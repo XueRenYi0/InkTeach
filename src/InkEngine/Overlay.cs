@@ -958,10 +958,13 @@ internal sealed class OverlayWindow : IDisposable
 
             _ctx.Transform = Matrix3x2.Identity;
 
-            if (app.ShowHud)
-                DrawHud(app.HudText);
+        if (app.ShowHud)
+            DrawHud(app.HudText);
 
-            _ctx.PopAxisAlignedClip();
+        // 滚动条（样式 B：一根细线）。画在浮动层，不进内容层。
+        DrawScrollBar(app);
+
+        _ctx.PopAxisAlignedClip();
         }
 
         // 界面画在所有笔迹之上。它每帧只贴一张缓存位图，不用重画内容。
@@ -1049,6 +1052,16 @@ internal sealed class OverlayWindow : IDisposable
             h.Add(OriginX + 12 + HudWidth + 4, OriginY + 12 + HudHeight + 4);
             r.Add(h);
         }
+
+        // 滚动条画在右边缘，而且要每帧淡出，所以必须算进脏区，
+        // 否则它消失之后会在屏幕上留一条擦不掉的线。
+        r.Add(new RectF
+        {
+            MinX = OriginX + Width - 30f * app.DpiScale,
+            MinY = OriginY,
+            MaxX = OriginX + Width,
+            MaxY = OriginY + Height,
+        });
 
         return r;
     }
@@ -1249,6 +1262,66 @@ internal sealed class OverlayWindow : IDisposable
                               new Vector2(sx, rect.MaxY - inset), sepBrush, 1f * dpi);
             }
         }
+    }
+
+    /// <summary>
+    /// 滚动条（样式 B：Win11 / Figma 那根细线）。
+    ///
+    /// 默认隐藏，滚动时浮现，**静止 3 秒淡出**（InkClass 实测 1.5 秒太快，
+    /// 用户会找不到它）。画在浮动层上——它每帧都在变（淡出），进内容层就等于
+    /// 每帧重画内容。
+    ///
+    /// 比例滑块靠"画布范围"（内容边界 ∪ 一屏，见 InkDocument.Extent）：
+    /// 没有总高度就没有比例可算。画布只有一屏时干脆不画。
+    ///
+    /// 用 <c>_scratch</c> 而不是 Brush(颜色)：淡出时颜色每帧都在变，
+    /// Brush() 是按颜色缓存的，会一帧往缓存里塞一个画刷。
+    /// </summary>
+    private void DrawScrollBar(InkEngine app)
+    {
+        float dpi = Dpi / 96f;
+        var viewport = new RectF
+        {
+            MinX = OriginX, MinY = OriginY,
+            MaxX = OriginX + Width, MaxY = OriginY + Height,
+        };
+        var extent = app.Doc.Extent(viewport);
+        float extentH = extent.MaxY - extent.MinY;
+        if (extentH <= Height + 1f) return;             // 画布只有一屏，不需要滚动条
+
+        double idle = (app.NowMs - app.ScrollBarActiveAtMs) / 1000.0;
+        float alpha = idle <= 3.0 ? 1f : MathF.Max(0f, 1f - (float)((idle - 3.0) / 0.4));
+        if (alpha <= 0.01f) return;
+
+        float top = OriginY + 40f * dpi;
+        float bottom = OriginY + Height - 40f * dpi;
+        float trackLen = bottom - top;
+        if (trackLen < 40f * dpi) return;
+
+        float w = 4f * dpi;                              // 细线
+        float axisX = OriginX + Width - 8f * dpi;
+        float x0 = axisX - w * 0.5f;
+        float r = w * 0.5f;
+
+        // 滑块长度 = 一屏 / 画布总高；位置 = 视口顶在画布里的比例
+        float thumbLen = MathF.Max(40f * dpi, trackLen * (Height / extentH));
+        float maxTravel = trackLen - thumbLen;
+        float viewTop = OriginY - app.ViewOffsetY;       // 视口顶部对应的画布 Y
+        float frac = extentH - Height > 1f
+            ? (viewTop - extent.MinY) / (extentH - Height) : 0f;
+        frac = Math.Clamp(frac, 0f, 1f);
+        float thumbY = top + maxTravel * frac;
+
+        // 轨道：极淡，只用来"知道这儿有东西"，不抢视觉
+        _scratch.Color = new Color4(0.50f, 0.52f, 0.55f, 0.16f * alpha);
+        _ctx.FillRoundedRectangle(
+            new RoundedRectangle(new Vortice.RawRectF(x0, top, x0 + w, bottom), r, r), _scratch);
+
+        // 滑块：中灰带透明度，浅色深色背景上都立得住
+        _scratch.Color = new Color4(0.47f, 0.49f, 0.53f, 0.75f * alpha);
+        _ctx.FillRoundedRectangle(
+            new RoundedRectangle(new Vortice.RawRectF(x0, thumbY, x0 + w, thumbY + thumbLen), r, r),
+            _scratch);
     }
 
     /// <summary>

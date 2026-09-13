@@ -72,6 +72,12 @@ public class InkEngine
     /// </summary>
     internal float ViewOffsetY;
 
+    /// <summary>
+    /// 最后一次"滚动条该露面"的时刻（滚动或悬停）。滚动条按这个时间淡出——
+    /// 静止 3 秒后消失（InkClass 实测 1.5 秒太快，用户会找不到它）。
+    /// </summary>
+    internal double ScrollBarActiveAtMs = double.MinValue;
+
     /// <summary>屏幕坐标 → 画布坐标（相机）。输入进来第一件事就是过这个。</summary>
     internal void ScreenToCanvas(ref float x, ref float y) => y -= ViewOffsetY;
     private SelHandle _dragHandle = SelHandle.None;
@@ -1588,6 +1594,8 @@ public class InkEngine
         float lowest = _virtualH - extent.MaxY;
         if (ViewOffsetY > 0f) ViewOffsetY = 0f;
         if (ViewOffsetY < lowest) ViewOffsetY = lowest;
+
+        ScrollBarActiveAtMs = NowMs;                     // 滚动时让滚动条露面
         Doc.InvalidateAll();                             // 整层重画（第一步的代价）
         _dirty = true;
         return IntPtr.Zero;

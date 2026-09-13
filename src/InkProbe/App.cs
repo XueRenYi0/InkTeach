@@ -289,6 +289,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             ScrollWriteTest();
         }
+        else if (mode == "--scrollshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ScrollShowcase();
+        }
         else if (mode == "--aaprobe")
         {
             _autoExitAt = double.MaxValue;
@@ -602,6 +608,44 @@ internal sealed class App : InkEngine.InkEngine
         Doc.Clear();
         Doc.ClearHistory();
         _quit = true;
+    }
+
+    /// <summary>
+    /// 把滚动条摆出来给人看：写满三屏内容，滚到中间，让滚动条处在"刚滚动过"的
+    /// 露面状态，然后挂着不动由外部截图。
+    /// </summary>
+    private void ScrollShowcase()
+    {
+        Doc.Clear();
+        Doc.ClearHistory();
+
+        // 写满三屏：每屏几行，跨度超过一屏，滚动条才有比例可算
+        for (int screen = 0; screen < 3; screen++)
+        {
+            for (int row = 0; row < 6; row++)
+            {
+                float y = _virtualY + screen * _virtualH + 250 + row * 240;
+                var s = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = new Color4(0.11f, 0.12f, 0.15f, 1f), Width = 6f,
+                };
+                for (int i = 0; i <= 40; i++)
+                {
+                    float t = i / 40f;
+                    s.AddPoint(_virtualX + 300 + t * 1200, y + MathF.Sin(t * 9f) * 30f, 0.5f, i * 8);
+                }
+                Doc.AddStroke(s);
+            }
+        }
+
+        // 滚到中间，并让滚动条处于"刚滚动过"的状态（真实滚动会自己设这个时刻）
+        ViewOffsetY = -_virtualH * 1.0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
+        ScrollBarActiveAtMs = NowMs;              // 相当于刚刚滚过
+        Doc.InvalidateAll();
+        SettleFrames(700);
+        Console.WriteLine("滚动条已摆好（刚滚动过的状态），等外部截图");
     }
 
     /// <summary>
