@@ -551,8 +551,19 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private static int RealizationBudget(int objectCount)
     {
-        if (objectCount <= 10_000) return 4096;    // ≤ 约 72 MB
-        if (objectCount <= 30_000) return 1024;    // ≤ 约 18 MB
+        // 目标机器是**4GB 内存的教室机**（而且核显的显存也从这 4GB 里分），
+        // 所以"缓存上限"不能按"这台开发机很快很宽裕"来定。
+        //
+        // 关键在于：细分缓存几乎只在**大范围重画**时才用得上（换分辨率、清空、
+        // 拖一大堆东西）。正常交互时每帧只重画脏区里那几条笔画，几十个缓存
+        // 就够周转了。所以 4096 个（72MB）是明显过量的——那是按"整层重画"
+        // 的最坏情况配的。
+        //
+        // 现在压到约 18MB 封顶，代价是最坏情况下的一次整层重画慢一点
+        // （那是换分辨率/清空这种极少发生的动作），换来的是给 4GB 机器
+        // 省下 50MB 常驻内存。这笔买卖在教室机上划算。
+        if (objectCount <= 10_000) return 1024;    // ≤ 约 18 MB
+        if (objectCount <= 30_000) return 512;     // ≤ 约 9 MB
         if (objectCount <= 100_000) return 256;    // ≤ 约 4.6 MB
         return 128;                                // ≤ 约 2.3 MB
     }
