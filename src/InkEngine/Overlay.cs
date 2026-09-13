@@ -950,10 +950,25 @@ internal sealed class OverlayWindow : IDisposable
             r.Add(m.Inflate(3f));
         }
 
-        // 选中高亮画在浮动层上、不进内容层，所以它的区域必须每帧算进脏区，
-        // 否则"取消选中 / 改选一批"之后，旧的高亮框会留在屏幕上擦不掉。
-        foreach (var s in app.Doc.Selected)
-            r.Add(s.PaddedBounds);
+        // 选中高亮画在浮动层上、不进内容层，所以它的区域必须每帧算进脏区。
+        //
+        // 注意**不能只算对象自己的包围盒**：选中框这一套 UI 比对象大——
+        // 外侧的光晕、跨在边线上的手柄、以及伸到上边外侧的旋转手柄。
+        // 漏掉哪一块，哪一块就会在屏幕上留下擦不掉的残影（实测踩过：
+        // 旋转手柄旁边留了一小块红色的前帧残留）。
+        if (app.Doc.Selected.Count > 0)
+        {
+            var sb = EditRegion.Of(app.Doc.Selected);
+            float dpi = app.DpiScale;
+            float margin = SelectionHandles.VisualSizeLogical * 0.5f * dpi + 6f;
+            var ui = sb.Inflate(margin);
+
+            var rot = SelectionHandles.Position(SelHandle.Rotate, sb, dpi);
+            float grip = SelectionHandles.RotateGripLogical * 0.5f * dpi + 3f;
+            ui.Add(rot.X - grip, rot.Y - grip);
+            ui.Add(rot.X + grip, rot.Y + grip);
+            r.Add(ui);
+        }
 
         if (app.ShowHud)
         {
@@ -1033,18 +1048,90 @@ internal sealed class OverlayWindow : IDisposable
         foreach (var r in rects) AddClipped(list, r);
     }
 
+    /// <summary>
+    /// 画选中框和手柄。规格见 design/选中与操作条-设计稿.png（方案 B）。
+    ///
+    /// 三条设计约束，都跟教室场景有关：
+    ///   · **画在浮动层上，不进内容层**。否则每改一次选区就要重画整块内容层，
+    ///     而选中是高频操作（每拖一下框选都要变）。
+    ///   · **光晕是必须的，不是装饰**。一盏投影打上去，深色 PPT 上一条纯蓝线
+    ///     会糊掉；描边外侧那圈半透明蓝让它在浅色和深色背景上都立得住。
+    ///   · 手柄的**位置和命中判定都在 SelectionHandles 里算**（那一层只有数学）。
+    ///     这里只负责画——换观感改这里，改交互规则改那边，互不牵连。
+    ///
+    /// 操作条（复制/删除/翻转/旋转那排按钮）还没画，等图标设计定稿。
+    /// </summary>
     private void DrawSelection(InkEngine app)
     {
-        if (app.Doc.Selected.Count == 0) return;
-        var brush = Brush(new Color4(0.2f, 0.65f, 1f, 0.22f));
-        _scratch.Color = new Color4(0.2f, 0.85f, 1f, 0.95f);
-        foreach (var s in app.Doc.Selected)
+        var sel = app.Doc.Selected;
+        if (sel.Count == 0) return;
+
+        // 多选时画一个总框，而不是每个对象一个框——拖动就是整组一起动。
+        var b = EditRegion.Of(sel);
+        if (b.IsEmpty) return;
+
+        float dpi = app.DpiScale;
+        var accent = new Color4(0f, 0.47f, 0.83f, 1f);      // #0078D4
+
+        // 1) 光晕
+        _scratch.Color = new Color4(accent.R, accent.G, accent.B, 0.16f);
+        _ctx.DrawRectangle(
+            new Vortice.RawRectF(b.MinX - 2f, b.MinY - 2f, b.MaxX + 2f, b.MaxY + 2f),
+            _scratch, 6.5f);
+
+        // 2) 描边
+        _scratch.Color = accent;
+        var outline = new Vortice.RawRectF(b.MinX, b.MinY, b.MaxX, b.MaxY);
+        _ctx.DrawRectangle(outline, _scratch, 2.5f);
+
+        // 3) 旋转手柄（在上边中点外侧，先画连线再画圆）
+        float rotR = SelectionHandles.RotateGripLogical * 0.5f * dpi;
+        var rot = SelectionHandles.Position(SelHandle.Rotate, b, dpi);
+        var topCenter = new Vector2((b.MinX + b.MaxX) * 0.5f, b.MinY);
+        _ctx.DrawLine(topCenter, rot, _scratch, 1.4f);
+        var white = Brush(new Color4(1f, 1f, 1f, 1f));
+        _ctx.FillEllipse(new Ellipse(rot, rotR, rotR), white);
+        _ctx.DrawEllipse(new Ellipse(rot, rotR, rotR), _scratch, 1.6f);
+        // 转圈的弧。Direct2D 的上下文没有 DrawArc，得自己拼一条路径——
+        // 采样十几个点连成折线就够了：这段弧半径不到 9 像素，看不出折。
+        using (var arc = Gfx.D2DFactory.CreatePathGeometry())
         {
-            var b = s.Bounds;
-            var r = new Vortice.RawRectF(b.MinX - 3, b.MinY - 3, b.MaxX + 3, b.MaxY + 3);
-            _ctx.FillRectangle(r, brush);
-            _ctx.DrawRectangle(r, _scratch, 1f);
+            using (var sink = arc.Open())
+            {
+                sink.BeginFigure(PointOnCircle(rot, rotR * 0.55f, 40f), FigureBegin.Hollow);
+                for (int i = 1; i <= 14; i++)
+                    sink.AddLine(PointOnCircle(rot, rotR * 0.55f, 40f + 260f * i / 14f));
+                sink.EndFigure(FigureEnd.Open);
+                sink.Close();
+            }
+            _ctx.DrawGeometry(arc, _scratch, 1.8f);
         }
+
+        // 4) 八个手柄。白底 + 蓝边：深色背景上是白方块显眼，
+        //    浅色背景上靠蓝边立住，一套画法两边都成立。
+        float hs = SelectionHandles.VisualSizeLogical * dpi;
+        float radius = hs * 0.28f;
+        Span<SelHandle> all = stackalloc SelHandle[]
+        {
+            SelHandle.TopLeft, SelHandle.Top, SelHandle.TopRight, SelHandle.Right,
+            SelHandle.BottomRight, SelHandle.Bottom, SelHandle.BottomLeft, SelHandle.Left,
+        };
+        foreach (var h in all)
+        {
+            var p = SelectionHandles.Position(h, b, dpi);
+            var box = new Vortice.RawRectF(p.X - hs * 0.5f, p.Y - hs * 0.5f,
+                                           p.X + hs * 0.5f, p.Y + hs * 0.5f);
+            var rr = new RoundedRectangle(box, radius, radius);
+            _ctx.FillRoundedRectangle(rr, white);
+            _ctx.DrawRoundedRectangle(rr, _scratch, 1.8f);
+        }
+    }
+
+    /// <summary>圆上某个角度上的点，用来拼小圆弧（画旋转手柄的转向标记）。</summary>
+    private static Vector2 PointOnCircle(Vector2 c, float r, float deg)
+    {
+        float a = deg * MathF.PI / 180f;
+        return new Vector2(c.X + r * MathF.Cos(a), c.Y + r * MathF.Sin(a));
     }
 
     private void DrawLaser(InkEngine app)

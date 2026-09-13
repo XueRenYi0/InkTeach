@@ -238,6 +238,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             HandleTest();
         }
+        else if (mode == "--selshowcase")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SelShowcase();
+        }
         else if (mode == "--aaprobe")
         {
             _autoExitAt = double.MaxValue;
@@ -389,6 +395,52 @@ internal sealed class App : InkEngine.InkEngine
     /// "这里的颜色比别处淡"。所以用两个等面积窗口的墨量比值来判定：
     /// 拐角窗口的覆盖率不该明显低于直段。
     /// </summary>
+    /// <summary>
+    /// 把选中框和手柄摆出来给人看。跟 --beautifyshowcase 一个路子：
+    /// 画好挂着不动，由外部截图，用来肉眼核对观感（不是自动判定）。
+    /// </summary>
+    private void SelShowcase()
+    {
+        BoardOn = true;                 // 白底，不然手柄压在桌面上看不清
+        Doc.Clear();
+        Doc.ClearHistory();
+
+        float cx = VirtualScreen.MinX + 720;
+        float top = VirtualScreen.MinY + 300;
+
+        // 一条自由笔迹
+        var free = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(0.11f, 0.12f, 0.15f, 1f), Width = 6f,
+        };
+        for (int i = 0; i <= 80; i++)
+        {
+            float t = i / 80f;
+            free.AddPoint(cx - 320 + t * 640, top + 80 + MathF.Sin(t * 7f) * 70f, 0.5f, i * 8);
+        }
+        Doc.AddStroke(free);
+
+        // 一个带旋转 + 非等比缩放的矩形：用来核对"变换参与选中框"这件事
+        var rect = new Stroke
+        {
+            Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+            Color = new Color4(0.95f, 0.18f, 0.18f, 1f), Width = 6f,
+        };
+        rect.AddPoint(cx - 260, top + 350, 1f, 0);
+        rect.AddPoint(cx + 260, top + 520, 1f, 0);
+        var center = new Vector2(cx, top + 435);
+        rect.Transform = Matrix3x2.CreateRotation(0.14f, center)
+                      * Matrix3x2.CreateScale(1.3f, 0.85f, center);
+        Doc.AddStroke(rect);
+
+        Doc.Selected.Clear();
+        foreach (var s in Doc.Strokes) Doc.Selected.Add(s);
+        Doc.InvalidateAll();
+        SettleFrames(800);
+        Console.WriteLine("选中框已摆好，等外部截图（这个模式不会自己退出）");
+    }
+
     /// <summary>
     /// 选中手柄自检：位置、命中、以及每个手柄拖出来的是什么矩阵。
     ///

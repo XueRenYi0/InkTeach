@@ -28,8 +28,17 @@ internal enum SelHandle
 /// </summary>
 internal static class SelectionHandles
 {
-    /// <summary>手柄的视觉直径（逻辑像素）。</summary>
-    public const float VisualSizeLogical = 7f;
+    /// <summary>
+    /// 手柄的视觉直径（**逻辑**像素）。
+    ///
+    /// 注意单位：这是"看起来多大"，与 DPI 无关。在 2 倍屏上会画成 28 物理像素。
+    /// 第一版我按物理像素实现（7 逻辑 = 14 物理），在这台机器上量出来只有
+    /// 7 逻辑像素，比设计意图小了一半，投影上会看不清——尺寸一律用逻辑像素。
+    /// </summary>
+    public const float VisualSizeLogical = 14f;
+
+    /// <summary>旋转手柄的直径（逻辑像素）。和普通手柄同尺寸，看起来才像一套。</summary>
+    public const float RotateGripLogical = 14f;
 
     /// <summary>
     /// 手柄的命中半径（逻辑像素）。**是视觉尺寸的两倍**：
