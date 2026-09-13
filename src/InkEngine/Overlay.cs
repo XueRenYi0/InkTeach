@@ -950,6 +950,11 @@ internal sealed class OverlayWindow : IDisposable
             r.Add(m.Inflate(3f));
         }
 
+        // 选中高亮画在浮动层上、不进内容层，所以它的区域必须每帧算进脏区，
+        // 否则"取消选中 / 改选一批"之后，旧的高亮框会留在屏幕上擦不掉。
+        foreach (var s in app.Doc.Selected)
+            r.Add(s.PaddedBounds);
+
         if (app.ShowHud)
         {
             var h = RectF.Empty;

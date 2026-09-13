@@ -707,6 +707,29 @@ internal abstract class EditAction
 {
     public abstract void Undo(InkDocument doc);
     public abstract void Redo(InkDocument doc);
+
+    /// <summary>这次改动**之前**对象占了哪块（画布坐标）。</summary>
+    public virtual RectF AffectedBefore => RectF.Empty;
+
+    /// <summary>改动**之后**占哪块。</summary>
+    public virtual RectF AffectedAfter => RectF.Empty;
+
+    /// <summary>要重绘的区域 = 两者并集。旧位置要擦、新位置要画，缺一个就留残影。</summary>
+    public RectF AffectedUnion
+    {
+        get { var r = AffectedBefore; r.Add(AffectedAfter); return r; }
+    }
+}
+
+/// <summary>一组对象占的总区域。加入、移除、改位置都只是"方向不同"，算法一样。</summary>
+internal static class EditRegion
+{
+    public static RectF Of(IEnumerable<Stroke> strokes)
+    {
+        var r = RectF.Empty;
+        foreach (var s in strokes) r.Add(s.PaddedBounds);
+        return r;
+    }
 }
 
 internal sealed class AddStrokesAction : EditAction
@@ -714,6 +737,7 @@ internal sealed class AddStrokesAction : EditAction
     public readonly List<Stroke> Strokes = new();
     public override void Undo(InkDocument doc) { foreach (var s in Strokes) doc.RemoveStroke(s); }
     public override void Redo(InkDocument doc) { foreach (var s in Strokes) doc.AppendStroke(s); }
+    public override RectF AffectedAfter => EditRegion.Of(Strokes);
 }
 
 internal sealed class RemoveStrokesAction : EditAction
@@ -721,6 +745,7 @@ internal sealed class RemoveStrokesAction : EditAction
     public readonly List<(int index, Stroke stroke)> Items = new();
     public override void Undo(InkDocument doc) { foreach (var it in Items) doc.InsertStroke(it.index, it.stroke); }
     public override void Redo(InkDocument doc) { foreach (var it in Items) doc.RemoveStroke(it.stroke); }
+    public override RectF AffectedBefore => EditRegion.Of(Items.Select(it => it.stroke));
 }
 
 internal sealed class ClearAction : EditAction
@@ -728,6 +753,50 @@ internal sealed class ClearAction : EditAction
     public readonly List<Stroke> Removed = new();
     public override void Undo(InkDocument doc) { foreach (var s in Removed) doc.AppendStroke(s); }
     public override void Redo(InkDocument doc) { doc.ClearStrokes(); }
+    public override RectF AffectedBefore => EditRegion.Of(Removed);
+}
+
+/// <summary>
+/// 对一组对象施加同一个变换。移动 / 缩放 / 旋转 / 镜像**都是它**，不是四套代码。
+///
+/// 只改矩阵、不碰几何，所以：
+///   · 代价是 O(对象数)，**与每一笔有多少个点无关**；
+///   · 撤销就是乘逆矩阵；
+///   · 几何缓存完全不用失效（缓存的是局部坐标下的几何）。
+///
+/// 逆矩阵现算而不存一份：省内存，而且"改变换"本来就是可逆运算，不需要额外状态。
+/// </summary>
+internal sealed class TransformObjectsAction : EditAction
+{
+    private readonly Stroke[] _targets;
+    private readonly Matrix3x2 _delta;
+    private readonly RectF _before;
+
+    public TransformObjectsAction(IReadOnlyList<Stroke> targets, Matrix3x2 delta)
+    {
+        _targets = new Stroke[targets.Count];
+        for (int i = 0; i < targets.Count; i++) _targets[i] = targets[i];
+        _delta = delta;
+        _before = EditRegion.Of(_targets);
+    }
+
+    public override RectF AffectedBefore => _before;
+    public override RectF AffectedAfter => EditRegion.Of(_targets);
+
+    public override void Redo(InkDocument doc) => Shift(doc, _delta);
+
+    public override void Undo(InkDocument doc)
+    {
+        // 退化矩阵（比如缩放成 0）不可逆，那就什么都不做，别把对象搞成 NaN。
+        if (!Matrix3x2.Invert(_delta, out var inv)) return;
+        Shift(doc, inv);
+    }
+
+    private void Shift(InkDocument doc, in Matrix3x2 m)
+    {
+        foreach (var s in _targets) doc.ApplyTransformCore(s, m);
+        doc.Version++;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -737,6 +806,12 @@ internal sealed class InkDocument
     public readonly List<Stroke> Strokes = new();
     public readonly List<Stroke> Selected = new();
     public readonly DirtyRegion Dirty = new();
+
+    /// <summary>
+    /// 画布块序列（纵向排列）。现在固定一块——冻结截图、白板、翻页都是它的不同内容，
+    /// 见计划文档第十二节。序列化按"多块"写，所以以后加页不用改格式。
+    /// </summary>
+    public readonly List<CanvasBlock> Blocks = new() { CanvasBlock.Default };
 
     /// <summary>
     /// 对象身份分配器。**只增不减、永不复用**。
@@ -839,6 +914,56 @@ internal sealed class InkDocument
         _undo.Add(action);
         if (_undo.Count > MaxUndoDepth) _undo.RemoveAt(0);
         _redo.Clear();
+
+        // 命令自己报告"我动了哪块区域"，脏区在这里统一合并。
+        // 这样功能代码就不必各自记得去标脏——漏标是留残影的头号原因。
+        Dirty.Add(action.AffectedUnion);
+    }
+
+    /// <summary>
+    /// 改一个对象的变换，并把空间索引跟着挪。
+    ///
+    /// **索引必须在改之前移除、改之后插入**：改完再移除就找不到它原来占的格子了，
+    /// 那些格子里会永远留着一个幽灵条目。
+    /// </summary>
+    internal void ApplyTransformCore(Stroke s, in Matrix3x2 m)
+    {
+        PendingAppend = null;      // 位置变了，"直接往上加"的快路径不再成立
+        _grid.Remove(s);
+        s.Transform = s.Transform * m;
+        _grid.Insert(s);
+    }
+
+    /// <summary>
+    /// 对当前选中的对象施加一个变换。移动 / 缩放 / 旋转 / 镜像都走这里。
+    /// 返回 false 表示没有选中任何东西。
+    /// </summary>
+    public bool ApplyTransform(Matrix3x2 delta)
+    {
+        if (Selected.Count == 0) return false;
+        var act = new TransformObjectsAction(Selected, delta);
+        act.Redo(this);
+        Commit(act);
+        return true;
+    }
+
+    /// <summary>
+    /// 用读出来的内容整体替换文档（加载 / 粘贴）。
+    /// **这是唯一一个不产生撤销动作的批量改动**——加载是一份新文档的开始；
+    /// 粘贴要进撤销栈的话，由调用方自己包成一条动作。
+    /// </summary>
+    internal void ReplaceAll(List<CanvasBlock> blocks, List<Stroke> strokes, int maxId)
+    {
+        ClearStrokes();
+        Blocks.Clear();
+        Blocks.AddRange(blocks);
+        if (Blocks.Count == 0) Blocks.Add(CanvasBlock.Default);
+        foreach (var s in strokes) AppendStroke(s);
+        ReserveIdsUpTo(maxId);
+        ClearHistory();
+        PendingAppend = null;
+        Dirty.MarkFull();
+        Version++;
     }
 
     /// <summary>Drops the undo history without touching the strokes. Used by the
@@ -951,25 +1076,7 @@ internal sealed class InkDocument
 
     /// <summary>Moves the current selection by a delta (drag-to-move).</summary>
     public void MoveSelected(float dx, float dy)
-    {
-        if (Selected.Count == 0) return;
-        var delta = Matrix3x2.CreateTranslation(dx, dy);
-
-        foreach (var s in Selected)
-        {
-            PendingAppend = null;
-            _grid.Remove(s);
-            Dirty.Add(s.PaddedBounds);            // 旧位置：擦掉
-
-            // 只改矩阵，点的坐标一个都不动，几何缓存也不释放重建。
-            // 这就是"变换独立于几何"的收益：跟这一笔有多少个点无关，O(1)。
-            s.Transform = s.Transform * delta;
-
-            _grid.Insert(s);
-            Dirty.Add(s.PaddedBounds);            // 新位置：重画
-        }
-        Version++;
-    }
+        => ApplyTransform(Matrix3x2.CreateTranslation(dx, dy));
 
     public void ApplyMarquee(RectF r)
     {

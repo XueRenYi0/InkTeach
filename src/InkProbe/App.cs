@@ -220,6 +220,18 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             ShapeTest();
         }
+        else if (mode == "--savetest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SaveTest();
+        }
+        else if (mode == "--transformtest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            TransformTest();
+        }
         else if (mode == "--aaprobe")
         {
             _autoExitAt = double.MaxValue;
@@ -371,6 +383,201 @@ internal sealed class App : InkEngine.InkEngine
     /// "这里的颜色比别处淡"。所以用两个等面积窗口的墨量比值来判定：
     /// 拐角窗口的覆盖率不该明显低于直段。
     /// </summary>
+    /// <summary>
+    /// 变换命令自检。
+    ///
+    /// 它要证明的是整个对象模型的**核心论断**：改变换不碰几何。
+    /// 具体就是三件事——几何版本号不变（GPU 缓存不用重建）、
+    /// 包围盒和空间索引跟着走、撤销能精确回到原样。
+    /// </summary>
+    private void TransformTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 变换命令自检（改矩阵，不碰几何）===");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"    {name,-22}{(ok ? "PASS" : "FAIL")}  {detail}");
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+
+        var s = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(1f, 0f, 0f, 1f), Width = 4f,
+        };
+        for (int i = 0; i < 60; i++)
+            s.AddPoint(200 + i * 5f, 300 + MathF.Sin(i * 0.2f) * 40f, 0.5f, i * 8);
+        Doc.AddStroke(s);
+
+        int revisionBefore = s.Revision;
+        var boundsBefore = s.WorldBounds;
+        float widthBefore = boundsBefore.MaxX - boundsBefore.MinX;
+
+        Doc.Selected.Clear();
+        Doc.Selected.Add(s);
+
+        // 以画的起点为中心放大两倍——非等比也不影响这套机制
+        var center = new Vector2(boundsBefore.MinX, boundsBefore.MinY);
+        int depthBefore = Doc.UndoDepth;
+        bool applied = Doc.ApplyTransform(Matrix3x2.CreateScale(2f, 2f, center));
+        Check("命令已提交", applied && Doc.UndoDepth == depthBefore + 1,
+              $"撤销深度 {depthBefore} -> {Doc.UndoDepth}");
+
+        // ★ 这条是整个设计的要害：几何没有重建
+        Check("几何版本号未变", s.Revision == revisionBefore,
+              $"Revision {revisionBefore} -> {s.Revision}（GPU 缓存不用重建）");
+
+        var boundsAfter = s.WorldBounds;
+        float widthAfter = boundsAfter.MaxX - boundsAfter.MinX;
+        Check("包围盒按倍数变大", Math.Abs(widthAfter - widthBefore * 2f) < 0.5f,
+              $"{widthBefore:F0} -> {widthAfter:F0} px");
+
+        // 空间索引必须跟着走：在新位置查得到
+        var probe = new RectF
+        {
+            MinX = center.X - 1, MinY = center.Y - 1,
+            MaxX = center.X + 1, MaxY = center.Y + 1,
+        };
+        var hits = new List<Stroke>();
+        Doc.QueryGrid(probe, hits);
+        Check("空间索引已更新", hits.Contains(s), $"新位置查到 {hits.Count} 个");
+
+        Doc.Undo();
+        var boundsUndone = s.WorldBounds;
+        bool restored = Math.Abs(boundsUndone.MinX - boundsBefore.MinX) < 0.01f
+                     && Math.Abs(boundsUndone.MaxX - boundsBefore.MaxX) < 0.01f
+                     && Math.Abs(boundsUndone.MinY - boundsBefore.MinY) < 0.01f
+                     && Math.Abs(boundsUndone.MaxY - boundsBefore.MaxY) < 0.01f;
+        Check("撤销精确回原位", restored,
+              $"({boundsUndone.MinX:F2},{boundsUndone.MinY:F2})-({boundsUndone.MaxX:F2},{boundsUndone.MaxY:F2})");
+
+        Doc.Redo();
+        Check("重做又回到放大后", Math.Abs((s.WorldBounds.MaxX - s.WorldBounds.MinX) - widthAfter) < 0.5f, "");
+
+        Console.WriteLine();
+        Console.WriteLine(fail == 0 ? "  PASS: 变换只改矩阵，几何与缓存未受影响" : $"  FAIL: {fail} 项不对");
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 保存 / 加载往返自检。
+    ///
+    /// 验的是"存下去的和读回来的完全一样"。这条比看起来重要：序列化是
+    /// **唯一会碰全部字段**的代码，任何一个字段忘了写、或者顺序写错，
+    /// 表现都是"用户存了一学期的批注打不开"，而且开发时很难发现。
+    /// </summary>
+    private void SaveTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 保存 / 加载往返自检 ===");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"    {name,-22}{(ok ? "PASS" : "FAIL")}  {detail}");
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+
+        // 自由笔迹：带压感、带时间戳
+        var freehand = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(0.95f, 0.18f, 0.18f, 1f),
+            Width = 6f, Preset = PenPreset.Handwriting,
+        };
+        for (int i = 0; i < 40; i++)
+            freehand.AddPoint(100 + i * 7f, 200 + MathF.Sin(i * 0.3f) * 30f,
+                              0.2f + 0.6f * (i / 40f), 1000 + i * 8.5);
+        Doc.AddStroke(freehand);
+
+        // 图形：带非等比缩放 + 旋转（最容易在序列化里被写错的东西）
+        var rect = new Stroke
+        {
+            Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+            Color = new Color4(0.13f, 0.45f, 0.90f, 0.8f),
+            Width = 12f, Preset = PenPreset.Precise,
+            Transform = Matrix3x2.CreateRotation(0.5f)
+                      * Matrix3x2.CreateScale(1.5f, 0.75f)
+                      * Matrix3x2.CreateTranslation(300f, 120f),
+        };
+        rect.AddPoint(10, 20, 1f, 5000);
+        rect.AddPoint(210, 160, 1f, 5000);
+        Doc.AddStroke(rect);
+
+        int before = Doc.Strokes.Count;
+        int maxId = 0;
+        foreach (var s in Doc.Strokes) maxId = Math.Max(maxId, s.Id);
+
+        var bytes = InkSerializer.Save(Doc);
+        Check("格式头可识别", InkSerializer.LooksLikeInk(bytes), $"{bytes.Length} 字节");
+        Check("每对象体积合理", bytes.Length / Math.Max(1, before) < 4000,
+              $"{bytes.Length / Math.Max(1, before)} 字节/对象");
+
+        var target = new InkDocument();
+        InkSerializer.LoadInto(target, bytes);
+
+        Check("对象数量", target.Strokes.Count == before, $"{target.Strokes.Count}");
+        Check("加载后撤销栈为空", target.UndoDepth == 0, $"{target.UndoDepth}");
+
+        bool allEqual = target.Strokes.Count == before;
+        string diff = "";
+        for (int i = 0; allEqual && i < before; i++)
+        {
+            var a = Doc.Strokes[i];
+            var b = target.Strokes[i];
+            bool eq = a.Id == b.Id && a.Tool == b.Tool && a.Kind == b.Kind
+                   && a.Color.R == b.Color.R && a.Color.G == b.Color.G
+                   && a.Color.B == b.Color.B && a.Color.A == b.Color.A
+                   && a.Width == b.Width && a.Preset == b.Preset
+                   && a.Transform.Equals(b.Transform)
+                   && a.Points.Count == b.Points.Count;
+            if (eq)
+            {
+                for (int k = 0; k < a.Points.Count; k++)
+                {
+                    var p = a.Points[k];
+                    var q = b.Points[k];
+                    // 时间戳是"绝对量 + float 偏移"，会有浮点截断，给 0.05ms 容差。
+                    if (p.X != q.X || p.Y != q.Y || p.P != q.P || Math.Abs(p.T - q.T) > 0.05)
+                    { eq = false; diff = $"对象{i} 第{k}点"; break; }
+                }
+            }
+            else diff = $"对象{i} 的字段";
+            allEqual = eq;
+        }
+        Check("逐字段一致", allEqual, allEqual ? "含变换、颜色、压感、时间" : diff);
+
+        var probe = new Stroke { Tool = Tool.Pen, Width = 3f };
+        probe.AddPoint(0, 0, 1f, 0);
+        target.AddStroke(probe);
+        Check("新对象 id 不撞车", probe.Id > maxId, $"新 {probe.Id} > 旧最大 {maxId}");
+
+        bool threw = false;
+        try { InkSerializer.LoadInto(new InkDocument(), new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 }); }
+        catch (InvalidDataException) { threw = true; }
+        Check("乱数据抛异常", threw, "");
+
+        var truncated = new byte[bytes.Length / 2];
+        Array.Copy(bytes, truncated, truncated.Length);
+        var keep = new InkDocument();
+        threw = false;
+        try { InkSerializer.LoadInto(keep, truncated); } catch (Exception) { threw = true; }
+        Check("截断数据抛异常", threw, "");
+        Check("失败时文档未被动过", keep.Strokes.Count == 0, $"{keep.Strokes.Count} 个对象");
+
+        Console.WriteLine();
+        Console.WriteLine(fail == 0 ? "  PASS: 保存/加载往返正确" : $"  FAIL: {fail} 项不对");
+        _quit = true;
+    }
+
     /// <summary>
     /// 图形命中测试自检。
     ///
