@@ -1575,7 +1575,19 @@ public class InkEngine
     {
         int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);
         ViewOffsetY -= delta / 120f * 72f * DpiScale;   // 一格 = 72 逻辑像素
-        if (ViewOffsetY > 0f) ViewOffsetY = 0f;         // 不许滚过内容顶部
+        // 上下都夹住画布范围（内容边界 ∪ 一屏）。
+        // 不夹的话会滚进无尽的空白，而且比例滚动条拿不到有意义的范围。
+        // 下边界是"视口底边贴住内容底边"——接着写，内容长出去，范围自己长出来，
+        // 所以不会把人卡在底边。
+        var viewport = new RectF
+        {
+            MinX = _virtualX, MinY = _virtualY,
+            MaxX = _virtualX + _virtualW, MaxY = _virtualY + _virtualH,
+        };
+        var extent = Doc.Extent(viewport);
+        float lowest = _virtualH - extent.MaxY;
+        if (ViewOffsetY > 0f) ViewOffsetY = 0f;
+        if (ViewOffsetY < lowest) ViewOffsetY = lowest;
         Doc.InvalidateAll();                             // 整层重画（第一步的代价）
         _dirty = true;
         return IntPtr.Zero;

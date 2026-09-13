@@ -899,6 +899,25 @@ internal sealed class InkDocument
         if (maxUsed >= _nextId) _nextId = maxUsed + 1;
     }
 
+    /// <summary>
+    /// 画布范围 = **内容边界 ∪ 一屏**，随书写自动增长。
+    ///
+    /// "∪ 一屏"是刻意的：没有内容的空白也必须能写（老师总得有个地方起笔），
+    /// 所以画布永远至少有一屏；内容长出去了，画布跟着长。
+    ///
+    /// 它是**比例滚动条的前提**——没有总高度就没有比例可算，滑块无从画起。
+    ///
+    /// 代价：每次调用 O(笔画数)（约 0.05ms/万笔），滚轮时算一遍可以接受。
+    /// </summary>
+    public RectF Extent(in RectF viewport)
+    {
+        var r = RectF.Empty;
+        foreach (var s in Strokes) r.Add(s.PaddedBounds);
+        if (r.IsEmpty) return viewport;   // 空文档：画布就是一屏
+        r.Add(viewport);                  // ∪ 一屏
+        return r;
+    }
+
     // 撤销栈必须有上限。原来用无上限的 Stack，一节课下来会堆进十万条动作、
     // 每条还持有笔画对象——实测 3 分钟就多占约 80 MB。主流软件的撤销深度
     // 都在 100~200 步，超过就从最旧的开始丢。
