@@ -939,32 +939,21 @@ internal sealed class InkDocument
     /// <summary>Candidate lookup through the spatial index (for measurement).</summary>
     public int QueryGrid(RectF r, List<Stroke> results) => _grid.Query(r, results);
 
-    /// <summary>
-    /// Set when the only pending change is a brand-new stroke that is already on
-    /// top of everything else. Then the affected region can simply be drawn into
-    /// instead of cleared and re-rasterised - which is the common case, because
-    /// it happens every time the user finishes a stroke.
-    /// </summary>
-    public Stroke PendingAppend;
-
     // -- mutation primitives (no history; the actions below drive these) ---
 
     public void AppendStroke(Stroke s)
     {
         if (s.Id == 0) s.Id = NextId();
-        bool cleanSlate = !Dirty.Full && Dirty.Rects.Count == 0;
         Strokes.Add(s);
         TotalPoints += s.Points.Count;
         _grid.Insert(s);
         Dirty.Add(s.PaddedBounds);
-        PendingAppend = cleanSlate ? s : null;
         Version++;
     }
 
     public void InsertStroke(int index, Stroke s)
     {
         if (s.Id == 0) s.Id = NextId();
-        PendingAppend = null;
         Strokes.Insert(Math.Clamp(index, 0, Strokes.Count), s);
         TotalPoints += s.Points.Count;
         _grid.Insert(s);
@@ -975,7 +964,6 @@ internal sealed class InkDocument
     public void RemoveStroke(Stroke s)
     {
         if (!Strokes.Remove(s)) return;
-        PendingAppend = null;
         _grid.Remove(s);
         // 关键：笔画被移除时必须释放缓存的 Direct2D 几何，否则每擦一次、
         // 每撤销一次都会泄漏一个几何对象（连同它占的 GPU 侧细分数据）。
@@ -988,7 +976,6 @@ internal sealed class InkDocument
 
     public void ClearStrokes()
     {
-        PendingAppend = null;
         foreach (var s in Strokes) s.Release();
         _grid.Clear();
         Strokes.Clear();
@@ -1019,7 +1006,6 @@ internal sealed class InkDocument
     /// </summary>
     internal void ApplyTransformCore(Stroke s, in Matrix3x2 m)
     {
-        PendingAppend = null;      // 位置变了，"直接往上加"的快路径不再成立
         _grid.Remove(s);
         s.Transform = s.Transform * m;
         _grid.Insert(s);
@@ -1096,20 +1082,19 @@ internal sealed class InkDocument
     /// </summary>
     internal void SetTransformLive(Stroke s, in Matrix3x2 m)
     {
-        PendingAppend = null;
         _grid.Remove(s);
         s.Transform = m;
         _grid.Insert(s);
 
         // **必须 bump 版本号**：渲染层就是靠它判断"内容层该不该修补"的
-        // （EnsureContent 第一行是 _renderedVersion == doc.Version 就直接返回）。
+        // （SyncTiles 里 `_tilesVersion != doc.Version` 那一句）。
         //
         // 当初漏了这一句，把"不产生撤销记录"和"文档没变"混成了一件事，
         // 结果拖动时蓝框跟着走、墨迹纹丝不动，松手才整层重画跳过去。
         // 版本号管的是"外观变了没有"，跟撤销栈无关。
         //
-        // 代价是每帧一次区域修补（PatchRegions）：只擦脏矩形、只重画与它相交的
-        // 对象，不是整层重建，所以跟画面里有多少笔无关。
+        // 代价是每帧把脏区碰到的**分块**重画一次（不是整层重建），
+        // 所以跟画面里有多少笔无关。
         Version++;
     }
 
@@ -1127,7 +1112,6 @@ internal sealed class InkDocument
         foreach (var s in strokes) AppendStroke(s);
         ReserveIdsUpTo(maxId);
         ClearHistory();
-        PendingAppend = null;
         Dirty.MarkFull();
         Version++;
     }
@@ -1256,7 +1240,6 @@ internal sealed class InkDocument
     /// repaint, so only used when a change really touches the entire surface).</summary>
     public void InvalidateAll()
     {
-        PendingAppend = null;
         Dirty.MarkFull();
         Version++;
     }

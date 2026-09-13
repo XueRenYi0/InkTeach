@@ -38,6 +38,11 @@ internal sealed class App : InkEngine.InkEngine
     {
         exitCode = 0;
 
+        // 参数对照用：--tilesize 256|512 直接换内容层的分块边长（见 CanvasTiles.cs）。
+        for (int i = 0; i + 1 < args.Length; i++)
+            if (args[i] == "--tilesize" && int.TryParse(args[i + 1], out var ts) && ts >= 64)
+                CanvasTileCache.TileSize = ts;
+
         // A separate process that just sits there waiting to be clicked. The
         // pass-through test uses it as the window *underneath* the overlay, so
         // the test observes real cross-process mouse routing.
@@ -157,6 +162,12 @@ internal sealed class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             EraserTest();
+        }
+        else if (mode == "--tiletest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            TileTest();
         }
         else if (mode == "--widthtest")
         {
@@ -588,39 +599,70 @@ internal sealed class App : InkEngine.InkEngine
         Check("滚回去仍在原位", back > 200, $"{back} 像素");
         Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：相机只改一个数，对象数据不动");
 
-        Console.WriteLine();
-        Console.WriteLine("=== 滚动一步的代价（整屏重画，第一步的已知边界）===");
-        Console.WriteLine("    画布里 | 重建耗时 | 判断");
-        Console.WriteLine("  ---------|----------|------");
-        foreach (int n in new[] { 0, 1000, 2000, 5000, 10000 })
-        {
-            Doc.Clear();
-            Doc.ClearHistory();
-            if (n > 0) GenerateStrokes(n);
-            ViewOffsetY = -400f;
-            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
-            Doc.InvalidateAll();
-            SettleFrames(300);
-
-            double ms = 0;
-            for (int k = 0; k < 3; k++)
-            {
-                ViewOffsetY -= 72f * DpiScale;
-                foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
-                Doc.InvalidateAll();
-                SettleFrames(220);
-                ms += _windows[0].LastRebuildMs;
-            }
-            string note = n <= 1000 ? "一屏量级 —— 可用"
-                        : n <= 2000 ? "两屏 —— 尚可"
-                        : "累积量 —— 需要分块缓存";
-            Console.WriteLine($"  {n,8} | {ms / 3,7:F1} ms | {note}");
-        }
+        ScrollBench();
 
         ViewOffsetY = 0f;
         Doc.Clear();
         Doc.ClearHistory();
         _quit = true;
+    }
+
+    /// <summary>
+    /// 滚动代价：**走真实的滚轮路径**（HandleWheel），一格渲染一帧。
+    ///
+    /// 两条纪律：
+    ///   · 不直接给 ViewOffsetY 赋值——那样绕开了 HandleWheel 的算术，上一轮
+    ///     就是因此漏掉了"滚轮符号写反"这个 bug（还是用户报的）。
+    ///   · 内容**铺开 8 屏**，不是塞在一屏里。真实板书是纵向累积的，塞一屏
+    ///     是"满屏"的极端形状，衡量不了分块缓存要解决的"累积量"问题。
+    ///
+    /// 看三个数：每格平均帧耗时、最慢一格、以及这一格光栅化了几块。
+    /// 分块缓存成立的标志是：**帧耗时与文档总量基本无关**——新露出来的
+    /// 只有那么一小条，和文档里已经有多少笔没关系。
+    /// </summary>
+    private void ScrollBench()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 滚动代价（真实滚轮路径，一格 = 144 物理像素）===");
+        Console.WriteLine("  内容铺开 8 屏（≈一节板书的量级），从顶部往下滚 12 格 ≈ 一屏");
+        Console.WriteLine("    文档笔数 | 每格平均 | 最慢一格 | 一格光栅 | 最慢一格光栅 | 新光栅块 | 判断");
+        Console.WriteLine("  -----------|----------|----------|----------|--------------|----------|------");
+
+        // 和 WheelTest 用同一套构造方式：delta 放在 wParam 的高 16 位。
+        static IntPtr Wheel(int delta) => new((long)(ushort)(short)delta << 16);
+        const int steps = 12;
+
+        foreach (int n in new[] { 1000, 5000, 10000 })
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            ViewOffsetY = 0f;
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+            GenerateStrokesSpread(n, 8);
+            SettleFrames(600);                       // 先把首屏画出来
+
+            double total = 0, worst = 0, raster = 0, worstRaster = 0;
+            int newTiles = 0;
+            for (int k = 0; k < steps; k++)
+            {
+                HandleWheel(Wheel(-120));            // 往下滚一格
+                NowMs = _clock.Elapsed.TotalMilliseconds;
+                RenderAll();                         // 只渲染这一格
+
+                var w0 = _windows[0];
+                total += w0.LastRecordMs;
+                raster += w0.LastRebuildMs;
+                if (w0.LastRecordMs > worst) worst = w0.LastRecordMs;
+                if (w0.LastRebuildMs > worstRaster) worstRaster = w0.LastRebuildMs;
+                newTiles += w0.LastPatchCount;
+            }
+
+            string note = worst < 16.7 ? "不掉帧" : worst < 33 ? "偶掉一帧" : "会卡";
+            Console.WriteLine($"  {n,9} | {total / steps,6:F2} ms | {worst,6:F2} ms | {raster / steps,6:F2} ms | {worstRaster,10:F2} ms | {newTiles,8} | {note}");
+        }
+
+        Console.WriteLine("  注：老做法（整层重画）的对照值：一屏量级 20ms，5000 笔 41ms，10000 笔 82ms。");
+        Console.WriteLine("      现在滚一格的代价只和「新露出来的那一小条」有关，与文档总量无关。");
     }
 
     /// <summary>
@@ -833,7 +875,7 @@ internal sealed class App : InkEngine.InkEngine
             s.AddPoint(cx - 200, cy, 1f, 0);
             s.AddPoint(cx + 200, cy, 1f, 0);
             Doc.AddStroke(s);      // 真实交互路径：不调 InvalidateAll，
-                                    // 走 PendingAppend -> DrawOnlyPatch（上次就是漏了这条）
+                                    // 走"脏区 → 标脏分块 → 只重画碰到的那几块"
             SettleFrames(350);
 
             int seen = ScreenProbe.CountMagenta((int)px - 60, (int)py - 60, 120, 120);
@@ -1936,6 +1978,45 @@ internal sealed class App : InkEngine.InkEngine
                 y += MathF.Sin(ang) * d;
                 x = Math.Clamp(x, _virtualX + 1, _virtualX + _virtualW - 1);
                 y = Math.Clamp(y, _virtualY + 1, _virtualY + _virtualH - 1);
+                s.AddPoint(x, y, (float)rnd.NextDouble(), NowMs);
+            }
+            Doc.AppendStroke(s);
+        }
+        Doc.ClearHistory();
+    }
+
+    /// <summary>
+    /// 铺开 <paramref name="screens"/> 屏的笔画。
+    ///
+    /// 为什么要有它：<see cref="GenerateStrokes"/> 把笔画全塞在一屏里，那是
+    /// "满屏"的极端形状，和真实板书不一样。真实情况是**纵向累积**——一节课
+    /// 往下写十几屏，每屏只有那么多字。两者的差别对分块缓存是决定性的：
+    /// 前者的重建代价随总量涨，后者不该涨。
+    /// </summary>
+    private void GenerateStrokesSpread(int strokeCount, int screens)
+    {
+        var rnd = new Random(20260913);
+        Doc.Clear();
+        float spanH = _virtualH * screens;
+        for (int i = 0; i < strokeCount; i++)
+        {
+            var s = new Stroke
+            {
+                Tool = Tool.Pen,
+                Color = PenColor,
+                Kind = StrokeKind.Freehand,
+                Width = 2.5f + (float)rnd.NextDouble() * 4f,
+            };
+            float x = _virtualX + (float)rnd.NextDouble() * _virtualW;
+            float y = _virtualY + (float)rnd.NextDouble() * spanH;
+            int pts = 8 + rnd.Next(24);
+            float ang = (float)(rnd.NextDouble() * Math.PI * 2);
+            for (int j = 0; j < pts; j++)
+            {
+                ang += (float)((rnd.NextDouble() - 0.5) * 0.7);
+                float d = 5f + (float)rnd.NextDouble() * 9f;
+                x = Math.Clamp(x + MathF.Cos(ang) * d, _virtualX + 1, _virtualX + _virtualW - 1);
+                y = Math.Clamp(y + MathF.Sin(ang) * d, _virtualY + 1, _virtualY + spanH - 1);
                 s.AddPoint(x, y, (float)rnd.NextDouble(), NowMs);
             }
             Doc.AppendStroke(s);
@@ -3184,6 +3265,139 @@ internal sealed class App : InkEngine.InkEngine
             ? $"  PASS: 没有残影（扣掉环境噪声后仅剩 {ours} 像素）"
             : $"  FAIL: 出现拖尾残影（扣掉环境噪声后仍有 {ours} 像素）");
         _quit = true;
+    }
+
+    /// <summary>
+    /// **分块缓存自检**：接缝、内容正确性、滚动复用、内存上界。
+    ///
+    /// 分块缓存有一类特别难查的 bug——**接缝**：笔画跨在块边界上时，如果
+    /// 有一边的块没把这条笔画画进去，就会缺一条边；而"平时看着好好的、
+    /// 只有粗笔画压在边界上才露出来"，靠肉眼很难碰到。
+    ///
+    /// 这里用"同一支笔，摆在块边界上 vs 摆在块正中间"做对照：墨量必须一样。
+    /// 边界上少墨 = 接缝，多墨 = 重复绘制。
+    /// </summary>
+    private void TileTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 分块缓存自检 ===");
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"    {name,-30}{(ok ? "PASS" : "FAIL")}  {detail}");
+        }
+
+        const int T = 256;                                  // 块边长，和 CanvasTileCache 一致
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+
+        // ---- 1) 粗横线压在横向块边界上 ----------------------------------
+        // 边界取 y = 3T = 768（画布坐标 = 屏幕坐标，因为相机为 0、原点为 0）。
+        float w2 = 40f;
+        int onSeam = DrawAndCountHorizontal(_virtualX + 300, 3 * T, 1200, w2);
+        int midTile = DrawAndCountHorizontal(_virtualX + 300, 3 * T + T / 2, 1200, w2);
+        int diffY = Math.Abs(onSeam - midTile);
+        Check("横线压在块边界上不缺墨", onSeam > 40000 && diffY < midTile * 0.03,
+              $"边界 {onSeam} vs 块中间 {midTile}（差 {diffY}，允许 {midTile * 0.03:F0}）");
+
+        // ---- 2) 粗竖线压在纵向块边界上 ----------------------------------
+        int onSeamX = DrawAndCountVertical(4 * T, _virtualY + 300, 1200, w2);
+        int midTileX = DrawAndCountVertical(4 * T + T / 2, _virtualY + 300, 1200, w2);
+        int diffX = Math.Abs(onSeamX - midTileX);
+        Check("竖线压在块边界上不缺墨", onSeamX > 40000 && diffX < midTileX * 0.03,
+              $"边界 {onSeamX} vs 块中间 {midTileX}（差 {diffX}，允许 {midTileX * 0.03:F0}）");
+
+        // ---- 3) 跨块的长笔画：一整条都得在 ------------------------------
+        // 从画面左上角一路斜到右下角，横跨十几个块。
+        Doc.Clear();
+        Doc.ClearHistory();
+        var longStroke = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(1f, 0f, 1f, 1f), Width = 2f * DpiScale,
+        };
+        for (int i = 0; i <= 40; i++)
+        {
+            float t = i / 40f;
+            longStroke.AddPoint(_virtualX + 200 + t * 2400, _virtualY + 200 + t * 1400, 1f, i);
+        }
+        Doc.AddStroke(longStroke);
+        SettleFrames(500);
+        // 沿线取 6 段采样，每段都得有墨（中间任何一块漏画，就会有一段是空的）
+        int emptySpots = 0;
+        for (int k = 0; k < 6; k++)
+        {
+            float t = (k + 0.5f) / 6f;
+            int n = ScreenProbe.CountMagenta(
+                (int)(_virtualX + 200 + t * 2400) - 60, (int)(_virtualY + 200 + t * 1400) - 60, 120, 120);
+            if (n < 50) emptySpots++;
+        }
+        Check("跨十几个块的长笔画不断线", emptySpots == 0, $"6 段采样里有 {emptySpots} 段是空的");
+
+        // ---- 4) 滚下去再滚回来：墨量必须一模一样，而且回程不重画 -------
+        int before = ScreenProbe.CountMagenta(_virtualX, _virtualY, _virtualW, _virtualH);
+        var w0 = _windows[0];
+        int rasterDown = 0, rasterUp = 0;
+        for (int k = 0; k < 4; k++) { HandleWheel(Wheel(-120)); RenderAll(); rasterDown += w0.LastPatchCount; }
+        for (int k = 0; k < 4; k++) { HandleWheel(Wheel(120)); RenderAll(); rasterUp += w0.LastPatchCount; }
+        SettleFrames(300);
+        int after = ScreenProbe.CountMagenta(_virtualX, _virtualY, _virtualW, _virtualH);
+
+        Check("滚下去再滚回来画面一致", Math.Abs(after - before) <= before * 0.005 && before > 5000,
+              $"{before} -> {after}");
+        Check("回程复用了块缓存（没有重画）", rasterUp == 0,
+              $"去程光栅 {rasterDown} 块，回程 {rasterUp} 块");
+
+        // ---- 5) 常驻块数不超过预算 --------------------------------------
+        Check("常驻分块不超预算", w0.LastTileCount <= Math.Max(w0.LastTileBudget, 1),
+              $"{w0.LastTileCount} 块 / 预算 {w0.LastTileBudget}（每块 256KB）");
+
+        Console.WriteLine();
+        Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：块边界无缝、跨块笔画完整、回程免重画、内存有上界");
+        Console.WriteLine();
+        Doc.Clear();
+        Doc.ClearHistory();
+        _quit = true;
+    }
+
+    // 分块测试的滚轮构造（和 WheelTest 一致：delta 在高 16 位）
+    private static IntPtr Wheel(int delta) => new((long)(ushort)(short)delta << 16);
+
+    /// <summary>画一条粗横线并数它的墨像素。横线的**中心线**画在 y 上。</summary>
+    private int DrawAndCountHorizontal(float x, float y, float len, float width)
+    {
+        Doc.Clear();
+        Doc.ClearHistory();
+        var s = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(1f, 0f, 1f, 1f), Width = width,
+        };
+        s.AddPoint(x, y, 1f, 0);
+        s.AddPoint(x + len, y, 1f, 1);
+        Doc.AddStroke(s);
+        Doc.InvalidateAll();
+        SettleFrames(350);
+        return ScreenProbe.CountMagenta((int)x, (int)(y - width), (int)len, (int)(width * 2f));
+    }
+
+    /// <summary>画一条粗竖线并数它的墨像素。竖线的**中心线**画在 x 上。</summary>
+    private int DrawAndCountVertical(float x, float y, float len, float width)
+    {
+        Doc.Clear();
+        Doc.ClearHistory();
+        var s = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(1f, 0f, 1f, 1f), Width = width,
+        };
+        s.AddPoint(x, y, 1f, 0);
+        s.AddPoint(x, y + len, 1f, 1);
+        Doc.AddStroke(s);
+        Doc.InvalidateAll();
+        SettleFrames(350);
+        return ScreenProbe.CountMagenta((int)(x - width), (int)y, (int)(width * 2f), (int)len);
     }
 
     private void EraserTest()

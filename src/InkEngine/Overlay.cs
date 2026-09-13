@@ -213,9 +213,18 @@ internal sealed class OverlayWindow : IDisposable
     private ID2D1DeviceContext _ctx;
     private ID2D1Bitmap1 _backBuffer;
 
-    private ID3D11Texture2D _contentTexture;
-    private ID2D1Bitmap1 _contentTarget;   // render into
-    private ID2D1Bitmap1 _contentSource;   // composite from
+    // ---- 内容层（画布空间分块缓存）---------------------------------------
+    // 内容层**不再是一张绑在屏幕上的位图**，而是画布空间里的一格一格小位图。
+    // 这是"滚动不重画"和"坐标不会忘换算"的根。见 CanvasTiles.cs 顶部的说明。
+    private CanvasTileCache _tiles;
+    /// <summary>上一次把文档脏区同步进分块缓存时的文档版本号。</summary>
+    private int _tilesVersion = -1;
+    /// <summary>上一帧的相机偏移。变了 → 整屏合成位置都变了，后缓冲整块作废。</summary>
+    private float _lastCamY = float.NaN;
+    private bool _lastBoardOn;
+    private Color4 _lastBoardColor = new(0f, 0f, 0f, -1f);
+    /// <summary>当前帧的引擎引用：光栅化分块时要用文档和底色。</summary>
+    private InkEngine _app;
 
     // ---- 界面缓存 --------------------------------------------------------
     // 界面画到自己的位图上，只在它声明"变了"的时候重画一次。这是引擎侧的
@@ -256,7 +265,7 @@ internal sealed class OverlayWindow : IDisposable
     public int LastPresentRectCount;
     public double LastPresentAreaPercent;
     public const float HudWidth = 1000f;
-    public const float HudHeight = 230f;
+    public const float HudHeight = 262f;
 
     /// <summary>是否成功拿到微软的委托墨迹轨迹接口（进程级探测结果）。</summary>
     public static bool InkTrailAvailable;
@@ -272,8 +281,6 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     public static bool InkTrailEnabled;
 
-    private int _renderedVersion = -1;
-
     public double LastRebuildMs;
     public double LastAppendMs;
     public double LastPatchMs;
@@ -281,6 +288,8 @@ internal sealed class OverlayWindow : IDisposable
     public double LastRecordMs;
     public double LastPresentMs;
     public int LastDrawnStrokes;
+    /// <summary>常驻分块数 / 这一帧可见块数 / 分块预算（诊断用）。</summary>
+    public int LastTileCount, LastTileVisible, LastTileBudget;
     public string LastError;
 
     public ID2D1DeviceContext Context => _ctx;
@@ -458,32 +467,10 @@ internal sealed class OverlayWindow : IDisposable
                     BitmapOptions.Target | BitmapOptions.CannotDraw));
         }
 
-        // Offscreen layer holding everything that has already been committed.
-        // Two Direct2D views over one Direct3D texture: a target to draw into,
-        // and a source to composite from (a target bitmap cannot be read back).
-        var texDesc = new Texture2DDescription
-        {
-            Width = (uint)Width,
-            Height = (uint)Height,
-            MipLevels = 1,
-            ArraySize = 1,
-            Format = Format.B8G8R8A8_UNorm,
-            SampleDescription = new SampleDescription(1, 0),
-            Usage = ResourceUsage.Default,
-            BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
-            CPUAccessFlags = CpuAccessFlags.None,
-            MiscFlags = ResourceOptionFlags.None,
-        };
-        _contentTexture = Gfx.Device.CreateTexture2D(texDesc);
-
-        using (var surface = _contentTexture.QueryInterface<IDXGISurface>())
-        {
-            _contentTarget = _ctx.CreateBitmapFromDxgiSurface(surface,
-                new BitmapProperties1(pf, 96f, 96f,
-                    BitmapOptions.Target | BitmapOptions.CannotDraw));
-            _contentSource = _ctx.CreateBitmapFromDxgiSurface(surface,
-                new BitmapProperties1(pf, 96f, 96f, BitmapOptions.None));
-        }
+        // 内容层：画布空间的分块光栅缓存。**不在这里分配位图**——块按需创建，
+        // 总量由 CanvasTileCache.BudgetTiles 封顶（默认 48MB）。
+        _tiles = new CanvasTileCache();
+        _tiles.Attach(_ctx);
 
         _scratch = _ctx.CreateSolidColorBrush(new Color4(1f, 1f, 1f, 1f), null);
         _transparentBrush = _ctx.CreateSolidColorBrush(new Color4(0f, 0f, 0f, 0f), null);
@@ -523,7 +510,18 @@ internal sealed class OverlayWindow : IDisposable
     //  Content layer
     // ------------------------------------------------------------------
 
-    private void EnsureContent(InkEngine app)
+    /// <summary>
+    /// 把文档的最新状态同步进分块缓存，并把"这一帧要看的新块"光栅化出来。
+    ///
+    /// 三步，顺序固定：
+    ///   ① 文档变了 → 把脏区碰到的块标脏（全是**画布坐标**，与相机无关）
+    ///   ② 相机/底色变了 → 块内容一个像素都不用重画，只是合成位置或底变了
+    ///   ③ 同步可见块：新露出来的（或脏的）就地光栅化，然后按预算淘汰旧块
+    ///
+    /// **滚动只走第 ② 步和第 ③ 步里的"没有新块"分支**，所以滚一格的代价
+    /// 与文档总量无关——这是分块相对老做法的根本差别。
+    /// </summary>
+    private void SyncTiles(InkEngine app)
     {
         var doc = app.Doc;
 
@@ -536,31 +534,144 @@ internal sealed class OverlayWindow : IDisposable
         // （FillGeometry），慢一点但内存有上界。
         Stroke.MaxRealizations = RealizationBudget(doc.Strokes.Count);
 
-        if (_renderedVersion == doc.Version) return;
-
-        Console.WriteLine($"[内容层] ver {doc.Version}（已渲染 {_renderedVersion}）Full={doc.Dirty.Full} 脏区={doc.Dirty.Rects.Count} 待追加={(doc.PendingAppend != null)} 相机={ViewOffsetY:F0}");
-        if (_renderedVersion < 0 || doc.Dirty.Full)
+        if (_tilesVersion != doc.Version)
         {
-            RebuildAll(doc, app);
-        }
-        else if (doc.PendingAppend != null && doc.Dirty.Rects.Count == 1)
-        {
-            var sw = Stopwatch.StartNew();
-            DrawOnlyPatch(doc.PendingAppend);
-            sw.Stop();
-            LastPatchMs = sw.Elapsed.TotalMilliseconds;
-            LastPatchCount = 1;
-        }
-        else
-        {
-            var sw = Stopwatch.StartNew();
-            int patched = PatchRegions(doc, app);
-            sw.Stop();
-            LastPatchMs = sw.Elapsed.TotalMilliseconds;
-            LastPatchCount = patched;
+            if (doc.Dirty.Full)
+            {
+                _tiles.MarkAllDirty();
+                _forceFullFrame = true;
+            }
+            else
+            {
+                foreach (var r in doc.Dirty.Rects) _tiles.MarkDirty(r);
+            }
+            _tilesVersion = doc.Version;
         }
 
-        _renderedVersion = doc.Version;
+        // 相机变了：**分块一律不动**，只是贴的位置变了。后缓冲里躺着的是
+        // 滚动前的画面，整块都不可信，所以这一帧整屏重合成。
+        if (ViewOffsetY != _lastCamY)
+        {
+            _lastCamY = ViewOffsetY;
+            _forceFullFrame = true;
+        }
+
+        // 底色是**画进分块里**的（透明批注 = 擦成全透明，白板 = 铺底色），
+        // 所以换底色等于所有块都过期。
+        if (app.BoardOn != _lastBoardOn || !app.BoardColor.Equals(_lastBoardColor))
+        {
+            _lastBoardOn = app.BoardOn;
+            _lastBoardColor = app.BoardColor;
+            _tiles.MarkAllDirty();
+            _forceFullFrame = true;
+        }
+
+        _tiles.Sync(VisibleCanvasRect, RasterizeTile);
+
+        RebuildCount += _tiles.RasterizedLastFrame;
+        LastRebuildMs = _tiles.RasterMsLastFrame;
+        LastPatchMs = _tiles.RasterMsLastFrame;
+        LastPatchCount = _tiles.RasterizedLastFrame;
+        LastDrawnStrokes = _tiles.StrokesLastFrame;
+        LastTileCount = _tiles.Count;
+        LastTileVisible = _tiles.VisibleCount;
+        LastTileBudget = _tiles.BudgetTiles > 0
+            ? Math.Max(_tiles.BudgetTiles, _tiles.VisibleCount + CanvasTileCache.ScrollBackMargin)
+            : _tiles.VisibleCount + CanvasTileCache.ScrollBackMargin;
+    }
+
+    /// <summary>
+    /// 光栅化一块：把与这块画布矩形相交的笔画画进它的纹理。
+    ///
+    /// **这一层唯一的坐标换算就是"减块原点"**，相机不参与——相机只出现在
+    /// <see cref="CompositeTiles"/> 那一步。老做法里"脏区、裁剪、快路径"
+    /// 各要记得换算一次，漏一处就出残影；现在想漏也没地方漏。
+    ///
+    /// 块纹理正好是块的大小，所以画出界的部分会被渲染目标自己裁掉，
+    /// 不需要额外的裁剪矩形（这也顺带避免了抗锯齿接缝）。
+    /// </summary>
+    private int RasterizeTile(ID2D1Bitmap1 target, RectF canvas)
+    {
+        var app = _app;
+        var doc = app.Doc;
+
+        _ctx.Target = target;
+        _ctx.BeginDraw();
+        _ctx.Transform = Matrix3x2.CreateTranslation(-canvas.MinX, -canvas.MinY);
+
+        // Clear() 无视裁剪，用 Copy 混合的填充来"擦"这一块（老规矩）。
+        //
+        // **矩形要写画布坐标，不能写 (0,0,TileSize,TileSize)**：当前的变换是
+        // "画布 → 块内"，直接给块内坐标会被再减一次块原点，整块擦到画面外去，
+        // 结果就是"内容确实重画了，但旧墨没被擦掉"——擦除后屏幕上留着鬼影。
+        // （实测踩过：橡皮擦掉了数据，屏幕上三条线还在。）
+        var clearRect = new Vortice.RawRectF(
+            canvas.MinX, canvas.MinY, canvas.MaxX, canvas.MaxY);
+        _ctx.PrimitiveBlend = PrimitiveBlend.Copy;
+        _ctx.FillRectangle(clearRect, BoardBrush(app));
+        _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
+
+        // 空间索引按**带笔宽外扩**的框返回候选，所以跨在块边界上的粗笔画
+        // 两边都会被画到，不会出现"贴边被削掉一半"的缺口。
+        doc.QueryGrid(canvas, _strokeScratch);
+        int drawn = 0;
+        foreach (var s in _strokeScratch)
+        {
+            if (!s.PaddedBounds.Intersects(canvas)) continue;
+            DrawStroke(s);
+            drawn++;
+        }
+
+        _ctx.Transform = Matrix3x2.Identity;
+        var hr = _ctx.EndDraw();
+        _ctx.Target = null;
+
+        if (hr.Failure) LastError = "tile EndDraw: " + hr.Description;
+        return drawn;
+    }
+
+    /// <summary>
+    /// 把可见分块贴到后缓冲上这一块区域里。
+    ///
+    /// **相机在整个内容层里只出现在这里**：窗口矩形 → 画布矩形，取每块相交的
+    /// 子矩形，贴回窗口上对应的位置。块在画布空间里待着不动，所以"滚动"在
+    /// 这里是一堆**子矩形拷贝**——和 Win32 的 ScrollWindowEx、浏览器合成器
+    /// 滚动图层是同一个手法：搬的是已经画好的像素，不是重新画。
+    ///
+    /// 必须是子矩形而不是整块：写字时脏区只有一小块，整块贴就等于每帧多搬
+    /// 几十万像素。
+    /// </summary>
+    private void CompositeTiles(in RectF windowRect)
+    {
+        // 窗口 → 画布（CanvasToWindow 的逆）：c = w + Origin - ViewOffset
+        var canvasRect = new RectF
+        {
+            MinX = windowRect.MinX + OriginX - ViewOffsetX,
+            MinY = windowRect.MinY + OriginY - ViewOffsetY,
+            MaxX = windowRect.MaxX + OriginX - ViewOffsetX,
+            MaxY = windowRect.MaxY + OriginY - ViewOffsetY,
+        };
+
+        foreach (var tile in _tiles.Visible)
+        {
+            var tr = CanvasTileCache.RectOf(tile.Tx, tile.Ty);
+
+            float l = MathF.Max(tr.MinX, canvasRect.MinX);
+            float t = MathF.Max(tr.MinY, canvasRect.MinY);
+            float r = MathF.Min(tr.MaxX, canvasRect.MaxX);
+            float b = MathF.Min(tr.MaxY, canvasRect.MaxY);
+            if (r <= l || b <= t) continue;
+
+            var src = new Vortice.RawRectF(l - tr.MinX, t - tr.MinY, r - tr.MinX, b - tr.MinY);
+            var dst = new Vortice.RawRectF(
+                l - canvasRect.MinX + windowRect.MinX, t - canvasRect.MinY + windowRect.MinY,
+                r - canvasRect.MinX + windowRect.MinX, b - canvasRect.MinY + windowRect.MinY);
+
+            // NearestNeighbor：画布和窗口是 1:1，不需要插值；用线性过滤反而
+            // 会在块边界上把邻居的像素混进来（半透明笔迹会糊出淡边）。
+            _ctx.DrawBitmap(tile.Source, dst, 1f,
+                Vortice.Direct2D1.InterpolationMode.NearestNeighbor, src, null);
+        }
     }
 
     /// <summary>
@@ -576,8 +687,8 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private RectF CanvasRectToWindow(in RectF r) => new()
     {
-        MinX = r.MinX + ViewOffsetX, MinY = r.MinY + ViewOffsetY,
-        MaxX = r.MaxX + ViewOffsetX, MaxY = r.MaxY + ViewOffsetY,
+        MinX = r.MinX + ViewOffsetX - OriginX, MinY = r.MinY + ViewOffsetY - OriginY,
+        MaxX = r.MaxX + ViewOffsetX - OriginX, MaxY = r.MaxY + ViewOffsetY - OriginY,
     };
     private RectF ClipToWindow(RectF r)
     {
@@ -709,9 +820,14 @@ internal sealed class OverlayWindow : IDisposable
         float dpiScale = Dpi / 96f;
         // 界面画在自己的绝对逻辑坐标里（和它 Layout 拿到的逻辑屏幕同一套），
         // 引擎负责换算成物理像素：先乘 dpiScale，再减去窗口原点。
+        //
+        // **这里绝对不能带相机**：界面是贴在屏幕上的工具条，画布滚它不动。
+        // 以前这里用的是 CanvasToWindow（含 ViewOffsetY），相机为 0 时看不出
+        // 问题，一滚动整个界面就会跟着内容往上跑——正是"坐标换算漏一处"
+        // 那一类 bug 的又一例。
         _ctx.SetDpi(96f, 96f);
         _ctx.Transform = Matrix3x2.CreateScale(dpiScale)
-                       * CanvasToWindow;
+                       * Matrix3x2.CreateTranslation(-OriginX, -OriginY);
         // 裁剪矩形同样用逻辑坐标（会被上面的变换一起作用）。
         var clip = new Vortice.RawRectF(_uiLogicalBounds.MinX, _uiLogicalBounds.MinY,
                                         _uiLogicalBounds.MaxX, _uiLogicalBounds.MaxY);
@@ -727,117 +843,6 @@ internal sealed class OverlayWindow : IDisposable
         }
         _ctx.Transform = Matrix3x2.Identity;
         _ctx.PopAxisAlignedClip();
-    }
-
-    /// <summary>
-    /// Appends a stroke that sits on top of everything already committed, so
-    /// the region only needs drawing - no erase pass. This is the hot path: it
-    /// runs once per finished stroke.
-    /// </summary>
-    private void DrawOnlyPatch(Stroke s)
-    {
-        var r = ClipToWindow(CanvasRectToWindow(s.PaddedBounds));
-        Console.WriteLine($"[追加] 笔画包围盒({s.PaddedBounds.MinX:F0},{s.PaddedBounds.MinY:F0})-({s.PaddedBounds.MaxX:F0},{s.PaddedBounds.MaxY:F0}) 裁后({r.MinX:F0},{r.MinY:F0})-({r.MaxX:F0},{r.MaxY:F0}) 空={r.IsEmpty}");
-        if (r.IsEmpty) return;
-
-        _ctx.Target = _contentTarget;
-        _ctx.BeginDraw();
-        _ctx.Transform = CanvasToWindow;
-        _ctx.PushAxisAlignedClip(
-            new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY),
-            AntialiasMode.Aliased);
-        DrawStroke(s);
-        _ctx.PopAxisAlignedClip();
-        _ctx.Transform = Matrix3x2.Identity;
-        var hr = _ctx.EndDraw();
-        try { _ctx.Flush(out _, out _); } catch { }
-        _ctx.Target = null;
-
-        if (hr.Failure) LastError = "append EndDraw: " + hr.Description;
-    }
-
-    /// <summary>
-    /// Repaints every stale rectangle in one pass: wipe each one, then redraw
-    /// only the items that actually cross it.
-    ///
-    /// Two things make this cheap. All the rectangles share a single
-    /// BeginDraw/EndDraw pair and a single Flush, because Flush waits for the
-    /// GPU and paying that once per rectangle dominates everything else. And the
-    /// candidate strokes come from the spatial index instead of a scan over the
-    /// whole document.
-    /// </summary>
-    private int PatchRegions(InkDocument doc, InkEngine app)
-    {
-        var rects = doc.Dirty.Rects;
-        if (rects.Count == 0) return 0;
-
-        _ctx.Target = _contentTarget;
-        _ctx.BeginDraw();
-        _ctx.Transform = CanvasToWindow;
-
-        int patched = 0;
-        foreach (var raw in rects)
-        {
-            var r = ClipToWindow(CanvasRectToWindow(raw));
-            if (r.IsEmpty) continue;
-
-            var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
-            _ctx.PushAxisAlignedClip(box, AntialiasMode.Aliased);
-
-            // Clear() on a Direct2D target ignores the current clip, so punch
-            // the hole with a Copy-blended fill instead.
-            _ctx.PrimitiveBlend = PrimitiveBlend.Copy;
-            _ctx.FillRectangle(box, BoardBrush(app));
-            _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
-
-            doc.QueryGrid(r, _strokeScratch);
-            foreach (var s in _strokeScratch) DrawStroke(s);
-
-            _ctx.PopAxisAlignedClip();
-            patched++;
-        }
-
-        _ctx.Transform = Matrix3x2.Identity;
-        var hr = _ctx.EndDraw();
-        try { _ctx.Flush(out _, out _); } catch { }
-        _ctx.Target = null;
-
-        if (hr.Failure) LastError = "patch EndDraw: " + hr.Description;
-        return patched;
-    }
-
-    private void RebuildAll(InkDocument doc, InkEngine app)
-    {
-        RebuildCount++;
-        // 整层重画意味着后缓冲里那块内容全过时了，这一帧必须全屏重绘一次。
-        _forceFullFrame = true;
-        var sw = Stopwatch.StartNew();
-        _ctx.Target = _contentTarget;
-        _ctx.BeginDraw();
-        // 白板模式下这一层整体铺底色；透明批注时就是清空。
-        _ctx.Clear(app.BoardOn ? app.BoardColor : Transparent);
-        _ctx.Transform = CanvasToWindow;
-
-        int drawn = 0;
-        var view = VisibleCanvasRect;   // 注意要算上相机，不能裸用窗口矩形
-        foreach (var s in doc.Strokes)
-        {
-            if (!s.IntersectsRect(view)) continue;
-            DrawStroke(s);
-            drawn++;
-        }
-
-        _ctx.Transform = Matrix3x2.Identity;
-        var hr = _ctx.EndDraw();
-        // Flush is required before this surface can be read back as a source.
-        try { _ctx.Flush(out _, out _); } catch { }
-        _ctx.Target = null;
-        sw.Stop();
-
-        Console.WriteLine($"[重建] 可见画布 y {view.MinY:F0}~{view.MaxY:F0}　笔画 {doc.Strokes.Count}　实绘 {drawn}　相机 {ViewOffsetY:F0}");
-        LastDrawnStrokes = drawn;
-        LastRebuildMs = sw.Elapsed.TotalMilliseconds;
-        if (hr.Failure) LastError = "rebuild EndDraw: " + hr.Description;
     }
 
     /// <summary>供分辨率实测复用同一套绘制路径。</summary>
@@ -916,6 +921,8 @@ internal sealed class OverlayWindow : IDisposable
 
     public void RenderFrame(InkEngine app)
     {
+        _app = app;
+
         // 界面：先布局、该重画就重画一次，拿到这一帧的矩形。
         bool uiVisible = PrepareUi(app);
 
@@ -923,7 +930,7 @@ internal sealed class OverlayWindow : IDisposable
         // bound: switching targets in the middle of BeginDraw/EndDraw puts
         // Direct2D into an error state.
         if (!app.NoContentCache)
-            EnsureContent(app);
+            SyncTiles(app);
 
         _transientNow = ComputeTransientBounds(app);
         UpdateFrameDirty(app, uiVisible);
@@ -931,6 +938,7 @@ internal sealed class OverlayWindow : IDisposable
         var sw = Stopwatch.StartNew();
         _ctx.Target = _backBuffer;
         _ctx.BeginDraw();
+        _ctx.Transform = Matrix3x2.Identity;
 
         // 逐块重绘。以前是"全屏清屏 + 全屏贴图 + 全屏上屏"，一帧要动 5.2M 像素；
         // 实测这才是在核显上占 8~9% GPU 的真正原因（不是上屏，Present1 之后
@@ -952,17 +960,29 @@ internal sealed class OverlayWindow : IDisposable
             {
                 // Naive path: re-rasterise every committed stroke, every frame.
                 _ctx.Transform = CanvasToWindow;
+                // 注意：这里要比的是**画布矩形**。以前直接拿窗口矩形去比，
+                // 相机为 0 时看不出问题，一滚动就全错（这也是要收进"类型化
+                // 坐标"的那一类坑）。
+                var cv = new RectF
+                {
+                    MinX = c.MinX + OriginX - ViewOffsetX,
+                    MinY = c.MinY + OriginY - ViewOffsetY,
+                    MaxX = c.MaxX + OriginX - ViewOffsetX,
+                    MaxY = c.MaxY + OriginY - ViewOffsetY,
+                };
                 foreach (var s in app.Doc.Strokes)
                 {
-                    if (!s.IntersectsRect(c)) continue;
+                    if (!s.PaddedBounds.Intersects(cv)) continue;
                     DrawStroke(s);
                 }
             }
             else
             {
-                _ctx.DrawBitmap(_contentSource, 1f, Vortice.Direct2D1.InterpolationMode.NearestNeighbor);
-                _ctx.Transform = CanvasToWindow;
+                // 内容层：把可见分块按相机贴在窗口上（子矩形拷贝，不重画笔迹）
+                CompositeTiles(c);
             }
+
+            _ctx.Transform = CanvasToWindow;
 
             // 调试用：--trailonly 时不画自己那一笔，用来验证委托墨迹轨迹
             // 是不是真的由系统合成器画出来了。
@@ -1037,6 +1057,7 @@ internal sealed class OverlayWindow : IDisposable
             var m = RectF.Empty;
             m.Add(app.MqMinX, app.MqMinY);
             m.Add(app.MqMaxX, app.MqMaxY);
+            m = CanvasRectToWindow(m);       // 框选矩形是画布坐标，脏区要窗口坐标
             r.Add(m.Inflate(3f));
         }
 
@@ -1058,10 +1079,10 @@ internal sealed class OverlayWindow : IDisposable
             float grip = SelectionHandles.RotateGripLogical * 0.5f * dpi + 3f;
             ui.Add(rot.X - grip, rot.Y - grip);
             ui.Add(rot.X + grip, rot.Y + grip);
-            r.Add(ui);
+            r.Add(CanvasRectToWindow(ui));   // 选中框也是画布坐标（它跟着墨迹走）
 
             // 操作条在选中框下方，也必须算进来，否则它自己会留下残影。
-            r.Add(SelectionHandles.BarRect(sb, dpi).Inflate(4f));
+            r.Add(CanvasRectToWindow(SelectionHandles.BarRect(sb, dpi).Inflate(4f)));
         }
 
         if (app.ShowHud)
@@ -1616,9 +1637,7 @@ internal sealed class OverlayWindow : IDisposable
     {
         _brushes.Clear();
         _scratch?.Dispose();
-        _contentSource?.Dispose();
-        _contentTarget?.Dispose();
-        _contentTexture?.Dispose();
+        _tiles?.Dispose();
         _backBuffer?.Dispose();
         _ctx?.Dispose();
         _visual?.Dispose();

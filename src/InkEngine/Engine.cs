@@ -203,6 +203,8 @@ public class InkEngine
     internal double _lastRebuildMs;
     internal double _lastRecordMs;
     internal double _lastPresentMs;
+    // 分块缓存的状态（面板与自检读数）
+    internal int _tilesUsed, _tilesVisible, _tilesBudget, _tilesRasterized;
     private double _inputToPresentMs;
     private double _lastInputMs = -1;
     internal double _nextLogAt;
@@ -523,6 +525,10 @@ public class InkEngine
         _lastRebuildMs = w0.LastRebuildMs;
         _lastRecordMs = w0.LastRecordMs;
         _lastPresentMs = w0.LastPresentMs;
+        _tilesUsed = w0.LastTileCount;
+        _tilesVisible = w0.LastTileVisible;
+        _tilesBudget = w0.LastTileBudget;
+        _tilesRasterized = w0.LastPatchCount;
 
         // How long the newest input took to reach the screen. This is our own
         // contribution; the display pipeline adds up to one more scan-out.
@@ -591,7 +597,8 @@ public class InkEngine
     {
         return
             $"帧率 {_fps,5:F1} fps     帧耗时 {_lastFrameMs,5:F2} ms     输入到上屏 {_inputToPresentMs,5:F1} ms\n" +
-            $"绘制 {_lastRecordMs,5:F2} ms     上屏 {_lastPresentMs,5:F2} ms     整层重建 {_lastRebuildMs,6:F1} ms\n" +
+            $"绘制 {_lastRecordMs,5:F2} ms     上屏 {_lastPresentMs,5:F2} ms     分块光栅 {_lastRebuildMs,6:F1} ms\n" +
+            $"分块 {_tilesUsed,4}/{_tilesBudget,4}（可见 {_tilesVisible,3}，本帧光栅 {_tilesRasterized,3}）\n" +
             $"工作集 {_workingSetMb,5:F1} MB   私有（提交）{_privateMb,6:F1} MB   显存 {_gpuMb,5:F0} MB   CPU {_cpuPercent,4:F1} %\n" +
             $"笔画 {Doc.Strokes.Count,6}     点数 {Doc.TotalPoints,8}     选中 {Doc.Selected.Count}     工具：{ToolName(Tool)}{(PassThrough ? "   [穿透中]" : "")}\n" +
             $"笔迹粗细 {PenWidthLogical,4:F1} 逻辑像素    网格单元 {Doc.GridCells}\n" +
@@ -1628,10 +1635,12 @@ public class InkEngine
     ///
     /// 只做纵向。往下滚 = 内容上移 = 偏移变负。
     ///
-    /// 现阶段的代价（第一步的已知边界）：偏移一变，整屏内容的位置全变，
-    /// 所以内容层要整层重画。一屏量级（约 1000 对象）约 20ms，可用；
-    /// 累积到一万笔时约 154ms，滚一格会卡一下。要治累积量得把内容层改成
-    /// 滚动缓冲或分块（计划文档第二十九节第二步）。
+    /// 代价：**这里一个像素都不重画**。内容层是画布空间的分块缓存
+    /// （CanvasTiles.cs），滚动只是换个位置把已经画好的块贴上去；只有在
+    /// 新露出**没画过**的块时才会光栅化那一小块。所以滚一格的代价与文档
+    /// 里有多少笔无关——从"整层重画"（一万笔 82~154ms，滚一格卡一下）
+    /// 变成"贴图 + 偶尔补一两块"。这也正是 Win32 ScrollWindowEx 和浏览器
+    /// 合成器滚动图层用的手法。
     /// </summary>
     internal IntPtr HandleWheel(IntPtr wParam)
     {
@@ -1650,8 +1659,8 @@ public class InkEngine
         if (ViewOffsetY < lowest) ViewOffsetY = lowest;
 
         ScrollBarActiveAtMs = NowMs;                     // 滚动时让滚动条露面
-        Console.WriteLine($"[滚轮] delta={delta} -> ViewOffsetY={ViewOffsetY:F0}");
-        Doc.InvalidateAll();                             // 整层重画（第一步的代价）
+        // 注意：**不调 Doc.InvalidateAll()**。那会把整个文档标脏、让所有分块
+        // 重画——正是这次要拔掉的病根。分块缓存自己会发现相机变了，只做重合成。
         _dirty = true;
         return IntPtr.Zero;
     }}

@@ -23,9 +23,14 @@ internal sealed class SpatialGrid
 
     public void Insert(Stroke s)
     {
-        // 索引的是**世界包围盒**（画布坐标）：对象被移动/缩放之后，
-        // 它占的格子就变了，索引必须跟着变。
-        var b = s.WorldBounds;
+        // 索引的是**带笔宽外扩的世界包围盒**（画布坐标）：
+        //   · 对象被移动/缩放之后占的格子会变，所以每次变换都要重插一遍；
+        //   · 用的是 PaddedBounds 而不是 WorldBounds —— 笔迹是画在中心线
+        //     两侧的，只索引中心线的范围，会让"中心线在格子外、笔身伸进
+        //     格子里"的粗笔画查不到。内容层分块之后这条更关键：漏一条，
+        //     块边界上就会缺一块墨（表现为笔迹被削掉一条边）。
+        //     索引放大一点只会多给几个候选，不会改变任何结果。
+        var b = s.PaddedBounds;
         if (b.IsEmpty) return;
         int x0 = (int)MathF.Floor(b.MinX / CellSize);
         int y0 = (int)MathF.Floor(b.MinY / CellSize);
@@ -46,7 +51,7 @@ internal sealed class SpatialGrid
 
     public void Remove(Stroke s)
     {
-        var b = s.WorldBounds;
+        var b = s.PaddedBounds;
         if (b.IsEmpty) return;
         int x0 = (int)MathF.Floor(b.MinX / CellSize);
         int y0 = (int)MathF.Floor(b.MinY / CellSize);
@@ -79,7 +84,8 @@ internal sealed class SpatialGrid
                 {
                     if (s.QueryStamp == _stamp) continue;
                     s.QueryStamp = _stamp;
-                    if (s.WorldBounds.Intersects(r)) results.Add(s);
+                    // 和 Insert 用同一套范围：带笔宽外扩。
+                    if (s.PaddedBounds.Intersects(r)) results.Add(s);
                 }
             }
         return results.Count;
