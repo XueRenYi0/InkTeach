@@ -518,7 +518,7 @@ internal sealed class App : InkEngine.InkEngine
 
         if (warmup) return;
         _abPriv = PrivateMb();
-        _abGpu = TryGpuMb();
+        _abGpu = GpuUsedMb();
         var (rec, _) = MeasureFrames(24);
         _abRec = rec;
     }
@@ -529,10 +529,25 @@ internal sealed class App : InkEngine.InkEngine
         return s.Count == 0 ? 0 : s[s.Count / 2];
     }
 
-    /// <summary>显存用量（取不到就返回 0，不影响报告）。</summary>
-    private static double TryGpuMb()
+    /// <summary>
+    /// 显存已用量（MB）。
+    ///
+    /// 注意：**别去解析 GpuMb() 返回的字符串**——那是"154/7396 MB"这种给人看的
+    /// 格式，TryParse 会失败并静默返回 0（第一版就是这么错的，整列显示 0）。
+    /// 要数就直接问同一个 API 要数。
+    ///
+    /// 为什么这项重要：核显的显存**是从系统内存里分的**，在 4GB 教室机上它和
+    /// 进程内存抢的是同一块。--memory 报告里一万笔时显存 154MB，比点数据
+    /// （3.9MB）大两个数量级——真正的大头很可能在这里。
+    /// </summary>
+    private static double GpuUsedMb()
     {
-        try { return double.TryParse(GpuMb().Replace(" MB", ""), out var v) ? v : 0; }
+        try
+        {
+            if (Gfx.Adapter3 == null) return 0;
+            var info = Gfx.Adapter3.QueryVideoMemoryInfo(0, Vortice.DXGI.MemorySegmentGroup.Local);
+            return info.CurrentUsage / 1048576.0;
+        }
         catch { return 0; }
     }
 
