@@ -262,6 +262,13 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             SelBenchTest();
         }
+        else if (mode == "--duptest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            int n = args.Length > 1 && int.TryParse(args[1], out var r) ? r : 14;
+            DupTest(n);
+        }
         else if (mode == "--aaprobe")
         {
             _autoExitAt = double.MaxValue;
@@ -413,6 +420,62 @@ internal sealed class App : InkEngine.InkEngine
     /// "这里的颜色比别处淡"。所以用两个等面积窗口的墨量比值来判定：
     /// 拐角窗口的覆盖率不该明显低于直段。
     /// </summary>
+    /// <summary>
+    /// 指数复制压力测验：画一笔，然后反复"全选 + 复制"（每次翻倍），
+    /// 每轮打印对象数与内存。就是用户按 Ctrl+A / Ctrl+D 那个动作的等价脚本。
+    ///
+    /// 它能回答两件事：
+    ///   · 内存随对象数量怎么涨 —— 换算成"每条多少 KB"
+    ///   · 涨到多少开始变慢 —— 看每轮耗时（含一次完整的绘制）
+    ///
+    /// 这也是**和 WPF 版做同一个动作做对照**用的脚本。
+    /// </summary>
+    private void DupTest(int rounds)
+    {
+        Doc.Clear();
+        Doc.ClearHistory();
+
+        var s = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(0.9f, 0.2f, 0.2f, 1f),
+            Width = 4f,
+        };
+        for (int i = 0; i < 20; i++) s.AddPoint(400 + i * 6f, 500 + MathF.Sin(i * 0.3f) * 40f, 0.5f, i);
+        Doc.AddStroke(s);
+        SettleFrames(150);
+
+        Console.WriteLine();
+        Console.WriteLine("=== 指数复制压力（Ctrl+A + Ctrl+D 的等价动作）===");
+        Console.WriteLine("   轮次 |   对象数 |   工作集 |  私有   | 本轮耗时 | 每对象");
+        Console.WriteLine("  ------|----------|----------|---------|----------|--------");
+
+        double baseMb = WorkingSetMb();
+        var clock = Stopwatch.StartNew();
+        for (int r = 1; r <= rounds; r++)
+        {
+            double t0 = clock.Elapsed.TotalMilliseconds;
+
+            Doc.Selected.Clear();
+            foreach (var st in Doc.Strokes) Doc.Selected.Add(st);   // = Ctrl+A
+            bool ok = Doc.DuplicateSelected();                       // = Ctrl+D
+            _dirty = true;
+            SettleFrames(30);
+
+            double dt = clock.Elapsed.TotalMilliseconds - t0;
+            double ws = WorkingSetMb();
+            int count = Doc.Strokes.Count;
+            Console.WriteLine($"  {r,6} | {count,8} | {ws,6:F0} MB | {PrivateMb(),5:F0} MB | "
+                            + $"{dt,6:F0} ms | {(ws - baseMb) / Math.Max(1, count) * 1024:F1} KB");
+            if (!ok)
+            {
+                Console.WriteLine("  到上限被拒绝——护栏生效，程序仍然可响应");
+                break;
+            }
+        }
+        _quit = true;
+    }
+
     /// <summary>
     /// 选中与变换的性能自检：走**真实的拖动路径**（SetTransformLive → 内容层
     /// 区域修补），量每步要花多久。

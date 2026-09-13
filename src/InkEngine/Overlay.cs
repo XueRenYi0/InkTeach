@@ -498,6 +498,16 @@ internal sealed class OverlayWindow : IDisposable
     private void EnsureContent(InkEngine app)
     {
         var doc = app.Doc;
+
+        // 细分缓存的预算随对象数量收缩。
+        //
+        // 每个缓存约 18KB，而且它是**设备相关的、每条笔画各存一份**，
+        // 所以对象一多它就是内存大头（4096 个 ≈ 72MB）。细分缓存本来就是
+        // "用内存换速度"：对象少的时候这笔买卖划算，几万条的时候会把人拖垮。
+        // 这里按对象数把预算压下来——超预算的笔画退回"每次重新细分"
+        // （FillGeometry），慢一点但内存有上界。
+        Stroke.MaxRealizations = RealizationBudget(doc.Strokes.Count);
+
         if (_renderedVersion == doc.Version) return;
 
         if (_renderedVersion < 0 || doc.Dirty.Full)
@@ -532,6 +542,19 @@ internal sealed class OverlayWindow : IDisposable
         float b = MathF.Min(r.MaxY, OriginY + Height);
         if (rr < l || b < t) return RectF.Empty;
         return new RectF { MinX = l, MinY = t, MaxX = rr, MaxY = b };
+    }
+
+    /// <summary>
+    /// 细分缓存数量的预算。按对象数分档，把缓存总内存压在几 MB 到几十 MB 之间
+    /// （每个约 18KB）。分档而不是连续公式，是为了让"多少钱换多少内存"一眼能看懂、
+    /// 也便于以后按实测调。
+    /// </summary>
+    private static int RealizationBudget(int objectCount)
+    {
+        if (objectCount <= 10_000) return 4096;    // ≤ 约 72 MB
+        if (objectCount <= 30_000) return 1024;    // ≤ 约 18 MB
+        if (objectCount <= 100_000) return 256;    // ≤ 约 4.6 MB
+        return 128;                                // ≤ 约 2.3 MB
     }
 
     // ------------------------------------------------------------------
