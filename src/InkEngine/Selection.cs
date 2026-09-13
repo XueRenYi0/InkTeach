@@ -12,6 +12,58 @@ internal enum SelHandle
 }
 
 /// <summary>
+/// 选中框的坐标系 = 一个矩形 + 一个"框坐标 → 画布坐标"的变换。
+///
+/// **单选**：用对象自己的坐标系（局部包围盒 + 它的变换），所以框和手柄跟着对象
+/// 一起转。这是主流软件的行为（Figma / PowerPoint / Illustrator 都是）。
+/// **多选**：用画布坐标下的轴对齐包围盒。多个对象朝向不同时，硬凑一个"整体朝向"
+/// 只会让人看不懂——所以这里刻意不做。
+///
+/// 这么分的好处：两种情形的数学是同一套。手柄位置在框坐标里算，再变换到画布；
+/// 命中判定把指针反变换回框坐标。轴对齐只是"变换为单位矩阵"的特例。
+/// **开销是 O(1)**：一个矩形、一个 3×2 矩阵，跟选区里有几个对象、画面上有
+/// 多少批注都没关系。
+/// </summary>
+internal struct SelectionFrame
+{
+    /// <summary>框坐标下的矩形。</summary>
+    public RectF Local;
+    /// <summary>框坐标 → 画布坐标。</summary>
+    public Matrix3x2 ToCanvas;
+
+    public bool IsEmpty => Local.IsEmpty;
+
+    public Vector2 ToCanvasPoint(Vector2 p) => Vector2.Transform(p, ToCanvas);
+
+    /// <summary>把画布坐标的点变回框坐标（命中判定用）。</summary>
+    public Vector2 ToLocalPoint(Vector2 p)
+    {
+        if (ToCanvas.IsIdentity) return p;
+        return Matrix3x2.Invert(ToCanvas, out var inv) ? Vector2.Transform(p, inv) : p;
+    }
+
+    /// <summary>
+    /// 框在画布上占的轴对齐矩形。脏区、操作条定位用它——
+    /// 框本身可能是斜的，但"它占了屏幕上哪一块"永远是个正矩形。
+    /// </summary>
+    public RectF CanvasAabb
+    {
+        get
+        {
+            if (Local.IsEmpty) return RectF.Empty;
+            if (ToCanvas.IsIdentity) return Local;
+            var p0 = ToCanvasPoint(new Vector2(Local.MinX, Local.MinY));
+            var p1 = ToCanvasPoint(new Vector2(Local.MaxX, Local.MinY));
+            var p2 = ToCanvasPoint(new Vector2(Local.MaxX, Local.MaxY));
+            var p3 = ToCanvasPoint(new Vector2(Local.MinX, Local.MaxY));
+            var r = RectF.Empty;
+            r.Add(p0.X, p0.Y); r.Add(p1.X, p1.Y); r.Add(p2.X, p2.Y); r.Add(p3.X, p3.Y);
+            return r;
+        }
+    }
+}
+
+/// <summary>
 /// 选中框的手柄布局，以及"拖动某个手柄 → 变换矩阵"的换算。
 ///
 /// **这一层只有数学，没有一行绘制。** 分开的好处有两个：
@@ -90,6 +142,73 @@ internal static class SelectionHandles
         if (h == SelHandle.Rotate) y -= RotateOffsetLogical * dpiScale;
         return new Vector2(x, y);
     }
+
+    /// <summary>手柄在**画布坐标**里的位置。</summary>
+    public static Vector2 CanvasPosition(SelHandle h, in SelectionFrame f, float dpiScale)
+        => f.ToCanvasPoint(Position(h, f.Local, dpiScale));
+
+    /// <summary>
+    /// 算当前选区的坐标系。单选跟对象转，多选轴对齐（理由见 SelectionFrame 的注释）。
+    /// </summary>
+    public static SelectionFrame FrameOf(IReadOnlyList<Stroke> sel)
+    {
+        if (sel == null || sel.Count == 0)
+            return new SelectionFrame { Local = RectF.Empty, ToCanvas = Matrix3x2.Identity };
+
+        if (sel.Count == 1)
+        {
+            var s = sel[0];
+            return new SelectionFrame { Local = s.Bounds, ToCanvas = s.Transform };
+        }
+
+        // 多选：把每个对象变换后的包围盒并起来，作为轴对齐的框。
+        var r = RectF.Empty;
+        foreach (var s in sel)
+        {
+            var one = new SelectionFrame { Local = s.Bounds, ToCanvas = s.Transform };
+            r.Add(one.CanvasAabb);
+        }
+        return new SelectionFrame { Local = r, ToCanvas = Matrix3x2.Identity };
+    }
+
+    /// <summary>按给定的选区坐标系做手柄命中判定。</summary>
+    public static SelHandle HitTest(float canvasX, float canvasY, in SelectionFrame f,
+                                    float dpiScale, bool includeEdgeHandles = true)
+    {
+        float r = HitRadiusLogical * dpiScale;
+        var p = new Vector2(canvasX, canvasY);
+
+        // 旋转手柄先测：它在框外，不会和四角重叠，但它离上边中点最近，
+        // 先测它能避免两个窄命中区互相抢。
+        if (Vector2.DistanceSquared(p, CanvasPosition(SelHandle.Rotate, f, dpiScale)) <= r * r)
+            return SelHandle.Rotate;
+
+        Span<SelHandle> order = stackalloc SelHandle[]
+        {
+            SelHandle.TopLeft, SelHandle.TopRight, SelHandle.BottomLeft, SelHandle.BottomRight,
+            SelHandle.Top, SelHandle.Bottom, SelHandle.Left, SelHandle.Right,
+        };
+        foreach (var h in order)
+        {
+            bool isEdge = h is SelHandle.Top or SelHandle.Bottom or SelHandle.Left or SelHandle.Right;
+            if (isEdge && !includeEdgeHandles) continue;
+            if (Vector2.DistanceSquared(p, CanvasPosition(h, f, dpiScale)) <= r * r) return h;
+        }
+        return SelHandle.None;
+    }
+
+    /// <summary>
+    /// 拖动换算。返回的是**框坐标**下的矩阵；调用方要把它共轭回画布坐标：
+    /// <c>F⁻¹ · M · F</c>（见 InkEngine.UpdateSelDrag）。
+    ///
+    /// 为什么不在画布坐标里直接算：框是斜的，而缩放的锚点是"对角那个手柄"，
+    /// 在斜的坐标系里做轴向缩放，只有在框坐标里才是"沿框的两条边"。
+    /// </summary>
+    public static Matrix3x2 DragMatrix(SelHandle handle, in SelectionFrame f,
+                                       Vector2 startPoint, Vector2 currentPoint,
+                                       float dpiScale, bool uniform, bool snapAngle)
+        => DragMatrix(handle, f.Local, f.ToLocalPoint(startPoint), f.ToLocalPoint(currentPoint),
+                      dpiScale, uniform, snapAngle);
 
     /// <summary>
     /// 点到哪个手柄上了。返回 <see cref="SelHandle.None"/> 表示没点中手柄

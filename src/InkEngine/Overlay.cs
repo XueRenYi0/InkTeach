@@ -958,12 +958,13 @@ internal sealed class OverlayWindow : IDisposable
         // 旋转手柄旁边留了一小块红色的前帧残留）。
         if (app.Doc.Selected.Count > 0)
         {
-            var sb = EditRegion.Of(app.Doc.Selected);
+            var frame = SelectionHandles.FrameOf(app.Doc.Selected);
+            var sb = frame.CanvasAabb;
             float dpi = app.DpiScale;
             float margin = SelectionHandles.VisualSizeLogical * 0.5f * dpi + 6f;
             var ui = sb.Inflate(margin);
 
-            var rot = SelectionHandles.Position(SelHandle.Rotate, sb, dpi);
+            var rot = SelectionHandles.CanvasPosition(SelHandle.Rotate, frame, dpi);
             float grip = SelectionHandles.RotateGripLogical * 0.5f * dpi + 3f;
             ui.Add(rot.X - grip, rot.Y - grip);
             ui.Add(rot.X + grip, rot.Y + grip);
@@ -1069,28 +1070,33 @@ internal sealed class OverlayWindow : IDisposable
         var sel = app.Doc.Selected;
         if (sel.Count == 0) return;
 
-        // 多选时画一个总框，而不是每个对象一个框——拖动就是整组一起动。
-        var b = EditRegion.Of(sel);
-        if (b.IsEmpty) return;
+        // 选区坐标系：单选跟对象转，多选轴对齐（见 SelectionFrame 的注释）。
+        var frame = SelectionHandles.FrameOf(sel);
+        if (frame.IsEmpty) return;
+        var b = frame.CanvasAabb;      // 操作条和脏区用它的轴对齐范围
 
         float dpi = app.DpiScale;
         var accent = new Color4(0f, 0.47f, 0.83f, 1f);      // #0078D4
 
+        // 框的四个角。**框本身可能是斜的**（单选一个转过角度的对象时），
+        // 所以只能用四条线画，不能用 DrawRectangle。
+        var c0 = SelectionHandles.CanvasPosition(SelHandle.TopLeft, frame, dpi);
+        var c1 = SelectionHandles.CanvasPosition(SelHandle.TopRight, frame, dpi);
+        var c2 = SelectionHandles.CanvasPosition(SelHandle.BottomRight, frame, dpi);
+        var c3 = SelectionHandles.CanvasPosition(SelHandle.BottomLeft, frame, dpi);
+
         // 1) 光晕
         _scratch.Color = new Color4(accent.R, accent.G, accent.B, 0.16f);
-        _ctx.DrawRectangle(
-            new Vortice.RawRectF(b.MinX - 2f, b.MinY - 2f, b.MaxX + 2f, b.MaxY + 2f),
-            _scratch, 6.5f);
+        DrawQuad(c0, c1, c2, c3, 6.5f);
 
         // 2) 描边
         _scratch.Color = accent;
-        var outline = new Vortice.RawRectF(b.MinX, b.MinY, b.MaxX, b.MaxY);
-        _ctx.DrawRectangle(outline, _scratch, 2.5f);
+        DrawQuad(c0, c1, c2, c3, 2.5f);
 
         // 3) 旋转手柄（在上边中点外侧，先画连线再画圆）
         float rotR = SelectionHandles.RotateGripLogical * 0.5f * dpi;
-        var rot = SelectionHandles.Position(SelHandle.Rotate, b, dpi);
-        var topCenter = new Vector2((b.MinX + b.MaxX) * 0.5f, b.MinY);
+        var rot = SelectionHandles.CanvasPosition(SelHandle.Rotate, frame, dpi);
+        var topCenter = SelectionHandles.CanvasPosition(SelHandle.Top, frame, dpi);
         _ctx.DrawLine(topCenter, rot, _scratch, 1.4f);
         var white = Brush(new Color4(1f, 1f, 1f, 1f));
         _ctx.FillEllipse(new Ellipse(rot, rotR, rotR), white);
@@ -1112,7 +1118,7 @@ internal sealed class OverlayWindow : IDisposable
         };
         foreach (var h in all)
         {
-            var p = SelectionHandles.Position(h, b, dpi);
+            var p = SelectionHandles.CanvasPosition(h, frame, dpi);
             var box = new Vortice.RawRectF(p.X - hs * 0.5f, p.Y - hs * 0.5f,
                                            p.X + hs * 0.5f, p.Y + hs * 0.5f);
             var rr = new RoundedRectangle(box, radius, radius);
@@ -1175,6 +1181,18 @@ internal sealed class OverlayWindow : IDisposable
                               new Vector2(sx, rect.MaxY - inset), sepBrush, 1f * dpi);
             }
         }
+    }
+
+    /// <summary>
+    /// 画一个四边形。选中框可能是斜的（单选一个转过角度的对象时），
+    /// DrawRectangle 只能画正矩形，所以边框用四条线拼。
+    /// </summary>
+    private void DrawQuad(Vector2 a, Vector2 b, Vector2 c, Vector2 d, float width)
+    {
+        _ctx.DrawLine(a, b, _scratch, width);
+        _ctx.DrawLine(b, c, _scratch, width);
+        _ctx.DrawLine(c, d, _scratch, width);
+        _ctx.DrawLine(d, a, _scratch, width);
     }
 
     /// <summary>

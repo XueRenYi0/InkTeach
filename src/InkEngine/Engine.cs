@@ -64,7 +64,7 @@ public class InkEngine
     internal bool KeyboardMode = true;
     private SelHandle _dragHandle = SelHandle.None;
     private bool _dragIsMove;
-    private RectF _dragStartBounds;
+    private SelectionFrame _dragFrame;
     private Vector2 _dragStartPoint;
     private Matrix3x2[] _dragStartXform;
     private Stroke[] _dragTargets;
@@ -1313,20 +1313,29 @@ public class InkEngine
     {
         if (Doc.Selected.Count == 0) return false;
 
-        var sb = EditRegion.Of(Doc.Selected);
+        var frame = SelectionHandles.FrameOf(Doc.Selected);
         float dpi = DpiScale;
 
-        int btn = SelectionHandles.BarButtonAt(x, y, sb, dpi);
-        if (btn >= 0) { RunBarAction(btn, sb); return true; }
+        // 操作条定位用框的**画布轴对齐范围**：框本身可能是斜的，但"它占了屏幕上
+        // 哪一块"永远是个正矩形，操作条贴在那个矩形的下面才对。
+        var aabb = frame.CanvasAabb;
+        int btn = SelectionHandles.BarButtonAt(x, y, aabb, dpi);
+        if (btn >= 0) { RunBarAction(btn, frame, aabb); return true; }
 
-        var h = SelectionHandles.HitTest(x, y, sb, dpi);
-        bool move = h == SelHandle.None
-                 && x >= sb.MinX && x <= sb.MaxX && y >= sb.MinY && y <= sb.MaxY;
-        if (h == SelHandle.None && !move) return false;   // 落在空白处：交给框选
+        var h = SelectionHandles.HitTest(x, y, frame, dpi);
+        bool move = false;
+        if (h == SelHandle.None)
+        {
+            // 没点在手柄上：把指针变回框坐标，看是不是落在框里（整体拖动）。
+            var lp = frame.ToLocalPoint(new Vector2(x, y));
+            move = lp.X >= frame.Local.MinX && lp.X <= frame.Local.MaxX
+                && lp.Y >= frame.Local.MinY && lp.Y <= frame.Local.MaxY;
+            if (!move) return false;                      // 落在空白处：交给框选
+        }
 
         _dragHandle = h;
         _dragIsMove = move;
-        _dragStartBounds = sb;
+        _dragFrame = frame;
         _dragStartPoint = new Vector2(x, y);
         _selDragMatrix = Matrix3x2.Identity;
 
@@ -1349,10 +1358,21 @@ public class InkEngine
         var cur = new Vector2(x, y);
         bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
 
-        var m = _dragIsMove
-            ? SelectionHandles.MoveMatrix(_dragStartPoint, cur)
-            : SelectionHandles.DragMatrix(_dragHandle, _dragStartBounds, _dragStartPoint,
-                                          cur, DpiScale, shift, shift);
+        Matrix3x2 m;
+        if (_dragIsMove)
+        {
+            // 整体移动：指针在画布上走多少，对象就走多少。**不能**在框坐标里算
+            // 再共轭回来——框是斜的时候那样会走偏方向。
+            m = Matrix3x2.CreateTranslation(cur - _dragStartPoint);
+        }
+        else
+        {
+            // 手柄换算在**框坐标**里做（缩放的锚点是"对角那个手柄"，只有在框坐标里
+            // 才是"沿着框的两条边"），再共轭回画布坐标：M = F⁻¹ · M_local · F
+            var localM = SelectionHandles.DragMatrix(_dragHandle, _dragFrame,
+                                                     _dragStartPoint, cur, DpiScale, shift, shift);
+            m = Conjugate(_dragFrame.ToCanvas, localM);
+        }
 
         for (int i = 0; i < _dragTargets.Length; i++)
         {
@@ -1398,24 +1418,43 @@ public class InkEngine
     /// 操作条按钮。下标与 SelectionHandles.BarButtonAt 的返回值和渲染时的
     /// 图标数组一一对应：0 复制 / 1 删除 / 2 左右翻转 / 3 上下翻转 / 4 旋转。
     /// </summary>
-    private void RunBarAction(int index, in RectF sel)
+    private void RunBarAction(int index, in SelectionFrame frame, in RectF aabb)
     {
         switch (index)
         {
             case 0: Doc.DuplicateSelected(); break;
             case 1: Doc.DeleteSelected(); break;
-            case 2: Doc.ApplyTransform(SelectionHandles.MirrorMatrix(sel, horizontal: true)); break;
-            case 3: Doc.ApplyTransform(SelectionHandles.MirrorMatrix(sel, horizontal: false)); break;
+
+            // 翻转绕**框自己的轴**：斜着的对象应该在自己那套坐标里翻，
+            // 而不是绕屏幕的竖直线翻——后者看起来像被转到别处去了。
+            case 2: Doc.ApplyTransform(Conjugate(frame.ToCanvas,
+                        SelectionHandles.MirrorMatrix(frame.Local, horizontal: true))); break;
+            case 3: Doc.ApplyTransform(Conjugate(frame.ToCanvas,
+                        SelectionHandles.MirrorMatrix(frame.Local, horizontal: false))); break;
+
             case 4:
             {
-                // 每次转 90°；连点四次回到原样。
-                var c = new Vector2((sel.MinX + sel.MaxX) * 0.5f, (sel.MinY + sel.MaxY) * 0.5f);
+                // 每次转 90°；连点四次回到原样。绕框的画布中心转。
+                var c = new Vector2((aabb.MinX + aabb.MaxX) * 0.5f, (aabb.MinY + aabb.MaxY) * 0.5f);
                 Doc.ApplyTransform(Matrix3x2.CreateRotation(MathF.PI / 2f, c));
                 break;
             }
         }
         Laser.Clear();
         _dirty = true;
+    }
+
+    /// <summary>
+    /// 把"框坐标下的变换"翻译成"画布坐标下的变换"：<c>F⁻¹ · M · F</c>。
+    ///
+    /// 框是斜的时候，同一句"沿框的横轴放大两倍"在画布坐标里是个斜的缩放。
+    /// 共轭就是在两套坐标之间翻译这件事——不用为"斜着的情况"另写一套公式。
+    /// </summary>
+    private static Matrix3x2 Conjugate(in Matrix3x2 frame, in Matrix3x2 localM)
+    {
+        if (frame.IsIdentity) return localM;
+        if (!Matrix3x2.Invert(frame, out var inv)) return localM;
+        return inv * localM * frame;
     }
     // =====================================================================
     //  批注键盘模式
