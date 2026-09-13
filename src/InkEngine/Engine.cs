@@ -208,8 +208,12 @@ public class InkEngine
         if (args.Contains("--inktrail")) OverlayWindow.InkTrailEnabled = true;
         if (args.Contains("--norealize")) OverlayWindow.RealizationEnabled = false;
         if (args.Contains("--latencywait")) OverlayWindow.LatencyWaitEnabled = true;
-        // --rawink：把笔迹的**所有**后处理关掉（滤波 / 抽稀 / 拟合 / 笔锋），
-        // 直接画原始采样点。用来对比"最初的笔迹"和优化之后的样子。
+        // 笔迹后处理开关。**默认全部关闭**（见 Stroke.RawInk 的说明）：
+        // 1€ 滤波 / 抽稀 / 贝塞尔拟合 / 宽度曲线 / 笔锋 / 三点平滑 都不做，
+        // 直接画指针报上来的原始采样点。
+        //   --smooth  重新打开全部后处理（回到优化后的笔迹）
+        //   --rawink  显式保持关闭（与默认一致，保留是为了兼容原有命令行）
+        if (args.Contains("--smooth")) Stroke.RawInk = false;
         if (args.Contains("--rawink")) Stroke.RawInk = true;
         argsContainActivate = args.Contains("--activate");
         int lagIdx = Array.IndexOf(args, "--laggy");

@@ -73,6 +73,24 @@ internal sealed class App : InkEngine.InkEngine
         // 这样既满足接口，又验证了"引擎不依赖任何具体界面"这条设计。
         SetUi(new HeadlessUi());
 
+        // 引擎现在的默认是"笔迹后处理全关"（见 Stroke.RawInk），那是给交互书写
+        // 用的：人眼看原始采样点，才能判断哪些观感是自己的平滑/美化带来的。
+        //
+        // 下面这一串开发期模式测的是**优化后的完整管线**——性能、内存、笔锋
+        // 自检的数据都是针对那个配置采集的（reports/ 里的报告也是）。所以它们
+        // 默认恢复后处理，保持口径不变；要按"全关"的状态跑，显式加 --rawink。
+        switch (mode)
+        {
+            case "--selftest": case "--report": case "--memory":
+            case "--inputtest": case "--passtest": case "--erasertest":
+            case "--widthtest": case "--ghosttest": case "--trailtest":
+            case "--longrun": case "--realizetest": case "--restest":
+            case "--beautifytest": case "--beautifyshowcase": case "--cornertest":
+            case "--aaprobe":
+                if (!args.Contains("--rawink")) Stroke.RawInk = false;
+                break;
+        }
+
         // --preset <precise|handwriting|bold|calligraphy>：笔锋预设。
         // 默认是 precise（不做手写美化），需要时用参数切换。
         int presetIdx = Array.IndexOf(args, "--preset");

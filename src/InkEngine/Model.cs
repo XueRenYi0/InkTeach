@@ -210,7 +210,12 @@ internal sealed class Stroke
     /// 没有 1€ 滤波、没有抽稀、没有贝塞尔拟合、没有笔锋。
     /// 用来回答"最初的样子是什么""某个观感问题到底出在哪一层"。
     /// </summary>
-    public static bool RawInk;
+    /// <remarks>
+    /// **当前默认是 true（= 后处理全部关掉）**：这一阶段要先看"原始采样点"
+    /// 长什么样，才能判断哪些观感问题其实是自己写的平滑 / 美化带来的。
+    /// 命令行加 --smooth 可以重新打开全部后处理。
+    /// </remarks>
+    public static bool RawInk = true;
     /// <summary>诊断用：算完轮廓后把拐角附近的点打到控制台。</summary>
     public static bool DumpOutline;
 
