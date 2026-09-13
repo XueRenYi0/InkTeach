@@ -895,7 +895,14 @@ public class InkEngine
         MarqueeActive = false;
 
         float l = MqMinX, t = MqMinY, r = MqMaxX, b = MqMaxY;
-        if (r - l < 4 || b - t < 4) return;
+        if (r - l < 4 || b - t < 4)
+        {
+            // 这是一次**点击**，不是拖框。单击空白处就该取消选中。
+            // 之前这里直接 return、什么都不做，用户得点两下才取消，很别扭。
+            Doc.Selected.Clear();
+            _dirty = true;
+            return;
+        }
 
             Doc.ApplyMarquee(new RectF { MinX = l, MinY = t, MaxX = r, MaxY = b });
         Console.WriteLine($"marquee selected {Doc.Selected.Count} strokes");
@@ -1432,13 +1439,6 @@ public class InkEngine
             case 3: Doc.ApplyTransform(Conjugate(frame.ToCanvas,
                         SelectionHandles.MirrorMatrix(frame.Local, horizontal: false))); break;
 
-            case 4:
-            {
-                // 每次转 90°；连点四次回到原样。绕框的画布中心转。
-                var c = new Vector2((aabb.MinX + aabb.MaxX) * 0.5f, (aabb.MinY + aabb.MaxY) * 0.5f);
-                Doc.ApplyTransform(Matrix3x2.CreateRotation(MathF.PI / 2f, c));
-                break;
-            }
         }
         Laser.Clear();
         _dirty = true;

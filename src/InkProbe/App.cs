@@ -256,6 +256,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             SelDragShowcase();
         }
+        else if (mode == "--selbench")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SelBenchTest();
+        }
         else if (mode == "--aaprobe")
         {
             _autoExitAt = double.MaxValue;
@@ -407,6 +413,69 @@ internal sealed class App : InkEngine.InkEngine
     /// "这里的颜色比别处淡"。所以用两个等面积窗口的墨量比值来判定：
     /// 拐角窗口的覆盖率不该明显低于直段。
     /// </summary>
+    /// <summary>
+    /// 选中与变换的性能自检：走**真实的拖动路径**（SetTransformLive → 内容层
+    /// 区域修补），量每步要花多久。
+    ///
+    /// 两个关键设计：
+    ///   ① **用窗口里的计数器，不用墙钟。** 墙钟会把 Present 的垂直同步等待算进去
+    ///      （60Hz 屏幕上每帧 16ms），量到的是显示器刷新率，不是我们的开销。
+    ///   ② **看最长的一步，不看平均。** 卡顿感来自长帧，平均值会把它们抹平。
+    /// </summary>
+    private void SelBenchTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 选中与变换性能（真实拖动路径）===");
+        Console.WriteLine("  画布里  | 变换 | 修补均 | 修补最长 | 每帧记录均 | 每帧最长");
+        Console.WriteLine("  --------|------|--------|----------|------------|--------");
+
+        foreach (int total in new[] { 0, 1000, 10000 })
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            if (total > 0) GenerateStrokes(total);
+            SettleFrames(150);
+
+            // 模拟真实用法：用户框选**一小撮**（20 个），而不是把一万笔全选中
+            Doc.Selected.Clear();
+            int pick = Math.Min(20, Doc.Strokes.Count);
+            for (int i = 0; i < pick; i++) Doc.Selected.Add(Doc.Strokes[i]);
+
+            var targets = Doc.Selected.ToArray();
+            const int steps = 30;
+            double patchSum = 0, recordSum = 0, patchMax = 0, recordMax = 0;
+            var w = _windows[0];
+
+            for (int k = 0; k < steps; k++)
+            {
+                var m = Matrix3x2.CreateTranslation(6f, 3f);
+                foreach (var s in targets)
+                {
+                    Doc.Dirty.Add(s.PaddedBounds);          // 旧位置
+                    Doc.SetTransformLive(s, s.Transform * m);
+                    Doc.Dirty.Add(s.PaddedBounds);          // 新位置
+                }
+                _dirty = true;
+                SettleFrames(10);
+
+                double p = w.LastPatchMs, r = w.LastRecordMs;
+                patchSum += p; recordSum += r;
+                if (p > patchMax) patchMax = p;
+                if (r > recordMax) recordMax = r;
+            }
+
+            Console.WriteLine($"  {total,7} | {targets.Length,4} | {patchSum / steps,6:F2} | "
+                            + $"{patchMax,8:F2} | {recordSum / steps,10:F2} | {recordMax,8:F2}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("  判据：修补耗时**不该**随画布里已有笔画数明显增长——区域修补只处理");
+        Console.WriteLine("  脏区内的对象，跟总数无关。若明显增长，说明退化成了整层重建。");
+        Doc.Clear();
+        Doc.ClearHistory();
+        _quit = true;
+    }
+
     /// <summary>
     /// 拖动预览的渲染核对：把选中对象用**实时变换**（SetTransformLive，
     /// 就是拖动中走的那条路径）挪走并挂着不动，由外部截图。

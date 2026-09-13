@@ -301,7 +301,13 @@ internal static class SelectionHandles
         if (u == 0.5f) sx = 1f;
         if (v == 0.5f) sy = 1f;
 
-        if (uniform)
+        // 四角 = **等比缩放**，不管有没有按 Shift。
+        //
+        // 理由：核心场景是"把写的内容放大/缩小"，不是压扁；而非等比加上
+        // "线宽不变"会让笔迹看起来像被压过的图片。单轴拉伸已经由边中点负责了，
+        // 四角再来一遍自由缩放在功能上是重复的。
+        bool isCorner = u != 0.5f && v != 0.5f;
+        if (uniform || isCorner)
         {
             float s = (u == 0.5f) ? MathF.Abs(sy) : (v == 0.5f) ? MathF.Abs(sx)
                     : MathF.Max(MathF.Abs(sx), MathF.Abs(sy));
@@ -348,7 +354,11 @@ internal static class SelectionHandles
     //  也让它可以被 --handletest 直接验。
     // =====================================================================
 
-    public const int BarButtonCount = 5;
+    /// <summary>
+    /// 操作条按钮数。**没有"旋转 90°"**：旋转手柄 + Shift 的 15° 吸附已经覆盖了
+    /// 任意角度（包括精确 90°），再放一个按钮是冗余，还占宽度、增加误点。
+    /// </summary>
+    public const int BarButtonCount = 4;
     public const float BarHeightLogical = 34f;
     public const float BarButtonWidthLogical = 46f;
     public const float BarPaddingLogical = 5f;

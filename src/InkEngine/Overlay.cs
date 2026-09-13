@@ -1160,7 +1160,7 @@ internal sealed class OverlayWindow : IDisposable
 
         string[] glyphs =
         {
-            IconPaths.copy, IconPaths.delete, IconPaths.flipH, IconPaths.flipV, IconPaths.rotate,
+            IconPaths.copy, IconPaths.delete, IconPaths.flipH, IconPaths.flipV,
         };
 
         const int n = SelectionHandles.BarButtonCount;
