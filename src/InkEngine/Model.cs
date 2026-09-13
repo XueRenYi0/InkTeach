@@ -63,7 +63,11 @@ public struct RectF
 /// </summary>
 internal sealed class DirtyRegion
 {
-    private const int MaxRects = 12;
+    /// <summary>
+    /// 脏矩形数量的上限。超过就压缩，但**不会压成一个**（见 Coalesce）。
+    /// 取 32：拖 20 个对象会产生 40 个旧位/新位矩形，压到 32 就够用了。
+    /// </summary>
+    private const int MaxRects = 32;
     private readonly List<RectF> _rects = new();
 
     public bool Full { get; private set; }
@@ -102,12 +106,36 @@ internal sealed class DirtyRegion
         _rects.Clear();
     }
 
+    /// <summary>
+    /// 超上限时压缩矩形数量。
+    ///
+    /// **绝对不能简单并成一个**——以前就是那样，后果是：拖一批散落的批注时，
+    /// 每帧的几十个脏矩形被合成一个整屏大矩形，于是每帧几乎整层重画
+    /// （实测一万笔时 91ms/步，表现就是卡死），还会不停重建 GPU 细分缓存，
+    /// 内存跟着涨。
+    ///
+    /// 改成反复合并"并起来最小的那一对"：数量照样受控，但矩形始终贴着真正
+    /// 变化的地方，不会退化成整屏。k ≤ 32，且只在超限时才走，代价可以忽略。
+    /// </summary>
     private void Coalesce()
     {
-        var u = _rects[0];
-        for (int i = 1; i < _rects.Count; i++) u.Add(_rects[i]);
-        _rects.Clear();
-        _rects.Add(u);
+        while (_rects.Count > MaxRects)
+        {
+            int bi = 0, bj = 1;
+            float best = float.MaxValue;
+            for (int i = 0; i < _rects.Count; i++)
+                for (int j = i + 1; j < _rects.Count; j++)
+                {
+                    var u = _rects[i];
+                    u.Add(_rects[j]);
+                    float area = (u.MaxX - u.MinX) * (u.MaxY - u.MinY);
+                    if (area < best) { best = area; bi = i; bj = j; }
+                }
+            var merged = _rects[bi];
+            merged.Add(_rects[bj]);
+            _rects[bi] = merged;
+            _rects.RemoveAt(bj);
+        }
     }
 }
 
