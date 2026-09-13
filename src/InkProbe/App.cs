@@ -250,6 +250,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             EditTest();
         }
+        else if (mode == "--seldrag")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SelDragShowcase();
+        }
         else if (mode == "--aaprobe")
         {
             _autoExitAt = double.MaxValue;
@@ -401,6 +407,35 @@ internal sealed class App : InkEngine.InkEngine
     /// "这里的颜色比别处淡"。所以用两个等面积窗口的墨量比值来判定：
     /// 拐角窗口的覆盖率不该明显低于直段。
     /// </summary>
+    /// <summary>
+    /// 拖动预览的渲染核对：把选中对象用**实时变换**（SetTransformLive，
+    /// 就是拖动中走的那条路径）挪走并挂着不动，由外部截图。
+    ///
+    /// 验的是"内容层会不会跟着修补"。之前漏了 bump 版本号，表现就是
+    /// 蓝框跟着走、墨迹停在原地——截图上一眼能看出来：修好的话墨迹在框里，
+    /// 没修的话墨迹还留在原来的地方，跟框分了家。
+    /// </summary>
+    private void SelDragShowcase()
+    {
+        SelShowcase();                       // 先摆好两条笔迹和选中框
+
+        var sel = Doc.Selected.ToArray();
+        var sb = EditRegion.Of(sel);
+        var c = new Vector2((sb.MinX + sb.MaxX) * 0.5f, (sb.MinY + sb.MaxY) * 0.5f);
+        var m = Matrix3x2.CreateScale(1.25f, 1.25f, c) * Matrix3x2.CreateTranslation(120f, -60f);
+
+        // 完全照 UpdateSelDrag 的做法：标脏旧位置 → 实时改变换 → 标脏新位置
+        foreach (var s in sel)
+        {
+            Doc.Dirty.Add(s.PaddedBounds);
+            Doc.SetTransformLive(s, s.Transform * m);
+            Doc.Dirty.Add(s.PaddedBounds);
+        }
+
+        SettleFrames(700);
+        Console.WriteLine("已用实时变换挪走，等外部截图（这个模式不会自己退出）");
+    }
+
     /// <summary>
     /// 编辑命令自检：复制 / 删除 / 翻转 / 旋转，外加操作条的命中判定。
     ///

@@ -337,6 +337,10 @@ public class InkEngine
 
         Host?.UpdateScreen(LogicalVirtualScreen);
         Console.WriteLine($"DPI 缩放 {DpiScale:F2}（逻辑 {_windows[0].Width / DpiScale:F0}x{_windows[0].Height / DpiScale:F0}）");
+
+        // 把键盘模式落到窗口样式上。字段默认是开的，但样式要等窗口建好才能改——
+        // 不调这一句，默认值和实际样式就对不上（得按一次 Ctrl+Alt+K 才生效）。
+        SetKeyboardMode(KeyboardMode);
         return ok;
     }
 

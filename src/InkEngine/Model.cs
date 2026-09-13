@@ -1016,6 +1016,17 @@ internal sealed class InkDocument
         _grid.Remove(s);
         s.Transform = m;
         _grid.Insert(s);
+
+        // **必须 bump 版本号**：渲染层就是靠它判断"内容层该不该修补"的
+        // （EnsureContent 第一行是 _renderedVersion == doc.Version 就直接返回）。
+        //
+        // 当初漏了这一句，把"不产生撤销记录"和"文档没变"混成了一件事，
+        // 结果拖动时蓝框跟着走、墨迹纹丝不动，松手才整层重画跳过去。
+        // 版本号管的是"外观变了没有"，跟撤销栈无关。
+        //
+        // 代价是每帧一次区域修补（PatchRegions）：只擦脏矩形、只重画与它相交的
+        // 对象，不是整层重建，所以跟画面里有多少笔无关。
+        Version++;
     }
 
     /// <summary>
