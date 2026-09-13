@@ -295,6 +295,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             ScrollShowcase();
         }
+        else if (mode == "--wheeltest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            WheelTest();
+        }
         else if (mode == "--aaprobe")
         {
             _autoExitAt = double.MaxValue;
@@ -646,6 +652,58 @@ internal sealed class App : InkEngine.InkEngine
         Doc.InvalidateAll();
         SettleFrames(700);
         Console.WriteLine("滚动条已摆好（刚滚动过的状态），等外部截图");
+    }
+
+    /// <summary>
+    /// 滚轮**算术**的自检。
+    ///
+    /// 这条是补课的：之前所有滚动测试都直接给 ViewOffsetY 赋值，
+    /// **从没走过 HandleWheel 里那段加减**，于是"符号写反、往下滚永远滚不动"
+    /// 这个 bug 一直没被测出来——还是用户报的。
+    ///
+    /// 直接构造 WM_MOUSEWHEEL 的 wParam（高 16 位是 delta）喂进去：
+    ///   往下滚 delta = -120，ViewOffsetY 必须**变负**（内容上移）
+    ///   往上滚到顶，必须夹在 0，不能越过
+    /// </summary>
+    private void WheelTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 滚轮算术自检 ===");
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"    {name,-22}{(ok ? "PASS" : "FAIL")}  {detail}");
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+
+        // delta 放在 wParam 的高 16 位（低 16 位是按键状态，这里给 0）
+        IntPtr Wheel(int delta) => new((long)(ushort)(short)delta << 16);
+        float step = 72f * DpiScale;
+
+        HandleWheel(Wheel(-120));
+        Check("往下滚一格应向下", ViewOffsetY < -1f, $"ViewOffsetY={ViewOffsetY:F0}（应为 -{step:F0}）");
+        Check("一格正好一个步长", Math.Abs(ViewOffsetY + step) < 0.6f, $"{ViewOffsetY:F0}");
+
+        HandleWheel(Wheel(-120));
+        HandleWheel(Wheel(-120));
+        Check("连滚三格累加", Math.Abs(ViewOffsetY + step * 3f) < 1.2f, $"{ViewOffsetY:F0}");
+
+        HandleWheel(Wheel(120));
+        Check("往上滚一格回升", Math.Abs(ViewOffsetY + step * 2f) < 1.2f, $"{ViewOffsetY:F0}");
+
+        for (int i = 0; i < 8; i++) HandleWheel(Wheel(120));
+        Check("滚到顶夹在 0，不越过", Math.Abs(ViewOffsetY) < 0.01f, $"{ViewOffsetY:F0}");
+
+        Console.WriteLine();
+        Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：滚轮方向与夹取都正确");
+        Doc.Clear();
+        Doc.ClearHistory();
+        _quit = true;
     }
 
     /// <summary>

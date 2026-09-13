@@ -1633,10 +1633,13 @@ public class InkEngine
     /// 累积到一万笔时约 154ms，滚一格会卡一下。要治累积量得把内容层改成
     /// 滚动缓冲或分块（计划文档第二十九节第二步）。
     /// </summary>
-    private IntPtr HandleWheel(IntPtr wParam)
+    internal IntPtr HandleWheel(IntPtr wParam)
     {
         int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);
-        ViewOffsetY -= delta / 120f * 72f * DpiScale;   // 一格 = 72 逻辑像素
+        // 往下滚时 delta = -120，要先变负（内容上移）——所以这里是 +=。
+        // 写成 -= 会把符号翻过来：滚轮往下 = 视图往上，正好抵掉，
+        // 再被"不许滚过顶部"夹回 0，表现就是**完全滚不动**。
+        ViewOffsetY += delta / 120f * 72f * DpiScale;   // 一格 = 72 逻辑像素
         // 上下都夹住画布范围（内容边界 ∪ 一屏）。
         // 不夹的话会滚进无尽的空白，而且比例滚动条拿不到有意义的范围。
         // 下边界是"视口底边贴住内容底边"——接着写，内容长出去，范围自己长出来，
@@ -1647,6 +1650,7 @@ public class InkEngine
         if (ViewOffsetY < lowest) ViewOffsetY = lowest;
 
         ScrollBarActiveAtMs = NowMs;                     // 滚动时让滚动条露面
+        Console.WriteLine($"[滚轮] delta={delta} -> ViewOffsetY={ViewOffsetY:F0}");
         Doc.InvalidateAll();                             // 整层重画（第一步的代价）
         _dirty = true;
         return IntPtr.Zero;
