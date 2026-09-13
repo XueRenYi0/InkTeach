@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace InkEngine;
+namespace InkEngine.Optimize;
 
 /// <summary>
 /// The "One Euro" filter - the standard low-latency smoother for pointer input.
@@ -61,87 +61,6 @@ internal sealed class OneEuroFilter
         float tau = 1f / (2f * MathF.PI * cutoffHz);
         return 1f / (1f + tau / dt);
     }
-}
-
-/// <summary>
-/// Uniform grid over the desktop. Erasing and marquee-selecting used to scan
-/// every stroke on every pointer move; with a grid they only look at the cells
-/// the query touches. Duplicate hits are suppressed with a per-stroke stamp, so
-/// queries allocate nothing.
-/// </summary>
-internal sealed class SpatialGrid
-{
-    public const int CellSize = 256;
-
-    private readonly Dictionary<long, List<Stroke>> _cells = new();
-    private readonly List<Stroke> _scratch = new();
-    private int _stamp;
-
-    private static long Key(int cx, int cy) => ((long)cx << 32) ^ (uint)cy;
-
-    public void Clear() => _cells.Clear();
-
-    public void Insert(Stroke s)
-    {
-        if (s.Bounds.IsEmpty) return;
-        int x0 = (int)MathF.Floor(s.Bounds.MinX / CellSize);
-        int y0 = (int)MathF.Floor(s.Bounds.MinY / CellSize);
-        int x1 = (int)MathF.Floor(s.Bounds.MaxX / CellSize);
-        int y1 = (int)MathF.Floor(s.Bounds.MaxY / CellSize);
-        for (int cy = y0; cy <= y1; cy++)
-            for (int cx = x0; cx <= x1; cx++)
-            {
-                long k = Key(cx, cy);
-                if (!_cells.TryGetValue(k, out var list))
-                {
-                    list = new List<Stroke>();
-                    _cells[k] = list;
-                }
-                list.Add(s);
-            }
-    }
-
-    public void Remove(Stroke s)
-    {
-        if (s.Bounds.IsEmpty) return;
-        int x0 = (int)MathF.Floor(s.Bounds.MinX / CellSize);
-        int y0 = (int)MathF.Floor(s.Bounds.MinY / CellSize);
-        int x1 = (int)MathF.Floor(s.Bounds.MaxX / CellSize);
-        int y1 = (int)MathF.Floor(s.Bounds.MaxY / CellSize);
-        for (int cy = y0; cy <= y1; cy++)
-            for (int cx = x0; cx <= x1; cx++)
-            {
-                if (_cells.TryGetValue(Key(cx, cy), out var list)) list.Remove(s);
-            }
-    }
-
-    /// <summary>Appends candidate strokes whose bounds overlap the rectangle.</summary>
-    public int Query(RectF r, List<Stroke> results)
-    {
-        results.Clear();
-        if (r.IsEmpty) return 0;
-
-        _stamp++;
-        int x0 = (int)MathF.Floor(r.MinX / CellSize);
-        int y0 = (int)MathF.Floor(r.MinY / CellSize);
-        int x1 = (int)MathF.Floor(r.MaxX / CellSize);
-        int y1 = (int)MathF.Floor(r.MaxY / CellSize);
-
-        for (int cy = y0; cy <= y1; cy++)
-            for (int cx = x0; cx <= x1; cx++)
-            {
-                if (!_cells.TryGetValue(Key(cx, cy), out var list)) continue;
-                foreach (var s in list)
-                {
-                    if (s.QueryStamp == _stamp) continue;
-                    s.QueryStamp = _stamp;
-                    if (s.Bounds.Intersects(r)) results.Add(s);
-                }
-            }
-        return results.Count;
-    }
-
-    public int CellCount => _cells.Count;
 }
 
 /// <summary>

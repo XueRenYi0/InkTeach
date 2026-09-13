@@ -1,10 +1,11 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Vortice.Direct2D1;
 using Vortice.Mathematics;
 using InkEngine;
+using InkEngine.Optimize;
 
 namespace InkProbe;
 
@@ -16,6 +17,13 @@ internal sealed class App : InkEngine.InkEngine
 {
     private IntPtr _clickTargetHwnd;
     private string _clickLogFile;
+
+    /// <summary>
+    /// 笔迹优化器。**宿主自己持有、自己决定装不装**——引擎压根不认识它。
+    /// 自检模式直接拿它算轮廓；交互模式由下面的开关决定要不要注册成
+    /// <see cref="InkOptimizers.Current"/>。
+    /// </summary>
+    private readonly InkBeautifier _beautifier = new();
 
     // =====================================================================
     //  Host hooks: everything here is a development tool, not engine code.
@@ -73,22 +81,27 @@ internal sealed class App : InkEngine.InkEngine
         // 这样既满足接口，又验证了"引擎不依赖任何具体界面"这条设计。
         SetUi(new HeadlessUi());
 
-        // 引擎现在的默认是"笔迹后处理全关"（见 Stroke.RawInk），那是给交互书写
-        // 用的：人眼看原始采样点，才能判断哪些观感是自己的平滑/美化带来的。
+        // 装不装笔迹优化器，由宿主在这里决定。引擎本身不认识它。
         //
-        // 下面这一串开发期模式测的是**优化后的完整管线**——性能、内存、笔锋
-        // 自检的数据都是针对那个配置采集的（reports/ 里的报告也是）。所以它们
-        // 默认恢复后处理，保持口径不变；要按"全关"的状态跑，显式加 --rawink。
-        switch (mode)
+        //   默认        不装。引擎画的就是原始采样点，量到的性能里不含任何
+        //               平滑/拟合成本——底层性能测试要的就是这个基准。
+        //   --smooth    装上（平滑 + 抽稀 + 拟合 + 笔锋）。
+        //   --rawink    显式保持不装，与默认一致，留着是为了兼容原有命令行。
+        //
+        // 有几个模式本身就是在验优化器（笔锋自检、四种笔锋摆样、拐角、点数
+        // 探针），它们自动装上，否则跑出来是一片空白。
+        bool wantOptimizer = args.Contains("--smooth")
+            || mode is "--beautifytest" or "--beautifyshowcase"
+                     or "--cornertest" or "--aaprobe";
+        if (args.Contains("--rawink")) wantOptimizer = false;
+        if (wantOptimizer)
         {
-            case "--selftest": case "--report": case "--memory":
-            case "--inputtest": case "--passtest": case "--erasertest":
-            case "--widthtest": case "--ghosttest": case "--trailtest":
-            case "--longrun": case "--realizetest": case "--restest":
-            case "--beautifytest": case "--beautifyshowcase": case "--cornertest":
-            case "--aaprobe":
-                if (!args.Contains("--rawink")) Stroke.RawInk = false;
-                break;
+            InkOptimizers.Current = _beautifier;
+            Console.WriteLine("笔迹优化器: 已装上");
+        }
+        else
+        {
+            Console.WriteLine("笔迹优化器: 未装（纯底层，画原始采样点）");
         }
 
         // --preset <precise|handwriting|bold|calligraphy>：笔锋预设。
@@ -296,11 +309,9 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine($"  2. 抽稀之后（RDP）      ：{simplified.Count} 点"
                         + $"（压掉 {(1 - simplified.Count / (float)afterFilterAndDecimate):P0}）");
 
-        s.Beautify(DpiScale);
-        int curves = s.Centerline?.Count ?? 0;
+        _beautifier.EndStroke(s, DpiScale);
         int outlinePts = s.Outline?.Length ?? 0;
-        Console.WriteLine($"  3. 贝塞尔拟合之后        ：{curves} 段三次曲线"
-                        + $"（每段 4 个控制点 = {curves * 4} 个数）");
+        Console.WriteLine($"  3. 拟合与抽稀            ：{_beautifier.LastReport}");
         Console.WriteLine($"  4. 送进 GPU 的轮廓点数   ：{outlinePts}");
         Console.WriteLine();
         Console.WriteLine("  这些数字全是引擎算出来的；系统只负责把最终轮廓按抗锯齿栅格化。");
@@ -327,7 +338,7 @@ internal sealed class App : InkEngine.InkEngine
         };
         float x = VirtualScreen.MinX + 500, y = VirtualScreen.MinY + 400;
         for (int i = 0; i <= 200; i++) s.AddPoint(x + i * 3f, y + i * 3f, 0.5f, i);
-        s.Beautify(DpiScale);
+        _beautifier.EndStroke(s, DpiScale);
 
         Doc.AddStroke(s);
         SettleFrames(500);
@@ -363,9 +374,8 @@ internal sealed class App : InkEngine.InkEngine
         float cx = VirtualScreen.MinX + 800, cy = VirtualScreen.MinY + 700;
         float arm = 400f;
 
-        bool oldRaw = Stroke.RawInk;
         // 诊断：把拐角附近的轮廓点导出来，看洞是"轮廓自己就缺"，还是"栅格化没填上"。
-        Stroke.DumpOutline = true;
+        _beautifier.DumpOutline = true;
         var s = new Stroke
         {
             Tool = Tool.Pen, Color = new Color4(0, 0, 0, 1),
@@ -374,8 +384,8 @@ internal sealed class App : InkEngine.InkEngine
         // 水平走一段，再垂直走一段，构成一个直角
         for (int i = 0; i <= 60; i++) s.AddPoint(cx + i * (arm / 60f), cy, 0.5f, i);
         for (int i = 1; i <= 60; i++) s.AddPoint(cx + arm, cy + i * (arm / 60f), 0.5f, 60 + i);
-        s.Beautify(DpiScale);
-        Stroke.DumpOutline = false;
+        _beautifier.EndStroke(s, DpiScale);
+        _beautifier.DumpOutline = false;
 
         Doc.Clear();
         Doc.InvalidateAll();
@@ -405,7 +415,6 @@ internal sealed class App : InkEngine.InkEngine
             ? "  PASS: 拐角没有掉色"
             : $"  FAIL: 拐角比直段少 {(1 - atCorner / total / MathF.Max(1e-6f, straight)):P0}");
 
-        Stroke.RawInk = oldRaw;
         _quit = true;
     }
 
@@ -495,7 +504,7 @@ internal sealed class App : InkEngine.InkEngine
         foreach (var (preset, name, width) in presets)
         {
             var s = MakeSpeedVaryingStroke(width, preset, DpiScale);
-            s.Beautify(DpiScale);
+            _beautifier.EndStroke(s, DpiScale);
             var dw = s.BeautifiedWidths;
             if (dw == null || dw.Length < 3) { Check("有宽度数据", false, "没有"); continue; }
 
@@ -547,8 +556,8 @@ internal sealed class App : InkEngine.InkEngine
             }
 
             // 3) 宽度不能超过声明上限（脏区依据）
-            Check("宽度不超界", dw.Max() <= body * Stroke.OutlineMaxFactor + 0.01f,
-                  $"最大 {dw.Max():F2} ≤ {body * Stroke.OutlineMaxFactor:F2}");
+            Check("宽度不超界", dw.Max() <= body * InkBeautifier.OutlineInflateFactor + 0.01f,
+                  $"最大 {dw.Max():F2} ≤ {body * InkBeautifier.OutlineInflateFactor:F2}");
         }
 
         // 4) 短笔画：渐细不能把它吃掉变形
@@ -559,7 +568,7 @@ internal sealed class App : InkEngine.InkEngine
                 Width = 16f * DpiScale, Preset = PenPreset.Handwriting,
             };
             for (int i = 0; i < 12; i++) shortStroke.AddPoint(100 + i * 2f, 100, 0.5f, i);
-            shortStroke.Beautify(DpiScale);
+            _beautifier.EndStroke(shortStroke, DpiScale);
             var sw2 = shortStroke.BeautifiedWidths;
             // 手写档不做渐细，所以短笔画的中段必须到得了全宽。
             bool okShort = sw2 != null && sw2.Max() >= 16f * DpiScale * 0.85f;
@@ -571,7 +580,7 @@ internal sealed class App : InkEngine.InkEngine
         // 5) 端头是圆的，不是被切平的方块
         {
             var s = MakeSpeedVaryingStroke(3f, PenPreset.Handwriting, DpiScale);
-            s.Beautify(DpiScale);
+            _beautifier.EndStroke(s, DpiScale);
             // 圆帽会让轮廓在笔画两端各多出约一个半径的弧，点数也会明显多于直线段
             Check("端头有圆弧", s.Outline != null && s.Outline.Length > 40,
                   $"轮廓 {s.Outline?.Length ?? 0} 点");
@@ -583,7 +592,7 @@ internal sealed class App : InkEngine.InkEngine
         for (int i = 0; i < reps; i++)
         {
             var s2 = MakeSpeedVaryingStroke(3f, PenPreset.Handwriting, DpiScale);
-            s2.Beautify(DpiScale);
+            _beautifier.EndStroke(s2, DpiScale);
         }
         sw3.Stop();
         double perStroke = sw3.Elapsed.TotalMilliseconds / reps;
@@ -621,7 +630,7 @@ internal sealed class App : InkEngine.InkEngine
             }
             s.Bounds = RectF.Empty;
             foreach (var p in s.Points) s.Bounds.Add(p.X, p.Y);
-            s.Beautify(DpiScale);
+            _beautifier.EndStroke(s, DpiScale);
             Doc.AddStroke(s);
 
             // 一条短笔画：看渐细会不会把它吃掉
@@ -632,7 +641,7 @@ internal sealed class App : InkEngine.InkEngine
             };
             float sx = VirtualScreen.MinX + 1500;
             for (int i = 0; i < 14; i++) shortS.AddPoint(sx + i * 2f, y, 0.5f, i);
-            shortS.Beautify(DpiScale);
+            _beautifier.EndStroke(shortS, DpiScale);
             Doc.AddStroke(shortS);
 
             // 一个折角：看尖角处理
@@ -644,7 +653,7 @@ internal sealed class App : InkEngine.InkEngine
             };
             for (int i = 0; i < 40; i++) corner.AddPoint(cx + i * 3f, cy, 0.5f, i);
             for (int i = 0; i < 40; i++) corner.AddPoint(cx + 120, cy + i * 3f, 0.5f, 40 + i);
-            corner.Beautify(DpiScale);
+            _beautifier.EndStroke(corner, DpiScale);
             Doc.AddStroke(corner);
 
             Console.WriteLine($"  {label}：轮廓 {s.Outline?.Length ?? 0} 点");

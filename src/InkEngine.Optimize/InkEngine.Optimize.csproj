@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    笔迹优化层：**可选**组件，核心引擎不依赖它。
+
+    这里放的都是"让笔迹更好看"的东西——输入平滑、抽稀、贝塞尔拟合、
+    笔锋轮廓、宽度曲线。核心引擎不认识这些概念，它只在两个位置留了口子
+    （见 ..\InkEngine\InkOptimizer.cs）：
+
+      1. 输入采样时，问一句"要不要平滑、要不要抽稀"；
+      2. 抬笔时，问一句"这一笔要不要后处理"。
+
+    不引用这个工程、不注册优化器，引擎就是最朴素的样子：指针报什么
+    坐标就用什么坐标，直接连成等宽带子。底层性能测试应该跑那个配置。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>InkEngine.Optimize</AssemblyName>
+    <RootNamespace>InkEngine.Optimize</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\InkEngine\InkEngine.csproj" />
+  </ItemGroup>
+
+  <!-- 开发期宿主要能直接构造优化器做自检（beautifytest 等模式）。 -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>InkProbe</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <!-- 核心的内部类型（Stroke / InkPoint / Gfx）出现在本工程的实现里 -->
+  <ItemGroup>
+    <PackageReference Include="Vortice.Direct2D1" Version="3.8.3" />
+    <PackageReference Include="Vortice.Mathematics" Version="2.1.1" />
+  </ItemGroup>
+
+</Project>

@@ -17,6 +17,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\InkEngine\InkEngine.csproj" />
+    <!-- 可选的笔迹优化层。不引用它、不注册优化器，跑的就是纯底层。 -->
+    <ProjectReference Include="..\InkEngine.Optimize\InkEngine.Optimize.csproj" />
   </ItemGroup>
 
   <!-- 引擎库里的 Vortice 类型会出现在公开签名里，这里需要能引用到 -->

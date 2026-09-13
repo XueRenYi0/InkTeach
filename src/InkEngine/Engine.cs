@@ -42,8 +42,6 @@ public class InkEngine
     internal static readonly float[] WidthPresets = { 1.5f, 3f, 6f, 10f, 16f, 24f };
     internal int WidthPresetIndex = 1;
 
-    private readonly OneEuroFilter _fx = new();
-    private readonly OneEuroFilter _fy = new();
     private double _lastSampleMs = -1;
     internal bool PointerInside;
     internal float PointerX, PointerY;
@@ -208,13 +206,8 @@ public class InkEngine
         if (args.Contains("--inktrail")) OverlayWindow.InkTrailEnabled = true;
         if (args.Contains("--norealize")) OverlayWindow.RealizationEnabled = false;
         if (args.Contains("--latencywait")) OverlayWindow.LatencyWaitEnabled = true;
-        // 笔迹后处理开关。**默认全部关闭**（见 Stroke.RawInk 的说明）：
-        // 1€ 滤波 / 抽稀 / 贝塞尔拟合 / 宽度曲线 / 笔锋 / 三点平滑 都不做，
-        // 直接画指针报上来的原始采样点。
-        //   --smooth  重新打开全部后处理（回到优化后的笔迹）
-        //   --rawink  显式保持关闭（与默认一致，保留是为了兼容原有命令行）
-        if (args.Contains("--smooth")) Stroke.RawInk = false;
-        if (args.Contains("--rawink")) Stroke.RawInk = true;
+        // 笔迹优化不由引擎决定：核心不认识"平滑""笔锋"这些概念，装不装优化器
+        // 由宿主说了算（见 InkOptimizer.cs，以及 InkProbe 里的 --smooth 开关）。
         argsContainActivate = args.Contains("--activate");
         int lagIdx = Array.IndexOf(args, "--laggy");
         if (lagIdx >= 0 && lagIdx + 1 < args.Length && int.TryParse(args[lagIdx + 1], out int lagMs))
@@ -684,11 +677,9 @@ public class InkEngine
                 break;
 
             default:
-                _fx.Reset();
-                _fy.Reset();
                 _lastSampleMs = NowMs;
-                _fx.Filter(x, 1.0 / 120);
-                _fy.Filter(y, 1.0 / 120);
+                // 起笔打底交给优化器；没装优化器就什么都不做。
+                InkOptimizers.Current?.BeginStroke(x, y);
                 float trailW = (tool == Tool.Highlighter ? HighlighterWidthLogical : PenWidthLogical) * DpiScale;
                 WindowAt(x, y)?.BeginInkTrail(
                     tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f);
@@ -742,21 +733,19 @@ public class InkEngine
             default:
                 if (ActiveStroke != null)
                 {
-                    // Smooth first, then decimate: the filter is what removes
-                    // hand tremor, and the distance test only keeps the point
-                    // count sane.
+                    // 平滑和抽稀都是优化器的事。没装优化器时原样收下：
+                    // 指针报什么坐标，就存什么坐标。
                     double dt = Math.Max(1e-3, (NowMs - _lastSampleMs) / 1000.0);
                     _lastSampleMs = NowMs;
-                    // --rawink 时不做滤波：拿到的是最原始的指针坐标。
-                    float fx = Stroke.RawInk ? x : _fx.Filter(x, dt);
-                    float fy = Stroke.RawInk ? y : _fy.Filter(y, dt);
+                    float fx = x, fy = y;
+                    var opt = InkOptimizers.Current;
+                    opt?.Smooth(ref fx, ref fy, dt);
 
                     WindowAt(x, y)?.AddInkTrailPoint(fx, fy, ActiveStroke.Width * 0.5f);
 
                     var last = ActiveStroke.Points[^1];
                     float dx = fx - last.X, dy = fy - last.Y;
-                    // --rawink 时不做抽稀：每个指针消息都收，看最密的原始轨迹。
-                    float minStep = Stroke.RawInk ? 0f : 0.7f * DpiScale;
+                    float minStep = (opt?.SampleStepLogicalPx ?? 0f) * DpiScale;
                     if (dx * dx + dy * dy >= minStep * minStep)
                         ActiveStroke.AddPoint(fx, fy, pressure, NowMs);
                 }
@@ -817,16 +806,10 @@ public class InkEngine
         {
             if (ActiveStroke.Points.Count > 0)
             {
-                // On release, straighten the stroke: RDP drops redundant samples,
-                // then cubic Beziers are fitted to what is left and the ribbon is
-                // rebuilt from those. That is what removes the faceted look.
-                int rawCount = ActiveStroke.Points.Count;
-                ActiveStroke.Beautify(DpiScale);
-                if (ActiveStroke.Centerline != null)
-                    _lastSimplifyInfo = $"{rawCount} 点 -> {ActiveStroke.Points.Count} 点 / "
-                                      + $"{ActiveStroke.Centerline.Count} 段贝塞尔 / "
-                                      + $"拟合最大偏差 {ActiveStroke.FitMaxErrorPx:F2} px"
-                                      + $"（{ActiveStroke.FitMaxErrorPx / DpiScale:F2} 逻辑像素）";
+                // 抬笔后的处理（平滑、抽稀、拟合、笔锋）全部交给优化器。
+                // 没装优化器时，存下来的就是原始采样点，引擎直接画它。
+                InkOptimizers.Current?.EndStroke(ActiveStroke, DpiScale);
+                _lastSimplifyInfo = InkOptimizers.Current?.LastReport;
                 Doc.AddStroke(ActiveStroke);
                 _lastStrokeReport =
                     $"采集到 {ActiveStroke.Points.Count} 个点"

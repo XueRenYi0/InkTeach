@@ -92,6 +92,9 @@ dotnet run --project src/InkProbe -c Release -- --memory reports/inkprobe-memory
 | `src/InkEngine/Overlay.cs` | 覆盖窗口、Direct3D11 + Direct2D + DirectComposition 渲染管线 |
 | `src/InkEngine/Model.cs` | 笔画数据、文档、激光笔轨迹 |
 | `src/InkEngine/Native.cs` | Win32 / 指针输入 / GDI 截屏的 P/Invoke 声明 |
+| `src/InkEngine/InkOptimizer.cs` | 笔迹优化的接入点（`IInkOptimizer`）。核心只有这个接口，没有实现 |
+| `src/InkEngine/SpatialGrid.cs` | 均匀网格空间索引，给橡皮擦/框选的命中测试用 |
+| `src/InkEngine.Optimize/` | **可选**的笔迹优化层：输入平滑、抽稀、贝塞尔拟合、笔锋。核心不依赖它 |
 | `tools/gen-fluent-icons.ps1` | 从上游图标库生成上面的路径数据（可复现）|
 | `src/InkProbe/App.cs` | 开发期宿主：自动化测试、基准、实测报告（引擎里不含这些）|
 | `src/InkProbe/app.manifest` | 每显示器 DPI 感知（PerMonitorV2） |
@@ -99,6 +102,26 @@ dotnet run --project src/InkProbe -c Release -- --memory reports/inkprobe-memory
 | `tools/MemBaseline` | 测量纯 .NET 进程的内存底噪，用于给内存数据做归因 |
 | `tools/InkAnalyzerProbe` | 验证 Windows 自带的形状识别能否在普通桌面程序里直接用 |
 | `src/InkProbeNative` | 同一个覆盖层的 C++ 原生版，用于量化「换语言能省多少内存」 |
+
+### 三层结构
+
+```
+核心 InkEngine          文档 · 输入 · 脏区渲染 · 空间索引 · Win32    ← 不认识下面两层
+  ├ InkEngine.Optimize 笔迹优化：平滑 / 抽稀 / 贝塞尔拟合 / 笔锋      ← 可选
+  └ 界面实现            IOverlayUi 的实现                             ← 可选
+```
+
+核心引擎里**没有任何平滑、拟合、笔锋代码**。它只会画两种东西：原始采样点
+连成的等宽带子，或者外部算好交给它的轮廓（`Stroke.Outline`）。想改变观感
+就装优化器；不装，量到的性能里就不含这部分成本。
+
+| 开关 | 效果 |
+|---|---|
+| （默认） | 不装优化器。纯底层，画原始采样点 |
+| `--smooth` | 装上笔迹优化器，用来和默认做 A/B 对照 |
+| `--rawink` | 显式不装，与默认一致，保留是为了兼容旧命令行 |
+
+---
 
 ## 已经做完并且验证过的
 

@@ -179,74 +179,37 @@ internal sealed class Stroke
     public RectF Bounds = RectF.Empty;
 
     /// <summary>
-    /// Fitted cubic Beziers describing the centreline, one Vector2[4] per
-    /// segment. When present the ribbon is built from this instead of the raw
-    /// polyline, which is what stops the outline looking faceted.
-    /// </summary>
-    public List<Vector2[]> Centerline;
-
-    /// <summary>Normalised pressure sampled evenly along the stroke, then
-    /// smoothed. Driving width from this instead of per-sample pressure removes
-    /// the lumpy variation that raw pen pressure produces.</summary>
-    public float[] WidthProfile;
-
-    /// <summary>
-    /// 美化后的闭合轮廓（虚拟桌面坐标）。由 StrokeBeautifier 在落笔结束时算一次，
-    /// 之后每次重画都直接用它，不再重算——这是"写的时候不卡"的前提。
+    /// 优化器算好的闭合轮廓（虚拟桌面坐标）。**核心不产生它，只在有值时使用。**
     ///
-    /// 它同时承载了：速度→粗细、起收笔渐细、圆头端帽、尖角圆弧、边缘粗糙度。
-    /// 渲染管线本身一行没改，只是喂给它的点从"左右各一个"变成了这条轮廓。
+    /// 有它就按填充多边形画，笔迹的形状完全由优化器决定（速度→粗细、起收笔
+    /// 渐细、圆头端帽、拐角圆弧，全都体现在这一圈点里）。为 null 时核心画
+    /// 最朴素的样子：原始采样点连成的等宽带子。
     /// </summary>
     public Vector2[] Outline;
 
     /// <summary>
-    /// 这一笔是否走了"手写美化"。false = 精确模式：等宽、不做任何造型，
-    /// 画线段和几何图形用。界面上的"手写美化"开关就是在切这个。
-    /// </summary>
-    public bool Beautified;
-
-    /// <summary>
-    /// 诊断用：完全不做任何后处理。笔迹就是原始采样点连出来的等宽带子，
-    /// 没有 1€ 滤波、没有抽稀、没有贝塞尔拟合、没有笔锋。
-    /// 用来回答"最初的样子是什么""某个观感问题到底出在哪一层"。
-    /// </summary>
-    /// <remarks>
-    /// **当前默认是 true（= 后处理全部关掉）**：这一阶段要先看"原始采样点"
-    /// 长什么样，才能判断哪些观感问题其实是自己写的平滑 / 美化带来的。
-    /// 命令行加 --smooth 可以重新打开全部后处理。
-    /// </remarks>
-    public static bool RawInk = true;
-    /// <summary>诊断用：算完轮廓后把拐角附近的点打到控制台。</summary>
-    public static bool DumpOutline;
-
-    /// <summary>当前使用的笔锋预设。换了预设要重新算轮廓。</summary>
-    /// <summary>默认不做手写美化，等宽渲染。见 InkEngine.PenPresetValue 的说明。</summary>
-    public PenPreset Preset = PenPreset.Precise;
-
-    /// <summary>
-    /// 美化时每个采样点的宽度（直径，物理像素）。仅供自检与调试。
-    ///
-    /// 存在笔画自己身上，不放在 StrokeBeautifier 的静态字段里——静态字段会被
-    /// 下一条笔画覆盖，自检就会读到别人的数据（实测栽过：判定用的数字和
-    /// 实际这一笔对不上，来回查了好几轮）。
+    /// 优化器写入的逐点宽度（直径，物理像素）。**核心自己不读**，只给自检与
+    /// 调试用。存在笔画自己身上而不是优化器的静态字段里——静态字段会被下一条
+    /// 笔画覆盖，自检就会读到别人的数据（实测栽过，来回查了好几轮）。
     /// </summary>
     public float[] BeautifiedWidths;
 
     /// <summary>
-    /// 美化后轮廓能超出名义笔宽多少（倍数）。脏区和命中测试要用。
+    /// 笔迹实际可能超出名义笔宽多少（倍数），脏区与命中测试要用。
     ///
-    /// 为什么是 1.45：速度模拟出来的压力会超过 1（连续慢写时压力累积），加上圆头
-    /// 端帽和粗糙边缘，实测最宽的毛笔档会到名义宽度的约 1.43 倍。
+    /// 默认 1.4：压感把宽度放大到 0.6 + 0.8×P 的上限。优化器装上之后会把它
+    /// 调大一些（圆头端帽、粗糙边缘会让轮廓再往外扩），由优化器自己设置。
+    ///
     /// 取小了不是"笔迹看着细"，而是**脏区算小、快速书写留下残影**——
-    /// 这类 bug 很显眼又难查，所以这里宁可留足。
+    /// 这类 bug 很显眼又难查，所以宁可留足。
     /// </summary>
-    public const float OutlineMaxFactor = 1.45f;
+    public float BoundsInflateFactor = MaxWidthFactor;
 
-    /// <summary>How far the fitted curve strays from the sampled points, in
-    /// pixels. A sanity number: too large and the "smoothing" is distortion.</summary>
-    public float FitMaxErrorPx;
-
-    public const int ProfileSamples = 48;
+    /// <summary>
+    /// 当前使用的笔锋预设。**核心只负责记住它**，怎么解释这个预设是优化器的事
+    /// （核心连 PenPreset 的具体风格都不认识）。没装优化器时它是无意义的。
+    /// </summary>
+    public PenPreset Preset = PenPreset.Precise;
 
     /// <summary>Bumped whenever the shape of this item changes. The cached GPU
     /// geometry is only trusted while it matches, which is what makes "add a
@@ -311,141 +274,6 @@ internal sealed class Stroke
         return w * 0.5f;
     }
 
-    /// <summary>
-    /// Turns a raw freehand stroke into a fitted curve plus a smoothed width
-    /// profile. Called once, when the pen lifts.
-    /// </summary>
-    public void Beautify(float scale)
-    {
-        // 诊断开关：把这一笔的**所有**后处理都跳过，直接画原始采样点。
-        // 用来回答"最开始是什么样"——没有滤波、没有抽稀、没有拟合、没有笔锋。
-        if (RawInk)
-        {
-            Beautified = false;
-            Outline = null;
-            Centerline = null;
-            WidthProfile = null;
-            return;
-        }
-
-        if (Kind != StrokeKind.Freehand || Points.Count < 4) return;
-
-        WidthProfile = BuildWidthProfile(Points, ProfileSamples);
-
-        // 手写美化：算一次笔锋轮廓（速度→粗细 + 起收笔渐细 + 圆头端帽）。
-        // 有真实压感就用压感，没有就用速度模拟——鼠标和普通触摸屏也有笔锋。
-        bool hasPressure = HasRealPressure();
-        Outline = StrokeBeautifier.BuildOutline(Points, hasPressure, Width,
-                                                StrokeBeautifier.Preset(Preset), scale);
-        Beautified = Outline != null;
-        if (Outline != null)
-        {
-            // 把这一笔用的宽度曲线留下来（自检用），来源见 StrokeBeautifier。
-            BeautifiedWidths = StrokeBeautifier.LastWidths;
-            Revision++;
-        }
-
-        if (DumpOutline && Outline != null)
-        {
-            // 拐角在中心线的中途。打印轮廓里横坐标接近拐角的那一段点，
-            // 直接看几何长什么样（洞是不是轮廓自己就缺）。
-            var corner = SimplifiedCorner();
-            Console.WriteLine($"  [轮廓] 共 {Outline.Length} 点，拐角大约在 ({corner.X:F0},{corner.Y:F0})");
-            foreach (var p in Outline)
-            {
-                if (MathF.Abs(p.X - corner.X) < 60 && MathF.Abs(p.Y - corner.Y) < 60)
-                    Console.WriteLine($"    ({p.X - corner.X,7:F1},{p.Y - corner.Y,7:F1})");
-            }
-        }
-
-        var simplified = Simplify.Rdp(Points, 0.5f * scale);
-        if (simplified.Count < 2) return;
-
-        var verts = new List<Vector2>(simplified.Count);
-        foreach (var p in simplified) verts.Add(new Vector2(p.X, p.Y));
-
-        // Tolerance: how far the curve may stray from the sampled points.
-        // Sub-pixel, so the fit is faithful rather than a reshaping.
-        var curves = CurveFit.FitCurve(verts, 0.75f * scale);
-        if (curves.Count == 0) return;
-
-        Centerline = curves;
-        ReplacePoints(simplified);   // polyline kept for hit testing
-
-        // Measure how faithfully the curve follows the input.
-        float worst = 0;
-        foreach (var v in verts)
-        {
-            float best = float.MaxValue;
-            foreach (var seg in curves)
-            {
-                // Sample at ~2 px so the measurement is not limited by the
-                // sampling itself; 16 steps over a long segment would read as
-                // several pixels of error that is not really there.
-                float approx = Vector2.Distance(seg[0], seg[1])
-                             + Vector2.Distance(seg[1], seg[2])
-                             + Vector2.Distance(seg[2], seg[3]);
-                int steps = Math.Clamp((int)MathF.Ceiling(approx / 2f), 8, 160);
-                for (int i = 0; i <= steps; i++)
-                {
-                    float d2 = Vector2.DistanceSquared(CurveFit.Evaluate(seg, i / (float)steps), v);
-                    if (d2 < best) best = d2;
-                }
-            }
-            if (best > worst) worst = best;
-        }
-        FitMaxErrorPx = MathF.Sqrt(worst);
-    }
-
-    private static float[] BuildWidthProfile(List<InkPoint> pts, int samples)
-    {
-        var profile = new float[samples];
-        int n = pts.Count;
-        if (n == 0) return profile;
-        if (n == 1)
-        {
-            Array.Fill(profile, Math.Clamp(pts[0].P, 0f, 1f));
-            return profile;
-        }
-
-        var len = new float[n];
-        for (int i = 1; i < n; i++)
-        {
-            float dx = pts[i].X - pts[i - 1].X, dy = pts[i].Y - pts[i - 1].Y;
-            len[i] = len[i - 1] + MathF.Sqrt(dx * dx + dy * dy);
-        }
-        float total = MathF.Max(1e-3f, len[n - 1]);
-
-        int seg = 0;
-        for (int i = 0; i < samples; i++)
-        {
-            float target = total * i / (samples - 1f);
-            while (seg < n - 2 && len[seg + 1] < target) seg++;
-            float span = MathF.Max(1e-4f, len[seg + 1] - len[seg]);
-            float f = Math.Clamp((target - len[seg]) / span, 0f, 1f);
-            profile[i] = pts[seg].P + (pts[seg + 1].P - pts[seg].P) * f;
-        }
-
-        // Two passes of a 5-tap box filter: enough to make the width read as a
-        // smooth taper instead of a wobble.
-        for (int pass = 0; pass < 2; pass++)
-        {
-            var copy = (float[])profile.Clone();
-            for (int i = 0; i < samples; i++)
-            {
-                float sum = 0; int count = 0;
-                for (int k = -2; k <= 2; k++)
-                {
-                    int j = i + k;
-                    if (j < 0 || j >= samples) continue;
-                    sum += copy[j]; count++;
-                }
-                profile[i] = sum / count;
-            }
-        }
-        return profile;
-    }
-
     /// <summary>Largest width multiplier the pressure curve can produce
     /// (0.60 + 0.80 * P at P = 1). Anything that reasons about how far a stroke
     /// can paint - dirty regions above all - has to use this, not the nominal
@@ -458,7 +286,7 @@ internal sealed class Stroke
     /// 取小了会在快速书写时留下残影——这是最容易被忽略、又最显眼的 bug。
     /// </summary>
     public RectF PaddedBounds => Bounds.Inflate(
-        Width * MathF.Max(MaxWidthFactor, OutlineMaxFactor) * 0.5f + 2f);
+        Width * BoundsInflateFactor * 0.5f + 2f);
 
     /// <summary>Distance in pixels from a point to this item's outline.</summary>
     public float DistanceTo(float x, float y)
@@ -618,24 +446,19 @@ internal sealed class Stroke
     /// allows per-point width, and it also stops a translucent highlighter from
     /// double-darkening where the stroke crosses over itself.
     /// </summary>
+    /// <summary>
+    /// 这一笔到底画成什么形状。**核心只有二选一**：
+    ///
+    ///   ① 优化器给了闭合轮廓 → 直接按多边形填充，形状完全由优化器决定；
+    ///   ② 没有 → 原始采样点连成的等宽带子，也就是最朴素的样子。
+    ///
+    /// 核心不产生轮廓，也不做平滑或拟合。想改变观感，请装优化器
+    /// （见 InkOptimizer.cs），而不是往这里加算法。
+    /// </summary>
     private ID2D1Geometry BuildRibbon(ID2D1Factory1 factory)
     {
-        // 美化轮廓优先：它是落笔结束时算好的，直接填充即可，
-        // 既省掉每帧重新算宽度，也保证了书写时的形状和落笔后完全一致。
         if (Outline != null && Outline.Length >= 3)
             return BuildGeometryFromOutline(factory);
-
-        // 精确模式（画线段/图形）：等宽带子，不读宽度曲线。
-        // 读宽度曲线的话，速度变化会让直线看着歪歪扭扭——那是"手写感"，
-        // 但画图和连线时是噪音。
-        if (!Beautified && Centerline != null)
-            return BuildRibbonFromCenterline(factory, uniform: true);
-
-        if (Centerline != null && WidthProfile != null && WidthProfile.Length >= 2)
-            return BuildRibbonFromCenterline(factory);
-
-        // --rawink：原始采样点直接连成等宽带子，不做三点平滑。
-        if (RawInk) return BuildRibbonFromPoints(factory, raw: true);
 
         return BuildRibbonFromPoints(factory);
     }
@@ -675,103 +498,19 @@ internal sealed class Stroke
         return max - min > 0.02f;
     }
 
-    /// <summary>诊断用：找出中心线上转得最急的那个点（也就是"拐角"）。</summary>
-    private Vector2 SimplifiedCorner()
-    {
-        var best = new Vector2(0, 0);
-        float worst = 1f;   // 余弦值，越小越急
-        for (int i = 1; i < Points.Count - 1; i++)
-        {
-            var a = new Vector2(Points[i].X - Points[i - 1].X, Points[i].Y - Points[i - 1].Y);
-            var b = new Vector2(Points[i + 1].X - Points[i].X, Points[i + 1].Y - Points[i].Y);
-            if (a.LengthSquared() < 1e-6f || b.LengthSquared() < 1e-6f) continue;
-            float cos = Vector2.Dot(Vector2.Normalize(a), Vector2.Normalize(b));
-            if (cos < worst)
-            {
-                worst = cos;
-                best = new Vector2(Points[i].X, Points[i].Y);
-            }
-        }
-        return best;
-    }
-
     /// <summary>
-    /// Samples the fitted Beziers densely and builds the outline from those
-    /// samples, taking width from the smoothed profile by arc length. Dense
-    /// sampling is what makes the edge smooth: the outline is only as faceted
-    /// as the samples are far apart.
+    /// 最朴素的画法：把采样点连成一条等宽带子，宽度由压感决定
+    /// （<see cref="HalfWidthAt"/>）。没有优化器时走的就是这一条。
+    ///
+    /// **这里不做任何平滑**：指针报什么坐标就用什么坐标。底层性能测试要的
+    /// 就是这个——量到的数字里不含我们自己加的滤波、抽稀或拟合。
+    ///
+    /// 已知观感问题：相邻两个采样点几乎重合时（鼠标刚按下的那一瞬间经常
+    /// 连报好几个相同坐标），下面的方向会被强行设成水平，轮廓随之在这里
+    /// 冒出一个尖角。这是"起笔处有毛边"最可能的来源，属**底层渲染**的
+    /// 问题，修在这一点即可，不需要开优化器。
     /// </summary>
-    private ID2D1Geometry BuildRibbonFromCenterline(ID2D1Factory1 factory, bool uniform = false)
-    {
-        const float stepPx = 1.6f;
-        var pts = new List<Vector2>(256);
-
-        foreach (var seg in Centerline)
-        {
-            float approx = Vector2.Distance(seg[0], seg[1])
-                         + Vector2.Distance(seg[1], seg[2])
-                         + Vector2.Distance(seg[2], seg[3]);
-            int steps = Math.Clamp((int)MathF.Ceiling(approx / stepPx), 4, 96);
-            int startIndex = pts.Count == 0 ? 0 : 1;
-            for (int i = startIndex; i <= steps; i++)
-                pts.Add(CurveFit.Evaluate(seg, i / (float)steps));
-        }
-
-        int n = pts.Count;
-        if (n < 2) return BuildRibbonFromPoints(factory);
-
-        var len = new float[n];
-        for (int i = 1; i < n; i++)
-            len[i] = len[i - 1] + Vector2.Distance(pts[i], pts[i - 1]);
-        float total = MathF.Max(1e-3f, len[n - 1]);
-
-        var outline = new Vector2[n * 2];
-        for (int i = 0; i < n; i++)
-        {
-            int a = i > 0 ? i - 1 : i;
-            int b = i < n - 1 ? i + 1 : i;
-            Vector2 dir = pts[b] - pts[a];
-            if (dir.LengthSquared() < 1e-8f) dir = Vector2.UnitX;
-            dir = Vector2.Normalize(dir);
-            var nrm = new Vector2(-dir.Y, dir.X);
-
-            float hw;
-            if (uniform)
-            {
-                hw = Width * 0.5f;
-            }
-            else
-            {
-                float t = len[i] / total;
-                hw = Width * (0.60f + 0.80f * SampleProfile(t)) * 0.5f;
-            }
-
-            outline[i] = pts[i] + nrm * hw;
-            outline[n * 2 - 1 - i] = pts[i] - nrm * hw;
-        }
-
-        var geo = factory.CreatePathGeometry();
-        using (var sink = geo.Open())
-        {
-            sink.SetFillMode(FillMode.Winding);
-            sink.BeginFigure(outline[0], FigureBegin.Filled);
-            for (int i = 1; i < outline.Length; i++) sink.AddLine(outline[i]);
-            sink.EndFigure(FigureEnd.Closed);
-            sink.Close();
-        }
-        return geo;
-    }
-
-    private float SampleProfile(float t)
-    {
-        float x = Math.Clamp(t, 0f, 1f) * (WidthProfile.Length - 1);
-        int i0 = (int)x;
-        int i1 = Math.Min(i0 + 1, WidthProfile.Length - 1);
-        float f = x - i0;
-        return WidthProfile[i0] + (WidthProfile[i1] - WidthProfile[i0]) * f;
-    }
-
-    private ID2D1Geometry BuildRibbonFromPoints(ID2D1Factory1 factory, bool raw = false)
+    private ID2D1Geometry BuildRibbonFromPoints(ID2D1Factory1 factory)
     {
         int n = Points.Count;
         if (n == 1)
@@ -781,40 +520,20 @@ internal sealed class Stroke
                 new Ellipse(new Vector2(Points[0].X, Points[0].Y), rad, rad));
         }
 
-        // Light 3-tap smoothing removes hand jitter without softening the line.
-        // The two end points are left untouched: smoothing the head would drag
-        // the line tip backwards and make the pen feel like it is lagging.
-        var px = new float[n];
-        var py = new float[n];
-        for (int i = 0; i < n; i++)
-        {
-            // raw 模式：连这点平滑也不做，就是原始点。
-            if (raw || i == 0 || i == n - 1)
-            {
-                px[i] = Points[i].X;
-                py[i] = Points[i].Y;
-                continue;
-            }
-            int a = i > 0 ? i - 1 : i;
-            int b = i < n - 1 ? i + 1 : i;
-            px[i] = (Points[a].X + Points[i].X * 2f + Points[b].X) * 0.25f;
-            py[i] = (Points[a].Y + Points[i].Y * 2f + Points[b].Y) * 0.25f;
-        }
-
         var outline = new Vector2[n * 2];
         for (int i = 0; i < n; i++)
         {
             int a = i > 0 ? i - 1 : i;
             int b = i < n - 1 ? i + 1 : i;
-            float dx = px[b] - px[a];
-            float dy = py[b] - py[a];
+            float dx = Points[b].X - Points[a].X;
+            float dy = Points[b].Y - Points[a].Y;
             float len = MathF.Sqrt(dx * dx + dy * dy);
             if (len < 1e-4f) { dx = 1; dy = 0; len = 1; }
             dx /= len; dy /= len;
             float nx = -dy, ny = dx;
             float hw = HalfWidthAt(i);
-            outline[i] = new Vector2(px[i] + nx * hw, py[i] + ny * hw);
-            outline[n * 2 - 1 - i] = new Vector2(px[i] - nx * hw, py[i] - ny * hw);
+            outline[i] = new Vector2(Points[i].X + nx * hw, Points[i].Y + ny * hw);
+            outline[n * 2 - 1 - i] = new Vector2(Points[i].X - nx * hw, Points[i].Y - ny * hw);
         }
 
         var geo = factory.CreatePathGeometry();

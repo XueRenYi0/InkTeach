@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace InkEngine;
+namespace InkEngine.Optimize;
 
 /// <summary>
 /// 手写美化：把一串原始采样点变成一条"像用笔写出来的"轮廓。
