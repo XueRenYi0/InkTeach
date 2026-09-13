@@ -37,8 +37,16 @@ internal static class SelectionHandles
     /// </summary>
     public const float VisualSizeLogical = 14f;
 
-    /// <summary>旋转手柄的直径（逻辑像素）。和普通手柄同尺寸，看起来才像一套。</summary>
-    public const float RotateGripLogical = 14f;
+    /// <summary>
+    /// 旋转手柄的直径（逻辑像素）。
+    ///
+    /// 比普通手柄（14）大一圈：它里面要装一个图标，14 的话图标只剩几个像素，
+    /// 投影上就糊成一个点。大一圈也让"这是个按钮"更好认。
+    /// </summary>
+    public const float RotateGripLogical = 20f;
+
+    /// <summary>旋转手柄里那个图标的尺寸（逻辑像素）。</summary>
+    public const float RotateGlyphLogical = 13f;
 
     /// <summary>
     /// 手柄的命中半径（逻辑像素）。**是视觉尺寸的两倍**：

@@ -1095,20 +1095,11 @@ internal sealed class OverlayWindow : IDisposable
         var white = Brush(new Color4(1f, 1f, 1f, 1f));
         _ctx.FillEllipse(new Ellipse(rot, rotR, rotR), white);
         _ctx.DrawEllipse(new Ellipse(rot, rotR, rotR), _scratch, 1.6f);
-        // 转圈的弧。Direct2D 的上下文没有 DrawArc，得自己拼一条路径——
-        // 采样十几个点连成折线就够了：这段弧半径不到 9 像素，看不出折。
-        using (var arc = Gfx.D2DFactory.CreatePathGeometry())
-        {
-            using (var sink = arc.Open())
-            {
-                sink.BeginFigure(PointOnCircle(rot, rotR * 0.55f, 40f), FigureBegin.Hollow);
-                for (int i = 1; i <= 14; i++)
-                    sink.AddLine(PointOnCircle(rot, rotR * 0.55f, 40f + 260f * i / 14f));
-                sink.EndFigure(FigureEnd.Open);
-                sink.Close();
-            }
-            _ctx.DrawGeometry(arc, _scratch, 1.8f);
-        }
+        // 圆里放**官方图标**，不是手画一段弧。
+        // 手画那版在投影上看像个"©"——旋转图标的识别特征就是那个箭头，
+        // 少一笔就不成形。这是"图标别自己画"的又一个实例。
+        float glyph = SelectionHandles.RotateGlyphLogical * dpi;
+        DrawIcon(IconPaths.rotate, rot.X - glyph * 0.5f, rot.Y - glyph * 0.5f, glyph, _scratch);
 
         // 4) 八个手柄。白底 + 蓝边：深色背景上是白方块显眼，
         //    浅色背景上靠蓝边立住，一套画法两边都成立。
@@ -1214,13 +1205,6 @@ internal sealed class OverlayWindow : IDisposable
                        * Matrix3x2.CreateTranslation(x, y) * saved;
         _ctx.FillGeometry(geo, brush);
         _ctx.Transform = saved;
-    }
-
-    /// <summary>圆上某个角度上的点，用来拼小圆弧（画旋转手柄的转向标记）。</summary>
-    private static Vector2 PointOnCircle(Vector2 c, float r, float deg)
-    {
-        float a = deg * MathF.PI / 180f;
-        return new Vector2(c.X + r * MathF.Cos(a), c.Y + r * MathF.Sin(a));
     }
 
     private void DrawLaser(InkEngine app)
