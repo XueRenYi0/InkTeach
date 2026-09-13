@@ -232,6 +232,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             TransformTest();
         }
+        else if (mode == "--handletest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            HandleTest();
+        }
         else if (mode == "--aaprobe")
         {
             _autoExitAt = double.MaxValue;
@@ -383,6 +389,111 @@ internal sealed class App : InkEngine.InkEngine
     /// "这里的颜色比别处淡"。所以用两个等面积窗口的墨量比值来判定：
     /// 拐角窗口的覆盖率不该明显低于直段。
     /// </summary>
+    /// <summary>
+    /// 选中手柄自检：位置、命中、以及每个手柄拖出来的是什么矩阵。
+    ///
+    /// 为什么要专门测：变换矩阵错了是那种"看着能动、但缩放之后再撤销
+    /// 回不到原样"的问题，肉眼基本发现不了，而且会累积误差。
+    /// </summary>
+    private void HandleTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 选中手柄自检（位置 / 命中 / 变换矩阵）===");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"    {name,-22}{(ok ? "PASS" : "FAIL")}  {detail}");
+        }
+
+        float dpi = DpiScale;
+        var b = new RectF { MinX = 400, MinY = 300, MaxX = 800, MaxY = 600 };
+        float cx = (b.MinX + b.MaxX) * 0.5f;
+
+        // ---- 位置 ----
+        var tl = SelectionHandles.Position(SelHandle.TopLeft, b, dpi);
+        var top = SelectionHandles.Position(SelHandle.Top, b, dpi);
+        var rot = SelectionHandles.Position(SelHandle.Rotate, b, dpi);
+        Check("左上角位置", Math.Abs(tl.X - b.MinX) < 0.01f && Math.Abs(tl.Y - b.MinY) < 0.01f,
+              $"({tl.X:F0},{tl.Y:F0})");
+        Check("上边中点位置", Math.Abs(top.X - cx) < 0.01f && Math.Abs(top.Y - b.MinY) < 0.01f, "");
+        Check("旋转手柄在上方外侧",
+              Math.Abs(rot.X - cx) < 0.01f && rot.Y < b.MinY - 20f,
+              $"离上边 {b.MinY - rot.Y:F0}px");
+
+        // ---- 命中 ----
+        Check("点上四角命中", SelectionHandles.HitTest(tl.X, tl.Y, b, dpi) == SelHandle.TopLeft, "");
+        Check("旋转手柄命中", SelectionHandles.HitTest(rot.X, rot.Y, b, dpi) == SelHandle.Rotate, "");
+        float far = SelectionHandles.HitRadiusLogical * dpi * 1.6f;
+        Check("偏离太远不命中",
+              SelectionHandles.HitTest(tl.X - far, tl.Y, b, dpi) == SelHandle.None, $"偏 {far:F0}px");
+        Check("极简模式不认边中点",
+              SelectionHandles.HitTest(top.X, top.Y, b, dpi, includeEdgeHandles: false) == SelHandle.None, "");
+
+        // ---- 四角拖动：锚点不动，被拖的角跟手 ----
+        var br = SelectionHandles.Position(SelHandle.BottomRight, b, dpi);
+        var target = new Vector2(b.MinX - 200, b.MinY - 100);   // 往左上拖，放大
+        var m = SelectionHandles.DragMatrix(SelHandle.TopLeft, b, tl, target, dpi, false, false);
+        var anchorAfter = Vector2.Transform(br, m);
+        Check("锚点（对角）不动",
+              Math.Abs(anchorAfter.X - br.X) < 0.05f && Math.Abs(anchorAfter.Y - br.Y) < 0.05f,
+              $"({anchorAfter.X:F1},{anchorAfter.Y:F1})");
+        var cornerAfter = Vector2.Transform(tl, m);
+        Check("被拖的角跟到目标点",
+              Math.Abs(cornerAfter.X - target.X) < 0.05f && Math.Abs(cornerAfter.Y - target.Y) < 0.05f,
+              $"({cornerAfter.X:F1},{cornerAfter.Y:F1}) 目标 ({target.X:F1},{target.Y:F1})");
+
+        // ---- 边中点：只动一个轴（这就是"左右拉伸 / 上下拉伸"）----
+        var right = SelectionHandles.Position(SelHandle.Right, b, dpi);
+        var mEdge = SelectionHandles.DragMatrix(SelHandle.Right, b, right,
+                                                new Vector2(right.X + 200, right.Y + 999), dpi, false, false);
+        Check("右边中点只拉伸 X", MathF.Abs(mEdge.M22 - 1f) < 1e-4f && mEdge.M11 > 1.49f,
+              $"sx={mEdge.M11:F2} sy={mEdge.M22:F2}（Y 的拖动被忽略）");
+
+        // ---- 拖过头：夹住，不翻转 ----
+        var wayPast = new Vector2(br.X + 600, br.Y + 600);
+        var mOver = SelectionHandles.DragMatrix(SelHandle.TopLeft, b, tl, wayPast, dpi, false, false);
+        Check("拖过头不翻转（夹住）",
+              mOver.M11 > 0f && mOver.M22 > 0f && MathF.Abs(mOver.M11 - SelectionHandles.MinScale) < 1e-3f,
+              $"sx={mOver.M11:F3} sy={mOver.M22:F3}，下限 {SelectionHandles.MinScale}");
+
+        // ---- Shift 等比 ----
+        var mUni = SelectionHandles.DragMatrix(SelHandle.TopLeft, b, tl,
+                                               new Vector2(b.MinX - 300, b.MinY - 80), dpi, true, false);
+        Check("Shift 等比", MathF.Abs(mUni.M11 - mUni.M22) < 1e-4f, $"sx={mUni.M11:F3} sy={mUni.M22:F3}");
+
+        // ---- 旋转：绕选区中心转，长度不变 ----
+        var center = new Vector2(cx, (b.MinY + b.MaxY) * 0.5f);
+        var mRot = SelectionHandles.DragMatrix(SelHandle.Rotate, b, top,
+                                               new Vector2(center.X + 100, center.Y), dpi, false, false);
+        var rotated = Vector2.Transform(tl, mRot);
+        float r0 = Vector2.Distance(tl, center);
+        float r1 = Vector2.Distance(rotated, center);
+        Check("旋转保持半径", Math.Abs(r0 - r1) < 0.05f, $"{r0:F1} -> {r1:F1}");
+
+        // ---- 旋转吸附 ----
+        var mSnap = SelectionHandles.DragMatrix(SelHandle.Rotate, b, top,
+                                                new Vector2(center.X + 100, center.Y + 7), dpi, false, true);
+        var v0 = Vector2.Normalize(top - center);
+        var v1 = Vector2.Normalize(Vector2.Transform(top, mSnap) - center);
+        float deg = MathF.Acos(Math.Clamp(Vector2.Dot(v0, v1), -1f, 1f)) * 180f / MathF.PI;
+        Check("Shift 旋转吸附到 15°", Math.Abs(deg % 15f) < 0.5f || Math.Abs(deg % 15f - 15f) < 0.5f,
+              $"转了 {deg:F1}°");
+
+        // ---- 镜像：只能从矩阵入口来 ----
+        var mMir = SelectionHandles.MirrorMatrix(b, horizontal: true);
+        var mirroredLeft = Vector2.Transform(tl, mMir);
+        Check("左右镜像对称", Math.Abs(mirroredLeft.X - b.MaxX) < 0.01f
+                           && Math.Abs(mirroredLeft.Y - b.MinY) < 0.01f,
+              $"左上角 -> ({mirroredLeft.X:F1},{mirroredLeft.Y:F1})");
+        Check("镜像矩阵行列式为负", mMir.M11 * mMir.M22 - mMir.M12 * mMir.M21 < 0f, "");
+
+        Console.WriteLine();
+        Console.WriteLine(fail == 0 ? "  PASS: 手柄位置、命中与变换矩阵都正确" : $"  FAIL: {fail} 项不对");
+        _quit = true;
+    }
+
     /// <summary>
     /// 变换命令自检。
     ///
