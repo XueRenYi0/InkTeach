@@ -53,6 +53,15 @@ public class InkEngine
     // 四种情形在这里分流：点操作条按钮 / 拖手柄 / 在选中范围里整体拖 / 空白处重新框选。
     internal bool SelDragging;
     internal int SelBarHover = -1;          // 悬停的按钮，-1 = 无（给渲染用）
+    /// <summary>
+    /// 批注键盘模式。开 = 键盘归批注层（编辑快捷键生效）；
+    /// 关 = 覆盖层永不抢焦点，键盘还给下层程序。
+    ///
+    /// 这是个**明确的取舍**：开着的时候放映中的 PPT 收不到键盘，因为覆盖层
+    /// 拿着前台焦点。用户拍板"先不考虑 PPT，先把底层做好"，所以默认开，
+    /// 用 Ctrl+Alt+K 切换。
+    /// </summary>
+    internal bool KeyboardMode = true;
     private SelHandle _dragHandle = SelHandle.None;
     private bool _dragIsMove;
     private RectF _dragStartBounds;
@@ -355,6 +364,7 @@ public class InkEngine
             // （错误 1409 = 热键已被注册）。换成 6：跟 1~5 挨着，好记，
             // 而且 Ctrl+Alt+6 各家都没占。
             (14, '6', "切换笔迹粗细"),
+            (15, 'K', "批注键盘模式开关"),
         };
 
         foreach (var (id, key, desc) in spec)
@@ -530,6 +540,10 @@ public class InkEngine
         // 宿主自己的窗口（开发期的点击目标）先处理。产品界面不会用到这一层。
         if (HandleHostWindowMessage(hWnd, msg, wParam, lParam, out var hostResult))
             return hostResult;
+
+        // 批注键盘模式下的按键。只有这个模式收得到——见 SetKeyboardMode。
+        if ((msg == Native.WM_KEYDOWN || msg == Native.WM_SYSKEYDOWN) && HandleKeyDown(wParam))
+            return IntPtr.Zero;
 
         // 恢复小圆钮：它独立于覆盖层，是穿透时唯一还能接收点击的东西。
         if (s_pillHwnds.Contains(hWnd))
@@ -930,6 +944,9 @@ public class InkEngine
                 PenWidthLogical = WidthPresets[WidthPresetIndex];
                 Console.WriteLine($"笔迹粗细 -> {PenWidthLogical} 逻辑像素"
                                 + $"（本机实际 {PenWidthLogical * DpiScale:F0} 物理像素）");
+                break;
+            case 15:
+                SetKeyboardMode(!KeyboardMode);
                 break;
         }
         _dirty = true;
@@ -1395,5 +1412,88 @@ public class InkEngine
         }
         Laser.Clear();
         _dirty = true;
+    }
+    // =====================================================================
+    //  批注键盘模式
+    // =====================================================================
+
+    /// <summary>
+    /// 开关批注键盘模式。
+    ///
+    /// 开：去掉 WS_EX_NOACTIVATE 并把窗口提到前台，键盘归批注层，编辑类
+    ///     快捷键（Ctrl+Z / Ctrl+D / Delete / 方向键…）才有地方落地。
+    /// 关：加回 WS_EX_NOACTIVATE，覆盖层回到"永不抢焦点"，键盘还给下层程序
+    ///     ——那时候只有全局热键（Ctrl+Alt+…）可用。
+    ///
+    /// 取舍说清楚：开着的时候，放映中的 PPT 收不到键盘。
+    /// </summary>
+    private void SetKeyboardMode(bool on)
+    {
+        KeyboardMode = on;
+        foreach (var w in _windows)
+        {
+            long ex = Native.GetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE).ToInt64();
+            if (on) ex &= ~Native.WS_EX_NOACTIVATE;
+            else ex |= Native.WS_EX_NOACTIVATE;
+            Native.SetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE, new IntPtr(ex));
+            Native.SetWindowPos(w.Hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER
+                | Native.SWP_NOACTIVATE | 0x0020 /*SWP_FRAMECHANGED*/);
+            if (on) Native.SetForegroundWindow(w.Hwnd);
+        }
+        Console.WriteLine($"批注键盘模式 = {on}"
+            + (on ? "（键盘归批注层；此时下层程序收不到键盘）" : "（键盘还给下层程序）"));
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// 批注键盘模式下的按键。**只在 <see cref="KeyboardMode"/> 打开时收到。**
+    ///
+    /// 键位一律照 Windows 的通用习惯，不自己发明：
+    ///   Ctrl+Z 撤销 / Ctrl+Y 重做 / Ctrl+A 全选 / Delete 删除 / Esc 取消选择
+    ///   Ctrl+D 复制一份（系统剪贴板还没接，先用 D）
+    ///   方向键移动 1 像素，按住 Shift 是 10 像素
+    ///
+    /// 已知待改：方向键按住会重复触发，每次都是一条撤销记录。要接"连续微调
+    /// 合并成一步"，得等编辑命令支持合并（撤销栈里相邻同类动作合并）。
+    /// </summary>
+    private bool HandleKeyDown(IntPtr wParam)
+    {
+        int vk = wParam.ToInt32();
+        bool ctrl = (Native.GetAsyncKeyState(0x11 /*VK_CONTROL*/) & 0x8000) != 0;
+        bool shift = (Native.GetAsyncKeyState(0x10 /*VK_SHIFT*/) & 0x8000) != 0;
+
+        switch (vk)
+        {
+            case 0x5A: if (!ctrl) return false; Doc.Undo(); Laser.Clear(); break;   // Z
+            case 0x59: if (!ctrl) return false; Doc.Redo(); break;                  // Y
+            case 0x41: if (!ctrl) return false; SelectAll(); break;                 // A
+            case 0x44: if (!ctrl) return false; Doc.DuplicateSelected(); break;     // D
+            case 0x2E: Doc.DeleteSelected(); break;                                 // Delete
+            case 0x1B: Doc.Selected.Clear(); break;                                 // Esc
+            case 0x25: case 0x26: case 0x27: case 0x28:                             // 方向键
+            {
+                float step = shift ? 10f : 1f;
+                float dx = vk == 0x25 ? -step : vk == 0x27 ? step : 0f;
+                float dy = vk == 0x26 ? -step : vk == 0x28 ? step : 0f;
+                Doc.ApplyTransform(Matrix3x2.CreateTranslation(dx, dy));
+                break;
+            }
+            default: return false;
+        }
+        _dirty = true;
+        return true;
+    }
+
+    /// <summary>
+    /// 全选。顺便切到选择工具——不切的话手柄和操作条不会出现，
+    /// 用户会以为"全选没生效"。
+    /// </summary>
+    private void SelectAll()
+    {
+        Doc.Selected.Clear();
+        foreach (var s in Doc.Strokes) Doc.Selected.Add(s);
+        Tool = Tool.Marquee;
+        NotifyUiStateChanged();
     }
 }

@@ -15,6 +15,8 @@ internal static class Native
     public const int WM_NCHITTEST = 0x0084;
     public const int WM_TIMER = 0x0113;
     public const int WM_HOTKEY = 0x0312;
+    public const int WM_KEYDOWN = 0x0100;
+    public const int WM_SYSKEYDOWN = 0x0104;
     public const int WM_LBUTTONDOWN = 0x0201;
     public const int WM_MOUSEMOVE = 0x0200;
     public const int WM_MOUSELEAVE = 0x02A3;
@@ -319,6 +321,9 @@ internal static class Native
 
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetFocus(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
