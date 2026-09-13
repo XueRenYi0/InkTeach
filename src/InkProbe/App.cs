@@ -269,6 +269,14 @@ internal sealed class App : InkEngine.InkEngine
             int n = args.Length > 1 && int.TryParse(args[1], out var r) ? r : 14;
             DupTest(n);
         }
+        else if (mode == "--memab")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            int n = args.Length > 1 && int.TryParse(args[1], out var s) ? s : 10000;
+            int k = args.Length > 2 && int.TryParse(args[2], out var rd) ? rd : 5;
+            MemAbTest(n, k);
+        }
         else if (mode == "--aaprobe")
         {
             _autoExitAt = double.MaxValue;
@@ -420,6 +428,114 @@ internal sealed class App : InkEngine.InkEngine
     /// "这里的颜色比别处淡"。所以用两个等面积窗口的墨量比值来判定：
     /// 拐角窗口的覆盖率不该明显低于直段。
     /// </summary>
+    /// <summary>
+    /// 配置 A/B 对照，**在同一个进程里交替跑**。
+    ///
+    /// 为什么必须这样：跨会话比数字是无效的。实测同一个"空闲"状态，两次会话
+    /// 差了 7MB —— 环境（别的进程、驱动状态、系统缓存）会漂移，而漂移的量级
+    /// 常常和被测效应同阶，于是结论就变成了掷骰子。
+    ///
+    /// 四条规矩，参考 JMH / Go benchstat / Google Benchmark 的通行做法：
+    ///   ① **交替**跑 A、B、A、B…，不是"先全测 A 再全测 B"——漂移会被平摊到两边；
+    ///   ② 每组测量前**强制归位**：清空 + 重建 + GC + TrimWorkingSet，
+    ///      否则测到的是上一轮的残留；
+    ///   ③ **预热**：先跑一段再采数（JIT、GPU 资源池、字体缓存都要热）；
+    ///   ④ 看**中位数与极差**，不看单次值；差异落在极差里就老实说"测不出来"。
+    ///
+    /// 内存一律用**私有字节（提交大小）**，不用工作集——工作集会被系统随时回收，
+    /// 它反映"系统压力"而不是"我们占了多少"（本地报告里已经写过这一点）。
+    /// </summary>
+    private void MemAbTest(int strokes, int rounds)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"=== A/B 对照：细分缓存 关(A) vs 开(B)，{strokes} 笔，交替 {rounds} 轮 ===");
+        Console.WriteLine("   轮次 |  A私有 | A每帧 |  B私有 | B每帧 | A显存 | B显存");
+        Console.WriteLine("  ------|--------|-------|--------|-------|-------|-------");
+
+        var aPriv = new List<double>(); var aRec = new List<double>(); var aGpu = new List<double>();
+        var bPriv = new List<double>(); var bRec = new List<double>(); var bGpu = new List<double>();
+
+        // 预热一轮，两边各一次，让 JIT / GPU 资源池 / 字体缓存都热起来
+        RunOnce(false, strokes, warmup: true);
+        RunOnce(true, strokes, warmup: true);
+
+        for (int r = 0; r < rounds; r++)
+        {
+            RunOnce(false, strokes, warmup: false);
+            aPriv.Add(_abPriv); aRec.Add(_abRec); aGpu.Add(_abGpu);
+
+            RunOnce(true, strokes, warmup: false);
+            bPriv.Add(_abPriv); bRec.Add(_abRec); bGpu.Add(_abGpu);
+
+            Console.WriteLine($"  {r + 1,5} | {aPriv[^1],6:F0} | {aRec[^1],5:F2} | "
+                            + $"{bPriv[^1],6:F0} | {bRec[^1],5:F2} | {aGpu[^1],5:F0} | {bGpu[^1],5:F0}");
+        }
+
+        double aP = Median(aPriv), bP = Median(bPriv);
+        double aR = Median(aRec), bR = Median(bRec);
+        double aG = Median(aGpu), bG = Median(bGpu);
+
+        Console.WriteLine();
+        Console.WriteLine($"  私有字节中位数 ：A {aP:F0} MB   B {bP:F0} MB   -> {(bP - aP):+0;-0;0} MB");
+        Console.WriteLine($"     A 极差 {aPriv.Min():F0}~{aPriv.Max():F0}（{(aPriv.Max() - aPriv.Min()):F0}）"
+                        + $"   B 极差 {bPriv.Min():F0}~{bPriv.Max():F0}（{(bPriv.Max() - bPriv.Min()):F0}）");
+        Console.WriteLine($"  显存中位数     ：A {aG:F0} MB   B {bG:F0} MB   -> {(bG - aG):+0;-0;0} MB");
+        Console.WriteLine($"  每帧记录中位数 ：A {aR:F2} ms  B {bR:F2} ms  -> {(bR - aR):+0.00;-0.00;0.00} ms");
+        Console.WriteLine();
+
+        // 判据：差异必须大于两边极差的较大者，才算"测得出来"。
+        double noise = Math.Max(aPriv.Max() - aPriv.Min(), bPriv.Max() - bPriv.Min());
+        double diff = Math.Abs(bP - aP);
+        Console.WriteLine(diff > noise
+            ? $"  结论：差异 {diff:F0}MB 大于噪声带 {noise:F0}MB —— **测得出来**"
+            : $"  结论：差异 {diff:F0}MB 落在噪声带 {noise:F0}MB 之内 —— **测不出来**，不能下结论");
+
+        Stroke.MaxRealizations = 4096;   // 还原默认
+        Doc.Clear();
+        Doc.ClearHistory();
+        _quit = true;
+    }
+
+    private double _abPriv, _abRec, _abGpu;
+
+    /// <summary>跑一次完整状态并采样。A=关细分缓存，B=开。</summary>
+    private void RunOnce(bool realizations, int strokes, bool warmup)
+    {
+        Doc.Clear();
+        Doc.ClearHistory();
+        Doc.Selected.Clear();
+        Stroke.MaxRealizations = realizations ? 4096 : 0;
+
+        GenerateStrokes(strokes);
+        Doc.InvalidateAll();
+        SettleFrames(180);                       // 让它整层画一遍（这里才会建缓存）
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        Mem.TrimWorkingSet();                    // 把"已释放但仍驻留"的部分挤出去
+        SettleFrames(30);
+
+        if (warmup) return;
+        _abPriv = PrivateMb();
+        _abGpu = TryGpuMb();
+        var (rec, _) = MeasureFrames(24);
+        _abRec = rec;
+    }
+
+    private static double Median(List<double> v)
+    {
+        var s = v.OrderBy(x => x).ToList();
+        return s.Count == 0 ? 0 : s[s.Count / 2];
+    }
+
+    /// <summary>显存用量（取不到就返回 0，不影响报告）。</summary>
+    private static double TryGpuMb()
+    {
+        try { return double.TryParse(GpuMb().Replace(" MB", ""), out var v) ? v : 0; }
+        catch { return 0; }
+    }
+
     /// <summary>
     /// 指数复制压力测验：画一笔，然后反复"全选 + 复制"（每次翻倍），
     /// 每轮打印对象数与内存。就是用户按 Ctrl+A / Ctrl+D 那个动作的等价脚本。
