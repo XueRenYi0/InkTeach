@@ -214,6 +214,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             CornerTest();
         }
+        else if (mode == "--shapetest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ShapeTest();
+        }
         else if (mode == "--aaprobe")
         {
             _autoExitAt = double.MaxValue;
@@ -365,6 +371,61 @@ internal sealed class App : InkEngine.InkEngine
     /// "这里的颜色比别处淡"。所以用两个等面积窗口的墨量比值来判定：
     /// 拐角窗口的覆盖率不该明显低于直段。
     /// </summary>
+    /// <summary>
+    /// 图形命中测试自检。
+    ///
+    /// 验的是"图形走精确命中、自由笔迹走中心线距离"这条分岔有没有走对。
+    /// 关键在于：**图形画的是描边轮廓，中间是空的**——用"点到中心线的距离"
+    /// 去判定，会把"点在矩形正中央"也当成命中，那是错的。
+    /// </summary>
+    private void ShapeTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 图形命中测试（描边轮廓，中间是空的）===");
+
+        float cx = _virtualX + 900, cy = _virtualY + 700;
+        float halfW = 8f * DpiScale;          // 半笔宽（物理像素）
+        var rect = new Stroke
+        {
+            Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+            Color = new Color4(1f, 0f, 1f, 1f), Width = halfW * 2f,
+        };
+        rect.AddPoint(cx - 200, cy - 150, 1f, NowMs);
+        rect.AddPoint(cx + 200, cy + 150, 1f, NowMs);
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"    {name,-22}{(ok ? "PASS" : "FAIL")}  {detail}");
+        }
+
+        Check("边上命中", rect.HitTestExact(cx, cy - 150), "");
+        Check("正中央不命中", !rect.HitTestExact(cx, cy), "轮廓中间是空的");
+        Check("远处不命中", !rect.HitTestExact(cx + 900, cy + 900), "");
+
+        float off = halfW + 20f;   // 离中心线比半笔宽还远
+        Check("容差外不命中", !rect.HitTestExact(cx, cy - 150 + off), $"偏移 {off:F0}px");
+        Check("容差内命中", rect.HitTestExact(cx, cy - 150 + off, off + 5f), $"容差 {off + 5f:F0}px");
+
+        var saved = rect.Transform;
+        rect.Transform = rect.Transform * Matrix3x2.CreateTranslation(400, 0);
+        Check("平移后原位置不命中", !rect.HitTestExact(cx, cy - 150), "");
+        Check("平移后新位置命中", rect.HitTestExact(cx + 400, cy - 150), "变换必须参与命中");
+        rect.Transform = saved;
+
+        Doc.Clear();
+        Doc.AddStroke(rect);
+        int removed = Doc.EraseAt(cx, cy, 10f * DpiScale);
+        Check("擦正中央不误删", removed == 0, $"删了 {removed} 个");
+        removed = Doc.EraseAt(cx, cy - 150, 10f * DpiScale);
+        Check("擦边上应删除", removed == 1, $"删了 {removed} 个");
+
+        Console.WriteLine();
+        Console.WriteLine(fail == 0 ? "  PASS: 图形命中判定正确" : $"  FAIL: {fail} 项不对");
+        _quit = true;
+    }
+
     private void CornerTest()
     {
         Console.WriteLine();

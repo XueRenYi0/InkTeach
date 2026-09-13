@@ -55,6 +55,23 @@ internal static class Gfx
     public static IDXGIAdapter3 Adapter3;
     public static string AdapterInfo = "unknown";
 
+    /// <summary>
+    /// 圆头圆角的描边样式。**渲染和命中测试必须共用同一个对象**——
+    /// 命中测试要判断"这个点算不算落在这条线上"，用的样式必须和画出来的
+    /// 一模一样，否则判定结果和肉眼看到的会对不上（箭头、细长图形尤其明显）。
+    /// </summary>
+    public static ID2D1StrokeStyle1 RoundStroke;
+
+    public static ID2D1StrokeStyle1 Round => RoundStroke ??= D2DFactory.CreateStrokeStyle(
+        new StrokeStyleProperties1
+        {
+            StartCap = CapStyle.Round,
+            EndCap = CapStyle.Round,
+            DashCap = CapStyle.Round,
+            LineJoin = LineJoin.Round,
+            MiterLimit = 10f,
+        });
+
     public static void Init()
     {
         Mem.Stage("0. 进程启动（运行时 + 程序集）");
@@ -98,6 +115,8 @@ internal static class Gfx
 
     public static void Shutdown()
     {
+        RoundStroke?.Dispose();
+        RoundStroke = null;
         WriteFactory?.Dispose();
         HudFormat?.Dispose();
         D2DDevice?.Dispose();
@@ -126,8 +145,6 @@ internal sealed class OverlayWindow : IDisposable
     /// <summary>Render pen strokes as stroked centre-lines instead of filled
     /// pressure ribbons. Cheaper to tessellate, but no width-from-pressure.</summary>
     public static bool CenterlineRendering = false;
-    public static ID2D1StrokeStyle1 RoundStrokeStyle;
-
     /// <summary>
     /// 是否用 Direct2D 的几何实现缓存替代每次重新细分。默认开启：
     /// 实测整层重画快 7 倍、擦除快 3 倍、撤销快 2.2 倍，代价是每个缓存约
@@ -798,15 +815,7 @@ internal sealed class OverlayWindow : IDisposable
         if (geo == null) return;
         if (s.IsShape || CenterlineRendering)
         {
-            RoundStrokeStyle ??= Gfx.D2DFactory.CreateStrokeStyle(new StrokeStyleProperties1
-            {
-                StartCap = CapStyle.Round,
-                EndCap = CapStyle.Round,
-                DashCap = CapStyle.Round,
-                LineJoin = LineJoin.Round,
-                MiterLimit = 10f,
-            });
-            _ctx.DrawGeometry(geo, Brush(s.Color), MathF.Max(1f, s.Width), RoundStrokeStyle);
+            _ctx.DrawGeometry(geo, Brush(s.Color), MathF.Max(1f, s.Width), Gfx.Round);
         }
         else
         {

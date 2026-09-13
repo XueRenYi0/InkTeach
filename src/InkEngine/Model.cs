@@ -394,6 +394,49 @@ internal sealed class Stroke
         return s > 1e-6f ? s : 1f;
     }
 
+    /// <summary>
+    /// 精确命中测试（**画布坐标**），<paramref name="tolerance"/> 是容差半径。
+    ///
+    /// 和 <see cref="DistanceToCanvas"/> 的分工：
+    ///
+    ///   · **自由笔迹**：带子本来就是"中心线两侧各半个笔宽"，所以"点到中心线的
+    ///     距离"已经等价于精确判定，用那个更快，不必走这里。
+    ///   · **图形**（直线 / 矩形 / 椭圆 / 箭头）：真实轮廓不是两个端点之间的
+    ///     线段，DistanceTo 里只能用归一化半径之类的近似，缩放或旋转之后明显偏。
+    ///     这里让 Direct2D 照着**画出来时用的同一条描边**去算，是精确的。
+    ///
+    /// 代价：一次几何构建（有缓存）+ 一次 COM 调用。所以只对**粗筛之后的
+    /// 少量候选**调用，不要拿它去遍历整个文档。
+    /// </summary>
+    public bool HitTestExact(float canvasX, float canvasY, float tolerance = 0f)
+    {
+        var geo = BuildGeometry(Gfx.D2DFactory);
+        if (geo == null) return false;
+
+        // 几何存在局部坐标里，把查询点反变换回去再测——等价于"带着变换去测"，
+        // 但只用最简单的重载，少一层踩坑的机会。
+        Vector2 p = new(canvasX, canvasY);
+        if (!Transform.IsIdentity)
+        {
+            if (!Matrix3x2.Invert(Transform, out var inv)) return false;
+            p = Vector2.Transform(p, inv);
+        }
+
+        if (IsShape)
+        {
+            // 图形是「描边的中心线」：线宽要算进去；容差靠把线临时加粗来实现——
+            // 于是"橡皮圆碰到这条线"就等价于"点落在加粗了 2r 的线上"，不用自己算距离。
+            //
+            // 注：非等比变换下"线宽不变"还没实现（见计划文档 7.1），这里按局部线宽判定。
+            return geo.StrokeContainsPoint(p, MathF.Max(1f, Width) + tolerance * 2f, Gfx.Round);
+        }
+
+        // 自由笔迹是填充的带子：落在里面就算命中；
+        // 容差则等价于"落在轮廓边界附近 tolerance 之内"。
+        if (geo.FillContainsPoint(p)) return true;
+        return tolerance > 0f && geo.StrokeContainsPoint(p, tolerance * 2f, Gfx.Round);
+    }
+
     public float DistanceTo(float x, float y)
     {
         if (Points.Count == 0) return float.MaxValue;
@@ -861,8 +904,17 @@ internal sealed class InkDocument
         var candidates = _queryScratch.ToArray();
         foreach (var s in candidates)
         {
-            float reach = radius + s.Width * Stroke.MaxWidthFactor * 0.5f;
-            if (s.DistanceToCanvas(x, y) > reach) continue;
+            if (s.IsShape)
+            {
+                // 图形的轮廓不是两个端点之间的线段，近似会偏，交给 Direct2D 精确算。
+                if (!s.HitTestExact(x, y, radius)) continue;
+            }
+            else
+            {
+                // 自由笔迹：带子就是中心线两侧半个笔宽，点到中心线的距离已经够准，走快的那条。
+                float reach = radius + s.Width * Stroke.MaxWidthFactor * 0.5f;
+                if (s.DistanceToCanvas(x, y) > reach) continue;
+            }
             int index = Strokes.IndexOf(s);
             if (index < 0) continue;
             act.Items.Add((index, s));
