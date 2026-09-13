@@ -505,6 +505,7 @@ internal sealed class App : InkEngine.InkEngine
         Doc.ClearHistory();
         Doc.Selected.Clear();
         Stroke.MaxRealizations = realizations ? 4096 : 0;
+        Stroke.KeepGeometry = realizations;
 
         GenerateStrokes(strokes);
         Doc.InvalidateAll();

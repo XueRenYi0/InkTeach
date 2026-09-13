@@ -816,15 +816,21 @@ internal sealed class OverlayWindow : IDisposable
         if (s.Transform.IsIdentity)
         {
             DrawStrokeCore(s, allowRealization);
-            return;
+        }
+        else
+        {
+            // 局部 → 画布（s.Transform），再 画布 → 窗口（调用方设的）。
+            // 乘法顺序按 System.Numerics 的约定：先作用左边的。
+            var canvasToWindow = _ctx.Transform;
+            _ctx.Transform = s.Transform * canvasToWindow;
+            DrawStrokeCore(s, allowRealization);
+            _ctx.Transform = canvasToWindow;
         }
 
-        // 局部 → 画布（s.Transform），再 画布 → 窗口（调用方设的）。
-        // 乘法顺序按 System.Numerics 的约定：先作用左边的。
-        var canvasToWindow = _ctx.Transform;
-        _ctx.Transform = s.Transform * canvasToWindow;
-        DrawStrokeCore(s, allowRealization);
-        _ctx.Transform = canvasToWindow;
+        // 画完就丢（--memab 的 A 组）。重建只要 3µs，所以丢得起——
+        // 前提是"丢"真的能让显存降下来，而不是被分配器留着复用。
+        // 这正是这次 A/B 要回答的问题。
+        if (!Stroke.KeepGeometry) s.Release();
     }
 
     private void DrawStrokeCore(Stroke s, bool allowRealization)

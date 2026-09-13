@@ -205,6 +205,19 @@ internal sealed class Stroke
     /// <summary>当前存活的细分缓存数量与上限（跨所有笔画）。</summary>
     public static int LiveRealizations;
     public static int MaxRealizations = 4096;
+
+    /// <summary>
+    /// 几何画完之后是否保留。
+    ///
+    /// **false = 画完立刻释放**（重建一条几何只要 3µs，见 reports/inkprobe-report.txt：
+    /// build geometry 34.5ms / 10000 条）。这是给 --memab 做 A/B 用的开关，
+    /// 回答一个之前没答对的问题：「每条笔画常驻一份几何，到底占不占显存？」
+    ///
+    /// 它和"过几帧再淘汰"有本质区别：那是**反复建销**，会撞上 D2D 分配器的棘轮
+    /// （释放过的块被留着复用，常驻反而更高，这一条我们踩过）。这里是**一次性**
+    /// 释放，之后只有那块被重画时才重建。
+    /// </summary>
+    public static bool KeepGeometry = true;
     /// <summary>
     /// 几何包围盒，**局部坐标**（对象自己的坐标系，不看 Transform）。
     ///
