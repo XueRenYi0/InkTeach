@@ -23,11 +23,14 @@ internal sealed class SpatialGrid
 
     public void Insert(Stroke s)
     {
-        if (s.Bounds.IsEmpty) return;
-        int x0 = (int)MathF.Floor(s.Bounds.MinX / CellSize);
-        int y0 = (int)MathF.Floor(s.Bounds.MinY / CellSize);
-        int x1 = (int)MathF.Floor(s.Bounds.MaxX / CellSize);
-        int y1 = (int)MathF.Floor(s.Bounds.MaxY / CellSize);
+        // 索引的是**世界包围盒**（画布坐标）：对象被移动/缩放之后，
+        // 它占的格子就变了，索引必须跟着变。
+        var b = s.WorldBounds;
+        if (b.IsEmpty) return;
+        int x0 = (int)MathF.Floor(b.MinX / CellSize);
+        int y0 = (int)MathF.Floor(b.MinY / CellSize);
+        int x1 = (int)MathF.Floor(b.MaxX / CellSize);
+        int y1 = (int)MathF.Floor(b.MaxY / CellSize);
         for (int cy = y0; cy <= y1; cy++)
             for (int cx = x0; cx <= x1; cx++)
             {
@@ -43,11 +46,12 @@ internal sealed class SpatialGrid
 
     public void Remove(Stroke s)
     {
-        if (s.Bounds.IsEmpty) return;
-        int x0 = (int)MathF.Floor(s.Bounds.MinX / CellSize);
-        int y0 = (int)MathF.Floor(s.Bounds.MinY / CellSize);
-        int x1 = (int)MathF.Floor(s.Bounds.MaxX / CellSize);
-        int y1 = (int)MathF.Floor(s.Bounds.MaxY / CellSize);
+        var b = s.WorldBounds;
+        if (b.IsEmpty) return;
+        int x0 = (int)MathF.Floor(b.MinX / CellSize);
+        int y0 = (int)MathF.Floor(b.MinY / CellSize);
+        int x1 = (int)MathF.Floor(b.MaxX / CellSize);
+        int y1 = (int)MathF.Floor(b.MaxY / CellSize);
         for (int cy = y0; cy <= y1; cy++)
             for (int cx = x0; cx <= x1; cx++)
             {
@@ -75,7 +79,7 @@ internal sealed class SpatialGrid
                 {
                     if (s.QueryStamp == _stamp) continue;
                     s.QueryStamp = _stamp;
-                    if (s.Bounds.Intersects(r)) results.Add(s);
+                    if (s.WorldBounds.Intersects(r)) results.Add(s);
                 }
             }
         return results.Count;

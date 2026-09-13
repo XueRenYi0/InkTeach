@@ -176,7 +176,83 @@ internal sealed class Stroke
     /// <summary>当前存活的细分缓存数量与上限（跨所有笔画）。</summary>
     public static int LiveRealizations;
     public static int MaxRealizations = 4096;
+    /// <summary>
+    /// 几何包围盒，**局部坐标**（对象自己的坐标系，不看 Transform）。
+    ///
+    /// 要"这个对象在画布上占多大地方"用 <see cref="WorldBounds"/>。
+    /// 这两个概念分开是刻意的：变换一变，局部包围盒不该跟着变。
+    /// </summary>
     public RectF Bounds = RectF.Empty;
+
+    /// <summary>
+    /// 稳定身份，**只增不减、永不复用**。撤销 / 多选 / 复制 / 序列化都靠它：
+    /// 用引用相等做不了（复制会产生新对象），用列表下标也不行（删除会错位）。
+    /// 0 表示"还没分配"，由文档在入册时给。
+    /// </summary>
+    public int Id;
+
+    /// <summary>
+    /// 局部坐标 → 画布坐标。**移动 / 缩放 / 旋转 / 镜像都只改这个矩阵，
+    /// 几何一个点都不动。**
+    ///
+    /// 这是这一层最重要的约定，它带来三件事：
+    ///   ① 变换是 O(1)，跟笔画有多少个点无关；
+    ///   ② GPU 几何缓存不用失效（缓存的是局部坐标下的几何）；
+    ///   ③ "放大再缩小"能精确回到原样，不会累积浮点损失。
+    ///
+    /// 反过来做（把变换烘焙进点坐标）会自动继承 InkClass 的两个毛病：
+    /// 每次变换都要重写全部点、而且缩放两次之后形状就回不去了。
+    ///
+    /// 默认单位矩阵：几何直接写在画布坐标里（现存数据就是这个状态）。
+    /// </summary>
+    public Matrix3x2 Transform = Matrix3x2.Identity;
+
+    private RectF _worldBounds = RectF.Empty;
+    private int _worldBoundsRevision = -1;
+    private Matrix3x2 _worldBoundsTransform = Matrix3x2.Identity;
+
+    /// <summary>
+    /// 画布坐标下的包围盒 = 局部包围盒经 <see cref="Transform"/> 变换之后。
+    ///
+    /// **脏区、命中测试、空间索引、框选一律用它**，不要用 <see cref="Bounds"/>。
+    ///
+    /// 两个容易写错的地方：
+    ///   ① 非等比缩放 / 旋转 / 镜像之后**不能只变换两个角点**——那得到的是
+    ///      "以对角线为边的矩形"，会偏小，脏区就会留下残影。这里变换四个角取并集。
+    ///   ② 它有缓存。拖动时每帧都会问它，不能每次都算。
+    /// </summary>
+    public RectF WorldBounds
+    {
+        get
+        {
+            if (_worldBoundsRevision == Revision && _worldBoundsTransform.Equals(Transform))
+                return _worldBounds;
+
+            _worldBounds = TransformRect(Bounds, Transform);
+            _worldBoundsRevision = Revision;
+            _worldBoundsTransform = Transform;
+            return _worldBounds;
+        }
+    }
+
+    /// <summary>把矩形按矩阵变换后取四个角的并集（旋转 / 镜像 / 非等比都正确）。</summary>
+    private static RectF TransformRect(RectF r, in Matrix3x2 m)
+    {
+        if (r.IsEmpty) return RectF.Empty;
+        if (m.IsIdentity) return r;
+
+        var p0 = Vector2.Transform(new Vector2(r.MinX, r.MinY), m);
+        var p1 = Vector2.Transform(new Vector2(r.MaxX, r.MinY), m);
+        var p2 = Vector2.Transform(new Vector2(r.MaxX, r.MaxY), m);
+        var p3 = Vector2.Transform(new Vector2(r.MinX, r.MaxY), m);
+
+        var box = RectF.Empty;
+        box.Add(p0.X, p0.Y);
+        box.Add(p1.X, p1.Y);
+        box.Add(p2.X, p2.Y);
+        box.Add(p3.X, p3.Y);
+        return box;
+    }
 
     /// <summary>
     /// 优化器算好的闭合轮廓（虚拟桌面坐标）。**核心不产生它，只在有值时使用。**
@@ -285,10 +361,39 @@ internal sealed class Stroke
     /// 再超出一点（起收笔的圆帽、粗糙边缘），所以取两者里更大的那个系数。
     /// 取小了会在快速书写时留下残影——这是最容易被忽略、又最显眼的 bug。
     /// </summary>
-    public RectF PaddedBounds => Bounds.Inflate(
+    /// <summary>
+    /// 脏区与命中测试用的外扩包围盒（**画布坐标**）。
+    /// 在 WorldBounds 基础上再按笔宽外扩——笔迹是画在线两侧的，
+    /// 只算中心线包围盒会漏掉边缘，快速书写就留残影。
+    /// </summary>
+    public RectF PaddedBounds => WorldBounds.Inflate(
         Width * BoundsInflateFactor * 0.5f + 2f);
 
     /// <summary>Distance in pixels from a point to this item's outline.</summary>
+    /// <summary>
+    /// 画布坐标下的"点到这一笔有多远"。内部先反变换回局部坐标再量。
+    ///
+    /// 反变换之后距离的尺度会跟着变（对象被放大时局部距离看起来变小），
+    /// 所以这里按对象的平均缩放折算回画布尺度。**这是个近似**；
+    /// 精确判定用 HitTestExact（让 Direct2D 带着变换直接算）。
+    /// </summary>
+    public float DistanceToCanvas(float x, float y)
+    {
+        if (Transform.IsIdentity) return DistanceTo(x, y);
+
+        Matrix3x2.Invert(Transform, out var inv);
+        var p = Vector2.Transform(new Vector2(x, y), inv);
+        return DistanceTo(p.X, p.Y) * AverageScale(Transform);
+    }
+
+    /// <summary>矩阵的平均缩放倍数（|行列式| 开方），用来在局部 / 画布尺度之间折算。</summary>
+    private static float AverageScale(in Matrix3x2 m)
+    {
+        float det = m.M11 * m.M22 - m.M12 * m.M21;
+        float s = MathF.Sqrt(MathF.Abs(det));
+        return s > 1e-6f ? s : 1f;
+    }
+
     public float DistanceTo(float x, float y)
     {
         if (Points.Count == 0) return float.MaxValue;
@@ -346,11 +451,13 @@ internal sealed class Stroke
         return dx * dx + dy * dy;
     }
 
-    public bool IntersectsRect(RectF r) => Bounds.Intersects(r);
+    /// <summary>与矩形是否相交（画布坐标）。粗筛用，只看世界包围盒。</summary>
+    public bool IntersectsRect(RectF r) => WorldBounds.Intersects(r);
 
+    /// <summary>是否整个落在矩形里（画布坐标）。框选用。</summary>
     public bool ContainedInRect(RectF r)
-        => !Bounds.IsEmpty && Bounds.MinX >= r.MinX && Bounds.MaxX <= r.MaxX
-        && Bounds.MinY >= r.MinY && Bounds.MaxY <= r.MaxY;
+        => !WorldBounds.IsEmpty && WorldBounds.MinX >= r.MinX && WorldBounds.MaxX <= r.MaxX
+        && WorldBounds.MinY >= r.MinY && WorldBounds.MaxY <= r.MaxY;
 
     public bool IsShape => Kind != StrokeKind.Freehand;
 
@@ -588,6 +695,20 @@ internal sealed class InkDocument
     public readonly List<Stroke> Selected = new();
     public readonly DirtyRegion Dirty = new();
 
+    /// <summary>
+    /// 对象身份分配器。**只增不减、永不复用**。
+    /// 反序列化时要把用过的最大值写回来，否则新对象会和老对象撞 id，
+    /// 撤销和多选就会指向错的对象。
+    /// </summary>
+    private int _nextId = 1;
+    public int NextId() => _nextId++;
+
+    /// <summary>反序列化之后调用：把 id 水位抬到至少这么高。</summary>
+    public void ReserveIdsUpTo(int maxUsed)
+    {
+        if (maxUsed >= _nextId) _nextId = maxUsed + 1;
+    }
+
     // 撤销栈必须有上限。原来用无上限的 Stack，一节课下来会堆进十万条动作、
     // 每条还持有笔画对象——实测 3 分钟就多占约 80 MB。主流软件的撤销深度
     // 都在 100~200 步，超过就从最旧的开始丢。
@@ -621,6 +742,7 @@ internal sealed class InkDocument
 
     public void AppendStroke(Stroke s)
     {
+        if (s.Id == 0) s.Id = NextId();
         bool cleanSlate = !Dirty.Full && Dirty.Rects.Count == 0;
         Strokes.Add(s);
         TotalPoints += s.Points.Count;
@@ -632,6 +754,7 @@ internal sealed class InkDocument
 
     public void InsertStroke(int index, Stroke s)
     {
+        if (s.Id == 0) s.Id = NextId();
         PendingAppend = null;
         Strokes.Insert(Math.Clamp(index, 0, Strokes.Count), s);
         TotalPoints += s.Points.Count;
@@ -739,7 +862,7 @@ internal sealed class InkDocument
         foreach (var s in candidates)
         {
             float reach = radius + s.Width * Stroke.MaxWidthFactor * 0.5f;
-            if (s.DistanceTo(x, y) > reach) continue;
+            if (s.DistanceToCanvas(x, y) > reach) continue;
             int index = Strokes.IndexOf(s);
             if (index < 0) continue;
             act.Items.Add((index, s));
@@ -777,24 +900,23 @@ internal sealed class InkDocument
     /// <summary>Moves the current selection by a delta (drag-to-move).</summary>
     public void MoveSelected(float dx, float dy)
     {
+        if (Selected.Count == 0) return;
+        var delta = Matrix3x2.CreateTranslation(dx, dy);
+
         foreach (var s in Selected)
         {
             PendingAppend = null;
             _grid.Remove(s);
-            Dirty.Add(s.PaddedBounds);       // erase the old position
-            for (int i = 0; i < s.Points.Count; i++)
-            {
-                var p = s.Points[i];
-                p.X += dx; p.Y += dy;
-                s.Points[i] = p;
-            }
-            s.Bounds = RectF.Empty;
-            foreach (var p in s.Points) s.Bounds.Add(p.X, p.Y);
-            s.Release();
+            Dirty.Add(s.PaddedBounds);            // 旧位置：擦掉
+
+            // 只改矩阵，点的坐标一个都不动，几何缓存也不释放重建。
+            // 这就是"变换独立于几何"的收益：跟这一笔有多少个点无关，O(1)。
+            s.Transform = s.Transform * delta;
+
             _grid.Insert(s);
-            Dirty.Add(s.PaddedBounds);       // repaint the new position
+            Dirty.Add(s.PaddedBounds);            // 新位置：重画
         }
-        if (Selected.Count > 0) Version++;
+        Version++;
     }
 
     public void ApplyMarquee(RectF r)

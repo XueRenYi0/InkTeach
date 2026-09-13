@@ -753,7 +753,30 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
     }
 
+    /// <summary>
+    /// 画一个对象。**调用方负责把 ctx 变换设成"画布坐标 → 窗口坐标"**，
+    /// 这里只在对象自己带变换时再左乘一下。
+    ///
+    /// 单位变换（绝大多数对象）走的是原路，一次多余的取/设变换都不做——
+    /// 这条路径每帧要给上万个对象跑，不能为了"以后可能用到"先付成本。
+    /// </summary>
     private void DrawStroke(Stroke s, bool allowRealization = true)
+    {
+        if (s.Transform.IsIdentity)
+        {
+            DrawStrokeCore(s, allowRealization);
+            return;
+        }
+
+        // 局部 → 画布（s.Transform），再 画布 → 窗口（调用方设的）。
+        // 乘法顺序按 System.Numerics 的约定：先作用左边的。
+        var canvasToWindow = _ctx.Transform;
+        _ctx.Transform = s.Transform * canvasToWindow;
+        DrawStrokeCore(s, allowRealization);
+        _ctx.Transform = canvasToWindow;
+    }
+
+    private void DrawStrokeCore(Stroke s, bool allowRealization)
     {
         if (RealizationEnabled && allowRealization && !s.IsShape)
         {
@@ -761,6 +784,11 @@ internal sealed class OverlayWindow : IDisposable
             if (real != null)
             {
                 // DrawGeometryRealization 定义在 ID2D1DeviceContext1 上
+                //
+                // 注意：几何实现是把局部几何**预先三角化**过的，画的时候整个
+                // 交给 ctx 变换。所以等比缩放没问题，**非等比拉伸会把笔宽一起
+                // 拉扁**。我们选了"拉伸时线宽不变"，所以非等比变换之后必须
+                // 走重建几何那条路（见计划文档 7.1）。
                 _ctx1.DrawGeometryRealization(real, Brush(s.Color));
                 return;
             }
