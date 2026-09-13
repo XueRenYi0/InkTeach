@@ -216,4 +216,64 @@ internal static class SelectionHandles
         return horizontal ? Matrix3x2.CreateScale(-1f, 1f, c)
                           : Matrix3x2.CreateScale(1f, -1f, c);
     }
+
+    /// <summary>整体平移（在选中框内部按下拖动）。</summary>
+    public static Matrix3x2 MoveMatrix(Vector2 from, Vector2 to)
+        => Matrix3x2.CreateTranslation(to - from);
+
+    // =====================================================================
+    //  操作条（复制 / 删除 / 左右翻转 / 上下翻转 / 旋转）
+    //
+    //  布局放在这里而不是渲染层：**命中判定和绘制必须用同一套尺寸**。
+    //  分开写迟早会差几个像素，表现就是"看得见按钮却点不中"。放这里
+    //  也让它可以被 --handletest 直接验。
+    // =====================================================================
+
+    public const int BarButtonCount = 5;
+    public const float BarHeightLogical = 34f;
+    public const float BarButtonWidthLogical = 46f;
+    public const float BarPaddingLogical = 5f;
+    public const float BarGapLogical = 2f;
+    /// <summary>选中框下边到操作条的距离（逻辑像素）。</summary>
+    public const float BarOffsetLogical = 14f;
+    /// <summary>图标框边长（逻辑像素）。Fluent 图标自带内边距，所以比字形大一点。</summary>
+    public const float BarIconBoxLogical = 22f;
+
+    /// <summary>操作条在画布坐标里的矩形。</summary>
+    public static RectF BarRect(in RectF sel, float dpi)
+    {
+        float btnW = BarButtonWidthLogical * dpi;
+        float h = BarHeightLogical * dpi;
+        float pad = BarPaddingLogical * dpi;
+        float gap = BarGapLogical * dpi;
+        float w = pad * 2 + BarButtonCount * btnW + (BarButtonCount - 1) * gap;
+
+        float x = (sel.MinX + sel.MaxX) * 0.5f - w * 0.5f;
+        float y = sel.MaxY + BarOffsetLogical * dpi;
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    /// <summary>第 i 个按钮的矩形（i 从 0 起）。</summary>
+    public static RectF BarButtonRect(int i, in RectF sel, float dpi)
+    {
+        var bar = BarRect(sel, dpi);
+        float btnW = BarButtonWidthLogical * dpi;
+        float pad = BarPaddingLogical * dpi;
+        float gap = BarGapLogical * dpi;
+        float x = bar.MinX + pad + i * (btnW + gap);
+        return new RectF { MinX = x, MinY = bar.MinY, MaxX = x + btnW, MaxY = bar.MaxY };
+    }
+
+    /// <summary>点到哪个按钮上了。返回 -1 表示没点到操作条。</summary>
+    public static int BarButtonAt(float x, float y, in RectF sel, float dpi)
+    {
+        var bar = BarRect(sel, dpi);
+        if (x < bar.MinX || x > bar.MaxX || y < bar.MinY || y > bar.MaxY) return -1;
+        for (int i = 0; i < BarButtonCount; i++)
+        {
+            var b = BarButtonRect(i, sel, dpi);
+            if (x >= b.MinX && x <= b.MaxX) return i;
+        }
+        return -1;
+    }
 }

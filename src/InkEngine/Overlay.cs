@@ -970,7 +970,7 @@ internal sealed class OverlayWindow : IDisposable
             r.Add(ui);
 
             // 操作条在选中框下方，也必须算进来，否则它自己会留下残影。
-            r.Add(SelectionBarRect(sb, dpi).Inflate(4f));
+            r.Add(SelectionHandles.BarRect(sb, dpi).Inflate(4f));
         }
 
         if (app.ShowHud)
@@ -1125,20 +1125,6 @@ internal sealed class OverlayWindow : IDisposable
     }
 
     /// <summary>
-    /// 操作条在画布坐标里的矩形。**绘制和脏区都调它**——两处各算一遍迟早会算错，
-    /// 而算错的后果就是屏幕上留下一块擦不掉的残影。
-    /// </summary>
-    private static RectF SelectionBarRect(in RectF sel, float dpi)
-    {
-        const int n = 5;
-        float btnW = 46f * dpi, h = 34f * dpi, pad = 5f * dpi, gap = 2f * dpi;
-        float w = pad * 2 + n * btnW + (n - 1) * gap;
-        float x = (sel.MinX + sel.MaxX) * 0.5f - w * 0.5f;
-        float y = sel.MaxY + 14f * dpi;
-        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
-    }
-
-    /// <summary>
     /// 操作条：复制 / 删除 / 左右翻转 / 上下翻转 / 旋转。
     /// 规格见 design/选中与操作条-设计稿.png。
     ///
@@ -1151,7 +1137,9 @@ internal sealed class OverlayWindow : IDisposable
     private void DrawSelectionBar(in RectF sel)
     {
         float dpi = Dpi / 96f;
-        var rect = SelectionBarRect(sel, dpi);
+        // 布局从 SelectionHandles 取，与命中判定同源：分开写迟早差几个像素，
+        // 表现就是"看得见按钮却点不中"。
+        var rect = SelectionHandles.BarRect(sel, dpi);
         var box = new Vortice.RawRectF(rect.MinX, rect.MinY, rect.MaxX, rect.MaxY);
         float radius = 8f * dpi;
         var rounded = new RoundedRectangle(box, radius, radius);
@@ -1169,24 +1157,22 @@ internal sealed class OverlayWindow : IDisposable
             IconPaths.copy, IconPaths.delete, IconPaths.flipH, IconPaths.flipV, IconPaths.rotate,
         };
 
-        const int n = 5;
-        float btnW = 46f * dpi, h = 34f * dpi, pad = 5f * dpi, gap = 2f * dpi;
-        // Fluent 的 24×24 图标自带约 2 像素内边距，所以给的框要比想要的字形大一点
-        // （框 22 → 字形约 19）。
-        float glyphBox = 22f * dpi;
+        const int n = SelectionHandles.BarButtonCount;
+        float glyphBox = SelectionHandles.BarIconBoxLogical * dpi;   // 图标框比字形大一点
 
         for (int i = 0; i < n; i++)
         {
-            float bx = rect.MinX + pad + i * (btnW + gap);
-            DrawIcon(glyphs[i], bx + (btnW - glyphBox) * 0.5f,
-                     rect.MinY + (h - glyphBox) * 0.5f, glyphBox, iconBrush);
+            var btn = SelectionHandles.BarButtonRect(i, sel, dpi);
+            DrawIcon(glyphs[i], (btn.MinX + btn.MaxX) * 0.5f - glyphBox * 0.5f,
+                     (btn.MinY + btn.MaxY) * 0.5f - glyphBox * 0.5f, glyphBox, iconBrush);
 
             // 键之间的分隔线：五个图标挨在一起会连成一片，看不出是几个按钮。
             if (i < n - 1)
             {
-                float sx = bx + btnW + gap * 0.5f;
-                _ctx.DrawLine(new Vector2(sx, rect.MinY + pad + 3f * dpi),
-                              new Vector2(sx, rect.MaxY - pad - 3f * dpi), sepBrush, 1f * dpi);
+                float sx = btn.MaxX + SelectionHandles.BarGapLogical * dpi * 0.5f;
+                float inset = (SelectionHandles.BarPaddingLogical + 3f) * dpi;
+                _ctx.DrawLine(new Vector2(sx, rect.MinY + inset),
+                              new Vector2(sx, rect.MaxY - inset), sepBrush, 1f * dpi);
             }
         }
     }

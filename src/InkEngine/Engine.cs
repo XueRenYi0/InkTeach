@@ -48,6 +48,18 @@ public class InkEngine
     internal bool ShowHud = true;
     internal string HudText = "";
     internal bool MarqueeActive;
+
+    // ---- 选择手势（框选工具 = 选择工具）---------------------------------
+    // 四种情形在这里分流：点操作条按钮 / 拖手柄 / 在选中范围里整体拖 / 空白处重新框选。
+    internal bool SelDragging;
+    internal int SelBarHover = -1;          // 悬停的按钮，-1 = 无（给渲染用）
+    private SelHandle _dragHandle = SelHandle.None;
+    private bool _dragIsMove;
+    private RectF _dragStartBounds;
+    private Vector2 _dragStartPoint;
+    private Matrix3x2[] _dragStartXform;
+    private Stroke[] _dragTargets;
+    private Matrix3x2 _selDragMatrix = Matrix3x2.Identity;
     /// <summary>调试开关：不画自己那一笔，只留系统合成器画出来的委托轨迹。</summary>
     internal bool SuppressActiveStroke;
     internal float MqMinX, MqMinY, MqMaxX, MqMaxY;
@@ -666,8 +678,12 @@ public class InkEngine
                 break;
 
             case Tool.Marquee:
-                MarqueeActive = true;
-                MqMinX = MqMaxX = x; MqMinY = MqMaxY = y;
+                // 先问选择手势（按钮 / 手柄 / 整体拖动）；都没接才起新的框选。
+                if (!TryBeginSelectionGesture(x, y))
+                {
+                    MarqueeActive = true;
+                    MqMinX = MqMaxX = x; MqMinY = MqMaxY = y;
+                }
                 break;
 
             case Tool.Laser:
@@ -722,8 +738,12 @@ public class InkEngine
                 break;
 
             case Tool.Marquee:
-                MqMinX = MathF.Min(MqMinX, x); MqMaxX = MathF.Max(MqMaxX, x);
-                MqMinY = MathF.Min(MqMinY, y); MqMaxY = MathF.Max(MqMaxY, y);
+                if (SelDragging) UpdateSelDrag(x, y);
+                else
+                {
+                    MqMinX = MathF.Min(MqMinX, x); MqMaxX = MathF.Max(MqMaxX, x);
+                    MqMinY = MathF.Min(MqMinY, y); MqMaxY = MathF.Max(MqMaxY, y);
+                }
                 break;
 
             case Tool.Laser:
@@ -822,7 +842,10 @@ public class InkEngine
             ActiveStroke = null;
         }
         if (Tool == Tool.Marquee)
-            ApplyMarquee();
+        {
+            if (SelDragging) EndSelDrag();
+            else ApplyMarquee();
+        }
         _drawing = false;
         _dirty = true;
         _cntDown = _cntMove = _cntUp = _cntCaptureLost = 0;
@@ -1253,5 +1276,124 @@ public class InkEngine
         Console.WriteLine("  I 性能面板          B 性能基准  M 内存探测   Y 切换穿透实现");
         Console.WriteLine("  X 退出");
         Console.WriteLine();
+    }
+
+    // =====================================================================
+    //  选择手势（框选工具 = 选择工具）
+    // =====================================================================
+
+    /// <summary>
+    /// 框选工具按下时的分流。返回 true 表示这次按下已经被选择手势接掉。
+    ///
+    /// 顺序有讲究：**先按钮、再手柄、最后才判断"整体拖动"**。反过来写的话，
+    /// 按钮和手柄都紧挨着选中框，会被"在框内拖动"抢走，表现就是点不中。
+    /// </summary>
+    private bool TryBeginSelectionGesture(float x, float y)
+    {
+        if (Doc.Selected.Count == 0) return false;
+
+        var sb = EditRegion.Of(Doc.Selected);
+        float dpi = DpiScale;
+
+        int btn = SelectionHandles.BarButtonAt(x, y, sb, dpi);
+        if (btn >= 0) { RunBarAction(btn, sb); return true; }
+
+        var h = SelectionHandles.HitTest(x, y, sb, dpi);
+        bool move = h == SelHandle.None
+                 && x >= sb.MinX && x <= sb.MaxX && y >= sb.MinY && y <= sb.MaxY;
+        if (h == SelHandle.None && !move) return false;   // 落在空白处：交给框选
+
+        _dragHandle = h;
+        _dragIsMove = move;
+        _dragStartBounds = sb;
+        _dragStartPoint = new Vector2(x, y);
+        _selDragMatrix = Matrix3x2.Identity;
+
+        _dragTargets = Doc.Selected.ToArray();
+        _dragStartXform = new Matrix3x2[_dragTargets.Length];
+        for (int i = 0; i < _dragTargets.Length; i++)
+            _dragStartXform[i] = _dragTargets[i].Transform;
+
+        SelDragging = true;
+        _dirty = true;
+        return true;
+    }
+
+    /// <summary>
+    /// 拖动中：每帧都从**按下那一刻的变换**重算，而不是在上一帧结果上继续乘。
+    /// 后者会累积浮点误差，拖得越久偏得越多，撤销也回不到原样。
+    /// </summary>
+    private void UpdateSelDrag(float x, float y)
+    {
+        var cur = new Vector2(x, y);
+        bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
+
+        var m = _dragIsMove
+            ? SelectionHandles.MoveMatrix(_dragStartPoint, cur)
+            : SelectionHandles.DragMatrix(_dragHandle, _dragStartBounds, _dragStartPoint,
+                                          cur, DpiScale, shift, shift);
+
+        for (int i = 0; i < _dragTargets.Length; i++)
+        {
+            var s = _dragTargets[i];
+            Doc.Dirty.Add(s.PaddedBounds);                 // 旧位置要擦
+            Doc.SetTransformLive(s, _dragStartXform[i] * m);
+            Doc.Dirty.Add(s.PaddedBounds);                 // 新位置要画
+        }
+        _selDragMatrix = m;
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// 松手：先把模型恢复到按下那一刻，再提交**一条**变换命令。
+    ///
+    /// 这样拖动过程中的实时预览不产生撤销记录，而撤销一步就精确回到拖动前
+    /// ——不会出现"拖的时候动了三十次，要按三十次撤销"那种事。
+    /// </summary>
+    private void EndSelDrag()
+    {
+        SelDragging = false;
+        if (_dragTargets == null) return;
+
+        for (int i = 0; i < _dragTargets.Length; i++)
+        {
+            Doc.SetTransformLive(_dragTargets[i], _dragStartXform[i]);
+            Doc.Dirty.Add(_dragTargets[i].PaddedBounds);
+        }
+
+        Doc.Selected.Clear();
+        foreach (var t in _dragTargets) Doc.Selected.Add(t);
+        Doc.ApplyTransform(_selDragMatrix);
+
+        _dragTargets = null;
+        _dragStartXform = null;
+        _dragHandle = SelHandle.None;
+        _dragIsMove = false;
+        _selDragMatrix = Matrix3x2.Identity;
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// 操作条按钮。下标与 SelectionHandles.BarButtonAt 的返回值和渲染时的
+    /// 图标数组一一对应：0 复制 / 1 删除 / 2 左右翻转 / 3 上下翻转 / 4 旋转。
+    /// </summary>
+    private void RunBarAction(int index, in RectF sel)
+    {
+        switch (index)
+        {
+            case 0: Doc.DuplicateSelected(); break;
+            case 1: Doc.DeleteSelected(); break;
+            case 2: Doc.ApplyTransform(SelectionHandles.MirrorMatrix(sel, horizontal: true)); break;
+            case 3: Doc.ApplyTransform(SelectionHandles.MirrorMatrix(sel, horizontal: false)); break;
+            case 4:
+            {
+                // 每次转 90°；连点四次回到原样。
+                var c = new Vector2((sel.MinX + sel.MaxX) * 0.5f, (sel.MinY + sel.MaxY) * 0.5f);
+                Doc.ApplyTransform(Matrix3x2.CreateRotation(MathF.PI / 2f, c));
+                break;
+            }
+        }
+        Laser.Clear();
+        _dirty = true;
     }
 }

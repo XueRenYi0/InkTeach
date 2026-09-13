@@ -244,6 +244,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             SelShowcase();
         }
+        else if (mode == "--edittest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            EditTest();
+        }
         else if (mode == "--aaprobe")
         {
             _autoExitAt = double.MaxValue;
@@ -395,6 +401,106 @@ internal sealed class App : InkEngine.InkEngine
     /// "这里的颜色比别处淡"。所以用两个等面积窗口的墨量比值来判定：
     /// 拐角窗口的覆盖率不该明显低于直段。
     /// </summary>
+    /// <summary>
+    /// 编辑命令自检：复制 / 删除 / 翻转 / 旋转，外加操作条的命中判定。
+    ///
+    /// 这四个动作是操作条按钮直接调的，但按钮没法自动点（要合成鼠标事件），
+    /// 所以这里直接验它们背后的命令，把**撤销语义**一并验掉——
+    /// 一步操作必须正好对应一条撤销记录，多一条少一条都是 bug。
+    /// </summary>
+    private void EditTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 编辑命令自检（复制 / 删除 / 翻转 / 旋转）===");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"    {name,-24}{(ok ? "PASS" : "FAIL")}  {detail}");
+        }
+
+        Stroke Make(float x)
+        {
+            var s = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand, Width = 4f,
+                Color = new Color4(0.9f, 0.2f, 0.2f, 1f),
+            };
+            for (int i = 0; i < 20; i++) s.AddPoint(x + i * 3f, 500 + i * 2f, 0.5f, i);
+            return s;
+        }
+        float Width(Stroke s) => s.WorldBounds.MaxX - s.WorldBounds.MinX;
+        float Height(Stroke s) => s.WorldBounds.MaxY - s.WorldBounds.MinY;
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        var a = Make(300); Doc.AddStroke(a);
+        var b = Make(600); Doc.AddStroke(b);
+
+        // ---- 复制 ----
+        Doc.Selected.Clear(); Doc.Selected.Add(a); Doc.Selected.Add(b);
+        int n0 = Doc.Strokes.Count, d0 = Doc.UndoDepth;
+        Doc.DuplicateSelected(30, 30);
+        Check("复制新增对象", Doc.Strokes.Count == n0 + 2, $"{n0} -> {Doc.Strokes.Count}");
+        Check("复制只记一步", Doc.UndoDepth == d0 + 1, $"{d0} -> {Doc.UndoDepth}");
+        Check("选中切到副本", Doc.Selected.Count == 2 && !ReferenceEquals(Doc.Selected[0], a), "");
+        Check("副本是新身份", Doc.Selected[0].Id != a.Id, $"{a.Id} -> {Doc.Selected[0].Id}");
+        Doc.Undo();
+        Check("撤销复制", Doc.Strokes.Count == n0, $"{Doc.Strokes.Count}");
+
+        // ---- 翻转 ----
+        Doc.Selected.Clear(); Doc.Selected.Add(a);
+        var wb = a.WorldBounds;
+        Doc.ApplyTransform(SelectionHandles.MirrorMatrix(wb, horizontal: true));
+        Check("左右翻转：包围盒不变",
+              Math.Abs(a.WorldBounds.MinX - wb.MinX) < 0.5f && Math.Abs(Width(a) - (wb.MaxX - wb.MinX)) < 0.5f, "");
+        Check("翻转后行列式为负", a.Transform.M11 * a.Transform.M22 - a.Transform.M12 * a.Transform.M21 < 0f, "");
+        Doc.Undo();
+        Check("撤销翻转回原位", Math.Abs(a.WorldBounds.MinX - wb.MinX) < 0.05f,
+              $"MinX {a.WorldBounds.MinX:F2} vs {wb.MinX:F2}");
+
+        // ---- 旋转 90°：宽高应该互换 ----
+        var wb2 = a.WorldBounds;
+        var c = new Vector2((wb2.MinX + wb2.MaxX) * 0.5f, (wb2.MinY + wb2.MaxY) * 0.5f);
+        Doc.ApplyTransform(Matrix3x2.CreateRotation(MathF.PI / 2f, c));
+        Check("旋转 90°：宽高互换",
+              Math.Abs(Width(a) - (wb2.MaxY - wb2.MinY)) < 0.5f
+              && Math.Abs(Height(a) - (wb2.MaxX - wb2.MinX)) < 0.5f,
+              $"{Width(a):F1}×{Height(a):F1}");
+        Doc.Undo();
+
+        // ---- 删除 ----
+        Doc.Selected.Clear(); Doc.Selected.Add(a);
+        int n1 = Doc.Strokes.Count;
+        Doc.DeleteSelected();
+        Check("删除选中", Doc.Strokes.Count == n1 - 1 && Doc.Selected.Count == 0, $"{n1} -> {Doc.Strokes.Count}");
+        Doc.Undo();
+        Check("撤销删除", Doc.Strokes.Count == n1, $"{Doc.Strokes.Count}");
+
+        // ---- 操作条命中 ----
+        Doc.Selected.Clear(); Doc.Selected.Add(a); Doc.Selected.Add(b);
+        var sb = EditRegion.Of(Doc.Selected);
+        float dpi = DpiScale;
+        var bar = SelectionHandles.BarRect(sb, dpi);
+        Check("操作条在选中框下方", bar.MinY > sb.MaxY, $"间距 {bar.MinY - sb.MaxY:F0}px");
+
+        bool allHit = true; string bad = "";
+        for (int i = 0; i < SelectionHandles.BarButtonCount; i++)
+        {
+            var r = SelectionHandles.BarButtonRect(i, sb, dpi);
+            int got = SelectionHandles.BarButtonAt((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f, sb, dpi);
+            if (got != i) { allHit = false; bad = $"第{i}个按钮命中到 {got}"; }
+        }
+        Check("每个按钮都能点中", allHit, bad);
+        Check("框外不误判",
+              SelectionHandles.BarButtonAt(bar.MinX - 30, bar.MinY + 5, sb, dpi) == -1, "");
+
+        Console.WriteLine();
+        Console.WriteLine(fail == 0 ? "  PASS: 编辑命令与操作条命中都正确" : $"  FAIL: {fail} 项不对");
+        _quit = true;
+    }
+
     /// <summary>
     /// 把选中框和手柄摆出来给人看。跟 --beautifyshowcase 一个路子：
     /// 画好挂着不动，由外部截图，用来肉眼核对观感（不是自动判定）。

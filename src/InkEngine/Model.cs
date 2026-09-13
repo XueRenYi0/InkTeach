@@ -309,6 +309,36 @@ internal sealed class Stroke
         _builtRevision = -1;
     }
 
+    /// <summary>
+    /// 深拷贝（复制 / 粘贴用）。**Id 留 0**，由文档入册时分配——
+    /// 复制出来的必须是新身份，否则撤销和多选会指向错的对象。
+    ///
+    /// 轮廓（Outline）是共享的，不复制：它是优化器算完就不再改的只读数组，
+    /// 一条笔画几百个点，复制一份只是白白吃内存。
+    /// </summary>
+    public Stroke Clone()
+    {
+        var c = new Stroke
+        {
+            Tool = Tool,
+            Kind = Kind,
+            Color = Color,
+            Width = Width,
+            Preset = Preset,
+            Transform = Transform,
+            BoundsInflateFactor = BoundsInflateFactor,
+        };
+        // 用 AddPoint 加：它会顺便把 Bounds 和 Revision 收拾好。
+        for (int i = 0; i < Points.Count; i++)
+        {
+            var p = Points[i];
+            c.AddPoint(p.X, p.Y, p.P, p.T);
+        }
+        c.Outline = Outline;
+        c.BeautifiedWidths = BeautifiedWidths;
+        return c;
+    }
+
     public void AddPoint(float x, float y, float p, double t)
     {
         Points.Add(new InkPoint { X = x, Y = y, P = p, T = t });
@@ -945,6 +975,47 @@ internal sealed class InkDocument
         act.Redo(this);
         Commit(act);
         return true;
+    }
+
+    /// <summary>
+    /// 复制选中的对象：克隆、换新身份、整体偏移一点，**并把选中切到副本**。
+    /// 选中切到副本是主流软件的行为，也符合直觉：复制完接着拖，拖的该是副本。
+    /// </summary>
+    public bool DuplicateSelected(float dx = 24f, float dy = 24f)
+    {
+        if (Selected.Count == 0) return false;
+
+        var act = new AddStrokesAction();
+        var copies = new List<Stroke>(Selected.Count);
+        foreach (var s in Selected)
+        {
+            var c = s.Clone();
+            c.Transform = c.Transform * Matrix3x2.CreateTranslation(dx, dy);
+            copies.Add(c);
+            act.Strokes.Add(c);
+            AppendStroke(c);       // 这一步给它分配 Id
+        }
+        Commit(act);
+
+        Selected.Clear();
+        Selected.AddRange(copies);
+        return true;
+    }
+
+    /// <summary>
+    /// 拖动预览：把变换**直接设成某个值**（不是乘增量）。
+    ///
+    /// 为什么不乘增量：拖动中每帧都从"按下那一刻的原始变换"重算，而不是在
+    /// 上一帧结果上继续乘——后者会累积浮点误差，拖得越久偏得越多，松手后
+    /// 撤销也回不到原样。这个过程**不产生撤销记录**；松手时才提交一条命令。
+    /// 但空间索引必须每帧跟着挪，否则拖完擦除会擦不到。
+    /// </summary>
+    internal void SetTransformLive(Stroke s, in Matrix3x2 m)
+    {
+        PendingAppend = null;
+        _grid.Remove(s);
+        s.Transform = m;
+        _grid.Insert(s);
     }
 
     /// <summary>
