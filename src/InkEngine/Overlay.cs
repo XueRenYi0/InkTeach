@@ -538,6 +538,7 @@ internal sealed class OverlayWindow : IDisposable
 
         if (_renderedVersion == doc.Version) return;
 
+        Console.WriteLine($"[内容层] ver {doc.Version}（已渲染 {_renderedVersion}）Full={doc.Dirty.Full} 脏区={doc.Dirty.Rects.Count} 待追加={(doc.PendingAppend != null)} 相机={ViewOffsetY:F0}");
         if (_renderedVersion < 0 || doc.Dirty.Full)
         {
             RebuildAll(doc, app);
@@ -736,6 +737,7 @@ internal sealed class OverlayWindow : IDisposable
     private void DrawOnlyPatch(Stroke s)
     {
         var r = ClipToWindow(CanvasRectToWindow(s.PaddedBounds));
+        Console.WriteLine($"[追加] 笔画包围盒({s.PaddedBounds.MinX:F0},{s.PaddedBounds.MinY:F0})-({s.PaddedBounds.MaxX:F0},{s.PaddedBounds.MaxY:F0}) 裁后({r.MinX:F0},{r.MinY:F0})-({r.MaxX:F0},{r.MaxY:F0}) 空={r.IsEmpty}");
         if (r.IsEmpty) return;
 
         _ctx.Target = _contentTarget;
@@ -832,6 +834,7 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.Target = null;
         sw.Stop();
 
+        Console.WriteLine($"[重建] 可见画布 y {view.MinY:F0}~{view.MaxY:F0}　笔画 {doc.Strokes.Count}　实绘 {drawn}　相机 {ViewOffsetY:F0}");
         LastDrawnStrokes = drawn;
         LastRebuildMs = sw.Elapsed.TotalMilliseconds;
         if (hr.Failure) LastError = "rebuild EndDraw: " + hr.Description;

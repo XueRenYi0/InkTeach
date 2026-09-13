@@ -301,6 +301,13 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             WheelTest();
         }
+        else if (mode == "--coordtest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            int n = args.Length > 1 && int.TryParse(args[1], out var c) ? c : 12;
+            CoordTest(n);
+        }
         else if (mode == "--aaprobe")
         {
             _autoExitAt = double.MaxValue;
@@ -701,6 +708,81 @@ internal sealed class App : InkEngine.InkEngine
 
         Console.WriteLine();
         Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：滚轮方向与夹取都正确");
+        Doc.Clear();
+        Doc.ClearHistory();
+        _quit = true;
+    }
+
+    /// <summary>
+    /// **坐标不变量测试**——随机相机偏移下反复验同一句话：
+    ///
+    ///   在画布 P 处写一笔 → 屏幕上 P+相机 处必须有墨。
+    ///
+    /// 为什么要有它：前面三个 bug（滚下去写的看不见 / 滚完写不了 / 闪一下就没了）
+    /// 都是"画布坐标和窗口坐标混用"，而且每个都是**用户碰出来的**。
+    /// 一个一个追太慢，这条测试把它们一次性网住：
+    /// 它走的是**真实交互路径**（AddStroke 不调 InvalidateAll → DrawOnlyPatch），
+    /// 并且随机换相机偏移——偏移一大，任何忘了换算的地方都会露馅。
+    ///
+    /// 这一类测试行业里叫"不变量测试"（invariant／属性测试）：不写死具体场景，
+    /// 只断言"无论参数取什么值，这条性质都必须成立"。
+    /// </summary>
+    private void CoordTest(int rounds)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"=== 坐标不变量测试（{rounds} 个随机相机偏移）===");
+        Console.WriteLine("    偏移 |     期望处 |   未偏移处 | 结果");
+        Console.WriteLine("  -------|------------|------------|------");
+
+        int pass = 0, fail = 0;
+        var detail = new List<string>();
+        var rnd = new Random(20260913);
+
+        for (int k = 0; k < rounds; k++)
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+
+            float shift = -(float)(rnd.NextDouble() * 3000.0 + 150.0);   // 往下滚 150~3150
+            ViewOffsetY = shift;
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = shift; }
+            Doc.InvalidateAll();
+            SettleFrames(150);
+
+            // 挑一个**屏幕可见**的位置，反推它对应的画布坐标（就是输入路径做的事）
+            float sx = _virtualX + 600f + (float)rnd.NextDouble() * 700f;
+            float sy = _virtualY + 300f + (float)rnd.NextDouble() * 700f;
+            float cx = sx, cy = sy;
+            ScreenToCanvas(ref cx, ref cy);
+
+            var s = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 24f * DpiScale,
+            };
+            s.AddPoint(cx - 150f, cy, 1f, 0);
+            s.AddPoint(cx + 150f, cy, 1f, 0);
+            Doc.AddStroke(s);              // 真实路径，别加 InvalidateAll
+            SettleFrames(200);
+
+            int atExpected = ScreenProbe.CountMagenta((int)sx - 90, (int)sy - 90, 180, 180);
+            int atRaw = ScreenProbe.CountMagenta((int)sx - 90, (int)(sy - shift) - 90, 180, 180);
+            bool ok = atExpected > 300;
+
+            if (ok) pass++; else { fail++; detail.Add($"偏移{shift:F0}：期望处 {atExpected} 像素（应 >300），画布 y={cy:F0}"); }
+            if (k < 12 || !ok)
+                Console.WriteLine($"  {shift,6:F0} | {atExpected,10} | {atRaw,10} | {(ok ? "PASS" : "FAIL")}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"  {pass}/{rounds} 通过");
+        foreach (var d in detail) Console.WriteLine("    " + d);
+        Console.WriteLine(fail == 0
+            ? "  PASS：随机偏移下，画布上写在哪、屏幕上就该出现在哪 —— 全都成立"
+            : $"  FAIL：{fail} 个偏移下不成立 —— 坐标换算有遗漏");
+
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
         Doc.Clear();
         Doc.ClearHistory();
         _quit = true;
