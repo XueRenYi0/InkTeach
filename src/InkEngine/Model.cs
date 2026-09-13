@@ -91,7 +91,39 @@ internal sealed class DirtyRegion
         }
 
         _rects.Add(r);
-        if (_rects.Count > MaxRects) Coalesce();
+        if (_rects.Count > MaxRects)
+        {
+            // 超上限：把**刚加进来的这一个**并进"并起来最小"的那个已有矩形，
+            // 而不是跑一遍全局合并。
+            //
+            // 为什么：Add 可能每帧被调上万次（拖动一万个对象 = 2 万次旧位/新位）。
+            // 全局合并是 O(k³)，每帧上万次就是上亿次运算——直接把帧率打死。
+            // 上一版就是这么错的：Coalesce 从 O(k) 改成 O(k³) 之后没能塌缩成
+            // 一个矩形，于是超限之后的每次 Add 都触发一遍。这里改成 O(k)。
+            MergeIntoCheapest(r);
+        }
+    }
+
+    /// <summary>
+    /// 把一个矩形并进"并起来面积最小"的那个已有矩形。O(k)，k ≤ MaxRects。
+    /// 合并而不是丢弃：丢掉的区域就永远不会被重画，屏幕上会留下擦不掉的残影。
+    /// </summary>
+    private void MergeIntoCheapest(RectF r)
+    {
+        _rects.RemoveAt(_rects.Count - 1);      // 刚加进来的那个，重新分配
+
+        int best = 0;
+        float bestArea = float.MaxValue;
+        for (int i = 0; i < _rects.Count; i++)
+        {
+            var u = _rects[i];
+            u.Add(r);
+            float area = (u.MaxX - u.MinX) * (u.MaxY - u.MinY);
+            if (area < bestArea) { bestArea = area; best = i; }
+        }
+        var merged = _rects[best];
+        merged.Add(r);
+        _rects[best] = merged;
     }
 
     public void MarkFull()
@@ -106,37 +138,6 @@ internal sealed class DirtyRegion
         _rects.Clear();
     }
 
-    /// <summary>
-    /// 超上限时压缩矩形数量。
-    ///
-    /// **绝对不能简单并成一个**——以前就是那样，后果是：拖一批散落的批注时，
-    /// 每帧的几十个脏矩形被合成一个整屏大矩形，于是每帧几乎整层重画
-    /// （实测一万笔时 91ms/步，表现就是卡死），还会不停重建 GPU 细分缓存，
-    /// 内存跟着涨。
-    ///
-    /// 改成反复合并"并起来最小的那一对"：数量照样受控，但矩形始终贴着真正
-    /// 变化的地方，不会退化成整屏。k ≤ 32，且只在超限时才走，代价可以忽略。
-    /// </summary>
-    private void Coalesce()
-    {
-        while (_rects.Count > MaxRects)
-        {
-            int bi = 0, bj = 1;
-            float best = float.MaxValue;
-            for (int i = 0; i < _rects.Count; i++)
-                for (int j = i + 1; j < _rects.Count; j++)
-                {
-                    var u = _rects[i];
-                    u.Add(_rects[j]);
-                    float area = (u.MaxX - u.MinX) * (u.MaxY - u.MinY);
-                    if (area < best) { best = area; bi = i; bj = j; }
-                }
-            var merged = _rects[bi];
-            merged.Add(_rects[bj]);
-            _rects[bi] = merged;
-            _rects.RemoveAt(bj);
-        }
-    }
 }
 
 internal enum StrokeKind

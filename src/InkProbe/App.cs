@@ -695,7 +695,11 @@ internal sealed class App : InkEngine.InkEngine
 
         // ---- 四角拖动：锚点不动，被拖的角跟手 ----
         var br = SelectionHandles.Position(SelHandle.BottomRight, b, dpi);
-        var target = new Vector2(b.MinX - 200, b.MinY - 100);   // 往左上拖，放大
+        // 目标点取在"锚点 → 被拖的角"的延长线上：四角现在是**等比**缩放，
+        // 只有沿对角线拖，被拖的角才会精确落在目标点上。
+        // （不在对角线上时等比缩放也能用，只是角落不到指针那儿——这是等比的
+        //   固有性质，不是 bug。）
+        var target = new Vector2(b.MinX * 2f - b.MaxX, b.MinY * 2f - b.MaxY);
         var m = SelectionHandles.DragMatrix(SelHandle.TopLeft, b, tl, target, dpi, false, false);
         var anchorAfter = Vector2.Transform(br, m);
         Check("锚点（对角）不动",
@@ -705,6 +709,7 @@ internal sealed class App : InkEngine.InkEngine
         Check("被拖的角跟到目标点",
               Math.Abs(cornerAfter.X - target.X) < 0.05f && Math.Abs(cornerAfter.Y - target.Y) < 0.05f,
               $"({cornerAfter.X:F1},{cornerAfter.Y:F1}) 目标 ({target.X:F1},{target.Y:F1})");
+        Check("四角是等比", MathF.Abs(m.M11 - m.M22) < 1e-4f, $"sx={m.M11:F3} sy={m.M22:F3}");
 
         // ---- 边中点：只动一个轴（这就是"左右拉伸 / 上下拉伸"）----
         var right = SelectionHandles.Position(SelHandle.Right, b, dpi);
