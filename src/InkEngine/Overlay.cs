@@ -968,6 +968,9 @@ internal sealed class OverlayWindow : IDisposable
             ui.Add(rot.X - grip, rot.Y - grip);
             ui.Add(rot.X + grip, rot.Y + grip);
             r.Add(ui);
+
+            // 操作条在选中框下方，也必须算进来，否则它自己会留下残影。
+            r.Add(SelectionBarRect(sb, dpi).Inflate(4f));
         }
 
         if (app.ShowHud)
@@ -1125,6 +1128,92 @@ internal sealed class OverlayWindow : IDisposable
             _ctx.FillRoundedRectangle(rr, white);
             _ctx.DrawRoundedRectangle(rr, _scratch, 1.8f);
         }
+
+        // 5) 操作条。放在下方，理由见 DrawSelectionBar 的注释。
+        DrawSelectionBar(b);
+    }
+
+    /// <summary>
+    /// 操作条在画布坐标里的矩形。**绘制和脏区都调它**——两处各算一遍迟早会算错，
+    /// 而算错的后果就是屏幕上留下一块擦不掉的残影。
+    /// </summary>
+    private static RectF SelectionBarRect(in RectF sel, float dpi)
+    {
+        const int n = 5;
+        float btnW = 46f * dpi, h = 34f * dpi, pad = 5f * dpi, gap = 2f * dpi;
+        float w = pad * 2 + n * btnW + (n - 1) * gap;
+        float x = (sel.MinX + sel.MaxX) * 0.5f - w * 0.5f;
+        float y = sel.MaxY + 14f * dpi;
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    /// <summary>
+    /// 操作条：复制 / 删除 / 左右翻转 / 上下翻转 / 旋转。
+    /// 规格见 design/选中与操作条-设计稿.png。
+    ///
+    /// **为什么在下方而不是上方**：选中内容靠屏幕上边时，上方的操作条要么被顶出
+    /// 屏幕、要么盖住正在讲的内容。下方永远有位置，个子矮的老师也够得着。
+    ///
+    /// 图标不是自己画的：路径数据来自微软 Fluent UI System Icons（MIT），
+    /// 由 tools/gen-icons.ps1 抓取生成。手画的圆角和光学比例总是差一口气。
+    /// </summary>
+    private void DrawSelectionBar(in RectF sel)
+    {
+        float dpi = Dpi / 96f;
+        var rect = SelectionBarRect(sel, dpi);
+        var box = new Vortice.RawRectF(rect.MinX, rect.MinY, rect.MaxX, rect.MaxY);
+        float radius = 8f * dpi;
+        var rounded = new RoundedRectangle(box, radius, radius);
+
+        _scratch.Color = new Color4(0.99f, 0.99f, 1f, 0.96f);
+        _ctx.FillRoundedRectangle(rounded, _scratch);
+        _scratch.Color = new Color4(0.80f, 0.82f, 0.86f, 1f);
+        _ctx.DrawRoundedRectangle(rounded, _scratch, 1f * dpi);
+
+        var iconBrush = Brush(new Color4(0.16f, 0.17f, 0.20f, 1f));
+        var sepBrush = Brush(new Color4(0.90f, 0.91f, 0.93f, 1f));
+
+        string[] glyphs =
+        {
+            IconPaths.copy, IconPaths.delete, IconPaths.flipH, IconPaths.flipV, IconPaths.rotate,
+        };
+
+        const int n = 5;
+        float btnW = 46f * dpi, h = 34f * dpi, pad = 5f * dpi, gap = 2f * dpi;
+        // Fluent 的 24×24 图标自带约 2 像素内边距，所以给的框要比想要的字形大一点
+        // （框 22 → 字形约 19）。
+        float glyphBox = 22f * dpi;
+
+        for (int i = 0; i < n; i++)
+        {
+            float bx = rect.MinX + pad + i * (btnW + gap);
+            DrawIcon(glyphs[i], bx + (btnW - glyphBox) * 0.5f,
+                     rect.MinY + (h - glyphBox) * 0.5f, glyphBox, iconBrush);
+
+            // 键之间的分隔线：五个图标挨在一起会连成一片，看不出是几个按钮。
+            if (i < n - 1)
+            {
+                float sx = bx + btnW + gap * 0.5f;
+                _ctx.DrawLine(new Vector2(sx, rect.MinY + pad + 3f * dpi),
+                              new Vector2(sx, rect.MaxY - pad - 3f * dpi), sepBrush, 1f * dpi);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 画一个图标。几何按 24×24 的单位坐标缓存，这里用变换缩放到目标尺寸——
+    /// 同一份几何能在不同尺寸和 DPI 下复用，不用重建。
+    /// </summary>
+    private void DrawIcon(string d, float x, float y, float size, ID2D1SolidColorBrush brush)
+    {
+        var geo = SvgPath.Get(d);
+        if (geo == null) return;
+
+        var saved = _ctx.Transform;
+        _ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                       * Matrix3x2.CreateTranslation(x, y) * saved;
+        _ctx.FillGeometry(geo, brush);
+        _ctx.Transform = saved;
     }
 
     /// <summary>圆上某个角度上的点，用来拼小圆弧（画旋转手柄的转向标记）。</summary>
