@@ -1014,6 +1014,20 @@ internal sealed class InkDocument
     {
         if (Selected.Count == 0) return false;
 
+        // 防呆护栏：Ctrl+A + Ctrl+D 是**指数增长**（选全部→复制→再全选→再复制，
+        // 每按一次翻一倍）。按十次就是 1024 倍，二十次是一百万条——任何画布
+        // 程序都扛不住，区别只在于"崩"还是"优雅地拒绝"。
+        //
+        // 到上限就**明确拒绝并说清楚**，而不是让程序卡到没响应。
+        // 老师说"我按了几下就卡死了"的时候，至少能看懂发生了什么。
+        if (Strokes.Count + Selected.Count > MaxObjects)
+        {
+            LastRejectReason = $"批注数量将达到 {Strokes.Count + Selected.Count}，"
+                             + $"超过上限 {MaxObjects}。请先清空或删掉一些。";
+            Console.WriteLine("[拒绝] " + LastRejectReason);
+            return false;
+        }
+
         var act = new AddStrokesAction();
         var copies = new List<Stroke>(Selected.Count);
         foreach (var s in Selected)
@@ -1030,6 +1044,15 @@ internal sealed class InkDocument
         Selected.AddRange(copies);
         return true;
     }
+
+    /// <summary>
+    /// 对象数量上限。取 10 万：按每条约 10KB（点数据 + GPU 几何 + 细分缓存）
+    /// 算下来约 1GB，已经是一台 8GB 教室机能忍受的边界了。
+    /// </summary>
+    public const int MaxObjects = 100_000;
+
+    /// <summary>上一次被拒绝的原因（给界面显示用）。没有就是 null。</summary>
+    public string LastRejectReason;
 
     /// <summary>
     /// 拖动预览：把变换**直接设成某个值**（不是乘增量）。
