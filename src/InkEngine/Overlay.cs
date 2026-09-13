@@ -163,6 +163,24 @@ internal sealed class OverlayWindow : IDisposable
     private Matrix3x2 CanvasToWindow =>
         Matrix3x2.CreateTranslation(-OriginX + ViewOffsetX, -OriginY + ViewOffsetY);
 
+    /// <summary>
+    /// 当前**看得见的那块画布**（画布坐标）。
+    ///
+    /// 凡是"拿窗口矩形去筛笔画"的地方都必须用它，而不是裸用 OriginX/OriginY——
+    /// 相机偏移为 0 时两者恰好相等，一滚动就不等。
+    ///
+    /// **这个 bug 实测踩过**：滚到 -1800 之后写的那一笔，画布坐标是 y=2500，
+    /// 而筛选用的是 [0,1800]，于是它被当成"不在视野里"跳过了，屏幕上一个像素
+    /// 都没有——表现就是"滚下去写的字看不见，滚回顶部又一切正常"。
+    /// </summary>
+    private RectF VisibleCanvasRect => new()
+    {
+        MinX = OriginX - ViewOffsetX,
+        MinY = OriginY - ViewOffsetY,
+        MaxX = OriginX - ViewOffsetX + Width,
+        MaxY = OriginY - ViewOffsetY + Height,
+    };
+
     /// <summary>相机偏移（由引擎每帧写进来；见 InkEngine.ViewOffsetY）。</summary>
     internal float ViewOffsetX, ViewOffsetY;
     public IntPtr Hwnd;
@@ -783,7 +801,7 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.Transform = CanvasToWindow;
 
         int drawn = 0;
-        var view = new RectF { MinX = OriginX, MinY = OriginY, MaxX = OriginX + Width, MaxY = OriginY + Height };
+        var view = VisibleCanvasRect;   // 注意要算上相机，不能裸用窗口矩形
         foreach (var s in doc.Strokes)
         {
             if (!s.IntersectsRect(view)) continue;

@@ -283,6 +283,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             CameraTest();
         }
+        else if (mode == "--scrollwrite")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ScrollWriteTest();
+        }
         else if (mode == "--aaprobe")
         {
             _autoExitAt = double.MaxValue;
@@ -591,6 +597,99 @@ internal sealed class App : InkEngine.InkEngine
                         : "累积量 —— 需要分块缓存";
             Console.WriteLine($"  {n,8} | {ms / 3,7:F1} ms | {note}");
         }
+
+        ViewOffsetY = 0f;
+        Doc.Clear();
+        Doc.ClearHistory();
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 滚下去还能不能写。
+    ///
+    /// 做法：在三个滚动位置（顶部 / 往下三屏）各在**当下的屏幕位置**写一笔，
+    /// 然后回到顶部，验证只有第一笔在视野里、后两笔确实留在了下面。
+    ///
+    /// 这同时回答"滚动要不要下限"：数据上**不设限**才是对的（老师往下写不完），
+    /// 真正要解决的是"怎么回来"——无限往下滚而没有回顶部的办法，老师会迷路。
+    /// </summary>
+    private void ScrollWriteTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 滚下去还能不能写 ===");
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"    {name,-24}{(ok ? "PASS" : "FAIL")}  {detail}");
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+
+        float px = _virtualX + 900, py = _virtualY + 700;      // 屏幕上的固定位置
+        float[] offsets = { 0f, -1800f, -5400f };              // 顶部 / 一屏 / 三屏
+        var writtenCanvasY = new List<float>();
+
+        for (int i = 0; i < offsets.Length; i++)
+        {
+            ViewOffsetY = offsets[i];
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
+
+            // 输入路径做的事：屏幕坐标 -> 画布坐标
+            float cx = px, cy = py;
+            ScreenToCanvas(ref cx, ref cy);
+            writtenCanvasY.Add(cy);
+
+            var s = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 20f * DpiScale,
+            };
+            s.AddPoint(cx - 200, cy, 1f, 0);
+            s.AddPoint(cx + 200, cy, 1f, 0);
+            Doc.AddStroke(s);
+            Doc.InvalidateAll();
+            SettleFrames(350);
+
+            int seen = ScreenProbe.CountMagenta((int)px - 60, (int)py - 60, 120, 120);
+            Check($"滚动 {offsets[i],7:F0} 处能写", seen > 200,
+                  $"画布 y={cy:F0}，屏幕上有 {seen} 像素");
+            if (seen <= 200)
+            {
+                // 诊断：墨到底画到哪去了？沿屏幕竖着扫几条带子。
+                Console.Write("      竖扫结果：");
+                for (int band = 0; band < 6; band++)
+                {
+                    int yy = _virtualY + band * 300;
+                    int n2 = ScreenProbe.CountMagenta((int)px - 200, yy, 400, 300);
+                    Console.Write($"y={band * 300,4}→{n2,5}  ");
+                }
+                Console.WriteLine();
+            }
+        }
+
+        Check("三笔记录在三个不同的画布位置",
+              writtenCanvasY.Distinct().Count() == 3, string.Join(", ", writtenCanvasY.Select(v => v.ToString("F0"))));
+
+        // 回到顶部：只有第一笔应该在视野里
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        Doc.InvalidateAll();
+        SettleFrames(400);
+
+        int first = ScreenProbe.CountMagenta((int)px - 60, (int)py - 60, 120, 120);
+        Check("回顶部：第一笔仍在原位", first > 200, $"{first} 像素");
+
+        int below = ScreenProbe.CountMagenta((int)px - 60, (int)py + 900, 120, 300);
+        Check("回顶部：后两笔在视野外", below < 40, $"屏幕下方 {below} 像素（应为 0）");
+
+        Console.WriteLine();
+        Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：滚到哪儿都能写，写下的内容留在那个画布位置");
+        Console.WriteLine();
+        Console.WriteLine("  关于下限：数据层不设限才是对的（往下写不完）。");
+        Console.WriteLine("  缺的不是下限，是**回顶部的办法**（滚动条 / 一键回顶）。");
+        Console.WriteLine("  现在的实现只夹住了上边界（不许滚过内容顶部），下方不设限。");
 
         ViewOffsetY = 0f;
         Doc.Clear();
