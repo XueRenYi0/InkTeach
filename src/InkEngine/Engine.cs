@@ -80,6 +80,40 @@ public class InkEngine
 
     /// <summary>屏幕坐标 → 画布坐标（相机）。输入进来第一件事就是过这个。</summary>
     internal void ScreenToCanvas(ref float x, ref float y) => y -= ViewOffsetY;
+
+    /// <summary>当前视口在**画布坐标**里的范围（相机之后）。</summary>
+    internal RectF ViewportCanvas => new()
+    {
+        MinX = _virtualX,
+        MinY = _virtualY - ViewOffsetY,
+        MaxX = _virtualX + _virtualW,
+        MaxY = _virtualY - ViewOffsetY + _virtualH,
+    };
+
+    /// <summary>
+    /// 画布范围 = 内容边界 ∪ 当前视口 ∪ **视口下方一屏空白**。
+    ///
+    /// 最后那一屏是必须的：只取"内容 ∪ 视口"的话，**空文档的画布恰好一屏**，
+    /// 下边界就是 0，往下滚立刻被夹回去——而滚不动就写不到下面去，写不到下面
+    /// 内容就不长，内容不长范围就不长……**死锁**。
+    /// （实测踩过：用户一打开软件，滚轮完全没反应，就是这个。）
+    ///
+    /// 留一屏空白等于"永远有一张白纸在下面"，像记事本一样。
+    /// </summary>
+    internal RectF CanvasExtent
+    {
+        get
+        {
+            var vp = ViewportCanvas;
+            var r = Doc.Extent(vp);
+            r.Add(new RectF
+            {
+                MinX = vp.MinX, MinY = vp.MaxY,
+                MaxX = vp.MaxX, MaxY = vp.MaxY + _virtualH,
+            });
+            return r;
+        }
+    }
     private SelHandle _dragHandle = SelHandle.None;
     private bool _dragIsMove;
     private SelectionFrame _dragFrame;
@@ -177,6 +211,8 @@ public class InkEngine
     private double _nextStatsAt;
     private double _lastStatsMs;
     private double _workingSetMb;
+    private double _privateMb;
+    private double _gpuMb;
     private double _lastTopmostMs;
 
     /// <summary>Everything that talks to the OS for reporting: process times,
@@ -198,6 +234,8 @@ public class InkEngine
         }
 
         _workingSetMb = proc.WorkingSet64 / 1048576.0;
+        _privateMb = proc.PrivateMemorySize64 / 1048576.0;
+        _gpuMb = GpuUsedMb();
         if (_workingSetMb > _peakWorkingSetMb) _peakWorkingSetMb = _workingSetMb;
         sw.Stop();
         _lastStatsMs = sw.Elapsed.TotalMilliseconds;
@@ -531,12 +569,30 @@ public class InkEngine
         }
     }
 
+    /// <summary>
+    /// 显存已用量（MB）。
+    ///
+    /// 为什么要显示它：**核显的显存是从系统内存里分的**，而它**不计入进程工作集**。
+    /// 任务管理器那一列在核显机器上会把 GPU 共享显存算进去，于是出现
+    /// "任务管理器 1000MB、面板只有 100MB"——不是面板不准，是只报了一个口径，
+    /// 恰好漏掉了最大的一块。
+    /// </summary>
+    private static double GpuUsedMb()
+    {
+        try
+        {
+            if (Gfx.Adapter3 == null) return 0;
+            var info = Gfx.Adapter3.QueryVideoMemoryInfo(0, Vortice.DXGI.MemorySegmentGroup.Local);
+            return info.CurrentUsage / 1048576.0;
+        }
+        catch { return 0; }
+    }
     private string BuildHudText()
     {
         return
             $"帧率 {_fps,5:F1} fps     帧耗时 {_lastFrameMs,5:F2} ms     输入到上屏 {_inputToPresentMs,5:F1} ms\n" +
             $"绘制 {_lastRecordMs,5:F2} ms     上屏 {_lastPresentMs,5:F2} ms     整层重建 {_lastRebuildMs,6:F1} ms\n" +
-            $"工作集 {_workingSetMb,5:F1} MB     CPU {_cpuPercent,4:F1} %     峰值 {_peakWorkingSetMb,5:F1} MB\n" +
+            $"工作集 {_workingSetMb,5:F1} MB   私有（提交）{_privateMb,6:F1} MB   显存 {_gpuMb,5:F0} MB   CPU {_cpuPercent,4:F1} %\n" +
             $"笔画 {Doc.Strokes.Count,6}     点数 {Doc.TotalPoints,8}     选中 {Doc.Selected.Count}     工具：{ToolName(Tool)}{(PassThrough ? "   [穿透中]" : "")}\n" +
             $"笔迹粗细 {PenWidthLogical,4:F1} 逻辑像素    网格单元 {Doc.GridCells}\n" +
             $"快捷键都加 Ctrl+Alt：1笔 2荧光 3激光 4橡皮 5框选 / W换粗细 / Z撤销 / C清空 / P穿透 / X退出";
@@ -1585,12 +1641,7 @@ public class InkEngine
         // 不夹的话会滚进无尽的空白，而且比例滚动条拿不到有意义的范围。
         // 下边界是"视口底边贴住内容底边"——接着写，内容长出去，范围自己长出来，
         // 所以不会把人卡在底边。
-        var viewport = new RectF
-        {
-            MinX = _virtualX, MinY = _virtualY,
-            MaxX = _virtualX + _virtualW, MaxY = _virtualY + _virtualH,
-        };
-        var extent = Doc.Extent(viewport);
+        var extent = CanvasExtent;
         float lowest = _virtualH - extent.MaxY;
         if (ViewOffsetY > 0f) ViewOffsetY = 0f;
         if (ViewOffsetY < lowest) ViewOffsetY = lowest;

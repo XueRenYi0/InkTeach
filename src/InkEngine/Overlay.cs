@@ -109,7 +109,7 @@ internal static class Gfx
 
         WriteFactory = DWrite.DWriteCreateFactory<IDWriteFactory>(Vortice.DirectWrite.FactoryType.Shared);
         HudFormat = WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 13f, "zh-CN");
+            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 15f, "zh-CN");
         Mem.Stage("3. 创建 DirectWrite（文字）之后");
     }
 
@@ -255,8 +255,8 @@ internal sealed class OverlayWindow : IDisposable
     public static int TransientHistoryFrames = 2;
     public int LastPresentRectCount;
     public double LastPresentAreaPercent;
-    public const float HudWidth = 760f;
-    public const float HudHeight = 158f;
+    public const float HudWidth = 1000f;
+    public const float HudHeight = 230f;
 
     /// <summary>是否成功拿到微软的委托墨迹轨迹接口（进程级探测结果）。</summary>
     public static bool InkTrailAvailable;
@@ -562,6 +562,22 @@ internal sealed class OverlayWindow : IDisposable
         _renderedVersion = doc.Version;
     }
 
+    /// <summary>
+    /// 画布矩形 → 窗口矩形。
+    ///
+    /// **凡是来自文档的矩形（脏区、笔画包围盒）在送进 ClipToWindow /
+    /// PushAxisAlignedClip 之前都必须过这一步**——那些函数吃的是窗口坐标。
+    /// 相机为 0 时两者恰好相等，一滚动就全错，症状是"滚完写不了字"
+    /// 或者"写了看不见"。
+    ///
+    /// 这个坑踩过两次：第一次修的是"整层重建"那条路（RebuildAll），
+    /// 但真正写字走的是"追加一笔"的快路径（DrawOnlyPatch）——没修到。
+    /// </summary>
+    private RectF CanvasRectToWindow(in RectF r) => new()
+    {
+        MinX = r.MinX + ViewOffsetX, MinY = r.MinY + ViewOffsetY,
+        MaxX = r.MaxX + ViewOffsetX, MaxY = r.MaxY + ViewOffsetY,
+    };
     private RectF ClipToWindow(RectF r)
     {
         float l = MathF.Max(r.MinX, OriginX);
@@ -719,7 +735,7 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private void DrawOnlyPatch(Stroke s)
     {
-        var r = ClipToWindow(s.PaddedBounds);
+        var r = ClipToWindow(CanvasRectToWindow(s.PaddedBounds));
         if (r.IsEmpty) return;
 
         _ctx.Target = _contentTarget;
@@ -760,7 +776,7 @@ internal sealed class OverlayWindow : IDisposable
         int patched = 0;
         foreach (var raw in rects)
         {
-            var r = ClipToWindow(raw);
+            var r = ClipToWindow(CanvasRectToWindow(raw));
             if (r.IsEmpty) continue;
 
             var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
@@ -992,14 +1008,14 @@ internal sealed class OverlayWindow : IDisposable
         var r = RectF.Empty;
 
         if (app.ActiveStroke != null)
-            r.Add(app.ActiveStroke.PaddedBounds);
+            r.Add(CanvasRectToWindow(app.ActiveStroke.PaddedBounds));
 
         var laser = app.Laser.Points;
         if (app.Laser.Visible && laser.Count > 0)
         {
             var b = RectF.Empty;
             foreach (var p in laser) b.Add(p.X, p.Y);
-            r.Add(b.Inflate(32f));      // 轨迹有宽度和发光，往外留一点
+            r.Add(CanvasRectToWindow(b.Inflate(32f)));      // 轨迹有宽度和发光，往外留一点
         }
 
         if (app.Tool == Tool.Eraser && app.PointerInside)
@@ -1082,7 +1098,7 @@ internal sealed class OverlayWindow : IDisposable
         if (doc.Dirty.Full)
             _contentDirtyNow.Add(full);
         else
-            foreach (var raw in doc.Dirty.Rects) _contentDirtyNow.Add(raw);
+            foreach (var raw in doc.Dirty.Rects) _contentDirtyNow.Add(CanvasRectToWindow(raw));
 
         if (_forceFullFrame)
         {
@@ -1285,7 +1301,7 @@ internal sealed class OverlayWindow : IDisposable
             MinX = OriginX, MinY = OriginY,
             MaxX = OriginX + Width, MaxY = OriginY + Height,
         };
-        var extent = app.Doc.Extent(viewport);
+        var extent = app.CanvasExtent;
         float extentH = extent.MaxY - extent.MinY;
         if (extentH <= Height + 1f) return;             // 画布只有一屏，不需要滚动条
 

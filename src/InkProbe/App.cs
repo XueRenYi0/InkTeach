@@ -692,8 +692,8 @@ internal sealed class App : InkEngine.InkEngine
             };
             s.AddPoint(cx - 200, cy, 1f, 0);
             s.AddPoint(cx + 200, cy, 1f, 0);
-            Doc.AddStroke(s);
-            Doc.InvalidateAll();
+            Doc.AddStroke(s);      // 真实交互路径：不调 InvalidateAll，
+                                    // 走 PendingAppend -> DrawOnlyPatch（上次就是漏了这条）
             SettleFrames(350);
 
             int seen = ScreenProbe.CountMagenta((int)px - 60, (int)py - 60, 120, 120);
@@ -730,6 +730,21 @@ internal sealed class App : InkEngine.InkEngine
 
         Console.WriteLine();
         Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：滚到哪儿都能写，写下的内容留在那个画布位置");
+        Console.WriteLine();
+
+        // 死锁回归：**空文档也必须能往下滚一屏**。
+        // 之前只取"内容 ∪ 视口"时，空文档画布恰好一屏、下边界为 0，
+        // 往下滚立刻被夹回去；而滚不动就写不到下面去 —— 死锁。
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        var empty = CanvasExtent;
+        Check("空文档也能往下滚一屏",
+              empty.MaxY - ViewportCanvas.MinY >= _virtualH * 2f,
+              $"画布高 {empty.MaxY - empty.MinY:F0}px（一屏 {_virtualH}px）");
+        Check("空文档不许往上滚过头", CanvasExtent.MinY <= ViewportCanvas.MinY + 0.5f,
+              $"画布顶 {empty.MinY:F0}");
         Console.WriteLine();
         Console.WriteLine("  关于下限：数据层不设限才是对的（往下写不完）。");
         Console.WriteLine("  缺的不是下限，是**回顶部的办法**（滚动条 / 一键回顶）。");
