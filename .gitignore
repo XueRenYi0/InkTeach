@@ -1,0 +1,13 @@
+bin/
+obj/
+*.user
+.vs/
+.idea/
+
+# 大体积的产物 / 参考件，不进版本库（文件仍留在磁盘上，不受影响）
+#   reports/shots          全屏截图，可重新生成，单个约 20 MB
+#   reports/peers          竞品程序副本
+#   reports/wpf-build-verify  WPF 版的构建校验输出
+reports/shots/
+reports/peers/
+reports/wpf-build-verify/
