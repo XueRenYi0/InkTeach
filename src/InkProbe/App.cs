@@ -277,6 +277,12 @@ internal sealed class App : InkEngine.InkEngine
             int k = args.Length > 2 && int.TryParse(args[2], out var rd) ? rd : 5;
             MemAbTest(n, k);
         }
+        else if (mode == "--cameratest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            CameraTest();
+        }
         else if (mode == "--aaprobe")
         {
             _autoExitAt = double.MaxValue;
@@ -491,6 +497,102 @@ internal sealed class App : InkEngine.InkEngine
             : $"  结论：差异 {diff:F0}MB 落在噪声带 {noise:F0}MB 之内 —— **测不出来**，不能下结论");
 
         Stroke.MaxRealizations = 4096;   // 还原默认
+        Doc.Clear();
+        Doc.ClearHistory();
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 相机自检 + 滚动步代价。
+    ///
+    /// 验两件事：
+    ///   ① **正确性**：偏移之后，同一块画布内容必须出现在屏幕上偏移后的位置，
+    ///      而**文档里的坐标一个都不变**——这是"滚动只改一个数、不动对象数据"的直接证据。
+    ///   ② **代价**：滚动一步 = 整屏重画（第一步的已知边界）。按"一屏量级"与
+    ///      "累积量级"分别量，就知道现在能扛到多少。
+    /// </summary>
+    private void CameraTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 相机自检 ===");
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"    {name,-20}{(ok ? "PASS" : "FAIL")}  {detail}");
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+
+        float cx = _virtualX + 900, cy = _virtualY + 700;
+        var s = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(1f, 0f, 1f, 1f), Width = 20f * DpiScale,   // 品红，好数像素
+        };
+        s.AddPoint(cx - 200, cy, 1f, 0);
+        s.AddPoint(cx + 200, cy, 1f, 0);
+        Doc.AddStroke(s);
+        Doc.InvalidateAll();
+        SettleFrames(400);
+
+        int before = ScreenProbe.CountMagenta((int)cx - 60, (int)cy - 60, 120, 120);
+        Check("偏移前在画布坐标处", before > 200, $"{before} 像素");
+
+        float shift = 600f;
+        ViewOffsetY = -shift;                        // 往下滚：内容上移
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
+        Doc.InvalidateAll();
+        SettleFrames(400);
+
+        int afterOld = ScreenProbe.CountMagenta((int)cx - 60, (int)cy - 60, 120, 120);
+        int afterNew = ScreenProbe.CountMagenta((int)cx - 60, (int)(cy - shift) - 60, 120, 120);
+        Check("原屏幕位置已清空", afterOld < 40, $"{afterOld} 像素");
+        Check("墨到了偏移后的位置", afterNew > 200, $"{afterNew} 像素");
+        Check("文档坐标未变", Math.Abs(s.Bounds.MinY - cy) < 0.01f,
+              $"Bounds.MinY={s.Bounds.MinY:F1}");
+
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        Doc.InvalidateAll();
+        SettleFrames(400);
+        int back = ScreenProbe.CountMagenta((int)cx - 60, (int)cy - 60, 120, 120);
+        Check("滚回去仍在原位", back > 200, $"{back} 像素");
+        Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：相机只改一个数，对象数据不动");
+
+        Console.WriteLine();
+        Console.WriteLine("=== 滚动一步的代价（整屏重画，第一步的已知边界）===");
+        Console.WriteLine("    画布里 | 重建耗时 | 判断");
+        Console.WriteLine("  ---------|----------|------");
+        foreach (int n in new[] { 0, 1000, 2000, 5000, 10000 })
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            if (n > 0) GenerateStrokes(n);
+            ViewOffsetY = -400f;
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
+            Doc.InvalidateAll();
+            SettleFrames(300);
+
+            double ms = 0;
+            for (int k = 0; k < 3; k++)
+            {
+                ViewOffsetY -= 72f * DpiScale;
+                foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
+                Doc.InvalidateAll();
+                SettleFrames(220);
+                ms += _windows[0].LastRebuildMs;
+            }
+            string note = n <= 1000 ? "一屏量级 —— 可用"
+                        : n <= 2000 ? "两屏 —— 尚可"
+                        : "累积量 —— 需要分块缓存";
+            Console.WriteLine($"  {n,8} | {ms / 3,7:F1} ms | {note}");
+        }
+
+        ViewOffsetY = 0f;
         Doc.Clear();
         Doc.ClearHistory();
         _quit = true;

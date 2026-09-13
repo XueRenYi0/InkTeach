@@ -62,6 +62,18 @@ public class InkEngine
     /// 用 Ctrl+Alt+K 切换。
     /// </summary>
     internal bool KeyboardMode = true;
+
+    /// <summary>
+    /// 相机：画布坐标 → 屏幕坐标的纵向偏移。**滚动只改这一个数**，
+    /// 不动任何对象数据——这是滚动能做到 O(1) 的前提。
+    ///
+    /// 往下滚 = 内容上移 = 这个值变负。只做纵向：板书是纵向累积的，
+    /// 横向没有用武之地，还省掉双指横扫与"画横线"的手势冲突。
+    /// </summary>
+    internal float ViewOffsetY;
+
+    /// <summary>屏幕坐标 → 画布坐标（相机）。输入进来第一件事就是过这个。</summary>
+    internal void ScreenToCanvas(ref float x, ref float y) => y -= ViewOffsetY;
     private SelHandle _dragHandle = SelHandle.None;
     private bool _dragIsMove;
     private SelectionFrame _dragFrame;
@@ -441,6 +453,9 @@ public class InkEngine
         }
         swHud.Stop();
 
+        // 相机写给各覆盖窗口：渲染的每一处变换都用它（见 OverlayWindow.CanvasToWindow）。
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
+
         foreach (var w in _windows)
             w.RenderFrame(this);
         foreach (var w in _windows)
@@ -545,6 +560,8 @@ public class InkEngine
         if (HandleHostWindowMessage(hWnd, msg, wParam, lParam, out var hostResult))
             return hostResult;
 
+        // 滚轮：滚动画布（只改相机偏移，不动对象数据）。见 HandleWheel。
+        if (msg == 0x020A /*WM_MOUSEWHEEL*/) return HandleWheel(wParam);
         // 批注键盘模式下的按键。只有这个模式收得到——见 SetKeyboardMode。
         if ((msg == Native.WM_KEYDOWN || msg == Native.WM_SYSKEYDOWN) && HandleKeyDown(wParam))
             return IntPtr.Zero;
@@ -668,6 +685,7 @@ public class InkEngine
         uint id = (uint)(wParam.ToInt64() & 0xFFFF);
         if (PassThrough) return;
         if (!ReadPointer(id, out float x, out float y, out float pressure, out bool inverted, out uint ptype)) return;
+        ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布
 
         _activePointer = id;
         _activePointerType = ptype;
@@ -736,6 +754,7 @@ public class InkEngine
         _cntMove++;
         uint id = (uint)(wParam.ToInt64() & 0xFFFF);
         if (!ReadPointer(id, out float x, out float y, out float pressure, out bool inverted, out _)) return;
+        ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布，下游全按画布坐标走
         PointerX = x; PointerY = y; PointerInside = true;
 
         // 界面捕获了指针（例如按下按钮后滑出去），消息全归界面。
@@ -1539,4 +1558,25 @@ public class InkEngine
         Tool = Tool.Marquee;
         NotifyUiStateChanged();
     }
-}
+
+    /// <summary>
+    /// 滚轮滚动画布。**只改相机偏移 ViewOffsetY，一个对象的数据都不动**——
+    /// 这是滚动能做到 O(1) 的前提。绝不能像 InkClass 那样把平移烘焙进点坐标
+    /// （那是 O(对象数)/次，一万笔滚一格要重写十万个点）。
+    ///
+    /// 只做纵向。往下滚 = 内容上移 = 偏移变负。
+    ///
+    /// 现阶段的代价（第一步的已知边界）：偏移一变，整屏内容的位置全变，
+    /// 所以内容层要整层重画。一屏量级（约 1000 对象）约 20ms，可用；
+    /// 累积到一万笔时约 154ms，滚一格会卡一下。要治累积量得把内容层改成
+    /// 滚动缓冲或分块（计划文档第二十九节第二步）。
+    /// </summary>
+    private IntPtr HandleWheel(IntPtr wParam)
+    {
+        int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);
+        ViewOffsetY -= delta / 120f * 72f * DpiScale;   // 一格 = 72 逻辑像素
+        if (ViewOffsetY > 0f) ViewOffsetY = 0f;         // 不许滚过内容顶部
+        Doc.InvalidateAll();                             // 整层重画（第一步的代价）
+        _dirty = true;
+        return IntPtr.Zero;
+    }}

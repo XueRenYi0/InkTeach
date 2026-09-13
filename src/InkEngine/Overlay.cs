@@ -155,6 +155,16 @@ internal sealed class OverlayWindow : IDisposable
 
     private ID2D1DeviceContext1 _ctx1;
 
+    /// <summary>
+    /// 画布坐标 → 窗口坐标。**相机在这里生效**：渲染的每一处变换都要用它，
+    /// 漏掉任何一处，那一处的东西就不会跟着滚动（典型症状：笔迹滚了、
+    /// 性能面板没滚，或者反过来）。
+    /// </summary>
+    private Matrix3x2 CanvasToWindow =>
+        Matrix3x2.CreateTranslation(-OriginX + ViewOffsetX, -OriginY + ViewOffsetY);
+
+    /// <summary>相机偏移（由引擎每帧写进来；见 InkEngine.ViewOffsetY）。</summary>
+    internal float ViewOffsetX, ViewOffsetY;
     public IntPtr Hwnd;
     public int OriginX, OriginY, Width, Height;
     public uint Dpi = 96;
@@ -666,7 +676,7 @@ internal sealed class OverlayWindow : IDisposable
         // 引擎负责换算成物理像素：先乘 dpiScale，再减去窗口原点。
         _ctx.SetDpi(96f, 96f);
         _ctx.Transform = Matrix3x2.CreateScale(dpiScale)
-                       * Matrix3x2.CreateTranslation(-OriginX, -OriginY);
+                       * CanvasToWindow;
         // 裁剪矩形同样用逻辑坐标（会被上面的变换一起作用）。
         var clip = new Vortice.RawRectF(_uiLogicalBounds.MinX, _uiLogicalBounds.MinY,
                                         _uiLogicalBounds.MaxX, _uiLogicalBounds.MaxY);
@@ -696,7 +706,7 @@ internal sealed class OverlayWindow : IDisposable
 
         _ctx.Target = _contentTarget;
         _ctx.BeginDraw();
-        _ctx.Transform = Matrix3x2.CreateTranslation(-OriginX, -OriginY);
+        _ctx.Transform = CanvasToWindow;
         _ctx.PushAxisAlignedClip(
             new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY),
             AntialiasMode.Aliased);
@@ -727,7 +737,7 @@ internal sealed class OverlayWindow : IDisposable
 
         _ctx.Target = _contentTarget;
         _ctx.BeginDraw();
-        _ctx.Transform = Matrix3x2.CreateTranslation(-OriginX, -OriginY);
+        _ctx.Transform = CanvasToWindow;
 
         int patched = 0;
         foreach (var raw in rects)
@@ -770,7 +780,7 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.BeginDraw();
         // 白板模式下这一层整体铺底色；透明批注时就是清空。
         _ctx.Clear(app.BoardOn ? app.BoardColor : Transparent);
-        _ctx.Transform = Matrix3x2.CreateTranslation(-OriginX, -OriginY);
+        _ctx.Transform = CanvasToWindow;
 
         int drawn = 0;
         var view = new RectF { MinX = OriginX, MinY = OriginY, MaxX = OriginX + Width, MaxY = OriginY + Height };
@@ -904,7 +914,7 @@ internal sealed class OverlayWindow : IDisposable
             if (app.NoContentCache)
             {
                 // Naive path: re-rasterise every committed stroke, every frame.
-                _ctx.Transform = Matrix3x2.CreateTranslation(-OriginX, -OriginY);
+                _ctx.Transform = CanvasToWindow;
                 foreach (var s in app.Doc.Strokes)
                 {
                     if (!s.IntersectsRect(c)) continue;
@@ -914,7 +924,7 @@ internal sealed class OverlayWindow : IDisposable
             else
             {
                 _ctx.DrawBitmap(_contentSource, 1f, Vortice.Direct2D1.InterpolationMode.NearestNeighbor);
-                _ctx.Transform = Matrix3x2.CreateTranslation(-OriginX, -OriginY);
+                _ctx.Transform = CanvasToWindow;
             }
 
             // 调试用：--trailonly 时不画自己那一笔，用来验证委托墨迹轨迹
