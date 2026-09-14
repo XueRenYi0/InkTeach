@@ -1,0 +1,22 @@
+virtual desktop: 2880x1800 at (0,0)
+帧延迟等待对象: 已启用
+overlay on monitor 65537: 2880x1800 at (0,0) dpi=192
+委托墨迹轨迹(InkTrail): 可用
+DPI 缩放 2.00（逻辑 1440x900）
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+registered 15/15 global hotkeys
+笔迹优化器: 未装（纯底层，画原始采样点）
+
+=== 图形命中测试（描边轮廓，中间是空的）===
+    边上命中                  PASS  
+    正中央不命中                PASS  轮廓中间是空的
+    远处不命中                 PASS  
+    容差外不命中                PASS  偏移 36px
+    容差内命中                 PASS  容差 41px
+    平移后原位置不命中             PASS  
+    平移后新位置命中              PASS  变换必须参与命中
+    擦正中央不误删               PASS  删了 0 个
+    擦边上应删除                PASS  删了 1 个
+
+  PASS: 图形命中判定正确
+shutdown complete

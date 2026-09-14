@@ -1,0 +1,16 @@
+virtual desktop: 2880x1800 at (0,0)
+帧延迟等待对象: 已启用
+overlay on monitor 65537: 2880x1800 at (0,0) dpi=192
+委托墨迹轨迹(InkTrail): 可用
+DPI 缩放 2.00（逻辑 1440x900）
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+registered 15/15 global hotkeys
+笔迹优化器: 未装（纯底层，画原始采样点）
+
+=== 穿透真机测试（合成真实点击，看下层窗口收不收到）===
+  对照：不穿透                     下层窗口收到点击: 否   文档预期: 否   PASS   （对照组）
+  只改命中测试返回值                  下层窗口收到点击: 否   文档预期: 否   PASS
+  只加 WS_EX_TRANSPARENT       下层窗口收到点击: 否   文档预期: 否   PASS
+  加 LAYERED+TRANSPARENT      下层窗口收到点击: 否   文档预期: 是   FAIL
+  结论: 1 项与文档不符
+shutdown complete

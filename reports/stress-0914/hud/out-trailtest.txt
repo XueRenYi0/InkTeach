@@ -1,0 +1,17 @@
+virtual desktop: 2880x1800 at (0,0)
+帧延迟等待对象: 已启用
+overlay on monitor 65537: 2880x1800 at (0,0) dpi=192
+委托墨迹轨迹(InkTrail): 可用
+DPI 缩放 2.00（逻辑 1440x900）
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+registered 15/15 global hotkeys
+笔迹优化器: 未装（纯底层，画原始采样点）
+
+=== 委托墨迹轨迹测试（关掉自己画的湿墨）===
+  接口状态: 可用
+  按住不放时笔迹像素: 344（这些只能是系统合成器画的）
+  松手之后笔迹像素  : 344（我们自己的笔画接管）
+  轨迹调试          : 
+  截图: D:\文件集中\code\批注\reports\shots\trail-while-down.bmp
+  FAIL: 没看到系统画的轨迹
+shutdown complete

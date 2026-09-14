@@ -1,0 +1,27 @@
+virtual desktop: 2880x1800 at (0,0)
+帧延迟等待对象: 已启用
+overlay on monitor 65537: 2880x1800 at (0,0) dpi=192
+委托墨迹轨迹(InkTrail): 可用
+DPI 缩放 2.00（逻辑 1440x900）
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+registered 15/15 global hotkeys
+笔迹优化器: 未装（纯底层，画原始采样点）
+
+=== 编辑命令自检（复制 / 删除 / 翻转 / 旋转）===
+    复制新增对象                  PASS  2 -> 4
+    复制只记一步                  PASS  2 -> 3
+    选中切到副本                  PASS  
+    副本是新身份                  PASS  1 -> 3
+    撤销复制                    PASS  2
+    左右翻转：包围盒不变              PASS  
+    翻转后行列式为负                PASS  
+    撤销翻转回原位                 PASS  MinX 300.00 vs 300.00
+    旋转 90°：宽高互换             PASS  38.0×57.0
+    删除选中                    PASS  2 -> 1
+    撤销删除                    PASS  2
+    操作条在选中框下方               PASS  间距 28px
+    每个按钮都能点中                PASS  
+    框外不误判                   PASS  
+
+  PASS: 编辑命令与操作条命中都正确
+shutdown complete

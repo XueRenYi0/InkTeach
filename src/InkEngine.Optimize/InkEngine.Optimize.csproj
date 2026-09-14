@@ -31,7 +31,7 @@
   <!-- 开发期宿主要能直接构造优化器做自检（beautifytest 等模式）。 -->
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
-      <_Parameter1>InkProbe</_Parameter1>
+      <_Parameter1>InkTeach</_Parameter1>
     </AssemblyAttribute>
   </ItemGroup>
 

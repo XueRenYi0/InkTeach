@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-// Measures the memory floor of a bare .NET desktop process, so the InkProbe
+// Measures the memory floor of a bare .NET desktop process, so the InkTeach
 // numbers can be split into "runtime overhead" vs "our own graphics stack".
 var p = Process.GetCurrentProcess();
 p.Refresh();

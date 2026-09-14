@@ -1,0 +1,22 @@
+virtual desktop: 2880x1800 at (0,0)
+帧延迟等待对象: 已启用
+overlay on monitor 65537: 2880x1800 at (0,0) dpi=192
+委托墨迹轨迹(InkTrail): 可用
+DPI 缩放 2.00（逻辑 1440x900）
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+registered 15/15 global hotkeys
+笔迹优化器: 未装（纯底层，画原始采样点）
+
+=== 保存 / 加载往返自检 ===
+    格式头可识别                PASS  836 字节
+    每对象体积合理               PASS  418 字节/对象
+    对象数量                  PASS  2
+    加载后撤销栈为空              PASS  0
+    逐字段一致                 PASS  含变换、颜色、压感、时间
+    新对象 id 不撞车            PASS  新 3 > 旧最大 2
+    乱数据抛异常                PASS  
+    截断数据抛异常               PASS  
+    失败时文档未被动过             PASS  0 个对象
+
+  PASS: 保存/加载往返正确
+shutdown complete

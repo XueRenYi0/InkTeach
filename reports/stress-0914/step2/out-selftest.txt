@@ -1,0 +1,42 @@
+virtual desktop: 2880x1800 at (0,0)
+帧延迟等待对象: 已启用
+overlay on monitor 65537: 2880x1800 at (0,0) dpi=192
+委托墨迹轨迹(InkTrail): 可用
+DPI 缩放 2.00（逻辑 1440x900）
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+registered 15/15 global hotkeys
+笔迹优化器: 未装（纯底层，画原始采样点）
+
+=== self test ===
+drawing a synthetic stroke across the primary monitor...
+[   0.1s] fps=  0.0 记录=15.67 上屏= 1.33 HUD= 6.29 统计= 5.54 合计= 28.83ms 置顶= 0.00ms 脏区=0块/100.0% ws=  86.4MB
+PASS: overlay pixels verified on screen (16294 matching pixels)
+
+running the 10k-stroke benchmark...
+
+=== benchmark: 10000 strokes ===
+  generate      :     89.3 ms
+  build geometry:     45.7 ms  (0.005 ms/stroke)
+  full rebuild  :    327.0 ms  (rasterise 10000 strokes onto the content layer)
+  points total  : 194797
+  working set   : 277.0 MB
+
+laser stress: forcing a continuous 120 Hz trail...
+[   1.6s] fps= 35.2 记录= 1.30 上屏= 3.81 HUD= 0.11 统计= 0.11 合计=  5.33ms 置顶= 0.08ms 脏区=0块/100.0% ws= 277.0MB
+[   2.6s] fps=117.3 记录= 2.54 上屏= 6.40 HUD= 0.12 统计= 0.12 合计=  9.19ms 置顶= 0.27ms 脏区=0块/100.0% ws= 278.0MB
+[   3.6s] fps=103.5 记录= 2.59 上屏= 6.09 HUD= 0.14 统计= 0.14 合计=  8.95ms 置顶= 0.14ms 脏区=0块/100.0% ws= 278.3MB
+
+--- summary ---
+  rendering verified : rendering verified
+  fps                : 101.8
+  record per frame   : 2.50 ms
+  present per frame  : 1.80 ms
+  full rebuild       : 0.0 ms
+  working set        : 278.6 MB
+  peak working set   : 278.5 MB
+
+[   4.6s] fps=102.6 记录= 2.59 上屏= 6.80 HUD= 0.16 统计= 0.16 合计=  9.70ms 置顶= 0.15ms 脏区=0块/100.0% ws= 278.5MB
+[   5.7s] fps=  5.1 记录= 2.07 上屏= 0.30 HUD= 1.66 统计= 1.64 合计=  5.68ms 置顶= 0.17ms 脏区=0块/100.0% ws= 278.7MB
+[   6.7s] fps=  3.9 记录= 1.84 上屏= 0.26 HUD= 2.83 统计= 2.80 合计=  7.73ms 置顶= 0.09ms 脏区=0块/100.0% ws= 278.8MB
+[   8.0s] fps=  4.0 记录= 1.83 上屏= 0.22 HUD= 1.52 统计= 1.50 合计=  5.07ms 置顶= 0.15ms 脏区=0块/100.0% ws= 278.8MB
+shutdown complete

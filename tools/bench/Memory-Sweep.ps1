@@ -5,7 +5,7 @@
   三个程序各跑一次同样的脚本、同样的动作，把三份 CSV 叠在一张图上比。
 
   用法：
-    pwsh tools/bench/Memory-Sweep.ps1 -ProcessName InkProbe -Seconds 60 `
+    pwsh tools/bench/Memory-Sweep.ps1 -ProcessName InkTeach -Seconds 60 `
          -Out reports/sweep-inkprobe.csv
 
   为什么这么写（都是踩过的坑）：
