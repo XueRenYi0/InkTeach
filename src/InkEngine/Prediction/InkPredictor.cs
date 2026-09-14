@@ -35,12 +35,23 @@ internal sealed class InkPredictor
 
     /// <summary>预测地平线（毫秒）。默认 10，允许 8~15。</summary>
     public double HorizonMs { get; set; } = 10.0;
-    /// <summary>整体阻尼：预测位移乘这个系数。</summary>
-    public float Damping { get; set; } = 0.7f;
+    /// <summary>
+    /// 整体阻尼：预测位移乘这个系数。
+    /// 0.80 是**用真实笔迹数据扫出来的**（UCI Character Trajectories，48.7 万个采样点，
+    /// 见 测试-压感与预测.md 与 `--predictdata`）：在"最坏 1% 情形下超前不超过 0.8 倍滞后"
+    /// 这个约束里，它把平均滞后吃掉了 56%，而阻尼 1.0 只多 6 个点却把最坏超前拉到 1.3 倍。
+    /// </summary>
+    public float Damping { get; set; } = 0.8f;
     /// <summary>加速度项衰减。</summary>
     public float AccelDamping { get; set; } = 0.4f;
     /// <summary>低于这个速度（px/ms）不预测。</summary>
     public float MinSpeed { get; set; } = 0.02f;
+    /// <summary>
+    /// 速度平滑强度（0 = 不平滑）。速度是差分出来的，真实手写里抖得厉害；
+    /// Chromium 也把 filter 单独做了一层（`one_euro_filter`）。
+    /// 这里的取值是用真实数据扫出来的，见 测试-压感与预测.md。
+    /// </summary>
+    public float VelocitySmoothing { get; set; } = 0f;
     /// <summary>预测段相对最后一点的最大位移（px）。</summary>
     public float MaxDistance { get; set; } = 12f;
     /// <summary>相邻采样间隔超过这个值就当断笔。</summary>
@@ -61,6 +72,9 @@ internal sealed class InkPredictor
     private float _px, _py;         // 上一次的速度（算加速度用）
     private float _ax, _ay;         // 加速度（px/ms²）
     private bool _hasPrevVelocity;
+
+    /// <summary>预测点的时间偏移（复用，避免每帧分配）。</summary>
+    private readonly double[] _taus = new double[8];
 
     /// <summary>最近一次算出来的速度大小（诊断/测试用）。</summary>
     public float Speed => MathF.Sqrt(_vx * _vx + _vy * _vy);
@@ -93,12 +107,25 @@ internal sealed class InkPredictor
         if (dt <= 0f) return;              // 同一时刻的两个点，速度无从谈起
 
         _px = _vx; _py = _vy;
-        _vx = (_x2 - _x1) / dt;
-        _vy = (_y2 - _y1) / dt;
+        float rawVx = (_x2 - _x1) / dt;
+        float rawVy = (_y2 - _y1) / dt;
+        // 速度平滑：只有不是第一个速度（_hasPrevVelocity）时才和上一次平滑值混合，
+        // 否则起笔那一下会被 0 拖慢。
+        float s = Math.Clamp(VelocitySmoothing, 0f, 0.9f);
+        if (s > 0f && _hasPrevVelocity)
+        {
+            _vx = rawVx * (1f - s) + _vx * s;
+            _vy = rawVy * (1f - s) + _vy * s;
+        }
+        else
+        {
+            _vx = rawVx;
+            _vy = rawVy;
+        }
 
         // 反向/急转：速度与上一次方向相反 → 丢掉速度和加速度，
         // 宁可这一帧不预测，也不要在拐弯处甩出去一截。
-        if (_hasPrevVelocity && (_vx * _px + _vy * _py) < 0f)
+        if (_hasPrevVelocity && (rawVx * _px + rawVy * _py) < 0f)
         {
             _vx = _vy = 0f;
             _ax = _ay = 0f;
@@ -139,16 +166,26 @@ internal sealed class InkPredictor
         }
         if (interval <= 0) interval = 8.0;
 
-        int want = (int)Math.Floor(horizon / interval);
-        if (want < 1) want = 1;                          // 至少给一点，否则等于没开
-        if (want > MaxPoints) want = MaxPoints;
-        if (want > outPoints.Length) want = outPoints.Length;
+        // 预测点按采样间隔铺开，**最后一点必须落在正地平线上**：
+        // 只铺到"离地平线最近的那个整数倍"会白白少补一截——
+        // 实测（真实笔迹数据，见 测试-压感与预测.md）：5 ms 采样 + 8 ms 地平线时，
+        // 只铺到 5 ms 的话"吃到"只有 40%，补上 8 ms 那一点之后才吃满。
+        int cap = Math.Min(Math.Min(MaxPoints, outPoints.Length), _taus.Length);
+        int steps = (int)Math.Floor(horizon / interval);
+        if (steps < 0) steps = 0;
+        if (steps > cap) steps = cap;
 
-        for (int i = 1; i <= want; i++)
+        int count = 0;
+        for (int i = 1; i <= steps; i++) _taus[count++] = interval * i;
+        if (count == 0 || horizon - _taus[count - 1] > 1e-6)
         {
-            double tau = interval * i;
-            if (tau > horizon) break;
+            if (count < cap) _taus[count++] = horizon;
+            else if (count > 0) _taus[count - 1] = horizon;
+        }
 
+        for (int i = 0; i < count; i++)
+        {
+            double tau = _taus[i];
             float t = (float)tau;
             float dx = _vx * t * Damping + 0.5f * _ax * t * t * AccelDamping;
             float dy = _vy * t * Damping + 0.5f * _ay * t * t * AccelDamping;
@@ -160,14 +197,14 @@ internal sealed class InkPredictor
                 dx *= k; dy *= k;
             }
 
-            outPoints[i - 1] = new PredictedPoint
+            outPoints[i] = new PredictedPoint
             {
                 X = _x2 + dx,
                 Y = _y2 + dy,
                 TimeMs = _t2 + tau,
             };
         }
-        return want;
+        return count;
     }
 
     /// <summary>地平线/参数越界时收进合法范围（命令行传进来的值也走这里）。</summary>
