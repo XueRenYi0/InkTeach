@@ -44,5 +44,5 @@ MIT 是宽松许可：可以商用、可以闭源，只需保留版权与许可�
 
 | 项目 | 许可证 | 用在哪 |
 |---|---|---|
-| `steveruizok/perfect-freehand` | MIT | 笔锋算法（`src/InkEngine.Optimize/` 里是按其思路重写的实现） |
+| `steveruizok/perfect-freehand` | MIT | 只读过思路（曾经按它重写过笔锋，那一层已于 2026-09-14 整层删除，代码未留） |
 | `Inkeys` | **GPL-3.0** | **只读过思路，没有复制任何代码**（GPL 有传染性，不能进闭源产品） |

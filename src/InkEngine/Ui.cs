@@ -121,7 +121,6 @@ public interface IEngineCommands
     void SetTool(Tool tool);
     void SetColor(Color4 color);
     void SetWidth(float logicalPx);
-    void SetPenPreset(PenPreset preset);
     void Undo();
     void Redo();
     void Clear();
@@ -132,32 +131,6 @@ public interface IEngineCommands
     /// </summary>
     void SetBoard(bool on);
     void Quit();
-}
-
-/// <summary>
-/// 笔锋预设。参数取自 perfect-freehand 的官方 demo 默认值
-/// （size=16, thinning=0.5, streamline=0.5, smoothing=0.5, taper=0），
-/// 再按"老师上课"的两种主要用途分成几档。
-///
-/// 注意：默认值里 **taper = 0**，也就是不做起收笔渐细。渐细是很强的效果，
-/// 用多了会让粗笔难看、短线变形，所以它只出现在"书法"那一档里。
-/// </summary>
-public enum PenPreset
-{
-    /// <summary>手写美化（默认）：轻微速度感，不做渐细。写字用这个。</summary>
-    Handwriting = 0,
-
-    /// <summary>
-    /// 精确：等宽、不做任何美化。画线段、箭头、几何图形用这个。
-    /// 画直线时"速度→粗细"会让线看起来歪歪扭扭，所以这里全部关掉。
-    /// </summary>
-    Precise = 1,
-
-    /// <summary>粗笔：给粗笔迹用的，刻意压低速度感——粗笔上任何起伏都被放大。</summary>
-    Bold = 2,
-
-    /// <summary>书法：起收笔明显渐细，笔锋最强。写大字、做示范用。</summary>
-    Calligraphy = 3,
 }
 
 /// <summary>课堂常用色。界面直接拿它画色板，保证多套界面配色一致。</summary>
@@ -190,14 +163,13 @@ public static class InkPalette
 /// <summary>引擎状态的只读快照，界面拿来显示。</summary>
 public readonly struct UiState
 {
-    public UiState(Tool tool, Color4 color, Color4 paletteBase, float width, PenPreset preset,
+    public UiState(Tool tool, Color4 color, Color4 paletteBase, float width,
                    bool passThrough, bool board, int undoDepth, int redoDepth, int strokeCount)
     {
         Tool = tool;
         Color = color;
         PaletteBase = paletteBase;
         Width = width;
-        Preset = preset;
         PassThrough = passThrough;
         Board = board;
         UndoDepth = undoDepth;
@@ -214,7 +186,6 @@ public readonly struct UiState
     /// </summary>
     public Color4 PaletteBase { get; }
     public float Width { get; }
-    public PenPreset Preset { get; }
     public bool PassThrough { get; }
     /// <summary>是否处于白板模式（画布有不透明底色）。</summary>
     public bool Board { get; }

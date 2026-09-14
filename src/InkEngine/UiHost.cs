@@ -69,7 +69,6 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetTool(Tool tool) => _engine.SetToolFromUi(tool);
     public void SetColor(Color4 color) => _engine.SetColorFromUi(color);
     public void SetWidth(float logicalPx) => _engine.SetWidthFromUi(logicalPx);
-    public void SetPenPreset(PenPreset preset) => _engine.SetPresetFromUi(preset);
     public void Undo() => _engine.UndoFromUi();
     public void Redo() => _engine.RedoFromUi();
     public void Clear() => _engine.ClearFromUi();

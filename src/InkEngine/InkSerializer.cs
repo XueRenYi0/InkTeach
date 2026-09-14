@@ -39,10 +39,9 @@ internal struct CanvasBlock
 ///      （见计划文档第二十六节），要用它就得再来一套 source generator；
 ///   ③ 这个格式将来要直接塞进剪贴板，字节数组最省事。
 ///
-/// **这一层住在核心里，所以它不知道优化器。** 只存原始采样点和"当时用的预设"，
-/// 轮廓（笔锋）由优化器在加载后重新算——优化器是确定性的，同样输入给同样输出。
-/// 代价是：存的时候装了优化器、打开的时候没装，观感会不一样。这是可接受的；
-/// 反过来把优化结果写进文件才是错的（格式就被可选层绑架了）。
+/// **存的就是原始采样点**：笔迹长什么样完全由采样点 + 笔宽决定
+/// （引擎只有一条画法：中心线 + D2D 原生描边），
+/// 所以文件里不需要、也不该存任何"渲染结果"。
 /// </summary>
 internal static class InkSerializer
 {
@@ -53,10 +52,17 @@ internal static class InkSerializer
     /// 格式版本。**读的时候必须按它分支**：以后加字段就升版本，老文件永远能读。
     /// 否则用户存了一学期的批注会因为一次升级全部打不开。
     /// </summary>
-    public const int FormatVersion = 1;
+    /// <summary>
+    /// 格式版本。读的时候按版本分支，老文件永远能读。
+    ///   · v1：最初的样子；
+    ///   · v2：对象可以带**图像像素**（截图 / 粘贴的图）；
+    ///   · v3：去掉了每条笔画的"笔锋预设"字节（手写美化整层已删除，
+    ///         但读 v1/v2 时仍要把那个字节消费掉，否则后面的字段会错位）。
+    /// </summary>
+    public const int FormatVersion = 3;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
-    public const string ClipboardFormatName = "InkProbe.InkObjects";
+    public const string ClipboardFormatName = "InkTeach.InkObjects";
 
     /// <summary>建议的文件扩展名。</summary>
     public const string FileExtension = ".inkb";
@@ -100,7 +106,6 @@ internal static class InkSerializer
 
         w.Write(s.Color.R); w.Write(s.Color.G); w.Write(s.Color.B); w.Write(s.Color.A);
         w.Write(s.Width);
-        w.Write((byte)s.Preset);
 
         // 变换：6 个数。**绝对不把变换烘焙进点坐标**——存进去的话，
         // 反复保存/打开的缩放会累积误差，而且"放大再缩小"回不到原样。
@@ -109,18 +114,34 @@ internal static class InkSerializer
         w.Write(s.Transform.M31); w.Write(s.Transform.M32);
 
         w.Write(s.Points.Count);
-        if (s.Points.Count == 0) return;
-
-        // 时间戳存"相对第一个点的毫秒偏移"，32 位够用：一笔最长也就几分钟。
-        // 绝对时间戳要 8 字节，占整条点数据的 40%，而渲染根本不用它。
-        double t0 = s.Points[0].T;
-        w.Write(t0);
-        foreach (var p in s.Points)
+        if (s.Points.Count > 0)
         {
-            w.Write(p.X);
-            w.Write(p.Y);
-            w.Write(p.P);
-            w.Write((float)(p.T - t0));
+            // 时间戳存"相对第一个点的毫秒偏移"，32 位够用：一笔最长也就几分钟。
+            // 绝对时间戳要 8 字节，占整条点数据的 40%，而渲染根本不用它。
+            double t0 = s.Points[0].T;
+            w.Write(t0);
+            foreach (var p in s.Points)
+            {
+                w.Write(p.X);
+                w.Write(p.Y);
+                w.Write(p.P);
+                w.Write((float)(p.T - t0));
+            }
+        }
+
+        // ---- v2：图像像素 ----
+        // 有图就写 1 + 尺寸 + 原始 BGRA。**不压缩**：
+        //   · 教室场景里一块截图约 1~3MB，一节课几十张，文件几十兆——可接受；
+        //   · 压缩要引编码器（见 ImageData 的注释：核心不引依赖），
+        //     而"保存"这条路现在还没有界面在用。等真要用的时候，
+        //     格式里已经留好了长度字段，加一层压缩不会破坏兼容。
+        w.Write((byte)(s.Image != null ? 1 : 0));
+        if (s.Image != null)
+        {
+            w.Write(s.Image.Width);
+            w.Write(s.Image.Height);
+            w.Write(s.Image.Bgra.Length);
+            w.Write(s.Image.Bgra);
         }
     }
 
@@ -146,7 +167,7 @@ internal static class InkSerializer
     public static void LoadInto(InkDocument doc, byte[] data)
     {
         if (!LooksLikeInk(data))
-            throw new InvalidDataException("不是 InkProbe 的批注数据（文件头不对）。");
+            throw new InvalidDataException("不是 InkTeach 的批注数据（文件头不对）。");
 
         using var ms = new MemoryStream(data, writable: false);
         using var r = new BinaryReader(ms, System.Text.Encoding.UTF8, leaveOpen: true);
@@ -185,7 +206,7 @@ internal static class InkSerializer
         int maxId = 0;
         for (int i = 0; i < objCount; i++)
         {
-            var s = ReadStroke(r);
+            var s = ReadStroke(r, version);
             if (s.Id > maxId) maxId = s.Id;
             strokes.Add(s);
         }
@@ -194,7 +215,7 @@ internal static class InkSerializer
         doc.ReplaceAll(blocks, strokes, maxId);
     }
 
-    private static Stroke ReadStroke(BinaryReader r)
+    private static Stroke ReadStroke(BinaryReader r, int version)
     {
         var s = new Stroke
         {
@@ -205,7 +226,9 @@ internal static class InkSerializer
 
         s.Color = new Color4(r.ReadSingle(), r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
         s.Width = r.ReadSingle();
-        s.Preset = (PenPreset)r.ReadByte();
+        // v1/v2 在这里还有"笔锋预设"一个字节。那一层已经删了，但**必须读掉**，
+        // 否则后面的变换、点数据全部错位——老文件就打不开了。
+        if (version < 3) r.ReadByte();
 
         s.Transform = new Matrix3x2(
             r.ReadSingle(), r.ReadSingle(),
@@ -215,16 +238,34 @@ internal static class InkSerializer
         int n = r.ReadInt32();
         if (n < 0 || n > 10_000_000)
             throw new InvalidDataException($"笔画点数不合理：{n}。");
-        if (n == 0) return s;
-
-        double t0 = r.ReadDouble();
-        for (int i = 0; i < n; i++)
+        if (n > 0)
         {
-            float x = r.ReadSingle();
-            float y = r.ReadSingle();
-            float p = r.ReadSingle();
-            float dt = r.ReadSingle();
-            s.AddPoint(x, y, p, t0 + dt);
+            double t0 = r.ReadDouble();
+            for (int i = 0; i < n; i++)
+            {
+                float x = r.ReadSingle();
+                float y = r.ReadSingle();
+                float p = r.ReadSingle();
+                float dt = r.ReadSingle();
+                s.AddPoint(x, y, p, t0 + dt);
+            }
+        }
+
+        if (version >= 2)
+        {
+            byte hasImage = r.ReadByte();
+            if (hasImage != 0)
+            {
+                int iw = r.ReadInt32();
+                int ih = r.ReadInt32();
+                int len = r.ReadInt32();
+                // 长度要核对：坏文件里的长度字段会让我们分配几个 G（和 ReadString 同一条教训）。
+                if (iw <= 0 || ih <= 0 || len < 0 || (long)iw * ih * 4 != len)
+                    throw new InvalidDataException($"图像尺寸与像素长度对不上：{iw}×{ih} / {len}。");
+                var pix = r.ReadBytes(len);
+                if (pix.Length != len) throw new InvalidDataException("图像像素数据不完整。");
+                s.Image = ImageData.Adopt(iw, ih, pix, hasAlpha: true);
+            }
         }
         return s;
     }

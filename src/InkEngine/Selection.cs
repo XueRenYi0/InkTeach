@@ -113,6 +113,21 @@ internal static class SelectionHandles
     public const float RotationSnapDegrees = 15f;
 
     /// <summary>
+    /// 不按修饰键时的**软吸附**网格（度）。靠近网格线才吸，其余角度自由。
+    ///
+    /// 网格取 90°（0 / 90 / 180 / 270）：投影上画示意图最常做的就是"摆正"，
+    /// 而 45° 这种角度老师要么用笔画，要么宁可自己转——吸 45° 反而碍事。
+    /// 想要中间角度：Shift 是 15° 硬网格，Alt 是完全自由。
+    /// </summary>
+    public const float RotationSoftSnapDegrees = 90f;
+
+    /// <summary>
+    /// 软吸附的容差（度）。吸住时度数标签会变色，用户知道"是吸上的不是转到的"，
+    /// 所以容差可以给得舒服一点（±3°：投影上写字手抖个两三度很正常）。
+    /// </summary>
+    public const float RotationSoftSnapToleranceDegrees = 3f;
+
+    /// <summary>
     /// 缩放下限。**刻意不为 0**：矩阵一旦退化（行列式为 0）就求不出逆矩阵，
     /// 撤销那一步会静默失效，对象就卡死在缩小状态里回不来了。
     /// </summary>
@@ -149,6 +164,11 @@ internal static class SelectionHandles
 
     /// <summary>
     /// 算当前选区的坐标系。单选跟对象转，多选轴对齐（理由见 SelectionFrame 的注释）。
+    ///
+    /// 范围取 **InkBounds（墨迹范围）而不是 Bounds（中心线）**：框是给眼睛看的，
+    /// 它必须把屏幕上那一坨墨圈住。用中心线的话，笔越宽框越"缩"到墨里面去——
+    /// 64 像素宽的荧光笔选中之后，框的四条边全压在墨上，看着就是错的
+    /// （用户实测反馈）。改成墨迹范围之后，框刚好贴着墨的外沿。
     /// </summary>
     public static SelectionFrame FrameOf(IReadOnlyList<Stroke> sel)
     {
@@ -158,15 +178,15 @@ internal static class SelectionHandles
         if (sel.Count == 1)
         {
             var s = sel[0];
-            return new SelectionFrame { Local = s.Bounds, ToCanvas = s.Transform };
+            return new SelectionFrame { Local = s.InkBounds, ToCanvas = s.Transform };
         }
 
-        // 多选：把每个对象变换后的包围盒并起来，作为轴对齐的框。
+        // 多选：把每个对象变换后的**墨迹**包围盒并起来，作为轴对齐的框。
         var r = RectF.Empty;
         foreach (var s in sel)
         {
-            var one = new SelectionFrame { Local = s.Bounds, ToCanvas = s.Transform };
-            r.Add(one.CanvasAabb);
+            var b = s.WorldInkBounds;
+            if (!b.IsEmpty) r.Add(b);
         }
         return new SelectionFrame { Local = r, ToCanvas = Matrix3x2.Identity };
     }
@@ -206,9 +226,10 @@ internal static class SelectionHandles
     /// </summary>
     public static Matrix3x2 DragMatrix(SelHandle handle, in SelectionFrame f,
                                        Vector2 startPoint, Vector2 currentPoint,
-                                       float dpiScale, bool uniform, bool snapAngle)
+                                       float dpiScale, bool uniform, bool snapAngle,
+                                       bool noSnap = false)
         => DragMatrix(handle, f.Local, f.ToLocalPoint(startPoint), f.ToLocalPoint(currentPoint),
-                      dpiScale, uniform, snapAngle);
+                      dpiScale, uniform, snapAngle, noSnap);
 
     /// <summary>
     /// 点到哪个手柄上了。返回 <see cref="SelHandle.None"/> 表示没点中手柄
@@ -257,6 +278,65 @@ internal static class SelectionHandles
     };
 
     /// <summary>
+    /// 拖动旋转手柄 → 旋转了多少度，以及这个角度**是不是被吸附出来的**。
+    ///
+    /// 三种模式，优先级从高到低：
+    ///   · <paramref name="noSnap"/>（按住 Alt）：完全自由。给"我就要 43°"的人一条路。
+    ///   · <paramref name="gridSnap"/>（按住 Shift）：硬网格 15°，与 Office / Figma 一致。
+    ///   · 默认：**软吸附**——离 90° 的整数倍不足 3° 就吸上去，其余角度原样保留。
+    ///
+    /// 度数是**相对量**（相对按下那一刻），正负按屏幕坐标：正 = 顺时针。
+    /// 相对量是唯一在所有情形下都有意义的数——对象本来可能就转着、多选时每个对象
+    /// 角度还各不相同，显示绝对角度只会让人看不懂。
+    /// </summary>
+    public static float RotationDeltaDegrees(Vector2 center, Vector2 startPoint, Vector2 currentPoint,
+                                             bool gridSnap, bool noSnap, out bool snapped)
+    {
+        float a0 = MathF.Atan2(startPoint.Y - center.Y, startPoint.X - center.X);
+        float a1 = MathF.Atan2(currentPoint.Y - center.Y, currentPoint.X - center.X);
+        float delta = a1 - a0;
+
+        snapped = false;
+        if (gridSnap)
+        {
+            float step = RotationSnapDegrees * MathF.PI / 180f;
+            delta = MathF.Round(delta / step) * step;
+            snapped = true;
+        }
+        else if (!noSnap)
+        {
+            float step = RotationSoftSnapDegrees * MathF.PI / 180f;
+            float nearest = MathF.Round(delta / step) * step;
+            float tol = RotationSoftSnapToleranceDegrees * MathF.PI / 180f;
+            if (MathF.Abs(delta - nearest) <= tol)
+            {
+                delta = nearest;
+                snapped = true;
+            }
+        }
+        return NormalizeDegrees(delta * 180f / MathF.PI);
+    }
+
+    /// <summary>
+    /// 把角度归一化到 (-180, 180]。用户看到的是 -43°，不是 317°；也不是 -0°。
+    /// </summary>
+    public static float NormalizeDegrees(float deg)
+    {
+        deg %= 360f;
+        if (deg > 180f) deg -= 360f;
+        if (deg <= -180f) deg += 360f;
+        return deg;
+    }
+
+    /// <summary>度数标签上的字。四舍五入到整度，并且**不留 -0°**。</summary>
+    public static string FormatDegrees(float deg)
+    {
+        int v = (int)MathF.Round(NormalizeDegrees(deg));
+        if (v == 0) v = 0;                       // -0.4 四舍五入成 -0 → 0
+        return v.ToString(System.Globalization.CultureInfo.InvariantCulture) + "°";
+    }
+
+    /// <summary>
     /// 把"拖着某个手柄从 <paramref name="startPoint"/> 到 <paramref name="currentPoint"/>"
     /// 换算成一个变换矩阵（作用在**选区开始拖动时**的坐标上）。
     ///
@@ -265,7 +345,8 @@ internal static class SelectionHandles
     /// </summary>
     public static Matrix3x2 DragMatrix(SelHandle handle, in RectF startBounds,
                                        Vector2 startPoint, Vector2 currentPoint,
-                                       float dpiScale, bool uniform, bool snapAngle)
+                                       float dpiScale, bool uniform, bool snapAngle,
+                                       bool noSnap = false)
     {
         if (handle == SelHandle.None) return Matrix3x2.Identity;
 
@@ -273,15 +354,8 @@ internal static class SelectionHandles
         {
             var c = new Vector2((startBounds.MinX + startBounds.MaxX) * 0.5f,
                                 (startBounds.MinY + startBounds.MaxY) * 0.5f);
-            float a0 = MathF.Atan2(startPoint.Y - c.Y, startPoint.X - c.X);
-            float a1 = MathF.Atan2(currentPoint.Y - c.Y, currentPoint.X - c.X);
-            float delta = a1 - a0;
-            if (snapAngle)
-            {
-                float step = RotationSnapDegrees * MathF.PI / 180f;
-                delta = MathF.Round(delta / step) * step;
-            }
-            return Matrix3x2.CreateRotation(delta, c);
+            float deg = RotationDeltaDegrees(c, startPoint, currentPoint, snapAngle, noSnap, out _);
+            return Matrix3x2.CreateRotation(deg * MathF.PI / 180f, c);
         }
 
         // 缩放 / 拉伸：对面那个手柄是**不动的锚点**。

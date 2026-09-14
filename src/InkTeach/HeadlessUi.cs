@@ -3,7 +3,7 @@ using Vortice.Direct2D1;
 using Vortice.DirectWrite;
 using Vortice.Mathematics;
 
-namespace InkProbe;
+namespace InkTeach;
 
 /// <summary>
 /// 无界面宿主：不画任何东西、不接受任何点击。

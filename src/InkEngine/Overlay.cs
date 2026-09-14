@@ -51,7 +51,6 @@ internal static class Gfx
     public static ID2D1Factory1 D2DFactory;
     public static ID2D1Device D2DDevice;
     public static IDWriteFactory WriteFactory;
-    public static IDWriteTextFormat HudFormat;
     public static IDXGIAdapter3 Adapter3;
     public static string AdapterInfo = "unknown";
 
@@ -108,8 +107,6 @@ internal static class Gfx
         Mem.Stage("2. 创建 Direct2D 设备之后");
 
         WriteFactory = DWrite.DWriteCreateFactory<IDWriteFactory>(Vortice.DirectWrite.FactoryType.Shared);
-        HudFormat = WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 15f, "zh-CN");
         Mem.Stage("3. 创建 DirectWrite（文字）之后");
     }
 
@@ -118,11 +115,31 @@ internal static class Gfx
         RoundStroke?.Dispose();
         RoundStroke = null;
         WriteFactory?.Dispose();
-        HudFormat?.Dispose();
         D2DDevice?.Dispose();
         D2DFactory?.Dispose();
         Factory?.Dispose();
         Device?.Dispose();
+    }
+
+    /// <summary>
+    /// 把 D3D/DXGI **内部**的缓存缓冲还给系统（<c>IDXGIDevice3::Trim</c>）。
+    ///
+    /// 为什么需要它：显卡驱动会把一批内部缓冲留着复用（提速后续绘制），
+    /// 这些缓冲算在我们的占用里。实测一万笔之后显存 62 → 202 MB，
+    /// 把笔画全删掉、几何全部释放之后**仍然停在 201 MB**——就是这些内部缓冲。
+    /// Trim 让运行时和驱动把这些丢掉；文档明确说它"不改变渲染状态、
+    /// 不影响绘制结果"，代价是之后第一帧要重新分配（有一次性能回落），
+    /// 所以**只在空闲时调**（大删除之后、或者停手一会儿）。
+    /// </summary>
+    public static bool TrimVideoMemory()
+    {
+        try
+        {
+            using var dxgiDevice = Device.QueryInterface<IDXGIDevice3>();
+            dxgiDevice.Trim();
+            return true;
+        }
+        catch { return false; }
     }
 }
 
@@ -134,26 +151,12 @@ internal static class Gfx
 /// </summary>
 internal sealed class OverlayWindow : IDisposable
 {
-    /// <summary>Additive blending gives the laser its glow, but costs GPU time
-    /// on a full-screen surface. Toggle here to compare.</summary>
-    public static bool LaserAdditive = true;
-    /// <summary>Number of age bands the laser trail is batched into (0 = don't draw).</summary>
-    public static int LaserBands = 7;
-
     public static long RebuildCount;
 
-    /// <summary>Render pen strokes as stroked centre-lines instead of filled
-    /// pressure ribbons. Cheaper to tessellate, but no width-from-pressure.</summary>
-    public static bool CenterlineRendering = false;
-    /// <summary>
-    /// 是否用 Direct2D 的几何实现缓存替代每次重新细分。默认开启：
-    /// 实测整层重画快 7 倍、擦除快 3 倍、撤销快 2.2 倍，代价是每个缓存约
-    /// 18 KB（有上限保护，见 Stroke.MaxRealizations）。用 --norealize 关掉。
-    /// </summary>
-    public static bool RealizationEnabled = true;
-    public const float RealizationTolerance = 0.25f;
-
     private ID2D1DeviceContext1 _ctx1;
+
+    /// <summary>帧号（跨窗口共享）：给笔画盖"最近被画过"的时间戳，用来淘汰冷掉的细分缓存。</summary>
+    private static long s_frameNo;
 
     /// <summary>
     /// 画布坐标 → 窗口坐标。**相机在这里生效**：渲染的每一处变换都要用它，
@@ -187,6 +190,30 @@ internal sealed class OverlayWindow : IDisposable
     public int OriginX, OriginY, Width, Height;
     public uint Dpi = 96;
 
+    /// <summary>
+    /// 滚动条的几何（**屏幕坐标**，和 OriginX/Width 同一套）。
+    /// 画和命中判定共用一份，避免"对了绘制、错了拖动"这种一半对一半错的状态。
+    /// </summary>
+    internal struct ScrollBarLayout
+    {
+        /// <summary>滑块中心线（那条细线的位置）。</summary>
+        public float AxisX;
+        /// <summary>轨道上下端。</summary>
+        public float Top, Bottom;
+        /// <summary>滑块顶边、长度，以及可移动的距离。</summary>
+        public float ThumbTop, ThumbLen, MaxTravel;
+        /// <summary>画布范围（比例换算要用）。</summary>
+        public float ExtentMinY, ExtentH;
+
+        /// <summary>
+        /// 指针是否落在"可抓"的范围里。宽度按 grabLogical 放宽（滑块只有 4 像素宽，
+        /// 按 4 像素判定等于点不中），上下各留一点余量，方便一次抓住。
+        /// </summary>
+        public bool HitTest(float screenX, float screenY, float grabLogical, float dpi)
+            => MathF.Abs(screenX - AxisX) <= grabLogical * dpi * 0.5f
+            && screenY >= Top - 6f * dpi && screenY <= Bottom + 6f * dpi;
+    }
+
     /// <summary>When true the window reports HTTRANSPARENT so mouse/pen input
     /// falls through to whatever is underneath.</summary>
     public bool PassThrough;
@@ -202,7 +229,9 @@ internal sealed class OverlayWindow : IDisposable
     /// 绘制 CPU 从 16.5% 涨到 85.7%（单核）、GPU 从 2.9% 涨到 62.9%。
     /// 原因是合成交换链的帧会被 DWM 立刻取走，等待对象几乎不会阻塞，
     /// 失去了垂直同步这层配速。对这种场景 Present(1) 才是正确的节流手段。
-    /// 保留代码与 --latencywait 开关，供将来换设备/换驱动时复测。
+    /// 保留这段代码（默认关闭、已没有命令行开关），供将来换设备/换驱动时复测。
+    /// 2026-09-14：`--latencywait` / `--vblankpace` / `--framestats` / `--bufcount`
+    /// 这几个**只用于对照实验**的开关已删除，结论留在 延时-实测与优化.md。
     /// </summary>
     public static bool LatencyWaitEnabled = false;
     private IDCompositionDevice _dcomp;
@@ -259,13 +288,38 @@ internal sealed class OverlayWindow : IDisposable
     /// <summary>整块后缓冲内容无效（首帧、重建、尺寸变化）时必须全屏重绘一次。</summary>
     private bool _forceFullFrame = true;
 
+    /// <summary>
+    /// 旋转度数标签用的文字格式。**按 DPI 生成**：绘制时的变换只有平移，
+    /// 字号写死 15 就等于"15 物理像素"，200% 缩放下会小一半。
+    /// </summary>
+    private IDWriteTextFormat _readoutFormat;
+    private float _readoutFormatPx;
+
+    // 性能面板：一帧一张缓存位图，文字变了才重画。
+    private ID2D1Bitmap1 _hudTarget, _hudSource;
+    private ID3D11Texture2D _hudBmpTex;
+    private IDWriteTextFormat _hudFormat;
+    private float _hudFormatPx;
+    private int _hudBmpW, _hudBmpH;
+    private string _hudCacheText;
+
     /// <summary>脏区要回溯几帧的临时图元。双缓冲下必须 ≥2，否则会出残影；
     /// 仅用于对照实验，正常运行不要改。</summary>
     public static int TransientHistoryFrames = 2;
     public int LastPresentRectCount;
     public double LastPresentAreaPercent;
-    public const float HudWidth = 1000f;
-    public const float HudHeight = 262f;
+    /// <summary>
+    /// 性能面板的尺寸（**逻辑**像素，按 DPI 放大成物理像素）。
+    ///
+    /// 老版本是写死的 1000×262 物理像素 + 15 号字：在 200% 缩放的屏上，
+    /// 15 物理像素只有 7.5 逻辑像素高——投影上根本看不清（用户原话：看不清）。
+    /// 字号必须跟着 DPI 走，这才是"看得清"的根本原因，不是把框放大就行。
+    /// </summary>
+    public const float HudWidthLogical = 700f;
+    public const float HudHeightLogical = 258f;
+    public const float HudFontLogical = 17f;
+    public const float HudMarginLogical = 12f;
+    public const float HudPadLogical = 10f;
 
     /// <summary>是否成功拿到微软的委托墨迹轨迹接口（进程级探测结果）。</summary>
     public static bool InkTrailAvailable;
@@ -282,11 +336,49 @@ internal sealed class OverlayWindow : IDisposable
     public static bool InkTrailEnabled;
 
     public double LastRebuildMs;
+    /// <summary>上一帧性能面板自己的代价（重排 + 贴图）。面板的代价也要能被质疑。</summary>
+    public double LastHudMs;
+    /// <summary>
+    /// 面板**重排一次**的耗时（只有文字变了才重排，其余帧是 0）。
+    /// 分开报的原因：摊到每帧的均值会把"4 Hz 重排一次"这件事藏起来，
+    /// 而"面板比笔迹还贵"这种印象必须能被解释清楚。
+    /// </summary>
+    public double LastHudRedrawMs;
+    /// <summary>累计重排次数（调用方用它算"每秒重排几次"）。</summary>
+    public long HudRedraws;
+    /// <summary>上一帧走"只补画"路径的块数（诊断）。</summary>
+    public int LastAppendedTiles;
+    /// <summary>累计"补画"块数（诊断）。</summary>
+    public long TotalAppendedTiles;
+    /// <summary>上一帧有多少条新笔画没能走补画路径（诊断）。</summary>
+    public int LastAppendMissed;
     public double LastAppendMs;
     public double LastPatchMs;
     public int LastPatchCount;
     public double LastRecordMs;
     public double LastPresentMs;
+
+    // ---- 延时探针 --------------------------------------------------------
+    // Present 前后的 QPC 时标，以及 DXGI 报告的上屏时刻。见 Latency.cs 的说明：
+    // 前两个是精确值，"上屏时刻"带 ±1 帧不确定度（窗口化合成交换链上，
+    // GetFrameStatistics 给的是"最近一次真正上屏的帧"，不一定正好是这一帧）。
+    public ulong LastPresentStartQpc;
+    public ulong LastPresentEndQpc;
+    public ulong LastDisplayQpc;
+    public bool LastFrameStatsOk;
+    public ulong LastPresentCount;
+    /// <summary>刷新周期（毫秒）。来自 GetFrameStatistics 的刷新计数差，拿不到时按 60Hz 估。</summary>
+    public double RefreshPeriodMs = 1000.0 / 60.0;
+
+    /// <summary>交换链的后缓冲数量：2 是最低延时的常规选择。</summary>
+    public static int BufferCount = 2;
+
+    /// <summary>
+    /// 每帧在渲染之前先 DwmFlush，等到合成边界再抽输入、提交。
+    /// 见 Native.DwmFlush 的说明，以及 README 里延时那一节。
+    /// </summary>
+    public static bool VBlankPaced;
+
     public int LastDrawnStrokes;
     /// <summary>常驻分块数 / 这一帧可见块数 / 分块预算（诊断用）。</summary>
     public int LastTileCount, LastTileVisible, LastTileBudget;
@@ -354,7 +446,7 @@ internal sealed class OverlayWindow : IDisposable
         long exStyle = Native.WS_EX_TOPMOST | Native.WS_EX_TOOLWINDOW
                      | Native.WS_EX_NOACTIVATE | Native.WS_EX_NOREDIRECTIONBITMAP;
 
-        Hwnd = Native.CreateWindowEx(exStyle, className, "InkProbe",
+        Hwnd = Native.CreateWindowEx(exStyle, className, "InkTeach",
             0x80000000L /*WS_POPUP*/, x, y, w, h,
             IntPtr.Zero, IntPtr.Zero, hInstance, IntPtr.Zero);
 
@@ -386,7 +478,7 @@ internal sealed class OverlayWindow : IDisposable
             Format.B8G8R8A8_UNorm,
             false,
             Usage.RenderTargetOutput,
-            2,
+            (uint)Math.Max(2, BufferCount),
             Scaling.Stretch,
             SwapEffect.FlipSequential,
             Vortice.DXGI.AlphaMode.Premultiplied,
@@ -449,6 +541,8 @@ internal sealed class OverlayWindow : IDisposable
         }
         Mem.Stage("5. 接入 DirectComposition 之后");
 
+        // 多线程光栅（官方文档：把路径几何的渲染摊到多个逻辑核上）。
+        // 当年做过 A/B（--mtraster），结论是收益落在噪声里，于是删掉开关、保持默认关。
         _ctx = Gfx.D2DDevice.CreateDeviceContext(DeviceContextOptions.None);
         _ctx1 = _ctx.QueryInterfaceOrNull<ID2D1DeviceContext1>();
         _ctx.SetDpi(96f, 96f);
@@ -525,15 +619,6 @@ internal sealed class OverlayWindow : IDisposable
     {
         var doc = app.Doc;
 
-        // 细分缓存的预算随对象数量收缩。
-        //
-        // 每个缓存约 18KB，而且它是**设备相关的、每条笔画各存一份**，
-        // 所以对象一多它就是内存大头（4096 个 ≈ 72MB）。细分缓存本来就是
-        // "用内存换速度"：对象少的时候这笔买卖划算，几万条的时候会把人拖垮。
-        // 这里按对象数把预算压下来——超预算的笔画退回"每次重新细分"
-        // （FillGeometry），慢一点但内存有上界。
-        Stroke.MaxRealizations = RealizationBudget(doc.Strokes.Count);
-
         if (_tilesVersion != doc.Version)
         {
             if (doc.Dirty.Full)
@@ -541,9 +626,22 @@ internal sealed class OverlayWindow : IDisposable
                 _tiles.MarkAllDirty();
                 _forceFullFrame = true;
             }
+            else if (doc.StructureChangedSinceRender)
+            {
+                // 结构变了（删 / 移 / 撤销 / 清空）：块里"只差几条新笔画"的前提没了，
+                // 挂着的补画清单一律作废，改成整块重画。
+                _tiles.FlushAppendsAsDirty();
+                foreach (var r in doc.Dirty.Rects) _tiles.MarkDirty(r);
+            }
             else
             {
-                foreach (var r in doc.Dirty.Rects) _tiles.MarkDirty(r);
+                // 只增不减：交给"补画"路径——把新笔画记到它覆盖的块上，
+                // 不清空整块。这是"同一页墨迹很多还在写"不卡的关键。
+                // 注意：这时的脏区全部来自新笔画本身，所以不必再 MarkDirty。
+                int missed = 0;
+                foreach (var s in doc.AppendedSinceRender)
+                    if (!_tiles.MarkAppend(s)) missed++;
+                LastAppendMissed = missed;
             }
             _tilesVersion = doc.Version;
         }
@@ -570,6 +668,8 @@ internal sealed class OverlayWindow : IDisposable
 
         RebuildCount += _tiles.RasterizedLastFrame;
         LastRebuildMs = _tiles.RasterMsLastFrame;
+        LastAppendedTiles = _tiles.AppendedLastFrame;
+        TotalAppendedTiles += _tiles.AppendedLastFrame;
         LastPatchMs = _tiles.RasterMsLastFrame;
         LastPatchCount = _tiles.RasterizedLastFrame;
         LastDrawnStrokes = _tiles.StrokesLastFrame;
@@ -590,7 +690,7 @@ internal sealed class OverlayWindow : IDisposable
     /// 块纹理正好是块的大小，所以画出界的部分会被渲染目标自己裁掉，
     /// 不需要额外的裁剪矩形（这也顺带避免了抗锯齿接缝）。
     /// </summary>
-    private int RasterizeTile(ID2D1Bitmap1 target, RectF canvas)
+    private int RasterizeTile(ID2D1Bitmap1 target, RectF canvas, List<Stroke> onlyThese)
     {
         var app = _app;
         var doc = app.Doc;
@@ -598,6 +698,18 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.Target = target;
         _ctx.BeginDraw();
         _ctx.Transform = Matrix3x2.CreateTranslation(-canvas.MinX, -canvas.MinY);
+
+        // 只补画新增的笔画：不清空、不遍历块内原有的笔画。
+        // 内容层"只增不减"（正在写字）时才走这条路，见 SyncTiles 里的判断。
+        if (onlyThese != null)
+        {
+            foreach (var s in onlyThese) DrawStroke(s);
+            _ctx.Transform = Matrix3x2.Identity;
+            var hrAppend = _ctx.EndDraw();
+            _ctx.Target = null;
+            if (hrAppend.Failure) LastError = "tile append EndDraw: " + hrAppend.Description;
+            return onlyThese.Count;
+        }
 
         // Clear() 无视裁剪，用 Copy 混合的填充来"擦"这一块（老规矩）。
         //
@@ -701,27 +813,34 @@ internal sealed class OverlayWindow : IDisposable
     }
 
     /// <summary>
-    /// 细分缓存数量的预算。按对象数分档，把缓存总内存压在几 MB 到几十 MB 之间
-    /// （每个约 18KB）。分档而不是连续公式，是为了让"多少钱换多少内存"一眼能看懂、
-    /// 也便于以后按实测调。
+    /// 旋转度数标签的矩形（**画布坐标**）。抽成独立函数，是因为有两处必须
+    /// 用**同一套几何**：画它，以及把它算进每帧脏区。少算一处，屏幕上就会
+    /// 留一块擦不掉的残影（选中框那一套 UI 已经踩过这个坑）。
+    ///
+    /// 位置贴在旋转手柄外侧（跟着手柄转，和 Figma 一样），并且夹在当前可见
+    /// 画布范围内——选区贴到屏幕边上的时候，标签不会跑到屏幕外面去。
     /// </summary>
-    private static int RealizationBudget(int objectCount)
+    private RectF RotationReadoutRect(in SelectionFrame frame, float dpi)
     {
-        // 目标机器是**4GB 内存的教室机**（而且核显的显存也从这 4GB 里分），
-        // 所以"缓存上限"不能按"这台开发机很快很宽裕"来定。
-        //
-        // 关键在于：细分缓存几乎只在**大范围重画**时才用得上（换分辨率、清空、
-        // 拖一大堆东西）。正常交互时每帧只重画脏区里那几条笔画，几十个缓存
-        // 就够周转了。所以 4096 个（72MB）是明显过量的——那是按"整层重画"
-        // 的最坏情况配的。
-        //
-        // 现在压到约 18MB 封顶，代价是最坏情况下的一次整层重画慢一点
-        // （那是换分辨率/清空这种极少发生的动作），换来的是给 4GB 机器
-        // 省下 50MB 常驻内存。这笔买卖在教室机上划算。
-        if (objectCount <= 10_000) return 1024;    // ≤ 约 18 MB
-        if (objectCount <= 30_000) return 512;     // ≤ 约 9 MB
-        if (objectCount <= 100_000) return 256;    // ≤ 约 4.6 MB
-        return 128;                                // ≤ 约 2.3 MB
+        const float widthLogical = 64f, heightLogical = 30f;
+        var rot = SelectionHandles.CanvasPosition(SelHandle.Rotate, frame, dpi);
+        float w = widthLogical * dpi, h = heightLogical * dpi;
+        float gap = (SelectionHandles.RotateGripLogical * 0.5f + 9f) * dpi;
+
+        float cx = rot.X, cy = rot.Y - gap - h * 0.5f;
+        var r = new RectF
+        {
+            MinX = cx - w * 0.5f, MinY = cy - h * 0.5f,
+            MaxX = cx + w * 0.5f, MaxY = cy + h * 0.5f,
+        };
+
+        var vis = VisibleCanvasRect;
+        float pad = 4f * dpi;
+        if (r.MinX < vis.MinX + pad) { r.MaxX += vis.MinX + pad - r.MinX; r.MinX = vis.MinX + pad; }
+        if (r.MaxX > vis.MaxX - pad) { r.MinX -= r.MaxX - (vis.MaxX - pad); r.MaxX = vis.MaxX - pad; }
+        if (r.MinY < vis.MinY + pad) { r.MaxY += vis.MinY + pad - r.MinY; r.MinY = vis.MinY + pad; }
+        if (r.MaxY > vis.MaxY - pad) { r.MinY -= r.MaxY - (vis.MaxY - pad); r.MaxY = vis.MaxY - pad; }
+        return r;
     }
 
     // ------------------------------------------------------------------
@@ -863,11 +982,11 @@ internal sealed class OverlayWindow : IDisposable
     /// 单位变换（绝大多数对象）走的是原路，一次多余的取/设变换都不做——
     /// 这条路径每帧要给上万个对象跑，不能为了"以后可能用到"先付成本。
     /// </summary>
-    private void DrawStroke(Stroke s, bool allowRealization = true)
+    private void DrawStroke(Stroke s)
     {
         if (s.Transform.IsIdentity)
         {
-            DrawStrokeCore(s, allowRealization);
+            DrawStrokeCore(s);
         }
         else
         {
@@ -875,44 +994,40 @@ internal sealed class OverlayWindow : IDisposable
             // 乘法顺序按 System.Numerics 的约定：先作用左边的。
             var canvasToWindow = _ctx.Transform;
             _ctx.Transform = s.Transform * canvasToWindow;
-            DrawStrokeCore(s, allowRealization);
+            DrawStrokeCore(s);
             _ctx.Transform = canvasToWindow;
         }
 
-        // 画完就丢（--memab 的 A 组）。重建只要 3µs，所以丢得起——
-        // 前提是"丢"真的能让显存降下来，而不是被分配器留着复用。
-        // 这正是这次 A/B 要回答的问题。
-        if (!Stroke.KeepGeometry) s.Release();
     }
 
-    private void DrawStrokeCore(Stroke s, bool allowRealization)
+    private void DrawStrokeCore(Stroke s)
     {
-        if (RealizationEnabled && allowRealization && !s.IsShape)
+        // 图像对象：画的是位图，不是几何。**必须放在最前面**——它和图形一样
+        // 属于"非自由笔迹"，走到下面那条 DrawGeometry 分支就会被描一个矩形边框。
+        if (s.IsImage)
         {
-            var real = s.GetRealization(_ctx1, RealizationTolerance);
-            if (real != null)
-            {
-                // DrawGeometryRealization 定义在 ID2D1DeviceContext1 上
-                //
-                // 注意：几何实现是把局部几何**预先三角化**过的，画的时候整个
-                // 交给 ctx 变换。所以等比缩放没问题，**非等比拉伸会把笔宽一起
-                // 拉扁**。我们选了"拉伸时线宽不变"，所以非等比变换之后必须
-                // 走重建几何那条路（见计划文档 7.1）。
-                _ctx1.DrawGeometryRealization(real, Brush(s.Color));
-                return;
-            }
+            var bmp = s.Image?.GetBitmap(_ctx);
+            if (bmp == null) return;
+            var a = new Vector2(s.Points[0].X, s.Points[0].Y);
+            var b = s.Points.Count > 1
+                ? new Vector2(s.Points[^1].X, s.Points[^1].Y)
+                : a;
+            var dst = new Vortice.RawRectF(MathF.Min(a.X, b.X), MathF.Min(a.Y, b.Y),
+                                           MathF.Max(a.X, b.X), MathF.Max(a.Y, b.Y));
+            // 缩放时用线性插值：最近邻在投影上会让文字边缘全是锯齿（放大看更明显）。
+            _ctx.DrawBitmap(bmp, dst, 1f, Vortice.Direct2D1.InterpolationMode.Linear, null, null);
+            return;
         }
 
         var geo = s.BuildGeometry(Gfx.D2DFactory);
         if (geo == null) return;
-        if (s.IsShape || CenterlineRendering)
-        {
-            _ctx.DrawGeometry(geo, Brush(s.Color), MathF.Max(1f, s.Width), Gfx.Round);
-        }
-        else
-        {
-            _ctx.FillGeometry(geo, Brush(s.Color));
-        }
+        // 两种画法：
+        //   · 单点笔迹 → 几何本身就是一个圆，填充它（零长度的线描边什么都画不出来）；
+        //   · 其余（笔迹的中心线、直线/矩形/椭圆/箭头）→ 统一交给 D2D 描边：
+        //     宽度、圆头端帽、拐角全由它算（2026-09-14 起，我们自己的轮廓代码已删除）。
+        if (s.IsSinglePoint) _ctx.FillGeometry(geo, Brush(s.Color));
+        else _ctx.DrawGeometry(geo, Brush(s.Color), MathF.Max(1f, s.Width), Gfx.Round);
+
     }
 
     // ------------------------------------------------------------------
@@ -922,6 +1037,7 @@ internal sealed class OverlayWindow : IDisposable
     public void RenderFrame(InkEngine app)
     {
         _app = app;
+        s_frameNo++;
 
         // 界面：先布局、该重画就重画一次，拿到这一帧的矩形。
         bool uiVisible = PrepareUi(app);
@@ -931,6 +1047,12 @@ internal sealed class OverlayWindow : IDisposable
         // Direct2D into an error state.
         if (!app.NoContentCache)
             SyncTiles(app);
+
+        // 性能面板先画进自己的缓存位图（必须在绑后缓冲、BeginDraw 之前做）。
+        var swHud = Stopwatch.StartNew();
+        PrepareHud(app);
+        LastHudMs = swHud.Elapsed.TotalMilliseconds;
+        LastHudRedrawMs = _hudRedrewThisFrame ? LastHudMs : 0;
 
         _transientNow = ComputeTransientBounds(app);
         UpdateFrameDirty(app, uiVisible);
@@ -988,17 +1110,22 @@ internal sealed class OverlayWindow : IDisposable
             // 是不是真的由系统合成器画出来了。
             if (app.ActiveStroke != null && !app.SuppressActiveStroke)
             // 正在写的那一笔几何每帧都在变，用实现缓存只会不停重建，反而更慢
-            DrawStroke(app.ActiveStroke, allowRealization: false);
+            DrawStroke(app.ActiveStroke);
 
             DrawSelection(app);
+            DrawCaptureRect(app);
             DrawLaser(app);
-            DrawEraserCursor(app);
+            DrawToolCursor(app);
             DrawMarquee(app);
 
             _ctx.Transform = Matrix3x2.Identity;
 
         if (app.ShowHud)
-            DrawHud(app.HudText);
+        {
+            var swBlit = Stopwatch.StartNew();
+            DrawHud();
+            LastHudMs += swBlit.Elapsed.TotalMilliseconds;
+        }
 
         // 滚动条（样式 B：一根细线）。画在浮动层，不进内容层。
         DrawScrollBar(app);
@@ -1041,15 +1168,18 @@ internal sealed class OverlayWindow : IDisposable
             r.Add(CanvasRectToWindow(b.Inflate(32f)));      // 轨迹有宽度和发光，往外留一点
         }
 
-        if (app.Tool == Tool.Eraser && app.PointerInside)
+        // 自绘的落点反馈（橡皮圆环 / 笔尖环 / 荧光笔圆盘）。它比图形本身大一圈
+        // （描边 + 刻度），脏区要跟着放大，否则快速划过会留下残影。
+        //
+        // 画布坐标 → 窗口坐标必须过 CanvasRectToWindow：圆环跟着笔迹走，
+        // 滚动之后两者才会一致（漏了这一步，滚下去之后圆环就擦不干净）。
+        if (app.DrawnCursor != InkEngine.ToolCursorShape.None)
         {
-            // 橡皮光标比橡皮半径大一圈（描边 + 四个方向的刻度），
-            // 脏区要跟着放大，否则快速划过会留下光标的残影。
-            float rad = app.EraserRadius * 1.3f + 8f;
+            float rad = app.DrawnCursorRadius;
             var c = RectF.Empty;
             c.Add(app.PointerX - rad, app.PointerY - rad);
             c.Add(app.PointerX + rad, app.PointerY + rad);
-            r.Add(c);
+            r.Add(CanvasRectToWindow(c));
         }
 
         if (app.MarqueeActive)
@@ -1059,6 +1189,15 @@ internal sealed class OverlayWindow : IDisposable
             m.Add(app.MqMaxX, app.MqMaxY);
             m = CanvasRectToWindow(m);       // 框选矩形是画布坐标，脏区要窗口坐标
             r.Add(m.Inflate(3f));
+        }
+
+        // 截图取景框：角标比线宽出去一截，多留 4 像素。
+        if (app.CaptureActive)
+        {
+            var m = RectF.Empty;
+            m.Add(app.CapMinX, app.CapMinY);
+            m.Add(app.CapMaxX, app.CapMaxY);
+            r.Add(CanvasRectToWindow(m).Inflate(4f));
         }
 
         // 选中高亮画在浮动层上、不进内容层，所以它的区域必须每帧算进脏区。
@@ -1083,13 +1222,20 @@ internal sealed class OverlayWindow : IDisposable
 
             // 操作条在选中框下方，也必须算进来，否则它自己会留下残影。
             r.Add(CanvasRectToWindow(SelectionHandles.BarRect(sb, dpi).Inflate(4f)));
+
+            // 旋转度数标签贴在旋转手柄外侧，比选中框本身还高出去一截，
+            // 同样必须进脏区；拖动中它每帧都在动，靠 _transientHistory 回溯两帧。
+            if (app.SelRotating)
+                r.Add(CanvasRectToWindow(RotationReadoutRect(frame, dpi).Inflate(3f)));
         }
 
         if (app.ShowHud)
         {
+            // 面板区域每帧都要进脏区：后缓冲里躺着的是两帧前的画面，不重贴就会闪。
+            float m = HudMarginLogical * HudScale;
             var h = RectF.Empty;
-            h.Add(OriginX + 10, OriginY + 10);
-            h.Add(OriginX + 12 + HudWidth + 4, OriginY + 12 + HudHeight + 4);
+            h.Add(OriginX + m - 2, OriginY + m - 2);
+            h.Add(OriginX + m + HudWidthPx + 2, OriginY + m + HudHeightPx + 2);
             r.Add(h);
         }
 
@@ -1230,25 +1376,82 @@ internal sealed class OverlayWindow : IDisposable
 
         // 4) 八个手柄。白底 + 蓝边：深色背景上是白方块显眼，
         //    浅色背景上靠蓝边立住，一套画法两边都成立。
-        float hs = SelectionHandles.VisualSizeLogical * dpi;
-        float radius = hs * 0.28f;
-        Span<SelHandle> all = stackalloc SelHandle[]
         {
-            SelHandle.TopLeft, SelHandle.Top, SelHandle.TopRight, SelHandle.Right,
-            SelHandle.BottomRight, SelHandle.Bottom, SelHandle.BottomLeft, SelHandle.Left,
-        };
-        foreach (var h in all)
-        {
-            var p = SelectionHandles.CanvasPosition(h, frame, dpi);
-            var box = new Vortice.RawRectF(p.X - hs * 0.5f, p.Y - hs * 0.5f,
-                                           p.X + hs * 0.5f, p.Y + hs * 0.5f);
-            var rr = new RoundedRectangle(box, radius, radius);
-            _ctx.FillRoundedRectangle(rr, white);
-            _ctx.DrawRoundedRectangle(rr, _scratch, 1.8f);
+            float hs = SelectionHandles.VisualSizeLogical * dpi;
+            float radius = hs * 0.28f;
+            Span<SelHandle> all = stackalloc SelHandle[]
+            {
+                SelHandle.TopLeft, SelHandle.Top, SelHandle.TopRight, SelHandle.Right,
+                SelHandle.BottomRight, SelHandle.Bottom, SelHandle.BottomLeft, SelHandle.Left,
+            };
+            foreach (var h in all)
+            {
+                var p = SelectionHandles.CanvasPosition(h, frame, dpi);
+                var box = new Vortice.RawRectF(p.X - hs * 0.5f, p.Y - hs * 0.5f,
+                                               p.X + hs * 0.5f, p.Y + hs * 0.5f);
+                var rr = new RoundedRectangle(box, radius, radius);
+                _ctx.FillRoundedRectangle(rr, white);
+                _ctx.DrawRoundedRectangle(rr, _scratch, 1.8f);
+            }
         }
 
         // 5) 操作条。放在下方，理由见 DrawSelectionBar 的注释。
         DrawSelectionBar(b);
+
+        // 6) 旋转度数标签：只在拖旋转手柄的过程中出现。
+        //
+        // 两件事必须同时说清楚："转了多少度"和"这个角度是不是吸出来的"。
+        // 后者靠颜色：吸住时整块变强调色（Figma / Office 也是这个语言）。
+        // 没有这层提示，用户分不清"我自己转到了 90°"和"它替我吸到了 90°"。
+        if (app.SelRotating)
+        {
+            var label = RotationReadoutRect(frame, dpi);
+            var box = new Vortice.RawRectF(label.MinX, label.MinY, label.MaxX, label.MaxY);
+            float pill = (label.MaxY - label.MinY) * 0.5f;
+            var shape = new RoundedRectangle(box, pill, pill);
+            bool snapped = app.SelRotationSnapped;
+
+            _ctx.FillRoundedRectangle(shape, Brush(snapped
+                ? new Color4(accent.R, accent.G, accent.B, 0.96f)
+                : new Color4(1f, 1f, 1f, 0.94f)));
+            _scratch.Color = snapped
+                ? new Color4(1f, 1f, 1f, 0.85f)
+                : new Color4(accent.R, accent.G, accent.B, 0.85f);
+            _ctx.DrawRoundedRectangle(shape, _scratch, 1.5f);
+
+            _scratch.Color = snapped
+                ? new Color4(1f, 1f, 1f, 1f)
+                : new Color4(0.10f, 0.12f, 0.16f, 1f);
+            _ctx.DrawText(SelectionHandles.FormatDegrees(app.SelRotationDegrees),
+                          ReadoutFormat(dpi),
+                          // 注意：Vortice 的 Rect(x, y, width, height) 是"位置 + 尺寸"，
+                          // 不是 (left, top, right, bottom)。写错的话文字会被排到很远的
+                          // 地方去（居中排版时直接跑到屏幕外），看起来就像"字没画出来"。
+                          new Rect(label.MinX, label.MinY,
+                                   label.MaxX - label.MinX, label.MaxY - label.MinY),
+                          _scratch);
+        }
+    }
+
+    /// <summary>
+    /// 度数标签的文字格式（按 DPI 生成并缓存）。
+    ///
+    /// 绘制时的变换只有平移、没有缩放，所以字号写死就等于"物理像素"——
+    /// 15 物理像素在 200% 缩放下只有 7.5 逻辑像素，投影上根本看不清。
+    /// </summary>
+    private IDWriteTextFormat ReadoutFormat(float dpi)
+    {
+        float px = MathF.Max(11f, MathF.Round(15f * dpi));
+        if (_readoutFormat == null || _readoutFormatPx != px)
+        {
+            _readoutFormat?.Dispose();
+            _readoutFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _readoutFormat.TextAlignment = TextAlignment.Center;
+            _readoutFormat.ParagraphAlignment = ParagraphAlignment.Center;
+            _readoutFormatPx = px;
+        }
+        return _readoutFormat;
     }
 
     /// <summary>
@@ -1319,29 +1522,51 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private void DrawScrollBar(InkEngine app)
     {
+        if (!TryScrollBar(app, out var sb)) return;      // 画布只有一屏：没有滚动条
+
+        // 悬停/拖动中：不淡出，而且加粗——"这根线能拖"靠它自己说，
+        // 不靠换光标（手型按规范只能表示链接，四向箭头会被读成缩放）。
+        bool hot = app.ScrollBarHover || app.ScrollBarDragging;
         float dpi = Dpi / 96f;
-        var viewport = new RectF
-        {
-            MinX = OriginX, MinY = OriginY,
-            MaxX = OriginX + Width, MaxY = OriginY + Height,
-        };
+        double idle = (app.NowMs - app.ScrollBarActiveAtMs) / 1000.0;
+        float alpha = hot ? 1f
+                    : idle <= 3.0 ? 1f
+                    : MathF.Max(0f, 1f - (float)((idle - 3.0) / 0.4));
+        if (alpha <= 0.01f) return;
+
+        float w = (hot ? 9f : 4f) * dpi;
+        float x0 = sb.AxisX - w * 0.5f;
+        float r = w * 0.5f;
+
+        // 轨道：极淡，只用来"知道这儿有东西"，不抢视觉
+        _scratch.Color = new Color4(0.50f, 0.52f, 0.55f, (hot ? 0.22f : 0.16f) * alpha);
+        _ctx.FillRoundedRectangle(
+            new RoundedRectangle(new Vortice.RawRectF(x0, sb.Top, x0 + w, sb.Bottom), r, r), _scratch);
+
+        // 滑块：中灰带透明度，浅色深色背景上都立得住
+        _scratch.Color = new Color4(0.47f, 0.49f, 0.53f, (hot ? 0.86f : 0.75f) * alpha);
+        _ctx.FillRoundedRectangle(
+            new RoundedRectangle(new Vortice.RawRectF(x0, sb.ThumbTop, x0 + w, sb.ThumbTop + sb.ThumbLen), r, r),
+            _scratch);
+    }
+
+    /// <summary>
+    /// 滚动条的几何（**屏幕坐标**，和 OriginX/Width 同一套）。
+    /// 画和拖动共用它——两处各算一份，改一处忘一处是这类代码的经典翻车点。
+    /// 返回 false = 现在不该有滚动条（画布只有一屏）。
+    /// </summary>
+    internal bool TryScrollBar(InkEngine app, out ScrollBarLayout l)
+    {
+        l = default;
+        float dpi = Dpi / 96f;
         var extent = app.CanvasExtent;
         float extentH = extent.MaxY - extent.MinY;
-        if (extentH <= Height + 1f) return;             // 画布只有一屏，不需要滚动条
-
-        double idle = (app.NowMs - app.ScrollBarActiveAtMs) / 1000.0;
-        float alpha = idle <= 3.0 ? 1f : MathF.Max(0f, 1f - (float)((idle - 3.0) / 0.4));
-        if (alpha <= 0.01f) return;
+        if (extentH <= Height + 1f) return false;
 
         float top = OriginY + 40f * dpi;
         float bottom = OriginY + Height - 40f * dpi;
         float trackLen = bottom - top;
-        if (trackLen < 40f * dpi) return;
-
-        float w = 4f * dpi;                              // 细线
-        float axisX = OriginX + Width - 8f * dpi;
-        float x0 = axisX - w * 0.5f;
-        float r = w * 0.5f;
+        if (trackLen < 40f * dpi) return false;
 
         // 滑块长度 = 一屏 / 画布总高；位置 = 视口顶在画布里的比例
         float thumbLen = MathF.Max(40f * dpi, trackLen * (Height / extentH));
@@ -1350,18 +1575,19 @@ internal sealed class OverlayWindow : IDisposable
         float frac = extentH - Height > 1f
             ? (viewTop - extent.MinY) / (extentH - Height) : 0f;
         frac = Math.Clamp(frac, 0f, 1f);
-        float thumbY = top + maxTravel * frac;
 
-        // 轨道：极淡，只用来"知道这儿有东西"，不抢视觉
-        _scratch.Color = new Color4(0.50f, 0.52f, 0.55f, 0.16f * alpha);
-        _ctx.FillRoundedRectangle(
-            new RoundedRectangle(new Vortice.RawRectF(x0, top, x0 + w, bottom), r, r), _scratch);
-
-        // 滑块：中灰带透明度，浅色深色背景上都立得住
-        _scratch.Color = new Color4(0.47f, 0.49f, 0.53f, 0.75f * alpha);
-        _ctx.FillRoundedRectangle(
-            new RoundedRectangle(new Vortice.RawRectF(x0, thumbY, x0 + w, thumbY + thumbLen), r, r),
-            _scratch);
+        l = new ScrollBarLayout
+        {
+            AxisX = OriginX + Width - 8f * dpi,
+            Top = top,
+            Bottom = bottom,
+            ThumbTop = top + maxTravel * frac,
+            ThumbLen = thumbLen,
+            MaxTravel = maxTravel,
+            ExtentMinY = extent.MinY,
+            ExtentH = extentH,
+        };
+        return true;
     }
 
     /// <summary>
@@ -1399,84 +1625,29 @@ internal sealed class OverlayWindow : IDisposable
         if (n < 2) return;
 
         double now = app.NowMs;
-        _ctx.PrimitiveBlend = LaserAdditive ? PrimitiveBlend.Add : PrimitiveBlend.SourceOver;
+        // 加法混合：激光要"发光"，叠在深色 PPT 上才有那个感觉。
+        _ctx.PrimitiveBlend = PrimitiveBlend.Add;
 
-        // Diagnostic modes used by the measurement report.
-        if (LaserBands == -1)
+        // 尾巴做成"填充的渐细带子"（越老越细直到消失），读起来像彗星尾——
+        // 这正是激光笔该有的样子。实测：填充一条几何是几十微秒，
+        // 而描边一条几何是毫秒级，所以这里不用描边。
+        using (var glow = BuildTaperedRibbon(pts, 0, n - 1, 13f, 0f))
         {
-            _scratch.Color = new Color4(1f, 0.2f, 0.2f, 0.6f);
-            _ctx.DrawLine(new Vector2(pts[0].X, pts[0].Y), new Vector2(pts[n - 1].X, pts[n - 1].Y), _scratch, 26f);
-            _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
-            return;
-        }
-        if (LaserBands == -2)
-        {
-            _scratch.Color = new Color4(1f, 0.2f, 0.2f, 0.6f);
-            _ctx.FillRectangle(new Vortice.RawRectF(pts[n - 1].X, pts[n - 1].Y, pts[n - 1].X + 20, pts[n - 1].Y + 20), _scratch);
-            _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
-            return;
-        }
-        if (LaserBands == -3)
-        {
-            // Build the same trail geometry but never draw it: isolates the cost
-            // of building a path geometry from the cost of rasterising it.
-            using var g = BuildPolyline(pts, 0, n - 1);
-            _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
-            return;
-        }
-
-        if (LaserBands == 7)
-        {
-            // Measurements say a *stroked* path geometry costs milliseconds per
-            // call no matter how short it is, while a *filled* one costs tens of
-            // microseconds. So the tail is built as a filled ribbon whose width
-            // tapers to nothing at the oldest end - which also reads as a comet
-            // trail, exactly what a laser pointer should look like.
-            using (var glow = BuildTaperedRibbon(pts, 0, n - 1, 13f, 0f))
+            if (glow != null)
             {
-                if (glow != null)
-                {
-                    _scratch.Color = new Color4(1f, 0.16f, 0.16f, 0.45f);
-                    _ctx.FillGeometry(glow, _scratch);
-                }
+                _scratch.Color = new Color4(1f, 0.16f, 0.16f, 0.45f);
+                _ctx.FillGeometry(glow, _scratch);
             }
-
-            int head = Math.Max(1, n / 3);
-            using (var core = BuildTaperedRibbon(pts, n - 1 - head, n - 1, 6f, 0f))
-            {
-                if (core != null)
-                {
-                    _scratch.Color = new Color4(1f, 0.96f, 0.92f, 0.95f);
-                    _ctx.FillGeometry(core, _scratch);
-                }
-            }
-
-            _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
-            return;
         }
 
-        // The trail fades with age. Drawing one line per segment costs one draw
-        // call per point; batching the trail into a handful of age bands keeps
-        // the fade but cuts the draw calls by an order of magnitude.
-        const int bandsMax = 6;
-        int bands = Math.Clamp(LaserBands, 0, bandsMax);
-        if (bands == 0) { _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver; return; }
-        int per = Math.Max(1, (n - 1) / bands);
-        for (int b = 0; b < bands; b++)
+        int head = Math.Max(1, n / 3);
+        using (var core = BuildTaperedRibbon(pts, n - 1 - head, n - 1, 6f, 0f))
         {
-            int start = b * per;
-            int end = Math.Min(n - 1, start + per);
-            if (end <= start) break;
-
-            double age = now - pts[(start + end) / 2].T;
-            float t = (float)Math.Clamp(1.0 - age / LaserTrail.LifetimeMs, 0, 1);
-            if (t <= 0.02f) continue;
-
-            using var geo = BuildPolyline(pts, start, end);
-            _scratch.Color = new Color4(1f, 0.18f, 0.18f, 0.12f * t);
-            _ctx.DrawGeometry(geo, _scratch, 26f);
-            _scratch.Color = new Color4(1f, 0.95f, 0.90f, 0.95f * t);
-            _ctx.DrawGeometry(geo, _scratch, 5f);
+            if (core != null)
+            {
+                _scratch.Color = new Color4(1f, 0.96f, 0.92f, 0.95f);
+                _ctx.FillGeometry(core, _scratch);
+            }
         }
 
         _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
@@ -1539,15 +1710,69 @@ internal sealed class OverlayWindow : IDisposable
         return geo;
     }
 
-    private void DrawEraserCursor(InkEngine app)
+    /// <summary>
+    /// 落点反馈：自己画在浮动层上的"指针"。
+    ///
+    /// 为什么不直接用系统光标：圆环/圆盘要跟着**笔宽**变，还要在深色 PPT 和
+    /// 白色白板上都看得见——系统光标做不到这两点。代价是真光标必须同时藏起来，
+    /// 那份逻辑在引擎里（InkEngine.DrawnCursor / CursorKind.Hidden）。
+    ///
+    /// 画在浮动层还有个好处：它的坐标和笔迹同源，不存在"光标热点偏了一两个
+    /// 像素"的问题——写字时那一两个像素是能感觉出来的。
+    /// </summary>
+    private void DrawToolCursor(InkEngine app)
     {
-        if (app.Tool != Tool.Eraser || !app.PointerInside) return;
+        var shape = app.DrawnCursor;
+        if (shape == InkEngine.ToolCursorShape.None) return;
 
-        float r = app.EraserRadius;
         var c = new Vector2(app.PointerX, app.PointerY);
+        if (shape == InkEngine.ToolCursorShape.Disc)
+        {
+            DrawHighlighterDisc(app, c);
+            return;
+        }
+        if (shape == InkEngine.ToolCursorShape.Dot)
+        {
+            DrawLaserDot(app, c);
+            return;
+        }
 
-        // 中间一层很淡的填充，让"要擦掉的范围"一眼可见。
-        _ctx.FillEllipse(new Ellipse(c, r, r), Brush(new Color4(0.35f, 0.55f, 0.95f, 0.10f)));
+        float outer = app.CursorOuterRadius;
+        float truth = app.Tool == Tool.Eraser
+            ? app.EraserRadius
+            : app.CursorRingTrueRadius;
+        var fill = app.Tool == Tool.Eraser
+            ? new Color4(0.35f, 0.55f, 0.95f, 0.10f)      // 橡皮：淡蓝，"要擦掉这一块"
+            : new Color4(0.35f, 0.55f, 0.95f, 0.06f);     // 笔尖：更淡，不挡视线
+        DrawRingCursor(c, truth, outer, fill);
+    }
+
+    /// <summary>
+    /// 圆环：橡皮的"要擦掉多大一块"、笔的"这一笔多粗"。
+    ///
+    /// 双色描边和四向刻度都是被场景逼出来的：单色圆在白板（浅）和深色 PPT（深）
+    /// 上总有一种看不清；刻度标出圆心，投影上写字手是抖的，得知道落点在哪。
+    ///
+    /// **两个圈**：内圈是**真实笔宽**（"我写出来就这么粗"），外圈是固定尺寸的
+    /// 最小可见范围。只有一个圈时无解：按真实宽度画，细笔看不见；按下限画，
+    /// 细笔的圈比笔迹粗一倍，反而误判。Photoshop 的笔刷光标就是这个做法。
+    /// </summary>
+    private void DrawRingCursor(Vector2 c, float truthR, float outerR, Color4 fill)
+    {
+        float r = MathF.Max(outerR, 1f);
+        bool doubleRing = r - truthR > 1.5f;         // 两个圈差得太近就只画外圈
+
+        // 中间一层很淡的填充，让"范围"一眼可见。
+        _ctx.FillEllipse(new Ellipse(c, r, r), Brush(fill));
+
+        // 内圈：真实笔宽。它才是"这一笔有多粗"的答案。
+        if (doubleRing)
+        {
+            _ctx.FillEllipse(new Ellipse(c, truthR, truthR),
+                             Brush(new Color4(0.35f, 0.55f, 0.95f, 0.16f)));
+            _scratch.Color = new Color4(0.22f, 0.28f, 0.38f, 0.55f);
+            _ctx.DrawEllipse(new Ellipse(c, truthR, truthR), _scratch, 1f);
+        }
 
         // 双色描边：外圈浅、内圈深。单色圆在深色桌面和白色白板上总有一种看不清，
         // 双层描边两种背景上都成立。
@@ -1565,6 +1790,46 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.DrawLine(new Vector2(c.X, c.Y + r - tick * 0.2f), new Vector2(c.X, c.Y + r + tick), _scratch, 1.5f);
     }
 
+    /// <summary>
+    /// 激光笔的落点：一个实心小圆点 + 白色外圈。
+    ///
+    /// 为什么不是圆环：激光是"我说的是这里"，不需要表达范围（它连墨都不留）。
+    /// 白圈是为了在深色背景上也能看见，并且和激光轨迹的红是同一个色系。
+    /// </summary>
+    private void DrawLaserDot(InkEngine app, Vector2 c)
+    {
+        float r = MathF.Max(app.CursorDotRadius, 2f);
+        _ctx.FillEllipse(new Ellipse(c, r + 1f, r + 1f), Brush(new Color4(1f, 1f, 1f, 0.85f)));
+        // 和激光轨迹同色（DrawLaser 里用的就是这组红）
+        _ctx.FillEllipse(new Ellipse(c, r, r), Brush(new Color4(1f, 0.16f, 0.16f, 0.95f)));
+    }
+
+    /// <summary>
+    /// 荧光笔的落点：**一个直径 = 笔宽的实心圆盘**。
+    ///
+    /// 为什么是圆，而不是旧版那根横条（胶囊）：荧光笔画出来的墨迹就是"中心线
+    /// 两侧各半个笔宽 + 两端圆帽"，落笔处本身是一个直径 = 笔宽的圆；单击一下
+    /// 留下的也正是这个圆。横条只在水平方向变宽，竖着画的那一刻和实际墨迹
+    /// 对不上，拖动时看上去像拖着一根尺子。
+    ///
+    /// 填充用荧光笔当前的颜色，落笔前就能看到会画出什么色；描边用和笔/橡皮
+    /// 圆环同一套的双色（浅底、深底上都看得见）。
+    /// </summary>
+    private void DrawHighlighterDisc(InkEngine app, Vector2 c)
+    {
+        // 半径就是半个笔宽——和真正落到屏幕上的墨迹同一个尺寸，不放大也不缩小。
+        float r = MathF.Max(app.HighlighterWidthLogical * app.DpiScale * 0.5f, 2f);
+        var hl = app.HighlighterCurrent;
+
+        _ctx.FillEllipse(new Ellipse(c, r, r), Brush(new Color4(hl.R, hl.G, hl.B, 0.22f)));
+
+        _scratch.Color = new Color4(1f, 1f, 1f, 0.75f);
+        _ctx.DrawEllipse(new Ellipse(c, r + 0.75f, r + 0.75f), _scratch, 1.5f);
+
+        _scratch.Color = new Color4(0.22f, 0.28f, 0.38f, 0.55f);
+        _ctx.DrawEllipse(new Ellipse(c, r - 0.75f, r - 0.75f), _scratch, 1.5f);
+    }
+
     private void DrawMarquee(InkEngine app)
     {
         if (!app.MarqueeActive) return;
@@ -1574,15 +1839,147 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.DrawRectangle(r, _scratch, 1.2f);
     }
 
-    private void DrawHud(string text)
+    /// <summary>
+    /// 截图时拖出来的那个框。
+    ///
+    /// 和框选**刻意画得不一样**：框选是蓝色（"我在选东西"），截图是琥珀色 +
+    /// 四角短角标（"我在取景"）。同一个手势、两套皮肤，用户一眼就知道
+    /// 松手之后会发生什么——这个区分在投影上很值。
+    ///
+    /// 框里面**不填充**：截图要看见底下的内容才知道该取到哪儿。
+    /// </summary>
+    private void DrawCaptureRect(InkEngine app)
     {
-        float w = HudWidth, h = HudHeight;
-        var box = new Vortice.RawRectF(12, 12, 12 + w, 12 + h);
-        _ctx.FillRectangle(box, Brush(new Color4(0.05f, 0.06f, 0.09f, 0.78f)));
+        if (!app.CaptureActive) return;
+        var r = new Vortice.RawRectF(app.CapMinX, app.CapMinY, app.CapMaxX, app.CapMaxY);
+        var accent = new Color4(1f, 0.68f, 0.10f, 1f);      // 琥珀
+
+        _scratch.Color = new Color4(accent.R, accent.G, accent.B, 0.9f);
+        _ctx.DrawRectangle(r, _scratch, 1.6f);
+
+        // 四角角标：长度取短边的 1/6，但夹在 8~28 之间——
+        // 框很小时角标不能糊成一片，很大时也不能细得看不见。
+        float shortSide = MathF.Min(r.Right - r.Left, r.Bottom - r.Top);
+        float len = Math.Clamp(shortSide / 6f, 8f, 28f);
+        float t = 3f;
+        DrawCorner(r.Left, r.Top, len, len, t);
+        DrawCorner(r.Right, r.Top, -len, len, t);
+        DrawCorner(r.Right, r.Bottom, -len, -len, t);
+        DrawCorner(r.Left, r.Bottom, len, -len, t);
+    }
+
+    private void DrawCorner(float x, float y, float dx, float dy, float t)
+    {
+        _scratch.Color = new Color4(1f, 0.68f, 0.10f, 1f);
+        _ctx.DrawLine(new Vector2(x, y), new Vector2(x + dx, y), _scratch, t);
+        _ctx.DrawLine(new Vector2(x, y), new Vector2(x, y + dy), _scratch, t);
+    }
+
+    private float HudScale => Dpi / 96f;
+    public float HudWidthPx => HudWidthLogical * HudScale;
+    public float HudHeightPx => HudHeightLogical * HudScale;
+
+    /// <summary>
+    /// 性能面板的文字格式，**按 DPI 生成并缓存**。
+    ///
+    /// 这是"看不清"的真正原因：渲染时的变换只有平移、没有缩放，字号写死 15
+    /// 就等于 15 物理像素——200% 缩放的屏上只有 7.5 逻辑像素高，投影上糊成一团。
+    /// </summary>
+    private IDWriteTextFormat HudFormat()
+    {
+        float px = MathF.Max(11f, MathF.Round(HudFontLogical * HudScale));
+        if (_hudFormat == null || _hudFormatPx != px)
+        {
+            _hudFormat?.Dispose();
+            _hudFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _hudFormatPx = px;
+        }
+        return _hudFormat;
+    }
+
+    /// <summary>
+    /// 面板进缓存位图。**必须在帧的 BeginDraw 之前调用**——Direct2D 不允许在
+    /// BeginDraw/EndDraw 中间换渲染目标（换了就把设备搞进错误状态，这条踩过）。
+    ///
+    /// 为什么要缓存：老实现是每帧直接排 7 行文字，实测面板自己吃掉 4.3 ms/帧，
+    /// 比它显示的所有东西加起来还贵（笔迹才 2 ms）。文字是 4 Hz 才变的，
+    /// 每帧重排纯属浪费。现在只有文字变了才重排一次，平时只是一次贴图。
+    /// </summary>
+    private void PrepareHud(InkEngine app)
+    {
+        if (!app.ShowHud) { _hudCacheText = null; return; }
+
+        float scale = HudScale;
+        int w = (int)MathF.Ceiling(HudWidthPx), h = (int)MathF.Ceiling(HudHeightPx);
+        EnsureHudBitmap(w, h);
+
+        string text = app.HudText ?? "";
+        _hudRedrewThisFrame = false;
+        if (_hudCacheText == text) return;
+
+        _ctx.Target = _hudTarget;
+        _ctx.BeginDraw();
+        _ctx.Transform = Matrix3x2.Identity;
+        var box = new Vortice.RawRectF(0, 0, w, h);
+        _ctx.FillRectangle(box, Brush(new Color4(0.05f, 0.06f, 0.09f, 0.86f)));
         _scratch.Color = new Color4(0.35f, 0.8f, 1f, 0.9f);
-        _ctx.DrawRectangle(box, _scratch, 1f);
-        _scratch.Color = new Color4(0.92f, 0.96f, 1f, 1f);
-        _ctx.DrawText(text, Gfx.HudFormat, new Rect(24, 20, w - 24, h - 16), _scratch);
+        _ctx.DrawRectangle(new Vortice.RawRectF(0.5f, 0.5f, w - 0.5f, h - 0.5f), _scratch, 1.5f);
+        _scratch.Color = new Color4(0.94f, 0.97f, 1f, 1f);
+        // 注意 Rect 是 (x, y, width, height)，不是 (left, top, right, bottom)。
+        float pad = HudPadLogical * scale;
+        _ctx.DrawText(text, HudFormat(), new Rect(pad, pad * 0.8f, w - pad * 2f, h - pad * 1.6f), _scratch);
+        _ctx.Transform = Matrix3x2.Identity;
+        _ctx.Target = null;
+        var hr = _ctx.EndDraw();
+        if (hr.Failure) LastError = "hud EndDraw: " + hr.Description;
+        _hudCacheText = text;
+        _hudRedrewThisFrame = true;
+        HudRedraws++;
+    }
+
+    private bool _hudRedrewThisFrame;
+
+    private void EnsureHudBitmap(int w, int h)
+    {
+        if (_hudTarget != null && _hudBmpW == w && _hudBmpH == h) return;
+        _hudSource?.Dispose(); _hudTarget?.Dispose(); _hudBmpTex?.Dispose();
+        _hudSource = null; _hudTarget = null; _hudBmpTex = null;
+
+        var desc = new Texture2DDescription
+        {
+            Width = (uint)Math.Max(1, w), Height = (uint)Math.Max(1, h),
+            MipLevels = 1, ArraySize = 1,
+            Format = Format.B8G8R8A8_UNorm,
+            SampleDescription = new SampleDescription(1, 0),
+            Usage = ResourceUsage.Default,
+            BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
+            CPUAccessFlags = CpuAccessFlags.None,
+            MiscFlags = ResourceOptionFlags.None,
+        };
+        _hudBmpTex = Gfx.Device.CreateTexture2D(desc);
+        var pf = new Vortice.DCommon.PixelFormat(Format.B8G8R8A8_UNorm,
+                                                 Vortice.DCommon.AlphaMode.Premultiplied);
+        using (var surface = _hudBmpTex.QueryInterface<IDXGISurface>())
+        {
+            // 一张纹理两个视图：当渲染目标的那张不能同时当绘制源（Direct2D 的规定）。
+            _hudTarget = _ctx.CreateBitmapFromDxgiSurface(surface,
+                new BitmapProperties1(pf, 96f, 96f, BitmapOptions.Target | BitmapOptions.CannotDraw));
+            _hudSource = _ctx.CreateBitmapFromDxgiSurface(surface,
+                new BitmapProperties1(pf, 96f, 96f, BitmapOptions.None));
+        }
+        _hudBmpW = w; _hudBmpH = h;
+        _hudCacheText = null;      // 尺寸变了必须重排
+    }
+
+    /// <summary>把缓存好的面板贴到后缓冲上（帧内调用，代价就是一次位图拷贝）。</summary>
+    private void DrawHud()
+    {
+        if (_hudSource == null) return;
+        float m = HudMarginLogical * HudScale;
+        var dst = new Vortice.RawRectF(m, m, m + _hudBmpW, m + _hudBmpH);
+        _ctx.DrawBitmap(_hudSource, dst, 1f,
+                        Vortice.Direct2D1.InterpolationMode.NearestNeighbor, null, null);
     }
 
     public void Present()
@@ -1614,6 +2011,8 @@ internal sealed class OverlayWindow : IDisposable
         if (useWaitable)
             Native.WaitForSingleObjectEx(_latencyWait, 100, true);
 
+        LastPresentStartQpc = Qpc.Now;
+
         // 脏区太少或太大都不划算：太大不如直接整屏上屏，太少说明这一帧
         // 没什么变化（例如只等垂直同步）。
         if (_presentRects.Count == 0 || _presentRects.Count > 16 || LastPresentAreaPercent > 80.0)
@@ -1629,14 +2028,22 @@ internal sealed class OverlayWindow : IDisposable
         }
 
         sw.Stop();
+        LastPresentEndQpc = Qpc.Now;
         LastPresentMs = sw.Elapsed.TotalMilliseconds;
         if (hr.Failure) LastError = "Present: " + hr.Description;
+
     }
+
 
     public void Dispose()
     {
         _brushes.Clear();
         _scratch?.Dispose();
+        _readoutFormat?.Dispose();
+        _hudFormat?.Dispose();
+        _hudSource?.Dispose();
+        _hudTarget?.Dispose();
+        _hudBmpTex?.Dispose();
         _tiles?.Dispose();
         _backBuffer?.Dispose();
         _ctx?.Dispose();

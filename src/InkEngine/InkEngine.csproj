@@ -23,12 +23,7 @@
        产品代码只走公开的 IOverlayUi / InkEngine 接口）。 -->
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
-      <_Parameter1>InkProbe</_Parameter1>
-    </AssemblyAttribute>
-    <!-- 笔迹优化层是可选组件，它要在核心的内部类型（Stroke / InkPoint / Gfx）
-         上实现 IInkOptimizer，所以需要看到内部成员。核心反过来不认识它。 -->
-    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
-      <_Parameter1>InkEngine.Optimize</_Parameter1>
+      <_Parameter1>InkTeach</_Parameter1>
     </AssemblyAttribute>
   </ItemGroup>
 

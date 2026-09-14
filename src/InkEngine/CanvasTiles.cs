@@ -89,6 +89,13 @@ internal sealed class CanvasTileCache : IDisposable
         public bool Dirty = true;
         /// <summary>最后一次"被看到"的帧号，用于淘汰。</summary>
         public long LastFrame;
+
+        /// <summary>
+        /// 还没画上去的**新笔画**。内容层只增不减时（正在写字），把这几条补画到
+        /// 现有画面上就行，不必清空整块重画——重画一块的代价与该块里的笔画条数
+        /// 成正比，而"再画一笔"的代价应当只有一笔。
+        /// </summary>
+        public readonly List<Stroke> Appended = new();
     }
 
     private readonly Dictionary<long, Tile> _tiles = new();
@@ -108,6 +115,8 @@ internal sealed class CanvasTileCache : IDisposable
     public int StrokesLastFrame { get; private set; }
     /// <summary>累计光栅化块数（含重复）。</summary>
     public long RasterizedTotal { get; private set; }
+    /// <summary>上一帧走"只补画"路径的块数（诊断）。</summary>
+    public int AppendedLastFrame { get; private set; }
     /// <summary>累计淘汰块数。</summary>
     public long EvictedTotal { get; private set; }
 
@@ -139,13 +148,49 @@ internal sealed class CanvasTileCache : IDisposable
         if (canvasRect.IsEmpty) return;
         for (int ty = FirstIdx(canvasRect.MinY); ty <= LastIdx(canvasRect.MaxY); ty++)
             for (int tx = FirstIdx(canvasRect.MinX); tx <= LastIdx(canvasRect.MaxX); tx++)
-                if (_tiles.TryGetValue(Key(tx, ty), out var tile)) tile.Dirty = true;
+                if (_tiles.TryGetValue(Key(tx, ty), out var tile))
+                {
+                    tile.Dirty = true;
+                    tile.Appended.Clear();      // 整块都要重画了，补画清单作废
+                }
     }
 
     /// <summary>整层作废（清空、换底色、换分辨率）。纹理留着复用，只置脏。</summary>
     public void MarkAllDirty()
     {
-        foreach (var t in _tiles.Values) t.Dirty = true;
+        foreach (var t in _tiles.Values) { t.Dirty = true; t.Appended.Clear(); }
+    }
+
+    /// <summary>
+    /// 新增一条笔画：只记"补画这一条"，**不清空整块**。
+    ///
+    /// 只记到**已经存在且不脏**的块上：不存在的块新建时就是脏的、会整块画；
+    /// 已经脏的块反正要整块重画，再记一次会画两遍。
+    /// </summary>
+    public bool MarkAppend(Stroke s)
+    {
+        var b = s.PaddedBounds;
+        if (b.IsEmpty) return false;
+        bool any = false;
+        for (int ty = FirstIdx(b.MinY); ty <= LastIdx(b.MaxY); ty++)
+            for (int tx = FirstIdx(b.MinX); tx <= LastIdx(b.MaxX); tx++)
+                if (_tiles.TryGetValue(Key(tx, ty), out var tile) && !tile.Dirty)
+                {
+                    tile.Appended.Add(s);
+                    any = true;
+                }
+        return any;
+    }
+
+    /// <summary>
+    /// 把还没画的补画清单作废，改成整块重画。
+    /// **结构一变（删、移、撤销、清空）就必须调用**：那些块现在的内容已经
+    /// 不是"只差几条新笔画"了，继续往旧画面上补笔会留下早就该消失的墨。
+    /// </summary>
+    public void FlushAppendsAsDirty()
+    {
+        foreach (var t in _tiles.Values)
+            if (t.Appended.Count > 0) { t.Appended.Clear(); t.Dirty = true; }
     }
 
     /// <summary>
@@ -153,12 +198,14 @@ internal sealed class CanvasTileCache : IDisposable
     /// 然后按预算淘汰看不见的旧块。
     /// </summary>
     /// <param name="visibleCanvas">当前视口在画布坐标里的范围。</param>
-    /// <param name="paint">画一块：参数是要画的块目标和它的画布矩形，返回画了几条笔画。</param>
-    public void Sync(in RectF visibleCanvas, Func<ID2D1Bitmap1, RectF, int> paint)
+    /// <param name="paint">画一块：参数是要画的块目标、画布矩形、以及"只补画这些笔画"
+    /// （null = 整块重画），返回画了几条笔画。</param>
+    public void Sync(in RectF visibleCanvas, Func<ID2D1Bitmap1, RectF, List<Stroke>, int> paint)
     {
         _frame++;
         _visible.Clear();
         RasterizedLastFrame = 0;
+        AppendedLastFrame = 0;
         RasterMsLastFrame = 0;
         StrokesLastFrame = 0;
 
@@ -182,10 +229,23 @@ internal sealed class CanvasTileCache : IDisposable
                 if (tile.Dirty)
                 {
                     var sw = Stopwatch.StartNew();
-                    StrokesLastFrame += paint(tile.Target, RectOf(tx, ty));
+                    StrokesLastFrame += paint(tile.Target, RectOf(tx, ty), null);
                     sw.Stop();
                     RasterMsLastFrame += sw.Elapsed.TotalMilliseconds;
                     tile.Dirty = false;
+                    tile.Appended.Clear();
+                    RasterizedLastFrame++;
+                    RasterizedTotal++;
+                }
+                else if (tile.Appended.Count > 0)
+                {
+                    // 只补画新笔画：不清空，代价与"新笔画条数"成正比，而不是与块内总数成正比。
+                    var sw = Stopwatch.StartNew();
+                    StrokesLastFrame += paint(tile.Target, RectOf(tx, ty), tile.Appended);
+                    sw.Stop();
+                    RasterMsLastFrame += sw.Elapsed.TotalMilliseconds;
+                    tile.Appended.Clear();
+                    AppendedLastFrame++;
                     RasterizedLastFrame++;
                     RasterizedTotal++;
                 }

@@ -15,6 +15,8 @@ public enum Tool
     Rectangle = 6,
     Ellipse = 7,
     Arrow = 8,
+    /// <summary>截图：拖一个框，把屏幕那一块抓成图像对象。</summary>
+    Capture = 9,
 }
 
 /// <summary>An axis-aligned rectangle in virtual-desktop pixels.</summary>
@@ -147,6 +149,8 @@ internal enum StrokeKind
     Rectangle = 2,
     Ellipse = 3,
     Arrow = 4,
+    /// <summary>图像对象（截图 / 粘贴）。像素挂在 <see cref="Stroke.Image"/> 上。</summary>
+    Image = 5,
 }
 
 internal struct InkPoint
@@ -169,55 +173,15 @@ internal sealed class Stroke
     public ID2D1Geometry Geometry;
 
     /// <summary>
-    /// Direct2D 的"几何实现"（geometry realization）：把几何**细分（三角化）之后**
-    /// 的结果缓存成一个设备相关对象。普通 ID2D1PathGeometry 只是数学描述，
-    /// 每次 FillGeometry 都要重新细分；realization 把这一步做成一次性的，
-    /// 之后每次绘制只是提交已经算好的三角形。
-    /// 注意：它是**设备相关**的，多个窗口（多块屏）时需要各存一份。
+    /// 图像对象的像素（只有 <see cref="StrokeKind.Image"/> 有）。
+    /// **核心只把它当"一块要画上去的图"**，不解释内容、不做解码
+    /// （见 ImageData 的注释：来源是 GDI 截图或剪贴板 CF_DIB，都是 BGRA）。
     /// </summary>
-    public ID2D1GeometryRealization Realization;
+    public ImageData Image;
 
-    public ID2D1GeometryRealization GetRealization(ID2D1DeviceContext1 ctx1, float tolerance)
-    {
-        // 几何一变（正在书写的那一笔会一直变），缓存就必须作废
-        if (Realization != null && _realizationRevision == Revision) return Realization;
-        if (ctx1 == null) return null;
-        if (Realization != null) { Realization.Dispose(); Realization = null; LiveRealizations--; }
+    /// <summary>是不是图像对象。渲染、命中测试、顶点编辑三处都要按它分流。</summary>
+    public bool IsImage => Kind == StrokeKind.Image;
 
-        // 细分缓存每个约 18 KB，必须设上限：超了就退回"每次重新细分"，
-        // 宁可慢一点也不能让内存无上限增长。
-        if (LiveRealizations >= MaxRealizations) return null;
-
-        var geo = BuildGeometry(Gfx.D2DFactory);
-        if (geo == null) return null;
-        try
-        {
-            Realization = ctx1.CreateFilledGeometryRealization(geo, tolerance);
-            if (Realization != null) LiveRealizations++;
-        }
-        catch { Realization = null; }
-        _realizationRevision = Revision;
-        return Realization;
-    }
-
-    private int _realizationRevision = -1;
-
-    /// <summary>当前存活的细分缓存数量与上限（跨所有笔画）。</summary>
-    public static int LiveRealizations;
-    public static int MaxRealizations = 4096;
-
-    /// <summary>
-    /// 几何画完之后是否保留。
-    ///
-    /// **false = 画完立刻释放**（重建一条几何只要 3µs，见 reports/inkprobe-report.txt：
-    /// build geometry 34.5ms / 10000 条）。这是给 --memab 做 A/B 用的开关，
-    /// 回答一个之前没答对的问题：「每条笔画常驻一份几何，到底占不占显存？」
-    ///
-    /// 它和"过几帧再淘汰"有本质区别：那是**反复建销**，会撞上 D2D 分配器的棘轮
-    /// （释放过的块被留着复用，常驻反而更高，这一条我们踩过）。这里是**一次性**
-    /// 释放，之后只有那块被重画时才重建。
-    /// </summary>
-    public static bool KeepGeometry = true;
     /// <summary>
     /// 几何包围盒，**局部坐标**（对象自己的坐标系，不看 Transform）。
     ///
@@ -296,39 +260,6 @@ internal sealed class Stroke
         return box;
     }
 
-    /// <summary>
-    /// 优化器算好的闭合轮廓（虚拟桌面坐标）。**核心不产生它，只在有值时使用。**
-    ///
-    /// 有它就按填充多边形画，笔迹的形状完全由优化器决定（速度→粗细、起收笔
-    /// 渐细、圆头端帽、拐角圆弧，全都体现在这一圈点里）。为 null 时核心画
-    /// 最朴素的样子：原始采样点连成的等宽带子。
-    /// </summary>
-    public Vector2[] Outline;
-
-    /// <summary>
-    /// 优化器写入的逐点宽度（直径，物理像素）。**核心自己不读**，只给自检与
-    /// 调试用。存在笔画自己身上而不是优化器的静态字段里——静态字段会被下一条
-    /// 笔画覆盖，自检就会读到别人的数据（实测栽过，来回查了好几轮）。
-    /// </summary>
-    public float[] BeautifiedWidths;
-
-    /// <summary>
-    /// 笔迹实际可能超出名义笔宽多少（倍数），脏区与命中测试要用。
-    ///
-    /// 默认 1.4：压感把宽度放大到 0.6 + 0.8×P 的上限。优化器装上之后会把它
-    /// 调大一些（圆头端帽、粗糙边缘会让轮廓再往外扩），由优化器自己设置。
-    ///
-    /// 取小了不是"笔迹看着细"，而是**脏区算小、快速书写留下残影**——
-    /// 这类 bug 很显眼又难查，所以宁可留足。
-    /// </summary>
-    public float BoundsInflateFactor = MaxWidthFactor;
-
-    /// <summary>
-    /// 当前使用的笔锋预设。**核心只负责记住它**，怎么解释这个预设是优化器的事
-    /// （核心连 PenPreset 的具体风格都不认识）。没装优化器时它是无意义的。
-    /// </summary>
-    public PenPreset Preset = PenPreset.Precise;
-
     /// <summary>Bumped whenever the shape of this item changes. The cached GPU
     /// geometry is only trusted while it matches, which is what makes "add a
     /// point, redraw" work while a stroke is still being drawn.</summary>
@@ -341,22 +272,34 @@ internal sealed class Stroke
 
     public static long ReleasedGeometries;
 
+    /// <summary>
+    /// 当前**存活**的几何对象数（诊断用）。
+    ///
+    /// 删了东西内存不降时，第一个要问的就是"几何释放了没有"。只有
+    /// ReleasedGeometries（累计释放）看不出这个——累计值是单调涨的，
+    /// 释放了 100 条又新建了 100 条，它照样涨。
+    /// </summary>
+    public static long LiveGeometries;
+
     /// <summary>Releases the cached Direct2D geometry.</summary>
     public void Release()
     {
-        if (Geometry != null) ReleasedGeometries++;
-        Geometry?.Dispose();
-        Geometry = null;
-        if (Realization != null) { Realization.Dispose(); Realization = null; LiveRealizations--; }
+        if (Geometry != null)
+        {
+            ReleasedGeometries++;
+            Geometry.Dispose();
+            Geometry = null;
+            LiveGeometries--;
+        }
+        // 图像对象还挂着一张 D2D 位图（可能很大：一张 800×600 的截图约 2MB）。
+        // 漏掉这一句，"擦掉截图之后内存不降"就是必然的。释放之后再画会按需重建。
+        Image?.Release();
         _builtRevision = -1;
     }
 
     /// <summary>
     /// 深拷贝（复制 / 粘贴用）。**Id 留 0**，由文档入册时分配——
     /// 复制出来的必须是新身份，否则撤销和多选会指向错的对象。
-    ///
-    /// 轮廓（Outline）是共享的，不复制：它是优化器算完就不再改的只读数组，
-    /// 一条笔画几百个点，复制一份只是白白吃内存。
     /// </summary>
     public Stroke Clone()
     {
@@ -366,9 +309,7 @@ internal sealed class Stroke
             Kind = Kind,
             Color = Color,
             Width = Width,
-            Preset = Preset,
             Transform = Transform,
-            BoundsInflateFactor = BoundsInflateFactor,
         };
         // 用 AddPoint 加：它会顺便把 Bounds 和 Revision 收拾好。
         for (int i = 0; i < Points.Count; i++)
@@ -376,8 +317,9 @@ internal sealed class Stroke
             var p = Points[i];
             c.AddPoint(p.X, p.Y, p.P, p.T);
         }
-        c.Outline = Outline;
-        c.BeautifiedWidths = BeautifiedWidths;
+        // 图像像素**共享不复制**：一张截图几兆字节，复制一份纯属浪费；
+        // 而且像素是不可变的（没有任何代码会改它），共享没有风险。
+        c.Image = Image;
         return c;
     }
 
@@ -399,47 +341,100 @@ internal sealed class Stroke
             p.X = x; p.Y = y;
             Points[1] = p;
         }
-        Bounds = RectF.Empty;
-        foreach (var pt in Points) Bounds.Add(pt.X, pt.Y);
+        RecomputeBounds();
         Revision++;
     }
-
-    /// <summary>Swaps in a simplified point list (used by RDP on completion).</summary>
-    public void ReplacePoints(List<InkPoint> points)
-    {
-        Points.Clear();
-        Points.AddRange(points);
-        Bounds = RectF.Empty;
-        foreach (var p in Points) Bounds.Add(p.X, p.Y);
-        Revision++;
-    }
-
-    public float HalfWidthAt(int index)
-    {
-        float w = Width;
-        if (Kind == StrokeKind.Freehand && Points.Count > 1)
-            w = Width * (0.60f + 0.80f * Math.Clamp(Points[index].P, 0f, 1f));
-        return w * 0.5f;
-    }
-
-    /// <summary>Largest width multiplier the pressure curve can produce
-    /// (0.60 + 0.80 * P at P = 1). Anything that reasons about how far a stroke
-    /// can paint - dirty regions above all - has to use this, not the nominal
-    /// half width, or the stroke paints outside its own bounds.</summary>
-    public const float MaxWidthFactor = 1.4f;
 
     /// <summary>
-    /// 脏区与命中测试用的外扩边界。美化后的轮廓可能比"中心线 ± 压力最大半宽"
-    /// 再超出一点（起收笔的圆帽、粗糙边缘），所以取两者里更大的那个系数。
-    /// 取小了会在快速书写时留下残影——这是最容易被忽略、又最显眼的 bug。
+    /// 整批换掉控制点（**图形的定义**从这里改）。
     /// </summary>
+    public void SetPoints(Vector2[] pts)
+    {
+        Points.Clear();
+        for (int i = 0; i < pts.Length; i++)
+            Points.Add(new InkPoint { X = pts[i].X, Y = pts[i].Y, P = 1f, T = 0 });
+        RecomputeBounds();
+        Revision++;
+    }
+
+    /// <summary>只挪一个控制点（顶点拖动走这里，**不动其它点、不动变换**）。</summary>
+    public void SetPoint(int index, Vector2 p)
+    {
+        if (index < 0 || index >= Points.Count) return;
+        var v = Points[index];
+        v.X = p.X; v.Y = p.Y;
+        Points[index] = v;
+        RecomputeBounds();
+        Revision++;
+    }
+
+    /// <summary>包围盒重算。它同时是脏区、命中测试和空间索引的依据，改点之后必须重算。</summary>
+    private void RecomputeBounds()
+    {
+        Bounds = RectF.Empty;
+        foreach (var p in Points) Bounds.Add(p.X, p.Y);
+    }
+
     /// <summary>
     /// 脏区与命中测试用的外扩包围盒（**画布坐标**）。
     /// 在 WorldBounds 基础上再按笔宽外扩——笔迹是画在线两侧的，
     /// 只算中心线包围盒会漏掉边缘，快速书写就留残影。
+    ///
+    /// 外扩量 = 半个笔宽（+2 像素余量）。**2026-09-14 起这个数是精确的**：
+    /// 墨迹现在是"中心线 + 等宽描边 + 圆头圆角"，离中心线最远就是半个笔宽，
+    /// 而端帽/拐角都是半径 = 半宽 的圆弧，不会再多伸出去。
+    /// （以前自己拼轮廓、内角要补到两条内边的交点，最远能到好几倍半宽，
+    /// 那时这个系数必须留得很大——现在就按事实来。）
     /// </summary>
     public RectF PaddedBounds => WorldBounds.Inflate(
-        Width * BoundsInflateFactor * 0.5f + 2f);
+        Width * 0.5f + 2f);
+
+    private RectF _inkBounds = RectF.Empty;
+    private int _inkBoundsRevision = -1;
+
+    /// <summary>
+    /// **墨迹**的包围盒（局部坐标）：中心线往外扩半个笔宽。
+    ///
+    /// 和 <see cref="Bounds"/>（中心线）是两件事。要"这一笔在屏幕上占了多大一块"，
+    /// 必须用它——中心线包围盒对宽笔来说小得离谱：64 像素宽的荧光笔，
+    /// 屏幕上是一条 64 像素宽的带子，而中心线包围盒只是一个点或一条细线。
+    /// **选中框就吃这个数**（以前用中心线，宽笔选中之后框压在墨里面，看着就不对）。
+    ///
+    /// 按 Revision 缓存：选区每帧都要问它，不能每次都遍历点。
+    /// </summary>
+    public RectF InkBounds
+    {
+        get
+        {
+            if (_inkBoundsRevision == Revision) return _inkBounds;
+
+            var r = RectF.Empty;
+            float hw = Width * 0.5f;        // 图像对象 Width = 0，就是它自己的矩形
+            for (int i = 0; i < Points.Count; i++)
+            {
+                r.Add(Points[i].X - hw, Points[i].Y - hw);
+                r.Add(Points[i].X + hw, Points[i].Y + hw);
+            }
+            _inkBounds = r;
+            _inkBoundsRevision = Revision;
+            return r;
+        }
+    }
+
+    /// <summary>
+    /// 墨迹包围盒的**画布坐标**版本（变换四个角取并集，理由同 <see cref="WorldBounds"/>）。
+    /// 多选时的选区框按它并起来。
+    /// </summary>
+    public RectF WorldInkBounds
+    {
+        get
+        {
+            var r = InkBounds;
+            if (r.IsEmpty) return r;
+            if (Transform.IsIdentity) return r;
+            return TransformRect(r, Transform);
+        }
+    }
 
     /// <summary>Distance in pixels from a point to this item's outline.</summary>
     /// <summary>
@@ -494,19 +489,19 @@ internal sealed class Stroke
             p = Vector2.Transform(p, inv);
         }
 
-        if (IsShape)
+        // 图像是"填满的一块矩形"：点在矩形里就算命中，容差往四周扩一点。
+        if (IsImage)
         {
-            // 图形是「描边的中心线」：线宽要算进去；容差靠把线临时加粗来实现——
-            // 于是"橡皮圆碰到这条线"就等价于"点落在加粗了 2r 的线上"，不用自己算距离。
-            //
-            // 注：非等比变换下"线宽不变"还没实现（见计划文档 7.1），这里按局部线宽判定。
-            return geo.StrokeContainsPoint(p, MathF.Max(1f, Width) + tolerance * 2f, Gfx.Round);
+            if (geo.FillContainsPoint(p)) return true;
+            return tolerance > 0f && geo.StrokeContainsPoint(p, tolerance * 2f, Gfx.Round);
         }
 
-        // 自由笔迹是填充的带子：落在里面就算命中；
-        // 容差则等价于"落在轮廓边界附近 tolerance 之内"。
-        if (geo.FillContainsPoint(p)) return true;
-        return tolerance > 0f && geo.StrokeContainsPoint(p, tolerance * 2f, Gfx.Round);
+        // 图形和笔迹现在都是"中心线 + 描边"（笔迹交 D2D 原生描边画，图形本来也是），
+        // 所以命中判定统一走描边：线宽算进去，容差靠把线临时加粗来实现——
+        // 于是"橡皮圆碰到这条线"就等价于"点落在加粗了 2r 的线上"，不用自己算距离。
+        //
+        // 注：非等比变换下"线宽不变"还没实现（见计划文档 7.1），这里按局部线宽判定。
+        return geo.StrokeContainsPoint(p, MathF.Max(1f, Width) + tolerance * 2f, Gfx.Round);
     }
 
     public float DistanceTo(float x, float y)
@@ -528,31 +523,8 @@ internal sealed class Stroke
             if (d2 < best) best = d2;
         }
 
-        // Shapes only store two corners, so their outline is not the segment
-        // between them. Add the real outline distance.
-        if (Kind == StrokeKind.Rectangle || Kind == StrokeKind.Ellipse)
-        {
-            var r = Bounds;
-            if (Kind == StrokeKind.Rectangle)
-            {
-                best = MathF.Min(best, DistToSegmentSq(x, y, r.MinX, r.MinY, r.MaxX, r.MinY));
-                best = MathF.Min(best, DistToSegmentSq(x, y, r.MaxX, r.MinY, r.MaxX, r.MaxY));
-                best = MathF.Min(best, DistToSegmentSq(x, y, r.MaxX, r.MaxY, r.MinX, r.MaxY));
-                best = MathF.Min(best, DistToSegmentSq(x, y, r.MinX, r.MaxY, r.MinX, r.MinY));
-            }
-            else
-            {
-                // Normalised radial distance is a good enough stand-in for the
-                // ellipse outline when deciding "did the eraser touch it".
-                float cx = (r.MinX + r.MaxX) * 0.5f, cy = (r.MinY + r.MaxY) * 0.5f;
-                float rx = MathF.Max(1f, (r.MaxX - r.MinX) * 0.5f);
-                float ry = MathF.Max(1f, (r.MaxY - r.MinY) * 0.5f);
-                float nx = (x - cx) / rx, ny = (y - cy) / ry;
-                float k = MathF.Sqrt(nx * nx + ny * ny) - 1f;
-                float approx = k * MathF.Min(rx, ry);
-                best = MathF.Min(best, approx * approx);
-            }
-        }
+        // 图形（矩形/椭圆/箭头）不走这里：它们的轮廓不是"两个端点之间的线段"，
+        // 近似会偏，命中判定统一走 HitTestExact（见 EraseAt）。
         return MathF.Sqrt(best);
     }
 
@@ -569,20 +541,27 @@ internal sealed class Stroke
     /// <summary>与矩形是否相交（画布坐标）。粗筛用，只看世界包围盒。</summary>
     public bool IntersectsRect(RectF r) => WorldBounds.Intersects(r);
 
-    /// <summary>是否整个落在矩形里（画布坐标）。框选用。</summary>
-    public bool ContainedInRect(RectF r)
-        => !WorldBounds.IsEmpty && WorldBounds.MinX >= r.MinX && WorldBounds.MaxX <= r.MaxX
-        && WorldBounds.MinY >= r.MinY && WorldBounds.MaxY <= r.MaxY;
-
     public bool IsShape => Kind != StrokeKind.Freehand;
+
+    /// <summary>
+    /// 笔迹的墨是"中心线 + 圆头圆角描边"，**由 Direct2D 自己算轮廓**
+    /// （`DrawGeometry` + `Gfx.Round`），我们不再自己拼轮廓。
+    ///
+    /// 2026-09-14：用户实测后拍板——D2D 的观感比我们自己拼的轮廓好，
+    /// 于是**把我们那一套整个删掉**（等宽带子、半圆端帽、外侧圆弧、内角补角、
+    /// 压感→宽度映射，以及为它服务的几何细分缓存）。
+    ///
+    /// 代价（明确接受）：**一条笔画只能有一个宽度**——压感不再影响粗细。
+    /// 采样点上仍然记着压力值（存档、将来要用还拿得到），只是渲染不吃它。
+    /// </summary>
+    public bool IsSinglePoint => Kind == StrokeKind.Freehand && Points.Count == 1;
 
     public ID2D1Geometry BuildGeometry(ID2D1Factory1 factory)
     {
         if (Geometry != null && _builtRevision == Revision) return Geometry;
         if (Points.Count == 0) return null;
 
-        Geometry?.Dispose();
-        Geometry = null;
+        if (Geometry != null) { Geometry.Dispose(); Geometry = null; LiveGeometries--; }
 
         Geometry = Kind switch
         {
@@ -590,8 +569,12 @@ internal sealed class Stroke
             StrokeKind.Ellipse => BuildEllipse(factory),
             StrokeKind.Arrow => BuildArrow(factory),
             StrokeKind.Line => BuildLine(factory),
-            _ => BuildRibbon(factory),
+            StrokeKind.Image => BuildImageRect(factory),
+            // 自由笔迹：只给**中心线**，描边（宽度、端帽、拐角）交给 D2D。
+            // 单点例外——那是一个圆点，几何直接建成圆（渲染那边会填充它）。
+            _ => Points.Count == 1 ? BuildDot(factory) : BuildCenterline(factory),
         };
+        if (Geometry != null) LiveGeometries++;
         _builtRevision = Revision;
         return Geometry;
     }
@@ -661,113 +644,51 @@ internal sealed class Stroke
         return geo;
     }
 
-    /// <summary>
-    /// Freehand strokes become a filled "ribbon": every sample point is offset
-    /// along its normal by half the pressure-scaled width, both sides are joined
-    /// into one closed polygon and filled with the winding rule. That is what
-    /// allows per-point width, and it also stops a translucent highlighter from
-    /// double-darkening where the stroke crosses over itself.
-    /// </summary>
-    /// <summary>
-    /// 这一笔到底画成什么形状。**核心只有二选一**：
-    ///
-    ///   ① 优化器给了闭合轮廓 → 直接按多边形填充，形状完全由优化器决定；
-    ///   ② 没有 → 原始采样点连成的等宽带子，也就是最朴素的样子。
-    ///
-    /// 核心不产生轮廓，也不做平滑或拟合。想改变观感，请装优化器
-    /// （见 InkOptimizer.cs），而不是往这里加算法。
-    /// </summary>
-    private ID2D1Geometry BuildRibbon(ID2D1Factory1 factory)
+    /// <summary>图像对象的矩形几何（命中测试与裁剪用，不做描边）。</summary>
+    private ID2D1PathGeometry BuildImageRect(ID2D1Factory1 factory)
     {
-        if (Outline != null && Outline.Length >= 3)
-            return BuildGeometryFromOutline(factory);
-
-        return BuildRibbonFromPoints(factory);
-    }
-
-    /// <summary>
-    /// 把美化轮廓直接变成填充几何。填充规则用 Winding：
-    /// 这样轮廓自交（比如写连笔时的回环）不会被挖空。
-    /// </summary>
-    private ID2D1Geometry BuildGeometryFromOutline(ID2D1Factory1 factory)
-    {
+        var (a, b) = Endpoints();
         var geo = factory.CreatePathGeometry();
-        using (var sink = geo.Open())
-        {
-            sink.SetFillMode(FillMode.Winding);
-            sink.BeginFigure(Outline[0], FigureBegin.Filled);
-            for (int i = 1; i < Outline.Length; i++) sink.AddLine(Outline[i]);
-            sink.EndFigure(FigureEnd.Closed);
-            sink.Close();
-        }
+        using var sink = geo.Open();
+        sink.SetFillMode(FillMode.Winding);
+        sink.BeginFigure(new Vector2(a.X, a.Y), FigureBegin.Filled);
+        sink.AddLine(new Vector2(b.X, a.Y));
+        sink.AddLine(new Vector2(b.X, b.Y));
+        sink.AddLine(new Vector2(a.X, b.Y));
+        sink.EndFigure(FigureEnd.Closed);
+        sink.Close();
         return geo;
     }
 
     /// <summary>
-    /// 输入是否带真实压感。判据：压力值有没有真的变化过。
-    /// 鼠标和多数触摸屏上报的恒定值（0.5 或 1）会被认成"没有压感"，
-    /// 从而改用速度模拟——这正是我们想要的分支。
+    /// 中心线（开放折线）。**这就是笔迹的几何**：宽度、圆头端帽、拐角全部由
+    /// Direct2D 按描边样式自己算（见 Overlay 里的 `DrawGeometry(..., Gfx.Round)`）。
+    ///
+    /// 2026-09-14：以前这里画的是"我们自己拼的轮廓"（等宽带子 + 半圆端帽 +
+    /// 外侧圆弧 + 内角补角 + 压感宽度），用户实测后认为 D2D 的观感更好，
+    /// 于是整套删掉。
     /// </summary>
-    private bool HasRealPressure()
+    private ID2D1PathGeometry BuildCenterline(ID2D1Factory1 factory)
     {
-        if (Points.Count < 3) return false;
-        float min = float.MaxValue, max = float.MinValue;
-        foreach (var p in Points)
-        {
-            if (p.P < min) min = p.P;
-            if (p.P > max) max = p.P;
-        }
-        return max - min > 0.02f;
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+        sink.BeginFigure(new Vector2(Points[0].X, Points[0].Y), FigureBegin.Hollow);
+        for (int i = 1; i < Points.Count; i++)
+            sink.AddLine(new Vector2(Points[i].X, Points[i].Y));
+        sink.EndFigure(FigureEnd.Open);
+        sink.Close();
+        return geo;
     }
 
     /// <summary>
-    /// 最朴素的画法：把采样点连成一条等宽带子，宽度由压感决定
-    /// （<see cref="HalfWidthAt"/>）。没有优化器时走的就是这一条。
-    ///
-    /// **这里不做任何平滑**：指针报什么坐标就用什么坐标。底层性能测试要的
-    /// 就是这个——量到的数字里不含我们自己加的滤波、抽稀或拟合。
-    ///
-    /// 已知观感问题：相邻两个采样点几乎重合时（鼠标刚按下的那一瞬间经常
-    /// 连报好几个相同坐标），下面的方向会被强行设成水平，轮廓随之在这里
-    /// 冒出一个尖角。这是"起笔处有毛边"最可能的来源，属**底层渲染**的
-    /// 问题，修在这一点即可，不需要开优化器。
+    /// 单点笔迹 = 一个圆点。**不能靠描边**：零长度的线描出来什么都没有，
+    /// 所以直接给一个半径为半个笔宽的圆，渲染那一侧会填充它。
     /// </summary>
-    private ID2D1Geometry BuildRibbonFromPoints(ID2D1Factory1 factory)
+    private ID2D1Geometry BuildDot(ID2D1Factory1 factory)
     {
-        int n = Points.Count;
-        if (n == 1)
-        {
-            float rad = MathF.Max(1f, HalfWidthAt(0));
-            return factory.CreateEllipseGeometry(
-                new Ellipse(new Vector2(Points[0].X, Points[0].Y), rad, rad));
-        }
-
-        var outline = new Vector2[n * 2];
-        for (int i = 0; i < n; i++)
-        {
-            int a = i > 0 ? i - 1 : i;
-            int b = i < n - 1 ? i + 1 : i;
-            float dx = Points[b].X - Points[a].X;
-            float dy = Points[b].Y - Points[a].Y;
-            float len = MathF.Sqrt(dx * dx + dy * dy);
-            if (len < 1e-4f) { dx = 1; dy = 0; len = 1; }
-            dx /= len; dy /= len;
-            float nx = -dy, ny = dx;
-            float hw = HalfWidthAt(i);
-            outline[i] = new Vector2(Points[i].X + nx * hw, Points[i].Y + ny * hw);
-            outline[n * 2 - 1 - i] = new Vector2(Points[i].X - nx * hw, Points[i].Y - ny * hw);
-        }
-
-        var geo = factory.CreatePathGeometry();
-        using (var sink = geo.Open())
-        {
-            sink.SetFillMode(FillMode.Winding);
-            sink.BeginFigure(outline[0], FigureBegin.Filled);
-            for (int i = 1; i < outline.Length; i++) sink.AddLine(outline[i]);
-            sink.EndFigure(FigureEnd.Closed);
-            sink.Close();
-        }
-        return geo;
+        float rad = MathF.Max(1f, Width * 0.5f);
+        return factory.CreateEllipseGeometry(
+            new Ellipse(new Vector2(Points[0].X, Points[0].Y), rad, rad));
     }
 }
 
@@ -791,6 +712,13 @@ internal abstract class EditAction
     {
         get { var r = AffectedBefore; r.Add(AffectedAfter); return r; }
     }
+
+    /// <summary>
+    /// 这条动作**引用着多少条笔画**。撤销栈的内存成本主要就在这里：
+    /// "删掉/清空"之后笔画并没有消失，只是从文档挪到了撤销栈里——撤销能还原，
+    /// 代价就是这些笔画必须一直活着。
+    /// </summary>
+    public virtual int HeldStrokes => 0;
 }
 
 /// <summary>一组对象占的总区域。加入、移除、改位置都只是"方向不同"，算法一样。</summary>
@@ -807,6 +735,7 @@ internal static class EditRegion
 internal sealed class AddStrokesAction : EditAction
 {
     public readonly List<Stroke> Strokes = new();
+    public override int HeldStrokes => Strokes.Count;
     public override void Undo(InkDocument doc) { foreach (var s in Strokes) doc.RemoveStroke(s); }
     public override void Redo(InkDocument doc) { foreach (var s in Strokes) doc.AppendStroke(s); }
     public override RectF AffectedAfter => EditRegion.Of(Strokes);
@@ -815,6 +744,7 @@ internal sealed class AddStrokesAction : EditAction
 internal sealed class RemoveStrokesAction : EditAction
 {
     public readonly List<(int index, Stroke stroke)> Items = new();
+    public override int HeldStrokes => Items.Count;
     public override void Undo(InkDocument doc) { foreach (var it in Items) doc.InsertStroke(it.index, it.stroke); }
     public override void Redo(InkDocument doc) { foreach (var it in Items) doc.RemoveStroke(it.stroke); }
     public override RectF AffectedBefore => EditRegion.Of(Items.Select(it => it.stroke));
@@ -823,6 +753,7 @@ internal sealed class RemoveStrokesAction : EditAction
 internal sealed class ClearAction : EditAction
 {
     public readonly List<Stroke> Removed = new();
+    public override int HeldStrokes => Removed.Count;
     public override void Undo(InkDocument doc) { foreach (var s in Removed) doc.AppendStroke(s); }
     public override void Redo(InkDocument doc) { doc.ClearStrokes(); }
     public override RectF AffectedBefore => EditRegion.Of(Removed);
@@ -880,6 +811,23 @@ internal sealed class InkDocument
     public readonly DirtyRegion Dirty = new();
 
     /// <summary>
+    /// 自上一帧渲染之后**新增**的笔画。
+    ///
+    /// 内容层缓存（CanvasTiles）用它走"只补画新笔画"的快路径：正在写字时
+    /// 文档只增不减，往已经画好的块上补一笔就行，不必清空整块重画——重画一块的
+    /// 代价与该块里的笔画总数成正比，而"再写一笔"的代价应当只有一笔。
+    /// 由渲染循环在每个窗口都渲染完之后清空（和 <see cref="Dirty"/> 同一处）。
+    /// </summary>
+    public readonly List<Stroke> AppendedSinceRender = new();
+
+    /// <summary>
+    /// 自上一帧之后发生过**结构性**改动：删除、插入、移动、清空、整层作废。
+    /// 一旦为真，"只补画"的前提（块内容只差几条新笔画）就不成立了，
+    /// 相关块必须整块重画。
+    /// </summary>
+    public bool StructureChangedSinceRender;
+
+    /// <summary>
     /// 画布块序列（纵向排列）。现在固定一块——冻结截图、白板、翻页都是它的不同内容，
     /// 见计划文档第十二节。序列化按"多块"写，所以以后加页不用改格式。
     /// </summary>
@@ -922,6 +870,19 @@ internal sealed class InkDocument
     // 每条还持有笔画对象——实测 3 分钟就多占约 80 MB。主流软件的撤销深度
     // 都在 100~200 步，超过就从最旧的开始丢。
     private const int MaxUndoDepth = 200;
+
+    /// <summary>
+    /// 撤销栈里最多挂多少条笔画。
+    ///
+    /// 只管步数是不够的：一步"清空"就能把一万条笔画挂在栈里等着还原，
+    /// 步数还是 1。所以再加一道**条数**上限，超了从最老的开始丢。
+    ///
+    /// 实测（--memlife）：一万条笔画挂在栈里约 5MB 点数据；几何在删除时就
+    /// 释放了，不会跟着栈走。所以这道上限不是为了省那点内存，而是防止
+    /// "清空一万条 + 继续写"这类操作把内存顶上去——上限之内随便撤销，
+    /// 超出的部分才丢。
+    /// </summary>
+    public const int MaxUndoStrokes = 30_000;
     private readonly List<EditAction> _undo = new();
     private readonly List<EditAction> _redo = new();
 
@@ -931,6 +892,24 @@ internal sealed class InkDocument
     public long TotalPoints;
     public int UndoDepth => _undo.Count;
     public int RedoDepth => _redo.Count;
+
+    /// <summary>
+    /// 撤销/重做栈里引用着的笔画总数。
+    ///
+    /// 这是"删了东西内存不降"的头号嫌疑：被删的笔画还在撤销栈里等着被还原。
+    /// 步数有上限（<see cref="MaxUndoDepth"/>），所以真正要盯的是**条数**——
+    /// 一步"清空"就能把一万条全挂在那儿。
+    /// </summary>
+    public int HistoryStrokes
+    {
+        get
+        {
+            int n = 0;
+            foreach (var a in _undo) n += a.HeldStrokes;
+            foreach (var a in _redo) n += a.HeldStrokes;
+            return n;
+        }
+    }
 
     private readonly SpatialGrid _grid = new();
     private readonly List<Stroke> _queryScratch = new();
@@ -945,6 +924,7 @@ internal sealed class InkDocument
     {
         if (s.Id == 0) s.Id = NextId();
         Strokes.Add(s);
+        AppendedSinceRender.Add(s);
         TotalPoints += s.Points.Count;
         _grid.Insert(s);
         Dirty.Add(s.PaddedBounds);
@@ -953,6 +933,8 @@ internal sealed class InkDocument
 
     public void InsertStroke(int index, Stroke s)
     {
+        // 插到中间（撤销"删除"走这里）：顺序变了，块必须整块重画。
+        StructureChangedSinceRender = true;
         if (s.Id == 0) s.Id = NextId();
         Strokes.Insert(Math.Clamp(index, 0, Strokes.Count), s);
         TotalPoints += s.Points.Count;
@@ -964,6 +946,7 @@ internal sealed class InkDocument
     public void RemoveStroke(Stroke s)
     {
         if (!Strokes.Remove(s)) return;
+        StructureChangedSinceRender = true;
         _grid.Remove(s);
         // 关键：笔画被移除时必须释放缓存的 Direct2D 几何，否则每擦一次、
         // 每撤销一次都会泄漏一个几何对象（连同它占的 GPU 侧细分数据）。
@@ -976,6 +959,7 @@ internal sealed class InkDocument
 
     public void ClearStrokes()
     {
+        StructureChangedSinceRender = true;
         foreach (var s in Strokes) s.Release();
         _grid.Clear();
         Strokes.Clear();
@@ -990,12 +974,37 @@ internal sealed class InkDocument
     private void Commit(EditAction action)
     {
         _undo.Add(action);
-        if (_undo.Count > MaxUndoDepth) _undo.RemoveAt(0);
+        TrimUndo();
         _redo.Clear();
 
         // 命令自己报告"我动了哪块区域"，脏区在这里统一合并。
         // 这样功能代码就不必各自记得去标脏——漏标是留残影的头号原因。
         Dirty.Add(action.AffectedUnion);
+    }
+
+    /// <summary>
+    /// 撤销栈两道闸：**步数**（不超过 <see cref="MaxUndoDepth"/>）和
+    /// **条数**（不超过 <see cref="MaxUndoStrokes"/>）。任一条超了就从最老的丢。
+    ///
+    /// 为什么要有条数这道：一步"清空"能挂着一万条笔画。步数只有 1，
+    /// 但内存是实打实的。
+    /// </summary>
+    private void TrimUndo()
+    {
+        if (_undo.Count > MaxUndoDepth)
+            _undo.RemoveRange(0, _undo.Count - MaxUndoDepth);
+
+        int held = 0;
+        foreach (var a in _undo) held += a.HeldStrokes;
+        if (held <= MaxUndoStrokes) return;
+
+        int drop = 0;
+        while (held > MaxUndoStrokes && drop < _undo.Count - 1)
+        {
+            held -= _undo[drop].HeldStrokes;
+            drop++;
+        }
+        if (drop > 0) _undo.RemoveRange(0, drop);
     }
 
     /// <summary>
@@ -1006,6 +1015,7 @@ internal sealed class InkDocument
     /// </summary>
     internal void ApplyTransformCore(Stroke s, in Matrix3x2 m)
     {
+        StructureChangedSinceRender = true;
         _grid.Remove(s);
         s.Transform = s.Transform * m;
         _grid.Insert(s);
@@ -1038,6 +1048,19 @@ internal sealed class InkDocument
         //
         // 到上限就**明确拒绝并说清楚**，而不是让程序卡到没响应。
         // 老师说"我按了几下就卡死了"的时候，至少能看懂发生了什么。
+        // 两道护栏：
+        //   ① 单次复制新增太多——"全选 + 复制"连按就是在走这条路。一次复制
+        //      5000 条以上几乎一定是误操作，而且代价是实打实的：
+        //      每条要重新光栅化、要进空间索引、要占点数据。
+        //   ② 总数上限——见 MaxObjects。
+        if (Selected.Count > MaxDuplicatePerOperation)
+        {
+            LastRejectReason = $"一次复制 {Selected.Count} 条超过上限 {MaxDuplicatePerOperation}。"
+                             + "如果确实要复制这么多，请分几次选。";
+            Console.WriteLine("[拒绝] " + LastRejectReason);
+            return false;
+        }
+
         if (Strokes.Count + Selected.Count > MaxObjects)
         {
             LastRejectReason = $"批注数量将达到 {Strokes.Count + Selected.Count}，"
@@ -1064,10 +1087,27 @@ internal sealed class InkDocument
     }
 
     /// <summary>
-    /// 对象数量上限。取 10 万：按每条约 10KB（点数据 + GPU 几何 + 细分缓存）
-    /// 算下来约 1GB，已经是一台 8GB 教室机能忍受的边界了。
+    /// 对象数量上限。
+    ///
+    /// 原来取 10 万（按"每条约 10KB"估的）——实测每条约 16~20KB，
+    /// 10 万条就是 **2GB**，还没算内容层缓存。教室里那台机器会直接卡死。
+    ///
+    /// 现在取 2 万：
+    ///   · 够用：连续板书 20 分钟约 7200 笔，一节 40 分钟的课约 1.5 万笔；
+    ///   · 安全：堆在同一个位置的极端情况（Ctrl+A + Ctrl+D）约 400MB 就停住，
+    ///     而不是一路涨到 GB 级。
+    /// 到上限是**明确拒绝并说明原因**，不是让程序卡到没响应。
     /// </summary>
-    public const int MaxObjects = 100_000;
+    public const int MaxObjects = 20_000;
+
+    /// <summary>
+    /// 单次复制最多新增多少条。
+    ///
+    /// 实测：堆在同一个位置的 8192 条，渲染一帧要 162ms、占用 272MB；
+    /// 16384 条是 289ms / 397MB（用真实笔迹还要更高）。而正常一屏板书大约
+    /// 400 条，所以 5000 这个量级既拦得住"全选+复制连按"，又不挡正常复制。
+    /// </summary>
+    public const int MaxDuplicatePerOperation = 5_000;
 
     /// <summary>上一次被拒绝的原因（给界面显示用）。没有就是 null。</summary>
     public string LastRejectReason;
@@ -1082,6 +1122,7 @@ internal sealed class InkDocument
     /// </summary>
     internal void SetTransformLive(Stroke s, in Matrix3x2 m)
     {
+        StructureChangedSinceRender = true;
         _grid.Remove(s);
         s.Transform = m;
         _grid.Insert(s);
@@ -1132,6 +1173,46 @@ internal sealed class InkDocument
         Commit(act);
     }
 
+    /// <summary>
+    /// 造一个图像对象（截图落盘、粘贴图片走这里）。
+    ///
+    /// 两个坐标约定：
+    ///   · **局部坐标**是 (0,0)-(W,H) 像素，图像自己的像素坐标；
+    ///   · 摆到画布上靠 <see cref="Stroke.Transform"/>（缩放 + 平移），
+    ///     和笔迹完全一样的机制——所以之后缩放、旋转、翻转都不需要另写代码。
+    ///
+    /// <paramref name="scale"/> 是"物理像素 → 画布像素"的换算（等于 1/DPI）。
+    /// 截屏抓到的是一比一的物理像素，在 200% 缩放的屏上直接摆上去会大一倍。
+    /// </summary>
+    public Stroke AddImage(ImageData img, float canvasX, float canvasY, float scale)
+    {
+        if (img == null) return null;
+        var s = new Stroke
+        {
+            Tool = Tool.Capture,
+            Kind = StrokeKind.Image,
+            Color = new Color4(1f, 1f, 1f, 1f),
+            Width = 0f,
+            Image = img,
+        };
+        s.SetPoints(new[]
+        {
+            new Vector2(0f, 0f),
+            new Vector2(img.Width, img.Height),
+        });
+        s.Transform = Matrix3x2.CreateScale(scale)
+                    * Matrix3x2.CreateTranslation(canvasX, canvasY);
+        AddStroke(s);
+        return s;
+    }
+
+    /// <summary>把选区换成指定的这一批对象（截图之后自动选中新对象用）。</summary>
+    public void SelectOnly(IEnumerable<Stroke> items)
+    {
+        Selected.Clear();
+        foreach (var s in items) Selected.Add(s);
+    }
+
     public bool Undo()
     {
         if (_undo.Count == 0) return false;
@@ -1149,7 +1230,7 @@ internal sealed class InkDocument
         _redo.RemoveAt(_redo.Count - 1);
         a.Redo(this);
         _undo.Add(a);
-        if (_undo.Count > MaxUndoDepth) _undo.RemoveAt(0);
+        TrimUndo();
         return true;
     }
 
@@ -1186,8 +1267,8 @@ internal sealed class InkDocument
             }
             else
             {
-                // 自由笔迹：带子就是中心线两侧半个笔宽，点到中心线的距离已经够准，走快的那条。
-                float reach = radius + s.Width * Stroke.MaxWidthFactor * 0.5f;
+                // 自由笔迹：墨就是中心线两侧各半个笔宽，点到中心线的距离已经够准，走快的那条。
+                float reach = radius + s.Width * 0.5f;
                 if (s.DistanceToCanvas(x, y) > reach) continue;
             }
             int index = Strokes.IndexOf(s);
@@ -1228,18 +1309,31 @@ internal sealed class InkDocument
     public void MoveSelected(float dx, float dy)
         => ApplyTransform(Matrix3x2.CreateTranslation(dx, dy));
 
+    /// <summary>
+    /// 框选：**框碰到墨就选中那一条**（不是"整条都在框里才选中"）。
+    ///
+    /// 判据用 <see cref="Stroke.PaddedBounds"/>（中心线外扩到笔身）：笔身擦到框
+    /// 就算选中。改成"相交"是被用户实测逼出来的——按"整条都在框里"，屏幕上
+    /// 永远选不全：笔迹只要有一头在屏幕外（框拖不到那儿），或者粗笔的笔身压出
+    /// 框外一点点，那条就永远选不上，用户看到的就是"我明明全框住了，却没全选中"。
+    ///
+    /// 代价是：框边碰到一条很长的笔迹会把整条选进来。这和 OneNote 的框选一致，
+    /// 也是老师更需要的那个方向（选多了可以点空白重来，选少了会以为软件坏了）。
+    /// 判据是"穿过框"，和空间索引给候选用的是同一个框，所以不会漏。
+    /// </summary>
     public void ApplyMarquee(RectF r)
     {
         Selected.Clear();
         _grid.Query(r, _queryScratch);
         foreach (var s in _queryScratch)
-            if (s.ContainedInRect(r)) Selected.Add(s);
+            if (s.PaddedBounds.Intersects(r)) Selected.Add(s);
     }
 
     /// <summary>Marks the whole content layer stale (cheap to say, expensive to
     /// repaint, so only used when a change really touches the entire surface).</summary>
     public void InvalidateAll()
     {
+        StructureChangedSinceRender = true;
         Dirty.MarkFull();
         Version++;
     }

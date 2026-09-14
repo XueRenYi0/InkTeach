@@ -10,6 +10,7 @@ internal static class Native
     public const int WM_PAINT = 0x000F;
     public const int WM_CLOSE = 0x0010;
     public const int WM_ERASEBKGND = 0x0014;
+    public const int WM_SETCURSOR = 0x0020;
     public const int WM_MOUSEACTIVATE = 0x0021;
     public const int WM_DISPLAYCHANGE = 0x007E;
     public const int WM_NCHITTEST = 0x0084;
@@ -67,6 +68,71 @@ internal static class Native
     public const uint PT_TOUCHPAD = 5;
     public const uint PEN_FLAG_INVERTED = 0x00000002;
     public const uint PEN_FLAG_ERASER = 0x00000004;
+
+    // ---- 光标 -------------------------------------------------------------
+    // IDC_* 都是 MAKEINTRESOURCE 的序号，用 LoadCursor(NULL, 序号) 取。
+    // 语义见微软的 "About Cursors"：这些名字什么时候用是平台约定，不是随便挑的。
+    public const int IDC_ARROW = 32512;      // Normal select
+    public const int IDC_IBEAM = 32513;      // Text select
+    public const int IDC_WAIT = 32514;       // Busy：只有真卡住才该出现
+    public const int IDC_CROSS = 32515;      // Precision select
+    public const int IDC_UPARROW = 32516;    // Alternate select
+    public const int IDC_SIZENWSE = 32642;   // Diagonal resize 1
+    public const int IDC_SIZENESW = 32643;   // Diagonal resize 2
+    public const int IDC_SIZEWE = 32644;     // Horizontal resize
+    public const int IDC_SIZENS = 32645;     // Vertical resize
+    public const int IDC_SIZEALL = 32646;    // Move
+    public const int IDC_NO = 32648;         // Unavailable
+    public const int IDC_HAND = 32649;       // Link select：只能表示链接
+    public const int IDC_APPSTARTING = 32650;// Working in background
+
+    public const int SM_CXCURSOR = 13;
+    public const int SM_CYCURSOR = 14;
+
+    public const uint TME_LEAVE = 0x00000002;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TRACKMOUSEEVENT
+    {
+        public int cbSize;
+        public uint dwFlags;
+        public IntPtr hwndTrack;
+        public uint dwHoverTime;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ICONINFO
+    {
+        public bool fIcon;          // false = 光标
+        public int xHotspot;
+        public int yHotspot;
+        public IntPtr hbmMask;
+        public IntPtr hbmColor;
+    }
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetCursor(IntPtr hCursor);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr LoadCursor(IntPtr hInstance, IntPtr lpCursorName);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetCursor();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr CreateIconIndirect(ref ICONINFO iconInfo);
+
+    [DllImport("user32.dll")]
+    public static extern bool DestroyCursor(IntPtr hCursor);
+
+    [DllImport("user32.dll")]
+    public static extern bool TrackMouseEvent(ref TRACKMOUSEEVENT tme);
+
+    [DllImport("user32.dll")]
+    public static extern int GetSystemMetricsForDpi(int nIndex, uint dpi);
+
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr CreateBitmap(int width, int height, uint planes, uint bitCount, IntPtr bits);
 
     // ---- dpi -------------------------------------------------------------
     public static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new(-4);
@@ -277,9 +343,49 @@ internal static class Native
     [DllImport("psapi.dll")]
     public static extern bool EmptyWorkingSet(IntPtr hProcess);
 
+    /// <summary>
+    /// 内存计数器的**扩展版 2**（Windows 11 / SDK 22000 起）。
+    ///
+    /// 关键在最后两个字段：
+    ///   <c>PrivateWorkingSetSize</c> = **专用工作集**，也就是任务管理器"内存"
+    ///     那一列显示的数（实测与 PerfCounter `\Process\Working Set - Private`、
+    ///     NtQuerySystemInformation 的 WorkingSetPrivateSize 三者完全一致）；
+    ///   <c>SharedCommitUsage</c> = 共享提交，解释"工作集里有多少是别人的"。
+    ///
+    /// 老系统上这两个字段会被留 0（系统按 cb 截断拷贝），调用方据此回退。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PROCESS_MEMORY_COUNTERS_EX2
+    {
+        public uint cb;
+        public uint PageFaultCount;
+        public UIntPtr PeakWorkingSetSize, WorkingSetSize;
+        public UIntPtr QuotaPeakPagedPoolUsage, QuotaPagedPoolUsage;
+        public UIntPtr QuotaPeakNonPagedPoolUsage, QuotaNonPagedPoolUsage;
+        public UIntPtr PagefileUsage, PeakPagefileUsage;
+        public UIntPtr PrivateUsage;
+        public UIntPtr PrivateWorkingSetSize;
+        public ulong SharedCommitUsage;
+    }
+
+    [DllImport("psapi.dll", SetLastError = true)]
+    public static extern bool GetProcessMemoryInfo(IntPtr hProcess,
+                                                   ref PROCESS_MEMORY_COUNTERS_EX2 counters,
+                                                   uint cb);
+
+    /// <summary>进程时间（CPU 用量）。比 Process.Refresh 便宜两个数量级。</summary>
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GetProcessTimes(IntPtr hProcess,
+                                              out long creation, out long exit,
+                                              out long kernel, out long user);
+
     // ---- keyboard/mouse state (used for modifier checks) -----------------
     [DllImport("user32.dll")]
     public static extern short GetAsyncKeyState(int vKey);
+
+    /// <summary>往窗口队列塞一条消息。自检里用它模拟"批注键盘模式下按了一个键"。</summary>
+    [DllImport("user32.dll")]
+    public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     // ---- painting --------------------------------------------------------
 
@@ -306,6 +412,13 @@ internal static class Native
     public const int SM_YVIRTUALSCREEN = 77;
     public const int SM_CXVIRTUALSCREEN = 78;
     public const int SM_CYVIRTUALSCREEN = 79;
+
+    /// <summary>SM_DIGITIZER：系统有没有数字化器（触摸 / 笔）。返回值按位解释。</summary>
+    public const int SM_DIGITIZER = 94;
+    /// <summary>SM_DIGITIZER 的位：内置笔 / 外接笔。有这两位之一，才值得开委托墨迹轨迹。</summary>
+    public const int NID_INTEGRATED_PEN = 0x04;
+    public const int NID_EXTERNAL_PEN = 0x08;
+
     public const uint SRCCOPY = 0x00CC0020;
     public const uint DIB_RGB_COLORS = 0;
     public const uint BI_RGB = 0;
@@ -348,6 +461,157 @@ internal static class Native
 
     [DllImport("gdi32.dll")]
     public static extern bool BitBlt(IntPtr hdcDest, int x, int y, int cx, int cy, IntPtr hdcSrc, int x1, int y1, uint rop);
+
+    // =====================================================================
+    //  剪贴板（截图落到剪贴板、粘贴图片）
+    //
+    //  只用 GDI 那套经典格式（CF_DIB / CF_DIBV5 / CF_BITMAP），**不注册
+    //  自定义格式、不引 WIC**：
+    //    · CF_DIB 是 1993 年就有的格式，任何程序都认（微信、QQ、Office、
+    //      画图、浏览器……），比"只写 PNG 格式"通用得多；
+    //    · 读的时候优先 CF_DIBV5（它带显式的 alpha 通道和 sRGB 信息），
+    //      退回 CF_DIB（alpha 是垃圾，按不透明处理，见 ImageData.Adopt）。
+    // =====================================================================
+
+    public const uint CF_BITMAP = 2;
+    public const uint CF_DIB = 8;
+    public const uint CF_DIBV5 = 17;
+    public const uint GMEM_MOVEABLE = 0x0002;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool OpenClipboard(IntPtr hWndNewOwner);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool CloseClipboard();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool EmptyClipboard();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr GetClipboardData(uint uFormat);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool IsClipboardFormatAvailable(uint format);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern int GetPriorityClipboardFormat(uint[] paFormatPriorityList, int cFormats);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GlobalLock(IntPtr hMem);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GlobalUnlock(IntPtr hMem);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern UIntPtr GlobalSize(IntPtr hMem);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GlobalFree(IntPtr hMem);
+
+    // =====================================================================
+    //  DWM：合成配速
+    // =====================================================================
+
+    /// <summary>
+    /// 阻塞到 DWM 完成下一次合成为止。返回 0 表示成功。
+    ///
+    /// 为什么需要它：Present(1) 是把线程**卡在垂直同步里**，这段时间消息队列
+    /// 没人抽，笔再快也得排队。改成"先 DwmFlush 等到合成边界、抽完消息、
+    /// 立刻 Present(0)"，输入就不用等了。
+    /// </summary>
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmFlush();
+
+    public const uint QS_ALLINPUT = 0x04FF;
+
+    /// <summary>
+    /// 阻塞到"有消息"或超时，二选一先到先返回。
+    ///
+    /// 用它而不是 Thread.Sleep(1)：Sleep 的精度受系统计时器粒度限制，默认
+    /// 一粒就是 15.6ms——足够错过一整个刷新周期。实测配速模式下把 Sleep(1)
+    /// 用在空闲分支上，帧数从 60 掉到 47，就是这一粒造成的。
+    /// 有消息就立刻返回，所以连续书写时它不引入任何等待。
+    /// </summary>
+    [DllImport("user32.dll")]
+    public static extern uint MsgWaitForMultipleObjectsEx(
+        uint count, IntPtr handles, uint timeoutMs, uint wakeMask, uint flags);
+
+    // =====================================================================
+    //  合成笔输入（仅开发期实验用）
+    // =====================================================================
+    // 目的：验证"委托墨迹轨迹"（IDCompositionDelegatedInkTrail）这条通道到底
+    // 认不认合成输入。它此前在本机验证不了，是因为只有合成鼠标可用，而系统
+    // 很可能只对 PT_PEN 启用这条通道。CreateSyntheticPointerDevice(PT_PEN)
+    // 造出来的消息走的是和真笔同一条 WM_POINTER 路径（pointerType = PT_PEN、
+    // 带压感），所以能把这条链路跑通。
+
+    public const uint POINTER_FLAG_NEW = 0x00000001;
+    public const uint POINTER_FLAG_INRANGE = 0x00000002;
+    public const uint POINTER_FLAG_INCONTACT = 0x00000004;
+    public const uint POINTER_FLAG_FIRSTBUTTON = 0x00000010;
+    public const uint POINTER_FLAG_PRIMARY = 0x00002000;
+    public const uint POINTER_FLAG_CONFIDENCE = 0x00004000;
+
+    public const uint PEN_MASK_PRESSURE = 0x00000001;
+    public const uint PEN_MASK_ROTATION = 0x00000002;
+    public const uint PEN_MASK_TILT_X = 0x00000004;
+    public const uint PEN_MASK_TILT_Y = 0x00000008;
+
+    /// <summary>POINTER_FEEDBACK_DEFAULT。合成设备必须给一个反馈模式。</summary>
+    public const uint POINTER_FEEDBACK_DEFAULT = 1;
+
+    /// <summary>
+    /// POINTER_TYPE_INFO：真实定义里中间是一个 union，最大成员是
+    /// POINTER_TOUCH_INFO（144 字节），我们只用 pen 分支（120 字节）。
+    /// 差的 24 字节必须显式补出来，否则 API 按 union 的真实大小读写会越界
+    /// （第一次写这个探针时就是这么崩的：0xC0000374 堆损坏）。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINTER_TYPE_INFO
+    {
+        public uint type;
+        public POINTER_PEN_INFO pen;
+        public unsafe fixed byte unionPad[24];
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr CreateSyntheticPointerDevice(uint pointerType, uint maxCount, uint mode);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool InjectSyntheticPointerInput(
+        IntPtr device, POINTER_TYPE_INFO[] pointerInfo, uint count);
+
+    [DllImport("user32.dll")]
+    public static extern void DestroySyntheticPointerDevice(IntPtr device);
+
+    public const int POINTER_DEVICE_PRODUCT_STRING_MAX = 520;
+
+    /// <summary>
+    /// POINTER_DEVICE_INFO。注意这**不是**指针消息里的 POINTER_INFO——
+    /// 第一次写的时候按"displayOrientation + device + type + ..."猜布局，
+    /// 结果 GetPointerDevices 把托管堆写坏直接崩进程。字段顺序和大小必须照抄
+    /// 官方定义（尾部那 520 个 wchar 是最容易漏的）。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINTER_DEVICE_INFO
+    {
+        public uint displayOrientation;
+        public IntPtr device;
+        public uint pointerDeviceType;
+        public IntPtr monitor;
+        public uint startingCursorId;
+        public ushort maxActiveContacts;
+        public unsafe fixed ushort productString[POINTER_DEVICE_PRODUCT_STRING_MAX];
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool GetPointerDevices(ref uint deviceCount, [Out] POINTER_DEVICE_INFO[] devices);
 
     // ---- synthetic input (used by the automated input-path test) ----------
 
