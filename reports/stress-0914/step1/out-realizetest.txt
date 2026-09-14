@@ -1,0 +1,15 @@
+virtual desktop: 2880x1800 at (0,0)
+帧延迟等待对象: 已启用
+overlay on monitor 65537: 2880x1800 at (0,0) dpi=192
+委托墨迹轨迹(InkTrail): 可用
+DPI 缩放 2.00（逻辑 1440x900）
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+registered 15/15 global hotkeys
+笔迹优化器: 未装（纯底层，画原始采样点）
+
+=== 几何实现缓存 A/B（10000 笔）===
+  A 每次重新细分整层重画 :    303.9 ms
+  B 缓存细分后整层重画   :    271.2 ms   （快 1.1 倍）
+  建立缓存的一次性成本   :     12.3 ms（312 笔）
+  工作集                 :    284.1 MB
+shutdown complete

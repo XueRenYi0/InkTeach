@@ -1,4 +1,4 @@
-﻿# InkProbe — 屏幕批注软件的性能验证原型
+﻿# InkTeach — 屏幕批注软件的性能验证原型
 
 这是一个用来**验证技术选型**的原型，不是成品。它把候选架构里最关键的几件事
 真的做出来并测了数据：透明覆盖层、GPU 合成、笔迹缓存、增量更新、穿透模式。
@@ -8,6 +8,10 @@
 底层与多套界面之间的接入口见 [引擎边界-多界面接入规范.md](引擎边界-多界面接入规范.md)。
 手写笔锋的实现与自检见 [手写美化-笔锋实现说明.md](手写美化-笔锋实现说明.md)
 （**默认关闭**：用户实测后认为不是必需，算法代码保留，需要时用 `--preset handwriting` 打开）。
+**延时**的实测、分场景数据、稳定性与优化依据见 [延时-实测与优化.md](延时-实测与优化.md)。
+**两种橡皮擦 / 截图 / 图形与顶点拖动**的调研与取舍见
+[调研-橡皮擦-截图-图形顶点.md](调研-橡皮擦-截图-图形顶点.md)，
+它们的数据模型、撤销动作与代码地图见 [底层设计-图形与图像对象.md](底层设计-图形与图像对象.md)。
 
 > **界面已移除（2026-09-13）**：悬浮工具条那一版观感不满意，已连同
 > `src/InkUi` 工程一起移出仓库。引擎侧的界面接入口 `IOverlayUi` 完整保留，
@@ -19,41 +23,105 @@
 
 ```powershell
 # 交互模式：全屏覆盖层，用全局快捷键操作
-dotnet run --project src/InkProbe -c Release
+dotnet run --project src/InkTeach -c Release
 
 # 自检：自己画一笔、截图验证、跑一万笔基准测试，然后退出
-dotnet run --project src/InkProbe -c Release -- --selftest 8
+dotnet run --project src/InkTeach -c Release -- --selftest 8
+
+# 延时分场景实测：四段分解 + 分位数 + 稳定性 + 「Present 返回 → 屏幕变色」，写 CSV
+dotnet run --project src/InkTeach -c Release -- --latbench reports/lat.csv --nohud
+
+# 真笔延时实测：用手写笔写一会儿，出报告（顺带告诉你手写板是「笔」还是「鼠标」模式）
+dotnet run --project src/InkTeach -c Release -- --penlive 30
 
 # 交互模式（默认就是等宽笔迹，不做手写美化）
-dotnet run --project src/InkProbe -c Release -- --nohud
+dotnet run --project src/InkTeach -c Release -- --nohud
 
 # 可选：打开手写美化 / 看原始笔迹
-dotnet run --project src/InkProbe -c Release -- --nohud --preset handwriting
-dotnet run --project src/InkProbe -c Release -- --nohud --rawink
+dotnet run --project src/InkTeach -c Release -- --nohud --preset handwriting
+dotnet run --project src/InkTeach -c Release -- --nohud --rawink
 
 # 实测报告：把内存、性能、穿透的数据全部跑一遍并写入文件
-dotnet run --project src/InkProbe -c Release -- --report reports/inkprobe-report.txt
+dotnet run --project src/InkTeach -c Release -- --report reports/inkprobe-report.txt
 
 # 内存归因报告：分阶段拆出每一部分占多少内存
-dotnet run --project src/InkProbe -c Release -- --memory reports/inkprobe-memory.txt
+dotnet run --project src/InkTeach -c Release -- --memory reports/inkprobe-memory.txt
 ```
 
 需要 .NET 8 SDK（本机已安装）。首次构建会从 nuget.org 拉取 Vortice 系列包。
 
-## 全局快捷键（Ctrl+Alt+…）
+## 快捷键
 
-| 按键 | 功能 | 按键 | 功能 |
-|---|---|---|---|
-| P | 穿透模式开关 | 1 | 笔 |
-| Z | 撤销 | 2 | 荧光笔 |
-| C | 清空 | 3 | 激光笔 |
-| I | 性能面板开关 | 4 | 橡皮擦 |
-| **6** | **切换笔迹粗细** | 5 | 框选 |
-| B | 一万笔性能基准测试 | | |
-| M | 内存/显存探测 | Y | 切换穿透实现方式 |
-| X | 退出 | | |
+**完整清单在 [快捷键总表.md](快捷键总表.md)**（含每个功能的所有键、修饰键、
+修改记录、本机实测的注册冲突）。那份文件是快捷键的唯一权威：改键必须同步改它，
+`--keytest` 会自动核对"代码里的每一条绑定都能在文档里查到"。
+下面两张表是摘要。
+
+键位**是一张可配置的表**，不是写死的字符串。启动时会打印整张表；
+改过的键位与**工具尺寸**存在 `%APPDATA%\InkTeach\settings.json`：
+
+```json
+{
+  "version": 2,
+  "keys":  { "Global.Quit": "Ctrl+Alt+F12" },
+  "tools": { "AreaEraserWidth": 140, "EraserRadius": 18 }
+}
+```
+
+两段分开、**只写"和默认不一样"的项**（删掉某一项 = 恢复默认；
+以后默认值改了，老配置不会把新默认顶掉）。写坏了照样启动，
+只是逐条打警告并用人能看懂的默认值——**坏配置不许让程序起不来**。
+`tools` 段记的是笔 / 荧光笔 / 激光笔的粗细和两种橡皮的大小（`Clear` 不管它）。
+
+| 作用域 | 放什么 | 默认键 |
+|---|---|---|
+| **全局**（任何程序在前台都生效） | 只放"切换类"：工具、穿透、清空、面板、粗细、退出 | `Ctrl+Alt+P/1/2/3/4/5/Z/C/I/6/K/Y/X/B/M` |
+| **批注内**（打开"批注键盘模式"后生效） | 编辑类：撤销/重做/全选/复制/删除/取消选择/方向键微调 | `Ctrl+Z/Y/A/D`、`Delete`、`Esc`、方向键（Shift 加速 10px）|
+
+新增的工具与动作（2026-09-14）：
+
+| 键 | 说明 |
+|---|---|
+| `Ctrl+Alt+4` / `Ctrl+Alt+E` | 笔记橡皮（整笔、只擦最上面那一条）/ 面积橡皮（**竖着的**黄金分割比矩形，范围内的墨被切掉）|
+| `Ctrl+Alt+6` | 换当前工具的**大小档位**：笔/荧光笔/激光笔各自一套，两种橡皮也各有一套 |
+| `Ctrl+Alt+S` | 截图：拖一个框 → 抓下来的图放到视口左上角并自动选中，同时进剪贴板 |
+| `Ctrl+Alt+7/8/9/0/T/J` | 直线 / 矩形 / 椭圆 / 圆 / 三角形 / 平行四边形 |
+| `Ctrl+Alt+5` 选中图形后**双击**（或按 `Enter`）| 进 / 出**顶点编辑**：拖顶点改形状（直线端点、三角形顶点、矩形角、圆的半径…）|
+| `Ctrl+V`（批注键盘模式内）| 把剪贴板里的图粘到视口左上角（只认 CF_DIB / CF_DIBV5）|
+
+面积橡皮的矩形**长宽比固定**（黄金分割比 1.618，**竖着**：高 = 1.618 × 宽），
+所以"大小"只有一个自由度：`Ctrl+Alt+6` 换档调的就是**高度**，不用分别调长和宽。
+光标就是这个矩形的半透明白色预览——**看到的范围就是擦掉的范围**
+（第一版光标画圆环、范围是矩形，用户会以为漏擦）。
+切段按**墨的实际宽度**向外扩半个笔宽再切：框内一定干净，不会像早先那样
+"粗笔画被啃掉一半、看着像变形"。
+
+编辑类**绝不能**注册成全局热键——全局注册 `Ctrl+C`/`Ctrl+Z` 会把所有程序的
+复制撤销都抢走。这条边界写在 `KeyBindings.cs` 的类型注释里。
+
+注册失败（被微信/QQ/教学软件占了）**会打印出来**并记进 `Keys.GlobalFailures`，
+不再像以前那样只留一行谁都看不到的日志。`--keytest` 会把冲突检测、落盘读回、
+坏配置容错、真机注册结果全验一遍。
+
+| 键 | 说明 |
+|---|---|
+| 全局 `Ctrl+Alt+…` | 见上表 |
+| `Shift` + 拖动手柄 | 缩放＝等比；旋转＝15° 硬网格 |
+| `Alt` + 拖动旋转手柄 | 临时关掉角度吸附（只想要 43° 的时候用） |
 
 手写笔的反向笔尖会自动切换成橡皮擦（走 `PEN_FLAG_INVERTED`）。
+
+## 选中与旋转
+
+拖动选中框上边外侧的旋转手柄时：
+
+- 手柄外侧浮出一个**度数标签**（如 `90°`），显示相对按下那一刻转了多少度，正数＝顺时针；
+- 松手前靠近 90° 的整数倍（±3°）会**吸附**，标签变强调色——用户能分清"我转到的"和"它吸到的"；
+- 按住 `Shift` ＝ 硬网格 15°（覆盖任意角度，含精确 90°）；按住 `Alt` ＝ 完全自由；
+- 一次拖拽 = **一步撤销**，松手提交，拖动中的预览不进撤销栈。
+
+自检：`--rotatetest`（读数/三种吸附模式/矩阵自洽/标签真的上屏 + 撤销回原位）。
+摆样看外观：`--rotateshow 90`、`--rotateshow 43`（挂住不动，人工截图）。
 
 ## 低层算法
 
@@ -72,14 +140,41 @@ dotnet run --project src/InkProbe -c Release -- --memory reports/inkprobe-memory
 |---|---|
 | `--inputtest` | 按下→移动→抬起整条路径，沿路径采样确认处处有墨（不是只有一个点） |
 | `--erasertest` | 稀疏采样快速划过，确认不遗漏、且整段拖拽只算一步撤销 |
+| `--erasemodetest` | 两种橡皮的分工：交叉处只删最上面一条（精准）、面积橡皮切段的切口贴着矩形边、图形不误删、真机数像素 |
+| `--shapedrawtest` | 七个图形逐个过一遍：拖动实时性、包围盒=真实占位（圆/平行四边形最容易错）、轮廓命中、顶点数、一步撤销；真机拖不出来时会明确标"跳过"并打印诊断 |
+| `--vertextest` | 图形的控制点规则、顶点拖动（含**旋转 30° 后**拖顶点）、一次拖动一步撤销 |
+| `--imagetest` | 图像对象：上屏、命中、复制/翻转（通用操作）、存档往返、剪贴板往返 |
+| `--capturetest` | 截图全流程：拖框 → 视口左上角 → 剪贴板，且**不把自己的批注拍进去**、屏幕无残影 |
 | `--passtest` | 另起进程开目标窗口，合成真实点击，确认穿透时下层窗口确实收到点击 |
 | `--widthtest` | 各档粗细的实测墨量对理论值，检查填充带子会不会出洞 |
+| `--rotatetest` | 旋转度数读数、90° 软吸附 / Shift 15° / Alt 自由、标签真的上屏、撤销回原位 |
+| `--keytest` | 键位表 / 冲突检测 / 落盘读回 / 坏配置容错 / 真机热键注册 / 批注内真按一次键 |
 | `--selftest` | 渲染验证 + 一万笔基准 |
 | `--report` | 全量性能与正确性数据 |
 | `--memory` | 内存分阶段归因 |
 | `--beautifytest` | 手写美化自检（验速度→粗细、起收笔渐细、宽度不超界、耗时） |
 | `--beautifyshowcase` | 把四种笔锋摆出来给人看（含白板背景） |
 | `--preset <名字>` | 切换笔锋：precise / handwriting / bold / calligraphy |
+| `--latbench <csv>` | 延时实测：分场景 + 分段耗时 + 分位数 + 稳定性 + 上屏段 |
+| `--penlive [秒]` | 真笔延时实测（挂上手写笔写一会儿，出报告） |
+| `--rotateshow [度]` | 旋转度数标签摆样（挂住不动，人工截图） |
+| `--cursorshow <笔|荧光笔|激光笔|橡皮|面积橡皮> [宽] [pen]` | 落点反馈摆样（挂住不动，人工截图） |
+| `--erasedemo` | 两个橡皮的对照摆样：左边整笔擦掉一竖、右边按矩形切出一道缺口 |
+| `--vertexshow` | 顶点编辑摆样（挂住不动，人工截图） |
+| `--imageshow` | 图像对象 + 同一套选中框摆样（挂住不动，人工截图） |
+
+## 呈现节奏与湿墨（延时相关）
+
+写板的迟滞主要来自"画完之后要等"，不是"画得慢"。实测与依据见
+[延时-实测与优化.md](延时-实测与优化.md)，默认行为是这两条：
+
+| 开关 | 默认 | 说明 |
+|---|---|---|
+| 合成边界配速 | **开** | 每帧先 `DwmFlush` 等到"上一帧已经上屏"，**再抽一次消息**，然后 `Present(0)`。实测把「Present 返回 → 屏幕变色」从 3.5 个刷新周期降到 1.0 个。`--nopace` 退回老的 `Present(1)` 阻塞行为 |
+| 委托墨迹轨迹 | **有笔设备就开** | 正在写的这一笔交给系统合成器画（只对 `PT_PEN` 生效，鼠标不受影响），笔尖跟手不再受我们渲染节奏影响。`--inktrail` / `--noinktrail` 可强制 |
+| `--latencywait` | 关 | 只开帧延迟等待对象、`Present(0)` 不阻塞：延时同样低，但帧率会飙到 300+，CPU/GPU 代价大，教室机不划算 |
+| `--framestats` | 关 | 每帧问 DXGI 要上屏时刻。**实测在合成交换链上它会把线程挂在垂直同步上**，一旦进每帧路径，量到的就是探针自己的停顿 |
+| `--bufcount <2..4>` | 2 | 后缓冲张数。实测 3 张并没有让延时变差（差值 0.02 ms） |
 
 ---
 
@@ -87,21 +182,37 @@ dotnet run --project src/InkProbe -c Release -- --memory reports/inkprobe-memory
 
 | 文件 | 作用 |
 |---|---|
+核心按**职责**分了五个目录（文件夹表达职责，命名空间仍然是 `InkEngine`）：
+
+| 文件 | 作用 |
+|---|---|
 | `src/InkEngine/Ui.cs` | 引擎与界面的唯一契约（`IOverlayUi` / `IUiHost` / `IEngineCommands`）|
-| `src/InkEngine/Engine.cs` | 引擎本体：消息循环、输入处理、热键、工具状态、界面接入 |
-| `src/InkEngine/Overlay.cs` | 覆盖窗口、Direct3D11 + Direct2D + DirectComposition 渲染管线 |
-| `src/InkEngine/Model.cs` | 笔画数据、文档、激光笔轨迹 |
-| `src/InkEngine/Native.cs` | Win32 / 指针输入 / GDI 截屏的 P/Invoke 声明 |
+| `src/InkEngine/Input/Engine.cs` | 引擎本体：消息循环、输入处理、热键、工具状态、界面接入 |
+| `src/InkEngine/Input/KeyBindings.cs` | 键位表：作用域、冲突检测、落盘、坏配置容错 |
+| `src/InkEngine/Render/Overlay.cs` | 覆盖窗口、Direct3D11 + Direct2D + DirectComposition 渲染管线 |
+| `src/InkEngine/Render/CanvasTiles.cs` | 内容层：画布空间的分块缓存（滚动不掉帧的根基）|
+| `src/InkEngine/Render/Cursors.cs` | 自绘系统光标（旋转光标、隐藏光标）|
+| `src/InkEngine/Doc/Model.cs` | 笔画与图像对象、文档、撤销动作、激光笔轨迹 |
+| `src/InkEngine/Doc/ShapeGeometry.cs` | 图形（直线/矩形/椭圆/圆/三角形/平行四边形/箭头）的控制点规则与几何 |
+| `src/InkEngine/Doc/ImageData.cs` | 图像像素（BGRA、预乘、D2D 位图缓存）|
+| `src/InkEngine/Doc/EraserOps.cs` | 两个橡皮的算法：精准命中、按矩形切段、轮廓求交 |
+| `src/InkEngine/Doc/SpatialGrid.cs` | 均匀网格空间索引，给橡皮擦/框选的命中测试用 |
+| `src/InkEngine/Doc/InkSerializer.cs` | 存档/剪贴板私有格式（v2 起带图像像素，老文件照样能开）|
+| `src/InkEngine/Interaction/Selection.cs` | 选中框坐标系、手柄布局与命中、旋转吸附、操作条布局 |
+| `src/InkEngine/Interaction/VertexHandles.cs` | 顶点手柄：位置、命中、拖动（一行绘制都没有）|
+| `src/InkEngine/Platform/Native.cs` | Win32 / 指针输入 / GDI / 剪贴板的 P/Invoke 声明 |
+| `src/InkEngine/Platform/ScreenCapture.cs` | 抓屏（抓之前先把自己的覆盖层藏起来）|
+| `src/InkEngine/Platform/ClipboardImage.cs` | 图片的剪贴板读写（CF_DIB / CF_DIBV5）|
+| `src/InkEngine/Platform/Latency.cs` | 延时采样与统计（分段耗时、分位数、稳定性、CSV），只在测量模式用 |
 | `src/InkEngine/InkOptimizer.cs` | 笔迹优化的接入点（`IInkOptimizer`）。核心只有这个接口，没有实现 |
-| `src/InkEngine/SpatialGrid.cs` | 均匀网格空间索引，给橡皮擦/框选的命中测试用 |
 | `src/InkEngine.Optimize/` | **可选**的笔迹优化层：输入平滑、抽稀、贝塞尔拟合、笔锋。核心不依赖它 |
 | `tools/gen-fluent-icons.ps1` | 从上游图标库生成上面的路径数据（可复现）|
-| `src/InkProbe/App.cs` | 开发期宿主：自动化测试、基准、实测报告（引擎里不含这些）|
-| `src/InkProbe/app.manifest` | 每显示器 DPI 感知（PerMonitorV2） |
+| `src/InkTeach/App.cs` | 开发期宿主：自动化测试、基准、实测报告（引擎里不含这些）|
+| `src/InkTeach/app.manifest` | 每显示器 DPI 感知（PerMonitorV2） |
 | `tools/ApiDump` | 反射列出绘图库的接口签名，写这个项目时的辅助工具 |
 | `tools/MemBaseline` | 测量纯 .NET 进程的内存底噪，用于给内存数据做归因 |
 | `tools/InkAnalyzerProbe` | 验证 Windows 自带的形状识别能否在普通桌面程序里直接用 |
-| `src/InkProbeNative` | 同一个覆盖层的 C++ 原生版，用于量化「换语言能省多少内存」 |
+| `src/InkTeachNative` | 同一个覆盖层的 C++ 原生版，用于量化「换语言能省多少内存」 |
 
 ### 三层结构
 
@@ -128,9 +239,54 @@ dotnet run --project src/InkProbe -c Release -- --memory reports/inkprobe-memory
 - 透明覆盖层能正确盖在桌面和其他程序之上（用截屏找像素的方式自动验证）
 - 无边框、置顶、不抢焦点、不出现在任务栏
 - 笔 / 荧光笔 / 激光笔 / 橡皮擦 / 框选五种工具，手写笔压感影响线宽
+- **两种橡皮擦**（2026-09-14）：笔记橡皮＝整笔精准删除（交叉处只删最上面那一条，
+  所以"擦掉其中一个笔画"做得到）；面积橡皮＝黄金分割比矩形，大小可调，
+  光标就是这个矩形的半透明白色预览，范围内的**自由笔迹被切段**（碎片仍可选中/撤销）、
+  **图形与图像整对象删除**；一次拖拽 = 一步撤销
+- **截图**：拖框 → 抓屏（抓之前先藏自己的覆盖层，所以批注不会被拍进去）→
+  放到视口左上角并自动选中 → 同时进剪贴板（CF_DIB）；`Ctrl+V` 也能粘剪贴板里的图
+- **图像对象**：截图/粘贴进来的图就是普通对象，复用同一套选中框与
+  复制/删除/翻转/旋转/撤销；存档格式 v2 带像素，老文件仍能打开
+- **图形与顶点拖动**：直线/矩形/椭圆/圆/三角形/平行四边形/箭头；
+  选中一个图形后双击（或 `Enter`）进顶点编辑，拖顶点实时改形状
+  ——直线端点、三角形顶点、矩形角、圆的半径都能单独拖
+- **由顶点定义的图形不需要切模式**：直线 / 箭头 / 三角形 / 平行四边形
+  选中后**直接显示顶点手柄**，不再显示八个缩放手柄（拉伸对它们没有意义，
+  只会误点——用户实测反馈）
+- **旋转读数改成 0~360°**（不出现负度数，360° 归一到 0°），数学层仍保留符号用于吸附
+- **落点反馈**：鼠标悬停/书写时自绘（笔＝双层圆环、荧光笔＝宽度胶囊、激光笔＝实心点、
+  橡皮＝圆环），手写笔落笔后不画（笔尖本身就是落点），触摸一律不画；
+  笔环是"内圈＝真实笔宽 + 外圈＝最小可见尺寸"，所以 1.5 像素的细笔也看得见落点又不会误判粗细
+- **旋转度数显示与吸附**：拖动中浮出度数标签，90° 软吸附（±3°，可 Alt 关），
+  Shift 是 15° 硬网格，一次拖拽一步撤销
+- **键位可配置**：全局 / 批注内两档作用域 + 冲突检测 + 注册失败可见 + 落盘
 - 穿透模式，三种实现方式都做了对照
 - 内容层缓存 + 增量更新（结束一笔只重画那一小块）
 - 内置性能面板（帧率、耗时、内存、CPU）和一万笔压力测试
+
+### 性能面板（Ctrl+Alt+I 开关）
+
+面板按 **DPI** 生成字号（以前字号写死 15 物理像素，200% 缩放的屏上只有
+7.5 逻辑像素高——投影上看不清，这是"看不清"的根因，不是框不够大）。
+整个面板画进一张**缓存位图**，只有数字变了（4 Hz）才重排一次：
+每帧代价从 **4.3 ms 降到 0.05 ms**，所以框放大到 700×258 逻辑像素也不心疼。
+
+内存那一行是三个口径并列，**并且标出在任务管理器里叫哪一列**：
+
+| 面板显示 | 任务管理器里 |
+|---|---|
+| 内存 x MB（专用工作集） | 「内存」列 |
+| 已提交 x MB | 「提交大小」列 |
+| 工作集 x MB（含共享） | 详细信息里的「工作集」 |
+| 共享提交 x MB | 解释"工作集为什么比专用大" |
+
+取数走 `GetProcessMemoryInfo(PROCESS_MEMORY_COUNTERS_EX2)`（Windows 11 起），
+实测与 `\Process\Working Set - Private`、`NtQuerySystemInformation` 的
+`WorkingSetPrivateSize` 三者一致；比原来的 `Process.Refresh()` 便宜两个数量级
+（统计那一栏 3~4 ms → 0.03 ms）。
+
+> 自检/基准模式下面板默认**关**（除非 `--hud`）：它是个大黑框，压在屏幕左上角，
+> 而很多自检的判据正是"数屏幕上的墨"，面板一盖就会假失败。
 - 引擎与界面已拆分：引擎可独立编译，界面只通过 `IOverlayUi` 接入，
   输入优先给界面、界面画在自己的矩形里（代价约 0.4 ms/帧）
   粗细点开是档位表（一步到位）、穿透后给提示并让出点击
@@ -141,7 +297,10 @@ dotnet run --project src/InkProbe -c Release -- --memory reports/inkprobe-memory
 ## 还没做 / 没验证的
 
 - **穿透模式下真实点击是否落到下层程序**：自动化的命中测试已经通过，但还需要人工点一下确认
-- 手写笔的真实压感、延迟手感（需要一台带压感笔的设备）
+- **手写笔的真实延迟手感**：分段延时的量化已经做完（见[延时-实测与优化.md](延时-实测与优化.md)），
+  但"真笔端到端主观手感"和"委托墨迹轨迹到底画不画得出来"需要真笔确认一次
+  （`--penlive 30`，手写笔在屏幕上写 30 秒即可）
+- 委托墨迹轨迹的**预测点**（`AddTrailPointsWithPrediction`）还没用上，是下一步还能抢一点的地方
 - 冻结截图模式、多显示器跨屏、HDR 色彩
 - 新界面（悬浮工具条等，见引擎边界文档里的接入说明）
 - 荧光笔的真实正片叠底混合（目前是半透明黄色近似）

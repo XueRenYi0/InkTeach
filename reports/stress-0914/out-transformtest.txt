@@ -1,0 +1,19 @@
+virtual desktop: 2880x1800 at (0,0)
+帧延迟等待对象: 已启用
+overlay on monitor 65537: 2880x1800 at (0,0) dpi=192
+委托墨迹轨迹(InkTrail): 可用
+DPI 缩放 2.00（逻辑 1440x900）
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+registered 15/15 global hotkeys
+笔迹优化器: 未装（纯底层，画原始采样点）
+
+=== 变换命令自检（改矩阵，不碰几何）===
+    命令已提交                 PASS  撤销深度 1 -> 2
+    几何版本号未变               PASS  Revision 60 -> 60（GPU 缓存不用重建）
+    包围盒按倍数变大              PASS  295 -> 590 px
+    空间索引已更新               PASS  新位置查到 1 个
+    撤销精确回原位               PASS  (200.00,260.00)-(495.00,339.98)
+    重做又回到放大后              PASS  
+
+  PASS: 变换只改矩阵，几何与缓存未受影响
+shutdown complete

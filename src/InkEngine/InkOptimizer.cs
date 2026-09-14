@@ -56,7 +56,7 @@ internal interface IInkOptimizer
 /// <summary>
 /// 当前装上的优化器。**null = 不装，引擎走纯底层路径。**
 ///
-/// 由宿主在启动时决定（见 InkProbe 的处理）：底层性能测试就该让它保持 null，
+/// 由宿主在启动时决定（见 InkTeach 的处理）：底层性能测试就该让它保持 null，
 /// 这样量到的数字里不含任何平滑/美化成本。
 /// </summary>
 internal static class InkOptimizers

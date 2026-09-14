@@ -278,7 +278,7 @@ Write-Host $memText
 if ($ShotPath) {
     $abs = [IO.Path]::GetFullPath($ShotPath)
     New-Item -ItemType Directory -Force -Path (Split-Path $abs) | Out-Null
-    & "D:\文件集中\code\批注\src\InkProbe\bin\Release\net8.0-windows\InkProbe.exe" --screenshot $abs | Out-Null
+    & "D:\文件集中\code\批注\src\InkTeach\bin\Release\net8.0-windows\InkTeach.exe" --screenshot $abs | Out-Null
     Write-Host ("  截图存证：$abs")
 }
 

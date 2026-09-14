@@ -1,0 +1,8 @@
+virtual desktop: 2880x1800 at (0,0)
+overlay on monitor 65537: 2880x1800 at (0,0) dpi=192
+委托墨迹轨迹(InkTrail): 可用
+DPI 缩放 2.00（逻辑 1440x900）
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+registered 15/15 global hotkeys
+笔迹优化器: 未装（纯底层，画原始采样点）
+[   0.2s] fps=  0.0 记录= 7.38 上屏= 0.54 HUD= 3.17 统计= 3.06 合计= 14.15ms 置顶= 0.00ms 脏区=0块/100.0% ws=  85.5MB

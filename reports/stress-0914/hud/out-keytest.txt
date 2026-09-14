@@ -1,0 +1,69 @@
+virtual desktop: 2880x1800 at (0,0)
+帧延迟等待对象: 已启用
+overlay on monitor 65537: 2880x1800 at (0,0) dpi=192
+委托墨迹轨迹(InkTrail): 可用
+DPI 缩放 2.00（逻辑 1440x900）
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+registered 15/15 global hotkeys
+笔迹优化器: 未装（纯底层，画原始采样点）
+
+=== 键位自检（表 / 冲突 / 落盘 / 真机注册）===
+    默认表内部没有矛盾                     PASS  无
+    作用域划分：全局 15 条 + 批注内 14 条      PASS  全局 15，批注内 14
+    全局键一律带修饰键（不会抢走正常打字）           PASS  
+    编辑类动作只在批注内（没有全局 Ctrl+Z 这种）    PASS  
+    解析 Ctrl+Alt+P（大小写不敏感）         PASS  Ctrl+Alt+P
+    解析 Delete                     PASS  VK=2E
+    解析 Shift+Left                 PASS  Shift+Left
+    认不出的键名要报错（不是静默忽略）             PASS  不认识的键名“月亮”
+    只有修饰键要报错                      PASS  只有修饰键，没有主键
+    撞了别人的键要拒绝并说清是谁                PASS  Ctrl+Alt+P 已经是“穿透模式开关”（Global）的键
+    全局热键没有修饰键要拒绝                  PASS  全局热键 F5 没有修饰键：那会把正常打字抢走，拒绝
+    没冲突就能改，并标记成脏                  PASS  撤销 → Ctrl+Alt+F5
+    能恢复默认键                        PASS  Ctrl+Alt+Z
+    写盘后文件真的存在                     PASS  C:\Users\薛仁义\AppData\Local\Temp\inkteach-keytest.json
+    读回无警告，且改动生效                   PASS  退出键 → Ctrl+Alt+F12
+    没改过的项仍是默认值（只写差异）              PASS  
+    只写差异：文件里应当只有 1 条              PASS  
+    键名写坏了：报警告 + 用默认值 + 不抛异常       PASS  “Global.Quit”的按键“Ctrl+Alt+”读不懂：只有修饰键，没有主键（这一项用默认值）
+    整个文件是垃圾：报警告 + 仍能启动            PASS  配置文件里没有 "keys" 段，按默认键位运行
+    全局热键注册数量与表一致                  PASS  15/15 注册成功
+    WM_HOTKEY 的 id 能正确反查到动作       PASS  15 条全部对上
+    批注内按 Delete 真的删掉了选中           PASS  3 笔 → 0 笔
+    这一步能撤销回来                      PASS  撤销后 3 笔
+
+  当前键位表：
+全局热键（任何程序在前台都生效）：
+  Ctrl+Alt+P       穿透模式开关         全屏批注：能画 / 不能画
+  Ctrl+Alt+1       笔              换成笔
+  Ctrl+Alt+2       荧光笔            换成荧光笔
+  Ctrl+Alt+3       激光笔            换成激光笔
+  Ctrl+Alt+4       橡皮擦            换成橡皮擦
+  Ctrl+Alt+5       框选             换成框选（选择/移动/缩放/旋转）
+  Ctrl+Alt+Z       撤销             撤销一步
+  Ctrl+Alt+C       清空             清空整页
+  Ctrl+Alt+I       性能面板开关         显示/隐藏性能面板
+  Ctrl+Alt+6       切换当前工具粗细       切成当前工具的下一档粗细
+  Ctrl+Alt+K       批注键盘模式开关       键盘归批注层（编辑快捷键生效）
+  Ctrl+Alt+Y       切换穿透实现方式       换穿透的实现方式
+  Ctrl+Alt+X       退出             退出
+  Ctrl+Alt+B       性能基准（开发）       开发期：一万笔基准
+  Ctrl+Alt+M       内存探测（开发）       开发期：内存/显存探测
+批注内快捷键（批注键盘模式打开时生效）：
+  Ctrl+Z           撤销             撤销一步
+  Ctrl+Y           重做             重做
+  Ctrl+A           全选             全选
+  Ctrl+D           复制一份           复制一份
+  Delete           删除选中           删除选中
+  Esc              取消选择           取消选择
+  Left             左移 1           左移 1 像素
+  Up               上移 1           上移 1 像素
+  Right            右移 1           右移 1 像素
+  Down             下移 1           下移 1 像素
+  Shift+Left       左移 10          左移 10 像素
+  Shift+Up         上移 10          上移 10 像素
+  Shift+Right      右移 10          右移 10 像素
+  Shift+Down       下移 10          下移 10 像素
+
+  PASS: 键位表、冲突检测、落盘读回、真机注册与批注内按键都正确
+shutdown complete

@@ -1,0 +1,67 @@
+virtual desktop: 2880x1800 at (0,0)
+帧延迟等待对象: 已启用
+overlay on monitor 65537: 2880x1800 at (0,0) dpi=192
+委托墨迹轨迹(InkTrail): 可用
+DPI 缩放 2.00（逻辑 1440x900）
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+registered 15/15 global hotkeys
+笔迹优化器: 未装（纯底层，画原始采样点）
+
+InkTeach 批注原型已启动。键位（可配置，见 C:\Users\薛仁义\AppData\Roaming\InkTeach\settings.json）：
+全局热键（任何程序在前台都生效）：
+  Ctrl+Alt+P       穿透模式开关         全屏批注：能画 / 不能画
+  Ctrl+Alt+1       笔              换成笔
+  Ctrl+Alt+2       荧光笔            换成荧光笔
+  Ctrl+Alt+3       激光笔            换成激光笔
+  Ctrl+Alt+4       橡皮擦            换成橡皮擦
+  Ctrl+Alt+5       框选             换成框选（选择/移动/缩放/旋转）
+  Ctrl+Alt+Z       撤销             撤销一步
+  Ctrl+Alt+C       清空             清空整页
+  Ctrl+Alt+I       性能面板开关         显示/隐藏性能面板
+  Ctrl+Alt+6       切换当前工具粗细       切成当前工具的下一档粗细
+  Ctrl+Alt+K       批注键盘模式开关       键盘归批注层（编辑快捷键生效）
+  Ctrl+Alt+Y       切换穿透实现方式       换穿透的实现方式
+  Ctrl+Alt+X       退出             退出
+  Ctrl+Alt+B       性能基准（开发）       开发期：一万笔基准
+  Ctrl+Alt+M       内存探测（开发）       开发期：内存/显存探测
+批注内快捷键（批注键盘模式打开时生效）：
+  Ctrl+Z           撤销             撤销一步
+  Ctrl+Y           重做             重做
+  Ctrl+A           全选             全选
+  Ctrl+D           复制一份           复制一份
+  Delete           删除选中           删除选中
+  Esc              取消选择           取消选择
+  Left             左移 1           左移 1 像素
+  Up               上移 1           上移 1 像素
+  Right            右移 1           右移 1 像素
+  Down             下移 1           下移 1 像素
+  Shift+Left       左移 10          左移 10 像素
+  Shift+Up         上移 10          上移 10 像素
+  Shift+Right      右移 10          右移 10 像素
+  Shift+Down       下移 10          下移 10 像素
+
+开发期测试模式（不属于引擎）：
+  --selftest [秒]     自动画几笔并检查渲染
+  --report [文件]     输出完整性能报告
+  --memory [文件]     输出内存归因报告
+  --inputtest         指针输入路径自检
+  --passtest          穿透真机测试（跨进程点击）
+  --erasertest        橡皮擦正确性
+  --widthtest         笔迹粗细/压力
+  --ghosttest         残影检测
+  --trailtest         委托墨迹轨迹对照
+  --latbench <csv>    延时实测（分场景 + 分位数 + 稳定性）
+  --penlive [秒]      真笔延时实测（挂上手写笔写一会儿，出报告）
+  --longrun [秒]      长时运行内存/CPU
+  --realizetest [n]   几何实现缓存对照
+  --restest [n]       分辨率对照（离屏层）
+  --beautifytest      手写美化自检（笔锋量化）
+  --beautifyshowcase  四种笔锋摆样（人工看）
+  --cornertest        直角填充自检（拐角会不会掉色）
+  --rotatetest        旋转度数读数与吸附（含真机拖动 + 上屏核对）
+  --preset <名字>     precise | handwriting | bold | calligraphy
+  --rawink            关掉所有笔迹后处理（滤波/抽稀/拟合/笔锋）
+  --screenshot <路径> [x y w h]  截屏工具
+  --clicktarget <日志>           穿透测试用的下层窗口
+
+[   0.2s] fps=  0.0 记录= 7.75 上屏= 0.72 面板=0.00ms×0/s 统计= 1.20 合计= 11.20ms 置顶= 0.00ms 脏区=0块/100.0% ws=  73.7MB

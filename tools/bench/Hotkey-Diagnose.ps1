@@ -94,7 +94,7 @@ namespace Diag
 
 function Shot([string]$name) {
     $path = Join-Path $OutDir $name
-    & "D:\文件集中\code\批注\src\InkProbe\bin\Release\net8.0-windows\InkProbe.exe" --screenshot $path | Out-Null
+    & "D:\文件集中\code\批注\src\InkTeach\bin\Release\net8.0-windows\InkTeach.exe" --screenshot $path | Out-Null
     return $path
 }
 

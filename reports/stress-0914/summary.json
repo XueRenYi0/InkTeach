@@ -1,0 +1,240 @@
+[
+  {
+    "Case": "coordtest",
+    "Desc": "坐标不变量：相机偏移下画哪儿显示哪儿",
+    "Verdict": "PASS",
+    "Seconds": 4.9,
+    "ExitCode": 0
+  },
+  {
+    "Case": "cameratest",
+    "Desc": "相机只改一个数，对象数据不动",
+    "Verdict": "FAIL",
+    "Seconds": 3.9,
+    "ExitCode": 0
+  },
+  {
+    "Case": "shapetest",
+    "Desc": "图形精确命中（轮廓中间是空的）",
+    "Verdict": "PASS",
+    "Seconds": 0.5,
+    "ExitCode": 0
+  },
+  {
+    "Case": "savetest",
+    "Desc": "保存/加载往返逐字段一致 + 坏数据明确失败",
+    "Verdict": "FAIL",
+    "Seconds": 0.4,
+    "ExitCode": 0
+  },
+  {
+    "Case": "transformtest",
+    "Desc": "改变换不碰几何、撤销精确回原位",
+    "Verdict": "PASS",
+    "Seconds": 0.4,
+    "ExitCode": 0
+  },
+  {
+    "Case": "handletest",
+    "Desc": "手柄位置/命中/拖出来的变换矩阵",
+    "Verdict": "PASS",
+    "Seconds": 0.4,
+    "ExitCode": 0
+  },
+  {
+    "Case": "edittest",
+    "Desc": "复制/删除/翻转/旋转的撤销语义",
+    "Verdict": "PASS",
+    "Seconds": 0.4,
+    "ExitCode": 0
+  },
+  {
+    "Case": "selbench",
+    "Desc": "选中/变换性能（分对象数档位）",
+    "Verdict": "N/A",
+    "Seconds": 5.7,
+    "ExitCode": 0
+  },
+  {
+    "Case": "duptest",
+    "Desc": "指数复制：内存线性 + 护栏",
+    "Verdict": "N/A",
+    "Seconds": 1.3,
+    "ExitCode": 0
+  },
+  {
+    "Case": "erasertest",
+    "Desc": "橡皮擦不遗漏、整段只算一步撤销",
+    "Verdict": "PASS",
+    "Seconds": 1.5,
+    "ExitCode": 0
+  },
+  {
+    "Case": "inputtest",
+    "Desc": "按下→移动→抬起整条路径处处有墨",
+    "Verdict": "PASS",
+    "Seconds": 1.7,
+    "ExitCode": 0
+  },
+  {
+    "Case": "widthtest",
+    "Desc": "各档粗细实测墨量对理论值",
+    "Verdict": "N/A",
+    "Seconds": 1.2,
+    "ExitCode": 0
+  },
+  {
+    "Case": "cornertest",
+    "Desc": "直角填充自检（拐角掉不掉色）",
+    "Verdict": "FAIL",
+    "Seconds": 1.0,
+    "ExitCode": 0
+  },
+  {
+    "Case": "ghosttest",
+    "Desc": "残影检测（相机为 0）",
+    "Verdict": "PASS",
+    "Seconds": 3.0,
+    "ExitCode": 0
+  },
+  {
+    "Case": "ghosttest-scroll",
+    "Desc": "残影检测（有滚动偏移）",
+    "Verdict": "PASS",
+    "Seconds": 3.0,
+    "ExitCode": 0
+  },
+  {
+    "Case": "trailtest",
+    "Desc": "委托墨迹轨迹对照",
+    "Verdict": "FAIL",
+    "Seconds": 2.7,
+    "ExitCode": 0
+  },
+  {
+    "Case": "cursortest",
+    "Desc": "光标/橡皮圆环/荧光笔胶囊渲染",
+    "Verdict": "FAIL",
+    "Seconds": 0.4,
+    "ExitCode": 0
+  },
+  {
+    "Case": "tiletest",
+    "Desc": "内容层分块缓存正确性",
+    "Verdict": "PASS",
+    "Seconds": 3.0,
+    "ExitCode": 0
+  },
+  {
+    "Case": "scrollwrite",
+    "Desc": "滚到哪儿都能写，内容留在画布位置",
+    "Verdict": "PASS",
+    "Seconds": 1.9,
+    "ExitCode": 0
+  },
+  {
+    "Case": "wheeltest",
+    "Desc": "滚轮滚动",
+    "Verdict": "PASS",
+    "Seconds": 0.4,
+    "ExitCode": 0
+  },
+  {
+    "Case": "appendtest",
+    "Desc": "追加路径（同一笔续写）",
+    "Verdict": "FAIL",
+    "Seconds": 3.6,
+    "ExitCode": 0
+  },
+  {
+    "Case": "memlife",
+    "Desc": "一万笔生命周期内存",
+    "Verdict": "N/A",
+    "Seconds": 1.5,
+    "ExitCode": 0
+  },
+  {
+    "Case": "realizetest",
+    "Desc": "几何实现缓存对照",
+    "Verdict": "N/A",
+    "Seconds": 2.4,
+    "ExitCode": 0
+  },
+  {
+    "Case": "restest",
+    "Desc": "分辨率对照（离屏层）",
+    "Verdict": "N/A",
+    "Seconds": 1.4,
+    "ExitCode": 0
+  },
+  {
+    "Case": "beautifytest",
+    "Desc": "手写美化自检（笔锋量化 15 项）",
+    "Verdict": "FAIL",
+    "Seconds": 0.4,
+    "ExitCode": 0
+  },
+  {
+    "Case": "selftest",
+    "Desc": "渲染验证 + 一万笔基准",
+    "Verdict": "PASS",
+    "Seconds": 8.4,
+    "ExitCode": 0
+  },
+  {
+    "Case": "memab",
+    "Desc": "内存 A/B：几何缓存值不值",
+    "Verdict": "N/A",
+    "Seconds": 6.3,
+    "ExitCode": 0
+  },
+  {
+    "Case": "passtest",
+    "Desc": "穿透：跨进程真实点击落到下层窗口",
+    "Verdict": "PASS",
+    "Seconds": 3.6,
+    "ExitCode": 0
+  },
+  {
+    "Case": "report",
+    "Desc": "全量性能报告（写文件）",
+    "Verdict": "N/A",
+    "Seconds": 23.8,
+    "ExitCode": 0
+  },
+  {
+    "Case": "memory",
+    "Desc": "内存分阶段归因（写文件）",
+    "Verdict": "N/A",
+    "Seconds": 1.7,
+    "ExitCode": 0
+  },
+  {
+    "Case": "aaprobe",
+    "Desc": "平滑到底是谁给的（点数分解）",
+    "Verdict": "N/A",
+    "Seconds": 0.4,
+    "ExitCode": 0
+  },
+  {
+    "Case": "longrun",
+    "Desc": "长跑 60 秒：画→擦→撤销→翻页",
+    "Verdict": "N/A",
+    "Seconds": 60.5,
+    "ExitCode": 0
+  },
+  {
+    "Case": "writetest",
+    "Desc": "连续书写 2 分钟（6 笔/秒）",
+    "Verdict": "N/A",
+    "Seconds": 3.5,
+    "ExitCode": 0
+  },
+  {
+    "Case": "latbench",
+    "Desc": "延时分场景实测（写 CSV）",
+    "Verdict": "FAIL",
+    "Seconds": 28.6,
+    "ExitCode": 0
+  }
+]
