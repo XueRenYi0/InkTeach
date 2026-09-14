@@ -428,6 +428,64 @@ internal sealed class OverlayWindow : IDisposable
         catch (Exception ex) { _trailActive = false; InkTrailDebug = "AddTrailPoints 异常: " + ex.Message; }
     }
 
+    /// <summary>
+    /// 把一批真实点 + 一批**预测点**交给系统合成器（都用屏幕坐标）。
+    ///
+    /// 预测点是"这一帧之后笔尖大概在哪"（见 Prediction/InkPredictor.cs）。系统会把轨迹画到
+    /// 预测点上；下一条消息来了、真实点补上，预测段自然被覆盖——所以这条通道**猜错了也只是
+    /// 屏幕上短暂的一小截**，不会进文档。微软自己笔迹"跟手"的关键就在这个带预测的重载上，
+    /// 而绑定我们本来就有（Vortice.DirectComposition 3.8.3）。
+    /// </summary>
+    public void AddInkTrailPoints(Vector2[] real, int realCount, Vector2[] predicted, int predictedCount, float radius)
+    {
+        if (!_trailActive || _inkTrail == null || real == null || realCount <= 0) return;
+        try
+        {
+            float r = MathF.Max(0.5f, radius);
+            var realPts = new DCompositionInkTrailPoint[realCount];
+            for (int i = 0; i < realCount; i++)
+                realPts[i] = new DCompositionInkTrailPoint
+                {
+                    X = real[i].X - OriginX,
+                    Y = real[i].Y - OriginY,
+                    Radius = r,
+                };
+
+            var predPts = Array.Empty<DCompositionInkTrailPoint>();
+            if (predicted != null && predictedCount > 0)
+            {
+                predPts = new DCompositionInkTrailPoint[predictedCount];
+                for (int i = 0; i < predictedCount; i++)
+                    predPts[i] = new DCompositionInkTrailPoint
+                    {
+                        X = predicted[i].X - OriginX,
+                        Y = predicted[i].Y - OriginY,
+                        Radius = r,
+                    };
+            }
+
+            _trailGeneration = _inkTrail.AddTrailPointsWithPrediction(
+                realPts, (uint)realCount, predPts, (uint)predPts.Length);
+            InkTrailDebug = $"AddTrailPointsWithPrediction 真实 {realCount} + 预测 {predPts.Length}，gen={_trailGeneration}";
+        }
+        catch (Exception ex)
+        {
+            // 带预测的重载万一不被支持，退回不带预测的老路——宁可少一点跟手，也不能丢湿墨。
+            InkTrailDebug = "AddTrailPointsWithPrediction 异常: " + ex.Message;
+            try
+            {
+                var p = new DCompositionInkTrailPoint
+                {
+                    X = real[realCount - 1].X - OriginX,
+                    Y = real[realCount - 1].Y - OriginY,
+                    Radius = MathF.Max(0.5f, radius),
+                };
+                _trailGeneration = _inkTrail.AddTrailPoints(new[] { p }, 1);
+            }
+            catch { _trailActive = false; }
+        }
+    }
+
     /// <summary>收笔：把预测出来的那一段抹掉，交回给我们自己的笔画。</summary>
     public void EndInkTrail()
     {

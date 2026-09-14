@@ -200,6 +200,30 @@ public class InkEngine
     internal bool _drawing;
     private uint _activePointer;
     private uint _activePointerType;
+
+    // ---- 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictor.cs）----
+    //  这两件事共用同一条时间轴：采样点自带硬件时标，压感保真靠它，外推预测也靠它。
+    private readonly PenSampleBuffer _pen = new();
+    private readonly InkPredictor _predictor = new();
+    private readonly PredictedPoint[] _predBuf = new PredictedPoint[8];
+    private readonly Vector2[] _trailReal = new Vector2[PenSampleBuffer.MaxSamples];
+    private readonly Vector2[] _trailPred = new Vector2[8];
+
+    /// <summary>湿墨预测开关。真笔专属，<c>--nopredict</c> 关掉。</summary>
+    internal bool PredictEnabled = true;
+    /// <summary>当前预测地平线（毫秒，8~15）。诊断用。</summary>
+    internal double PredictHorizonMs => _predictor.HorizonMs;
+    /// <summary>前带量的硬上限（像素）。诊断用。</summary>
+    internal float PredictLeadCap => _predictor.MaxDistance;
+    /// <summary>本笔有没有压感（设备级判断，不是看数值）。</summary>
+    internal bool ActiveStrokeHasPressure;
+    /// <summary>上一笔的合并率/预测统计（诊断与自检用）。</summary>
+    internal int LastCoalescedSamples, LastCoalescedMessages;
+    /// <summary>累计统计（--penlive 结束时汇总用）：真笔的压感/倾角/合并情况。</summary>
+    internal int PenTotalPoints, PenPressurePoints, PenMessages, PenSamples;
+    internal bool PenSawPressureMask, PenSawTiltMask, PenSawRotationMask;
+    /// <summary>预测把湿墨往前带了多少（像素）——"说不清有没有用"时就看这个数。</summary>
+    internal double PredLeadSum; internal int PredLeadCount; internal float PredLeadMax;
     internal int _cntDown, _cntMove, _cntUp, _cntCaptureLost;
     internal string _lastStrokeReport;
     private long _hotkeysRegistered;
@@ -448,6 +472,19 @@ public class InkEngine
         OverlayWindow.InkTrailEnabled = penDevicePresent && !args.Contains("--noinktrail");
         if (args.Contains("--inktrail")) OverlayWindow.InkTrailEnabled = true;
         if (args.Contains("--noinktrail")) OverlayWindow.InkTrailEnabled = false;
+
+        // ---- 笔迹预测 ---------------------------------------------------------
+        // 默认跟着湿墨轨迹一起开（只对真笔生效）。--nopredict 关掉；
+        // --predictms N 调地平线，超出 8~15 ms 会被收进范围（见原理文档第三节）。
+        PredictEnabled = OverlayWindow.InkTrailEnabled && !args.Contains("--nopredict");
+        for (int i = 0; i < args.Length - 1; i++)
+            if (args[i] == "--predictms" && double.TryParse(args[i + 1], out double pm))
+                _predictor.HorizonMs = pm;
+        // 前带量的硬上限（像素）。默认 12 px 足够快机器；负载大、延迟高时要放宽才看得清效果。
+        for (int i = 0; i < args.Length - 1; i++)
+            if (args[i] == "--predictlead" && float.TryParse(args[i + 1], out float pl))
+                _predictor.MaxDistance = Math.Clamp(pl, 4f, 40f);
+        _predictor.ClampHorizon();
 
         // ---- 呈现节奏 ---------------------------------------------------------
         // 默认改成"等到合成边界再抽输入、立刻 Present(0)"。实测这一项把
@@ -1070,7 +1107,7 @@ public class InkEngine
                 // 只对真笔（PT_PEN）起轨迹：这条通道是给"笔尖跟手"用的，
                 // 鼠标/触摸走它没有意义，而且会平白多一条系统画出来的线。
                 if (ptype == Native.PT_PEN)
-                    WindowAt(x, y)?.BeginInkTrail(
+                    WindowAt(screenX, screenY)?.BeginInkTrail(
                         tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f);
                 ActiveStroke = new Stroke
                 {
@@ -1080,7 +1117,13 @@ public class InkEngine
                                                       : tool == Tool.Laser ? LaserWidthLogical
                                                       : PenWidthLogical) * DpiScale,
                 };
-                ActiveStroke.AddPoint(x, y, pressure, NowMs);
+                // 起笔：预测器从这一刻开始积累；落笔这条消息里可能已经合并了几个采样点，
+                // 一起收进来（以前只取最新那一个）。
+                _predictor.Reset();
+                ActiveStrokeHasPressure = false;
+                LastCoalescedSamples = LastCoalescedMessages = 0;
+                AppendStrokeSamples(id, ptype, x, y, pressure);
+                FeedInkTrail(ptype, trailW * 0.5f, screenX, screenY);
                 break;
         }
         _dirty = true;
@@ -1160,13 +1203,11 @@ public class InkEngine
                 if (ActiveStroke != null)
                 {
                     // 指针报什么坐标就存什么坐标：不做平滑、不做抽稀。
-                    // （采样间隔、平滑、抽稀以前是给可选的笔迹优化层用的，那一层已经删掉。）
-                    float fx = x, fy = y;
-
-                    if (ptype == Native.PT_PEN)
-                        WindowAt(x, y)?.AddInkTrailPoint(fx, fy, ActiveStroke.Width * 0.5f);
-
-                    ActiveStroke.AddPoint(fx, fy, pressure, NowMs);
+                    // 但**一条消息里的点要全部收下**——系统会把来不及投递的移动合并
+                    // （自己实测：注入 140 Hz，应用只收到约 60 条消息，其余在 history 里），
+                    // 只取最新那一个等于把笔的采样率砍半（见 Input/PenInput.cs）。
+                    AppendStrokeSamples(id, ptype, x, y, pressure);
+                    FeedInkTrail(ptype, ActiveStroke.Width * 0.5f, screenX, screenY);
                 }
                 break;
         }
@@ -1370,7 +1411,9 @@ public class InkEngine
                 _lastStrokeReport =
                     $"采集到 {ActiveStroke.Points.Count} 个点"
                     + $"，收到 按下{_cntDown} 移动{_cntMove} 抬起{_cntUp} 丢失捕获{_cntCaptureLost}"
-                    + $"，设备={PointerTypeName(_activePointerType)}";
+                    + $"，设备={PointerTypeName(_activePointerType)}"
+                    + $"，压感={(ActiveStrokeHasPressure ? "有" : "无")}"
+                    + $"，合并({LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 个采样点)";
                 Console.WriteLine("[笔画] " + _lastStrokeReport);
             }
             ActiveStroke = null;
@@ -1747,6 +1790,84 @@ public class InkEngine
                 return w;
         }
         return _windows.Count > 0 ? _windows[0] : null;
+    }
+
+    /// <summary>
+    /// 把这条指针消息里的**全部**采样点追加进当前笔画。
+    ///
+    /// 真笔走合并点（`GetPointerPenInfoHistory`，见 <c>Input/PenInput.cs</c>）：
+    /// 系统会把来不及投递的移动合并进一条消息，只取最新那一个等于把采样率砍半。
+    /// 非笔设备、或读不到合并点时退回"一个消息一个点"的老路（行为与以前完全一致）。
+    ///
+    /// 坐标：笔画存**画布**坐标；预测器喂**屏幕**坐标（湿墨轨迹也是屏幕空间）。
+    /// </summary>
+    private void AppendStrokeSamples(uint id, uint ptype, float curCanvasX, float curCanvasY, float curPressure)
+    {
+        if (ActiveStroke == null) return;
+
+        if (ptype != Native.PT_PEN || _pen.Read(id, NowMs, _lastInputMsgQpc) == 0)
+        {
+            ActiveStroke.AddPoint(curCanvasX, curCanvasY, curPressure, NowMs);
+            return;
+        }
+
+        LastCoalescedMessages++;
+        LastCoalescedSamples += _pen.Count;
+        PenMessages++;
+        PenSamples += _pen.Count;
+        PenSawPressureMask |= _pen.AnyPressure;
+        PenSawTiltMask |= _pen.HasTilt;
+        PenSawRotationMask |= _pen.Last.Rotation != 0;
+        for (int i = 0; i < _pen.Count; i++)
+        {
+            var s = _pen[i];
+            float cx = s.X, cy = s.Y;
+            ScreenToCanvas(ref cx, ref cy);
+            ActiveStroke.AddPoint(cx, cy, s.Pressure, s.TimeMs);
+            _predictor.Add(s.X, s.Y, s.TimeMs);
+            PenTotalPoints++;
+            if (s.HasPressure) PenPressurePoints++;
+        }
+        ActiveStrokeHasPressure |= _pen.AnyPressure;
+    }
+
+    /// <summary>
+    /// 湿墨：把这一条消息里的真实点（屏幕坐标）连同**预测点**一起交给系统合成器。
+    ///
+    /// 预测只作用于湿墨——它画的是"正在写的这一笔"的最后一小段，真实点一到就被覆盖，
+    /// 不进存档、也不会变成一条真的笔画。这是"不甩墨"的第一道保险。
+    /// </summary>
+    private void FeedInkTrail(uint ptype, float radius, float screenX, float screenY)
+    {
+        if (ptype != Native.PT_PEN || !OverlayWindow.InkTrailEnabled) return;
+        var win = WindowAt(screenX, screenY);
+        if (win == null) return;
+
+        int realCount = 0;
+        if (_pen.Count > 0)
+        {
+            for (int i = 0; i < _pen.Count && realCount < _trailReal.Length; i++)
+                _trailReal[realCount++] = new Vector2(_pen[i].X, _pen[i].Y);
+        }
+        if (realCount == 0) _trailReal[realCount++] = new Vector2(screenX, screenY);
+
+        int predCount = 0;
+        if (PredictEnabled)
+        {
+            int n = _predictor.Predict(_predBuf);
+            for (int i = 0; i < n && predCount < _trailPred.Length; i++)
+                _trailPred[predCount++] = new Vector2(_predBuf[i].X, _predBuf[i].Y);
+        }
+
+        if (predCount > 0)
+        {
+            float lead = Vector2.Distance(_trailReal[realCount - 1], _trailPred[predCount - 1]);
+            PredLeadSum += lead;
+            PredLeadCount++;
+            if (lead > PredLeadMax) PredLeadMax = lead;
+        }
+
+        win.AddInkTrailPoints(_trailReal, realCount, _trailPred, predCount, radius);
     }
 
     private void ApplyMarquee()

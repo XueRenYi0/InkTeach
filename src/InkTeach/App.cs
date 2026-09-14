@@ -344,6 +344,35 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             CameraTest();
         }
+        else if (mode == "--predicttest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PredictorTest();
+        }
+        else if (mode == "--pressurediag")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PressureDiagTest();
+        }
+        else if (mode == "--predictdata")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PredictEval.Run(args.Length > 1 ? args[1] : "tmp/datasets");
+            _quit = true;
+        }
+        else if (mode == "--wetinktest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            double secs = 15;
+            for (int i = 0; i < args.Length - 1; i++)
+                if (args[i] == "--live" && double.TryParse(args[i + 1], out var s)) secs = s;
+            if (args.Contains("--live")) WetInkLiveTest(secs);
+            else WetInkTest(args.Contains("--activate"));
+        }
         else if (mode == "--scrollwrite")
         {
             _autoExitAt = double.MaxValue;
@@ -429,6 +458,10 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --widthtest         笔迹粗细/压力");
         Console.WriteLine("  --ghosttest         残影检测");
         Console.WriteLine("  --trailtest         委托墨迹轨迹对照");
+        Console.WriteLine("  --predicttest       笔迹预测自检（纯算法：直线/加速/急转/断笔/限幅/性能）");
+        Console.WriteLine("  --pressurediag      压感采集诊断（合成笔注入：合并点、压感有效位、压力分布）");
+        Console.WriteLine("  --wetinktest        湿墨轨迹实测（只让系统画，数上屏像素：这条通道到底画不画）");
+        Console.WriteLine("  --predictdata [路径] 真实笔迹数据上的预测评测（UCI Character Trajectories）");
         Console.WriteLine("  --latbench <csv>    延时实测（分场景 + 分位数 + 稳定性）");
         Console.WriteLine("  --penlive [秒]      真笔延时实测（挂上手写笔写一会儿，出报告）");
         Console.WriteLine("  --longrun [秒]      长时运行内存/CPU");
@@ -4612,6 +4645,416 @@ internal sealed class App : InkEngine.InkEngine
         _quit = true;
     }
 
+    // =====================================================================
+    //  压感采集与笔迹预测的自检
+    // =====================================================================
+
+    /// <summary>
+    /// 笔迹预测自检（**纯算法**：不需要真笔、不需要屏幕、不画东西）。
+    /// 把 `调研-压感与预测-原理.md` 第三节里那些"别甩墨"的约束逐条变成断言。
+    /// </summary>
+    private void PredictorTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 笔迹预测自检（纯算法）===");
+        int pass = 0, fail = 0;
+        void Check(string what, bool ok, string detail)
+        {
+            Console.WriteLine($"  {(ok ? "PASS" : "FAIL")}: {what,-36} {detail}");
+            if (ok) pass++; else fail++;
+        }
+
+        var pred = new PredictedPoint[8];
+        static InkPredictor New(double horizonMs = 10.0)
+        {
+            var p = new InkPredictor { HorizonMs = horizonMs };
+            p.ClampHorizon();
+            return p;
+        }
+
+        // 1) 直线匀速：v = 1 px/ms，地平线 10 ms，阻尼 0.7 → 最远点应在 7 px 处
+        {
+            var p = New();
+            p.Damping = 0.70f;                                  // 显式给值，别跟默认值耦合
+            p.Add(0, 0, 0); p.Add(5, 0, 5); p.Add(10, 0, 10);
+            int n = p.Predict(pred);
+            float dx = n > 0 ? pred[n - 1].X - 10f : float.NaN;
+            Check("直线匀速：给出预测点且在前方", n >= 1 && dx > 0, $"点数 {n}，位移 {dx:F2} px");
+            Check("直线匀速：位移 = v·τ·阻尼", n >= 1 && MathF.Abs(dx - 7f) < 0.5f, $"期望 7.00，实得 {dx:F2}");
+            Check("直线匀速：时间单调递增且不超过地平线",
+                  n >= 2 && pred[0].TimeMs > 10 && pred[n - 1].TimeMs <= 20.01 &&
+                  pred[1].TimeMs > pred[0].TimeMs,
+                  n >= 2 ? $"{pred[0].TimeMs:F1} → {pred[n - 1].TimeMs:F1} ms（最后一点 = 起点 + 10）" : "点不够");
+            Check("默认阻尼就是数据扫出来的 0.80", MathF.Abs(new InkPredictor().Damping - 0.80f) < 1e-6f,
+                  $"{new InkPredictor().Damping:F2}");
+        }
+
+        // 2) 匀加速：二阶项应让它比"只用速度"更远（但被 AccelDamping 收着）
+        {
+            var p = New();
+            p.Add(0, 0, 0); p.Add(5, 0, 5); p.Add(11, 0, 10);   // v: 1 → 1.2，a = 0.04 px/ms²
+            int n = p.Predict(pred);
+            float dx = n > 0 ? pred[n - 1].X - 11f : float.NaN;
+            float firstOrder = 1.2f * 10f * 0.7f;               // 只算速度项
+            Check("匀加速：比一阶更远（加速度项生效）", n >= 1 && dx > firstOrder + 0.2f,
+                  $"二阶 {dx:F2} > 一阶 {firstOrder:F2}");
+            Check("匀加速：加速度被衰减，不会失控", n >= 1 && dx < firstOrder + 3f, $"二阶 {dx:F2}");
+        }
+
+        // 3) 慢速不预测：速度低于阈值时返回 0 个点（慢写时预测只有抖动没有收益）
+        {
+            var p = New();
+            p.Add(0, 0, 0); p.Add(0.05f, 0, 5);                 // v = 0.01 px/ms < 0.02
+            int n = p.Predict(pred);
+            Check("慢速：不预测", n == 0, $"速度 {p.Speed:F3} px/ms → 点数 {n}");
+        }
+
+        // 4) 断笔重置：相邻采样间隔 > 20 ms 就当新的一笔（Chromium 的 kMaxTimeDelta）
+        {
+            var p = New();
+            p.Add(0, 0, 0); p.Add(5, 0, 5);
+            p.Add(100, 0, 105);                                 // 间隔 100 ms
+            int n = p.Predict(pred);
+            Check("断笔：间隔 100 ms 后重置", p.Count == 1 && n == 0, $"队列长度 {p.Count}，点数 {n}");
+        }
+
+        // 5) 反向/急转：新点与当前速度反向 → 丢掉速度，这一帧不预测（拐弯处最容易甩墨）
+        {
+            var p = New();
+            p.Add(0, 0, 0); p.Add(10, 0, 10);                   // v = +1
+            p.Add(-1, 0, 20);                                   // 立刻反向
+            int n = p.Predict(pred);
+            Check("急转：反向时丢掉速度", MathF.Abs(p.Speed) < 0.001f && n == 0,
+                  $"速度 {p.Speed:F3} px/ms，点数 {n}");
+        }
+
+        // 6) 限幅：极快速度下，预测段长度被 MaxDistance 截住（兜底，防长尾）
+        {
+            var p = New();
+            p.Add(0, 0, 0); p.Add(500, 0, 5);                   // v = 100 px/ms
+            int n = p.Predict(pred);
+            float dx = n > 0 ? pred[n - 1].X - 500f : float.NaN;
+            Check("限幅：位移不超过 MaxDistance", n >= 1 && dx <= p.MaxDistance + 0.01f,
+                  $"位移 {dx:F2} px（上限 {p.MaxDistance}）");
+        }
+
+        // 7) 地平线夹取：命令行传进来的值会被收进 8~15 ms
+        {
+            var lo = New(1.0); var hi = New(100.0);
+            Check("地平线：低于 8 ms 收到 8", Math.Abs(lo.HorizonMs - 8) < 0.001, $"{lo.HorizonMs}");
+            Check("地平线：高于 15 ms 收到 15", Math.Abs(hi.HorizonMs - 15) < 0.001, $"{hi.HorizonMs}");
+        }
+
+        // 8) 点数与上限：按采样间隔铺满地平线；**最后一点必须落在正地平线上**
+        //    （实测教训：只铺到"离地平线最近的那个整数倍"，5 ms 采样 + 8 ms 地平线会少补 3 ms）
+        {
+            var p = New(10);
+            p.Add(0, 0, 0); p.Add(3, 0, 3); p.Add(6, 0, 6);      // 间隔 3 ms
+            int n = p.Predict(pred);
+            Check("点数：3 ms 间隔 + 10 ms 地平线 → 铺到地平线",
+                  n == 4 && Math.Abs(pred[n - 1].TimeMs - 16.0) < 1e-6,
+                  $"点数 {n}，最后一点 {pred[n - 1].TimeMs:F1} ms（应 = 6 + 10）");
+
+            var p8 = New(8);
+            p8.Add(0, 0, 0); p8.Add(5, 0, 5); p8.Add(10, 0, 10); // 间隔 5 ms
+            int n8 = p8.Predict(pred);
+            Check("地平线不被采样间隔截短（8 ms + 5 ms 采样）",
+                  n8 == 2 && Math.Abs(pred[n8 - 1].TimeMs - 18.0) < 1e-6,
+                  $"点数 {n8}，最后一点 {pred[n8 - 1].TimeMs:F1} ms（应 = 10 + 8）");
+
+            var p2 = New(15);
+            p2.MaxPoints = 4;
+            for (int i = 0; i < 8; i++) p2.Add(i * 1.0f, 0, i * 1.0);   // 1 ms 间隔
+            int n2 = p2.Predict(pred);
+            Check("点数：不超过 MaxPoints", n2 <= p2.MaxPoints, $"点数 {n2}（上限 {p2.MaxPoints}）");
+        }
+
+        // 9) 成本：预测必须是"顺手就做了"，不能进性能预算
+        {
+            var p = New();
+            const int N = 200_000;
+            p.Add(0, 0, 0); p.Add(5, 0, 5); p.Add(10, 0, 10);
+            var sw = Stopwatch.StartNew();
+            int acc = 0;
+            for (int i = 0; i < N; i++)
+            {
+                p.Add(10 + i * 0.001f, 0, 10 + i * 0.005);
+                acc += p.Predict(pred);
+            }
+            sw.Stop();
+            double us = sw.Elapsed.TotalMilliseconds * 1000.0 / N;
+            Check("成本：每次 < 5 µs", us < 5.0, $"{us:F3} µs/次（累计预测 {acc} 个点）");
+        }
+
+        Console.WriteLine($"  合计：{pass} 项通过，{fail} 项失败");
+        Console.WriteLine(fail == 0 ? "  PASS: 预测器自检全部通过" : "  FAIL: 预测器自检有失败项");
+        _quit = true;
+    }
+
+    // ---- 合成笔（自检注入用）--------------------------------------------
+    private IntPtr _syntheticPen;
+
+    private bool EnsureSyntheticPen()
+    {
+        if (_syntheticPen != IntPtr.Zero) return true;
+        _syntheticPen = Native.CreateSyntheticPointerDevice(Native.PT_PEN, 1, Native.POINTER_FEEDBACK_DEFAULT);
+        return _syntheticPen != IntPtr.Zero;
+    }
+
+    /// <summary>注入一个合成笔采样点，走的是和真笔同一条 WM_POINTER 路径。</summary>
+    private void SendPenPoint(float x, float y, uint pressure, bool contact, bool first)
+    {
+        var arr = new Native.POINTER_TYPE_INFO[1];
+        uint flags = Native.POINTER_FLAG_INRANGE | Native.POINTER_FLAG_CONFIDENCE;
+        if (contact) flags |= Native.POINTER_FLAG_INCONTACT;
+        if (first) flags |= Native.POINTER_FLAG_NEW | Native.POINTER_FLAG_PRIMARY | Native.POINTER_FLAG_FIRSTBUTTON;
+
+        arr[0].type = Native.PT_PEN;
+        arr[0].pen.pointerInfo.pointerType = Native.PT_PEN;
+        arr[0].pen.pointerInfo.pointerFlags = flags;
+        arr[0].pen.pointerInfo.ptPixelLocationX = (int)x;
+        arr[0].pen.pointerInfo.ptPixelLocationY = (int)y;
+        arr[0].pen.pointerInfo.hwndTarget = _windows.Count > 0 ? _windows[0].Hwnd : IntPtr.Zero;
+        arr[0].pen.penFlags = 0;
+        arr[0].pen.penMask = Native.PEN_MASK_PRESSURE;
+        arr[0].pen.pressure = pressure;
+        Native.InjectSyntheticPointerInput(_syntheticPen, arr, 1);
+    }
+
+    /// <summary>
+    /// 压感采集诊断：用合成笔注入一条**已知**的轨迹（点数、节奏、压力都已知），
+    /// 然后看引擎收下了多少点、合并点有没有读全、压感有效位判得对不对。
+    ///
+    /// 这个用例的价值在于它**不依赖真笔**：注入 160 个点、每帧塞 4 个，
+    /// 系统必然把其中几条合并成一条消息——如果合并点没读全，笔画的点数会明显少于 160。
+    /// </summary>
+    private void PressureDiagTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 压感采集诊断（合成笔注入）===");
+        if (!EnsureSyntheticPen())
+        {
+            Console.WriteLine("  SKIP: 拿不到合成笔设备（CreateSyntheticPointerDevice 失败）");
+            _quit = true; return;
+        }
+
+        Doc.Clear();
+        Doc.InvalidateAll();
+        Tool = Tool.Pen;
+        SettleFrames(120);
+
+        float cx = _virtualX + _virtualW * 0.5f;
+        float cy = _virtualY + _virtualH * 0.5f;
+        const int PerFrame = 4;
+        const int Frames = 40;
+        int injected = 0;
+
+        SendPenPoint(cx - 300, cy, 200, contact: true, first: true);
+        injected++;
+
+        for (int f = 0; f < Frames; f++)
+        {
+            // 每帧塞 PerFrame 个点：系统会把它们合并进同一条消息（这正是要测的）
+            for (int k = 0; k < PerFrame; k++)
+            {
+                float t = (f * PerFrame + k) / (float)(Frames * PerFrame);
+                SendPenPoint(cx - 300 + t * 600, cy + MathF.Sin(t * 6.28f) * 40,
+                             (uint)(200 + t * 700), contact: true, first: false);
+                injected++;
+            }
+            SettleFrames(1);        // 抽一次消息：这一帧应该把合并的几个点一起读进来
+        }
+
+        SendPenPoint(cx + 300, cy, 400, contact: false, first: false);   // 抬笔
+        SettleFrames(60);
+
+        int strokePoints = 0, withPressure = 0;
+        float pMin = 9f, pMax = -1f;
+        if (Doc.Strokes.Count > 0)
+        {
+            var s = Doc.Strokes[^1];
+            strokePoints = s.Points.Count;
+            foreach (var pt in s.Points)
+            {
+                if (pt.P > 0f && MathF.Abs(pt.P - 0.5f) > 0.001f) withPressure++;
+                pMin = MathF.Min(pMin, pt.P);
+                pMax = MathF.Max(pMax, pt.P);
+            }
+        }
+
+        double ratio = LastCoalescedMessages > 0 ? LastCoalescedSamples / (double)LastCoalescedMessages : 0;
+        Console.WriteLine($"  注入采样点            : {injected}");
+        Console.WriteLine($"  引擎收到的消息 / 采样点: {LastCoalescedMessages} / {LastCoalescedSamples}（每条消息平均 {ratio:F2} 个点）");
+        Console.WriteLine($"  本笔判定有无压感       : {(ActiveStrokeHasPressure ? "有" : "无")}");
+        Console.WriteLine($"  落到笔画里的点数       : {strokePoints}（其中带压感的 {withPressure} 个）");
+        Console.WriteLine($"  压力范围              : {(pMax >= 0 ? $"{pMin:F3} ~ {pMax:F3}" : "（没有点）")}");
+        Console.WriteLine($"  设备                  : {DeviceName(LastPointerType)}");
+        Console.WriteLine($"  湿墨轨迹              : 开关={(OverlayWindow.InkTrailEnabled ? "开" : "关")}"
+                          + $"，预测={(PredictEnabled ? $"开（{PredictHorizonMs:F0} ms）" : "关")}"
+                          + $"，最后一次调用={OverlayWindow.InkTrailDebug}");
+
+        bool readAll = strokePoints >= injected * 0.8;
+        bool coalesced = ratio > 1.3;
+        bool pressureOk = ActiveStrokeHasPressure && pMax - pMin > 0.3f;
+
+        Console.WriteLine(readAll
+            ? $"  PASS: 合并点读全了（{strokePoints} ≥ 注入 {injected} 的 80%）"
+            : $"  FAIL: 点数明显少于注入（{strokePoints} vs {injected}）——合并点没读全");
+        Console.WriteLine(coalesced
+            ? $"  PASS: 确实发生了合并（每条消息 {ratio:F2} 个点）"
+            : $"  WARN: 这次没观察到合并（每条消息 {ratio:F2} 个点），用例的说服力打折");
+        Console.WriteLine(pressureOk
+            ? "  PASS: 压感有效位与压力数值都对"
+            : $"  FAIL: 压感判定不对（有压感={ActiveStrokeHasPressure}，范围 {pMin:F3}~{pMax:F3}）");
+
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 湿墨轨迹（委托墨迹）实测：**只让系统画**（`SuppressActiveStroke`），用合成笔走一遍，
+    /// 再从屏幕上数墨色像素。
+    ///
+    /// 为什么必须测这一条：预测**只喂这条通道**——它画的是"正在写的这一笔"的最后一小段。
+    /// 如果这条通道在某台机器上根本没上屏（API 调用成功、返回了 generationId，
+    /// 不等于 DWM 真的画出来），那预测就不可能有任何可见效果，
+    /// "开/关都一样"就会有完全不同的解释。
+    /// </summary>
+    private void WetInkTest(bool activate = false)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 湿墨轨迹实测：只让系统画（自己不画）===");
+        Console.WriteLine($"  变体：{(activate ? "把覆盖层强制激活（去掉 NOACTIVATE + 抢前台）" : "按产品原样（置顶 + 不抢焦点）")}");
+        if (!EnsureSyntheticPen())
+        {
+            Console.WriteLine("  SKIP: 拿不到合成笔设备");
+            _quit = true; return;
+        }
+
+        if (activate && _windows.Count > 0)
+        {
+            // 假设：DWM 可能只给"前台窗口"画委托湿墨。这里把 NOACTIVATE 摘掉并抢一次前台，
+            // 看轨迹会不会突然出现——纯粹是对照实验，产品形态不会这么做。
+            var w0 = _windows[0];
+            long ex = (long)Native.GetWindowLongPtr(w0.Hwnd, Native.GWL_EXSTYLE);
+            Native.SetWindowLongPtr(w0.Hwnd, Native.GWL_EXSTYLE, (IntPtr)(ex & ~(long)Native.WS_EX_NOACTIVATE));
+            Native.SetForegroundWindow(w0.Hwnd);
+            Console.WriteLine($"  已激活：{w0.Hwnd}");
+        }
+
+        Doc.Clear();
+        Doc.InvalidateAll();
+        Tool = Tool.Pen;
+        SuppressActiveStroke = true;      // 我们自己那一笔不画，屏幕上留的就只能是系统画的
+        SettleFrames(200);
+
+        float cx = _virtualX + _virtualW * 0.5f;
+        float cy = _virtualY + _virtualH * 0.5f;
+        int boxX = (int)(cx - 400), boxY = (int)(cy - 160);
+
+        SendPenPoint(cx - 300, cy, 400, contact: true, first: true);
+        for (int i = 1; i <= 30; i++)
+        {
+            SendPenPoint(cx - 300 + i * 20, cy + MathF.Sin(i / 30f * 6.28f) * 60,
+                         400, contact: true, first: false);
+            SettleFrames(4);
+        }
+        SettleFrames(60);                 // 笔仍然按着
+
+        int whileDown = ScreenProbe.CountRed(boxX, boxY, 800, 320);
+        int whileDownFull = ScreenProbe.CountRed(_virtualX, _virtualY, _virtualW, _virtualH);
+        string shot = Path.Combine("reports", "shots", "wetink-down.bmp");
+        Directory.CreateDirectory(Path.GetDirectoryName(shot));
+        ScreenProbe.SaveBmp(shot, boxX, boxY, 800, 320);
+        string shotFull = Path.Combine("reports", "shots", "wetink-down-full.bmp");
+        ScreenProbe.SaveBmp(shotFull, _virtualX, _virtualY, _virtualW, _virtualH);
+
+        SendPenPoint(cx + 300, cy, 400, contact: false, first: false);
+        SettleFrames(300);
+        int afterUp = ScreenProbe.CountRed(boxX, boxY, 800, 320);
+
+        SuppressActiveStroke = false;
+        Console.WriteLine($"  按住不放时墨色像素：{whileDown}（这一笔我们自己没画，只能是系统画的）");
+        Console.WriteLine($"  同上但扫全屏      ：{whileDownFull}（排除「画在别处」）");
+        Console.WriteLine($"  抬笔之后墨色像素  ：{afterUp}（委托轨迹应当被收回）");
+        Console.WriteLine($"  轨迹调试          ：{OverlayWindow.InkTrailDebug}");
+        Console.WriteLine($"  截图              ：{Path.GetFullPath(shot)}");
+        Console.WriteLine($"  全屏截图          ：{Path.GetFullPath(shotFull)}");
+        // 重要教训：**合成笔不被 DWM 认**（实测：合成笔下按住时 0 个墨色像素，
+        // 换成真笔同样流程是 1.4 万个）。所以合成分支只能判"我们的 API 调用成不成功"，
+        // 判不了"系统画没画"——真笔要用 --wetinktest --live N（人来写）。
+        Console.WriteLine(whileDown > 500
+            ? "  PASS: 委托墨迹轨迹确实上了屏 —— 预测有可见通道"
+            : "  不可判定：合成笔不会被 DWM 画成湿墨（实测如此）。要判这一条请用真笔：--wetinktest --live 15");
+        Console.WriteLine($"  抬笔后的墨是我们自己提交进文档的那一笔（与轨迹无关），这里只作记录：{afterUp} 像素");
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 湿墨轨迹「真笔 + 自己不画」实测：你写 N 秒，我每 100 ms 采一次屏，
+    /// 记下**最多**看到多少墨色像素。
+    ///
+    /// 为什么要人写：合成笔走的是同一条 WM_POINTER 路径，但 DWM 可能只认真实数字化仪的
+    /// 指针（上一轮合成笔下轨迹一个像素都没有）。这一轮就是用来判这一条的。
+    /// </summary>
+    private void WetInkLiveTest(double seconds)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 湿墨轨迹实测（真笔 · 只让系统画）===");
+        Console.WriteLine("  注意：这一轮你自己写的时候屏幕上**不会**出现笔画（我们自己那层关掉了），");
+        Console.WriteLine("        抬笔之后那一笔才会出现。屏幕上中途出现的任何墨，都只能是系统画的委托轨迹。");
+        Console.WriteLine($"  现在开始写 {seconds:F0} 秒……");
+        Console.WriteLine();
+
+        Doc.Clear();
+        Doc.InvalidateAll();
+        Tool = Tool.Pen;
+        SuppressActiveStroke = true;
+        SettleFrames(120);
+
+        float cx = _virtualX + _virtualW * 0.5f;
+        float cy = _virtualY + _virtualH * 0.5f;
+        int boxX = (int)(cx - 700), boxY = (int)(cy - 350);
+        int maxBand = 0, maxFull = 0, samples = 0;
+        int beforePoints = PenTotalPoints;
+
+        double t0 = NowMs;
+        double nextSampleAt = t0;
+        int tick = 0;
+        while (!_quit && NowMs - t0 < seconds * 1000)
+        {
+            DrainMessages();
+            if (_dirty || _drawing) { if (OverlayWindow.VBlankPaced) Native.DwmFlush(); RenderAll(); _dirty = false; }
+            else Native.MsgWaitForMultipleObjectsEx(0, IntPtr.Zero, 20, Native.QS_ALLINPUT, 0);
+            NowMs = _clock.Elapsed.TotalMilliseconds;
+
+            if (NowMs >= nextSampleAt)
+            {
+                nextSampleAt = NowMs + 100;
+                samples++;
+                int band = ScreenProbe.CountRed(boxX, boxY, 1400, 700);
+                if (band > maxBand) maxBand = band;
+                if (++tick % 10 == 0)              // 全屏每秒一次，排除"画在别处"
+                {
+                    int full = ScreenProbe.CountRed(_virtualX, _virtualY, _virtualW, _virtualH);
+                    if (full > maxFull) maxFull = full;
+                }
+            }
+        }
+
+        SuppressActiveStroke = false;
+        int penSamples = PenTotalPoints - beforePoints;
+        Console.WriteLine();
+        Console.WriteLine($"  这 {seconds:F0} 秒里收到真笔采样点：{penSamples}（0 说明没写进来）");
+        Console.WriteLine($"  屏幕中央区域的最大墨色像素：{maxBand}（共采 {samples} 次）");
+        Console.WriteLine($"  全屏的最大墨色像素        ：{maxFull}");
+        Console.WriteLine($"  轨迹调试                  ：{OverlayWindow.InkTrailDebug}");
+        Console.WriteLine(maxBand > 200
+            ? "  PASS: 真笔下系统确实在画委托轨迹 —— 预测有可见通道"
+            : "  FAIL: 真笔下系统也没画（这一轮屏幕上不该有别的墨）—— 委托轨迹这台机器上不生效");
+        SettleFrames(120);
+        _quit = true;
+    }
+
     private void GhostTest(bool scrolled = false)
     {
         Console.WriteLine();
@@ -5604,12 +6047,38 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  笔 = PT_PEN 才是真笔通道（有压感、有硬件时标）；"
                           + "鼠标 = 手写板工作在兼容模式，单这一项就够造成迟滞感。");
 
+        // 真笔的"数据质量"汇总：这次要不要相信压感、合并点收全了没有、
+        // 以及预测在什么档位（这些在 调研-压感与预测-原理.md 与 测试-压感与预测.md 里都有判据）。
+        Console.WriteLine();
+        Console.WriteLine("=== 真笔数据质量汇总 ===");
+        Console.WriteLine($"  合并点：{PenMessages} 条消息 → {PenSamples} 个采样点"
+                          + (PenMessages > 0 ? $"（每条 {PenSamples / (double)PenMessages:F2} 个）" : ""));
+        Console.WriteLine($"  压感：{PenPressurePoints}/{PenTotalPoints} 个点带有效压感；"
+                          + $"设备报 pressure 位={Yes(PenSawPressureMask)}，"
+                          + $"倾角位={Yes(PenSawTiltMask)}，旋转位={Yes(PenSawRotationMask)}");
+        Console.WriteLine($"  预测：{(PredictEnabled ? $"开（{PredictHorizonMs:F0} ms）" : "关")}；"
+                          + $"湿墨轨迹：{(OverlayWindow.InkTrailEnabled ? "开" : "关")}"
+                          + $"（{OverlayWindow.InkTrailNote}）");
+        if (PredLeadCount > 0)
+            Console.WriteLine($"  预测实际把墨往前带：平均 {PredLeadSum / PredLeadCount:F2} px，"
+                              + $"最大 {PredLeadMax:F2} px（上限 {PredictLeadCap:F0} px，共 {PredLeadCount} 次）");
+        else if (PredictEnabled)
+            Console.WriteLine("  预测实际把墨往前带：一次都没有触发（速度太低或全是急转/断笔）");
+        Console.WriteLine(PenTotalPoints == 0
+            ? "  注意：这一轮一个真笔采样点都没有——写的时候用的是鼠标/触摸，或者笔工作在兼容模式"
+            : PenSawPressureMask
+                ? "  压感可用：这台机器/这支笔确实在报压力"
+                : "  压感不可用：设备没报 pressure 位（先查驱动的 Windows Ink 开关）");
+
         Console.Write(Latency.Report());
         string csv = "reports/latency-live.csv";
         Latency.WriteCsv(csv, "real-pen");
         Console.WriteLine($"CSV 已写入 {csv}");
         _quit = true;
     }
+
+    /// <summary>汇总行里用的小写法。</summary>
+    private static string Yes(bool v) => v ? "有" : "无";
 
     private static string DeviceName(uint t) => t switch
     {
