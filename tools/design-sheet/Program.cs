@@ -86,6 +86,8 @@ internal static partial class Program
             RenderSheet(outDir, "界面-设计稿v4-宽度调研.png", DrawWidthSheet);
         if (sheet is "all" or "height")
             RenderSheet(outDir, "界面-设计稿v5-高度调研.png", DrawHeightSheet);
+        if (sheet is "all" or "dock")
+            RenderSheet(outDir, "界面-设计稿v6-贴边与隐藏.png", DrawDockSheet);
     }
 
     /// <summary>把每个绘制函数画成一张 PNG：高度由绘制函数自己算出来。</summary>
