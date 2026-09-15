@@ -23,14 +23,31 @@ internal static class PanelDraw
     /// <summary>面板宽度不是写死的：它由按钮尺寸算出来（图标放大，条子就得跟着变长）。</summary>
     public const double PanelWBase = 592;
 
-    public static double BarContentWidth(double btn)
+    public static double BarContentWidth(double btn) => BarContentWidth(btn, AllToolsIndex.Length, false);
+
+    static readonly int[] AllToolsIndex = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+
+    /// <summary>极简档：只钉"笔 / 橡皮"，加一个永远的"更多"（下标是 Tools 里的原始下标）。</summary>
+    public static readonly int[] MiniTools = { 1, 4, 10 };
+
+    /// <summary>极简档的 4 个颜色：红 / 黑 / 蓝 / 白（白笔是投影刚需）。</summary>
+    public static readonly int[] MiniPalette = { 0, BlackIndex, 5, WhiteIndex };
+
+    /// <summary>色片下标 → <see cref="Pen"/> 里的真实下标（极简档只摆 4 个色块）。</summary>
+    public static int ColorIndexOf(PanelState s, StripSpec spec, int chip)
+        => (s.Mini && spec.Kind == StripKind.Colors && !spec.Decorative) ? MiniPalette[chip] : chip;
+
+    /// <summary>这一刻主条上钉了哪些工具。</summary>
+    public static int[] VisibleTools(PanelState s) => s.Mini ? MiniTools : AllToolsIndex;
+
+    public static double BarContentWidth(double btn, int count, bool mini)
     {
         double w = Pad * 2 + btn + (SepGap * 2 + 1);
-        for (int i = 0; i < Tools.Length; i++)
+        for (int i = 0; i < count; i++)
         {
             w += btn;
-            if (i < Tools.Length - 1)
-                w += Array.IndexOf(GroupEnds, i) >= 0 ? SepGap * 2 + 1 : Gap;
+            if (i < count - 1)
+                w += (!mini && Array.IndexOf(GroupEnds, i) >= 0) ? SepGap * 2 + 1 : Gap;
         }
         return w;
     }
@@ -238,8 +255,11 @@ internal static class PanelDraw
         public double SliderY;                       // 滑条中心线
         public double SliderZoneTop, SliderZoneBottom;
         public double OriginY;                       // 面板在元素里的纵向偏移（抽屉打开时下移）
+        public double OriginX;                       // 面板在元素里的横向偏移（抽屉比面板宽时居中）
+        public double ContentW;                      // 元素内容宽度（= max(面板宽, 抽屉宽)）
         public Rect DrawerRect;                      // 「更多」抽屉
         public (Rect R, int Group, int Index)[] MoreItems = Array.Empty<(Rect, int, int)>();
+        public int[] ToolIndices = Array.Empty<int>();   // 每个按钮对应的原始工具下标
         public double Btn = 44, Icon = 24;
     }
 
@@ -258,7 +278,9 @@ internal static class PanelDraw
         double groove = (slim ? 0 : GrooveH) * e;
 
         var L = new Layout { E = e, Btn = scale.Btn, Icon = scale.Icon };
-        L.W = 48 + (BarContentWidth(scale.Btn) - 48) * e;
+        var vis = VisibleTools(s);
+        double fullW = BarContentWidth(scale.Btn, vis.Length, s.Mini);
+        L.W = 48 + (fullW - 48) * e;
         L.Band = band;
         L.GrooveBandH = groove;
         L.H = Math.Max(48, band + scale.Row * e + groove);
@@ -278,7 +300,10 @@ internal static class PanelDraw
         if (s.MoreOpen && e > 0.9)
         {
             L.OriginY = DrawerH + DrawerGap;
-            double dx = Math.Max(0, L.W - DrawerW);
+            // 抽屉可能比面板宽（极简档只有 201）—— 那就把两者居中放进同一条内容宽度里
+            L.ContentW = Math.Max(L.W, DrawerW);
+            L.OriginX = (L.ContentW - L.W) / 2;
+            double dx = (L.ContentW - DrawerW) / 2;
             L.DrawerRect = new Rect(dx, 0, DrawerW, DrawerH);
             var its = new List<(Rect, int, int)>();
             double gy = 12;
@@ -291,6 +316,7 @@ internal static class PanelDraw
             }
             L.MoreItems = its.ToArray();
         }
+        else L.ContentW = L.W;
 
         // 上带的内容：贴着条的中间排
         var items = new List<Rect>();
@@ -308,7 +334,8 @@ internal static class PanelDraw
 
             // 右端的"动作"按钮：模式占左边，动作占右边 —— 两者之间留 8 像素分隔
             bool showAction = !L.Collapsed && !string.IsNullOrEmpty(spec.ActionIcon) && band > 20;
-            double actionW = showAction ? 152 : 0;
+            // 动作按钮随面板宽度伸缩：极简档只有 201 宽，还给 152 的话两个模式段就没地方了
+            double actionW = showAction ? Math.Clamp(L.W * 0.36, 62, 152) : 0;
             double avail = L.W - inset * 2 - (actionW > 0 ? actionW + 8 : 0);
             L.ActionRect = showAction
                 ? new Rect(L.W - inset - actionW, cy, actionW, itemH)
@@ -317,7 +344,8 @@ internal static class PanelDraw
             {
                 case StripKind.Colors:
                 {
-                    int n = Pen.Length;
+                    // 极简档只给 4 个色块（红/黑/蓝/白）；完整档给全部 12 个
+                    int n = (s.Mini && kind == StripKind.Colors && !spec.Decorative) ? MiniPalette.Length : Pen.Length;
                     double gap = 2 + 2 * Clamp01((band - 10) / 16);
                     double cw = (avail - gap * (n - 1)) / n;
                     for (int i = 0; i < n; i++)
@@ -371,15 +399,16 @@ internal static class PanelDraw
             double cx = Pad + btn / 2;
             tiles.Add(new Rect(cx - btn / 2, cy - btn / 2, btn, btn));
             cx += btn / 2 + SepGap * 2 + 1;
-            for (int i = 0; i < Tools.Length; i++)
+            for (int i = 0; i < vis.Length; i++)
             {
                 tiles.Add(new Rect(cx, cy - btn / 2, btn, btn));
                 cx += btn;
-                if (i < Tools.Length - 1)
-                    cx += Array.IndexOf(GroupEnds, i) >= 0 ? SepGap * 2 + 1 : Gap;
+                if (i < vis.Length - 1)
+                    cx += (!s.Mini && Array.IndexOf(GroupEnds, i) >= 0) ? SepGap * 2 + 1 : Gap;
             }
         }
         L.Tiles = tiles.ToArray();
+        L.ToolIndices = vis;
         return L;
     }
 
@@ -394,7 +423,14 @@ internal static class PanelDraw
         if (s.MoreOpen && !L.DrawerRect.IsEmpty) DrawDrawer(c, s, L);
         if (L.OriginY > 0.5)
         {
-            c.PushTransform(new TranslateTransform(0, L.OriginY));
+            c.PushTransform(new TranslateTransform(L.OriginX, L.OriginY));
+            DrawPanel(c, s, L);
+            c.Pop();
+            return;
+        }
+        if (L.OriginX > 0.5)
+        {
+            c.PushTransform(new TranslateTransform(L.OriginX, 0));
             DrawPanel(c, s, L);
             c.Pop();
             return;
@@ -528,14 +564,15 @@ internal static class PanelDraw
             {
                 case StripKind.Colors:
                 {
-                    bool sel = i == spec.Sel;
+                    int pen = ColorIndexOf(s, spec, i);      // 片下标 → Pen 里的真实下标（极简档只给 4 个）
+                    bool sel = pen == s.Color;
                     // 满饱和（不再往白里混）；只在"平时那条细线"上略压一点亮度，让它退成装饰
-                    Color fill = SwatchDisplay(i, dark);
+                    Color fill = SwatchDisplay(pen, dark);
                     if (spec.Decorative) fill = WithAlpha(fill, 0x9A);   // 装饰用：暗一档，明确"这里不能点"
                     double grow = 0;
                     var rr = new Rect(r.X, r.Y - grow, r.Width, r.Height + grow * 2);
                     // 平时只有 6 像素高：这时候再套 1px 描边，整条会被描边"吃掉"而发灰 —— 只有展开时才描边
-                    Pen chipEdge = new Pen(new SolidColorBrush(SwatchEdge(i, dark)), sel ? 1.4 : 1);
+                    Pen chipEdge = new Pen(new SolidColorBrush(SwatchEdge(pen, dark)), sel ? 1.4 : 1);
                     c.DrawRoundedRectangle(new SolidColorBrush(fill), chipEdge,
                                            rr, Math.Min(7, r.Height / 2), Math.Min(7, r.Height / 2));
                     if (sel)
@@ -553,7 +590,7 @@ internal static class PanelDraw
                     c.DrawRoundedRectangle(new SolidColorBrush(sel ? Accent : ChipFill(dark, false)),
                                            new Pen(new SolidColorBrush(sel ? Colors.Transparent : (dark ? C(0xFF, 0xFF, 0xFF, 0x22) : C(0x00, 0x00, 0x00, 0x1E))), 1),
                                            r, 6, 6);
-                    Label(c, spec.Labels[i], r, 12.5, sel ? Brushes.White : new SolidColorBrush(InkColor(dark)), sel);
+                    Label(c, spec.Labels[i], r, r.Width < 62 ? 11 : 12.5, sel ? Brushes.White : new SolidColorBrush(InkColor(dark)), sel);
                     break;
                 }
                 case StripKind.Shapes:
@@ -595,8 +632,9 @@ internal static class PanelDraw
             c.DrawRoundedRectangle(new SolidColorBrush(fill), new Pen(new SolidColorBrush(edge), 1), ar, 6, 6);
 
             Color fg = clear ? WithAlpha(tint, 0xE6) : new SolidColorBrush(InkColor(dark)).Color;
-            Icon(c, spec.ActionIcon, ar.X + 22, ar.Y + ar.Height / 2, 18, new SolidColorBrush(fg));
-            Text(c, spec.ActionLabel, ar.X + 40, ar.Y + (ar.Height - 17) / 2, 12.5, new SolidColorBrush(fg));
+            bool narrow = ar.Width < 104;
+            Icon(c, spec.ActionIcon, narrow ? ar.X + ar.Width / 2 : ar.X + 22, ar.Y + ar.Height / 2, 18, new SolidColorBrush(fg));
+            if (!narrow) Text(c, spec.ActionLabel, ar.X + 40, ar.Y + (ar.Height - 17) / 2, 12.5, new SolidColorBrush(fg));
 
             // 按住式动作：底部一条进度，走满才真的执行
             if (spec.ActionHoldMs > 0)
@@ -634,11 +672,12 @@ internal static class PanelDraw
         Icon(c, "chevronDown", ball.X + ball.Width / 2, ball.Y + ball.Height / 2, L.Icon * 0.9,
              new SolidColorBrush(InkColor(dark)));
 
-        for (int i = 0; i < Tools.Length && i + 1 < L.Tiles.Length; i++)
+        for (int i = 0; i < L.ToolIndices.Length && i + 1 < L.Tiles.Length; i++)
         {
+            int tool = L.ToolIndices[i];
             var t = L.Tiles[i + 1];
             double cx = t.X + t.Width / 2, cy = t.Y + t.Height / 2;
-            bool active = i == s.Tool || (IsEntry(i) && s.MoreOpen);
+            bool active = tool == s.Tool || (IsEntry(tool) && s.MoreOpen);
             if (active)
                 c.DrawRoundedRectangle(new SolidColorBrush(Accent), null, t, 9, 9);
             else if (i == s.HoverTile)
@@ -656,13 +695,13 @@ internal static class PanelDraw
                         : (dark ? C(0xFF, 0xFF, 0xFF, 0x24) : C(0x00, 0x00, 0x00, 0x18))), null, pr, 8, 8);
             }
 
-            if (i == 3)
+            if (tool == 3)
                 DrawLaser(c, cx, cy, L.Icon, new SolidColorBrush(active ? Colors.White : InkColor(dark)), s.LaserStyle);
             else
-                Icon(c, active ? Tools[i].Filled : Tools[i].Icon, cx, cy, L.Icon,
+                Icon(c, active ? Tools[tool].Filled : Tools[tool].Icon, cx, cy, L.Icon,
                      new SolidColorBrush(active ? Colors.White : InkColor(dark)));
 
-            if (Array.IndexOf(GroupEnds, i) >= 0 && i + 2 < L.Tiles.Length)
+            if (!s.Mini && Array.IndexOf(GroupEnds, i) >= 0 && i + 2 < L.Tiles.Length)
             {
                 double sepX = (t.X + t.Width + L.Tiles[i + 2].X) / 2;
                 c.DrawRectangle(new SolidColorBrush(dark ? C(0xFF, 0xFF, 0xFF, 0x28) : C(0x00, 0x00, 0x00, 0x1E)),
@@ -915,6 +954,8 @@ internal sealed class PanelState
     public bool AutoHide;
     /// <summary>瘦身档：滑条嵌进按钮带下沿，色线与色板各收一点。</summary>
     public bool Slim = true;     // 默认就走瘦身档（按 H 可以切回现状对照）
+    /// <summary>极简档：主条只钉"笔 / 橡皮 / 更多"，笔的设置条只给 4 个色块。</summary>
+    public bool Mini;
     public int LaserStyle = 2;   // 默认用"自绘：笔＋光束＋落点"（按 L 可换其它候选）
     public int LaserSize = 1;
     public int EraserMode;       // 0 整笔擦 / 1 面积擦

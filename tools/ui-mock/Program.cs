@@ -90,7 +90,7 @@ internal static class Program
         Console.WriteLine("  2) 鼠标移到最下面那道凹槽 → 拖块浮出，拖动改大小（笔＝笔宽，橡皮＝橡皮大小，右边有预览）");
         Console.WriteLine("  3) 按 D 切深色主题：看白块/黑块还分不分得出来");
         Console.WriteLine("  4) 按住面板空白处可以拖动它；点最左边那一格收起成球");
-        Console.WriteLine("  控制台热键：Esc 退出 · D 深浅 · C 收起/展开 · H 瘦身档 · R 上带开合 · G 滑条 · S 图标档位 · T 换工具 · 1-9 选色 · +/- 大小 · L 激光笔图标");
+        Console.WriteLine("  控制台热键：Esc 退出 · D 深浅 · C 收起/展开 · M 极简/完整 · H 瘦身档 · R 上带开合 · G 滑条 · S 图标档位 · T 换工具 · 1-9 选色 · +/- 大小 · L 激光笔图标");
         Console.WriteLine();
 
         var keys = new Thread(() =>
@@ -161,6 +161,7 @@ internal static class Program
             case ConsoleKey.L: p.CycleLaser(); break;
             case ConsoleKey.S: p.CycleIconScale(); break;
             case ConsoleKey.H: p.ToggleSlim(); break;
+            case ConsoleKey.M: p.ToggleMini(); break;
             case ConsoleKey.T: p.SetTool((p.State.Tool + 1) % PanelDraw.Tools.Length); break;
             case ConsoleKey.OemPlus: case ConsoleKey.Add: p.NudgeSlider(0.06); break;
             case ConsoleKey.OemMinus: case ConsoleKey.Subtract: p.NudgeSlider(-0.06); break;
@@ -203,13 +204,16 @@ internal static class Program
             ("20-瘦身档-橡皮",         St(rail: 1, tool: 4, eraser: 1, groove: 1, slim: true), false, 0, 0),
             ("21-瘦身档-贴PPT",        St(tool: 1, color: 0, slim: true),            true, 900, 420),
             ("22-更多抽屉",            St(tool: 1, color: 0, more: true),            false, 0, 0),
+            ("23-极简档-笔",           St(tool: 1, color: 0, mini: true, rail: 1),   false, 0, 0),
+            ("24-极简档-橡皮",         St(tool: 4, color: 0, mini: true, rail: 1, eraser: 1, groove: 1), false, 0, 0),
+            ("25-极简档-更多",         St(tool: 1, color: 0, mini: true, more: true), false, 0, 0),
         };
 
         foreach (var it in list)
         {
             var L = PanelDraw.Compute(it.St);
             double pad = it.Slide ? 0 : 40;
-            double w = it.Slide ? it.W : L.W + pad * 2;
+            double w = it.Slide ? it.W : L.ContentW + pad * 2;
             double h = it.Slide ? it.H : L.OriginY + L.H + pad * 2;   // 抽屉在面板上方，要一起算进来
 
             var dv = new DrawingVisual();
@@ -243,7 +247,8 @@ internal static class Program
     static PanelState St(double e = 1, double rail = 0, double groove = 0, int color = 0,
                          bool dark = false, int tool = 1, int laser = 0, int eraser = 0,
                          bool hideInk = false, int select = 0, int shape = 0, int scale = 0,
-                         double hold = 0, double flash = 0, bool slim = false, bool more = false)
+                         double hold = 0, double flash = 0, bool slim = false, bool more = false,
+                         bool mini = false)
         => new PanelState
         {
             E = e, Rail = rail, Groove = groove, Color = color, Dark = dark, Tool = tool,
@@ -252,6 +257,7 @@ internal static class Program
             ClearHold = hold, ActionFlash = flash,
             Slim = slim,
             MoreOpen = more,
+            Mini = mini,
         };
 
     // =====================================================================

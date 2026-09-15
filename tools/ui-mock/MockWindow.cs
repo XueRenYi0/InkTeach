@@ -238,7 +238,7 @@ internal sealed class PanelElement : FrameworkElement
     {
         var L = PanelDraw.Compute(State);
         // 抽屉在面板上方（OriginY）；瘦身档在面板下方还有一条透明命中带
-        return new Size(L.W, L.OriginY + L.H + L.HitPadBottom);
+        return new Size(L.ContentW, L.OriginY + L.H + L.HitPadBottom);
     }
 
     protected override void OnRender(DrawingContext dc) => PanelDraw.Draw(dc, State);
@@ -345,7 +345,7 @@ internal sealed class PanelElement : FrameworkElement
         switch (spec.Kind)
         {
             case PanelDraw.StripKind.Colors:
-                State.Color = Math.Clamp(i, 0, PanelDraw.Pen.Length - 1);
+                State.Color = PanelDraw.ColorIndexOf(State, spec, i);
                 Status?.Invoke("笔色：" + PanelDraw.PenName[State.Color]);
                 break;
             case PanelDraw.StripKind.Segments:
@@ -434,6 +434,23 @@ internal sealed class PanelElement : FrameworkElement
     }
 
     /// <summary>现状（平时 80 / 展开 108）与瘦身档（平时 60 / 展开 84）之间切换。</summary>
+    public void ToggleMini()
+    {
+        State.Mini = !State.Mini;
+        // 切过去以后，如果当前工具不在这一档里，就落到"笔"
+        bool visible = Array.IndexOf(PanelDraw.VisibleTools(State), State.Tool) >= 0;
+        if (!visible) State.Tool = 1;
+        State.MoreOpen = false;
+        State.HoverTile = -1;
+        InvalidateMeasure();
+        InvalidateVisual();
+        LayoutChanged?.Invoke(PanelDraw.Compute(State));
+        var L = PanelDraw.Compute(State);
+        Status?.Invoke(State.Mini
+            ? $"极简档：主条只钉「笔 / 橡皮 / 更多」，宽 {L.W:F0}（完整档是 {PanelDraw.BarContentWidth(PanelDraw.Scales[State.IconScale].Btn):F0}）"
+            : $"完整档：{PanelDraw.VisibleTools(State).Length} 项，宽 {L.W:F0}");
+    }
+
     public void ToggleSlim()
     {
         State.Slim = !State.Slim;
@@ -511,6 +528,7 @@ internal sealed class PanelElement : FrameworkElement
 
         // 面板部分：换算到面板自己的坐标系（抽屉打开时面板整体下移了）
         p = new Point(p.X, p.Y - L0.OriginY);
+        p = new Point(p.X - L0.OriginX, p.Y);
         if (_dragWindow) { DragWindowTo(p); e.Handled = true; return; }
         if (_dragSlider) { SetSliderFromX(p.X); e.Handled = true; return; }
 
@@ -522,7 +540,7 @@ internal sealed class PanelElement : FrameworkElement
         if (_holdAction && !L.ActionRect.Contains(p)) _holdAction = false;   // 按着走开 = 取消
 
         int hover = -1;
-        for (int i = 0; i < PanelDraw.Tools.Length && i + 1 < L.Tiles.Length; i++)
+        for (int i = 0; i < L.ToolIndices.Length && i + 1 < L.Tiles.Length; i++)
             if (L.Tiles[i + 1].Contains(p)) hover = i;
 
         // 上带的命中区**锚在按钮带上沿**（那个位置在屏幕上是固定的），
@@ -558,19 +576,20 @@ internal sealed class PanelElement : FrameworkElement
                 e.Handled = true;
                 return;
             }
-        p = new Point(p.X, p.Y - L.OriginY);   // 面板部分：换算到面板坐标系
+        // 面板部分：换算到面板自己的坐标系
+        p = new Point(p.X - L.OriginX, p.Y - L.OriginY);
         _downAt = p;
 
         if (L.E > 0.9)
         {
             if (L.Tiles.Length > 0 && L.Tiles[0].Contains(p)) { ToggleExpand(); e.Handled = true; return; }
 
-            for (int i = 0; i < PanelDraw.Tools.Length && i + 1 < L.Tiles.Length; i++)
+            for (int i = 0; i < L.ToolIndices.Length && i + 1 < L.Tiles.Length; i++)
                 if (L.Tiles[i + 1].Contains(p))
                 {
                     State.PressTile = i;
                     InvalidateVisual();
-                    SetTool(i);
+                    SetTool(L.ToolIndices[i]);
                     e.Handled = true;
                     return;
                 }
@@ -680,6 +699,7 @@ internal class MockWindow : Window
     public readonly Canvas Root = new Canvas();
     public readonly PanelElement Panel = new PanelElement();
     double _anchorBottom;
+    double _anchorLeft;
 
     public MockWindow()
     {
@@ -698,13 +718,14 @@ internal class MockWindow : Window
         Panel.MovedByUser += () =>
         {
             var L = PanelDraw.Compute(Panel.State);
+            _anchorLeft = Left + L.OriginX;
             _anchorBottom = Top + L.OriginY + L.H;
         };
 
         Loaded += (_, __) =>
         {
             var wa = SystemParameters.WorkArea;
-            Left = wa.Left + (wa.Width - PanelDraw.BarContentWidth(PanelDraw.Scales[Panel.State.IconScale].Btn)) / 2;
+            _anchorLeft = wa.Left + (wa.Width - PanelDraw.BarContentWidth(PanelDraw.Scales[Panel.State.IconScale].Btn)) / 2;
             _anchorBottom = wa.Bottom - 60;
             ApplyLayout(PanelDraw.Compute(Panel.State));
             SuppressActivation();
@@ -713,9 +734,10 @@ internal class MockWindow : Window
 
     protected virtual void ApplyLayout(PanelDraw.Layout L)
     {
-        Width = L.W;
+        Width = L.ContentW;
         Height = L.OriginY + L.H + L.HitPadBottom;
-        // 锚的是"面板下沿"，所以抽屉展开时窗口往上长、面板本身不动
+        // 锚的是"面板自己的左下角"，所以抽屉展开时窗口往左上长、面板本身不动
+        Left = _anchorLeft - L.OriginX;
         Top = _anchorBottom - L.OriginY - L.H;
     }
 
