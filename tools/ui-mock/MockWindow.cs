@@ -159,6 +159,23 @@ internal sealed class PanelElement : FrameworkElement
         }
     }
 
+    /// <summary>点抽屉里的一格。kind：0 应用（更新/重启/退出）、1 深色、2 贴边隐藏、3 装饰带、-1 即将加入。</summary>
+    void FireMoreItem(int group, int index)
+    {
+        var item = PanelDraw.Drawer[group].Items[index];
+        switch (item.Kind)
+        {
+            case 0:
+                if (item.Label == "退出") { Status?.Invoke("退出 —— 关掉面板"); Application.Current.Shutdown(); return; }
+                Status?.Invoke(item.Label + "：界面占位（引擎里还没有这件事，先放在这里）");
+                break;
+            case 1: ToggleDark(); break;
+            case 2: State.AutoHide = !State.AutoHide; Status?.Invoke("贴边隐藏：" + (State.AutoHide ? "开" : "关")); InvalidateVisual(); break;
+            case 3: State.ShowDeco = !State.ShowDeco; Status?.Invoke("装饰带：" + (State.ShowDeco ? "显示" : "隐藏")); InvalidateVisual(); break;
+            default: Status?.Invoke(item.Label + "：学科工具，即将加入"); break;
+        }
+    }
+
     /// <summary>
     /// 悬停意图：指针进入热区要停 120ms（上带）/ 90ms（下带）才展开；
     /// 离开后要过 220ms / 200ms 才收回。**路过不再改变任何东西** —— 这是"划过就变大小"的根治办法。
@@ -220,7 +237,8 @@ internal sealed class PanelElement : FrameworkElement
     protected override Size MeasureOverride(Size availableSize)
     {
         var L = PanelDraw.Compute(State);
-        return new Size(L.W, L.H + L.HitPadBottom);   // 瘦身档：可见面板下面还有一条透明命中带
+        // 抽屉在面板上方（OriginY）；瘦身档在面板下方还有一条透明命中带
+        return new Size(L.W, L.OriginY + L.H + L.HitPadBottom);
     }
 
     protected override void OnRender(DrawingContext dc) => PanelDraw.Draw(dc, State);
@@ -262,6 +280,25 @@ internal sealed class PanelElement : FrameworkElement
     public void SetTool(int i)
     {
         if (i < 0 || i >= PanelDraw.Tools.Length) return;
+
+        // 「更多」是入口：开合抽屉，不改当前工具
+        if (PanelDraw.IsEntry(i))
+        {
+            State.MoreOpen = !State.MoreOpen;
+            State.MoreHover = -1;
+            if (State.MoreOpen) { _railPinned = false; _railWant = false; _rail.To(0, 167, Now); }
+            InvalidateMeasure();
+            InvalidateVisual();
+            LayoutChanged?.Invoke(PanelDraw.Compute(State));
+            Status?.Invoke(State.MoreOpen ? "更多：抽屉打开（更新 / 重启 / 退出 / 界面开关 / 学科工具占位）" : "更多：抽屉收起");
+            return;
+        }
+        if (State.MoreOpen)   // 换工具就收起抽屉
+        {
+            State.MoreOpen = false;
+            InvalidateMeasure();
+            LayoutChanged?.Invoke(PanelDraw.Compute(State));
+        }
         if (PanelDraw.IsAction(i))
         {
             Status?.Invoke(i == 8 ? "后撤（动作，不改上下文）" : "重做（动作，不改上下文）");
@@ -454,6 +491,26 @@ internal sealed class PanelElement : FrameworkElement
     void OnMove(object s, MouseEventArgs e)
     {
         var p = e.GetPosition(this);
+
+        // 抽屉先判（它在面板上方，用原始坐标）
+        var L0 = PanelDraw.Compute(State);
+        if (State.MoreOpen)
+        {
+            int hov = -1;
+            foreach (var it in L0.MoreItems)
+                if (it.R.Contains(p)) hov = it.Group * 10 + it.Index;
+            State.MoreHover = hov;
+            if (hov >= 0)
+            {
+                Cursor = Cursors.Hand;
+                InvalidateVisual();
+                return;
+            }
+        }
+        else if (State.MoreHover >= 0) State.MoreHover = -1;
+
+        // 面板部分：换算到面板自己的坐标系（抽屉打开时面板整体下移了）
+        p = new Point(p.X, p.Y - L0.OriginY);
         if (_dragWindow) { DragWindowTo(p); e.Handled = true; return; }
         if (_dragSlider) { SetSliderFromX(p.X); e.Handled = true; return; }
 
@@ -491,6 +548,18 @@ internal sealed class PanelElement : FrameworkElement
         var p = e.GetPosition(this);
         _downAt = p;
         var L = PanelDraw.Compute(State);
+
+        // 抽屉里的东西（原始坐标）
+        if (State.MoreOpen)
+            foreach (var it in L.MoreItems)
+            {
+                if (!it.R.Contains(p)) continue;
+                FireMoreItem(it.Group, it.Index);
+                e.Handled = true;
+                return;
+            }
+        p = new Point(p.X, p.Y - L.OriginY);   // 面板部分：换算到面板坐标系
+        _downAt = p;
 
         if (L.E > 0.9)
         {
@@ -626,7 +695,11 @@ internal class MockWindow : Window
 
         Root.Children.Add(Panel);
         Panel.LayoutChanged += ApplyLayout;
-        Panel.MovedByUser += () => _anchorBottom = Top + ActualHeight;
+        Panel.MovedByUser += () =>
+        {
+            var L = PanelDraw.Compute(Panel.State);
+            _anchorBottom = Top + L.OriginY + L.H;
+        };
 
         Loaded += (_, __) =>
         {
@@ -641,8 +714,9 @@ internal class MockWindow : Window
     protected virtual void ApplyLayout(PanelDraw.Layout L)
     {
         Width = L.W;
-        Height = L.H + L.HitPadBottom;
-        Top = _anchorBottom - L.H;
+        Height = L.OriginY + L.H + L.HitPadBottom;
+        // 锚的是"面板下沿"，所以抽屉展开时窗口往上长、面板本身不动
+        Top = _anchorBottom - L.OriginY - L.H;
     }
 
     /// <summary>不抢焦点、不出现在 Alt-Tab 里 —— 和产品里的覆盖层一个待遇。</summary>

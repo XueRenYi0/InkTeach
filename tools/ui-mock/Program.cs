@@ -202,6 +202,7 @@ internal static class Program
             ("19-瘦身档-展开",         St(rail: 1, tool: 1, color: 0, slim: true),   false, 0, 0),
             ("20-瘦身档-橡皮",         St(rail: 1, tool: 4, eraser: 1, groove: 1, slim: true), false, 0, 0),
             ("21-瘦身档-贴PPT",        St(tool: 1, color: 0, slim: true),            true, 900, 420),
+            ("22-更多抽屉",            St(tool: 1, color: 0, more: true),            false, 0, 0),
         };
 
         foreach (var it in list)
@@ -209,7 +210,7 @@ internal static class Program
             var L = PanelDraw.Compute(it.St);
             double pad = it.Slide ? 0 : 40;
             double w = it.Slide ? it.W : L.W + pad * 2;
-            double h = it.Slide ? it.H : L.H + pad * 2;
+            double h = it.Slide ? it.H : L.OriginY + L.H + pad * 2;   // 抽屉在面板上方，要一起算进来
 
             var dv = new DrawingVisual();
             using (var c = dv.RenderOpen())
@@ -242,7 +243,7 @@ internal static class Program
     static PanelState St(double e = 1, double rail = 0, double groove = 0, int color = 0,
                          bool dark = false, int tool = 1, int laser = 0, int eraser = 0,
                          bool hideInk = false, int select = 0, int shape = 0, int scale = 0,
-                         double hold = 0, double flash = 0, bool slim = false)
+                         double hold = 0, double flash = 0, bool slim = false, bool more = false)
         => new PanelState
         {
             E = e, Rail = rail, Groove = groove, Color = color, Dark = dark, Tool = tool,
@@ -250,6 +251,7 @@ internal static class Program
             SelectMode = select, ShapeKind = shape, IconScale = scale,
             ClearHold = hold, ActionFlash = flash,
             Slim = slim,
+            MoreOpen = more,
         };
 
     // =====================================================================

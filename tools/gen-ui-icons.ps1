@@ -67,6 +67,14 @@ $icons = [ordered]@{
     # "更多"入口的候选：省略号 vs 宫格（工具箱）
     'apps'            = @('Apps')
     'grid'            = @('Grid')
+    # 「更多」抽屉里那几个
+    'arrowSync'       = @('Arrow Sync')
+    'arrowClockwise'  = @('Arrow Clockwise')
+    'power'           = @('Power')
+    'darkTheme'       = @('Dark Theme')
+    'dockRow'         = @('Dock Row')
+    'ruler'           = @('Ruler')
+    'mathFormula'     = @('Math Formula')
 }
 
 # 激活态用的 filled 变体（Windows 11 的惯例：常态 regular、选中 filled）

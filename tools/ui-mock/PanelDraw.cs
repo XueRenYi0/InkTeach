@@ -67,13 +67,42 @@ internal static class PanelDraw
         ("capture", "captureFilled", "截屏"),
         ("undo", "undoFilled", "后撤"),
         ("redo", "redoFilled", "重做"),
-        ("settings", "settingsFilled", "设置"),
+        ("more", "moreFilled", "更多"),
     };
 
     public static readonly int[] GroupEnds = { 0, 4, 7 };
 
     /// <summary>后撤/重做是"动作"，点了就执行，不切换上下文。</summary>
     public static bool IsAction(int tool) => tool is 8 or 9;
+    /// <summary>"更多"是入口：点了开合抽屉，也不改当前工具。</summary>
+    public static bool IsEntry(int tool) => tool == 10;
+
+    // ---- 「更多」抽屉 -----------------------------------------------------
+
+    public const double DrawerW = 380, DrawerH = 228, DrawerGap = 8;
+
+    /// <summary>抽屉里的三组东西：应用 / 界面 / 学科工具（占位）。</summary>
+    public static readonly (string Group, (string Icon, string Label, int Kind)[] Items)[] Drawer =
+    {
+        ("应用", new[]
+        {
+            ("arrowSync", "检查更新", 0),
+            ("arrowClockwise", "重启", 0),
+            ("power", "退出", 0),
+        }),
+        ("界面", new[]
+        {
+            ("darkTheme", "深色主题", 1),
+            ("dockRow", "贴边隐藏", 2),
+            ("color", "装饰带", 3),
+        }),
+        ("学科工具（即将加入）", new[]
+        {
+            ("ruler", "直尺", -1),
+            ("mathFormula", "量角器", -1),
+            ("grid", "田字格", -1),
+        }),
+    };
 
     // ---- 12 色 ----------------------------------------------------------
     // 前 9 个和引擎的 InkPalette 一致（红橙黄绿青蓝紫黑白），后 3 个是这一轮新增：粉 / 棕 / 灰。
@@ -184,9 +213,8 @@ internal static class PanelDraw
             case 7: // 截屏 —— 你说的"直接截 / 隐藏界面截"
                 sp.Kind = StripKind.Segments; sp.Labels = new[] { "直接截取", "隐藏批注截取" }; sp.Sel = s.CaptureHideInk ? 1 : 0;
                 break;
-            case 10: // 设置：放几个开关
-                sp.Kind = StripKind.Toggles; sp.Labels = new[] { "装饰带", "贴边隐藏", "深色主题" };
-                sp.On = new[] { s.ShowDeco, s.AutoHide, s.Dark };
+            case 10: // 「更多」是入口不是工具：上带留作装饰（里面的开关都搬进抽屉了）
+                sp.Kind = StripKind.Colors; sp.Decorative = true; sp.Sel = s.Color;
                 break;
             default: // 鼠标（穿透）
                 sp.Kind = StripKind.Segments; sp.Labels = new[] { "直接操作", "穿透点击" }; sp.Sel = s.PassThrough ? 1 : 0;
@@ -209,6 +237,9 @@ internal static class PanelDraw
         public double HitPadBottom;                  // 元素比可见面板多出来的高度（瘦身档的透明命中带）
         public double SliderY;                       // 滑条中心线
         public double SliderZoneTop, SliderZoneBottom;
+        public double OriginY;                       // 面板在元素里的纵向偏移（抽屉打开时下移）
+        public Rect DrawerRect;                      // 「更多」抽屉
+        public (Rect R, int Group, int Index)[] MoreItems = Array.Empty<(Rect, int, int)>();
         public double Btn = 44, Icon = 24;
     }
 
@@ -242,6 +273,24 @@ internal static class PanelDraw
         L.SliderY = slim ? L.H - 3 : L.H - groove / 2;
         L.SliderZoneTop = slim ? L.H - 20 : L.H - groove - 8;
         L.SliderZoneBottom = L.H + L.HitPadBottom;
+
+        // 「更多」抽屉：贴在面板右侧、往上长（贴底时下面没有空间）
+        if (s.MoreOpen && e > 0.9)
+        {
+            L.OriginY = DrawerH + DrawerGap;
+            double dx = Math.Max(0, L.W - DrawerW);
+            L.DrawerRect = new Rect(dx, 0, DrawerW, DrawerH);
+            var its = new List<(Rect, int, int)>();
+            double gy = 12;
+            for (int g = 0; g < Drawer.Length; g++)
+            {
+                gy += 16;
+                for (int i = 0; i < Drawer[g].Items.Length; i++)
+                    its.Add((new Rect(dx + 14 + i * (112 + 8), gy, 112, 46), g, i));
+                gy += 46 + 10;
+            }
+            L.MoreItems = its.ToArray();
+        }
 
         // 上带的内容：贴着条的中间排
         var items = new List<Rect>();
@@ -341,6 +390,22 @@ internal static class PanelDraw
         var L = Compute(s);
         bool dark = s.Dark;
 
+        // 「更多」抽屉先画（它在面板上方），然后把面板整体下移再照常画
+        if (s.MoreOpen && !L.DrawerRect.IsEmpty) DrawDrawer(c, s, L);
+        if (L.OriginY > 0.5)
+        {
+            c.PushTransform(new TranslateTransform(0, L.OriginY));
+            DrawPanel(c, s, L);
+            c.Pop();
+            return;
+        }
+        DrawPanel(c, s, L);
+    }
+
+    static void DrawPanel(DrawingContext c, PanelState s, Layout L)
+    {
+        bool dark = s.Dark;
+
         if (L.E < 0.02)
         {
             DrawBall(c, L, s);
@@ -382,6 +447,46 @@ internal static class PanelDraw
     }
 
     /// <summary>上带：按当前工具画色片 / 分段 / 图形 / 开关。</summary>
+    static void DrawDrawer(DrawingContext c, PanelState s, Layout L)
+    {
+        bool dark = s.Dark;
+        var r = L.DrawerRect;
+        // 抽屉跟着面板一起淡入淡出
+        double fade = Clamp01(s.ContentFade);
+        if (fade < 0.999) { c.PushOpacity(fade); c.PushTransform(new TranslateTransform(0, (1 - fade) * 6)); }
+
+        Shadow(c, r, 14);
+        c.DrawRoundedRectangle(new SolidColorBrush(PanelFill(dark)),
+                               new Pen(new SolidColorBrush(PanelEdge(dark)), 1),
+                               Inset(r), 14, 14);
+
+        foreach (var it in L.MoreItems)
+        {
+            var cell = it.R;
+            var item = Drawer[it.Group].Items[it.Index];
+            bool soon = item.Kind < 0;
+            bool hover = !soon && s.MoreHover == (it.Group * 10 + it.Index);
+            if (hover)
+                c.DrawRoundedRectangle(new SolidColorBrush(dark ? C(0xFF, 0xFF, 0xFF, 0x14) : C(0x00, 0x00, 0x00, 0x0C)),
+                                       null, cell, 8, 8);
+            var fg = soon
+                ? new SolidColorBrush(C(0x9A, 0xA0, 0xAA))
+                : new SolidColorBrush(InkColor(dark));
+            Icon(c, item.Icon, cell.X + 22, cell.Y + cell.Height / 2, 20, fg);
+            Text(c, item.Label, cell.X + 40, cell.Y + (cell.Height - 17) / 2, 12.5, fg);
+        }
+
+        // 组标签画在每行格子的上方
+        double gy = r.Y + 12;
+        for (int g = 0; g < Drawer.Length; g++)
+        {
+            Text(c, Drawer[g].Group, r.X + 14, gy, 11.5, new SolidColorBrush(dark ? C(0x9A, 0x9E, 0xA6) : C(0x6B, 0x70, 0x78)));
+            gy += 16 + 46 + 10;
+        }
+
+        if (fade < 0.999) { c.Pop(); c.Pop(); }
+    }
+
     static void DrawStrip(DrawingContext c, PanelState s, Layout L)
     {
         var spec = SpecOf(s);
@@ -533,7 +638,7 @@ internal static class PanelDraw
         {
             var t = L.Tiles[i + 1];
             double cx = t.X + t.Width / 2, cy = t.Y + t.Height / 2;
-            bool active = i == s.Tool;
+            bool active = i == s.Tool || (IsEntry(i) && s.MoreOpen);
             if (active)
                 c.DrawRoundedRectangle(new SolidColorBrush(Accent), null, t, 9, 9);
             else if (i == s.HoverTile)
@@ -810,7 +915,7 @@ internal sealed class PanelState
     public bool AutoHide;
     /// <summary>瘦身档：滑条嵌进按钮带下沿，色线与色板各收一点。</summary>
     public bool Slim = true;     // 默认就走瘦身档（按 H 可以切回现状对照）
-    public int LaserStyle;
+    public int LaserStyle = 2;   // 默认用"自绘：笔＋光束＋落点"（按 L 可换其它候选）
     public int LaserSize = 1;
     public int EraserMode;       // 0 整笔擦 / 1 面积擦
     public int SelectMode;       // 0 矩形框选 / 1 自由套索
@@ -827,4 +932,7 @@ internal sealed class PanelState
     public double ActionFlash;
     /// <summary>清空执行后的整块红边（0~1，自己衰减）。</summary>
     public double ClearFlash;
+    /// <summary>「更多」抽屉开着没有；以及鼠标停在抽屉里哪一格。</summary>
+    public bool MoreOpen;
+    public int MoreHover = -1;
 }
