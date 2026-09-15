@@ -220,8 +220,8 @@ internal static class Program
         {
             ("01-收起成球",            St(e: 0),                                    false, 0, 0),
             ("02-平时只有一条色线",    St(),                                        false, 0, 0),
-            ("03-笔-12色片",           St(rail: 1, tool: 1, color: 0),              false, 0, 0),
-            ("04-橡皮-整笔与面积",     St(rail: 1, tool: 4, eraser: 1, groove: 1),  false, 0, 0),
+            ("03-笔-12色片",           St(rail: 1, tool: 2, color: 0),              false, 0, 0),
+            ("04-橡皮-整笔与面积",     St(rail: 1, tool: 5, eraser: 1, groove: 1),  false, 0, 0),
             ("05-截屏-直接与隐藏批注", St(rail: 1, tool: 7),                        false, 0, 0),
             ("06-选择-框选与套索",     St(rail: 1, tool: 5),                        false, 0, 0),
             ("07-图形-六种",           St(rail: 1, tool: 6, color: 5),              false, 0, 0),
@@ -230,21 +230,21 @@ internal static class Program
             ("10-图标档-40-20",        St(rail: 1, tool: 1, scale: 0),              false, 0, 0),
             ("11-图标档-44-24",        St(rail: 1, tool: 1, scale: 1),              false, 0, 0),
             ("12-图标档-48-28",        St(rail: 1, tool: 1, scale: 2),              false, 0, 0),
-            ("13-深色-12色片",         St(rail: 1, tool: 1, color: 10, dark: true), false, 0, 0),
-            ("14-贴在假PPT上",         St(tool: 1, color: 0),                       true, 900, 420),
-            ("15-深色贴PPT",           St(rail: 1, tool: 1, color: 10, dark: true), true, 900, 420),
-            ("16-清空-按住进行中",     St(rail: 1, tool: 4, eraser: 1, hold: 0.55, groove: 1), false, 0, 0),
-            ("17-全选-执行闪一下",     St(rail: 1, tool: 5, select: 1, flash: 1),   false, 0, 0),
+            ("13-深色-12色片",         St(rail: 1, tool: 2, color: 10, dark: true), false, 0, 0),
+            ("14-贴在假PPT上",         St(tool: 2, color: 0),                       true, 900, 420),
+            ("15-深色贴PPT",           St(rail: 1, tool: 2, color: 10, dark: true), true, 900, 420),
+            ("16-清空-按住进行中",     St(rail: 1, tool: 5, eraser: 1, hold: 0.55, groove: 1), false, 0, 0),
+            ("17-全选-执行闪一下",     St(rail: 1, tool: 6, select: 1, flash: 1),   false, 0, 0),
             ("18-瘦身档-平时",         St(tool: 1, color: 0, slim: true),            false, 0, 0),
             ("19-瘦身档-展开",         St(rail: 1, tool: 1, color: 0, slim: true),   false, 0, 0),
             ("20-瘦身档-橡皮",         St(rail: 1, tool: 4, eraser: 1, groove: 1, slim: true), false, 0, 0),
             ("21-瘦身档-贴PPT",        St(tool: 1, color: 0, slim: true),            true, 900, 420),
             ("22-更多抽屉",            St(tool: 1, color: 0, more: true),            false, 0, 0),
-            ("23-极简档-笔",           St(tool: 1, color: 0, mini: true, rail: 1),   false, 0, 0),
-            ("24-极简档-橡皮",         St(tool: 4, color: 0, mini: true, rail: 1, eraser: 1, groove: 1), false, 0, 0),
-            ("25-极简档-更多",         St(tool: 1, color: 0, mini: true, more: true), false, 0, 0),
+            ("23-极简档-笔",           St(tool: 2, color: 0, mini: true, rail: 1),   false, 0, 0),
+            ("24-极简档-橡皮",         St(tool: 5, color: 0, mini: true, rail: 1, eraser: 1, groove: 1), false, 0, 0),
+            ("25-极简档-更多",         St(tool: 2, color: 0, mini: true, more: true), false, 0, 0),
             ("26-白板-开着（盖住 PPT）", St(tool: 1, color: 0, board: true, boardColor: 0), true, 900, 420),
-            ("27-白板-板色三选",       St(tool: 11, color: 11, board: true, boardColor: 1, rail: 1), true, 900, 420),
+            ("27-白板-板色三选",       St(tool: 1, color: 11, board: true, boardColor: 1, rail: 1), true, 900, 420),
         };
 
         foreach (var it in list)
@@ -286,7 +286,7 @@ internal static class Program
     }
 
     static PanelState St(double e = 1, double rail = 0, double groove = 0, int color = 0,
-                         bool dark = false, int tool = 1, int laser = 0, int eraser = 0,
+                         bool dark = false, int tool = 2, int laser = 0, int eraser = 0,
                          bool hideInk = false, int select = 0, int shape = 0, int scale = 0,
                          double hold = 0, double flash = 0, bool slim = false, bool more = false,
                          bool mini = false, bool board = false, int boardColor = 0)
@@ -310,19 +310,19 @@ internal static class Program
     {
         var rows = new (string Title, PanelState St)[]
         {
-            ("笔：12 色片（满饱和、带间隙、圆角）", St(rail: 1, tool: 1, color: 0)),
-            ("荧光笔：同一组色片（画出来是半透明）", St(rail: 1, tool: 2, color: 2)),
-            ("激光笔：小 / 中 / 大（下带＝光点大小）", St(rail: 1, tool: 3, laser: 0)),
-            ("橡皮擦：整笔擦 / 面积擦（下带＝橡皮大小）", St(rail: 1, tool: 4, eraser: 1, groove: 1)),
-            ("选择：矩形框选 / 自由套索", St(rail: 1, tool: 5, select: 1)),
-            ("图形：直线 箭头 矩形 椭圆 三角 平行四边形", St(rail: 1, tool: 6, shape: 2)),
-            ("截屏：直接截取 / 隐藏批注截取", St(rail: 1, tool: 7, hideInk: true)),
+            ("笔：12 色片（满饱和、带间隙、圆角）", St(rail: 1, tool: 2, color: 0)),
+            ("荧光笔：同一组色片（画出来是半透明）", St(rail: 1, tool: 3, color: 2)),
+            ("激光笔：小 / 中 / 大（下带＝光点大小）", St(rail: 1, tool: 4, laser: 0)),
+            ("橡皮擦：整笔擦 / 面积擦（下带＝橡皮大小）", St(rail: 1, tool: 5, eraser: 1, groove: 1)),
+            ("选择：矩形框选 / 自由套索", St(rail: 1, tool: 6, select: 1)),
+            ("图形：直线 箭头 矩形 椭圆 三角 平行四边形", St(rail: 1, tool: 7, shape: 2)),
+            ("截屏：直接截取 / 隐藏批注截取", St(rail: 1, tool: 8, hideInk: true)),
             ("鼠标：直接操作 / 穿透点击", St(rail: 1, tool: 0)),
-            ("设置：装饰带 / 贴边隐藏 / 深色主题", St(rail: 1, tool: 10)),
-            ("平时：上带退成一条色线（4 像素）", St(tool: 1, color: 0)),
-            ("任务栏档：平时 52（原 80）", St(tool: 1, color: 0)),
-            ("任务栏档：展开 76（原 108）", St(rail: 1, tool: 1, color: 0)),
-            ("深色主题：同一套（黑块已提亮）", St(rail: 1, tool: 1, color: 10, dark: true)),
+            ("设置：装饰带 / 贴边隐藏 / 深色主题", St(rail: 1, tool: 11)),
+            ("平时：上带退成一条色线（4 像素）", St(tool: 2, color: 0)),
+            ("任务栏档：平时 52（原 80）", St(tool: 2, color: 0)),
+            ("任务栏档：展开 76（原 108）", St(rail: 1, tool: 2, color: 0)),
+            ("深色主题：同一套（黑块已提亮）", St(rail: 1, tool: 2, color: 10, dark: true)),
         };
 
         const double W = 760, X = 84;
@@ -332,7 +332,7 @@ internal static class Program
         foreach (var r in rows) total += PanelDraw.Compute(r.St).H + 52;
         total += 10 + 30;
         foreach (int sc in new[] { 0, 1, 2, 3 })
-            total += PanelDraw.Compute(St(rail: 1, tool: 1, scale: sc, slim: true)).H + 44;
+            total += PanelDraw.Compute(St(rail: 1, tool: 2, scale: sc, slim: true)).H + 44;
         total += 40;
 
         var dv = new DrawingVisual();
@@ -360,7 +360,7 @@ internal static class Program
             y += 30;
             foreach (int sc in new[] { 0, 1, 2, 3 })
             {
-                var st = St(rail: 1, tool: 1, scale: sc, slim: true);
+                var st = St(rail: 1, tool: 2, scale: sc, slim: true);
                 var L = PanelDraw.Compute(st);
                 var sca = PanelDraw.Scales[sc];
                 PanelDraw.Text(c, $"按钮 {sca.Btn:F0} ／ 图标 {sca.Icon:F0}　→　面板总高 {L.H:F0}", X, y, 12.5,

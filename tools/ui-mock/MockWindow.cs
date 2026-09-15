@@ -383,23 +383,23 @@ internal sealed class PanelElement : FrameworkElement
     {
         switch (State.Tool)
         {
-            case 0:
+            case PanelDraw.ToolMouse:
                 State.PassThrough = i == 1;
                 Status?.Invoke(State.PassThrough ? "鼠标：穿透点击（引擎里就是 SetPassThrough）" : "鼠标：直接操作");
                 break;
-            case 3:
+            case PanelDraw.ToolLaser:
                 State.LaserSize = i;
                 Status?.Invoke("激光笔光点：" + new[] { "小", "中", "大" }[i]);
                 break;
-            case 4:
+            case PanelDraw.ToolEraser:
                 State.EraserMode = i;
                 Status?.Invoke(i == 0 ? "橡皮：整笔擦（引擎里是 EraseAt：碰到哪条删哪条）" : "橡皮：面积擦（引擎里是像素橡皮，一笔切成两段）");
                 break;
-            case 5:
+            case PanelDraw.ToolSelect:
                 State.SelectMode = i;
                 Status?.Invoke(i == 0 ? "选择：矩形框选（碰到就选）" : "选择：自由套索（80% 判据）");
                 break;
-            case 7:
+            case PanelDraw.ToolCapture:
                 State.CaptureHideInk = i == 1;
                 Status?.Invoke(i == 0 ? "截屏：直接截取（含批注）" : "截屏：隐藏批注截取（先把自己的覆盖层藏起来）");
                 break;
@@ -438,9 +438,9 @@ internal sealed class PanelElement : FrameworkElement
 
     double SliderValue()
     {
-        if (State.Tool == 4) return 8 + State.Slider01 * 56;      // 橡皮 8～64
-        if (State.Tool == 3) return 4 + State.Slider01 * 20;      // 激光 4～24
-        if (State.Tool == 2) return 16 + State.Slider01 * 48;     // 荧光笔 16～64
+        if (State.Tool == PanelDraw.ToolEraser) return 8 + State.Slider01 * 56;      // 橡皮 8～64
+        if (State.Tool == PanelDraw.ToolLaser) return 4 + State.Slider01 * 20;      // 激光 4～24
+        if (State.Tool == PanelDraw.ToolHighlighter) return 16 + State.Slider01 * 48;     // 荧光笔 16～64
         return 1.5 + State.Slider01 * 38.5;                       // 笔 1.5～40
     }
 
@@ -461,7 +461,7 @@ internal sealed class PanelElement : FrameworkElement
         State.Mini = !State.Mini;
         // 切过去以后，如果当前工具不在这一档里，就落到"笔"
         bool visible = Array.IndexOf(PanelDraw.VisibleTools(State), State.Tool) >= 0;
-        if (!visible) State.Tool = 1;
+        if (!visible) State.Tool = PanelDraw.ToolPen;
         State.MoreOpen = false;
         State.HoverTile = -1;
         InvalidateMeasure();

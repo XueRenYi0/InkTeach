@@ -27,8 +27,13 @@ internal static class PanelDraw
 
     static readonly int[] AllToolsIndex = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
 
+    // 工具下标写成具名常量：以后再往主条里插一格，只改这一处，不用满文件找数字
+    public const int ToolMouse = 0, ToolBoard = 1, ToolPen = 2, ToolHighlighter = 3, ToolLaser = 4,
+                     ToolEraser = 5, ToolSelect = 6, ToolShapes = 7, ToolCapture = 8,
+                     ToolUndo = 9, ToolRedo = 10, ToolMore = 11;
+
     /// <summary>极简档：只钉"笔 / 橡皮"，加一个永远的"更多"（下标是 Tools 里的原始下标）。</summary>
-    public static readonly int[] MiniTools = { 1, 4, 10 };
+    public static readonly int[] MiniTools = { ToolPen, ToolEraser, ToolMore };
 
     /// <summary>极简档的 4 个颜色：红 / 黑 / 蓝 / 白（白笔是投影刚需）。</summary>
     public static readonly int[] MiniPalette = { 0, BlackIndex, 5, WhiteIndex };
@@ -74,8 +79,9 @@ internal static class PanelDraw
 
     public static readonly (string Icon, string Filled, string Name)[] Tools =
     {
-        ("mouse", "mouseFilled", "鼠标"),
-        ("pen", "penFilled", "笔"),
+        ("mouse", "mouseFilled", "鼠标"),          // ToolMouse
+        ("board", "board", "白板"),                // ToolBoard —— 和鼠标同属"画布模式"，所以紧挨着
+        ("pen", "penFilled", "笔"),                // ToolPen
         ("highlighter", "highlighterFilled", "荧光笔"),
         ("laser", "laserFilled", "激光笔"),
         ("eraser", "eraserFilled", "橡皮擦"),
@@ -85,18 +91,18 @@ internal static class PanelDraw
         ("undo", "undoFilled", "后撤"),
         ("redo", "redoFilled", "重做"),
         ("more", "moreFilled", "更多"),
-        ("board", "board", "白板"),
     };
 
-    public static readonly int[] GroupEnds = { 0, 4, 7, 10 };
+    /// <summary>这些下标之后插一条分隔线：鼠标+白板 ｜ 四种笔 ｜ 编辑类 ｜ 后撤重做 ｜ 更多。</summary>
+    public static readonly int[] GroupEnds = { ToolBoard, ToolEraser, ToolCapture, ToolRedo };
 
     /// <summary>后撤/重做是"动作"，点了就执行，不切换上下文。</summary>
-    public static bool IsAction(int tool) => tool is 8 or 9;
+    public static bool IsAction(int tool) => tool is ToolUndo or ToolRedo;
     /// <summary>"更多"是入口：点了开合抽屉，也不改当前工具。</summary>
-    public static bool IsEntry(int tool) => tool == 10;
+    public static bool IsEntry(int tool) => tool == ToolMore;
 
     /// <summary>白板是"画布开关"，不是工具：点了不改当前工具，只切底色。</summary>
-    public const int BoardTool = 11;
+    public const int BoardTool = ToolBoard;
 
     /// <summary>板色：白板 / 绿板 / 黑板 —— 教学上最常见的三种。</summary>
     public static readonly (string Name, Color Color)[] BoardColors =
@@ -211,41 +217,41 @@ internal static class PanelDraw
             return new StripSpec { Kind = StripKind.Colors, Decorative = true, Sel = s.Color };
         switch (s.Tool)
         {
-            case 1: // 笔
+            case ToolPen: // 笔
                 sp.Kind = StripKind.Colors; sp.Sel = s.Color; sp.HasSlider = true; sp.SliderHint = "笔宽";
                 break;
-            case 2: // 荧光笔
+            case ToolHighlighter: // 荧光笔
                 sp.Kind = StripKind.Colors; sp.Sel = s.Color; sp.HasSlider = true; sp.SliderHint = "荧光笔宽";
                 break;
-            case 3: // 激光笔
+            case ToolLaser: // 激光笔
                 sp.Kind = StripKind.Segments; sp.Labels = new[] { "小", "中", "大" };
                 sp.Sel = s.LaserSize; sp.HasSlider = true; sp.SliderHint = "光点大小";
                 break;
-            case 4: // 橡皮擦 —— 你说的"线擦还是面积擦"
+            case ToolEraser: // 橡皮擦 —— 你说的"线擦还是面积擦"
                 sp.Kind = StripKind.Segments; sp.Labels = new[] { "整笔擦", "面积擦" };
                 sp.Sel = s.EraserMode; sp.HasSlider = true; sp.SliderHint = "橡皮大小";
                 // 清空挂在橡皮这条的右端：擦一点 / 擦一块 / 全擦掉，语义是一路的。
                 // **按住才算数**（0.8 秒），因为清空是可撤销、但代价很大的动作。
                 sp.ActionIcon = "broom"; sp.ActionLabel = "清空"; sp.ActionId = ActionClear; sp.ActionHoldMs = 800;
                 break;
-            case 5: // 选择
+            case ToolSelect: // 选择
                 sp.Kind = StripKind.Segments; sp.Labels = new[] { "矩形框选", "自由套索" }; sp.Sel = s.SelectMode;
                 // 全选是"动作"不是"模式"：点一下就执行，不会保持高亮
                 sp.ActionIcon = "selectAll"; sp.ActionLabel = "全选"; sp.ActionId = ActionSelectAll;
                 break;
-            case 6: // 图形
+            case ToolShapes: // 图形
                 sp.Kind = StripKind.Shapes; sp.Sel = s.ShapeKind;
                 sp.Icons = new[] { "lineWeight", "arrowRight", "square", "circle", "triangle", "shapes" };
                 sp.Labels = new[] { "直线", "箭头", "矩形", "椭圆", "三角", "平行四边形" };
                 sp.HasSlider = true; sp.SliderHint = "线宽";
                 break;
-            case 7: // 截屏 —— 你说的"直接截 / 隐藏界面截"
+            case ToolCapture: // 截屏 —— 你说的"直接截 / 隐藏界面截"
                 sp.Kind = StripKind.Segments; sp.Labels = new[] { "直接截取", "隐藏批注截取" }; sp.Sel = s.CaptureHideInk ? 1 : 0;
                 break;
-            case 10: // 「更多」是入口不是工具：上带留作装饰（里面的开关都搬进抽屉了）
+            case ToolMore: // 「更多」是入口不是工具：上带留作装饰（里面的开关都搬进抽屉了）
                 sp.Kind = StripKind.Colors; sp.Decorative = true; sp.Sel = s.Color;
                 break;
-            case BoardTool: // 白板：上带就是三种板色（正好复用"上带＝这个按钮的设置条"这条规则）
+            case ToolBoard: // 白板：上带就是三种板色（正好复用"上带＝这个按钮的设置条"这条规则）
                 sp.Kind = StripKind.Segments; sp.Labels = new[] { "白板", "绿板", "黑板" };
                 sp.Sel = s.BoardColor;
                 break;
@@ -713,7 +719,7 @@ internal static class PanelDraw
                         : (dark ? C(0xFF, 0xFF, 0xFF, 0x24) : C(0x00, 0x00, 0x00, 0x18))), null, pr, 8, 8);
             }
 
-            if (tool == 3)
+            if (tool == ToolLaser)
                 DrawLaser(c, cx, cy, L.Icon, new SolidColorBrush(active ? Colors.White : InkColor(dark)), s.LaserStyle);
             else
                 Icon(c, active ? Tools[tool].Filled : Tools[tool].Icon, cx, cy, L.Icon,
@@ -757,9 +763,9 @@ internal static class PanelDraw
         {
             c.DrawEllipse(Brushes.White, new Pen(new SolidColorBrush(C(0x30, 0x34, 0x3C)), 1),
                           new Point(inset + trackW * s.Slider01, cy), 8, 8);
-            if (s.Tool == 4 && s.EraserMode == 0)
+            if (s.Tool == ToolEraser && s.EraserMode == 0)
                 c.DrawEllipse(null, new Pen(new SolidColorBrush(ink), 2.4), new Point(px, cy), 3 + 8 * s.Slider01, 3 + 8 * s.Slider01);
-            else if (s.Tool == 4)
+            else if (s.Tool == ToolEraser)
                 c.DrawRoundedRectangle(new SolidColorBrush(WithAlpha(ink, 0xCC)), null,
                                        new Rect(px - (4 + 7 * s.Slider01) / 1.6, cy - (4 + 7 * s.Slider01), (4 + 7 * s.Slider01) / 0.8, (4 + 7 * s.Slider01) * 2), 3, 3);
             else
