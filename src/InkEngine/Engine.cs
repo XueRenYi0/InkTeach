@@ -264,10 +264,28 @@ public class InkEngine
 
     /// <summary>正在拖旋转手柄——度数标签靠它决定显不显示。</summary>
     internal bool SelRotating;
-    /// <summary>当前这一拖转了多（度，正 = 顺时针；相对按下那一刻）。</summary>
+    /// <summary>
+    /// 当前这一拖一共转了多少度（**逆时针为正、顺时针为负**，相对按下那一刻）。
+    ///
+    /// **不设上限**（用户 2026-09-15 定："贴合我们高中数学"）：转两圈就是 720°，
+    /// 倒着转就是负数，超过 ±180° 也**不绕回**——所以它不是"起点到当前点的夹角"，
+    /// 而是每帧一小步累加出来的（见 <see cref="_rotAccumDeg"/>）。
+    /// </summary>
     internal float SelRotationDegrees;
     /// <summary>这个角度是"吸"出来的（90° 或 Shift 15° 网格），标签要变色提示。</summary>
     internal bool SelRotationSnapped;
+
+    /// <summary>
+    /// 本次旋转的**累积角**（度，逆时针为正）。每帧用
+    /// <see cref="SelectionHandles.RotationStepDegrees"/> 取一小步加上去。
+    ///
+    /// 为什么不直接量"起点 → 当前点"：那个量天生只有 ±180° 的分辨率，
+    /// 从起点直接甩到 200° 的位置，量出来是 -160°（最短路径），"转了一圈"
+    /// 这件事就丢了。一帧一步地累积才记得住转了几圈。
+    /// </summary>
+    private float _rotAccumDeg;
+    /// <summary>上一帧指针在**框坐标**里的位置（算这一帧转了多少用）。</summary>
+    private Vector2 _rotPrevPoint;
 
     private Vector2 _dragStartPoint;
     private Matrix3x2[] _dragStartXform;
@@ -2859,6 +2877,11 @@ public class InkEngine
         for (int i = 0; i < _dragTargets.Length; i++)
             _dragStartXform[i] = _dragTargets[i].Transform;
 
+        // 旋转：累积角从 0 起，指针的"上一帧位置"就是按下这一点。
+        // 必须在这里归零——上一次拖拽攒下来的角度绝不能带进这一次。
+        _rotAccumDeg = 0f;
+        _rotPrevPoint = frame.ToLocalPoint(_dragStartPoint);
+
         SelDragging = true;
         _dirty = true;
         return true;
@@ -2889,33 +2912,45 @@ public class InkEngine
         // 各管一头，中间那档（默认的 90° 软吸附）不用按键。
         bool alt = (Native.GetAsyncKeyState(0x12 /* VK_MENU */) & 0x8000) != 0;
 
-        Matrix3x2 m;
+        Matrix3x2 m, localM;
         if (_dragIsMove)
         {
             // 整体移动：指针在画布上走多少，对象就走多少。**不能**在框坐标里算
             // 再共轭回来——框是斜的时候那样会走偏方向。
             m = Matrix3x2.CreateTranslation(cur - _dragStartPoint);
         }
+        else if (_dragHandle == SelHandle.Rotate)
+        {
+            // —— 旋转：**一帧一步地累积**（角度不设上限，见 SelRotationDegrees）——
+            //
+            // 角度在**框坐标**里量（和真正施加的旋转矩阵同一套输入），否则对象被
+            // 移动/转过之后，读数会和实际转过的角度对不上。
+            var c = new Vector2((_dragFrame.Local.MinX + _dragFrame.Local.MaxX) * 0.5f,
+                                (_dragFrame.Local.MinY + _dragFrame.Local.MaxY) * 0.5f);
+            var p = _dragFrame.ToLocalPoint(cur);
+            _rotAccumDeg += SelectionHandles.RotationStepDegrees(c, _rotPrevPoint, p);
+            _rotPrevPoint = p;
+
+            // 吸附作用在**累积角**上：90° / 15° 的整数倍在负角度、超过一圈的角度上照样对得上。
+            float localDeg = SelectionHandles.SnapRotationDegrees(_rotAccumDeg, shift, alt, out bool snapped);
+
+            // 被翻转过的对象：框坐标和屏幕**反手**，本地量出来的角度和眼睛看到的转向相反。
+            // 读数按**眼睛看到的方向**（逆时针为正），矩阵仍用本地那个数——
+            // 不然手柄就不跟手了（手柄必须始终咬住指针，这一条优先级更高）。
+            SelRotationDegrees = SelectionHandles.IsMirrored(_dragFrame.ToCanvas) ? -localDeg : localDeg;
+            SelRotationSnapped = snapped;
+            SelRotating = true;
+
+            // 矩阵用**吸附后的那个数**（没镜像时它和标签上的数一模一样）。
+            localM = SelectionHandles.RotateMatrix(localDeg, c);
+            m = Conjugate(_dragFrame.ToCanvas, localM);
+        }
         else
         {
-            if (_dragHandle == SelHandle.Rotate)
-            {
-                var c = new Vector2((_dragFrame.Local.MinX + _dragFrame.Local.MaxX) * 0.5f,
-                                    (_dragFrame.Local.MinY + _dragFrame.Local.MaxY) * 0.5f);
-                // 角度在**框坐标**里量（和真正施加的旋转矩阵同一套输入），
-                // 否则对象被移动/转过之后，读数会和实际转过的角度对不上。
-                float delta = SelectionHandles.RotationDeltaDegrees(
-                    c, _dragFrame.ToLocalPoint(_dragStartPoint), _dragFrame.ToLocalPoint(cur),
-                    shift, alt, out bool snapped);
-                SelRotationDegrees = delta;
-                SelRotationSnapped = snapped;
-                SelRotating = true;
-            }
-
             // 手柄换算在**框坐标**里做（缩放的锚点是"对角那个手柄"，只有在框坐标里
             // 才是"沿着框的两条边"），再共轭回画布坐标：M = F⁻¹ · M_local · F
-            var localM = SelectionHandles.DragMatrix(_dragHandle, _dragFrame,
-                                                     _dragStartPoint, cur, DpiScale, shift, shift, alt);
+            localM = SelectionHandles.DragMatrix(_dragHandle, _dragFrame,
+                                                 _dragStartPoint, cur, DpiScale, shift, shift, alt);
             m = Conjugate(_dragFrame.ToCanvas, localM);
         }
 
@@ -2940,6 +2975,7 @@ public class InkEngine
     {
         SelDragging = false;
         SelRotating = false;            // 度数标签只在拖动中出现
+        _rotAccumDeg = 0f;              // 下一次拖拽从 0 开始数（标签也不显示了）
         if (_dragTargets == null) return;
 
         for (int i = 0; i < _dragTargets.Length; i++)

@@ -2214,20 +2214,35 @@ internal sealed class App : InkEngine.InkEngine
                           + $"，期望 {want:F1}°{(wantSnap ? "（吸附）" : "（自由）")}");
         }
 
+        // 注意 `target` 是**指针在屏幕上顺时针转的角度**（见 At），`want` 是标签上的数。
+        // 用户 2026-09-15 定：**逆时针为正、顺时针为负**——所以顺时针 88° 读数是 -90°。
         Case("正对网格：吸附", 0f, 0f, true);
         Case("容差内：吸到 0°", 2f, 0f, true);
-        Case("容差外：保持自由", 5f, 5f, false);
-        Case("普通角度：保持自由", 43f, 43f, false);
-        Case("容差内：吸到 90°", 88f, 90f, true);
-        Case("容差内：吸到 -90°", -89f, -90f, true);
-        Case("容差外：保持自由（90 附近）", 95f, 95f, false);
-        Case("半个整角：自由", 45f, 45f, false);
-        Case("整角 180°：吸附", 180f, 180f, true);
-        Case("负整角：归一化到 180°", -180f, 180f, true);
-        Case("Shift：硬网格 15°", 20f, 15f, true, shift: true);
+        Case("容差外：保持自由（顺时针 → 负）", 5f, -5f, false);
+        Case("普通角度：保持自由", 43f, -43f, false);
+        Case("容差内：吸到 90°", 88f, -90f, true);
+        Case("容差内：吸到 -90°", -89f, 90f, true);
+        Case("容差外：保持自由（90 附近）", 95f, -95f, false);
+        Case("半个整角：自由", 45f, -45f, false);
+        Case("整角 180°：吸附", 180f, -180f, true);
+        // 半圈这个点天生有歧义：屏幕 -180° 的最短增量既可以是 +180 也可以是 -180，
+        // 实现取"归一化后再取负" → -180。真正的转圈由拖动中的**逐帧累积**决定（见 C 段）。
+        Case("半圈的临界点：取 -180°", -180f, -180f, true);
+        Case("Shift：硬网格 15°", 20f, -15f, true, shift: true);
         Case("Shift：吸到 0°", 7f, 0f, true, shift: true);
-        Case("Alt：完全自由", 2f, 2f, false, alt: true);
-        Case("Shift+Alt：Shift 优先", 20f, 15f, true, shift: true, alt: true);
+        Case("Alt：完全自由", 2f, -2f, false, alt: true);
+        Case("Shift+Alt：Shift 优先", 20f, -15f, true, shift: true, alt: true);
+
+        // **不设上限**（用户 2026-09-15 定）：吸附规则原样，但角度不绕回。
+        // 转两圈多一点点 = 738°，就该原样写 738°，而不是 18°。
+        Check("吸附：738° 不绕回", Math.Abs(SelectionHandles.SnapRotationDegrees(738f, false, false, out _) - 738f) < 0.01f,
+              $"738° → {SelectionHandles.SnapRotationDegrees(738f, false, false, out _):F0}°");
+        Check("吸附：722° 吸到 720°（整圈的整数倍照样认）",
+              Math.Abs(SelectionHandles.SnapRotationDegrees(722f, false, false, out bool s722) - 720f) < 0.01f && s722,
+              $"722° → {SelectionHandles.SnapRotationDegrees(722f, false, false, out _):F0}°");
+        Check("吸附：-725° 保持自由（离 -720° 差 5°）",
+              Math.Abs(SelectionHandles.SnapRotationDegrees(-725f, false, false, out bool s725) + 725f) < 0.01f && !s725,
+              $"-725° → {SelectionHandles.SnapRotationDegrees(-725f, false, false, out _):F0}°");
 
         // 读数与矩阵必须自洽：矩阵转过的角度（独立用 atan2 量）要等于读数
         foreach (float target in new[] { 0f, 43f, 88f, -137f, 179f })
@@ -2237,7 +2252,8 @@ internal sealed class App : InkEngine.InkEngine
             var moved = Vector2.Transform(from, m);
             float measured = MathF.Atan2(moved.Y - center.Y, moved.X - center.X)
                            * 180f / MathF.PI + 90f;         // 起点在 -90°，所以加回来
-            measured = SelectionHandles.NormalizeDegrees(measured);
+            // 量出来的是**屏幕坐标**（顺时针为正）；读数那套是逆时针为正，取负号对齐
+            measured = -SelectionHandles.NormalizeDegrees(measured);
             var pivotAfter = Vector2.Transform(center, m);
             Check($"拖动 {target,5:F0}°：读数与矩阵一致",
                   Math.Abs(measured - deg) < 0.2f
@@ -2253,6 +2269,10 @@ internal sealed class App : InkEngine.InkEngine
               $"89.6° → {SelectionHandles.FormatDegrees(89.6f)}");
         Check("标签文案带符号", SelectionHandles.FormatDegrees(-45f) == "-45°",
               $"-45° → {SelectionHandles.FormatDegrees(-45f)}");
+        Check("标签文案不绕回（转两圈就写 740°）", SelectionHandles.FormatDegrees(740f) == "740°",
+              $"740° → {SelectionHandles.FormatDegrees(740f)}");
+        Check("标签文案不绕回（倒着转就写 -1234°）", SelectionHandles.FormatDegrees(-1234f) == "-1234°",
+              $"-1234° → {SelectionHandles.FormatDegrees(-1234f)}");
 
         // ================= B. 真机层 =================
         Doc.Clear();
@@ -2312,8 +2332,9 @@ internal sealed class App : InkEngine.InkEngine
         SettleFrames(260);
 
         Check("拖动中标记为旋转", SelRotating, $"SelRotating={SelRotating}");
-        Check("读数 ≈ 90°", Math.Abs(SelRotationDegrees - 90f) < 1f, $"{SelRotationDegrees:F1}°");
-        Check("92° 被吸到 90°", SelRotationSnapped, $"snapped={SelRotationSnapped}");
+        // 指针**顺时针**拖了 92°（GripAt 的角度是屏幕坐标），标签该写 -90°——逆转为正、顺转为负
+        Check("读数 ≈ -90°（顺时针为负）", Math.Abs(SelRotationDegrees + 90f) < 1f, $"{SelRotationDegrees:F1}°");
+        Check("顺时针 92° 被吸到 -90°", SelRotationSnapped, $"snapped={SelRotationSnapped}");
         int snappedPixels = AccentCount();
         Check("吸住时标签上屏（强调色填充）", snappedPixels > 1500, $"{snappedPixels} 像素");
 
@@ -2321,7 +2342,7 @@ internal sealed class App : InkEngine.InkEngine
         var to43 = GripAt(43f);
         SendMouse((int)to43.X, (int)to43.Y, 0);
         SettleFrames(260);
-        Check("43° 保持自由", !SelRotationSnapped && Math.Abs(SelRotationDegrees - 43f) < 1f,
+        Check("顺时针 43° 保持自由（-43°）", !SelRotationSnapped && Math.Abs(SelRotationDegrees + 43f) < 1f,
               $"{SelRotationDegrees:F1}°，snapped={SelRotationSnapped}");
         int freePixels = AccentCount();
         Check("没吸住时标签是白底（强调色像素少）", freePixels < 800, $"{freePixels} 像素");
@@ -2345,6 +2366,112 @@ internal sealed class App : InkEngine.InkEngine
               Math.Abs(back.M11 - 1f) < 1e-4f && Math.Abs(back.M12) < 1e-4f
               && Math.Abs(back.M21) < 1e-4f && Math.Abs(back.M22 - 1f) < 1e-4f,
               $"撤销后 M11={back.M11:F4} M12={back.M12:F4}");
+
+        // ================= C. 方向 + 不设上限（用户 2026-09-15 定的）=================
+        //
+        // 两条都要测：只有"逆时针为正"和"顺时针为负"**成对**出现，才证明符号是对的
+        // （只测一条的话，符号写反了也看不出来）。
+        // 再往同一方向一直转，看读数会不会在 ±180° 处**绕回**——绕回就说明还是在量
+        // "起点到当前点的夹角"，而不是"这一拖一共转了多少"。
+        {
+            // 圆形选区：绕自己转不改变轴心和半径，角度才好量准
+            Stroke NewRound()
+            {
+                Doc.Clear();
+                Doc.ClearHistory();
+                var s2 = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = new Color4(1f, 0f, 1f, 1f), Width = 12f * DpiScale,
+                };
+                for (int i = 0; i <= 48; i++)
+                {
+                    float a = i / 48f * MathF.PI * 2f;
+                    s2.AddPoint(sx + MathF.Cos(a) * 180f * DpiScale,
+                                sy + MathF.Sin(a) * 180f * DpiScale, 0.9f, i * 8);
+                }
+                Doc.AddStroke(s2);
+                Doc.Selected.Clear();
+                Doc.Selected.Add(s2);
+                Tool = Tool.Marquee;
+                SettleFrames(300);
+                return s2;
+            }
+
+            // 从当前位置的旋转手柄开始，按一串"屏幕角度增量"拖过去（单位：度，顺时针为正）
+            float Spin(Stroke s2, params float[] clockwiseSteps)
+            {
+                var f2 = SelectionHandles.FrameOf(Doc.Selected);
+                var grip2 = SelectionHandles.CanvasPosition(SelHandle.Rotate, f2, DpiScale);
+                var pivot2 = new Vector2((f2.CanvasAabb.MinX + f2.CanvasAabb.MaxX) * 0.5f,
+                                         (f2.CanvasAabb.MinY + f2.CanvasAabb.MaxY) * 0.5f);
+                float arm2 = Vector2.Distance(grip2, pivot2);
+                float a0 = MathF.Atan2(grip2.Y - pivot2.Y, grip2.X - pivot2.X);
+
+                SendMouse((int)grip2.X, (int)grip2.Y, Native.MOUSEEVENTF_LEFTDOWN);
+                SettleFrames(90);
+                float travel = 0f;
+                foreach (float step in clockwiseSteps)
+                {
+                    // 传进来的是**增量**：一路加着走，才能真的"转了 200°"。
+                    // （第一版写成 `a0 + step` 当绝对角用，两步都落在同一个点上，
+                    //  指针没动就没有消息，读数自然只有最后一步——自检当场抓到。）
+                    travel += step;
+                    float rad = a0 + travel * MathF.PI / 180f;
+                    SendMouse((int)(pivot2.X + arm2 * MathF.Cos(rad)),
+                              (int)(pivot2.Y + arm2 * MathF.Sin(rad)), 0);
+                    SettleFrames(90);
+                }
+                return SelRotationDegrees;
+            }
+
+            // ① 逆时针 90°：读数为**正**，而且矩阵真的往逆时针转了
+            //    （屏幕坐标里逆时针 90° → CreateRotation(-90°) → M12 = -1）
+            var spinCcw = NewRound();
+            float ccwRead = Spin(spinCcw, -90f);
+            Check("逆时针拖 90° → 读数 +90°（逆转为正）",
+                  Math.Abs(ccwRead - 90f) < 1.5f, $"读数 {ccwRead:F1}°");
+            Check("读数的符号和几何一致（逆时针转出来 M12≈-1）",
+                  Math.Abs(spinCcw.Transform.M12 + 1f) < 0.05f && Math.Abs(spinCcw.Transform.M11) < 0.05f,
+                  $"M11={spinCcw.Transform.M11:F3} M12={spinCcw.Transform.M12:F3}");
+            SendMouse(0, 0, Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(200);
+
+            // ② 顺时针 90°：读数为**负**
+            var spinCw = NewRound();
+            float cwRead = Spin(spinCw, 90f);
+            Check("顺时针拖 90° → 读数 -90°（顺转为负）",
+                  Math.Abs(cwRead + 90f) < 1.5f, $"读数 {cwRead:F1}°");
+            SendMouse(0, 0, Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(200);
+
+            // ③ 不设上限：同一拖里一路逆时针转 200°，读数必须 > 180°，不许绕回 -160°
+            var spinLong = NewRound();
+            float longRead = Spin(spinLong, -90f, -90f, -20f);
+            Check("同一拖转 200° → 读数 ≈ +200°（不绕回）",
+                  longRead > 190f && longRead < 210f,
+                  $"读数 {longRead:F1}°（绕回的话会是 -160° 左右）");
+            Check("转 200° 的对象真的转了 200°（矩阵能和读数对上）",
+                  Math.Abs(spinLong.Transform.M11 - MathF.Cos(200f * MathF.PI / 180f)) < 0.05f
+                  && Math.Abs(spinLong.Transform.M12 + MathF.Sin(200f * MathF.PI / 180f)) < 0.05f,
+                  $"M11={spinLong.Transform.M11:F3}（期望 {MathF.Cos(200f * MathF.PI / 180f):F3}）");
+            SendMouse(0, 0, Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(200);
+
+            // ④ 翻转过的对象：框坐标和屏幕是"反手"的（行列式为负），
+            //    读数仍然要以**眼睛看到的方向**为准——屏幕上逆时针拖，就该是正数。
+            var spinMirror = NewRound();
+            Doc.ApplyTransform(SelectionHandles.MirrorMatrix(spinMirror.WorldInkBounds, horizontal: true));
+            SettleFrames(250);
+            bool leftHanded = SelectionHandles.IsMirrored(spinMirror.Transform);
+            float mirrorRead = Spin(spinMirror, -90f);      // 屏幕上逆时针 90°
+            string mirrorNote = leftHanded ? "已镜像（行列式为负）" : "没镜像成（行列式为正）";
+            Check("翻转过的对象：屏幕上逆时针拖 → 读数仍为正",
+                  leftHanded && mirrorRead > 0f,
+                  $"{mirrorNote}，读数 {mirrorRead:F1}°");
+            SendMouse(0, 0, Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(200);
+        }
 
         Console.WriteLine();
         Console.WriteLine(fail == 0

@@ -879,9 +879,23 @@ internal sealed class OverlayWindow : IDisposable
     /// 位置贴在旋转手柄外侧（跟着手柄转，和 Figma 一样），并且夹在当前可见
     /// 画布范围内——选区贴到屏幕边上的时候，标签不会跑到屏幕外面去。
     /// </summary>
-    private RectF RotationReadoutRect(in SelectionFrame frame, float dpi)
+    /// <summary>
+    /// 度数标签的盒子**宽度跟着文案走**：角度不设上限之后会出现 "-1234°" 这种长数字，
+    /// 写死 64 逻辑像素会把字裁掉（D2D 画在固定矩形里，超出部分直接不见）。
+    /// 用和绘制同一个文字格式量一遍宽度——**量完要留着那点余量**，
+    /// 所以宽度 = 文字宽 + 两侧内边距。
+    /// </summary>
+    private RectF RotationReadoutRect(in SelectionFrame frame, float dpi, string text)
     {
-        const float widthLogical = 64f, heightLogical = 30f;
+        const float minWidthLogical = 64f, heightLogical = 30f;
+        float widthLogical = minWidthLogical;
+        if (!string.IsNullOrEmpty(text))
+        {
+            // 量一次就够了：标签只在拖动中出现，每帧一次测量对帧率没有影响
+            // （比"按字数估宽"可靠——中英文、正负号、度数符号宽度都不一样）。
+            float textW = MeasureTextWidth(text, ReadoutFormat(dpi));
+            widthLogical = MathF.Max(minWidthLogical, textW / dpi + 24f);
+        }
         var rot = SelectionHandles.CanvasPosition(SelHandle.Rotate, frame, dpi);
         float w = widthLogical * dpi, h = heightLogical * dpi;
         float gap = (SelectionHandles.RotateGripLogical * 0.5f + 9f) * dpi;
@@ -1338,7 +1352,7 @@ internal sealed class OverlayWindow : IDisposable
             // 旋转度数标签贴在旋转手柄外侧，比选中框本身还高出去一截，
             // 同样必须进脏区；拖动中它每帧都在动，靠 _transientHistory 回溯两帧。
             if (app.SelRotating)
-                r.Add(CanvasRectToWindow(RotationReadoutRect(frame, dpi).Inflate(3f)));
+                r.Add(CanvasRectToWindow(RotationReadoutRect(frame, dpi, RotationLabel(app)).Inflate(3f)));
         }
 
         if (app.ShowHud)
@@ -1517,7 +1531,9 @@ internal sealed class OverlayWindow : IDisposable
         // 没有这层提示，用户分不清"我自己转到了 90°"和"它替我吸到了 90°"。
         if (app.SelRotating)
         {
-            var label = RotationReadoutRect(frame, dpi);
+            // 同一个文案：盒子按它量宽，字也画它。**改一处就得改两处**的地方收成一个函数。
+            string readout = RotationLabel(app);
+            var label = RotationReadoutRect(frame, dpi, readout);
             var box = new Vortice.RawRectF(label.MinX, label.MinY, label.MaxX, label.MaxY);
             float pill = (label.MaxY - label.MinY) * 0.5f;
             var shape = new RoundedRectangle(box, pill, pill);
@@ -1534,8 +1550,7 @@ internal sealed class OverlayWindow : IDisposable
             _scratch.Color = snapped
                 ? new Color4(1f, 1f, 1f, 1f)
                 : new Color4(0.10f, 0.12f, 0.16f, 1f);
-            _ctx.DrawText(SelectionHandles.FormatDegrees(app.SelRotationDegrees),
-                          ReadoutFormat(dpi),
+            _ctx.DrawText(readout, ReadoutFormat(dpi),
                           // 注意：Vortice 的 Rect(x, y, width, height) 是"位置 + 尺寸"，
                           // 不是 (left, top, right, bottom)。写错的话文字会被排到很远的
                           // 地方去（居中排版时直接跑到屏幕外），看起来就像"字没画出来"。
@@ -1551,6 +1566,24 @@ internal sealed class OverlayWindow : IDisposable
     /// 绘制时的变换只有平移、没有缩放，所以字号写死就等于"物理像素"——
     /// 15 物理像素在 200% 缩放下只有 7.5 逻辑像素，投影上根本看不清。
     /// </summary>
+    /// <summary>
+    /// 用 DirectWrite 量一段文字在给定格式下的宽度。给"盒子要跟着文案变长"的地方用
+    /// （度数标签、面板底色）。用同一个格式量，量出来的才和画出来的一致。
+    /// </summary>
+    /// <summary>度数标签的文案（画它、按它量盒子宽度，都走这一个函数）。</summary>
+    private static string RotationLabel(InkEngine app) => SelectionHandles.FormatDegrees(app.SelRotationDegrees);
+
+    private static float MeasureTextWidth(string text, IDWriteTextFormat format)
+    {
+        if (string.IsNullOrEmpty(text) || format == null) return 0f;
+        try
+        {
+            using var layout = Gfx.WriteFactory.CreateTextLayout(text, format, 4096f, 1024f);
+            return layout.Metrics.Width;
+        }
+        catch { return 0f; }        // 量不出来就退回最小宽度，绝不能因为量个宽度把渲染搞挂
+    }
+
     private IDWriteTextFormat ReadoutFormat(float dpi)
     {
         float px = MathF.Max(11f, MathF.Round(15f * dpi));

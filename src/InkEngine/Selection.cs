@@ -305,40 +305,73 @@ internal static class SelectionHandles
     ///   · <paramref name="gridSnap"/>（按住 Shift）：硬网格 15°，与 Office / Figma 一致。
     ///   · 默认：**软吸附**——离 90° 的整数倍不足 3° 就吸上去，其余角度原样保留。
     ///
-    /// 度数是**相对量**（相对按下那一刻），正负按屏幕坐标：正 = 顺时针。
-    /// 相对量是唯一在所有情形下都有意义的数——对象本来可能就转着、多选时每个对象
+    /// 度数是**相对量**（相对按下那一刻）——对象本来可能就转着、多选时每个对象
     /// 角度还各不相同，显示绝对角度只会让人看不懂。
     /// </summary>
     public static float RotationDeltaDegrees(Vector2 center, Vector2 startPoint, Vector2 currentPoint,
                                              bool gridSnap, bool noSnap, out bool snapped)
-    {
-        float a0 = MathF.Atan2(startPoint.Y - center.Y, startPoint.X - center.X);
-        float a1 = MathF.Atan2(currentPoint.Y - center.Y, currentPoint.X - center.X);
-        float delta = a1 - a0;
+        => SnapRotationDegrees(RotationStepDegrees(center, startPoint, currentPoint),
+                               gridSnap, noSnap, out snapped);
 
+    /// <summary>
+    /// 从 <paramref name="fromPoint"/> 转到 <paramref name="toPoint"/>（都相对
+    /// <paramref name="center"/>）的**最短角度增量**。
+    ///
+    /// **符号约定：逆时针为正、顺时针为负**（用户 2026-09-15 定："贴合我们高中数学"，
+    /// 不设上限）。屏幕的 y 轴朝下，`atan2` 算出来的正角在屏幕上其实是**顺时针**，
+    /// 所以这里取过一次负号——出来的数就是标签上直接显示的那个数。
+    ///
+    /// 这一层是给**累积**用的（见 InkEngine.UpdateSelDrag）：拖动中每帧取一小步，
+    /// 要的是"这一帧往哪边转了多少"，不是"相对起点一共多少"。取"最短"正是为此——
+    /// 一帧里真转过半圈以上才会取错方向，60 帧/秒下那要求指针在一帧里绕半圈。
+    /// </summary>
+    public static float RotationStepDegrees(Vector2 center, Vector2 fromPoint, Vector2 toPoint)
+    {
+        float a0 = MathF.Atan2(fromPoint.Y - center.Y, fromPoint.X - center.X);
+        float a1 = MathF.Atan2(toPoint.Y - center.Y, toPoint.X - center.X);
+        return -NormalizeDegrees((a1 - a0) * 180f / MathF.PI);
+    }
+
+    /// <summary>
+    /// 对**已经攒好的角度**做吸附。**不做归一化**：角度不设上限（用户 2026-09-15 定），
+    /// 转两圈就是 720°，倒着转回去就是 -400°。90 / 15 的整数倍在负角度和超过一圈的
+    /// 角度上照样对得上，所以吸附规则一个字都不用改。
+    /// </summary>
+    public static float SnapRotationDegrees(float deg, bool gridSnap, bool noSnap, out bool snapped)
+    {
         snapped = false;
         if (gridSnap)
         {
-            float step = RotationSnapDegrees * MathF.PI / 180f;
-            delta = MathF.Round(delta / step) * step;
+            deg = MathF.Round(deg / RotationSnapDegrees) * RotationSnapDegrees;
             snapped = true;
         }
         else if (!noSnap)
         {
-            float step = RotationSoftSnapDegrees * MathF.PI / 180f;
-            float nearest = MathF.Round(delta / step) * step;
-            float tol = RotationSoftSnapToleranceDegrees * MathF.PI / 180f;
-            if (MathF.Abs(delta - nearest) <= tol)
+            float nearest = MathF.Round(deg / RotationSoftSnapDegrees) * RotationSoftSnapDegrees;
+            if (MathF.Abs(deg - nearest) <= RotationSoftSnapToleranceDegrees)
             {
-                delta = nearest;
+                deg = nearest;
                 snapped = true;
             }
         }
-        return NormalizeDegrees(delta * 180f / MathF.PI);
+        return deg;
     }
 
     /// <summary>
+    /// 绕 <paramref name="center"/> 转 <paramref name="deg"/> 度（**逆时针为正**）的矩阵。
+    ///
+    /// 全工程**只有这一处**把"用户看到的度数"翻成屏幕坐标的旋转方向，两个调用点
+    /// （引擎拖手柄、<see cref="DragMatrix"/>）都走它——分开写迟早出现
+    /// "读数说 +90°、对象却往 -90° 转"这种对不上的事。
+    /// </summary>
+    public static Matrix3x2 RotateMatrix(float deg, Vector2 center)
+        => Matrix3x2.CreateRotation(-deg * MathF.PI / 180f, center);
+
+    /// <summary>
     /// 把角度归一化到 (-180, 180]。用户看到的是 -43°，不是 317°；也不是 -0°。
+    ///
+    /// 注意：**标签上的数不再过这里**（角度不设上限）。它还留着，是给
+    /// <see cref="RotationStepDegrees"/>（每帧增量）和自检里"独立量一遍角度"用的。
     /// </summary>
     public static float NormalizeDegrees(float deg)
     {
@@ -348,10 +381,14 @@ internal static class SelectionHandles
         return deg;
     }
 
-    /// <summary>度数标签上的字。四舍五入到整度，并且**不留 -0°**。</summary>
+    /// <summary>
+    /// 度数标签上的字。四舍五入到整度，**不留 -0°**，并且**不绕回**：
+    /// 740° 就写 "740°"，倒着转两圈就写 "-720°"（用户：不设上限）。
+    /// 正数不带 "+"，负数自带 "-"。
+    /// </summary>
     public static string FormatDegrees(float deg)
     {
-        int v = (int)MathF.Round(NormalizeDegrees(deg));
+        int v = (int)MathF.Round(deg);
         if (v == 0) v = 0;                       // -0.4 四舍五入成 -0 → 0
         return v.ToString(System.Globalization.CultureInfo.InvariantCulture) + "°";
     }
@@ -375,7 +412,7 @@ internal static class SelectionHandles
             var c = new Vector2((startBounds.MinX + startBounds.MaxX) * 0.5f,
                                 (startBounds.MinY + startBounds.MaxY) * 0.5f);
             float deg = RotationDeltaDegrees(c, startPoint, currentPoint, snapAngle, noSnap, out _);
-            return Matrix3x2.CreateRotation(deg * MathF.PI / 180f, c);
+            return RotateMatrix(deg, c);
         }
 
         // 缩放 / 拉伸：对面那个手柄是**不动的锚点**。
@@ -439,6 +476,16 @@ internal static class SelectionHandles
     /// <summary>整体平移（在选中框内部按下拖动）。</summary>
     public static Matrix3x2 MoveMatrix(Vector2 from, Vector2 to)
         => Matrix3x2.CreateTranslation(to - from);
+
+    /// <summary>
+    /// 这个变换是不是**镜像过**的（行列式为负）。
+    ///
+    /// 关系到旋转读数的正负：镜像过的对象，它的**框坐标和屏幕是反手的**，
+    /// 同一段拖动在框坐标里量出来是顺时针、在屏幕上看着却是逆时针。读数要按
+    /// **眼睛看到的方向**（用户 2026-09-15 定的：逆时针为正），所以这里必须能问出来。
+    /// </summary>
+    public static bool IsMirrored(in Matrix3x2 m)
+        => m.M11 * m.M22 - m.M12 * m.M21 < 0f;
 
     // =====================================================================
     //  操作条（复制 / 删除 / 左右翻转 / 上下翻转 / 旋转）
