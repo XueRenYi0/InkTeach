@@ -148,8 +148,28 @@ public class InkEngine
     /// <summary>套索拖出来的路径（**画布坐标**，间距 ≥ <see cref="LassoStepLogical"/>）。</summary>
     internal readonly List<Vector2> LassoPath = new();
 
+    /// <summary>
+    /// 指针**此刻**的位置（画布坐标）。套索的路径是抽稀过的（间距 ≥3 逻辑像素），
+    /// 只画路径的话线头会比指针慢半拍（200% 缩放下差 6 个物理像素，看得出来）。
+    /// 所以预览画"路径 + 这一个点"，手感才是线头咬着指针走。
+    /// </summary>
+    internal Vector2 LassoLive;
+
     /// <summary>套索路径的采样间距（逻辑像素）：太密没用，还会把点数撑到几百。</summary>
     internal const float LassoStepLogical = 3f;
+
+    /// <summary>
+    /// 框选矩形 / 截图取景框的**锚点**（按下那一点，画布坐标）。
+    ///
+    /// 矩形必须按"锚点 ↔ 当前点"来算，**不能**在每次移动时累积 min/max：
+    /// 累积的话指针往回走框不会跟着缩，屏幕上看到的是"扫过的最大范围"，
+    /// 手感就是"不跟手"（用户 2026-09-15 实测反馈："人家是选中起始点以后，
+    /// 鼠标不管怎么变，它都是一个可变的矩形，但是我们这个似乎不是"）。
+    /// </summary>
+    private float _mqAnchorX, _mqAnchorY;
+
+    /// <summary>截图取景框的锚点（同上，两处用的是同一套算法）。</summary>
+    private float _capAnchorX, _capAnchorY;
 
     /// <summary>按下那一刻的修饰键（套索的 Shift 加选 / Alt 减选）。</summary>
     private bool _lassoAdditive, _lassoSubtractive;
@@ -1200,9 +1220,7 @@ public class InkEngine
                 // 和框选同一个手势。**和框选一样存画布坐标**（渲染那一层就
                 // 不必为它单独换算一次），抓屏时再换算回屏幕坐标
                 // （screen = canvas + 相机偏移，见 EndCapture）。
-                CaptureActive = true;
-                CapMinX = CapMaxX = x;
-                CapMinY = CapMaxY = y;
+                BeginCaptureAt(x, y);
                 break;
 
             case Tool.Marquee:
@@ -1312,11 +1330,7 @@ public class InkEngine
                 break;
 
             case Tool.Capture:
-                if (CaptureActive)
-                {
-                    CapMinX = MathF.Min(CapMinX, x); CapMaxX = MathF.Max(CapMaxX, x);
-                    CapMinY = MathF.Min(CapMinY, y); CapMaxY = MathF.Max(CapMaxY, y);
-                }
+                if (CaptureActive) ExtendCaptureTo(x, y);
                 break;
 
             case Tool.Marquee:
@@ -2171,26 +2185,73 @@ public class InkEngine
     private void BeginMarqueeAt(float x, float y, bool shift, bool alt)
     {
         MarqueeActive = true;
+        _mqAnchorX = x; _mqAnchorY = y;
         MqMinX = MqMaxX = x; MqMinY = MqMaxY = y;
         // 套索：路径从按下这一点开始；修饰键也在这一刻记下来（松手时用它决定加选/减选）。
         LassoPath.Clear();
-        if (SelMode == SelectMode.Lasso) LassoPath.Add(new Vector2(x, y));
+        LassoLive = new Vector2(x, y);
+        if (SelMode == SelectMode.Lasso) LassoPath.Add(LassoLive);
         _lassoAdditive = shift;
         _lassoSubtractive = alt;
     }
 
-    /// <summary>拖框中一路移动。矩形只更新包围盒；套索顺带收路径点（抽稀，见 LassoStepLogical）。</summary>
+    /// <summary>
+    /// 拖框中一路移动。
+    ///
+    /// 矩形：**锚点 ↔ 当前点**（四个方向都能拉，往回走框跟着缩回去）。
+    /// 套索：抽稀后收进路径，同时记下指针当前位置给预览用（见 <see cref="LassoLive"/>）。
+    /// </summary>
     private void ExtendMarqueeTo(float x, float y)
     {
+        if (SelMode != SelectMode.Lasso)
+        {
+            // 矩形框 = 从锚点拉到当前点的那一个矩形。**不是**"扫过的最大范围"。
+            MqMinX = MathF.Min(_mqAnchorX, x); MqMaxX = MathF.Max(_mqAnchorX, x);
+            MqMinY = MathF.Min(_mqAnchorY, y); MqMaxY = MathF.Max(_mqAnchorY, y);
+            return;
+        }
+
+        // 套索：间距 < 3 逻辑像素的点对判据没有贡献，只会把多边形从几十个顶点撑到几千个，
+        // 而每条笔迹的"点在不在圈里"都要乘这个顶点数。
+        LassoLive = new Vector2(x, y);
+        if (LassoPath.Count == 0) { LassoPath.Add(LassoLive); }
+        else
+        {
+            var last = LassoPath[LassoPath.Count - 1];
+            if (Vector2.Distance(last, LassoLive) >= LassoStepLogical * DpiScale)
+                LassoPath.Add(LassoLive);
+        }
+
+        // 脏区**只增不减**（和矩形那条路刻意不同）：已经画到屏幕上的那一段线，
+        // 不能因为指针往回移就不重画——不重画就擦不掉，屏幕上会留下一截旧线。
         MqMinX = MathF.Min(MqMinX, x); MqMaxX = MathF.Max(MqMaxX, x);
         MqMinY = MathF.Min(MqMinY, y); MqMaxY = MathF.Max(MqMaxY, y);
+    }
 
-        // 间距 < 3 逻辑像素的点对判据没有贡献，只会把多边形从几十个顶点撑到几千个，
-        // 而每条笔迹的"点在不在圈里"都要乘这个顶点数。
-        if (SelMode != SelectMode.Lasso || LassoPath.Count == 0) return;
-        var last = LassoPath[LassoPath.Count - 1];
-        if (Vector2.Distance(last, new Vector2(x, y)) >= LassoStepLogical * DpiScale)
-            LassoPath.Add(new Vector2(x, y));
+    /// <summary>截图取景框按下（和框选同一套锚点算法）。</summary>
+    private void BeginCaptureAt(float x, float y)
+    {
+        CaptureActive = true;
+        _capAnchorX = x; _capAnchorY = y;
+        CapMinX = CapMaxX = x; CapMinY = CapMaxY = y;
+    }
+
+    /// <summary>截图取景框拖动：锚点 ↔ 当前点（往回拖要跟着缩，否则就是"不跟手"）。</summary>
+    private void ExtendCaptureTo(float x, float y)
+    {
+        CapMinX = MathF.Min(_capAnchorX, x); CapMaxX = MathF.Max(_capAnchorX, x);
+        CapMinY = MathF.Min(_capAnchorY, y); CapMaxY = MathF.Max(_capAnchorY, y);
+    }
+
+    /// <summary>
+    /// 自检用：只驱动截图取景框的"按下 → 拖"，**不真的抓屏**（抓屏要藏窗口，
+    /// 还会把这一帧的测试环境弄乱）。取景框和框选框用的是同一套锚点算法。
+    /// </summary>
+    internal void CaptureFrameDragForTest(float ax, float ay, float x1, float y1, float x2 = float.NaN, float y2 = float.NaN)
+    {
+        BeginCaptureAt(ax, ay);
+        ExtendCaptureTo(x1, y1);
+        if (!float.IsNaN(x2)) ExtendCaptureTo(x2, y2);
     }
 
     /// <summary>

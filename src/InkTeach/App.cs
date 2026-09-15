@@ -4975,7 +4975,60 @@ internal sealed class App : InkEngine.InkEngine
             _ = tol;
         }
 
-        // ⑫ "选中是临时上下文"（用户 2026-09-15 定的规则，也是 InkClass/PPT/Figma 的惯例）
+        // ⑫ 框选矩形**咬着指针**（用户 2026-09-15 反馈："感觉有点不大跟手"）
+        //
+        // 以前按下之后每次移动都累积 min/max，于是框只会**变大**：指针往回走框不跟着缩，
+        // 屏幕上看到的是"扫过的最大范围"，而不是"从起点拉到现在的这一个矩形"。
+        // 现在按**锚点 ↔ 当前点**算（和同行一致），往回拖要能缩回去。
+        // 截图取景框用的是同一套算法，这里一起验。
+        {
+            SelMode = SelectMode.Rect;
+            Tool = Tool.Marquee;
+
+            // ① 拖到 +400 再拖回 +100 松手：框应该是 [锚点, +100]，不是 [锚点, +400]
+            Doc.Clear();
+            Doc.ClearHistory();
+            var sweptOnly = Line(x0 + 200f, y0 + 50f, 100f, 0f, 6f * DpiScale);  // 扫过、但不在最终框里
+            var inside = Line(x0 + 20f, y0 + 50f, 60f, 0f, 6f * DpiScale);       // 在最终框里
+            Doc.AddStroke(sweptOnly);
+            Doc.AddStroke(inside);
+            MarqueeDragForTest(new[]
+            {
+                new Vector2(x0, y0),
+                new Vector2(x0 + 400f, y0 + 400f),      // 先拖远
+                new Vector2(x0 + 100f, y0 + 100f),      // 再拖回来松手
+            });
+            bool sweptPicked = Doc.Selected.Contains(sweptOnly);
+            Check("框选：拖远再拖回来 → 框跟着缩（不是扫过的最大范围）",
+                  Doc.Selected.Count == 1 && Doc.Selected[0] == inside,
+                  $"选中 {Doc.Selected.Count} 条（扫过但已退回的那条"
+                  + (sweptPicked ? "**被误选**" : "没被选") + "）");
+
+            // ② 从锚点往左上拖：反向也要能拉出框
+            Doc.Clear();
+            Doc.ClearHistory();
+            var upLeft = Line(x0 - 120f, y0 - 120f, 60f, 0f, 6f * DpiScale);
+            Doc.AddStroke(upLeft);
+            MarqueeDragForTest(new[]
+            {
+                new Vector2(x0, y0),
+                new Vector2(x0 - 180f, y0 - 180f),
+            });
+            Check("框选：从锚点往左上拖 → 反向也能拉出框",
+                  Doc.Selected.Count == 1 && Doc.Selected[0] == upLeft,
+                  $"选中 {Doc.Selected.Count} 条");
+
+            // ③ 截图取景框：同一套锚点算法（只驱动"按下 → 拖"，不抓屏）
+            CaptureFrameDragForTest(x0, y0, x0 + 400f, y0 + 400f, x0 + 100f, y0 + 100f);
+            bool capShrunk = MathF.Abs(CapMinX - x0) < 0.01f && MathF.Abs(CapMaxX - (x0 + 100f)) < 0.01f
+                          && MathF.Abs(CapMinY - y0) < 0.01f && MathF.Abs(CapMaxY - (y0 + 100f)) < 0.01f;
+            Check("截图取景框：同一套锚点算法（拖远再拖回也缩）", capShrunk,
+                  $"框 = ({CapMinX:F0},{CapMinY:F0})..({CapMaxX:F0},{CapMaxY:F0})，"
+                  + $"期望 ({x0:F0},{y0:F0})..({x0 + 100f:F0},{y0 + 100f:F0})");
+            CaptureActive = false;
+        }
+
+        // ⑬ "选中是临时上下文"（用户 2026-09-15 定的规则，也是 InkClass/PPT/Figma 的惯例）
         {
             // 换工具 → 收起；按"框选"（本来就是它）→ 保留
             Doc.SelectOnly(new[] { a });
@@ -7100,6 +7153,7 @@ internal sealed class App : InkEngine.InkEngine
             var before = ScreenProbe.CaptureRegion(bandX, bandYpx, bandW, bandH);
             MarqueeActive = true;
             LassoPath.AddRange(boxPath);
+            LassoLive = boxPath[boxPath.Count - 1];      // 线头画在指针位置（这里就是最后一个点）
             MqMinX = boxPath[0].X; MqMinY = boxPath[0].Y;
             MqMaxX = boxPath[2].X; MqMaxY = boxPath[2].Y;
             Doc.InvalidateAll();
@@ -7130,7 +7184,13 @@ internal sealed class App : InkEngine.InkEngine
         Doc.AddStroke(rectTarget);
         Doc.Selected.Clear();
         SelMode = SelectMode.Rect;
-        Quiet(() => MarqueeDragForTest(boxPath));
+        // 矩形模式喂**两个点**（锚点 → 对角）就够：矩形是按"锚点 ↔ 当前点"算的，
+        // 喂一圈闭合路径的话锚点和终点会重合，等于拉出一个零面积的框。
+        Quiet(() => MarqueeDragForTest(new[]
+        {
+            new Vector2(cx - 150f, cy - 150f),
+            new Vector2(cx + 150f, cy + 150f),
+        }));
         Check("切回矩形：同一个手势变成'碰到就选'",
               SelMode == SelectMode.Rect && Doc.Selected.Count == 1 && Doc.Selected.Contains(rectTarget),
               $"矩形模式下选中 {Doc.Selected.Count} 条（同一个矩形范围，换了一套判据）");

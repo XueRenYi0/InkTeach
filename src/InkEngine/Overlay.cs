@@ -1988,16 +1988,21 @@ internal sealed class OverlayWindow : IDisposable
         // 套索：画**自由曲线**，不是矩形。手势是什么样，屏幕上就得是什么样——
         // 用户要能看见自己"圈"到哪儿了，否则 80% 这条判据完全不可预期。
         // 收口那条边画淡一点：它提示"松手会自动闭合"，但还不是现在的边界。
-        if (app.SelMode == SelectMode.Lasso && app.LassoPath.Count >= 2)
+        //
+        // 线头必须画到**指针此刻的位置**（LassoLive），不能只画抽稀过的路径点：
+        // 路径点之间隔着 3 逻辑像素，只画路径的话线头会慢半拍（200% 缩放 = 6 个物理像素，
+        // 看得出来）。抽稀是为了判据便宜，不是为了少画这一截。
+        if (app.SelMode == SelectMode.Lasso && app.LassoPath.Count >= 1
+            && (app.LassoPath.Count >= 2
+                || Vector2.Distance(app.LassoPath[0], app.LassoLive) > 0.5f))
         {
             _scratch.Color = new Color4(0.35f, 0.75f, 1f, 0.95f);
-            using (var geo = BuildFreePolyline(app.LassoPath))
+            using (var geo = BuildFreePolyline(app.LassoPath, app.LassoLive))
                 _ctx.DrawGeometry(geo, _scratch, 1.6f, Gfx.Round);
 
             _scratch.Color = new Color4(0.35f, 0.75f, 1f, 0.30f);
             var p0 = app.LassoPath[0];
-            var pn = app.LassoPath[app.LassoPath.Count - 1];
-            _ctx.DrawLine(p0, pn, _scratch, 1.2f);
+            _ctx.DrawLine(p0, app.LassoLive, _scratch, 1.2f);
             return;
         }
 
@@ -2013,12 +2018,13 @@ internal sealed class OverlayWindow : IDisposable
     /// 为什么不复用手写笔迹那套：那是"中心线 + 原生描边"的墨，要按笔宽、颜色、
     /// 分块缓存走；套索只是一根临时的引导线，每帧现建现扔就够（几十个顶点）。
     /// </summary>
-    private static ID2D1PathGeometry BuildFreePolyline(IReadOnlyList<Vector2> pts)
+    private static ID2D1PathGeometry BuildFreePolyline(IReadOnlyList<Vector2> pts, Vector2 tail)
     {
         var geo = Gfx.D2DFactory.CreatePathGeometry();
         using var sink = geo.Open();
         sink.BeginFigure(pts[0], FigureBegin.Hollow);
         for (int i = 1; i < pts.Count; i++) sink.AddLine(pts[i]);
+        if (Vector2.Distance(tail, pts[pts.Count - 1]) > 0.5f) sink.AddLine(tail);
         sink.EndFigure(FigureEnd.Open);
         sink.Close();
         return geo;
