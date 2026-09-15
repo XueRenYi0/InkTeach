@@ -1984,10 +1984,44 @@ internal sealed class OverlayWindow : IDisposable
     private void DrawMarquee(InkEngine app)
     {
         if (!app.MarqueeActive) return;
+
+        // 套索：画**自由曲线**，不是矩形。手势是什么样，屏幕上就得是什么样——
+        // 用户要能看见自己"圈"到哪儿了，否则 80% 这条判据完全不可预期。
+        // 收口那条边画淡一点：它提示"松手会自动闭合"，但还不是现在的边界。
+        if (app.SelMode == SelectMode.Lasso && app.LassoPath.Count >= 2)
+        {
+            _scratch.Color = new Color4(0.35f, 0.75f, 1f, 0.95f);
+            using (var geo = BuildFreePolyline(app.LassoPath))
+                _ctx.DrawGeometry(geo, _scratch, 1.6f, Gfx.Round);
+
+            _scratch.Color = new Color4(0.35f, 0.75f, 1f, 0.30f);
+            var p0 = app.LassoPath[0];
+            var pn = app.LassoPath[app.LassoPath.Count - 1];
+            _ctx.DrawLine(p0, pn, _scratch, 1.2f);
+            return;
+        }
+
         var r = new Vortice.RawRectF(app.MqMinX, app.MqMinY, app.MqMaxX, app.MqMaxY);
         _ctx.FillRectangle(r, Brush(new Color4(0.25f, 0.6f, 1f, 0.12f)));
         _scratch.Color = new Color4(0.35f, 0.75f, 1f, 0.95f);
         _ctx.DrawRectangle(r, _scratch, 1.2f);
+    }
+
+    /// <summary>
+    /// 把一串画布坐标的点连成一条**开放折线**（套索预览用）。
+    ///
+    /// 为什么不复用手写笔迹那套：那是"中心线 + 原生描边"的墨，要按笔宽、颜色、
+    /// 分块缓存走；套索只是一根临时的引导线，每帧现建现扔就够（几十个顶点）。
+    /// </summary>
+    private static ID2D1PathGeometry BuildFreePolyline(IReadOnlyList<Vector2> pts)
+    {
+        var geo = Gfx.D2DFactory.CreatePathGeometry();
+        using var sink = geo.Open();
+        sink.BeginFigure(pts[0], FigureBegin.Hollow);
+        for (int i = 1; i < pts.Count; i++) sink.AddLine(pts[i]);
+        sink.EndFigure(FigureEnd.Open);
+        sink.Close();
+        return geo;
     }
 
     /// <summary>

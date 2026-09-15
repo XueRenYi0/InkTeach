@@ -176,6 +176,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             ClipboardTest();
         }
+        else if (mode == "--lassotest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            LassoTest();
+        }
         else if (mode == "--cursortest")
         {
             _autoExitAt = double.MaxValue;
@@ -501,6 +507,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --eraserlab [前缀]  橡皮手测台：铺样例 + 记录每条拖拽，给人用鼠标测（不自动退出）");
         Console.WriteLine("  --imagetest         图像对象（上屏 / 复制翻转 / 存档 / 剪贴板）");
         Console.WriteLine("  --clipboardtest     剪贴板对象通道（复制 → 粘回来仍是对象；会覆盖系统剪贴板）");
+        Console.WriteLine("  --lassotest         套索选择（80% 判据 / 贴边无限延伸 / 加选减选）");
         Console.WriteLine("  --capturetest       截图（拖框 → 左上角 → 剪贴板，且不拍进自己的批注）");
         Console.WriteLine("  --cursorshow <笔|荧光笔|激光笔|橡皮|像素橡皮> [宽]  落点摆样");
         Console.WriteLine("  --widthtest         笔迹粗细/压力");
@@ -6864,6 +6871,271 @@ internal sealed class App : InkEngine.InkEngine
 
         Doc.Clear();
         Console.WriteLine("  剪贴板里现在留着自检那张 64×48 的图（退出不会恢复你原来的内容）");
+        Console.WriteLine($"  合计：通过 {pass}，失败 {fail}");
+        Console.WriteLine(fail == 0 ? "PASS" : "FAIL");
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 套索自检（--lassotest）。判据全是能算出来的数，不看屏幕。
+    ///
+    /// 七条：
+    ///   ① `Ctrl+Alt+9` 真的在切方式（默认矩形）；
+    ///   ② **80% 边界**：代表点 79% 在圈里 → 不选，81% → 选（WPF 的 _percentIntersectForInk）；
+    ///   ③ **贴边＝无限延伸**：同一条半个身子在屏幕外的长笔迹，圈贴左边 → 选中；
+    ///      圈不贴边（只有可见的那一小段在圈里）→ 不选。这一对**必须成对验**，
+    ///      只验"贴边选中"看不出延伸是不是把什么都选进来了；
+    ///   ④ **图形按轮廓判**：矩形只差右下角没圈住（4/5 轮廓点）→ 选；
+    ///      再少一个角（3/5）→ 不选。用"两个端点"当代表点的话前者会漏选；
+    ///   ⑤ **图像按四个角判**：四角全在圈里 → 选；少一个角（3/4 = 75%）→ 不选；
+    ///   ⑥ **被擦掉的那一段不算墨**：圈住一条笔迹"被擦掉的那半截"，不该选中它；
+    ///   ⑦ 引擎那条路（按下→拖→松手）真的会用这条判据；路径太短＝单击空白＝取消选中。
+    /// </summary>
+    private void LassoTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 套索自检（80% 判据 / 贴边无限延伸 / 加选减选）===");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-30} {detail}");
+        }
+
+        static List<Vector2> Box(float x0, float y0, float x1, float y1) => new()
+        {
+            new Vector2(x0, y0), new Vector2(x1, y0),
+            new Vector2(x1, y1), new Vector2(x0, y1),
+        };
+
+        float cx = _virtualX + _virtualW * 0.5f, cy = _virtualY + _virtualH * 0.5f;
+        var vp = ViewportCanvas;
+        float snap = LassoEdgeSnapLogical * DpiScale;
+        var realOut = Console.Out;                    // 掐掉 ApplyLasso 与手势里的控制台输出
+        void Quiet(Action a) { Console.SetOut(TextWriter.Null); try { a(); } finally { Console.SetOut(realOut); } }
+
+        // --- 0. 切换方式 --------------------------------------------------------
+        Check("默认是矩形框", SelMode == SelectMode.Rect, SelMode.ToString());
+        SelMode = SelectMode.Rect;
+        ToggleSelectModeForTest();
+        bool toLasso = SelMode == SelectMode.Lasso;
+        ToggleSelectModeForTest();
+        Check("Ctrl+Alt+9 在两种方式之间切", toLasso && SelMode == SelectMode.Rect,
+              $"矩形 → {(toLasso ? "套索" : "?")} → {SelMode}");
+
+        // --- 1. 80% 边界（79% 不选 / 81% 选）------------------------------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        var boxPath = Box(cx - 150, cy - 150, cx + 150, cy + 150);
+
+        Stroke MakeRow(int insideCount)
+        {
+            var s = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 3f };
+            for (int i = 0; i < 100; i++)
+            {
+                if (i < insideCount)
+                    s.AddPoint(cx - 100 + (i % 10) * 22, cy - 100 + (i / 10) * 25, 1f, i);   // 圈里
+                else
+                    s.AddPoint(cx + 400 + (i % 20) * 5, cy - 100 + (i / 20) * 25, 1f, i);    // 圈外
+            }
+            return s;
+        }
+
+        // 两条**分开测**：放一个文档里的话，81% 那条本来就会被选中，
+        // "79% 没被选中"这件事就看不出来了（第一版就是这么写错的）。
+        var s79 = MakeRow(79);
+        Doc.AddStroke(s79);
+        int n79 = Doc.ApplyLasso(boxPath, vp, snap);
+        Check("79% 在圈里 → 不选", n79 == 0 && Doc.Selected.Count == 0,
+              $"判中 {n79} 条（80% 是门槛，79/100 必须落空）");
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        var s81 = MakeRow(81);
+        Doc.AddStroke(s81);
+        int n81 = Doc.ApplyLasso(boxPath, vp, snap);
+        Check("81% 在圈里 → 选中",
+              n81 == 1 && Doc.Selected.Count == 1 && ReferenceEquals(Doc.Selected[0], s81),
+              $"判中 {n81} 条（81/100 ≥ 80%）");
+
+        // --- 2. 贴边＝无限延伸 --------------------------------------------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        var longLine = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 6f };
+        for (int i = 0; i < 120; i++) longLine.AddPoint(vp.MinX - 800 + i * 10, cy, 1f, i);
+        Doc.AddStroke(longLine);
+        int total = longLine.Points.Count;                 // 120
+        int visibleInside = 110;                           // x < vp.MinX + 300 的那些
+
+        var awayFromEdge = Box(vp.MinX + 50, cy - 100, vp.MinX + 300, cy + 100);
+        int nAway = Doc.ApplyLasso(awayFromEdge, vp, snap);
+        Check("圈不贴边 → 屏幕外那半截不算（不选）", nAway == 0 && Doc.Selected.Count == 0,
+              $"判中 {nAway} 条（圈里只有约 25/{total} 个点，{(25 * 100 / total)}%）");
+
+        var touchEdge = Box(vp.MinX, cy - 100, vp.MinX + 300, cy + 100);
+        int nEdge = Doc.ApplyLasso(touchEdge, vp, snap);
+        Check("圈贴着屏幕左边 → 当作圈到无限远（选中）",
+              nEdge == 1 && Doc.Selected.Count == 1 && ReferenceEquals(Doc.Selected[0], longLine),
+              $"判中 {nEdge} 条（延伸后圈里 {visibleInside}/{total} 个点 = "
+              + $"{visibleInside * 100 / total}% ≥ 80%）");
+
+        // --- 3. 图形按**轮廓**判，不按两个端点 ----------------------------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        var bigRect = new Stroke
+        {
+            Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+            Color = new Color4(0.9f, 0.2f, 0.2f, 1f), Width = 4f,
+        };
+        bigRect.AddPoint(cx - 600, cy - 400, 1f, 0);
+        bigRect.AddPoint(cx + 600, cy + 400, 1f, 0);        // 端点是那条斜对角线
+        Doc.AddStroke(bigRect);
+
+        // 只把右下角切掉一点：轮廓 5 个点里 4 个在圈里（= 80%），两个端点里只有 1 个
+        var cutCorner = new List<Vector2>
+        {
+            new(cx - 700, cy - 500), new(cx + 700, cy - 500), new(cx + 700, cy + 300),
+            new(cx + 560, cy + 420), new(cx - 700, cy + 420),
+        };
+        int nRect = Doc.ApplyLasso(cutCorner, vp, snap);
+        Check("矩形：4/5 个轮廓点在圈里 → 选中", nRect == 1,
+              $"判中 {nRect} 条（轮廓 5 点里 4 点在内 = 80%；按两个端点算只有 50%，会漏选）");
+
+        var noBottom = Box(cx - 700, cy - 500, cx + 700, cy + 300);
+        int nRect2 = Doc.ApplyLasso(noBottom, vp, snap);
+        Check("矩形：只有 3/5 个轮廓点在圈里 → 不选", nRect2 == 0,
+              $"判中 {nRect2} 条（60% < 80%）");
+
+        // --- 4. 图像按四个角判 --------------------------------------------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        var pic = Doc.AddImage(MakeTestImage(300, 200), cx - 500, cy - 300, 1f);
+        int nPicAll = Doc.ApplyLasso(Box(cx - 600, cy - 400, cx - 100, cy), vp, snap);
+        Check("图像：四个角都在圈里 → 选中", nPicAll == 1,
+              $"判中 {nPicAll} 条（角点 4/4 = 100%）");
+
+        int nPic3 = Doc.ApplyLasso(Box(cx - 600, cy - 400, cx - 200, cy), vp, snap);
+        Check("图像：只圈住三个角 → 不选", nPic3 == 0,
+              $"判中 {nPic3} 条（3/4 = 75% < 80%）");
+
+        // --- 5. 被擦掉的那一段不算墨 --------------------------------------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        var erasedMost = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 6f };
+        for (int i = 0; i < 20; i++) erasedMost.AddPoint(cx, cy - 190 + i * 20, 1f, i);
+        erasedMost.AddErased(0f, 16f);                      // 上面 17 个点那一段被擦掉
+        Doc.AddStroke(erasedMost);
+        int remaining = 0;
+        for (int i = 0; i < erasedMost.Points.Count; i++)
+            if (!erasedMost.IsParamErased(i)) remaining++;
+        int nErased = Doc.ApplyLasso(Box(cx - 100, cy - 200, cx + 100, cy + 100), vp, snap);
+        Check("圈住被擦掉的那半截 → 不选", nErased == 0 && Doc.Selected.Count == 0,
+              $"判中 {nErased} 条（圈里还剩 {remaining} 个没被擦的点 = "
+              + $"{remaining * 100 / erasedMost.Points.Count}%；把擦掉的也算上就是 85%，会误选）");
+
+        // --- 6. Shift 加选 / Alt 减选 -------------------------------------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        var left = MakeRow(100);                            // 全在圈里
+        var right = Doc.AddImage(MakeTestImage(80, 80), cx + 400, cy + 400, 1f);
+        Doc.AddStroke(left);
+        Doc.SelectOnly(new[] { right });
+        int nAdd = Doc.ApplyLasso(boxPath, vp, snap, additive: true);
+        bool added = Doc.Selected.Count == 2 && Doc.Selected.Contains(left) && Doc.Selected.Contains(right);
+        Check("Shift 加选：原有的不丢", nAdd == 1 && added,
+              $"判中 {nAdd} 条，选区 {Doc.Selected.Count} 条（图像 + 笔迹）");
+
+        int nSub = Doc.ApplyLasso(boxPath, vp, snap, subtractive: true);
+        bool removed = Doc.Selected.Count == 1 && Doc.Selected.Contains(right) && !Doc.Selected.Contains(left);
+        Check("Alt 减选：只把它移出去", nSub == 1 && removed,
+              $"判中 {nSub} 条，选区剩 {Doc.Selected.Count} 条（图像还在）");
+
+        // --- 7. 引擎那条路（按下 → 拖 → 松手）-----------------------------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        var target = MakeRow(100);
+        Doc.AddStroke(target);
+        Doc.Selected.Clear();
+        SelMode = SelectMode.Lasso;
+        Quiet(() => MarqueeDragForTest(boxPath));
+        Check("引擎：走一次完整套索手势 → 选中", Doc.Selected.Count == 1 && Doc.Selected.Contains(target),
+              $"选中 {Doc.Selected.Count} 条，路径已清空={LassoPath.Count == 0}");
+
+        Quiet(() => MarqueeDragForTest(new[] { new Vector2(cx, cy), new Vector2(cx + 1, cy + 1) }));
+        Check("引擎：路径太短＝单击空白 → 取消选中", Doc.Selected.Count == 0,
+              $"选中 {Doc.Selected.Count} 条（和框选那条规则一致）");
+
+        // --- 8. 拽着不放时屏幕上真有那根线（差分判据，抓屏拍不到就跳过）----------
+        // 预览画的是自由折线，和矩形框不是同一段代码；不验的话"套索拖起来什么都看不见"
+        // 这种问题要等人肉测才发现。
+        Doc.Clear();
+        Doc.ClearHistory();
+        SelMode = SelectMode.Lasso;
+        MarqueeActive = false;
+        LassoPath.Clear();
+        Doc.InvalidateAll();
+        SettleFrames(400);
+
+        int bandX = (int)(cx - 220), bandY = (int)(cy - 190);
+        int bandYpx = (int)(cy - 190 + ViewOffsetY);
+        const int bandW = 440, bandH = 70;
+        var sight = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = 10f };
+        for (int i = 0; i <= 20; i++) sight.AddPoint(cx - 200 + i * 20, cy - 150, 1f, i);
+        Doc.AddStroke(sight);
+        Doc.InvalidateAll();
+        SettleFrames(400);
+        int canSee = ScreenProbe.CountMagenta(bandX, bandYpx, bandW, bandH);
+        Doc.Clear();
+        Doc.InvalidateAll();
+        SettleFrames(400);
+
+        if (canSee < 200)
+        {
+            Console.WriteLine($"  环境：抓屏看不到我们的层（拍到的是桌面/别的窗口，{canSee} 像素）"
+                            + " → SKIP: 预览那一条跳过");
+        }
+        else
+        {
+            var before = ScreenProbe.CaptureRegion(bandX, bandYpx, bandW, bandH);
+            MarqueeActive = true;
+            LassoPath.AddRange(boxPath);
+            MqMinX = boxPath[0].X; MqMinY = boxPath[0].Y;
+            MqMaxX = boxPath[2].X; MqMaxY = boxPath[2].Y;
+            Doc.InvalidateAll();
+            SettleFrames(400);
+            var after = ScreenProbe.CaptureRegion(bandX, bandYpx, bandW, bandH);
+
+            int changed = 0;
+            for (int i = 0; i + 3 < Math.Min(before.Length, after.Length); i += 4)
+            {
+                int d = Math.Abs(before[i] - after[i]) + Math.Abs(before[i + 1] - after[i + 1])
+                      + Math.Abs(before[i + 2] - after[i + 2]);
+                if (d > 40) changed++;
+            }
+            // 圈的上边正好横穿这条带子：300 逻辑像素长 × 1.6 宽（DPI 2 → 约 3 像素）
+            Check("拽着不放时屏幕上真画出了那条线", changed > 200,
+                  $"这条带子里变了 {changed} 个像素（上边线横穿过去，应该上千）");
+
+            MarqueeActive = false;
+            LassoPath.Clear();
+            Doc.InvalidateAll();
+            SettleFrames(200);
+        }
+
+        // --- 9. 切回矩形：同一个手势变成"碰到就选" -----------------------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        var rectTarget = MakeRow(100);
+        Doc.AddStroke(rectTarget);
+        Doc.Selected.Clear();
+        SelMode = SelectMode.Rect;
+        Quiet(() => MarqueeDragForTest(boxPath));
+        Check("切回矩形：同一个手势变成'碰到就选'",
+              SelMode == SelectMode.Rect && Doc.Selected.Count == 1 && Doc.Selected.Contains(rectTarget),
+              $"矩形模式下选中 {Doc.Selected.Count} 条（同一个矩形范围，换了一套判据）");
+
+        Doc.Clear();
         Console.WriteLine($"  合计：通过 {pass}，失败 {fail}");
         Console.WriteLine(fail == 0 ? "PASS" : "FAIL");
         _quit = true;

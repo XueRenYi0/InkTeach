@@ -807,6 +807,53 @@ internal sealed class Stroke
     public bool IsSinglePoint => Kind == StrokeKind.Freehand && Points.Count == 1;
 
     /// <summary>
+    /// 套索判据用的**代表点集**（画布坐标），追加到 <paramref name="dst"/>。
+    ///
+    /// 三种对象各取"它自己那个形状"，不能一律拿 Points 顶上：
+    ///   · **自由笔迹**：采样点。**跳过被像素橡皮擦掉的那一段**——擦掉的墨不算墨，
+    ///     一条被擦掉中间一段的长横线上，缺口里的点会把"圈住左边半截"判成"圈住整条"；
+    ///   · **图形**：<see cref="ShapeOutline"/> 的轮廓折线。**不能用两个端点**——
+    ///     矩形 / 椭圆的端点是斜对角，拿它当代表点，等于"圈住外框的左上角"就算
+    ///     "圈住了整个矩形"；
+    ///   · **图像**：四个角。它是"填满的一块"，四角就是它的边界。
+    ///
+    /// 全部经 <see cref="Transform"/> 变换到画布坐标：套索是在屏幕上圈的，
+    /// 判据必须在同一套坐标里（旋转过的对象尤其明显）。
+    /// </summary>
+    public void AppendRepresentativePoints(List<Vector2> dst)
+    {
+        if (Points.Count == 0) return;
+        bool ident = Transform.IsIdentity;
+
+        if (IsImage)
+        {
+            var b = Bounds;
+            dst.Add(ToCanvas(b.MinX, b.MinY, ident));
+            dst.Add(ToCanvas(b.MaxX, b.MinY, ident));
+            dst.Add(ToCanvas(b.MaxX, b.MaxY, ident));
+            dst.Add(ToCanvas(b.MinX, b.MaxY, ident));
+            return;
+        }
+
+        if (Kind != StrokeKind.Freehand)
+        {
+            foreach (var p in ShapeOutline()) dst.Add(ident ? p : Vector2.Transform(p, Transform));
+            return;
+        }
+
+        // 自由笔迹：按参数跳擦除区间。参数 = 点序号（见 Stroke.Erased）。
+        for (int i = 0; i < Points.Count; i++)
+        {
+            if (Erased.Count > 0 && IsParamErased(i)) continue;
+            var q = Points[i];
+            dst.Add(ToCanvas(q.X, q.Y, ident));
+        }
+    }
+
+    private Vector2 ToCanvas(float x, float y, bool ident)
+        => ident ? new Vector2(x, y) : Vector2.Transform(new Vector2(x, y), Transform);
+
+    /// <summary>
     /// 图形的**轮廓折线**（局部坐标，首尾相接，自己闭合）。
     ///
     /// 图形不是"点列"，它的轮廓由两个端点推出来（见下面一排 Build*）。渲染和
@@ -2424,6 +2471,116 @@ internal sealed class InkDocument
         _grid.Query(r, _queryScratch);
         foreach (var s in _queryScratch)
             if (s.PaddedBounds.Intersects(r)) Selected.Add(s);
+    }
+
+    /// <summary>WPF 的 `_percentIntersectForInk`：代表点落进圈里的比例（百分数）。</summary>
+    public const float LassoPercentInk = 80f;
+
+    /// <summary>
+    /// 套索的判据：**一个对象的代表点里有 80% 以上落在圈里**才算选中。
+    ///
+    /// 80 这个数是抄微软 WPF 的 `LassoHelper._percentIntersectForInk = 80`——它是
+    /// 微软在真实手写板上反复调出来的：太高（100%＝"整条都在圈里"）会像框选那样
+    /// 永远选不全（笔头伸出圈外一点点就白圈）；太低会把手滑划过的笔迹一股脑选进来。
+    ///
+    /// 注意它和**框选**的判据**故意不一样**：框选是"碰到就选"（对应 OneNote），
+    /// 套索是"圈住了才算"（对应 WPF 与绝大多数白板）。两种手势的意图本来就不同：
+    /// 拖矩形是"我框住这一片"，画一圈是"我把这一条圈起来了"。
+    ///
+    /// **贴边＝无限延伸**（<paramref name="visible"/> 是当前可见的画布矩形）：
+    /// 圈到屏幕边的顶点会被推到"屏幕外很远"（见 ExtendToEdges），于是伸出屏幕的
+    /// 那一截也算在圈里。没有这一条，一条横跨屏幕的长笔迹永远选不全——框选当初
+    /// 就是为同一个问题才改成"碰到就选"的（见 ApplyMarquee 的注释）。
+    ///
+    /// 返回**被这一圈判中**的对象数（加减选之前），自检和日志用它。
+    /// </summary>
+    public int ApplyLasso(IReadOnlyList<Vector2> path, in RectF visible, float edgeSnap,
+                          bool additive = false, bool subtractive = false)
+    {
+        if (path == null || path.Count < 3) return 0;
+
+        // 候选粗筛用**没延伸过**的圈：延伸之后包围盒会到几十万像素外，等于全表扫描。
+        // 这不影响正确性——能落在圈里的对象，它的包围盒一定和圈（原始范围）相交；
+        // 不相交的，在屏幕上根本看不见（看不见的东西本来也不该被圈进来）。
+        var bbox = RectF.Empty;
+        foreach (var p in path) bbox.Add(p.X, p.Y);
+        bbox = bbox.Inflate(1f);
+
+        _grid.Query(bbox, _queryScratch);
+        if (_queryScratch.Count == 0) return 0;
+
+        var poly = ExtendToEdges(path, visible, edgeSnap);
+        var scratch = new List<Vector2>();
+        var hit = new List<Stroke>();
+        foreach (var s in _queryScratch)
+        {
+            scratch.Clear();
+            s.AppendRepresentativePoints(scratch);
+            if (scratch.Count == 0) continue;
+
+            int inside = 0;
+            foreach (var p in scratch)
+                if (PointInPolygon(poly, p.X, p.Y)) inside++;
+
+            // 整数比较，避免浮点边界上的 79.99999：inside / Count ≥ 80%
+            if (inside * 100 >= scratch.Count * LassoPercentInk) hit.Add(s);
+        }
+
+        if (subtractive) { foreach (var s in hit) Selected.Remove(s); }
+        else if (additive) { foreach (var s in hit) if (!Selected.Contains(s)) Selected.Add(s); }
+        else { Selected.Clear(); Selected.AddRange(hit); }
+        return hit.Count;
+    }
+
+    /// <summary>"无限远"的替代值：10 万像素。见 ExtendToEdges。</summary>
+    private const float EdgeRun = 100_000f;
+
+    /// <summary>
+    /// 把"贴着屏幕边"的顶点推到屏幕外很远（EdgeRun），这一步就是
+    /// 把"圈到屏幕边"变成"圈到无限远"。
+    ///
+    /// 为什么推顶点、而不是"把那条边延长成射线"：射线版的数学更干净，但要给多边形
+    /// 引入"无穷远边"的概念，后续的奇偶判定、包围盒、预览绘制全都得跟着改。
+    /// 推到 10 万像素外，在**可见区域尺度**上和无穷远没有区别（屏幕上最长的一条
+    /// 板书也就几千像素），而判据仍然是一个普通的多边形。
+    ///
+    /// 代价（已知）：被推出去的那个顶点会在屏幕外鼓出一个楔形，圈外、又恰好在
+    /// 那个方向上的东西会被多选进来。屏幕上看不出来（那些东西本来就不在可见区域里）。
+    /// </summary>
+    private static List<Vector2> ExtendToEdges(
+        IReadOnlyList<Vector2> path, in RectF visible, float edgeSnap)
+    {
+        var poly = new List<Vector2>(path.Count);
+        for (int i = 0; i < path.Count; i++)
+        {
+            var p = path[i];
+            if (!visible.IsEmpty)
+            {
+                if (p.X <= visible.MinX + edgeSnap) p.X = visible.MinX - EdgeRun;
+                else if (p.X >= visible.MaxX - edgeSnap) p.X = visible.MaxX + EdgeRun;
+                if (p.Y <= visible.MinY + edgeSnap) p.Y = visible.MinY - EdgeRun;
+                else if (p.Y >= visible.MaxY - edgeSnap) p.Y = visible.MaxY + EdgeRun;
+            }
+            poly.Add(p);
+        }
+        return poly;
+    }
+
+    /// <summary>
+    /// 点在多边形内（射线法 / 奇偶规则）。每点 O(n)，不需要三角化。
+    /// </summary>
+    public static bool PointInPolygon(IReadOnlyList<Vector2> poly, float x, float y)
+    {
+        bool inside = false;
+        for (int i = 0, j = poly.Count - 1; i < poly.Count; j = i++)
+        {
+            float xi = poly[i].X, yi = poly[i].Y;
+            float xj = poly[j].X, yj = poly[j].Y;
+            if ((yi > y) == (yj > y)) continue;                 // 这条边不跨过水平线
+            float xCross = (xj - xi) * (y - yi) / (yj - yi) + xi;
+            if (x < xCross) inside = !inside;
+        }
+        return inside;
     }
 
     /// <summary>

@@ -39,6 +39,8 @@ internal enum KeyAction
     SplitErased,
     ToolCapture,
     ToolMarquee,
+    /// <summary>框选工具下拖空白处的方式：矩形框 ←→ 自由套索（见 InkEngine.SelMode）。</summary>
+    SelectShape,
     Undo,
     Clear,
     ToggleHud,
@@ -304,6 +306,7 @@ internal sealed class KeyMap
         KeyAction.SplitErased => "拆开擦断的笔迹",
         KeyAction.ToolCapture => "截图",
         KeyAction.ToolMarquee => "框选",
+        KeyAction.SelectShape => "选择方式",
         KeyAction.Undo => "撤销",
         KeyAction.Redo => "重做",
         KeyAction.Copy => "复制选中",
@@ -361,6 +364,7 @@ internal sealed class KeyMap
         m.Add(G, KeyAction.SplitErased, "Ctrl+Alt+8", "把选中的、被擦断的笔迹拆成独立对象（想单独搬动某一截时用）");
         m.Add(G, KeyAction.ToolCapture, "Ctrl+Alt+S", "截图：拖一个框，抓到的图放到左上角并进剪贴板");
         m.Add(G, KeyAction.ToolMarquee, "Ctrl+Alt+5", "换成框选（选择/移动/缩放/旋转）");
+        m.Add(G, KeyAction.SelectShape, "Ctrl+Alt+9", "选择方式：矩形框 ←→ 自由套索（面板上有显示）");
         m.Add(G, KeyAction.Undo, "Ctrl+Alt+Z", "撤销一步");
         m.Add(G, KeyAction.Clear, "Ctrl+Alt+C", "清空整页");
         m.Add(G, KeyAction.ToggleHud, "Ctrl+Alt+I", "显示/隐藏性能面板");

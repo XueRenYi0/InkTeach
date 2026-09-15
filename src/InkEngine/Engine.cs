@@ -6,6 +6,15 @@ using Vortice.Mathematics;
 
 namespace InkEngine;
 
+/// <summary>框选工具下拖空白处的选择方式（`Ctrl+Alt+9` 切）。见 InkEngine.SelMode。</summary>
+internal enum SelectMode
+{
+    /// <summary>矩形框选：碰到墨就算选中（OneNote 的语义）。</summary>
+    Rect = 0,
+    /// <summary>自由套索：代表点 80% 落在圈里才算选中（WPF 的语义）。</summary>
+    Lasso = 1,
+}
+
 internal enum PassThroughMode
 {
     /// <summary>WM_NCHITTEST -> HTTRANSPARENT only (safe, but the documented
@@ -123,6 +132,27 @@ public class InkEngine
     internal bool EraserKeepsSystemCursor;
     internal string HudText = "";
     internal bool MarqueeActive;
+
+    /// <summary>
+    /// 框选工具下拖空白处时的**选择方式**：矩形框 ↔ 自由套索（`Ctrl+Alt+9` 切）。
+    ///
+    /// 为什么不给界面按钮：工具条上已经挤了六种工具，而"选择方式"是个**低频设置**
+    /// （一节课可能一次都不切）。一个键 + 面板上一行字（见 BuildHudText）足够，
+    /// 还省掉一次"图标到底画哪个"的审美争论。**不落盘**（和工具尺寸一样活在内存里）。
+    ///
+    /// 两种手势的判据**故意不一样**（见 InkDocument.ApplyMarquee / ApplyLasso）：
+    /// 拖矩形＝"我框住这一片"（碰到就算），画一圈＝"我把这一条圈起来了"（80% 在内）。
+    /// </summary>
+    internal SelectMode SelMode = SelectMode.Rect;
+
+    /// <summary>套索拖出来的路径（**画布坐标**，间距 ≥ <see cref="LassoStepLogical"/>）。</summary>
+    internal readonly List<Vector2> LassoPath = new();
+
+    /// <summary>套索路径的采样间距（逻辑像素）：太密没用，还会把点数撑到几百。</summary>
+    internal const float LassoStepLogical = 3f;
+
+    /// <summary>按下那一刻的修饰键（套索的 Shift 加选 / Alt 减选）。</summary>
+    private bool _lassoAdditive, _lassoSubtractive;
 
     // ---- 选择手势（框选工具 = 选择工具）---------------------------------
     // 四种情形在这里分流：点操作条按钮 / 拖手柄 / 在选中范围里整体拖 / 空白处重新框选。
@@ -935,14 +965,18 @@ public class InkEngine
             $"已提交 {_privateMb,6:F1} MB（=“提交大小”）   工作集 {_workingSetMb,6:F1} MB（含共享）\n" +
             $"共享提交 {_sharedCommitMb,6:F1} MB   显存 {_gpuMb,6:F1} MB   CPU {_cpuPercent,4:F1} %\n" +
             $"笔画 {Doc.Strokes.Count}      点数 {Doc.TotalPoints}\n" +
-            $"选中 {Doc.Selected.Count}      工具 {ToolName(Tool)}{(PassThrough ? "（穿透中）" : "")}      粗细 {CurrentToolWidthLogical,4:F1}      撤销栈 {Doc.UndoDepth}\n" +
+            $"选中 {Doc.Selected.Count}      工具 {ToolName(Tool)}{SelectModeTag()}{(PassThrough ? "（穿透中）" : "")}      粗细 {CurrentToolWidthLogical,4:F1}      撤销栈 {Doc.UndoDepth}\n" +
             $"分块 {_tilesUsed}/{_tilesBudget}（可见 {_tilesVisible}，本帧光栅 {_tilesRasterized}）      网格 {Doc.GridCells}\n" +
-            $"Ctrl+Alt：1笔 2荧光 3激光 4橡皮 7像素橡皮 5框选 6粗细 Z撤销 C清空\n" +
+            $"Ctrl+Alt：1笔 2荧光 3激光 4橡皮 7像素橡皮 5框选 9矩形/套索 6粗细 Z撤销 C清空\n" +
             (EraserTelemetry != null
                 ? $"橡皮手测台：记录中 · 已记 {EraserTelemetry.DragCount} 条拖拽（退出时写汇总）\n"
                 : "") +
             $"其它 Ctrl+Alt：I面板 P穿透 K键盘 Y穿透方式 X退出";
     }
+
+    /// <summary>面板上跟着"工具"显示的当前选择方式（只有框选工具用得上）。</summary>
+    private string SelectModeTag()
+        => Tool == Tool.Marquee ? (SelMode == SelectMode.Lasso ? "·套索" : "·矩形") : "";
 
     private static string ToolName(Tool t) => t switch
     {
@@ -1180,8 +1214,10 @@ public class InkEngine
                         shift: (Native.GetAsyncKeyState(0x10 /*VK_SHIFT*/) & 0x8000) != 0,
                         alt: (Native.GetAsyncKeyState(0x12 /*VK_MENU*/) & 0x8000) != 0))
                 {
-                    MarqueeActive = true;
-                    MqMinX = MqMaxX = x; MqMinY = MqMaxY = y;
+                    BeginMarqueeAt(
+                        x, y,
+                        shift: (Native.GetAsyncKeyState(0x10 /*VK_SHIFT*/) & 0x8000) != 0,
+                        alt: (Native.GetAsyncKeyState(0x12 /*VK_MENU*/) & 0x8000) != 0);
                 }
                 break;
 
@@ -1285,11 +1321,7 @@ public class InkEngine
 
             case Tool.Marquee:
                 if (SelDragging) UpdateSelDrag(x, y);
-                else
-                {
-                    MqMinX = MathF.Min(MqMinX, x); MqMaxX = MathF.Max(MqMaxX, x);
-                    MqMinY = MathF.Min(MqMinY, y); MqMaxY = MathF.Max(MqMaxY, y);
-                }
+                else ExtendMarqueeTo(x, y);
                 break;
 
             case Tool.Laser:
@@ -2084,6 +2116,9 @@ public class InkEngine
         if (!MarqueeActive) return;
         MarqueeActive = false;
 
+        // 选择方式是套索时走另一条判据（80% 在内 + 贴边无限延伸），见 ApplyLassoSelection。
+        if (SelMode == SelectMode.Lasso) { ApplyLassoSelection(); return; }
+
         float l = MqMinX, t = MqMinY, r = MqMaxX, b = MqMaxY;
         if (r - l < 4 || b - t < 4)
         {
@@ -2103,6 +2138,110 @@ public class InkEngine
         Console.WriteLine($"marquee selected {Doc.Selected.Count} strokes");
         _dirty = true;
     }
+
+    /// <summary>
+    /// 切换框选工具下"拖空白处"的方式：矩形框 ↔ 自由套索。
+    ///
+    /// **只切方式，不换工具**——用户按这个键的时候手上可能还拿着笔（正在写），
+    /// 换工具会顺手把选中清掉（见 SwitchTool），那是他没要的副作用。
+    /// 方式不落盘：和工具尺寸一样活在内存里，重开就是默认的矩形。
+    /// </summary>
+    private void ToggleSelectMode()
+    {
+        SelMode = SelMode == SelectMode.Lasso ? SelectMode.Rect : SelectMode.Lasso;
+        // 半路切就把没画完的圈丢掉，免得下一次按下接在旧路径后面。
+        LassoPath.Clear();
+        MarqueeActive = false;
+        Console.WriteLine(SelMode == SelectMode.Lasso
+            ? "选择方式：自由套索（圈住 80% 就算选中；圈到屏幕边＝当作无限延伸）"
+            : "选择方式：矩形框（碰到墨就算选中）");
+        if (Tool != Tool.Marquee)
+            Console.WriteLine("  （现在不是框选工具：按 Ctrl+Alt+5 换到框选才用得上）");
+    }
+
+    /// <summary>自检用：切一次选择方式（等同于按一下 Ctrl+Alt+9）。</summary>
+    internal void ToggleSelectModeForTest() => ToggleSelectMode();
+
+    /// <summary>
+    /// 框选工具按下时起一个新手势。**抽出来是为了自检能走到同一段代码**
+    /// （见 <see cref="MarqueeDragForTest"/>）：合成鼠标在锁屏 / 被别的程序占着捕获时
+    /// 进不来，那几条自检只能记跳过——而这段接线恰恰是最容易写错的地方。
+    /// 修饰键由调用方读键盘后传进来，判定函数保持纯逻辑。
+    /// </summary>
+    private void BeginMarqueeAt(float x, float y, bool shift, bool alt)
+    {
+        MarqueeActive = true;
+        MqMinX = MqMaxX = x; MqMinY = MqMaxY = y;
+        // 套索：路径从按下这一点开始；修饰键也在这一刻记下来（松手时用它决定加选/减选）。
+        LassoPath.Clear();
+        if (SelMode == SelectMode.Lasso) LassoPath.Add(new Vector2(x, y));
+        _lassoAdditive = shift;
+        _lassoSubtractive = alt;
+    }
+
+    /// <summary>拖框中一路移动。矩形只更新包围盒；套索顺带收路径点（抽稀，见 LassoStepLogical）。</summary>
+    private void ExtendMarqueeTo(float x, float y)
+    {
+        MqMinX = MathF.Min(MqMinX, x); MqMaxX = MathF.Max(MqMaxX, x);
+        MqMinY = MathF.Min(MqMinY, y); MqMaxY = MathF.Max(MqMaxY, y);
+
+        // 间距 < 3 逻辑像素的点对判据没有贡献，只会把多边形从几十个顶点撑到几千个，
+        // 而每条笔迹的"点在不在圈里"都要乘这个顶点数。
+        if (SelMode != SelectMode.Lasso || LassoPath.Count == 0) return;
+        var last = LassoPath[LassoPath.Count - 1];
+        if (Vector2.Distance(last, new Vector2(x, y)) >= LassoStepLogical * DpiScale)
+            LassoPath.Add(new Vector2(x, y));
+    }
+
+    /// <summary>
+    /// 自检用：把一条路径按"按下 → 一路移动 → 松手"**真实跑一遍**——走的是和鼠标
+    /// 完全相同的三个入口（<see cref="BeginMarqueeAt"/> / <see cref="ExtendMarqueeTo"/> /
+    /// <see cref="ApplyMarquee"/>），只是不经过操作系统的消息队列。
+    /// </summary>
+    internal void MarqueeDragForTest(IReadOnlyList<Vector2> path,
+                                     bool shift = false, bool alt = false)
+    {
+        if (path == null || path.Count == 0) return;
+        BeginMarqueeAt(path[0].X, path[0].Y, shift, alt);
+        for (int i = 1; i < path.Count; i++) ExtendMarqueeTo(path[i].X, path[i].Y);
+        ApplyMarquee();               // 松手：按 SelMode 走矩形或套索
+    }
+
+    /// <summary>
+    /// 套索松手。判据在 <see cref="InkDocument.ApplyLasso"/>（80% 在内 + 贴边无限延伸），
+    /// 这里只管三件事：路径太短就当**单击空白**（取消选中，和框选一致）、
+    /// 修饰键加减选、清掉路径。
+    /// </summary>
+    private void ApplyLassoSelection()
+    {
+        if (LassoPath.Count < 3 || (MqMaxX - MqMinX) < 4f || (MqMaxY - MqMinY) < 4f)
+        {
+            // 点一下空白就想"什么都别选"——和框选那条同样的处理（见 ApplyMarquee）。
+            Doc.Selected.Clear();
+            CopyDragArmed = false;
+            LassoPath.Clear();
+            _dirty = true;
+            return;
+        }
+
+        int n = Doc.ApplyLasso(LassoPath, ViewportCanvas, LassoEdgeSnapLogical * DpiScale,
+                               additive: _lassoAdditive, subtractive: _lassoSubtractive);
+        Console.WriteLine(_lassoSubtractive
+            ? $"lasso removed {n} strokes（剩 {Doc.Selected.Count} 条）"
+            : $"lasso selected {n} strokes（圈 {LassoPath.Count} 个点"
+              + (_lassoAdditive ? $"，Shift 加选，共 {Doc.Selected.Count} 条）" : "）"));
+        LassoPath.Clear();
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// "圈到屏幕边"的判定容差（逻辑像素）：指针离可见区域边线这么近就当作贴边，
+    /// 那一段按无限延伸处理（见 <see cref="InkDocument.ApplyLasso"/>）。
+    ///
+    /// 取 4：指针能被拖到窗口外（有捕获），所以贴边基本都能满足；取太大又会让
+    /// "离边还有一点点"的圈也偷偷延伸出去，把屏幕外的墨一起圈进来。
+    /// </summary>
+    internal const float LassoEdgeSnapLogical = 4f;
 
     /// <summary>
     /// 读一条指针消息，顺便把两个时标记下来（延时探针用）：
@@ -2182,6 +2321,7 @@ public class InkEngine
             }
             case KeyAction.ToolCapture: SwitchTool(Tool.Capture); break;
             case KeyAction.ToolMarquee: SwitchTool(Tool.Marquee); break;
+            case KeyAction.SelectShape: ToggleSelectMode(); break;
             case KeyAction.Undo: Doc.Undo(); Laser.Clear(); break;
             case KeyAction.Redo: Doc.Redo(); break;
             case KeyAction.Copy: CopySelectionToClipboard(); break;
