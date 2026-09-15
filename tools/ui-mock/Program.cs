@@ -125,7 +125,7 @@ internal static class Program
         Console.WriteLine("  2) 鼠标移到最下面那道凹槽 → 拖块浮出，拖动改大小（笔＝笔宽，橡皮＝橡皮大小，右边有预览）");
         Console.WriteLine("  3) 按 D 切深色主题：看白块/黑块还分不分得出来");
         Console.WriteLine("  4) 按住面板空白处可以拖动它；点最左边那一格收起成球");
-        Console.WriteLine("  控制台热键：Esc 退出 · D 深浅 · C 收起/展开 · M 极简/完整 · H 瘦身档 · R 上带开合 · G 滑条 · S 图标档位 · T 换工具 · 1-9 选色 · +/- 大小 · L 激光笔图标");
+        Console.WriteLine("  控制台热键：Esc 退出 · D 深浅 · C 收起/展开 · M 极简/完整 · H 瘦身档 · B 白板开合 · R 上带开合 · G 滑条 · S 图标档位 · T 换工具 · 1-9 选色 · +/- 大小 · L 激光笔图标");
         Console.WriteLine();
 
         var keys = new Thread(() =>
@@ -197,6 +197,7 @@ internal static class Program
             case ConsoleKey.S: p.CycleIconScale(); break;
             case ConsoleKey.H: p.ToggleSlim(); break;
             case ConsoleKey.M: p.ToggleMini(); break;
+            case ConsoleKey.B: p.SetTool(PanelDraw.BoardTool); break;
             case ConsoleKey.T: p.SetTool((p.State.Tool + 1) % PanelDraw.Tools.Length); break;
             case ConsoleKey.OemPlus: case ConsoleKey.Add: p.NudgeSlider(0.06); break;
             case ConsoleKey.OemMinus: case ConsoleKey.Subtract: p.NudgeSlider(-0.06); break;
@@ -242,6 +243,8 @@ internal static class Program
             ("23-极简档-笔",           St(tool: 1, color: 0, mini: true, rail: 1),   false, 0, 0),
             ("24-极简档-橡皮",         St(tool: 4, color: 0, mini: true, rail: 1, eraser: 1, groove: 1), false, 0, 0),
             ("25-极简档-更多",         St(tool: 1, color: 0, mini: true, more: true), false, 0, 0),
+            ("26-白板-开着（盖住 PPT）", St(tool: 1, color: 0, board: true, boardColor: 0), true, 900, 420),
+            ("27-白板-板色三选",       St(tool: 11, color: 11, board: true, boardColor: 1, rail: 1), true, 900, 420),
         };
 
         foreach (var it in list)
@@ -256,7 +259,10 @@ internal static class Program
             {
                 if (it.Slide)
                 {
-                    SlideDraw.Draw(c, new Rect(0, 0, w, h));
+                    if (it.St.BoardOn)
+                        c.DrawRectangle(new SolidColorBrush(PanelDraw.BoardColors[it.St.BoardColor].Color), null, new Rect(0, 0, w, h));
+                    else
+                        SlideDraw.Draw(c, new Rect(0, 0, w, h));
                     c.PushTransform(new TranslateTransform((w - L.W) / 2, h - L.H - 20));
                 }
                 else
@@ -283,7 +289,7 @@ internal static class Program
                          bool dark = false, int tool = 1, int laser = 0, int eraser = 0,
                          bool hideInk = false, int select = 0, int shape = 0, int scale = 0,
                          double hold = 0, double flash = 0, bool slim = false, bool more = false,
-                         bool mini = false)
+                         bool mini = false, bool board = false, int boardColor = 0)
         => new PanelState
         {
             E = e, Rail = rail, Groove = groove, Color = color, Dark = dark, Tool = tool,
@@ -293,6 +299,7 @@ internal static class Program
             Slim = slim,
             MoreOpen = more,
             Mini = mini,
+            BoardOn = board, BoardColor = boardColor,
         };
 
     // =====================================================================
@@ -379,7 +386,18 @@ internal static class Program
 /// <summary>假 PPT 的一页：标题、正文、柱状图、红色手写批注、蓝色圈选。</summary>
 internal sealed class SlideElement : FrameworkElement
 {
-    protected override void OnRender(DrawingContext c) => SlideDraw.Draw(c, new Rect(0, 0, ActualWidth, ActualHeight));
+    public PanelState St;
+    protected override void OnRender(DrawingContext c)
+    {
+        var r = new Rect(0, 0, ActualWidth, ActualHeight);
+        if (St != null && St.BoardOn)
+        {
+            // 白板：把下面那张假 PPT 整块盖住 —— 这就是"白板模式"在真环境里的样子
+            c.DrawRectangle(new SolidColorBrush(PanelDraw.BoardColors[St.BoardColor].Color), null, r);
+            return;
+        }
+        SlideDraw.Draw(c, r);
+    }
 }
 
 internal static class SlideDraw

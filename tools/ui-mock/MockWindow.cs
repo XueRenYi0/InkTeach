@@ -282,6 +282,23 @@ internal sealed class PanelElement : FrameworkElement
         if (i < 0 || i >= PanelDraw.Tools.Length) return;
 
         // 「更多」是入口：开合抽屉，不改当前工具
+        if (i == PanelDraw.BoardTool)
+        {
+            // 白板是"画布开关"：点了不改当前工具，只切底色
+            State.BoardOn = !State.BoardOn;
+            if (State.BoardOn)
+            {
+                State.PassThrough = false;   // 开着白板还穿透的话，点下去打到的是看不见的窗口
+                Status?.Invoke($"白板：开（{PanelDraw.BoardColors[State.BoardColor].Name}）—— 桌面被盖住，笔迹还在；穿透已自动关掉");
+            }
+            else Status?.Invoke("白板：关 —— 回到透明批注");
+            _railPinned = true;
+            _rail.To(1, 167, Now);           // 顺便把板色那一行露出来
+            InvalidateVisual();
+            LayoutChanged?.Invoke(PanelDraw.Compute(State));
+            return;
+        }
+
         if (PanelDraw.IsEntry(i))
         {
             State.MoreOpen = !State.MoreOpen;
@@ -385,6 +402,11 @@ internal sealed class PanelElement : FrameworkElement
             case 7:
                 State.CaptureHideInk = i == 1;
                 Status?.Invoke(i == 0 ? "截屏：直接截取（含批注）" : "截屏：隐藏批注截取（先把自己的覆盖层藏起来）");
+                break;
+            case PanelDraw.BoardTool:
+                State.BoardColor = i;
+                State.BoardOn = true;      // 选了板色 = 想用这块板
+                Status?.Invoke("板色：" + PanelDraw.BoardColors[i].Name);
                 break;
             default:
                 Status?.Invoke("选项：" + PanelDraw.SpecOf(State).Labels[i]);
@@ -770,7 +792,7 @@ internal sealed class DemoWindow : MockWindow
         Height = 660;
         Left = 120;
         Top = 80;
-        Root.Children.Insert(0, new SlideElement { Width = 1120, Height = 660 });
+        Root.Children.Insert(0, new SlideElement { Width = 1120, Height = 660, St = Panel.State });
     }
 
     protected override void ApplyLayout(PanelDraw.Layout L)

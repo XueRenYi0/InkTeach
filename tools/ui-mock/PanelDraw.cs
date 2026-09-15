@@ -25,7 +25,7 @@ internal static class PanelDraw
 
     public static double BarContentWidth(double btn) => BarContentWidth(btn, AllToolsIndex.Length, false);
 
-    static readonly int[] AllToolsIndex = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    static readonly int[] AllToolsIndex = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
 
     /// <summary>极简档：只钉"笔 / 橡皮"，加一个永远的"更多"（下标是 Tools 里的原始下标）。</summary>
     public static readonly int[] MiniTools = { 1, 4, 10 };
@@ -85,14 +85,26 @@ internal static class PanelDraw
         ("undo", "undoFilled", "后撤"),
         ("redo", "redoFilled", "重做"),
         ("more", "moreFilled", "更多"),
+        ("board", "board", "白板"),
     };
 
-    public static readonly int[] GroupEnds = { 0, 4, 7 };
+    public static readonly int[] GroupEnds = { 0, 4, 7, 10 };
 
     /// <summary>后撤/重做是"动作"，点了就执行，不切换上下文。</summary>
     public static bool IsAction(int tool) => tool is 8 or 9;
     /// <summary>"更多"是入口：点了开合抽屉，也不改当前工具。</summary>
     public static bool IsEntry(int tool) => tool == 10;
+
+    /// <summary>白板是"画布开关"，不是工具：点了不改当前工具，只切底色。</summary>
+    public const int BoardTool = 11;
+
+    /// <summary>板色：白板 / 绿板 / 黑板 —— 教学上最常见的三种。</summary>
+    public static readonly (string Name, Color Color)[] BoardColors =
+    {
+        ("白板", C(0xFA, 0xFA, 0xF8)),
+        ("绿板", C(0x1E, 0x3A, 0x2E)),
+        ("黑板", C(0x18, 0x1A, 0x1E)),
+    };
 
     // ---- 「更多」抽屉 -----------------------------------------------------
 
@@ -232,6 +244,10 @@ internal static class PanelDraw
                 break;
             case 10: // 「更多」是入口不是工具：上带留作装饰（里面的开关都搬进抽屉了）
                 sp.Kind = StripKind.Colors; sp.Decorative = true; sp.Sel = s.Color;
+                break;
+            case BoardTool: // 白板：上带就是三种板色（正好复用"上带＝这个按钮的设置条"这条规则）
+                sp.Kind = StripKind.Segments; sp.Labels = new[] { "白板", "绿板", "黑板" };
+                sp.Sel = s.BoardColor;
                 break;
             default: // 鼠标（穿透）
                 sp.Kind = StripKind.Segments; sp.Labels = new[] { "直接操作", "穿透点击" }; sp.Sel = s.PassThrough ? 1 : 0;
@@ -677,7 +693,9 @@ internal static class PanelDraw
             int tool = L.ToolIndices[i];
             var t = L.Tiles[i + 1];
             double cx = t.X + t.Width / 2, cy = t.Y + t.Height / 2;
-            bool active = tool == s.Tool || (IsEntry(tool) && s.MoreOpen);
+            bool active = tool == s.Tool
+                       || (tool == BoardTool && s.BoardOn)
+                       || (IsEntry(tool) && s.MoreOpen);
             if (active)
                 c.DrawRoundedRectangle(new SolidColorBrush(Accent), null, t, 9, 9);
             else if (i == s.HoverTile)
@@ -976,4 +994,7 @@ internal sealed class PanelState
     /// <summary>「更多」抽屉开着没有；以及鼠标停在抽屉里哪一格。</summary>
     public bool MoreOpen;
     public int MoreHover = -1;
+    /// <summary>白板开着没有；板色 0 白 / 1 绿 / 2 黑。</summary>
+    public bool BoardOn;
+    public int BoardColor;
 }
