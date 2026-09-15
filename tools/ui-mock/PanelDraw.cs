@@ -25,15 +25,21 @@ internal static class PanelDraw
 
     public static double BarContentWidth(double btn) => BarContentWidth(btn, AllToolsIndex.Length, false);
 
-    static readonly int[] AllToolsIndex = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+    internal static readonly int[] AllToolsIndex = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
 
     // 工具下标写成具名常量：以后再往主条里插一格，只改这一处，不用满文件找数字
     public const int ToolMouse = 0, ToolBoard = 1, ToolPen = 2, ToolHighlighter = 3, ToolLaser = 4,
                      ToolEraser = 5, ToolSelect = 6, ToolShapes = 7, ToolCapture = 8,
                      ToolUndo = 9, ToolRedo = 10, ToolMore = 11;
 
-    /// <summary>极简档：只钉"笔 / 橡皮"，加一个永远的"更多"（下标是 Tools 里的原始下标）。</summary>
-    public static readonly int[] MiniTools = { ToolPen, ToolEraser, ToolMore };
+    /// <summary>极简档：笔 / 橡皮 / 白板 ＋ 一个永远的"更多"（下标是 Tools 里的原始下标）。</summary>
+    public static readonly int[] MiniTools = { ToolPen, ToolEraser, ToolBoard, ToolMore };
+
+    /// <summary>完整档：全部工具。</summary>
+    public static int[] FullTools => AllToolsIndex;
+
+    // 界面档位：0 极简 / 1 自定义（用户自己钉的）/ 2 完整
+    public const int ProfileMini = 0, ProfileCustom = 1, ProfileFull = 2;
 
     /// <summary>极简档的 4 个颜色：红 / 黑 / 蓝 / 白（白笔是投影刚需）。</summary>
     public static readonly int[] MiniPalette = { 0, BlackIndex, 5, WhiteIndex };
@@ -42,8 +48,20 @@ internal static class PanelDraw
     public static int ColorIndexOf(PanelState s, StripSpec spec, int chip)
         => (s.Mini && spec.Kind == StripKind.Colors && !spec.Decorative) ? MiniPalette[chip] : chip;
 
-    /// <summary>这一刻主条上钉了哪些工具。</summary>
-    public static int[] VisibleTools(PanelState s) => s.Mini ? MiniTools : AllToolsIndex;
+    /// <summary>这一刻主条上钉了哪些工具：极简＝固定的四个，自定义＝用户自己钉的，完整＝全部。</summary>
+    public static int[] VisibleTools(PanelState s) => s.Profile switch
+    {
+        ProfileMini => MiniTools,
+        ProfileCustom => (s.CustomTools != null && s.CustomTools.Length > 0) ? s.CustomTools : AllToolsIndex,
+        _ => AllToolsIndex,
+    };
+
+    public static string ProfileName(int profile) => profile switch
+    {
+        ProfileMini => "极简",
+        ProfileCustom => "自定义",
+        _ => "完整",
+    };
 
     public static double BarContentWidth(double btn, int count, bool mini)
     {
@@ -114,7 +132,7 @@ internal static class PanelDraw
 
     // ---- 「更多」抽屉 -----------------------------------------------------
 
-    public const double DrawerW = 380, DrawerH = 228, DrawerGap = 8;
+    public const double DrawerW = 380, DrawerH = 300, DrawerGap = 8;
 
     /// <summary>抽屉里的三组东西：应用 / 界面 / 学科工具（占位）。</summary>
     public static readonly (string Group, (string Icon, string Label, int Kind)[] Items)[] Drawer =
@@ -137,6 +155,12 @@ internal static class PanelDraw
             ("mathFormula", "量角器", -1),
             ("grid", "田字格", -1),
         }),
+    };
+
+    /// <summary>抽屉最上面那一组：界面档位（极简 / 自定义 / 完整）。</summary>
+    public static readonly (string Name, int Profile)[] Profiles =
+    {
+        ("极简", ProfileMini), ("自定义", ProfileCustom), ("完整", ProfileFull),
     };
 
     // ---- 12 色 ----------------------------------------------------------
@@ -281,6 +305,7 @@ internal static class PanelDraw
         public double ContentW;                      // 元素内容宽度（= max(面板宽, 抽屉宽)）
         public Rect DrawerRect;                      // 「更多」抽屉
         public (Rect R, int Group, int Index)[] MoreItems = Array.Empty<(Rect, int, int)>();
+        public Rect[] ProfileRects = Array.Empty<Rect>();   // 抽屉顶上那三个"界面档位"
         public int[] ToolIndices = Array.Empty<int>();   // 每个按钮对应的原始工具下标
         public double Btn = 44, Icon = 24;
     }
@@ -327,8 +352,15 @@ internal static class PanelDraw
             L.OriginX = (L.ContentW - L.W) / 2;
             double dx = (L.ContentW - DrawerW) / 2;
             L.DrawerRect = new Rect(dx, 0, DrawerW, DrawerH);
+            // 顶上那一条：界面档位（极简 / 自定义 / 完整）
+            var profs = new List<Rect>();
+            double pw = (DrawerW - 28 - 2 * 8) / 3;
+            for (int i = 0; i < Profiles.Length; i++)
+                profs.Add(new Rect(dx + 14 + i * (pw + 8), 26, pw, 30));
+            L.ProfileRects = profs.ToArray();
+
             var its = new List<(Rect, int, int)>();
-            double gy = 12;
+            double gy = 68;
             for (int g = 0; g < Drawer.Length; g++)
             {
                 gy += 16;
@@ -527,6 +559,20 @@ internal static class PanelDraw
                                new Pen(new SolidColorBrush(PanelEdge(dark)), 1),
                                Inset(r), 14, 14);
 
+        // 顶上：界面档位三段（当前那一档用强调色）
+        Text(c, "界面档位", r.X + 14, r.Y + 8, 11.5, new SolidColorBrush(dark ? C(0x9A, 0x9E, 0xA6) : C(0x6B, 0x70, 0x78)));
+        for (int i = 0; i < L.ProfileRects.Length; i++)
+        {
+            var pr = L.ProfileRects[i];
+            bool sel = Profiles[i].Profile == s.Profile;
+            bool hover = s.ProfileHover == i;
+            Color bg = sel ? Accent : (hover ? C(0x00, 0x00, 0x00, 0x0E) : C(0x00, 0x00, 0x00, 0x05));
+            c.DrawRoundedRectangle(new SolidColorBrush(bg),
+                                   new Pen(new SolidColorBrush(sel ? Colors.Transparent : (dark ? C(0xFF, 0xFF, 0xFF, 0x22) : C(0x00, 0x00, 0x00, 0x1E))), 1),
+                                   pr, 6, 6);
+            Label(c, Profiles[i].Name, pr, 12.5, sel ? Brushes.White : new SolidColorBrush(InkColor(dark)), sel);
+        }
+
         foreach (var it in L.MoreItems)
         {
             var cell = it.R;
@@ -543,8 +589,8 @@ internal static class PanelDraw
             Text(c, item.Label, cell.X + 40, cell.Y + (cell.Height - 17) / 2, 12.5, fg);
         }
 
-        // 组标签画在每行格子的上方
-        double gy = r.Y + 12;
+        // 组标签画在每行格子的上方（格子的第一行在 y=84，标签要在它上面 16 像素）
+        double gy = r.Y + 68;
         for (int g = 0; g < Drawer.Length; g++)
         {
             Text(c, Drawer[g].Group, r.X + 14, gy, 11.5, new SolidColorBrush(dark ? C(0x9A, 0x9E, 0xA6) : C(0x6B, 0x70, 0x78)));
@@ -987,8 +1033,20 @@ internal sealed class PanelState
     public bool AutoHide;
     /// <summary>瘦身档：滑条嵌进按钮带下沿，色线与色板各收一点。</summary>
     public bool Slim = true;     // 默认就走瘦身档（按 H 可以切回现状对照）
-    /// <summary>极简档：主条只钉"笔 / 橡皮 / 更多"，笔的设置条只给 4 个色块。</summary>
-    public bool Mini;
+    /// <summary>
+    /// 界面档位：0 极简 / 1 自定义 / 2 完整。
+    /// 自定义档就是"用户自己钉的那份集合"，一改钉住配置就进这一档。
+    /// </summary>
+    public int Profile = PanelDraw.ProfileFull;
+    /// <summary>自定义档钉了哪些（默认=全部；用户改过之后就是他那份）。</summary>
+    public int[] CustomTools = PanelDraw.AllToolsIndex;
+
+    /// <summary>是不是极简档（老代码和自检都用这个名字）。</summary>
+    public bool Mini
+    {
+        get => Profile == PanelDraw.ProfileMini;
+        set => Profile = value ? PanelDraw.ProfileMini : PanelDraw.ProfileFull;
+    }
     public int LaserStyle = 2;   // 默认用"自绘：笔＋光束＋落点"（按 L 可换其它候选）
     public int LaserSize = 1;
     public int EraserMode;       // 0 整笔擦 / 1 面积擦
@@ -1009,6 +1067,8 @@ internal sealed class PanelState
     /// <summary>「更多」抽屉开着没有；以及鼠标停在抽屉里哪一格。</summary>
     public bool MoreOpen;
     public int MoreHover = -1;
+    /// <summary>鼠标停在"界面档位"哪一段上。</summary>
+    public int ProfileHover = -1;
     /// <summary>白板开着没有；板色 0 白 / 1 绿 / 2 黑。</summary>
     public bool BoardOn;
     public int BoardColor;

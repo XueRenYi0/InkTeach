@@ -221,7 +221,7 @@ internal static class Program
             case ConsoleKey.L: p.CycleLaser(); break;
             case ConsoleKey.S: p.CycleIconScale(); break;
             case ConsoleKey.H: p.ToggleSlim(); break;
-            case ConsoleKey.M: p.ToggleMini(); break;
+            case ConsoleKey.M: p.CycleProfile(); break;
             case ConsoleKey.B: p.SetTool(PanelDraw.BoardTool); break;
             case ConsoleKey.T: p.SetTool((p.State.Tool + 1) % PanelDraw.Tools.Length); break;
             case ConsoleKey.OemPlus: case ConsoleKey.Add: p.NudgeSlider(0.06); break;
@@ -265,9 +265,9 @@ internal static class Program
             ("20-瘦身档-橡皮",         St(rail: 1, tool: 4, eraser: 1, groove: 1, slim: true), false, 0, 0),
             ("21-瘦身档-贴PPT",        St(tool: 1, color: 0, slim: true),            true, 900, 420),
             ("22-更多抽屉",            St(tool: 1, color: 0, more: true),            false, 0, 0),
-            ("23-极简档-笔",           St(tool: 2, color: 0, mini: true, rail: 1),   false, 0, 0),
+            ("23-极简档-笔（4 格含白板）", St(tool: 2, color: 0, mini: true, rail: 1), false, 0, 0),
             ("24-极简档-橡皮",         St(tool: 5, color: 0, mini: true, rail: 1, eraser: 1, groove: 1), false, 0, 0),
-            ("25-极简档-更多",         St(tool: 2, color: 0, mini: true, more: true), false, 0, 0),
+            ("25-极简档-更多（含三档切换）", St(tool: 2, color: 0, mini: true, more: true), false, 0, 0),
             ("26-白板-开着（盖住 PPT）", St(tool: 1, color: 0, board: true, boardColor: 0), true, 900, 420),
             ("27-白板-板色三选",       St(tool: 1, color: 11, board: true, boardColor: 1, rail: 1), true, 900, 420),
         };

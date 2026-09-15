@@ -217,13 +217,54 @@ internal static class UiTests
         // C. 语义：几件"点一下会发生什么"的约定
         // ---------------------------------------------------------------
 
-        Check("极简档只钉笔/橡皮/更多", () =>
+        Check("极简档 = 笔 / 橡皮 / 白板 / 更多", () =>
         {
             var vis = PanelDraw.VisibleTools(new PanelState { Mini = true });
-            if (vis.Length != 3) return $"可见工具数是 {vis.Length}，应为 3";
+            if (vis.Length != 4) return $"可见工具数是 {vis.Length}，应为 4";
             if (vis[0] != PanelDraw.ToolPen) return "第一格不是笔";
             if (vis[1] != PanelDraw.ToolEraser) return "第二格不是橡皮";
-            if (vis[2] != PanelDraw.ToolMore) return "第三格不是更多";
+            if (vis[2] != PanelDraw.ToolBoard) return "第三格不是白板";
+            if (vis[3] != PanelDraw.ToolMore) return "第四格不是更多";
+            return null;
+        });
+
+        Check("三个界面档位：项数与宽度都对得上", () =>
+        {
+            var expect = new[] { 4, 12, 12 };          // 极简 / 自定义（默认=全部）/ 完整
+            for (int p = 0; p < PanelDraw.Profiles.Length; p++)
+            {
+                var st = new PanelState { Profile = p, Slim = true, E = 1 };
+                int n = PanelDraw.VisibleTools(st).Length;
+                if (n != expect[p]) return $"{PanelDraw.ProfileName(p)} 档有 {n} 项，应为 {expect[p]}";
+                var L = PanelDraw.Compute(st);
+                if (L.W <= 0) return $"{PanelDraw.ProfileName(p)} 档宽度非正";
+                if (PanelDraw.ProfileName(p).Length == 0) return "档位没有名字";
+            }
+            return null;
+        });
+
+        Check("循环切档：三下回到原来那一档", () =>
+        {
+            var el = New();
+            int first = el.State.Profile;
+            for (int i = 0; i < PanelDraw.Profiles.Length; i++) { el.CycleProfile(); el.SnapAll(); }
+            if (el.State.Profile != first) return $"绕一圈之后是 {PanelDraw.ProfileName(el.State.Profile)}，应为 {PanelDraw.ProfileName(first)}";
+            if (PanelDraw.Profiles.Length != 3) return "档位数不是 3";
+            return null;
+        });
+
+        Check("极简档：每个工具的上带控件都放得进面板", () =>
+        {
+            double panelW = PanelDraw.Compute(new PanelState { Mini = true, Slim = true, E = 1 }).W;
+            foreach (int tool in PanelDraw.VisibleTools(new PanelState { Mini = true }))
+            {
+                var L = PanelDraw.Compute(new PanelState { Tool = tool, Mini = true, Slim = true, E = 1, Rail = 1 });
+                foreach (var it in L.Items)
+                    if (it.X < -0.5 || it.Right > L.W + 0.5)
+                        return $"工具「{PanelDraw.Tools[tool].Name}」的上带控件超出面板（{it.X:F1}..{it.Right:F1}，面板宽 {L.W:F0}）";
+                if (!L.ActionRect.IsEmpty && L.ActionRect.Right > L.W + 0.5)
+                    return $"工具「{PanelDraw.Tools[tool].Name}」的动作按钮超出面板";
+            }
             return null;
         });
 

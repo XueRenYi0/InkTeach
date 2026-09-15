@@ -504,12 +504,23 @@ internal sealed class PanelElement : FrameworkElement
         LayoutChanged?.Invoke(PanelDraw.Compute(State));
     }
 
-    /// <summary>现状（平时 80 / 展开 108）与瘦身档（平时 60 / 展开 84）之间切换。</summary>
+    /// <summary>循环切界面档位：极简 → 自定义 → 完整 → 极简。</summary>
+    public void CycleProfile()
+    {
+        State.Profile = (State.Profile + 1) % PanelDraw.Profiles.Length;
+        ApplyProfile("循环切档");
+    }
+
+    /// <summary>保留旧名字（自检里在用）：极简 ↔ 完整。</summary>
     public void ToggleMini()
     {
-        // 切档会改主条内容，日志里留一笔（出问题时对得上时间线）
-        State.Mini = !State.Mini;
-        // 切过去以后，如果当前工具不在这一档里，就落到"笔"
+        State.Profile = State.Mini ? PanelDraw.ProfileFull : PanelDraw.ProfileMini;
+        ApplyProfile("切到极简/完整");
+    }
+
+    /// <summary>切档之后统一收尾：当前工具不在新档里就落到笔、收起抽屉、重排并记日志。</summary>
+    void ApplyProfile(string how)
+    {
         bool visible = Array.IndexOf(PanelDraw.VisibleTools(State), State.Tool) >= 0;
         if (!visible) State.Tool = PanelDraw.ToolPen;
         State.MoreOpen = false;
@@ -518,10 +529,9 @@ internal sealed class PanelElement : FrameworkElement
         InvalidateVisual();
         LayoutChanged?.Invoke(PanelDraw.Compute(State));
         var L = PanelDraw.Compute(State);
-        Log.Write("切档：" + (State.Mini ? "极简" : "完整") + $"，当前工具={PanelDraw.Tools[State.Tool].Name}，宽={L.W:F0}");
-        Status?.Invoke(State.Mini
-            ? $"极简档：主条只钉「笔 / 橡皮 / 更多」，宽 {L.W:F0}（完整档是 {PanelDraw.BarContentWidth(PanelDraw.Scales[State.IconScale].Btn):F0}）"
-            : $"完整档：{PanelDraw.VisibleTools(State).Length} 项，宽 {L.W:F0}");
+        string name = PanelDraw.ProfileName(State.Profile);
+        Log.Write($"切档（{how}）：{name}，当前工具={PanelDraw.Tools[State.Tool].Name}，{PanelDraw.VisibleTools(State).Length} 项，宽={L.W:F0}");
+        Status?.Invoke($"界面档位：{name} —— {PanelDraw.VisibleTools(State).Length} 项，宽 {L.W:F0}");
     }
 
     public void ToggleSlim()
@@ -590,6 +600,9 @@ internal sealed class PanelElement : FrameworkElement
             foreach (var it in L0.MoreItems)
                 if (it.R.Contains(p)) hov = it.Group * 10 + it.Index;
             State.MoreHover = hov;
+            State.ProfileHover = -1;
+            for (int i = 0; i < L0.ProfileRects.Length; i++)
+                if (L0.ProfileRects[i].Contains(p)) { State.ProfileHover = i; hov = 0; }
             if (hov >= 0)
             {
                 Cursor = Cursors.Hand;
@@ -640,6 +653,16 @@ internal sealed class PanelElement : FrameworkElement
         _downAt = p;
         var L = PanelDraw.Compute(State);
 
+        // 抽屉顶上那三段"界面档位"
+        if (State.MoreOpen)
+            for (int i = 0; i < L.ProfileRects.Length; i++)
+            {
+                if (!L.ProfileRects[i].Contains(p)) continue;
+                State.Profile = PanelDraw.Profiles[i].Profile;
+                ApplyProfile("抽屉里点" + PanelDraw.Profiles[i].Name);
+                e.Handled = true;
+                return;
+            }
         // 抽屉里的东西（原始坐标）
         if (State.MoreOpen)
             foreach (var it in L.MoreItems)
