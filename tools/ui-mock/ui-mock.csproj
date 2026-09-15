@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>ui-mock</AssemblyName>
+    <RootNamespace>UiMock</RootNamespace>
+    <!-- 设计验证工具：不接引擎、不碰文档，只用来"贴在真 PPT 上看观感" -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 图标路径表和设计稿共用一份，避免两处各抄一遍（同一个文件，两个程序各自编译） -->
+    <Compile Include="..\design-sheet\IconPaths.g.cs" Link="IconPaths.g.cs" />
+  </ItemGroup>
+
+</Project>
