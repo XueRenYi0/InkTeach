@@ -615,16 +615,89 @@ internal static class PanelDraw
         Icon(c, "pen", r, r, r * 0.7, new SolidColorBrush(InkColor(s.Dark)));
     }
 
-    /// <summary>激光笔图标：光点 ＋ 一束斜射出去的光（上游没有这个专名，按 24 网格自绘）。</summary>
+    /// <summary>
+    /// 激光笔图标候选（按 L 循环）。上游 Fluent 没有这个专名，所以这里有三种来源：
+    /// Material Symbols 的 stylus_laser_pointer（专名，Apache-2.0）、
+    /// 我们按 Fluent 的 24 网格自绘的几个、以及 Fluent 自己的近义图标。
+    /// </summary>
     static void DrawLaser(DrawingContext c, double cx, double cy, double size, Brush brush, int style)
     {
         switch (style)
         {
-            case 1: Icon(c, "laserFlash", cx, cy, size, brush); return;
-            case 2: Icon(c, "laserRecord", cx, cy, size, brush); return;
-            case 3: Icon(c, "laserTarget", cx, cy, size, brush); return;
+            case 0: Icon(c, "msStylusLaser", cx, cy, size, brush); return;
+            case 1: Icon(c, "msStylusLaserFill", cx, cy, size, brush); return;
+            case 2: LaserPenBeam(c, cx, cy, size, brush); return;
+            case 3: LaserBeamCone(c, cx, cy, size, brush); return;
+            case 4: Icon(c, "laserFlash", cx, cy, size, brush); return;
+            case 5: Icon(c, "laserRecord", cx, cy, size, brush); return;
+            case 6: Icon(c, "laserTarget", cx, cy, size, brush); return;
+            case 7: LaserRays(c, cx, cy, size, brush); return;
+            default: LaserArcs(c, cx, cy, size, brush); return;
         }
+    }
 
+    /// <summary>自绘：笔 ＋ 光束 ＋ 落点（照 Excalidraw 那个思路，但画成 Fluent 的线宽）。</summary>
+    static void LaserPenBeam(DrawingContext c, double cx, double cy, double size, Brush brush)
+    {
+        double k = size / 24.0;
+        c.PushTransform(new TranslateTransform(cx - size / 2, cy - size / 2));
+        c.PushTransform(new ScaleTransform(k, k));
+        var body = new Pen(brush, 3.0) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+        var thin = new Pen(brush, 1.4) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+        c.DrawLine(body, new Point(17.0, 4.6), new Point(12.4, 9.2));      // 笔身
+        c.DrawLine(thin, new Point(11.6, 10.0), new Point(9.4, 12.2));      // 光束
+        c.DrawEllipse(brush, null, new Point(6.6, 15.0), 2.1, 2.1);         // 落点
+        c.Pop();
+        c.Pop();
+    }
+
+    /// <summary>自绘：光点 ＋ 短射线。</summary>
+    static void LaserRays(DrawingContext c, double cx, double cy, double size, Brush brush)
+    {
+        double k = size / 24.0;
+        c.PushTransform(new TranslateTransform(cx - size / 2, cy - size / 2));
+        c.PushTransform(new ScaleTransform(k, k));
+        var pen = new Pen(brush, 1.6) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+        var dot = new Point(12, 12);
+        c.DrawEllipse(brush, null, dot, 3.0, 3.0);
+        foreach (double a in new[] { -90.0, -40, 10, 55, 125, 180, 235 })
+        {
+            double r = a * Math.PI / 180.0;
+            c.DrawLine(pen,
+                new Point(dot.X + Math.Cos(r) * 6.0, dot.Y + Math.Sin(r) * 6.0),
+                new Point(dot.X + Math.Cos(r) * 9.2, dot.Y + Math.Sin(r) * 9.2));
+        }
+        c.Pop();
+        c.Pop();
+    }
+
+    /// <summary>自绘：光点 ＋ 三道弧（第一版那个，留着做对比）。</summary>
+    static void LaserArcs(DrawingContext c, double cx, double cy, double size, Brush brush)
+    {
+        double k = size / 24.0;
+        c.PushTransform(new TranslateTransform(cx - size / 2, cy - size / 2));
+        c.PushTransform(new ScaleTransform(k, k));
+        var pen = new Pen(brush, 1.6) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+        var p0 = new Point(6.5, 17.5);
+        c.DrawEllipse(brush, null, p0, 2.6, 2.6);
+        foreach (double rad in new[] { 7.0, 11.0, 15.0 })
+        {
+            var g = new StreamGeometry();
+            using (var gc = g.Open())
+            {
+                gc.BeginFigure(Polar(p0, rad, -96), false, false);
+                gc.ArcTo(Polar(p0, rad, -18), new Size(rad, rad), 0, false, SweepDirection.Clockwise, true, false);
+            }
+            g.Freeze();
+            c.DrawGeometry(null, pen, g);
+        }
+        c.Pop();
+        c.Pop();
+    }
+
+    /// <summary>自绘：光点 ＋ 一束斜射出去的光（锥体填一层半透明，小尺寸下才有体量）。</summary>
+    static void LaserBeamCone(DrawingContext c, double cx, double cy, double size, Brush brush)
+    {
         double s = size / 24.0;
         c.PushTransform(new TranslateTransform(cx - size / 2, cy - size / 2));
         c.PushTransform(new ScaleTransform(s, s));
@@ -661,6 +734,13 @@ internal static class PanelDraw
 
     static Rect Inset(Rect r) => new Rect(r.X + 0.5, r.Y + 0.5, Math.Max(0, r.Width - 1), Math.Max(0, r.Height - 1));
 
+    /// <summary>极坐标取点（画弧线用）。</summary>
+    static Point Polar(Point c, double r, double deg)
+    {
+        double a = deg * Math.PI / 180.0;
+        return new Point(c.X + Math.Cos(a) * r, c.Y + Math.Sin(a) * r);
+    }
+
     static void Label(DrawingContext c, string text, Rect r, double size, Brush b, bool bold)
         => Text(c, text, r.X + (r.Width - Measure(text, size)) / 2, r.Y + (r.Height - size * 1.35) / 2, size, b, bold);
 
@@ -687,10 +767,22 @@ internal static class PanelDraw
         string path;
         try { path = IconPaths.Get(name); } catch { return; }
         var geo = Geometry.Parse(path);
-        double s = size / 24.0;
+        // 外部库的图标自带 viewBox（Material 用的是 0 -960 960 960），按它换算
+        double vbW = 24, vbX = 0, vbY = 0;
+        if (IconPaths.TryGetBox(name, out var box) && !string.IsNullOrWhiteSpace(box))
+        {
+            var parts = box.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 4
+                && double.TryParse(parts[0], out var bx) && double.TryParse(parts[1], out var by)
+                && double.TryParse(parts[2], out var bw))
+            { vbX = bx; vbY = by; vbW = bw; }
+        }
+        double s = size / vbW;
         c.PushTransform(new TranslateTransform(cx - size / 2, cy - size / 2));
         c.PushTransform(new ScaleTransform(s, s));
+        c.PushTransform(new TranslateTransform(-vbX, -vbY));
         c.DrawGeometry(brush, null, geo);
+        c.Pop();
         c.Pop();
         c.Pop();
     }

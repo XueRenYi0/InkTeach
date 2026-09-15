@@ -423,9 +423,14 @@ internal sealed class PanelElement : FrameworkElement
 
     public void CycleLaser()
     {
-        State.LaserStyle = (State.LaserStyle + 1) % 4;
+        State.LaserStyle = (State.LaserStyle + 1) % 9;
         InvalidateVisual();
-        string[] n = { "光束锥（自制）", "Flash（闪电）", "Record（圆点）", "Target（靶心）" };
+        string[] n =
+        {
+            "Material 专名 stylus_laser_pointer", "Material 专名（实心）", "自绘：笔＋光束＋落点",
+            "自绘：光束锥", "Fluent：Flash 闪电", "Fluent：Record 圆点",
+            "Fluent：Target 靶心", "自绘：光点＋短射线", "自绘（第一版）：光点＋三道弧",
+        };
         Status?.Invoke("激光笔图标：" + n[State.LaserStyle]);
     }
 

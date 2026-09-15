@@ -64,6 +64,9 @@ $icons = [ordered]@{
     # 设置条右端那两个"动作"按钮
     'broom'           = @('Broom')
     'selectAll'       = @('Square Multiple')
+    # "更多"入口的候选：省略号 vs 宫格（工具箱）
+    'apps'            = @('Apps')
+    'grid'            = @('Grid')
 }
 
 # 激活态用的 filled 变体（Windows 11 的惯例：常态 regular、选中 filled）
@@ -81,6 +84,17 @@ $filledIcons = [ordered]@{
     'redoFilled'        = @('Arrow Redo')
     'settingsFilled'    = @('Settings')
     'moreFilled'        = @('More Horizontal')
+}
+
+# 外部图标库的候选（只用来给"上游没有专名"的语义做对比，都是各自许可证下的图形）
+#   Material Symbols（Apache-2.0）：有专名 stylus_laser_pointer —— 就是"笔 + 激光"
+#   它们用的是 960 网格、填充式路径，所以生成出来会额外带一个 viewBox 常量
+$foreignIcons = [ordered]@{
+    'msStylusLaser'     = 'https://cdn.jsdelivr.net/npm/@material-symbols/svg-400@latest/outlined/stylus_laser_pointer.svg'
+    'msStylusLaserFill' = 'https://cdn.jsdelivr.net/npm/@material-symbols/svg-400@latest/rounded/stylus_laser_pointer-fill.svg'
+    'msPointScan'       = 'https://cdn.jsdelivr.net/npm/@material-symbols/svg-400@latest/outlined/point_scan.svg'
+    'msFlashlightOn'    = 'https://cdn.jsdelivr.net/npm/@material-symbols/svg-400@latest/outlined/flashlight_on.svg'
+    'msStylus'          = 'https://cdn.jsdelivr.net/npm/@material-symbols/svg-400@latest/outlined/stylus.svg'
 }
 
 $used = @{}
@@ -142,6 +156,25 @@ foreach ($table in @(@($icons, 'regular'), @($filledIcons, 'filled'))) {
     }
 }
 
+# 外部库：路径 + viewBox 一起生成
+$boxes = @()
+foreach ($key in $foreignIcons.Keys) {
+    try { $svg = (Invoke-WebRequest -Uri $foreignIcons[$key] -UseBasicParsing -TimeoutSec 25).Content }
+    catch { Write-Host "  跳过 $key（下载失败）"; continue }
+    $vb = [regex]::Match($svg, 'viewBox="([^"]+)"').Groups[1].Value
+    $m = [regex]::Matches($svg, 'd="([^"]+)"')
+    if ($m.Count -eq 0) { Write-Host "  跳过 $key（没有路径）"; continue }
+    $d = ($m | ForEach-Object { $_.Groups[1].Value }) -join ' '
+    [void]$sb.AppendLine("    /// <summary>Material Symbols: $key（${vb} 网格）</summary>")
+    [void]$sb.AppendLine("    public const string $key =")
+    [void]$sb.AppendLine('        "' + $d + '";')
+    [void]$sb.AppendLine("    public const string ${key}Box = `"$vb`";")
+    [void]$sb.AppendLine()
+    $log += ("{0,-19} {1,-18} {2,-8} {3} 字符" -f $key, 'Material Symbols', 'foreign', $d.Length)
+    $allKeys += $key
+    $boxes += $key
+}
+
 [void]$sb.AppendLine('    /// <summary>按本地名字取路径数据（名字拼错时当场抛，别画出一个空图标）。</summary>')
 [void]$sb.AppendLine('    public static string Get(string name) => name switch')
 [void]$sb.AppendLine('    {')
@@ -150,6 +183,19 @@ foreach ($key in $allKeys) {
 }
 [void]$sb.AppendLine('        _ => throw new System.ArgumentOutOfRangeException(nameof(name), name, "图标表里没有这个名字"),')
 [void]$sb.AppendLine('    };')
+[void]$sb.AppendLine()
+[void]$sb.AppendLine('    /// <summary>外部库的图标带自己的 viewBox（比如 Material 用的是 960 网格）；没有就按 24 网格处理。</summary>')
+[void]$sb.AppendLine('    public static bool TryGetBox(string name, out string box)')
+[void]$sb.AppendLine('    {')
+[void]$sb.AppendLine('        box = name switch')
+[void]$sb.AppendLine('        {')
+foreach ($key in $boxes) {
+    [void]$sb.AppendLine('            "' + $key + '" => ' + $key + 'Box,')
+}
+[void]$sb.AppendLine('            _ => null,')
+[void]$sb.AppendLine('        };')
+[void]$sb.AppendLine('        return box != null;')
+[void]$sb.AppendLine('    }')
 [void]$sb.AppendLine('}')
 [System.IO.File]::WriteAllText($outFile, $sb.ToString(), [System.Text.UTF8Encoding]::new($true))
 

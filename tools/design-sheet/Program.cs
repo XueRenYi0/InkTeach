@@ -88,6 +88,8 @@ internal static partial class Program
             RenderSheet(outDir, "界面-设计稿v5-高度调研.png", DrawHeightSheet);
         if (sheet is "all" or "dock")
             RenderSheet(outDir, "界面-设计稿v6-贴边与隐藏.png", DrawDockSheet);
+        if (sheet is "all" or "more")
+            RenderSheet(outDir, "界面-设计稿v7-激光图标与更多抽屉.png", DrawLaserMoreSheet);
     }
 
     /// <summary>把每个绘制函数画成一张 PNG：高度由绘制函数自己算出来。</summary>
@@ -651,10 +653,22 @@ internal static partial class Program
     static void Icon(DrawingContext c, string name, double cx, double cy, double size, Brush brush)
     {
         var geo = Geometry.Parse(IconPaths.Get(name));
-        double s = size / 24.0;
+        // 外部库的图标自带 viewBox，按它换算（Material 用 0 -960 960 960）
+        double vbW = 24, vbX = 0, vbY = 0;
+        if (IconPaths.TryGetBox(name, out var box) && !string.IsNullOrWhiteSpace(box))
+        {
+            var parts = box.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 4
+                && double.TryParse(parts[0], out var bx) && double.TryParse(parts[1], out var by)
+                && double.TryParse(parts[2], out var bw))
+            { vbX = bx; vbY = by; vbW = bw; }
+        }
+        double s = size / vbW;
         c.PushTransform(new TranslateTransform(cx - size / 2, cy - size / 2));
         c.PushTransform(new ScaleTransform(s, s));
+        c.PushTransform(new TranslateTransform(-vbX, -vbY));
         c.DrawGeometry(brush, null, geo);
+        c.Pop();
         c.Pop();
         c.Pop();
     }
