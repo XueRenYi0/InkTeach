@@ -34,6 +34,7 @@ internal enum KeyAction
     ToolHighlighter,
     ToolLaser,
     ToolEraser,
+    ToolPixelEraser,
     ToolCapture,
     ToolMarquee,
     Undo,
@@ -294,6 +295,7 @@ internal sealed class KeyMap
         KeyAction.ToolHighlighter => "荧光笔",
         KeyAction.ToolLaser => "激光笔",
         KeyAction.ToolEraser => "橡皮擦",
+        KeyAction.ToolPixelEraser => "像素橡皮",
         KeyAction.ToolCapture => "截图",
         KeyAction.ToolMarquee => "框选",
         KeyAction.Undo => "撤销",
@@ -347,7 +349,8 @@ internal sealed class KeyMap
         m.Add(G, KeyAction.ToolPen, "Ctrl+Alt+1", "换成笔");
         m.Add(G, KeyAction.ToolHighlighter, "Ctrl+Alt+2", "换成荧光笔");
         m.Add(G, KeyAction.ToolLaser, "Ctrl+Alt+3", "换成激光笔");
-        m.Add(G, KeyAction.ToolEraser, "Ctrl+Alt+4", "换成橡皮擦");
+        m.Add(G, KeyAction.ToolEraser, "Ctrl+Alt+4", "换成橡皮擦（碰到哪一条就整条删掉）");
+        m.Add(G, KeyAction.ToolPixelEraser, "Ctrl+Alt+7", "换成像素橡皮（只擦掉碰到的一块，一笔会切成两段）");
         m.Add(G, KeyAction.ToolCapture, "Ctrl+Alt+S", "截图：拖一个框，抓到的图放到左上角并进剪贴板");
         m.Add(G, KeyAction.ToolMarquee, "Ctrl+Alt+5", "换成框选（选择/移动/缩放/旋转）");
         m.Add(G, KeyAction.Undo, "Ctrl+Alt+Z", "撤销一步");

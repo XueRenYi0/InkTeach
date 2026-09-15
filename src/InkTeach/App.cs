@@ -132,6 +132,24 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             EraserTest();
         }
+        else if (mode == "--pixelerasetest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PixelEraserTest();
+        }
+        else if (mode == "--pixeleraseshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PixelEraserShowcase();
+        }
+        else if (mode == "--eraseselfcross")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            EraseSelfCrossProbe();
+        }
         else if (mode == "--cursortest")
         {
             _autoExitAt = double.MaxValue;
@@ -452,9 +470,11 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --inputtest         指针输入路径自检");
         Console.WriteLine("  --passtest          穿透真机测试（跨进程点击）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
+        Console.WriteLine("  --pixelerasetest    像素橡皮正确性（切成两段 / 框里无墨 / 一步撤销）");
+        Console.WriteLine("  --pixeleraseshow    像素橡皮摆样（擦之前/之后各存一张图，自己抓屏）");
         Console.WriteLine("  --imagetest         图像对象（上屏 / 复制翻转 / 存档 / 剪贴板）");
         Console.WriteLine("  --capturetest       截图（拖框 → 左上角 → 剪贴板，且不拍进自己的批注）");
-        Console.WriteLine("  --cursorshow <笔|荧光笔|激光笔|橡皮> [宽]  落点摆样");
+        Console.WriteLine("  --cursorshow <笔|荧光笔|激光笔|橡皮|像素橡皮> [宽]  落点摆样");
         Console.WriteLine("  --widthtest         笔迹粗细/压力");
         Console.WriteLine("  --ghosttest         残影检测");
         Console.WriteLine("  --trailtest         委托墨迹轨迹对照");
@@ -1944,6 +1964,7 @@ internal sealed class App : InkEngine.InkEngine
             "highlighter" or "hl" => Tool.Highlighter,
             "laser" => Tool.Laser,
             "eraser" => Tool.Eraser,
+            "pixeleraser" or "blockeraser" => Tool.PixelEraser,
             _ => Tool.Pen,
         };
         if (widthLogical > 0f)
@@ -1951,6 +1972,7 @@ internal sealed class App : InkEngine.InkEngine
             if (Tool == Tool.Highlighter) HighlighterWidthLogical = widthLogical;
             else if (Tool == Tool.Laser) LaserWidthLogical = widthLogical;
             else if (Tool == Tool.Eraser) EraserRadiusLogical = widthLogical;
+            else if (Tool == Tool.PixelEraser) PixelEraserWidthLogical = widthLogical;
             else PenWidthLogical = widthLogical;
         }
 
@@ -1963,12 +1985,104 @@ internal sealed class App : InkEngine.InkEngine
         ShowHud = false;
         _dirty = true;
         SettleFrames(600);
-        Console.WriteLine($"落点反馈已摆好：{Tool} 宽 {CurrentToolWidthLogical} 逻辑像素"
-                        + $"（{DrawnCursor}，外圈 {CursorOuterRadius:F0}px，脏区 {DrawnCursorRadius:F0}px）");
+        string size = Tool == Tool.PixelEraser
+            ? $"矩形 {PixelEraserWidthLogical:F0}×{PixelEraserHeightLogical:F0} 逻辑像素"
+              + $"（高:宽 = {GoldenRatio:F3}）"
+            : $"宽 {CurrentToolWidthLogical} 逻辑像素（外圈 {CursorOuterRadius:F0}px）";
+        Console.WriteLine($"落点反馈已摆好：{Tool} {size}"
+                        + $"（{DrawnCursor}，脏区 {DrawnCursorRadius:F0}px）");
         Console.WriteLine("cursor showcase ready");
     }
 
     private bool showcasePenDevice = false;
+
+    /// <summary>
+    /// 像素橡皮摆样（--pixeleraseshow）：画几条"板书"，用竖着的黄金比矩形抹一下，
+    /// **自己抓屏**存两张图——擦之前（带落点）和擦之后（落点挪开）。
+    ///
+    /// 为什么不靠外部截图工具：自检已经能抓屏了（ScreenProbe），摆样自己存图少一步人工。
+    /// 落点在第二张里必须挪开——矩形正压在切口上，就看不出"一笔被切成了两段"。
+    /// </summary>
+    private void PixelEraserShowcase()
+    {
+        Doc.Clear();
+        Doc.ClearHistory();
+        float cx = _virtualX + _virtualW * 0.5f;
+        float cy = _virtualY + _virtualH * 0.5f;
+        float dpi = DpiScale;
+
+        // 三条横墨（笔迹，会被切成两段）、一条荧光笔（同样会被切）、
+        // 一个矩形（图形，轮廓被碰到时整条删）。三种对象一屏看全。
+        // 墨水的位置要落在橡皮的竖边范围（±半高）里——落在外面就看不出"擦掉了一整条"。
+        foreach (float dy in new[] { -120f, -60f, 0f })
+        {
+            var s = new Stroke
+            {
+                Tool = Tool.Pen, Color = new Color4(0.10f, 0.11f, 0.13f, 1f), Width = 8f * dpi,
+            };
+            for (int i = 0; i <= 120; i++)
+                s.AddPoint(cx - 520 + i * 9f, cy + dy + MathF.Sin(i * 0.32f) * 6f, 0.9f, i);
+            Doc.AddStroke(s);
+        }
+        var hl = new Stroke
+        {
+            Tool = Tool.Highlighter, Color = new Color4(1f, 0.84f, 0.16f, 1f), Width = 26f * dpi,
+        };
+        for (int i = 0; i <= 60; i++) hl.AddPoint(cx - 440 + i * 15f, cy + 110, 1f, i);
+        Doc.AddStroke(hl);
+
+        var box = new Stroke
+        {
+            Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+            Color = new Color4(0.9f, 0.2f, 0.2f, 1f), Width = 5f * dpi,
+        };
+        box.AddPoint(cx + 40, cy - 250, 1f, 0);       // 左边压在橡皮里（橡皮半宽 = 93 物理像素）
+        box.AddPoint(cx + 280, cy + 250, 1f, 0);
+        Doc.AddStroke(box);
+
+        Tool = Tool.PixelEraser;
+        PassThrough = false;
+        ShowHud = false;
+        PointerInside = true;
+        LastPointerType = Native.PT_MOUSE;
+        PointerX = cx; PointerY = cy;
+        Doc.InvalidateAll();
+        SettleFrames(600);
+
+        int w = (int)(PixelEraserWidthLogical * dpi * 3.2f);
+        int h = (int)(PixelEraserHeightLogical * dpi * 2.4f);
+        int x0 = (int)cx - w / 2, y0 = (int)cy - h / 2;
+
+        string shot1 = Path.Combine("reports", "像素橡皮-1-落点与擦之前.bmp");
+        ScreenProbe.SaveBmp(shot1, x0, y0, w, h);
+        Console.WriteLine($"已存 {Path.GetFullPath(shot1)}");
+        Console.WriteLine($"  落点：{(int)PixelEraserWidthLogical}×{(int)PixelEraserHeightLogical} 逻辑像素"
+                        + $"（{PixelEraserWidthLogical * dpi:F0}×{PixelEraserHeightLogical * dpi:F0} 物理像素）");
+
+        int before = Doc.Strokes.Count;
+        Doc.BeginEraseRect();
+        Doc.EraseRectAt(cx, cy, PixelEraserHalfWidthPx, PixelEraserHalfHeightPx);
+        Doc.EndErase();
+
+        // 落点挪开再拍：矩形正压在切口上就看不出切成了什么样。
+        PointerX = _virtualX + 120; PointerY = _virtualY + _virtualH - 120;
+        SettleFrames(600);
+
+        string shot2 = Path.Combine("reports", "像素橡皮-2-擦之后.bmp");
+        ScreenProbe.SaveBmp(shot2, x0, y0, w, h);
+        Console.WriteLine($"已存 {Path.GetFullPath(shot2)}");
+        Console.WriteLine($"  擦之前 {before} 条 → 擦之后 {Doc.Strokes.Count} 条"
+                        + $"（一条横墨切两段 + 荧光笔切两段 + 矩形整条删 = {before} + 4 - 1）");
+        for (int i = 0; i < Doc.Strokes.Count; i++)
+        {
+            var s = Doc.Strokes[i];
+            Console.WriteLine($"    #{i} {s.Kind,-9} 点 {s.Points.Count,4}"
+                            + $"  x {s.Bounds.MinX:F0}..{s.Bounds.MaxX:F0}"
+                            + $"  y {s.Bounds.MinY:F0}..{s.Bounds.MaxY:F0}");
+        }
+        Console.WriteLine("pixel eraser showcase done");
+        _quit = true;
+    }
 
     /// <summary>
     /// 旋转标签摆样：选中一个对象、把框转到指定角度、把度数标签挂出来不动，
@@ -2522,6 +2636,143 @@ internal sealed class App : InkEngine.InkEngine
     /// 判据：在同一笔的"自交重叠区"和"普通区"各取一个像素，颜色必须相同
     /// （半透明荧光笔最敏感——叠两次一眼就能看出来）。
     /// </summary>
+    /// <summary>
+    /// 实验（--eraseselfcross）：**切段之后，荧光笔自交处会不会变深**。
+    ///
+    /// 为什么值得单独量：`--selfcross` 守着"一笔自己穿过自己时颜色不能变深"这条不变量，
+    /// 而它是**一次 DrawGeometry** 的性质——D2D 把一条描边当成一个整体填充一次。
+    /// 像素橡皮把一条笔迹**拆成两个对象**之后就变成两次填充，两段墨在空间上重叠的地方
+    /// 会各画一次：半透明的荧光笔叠两次，交叠处就深了。
+    ///
+    /// 这不是"看着差不多"的事，能被像素证伪。所以这里在**离交点很远的地方**切一刀，
+    /// 让互相穿过的那两股墨落在不同的碎片里，再量交点色和普通处色的差。
+    /// 只报数字、不判红绿（它是在验证一个设计取舍，不是回归用例）。
+    /// </summary>
+    private void EraseSelfCrossProbe()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 实验：切段之后自交处会不会变深（半透明荧光笔）===");
+
+        Doc.Clear();
+        Doc.ClearHistory();
+
+        // **离屏渲染 + 读回像素**，不看屏幕。
+        //
+        // 为什么不抓屏：抓屏在锁屏 / 远程会话 / 别的窗口盖住时会拿到桌面壁纸，
+        // 量出来的数字完全是假的——这次就踩到了（交叠处和普通处一模一样，
+        // 其实两处拍到的都是壁纸）。离屏没有这个问题，什么时候跑都一样。
+        const int W = 800, H = 800;
+        var ctx = _windows[0].Context;
+        var pf = new Vortice.DCommon.PixelFormat(
+            Vortice.DXGI.Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied);
+        var target = ctx.CreateBitmap(new SizeI(W, H), IntPtr.Zero, 0,
+            new BitmapProperties1(pf, 96f, 96f, BitmapOptions.Target | BitmapOptions.CannotDraw));
+        var cpu = ctx.CreateBitmap(new SizeI(W, H), IntPtr.Zero, 0,
+            new BitmapProperties1(pf, 96f, 96f, BitmapOptions.CpuRead | BitmapOptions.CannotDraw));
+
+        byte[] Render()
+        {
+            ctx.Target = target;
+            ctx.BeginDraw();
+            ctx.Clear(new Color4(0.98f, 0.98f, 0.98f, 1f));      // 当作白板底色
+            ctx.Transform = System.Numerics.Matrix3x2.CreateTranslation(-_virtualX, -_virtualY);
+            foreach (var st in Doc.Strokes) _windows[0].DrawStrokeForTest(st);
+            ctx.Transform = System.Numerics.Matrix3x2.Identity;
+            var hr = ctx.EndDraw();
+            if (hr.Failure) Console.WriteLine("  离屏 EndDraw 失败: " + hr.Description);
+            ctx.Target = null;
+
+            cpu.CopyFromBitmap(new System.Drawing.Point(0, 0), target);
+            var m = cpu.Map(MapOptions.Read);
+            var buf = new byte[W * H * 4];
+            for (int y = 0; y < H; y++)
+                Marshal.Copy(IntPtr.Add(m.Bits, (int)(y * m.Pitch)), buf, y * W * 4, W * 4);
+            cpu.Unmap();
+            return buf;
+        }
+
+        float w = 40f;
+        float cx = _virtualX + 500f, cy = _virtualY + 500f;
+
+        // 和 --selfcross 用同一条"自己穿过自己"的笔迹。
+        var s = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = HighlighterCurrent, Width = w,
+        };
+        var raw = new List<Vector2>
+        {
+            new(cx, cy), new(cx + 120, cy), new(cx + 240, cy + 60),
+            new(cx + 240, cy + 220), new(cx + 60, cy + 260),
+            new(cx - 20, cy + 120), new(cx + 200, cy),          // ← 穿过第一段
+            new(cx + 330, cy - 150),
+        };
+        for (int i = 0; i + 1 < raw.Count; i++)
+            for (int k = 0; k < 20; k++)
+            {
+                float t = k / 20f;
+                s.AddPoint(raw[i].X + (raw[i + 1].X - raw[i].X) * t,
+                           raw[i].Y + (raw[i + 1].Y - raw[i].Y) * t, 0.5f, i * 20 + k);
+            }
+        s.AddPoint(raw[^1].X, raw[^1].Y, 0.5f, 999);
+        Doc.AddStroke(s);
+
+        (int r, int g, int b) Avg(byte[] buf, int px, int py, int size)
+        {
+            long r = 0, g = 0, b = 0; int n = 0;
+            for (int y = py; y < py + size; y++)
+                for (int x = px; x < px + size; x++)
+                {
+                    int i = y * W * 4 + x * 4;
+                    b += buf[i]; g += buf[i + 1]; r += buf[i + 2]; n++;
+                }
+            return ((int)(r / n), (int)(g / n), (int)(b / n));
+        }
+        // **真正的自交点在哪儿**：把两段中心线解出来才知道。
+        //   A: P1(120,0) → P2(240,60)（第一段那条横线的斜尾巴）
+        //   B: P5(-20,120) → P6(200,0)（绕回来那一股）
+        //   A(u) = (120+120u, 60u)、B(t) = (-20+220t, 120-120t)
+        //   60u = 120-120t → u = 2-2t；代进 x：-20+220t = 360-240t → t = 0.826, u = 0.348
+        //   → 交点 ≈ (161.7, 20.9)
+        //
+        // 顺带一提：原来那条 --selfcross 用例探的是相对 (200, 0)，离这里 40 像素——
+        // 那儿其实只有一股墨，两边颜色当然一样，那条判据是**空的**（见文档）。
+        int crossX = (int)(cx + 161.7f - _virtualX) - 8;
+        int crossY = (int)(cy + 20.9f - _virtualY) - 8;
+        int plainX = (int)(cx + 60f - _virtualX) - 8;
+        int plainY = (int)(cy - _virtualY) - 8;
+
+        var buf0 = Render();
+        var cross0 = Avg(buf0, crossX, crossY, 17);
+        var plain0 = Avg(buf0, plainX, plainY, 17);
+        int Diff((int r, int g, int b) a, (int r, int g, int b) b)
+            => Math.Abs(a.r - b.r) + Math.Abs(a.g - b.g) + Math.Abs(a.b - b.b);
+        int diff0 = Diff(cross0, plain0);
+        Console.WriteLine($"  一刀没切（1 个对象）：交叠处 ({cross0.r},{cross0.g},{cross0.b})"
+                        + $" vs 普通处 ({plain0.r},{plain0.g},{plain0.b})  差 {diff0}");
+
+        // 在右侧那条竖边上切一刀（离交点 240 像素以上）：
+        // 互相穿过的那两股墨从此属于**两个不同的对象**。
+        int before = Doc.Strokes.Count;
+        Doc.BeginEraseRect();
+        Doc.EraseRectAt(cx + 240, cy + 140, 20f, 30f);
+        Doc.EndErase();
+
+        var buf1 = Render();
+        var cross1 = Avg(buf1, crossX, crossY, 17);
+        var plain1 = Avg(buf1, plainX, plainY, 17);
+        int diff1 = Diff(cross1, plain1);
+        Console.WriteLine($"  切一刀后（{Doc.Strokes.Count} 个对象）：交叠处 ({cross1.r},{cross1.g},{cross1.b})"
+                        + $" vs 普通处 ({plain1.r},{plain1.g},{plain1.b})  差 {diff1}");
+        Console.WriteLine($"  对象数 {before} → {Doc.Strokes.Count}"
+                        + $"；交叠处比切之前深了 {diff1 - diff0}（0 = 没变深）");
+
+        target.Dispose();
+        cpu.Dispose();
+        Console.WriteLine("erase-selfcross probe done");
+        _quit = true;
+    }
+
     private void SelfCrossTest()
     {
         Console.WriteLine();
@@ -2547,7 +2798,8 @@ internal sealed class App : InkEngine.InkEngine
         float cx = _virtualX + 500f, cy = _virtualY + 500f;
 
         // 造一条"自己穿过自己"的笔迹：先往右，再绕回来从第一段上方穿过去。
-        // 交点定在 (cx+200, cy)：那里会有两段墨重叠。
+        // **真正的交点在相对 (161.7, 20.9)**（两段中心线联立解出来的，推导见
+        // EraseSelfCrossProbe），不是 (200, 0)。
         Stroke MakeLoop(float dx)
         {
             var s = new Stroke
@@ -2586,13 +2838,35 @@ internal sealed class App : InkEngine.InkEngine
             return ((int)(r / n), (int)(g / n), (int)(b / n));
         }
         // 交叠区（两段墨重叠）与普通区（只有一段墨）各取一个小方块的平均色
+        //
+        // 探针位置 2026-09-15 修过一次：以前探的是相对 (200,0)，离真交点 40 像素——
+        // 那儿只有一股墨，两边颜色当然一样，于是这条判据**永远是绿的、什么都没验**。
         void Probe(string label, float dx)
         {
-            var co = Avg(ScreenProbe.CaptureRegion((int)(cx + dx + 200) - 8, (int)cy - 8, 17, 17), 17);
+            var co = Avg(ScreenProbe.CaptureRegion(
+                (int)(cx + dx + 161.7f) - 8, (int)(cy + 20.9f) - 8, 17, 17), 17);
             var cs = Avg(ScreenProbe.CaptureRegion((int)(cx + dx + 60) - 8, (int)cy - 8, 17, 17), 17);
             int diff = Math.Abs(co.r - cs.r) + Math.Abs(co.g - cs.g) + Math.Abs(co.b - cs.b);
             Check($"自交处没有叠色（{label}）", diff <= 6,
                   $"交叠处 ({co.r},{co.g},{co.b}) vs 普通处 ({cs.r},{cs.g},{cs.b})，差 {diff}");
+        }
+
+        // 先确认"能看见墨"：抓屏在锁屏 / 远程会话 / 被别的窗口盖住时拿到的根本不是
+        // 我们这一层，那时任何颜色比对都是假的（实测踩到：两处都拍到桌面壁纸，
+        // 于是"差 0 = 通过"）。看不见就明确跳过，不能给一个假绿。
+        var sanity = Avg(ScreenProbe.CaptureRegion((int)(cx + 60) - 8, (int)cy - 8, 17, 17), 17);
+        // 荧光笔是黄色（r > g > b，都很亮）。拿"是不是黄的"当判据，比"和板色不一样"
+        // 硬得多：桌面壁纸、任何别的窗口都能和板色不一样，但不该是黄的。
+        bool canSeeInk = sanity.r > 180 && sanity.r > sanity.g && sanity.g > sanity.b;
+        if (!canSeeInk)
+        {
+            Console.WriteLine($"  环境：抓屏看不到我们的墨（拍到的大概是桌面或别的窗口）"
+                            + $" → SKIP: 自交叠色那一条跳过（这里应该是一块黄荧光笔，"
+                            + $"实际拍到 ({sanity.r},{sanity.g},{sanity.b})）");
+            BoardColor = boardColorBefore;
+            BoardOn = boardBefore;
+            _quit = true;
+            return;
         }
         Probe("一笔自交", 0f);
 
@@ -3364,6 +3638,33 @@ internal sealed class App : InkEngine.InkEngine
             }
             P($"【橡皮擦】在 1 万笔画的画面上，擦除拖动一步: {eraseSum / eraseSteps:F2} ms/步"
               + $"（共擦掉 {eraseRemoved} 笔；对照整层重画 {eraseRebuildRef:F0} ms）");
+
+            // 像素橡皮的一步：命中判定 + 切段 + 重画那一小块。它比整笔橡皮多做
+            // 一件事（切段与新建碎片），所以必须单独量——不能拿整笔橡皮的数字顶替。
+            double cutSum = 0;
+            int cutSteps = 0, cutStrokes = 0;
+            double cutSelfMs = 0;
+            int cutTiles = 0;
+            var rnd3 = new Random(13);
+            float bx = _virtualX + (float)rnd3.NextDouble() * _virtualW;
+            float by = _virtualY + (float)rnd3.NextDouble() * _virtualH;
+            for (int i = 0; i < n; i++)
+            {
+                bx += 14; by += 9;
+                var swCut = Stopwatch.StartNew();
+                cutStrokes += Doc.EraseRectAt(bx, by, PixelEraserHalfWidthPx, PixelEraserHalfHeightPx);
+                swCut.Stop();
+                cutSelfMs += swCut.Elapsed.TotalMilliseconds;
+                NowMs = _clock.Elapsed.TotalMilliseconds;
+                RenderAll();
+                cutSum += _windows[0].LastPatchMs;
+                cutTiles += _windows[0].LastPatchCount;
+                cutSteps++;
+            }
+            P($"【像素橡皮】在 1 万笔画的画面上，擦除拖动一步: {cutSum / cutSteps:F2} ms/步"
+              + $"（其中擦除本身 {cutSelfMs / cutSteps:F2} ms + 重画 {cutSum / cutSteps - cutSelfMs / cutSteps:F2} ms；"
+              + $"共切到 {cutStrokes} 笔、每步重画 {cutTiles / (double)cutSteps:F1} 块；"
+              + $"整笔橡皮同位置 {eraseSum / eraseSteps:F2} ms/步）");
 
             // Undo of a single stroke costs the same as an erase patch.
             double undoSum = 0;
@@ -5342,6 +5643,223 @@ internal sealed class App : InkEngine.InkEngine
 
         bool ok = after == 0 && undoAfter - undoBefore == 1 && leftover < 200;
         Console.WriteLine(ok ? "  PASS" : "  FAIL");
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 像素橡皮自检（--pixelerasetest）。
+    ///
+    /// 判据全是"看得见的行为"，不是内部状态：
+    ///   ① 一条横线被竖着抹一下 → 变成**两段**，切口正好停在橡皮边界外（框里不留墨）；
+    ///   ② 整条落在橡皮里的 → 消失，撤销回来还是原来那一条；
+    ///   ③ 没碰到的 → 原样不动（**引用相等**：重建一遍看不出来，但白扔几何缓存）；
+    ///   ④ 图形要"轮廓真的碰到"才删——橡皮从一个大图形正中间划过不能把整个图形吃掉；
+    ///   ⑤ 一次拖拽扫过多个位置 = **一步**撤销，撤销后文档逐条回到拖之前；
+    ///   ⑥ 上屏像素：框里的墨归零、框外还在。
+    /// 外加两条结构判据：默认落点是**竖着的黄金比矩形**；这个工具的落点反馈画的是矩形。
+    /// </summary>
+    private void PixelEraserTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 像素橡皮自检（切段 / 框里无墨 / 一步撤销）===");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-36} {detail}");
+        }
+
+        float cx = _virtualX + _virtualW * 0.5f;
+        float cy = _virtualY + _virtualH * 0.5f;
+        const float halfW = 30f, halfH = 60f;     // 测试用的小块（默认那块 93×150 太大）
+        const float penW = 16f;
+        const float reach = penW * 0.5f;          // 半笔宽：切口要停在框外这么远
+
+        // --- 0. 形状与落点反馈 -------------------------------------------------
+        Check("落点是竖着的黄金比例矩形",
+              PixelEraserWidthLogical > 0f && PixelEraserHeightLogical > PixelEraserWidthLogical
+              && MathF.Abs(PixelEraserHeightLogical / PixelEraserWidthLogical - GoldenRatio) < 0.002f,
+              $"{PixelEraserWidthLogical:F0}×{PixelEraserHeightLogical:F0} 逻辑像素，"
+              + $"高:宽 = {PixelEraserHeightLogical / PixelEraserWidthLogical:F3}");
+
+        var savedTool = Tool;
+        bool savedInside = PointerInside;
+        var savedDevice = LastPointerType;
+        Tool = Tool.PixelEraser;
+        PointerInside = true;                  // 落点反馈只在"指针在窗口里"时才画
+        LastPointerType = Native.PT_MOUSE;
+        Check("落点反馈是矩形 + 系统光标藏起来",
+              DrawnCursor == ToolCursorShape.Rect && ComputeCursorKind() == CursorKind.Hidden,
+              $"{DrawnCursor} / {ComputeCursorKind()}");
+        Tool = savedTool;
+        PointerInside = savedInside;
+        LastPointerType = savedDevice;
+
+        // --- 1. 一条横线抹一下：应该变成两段，切口停在框外 ----------------------
+        Doc.Clear();
+        Doc.ClearHistory();
+
+        var line = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = penW };
+        for (int i = 0; i <= 80; i++) line.AddPoint(cx - 400 + i * 10, cy, 0.9f, i);
+        Doc.AddStroke(line);
+
+        int undoBefore = Doc.UndoDepth;
+        Doc.BeginEraseRect();
+        Doc.EraseRectAt(cx, cy, halfW, halfH);
+        Doc.EndErase();
+
+        var parts = Doc.Strokes.ToArray();
+        Check("一条被切成两段", parts.Length == 2, $"笔画数 1 → {parts.Length}");
+        Check("一次擦除只算一步撤销", Doc.UndoDepth == undoBefore + 1,
+              $"撤销栈 {undoBefore} → {Doc.UndoDepth}");
+
+        float leftEnd = parts.Length == 2 ? parts[0].Bounds.MaxX : float.NaN;
+        float rightStart = parts.Length == 2 ? parts[1].Bounds.MinX : float.NaN;
+        float bandLeft = cx - halfW - reach, bandRight = cx + halfW + reach;
+        Check("框里不留墨（切口在边界外）",
+              parts.Length == 2 && leftEnd <= bandLeft + 0.5f && rightStart >= bandRight - 0.5f,
+              $"左段到 {leftEnd:F1}（该 ≤ {bandLeft:F1}），右段从 {rightStart:F1}（该 ≥ {bandRight:F1}）");
+
+        bool anyInside = false;
+        foreach (var p in parts)
+            foreach (var q in p.Points)
+                if (MathF.Abs(q.Y - cy) < halfH && MathF.Abs(q.X - cx) < halfW + reach - 0.5f)
+                    anyInside = true;
+        Check("没有一段的中心线伸进框里", !anyInside,
+              anyInside ? "有采样点落在框内" : "所有采样点都在框外");
+
+        // --- 2. 撤销 / 重做 ----------------------------------------------------
+        bool undone = Doc.Undo();
+        Check("撤销：回到原来那一条（同一对象、点数不变）",
+              undone && Doc.Strokes.Count == 1 && ReferenceEquals(Doc.Strokes[0], line)
+              && line.Points.Count == 81,
+              $"笔画数 {Doc.Strokes.Count}，点数 {line.Points.Count}");
+
+        bool redone = Doc.Redo();
+        Check("重做：又回到两段", redone && Doc.Strokes.Count == 2 && !Doc.Strokes.Contains(line),
+              $"笔画数 {Doc.Strokes.Count}");
+
+        // --- 3. 整条在框里 / 完全没碰到 ----------------------------------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        var inside = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = penW };
+        for (int i = 0; i <= 10; i++) inside.AddPoint(cx - 10 + i * 2, cy - 10 + i * 2, 0.9f, i);
+        var faraway = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = penW };
+        for (int i = 0; i <= 40; i++) faraway.AddPoint(cx - 700 + i * 10, cy, 0.9f, i);
+        Doc.AddStroke(inside);
+        Doc.AddStroke(faraway);
+
+        Doc.BeginEraseRect();
+        Doc.EraseRectAt(cx, cy, halfW, halfH);
+        Doc.EndErase();
+        Check("框里的整条被擦掉、框外的不动",
+              Doc.Strokes.Count == 1 && ReferenceEquals(Doc.Strokes[0], faraway),
+              $"剩下 {Doc.Strokes.Count} 条"
+              + (Doc.Strokes.Count == 1 && ReferenceEquals(Doc.Strokes[0], faraway)
+                 ? "（框外那条，引用没变）" : "（不是框外那条！）"));
+
+        Doc.Undo();
+        Check("撤销把整条放回来（含原顺序）",
+              Doc.Strokes.Count == 2 && ReferenceEquals(Doc.Strokes[0], inside)
+              && ReferenceEquals(Doc.Strokes[1], faraway),
+              $"笔画数 {Doc.Strokes.Count}");
+
+        // --- 4. 图形：轮廓碰到才删 --------------------------------------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        var crossed = new Stroke
+        {
+            Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+            Color = new Color4(0.95f, 0.18f, 0.18f, 1f), Width = 4f,
+        };
+        crossed.AddPoint(cx - 10, cy - 200, 1f, 0);      // 两条竖边正好穿过橡皮
+        crossed.AddPoint(cx + 10, cy + 200, 1f, 0);
+
+        var bigShape = new Stroke
+        {
+            Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+            Color = new Color4(0.95f, 0.18f, 0.18f, 1f), Width = 4f,
+        };
+        bigShape.AddPoint(cx - 400, cy - 400, 1f, 0);    // 外框很大，轮廓离橡皮很远
+        bigShape.AddPoint(cx + 400, cy + 400, 1f, 0);
+
+        Doc.AddStroke(crossed);
+        Doc.AddStroke(bigShape);
+        Doc.BeginEraseRect();
+        Doc.EraseRectAt(cx, cy, halfW, halfH);
+        Doc.EndErase();
+        Check("图形的轮廓碰到 → 整条删", !Doc.Strokes.Contains(crossed),
+              $"{Doc.Strokes.Count} 条留下（应剩 1）");
+        Check("橡皮从大图形正中间划过 → 不删", Doc.Strokes.Contains(bigShape),
+              "外框和橡皮相交，但轮廓离橡皮 370 像素（按外框判就会误删）");
+
+        // --- 5. 一次拖拽扫过 5 条 = 一步撤销 -----------------------------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        for (int k = 0; k < 5; k++)
+        {
+            var s = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = penW };
+            for (int i = 0; i <= 80; i++) s.AddPoint(cx - 400 + i * 10, cy - 200 + k * 100, 0.9f, i);
+            Doc.AddStroke(s);
+        }
+        var before = Doc.Strokes.ToArray();
+        int undo0 = Doc.UndoDepth;
+
+        Doc.BeginEraseRect();
+        for (int k = 0; k < 5; k++) Doc.EraseRectAt(cx, cy - 200 + k * 100, halfW, halfH);
+        Doc.EndErase();
+        Check("拖拽扫过 5 条 = 一步撤销",
+              Doc.UndoDepth == undo0 + 1 && Doc.Strokes.Count == 10,
+              $"撤销栈 +{Doc.UndoDepth - undo0}，笔画数 5 → {Doc.Strokes.Count}");
+
+        Doc.Undo();
+        bool restored = Doc.Strokes.Count == before.Length;
+        for (int i = 0; restored && i < before.Length; i++)
+            restored = ReferenceEquals(Doc.Strokes[i], before[i]);
+        Check("撤销后逐条回到拖之前（条数 + 顺序 + 原对象）", restored,
+              $"笔画数 {Doc.Strokes.Count}，逐条比对 {(restored ? "全部一致" : "有出入")}");
+
+        // --- 6. 上屏像素 -------------------------------------------------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        var onScreen = new Stroke
+        {
+            Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = penW * DpiScale,
+        };
+        for (int i = 0; i <= 80; i++) onScreen.AddPoint(cx - 400 + i * 10, cy, 0.9f, i);
+        Doc.AddStroke(onScreen);
+        Doc.InvalidateAll();
+        PointerInside = false;                 // 别让自绘光标进像素统计
+        SettleFrames(500);
+
+        int inkBefore = ScreenProbe.CountMagenta((int)(cx - 500), (int)(cy - 40), 1000, 80);
+        // 先确认抓屏真的能看到我们的墨：锁屏 / 远程会话 / 被别的窗口盖住时，
+        // 拍到的是桌面壁纸，那时"框里的墨归零"会假红、"框外的还在"会假绿。
+        // 看不见就明确跳过这一条（前面十几条模型判据照样算数）。
+        if (inkBefore < 500)
+        {
+            Console.WriteLine($"  环境：抓屏看不到我们的墨（拍到的大概是桌面或别的窗口）"
+                            + $" → SKIP: 上屏那一条跳过（该有一千多品红像素，拍到 {inkBefore}）");
+            Console.WriteLine($"  合计：通过 {pass}，失败 {fail}（上屏一条未验）");
+            _quit = true;
+            return;
+        }
+        Doc.BeginEraseRect();
+        Doc.EraseRectAt(cx, cy, halfW, halfH);
+        Doc.EndErase();
+        SettleFrames(500);
+
+        int inBox = ScreenProbe.CountMagenta((int)(cx - halfW + 3), (int)(cy - 30), (int)(halfW * 2 - 6), 60);
+        int outside = ScreenProbe.CountMagenta((int)(cx - 500), (int)(cy - 30), 300, 60);
+        int inkAfter = ScreenProbe.CountMagenta((int)(cx - 500), (int)(cy - 40), 1000, 80);
+        Check("上屏：框里的墨归零、框外的还在",
+              inkBefore > 500 && inBox < 20 && outside > 300 && inkAfter > inkBefore * 0.8,
+              $"画上 {inkBefore} 像素 → 框里 {inBox}、框外 {outside}，全带 {inkAfter}"
+              + $"（应 ≈ {inkBefore} 减去被擦的那一段，不掉远处的墨）");
+
+        Console.WriteLine($"  合计：通过 {pass}，失败 {fail}");
+        Console.WriteLine(fail == 0 ? "PASS" : "FAIL");
         _quit = true;
     }
 

@@ -1794,6 +1794,11 @@ internal sealed class OverlayWindow : IDisposable
             DrawLaserDot(app, c);
             return;
         }
+        if (shape == InkEngine.ToolCursorShape.Rect)
+        {
+            DrawEraserRectCursor(app, c);
+            return;
+        }
 
         float outer = app.CursorOuterRadius;
         float truth = app.Tool == Tool.Eraser
@@ -1815,6 +1820,40 @@ internal sealed class OverlayWindow : IDisposable
     /// 最小可见范围。只有一个圈时无解：按真实宽度画，细笔看不见；按下限画，
     /// 细笔的圈比笔迹粗一倍，反而误判。Photoshop 的笔刷光标就是这个做法。
     /// </summary>
+    /// <summary>
+    /// 像素橡皮的落点：**竖着的黄金比例矩形**（高 : 宽 = 1.618）。
+    ///
+    /// 为什么是矩形而不是圆环：它就是"一块橡皮"。从上往下抹一列板书时，用户要知道
+    /// 这一抹有多宽、多高；圆环表达不了这个。
+    ///
+    /// 三层（和圆环同一套色彩逻辑）：
+    ///   · **半透明填充**——看得见"这一块会被擦掉"，同时底下的字还看得见（用户要的
+    ///     "有点透明度"）。太实会挡住要擦的东西，太淡又看不出边界；
+    ///   · 白色外圈 + 深色内圈的双色描边：深色 PPT 和白色白板上都得看得见；
+    ///   · 中心一个小十字：投影上写字手会抖，得知道精确落点在哪。
+    /// </summary>
+    private void DrawEraserRectCursor(InkEngine app, Vector2 c)
+    {
+        float hw = MathF.Max(1f, app.PixelEraserHalfWidthPx);
+        float hh = MathF.Max(1f, app.PixelEraserHalfHeightPx);
+
+        _ctx.FillRectangle(
+            new Vortice.RawRectF(c.X - hw, c.Y - hh, c.X + hw, c.Y + hh),
+            Brush(new Color4(0.35f, 0.55f, 0.95f, 0.12f)));
+
+        _scratch.Color = new Color4(1f, 1f, 1f, 0.75f);
+        _ctx.DrawRectangle(new Vortice.RawRectF(
+            c.X - hw - 0.75f, c.Y - hh - 0.75f, c.X + hw + 0.75f, c.Y + hh + 0.75f), _scratch, 1.5f);
+        _scratch.Color = new Color4(0.22f, 0.28f, 0.38f, 0.85f);
+        _ctx.DrawRectangle(new Vortice.RawRectF(
+            c.X - hw + 0.75f, c.Y - hh + 0.75f, c.X + hw - 0.75f, c.Y + hh - 0.75f), _scratch, 1.5f);
+
+        float tick = MathF.Max(5f, MathF.Min(hw, hh) * 0.25f);
+        _scratch.Color = new Color4(0.22f, 0.28f, 0.38f, 0.8f);
+        _ctx.DrawLine(new Vector2(c.X - tick, c.Y), new Vector2(c.X + tick, c.Y), _scratch, 1.5f);
+        _ctx.DrawLine(new Vector2(c.X, c.Y - tick), new Vector2(c.X, c.Y + tick), _scratch, 1.5f);
+    }
+
     private void DrawRingCursor(Vector2 c, float truthR, float outerR, Color4 fill)
     {
         float r = MathF.Max(outerR, 1f);

@@ -44,6 +44,20 @@ public class InkEngine
     internal float EraserRadius => EraserRadiusLogical * DpiScale;
     private float _lastEraseX, _lastEraseY;
 
+    /// <summary>
+    /// 像素橡皮的落点尺寸（逻辑像素）：**竖着的黄金比例矩形**，高 : 宽 = 1.618。
+    ///
+    /// 默认宽 93 × 高 150：用户实测的用法是"从上往下抹一段"（一列板书、一个竖排的字），
+    /// 不是横扫一行，所以竖边比横边长。Ctrl+Alt+6 在这里的几档之间切（档位同样守黄金比）。
+    /// </summary>
+    internal const float GoldenRatio = 1.618f;
+    internal float PixelEraserWidthLogical = 93f;
+    internal static readonly float[] PixelEraserWidthPresets = { 46f, 93f, 150f };
+    internal int PixelEraserWidthIndex = 1;
+    internal float PixelEraserHeightLogical => PixelEraserWidthLogical * GoldenRatio;
+    internal float PixelEraserHalfWidthPx => PixelEraserWidthLogical * 0.5f * DpiScale;
+    internal float PixelEraserHalfHeightPx => PixelEraserHeightLogical * 0.5f * DpiScale;
+
     /// <summary>截图工具的拖动矩形（画布坐标）。</summary>
     internal bool CaptureActive;
     internal float CapMinX, CapMinY, CapMaxX, CapMaxY;
@@ -68,6 +82,7 @@ public class InkEngine
     {
         Tool.Highlighter => HighlighterWidthLogical,
         Tool.Laser => LaserWidthLogical,
+        Tool.PixelEraser => PixelEraserWidthLogical,
         _ => PenWidthLogical,
     };
 
@@ -877,7 +892,7 @@ public class InkEngine
             $"笔画 {Doc.Strokes.Count}      点数 {Doc.TotalPoints}\n" +
             $"选中 {Doc.Selected.Count}      工具 {ToolName(Tool)}{(PassThrough ? "（穿透中）" : "")}      粗细 {CurrentToolWidthLogical,4:F1}      撤销栈 {Doc.UndoDepth}\n" +
             $"分块 {_tilesUsed}/{_tilesBudget}（可见 {_tilesVisible}，本帧光栅 {_tilesRasterized}）      网格 {Doc.GridCells}\n" +
-            $"Ctrl+Alt：1笔 2荧光 3激光 4橡皮 5框选 6粗细 Z撤销 C清空\n" +
+            $"Ctrl+Alt：1笔 2荧光 3激光 4橡皮 7像素橡皮 5框选 6粗细 Z撤销 C清空\n" +
             $"其它 Ctrl+Alt：I面板 P穿透 K键盘 Y穿透方式 X退出";
     }
 
@@ -887,6 +902,7 @@ public class InkEngine
         Tool.Highlighter => "荧光笔",
         Tool.Laser => "激光笔",
         Tool.Eraser => "橡皮擦",
+        Tool.PixelEraser => "像素橡皮",
         Tool.Capture => "截图",
         Tool.Marquee => "框选",
         Tool.Line => "直线",
@@ -1076,6 +1092,12 @@ public class InkEngine
                 Doc.EraseAt(x, y, EraserRadius);
                 break;
 
+            case Tool.PixelEraser:
+                _lastEraseX = x; _lastEraseY = y;
+                Doc.BeginEraseRect();
+                Doc.EraseRectAt(x, y, PixelEraserHalfWidthPx, PixelEraserHalfHeightPx);
+                break;
+
             case Tool.Capture:
                 // 和框选同一个手势。**和框选一样存画布坐标**（渲染那一层就
                 // 不必为它单独换算一次），抓屏时再换算回屏幕坐标
@@ -1178,6 +1200,10 @@ public class InkEngine
                 EraseAlongPath(x, y);
                 break;
 
+            case Tool.PixelEraser:
+                EraseRectAlongPath(x, y);
+                break;
+
             case Tool.Capture:
                 if (CaptureActive)
                 {
@@ -1266,6 +1292,27 @@ public class InkEngine
         {
             float t = i / (float)steps;
             Doc.EraseAt(_lastEraseX + dx * t, _lastEraseY + dy * t, r);
+        }
+        _lastEraseX = x;
+        _lastEraseY = y;
+    }
+
+    /// <summary>
+    /// 像素橡皮沿指针走过的路径扫一遍。理由和整笔橡皮一样：只测最新那一点，快划就会在
+    /// 两次采样之间漏掉一整段。步长取**短边的一半**——相邻两个位置至少重叠一半，
+    /// 中间不会有缝；上限 64 步，免得一次大跨度拖动把每帧的代价拉爆。
+    /// </summary>
+    private void EraseRectAlongPath(float x, float y)
+    {
+        float hw = PixelEraserHalfWidthPx, hh = PixelEraserHalfHeightPx;
+        float dx = x - _lastEraseX, dy = y - _lastEraseY;
+        float dist = MathF.Sqrt(dx * dx + dy * dy);
+        int steps = Math.Clamp((int)(dist / MathF.Max(1f, MathF.Min(hw, hh))), 1, 64);
+
+        for (int i = 1; i <= steps; i++)
+        {
+            float t = i / (float)steps;
+            Doc.EraseRectAt(_lastEraseX + dx * t, _lastEraseY + dy * t, hw, hh);
         }
         _lastEraseX = x;
         _lastEraseY = y;
@@ -1457,6 +1504,11 @@ public class InkEngine
         /// <summary>圆环：橡皮、手写笔悬停。直接表达"落点范围内会怎样"。</summary>
         Ring,
         /// <summary>
+        /// 矩形：像素橡皮。它的落点**就是一个矩形**（竖着的黄金比例），
+        /// 所以光标不该画成圆——画成圆等于告诉用户一个错的形状。
+        /// </summary>
+        Rect,
+        /// <summary>
         /// 实心圆盘：荧光笔。落点处就是一个直径 = 笔宽的圆——单击一下留下的
         /// 墨点也是它，所以"光标"和"点下去会得到什么"是同一个形状。
         /// </summary>
@@ -1524,6 +1576,7 @@ public class InkEngine
         Tool.Highlighter => CursorKind.Hidden,      // 落点由自绘的宽度圆盘表达
         Tool.Laser => CursorKind.Hidden,            // 落点由自绘的实心点表达
         Tool.Eraser => CursorKind.Hidden,           // 落点由自绘圆环表达
+        Tool.PixelEraser => CursorKind.Hidden,      // 落点由自绘矩形表达
         // 截图用手势（拖框），十字准星是"从这儿拖到那儿"的通用语言，和框选一致。
         Tool.Marquee or Tool.Capture or Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Arrow
             => CursorKind.Cross,
@@ -1600,6 +1653,9 @@ public class InkEngine
             case Tool.Eraser:
                 // 橡皮反过来：它表达的是"这一块会被擦掉"，擦除中更要看得到。
                 return ToolCursorShape.Ring;
+            case Tool.PixelEraser:
+                // 同理：矩形要一直看得见，擦除中更要说清"这一块正在被擦"。
+                return ToolCursorShape.Rect;
                 case Tool.Pen:
                     return penTip && _drawing ? ToolCursorShape.None : ToolCursorShape.Ring;
                 case Tool.Highlighter:
@@ -1624,6 +1680,10 @@ public class InkEngine
                 case ToolCursorShape.Disc:
                     // 圆盘：脏区按半径算，再留出描边和抗锯齿的边。
                     return MathF.Max(HighlighterWidthLogical * DpiScale * 0.5f, 2f) + 12f;
+                case ToolCursorShape.Rect:
+                    // 矩形：按**半对角线**扩，四个角才不会在快速移动时留残影。
+                    return MathF.Sqrt(PixelEraserHalfWidthPx * PixelEraserHalfWidthPx
+                                    + PixelEraserHalfHeightPx * PixelEraserHalfHeightPx) + 12f;
                 case ToolCursorShape.Dot:
                     return CursorDotRadius * 1.5f + 10f;
                 default:
@@ -1954,6 +2014,7 @@ public class InkEngine
             case KeyAction.ToolHighlighter: Tool = Tool.Highlighter; break;
             case KeyAction.ToolLaser: Tool = Tool.Laser; break;
             case KeyAction.ToolEraser: Tool = Tool.Eraser; break;
+            case KeyAction.ToolPixelEraser: Tool = Tool.PixelEraser; break;
             case KeyAction.ToolCapture: Tool = Tool.Capture; break;
             case KeyAction.ToolMarquee: Tool = Tool.Marquee; break;
             case KeyAction.Undo: Doc.Undo(); Laser.Clear(); break;
@@ -2011,6 +2072,10 @@ public class InkEngine
             case Tool.Laser:
                 LaserWidthIndex = (LaserWidthIndex + 1) % LaserWidthPresets.Length;
                 LaserWidthLogical = LaserWidthPresets[LaserWidthIndex];
+                break;
+            case Tool.PixelEraser:
+                PixelEraserWidthIndex = (PixelEraserWidthIndex + 1) % PixelEraserWidthPresets.Length;
+                PixelEraserWidthLogical = PixelEraserWidthPresets[PixelEraserWidthIndex];
                 break;
             default:
                 WidthPresetIndex = (WidthPresetIndex + 1) % WidthPresets.Length;
