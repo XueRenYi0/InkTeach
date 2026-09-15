@@ -46,6 +46,41 @@ internal static class Program
         // 控制台里要打中文说明：把代码页设成 UTF-8，免得变成一堆问号
         try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
 
+        // 启动计时：进程入口 → 窗口出现，顺便量一下"构建全部图标几何"要多久
+        if (Array.IndexOf(args, "--startup") >= 0)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            int n = 0;
+            foreach (string name in new[]
+                     {
+                         "mouse", "pen", "highlighter", "laser", "eraser", "select", "shapes", "capture",
+                         "undo", "redo", "more", "settings", "broom", "selectAll", "arrowSync", "arrowClockwise",
+                         "power", "darkTheme", "dockRow", "ruler", "mathFormula", "grid", "color", "pin",
+                         "msStylusLaser", "msStylusLaserFill",
+                     })
+            {
+                try
+                {
+                    var geo = Geometry.Parse(DesignSheet.IconPaths.Get(name));
+                    geo.Freeze();      // 冻结 = 以后可以跨帧复用，和 D2D 里"建一次几何"是同一件事
+                    n++;
+                }
+                catch { }
+            }
+            double geometryMs = sw.Elapsed.TotalMilliseconds;
+            Console.WriteLine($"  构建 {n} 个图标几何：{geometryMs:F1} ms（一次性，之后缓存复用）");
+
+            var app1 = new Application();
+            var t0 = System.Diagnostics.Stopwatch.StartNew();
+            MockWindow w1 = new MockWindow();
+            w1.Loaded += (_, __) => Console.WriteLine($"  进程入口 → 窗口出现：{t0.Elapsed.TotalMilliseconds:F0} ms（这一段才是假面板特有的）");
+            var t1 = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+            t1.Tick += (_, __) => { Console.WriteLine($"  合计 {t0.Elapsed.TotalMilliseconds:F0} ms，退出"); app1.Shutdown(); };
+            t1.Start();
+            app1.Run(w1);
+            return;
+        }
+
         if (args.Length > 0 && args[0] == "--shot")
         {
             Shots(args.Length > 1 ? args[1] : "design/mock");
