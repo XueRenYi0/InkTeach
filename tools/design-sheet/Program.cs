@@ -92,6 +92,8 @@ internal static partial class Program
             RenderSheet(outDir, "界面-设计稿v7-激光图标与更多抽屉.png", DrawLaserMoreSheet);
         if (sheet is "all" or "mini")
             RenderSheet(outDir, "界面-设计稿v8-极简界面.png", DrawMiniSheet);
+        if (sheet is "all" or "shoticon")
+            RenderSheet(outDir, "界面-设计稿v9-截屏图标.png", DrawShotIconSheet);
     }
 
     /// <summary>把每个绘制函数画成一张 PNG：高度由绘制函数自己算出来。</summary>

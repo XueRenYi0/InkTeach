@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -78,6 +79,7 @@ internal sealed class PanelElement : FrameworkElement
         MouseMove += OnMove;
         MouseLeftButtonDown += OnDown;
         MouseLeftButtonUp += OnUp;
+        MouseRightButtonDown += OnRightDown;
         MouseLeave += OnLeave;
         Cursor = Cursors.Arrow;
     }
@@ -534,6 +536,36 @@ internal sealed class PanelElement : FrameworkElement
         Status?.Invoke($"界面档位：{name} —— {PanelDraw.VisibleTools(State).Length} 项，宽 {L.W:F0}");
     }
 
+    /// <summary>
+    /// 钉住 / 取消钉住。规则：一改钉住集合，档位就进"自定义"（用户自己那份）；
+    /// 笔和橡皮是安全项，不许取消（否则界面连写和擦都做不了）。
+    /// </summary>
+    public void PinTool(int tool, bool pinned)
+    {
+        if (!pinned && !PanelDraw.CanUnpin(tool))
+        {
+            Log.Write($"钉住：{PanelDraw.Tools[tool].Name} 是安全项，不许取消");
+            Status?.Invoke($"{PanelDraw.Tools[tool].Name} 是安全项，取消不了（界面总得能写字和擦）");
+            return;
+        }
+
+        var list = new List<int>(State.CustomTools ?? PanelDraw.AllToolsIndex);
+        if (pinned)
+        {
+            if (list.Contains(tool)) return;
+            list.Add(tool);
+        }
+        else
+        {
+            if (!list.Remove(tool)) return;
+        }
+        // 永远按"规范顺序"排，不按点击先后 —— 位置稳定才好记
+        list.Sort();
+        State.CustomTools = list.ToArray();
+        State.Profile = PanelDraw.ProfileCustom;
+        ApplyProfile(pinned ? $"钉上：{PanelDraw.Tools[tool].Name}" : $"取消钉住：{PanelDraw.Tools[tool].Name}");
+    }
+
     public void ToggleSlim()
     {
         State.Slim = !State.Slim;
@@ -603,6 +635,9 @@ internal sealed class PanelElement : FrameworkElement
             State.ProfileHover = -1;
             for (int i = 0; i < L0.ProfileRects.Length; i++)
                 if (L0.ProfileRects[i].Contains(p)) { State.ProfileHover = i; hov = 0; }
+            State.PinHover = -1;
+            foreach (var u in L0.UnpinnedRects)
+                if (u.R.Contains(p)) { State.PinHover = u.Tool; hov = 0; }
             if (hov >= 0)
             {
                 Cursor = Cursors.Hand;
@@ -660,6 +695,15 @@ internal sealed class PanelElement : FrameworkElement
                 if (!L.ProfileRects[i].Contains(p)) continue;
                 State.Profile = PanelDraw.Profiles[i].Profile;
                 ApplyProfile("抽屉里点" + PanelDraw.Profiles[i].Name);
+                e.Handled = true;
+                return;
+            }
+        // 抽屉第二组：点一下把工具钉回主条
+        if (State.MoreOpen)
+            foreach (var u in L.UnpinnedRects)
+            {
+                if (!u.R.Contains(p)) continue;
+                PinTool(u.Tool, true);
                 e.Handled = true;
                 return;
             }
@@ -736,6 +780,21 @@ internal sealed class PanelElement : FrameworkElement
         _dragWindow = true;
         _grabScreen = ScreenDiu(p);
         CaptureMouse();
+    }
+
+    /// <summary>右键主条上的按钮 = 取消钉住（鼠标/笔都方便；笔上就是"长按"的替代）。</summary>
+    void OnRightDown(object s, MouseButtonEventArgs e)
+    {
+        var p = e.GetPosition(this);
+        var L0 = PanelDraw.Compute(State);
+        var pp = new Point(p.X - L0.OriginX, p.Y - L0.OriginY);
+        for (int i = 0; i < L0.ToolIndices.Length && i + 1 < L0.Tiles.Length; i++)
+        {
+            if (!L0.Tiles[i + 1].Contains(pp)) continue;
+            PinTool(L0.ToolIndices[i], false);
+            e.Handled = true;
+            return;
+        }
     }
 
     void OnUp(object s, MouseButtonEventArgs e)

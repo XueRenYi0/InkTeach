@@ -63,6 +63,19 @@ internal static class PanelDraw
         _ => "完整",
     };
 
+    /// <summary>安全项：这两个永远不许取消钉住（否则界面连写和擦都做不了）。</summary>
+    public static bool CanUnpin(int tool) => tool != ToolPen && tool != ToolEraser && tool != ToolMore;
+
+    /// <summary>没钉在主条上的工具（抽屉里那组"可以钉回来"的）。</summary>
+    public static int[] UnpinnedTools(PanelState s)
+    {
+        var on = VisibleTools(s);
+        var list = new List<int>();
+        foreach (int t in AllToolsIndex)
+            if (t != ToolMore && Array.IndexOf(on, t) < 0) list.Add(t);
+        return list.ToArray();
+    }
+
     public static double BarContentWidth(double btn, int count, bool mini)
     {
         double w = Pad * 2 + btn + (SepGap * 2 + 1);
@@ -132,7 +145,9 @@ internal static class PanelDraw
 
     // ---- 「更多」抽屉 -----------------------------------------------------
 
-    public const double DrawerW = 380, DrawerH = 300, DrawerGap = 8;
+    public const double DrawerW = 380, DrawerGap = 8;
+    /// <summary>抽屉里那三组固定内容（应用 / 界面 / 学科工具）的高度。</summary>
+    public const double DrawerGroupsH = 3 * (16 + 46 + 10);
 
     /// <summary>抽屉里的三组东西：应用 / 界面 / 学科工具（占位）。</summary>
     public static readonly (string Group, (string Icon, string Label, int Kind)[] Items)[] Drawer =
@@ -306,6 +321,8 @@ internal static class PanelDraw
         public Rect DrawerRect;                      // 「更多」抽屉
         public (Rect R, int Group, int Index)[] MoreItems = Array.Empty<(Rect, int, int)>();
         public Rect[] ProfileRects = Array.Empty<Rect>();   // 抽屉顶上那三个"界面档位"
+        public (Rect R, int Tool)[] UnpinnedRects = Array.Empty<(Rect, int)>();  // "未钉在主条上"的格子
+        public bool UnpinnedHint;                            // 没有未钉的工具时，画一行提示
         public int[] ToolIndices = Array.Empty<int>();   // 每个按钮对应的原始工具下标
         public double Btn = 44, Icon = 24;
     }
@@ -346,12 +363,16 @@ internal static class PanelDraw
         // 「更多」抽屉：贴在面板右侧、往上长（贴底时下面没有空间）
         if (s.MoreOpen && e > 0.9)
         {
-            L.OriginY = DrawerH + DrawerGap;
-            // 抽屉可能比面板宽（极简档只有 201）—— 那就把两者居中放进同一条内容宽度里
+            var un = UnpinnedTools(s);
+            int unRows = Math.Max(1, (un.Length + 2) / 3);
+            double unH = 16 + unRows * 56;              // 组标题 + 若干行格子
+            double drawerH = 56 + unH + DrawerGroupsH + 12;
+            L.OriginY = drawerH + DrawerGap;
+            // 抽屉可能比面板宽（极简档只有 245）—— 那就把两者居中放进同一条内容宽度里
             L.ContentW = Math.Max(L.W, DrawerW);
             L.OriginX = (L.ContentW - L.W) / 2;
             double dx = (L.ContentW - DrawerW) / 2;
-            L.DrawerRect = new Rect(dx, 0, DrawerW, DrawerH);
+            L.DrawerRect = new Rect(dx, 0, DrawerW, drawerH);
             // 顶上那一条：界面档位（极简 / 自定义 / 完整）
             var profs = new List<Rect>();
             double pw = (DrawerW - 28 - 2 * 8) / 3;
@@ -359,8 +380,19 @@ internal static class PanelDraw
                 profs.Add(new Rect(dx + 14 + i * (pw + 8), 26, pw, 30));
             L.ProfileRects = profs.ToArray();
 
+            // 第二组：没钉在主条上的工具（点一下钉回去）
+            var unp = new List<(Rect, int)>();
+            double uy = 68 + 16;
+            for (int i = 0; i < un.Length; i++)
+            {
+                int col = i % 3, row = i / 3;
+                unp.Add((new Rect(dx + 14 + col * 120, uy + row * 56, 112, 46), un[i]));
+            }
+            L.UnpinnedRects = unp.ToArray();
+            L.UnpinnedHint = un.Length == 0;
+
             var its = new List<(Rect, int, int)>();
-            double gy = 68;
+            double gy = uy + unRows * 56 + 4;
             for (int g = 0; g < Drawer.Length; g++)
             {
                 gy += 16;
@@ -571,6 +603,26 @@ internal static class PanelDraw
                                    new Pen(new SolidColorBrush(sel ? Colors.Transparent : (dark ? C(0xFF, 0xFF, 0xFF, 0x22) : C(0x00, 0x00, 0x00, 0x1E))), 1),
                                    pr, 6, 6);
             Label(c, Profiles[i].Name, pr, 12.5, sel ? Brushes.White : new SolidColorBrush(InkColor(dark)), sel);
+        }
+
+        // 第二组：没钉在主条上的工具 —— 点一下钉回去（图钉就是"钉"的意思）
+        Text(c, "未钉在主条上（点一下钉回去）", r.X + 14, r.Y + 68, 11.5,
+             new SolidColorBrush(dark ? C(0x9A, 0x9E, 0xA6) : C(0x6B, 0x70, 0x78)));
+        if (L.UnpinnedHint)
+        {
+            Text(c, "工具箱里随时能钉回来；笔和橡皮是安全项，永远在主条上。", r.X + 14, r.Y + 90, 11.5,
+                 new SolidColorBrush(C(0x9A, 0xA0, 0xAA)));
+        }
+        foreach (var u in L.UnpinnedRects)
+        {
+            bool hover = s.PinHover == u.Tool;
+            c.DrawRoundedRectangle(new SolidColorBrush(hover ? C(0x00, 0x67, 0xC0, 0x1E) : ChipFill(dark, false)),
+                                   new Pen(new SolidColorBrush(hover ? Accent : (dark ? C(0xFF, 0xFF, 0xFF, 0x22) : C(0x00, 0x00, 0x00, 0x1E))), 1),
+                                   u.R, 8, 8);
+            Icon(c, Tools[u.Tool].Icon, u.R.X + 22, u.R.Y + u.R.Height / 2, 20, new SolidColorBrush(InkColor(dark)));
+            Text(c, Tools[u.Tool].Name, u.R.X + 40, u.R.Y + (u.R.Height - 17) / 2, 12.5, new SolidColorBrush(InkColor(dark)));
+            Icon(c, "pin", u.R.Right - 13, u.R.Y + 13, 12,
+                 new SolidColorBrush(hover ? Accent : C(0x9A, 0xA0, 0xAA)));
         }
 
         foreach (var it in L.MoreItems)
@@ -1069,6 +1121,8 @@ internal sealed class PanelState
     public int MoreHover = -1;
     /// <summary>鼠标停在"界面档位"哪一段上。</summary>
     public int ProfileHover = -1;
+    /// <summary>鼠标停在"未钉在主条上"的哪个工具上。</summary>
+    public int PinHover = -1;
     /// <summary>白板开着没有；板色 0 白 / 1 绿 / 2 黑。</summary>
     public bool BoardOn;
     public int BoardColor;

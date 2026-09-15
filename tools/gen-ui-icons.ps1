@@ -75,6 +75,16 @@ $icons = [ordered]@{
     'dockRow'         = @('Dock Row')
     'ruler'           = @('Ruler')
     'mathFormula'     = @('Math Formula')
+    # 截屏图标的备选（上游有几枚近义，逐个拉下来比）
+    'shotRecord'      = @('Screenshot Record')
+    'camera'          = @('Camera')
+    'crop'            = @('Crop')
+    'scan'            = @('Scan')
+    'scanObject'      = @('Scan Object')
+    'windowIco'       = @('Window')
+    'desktop'         = @('Desktop')
+    'maximize'        = @('Full Screen Maximize')
+    'image'           = @('Image')
 }
 
 # 激活态用的 filled 变体（Windows 11 的惯例：常态 regular、选中 filled）

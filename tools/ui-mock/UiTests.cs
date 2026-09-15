@@ -217,6 +217,68 @@ internal static class UiTests
         // C. 语义：几件"点一下会发生什么"的约定
         // ---------------------------------------------------------------
 
+        // ---------------------------------------------------------------
+        // D. 钉住 / 取消钉住
+        // ---------------------------------------------------------------
+
+        Check("取消钉住：工具离开主条、进了未钉组、档位变成自定义", () =>
+        {
+            var el = New();
+            el.SnapAll();
+            el.PinTool(PanelDraw.ToolLaser, false);
+            el.SnapAll();
+            if (Array.IndexOf(PanelDraw.VisibleTools(el.State), PanelDraw.ToolLaser) >= 0)
+                return "取消钉住之后激光笔还在主条上";
+            if (Array.IndexOf(PanelDraw.UnpinnedTools(el.State), PanelDraw.ToolLaser) < 0)
+                return "取消钉住之后工具没进未钉那一组";
+            if (el.State.Profile != PanelDraw.ProfileCustom)
+                return $"档位是「{PanelDraw.ProfileName(el.State.Profile)}」，应为自定义";
+            return null;
+        });
+
+        Check("钉回去：回到主条、且按规范顺序排（不是按点击先后）", () =>
+        {
+            var el = New();
+            el.PinTool(PanelDraw.ToolLaser, false);
+            el.PinTool(PanelDraw.ToolShapes, false);
+            el.PinTool(PanelDraw.ToolLaser, true);      // 先钉激光笔
+            el.PinTool(PanelDraw.ToolShapes, true);     // 再钉图形
+            el.SnapAll();
+            var vis = PanelDraw.VisibleTools(el.State);
+            if (Array.IndexOf(vis, PanelDraw.ToolLaser) < 0) return "激光笔没回来";
+            if (Array.IndexOf(vis, PanelDraw.ToolShapes) < 0) return "图形没回来";
+            for (int i = 1; i < vis.Length; i++)
+                if (vis[i] < vis[i - 1]) return "顺序乱了（应按规范顺序排，不按点击先后）";
+            if (vis.Length != PanelDraw.AllToolsIndex.Length) return $"钉回来之后是 {vis.Length} 项，应回到 {PanelDraw.AllToolsIndex.Length}";
+            return null;
+        });
+
+        Check("安全项：笔 / 橡皮 / 更多 取消不了", () =>
+        {
+            var el = New();
+            foreach (int t in new[] { PanelDraw.ToolPen, PanelDraw.ToolEraser, PanelDraw.ToolMore })
+            {
+                el.PinTool(t, false);
+                if (Array.IndexOf(PanelDraw.UnpinnedTools(el.State), t) >= 0)
+                    return $"{PanelDraw.Tools[t].Name} 被取消掉了（它是安全项）";
+            }
+            if (el.State.Profile == PanelDraw.ProfileCustom) return "安全项没法取消，却把档位改成了自定义";
+            return null;
+        });
+
+        Check("钉住只动钉住集合，不动别的", () =>
+        {
+            var el = New();
+            el.SetTool(PanelDraw.ToolPen);
+            el.State.Color = 5;
+            el.SnapAll();
+            el.PinTool(PanelDraw.ToolLaser, false);
+            el.SnapAll();
+            if (el.State.Tool != PanelDraw.ToolPen) return "取消钉住把当前工具改了";
+            if (el.State.Color != 5) return "取消钉住把颜色改了";
+            return null;
+        });
+
         Check("极简档 = 笔 / 橡皮 / 白板 / 更多", () =>
         {
             var vis = PanelDraw.VisibleTools(new PanelState { Mini = true });

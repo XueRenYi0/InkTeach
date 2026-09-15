@@ -270,6 +270,8 @@ internal static class Program
             ("25-极简档-更多（含三档切换）", St(tool: 2, color: 0, mini: true, more: true), false, 0, 0),
             ("26-白板-开着（盖住 PPT）", St(tool: 1, color: 0, board: true, boardColor: 0), true, 900, 420),
             ("27-白板-板色三选",       St(tool: 1, color: 11, board: true, boardColor: 1, rail: 1), true, 900, 420),
+            ("28-钉住：把激光笔和图形收进工具箱",
+             St(tool: 2, color: 0, more: true, unpin: new[] { 4, 7 }), false, 0, 0),
         };
 
         foreach (var it in list)
@@ -314,7 +316,7 @@ internal static class Program
                          bool dark = false, int tool = 2, int laser = 0, int eraser = 0,
                          bool hideInk = false, int select = 0, int shape = 0, int scale = 0,
                          double hold = 0, double flash = 0, bool slim = false, bool more = false,
-                         bool mini = false, bool board = false, int boardColor = 0)
+                         bool mini = false, bool board = false, int boardColor = 0, int[] unpin = null)
         => new PanelState
         {
             E = e, Rail = rail, Groove = groove, Color = color, Dark = dark, Tool = tool,
@@ -325,6 +327,10 @@ internal static class Program
             MoreOpen = more,
             Mini = mini,
             BoardOn = board, BoardColor = boardColor,
+            Profile = (unpin != null) ? PanelDraw.ProfileCustom : PanelDraw.ProfileFull,
+            CustomTools = (unpin != null)
+                ? Array.FindAll(PanelDraw.AllToolsIndex, x => Array.IndexOf(unpin, x) < 0)
+                : PanelDraw.AllToolsIndex,
         };
 
     // =====================================================================
