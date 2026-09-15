@@ -338,7 +338,11 @@ internal static class PanelDraw
             }
             L.MoreItems = its.ToArray();
         }
-        else L.ContentW = L.W;
+        else
+        {
+            L.ContentW = L.W;
+            L.DrawerRect = Rect.Empty;   // 必须显式清：默认的 Rect 是 (0,0,0,0)，它的 IsEmpty 是 false
+        }
 
         // 上带的内容：贴着条的中间排
         var items = new List<Rect>();
@@ -431,6 +435,11 @@ internal static class PanelDraw
         }
         L.Tiles = tiles.ToArray();
         L.ToolIndices = vis;
+
+        // 滑条的命中区不许盖住按钮：上沿夹到"按钮底 + 1"。
+        // 之前靠"命中测试先问按钮"来兜，能跑但很脆 —— 以后谁调了顺序就会抢点击。
+        if (tiles.Count > 1)
+            L.SliderZoneTop = Math.Max(L.SliderZoneTop, tiles[1].Bottom + 1);
         return L;
     }
 
@@ -969,7 +978,7 @@ internal sealed class PanelState
     public double Groove;        // 0 = 滑条常态，1 = 悬停/拖动
     public double Slider01 = 0.45;
     public int Color = 0;
-    public int Tool = 1;
+    public int Tool = PanelDraw.ToolPen;   // ← 默认要写常量：重排下标时这里漏过一次，启动时"当前工具"变成了白板
     public int HoverTile = -1;
     public int PressTile = -1;
     public int IconScale;        // 0 = 任务栏档（默认）／1 = 前几轮的现状／2 = 更大／3 = 小图标

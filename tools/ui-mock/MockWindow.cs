@@ -50,6 +50,10 @@ internal sealed class PanelElement : FrameworkElement
             if (u >= 1) _running = false;
             return true;
         }
+
+        public double Target => _to;
+        /// <summary>测试用：直接跳到目标值。</summary>
+        public void Snap() { Value = _to; _running = false; }
     }
 
     readonly Anim _e = new(1), _rail = new(0), _groove = new(0), _fade = new(1);
@@ -64,6 +68,8 @@ internal sealed class PanelElement : FrameworkElement
     double _lastTick;
 
     double Now => _clock.Elapsed.TotalMilliseconds;
+    /// <summary>测试用：上带是不是被"钉住展开"的。</summary>
+    public bool RailPinned => _railPinned;
 
     public PanelElement()
     {
@@ -163,6 +169,7 @@ internal sealed class PanelElement : FrameworkElement
     void FireMoreItem(int group, int index)
     {
         var item = PanelDraw.Drawer[group].Items[index];
+        Log.Write("抽屉项：" + PanelDraw.Drawer[group].Group + " / " + item.Label);
         switch (item.Kind)
         {
             case 0:
@@ -252,10 +259,50 @@ internal sealed class PanelElement : FrameworkElement
             _e.To(0, 167, Now);
             _rail.To(0, 167, Now);
             _groove.To(0, 167, Now);
-            State.HoverTile = -1;
+            // 收起来 = 回到"干净状态"：抽屉、钉住的上带、按下的按钮、按住进度全都要清掉。
+            // 不清会怎样（实测踩到）：点"更多"→点"收起"→再点球展开，抽屉会自己冒出来、
+            // "更多"一直高亮、上带还是钉住展开的 —— 用户从没要求过这些。
+            ResetTransientState();
+            Log.Write("收起：抽屉/钉住/按下 全部清掉");
         }
-        else _e.To(1, 167, Now);
+        else
+        {
+            _e.To(1, 167, Now);
+            Log.Write("展开");
+        }
         InvalidateVisual();
+    }
+
+    /// <summary>把"临时状态"清干净。收起时、以及每次从收起展开时都会走一遍。</summary>
+    void ResetTransientState()
+    {
+        State.MoreOpen = false;
+        State.MoreHover = -1;
+        State.HoverTile = -1;
+        State.PressTile = -1;
+        State.ActionHoverID = -1;
+        State.ClearHold = 0;
+        _holdAction = false;
+        _railPinned = false;
+        _groovePinned = false;
+        _railWant = false;
+        _grooveWant = false;
+        _railEnterAt = _railExitAt = _grooveEnterAt = _grooveExitAt = -1;
+    }
+
+    /// <summary>测试用：把动画一步到位（不等真实的 167 毫秒）。</summary>
+    internal void SnapAll()
+    {
+        _e.Snap();
+        _rail.Snap();
+        _groove.Snap();
+        _fade.Snap();
+        // 换工具是"淡出 → 换 → 淡入"三步，换的那一下在 Step 里；测试要把它落地
+        if (_pendingTool >= 0) { State.Tool = _pendingTool; _pendingTool = -1; }
+        State.E = _e.Value;
+        State.Rail = _rail.Value;
+        State.Groove = _groove.Value;
+        State.ContentFade = _fade.Value;
     }
 
     public void ToggleRail()
@@ -307,6 +354,7 @@ internal sealed class PanelElement : FrameworkElement
             InvalidateMeasure();
             InvalidateVisual();
             LayoutChanged?.Invoke(PanelDraw.Compute(State));
+            Log.Write("更多抽屉：" + (State.MoreOpen ? "开" : "关"));
             Status?.Invoke(State.MoreOpen ? "更多：抽屉打开（更新 / 重启 / 退出 / 界面开关 / 学科工具占位）" : "更多：抽屉收起");
             return;
         }
@@ -342,6 +390,7 @@ internal sealed class PanelElement : FrameworkElement
         _rail.To(1, 167, Now);
         var spec = PanelDraw.SpecOf(new PanelState { Tool = i });
         string lower = spec.HasSlider ? spec.SliderHint : "装饰线（这个工具没有可调的）";
+        Log.Write($"换工具：{PanelDraw.Tools[i].Name}（上带={KindName(spec.Kind)}，下带={lower}）");
         Status?.Invoke($"工具：{PanelDraw.Tools[i].Name} —— 上带是「{KindName(spec.Kind)}」，下带是「{lower}」");
         InvalidateVisual();
     }
@@ -458,6 +507,7 @@ internal sealed class PanelElement : FrameworkElement
     /// <summary>现状（平时 80 / 展开 108）与瘦身档（平时 60 / 展开 84）之间切换。</summary>
     public void ToggleMini()
     {
+        // 切档会改主条内容，日志里留一笔（出问题时对得上时间线）
         State.Mini = !State.Mini;
         // 切过去以后，如果当前工具不在这一档里，就落到"笔"
         bool visible = Array.IndexOf(PanelDraw.VisibleTools(State), State.Tool) >= 0;
@@ -468,6 +518,7 @@ internal sealed class PanelElement : FrameworkElement
         InvalidateVisual();
         LayoutChanged?.Invoke(PanelDraw.Compute(State));
         var L = PanelDraw.Compute(State);
+        Log.Write("切档：" + (State.Mini ? "极简" : "完整") + $"，当前工具={PanelDraw.Tools[State.Tool].Name}，宽={L.W:F0}");
         Status?.Invoke(State.Mini
             ? $"极简档：主条只钉「笔 / 橡皮 / 更多」，宽 {L.W:F0}（完整档是 {PanelDraw.BarContentWidth(PanelDraw.Scales[State.IconScale].Btn):F0}）"
             : $"完整档：{PanelDraw.VisibleTools(State).Length} 项，宽 {L.W:F0}");

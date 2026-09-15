@@ -32,6 +32,7 @@ internal static class Program
         catch (Exception ex)
         {
             // 双击运行时，出事不能一闪而过 —— 把话说清楚再等一个按键
+            Log.Exception("启动/主循环", ex);
             Console.WriteLine();
             Console.WriteLine("启动失败：" + ex.GetType().Name);
             Console.WriteLine(ex.Message);
@@ -45,9 +46,28 @@ internal static class Program
     {
         // 控制台里要打中文说明：把代码页设成 UTF-8，免得变成一堆问号
         try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
+        Log.Session(string.Join(" ", args));
 
         // 启动计时：进程入口 → 窗口出现，顺便量一下"构建全部图标几何"要多久
         if (Array.IndexOf(args, "--startup") >= 0)
+        {
+            StartupProbe();
+            return;
+        }
+
+        if (Array.IndexOf(args, "--uitest") >= 0)
+        {
+            Environment.ExitCode = UiTests.Run();
+            return;
+        }
+
+        // 剩下的几种模式（出图 / 总览图 / 冒烟 / 交互）都在这里
+        AfterStartupPlaceholder(args);
+    }
+
+    /// <summary>启动分解：建图标几何 ＋ 进程入口到窗口出现（数字见 调研-界面-性能账.md 第九节）。</summary>
+    static void StartupProbe()
+    {
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             int n = 0;
@@ -80,7 +100,12 @@ internal static class Program
             app1.Run(w1);
             return;
         }
+    }
 
+
+
+    static void AfterStartupPlaceholder(string[] args)
+    {
         if (args.Length > 0 && args[0] == "--shot")
         {
             Shots(args.Length > 1 ? args[1] : "design/mock");
