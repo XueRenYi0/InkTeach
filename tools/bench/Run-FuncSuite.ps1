@@ -34,6 +34,7 @@ $cases = @(
     @{ f = '图形对象';   n = 'shapetest';    a = @('--shapetest');       t = 120; d = '直线/矩形命中：轮廓中间是空的' }
     @{ f = '图形对象';   n = 'imagetest';    a = @('--imagetest');       t = 150; d = '图像对象：上屏/复制翻转/存档/剪贴板' }
     @{ f = '图形对象';   n = 'capturetest';  a = @('--capturetest');     t = 150; d = '截图：拖框 → 左上角 → 剪贴板，不拍进自己' }
+    @{ f = '剪贴板';     n = 'clipboardtest'; a = @('--clipboardtest');  t = 150; d = '复制成对象：逐字段回读 / 身份重发 / 同时给外部一张图 / 智能粘贴（会覆盖系统剪贴板）' }
     @{ f = '存档';       n = 'savetest';     a = @('--savetest');        t = 150; d = '保存/加载往返逐字段一致 + 坏数据明确失败' }
     @{ f = '变换与撤销'; n = 'transformtest';a = @('--transformtest');   t = 150; d = '改变换不碰几何、撤销精确回原位' }
     @{ f = '变换与撤销'; n = 'handletest';   a = @('--handletest');      t = 150; d = '选中框手柄位置/命中/拖出来的矩阵' }

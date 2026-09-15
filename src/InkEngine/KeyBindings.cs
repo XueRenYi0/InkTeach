@@ -35,6 +35,8 @@ internal enum KeyAction
     ToolLaser,
     ToolEraser,
     ToolPixelEraser,
+    /// <summary>把选区里"被橡皮擦断"的笔迹拆成独立对象（默认不拆，见 Model.SplitErasedSelection）。</summary>
+    SplitErased,
     ToolCapture,
     ToolMarquee,
     Undo,
@@ -49,11 +51,14 @@ internal enum KeyAction
 
     // —— 批注内（编辑类）——
     Redo,
+    /// <summary>复制选中对象到剪贴板（对象 + 一张图）。</summary>
+    Copy,
     SelectAll,
     Duplicate,
     DeleteSelected,
     CancelSelection,
-    PasteImage,
+    /// <summary>粘贴：剪贴板里有我们的对象就粘对象，否则当图粘。</summary>
+    Paste,
     NudgeLeft,
     NudgeUp,
     NudgeRight,
@@ -296,10 +301,12 @@ internal sealed class KeyMap
         KeyAction.ToolLaser => "激光笔",
         KeyAction.ToolEraser => "橡皮擦",
         KeyAction.ToolPixelEraser => "像素橡皮",
+        KeyAction.SplitErased => "拆开擦断的笔迹",
         KeyAction.ToolCapture => "截图",
         KeyAction.ToolMarquee => "框选",
         KeyAction.Undo => "撤销",
         KeyAction.Redo => "重做",
+        KeyAction.Copy => "复制选中",
         KeyAction.Clear => "清空",
         KeyAction.ToggleHud => "性能面板开关",
         KeyAction.CycleWidth => "切换当前工具粗细",
@@ -312,7 +319,7 @@ internal sealed class KeyMap
         KeyAction.Duplicate => "复制一份",
         KeyAction.DeleteSelected => "删除选中",
         KeyAction.CancelSelection => "取消选择",
-        KeyAction.PasteImage => "粘贴剪贴板里的图",
+        KeyAction.Paste => "粘贴（对象优先，否则当图）",
         KeyAction.NudgeLeft => "左移 1",
         KeyAction.NudgeUp => "上移 1",
         KeyAction.NudgeRight => "右移 1",
@@ -351,6 +358,7 @@ internal sealed class KeyMap
         m.Add(G, KeyAction.ToolLaser, "Ctrl+Alt+3", "换成激光笔");
         m.Add(G, KeyAction.ToolEraser, "Ctrl+Alt+4", "换成橡皮擦（碰到哪一条就整条删掉）");
         m.Add(G, KeyAction.ToolPixelEraser, "Ctrl+Alt+7", "换成像素橡皮（只擦掉碰到的一块，一笔会切成两段）");
+        m.Add(G, KeyAction.SplitErased, "Ctrl+Alt+8", "把选中的、被擦断的笔迹拆成独立对象（想单独搬动某一截时用）");
         m.Add(G, KeyAction.ToolCapture, "Ctrl+Alt+S", "截图：拖一个框，抓到的图放到左上角并进剪贴板");
         m.Add(G, KeyAction.ToolMarquee, "Ctrl+Alt+5", "换成框选（选择/移动/缩放/旋转）");
         m.Add(G, KeyAction.Undo, "Ctrl+Alt+Z", "撤销一步");
@@ -365,11 +373,12 @@ internal sealed class KeyMap
 
         m.Add(A, KeyAction.Undo, "Ctrl+Z", "撤销一步");
         m.Add(A, KeyAction.Redo, "Ctrl+Y", "重做");
+        m.Add(A, KeyAction.Copy, "Ctrl+C", "复制选中对象（粘回来仍是可编辑对象，同时给外部程序一张图）");
         m.Add(A, KeyAction.SelectAll, "Ctrl+A", "全选");
         m.Add(A, KeyAction.Duplicate, "Ctrl+D", "复制一份");
         m.Add(A, KeyAction.DeleteSelected, "Delete", "删除选中");
         m.Add(A, KeyAction.CancelSelection, "Esc", "取消选择");
-        m.Add(A, KeyAction.PasteImage, "Ctrl+V", "把剪贴板里的图粘到左上角");
+        m.Add(A, KeyAction.Paste, "Ctrl+V", "粘贴：优先粘回可编辑对象，否则把图粘到左上角");
         m.Add(A, KeyAction.NudgeLeft, "Left", "左移 1 像素");
         m.Add(A, KeyAction.NudgeUp, "Up", "上移 1 像素");
         m.Add(A, KeyAction.NudgeRight, "Right", "右移 1 像素");

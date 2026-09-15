@@ -478,6 +478,14 @@ internal static class Native
     public const uint CF_DIBV5 = 17;
     public const uint GMEM_MOVEABLE = 0x0002;
 
+    /// <summary>
+    /// 注册一个自定义剪贴板格式（返回它的格式号，同一进程内同一个名字只注册一次）。
+    /// 我们用 "InkTeach.InkObjects" 放**我们自己的对象字节**——粘回来仍是可编辑对象，
+    /// 而不是一张图（见 ClipboardInk）。
+    /// </summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern uint RegisterClipboardFormat(string lpszFormat);
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool OpenClipboard(IntPtr hWndNewOwner);
 

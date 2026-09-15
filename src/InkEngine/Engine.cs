@@ -94,6 +94,33 @@ public class InkEngine
     /// </summary>
     internal uint LastPointerType = Native.PT_MOUSE;
     internal bool ShowHud = true;
+
+    /// <summary>
+    /// 橡皮的实测采集（"手测台" --eraserlab）。**平时是 null**，所有上报点都是 `?.`，
+    /// 正常使用一分钱开销都不多花。见 <see cref="EraserTelemetry"/>。
+    /// </summary>
+    internal EraserTelemetry EraserTelemetry;
+
+    /// <summary>
+    /// **复制拖拽模式**：点了操作条的复制按钮之后进入，此时按住选中内容拖动 = **拖出一份副本**
+    /// （原件不动），可以连着拖多份；再点按钮 / 点空白 / 换工具退出。
+    ///
+    /// 语义抄 InkClass（那边已经踩过一轮坑）：点图标**只进模式**，不是"点一下原地克隆一份"
+    /// ——后者副本固定偏移 24px、落点不可控，已经废弃。
+    /// </summary>
+    internal bool CopyDragArmed;
+
+    /// <summary>复制拖拽这一次拖动里"插入副本"那条待提交的动作（松手时和位移合成一步）。</summary>
+    private AddStrokesAction _pendingClone;
+
+    /// <summary>
+    /// 橡皮的落点反馈之外，**同时显示系统箭头**（默认藏起来，只画我们自己的圈/方块）。
+    ///
+    /// 留这个开关是为了做 A/B：自绘的方块光标本质是"我们画的一帧"，天生比系统光标晚
+    /// 一个刷新周期（16.7 ms）；系统箭头画在硬件光标平面上，几乎没有延迟。用户说
+    /// "不跟手"时，把两个都显示出来——箭头跟手、方块形状准，哪种更舒服由用户说了算。
+    /// </summary>
+    internal bool EraserKeepsSystemCursor;
     internal string HudText = "";
     internal bool MarqueeActive;
 
@@ -172,6 +199,17 @@ public class InkEngine
     // 这两个给自检看（--cursortest 要构造"拖拽中"的状态）。
     internal SelHandle _dragHandle = SelHandle.None;
     internal bool _dragIsMove;
+    /// <summary>
+    /// 这一次拖动的"点选起手笔迹"（按下时命中的那一条）。松手时若**一点没移动**，
+    /// 就把多选收窄成只选它——PPT/Figma 的行为。见 EndSelDrag。
+    /// </summary>
+    internal Stroke _dragHitStroke;
+
+    /// <summary>
+    /// 点选的命中容差（逻辑像素）。细笔只有 1.5 逻辑像素宽，严格按墨判等于点不中；
+    /// 4 像素和操作条手柄的容差同一量级。见 <see cref="InkDocument.HitObjectAt"/>。
+    /// </summary>
+    internal const float ClickToleranceLogical = 4f;
     private SelectionFrame _dragFrame;
 
     /// <summary>正在拖旋转手柄——度数标签靠它决定显不显示。</summary>
@@ -809,6 +847,13 @@ public class InkEngine
 
         double wall = _clock.Elapsed.TotalMilliseconds;
         _lastFrameMs = wall - frameStart;
+        // 手测台：把这一帧的"重画 + 整帧"耗时喂给采集器（它只在拖拽中累计）。
+        if (EraserTelemetry != null)
+        {
+            EraserTelemetry.Frame(_windows.Count > 0 ? _windows[0].LastPatchMs : 0,
+                                  _lastFrameMs, _inputToPresentMs);
+            EraserTelemetry.Beat(NowMs, _fps, Doc);
+        }
 
         _frames++;
         if (wall - _fpsWindowStart >= 500)
@@ -893,6 +938,9 @@ public class InkEngine
             $"选中 {Doc.Selected.Count}      工具 {ToolName(Tool)}{(PassThrough ? "（穿透中）" : "")}      粗细 {CurrentToolWidthLogical,4:F1}      撤销栈 {Doc.UndoDepth}\n" +
             $"分块 {_tilesUsed}/{_tilesBudget}（可见 {_tilesVisible}，本帧光栅 {_tilesRasterized}）      网格 {Doc.GridCells}\n" +
             $"Ctrl+Alt：1笔 2荧光 3激光 4橡皮 7像素橡皮 5框选 6粗细 Z撤销 C清空\n" +
+            (EraserTelemetry != null
+                ? $"橡皮手测台：记录中 · 已记 {EraserTelemetry.DragCount} 条拖拽（退出时写汇总）\n"
+                : "") +
             $"其它 Ctrl+Alt：I面板 P穿透 K键盘 Y穿透方式 X退出";
     }
 
@@ -1089,13 +1137,29 @@ public class InkEngine
             case Tool.Eraser:
                 _lastEraseX = x; _lastEraseY = y;
                 Doc.BeginErase();
-                Doc.EraseAt(x, y, EraserRadius);
+                EraserTelemetry?.BeginDrag(Tool.Eraser, x, y, NowMs);
+                {
+                    bool log = EraserTelemetry != null;
+                    long t0 = log ? Stopwatch.GetTimestamp() : 0;
+                    int hit = Doc.EraseAt(x, y, EraserRadius);
+                    if (log)
+                        EraserTelemetry.Step(hit, Doc.TotalIntervals, Doc.Strokes.Count,
+                                             Stopwatch.GetElapsedTime(t0).TotalMilliseconds, x, y, NowMs);
+                }
                 break;
 
             case Tool.PixelEraser:
                 _lastEraseX = x; _lastEraseY = y;
                 Doc.BeginEraseRect();
-                Doc.EraseRectAt(x, y, PixelEraserHalfWidthPx, PixelEraserHalfHeightPx);
+                EraserTelemetry?.BeginDrag(Tool.PixelEraser, x, y, NowMs);
+                {
+                    bool log = EraserTelemetry != null;
+                    long t0 = log ? Stopwatch.GetTimestamp() : 0;
+                    int hit = Doc.EraseRectAt(x, y, PixelEraserHalfWidthPx, PixelEraserHalfHeightPx);
+                    if (log)
+                        EraserTelemetry.Step(hit, Doc.TotalIntervals, Doc.Strokes.Count,
+                                             Stopwatch.GetElapsedTime(t0).TotalMilliseconds, x, y, NowMs);
+                }
                 break;
 
             case Tool.Capture:
@@ -1109,7 +1173,12 @@ public class InkEngine
 
             case Tool.Marquee:
                 // 先问选择手势（按钮 / 手柄 / 整体拖动）；都没接才起新的框选。
-                if (!TryBeginSelectionGesture(x, y))
+                // 修饰键在这一刻读一次就传进去（而不是在判定函数里读键盘）——
+                // 这样"Shift 加选 / Alt 减选"这条分支能被自检直接驱动。
+                if (!TryBeginSelectionGesture(
+                        x, y,
+                        shift: (Native.GetAsyncKeyState(0x10 /*VK_SHIFT*/) & 0x8000) != 0,
+                        alt: (Native.GetAsyncKeyState(0x12 /*VK_MENU*/) & 0x8000) != 0))
                 {
                     MarqueeActive = true;
                     MqMinX = MqMaxX = x; MqMinY = MqMaxY = y;
@@ -1194,6 +1263,8 @@ public class InkEngine
         }
 
         var tool = inverted ? Tool.Eraser : Tool;
+        // 手测台：数"指针消息"而不是"擦除步"——消息之间的间隔才是跟不跟手。
+        if (tool == Tool.Eraser || tool == Tool.PixelEraser) EraserTelemetry?.Move(NowMs);
         switch (tool)
         {
             case Tool.Eraser:
@@ -1291,7 +1362,13 @@ public class InkEngine
         for (int i = 1; i <= steps; i++)
         {
             float t = i / (float)steps;
-            Doc.EraseAt(_lastEraseX + dx * t, _lastEraseY + dy * t, r);
+            float ex = _lastEraseX + dx * t, ey = _lastEraseY + dy * t;
+            bool log = EraserTelemetry != null;
+            long t0 = log ? Stopwatch.GetTimestamp() : 0;
+            int hit = Doc.EraseAt(ex, ey, r);
+            if (log)
+                EraserTelemetry.Step(hit, Doc.TotalIntervals, Doc.Strokes.Count,
+                                     Stopwatch.GetElapsedTime(t0).TotalMilliseconds, ex, ey, NowMs);
         }
         _lastEraseX = x;
         _lastEraseY = y;
@@ -1312,7 +1389,13 @@ public class InkEngine
         for (int i = 1; i <= steps; i++)
         {
             float t = i / (float)steps;
-            Doc.EraseRectAt(_lastEraseX + dx * t, _lastEraseY + dy * t, hw, hh);
+            float ex = _lastEraseX + dx * t, ey = _lastEraseY + dy * t;
+            bool log = EraserTelemetry != null;
+            long t0 = log ? Stopwatch.GetTimestamp() : 0;
+            int hit = Doc.EraseRectAt(ex, ey, hw, hh);
+            if (log)
+                EraserTelemetry.Step(hit, Doc.TotalIntervals, Doc.Strokes.Count,
+                                     Stopwatch.GetElapsedTime(t0).TotalMilliseconds, ex, ey, NowMs);
         }
         _lastEraseX = x;
         _lastEraseY = y;
@@ -1415,6 +1498,69 @@ public class InkEngine
     /// 从剪贴板粘一张图（Ctrl+V）。位置规则和截图一致：**视口左上角**，
     /// 粘完立刻选中。
     /// </summary>
+    /// <summary>
+    /// 复制选中对象到剪贴板：**对象字节 + 一张图**。
+    ///
+    /// 对象字节让"粘回来仍是可编辑对象"（跨页、跨窗口、跨程序实例都行）；
+    /// 图是给外部程序的兜底（Word / PPT / 微信粘到的是图，至少能用）。
+    /// 只放对象不放图也行，但那样"复制一段板书贴到微信"就没反应——两头都要顾。
+    /// </summary>
+    internal bool CopySelectionToClipboard()
+    {
+        var sel = Doc.Selected;
+        if (sel.Count == 0)
+        {
+            Console.WriteLine("复制：没有选中任何东西（先用框选或点选选中）");
+            return false;
+        }
+
+        byte[] objects = ClipboardInk.Serialize(sel);
+
+        // 同时渲染一张图：范围 = 这批对象的画布范围 + 4 逻辑像素留白
+        byte[] dib = null; int w = 0, h = 0;
+        var box = EditRegion.Of(sel);
+        if (!box.IsEmpty && _windows.Count > 0)
+        {
+            box = box.Inflate(4f * DpiScale);
+            w = Math.Max(1, (int)MathF.Ceiling(box.MaxX - box.MinX));
+            h = Math.Max(1, (int)MathF.Ceiling(box.MaxY - box.MinY));
+            // 防呆：图太大就不放了（对象格式照放）
+            if ((long)w * h <= 32_000_000) dib = _windows[0].RenderStrokesToBgra(sel, box, w, h);
+            else { w = h = 0; }
+        }
+
+        bool ok = ClipboardInk.Set(objects, dib, w, h);
+        Console.WriteLine(ok
+            ? $"复制 {sel.Count} 个对象（同时放了一张 {w}×{h} 的图：外部程序也粘得上）"
+            : "复制失败（剪贴板正被别的程序占着？）");
+        return ok;
+    }
+
+    /// <summary>
+    /// 粘贴：**优先粘回可编辑对象**——剪贴板里有我们的对象格式就还原成对象，
+    /// 没有就退回"当图片粘贴"（原有行为）。落在视口左上角并自动选中，粘完就能拖走。
+    /// </summary>
+    internal bool PasteFromClipboard()
+    {
+        if (ClipboardInk.TryGetObjects(out var objs) && objs.Count > 0)
+        {
+            var vp = ViewportCanvas;
+            float m = CaptureMarginLogical * DpiScale;
+            var box = EditRegion.Of(objs);
+            var move = Matrix3x2.CreateTranslation(vp.MinX + m - box.MinX, vp.MinY + m - box.MinY);
+            foreach (var s in objs) s.Transform = s.Transform * move;   // 插入前平移（画布坐标）
+
+            Doc.AddStrokes(objs);          // 一步撤销
+            Doc.SelectOnly(objs);
+            Tool = Tool.Marquee;
+            NotifyUiStateChanged();
+            _dirty = true;
+            Console.WriteLine($"粘贴 {objs.Count} 个对象（仍是可编辑对象）");
+            return true;
+        }
+        return PasteImageFromClipboard();
+    }
+
     internal bool PasteImageFromClipboard()
     {
         if (!ClipboardImage.TryGetImage(out var pixels, out int w, out int h, out bool hasAlpha))
@@ -1473,6 +1619,8 @@ public class InkEngine
         _drawing = false;
         _dirty = true;
         _cntDown = _cntMove = _cntUp = _cntCaptureLost = 0;
+        // 手测台：一次拖拽收尾。**必须在 EndErase 之后**——撤销栈深度要算上刚提交的那一步。
+        EraserTelemetry?.EndDrag(Doc, Doc.UndoDepth, NowMs);
     }
 
     private static string PointerTypeName(uint t) => t switch
@@ -1575,8 +1723,9 @@ public class InkEngine
         Tool.Pen => CursorKind.Hidden,
         Tool.Highlighter => CursorKind.Hidden,      // 落点由自绘的宽度圆盘表达
         Tool.Laser => CursorKind.Hidden,            // 落点由自绘的实心点表达
-        Tool.Eraser => CursorKind.Hidden,           // 落点由自绘圆环表达
-        Tool.PixelEraser => CursorKind.Hidden,      // 落点由自绘矩形表达
+        // 落点由自绘圆环 / 矩形表达；开了 EraserKeepsSystemCursor 就两个都显示（A/B 用）。
+        Tool.Eraser => EraserKeepsSystemCursor ? CursorKind.Default : CursorKind.Hidden,
+        Tool.PixelEraser => EraserKeepsSystemCursor ? CursorKind.Default : CursorKind.Hidden,
         // 截图用手势（拖框），十字准星是"从这儿拖到那儿"的通用语言，和框选一致。
         Tool.Marquee or Tool.Capture or Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Arrow
             => CursorKind.Cross,
@@ -1598,7 +1747,7 @@ public class InkEngine
         var aabb = frame.CanvasAabb;
 
         // 操作条按钮：按钮的形状本身就是 affordance，光标保持箭头。
-        if (SelectionHandles.BarButtonAt(canvasX, canvasY, aabb, dpi) >= 0)
+        if (SelectionHandles.BarButtonAt(canvasX, canvasY, aabb, dpi, ViewportCanvas) >= 0)
             return CursorKind.Default;
 
         var h = SelectionHandles.HitTest(canvasX, canvasY, frame, dpi);
@@ -1945,7 +2094,12 @@ public class InkEngine
             return;
         }
 
-            Doc.ApplyMarquee(new RectF { MinX = l, MinY = t, MaxX = r, MaxY = b });
+        Doc.ApplyMarquee(new RectF { MinX = l, MinY = t, MaxX = r, MaxY = b });
+        // **不在这里自动拆开**。原来这里调了 SplitErasedSelection()，被否掉了：
+        // 拆成两个对象会让半透明荧光笔在"两截互相穿过"的地方**混合两次、颜色变深**——
+        // 那等于"我什么都没擦，只是框选了一下，墨却变了"。原则是**擦除只是像素没了**：
+        // 除了被擦掉的那一块，其他像素在任何操作前后都该一模一样。
+        // 想单独摆弄某一截时用显式动作（Ctrl+Alt+8 拆开擦断的笔迹），见 RunAction。
         Console.WriteLine($"marquee selected {Doc.Selected.Count} strokes");
         _dirty = true;
     }
@@ -2007,18 +2161,30 @@ public class InkEngine
     /// </summary>
     private void RunAction(KeyAction action, int hotkeyId = 0)
     {
+        // 手测台：事件流水。撤销尤其重要——"擦完马上撤销"就是"这一擦不是我想要的"。
+        if (EraserTelemetry != null && action != KeyAction.None)
+            EraserTelemetry.Note(KeyMap.Describe(action), NowMs);
         switch (action)
         {
             case KeyAction.TogglePassThrough: SetPassThrough(!PassThrough); break;
-            case KeyAction.ToolPen: Tool = Tool.Pen; break;
-            case KeyAction.ToolHighlighter: Tool = Tool.Highlighter; break;
-            case KeyAction.ToolLaser: Tool = Tool.Laser; break;
-            case KeyAction.ToolEraser: Tool = Tool.Eraser; break;
-            case KeyAction.ToolPixelEraser: Tool = Tool.PixelEraser; break;
-            case KeyAction.ToolCapture: Tool = Tool.Capture; break;
-            case KeyAction.ToolMarquee: Tool = Tool.Marquee; break;
+            case KeyAction.ToolPen: SwitchTool(Tool.Pen); break;
+            case KeyAction.ToolHighlighter: SwitchTool(Tool.Highlighter); break;
+            case KeyAction.ToolLaser: SwitchTool(Tool.Laser); break;
+            case KeyAction.ToolEraser: SwitchTool(Tool.Eraser); break;
+            case KeyAction.ToolPixelEraser: SwitchTool(Tool.PixelEraser); break;
+            case KeyAction.SplitErased:
+            {
+                int n = Doc.SplitErasedSelection();
+                Console.WriteLine(n > 0
+                    ? $"拆开擦断的笔迹：{n} 条 → 各段成为独立对象（可单独搬运/删除）"
+                    : "拆开擦断的笔迹：选中的里面没有被擦断的（先用框选选中它）");
+                break;
+            }
+            case KeyAction.ToolCapture: SwitchTool(Tool.Capture); break;
+            case KeyAction.ToolMarquee: SwitchTool(Tool.Marquee); break;
             case KeyAction.Undo: Doc.Undo(); Laser.Clear(); break;
             case KeyAction.Redo: Doc.Redo(); break;
+            case KeyAction.Copy: CopySelectionToClipboard(); break;
             case KeyAction.Clear: Doc.Clear(); Laser.Clear(); break;
             case KeyAction.ToggleHud: ShowHud = !ShowHud; break;
             case KeyAction.CycleWidth: CycleWidth(); break;
@@ -2035,7 +2201,7 @@ public class InkEngine
             case KeyAction.Duplicate: Doc.DuplicateSelected(); break;
             case KeyAction.DeleteSelected: Doc.DeleteSelected(); break;
             case KeyAction.CancelSelection: Doc.Selected.Clear(); break;
-            case KeyAction.PasteImage: PasteImageFromClipboard(); break;
+            case KeyAction.Paste: PasteFromClipboard(); break;
             case KeyAction.NudgeLeft: Nudge(-1f, 0f); break;
             case KeyAction.NudgeUp: Nudge(0f, -1f); break;
             case KeyAction.NudgeRight: Nudge(1f, 0f); break;
@@ -2061,6 +2227,29 @@ public class InkEngine
     /// 切换**当前工具**的粗细。以前这里写死改笔宽，于是"选了荧光笔按切粗细没反应"
     /// ——改的不是它。四种工具各有一张档位表（见 WidthPresets 的注释）。
     /// </summary>
+    /// <summary>
+    /// 换工具。**用户规则（2026-09-15 定，也是 InkClass / PPT / Figma 的惯例）**：
+    /// "选中是临时上下文"——除了框选工具自己，换到任何别的工具都**收起选区**。
+    ///
+    /// 不这么做会出两个问题：① 选区遮罩会把接下来的第一笔吃掉（老师点完工具画不出来，
+    /// 得先点一下空白）；② 用户看着"我已经换工具了，怎么还选着"。
+    /// 滚动、激光、键盘编辑键**不算**换上下文（见 计划-选中工具.md 的那张表）。
+    /// </summary>
+    private void SwitchTool(Tool t)
+    {
+        if (Tool != t && t != Tool.Marquee) ClearSelectionForNewContext();
+        Tool = t;
+    }
+
+    /// <summary>收起选区（换工具、以及"与选中无关的新操作"走这里）。</summary>
+    private void ClearSelectionForNewContext()
+    {
+        CopyDragArmed = false;
+        if (Doc.Selected.Count == 0) return;
+        Doc.Selected.Clear();
+        _dirty = true;
+    }
+
     internal void CycleWidth()
     {
         switch (Tool)
@@ -2084,6 +2273,7 @@ public class InkEngine
         }
         Console.WriteLine($"{Tool} 粗细 -> {CurrentToolWidthLogical} 逻辑像素"
                         + $"（本机实际 {CurrentToolWidthLogical * DpiScale:F0} 物理像素）");
+        EraserTelemetry?.Note($"{ToolName(Tool)}粗细 → {CurrentToolWidthLogical:F0} 逻辑像素", NowMs);
         NotifyUiStateChanged();
     }
 
@@ -2143,6 +2333,8 @@ public class InkEngine
         s_map.Clear();
         Cursors.DisposeAll();
         Gfx.Shutdown();
+        // 手测台：退出时把汇总写出来（逐条数据在每条拖拽结束时就已经落盘了）。
+        EraserTelemetry?.Close(Doc, NowMs);
         Console.WriteLine("shutdown complete");
     }
 
@@ -2221,11 +2413,25 @@ public class InkEngine
 
     internal void SetToolFromUi(Tool tool)
     {
-        Tool = tool;
+        SwitchTool(tool);
+        EraserTelemetry?.Note($"界面换工具 → {ToolName(tool)}", NowMs);
         ApplyCursor();
         _dirty = true;
         NotifyUiStateChanged();
     }
+
+    // ---- 自检钩子（测试要驱动"换工具/操作条按钮/拖动中移动"这些私有路径）----
+
+    /// <summary>自检用：执行一个键位动作（换工具、撤销……都从同一个入口进）。</summary>
+    internal void RunActionForTest(KeyAction a) => RunAction(a);
+
+    /// <summary>自检用：点操作条第 index 个按钮。</summary>
+    internal void RunBarActionForTest(int index)
+        => RunBarAction(index, SelectionHandles.FrameOf(Doc.Selected),
+                        SelectionHandles.FrameOf(Doc.Selected).CanvasAabb);
+
+    /// <summary>自检用：拖动中移动指针（选择手势）。</summary>
+    internal void UpdateSelectionGestureForTest(float x, float y) => UpdateSelDrag(x, y);
 
     internal void SetColorFromUi(Color4 color)
     {
@@ -2367,32 +2573,79 @@ public class InkEngine
     /// <summary>
     /// 框选工具按下时的分流。返回 true 表示这次按下已经被选择手势接掉。
     ///
-    /// 顺序有讲究：**先按钮、再手柄、最后才判断"整体拖动"**。反过来写的话，
-    /// 按钮和手柄都紧挨着选中框，会被"在框内拖动"抢走，表现就是点不中。
+    /// 顺序有讲究（从 1 到 5，**不能换**）：
+    ///   1. 操作条按钮——它和手柄、框都紧挨着，放后面就点不中；
+    ///   2. 手柄（缩放 / 旋转）；
+    ///   3. 在**当前选区框内** → 整体拖动；
+    ///   4. **点选**：按在一条墨迹上就选中它（没有选中时也走这条）；
+    ///   5. 都没有 → 返回 false，交给外面的框选。
+    ///
+    /// 第 3 步必须在第 4 步之前：否则"拖动已选中的一块"会被判成"点选其中一条"，
+    /// 多选就再也搬不动了。（2026-09-15 实现点选时定的顺序。）
     /// </summary>
-    private bool TryBeginSelectionGesture(float x, float y)
+    private bool TryBeginSelectionGesture(float x, float y, bool shift, bool alt)
     {
-        if (Doc.Selected.Count == 0) return false;
-
-        var frame = SelectionHandles.FrameOf(Doc.Selected);
+        _dragHitStroke = null;
+        _pendingClone = null;
         float dpi = DpiScale;
 
-        // 操作条定位用框的**画布轴对齐范围**：框本身可能是斜的，但"它占了屏幕上
-        // 哪一块"永远是个正矩形，操作条贴在那个矩形的下面才对。
-        var aabb = frame.CanvasAabb;
-
-        int btn = SelectionHandles.BarButtonAt(x, y, aabb, dpi);
-        if (btn >= 0) { RunBarAction(btn, frame, aabb); return true; }
-
-        var h = SelectionHandles.HitTest(x, y, frame, dpi);
         bool move = false;
-        if (h == SelHandle.None)
+        var h = SelHandle.None;
+        var frame = SelectionHandles.FrameOf(Doc.Selected);
+
+        // —— 1~3：有选中时才谈得上（没选中就直接跳到第 4 步的点选）——
+        if (Doc.Selected.Count > 0)
         {
-            // 没点在手柄上：把指针变回框坐标，看是不是落在框里（整体拖动）。
-            var lp = frame.ToLocalPoint(new Vector2(x, y));
-            move = lp.X >= frame.Local.MinX && lp.X <= frame.Local.MaxX
-                && lp.Y >= frame.Local.MinY && lp.Y <= frame.Local.MaxY;
-            if (!move) return false;                      // 落在空白处：交给框选
+            // 操作条定位用框的**画布轴对齐范围**：框本身可能是斜的，但"它占了屏幕上
+            // 哪一块"永远是个正矩形，操作条贴在那个矩形的下面才对。
+            var aabb = frame.CanvasAabb;
+
+            int btn = SelectionHandles.BarButtonAt(x, y, aabb, dpi, ViewportCanvas);
+            if (btn >= 0) { RunBarAction(btn, frame, aabb); return true; }
+
+            h = SelectionHandles.HitTest(x, y, frame, dpi);
+            if (h == SelHandle.None)
+            {
+                // 没点在手柄上：把指针变回框坐标，看是不是落在框里（整体拖动）。
+                var lp = frame.ToLocalPoint(new Vector2(x, y));
+                move = lp.X >= frame.Local.MinX && lp.X <= frame.Local.MaxX
+                    && lp.Y >= frame.Local.MinY && lp.Y <= frame.Local.MaxY;
+
+                // 顺手记下"指针底下是哪一条"：松手时若一点没移动，就把多选**收窄成只选它**
+                // （PPT/Figma 的行为）。落在框内空白处 → 记不到东西 → 松手不改选择。
+                if (move) _dragHitStroke = Doc.HitObjectAt(x, y, ClickToleranceLogical * dpi);
+            }
+        }
+
+        // —— 4：点选（2026-09-15 新增）——
+        if (h == SelHandle.None && !move)
+        {
+            var hit = Doc.SelectAt(x, y, ClickToleranceLogical * dpi,
+                                   additive: shift, subtractive: alt);
+            if (hit == null) return false;                // 5：空白 → 交给框选
+
+            _dragHitStroke = hit;
+            _dirty = true;
+            // 加选/减选时**不进拖动**：方便连着点几条攒出一个选择。
+            if (shift || alt) return true;
+
+            // 无修饰键：选中它并**直接进入整体拖动**（点住就能拖，和 PPT 一样）。
+            frame = SelectionHandles.FrameOf(Doc.Selected);
+            move = true;
+        }
+
+        // —— 4.5：复制拖拽模式：按住选中内容拖动 = **拖出一份副本**（原件不动）——
+        // 克隆放在这里（按下那一刻），副本与原件完全重合，随后这一次拖动移动的就是副本；
+        // 松手时把"插入副本 + 移动副本"合成一步撤销（见 EndSelDrag）。
+        if (move && CopyDragArmed)
+        {
+            _pendingClone = Doc.CloneSelectedInPlace();
+            if (_pendingClone.Strokes.Count > 0)
+            {
+                frame = SelectionHandles.FrameOf(Doc.Selected);   // 副本与原件重合，框不变
+                _dirty = true;
+            }
+            else _pendingClone = null;
         }
 
         _dragHandle = h;
@@ -2409,6 +2662,19 @@ public class InkEngine
         _dirty = true;
         return true;
     }
+
+    /// <summary>
+    /// 自检用：直接走一次"选择手势分流"（操作条 / 手柄 / 框内拖动 / 点选都从这儿进）。
+    /// 返回 false = 这次按下没被选择手势接掉（调用方会起框选）。
+    ///
+    /// 为什么把修饰键当参数：点选里的 Shift/Alt 分支要看真键盘，自检没法按着 Shift 跑，
+    /// 于是"读键盘"这一步留在调用方（鼠标按下那处），判定函数保持纯逻辑。
+    /// </summary>
+    internal bool SelectionGestureForTest(float x, float y, bool shift = false, bool alt = false)
+        => TryBeginSelectionGesture(x, y, shift, alt);
+
+    /// <summary>自检用：结束一次选择手势（松手）。</summary>
+    internal void EndSelectionGestureForTest() => EndSelDrag();
 
     /// <summary>
     /// 拖动中：每帧都从**按下那一刻的变换**重算，而不是在上一帧结果上继续乘。
@@ -2483,12 +2749,40 @@ public class InkEngine
 
         Doc.Selected.Clear();
         foreach (var t in _dragTargets) Doc.Selected.Add(t);
-        Doc.ApplyTransform(_selDragMatrix);
+        // **一点没移动就别进撤销栈**：按一下选中框（或者点选一条）原本会多出一条
+        // "原样"的撤销记录——点选一多，撤销栈里全是这种空记录。
+        if (_pendingClone != null)
+        {
+            // 拖出副本：**插入副本 + 移动副本 = 一步撤销**（拖错了按一次就全回去）。
+            if (_selDragMatrix.IsIdentity)
+            {
+                Doc.CommitCompound(_pendingClone);
+            }
+            else
+            {
+                var moveAct = new TransformObjectsAction(Doc.Selected, _selDragMatrix);
+                moveAct.Redo(Doc);
+                Doc.CommitCompound(_pendingClone, moveAct);
+            }
+            _pendingClone = null;
+        }
+        else if (!_selDragMatrix.IsIdentity)
+        {
+            Doc.ApplyTransform(_selDragMatrix);
+        }
+
+        // "点一下把多选收窄成单选"：按下时命中了一条、而这一次**一点没移动** → 只留它
+        // （PPT/Figma 的行为）。移动过就正常整体搬，不收窄。
+        if (_dragIsMove && _dragHitStroke != null && _selDragMatrix.IsIdentity
+            && Doc.Selected.Count > 1 && Doc.Selected.Contains(_dragHitStroke))
+            Doc.SelectOnly(new[] { _dragHitStroke });
 
         _dragTargets = null;
         _dragStartXform = null;
         _dragHandle = SelHandle.None;
         _dragIsMove = false;
+        _dragHitStroke = null;
+        _pendingClone = null;
         _selDragMatrix = Matrix3x2.Identity;
         _dirty = true;
     }
@@ -2501,7 +2795,10 @@ public class InkEngine
     {
         switch (index)
         {
-            case 0: Doc.DuplicateSelected(); break;
+            // 0 = 复制：**进入/退出"复制拖拽模式"**，不是"点一下原地克隆一份"。
+            // 抄 InkClass 的结论：点击即克隆那版"副本固定偏移 24px、落点不可控"，已废弃；
+            // 现在点图标只进模式（图标高亮），之后按住选中内容拖 = 拖出副本，可连续多份。
+            case 0: CopyDragArmed = !CopyDragArmed; break;
             case 1: Doc.DeleteSelected(); break;
 
             // 翻转绕**框自己的轴**：斜着的对象应该在自己那套坐标里翻，
@@ -2513,6 +2810,8 @@ public class InkEngine
 
         }
         Laser.Clear();
+        // 删除之后选区可能空了；模式跟着选区走（InkClass 同款：选区没了就退出）。
+        if (Doc.Selected.Count == 0) CopyDragArmed = false;
         _dirty = true;
     }
 

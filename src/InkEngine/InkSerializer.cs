@@ -58,8 +58,11 @@ internal static class InkSerializer
     ///   · v2：对象可以带**图像像素**（截图 / 粘贴的图）；
     ///   · v3：去掉了每条笔画的"笔锋预设"字节（手写美化整层已删除，
     ///         但读 v1/v2 时仍要把那个字节消费掉，否则后面的字段会错位）。
+    ///   · v4：每条笔画多一段**擦除区间表**（像素橡皮擦掉了哪几段，见 Stroke.Erased）。
+    ///         这是"一条笔迹上记区间"而不是把笔迹拆成几个对象的关键——
+    ///         存下来之后，一块被擦掉中间一段的板书重开还是**一条**笔迹。
     /// </summary>
-    public const int FormatVersion = 3;
+    public const int FormatVersion = 4;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -142,6 +145,15 @@ internal static class InkSerializer
             w.Write(s.Image.Height);
             w.Write(s.Image.Bgra.Length);
             w.Write(s.Image.Bgra);
+        }
+
+        // ---- v4：擦除区间表 ----
+        // 参数 = 点序号（可以带小数），成对写。绝大多数笔画是 0 对，所以只多 4 个字节。
+        w.Write(s.Erased.Count);
+        foreach (var (a, b) in s.Erased)
+        {
+            w.Write(a);
+            w.Write(b);
         }
     }
 
@@ -265,6 +277,20 @@ internal static class InkSerializer
                 var pix = r.ReadBytes(len);
                 if (pix.Length != len) throw new InvalidDataException("图像像素数据不完整。");
                 s.Image = ImageData.Adopt(iw, ih, pix, hasAlpha: true);
+            }
+        }
+
+        if (version >= 4)
+        {
+            int nErased = r.ReadInt32();
+            if (nErased < 0 || nErased > 1_000_000)
+                throw new InvalidDataException($"擦除区间数量不合理：{nErased}。");
+            for (int i = 0; i < nErased; i++)
+            {
+                float a = r.ReadSingle();
+                float b = r.ReadSingle();
+                if (b < a) (a, b) = (b, a);
+                s.Erased.Add((a, b));       // 文件里的表本来就是有序的，原样收下
             }
         }
         return s;

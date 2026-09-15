@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using Vortice.Direct2D1;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
@@ -1025,6 +1026,59 @@ internal sealed class OverlayWindow : IDisposable
     /// <summary>供分辨率实测复用同一套绘制路径。</summary>
     public void DrawStrokeForTest(Stroke s) => DrawStroke(s);
 
+    /// <summary>
+    /// 把一批对象画到**离屏位图**上并读回 BGRA（复制到剪贴板时给外部程序那张图用）。
+    ///
+    /// 背景是**全透明**——粘到别处时不该带上我们的白底或桌面。
+    /// <paramref name="region"/> 是这批对象在画布坐标里的范围（调用方算好，含一点留白），
+    /// 位图尺寸 = 它的像素尺寸（画布坐标就是物理像素，1:1）。
+    /// 返回 null = 建位图/绘制失败（调用方就当"这次没图"，对象格式照放）。
+    /// </summary>
+    public byte[] RenderStrokesToBgra(IReadOnlyList<Stroke> strokes, RectF region, int w, int h)
+    {
+        if (_ctx == null || strokes == null || strokes.Count == 0 || w <= 0 || h <= 0) return null;
+
+        var pf = new Vortice.DCommon.PixelFormat(
+            Vortice.DXGI.Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied);
+        ID2D1Bitmap1 target = null, cpu = null;
+        try
+        {
+            target = _ctx.CreateBitmap(new SizeI(w, h), IntPtr.Zero, 0,
+                new BitmapProperties1(pf, 96f, 96f, BitmapOptions.Target | BitmapOptions.CannotDraw));
+            cpu = _ctx.CreateBitmap(new SizeI(w, h), IntPtr.Zero, 0,
+                new BitmapProperties1(pf, 96f, 96f, BitmapOptions.CpuRead | BitmapOptions.CannotDraw));
+
+            _ctx.Target = target;
+            _ctx.BeginDraw();
+            _ctx.Clear(new Color4(0f, 0f, 0f, 0f));
+            _ctx.Transform = Matrix3x2.CreateTranslation(-region.MinX, -region.MinY);
+            foreach (var s in strokes) DrawStroke(s);
+            _ctx.Transform = Matrix3x2.Identity;
+            var hr = _ctx.EndDraw();
+            _ctx.Target = null;
+            if (hr.Failure) { LastError = "复制到剪贴板的离屏绘制失败: " + hr.Description; return null; }
+
+            // D2D 位图 → CPU 可读位图 → 拷进内存
+            cpu.CopyFromBitmap(new System.Drawing.Point(0, 0), target);
+            var m = cpu.Map(MapOptions.Read);
+            var buf = new byte[w * h * 4];
+            for (int y = 0; y < h; y++)
+                Marshal.Copy(IntPtr.Add(m.Bits, (int)(y * m.Pitch)), buf, y * w * 4, w * 4);
+            cpu.Unmap();
+            return buf;
+        }
+        catch (Exception ex)
+        {
+            LastError = "复制到剪贴板失败: " + ex.Message;
+            return null;
+        }
+        finally
+        {
+            target?.Dispose();
+            cpu?.Dispose();
+        }
+    }
+
     /// <summary>供分辨率实测复用同一套"擦掉一块"逻辑。</summary>
     public void ClearRectForTest(RectF r)
     {
@@ -1279,7 +1333,7 @@ internal sealed class OverlayWindow : IDisposable
             r.Add(CanvasRectToWindow(ui));   // 选中框也是画布坐标（它跟着墨迹走）
 
             // 操作条在选中框下方，也必须算进来，否则它自己会留下残影。
-            r.Add(CanvasRectToWindow(SelectionHandles.BarRect(sb, dpi).Inflate(4f)));
+            r.Add(CanvasRectToWindow(SelectionHandles.BarRect(sb, dpi, app.ViewportCanvas).Inflate(4f)));
 
             // 旋转度数标签贴在旋转手柄外侧，比选中框本身还高出去一截，
             // 同样必须进脏区；拖动中它每帧都在动，靠 _transientHistory 回溯两帧。
@@ -1454,7 +1508,7 @@ internal sealed class OverlayWindow : IDisposable
         }
 
         // 5) 操作条。放在下方，理由见 DrawSelectionBar 的注释。
-        DrawSelectionBar(b);
+        DrawSelectionBar(b, app.ViewportCanvas);
 
         // 6) 旋转度数标签：只在拖旋转手柄的过程中出现。
         //
@@ -1522,12 +1576,12 @@ internal sealed class OverlayWindow : IDisposable
     /// 图标不是自己画的：路径数据来自微软 Fluent UI System Icons（MIT），
     /// 由 tools/gen-icons.ps1 抓取生成。手画的圆角和光学比例总是差一口气。
     /// </summary>
-    private void DrawSelectionBar(in RectF sel)
+    private void DrawSelectionBar(in RectF sel, in RectF visible)
     {
         float dpi = Dpi / 96f;
         // 布局从 SelectionHandles 取，与命中判定同源：分开写迟早差几个像素，
         // 表现就是"看得见按钮却点不中"。
-        var rect = SelectionHandles.BarRect(sel, dpi);
+        var rect = SelectionHandles.BarRect(sel, dpi, visible);
         var box = new Vortice.RawRectF(rect.MinX, rect.MinY, rect.MaxX, rect.MaxY);
         float radius = 8f * dpi;
         var rounded = new RoundedRectangle(box, radius, radius);
@@ -1550,7 +1604,7 @@ internal sealed class OverlayWindow : IDisposable
 
         for (int i = 0; i < n; i++)
         {
-            var btn = SelectionHandles.BarButtonRect(i, sel, dpi);
+            var btn = SelectionHandles.BarButtonRect(i, sel, dpi, visible);
             DrawIcon(glyphs[i], (btn.MinX + btn.MaxX) * 0.5f - glyphBox * 0.5f,
                      (btn.MinY + btn.MaxY) * 0.5f - glyphBox * 0.5f, glyphBox, iconBrush);
 

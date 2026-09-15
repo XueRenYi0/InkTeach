@@ -198,6 +198,12 @@ internal static class SelectionHandles
         float r = HitRadiusLogical * dpiScale;
         var p = new Vector2(canvasX, canvasY);
 
+        // 细长对象让出"边中点"手柄 —— 理由和下面 RectF 版一模一样（两处都要改，
+        // 这不是复制代码，是同一个判据的两个入口；漏改一处就会出现"某条路径点不中/拖不动"）。
+        var box = f.CanvasAabb;
+        bool thinVertical = (box.MaxY - box.MinY) < r * 2f;
+        bool thinHorizontal = (box.MaxX - box.MinX) < r * 2f;
+
         // 旋转手柄先测：它在框外，不会和四角重叠，但它离上边中点最近，
         // 先测它能避免两个窄命中区互相抢。
         if (Vector2.DistanceSquared(p, CanvasPosition(SelHandle.Rotate, f, dpiScale)) <= r * r)
@@ -212,6 +218,8 @@ internal static class SelectionHandles
         {
             bool isEdge = h is SelHandle.Top or SelHandle.Bottom or SelHandle.Left or SelHandle.Right;
             if (isEdge && !includeEdgeHandles) continue;
+            if (thinVertical && h is SelHandle.Top or SelHandle.Bottom) continue;
+            if (thinHorizontal && h is SelHandle.Left or SelHandle.Right) continue;
             if (Vector2.DistanceSquared(p, CanvasPosition(h, f, dpiScale)) <= r * r) return h;
         }
         return SelHandle.None;
@@ -244,6 +252,16 @@ internal static class SelectionHandles
         float r = HitRadiusLogical * dpiScale;
         var p = new Vector2(canvasX, canvasY);
 
+        // **细长对象（一行字、一条横线）的特例**：上下（或左右）手柄的命中区比对象本身
+        // 还高，会把整个身子盖住——于是"想拖它"变成了"想缩放它"，而且拖不动。
+        // 投影上"拖不动"比"缩不了"气人得多，所以这里：对象在某个方向比手柄的命中直径还窄时，
+        // **把那个方向的"边中点"手柄让出来**（四角和旋转手柄照旧）。
+        // 2026-09-15 由 --seltest 的"复制拖拽"用例暴露：一条 8 逻辑像素宽的横线，
+        // 在正中间按下命中的是"上"手柄。
+        float boxW = b.MaxX - b.MinX, boxH = b.MaxY - b.MinY;
+        bool thinVertical = boxH < r * 2f;      // 竖向太窄 → 让出"上/下"
+        bool thinHorizontal = boxW < r * 2f;    // 横向太窄 → 让出"左/右"
+
         // 旋转手柄先测：它在框外，不会和四角重叠，但它离上边中点的
         // "上"手柄最近，先测它能避免两个窄命中区互相抢。
         if (Vector2.DistanceSquared(p, Position(SelHandle.Rotate, b, dpiScale)) <= r * r)
@@ -258,6 +276,8 @@ internal static class SelectionHandles
         {
             bool isEdge = h is SelHandle.Top or SelHandle.Bottom or SelHandle.Left or SelHandle.Right;
             if (isEdge && !includeEdgeHandles) continue;
+            if (thinVertical && h is SelHandle.Top or SelHandle.Bottom) continue;
+            if (thinHorizontal && h is SelHandle.Left or SelHandle.Right) continue;
             if (Vector2.DistanceSquared(p, Position(h, b, dpiScale)) <= r * r) return h;
         }
         return SelHandle.None;
@@ -439,11 +459,28 @@ internal static class SelectionHandles
     public const float BarGapLogical = 2f;
     /// <summary>选中框下边到操作条的距离（逻辑像素）。</summary>
     public const float BarOffsetLogical = 14f;
+    /// <summary>
+    /// 操作条下边缘与"可见区域下边"的最小距离（逻辑像素）——即**给条一个下限**。
+    ///
+    /// 为什么是"给下限"而不是"翻到选区上方"（用户 2026-09-15 定的）：
+    /// 翻上去会盖住选区上方的板书，而且条的位置会跳来跳去；给下限更稳——条永远在框
+    /// 下方，到了离屏幕下边这么近就**停住**，宁可压住一点选中内容（条画在浮动层上，
+    /// 永远可见、可点）。
+    /// </summary>
+    public const float BarMinBottomMarginLogical = 12f;
+    /// <summary>两侧留白：条不贴屏幕边（逻辑像素）。</summary>
+    public const float BarScreenPaddingLogical = 8f;
     /// <summary>图标框边长（逻辑像素）。Fluent 图标自带内边距，所以比字形大一点。</summary>
     public const float BarIconBoxLogical = 22f;
 
-    /// <summary>操作条在画布坐标里的矩形。</summary>
-    public static RectF BarRect(in RectF sel, float dpi)
+    /// <summary>
+    /// 操作条在画布坐标里的矩形。<paramref name="visible"/> 是当前可见的画布范围
+    /// （`InkEngine.ViewportCanvas`）。
+    ///
+    /// **渲染和命中必须调这一个函数**（分开写迟早差几个像素，表现就是"看得见点不中"）。
+    /// 夹取规则只有两条：横向夹在可见区域内；纵向上边不越顶、**下边不低于下限**。
+    /// </summary>
+    public static RectF BarRect(in RectF sel, float dpi, in RectF visible)
     {
         float btnW = BarButtonWidthLogical * dpi;
         float h = BarHeightLogical * dpi;
@@ -453,13 +490,27 @@ internal static class SelectionHandles
 
         float x = (sel.MinX + sel.MaxX) * 0.5f - w * 0.5f;
         float y = sel.MaxY + BarOffsetLogical * dpi;
+
+        if (!visible.IsEmpty)
+        {
+            float margin = BarScreenPaddingLogical * dpi;
+            float left = visible.MinX + margin;
+            float right = MathF.Max(left, visible.MaxX - margin - w);
+            x = Math.Clamp(x, left, right);
+
+            // 上边不越顶；**下边不低于下限**（用户定的"给下限，不翻面"）。
+            float top = visible.MinY + margin;
+            float bottomMost = visible.MaxY - BarMinBottomMarginLogical * dpi - h;
+            y = MathF.Min(y, MathF.Max(top, bottomMost));
+            if (y < top) y = top;
+        }
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
     }
 
     /// <summary>第 i 个按钮的矩形（i 从 0 起）。</summary>
-    public static RectF BarButtonRect(int i, in RectF sel, float dpi)
+    public static RectF BarButtonRect(int i, in RectF sel, float dpi, in RectF visible)
     {
-        var bar = BarRect(sel, dpi);
+        var bar = BarRect(sel, dpi, visible);
         float btnW = BarButtonWidthLogical * dpi;
         float pad = BarPaddingLogical * dpi;
         float gap = BarGapLogical * dpi;
@@ -468,13 +519,13 @@ internal static class SelectionHandles
     }
 
     /// <summary>点到哪个按钮上了。返回 -1 表示没点到操作条。</summary>
-    public static int BarButtonAt(float x, float y, in RectF sel, float dpi)
+    public static int BarButtonAt(float x, float y, in RectF sel, float dpi, in RectF visible)
     {
-        var bar = BarRect(sel, dpi);
+        var bar = BarRect(sel, dpi, visible);
         if (x < bar.MinX || x > bar.MaxX || y < bar.MinY || y > bar.MaxY) return -1;
         for (int i = 0; i < BarButtonCount; i++)
         {
-            var b = BarButtonRect(i, sel, dpi);
+            var b = BarButtonRect(i, sel, dpi, visible);
             if (x >= b.MinX && x <= b.MaxX) return i;
         }
         return -1;

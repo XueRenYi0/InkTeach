@@ -63,6 +63,10 @@ public struct RectF
     public bool Intersects(RectF o)
         => !IsEmpty && !o.IsEmpty && MinX <= o.MaxX && MaxX >= o.MinX && MinY <= o.MaxY && MaxY >= o.MinY;
 
+    /// <summary>点在不在这个矩形里（点选/操作条这些地方用）。</summary>
+    public bool Contains(float x, float y)
+        => !IsEmpty && x >= MinX && x <= MaxX && y >= MinY && y <= MaxY;
+
     public RectF Inflate(float d) => new()
     {
         MinX = MinX - d, MinY = MinY - d, MaxX = MaxX + d, MaxY = MaxY + d,
@@ -192,6 +196,229 @@ internal sealed class Stroke
 
     /// <summary>是不是图像对象。渲染、命中测试、顶点编辑三处都要按它分流。</summary>
     public bool IsImage => Kind == StrokeKind.Image;
+
+    /// <summary>
+    /// **被擦掉的参数区间**（参数 = 点序号，可以带小数；空表 = 整条完好）。
+    ///
+    /// 2026-09-15 从"把笔迹拆成几个新对象"改成"在一条笔迹上记区间"，四个理由：
+    ///   ① **自相重叠的墨不会混合两次**：剩下的段还在同一条几何里，一次
+    ///      `DrawGeometry` 只混合一次。拆成两个对象就会混合两次——半透明荧光笔
+    ///      在自交处会变深（离屏实测：差 0 → 56）；
+    ///   ② **对象数不涨**：拆对象时，反复擦同一笔会让对象线性增长
+    ///      （一万笔的画面上 25 步切出 3123 个）；
+    ///   ③ **身份不变**：`Id` 不换，选中 / 变换 / 复制粘贴的行为完全不变；
+    ///   ④ 区间记在**参数**上，与变换无关——拆对象时得把变换烘进画布坐标。
+    ///
+    /// 代价（明确接受）：几何缓存要按区间重拼（figure 数与"拆出来的段数"同量级）；
+    /// 命中测试要跳过被擦的段（见 <see cref="DistanceTo"/>）。
+    ///
+    /// 约定：**始终有序、不相邻**（<see cref="AddErased"/> 负责合并）。
+    /// </summary>
+    public readonly List<(float a, float b)> Erased = new();
+
+    /// <summary>最后一个点的参数（参数 = 点序号）。</summary>
+    public float LastParam => Points.Count > 1 ? Points.Count - 1 : 0f;
+
+    public bool HasErased => Erased.Count > 0;
+
+    /// <summary>
+    /// 加一段被擦掉的参数区间（自动裁剪到 [0, LastParam] 并与相邻区间合并）。
+    /// 返回是否真的改变了什么。
+    /// </summary>
+    public bool AddErased(float a, float b)
+    {
+        float lo = MathF.Min(a, b), hi = MathF.Max(a, b);
+        lo = Math.Clamp(lo, 0f, LastParam);
+        hi = Math.Clamp(hi, 0f, LastParam);
+        if (MergeInterval(Erased, lo, hi))
+        {
+            Revision++;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 把一段区间并进一张"有序、互不相邻"的区间表（就地改）。返回是否真的变了。
+    ///
+    /// 抽成静态是为了让像素橡皮能先在**副本**上算好结果再决定要不要动对象——
+    /// 直接改原对象的话，"其实没变化"也会把几何缓存打掉、把块标记成要重画。
+    /// </summary>
+    public static bool MergeInterval(List<(float a, float b)> list, float lo, float hi)
+    {
+        // 零长度区间 = 什么都没擦掉（参数的 1 就是相邻两个采样点的间隔）。
+        if (hi - lo < 1e-3f) return false;
+
+        // 合并判定的余量：参数 1 = 相邻两个采样点的间隔，1e-3 换到屏幕上是千分之一个
+        // 采样间距——远小于一个像素。
+        const float eps = 1e-3f;
+
+        int from = 0;
+        while (from < list.Count && list[from].b < lo - eps) from++;
+
+        float nlo = lo, nhi = hi;
+        int to = from;                       // [from, to) 是要被吃掉的旧区间
+        while (to < list.Count && list[to].a <= nhi + eps)
+        {
+            nlo = MathF.Min(nlo, list[to].a);
+            nhi = MathF.Max(nhi, list[to].b);
+            to++;
+        }
+
+        // 被一个已有区间完整包住 → 状态没变。
+        if (to - from == 1 && list[from].a == nlo && list[from].b == nhi) return false;
+
+        list.RemoveRange(from, to - from);
+        list.Insert(from, (nlo, nhi));
+        return true;
+    }
+
+    /// <summary>给一张区间表算"还剩下哪些连续段"（<see cref="RemainingRuns"/> 的静态版）。</summary>
+    public static List<(float a, float b)> RemainingRunsOf(
+        List<(float a, float b)> list, float lastParam)
+    {
+        var runs = new List<(float a, float b)>();
+        float cursor = 0f;
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (list[i].a > cursor + 1e-4f) runs.Add((cursor, list[i].a));
+            cursor = MathF.Max(cursor, list[i].b);
+        }
+        if (cursor < lastParam - 1e-4f) runs.Add((cursor, lastParam));
+        return runs;
+    }
+
+    /// <summary>整表替换（撤销 / 重做 / 反序列化用）。</summary>
+    public void SetErased(List<(float a, float b)> src)
+    {
+        Erased.Clear();
+        if (src != null) Erased.AddRange(src);
+        Revision++;
+    }
+
+    /// <summary>参数 t 是否落在被擦掉的区间里。</summary>
+    public bool IsParamErased(float t)
+    {
+        for (int i = 0; i < Erased.Count; i++)
+            if (t >= Erased[i].a && t <= Erased[i].b) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// 还剩下的连续段（参数区间），按顺序。空 = 整条都被擦没了。
+    /// 渲染按它拼几何，撤销 / 命中测试也读它。
+    /// </summary>
+    public List<(float a, float b)> RemainingRuns()
+    {
+        var runs = new List<(float a, float b)>();
+        // 单点笔迹（一个圆点）：参数只有一个 0。它没有"长度"可分，所以要么完整
+        // 保留、要么整条被擦掉（后者由像素橡皮那边直接判定并删除，见 EraseRectAt）。
+        if (Points.Count <= 1)
+        {
+            if (Erased.Count == 0) runs.Add((0f, 0f));
+            return runs;
+        }
+        return RemainingRunsOf(Erased, LastParam);
+    }
+
+    /// <summary>参数 t 处的坐标（在两个采样点之间线性插值）。</summary>
+    public Vector2 PointAtParam(float t)
+    {
+        int n = Points.Count;
+        if (n == 0) return default;
+        if (n == 1) return new Vector2(Points[0].X, Points[0].Y);
+        float c = Math.Clamp(t, 0f, n - 1);
+        int i = (int)MathF.Floor(c);
+        if (i >= n - 1) return new Vector2(Points[n - 1].X, Points[n - 1].Y);
+        float f = c - i;
+        return new Vector2(
+            Points[i].X + (Points[i + 1].X - Points[i].X) * f,
+            Points[i].Y + (Points[i + 1].Y - Points[i].Y) * f);
+    }
+
+    /// <summary>参数 t 处的压力（拆段时给新段的端点用，别把压感丢掉）。</summary>
+    public float PressureAtParam(float t)
+    {
+        int n = Points.Count;
+        if (n == 0) return 0.5f;
+        if (n == 1) return Points[0].P;
+        float c = Math.Clamp(t, 0f, n - 1);
+        int i = (int)MathF.Floor(c);
+        if (i >= n - 1) return Points[n - 1].P;
+        float f = c - i;
+        return Points[i].P + (Points[i + 1].P - Points[i].P) * f;
+    }
+
+    /// <summary>参数 t 处的时间戳（同上）。</summary>
+    public double TimeAtParam(float t)
+    {
+        int n = Points.Count;
+        if (n == 0) return 0;
+        if (n == 1) return Points[0].T;
+        float c = Math.Clamp(t, 0f, n - 1);
+        int i = (int)MathF.Floor(c);
+        if (i >= n - 1) return Points[n - 1].T;
+        float f = c - i;
+        return Points[i].T + (Points[i + 1].T - Points[i].T) * f;
+    }
+
+    /// <summary>
+    /// 把这一条按**剩下的段**拆成几个新对象（局部坐标 + 原变换，样式继承）。
+    /// 只有"用户要单独摆弄某一段"时才调用，见 <see cref="InkDocument.SplitErasedSelection"/>。
+    /// </summary>
+    public List<Stroke> SplitIntoRuns()
+    {
+        var parts = new List<Stroke>();
+        foreach (var (a, b) in RemainingRuns())
+        {
+            var p = new Stroke
+            {
+                Tool = Tool, Kind = StrokeKind.Freehand,
+                Color = Color, Width = Width, Transform = Transform,
+            };
+            var start = PointAtParam(a);
+            p.AddPoint(start.X, start.Y, PressureAtParam(a), TimeAtParam(a));
+            for (int i = 1; i < Points.Count; i++)
+            {
+                if (i < a - 1e-6f) continue;
+                if (i > b + 1e-6f) break;
+                p.AddPoint(Points[i].X, Points[i].Y, Points[i].P, Points[i].T);
+            }
+            var end = PointAtParam(b);
+            p.AddPoint(end.X, end.Y, PressureAtParam(b), TimeAtParam(b));
+            parts.Add(p);
+        }
+        return parts;
+    }
+
+    /// <summary>
+    /// 把**图形**（直线 / 矩形 / 椭圆 / 箭头）熔成自由笔迹：按它自己的轮廓折线取点，
+    /// 坐标换算到画布、变换归一。
+    ///
+    /// 为什么：用户 2026-09-15 定"**橡皮擦中图形，断开了也要单独算**"——图形是参数化对象
+    /// （两个端点），不先变成点列就没法"擦掉中间、剩下两截"。熔完就走和墨迹一模一样的那条路。
+    ///
+    /// 代价（明确接受）：熔完它**不再是图形**——没有顶点手柄、不能改形状参数。
+    /// 这一步靠撤销回退（原图形整个进撤销栈）。
+    ///
+    /// 轮廓顺序（见 <see cref="ShapeOutline"/>）：直线 2 点、矩形 5 点、椭圆 33 点；
+    /// 箭头是 [尾, 尖, 上翼, 尖, 下翼]——中间那两段是**沿着已经画过的翼走回去**，
+    /// 不会凭空多出墨（不透明笔下看不出双画，箭头本来就是用笔画的）。
+    /// </summary>
+    public Stroke MeltToFreehand()
+    {
+        var m = new Stroke
+        {
+            Tool = Tool, Kind = StrokeKind.Freehand,
+            Color = Color, Width = Width,
+        };
+        foreach (var p in ShapeOutline())
+        {
+            var q = Transform.IsIdentity ? p : Vector2.Transform(p, Transform);
+            m.AddPoint(q.X, q.Y, 1f, 0);
+        }
+        return m;
+    }
 
     /// <summary>
     /// 几何包围盒，**局部坐标**（对象自己的坐标系，不看 Transform）。
@@ -331,6 +558,8 @@ internal sealed class Stroke
         // 图像像素**共享不复制**：一张截图几兆字节，复制一份纯属浪费；
         // 而且像素是不可变的（没有任何代码会改它），共享没有风险。
         c.Image = Image;
+        // 擦除区间要跟着复制：不然"复制一份"会把已经擦掉的部分又画回来。
+        c.Erased.AddRange(Erased);
         return c;
     }
 
@@ -530,7 +759,12 @@ internal sealed class Stroke
         float best = float.MaxValue;
         for (int i = 1; i < Points.Count; i++)
         {
-            float d2 = DistToSegmentSq(x, y, Points[i - 1].X, Points[i - 1].Y, Points[i].X, Points[i].Y);
+            float d2 = DistToSegmentSq(x, y, Points[i - 1].X, Points[i - 1].Y,
+                                      Points[i].X, Points[i].Y, out float t);
+            // **被擦掉的那一段不算墨**：拆对象的时候缺口是真的（那一段对象都没了），
+            // 改成区间表之后缺口只是"不画"，所以命中测试必须自己跳过——否则拿橡皮
+            // 去点一个明明已经擦空的缺口，会把整条笔迹删掉。
+            if (IsParamErased((i - 1) + t)) continue;
             if (d2 < best) best = d2;
         }
 
@@ -540,11 +774,16 @@ internal sealed class Stroke
     }
 
     private static float DistToSegmentSq(float px, float py, float ax, float ay, float bx, float by)
+        => DistToSegmentSq(px, py, ax, ay, bx, by, out _);
+
+    /// <summary>点到线段的距离平方；顺带给出最近点的参数 t（0..1），命中测试要用。</summary>
+    private static float DistToSegmentSq(float px, float py, float ax, float ay,
+                                         float bx, float by, out float t)
     {
         float vx = bx - ax, vy = by - ay;
         float wx = px - ax, wy = py - ay;
         float len2 = vx * vx + vy * vy;
-        float t = len2 <= 1e-6f ? 0f : Math.Clamp((wx * vx + wy * vy) / len2, 0f, 1f);
+        t = len2 <= 1e-6f ? 0f : Math.Clamp((wx * vx + wy * vy) / len2, 0f, 1f);
         float dx = wx - vx * t, dy = wy - vy * t;
         return dx * dx + dy * dy;
     }
@@ -761,10 +1000,26 @@ internal sealed class Stroke
     {
         var geo = factory.CreatePathGeometry();
         using var sink = geo.Open();
-        sink.BeginFigure(new Vector2(Points[0].X, Points[0].Y), FigureBegin.Hollow);
-        for (int i = 1; i < Points.Count; i++)
-            sink.AddLine(new Vector2(Points[i].X, Points[i].Y));
-        sink.EndFigure(FigureEnd.Open);
+
+        // **每条剩下的段一个 figure，但它们在同一条几何里**——这一点是关键：
+        // 一次 DrawGeometry 只混合一次，所以半透明荧光笔即使自相重叠也不会变深。
+        // 拆成两个对象（两个 DrawGeometry）就会混合两次（实测差 0 → 56）。
+        foreach (var (a, b) in RemainingRuns())
+        {
+            sink.BeginFigure(PointAtParam(a), FigureBegin.Hollow);
+            for (int i = 1; i < Points.Count; i++)
+            {
+                if (i < a - 1e-6f) continue;
+                if (i > b + 1e-6f) break;
+                sink.AddLine(new Vector2(Points[i].X, Points[i].Y));
+            }
+            // 终点只在"切出来的插值点"时才补。**必须是这个条件**：如果这一段的终点正好落在
+            // 某个采样点上，上面的循环已经把它加进去了，再补一次就给几何多出一个零长段——
+            // 没被擦过的笔迹（a=0、b=末尾）必须和"没有区间表"时**逐点一致**，
+            // 否则等于凭空改了笔迹几何。
+            if (MathF.Abs(b - MathF.Round(b)) > 1e-6f) sink.AddLine(PointAtParam(b));
+            sink.EndFigure(FigureEnd.Open);
+        }
         sink.Close();
         return geo;
     }
@@ -830,6 +1085,42 @@ internal sealed class AddStrokesAction : EditAction
     public override RectF AffectedAfter => EditRegion.Of(Strokes);
 }
 
+/// <summary>
+/// 把几步合成**一步撤销**。现在只有一个用处：**拖出副本**（插入副本 + 移动副本）——
+/// 用户拖错了一下，按一次撤销就该回到"什么都没发生"。
+///
+/// 约定和别的动作一样：**效果已经应用过了**，这里只负责记账；撤销时反着放回去。
+/// </summary>
+internal sealed class CompoundAction : EditAction
+{
+    public readonly List<EditAction> Steps = new();
+
+    public override int HeldStrokes
+    {
+        get { int n = 0; foreach (var a in Steps) n += a.HeldStrokes; return n; }
+    }
+
+    public override RectF AffectedBefore
+    {
+        get { var r = RectF.Empty; foreach (var a in Steps) r.Add(a.AffectedBefore); return r; }
+    }
+
+    public override RectF AffectedAfter
+    {
+        get { var r = RectF.Empty; foreach (var a in Steps) r.Add(a.AffectedAfter); return r; }
+    }
+
+    public override void Undo(InkDocument doc)
+    {
+        for (int i = Steps.Count - 1; i >= 0; i--) Steps[i].Undo(doc);
+    }
+
+    public override void Redo(InkDocument doc)
+    {
+        foreach (var a in Steps) a.Redo(doc);
+    }
+}
+
 internal sealed class RemoveStrokesAction : EditAction
 {
     public readonly List<(int index, Stroke stroke)> Items = new();
@@ -840,95 +1131,180 @@ internal sealed class RemoveStrokesAction : EditAction
 }
 
 /// <summary>
-/// 像素橡皮：把被擦到的笔画**换成擦剩下的几段**。
+/// 像素橡皮：往笔画的**擦除区间表**里加区间（见 <see cref="Stroke.Erased"/>）。
 ///
-/// 一条记录 = 一条原来的笔画。parts 为空 = 这一笔整条都被擦掉了（图形就是这样，
-/// 或者细笔整条落在矩形里）——也走这条路径，于是"擦一次"永远只有一个撤销动作，
-/// 不管那一下切开了几条、切成了几段。
+/// 一条记录 = 一条**原本就存在**的笔画，两种情况：
+///   · 还在（只是被擦掉了几段）→ 撤销就是把区间表换回 Before、重做换回 After；
+///   · 整条被擦没了（图形、或细笔整条落在块里）→ 从文档里拿走，撤销时按 Anchor 放回去。
 ///
-/// **下标为什么不直接存**：一次拖拽里前面擦掉几笔，后面几条的下标就全变了。
-/// 存下来的下标到了撤销那一刻已经没有意义。这里存的是 <see cref="Item.UnaffectedBefore"/>
-/// ——"排在这一笔前面的、**没被本批橡皮动过的**笔画有几条"。这个数在整个拖拽过程中
-/// 恒定，撤销时先把本批涉及的全部拿出来，剩下的就是那些"没动过的"，按这个数插回去，
-/// 位置永远对得上（顺序也因此不会被撤销弄乱）。
+/// 一次拖拽 = 一条记录（不管擦到几条、擦了几刀），所以"擦一次 = 一步撤销"照旧。
+///
+/// 和上一版（把笔迹拆成几个新对象）比，这里少了一大堆麻烦：对象不动，就没有
+/// "碎片又被人擦到要并回去""撤销时把上一版碎片放回来"这些事情，`Id` 也保持不变。
 /// </summary>
-internal sealed class SplitStrokesAction : EditAction
+internal sealed class EraseIntervalsAction : EditAction
 {
     internal sealed class Item
     {
-        /// <summary>排在这一笔前面的"干净"笔画条数（见类注释）。</summary>
-        public int UnaffectedBefore;
+        public Stroke S;
+        /// <summary>这一笔**原本**的擦除区间表（撤销时换回来）。</summary>
+        public List<(float a, float b)> Before = new();
+        /// <summary>这一笔**擦完之后**的擦除区间表（重做时换回来）。</summary>
+        public List<(float a, float b)> After = new();
+        /// <summary>整条被擦没了 → 从文档里拿走（撤销要放回去），Anchor 是它的位置。</summary>
+        public bool Removed;
+        public int Anchor;
+        /// <summary>这一次真正变了的那一块（撤销/重做也用它当脏区，别整条重画）。</summary>
+        public RectF Paint = RectF.Empty;
 
+        /// <summary>
+        /// 撤销时要还原成什么。默认就是 <see cref="S"/>；**图形被熔成笔迹时记的是原来那个图形**
+        /// （S 已经换成熔出来的笔迹了）。
+        /// </summary>
+        public Stroke UndoOriginal;
+    }
+
+    public readonly List<Item> Items = new();
+
+    /// <summary>这一批真正需要重画的范围（画布坐标，由 EraseRectAt 累加）。</summary>
+    public RectF Paint = RectF.Empty;
+
+    public Item FindItem(Stroke s)
+    {
+        for (int i = 0; i < Items.Count; i++)
+            if (ReferenceEquals(Items[i].S, s)) return Items[i];
+        return null;
+    }
+
+    /// <summary>一次拖拽里同一笔被擦了好几刀：并到同一条记录上（Before 保持最初那份）。</summary>
+    public Item Touch(Stroke s)
+    {
+        var it = FindItem(s);
+        if (it != null) return it;
+        it = new Item { S = s, Before = new List<(float a, float b)>(s.Erased) };
+        Items.Add(it);
+        return it;
+    }
+
+    /// <summary>
+    /// 算完发现"这一刀其实什么也没改变"（粗筛进来的、或者这一段早就被擦过了）：
+    /// 把**刚刚新建**的这条记录撤掉，别让撤销栈里多出一步空操作。
+    /// 调用方负责只在"这条记录是这一刀才建的"时候调——已经改过的那种不能丢。
+    /// </summary>
+    public void Drop(Item it) => Items.Remove(it);
+
+    public override int HeldStrokes => Items.Count;
+
+    /// <summary>
+    /// 只报"真正变化的那一块"。基类默认拿动过的对象的包围盒并集当脏区，那太粗了：
+    /// 一条笔迹被擦掉中间一小段，框外的墨一点没变，按整条标脏会把这条墨跨过的每一块
+    /// 都拖去重画（实测一万笔时每步重画 11.3 块，而橡皮只盖住 2~4 块）。
+    /// </summary>
+    public override RectF AffectedBefore => Paint;
+    public override RectF AffectedAfter => Paint;
+
+    public override void Undo(InkDocument doc) => Apply(doc, restored: true);
+    public override void Redo(InkDocument doc) => Apply(doc, restored: false);
+
+    private void Apply(InkDocument doc, bool restored)
+    {
+        // ① 区间表换回去（撤销）/ 换回来（重做）。
+        foreach (var it in Items)
+            doc.SetErased(it.S, restored ? it.Before : it.After, it.Paint);
+
+        // ② 整条被擦没的那些：撤销时放回去、重做时再拿走。
+        //
+        // 位置用 Anchor——"排在这一笔前面的、没被本批拿走的笔画有几条"。下标在拖动过程中
+        // 一直在变（每拿走一条，后面的就少 1），只有这个数不变，所以按它插回去不会错位。
+        _removed.Clear();
+        foreach (var it in Items) if (it.Removed) _removed.Add(it);
+        if (_removed.Count == 0) return;
+
+        _removed.Sort((x, y) => x.Anchor.CompareTo(y.Anchor));
+        if (restored)
+        {
+            int inserted = 0;
+            foreach (var it in _removed)
+                doc.InsertStroke(it.Anchor + inserted++, it.S, it.Paint);
+        }
+        else
+        {
+            foreach (var it in _removed) doc.RemoveStroke(it.S, it.Paint);
+        }
+    }
+
+    private readonly List<Item> _removed = new();
+}
+
+/// <summary>
+/// "把擦断的笔迹拆成独立对象"这一步的撤销记录：一条原笔迹 → 它的每一段各成一个对象。
+///
+/// 只在**用户选中了它**的时候才发生（见 <see cref="InkDocument.SplitErasedSelection"/>）。
+/// 平时像素橡皮只往区间表里加区间，不拆——那样自交不变深、对象数不涨、身份也不变。
+/// </summary>
+internal sealed class SplitErasedAction : EditAction
+{
+    internal sealed class Item
+    {
+        /// <summary>原笔迹在列表里的下标（**拖拽前那一套坐标系**，见 InkDocument.EndErase）。</summary>
+        public int Index;
         /// <summary>擦之前的那一条（整条进撤销栈，回退时原样回来）。</summary>
         public Stroke Original;
-
-        /// <summary>擦剩下的几段。空 = 整条都擦没了。</summary>
+        /// <summary>它**原本**的擦除区间表（老存档里可能就有区间；回退时要一并还原）。</summary>
+        public List<(float a, float b)> Before = new();
+        /// <summary>擦剩下的几段，各自是独立对象。**空 = 整条被擦没了**。</summary>
         public readonly List<Stroke> Parts = new();
     }
 
     public readonly List<Item> Items = new();
 
     /// <summary>
-    /// **真正需要重画的那一块**（画布坐标，由 <see cref="InkDocument.EraseRectAt"/> 累加）。
-    ///
-    /// 为什么要单独记：基类默认拿"动过的对象的包围盒并集"当脏区，那是**保守但很粗**的
-    /// 估计——把一个对象换成两段时，框外的墨和原来**一模一样**，只有橡皮盖的那一块变了。
-    /// 按整条的包围盒标脏，会把这条墨跨过的每一块都拖去重画。实测（一万笔的极端画面）：
-    /// 每步重画 11 块，而橡皮只盖住 2 块。改成这个之后，"重画几块"就等于"橡皮盖了几块"。
+    /// 这一次真正变化的那一块（画布坐标）。给了就用它当脏区，不给就退回"动过的对象的
+    /// 包围盒并集"（保守但很粗，见 EraseIntervalsAction 的注释）。
     /// </summary>
     public RectF Paint = RectF.Empty;
 
-    /// <summary>本批切出来的碎片 → 它属于哪一条记录。同一条碎片被再擦一次时要并回去。</summary>
-    private readonly Dictionary<Stroke, Item> _byPart = new();
-
-    public Item OwnerOf(Stroke s) => _byPart.TryGetValue(s, out var it) ? it : null;
-
-    public void Register(Item item, List<Stroke> parts)
-    {
-        for (int i = 0; i < parts.Count; i++) _byPart[parts[i]] = item;
-    }
-
     public override int HeldStrokes
     {
-        get
-        {
-            int n = 0;
-            foreach (var it in Items) n += 1 + it.Parts.Count;
-            return n;
-        }
+        get { int n = 0; foreach (var it in Items) n += 1 + it.Parts.Count; return n; }
     }
 
-    public override RectF AffectedBefore => Paint;
-    public override RectF AffectedAfter => Paint;
+    public override RectF AffectedBefore => Paint.IsEmpty ? EditRegion.Of(Items.Select(it => it.Original)) : Paint;
+    public override RectF AffectedAfter => Paint.IsEmpty ? EditRegion.Of(Items.SelectMany(it => it.Parts)) : Paint;
 
-    public override void Undo(InkDocument doc) => Rebuild(doc, restored: true);
-    public override void Redo(InkDocument doc) => Rebuild(doc, restored: false);
+    public override void Undo(InkDocument doc) => Apply(doc, restored: true);
+    public override void Redo(InkDocument doc) => Apply(doc, restored: false);
 
-    private void Rebuild(InkDocument doc, bool restored)
+    private void Apply(InkDocument doc, bool restored)
     {
-        // 先把本批动过的全部拿出来（原笔画 + 所有碎片）。按引用删，不看下标。
+        // 先把本批涉及的都拿出来（按引用删，不看下标）。
         foreach (var it in Items)
         {
             doc.RemoveStroke(it.Original);
             for (int i = 0; i < it.Parts.Count; i++) doc.RemoveStroke(it.Parts[i]);
         }
 
-        // 再按"前面有几条干净笔画"升序放回去：插入点 = 干净笔画数 + 已经放回去的数量。
-        // 同一插入点的（相邻几条被一起擦掉）保持登记顺序。
-        var order = Items.OrderBy(it => it.UnaffectedBefore).ToList();
-        int inserted = 0;
+        // 再按下标升序放回去。插入点 = 原下标 - 已经处理过的条数 + 前面已经放回去的笔画数
+        // （登记时用的是同一套下标：拆分那一步是**按下标降序**逐条处理的，前面的处理不会
+        // 动到后面还没处理的下标）。
+        var order = Items.OrderBy(it => it.Index).ToList();
+        int handled = 0, placed = 0;
         foreach (var it in order)
         {
+            int pos = it.Index - handled + placed;
             if (restored)
             {
-                doc.InsertStroke(it.UnaffectedBefore + inserted, it.Original);
-                inserted++;
+                doc.InsertStroke(pos, it.Original);
+                // 老存档里的区间要跟着还原（新擦的笔迹 Before 是空的）。
+                doc.SetErased(it.Original, it.Before, Paint.IsEmpty ? null : Paint);
+                placed += 1;
             }
             else
             {
-                for (int i = 0; i < it.Parts.Count; i++)
-                    doc.InsertStroke(it.UnaffectedBefore + inserted++, it.Parts[i]);
+                for (int i = 0; i < it.Parts.Count; i++) doc.InsertStroke(pos + i, it.Parts[i]);
+                placed += it.Parts.Count;
             }
+            handled++;
         }
     }
 }
@@ -1073,6 +1449,14 @@ internal sealed class InkDocument
     public int Version;
 
     public long TotalPoints;
+
+    /// <summary>
+    /// 全文档的**擦除区间总段数**（像素橡皮擦了多少段）。
+    ///
+    /// 维护成 O(1) 的计数而不是每次遍历统计：手测台要按秒采样它（见 EraserTelemetry），
+    /// 遍历一万笔只为了显示一个数，纯属浪费。增删改三处跟着维护。
+    /// </summary>
+    public int TotalIntervals;
     public int UndoDepth => _undo.Count;
     public int RedoDepth => _redo.Count;
 
@@ -1113,6 +1497,7 @@ internal sealed class InkDocument
         Strokes.Add(s);
         AppendedSinceRender.Add(s);
         TotalPoints += s.Points.Count;
+        TotalIntervals += s.Erased.Count;
         _grid.Insert(s);
         Dirty.Add(s.PaddedBounds);
         Version++;
@@ -1128,13 +1513,14 @@ internal sealed class InkDocument
     /// 所以缓存里框外那些块仍然是有效的。按"整条的范围"标脏会把这条墨跨过的每一块
     /// 都拖去重画——实测一万笔时每步重画 11 块，而橡皮明明只盖住 2 块。
     /// </summary>
-    private void InsertStroke(int index, Stroke s, RectF? dirty)
+    public void InsertStroke(int index, Stroke s, RectF? dirty)
     {
         // 插到中间（撤销"删除"走这里）：顺序变了，块必须整块重画。
         StructureChangedSinceRender = true;
         if (s.Id == 0) s.Id = NextId();
         Strokes.Insert(Math.Clamp(index, 0, Strokes.Count), s);
         TotalPoints += s.Points.Count;
+        TotalIntervals += s.Erased.Count;
         _grid.Insert(s);
         Dirty.Add(dirty ?? s.PaddedBounds);
         Version++;
@@ -1143,9 +1529,12 @@ internal sealed class InkDocument
     public void RemoveStroke(Stroke s) => RemoveStroke(s, null);
 
     /// <summary>删一条笔画。脏区同 <see cref="InsertStroke(int, Stroke, RectF?)"/>（像素橡皮专用）。</summary>
-    private void RemoveStroke(Stroke s, RectF? dirty)
+    public void RemoveStroke(Stroke s, RectF? dirty)
     {
         if (!Strokes.Remove(s)) return;
+        // **对象从文档里消失了，就不能还留在选中集合里**（否则选中框会挂着一个不存在的东西，
+        // 拖它还会给它做变换）。擦除、删除、撤销"新增"都会走到这里——集中一处兜底。
+        Selected.Remove(s);
         StructureChangedSinceRender = true;
         _grid.Remove(s);
         // 关键：笔画被移除时必须释放缓存的 Direct2D 几何，否则每擦一次、
@@ -1153,6 +1542,7 @@ internal sealed class InkDocument
         // 撤销/重做会重建几何，代价很小；不释放的话一节课能涨到 GB 级。
         s.Release();
         TotalPoints -= s.Points.Count;
+        TotalIntervals -= s.Erased.Count;
         Dirty.Add(dirty ?? s.PaddedBounds);
         Version++;
     }
@@ -1165,6 +1555,7 @@ internal sealed class InkDocument
         Strokes.Clear();
         Selected.Clear();
         TotalPoints = 0;
+        TotalIntervals = 0;
         Dirty.MarkFull();
         Version++;
     }
@@ -1232,6 +1623,50 @@ internal sealed class InkDocument
         act.Redo(this);
         Commit(act);
         return true;
+    }
+
+    /// <summary>
+    /// 复制拖拽用：把当前选中**原地克隆一份**插进文档，**不进撤销栈**——调用方会在松手时
+    /// 把"插入副本 + 拖动副本"合成一步（见 <see cref="CommitCompound"/>）。
+    ///
+    /// 为什么是"原地重合"而不是像 Ctrl+D 那样偏移 24 像素：拖出副本的手感就是
+    /// "从原件上拖出来一份"，起点必须重合（抄 InkClass 的结论：固定偏移的落点不可控）。
+    /// </summary>
+    public AddStrokesAction CloneSelectedInPlace()
+    {
+        var act = new AddStrokesAction();
+        if (Selected.Count == 0) return act;
+
+        // 护栏和 Ctrl+D 同一套（见 DuplicateSelected 的注释）
+        foreach (var s in Selected)
+        {
+            if (Strokes.Count + act.Strokes.Count + 1 > MaxObjects)
+            {
+                LastRejectReason = $"批注数量将达到上限 {MaxObjects}，这一份副本没复制。";
+                Console.WriteLine("[拒绝] " + LastRejectReason);
+                break;
+            }
+            var c = s.Clone();
+            act.Strokes.Add(c);
+            AppendStroke(c);        // 这一步给它分配 Id
+        }
+        if (act.Strokes.Count > 0)
+        {
+            Selected.Clear();
+            Selected.AddRange(act.Strokes);
+        }
+        return act;
+    }
+
+    /// <summary>
+    /// 把几步**合成一步**提交。调用方保证这些效果**已经应用过**了
+    /// （副本已插入、变换在拖动中逐帧设过），这里只记账。
+    /// </summary>
+    public void CommitCompound(params EditAction[] steps)
+    {
+        var c = new CompoundAction();
+        foreach (var a in steps) if (a != null) c.Steps.Add(a);
+        if (c.Steps.Count > 0) Commit(c);
     }
 
     /// <summary>
@@ -1373,6 +1808,19 @@ internal sealed class InkDocument
         Commit(act);
     }
 
+    /// <summary>一次插入多条（粘贴用），**算一步撤销**。</summary>
+    public void AddStrokes(IReadOnlyList<Stroke> items)
+    {
+        if (items == null || items.Count == 0) return;
+        var act = new AddStrokesAction();
+        for (int i = 0; i < items.Count; i++)
+        {
+            act.Strokes.Add(items[i]);
+            AppendStroke(items[i]);
+        }
+        Commit(act);
+    }
+
     /// <summary>
     /// 造一个图像对象（截图落盘、粘贴图片走这里）。
     ///
@@ -1460,6 +1908,11 @@ internal sealed class InkDocument
         var candidates = _queryScratch.ToArray();
         foreach (var s in candidates)
         {
+            // **图像对象不碰**：两种橡皮一致（像素橡皮那边也跳过）。
+            // 图像是"老师截来的内容"，不是笔画——橡皮擦掉半张截图不是任何人想要的；
+            // 要删它用框选 + Delete。改之前这里对图像会走 IsShape 分支整条删掉，
+            // 两种橡皮行为不一致（实测见 调研-图形与选中框.md 第五节）。
+            if (s.IsImage) continue;
             if (s.IsShape)
             {
                 // 图形的轮廓不是两个端点之间的线段，近似会偏，交给 Direct2D 精确算。
@@ -1482,19 +1935,96 @@ internal sealed class InkDocument
     }
 
     private RemoveStrokesAction _eraseBatch;
-    private SplitStrokesAction _splitBatch;
+    private EraseIntervalsAction _intervalBatch;
+
+    /// <summary>像素橡皮算出来的参数区间（复用一个表，拖动时不要每步分配）。</summary>
+    private readonly List<(float a, float b)> _intervalScratch = new();
 
     public void BeginErase() => _eraseBatch = new RemoveStrokesAction();
 
     /// <summary>像素橡皮：开始一次拖拽。整段拖拽只算**一步**撤销。</summary>
-    public void BeginEraseRect() => _splitBatch = new SplitStrokesAction();
+    public void BeginEraseRect() => _intervalBatch = new EraseIntervalsAction();
 
     public void EndErase()
     {
         if (_eraseBatch != null && _eraseBatch.Items.Count > 0) Commit(_eraseBatch);
         _eraseBatch = null;
-        if (_splitBatch != null && _splitBatch.Items.Count > 0) Commit(_splitBatch);
-        _splitBatch = null;
+        if (_intervalBatch != null && _intervalBatch.Items.Count > 0)
+        {
+            // 拖拽中用区间表（便宜、不 churn 对象），**松手时才落成独立对象**。
+            MaterializeIntervalBatch(_intervalBatch);
+            _intervalBatch = null;
+        }
+    }
+
+    /// <summary>
+    /// 像素橡皮的拖拽收尾：**把"擦除区间"落成"独立对象"**。
+    ///
+    /// 用户 2026-09-15 定的语义："橡皮擦中墨迹或者图形，如果断开了结构，选中分开以后单独算"
+    /// ——所以擦完就是**两截各自独立的笔迹**，能分别选中、分别搬、分别删。
+    /// 拖拽过程中先用区间表是图便宜（一次拖拽里同一笔可能被擦十几刀，每刀都新建对象会
+    /// 又慢又乱），松手一次性结账。
+    ///
+    /// 三步都不能省：
+    ///   ① 把"整条被擦没"的**临时放回列表**——Anchor 记的是"排在它前面的、没被本批拿走的
+    ///      画笔有几条"，按它升序插回去，列表就恢复成**拖拽前**的样子；
+    ///   ② 这时每个原对象的 `IndexOf` 就是拖拽前那一套下标（撤销记录要用同一套坐标系）；
+    ///   ③ 从后往前把每个原对象换成它的碎片（擦光的换成空），下标不会互相干扰。
+    /// </summary>
+    private void MaterializeIntervalBatch(EraseIntervalsAction act)
+    {
+        // ① 把被擦光的临时放回去（只为算下标，马上又会被换掉）
+        var gone = new List<EraseIntervalsAction.Item>();
+        foreach (var it in act.Items) if (it.Removed) gone.Add(it);
+        gone.Sort((a, b) => a.Anchor.CompareTo(b.Anchor));
+        int inserted = 0;
+        foreach (var it in gone) InsertStroke(it.Anchor + inserted++, it.S);
+
+        // ② 记下"拖拽前"的下标；③ 从后往前替换成碎片
+        var live = new List<(int index, EraseIntervalsAction.Item it)>();
+        foreach (var it in act.Items)
+        {
+            int idx = Strokes.IndexOf(it.S);
+            if (idx >= 0) live.Add((idx, it));
+        }
+        live.Sort((a, b) => b.index.CompareTo(a.index));
+
+        var split = new SplitErasedAction { Paint = act.Paint };
+        foreach (var (index, it) in live)
+        {
+            var s = it.S;
+            var item = new SplitErasedAction.Item
+            {
+                Index = index,
+                Original = it.UndoOriginal ?? s,   // 熔过图形的：还的是原图形
+                Before = it.Before,
+            };
+            item.Parts.AddRange(s.SplitIntoRuns());     // 剩下的每一段 = 一个独立对象
+            split.Items.Add(item);
+
+            RemoveStroke(s, it.Paint);
+            for (int k = 0; k < item.Parts.Count; k++) InsertStroke(index + k, item.Parts[k], it.Paint);
+        }
+        if (split.Items.Count > 0) Commit(split);
+    }
+
+    /// <summary>
+    /// 换掉一条笔画的擦除区间表（像素橡皮 / 撤销 / 重做都走这里）。
+    ///
+    /// 为什么要包一层：改区间**必须**同时做三件事——几何缓存失效（<c>Revision</c> 会涨，
+    /// 见 Stroke.SetErased）、内容层的块标成要重画、脏区记上。少一件就是"数据改了屏幕
+    /// 不动"或者"重画范围不对留残影"。
+    ///
+    /// <paramref name="paint"/> 是"这次真正变了的那一块"；不给就退回整条的包围盒
+    /// （保守但很粗，见 EraseIntervalsAction.AffectedBefore 的注释）。
+    /// </summary>
+    public void SetErased(Stroke s, List<(float a, float b)> intervals, RectF? paint = null)
+    {
+        TotalIntervals += (intervals?.Count ?? 0) - s.Erased.Count;
+        s.SetErased(intervals);
+        StructureChangedSinceRender = true;
+        Dirty.Add(paint ?? s.PaddedBounds);
+        Version++;
     }
 
     /// <summary>
@@ -1513,8 +2043,8 @@ internal sealed class InkDocument
     /// </summary>
     public int EraseRectAt(float cx, float cy, float halfW, float halfH)
     {
-        bool standalone = _splitBatch == null;
-        var act = _splitBatch ?? new SplitStrokesAction();
+        bool standalone = _intervalBatch == null;
+        var act = _intervalBatch ?? new EraseIntervalsAction();
 
         var rect = new RectF
         {
@@ -1538,97 +2068,129 @@ internal sealed class InkDocument
         }
         if (_candidateSet.Count == 0) return 0;
 
-        // **一次线性扫描**同时算出三件事：候选在列表里的下标、"排在前面的干净笔画有几条"、
-        // 以及处理顺序。
+        // **一次线性扫描**同时算出两件事：候选在列表里的下标（只有"整条被擦没"才用得上）、
+        // 以及它前面有几条"没被本批拿走的笔画"（Anchor）。
         //
         // 为什么不逐个 IndexOf + 逐个往前数：在一块 93×150 的地方，候选项可以有一两百条，
         // 每条都 O(笔画数) 扫一遍，一万笔的画面上就是"每步几百万次比较"——实测那正是
         // 一步 22ms 里的大头。扫一遍是 O(笔画数)，和候选多少无关。
-        //
-        // **从后往前**处理：删一笔、在原下标处插回它的碎片，不会把还没处理的下标挪位。
         _hitScratch.Clear();
         int unaffected = 0;
         for (int i = 0; i < Strokes.Count; i++)
         {
             var t = Strokes[i];
             if (_candidateSet.Contains(t)) _hitScratch.Add((i, unaffected, t));
-
-            // 计数只数"没被本批动过的"：碎片整组算一条（数第一片）。
-            var owner = act.OwnerOf(t);
-            if (owner == null) { unaffected++; continue; }
-            if (owner.Parts.Count > 0 && ReferenceEquals(owner.Parts[0], t)) unaffected++;
+            unaffected++;
         }
         if (_hitScratch.Count == 0) return 0;
 
-        // 下标大的先处理；共享同一个"干净位置"的（相邻几条一起擦掉）按登记顺序。
-        _hitScratch.Sort((x, y) => y.index.CompareTo(x.index));
-
         int affected = 0;
         foreach (var (index, logical, s) in _hitScratch)
-            CutOne(act, index, logical, s, rect, ref affected);
+            ApplyErase(act, index, logical, s, rect, ref affected);
 
-        if (standalone && act.Items.Count > 0) Commit(act);
+        // 单次调用（自检、性能测试、以及将来"按一下擦一下"的用法）也要落成独立对象——
+        // 和整段拖拽松手时走的是同一个收尾，语义只有一处。
+        if (standalone && act.Items.Count > 0) MaterializeIntervalBatch(act);
         return affected;
     }
 
     /// <summary>
-    /// 擦到一笔之后的处理：本批已经切过就并回去，没切过就新开一条记录。
-    /// <paramref name="index"/> 是调用方**线性扫描时**记下的下标——从后往前处理，
-    /// 所以它到这一刻仍然有效；万一不对（理论上不该发生）就退回 IndexOf 兜底。
+    /// 擦到一笔：算出"被擦掉的参数区间"，并进它的区间表；如果整条都被擦没了，
+    /// 就把它从文档里拿走（撤销时按 Anchor 放回来）。
+    ///
+    /// <paramref name="index"/> 是调用方线性扫描时记下的下标；<paramref name="anchor"/>
+    /// 是"排在这一笔前面的、没被本批拿走的笔画有几条"——只有整条被拿走时才用得上。
     /// </summary>
-    private void CutOne(SplitStrokesAction act, int index, int logical,
-                        Stroke s, in RectF rect, ref int affected)
+    private void ApplyErase(EraseIntervalsAction act, int index, int anchor,
+                            Stroke s, in RectF rect, ref int affected)
     {
-        int at = index;
-        if (at >= Strokes.Count || !ReferenceEquals(Strokes[at], s)) at = Strokes.IndexOf(s);
-        if (at < 0) return;
-
         // 这一次真正变了的那一块 = 橡皮矩形 ⊕ 半个笔宽（切口的圆头刚好在这一圈上）
         // + 2 像素抗锯齿余量。框外的墨没变，所以只标这一块当脏区。
         var paint = rect.Inflate(MathF.Max(1f, s.Width) * 0.5f + 2f);
         act.Paint.Add(paint);
 
-        var owner = act.OwnerOf(s);
-        if (owner != null)
+        bool isNew = act.FindItem(s) == null;
+        var item = act.Touch(s);
+        item.Paint.Add(paint);
+
+        // **图形：先熔成笔迹再切**（用户 2026-09-15 定："橡皮擦中图形，断开了也要单独算"）。
+        // 熔完在文档里就地替换，下面的擦除逻辑完全不用为图形另开一条路；
+        // 撤销靠 item.UndoOriginal 记着原来那个图形。
+        if (s.Kind != StrokeKind.Freehand)
         {
-            // 本批自己刚切出来的碎片又被擦到了：**并回原来那一条**。
-            // 另开一条记录会让撤销时把这片碎片的"上一版"也放回来——屏幕上多出一截墨。
-            var sub = CutFreehand(s, rect);
-            if (sub == null) return;
+            var melted = s.MeltToFreehand();
+            int at = Strokes.IndexOf(s);
+            if (at < 0) { if (isNew) act.Drop(item); return; }
             RemoveStroke(s, paint);
-            int slot = owner.Parts.IndexOf(s);
-            if (slot < 0) slot = owner.Parts.Count;
-            owner.Parts.RemoveAt(slot);
-            owner.Parts.InsertRange(slot, sub);
-            act.Register(owner, sub);
-            for (int k = 0; k < sub.Count; k++) InsertStroke(at + k, sub[k], paint);
+            InsertStroke(at, melted, paint);
+            item.UndoOriginal = s;
+            item.S = melted;
+            s = melted;
+        }
+
+        if (s.Points.Count <= 1)
+        {
+            // 单点笔迹（一个圆点）：参数只有一个 0，没有长度可分——盖住就整条擦掉。
+            if (!DotCovered(s, rect)) { if (isNew) act.Drop(item); return; }
+            item.After.Clear();
+            SetErased(s, item.After, paint);
+            MarkRemoved(act, item, anchor, s, paint);
             affected++;
             return;
         }
 
-        List<Stroke> parts;
-        if (s.Kind == StrokeKind.Freehand)
+        _intervalScratch.Clear();
+        if (!ErasedIntervals(s, rect, _intervalScratch))
         {
-            parts = CutFreehand(s, rect);
-            if (parts == null) return;              // 粗筛进来的，其实没碰到
-        }
-        else
-        {
-            parts = new List<Stroke>();             // 图形：整条删
+            if (isNew) act.Drop(item);
+            return;
         }
 
-        var item = new SplitStrokesAction.Item
-        {
-            UnaffectedBefore = logical,
-            Original = s,
-        };
-        item.Parts.AddRange(parts);
-        act.Items.Add(item);
-        act.Register(item, parts);
+        // 先在副本上算好结果，再决定要不要动对象：没变化就别打掉几何缓存。
+        var after = new List<(float a, float b)>(s.Erased);
+        foreach (var iv in _intervalScratch) Stroke.MergeInterval(after, iv.a, iv.b);
+        if (SameIntervals(after, s.Erased)) { if (isNew) act.Drop(item); return; }
 
-        RemoveStroke(s, paint);
-        for (int k = 0; k < parts.Count; k++) InsertStroke(at + k, parts[k], paint);
+        item.After = after;
+        SetErased(s, item.After, paint);
+        if (Stroke.RemainingRunsOf(after, s.LastParam).Count == 0)
+            MarkRemoved(act, item, anchor, s, paint);
         affected++;
+    }
+
+    /// <summary>
+    /// 整条被擦没了：从文档里拿走，并记下**放回去的位置**。
+    ///
+    /// Anchor 要用"没被本批拿走的"笔画来算：本批已经拿走的那几条不在列表里了，
+    /// 但它们原本排在前面，所以得把它们补回去（按记录顺序扫一遍）。
+    /// 松手时 <see cref="MaterializeIntervalBatch"/> 就靠它把列表恢复成拖拽前的样子。
+    /// </summary>
+    private void MarkRemoved(EraseIntervalsAction act, EraseIntervalsAction.Item item,
+                             int anchor, Stroke s, in RectF paint)
+    {
+        int fix = 0;
+        foreach (var other in act.Items)
+            if (other.Removed && other.Anchor <= anchor + fix) fix++;
+        item.Removed = true;
+        item.Anchor = anchor + fix;
+        RemoveStroke(s, paint);
+    }
+
+    /// <summary>两张区间表是否逐项相同（用来判断"这一刀其实什么都没改变"）。</summary>
+    private static bool SameIntervals(List<(float a, float b)> x, List<(float a, float b)> y)
+    {
+        if (x.Count != y.Count) return false;
+        for (int i = 0; i < x.Count; i++) if (x[i] != y[i]) return false;
+        return true;
+    }
+
+    /// <summary>单点笔迹（圆点）是否被这块橡皮盖住（画布坐标判定）。</summary>
+    private static bool DotCovered(Stroke s, in RectF rect)
+    {
+        var p = new Vector2(s.Points[0].X, s.Points[0].Y);
+        if (!s.Transform.IsIdentity) p = Vector2.Transform(p, s.Transform);
+        // 圆点的墨是以 p 为心、半径半个笔宽的圆；"墨被盖住"= 圆心到橡皮的距离 ≤ 半笔宽。
+        return DistToRect(p, rect) <= MathF.Max(1f, s.Width) * 0.5f;
     }
 
     /// <summary>图形和这块矩形碰上了没有（按轮廓判，不按外框——见 Stroke.ShapeOutline）。</summary>
@@ -1686,104 +2248,145 @@ internal sealed class InkDocument
     }
 
     /// <summary>
-    /// 把一条自由笔迹按"矩形 ⊕ 半个笔宽"切成几段，返回**擦剩下的**那些。
-    /// 返回 null = 这一笔一点没被碰到（调用方原样留着，不新建任何对象）。
+    /// 算出"这一笔被这块橡皮擦掉的**参数区间**"（参数 = 点序号，可以带小数）。
+    /// 返回 false = 一点没碰到（调用方原样留着）；true = 至少有一段被擦了（写进 into）。
     ///
-    /// 在**画布坐标**里算：原对象可能带着变换（被框选移动 / 缩放过），切出来的碎片是
-    /// "画布坐标 + 单位变换"的新对象。原对象整个进撤销栈，回退时原样回来。
+    /// 判据和上一版一样：墨在中心线两侧各半个笔宽，所以"墨被盖住"等价于
+    /// "中心线上的点到橡皮矩形的距离 ≤ 半笔宽"。进出边界的那一段上二分求切点参数
+    /// （距离沿线段是凸的，必收敛；<see cref="EdgeT"/> 与方向无关）。
+    ///
+    /// 画布坐标只用来**判定**，"擦掉哪一段"用的是笔画自己的参数——所以带变换的笔迹
+    /// （被框选移动 / 缩放过）不用再把变换烘进点坐标，区间天生跟着变换走。
     /// </summary>
-    private static List<Stroke> CutFreehand(Stroke s, in RectF rect)
+    private static bool ErasedIntervals(Stroke s, RectF rect, List<(float a, float b)> into)
     {
         int n = s.Points.Count;
-        if (n == 0) return null;
+        if (n < 2) return false;
         float reach = MathF.Max(1f, s.Width) * 0.5f;
 
-        var pts = new Vector2[n];
-        for (int i = 0; i < n; i++)
+        Vector2 Pt(int i)
         {
             var v = new Vector2(s.Points[i].X, s.Points[i].Y);
-            pts[i] = s.Transform.IsIdentity ? v : Vector2.Transform(v, s.Transform);
+            return s.Transform.IsIdentity ? v : Vector2.Transform(v, s.Transform);
         }
-
-        var parts = new List<Stroke>();
-        if (n == 1)
-            return DistToRect(pts[0], rect) <= reach ? parts : null;
+        bool In(Vector2 p) => DistToRect(p, rect) <= reach;
 
         bool touched = false;
-        Stroke cur = null;
+        bool inRun = false;
+        float runStart = 0f;
 
+        // 起手就在框里（第一段之前没有任何边界要算）
+        if (In(Pt(0))) { inRun = true; runStart = 0f; touched = true; }
+
+        // **逐段扫，而且段内要细分**：只看两个端点是不够的——橡皮完全可能整段落
+        // 在两个采样点之间（稀疏采样、或者只有两个端点的长直线），只看端点会"擦了个寂寞"。
+        // 段内按固定步长细分，跨界处在相邻两个子采样之间二分求切点（精度和整段二分一致）。
+        // 代价：密集笔迹（采样点间隔 1~5 像素）每段只多 1~2 次距离计算；
+        //       只有"两个端点拉得很开"的笔迹才多算，而那正是原来会漏的那种。
+        const float SubStep = 4f;
         for (int i = 0; i + 1 < n; i++)
         {
-            Vector2 a = pts[i], b = pts[i + 1];
-            InkPoint ia = s.Points[i], ib = s.Points[i + 1];
-            bool inA = DistToRect(a, rect) <= reach;
-            bool inB = DistToRect(b, rect) <= reach;
-            if (inA || inB) touched = true;
+            Vector2 a = Pt(i), b = Pt(i + 1);
+            float len = Vector2.Distance(a, b);
+            int sub = Math.Max(1, (int)MathF.Ceiling(len / SubStep));
 
-            if (!inA && cur == null)
+            float prevT = 0f;
+            bool prevIn = In(a);
+            for (int k = 1; k <= sub; k++)
             {
-                cur = NewPart(s);
-                cur.AddPoint(a.X, a.Y, ia.P, ia.T);
-            }
+                float t = k / (float)sub;
+                bool cur = In(Vector2.Lerp(a, b, t));
+                if (cur) touched = true;
 
-            if (!inA && !inB)
-            {
-                cur.AddPoint(b.X, b.Y, ib.P, ib.T);
-            }
-            else if (!inA && inB)
-            {
-                // 进框：在边界上收口。切点落在"矩形 ⊕ 半笔宽"的边界上，圆头端帽正好
-                // 和框边相切——框里那半边没有墨。
-                float t = EdgeT(a, b, rect, reach);
-                cur.AddPoint(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t,
-                             ia.P + (ib.P - ia.P) * t, ia.T + (ib.T - ia.T) * t);
-                parts.Add(cur);
-                cur = null;
-            }
-            else if (inA && !inB)
-            {
-                // 出框：从边界起一段新的。
-                float t = EdgeT(a, b, rect, reach);
-                cur = NewPart(s);
-                cur.AddPoint(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t,
-                             ia.P + (ib.P - ia.P) * t, ia.T + (ib.T - ia.T) * t);
-                cur.AddPoint(b.X, b.Y, ib.P, ib.T);
+                if (!inRun && cur)
+                {
+                    runStart = i + EdgeT(a, b, rect, reach, prevT, t);
+                    inRun = true;
+                }
+                else if (inRun && !cur)
+                {
+                    into.Add((runStart, i + EdgeT(a, b, rect, reach, prevT, t)));
+                    inRun = false;
+                }
+                prevT = t;
+                prevIn = cur;
             }
         }
-
-        if (cur != null) parts.Add(cur);
-        return touched ? parts : null;
+        if (inRun) into.Add((runStart, n - 1));      // 一直擦到最后一笔
+        return touched;
     }
 
     /// <summary>
-    /// 线段上"刚好压在橡皮边界上"那一点的参数 t。
+    /// 线段上"刚好压在橡皮边界上"那一点的参数 t：在 [<paramref name="lo"/>,
+    /// <paramref name="hi"/>] 之间二分，两端一个是框内、一个是框外。
     ///
-    /// **方向必须无关**：进框（a 在外、b 在里）和出框（a 在里、b 在外）都要用。
-    /// 第一版只按"a 在外"写，于是出框那一刀收敛到了 a（框内那个采样点）——
+    /// **方向必须无关**：进框（前一点在外、后点在里面）和出框（反过来）都要用。
+    /// 第一版只按"起点在外"写，于是出框那一刀收敛到了框内那个采样点——
     /// 结果是每条的右半边多留了一截墨，切口不在框边而在框里。自检抓到的就是这个。
     /// 框是凸的，距离沿线段先减后增，二分一定收敛（20 次 ≈ 百万分之一，远小于一个像素）。
     /// </summary>
-    private static float EdgeT(Vector2 a, Vector2 b, in RectF r, float reach)
+    private static float EdgeT(Vector2 a, Vector2 b, in RectF r, float reach, float lo, float hi)
     {
-        bool aInside = DistToRect(a, r) <= reach;
-        float lo = 0f, hi = 1f;          // lo 留在 a 那一侧，hi 收到 b 那一侧
+        bool loInside = DistToRect(Vector2.Lerp(a, b, lo), r) <= reach;
         for (int i = 0; i < 20; i++)
         {
             float mid = (lo + hi) * 0.5f;
-            var p = new Vector2(a.X + (b.X - a.X) * mid, a.Y + (b.Y - a.Y) * mid);
-            if ((DistToRect(p, r) <= reach) == aInside) lo = mid; else hi = mid;
+            bool midInside = DistToRect(Vector2.Lerp(a, b, mid), r) <= reach;
+            if (midInside == loInside) lo = mid; else hi = mid;
         }
         return (lo + hi) * 0.5f;
     }
 
-    /// <summary>擦剩下的一段：样式全继承，**变换是单位矩阵**（点已经是画布坐标）。</summary>
-    private static Stroke NewPart(Stroke s) => new()
+    /// <summary>
+    /// 把**选区里被擦断的**笔迹拆成独立对象（剩下的每一段各成一个）。
+    ///
+    /// 为什么要有这一步：像素橡皮默认**不拆**（一条笔迹 + 擦除区间表）——那样半透明
+    /// 荧光笔自交处不会混合两次、反复擦对象数也不涨、`Id` 也不变。但用户眼睛看到的是
+    /// "这里明明断成两截了"，想单独搬动其中一截时，选中整条太反直觉。折中：
+    /// **平时不拆，一旦被框选到就拆**——"擦"保持轻量，"单独摆弄某一段"也做得到。
+    ///
+    /// 拆出来的段继承样式与变换，点仍是**局部坐标**（缩放/旋转过的笔迹拆完也正确）；
+    /// 一次框选拆多条的，**算一步撤销**。
+    /// </summary>
+    /// <returns>拆开了几条（0 = 选中的里面没有被擦断的）</returns>
+    public int SplitErasedSelection()
     {
-        Tool = s.Tool,
-        Kind = StrokeKind.Freehand,
-        Color = s.Color,
-        Width = s.Width,
-    };
+        var act = new SplitErasedAction();
+
+        // **按下标降序**处理：每拆一条都会改变列表长度，从后往前走，前面那些还没处理的
+        // 下标才是同一套坐标系（撤销/重做按它插回去才不会错位）。
+        var targets = new List<(int index, Stroke s)>();
+        foreach (var s in Selected)
+        {
+            if (!s.HasErased || s.Kind != StrokeKind.Freehand) continue;
+            int i = Strokes.IndexOf(s);
+            if (i >= 0) targets.Add((i, s));
+        }
+        if (targets.Count == 0) return 0;
+        targets.Sort((a, b) => b.index.CompareTo(a.index));
+
+        var newSelection = new List<Stroke>(Selected);
+        foreach (var (index, s) in targets)
+        {
+            var parts = s.SplitIntoRuns();
+            if (parts.Count <= 1) continue;            // 只剩一段（或者全被擦没了），不用拆
+
+            var item = new SplitErasedAction.Item { Index = index, Original = s };
+            item.Parts.AddRange(parts);
+            act.Items.Add(item);
+            newSelection.Remove(s);
+            newSelection.AddRange(parts);
+
+            RemoveStroke(s);
+            for (int k = 0; k < parts.Count; k++) InsertStroke(index + k, parts[k]);
+        }
+        if (act.Items.Count == 0) return 0;
+
+        Commit(act);
+        Selected.Clear();
+        Selected.AddRange(newSelection);
+        return act.Items.Count;
+    }
 
     public void DeleteSelected()
     {
@@ -1821,6 +2424,64 @@ internal sealed class InkDocument
         _grid.Query(r, _queryScratch);
         foreach (var s in _queryScratch)
             if (s.PaddedBounds.Intersects(r)) Selected.Add(s);
+    }
+
+    /// <summary>
+    /// 点选：返回 (x,y) 处**最上面**的那个对象（没点到就 null）。
+    ///
+    /// 判据和橡皮命中同源：自由笔迹看"点到中心线的距离 ≤ 半笔宽 + 容差"
+    /// （**被像素橡皮擦掉的那段不算墨**，<see cref="Stroke.DistanceToCanvas"/> 已经跳过）；
+    /// 图形 / 图像交给 Direct2D 的描边 / 填充命中。
+    ///
+    /// 多条叠在一起时取列表里**下标最大**的（最后画的＝最上面）——和 InkClass 一致
+    /// （那边是 `hitTestStrokes[^1]`）。
+    /// </summary>
+    public Stroke HitObjectAt(float x, float y, float tolerance)
+    {
+        // 粗筛：网格是按"带笔宽的外扩包围盒"索引的，所以点周围一个小矩形就能捞到
+        // 所有可能命中的对象（宽笔的笔身伸过来也算）。
+        var probe = new RectF
+        {
+            MinX = x - tolerance, MinY = y - tolerance,
+            MaxX = x + tolerance, MaxY = y + tolerance,
+        };
+        _grid.Query(probe, _queryScratch);
+        if (_queryScratch.Count == 0) return null;
+
+        Stroke best = null;
+        int bestIndex = -1;
+        foreach (var s in _queryScratch)
+        {
+            if (!s.PaddedBounds.Contains(x, y)) continue;
+
+            bool hit = s.Kind == StrokeKind.Freehand
+                ? s.DistanceToCanvas(x, y) <= s.Width * 0.5f + tolerance
+                : s.HitTestExact(x, y, tolerance);
+            if (!hit) continue;
+
+            int idx = Strokes.IndexOf(s);
+            if (idx > bestIndex) { bestIndex = idx; best = s; }
+        }
+        return best;
+    }
+
+    /// <summary>
+    /// 点选：把 (x,y) 处的对象选中，返回**被点到的那个**（没点到 = null，调用方继续框选）。
+    ///
+    /// 修饰键（和主流一致）：<paramref name="additive"/>（Shift）= 加选，已经在选区里就
+    /// **移出**（切换）；<paramref name="subtractive"/>（Alt）= 移出。加/减选时不动其它选中，
+    /// 方便连着点几条攒出一个选择。
+    /// </summary>
+    public Stroke SelectAt(float x, float y, float tolerance,
+                           bool additive = false, bool subtractive = false)
+    {
+        var hit = HitObjectAt(x, y, tolerance);
+        if (hit == null) return null;
+
+        if (subtractive) Selected.Remove(hit);
+        else if (additive) { if (!Selected.Remove(hit)) Selected.Add(hit); }
+        else { Selected.Clear(); Selected.Add(hit); }
+        return hit;
     }
 
     /// <summary>Marks the whole content layer stale (cheap to say, expensive to

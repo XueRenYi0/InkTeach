@@ -39,7 +39,21 @@ internal static class ClipboardImage
         try
         {
             if (!Native.EmptyClipboard()) return false;
+            return PutDibIntoOpenClipboard(bgra, w, h);
+        }
+        finally { Native.CloseClipboard(); }
+    }
 
+    /// <summary>
+    /// 把一张 BGRA（自上而下）写成 CF_DIB，**假定剪贴板已经打开并且已经清空**。
+    ///
+    /// 抽出来是给"复制对象"那条路用的：它要在**同一次剪贴板会话里**既放我们的对象格式、
+    /// 又放这张图（分两次 Open/Empty 的话，后一次会把前一次的内容清掉）。
+    /// </summary>
+    internal static bool PutDibIntoOpenClipboard(byte[] bgra, int w, int h)
+    {
+        if (bgra == null || w <= 0 || h <= 0) return false;
+        if (bgra.Length < (long)w * h * 4) return false;
             int headerSize = 40;                        // BITMAPINFOHEADER
             int pixelBytes = w * h * 4;
             int total = headerSize + pixelBytes;
@@ -76,8 +90,6 @@ internal static class ClipboardImage
                 return false;
             }
             return true;
-        }
-        finally { Native.CloseClipboard(); }
     }
 
     /// <summary>
@@ -167,7 +179,7 @@ internal static class ClipboardImage
     }
 
     /// <summary>剪贴板可能被别的程序占着（这是常态，不是异常）。重试几次。</summary>
-    private static bool OpenWithRetry(IntPtr owner)
+    internal static bool OpenWithRetry(IntPtr owner)
     {
         for (int i = 0; i < 5; i++)
         {
