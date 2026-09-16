@@ -263,6 +263,7 @@ pwsh -File tools/bench/Run-PerfSuite.ps1
 | `--capturetest` | 截图全流程：拖框 → 视口左上角 → 剪贴板，且**不把自己的批注拍进去**、屏幕无残影 |
 | `--passtest` | 另起进程开目标窗口，合成真实点击，确认穿透时下层窗口确实收到点击 |
 | `--uitest` | **界面输入通路**：挂一块自检面板，合成真实点击，逐条判定"面板内／面板外 × 穿透开／关 × 界面吃不吃"到底谁收到；并打印"系统问了命中测试几次"作为区域穿透可行性的硬证据 |
+| `--paneltest` | **产品界面**（`src/InkUi`）：球→按钮带、点按钮真的改引擎状态、拖动贴边、空闲 0 帧；界面层的最小闭环验收 |
 | `--widthtest` | 各档粗细的实测墨量对理论值（描边的宽度对不对） |
 | `--captest` | 笔迹两端：单击＝圆点、宽笔拖出来＝两头半圆（几何 + 上屏像素两层判定，并导一张图） |
 | `--cornertest` | 折角（45/90/135/170°）中心线不缺墨、墨不超出脏区、拐角上屏 |
@@ -316,6 +317,7 @@ pwsh -File tools/bench/Run-PerfSuite.ps1
 | `src/InkEngine/ImageData.cs` | 图像像素（BGRA、预乘、D2D 位图缓存）|
 | `src/InkEngine/SpatialGrid.cs` | 均匀网格空间索引，给橡皮擦/框选的命中测试用 |
 | `src/InkEngine/InkSerializer.cs` | 存档/剪贴板私有格式（v2 起带图像像素，老文件照样能开）|
+| `src/InkUi/` | **产品界面层**（只认 `IOverlayUi`/`IUiHost`/`IEngineCommands`）：设计令牌、图标、动画、完整界面（球↔按钮带）见 [计划-底层对接界面.md](计划-底层对接界面.md) |
 | `src/InkEngine/Selection.cs` | 选中框坐标系、手柄布局与命中、旋转吸附、操作条布局 |
 | `src/InkEngine/Native.cs` | Win32 / 指针输入 / GDI / 剪贴板的 P/Invoke 声明 |
 | `src/InkEngine/ScreenCapture.cs` | 抓屏（抓之前先把自己的覆盖层藏起来）|

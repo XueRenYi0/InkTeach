@@ -1,8 +1,9 @@
 <#
-为「界面设计稿」出图工具准备图标路径，生成 tools/design-sheet/IconPaths.g.cs。
+准备「界面」用的图标路径。默认给设计稿出图工具用，也可以直接出给产品界面层（src/InkUi）。
 
 用法：
-    pwsh tools/gen-ui-icons.ps1
+    pwsh tools/gen-ui-icons.ps1                      # → tools/design-sheet/IconPaths.g.cs（默认）
+    pwsh tools/gen-ui-icons.ps1 -Out src/InkUi/Icons.g.cs -Namespace InkUi -Class PanelIcons
 
 和 tools/gen-fluent-icons.ps1 / gen-icons.ps1 同一套路：只从上游 SVG 里取
 path 的 d 数据，不引入任何运行时代码；下载走 jsDelivr 镜像（国内直连
@@ -14,11 +15,18 @@ raw.githubusercontent.com 经常超时），并带本地缓存。
 而这一轮的结论要能直接落到 src 里的图标表上，所以探测结果本身就是要留的证据。
 #>
 
+param(
+    [string]$Out = 'tools/design-sheet/IconPaths.g.cs',
+    [string]$Namespace = 'DesignSheet',
+    [string]$Class = 'IconPaths'
+)
+
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$outFile = Join-Path $repoRoot 'tools/design-sheet/IconPaths.g.cs'
+$outFile = Join-Path $repoRoot $Out
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $outFile) | Out-Null
 $cacheDir = Join-Path ([System.IO.Path]::GetTempPath()) 'fluent-icons'
 New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
 
@@ -139,12 +147,12 @@ $sb = [System.Text.StringBuilder]::new()
 [void]$sb.AppendLine('// 来源：https://github.com/microsoft/fluentui-system-icons （MIT License，')
 [void]$sb.AppendLine('// Copyright (c) 2020 Microsoft Corporation）')
 [void]$sb.AppendLine('// 两套变体都有：regular（常态）与 filled（激活态），viewBox 都是 0 0 24 24。')
-[void]$sb.AppendLine('// 仅供「界面设计稿」出图工具使用，不进产品。')
+[void]$sb.AppendLine('// 由 -Out/-Namespace/-Class 决定落到哪个工程：设计稿出图工具，或产品界面层 src/InkUi。')
 [void]$sb.AppendLine('// </auto-generated>')
 [void]$sb.AppendLine()
-[void]$sb.AppendLine('namespace DesignSheet;')
+[void]$sb.AppendLine("namespace $Namespace;")
 [void]$sb.AppendLine()
-[void]$sb.AppendLine('internal static partial class IconPaths')
+[void]$sb.AppendLine("internal static partial class $Class")
 [void]$sb.AppendLine('{')
 
 $allKeys = @()

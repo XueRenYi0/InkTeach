@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\InkEngine\InkEngine.csproj" />
+    <ProjectReference Include="..\InkUi\InkUi.csproj" />
   </ItemGroup>
 
   <!-- 引擎库里的 Vortice 类型会出现在公开签名里，这里需要能引用到 -->

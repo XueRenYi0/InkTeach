@@ -17,8 +17,12 @@ namespace InkEngine;
 ///
 /// 几何按 24×24 的原始坐标缓存，绘制时用 ctx 的变换缩放到目标尺寸——
 /// 这样同一份几何可以在不同尺寸/DPI 下复用，不用重建。
+///
+/// **public**：界面层（`InkUi`）也要用它画图标。它是通用的路径解析工具，
+/// 不碰文档模型、不碰工具状态，对界面开放不违反分层（界面照样不许碰文档）。
+/// 引擎自己的图标表（`Icons.Paths.cs`）仍是 internal——那是引擎内部的事。
 /// </summary>
-internal static class SvgPath
+public static class SvgPath
 {
     private static readonly Dictionary<string, ID2D1PathGeometry> Cache = new();
 

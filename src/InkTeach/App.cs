@@ -132,6 +132,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             UiInputTest();
         }
+        else if (mode == "--paneltest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PanelTest();
+        }
         else if (mode == "--erasertest")
         {
             _autoExitAt = double.MaxValue;
@@ -519,6 +525,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --inputtest         指针输入路径自检");
         Console.WriteLine("  --passtest          穿透真机测试（跨进程点击）");
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
+        Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
         Console.WriteLine("  --pixelerasetest    像素橡皮正确性（切成两段 / 框里无墨 / 一步撤销）");
         Console.WriteLine("  --pixeleraseshow    像素橡皮摆样（擦之前/之后各存一张图，自己抓屏）");
@@ -5021,6 +5028,164 @@ internal sealed class App : InkEngine.InkEngine
 
         SetPass(false);
         try { target.Kill(); } catch { }
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 产品界面（`src/InkUi` 的 `FullUi`）自检：球 ↔ 按钮带这条最小闭环。
+    ///
+    /// 这一步故意只验四件事——**坐标 / DPI / 脏区 / 输入拦截**：
+    /// 它们在假面板里验证不到（假面板自成一个窗口、自带坐标系），而恰恰是接引擎
+    /// 最容易错的地方。这四件对了，后面搬色带、滑块、抽屉都只是堆代码。
+    ///
+    /// 挂法用的是 `SetUiFactory`——产品的挂法。界面崩了引擎要能自己再造一个，
+    /// 没工厂就只能一路走到重启（见 计划-底层对接界面.md 4.5）。
+    /// </summary>
+    private void PanelTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 产品界面自检（球 → 按钮带）===");
+
+        if (SkipIfNoSyntheticInput("产品界面自检")) { _quit = true; return; }
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-26} {detail}");
+        }
+
+        void ClickPhysical(float x, float y)
+        {
+            SendMouse((int)x, (int)y, 0);                            SettleFrames(80);
+            SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+            SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(320);
+        }
+
+        PassMode = PassThroughMode.LayeredTransparent;
+        PassThrough = false;
+        foreach (var w in _windows) ApplyPassThroughStyle(w);
+        SetUiFactory(() => new InkUi.FullUi());
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Pen;
+        SettleFrames(300);
+
+        var ui = CurrentUi as InkUi.FullUi;
+        if (ui == null)
+        {
+            Console.WriteLine($"  界面没挂上：当前 = {CurrentUi.Name}");
+            ExitCode = 1;
+            _quit = true;
+            return;
+        }
+
+        // ---- ① 收起态：球真的在屏幕上，而且是个 48 的方（圆） ----
+        var ball = ui.QueryBounds();
+        float ballW = ball.MaxX - ball.MinX, ballH = ball.MaxY - ball.MinY;
+        Check("收起态是一个 48 的球",
+              MathF.Abs(ballW - 48f) < 1f && MathF.Abs(ballH - 48f) < 1f,
+              $"占用 {ballW:F0}×{ballH:F0}，位置 ({ball.MinX:F0},{ball.MinY:F0})");
+
+        Check("球贴在屏幕下边、离边 12",
+              MathF.Abs(ball.MaxY - (VirtualScreen.MaxY / DpiScale - InkUi.Tokens.EdgeMargin)) < 1.5f,
+              $"球底 {ball.MaxY:F0}（逻辑），屏幕底 {VirtualScreen.MaxY / DpiScale:F0}（逻辑）");
+
+        // ---- ② 点球展开：动画期间必须连续出帧 ----
+        int strokes0 = Doc.Strokes.Count;
+        float ballCx = (ball.MinX + ball.MaxX) * 0.5f * DpiScale;
+        float ballCy = (ball.MinY + ball.MaxY) * 0.5f * DpiScale;
+        SendMouse((int)ballCx, (int)ballCy, 0);                            SettleFrames(70);
+        SendMouse((int)ballCx, (int)ballCy, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(50);
+        SendMouse((int)ballCx, (int)ballCy, Native.MOUSEEVENTF_LEFTUP);
+
+        // 松手就开始数帧——**别先 settle**：动画只有 200 毫秒，
+        // 先 settle 一遍等于等它跑完再来数"动画期间的帧"，那永远数不出东西。
+        int frames = 0;
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 260)
+        {
+            PumpMessages();
+            if (NeedsFrame()) { RenderAll(); _dirty = false; frames++; }
+            else Thread.Sleep(1);
+        }
+        SettleFrames(120);
+
+        Check("点球能展开", ui.ExpandedForTest, $"展开状态 = {ui.ExpandedForTest}");
+        Check("展开动画拿到了连续帧", frames >= 5, $"260 毫秒里出了 {frames} 帧");
+        Check("点球不落墨", Doc.Strokes.Count == strokes0, $"笔画 {strokes0} → {Doc.Strokes.Count}");
+
+        // ---- ③ 展开后的尺寸：算出来的宽，不是一个拍脑袋的数 ----
+        var bar = ui.QueryBounds();
+        float barW = bar.MaxX - bar.MinX, barH = bar.MaxY - bar.MinY;
+        Check("展开成一条带子（高 48、宽 > 600）",
+              MathF.Abs(barH - 48f) < 1f && barW > 600f,
+              $"占用 {barW:F0}×{barH:F0}");
+
+        // ---- ④ 点"笔"那一格：引擎状态真的变了（走的是命令通道）----
+        Tool = Tool.Eraser;
+        var penCell = ui.CellRectForTest(3);
+        ClickPhysical((penCell.MinX + penCell.MaxX) * 0.5f * DpiScale,
+                      (penCell.MinY + penCell.MaxY) * 0.5f * DpiScale);
+        Check("点「笔」切到笔", Tool == Tool.Pen, $"工具 = {Tool}");
+
+        // ---- ⑤ 输入拦截：面板内不落墨，面板外照常落墨 ----
+        strokes0 = Doc.Strokes.Count;
+        var boardCell = ui.CellRectForTest(2);
+        ClickPhysical((boardCell.MinX + boardCell.MaxX) * 0.5f * DpiScale,
+                      (boardCell.MinY + boardCell.MaxY) * 0.5f * DpiScale);
+        Check("点「白板」不落墨", Doc.Strokes.Count == strokes0,
+              $"笔画 {strokes0} → {Doc.Strokes.Count}，白板 = {BoardOn}");
+        if (BoardOn) { Host.Commands.SetBoard(false); SettleFrames(120); }
+
+        strokes0 = Doc.Strokes.Count;
+        Tool = Tool.Pen;
+        ClickPhysical(_virtualX + _virtualW * 0.5f, _virtualY + _virtualH * 0.45f);
+        Check("面板外照常落墨", Doc.Strokes.Count > strokes0,
+              $"笔画 {strokes0} → {Doc.Strokes.Count}");
+
+        // ---- ⑥ 收起来，然后空闲必须 0 帧 ----
+        var ball2 = ui.CellRectForTest(0);
+        ClickPhysical((ball2.MinX + ball2.MaxX) * 0.5f * DpiScale,
+                      (ball2.MinY + ball2.MaxY) * 0.5f * DpiScale);
+        SettleFrames(250);
+        Check("点最左那格能收起", !ui.ExpandedForTest, $"展开状态 = {ui.ExpandedForTest}");
+
+        PumpMessages();
+        RenderAll();
+        _dirty = false;
+        int quiet = 0;
+        var swQuiet = Stopwatch.StartNew();
+        while (swQuiet.ElapsedMilliseconds < 150)
+        {
+            PumpMessages();
+            if (NeedsFrame()) { RenderAll(); _dirty = false; quiet++; }
+            else Thread.Sleep(2);
+        }
+        Check("空闲 0 帧", quiet == 0, $"安静 150 毫秒出了 {quiet} 帧");
+
+        // ---- ⑦ 拖动并贴边：拖到左边缘附近松手，应该吸附过去（离边 2）----
+        var home = ui.QueryBounds();
+        float hx = (home.MinX + home.MaxX) * 0.5f * DpiScale;
+        float hy = (home.MinY + home.MaxY) * 0.5f * DpiScale;
+        int targetX = _virtualX + 20;
+        SendMouse((int)hx, (int)hy, 0);                          SettleFrames(60);
+        SendMouse((int)hx, (int)hy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(50);
+        for (int i = 1; i <= 10; i++)
+        {
+            SendMouse((int)(hx + (targetX - hx) * i / 10f), (int)hy, 0);
+            SettleFrames(20);
+        }
+        SendMouse(targetX, (int)hy, Native.MOUSEEVENTF_LEFTUP);
+        SettleFrames(200);
+
+        var docked = ui.QueryBounds();
+        float wantLeft = _virtualX / DpiScale + InkUi.Tokens.DockGap;
+        Check("拖到左边缘会吸附", MathF.Abs(docked.MinX - wantLeft) < 3f,
+              $"左边缘 {docked.MinX:F0}（贴边后应为 {wantLeft:F0}），拖动前在 {home.MinX:F0}");
+
+        Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
+        ExitCode = fail == 0 ? 0 : 1;
         _quit = true;
     }
 
