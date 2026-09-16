@@ -68,24 +68,72 @@ public sealed class FullUi : IOverlayUi
 
     private bool _sliderDragging;
 
+    // ---- 「更多」抽屉 ------------------------------------------------------
+    private bool _drawerOpen;
+    private int _drawerHover = -1;
+
+    /// <summary>深色主题：手动开关（用户定的），底色/图标/描边整套换。</summary>
+    private bool _dark;
+
+    /// <summary>贴边隐藏：默认关（用户定的）。开了以后贴边时只露 8 像素的头。</summary>
+    private bool _hideEnabled;
+    private readonly Anim _peek;           // 0 = 只剩露头，1 = 完全显示
+    private bool _hoverInside;             // 指针在"看得见的那一块"里
+    private double _leftAtMs = double.NegativeInfinity;
+
+    /// <summary>「更多」抽屉里的行。</summary>
+    private enum Row { DarkTheme, AutoHide, Restart, Quit, CheckUpdate, SubjectTools }
+
+    private static readonly (Row Kind, string Label, bool Dangerous, bool Gray)[] Rows =
+    {
+        (Row.DarkTheme, "深色主题", false, false),
+        (Row.AutoHide, "贴边隐藏", false, false),
+        (Row.Restart, "重启软件", false, false),
+        (Row.Quit, "退出", true, false),
+        (Row.CheckUpdate, "检查更新", false, true),
+        (Row.SubjectTools, "学科工具", false, true),
+    };
+
+    /// <summary>第 1、3 行是分隔线（画的时候跳过的位置）。</summary>
+    private static bool IsSeparatorAfter(int row) => row == 1 || row == 3;
+
+    private const float DrawerW = 260f;
+    private const float DrawerRowH = 40f;
+    private const float DrawerPad = 12f;
+    private const float DrawerGap = 8f;
+    private const float DrawerSepH = 9f;
+
     private readonly Dictionary<uint, ID2D1SolidColorBrush> _brushes = new();
 
     public FullUi()
     {
         _expand = new Anim(0f);
+        _peek = new Anim(1f);
     }
 
     public string Name => "完整界面";
     public bool Visible => true;
-    public bool IsAnimating => _expand.Running;
+    public bool IsAnimating
+    {
+        get
+        {
+            // 贴边隐藏那条"离开一会儿才收"是靠**继续要帧**实现的：
+            // 没有帧就没有时机去收（引擎只在有脏区或界面说要动时才渲染）。
+            if (_peek.Running) return true;
+            if (_hideEnabled && !_hoverInside && _peek.Value > 0f) return true;
+            return _expand.Running;
+        }
+    }
 
     public void Attach(IUiHost host)
     {
         _host = host;
         _widgets = new Widgets(host);
         _expand.Bind(host);        // 时钟必须接真的那个（见 Anim.Bind 的注释）
+        _peek.Bind(host);
         _lastTool = host.State.Tool;
         _expand.Jump(0f);
+        _peek.Jump(1f);
         Layout(host.Screen, host.DpiScale);
     }
 
@@ -99,16 +147,21 @@ public sealed class FullUi : IOverlayUi
 
     public RectF QueryBounds()
     {
-        var bar = BarRect();
-        var band = BandRect();
-        // 上带还没长出来的那几帧只算主条（占用矩形必须跟着实际画出来的东西走，
-        // 不然命中测试和输入小窗都会比画面大一圈）。
-        if (band.MaxY - band.MinY < 2f) return bar;
-        return new RectF
+        // 占用矩形必须跟着"实际画出来的东西"走：贴边隐藏时它就只剩露头那一条，
+        // 输入小窗也跟着缩——这样指针扫过露头才算"碰到面板"，其余位置照旧穿透/画线。
+        var u = UnionRect();
+        var s = Shift();
+        u = new RectF
         {
-            MinX = bar.MinX, MinY = Math.Min(bar.MinY, band.MinY),
-            MaxX = bar.MaxX, MaxY = Math.Max(bar.MaxY, band.MaxY),
+            MinX = u.MinX + s.X, MinY = u.MinY + s.Y,
+            MaxX = u.MaxX + s.X, MaxY = u.MaxY + s.Y,
         };
+        // 露头必须留在屏幕内（绝不把窗口挪出屏幕来实现隐藏——那样就再也收不到输入了）
+        u.MinX = Math.Max(u.MinX, _screen.MinX);
+        u.MinY = Math.Max(u.MinY, _screen.MinY);
+        u.MaxX = Math.Min(u.MaxX, _screen.MaxX);
+        u.MaxY = Math.Min(u.MaxY, _screen.MaxY);
+        return u;
     }
 
     private RectF BarRect()
@@ -351,23 +404,190 @@ public sealed class FullUi : IOverlayUi
         }
     }
 
+    // ---- 「更多」抽屉 ------------------------------------------------------
+
+    /// <summary>抽屉的高：6 行 ＋ 两条分隔 ＋ 上下内边距。算出来的，加行不用手改数字。</summary>
+    private static float DrawerHeight()
+    {
+        float h = DrawerPad * 2f + Rows.Length * DrawerRowH;
+        for (int i = 0; i < Rows.Length; i++) if (IsSeparatorAfter(i)) h += DrawerSepH;
+        return h;
+    }
+
+    /// <summary>主条 ＋ 上带（不含抽屉）。</summary>
+    private RectF PanelRect()
+    {
+        var bar = BarRect();
+        var band = BandRect();
+        if (band.MaxY - band.MinY < 2f) return bar;
+        return new RectF
+        {
+            MinX = bar.MinX, MinY = Math.Min(bar.MinY, band.MinY),
+            MaxX = bar.MaxX, MaxY = Math.Max(bar.MaxY, band.MaxY),
+        };
+    }
+
+    /// <summary>
+    /// 抽屉：**右对齐、放在内容那一侧**（和上带同一个方向）。
+    /// 右对齐是因为它是由最右那格「更多」打开的——弹出的东西应该出现在手指附近。
+    /// </summary>
+    private RectF DrawerRect()
+    {
+        float h = DrawerHeight();
+        var panel = PanelRect();
+        float maxX = panel.MaxX;
+        float y = BandAbove() ? panel.MinY - DrawerGap - h : panel.MaxY + DrawerGap;
+        return new RectF { MinX = maxX - DrawerW, MinY = y, MaxX = maxX, MaxY = y + h };
+    }
+
+    private float RowTop(int i)
+    {
+        float y = DrawerRect().MinY + DrawerPad;
+        for (int k = 0; k < i; k++)
+        {
+            y += DrawerRowH;
+            if (IsSeparatorAfter(k)) y += DrawerSepH;
+        }
+        return y;
+    }
+
+    private RectF RowRect(int i)
+    {
+        var d = DrawerRect();
+        float y = RowTop(i);
+        return new RectF { MinX = d.MinX + DrawerPad, MinY = y, MaxX = d.MaxX - DrawerPad, MaxY = y + DrawerRowH };
+    }
+
+    /// <summary>开关的矩形（行右侧那个小胶囊）。</summary>
+    private RectF SwitchRect(int i)
+    {
+        var r = RowRect(i);
+        float w = 36f, h = 20f;
+        float cy = (r.MinY + r.MaxY) * 0.5f;
+        return new RectF { MinX = r.MaxX - w, MinY = cy - h * 0.5f, MaxX = r.MaxX, MaxY = cy + h * 0.5f };
+    }
+
+    private bool IsToggleRow(int i) => Rows[i].Kind is Row.DarkTheme or Row.AutoHide;
+    private bool IsGrayRow(int i) => Rows[i].Gray;
+
+    private int HitRow(float x, float y)
+    {
+        if (!_drawerOpen) return -1;
+        var d = DrawerRect();
+        if (!d.Contains(x, y)) return -1;
+        for (int i = 0; i < Rows.Length; i++)
+            if (RowRect(i).Contains(x, y) && !IsGrayRow(i)) return i;
+        return -1;
+    }
+
+    private void ActivateRow(int i)
+    {
+        switch (Rows[i].Kind)
+        {
+            case Row.DarkTheme:
+                _dark = !_dark;
+                Invalidate();
+                break;
+            case Row.AutoHide:
+                _hideEnabled = !_hideEnabled;
+                _peek.Jump(1f);          // 刚打开时先给个完整的，别一开就缩起来
+                Invalidate();
+                break;
+            case Row.Restart:
+                _host.Commands.Restart();     // 引擎会先暂存板书再重启
+                break;
+            case Row.Quit:
+                _host.Commands.Quit();
+                break;
+        }
+    }
+
+    // ---- 贴边隐藏 -----------------------------------------------------------
+
+    /// <summary>整块（主条 ＋ 上带 ＋ 抽屉）**未平移**的矩形。</summary>
+    private RectF UnionRect()
+    {
+        var p = PanelRect();
+        if (!_drawerOpen) return p;
+        var d = DrawerRect();
+        return new RectF
+        {
+            MinX = Math.Min(p.MinX, d.MinX), MinY = Math.Min(p.MinY, d.MinY),
+            MaxX = Math.Max(p.MaxX, d.MaxX), MaxY = Math.Max(p.MaxY, d.MaxY),
+        };
+    }
+
+    /// <summary>
+    /// 贴边隐藏的位移：往贴着的那条边挪，最后只剩 `DockPeek` 那么宽露在外面。
+    /// 几何全部按"没挪"算，只有最后一步整体平移——这样命中、绘制、占用矩形三处
+    /// 不会各写一份坐标换算（那是这类 bug 的老窝）。
+    /// </summary>
+    private Vector2 Shift()
+    {
+        if (!_hideEnabled) return Vector2.Zero;
+        float t = 1f - _peek.Value;
+        if (t <= 0.001f) return Vector2.Zero;
+
+        var u = UnionRect();
+        float w = u.MaxX - u.MinX, h = u.MaxY - u.MinY;
+        float dl = u.MinX - _screen.MinX, dr = _screen.MaxX - u.MaxX;
+        float dt = u.MinY - _screen.MinY, db = _screen.MaxY - u.MaxY;
+        float best = Math.Min(Math.Min(dl, dr), Math.Min(dt, db));
+        if (best > Tokens.SnapDistance) return Vector2.Zero;      // 没贴边就不藏
+
+        // 位移要把"面板到屏幕边那点空隙"也算进去：面板浮着的时候离边 12，
+        // 只挪 (size - Peek) 的话，屏幕上会留下 12 + 8 = 20 像素（露头比说好的大）。
+        if (best == dl) return new Vector2(-(w - Tokens.DockPeek + dl) * t, 0);
+        if (best == dr) return new Vector2((w - Tokens.DockPeek + dr) * t, 0);
+        if (best == dt) return new Vector2(0, -(h - Tokens.DockPeek + dt) * t);
+        return new Vector2(0, (h - Tokens.DockPeek + db) * t);
+    }
+
+    /// <summary>
+    /// 每帧更新"该不该收起来"。写得像个小状态机，因为规则就三条：
+    /// 写字中不许动、指针在里面/正按着/抽屉开着不许收、刚离开要等一会儿（防误触）。
+    /// </summary>
+    private void UpdatePeek()
+    {
+        if (!_hideEnabled) { _peek.To(1f, 0); return; }
+
+        bool keepOpen = _hoverInside || _press != -1 || _sliderDragging || _drawerOpen
+                     || _host.State.IsDrawing;
+        if (keepOpen)
+        {
+            _leftAtMs = _host.NowMs;
+            _peek.To(1f, Tokens.SnapMs);
+            return;
+        }
+        if (_host.NowMs - _leftAtMs < 700) return;               // 刚离开：再等等（防误触）
+        _peek.To(0f, Tokens.SnapMs);
+    }
+
     // ---- 输入 ---------------------------------------------------------------
 
     public bool PointerDown(in UiPointerEvent e)
     {
+        var p = Local(e);
         _press = -1;
         _dragging = false;
-        _pressPos = new Vector2(e.X, e.Y);
+        _hoverInside = true;
+        _leftAtMs = _host.NowMs;
+        _pressPos = p;
         _dragStartAnchor = Anchor();
 
         if (_expand.Value < 0.5f)
         {
-            if (!BallRect().Contains(e.X, e.Y)) return false;
+            if (!BallRect().Contains(p.X, p.Y)) return false;
             _press = -2;                    // 球
             return true;
         }
 
-        int idx = HitCell(e.X, e.Y);
+        // 抽屉优先。它长在面板外面（上方），物理上和主条不重叠，
+        // 但顺序写清楚，省得以后挪位置时踩雷。
+        int row = HitRow(p.X, p.Y);
+        if (row >= 0) { _press = 1000 + row; return true; }
+
+        int idx = HitCell(p.X, p.Y);
         if (idx >= 0)
         {
             _press = idx;
@@ -377,28 +597,37 @@ public sealed class FullUi : IOverlayUi
         // 上带：滑条优先（它的可拖区域比视觉大一圈，会和色片/分段挨着）
         if (BandVisible())
         {
-            if (BandHasSlider && Widgets.SliderHit(SliderRect()).Contains(e.X, e.Y))
+            if (BandHasSlider && Widgets.SliderHit(SliderRect()).Contains(p.X, p.Y))
             {
                 _sliderDragging = true;
-                DragSlider(e.X);
+                DragSlider(p.X);
                 return true;
             }
-            int sw = HitSwatch(e.X, e.Y);
+            int sw = HitSwatch(p.X, p.Y);
             if (sw >= 0) { ActivateSwatch(sw); return true; }
-            int sg = HitSegment(e.X, e.Y);
+            int sg = HitSegment(p.X, p.Y);
             if (sg >= 0) { ActivateSegment(sg); return true; }
         }
 
         return false;                       // 带子/上带里的空白（两端内边距）：不吃，引擎按"地盘"吞掉
     }
 
+    /// <summary>屏幕坐标 → "没有平移过的"布局坐标（贴边隐藏会整体平移一次）。</summary>
+    private Vector2 Local(in UiPointerEvent e)
+    {
+        var s = Shift();
+        return new Vector2(e.X - s.X, e.Y - s.Y);
+    }
+
     public bool PointerMove(in UiPointerEvent e)
     {
-        var p = new Vector2(e.X, e.Y);
+        _hoverInside = QueryBounds().Contains(e.X, e.Y);
+        _leftAtMs = _host.NowMs;
+        var p = Local(e);
 
         if (_sliderDragging)
         {
-            DragSlider(e.X);
+            DragSlider(p.X);
             return true;
         }
 
@@ -414,15 +643,30 @@ public sealed class FullUi : IOverlayUi
             return true;
         }
 
+        int row = HitRow(p.X, p.Y);
+        if (row != _drawerHover)
+        {
+            _drawerHover = row;
+            Invalidate();
+        }
+
         int hover = _expand.Value < 0.5f
-            ? (BallRect().Contains(e.X, e.Y) ? -2 : -1)
-            : HoverAt(e.X, e.Y);
+            ? (BallRect().Contains(p.X, p.Y) ? -2 : -1)
+            : HoverAt(p.X, p.Y);
         if (hover != _hover)
         {
             _hover = hover;
             Invalidate();
         }
-        return hover != -1;
+        return hover != -1 || row >= 0;
+    }
+
+    public void PointerLeave()
+    {
+        if (!_hoverInside) return;
+        _hoverInside = false;
+        _leftAtMs = _host?.NowMs ?? 0;
+        Invalidate();
     }
 
     /// <summary>
@@ -462,6 +706,7 @@ public sealed class FullUi : IOverlayUi
             return true;
         }
 
+        if (idx >= 1000) { ActivateRow(idx - 1000); return true; }   // 抽屉里的行
         if (idx == -2) { Toggle(); return true; }        // 点球：展开
         if (idx == 0) { Toggle(); return true; }         // 点带子最左那格：收起
         Activate(idx);
@@ -536,7 +781,10 @@ public sealed class FullUi : IOverlayUi
             case 9: cmd.SetTool(Tool.Capture); break;
             case 10: cmd.Undo(); break;
             case 11: cmd.Redo(); break;
-            case 12: break;                                  // 「更多」抽屉：下一版
+            case 12:                                         // 「更多」：开合抽屉
+                _drawerOpen = !_drawerOpen;
+                _drawerHover = -1;
+                break;
         }
         Invalidate();
     }
@@ -576,6 +824,24 @@ public sealed class FullUi : IOverlayUi
     public void Render(ID2D1DeviceContext ctx, UiTheme theme)
     {
         if (_host == null) return;
+        UpdatePeek();                    // 每帧问一次"该不该收起来"（贴边隐藏）
+
+        var saved = ctx.Transform;
+        var shift = Shift();
+        if (shift != Vector2.Zero)
+            ctx.Transform = Matrix3x2.CreateTranslation(shift) * saved;
+        try
+        {
+            RenderCore(ctx);
+        }
+        finally
+        {
+            ctx.Transform = saved;
+        }
+    }
+
+    private void RenderCore(ID2D1DeviceContext ctx)
+    {
         float e = _expand.Value;
         var bar = BarRect();
         DrawCard(ctx, bar, Tokens.PillRadius(Tokens.BarHeight));
@@ -588,7 +854,7 @@ public sealed class FullUi : IOverlayUi
             var c = new Vector2((bar.MinX + bar.MaxX) * 0.5f, (bar.MinY + bar.MaxY) * 0.5f);
             var ring = new Ellipse(c, d * 0.5f, d * 0.5f);
             ctx.DrawEllipse(ring, Brush(ctx, st.PaletteBase), 3f);
-            IconAtlas.DrawCentered(ctx, "pen", bar, Tokens.Icon, Brush(ctx, Tokens.InkLight));
+            IconAtlas.DrawCentered(ctx, "pen", bar, Tokens.Icon, Brush(ctx, InkCol));
             return;
         }
 
@@ -601,7 +867,15 @@ public sealed class FullUi : IOverlayUi
         for (int i = 1; i < Cells.Length; i++) DrawCell(ctx, i, st, e);
 
         if (BandVisible()) DrawBand(ctx, st);
+        if (_drawerOpen) DrawDrawer(ctx);
     }
+
+    // ---- 颜色（深色主题只是一整套换过来，形状一个都不动）------------------
+
+    private Color4 PanelFill => _dark ? Tokens.PanelDark : Tokens.PanelLight;
+    private Color4 BorderCol => _dark ? Tokens.BorderDark : Tokens.BorderLight;
+    private Color4 InkCol => _dark ? Tokens.InkDark : Tokens.InkLight;
+    private Color4 HoverCol => _dark ? Tokens.HoverDark : Tokens.HoverLight;
 
     /// <summary>一张"卡片"：两层投影 ＋ 底 ＋ 1px 描边（没有这道边，圆角会糊进背景里）。</summary>
     private void DrawCard(ID2D1DeviceContext ctx, RectF r, float radius)
@@ -613,8 +887,8 @@ public sealed class FullUi : IOverlayUi
 
         var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
         var rr = new RoundedRectangle(box, radius, radius);
-        ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.PanelLight));
-        ctx.DrawRoundedRectangle(rr, Brush(ctx, Tokens.BorderLight), 1f);
+        ctx.FillRoundedRectangle(rr, Brush(ctx, PanelFill));
+        ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
     }
 
     /// <summary>画上带的内容。每一项都对应引擎里真实存在的能力，摆不出来的就不摆。</summary>
@@ -628,21 +902,21 @@ public sealed class FullUi : IOverlayUi
                 var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
                 var rr = new RoundedRectangle(box, 7f, 7f);
                 ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Palette[i].Color));
-                ctx.DrawRoundedRectangle(rr, Brush(ctx, Tokens.BorderLight), 1f);
+                ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
 
                 if (IsSwatchActive(st, i))
                 {
                     // 选中的色块要有**第二重标记**（只靠颜色区分不符合无障碍要求）：
                     // 外圈深描边 ＋ 内圈白环。
                     var outer = new Vortice.RawRectF(r.MinX - 2, r.MinY - 2, r.MaxX + 2, r.MaxY + 2);
-                    ctx.DrawRoundedRectangle(new RoundedRectangle(outer, 9f, 9f), Brush(ctx, Tokens.InkLight), 1.5f);
+                    ctx.DrawRoundedRectangle(new RoundedRectangle(outer, 9f, 9f), Brush(ctx, InkCol), 1.5f);
                     var inner = new Vortice.RawRectF(r.MinX + 1, r.MinY + 1, r.MaxX - 1, r.MaxY - 1);
                     ctx.DrawRoundedRectangle(new RoundedRectangle(inner, 6f, 6f), Brush(ctx, new Color4(1f, 1f, 1f, 0.9f)), 2f);
                 }
                 else if (_hover == 100 + i)
                 {
                     var outer = new Vortice.RawRectF(r.MinX - 2, r.MinY - 2, r.MaxX + 2, r.MaxY + 2);
-                    ctx.DrawRoundedRectangle(new RoundedRectangle(outer, 9f, 9f), Brush(ctx, Tokens.InkLight), 1.5f);
+                    ctx.DrawRoundedRectangle(new RoundedRectangle(outer, 9f, 9f), Brush(ctx, InkCol), 1.5f);
                 }
             }
         }
@@ -651,7 +925,7 @@ public sealed class FullUi : IOverlayUi
         {
             var r = SliderRect();
             _widgets.Slider(ctx, r, SliderT(st),
-                            Brush(ctx, Tokens.HoverLight), Brush(ctx, Tokens.Accent), Brush(ctx, Tokens.Accent));
+                            Brush(ctx, HoverCol), Brush(ctx, Tokens.Accent), Brush(ctx, Tokens.Accent));
         }
 
         int n = BandSegmentCount;
@@ -677,7 +951,7 @@ public sealed class FullUi : IOverlayUi
         if (_bandCell == 2)
         {
             ctx.FillRoundedRectangle(rr, Brush(ctx, InkPalette.BoardPresets[i].Color));
-            ctx.DrawRoundedRectangle(rr, active ? Brush(ctx, Tokens.Accent) : Brush(ctx, Tokens.BorderLight),
+            ctx.DrawRoundedRectangle(rr, active ? Brush(ctx, Tokens.Accent) : Brush(ctx, BorderCol),
                                      active ? 2f : 1f);
             if (active)
             {
@@ -693,13 +967,13 @@ public sealed class FullUi : IOverlayUi
         }
         else if (_hover == 200 + i || _press == 200 + i)
         {
-            ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.HoverLight));
+            ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
         }
-        ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : Tokens.BorderLight), 1f);
+        ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : BorderCol), 1f);
 
         string label = SegmentLabel(i);
         _widgets.Text(ctx, label, r, 12.5f,
-                      Brush(ctx, active ? Tokens.AccentInk : Tokens.InkLight));
+                      Brush(ctx, active ? Tokens.AccentInk : InkCol));
     }
 
     private string SegmentLabel(int i) => _bandCell switch
@@ -730,6 +1004,65 @@ public sealed class FullUi : IOverlayUi
             && MathF.Abs(c.B - st.BoardColor.B) < 0.02f;
     }
 
+    /// <summary>
+    /// 画「更多」抽屉：左边文字、右边开关；灰项（还没做的功能）压暗并且点不动。
+    /// 危险动作（退出）用红字——不挨着常用动作放，这是设计里定过的规矩。
+    /// </summary>
+    private void DrawDrawer(ID2D1DeviceContext ctx)
+    {
+        var d = DrawerRect();
+        DrawCard(ctx, d, Tokens.BandRadius);
+
+        for (int i = 0; i < Rows.Length; i++)
+        {
+            var r = RowRect(i);
+            bool gray = IsGrayRow(i);
+            bool hover = !gray && _drawerHover == i;
+
+            if (hover)
+            {
+                var hb = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
+                ctx.FillRoundedRectangle(new RoundedRectangle(hb, 8f, 8f), Brush(ctx, HoverCol));
+            }
+
+            Color4 ink = gray ? new Color4(InkCol.R, InkCol.G, InkCol.B, 0.35f)
+                       : Rows[i].Dangerous ? new Color4(0.85f, 0.22f, 0.22f, 1f)
+                       : InkCol;
+            var label = new RectF
+            {
+                MinX = r.MinX + 4, MinY = r.MinY,
+                MaxX = r.MaxX - (IsToggleRow(i) ? 48f : 4f), MaxY = r.MaxY,
+            };
+            _widgets.Text(ctx, Rows[i].Label, label, 13f, Brush(ctx, ink), center: false);
+
+            if (IsToggleRow(i)) DrawSwitch(ctx, SwitchRect(i), IsOn(i));
+
+            if (IsSeparatorAfter(i))
+            {
+                float y = r.MaxY + DrawerSepH * 0.5f;
+                ctx.DrawLine(new Vector2(d.MinX + DrawerPad, y),
+                             new Vector2(d.MaxX - DrawerPad, y), Brush(ctx, BorderCol), 1f);
+            }
+        }
+    }
+
+    private bool IsOn(int i) => Rows[i].Kind == Row.DarkTheme ? _dark : _hideEnabled;
+
+    /// <summary>开关：打开的用强调色，关的是浅底 + 描边；滑钮在右/左。</summary>
+    private void DrawSwitch(ID2D1DeviceContext ctx, RectF r, bool on)
+    {
+        float radius = (r.MaxY - r.MinY) * 0.5f;
+        var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
+        var rr = new RoundedRectangle(box, radius, radius);
+        ctx.FillRoundedRectangle(rr, Brush(ctx, on ? Tokens.Accent : HoverCol));
+        if (!on) ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+
+        float k = 14f;
+        float cx = on ? r.MaxX - k * 0.5f - 3f : r.MinX + k * 0.5f + 3f;
+        var c = new Vector2(cx, (r.MinY + r.MaxY) * 0.5f);
+        ctx.FillEllipse(new Ellipse(c, k * 0.5f, k * 0.5f), Brush(ctx, Tokens.AccentInk));
+    }
+
     private void DrawCell(ID2D1DeviceContext ctx, int i, in UiState st, float e)
     {
         var r = CellRect(i);
@@ -743,7 +1076,7 @@ public sealed class FullUi : IOverlayUi
             {
                 float x = r.MaxX + Tokens.GroupDivider * 0.5f;
                 ctx.DrawLine(new Vector2(x, r.MinY + 10), new Vector2(x, r.MaxY - 10),
-                             Brush(ctx, Tokens.BorderLight), 1f);
+                             Brush(ctx, BorderCol), 1f);
             }
 
             if (active)
@@ -754,7 +1087,7 @@ public sealed class FullUi : IOverlayUi
             else if (hover)
             {
                 var bg = new Vortice.RawRectF(r.MinX + 2, r.MinY + 4, r.MaxX - 2, r.MaxY - 4);
-                ctx.FillRoundedRectangle(new RoundedRectangle(bg, 8f, 8f), Brush(ctx, Tokens.HoverLight));
+                ctx.FillRoundedRectangle(new RoundedRectangle(bg, 8f, 8f), Brush(ctx, HoverCol));
             }
         }
 
@@ -765,12 +1098,12 @@ public sealed class FullUi : IOverlayUi
             float d = 32f;
             var ring = new Ellipse(c, d * 0.5f, d * 0.5f);
             ctx.DrawEllipse(ring, Brush(ctx, st.PaletteBase), 2.5f);
-            IconAtlas.DrawCentered(ctx, "pen", r, 16f, Brush(ctx, Tokens.InkLight));
+            IconAtlas.DrawCentered(ctx, "pen", r, 16f, Brush(ctx, InkCol));
             return;
         }
 
         var icon = active ? Cells[i].Filled : Cells[i].Icon;
-        var ink = active ? Tokens.AccentInk : Tokens.InkLight;
+        var ink = active ? Tokens.AccentInk : InkCol;
         IconAtlas.DrawCentered(ctx, icon, r, Tokens.Icon, Brush(ctx, ink));
     }
 
@@ -823,6 +1156,18 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>自检用：滑条的矩形。</summary>
     internal RectF SliderRectForTest => SliderRect();
+
+    /// <summary>自检用：抽屉开着没有 / 它的矩形 / 第 i 行的矩形。</summary>
+    internal bool DrawerOpenForTest => _drawerOpen;
+    internal RectF DrawerRectForTest => DrawerRect();
+    internal RectF RowRectForTest(int i) => RowRect(i);
+
+    /// <summary>自检用：深色主题与贴边隐藏的开关状态。</summary>
+    internal bool DarkForTest => _dark;
+    internal bool HideEnabledForTest => _hideEnabled;
+
+    /// <summary>自检/出图用：把抽屉打开（产品里只能点「更多」那一格开）。</summary>
+    internal void OpenDrawerForTest() => _drawerOpen = true;
 
     /// <summary>自检用：现在算"展开"吗。</summary>
     internal bool ExpandedForTest => _expand.Value > 0.5f;

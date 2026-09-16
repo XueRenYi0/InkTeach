@@ -17,6 +17,7 @@ internal sealed class App : InkEngine.InkEngine
 {
     private IntPtr _clickTargetHwnd;
     private string _clickLogFile;
+    private bool _panelShowDrawer;
 
     /// <summary>密集模式：所有笔画写在一小块区域里（量"同一页很多墨迹"）。</summary>
     private bool DenseWrite;
@@ -5053,6 +5054,7 @@ internal sealed class App : InkEngine.InkEngine
     /// </summary>
     private void PanelShow(string path)
     {
+        _panelShowDrawer = Environment.GetCommandLineArgs().Contains("--drawer");
         SetUiFactory(() => new InkUi.FullUi());
         Tool = Tool.Pen;
         BoardOn = true;                      // 白板打底：截出来的图里没有桌面上的杂东西
@@ -5061,6 +5063,7 @@ internal sealed class App : InkEngine.InkEngine
         if (CurrentUi is InkUi.FullUi ui)
         {
             ui.SnapForTest();                // 一步展开，不用等 200 毫秒
+            if (_panelShowDrawer) ui.OpenDrawerForTest();   // --drawer：连抽屉一起出图
             SettleFrames(500);
 
             var b = ui.QueryBounds();
@@ -5265,6 +5268,60 @@ internal sealed class App : InkEngine.InkEngine
         Host.Commands.SetBoardColor(InkPalette.BoardPresets[0].Color);
         SettleFrames(150);
 
+        // ---- ⑦ 「更多」抽屉：开合、深色主题、贴边隐藏 ----
+        var moreCell = ui.CellRectForTest(12);
+        ClickPhysical((moreCell.MinX + moreCell.MaxX) * 0.5f * DpiScale,
+                      (moreCell.MinY + moreCell.MaxY) * 0.5f * DpiScale);
+        SettleFrames(150);
+        var drawer = ui.DrawerRectForTest;
+        Check("点「更多」开出抽屉", ui.DrawerOpenForTest,
+              $"抽屉 ({drawer.MinX:F0},{drawer.MinY:F0})-({drawer.MaxX:F0},{drawer.MaxY:F0})");
+        Check("抽屉在面板上方、且在屏幕内",
+              ui.DrawerOpenForTest && drawer.MaxY <= ui.BarRectForTest.MinY - 2f
+              && drawer.MinY >= _virtualY / DpiScale && drawer.MaxX <= _virtualX / DpiScale + _virtualW / DpiScale,
+              $"抽屉底 {drawer.MinY:F0}+{drawer.MaxY - drawer.MinY:F0}，主条顶 {ui.BarRectForTest.MinY:F0}");
+
+        var darkRow = ui.RowRectForTest(0);
+        ClickPhysical((darkRow.MinX + darkRow.MaxX) * 0.5f * DpiScale,
+                      (darkRow.MinY + darkRow.MaxY) * 0.5f * DpiScale);
+        Check("点「深色主题」切换", ui.DarkForTest, $"深色 = {ui.DarkForTest}");
+
+        var hideRow = ui.RowRectForTest(1);
+        ClickPhysical((hideRow.MinX + hideRow.MaxX) * 0.5f * DpiScale,
+                      (hideRow.MinY + hideRow.MaxY) * 0.5f * DpiScale);
+        Check("点「贴边隐藏」打开", ui.HideEnabledForTest, $"开关 = {ui.HideEnabledForTest}");
+
+        // 关掉抽屉（点「更多」再点一下），然后把指针移到画布上：
+        // 贴边状态下应该收成一条 8 像素的"露头"，悬停露头再长回来。
+        ClickPhysical((moreCell.MinX + moreCell.MaxX) * 0.5f * DpiScale,
+                      (moreCell.MinY + moreCell.MaxY) * 0.5f * DpiScale);
+        SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.4f), 0);
+        SettleFrames(1200);                       // 等过"离开 700 毫秒才收"那一段
+        var peeked = ui.QueryBounds();
+        Check("贴边隐藏收成露头",
+              (peeked.MaxY - peeked.MinY) < 12f || (peeked.MaxX - peeked.MinX) < 12f,
+              $"占用 {peeked.MaxX - peeked.MinX:F0}×{peeked.MaxY - peeked.MinY:F0}（应只剩露头那条）");
+
+        SendMouse((int)((peeked.MinX + peeked.MaxX) * 0.5f * DpiScale),
+                  (int)((peeked.MinY + peeked.MaxY) * 0.5f * DpiScale), 0);
+        SettleFrames(500);
+        var back = ui.QueryBounds();
+        Check("碰一下露头就长回来", (back.MaxX - back.MinX) > 100f,
+              $"占用 {back.MaxX - back.MinX:F0}×{back.MaxY - back.MinY:F0}");
+
+        // 关掉贴边隐藏，免得影响后面的用例
+        var moreCell2 = ui.CellRectForTest(12);
+        ClickPhysical((moreCell2.MinX + moreCell2.MaxX) * 0.5f * DpiScale,
+                      (moreCell2.MinY + moreCell2.MaxY) * 0.5f * DpiScale);
+        SettleFrames(150);
+        var hideRow2 = ui.RowRectForTest(1);
+        ClickPhysical((hideRow2.MinX + hideRow2.MaxX) * 0.5f * DpiScale,
+                      (hideRow2.MinY + hideRow2.MaxY) * 0.5f * DpiScale);
+        ClickPhysical((moreCell2.MinX + moreCell2.MaxX) * 0.5f * DpiScale,
+                      (moreCell2.MinY + moreCell2.MaxY) * 0.5f * DpiScale);
+        SettleFrames(250);
+        Check("关掉贴边隐藏", !ui.HideEnabledForTest, $"开关 = {ui.HideEnabledForTest}");
+
         // ---- ⑥ 收起来，然后空闲必须 0 帧 ----
         var ball2 = ui.CellRectForTest(0);
         ClickPhysical((ball2.MinX + ball2.MaxX) * 0.5f * DpiScale,
@@ -5304,6 +5361,33 @@ internal sealed class App : InkEngine.InkEngine
         float wantLeft = _virtualX / DpiScale + InkUi.Tokens.DockGap;
         Check("拖到左边缘会吸附", MathF.Abs(docked.MinX - wantLeft) < 3f,
               $"左边缘 {docked.MinX:F0}（贴边后应为 {wantLeft:F0}），拖动前在 {home.MinX:F0}");
+
+        // ---- ⑧ 抽屉里的「重启软件」：先暂存板书，再拉起新进程（这里只记一笔，不真拉）----
+        Recovery.ClearRestartCount();
+        try { File.Delete(Recovery.SessionPath); } catch { }
+        Doc.Clear();
+        Doc.ClearHistory();
+        var keep2 = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 6f };
+        keep2.AddPoint(500, 500, 1f, 0);
+        keep2.AddPoint(800, 500, 1f, 1);
+        Doc.AddStroke(keep2);
+
+        var ball3 = ui.QueryBounds();
+        ClickPhysical((ball3.MinX + ball3.MaxX) * 0.5f * DpiScale,
+                      (ball3.MinY + ball3.MaxY) * 0.5f * DpiScale);      // 展开
+        SettleFrames(250);
+        var moreCell3 = ui.CellRectForTest(12);
+        ClickPhysical((moreCell3.MinX + moreCell3.MaxX) * 0.5f * DpiScale,
+                      (moreCell3.MinY + moreCell3.MaxY) * 0.5f * DpiScale);  // 开抽屉
+        SettleFrames(150);
+        var restartRow = ui.RowRectForTest(2);
+        ClickPhysical((restartRow.MinX + restartRow.MaxX) * 0.5f * DpiScale,
+                      (restartRow.MinY + restartRow.MaxY) * 0.5f * DpiScale);
+        Check("点「重启软件」：先存板书再重启",
+              RestartRequested && File.Exists(Recovery.SessionPath),
+              $"重启已发起 = {RestartRequested}，板书已暂存 = {File.Exists(Recovery.SessionPath)}");
+        try { File.Delete(Recovery.SessionPath); } catch { }
+        Recovery.ClearRestartCount();
 
         Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
         ExitCode = fail == 0 ? 0 : 1;

@@ -71,6 +71,15 @@ public interface IOverlayUi
     /// <summary>指针移动（含悬停）。返回 true 表示界面消费。</summary>
     bool PointerMove(in UiPointerEvent e);
 
+    /// <summary>
+    /// 指针离开了界面这一块。
+    ///
+    /// 为什么必须有这个出口：引擎只会把**落在界面矩形内**的移动转给界面，
+    /// 所以"指针什么时候走了"界面自己是算不出来的。而这件事有真实后果——
+    /// 贴边隐藏要"移开一会儿才收"、悬停展开要收回去，都靠它。
+    /// </summary>
+    void PointerLeave();
+
     /// <summary>指针抬起。</summary>
     bool PointerUp(in UiPointerEvent e);
 
@@ -153,6 +162,13 @@ public interface IEngineCommands
 
     /// <summary>全选（引擎会顺手把工具切到框选，免得用户以为没生效）。</summary>
     void SelectAll();
+
+    /// <summary>
+    /// 重启软件。**先把板书暂存**，再拉起新进程、退出自己，新进程启动时读回来。
+    /// 和"界面崩了自动重启"走的是同一条路（见 Recovery）：重启的前提是不丢东西。
+    /// 教室里没有键盘的机器上，这是"感觉不对就重开一次"的唯一入口。
+    /// </summary>
+    void Restart();
 
     void Quit();
 }
@@ -250,6 +266,11 @@ public readonly struct UiState
     public Color4 BoardColor { get; init; }
     /// <summary>框选的选择方式（界面用它高亮"矩形/套索"那一格）。</summary>
     public SelectMode SelectMode { get; init; }
+    /// <summary>
+    /// 老师这一刻是不是正在写。界面用它判断"别在人家写字的时候动界面"——
+    /// 比如贴边隐藏：手正在写，界面突然收起来或者浮出来，都会打断。
+    /// </summary>
+    public bool IsDrawing { get; init; }
     /// <summary>可撤销步数——界面的"撤销"按钮据此变灰。</summary>
     public int UndoDepth { get; init; }
     public int RedoDepth { get; init; }
@@ -318,6 +339,7 @@ public sealed class NullUi : IOverlayUi
     public void Render(ID2D1DeviceContext ctx, UiTheme theme) { }
     public bool PointerDown(in UiPointerEvent e) => false;
     public bool PointerMove(in UiPointerEvent e) => false;
+    public void PointerLeave() { }
     public bool PointerUp(in UiPointerEvent e) => false;
     public void OnStateChanged(in UiState state) { }
 }

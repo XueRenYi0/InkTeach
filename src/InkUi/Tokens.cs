@@ -47,6 +47,12 @@ internal static class Tokens
     /// <summary>贴边之后几乎贴着屏幕（不是 12——12 是"浮着"的留白）。</summary>
     public const float DockGap = 2f;
 
+    /// <summary>
+    /// 贴边隐藏时露出来的头：8 像素。8 看得见、点得到、悬停能唤出；
+    /// 再细就得靠"蹭屏幕边缘"了，教室里不友好（Windows 任务栏留的是 2）。
+    /// </summary>
+    public const float DockPeek = 8f;
+
     /// <summary>拖到离边 40 以内就吸附。</summary>
     public const float SnapDistance = 40f;
 

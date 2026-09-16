@@ -1219,6 +1219,9 @@ public class InkEngine
                 PointerInside = false;
                 _dirty = true;
                 ApplyCursor();
+                // 注意：**这里不能叫 Ui.PointerLeave()**。覆盖层的"离开"在面板接管输入时
+                // 恰恰是"指针进了面板"的那一刻（人从画布移到工具条上），
+                // 界面收到的会是反的。界面那条离开由接输入小窗发（见 UiInputWndProc）。
                 return IntPtr.Zero;
 
             case Native.WM_MOUSELEAVE:
@@ -2892,6 +2895,7 @@ public class InkEngine
         Board = BoardOn,
         BoardColor = BoardColor,
         SelectMode = SelMode,
+        IsDrawing = _drawing,
         UndoDepth = Doc.UndoDepth,
         RedoDepth = Doc.RedoDepth,
         StrokeCount = Doc.Strokes.Count,
@@ -2986,6 +2990,26 @@ public class InkEngine
     }
 
     internal void QuitFromUi() => _quit = true;
+
+    /// <summary>
+    /// 界面上那个"重启"：给老师一个"感觉不对就重开一次"的出口
+    /// （教室大屏 + 手写板的机器上可能没有键盘，界面是唯一入口）。
+    /// 走的是和"界面崩了自动重启"同一条路：**先暂存板书**，再拉起新进程、退出自己；
+    /// 新进程启动时会把它读回来，所以重启不丢东西。
+    /// </summary>
+    internal void RestartFromUi()
+    {
+        try { Recovery.SaveSession(InkSerializer.Save(Doc)); }
+        catch (Exception ex) { Console.WriteLine("板书暂存失败：" + ex.Message); }
+
+        if (!RestartSelf("界面上的重启"))
+        {
+            Console.WriteLine("重启没成功，继续用（板书还在）");
+            return;
+        }
+        RestartRequested = true;
+        _quit = true;
+    }
 
     internal void SetPassThroughFromUi(bool on)
     {
@@ -3373,6 +3397,8 @@ public class InkEngine
 
             case Native.WM_POINTERLEAVE:
                 _uiHover = false; _dirty = true; ApplyCursor();
+                // 界面那条"人走了"由这里发：方案 B 下，指针离开面板＝离开这块接输入小窗。
+                UiGuard("PointerLeave", () => Ui.PointerLeave());
                 return IntPtr.Zero;
 
             case Native.WM_POINTERDOWN:

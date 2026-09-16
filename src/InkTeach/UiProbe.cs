@@ -101,6 +101,10 @@ internal sealed class UiProbe : IOverlayUi
         return _bounds.Contains(e.X, e.Y);
     }
 
+    /// <summary>自检用：指针离开了几次（引擎会在 WM_POINTERLEAVE 时叫它）。</summary>
+    public int Leave;
+    public void PointerLeave() => Leave++;
+
     public bool PointerUp(in UiPointerEvent e)
     {
         Up++;

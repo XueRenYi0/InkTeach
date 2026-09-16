@@ -25,6 +25,7 @@ internal sealed class HeadlessUi : IOverlayUi
     public void Render(ID2D1DeviceContext ctx, UiTheme theme) { }
     public bool PointerDown(in UiPointerEvent e) => false;
     public bool PointerMove(in UiPointerEvent e) => false;
+    public void PointerLeave() { }
     public bool PointerUp(in UiPointerEvent e) => false;
     public void OnStateChanged(in UiState state) { }
 }
