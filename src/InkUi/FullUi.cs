@@ -159,7 +159,11 @@ public sealed class FullUi : IOverlayUi
     private const float DrawerW = 260f;
     private const float DrawerRowH = 40f;
     private const float DrawerPad = 12f;
-    private const float DrawerGap = 8f;
+    /// <summary>
+    /// 抽屉离面板的空隙。比假面板的 8 大一些（用户要的"再往上一些"）：
+    /// 拉开一点，抽屉和工具条才像两块东西，而不是糊在一起。
+    /// </summary>
+    private const float DrawerGap = 16f;
     private const float DrawerSepH = 9f;
     private const float ProfileH = 32f;        // 顶部那排"极简 / 自定义 / 完整"
     private const float GridChipH = 36f;       // 钉住那一栏里每个工具格
@@ -193,6 +197,7 @@ public sealed class FullUi : IOverlayUi
     {
         _host = host;
         _widgets = new Widgets(host);
+        IconAtlas.Init(host.PathFactory);
         _expand.Bind(host);        // 时钟必须接真的那个（见 Anim.Bind 的注释）
         _peek.Bind(host);
         _rail.Bind(host);
@@ -434,14 +439,29 @@ public sealed class FullUi : IOverlayUi
     // 没有设置项的（后撤/重做/更多/截屏）就不长上带——不做一排空按钮。
 
     private float BandCenterY() => (BandRect().MinY + BandRect().MaxY) * 0.5f;
-    private float BandContentLeft() => BandRect().MinX + Tokens.BarPad;
+    private float BandContentLeft() => BandRect().MinX + BarInset();
 
     private RectF SwatchRect(int i)
     {
-        float x = BandContentLeft() + i * (Tokens.Swatch + Tokens.SwatchGap);
-        float y = BandCenterY() - Tokens.Swatch * 0.5f;
-        return new RectF { MinX = x, MinY = y, MaxX = x + Tokens.Swatch, MaxY = y + Tokens.Swatch };
+        // **色片按可用宽度平分，铺满整条**（照假面板：cw = (avail - gap*(n-1)) / n）。
+        // 早先我写的是固定 26 宽 ＋ 6 缝，结果右边空出一大块，跟假面板一比就露馅了。
+        var band = BandRect();
+        int n = Tokens.Palette.Length;
+        float gap = 4f;
+        float avail = band.MaxX - band.MinX - BarInset() * 2f
+                    - (BandHasSlider ? Tokens.SliderWidth + 12f : 0f);
+        float w = (avail - gap * (n - 1)) / n;
+        float h = SwatchHeight();
+        float x = band.MinX + BarInset() + i * (w + gap);
+        float y = BandCenterY() - h * 0.5f;
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
     }
+
+    /// <summary>上带左右的内边距（照假面板的 inset = 16）。</summary>
+    private static float BarInset() => 16f;
+
+    /// <summary>色片的高：最多 26，带子矮的时候按比例缩（假面板：min(26, band * 0.8)）。</summary>
+    private float SwatchHeight() => MathF.Min(Tokens.Swatch, BandHeightFull() * 0.8f);
 
     private RectF SliderRect()
     {
@@ -449,15 +469,15 @@ public sealed class FullUi : IOverlayUi
         float y = BandCenterY() - (Tokens.SliderKnob + 8f) * 0.5f;
         return new RectF
         {
-            MinX = band.MaxX - Tokens.BarPad - Tokens.SliderWidth,
-            MinY = y, MaxX = band.MaxX - Tokens.BarPad, MaxY = y + Tokens.SliderKnob + 8f,
+            MinX = band.MaxX - BarInset() - Tokens.SliderWidth,
+            MinY = y, MaxX = band.MaxX - BarInset(), MaxY = y + Tokens.SliderKnob + 8f,
         };
     }
 
     private RectF SegmentRect(int i, int count)
     {
         var band = BandRect();
-        float total = band.MaxX - band.MinX - Tokens.BarPad * 2;
+        float total = band.MaxX - band.MinX - BarInset() * 2;
         float w = Math.Min(120f, (total - (count - 1) * 6f) / count);
         float x = BandContentLeft() + i * (w + 6f);
         float y = BandCenterY() - Tokens.SegmentHeight * 0.5f;
@@ -501,17 +521,7 @@ public sealed class FullUi : IOverlayUi
     private int HitSwatch(float x, float y)
     {
         if (!BandHasSwatches) return -1;
-        // 色线状态（还没张开）：整条线按 12 等分，**点哪一段就是哪个色**
-        // ——用户明确说喜欢"不用先展开再点"这一条。
-        if (!RailOpen)
-        {
-            var line = BandRect();
-            float left = line.MinX + Tokens.BarPad, right = line.MaxX - Tokens.BarPad;
-            if (x < left || x > right) return -1;
-            if (y < line.MinY - Tokens.RailHoverPad || y > line.MaxY + Tokens.RailHoverPad) return -1;
-            int n = Tokens.Palette.Length;
-            return Math.Clamp((int)((x - left) / MathF.Max(1f, (right - left) / n)), 0, n - 1);
-        }
+        if (!RailOpen) return -1;      // 还是一条色线时不吃点击（指针一靠近它就会张开）
         for (int i = 0; i < Tokens.Palette.Length; i++)
             if (SwatchRect(i).Contains(x, y)) return i;
         return -1;
@@ -520,14 +530,7 @@ public sealed class FullUi : IOverlayUi
     private int HitSegment(float x, float y)
     {
         int n = BandSegmentCount;
-        if (n > 0 && !RailOpen)
-        {
-            var line = BandRect();
-            float left = line.MinX + Tokens.BarPad, right = line.MaxX - Tokens.BarPad;
-            if (x < left || x > right) return -1;
-            if (y < line.MinY - Tokens.RailHoverPad || y > line.MaxY + Tokens.RailHoverPad) return -1;
-            return Math.Clamp((int)((x - left) / MathF.Max(1f, (right - left) / n)), 0, n - 1);
-        }
+        if (!RailOpen) return -1;
         for (int i = 0; i < n; i++)
             if (SegmentRect(i, n).Contains(x, y)) return i;
         return -1;
@@ -659,10 +662,23 @@ public sealed class FullUi : IOverlayUi
     private RectF DrawerRect()
     {
         float h = DrawerHeight();
-        var panel = PanelRect();
+        // 位置以**色带完全展开**时的面板顶为参照，不用"这一刻"的面板顶：
+        // 色带在 6↔34 之间长短变化，抽屉要是跟着它走，鼠标一碰到色带抽屉就往上跳一下
+        // —— 那正是用户说的"色带展开以后有起伏"。
+        var panel = PanelRectFullBand();
         float maxX = panel.MaxX;
         float y = BandAbove() ? panel.MinY - DrawerGap - h : panel.MaxY + DrawerGap;
         return new RectF { MinX = maxX - DrawerW, MinY = y, MaxX = maxX, MaxY = y + h };
+    }
+
+    /// <summary>如果按"色带完全展开"来算，面板会占哪一块（只给抽屉定位用）。</summary>
+    private RectF PanelRectFullBand()
+    {
+        var bar = BarRect();
+        float h = Tokens.BandHeight + BandGap;
+        return BandAbove()
+            ? new RectF { MinX = bar.MinX, MinY = bar.MinY - h, MaxX = bar.MaxX, MaxY = bar.MaxY }
+            : new RectF { MinX = bar.MinX, MinY = bar.MinY, MaxX = bar.MaxX, MaxY = bar.MaxY + h };
     }
 
     private float RowTop(int i)
@@ -1131,11 +1147,14 @@ public sealed class FullUi : IOverlayUi
         if (e < 0.5f)
         {
             // 收起态：一个球，圆内那圈颜色 = 当前笔色（不用点开就知道手里是哪支笔）
-            float d = Tokens.Ball - 8f;
             var c = new Vector2((bar.MinX + bar.MaxX) * 0.5f, (bar.MinY + bar.MaxY) * 0.5f);
-            var ring = new Ellipse(c, d * 0.5f, d * 0.5f);
-            ctx.DrawEllipse(ring, Brush(ctx, st.PaletteBase), 3f);
-            IconAtlas.DrawCentered(ctx, "pen", bar, Tokens.Icon, Brush(ctx, InkCol));
+            // 数字照抄假面板：圆内那圈半径 = 0.76 × 球的半径、线宽 2.5，
+            // 中间那个笔图标 = 0.7 × 球的半径（比工具格里的图标小一圈，
+            // 不然一个 48 的球里塞一个 24 的图标会顶到边上）。
+            float half = (bar.MaxX - bar.MinX) * 0.5f;
+            var ring = new Ellipse(c, half * 0.76f, half * 0.76f);
+            ctx.DrawEllipse(ring, Brush(ctx, st.PaletteBase), 2.5f);
+            IconAtlas.DrawCentered(ctx, "pen", bar, half * 1.4f, Brush(ctx, InkCol));
             return;
         }
 
@@ -1175,8 +1194,14 @@ public sealed class FullUi : IOverlayUi
     /// <summary>画上带的内容。每一项都对应引擎里真实存在的能力，摆不出来的就不摆。</summary>
     private void DrawBand(ID2D1DeviceContext ctx, in UiState st)
     {
-        // 平时就一条 6 像素的色线（可点的 12 段），碰到才长成完整的设置条。
-        if (!RailOpen) { DrawBandLine(ctx, st); return; }
+        // 平时就是一条 **6 像素的色线，整条用当前笔色**（照假面板：不分段、没有文字），
+        // 碰到才长成完整的设置条。中间那一段是"线淡出、控件淡入"的过渡
+        // ——假面板的公式：t = (带高 - 12) / 14，0 = 还是一条线，1 = 完全是控件。
+        float t = Math.Clamp((BandHeightFull() - 12f) / 14f, 0f, 1f);
+        if (t < 0.999f) DrawBandLine(ctx, st, 1f - t);
+        if (t <= 0.001f) return;
+
+        if (!RailOpen) return;
 
         if (BandHasSwatches)
         {
@@ -1188,14 +1213,17 @@ public sealed class FullUi : IOverlayUi
                 ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Palette[i].Color));
                 ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
 
+                // 一道内高光：色片才有"实体感"（假面板里写着"颜值上最便宜的一笔"）
+                var hl = new Vortice.RawRectF(r.MinX + 2, r.MinY + 1, r.MaxX - 2, r.MinY + 1 + (r.MaxY - r.MinY) * 0.26f);
+                ctx.FillRoundedRectangle(new RoundedRectangle(hl, 3f, 3f),
+                    Brush(ctx, new Color4(1f, 1f, 1f, _dark ? 0.13f : 0.35f)));
+
                 if (IsSwatchActive(st, i))
                 {
                     // 选中的色块要有**第二重标记**（只靠颜色区分不符合无障碍要求）：
-                    // 外圈深描边 ＋ 内圈白环。
-                    var outer = new Vortice.RawRectF(r.MinX - 2, r.MinY - 2, r.MaxX + 2, r.MaxY + 2);
-                    ctx.DrawRoundedRectangle(new RoundedRectangle(outer, 9f, 9f), Brush(ctx, InkCol), 1.5f);
-                    var inner = new Vortice.RawRectF(r.MinX + 1, r.MinY + 1, r.MaxX - 1, r.MaxY - 1);
-                    ctx.DrawRoundedRectangle(new RoundedRectangle(inner, 6f, 6f), Brush(ctx, new Color4(1f, 1f, 1f, 0.9f)), 2f);
+                    // 往里缩 2 像素再描一圈（照假面板的 1.6 线宽）。
+                    var inner = new Vortice.RawRectF(r.MinX + 2, r.MinY + 2, r.MaxX - 2, r.MaxY - 2);
+                    ctx.DrawRoundedRectangle(new RoundedRectangle(inner, 5f, 5f), Brush(ctx, InkCol), 1.6f);
                 }
                 else if (_hover == 100 + i)
                 {
@@ -1248,57 +1276,28 @@ public sealed class FullUi : IOverlayUi
     }
 
     /// <summary>
-    /// 平时那条色线：笔/荧光笔就是 12 段色片压成的一条线（当前色那一段多一道白记号），
-    /// 分段类是底槽里按比例高亮当前那一档，只有滑条的（激光）画一个位置点。
+    /// 平时那条色线：**整条用当前笔色**，不分段、没有文字（照假面板）。
+    /// `alpha` 是过渡用的——它长成设置条的过程中，这条线淡出。
+    ///
+    /// 一处细节：**白笔在浅底上会看不见**，所以给白线补一道极淡的描边兜底
+    /// （假面板里专门为这一种情况写了这个分支）。
     /// </summary>
-    private void DrawBandLine(ID2D1DeviceContext ctx, in UiState st)
+    private void DrawBandLine(ID2D1DeviceContext ctx, in UiState st, float alpha)
     {
         var r = BandRect();
+        if (r.MaxY - r.MinY < 0.5f) return;
+
         float radius = MathF.Max(2f, (r.MaxY - r.MinY) * 0.5f);
-        float left = r.MinX + Tokens.BarPad, right = r.MaxX - Tokens.BarPad;
-        var trough = new Vortice.RawRectF(left, r.MinY, right, r.MaxY);
-        ctx.FillRoundedRectangle(new RoundedRectangle(trough, radius, radius), Brush(ctx, HoverCol));
+        float left = r.MinX + BarInset(), right = r.MaxX - BarInset();
+        var box = new Vortice.RawRectF(left, r.MinY, right, r.MaxY);
+        var rr = new RoundedRectangle(box, radius, radius);
 
-        if (BandHasSwatches)
-        {
-            int n = Tokens.Palette.Length;
-            float w = (right - left) / n;
-            for (int i = 0; i < n; i++)
-            {
-                var seg = new Vortice.RawRectF(left + i * w, r.MinY, left + (i + 1) * w, r.MaxY);
-                ctx.FillRectangle(seg, Brush(ctx, Tokens.Palette[i].Color));
-                if (IsSwatchActive(st, i))
-                {
-                    float cx = left + (i + 0.5f) * w;
-                    ctx.FillRectangle(
-                        new Vortice.RawRectF(cx - 1.5f, r.MinY + 0.5f, cx + 1.5f, r.MaxY - 0.5f),
-                        Brush(ctx, new Color4(1f, 1f, 1f, 0.95f)));
-                }
-            }
-            return;
-        }
+        var line = st.PaletteBase;
+        ctx.FillRoundedRectangle(rr, Brush(ctx, new Color4(line.R, line.G, line.B, alpha)));
 
-        int count = _bandCell == 2 ? InkPalette.BoardPresets.Length : BandSegmentCount;
-        if (count > 0)
-        {
-            int sel = ActiveSegmentIndex(st);
-            if (sel < 0) return;
-            float w = (right - left) / count;
-            var c = _bandCell == 2 ? InkPalette.BoardPresets[sel].Color : Tokens.Accent;
-            ctx.FillRoundedRectangle(
-                new RoundedRectangle(new Vortice.RawRectF(left + sel * w, r.MinY,
-                                                          left + (sel + 1) * w, r.MaxY), radius, radius),
-                Brush(ctx, c));
-            return;
-        }
-
-        if (BandHasSlider)
-        {
-            float x = left + (right - left) * SliderT(st);
-            ctx.FillRoundedRectangle(
-                new RoundedRectangle(new Vortice.RawRectF(x - 8f, r.MinY, x + 8f, r.MaxY), radius, radius),
-                Brush(ctx, Tokens.Accent));
-        }
+        bool nearWhite = line.R > 0.9f && line.G > 0.9f && line.B > 0.9f;
+        if (nearWhite && !_dark)
+            ctx.DrawRoundedRectangle(rr, Brush(ctx, new Color4(0f, 0f, 0f, 0.2f * alpha)), 1f);
     }
 
     private void DrawSegment(ID2D1DeviceContext ctx, int i, int count, in UiState st)
@@ -1333,15 +1332,28 @@ public sealed class FullUi : IOverlayUi
         ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : BorderCol), 1f);
 
         string label = SegmentLabel(i);
-        _widgets.Text(ctx, label, r, 12.5f,
-                      Brush(ctx, active ? Tokens.AccentInk : InkCol));
+        if (label.Length > 0)
+            _widgets.Text(ctx, label, r, (r.MaxX - r.MinX) < 62f ? 11f : 12.5f,
+                          Brush(ctx, active ? Tokens.AccentInk : InkCol));
+        else
+            IconAtlas.DrawCentered(ctx, ShapeIcon(i), r, 18f,
+                                   Brush(ctx, active ? Tokens.AccentInk : InkCol));
     }
+
+    /// <summary>
+    /// 图形那一排**用图标不用文字**（照假面板）：四种图形的轮廓比"直线/矩形"四个字
+    /// 一眼得多，而且不用为四个字去量宽度。
+    /// </summary>
+    private static string ShapeIcon(int i) => i switch
+    {
+        0 => "lineWeight", 1 => "square", 2 => "circle", _ => "arrowRight",
+    };
 
     private string SegmentLabel(int i) => _bandCell switch
     {
         6 => i == 0 ? "整笔擦" : "面积擦",
         7 => i == 0 ? "矩形" : "套索",
-        8 => i switch { 0 => "直线", 1 => "矩形", 2 => "椭圆", _ => "箭头" },
+        8 => "",                                   // 图形：画图标（见 ShapeIcon）
         _ => "",
     };
 
@@ -1403,7 +1415,8 @@ public sealed class FullUi : IOverlayUi
                 ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
             }
             var ink = pinned ? InkCol : new Color4(InkCol.R, InkCol.G, InkCol.B, 0.35f);
-            IconAtlas.DrawCentered(ctx, Cells[cell].Icon, r, 18f, Brush(ctx, ink));
+            if (cell == 5) IconAtlas.DrawLaser(ctx, r, 18f, Brush(ctx, ink));
+            else IconAtlas.DrawCentered(ctx, Cells[cell].Icon, r, 18f, Brush(ctx, ink));
             if (!CanUnpin(cell))
             {
                 // 安全项：右上角一个小点，意思是"这个取消不掉"
@@ -1508,7 +1521,10 @@ public sealed class FullUi : IOverlayUi
 
         var icon = active ? Cells[i].Filled : Cells[i].Icon;
         var ink = active ? Tokens.AccentInk : InkCol;
-        IconAtlas.DrawCentered(ctx, icon, r, Tokens.Icon, Brush(ctx, ink));
+        // 激光笔是**自绘**的（笔＋光束＋落点）：Fluent 里没有这个专名，
+        // 用闪电之类的近义图标，老师看不出这是激光笔（假面板比过九个候选，选的是这个）。
+        if (i == 5) IconAtlas.DrawLaser(ctx, r, Tokens.Icon, Brush(ctx, ink));
+        else IconAtlas.DrawCentered(ctx, icon, r, Tokens.Icon, Brush(ctx, ink));
     }
 
     private bool IsActive(int i, in UiState st) => i switch
@@ -1579,6 +1595,9 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>自检/出图用：直接切到某一档（产品里在抽屉顶部点）。</summary>
     internal void SetProfileForTest(int i) => SetProfile((Profile)i);
+
+    /// <summary>自检/出图用：把色线张开成设置条（产品里是鼠标碰到它）。</summary>
+    internal void OpenRailForTest() { _railHover = true; _rail.Jump(1f); }
 
     /// <summary>自检用：这一档显示几格 / 现在是第几档 / 某一格钉着没有。</summary>
     internal int VisibleCountForTest => VisibleCells().Length;

@@ -19,6 +19,7 @@ internal sealed class App : InkEngine.InkEngine
     private string _clickLogFile;
     private bool _panelShowDrawer;
     private bool _panelShowMini;
+    private bool _panelShowBand;
     private bool _selfCheckMode;
 
     /// <summary>密集模式：所有笔画写在一小块区域里（量"同一页很多墨迹"）。</summary>
@@ -5070,6 +5071,7 @@ internal sealed class App : InkEngine.InkEngine
     {
         _panelShowDrawer = Environment.GetCommandLineArgs().Contains("--drawer");
         _panelShowMini = Environment.GetCommandLineArgs().Contains("--mini");
+        _panelShowBand = Environment.GetCommandLineArgs().Contains("--band");
         SetUiFactory(() => new InkUi.FullUi());
         Tool = Tool.Pen;
         BoardOn = true;                      // 白板打底：截出来的图里没有桌面上的杂东西
@@ -5079,6 +5081,7 @@ internal sealed class App : InkEngine.InkEngine
         {
             ui.SnapForTest();                // 一步展开，不用等 200 毫秒
             if (_panelShowMini) ui.SetProfileForTest(0);     // --mini：极简档（短胶囊）
+            if (_panelShowBand) ui.OpenRailForTest();        // --band：把色线张开成设置条
             if (_panelShowDrawer) ui.OpenDrawerForTest();   // --drawer：连抽屉一起出图
             SettleFrames(500);
 
@@ -5335,6 +5338,17 @@ internal sealed class App : InkEngine.InkEngine
               ui.DrawerOpenForTest && drawer.MaxY <= ui.BarRectForTest.MinY - 2f
               && drawer.MinY >= _virtualY / DpiScale && drawer.MaxX <= _virtualX / DpiScale + _virtualW / DpiScale,
               $"抽屉底 {drawer.MinY:F0}+{drawer.MaxY - drawer.MinY:F0}，主条顶 {ui.BarRectForTest.MinY:F0}");
+
+        // 色带在 6 ↔ 34 之间长短变化，抽屉的位置**不许跟着它走**：
+        // 跟着走就是"鼠标一碰色带、抽屉往上跳一下"（用户说的"起伏"）。
+        var lineRect = ui.BandRectForTest;             // 这一刻是那条色线
+        SendMouse((int)((lineRect.MinX + lineRect.MaxX) * 0.5f * DpiScale),
+                  (int)((lineRect.MinY + lineRect.MaxY) * 0.5f * DpiScale), 0);
+        SettleFrames(400);                              // 等色带张开
+        var drawerAfter = ui.DrawerRectForTest;
+        Check("色带张开时抽屉不跟着起伏",
+              ui.RailOpenForTest && MathF.Abs(drawerAfter.MinY - drawer.MinY) < 1.5f,
+              $"色带高 {ui.BandHeightForTest:F0}，抽屉底 {drawer.MinY:F0} → {drawerAfter.MinY:F0}");
 
         var darkRow = ui.RowRectForTest(0);
         ClickPhysical((darkRow.MinX + darkRow.MaxX) * 0.5f * DpiScale,
