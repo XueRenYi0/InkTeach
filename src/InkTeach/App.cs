@@ -82,6 +82,9 @@ internal sealed class App : InkEngine.InkEngine
     protected override int RunModeDispatch(string mode, string[] args)
     {
         _selfCheckMode = mode.Length > 0;
+        // 自检一律用**临时配置文件**：判据要确定，更不能把用户真正的设置改掉。
+        if (_selfCheckMode && InkSettings.PathOverride == null)
+            InkSettings.PathOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck.json");
 
         // 交互模式挂**产品界面**；自检/基准模式挂"什么都不画"的空宿主
         // （自检要数屏幕上的墨，一块面板盖上去会把判据搞脏——这条踩过）。
@@ -5132,6 +5135,27 @@ internal sealed class App : InkEngine.InkEngine
             return;
         }
 
+        // 把面板弄到"展开 ＋ 抽屉开着"这个已知状态。
+        // 每一步都先问**当前**状态再动手——面板可能正收着、可能刚被换成新实例，
+        // 硬按上一次算好的坐标去点，点空了都不知道（这一版用例被坑过一次）。
+        void NormalizePanel()
+        {
+            if (!ui.ExpandedForTest)
+            {
+                var b = ui.QueryBounds();
+                ClickPhysical((b.MinX + b.MaxX) * 0.5f * DpiScale,
+                              (b.MinY + b.MaxY) * 0.5f * DpiScale);
+                SettleFrames(300);
+            }
+            if (!ui.DrawerOpenForTest)
+            {
+                var m = ui.CellRectForTest(12);
+                ClickPhysical((m.MinX + m.MaxX) * 0.5f * DpiScale,
+                              (m.MinY + m.MaxY) * 0.5f * DpiScale);
+                SettleFrames(250);
+            }
+        }
+
         // ---- ① 收起态：球真的在屏幕上，而且是个 48 的方（圆） ----
         var ball = ui.QueryBounds();
         float ballW = ball.MaxX - ball.MinX, ballH = ball.MaxY - ball.MinY;
@@ -5467,6 +5491,46 @@ internal sealed class App : InkEngine.InkEngine
         // ---- ⑧ 抽屉里的「重启软件」：先暂存板书，再拉起新进程（这里只记一笔，不真拉）----
         Recovery.ClearRestartCount();
         try { File.Delete(Recovery.SessionPath); } catch { }
+
+        // ---- ⑨ 偏好落盘：改过的写进 settings.json，重开界面读得回来 ----
+        // 把状态弄成一组"非默认"：深色开着（前面的用例已经开了）、取消钉住"图形"
+        // （档位随之进"自定义"）。自检模式用的是临时配置文件，不碰用户真正的设置。
+        //
+        // 注意：上一条用例结束时面板是**收起**的，得先展开再去点抽屉里的东西——
+        // 收起状态下那些格子的坐标算出来是"按球的位置铺开"，点过去全是空的
+        // （这一版用例第一次跑就是这么点空的）。
+        var ballFirst = ui.QueryBounds();
+        ClickPhysical((ballFirst.MinX + ballFirst.MaxX) * 0.5f * DpiScale,
+                      (ballFirst.MinY + ballFirst.MaxY) * 0.5f * DpiScale);
+        SettleFrames(300);
+        var moreCell6 = ui.CellRectForTest(12);
+        ClickPhysical((moreCell6.MinX + moreCell6.MaxX) * 0.5f * DpiScale,
+                      (moreCell6.MinY + moreCell6.MaxY) * 0.5f * DpiScale);       // 开抽屉
+        SettleFrames(200);
+        var chip6 = ui.ChipRectForTest(8);
+        ClickPhysical((chip6.MinX + chip6.MaxX) * 0.5f * DpiScale,
+                      (chip6.MinY + chip6.MaxY) * 0.5f * DpiScale);               // 取消钉住"图形"
+        SettleFrames(250);
+        SaveSettingsForTest();
+
+        string prefsPath = InkSettings.PathOverride ?? "";
+        string prefsText = File.Exists(prefsPath) ? File.ReadAllText(prefsPath) : "";
+        Check("改动写进了配置文件",
+              prefsText.Contains("\"ui\"") && prefsText.Contains("\"dark\"")
+              && prefsText.Contains("\"profile\"") && prefsText.Contains("\"unpinned\""),
+              $"{Path.GetFileName(prefsPath)}（{prefsText.Length} 字节）");
+
+        // 把内存里那份清掉、从文件重读，再挂一个新界面——这才算"重开软件"那条链子
+        ReloadUiPrefsForTest();
+        SetUiFactory(() => new InkUi.FullUi());
+        SettleFrames(300);
+        ui = CurrentUi as InkUi.FullUi;
+        Check("重开界面读回了偏好",
+              ui != null && ui.DarkForTest && ui.ProfileForTest == 1 && !ui.PinnedForTest(8),
+              $"深色={ui?.DarkForTest}，档位={ui?.ProfileForTest}（1=自定义），图形钉着={ui?.PinnedForTest(8)}");
+
+        try { File.Delete(prefsPath); } catch { }        // 临时配置用完就删
+
         Doc.Clear();
         Doc.ClearHistory();
         var keep2 = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 6f };
@@ -5474,14 +5538,7 @@ internal sealed class App : InkEngine.InkEngine
         keep2.AddPoint(800, 500, 1f, 1);
         Doc.AddStroke(keep2);
 
-        var ball3 = ui.QueryBounds();
-        ClickPhysical((ball3.MinX + ball3.MaxX) * 0.5f * DpiScale,
-                      (ball3.MinY + ball3.MaxY) * 0.5f * DpiScale);      // 展开
-        SettleFrames(250);
-        var moreCell3 = ui.CellRectForTest(12);
-        ClickPhysical((moreCell3.MinX + moreCell3.MaxX) * 0.5f * DpiScale,
-                      (moreCell3.MinY + moreCell3.MaxY) * 0.5f * DpiScale);  // 开抽屉
-        SettleFrames(150);
+        NormalizePanel();
         var restartRow = ui.RowRectForTest(2);
         ClickPhysical((restartRow.MinX + restartRow.MaxX) * 0.5f * DpiScale,
                       (restartRow.MinY + restartRow.MaxY) * 0.5f * DpiScale);

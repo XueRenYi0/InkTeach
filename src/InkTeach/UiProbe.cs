@@ -49,6 +49,7 @@ internal sealed class UiProbe : IOverlayUi
 
     public void Attach(IUiHost host) => _host = host;
 
+
     public bool IsAnimating => _host != null && _host.NowMs < AnimateUntilMs;
 
     public RectF Layout(RectF screen, float dpiScale)

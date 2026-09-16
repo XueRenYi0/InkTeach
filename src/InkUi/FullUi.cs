@@ -200,7 +200,43 @@ public sealed class FullUi : IOverlayUi
         _expand.Jump(0f);
         _peek.Jump(1f);
         _rail.Jump(0f);
+        LoadPrefs();
         Layout(host.Screen, host.DpiScale);
+    }
+
+    // ---- 界面自己的偏好（存哪儿、怎么存由引擎负责，这里只管键的含义）------
+    //
+    // 四样东西能记住：深色主题、贴边隐藏、档位、钉住（取消了哪几格）。
+    // **面板位置不记**——用户定的"每次启动都在固定位置"。
+    // 只写"和默认不一样"的项：默认档位（完整）、默认全钉住、默认浅色不隐藏都不进配置文件
+    // （以后默认值改了，老配置不会把新默认顶掉）。
+
+    private void LoadPrefs()
+    {
+        _dark = _host.GetPref("dark") == "1";
+        _hideEnabled = _host.GetPref("hide") == "1";
+
+        string prof = _host.GetPref("profile");
+        _profile = prof == "mini" ? Profile.Mini
+                 : prof == "custom" ? Profile.Custom
+                 : Profile.Full;
+
+        for (int i = 1; i < _pinned.Length; i++) _pinned[i] = true;
+        foreach (var s in (_host.GetPref("unpinned") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
+            if (int.TryParse(s, out int cell) && cell > 0 && cell < Cells.Length && CanUnpin(cell))
+                _pinned[cell] = false;
+    }
+
+    private void SavePrefs()
+    {
+        _host.SetPref("dark", _dark ? "1" : null);
+        _host.SetPref("hide", _hideEnabled ? "1" : null);
+        _host.SetPref("profile", _profile == Profile.Full ? null
+                               : _profile == Profile.Mini ? "mini" : "custom");
+
+        var off = new List<string>();
+        for (int i = 1; i < _pinned.Length; i++) if (!_pinned[i]) off.Add(i.ToString());
+        _host.SetPref("unpinned", off.Count == 0 ? null : string.Join(",", off));
     }
 
     // ---- 布局 ---------------------------------------------------------------
@@ -676,11 +712,13 @@ public sealed class FullUi : IOverlayUi
         {
             case Row.DarkTheme:
                 _dark = !_dark;
+                SavePrefs();
                 Invalidate();
                 break;
             case Row.AutoHide:
                 _hideEnabled = !_hideEnabled;
                 _peek.Jump(1f);          // 刚打开时先给个完整的，别一开就缩起来
+                SavePrefs();
                 Invalidate();
                 break;
             case Row.Restart:
@@ -701,6 +739,7 @@ public sealed class FullUi : IOverlayUi
         _drawerHover = -1;
         _hover = -1;
         _press = -1;
+        SavePrefs();
         Invalidate();
     }
 
@@ -1504,8 +1543,12 @@ public sealed class FullUi : IOverlayUi
 
     // ---- 自检钩子（开发期用；产品代码不碰）--------------------------------
 
-    /// <summary>自检用：第 i 格的逻辑矩形（换算成物理坐标再加 DPI 就能点）。</summary>
-    internal RectF CellRectForTest(int i) => CellRect(i);
+    /// <summary>
+    /// 自检用：某一格（按**完整档的下标**）的逻辑矩形。
+    /// 注意参数是"格子的编号"不是"第几个"——档位一换，显示的格子数就变了，
+    /// 按序号取会跑到界外（自检第一版就是这么点空了整整一条用例）。
+    /// </summary>
+    internal RectF CellRectForTest(int cell) => CellRect(PosOf(cell));
 
     /// <summary>自检用：上带这一刻的矩形（没长出来就是空）。</summary>
     internal RectF BandRectForTest => BandVisible() ? BandRect() : RectF.Empty;

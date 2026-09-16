@@ -38,6 +38,16 @@ public class InkEngine
     // ---- document / interaction state ------------------------------------
     internal readonly InkDocument Doc = new();
     internal readonly LaserTrail Laser = new();
+
+    /// <summary>
+    /// 界面自己的偏好（深色主题、贴边隐藏、档位、钉住）。引擎**只存不解释**：
+    /// 它不知道"极简档"是什么，界面说存什么就存什么。落盘在 settings.json 的 `ui` 段。
+    /// </summary>
+    internal readonly Dictionary<string, string> UiPrefs = new();
+    private bool _uiPrefsDirty;
+
+    /// <summary>自检/基准模式：**不读也不写**用户配置（判据要确定，更不能改用户的设置）。</summary>
+    internal bool SelfCheckMode;
     internal Stroke ActiveStroke;
     internal Tool Tool = Tool.Pen;
     /// <summary>Tool sizes are authored in logical pixels and scaled by the
@@ -640,6 +650,7 @@ public class InkEngine
             return 2;
 
         string mode = args.Length > 0 ? args[0] : "";
+        SelfCheckMode = mode.Length > 0;
 
         // 上次因为界面出问题重启过？把板书读回来（读走就删，只恢复一次）。
         // 自检/基准模式不掺和：那些模式不该被"上次留下的板书"影响判据。
@@ -711,6 +722,12 @@ public class InkEngine
                                                               "inkteach-nosettings.json");
         foreach (var w in InkSettings.Load(Keys))
             Console.WriteLine("settings: " + w);
+
+        // 界面偏好（深色主题/贴边隐藏/档位/钉住）：引擎原样读进来，等着界面来问。
+        // 自检模式不读——判据要确定，而且不该拿用户的设置去跑自检。
+        if (!SelfCheckMode)
+            foreach (var w in InkSettings.LoadUiPrefs(UiPrefs))
+                Console.WriteLine("settings: " + w);
 
         RegisterHotkeys();
 
@@ -2790,8 +2807,8 @@ public class InkEngine
             for (int i = 1; i <= _hotkeyActions.Count + 2; i++) Native.UnregisterHotKey(w.Hwnd, i);
             w.Dispose();
         }
-        // 只写"改过的"键位；没改过就不碰用户的配置文件。
-        if (Keys.Dirty) InkSettings.Save(Keys);
+        // 只写"改过的"键位和"界面改过的"偏好；都没动过就不碰用户的配置文件。
+        FlushSettings();
 
         if (_uiInputHwnd != IntPtr.Zero)
         {
@@ -2991,6 +3008,52 @@ public class InkEngine
     }
 
     internal void QuitFromUi() => _quit = true;
+
+    // ---- 界面偏好的存取（引擎只当仓库，不解释内容）----------------------
+
+    /// <summary>界面来问一条偏好。没有就返回 null（界面自己知道默认值）。</summary>
+    internal string GetUiPref(string key)
+        => key != null && UiPrefs.TryGetValue(key, out var v) ? v : null;
+
+    /// <summary>
+    /// 界面记一条偏好。传 null 表示"回到默认"，那就把这一项**删掉**——
+    /// 配置文件里只留和默认不一样的项，以后默认值改了，老配置不会把新默认顶掉。
+    /// </summary>
+    internal void SetUiPref(string key, string value)
+    {
+        if (string.IsNullOrEmpty(key)) return;
+        if (value == null)
+        {
+            if (UiPrefs.Remove(key)) _uiPrefsDirty = true;
+            return;
+        }
+        if (UiPrefs.TryGetValue(key, out var old) && old == value) return;
+        UiPrefs[key] = value;
+        _uiPrefsDirty = true;
+    }
+
+    /// <summary>把键位与界面偏好写盘（只在真的改过时才写）。自检模式一律不写。</summary>
+    internal void FlushSettings()
+    {
+        if (SelfCheckMode) return;
+        if (!Keys.Dirty && !_uiPrefsDirty) return;
+        InkSettings.Save(Keys, UiPrefs);
+        _uiPrefsDirty = false;
+    }
+
+    /// <summary>自检用：**无视自检模式的禁令**，立刻把设置写盘（用来验证"记得住"这条链子）。</summary>
+    internal void SaveSettingsForTest() => InkSettings.Save(Keys, UiPrefs);
+
+    /// <summary>
+    /// 自检用：把内存里的界面偏好清空、**从文件重读**。
+    /// 不这么做的话，"重开界面读回了偏好"其实读的是内存里那份，等于没验到落盘。
+    /// </summary>
+    internal void ReloadUiPrefsForTest()
+    {
+        UiPrefs.Clear();
+        foreach (var w in InkSettings.LoadUiPrefs(UiPrefs))
+            Console.WriteLine("settings: " + w);
+    }
 
     /// <summary>
     /// 界面上那个"重启"：给老师一个"感觉不对就重开一次"的出口

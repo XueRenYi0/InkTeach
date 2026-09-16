@@ -42,23 +42,10 @@ internal static class InkSettings
         try { text = File.ReadAllText(path); }
         catch (Exception ex) { warnings.Add($"读不了配置文件 {path}：{ex.Message}"); return warnings; }
 
-        int i = text.IndexOf("\"keys\"", StringComparison.Ordinal);
-        if (i < 0) { warnings.Add("配置文件里没有 \"keys\" 段，按默认键位运行"); return warnings; }
-        int open = text.IndexOf('{', i);
-        if (open < 0) { warnings.Add("\"keys\" 段没有起始大括号，按默认键位运行"); return warnings; }
+        string body = SectionBody(text, "keys");
+        if (body == null) { warnings.Add("配置文件里没有 \"keys\" 段，按默认键位运行"); return warnings; }
 
-        int depth = 0, end = text.Length;
-        for (int k = open; k < text.Length; k++)
-        {
-            if (text[k] == '{') depth++;
-            else if (text[k] == '}')
-            {
-                depth--;
-                if (depth == 0) { end = k; break; }
-            }
-        }
-
-        foreach (var (key, value, bad) in Pairs(text.Substring(open + 1, Math.Max(0, end - open - 1))))
+        foreach (var (key, value, bad) in Pairs(body))
         {
             if (bad != null) { warnings.Add(bad); continue; }
             var parts = key.Split('.');
@@ -86,8 +73,60 @@ internal static class InkSettings
         return warnings;
     }
 
-    /// <summary>把"和默认不一样"的键位写进配置文件。只写差异，理由见类注释。</summary>
-    public static void Save(KeyMap map)
+    /// <summary>
+    /// 读界面自己的偏好（`ui` 段）。引擎**不解释**这些值：它只是"界面说存什么就存什么"，
+    /// 语义（深色主题、贴边隐藏、档位、钉住）归界面层。所以这里是一张平铺的字符串表，
+    /// 没有类型、没有枚举——引擎不该知道"极简档"是什么东西。
+    ///
+    /// 和键位一样：文件坏了、段缺了、值读不出来，都只是**警告**，不许影响启动。
+    /// </summary>
+    public static List<string> LoadUiPrefs(Dictionary<string, string> prefs)
+    {
+        var warnings = new List<string>();
+        string path = FilePath;
+        if (!File.Exists(path)) return warnings;
+
+        string text;
+        try { text = File.ReadAllText(path); }
+        catch (Exception ex) { warnings.Add($"读不了配置文件 {path}：{ex.Message}"); return warnings; }
+
+        string body = SectionBody(text, "ui");
+        if (body == null) return warnings;          // 没有 ui 段很正常（老文件都没有）
+
+        foreach (var (key, value, bad) in Pairs(body))
+        {
+            if (bad != null) { warnings.Add("界面偏好：" + bad); continue; }
+            prefs[key] = value;
+        }
+        return warnings;
+    }
+
+    /// <summary>取出某个段的正文（不含最外层大括号）。段不存在或大括号不配对就返回 null。</summary>
+    private static string SectionBody(string text, string name)
+    {
+        int i = text.IndexOf("\"" + name + "\"", StringComparison.Ordinal);
+        if (i < 0) return null;
+        int open = text.IndexOf('{', i);
+        if (open < 0) return null;
+
+        int depth = 0;
+        for (int k = open; k < text.Length; k++)
+        {
+            if (text[k] == '{') depth++;
+            else if (text[k] == '}')
+            {
+                depth--;
+                if (depth == 0) return text.Substring(open + 1, k - open - 1);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 把"和默认不一样"的键位、以及界面偏好写进配置文件。
+    /// 键位只写差异（理由见类注释）；界面偏好是引擎原样存下来的，界面那边只放"和默认不一样"的项。
+    /// </summary>
+    public static void Save(KeyMap map, IReadOnlyDictionary<string, string> uiPrefs = null)
     {
         string path = FilePath;
         try
@@ -108,6 +147,19 @@ internal static class InkSettings
                 sb.AppendLine(i == changed.Count - 1 ? "" : ",");
             }
             sb.AppendLine("  }");
+
+            if (uiPrefs != null && uiPrefs.Count > 0)
+            {
+                sb.AppendLine(",");
+                sb.AppendLine("  \"ui\": {");
+                int n = 0;
+                foreach (var kv in uiPrefs)
+                {
+                    sb.Append($"    \"{kv.Key}\": \"{kv.Value}\"");
+                    sb.AppendLine(++n == uiPrefs.Count ? "" : ",");
+                }
+                sb.AppendLine("  }");
+            }
             sb.AppendLine("}");
             File.WriteAllText(path, sb.ToString());
             map.Dirty = false;

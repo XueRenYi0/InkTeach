@@ -64,6 +64,11 @@ internal sealed class UiHost : IUiHost, IEngineCommands
 
     public void InvalidateUi() => _engine.InvalidateUi();
 
+    // ---- 界面自己的偏好（引擎只存不解释，落在 settings.json 的 ui 段）----
+
+    public string GetPref(string key) => _engine.GetUiPref(key);
+    public void SetPref(string key, string value) => _engine.SetUiPref(key, value);
+
     // ---- IEngineCommands -------------------------------------------------
 
     public void SetTool(Tool tool) => _engine.SetToolFromUi(tool);

@@ -136,6 +136,21 @@ public interface IUiHost
     /// **不要每帧调**——那就等于每帧重画界面，等于白做缓存。
     /// </summary>
     void InvalidateUi();
+
+    /// <summary>
+    /// 读一条**界面自己的**偏好（深色主题、贴边隐藏、档位、钉住……）。
+    /// 返回 null = 没有存过，界面用自己的默认值。
+    ///
+    /// 为什么放在引擎这边：配置文件只有一个，读写规则（只写差异、坏了不影响启动）
+    /// 已经写在 <see cref="InkSettings"/> 里了，界面不该再自己实现一遍。
+    /// **引擎只当仓库**：它不认识这些键的含义，界面说存什么就存什么。
+    /// </summary>
+    string GetPref(string key);
+
+    /// <summary>
+    /// 记一条界面偏好。传 null = 回到默认（引擎会把这一项删掉，不会写进配置文件）。
+    /// </summary>
+    void SetPref(string key, string value);
 }
 
 /// <summary>界面对引擎的全部操作能力。刻意做窄，防止界面越权。</summary>
