@@ -1288,7 +1288,7 @@ public class InkEngine
     internal bool NeedsFrame()
     {
         _animating = Laser.ActiveAt(NowMs) || _drawing || SelFlashing
-                   || (Ui != null && Ui.IsAnimating);
+                   || UiIsAnimatingNow;
         return _dirty || _animating;
     }
 
@@ -2862,7 +2862,8 @@ public class InkEngine
     private void NotifyUiStateChanged()
     {
         if (Ui == null) return;
-        Ui.OnStateChanged(SnapshotState());
+        var snapshot = SnapshotState();
+        UiGuard("OnStateChanged", () => Ui.OnStateChanged(snapshot));
     }
 
     internal void SetToolFromUi(Tool tool)
@@ -3000,28 +3001,28 @@ public class InkEngine
     /// </summary>
     private bool UiPointerDown(float x, float y, float pressure, bool fromPen, bool eraserTip)
     {
-        if (Ui == null || !Ui.Visible) return false;
+        if (!UiVisibleNow) return false;
         var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip);
-        if (!Ui.PointerDown(e)) return false;
+        if (!UiGuard("PointerDown", () => Ui.PointerDown(e), false)) return false;
         UiCapturing = true;
         return true;
     }
 
     private bool UiPointerMove(float x, float y, float pressure, bool fromPen, bool eraserTip)
     {
-        if (Ui == null || !Ui.Visible) return false;
+        if (!UiVisibleNow) return false;
 
         // 只有在界面已经捕获输入或指针落在界面矩形内时才转发，避免没必要的调用。
         if (!UiCapturing && !UiContains(x, y)) return false;
         var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip);
-        return Ui.PointerMove(e);
+        return UiGuard("PointerMove", () => Ui.PointerMove(e), false);
     }
 
     private bool UiPointerUp(float x, float y, float pressure, bool fromPen, bool eraserTip)
     {
-        if (Ui == null || !Ui.Visible || !UiCapturing) return false;
+        if (!UiVisibleNow || !UiCapturing) return false;
         var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip);
-        bool consumed = Ui.PointerUp(e);
+        bool consumed = UiGuard("PointerUp", () => Ui.PointerUp(e), false);
         UiCapturing = false;
         return consumed;
     }
@@ -3050,14 +3051,77 @@ public class InkEngine
 
     // ---- 面板的"接输入小窗"（方案 B）--------------------------------------
 
+    // ---- 界面回调的统一入口：**都是防弹的** ------------------------------
+    //
+    // 为什么值得包这一层：界面里的一个 bug 不该让"板书"这个主功能跟着不可用。
+    // 以前的保护只有绘制那一段（`Overlay.DrawUi` 里的 try/catch 打印），
+    // 而 `PointerDown/Move/Up`、`OnStateChanged`、`QueryBounds`、`IsAnimating`
+    // 全是裸调——界面一抛，异常就冒到消息循环里，老师当场什么都画不出来。
+    //
+    // 规矩：**3 秒内 3 次**异常就把界面停用（换成 NullUi，并藏掉接输入小窗），
+    // 笔迹照常。
+    //
+    // 为什么是"一个时间窗内 3 次"而不是"连续 3 次调用"：界面每帧都会被调好几次
+    // （Visible / QueryBounds / Render / PointerMove…），只要别处的调用成功就把
+    // 计数清零的话，一条只在 PointerDown 里踩的 bug 永远攒不到 3 次。
+    // 反过来"一次就停用"又太狠——偶发一次不该让工具条消失一整节课。
+    private int _uiFaults;
+    private double _uiLastFaultMs = double.NegativeInfinity;
+
+    /// <summary>界面的异常次数与处置。第三次就停用界面，并说清发生了什么。</summary>
+    private void NoteUiFault(string what, Exception ex)
+    {
+        if (NowMs - _uiLastFaultMs > 3000) _uiFaults = 0;   // 隔久了当新的一轮
+        _uiLastFaultMs = NowMs;
+        _uiFaults++;
+        if (_uiFaults < 3)
+        {
+            Console.WriteLine($"界面异常（{what}，第 {_uiFaults} 次）：{ex.Message}");
+            return;
+        }
+
+        Console.WriteLine($"界面已停用：{what} 连续 {_uiFaults} 次抛异常 —— {ex.Message}");
+        Console.WriteLine("  → 换成无界面继续跑，笔迹不受影响；界面那边修好再挂回来。");
+        Ui = new NullUi();
+        UiCapturing = false;
+        Native.ReleaseCapture();
+        _uiHover = false;
+        if (_uiInputHwnd != IntPtr.Zero && _uiInputShown)
+        {
+            Native.ShowWindow(_uiInputHwnd, Native.SW_HIDE);
+            _uiInputShown = false;
+        }
+        _dirty = true;
+    }
+
+    private T UiGuard<T>(string what, Func<T> call, T fallback)
+    {
+        try { return call(); }
+        catch (Exception ex) { NoteUiFault(what, ex); return fallback; }
+    }
+
+    private void UiGuard(string what, Action call)
+    {
+        try { call(); }
+        catch (Exception ex) { NoteUiFault(what, ex); }
+    }
+
+    internal bool UiVisibleNow => Ui != null && UiGuard("Visible", () => Ui.Visible, false);
+    internal RectF UiQueryBoundsNow() =>
+        Ui == null ? RectF.Empty : UiGuard("QueryBounds", () => Ui.QueryBounds(), RectF.Empty);
+    internal bool UiIsAnimatingNow => Ui != null && UiGuard("IsAnimating", () => Ui.IsAnimating, false);
+    internal RectF UiLayoutNow(RectF screen, float dpiScale) =>
+        Ui == null ? RectF.Empty : UiGuard("Layout", () => Ui.Layout(screen, dpiScale), RectF.Empty);
+    internal void UiRenderNow(ID2D1DeviceContext ctx, UiTheme theme) =>
+        UiGuard("Render", () => Ui.Render(ctx, theme));
+
     /// <summary>
     /// 每次渲染前调用一次：让接输入小窗跟着界面这一刻占的地方走。
     /// 界面隐藏或没占地方时把它藏起来——藏起来就等于"不存在于输入里"。
     /// </summary>
     private void UpdateUiInputWindow()
     {
-        var ui = Ui;
-        RectF logical = ui != null && ui.Visible ? ui.QueryBounds() : RectF.Empty;
+        RectF logical = UiVisibleNow ? UiQueryBoundsNow() : RectF.Empty;
 
         if (logical.IsEmpty)
         {

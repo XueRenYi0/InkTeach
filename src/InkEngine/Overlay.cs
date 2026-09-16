@@ -953,8 +953,7 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private bool PrepareUi(InkEngine app)
     {
-        var ui = app.Ui;
-        if (ui == null || !ui.Visible)
+        if (!app.UiVisibleNow)
         {
             _uiLogicalBounds = RectF.Empty;
             _uiBounds = RectF.Empty;
@@ -963,26 +962,29 @@ internal sealed class OverlayWindow : IDisposable
 
         float dpiScale = Dpi / 96f;
 
-        // 界面看到的逻辑屏幕：覆盖窗口的屏幕范围除以 DPI。界面用逻辑坐标返回
-        // 自己占哪一块，引擎乘 dpiScale 就得到物理矩形——放大只发生这一次。
-        var uiScreen = new RectF
-        {
-            MinX = OriginX / dpiScale, MinY = OriginY / dpiScale,
-            MaxX = (OriginX + Width) / dpiScale, MaxY = (OriginY + Height) / dpiScale,
-        };
+        // 界面看到的"屏幕"是**整块虚拟桌面**，和 `IUiHost.Screen` 是同一个东西。
+        //
+        // 以前这里给的是**本窗口那一块显示器**的矩形（OriginX/Width 是覆盖窗口自己的）：
+        // 同一个概念两个答案，界面按哪个算都会有一个是错的——副屏上"贴右下角"
+        // 立刻偏一块。多显示器下每个覆盖窗口都会用这个值调一次 Layout，
+        // 现在它们传的是同一个矩形，界面那边就是幂等的。
+        //
+        // 注：这里的逻辑尺寸仍用全局 DpiScale（第一块屏）。副屏 DPI 不同的完整支持
+        // 是二期（难点 4），届时改成按窗口取。
+        var uiScreen = app.LogicalVirtualScreen;
 
         // 界面只在布局会变的时候调（尺寸/DPI 变化）。正常每帧都走缓存。
         if (_uiLayoutBounds.IsEmpty || _uiLayoutDpi != dpiScale
             || !_uiLayoutScreen.Equals(uiScreen))
         {
-            _uiLayoutBounds = ui.Layout(uiScreen, dpiScale);
+            _uiLayoutBounds = app.UiLayoutNow(uiScreen, dpiScale);
         _uiLayoutScreen = uiScreen;
         _uiLayoutDpi = dpiScale;
         }
 
         // 占用矩形每帧都问一次：悬浮条被拖动、展开调色板、折叠收起、暂时消失，
         // 都靠这个方法告诉引擎；否则命中测试和脏区会一直停在旧位置。
-        var live = ui.QueryBounds();
+        var live = app.UiQueryBoundsNow();
         _uiLogicalBounds = live;
         _uiBounds = live.IsEmpty ? RectF.Empty : new RectF
         {
@@ -1031,15 +1033,8 @@ internal sealed class OverlayWindow : IDisposable
         var clip = new Vortice.RawRectF(_uiLogicalBounds.MinX, _uiLogicalBounds.MinY,
                                         _uiLogicalBounds.MaxX, _uiLogicalBounds.MaxY);
         _ctx.PushAxisAlignedClip(clip, AntialiasMode.Aliased);
-        try
-        {
-            app.Ui.Render(_ctx, UiTheme.Default);
-        }
-        catch (Exception ex)
-        {
-            LastError = "UI render: " + ex;
-            Console.WriteLine("UI render 异常: " + ex);
-        }
+        // 防弹入口在引擎那边（`UiRenderNow`）：界面连抛三次就整体停用，笔迹照常。
+        app.UiRenderNow(_ctx, UiTheme.Default);
         _ctx.Transform = Matrix3x2.Identity;
         _ctx.PopAxisAlignedClip();
     }

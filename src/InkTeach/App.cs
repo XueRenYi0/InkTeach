@@ -4896,6 +4896,30 @@ internal sealed class App : InkEngine.InkEngine
         Doc.Clear();
         Doc.ClearHistory();
 
+        // ---- ⑪ 界面看到的"屏幕"必须和 IUiHost.Screen 是同一个 ----
+        // 单屏上这两者本来就相等（覆盖窗口 == 虚拟桌面），所以这一条是**回归护栏**：
+        // 一旦有人把 Layout 的实参改回"本窗口那一块显示器"，双屏上才会露馅，
+        // 而在没有双屏的机器上，护栏能立刻发现它不等了。
+        Check("Layout 与 Screen 同一套坐标",
+              probe.LastLayoutScreen.Equals(host.Screen),
+              $"Layout ({probe.LastLayoutScreen.MinX:F0},{probe.LastLayoutScreen.MinY:F0})-"
+              + $"({probe.LastLayoutScreen.MaxX:F0},{probe.LastLayoutScreen.MaxY:F0})  vs  "
+              + $"Screen ({host.Screen.MinX:F0},{host.Screen.MinY:F0})-"
+              + $"({host.Screen.MaxX:F0},{host.Screen.MaxY:F0})");
+
+        // ---- ⑫ 界面抛异常不许把板书一起废掉（3 秒内 3 次 → 停用界面）----
+        probe.ThrowOnDown = true;
+        for (int i = 0; i < 3; i++) { probe.Down = 0; Click(inX, inY); }
+        bool disabled = CurrentUi is NullUi;
+        Check("界面连抛三次→自动停用", disabled, $"当前界面 = {CurrentUi.Name}");
+
+        probe.ThrowOnDown = false;
+        Tool = Tool.Pen;
+        strokes0 = Doc.Strokes.Count;
+        Click(outX, outY);
+        Check("界面停用后笔迹照常", Doc.Strokes.Count > strokes0,
+              $"笔画 {strokes0} → {Doc.Strokes.Count}");
+
         Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
         ExitCode = fail == 0 ? 0 : 1;
 
