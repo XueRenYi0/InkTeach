@@ -69,6 +69,10 @@ internal enum KeyAction
     NudgeUpFar,
     NudgeRightFar,
     NudgeDownFar,
+    /// <summary>白板整屏翻页：相机上移一屏（到顶就不动）。</summary>
+    FlipPageUp,
+    /// <summary>白板整屏翻页：相机下移一屏（下面永远还有一屏空白）。</summary>
+    FlipPageDown,
 }
 
 /// <summary>
@@ -331,6 +335,8 @@ internal sealed class KeyMap
         KeyAction.NudgeUpFar => "上移 10",
         KeyAction.NudgeRightFar => "右移 10",
         KeyAction.NudgeDownFar => "下移 10",
+        KeyAction.FlipPageUp => "上一屏",
+        KeyAction.FlipPageDown => "下一屏",
         _ => a.ToString(),
     };
 
@@ -391,6 +397,12 @@ internal sealed class KeyMap
         m.Add(A, KeyAction.NudgeUpFar, "Shift+Up", "上移 10 像素");
         m.Add(A, KeyAction.NudgeRightFar, "Shift+Right", "右移 10 像素");
         m.Add(A, KeyAction.NudgeDownFar, "Shift+Down", "下移 10 像素");
+
+        // 白板翻页。**故意只放批注内**：注册成全局热键会把 PPT / PDF / 浏览器
+        // 的 PageUp / PageDown 全抢走——那正是"绝不能全局注册编辑类键"的同一条理由。
+        // 教室里没键盘的老师走面板上带那两个按钮（见 InkUi.FullUi）。
+        m.Add(A, KeyAction.FlipPageUp, "PageUp", "白板翻到上一屏（已经在最上面就不动）");
+        m.Add(A, KeyAction.FlipPageDown, "PageDown", "白板翻到下一屏（下面永远还有一屏空白）");
         return m;
     }
 

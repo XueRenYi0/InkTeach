@@ -55,6 +55,7 @@ $icons = [ordered]@{
     'passthrough' = @('Eye Off')
     'delete'      = @('Delete')
     'chevronDown' = @('Chevron Down')
+    'chevronUp'   = @('Chevron Up')
     'chevronRight'= @('Chevron Right')
     'pin'         = @('Pin')
     'square'      = @('Square')

@@ -281,6 +281,15 @@ internal static class Native
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint crKey, byte bAlpha, uint dwFlags);
 
+    /// <summary>
+    /// 读系统设置。自检/翻页用它问"在 Windows 中显示动画"这一条
+    /// （`SPI_GETCLIENTAREAANIMATION`）：关掉时动效直接跳终态。
+    /// </summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, ref int pvParam, uint fWinIni);
+
+    public const uint SPI_GETCLIENTAREAANIMATION = 0x1042;
+
     public const uint LWA_ALPHA = 0x00000002;
 
     [DllImport("user32.dll", SetLastError = true)]

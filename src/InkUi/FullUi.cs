@@ -524,6 +524,14 @@ public sealed class FullUi : IOverlayUi
     private RectF SegmentRect(int i, int count)
     {
         var band = BandRect();
+        // 白板那一格：5 段固定宽（70），右边留出来给"第 N 屏"
+        if (_bandCell == 2)
+        {
+            float bw = 70f;
+            float bx = BandContentLeft() + i * (bw + 6f);
+            float by = BandCenterY() - Tokens.SegmentHeight * 0.5f;
+            return new RectF { MinX = bx, MinY = by, MaxX = bx + bw, MaxY = by + Tokens.SegmentHeight };
+        }
         float total = band.MaxX - band.MinX - BarInset() * 2;
         float w = Math.Min(120f, (total - (count - 1) * 6f) / count);
         float x = BandContentLeft() + i * (w + 6f);
@@ -533,7 +541,11 @@ public sealed class FullUi : IOverlayUi
 
     private bool BandHasSwatches => _bandCell is 3 or 4;
     private bool BandHasSlider => _bandCell is 3 or 4 or 5 or 6;
-    private int BandSegmentCount => _bandCell switch { 2 => 3, 6 => 2, 7 => 2, 8 => 4, _ => 0 };
+    /// <summary>
+    /// 上带里有几段。白板那一格是 5 段：**[上一屏] [白][绿][黑] [下一屏]**
+    /// ——翻屏和板色是同一类事（都属于"这块板怎么摆"），放一行最顺手。
+    /// </summary>
+    private int BandSegmentCount => _bandCell switch { 2 => 5, 6 => 2, 7 => 2, 8 => 4, _ => 0 };
 
     /// <summary>这个工具的粗细范围。**界面管范围，引擎管钳位**——引擎那边是 0.5～64。</summary>
     private (float Min, float Max) WidthRange(Tool tool) => tool switch
@@ -647,8 +659,11 @@ public sealed class FullUi : IOverlayUi
     {
         switch (_bandCell)
         {
-            case 2:                       // 白板三色：选板色＝要用板，所以顺手把板打开
-                _host.Commands.SetBoardColor(InkPalette.BoardPresets[i].Color);
+            case 2:                       // 白板：[上一屏] [白][绿][黑] [下一屏]
+                if (i == 0) { _host.Commands.FlipPage(false); break; }        // 上一屏
+                if (i == 4) { _host.Commands.FlipPage(true); break; }         // 下一屏
+                // 三色：选板色＝要用板，所以顺手把板打开
+                _host.Commands.SetBoardColor(InkPalette.BoardPresets[i - 1].Color);
                 _host.Commands.SetBoard(true);
                 break;
             case 6:                       // 整笔擦 / 面积擦 —— 引擎里是**两个工具**
@@ -1374,6 +1389,18 @@ public sealed class FullUi : IOverlayUi
 
         int n = BandSegmentCount;
         for (int i = 0; i < n; i++) DrawSegment(ctx, i, n, st);
+
+        // 白板那一格右边显示"第 N 屏"——老师要有一点位置感（"我在第几屏"）
+        if (_bandCell == 2)
+        {
+            var panel = UnionRect();
+            var box = new RectF
+            {
+                MinX = SegmentRect(4, 5).MaxX + 10f, MinY = BandRect().MinY,
+                MaxX = panel.MaxX - BarInset(), MaxY = BandRect().MaxY,
+            };
+            _widgets.Text(ctx, $"第 {st.ScreenIndex} 屏", box, 12.5f, Brush(ctx, InkCol), center: false);
+        }
     }
 
     /// <summary>
@@ -1500,7 +1527,19 @@ public sealed class FullUi : IOverlayUi
         // 白板那三格直接画板色（颜色本身就是内容，写字反而多余）
         if (_bandCell == 2)
         {
-            ctx.FillRoundedRectangle(rr, Brush(ctx, InkPalette.BoardPresets[i].Color));
+            // 两端是"上一屏 / 下一屏"：到顶了"上一屏"压暗（点不动，反馈在这里给）
+            if (i == 0 || i == 4)
+            {
+                bool enabled = i == 4 || _host.State.CanFlipPageUp;
+                var fg = enabled ? InkCol : new Color4(InkCol.R, InkCol.G, InkCol.B, 0.30f);
+                if (_hover == 200 + i) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+                ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+                IconAtlas.DrawCentered(ctx, i == 0 ? "chevronUp" : "chevronDown", r, 16f, Brush(ctx, fg));
+                return;
+            }
+
+            int bi = i - 1;                       // 1..3 → 白/绿/黑
+            ctx.FillRoundedRectangle(rr, Brush(ctx, InkPalette.BoardPresets[bi].Color));
             ctx.DrawRoundedRectangle(rr, active ? Brush(ctx, Tokens.Accent) : Brush(ctx, BorderCol),
                                      active ? 2f : 1f);
             if (active)
@@ -1549,7 +1588,7 @@ public sealed class FullUi : IOverlayUi
 
     private bool IsSegmentActive(in UiState st, int i) => _bandCell switch
     {
-        2 => BoardColorIs(st, i),
+        2 => i >= 1 && i <= 3 && BoardColorIs(st, i - 1),
         6 => i == 0 ? st.Tool == Tool.Eraser : st.Tool == Tool.PixelEraser,
         7 => i == 0 ? st.SelectMode == SelectMode.Rect : st.SelectMode == SelectMode.Lasso,
         8 => st.Tool == (i switch
@@ -1792,6 +1831,9 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>自检/出图用：把色线张开成设置条（产品里是鼠标碰到它）。</summary>
     internal void OpenRailForTest() { _railHover = true; _rail.Jump(1f); }
+
+    /// <summary>出图用：把上带掰到某一格（等价于点它一下，但不执行那一格的动作）。</summary>
+    internal void SelectBandCellForTest(int cell) { _bandCell = cell; _railPinned = true; }
 
     /// <summary>自检用：这一档显示几格 / 现在是第几档 / 某一格钉着没有。</summary>
     internal int VisibleCountForTest => VisibleCells().Length;

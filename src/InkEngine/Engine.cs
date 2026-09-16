@@ -1009,6 +1009,7 @@ public class InkEngine
             }
 
             Laser.Prune(NowMs);
+            StepCameraAnim();                 // 翻页动画（167ms）
             if (NeedsFrame())
             {
                 // VBlankPaced：先等到合成边界，**再抽一次消息**，然后画、提交。
@@ -1422,7 +1423,7 @@ public class InkEngine
     internal bool NeedsFrame()
     {
         _animating = Laser.ActiveAt(NowMs) || _drawing || SelFlashing
-                   || UiIsAnimatingNow;
+                   || UiIsAnimatingNow || _camAnimating;
         return _dirty || _animating;
     }
 
@@ -2300,10 +2301,108 @@ public class InkEngine
     /// <summary>上下夹住相机偏移（滚轮和拖滚动条共用）。</summary>
     internal void ClampViewOffset()
     {
+        ViewOffsetY = ClampOffset(ViewOffsetY);
+    }
+
+    /// <summary>把一个相机偏移夹进合法范围（翻页要"先算目标再决定动不动"，所以抽出来）。</summary>
+    private float ClampOffset(float y)
+    {
         var extent = CanvasExtent;
         float lowest = _virtualH - extent.MaxY;
-        if (ViewOffsetY > 0f) ViewOffsetY = 0f;
-        if (ViewOffsetY < lowest) ViewOffsetY = lowest;
+        if (y > 0f) y = 0f;
+        if (y < lowest) y = lowest;
+        return y;
+    }
+
+    // ---- 整屏翻页（"一屏 = 一页"）-----------------------------------------
+    //
+    // 用户 2026-09-16 选的方案（见 调研-白板翻页.md）：**还是同一张连续画布**，
+    // 只是相机**按整屏跳**——上一屏/下一屏各走一个视口高，翻完屏幕上不留半行字。
+    //
+    // 为什么不做"每页一套笔迹"（InkClass 那种）：它的"页"主要是为了跟 PPT 对齐，
+    // 我们暂时不接 PPT；而且它为此付出了"坐标物化 + 按页记偏移"的代价（它的注释写着
+    // 切回原页会"位置对不上、滚上去的内容再也滚不回来"）。我们只动相机，没有这些问题。
+
+    private double _camFrom, _camTo, _camStartMs;
+    private bool _camAnimating;
+    private const double CamAnimMs = 167;      // 和界面同一套时长（167ms 是 Windows 的 Direct Entrance）
+
+    /// <summary>
+    /// 翻一屏。<paramref name="down"/> = 往下翻（内容上移、偏移变负，和滚轮同一套符号）。
+    /// 返回是否真的翻了（已经在顶/底就不动）。
+    /// </summary>
+    internal bool FlipPage(bool down)
+    {
+        float want = ClampOffset(down ? ViewOffsetY - _virtualH : ViewOffsetY + _virtualH);
+        if (Math.Abs(want - ViewOffsetY) < 1f) return false;
+
+        if (!ClientAreaAnimationOn)
+        {
+            ViewOffsetY = want;               // 系统关了动画就直接跳终态（老机器上是常事）
+            _dirty = true;
+            return true;
+        }
+        _camFrom = ViewOffsetY; _camTo = want; _camStartMs = NowMs; _camAnimating = true;
+        _dirty = true;
+        return true;
+    }
+
+    /// <summary>
+    /// 翻页动画：167ms、快出缓停（和面板的展开同一套曲线）。
+    ///
+    /// **每帧推进一次**，由主循环调。自检的 `SettleFrames` 也调同一份——
+    /// 自检是手动抽帧、不走主循环，少这一句就会量出"翻页返回 true 但相机
+    /// 一直停在起点"（`--pagetest` 第一版就是这么自己把自己骗了一次）。
+    /// </summary>
+    internal void StepCameraAnim()
+    {
+        if (!_camAnimating) return;
+        double t = (NowMs - _camStartMs) / CamAnimMs;
+        if (t >= 1.0) { ViewOffsetY = (float)_camTo; _camAnimating = false; }
+        else
+        {
+            float k = 1f - MathF.Pow(1f - (float)t, 3f);
+            ViewOffsetY = (float)(_camFrom + (_camTo - _camFrom) * k);
+        }
+        _dirty = true;
+    }
+
+    /// <summary>当前在第几屏（1 起）。相机偏移除以视口高 + 1。</summary>
+    internal int ScreenIndex => (int)Math.Round(-ViewOffsetY / Math.Max(1f, _virtualH)) + 1;
+
+    /// <summary>还能不能往上翻（到顶了就不行；往下永远可以——画布下面永远多一屏）。</summary>
+    internal bool CanFlipPageUp => ViewOffsetY < -1f;
+
+    /// <summary>
+    /// "一页"在**画布坐标**里的高 = 一个视口高；第一页的顶 = 虚拟桌面顶。
+    /// 页界线（白板模式下画的那条淡线）按这两个值算，所以它**固定在画布上**、
+    /// 不随相机动——能被烘进分块缓存，平时零成本。
+    /// </summary>
+    internal float PageHeightCanvas => _virtualH;
+    internal float PageTopCanvas => _virtualY;
+
+    /// <summary>
+    /// 系统的"在 Windows 中显示动画"开关（`SPI_GETCLIENTAREAANIMATION`）。
+    /// 关掉时所有动效直接跳终态——教室老机器上常关，设计文稿里也把这条列为硬规范。
+    /// 取不到就当作"开着"（跟系统默认一致）。
+    /// </summary>
+    private bool? _animOn;
+    internal bool ClientAreaAnimationOn
+    {
+        get
+        {
+            if (_animOn == null)
+            {
+                int v = 1;
+                try
+                {
+                    if (!Native.SystemParametersInfo(Native.SPI_GETCLIENTAREAANIMATION, 0, ref v, 0)) v = 1;
+                }
+                catch { v = 1; }
+                _animOn = v != 0;
+            }
+            return _animOn.Value;
+        }
     }
 
     private bool TryBeginScrollBarDrag(float screenX, float screenY)
@@ -2770,6 +2869,8 @@ public class InkEngine
             case KeyAction.NudgeUpFar: Nudge(0f, -10f); break;
             case KeyAction.NudgeRightFar: Nudge(10f, 0f); break;
             case KeyAction.NudgeDownFar: Nudge(0f, 10f); break;
+            case KeyAction.FlipPageUp: FlipPageFromUi(false); break;
+            case KeyAction.FlipPageDown: FlipPageFromUi(true); break;
         }
     }
 
@@ -2996,6 +3097,8 @@ public class InkEngine
         Board = BoardOn,
         BoardColor = BoardColor,
         SelectMode = SelMode,
+        ScreenIndex = ScreenIndex,
+        CanFlipPageUp = CanFlipPageUp,
         IsDrawing = _drawing,
         UndoDepth = Doc.UndoDepth,
         RedoDepth = Doc.RedoDepth,
@@ -3216,6 +3319,13 @@ public class InkEngine
     {
         SelectAll();
         _dirty = true;
+    }
+
+    /// <summary>界面上的"上一屏 / 下一屏"（整屏翻页）。</summary>
+    internal void FlipPageFromUi(bool down)
+    {
+        if (!FlipPage(down)) return;
+        NotifyUiStateChanged();
     }
 
     /// <summary>

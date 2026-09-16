@@ -160,6 +160,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PanelShow(args.Length > 1 ? args[1] : "reports/panel-第一版.png");
         }
+        else if (mode == "--pageshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PageShow(args.Length > 1 ? args[1] : "reports/page-lines.bmp");
+        }
         else if (mode == "--iconshow")
         {
             _autoExitAt = double.MaxValue;
@@ -493,6 +499,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             WheelTest();
         }
+        else if (mode == "--pagetest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PageTest();
+        }
         else if (mode == "--coordtest")
         {
             _autoExitAt = double.MaxValue;
@@ -569,6 +581,9 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --passtest          穿透真机测试（跨进程点击）");
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
+        Console.WriteLine("  --pagetest          整屏翻页自检（一屏 = 一页：页高 = 视口高、只动相机、到顶就停）");
+        Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
+        Console.WriteLine("  --panelshow <图> [--band] [--mini] [--drawer] [--cell N]   界面出图（离屏）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
         Console.WriteLine("  --pixelerasetest    像素橡皮正确性（切成两段 / 框里无墨 / 一步撤销）");
         Console.WriteLine("  --pixeleraseshow    像素橡皮摆样（擦之前/之后各存一张图，自己抓屏）");
@@ -854,6 +869,210 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：滚轮方向与夹取都正确");
         Doc.Clear();
         Doc.ClearHistory();
+        _quit = true;
+    }
+
+    /// <summary>
+    /// **整屏翻页自检（一屏 = 一页）**。取向与出处见 [调研-白板翻页.md]。
+    ///
+    /// 关键是盯着"**没有新概念**"这件事：我们**不做** OneNote 那种"每页一个文档"
+    /// （那是 InkClass 的路子，专为跟 PPT 对齐而付的代价），而是**同一张连续的长纸**，
+    /// 只让相机按整屏跳。所以这一套用例全在验：
+    ///   · 页高 = 视口高，翻一屏 = 相机正好走一屏（翻完不留半行字）；
+    ///   · **翻页前后，文档里没有一个坐标发生变化**（只有相机动）——这是"没做分页"的证据；
+    ///   · 到顶就停、往下永远还有一屏（无限纸的红利）；
+    ///   · 滚轮仍然是细粒度（翻页不该把滚轮改成"一格一屏"）；
+    ///   · 翻完屏幕上真的换了内容（屏幕取点，和 --cameratest 同一套手法）。
+    /// </summary>
+    private void PageTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 整屏翻页自检（一屏 = 一页）===");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-30} {detail}");
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        Doc.InvalidateAll();
+        SettleFrames(250);
+
+        float pageH = _virtualH;                       // 物理像素：页高 = 视口高
+
+        // ---- ① 页高 ----
+        Check("页高 = 视口高", Math.Abs(PageHeightCanvas - _virtualH) < 0.01f,
+              $"页高 {PageHeightCanvas:F0}，视口高 {_virtualH}");
+        Check("第 1 屏的页顶 = 虚拟桌面顶",
+              Math.Abs(PageTopCanvas - _virtualY) < 0.01f,
+              $"页顶 {PageTopCanvas:F0}，桌面顶 {_virtualY}");
+
+        // ---- ② 翻一屏 = 相机正好走一屏 ----
+        Check("起手在第 1 屏、且不能再往上翻",
+              ScreenIndex == 1 && !CanFlipPageUp,
+              $"屏号 {ScreenIndex}，能上翻 = {CanFlipPageUp}");
+
+        bool went = FlipPage(true);
+        SettleFrames(400);                             // 等完那 167ms 的缓动
+        Check("往下翻返回 true", went, $"返回 {went}");
+        Check("翻一屏 = 相机正好走一屏", Math.Abs(ViewOffsetY + pageH) < 0.6f,
+              $"相机 {ViewOffsetY:F1}（应为 {-pageH:F0}）");
+        Check("翻完在第 2 屏", ScreenIndex == 2, $"屏号 {ScreenIndex}");
+        Check("到第 2 屏后就能往上翻了", CanFlipPageUp, $"能上翻 = {CanFlipPageUp}");
+
+        // ---- ③ 往下永远还有一屏（连翻 6 次都成）----
+        int flipped = 1;
+        for (int i = 0; i < 6; i++)
+        {
+            if (!FlipPage(true)) break;
+            flipped++;
+            SettleFrames(250);
+        }
+        Check("下一屏永远可用（连翻 6 次都成）", flipped == 7,
+              $"成功 {flipped} 次，屏号 {ScreenIndex}");
+
+        // ---- ④ 回来；到顶后再上翻必须"什么都不做" ----
+        for (int i = 0; i < 10 && CanFlipPageUp; i++) { FlipPage(false); SettleFrames(250); }
+        Check("连翻回顶：相机夹在 0，不越过", Math.Abs(ViewOffsetY) < 0.01f,
+              $"相机 {ViewOffsetY:F2}");
+        bool upAtTop = FlipPage(false);
+        SettleFrames(200);
+        Check("到顶了再上翻：返回 false 且相机不动",
+              !upAtTop && Math.Abs(ViewOffsetY) < 0.01f,
+              $"返回 {upAtTop}，相机 {ViewOffsetY:F2}");
+
+        // ---- ⑤ 翻页前后，文档里一个坐标都不变（证明"没做分页"）----
+        // 铺开三屏、每屏三行——量级对齐一节真实板书。
+        Doc.Clear();
+        Doc.ClearHistory();
+        for (int screen = 0; screen < 3; screen++)
+            for (int row = 0; row < 3; row++)
+            {
+                var s = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = new Color4(0.12f, 0.13f, 0.16f, 1f), Width = 6f,
+                };
+                float y = _virtualY + screen * _virtualH + 200f + row * 260f;
+                for (int i = 0; i <= 20; i++)
+                    s.AddPoint(_virtualX + 240f + i * 55f, y + (i % 4) * 8f, 1f, i * 8);
+                Doc.AddStroke(s);
+            }
+        Doc.InvalidateAll();
+        SettleFrames(200);
+
+        string Dump()
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var s in Doc.Strokes)
+            {
+                sb.Append((int)s.Tool).Append('/').Append((int)s.Kind).Append(':');
+                foreach (var p in s.Points)
+                    sb.Append(p.X.ToString("F3")).Append(',').Append(p.Y.ToString("F3")).Append(';');
+                sb.Append('|');
+            }
+            return sb.ToString();
+        }
+
+        string coords0 = Dump();
+        int strokes0 = Doc.Strokes.Count;
+        FlipPage(true); SettleFrames(300);
+        FlipPage(true); SettleFrames(300);
+        FlipPage(false); SettleFrames(300);
+        FlipPage(true); SettleFrames(300);
+        string coords1 = Dump();
+        Check("翻来翻去：对象数没变", Doc.Strokes.Count == strokes0,
+              $"{strokes0} → {Doc.Strokes.Count} 条");
+        Check("翻来翻去：**每一个坐标都没变**", coords1 == coords0,
+              coords1 == coords0 ? $"{coords0.Length} 字符逐字符一致（只有相机动）"
+                                 : "有坐标被改动了 —— 翻页不该碰文档");
+
+        // ---- ⑥ 滚轮仍是细粒度（一格 72 逻辑像素，不是一格一屏）----
+        IntPtr Wheel(int delta) => new((long)(ushort)(short)delta << 16);
+        for (int i = 0; i < 12 && CanFlipPageUp; i++) { FlipPage(false); SettleFrames(250); }
+        SettleFrames(150);
+        float camBefore = ViewOffsetY;
+        HandleWheel(Wheel(-120));
+        SettleFrames(120);
+        float wheelStep = 72f * DpiScale;
+        Check("滚轮还是细粒度（一格 72 逻辑像素）",
+              Math.Abs(ViewOffsetY - camBefore + wheelStep) < 1.2f,
+              $"走了一格 = {camBefore - ViewOffsetY:F0} 物理像素（应为 {wheelStep:F0}，一屏是 {pageH:F0}）");
+        HandleWheel(Wheel(120));                       // 滚回去
+        SettleFrames(120);
+
+        // ---- ⑦ 翻完屏幕上真的换了内容（屏幕取点）----
+        // 先放一笔**第 1 屏**的洋红墨：它必须看得见——既当判据，也当"取屏可用"的探针。
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        // 两笔**故意放在不同的屏幕高度**，这样"没翻动"和"翻动了"才有区别：
+        //   第 1 屏那笔 → 相机为 0 时在屏幕 y=400；翻下去之后跑到屏幕外（负号），
+        //   第 2 屏那笔 → 相机为 0 时在屏幕外，翻下去之后出现在屏幕 y=1000。
+        // （第一版把两笔放在**同一个屏幕位置**，结果"翻没翻"取到的像素数一模一样，
+        //   即使相机根本没动也会通过——这种"测不出区别"的用例比没有还坏。）
+        float px = _virtualX + 900f;
+        float y1 = _virtualY + 400f;                 // 第 1 屏
+        float y2 = _virtualY + _virtualH + 1000f;    // 第 2 屏，翻下去之后落在屏幕 y=1000
+        foreach (float cy in new[] { y1, y2 })
+        {
+            var s = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 26f * DpiScale,
+            };
+            s.AddPoint(px - 220f, cy, 1f, 0);
+            s.AddPoint(px + 220f, cy, 1f, 1);
+            Doc.AddStroke(s);
+        }
+        Doc.InvalidateAll();
+        SettleFrames(400);
+
+        int BandAt(float screenY) => ScreenProbe.CountMagenta((int)px - 260, (int)screenY - 40, 520, 80);
+        float homeProbeY = _virtualY + 400f, secondProbeY = _virtualY + 1000f;
+
+        int probe = BandAt(homeProbeY);
+        if (probe < 300)
+        {
+            // 锁屏 / 远程桌面 / 别的窗口盖住时取不到像素：这条只能跳过，不能算失败。
+            Console.WriteLine($"  [跳过] 第一屏的墨自己都没取到（{probe} 像素）——"
+                            + "屏幕取点这时候不可用（锁屏 / 远程 / 被盖住），这一条不判红绿");
+        }
+        else
+        {
+            int secondBefore = BandAt(secondProbeY);
+            Check("相机为 0 时：第 2 屏那笔不该在屏幕上", secondBefore < 40,
+                  $"{secondBefore} 像素（第 2 屏那笔此时在屏幕外）");
+
+            FlipPage(true);
+            SettleFrames(400);
+            int firstAfter = BandAt(homeProbeY);
+            int secondAfter = BandAt(secondProbeY);
+            Check("翻下去：第 1 屏那笔离开屏幕", firstAfter < 40,
+                  $"{firstAfter} 像素（原来 400 处那笔现在在屏幕外）");
+            Check("翻下去：第 2 屏那笔出现在屏幕上", secondAfter > 300,
+                  $"{secondAfter} 像素（落在屏幕 1000 处）");
+
+            FlipPage(false);
+            SettleFrames(400);
+            int backHome = BandAt(homeProbeY);
+            Check("翻回来：第 1 屏那笔还在原处", backHome > 300, $"{backHome} 像素");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(fail == 0
+            ? "  PASS：整屏翻页正确（页高 = 视口高、只动相机、到顶就停、往下无限、滚轮仍是细粒度）"
+            : $"  FAIL：{fail} 项不对（{pass} 项通过）");
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
         _quit = true;
     }
 
@@ -4551,6 +4770,7 @@ internal sealed class App : InkEngine.InkEngine
         while (sw.ElapsedMilliseconds < ms)
         {
             PumpMessages();
+            StepCameraAnim();          // 主循环每帧做的那一件事，自检也得做（否则相机永远停在起点）
             RenderAll();
         }
     }
@@ -5386,6 +5606,62 @@ internal sealed class App : InkEngine.InkEngine
         }
     }
 
+    /// <summary>
+    /// **页界线摆样**：白板打底、铺三屏板书，出两张图——
+    ///   · `<path>`：相机停在两屏之间（页界线落在屏幕中间，最好看细节）；
+    ///   · `<path>-对齐.bmp`：相机正好停在第 2 屏（页界线压在屏幕上下沿）。
+    /// 为什么要两张：一眼看出"一屏一页"的分界到底顺不顺眼、会不会被当成画面上的脏点。
+    /// </summary>
+    private void PageShow(string path)
+    {
+        SetUiFactory(() => new InkUi.FullUi());
+        BoardOn = true;
+        BoardColor = InkPalette.BoardPresets[0].Color;
+
+        for (int screen = 0; screen < 3; screen++)
+            for (int row = 0; row < 4; row++)
+            {
+                var s = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = new Color4(0.10f, 0.11f, 0.14f, 1f), Width = 5f * DpiScale,
+                };
+                float y = _virtualY + screen * _virtualH + 240f + row * 380f;
+                for (int i = 0; i <= 36; i++)
+                    s.AddPoint(_virtualX + 420f + i * 52f, y + MathF.Sin(i * 0.4f) * 26f, 1f, i * 8);
+                Doc.AddStroke(s);
+            }
+
+        // 第 2 屏右边标一句"这里是第 2 屏"，看图时好对号
+        var tag = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(0.13f, 0.36f, 0.24f, 1f), Width = 9f * DpiScale,
+        };
+        float ty = _virtualY + _virtualH + 150f;
+        for (int i = 0; i <= 60; i++) tag.AddPoint(_virtualX + 2200f + i * 4f, ty + (i % 7) * 6f, 1f, i * 8);
+        Doc.AddStroke(tag);
+
+        void Shot(float offset, string outPath)
+        {
+            ViewOffsetY = offset;
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = offset; }
+            Doc.InvalidateAll();
+            SettleFrames(600);
+            bool ok = ScreenProbe.SaveBmp(outPath, (int)_virtualX, (int)_virtualY,
+                                          (int)_virtualW, (int)_virtualH);
+            Console.WriteLine(ok ? $"已出图 {outPath}" : $"出图失败 {outPath}");
+        }
+
+        Shot(-_virtualH * 0.55f, path);                       // 界线落在屏幕中间
+        string aligned = System.IO.Path.ChangeExtension(path, null) + "-对齐.bmp";
+        Shot(-_virtualH * 1.0f, aligned);                     // 正好第 2 屏
+
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        _quit = true;
+    }
+
     private void PanelShow(string path)
     {
         _panelShowDrawer = Environment.GetCommandLineArgs().Contains("--drawer");
@@ -5401,6 +5677,12 @@ internal sealed class App : InkEngine.InkEngine
             ui.SnapForTest();                // 一步展开，不用等 200 毫秒
             if (_panelShowMini) ui.SetProfileForTest(0);     // --mini：极简档（短胶囊）
             if (_panelShowBand) ui.OpenRailForTest();        // --band：把色线张开成设置条
+            // --cell N：把上带掰到第 N 格再出图（N=2 就是白板那条
+            // `[上一屏] [白][绿][黑] [下一屏]` ＋ "第 N 屏"）
+            var cli = Environment.GetCommandLineArgs();
+            int ci = Array.IndexOf(cli, "--cell");
+            if (ci >= 0 && ci + 1 < cli.Length && int.TryParse(cli[ci + 1], out int cellArg))
+                ui.SelectBandCellForTest(cellArg);
             if (_panelShowDrawer) ui.OpenDrawerForTest();   // --drawer：连抽屉一起出图
             SettleFrames(500);
 
@@ -5658,7 +5940,10 @@ internal sealed class App : InkEngine.InkEngine
         ClickPhysical((boardCell2.MinX + boardCell2.MaxX) * 0.5f * DpiScale,
                       (boardCell2.MinY + boardCell2.MaxY) * 0.5f * DpiScale);
         SettleFrames(150);
-        var green = ui.SegmentRectForTest(1);                  // 白板三色里的"绿板"
+        // 白板那一格现在是 5 段：`[上一屏] [白][绿][黑] [下一屏]`。
+        // 所以"绿板"是下标 **2**（下标 1 是白板、0/4 是翻页）——
+        // 这一条自检第一版按老的三段布局点下标 1，点到了"白板"，被判成失败。
+        var green = ui.SegmentRectForTest(2);
         ClickPhysical((green.MinX + green.MaxX) * 0.5f * DpiScale,
                       (green.MinY + green.MaxY) * 0.5f * DpiScale);
         var wantBoard = InkPalette.BoardPresets[1].Color;
@@ -5668,6 +5953,52 @@ internal sealed class App : InkEngine.InkEngine
               && MathF.Abs(wantBoard.G - gotBoard.G) < 0.02f
               && MathF.Abs(wantBoard.B - gotBoard.B) < 0.02f,
               $"板开 = {BoardOn}，板色 ({gotBoard.R:F2},{gotBoard.G:F2},{gotBoard.B:F2})");
+
+        // ---- ⑥.5 白板翻页：上带上的 [上一屏] / [下一屏] ----
+        // 屏幕高必须是"整数屏"的底数：跑到第一屏（相机偏移 = 0）再往下翻。
+        var upSeg = ui.SegmentRectForTest(0);
+        float upX = (upSeg.MinX + upSeg.MaxX) * 0.5f * DpiScale;
+        float upY = (upSeg.MinY + upSeg.MaxY) * 0.5f * DpiScale;
+        var downSeg = ui.SegmentRectForTest(4);
+        float downX = (downSeg.MinX + downSeg.MaxX) * 0.5f * DpiScale;
+        float downY = (downSeg.MinY + downSeg.MaxY) * 0.5f * DpiScale;
+        float camHome = ViewOffsetY;
+
+        // 已经在最上面：点"上一屏"不该动（按钮也该是压暗的）
+        Check("到顶时「上一屏」不可用", !Host.State.CanFlipPageUp,
+              $"相机 {camHome:F0}，还能上翻 = {Host.State.CanFlipPageUp}");
+        ClickPhysical(upX, upY);
+        SettleFrames(400);
+        Check("到顶时点「上一屏」相机不动",
+              MathF.Abs(ViewOffsetY - camHome) < 1f,
+              $"相机 {camHome:F0} → {ViewOffsetY:F0}");
+
+        ClickPhysical(downX, downY);
+        SettleFrames(400);
+        Check("点「下一屏」翻到第 2 屏",
+              Host.State.ScreenIndex == 2 && ViewOffsetY < -1f,
+              $"屏号 {Host.State.ScreenIndex}，相机 {ViewOffsetY:F0}");
+
+        ClickPhysical(downX, downY);
+        SettleFrames(400);
+        Check("再点一次翻到第 3 屏（下面永远还有一屏）",
+              Host.State.ScreenIndex == 3, $"屏号 {Host.State.ScreenIndex}");
+
+        ClickPhysical(upX, upY);
+        SettleFrames(400);
+        Check("点「上一屏」回到第 2 屏",
+              Host.State.ScreenIndex == 2 && Host.State.CanFlipPageUp,
+              $"屏号 {Host.State.ScreenIndex}，还能上翻 = {Host.State.CanFlipPageUp}");
+
+        // 收尾：把相机送回第一屏，别把后面的用例带偏（后面的用例都假设相机为 0）
+        while (Host.State.CanFlipPageUp)
+        {
+            ClickPhysical(upX, upY);
+            SettleFrames(300);
+        }
+        Check("翻回第一屏（相机归零）", Math.Abs(ViewOffsetY) < 1f,
+              $"相机 {ViewOffsetY:F1}");
+
         Host.Commands.SetBoard(false);
         Host.Commands.SetBoardColor(InkPalette.BoardPresets[0].Color);
         SettleFrames(150);

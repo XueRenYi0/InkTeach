@@ -179,6 +179,13 @@ public interface IEngineCommands
     void SelectAll();
 
     /// <summary>
+    /// 整屏翻页：<paramref name="down"/> = 往下翻一屏。
+    /// "一屏 = 一页"——相机正好走一个视口高，翻完屏幕上不留半行字；
+    /// 往下永远翻得动（画布下面永远多一屏），到顶了往上翻就不动。
+    /// </summary>
+    void FlipPage(bool down);
+
+    /// <summary>
     /// 重启软件。**先把板书暂存**，再拉起新进程、退出自己，新进程启动时读回来。
     /// 和"界面崩了自动重启"走的是同一条路（见 Recovery）：重启的前提是不丢东西。
     /// 教室里没有键盘的机器上，这是"感觉不对就重开一次"的唯一入口。
@@ -281,6 +288,10 @@ public readonly struct UiState
     public Color4 BoardColor { get; init; }
     /// <summary>框选的选择方式（界面用它高亮"矩形/套索"那一格）。</summary>
     public SelectMode SelectMode { get; init; }
+    /// <summary>现在在第几屏（1 起）。界面用它显示"第 N 屏"。</summary>
+    public int ScreenIndex { get; init; }
+    /// <summary>还能不能往上翻（到顶了就不行）。"下一屏"永远可用。</summary>
+    public bool CanFlipPageUp { get; init; }
     /// <summary>
     /// 老师这一刻是不是正在写。界面用它判断"别在人家写字的时候动界面"——
     /// 比如贴边隐藏：手正在写，界面突然收起来或者浮出来，都会打断。

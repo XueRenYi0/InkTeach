@@ -57,6 +57,7 @@ $cases = @(
     @{ f = '滚动';       n = 'scrollwrite';  a = @('--scrollwrite');     t = 180; d = '滚到哪儿都能写，墨留在画布位置' }
     @{ f = '滚动';       n = 'ghosttest';    a = @('--ghosttest');       t = 180; d = '残影检测（相机为 0）' }
     @{ f = '滚动';       n = 'ghosttest-scroll'; a = @('--ghosttest', 'scroll'); t = 180; d = '残影检测（有滚动偏移）' }
+    @{ f = '翻页';       n = 'pagetest';    a = @('--pagetest');        t = 180; d = '整屏翻页（一屏 = 一页）：页高 = 视口高 / 只动相机 / 到顶就停 / 往下无限 / 滚轮仍细粒度' }
     @{ f = '实笔轨迹';   n = 'trailtest';    a = @('--trailtest');       t = 150; d = '委托墨迹轨迹（只对真笔生效，鼠标下记跳过）' }
     @{ f = '穿透模式';   n = 'passtest';     a = @('--passtest');        t = 180; d = '穿透：跨进程真实点击落到下层窗口' }
     @{ f = '穿透模式';   n = 'uitest';       a = @('--uitest');          t = 240; d = '界面输入通路：面板内/外 × 穿透开/关 × 界面吃不吃，谁收到（含"穿透下面板可点"）' }

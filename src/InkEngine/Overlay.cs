@@ -632,6 +632,34 @@ internal sealed class OverlayWindow : IDisposable
     }
 
     /// <summary>
+    /// 白板模式下画"页界线"：一屏一页，界线落在画布坐标的整数屏位置。
+    ///
+    /// 为什么把它画成**画布内容**而不是每帧叠一层：界线在图上的位置是固定的
+    /// （不随相机动），所以能跟白板底色一起烘进分块缓存 —— 滚动和翻页都不额外花钱。
+    /// 颜色按板色明暗挑：浅板画淡黑线、深板画淡白线，只求"看得出有个分界"，不抢板书。
+    /// </summary>
+    private void DrawPageLines(InkEngine app, RectF canvas)
+    {
+        float h = app.PageHeightCanvas;
+        if (h < 50f) return;
+        float top = app.PageTopCanvas;
+
+        float first = MathF.Floor((canvas.MinY - top) / h) * h + top;
+        var c = app.BoardColor;
+        float lum = 0.299f * c.R + 0.587f * c.G + 0.114f * c.B;
+        var line = lum > 0.5f
+            ? new Color4(0f, 0f, 0f, 0.10f)
+            : new Color4(1f, 1f, 1f, 0.14f);
+
+        for (float y = first; y <= canvas.MaxY + 0.5f; y += h)
+        {
+            if (y < canvas.MinY - 0.5f) continue;
+            _ctx.DrawLine(new System.Numerics.Vector2(canvas.MinX, y),
+                          new System.Numerics.Vector2(canvas.MaxX, y), Brush(line), 1f);
+        }
+    }
+
+    /// <summary>
     /// 取当前该用的底色画刷。透明批注时就是全透明（等于把这一块擦干净），
     /// 白板时是不透明的底色。底色变了才重建画刷，正常每帧不分配。
     /// </summary>
@@ -787,6 +815,10 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.PrimitiveBlend = PrimitiveBlend.Copy;
         _ctx.FillRectangle(clearRect, BoardBrush(app));
         _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
+
+        // 白板模式：画"页界线"（一屏一页）。它是**画布内容**——固定在图上的位置、
+        // 不随相机动，所以烘进分块缓存里，滚动与翻页都不额外花钱。
+        if (app.BoardOn) DrawPageLines(app, canvas);
 
         // 空间索引按**带笔宽外扩**的框返回候选，所以跨在块边界上的粗笔画
         // 两边都会被画到，不会出现"贴边被削掉一半"的缺口。

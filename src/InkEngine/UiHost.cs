@@ -82,6 +82,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetBoardColor(Color4 color) => _engine.SetBoardColorFromUi(color);
     public void SetSelectMode(SelectMode mode) => _engine.SetSelectModeFromUi(mode);
     public void SelectAll() => _engine.SelectAllFromUi();
+    public void FlipPage(bool down) => _engine.FlipPageFromUi(down);
     public void Restart() => _engine.RestartFromUi();
     public void Quit() => _engine.QuitFromUi();
 
