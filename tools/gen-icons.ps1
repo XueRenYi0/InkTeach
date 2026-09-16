@@ -35,6 +35,18 @@ $icons = [ordered]@{
     'flipH'  = @('Flip Horizontal', 'Flip Horizontal 24', 'Arrow Swap')
     'flipV'  = @('Flip Vertical',   'Flip Vertical 24',   'Arrow Swap')
     'rotate' = @('Arrow Rotate Clockwise', 'Rotate Right', 'Arrow Clockwise', 'Rotate Left')
+    # 选中条件（操作条第二轮，2026-09-16）。名字都先在这台机器上逐个核实过存在
+    # （见 调研-选中框-反馈-导出-层级-属性.md 第六节），这些是"抓不到就换"的候选。
+    'collapse'   = @('Dismiss')                       # 收起工具条（参考图里条首那个 ✕）
+    'layer'      = @('Layer')                         # 层级（点开：置顶 / 置底）
+    'toFront'    = @('Arrow Upload')                  # 置顶（Fluent 没有"置顶"专名，用"上箭头 + 底托"）
+    'toBack'     = @('Arrow Download')                # 置底
+    # 注意：**不能叫 lock** —— 那是 C# 关键字，生成的常量名会编译不过（实测踩到）。
+    'lockClosed' = @('Lock Closed')                   # 已锁定
+    'unlock'     = @('Lock Open')                     # 未锁定
+    # 导出用 **Save**（软盘）而不是 Arrow Export Up：后者画出来是"上箭头 + 底托"，
+    # 和置顶用的 Arrow Upload 几乎一模一样，同一屏里两个一样的图标就废了（实测发现）。
+    'export'     = @('Save', 'Arrow Export Up')       # 导出（另存为）
 }
 
 function Get-UpstreamFile([string]$folder, [string]$fileName) {

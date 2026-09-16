@@ -61,8 +61,10 @@ internal static class InkSerializer
     ///   · v4：每条笔画多一段**擦除区间表**（像素橡皮擦掉了哪几段，见 Stroke.Erased）。
     ///         这是"一条笔迹上记区间"而不是把笔迹拆成几个对象的关键——
     ///         存下来之后，一块被擦掉中间一段的板书重开还是**一条**笔迹。
+    ///   · v5：每条笔画多一个**锁定标记**（见 Stroke.Locked）。老文件（≤ v4）读进来
+    ///         一律"不锁"，所以版本闸只往上抬、不需要迁移代码。
     /// </summary>
-    public const int FormatVersion = 4;
+    public const int FormatVersion = 5;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -155,6 +157,9 @@ internal static class InkSerializer
             w.Write(a);
             w.Write(b);
         }
+
+        // ---- v5：锁定标记 ----
+        w.Write((byte)(s.Locked ? 1 : 0));
     }
 
     // =====================================================================
@@ -293,6 +298,9 @@ internal static class InkSerializer
                 s.Erased.Add((a, b));       // 文件里的表本来就是有序的，原样收下
             }
         }
+
+        // ---- v5：锁定标记（老文件没有这一位，一律"不锁"）----
+        if (version >= 5) s.Locked = r.ReadByte() != 0;
         return s;
     }
 

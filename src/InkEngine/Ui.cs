@@ -158,6 +158,30 @@ public static class InkPalette
 
     /// <summary>把笔色换算成荧光笔色：保留色相，降低不透明度。</summary>
     public static Color4 ToHighlighter(Color4 pen) => new(pen.R, pen.G, pen.B, 0.32f);
+
+    /// <summary>
+    /// **选中框属性面板**的色板（2026-09-16 加）：4 列排布 —— 中性一行、
+    /// 暖色一行、冷色一行、末格"自定义取色"（占位，本轮禁用）。
+    ///
+    /// 为什么不直接用上面的 <see cref="Presets"/>：那 9 色是上带 / 假面板在用的，
+    /// 改它会把假面板的色片布局一起牵动。这里独立一张，互不影响。
+    /// </summary>
+    public static readonly (string Name, Color4 Color)[] SelectionSwatches =
+    {
+        ("白",   new Color4(1.00f, 1.00f, 1.00f, 1f)),
+        ("浅灰", new Color4(0.72f, 0.75f, 0.78f, 1f)),
+        ("深灰", new Color4(0.36f, 0.38f, 0.42f, 1f)),
+        ("黑",   new Color4(0.11f, 0.12f, 0.15f, 1f)),
+        ("红",   new Color4(0.95f, 0.18f, 0.18f, 1f)),
+        ("橙",   new Color4(0.98f, 0.55f, 0.09f, 1f)),
+        ("黄",   new Color4(0.98f, 0.82f, 0.12f, 1f)),
+        ("浅绿", new Color4(0.55f, 0.85f, 0.30f, 1f)),
+        ("青",   new Color4(0.10f, 0.72f, 0.78f, 1f)),
+        ("蓝",   new Color4(0.13f, 0.45f, 0.90f, 1f)),
+        ("紫",   new Color4(0.55f, 0.28f, 0.86f, 1f)),
+        ("粉",   new Color4(0.98f, 0.55f, 0.68f, 1f)),
+        ("自定义", new Color4(0f, 0f, 0f, 0f)),      // 占位：要接系统取色器，下一批
+    };
 }
 
 /// <summary>引擎状态的只读快照，界面拿来显示。</summary>

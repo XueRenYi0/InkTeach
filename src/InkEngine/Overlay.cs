@@ -1360,6 +1360,15 @@ internal sealed class OverlayWindow : IDisposable
             // 操作条在选中框下方，也必须算进来，否则它自己会留下残影。
             r.Add(CanvasRectToWindow(SelectionHandles.BarRect(sb, dpi, app.ViewportCanvas).Inflate(4f)));
 
+            // 收起态的圆钮 / 打开的面板 / 提示条：都是"每帧都在变"的浮动层，
+            // 漏一块就在屏幕上留一块擦不掉的残影（这条踩过好几次了）。
+            r.Add(CanvasRectToWindow(SelectionHandles.BarCollapsedRect(sb, dpi, app.ViewportCanvas).Inflate(4f)));
+            if (app.SelPanelOpen == SelPanel.Ink)
+                r.Add(CanvasRectToWindow(SelectionHandles
+                    .PanelRect(sb, dpi, app.ViewportCanvas, SelectionHandles.SwatchCount).Inflate(6f)));
+            else if (app.SelPanelOpen == SelPanel.Layer)
+                r.Add(CanvasRectToWindow(SelectionHandles.LayerPanelRect(sb, dpi, app.ViewportCanvas).Inflate(6f)));
+
             // 旋转度数标签贴在旋转手柄外侧，比选中框本身还高出去一截，
             // 同样必须进脏区；拖动中它每帧都在动，靠 _transientHistory 回溯两帧。
             if (app.SelRotating)
@@ -1533,9 +1542,20 @@ internal sealed class OverlayWindow : IDisposable
         _scratch.Color = new Color4(accent.R, accent.G, accent.B, 0.16f);
         DrawQuad(c0, c1, c2, c3, 6.5f);
 
-        // 2) 描边
-        _scratch.Color = accent;
-        DrawQuad(c0, c1, c2, c3, 2.5f);
+        // 2) 描边。两种特殊状态在这里体现：
+        //    · **复制拖拽模式**：框画成虚线（"按着拖 = 拖出副本"的通用语言）；
+        //    · **复制成功那 0.25 秒**：框加粗变亮，闪一下（用户反馈"复制以后看不出来"）。
+        if (app.SelFlashing)
+        {
+            _scratch.Color = new Color4(accent.R, accent.G, accent.B, 1f);
+            DrawQuad(c0, c1, c2, c3, 5.5f);
+        }
+        else
+        {
+            _scratch.Color = accent;
+            if (app.CopyDragArmed) DrawQuadDashed(c0, c1, c2, c3, 2.5f);
+            else DrawQuad(c0, c1, c2, c3, 2.5f);
+        }
 
         // 3) 旋转手柄（在上边中点外侧，先画连线再画圆）
         //    拖动中收起来，但**旋转中要留**（此刻它就是"正在抓的那个东西"）。
@@ -1578,11 +1598,21 @@ internal sealed class OverlayWindow : IDisposable
             }
         }
 
-        // 5) 操作条。放在下方，理由见 DrawSelectionBar 的注释。
+        // 5) 操作条（九格）/ 收起态的圆钮。放在下方，理由见 DrawSelectionBar 的注释。
         //    拖动 / 旋转中收起来：此刻点不中；而且贴着屏幕下边时它会**停在原地**，
         //    内容继续走、条不跟——那是最像卡死的一幕（见 SelectionHandles.BarRect）。
         if (!collapsed)
-            DrawSelectionBar(b, app.ViewportCanvas);
+        {
+            if (app.SelBarCollapsed) DrawCollapsedDot(app, b);
+            else DrawSelectionBar(app, b);
+        }
+
+        // 5.5) 浮动面板（颜色/粗细、层级）。画在条之后，盖在内容之上。
+        if (!collapsed && !app.SelBarCollapsed)
+        {
+            if (app.SelPanelOpen == SelPanel.Ink) DrawInkPanel(app, b);
+            else if (app.SelPanelOpen == SelPanel.Layer) DrawLayerPanel(app, b);
+        }
 
         // 6) 旋转度数标签：只在拖旋转手柄的过程中出现。
         //
@@ -1660,37 +1690,40 @@ internal sealed class OverlayWindow : IDisposable
     }
 
     /// <summary>
-    /// 操作条：复制 / 删除 / 左右翻转 / 上下翻转 / 旋转。
-    /// 规格见 design/选中与操作条-设计稿.png。
+    /// 操作条（九格）：收起 / 颜色 / 锁定 / 层级 / 导出 / 复制 / 左右翻转 / 上下翻转 / 删除。
+    /// 顺序的语义见 <see cref="SelBarButton"/>；这一层只负责画。
     ///
     /// **为什么在下方而不是上方**：选中内容靠屏幕上边时，上方的操作条要么被顶出
     /// 屏幕、要么盖住正在讲的内容。下方永远有位置，个子矮的老师也够得着。
     ///
     /// 图标不是自己画的：路径数据来自微软 Fluent UI System Icons（MIT），
     /// 由 tools/gen-icons.ps1 抓取生成。手画的圆角和光学比例总是差一口气。
+    ///
+    /// 三种状态都要画出来（2026-09-16 补的，起因是用户说"复制以后看不出来"）：
+    ///   · **悬停**：浅灰圆角底（`SelBarHover`，以前这个字段是个死字段，没人赋值也没人画）；
+    ///   · **激活**：浅蓝底 + 图标加深（颜色/层级面板开着、复制模式开着）；
+    ///   · **禁用**：图标减到 35%（导出还没接、锁定对图像无意义……）。
     /// </summary>
-    private void DrawSelectionBar(in RectF sel, in RectF visible)
+    private void DrawSelectionBar(InkEngine app, in RectF sel)
     {
+        var visible = app.ViewportCanvas;
         float dpi = Dpi / 96f;
         // 布局从 SelectionHandles 取，与命中判定同源：分开写迟早差几个像素，
         // 表现就是"看得见按钮却点不中"。
         var rect = SelectionHandles.BarRect(sel, dpi, visible);
         var box = new Vortice.RawRectF(rect.MinX, rect.MinY, rect.MaxX, rect.MaxY);
-        float radius = 8f * dpi;
+        // 圆角**用界面那套令牌**（UiTheme.CornerRadius = 10），不自己发明一个胶囊：
+        // 工具条、操作条、面板三样东西的圆角必须是同一个数，看着才是一家的。
+        float radius = MathF.Min(UiTheme.Default.CornerRadius * dpi, (rect.MaxY - rect.MinY) * 0.5f);
         var rounded = new RoundedRectangle(box, radius, radius);
 
-        _scratch.Color = new Color4(0.99f, 0.99f, 1f, 0.96f);
+        // 配色**取界面那套主题**（UiTheme.Default）：操作条和工具条必须是同一套颜色，
+        // 各写一份迟早会花（用户："纯白色也不美观……看看怎么和那个界面搭配起来"）。
+        var theme = UiTheme.Default;
+        _scratch.Color = theme.Panel;
         _ctx.FillRoundedRectangle(rounded, _scratch);
-        _scratch.Color = new Color4(0.80f, 0.82f, 0.86f, 1f);
+        _scratch.Color = theme.PanelBorder;
         _ctx.DrawRoundedRectangle(rounded, _scratch, 1f * dpi);
-
-        var iconBrush = Brush(new Color4(0.16f, 0.17f, 0.20f, 1f));
-        var sepBrush = Brush(new Color4(0.90f, 0.91f, 0.93f, 1f));
-
-        string[] glyphs =
-        {
-            IconPaths.copy, IconPaths.delete, IconPaths.flipH, IconPaths.flipV,
-        };
 
         const int n = SelectionHandles.BarButtonCount;
         float glyphBox = SelectionHandles.BarIconBoxLogical * dpi;   // 图标框比字形大一点
@@ -1698,19 +1731,295 @@ internal sealed class OverlayWindow : IDisposable
         for (int i = 0; i < n; i++)
         {
             var btn = SelectionHandles.BarButtonRect(i, sel, dpi, visible);
-            DrawIcon(glyphs[i], (btn.MinX + btn.MaxX) * 0.5f - glyphBox * 0.5f,
-                     (btn.MinY + btn.MaxY) * 0.5f - glyphBox * 0.5f, glyphBox, iconBrush);
+            var kind = (SelBarButton)i;
+            bool hot = app.SelBarHover == i;
+            bool active = IsBarButtonActive(app, kind);
+            bool disabled = kind == SelBarButton.Export;      // 还没接（见 RunBarAction）
 
-            // 键之间的分隔线：五个图标挨在一起会连成一片，看不出是几个按钮。
-            if (i < n - 1)
+            // 悬停 / 激活的底：参考实现就是这么做的（浅色圆角底 + 图标加深）。
+            if (hot || active)
             {
-                float sx = btn.MaxX + SelectionHandles.BarGapLogical * dpi * 0.5f;
-                float inset = (SelectionHandles.BarPaddingLogical + 3f) * dpi;
-                _ctx.DrawLine(new Vector2(sx, rect.MinY + inset),
-                              new Vector2(sx, rect.MaxY - inset), sepBrush, 1f * dpi);
+                // 激活底比按钮小一圈（内缩 3），圆角接近半个身位——小按钮上
+                // 大圆角会显得"胖"，这一圈内缩就是让它看起来利落的关键。
+                float inset = 3f * dpi;
+                var bg = new Vortice.RawRectF(btn.MinX + inset, btn.MinY + inset,
+                                              btn.MaxX - inset, btn.MaxY - inset);
+                float br = MathF.Min(bg.Bottom - bg.Top, bg.Right - bg.Left) * 0.32f;
+                _scratch.Color = active
+                    ? theme.ActiveBg                            // 激活：主题的实心蓝
+                    : theme.Hover;                              // 悬停：主题的浅蓝灰
+                _ctx.FillRoundedRectangle(new RoundedRectangle(bg, br, br), _scratch);
+            }
+
+            var iconBrush = Brush(disabled ? theme.TextMuted
+                                     : active ? theme.ActiveText
+                                              : theme.Text);
+            float cx = (btn.MinX + btn.MaxX) * 0.5f, cy = (btn.MinY + btn.MaxY) * 0.5f;
+
+            switch (kind)
+            {
+                case SelBarButton.Color:
+                    // 圆环的**半径**按图标框的一半左右给（以前给成 0.62 倍，画出来比
+                    // 别的图标还大一圈——用户："那个颜色圈的比例也太大了"）。
+                    DrawColorRing(app, cx, cy, glyphBox * 0.44f, disabled);
+                    break;
+                case SelBarButton.Lock:
+                    DrawIcon(IsSelectionLocked(app) ? IconPaths.lockClosed : IconPaths.unlock,
+                             cx - glyphBox * 0.5f, cy - glyphBox * 0.5f, glyphBox, iconBrush);
+                    break;
+                default:
+                    DrawIcon(IconForBar(kind), cx - glyphBox * 0.5f, cy - glyphBox * 0.5f,
+                             glyphBox, iconBrush);
+                    break;
             }
         }
     }
+
+    /// <summary>操作条九格各自的图标（颜色那格是自绘的"当前色环"，不在这里）。</summary>
+    private static string IconForBar(SelBarButton b) => b switch
+    {
+        SelBarButton.Collapse => IconPaths.collapse,
+        SelBarButton.Layer => IconPaths.layer,
+        SelBarButton.Export => IconPaths.export,
+        SelBarButton.Copy => IconPaths.copy,
+        SelBarButton.FlipH => IconPaths.flipH,
+        SelBarButton.FlipV => IconPaths.flipV,
+        SelBarButton.Delete => IconPaths.delete,
+        _ => IconPaths.layer,
+    };
+
+    /// <summary>这一格是"激活"状态吗（面板开着 / 模式开着）。</summary>
+    private static bool IsBarButtonActive(InkEngine app, SelBarButton b) => b switch
+    {
+        SelBarButton.Color => app.SelPanelOpen == SelPanel.Ink,
+        SelBarButton.Layer => app.SelPanelOpen == SelPanel.Layer,
+        SelBarButton.Copy => app.CopyDragArmed,
+        _ => false,
+    };
+
+    /// <summary>选中的对象是不是**全都**锁着（决定锁图标画开锁还是闭锁）。</summary>
+    private static bool IsSelectionLocked(InkEngine app)
+    {
+        if (app.Doc.Selected.Count == 0) return false;
+        foreach (var s in app.Doc.Selected) if (!s.Locked) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// "颜色"那一格的图标：**当前色的圆环**（参考实现的画法）。
+    ///
+    /// 一眼能看出"这一批墨现在是什么颜色"；选中的颜色不一致时（混合选区）
+    /// 画成**双色环**——左半边第一种色、右半边第二种色，不假装是纯色。
+    /// 选中的全是图像对象时画成禁用态（图像没有"颜色"这个概念）。
+    /// </summary>
+    private void DrawColorRing(InkEngine app, float cx, float cy, float r, bool disabled)
+    {
+        Color4 a = default; int distinct = 0; Color4 b2 = default;
+        bool any = false, anyImage = false;
+        foreach (var s in app.Doc.Selected)
+        {
+            if (s.IsImage) { anyImage = true; continue; }
+            if (!any) { a = s.Color; any = true; continue; }
+            if (distinct == 0 && !SameRgb(a, s.Color)) { b2 = s.Color; distinct = 1; }
+            else if (distinct == 1 && !SameRgb(a, s.Color) && !SameRgb(b2, s.Color)) distinct = 2;
+        }
+        if (!any)                                   // 全是图像对象：画个灰环（禁用态）
+        {
+            _scratch.Color = new Color4(0.5f, 0.52f, 0.56f, 0.35f);
+            _ctx.DrawEllipse(new Ellipse(new Vector2(cx, cy), r, r), _scratch, 2.6f * Dpi / 96f);
+            return;
+        }
+
+        float w = 2.2f * Dpi / 96f;
+        var half = new Ellipse(new Vector2(cx, cy), r, r);
+        _scratch.Color = disabled ? new Color4(a.R, a.G, a.B, 0.35f) : a;
+        // 先整圈画底色，再把"另一种颜色"那一段盖上去（用一小段圆弧当示意，不做精密分色：
+        // 这条只需要让人看出来"不止一种颜色"，不需要准确比例）。
+        _ctx.DrawEllipse(half, _scratch, w);
+        if (distinct >= 1)
+        {
+            _scratch.Color = disabled ? new Color4(b2.R, b2.G, b2.B, 0.35f) : b2;
+            float a0 = -MathF.PI / 2f;
+            // 用四条短弧线拼出"另外半圈"（D2D 的 DrawArc 在各版本签名不一致，不值得为它冒险）
+            for (int k = 0; k < 12; k++)
+            {
+                float t0 = a0 + k / 24f * MathF.PI * 2f;
+                float t1 = t0 + MathF.PI * 2f / 24f;
+                _ctx.DrawLine(new Vector2(cx + MathF.Cos(t0) * r, cy + MathF.Sin(t0) * r),
+                              new Vector2(cx + MathF.Cos(t1) * r, cy + MathF.Sin(t1) * r), _scratch, w);
+            }
+        }
+    }
+
+    private static bool SameRgb(in Color4 a, in Color4 b)
+        => MathF.Abs(a.R - b.R) < 0.02f && MathF.Abs(a.G - b.G) < 0.02f && MathF.Abs(a.B - b.B) < 0.02f;
+
+    /// <summary>
+    /// 收起态的圆钮（参考实现里条首那个 ✕ 点下去之后的样子）。
+    /// 画一个圆 + 中间的"＋"：两段线自己画——它不是图标，是个纯几何符号。
+    /// </summary>
+    private void DrawCollapsedDot(InkEngine app, in RectF sel)
+    {
+        float dpi = Dpi / 96f;
+        var r = SelectionHandles.BarCollapsedRect(sel, dpi, app.ViewportCanvas);
+        float d = r.MaxX - r.MinX;
+        var c = new Vector2((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
+
+        bool hot = app.SelBarHover == (int)SelBarButton.Collapse;
+        var th = UiTheme.Default;
+        _scratch.Color = hot ? th.Hover : th.Panel;
+        _ctx.FillEllipse(new Ellipse(c, d * 0.5f, d * 0.5f), _scratch);
+        _scratch.Color = th.PanelBorder;
+        _ctx.DrawEllipse(new Ellipse(c, d * 0.5f, d * 0.5f), _scratch, 1f * dpi);
+
+        _scratch.Color = th.Text;
+        float arm = d * 0.19f, w = 1.8f * dpi;
+        _ctx.DrawLine(new Vector2(c.X - arm, c.Y), new Vector2(c.X + arm, c.Y), _scratch, w);
+        _ctx.DrawLine(new Vector2(c.X, c.Y - arm), new Vector2(c.X, c.Y + arm), _scratch, w);
+    }
+
+    /// <summary>浮动面板的卡片底：白底、圆角、浅边、一层很淡的投影（和操作条同一套）。</summary>
+    private void DrawPanelCard(in RectF r, float radius)
+    {
+        float dpi = Dpi / 96f;
+        var th = UiTheme.Default;
+        var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
+        // 投影：两层就够（界面上那套四层阴影是给常驻面板用的，这里是临时浮层）
+        for (int i = 2; i >= 1; i--)
+        {
+            _scratch.Color = new Color4(0f, 0f, 0f, 0.045f * i);
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(r.MinX + 0.5f, r.MinY + 0.5f + i * 1.5f * dpi,
+                                     r.MaxX - 0.5f, r.MaxY - 0.5f + i * 1.5f * dpi),
+                radius, radius), _scratch);
+        }
+        _scratch.Color = th.Panel;
+        _ctx.FillRoundedRectangle(new RoundedRectangle(box, radius, radius), _scratch);
+        _scratch.Color = th.PanelBorder;
+        _ctx.DrawRoundedRectangle(new RoundedRectangle(box, radius, radius), _scratch, 1f * dpi);
+    }
+
+    /// <summary>
+    /// 颜色 / 粗细 / 线型面板（照参考实现）：一条粗细滑条、一行线型、一块 4 列色板。
+    ///
+    /// 色板的"当前色"用**环**标出来（参考实现的做法）：比整块换色省地方，
+    /// 而且混合选区（几种颜色混着选）也能表达——那时环画成双色（见 DrawColorRing）。
+    /// </summary>
+    private void DrawInkPanel(InkEngine app, in RectF sel)
+    {
+        float dpi = Dpi / 96f;
+        int sc = SelectionHandles.SwatchCount;
+        var p = SelectionHandles.PanelRect(sel, dpi, app.ViewportCanvas, sc);
+        DrawPanelCard(p, 10f * dpi);
+
+        // ---- ① 粗细滑条 ----
+        var slider = SelectionHandles.SliderRect(sel, dpi, app.ViewportCanvas, sc);
+        int steps = app.SliderStepCount();
+        int cur = app.SliderStepOfSelection(sel);
+        float cy = (slider.MinY + slider.MaxY) * 0.5f;
+        float x0 = SelectionHandles.SliderStepX(0, steps, sel, dpi, app.ViewportCanvas, sc);
+        float x1 = SelectionHandles.SliderStepX(steps - 1, steps, sel, dpi, app.ViewportCanvas, sc);
+        var th = UiTheme.Default;
+        _scratch.Color = new Color4(th.TextMuted.R, th.TextMuted.G, th.TextMuted.B, 0.35f);
+        _ctx.DrawLine(new Vector2(x0, cy), new Vector2(x1, cy), _scratch, 2.4f * dpi);
+        for (int i = 0; i < steps; i++)
+        {
+            float x = SelectionHandles.SliderStepX(i, steps, sel, dpi, app.ViewportCanvas, sc);
+            _scratch.Color = i == cur ? th.ActiveBg : th.TextMuted;
+            _ctx.FillEllipse(new Ellipse(new Vector2(x, cy), 1.9f * dpi, 1.9f * dpi), _scratch);
+        }
+        float kx = SelectionHandles.SliderStepX(cur, steps, sel, dpi, app.ViewportCanvas, sc);
+        _ctx.FillEllipse(new Ellipse(new Vector2(kx, cy), 7f * dpi, 7f * dpi),
+                         Brush(new Color4(1f, 1f, 1f, 1f)));
+        _scratch.Color = th.ActiveBg;
+        _ctx.DrawEllipse(new Ellipse(new Vector2(kx, cy), 7f * dpi, 7f * dpi), _scratch, 1.8f * dpi);
+
+        // ---- ②③ 线型：实线 / 虚线 ----
+        for (int i = 0; i < 2; i++)
+        {
+            var cell = SelectionHandles.StyleCellRect(i, sel, dpi, app.ViewportCanvas, sc);
+            bool solid = i == 0;
+            _scratch.Color = solid ? th.Hover : th.Panel;                   // 虚线禁用（底层还没做）
+            float cr = 7f * dpi;
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(cell.MinX, cell.MinY, cell.MaxX, cell.MaxY), cr, cr), _scratch);
+
+            float lx0 = cell.MinX + 10f * dpi, lx1 = cell.MaxX - 10f * dpi;
+            float ly = (cell.MinY + cell.MaxY) * 0.5f;
+            _scratch.Color = solid
+                ? th.Text
+                : new Color4(th.TextMuted.R, th.TextMuted.G, th.TextMuted.B, 0.55f);
+            if (solid) _ctx.DrawLine(new Vector2(lx0, ly), new Vector2(lx1, ly), _scratch, 2.6f * dpi);
+            else DrawDashed(new Vector2(lx0, ly), new Vector2(lx1, ly), 2.6f * dpi);
+        }
+
+        // ---- ④ 色板 ----
+        var swatches = InkPalette.SelectionSwatches;
+        Color4 curColor = default; bool anyColor = false;
+        foreach (var s in app.Doc.Selected)
+        {
+            if (s.IsImage) continue;
+            curColor = s.Color; anyColor = true; break;
+        }
+        for (int i = 0; i < sc; i++)
+        {
+            var cell = SelectionHandles.SwatchRect(i, sel, dpi, app.ViewportCanvas, sc);
+            var c = new Vector2((cell.MinX + cell.MaxX) * 0.5f, (cell.MinY + cell.MaxY) * 0.5f);
+            float rad = (cell.MaxX - cell.MinX) * 0.5f;
+            bool custom = i == swatches.Length - 1;      // 末格 = 自定义取色（本轮占位）
+
+            if (custom)
+            {
+                // 占位不画彩虹（那要引渐变），画一个虚线灰环表示"这里还没接"
+                _scratch.Color = new Color4(th.TextMuted.R, th.TextMuted.G, th.TextMuted.B, 0.7f);
+                for (int k = 0; k < 8; k++)
+                {
+                    float t0 = k / 8f * MathF.PI * 2f, t1 = t0 + MathF.PI * 2f / 16f;
+                    _ctx.DrawLine(new Vector2(c.X + MathF.Cos(t0) * rad, c.Y + MathF.Sin(t0) * rad),
+                                  new Vector2(c.X + MathF.Cos(t1) * rad, c.Y + MathF.Sin(t1) * rad),
+                                  _scratch, 2f * dpi);
+                }
+                continue;
+            }
+
+            var col = swatches[i].Color;
+            _scratch.Color = col;
+            _ctx.FillEllipse(new Ellipse(c, rad, rad), _scratch);
+            _scratch.Color = new Color4(0f, 0f, 0f, 0.18f);        // 浅色片压在浅底上要能看见边
+            _ctx.DrawEllipse(new Ellipse(c, rad, rad), _scratch, 1f * dpi);
+
+            // 当前色：外面套一圈（参考实现的做法）
+            if (anyColor && SameRgb(col, curColor))
+            {
+                _scratch.Color = th.ActiveBg;
+                _ctx.DrawEllipse(new Ellipse(c, rad + 3.5f * dpi, rad + 3.5f * dpi), _scratch, 2.2f * dpi);
+            }
+        }
+    }
+
+    /// <summary>层级小面板：置顶 / 置底两格（图标用 Fluent 的"上/下箭头 + 底托"）。</summary>
+    private void DrawLayerPanel(InkEngine app, in RectF sel)
+    {
+        float dpi = Dpi / 96f;
+        var p = SelectionHandles.LayerPanelRect(sel, dpi, app.ViewportCanvas);
+        DrawPanelCard(p, 10f * dpi);
+
+        string[] icons = { IconPaths.toFront, IconPaths.toBack };
+        var th = UiTheme.Default;
+        for (int i = 0; i < 2; i++)
+        {
+            var cell = SelectionHandles.LayerCellRect(i, sel, dpi, app.ViewportCanvas);
+            _scratch.Color = th.Hover;
+            float cr = 8f * dpi;
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(cell.MinX, cell.MinY, cell.MaxX, cell.MaxY), cr, cr), _scratch);
+            float icon = SelectionHandles.BarIconBoxLogical * dpi;
+            DrawIcon(icons[i], (cell.MinX + cell.MaxX) * 0.5f - icon * 0.5f,
+                     (cell.MinY + cell.MaxY) * 0.5f - icon * 0.5f, icon,
+                     Brush(th.Text));
+        }
+    }
+
 
     /// <summary>
     /// 滚动条（样式 B：Win11 / Figma 那根细线）。
@@ -1806,6 +2115,34 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.DrawLine(b, c, _scratch, width);
         _ctx.DrawLine(c, d, _scratch, width);
         _ctx.DrawLine(d, a, _scratch, width);
+    }
+
+    /// <summary>
+    /// 画一个**虚线**四边形（复制拖拽模式的框用）。
+    ///
+    /// 为什么不用 D2D 的 dash style：那要给每种线宽各建一个 `ID2D1StrokeStyle`
+    /// 并管生命周期，而现在只有两处要虚线（这个框 + 面板里的"虚线"示意）。手算分段
+    /// 十来行、结果完全可控，也不用担心各版本 Vortice 的 API 差异。
+    /// </summary>
+    private void DrawQuadDashed(Vector2 a, Vector2 b, Vector2 c, Vector2 d, float width)
+    {
+        DrawDashed(a, b, width);
+        DrawDashed(b, c, width);
+        DrawDashed(c, d, width);
+        DrawDashed(d, a, width);
+    }
+
+    private void DrawDashed(Vector2 a, Vector2 b, float width)
+    {
+        float len = Vector2.Distance(a, b);
+        if (len < 0.5f) return;
+        var dir = (b - a) / len;
+        float dash = 7f * Dpi / 96f, gap = 5f * Dpi / 96f;
+        for (float t = 0; t < len; t += dash + gap)
+        {
+            float t1 = MathF.Min(t + dash, len);
+            _ctx.DrawLine(a + dir * t, a + dir * t1, _scratch, width);
+        }
     }
 
     /// <summary>

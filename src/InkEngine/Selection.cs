@@ -12,6 +12,41 @@ internal enum SelHandle
 }
 
 /// <summary>
+/// 操作条上九格的**语义**（顺序即排布，见 <see cref="SelectionHandles.BarButtonCount"/>）。
+///
+/// 用枚举而不是裸下标：渲染（画哪个图标）、命中（点到哪一格）、动作（那一格干什么）
+/// 三处必须对上，写死数字迟早错位一格——而且这条在自检里是要逐个核对的。
+/// </summary>
+internal enum SelBarButton
+{
+    /// <summary>收起工具条（参考实现里条首那个 ✕）：收起后只剩一个小圆钮，点它展开。</summary>
+    Collapse = 0,
+    /// <summary>颜色 / 粗细面板。</summary>
+    Color = 1,
+    /// <summary>锁定 / 解锁（锁定的对象能选中但拖不动，见 调研 第四节）。</summary>
+    Lock = 2,
+    /// <summary>层级小面板（置顶 / 置底）。</summary>
+    Layer = 3,
+    /// <summary>导出（另存为）。</summary>
+    Export = 4,
+    /// <summary>复制拖拽模式（点一下进入/退出）。</summary>
+    Copy = 5,
+    FlipH = 6,
+    FlipV = 7,
+    Delete = 8,
+}
+
+/// <summary>浮动面板的种类。同一时刻只开一个。</summary>
+internal enum SelPanel
+{
+    None = 0,
+    /// <summary>颜色 / 粗细 / 线型（挂在"颜色"那一格下）。</summary>
+    Ink = 1,
+    /// <summary>层级（挂在"层级"那一格下）。</summary>
+    Layer = 2,
+}
+
+/// <summary>
 /// 选中框的坐标系 = 一个矩形 + 一个"框坐标 → 画布坐标"的变换。
 ///
 /// **一律轴对齐**（用户 2026-09-16 定的）：不管选了一条还是多条，框都是
@@ -504,14 +539,32 @@ internal static class SelectionHandles
     // =====================================================================
 
     /// <summary>
-    /// 操作条按钮数。**没有"旋转 90°"**：旋转手柄 + Shift 的 15° 吸附已经覆盖了
-    /// 任意角度（包括精确 90°），再放一个按钮是冗余，还占宽度、增加误点。
+    /// 操作条按钮数（2026-09-16 从 4 扩到 9，顺序见 <see cref="SelBarButton"/>）：
+    /// 收起 / 颜色 / 锁定 / 层级 / 导出 / 复制 / 左右翻转 / 上下翻转 / 删除。
+    ///
+    /// 三条排布上的理由：
+    ///   · **危险动作在最右**（删除），离手远一点；
+    ///   · **开关类在左**（收起、颜色、锁定、层级），它们是"点一下看状态"的；
+    ///   · **仍然没有"旋转 90°"**：旋转手柄 + Shift 的 15° 吸附已经覆盖任意角度，
+    ///     再放一格是冗余（用户 2026-09-15 明确不要）。翻转两格**保留在条上**
+    ///     （用户 2026-09-16 定：九格，不把翻转收进子面板）。
     /// </summary>
-    public const int BarButtonCount = 4;
-    public const float BarHeightLogical = 34f;
-    public const float BarButtonWidthLogical = 46f;
-    public const float BarPaddingLogical = 5f;
-    public const float BarGapLogical = 2f;
+    public const int BarButtonCount = 9;
+    /// <summary>
+    /// 操作条的高度 / 每格宽度 / 内边距 / 格间距（逻辑像素）。
+    ///
+    /// **2026-09-16 缩小过一轮**：九格铺开之后整条 440×34 太"厚"、太占屏幕
+    /// （用户："工具条太大，没有之前美观"）。现在 38×30、内边距 3、格间距 0
+    /// ——整条 348×30，比原来窄 20%、矮 12%，而且圆角取高度一半做成**胶囊**，
+    /// 视觉上比"厚矩形"轻一档。
+    /// 38 这个数不是随手取的：Windows 11 任务栏按钮 40 逻辑像素是"看得清又点得中"的
+    /// 那个量级（见 调研-界面-高度.md），再小投影上就吃力了。
+    /// </summary>
+    public const float BarHeightLogical = 30f;
+    public const float BarButtonWidthLogical = 38f;
+    /// <summary>两端内边距。给 6：胶囊的两端是圆的，图标贴太近会像"要掉出来"。</summary>
+    public const float BarPaddingLogical = 6f;
+    public const float BarGapLogical = 0f;
     /// <summary>选中框下边到操作条的距离（逻辑像素）。</summary>
     public const float BarOffsetLogical = 14f;
     /// <summary>
@@ -526,7 +579,255 @@ internal static class SelectionHandles
     /// <summary>两侧留白：条不贴屏幕边（逻辑像素）。</summary>
     public const float BarScreenPaddingLogical = 8f;
     /// <summary>图标框边长（逻辑像素）。Fluent 图标自带内边距，所以比字形大一点。</summary>
-    public const float BarIconBoxLogical = 22f;
+    /// <summary>图标框边长（逻辑像素）。从 22 收到 18：图标跟着条一起缩小，
+    /// 但**不能再小**——投影上 16 以下就开始糊。</summary>
+    public const float BarIconBoxLogical = 18f;
+
+    /// <summary>
+    /// 收起态那个小圆钮的直径（逻辑像素）。
+    ///
+    /// 用户 2026-09-16 更正："条首那个 ✕ 不是取消选择，是**收起工具条**"——
+    /// 点它整条收起来，只剩这么一个小圆，点它再展开（参考实现也是这个形状）。
+    /// 定 44：和条高（34）一个量级、比手柄大一圈，投影上点得中。
+    /// </summary>
+    /// <summary>
+    /// 收起态小圆球的直径。44 → 36 → **26**（用户："收起以后的小圆球太大，不美观"）。
+    ///
+    /// 为什么敢给这么小：它只干一件事——"点我展开"，而且指针此刻就在附近
+    /// （老师刚点过条上的收起）。与其说它是个按钮，不如说是个**标记**；
+    /// 26 逻辑像素在投影上仍然看得清，和工具条那边 40 的最小可点尺寸是两种东西。
+    /// </summary>
+    public const float BarCollapsedDotLogical = 26f;
+
+    /// <summary>收起态圆钮与选中框下边的距离（逻辑像素，和展开态一致，位置不跳）。</summary>
+    public const float BarCollapsedOffsetLogical = 14f;
+
+    // ---- 浮动面板（颜色/粗细、层级）的尺寸（逻辑像素）----
+    public const float PanelPaddingLogical = 10f;
+    /// <summary>色片边长。</summary>
+    public const float SwatchSizeLogical = 26f;
+    public const float SwatchGapLogical = 7f;
+    /// <summary>色板列数（4 列：中性一行、暖一行、冷一行 + 末格自定义）。</summary>
+    public const int SwatchColumns = 4;
+    /// <summary>面板里"滑条行""线型行"的高度。</summary>
+    public const float PanelRowLogical = 34f;
+    /// <summary>面板与它上面那条（操作条）的距离。</summary>
+    public const float PanelGapLogical = 10f;
+    /// <summary>层级面板每一格的边长（两格并排）。</summary>
+    public const float LayerCellLogical = 40f;
+
+    /// <summary>色板里有几个色片（引擎侧的色板表长度）。</summary>
+    public static int SwatchCount => InkPalette.SelectionSwatches.Length;
+
+    /// <summary>
+    /// 收起态圆钮的矩形：**横向跟着框居中、纵向在框下方同一个位置**——
+    /// 展开/收起时圆钮和条的横纵位置一致，切换不会"跳"。
+    /// </summary>
+    public static RectF BarCollapsedRect(in RectF sel, float dpi, in RectF visible)
+    {
+        float d = BarCollapsedDotLogical * dpi;
+        float x = (sel.MinX + sel.MaxX) * 0.5f - d * 0.5f;
+        float y = sel.MaxY + BarCollapsedOffsetLogical * dpi;
+
+        if (!visible.IsEmpty)
+        {
+            float margin = BarScreenPaddingLogical * dpi;
+            x = Math.Clamp(x, visible.MinX + margin, MathF.Max(visible.MinX + margin, visible.MaxX - margin - d));
+            float top = visible.MinY + margin;
+            float bottomMost = visible.MaxY - BarMinBottomMarginLogical * dpi - d;
+            y = MathF.Min(y, MathF.Max(top, bottomMost));
+            if (y < top) y = top;
+        }
+        return new RectF { MinX = x, MinY = y, MaxX = x + d, MaxY = y + d };
+    }
+
+    /// <summary>面板的高度：滑条行 + 线型行 + 色板若干行 + 内边距（画与命中同源）。</summary>
+    public static float PanelHeightLogical(int swatchCount)
+    {
+        int rows = (swatchCount + SwatchColumns - 1) / SwatchColumns;
+        float gridH = rows * SwatchSizeLogical + MathF.Max(0, rows - 1) * SwatchGapLogical;
+        return PanelPaddingLogical * 2 + PanelRowLogical * 2 + gridH;
+    }
+
+    /// <summary>
+    /// 浮动面板的矩形。默认挂在**操作条正下方**（参考实现就是这样）；
+    /// 下方放不下就翻到**选中框上方**；再放不下就夹在可见区域里。
+    ///
+    /// 注意它比条高一截（240 逻辑像素量级），比条更容易出屏——所以夹取规则比 BarRect
+    /// 多一条"翻面"，不能照抄条形那套"给下限、不翻面"。
+    /// </summary>
+    public static RectF PanelRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
+    {
+        float w = PanelPaddingLogical * 2
+                + SwatchColumns * SwatchSizeLogical + (SwatchColumns - 1) * SwatchGapLogical;
+        float h = PanelHeightLogical(swatchCount) * dpi;
+        w *= dpi;
+
+        var bar = BarRect(sel, dpi, visible);
+        float x = bar.MinX;                                       // 左对齐条（参考图）
+        float y = bar.MaxY + PanelGapLogical * dpi;
+
+        if (!visible.IsEmpty)
+        {
+            float margin = BarScreenPaddingLogical * dpi;
+            float left = visible.MinX + margin;
+            float right = MathF.Max(left, visible.MaxX - margin - w);
+            x = Math.Clamp(x, left, right);
+
+            float top = visible.MinY + margin;
+            float bottom = visible.MaxY - margin;
+            if (y + h > bottom)                                   // 下方放不下：翻到框上方
+            {
+                float above = sel.MinY - PanelGapLogical * dpi - h;
+                y = above >= top ? above : MathF.Max(top, bottom - h);
+            }
+            y = Math.Clamp(y, top, MathF.Max(top, bottom - h));
+        }
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    /// <summary>层级小面板的矩形（两格并排，贴在"层级"那一格的下面）。</summary>
+    public static RectF LayerPanelRect(in RectF sel, float dpi, in RectF visible)
+    {
+        float w = (LayerCellLogical * 2 + PanelPaddingLogical * 2) * dpi;
+        float h = (LayerCellLogical + PanelPaddingLogical * 2) * dpi;
+        var bar = BarRect(sel, dpi, visible);
+        var btn = BarButtonRect((int)SelBarButton.Layer, sel, dpi, visible);
+
+        float x = btn.MinX + (btn.MaxX - btn.MinX) * 0.5f - w * 0.5f;
+        float y = bar.MaxY + PanelGapLogical * dpi;
+
+        if (!visible.IsEmpty)
+        {
+            float margin = BarScreenPaddingLogical * dpi;
+            x = Math.Clamp(x, visible.MinX + margin, MathF.Max(visible.MinX + margin, visible.MaxX - margin - w));
+            float top = visible.MinY + margin;
+            float bottom = visible.MaxY - margin;
+            if (y + h > bottom)
+            {
+                float above = sel.MinY - PanelGapLogical * dpi - h;
+                y = above >= top ? above : MathF.Max(top, bottom - h);
+            }
+            y = Math.Clamp(y, top, MathF.Max(top, bottom - h));
+        }
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    /// <summary>层级面板里第 i 格（0 = 置顶，1 = 置底）。</summary>
+    public static RectF LayerCellRect(int i, in RectF sel, float dpi, in RectF visible)
+    {
+        var p = LayerPanelRect(sel, dpi, visible);
+        float pad = PanelPaddingLogical * dpi, cell = LayerCellLogical * dpi;
+        float x = p.MinX + pad + i * cell;
+        return new RectF { MinX = x, MinY = p.MinY + pad, MaxX = x + cell, MaxY = p.MinY + pad + cell };
+    }
+
+    /// <summary>颜色面板里第 i 个色片。</summary>
+    public static RectF SwatchRect(int i, in RectF sel, float dpi, in RectF visible, int swatchCount)
+    {
+        var p = PanelRect(sel, dpi, visible, swatchCount);
+        float pad = PanelPaddingLogical * dpi;
+        float size = SwatchSizeLogical * dpi, gap = SwatchGapLogical * dpi;
+        float gridTop = p.MaxY - pad - ((swatchCount + SwatchColumns - 1) / SwatchColumns) * size
+                      - (((swatchCount + SwatchColumns - 1) / SwatchColumns) - 1) * gap;
+        int col = i % SwatchColumns, row = i / SwatchColumns;
+        float x = p.MinX + pad + col * (size + gap);
+        float y = gridTop + row * (size + gap);
+        return new RectF { MinX = x, MinY = y, MaxX = x + size, MaxY = y + size };
+    }
+
+    /// <summary>颜色面板里"粗细滑条"那一行的矩形。</summary>
+    public static RectF SliderRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
+    {
+        var p = PanelRect(sel, dpi, visible, swatchCount);
+        float pad = PanelPaddingLogical * dpi;
+        return new RectF
+        {
+            MinX = p.MinX + pad, MinY = p.MinY + pad,
+            MaxX = p.MaxX - pad, MaxY = p.MinY + pad + PanelRowLogical * dpi,
+        };
+    }
+
+    /// <summary>颜色面板里"线型"那一行的第 i 格（0 = 实线，1 = 虚线）。</summary>
+    public static RectF StyleCellRect(int i, in RectF sel, float dpi, in RectF visible, int swatchCount)
+    {
+        var p = PanelRect(sel, dpi, visible, swatchCount);
+        float pad = PanelPaddingLogical * dpi;
+        float rowTop = p.MinY + pad + PanelRowLogical * dpi;
+        float half = (p.MaxX - p.MinX - pad * 2 - 8 * dpi) * 0.5f;
+        float x = p.MinX + pad + i * (half + 8 * dpi);
+        return new RectF { MinX = x, MinY = rowTop, MaxX = x + half, MaxY = rowTop + PanelRowLogical * dpi };
+    }
+
+    /// <summary>点到面板的哪个部分了（渲染和命中同源）。</summary>
+    internal enum PanelPart
+    {
+        None = 0,
+        Slider,
+        StyleSolid,
+        StyleDashed,
+        SwatchBase,     // + i
+        LayerFront,
+        LayerBack,
+    }
+
+    /// <summary>
+    /// 面板命中。**返回 None 也可能是"点在面板的空白处"**——调用方用
+    /// <see cref="PanelContains"/> 区分"点在外面（该收起面板）"和"点在面板上（别收起）"。
+    /// </summary>
+    public static PanelPart PanelPartAt(float x, float y, in RectF sel, float dpi, in RectF visible,
+                                        SelPanel panel, int swatchCount)
+    {
+        if (panel == SelPanel.Ink)
+        {
+            var slider = SliderRect(sel, dpi, visible, swatchCount);
+            if (slider.Contains(x, y)) return PanelPart.Slider;
+            for (int i = 0; i < 2; i++)
+                if (StyleCellRect(i, sel, dpi, visible, swatchCount).Contains(x, y))
+                    return i == 0 ? PanelPart.StyleSolid : PanelPart.StyleDashed;
+            for (int i = 0; i < swatchCount; i++)
+                if (SwatchRect(i, sel, dpi, visible, swatchCount).Contains(x, y))
+                    return PanelPart.SwatchBase + i;
+        }
+        else if (panel == SelPanel.Layer)
+        {
+            if (LayerCellRect(0, sel, dpi, visible).Contains(x, y)) return PanelPart.LayerFront;
+            if (LayerCellRect(1, sel, dpi, visible).Contains(x, y)) return PanelPart.LayerBack;
+        }
+        return PanelPart.None;
+    }
+
+    /// <summary>点在不在（当前这个）面板的卡片里面。</summary>
+    public static bool PanelContains(float x, float y, in RectF sel, float dpi, in RectF visible,
+                                     SelPanel panel, int swatchCount)
+    {
+        if (panel == SelPanel.Ink) return PanelRect(sel, dpi, visible, swatchCount).Contains(x, y);
+        if (panel == SelPanel.Layer) return LayerPanelRect(sel, dpi, visible).Contains(x, y);
+        return false;
+    }
+
+    /// <summary>滑条上第 i 档（共 n 档）的圆钮中心 X。</summary>
+    public static float SliderStepX(int i, int n, in RectF sel, float dpi, in RectF visible, int swatchCount)
+    {
+        var r = SliderRect(sel, dpi, visible, swatchCount);
+        float inset = 10f * dpi;                       // 两端留白，圆钮不贴边
+        float a = r.MinX + inset, b = r.MaxX - inset;
+        if (n <= 1) return (a + b) * 0.5f;
+        return a + (b - a) * i / (n - 1);
+    }
+
+    /// <summary>离 (x,y) 最近的档位下标（滑条拖动时吸附用）。</summary>
+    public static int SliderNearestStep(float x, int n, in RectF sel, float dpi, in RectF visible, int swatchCount)
+    {
+        int best = 0; float bestD = float.MaxValue;
+        for (int i = 0; i < n; i++)
+        {
+            float sx = SliderStepX(i, n, sel, dpi, visible, swatchCount);
+            float d = MathF.Abs(sx - x);
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+    }
 
     /// <summary>
     /// 操作条在画布坐标里的矩形。<paramref name="visible"/> 是当前可见的画布范围

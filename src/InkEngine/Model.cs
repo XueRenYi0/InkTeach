@@ -185,6 +185,16 @@ internal sealed class Stroke
     public float Width;
     public readonly List<InkPoint> Points = new();
 
+    /// <summary>
+    /// **锁定**（2026-09-16 加，用户定的语义是"能选中、但拖不动"）：
+    ///   · 照样能被点选 / 框选 / 套索 / 全选选中，框和手柄照画；
+    ///   · 但拖动 / 缩放 / 旋转 / 翻转**跳过它**（选区里锁定的留在原地）；
+    ///   · 两种橡皮、`Delete` 也跳过（橡皮和删除改的是内容，不是位置）；
+    ///   · 改颜色 / 改粗细 / 复制 / 导出**不受影响**（那是样式与内容带走）。
+    /// 见 调研-选中框-反馈-导出-层级-属性.md 第四节。
+    /// </summary>
+    public bool Locked;
+
     public ID2D1Geometry Geometry;
 
     /// <summary>
@@ -503,6 +513,16 @@ internal sealed class Stroke
     /// point, redraw" work while a stroke is still being drawn.</summary>
     public int Revision { get; private set; }
     private int _builtRevision = -1;
+
+    /// <summary>
+    /// 颜色 / 粗细这类"不改几何、但改了墨迹范围"的属性变过之后调用。
+    ///
+    /// 为什么需要：<see cref="InkBounds"/> 按 <see cref="Revision"/> 缓存，
+    /// 而 `Color` / `Width` 是裸字段——直接改它们缓存不会失效，于是**改完粗细，
+    /// 选中框还按旧的半宽算**（框和墨对不上）。这里顺手也让几何缓存失效，
+    /// 多一次重建，一次性代价可以接受。
+    /// </summary>
+    public void InvalidateMetrics() => Revision++;
 
     /// <summary>Scratch field used by the spatial index to avoid returning the
     /// same stroke twice for one query without allocating a set.</summary>
@@ -1375,6 +1395,141 @@ internal sealed class ClearAction : EditAction
 ///
 /// 逆矩阵现算而不存一份：省内存，而且"改变换"本来就是可逆运算，不需要额外状态。
 /// </summary>
+/// <summary>
+/// 给一批对象改**一个属性**（颜色 / 粗细 / 锁定）。三条共用一个动作：
+/// 都是"记下旧值 → 改 → 撤销时写回"，差别只在写哪个字段。
+///
+/// 脏区按"改前 ∪ 改后"取并集（粗细变了墨会往外长一圈），和 TransformObjectsAction
+/// 同一个模式；改完置 StructureChangedSinceRender——内容层的像素真的变了，
+/// 不能走"只补画新笔画"那条快路径。
+/// </summary>
+internal sealed class SetStrokePropAction : EditAction
+{
+    public enum Prop { Color, Width, Lock }
+
+    private readonly Stroke[] _targets;
+    private readonly Prop _prop;
+    private readonly Color4[] _oldColor;
+    private readonly Color4[] _newColor;      // 每条各自的"新颜色"（荧光笔要转半透明，见下）
+    private readonly float[] _oldWidth;
+    private readonly bool[] _oldLock;
+    private readonly float _width;
+    private readonly bool _lock;
+    private readonly RectF _before;
+
+    /// <summary>
+    /// 改颜色。**新颜色按条给**（不是统一一个值）：荧光笔要保留半透明
+    /// （`InkPalette.ToHighlighter`），普通墨迹用不透明的基色——同一批里两种笔混着选时，
+    /// 一个色值套不下去。
+    /// </summary>
+    public SetStrokePropAction(IReadOnlyList<Stroke> targets, Color4[] newColors)
+        : this(targets)
+    {
+        _prop = Prop.Color;
+        _oldColor = new Color4[_targets.Length];
+        _newColor = new Color4[_targets.Length];
+        for (int i = 0; i < _targets.Length; i++)
+        {
+            _oldColor[i] = _targets[i].Color;
+            _newColor[i] = i < newColors.Length ? newColors[i] : newColors[^1];
+        }
+    }
+
+    public SetStrokePropAction(IReadOnlyList<Stroke> targets, float width)
+        : this(targets) { _prop = Prop.Width; _width = width; _oldWidth = new float[_targets.Length];
+                          for (int i = 0; i < _targets.Length; i++) _oldWidth[i] = _targets[i].Width; }
+
+    public SetStrokePropAction(IReadOnlyList<Stroke> targets, bool locked)
+        : this(targets) { _prop = Prop.Lock; _lock = locked; _oldLock = new bool[_targets.Length];
+                          for (int i = 0; i < _targets.Length; i++) _oldLock[i] = _targets[i].Locked; }
+
+    private SetStrokePropAction(IReadOnlyList<Stroke> targets)
+    {
+        _targets = new Stroke[targets.Count];
+        for (int i = 0; i < targets.Count; i++) _targets[i] = targets[i];
+        _before = EditRegion.Of(_targets);
+    }
+
+    public override RectF AffectedBefore => _before;
+    public override RectF AffectedAfter => EditRegion.Of(_targets);
+
+    public override void Redo(InkDocument doc) => Apply(doc, old: false);
+    public override void Undo(InkDocument doc) => Apply(doc, old: true);
+
+    private void Apply(InkDocument doc, bool old)
+    {
+        for (int i = 0; i < _targets.Length; i++)
+        {
+            var s = _targets[i];
+            doc.Dirty.Add(s.PaddedBounds);                 // 旧样子要擦
+            switch (_prop)
+            {
+                case Prop.Color: s.Color = old ? _oldColor[i] : _newColor[i]; break;
+                case Prop.Width: s.Width = old ? _oldWidth[i] : _width; break;
+                case Prop.Lock:  s.Locked = old ? _oldLock[i] : _lock; break;
+            }
+            // 颜色/粗细会改墨迹范围（半宽），必须让 InkBounds 的缓存失效；
+            // 锁定不改外观，不用重算。
+            if (_prop != Prop.Lock) s.InvalidateMetrics();
+            doc.Dirty.Add(s.PaddedBounds);                 // 新样子要画
+        }
+        doc.StructureChangedSinceRender = true;
+        doc.Version++;
+    }
+}
+
+/// <summary>
+/// 层级：把选中的这一批整体移到**最上**（置顶）或**最下**（置底），内部相对顺序不变。
+/// 只做这两个动作，不做"上移/下移一格"（见 调研-选中框-反馈-导出-层级-属性.md 第三节）。
+/// 撤销 = 按原下标插回去。
+/// </summary>
+internal sealed class ReorderStrokesAction : EditAction
+{
+    private readonly Stroke[] _targets;
+    private readonly bool _toFront;
+    private readonly List<(int index, Stroke s)> _old = new();
+    private readonly RectF _bounds;
+
+    public ReorderStrokesAction(IReadOnlyList<Stroke> targets, bool toFront)
+    {
+        _toFront = toFront;
+        _targets = new Stroke[targets.Count];
+        for (int i = 0; i < targets.Count; i++) _targets[i] = targets[i];
+        _bounds = EditRegion.Of(_targets);
+    }
+
+    public override RectF AffectedBefore => _bounds;
+    public override RectF AffectedAfter => _bounds;
+
+    public override void Redo(InkDocument doc)
+    {
+        _old.Clear();
+        foreach (var s in _targets) _old.Add((doc.Strokes.IndexOf(s), s));
+        _old.Sort((a, b) => a.index.CompareTo(b.index));
+
+        foreach (var it in _old) doc.Strokes.Remove(it.s);
+        if (_toFront) { foreach (var it in _old) doc.Strokes.Add(it.s); }
+        else { for (int i = _old.Count - 1; i >= 0; i--) doc.Strokes.Insert(0, _old[i].s); }
+        Touch(doc);
+    }
+
+    public override void Undo(InkDocument doc)
+    {
+        foreach (var it in _old) doc.Strokes.Remove(it.s);
+        foreach (var it in _old)                       // 从小到大插，下标才不会互相挤
+            doc.Strokes.Insert(Math.Min(it.index, doc.Strokes.Count), it.s);
+        Touch(doc);
+    }
+
+    private void Touch(InkDocument doc)
+    {
+        // 顺序变了：内容层"只差几条新笔画"的前提不成立，碰到的块要整块重画。
+        doc.StructureChangedSinceRender = true;
+        doc.Version++;
+        doc.Dirty.Add(_bounds);                        // 重叠的那些像素才可能变
+    }
+}
+
 internal sealed class TransformObjectsAction : EditAction
 {
     private readonly Stroke[] _targets;
@@ -1991,6 +2146,9 @@ internal sealed class InkDocument
             // 要删它用框选 + Delete。改之前这里对图像会走 IsShape 分支整条删掉，
             // 两种橡皮行为不一致（实测见 调研-图形与选中框.md 第五节）。
             if (s.IsImage) continue;
+            // **锁定的也不碰**（2026-09-16）：橡皮改的是内容，不是位置——
+            // "锁了还能被擦掉"等于没锁。图像那条先例的同一个形状。
+            if (s.Locked) continue;
             if (s.IsShape)
             {
                 // 图形的轮廓不是两个端点之间的线段，近似会偏，交给 Direct2D 精确算。
@@ -2140,6 +2298,7 @@ internal sealed class InkDocument
         {
             var s = _queryScratch[i];
             if (s.IsImage) continue;
+            if (s.Locked) continue;        // 同整笔橡皮：锁定的不擦（见 Stroke.Locked）
             if (!s.PaddedBounds.Intersects(rect)) continue;
             if (s.Kind != StrokeKind.Freehand && !ShapeTouchesRect(s, rect)) continue;
             _candidateSet.Add(s);
@@ -2472,6 +2631,7 @@ internal sealed class InkDocument
         var act = new RemoveStrokesAction();
         foreach (var s in Selected)
         {
+            if (s.Locked) continue;            // 锁定的不删（见 Stroke.Locked）
             int idx = Strokes.IndexOf(s);
             if (idx >= 0) act.Items.Add((idx, s));
         }
@@ -2483,6 +2643,51 @@ internal sealed class InkDocument
     /// <summary>Moves the current selection by a delta (drag-to-move).</summary>
     public void MoveSelected(float dx, float dy)
         => ApplyTransform(Matrix3x2.CreateTranslation(dx, dy));
+
+    // ---- 属性编辑（颜色 / 粗细 / 锁定）与层级 -------------------------------
+
+    /// <summary>
+    /// 给一批对象改颜色（一步撤销）。<paramref name="newColors"/> 与 targets 一一对应
+    /// （荧光笔那一条要用半透明版本，见 SetStrokePropAction）。
+    /// </summary>
+    public bool ApplyColors(IReadOnlyList<Stroke> targets, Color4[] newColors)
+    {
+        if (targets == null || targets.Count == 0) return false;
+        var act = new SetStrokePropAction(targets, newColors);
+        act.Redo(this);
+        Commit(act);
+        return true;
+    }
+
+    /// <summary>给一批对象改粗细（**物理**像素，调用方自己乘 DPI）。一步撤销。</summary>
+    public bool ApplyWidths(IReadOnlyList<Stroke> targets, float width)
+    {
+        if (targets == null || targets.Count == 0) return false;
+        var act = new SetStrokePropAction(targets, width);
+        act.Redo(this);
+        Commit(act);
+        return true;
+    }
+
+    /// <summary>给一批对象加锁 / 解锁（一步撤销）。见 Stroke.Locked 的语义。</summary>
+    public bool ApplyLock(IReadOnlyList<Stroke> targets, bool locked)
+    {
+        if (targets == null || targets.Count == 0) return false;
+        var act = new SetStrokePropAction(targets, locked);
+        act.Redo(this);
+        Commit(act);
+        return true;
+    }
+
+    /// <summary>层级：把选中的整体置顶 / 置底（一步撤销）。内部相对顺序不变。</summary>
+    public bool ReorderSelected(bool toFront)
+    {
+        if (Selected.Count == 0 || Selected.Count >= Strokes.Count) return false;
+        var act = new ReorderStrokesAction(Selected, toFront);
+        act.Redo(this);
+        Commit(act);
+        return true;
+    }
 
     /// <summary>
     /// 框选：**框碰到墨就选中那一条**（不是"整条都在框里才选中"）。

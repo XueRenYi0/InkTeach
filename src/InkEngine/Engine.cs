@@ -178,6 +178,25 @@ public class InkEngine
     // 四种情形在这里分流：点操作条按钮 / 拖手柄 / 在选中范围里整体拖 / 空白处重新框选。
     internal bool SelDragging;
     internal int SelBarHover = -1;          // 悬停的按钮，-1 = 无（给渲染用）
+
+    /// <summary>
+    /// 操作条**收起**了吗（用户 2026-09-16 更正：条首那个 ✕ 不是"取消选择"，是"收起"）。
+    /// 收起后整条不画，只在框下方留一个小圆钮，点它展开——投影时不挡板书。
+    /// 注意收起的是**条**，框与手柄照旧（参考实现也是这样）。
+    /// </summary>
+    internal bool SelBarCollapsed;
+
+    /// <summary>当前开着的浮动面板（同一时刻只开一个）。见 <see cref="SelPanel"/>。</summary>
+    internal SelPanel SelPanelOpen = SelPanel.None;
+
+    /// <summary>正在拖颜色面板里的粗细滑条。</summary>
+    private bool _sliderDragging;
+
+    /// <summary>复制成功之后选区"闪一下"的到期时刻（0.25 秒，见 Overlay.DrawSelection）。</summary>
+    internal double SelFlashUntilMs;
+
+    /// <summary>复制成功时选区闪一下的时长（毫秒）。</summary>
+    public const double SelFlashMs = 250;
     /// <summary>
     /// 批注键盘模式。开 = 键盘归批注层（编辑快捷键生效）；
     /// 关 = 覆盖层永不抢焦点，键盘还给下层程序。
@@ -831,7 +850,9 @@ public class InkEngine
             if (NowMs >= _autoExitAt) break;
 
             Laser.Prune(NowMs);
-            _animating = Laser.ActiveAt(NowMs) || _drawing;
+            // "复制闪一下"也要把帧驱动起来：它自己会到期消失，不驱动的话
+            // 最后一帧画完就没人再画了，那道高亮会一直挂在屏幕上。
+            _animating = Laser.ActiveAt(NowMs) || _drawing || SelFlashing;
 
             if (_dirty || _animating)
             {
@@ -1358,6 +1379,7 @@ public class InkEngine
             // 悬停路径。以前这里直接 return，"没落笔"时引擎完全不知道指针在哪儿，
             // 于是悬停光标、滚动条悬停、落点预览都无从谈起。
             UpdateScrollBarHover(screenX, screenY);
+            UpdateBarHover(x, y);                  // 操作条九格的 hover 态（画与命中同源）
             ApplyCursor();
             if (DrawnCursor != ToolCursorShape.None) _dirty = true;
             return;
@@ -1381,7 +1403,9 @@ public class InkEngine
                 break;
 
             case Tool.Marquee:
-                if (SelDragging) UpdateSelDrag(x, y);
+                // 拖着颜色面板里的粗细滑条：只吸档位，不进"整体拖动"。
+                if (_sliderDragging) SetWidthStepAt(x, LiveSelectionFrame.CanvasAabb);
+                else if (SelDragging) UpdateSelDrag(x, y);
                 else ExtendMarqueeTo(x, y);
                 break;
 
@@ -1626,6 +1650,10 @@ public class InkEngine
         Console.WriteLine(ok
             ? $"复制 {sel.Count} 个对象（同时放了一张 {w}×{h} 的图：外部程序也粘得上）"
             : "复制失败（剪贴板正被别的程序占着？）");
+
+        // 屏幕上的反馈只有**选区闪一下**（用户反馈的"复制以后看不出来"）。
+        // 提示条 2026-09-16 按用户要求去掉了：屏幕上一个字都不留。
+        if (ok) SelFlashUntilMs = NowMs + SelFlashMs;
         return ok;
     }
 
@@ -1706,7 +1734,8 @@ public class InkEngine
         }
         if (Tool == Tool.Marquee)
         {
-            if (SelDragging) EndSelDrag();
+            if (_sliderDragging) _sliderDragging = false;      // 滑条松手：只是停，不用收尾
+            else if (SelDragging) EndSelDrag();
             else ApplyMarquee();
         }
         _drawing = false;
@@ -2855,6 +2884,217 @@ public class InkEngine
     /// <summary>这一条现在被摘出内容层了吗（内容层重画一块时要跳过它）。</summary>
     internal bool IsContentDetached(Stroke s) => _detachSet.Count > 0 && _detachSet.Contains(s);
 
+    // =====================================================================
+    //  操作条（九格）+ 浮动面板 + 提示条：状态与动作
+    // =====================================================================
+
+    /// <summary>选区正在"闪一下"吗（复制成功的反馈）。</summary>
+    internal bool SelFlashing => NowMs < SelFlashUntilMs;
+
+    /// <summary>
+    /// 改选中对象的颜色。**荧光笔保留半透明**（`InkPalette.ToHighlighter`），
+    /// **图像对象跳过**（它没有"颜色"这个概念），其余按同一色值统改。
+    /// 返回真正改掉了几条（0 = 一条都没改，调用方据此给提示）。
+    /// </summary>
+    internal int SetSelectionColor(Color4 baseColor)
+    {
+        var targets = new List<Stroke>();
+        var colors = new List<Color4>();
+        int changed = 0;
+        foreach (var s in Doc.Selected)
+        {
+            if (s.IsImage) continue;
+            // 荧光笔与普通墨迹共用同一个"基色"，但荧光笔要转成半透明——
+            // 直接按基色刷会把荧光笔刷成实心（那种"越改越糟"的效果）。
+            var c = s.Color.A < 0.99f ? InkPalette.ToHighlighter(baseColor) : baseColor;
+            if (s.Color.Equals(c)) continue;
+            targets.Add(s);
+            colors.Add(c);
+            changed++;
+        }
+        if (changed == 0) return 0;
+        Doc.ApplyColors(targets, colors.ToArray());   // 一条动作 = 一步撤销
+        // 屏幕反馈按用户要求**只留"选中框上看得见的变化"**（颜色环、框的粗细），
+        // 不再弹提示条；需要留痕的写控制台（这一版一直如此）。
+        Console.WriteLine($"改颜色：{changed} 个对象");
+        return changed;
+    }
+
+    /// <summary>
+    /// 改选中对象的粗细（**逻辑**像素档位，内部乘 DPI 换成物理宽度）。
+    /// 图像对象跳过。返回改了几条。
+    /// </summary>
+    internal int SetSelectionWidth(float logicalWidth)
+    {
+        float w = logicalWidth * DpiScale;
+        var targets = new List<Stroke>();
+        int changed = 0;
+        foreach (var s in Doc.Selected)
+        {
+            if (s.IsImage) continue;
+            if (MathF.Abs(s.Width - w) < 0.01f) continue;
+            targets.Add(s);
+            changed++;
+        }
+        if (changed == 0) return 0;
+        Doc.ApplyWidths(targets, w);
+        Console.WriteLine($"改粗细：{changed} 个对象 → {logicalWidth:F1} 逻辑像素");
+        return changed;
+    }
+
+    /// <summary>
+    /// 锁定 / 解锁选中对象（用户 2026-09-16 定的语义：**锁定后能选中、但拖不动**）。
+    /// 全部未锁 → 全锁；全部已锁 → 全解；混合 → 全锁。
+    /// </summary>
+    internal int ToggleSelectionLock()
+    {
+        if (Doc.Selected.Count == 0) return 0;
+        bool anyUnlocked = false;
+        foreach (var s in Doc.Selected) if (!s.Locked) { anyUnlocked = true; break; }
+        bool lockTo = anyUnlocked;                 // 有没锁的就全锁上，否则全解
+
+        var targets = new List<Stroke>();
+        foreach (var s in Doc.Selected) if (s.Locked != lockTo) targets.Add(s);
+        int n = targets.Count;
+        if (n > 0) Doc.ApplyLock(targets, lockTo);
+        if (n > 0)
+            Console.WriteLine(lockTo ? $"已锁定 {n} 个对象" : $"已解锁 {n} 个对象");
+        return n;
+    }
+
+    /// <summary>层级：把选中的整体置顶 / 置底（用户 2026-09-16 定：只做这两个）。</summary>
+    internal bool ReorderSelection(bool toFront)
+    {
+        if (Doc.Selected.Count == 0) return false;
+        if (Doc.Selected.Count >= Doc.Strokes.Count)        // 全选时置顶/置底没有意义
+        {
+            Console.WriteLine("层级：整页都选中了，没有层级可调");
+            return false;
+        }
+        Doc.ReorderSelected(toFront);
+        Console.WriteLine(toFront ? "层级：已置顶" : "层级：已置底");
+        return true;
+    }
+
+    /// <summary>
+    /// 点了浮动面板上的东西。返回 true = 这一次按下被面板消费掉了。
+    /// 面板的几何全部来自 <see cref="SelectionHandles"/>（渲染与命中同源）。
+    /// </summary>
+    private bool HandlePanelClick(float x, float y)
+    {
+        var aabb = LiveSelectionFrame.CanvasAabb;
+        float dpi = DpiScale;
+        int sc = SelectionHandles.SwatchCount;
+        var part = SelectionHandles.PanelPartAt(x, y, aabb, dpi, ViewportCanvas, SelPanelOpen, sc);
+
+        switch (part)
+        {
+            case SelectionHandles.PanelPart.Slider:
+                _sliderDragging = true;
+                SetWidthStepAt(x, aabb);
+                return true;
+
+            case SelectionHandles.PanelPart.StyleSolid:
+                return true;                       // 现在就是实线，点了不变
+
+            case SelectionHandles.PanelPart.StyleDashed:
+                // 用户 2026-09-16 定：先放控件，虚线底层下一批做（要加 dash 渲染 + 存档一位）。
+                Console.WriteLine("虚线：底层还没做（下一批接 dash 渲染）");
+                return true;
+
+            case SelectionHandles.PanelPart.LayerFront:
+                SelPanelOpen = SelPanel.None;
+                ReorderSelection(toFront: true);
+                return true;
+
+            case SelectionHandles.PanelPart.LayerBack:
+                SelPanelOpen = SelPanel.None;
+                ReorderSelection(toFront: false);
+                return true;
+        }
+
+        if (part >= SelectionHandles.PanelPart.SwatchBase)
+        {
+            int i = part - SelectionHandles.PanelPart.SwatchBase;
+            var swatches = InkPalette.SelectionSwatches;
+            if (i < 0 || i >= swatches.Length) return true;
+            if (i == swatches.Length - 1)      // 末格 = 自定义取色（本轮占位）
+            {
+                Console.WriteLine("自定义取色：下一批接系统取色器");
+                return true;
+            }
+            SetSelectionColor(swatches[i].Color);
+            return true;
+        }
+        return false;                          // 面板的空白处：什么都不做
+    }
+
+    /// <summary>颜色面板里"粗细滑条"当前的档位表：全荧光笔就用荧光笔那三档。</summary>
+    private float[] WidthStepsForSelection()
+    {
+        bool anyPen = false, anyHighlighter = false;
+        foreach (var s in Doc.Selected)
+        {
+            if (s.IsImage) continue;
+            if (s.Tool == Tool.Highlighter) anyHighlighter = true; else anyPen = true;
+        }
+        return (anyHighlighter && !anyPen) ? HighlighterWidthPresets : WidthPresets;
+    }
+
+    /// <summary>把滑条拖到 x 处 → 吸附到最近的档位并应用。</summary>
+    private void SetWidthStepAt(float x, in RectF aabb)
+    {
+        var steps = WidthStepsForSelection();
+        int i = SelectionHandles.SliderNearestStep(x, steps.Length, aabb, DpiScale, ViewportCanvas,
+                                                   SelectionHandles.SwatchCount);
+        SetSelectionWidth(steps[i]);
+    }
+
+    /// <summary>当前选区在滑条上对应的档位（取第一条非图像对象）。</summary>
+    internal int SliderStepOfSelection(in RectF aabb)
+    {
+        var steps = WidthStepsForSelection();
+        float wLogical = 0f;
+        foreach (var s in Doc.Selected)
+        {
+            if (s.IsImage) continue;
+            wLogical = s.Width / DpiScale;
+            break;
+        }
+        int best = 0; float bestD = float.MaxValue;
+        for (int i = 0; i < steps.Length; i++)
+        {
+            float d = MathF.Abs(steps[i] - wLogical);
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+    }
+
+    /// <summary>选区里的档位表长度（渲染滑条刻度、命中同源用）。</summary>
+    internal int SliderStepCount() => WidthStepsForSelection().Length;
+
+    /// <summary>
+    /// 操作条上鼠标悬停的是哪一格（-1 = 没在条上）。**只在没按住时算**：
+    /// 拖动中指针早就离开按钮了，重算只会让高亮乱跳。
+    /// </summary>
+    private void UpdateBarHover(float x, float y)
+    {
+        int hover = -1;
+        if (Tool == Tool.Marquee && Doc.Selected.Count > 0 && !_drawing)
+        {
+            var aabb = LiveSelectionFrame.CanvasAabb;
+            if (SelBarCollapsed)
+            {
+                var dot = SelectionHandles.BarCollapsedRect(aabb, DpiScale, ViewportCanvas);
+                hover = dot.Contains(x, y) ? (int)SelBarButton.Collapse : -1;
+            }
+            else hover = SelectionHandles.BarButtonAt(x, y, aabb, DpiScale, ViewportCanvas);
+        }
+        if (hover == SelBarHover) return;
+        SelBarHover = hover;
+        _dirty = true;
+    }
+
     /// <summary>
     /// 手势开始：把这一批对象从**内容层**里摘出去（方案 B）。
     ///
@@ -2943,7 +3183,12 @@ public class InkEngine
             var f = SelectionHandles.FrameOf(Doc.Selected);
             if (!DragPreviewActive || f.IsEmpty) return f;
             var r = RectF.Empty;
-            foreach (var s in Doc.Selected) r.Add(TransformBounds(s.WorldInkBounds, _selDragMatrix));
+            foreach (var s in Doc.Selected)
+            {
+                // 锁定的对象**不跟着动**（用户 2026-09-16 定的 B 语义），
+                // 所以它们那块按"当前位置"算——不然框会跟着它们一起漂。
+                r.Add(s.Locked ? s.WorldInkBounds : TransformBounds(s.WorldInkBounds, _selDragMatrix));
+            }
             return new SelectionFrame { Local = r, ToCanvas = Matrix3x2.Identity };
         }
     }
@@ -2971,6 +3216,42 @@ public class InkEngine
         var h = SelHandle.None;
         var frame = SelectionHandles.FrameOf(Doc.Selected);
 
+        // —— ⓪ 收起态圆钮 / 浮动面板 / 操作条：优先级最高（它们盖在别的东西上面）——
+        //
+        // 顺序：**面板内部 → 操作条 → 面板外部**。为什么把"条"放在"面板外部"之前：
+        // 面板开着时去点"层级"那一格，应该直接换成层级面板，而不是"先关掉再被这一格
+        // 又打开"。而点面板和条以外的任何地方，才把面板收起来（并且这一次点击**继续**
+        // 往下走，于是"点空白取消选中"的习惯不会因为面板开着就失灵）。
+        if (Doc.Selected.Count > 0)
+        {
+            var aabb0 = LiveSelectionFrame.CanvasAabb;
+
+            if (SelBarCollapsed)
+            {
+                // 收起态：只有一个圆钮，点它展开（框和手柄照旧，收起的只是"条"）。
+                var dot = SelectionHandles.BarCollapsedRect(aabb0, dpi, ViewportCanvas);
+                if (dot.Contains(x, y))
+                {
+                    SelBarCollapsed = false;
+                    _dirty = true;
+                    return true;
+                }
+            }
+            else if (SelPanelOpen != SelPanel.None
+                     && SelectionHandles.PanelContains(x, y, aabb0, dpi, ViewportCanvas,
+                                                       SelPanelOpen, SelectionHandles.SwatchCount))
+            {
+                HandlePanelClick(x, y);
+                return true;                        // 面板上的点击一律吃掉（包括空白处）
+            }
+            else
+            {
+                int btn0 = SelectionHandles.BarButtonAt(x, y, aabb0, dpi, ViewportCanvas);
+                if (btn0 >= 0) { RunBarAction(btn0, frame, aabb0); return true; }
+                if (SelPanelOpen != SelPanel.None) { SelPanelOpen = SelPanel.None; _dirty = true; }
+            }
+        }
+
         // —— 1~3：有选中时才谈得上（没选中就直接跳到第 4 步的点选）——
         if (Doc.Selected.Count > 0)
         {
@@ -2978,9 +3259,7 @@ public class InkEngine
             // 哪一块"永远是个正矩形，操作条贴在那个矩形的下面才对。
             var aabb = frame.CanvasAabb;
 
-            int btn = SelectionHandles.BarButtonAt(x, y, aabb, dpi, ViewportCanvas);
-            if (btn >= 0) { RunBarAction(btn, frame, aabb); return true; }
-
+            // （操作条与面板已经在 ⓪ 里处理过了，这里只剩手柄 / 框内拖动 / 点选）
             h = SelectionHandles.HitTest(x, y, frame, dpi);
             if (h == SelHandle.None)
             {
@@ -3033,6 +3312,35 @@ public class InkEngine
         _selDragMatrix = Matrix3x2.Identity;
         _selDragMoved = false;
         _dragTargets = Doc.Selected.ToArray();
+
+        // 锁定（用户 2026-09-16 定的 B 语义）：**能选中，但拖不动**。
+        // 做法是把锁定的从"这一次手势要动的那批"里摘掉——选区框照旧画（框算的是
+        // Doc.Selected），只是它们不跟着动。全锁时提示一句、并且什么都不动。
+        {
+            int lockedCount = 0;
+            foreach (var s in _dragTargets) if (s.Locked) lockedCount++;
+            if (lockedCount > 0)
+            {
+                if (lockedCount == _dragTargets.Length)
+                {
+                    // 锁定的对象拖不动——这一句只在控制台留痕（屏幕反馈按用户要求去掉了提示条；
+                    // 锁图标本身就是状态指示）。
+                    Console.WriteLine($"拖动：这 {lockedCount} 个对象已锁定，拖不动");
+                    SelDragging = true;                 // 吃掉这次按下：别退化成重新框选
+                    _dragTargets = Array.Empty<Stroke>();
+                    _dragStartXform = Array.Empty<Matrix3x2>();
+                    _dragHandle = SelHandle.None;
+                    _dragIsMove = false;
+                    _dirty = true;
+                    return true;
+                }
+                var movable = new List<Stroke>(_dragTargets.Length - lockedCount);
+                foreach (var s in _dragTargets) if (!s.Locked) movable.Add(s);
+                _dragTargets = movable.ToArray();
+                Console.WriteLine($"拖动：{lockedCount} 个对象已锁定，不跟着动");
+            }
+        }
+
         _dragStartXform = new Matrix3x2[_dragTargets.Length];
         for (int i = 0; i < _dragTargets.Length; i++)
             _dragStartXform[i] = _dragTargets[i].Transform;
@@ -3155,6 +3463,22 @@ public class InkEngine
         _rotAccumDeg = 0f;              // 下一次拖拽从 0 开始数（标签也不显示了）
         if (_dragTargets == null) return;
 
+        // 一批都没得动（例如选中的全锁着）：只把状态收干净，**不要**提交空动作
+        // （提交了就是"点一下多一条空撤销记录"）。
+        if (_dragTargets.Length == 0)
+        {
+            _dragTargets = null;
+            _dragStartXform = null;
+            _dragHandle = SelHandle.None;
+            _dragIsMove = false;
+            _dragHitStroke = null;
+            _pendingClone = null;
+            _selDragMatrix = Matrix3x2.Identity;
+            ReattachAfterDrag();
+            _dirty = true;
+            return;
+        }
+
         for (int i = 0; i < _dragTargets.Length; i++)
         {
             Doc.SetTransformLive(_dragTargets[i], _dragStartXform[i]);
@@ -3213,21 +3537,64 @@ public class InkEngine
     /// </summary>
     private void RunBarAction(int index, in SelectionFrame frame, in RectF aabb)
     {
-        switch (index)
+        // 下标 ↔ 语义只在 SelBarButton 里写一遍（渲染、命中、动作三处共用它）。
+        var btn = (SelBarButton)index;
+        switch (btn)
         {
-            // 0 = 复制：**进入/退出"复制拖拽模式"**，不是"点一下原地克隆一份"。
+            // **收起工具条**（用户 2026-09-16 更正：条首那个 ✕ 不是"取消选择"）。
+            // 收起后只剩一个小圆钮，点它展开；框和手柄照旧，收起的只是"条"。
+            case SelBarButton.Collapse:
+                SelBarCollapsed = true;
+                SelPanelOpen = SelPanel.None;
+                CopyDragArmed = false;
+                break;
+
+            case SelBarButton.Color:
+                SelPanelOpen = SelPanelOpen == SelPanel.Ink ? SelPanel.None : SelPanel.Ink;
+                break;
+
+            case SelBarButton.Lock:
+                ToggleSelectionLock();
+                break;
+
+            case SelBarButton.Layer:
+                SelPanelOpen = SelPanelOpen == SelPanel.Layer ? SelPanel.None : SelPanel.Layer;
+                break;
+
+            case SelBarButton.Export:
+                // 用户 2026-09-16 定：走系统"另存为"。这一步要动覆盖窗的"不抢焦点"，
+                // 排在第 4 批（见 调研-选中框-反馈-导出-层级-属性.md 第二节）。
+                Console.WriteLine("导出（另存为）：还没接（下一批）");
+                break;
+
+            // **进入/退出"复制拖拽模式"**，不是"点一下原地克隆一份"。
             // 抄 InkClass 的结论：点击即克隆那版"副本固定偏移 24px、落点不可控"，已废弃；
-            // 现在点图标只进模式（图标高亮），之后按住选中内容拖 = 拖出副本，可连续多份。
-            case 0: CopyDragArmed = !CopyDragArmed; break;
-            case 1: Doc.DeleteSelected(); break;
+            // 现在点图标只进模式（图标高亮 + 框变虚线），之后按住选中内容拖 = 拖出副本。
+            case SelBarButton.Copy:
+                CopyDragArmed = !CopyDragArmed;
+                break;
 
-            // 翻转绕**框自己的轴**：斜着的对象应该在自己那套坐标里翻，
-            // 而不是绕屏幕的竖直线翻——后者看起来像被转到别处去了。
-            case 2: Doc.ApplyTransform(Conjugate(frame.ToCanvas,
-                        SelectionHandles.MirrorMatrix(frame.Local, horizontal: true))); break;
-            case 3: Doc.ApplyTransform(Conjugate(frame.ToCanvas,
-                        SelectionHandles.MirrorMatrix(frame.Local, horizontal: false))); break;
+            // 翻转绕**框自己的轴**。框现在一律轴对齐，所以它就是屏幕的左右/上下翻——
+            // 和"框永远正着"同一条规则（见 SelectionFrame 的注释）。
+            case SelBarButton.FlipH:
+                Doc.ApplyTransform(Conjugate(frame.ToCanvas,
+                    SelectionHandles.MirrorMatrix(frame.Local, horizontal: true)));
+                break;
+            case SelBarButton.FlipV:
+                Doc.ApplyTransform(Conjugate(frame.ToCanvas,
+                    SelectionHandles.MirrorMatrix(frame.Local, horizontal: false)));
+                break;
 
+            case SelBarButton.Delete:
+            {
+                int n = Doc.Selected.Count, locked = 0;
+                foreach (var s in Doc.Selected) if (s.Locked) locked++;
+                Doc.DeleteSelected();
+                Console.WriteLine(locked > 0
+                    ? $"删除 {n - locked} 个对象（{locked} 个锁定，没删）"
+                    : $"删除 {n} 个对象");
+                break;
+            }
         }
         Laser.Clear();
         // 删除之后选区可能空了；模式跟着选区走（InkClass 同款：选区没了就退出）。

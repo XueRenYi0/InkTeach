@@ -5284,7 +5284,7 @@ internal sealed class App : InkEngine.InkEngine
             Doc.SelectOnly(new[] { src });
             var srcXform0 = src.Transform;
 
-            RunBarActionForTest(0);                                   // 0 = 复制按钮
+            RunBarActionForTest((int)SelBarButton.Copy);              // 复制按钮（第二轮从 0 挪到 5）
             bool armed = CopyDragArmed && Doc.Selected.Count == 1;
 
             bool took = SelectionGestureForTest(x0 + 100f, y0);        // 按在原件上（框内 → 拖动）
@@ -5324,7 +5324,7 @@ internal sealed class App : InkEngine.InkEngine
                   $"撤一次后 {2} 条、再撤一次 {Doc.Strokes.Count} 条，"
                   + $"原件位置 {(src.Transform.Equals(srcXform0) ? "回到原位" : "没回来")}");
 
-            RunBarActionForTest(0);                                   // 退出模式（收尾）
+            RunBarActionForTest((int)SelBarButton.Copy);              // 退出模式（收尾）
             Check("再点一次复制按钮 → 退出复制拖拽模式", !CopyDragArmed, $"armed={CopyDragArmed}");
         }
 
@@ -5638,6 +5638,247 @@ internal sealed class App : InkEngine.InkEngine
                   + $"（内容外接 {(expBox.MaxX - expBox.MinX):F0}），轴对齐={dFrame.ToCanvas.IsIdentity}");
             EndSelectionGestureForTest();
             SettleFrames(120);
+
+            // ---- 操作条第二轮（2026-09-16）：九格 / 收起 / 提示条 / 颜色面板 / 锁定 / 层级 ----
+            Doc.Clear();
+            Doc.ClearHistory();
+            var bA = FatLine(y0 + 700f, new Color4(1f, 0f, 1f, 1f));
+            var bB = FatLine(y0 + 900f, new Color4(1f, 0f, 1f, 1f));
+            Doc.AddStroke(bA);
+            Doc.AddStroke(bB);
+            Doc.SelectOnly(new[] { bA });
+            SettleFrames(220);
+
+            var barFrame = LiveSelectionFrame;
+            var barBoxR = SelectionHandles.BarRect(barFrame.CanvasAabb, dpi, ViewportCanvas);
+            int Bar2White() => ScreenProbe.CountNear((int)barBoxR.MinX, (int)barBoxR.MinY,
+                (int)(barBoxR.MaxX - barBoxR.MinX), (int)(barBoxR.MaxY - barBoxR.MinY), 255, 255, 255, 24);
+
+            // ① 九格逐格命中（纯函数，便宜且能钉住"下标 ↔ 语义"不错位）
+            bool allHit = true; string hitNote = "";
+            for (int i = 0; i < SelectionHandles.BarButtonCount; i++)
+            {
+                var br = SelectionHandles.BarButtonRect(i, barFrame.CanvasAabb, dpi, ViewportCanvas);
+                int got = SelectionHandles.BarButtonAt((br.MinX + br.MaxX) * 0.5f,
+                                                      (br.MinY + br.MaxY) * 0.5f,
+                                                      barFrame.CanvasAabb, dpi, ViewportCanvas);
+                if (got != i) { allHit = false; hitNote = $"第 {i} 格命中成了 {got}"; }
+            }
+            Check("操作条九格：每格都点得中自己", allHit,
+                  allHit ? $"{SelectionHandles.BarButtonCount} 格逐格核对" : hitNote);
+
+            // ② 收起 / 展开（用户更正：条首那个 ✕ 是"收起工具条"，不是"取消选择"）
+            int barWhiteBeforeCollapse = Bar2White();
+            RunBarActionForTest((int)SelBarButton.Collapse);
+            SettleFrames(140);
+            var dotR = SelectionHandles.BarCollapsedRect(barFrame.CanvasAabb, dpi, ViewportCanvas);
+            int barWhiteCollapsed = Bar2White();
+            int dotWhite = ScreenProbe.CountNear((int)dotR.MinX, (int)dotR.MinY,
+                (int)(dotR.MaxX - dotR.MinX), (int)(dotR.MaxY - dotR.MinY), 255, 255, 255, 24);
+            bool tookDot = SelectionGestureForTest((dotR.MinX + dotR.MaxX) * 0.5f,
+                                                   (dotR.MinY + dotR.MaxY) * 0.5f);
+            EndSelectionGestureForTest();
+            SettleFrames(140);
+            Check("收起：整条没了、圆钮在；点圆钮又展开",
+                  // 判据用"白底掉了 80% 以上"而不是"归零"：**圆钮自己就落在条的那块区域里**
+                  // （它居中在框下方，和条的横纵位置一致），所以那块不会真的全黑。
+                  tookDot && !SelBarCollapsed && barWhiteCollapsed * 5 < barWhiteBeforeCollapse
+                  && dotWhite > 300 && Bar2White() > 3000,
+                  $"条的白底 {barWhiteBeforeCollapse} → 收起后 {barWhiteCollapsed} → 展开后 {Bar2White()}，"
+                  + $"圆钮的白 {dotWhite}（圆心 {dotR.MinX:F0},{dotR.MinY:F0}），"
+                  + $"点中圆钮={tookDot}，收起态={SelBarCollapsed}");
+
+            // ③ 颜色面板：点"颜色"开面板 → 点色片改色 → 一次撤销回原色
+            RunBarActionForTest((int)SelBarButton.Color);
+            SettleFrames(140);
+            var panelR = SelectionHandles.PanelRect(barFrame.CanvasAabb, dpi, ViewportCanvas,
+                                                    SelectionHandles.SwatchCount);
+            int panelWhite = ScreenProbe.CountNear((int)panelR.MinX, (int)panelR.MinY,
+                (int)(panelR.MaxX - panelR.MinX), (int)(panelR.MaxY - panelR.MinY), 255, 255, 255, 24);
+            int swatchPick = 5;                                   // 橙
+            var swR = SelectionHandles.SwatchRect(swatchPick, barFrame.CanvasAabb, dpi, ViewportCanvas,
+                                                  SelectionHandles.SwatchCount);
+            bool tookSwatch = SelectionGestureForTest((swR.MinX + swR.MaxX) * 0.5f,
+                                                     (swR.MinY + swR.MaxY) * 0.5f);
+            EndSelectionGestureForTest();
+            SettleFrames(140);
+            var wantColor = InkPalette.SelectionSwatches[swatchPick].Color;
+            bool colorChanged = MathF.Abs(bA.Color.R - wantColor.R) < 0.02f
+                             && MathF.Abs(bA.Color.G - wantColor.G) < 0.02f
+                             && MathF.Abs(bA.Color.B - wantColor.B) < 0.02f;
+            Doc.Undo();
+            SettleFrames(140);
+            bool colorBack = bA.Color.R > 0.9f && bA.Color.G < 0.1f && bA.Color.B > 0.9f;
+            Check("颜色面板：点色片真的改色、一次撤销回原色",
+                  SelPanelOpen == SelPanel.Ink && panelWhite > 5000 && tookSwatch
+                  && colorChanged && colorBack,
+                  $"面板白底 {panelWhite} 像素；改色 {(colorChanged ? "对" : "不对")}，"
+                  + $"撤销后回原色 {(colorBack ? "是" : "否")}");
+
+            // ⑤ 粗细滑条：拖到最粗那一档 → Width 变 + 选中框跟着变大
+            var sliderT = SelectionHandles.SliderRect(barFrame.CanvasAabb, dpi, ViewportCanvas,
+                                                      SelectionHandles.SwatchCount);
+            // 档位表由引擎决定（全荧光笔用荧光笔那三档）——自检这边跟着引擎的口径走
+            int lastStep = SliderStepCount();
+            float wBefore = bA.Width;
+            var frameWBeforeBox = LiveSelectionFrame.CanvasAabb;
+            float frameWBefore = frameWBeforeBox.MaxX - frameWBeforeBox.MinX;
+            float sx = SelectionHandles.SliderStepX(lastStep - 1, lastStep, barFrame.CanvasAabb, dpi,
+                                                    ViewportCanvas, SelectionHandles.SwatchCount);
+            bool tookSlider = SelectionGestureForTest(sx, (sliderT.MinY + sliderT.MaxY) * 0.5f);
+            EndSelectionGestureForTest();
+            SettleFrames(140);
+            float frameWAfter = LiveSelectionFrame.CanvasAabb.MaxX - LiveSelectionFrame.CanvasAabb.MinX;
+            bool widthChanged = bA.Width > wBefore + 1f;
+            Check("粗细滑条：拖到最粗 → 墨变粗、选中框跟着变大",
+                  tookSlider && widthChanged && frameWAfter > frameWBefore + 1f,
+                  $"宽 {wBefore:F1} → {bA.Width:F1}；框宽 {frameWBefore:F0} → {frameWAfter:F0}");
+            Doc.Undo();
+            SettleFrames(120);
+
+            // ⑥ 锁定（用户定的 B 语义）：锁上以后能选中、但拖不动、也删不掉
+            RunBarActionForTest((int)SelBarButton.Color);          // 先收面板（免得盖住条）
+            RunBarActionForTest((int)SelBarButton.Lock);
+            SettleFrames(120);
+            bool lockedNow = bA.Locked;
+            var lockC = new Vector2((barFrame.CanvasAabb.MinX + barFrame.CanvasAabb.MaxX) * 0.5f,
+                                    (barFrame.CanvasAabb.MinY + barFrame.CanvasAabb.MaxY) * 0.5f);
+            int depthBefore = Doc.UndoDepth;
+            bool tookLockedDrag = SelectionGestureForTest(lockC.X, lockC.Y);
+            UpdateSelectionGestureForTest(lockC.X + 160f, lockC.Y + 60f);
+            EndSelectionGestureForTest();
+            SettleFrames(120);
+            bool stayed = bA.Transform.IsIdentity && Doc.UndoDepth == depthBefore;
+            int nBefore = Doc.Strokes.Count;
+            RunBarActionForTest((int)SelBarButton.Delete);
+            SettleFrames(120);
+            bool survivedDelete = Doc.Strokes.Contains(bA) && Doc.Strokes.Count == nBefore;
+            Check("锁定：能选中，但拖不动、也删不掉（B 语义）",
+                  lockedNow && tookLockedDrag && stayed && survivedDelete,
+                  $"锁上={lockedNow}，拖了以后位置 {(bA.Transform.IsIdentity ? "没动" : "动了")}，"
+                  + $"撤销栈 +{Doc.UndoDepth - depthBefore}（该是 0），删除后还在={Doc.Strokes.Contains(bA)}");
+
+            // ⑦ 解锁之后能拖（B 语义的另一半：锁是可以随时解开的）
+            Doc.SelectOnly(new[] { bA });
+            RunBarActionForTest((int)SelBarButton.Lock);           // 再点一次 = 解锁
+            SettleFrames(120);
+            var unlockC = new Vector2((LiveSelectionFrame.CanvasAabb.MinX + LiveSelectionFrame.CanvasAabb.MaxX) * 0.5f,
+                                      (LiveSelectionFrame.CanvasAabb.MinY + LiveSelectionFrame.CanvasAabb.MaxY) * 0.5f);
+            SelectionGestureForTest(unlockC.X, unlockC.Y);
+            UpdateSelectionGestureForTest(unlockC.X + 120f, unlockC.Y);
+            EndSelectionGestureForTest();
+            SettleFrames(140);
+            Check("解锁之后又能拖了", !bA.Locked && !bA.Transform.IsIdentity,
+                  $"锁={bA.Locked}，位置 {(bA.Transform.IsIdentity ? "没动" : "动了")}");
+            Doc.Undo();
+            SettleFrames(120);
+
+            // ⑧ 层级：置顶（下标关系反过来）→ 一次撤销回原顺序
+            Doc.SelectOnly(new[] { bA });
+            int idxBefore = Doc.Strokes.IndexOf(bA);
+            RunBarActionForTest((int)SelBarButton.Layer);          // 开层级面板
+            SettleFrames(120);
+            var frontCell = SelectionHandles.LayerCellRect(0, LiveSelectionFrame.CanvasAabb, dpi, ViewportCanvas);
+            bool tookFront = SelectionGestureForTest((frontCell.MinX + frontCell.MaxX) * 0.5f,
+                                                    (frontCell.MinY + frontCell.MaxY) * 0.5f);
+            EndSelectionGestureForTest();
+            SettleFrames(140);
+            bool onTop = Doc.Strokes.IndexOf(bA) == Doc.Strokes.Count - 1;
+            Doc.Undo();
+            SettleFrames(140);
+            Check("层级：置顶把这一条移到最上，一次撤销回原顺序",
+                  tookFront && onTop && Doc.Strokes.IndexOf(bA) == idxBefore,
+                  $"下标 {idxBefore} → 置顶后 {Doc.Strokes.Count - 1}（最上）→ 撤销后 {Doc.Strokes.IndexOf(bA)}");
+
+            // ⑨ 导出那一格：还没接（下一批做"另存为"）。判据是**点了不炸也不改任何东西**——
+            // 屏幕上不再弹提示条（用户 2026-09-16 明确不要提示条），只写控制台。
+            {
+                int n0 = Doc.Strokes.Count, d0 = Doc.UndoDepth, sel0 = Doc.Selected.Count;
+                RunBarActionForTest((int)SelBarButton.Export);
+                SettleFrames(80);
+                Check("导出格子：还没接，点了什么都不动（不炸、不改文档、不进撤销栈）",
+                      Doc.Strokes.Count == n0 && Doc.UndoDepth == d0 && Doc.Selected.Count == sel0,
+                      $"对象 {n0}→{Doc.Strokes.Count}，撤销栈 +{Doc.UndoDepth - d0}，选中 {sel0}→{Doc.Selected.Count}");
+            }
+
+            // ---- 选中逻辑三连测（用户点名要的）：一条 / 多条 / 里面混着图片 ----
+            {
+                // (1) 单选一条：框 = 它自己的墨迹包围盒（不是中心线、也不虚胖）
+                Doc.Clear();
+                Doc.ClearHistory();
+                var one = FatLine(y0 + 700f, new Color4(1f, 0f, 1f, 1f));
+                Doc.AddStroke(one);
+                Doc.SelectOnly(new[] { one });
+                SettleFrames(160);
+                var oneF = SelectionHandles.FrameOf(Doc.Selected);
+                var oneInk = one.WorldInkBounds;
+                bool oneFrameOk = MathF.Abs(oneF.Local.MinX - oneInk.MinX) < 0.01f
+                               && MathF.Abs(oneF.Local.MaxY - oneInk.MaxY) < 0.01f;
+
+                // (2) 多条：框 = 并集；**改一次颜色只记一步撤销**；置顶后内部相对顺序不变
+                var two = FatLine(y0 + 1000f, new Color4(1f, 0f, 1f, 1f));
+                Doc.AddStroke(two);
+                Doc.SelectOnly(new[] { one, two });
+                SettleFrames(160);
+                var twoF = SelectionHandles.FrameOf(Doc.Selected);
+                bool twoFrameOk = twoF.Local.MinY < oneInk.MinY + 1f
+                               && twoF.Local.MaxY > two.WorldInkBounds.MaxY - 1f;
+                int d0 = Doc.UndoDepth;
+                SetSelectionColor(InkPalette.SelectionSwatches[9].Color);      // 蓝
+                bool bothColored = one.Color.B > 0.8f && two.Color.B > 0.8f;
+                bool oneUndo = Doc.UndoDepth == d0 + 1;
+                Doc.Undo();
+                SettleFrames(120);
+                // 置顶要有"别人在下面"才谈得上：再加一条**不选中**的（否则"全选"是特例，
+                // 引擎会拒绝并提示"整页都选中了，没有层级可调"——第一版自检就踩了这个）。
+                var bystander = FatLine(y0 + 1150f, new Color4(1f, 0f, 1f, 1f));
+                Doc.AddStroke(bystander);
+                Doc.SelectOnly(new[] { one, two });
+                SettleFrames(120);
+                int iOne = Doc.Strokes.IndexOf(one), iTwo = Doc.Strokes.IndexOf(two);
+                ReorderSelection(toFront: true);                               // 两条一起置顶
+                SettleFrames(120);
+                bool orderKept = Doc.Strokes.IndexOf(one) < Doc.Strokes.IndexOf(two)
+                              && Doc.Strokes.IndexOf(two) == Doc.Strokes.Count - 1;
+                Doc.Undo();
+                SettleFrames(120);
+                bool orderBack = Doc.Strokes.IndexOf(one) == iOne && Doc.Strokes.IndexOf(two) == iTwo;
+
+                // (3) 里面混着图片：改颜色/粗细**跳过图片**，翻转**连图片一起翻**，
+                //     删除/框选都算上它（它是普通对象）
+                var img3 = ImageData.Adopt(32, 24, new byte[32 * 24 * 4], false);
+                var placedImg = img3 != null ? Doc.AddImage(img3, x0 + 200f, y0 + 1300f, 1f) : null;
+                if (placedImg != null)
+                {
+                    Doc.SelectOnly(new[] { one, placedImg });
+                    SettleFrames(160);
+                    var imgColor = placedImg.Color; var imgWidth = placedImg.Width;
+                    int d1 = Doc.UndoDepth;
+                    SetSelectionColor(InkPalette.SelectionSwatches[5].Color);  // 橙
+                    bool imgColorKept = placedImg.Color.Equals(imgColor);
+                    bool inkChanged = one.Color.R > 0.9f && one.Color.G > 0.4f && one.Color.B < 0.2f;
+                    SetSelectionWidth(24f);
+                    bool imgWidthKept = MathF.Abs(placedImg.Width - imgWidth) < 0.01f;
+                    bool twoSteps = Doc.UndoDepth == d1 + 2;
+                    Doc.Undo(); Doc.Undo();
+                    SettleFrames(160);
+                    // 翻转：图像也该跟着翻（M11 变负）
+                    Doc.SelectOnly(new[] { placedImg });
+                    Doc.ApplyTransform(SelectionHandles.MirrorMatrix(placedImg.WorldInkBounds, true));
+                    SettleFrames(120);
+                    bool imgFlipped = placedImg.Transform.M11 < -0.5f;
+                    Check("含图片的选中：改色/改粗细跳过图片、翻转照翻、各记一步撤销",
+                          imgColorKept && inkChanged && imgWidthKept && twoSteps && imgFlipped,
+                          $"图片颜色 {(imgColorKept ? "没动" : "被改了")}、粗细 {(imgWidthKept ? "没动" : "被改了")}；"
+                          + $"墨变色={(inkChanged ? "是" : "否")}；两步撤销={(twoSteps ? "对" : "错")}；"
+                          + $"图片翻转={(imgFlipped ? "翻了" : "没翻")}");
+                }
+                Check("单选一条 / 多选多条：框按墨迹范围、多选按并集，改一次只记一步撤销",
+                      oneFrameOk && twoFrameOk && bothColored && oneUndo && orderKept && orderBack,
+                      $"单选框贴合墨迹={(oneFrameOk ? "是" : "否")}，多选并集={(twoFrameOk ? "是" : "否")}，"
+                      + $"两条都变色={(bothColored ? "是" : "否")}，一步撤销={(oneUndo ? "对" : "错")}，"
+                      + $"置顶保持内部顺序={(orderKept && orderBack ? "是" : "否")}");
+            }
 
             BoardOn = boardWas;
             BoardColor = boardColorWas;
