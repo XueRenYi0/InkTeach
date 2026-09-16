@@ -4838,6 +4838,64 @@ internal sealed class App : InkEngine.InkEngine
         Check("穿透·面板外不落墨", Doc.Strokes.Count == strokes0,
               $"笔画 {strokes0} → {Doc.Strokes.Count}");
 
+        // ---- ⑨ 界面驱动的动画必须拿到连续帧，停下之后必须回到零帧 ----
+        // 判据用的是引擎自己的 NeedsFrame()：测的和跑的是同一个判据。
+        SetPass(false);
+        SettleFrames(150);
+        probe.AnimateUntilMs = NowMs + 220;
+
+        int framesDuring = 0;
+        var swAnim = Stopwatch.StartNew();
+        while (swAnim.ElapsedMilliseconds < 240)
+        {
+            PumpMessages();
+            if (NeedsFrame()) { RenderAll(); _dirty = false; framesDuring++; }
+            else Thread.Sleep(1);
+        }
+        Check("界面驱动的动画拿到连续帧", framesDuring >= 5,
+              $"220 毫秒里出了 {framesDuring} 帧（60 fps 下约 13 帧）");
+
+        // 先落地一帧把脏区清干净，再看安静期是不是真的 0 帧
+        PumpMessages();
+        RenderAll();
+        _dirty = false;
+        int framesQuiet = 0;
+        var swQuiet = Stopwatch.StartNew();
+        while (swQuiet.ElapsedMilliseconds < 150)
+        {
+            PumpMessages();
+            if (NeedsFrame()) { RenderAll(); _dirty = false; framesQuiet++; }
+            else Thread.Sleep(2);
+        }
+        Check("动画结束后回到零帧", framesQuiet == 0, $"安静 150 毫秒出了 {framesQuiet} 帧");
+
+        // ---- ⑩ 命令通道：新加的三条命令走一遍，状态读得回来 ----
+        // 这段走的是**界面能看到的那条路**（IUiHost.Commands → IEngineCommands → 引擎），
+        // 不是直接改引擎字段——否则测的就不是"契约通不通"。
+        var host = Host;
+        host.Commands.SetSelectMode(SelectMode.Lasso);
+        Check("命令·切套索", host.State.SelectMode == SelectMode.Lasso,
+              $"读回 {host.State.SelectMode}");
+        host.Commands.SetSelectMode(SelectMode.Rect);
+
+        var green = InkPalette.BoardPresets[1].Color;
+        host.Commands.SetBoardColor(green);
+        Check("命令·换板色", host.State.BoardColor.Equals(green), "读回绿板");
+        host.Commands.SetBoardColor(InkPalette.BoardPresets[0].Color);
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        var only = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 6f };
+        only.AddPoint(400, 400, 1f, 0);
+        only.AddPoint(620, 400, 1f, 1);
+        Doc.AddStroke(only);
+        Tool = Tool.Pen;
+        host.Commands.SelectAll();
+        Check("命令·全选", Doc.Selected.Count == 1 && Tool == Tool.Marquee,
+              $"选中 {Doc.Selected.Count} 条，工具={Tool}");
+        Doc.Clear();
+        Doc.ClearHistory();
+
         Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
         ExitCode = fail == 0 ? 0 : 1;
 

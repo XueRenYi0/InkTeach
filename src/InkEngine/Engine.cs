@@ -7,7 +7,11 @@ using Vortice.Mathematics;
 namespace InkEngine;
 
 /// <summary>框选工具下拖空白处的选择方式（`Ctrl+Alt+9` 切）。见 InkEngine.SelMode。</summary>
-internal enum SelectMode
+/// <summary>
+/// 框选工具下的两种选择方式。<b>public</b>：它是界面契约的一部分
+/// （界面要能"切成套索"，见 <see cref="IEngineCommands.SetSelectMode"/>）。
+/// </summary>
+public enum SelectMode
 {
     /// <summary>矩形框选：碰到墨就算选中（OneNote 的语义）。</summary>
     Rect = 0,
@@ -880,11 +884,7 @@ public class InkEngine
             if (NowMs >= _autoExitAt) break;
 
             Laser.Prune(NowMs);
-            // "复制闪一下"也要把帧驱动起来：它自己会到期消失，不驱动的话
-            // 最后一帧画完就没人再画了，那道高亮会一直挂在屏幕上。
-            _animating = Laser.ActiveAt(NowMs) || _drawing || SelFlashing;
-
-            if (_dirty || _animating)
+            if (NeedsFrame())
             {
                 // VBlankPaced：先等到合成边界，**再抽一次消息**，然后画、提交。
                 //
@@ -897,8 +897,12 @@ public class InkEngine
                     DrainMessages();
                     _dirty = true;
                 }
+                // 渲染期间界面可能又提出"我还要一帧"（在 Render 里调 InvalidateUi）。
+                // 用序号认出来，别让这一句 _dirty = false 把它抹掉——
+                // 抹掉的表现就是"动画或一次性外观变化卡在第一帧"。
+                long seqBefore = _uiInvalidateSeq;
                 RenderAll();
-                _dirty = false;
+                _dirty = _uiInvalidateSeq != seqBefore;
             }
             else
             {
@@ -1266,6 +1270,26 @@ public class InkEngine
         if (_uiInputShown && _uiInputHwnd != IntPtr.Zero)
             Native.SetWindowPos(_uiInputHwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+    }
+
+    /// <summary>
+    /// 这一刻该不该出一帧：脏了，或者有东西还在动。
+    ///
+    /// 三个"在动"的来源，各有各的理由：
+    ///   · 激光轨迹：它自己会到期消失，不驱动的话最后一帧画完就没人再画了，
+    ///     那道高亮会一直挂在屏幕上；
+    ///   · 正在书写：笔尖这条线每帧都在变；
+    ///   · **界面自己声明的动画**（<see cref="IOverlayUi.IsAnimating"/>）：
+    ///     展开/收起、悬停展开、贴边吸附全靠它，缺了就是"动画停在第一帧"。
+    ///
+    /// 自检直接调它来数帧——这样"引擎给不给帧"用的是**同一个判据**，
+    /// 不会出现"测的是一套、跑的是另一套"。
+    /// </summary>
+    internal bool NeedsFrame()
+    {
+        _animating = Laser.ActiveAt(NowMs) || _drawing || SelFlashing
+                   || (Ui != null && Ui.IsAnimating);
+        return _dirty || _animating;
     }
 
     // =====================================================================
@@ -2354,11 +2378,20 @@ public class InkEngine
     /// </summary>
     private void ToggleSelectMode()
     {
-        SelMode = SelMode == SelectMode.Lasso ? SelectMode.Rect : SelectMode.Lasso;
+        SetSelectMode(SelMode == SelectMode.Lasso ? SelectMode.Rect : SelectMode.Lasso);
+    }
+
+    /// <summary>
+    /// 切到指定的选择方式。键盘那一路（Ctrl+Alt+9）和界面那一路
+    /// （<see cref="SetSelectModeFromUi"/>）**都走这里**，免得两条路各写一套规则。
+    /// </summary>
+    private void SetSelectMode(SelectMode mode)
+    {
+        SelMode = mode;
         // 半路切就把没画完的圈丢掉，免得下一次按下接在旧路径后面。
         LassoPath.Clear();
         MarqueeActive = false;
-        Console.WriteLine(SelMode == SelectMode.Lasso
+        Console.WriteLine(mode == SelectMode.Lasso
             ? "选择方式：自由套索（圈住 80% 就算选中；圈到屏幕边＝当作无限延伸）"
             : "选择方式：矩形框（碰到墨就算选中）");
         if (Tool != Tool.Marquee)
@@ -2794,17 +2827,37 @@ public class InkEngine
     public void InvalidateUi()
     {
         UiInvalidatePending = true;
+        _uiInvalidateSeq++;
         _dirty = true;
     }
 
-    internal UiState SnapshotState() => new(
-        Tool,
-        Tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
-        Tool == Tool.Highlighter
+    /// <summary>
+    /// 界面的重画请求流水号。渲染循环拿它判"渲染期间界面是不是又提了请求"，
+    /// 从而**不抹掉**那一帧请求（见 Loop 里那段的注释）。
+    /// </summary>
+    private long _uiInvalidateSeq;
+
+    internal UiState SnapshotState() => new()
+    {
+        Tool = Tool,
+        Color = Tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
+        PaletteBase = Tool == Tool.Highlighter
             ? new Color4(HighlighterCurrent.R, HighlighterCurrent.G, HighlighterCurrent.B, 1f)
             : CurrentColor,
-        CurrentToolWidthLogical,
-        PassThrough, BoardOn, Doc.UndoDepth, Doc.RedoDepth, Doc.Strokes.Count);
+        Width = CurrentToolWidthLogical,
+        // 按工具分开给：只给一个 Width 的话，滑块在切工具时会跳（三个工具各记各的宽度）。
+        PenWidth = PenWidthLogical,
+        HighlighterWidth = HighlighterWidthLogical,
+        HighlighterColor = HighlighterCurrent,
+        LaserWidth = LaserWidthLogical,
+        PassThrough = PassThrough,
+        Board = BoardOn,
+        BoardColor = BoardColor,
+        SelectMode = SelMode,
+        UndoDepth = Doc.UndoDepth,
+        RedoDepth = Doc.RedoDepth,
+        StrokeCount = Doc.Strokes.Count,
+    };
 
     private void NotifyUiStateChanged()
     {
@@ -2911,6 +2964,34 @@ public class InkEngine
         Doc.InvalidateAll();
         _dirty = true;
         NotifyUiStateChanged();
+    }
+
+    /// <summary>界面切选择方式（矩形框 / 自由套索）。</summary>
+    internal void SetSelectModeFromUi(SelectMode mode)
+    {
+        if (SelMode == mode) return;
+        SetSelectMode(mode);
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 界面换板色。底色一变整个内容层都要重画——缓存里那张图是按旧底色画的
+    /// （和 <see cref="SetBoardFromUi"/> 同理）。
+    /// </summary>
+    internal void SetBoardColorFromUi(Color4 color)
+    {
+        if (BoardColor.Equals(color)) return;
+        BoardColor = color;
+        Doc.InvalidateAll();
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>界面上的"全选"。<see cref="SelectAll"/> 自己会把工具切成框选，免得用户以为没生效。</summary>
+    internal void SelectAllFromUi()
+    {
+        SelectAll();
+        _dirty = true;
     }
 
     /// <summary>

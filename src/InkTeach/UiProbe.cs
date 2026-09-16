@@ -34,13 +34,26 @@ internal sealed class UiProbe : IOverlayUi
 
     // ---- 自检要读的计数 ----
     public int Down, Move, Up, StateCalls;
+    public int RenderCalls;
     public float LastX = float.NaN, LastY = float.NaN;
     public Tool LastToolFromState = Tool.Pen;
 
+    /// <summary>自检用：让界面"声称自己还在动"到这个时刻为止（引擎时钟，毫秒）。</summary>
+    public double AnimateUntilMs;
+
+    /// <summary>自检用：Layout 收到的屏幕矩形（用来核对"界面看到的屏幕"和 IUiHost.Screen 是不是同一个）。</summary>
+    public RectF LastLayoutScreen;
+
+    /// <summary>自检用：让界面在下压时抛异常，验证引擎的熔断（连续几次就停用界面）。</summary>
+    public bool ThrowOnDown;
+
     public void Attach(IUiHost host) => _host = host;
+
+    public bool IsAnimating => _host != null && _host.NowMs < AnimateUntilMs;
 
     public RectF Layout(RectF screen, float dpiScale)
     {
+        LastLayoutScreen = screen;
         _bounds = new RectF
         {
             MinX = BoundsPhysical.MinX / dpiScale,
@@ -60,6 +73,7 @@ internal sealed class UiProbe : IOverlayUi
 
     public void Render(ID2D1DeviceContext ctx, UiTheme theme)
     {
+        RenderCalls++;
         if (_bounds.IsEmpty) return;
         // 只画两块实心色：够自检数像素，也够肉眼一眼看出面板在哪。
         using var panel = ctx.CreateSolidColorBrush(new Color4(0.16f, 0.42f, 0.86f, 0.85f), null);
@@ -71,6 +85,7 @@ internal sealed class UiProbe : IOverlayUi
 
     public bool PointerDown(in UiPointerEvent e)
     {
+        if (ThrowOnDown) throw new InvalidOperationException("自检：故意在界面里抛的异常");
         Down++;
         LastX = e.X; LastY = e.Y;
         if (!_bounds.Contains(e.X, e.Y)) return false;

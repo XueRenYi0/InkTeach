@@ -18,6 +18,7 @@ internal sealed class HeadlessUi : IOverlayUi
 {
     public string Name => "无界面";
     public bool Visible => false;
+    public bool IsAnimating => false;
     public void Attach(IUiHost host) { }
     public RectF Layout(RectF screen, float dpiScale) => RectF.Empty;
     public RectF QueryBounds() => RectF.Empty;

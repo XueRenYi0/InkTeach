@@ -25,6 +25,20 @@ public interface IOverlayUi
     /// <summary>界面是否显示。隐藏时引擎不画它、也不给它输入。</summary>
     bool Visible { get; }
 
+    /// <summary>
+    /// 界面这一刻有没有动画在跑。引擎每帧问一次（和 <see cref="QueryBounds"/> 同一套路）：
+    /// 只要有一处返回 true，引擎就持续出帧，直到动画结束自动归零。
+    ///
+    /// 为什么必须有这个出口：引擎只在"有脏区或有东西在动"时才渲染一帧，
+    /// 而"在动"原来只算激光、正在书写、复制闪一下。界面在 <see cref="Render"/>
+    /// 里调 <see cref="IUiHost.InvalidateUi"/> 设的那点脏，会被同一帧末尾的
+    /// `_dirty = false` 抹掉——**展开动画会停在第一帧**。
+    ///
+    /// 规矩：动画期间返回 true，**结束时必须自己变成 false**，
+    /// 否则空闲时也会一直出帧（那是笔记本电池最恨的一种 bug）。
+    /// </summary>
+    bool IsAnimating { get; }
+
     /// <summary>引擎装配时调用一次，界面从这里拿到命令入口与状态。</summary>
     void Attach(IUiHost host);
 
@@ -130,6 +144,16 @@ public interface IEngineCommands
     /// 关=透明批注，直接写在别的程序上面。
     /// </summary>
     void SetBoard(bool on);
+
+    /// <summary>白板的底色（白/绿/黑）。换底色会整层重画，和开关同理。</summary>
+    void SetBoardColor(Color4 color);
+
+    /// <summary>框选工具下的选择方式：矩形框（碰到墨就选中）／自由套索（圈住 80% 才选中）。</summary>
+    void SetSelectMode(SelectMode mode);
+
+    /// <summary>全选（引擎会顺手把工具切到框选，免得用户以为没生效）。</summary>
+    void SelectAll();
+
     void Quit();
 }
 
@@ -160,6 +184,17 @@ public static class InkPalette
     public static Color4 ToHighlighter(Color4 pen) => new(pen.R, pen.G, pen.B, 0.32f);
 
     /// <summary>
+    /// 白板的三种底色。老师实际就这三种用法：白板讲课、绿板（像传统黑板）、
+    /// 黑板（投影暗的时候不刺眼）。界面直接拿它画那三格。
+    /// </summary>
+    public static readonly (string Name, Color4 Color)[] BoardPresets =
+    {
+        ("白板", new Color4(0.99f, 0.99f, 0.98f, 1f)),
+        ("绿板", new Color4(0.13f, 0.36f, 0.24f, 1f)),
+        ("黑板", new Color4(0.10f, 0.11f, 0.13f, 1f)),
+    };
+
+    /// <summary>
     /// **选中框属性面板**的色板（2026-09-16 加）：4 列排布 —— 中性一行、
     /// 暖色一行、冷色一行、末格"自定义取色"（占位，本轮禁用）。
     ///
@@ -184,39 +219,41 @@ public static class InkPalette
     };
 }
 
-/// <summary>引擎状态的只读快照，界面拿来显示。</summary>
+/// <summary>
+/// 引擎状态的只读快照，界面拿来显示。
+///
+/// 用 init 属性而不是十几个位置参数：这个快照只会越加越多（每加一个界面要显示的东西
+/// 就多一项），位置参数到了十来个以后，"谁在第几位"就是纯粹的踩雷。
+/// 构造点只有引擎里那一处（<c>SnapshotState</c>）。
+/// </summary>
 public readonly struct UiState
 {
-    public UiState(Tool tool, Color4 color, Color4 paletteBase, float width,
-                   bool passThrough, bool board, int undoDepth, int redoDepth, int strokeCount)
-    {
-        Tool = tool;
-        Color = color;
-        PaletteBase = paletteBase;
-        Width = width;
-        PassThrough = passThrough;
-        Board = board;
-        UndoDepth = undoDepth;
-        RedoDepth = redoDepth;
-        StrokeCount = strokeCount;
-    }
-
-    public Tool Tool { get; }
+    public Tool Tool { get; init; }
     /// <summary>当前工具实际用的颜色（荧光笔是半透明的）。</summary>
-    public Color4 Color { get; }
+    public Color4 Color { get; init; }
     /// <summary>
     /// 当前颜色的"基色"，永远是不透明的。荧光笔的色相与它一致，
     /// 界面的色板用它来判定"选中的是哪个色块"。
     /// </summary>
-    public Color4 PaletteBase { get; }
-    public float Width { get; }
-    public bool PassThrough { get; }
+    public Color4 PaletteBase { get; init; }
+    /// <summary>当前工具的宽度（笔/荧光笔/激光各记各的）。</summary>
+    public float Width { get; init; }
+    /// <summary>下面这几个是"按工具取"的原始值：滑块要用它们，否则切工具时会跳。</summary>
+    public float PenWidth { get; init; }
+    public float HighlighterWidth { get; init; }
+    public Color4 HighlighterColor { get; init; }
+    public float LaserWidth { get; init; }
+    public bool PassThrough { get; init; }
     /// <summary>是否处于白板模式（画布有不透明底色）。</summary>
-    public bool Board { get; }
+    public bool Board { get; init; }
+    /// <summary>白板底色（界面用它高亮"现在是哪种板"）。</summary>
+    public Color4 BoardColor { get; init; }
+    /// <summary>框选的选择方式（界面用它高亮"矩形/套索"那一格）。</summary>
+    public SelectMode SelectMode { get; init; }
     /// <summary>可撤销步数——界面的"撤销"按钮据此变灰。</summary>
-    public int UndoDepth { get; }
-    public int RedoDepth { get; }
-    public int StrokeCount { get; }
+    public int UndoDepth { get; init; }
+    public int RedoDepth { get; init; }
+    public int StrokeCount { get; init; }
 }
 
 /// <summary>
@@ -274,6 +311,7 @@ public sealed class NullUi : IOverlayUi
 {
     public string Name => "（无界面）";
     public bool Visible => false;
+    public bool IsAnimating => false;
     public void Attach(IUiHost host) { }
     public RectF Layout(RectF screen, float dpiScale) => RectF.Empty;
     public RectF QueryBounds() => RectF.Empty;
