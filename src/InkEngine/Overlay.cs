@@ -1107,6 +1107,72 @@ internal sealed class OverlayWindow : IDisposable
         }
     }
 
+    /// <summary>
+    /// 把**界面**离屏画进一张位图并读回 BGRA（开发期出图用）。
+    ///
+    /// 为什么单开这条路：平时的出图是"截屏"，那要求屏幕亮着、会话没锁，
+    /// 图里还会混进桌面上的东西。这条路把界面画到自己的位图上——
+    /// **锁屏 / 远程 / 这台机器上没人看着**的时候照样能出图，以后也便于接 CI。
+    ///
+    /// 背景用一层浅灰（不是透明）：半透明白面板压在透明底上看不清边界。
+    /// </summary>
+    public byte[] RenderUiToBgra(InkEngine app, int padPx, out int w, out int h)
+    {
+        w = h = 0;
+        if (_ctx == null || app.Ui == null || !app.UiVisibleNow) return null;
+
+        var bounds = app.UiQueryBoundsNow();
+        if (bounds.IsEmpty) return null;
+
+        float dpi = Dpi / 96f;
+        w = (int)MathF.Ceiling((bounds.MaxX - bounds.MinX) * dpi) + padPx * 2;
+        h = (int)MathF.Ceiling((bounds.MaxY - bounds.MinY) * dpi) + padPx * 2;
+        if (w <= 0 || h <= 0 || w > 8000 || h > 8000) return null;
+
+        var pf = new Vortice.DCommon.PixelFormat(
+            Vortice.DXGI.Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied);
+        ID2D1Bitmap1 target = null, cpu = null;
+        try
+        {
+            target = _ctx.CreateBitmap(new SizeI(w, h), IntPtr.Zero, 0,
+                new BitmapProperties1(pf, 96f, 96f, BitmapOptions.Target | BitmapOptions.CannotDraw));
+            cpu = _ctx.CreateBitmap(new SizeI(w, h), IntPtr.Zero, 0,
+                new BitmapProperties1(pf, 96f, 96f, BitmapOptions.CpuRead | BitmapOptions.CannotDraw));
+
+            _ctx.Target = target;
+            _ctx.BeginDraw();
+            _ctx.Clear(new Color4(0.93f, 0.94f, 0.96f, 1f));
+            _ctx.SetDpi(96f, 96f);
+            // 和 DrawUi 同一套坐标：先乘 DPI，再把界面左上角挪到留白处
+            _ctx.Transform = Matrix3x2.CreateScale(dpi)
+                           * Matrix3x2.CreateTranslation(-bounds.MinX * dpi + padPx,
+                                                         -bounds.MinY * dpi + padPx);
+            app.UiRenderNow(_ctx, UiTheme.Default);
+            _ctx.Transform = Matrix3x2.Identity;
+            var hr = _ctx.EndDraw();
+            _ctx.Target = null;
+            if (hr.Failure) { LastError = "界面离屏绘制失败: " + hr.Description; return null; }
+
+            cpu.CopyFromBitmap(new System.Drawing.Point(0, 0), target);
+            var m = cpu.Map(MapOptions.Read);
+            var buf = new byte[w * h * 4];
+            for (int y = 0; y < h; y++)
+                Marshal.Copy(IntPtr.Add(m.Bits, (int)(y * m.Pitch)), buf, y * w * 4, w * 4);
+            cpu.Unmap();
+            return buf;
+        }
+        catch (Exception ex)
+        {
+            LastError = "界面离屏绘制失败: " + ex.Message;
+            return null;
+        }
+        finally
+        {
+            target?.Dispose();
+            cpu?.Dispose();
+        }
+    }
+
     /// <summary>供分辨率实测复用同一套"擦掉一块"逻辑。</summary>
     public void ClearRectForTest(RectF r)
     {

@@ -21,6 +21,8 @@ namespace InkUi;
 internal static class IconAtlas
 {
     private static ID2D1StrokeStyle _round;
+    private static ID2D1Factory1 _factory;
+    private static ID2D1PathGeometry _cone;
 
     /// <summary>
     /// 建一次"圆头圆角"的描边样式（自绘图标要用）。由界面在 Attach 时调一次。
@@ -29,7 +31,9 @@ internal static class IconAtlas
     /// </summary>
     public static void Init(ID2D1Factory1 factory)
     {
-        if (_round != null || factory == null) return;
+        if (factory == null) return;
+        _factory = factory;
+        if (_round != null) return;
         _round = factory.CreateStrokeStyle(new StrokeStyleProperties
         {
             StartCap = CapStyle.Round,
@@ -45,8 +49,24 @@ internal static class IconAtlas
         var geo = SvgPath.Get(PanelIcons.Get(name));
         if (geo == null) return;
 
+        // 有些上游图标不是 24 网格（Material Symbols 用 960），而且原点可能是负的
+        // （viewBox="0 -960 960 960"）。只按宽度缩放、不按原点平移，图标会画到框外——
+        // 看着就是"这个图标只有一个小角"（自检出图时当场看到过一次）。
+        float box = 24f, ox = 0f, oy = 0f;
+        if (PanelIcons.TryGetBox(name, out var vb))
+        {
+            var parts = vb.Split(' ');
+            if (parts.Length >= 4
+                && float.TryParse(parts[0], out var vx) && float.TryParse(parts[1], out var vy)
+                && float.TryParse(parts[2], out var vw) && vw > 0)
+            {
+                box = vw; ox = vx; oy = vy;
+            }
+        }
+
         var saved = ctx.Transform;
-        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+        ctx.Transform = Matrix3x2.CreateScale(size / box)
+                      * Matrix3x2.CreateTranslation(-ox, -oy)
                       * Matrix3x2.CreateTranslation(x, y)
                       * saved;
         ctx.FillGeometry(geo, brush);
@@ -71,7 +91,9 @@ internal static class IconAtlas
     /// （24 网格：笔身 (17,4.6)→(12.4,9.2) 粗 3、光束 (11.6,10)→(9.4,12.2) 细 1.4、
     /// 落点圆心 (6.6,15) 半径 2.1），画出来和界面上其它 Fluent 图标是一套手感。
     /// </summary>
-    public static void DrawLaser(ID2D1DeviceContext ctx, RectF box, float size, ID2D1Brush brush)
+    public static void DrawLaser(ID2D1DeviceContext ctx, RectF box, float size,
+                                ID2D1Brush brush, ID2D1Brush softBrush = null,
+                                int variant = LaserDefault)
     {
         float cx = (box.MinX + box.MaxX) * 0.5f;
         float cy = (box.MinY + box.MaxY) * 0.5f;
@@ -80,10 +102,55 @@ internal static class IconAtlas
                       * Matrix3x2.CreateTranslation(cx - size * 0.5f, cy - size * 0.5f)
                       * saved;
 
-        ctx.DrawLine(new Vector2(17f, 4.6f), new Vector2(12.4f, 9.2f), brush, 3f, _round);
-        ctx.DrawLine(new Vector2(11.6f, 10f), new Vector2(9.4f, 12.2f), brush, 1.4f, _round);
-        ctx.FillEllipse(new Ellipse(new Vector2(6.6f, 15f), 2.1f, 2.1f), brush);
+        switch (variant)
+        {
+            case 0:     // 第一版：笔 ＋ 细光束 ＋ 小落点（用户说"有点单薄"）
+                ctx.DrawLine(new Vector2(17f, 4.6f), new Vector2(12.4f, 9.2f), brush, 3f, _round);
+                ctx.DrawLine(new Vector2(11.6f, 10f), new Vector2(9.4f, 12.2f), brush, 1.4f, _round);
+                ctx.FillEllipse(new Ellipse(new Vector2(6.6f, 15f), 2.1f, 2.1f), brush);
+                break;
+
+            case 1:     // 锥形光束（照假面板那一版）：一片 30% 的锥 ＋ 两条边 ＋ 大一点的落点
+                if (Cone() != null) ctx.FillGeometry(Cone(), softBrush ?? brush);
+                ctx.DrawLine(new Vector2(7.6f, 16.4f), new Vector2(20.5f, 3.5f), brush, 1.7f, _round);
+                ctx.DrawLine(new Vector2(8.4f, 18.4f), new Vector2(21.5f, 13.5f), brush, 1.7f, _round);
+                ctx.FillEllipse(new Ellipse(new Vector2(6f, 18f), 2.7f, 2.7f), brush);
+                break;
+
+            case 2:     // 加重版：笔更粗、光束更粗、落点更大
+                ctx.DrawLine(new Vector2(17.5f, 4.2f), new Vector2(12.6f, 9.1f), brush, 3.6f, _round);
+                ctx.DrawLine(new Vector2(11.8f, 9.9f), new Vector2(8.8f, 12.9f), brush, 2.4f, _round);
+                ctx.FillEllipse(new Ellipse(new Vector2(7f, 14.8f), 2.9f, 2.9f), brush);
+                break;
+
+            default:    // 锥形 ＋ 落点光环（落点外面再套一圈，像"正在打的那一点"）
+                ctx.DrawLine(new Vector2(7.6f, 16.4f), new Vector2(20.5f, 3.5f), brush, 1.7f, _round);
+                ctx.DrawLine(new Vector2(8.4f, 18.4f), new Vector2(21.5f, 13.5f), brush, 1.7f, _round);
+                ctx.FillEllipse(new Ellipse(new Vector2(6f, 18f), 2.7f, 2.7f), brush);
+                ctx.DrawEllipse(new Ellipse(new Vector2(6f, 18f), 4.3f, 4.3f), brush, 1.1f);
+                break;
+        }
 
         ctx.Transform = saved;
+    }
+
+    /// <summary>产品里用哪一个激光笔图标（改这一个数字就能换）。</summary>
+    public const int LaserDefault = 2;
+
+    /// <summary>锥形光束那片半透明填充（建一次）。</summary>
+    private static ID2D1PathGeometry Cone()
+    {
+        if (_cone != null) return _cone;
+        if (_factory == null) return null;
+        _cone = _factory.CreatePathGeometry();
+        using (var sink = _cone.Open())
+        {
+            sink.BeginFigure(new Vector2(6f, 18f), FigureBegin.Filled);
+            sink.AddLine(new Vector2(20.5f, 3.5f));
+            sink.AddLine(new Vector2(21.5f, 13.5f));
+            sink.EndFigure(FigureEnd.Closed);
+            sink.Close();
+        }
+        return _cone;
     }
 }

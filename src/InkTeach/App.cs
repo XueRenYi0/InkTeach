@@ -157,6 +157,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PanelShow(args.Length > 1 ? args[1] : "reports/panel-第一版.png");
         }
+        else if (mode == "--iconshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            IconShow(args.Length > 1 ? args[1] : "reports/laser-icons.bmp");
+        }
         else if (mode == "--erasertest")
         {
             _autoExitAt = double.MaxValue;
@@ -4597,12 +4603,32 @@ internal sealed class App : InkEngine.InkEngine
         try
         {
             if (!File.Exists(file)) return 0;
-            var text = File.ReadAllText(file);
+            var text = ReadTextShared(file);
             int n = 0, i = 0;
             while ((i = text.IndexOf("clicked", i, StringComparison.Ordinal)) >= 0) { n++; i += 7; }
             return n;
         }
         catch { return 0; }
+    }
+
+    /// <summary>
+    /// 读一个"另一个进程正在写"的小文件，**带重试**。
+    ///
+    /// 为什么需要：点击目标进程每隔一会儿就往这个文件里追加一行，父进程同时在读；
+    /// 撞上共享冲突时 `File.ReadAllText` 直接抛 IOException，整条用例会以"异常"收场
+    /// 而不是判据失败——套件里就报成 FATAL，看起来像功能坏了。
+    /// 这类"测试自己的时序问题"必须和被测的东西分开，不然会浪费很多时间去查一个不存在的 bug。
+    /// </summary>
+    private static string ReadTextShared(string path, int timeoutMs = 3000)
+    {
+        var sw = Stopwatch.StartNew();
+        while (true)
+        {
+            try { return File.ReadAllText(path); }
+            catch (IOException) when (sw.ElapsedMilliseconds < timeoutMs) { Thread.Sleep(20); }
+            catch (UnauthorizedAccessException) when (sw.ElapsedMilliseconds < timeoutMs) { Thread.Sleep(20); }
+            catch (Exception) { return ""; }   // 到点了还读不到就当空的，别把用例打成异常
+        }
     }
 
     /// <summary>
@@ -4618,7 +4644,9 @@ internal sealed class App : InkEngine.InkEngine
 
         string dir = Path.Combine(Path.GetTempPath(), "inkprobe_passtest");
         Directory.CreateDirectory(dir);
-        string log = Path.Combine(dir, "target.txt");
+        // 每次跑用**带进程号的文件名**：上一轮要是留了个没退干净的点击目标进程，
+        // 它还在往老文件里写，两边就会抢同一个文件（套件里真撞到过一次）。
+        string log = Path.Combine(dir, $"target-{Environment.ProcessId}.txt");
         File.WriteAllText(log, "");      // must write before spawning? no: spawn then wait for ready
 
         var psi = new ProcessStartInfo(Environment.ProcessPath, $"--clicktarget \"{log}\"")
@@ -4628,9 +4656,10 @@ internal sealed class App : InkEngine.InkEngine
         var target = Process.Start(psi);
         if (target == null) { Console.WriteLine("  无法启动点击目标进程"); _quit = true; return; }
 
-        for (int i = 0; i < 120 && !File.ReadAllText(log).Contains("ready"); i++)
+        // 读的时候带重试：父进程读、子进程写，撞上共享冲突时直接抛会把整条用例打成异常
+        for (int i = 0; i < 120 && !ReadTextShared(log, 200).Contains("ready"); i++)
             Thread.Sleep(50);
-        if (!File.ReadAllText(log).Contains("ready"))
+        if (!ReadTextShared(log, 200).Contains("ready"))
         {
             Console.WriteLine("  点击目标窗口没有就绪");
             target.Kill();
@@ -4710,7 +4739,7 @@ internal sealed class App : InkEngine.InkEngine
         // 目标窗口：另一个进程里的一块普通窗口，被我们的覆盖层压着。
         string dir = Path.Combine(Path.GetTempPath(), "inkprobe_uitest");
         Directory.CreateDirectory(dir);
-        string log = Path.Combine(dir, "target.txt");
+        string log = Path.Combine(dir, $"target-{Environment.ProcessId}.txt");   // 同 --passtest：按进程号分开
         File.WriteAllText(log, "");
 
         var psi = new ProcessStartInfo(Environment.ProcessPath, $"--clicktarget \"{log}\"")
@@ -4725,9 +4754,9 @@ internal sealed class App : InkEngine.InkEngine
             return;
         }
 
-        for (int i = 0; i < 120 && !File.ReadAllText(log).Contains("ready"); i++)
+        for (int i = 0; i < 120 && !ReadTextShared(log, 200).Contains("ready"); i++)
             Thread.Sleep(50);
-        if (!File.ReadAllText(log).Contains("ready"))
+        if (!ReadTextShared(log, 200).Contains("ready"))
         {
             Console.WriteLine("  点击目标窗口没有就绪");
             try { target.Kill(); } catch { }
@@ -5067,6 +5096,78 @@ internal sealed class App : InkEngine.InkEngine
     /// 把界面挂上、展开、出图（给人看的，不判红绿）。
     /// 出图这条链子是这个仓库一贯的验收方式：观感的事眼睛说了算，数字只负责证明没坏。
     /// </summary>
+    /// <summary>把激光笔图标的几个候选并排出一张图（开发期比图用）。</summary>
+    private void IconShow(string path)
+    {
+        SetUi(new LaserIconSheet());
+        BoardOn = true;                      // 白板打底：图里没有桌面上的杂东西
+        SettleFrames(400);
+
+        // 优先走**离屏出图**：锁屏 / 远程 / 没显示器时照样出得来，图里也不会混进桌面。
+        if (OffscreenShot(path)) return;
+
+        var b = CurrentUi.QueryBounds();
+        int x = (int)MathF.Floor(b.MinX * DpiScale) - 20;
+        int y = (int)MathF.Floor(b.MinY * DpiScale) - 20;
+        int w = (int)MathF.Ceiling((b.MaxX - b.MinX) * DpiScale) + 40;
+        int h = (int)MathF.Ceiling((b.MaxY - b.MinY) * DpiScale) + 40;
+        bool ok = ScreenProbe.SaveBmp(path, x, y, w, h);
+        Console.WriteLine(ok ? $"已出图 {path}" : "出图失败");
+        ExitCode = ok ? 0 : 1;
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 离屏把界面画下来存成 BMP。返回 true = 出图成功。
+    ///
+    /// 这条路**不截屏**：它让界面渲染到自己的位图上。
+    /// 好处是锁屏 / 远程 / 这台机器上没人看着的时候照样能出图，
+    /// 而且图里只有界面本身，没有桌面、任务栏、别的窗口。
+    /// </summary>
+    private bool OffscreenShot(string path)
+    {
+        if (_windows.Count == 0) return false;
+        var bytes = _windows[0].RenderUiToBgra(this, 24, out int w, out int h);
+        if (bytes == null)
+        {
+            Console.WriteLine("离屏出图失败：" + (_windows[0].LastError ?? "没有占用矩形"));
+            return false;
+        }
+
+        // BMP：文件头 14 ＋ 信息头 40，像素按 BGRA、行从下往上（行宽 4 字节对齐）。
+        int stride = w * 4;
+        int size = 54 + stride * h;
+        var outBytes = new byte[size];
+        void W16(int at, int v) { outBytes[at] = (byte)v; outBytes[at + 1] = (byte)(v >> 8); }
+        void W32(int at, int v)
+        {
+            outBytes[at] = (byte)v; outBytes[at + 1] = (byte)(v >> 8);
+            outBytes[at + 2] = (byte)(v >> 16); outBytes[at + 3] = (byte)(v >> 24);
+        }
+        outBytes[0] = (byte)'B'; outBytes[1] = (byte)'M';
+        W32(2, size); W32(10, 54); W32(14, 40);
+        W32(18, w); W32(22, h);
+        W16(26, 1); W16(28, 32);
+        W32(34, stride * h);
+        for (int y = 0; y < h; y++)
+            Array.Copy(bytes, (h - 1 - y) * w * 4, outBytes, 54 + y * stride, w * 4);
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".");
+            File.WriteAllBytes(path, outBytes);
+            Console.WriteLine($"已离屏出图 {path}（{w}×{h}）");
+            ExitCode = 0;
+            _quit = true;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("写出图失败：" + ex.Message);
+            return false;
+        }
+    }
+
     private void PanelShow(string path)
     {
         _panelShowDrawer = Environment.GetCommandLineArgs().Contains("--drawer");
