@@ -16,6 +16,15 @@ namespace InkUi;
 /// </summary>
 public sealed class FullUi : IOverlayUi
 {
+    // ---- 性能归因开关（开发期）--------------------------------------------
+    //
+    // 面板每帧到底贵在哪，**不能猜**：把这几块分别关掉、同一份内容各量一遍，
+    // 才知道该优化谁（实测：完整展开态比不挂界面贵 2.44 毫秒，超过 1.5 的红线）。
+    internal static bool PerfSkipShadow;
+    internal static bool PerfSkipChrome;        // 凹槽 ＋ 顶部内高光
+    internal static bool PerfSkipSwatchDetail;  // 色片的内高光与选中环
+    internal static bool PerfSkipIcons;
+
     // ---- 按钮表 -------------------------------------------------------------
     //
     // index 0 是"收起格"（就是那个球缩到带子里），1..N 是工具。
@@ -181,6 +190,20 @@ public sealed class FullUi : IOverlayUi
     private const float GridGap = 6f;
 
     private readonly Dictionary<uint, ID2D1SolidColorBrush> _brushes = new();
+
+    // ---- 静态底缓存：**想清楚了再做，现在没做** -----------------------------
+    //
+    // 实测（--panelperf，同一份内容 200 笔）：完整展开态比不挂界面贵约 1.5～2.6 ms/帧，
+    // 而归因显示阴影只占 0.37、凹槽 0.16、色片细节 0.34、图标 0.32 ——
+    // 剩下的钱花在**每帧几十次小绘制调用本身**（不是填充面积）。
+    // 教科书解法是"把静态底画进一张位图，每帧只贴一次"（引擎里的性能面板就是这么干的：
+    // 4.3 ms → 0.05 ms）。但**这条路有个前提**：刷缓存必须在"这一帧开始画"之前做。
+    //
+    // 我试过在 Render() 里刷（也就是在引擎 BeginDraw 里面切换渲染目标再 BeginDraw），
+    // Direct2D 不允许这么做 —— 现象是**整块面板直接变空白**（出图当场看出来的；
+    // 几何与命中测试的自检全绿，因为那部分没坏）。
+    // 所以它需要引擎在 `RenderFrame` 里、BeginDraw 之前开一个"界面离屏准备"的钩子
+    // （引擎自己的 PrepareHud 就挂在那儿）。**先记账，不改**（见计划 §10.2）。
 
     public FullUi()
     {
@@ -1200,7 +1223,11 @@ public sealed class FullUi : IOverlayUi
         if (_host == null) return;
         UpdatePeek();                    // 每帧问一次"该不该收起来"（贴边隐藏）
         UpdateRail();                    // 色线该不该长成设置条
+        RenderShifted(ctx);
+    }
 
+    private void RenderShifted(ID2D1DeviceContext ctx)
+    {
         var saved = ctx.Transform;
         var shift = Shift();
         if (shift != Vector2.Zero)
@@ -1244,7 +1271,7 @@ public sealed class FullUi : IOverlayUi
         // 色带那条**凹槽**：把色带那一块裁出来、填一层淡淡的暗色（照假面板：
         // 裁进面板的圆角形状，顶部两个角自然跟着圆）。
         var band = BandRect();
-        if (band.MaxY - band.MinY >= 2f)
+        if (!PerfSkipChrome && band.MaxY - band.MinY >= 2f)
         {
             ctx.PushAxisAlignedClip(new Vortice.RawRectF(band.MinX, band.MinY, band.MaxX, band.MaxY),
                                     AntialiasMode.Aliased);
@@ -1261,7 +1288,7 @@ public sealed class FullUi : IOverlayUi
         if (BandVisible()) DrawBand(ctx, st);
 
         // 面板顶部一道极淡的内高光（假面板原话："Windows 11 的层次感靠它"）
-        if (band.MaxY - band.MinY > 20f)
+        if (!PerfSkipChrome && band.MaxY - band.MinY > 20f)
         {
             ctx.PushAxisAlignedClip(new Vortice.RawRectF(panel.MinX, panel.MinY, panel.MaxX, panel.MaxY),
                                     AntialiasMode.Aliased);
@@ -1286,10 +1313,13 @@ public sealed class FullUi : IOverlayUi
     /// <summary>一张"卡片"：两层投影 ＋ 底 ＋ 1px 描边（没有这道边，圆角会糊进背景里）。</summary>
     private void DrawCard(ID2D1DeviceContext ctx, RectF r, float radius)
     {
-        var sh1 = new Vortice.RawRectF(r.MinX, r.MinY + 1, r.MaxX, r.MaxY + 1);
-        ctx.FillRoundedRectangle(new RoundedRectangle(sh1, radius, radius), Brush(ctx, Tokens.Shadow1));
-        var sh2 = new Vortice.RawRectF(r.MinX, r.MinY + 3, r.MaxX, r.MaxY + 3);
-        ctx.FillRoundedRectangle(new RoundedRectangle(sh2, radius, radius), Brush(ctx, Tokens.Shadow2));
+        if (!PerfSkipShadow)
+        {
+            var sh1 = new Vortice.RawRectF(r.MinX, r.MinY + 1, r.MaxX, r.MaxY + 1);
+            ctx.FillRoundedRectangle(new RoundedRectangle(sh1, radius, radius), Brush(ctx, Tokens.Shadow1));
+            var sh2 = new Vortice.RawRectF(r.MinX, r.MinY + 3, r.MaxX, r.MaxY + 3);
+            ctx.FillRoundedRectangle(new RoundedRectangle(sh2, radius, radius), Brush(ctx, Tokens.Shadow2));
+        }
 
         var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
         var rr = new RoundedRectangle(box, radius, radius);
@@ -1320,11 +1350,14 @@ public sealed class FullUi : IOverlayUi
                 ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
 
                 // 一道内高光：色片才有"实体感"（假面板里写着"颜值上最便宜的一笔"）
-                var hl = new Vortice.RawRectF(r.MinX + 2, r.MinY + 1, r.MaxX - 2, r.MinY + 1 + (r.MaxY - r.MinY) * 0.26f);
-                ctx.FillRoundedRectangle(new RoundedRectangle(hl, 3f, 3f),
-                    Brush(ctx, new Color4(1f, 1f, 1f, _dark ? 0.13f : 0.35f)));
+                if (!PerfSkipSwatchDetail)
+                {
+                    var hl = new Vortice.RawRectF(r.MinX + 2, r.MinY + 1, r.MaxX - 2, r.MinY + 1 + (r.MaxY - r.MinY) * 0.26f);
+                    ctx.FillRoundedRectangle(new RoundedRectangle(hl, 3f, 3f),
+                        Brush(ctx, new Color4(1f, 1f, 1f, _dark ? 0.13f : 0.35f)));
+                }
 
-                if (IsSwatchActive(st, i))
+                if (!PerfSkipSwatchDetail && IsSwatchActive(st, i))
                 {
                     // 选中的色块要有**第二重标记**（只靠颜色区分不符合无障碍要求）：
                     // 往里缩 2 像素再描一圈（照假面板的 1.6 线宽）。
@@ -1680,6 +1713,7 @@ public sealed class FullUi : IOverlayUi
         var ink = active ? Tokens.AccentInk : InkCol;
         // 激光笔是**自绘**的（笔＋光束＋落点）：Fluent 里没有这个专名，
         // 用闪电之类的近义图标，老师看不出这是激光笔（假面板比过九个候选，选的是这个）。
+        if (PerfSkipIcons) return;
         if (i == 5) IconAtlas.DrawLaser(ctx, r, Tokens.Icon, Brush(ctx, ink));
         else IconAtlas.DrawCentered(ctx, icon, r, Tokens.Icon, Brush(ctx, ink));
     }
@@ -1712,7 +1746,10 @@ public sealed class FullUi : IOverlayUi
         return b;
     }
 
-    private void Invalidate() => _host?.InvalidateUi();
+    private void Invalidate()
+    {
+        _host?.InvalidateUi();
+    }
 
     // ---- 自检钩子（开发期用；产品代码不碰）--------------------------------
 

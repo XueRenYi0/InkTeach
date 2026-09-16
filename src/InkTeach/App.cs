@@ -172,6 +172,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             RecoveryTest();
         }
+        else if (mode == "--panelperf")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PanelPerf();
+        }
         else if (mode == "--erasertest")
         {
             _autoExitAt = double.MaxValue;
@@ -5122,6 +5128,104 @@ internal sealed class App : InkEngine.InkEngine
         int h = (int)MathF.Ceiling((b.MaxY - b.MinY) * DpiScale) + 40;
         bool ok = ScreenProbe.SaveBmp(path, x, y, w, h);
         Console.WriteLine(ok ? $"已出图 {path}" : "出图失败");
+        ExitCode = ok ? 0 : 1;
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 真实面板的每帧代价：**同一份内容**，挂面板与不挂面板各渲染一遍，比时间。
+    ///
+    /// 为什么要有这个：设计阶段那句"面板每帧 0.5～1.5 毫秒"是**估**的
+    /// （拿 160×60 的小界面按面积外推的），而面板现在有 636×82、
+    /// 还在写字这条最敏感的路径上。教室机器比开发机慢，估的数不能当结论。
+    ///
+    /// 量三档：不挂界面（基准）／收起成球／展开成带子（含设置条，最贵的一档）。
+    /// 每档都强制 `_dirty = true` 再渲染，避免"空闲不出帧"把代价量成 0。
+    /// </summary>
+    private void PanelPerf()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 真实面板的每帧代价（同一份内容，挂 vs 不挂）===");
+
+        // 一屏板书：200 条各 40 个点
+        Doc.Clear();
+        Doc.ClearHistory();
+        var rnd = new Random(7);
+        for (int s = 0; s < 200; s++)
+        {
+            var st = new Stroke
+            {
+                Tool = Tool.Pen, Color = new Color4(0.1f, 0.1f, 0.1f, 1f),
+                Width = 6f * DpiScale,
+            };
+            float x0 = _virtualX + rnd.Next(100, Math.Max(200, _virtualW - 400));
+            float y0 = _virtualY + rnd.Next(100, Math.Max(200, _virtualH - 300));
+            for (int k = 0; k < 40; k++) st.AddPoint(x0 + k * 6, y0 + MathF.Sin(k * 0.3f) * 20, 1f, k);
+            Doc.AddStroke(st);
+        }
+        Doc.InvalidateAll();
+        SettleFrames(400);
+
+        double Measure(int frames)
+        {
+            // **跑 3 轮取最小值**：这台机器上同时跑着远程控制和几个吃 GPU 的客户端，
+            // 平均值被"别人抢走的那几毫秒"抬高得离谱（同一档实测在 1.1～3.0 之间跳）。
+            // 最小值 = 最"干净"的那一轮，用它比才比得出我们自己代码的差别。
+            double best = double.MaxValue;
+            for (int round = 0; round < 3; round++)
+            {
+                SettleFrames(150);
+                var sw = Stopwatch.StartNew();
+                for (int i = 0; i < frames; i++) { _dirty = true; RenderAll(); }
+                sw.Stop();
+                best = Math.Min(best, sw.Elapsed.TotalMilliseconds / frames);
+            }
+            return best;
+        }
+
+        SetUi(new HeadlessUi());
+        SettleFrames(200);
+        double none = Measure(200);
+
+        SetUiFactory(() => new InkUi.FullUi());
+        SettleFrames(300);
+        double ball = Measure(200);                       // 收起态：一个球
+
+        if (CurrentUi is InkUi.FullUi ui)
+        {
+            ui.SnapForTest();                             // 一步展开
+            ui.OpenRailForTest();                         // 色带也张开（最贵的一档）
+        }
+        SettleFrames(300);
+        double full = Measure(200);
+
+        Console.WriteLine($"  不挂界面            {none,6:F2} ms/帧");
+        Console.WriteLine($"  收起成一个球        {ball,6:F2} ms/帧   （比不挂多 {ball - none,5:F2}）");
+        Console.WriteLine($"  展开＋色带张开      {full,6:F2} ms/帧   （比不挂多 {full - none,5:F2}）");
+
+        // ---- 归因：把几块分别关掉再量，看钱花在哪 ----
+        Console.WriteLine();
+        Console.WriteLine("  归因（从「展开＋色带」这一档里省了多少）：");
+        void Attrib(string name, Action set)
+        {
+            set();
+            SettleFrames(200);
+            double t = Measure(200);
+            Console.WriteLine($"    {name,-22} {t,6:F2} ms/帧   （省 {full - t,5:F2}）");
+        }
+        Attrib("不算阴影", () => InkUi.FullUi.PerfSkipShadow = true);
+        InkUi.FullUi.PerfSkipShadow = false;
+        Attrib("不算凹槽与顶光", () => InkUi.FullUi.PerfSkipChrome = true);
+        InkUi.FullUi.PerfSkipChrome = false;
+        Attrib("不算色片细节", () => InkUi.FullUi.PerfSkipSwatchDetail = true);
+        InkUi.FullUi.PerfSkipSwatchDetail = false;
+        Attrib("不算图标", () => InkUi.FullUi.PerfSkipIcons = true);
+        InkUi.FullUi.PerfSkipIcons = false;
+
+        bool ok = (full - none) <= 1.5;                   // 计划里定的红线：≤1.5ms/帧
+        Console.WriteLine(ok
+            ? "  PASS: 完整展开态的额外代价在 1.5 毫秒以内"
+            : $"  FAIL: 完整展开态比不挂界面贵了 {full - none:F2} 毫秒（红线 1.5）");
         ExitCode = ok ? 0 : 1;
         _quit = true;
     }
