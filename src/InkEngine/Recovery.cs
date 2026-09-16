@@ -24,6 +24,62 @@ internal static class Recovery
     public static string SessionPath =>
         Path.Combine(Path.GetTempPath(), "inkteach-session.ink");
 
+    /// <summary>
+    /// **自动存档**（崩溃恢复用）。放 `%LOCALAPPDATA%`——不是 TEMP：
+    /// TEMP 会被系统/清理工具删掉，"断电一节课"这种场景恰恰要跨重启活下来。
+    ///
+    /// 和 <see cref="SessionPath"/> 的分工：那个是"自己主动重启，立刻读回来"；
+    /// 这个是"每 15 秒存一次，下次打开接上"（产品里没有"保存"这个动作，
+    /// 所以按持久画布来做——同类里 OneNote/Notability 都是这个模型；
+    /// Xournal++ 是"退出删掉草稿"，它的用户正在提 issue 想改，
+    /// 见 xournalpp/xournalpp#7697 与 #7754）。
+    /// </summary>
+    /// <summary>自检用：指向临时文件，**别动用户真正的板书**（和设置那边同一个套路）。</summary>
+    public static string AutoSavePathOverride;
+
+    public static string AutoSavePath => AutoSavePathOverride ?? System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "InkTeach", "autosave.ink");
+
+    public static bool AutoSaveExists => File.Exists(AutoSavePath);
+
+    /// <summary>自动存档写盘。写不进去只提示，不影响使用（顶多这次崩溃丢东西）。</summary>
+    public static void SaveAuto(byte[] blob)
+    {
+        try
+        {
+            var dir = System.IO.Path.GetDirectoryName(AutoSavePath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            // 先写临时文件再换名：**不能直接覆盖**——写一半断电会留下一个坏文件，
+            // 下次打开时"恢复"出一堆垃圾（比没有自动存档更糟）。
+            string tmp = AutoSavePath + ".tmp";
+            File.WriteAllBytes(tmp, blob);
+            File.Move(tmp, AutoSavePath, overwrite: true);
+        }
+        catch (Exception ex) { Console.WriteLine("自动存档失败：" + ex.Message); }
+    }
+
+    /// <summary>读自动存档。**读走不删**：它就是"上次的板书"，下次打开还要用。</summary>
+    public static byte[] LoadAuto()
+    {
+        try
+        {
+            if (!File.Exists(AutoSavePath)) return null;
+            return File.ReadAllBytes(AutoSavePath);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("读自动存档失败（当作没有，不影响启动）：" + ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>删掉自动存档（自检用；产品里没有"删除"这条路，清空板书会存成空文档）。</summary>
+    public static void DeleteAuto()
+    {
+        try { if (File.Exists(AutoSavePath)) File.Delete(AutoSavePath); } catch { }
+    }
+
     private static string StatePath =>
         Path.Combine(Path.GetTempPath(), "inkteach-ui-restarts.txt");
 

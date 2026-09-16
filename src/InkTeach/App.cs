@@ -86,6 +86,9 @@ internal sealed class App : InkEngine.InkEngine
         // 自检一律用**临时配置文件**：判据要确定，更不能把用户真正的设置改掉。
         if (_selfCheckMode && InkSettings.PathOverride == null)
             InkSettings.PathOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck.json");
+        // 自动存档同理：自检**绝不能碰用户真正的板书**
+        if (_selfCheckMode && Recovery.AutoSavePathOverride == null)
+            Recovery.AutoSavePathOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck-autosave.ink");
 
         // 交互模式挂**产品界面**；自检/基准模式挂"什么都不画"的空宿主
         // （自检要数屏幕上的墨，一块面板盖上去会把判据搞脏——这条踩过）。
@@ -162,6 +165,12 @@ internal sealed class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             IconShow(args.Length > 1 ? args[1] : "reports/laser-icons.bmp");
+        }
+        else if (mode == "--recoverytest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            RecoveryTest();
         }
         else if (mode == "--erasertest")
         {
@@ -5114,6 +5123,111 @@ internal sealed class App : InkEngine.InkEngine
         bool ok = ScreenProbe.SaveBmp(path, x, y, w, h);
         Console.WriteLine(ok ? $"已出图 {path}" : "出图失败");
         ExitCode = ok ? 0 : 1;
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 自动存档 / 崩溃恢复自检（开发期）。
+    ///
+    /// 它是"一节课的板书会不会丢"这条链子的唯一自动化验证：
+    ///   ① 存了能原样读回来（笔画数/颜色/粗细/身份一致）；
+    ///   ② **没变就不写**（靠文档版本号节流，不然每 15 秒白写一遍全量）；
+    ///   ③ **清空之后存的是空的**（不然重启会把擦掉的东西又变回来）；
+    ///   ④ 坏文件读不出来时**不许影响启动**（从空白开始，只提示）；
+    ///   ⑤ 存档落在 LOCALAPPDATA，**不是 TEMP**（TEMP 会被清理工具删掉，
+    ///      而"断电一节课"恰恰要跨重启活下来）。
+    ///
+    /// 自检全程用临时路径（`Recovery.AutoSavePathOverride`），不碰用户真正的板书。
+    /// </summary>
+    private void RecoveryTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 自动存档/崩溃恢复自检 ===");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-34} {detail}");
+        }
+
+        string path = Recovery.AutoSavePath;
+        Recovery.DeleteAuto();
+
+        Check("存档落在 LOCALAPPDATA（不是 TEMP）",
+              path.Contains("Local", StringComparison.OrdinalIgnoreCase)
+              || Recovery.AutoSavePathOverride != null,
+              path);
+
+        // ① 存 → 读回来，逐项一致
+        Doc.Clear();
+        Doc.ClearHistory();
+        var a = new Stroke { Tool = Tool.Pen, Color = new Color4(0.13f, 0.70f, 0.33f, 1f), Width = 7f * DpiScale };
+        a.AddPoint(400, 400, 1f, 0); a.AddPoint(700, 500, 1f, 1);
+        Doc.AddStroke(a);
+        var b = new Stroke { Tool = Tool.Highlighter, Color = new Color4(1f, 0.85f, 0.15f, 0.32f), Width = 24f * DpiScale };
+        b.AddPoint(500, 700, 1f, 0); b.AddPoint(900, 760, 1f, 1);
+        Doc.AddStroke(b);
+
+        AutoSaveNow();
+        long size = new FileInfo(path).Length;
+        var fresh = new InkDocument();
+        InkSerializer.LoadInto(fresh, Recovery.LoadAuto());
+        bool same = fresh.Strokes.Count == 2
+                 && MathF.Abs(fresh.Strokes[0].Color.G - 0.70f) < 0.02f
+                 && MathF.Abs(fresh.Strokes[1].Width - 24f * DpiScale) < 0.5f
+                 && fresh.Strokes[1].Tool == Tool.Highlighter;
+        Check("存了能原样读回来", same,
+              $"暂存 {size} 字节 → 读回 {fresh.Strokes.Count} 笔，第 2 笔 {fresh.Strokes[1].Width:F0} 物理像素");
+
+        // ② 没变就不写
+        SetAutoSaveIntervalForTest(80);
+        int before = AutoSaveCount;
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 260) { PumpMessages(); RenderAll(); }
+        int afterIdle = AutoSaveCount;
+        Check("板书没变就不写", afterIdle == before, $"{before} → {afterIdle} 次");
+
+        // 变一下 → 到点就该写
+        var c = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 4f * DpiScale };
+        c.AddPoint(300, 300, 1f, 0); c.AddPoint(360, 330, 1f, 1);
+        Doc.AddStroke(c);
+        sw.Restart();
+        while (sw.ElapsedMilliseconds < 260) { PumpMessages(); RenderAll(); }
+        Check("板书变了就到点写一次", AutoSaveCount > afterIdle, $"{afterIdle} → {AutoSaveCount} 次");
+
+        // ③ 清空之后存的是空的
+        Doc.Clear();
+        Doc.ClearHistory();
+        AutoSaveNow();
+        var empty = new InkDocument();
+        InkSerializer.LoadInto(empty, Recovery.LoadAuto());
+        Check("清空之后存的是空文档", empty.Strokes.Count == 0, $"读回 {empty.Strokes.Count} 笔");
+
+        // ④ 坏文件不影响启动
+        File.WriteAllBytes(path, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+        Doc.Clear();
+        Doc.ClearHistory();
+        bool threw = false;
+        try { RestoreAutoSaveForTest(); } catch { threw = true; }
+        Check("坏文件不影响启动（从空白开始）", !threw && Doc.Strokes.Count == 0,
+              $"抛异常 = {threw}，读回 {Doc.Strokes.Count} 笔");
+
+        // ⑤ 真存档能"重启接上"（走启动那条路）
+        Doc.Clear();
+        Doc.ClearHistory();
+        var d = new Stroke { Tool = Tool.Pen, Color = new Color4(0.1f, 0.4f, 0.9f, 1f), Width = 6f * DpiScale };
+        d.AddPoint(200, 200, 1f, 0); d.AddPoint(600, 260, 1f, 1);
+        Doc.AddStroke(d);
+        AutoSaveNow();
+        Doc.Clear();
+        Doc.ClearHistory();
+        RestoreAutoSaveForTest();
+        Check("重开接上上次的板书", Doc.Strokes.Count == 1, $"读回 {Doc.Strokes.Count} 笔");
+
+        Recovery.DeleteAuto();
+        Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
+        ExitCode = fail == 0 ? 0 : 1;
         _quit = true;
     }
 

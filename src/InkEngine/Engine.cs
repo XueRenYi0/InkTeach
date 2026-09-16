@@ -48,6 +48,53 @@ public class InkEngine
 
     /// <summary>自检/基准模式：**不读也不写**用户配置（判据要确定，更不能改用户的设置）。</summary>
     internal bool SelfCheckMode;
+
+    // ---- 自动存档（崩溃恢复）------------------------------------------------
+    //
+    // 产品里**没有"保存"这个动作**，所以按"持久画布"来做：每 15 秒（板书变了才写）
+    // 存一份到 %LOCALAPPDATA%，下次打开自动接上。
+    // 为什么值得：一节课的板书丢了是最坏的失败模式；同类开源软件（Xournal++）
+    // 正因为"崩溃就丢"被用户提了严重数据丢失的 issue。
+
+    /// <summary>自动存档的间隔（毫秒）。板书没变就不写。</summary>
+    private double _autoSaveEveryMs = 15000;
+    private double _nextAutoSaveAtMs;
+    private long _autoSavedVersion = -1;
+
+    /// <summary>自检用：这一场跑下来自动存档写了多少次（验证"没变就不写"）。</summary>
+    internal int AutoSaveCount { get; private set; }
+
+    /// <summary>自检用：把自动存档间隔调短（不然得等 15 秒才验得到节流）。</summary>
+    internal void SetAutoSaveIntervalForTest(double ms)
+    {
+        _autoSaveEveryMs = ms;
+        _nextAutoSaveAtMs = 0;
+    }
+
+    /// <summary>自检用：走一遍"启动时接上上次板书"这条真路径（含坏文件容错）。</summary>
+    internal void RestoreAutoSaveForTest() => RestoreAutoSaveIfAny();
+
+    /// <summary>自检用：立刻按当前文档写一次自动存档（不看间隔）。</summary>
+    internal void AutoSaveNow()
+    {
+        try { Recovery.SaveAuto(InkSerializer.Save(Doc)); }
+        catch (Exception ex) { Console.WriteLine("自动存档失败：" + ex.Message); }
+        _autoSavedVersion = Doc.Version;
+        AutoSaveCount++;
+    }
+
+    /// <summary>
+    /// 到了间隔、而且板书真的变了，就写一次。
+    /// 判据用文档版本号（`Doc.Version`）——它在每次增删改时都会加一，
+    /// 比"每 15 秒无条件写一遍"省得多（一万笔的全量序列化不是白给的）。
+    /// </summary>
+    private void MaybeAutoSave()
+    {
+        if (NowMs < _nextAutoSaveAtMs) return;
+        _nextAutoSaveAtMs = NowMs + _autoSaveEveryMs;
+        if (Doc.Version == _autoSavedVersion) return;
+        AutoSaveNow();
+    }
     internal Stroke ActiveStroke;
     internal Tool Tool = Tool.Pen;
     /// <summary>Tool sizes are authored in logical pixels and scaled by the
@@ -656,6 +703,9 @@ public class InkEngine
         // 自检/基准模式不掺和：那些模式不该被"上次留下的板书"影响判据。
         if (mode.Length == 0) RestoreSessionIfAny();
 
+        // 上次的自动存档（崩溃/正常退出都留）：产品启动时接上。
+        if (mode.Length == 0) RestoreAutoSaveIfAny();
+
         // 宿主自己的启动分支（开发期的点击目标、截图工具等）。返回 true
         // 表示这条命令行已经由宿主处理完，引擎不再往下走。产品界面不需要覆写。
         if (PrepareHostStartup(mode, args, out int hostExit))
@@ -782,6 +832,30 @@ public class InkEngine
         catch (Exception ex)
         {
             Console.WriteLine("会话恢复失败（那份暂存已丢弃）：" + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 启动时接上上次的板书（自动存档）。
+    /// **读走不删**：它就是这份板书本身，下次打开还要接着用。
+    /// 读坏了只提示、从空白开始——自动存档不该成为"起不来"的理由。
+    /// </summary>
+    private void RestoreAutoSaveIfAny()
+    {
+        _nextAutoSaveAtMs = NowMs + _autoSaveEveryMs;
+        var blob = Recovery.LoadAuto();
+        if (blob == null) return;
+
+        try
+        {
+            InkSerializer.LoadInto(Doc, blob);
+            Doc.InvalidateAll();
+            _autoSavedVersion = Doc.Version;
+            Console.WriteLine($"已接上上次的板书：{Doc.Strokes.Count} 笔");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("自动存档读不出来（已忽略，从空白开始）：" + ex.Message);
         }
     }
 
@@ -980,6 +1054,12 @@ public class InkEngine
         FrameCounter++;
         double frameStart = NowMs;
         double wall0 = _clock.Elapsed.TotalMilliseconds;
+
+        // 自动存档：**放在这里**（每帧都过）而不是主循环里——主循环那条路
+        // 只在"真有帧"时才走到，而自检是用"抽消息＋渲染"驱动的，挂在主循环里
+        // 自检就永远验不到它（第一版就是这么漏的：改了板书也不写）。
+        // 自检模式走临时路径（Recovery.AutoSavePathOverride），不会碰用户的板书。
+        MaybeAutoSave();
 
         // The HUD text and the process counters cost an order of magnitude more
         // than drawing the ink does, so they refresh a few times a second rather
@@ -2809,6 +2889,9 @@ public class InkEngine
         }
         // 只写"改过的"键位和"界面改过的"偏好；都没动过就不碰用户的配置文件。
         FlushSettings();
+
+        // 退出前补一次自动存档（下一次打开接上）。自检模式不动用户的存档。
+        if (Doc.Version != _autoSavedVersion) AutoSaveNow();
 
         if (_uiInputHwnd != IntPtr.Zero)
         {
