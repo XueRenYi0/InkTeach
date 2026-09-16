@@ -273,6 +273,16 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
+    /// <summary>
+    /// 分层窗口的整体透明度。面板的"接输入小窗"用它把自己压到 1/255：
+    /// 肉眼不可见，但**在**——既不能用 alpha=0（等于点不到自己），
+    /// 也不能把窗口挪出屏幕（那样同样收不到输入）。
+    /// </summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint crKey, byte bAlpha, uint dwFlags);
+
+    public const uint LWA_ALPHA = 0x00000002;
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
 

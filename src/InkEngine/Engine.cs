@@ -429,6 +429,19 @@ public class InkEngine
     /// <summary>自检用：系统问了我们几次命中测试、其中几次回答"这块是我的"。</summary>
     internal int _cntNcHitTest, _cntNcHitClient;
 
+    // ==== 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1）=================
+    //
+    // 为什么需要它：穿透必须靠 WS_EX_TRANSPARENT（跨进程才点得到下层），
+    // 而那个样式让窗口**在系统那一层就被排除在输入之外**——实测 WM_NCHITTEST
+    // 一次都不会被调用。所以"面板可点"和"点击穿透"在同一个窗口里是互斥的。
+    //
+    // 解法：画面照旧画在覆盖层上（不新增渲染路径、不抢层序），另外开一块
+    // **只收输入、不画东西**的小窗，正好盖住面板矩形。系统按窗口分发输入，
+    // 于是"穿透"和"面板可点"天然同时成立。
+    private IntPtr _uiInputHwnd;
+    private bool _uiInputShown;
+    private RectF _uiInputRect;                 // 物理像素
+
     /// <summary>
     /// 指针这一刻是不是停在界面自己那一块上。
     /// 两个地方要用：悬停时光标要给箭头（不是笔尖/橡皮圈）；穿透模式下
@@ -936,6 +949,10 @@ public class InkEngine
         // 相机写给各覆盖窗口：渲染的每一处变换都用它（见 OverlayWindow.CanvasToWindow）。
         foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
 
+        // 面板的接输入小窗跟着界面这一刻占的地方走（方案 B）。
+        // 放在渲染之前：这一帧界面画在哪，输入就该收在哪，两件事同源。
+        UpdateUiInputWindow();
+
         foreach (var w in _windows)
             w.RenderFrame(this);
         foreach (var w in _windows)
@@ -1105,6 +1122,10 @@ public class InkEngine
 
     private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
+        // 面板的"接输入小窗"（方案 B）：它只收输入，什么都不画。
+        if (_uiInputHwnd != IntPtr.Zero && hWnd == _uiInputHwnd)
+            return UiInputWndProc(hWnd, msg, wParam, lParam);
+
         // 宿主自己的窗口（开发期的点击目标）先处理。产品界面不会用到这一层。
         if (HandleHostWindowMessage(hWnd, msg, wParam, lParam, out var hostResult))
             return hostResult;
@@ -1238,6 +1259,13 @@ public class InkEngine
         foreach (var w in _windows)
             Native.SetWindowPos(w.Hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+
+        // 接输入小窗**必须排在最后抬**：两块都是置顶窗口，谁最后 SetWindowPos
+        // 谁在上面（见 计划-底层对接界面.md 4.1 的"层序"纪律）。只在这一处抬，
+        // 别处不许再抬它，否则会出现"面板偶尔被自己的笔迹层盖住"。
+        if (_uiInputShown && _uiInputHwnd != IntPtr.Zero)
+            Native.SetWindowPos(_uiInputHwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
+                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
     }
 
     // =====================================================================
@@ -1261,6 +1289,9 @@ public class InkEngine
         //  1) 这一段必须**排在穿透判断之前**——不然开着穿透时界面永远收不到按下；
         //  2) 传给界面的是**逻辑屏幕坐标**，不是画布坐标。界面的布局与绘制都在
         //     屏幕坐标里，喂它画布坐标的话相机一滚，命中就整体偏掉一块。
+        //
+        // 注：面板在实际产品里由"接输入小窗"（方案 B）接管，走的不是这条路；
+        // 这里留着是**兜底**——万一那块小窗没建起来，至少非穿透模式下还能用。
         if (UiPointerDown(screenX, screenY, pressure, ptype == Native.PT_PEN, inverted))
         {
             _drawing = false;
@@ -1611,6 +1642,9 @@ public class InkEngine
     {
         var list = new List<IntPtr>(_windows.Count);
         foreach (var w in _windows) list.Add(w.Hwnd);
+        // 抓屏时要连"接输入小窗"一起藏：它是 1/255 的一层灰，肉眼看不见，
+        // 但拍进图里就是一层脏（截图界面永远不该出现在截图里）。
+        if (_uiInputHwnd != IntPtr.Zero) list.Add(_uiInputHwnd);
         return list.ToArray();
     }
 
@@ -1990,6 +2024,11 @@ public class InkEngine
         {
             if (PassThrough || !PointerInside || LastPointerType == Native.PT_TOUCH)
                 return ToolCursorShape.None;
+
+            // 指针停在面板上（接输入小窗接管了）：这一圈落点反馈该消失。
+            // 不判这一条的话，指针移到面板上之后，覆盖层收不到任何指针消息，
+            // 上一帧的圆环会**留在屏幕上不动**——看起来就像卡住了。
+            if (_uiHover) return ToolCursorShape.None;
 
             // 规则一句话：**鼠标没有笔尖，所以悬停和书写都要画**；
             // **手写笔的笔尖本身就是落点**，一落笔就不该再跟一个圈
@@ -2683,6 +2722,14 @@ public class InkEngine
         }
         // 只写"改过的"键位；没改过就不碰用户的配置文件。
         if (Keys.Dirty) InkSettings.Save(Keys);
+
+        if (_uiInputHwnd != IntPtr.Zero)
+        {
+            Native.DestroyWindow(_uiInputHwnd);
+            _uiInputHwnd = IntPtr.Zero;
+            _uiInputShown = false;
+        }
+
         _windows.Clear();
         s_map.Clear();
         Cursors.DisposeAll();
@@ -2918,6 +2965,167 @@ public class InkEngine
         long v = lParam.ToInt64();
         x = (short)(v & 0xFFFF);
         y = (short)((v >> 16) & 0xFFFF);
+    }
+
+    // ---- 面板的"接输入小窗"（方案 B）--------------------------------------
+
+    /// <summary>
+    /// 每次渲染前调用一次：让接输入小窗跟着界面这一刻占的地方走。
+    /// 界面隐藏或没占地方时把它藏起来——藏起来就等于"不存在于输入里"。
+    /// </summary>
+    private void UpdateUiInputWindow()
+    {
+        var ui = Ui;
+        RectF logical = ui != null && ui.Visible ? ui.QueryBounds() : RectF.Empty;
+
+        if (logical.IsEmpty)
+        {
+            if (_uiInputShown && _uiInputHwnd != IntPtr.Zero)
+            {
+                Native.ShowWindow(_uiInputHwnd, Native.SW_HIDE);
+                _uiInputShown = false;
+                _uiHover = false;
+            }
+            return;
+        }
+
+        EnsureUiInputWindow();
+        if (_uiInputHwnd == IntPtr.Zero) return;
+
+        // 逻辑 → 物理只在这里做一次（界面的坐标系永远只有逻辑那一套）。
+        var phys = new RectF
+        {
+            MinX = logical.MinX * DpiScale, MinY = logical.MinY * DpiScale,
+            MaxX = logical.MaxX * DpiScale, MaxY = logical.MaxY * DpiScale,
+        };
+
+        if (_uiInputShown && phys.Equals(_uiInputRect)) return;
+
+        Native.SetWindowPos(_uiInputHwnd, Native.HWND_TOPMOST,
+            (int)MathF.Floor(phys.MinX), (int)MathF.Floor(phys.MinY),
+            Math.Max(1, (int)MathF.Ceiling(phys.MaxX - phys.MinX)),
+            Math.Max(1, (int)MathF.Ceiling(phys.MaxY - phys.MinY)),
+            Native.SWP_NOACTIVATE | (_uiInputShown ? 0 : Native.SWP_SHOWWINDOW));
+
+        _uiInputRect = phys;
+        _uiInputShown = true;
+    }
+
+    private void EnsureUiInputWindow()
+    {
+        if (_uiInputHwnd != IntPtr.Zero) return;
+
+        long exStyle = Native.WS_EX_TOPMOST | Native.WS_EX_TOOLWINDOW
+                     | Native.WS_EX_NOACTIVATE | Native.WS_EX_LAYERED;
+        _uiInputHwnd = Native.CreateWindowEx(exStyle, _className, "InkTeachUiInput",
+            0x80000000L /*WS_POPUP*/, 0, 0, 1, 1,
+            IntPtr.Zero, IntPtr.Zero, _hInstance, IntPtr.Zero);
+
+        if (_uiInputHwnd == IntPtr.Zero)
+        {
+            Console.WriteLine("界面接输入小窗创建失败: " + Marshal.GetLastWin32Error()
+                              + "（面板在穿透模式下会点不动）");
+            return;
+        }
+
+        // 1/255 的不透明度：肉眼看不见，但对命中测试来说它**实实在在地在这**。
+        Native.SetLayeredWindowAttributes(_uiInputHwnd, 0, 1, Native.LWA_ALPHA);
+    }
+
+    /// <summary>
+    /// 接输入小窗的消息。它不画任何东西，只负责把指针事件翻成界面事件。
+    /// 坐标一律是**物理屏幕坐标**——<c>UiPointer*</c> 那三个包装负责除以 DPI，
+    /// 跟覆盖层那条路完全同一套口径。
+    /// </summary>
+    private IntPtr UiInputWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        switch (msg)
+        {
+            // 这块就是面板本身，不需要再判断"落在面板里的哪个位置"。
+            case Native.WM_NCHITTEST:
+                _cntNcHitTest++; _cntNcHitClient++;
+                return new IntPtr(Native.HTCLIENT);
+
+            // 点面板不许把下层程序的焦点抢走（老师点一下按钮，PPT 还是前台）。
+            case Native.WM_MOUSEACTIVATE:
+                return new IntPtr(Native.MA_NOACTIVATE);
+
+            case Native.WM_ERASEBKGND:
+                return new IntPtr(1);
+
+            case Native.WM_PAINT:
+                Native.BeginPaint(hWnd, out var ps);
+                Native.EndPaint(hWnd, ref ps);
+                return IntPtr.Zero;
+
+            case Native.WM_POINTERENTER:
+                _uiHover = true; _dirty = true; ApplyCursor();
+                return IntPtr.Zero;
+
+            case Native.WM_POINTERLEAVE:
+                _uiHover = false; _dirty = true; ApplyCursor();
+                return IntPtr.Zero;
+
+            case Native.WM_POINTERDOWN:
+            {
+                uint id = (uint)(wParam.ToInt64() & 0xFFFF);
+                if (!ReadPointer(id, out float sx, out float sy, out float pressure,
+                                 out bool inverted, out uint ptype))
+                    return IntPtr.Zero;
+                StampInput(); _cntDown++;
+                LastPointerType = ptype;
+                _uiHover = true;
+
+                if (UiPointerDown(sx, sy, pressure, ptype == Native.PT_PEN, inverted))
+                {
+                    // 界面也要捕获：在按钮上滑开、拖出面板，都要继续收到消息。
+                    Native.SetCapture(hWnd);
+                }
+                // 界面没吃这一口也**不落墨、不透给下层**：QueryBounds 声明的就是
+                // 界面的地盘（面板底下的墨看不见，将来面板一挪又冒出来）。
+                _dirty = true;
+                ApplyCursor();
+                return IntPtr.Zero;
+            }
+
+            case Native.WM_POINTERUPDATE:
+            {
+                uint id = (uint)(wParam.ToInt64() & 0xFFFF);
+                if (!ReadPointer(id, out float sx, out float sy, out float pressure,
+                                 out bool inverted, out uint ptype))
+                    return IntPtr.Zero;
+                StampInput(); _cntMove++;
+                LastPointerType = ptype;
+                _uiHover = true;
+                UiPointerMove(sx, sy, pressure, ptype == Native.PT_PEN, inverted);
+                _dirty = true;
+                return IntPtr.Zero;
+            }
+
+            case Native.WM_POINTERUP:
+            {
+                uint id = (uint)(wParam.ToInt64() & 0xFFFF);
+                if (ReadPointer(id, out float sx, out float sy, out float pressure,
+                                out bool inverted, out _))
+                {
+                    StampInput(); _cntUp++;
+                    UiPointerUp(sx, sy, pressure, false, inverted);
+                }
+                Native.ReleaseCapture();
+                UiCapturing = false;
+                _dirty = true;
+                ApplyCursor();
+                return IntPtr.Zero;
+            }
+
+            case Native.WM_POINTERCAPTURECHANGED:
+                _cntCaptureLost++;
+                UiCapturing = false;
+                _uiHover = false;
+                _dirty = true;
+                return IntPtr.Zero;
+        }
+        return Native.DefWindowProc(hWnd, msg, wParam, lParam);
     }
 
     /// <summary>控制台用法说明。产品界面不会走这里。</summary>
