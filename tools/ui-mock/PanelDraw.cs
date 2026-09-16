@@ -32,8 +32,15 @@ internal static class PanelDraw
                      ToolEraser = 5, ToolSelect = 6, ToolShapes = 7, ToolCapture = 8,
                      ToolUndo = 9, ToolRedo = 10, ToolMore = 11;
 
-    /// <summary>极简档：笔 / 橡皮 / 白板 ＋ 一个永远的"更多"（下标是 Tools 里的原始下标）。</summary>
-    public static readonly int[] MiniTools = { ToolPen, ToolEraser, ToolBoard, ToolMore };
+    /// <summary>
+    /// 极简档"钉哪几个"（一个**集合**，不是顺序）。
+    /// 顺序由 <see cref="MiniTools"/> 从完整档的顺序里**过滤**出来 ——
+    /// 这样"同一个工具在两档里相对位置一致"是自动成立的，不是靠人手抄一遍。
+    /// </summary>
+    static readonly int[] MiniSet = { ToolMouse, ToolBoard, ToolPen, ToolEraser, ToolUndo, ToolMore };
+
+    /// <summary>极简档实际显示的顺序＝完整顺序过滤（鼠标/白板/笔/橡皮/后撤/更多）。</summary>
+    public static int[] MiniTools => Array.FindAll(AllToolsIndex, x => Array.IndexOf(MiniSet, x) >= 0);
 
     /// <summary>完整档：全部工具。</summary>
     public static int[] FullTools => AllToolsIndex;

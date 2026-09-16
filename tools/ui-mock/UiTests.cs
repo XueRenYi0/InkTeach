@@ -279,20 +279,35 @@ internal static class UiTests
             return null;
         });
 
-        Check("极简档 = 笔 / 橡皮 / 白板 / 更多", () =>
+        Check("极简档 = 鼠标 / 白板 / 笔 / 橡皮 / 后撤 / 更多", () =>
         {
             var vis = PanelDraw.VisibleTools(new PanelState { Mini = true });
-            if (vis.Length != 4) return $"可见工具数是 {vis.Length}，应为 4";
-            if (vis[0] != PanelDraw.ToolPen) return "第一格不是笔";
-            if (vis[1] != PanelDraw.ToolEraser) return "第二格不是橡皮";
-            if (vis[2] != PanelDraw.ToolBoard) return "第三格不是白板";
-            if (vis[3] != PanelDraw.ToolMore) return "第四格不是更多";
+            var want = new[] { PanelDraw.ToolMouse, PanelDraw.ToolBoard, PanelDraw.ToolPen,
+                               PanelDraw.ToolEraser, PanelDraw.ToolUndo, PanelDraw.ToolMore };
+            if (vis.Length != want.Length) return $"可见工具数是 {vis.Length}，应为 {want.Length}";
+            for (int i = 0; i < want.Length; i++)
+                if (vis[i] != want[i]) return $"第 {i + 1} 格是「{PanelDraw.Tools[vis[i]].Name}」，应为「{PanelDraw.Tools[want[i]].Name}」";
+            return null;
+        });
+
+        Check("极简档的顺序必须是完整档顺序的子序列", () =>
+        {
+            // 这条是"两档相对位置一致"的硬约束：同一个人在两档之间切换，不用重新记位置。
+            var mini = PanelDraw.VisibleTools(new PanelState { Mini = true });
+            var full = PanelDraw.VisibleTools(new PanelState { Mini = false });
+            int j = 0;
+            foreach (int t in mini)
+            {
+                while (j < full.Length && full[j] != t) j++;
+                if (j >= full.Length) return $"「{PanelDraw.Tools[t].Name}」在完整档里的位置排在极简档之前（顺序不一致）";
+                j++;
+            }
             return null;
         });
 
         Check("三个界面档位：项数与宽度都对得上", () =>
         {
-            var expect = new[] { 4, 12, 12 };          // 极简 / 自定义（默认=全部）/ 完整
+            var expect = new[] { 6, 12, 12 };          // 极简 / 自定义（默认=全部）/ 完整
             for (int p = 0; p < PanelDraw.Profiles.Length; p++)
             {
                 var st = new PanelState { Profile = p, Slim = true, E = 1 };

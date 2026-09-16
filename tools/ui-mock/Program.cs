@@ -265,7 +265,7 @@ internal static class Program
             ("20-瘦身档-橡皮",         St(rail: 1, tool: 4, eraser: 1, groove: 1, slim: true), false, 0, 0),
             ("21-瘦身档-贴PPT",        St(tool: 1, color: 0, slim: true),            true, 900, 420),
             ("22-更多抽屉",            St(tool: 1, color: 0, more: true),            false, 0, 0),
-            ("23-极简档-笔（4 格含白板）", St(tool: 2, color: 0, mini: true, rail: 1), false, 0, 0),
+            ("23-极简档-笔（6 格）", St(tool: 2, color: 0, mini: true, rail: 1), false, 0, 0),
             ("24-极简档-橡皮",         St(tool: 5, color: 0, mini: true, rail: 1, eraser: 1, groove: 1), false, 0, 0),
             ("25-极简档-更多（含三档切换）", St(tool: 2, color: 0, mini: true, more: true), false, 0, 0),
             ("26-白板-开着（盖住 PPT）", St(tool: 1, color: 0, board: true, boardColor: 0), true, 900, 420),
@@ -325,12 +325,12 @@ internal static class Program
             ClearHold = hold, ActionFlash = flash,
             Slim = slim,
             MoreOpen = more,
-            Mini = mini,
             BoardOn = board, BoardColor = boardColor,
             Profile = (unpin != null) ? PanelDraw.ProfileCustom : PanelDraw.ProfileFull,
             CustomTools = (unpin != null)
                 ? Array.FindAll(PanelDraw.AllToolsIndex, x => Array.IndexOf(unpin, x) < 0)
                 : PanelDraw.AllToolsIndex,
+            Mini = mini,   // ← 必须最后设：mini:true 时要盖过上面的 Profile
         };
 
     // =====================================================================
