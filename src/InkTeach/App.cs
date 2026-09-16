@@ -5186,6 +5186,9 @@ internal sealed class App : InkEngine.InkEngine
             if (_panelShowDrawer) ui.OpenDrawerForTest();   // --drawer：连抽屉一起出图
             SettleFrames(500);
 
+            // 优先离屏出图（锁屏 / 远程也能出，图里不混桌面）
+            if (OffscreenShot(path)) return;
+
             var b = ui.QueryBounds();
             int x = (int)MathF.Floor(b.MinX * DpiScale) - 30;
             int y = (int)MathF.Floor(b.MinY * DpiScale) - 30;
@@ -5305,7 +5308,7 @@ internal sealed class App : InkEngine.InkEngine
         // 总高在这两档之间"；两条精确的高度由上面那两条"色线/设置条"专测。
         Check("展开成一条带子（主条高 48、宽 > 600）",
               MathF.Abs((barOnly.MaxY - barOnly.MinY) - 48f) < 1f
-              && barH >= 56f && barH <= 88f
+              && barH >= 52f && barH <= 88f      // 色线时 54、设置条时 82
               && barW > 600f,
               $"占用 {barW:F0}×{barH:F0}（主条高 {barOnly.MaxY - barOnly.MinY:F0}）");
 
@@ -5339,37 +5342,61 @@ internal sealed class App : InkEngine.InkEngine
               $"笔画 {strokes0} → {Doc.Strokes.Count}");
 
         // ---- ⑥ 上带：色片 / 滑条 / 分段（都走命令通道）----
+        // 先取消"钉住"：前面点过工具，色带是**钉住展开**的（假面板的规矩：
+        // 点工具就把它的设置条留在那儿）。再点一次同一个工具 = 收起。
+        var penCellAgain = ui.CellRectForTest(3);
+        ClickPhysical((penCellAgain.MinX + penCellAgain.MaxX) * 0.5f * DpiScale,
+                      (penCellAgain.MinY + penCellAgain.MaxY) * 0.5f * DpiScale);
+        SettleFrames(300);
+        Check("再点一次同一个工具 = 收起它的设置条",
+              !ui.RailOpenForTest && ui.BandHeightForTest < 12f,
+              $"上带高 {ui.BandHeightForTest:F0}");
+
         // 先看"平时那条色线"：指针在画布上，上带应该只有 6 像素高。
         var line = ui.BandRectForTest;
         Check("平时上带收成一条色线",
               MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandLine) < 1.5f && !ui.RailOpenForTest,
               $"上带高 {ui.BandHeightForTest:F0}（色线应为 {InkUi.Tokens.BandLine:F0}）");
 
-        // 碰一下就该长成完整的设置条（用户喜欢的就是这条）。
+        // 碰一下（要停 120 毫秒，**路过不算数**）就该长成完整的设置条。
         SendMouse((int)((line.MinX + line.MaxX) * 0.5f * DpiScale),
                   (int)((line.MinY + line.MaxY) * 0.5f * DpiScale), 0);
+        SettleFrames(60);
+        bool stillLine = !ui.RailOpenForTest;          // 刚进热区 60 毫秒：还该是色线
         SettleFrames(400);
         Check("碰到色线就长成设置条",
-              ui.RailOpenForTest && MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandHeight) < 1.5f,
-              $"上带高 {ui.BandHeightForTest:F0}（设置条应为 {InkUi.Tokens.BandHeight:F0}）");
+              stillLine && ui.RailOpenForTest
+              && MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandHeight) < 1.5f,
+              $"进热区 60ms 时高 {InkUi.Tokens.BandLine:F0}（该还没动），400ms 后高 {ui.BandHeightForTest:F0}"
+              + $"（设置条应为 {InkUi.Tokens.BandHeight:F0}）");
+
+        // 点工具 = 把它的设置条**钉住**：指针移开也不收（不然选项来不及选）
+        var penCellPin = ui.CellRectForTest(3);
+        ClickPhysical((penCellPin.MinX + penCellPin.MaxX) * 0.5f * DpiScale,
+                      (penCellPin.MinY + penCellPin.MaxY) * 0.5f * DpiScale);
+        SettleFrames(200);
+        SendMouse((int)(_virtualX + _virtualW * 0.7f), (int)(_virtualY + _virtualH * 0.3f), 0);
+        SettleFrames(600);                              // 离开热区很久
+        Check("点工具后色带钉住（指针移开也不收）",
+              ui.RailPinnedForTest && ui.RailOpenForTest,
+              $"钉住 = {ui.RailPinnedForTest}，张开 = {ui.RailOpenForTest}，高 {ui.BandHeightForTest:F0}");
 
         var bandRect = ui.BandRectForTest;
         Check("展开后有上带", bandRect.MaxY - bandRect.MinY > 20f,
               $"上带 {bandRect.MaxX - bandRect.MinX:F0}×{bandRect.MaxY - bandRect.MinY:F0}");
 
-        // 先点回「笔」那一格：上带换成笔的设置条（色片 ＋ 粗细）。
-        // 不点的话上带还停在刚才那个白板的板色上——这是设计要的（上带＝当前按钮的设置），
-        // 自检必须按用户真实的操作顺序走。
-        var penCell2 = ui.CellRectForTest(3);
-        ClickPhysical((penCell2.MinX + penCell2.MaxX) * 0.5f * DpiScale,
-                      (penCell2.MinY + penCell2.MaxY) * 0.5f * DpiScale);
-        SettleFrames(150);
+        // 上带现在**已经钉在「笔」上**（上一条"点工具后色带钉住"就是点它钉住的），
+        // 所以这里不用再点一次——**再点一次反而会把它收起来**（新语义：再点当前工具＝收起）。
+        // 第一版用例在这里又点了一下，结果后面点色片全落空。
+        Check("上带是笔的设置条（色片行）", ui.RailPinnedForTest && ui.RailOpenForTest,
+              $"钉住 = {ui.RailPinnedForTest}，张开 = {ui.RailOpenForTest}");
 
         // 挑一个**不是默认色**的色片（默认笔色就是红，用红当期望值会假通过——
         // 这一条自检第一版就是这么假通过的，被"换色成功"蒙了一次）。
         var swatch = ui.SwatchRectForTest(6);                 // 第 7 个色片：绿
-        ClickPhysical((swatch.MinX + swatch.MaxX) * 0.5f * DpiScale,
-                      (swatch.MinY + swatch.MaxY) * 0.5f * DpiScale);
+        float swx = (swatch.MinX + swatch.MaxX) * 0.5f * DpiScale;
+        float swy = (swatch.MinY + swatch.MaxY) * 0.5f * DpiScale;
+        ClickPhysical(swx, swy);
         var wantColor = InkUi.Tokens.Palette[6].Color;
         var gotColor = Host.State.PaletteBase;
         var defaultColor = InkPalette.PenDefault;

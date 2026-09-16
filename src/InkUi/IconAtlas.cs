@@ -123,16 +123,39 @@ internal static class IconAtlas
                 ctx.FillEllipse(new Ellipse(new Vector2(7f, 14.8f), 2.9f, 2.9f), brush);
                 break;
 
-            default:    // 锥形 ＋ 落点光环（落点外面再套一圈，像"正在打的那一点"）
+            case 3:     // 锥形 ＋ 落点光环（落点外面再套一圈，像"正在打的那一点"）
                 ctx.DrawLine(new Vector2(7.6f, 16.4f), new Vector2(20.5f, 3.5f), brush, 1.7f, _round);
                 ctx.DrawLine(new Vector2(8.4f, 18.4f), new Vector2(21.5f, 13.5f), brush, 1.7f, _round);
                 ctx.FillEllipse(new Ellipse(new Vector2(6f, 18f), 2.7f, 2.7f), brush);
                 ctx.DrawEllipse(new Ellipse(new Vector2(6f, 18f), 4.3f, 4.3f), brush, 1.1f);
                 break;
+
+            default:    // "PowerPoint 那颗红点"：一个实心红点 ＋ 一圈很淡的光晕
+                ctx.FillEllipse(new Ellipse(new Vector2(12f, 12f), 7.5f, 7.5f),
+                                BrushOf(ctx, new Color4(0.95f, 0.18f, 0.18f, 0.22f)));
+                ctx.FillEllipse(new Ellipse(new Vector2(12f, 12f), 3.2f, 3.2f),
+                                BrushOf(ctx, new Color4(0.95f, 0.18f, 0.18f, 1f)));
+                break;
         }
 
         ctx.Transform = saved;
     }
+
+    /// <summary>
+    /// 自绘图标偶尔需要一个**固定颜色**的画刷（比如那颗红点：它不是"图标色"，
+    /// 它就是激光本身的颜色）。按颜色缓存，不每帧重建。
+    /// </summary>
+    private static ID2D1SolidColorBrush BrushOf(ID2D1DeviceContext ctx, Color4 c)
+    {
+        uint key = ((uint)(c.R * 255) << 24) | ((uint)(c.G * 255) << 16)
+                 | ((uint)(c.B * 255) << 8) | (uint)(c.A * 255);
+        if (_fixed.TryGetValue(key, out var b)) return b;
+        b = ctx.CreateSolidColorBrush(c, null);
+        _fixed[key] = b;
+        return b;
+    }
+
+    private static readonly Dictionary<uint, ID2D1SolidColorBrush> _fixed = new();
 
     /// <summary>产品里用哪一个激光笔图标（改这一个数字就能换）。</summary>
     public const int LaserDefault = 2;

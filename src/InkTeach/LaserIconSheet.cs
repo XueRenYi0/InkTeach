@@ -18,14 +18,21 @@ internal sealed class LaserIconSheet : IOverlayUi
     private RectF _bounds;
     private readonly Dictionary<uint, ID2D1SolidColorBrush> _brushes = new();
 
-    private static readonly (int Variant, string Name)[] Items =
+    /// <summary>一行一个候选：自绘的用 Variant，上游 Fluent 的用 Icon 名字。</summary>
+    private static readonly (int Variant, string Icon, string Name)[] Items =
     {
-        (0, "① 细光束（现在）"),
-        (1, "② 锥形光束"),
-        (2, "③ 加重笔+光束"),
-        (3, "④ 锥形+落点光环"),
-        // 上游 Material 的 stylus_laser 不列进来：它是 960 网格 ＋ 负原点，
-        // 而且设计里定过"一个界面只用一个图标库"（Fluent），混库线宽对不上。
+        (0, null, "① 细光束（自绘）"),
+        (1, null, "② 锥形光束（自绘）"),
+        (2, null, "③ 加重笔+光束（自绘 · 现在用这个）"),
+        (3, null, "④ 锥形+落点光环（自绘）"),
+        (4, null, "⑤ 红点（PowerPoint 那种）"),
+        (0, "laserFlash", "⑥ Fluent Flash（闪电）"),
+        (0, "laserFlashlight", "⑦ Fluent Flashlight（手电）"),
+        (0, "laserRecord", "⑧ Fluent Record（圆点）"),
+        (0, "laserTarget", "⑨ Fluent Target（靶心）"),
+        (0, "laserWand", "⑩ Fluent Wand（魔杖）"),
+        (0, "laserSparkle", "⑪ Fluent Sparkle（星芒）"),
+        (0, "laserCircle", "⑫ Fluent Circle（空心圆）"),
     };
 
     public string Name => "激光图标对照";
@@ -79,11 +86,11 @@ internal sealed class LaserIconSheet : IOverlayUi
             // 真实尺寸（24，画在一个 40 的按钮格里）
             var cell = new RectF { MinX = _bounds.MinX + 210f, MinY = y + 4f, MaxX = _bounds.MinX + 250f, MaxY = y + 44f };
             DrawCellBg(ctx, cell);
-            DrawOne(ctx, cell, 24f, ink, soft, Items[i].Variant);
+            DrawOne(ctx, cell, 24f, ink, soft, Items[i]);
 
             // 放大一倍（48）
             var big = new RectF { MinX = _bounds.MinX + 270f, MinY = y - 8f, MaxX = _bounds.MinX + 350f, MaxY = y + 72f };
-            DrawOne(ctx, big, 48f, ink, soft, Items[i].Variant);
+            DrawOne(ctx, big, 48f, ink, soft, Items[i]);
         }
     }
 
@@ -93,9 +100,16 @@ internal sealed class LaserIconSheet : IOverlayUi
         ctx.FillRoundedRectangle(new RoundedRectangle(box, 8f, 8f), Brush(ctx, new Color4(0f, 0f, 0f, 0.07f)));
     }
 
-    private void DrawOne(ID2D1DeviceContext ctx, RectF box, float size, Color4 ink, Color4 soft, int variant)
+    private void DrawOne(ID2D1DeviceContext ctx, RectF box, float size, Color4 ink, Color4 soft,
+                         (int Variant, string Icon, string Name) item)
     {
-        InkUi.IconAtlas.DrawLaser(ctx, box, size, Brush(ctx, ink), Brush(ctx, soft), variant);
+        // 上游图标按"图标色"画；自绘的激光那几个按当前笔色/红的来
+        if (item.Icon != null)
+        {
+            InkUi.IconAtlas.DrawCentered(ctx, item.Icon, box, size, Brush(ctx, ink));
+            return;
+        }
+        InkUi.IconAtlas.DrawLaser(ctx, box, size, Brush(ctx, ink), Brush(ctx, soft), item.Variant);
     }
 
     private ID2D1SolidColorBrush Brush(ID2D1DeviceContext ctx, Color4 c)

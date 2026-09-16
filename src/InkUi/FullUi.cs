@@ -137,6 +137,17 @@ public sealed class FullUi : IOverlayUi
     private readonly Anim _peek;           // 0 = 只剩露头，1 = 完全显示
     private readonly Anim _rail;           // 0 = 平时那条 6 像素色线，1 = 完整设置条
     private bool _railHover;
+
+    /// <summary>
+    /// 色带被"钉住展开"了吗。点一个工具就把它的设置条留在那儿——
+    /// 不钉的话指针一移开它就收，选项根本来不及选（假面板的注释写着这一条）。
+    /// 再点一次同一个工具 = 收起（各家软件的通例，用户也认这个）。
+    /// </summary>
+    private bool _railPinned;
+
+    /// <summary>悬停意图的两个时刻：进热区 120ms 才展开、离开 220ms 才收回——路过不算数。</summary>
+    private double _railEnterAtMs = double.NegativeInfinity;
+    private double _railExitAtMs = double.NegativeInfinity;
     private bool _hoverInside;             // 指针在"看得见的那一块"里
     private double _leftAtMs = double.NegativeInfinity;
 
@@ -188,6 +199,11 @@ public sealed class FullUi : IOverlayUi
             // 没有帧就没有时机去收（引擎只在有脏区或界面说要动时才渲染）。
             if (_peek.Running) return true;
             if (_rail.Running) return true;
+            // 色带正在"等悬停意图"时也得给帧：不然 120 毫秒到了没人去展开它，
+            // 或者 220 毫秒到了没人去收它。展开/收起一旦完成，这两个条件立刻为假 → 空闲回到 0 帧。
+            if (BandVisible() && !_railPinned
+                && ((_railHover && _rail.Value < 0.5f) || (!_railHover && _rail.Value > 0f)))
+                return true;
             if (_hideEnabled && !_hoverInside && _peek.Value > 0f) return true;
             return _expand.Running;
         }
@@ -547,8 +563,36 @@ public sealed class FullUi : IOverlayUi
     /// <summary>色线 / 设置条该不该张开。判据：指针碰到它、或者正在拖滑条。</summary>
     private void UpdateRail()
     {
-        if (!BandVisible()) { _rail.To(0f, 0); _railHover = false; return; }
-        _rail.To(_railHover || _sliderDragging ? 1f : 0f, Tokens.RailMs);
+        if (!BandVisible())
+        {
+            _rail.To(0f, 0);
+            _railHover = false;
+            _railPinned = false;
+            return;
+        }
+
+        // 钉住 / 正在拖滑条：一直开着，不参与悬停那套计时
+        if (_railPinned || _sliderDragging)
+        {
+            _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
+            _rail.To(1f, Tokens.RailMs);
+            return;
+        }
+
+        double now = _host.NowMs;
+        if (_railHover)
+        {
+            _railExitAtMs = double.NegativeInfinity;
+            if (_rail.Value >= 0.5f) { _railEnterAtMs = double.NegativeInfinity; return; }
+            if (double.IsNegativeInfinity(_railEnterAtMs)) _railEnterAtMs = now;
+            else if (now - _railEnterAtMs >= 120) _rail.To(1f, Tokens.RailMs);
+            return;
+        }
+
+        _railEnterAtMs = double.NegativeInfinity;
+        if (_rail.Value <= 0.001f) { _railExitAtMs = double.NegativeInfinity; return; }
+        if (double.IsNegativeInfinity(_railExitAtMs)) _railExitAtMs = now;
+        else if (now - _railExitAtMs >= 220) _rail.To(0f, Tokens.RailMs);
     }
 
     /// <summary>
@@ -869,6 +913,15 @@ public sealed class FullUi : IOverlayUi
         int chip = HitChip(p.X, p.Y);
         if (chip >= 0) { TogglePin(chip); return true; }
 
+        // **滑条要排在工具格前面**：它在面板最下沿，和工具格的矩形是重叠的。
+        // 排在后面的话，按最下沿那一条会被当成"点了某个工具"（假面板里 groove 也是先判的）。
+        if (BandHasSlider && Widgets.SliderHit(SliderRect()).Contains(p.X, p.Y))
+        {
+            _sliderDragging = true;
+            DragSlider(p.X);
+            return true;
+        }
+
         int idx = HitCell(p.X, p.Y);
         if (idx >= 0)
         {
@@ -876,15 +929,9 @@ public sealed class FullUi : IOverlayUi
             return true;
         }
 
-        // 上带：滑条优先（它的可拖区域比视觉大一圈，会和色片/分段挨着）
+        // 上带：色片 / 分段（滑条已经在上面判过了）
         if (BandVisible())
         {
-            if (BandHasSlider && Widgets.SliderHit(SliderRect()).Contains(p.X, p.Y))
-            {
-                _sliderDragging = true;
-                DragSlider(p.X);
-                return true;
-            }
             int sw = HitSwatch(p.X, p.Y);
             if (sw >= 0) { ActivateSwatch(sw); return true; }
             int sg = HitSegment(p.X, p.Y);
@@ -1050,6 +1097,8 @@ public sealed class FullUi : IOverlayUi
             _press = -1;
             _dragging = false;
             _sliderDragging = false;
+            _railPinned = false;        // 钉住也属于临时状态：收起再展开不该还钉着
+            _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
         }
         Invalidate();
     }
@@ -1063,8 +1112,27 @@ public sealed class FullUi : IOverlayUi
         var cmd = _host.Commands;
         var st = _host.State;
 
-        // 点工具格时，上带跟着换成这个工具的设置（"上带＝这个按钮的设置条"）。
-        if (HasBand(idx)) _bandCell = idx;
+        // 点工具格时，上带跟着换成这个工具的设置（"上带＝这个按钮的设置条"），
+        // 并且**钉住展开**——不钉的话指针一移开就收了，选项来不及选。
+        //
+        // 再点一次**同一个**工具 = 收起它自己的设置条（假面板的用法，也是各家通例）。
+        if (HasBand(idx))
+        {
+            // "再点一次"判的是**当前工具**（不是"上带现在显示谁"）：
+            // 点过白板之后上带显示板色，但工具还是笔——这时点笔就是收起它，不是换内容。
+            // （假面板判的就是 `i == State.Tool`，我第一版按"上带显示谁"判，行为就对不上了。）
+            bool sameAsCurrentTool = idx == CellForTool(_host.State.Tool);
+            if (sameAsCurrentTool && _railPinned)
+            {
+                _railPinned = false;
+                _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
+                _rail.To(0f, Tokens.RailMs);
+                Invalidate();
+                return;                      // 收起时不再重复执行这一格的动作
+            }
+            _bandCell = idx;
+            _railPinned = true;
+        }
 
         switch (idx)
         {
@@ -1088,6 +1156,8 @@ public sealed class FullUi : IOverlayUi
             case 12:                                         // 「更多」：开合抽屉
                 _drawerOpen = !_drawerOpen;
                 _drawerHover = -1;
+                // 抽屉和色带抢同一块地方：开抽屉就把色带收掉（假面板同一条）
+                if (_drawerOpen) { _railPinned = false; _rail.To(0f, Tokens.RailMs); }
                 break;
         }
         Invalidate();
@@ -1709,6 +1779,9 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>自检用：色线张开没有（false = 平时那条 6 像素的线）。</summary>
     internal bool RailOpenForTest => RailOpen;
+
+    /// <summary>自检用：色带是不是被"钉住展开"的（点工具之后应该钉住）。</summary>
+    internal bool RailPinnedForTest => _railPinned;
 
     /// <summary>自检用：上带这一刻多高（6 = 色线，34 = 完整设置条）。</summary>
     internal float BandHeightForTest => BandRect().MaxY - BandRect().MinY;
