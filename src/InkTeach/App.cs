@@ -138,6 +138,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PanelTest();
         }
+        else if (mode == "--panelshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PanelShow(args.Length > 1 ? args[1] : "reports/panel-第一版.png");
+        }
         else if (mode == "--erasertest")
         {
             _autoExitAt = double.MaxValue;
@@ -5041,6 +5047,36 @@ internal sealed class App : InkEngine.InkEngine
     /// 挂法用的是 `SetUiFactory`——产品的挂法。界面崩了引擎要能自己再造一个，
     /// 没工厂就只能一路走到重启（见 计划-底层对接界面.md 4.5）。
     /// </summary>
+    /// <summary>
+    /// 把界面挂上、展开、出图（给人看的，不判红绿）。
+    /// 出图这条链子是这个仓库一贯的验收方式：观感的事眼睛说了算，数字只负责证明没坏。
+    /// </summary>
+    private void PanelShow(string path)
+    {
+        SetUiFactory(() => new InkUi.FullUi());
+        Tool = Tool.Pen;
+        BoardOn = true;                      // 白板打底：截出来的图里没有桌面上的杂东西
+        SettleFrames(400);
+
+        if (CurrentUi is InkUi.FullUi ui)
+        {
+            ui.SnapForTest();                // 一步展开，不用等 200 毫秒
+            SettleFrames(500);
+
+            var b = ui.QueryBounds();
+            int x = (int)MathF.Floor(b.MinX * DpiScale) - 30;
+            int y = (int)MathF.Floor(b.MinY * DpiScale) - 30;
+            int w = (int)MathF.Ceiling((b.MaxX - b.MinX) * DpiScale) + 60;
+            int h = (int)MathF.Ceiling((b.MaxY - b.MinY) * DpiScale) + 60;
+            bool ok = ScreenProbe.SaveBmp(path, x, y, w, h);
+            Console.WriteLine(ok
+                ? $"已出图 {path}（面板 {b.MaxX - b.MinX:F0}×{b.MaxY - b.MinY:F0} 逻辑像素）"
+                : "出图失败");
+            ExitCode = ok ? 0 : 1;
+        }
+        _quit = true;
+    }
+
     private void PanelTest()
     {
         Console.WriteLine();
