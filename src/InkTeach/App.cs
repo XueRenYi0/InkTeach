@@ -5154,9 +5154,12 @@ internal sealed class App : InkEngine.InkEngine
         // ---- ③ 展开后的尺寸：算出来的宽，不是一个拍脑袋的数 ----
         var bar = ui.QueryBounds();
         float barW = bar.MaxX - bar.MinX, barH = bar.MaxY - bar.MinY;
-        Check("展开成一条带子（高 48、宽 > 600）",
-              MathF.Abs(barH - 48f) < 1f && barW > 600f,
-              $"占用 {barW:F0}×{barH:F0}");
+        var barOnly = ui.BarRectForTest;
+        Check("展开成一条带子（主条高 48、总高 86、宽 > 600）",
+              MathF.Abs((barOnly.MaxY - barOnly.MinY) - 48f) < 1f
+              && MathF.Abs(barH - 86f) < 1.5f
+              && barW > 600f,
+              $"占用 {barW:F0}×{barH:F0}（主条高 {barOnly.MaxY - barOnly.MinY:F0}）");
 
         // ---- ④ 点"笔"那一格：引擎状态真的变了（走的是命令通道）----
         Tool = Tool.Eraser;
@@ -5179,6 +5182,81 @@ internal sealed class App : InkEngine.InkEngine
         ClickPhysical(_virtualX + _virtualW * 0.5f, _virtualY + _virtualH * 0.45f);
         Check("面板外照常落墨", Doc.Strokes.Count > strokes0,
               $"笔画 {strokes0} → {Doc.Strokes.Count}");
+
+        // ---- ⑥ 上带：色片 / 滑条 / 分段（都走命令通道）----
+        var bandRect = ui.BandRectForTest;
+        Check("展开后有上带", bandRect.MaxY - bandRect.MinY > 20f,
+              $"上带 {bandRect.MaxX - bandRect.MinX:F0}×{bandRect.MaxY - bandRect.MinY:F0}");
+
+        // 先点回「笔」那一格：上带换成笔的设置条（色片 ＋ 粗细）。
+        // 不点的话上带还停在刚才那个白板的板色上——这是设计要的（上带＝当前按钮的设置），
+        // 自检必须按用户真实的操作顺序走。
+        var penCell2 = ui.CellRectForTest(3);
+        ClickPhysical((penCell2.MinX + penCell2.MaxX) * 0.5f * DpiScale,
+                      (penCell2.MinY + penCell2.MaxY) * 0.5f * DpiScale);
+        SettleFrames(150);
+
+        // 挑一个**不是默认色**的色片（默认笔色就是红，用红当期望值会假通过——
+        // 这一条自检第一版就是这么假通过的，被"换色成功"蒙了一次）。
+        var swatch = ui.SwatchRectForTest(6);                 // 第 7 个色片：绿
+        ClickPhysical((swatch.MinX + swatch.MaxX) * 0.5f * DpiScale,
+                      (swatch.MinY + swatch.MaxY) * 0.5f * DpiScale);
+        var wantColor = InkUi.Tokens.Palette[6].Color;
+        var gotColor = Host.State.PaletteBase;
+        var defaultColor = InkPalette.PenDefault;
+        bool isDefault = MathF.Abs(gotColor.R - defaultColor.R) < 0.02f
+                      && MathF.Abs(gotColor.G - defaultColor.G) < 0.02f
+                      && MathF.Abs(gotColor.B - defaultColor.B) < 0.02f;
+        Check("点色片换笔色",
+              MathF.Abs(wantColor.R - gotColor.R) < 0.02f
+              && MathF.Abs(wantColor.G - gotColor.G) < 0.02f
+              && MathF.Abs(wantColor.B - gotColor.B) < 0.02f
+              && !isDefault,
+              $"期望 ({wantColor.R:F2},{wantColor.G:F2},{wantColor.B:F2})，实际 ({gotColor.R:F2},{gotColor.G:F2},{gotColor.B:F2})");
+
+        float widthBefore = Host.State.Width;
+        var slider = ui.SliderRectForTest;
+        float sliderY = (slider.MinY + slider.MaxY) * 0.5f * DpiScale;
+        SendMouse((int)(slider.MinX * DpiScale), (int)sliderY, 0);                          SettleFrames(60);
+        SendMouse((int)(slider.MinX * DpiScale), (int)sliderY, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(50);
+        for (int i = 1; i <= 6; i++)
+        {
+            SendMouse((int)((slider.MinX + (slider.MaxX - slider.MinX) * i / 6f) * DpiScale),
+                      (int)sliderY, 0);
+            SettleFrames(25);
+        }
+        SendMouse((int)(slider.MaxX * DpiScale), (int)sliderY, Native.MOUSEEVENTF_LEFTUP);  SettleFrames(150);
+        Check("拖滑条改粗细", Host.State.Width > widthBefore + 5f,
+              $"粗细 {widthBefore:F1} → {Host.State.Width:F1}");
+
+        // 换工具（走引擎那条路，等同按热键）：上带要跟着换成"选择"的设置条
+        Host.Commands.SetTool(Tool.Marquee);
+        SettleFrames(150);
+        var lasso = ui.SegmentRectForTest(1);
+        ClickPhysical((lasso.MinX + lasso.MaxX) * 0.5f * DpiScale,
+                      (lasso.MinY + lasso.MaxY) * 0.5f * DpiScale);
+        Check("点分段切成套索", Host.State.SelectMode == SelectMode.Lasso,
+              $"选择方式 = {Host.State.SelectMode}（上带跟着工具换成选择才点得到）");
+
+        Host.Commands.SetTool(Tool.Pen);
+        SettleFrames(150);
+        var boardCell2 = ui.CellRectForTest(2);
+        ClickPhysical((boardCell2.MinX + boardCell2.MaxX) * 0.5f * DpiScale,
+                      (boardCell2.MinY + boardCell2.MaxY) * 0.5f * DpiScale);
+        SettleFrames(150);
+        var green = ui.SegmentRectForTest(1);                  // 白板三色里的"绿板"
+        ClickPhysical((green.MinX + green.MaxX) * 0.5f * DpiScale,
+                      (green.MinY + green.MaxY) * 0.5f * DpiScale);
+        var wantBoard = InkPalette.BoardPresets[1].Color;
+        var gotBoard = Host.State.BoardColor;
+        Check("点板色换成绿板",
+              BoardOn && MathF.Abs(wantBoard.R - gotBoard.R) < 0.02f
+              && MathF.Abs(wantBoard.G - gotBoard.G) < 0.02f
+              && MathF.Abs(wantBoard.B - gotBoard.B) < 0.02f,
+              $"板开 = {BoardOn}，板色 ({gotBoard.R:F2},{gotBoard.G:F2},{gotBoard.B:F2})");
+        Host.Commands.SetBoard(false);
+        Host.Commands.SetBoardColor(InkPalette.BoardPresets[0].Color);
+        SettleFrames(150);
 
         // ---- ⑥ 收起来，然后空闲必须 0 帧 ----
         var ball2 = ui.CellRectForTest(0);

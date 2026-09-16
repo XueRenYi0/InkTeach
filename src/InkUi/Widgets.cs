@@ -1,0 +1,80 @@
+using InkEngine;
+using Vortice.Direct2D1;
+using Vortice.DirectWrite;
+using Vortice.Mathematics;
+
+namespace InkUi;
+
+/// <summary>
+/// 界面用得着的几类元件：文字、色片、分段选择框、滑条。
+///
+/// 为什么只有这几类：界面是被"按钮带 ＋ 上带"两件事撑起来的，
+/// 需要的元件就这几种。**不做通用控件库**——通用控件库会把复杂度吃光，
+/// 而这里每一件都是照着设计稿 1:1 落下来的。
+///
+/// 文字格式**缓存**（同一档字号只建一次）：DirectWrite 建格式不便宜，
+/// 而这里每帧都在画字。
+/// </summary>
+internal sealed class Widgets
+{
+    private readonly IUiHost _host;
+    private readonly Dictionary<(float Size, bool Center), IDWriteTextFormat> _formats = new();
+
+    public Widgets(IUiHost host) => _host = host;
+
+    // ---- 文字 ---------------------------------------------------------------
+
+    private IDWriteTextFormat Format(float sizeLogical, bool center)
+    {
+        if (_formats.TryGetValue((sizeLogical, center), out var f)) return f;
+
+        float px = MathF.Max(9f, sizeLogical * _host.DpiScale);
+        f = _host.TextFactory.CreateTextFormat("Microsoft YaHei UI", null,
+            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+        if (center)
+        {
+            f.TextAlignment = TextAlignment.Center;
+            f.ParagraphAlignment = ParagraphAlignment.Center;
+        }
+        _formats[(sizeLogical, center)] = f;
+        return f;
+    }
+
+    /// <summary>
+    /// 在矩形里画一段文字（默认居中）。
+    /// 注意 Vortice 的 `Rect(x, y, w, h)` 是"位置 ＋ 尺寸"，不是
+    /// (左, 上, 右, 下)——写错的话文字会被排到很远的屏幕外，看起来像"没画出来"。
+    /// </summary>
+    public void Text(ID2D1DeviceContext ctx, string text, RectF box, float size,
+                     ID2D1Brush brush, bool center = true)
+    {
+        ctx.DrawText(text, Format(size, center),
+                     new Rect(box.MinX, box.MinY, box.MaxX - box.MinX, box.MaxY - box.MinY),
+                     brush);
+    }
+
+    // ---- 滑条 ---------------------------------------------------------------
+
+    /// <summary>轨道 + 已走过去的那一段 + 滑钮。返回滑钮的圆心（画预览用得上）。</summary>
+    public void Slider(ID2D1DeviceContext ctx, RectF box, float t01,
+                       ID2D1Brush track, ID2D1Brush fill, ID2D1Brush knob)
+    {
+        float cy = (box.MinY + box.MaxY) * 0.5f;
+        float left = box.MinX + Tokens.SliderKnob * 0.5f;
+        float right = box.MaxX - Tokens.SliderKnob * 0.5f;
+        var a = new System.Numerics.Vector2(left, cy);
+        var b = new System.Numerics.Vector2(right, cy);
+
+        ctx.DrawLine(a, b, track, Tokens.SliderTrack);
+        var k = new System.Numerics.Vector2(left + (right - left) * Math.Clamp(t01, 0f, 1f), cy);
+        ctx.DrawLine(a, k, fill, Tokens.SliderTrack);
+        ctx.FillEllipse(new Ellipse(k, Tokens.SliderKnob * 0.5f, Tokens.SliderKnob * 0.5f), knob);
+    }
+
+    /// <summary>滑条的可拖区域（比视觉大一圈，手指才抓得住）。</summary>
+    public static RectF SliderHit(RectF box) => new()
+    {
+        MinX = box.MinX - 6, MinY = box.MinY - 6,
+        MaxX = box.MaxX + 6, MaxY = box.MaxY + 6,
+    };
+}

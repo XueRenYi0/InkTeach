@@ -56,6 +56,27 @@ internal static class Tokens
     /// <summary>圆角一律"高 ÷ 2"：球→条是一次连续变形，不会先变圆角再变长。</summary>
     public static float PillRadius(float height) => height * 0.5f;
 
+    /// <summary>
+    /// 上带（当前工具的设置条）的高。色片 26 ＋ 上下各 4。
+    /// 它**不做成胶囊**：两块叠起来用大圆角会形成"两段弧"，很难看
+    /// （设计稿 ③ 那一叠专门看过），所以上带是圆角 12 的方片。
+    /// </summary>
+    public const float BandHeight = 34f;
+    public const float BandRadius = 12f;
+
+    /// <summary>色片：26 的方块，缝 6。缝是必须的——挨在一起会糊成一条彩带。</summary>
+    public const float Swatch = 26f;
+    public const float SwatchGap = 6f;
+
+    /// <summary>分段选择框（整笔/面积、矩形/套索、小/中/大）的高与内边距。</summary>
+    public const float SegmentHeight = 26f;
+    public const float SegmentPad = 12f;
+
+    /// <summary>滑条：轨道 4 高、滑钮 16（系统的滑块就是这个量级）。</summary>
+    public const float SliderTrack = 4f;
+    public const float SliderKnob = 16f;
+    public const float SliderWidth = 150f;
+
     // ---- 动效 ---------------------------------------------------------------
 
     /// <summary>展开 200 ms、收起 150 ms（收起要比展开快：用户已经决定了）。</summary>
