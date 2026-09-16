@@ -18,6 +18,7 @@ internal sealed class App : InkEngine.InkEngine
     private IntPtr _clickTargetHwnd;
     private string _clickLogFile;
     private bool _panelShowDrawer;
+    private bool _selfCheckMode;
 
     /// <summary>密集模式：所有笔画写在一小块区域里（量"同一页很多墨迹"）。</summary>
     private bool DenseWrite;
@@ -79,6 +80,8 @@ internal sealed class App : InkEngine.InkEngine
     /// <summary>测试模式分发。返回 -1 = 正常跑消息循环。</summary>
     protected override int RunModeDispatch(string mode, string[] args)
     {
+        _selfCheckMode = mode.Length > 0;
+
         // 交互模式挂**产品界面**；自检/基准模式挂"什么都不画"的空宿主
         // （自检要数屏幕上的墨，一块面板盖上去会把判据搞脏——这条踩过）。
         //
@@ -503,6 +506,9 @@ internal sealed class App : InkEngine.InkEngine
     /// </summary>
     protected override bool RestartSelf(string why)
     {
+        // **只有自检模式才拦**。以前这里无条件返回 true，于是产品里的"重启"也不重启了
+        // （用户点了一下，界面还在，什么都没发生）——自检的替身把产品路径一起换掉了。
+        if (!_selfCheckMode) return base.RestartSelf(why);
         Console.WriteLine($"[自检] 不真的重启（{why}）；产品里这一步会重新拉起自己");
         return true;
     }
@@ -5126,15 +5132,15 @@ internal sealed class App : InkEngine.InkEngine
         // ---- ① 收起态：球真的在屏幕上，而且是个 48 的方（圆） ----
         var ball = ui.QueryBounds();
         float ballW = ball.MaxX - ball.MinX, ballH = ball.MaxY - ball.MinY;
-        var work = ui.WorkAreaForTest;
         Check("收起态是一个 48 的球",
               MathF.Abs(ballW - 48f) < 1f && MathF.Abs(ballH - 48f) < 1f,
               $"占用 {ballW:F0}×{ballH:F0}，位置 ({ball.MinX:F0},{ball.MinY:F0})");
 
-        // 按**工作区**（扣掉任务栏）摆，不是按整屏：贴着屏幕最下边会被任务栏压住。
-        Check("球贴在工作区下边、离边 12",
-              MathF.Abs(ball.MaxY - (work.MaxY - InkUi.Tokens.EdgeMargin)) < 1.5f,
-              $"球底 {ball.MaxY:F0}，工作区底 {work.MaxY:F0}（屏幕底 {VirtualScreen.MaxY / DpiScale:F0}）");
+        // 按**屏幕**底边算，允许盖住任务栏（用户定的：工具条压在任务栏上是合理的，
+        // 贴屏幕边 12 像素的手感比"躲开任务栏"更重要）。
+        Check("球贴在屏幕下边、离边 12",
+              MathF.Abs(ball.MaxY - (VirtualScreen.MaxY / DpiScale - InkUi.Tokens.EdgeMargin)) < 1.5f,
+              $"球底 {ball.MaxY:F0}，屏幕底 {VirtualScreen.MaxY / DpiScale:F0}");
 
         // ---- ② 点球展开：动画期间必须连续出帧 ----
         int strokes0 = Doc.Strokes.Count;
@@ -5164,9 +5170,11 @@ internal sealed class App : InkEngine.InkEngine
         var bar = ui.QueryBounds();
         float barW = bar.MaxX - bar.MinX, barH = bar.MaxY - bar.MinY;
         var barOnly = ui.BarRectForTest;
-        Check("展开成一条带子（主条高 48、总高 86、宽 > 600）",
+        // 总高看这一刻上带是色线还是设置条（58 / 86），所以这里只卡"主条 48、宽 > 600、
+        // 总高在这两档之间"；两条精确的高度由上面那两条"色线/设置条"专测。
+        Check("展开成一条带子（主条高 48、宽 > 600）",
               MathF.Abs((barOnly.MaxY - barOnly.MinY) - 48f) < 1f
-              && MathF.Abs(barH - 86f) < 1.5f
+              && barH >= 56f && barH <= 88f
               && barW > 600f,
               $"占用 {barW:F0}×{barH:F0}（主条高 {barOnly.MaxY - barOnly.MinY:F0}）");
 
@@ -5200,6 +5208,20 @@ internal sealed class App : InkEngine.InkEngine
               $"笔画 {strokes0} → {Doc.Strokes.Count}");
 
         // ---- ⑥ 上带：色片 / 滑条 / 分段（都走命令通道）----
+        // 先看"平时那条色线"：指针在画布上，上带应该只有 6 像素高。
+        var line = ui.BandRectForTest;
+        Check("平时上带收成一条色线",
+              MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandLine) < 1.5f && !ui.RailOpenForTest,
+              $"上带高 {ui.BandHeightForTest:F0}（色线应为 {InkUi.Tokens.BandLine:F0}）");
+
+        // 碰一下就该长成完整的设置条（用户喜欢的就是这条）。
+        SendMouse((int)((line.MinX + line.MaxX) * 0.5f * DpiScale),
+                  (int)((line.MinY + line.MaxY) * 0.5f * DpiScale), 0);
+        SettleFrames(400);
+        Check("碰到色线就长成设置条",
+              ui.RailOpenForTest && MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandHeight) < 1.5f,
+              $"上带高 {ui.BandHeightForTest:F0}（设置条应为 {InkUi.Tokens.BandHeight:F0}）");
+
         var bandRect = ui.BandRectForTest;
         Check("展开后有上带", bandRect.MaxY - bandRect.MinY > 20f,
               $"上带 {bandRect.MaxX - bandRect.MinX:F0}×{bandRect.MaxY - bandRect.MinY:F0}");

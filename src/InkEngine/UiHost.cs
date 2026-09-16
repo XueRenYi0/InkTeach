@@ -48,9 +48,6 @@ internal sealed class UiHost : IUiHost, IEngineCommands
 
     public float DpiScale => _dpiScale;
 
-    /// <summary>工作区（扣掉任务栏），逻辑像素。</summary>
-    public RectF WorkArea => _engine.LogicalWorkArea;
-
     /// <summary>
     /// true 表示这是"换回同一个界面"，不是首次接入。界面据此决定要不要
     /// 重新采纳引擎给的屏幕尺寸——重新采纳会把界面摆到按另一套坐标算的位置上。

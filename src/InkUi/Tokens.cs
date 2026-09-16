@@ -70,6 +70,19 @@ internal static class Tokens
     public const float BandHeight = 34f;
     public const float BandRadius = 12f;
 
+    /// <summary>
+    /// 平时那条**色线**：6 像素。数字照抄假面板（`BandIdle = 6 / BandOpen = 34`）。
+    /// 它不只是装饰——12 段色片压成一条线以后**仍然可以直接点**，
+    /// 不用先"展开再选"（用户明确说喜欢这个）。
+    /// </summary>
+    public const float BandLine = 6f;
+
+    /// <summary>色线长成设置条的时长（和悬停展开同一套时长，观感才是一路的）。</summary>
+    public const double RailMs = 167;
+
+    /// <summary>鼠标离色线多近就算"碰到了"（上下各让一点，不用精确压在 6 像素上）。</summary>
+    public const float RailHoverPad = 10f;
+
     /// <summary>色片：26 的方块，缝 6。缝是必须的——挨在一起会糊成一条彩带。</summary>
     public const float Swatch = 26f;
     public const float SwatchGap = 6f;

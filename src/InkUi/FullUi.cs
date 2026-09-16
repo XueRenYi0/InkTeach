@@ -43,7 +43,6 @@ public sealed class FullUi : IOverlayUi
     private IUiHost _host;
     private Widgets _widgets;
     private RectF _screen;                 // 逻辑虚拟桌面（Layout 给的）
-    private RectF _work;                   // 逻辑工作区（扣掉任务栏）：面板按它摆
     // 拖过之后的位置（左上角）；**null = 还没拖过**，用默认位置（下边居中）。
     // 这里特意不用 RectF 来表示"没拖过"：`RectF` 的默认值是全 0，而
     // `IsEmpty` 判的是 `MaxX < MinX`——全 0 的矩形**不算空**，
@@ -79,6 +78,8 @@ public sealed class FullUi : IOverlayUi
     /// <summary>贴边隐藏：默认关（用户定的）。开了以后贴边时只露 8 像素的头。</summary>
     private bool _hideEnabled;
     private readonly Anim _peek;           // 0 = 只剩露头，1 = 完全显示
+    private readonly Anim _rail;           // 0 = 平时那条 6 像素色线，1 = 完整设置条
+    private bool _railHover;
     private bool _hoverInside;             // 指针在"看得见的那一块"里
     private double _leftAtMs = double.NegativeInfinity;
 
@@ -110,6 +111,7 @@ public sealed class FullUi : IOverlayUi
     {
         _expand = new Anim(0f);
         _peek = new Anim(1f);
+        _rail = new Anim(0f);
     }
 
     public string Name => "完整界面";
@@ -121,6 +123,7 @@ public sealed class FullUi : IOverlayUi
             // 贴边隐藏那条"离开一会儿才收"是靠**继续要帧**实现的：
             // 没有帧就没有时机去收（引擎只在有脏区或界面说要动时才渲染）。
             if (_peek.Running) return true;
+            if (_rail.Running) return true;
             if (_hideEnabled && !_hoverInside && _peek.Value > 0f) return true;
             return _expand.Running;
         }
@@ -132,9 +135,11 @@ public sealed class FullUi : IOverlayUi
         _widgets = new Widgets(host);
         _expand.Bind(host);        // 时钟必须接真的那个（见 Anim.Bind 的注释）
         _peek.Bind(host);
+        _rail.Bind(host);
         _lastTool = host.State.Tool;
         _expand.Jump(0f);
         _peek.Jump(1f);
+        _rail.Jump(0f);
         Layout(host.Screen, host.DpiScale);
     }
 
@@ -143,9 +148,6 @@ public sealed class FullUi : IOverlayUi
     public RectF Layout(RectF screen, float dpiScale)
     {
         _screen = screen;
-        // 面板按**工作区**摆（贴底时不会被任务栏压住；PPT 全屏时工作区＝整屏，自动对）。
-        // 拿不到工作区就退回整屏——界面不该因为拿不到这个而摆不出来。
-        _work = _host?.WorkArea ?? screen;
         return QueryBounds();
     }
 
@@ -178,7 +180,7 @@ public sealed class FullUi : IOverlayUi
     private RectF BandRect()
     {
         var bar = BarRect();
-        float h = Tokens.BandHeight * BandProgress();
+        float h = BandHeightFull() * BandProgress();
         // 带子**朝屏幕中心那一侧**长：
         //   · 面板贴底（默认位置）→ 带子在上面：底边锚定不动，你刚点的按钮位置也不动
         //     （这是假面板当年的做法，代码注释写着"贴底时下面没有空间"）；
@@ -200,6 +202,13 @@ public sealed class FullUi : IOverlayUi
 
     private const float BandGap = 4f;
     private float BandProgress() => _expand.Value;
+
+    /// <summary>上带这一刻的高度：平时 6 像素的色线，碰到了长成 34 像素的设置条。</summary>
+    private float BandHeightFull() =>
+        Tokens.BandLine + (Tokens.BandHeight - Tokens.BandLine) * _rail.Value;
+
+    /// <summary>色线 / 设置条：数值够大了才按"设置条"那套画与命中（中间态归短的这边）。</summary>
+    private bool RailOpen => _rail.Value >= 0.5f;
 
     /// <summary>上带这一刻是不是真的画出来了（长出来之前不参与命中）。</summary>
     private bool BandVisible() => BandProgress() > 0.6f;
@@ -242,8 +251,8 @@ public sealed class FullUi : IOverlayUi
     /// 注意这里减的是**主条高**、不是总高——带子朝上长，主条自己不动。
     /// </summary>
     private Vector2 RawAnchor() => _anchor ?? new Vector2(
-        _work.MinX + (_work.MaxX - _work.MinX - Width()) * 0.5f,
-        _work.MaxY - Tokens.EdgeMargin - Tokens.BarHeight);
+        _screen.MinX + (_screen.MaxX - _screen.MinX - Width()) * 0.5f,
+        _screen.MaxY - Tokens.EdgeMargin - Tokens.BarHeight);
 
     /// <summary>
     /// 带子长在哪一侧：**朝屏幕中心**。面板在下半屏就朝上长（贴底时下面本来也没空间），
@@ -253,7 +262,7 @@ public sealed class FullUi : IOverlayUi
     {
         var a = RawAnchor();
         float center = a.Y + Tokens.BarHeight * 0.5f;
-        return center >= (_work.MinY + _work.MaxY) * 0.5f;
+        return center >= (_screen.MinY + _screen.MaxY) * 0.5f;
     }
 
     /// <summary>夹在可见区域内（一期就夹在单块屏里，跨屏怎么画还没验证过）。</summary>
@@ -265,11 +274,11 @@ public sealed class FullUi : IOverlayUi
         float top = BandAbove() ? a.Y - bandH : a.Y;
         float bottom = top + h;
 
-        float x = Math.Clamp(a.X, _work.MinX + Tokens.DockGap,
-                                    _work.MaxX - Tokens.DockGap - w);
+        float x = Math.Clamp(a.X, _screen.MinX + Tokens.DockGap,
+                                    _screen.MaxX - Tokens.DockGap - w);
         float y = a.Y;
-        if (top < _work.MinY + Tokens.DockGap) y += _work.MinY + Tokens.DockGap - top;
-        if (bottom > _work.MaxY - Tokens.DockGap) y -= bottom - (_work.MaxY - Tokens.DockGap);
+        if (top < _screen.MinY + Tokens.DockGap) y += _screen.MinY + Tokens.DockGap - top;
+        if (bottom > _screen.MaxY - Tokens.DockGap) y -= bottom - (_screen.MaxY - Tokens.DockGap);
         return new Vector2(x, y);
     }
 
@@ -370,6 +379,17 @@ public sealed class FullUi : IOverlayUi
     private int HitSwatch(float x, float y)
     {
         if (!BandHasSwatches) return -1;
+        // 色线状态（还没张开）：整条线按 12 等分，**点哪一段就是哪个色**
+        // ——用户明确说喜欢"不用先展开再点"这一条。
+        if (!RailOpen)
+        {
+            var line = BandRect();
+            float left = line.MinX + Tokens.BarPad, right = line.MaxX - Tokens.BarPad;
+            if (x < left || x > right) return -1;
+            if (y < line.MinY - Tokens.RailHoverPad || y > line.MaxY + Tokens.RailHoverPad) return -1;
+            int n = Tokens.Palette.Length;
+            return Math.Clamp((int)((x - left) / MathF.Max(1f, (right - left) / n)), 0, n - 1);
+        }
         for (int i = 0; i < Tokens.Palette.Length; i++)
             if (SwatchRect(i).Contains(x, y)) return i;
         return -1;
@@ -378,9 +398,47 @@ public sealed class FullUi : IOverlayUi
     private int HitSegment(float x, float y)
     {
         int n = BandSegmentCount;
+        if (n > 0 && !RailOpen)
+        {
+            var line = BandRect();
+            float left = line.MinX + Tokens.BarPad, right = line.MaxX - Tokens.BarPad;
+            if (x < left || x > right) return -1;
+            if (y < line.MinY - Tokens.RailHoverPad || y > line.MaxY + Tokens.RailHoverPad) return -1;
+            return Math.Clamp((int)((x - left) / MathF.Max(1f, (right - left) / n)), 0, n - 1);
+        }
         for (int i = 0; i < n; i++)
             if (SegmentRect(i, n).Contains(x, y)) return i;
         return -1;
+    }
+
+    /// <summary>色线 / 设置条该不该张开。判据：指针碰到它、或者正在拖滑条。</summary>
+    private void UpdateRail()
+    {
+        if (!BandVisible()) { _rail.To(0f, 0); _railHover = false; return; }
+        _rail.To(_railHover || _sliderDragging ? 1f : 0f, Tokens.RailMs);
+    }
+
+    /// <summary>
+    /// 色线的"碰到"判定区：**按张开后的高度**算。
+    ///
+    /// 不这么做的话会来回抖：线一张开，它的矩形就往上长了 28 像素，
+    /// 指针（还停在原来那条线的位置）立刻落到判定区外面 → 又收回去 → 再张开……
+    /// </summary>
+    private RectF RailZone()
+    {
+        var bar = BarRect();
+        float h = Tokens.BandHeight + Tokens.RailHoverPad * 2f;
+        return BandAbove()
+            ? new RectF
+            {
+                MinX = bar.MinX, MinY = bar.MinY - BandGap - h,
+                MaxX = bar.MaxX, MaxY = bar.MinY - BandGap + Tokens.RailHoverPad,
+            }
+            : new RectF
+            {
+                MinX = bar.MinX, MinY = bar.MaxY + BandGap - Tokens.RailHoverPad,
+                MaxX = bar.MaxX, MaxY = bar.MaxY + BandGap + h,
+            };
     }
 
     private void ActivateSwatch(int i) => _host.Commands.SetColor(Tokens.Palette[i].Color);
@@ -534,8 +592,8 @@ public sealed class FullUi : IOverlayUi
 
         var u = UnionRect();
         float w = u.MaxX - u.MinX, h = u.MaxY - u.MinY;
-        float dl = u.MinX - _work.MinX, dr = _work.MaxX - u.MaxX;
-        float dt = u.MinY - _work.MinY, db = _work.MaxY - u.MaxY;
+        float dl = u.MinX - _screen.MinX, dr = _screen.MaxX - u.MaxX;
+        float dt = u.MinY - _screen.MinY, db = _screen.MaxY - u.MaxY;
         float best = Math.Min(Math.Min(dl, dr), Math.Min(dt, db));
         if (best > Tokens.SnapDistance) return Vector2.Zero;      // 没贴边就不藏
 
@@ -633,6 +691,7 @@ public sealed class FullUi : IOverlayUi
         _hoverInside = QueryBounds().Contains(e.X, e.Y);
         _leftAtMs = _host.NowMs;
         var p = Local(e);
+        _railHover = BandVisible() && RailZone().Contains(p.X, p.Y);
 
         if (_sliderDragging)
         {
@@ -727,19 +786,19 @@ public sealed class FullUi : IOverlayUi
     {
         var a = Anchor();
         float w = Width(), h = Height();
-        float left = a.X - _work.MinX;
-        float right = _work.MaxX - (a.X + w);
-        float top = a.Y - _work.MinY;
-        float bottom = _work.MaxY - (a.Y + h);
+        float left = a.X - _screen.MinX;
+        float right = _screen.MaxX - (a.X + w);
+        float top = a.Y - _screen.MinY;
+        float bottom = _screen.MaxY - (a.Y + h);
 
         float best = Math.Min(Math.Min(left, right), Math.Min(top, bottom));
         if (best > Tokens.SnapDistance) return;          // 不够近：不吸附（拖到哪儿就哪儿）
 
         var want = a;
-        if (best == left) want.X = _work.MinX + Tokens.DockGap;
-        else if (best == right) want.X = _work.MaxX - Tokens.DockGap - w;
-        else if (best == top) want.Y = _work.MinY + Tokens.DockGap;
-        else want.Y = _work.MaxY - Tokens.DockGap - h;
+        if (best == left) want.X = _screen.MinX + Tokens.DockGap;
+        else if (best == right) want.X = _screen.MaxX - Tokens.DockGap - w;
+        else if (best == top) want.Y = _screen.MinY + Tokens.DockGap;
+        else want.Y = _screen.MaxY - Tokens.DockGap - h;
 
         _anchor = want;
     }
@@ -834,6 +893,7 @@ public sealed class FullUi : IOverlayUi
     {
         if (_host == null) return;
         UpdatePeek();                    // 每帧问一次"该不该收起来"（贴边隐藏）
+        UpdateRail();                    // 色线该不该长成设置条
 
         var saved = ctx.Transform;
         var shift = Shift();
@@ -903,6 +963,9 @@ public sealed class FullUi : IOverlayUi
     /// <summary>画上带的内容。每一项都对应引擎里真实存在的能力，摆不出来的就不摆。</summary>
     private void DrawBand(ID2D1DeviceContext ctx, in UiState st)
     {
+        // 平时就一条 6 像素的色线（可点的 12 段），碰到才长成完整的设置条。
+        if (!RailOpen) { DrawBandLine(ctx, st); return; }
+
         if (BandHasSwatches)
         {
             for (int i = 0; i < Tokens.Palette.Length; i++)
@@ -947,6 +1010,83 @@ public sealed class FullUi : IOverlayUi
         var p = st.PaletteBase;
         return MathF.Abs(c.R - p.R) < 0.02f && MathF.Abs(c.G - p.G) < 0.02f
             && MathF.Abs(c.B - p.B) < 0.02f;
+    }
+
+    /// <summary>当前那一档在下标几（色线里靠它标出"你现在在哪一段"）。</summary>
+    private int ActiveSegmentIndex(in UiState st)
+    {
+        switch (_bandCell)
+        {
+            case 2:
+                for (int i = 0; i < InkPalette.BoardPresets.Length; i++)
+                    if (BoardColorIs(st, i)) return i;
+                return -1;
+            case 6:
+                return st.Tool == Tool.Eraser ? 0 : st.Tool == Tool.PixelEraser ? 1 : -1;
+            case 7:
+                return st.SelectMode == SelectMode.Rect ? 0 : 1;
+            case 8:
+                return st.Tool switch
+                {
+                    Tool.Line => 0, Tool.Rectangle => 1, Tool.Ellipse => 2, Tool.Arrow => 3, _ => -1,
+                };
+            default:
+                return -1;
+        }
+    }
+
+    /// <summary>
+    /// 平时那条色线：笔/荧光笔就是 12 段色片压成的一条线（当前色那一段多一道白记号），
+    /// 分段类是底槽里按比例高亮当前那一档，只有滑条的（激光）画一个位置点。
+    /// </summary>
+    private void DrawBandLine(ID2D1DeviceContext ctx, in UiState st)
+    {
+        var r = BandRect();
+        float radius = MathF.Max(2f, (r.MaxY - r.MinY) * 0.5f);
+        float left = r.MinX + Tokens.BarPad, right = r.MaxX - Tokens.BarPad;
+        var trough = new Vortice.RawRectF(left, r.MinY, right, r.MaxY);
+        ctx.FillRoundedRectangle(new RoundedRectangle(trough, radius, radius), Brush(ctx, HoverCol));
+
+        if (BandHasSwatches)
+        {
+            int n = Tokens.Palette.Length;
+            float w = (right - left) / n;
+            for (int i = 0; i < n; i++)
+            {
+                var seg = new Vortice.RawRectF(left + i * w, r.MinY, left + (i + 1) * w, r.MaxY);
+                ctx.FillRectangle(seg, Brush(ctx, Tokens.Palette[i].Color));
+                if (IsSwatchActive(st, i))
+                {
+                    float cx = left + (i + 0.5f) * w;
+                    ctx.FillRectangle(
+                        new Vortice.RawRectF(cx - 1.5f, r.MinY + 0.5f, cx + 1.5f, r.MaxY - 0.5f),
+                        Brush(ctx, new Color4(1f, 1f, 1f, 0.95f)));
+                }
+            }
+            return;
+        }
+
+        int count = _bandCell == 2 ? InkPalette.BoardPresets.Length : BandSegmentCount;
+        if (count > 0)
+        {
+            int sel = ActiveSegmentIndex(st);
+            if (sel < 0) return;
+            float w = (right - left) / count;
+            var c = _bandCell == 2 ? InkPalette.BoardPresets[sel].Color : Tokens.Accent;
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(left + sel * w, r.MinY,
+                                                          left + (sel + 1) * w, r.MaxY), radius, radius),
+                Brush(ctx, c));
+            return;
+        }
+
+        if (BandHasSlider)
+        {
+            float x = left + (right - left) * SliderT(st);
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(x - 8f, r.MinY, x + 8f, r.MaxY), radius, radius),
+                Brush(ctx, Tokens.Accent));
+        }
     }
 
     private void DrawSegment(ID2D1DeviceContext ctx, int i, int count, in UiState st)
@@ -1187,9 +1327,12 @@ public sealed class FullUi : IOverlayUi
     /// <summary>自检用：界面看到的屏幕（核对它和 IUiHost.Screen 是不是同一个）。</summary>
     internal RectF ScreenForTest => _screen;
 
-    /// <summary>自检用：界面按它摆面板的工作区（扣掉任务栏）。</summary>
-    internal RectF WorkAreaForTest => _work;
-
     /// <summary>自检用：贴边隐藏的进度（1 = 完全显示，0 = 只剩露头）。</summary>
     internal float PeekForTest => _peek.Value;
+
+    /// <summary>自检用：色线张开没有（false = 平时那条 6 像素的线）。</summary>
+    internal bool RailOpenForTest => RailOpen;
+
+    /// <summary>自检用：上带这一刻多高（6 = 色线，34 = 完整设置条）。</summary>
+    internal float BandHeightForTest => BandRect().MaxY - BandRect().MinY;
 }

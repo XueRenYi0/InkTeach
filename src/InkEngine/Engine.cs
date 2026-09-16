@@ -409,8 +409,6 @@ public class InkEngine
 
     internal int _virtualX, _virtualY, _virtualW, _virtualH;
 
-    /// <summary>主屏的工作区（扣掉任务栏），物理像素。给界面按它摆面板用。</summary>
-    private int _workX = int.MinValue, _workY, _workW, _workH;
     internal double _autoExitAt = double.MaxValue;
 
     // ---- perf accounting --------------------------------------------------
@@ -823,18 +821,6 @@ public class InkEngine
             }
             s_map[w.Hwnd] = w;
             _windows.Add(w);
-            // 顺便把这块屏的**工作区**记下来（rcWork：扣掉任务栏）。
-            // 界面要按它摆：贴着屏幕最下边摆会被任务栏压住/压住任务栏，
-            // 而 PPT 全屏放映时没有任务栏，rcWork 就等于整屏——自动是对的。
-            var mi = new Native.MONITORINFO { cbSize = Marshal.SizeOf<Native.MONITORINFO>() };
-            if (Native.GetMonitorInfo(hMon, ref mi))
-            {
-                if (_workX == int.MinValue)      // 一期就用主屏（第一块）的工作区
-                {
-                    _workX = mi.rcWork.Left; _workY = mi.rcWork.Top;
-                    _workW = mi.rcWork.Width; _workH = mi.rcWork.Height;
-                }
-            }
             Console.WriteLine($"overlay on monitor {hMon}: {r.Width}x{r.Height} at ({r.Left},{r.Top}) dpi={w.Dpi}");
             Console.WriteLine($"委托墨迹轨迹(InkTrail): {OverlayWindow.InkTrailNote}");
             return true;
@@ -2875,18 +2861,6 @@ public class InkEngine
         MaxX = (_virtualX + _virtualW) / DpiScale,
         MaxY = (_virtualY + _virtualH) / DpiScale,
     };
-
-    /// <summary>
-    /// 主屏**工作区**的逻辑范围（扣掉任务栏）。拿不到就退回整屏——
-    /// 退回去只是"面板可能压在任务栏上"，不该因此让界面摆不出来。
-    /// </summary>
-    public RectF LogicalWorkArea => _workX == int.MinValue
-        ? LogicalVirtualScreen
-        : new RectF
-        {
-            MinX = _workX / DpiScale, MinY = _workY / DpiScale,
-            MaxX = (_workX + _workW) / DpiScale, MaxY = (_workY + _workH) / DpiScale,
-        };
 
     /// <summary>
     /// 界面声明"外观变了，请重画我的缓存"。可以由界面的任意线程调用，
