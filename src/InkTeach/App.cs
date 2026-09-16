@@ -1419,7 +1419,9 @@ internal sealed class App : InkEngine.InkEngine
     private void SelBenchTest()
     {
         Console.WriteLine();
-        Console.WriteLine("=== 选中与变换性能（真实拖动路径）===");
+        Console.WriteLine("=== 选中与变换性能 ===");
+        Console.WriteLine();
+        Console.WriteLine("  ① 老做法：每帧改模型（SetTransformLive）→ 内容层按脏区修补");
         Console.WriteLine("  画布里  | 变换 | 修补均 | 修补最长 | 每帧记录均 | 每帧最长");
         Console.WriteLine("  --------|------|--------|----------|------------|--------");
 
@@ -1465,6 +1467,74 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine();
         Console.WriteLine("  判据：修补耗时**不该**随画布里已有笔画数明显增长——区域修补只处理");
         Console.WriteLine("  脏区内的对象，跟总数无关。若明显增长，说明退化成了整层重建。");
+
+        // ---- ② 现在的拖动路径（方案 B：拖动预览）---------------------------
+        //
+        // 同一批对象、同样的拖动，走**真实的手势路径**：按住 → 每步挪一点 → 松手。
+        // 这一条要盯的是两个数：
+        //   · 内容层每帧重画的块数 —— 方案 B 之后应当是 **0**（模型不动、块全有效）；
+        //   · 每帧记录耗时 —— 老做法那个"散布全屏 19ms"是否真的掉下来。
+        Console.WriteLine();
+        Console.WriteLine("  ② 现在的拖动（方案 B：拖动预览，内容层不动）");
+        Console.WriteLine("  画布里  | 变换 | 起手一次重画 | 拖动中重画 | 拖动中补丁均 | 每帧记录均 | 每帧最长");
+        Console.WriteLine("  --------|------|--------------|------------|--------------|------------|--------");
+        foreach (int total in new[] { 1000, 10000 })
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            if (total > 0) GenerateStrokes(total);
+            SettleFrames(150);
+
+            // 刻意挑**散布全屏**的 20 条（和老做法那张表同一个场景）
+            Doc.Selected.Clear();
+            int pick = Math.Min(20, Doc.Strokes.Count);
+            int stride = Math.Max(1, Doc.Strokes.Count / Math.Max(1, pick));
+            for (int i = 0; i < pick; i++)
+                Doc.Selected.Add(Doc.Strokes[Math.Min(Doc.Strokes.Count - 1, i * stride)]);
+
+            var fr = SelectionHandles.FrameOf(Doc.Selected);
+            var aabb = fr.CanvasAabb;
+            float px = (aabb.MinX + aabb.MaxX) * 0.5f, py = (aabb.MinY + aabb.MaxY) * 0.5f;
+            bool took = SelectionGestureForTest(px, py);
+
+            var w = _windows[0];
+            const int steps = 30;
+            double patchSum = 0, recordSum = 0, recordMax = 0, patchMax = 0;
+            double tilesSum = 0; int tilesMax = 0;
+            int startTiles = 0; double startPatchMs = 0;
+            for (int k = 0; k < steps; k++)
+            {
+                UpdateSelectionGestureForTest(px + 6f * (k + 1), py + 3f * (k + 1));
+                SettleFrames(10);
+                recordMax = Math.Max(recordMax, w.LastRecordMs);
+                if (k == 0)
+                {
+                    // 第 0 步 = **起手那一下**：把这一批从内容层摘出去，那些块要重画一次。
+                    // 这一笔是一次性的，不能混进"拖动中每帧"的均值里（混进去会把它算成
+                    // 每个拖动帧的代价，看着像没优化）。
+                    startTiles = w.LastPatchCount;
+                    startPatchMs = w.LastPatchMs;
+                    continue;
+                }
+                patchSum += w.LastPatchMs; recordSum += w.LastRecordMs;
+                patchMax = Math.Max(patchMax, w.LastPatchMs);
+                tilesSum += w.LastPatchCount;
+                tilesMax = Math.Max(tilesMax, w.LastPatchCount);
+            }
+            EndSelectionGestureForTest();
+            SettleFrames(60);
+            int steadySteps = steps - 1;
+
+            Console.WriteLine($"  {total,7} | {pick,4} | {startTiles,7} 块/{startPatchMs,5:F1}ms | "
+                            + $"{tilesSum / steadySteps,7:F1} 块 | {patchSum / steadySteps,9:F2} ms | "
+                            + $"{recordSum / steadySteps,8:F2} ms | {recordMax,8:F2} ms"
+                            + (took ? "" : "   （！手势没接住）"));
+            Console.WriteLine($"          （拖动中内容层重画的块：均 {tilesSum / steadySteps:F1}、最多 {tilesMax}"
+                            + $"，应当是 0；起手那一下 {startTiles} 块是一次性的）");
+        }
+        Console.WriteLine();
+        Console.WriteLine("  判据：②的\"内容层重画块/帧\"应当是 0（模型不动，只画浮动层预览），");
+        Console.WriteLine("        每帧耗时应当与\"选中的这几条\"成正比，而不是与\"走过的面积\"成正比。");
         Doc.Clear();
         Doc.ClearHistory();
         _quit = true;
@@ -2316,7 +2386,9 @@ internal sealed class App : InkEngine.InkEngine
         int probeW = (int)(150f * dpi), probeH = (int)(120f * dpi);
         int AccentCount()
         {
-            var f = SelectionHandles.FrameOf(Doc.Selected);
+            // 用**实时框**：拖动中模型到松手才动（方案 B），拿模型里的框去算手柄位置，
+            // 探针窗会停在按下那一刻的老地方，而标签早跟着内容转走了。
+            var f = LiveSelectionFrame;
             var h = SelectionHandles.CanvasPosition(SelHandle.Rotate, f, dpi);
             return ScreenProbe.CountNear((int)(h.X - probeW * 0.5f), (int)(h.Y - probeH),
                                          probeW, probeH, 0, 120, 212, 40);
@@ -2425,15 +2497,28 @@ internal sealed class App : InkEngine.InkEngine
                 return SelRotationDegrees;
             }
 
+            // 拖动中"对象现在是什么变换"要问**合成后**的那个矩阵：方案 B 里
+            // 模型到松手才动，拖动中的实时位移活在预览矩阵里（对象自己的变换 × 预览矩阵，
+            // 和渲染时左乘的完全是同一个式子）。松手后再问 s.Transform 就是它本身。
+            Matrix3x2 Live(Stroke s2) => DragPreviewActive
+                ? s2.Transform * DragPreviewMatrix : s2.Transform;
+
             // ① 逆时针 90°：读数为**正**，而且矩阵真的往逆时针转了
             //    （屏幕坐标里逆时针 90° → CreateRotation(-90°) → M12 = -1）
             var spinCcw = NewRound();
             float ccwRead = Spin(spinCcw, -90f);
             Check("逆时针拖 90° → 读数 +90°（逆转为正）",
                   Math.Abs(ccwRead - 90f) < 1.5f, $"读数 {ccwRead:F1}°");
+            var liveCcw = Live(spinCcw);
             Check("读数的符号和几何一致（逆时针转出来 M12≈-1）",
-                  Math.Abs(spinCcw.Transform.M12 + 1f) < 0.05f && Math.Abs(spinCcw.Transform.M11) < 0.05f,
-                  $"M11={spinCcw.Transform.M11:F3} M12={spinCcw.Transform.M12:F3}");
+                  Math.Abs(liveCcw.M12 + 1f) < 0.05f && Math.Abs(liveCcw.M11) < 0.05f,
+                  $"M11={liveCcw.M11:F3} M12={liveCcw.M12:F3}");
+            // 方案 B 的契约：拖动中模型**一个字都不动**（动静全在预览里，松手才提交）。
+            // 少了这条，将来有人"顺手"把 SetTransformLive 加回去就没人拦得住 ——
+            // 而那就是每帧重画走过的面积、19ms/帧 的那条老路。
+            Check("拖动中模型不动（只在预览里位移，松手才提交）",
+                  DragPreviewActive && spinCcw.Transform.Equals(Matrix3x2.Identity),
+                  $"预览={DragPreviewActive}，模型 M11={spinCcw.Transform.M11:F3} M12={spinCcw.Transform.M12:F3}");
             SendMouse(0, 0, Native.MOUSEEVENTF_LEFTUP);
             SettleFrames(200);
 
@@ -2451,10 +2536,11 @@ internal sealed class App : InkEngine.InkEngine
             Check("同一拖转 200° → 读数 ≈ +200°（不绕回）",
                   longRead > 190f && longRead < 210f,
                   $"读数 {longRead:F1}°（绕回的话会是 -160° 左右）");
+            var liveLong = Live(spinLong);
             Check("转 200° 的对象真的转了 200°（矩阵能和读数对上）",
-                  Math.Abs(spinLong.Transform.M11 - MathF.Cos(200f * MathF.PI / 180f)) < 0.05f
-                  && Math.Abs(spinLong.Transform.M12 + MathF.Sin(200f * MathF.PI / 180f)) < 0.05f,
-                  $"M11={spinLong.Transform.M11:F3}（期望 {MathF.Cos(200f * MathF.PI / 180f):F3}）");
+                  Math.Abs(liveLong.M11 - MathF.Cos(200f * MathF.PI / 180f)) < 0.05f
+                  && Math.Abs(liveLong.M12 + MathF.Sin(200f * MathF.PI / 180f)) < 0.05f,
+                  $"M11={liveLong.M11:F3}（期望 {MathF.Cos(200f * MathF.PI / 180f):F3}）");
             SendMouse(0, 0, Native.MOUSEEVENTF_LEFTUP);
             SettleFrames(200);
 
@@ -5240,6 +5326,324 @@ internal sealed class App : InkEngine.InkEngine
 
             RunBarActionForTest(0);                                   // 退出模式（收尾）
             Check("再点一次复制按钮 → 退出复制拖拽模式", !CopyDragArmed, $"armed={CopyDragArmed}");
+        }
+
+        // ⑭ 拖动 / 旋转期间的画法（2026-09-16）：方案 A 收装饰 + 方案 B 拖动预览
+        //
+        // 这一段的判据全部落在**屏幕像素**上，因为要验的两件事都是"看得见"的性质：
+        //   · 拖动中手柄与操作条到底还在不在屏幕上（方案 A）；
+        //   · 被拖的那块到底有没有跟着指针走、并且**没被选中的墨一个像素都没动**（方案 B）。
+        //
+        // 前置条件是把板铺成**不透明**并选一个**没有别的程序参与**的颜色：
+        // 桌面上"没画东西的地方"是别的程序，白像素到处都是，数不出"手柄的白在不在"。
+        // 板色取深灰，于是四种东西互不撞色：板=深灰、墨=品红、手柄与操作条=白、选中框=蓝。
+        {
+            bool boardWas = BoardOn;
+            var boardColorWas = BoardColor;
+            float camWas = ViewOffsetY;
+            BoardOn = true;
+            BoardColor = new Color4(0.10f, 0.10f, 0.12f, 1f);
+            ViewOffsetY = 0f;                        // 屏幕坐标 == 画布坐标，抓屏好算
+            Doc.Clear();
+            Doc.ClearHistory();
+            Tool = Tool.Marquee;
+
+            float dpi = DpiScale;
+            Stroke FatLine(float yy, Color4 col)
+            {
+                var s = new Stroke { Tool = Tool.Pen, Color = col, Width = 10f * dpi };
+                s.AddPoint(x0, yy, 0.5f, NowMs);
+                s.AddPoint(x0 + 260f * dpi, yy, 0.5f, NowMs);
+                return s;
+            }
+            var dragInk = FatLine(y0 + 700f, new Color4(1f, 0f, 1f, 1f));    // 品红：被拖的这一条
+            var refInk = FatLine(y0 + 1100f, new Color4(0f, 1f, 0f, 1f));    // 绿：什么都不做的参照物
+            Doc.AddStroke(dragInk);
+            Doc.AddStroke(refInk);
+            Doc.SelectOnly(new[] { dragInk });
+            SettleFrames(250);
+
+            var frame0 = LiveSelectionFrame;
+            var barRect = SelectionHandles.BarRect(frame0.CanvasAabb, dpi, ViewportCanvas);
+            var handleTL = SelectionHandles.CanvasPosition(SelHandle.TopLeft, frame0, dpi);
+
+            int BarWhite() => ScreenProbe.CountNear(
+                (int)barRect.MinX, (int)barRect.MinY,
+                (int)(barRect.MaxX - barRect.MinX), (int)(barRect.MaxY - barRect.MinY),
+                255, 255, 255, 30);
+            int HandleWhite() => ScreenProbe.CountNear(
+                (int)handleTL.X - 20, (int)handleTL.Y - 20, 40, 40, 255, 255, 255, 30);
+
+            var oldBox = dragInk.PaddedBounds.Inflate(8f);
+            int BoxMagenta(in RectF r) => ScreenProbe.CountMagenta(
+                (int)r.MinX, (int)r.MinY, (int)(r.MaxX - r.MinX), (int)(r.MaxY - r.MinY));
+            var refBox = refInk.PaddedBounds.Inflate(10f);
+            byte[] RefShot() => ScreenProbe.CaptureRegion(
+                (int)refBox.MinX, (int)refBox.MinY,
+                (int)(refBox.MaxX - refBox.MinX), (int)(refBox.MaxY - refBox.MinY));
+
+            int barBefore = BarWhite(), handleBefore = HandleWhite();
+            int oldBefore = BoxMagenta(oldBox);
+            var refBefore = RefShot();
+
+            // 按住选中内容中间拖走（中间离手柄最远，命中的一定是"整体拖动"）
+            float px = x0 + 130f * dpi, py = y0 + 700f;
+            float dx = 150f, dy = 210f;
+            bool tookDrag = SelectionGestureForTest(px, py);
+            UpdateSelectionGestureForTest(px + dx, py + dy);
+            SettleFrames(90);
+
+            var movedBox = new RectF
+            {
+                MinX = oldBox.MinX + dx, MinY = oldBox.MinY + dy,
+                MaxX = oldBox.MaxX + dx, MaxY = oldBox.MaxY + dy,
+            };
+            // 墨量比对只在**中间那一段**做：两端压着缩放手柄，而手柄拖动中是收起来的，
+            // 拿整条去比会把"手柄盖住了几块墨"当成"两种画法不一致"。
+            var midStrip = new RectF
+            {
+                MinX = (movedBox.MinX + movedBox.MaxX) * 0.5f - 200f,
+                MinY = (movedBox.MinY + movedBox.MaxY) * 0.5f - 30f,
+                MaxX = (movedBox.MinX + movedBox.MaxX) * 0.5f - 100f,
+                MaxY = (movedBox.MinY + movedBox.MaxY) * 0.5f + 30f,
+            };
+            int barDuring = BarWhite(), handleDuring = HandleWhite();
+            int oldDuring = BoxMagenta(oldBox), newDuring = BoxMagenta(movedBox);
+            int stripDuring = BoxMagenta(midStrip);
+            var refDuring = RefShot();
+            int patchDuring = _windows[0].LastPatchCount;
+
+            Check("拖动中：手柄与操作条收起来（方案 A）",
+                  tookDrag && SelChromeCollapsed
+                  && barDuring * 10 < barBefore && handleDuring * 10 < handleBefore,
+                  $"接住={tookDrag}，收起={SelChromeCollapsed}；"
+                  + $"操作条的白 {barBefore}→{barDuring}，手柄的白 {handleBefore}→{handleDuring}");
+
+            Check("拖动中：内容层一帧都不重画（方案 B）",
+                  patchDuring == 0,
+                  $"上一帧光栅化分块 {patchDuring} 块（老做法要把走过的面积整块重画一遍）");
+
+            Check("拖动中：预览真的上屏（新位置有墨、原位置干净）",
+                  newDuring > 200 && oldDuring == 0,
+                  $"新位置 {newDuring} 像素，原位置 {oldDuring} 像素");
+
+            Check("拖动中：没被选中的墨迹一个像素都不许变",
+                  ScreenProbe.DiffCount(refBefore, refDuring) == 0,
+                  $"参照物区域差异 {ScreenProbe.DiffCount(refBefore, refDuring)} 像素");
+
+            EndSelectionGestureForTest();
+            SettleFrames(250);
+
+            // 松手后框跟着内容走到了新位置，所以手柄与操作条要**按现在的框**重新取位置
+            var frameAfter = LiveSelectionFrame;
+            var barRectAfter = SelectionHandles.BarRect(frameAfter.CanvasAabb, dpi, ViewportCanvas);
+            var handleAfterPt = SelectionHandles.CanvasPosition(SelHandle.TopLeft, frameAfter, dpi);
+            int barAfter = ScreenProbe.CountNear(
+                (int)barRectAfter.MinX, (int)barRectAfter.MinY,
+                (int)(barRectAfter.MaxX - barRectAfter.MinX), (int)(barRectAfter.MaxY - barRectAfter.MinY),
+                255, 255, 255, 30);
+            int handleAfter = ScreenProbe.CountNear(
+                (int)handleAfterPt.X - 20, (int)handleAfterPt.Y - 20, 40, 40, 255, 255, 255, 30);
+            int oldAfter = BoxMagenta(oldBox), newAfter = BoxMagenta(movedBox);
+            int stripAfter = BoxMagenta(midStrip);
+            int parity = Math.Abs(stripAfter - stripDuring);
+            var refAfter = RefShot();
+
+            Check("松手后：装饰回来、模型才动、原位置干净",
+                  !SelChromeCollapsed && handleAfter > handleBefore / 2 && barAfter > barBefore / 2
+                  && !dragInk.Transform.IsIdentity && oldAfter == 0,
+                  $"手柄的白 {handleAfter}（拖动前 {handleBefore}），条的白 {barAfter}，"
+                  + $"模型 {(dragInk.Transform.IsIdentity ? "还没动" : "动了")}，原位置 {oldAfter} 像素");
+
+            Check("松手前后同一段墨的墨量一致（预览与内容层像素一致）",
+                  stripDuring > 200 && parity <= Math.Max(20, stripDuring / 50),
+                  $"中间那一段：拖动中 {stripDuring} 像素，松手后 {stripAfter} 像素（差 {parity}）");
+
+            Check("松手后参照物仍然一个像素都没变",
+                  ScreenProbe.DiffCount(refBefore, refAfter) == 0,
+                  $"差异 {ScreenProbe.DiffCount(refBefore, refAfter)} 像素");
+
+            Doc.Undo();
+            SettleFrames(250);
+            Check("一次撤销回到原位（方案 B 没改撤销语义）",
+                  dragInk.Transform.IsIdentity && BoxMagenta(oldBox) > oldBefore / 2
+                  && BoxMagenta(movedBox) == 0,
+                  $"模型 {(dragInk.Transform.IsIdentity ? "回原位" : "没回来")}，"
+                  + $"原位置品红 {BoxMagenta(oldBox)} 像素（拖着时 {oldBefore}），"
+                  + $"拖过去的位置 {BoxMagenta(movedBox)} 像素（该是 0）");
+
+            // ---- 方案 A 的另一半：旋转中**留**旋转柄与度数标签 ----
+            Doc.Clear();
+            Doc.ClearHistory();
+            var spinInk = FatLine(y0 + 700f, new Color4(1f, 0f, 1f, 1f));
+            Doc.AddStroke(spinInk);
+            Doc.SelectOnly(new[] { spinInk });
+            SettleFrames(250);
+
+            var f2 = LiveSelectionFrame;
+            var grip2 = SelectionHandles.CanvasPosition(SelHandle.Rotate, f2, dpi);
+            var pivot2 = new Vector2((f2.CanvasAabb.MinX + f2.CanvasAabb.MaxX) * 0.5f,
+                                     (f2.CanvasAabb.MinY + f2.CanvasAabb.MaxY) * 0.5f);
+            float arm2 = Vector2.Distance(grip2, pivot2);
+            var barRect2 = SelectionHandles.BarRect(f2.CanvasAabb, dpi, ViewportCanvas);
+            int SpinBarWhite() => ScreenProbe.CountNear(
+                (int)barRect2.MinX, (int)barRect2.MinY,
+                (int)(barRect2.MaxX - barRect2.MinX), (int)(barRect2.MaxY - barRect2.MinY),
+                255, 255, 255, 30);
+            // 度数标签就在**当前**旋转柄的上方（手柄跟着内容转，所以每步都要重算位置）
+            int LabelAccent()
+            {
+                var h = SelectionHandles.CanvasPosition(SelHandle.Rotate, LiveSelectionFrame, dpi);
+                int pw = (int)(120f * dpi), ph = (int)(70f * dpi);
+                return ScreenProbe.CountNear((int)(h.X - pw * 0.5f), (int)(h.Y - ph),
+                                             pw, ph, 0, 120, 212, 40);
+            }
+
+            int spinBarBefore = SpinBarWhite();
+            bool tookSpin = SelectionGestureForTest(grip2.X, grip2.Y);
+            UpdateSelectionGestureForTest(pivot2.X - arm2, pivot2.Y);     // 屏幕上逆时针 90°
+            SettleFrames(90);
+
+            int labelPixels = LabelAccent();
+            int spinBarDuring = SpinBarWhite();
+            Check("旋转中：柄与度数标签还在、操作条收起来（方案 A）",
+                  tookSpin && SelRotating && SelChromeCollapsed
+                  && spinBarDuring * 10 < spinBarBefore && labelPixels > 800,
+                  $"接住={tookSpin}，旋转中={SelRotating}，收起={SelChromeCollapsed}；"
+                  + $"度数标签强调色 {labelPixels} 像素，操作条的白 {spinBarBefore}→{spinBarDuring}");
+
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            var f2After = LiveSelectionFrame;
+            var barRect2After = SelectionHandles.BarRect(f2After.CanvasAabb, dpi, ViewportCanvas);
+            int spinBarAfter = ScreenProbe.CountNear(
+                (int)barRect2After.MinX, (int)barRect2After.MinY,
+                (int)(barRect2After.MaxX - barRect2After.MinX), (int)(barRect2After.MaxY - barRect2After.MinY),
+                255, 255, 255, 30);
+            Check("旋转松手后：标签消失、操作条回来",
+                  !SelRotating && spinBarAfter > spinBarBefore / 2,
+                  $"条的白 {spinBarAfter}（旋转前 {spinBarBefore}）");
+
+            // ---- 多选拖动：框是**轴对齐并集**，拖动中同样要跟着内容走 ----
+            // （LiveSelectionFrame 的另一条分支：单选靠"框坐标系右乘"，多选要
+            //   逐条过实时矩阵再并。少了这条，多选拖动时会只剩框留在原地。）
+            Doc.Clear();
+            Doc.ClearHistory();
+            var m1 = FatLine(y0 + 600f, new Color4(1f, 0f, 1f, 1f));
+            var m2 = FatLine(y0 + 980f, new Color4(1f, 0f, 1f, 1f));
+            Doc.AddStroke(m1);
+            Doc.AddStroke(m2);
+            Doc.SelectOnly(new[] { m1, m2 });
+            SettleFrames(200);
+
+            var multiBefore = LiveSelectionFrame.CanvasAabb;
+            float mx = (multiBefore.MinX + multiBefore.MaxX) * 0.5f;
+            float my = (multiBefore.MinY + multiBefore.MaxY) * 0.5f;
+            bool tookMulti = SelectionGestureForTest(mx, my);
+            UpdateSelectionGestureForTest(mx + 120f, my - 80f);
+            SettleFrames(60);
+            var multiDuring = LiveSelectionFrame.CanvasAabb;
+            bool frameFollows = MathF.Abs(multiDuring.MinX - (multiBefore.MinX + 120f)) < 1.5f
+                             && MathF.Abs(multiDuring.MinY - (multiBefore.MinY - 80f)) < 1.5f;
+            Check("多选拖动：框（轴对齐并集）跟着内容走",
+                  tookMulti && DragPreviewActive && frameFollows,
+                  $"{multiBefore.MinX:F0},{multiBefore.MinY:F0} → {multiDuring.MinX:F0},{multiDuring.MinY:F0}"
+                  + $"（期望 +120,-80）");
+            EndSelectionGestureForTest();
+            SettleFrames(120);
+
+            // ---- 缩放手势也走同一条"摘出去"的路，但**装饰不收** ----
+            // （方案 B 对三种手势一视同仁；方案 A 只收移动与旋转——
+            //   拖某个手柄时，另外几个手柄是有用的参照。）
+            Doc.Clear();
+            Doc.ClearHistory();
+            var scInk = FatLine(y0 + 700f, new Color4(1f, 0f, 1f, 1f));
+            Doc.AddStroke(scInk);
+            Doc.SelectOnly(new[] { scInk });
+            SettleFrames(200);
+
+            var fScale = LiveSelectionFrame;
+            var gripR = SelectionHandles.CanvasPosition(SelHandle.Right, fScale, dpi);
+            float widthBefore = fScale.CanvasAabb.MaxX - fScale.CanvasAabb.MinX;
+            bool tookScale = SelectionGestureForTest(gripR.X, gripR.Y);
+            UpdateSelectionGestureForTest(gripR.X + 200f, gripR.Y);
+            SettleFrames(60);
+            var fScaled = LiveSelectionFrame;
+            float widthDuring = fScaled.CanvasAabb.MaxX - fScaled.CanvasAabb.MinX;
+            Check("缩放中：框跟着手柄变宽，且装饰不收（方案 A 只管移动与旋转）",
+                  tookScale && widthDuring > widthBefore + 150f && !SelChromeCollapsed,
+                  $"宽 {widthBefore:F0} → {widthDuring:F0}（期望 +200），收起={SelChromeCollapsed}");
+            EndSelectionGestureForTest();
+            SettleFrames(120);
+
+            // ---- 单选一个**转过角度**的对象：框也必须是轴对齐的正矩形 ----
+            // （用户 2026-09-16 定：单选也走多选那条量法。早先是"单选跟对象转"，
+            //   判据就一条——框坐标系必须是单位阵，且框恰好是对象墨迹的外接正矩形。
+            //   有人把它改回"跟对象转"，这里会红。）
+            Doc.Clear();
+            Doc.ClearHistory();
+            var tilted = FatLine(y0 + 700f, new Color4(1f, 0f, 1f, 1f));
+            Doc.AddStroke(tilted);
+            Doc.SelectOnly(new[] { tilted });
+            var tCenter = new Vector2((tilted.PaddedBounds.MinX + tilted.PaddedBounds.MaxX) * 0.5f,
+                                      (tilted.PaddedBounds.MinY + tilted.PaddedBounds.MaxY) * 0.5f);
+            Doc.ApplyTransform(Matrix3x2.CreateRotation(-40f * MathF.PI / 180f, tCenter));
+            SettleFrames(150);
+
+            var tf = SelectionHandles.FrameOf(Doc.Selected);
+            var tExpect = tilted.WorldInkBounds;
+            bool tAligned = tf.ToCanvas.IsIdentity
+                         && MathF.Abs(tf.Local.MinX - tExpect.MinX) < 0.01f
+                         && MathF.Abs(tf.Local.MinY - tExpect.MinY) < 0.01f
+                         && MathF.Abs(tf.Local.MaxX - tExpect.MaxX) < 0.01f
+                         && MathF.Abs(tf.Local.MaxY - tExpect.MaxY) < 0.01f;
+            var tGrip = SelectionHandles.CanvasPosition(SelHandle.Rotate, tf, dpi);
+            bool tGripOnTop = MathF.Abs(tGrip.X - (tf.Local.MinX + tf.Local.MaxX) * 0.5f) < 0.01f
+                           && tGrip.Y < tf.Local.MinY;
+            Check("单选一个转过的对象：框是正矩形、旋转柄在正上方",
+                  tAligned && tGripOnTop,
+                  $"框 {tf.Local.MinX:F0},{tf.Local.MinY:F0}..{tf.Local.MaxX:F0},{tf.Local.MaxY:F0}"
+                  + $"（墨迹 {tExpect.MinX:F0},{tExpect.MinY:F0}..{tExpect.MaxX:F0},{tExpect.MaxY:F0}）；"
+                  + $"柄在 ({tGrip.X:F0},{tGrip.Y:F0})");
+
+            // 再转一手：拖动中框仍然轴对齐，而且是**每帧重新贴合**当前内容
+            var tPivot = new Vector2((tf.Local.MinX + tf.Local.MaxX) * 0.5f,
+                                     (tf.Local.MinY + tf.Local.MaxY) * 0.5f);
+            float tArm = Vector2.Distance(tGrip, tPivot);
+            float tA0 = MathF.Atan2(tGrip.Y - tPivot.Y, tGrip.X - tPivot.X);
+            float tA1 = tA0 - 30f * MathF.PI / 180f;              // 屏幕上逆时针 30°
+            bool tookTilt = SelectionGestureForTest(tGrip.X, tGrip.Y);
+            UpdateSelectionGestureForTest(tPivot.X + tArm * MathF.Cos(tA1),
+                                          tPivot.Y + tArm * MathF.Sin(tA1));
+            SettleFrames(60);
+
+            var dFrame = LiveSelectionFrame;
+            var wb = tilted.WorldInkBounds;
+            var expBox = RectF.Empty;
+            foreach (var corner in new[]
+            {
+                new Vector2(wb.MinX, wb.MinY), new Vector2(wb.MaxX, wb.MinY),
+                new Vector2(wb.MaxX, wb.MaxY), new Vector2(wb.MinX, wb.MaxY),
+            })
+            {
+                var q = Vector2.Transform(corner, DragPreviewMatrix);
+                expBox.Add(q.X, q.Y);
+            }
+            bool tLiveAligned = dFrame.ToCanvas.IsIdentity
+                             && MathF.Abs(dFrame.Local.MinX - expBox.MinX) < 0.5f
+                             && MathF.Abs(dFrame.Local.MaxX - expBox.MaxX) < 0.5f;
+            Check("旋转中：框仍正着，并每帧重新贴合当前内容",
+                  tookTilt && tLiveAligned,
+                  $"框宽 {dFrame.Local.MaxX - dFrame.Local.MinX:F0}"
+                  + $"（内容外接 {(expBox.MaxX - expBox.MinX):F0}），轴对齐={dFrame.ToCanvas.IsIdentity}");
+            EndSelectionGestureForTest();
+            SettleFrames(120);
+
+            BoardOn = boardWas;
+            BoardColor = boardColorWas;
+            ViewOffsetY = camWas;
+            Doc.Clear();
+            Doc.ClearHistory();
         }
 
         Console.WriteLine();

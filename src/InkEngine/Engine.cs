@@ -262,6 +262,35 @@ public class InkEngine
     internal const float ClickToleranceLogical = 4f;
     private SelectionFrame _dragFrame;
 
+    /// <summary>
+    /// 这一次手势**真的动过**吗（指针离按下那一点超过了点击容差）。
+    ///
+    /// 只用来决定"装饰要不要收起来"（见 <see cref="SelChromeCollapsed"/>）：
+    /// 单击一下不该让手柄和操作条闪一下。
+    /// </summary>
+    private bool _selDragMoved;
+
+    /// <summary>
+    /// 拖动预览（见 <see cref="DragPreviewActive"/>）里**从内容层摘出去**的那一批，
+    /// 判定用（内容层重画一块时 O(1) 问"这条要不要跳过"）。见 <see cref="IsContentDetached"/>。
+    /// </summary>
+    private readonly HashSet<Stroke> _detachSet = new();
+
+    /// <summary>
+    /// 同一批，按**文档顺序**排一遍。画的时候用它——
+    /// 一个集合的遍历顺序不是 z 序，多选里荧光笔压着字那种情况就会翻来翻去。
+    /// </summary>
+    private readonly List<Stroke> _detachOrdered = new();
+
+    /// <summary>
+    /// 上一帧拖动预览占的画布范围。
+    ///
+    /// 脏区要写成"上一帧 ∪ 这一帧"：后缓冲里躺着的是两帧前的画面，而这两块并起来
+    /// 正好覆盖两帧之间的差集（这和以前"旧位置 ∪ 新位置"是同一套账，见
+    /// <c>Overlay.UpdateFrameDirty</c> 的注释）。
+    /// </summary>
+    private RectF _dragPrevBounds;
+
     /// <summary>正在拖旋转手柄——度数标签靠它决定显不显示。</summary>
     internal bool SelRotating;
     /// <summary>
@@ -2789,6 +2818,136 @@ public class InkEngine
     //  选择手势（框选工具 = 选择工具）
     // =====================================================================
 
+    // ---- 拖动期收装饰（方案 A）与拖动预览（方案 B）------------------------
+
+    /// <summary>
+    /// 拖动 / 旋转手势里"装饰该收起来"吗（方案 A）。
+    ///
+    /// 三条判据：
+    ///   · 正在拖（<see cref="SelDragging"/>）；
+    ///   · **真的动过**（超过 <see cref="ClickToleranceLogical"/>）——单击一下不该闪；
+    ///   · 是**移动或旋转** —— 缩放手势不收：拖某个手柄时另外几个手柄是有用的参照，
+    ///     而光标也已经说明抓的是哪一个。
+    ///
+    /// 为什么可以收：按下那一刻指针就被 SetCapture 接管了，手柄与操作条
+    /// **此刻根本点不中**，画着就是"看得见、点不到"。
+    /// 注意：**脏区照旧算**（见 Overlay.ComputeTransientBounds），靠两帧回溯把
+    /// 消失的那一块擦干净。
+    /// </summary>
+    internal bool SelChromeCollapsed
+        => SelDragging && _selDragMoved
+        && (_dragIsMove || _dragHandle == SelHandle.Rotate);
+
+    /// <summary>拖动预览在不在：手势进行中，而且真的有一批对象被摘出来了。</summary>
+    internal bool DragPreviewActive => SelDragging && _detachOrdered.Count > 0;
+
+    /// <summary>拖动预览要画的那一批（按文档顺序，用 <see cref="DragPreviewMatrix"/> 变换）。</summary>
+    internal IReadOnlyList<Stroke> DragPreviewStrokes => _detachOrdered;
+
+    /// <summary>
+    /// 拖动预览的实时变换（画布坐标），乘在对象**按下那一刻**的变换之上。
+    ///
+    /// 内容层那条老路会把对象变换成"按下时的变换 × 这个矩阵"，这里左乘的正是它，
+    /// 所以两种画法应当像素一致（自检里有一条专门盯这件事）。
+    /// </summary>
+    internal Matrix3x2 DragPreviewMatrix => _selDragMatrix;
+
+    /// <summary>这一条现在被摘出内容层了吗（内容层重画一块时要跳过它）。</summary>
+    internal bool IsContentDetached(Stroke s) => _detachSet.Count > 0 && _detachSet.Contains(s);
+
+    /// <summary>
+    /// 手势开始：把这一批对象从**内容层**里摘出去（方案 B）。
+    ///
+    /// 三步，代价 O(文档条数)，而且一个手势只做一次：
+    ///   ① 收成集合（内容层重画时判定 O(1)）；
+    ///   ② 按文档顺序排一份（画的时候要 z 序，集合的遍历顺序不是 z 序）；
+    ///   ③ 把它们**按下那一刻**压过的块标脏一次 —— 重画那些块时跳过这一批，
+    ///      于是"它们原来待的地方"在内容层里当场就干净了；之后的整个手势期间
+    ///      内容层一帧都不用再动（相机滚动也照旧成立，因为块活在画布空间）。
+    /// </summary>
+    private void DetachForDrag()
+    {
+        _detachSet.Clear();
+        _detachOrdered.Clear();
+        foreach (var s in _dragTargets) _detachSet.Add(s);
+        if (_detachSet.Count > 0)
+        {
+            foreach (var s in Doc.Strokes)
+                if (_detachSet.Contains(s)) _detachOrdered.Add(s);
+            foreach (var s in _dragTargets) Doc.InvalidateContent(s.PaddedBounds);
+        }
+        _dragPrevBounds = PreviewBounds(Matrix3x2.Identity);
+    }
+
+    /// <summary>手势结束：这一批回到内容层（下一次重画就带上它们了）。</summary>
+    private void ReattachAfterDrag()
+    {
+        _detachSet.Clear();
+        _detachOrdered.Clear();
+        _dragPrevBounds = RectF.Empty;
+        _selDragMoved = false;
+    }
+
+    /// <summary>
+    /// 这一批对象在矩阵 <paramref name="m"/> 下占的画布范围（轴对齐）。
+    ///
+    /// 脏区必须是正矩形，而对象和选区框都可能是斜的，所以取四个角变换后的包围盒。
+    /// 往外多留 2 逻辑像素：抗锯齿的边缘会跑出精确包围盒一点点，漏了就会在屏幕上
+    /// 留一条发丝一样的残影。
+    /// </summary>
+    private RectF PreviewBounds(in Matrix3x2 m)
+    {
+        var r = RectF.Empty;
+        foreach (var s in _dragTargets)
+        {
+            var b = s.PaddedBounds;
+            if (b.IsEmpty) continue;
+            if (m.IsIdentity) { r.Add(b); continue; }
+            r.Add(TransformBounds(b, m));
+        }
+        return r.IsEmpty ? r : r.Inflate(2f * DpiScale);
+    }
+
+    /// <summary>把一个轴对齐矩形过一遍矩阵，取四个角变换后的新包围盒。</summary>
+    private static RectF TransformBounds(in RectF b, in Matrix3x2 m)
+    {
+        if (b.IsEmpty) return RectF.Empty;
+        if (m.IsIdentity) return b;
+        var p0 = Vector2.Transform(new Vector2(b.MinX, b.MinY), m);
+        var p1 = Vector2.Transform(new Vector2(b.MaxX, b.MinY), m);
+        var p2 = Vector2.Transform(new Vector2(b.MaxX, b.MaxY), m);
+        var p3 = Vector2.Transform(new Vector2(b.MinX, b.MaxY), m);
+        var r = RectF.Empty;
+        r.Add(p0.X, p0.Y); r.Add(p1.X, p1.Y);
+        r.Add(p2.X, p2.Y); r.Add(p3.X, p3.Y);
+        return r;
+    }
+
+    /// <summary>
+    /// **这一帧该画的那个选中框**：拖动预览期间要用实时变换，不能再用模型里的。
+    ///
+    /// 为什么必须分开：方案 B 里模型到松手才动（那样内容层才能一帧都不重画），
+    /// 于是 <see cref="SelectionHandles.FrameOf"/> 拿到的是**按下那一刻**的框 ——
+    /// 直接拿它画，拖动中框和手柄会留在原地不动、内容和框分家（松手才"啪"地跳回来）。
+    ///
+    /// 算法和 <see cref="SelectionHandles.FrameOf"/> 是**同一条**：每个对象的**世界**
+    /// 包围盒先过一遍实时矩阵，再并成轴对齐的框。所以一条和多条没有分支——
+    /// 框永远正着，旋转中每帧重新贴合当前内容（会"呼吸"，这是"框永远正着"的代价，
+    /// 见 SelectionFrame 的注释）。
+    /// 不在拖动中就原样返回（绝大多数帧走这条，零开销）。
+    /// </summary>
+    internal SelectionFrame LiveSelectionFrame
+    {
+        get
+        {
+            var f = SelectionHandles.FrameOf(Doc.Selected);
+            if (!DragPreviewActive || f.IsEmpty) return f;
+            var r = RectF.Empty;
+            foreach (var s in Doc.Selected) r.Add(TransformBounds(s.WorldInkBounds, _selDragMatrix));
+            return new SelectionFrame { Local = r, ToCanvas = Matrix3x2.Identity };
+        }
+    }
+
     /// <summary>
     /// 框选工具按下时的分流。返回 true 表示这次按下已经被选择手势接掉。
     ///
@@ -2872,10 +3031,15 @@ public class InkEngine
         _dragFrame = frame;
         _dragStartPoint = new Vector2(x, y);
         _selDragMatrix = Matrix3x2.Identity;
+        _selDragMoved = false;
         _dragTargets = Doc.Selected.ToArray();
         _dragStartXform = new Matrix3x2[_dragTargets.Length];
         for (int i = 0; i < _dragTargets.Length; i++)
             _dragStartXform[i] = _dragTargets[i].Transform;
+
+        // 方案 B：把这一批从**内容层**摘出去，改由浮动层画实时预览。
+        // 模型在整个手势里一个字都不改，所以内容层一帧都不用重画。
+        DetachForDrag();
 
         // 旋转：累积角从 0 起，指针的"上一帧位置"就是按下这一点。
         // 必须在这里归零——上一次拖拽攒下来的角度绝不能带进这一次。
@@ -2923,8 +3087,9 @@ public class InkEngine
         {
             // —— 旋转：**一帧一步地累积**（角度不设上限，见 SelRotationDegrees）——
             //
-            // 角度在**框坐标**里量（和真正施加的旋转矩阵同一套输入），否则对象被
-            // 移动/转过之后，读数会和实际转过的角度对不上。
+            // 角度在**框坐标**里量（和真正施加的旋转矩阵同一套输入）。
+            // 选中框现在一律轴对齐（ToCanvas 是单位阵），所以框坐标 == 画布坐标，
+            // 量出来的角度就是屏幕上看到的角度——这也正是"读数按眼睛看的方向"那条规则。
             var c = new Vector2((_dragFrame.Local.MinX + _dragFrame.Local.MaxX) * 0.5f,
                                 (_dragFrame.Local.MinY + _dragFrame.Local.MaxY) * 0.5f);
             var p = _dragFrame.ToLocalPoint(cur);
@@ -2934,9 +3099,10 @@ public class InkEngine
             // 吸附作用在**累积角**上：90° / 15° 的整数倍在负角度、超过一圈的角度上照样对得上。
             float localDeg = SelectionHandles.SnapRotationDegrees(_rotAccumDeg, shift, alt, out bool snapped);
 
-            // 被翻转过的对象：框坐标和屏幕**反手**，本地量出来的角度和眼睛看到的转向相反。
-            // 读数按**眼睛看到的方向**（逆时针为正），矩阵仍用本地那个数——
-            // 不然手柄就不跟手了（手柄必须始终咬住指针，这一条优先级更高）。
+            // 这一段是"框坐标和屏幕反手时，把读数翻回眼睛看到的方向"的通用保险：
+            // 镜像过的对象 + 斜框的组合下，本地角度的正负和屏幕是反的。
+            // 选中框改成**一律轴对齐**之后 ToCanvas 恒为单位阵，这里恒不触发；
+            // 留着是因为公式本来就要覆盖"框有自己的朝向"那一天（见 SelectionFrame 的注释）。
             SelRotationDegrees = SelectionHandles.IsMirrored(_dragFrame.ToCanvas) ? -localDeg : localDeg;
             SelRotationSnapped = snapped;
             SelRotating = true;
@@ -2954,14 +3120,25 @@ public class InkEngine
             m = Conjugate(_dragFrame.ToCanvas, localM);
         }
 
-        for (int i = 0; i < _dragTargets.Length; i++)
-        {
-            var s = _dragTargets[i];
-            Doc.Dirty.Add(s.PaddedBounds);                 // 旧位置要擦
-            Doc.SetTransformLive(s, _dragStartXform[i] * m);
-            Doc.Dirty.Add(s.PaddedBounds);                 // 新位置要画
-        }
+        // 方案 B：**不动模型**，实时位移只活在 _selDragMatrix 里，由浮动层画预览。
+        //
+        // 以前这里是"每帧 SetTransformLive"，它会把渲染版本号抬起来，于是内容层
+        // 每一帧都要把"走过的面积"里的所有笔迹重画一遍——实测散布全屏的一小撮
+        // 是 19ms/帧，而其中被拖的只有那几条。现在内容层只在**手势开始**被标脏一次
+        // （把这一批从块里摘出去那一下），中途一帧都不碰。
+        //
+        // 脏区 = 上一帧预览的位置 ∪ 这一帧预览的位置：后缓冲里躺着的是两帧前的画面，
+        // 而这两块并起来正好覆盖"两帧之间差了哪些像素"（和以前"旧位 ∪ 新位"同一套账）。
+        if (!_dragPrevBounds.IsEmpty) Doc.Dirty.Add(_dragPrevBounds);
         _selDragMatrix = m;
+        _dragPrevBounds = PreviewBounds(m);
+        if (!_dragPrevBounds.IsEmpty) Doc.Dirty.Add(_dragPrevBounds);
+
+        // 方案 A：真的动过才收装饰（单击一下不该闪）。
+        if (!_selDragMoved
+            && Vector2.Distance(cur, _dragStartPoint) > ClickToleranceLogical * DpiScale)
+            _selDragMoved = true;
+
         _dirty = true;
     }
 
@@ -3021,6 +3198,12 @@ public class InkEngine
         _dragHitStroke = null;
         _pendingClone = null;
         _selDragMatrix = Matrix3x2.Identity;
+
+        // 方案 B：这一批回到内容层（下一次重画就把它们画进块里）。
+        // 顺序放在最后：上面那条"提交变换"已经把旧位与新位都标脏了，
+        // 所以这一帧的重画一定会带上它们（而不是继续画预览）。
+        ReattachAfterDrag();
+
         _dirty = true;
     }
 

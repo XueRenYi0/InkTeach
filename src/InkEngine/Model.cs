@@ -1822,6 +1822,24 @@ internal sealed class InkDocument
     }
 
     /// <summary>
+    /// 告诉渲染层"这些块要整块重来"，但**模型本身一个字没改**。
+    ///
+    /// 用途是拖动预览（见 <c>InkEngine._dragTargets</c> 与方案 B）：手势开始的这一刻，
+    /// 被拖的那一批对象要从内容层里**摘出去**——它们原来压过的地方必须重画一次
+    /// （这次不带它们）。之后整个手势期间这些块都有效，一帧都不用再碰。
+    ///
+    /// 为什么需要这个专用入口：块标脏只在"版本号变了"那一支里做
+    /// （见 <c>Overlay.SyncTiles</c>），所以"只标脏、不动模型"这件事必须
+    /// 同时把版本号往上抬一格，否则这一帧的标脏会被丢掉。
+    /// </summary>
+    public void InvalidateContent(in RectF r)
+    {
+        Dirty.Add(r);
+        StructureChangedSinceRender = true;
+        Version++;
+    }
+
+    /// <summary>
     /// 用读出来的内容整体替换文档（加载 / 粘贴）。
     /// **这是唯一一个不产生撤销动作的批量改动**——加载是一份新文档的开始；
     /// 粘贴要进撤销栈的话，由调用方自己包成一条动作。
@@ -1913,7 +1931,19 @@ internal sealed class InkDocument
         if (_undo.Count == 0) return false;
         var a = _undo[^1];
         _undo.RemoveAt(_undo.Count - 1);
+
+        // 撤销也要把自己动过的那块标脏——**和 Commit 用同一句话**，理由一样：
+        // 命令自己报告"我动了哪块区域"，漏标就是屏幕上留着撤销前的画面
+        // （改变换那类命令只 bump 版本号、不碰 Dirty，原来在这里断了链：
+        //  模型回去了、块却还是旧图，自检里"撤销后原位置要有墨、拖过去的地方要干净"
+        //  两条当场抓到）。
+        //
+        // **必须在改之前采样**：AffectedAfter 是"对象**现在**占哪块"（TransformObjectsAction
+        // 是现算的），改完再算就变成"原位置"，于是"拖过去的那个位置"永远没被标脏、
+        // 在屏幕上留一块幽灵（实测：撤销后新旧两处都有墨）。
+        var affected = a.AffectedUnion;
         a.Undo(this);
+        Dirty.Add(affected);
         _redo.Add(a);
         return true;
     }
@@ -1924,6 +1954,7 @@ internal sealed class InkDocument
         var a = _redo[^1];
         _redo.RemoveAt(_redo.Count - 1);
         a.Redo(this);
+        Dirty.Add(a.AffectedUnion);      // 同 Undo：重做同样要把那块重画
         _undo.Add(a);
         TrimUndo();
         return true;

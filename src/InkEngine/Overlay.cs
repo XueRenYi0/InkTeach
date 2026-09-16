@@ -762,7 +762,13 @@ internal sealed class OverlayWindow : IDisposable
         // 内容层"只增不减"（正在写字）时才走这条路，见 SyncTiles 里的判断。
         if (onlyThese != null)
         {
-            foreach (var s in onlyThese) DrawStroke(s);
+            foreach (var s in onlyThese)
+            {
+                // 被摘出去的那一批（拖动预览）不画进内容层：它们此刻由浮动层画，
+                // 位置是每帧都在变的实时变换。见 InkEngine.DetachForDrag。
+                if (app.IsContentDetached(s)) continue;
+                DrawStroke(s);
+            }
             _ctx.Transform = Matrix3x2.Identity;
             var hrAppend = _ctx.EndDraw();
             _ctx.Target = null;
@@ -789,6 +795,7 @@ internal sealed class OverlayWindow : IDisposable
         foreach (var s in _strokeScratch)
         {
             if (!s.PaddedBounds.Intersects(canvas)) continue;
+            if (app.IsContentDetached(s)) continue;      // 同上：拖动预览那一批不进内容层
             DrawStroke(s);
             drawn++;
         }
@@ -1221,6 +1228,7 @@ internal sealed class OverlayWindow : IDisposable
                 foreach (var s in app.Doc.Strokes)
                 {
                     if (!s.PaddedBounds.Intersects(cv)) continue;
+                    if (app.IsContentDetached(s)) continue;   // 拖动预览那一批由浮动层画
                     DrawStroke(s);
                 }
             }
@@ -1238,6 +1246,7 @@ internal sealed class OverlayWindow : IDisposable
             // 正在写的那一笔几何每帧都在变，用实现缓存只会不停重建，反而更慢
             DrawStroke(app.ActiveStroke);
 
+            DrawDragPreview(app);
             DrawSelection(app);
             DrawCaptureRect(app);
             DrawLaser(app);
@@ -1334,7 +1343,9 @@ internal sealed class OverlayWindow : IDisposable
         // 旋转手柄旁边留了一小块红色的前帧残留）。
         if (app.Doc.Selected.Count > 0)
         {
-            var frame = SelectionHandles.FrameOf(app.Doc.Selected);
+            // 拖动预览期间框是"实时"的（模型还没动，见 LiveSelectionFrame）：
+            // 脏区必须跟着它走，否则框和手柄会在新位置上留下擦不掉的残影。
+            var frame = app.LiveSelectionFrame;
             var sb = frame.CanvasAabb;
             float dpi = app.DpiScale;
             float margin = SelectionHandles.VisualSizeLogical * 0.5f * dpi + 6f;
@@ -1446,6 +1457,33 @@ internal sealed class OverlayWindow : IDisposable
     }
 
     /// <summary>
+    /// 拖动预览：手势中把被"摘出内容层"的那一批按**实时变换**画在最上层。
+    ///
+    /// 为什么要有这一层：拖动期间模型一个字都不改（所以内容层那些块全部有效、
+    /// 一帧都不用重画，最坏帧不再随"走过的面积"涨），实时位移只活在
+    /// <see cref="InkEngine.DragPreviewMatrix"/> 里；旧位置则是从内容层贴回来的，
+    /// 像素级还原、不会闪。
+    ///
+    /// 得到的两个副作用，都是想要的：
+    ///   · 被拖的那块**自动浮起来**（它画在整层内容之上）——不用去压暗周围；
+    ///   · 拖动期间 z 序暂时在最上层（松手回到正确层次，这是"拖动预览"的常规取舍）。
+    ///
+    /// 画法必须与内容层**像素一致**，否则松手那一下会"跳"：这里左乘的矩阵正是
+    /// 内容层会把对象变换成的那个（对象自己的变换 × 实时矩阵），
+    /// 自检里有一条"松手前后同一段墨的墨量一致"盯着它。
+    /// </summary>
+    private void DrawDragPreview(InkEngine app)
+    {
+        var strokes = app.DragPreviewStrokes;
+        if (strokes.Count == 0) return;
+
+        var canvasToWindow = _ctx.Transform;                 // 此刻是 CanvasToWindow
+        _ctx.Transform = app.DragPreviewMatrix * canvasToWindow;
+        foreach (var s in strokes) DrawStroke(s);
+        _ctx.Transform = canvasToWindow;
+    }
+
+    /// <summary>
     /// 画选中框和手柄。规格见 design/选中与操作条-设计稿.png（方案 B）。
     ///
     /// 三条设计约束，都跟教室场景有关：
@@ -1463,16 +1501,29 @@ internal sealed class OverlayWindow : IDisposable
         var sel = app.Doc.Selected;
         if (sel.Count == 0) return;
 
-        // 选区坐标系：单选跟对象转，多选轴对齐（见 SelectionFrame 的注释）。
-        var frame = SelectionHandles.FrameOf(sel);
+        // 选区坐标系：**一律轴对齐**——不管选了一条还是多条，框都是屏幕上那个正矩形
+        // （见 SelectionFrame 的注释）。拖动预览期间取"实时框"：模型还没动，
+        // 但框必须跟着内容走，而且是每帧重新贴合当前内容（见 LiveSelectionFrame）。
+        var frame = app.LiveSelectionFrame;
         if (frame.IsEmpty) return;
         var b = frame.CanvasAabb;      // 操作条和脏区用它的轴对齐范围
 
         float dpi = app.DpiScale;
         var accent = new Color4(0f, 0.47f, 0.83f, 1f);      // #0078D4
 
-        // 框的四个角。**框本身可能是斜的**（单选一个转过角度的对象时），
-        // 所以只能用四条线画，不能用 DrawRectangle。
+        // 拖动 / 旋转期间的**装饰收敛**（方案 A）：手柄与操作条此刻点不中
+        // （指针已被拖拽接管），留着就是"看得见、点不到"，还跟着内容一起晃。
+        //
+        // 注意三件事：
+        //   · 缩放手势不收（拖手柄时别的柄是参照，见 SelChromeCollapsed）；
+        //   · 旋转时**留**旋转柄与度数标签：柄标着"我抓的是这个"，度数是读数；
+        //   · 不画不等于不算：这些矩形的脏区照旧由 ComputeTransientBounds 给出，
+        //     靠两帧回溯把刚消失的那一块擦干净（这里踩过坑，见那段注释）。
+        bool collapsed = app.SelChromeCollapsed;
+
+        // 框的四个角。**按四个角连成四边形画**，而不是 DrawRectangle：
+        // 现在框一律轴对齐（ToCanvas 是单位阵），两种画法结果一样，
+        // 但这样将来真要加"整组的朝向"时，这里一行都不用改。
         var c0 = SelectionHandles.CanvasPosition(SelHandle.TopLeft, frame, dpi);
         var c1 = SelectionHandles.CanvasPosition(SelHandle.TopRight, frame, dpi);
         var c2 = SelectionHandles.CanvasPosition(SelHandle.BottomRight, frame, dpi);
@@ -1487,21 +1538,27 @@ internal sealed class OverlayWindow : IDisposable
         DrawQuad(c0, c1, c2, c3, 2.5f);
 
         // 3) 旋转手柄（在上边中点外侧，先画连线再画圆）
-        float rotR = SelectionHandles.RotateGripLogical * 0.5f * dpi;
-        var rot = SelectionHandles.CanvasPosition(SelHandle.Rotate, frame, dpi);
-        var topCenter = SelectionHandles.CanvasPosition(SelHandle.Top, frame, dpi);
-        _ctx.DrawLine(topCenter, rot, _scratch, 1.4f);
+        //    拖动中收起来，但**旋转中要留**（此刻它就是"正在抓的那个东西"）。
         var white = Brush(new Color4(1f, 1f, 1f, 1f));
-        _ctx.FillEllipse(new Ellipse(rot, rotR, rotR), white);
-        _ctx.DrawEllipse(new Ellipse(rot, rotR, rotR), _scratch, 1.6f);
-        // 圆里放**官方图标**，不是手画一段弧。
-        // 手画那版在投影上看像个"©"——旋转图标的识别特征就是那个箭头，
-        // 少一笔就不成形。这是"图标别自己画"的又一个实例。
-        float glyph = SelectionHandles.RotateGlyphLogical * dpi;
-        DrawIcon(IconPaths.rotate, rot.X - glyph * 0.5f, rot.Y - glyph * 0.5f, glyph, _scratch);
+        if (!collapsed || app.SelRotating)
+        {
+            float rotR = SelectionHandles.RotateGripLogical * 0.5f * dpi;
+            var rot = SelectionHandles.CanvasPosition(SelHandle.Rotate, frame, dpi);
+            var topCenter = SelectionHandles.CanvasPosition(SelHandle.Top, frame, dpi);
+            _ctx.DrawLine(topCenter, rot, _scratch, 1.4f);
+            _ctx.FillEllipse(new Ellipse(rot, rotR, rotR), white);
+            _ctx.DrawEllipse(new Ellipse(rot, rotR, rotR), _scratch, 1.6f);
+            // 圆里放**官方图标**，不是手画一段弧。
+            // 手画那版在投影上看像个"©"——旋转图标的识别特征就是那个箭头，
+            // 少一笔就不成形。这是"图标别自己画"的又一个实例。
+            float glyph = SelectionHandles.RotateGlyphLogical * dpi;
+            DrawIcon(IconPaths.rotate, rot.X - glyph * 0.5f, rot.Y - glyph * 0.5f, glyph, _scratch);
+        }
 
         // 4) 八个手柄。白底 + 蓝边：深色背景上是白方块显眼，
         //    浅色背景上靠蓝边立住，一套画法两边都成立。
+        //    拖动 / 旋转中收起来（此刻点不中，而且是最"晃眼"的一圈家具）。
+        if (!collapsed)
         {
             float hs = SelectionHandles.VisualSizeLogical * dpi;
             float radius = hs * 0.28f;
@@ -1522,7 +1579,10 @@ internal sealed class OverlayWindow : IDisposable
         }
 
         // 5) 操作条。放在下方，理由见 DrawSelectionBar 的注释。
-        DrawSelectionBar(b, app.ViewportCanvas);
+        //    拖动 / 旋转中收起来：此刻点不中；而且贴着屏幕下边时它会**停在原地**，
+        //    内容继续走、条不跟——那是最像卡死的一幕（见 SelectionHandles.BarRect）。
+        if (!collapsed)
+            DrawSelectionBar(b, app.ViewportCanvas);
 
         // 6) 旋转度数标签：只在拖旋转手柄的过程中出现。
         //
@@ -1736,8 +1796,9 @@ internal sealed class OverlayWindow : IDisposable
     }
 
     /// <summary>
-    /// 画一个四边形。选中框可能是斜的（单选一个转过角度的对象时），
-    /// DrawRectangle 只能画正矩形，所以边框用四条线拼。
+    /// 画一个四边形。选中框现在是轴对齐的，但边框仍然用四条线拼：
+    /// 这条路径同时要能画"框有自己的朝向"的情形（见 SelectionFrame 的注释），
+    /// 换成 DrawRectangle 就等于把那条路堵死了。
     /// </summary>
     private void DrawQuad(Vector2 a, Vector2 b, Vector2 c, Vector2 d, float width)
     {
