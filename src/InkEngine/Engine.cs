@@ -426,6 +426,16 @@ public class InkEngine
     internal Color4 HighlighterCurrent = InkPalette.HighlighterDefault;
     internal bool UiCapturing;
 
+    /// <summary>自检用：系统问了我们几次命中测试、其中几次回答"这块是我的"。</summary>
+    internal int _cntNcHitTest, _cntNcHitClient;
+
+    /// <summary>
+    /// 指针这一刻是不是停在界面自己那一块上。
+    /// 两个地方要用：悬停时光标要给箭头（不是笔尖/橡皮圈）；穿透模式下
+    /// WM_SETCURSOR 要区分"面板之外让下层决定"与"面板之上我们自己给箭头"。
+    /// </summary>
+    private bool _uiHover;
+
     /// <summary>
     /// 白板模式：给整块画布铺一层不透明的底色，遮住桌面和别的程序。
     /// 关掉就是原本的"透明批注"——直接写在别人的 PPT、网页上面。
@@ -702,7 +712,7 @@ public class InkEngine
 
         Loop();
         Shutdown();
-        return 0;
+        return ExitCode;
     }
 
     /// <summary>
@@ -721,6 +731,13 @@ public class InkEngine
     /// 产品界面只会拿到 -1；测试模式由 InkTeach 覆写。
     /// </summary>
     protected virtual int RunModeDispatch(string mode, string[] args) => -1;
+
+    /// <summary>
+    /// 收尾时给进程的退出码。默认 0；自检发现有 FAIL 时置 1，
+    /// 这样脚本/CI 不用去解析控制台文字也能判红绿（和 tools/ui-mock 的自检一个规矩）。
+    /// 产品路径永远是 0。
+    /// </summary>
+    protected int ExitCode;
 
     private bool RegisterWindowClass()
     {
@@ -1101,9 +1118,23 @@ public class InkEngine
         switch (msg)
         {
             case Native.WM_NCHITTEST:
-                if (PassThrough)
-                    return new IntPtr(Native.HTTRANSPARENT);
-                return new IntPtr(Native.HTCLIENT);
+                // 这两个计数只给自检用：它回答"穿透时系统到底还问不问我"，
+                // 这是判定"能不能只靠命中测试做区域穿透"的唯一硬证据。
+                _cntNcHitTest++;
+                if (!PassThrough)
+                {
+                    _cntNcHitClient++;
+                    return new IntPtr(Native.HTCLIENT);
+                }
+                // 穿透模式下，**界面自己那一块仍然归界面**。
+                //
+                // 以前这里一律回 HTTRANSPARENT，于是"开着穿透还想用工具条"这个
+                // 最常见的组合直接失效：命中测试在系统那一层就把我们排除了，
+                // WM_POINTERDOWN 根本轮不到引擎，悬浮球变成了一个画出来的装饰。
+                HitTestPoint(lParam, out float hitX, out float hitY);
+                bool mine = UiContains(hitX, hitY);
+                if (mine) _cntNcHitClient++;
+                return new IntPtr(mine ? Native.HTCLIENT : Native.HTTRANSPARENT);
 
             // 指针形状。**必须显式回答**：不处理时系统会拿窗口类的光标兜底，
             // 而类光标为 NULL 的表现就是"永远转圈"（这次修的就是它）。
@@ -1113,7 +1144,9 @@ public class InkEngine
             case Native.WM_SETCURSOR:
                 // 非客户区（边框、缩放角）由系统按自己的规矩来。
                 if ((lParam.ToInt64() & 0xFFFF) != Native.HTCLIENT) break;
-                if (PassThrough) break;                 // 穿透：让下层窗口决定
+                // 穿透：面板之外让下层窗口决定；**面板自己那一块要给箭头**
+                // （否则"工具条上顶着一个笔尖圈"或者一个转圈光标）。
+                if (PassThrough && !_uiHover) break;
                 ApplyCursor(force: true);
                 return new IntPtr(1);                   // TRUE = 已处理，别再兜底
 
@@ -1216,19 +1249,19 @@ public class InkEngine
         StampInput();
         _cntDown++;
         uint id = (uint)(wParam.ToInt64() & 0xFFFF);
-        if (PassThrough) return;
         if (!ReadPointer(id, out float sx, out float sy, out float pressure, out bool inverted, out uint ptype)) return;
         LastPointerType = ptype;
         float screenX = sx, screenY = sy;
         float x = sx, y = sy;
         ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布
 
-        _activePointer = id;
-        _activePointerType = ptype;
-        PointerX = x; PointerY = y; PointerInside = true;
-
         // 界面优先：点在悬浮条上就是操作界面，不是画一笔。
-        if (UiPointerDown(x, y, pressure, ptype == Native.PT_PEN, inverted))
+        //
+        // 两件容易踩的事：
+        //  1) 这一段必须**排在穿透判断之前**——不然开着穿透时界面永远收不到按下；
+        //  2) 传给界面的是**逻辑屏幕坐标**，不是画布坐标。界面的布局与绘制都在
+        //     屏幕坐标里，喂它画布坐标的话相机一滚，命中就整体偏掉一块。
+        if (UiPointerDown(screenX, screenY, pressure, ptype == Native.PT_PEN, inverted))
         {
             _drawing = false;
             // 界面也要捕获指针：拖出悬浮条、在按钮上滑开都需要继续收到消息。
@@ -1237,6 +1270,25 @@ public class InkEngine
             ApplyCursor();
             return;
         }
+
+        // 落在界面画的那一块里、但界面没吃这一下：这一下就算了。
+        // ① 不落墨——面板底下的墨看不见，面板一挪又冒出来，属于"看不见却被记下来"；
+        // ② 不透给下层——界面声明占用的区域（QueryBounds）就是它的地盘，
+        //    要放行得让界面自己别把那一块算进去。
+        if (UiContains(screenX, screenY))
+        {
+            _uiHover = true;
+            _drawing = false;
+            _dirty = true;
+            return;
+        }
+
+        // 界面之外的穿透：交下层窗口，我们不收这一下。
+        if (PassThrough) return;
+
+        _activePointer = id;
+        _activePointerType = ptype;
+        PointerX = x; PointerY = y; PointerInside = true;
 
         // 滚动条次之：它只占右边缘一条窄带，但"拖滑块"比"在那儿画一笔"更特殊。
         if (TryBeginScrollBarDrag(screenX, screenY))
@@ -1357,10 +1409,24 @@ public class InkEngine
         // 界面捕获了指针（例如按下按钮后滑出去），消息全归界面。
         if (UiCapturing)
         {
-            UiPointerMove(x, y, pressure, false, inverted);
+            UiPointerMove(screenX, screenY, pressure, false, inverted);   // 逻辑屏幕坐标
             _dirty = true;
             return;
         }
+
+        // 界面优先：悬停也要转发。
+        //
+        // 悬停高亮、"靠近才长大"、"悬停 120 ms 才浮出"全靠这条。以前只有
+        // **捕获分支**会转发，而"鼠标停在按钮上"恰恰是没捕获的状态——
+        // 于是界面的悬停永远不会亮，而且不报错，只是"感觉不跟手"。
+        // 书写中不转发：那一笔已经归画布了，界面这时候不该再动。
+        if (!_drawing && UiPointerMove(screenX, screenY, pressure, ptype == Native.PT_PEN, inverted))
+        {
+            if (!_uiHover) { _uiHover = true; ApplyCursor(); }
+            _dirty = true;
+            return;
+        }
+        if (_uiHover) { _uiHover = false; ApplyCursor(); }
 
         // 穿透模式：我们不收输入，也不该动光标（那是下层窗口的事）。
         if (PassThrough) { _dirty = true; return; }
@@ -1441,6 +1507,12 @@ public class InkEngine
                                        out bool uinverted, out _))
         {
             UiPointerUp(ux, uy, upressure, false, uinverted);
+            // **必须显式放开捕获**：按钮上也走 SetCapture（拖出按钮、在按钮上滑开
+            // 都要继续收到消息），而系统**不会**在按键抬起时替我们放开。
+            // 忘了这一句的后果不是"按钮卡住"，而是**整台机器的鼠标事件都还挂在
+            // 我们窗口上**：穿透、点下层程序、换到别的软件全乱，而且现象离原因很远。
+            Native.ReleaseCapture();
+            UiCapturing = false;
             _drawing = false;
             _dirty = true;
             ApplyCursor();
@@ -1812,6 +1884,11 @@ public class InkEngine
     /// <summary>当前该显示什么光标。纯函数（不碰系统），所以能拿来做自检。</summary>
     internal CursorKind ComputeCursorKind()
     {
+        // 指针停在界面自己那一块上：给箭头。
+        // 界面上的按钮不该顶着一个笔尖圈/橡皮圈——那一圈是"落点反馈"，
+        // 只对画布有意义。
+        if (_uiHover && !_drawing) return CursorKind.Default;
+
         if (PassThrough) return CursorKind.Leave;                 // 谁来接管由系统决定
         if (LastPointerType == Native.PT_TOUCH) return CursorKind.Hidden;
 
@@ -2827,6 +2904,20 @@ public class InkEngine
         foreach (var w in _windows)
             if (w.UiBoundsLogicalContains(x, y)) return true;
         return false;
+    }
+
+    /// <summary>
+    /// 取 WM_NCHITTEST 的 lParam 里的屏幕坐标。
+    ///
+    /// 它是两个**有符号** 16 位拼起来的**物理**像素坐标。必须按有符号取：
+    /// 副屏在主屏左边/上边时坐标是负的，按无符号取会得到 6 万多，
+    /// 贴边、命中测试全错——而单屏 + 正坐标的机器上完全看不出来。
+    /// </summary>
+    private static void HitTestPoint(IntPtr lParam, out float x, out float y)
+    {
+        long v = lParam.ToInt64();
+        x = (short)(v & 0xFFFF);
+        y = (short)((v >> 16) & 0xFFFF);
     }
 
     /// <summary>控制台用法说明。产品界面不会走这里。</summary>

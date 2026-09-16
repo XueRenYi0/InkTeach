@@ -126,6 +126,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PassThroughTest();
         }
+        else if (mode == "--uitest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            UiInputTest();
+        }
         else if (mode == "--erasertest")
         {
             _autoExitAt = double.MaxValue;
@@ -501,6 +507,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --memory [文件]     输出内存归因报告");
         Console.WriteLine("  --inputtest         指针输入路径自检");
         Console.WriteLine("  --passtest          穿透真机测试（跨进程点击）");
+        Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
         Console.WriteLine("  --pixelerasetest    像素橡皮正确性（切成两段 / 框里无墨 / 一步撤销）");
         Console.WriteLine("  --pixeleraseshow    像素橡皮摆样（擦之前/之后各存一张图，自己抓屏）");
@@ -4639,6 +4646,240 @@ internal sealed class App : InkEngine.InkEngine
     }
 
     /// <summary>
+    /// 界面输入通路的真机自检：把"面板内 / 面板外 × 穿透开 / 穿透关 × 界面吃不吃"
+    /// 这几种组合各合成一次**真实点击**，然后看**到底谁收到了**。
+    ///
+    /// 四类判定（这就是引擎与界面之间那四条规矩）：
+    ///
+    ///   · 命中界面矩形、界面消费 → 归界面（画布不落墨，穿透也不交下层）
+    ///   · 命中界面矩形、界面没消费 → 画布不落墨；穿透时交下层
+    ///   · 没命中界面矩形 → 穿透时交下层，否则照常落墨
+    ///   · 悬停同样要转发给界面（按钮高亮靠它），坐标必须是**逻辑屏幕**坐标
+    ///
+    /// 为什么非要真窗口 + 真点击：这一类 bug 全在"系统命中测试 → WM_NCHITTEST →
+    /// WM_POINTER* → 引擎"这条路上，纯函数自检与不接引擎的假面板**都看不见**。
+    /// 合成输入走的就是真实的那条路。
+    /// </summary>
+    private void UiInputTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 界面输入通路自检（合成真实点击，看谁收到）===");
+
+        if (SkipIfNoSyntheticInput("界面输入通路自检")) { _quit = true; return; }
+
+        // 目标窗口：另一个进程里的一块普通窗口，被我们的覆盖层压着。
+        string dir = Path.Combine(Path.GetTempPath(), "inkprobe_uitest");
+        Directory.CreateDirectory(dir);
+        string log = Path.Combine(dir, "target.txt");
+        File.WriteAllText(log, "");
+
+        var psi = new ProcessStartInfo(Environment.ProcessPath, $"--clicktarget \"{log}\"")
+        {
+            UseShellExecute = false,
+        };
+        var target = Process.Start(psi);
+        if (target == null)
+        {
+            Console.WriteLine("  无法启动点击目标进程");
+            _quit = true;
+            return;
+        }
+
+        for (int i = 0; i < 120 && !File.ReadAllText(log).Contains("ready"); i++)
+            Thread.Sleep(50);
+        if (!File.ReadAllText(log).Contains("ready"))
+        {
+            Console.WriteLine("  点击目标窗口没有就绪");
+            try { target.Kill(); } catch { }
+            _quit = true;
+            return;
+        }
+
+        // 面板盖住目标窗口的中段：这样"面板内"和"面板外"两个落点都在同一个
+        // 下层窗口里，唯一的差别就是有没有被界面接住。
+        const int twX = 120, twY = 120, twW = 420, twH = 320;
+        int cx = twX + twW / 2, cy = twY + twH / 2;
+        int panelX = cx - 140, panelW = 280, panelH = 140;
+
+        var probe = new UiProbe
+        {
+            BoundsPhysical = new RectF
+            {
+                MinX = panelX, MinY = cy - panelH / 2,
+                MaxX = panelX + panelW, MaxY = cy + panelH / 2,
+            },
+        };
+        SetUi(probe);
+        Tool = Tool.Pen;
+        Doc.Clear();
+        Doc.InvalidateAll();
+        SettleFrames(200);
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-26} {detail}");
+        }
+
+        void Click(int x, int y)
+        {
+            SendMouse(x, y, 0);                            SettleFrames(80);
+            SendMouse(x, y, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+            SendMouse(x, y, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(320);
+        }
+
+        void SetPass(bool on)
+        {
+            PassMode = PassThroughMode.LayeredTransparent;
+            PassThrough = on;
+            foreach (var w in _windows) ApplyPassThroughStyle(w);
+            SettleFrames(150);
+        }
+
+        // 三个落点：都在目标窗口的**客户区**里（窗口有边框和标题栏，
+        // 点在标题栏上系统不会发 WM_LBUTTONDOWN，下层就"收不到点击"了），
+        // 差别只在面板/界面怎么处理。
+        int inX = cx - 80, inY = cy;             // 面板左半：界面会消费
+        int holeX = cx + 80, holeY = cy;         // 面板右半：界面返回 false
+        int outX = cx, outY = cy + 140;          // 面板下沿之外、客户区内
+
+        // ---- ① 悬停要能到界面 ----
+        SetPass(false);
+        probe.Move = 0;
+        SendMouse(inX, inY, 0);
+        SettleFrames(200);
+        Check("悬停转发到界面", probe.Move > 0, $"界面收到 {probe.Move} 次移动");
+
+        // ---- ② 悬停坐标必须是"逻辑屏幕"，不能是画布坐标 ----
+        // 判法：同一个物理点，相机滚过之后再悬停一次，界面看到的坐标不该变。
+        float y0 = probe.LastY;
+        ViewOffsetY = -300f;
+        SettleFrames(150);
+        SendMouse(inX, inY + 6, 0);              // 错开一点，确保真的有 WM_POINTERUPDATE
+        SettleFrames(200);
+        float y1 = probe.LastY;
+        bool coordsUsable = !float.IsNaN(y0) && !float.IsNaN(y1);
+        bool drift = coordsUsable && MathF.Abs(y1 - y0) > 4f;
+        Check("悬停坐标不受相机影响", coordsUsable && !drift,
+              coordsUsable
+                  ? $"滚前 y={y0:F0}，滚后 y={y1:F0}（差 {MathF.Abs(y1 - y0):F0} 像素）"
+                  : "界面根本没收到悬停，这一项无从判定");
+        ViewOffsetY = 0f;
+        SettleFrames(150);
+
+        // ---- ③ 不穿透：面板内点击归界面，且不许画出一笔 ----
+        int strokes0 = Doc.Strokes.Count;
+        int clicks0 = CountClicks(log);
+        probe.Down = 0;
+        Tool = Tool.Pen;
+        Click(inX, inY);
+        bool uiGot = probe.Down > 0;
+        Check("不穿透·点面板归界面", uiGot, $"界面收到 {probe.Down} 次按下");
+        Check("不穿透·点面板不落墨", Doc.Strokes.Count == strokes0,
+              $"笔画 {strokes0} → {Doc.Strokes.Count}");
+        Check("不穿透·点面板不传下层", CountClicks(log) == clicks0, "下层窗口没收到点击");
+        Check("界面的命令真的到了引擎", probe.LastToolFromState == Tool.Eraser,
+              $"界面按钮把工具切成了 {probe.LastToolFromState}");
+
+        // ---- ④ 不穿透：界面"看见了但不吃"的那一半也不该落墨 ----
+        Tool = Tool.Pen;
+        strokes0 = Doc.Strokes.Count;
+        Click(holeX, holeY);
+        Check("不穿透·面板空洞不落墨", Doc.Strokes.Count == strokes0,
+              $"笔画 {strokes0} → {Doc.Strokes.Count}");
+
+        // ---- ⑤ 不穿透：面板外照常画线 ----
+        Tool = Tool.Pen;
+        strokes0 = Doc.Strokes.Count;
+        clicks0 = CountClicks(log);
+        Click(outX, outY);
+        Check("不穿透·面板外照常落墨", Doc.Strokes.Count > strokes0,
+              $"笔画 {strokes0} → {Doc.Strokes.Count}");
+        Check("不穿透·面板外不传下层", CountClicks(log) == clicks0, "下层窗口没收到点击");
+
+        // ---- ⑥ 穿透：面板内点击必须由界面收下（这就是这次要修的那条）----
+        SetPass(true);
+
+        // 穿透下悬停也要到界面：这是"看 PPT 时随手叫出笔"的同一组合。
+        probe.Move = 0;
+        SendMouse(inX, inY, 0);
+        SettleFrames(220);
+        Check("穿透·悬停到界面", probe.Move > 0, $"界面收到 {probe.Move} 次移动");
+
+        clicks0 = CountClicks(log);
+        strokes0 = Doc.Strokes.Count;
+        probe.Down = 0;
+        Tool = Tool.Pen;
+        Click(inX, inY);
+        Check("穿透·点面板归界面", probe.Down > 0, $"界面收到 {probe.Down} 次按下");
+        Check("穿透·面板不许穿到下层", CountClicks(log) == clicks0,
+              $"下层窗口收到 {CountClicks(log) - clicks0} 次点击（应为 0）");
+        Check("穿透·点面板不落墨", Doc.Strokes.Count == strokes0,
+              $"笔画 {strokes0} → {Doc.Strokes.Count}");
+
+        // ---- ⑦ 穿透：面板是界面的地盘，"看见但不吃"也不许漏给下层 ----
+        // （面板要放行某个位置，得它自己别把那一块算进 QueryBounds；
+        //   将来若真需要"面板中间挖个洞让点击穿过去"，再加一个逐点命中回调。）
+        clicks0 = CountClicks(log);
+        strokes0 = Doc.Strokes.Count;
+        Click(holeX, holeY);
+        Check("穿透·面板空洞不漏给下层", CountClicks(log) == clicks0,
+              $"下层窗口收到 {CountClicks(log) - clicks0} 次点击（应为 0）");
+        Check("穿透·面板空洞不落墨", Doc.Strokes.Count == strokes0,
+              $"笔画 {strokes0} → {Doc.Strokes.Count}");
+
+        // ---- ⑧ 穿透：面板外交下层 ----
+        clicks0 = CountClicks(log);
+        strokes0 = Doc.Strokes.Count;
+        Click(outX, outY);
+        Check("穿透·面板外交下层", CountClicks(log) > clicks0,
+              $"下层窗口收到 {CountClicks(log) - clicks0} 次点击（应 ≥ 1）");
+        Check("穿透·面板外不落墨", Doc.Strokes.Count == strokes0,
+              $"笔画 {strokes0} → {Doc.Strokes.Count}");
+
+        Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
+        ExitCode = fail == 0 ? 0 : 1;
+
+        // ---- 诊断（不计红绿）：穿透的两种实现方式各自牺牲了什么 ----
+        // "面板可点"和"点击透给下层"在现在的实现里是互斥的：
+        //   · 只改 WM_NCHITTEST（HitTest 档）：面板能收到，但下层收不到
+        //     —— HTTRANSPARENT 只在**同一个线程内**继续往下找窗口；
+        //   · LAYERED+TRANSPARENT 档：下层收得到，但这个窗口在系统那一层
+        //     就被排除在输入之外了，NCHITTEST 根本轮不到我们，面板点不动。
+        // 这段打印就是为了把这条取舍钉成数字，选架构时不用再猜。
+        foreach (var (modeName, mode) in new[]
+                 {
+                     ("只按点回答命中测试", PassThroughMode.HitTest),
+                     ("LAYERED+TRANSPARENT", PassThroughMode.LayeredTransparent),
+                 })
+        {
+            PassMode = mode;
+            PassThrough = true;
+            foreach (var w in _windows) ApplyPassThroughStyle(w);
+            SettleFrames(150);
+
+            probe.Down = 0;
+            int c0 = CountClicks(log);
+            int nc0 = _cntNcHitTest, ncc0 = _cntNcHitClient;
+            int dn0 = _cntDown;
+            Click(inX, inY);
+            Console.WriteLine($"  [诊断] {modeName,-24} 面板收到按下 {(probe.Down > 0 ? "是" : "否")}"
+                              + $"   下层窗口收到 {(CountClicks(log) > c0 ? "是" : "否")}"
+                              + $"   系统问了命中测试 {_cntNcHitTest - nc0} 次"
+                              + $"（其中答「这块是我的」{_cntNcHitClient - ncc0} 次）"
+                              + $"   引擎收到指针按下 {_cntDown - dn0} 次");
+            PassThrough = false;
+            foreach (var w in _windows) ApplyPassThroughStyle(w);
+            SettleFrames(120);
+        }
+
+        SetPass(false);
+        try { target.Kill(); } catch { }
+        _quit = true;
+    }
+
+    /// <summary>
     /// Three long strokes, then a deliberately coarse vertical swipe with the
     /// eraser. Without path interpolation the sample spacing leaves gaps and
     /// strokes in between survive, which is the "eraser is not sensitive"
@@ -8010,9 +8251,16 @@ internal sealed class App : InkEngine.InkEngine
         SettleFrames(80);
         SendMouse((int)(cx + 60), (int)(cy + 30), Native.MOUSEEVENTF_LEFTUP);
         SettleFrames(200);
+
+        // **先数再清**：下面那个 Clear() 会把刚画出来的这一笔也清掉，
+        // 以前在这里直接 `return Doc.Strokes.Count > before`，于是永远返回 false
+        // ——所有靠它把关的用例（残影、橡皮、截图……）其实一直在静默 SKIP，
+        // 而屏幕上的日志却写着"合成输入不可用"，把锅推给了环境。
+        // 判据必须取 Clear 之前的值。
+        int after = Doc.Strokes.Count;
         Doc.Clear();
         Doc.ClearHistory();
-        return Doc.Strokes.Count > before;
+        return after > before;
     }
 
     /// <summary>
