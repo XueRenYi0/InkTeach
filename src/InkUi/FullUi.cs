@@ -43,6 +43,7 @@ public sealed class FullUi : IOverlayUi
     private IUiHost _host;
     private Widgets _widgets;
     private RectF _screen;                 // 逻辑虚拟桌面（Layout 给的）
+    private RectF _work;                   // 逻辑工作区（扣掉任务栏）：面板按它摆
     // 拖过之后的位置（左上角）；**null = 还没拖过**，用默认位置（下边居中）。
     // 这里特意不用 RectF 来表示"没拖过"：`RectF` 的默认值是全 0，而
     // `IsEmpty` 判的是 `MaxX < MinX`——全 0 的矩形**不算空**，
@@ -142,6 +143,9 @@ public sealed class FullUi : IOverlayUi
     public RectF Layout(RectF screen, float dpiScale)
     {
         _screen = screen;
+        // 面板按**工作区**摆（贴底时不会被任务栏压住；PPT 全屏时工作区＝整屏，自动对）。
+        // 拿不到工作区就退回整屏——界面不该因为拿不到这个而摆不出来。
+        _work = _host?.WorkArea ?? screen;
         return QueryBounds();
     }
 
@@ -238,8 +242,8 @@ public sealed class FullUi : IOverlayUi
     /// 注意这里减的是**主条高**、不是总高——带子朝上长，主条自己不动。
     /// </summary>
     private Vector2 RawAnchor() => _anchor ?? new Vector2(
-        _screen.MinX + (_screen.MaxX - _screen.MinX - Width()) * 0.5f,
-        _screen.MaxY - Tokens.EdgeMargin - Tokens.BarHeight);
+        _work.MinX + (_work.MaxX - _work.MinX - Width()) * 0.5f,
+        _work.MaxY - Tokens.EdgeMargin - Tokens.BarHeight);
 
     /// <summary>
     /// 带子长在哪一侧：**朝屏幕中心**。面板在下半屏就朝上长（贴底时下面本来也没空间），
@@ -249,7 +253,7 @@ public sealed class FullUi : IOverlayUi
     {
         var a = RawAnchor();
         float center = a.Y + Tokens.BarHeight * 0.5f;
-        return center >= (_screen.MinY + _screen.MaxY) * 0.5f;
+        return center >= (_work.MinY + _work.MaxY) * 0.5f;
     }
 
     /// <summary>夹在可见区域内（一期就夹在单块屏里，跨屏怎么画还没验证过）。</summary>
@@ -261,11 +265,11 @@ public sealed class FullUi : IOverlayUi
         float top = BandAbove() ? a.Y - bandH : a.Y;
         float bottom = top + h;
 
-        float x = Math.Clamp(a.X, _screen.MinX + Tokens.DockGap,
-                                    _screen.MaxX - Tokens.DockGap - w);
+        float x = Math.Clamp(a.X, _work.MinX + Tokens.DockGap,
+                                    _work.MaxX - Tokens.DockGap - w);
         float y = a.Y;
-        if (top < _screen.MinY + Tokens.DockGap) y += _screen.MinY + Tokens.DockGap - top;
-        if (bottom > _screen.MaxY - Tokens.DockGap) y -= bottom - (_screen.MaxY - Tokens.DockGap);
+        if (top < _work.MinY + Tokens.DockGap) y += _work.MinY + Tokens.DockGap - top;
+        if (bottom > _work.MaxY - Tokens.DockGap) y -= bottom - (_work.MaxY - Tokens.DockGap);
         return new Vector2(x, y);
     }
 
@@ -530,17 +534,22 @@ public sealed class FullUi : IOverlayUi
 
         var u = UnionRect();
         float w = u.MaxX - u.MinX, h = u.MaxY - u.MinY;
-        float dl = u.MinX - _screen.MinX, dr = _screen.MaxX - u.MaxX;
-        float dt = u.MinY - _screen.MinY, db = _screen.MaxY - u.MaxY;
+        float dl = u.MinX - _work.MinX, dr = _work.MaxX - u.MaxX;
+        float dt = u.MinY - _work.MinY, db = _work.MaxY - u.MaxY;
         float best = Math.Min(Math.Min(dl, dr), Math.Min(dt, db));
         if (best > Tokens.SnapDistance) return Vector2.Zero;      // 没贴边就不藏
 
-        // 位移要把"面板到屏幕边那点空隙"也算进去：面板浮着的时候离边 12，
-        // 只挪 (size - Peek) 的话，屏幕上会留下 12 + 8 = 20 像素（露头比说好的大）。
-        if (best == dl) return new Vector2(-(w - Tokens.DockPeek + dl) * t, 0);
-        if (best == dr) return new Vector2((w - Tokens.DockPeek + dr) * t, 0);
-        if (best == dt) return new Vector2(0, -(h - Tokens.DockPeek + dt) * t);
-        return new Vector2(0, (h - Tokens.DockPeek + db) * t);
+        // **方向**按工作区挑（面板停在哪儿），**位移量**按**屏幕**边算。
+        //
+        // 为什么位移量不能按工作区：面板不会"藏到任务栏后面"——我们的覆盖层是全屏置顶的，
+        // 任务栏挡不住它。只有把面板推出**屏幕**，它才真的看不见。按工作区算的话，
+        // 露头会变成 8 ＋（任务栏那段高度）＝几十像素（自检当场量到过 56）。
+        float sl = u.MinX - _screen.MinX, sr = _screen.MaxX - u.MaxX;
+        float st = u.MinY - _screen.MinY, sb = _screen.MaxY - u.MaxY;
+        if (best == dl) return new Vector2(-(w - Tokens.DockPeek + sl) * t, 0);
+        if (best == dr) return new Vector2((w - Tokens.DockPeek + sr) * t, 0);
+        if (best == dt) return new Vector2(0, -(h - Tokens.DockPeek + st) * t);
+        return new Vector2(0, (h - Tokens.DockPeek + sb) * t);
     }
 
     /// <summary>
@@ -718,19 +727,19 @@ public sealed class FullUi : IOverlayUi
     {
         var a = Anchor();
         float w = Width(), h = Height();
-        float left = a.X - _screen.MinX;
-        float right = _screen.MaxX - (a.X + w);
-        float top = a.Y - _screen.MinY;
-        float bottom = _screen.MaxY - (a.Y + h);
+        float left = a.X - _work.MinX;
+        float right = _work.MaxX - (a.X + w);
+        float top = a.Y - _work.MinY;
+        float bottom = _work.MaxY - (a.Y + h);
 
         float best = Math.Min(Math.Min(left, right), Math.Min(top, bottom));
         if (best > Tokens.SnapDistance) return;          // 不够近：不吸附（拖到哪儿就哪儿）
 
         var want = a;
-        if (best == left) want.X = _screen.MinX + Tokens.DockGap;
-        else if (best == right) want.X = _screen.MaxX - Tokens.DockGap - w;
-        else if (best == top) want.Y = _screen.MinY + Tokens.DockGap;
-        else want.Y = _screen.MaxY - Tokens.DockGap - h;
+        if (best == left) want.X = _work.MinX + Tokens.DockGap;
+        else if (best == right) want.X = _work.MaxX - Tokens.DockGap - w;
+        else if (best == top) want.Y = _work.MinY + Tokens.DockGap;
+        else want.Y = _work.MaxY - Tokens.DockGap - h;
 
         _anchor = want;
     }
@@ -1177,4 +1186,10 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>自检用：界面看到的屏幕（核对它和 IUiHost.Screen 是不是同一个）。</summary>
     internal RectF ScreenForTest => _screen;
+
+    /// <summary>自检用：界面按它摆面板的工作区（扣掉任务栏）。</summary>
+    internal RectF WorkAreaForTest => _work;
+
+    /// <summary>自检用：贴边隐藏的进度（1 = 完全显示，0 = 只剩露头）。</summary>
+    internal float PeekForTest => _peek.Value;
 }

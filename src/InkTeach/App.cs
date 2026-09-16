@@ -79,9 +79,13 @@ internal sealed class App : InkEngine.InkEngine
     /// <summary>测试模式分发。返回 -1 = 正常跑消息循环。</summary>
     protected override int RunModeDispatch(string mode, string[] args)
     {
-        // 纯底层模式：接一个"什么都不画"的宿主。引擎要求接入一个 IOverlayUi，
-        // 这样既满足接口，又验证了"引擎不依赖任何具体界面"这条设计。
-        SetUi(new HeadlessUi());
+        // 交互模式挂**产品界面**；自检/基准模式挂"什么都不画"的空宿主
+        // （自检要数屏幕上的墨，一块面板盖上去会把判据搞脏——这条踩过）。
+        //
+        // 用 SetUiFactory 而不是 SetUi：界面万一崩了，引擎要能自己再造一个回来，
+        // 再造不回来才轮到重启（见 计划-底层对接界面.md 4.5 的三级阶梯）。
+        if (mode.Length == 0) SetUiFactory(() => new InkUi.FullUi());
+        else SetUi(new HeadlessUi());
 
         // --board：把白板打开（**不透明**底色）。
         //
@@ -5122,13 +5126,15 @@ internal sealed class App : InkEngine.InkEngine
         // ---- ① 收起态：球真的在屏幕上，而且是个 48 的方（圆） ----
         var ball = ui.QueryBounds();
         float ballW = ball.MaxX - ball.MinX, ballH = ball.MaxY - ball.MinY;
+        var work = ui.WorkAreaForTest;
         Check("收起态是一个 48 的球",
               MathF.Abs(ballW - 48f) < 1f && MathF.Abs(ballH - 48f) < 1f,
               $"占用 {ballW:F0}×{ballH:F0}，位置 ({ball.MinX:F0},{ball.MinY:F0})");
 
-        Check("球贴在屏幕下边、离边 12",
-              MathF.Abs(ball.MaxY - (VirtualScreen.MaxY / DpiScale - InkUi.Tokens.EdgeMargin)) < 1.5f,
-              $"球底 {ball.MaxY:F0}（逻辑），屏幕底 {VirtualScreen.MaxY / DpiScale:F0}（逻辑）");
+        // 按**工作区**（扣掉任务栏）摆，不是按整屏：贴着屏幕最下边会被任务栏压住。
+        Check("球贴在工作区下边、离边 12",
+              MathF.Abs(ball.MaxY - (work.MaxY - InkUi.Tokens.EdgeMargin)) < 1.5f,
+              $"球底 {ball.MaxY:F0}，工作区底 {work.MaxY:F0}（屏幕底 {VirtualScreen.MaxY / DpiScale:F0}）");
 
         // ---- ② 点球展开：动画期间必须连续出帧 ----
         int strokes0 = Doc.Strokes.Count;
@@ -5296,7 +5302,9 @@ internal sealed class App : InkEngine.InkEngine
         ClickPhysical((moreCell.MinX + moreCell.MaxX) * 0.5f * DpiScale,
                       (moreCell.MinY + moreCell.MaxY) * 0.5f * DpiScale);
         SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.4f), 0);
-        SettleFrames(1200);                       // 等过"离开 700 毫秒才收"那一段
+        // 等过"离开 700 毫秒才收"＋收起动画那一段（167 毫秒）：留足余量，别把动画
+        // 中间态当成终态来判——第一版就是这么误判成"露头 56 像素"的。
+        SettleFrames(2000);
         var peeked = ui.QueryBounds();
         Check("贴边隐藏收成露头",
               (peeked.MaxY - peeked.MinY) < 12f || (peeked.MaxX - peeked.MinX) < 12f,

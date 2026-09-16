@@ -99,6 +99,14 @@ public interface IUiHost
     /// <summary>屏幕范围（虚拟桌面坐标）。</summary>
     RectF Screen { get; }
 
+    /// <summary>
+    /// **工作区**（扣掉任务栏），逻辑像素。
+    ///
+    /// 界面该按它摆面板，不是按屏幕：贴着屏幕最下边摆会被任务栏压住，
+    /// 而 PPT 全屏放映时任务栏不在，工作区就等于整屏——所以按它摆两种情况都对。
+    /// </summary>
+    RectF WorkArea { get; }
+
     /// <summary>DPI 缩放（逻辑像素 → 物理像素）。</summary>
     float DpiScale { get; }
 
