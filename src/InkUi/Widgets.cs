@@ -28,7 +28,10 @@ internal sealed class Widgets
     {
         if (_formats.TryGetValue((sizeLogical, center), out var f)) return f;
 
-        float px = MathF.Max(9f, sizeLogical * _host.DpiScale);
+        // **字号就是逻辑像素，不要再乘 DPI**：引擎画界面时已经把整个上下文按 DPI 缩放过
+        // 一次（Overlay.DrawUi 里的 CreateScale(dpiScale)），再乘一次等于放大两遍——
+        // 症状是"标签大得离谱、三个字的按钮标题被挤成两行"（这一版就是这么被看出来的）。
+        float px = MathF.Max(9f, sizeLogical);
         f = _host.TextFactory.CreateTextFormat("Microsoft YaHei UI", null,
             FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
         if (center)

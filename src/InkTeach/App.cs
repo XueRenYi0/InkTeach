@@ -18,6 +18,7 @@ internal sealed class App : InkEngine.InkEngine
     private IntPtr _clickTargetHwnd;
     private string _clickLogFile;
     private bool _panelShowDrawer;
+    private bool _panelShowMini;
     private bool _selfCheckMode;
 
     /// <summary>密集模式：所有笔画写在一小块区域里（量"同一页很多墨迹"）。</summary>
@@ -5065,6 +5066,7 @@ internal sealed class App : InkEngine.InkEngine
     private void PanelShow(string path)
     {
         _panelShowDrawer = Environment.GetCommandLineArgs().Contains("--drawer");
+        _panelShowMini = Environment.GetCommandLineArgs().Contains("--mini");
         SetUiFactory(() => new InkUi.FullUi());
         Tool = Tool.Pen;
         BoardOn = true;                      // 白板打底：截出来的图里没有桌面上的杂东西
@@ -5073,6 +5075,7 @@ internal sealed class App : InkEngine.InkEngine
         if (CurrentUi is InkUi.FullUi ui)
         {
             ui.SnapForTest();                // 一步展开，不用等 200 毫秒
+            if (_panelShowMini) ui.SetProfileForTest(0);     // --mini：极简档（短胶囊）
             if (_panelShowDrawer) ui.OpenDrawerForTest();   // --drawer：连抽屉一起出图
             SettleFrames(500);
 
@@ -5351,6 +5354,75 @@ internal sealed class App : InkEngine.InkEngine
                       (moreCell2.MinY + moreCell2.MaxY) * 0.5f * DpiScale);
         SettleFrames(250);
         Check("关掉贴边隐藏", !ui.HideEnabledForTest, $"开关 = {ui.HideEnabledForTest}");
+
+        // ---- ⑦.5 界面档位与钉住 ----
+        var moreCell4 = ui.CellRectForTest(12);
+        ClickPhysical((moreCell4.MinX + moreCell4.MaxX) * 0.5f * DpiScale,
+                      (moreCell4.MinY + moreCell4.MaxY) * 0.5f * DpiScale);   // 开抽屉
+        SettleFrames(200);
+
+        Check("完整档是 13 格", ui.VisibleCountForTest == 13, $"显示 {ui.VisibleCountForTest} 格");
+
+        // 切到极简：只留六格 ＋ 收起格，整条带子明显变短
+        var miniSeg = ui.ProfileRectForTest(0);
+        ClickPhysical((miniSeg.MinX + miniSeg.MaxX) * 0.5f * DpiScale,
+                      (miniSeg.MinY + miniSeg.MaxY) * 0.5f * DpiScale);
+        SettleFrames(250);
+        var miniBar = ui.BarRectForTest;
+        Check("极简档是七格（六格 ＋ 收起格）", ui.VisibleCountForTest == 7,
+              $"显示 {ui.VisibleCountForTest} 格，档位 = {ui.ProfileForTest}");
+        Check("极简档是一条短胶囊", (miniBar.MaxX - miniBar.MinX) < 360f,
+              $"宽 {miniBar.MaxX - miniBar.MinX:F0}（完整档是 636）");
+
+        // 切档时"当前工具不在这一档里"要落到笔：先把工具换成图形（极简档里没有它）
+        Host.Commands.SetTool(Tool.Rectangle);
+        SettleFrames(150);
+        var miniSeg2 = ui.ProfileRectForTest(0);          // 已经在极简了，再点一次也走同一条路
+        ClickPhysical((miniSeg2.MinX + miniSeg2.MaxX) * 0.5f * DpiScale,
+                      (miniSeg2.MinY + miniSeg2.MaxY) * 0.5f * DpiScale);
+        Check("切档时工具不在档内→落到笔", Tool == Tool.Pen, $"工具 = {Tool}");
+
+        // 切回完整档
+        var fullSeg = ui.ProfileRectForTest(2);
+        ClickPhysical((fullSeg.MinX + fullSeg.MaxX) * 0.5f * DpiScale,
+                      (fullSeg.MinY + fullSeg.MaxY) * 0.5f * DpiScale);
+        SettleFrames(250);
+        Check("切回完整档", ui.VisibleCountForTest == 13, $"显示 {ui.VisibleCountForTest} 格");
+
+        // 取消钉住"图形"（下标 8）：档位自动变成自定义，主条上少一格
+        var chip = ui.ChipRectForTest(8);
+        ClickPhysical((chip.MinX + chip.MaxX) * 0.5f * DpiScale,
+                      (chip.MinY + chip.MaxY) * 0.5f * DpiScale);
+        SettleFrames(250);
+        Check("取消钉住→进自定义档、主条少一格",
+              ui.ProfileForTest == 1 && !ui.PinnedForTest(8) && ui.VisibleCountForTest == 12,
+              $"档位 = {ui.ProfileForTest}，钉着 = {ui.PinnedForTest(8)}，显示 {ui.VisibleCountForTest} 格");
+
+        // 安全项：笔（下标 3）点一下不该被取消
+        var penChip = ui.ChipRectForTest(3);
+        ClickPhysical((penChip.MinX + penChip.MaxX) * 0.5f * DpiScale,
+                      (penChip.MinY + penChip.MaxY) * 0.5f * DpiScale);
+        SettleFrames(200);
+        Check("安全项（笔）取消不掉", ui.PinnedForTest(3), $"笔钉着 = {ui.PinnedForTest(3)}");
+
+        // 钉回去，回到完整档，别把后面的用例带偏
+        // 注意：每次点之前**重新取一次矩形**——切档会让主条宽度变、抽屉跟着挪，
+        // 复用之前算好的坐标就会点空（这一版自检就是这么把自己坑了一次）。
+        var chipBack = ui.ChipRectForTest(8);
+        ClickPhysical((chipBack.MinX + chipBack.MaxX) * 0.5f * DpiScale,
+                      (chipBack.MinY + chipBack.MaxY) * 0.5f * DpiScale);
+        SettleFrames(200);
+        var fullSeg2 = ui.ProfileRectForTest(2);
+        ClickPhysical((fullSeg2.MinX + fullSeg2.MaxX) * 0.5f * DpiScale,
+                      (fullSeg2.MinY + fullSeg2.MaxY) * 0.5f * DpiScale);
+        SettleFrames(200);
+        var moreCell5 = ui.CellRectForTest(12);
+        ClickPhysical((moreCell5.MinX + moreCell5.MaxX) * 0.5f * DpiScale,
+                      (moreCell5.MinY + moreCell5.MaxY) * 0.5f * DpiScale);   // 关抽屉
+        SettleFrames(250);
+        Check("收尾：回到完整档、抽屉已关",
+              ui.ProfileForTest == 2 && ui.VisibleCountForTest == 13 && !ui.DrawerOpenForTest,
+              $"档位 = {ui.ProfileForTest}，显示 {ui.VisibleCountForTest} 格，抽屉 = {ui.DrawerOpenForTest}");
 
         // ---- ⑥ 收起来，然后空闲必须 0 帧 ----
         var ball2 = ui.CellRectForTest(0);

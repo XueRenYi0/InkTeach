@@ -40,6 +40,61 @@ public sealed class FullUi : IOverlayUi
     /// <summary>每一组的最后一格（下标）。组之间画一条分隔线。</summary>
     private static readonly int[] GroupEnds = { 0, 2, 6, 9, 12 };
 
+    // ---- 界面档位 -----------------------------------------------------------
+    //
+    // 三档（用户定的默认是"完整档"）：
+    //   · 极简 = 一条**短胶囊**，只留最常用的六格；
+    //   · 自定义 = 老师自己钉的那份集合（默认＝全部，等于完整档，改过之后才不一样）；
+    //   · 完整 = 全部十二格。
+    // 规则一条：**极简与自定义都必须是完整档顺序的子序列**——同一个工具在哪一档里
+    // 都在同一个相对位置，来回切档不用重新找。
+
+    /// <summary>档位。</summary>
+    private enum Profile { Mini = 0, Custom = 1, Full = 2 }
+
+    /// <summary>
+    /// 极简档留哪几格。**照抄假面板的结论**（鼠标/白板/笔/橡皮/后撤/更多）：
+    /// 补"鼠标"是因为看 PPT 时要能点下层，补"后撤"是因为误画一笔要有救。
+    /// </summary>
+    private static readonly int[] MiniCells = { 1, 2, 3, 6, 10, 12 };
+
+    private Profile _profile = Profile.Full;
+
+    /// <summary>自定义档钉了哪些格（下标对齐 Cells；0 号"收起格"永远在，不参与钉）。</summary>
+    private readonly bool[] _pinned = CreateAllPinned();
+
+    /// <summary>笔、橡皮、「更多」是**安全项**：取消钉住之后就没法用了，所以不许取消。</summary>
+    private static bool CanUnpin(int cell) => cell is not (3 or 6 or 12);
+
+    private static bool[] CreateAllPinned()
+    {
+        var a = new bool[Cells.Length];
+        for (int i = 1; i < a.Length; i++) a[i] = true;
+        return a;
+    }
+
+    /// <summary>
+    /// 这一档实际显示的格子（含 0 号收起格），**始终按完整档的顺序排列**。
+    /// 布局、命中、绘制三处都只认这个列表——不这么统一，切档时总有一处忘了跟着变。
+    /// </summary>
+    private int[] VisibleCells()
+    {
+        var list = new List<int> { 0 };
+        switch (_profile)
+        {
+            case Profile.Mini:
+                list.AddRange(MiniCells);
+                break;
+            case Profile.Custom:
+                for (int i = 1; i < Cells.Length; i++) if (_pinned[i]) list.Add(i);
+                break;
+            default:
+                for (int i = 1; i < Cells.Length; i++) list.Add(i);
+                break;
+        }
+        return list.ToArray();
+    }
+
     private IUiHost _host;
     private Widgets _widgets;
     private RectF _screen;                 // 逻辑虚拟桌面（Layout 给的）
@@ -71,6 +126,8 @@ public sealed class FullUi : IOverlayUi
     // ---- 「更多」抽屉 ------------------------------------------------------
     private bool _drawerOpen;
     private int _drawerHover = -1;
+    private int _profileHover = -1;
+    private int _chipHover = -1;
 
     /// <summary>深色主题：手动开关（用户定的），底色/图标/描边整套换。</summary>
     private bool _dark;
@@ -104,6 +161,9 @@ public sealed class FullUi : IOverlayUi
     private const float DrawerPad = 12f;
     private const float DrawerGap = 8f;
     private const float DrawerSepH = 9f;
+    private const float ProfileH = 32f;        // 顶部那排"极简 / 自定义 / 完整"
+    private const float GridChipH = 36f;       // 钉住那一栏里每个工具格
+    private const float GridGap = 6f;
 
     private readonly Dictionary<uint, ID2D1SolidColorBrush> _brushes = new();
 
@@ -213,13 +273,25 @@ public sealed class FullUi : IOverlayUi
     /// <summary>上带这一刻是不是真的画出来了（长出来之前不参与命中）。</summary>
     private bool BandVisible() => BandProgress() > 0.6f;
 
-    /// <summary>带子完全展开时的宽。算出来的，不是写死的（改格数/间距不用手改数字）。</summary>
-    private static float ExpandedWidth()
+    /// <summary>这一格属于第几组（分隔线画在"组变了"的两个相邻格之间）。</summary>
+    private static int GroupOf(int cell)
     {
-        float w = Tokens.BarPad * 2f + Cells.Length * Tokens.Button;
-        int gaps = Cells.Length - 1;
-        w += (gaps - GroupEnds.Length + 1) * Tokens.GapInGroup;
-        w += (GroupEnds.Length - 1) * Tokens.GroupDivider;
+        for (int i = 0; i < GroupEnds.Length; i++) if (cell <= GroupEnds[i]) return i;
+        return GroupEnds.Length - 1;
+    }
+
+    /// <summary>带子完全展开时的宽。**按这一刻显示的格子算**，改档位/格数都不用动数字。</summary>
+    private float ExpandedWidth()
+    {
+        var vis = VisibleCells();
+        float w = Tokens.BarPad * 2f;
+        for (int k = 0; k < vis.Length; k++)
+        {
+            w += Tokens.Button;
+            if (k + 1 < vis.Length)
+                w += GroupOf(vis[k]) == GroupOf(vis[k + 1])
+                    ? Tokens.GapInGroup : Tokens.GroupDivider;
+        }
         return w;
     }
 
@@ -282,19 +354,33 @@ public sealed class FullUi : IOverlayUi
         return new Vector2(x, y);
     }
 
-    /// <summary>第 i 格的矩形（逻辑坐标）。收起格也在里面（i = 0）。</summary>
-    private RectF CellRect(int i)
+    /// <summary>
+    /// 第 pos 个**显示出来**的格子的矩形（逻辑坐标，pos 是"当前档位里的序号"）。
+    /// 切档换的是这份列表，绘制与命中都走它，所以不会出现"画一套、点另一套"。
+    /// </summary>
+    private RectF CellRect(int pos)
     {
+        var vis = VisibleCells();
+        if (pos < 0 || pos >= vis.Length) return RectF.Empty;
+
         var a = Anchor();
         float x = a.X + Tokens.BarPad;
-        for (int k = 0; k <= i; k++)
+        for (int k = 0; k <= pos; k++)
         {
-            if (k == i)
+            if (k == pos)
                 return new RectF { MinX = x, MinY = a.Y, MaxX = x + Tokens.Button, MaxY = a.Y + Height() };
             x += Tokens.Button;
-            x += Array.IndexOf(GroupEnds, k) >= 0 ? Tokens.GroupDivider : Tokens.GapInGroup;
+            x += GroupOf(vis[k]) == GroupOf(vis[k + 1]) ? Tokens.GapInGroup : Tokens.GroupDivider;
         }
         return RectF.Empty;
+    }
+
+    /// <summary>某一格（按完整档的下标）在当前位置里的序号；不在这一档就是 -1。</summary>
+    private int PosOf(int cell)
+    {
+        var vis = VisibleCells();
+        for (int k = 0; k < vis.Length; k++) if (vis[k] == cell) return k;
+        return -1;
     }
 
     /// <summary>收起态那个球（和带子第一格同一个位置，来回都不用重新瞄准）。</summary>
@@ -468,10 +554,51 @@ public sealed class FullUi : IOverlayUi
 
     // ---- 「更多」抽屉 ------------------------------------------------------
 
-    /// <summary>抽屉的高：6 行 ＋ 两条分隔 ＋ 上下内边距。算出来的，加行不用手改数字。</summary>
+    /// <summary>抽屉顶部的档位条（极简 / 自定义 / 完整）。</summary>
+    private RectF ProfileRect(int i)
+    {
+        var d = DrawerRect();
+        float w = (d.MaxX - d.MinX - DrawerPad * 2 - 2 * 8f) / 3f;
+        float x = d.MinX + DrawerPad + i * (w + 8f);
+        return new RectF { MinX = x, MinY = d.MinY + DrawerPad, MaxX = x + w, MaxY = d.MinY + DrawerPad + ProfileH };
+    }
+
+    private int ProfileIndex() => (int)_profile;
+
+    /// <summary>"钉住"那一栏：12 个工具格，排 4 列。点一下切换钉住/取消。</summary>
+    private float GridTop() => DrawerRect().MinY + DrawerPad + ProfileH + 12f;
+
+    private RectF ChipRect(int cell)
+    {
+        var d = DrawerRect();
+        int idx = cell - 1;                        // 0..11（0 号收起格不参与钉）
+        float w = (d.MaxX - d.MinX - DrawerPad * 2 - 3 * GridGap) / 4f;
+        int col = idx % 4, row = idx / 4;
+        float x = d.MinX + DrawerPad + col * (w + GridGap);
+        float y = GridTop() + row * (GridChipH + GridGap);
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + GridChipH };
+    }
+
+    private int HitChip(float x, float y)
+    {
+        if (!_drawerOpen) return -1;
+        for (int cell = 1; cell < Cells.Length; cell++)
+            if (ChipRect(cell).Contains(x, y)) return cell;
+        return -1;
+    }
+
+    private int HitProfile(float x, float y)
+    {
+        if (!_drawerOpen) return -1;
+        for (int i = 0; i < 3; i++) if (ProfileRect(i).Contains(x, y)) return i;
+        return -1;
+    }
+
+    /// <summary>抽屉的高：档位条 ＋ 钉住那一栏 ＋ 6 行 ＋ 两条分隔 ＋ 上下内边距。算出来的。</summary>
     private static float DrawerHeight()
     {
-        float h = DrawerPad * 2f + Rows.Length * DrawerRowH;
+        float h = DrawerPad * 2f + ProfileH + 12f + 3f * (GridChipH + GridGap) + 10f;
+        h += Rows.Length * DrawerRowH;
         for (int i = 0; i < Rows.Length; i++) if (IsSeparatorAfter(i)) h += DrawerSepH;
         return h;
     }
@@ -504,7 +631,8 @@ public sealed class FullUi : IOverlayUi
 
     private float RowTop(int i)
     {
-        float y = DrawerRect().MinY + DrawerPad;
+        // 行在**档位条 ＋ 钉住栏**的下面
+        float y = GridTop() + 3f * (GridChipH + GridGap) + 10f;
         for (int k = 0; k < i; k++)
         {
             y += DrawerRowH;
@@ -562,6 +690,26 @@ public sealed class FullUi : IOverlayUi
                 _host.Commands.Quit();
                 break;
         }
+    }
+
+    /// <summary>切档。切完要检查"当前工具还在不在这一档里"——不在就落到笔。</summary>
+    private void SetProfile(Profile p)
+    {
+        _profile = p;
+        if (PosOf(CellForTool(_host.State.Tool)) < 0)
+            _host.Commands.SetTool(Tool.Pen);
+        _drawerHover = -1;
+        _hover = -1;
+        _press = -1;
+        Invalidate();
+    }
+
+    /// <summary>钉住 / 取消钉住。笔、橡皮、「更多」是安全项（取消了就没法用），不许动。</summary>
+    private void TogglePin(int cell)
+    {
+        if (!CanUnpin(cell)) return;
+        _pinned[cell] = !_pinned[cell];
+        SetProfile(Profile.Custom);
     }
 
     // ---- 贴边隐藏 -----------------------------------------------------------
@@ -653,6 +801,10 @@ public sealed class FullUi : IOverlayUi
         // 但顺序写清楚，省得以后挪位置时踩雷。
         int row = HitRow(p.X, p.Y);
         if (row >= 0) { _press = 1000 + row; return true; }
+        int prof = HitProfile(p.X, p.Y);
+        if (prof >= 0) { SetProfile((Profile)prof); return true; }
+        int chip = HitChip(p.X, p.Y);
+        if (chip >= 0) { TogglePin(chip); return true; }
 
         int idx = HitCell(p.X, p.Y);
         if (idx >= 0)
@@ -717,6 +869,10 @@ public sealed class FullUi : IOverlayUi
             _drawerHover = row;
             Invalidate();
         }
+        int prof = HitProfile(p.X, p.Y);
+        if (prof != _profileHover) { _profileHover = prof; Invalidate(); }
+        int chip = HitChip(p.X, p.Y);
+        if (chip != _chipHover) { _chipHover = chip; Invalidate(); }
 
         int hover = _expand.Value < 0.5f
             ? (BallRect().Contains(p.X, p.Y) ? -2 : -1)
@@ -805,8 +961,9 @@ public sealed class FullUi : IOverlayUi
 
     private int HitCell(float x, float y)
     {
-        for (int i = 0; i < Cells.Length; i++)
-            if (CellRect(i).Contains(x, y)) return i;
+        var vis = VisibleCells();
+        for (int k = 0; k < vis.Length; k++)
+            if (CellRect(k).Contains(x, y)) return vis[k];      // 返还完整档的下标
         return -1;
     }
 
@@ -815,6 +972,22 @@ public sealed class FullUi : IOverlayUi
         bool collapse = _expand.Value > 0.5f;
         // 系统关掉动画时直接跳终态（教室里老机器上很常见）
         _expand.To(collapse ? 0f : 1f, collapse ? Tokens.CollapseMs : Tokens.ExpandMs);
+
+        // **收起时必须把临时状态清干净**：抽屉、钉住的悬停、按下的格、在拖的滑条。
+        // 不清的话，缩回一个球之后抽屉还挂在那儿（占用矩形也算着它），
+        // 下次展开时那些状态还会自己冒出来。假面板当年就是栽在这条上：
+        // "点更多→点收起→再展开，抽屉自己冒出来"。
+        if (collapse)
+        {
+            _drawerOpen = false;
+            _drawerHover = -1;
+            _profileHover = -1;
+            _chipHover = -1;
+            _hover = -1;
+            _press = -1;
+            _dragging = false;
+            _sliderDragging = false;
+        }
         Invalidate();
     }
 
@@ -931,9 +1104,9 @@ public sealed class FullUi : IOverlayUi
         var band = BandRect();
         if (band.MaxY - band.MinY >= 2f) DrawCard(ctx, band, Tokens.BandRadius);
 
-        // 展开态：球缩进最左一格，右边是 12 个工具格。
-        DrawCell(ctx, 0, st, e);
-        for (int i = 1; i < Cells.Length; i++) DrawCell(ctx, i, st, e);
+        // 展开态：球缩进最左一格，右边是这一档的工具格（极简档就只有六格）。
+        var vis = VisibleCells();
+        for (int k = 0; k < vis.Length; k++) DrawCell(ctx, k, st);
 
         if (BandVisible()) DrawBand(ctx, st);
         if (_drawerOpen) DrawDrawer(ctx);
@@ -1162,6 +1335,44 @@ public sealed class FullUi : IOverlayUi
         var d = DrawerRect();
         DrawCard(ctx, d, Tokens.BandRadius);
 
+        // 档位条：极简 / 自定义 / 完整
+        for (int i = 0; i < 3; i++)
+        {
+            var r = ProfileRect(i);
+            bool active = ProfileIndex() == i;
+            var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 8f, 8f);
+            if (active) ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Accent));
+            else if (_profileHover == i) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+            ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : BorderCol), 1f);
+            _widgets.Text(ctx, ProfileName(i), r, 12.5f,
+                          Brush(ctx, active ? Tokens.AccentInk : InkCol));
+        }
+
+        // 钉住那一栏：点一下切换钉住/取消（笔、橡皮、更多是安全项，点不动）
+        for (int cell = 1; cell < Cells.Length; cell++)
+        {
+            var r = ChipRect(cell);
+            bool pinned = _pinned[cell];
+            var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 8f, 8f);
+            if (pinned)
+            {
+                ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+                ctx.DrawRoundedRectangle(rr, Brush(ctx, Tokens.Accent), 1f);
+            }
+            else
+            {
+                ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+            }
+            var ink = pinned ? InkCol : new Color4(InkCol.R, InkCol.G, InkCol.B, 0.35f);
+            IconAtlas.DrawCentered(ctx, Cells[cell].Icon, r, 18f, Brush(ctx, ink));
+            if (!CanUnpin(cell))
+            {
+                // 安全项：右上角一个小点，意思是"这个取消不掉"
+                ctx.FillEllipse(new Ellipse(new Vector2(r.MaxX - 5f, r.MinY + 5f), 2f, 2f),
+                                Brush(ctx, new Color4(InkCol.R, InkCol.G, InkCol.B, 0.45f)));
+            }
+        }
+
         for (int i = 0; i < Rows.Length; i++)
         {
             var r = RowRect(i);
@@ -1197,6 +1408,8 @@ public sealed class FullUi : IOverlayUi
 
     private bool IsOn(int i) => Rows[i].Kind == Row.DarkTheme ? _dark : _hideEnabled;
 
+    private static string ProfileName(int i) => i switch { 0 => "极简", 1 => "自定义", _ => "完整" };
+
     /// <summary>开关：打开的用强调色，关的是浅底 + 描边；滑钮在右/左。</summary>
     private void DrawSwitch(ID2D1DeviceContext ctx, RectF r, bool on)
     {
@@ -1212,16 +1425,19 @@ public sealed class FullUi : IOverlayUi
         ctx.FillEllipse(new Ellipse(c, k * 0.5f, k * 0.5f), Brush(ctx, Tokens.AccentInk));
     }
 
-    private void DrawCell(ID2D1DeviceContext ctx, int i, in UiState st, float e)
+    /// <summary>画第 pos 个显示出来的格子（pos 是"当前档位里的序号"，i 是完整档下标）。</summary>
+    private void DrawCell(ID2D1DeviceContext ctx, int pos, in UiState st)
     {
-        var r = CellRect(i);
+        var vis = VisibleCells();
+        int i = vis[pos];
+        var r = CellRect(pos);
         bool active = IsActive(i, st);
         bool hover = _hover == i || _press == i;
 
         if (i > 0)
         {
-            // 分隔线画在组尾那一格的右边
-            if (Array.IndexOf(GroupEnds, i) >= 0 && i != Cells.Length - 1)
+            // 分隔线画在"组变了"的地方——按**显示出来的邻居**判，不是按完整档的下标
+            if (pos + 1 < vis.Length && GroupOf(i) != GroupOf(vis[pos + 1]))
             {
                 float x = r.MaxX + Tokens.GroupDivider * 0.5f;
                 ctx.DrawLine(new Vector2(x, r.MinY + 10), new Vector2(x, r.MaxY - 10),
@@ -1317,6 +1533,18 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>自检/出图用：把抽屉打开（产品里只能点「更多」那一格开）。</summary>
     internal void OpenDrawerForTest() => _drawerOpen = true;
+
+    /// <summary>自检/出图用：直接切到某一档（产品里在抽屉顶部点）。</summary>
+    internal void SetProfileForTest(int i) => SetProfile((Profile)i);
+
+    /// <summary>自检用：这一档显示几格 / 现在是第几档 / 某一格钉着没有。</summary>
+    internal int VisibleCountForTest => VisibleCells().Length;
+    internal int ProfileForTest => (int)_profile;
+    internal bool PinnedForTest(int cell) => _pinned[cell];
+
+    /// <summary>自检用：档位条第 i 段、钉住栏第 cell 格的矩形。</summary>
+    internal RectF ProfileRectForTest(int i) => ProfileRect(i);
+    internal RectF ChipRectForTest(int cell) => ChipRect(cell);
 
     /// <summary>自检用：现在算"展开"吗。</summary>
     internal bool ExpandedForTest => _expand.Value > 0.5f;
