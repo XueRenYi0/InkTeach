@@ -301,7 +301,12 @@ public sealed class FullUi : IOverlayUi
         };
     }
 
-    private const float BandGap = 4f;
+    /// <summary>
+    /// 色带和主条之间**不留缝**：假面板里它们是**同一块面板**（一个圆角包住两行），
+    /// 我原来做成两张分开的卡片 ＋ 4 像素缝，看着就是"两个叠起来的药丸"，
+    /// 不如它整块（用户 2026-09-16 提的"色带不如假面板美观"，主要就是这一条）。
+    /// </summary>
+    private const float BandGap = 0f;
     private float BandProgress() => _expand.Value;
 
     /// <summary>上带这一刻的高度：平时 6 像素的色线，碰到了长成 34 像素的设置条。</summary>
@@ -449,7 +454,7 @@ public sealed class FullUi : IOverlayUi
         int n = Tokens.Palette.Length;
         float gap = 4f;
         float avail = band.MaxX - band.MinX - BarInset() * 2f
-                    - (BandHasSlider ? Tokens.SliderWidth + 12f : 0f);
+                    - (BandHasSlider ? 0f : 0f);   // 滑条已经挪到面板下沿，色片铺满整条
         float w = (avail - gap * (n - 1)) / n;
         float h = SwatchHeight();
         float x = band.MinX + BarInset() + i * (w + gap);
@@ -465,12 +470,15 @@ public sealed class FullUi : IOverlayUi
 
     private RectF SliderRect()
     {
-        var band = BandRect();
-        float y = BandCenterY() - (Tokens.SliderKnob + 8f) * 0.5f;
+        // 滑条在**面板最下沿那一条**（照假面板），不是色带右边的一小块。
+        // 命中区给它一点上下余量，手指才好抓。
+        var panel = UnionRect();
+        float inset = BarInset();
+        float cy = panel.MaxY - 6f;
         return new RectF
         {
-            MinX = band.MaxX - BarInset() - Tokens.SliderWidth,
-            MinY = y, MaxX = band.MaxX - BarInset(), MaxY = y + Tokens.SliderKnob + 8f,
+            MinX = panel.MinX + inset, MinY = cy - 9f,
+            MaxX = panel.MaxX - inset, MaxY = cy + 9f,
         };
     }
 
@@ -1141,7 +1149,12 @@ public sealed class FullUi : IOverlayUi
     {
         float e = _expand.Value;
         var bar = BarRect();
-        DrawCard(ctx, bar, Tokens.PillRadius(Tokens.BarHeight));
+        var panel = UnionRect();
+
+        // **整块面板一张卡片**（主条 ＋ 色带共用一个圆角）：圆角随展开从 24 收到 18，
+        // 和假面板一样（它写的是 L.Radius = 24 - 6 * e）。
+        float radius = Tokens.PillRadius(Tokens.BarHeight) - 6f * e;
+        DrawCard(ctx, panel, radius);
 
         var st = _host.State;
         if (e < 0.5f)
@@ -1158,15 +1171,38 @@ public sealed class FullUi : IOverlayUi
             return;
         }
 
-        // 上带单独一张方片（圆角 12，不做胶囊：两块叠一起用大圆角会出现"两段弧"）
+        // 色带那条**凹槽**：把色带那一块裁出来、填一层淡淡的暗色（照假面板：
+        // 裁进面板的圆角形状，顶部两个角自然跟着圆）。
         var band = BandRect();
-        if (band.MaxY - band.MinY >= 2f) DrawCard(ctx, band, Tokens.BandRadius);
+        if (band.MaxY - band.MinY >= 2f)
+        {
+            ctx.PushAxisAlignedClip(new Vortice.RawRectF(band.MinX, band.MinY, band.MaxX, band.MaxY),
+                                    AntialiasMode.Aliased);
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(panel.MinX, panel.MinY, panel.MaxX, panel.MaxY), radius, radius),
+                Brush(ctx, _dark ? Tokens.TroughDark : Tokens.TroughLight));
+            ctx.PopAxisAlignedClip();
+        }
 
         // 展开态：球缩进最左一格，右边是这一档的工具格（极简档就只有六格）。
         var vis = VisibleCells();
         for (int k = 0; k < vis.Length; k++) DrawCell(ctx, k, st);
 
         if (BandVisible()) DrawBand(ctx, st);
+
+        // 面板顶部一道极淡的内高光（假面板原话："Windows 11 的层次感靠它"）
+        if (band.MaxY - band.MinY > 20f)
+        {
+            ctx.PushAxisAlignedClip(new Vortice.RawRectF(panel.MinX, panel.MinY, panel.MaxX, panel.MaxY),
+                                    AntialiasMode.Aliased);
+            ctx.FillRectangle(
+                new Vortice.RawRectF(panel.MinX + 1, panel.MinY + 0.5f, panel.MaxX - 1, panel.MinY + 1.5f),
+                Brush(ctx, _dark ? Tokens.TopSheenDark : Tokens.TopSheenLight));
+            ctx.PopAxisAlignedClip();
+        }
+
+        // 滑条：面板**最下沿那一条**（照假面板：主条下方本来就留了 8 像素余量）
+        if (e > 0.55f) DrawGroove(ctx, st);
         if (_drawerOpen) DrawDrawer(ctx);
     }
 
@@ -1233,15 +1269,61 @@ public sealed class FullUi : IOverlayUi
             }
         }
 
-        if (BandHasSlider)
-        {
-            var r = SliderRect();
-            _widgets.Slider(ctx, r, SliderT(st),
-                            Brush(ctx, HoverCol), Brush(ctx, Tokens.Accent), Brush(ctx, Tokens.Accent));
-        }
-
         int n = BandSegmentCount;
         for (int i = 0; i < n; i++) DrawSegment(ctx, i, n, st);
+    }
+
+    /// <summary>
+    /// 面板**最下沿那一条**滑条（照假面板的 DrawGroove）：底轨 ＋ 用当前笔色画的进度
+    /// ＋ 右端一个跟着变大的笔尖预览。拖动时才浮出白色滑钮。
+    ///
+    /// 没有滑条的工具（鼠标/选择/图形…）在这里画一条"踢脚线"——
+    /// 笔色 25% 的 2 像素线。**它的作用是让面板高度不忽高忽低**，
+    /// 顺带让每个工具的下沿都有点东西，不至于是空的。
+    /// </summary>
+    private void DrawGroove(ID2D1DeviceContext ctx, in UiState st)
+    {
+        var panel = UnionRect();
+        float inset = BarInset();
+        float cy = panel.MaxY - 6f;
+        float left = panel.MinX + inset;
+        float w = panel.MaxX - inset - left;
+        var ink = st.PaletteBase;
+
+        if (!BandHasSlider)
+        {
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(left, cy - 1f, left + w, cy + 1f), 1f, 1f),
+                Brush(ctx, new Color4(ink.R, ink.G, ink.B, 0.25f)));
+            return;
+        }
+
+        float h = _sliderDragging ? 6f : 4f;
+        var rr = new RoundedRectangle(new Vortice.RawRectF(left, cy - h * 0.5f, left + w, cy + h * 0.5f),
+                                      h * 0.5f, h * 0.5f);
+        ctx.FillRoundedRectangle(rr, Brush(ctx, _dark ? Tokens.TrackDark : Tokens.TrackLight));
+
+        float t = SliderT(st);
+        if (t > 0.002f)
+        {
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(left, cy - h * 0.5f, left + w * t, cy + h * 0.5f),
+                                     h * 0.5f, h * 0.5f),
+                Brush(ctx, new Color4(ink.R, ink.G, ink.B, _sliderDragging ? 0.85f : 0.45f)));
+        }
+
+        // 右端：笔尖预览（粗细一眼看得见，比数字直观）
+        float previewR = Math.Clamp(2f + t * 7f, 2f, 9f);
+        ctx.FillEllipse(new Ellipse(new Vector2(panel.MaxX - inset - 10f, cy), previewR, previewR),
+                        Brush(ctx, ink));
+
+        // 拖动时浮出滑钮
+        if (_sliderDragging || _railHover)
+        {
+            var c = new Vector2(left + w * t, cy);
+            ctx.FillEllipse(new Ellipse(c, 8f, 8f), Brush(ctx, Tokens.AccentInk));
+            ctx.DrawEllipse(new Ellipse(c, 8f, 8f), Brush(ctx, new Color4(0.19f, 0.20f, 0.24f, 1f)), 1f);
+        }
     }
 
     private bool IsSwatchActive(in UiState st, int i)
@@ -1287,13 +1369,18 @@ public sealed class FullUi : IOverlayUi
         var r = BandRect();
         if (r.MaxY - r.MinY < 0.5f) return;
 
-        float radius = MathF.Max(2f, (r.MaxY - r.MinY) * 0.5f);
-        float left = r.MinX + BarInset(), right = r.MaxX - BarInset();
-        var box = new Vortice.RawRectF(left, r.MinY, right, r.MaxY);
-        var rr = new RoundedRectangle(box, radius, radius);
-
+        var panel = UnionRect();
+        float radius = Tokens.PillRadius(Tokens.BarHeight) - 6f * _expand.Value;
+        var rr = new RoundedRectangle(
+            new Vortice.RawRectF(panel.MinX, panel.MinY, panel.MaxX, panel.MaxY), radius, radius);
         var line = st.PaletteBase;
+
+        // **贴着面板顶边的圆角走**（照假面板）：整条线的两端跟着面板的圆角收进去，
+        // 而不是在面板里缩进一条独立的小线——那样看着像"贴了张纸条"。
+        ctx.PushAxisAlignedClip(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY),
+                                AntialiasMode.Aliased);
         ctx.FillRoundedRectangle(rr, Brush(ctx, new Color4(line.R, line.G, line.B, alpha)));
+        ctx.PopAxisAlignedClip();
 
         bool nearWhite = line.R > 0.9f && line.G > 0.9f && line.B > 0.9f;
         if (nearWhite && !_dark)

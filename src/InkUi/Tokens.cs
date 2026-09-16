@@ -132,6 +132,21 @@ internal static class Tokens
     public static readonly Color4 HoverLight = new(0f, 0f, 0f, 0.07f);
     public static readonly Color4 HoverDark = new(1f, 1f, 1f, 0.08f);
 
+    /// <summary>
+    /// 色带那条**凹槽**：色片躺在里面才像"装在面板上"，直接贴在白底上会显得浮。
+    /// 数字照假面板（`RailTrough`）：浅色主题黑 10%、深色主题白 12%。
+    /// </summary>
+    public static readonly Color4 TroughLight = new(0f, 0f, 0f, 0.10f);
+    public static readonly Color4 TroughDark = new(1f, 1f, 1f, 0.12f);
+
+    /// <summary>滑条底轨（没拖的时候很淡）与描边。</summary>
+    public static readonly Color4 TrackLight = new(0f, 0f, 0f, 0.07f);
+    public static readonly Color4 TrackDark = new(1f, 1f, 1f, 0.08f);
+
+    /// <summary>面板顶部那道内高光（照假面板：Windows 11 的层次感靠它）。</summary>
+    public static readonly Color4 TopSheenLight = new(1f, 1f, 1f, 0.55f);
+    public static readonly Color4 TopSheenDark = new(1f, 1f, 1f, 0.08f);
+
     /// <summary>投影用"同形状往下叠 2 层、逐层变淡"近似（真模糊贵一个量级）。</summary>
     public static readonly Color4 Shadow1 = new(0f, 0f, 0f, 0.10f);
     public static readonly Color4 Shadow2 = new(0f, 0f, 0f, 0.06f);
