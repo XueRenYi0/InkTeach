@@ -640,6 +640,10 @@ public class InkEngine
 
         string mode = args.Length > 0 ? args[0] : "";
 
+        // 上次因为界面出问题重启过？把板书读回来（读走就删，只恢复一次）。
+        // 自检/基准模式不掺和：那些模式不该被"上次留下的板书"影响判据。
+        if (mode.Length == 0) RestoreSessionIfAny();
+
         // 宿主自己的启动分支（开发期的点击目标、截图工具等）。返回 true
         // 表示这条命令行已经由宿主处理完，引擎不再往下走。产品界面不需要覆写。
         if (PrepareHostStartup(mode, args, out int hostExit))
@@ -740,6 +744,27 @@ public class InkEngine
     {
         exitCode = 0;
         return false;
+    }
+
+    /// <summary>
+    /// 读回"因为界面出问题而重启"之前暂存的板书。**读走就删**（只恢复一次），
+    /// 太旧的由 <see cref="Recovery.TakeSession"/> 自己丢掉。
+    /// </summary>
+    private void RestoreSessionIfAny()
+    {
+        var blob = Recovery.TakeSession();
+        if (blob == null) return;
+
+        try
+        {
+            InkSerializer.LoadInto(Doc, blob);
+            Doc.InvalidateAll();
+            Console.WriteLine($"已恢复上次界面出问题时暂存的板书：{Doc.Strokes.Count} 笔");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("会话恢复失败（那份暂存已丢弃）：" + ex.Message);
+        }
     }
 
     /// <summary>
@@ -882,6 +907,14 @@ public class InkEngine
             NowMs = _clock.Elapsed.TotalMilliseconds;
 
             if (NowMs >= _autoExitAt) break;
+
+            // 跑满一分钟还没出事 → 把"因为界面出问题而重启"的计数清掉。
+            // 不这么做的话，上午两次、下午两次，第四次就会莫名其妙不许重启。
+            if (!_restartCountCleared && NowMs > 60_000)
+            {
+                Recovery.ClearRestartCount();
+                _restartCountCleared = true;
+            }
 
             Laser.Prune(NowMs);
             if (NeedsFrame())
@@ -2792,6 +2825,11 @@ public class InkEngine
     public void SetUi(IOverlayUi ui, bool keepScreen = false)
     {
         Ui = ui ?? new NullUi();
+        // 换了界面就得让各窗口重新布局：覆盖窗口缓存着"上次给 Layout 的屏幕"，
+        // 不清的话新界面永远等不到 Layout，QueryBounds 会一直返回空（看不见也点不到）。
+        foreach (var w in _windows) w.InvalidateUiLayout();
+        _uiFaults = 0;
+        _uiHover = false;
         // 界面看到的屏幕坐标是逻辑像素：它按自己的逻辑尺寸布局，引擎负责按 DPI 放大。
         Host = new UiHost(this, LogicalVirtualScreen, DpiScale, keepScreen);
         Ui.Attach(Host);
@@ -2967,6 +3005,20 @@ public class InkEngine
         NotifyUiStateChanged();
     }
 
+    /// <summary>
+    /// 装界面，**并留下"再造一个"的办法**。产品代码用这一条，不要用 <see cref="SetUi"/>：
+    /// 界面出问题时引擎要能自己把界面重建回来（教室大屏很可能没有键盘，
+    /// 界面是唯一的出口，见 <see cref="Recovery"/> 的注释）。
+    ///
+    /// 传进来的工厂必须每次都能造一个**全新的**界面（不要复用同一个实例——
+    /// 那个实例正是刚被判定"状态坏了"的那一个）。
+    /// </summary>
+    public void SetUiFactory(Func<IOverlayUi> factory)
+    {
+        _uiFactory = factory;
+        SetUi(factory != null ? factory() : null);
+    }
+
     /// <summary>界面切选择方式（矩形框 / 自由套索）。</summary>
     internal void SetSelectModeFromUi(SelectMode mode)
     {
@@ -3068,7 +3120,30 @@ public class InkEngine
     private int _uiFaults;
     private double _uiLastFaultMs = double.NegativeInfinity;
 
-    /// <summary>界面的异常次数与处置。第三次就停用界面，并说清发生了什么。</summary>
+    /// <summary>界面工厂：有它引擎才能"自己把界面重建一个回来"。</summary>
+    private Func<IOverlayUi> _uiFactory;
+
+    /// <summary>最近一分钟里重建过几次界面。重建也失败就得往上走一级（重启软件）。</summary>
+    private int _uiRebuilds;
+    private double _uiRebuildWindowStartMs = double.NegativeInfinity;
+
+    /// <summary>自检用：这一次"重启软件"有没有真的被发起。</summary>
+    internal bool RestartRequested { get; private set; }
+
+    /// <summary>重启计数清过一次就够了（跑满一分钟算"稳住了"）。</summary>
+    private bool _restartCountCleared;
+
+    /// <summary>
+    /// 界面的异常次数与处置。**三级阶梯**，一级比一级重，但都不留死局：
+    ///
+    ///   ① 重建界面（引擎自己 new 一个回来）—— 板书不动，工具条重新挂一遍；
+    ///   ② 重启软件 —— 重启前把板书暂存下来，重启后读回来，**什么都不丢**；
+    ///   ③ 都不行就退回无界面 —— 至少还能写，而且是必现 bug 时的唯一出路
+    ///      （否则就是无限重启，屏幕一直在闪，比停用更糟）。
+    ///
+    /// 为什么必须往"重启"走：教室的大屏 + 手写板机器上很可能没有键盘，
+    /// 界面就是唯一的出口；界面没了又没法重启，就是死局（用户 2026-09-16 提的）。
+    /// </summary>
     private void NoteUiFault(string what, Exception ex)
     {
         if (NowMs - _uiLastFaultMs > 3000) _uiFaults = 0;   // 隔久了当新的一轮
@@ -3080,8 +3155,97 @@ public class InkEngine
             return;
         }
 
-        Console.WriteLine($"界面已停用：{what} 连续 {_uiFaults} 次抛异常 —— {ex.Message}");
-        Console.WriteLine("  → 换成无界面继续跑，笔迹不受影响；界面那边修好再挂回来。");
+        Console.WriteLine($"界面 3 秒内抛了 {_uiFaults} 次异常（最后一次在 {what}）：{ex.Message}");
+
+        // ① 还能重建就先重建：不丢板书，通常也够用（界面多半是状态被搞坏了）。
+        if (_uiFactory != null && UiRebuildAllowed())
+        {
+            RebuildUi(what);
+            return;
+        }
+
+        // ② 重建也救不回来 → 重启软件（先把板书存下来）。
+        if (TryRestartForUiProblem(what)) return;
+
+        // ③ 最后的兜底：退回无界面。必现的 bug 走到这里，至少还能写。
+        DisableUi(what);
+    }
+
+    private void RebuildUi(string what)
+    {
+        if (NowMs - _uiRebuildWindowStartMs > 60_000) { _uiRebuilds = 0; _uiRebuildWindowStartMs = NowMs; }
+        _uiRebuilds++;
+        _uiFaults = 0;
+
+        Console.WriteLine($"  → 重建界面（这个界面是第 {_uiRebuilds} 次重建）—— 板书不受影响");
+        try
+        {
+            SetUi(_uiFactory());
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("界面重建失败：" + ex.Message);
+            SetUi(null);
+        }
+    }
+
+    /// <summary>一分钟内最多重建两次；再多说明重建不管用，该往上走一级。</summary>
+    private bool UiRebuildAllowed()
+    {
+        if (NowMs - _uiRebuildWindowStartMs > 60_000) return true;
+        return _uiRebuilds < 2;
+    }
+
+    /// <summary>
+    /// 因为界面出问题而重启软件。返回 true = 已经开始重启（调用方别再往下走）。
+    /// **先存板书再重启**：重启的前提是不丢东西。
+    /// </summary>
+    private bool TryRestartForUiProblem(string what)
+    {
+        int n = Recovery.NoteRestart();
+        if (n > Recovery.MaxRestartsInWindow)
+        {
+            Console.WriteLine($"  → 这个窗口内已经重启过 {n - 1} 次，不再重启（多半是必现的问题）");
+            return false;
+        }
+
+        try { Recovery.SaveSession(InkSerializer.Save(Doc)); } catch (Exception ex) { Console.WriteLine("板书暂存失败：" + ex.Message); }
+        Console.WriteLine($"  → 重启软件（第 {n} 次），板书已暂存，重启后自动读回来");
+
+        if (!RestartSelf(what)) return false;
+        RestartRequested = true;
+        _quit = true;           // 主循环退出 → Shutdown → 进程结束，新进程接手
+        return true;
+    }
+
+    /// <summary>
+    /// 真的把软件重新拉起来。**宿主可以覆写**（自检里只记一笔，不真拉进程）。
+    /// 返回 false = 没拉起来，那就别退出——退回无界面继续跑总比"退出后什么都没有"强。
+    /// </summary>
+    protected virtual bool RestartSelf(string why)
+    {
+        try
+        {
+            string exe = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(exe)) return false;
+
+            var psi = new ProcessStartInfo(exe) { UseShellExecute = false };
+            var args = Environment.GetCommandLineArgs();
+            for (int i = 1; i < args.Length; i++) psi.ArgumentList.Add(args[i]);
+            Process.Start(psi);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("拉起新进程失败：" + ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>三级都走不通时的兜底：停用界面，笔迹照常。</summary>
+    private void DisableUi(string what)
+    {
+        Console.WriteLine($"  → 界面已停用（{what}）。笔迹不受影响；修好之后重开软件就回来了。");
         Ui = new NullUi();
         UiCapturing = false;
         Native.ReleaseCapture();

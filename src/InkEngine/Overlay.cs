@@ -1003,6 +1003,18 @@ internal sealed class OverlayWindow : IDisposable
     private RectF _uiLayoutBounds = RectF.Empty;
 
     /// <summary>
+    /// 换界面时必须把它清掉：不然新界面**永远不会被调 Layout**（屏幕和 DPI 都没变，
+    /// 缓存看起来还有效），它的 QueryBounds 会一直返回空——
+    /// 表现就是"换上去的界面看不见、也点不到"。
+    /// </summary>
+    internal void InvalidateUiLayout()
+    {
+        _uiLayoutScreen = RectF.Empty;
+        _uiLayoutDpi = -1f;
+        _uiLayoutBounds = RectF.Empty;
+    }
+
+    /// <summary>
     /// 把界面画到后缓冲上。
     ///
     /// 每帧只重画界面自己那一小块矩形（裁剪 + 按其逻辑坐标绘制），整屏的其它

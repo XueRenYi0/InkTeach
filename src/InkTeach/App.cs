@@ -479,6 +479,17 @@ internal sealed class App : InkEngine.InkEngine
     }
 
     /// <summary>点击目标窗口只关心"有没有被点到"。</summary>
+    /// <summary>
+    /// 自检里**不真的拉新进程**（会开出一堆覆盖窗口，把机器占满），
+    /// 只记一笔并返回"成功"——这样"重建救不回来就重启"那条路能被完整走到。
+    /// 产品里走基类实现（真拉进程）。
+    /// </summary>
+    protected override bool RestartSelf(string why)
+    {
+        Console.WriteLine($"[自检] 不真的重启（{why}）；产品里这一步会重新拉起自己");
+        return true;
+    }
+
     protected override bool HandleHostWindowMessage(
         IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam, out IntPtr result)
     {
@@ -4907,18 +4918,63 @@ internal sealed class App : InkEngine.InkEngine
               + $"Screen ({host.Screen.MinX:F0},{host.Screen.MinY:F0})-"
               + $"({host.Screen.MaxX:F0},{host.Screen.MaxY:F0})");
 
-        // ---- ⑫ 界面抛异常不许把板书一起废掉（3 秒内 3 次 → 停用界面）----
-        probe.ThrowOnDown = true;
-        for (int i = 0; i < 3; i++) { probe.Down = 0; Click(inX, inY); }
-        bool disabled = CurrentUi is NullUi;
-        Check("界面连抛三次→自动停用", disabled, $"当前界面 = {CurrentUi.Name}");
+        // ---- ⑫ 界面抛异常不许留死局：重建 → 重启 → 兜底，而且板书不许丢 ----
+        // 教室大屏/手写板上可能根本没有键盘，界面是唯一的出口：界面没了又关不掉、
+        // 重启不了，就是死局（用户 2026-09-16 提的）。
+        Recovery.ClearRestartCount();          // 别让上一次自检留下的计数影响这一次
+        try { File.Delete(Recovery.SessionPath); } catch { }
 
-        probe.ThrowOnDown = false;
-        Tool = Tool.Pen;
-        strokes0 = Doc.Strokes.Count;
-        Click(outX, outY);
-        Check("界面停用后笔迹照常", Doc.Strokes.Count > strokes0,
-              $"笔画 {strokes0} → {Doc.Strokes.Count}");
+        int uiBuilt = 0;
+        var panelRect = probe.BoundsPhysical;
+        UiProbe MakeProbe()
+        {
+            uiBuilt++;
+            return new UiProbe { BoundsPhysical = panelRect };
+        }
+        SetUiFactory(MakeProbe);               // 引擎从此有"再造一个回来"的办法
+        SettleFrames(200);
+
+        // ① 第一次崩：3 秒内 3 次 → 重建界面（不是停用）
+        var firstUi = (UiProbe)CurrentUi;
+        firstUi.ThrowOnDown = true;
+        for (int i = 0; i < 3; i++) { probe.Down = 0; Click(inX, inY); }
+        bool rebuilt = CurrentUi is UiProbe && !ReferenceEquals(CurrentUi, firstUi);
+        Check("界面崩了先重建（不停用）", rebuilt,
+              $"重建次数 {uiBuilt - 1}，当前界面 = {CurrentUi.Name}");
+
+        // ② 重建之后继续崩（重建额度用完）→ 重启软件，且重启前把板书存下来
+        Doc.Clear();
+        Doc.ClearHistory();
+        var keep = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 6f };
+        keep.AddPoint(400, 400, 1f, 0);
+        keep.AddPoint(700, 400, 1f, 1);
+        Doc.AddStroke(keep);
+        int strokesBeforeRestart = Doc.Strokes.Count;
+
+        for (int round = 0; round < 2; round++)
+        {
+            var ui = CurrentUi as UiProbe;
+            if (ui == null) break;
+            ui.ThrowOnDown = true;
+            for (int i = 0; i < 3; i++) { probe.Down = 0; Click(inX, inY); }
+            SettleFrames(120);
+        }
+        Check("重建救不回来就重启软件", RestartRequested, $"当前界面 = {CurrentUi.Name}");
+
+        // 板书必须读得回来——"重启"的前提是不丢东西
+        var blob = Recovery.TakeSession();
+        bool restorable = false;
+        string detail = "没有暂存文件";
+        if (blob != null)
+        {
+            var fresh = new InkDocument();
+            InkSerializer.LoadInto(fresh, blob);
+            restorable = fresh.Strokes.Count == strokesBeforeRestart && strokesBeforeRestart > 0;
+            detail = $"暂存 {blob.Length} 字节 → 读回 {fresh.Strokes.Count} 笔（重启前 {strokesBeforeRestart} 笔）";
+        }
+        Check("重启后板书读得回来", restorable, detail);
+        try { File.Delete(Recovery.SessionPath); } catch { }
+        Recovery.ClearRestartCount();
 
         Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
         ExitCode = fail == 0 ? 0 : 1;
@@ -4930,6 +4986,11 @@ internal sealed class App : InkEngine.InkEngine
         //   · LAYERED+TRANSPARENT 档：下层收得到，但这个窗口在系统那一层
         //     就被排除在输入之外了，NCHITTEST 根本轮不到我们，面板点不动。
         // 这段打印就是为了把这条取舍钉成数字，选架构时不用再猜。
+        // 上面的熔断自检留着"故意抛异常"的界面，诊断这几下点击会继续触发重建/重启
+        // （还会往临时目录写会话文件）。先把开关关掉，让这段只回答它要回答的问题。
+        var diagUi = CurrentUi as UiProbe;
+        if (diagUi != null) diagUi.ThrowOnDown = false;
+
         foreach (var (modeName, mode) in new[]
                  {
                      ("只按点回答命中测试", PassThroughMode.HitTest),
@@ -4941,12 +5002,12 @@ internal sealed class App : InkEngine.InkEngine
             foreach (var w in _windows) ApplyPassThroughStyle(w);
             SettleFrames(150);
 
-            probe.Down = 0;
+            if (diagUi != null) diagUi.Down = 0;
             int c0 = CountClicks(log);
             int nc0 = _cntNcHitTest, ncc0 = _cntNcHitClient;
             int dn0 = _cntDown;
             Click(inX, inY);
-            Console.WriteLine($"  [诊断] {modeName,-24} 面板收到按下 {(probe.Down > 0 ? "是" : "否")}"
+            Console.WriteLine($"  [诊断] {modeName,-24} 面板收到按下 {(diagUi != null && diagUi.Down > 0 ? "是" : "否")}"
                               + $"   下层窗口收到 {(CountClicks(log) > c0 ? "是" : "否")}"
                               + $"   系统问了命中测试 {_cntNcHitTest - nc0} 次"
                               + $"（其中答「这块是我的」{_cntNcHitClient - ncc0} 次）"
@@ -4955,6 +5016,8 @@ internal sealed class App : InkEngine.InkEngine
             foreach (var w in _windows) ApplyPassThroughStyle(w);
             SettleFrames(120);
         }
+        try { File.Delete(Recovery.SessionPath); } catch { }
+        Recovery.ClearRestartCount();
 
         SetPass(false);
         try { target.Kill(); } catch { }
