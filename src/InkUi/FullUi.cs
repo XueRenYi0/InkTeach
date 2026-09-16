@@ -104,7 +104,11 @@ public sealed class FullUi : IOverlayUi
         // 上带还没长出来的那几帧只算主条（占用矩形必须跟着实际画出来的东西走，
         // 不然命中测试和输入小窗都会比画面大一圈）。
         if (band.MaxY - band.MinY < 2f) return bar;
-        return new RectF { MinX = bar.MinX, MinY = bar.MinY, MaxX = bar.MaxX, MaxY = band.MaxY };
+        return new RectF
+        {
+            MinX = bar.MinX, MinY = Math.Min(bar.MinY, band.MinY),
+            MaxX = bar.MaxX, MaxY = Math.Max(bar.MaxY, band.MaxY),
+        };
     }
 
     private RectF BarRect()
@@ -118,6 +122,18 @@ public sealed class FullUi : IOverlayUi
     {
         var bar = BarRect();
         float h = Tokens.BandHeight * BandProgress();
+        // 带子**朝屏幕中心那一侧**长：
+        //   · 面板贴底（默认位置）→ 带子在上面：底边锚定不动，你刚点的按钮位置也不动
+        //     （这是假面板当年的做法，代码注释写着"贴底时下面没有空间"）；
+        //   · 面板拖到上半屏 → 带子在下面，朝内容长。
+        // 一开始我写成"永远在主条下面"，那是**不经意的偏差**：面板底边锚定 + 带子在下面
+        // = 展开时按钮带整体上跳 38 像素，正是设计文稿里点过名的"切工具会跳"。
+        if (BandAbove())
+            return new RectF
+            {
+                MinX = bar.MinX, MinY = bar.MinY - BandGap - h,
+                MaxX = bar.MaxX, MaxY = bar.MinY - BandGap,
+            };
         return new RectF
         {
             MinX = bar.MinX, MinY = bar.MaxY + BandGap,
@@ -159,25 +175,45 @@ public sealed class FullUi : IOverlayUi
     private Vector2 Anchor()
     {
         float w = Width();
-        // 用**总高**（主条 ＋ 上带）：默认位置是"贴着下边"，上带长出来时面板往上长，
-        // 而不是往下顶出屏幕（顶出屏幕的话输入小窗也会跟着跑到屏幕外）。
         float h = TotalHeight();
-        Vector2 a = _anchor ?? new Vector2(
-            _screen.MinX + (_screen.MaxX - _screen.MinX - w) * 0.5f,
-            _screen.MaxY - Tokens.EdgeMargin - h);
+        var a = RawAnchor();
         return Clamp(a, w, h);
+    }
+
+    /// <summary>
+    /// 没拖过时的位置：**主条的底边贴屏幕下边**（离边 12）。
+    /// 注意这里减的是**主条高**、不是总高——带子朝上长，主条自己不动。
+    /// </summary>
+    private Vector2 RawAnchor() => _anchor ?? new Vector2(
+        _screen.MinX + (_screen.MaxX - _screen.MinX - Width()) * 0.5f,
+        _screen.MaxY - Tokens.EdgeMargin - Tokens.BarHeight);
+
+    /// <summary>
+    /// 带子长在哪一侧：**朝屏幕中心**。面板在下半屏就朝上长（贴底时下面本来也没空间），
+    /// 拖到上半屏就朝下长。判据用"主条中心 vs 屏幕中心"，不管面板怎么拖都成立。
+    /// </summary>
+    private bool BandAbove()
+    {
+        var a = RawAnchor();
+        float center = a.Y + Tokens.BarHeight * 0.5f;
+        return center >= (_screen.MinY + _screen.MaxY) * 0.5f;
     }
 
     /// <summary>夹在可见区域内（一期就夹在单块屏里，跨屏怎么画还没验证过）。</summary>
     private Vector2 Clamp(Vector2 a, float w, float h)
     {
-        float minX = _screen.MinX + Tokens.DockGap;
-        float maxX = _screen.MaxX - Tokens.DockGap - w;
-        float minY = _screen.MinY + Tokens.DockGap;
-        float maxY = _screen.MaxY - Tokens.DockGap - h;
-        if (maxX < minX) maxX = minX;
-        if (maxY < minY) maxY = minY;
-        return new Vector2(Math.Clamp(a.X, minX, maxX), Math.Clamp(a.Y, minY, maxY));
+        // 夹取要按**整个面板**（主条 ＋ 带子）算：a 是主条左上角，
+        // 带子在上面时整块的顶边在 a.Y 之上。
+        float bandH = (BandGap + Tokens.BandHeight) * BandProgress();
+        float top = BandAbove() ? a.Y - bandH : a.Y;
+        float bottom = top + h;
+
+        float x = Math.Clamp(a.X, _screen.MinX + Tokens.DockGap,
+                                    _screen.MaxX - Tokens.DockGap - w);
+        float y = a.Y;
+        if (top < _screen.MinY + Tokens.DockGap) y += _screen.MinY + Tokens.DockGap - top;
+        if (bottom > _screen.MaxY - Tokens.DockGap) y -= bottom - (_screen.MaxY - Tokens.DockGap);
+        return new Vector2(x, y);
     }
 
     /// <summary>第 i 格的矩形（逻辑坐标）。收起格也在里面（i = 0）。</summary>

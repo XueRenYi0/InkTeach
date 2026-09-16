@@ -5161,6 +5161,13 @@ internal sealed class App : InkEngine.InkEngine
               && barW > 600f,
               $"占用 {barW:F0}×{barH:F0}（主条高 {barOnly.MaxY - barOnly.MinY:F0}）");
 
+        // 带子长在**上面**（贴底时朝屏幕中心）：主条位置不许动——
+        // 你刚点的那个按钮要是往上跳 38 像素，下一次点它就得重新瞄（费茨定律）。
+        Check("展开时主条不动（只有带子长出来）",
+              MathF.Abs(barOnly.MinY - ball.MinY) < 1.5f
+              && MathF.Abs(barOnly.MaxY - ball.MaxY) < 1.5f,
+              $"收起时 y {ball.MinY:F0}..{ball.MaxY:F0}，展开后主条 y {barOnly.MinY:F0}..{barOnly.MaxY:F0}");
+
         // ---- ④ 点"笔"那一格：引擎状态真的变了（走的是命令通道）----
         Tool = Tool.Eraser;
         var penCell = ui.CellRectForTest(3);
