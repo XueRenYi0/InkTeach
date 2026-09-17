@@ -6081,6 +6081,137 @@ internal sealed class App : InkEngine.InkEngine
             SettleFrames(150);
         }
 
+        // ---- ⑥.5 上带右端的两个动作：清空（按住 0.8 秒）、全选（点一下）----
+        //
+        // 出自假面板：清空挂在**橡皮**那条（擦一点/擦一块/全擦掉是一路的事），
+        // 按住 0.8 秒才算数；全选挂在**选择**那条。清空可撤销，但代价大，所以防误触。
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            for (int i = 0; i < 3; i++)
+            {
+                var s = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = new Color4(0f, 0f, 0f, 1f), Width = 6f,
+                };
+                s.AddPoint(_virtualX + 300 + i * 40, _virtualY + 300, 1f, 0);
+                s.AddPoint(_virtualX + 380 + i * 40, _virtualY + 340, 1f, 1);
+                Doc.AddStroke(s);
+            }
+            SettleFrames(150);
+
+            Host.Commands.SetTool(Tool.Eraser);
+            SettleFrames(200);
+            var barA = ui.BarRectForTest;          // 指针挪回面板：设置条才开着
+            SendMouse((int)((barA.MinX + barA.MaxX) * 0.5f * DpiScale),
+                      (int)((barA.MinY + barA.MaxY) * 0.5f * DpiScale), 0);
+            SettleFrames(400);
+
+            var act = ui.ActionRectForTest;
+            Check("橡皮那条右端有「清空」", act.MaxX - act.MinX > 40f,
+                  $"动作按钮宽 {act.MaxX - act.MinX:F0}");
+
+            float ax = (act.MinX + act.MaxX) * 0.5f * DpiScale;
+            float ay = (act.MinY + act.MaxY) * 0.5f * DpiScale;
+            int before = Doc.Strokes.Count;
+
+            // 按住 0.3 秒就松手：**不清空**，而且那一刻进度条该走到一半
+            SendMouse((int)ax, (int)ay, 0);                            SettleFrames(60);
+            SendMouse((int)ax, (int)ay, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(300);
+            bool midHold = ui.ActionHoldingForTest
+                        && ui.HoldProgressForTest > 0.1f && ui.HoldProgressForTest < 0.9f;
+            SendMouse((int)ax, (int)ay, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(250);
+            Check("按住 0.3 秒松手：不清空（进度条走到一半）",
+                  midHold && Doc.Strokes.Count == before,
+                  $"按住中 = {midHold}，笔画 {before} → {Doc.Strokes.Count}");
+
+            // 按住够 0.8 秒：清空
+            SendMouse((int)ax, (int)ay, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(1100);
+            SendMouse((int)ax, (int)ay, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(250);
+            Check("按住 0.8 秒：清空生效", Doc.Strokes.Count == 0,
+                  $"笔画 {before} → {Doc.Strokes.Count}");
+            Host.Commands.Undo();
+            SettleFrames(250);
+            Check("清空能撤销回来（不是不可逆的破坏）", Doc.Strokes.Count == before,
+                  $"撤销后 {Doc.Strokes.Count} 笔");
+
+            // 全选：挂在选择那条
+            Host.Commands.SetTool(Tool.Marquee);
+            SettleFrames(200);
+            var barS = ui.BarRectForTest;
+            SendMouse((int)((barS.MinX + barS.MaxX) * 0.5f * DpiScale),
+                      (int)((barS.MinY + barS.MaxY) * 0.5f * DpiScale), 0);
+            SettleFrames(400);
+            var act2 = ui.ActionRectForTest;
+            Check("选择那条右端有「全选」", act2.MaxX - act2.MinX > 40f,
+                  $"动作按钮宽 {act2.MaxX - act2.MinX:F0}");
+
+            Doc.Selected.Clear();
+            ClickPhysical((act2.MinX + act2.MaxX) * 0.5f * DpiScale,
+                          (act2.MinY + act2.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("点「全选」：选中的条数 = 笔画数",
+                  Doc.Selected.Count == Doc.Strokes.Count && Doc.Selected.Count > 0,
+                  $"选中 {Doc.Selected.Count} / 笔画 {Doc.Strokes.Count}");
+        }
+
+        // ---- ⑥.6 撤销/重做的**灰度**（用户 2026-09-17："撤销重做灰度"）----
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            SettleFrames(250);
+            Check("栈空：撤销和重做都压暗",
+                  ui.CellUnavailableForTest(10) && ui.CellUnavailableForTest(11),
+                  $"撤销压暗 = {ui.CellUnavailableForTest(10)}，重做压暗 = {ui.CellUnavailableForTest(11)}");
+
+            var s1 = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0f, 0f, 0f, 1f), Width = 6f,
+            };
+            s1.AddPoint(_virtualX + 400, _virtualY + 400, 1f, 0);
+            s1.AddPoint(_virtualX + 500, _virtualY + 420, 1f, 1);
+            Doc.AddStroke(s1);
+            SettleFrames(250);
+            Check("画一笔之后：撤销亮、重做仍暗",
+                  !ui.CellUnavailableForTest(10) && ui.CellUnavailableForTest(11),
+                  $"撤销压暗 = {ui.CellUnavailableForTest(10)}，重做压暗 = {ui.CellUnavailableForTest(11)}");
+
+            Host.Commands.Undo();
+            SettleFrames(250);
+            Check("撤销之后：重做亮起来",
+                  ui.CellUnavailableForTest(10) && !ui.CellUnavailableForTest(11),
+                  $"撤销压暗 = {ui.CellUnavailableForTest(10)}，重做压暗 = {ui.CellUnavailableForTest(11)}");
+            Doc.Clear();
+            Doc.ClearHistory();
+            SettleFrames(150);
+        }
+
+        // ---- ⑥.7 白板和穿透**互斥**（用户 2026-09-17 问："鼠标和白板是不是也应该互斥"）----
+        //
+        // 该互斥：白板是不透明的一层，穿透是"点击落到下层程序"——两个一起开着，
+        // 老师看到的是白板、点到的却是白板下面那个看不见的窗口。
+        {
+            Host.Commands.SetBoard(true);
+            SettleFrames(200);
+            Host.Commands.SetPassThrough(true);
+            SettleFrames(250);
+            Check("开穿透 → 白板自动关掉",
+                  !BoardOn && Host.State.PassThrough,
+                  $"板开 = {BoardOn}，穿透 = {Host.State.PassThrough}");
+
+            Host.Commands.SetBoard(true);
+            SettleFrames(300);
+            Check("开白板 → 穿透自动关掉",
+                  BoardOn && !Host.State.PassThrough,
+                  $"板开 = {BoardOn}，穿透 = {Host.State.PassThrough}");
+
+            Host.Commands.SetBoard(false);
+            Host.Commands.SetTool(Tool.Pen);
+            SettleFrames(200);
+        }
+
         // 换工具（走引擎那条路，等同按热键）：上带要跟着换成"选择"的设置条
         Host.Commands.SetTool(Tool.Marquee);
         SettleFrames(150);

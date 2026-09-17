@@ -2967,6 +2967,19 @@ public class InkEngine
     {
         PassThrough = on;
         if (!on) Laser.Visible = false;
+
+        // **穿透和白板互斥**（用户 2026-09-17 问的那条）。两个方向都要挡：
+        //   · 开白板 → 关穿透：白板是不透明的一层，穿透是"点击落到下层程序"；
+        //     两个一起开着，老师看到的是白板、点到的却是白板下面那个看不见的窗口。
+        //   · 开穿透 → 关白板：同上，反过来也一样说不通。
+        // 关掉的那一方**不自动回来**（和"关板不自动开穿透"一致）：老师再点一下就行，
+        // 而"悄悄替你恢复"才是难查的那类行为。
+        if (on && BoardOn)
+        {
+            BoardOn = false;
+            Doc.InvalidateAll();
+            NotifyUiStateChanged();
+        }
         foreach (var w in _windows) ApplyPassThroughStyle(w);
         // 穿透时把指针交还给下层窗口（ApplyCursor 会在穿透模式下自动放手）；
         // 退出穿透要立刻把属于我们的光标设回来，不必等下一次鼠标移动。
@@ -3323,6 +3336,8 @@ public class InkEngine
     {
         if (BoardOn == on) return;
         BoardOn = on;
+        // 开白板就顺手关掉穿透（另一边在 SetPassThrough 里，两个方向都挡，理由见那儿）
+        if (on) SetPassThrough(false);
         Doc.InvalidateAll();
         _dirty = true;
         NotifyUiStateChanged();

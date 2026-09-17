@@ -222,6 +222,10 @@ public sealed class FullUi : IOverlayUi
             // 没有帧就没有时机去收（引擎只在有脏区或界面说要动时才渲染）。
             if (_peek.Running) return true;
             if (_rail.Running) return true;
+            // 按住清空、或者刚按完那一下的闪光：都要继续给帧，否则进度条不走、
+            // 也永远到不了 0.8 秒那个点（"按住不放"这条全靠帧在推进）。
+            if (ActionHolding) return true;
+            if (_host != null && _host.NowMs < _actionFlashUntil) return true;
             // 色带正在"等悬停意图"时也得给帧：不然 120 毫秒到了没人去展开它，
             // 或者 220 毫秒到了没人去收它。展开/收起一旦完成，这两个条件立刻为假 → 空闲回到 0 帧。
             if (BandVisible()
@@ -517,7 +521,8 @@ public sealed class FullUi : IOverlayUi
         int n = Tokens.Palette.Length;
         float gap = 4f;
         float avail = band.MaxX - band.MinX - BarInset() * 2f
-                    - (BandHasSlider ? SliderTrackW + 14f : 0f);   // 给右端的粗细滑条让位
+                    - (BandHasSlider ? SliderTrackW + 14f : 0f)    // 给右端的粗细滑条让位
+                    - ActionReserve;                                // 给最右端的动作按钮让位
         float w = (avail - gap * (n - 1)) / n;
         float h = SwatchHeight();
         float x = band.MinX + BarInset() + i * (w + gap);
@@ -548,7 +553,7 @@ public sealed class FullUi : IOverlayUi
     private RectF SliderRect()
     {
         var band = BandRect();
-        float right = band.MaxX - BarInset();
+        float right = band.MaxX - BarInset() - ActionReserve;   // 最右端留给动作按钮
         float cy = (band.MinY + band.MaxY) * 0.5f;
         return new RectF
         {
@@ -570,7 +575,8 @@ public sealed class FullUi : IOverlayUi
         }
         // 和色片一样：右端有滑条的时候要给滑条让位，否则分段会和滑条叠在一起
         float total = band.MaxX - band.MinX - BarInset() * 2
-                    - (BandHasSlider ? SliderTrackW + 14f : 0f);
+                    - (BandHasSlider ? SliderTrackW + 14f : 0f)
+                    - ActionReserve;
         float w = Math.Min(120f, (total - (count - 1) * 6f) / count);
         float x = BandContentLeft() + i * (w + 6f);
         float y = BandCenterY() - Tokens.SegmentHeight * 0.5f;
@@ -633,6 +639,97 @@ public sealed class FullUi : IOverlayUi
         float left = box.MinX + Tokens.SliderKnob * 0.5f;
         float right = box.MaxX - SliderPreviewW - Tokens.SliderKnob * 0.5f;
         return (left, right);
+    }
+
+    // ---- 上带右端的"动作"按钮（照假面板）------------------------------------
+    //
+    // 假面板里：**清空**挂在橡皮那条的右端（擦一点 / 擦一块 / 全擦掉，语义是一路的），
+    // 而且**按住 0.8 秒才算数**——清空本身可撤销，但代价大，防误触；
+    // **全选**挂在选择那条的右端，点一下就执行。
+    // 这两条我们一直缺（计划 10.1 的第 1 条），2026-09-17 用户点名要。
+    //
+    // 位置：上带**最右端**。粗细滑条也在右端，所以橡皮那条是
+    // `[整笔擦][面积擦] …… [粗细滑条][清空]`——动作永远贴在最外沿。
+    private enum BandAction { None = 0, Clear, SelectAll }
+
+    private BandAction ActionOf(int bandCell) => bandCell switch
+    {
+        6 => BandAction.Clear,        // 清空 ≈ "全擦掉"，和两种橡皮排一条
+        7 => BandAction.SelectAll,    // 全选 ≈ "把要操作的东西一次选上"，归选择这条
+        _ => BandAction.None,
+    };
+    private BandAction CurAction => ActionOf(_bandCell);
+
+    private const float ActionW = 92f;
+    private const double ClearHoldMs = 800;
+
+    private RectF ActionRect()
+    {
+        var band = BandRect();
+        float right = band.MaxX - BarInset();
+        float cy = (band.MinY + band.MaxY) * 0.5f;
+        return new RectF
+        {
+            MinX = right - ActionW, MinY = cy - Tokens.SegmentHeight * 0.5f,
+            MaxX = right, MaxY = cy + Tokens.SegmentHeight * 0.5f,
+        };
+    }
+
+    /// <summary>动作按钮要占的横向空间（色片 / 分段 / 滑条都得让位）。</summary>
+    private float ActionReserve => CurAction == BandAction.None ? 0f : ActionW + 10f;
+
+    /// <summary>清空的按住计时（-inf = 没在按）与"刚按完闪一下"的时刻。</summary>
+    private double _actionHoldFrom = double.NegativeInfinity;
+    private double _actionFlashUntil = double.NegativeInfinity;
+    private bool ActionHolding => !double.IsNegativeInfinity(_actionHoldFrom);
+
+    /// <summary>按住进度 0..1（画那个从左往右的填充）。</summary>
+    private float HoldProgress()
+    {
+        if (!ActionHolding || _host == null) return 0f;
+        return (float)Math.Clamp((_host.NowMs - _actionHoldFrom) / ClearHoldMs, 0.0, 1.0);
+    }
+
+    /// <summary>
+    /// 每帧推进一次"按住清空"。**必须在每帧调**（和面板动画同一套节奏）：
+    /// 只在 PointerUp 里判时间的话，老师按住不放、松手前那一下永远不会触发。
+    /// </summary>
+    private void UpdateBandAction()
+    {
+        if (!ActionHolding || _host == null) return;
+        if (_host.NowMs - _actionHoldFrom < ClearHoldMs) return;
+        _actionHoldFrom = double.NegativeInfinity;
+        _actionFlashUntil = _host.NowMs + 260;
+        _host.Commands.Clear();
+        Invalidate();
+    }
+
+    /// <summary>动作按钮：图标 ＋ 文字；清空那条按住时从左边往右填进度。</summary>
+    private void DrawBandAction(ID2D1DeviceContext ctx)
+    {
+        var a = CurAction;
+        if (a == BandAction.None || !RailOpen) return;
+        var r = ActionRect();
+        bool clear = a == BandAction.Clear;
+        var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f, 7f);
+        var tint = clear ? new Color4(0.90f, 0.35f, 0.25f, 1f) : Tokens.Accent;
+
+        ctx.FillRoundedRectangle(rr, Brush(ctx, new Color4(tint.R, tint.G, tint.B, 0.08f)));
+        float t = HoldProgress();
+        if (t > 0.002f)
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY,
+                                     r.MinX + (r.MaxX - r.MinX) * t, r.MaxY), 7f, 7f),
+                Brush(ctx, new Color4(tint.R, tint.G, tint.B, 0.45f)));
+        ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+
+        var iconBox = new RectF { MinX = r.MinX + 6f, MinY = r.MinY, MaxX = r.MinX + 28f, MaxY = r.MaxY };
+        IconAtlas.DrawCentered(ctx, clear ? "broom" : "selectAll", iconBox, 16f, Brush(ctx, InkCol));
+        var labelBox = new RectF { MinX = r.MinX + 28f, MinY = r.MinY, MaxX = r.MaxX - 6f, MaxY = r.MaxY };
+        _widgets.Text(ctx, clear ? "清空" : "全选", labelBox, 12.5f, Brush(ctx, InkCol));
+
+        if (_host != null && _host.NowMs < _actionFlashUntil)
+            ctx.DrawRoundedRectangle(rr, Brush(ctx, Tokens.Accent), 2f);
     }
 
     // ---- 粗细预览：数字 ＋ **真实大小** --------------------------------------
@@ -1189,6 +1286,25 @@ public sealed class FullUi : IOverlayUi
 
         // **滑条要排在工具格前面**：它在面板最下沿，和工具格的矩形是重叠的。
         // 排在后面的话，按最下沿那一条会被当成"点了某个工具"（假面板里 groove 也是先判的）。
+        // 动作按钮（清空/全选）排在最前面：它贴在上带最外沿，和谁都挨着。
+        if (BandVisible() && RailOpen && CurAction != BandAction.None
+            && ActionRect().Contains(p.X, p.Y))
+        {
+            if (CurAction == BandAction.Clear)
+            {
+                // 清空：**按住才算数**（0.8 秒），松手即取消。进度由 UpdateBandAction 每帧推进。
+                _actionHoldFrom = _host.NowMs;
+                _press = 2000;
+            }
+            else
+            {
+                _host.Commands.SelectAll();          // 全选：点一下就执行
+                _actionFlashUntil = _host.NowMs + 260;
+            }
+            Invalidate();
+            return true;
+        }
+
         if (BandHasSlider && Widgets.SliderHit(SliderRect()).Contains(p.X, p.Y))
         {
             _sliderDragging = true;
@@ -1288,6 +1404,8 @@ public sealed class FullUi : IOverlayUi
         int idx = HitCell(x, y);
         if (idx >= 0) return idx;
         if (!BandVisible()) return -1;
+        // 动作按钮（清空/全选）：编号 400，和色片 100、分段 200、滑条 300 排成一套
+        if (CurAction != BandAction.None && RailOpen && ActionRect().Contains(x, y)) return 400;
         if (BandHasSlider && Widgets.SliderHit(SliderRect()).Contains(x, y)) return 300;
         int sw = HitSwatch(x, y);
         if (sw >= 0) return 100 + sw;
@@ -1315,6 +1433,13 @@ public sealed class FullUi : IOverlayUi
             return true;
         }
 
+        // 按住清空：松手即取消（够 0.8 秒的那一次已经在 UpdateBandAction 里执行过了）
+        if (idx == 2000)
+        {
+            _actionHoldFrom = double.NegativeInfinity;
+            Invalidate();
+            return true;
+        }
         if (idx >= 1000) { ActivateRow(idx - 1000); return true; }   // 抽屉里的行
         if (idx == -2) { Toggle(); return true; }        // 点球：展开
         if (idx == 0) { Toggle(); return true; }         // 点带子最左那格：收起
@@ -1469,6 +1594,7 @@ public sealed class FullUi : IOverlayUi
         if (_host == null) return;
         UpdatePeek();                    // 每帧问一次"该不该收起来"（贴边隐藏）
         UpdateRail();                    // 色线该不该长成设置条
+        UpdateBandAction();              // "按住清空"够 0.8 秒没有（每帧推进）
         RenderShifted(ctx);
     }
 
@@ -1624,6 +1750,7 @@ public sealed class FullUi : IOverlayUi
         for (int i = 0; i < n; i++) DrawSegment(ctx, i, n, st);
 
         if (BandHasSlider) DrawBandSlider(ctx, st);
+        DrawBandAction(ctx);
 
         // 白板那一格右边显示"第 N 屏"——老师要有一点位置感（"我在第几屏"）
         if (_bandCell == 2)
@@ -1975,7 +2102,7 @@ public sealed class FullUi : IOverlayUi
                 var bg = new Vortice.RawRectF(r.MinX + 2, r.MinY + 4, r.MaxX - 2, r.MaxY - 4);
                 ctx.FillRoundedRectangle(new RoundedRectangle(bg, 8f, 8f), Brush(ctx, Tokens.Accent));
             }
-            else if (hover)
+            else if (hover && !CellUnavailable(i, st))
             {
                 var bg = new Vortice.RawRectF(r.MinX + 2, r.MinY + 4, r.MaxX - 2, r.MaxY - 4);
                 ctx.FillRoundedRectangle(new RoundedRectangle(bg, 8f, 8f), Brush(ctx, HoverCol));
@@ -1995,6 +2122,10 @@ public sealed class FullUi : IOverlayUi
 
         var icon = active ? Cells[i].Filled : Cells[i].Icon;
         var ink = active ? Tokens.AccentInk : InkCol;
+        // **撤销/重做栈空 → 压暗**（用户 2026-09-17："撤销重做灰度"）。
+        // 引擎早就把 UndoDepth / RedoDepth 递给界面了，只是界面一直没用。
+        // 压暗而不是藏起来：位置固定、老师不用去找；点它也没事（引擎那边是空操作）。
+        if (CellUnavailable(i, st)) ink = new Color4(ink.R, ink.G, ink.B, 0.30f);
         // 激光笔是**自绘**的（笔＋光束＋落点）：Fluent 里没有这个专名，
         // 用闪电之类的近义图标，老师看不出这是激光笔（假面板比过九个候选，选的是这个）。
         if (PerfSkipIcons) return;
@@ -2040,6 +2171,16 @@ public sealed class FullUi : IOverlayUi
             _ => false,
         };
     }
+
+    /// <summary>
+    /// 这一格现在是不是"不可用"（暂时压暗的那种）。
+    ///
+    /// 现在只有一种：**撤销/重做栈空**。用户 2026-09-17 要的"灰度"。
+    /// 判据直接用引擎给的 UndoDepth / RedoDepth——界面不去猜"上一次操作是不是能撤销"，
+    /// 那种猜法迟早和引擎对不上。
+    /// </summary>
+    private static bool CellUnavailable(int i, in UiState st) =>
+        (i == 10 && st.UndoDepth == 0) || (i == 11 && st.RedoDepth == 0);
 
     /// <summary>
     /// 画刷按颜色缓存。**不能每帧重建**（性能账里点过名：几何与画刷都要缓存）。
@@ -2124,6 +2265,14 @@ public sealed class FullUi : IOverlayUi
         _railHover = true;
         _rail.Jump(1f);
     }
+
+    /// <summary>自检用：上带右端那个动作按钮（清空/全选）的矩形 + 按住状态。</summary>
+    internal RectF ActionRectForTest => CurAction == BandAction.None ? RectF.Empty : ActionRect();
+    internal bool ActionHoldingForTest => ActionHolding;
+    internal float HoldProgressForTest => HoldProgress();
+
+    /// <summary>自检用：这一格现在压暗没有（撤销/重做栈空）。</summary>
+    internal bool CellUnavailableForTest(int cell) => CellUnavailable(cell, _host.State);
 
     /// <summary>自检用：粗细预览这一刻的矩形（屏幕坐标；没显示就是空矩形）。</summary>
     internal RectF SizePreviewRectForTest
