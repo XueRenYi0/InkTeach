@@ -89,6 +89,10 @@ internal sealed class App : InkEngine.InkEngine
         // 自动存档同理：自检**绝不能碰用户真正的板书**
         if (_selfCheckMode && Recovery.AutoSavePathOverride == null)
             Recovery.AutoSavePathOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck-autosave.ink");
+        // 自检里**不弹"另存为"对话框**：它会阻塞等消息，而自检是自己抽消息推进的，
+        // 一弹就卡到超时（`--selftest` 会逐个点操作条上的按钮，点到"导出"就中招）。
+        // 导出那条链由 `--iotest` 走"不弹框、直接写指定路径"验，见 ExportSelectionToPathForTest。
+        if (_selfCheckMode) ExportDialogEnabled = false;
 
         // 交互模式挂**产品界面**；自检/基准模式挂"什么都不画"的空宿主
         // （自检要数屏幕上的墨，一块面板盖上去会把判据搞脏——这条踩过）。
@@ -505,6 +509,13 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PageTest();
         }
+        else if (mode == "--iotest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            // 给路径时**保留文件**（人工核对 / 拿别的解码器验它）
+            IoTest(args.Length > 1 ? args[1] : null);
+        }
         else if (mode == "--coordtest")
         {
             _autoExitAt = double.MaxValue;
@@ -582,6 +593,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
         Console.WriteLine("  --pagetest          整屏翻页自检（一屏 = 一页：页高 = 视口高、只动相机、到顶就停）");
+        Console.WriteLine("  --iotest [路径]     导出自检（选中的内容 → 透明底 PNG ＋ 剪贴板；给路径就保留文件）");
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
         Console.WriteLine("  --panelshow <图> [--band] [--mini] [--drawer] [--cell N]   界面出图（离屏）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
@@ -867,6 +879,164 @@ internal sealed class App : InkEngine.InkEngine
 
         Console.WriteLine();
         Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：滚轮方向与夹取都正确");
+        Doc.Clear();
+        Doc.ClearHistory();
+        _quit = true;
+    }
+
+    /// <summary>
+    /// **导出（选中的内容 → 透明底 PNG）自检**。
+    ///
+    /// 用户 2026-09-17 定：只导选中的、透明底、弹"另存为"、**同时进剪贴板**。
+    /// 这里不走对话框（对话框在自检里会卡住），直接写到临时文件，其余流程一模一样。
+    ///
+    /// 关键是**把 PNG 解回来验像素**：PNG 要的是直通 alpha，而我们渲染出来的是
+    /// 预乘 alpha——不还原就发灰（半透明荧光笔最明显），而这条错误光看"文件写出来了"
+    /// 是发现不了的。所以这里自己解 IDAT（inflate ＋ 去 filter 字节）抽像素比。
+    /// </summary>
+    private void IoTest(string keepPath = null)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 导出自检（选中 → 透明底 PNG ＋ 剪贴板）===");
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-34} {detail}");
+        }
+
+        string path = keepPath ?? Path.Combine(Path.GetTempPath(), "inkteach-iotest.png");
+        if (keepPath == null) { try { File.Delete(path); } catch { } }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        SettleFrames(200);
+
+        // ① 没选中 → 不导出、也不该留下文件
+        bool ok0 = ExportSelectionToPathForTest(path);
+        Check("没选中时不导出、不写文件", !ok0 && !File.Exists(path),
+              $"返回 {ok0}，文件在 = {File.Exists(path)}");
+
+        // ② 一笔实心笔 ＋ 一笔半透明荧光笔，全选中
+        var red = new Color4(0.95f, 0.18f, 0.18f, 1f);
+        var yellow = new Color4(0.98f, 0.82f, 0.12f, 1f);
+        var pen = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = red, Width = 20f * DpiScale,
+        };
+        for (int i = 0; i <= 20; i++) pen.AddPoint(600 + i * 10, 400, 1f, i * 8);
+        Doc.AddStroke(pen);
+
+        var hlColor = InkPalette.ToHighlighter(yellow);
+        var hl = new Stroke
+        {
+            Tool = Tool.Highlighter, Kind = StrokeKind.Freehand,
+            Color = hlColor, Width = 40f * DpiScale,
+        };
+        for (int i = 0; i <= 20; i++) hl.AddPoint(600 + i * 10, 500, 1f, i * 8);
+        Doc.AddStroke(hl);
+        Doc.SelectOnly(new[] { pen, hl });
+        Tool = Tool.Marquee;
+        SettleFrames(300);
+
+        bool ok = ExportSelectionToPathForTest(path);
+        Check("导出返回成功", ok, $"返回 {ok}");
+        if (!ok || !File.Exists(path))
+        {
+            Console.WriteLine($"  FAIL: 文件没写出来，后面几项没法验（{fail} 项失败）");
+            _quit = true;
+            return;
+        }
+
+        var png = File.ReadAllBytes(path);
+        Check("文件非空", png.Length > 100, $"{png.Length} 字节");
+        Check("PNG 签名正确",
+              png.Length > 8 && png[0] == 0x89 && png[1] == 0x50 && png[2] == 0x4E && png[3] == 0x47,
+              $"{png[0]:X2} {png[1]:X2} {png[2]:X2} {png[3]:X2}");
+
+        // ③ 解回像素：走 chunks → 拼 IDAT → inflate → 去每行的 filter 字节
+        int iw = 0, ih = 0;
+        var idat = new MemoryStream();
+        int p = 8;
+        while (p + 8 <= png.Length)
+        {
+            int len = (png[p] << 24) | (png[p + 1] << 16) | (png[p + 2] << 8) | png[p + 3];
+            string type = "" + (char)png[p + 4] + (char)png[p + 5] + (char)png[p + 6] + (char)png[p + 7];
+            int dataAt = p + 8;
+            if (type == "IHDR")
+            {
+                iw = (png[dataAt] << 24) | (png[dataAt + 1] << 16) | (png[dataAt + 2] << 8) | png[dataAt + 3];
+                ih = (png[dataAt + 4] << 24) | (png[dataAt + 5] << 16) | (png[dataAt + 6] << 8) | png[dataAt + 7];
+            }
+            else if (type == "IDAT") idat.Write(png, dataAt, len);
+            p = dataAt + len + 4;
+        }
+
+        var box = EditRegion.Of(new[] { pen, hl }).Inflate(4f * DpiScale);
+        int wantW = (int)MathF.Ceiling(box.MaxX - box.MinX);
+        int wantH = (int)MathF.Ceiling(box.MaxY - box.MinY);
+        Check("IHDR 的宽高 = 选区像素尺寸", iw == wantW && ih == wantH,
+              $"图 {iw}×{ih}，选区 {wantW}×{wantH}");
+
+        // inflate：zlib 头 2 字节 ＋ 尾部 adler32 4 字节，中间是裸 deflate
+        var z = idat.ToArray();
+        byte[] raw;
+        using (var ms = new MemoryStream(z, 2, z.Length - 6))
+        using (var inf = new System.IO.Compression.DeflateStream(ms, System.IO.Compression.CompressionMode.Decompress))
+        using (var outMs = new MemoryStream())
+        {
+            inf.CopyTo(outMs);
+            raw = outMs.ToArray();
+        }
+        Check("IDAT 能解回原始像素（每行 1 个 filter 字节）",
+              raw.Length >= ih * (1 + iw * 4), $"{raw.Length} 字节（应为 {ih * (1 + iw * 4)}）");
+
+        (byte R, byte G, byte B, byte A) PixelAt(float canvasX, float canvasY)
+        {
+            int x = Math.Clamp((int)(canvasX - box.MinX), 0, iw - 1);
+            int y = Math.Clamp((int)(canvasY - box.MinY), 0, ih - 1);
+            int o = y * (1 + iw * 4) + 1 + x * 4;
+            return (raw[o], raw[o + 1], raw[o + 2], raw[o + 3]);
+        }
+
+        var px = PixelAt(700, 400);           // 红笔的中心
+        Check("实心笔：不透明、颜色就是笔色",
+              px.A == 255
+              && Math.Abs(px.R - red.R * 255) < 6 && Math.Abs(px.G - red.G * 255) < 6
+              && Math.Abs(px.B - red.B * 255) < 6,
+              $"RGBA = {px.R},{px.G},{px.B},{px.A}（应为 {(int)(red.R * 255)},{(int)(red.G * 255)},{(int)(red.B * 255)},255）");
+
+        var hp = PixelAt(700, 500);           // 荧光笔的中心
+        int wantA = (int)(hlColor.A * 255);
+        Check("荧光笔：半透明（没被压成不透明）",
+              hp.A > 20 && hp.A < 250, $"alpha = {hp.A}（应为 {wantA} 上下）");
+        // 预乘 → 直通没做对的话，这里会明显偏暗（R 会从 ~250 掉到 ~80）
+        Check("荧光笔：颜色是**直通 alpha**（预乘没还原就会发灰）",
+              Math.Abs(hp.R - yellow.R * 255) < 12 && Math.Abs(hp.G - yellow.G * 255) < 12
+              && Math.Abs(hp.B - yellow.B * 255) < 12,
+              $"RGB = {hp.R},{hp.G},{hp.B}（应为 {(int)(yellow.R * 255)},{(int)(yellow.G * 255)},{(int)(yellow.B * 255)}）");
+
+        var blank = PixelAt(300, 300);        // 选区左上角那块（没有墨）
+        Check("空白处：完全透明（透明底）", blank.A == 0 && blank.R == 0 && blank.G == 0 && blank.B == 0,
+              $"RGBA = {blank.R},{blank.G},{blank.B},{blank.A}");
+
+        // ④ 剪贴板：同一次导出也要放进去（对象 ＋ 上面那张图）
+        bool clip = ClipboardInk.TryGetObjects(out var back);
+        Check("同时进了剪贴板：能读回对象",
+              clip && back != null && back.Count == 2,
+              clip ? $"读回 {back?.Count} 个对象（应为 2）" : "剪贴板里没有我们的对象");
+
+        Console.WriteLine();
+        Console.WriteLine(fail == 0
+            ? "  PASS：导出写出的 PNG 透明底、颜色与 alpha 都对，剪贴板也拿到了"
+            : $"  FAIL：{fail} 项不对（{pass} 项通过）");
+        Console.WriteLine($"  文件：{path}（{png.Length} 字节）");
+
+        // 给了路径就留着（人工核对 / 拿别的解码器验它）
+        if (keepPath == null) { try { File.Delete(path); } catch { } }
         Doc.Clear();
         Doc.ClearHistory();
         _quit = true;

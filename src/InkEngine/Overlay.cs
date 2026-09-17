@@ -1839,7 +1839,7 @@ internal sealed class OverlayWindow : IDisposable
             var kind = (SelBarButton)i;
             bool hot = app.SelBarHover == i;
             bool active = IsBarButtonActive(app, kind);
-            bool disabled = kind == SelBarButton.Export;      // 还没接（见 RunBarAction）
+            bool disabled = false;    // 导出**接上了**（2026-09-17）：不再压暗
 
             // 悬停 / 激活的底：参考实现就是这么做的（浅色圆角底 + 图标加深）。
             if (hot || active)

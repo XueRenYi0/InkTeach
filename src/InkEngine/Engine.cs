@@ -1950,6 +1950,162 @@ public class InkEngine
         return ok;
     }
 
+    // ---- 导出（选中 → 透明底 PNG）------------------------------------------
+    //
+    // 用户 2026-09-17 定：**只导选中的**、**透明底 PNG**、**弹系统"另存为"**，
+    // 而且**同时放进剪贴板**（两样都要）。落点与命名按
+    // [调研-选中框-反馈-导出-层级-属性.md] 第二节。
+    //
+    // 屏幕上**不留字**（用户 2026-09-16 明确要求把提示条去掉），只让选区闪一下——
+    // 文件对话框本身就是最清楚的反馈。
+
+    /// <summary>
+    /// 把选中的内容离屏渲染成一张**透明底** BGRA（和"复制到剪贴板"那条路同一个渲染器）。
+    /// 返回 null = 不能导（没选中 / 太大 / 渲染失败），每种情况都有日志。
+    /// </summary>
+    private byte[] RenderSelectionForExport(out int w, out int h)
+    {
+        w = h = 0;
+        var sel = Doc.Selected;
+        if (sel.Count == 0)
+        {
+            Console.WriteLine("导出：没有选中任何东西（先用框选或点选选中）");
+            return null;
+        }
+        var box = EditRegion.Of(sel);
+        if (box.IsEmpty) return null;
+        box = box.Inflate(4f * DpiScale);                     // 和"复制"同一个留白
+        w = Math.Max(1, (int)MathF.Ceiling(box.MaxX - box.MinX));
+        h = Math.Max(1, (int)MathF.Ceiling(box.MaxY - box.MinY));
+        if ((long)w * h > 32_000_000)
+        {
+            Console.WriteLine($"导出：选中的内容太大（{w}×{h}）");
+            w = h = 0;
+            return null;
+        }
+        if (_windows.Count == 0) { w = h = 0; return null; }
+
+        var bgra = _windows[0].RenderStrokesToBgra(sel, box, w, h);
+        if (bgra == null) { Console.WriteLine("导出：离屏渲染失败"); w = h = 0; }
+        return bgra;
+    }
+
+    /// <summary>
+    /// 写 PNG ＋ **同时放进剪贴板**（对象 ＋ 这张图，和 Ctrl+C 同一个剪贴板合同），
+    /// 再让选区闪一下。
+    /// </summary>
+    internal bool WriteExport(byte[] bgra, int w, int h, string path)
+    {
+        try
+        {
+            var png = PngWriter.EncodeBgraPremultiplied(bgra, w, h);
+            if (png == null) { Console.WriteLine("导出：PNG 编码失败"); return false; }
+            var dir = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllBytes(path, png);
+            Console.WriteLine($"导出成功：{path}（{w}×{h}，{png.Length / 1024.0:F0} KB）");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"导出失败：{ex.Message}");
+            return false;
+        }
+
+        var sel = Doc.Selected;
+        if (sel.Count > 0) ClipboardInk.Set(ClipboardInk.Serialize(sel), bgra, w, h);
+        SelFlashUntilMs = NowMs + SelFlashMs;
+        _dirty = true;
+        return true;
+    }
+
+    /// <summary>
+    /// **导出按钮做的事**：先渲染，再弹"另存为"，然后写盘 ＋ 进剪贴板。
+    /// 用户取消对话框 = 什么都不做（不写文件、也不动剪贴板）。
+    /// </summary>
+    internal void ExportSelection()
+    {
+        var bgra = RenderSelectionForExport(out int w, out int h);
+        if (bgra == null) return;
+
+        // 自检模式**绝不弹对话框**：系统对话框会阻塞在那里等消息，
+        // 而自检是靠"抽消息 + 渲染"自己推进的——一弹就把整条自检卡死到超时。
+        // （自检要验的是"渲染 → 编码 → 写盘 → 剪贴板"这条链，那条由 --iotest 走
+        //  ExportSelectionToPathForTest，不经过这里。）
+        if (!ExportDialogEnabled)
+        {
+            Console.WriteLine("导出：自检模式不弹另存为对话框（见 --iotest）");
+            return;
+        }
+
+        string suggested = $"选中-{DateTime.Now:yyyyMMdd-HHmm}.png";
+        string path = null;
+        BorrowFocusForDialog();                 // 覆盖层平时不抢焦点，弹框前临时放开
+        try { path = ExportFileDialog.AskForPng(OwnerHwnd(), suggested); }
+        catch (Exception ex)
+        {
+            // **弹框这一步出错绝不允许打死软件**。真踩过：.NET 7 起结构体字段不能用
+            // StringBuilder，那一版一点"导出"整个进程就没了（异常从 P/Invoke 冒到 Main）。
+            // 现在最坏也只是"这次导不出去"，并且把原因说清楚。
+            Console.WriteLine($"导出：弹另存为失败（{ex.GetType().Name}: {ex.Message}）");
+            return;
+        }
+        finally { ReturnFocusAfterDialog(); }
+
+        if (path == null) { Console.WriteLine("导出：取消"); return; }
+        WriteExport(bgra, w, h, path);
+    }
+
+    /// <summary>自检用：不弹对话框，直接写到指定路径（其余流程一模一样）。</summary>
+    internal bool ExportSelectionToPathForTest(string path)
+    {
+        var bgra = RenderSelectionForExport(out int w, out int h);
+        if (bgra == null) return false;
+        return WriteExport(bgra, w, h, path);
+    }
+
+    private IntPtr OwnerHwnd() => _windows.Count > 0 ? _windows[0].Hwnd : IntPtr.Zero;
+
+    /// <summary>
+    /// 导出时要不要弹系统的"另存为"。**自检模式必须关掉**（见 <see cref="ExportSelection"/>）：
+    /// 系统对话框会阻塞等消息，而自检是自己抽消息推进的，一弹就卡到超时。
+    /// 产品里保持 true。
+    /// </summary>
+    internal bool ExportDialogEnabled = true;
+
+    // 弹系统对话框期间借一下焦点：把 WS_EX_NOACTIVATE 摘掉、弹完装回去。
+    // 和"批注键盘模式"同一个手法（那边是长期摘掉，这里是临时的）。
+    private bool _focusBorrowed;
+
+    private void BorrowFocusForDialog()
+    {
+        if (_focusBorrowed) return;
+        _focusBorrowed = true;
+        foreach (var w in _windows)
+        {
+            long ex = Native.GetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE).ToInt64();
+            Native.SetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE, new IntPtr(ex & ~Native.WS_EX_NOACTIVATE));
+            Native.SetWindowPos(w.Hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER
+                | 0x0020 /*SWP_FRAMECHANGED*/);
+        }
+        if (_windows.Count > 0) Native.SetForegroundWindow(_windows[0].Hwnd);
+    }
+
+    private void ReturnFocusAfterDialog()
+    {
+        if (!_focusBorrowed) return;
+        _focusBorrowed = false;
+        if (KeyboardMode) return;               // 键盘模式本来就要求能激活，别把它的样式改回去
+        foreach (var w in _windows)
+        {
+            long ex = Native.GetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE).ToInt64();
+            Native.SetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE, new IntPtr(ex | Native.WS_EX_NOACTIVATE));
+            Native.SetWindowPos(w.Hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER
+                | Native.SWP_NOACTIVATE | 0x0020 /*SWP_FRAMECHANGED*/);
+        }
+    }
+
     /// <summary>
     /// 粘贴：**优先粘回可编辑对象**——剪贴板里有我们的对象格式就还原成对象，
     /// 没有就退回"当图片粘贴"（原有行为）。落在视口左上角并自动选中，粘完就能拖走。
@@ -4533,9 +4689,9 @@ public class InkEngine
                 break;
 
             case SelBarButton.Export:
-                // 用户 2026-09-16 定：走系统"另存为"。这一步要动覆盖窗的"不抢焦点"，
-                // 排在第 4 批（见 调研-选中框-反馈-导出-层级-属性.md 第二节）。
-                Console.WriteLine("导出（另存为）：还没接（下一批）");
+                // 用户 2026-09-17 定：只导**选中的**、**透明底 PNG**、走系统"另存为"，
+                // 并且**同时放进剪贴板**（两样都要）。见 ExportSelection。
+                ExportSelection();
                 break;
 
             // **进入/退出"复制拖拽模式"**，不是"点一下原地克隆一份"。
