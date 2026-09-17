@@ -7727,6 +7727,46 @@ internal sealed class App : InkEngine.InkEngine
         PointerY = (b0.MinY + b0.MaxY) * 0.5f;
         Check("操作条按钮（不换光标）", CursorKind.Default);
 
+        // ---- 操作条**整块**都是"界面"（用户 2026-09-17 报的）----
+        //
+        // "操作对应图标的时候一会是十字光标，一会是箭头图标"——原来只认按钮本体，
+        // 按钮之间的分隔线、两头的留白都退回工具光标（框选是十字），
+        // 鼠标在条上横着滑过去就是 箭头／十字／箭头／十字。
+        {
+            var bar = SelectionHandles.BarRect(aabb, dpi, ViewportCanvas);
+            // 条**尾部那段留白**（最后一格右边到条右端）：一定不在任何按钮上。
+            // 注：九格是**紧挨着**排的（BarGapLogical = 0，靠分隔线分区），所以
+            // "两格之间"其实是共用一条边，那里算前一个按钮；真正露在外面的
+            // 只有条两端的 6 逻辑像素留白，也正是原来会漏出十字的地方。
+            var last = SelectionHandles.BarButtonRect(SelectionHandles.BarButtonCount - 1,
+                                                      aabb, dpi, ViewportCanvas);
+            PointerX = (last.MaxX + bar.MaxX) * 0.5f;
+            PointerY = (bar.MinY + bar.MaxY) * 0.5f;
+            CheckBool("（先确认那个点真的不在按钮上）",
+                SelectionHandles.BarButtonAt(PointerX, PointerY, aabb, dpi, ViewportCanvas) == -1
+                && PointerX < bar.MaxX, "不在按钮上、但在条里");
+            Check("操作条 · 条内留白（箭头，不是十字）", CursorKind.Default);
+
+            // 挂在下头的小面板：整块也是界面，面板的空白处同样是箭头
+            SelPanelOpen = SelPanel.Export;
+            var pnl = SelectionHandles.ExportPanelRect(aabb, dpi, ViewportCanvas);
+            PointerX = pnl.MinX + 3f; PointerY = pnl.MaxY - 3f;      // 面板的内边距
+            Check("导出格式面板 · 面板空白处（箭头）", CursorKind.Default);
+            var cell0 = SelectionHandles.ExportCellRect(0, aabb, dpi, ViewportCanvas);
+            PointerX = (cell0.MinX + cell0.MaxX) * 0.5f;
+            PointerY = (cell0.MinY + cell0.MaxY) * 0.5f;
+            Check("导出格式面板 · PNG 那格（箭头）", CursorKind.Default);
+            SelPanelOpen = SelPanel.None;
+
+            // 收起态那颗圆钮也一样
+            SelBarCollapsed = true;
+            var dot = SelectionHandles.BarCollapsedRect(aabb, dpi, ViewportCanvas);
+            PointerX = (dot.MinX + dot.MaxX) * 0.5f;
+            PointerY = (dot.MinY + dot.MaxY) * 0.5f;
+            Check("操作条收起态的圆钮（箭头）", CursorKind.Default);
+            SelBarCollapsed = false;
+        }
+
         PointerX = aabb.MinX - 120f * dpi; PointerY = aabb.MinY - 120f * dpi;
         Check("选中框外的空白（重新框选）", CursorKind.Cross);
 

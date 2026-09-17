@@ -710,34 +710,47 @@ internal static class SelectionHandles
     /// 大按钮上：系统对话框只管选位置和名字。格子比层级那个宽，因为这里要有字
     /// （图标说不清"透明底 / 白底"）。
     /// </summary>
-    public const float ExportCellLogical = 118f;
+    public const float ExportCellLogical = 124f;
+
+    /// <summary>
+    /// 导出那两格的高度。
+    ///
+    /// **第一版是正方形（124×124）**，里面上下两行字（大字 PNG、小字 透明底）——
+    /// 用户一眼就说"太丑了"：两格又高又空，像两个没填满的方块，和界面上那条
+    /// 46 高的胶囊、40 高的图标格完全不是一个语言。
+    /// 现在改成**一行字的扁片**（高 44）：`PNG 透明底` 一行读完，字号分两档
+    /// （格式名正常色、底色说明淡一点），两块并排像菜单项。
+    /// </summary>
+    public const float ExportCellHeightLogical = 44f;
 
     public static RectF ExportPanelRect(in RectF sel, float dpi, in RectF visible)
-        => PanelBelow((int)SelBarButton.Export, ExportCellLogical, 2, sel, dpi, visible);
+        => PanelBelow((int)SelBarButton.Export, ExportCellLogical, ExportCellHeightLogical,
+                      2, sel, dpi, visible);
 
     /// <summary>导出面板里第 i 格（0 = PNG 透明底，1 = JPG 白底）。</summary>
     public static RectF ExportCellRect(int i, in RectF sel, float dpi, in RectF visible)
     {
         var p = ExportPanelRect(sel, dpi, visible);
         float pad = PanelPaddingLogical * dpi, cell = ExportCellLogical * dpi;
+        float ch = ExportCellHeightLogical * dpi;
         float x = p.MinX + pad + i * (cell + PanelCellGapLogical * dpi);
-        return new RectF { MinX = x, MinY = p.MinY + pad, MaxX = x + cell, MaxY = p.MinY + pad + cell };
+        return new RectF { MinX = x, MinY = p.MinY + pad, MaxX = x + cell, MaxY = p.MinY + pad + ch };
     }
 
     /// <summary>层级小面板的矩形（两格并排，贴在"层级"那一格的下面）。</summary>
     public static RectF LayerPanelRect(in RectF sel, float dpi, in RectF visible)
-        => PanelBelow((int)SelBarButton.Layer, LayerCellLogical, 2, sel, dpi, visible);
+        => PanelBelow((int)SelBarButton.Layer, LayerCellLogical, LayerCellLogical, 2, sel, dpi, visible);
 
     /// <summary>
     /// "挂在操作条某个按钮下面的小面板"——层级和导出共用这一份几何：
     /// 水平对准按钮中心、垂直贴在条下方；下方放不下就翻到选区上方；最后夹进可见区。
     /// </summary>
-    private static RectF PanelBelow(int button, float cellLogical, int cells,
+    private static RectF PanelBelow(int button, float cellLogical, float cellHeightLogical, int cells,
                                     in RectF sel, float dpi, in RectF visible)
     {
         float w = (cellLogical * cells + PanelCellGapLogical * (cells - 1)
                  + PanelPaddingLogical * 2) * dpi;
-        float h = (cellLogical + PanelPaddingLogical * 2) * dpi;
+        float h = (cellHeightLogical + PanelPaddingLogical * 2) * dpi;
         var bar = BarRect(sel, dpi, visible);
         var btn = BarButtonRect(button, sel, dpi, visible);
 

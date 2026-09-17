@@ -2485,9 +2485,27 @@ public class InkEngine
         float dpi = DpiScale;
         var aabb = frame.CanvasAabb;
 
-        // 操作条按钮：按钮的形状本身就是 affordance，光标保持箭头。
-        if (SelectionHandles.BarButtonAt(canvasX, canvasY, aabb, dpi, ViewportCanvas) >= 0)
-            return CursorKind.Default;
+        // **操作条是"一块"，不只是几个按钮**（用户 2026-09-17 报的："操作对应图标的时候
+        // 一会是十字光标，一会是箭头图标"）。
+        //
+        // 原来只认按钮本体（`BarButtonAt`），按钮之间的分隔线、两头的留白都不算，
+        // 于是那些位置上就退回工具光标——框选工具是十字，鼠标在条上横着滑过去就是
+        // 箭头／十字／箭头／十字。条在视觉上是一整块白色胶囊，指针落在它上面就该是箭头。
+        // 收起态那颗圆钮、以及挂在条下面的小面板（颜色/粗细、层级、导出）同理。
+        if (SelBarCollapsed)
+        {
+            if (SelectionHandles.BarCollapsedRect(aabb, dpi, ViewportCanvas).Contains(canvasX, canvasY))
+                return CursorKind.Default;
+        }
+        else
+        {
+            if (SelectionHandles.BarRect(aabb, dpi, ViewportCanvas).Contains(canvasX, canvasY))
+                return CursorKind.Default;
+            if (SelPanelOpen != SelPanel.None
+                && SelectionHandles.PanelContains(canvasX, canvasY, aabb, dpi, ViewportCanvas,
+                                                  SelPanelOpen, SelectionHandles.SwatchCount))
+                return CursorKind.Default;
+        }
 
         var h = SelectionHandles.HitTest(canvasX, canvasY, frame, dpi);
         if (h != SelHandle.None) return HandleCursor(h);

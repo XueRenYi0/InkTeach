@@ -2231,11 +2231,15 @@ internal sealed class OverlayWindow : IDisposable
 
     /// <summary>层级小面板：置顶 / 置底两格（图标用 Fluent 的"上/下箭头 + 底托"）。</summary>
     /// <summary>
-    /// **导出格式面板**：两格并排——`PNG / 透明底`、`JPG / 白底`。
+    /// **导出格式面板**：两块扁片并排——`PNG 透明底`、`JPG 白底`。
     ///
-    /// 每格两行字：大字是格式名（PNG / JPG），小字是**它到底是什么底**
-    /// （透明底 / 白底）——用户 2026-09-17 问"要不要让用户知道 png 是透明底、jpg 是白底"：
-    /// 要，而且既写在这里（他做选择的地方），也写在系统对话框的类型栏里（他改主意的地方）。
+    /// 一行字里分两档字号：粗一点的格式名 ＋ 淡一点的**它到底是什么底**
+    /// （用户 2026-09-17 问"要不要让用户知道 png 是透明底、jpg 是白底"：要，
+    /// 而且既写在这里——他做选择的地方，也写在系统对话框的类型栏里——他改主意的地方）。
+    ///
+    /// **第一版是两格大方块、上下两行字**，用户一眼就说"太丑了"：方块又高又空，
+    /// 和界面上那条 46 高的胶囊完全不是一个语言。现在两块扁片、一行读完，
+    /// 两段文字**当成一个整体居中**（先量宽度再摆）。
     /// </summary>
     private void DrawExportPanel(InkEngine app, in RectF sel)
     {
@@ -2244,6 +2248,9 @@ internal sealed class OverlayWindow : IDisposable
         DrawPanelCard(p, 10f * dpi);
 
         var th = UiTheme.Default;
+        var title = ExportTitleFormat();
+        var sub = ExportSubFormat();
+        float gap = 7f * dpi;
         for (int i = 0; i < 2; i++)
         {
             var cell = SelectionHandles.ExportCellRect(i, sel, dpi, app.ViewportCanvas);
@@ -2252,14 +2259,14 @@ internal sealed class OverlayWindow : IDisposable
             _ctx.FillRoundedRectangle(new RoundedRectangle(
                 new Vortice.RawRectF(cell.MinX, cell.MinY, cell.MaxX, cell.MaxY), cr, cr), _scratch);
 
-            // 两行字**当一组居中**（第一版一个贴顶、一个贴中，中间空一大块）
+            string name = i == 0 ? "PNG" : "JPG";
+            string note = i == 0 ? "透明底" : "白底";
+            float wn = MeasureTextWidth(name, title), ws = MeasureTextWidth(note, sub);
+            float x = cell.MinX + ((cell.MaxX - cell.MinX) - (wn + gap + ws)) * 0.5f;
             float h = cell.MaxY - cell.MinY;
-            _ctx.DrawText(i == 0 ? "PNG" : "JPG", ExportTitleFormat(),
-                          new Rect(cell.MinX, cell.MinY + h * 0.22f, cell.MaxX - cell.MinX, h * 0.30f),
-                          Brush(th.Text));
-            _ctx.DrawText(i == 0 ? "透明底" : "白底", ExportSubFormat(),
-                          new Rect(cell.MinX, cell.MinY + h * 0.52f, cell.MaxX - cell.MinX, h * 0.26f),
-                          Brush(th.Text));
+            _ctx.DrawText(name, title, new Rect(x, cell.MinY, wn + 2f, h), Brush(th.Text));
+            _ctx.DrawText(note, sub, new Rect(x + wn + gap, cell.MinY, ws + 2f, h),
+                          Brush(new Color4(th.Text.R, th.Text.G, th.Text.B, 0.62f)));
         }
     }
 
@@ -2269,8 +2276,8 @@ internal sealed class OverlayWindow : IDisposable
     {
         if (_exportTitleFmt != null) return _exportTitleFmt;
         _exportTitleFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-            FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, 15f * (Dpi / 96f), "zh-CN");
-        _exportTitleFmt.TextAlignment = TextAlignment.Center;
+            FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, 14f * (Dpi / 96f), "zh-CN");
+        _exportTitleFmt.TextAlignment = TextAlignment.Leading;
         _exportTitleFmt.ParagraphAlignment = ParagraphAlignment.Center;
         return _exportTitleFmt;
     }
@@ -2279,8 +2286,8 @@ internal sealed class OverlayWindow : IDisposable
     {
         if (_exportSubFmt != null) return _exportSubFmt;
         _exportSubFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 11.5f * (Dpi / 96f), "zh-CN");
-        _exportSubFmt.TextAlignment = TextAlignment.Center;
+            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 12.5f * (Dpi / 96f), "zh-CN");
+        _exportSubFmt.TextAlignment = TextAlignment.Leading;
         _exportSubFmt.ParagraphAlignment = ParagraphAlignment.Center;
         return _exportSubFmt;
     }
