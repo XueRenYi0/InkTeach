@@ -13,7 +13,7 @@ namespace InkTeach;
 /// 开发期宿主：持有引擎，外加一整套自动化测试/基准工具。
 /// 继承只是为了让这些工具直接读引擎内部状态（产品代码请用组合：new InkEngine()）。
 /// </summary>
-internal sealed class App : InkEngine.InkEngine
+internal sealed partial class App : InkEngine.InkEngine
 {
     private IntPtr _clickTargetHwnd;
     private string _clickLogFile;
@@ -527,6 +527,18 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PageTest();
         }
+        else if (mode == "--slidetest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SlideTestEntry();          // 幻灯片页自检（假放映驱动，见 SlideTest.cs）
+        }
+        else if (mode == "--pptprobe")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PptProbe();                // 真 PowerPoint 端到端探针（会真的起放映）
+        }
         else if (mode == "--iotest")
         {
             _autoExitAt = double.MaxValue;
@@ -617,6 +629,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
         Console.WriteLine("  --pagetest          整屏翻页自检（一屏 = 一页：页高 = 视口高、只动相机、到顶就停）");
+        Console.WriteLine("  --slidetest         幻灯片页自检（假放映驱动，不需要 Office；切页只动相机、按身份归属）");
         Console.WriteLine("  --iotest [路径]     导出自检（选中 → PNG 透明底 / JPEG 白底；给路径就保留文件）");
         Console.WriteLine("  --patterntest       白板底纹自检（方格/横线/间距 + 数屏幕上的线 + 重铺代价）");
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");

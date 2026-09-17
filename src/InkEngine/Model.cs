@@ -2085,6 +2085,15 @@ internal sealed class InkDocument
     /// </summary>
     public int CurrentPage;
 
+    /// <summary>
+    /// 现在这一页是不是**幻灯片**（= 该页在 PPT 里的身份；0 = 白板）。
+    /// 和 <see cref="CurrentPage"/> 一样，由引擎填、模型只用来给新对象打标。
+    /// </summary>
+    public long CurrentSlideId;
+
+    /// <summary>现在这一叠演示文稿的身份（不在放映里就是 null）。</summary>
+    public string CurrentDeckKey;
+
     /// <summary>刚撤销/重做的那一步发生在哪一页（-1 = 不知道）——相机靠它自动翻过去。</summary>
     public int LastActionPage = -1;
 
@@ -2095,6 +2104,7 @@ internal sealed class InkDocument
         // 截屏插入这些路径没有"起笔"这个动作——漏了它们，"清空本页"就清不掉
         // 那些东西（自检里就是这么露出来的）。
         if (s.Page < 0) s.Page = CurrentPage;
+        if (s.SlideId == 0) s.SlideId = CurrentSlideId;
         var act = new AddStrokesAction();
         act.Strokes.Add(s);
         AppendStroke(s);

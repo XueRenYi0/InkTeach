@@ -327,6 +327,14 @@ public readonly struct UiState
     public int ScreenIndex { get; init; }
     /// <summary>还能不能往上翻（到顶了就不行）。"下一屏"永远可用。</summary>
     public bool CanFlipPageUp { get; init; }
+
+    /// <summary>
+    /// **正在放映幻灯片**时的页码（1 起；0 = 没在放映）。界面用它显示 `PPT 3/12`
+    /// 并把"上一屏/下一屏"改成驱动 PPT 翻页（用户点头的默认，见 调研-对接PPT.md 第五节）。
+    /// </summary>
+    public int SlidePosition { get; init; }
+    /// <summary>幻灯片总页数（0 = 没在放映）。</summary>
+    public int SlideCount { get; init; }
     /// <summary>
     /// 老师这一刻是不是正在写。界面用它判断"别在人家写字的时候动界面"——
     /// 比如贴边隐藏：手正在写，界面突然收起来或者浮出来，都会打断。

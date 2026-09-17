@@ -1195,7 +1195,11 @@ public class InkEngine
         // **当前页跟着相机走**：模型层需要一个"现在在第几页"的整数（新写的笔要标页、
         // 撤销栈的每一步要记页），而它只该由一处告诉它——每帧同步一次，滚轮/翻页/
         // 自动翻页/程序化跳页全都自动覆盖。
-        Doc.CurrentPage = CurrentPage;
+        //
+        // **放映中例外**：那时候"当前页"是幻灯片页（SlidePageBase + 位置），
+        // 不该被相机反算出来——相机反算只会得到白板页号。由 PollSlides 负责。
+        PollSlides();
+        if (!SlideNow.Showing) Doc.CurrentPage = CurrentPage;
         double frameStart = NowMs;
         double wall0 = _clock.Elapsed.TotalMilliseconds;
 
@@ -3645,6 +3649,8 @@ public class InkEngine
         SelectMode = SelMode,
         ScreenIndex = ScreenIndex,
         CanFlipPageUp = CanFlipPageUp,
+        SlidePosition = SlideNow.Showing ? SlideNow.Position : 0,
+        SlideCount = SlideNow.Showing ? SlideNow.Count : 0,
         IsDrawing = _drawing,
         UndoDepth = Doc.UndoDepth,
         RedoDepth = Doc.RedoDepth,
@@ -3791,6 +3797,95 @@ public class InkEngine
         if (want > 0f) want = 0f;
         if (Math.Abs(want - ViewOffsetY) < 1f) return false;
         return AnimateCameraTo(want);
+    }
+
+    // ---- 幻灯片页空间（2026-09-17，阶段 1）---------------------------------
+    //
+    // 白板页 0、1、2… 从画布顶上往下排；**幻灯片页排在另一个区段**（页号从
+    // SlidePageBase 起），于是"白板页"和"幻灯片页"天然是两个不相交的空间
+    // ——用户点头的那条默认（白板页和 PPT 页是两套页空间）。
+    //
+    // 为什么用"页号偏移"而不是另开一套坐标：页号本来就是一个整数，页的**位置**
+    // 由 `PageTop + page × 页高` 算出来。加一个大偏移就能让两套互不干扰，
+    // 而清空本页、页归属、落盘这些逻辑一行都不用改（它们只认那个整数）。
+    // 取 100000：白板要排到十万页才可能撞上，实际不可能；也留着以后接别的页空间。
+
+    /// <summary>幻灯片页的页号起点（幻灯片第 1 页 = 这个值 + 1）。</summary>
+    internal const int SlidePageBase = 100000;
+
+    /// <summary>幻灯片页号 → 白板那套页号（给"清空本页/归属"复用）。</summary>
+    internal static int SlidePageOfPosition(int position) => SlidePageBase + position;
+
+    /// <summary>
+    /// **"现在是第几页"的来源**。null = 没接（永远如此时一切照旧）。
+    /// 生产里是 PowerPoint / WPS 的 COM 实现，自检里是 <see cref="FakeSlideSource"/>。
+    /// </summary>
+    internal ISlideSource Slides;
+
+    /// <summary>最近一次探测到的放映状态（界面读它显示 `PPT 3/12`）。</summary>
+    internal SlideState SlideNow;
+
+    private double _nextSlidePollAtMs;
+
+    /// <summary>进放映之前站在白板的哪一页（放映结束要回到它）。</summary>
+    private int _whiteboardPageBeforeShow;
+
+    /// <summary>
+    /// **探测放映状态**：轮询而不是挂 COM 事件（理由见 调研-对接PPT.md 3.4：
+    /// 老师翻页有三个来源——我们的按钮、键盘、遥控翻页器，轮询一律看得见）。
+    ///
+    /// 三条纪律：
+    ///   ① 每 250ms 才问一次（COM 调用再便宜也不该每帧付）；
+    ///   ② **探测失败一律当"没有 PPT"**——不弹错、不卡、不提示（老师那边一切照旧）；
+    ///   ③ 页变了才动相机（"切页 = 换一块画布"，O(1)，不重放任何历史）。
+    /// </summary>
+    private void PollSlides()
+    {
+        if (Slides == null) return;
+        if (NowMs < _nextSlidePollAtMs) return;
+        _nextSlidePollAtMs = NowMs + 250;
+
+        bool ok;
+        SlideState st;
+        try { ok = Slides.TryGetState(out st); }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"幻灯片探测失败（当作没有 PPT）：{ex.Message}");
+            Slides = null;                       // 一次都不再纠缠，退回纯白板
+            return;
+        }
+        if (!ok) st = default;
+
+        bool wasShowing = SlideNow.Showing;
+        bool changed = !st.Equals(SlideNow);
+        SlideNow = st;
+        if (!changed) return;
+
+        // 模型层要知道"新写的东西属于哪一页/哪一叠"（见 InkDocument.AddStroke 那个漏斗）
+        Doc.CurrentSlideId = st.Showing ? st.SlideId : 0;
+        Doc.CurrentDeckKey = st.Showing ? st.DeckKey : null;
+
+        if (st.Showing)
+        {
+            // 记下"进放映之前站在白板的哪一页"——放映结束要**回到那一页**，
+            // 而不是傻站在幻灯片页区段上（那里在白板空间里是一片空白）。
+            if (!wasShowing) _whiteboardPageBeforeShow = CurrentPage;
+            // 放映空间：新笔自动落到这一页（页号 = 幻灯片页区间里的那一个）
+            Doc.CurrentPage = SlidePageOfPosition(st.Position);
+            GotoPage(Doc.CurrentPage);
+            Console.WriteLine($"放映：第 {st.Position}/{st.Count} 页"
+                            + $"（幻灯片身份 {st.SlideId}），批注跟着换到这一页");
+        }
+        else if (wasShowing)
+        {
+            // 放映结束：**回到进放映之前那一页白板**。老师刚从 PPT 退出来，
+            // 眼前该是他自己的板书，而不是幻灯片区段那片空白。
+            GotoPage(_whiteboardPageBeforeShow);
+            Doc.CurrentPage = _whiteboardPageBeforeShow;
+            Console.WriteLine($"放映结束：回到白板第 {_whiteboardPageBeforeShow + 1} 页");
+        }
+        NotifyUiStateChanged();
+        _dirty = true;
     }
 
     private bool AnimateCameraTo(float want)
@@ -3955,6 +4050,16 @@ public class InkEngine
     /// <summary>界面上的"上一屏 / 下一屏"（整屏翻页）。</summary>
     internal void FlipPageFromUi(bool down)
     {
+        // **放映中，这两个按钮驱动 PPT 翻页**（用户 2026-09-17 点头的默认，
+        // 见 调研-对接PPT.md 第五节第 3 条）：老师按"下一屏"就是要翻 PPT 的下一页，
+        // 而不是在 PPT 底下的白板上翻。翻完立刻探测一次，批注跟着换过去。
+        if (SlideNow.Showing && Slides != null)
+        {
+            bool ok = down ? Slides.Next() : Slides.Previous();
+            if (!ok) Console.WriteLine(down ? "放映：已经是最后一页" : "放映：已经是第一页");
+            _nextSlidePollAtMs = 0;             // 别等那 250ms 的节拍
+            return;
+        }
         if (!FlipPage(down)) return;
         NotifyUiStateChanged();
     }

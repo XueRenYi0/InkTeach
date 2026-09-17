@@ -1929,7 +1929,11 @@ public sealed class FullUi : IOverlayUi
         if (BandHasSlider) DrawBandSlider(ctx, st);
         DrawBandAction(ctx);
 
-        // 白板那一格右边显示"第 N 屏"——老师要有一点位置感（"我在第几屏"）
+        // 白板那一格右边显示"第 N 屏"——老师要有一点位置感（"我在第几屏"）。
+        //
+        // **放映中改显示 `PPT 3/12`**（2026-09-17）：那时候"上一屏/下一屏"驱动的是
+        // PPT 翻页（见 Engine.FlipPageFromUi），位置感就该是**幻灯片页码**，
+        // 再显示"第 3 屏"会让人以为在翻白板。
         if (_bandCell == 2)
         {
             var panel = UnionRect();
@@ -1938,7 +1942,10 @@ public sealed class FullUi : IOverlayUi
                 MinX = SegmentRect(4, 5).MaxX + 10f, MinY = BandRect().MinY,
                 MaxX = panel.MaxX - BarInset(), MaxY = BandRect().MaxY,
             };
-            _widgets.Text(ctx, $"第 {st.ScreenIndex} 屏", box, 12.5f, Brush(ctx, InkCol), center: false);
+            string label = st.SlidePosition > 0
+                ? $"PPT {st.SlidePosition}/{st.SlideCount}"
+                : $"第 {st.ScreenIndex} 屏";
+            _widgets.Text(ctx, label, box, 12.5f, Brush(ctx, InkCol), center: false);
         }
     }
 
