@@ -2429,19 +2429,24 @@ internal sealed class OverlayWindow : IDisposable
 
         _ctx.FillRectangle(
             new Vortice.RawRectF(c.X - hw, c.Y - hh, c.X + hw, c.Y + hh),
-            Brush(new Color4(0.35f, 0.55f, 0.95f, 0.12f)));
+            // 填充色：**0.12 → 0.22**（用户 2026-09-17："面积橡皮擦太透明了"）。
+            // 参考点：笔尖那个圆环填充是 0.06，整笔橡皮的圆是 0.10——面积橡皮是
+            // 唯一"要看清边界的一块面"，它最实才对；0.22 之后底下的字仍然透得出来。
+            Brush(new Color4(0.35f, 0.55f, 0.95f, 0.22f)));
 
-        _scratch.Color = new Color4(1f, 1f, 1f, 0.75f);
+        // 两层描边都比原来略实一档，且线宽 1.5 → 1.8：面积橡皮的边界是"会不会擦掉"
+        // 的判据，投影上要一眼看清。
+        _scratch.Color = new Color4(1f, 1f, 1f, 0.85f);
         _ctx.DrawRectangle(new Vortice.RawRectF(
-            c.X - hw - 0.75f, c.Y - hh - 0.75f, c.X + hw + 0.75f, c.Y + hh + 0.75f), _scratch, 1.5f);
-        _scratch.Color = new Color4(0.22f, 0.28f, 0.38f, 0.85f);
+            c.X - hw - 0.9f, c.Y - hh - 0.9f, c.X + hw + 0.9f, c.Y + hh + 0.9f), _scratch, 1.8f);
+        _scratch.Color = new Color4(0.22f, 0.28f, 0.38f, 0.9f);
         _ctx.DrawRectangle(new Vortice.RawRectF(
-            c.X - hw + 0.75f, c.Y - hh + 0.75f, c.X + hw - 0.75f, c.Y + hh - 0.75f), _scratch, 1.5f);
+            c.X - hw + 0.9f, c.Y - hh + 0.9f, c.X + hw - 0.9f, c.Y + hh - 0.9f), _scratch, 1.8f);
 
         float tick = MathF.Max(5f, MathF.Min(hw, hh) * 0.25f);
-        _scratch.Color = new Color4(0.22f, 0.28f, 0.38f, 0.8f);
-        _ctx.DrawLine(new Vector2(c.X - tick, c.Y), new Vector2(c.X + tick, c.Y), _scratch, 1.5f);
-        _ctx.DrawLine(new Vector2(c.X, c.Y - tick), new Vector2(c.X, c.Y + tick), _scratch, 1.5f);
+        _scratch.Color = new Color4(0.22f, 0.28f, 0.38f, 0.85f);
+        _ctx.DrawLine(new Vector2(c.X - tick, c.Y), new Vector2(c.X + tick, c.Y), _scratch, 1.8f);
+        _ctx.DrawLine(new Vector2(c.X, c.Y - tick), new Vector2(c.X, c.Y + tick), _scratch, 1.8f);
     }
 
     private void DrawRingCursor(Vector2 c, float truthR, float outerR, Color4 fill)

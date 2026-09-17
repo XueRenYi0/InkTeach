@@ -2637,6 +2637,12 @@ internal sealed class App : InkEngine.InkEngine
         ViewOffsetY = 0f;
         foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
 
+        // **白板打底**：这一节靠"数屏幕上的强调色像素"判断标签画没画、在哪儿，
+        // 而批注模式下面板是全透明的——桌面上的东西会被算进来。2026-09-17 实测：
+        // 桌面换了一批窗口之后，这三条一下全红（"标签位置是干净的"量到 3421 像素），
+        // 而代码一个字没改。铺一层不透明白板，量到的就全是我们的墨。
+        BoardOn = true;
+
         float sx = _virtualX + _virtualW * 0.5f, sy = _virtualY + _virtualH * 0.5f;
         var stroke = new Stroke
         {
@@ -5670,6 +5676,9 @@ internal sealed class App : InkEngine.InkEngine
         SetUiFactory(() => new InkUi.FullUi());
         Tool = Tool.Pen;
         BoardOn = true;                      // 白板打底：截出来的图里没有桌面上的杂东西
+        // --pixel：把工具切成面积橡皮再出图（看"橡皮按钮的图标跟着换"那一版）
+        if (Environment.GetCommandLineArgs().Contains("--pixel")) Tool = Tool.PixelEraser;
+        if (Environment.GetCommandLineArgs().Contains("--eraser")) Tool = Tool.Eraser;
         SettleFrames(400);
 
         if (CurrentUi is InkUi.FullUi ui)
@@ -5842,54 +5851,44 @@ internal sealed class App : InkEngine.InkEngine
               $"笔画 {strokes0} → {Doc.Strokes.Count}");
 
         // ---- ⑥ 上带：色片 / 滑条 / 分段（都走命令通道）----
-        // 先取消"钉住"：前面点过工具，色带是**钉住展开**的（假面板的规矩：
-        // 点工具就把它的设置条留在那儿）。再点一次同一个工具 = 收起。
+        //
+        // **张不张开只看焦点在不在面板上**（2026-09-17 用户定的新语义）：
+        //   指针落在面板（主条 ∪ 设置条）上 → 张开；离开 → 220 毫秒后收成一条 6 像素色线。
+        // 旧的那套"点一次钉住、再点同一个工具收起"已经删掉了——两套规则会打架：
+        // 指针还停在面板上，收下去会立刻又张开。
         var penCellAgain = ui.CellRectForTest(3);
         ClickPhysical((penCellAgain.MinX + penCellAgain.MaxX) * 0.5f * DpiScale,
                       (penCellAgain.MinY + penCellAgain.MaxY) * 0.5f * DpiScale);
         SettleFrames(300);
-        Check("再点一次同一个工具 = 收起它的设置条",
-              !ui.RailOpenForTest && ui.BandHeightForTest < 12f,
-              $"上带高 {ui.BandHeightForTest:F0}");
-
-        // 先看"平时那条色线"：指针在画布上，上带应该只有 6 像素高。
-        var line = ui.BandRectForTest;
-        Check("平时上带收成一条色线",
-              MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandLine) < 1.5f && !ui.RailOpenForTest,
-              $"上带高 {ui.BandHeightForTest:F0}（色线应为 {InkUi.Tokens.BandLine:F0}）");
-
-        // 碰一下（要停 120 毫秒，**路过不算数**）就该长成完整的设置条。
-        SendMouse((int)((line.MinX + line.MaxX) * 0.5f * DpiScale),
-                  (int)((line.MinY + line.MaxY) * 0.5f * DpiScale), 0);
-        SettleFrames(60);
-        bool stillLine = !ui.RailOpenForTest;          // 刚进热区 60 毫秒：还该是色线
-        SettleFrames(400);
-        Check("碰到色线就长成设置条",
-              stillLine && ui.RailOpenForTest
+        Check("焦点在面板上：设置条张开",
+              ui.RailHoverForTest && ui.RailOpenForTest
               && MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandHeight) < 1.5f,
-              $"进热区 60ms 时高 {InkUi.Tokens.BandLine:F0}（该还没动），400ms 后高 {ui.BandHeightForTest:F0}"
-              + $"（设置条应为 {InkUi.Tokens.BandHeight:F0}）");
+              $"焦点在面板 = {ui.RailHoverForTest}，张开 = {ui.RailOpenForTest}，高 {ui.BandHeightForTest:F0}");
 
-        // 点工具 = 把它的设置条**钉住**：指针移开也不收（不然选项来不及选）
-        var penCellPin = ui.CellRectForTest(3);
-        ClickPhysical((penCellPin.MinX + penCellPin.MaxX) * 0.5f * DpiScale,
-                      (penCellPin.MinY + penCellPin.MaxY) * 0.5f * DpiScale);
-        SettleFrames(200);
-        SendMouse((int)(_virtualX + _virtualW * 0.7f), (int)(_virtualY + _virtualH * 0.3f), 0);
-        SettleFrames(600);                              // 离开热区很久
-        Check("点工具后色带钉住（指针移开也不收）",
-              ui.RailPinnedForTest && ui.RailOpenForTest,
-              $"钉住 = {ui.RailPinnedForTest}，张开 = {ui.RailOpenForTest}，高 {ui.BandHeightForTest:F0}");
+        // 指针移到画布上（离开面板）→ 收成一条色线
+        SendMouse((int)(_virtualX + _virtualW * 0.6f), (int)(_virtualY + _virtualH * 0.3f), 0);
+        SettleFrames(700);                              // 220ms 退出延迟 + 167ms 动画，留足
+        Check("指针离开面板：收成一条色线",
+              !ui.RailOpenForTest
+              && MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandLine) < 1.5f,
+              $"张开 = {ui.RailOpenForTest}，高 {ui.BandHeightForTest:F0}（色线应为 {InkUi.Tokens.BandLine:F0}）");
+
+        // 再把指针挪回**主条**（不是色带本身）→ 不用点，它自己就该张开。
+        // 这一条就是用户说的"焦点在悬浮框的时候就展开"。
+        var barHover = ui.BarRectForTest;
+        SendMouse((int)((barHover.MinX + barHover.MaxX) * 0.5f * DpiScale),
+                  (int)((barHover.MinY + barHover.MaxY) * 0.5f * DpiScale), 0);
+        SettleFrames(500);
+        Check("指针回到面板（主条）上就自己张开",
+              ui.RailOpenForTest && ui.RailHoverForTest,
+              $"张开 = {ui.RailOpenForTest}，高 {ui.BandHeightForTest:F0}");
 
         var bandRect = ui.BandRectForTest;
         Check("展开后有上带", bandRect.MaxY - bandRect.MinY > 20f,
               $"上带 {bandRect.MaxX - bandRect.MinX:F0}×{bandRect.MaxY - bandRect.MinY:F0}");
 
-        // 上带现在**已经钉在「笔」上**（上一条"点工具后色带钉住"就是点它钉住的），
-        // 所以这里不用再点一次——**再点一次反而会把它收起来**（新语义：再点当前工具＝收起）。
-        // 第一版用例在这里又点了一下，结果后面点色片全落空。
-        Check("上带是笔的设置条（色片行）", ui.RailPinnedForTest && ui.RailOpenForTest,
-              $"钉住 = {ui.RailPinnedForTest}，张开 = {ui.RailOpenForTest}");
+        Check("上带是笔的设置条（色片行）", ui.RailOpenForTest,
+              $"张开 = {ui.RailOpenForTest}");
 
         // 挑一个**不是默认色**的色片（默认笔色就是红，用红当期望值会假通过——
         // 这一条自检第一版就是这么假通过的，被"换色成功"蒙了一次）。
@@ -5924,6 +5923,107 @@ internal sealed class App : InkEngine.InkEngine
         SendMouse((int)(slider.MaxX * DpiScale), (int)sliderY, Native.MOUSEEVENTF_LEFTUP);  SettleFrames(150);
         Check("拖滑条改粗细", Host.State.Width > widthBefore + 5f,
               $"粗细 {widthBefore:F1} → {Host.State.Width:F1}");
+
+        // ---- ⑥.2 滑条**按工具路由**：橡皮终于能调大小了 ----
+        //
+        // 这一条是被用户点出来的："橡皮擦现在没有调节大小功能"。
+        // 真相是界面上**有**滑条（`BandHasSlider` 一直包含橡皮那一格），
+        // 但引擎的 `SetWidthFromUi` 只分了"荧光笔 / 激光 / 其它"三支，
+        // 两种橡皮全落进"其它"——拖橡皮的滑条，**改的是笔宽**，橡皮一点没动。
+        // 所以这三条要一起看：橡皮变了 **且** 笔宽没变（不然还会退回旧 bug）。
+        {
+            Host.Commands.SetTool(Tool.Eraser);
+            SettleFrames(200);
+            float penW0 = PenWidthLogical;
+            // 先把指针放回面板（不然设置条是收着的，滑条不在）
+            var barE = ui.BarRectForTest;
+            SendMouse((int)((barE.MinX + barE.MaxX) * 0.5f * DpiScale),
+                      (int)((barE.MinY + barE.MaxY) * 0.5f * DpiScale), 0);
+            SettleFrames(400);
+            var slE = ui.SliderRectForTest;
+            float slEy = (slE.MinY + slE.MaxY) * 0.5f * DpiScale;
+
+            var (emin, emax) = (8f, 48f);              // 界面那边 WidthRange(Tool.Eraser)
+            var (trackL, trackR) = ui.SliderTrackRangeForTest;
+            SendMouse((int)(trackL * DpiScale), (int)slEy, 0);                          SettleFrames(60);
+            SendMouse((int)(trackL * DpiScale), (int)slEy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(50);
+            SendMouse((int)(trackR * DpiScale), (int)slEy, 0);                          SettleFrames(120);
+            SendMouse((int)(trackR * DpiScale), (int)slEy, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(150);
+            Check("橡皮的滑条拖到最右＝最大落点",
+                  MathF.Abs(EraserRadiusLogical - emax) < 1.5f,
+                  $"橡皮半径 {EraserRadiusLogical:F1}（应到 {emax}）");
+            Check("拖橡皮的滑条**不动笔宽**",
+                  MathF.Abs(PenWidthLogical - penW0) < 0.01f,
+                  $"笔宽 {penW0:F2} → {PenWidthLogical:F2}（旧 bug 就是这里被改掉的）");
+
+            var (trackL2, trackR2) = ui.SliderTrackRangeForTest;
+            SendMouse((int)(trackL2 * DpiScale), (int)slEy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+            SendMouse((int)(trackL2 * DpiScale), (int)slEy, 0);                          SettleFrames(120);
+            SendMouse((int)(trackL2 * DpiScale), (int)slEy, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(150);
+            Check("橡皮的滑条拖到最左＝最小落点",
+                  MathF.Abs(EraserRadiusLogical - emin) < 1.5f,
+                  $"橡皮半径 {EraserRadiusLogical:F1}（应到 {emin}）");
+
+            // 面积橡皮同理，而且它的范围比笔宽大得多（30～160）
+            Host.Commands.SetTool(Tool.PixelEraser);
+            SettleFrames(200);
+            float penW1 = PenWidthLogical;
+            var slP = ui.SliderRectForTest;
+            float slPy = (slP.MinY + slP.MaxY) * 0.5f * DpiScale;
+            var (pl, pr) = ui.SliderTrackRangeForTest;
+            SendMouse((int)(pr * DpiScale), (int)slPy, 0);                          SettleFrames(60);
+            SendMouse((int)(pr * DpiScale), (int)slPy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(50);
+            SendMouse((int)(pr * DpiScale), (int)slPy, 0);                          SettleFrames(120);
+            SendMouse((int)(pr * DpiScale), (int)slPy, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(150);
+            Check("面积橡皮的滑条能放到 160（比笔宽的上限 40 大）",
+                  MathF.Abs(PixelEraserWidthLogical - 160f) < 2f,
+                  $"面积橡皮宽 {PixelEraserWidthLogical:F1}（应到 160）");
+            Check("拖面积橡皮的滑条**不动笔宽**",
+                  MathF.Abs(PenWidthLogical - penW1) < 0.01f,
+                  $"笔宽 {penW1:F2} → {PenWidthLogical:F2}");
+            Host.Commands.SetTool(Tool.Pen);
+            SettleFrames(200);
+        }
+
+        // ---- ⑥.3 穿透与工具**互斥** ----
+        {
+            Host.Commands.SetPassThrough(true);
+            SettleFrames(250);
+            Check("穿透开着时，工具格一律不高亮（免得`穿透＋笔`同时亮）",
+                  ui.CellActiveForTest(1) && !ui.CellActiveForTest(3) && !ui.CellActiveForTest(4)
+                  && !ui.CellActiveForTest(6) && !ui.CellActiveForTest(9),
+                  $"鼠标 = {ui.CellActiveForTest(1)}，笔 = {ui.CellActiveForTest(3)}，工具 = {Tool}");
+
+            var penCellPt = ui.CellRectForTest(3);
+            ClickPhysical((penCellPt.MinX + penCellPt.MaxX) * 0.5f * DpiScale,
+                          (penCellPt.MinY + penCellPt.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("点工具格＝顺手关掉穿透（不用先去点鼠标格）",
+                  !Host.State.PassThrough && Tool == Tool.Pen,
+                  $"穿透 = {Host.State.PassThrough}，工具 = {Tool}");
+            Check("关掉穿透之后工具格亮回来", ui.CellActiveForTest(3),
+                  $"笔格高亮 = {ui.CellActiveForTest(3)}");
+        }
+
+        // ---- ⑥.4 截图那一格真的接上了（用户 2026-09-17："截图功能还没有接进来"）----
+        //
+        // 引擎里截图工具（Tool.Capture）和"拖框抓图"这条链路是有的（--capturetest 全绿），
+        // 面板上第 9 格也在走 SetTool(Capture)。这一条把它**钉在自检里**：
+        // 点一下必须真的切到截图工具、而且那一格要亮——不然老师点了没反应，
+        // 只能得出"还没接进来"这个结论（这正是用户看到的）。
+        {
+            Host.Commands.SetTool(Tool.Pen);
+            SettleFrames(150);
+            var cap = ui.CellRectForTest(9);
+            ClickPhysical((cap.MinX + cap.MaxX) * 0.5f * DpiScale,
+                          (cap.MinY + cap.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("点「截屏」真的切到截图工具", Tool == Tool.Capture, $"工具 = {Tool}");
+            Check("截屏那一格亮起来（点了有反馈）", ui.CellActiveForTest(9),
+                  $"截屏格高亮 = {ui.CellActiveForTest(9)}");
+            Host.Commands.SetTool(Tool.Pen);
+            SettleFrames(150);
+        }
 
         // 换工具（走引擎那条路，等同按热键）：上带要跟着换成"选择"的设置条
         Host.Commands.SetTool(Tool.Marquee);
@@ -6016,16 +6116,21 @@ internal sealed class App : InkEngine.InkEngine
               && drawer.MinY >= _virtualY / DpiScale && drawer.MaxX <= _virtualX / DpiScale + _virtualW / DpiScale,
               $"抽屉底 {drawer.MinY:F0}+{drawer.MaxY - drawer.MinY:F0}，主条顶 {ui.BarRectForTest.MinY:F0}");
 
-        // 色带在 6 ↔ 34 之间长短变化，抽屉的位置**不许跟着它走**：
+        // 抽屉和设置条**互斥**（2026-09-17）：两者只隔 16 像素，抽屉开着的时候设置条
+        // 要是被指针挤出来，会从抽屉底下冒一截，很难看（假面板里也是这么让位的）。
+        // 顺带守住老规矩：**抽屉的位置不许跟着设置条的高低走**——
         // 跟着走就是"鼠标一碰色带、抽屉往上跳一下"（用户说的"起伏"）。
         var lineRect = ui.BandRectForTest;             // 这一刻是那条色线
         SendMouse((int)((lineRect.MinX + lineRect.MaxX) * 0.5f * DpiScale),
                   (int)((lineRect.MinY + lineRect.MaxY) * 0.5f * DpiScale), 0);
-        SettleFrames(400);                              // 等色带张开
+        SettleFrames(400);                              // 等过"该张开"的那段时间
         var drawerAfter = ui.DrawerRectForTest;
-        Check("色带张开时抽屉不跟着起伏",
-              ui.RailOpenForTest && MathF.Abs(drawerAfter.MinY - drawer.MinY) < 1.5f,
-              $"色带高 {ui.BandHeightForTest:F0}，抽屉底 {drawer.MinY:F0} → {drawerAfter.MinY:F0}");
+        Check("抽屉开着时设置条让位（不挤出来、也不推抽屉）",
+              !ui.RailOpenForTest
+              && MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandLine) < 1.5f
+              && MathF.Abs(drawerAfter.MinY - drawer.MinY) < 1.5f,
+              $"设置条高 {ui.BandHeightForTest:F0}（该是色线 {InkUi.Tokens.BandLine:F0}），"
+              + $"抽屉底 {drawer.MinY:F0} → {drawerAfter.MinY:F0}");
 
         var darkRow = ui.RowRectForTest(0);
         ClickPhysical((darkRow.MinX + darkRow.MaxX) * 0.5f * DpiScale,
@@ -6178,6 +6283,43 @@ internal sealed class App : InkEngine.InkEngine
         float wantLeft = _virtualX / DpiScale + InkUi.Tokens.DockGap;
         Check("拖到左边缘会吸附", MathF.Abs(docked.MinX - wantLeft) < 3f,
               $"左边缘 {docked.MinX:F0}（贴边后应为 {wantLeft:F0}），拖动前在 {home.MinX:F0}");
+
+        // ---- ⑦.2 锚点统一：拖过之后展开，**还是"两边长"** ----
+        //
+        // 用户 2026-09-17 问的那条："有时候点击收缩像往左收缩、点击展开又向右展开，
+        // 这是设计亮点还是考虑不周"——是后者：以前"没拖过"走居中公式（两边长），
+        // "拖过"之后存的是左上角（只往右长），同一个手势两种反应。
+        // 现在统一成**以球心为准、两边长，碰边就贴边**。
+        // 这一条要说清楚：**球心是锚点**，所以展开后带子的中心必须落在原来球心的位置上。
+        {
+            var d0 = ui.QueryBounds();                        // 此刻贴着左边、收起态
+            float sx = (d0.MinX + d0.MaxX) * 0.5f * DpiScale;
+            float sy = (d0.MinY + d0.MaxY) * 0.5f * DpiScale;
+            int toX = _virtualX + (int)(500 * DpiScale);      // 拖到屏幕中左部（离两边都远）
+            SendMouse((int)sx, (int)sy, 0);                           SettleFrames(60);
+            SendMouse((int)sx, (int)sy, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(50);
+            for (int i = 1; i <= 8; i++) { SendMouse((int)(sx + (toX - sx) * i / 8f), (int)sy, 0); SettleFrames(20); }
+            SendMouse(toX, (int)sy, Native.MOUSEEVENTF_LEFTUP);        SettleFrames(250);
+            var parked = ui.QueryBounds();
+            float parkedCx = (parked.MinX + parked.MaxX) * 0.5f;
+
+            ClickPhysical((parked.MinX + parked.MaxX) * 0.5f * DpiScale,
+                          (parked.MinY + parked.MaxY) * 0.5f * DpiScale);   // 点球展开
+            SettleFrames(400);
+            var anchoredBar = ui.BarRectForTest;
+            float anchoredCx = (anchoredBar.MinX + anchoredBar.MaxX) * 0.5f;
+            Check("拖到中间后展开：以球心为准、两边一起长",
+                  MathF.Abs(anchoredCx - parkedCx) < 2f,
+                  $"球心 {parkedCx:F0}，展开后带子中心 {anchoredCx:F0}"
+                  + $"（带子 {anchoredBar.MinX:F0}..{anchoredBar.MaxX:F0}）");
+
+            // 收回去（后面几段用例都假设"面板是收起的"）
+            var ballCell = ui.CellRectForTest(0);
+            ClickPhysical((ballCell.MinX + ballCell.MaxX) * 0.5f * DpiScale,
+                          (ballCell.MinY + ballCell.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("再点一次收起（回到球）", !ui.ExpandedForTest, $"展开状态 = {ui.ExpandedForTest}");
+        }
 
         // ---- ⑧ 抽屉里的「重启软件」：先暂存板书，再拉起新进程（这里只记一笔，不真拉）----
         Recovery.ClearRestartCount();

@@ -103,6 +103,17 @@ public class InkEngine
     internal float DpiScale = 1f;
 
     internal float EraserRadiusLogical = 22f;
+    /// <summary>
+    /// 整笔橡皮的落点半径（逻辑像素）的档位。**以前它根本没有档位**——
+    /// 界面上给橡皮画了粗细滑条，可引擎里 `SetWidthFromUi` 把它归到"其它"那一支，
+    /// 结果改的是**笔宽**：老师拖橡皮的滑条，笔迹粗细悄悄变了、橡皮一点没变。
+    /// 现在四种工具各记各的，橡皮也有自己的三档。
+    /// </summary>
+    internal static readonly float[] EraserRadiusPresets = { 12f, 22f, 34f };
+    internal int EraserRadiusIndex = 1;
+    /// <summary>两种橡皮各自的可调范围（逻辑像素）。界面滑条的范围要和这里一致。</summary>
+    internal const float EraserRadiusMin = 8f, EraserRadiusMax = 48f;
+    internal const float PixelEraserMinWidth = 30f, PixelEraserMaxWidth = 160f;
     internal float PenWidthLogical = 3f;
     internal float HighlighterWidthLogical = 18f;
     /// <summary>
@@ -153,6 +164,7 @@ public class InkEngine
         Tool.Highlighter => HighlighterWidthLogical,
         Tool.Laser => LaserWidthLogical,
         Tool.PixelEraser => PixelEraserWidthLogical,
+        Tool.Eraser => EraserRadiusLogical,
         _ => PenWidthLogical,
     };
 
@@ -2900,6 +2912,13 @@ public class InkEngine
     {
         if (Tool != t && t != Tool.Marquee) ClearSelectionForNewContext();
         Tool = t;
+
+        // **穿透和工具是互斥的**（用户 2026-09-17 定）。
+        //
+        // 穿透开着的时候点击落到下层程序上，画布根本收不到笔——这时"选中了笔"是个假状态：
+        // 按钮亮着、写不出字。所以换工具（点面板也好、按热键也好）等于一句"我要开始用了"，
+        // 顺手把穿透关掉。反过来，点面板上那个"鼠标"格是明说要穿透，它单独开。
+        if (PassThrough) SetPassThrough(false);
     }
 
     /// <summary>收起选区（换工具、以及"与选中无关的新操作"走这里）。</summary>
@@ -2926,6 +2945,12 @@ public class InkEngine
             case Tool.PixelEraser:
                 PixelEraserWidthIndex = (PixelEraserWidthIndex + 1) % PixelEraserWidthPresets.Length;
                 PixelEraserWidthLogical = PixelEraserWidthPresets[PixelEraserWidthIndex];
+                break;
+            case Tool.Eraser:
+                // 整笔橡皮也有自己的档位。以前它落进 default，按 Ctrl+Alt+6 改的是**笔宽**
+                // ——"拿着橡皮调粗细，笔迹变粗了"就是这么来的。
+                EraserRadiusIndex = (EraserRadiusIndex + 1) % EraserRadiusPresets.Length;
+                EraserRadiusLogical = EraserRadiusPresets[EraserRadiusIndex];
                 break;
             default:
                 WidthPresetIndex = (WidthPresetIndex + 1) % WidthPresets.Length;
@@ -3147,24 +3172,48 @@ public class InkEngine
 
     internal void SetWidthFromUi(float logicalPx)
     {
-        float v = Math.Clamp(logicalPx, 0.5f, 64f);
-        if (Tool == Tool.Highlighter)
+        // 外层的 0.5～64 只是"别把明显离谱的值放进来"的兜底；**真正的范围按工具算**。
+        // 这个 64 曾经把面积橡皮卡住过：它的横边要能到 160（一块大橡皮），
+        // 被外层夹在 64 之后，"拖到最右"只能到 64（--paneltest 当场抓到）。
+        float v = Math.Clamp(logicalPx, 0.5f, PixelEraserMaxWidth);
+
+        // **按当前工具路由**。以前只有"荧光笔 / 激光 / 其它"三支，
+        // 两种橡皮全落进"其它"→ 改的是笔宽（界面上的橡皮滑条是个摆设）。
+        switch (Tool)
         {
-            HighlighterWidthLogical = v;
-            int hi = Array.IndexOf(HighlighterWidthPresets, v);
-            if (hi >= 0) HighlighterWidthIndex = hi;
-        }
-        else if (Tool == Tool.Laser)
-        {
-            LaserWidthLogical = v;
-            int li = Array.IndexOf(LaserWidthPresets, v);
-            if (li >= 0) LaserWidthIndex = li;
-        }
-        else
-        {
-            PenWidthLogical = v;
-            int idx = Array.IndexOf(WidthPresets, v);
-            if (idx >= 0) WidthPresetIndex = idx;
+            case Tool.Highlighter:
+                HighlighterWidthLogical = v;
+                int hi = Array.IndexOf(HighlighterWidthPresets, v);
+                if (hi >= 0) HighlighterWidthIndex = hi;
+                break;
+
+            case Tool.Laser:
+                LaserWidthLogical = v;
+                int li = Array.IndexOf(LaserWidthPresets, v);
+                if (li >= 0) LaserWidthIndex = li;
+                break;
+
+            case Tool.PixelEraser:
+                // 像素橡皮改的是**那一块橡皮的横边**（高 = 横边 × 黄金比）。
+                // 它的范围比笔宽大得多（一块橡皮 30～160 逻辑像素），
+                // 所以这里单独夹一次，不跟笔共用那个 64 的上限。
+                PixelEraserWidthLogical = Math.Clamp(v, PixelEraserMinWidth, PixelEraserMaxWidth);
+                int pi = Array.IndexOf(PixelEraserWidthPresets, PixelEraserWidthLogical);
+                if (pi >= 0) PixelEraserWidthIndex = pi;
+                break;
+
+            case Tool.Eraser:
+                // 整笔橡皮改的是**落点半径**（碰到哪儿就删哪一条）
+                EraserRadiusLogical = Math.Clamp(v, EraserRadiusMin, EraserRadiusMax);
+                int ei = Array.IndexOf(EraserRadiusPresets, EraserRadiusLogical);
+                if (ei >= 0) EraserRadiusIndex = ei;
+                break;
+
+            default:
+                PenWidthLogical = v;
+                int idx = Array.IndexOf(WidthPresets, v);
+                if (idx >= 0) WidthPresetIndex = idx;
+                break;
         }
         _dirty = true;
         NotifyUiStateChanged();

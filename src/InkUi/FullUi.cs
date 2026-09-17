@@ -107,7 +107,14 @@ public sealed class FullUi : IOverlayUi
     private IUiHost _host;
     private Widgets _widgets;
     private RectF _screen;                 // 逻辑虚拟桌面（Layout 给的）
-    // 拖过之后的位置（左上角）；**null = 还没拖过**，用默认位置（下边居中）。
+    // 拖过之后的位置：**X = 面板中心，Y = 主条上边**。null = 还没拖过（下边居中）。
+    //
+    // 为什么 X 存的是**中心**而不是左上角（2026-09-17 改）：
+    // 假面板和第一版里，"没拖过"走的是"居中"公式（公式里带当前宽度），于是展开时
+    // **两边一起长**；而"拖过"之后存的是左上角，于是展开时**只往右长**。
+    // 同一个手势两种反应，用户当场就问"这是设计亮点还是考虑不周"——是后者。
+    // 现在统一成一条规则：**以球心为准，两边长；碰边就贴边**（见 RawAnchor）。
+    //
     // 这里特意不用 RectF 来表示"没拖过"：`RectF` 的默认值是全 0，而
     // `IsEmpty` 判的是 `MaxX < MinX`——全 0 的矩形**不算空**，
     // 于是"没拖过"会被当成"拖到了 (0,0)"（自检当场抓到过这一条）。
@@ -146,13 +153,6 @@ public sealed class FullUi : IOverlayUi
     private readonly Anim _peek;           // 0 = 只剩露头，1 = 完全显示
     private readonly Anim _rail;           // 0 = 平时那条 6 像素色线，1 = 完整设置条
     private bool _railHover;
-
-    /// <summary>
-    /// 色带被"钉住展开"了吗。点一个工具就把它的设置条留在那儿——
-    /// 不钉的话指针一移开它就收，选项根本来不及选（假面板的注释写着这一条）。
-    /// 再点一次同一个工具 = 收起（各家软件的通例，用户也认这个）。
-    /// </summary>
-    private bool _railPinned;
 
     /// <summary>悬停意图的两个时刻：进热区 120ms 才展开、离开 220ms 才收回——路过不算数。</summary>
     private double _railEnterAtMs = double.NegativeInfinity;
@@ -224,7 +224,7 @@ public sealed class FullUi : IOverlayUi
             if (_rail.Running) return true;
             // 色带正在"等悬停意图"时也得给帧：不然 120 毫秒到了没人去展开它，
             // 或者 220 毫秒到了没人去收它。展开/收起一旦完成，这两个条件立刻为假 → 空闲回到 0 帧。
-            if (BandVisible() && !_railPinned
+            if (BandVisible()
                 && ((_railHover && _rail.Value < 0.5f) || (!_railHover && _rail.Value > 0f)))
                 return true;
             if (_hideEnabled && !_hoverInside && _peek.Value > 0f) return true;
@@ -404,12 +404,22 @@ public sealed class FullUi : IOverlayUi
     }
 
     /// <summary>
-    /// 没拖过时的位置：**主条的底边贴屏幕下边**（离边 12）。
-    /// 注意这里减的是**主条高**、不是总高——带子朝上长，主条自己不动。
+    /// 主条左上角。**一条规则管横向和纵向**：
+    ///
+    ///   · 横向：以**面板中心**为准，展开时**两边一起长**（这就是用户说的"从中间向两边展开"，
+    ///     保留）；拖到屏幕边上会超出屏幕，由 <see cref="Clamp"/> 贴住边——
+    ///     贴边时看起来就是"从边上往中间长"，正是该有的样子；
+    ///   · 纵向：**主条的上边**为准（带子长在上面，主条自己不动，所以贴底时不会跳）。
+    ///
+    /// 没拖过 → 屏幕下边居中（主条底边离屏幕下边 12 像素）。
     /// </summary>
-    private Vector2 RawAnchor() => _anchor ?? new Vector2(
-        _screen.MinX + (_screen.MaxX - _screen.MinX - Width()) * 0.5f,
-        _screen.MaxY - Tokens.EdgeMargin - Tokens.BarHeight);
+    private Vector2 RawAnchor()
+    {
+        float w = Width();
+        float cx = _anchor?.X ?? (_screen.MinX + _screen.MaxX) * 0.5f;
+        float top = _anchor?.Y ?? (_screen.MaxY - Tokens.EdgeMargin - Tokens.BarHeight);
+        return new Vector2(cx - w * 0.5f, top);
+    }
 
     /// <summary>
     /// 带子长在哪一侧：**朝屏幕中心**。面板在下半屏就朝上长（贴底时下面本来也没空间），
@@ -493,7 +503,7 @@ public sealed class FullUi : IOverlayUi
         int n = Tokens.Palette.Length;
         float gap = 4f;
         float avail = band.MaxX - band.MinX - BarInset() * 2f
-                    - (BandHasSlider ? 0f : 0f);   // 滑条已经挪到面板下沿，色片铺满整条
+                    - (BandHasSlider ? SliderTrackW + 14f : 0f);   // 给右端的粗细滑条让位
         float w = (avail - gap * (n - 1)) / n;
         float h = SwatchHeight();
         float x = band.MinX + BarInset() + i * (w + gap);
@@ -507,17 +517,29 @@ public sealed class FullUi : IOverlayUi
     /// <summary>色片的高：最多 26，带子矮的时候按比例缩（假面板：min(26, band * 0.8)）。</summary>
     private float SwatchHeight() => MathF.Min(Tokens.Swatch, BandHeightFull() * 0.8f);
 
+    /// <summary>粗细滑条的轨道宽（逻辑像素）。</summary>
+    private const float SliderTrackW = 132f;
+
+    /// <summary>
+    /// 粗细滑条：**长在设置条里面、靠右端**（用户 2026-09-17："笔、荧光笔的调节大小
+    /// 还是放到色带上来"）。
+    ///
+    /// 它原来在**面板最下沿那一整条**上（照假面板的 groove）。放在那儿有两个问题：
+    ///   ① 和工具格的下半截重叠，命中顺序得靠"滑条先判"这种技巧兜着；
+    ///   ② 它离"设置"这件事太远——老师看到的是"面板底下有条槽"，不知道它是干什么的。
+    /// 挪进设置条之后，色片（颜色）和滑条（粗细）在同一行里，就是"这个工具的设置"。
+    ///
+    /// 命中区上下各给 9 像素余量（手指比鼠标难瞄）。
+    /// </summary>
     private RectF SliderRect()
     {
-        // 滑条在**面板最下沿那一条**（照假面板），不是色带右边的一小块。
-        // 命中区给它一点上下余量，手指才好抓。
-        var panel = UnionRect();
-        float inset = BarInset();
-        float cy = panel.MaxY - 6f;
+        var band = BandRect();
+        float right = band.MaxX - BarInset();
+        float cy = (band.MinY + band.MaxY) * 0.5f;
         return new RectF
         {
-            MinX = panel.MinX + inset, MinY = cy - 9f,
-            MaxX = panel.MaxX - inset, MaxY = cy + 9f,
+            MinX = right - SliderTrackW, MinY = cy - 9f,
+            MaxX = right, MaxY = cy + 9f,
         };
     }
 
@@ -532,7 +554,9 @@ public sealed class FullUi : IOverlayUi
             float by = BandCenterY() - Tokens.SegmentHeight * 0.5f;
             return new RectF { MinX = bx, MinY = by, MaxX = bx + bw, MaxY = by + Tokens.SegmentHeight };
         }
-        float total = band.MaxX - band.MinX - BarInset() * 2;
+        // 和色片一样：右端有滑条的时候要给滑条让位，否则分段会和滑条叠在一起
+        float total = band.MaxX - band.MinX - BarInset() * 2
+                    - (BandHasSlider ? SliderTrackW + 14f : 0f);
         float w = Math.Min(120f, (total - (count - 1) * 6f) / count);
         float x = BandContentLeft() + i * (w + 6f);
         float y = BandCenterY() - Tokens.SegmentHeight * 0.5f;
@@ -550,9 +574,16 @@ public sealed class FullUi : IOverlayUi
     /// <summary>这个工具的粗细范围。**界面管范围，引擎管钳位**——引擎那边是 0.5～64。</summary>
     private (float Min, float Max) WidthRange(Tool tool) => tool switch
     {
-        Tool.Highlighter => (16f, 64f),
+        // 两边的数字要和引擎里各工具的档位对得上（引擎那边是
+        // HighlighterWidthPresets 8/18/32、LaserWidthPresets 4/8/14、
+        // EraserRadiusPresets 12/22/34、PixelEraserWidthPresets 46/93/150）。
+        // 界面拿不到引擎的 internal 常量（那是**故意**的：界面只认公开契约），
+        // 所以两边各留一份数字，靠自检卡住：--paneltest 会把滑条拖到两端，
+        // 断言引擎里那个值真的走到了范围的端点。
+        Tool.Highlighter => (8f, 64f),
         Tool.Laser => (4f, 24f),
-        Tool.Eraser or Tool.PixelEraser => (8f, 64f),
+        Tool.Eraser => (8f, 48f),          // 整笔橡皮改的是**落点半径**
+        Tool.PixelEraser => (30f, 160f),   // 面积橡皮改的是**那一块的横边**（高 = 横边 × 1.618）
         _ => (1.5f, 40f),
     };
 
@@ -566,15 +597,28 @@ public sealed class FullUi : IOverlayUi
     /// <summary>拖滑条：只在**值真的变了**的时候提交（每帧几十次 SetWidth 会连带动画与重画）。</summary>
     private void DragSlider(float x)
     {
-        var box = SliderRect();
-        float left = box.MinX + Tokens.SliderKnob * 0.5f;
-        float right = box.MaxX - Tokens.SliderKnob * 0.5f;
+        var (left, right) = SliderTrackRange();
         float t = right <= left ? 0f : Math.Clamp((x - left) / (right - left), 0f, 1f);
 
         var (min, max) = WidthRange(_host.State.Tool);
         float want = min + (max - min) * t;
         if (MathF.Abs(want - _host.State.Width) < 0.5f) return;   // 没变就不提交
         _host.Commands.SetWidth(want);
+    }
+
+    /// <summary>滑条右端留给"粗细预览点"的宽度。</summary>
+    private const float SliderPreviewW = 18f;
+
+    /// <summary>
+    /// 滑条**轨道**的左右端（滑钮圆心能走到哪儿）。
+    /// 画和拖共用这一份——各算一份的话，迟早会出现"看着在中间、点出来偏一截"。
+    /// </summary>
+    private (float Left, float Right) SliderTrackRange()
+    {
+        var box = SliderRect();
+        float left = box.MinX + Tokens.SliderKnob * 0.5f;
+        float right = box.MaxX - SliderPreviewW - Tokens.SliderKnob * 0.5f;
+        return (left, right);
     }
 
     private int HitSwatch(float x, float y)
@@ -602,15 +646,26 @@ public sealed class FullUi : IOverlayUi
         {
             _rail.To(0f, 0);
             _railHover = false;
-            _railPinned = false;
             return;
         }
 
-        // 钉住 / 正在拖滑条：一直开着，不参与悬停那套计时
-        if (_railPinned || _sliderDragging)
+        // 正在拖滑条：一直开着，不参与悬停那套计时
+        // （手滑到轨道外面一点点不该让设置条收掉——拖到一半收掉是最气人的一种）
+        if (_sliderDragging)
         {
             _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
             _rail.To(1f, Tokens.RailMs);
+            return;
+        }
+
+        // 抽屉开着的时候设置条让位（假面板同一条：这两个抢的是同一块地方）。
+        // 少了这一条会有个很别扭的画面：抽屉还开着，指针在主条上一动，
+        // 设置条就从抽屉底下冒出来一截（抽屉离主条只有 16 像素，设置条有 34 高）。
+        if (_drawerOpen)
+        {
+            _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
+            _railHover = false;
+            _rail.To(0f, Tokens.RailMs);
             return;
         }
 
@@ -651,6 +706,30 @@ public sealed class FullUi : IOverlayUi
                 MinX = bar.MinX, MinY = bar.MaxY + BandGap - Tokens.RailHoverPad,
                 MaxX = bar.MaxX, MaxY = bar.MaxY + BandGap + h,
             };
+    }
+
+    /// <summary>
+    /// "焦点在悬浮框上"的判定区 = **主条 ∪ 设置条**（用户 2026-09-17 定的语义）。
+    ///
+    /// 以前只有**设置条自己那一条**算，于是老师想把鼠标从主条挪到色片上有两段路：
+    /// 先碰到色线、等 120 毫秒张开、再点工具钉住，钉住了才敢把指针挪上去。
+    /// 现在整块面板都算"焦点在面板上"：**指针在面板上它就张开，指针离开就收成色线**，
+    /// 中间不用再点一次、也不会走两步就收回去。
+    ///
+    /// 注意判据用的是**主条 ∪ 色带**而不是"整个 UnionRect"：贴边隐藏时 UnionRect
+    /// 会被夹到只剩 8 像素的露头，用它当判定区会让"贴边的面板"在指针没靠近时也展开。
+    /// </summary>
+    private RectF RailHoverZone()
+    {
+        var bar = BarRect();
+        var rail = RailZone();
+        return new RectF
+        {
+            MinX = MathF.Min(bar.MinX, rail.MinX),
+            MinY = MathF.Min(bar.MinY, rail.MinY),
+            MaxX = MathF.Max(bar.MaxX, rail.MaxX),
+            MaxY = MathF.Max(bar.MaxY, rail.MaxY),
+        };
     }
 
     private void ActivateSwatch(int i) => _host.Commands.SetColor(Tokens.Palette[i].Color);
@@ -933,7 +1012,14 @@ public sealed class FullUi : IOverlayUi
         _hoverInside = true;
         _leftAtMs = _host.NowMs;
         _pressPos = p;
-        _dragStartAnchor = Anchor();
+        // 拖动记的是**中心 + 上边**（和 RawAnchor 同一套语义），不是左上角：
+        // 否则松手之后面板的"中心"会随宽度漂，展开/收起时位置对不上。
+        _dragStartAnchor = new Vector2(Anchor().X + Width() * 0.5f, Anchor().Y);
+
+        // **按下也算"焦点在面板上"**：手写笔和触摸没有悬停那一段，
+        // 只在 PointerMove 里更新 _railHover 的话，老师用笔点面板时设置条根本不会张开
+        // （鼠标能张开、笔不能——这类"只在一种设备上坏"的 bug 最难查）。
+        _railHover = BandVisible() && RailHoverZone().Contains(p.X, p.Y);
 
         if (_expand.Value < 0.5f)
         {
@@ -991,7 +1077,7 @@ public sealed class FullUi : IOverlayUi
         _hoverInside = QueryBounds().Contains(e.X, e.Y);
         _leftAtMs = _host.NowMs;
         var p = Local(e);
-        _railHover = BandVisible() && RailZone().Contains(p.X, p.Y);
+        _railHover = BandVisible() && RailHoverZone().Contains(p.X, p.Y);
 
         if (_sliderDragging)
         {
@@ -1037,6 +1123,7 @@ public sealed class FullUi : IOverlayUi
     {
         if (!_hoverInside) return;
         _hoverInside = false;
+        _railHover = false;              // 指针离开面板 = 焦点不在了，设置条该收（走 ExitDelay）
         _leftAtMs = _host?.NowMs ?? 0;
         Invalidate();
     }
@@ -1135,7 +1222,6 @@ public sealed class FullUi : IOverlayUi
             _press = -1;
             _dragging = false;
             _sliderDragging = false;
-            _railPinned = false;        // 钉住也属于临时状态：收起再展开不该还钉着
             _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
         }
         Invalidate();
@@ -1156,20 +1242,15 @@ public sealed class FullUi : IOverlayUi
         // 再点一次**同一个**工具 = 收起它自己的设置条（假面板的用法，也是各家通例）。
         if (HasBand(idx))
         {
-            // "再点一次"判的是**当前工具**（不是"上带现在显示谁"）：
-            // 点过白板之后上带显示板色，但工具还是笔——这时点笔就是收起它，不是换内容。
-            // （假面板判的就是 `i == State.Tool`，我第一版按"上带显示谁"判，行为就对不上了。）
-            bool sameAsCurrentTool = idx == CellForTool(_host.State.Tool);
-            if (sameAsCurrentTool && _railPinned)
-            {
-                _railPinned = false;
-                _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
-                _rail.To(0f, Tokens.RailMs);
-                Invalidate();
-                return;                      // 收起时不再重复执行这一格的动作
-            }
+            // 设置条显示**这一格的设置**：点白板就看板色＋翻页，点橡皮就看整笔擦/面积擦。
+            //
+            // 这里以前还有一套"点一次钉住、再点同一个工具收起"的状态（照假面板抄的）。
+            // 2026-09-17 用户定了新的语义：**张不张开只看焦点在不在面板上**
+            // （见 RailHoverZone）。于是"再点一次收起"这一支必须删掉——
+            // 指针还停在面板上，收下去会立刻又张开，是两个规则打架。
+            // 指针一离开面板它自己就收（走 220 毫秒的退出延迟），不用老师再点一次。
             _bandCell = idx;
-            _railPinned = true;
+            _railEnterAtMs = double.NegativeInfinity;   // 已经在面板上了，不用再等开门那 120 毫秒
         }
 
         switch (idx)
@@ -1195,7 +1276,7 @@ public sealed class FullUi : IOverlayUi
                 _drawerOpen = !_drawerOpen;
                 _drawerHover = -1;
                 // 抽屉和色带抢同一块地方：开抽屉就把色带收掉（假面板同一条）
-                if (_drawerOpen) { _railPinned = false; _rail.To(0f, Tokens.RailMs); }
+                if (_drawerOpen) { _railHover = false; _rail.To(0f, Tokens.RailMs); }
                 break;
         }
         Invalidate();
@@ -1390,6 +1471,8 @@ public sealed class FullUi : IOverlayUi
         int n = BandSegmentCount;
         for (int i = 0; i < n; i++) DrawSegment(ctx, i, n, st);
 
+        if (BandHasSlider) DrawBandSlider(ctx, st);
+
         // 白板那一格右边显示"第 N 屏"——老师要有一点位置感（"我在第几屏"）
         if (_bandCell == 2)
         {
@@ -1414,46 +1497,56 @@ public sealed class FullUi : IOverlayUi
     private void DrawGroove(ID2D1DeviceContext ctx, in UiState st)
     {
         var panel = UnionRect();
+        // 2026-09-17：粗细滑条**搬进设置条**里了（见 SliderRect 的注释），
+        // 所以面板下沿不再需要"有滑条就画滑条、没滑条画踢脚线"这条分支——
+        // 现在**每格都画同一条踢脚线**：笔色 25% 的 2 像素细线。
+        // 它的作用只剩一个，但很实在：**让面板下沿永远有东西**，看着是块完整的板子。
         float inset = BarInset();
         float cy = panel.MaxY - 6f;
         float left = panel.MinX + inset;
         float w = panel.MaxX - inset - left;
         var ink = st.PaletteBase;
+        ctx.FillRoundedRectangle(
+            new RoundedRectangle(new Vortice.RawRectF(left, cy - 1f, left + w, cy + 1f), 1f, 1f),
+            Brush(ctx, new Color4(ink.R, ink.G, ink.B, 0.25f)));
+    }
 
-        if (!BandHasSlider)
-        {
-            ctx.FillRoundedRectangle(
-                new RoundedRectangle(new Vortice.RawRectF(left, cy - 1f, left + w, cy + 1f), 1f, 1f),
-                Brush(ctx, new Color4(ink.R, ink.G, ink.B, 0.25f)));
-            return;
-        }
-
-        float h = _sliderDragging ? 6f : 4f;
-        var rr = new RoundedRectangle(new Vortice.RawRectF(left, cy - h * 0.5f, left + w, cy + h * 0.5f),
-                                      h * 0.5f, h * 0.5f);
-        ctx.FillRoundedRectangle(rr, Brush(ctx, _dark ? Tokens.TrackDark : Tokens.TrackLight));
-
+    /// <summary>
+    /// 设置条右端的**粗细滑条**：底轨 ＋ 已选段（用当前颜色）＋ 滑钮 ＋ 右端一个
+    /// 跟着变大的笔尖预览（粗细一眼看得见，比数字直观）。
+    ///
+    /// 滑钮**一直画**、不再"只有拖动/悬停才浮出来"：设置条本来就只在
+    /// "焦点在面板上"时才出现（见 RailHoverZone），等于永远处在悬停态。
+    /// 只在拖动时才出现的话，老师会以为那是个静态的分隔符。
+    /// </summary>
+    private void DrawBandSlider(ID2D1DeviceContext ctx, in UiState st)
+    {
+        var box = SliderRect();
+        var (left, right) = SliderTrackRange();
+        float cy = (box.MinY + box.MaxY) * 0.5f;
         float t = SliderT(st);
-        if (t > 0.002f)
-        {
+        var ink = st.PaletteBase;
+
+        float h = _sliderDragging ? 6f : 5f;
+        ctx.FillRoundedRectangle(
+            new RoundedRectangle(new Vortice.RawRectF(left, cy - h * 0.5f, right, cy + h * 0.5f),
+                                 h * 0.5f, h * 0.5f),
+            Brush(ctx, _dark ? Tokens.TrackDark : Tokens.TrackLight));
+
+        float kx = left + (right - left) * t;
+        if (kx - left > 0.5f)
             ctx.FillRoundedRectangle(
-                new RoundedRectangle(new Vortice.RawRectF(left, cy - h * 0.5f, left + w * t, cy + h * 0.5f),
+                new RoundedRectangle(new Vortice.RawRectF(left, cy - h * 0.5f, kx, cy + h * 0.5f),
                                      h * 0.5f, h * 0.5f),
-                Brush(ctx, new Color4(ink.R, ink.G, ink.B, _sliderDragging ? 0.85f : 0.45f)));
-        }
+                Brush(ctx, new Color4(ink.R, ink.G, ink.B, _sliderDragging ? 0.85f : 0.55f)));
 
-        // 右端：笔尖预览（粗细一眼看得见，比数字直观）
-        float previewR = Math.Clamp(2f + t * 7f, 2f, 9f);
-        ctx.FillEllipse(new Ellipse(new Vector2(panel.MaxX - inset - 10f, cy), previewR, previewR),
+        ctx.FillEllipse(new Ellipse(new Vector2(kx, cy), 7f, 7f), Brush(ctx, Tokens.AccentInk));
+        ctx.DrawEllipse(new Ellipse(new Vector2(kx, cy), 7f, 7f),
+                        Brush(ctx, new Color4(0.19f, 0.20f, 0.24f, 1f)), 1f);
+
+        float pr = Math.Clamp(2f + t * 6.5f, 2f, 8.5f);
+        ctx.FillEllipse(new Ellipse(new Vector2(box.MaxX - SliderPreviewW * 0.5f - 2f, cy), pr, pr),
                         Brush(ctx, ink));
-
-        // 拖动时浮出滑钮
-        if (_sliderDragging || _railHover)
-        {
-            var c = new Vector2(left + w * t, cy);
-            ctx.FillEllipse(new Ellipse(c, 8f, 8f), Brush(ctx, Tokens.AccentInk));
-            ctx.DrawEllipse(new Ellipse(c, 8f, 8f), Brush(ctx, new Color4(0.19f, 0.20f, 0.24f, 1f)), 1f);
-        }
     }
 
     private bool IsSwatchActive(in UiState st, int i)
@@ -1754,22 +1847,41 @@ public sealed class FullUi : IOverlayUi
         // 用闪电之类的近义图标，老师看不出这是激光笔（假面板比过九个候选，选的是这个）。
         if (PerfSkipIcons) return;
         if (i == 5) IconAtlas.DrawLaser(ctx, r, Tokens.Icon, Brush(ctx, ink));
+        // 两种橡皮也是**自绘**的，而且**图标跟着当前是哪种橡皮变**：
+        // 整笔擦＝橡皮压着一条线；面积擦＝竖着的黄金比例矩形＋十字（和落点光标同形）。
+        // 一个按钮管两个工具，图标不跟着变的话，"现在到底在擦整条还是擦一块"只能看文字。
+        else if (i == 6) IconAtlas.DrawEraser(ctx, r, Tokens.Icon, Brush(ctx, ink), area: st.Tool == Tool.PixelEraser);
         else IconAtlas.DrawCentered(ctx, icon, r, Tokens.Icon, Brush(ctx, ink));
     }
 
-    private bool IsActive(int i, in UiState st) => i switch
+    /// <summary>
+    /// 这一格现在算不算"选中的"。
+    ///
+    /// **穿透和工具是互斥的**（用户 2026-09-17 定）：穿透开着的时候点击落到下层程序上，
+    /// 画布根本收不到笔。所以这时候工具格一律不高亮——不然会出现"鼠标"和"笔"同时亮着，
+    /// 老师以为在写字、写出来一个字都没有。
+    ///
+    /// 白板（2）是例外：它表示的是"板开着"这个事实，和能不能写字无关，穿透时照常显示。
+    /// 引擎那边配合着改了：**换工具会自动关掉穿透**（`InkEngine.SwitchTool`），
+    /// 所以点一下工具格就能立刻写字，不用先去点"鼠标"把它关掉。
+    /// </summary>
+    private bool IsActive(int i, in UiState st)
     {
-        1 => st.PassThrough,
-        2 => st.Board,
-        3 => st.Tool == Tool.Pen,
-        4 => st.Tool == Tool.Highlighter,
-        5 => st.Tool == Tool.Laser,
-        6 => st.Tool is Tool.Eraser or Tool.PixelEraser,
-        7 => st.Tool == Tool.Marquee,
-        8 => st.Tool is Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Arrow,
-        9 => st.Tool == Tool.Capture,
-        _ => false,
-    };
+        if (i == 1) return st.PassThrough;
+        if (i == 2) return st.Board;
+        if (st.PassThrough) return false;
+        return i switch
+        {
+            3 => st.Tool == Tool.Pen,
+            4 => st.Tool == Tool.Highlighter,
+            5 => st.Tool == Tool.Laser,
+            6 => st.Tool is Tool.Eraser or Tool.PixelEraser,
+            7 => st.Tool == Tool.Marquee,
+            8 => st.Tool is Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Arrow,
+            9 => st.Tool == Tool.Capture,
+            _ => false,
+        };
+    }
 
     /// <summary>
     /// 画刷按颜色缓存。**不能每帧重建**（性能账里点过名：几何与画刷都要缓存）。
@@ -1814,6 +1926,12 @@ public sealed class FullUi : IOverlayUi
     /// <summary>自检用：滑条的矩形。</summary>
     internal RectF SliderRectForTest => SliderRect();
 
+    /// <summary>
+    /// 自检用：滑条轨道的左右端（逻辑坐标）。自检要拖到**两端**去验
+    /// "这个工具的粗细真的走到了范围的端点"，所以必须拿到和绘制同一份的两个端点。
+    /// </summary>
+    internal (float Left, float Right) SliderTrackRangeForTest => SliderTrackRange();
+
     /// <summary>自检用：抽屉开着没有 / 它的矩形 / 第 i 行的矩形。</summary>
     internal bool DrawerOpenForTest => _drawerOpen;
     internal RectF DrawerRectForTest => DrawerRect();
@@ -1833,7 +1951,12 @@ public sealed class FullUi : IOverlayUi
     internal void OpenRailForTest() { _railHover = true; _rail.Jump(1f); }
 
     /// <summary>出图用：把上带掰到某一格（等价于点它一下，但不执行那一格的动作）。</summary>
-    internal void SelectBandCellForTest(int cell) { _bandCell = cell; _railPinned = true; }
+    internal void SelectBandCellForTest(int cell)
+    {
+        _bandCell = cell;
+        _railHover = true;      // 出图时假装"焦点就在面板上"
+        _rail.Jump(1f);
+    }
 
     /// <summary>自检用：这一档显示几格 / 现在是第几档 / 某一格钉着没有。</summary>
     internal int VisibleCountForTest => VisibleCells().Length;
@@ -1859,8 +1982,14 @@ public sealed class FullUi : IOverlayUi
     /// <summary>自检用：色线张开没有（false = 平时那条 6 像素的线）。</summary>
     internal bool RailOpenForTest => RailOpen;
 
-    /// <summary>自检用：色带是不是被"钉住展开"的（点工具之后应该钉住）。</summary>
-    internal bool RailPinnedForTest => _railPinned;
+    /// <summary>
+    /// 自检用：焦点还在不在面板上（设置条该不该开着看它）。
+    /// 旧的 `RailPinnedForTest` 随"点一次钉住"一起删掉了——那套状态已经不存在。
+    /// </summary>
+    internal bool RailHoverForTest => _railHover;
+
+    /// <summary>自检用：某一格这一刻算不算"选中的"（穿透与工具互斥那条靠它看）。</summary>
+    internal bool CellActiveForTest(int cell) => IsActive(cell, _host.State);
 
     /// <summary>自检用：上带这一刻多高（6 = 色线，34 = 完整设置条）。</summary>
     internal float BandHeightForTest => BandRect().MaxY - BandRect().MinY;

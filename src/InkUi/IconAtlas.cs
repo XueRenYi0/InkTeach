@@ -160,6 +160,63 @@ internal static class IconAtlas
     /// <summary>产品里用哪一个激光笔图标（改这一个数字就能换）。</summary>
     public const int LaserDefault = 2;
 
+    /// <summary>
+    /// **自绘的两种橡皮图标**（<paramref name="area"/> = 面积擦 / 像素橡皮）。
+    ///
+    /// 为什么不用 Fluent 的 Eraser（用户 2026-09-17："笔迹擦除的图标不合理"）：
+    /// 它是一块**斜着的圆角方块**，20 像素下读起来像个菱形 / 一片叶子，
+    /// 而且整笔擦和面积擦**用的是同一个图标**——两个行为完全不同的工具长得一模一样，
+    /// 老师只能靠上面的文字分。
+    ///
+    /// 现在两个分开画，各自的图形就是它**在屏幕上的样子**：
+    ///   · 整笔擦：一块橡皮压在一条线上，线**从橡皮底下钻出来**（碰到哪条就整条没了）；
+    ///   · 面积擦：**竖着的黄金比例矩形**＋中心十字＋一层淡填充——和落点光标
+    ///     （`Overlay.DrawEraserRectCursor`）是同一个形状，老师一眼对得上。
+    ///
+    /// 网格 24、线宽 1.8～2.6，和自绘的激光笔同一套手感。
+    /// </summary>
+    public static void DrawEraser(ID2D1DeviceContext ctx, RectF box, float size,
+                                 ID2D1Brush brush, bool area)
+    {
+        float cx = (box.MinX + box.MaxX) * 0.5f;
+        float cy = (box.MinY + box.MaxY) * 0.5f;
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(cx - size * 0.5f, cy - size * 0.5f)
+                      * saved;
+
+        if (area)
+        {
+            // **虚线框**（竖着的黄金比例矩形：9 × 14.6）。
+            //
+            // 第一版画的是"实线框＋中心十字"，出图一看**像个加号按钮**（12 像素宽的框
+            // 在 20 像素的按钮里几乎成了正方形，"＋"又最抢眼）。改成虚线框之后：
+            // 虚线是各家通用的"一块区域"的说法，和落点那个矩形是同一个意思，
+            // 也不会再和"加号/放大"混。
+            float hw = 4.5f, hh = 7.3f;
+            const float dl = 2.6f, gp = 2.1f, lw = 1.8f;
+            DashedLine(ctx, new Vector2(12f - hw, 12f - hh), new Vector2(12f + hw, 12f - hh), dl, gp, lw, brush);
+            DashedLine(ctx, new Vector2(12f + hw, 12f - hh), new Vector2(12f + hw, 12f + hh), dl, gp, lw, brush);
+            DashedLine(ctx, new Vector2(12f + hw, 12f + hh), new Vector2(12f - hw, 12f + hh), dl, gp, lw, brush);
+            DashedLine(ctx, new Vector2(12f - hw, 12f + hh), new Vector2(12f - hw, 12f - hh), dl, gp, lw, brush);
+        }
+        else
+        {
+            // 先画那条**笔画**（横着一条），再用**实心**橡皮块把它的左半截压住——
+            // 看起来就是"线从橡皮底下钻出来"，一眼明白"碰到就整条没了"。
+            //
+            // 橡皮用**实心**（不是描边）：20 像素的按钮里，描边的斜方块会糊成一圈线，
+            // 实心的块才读得出来"这是一块橡皮"（出图比过两版）。
+            // 线的起点故意留在方块**里面**（y=9.2 时方块占 x∈[10.3,13.4]），
+            // 不然会从方块左上角外面露出一小截，像线穿过去了。
+            ctx.DrawLine(new Vector2(11.0f, 9.2f), new Vector2(21.2f, 9.2f), brush, 2.6f, _round);
+            var body = EraserBody();
+            if (body != null) ctx.FillGeometry(body, brush);
+        }
+
+        ctx.Transform = saved;
+    }
+
     /// <summary>锥形光束那片半透明填充（建一次）。</summary>
     private static ID2D1PathGeometry Cone()
     {
@@ -175,5 +232,67 @@ internal static class IconAtlas
             sink.Close();
         }
         return _cone;
+    }
+
+    /// <summary>
+    /// 整笔橡皮那块**斜 42° 的实心方块**（24 网格里的一副固定坐标，建一次）。
+    /// 和 <see cref="Cone"/> 一样：自绘图标要填一块形状时用它，不每帧重建几何。
+    /// </summary>
+    private static ID2D1PathGeometry EraserBody()
+    {
+        if (_eraserBody != null) return _eraserBody;
+        if (_factory == null) return null;
+
+        var c = new Vector2(10.2f, 14.0f);
+        float r = -42f * MathF.PI / 180f;
+        var ax = new Vector2(MathF.Cos(r), MathF.Sin(r));   // 长轴（指向右上）
+        var pe = new Vector2(-ax.Y, ax.X);                   // 短轴
+        const float hl = 5.6f, hw = 3.5f;
+        var p1 = c + ax * hl + pe * hw;
+        var p2 = c + ax * hl - pe * hw;
+        var p3 = c - ax * hl - pe * hw;
+        var p4 = c - ax * hl + pe * hw;
+
+        var g = _factory.CreatePathGeometry();
+        using (var sink = g.Open())
+        {
+            // 画成**两块**，中间留一道 1.1 像素的缝——就是橡皮上那道"用到哪儿"的分界。
+            // 用"几何留缝"而不是"再画一条背景色的线"：图标底色可能是面板底、
+            // 也可能是选中态的强调色，背景色画不对就成了脏点；留缝是**真的透过去**，
+            // 两种底色下都对。
+            Quad(sink, ax, pe, hw, -hl, -hl * 0.30f);
+            Quad(sink, ax, pe, hw, -hl * 0.10f, hl);
+            sink.Close();
+        }
+        _eraserBody = g;
+        return _eraserBody;
+    }
+
+    /// <summary>往几何里加一块"长轴从 a 到 b、半宽 hw"的矩形（自绘图标拼形状用）。</summary>
+    private static void Quad(ID2D1GeometrySink sink, Vector2 ax, Vector2 pe, float hw, float a, float b)
+    {
+        var c0 = ax * a; var c1 = ax * b; var w = pe * hw;
+        sink.BeginFigure(c0 + w, FigureBegin.Filled);
+        sink.AddLine(c1 + w);
+        sink.AddLine(c1 - w);
+        sink.AddLine(c0 - w);
+        sink.EndFigure(FigureEnd.Closed);
+    }
+
+    private static ID2D1PathGeometry _eraserBody;
+
+    /// <summary>虚线：自绘图标画"一块区域"时用（面积橡皮）。圆头线头，比分段方头好看。</summary>
+    private static void DashedLine(ID2D1DeviceContext ctx, Vector2 a, Vector2 b,
+                                   float dash, float gap, float w, ID2D1Brush brush)
+    {
+        var d = b - a;
+        float len = d.Length();
+        if (len < 0.01f) return;
+        d /= len;
+        for (float s = 0f; s < len; s += dash + gap)
+        {
+            float e = MathF.Min(s + dash, len);
+            ctx.DrawLine(a + d * s, a + d * e, brush, w, _round);
+        }
     }
 }
