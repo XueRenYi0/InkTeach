@@ -64,7 +64,12 @@ internal static class InkSerializer
     ///   · v5：每条笔画多一个**锁定标记**（见 Stroke.Locked）。老文件（≤ v4）读进来
     ///         一律"不锁"，所以版本闸只往上抬、不需要迁移代码。
     /// </summary>
-    public const int FormatVersion = 5;
+    /// <summary>
+    /// v6（2026-09-17）：每一笔多了**页归属**——白板页号 `Page` ＋ 幻灯片身份 `SlideId`。
+    /// 见 [计划-白板与PPT-页逻辑.md]。老文件读进来是"没有页归属"（Page = -1），
+    /// 等价于"整张连续纸"，行为不变。
+    /// </summary>
+    public const int FormatVersion = 6;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -108,6 +113,11 @@ internal static class InkSerializer
         w.Write(s.Id);
         w.Write((byte)s.Tool);
         w.Write((byte)s.Kind);
+
+        // v6：页归属（白板页号 + 幻灯片身份）。放在最前面而不是结尾：以后再加字段时，
+        // "页"这种一定会有的东西排在前面更好读；读取端一律按 version 判断。
+        w.Write(s.Page);
+        w.Write(s.SlideId);
 
         w.Write(s.Color.R); w.Write(s.Color.G); w.Write(s.Color.B); w.Write(s.Color.A);
         w.Write(s.Width);
@@ -240,6 +250,14 @@ internal static class InkSerializer
             Tool = (Tool)r.ReadByte(),
             Kind = (StrokeKind)r.ReadByte(),
         };
+
+        // v6：页归属。老文件没有这两个字段 → Page 保持 -1（"没有页归属的连续纸"），
+        // SlideId 保持 0（不在幻灯片空间）。
+        if (version >= 6)
+        {
+            s.Page = r.ReadInt32();
+            s.SlideId = r.ReadInt64();
+        }
 
         s.Color = new Color4(r.ReadSingle(), r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
         s.Width = r.ReadSingle();

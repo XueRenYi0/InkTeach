@@ -1192,6 +1192,10 @@ public class InkEngine
     internal void RenderAll()
     {
         FrameCounter++;
+        // **当前页跟着相机走**：模型层需要一个"现在在第几页"的整数（新写的笔要标页、
+        // 撤销栈的每一步要记页），而它只该由一处告诉它——每帧同步一次，滚轮/翻页/
+        // 自动翻页/程序化跳页全都自动覆盖。
+        Doc.CurrentPage = CurrentPage;
         double frameStart = NowMs;
         double wall0 = _clock.Elapsed.TotalMilliseconds;
 
@@ -1734,8 +1738,12 @@ public class InkEngine
                     Tool = tool,
                     Color = tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
                     Width = (tool == Tool.Highlighter ? HighlighterWidthLogical
-                                                      : tool == Tool.Laser ? LaserWidthLogical
-                                                      : PenWidthLogical) * DpiScale,
+                                                     : tool == Tool.Laser ? LaserWidthLogical
+                                                     : PenWidthLogical) * DpiScale,
+                    // **起笔就标页**：这一笔属于"起笔时看着的那一页"。
+                    // 为什么按起点而不是按几何现算：笔画是可以跨页界的（"页之间不设墙"），
+                    // 跨界的那些必须有个确定的归属，"从哪儿开始写"是最符合直觉的那条规则。
+                    Page = CurrentPage,
                 };
                 // 起笔：预测器从这一刻开始积累；落笔这条消息里可能已经合并了几个采样点，
                 // 一起收进来（以前只取最新那一个）。
@@ -2826,16 +2834,7 @@ public class InkEngine
     {
         float want = ClampOffset(down ? ViewOffsetY - _virtualH : ViewOffsetY + _virtualH);
         if (Math.Abs(want - ViewOffsetY) < 1f) return false;
-
-        if (!ClientAreaAnimationOn)
-        {
-            ViewOffsetY = want;               // 系统关了动画就直接跳终态（老机器上是常事）
-            _dirty = true;
-            return true;
-        }
-        _camFrom = ViewOffsetY; _camTo = want; _camStartMs = NowMs; _camAnimating = true;
-        _dirty = true;
-        return true;
+        return AnimateCameraTo(want);
     }
 
     /// <summary>
@@ -2863,6 +2862,30 @@ public class InkEngine
 
     /// <summary>还能不能往上翻（到顶了就不行；往下永远可以——画布下面永远多一屏）。</summary>
     internal bool CanFlipPageUp => ViewOffsetY < -1f;
+
+    /// <summary>
+    /// **画布上某个 y 属于第几页**（白板空间，0 起）。一页 = 一个视口高，
+    /// 第一页的顶 = 虚拟桌面顶（和页界线、底纹共用同一个原点）。
+    ///
+    /// 页是"画布上的一段纵向区域"，所以它**永远是现算的**——不存任何"页表"，
+    /// 也没有"最多 101 页"这种硬顶（InkClass 有，见 计划-白板与PPT-页逻辑.md 第 1.4 节）。
+    /// </summary>
+    internal int PageOfCanvasY(float y)
+        => (int)MathF.Floor((y - PageTopCanvas) / PageHeightCanvas);
+
+    /// <summary>
+    /// **现在看着的是第几页**。取视口**中心**所在的页，而不是上边界：
+    /// 滚轮细滚到一半（上边界正好压在页界线上）时，"我在哪一页"应该跟着
+    /// 看得最多的那一片走，否则清空会清掉上一页。
+    /// </summary>
+    internal int CurrentPage
+    {
+        get
+        {
+            float top = PageTopCanvas - ViewOffsetY;        // 视口上沿在画布坐标里的位置
+            return PageOfCanvasY(top + PageHeightCanvas * 0.5f);
+        }
+    }
 
     /// <summary>
     /// "一页"在**画布坐标**里的高 = 一个视口高；第一页的顶 = 虚拟桌面顶。
@@ -3720,6 +3743,7 @@ public class InkEngine
     internal void UndoFromUi()
     {
         Doc.Undo();
+        FollowUndoPage();
         Laser.Clear();
         _dirty = true;
         NotifyUiStateChanged();
@@ -3728,13 +3752,71 @@ public class InkEngine
     internal void RedoFromUi()
     {
         Doc.Redo();
+        FollowUndoPage();
         _dirty = true;
         NotifyUiStateChanged();
     }
 
+    /// <summary>
+    /// **撤销跨页时自动翻回去**（页模型的行为之一）。
+    ///
+    /// 场景：老师在第 3 页按撤销，而撤销掉的是第 1 页写的那一笔——相机不跟过去，
+    /// 屏幕上就"什么都没变"（那一笔在第 1 页上回来了，可他看不见）。
+    /// 所以撤销/重做完看一眼"这一步发生在哪一页"，不在眼前就整屏翻过去。
+    ///
+    /// 只在**白板空间**做：幻灯片空间里翻页意味着换页，那是 PPT 说了算的
+    /// （见 调研-对接PPT.md），不能我们自己偷偷把老师的放映翻走。
+    /// </summary>
+    private void FollowUndoPage()
+    {
+        int p = Doc.LastActionPage;
+        if (p < 0 || p == CurrentPage) return;
+        if (Math.Abs(p - CurrentPage) > 200) return;      // 明显不合理的页号，别乱跳
+        GotoPage(p);
+    }
+
+    /// <summary>
+    /// 把相机**动画移到第 n 页**（和翻页同一套曲线、同一个时长）。
+    ///
+    /// **这里故意不走 <see cref="ClampOffset"/>**（踩过一次，记下来）：
+    /// 那个夹取是按"画布上**现在有多少内容**"算的，而"翻到第 N 页"是**明确的意图**——
+    /// 而且经常正好发生在内容刚变的那一刻（撤销把第 3 页那笔撤没了，内容范围立刻缩回去，
+    /// 于是想去第 3 页却被夹在第 2 页；自检里就是这么被抓到的：撤销后停在第 2 页）。
+    /// 允许停在"暂时没有内容的页"没问题：老师看到的就是那一页（空的），
+    /// 下一次滚轮/翻页又会照常按内容夹回来。只有"第 1 页之上"确实没有东西，那个上限保留。
+    /// </summary>
+    internal bool GotoPage(int page)
+    {
+        float want = PageTopCanvas - page * PageHeightCanvas;
+        if (want > 0f) want = 0f;
+        if (Math.Abs(want - ViewOffsetY) < 1f) return false;
+        return AnimateCameraTo(want);
+    }
+
+    private bool AnimateCameraTo(float want)
+    {
+        if (!ClientAreaAnimationOn)
+        {
+            ViewOffsetY = want;               // 系统关了动画就直接跳终态（老机器上是常事）
+            _dirty = true;
+            return true;
+        }
+        _camFrom = ViewOffsetY; _camTo = want; _camStartMs = NowMs; _camAnimating = true;
+        _dirty = true;
+        return true;
+    }
+
     internal void ClearFromUi()
     {
-        Doc.Clear();
+        Doc.CurrentPage = CurrentPage;      // 保险：提交那一步要知道它在哪一页
+        // **只清当前这一页**（页模型带来的行为改动，2026-09-17）。
+        // 老师在第 5 页讲完一题点清空，前面四页的板书原样留着——这是"分页"最实在的好处，
+        // 也是 InkClass 那些用户真正在用的行为。清空**不回第 1 页**（用户点过头的默认：
+        // "在第 12 页清空就还在第 12 页接着写"）。
+        int cleared = Doc.ClearPage(CurrentPage);
+        Console.WriteLine(cleared > 0
+            ? $"清空：只清第 {CurrentPage + 1} 页（{cleared} 个对象），其余页没动"
+            : $"清空：第 {CurrentPage + 1} 页本来就是空的");
         Laser.Clear();
         _dirty = true;
         NotifyUiStateChanged();

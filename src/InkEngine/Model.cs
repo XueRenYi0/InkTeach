@@ -195,6 +195,28 @@ internal sealed class Stroke
     /// </summary>
     public bool Locked;
 
+    /// <summary>
+    /// **这一笔属于哪一页**（2026-09-17 起的"页模型"，见
+    /// [计划-白板与PPT-页逻辑.md] 第 4 节）：
+    ///   · 白板空间：= 白板页号（0 起，`画布 y ÷ 一页高`）；**-1 = 还没标**
+    ///     （老文件、或者不属于任何一页的东西）；
+    ///   · 幻灯片空间：= 该页在放映里的位置，**只用于显示**——身份看 <see cref="SlideId"/>。
+    ///
+    /// 为什么要有它（而不是每次现算几何）：① "清空只清这一页"要能一眼问出
+    /// "哪些属于这一页"；② PPT 那一半的页身份**不是几何**（是 SlideID），
+    /// 现算根本算不出来。
+    /// </summary>
+    public int Page = -1;
+
+    /// <summary>
+    /// 幻灯片空间的**页身份**：PowerPoint 的 `Slide.SlideID`（0 = 不在幻灯片空间）。
+    ///
+    /// 为什么不用页号当身份：**在 PPT 里调换两页顺序，SlideID 不变、页号会变**。
+    /// 用页号当身份，批注就会跟着错位——那是 InkClass 的坑（它那个 `previousSlideID`
+    /// 变量名里写着 ID，存的其实是页号），见 [调研-对接PPT.md] 第二节。
+    /// </summary>
+    public long SlideId;
+
     public ID2D1Geometry Geometry;
 
     /// <summary>
@@ -1118,6 +1140,15 @@ internal abstract class EditAction
     /// <summary>改动**之后**占哪块。</summary>
     public virtual RectF AffectedAfter => RectF.Empty;
 
+    /// <summary>
+    /// 这一步改动**发生在哪一页**（-1 = 不知道）。
+    ///
+    /// 用处只有一个，但很实在：**撤销跨页时自动把相机翻回去**——老师在第 3 页撤到第 1 页
+    /// 写的那一笔，画面得跟过去，否则"撤销了但眼前什么都没变"。
+    /// 在 <see cref="InkDocument.Commit"/> 里按"提交时所在的那页"填一次。
+    /// </summary>
+    public int Page = -1;
+
     /// <summary>要重绘的区域 = 两者并集。旧位置要擦、新位置要画，缺一个就留残影。</summary>
     public RectF AffectedUnion
     {
@@ -1382,6 +1413,29 @@ internal sealed class ClearAction : EditAction
     public override int HeldStrokes => Removed.Count;
     public override void Undo(InkDocument doc) { foreach (var s in Removed) doc.AppendStroke(s); }
     public override void Redo(InkDocument doc) { doc.ClearStrokes(); }
+    public override RectF AffectedBefore => EditRegion.Of(Removed);
+}
+
+/// <summary>
+/// **清空当前这一页**（2026-09-17 页模型带来的行为改动）。
+///
+/// 为什么单开一个动作、不重用 <see cref="ClearAction"/>：那个的 Redo 是
+/// `doc.ClearStrokes()`（全清），一页的撤销要是走到它，重做会把**别的页也清掉**。
+///
+/// 语义：只删"归属 = 这一页"的对象。老师讲完一题点清空，其余几页原样留着。
+/// </summary>
+internal sealed class ClearPageAction : EditAction
+{
+    public readonly List<Stroke> Removed = new();
+    /// <summary>清的是哪一页（注意别和基类的 `Page` = "这一步发生在哪一页" 混了，
+    /// 所以这里叫 TargetPage）。</summary>
+    public readonly int TargetPage;
+
+    public ClearPageAction(int page) { TargetPage = page; }
+
+    public override int HeldStrokes => Removed.Count;
+    public override void Undo(InkDocument doc) { foreach (var s in Removed) doc.AppendStroke(s); }
+    public override void Redo(InkDocument doc) { foreach (var s in Removed) doc.RemoveStroke(s); }
     public override RectF AffectedBefore => EditRegion.Of(Removed);
 }
 
@@ -1766,6 +1820,8 @@ internal sealed class InkDocument
 
     private void Commit(EditAction action)
     {
+        // 记下"这一步发生在哪一页"：撤销跨页时相机要能自己翻回去（见 EditAction.Page）。
+        if (action.Page < 0) action.Page = CurrentPage;
         _undo.Add(action);
         TrimUndo();
         _redo.Clear();
@@ -2020,8 +2076,25 @@ internal sealed class InkDocument
         _redo.Clear();
     }
 
+    /// <summary>
+    /// **当前页**（白板空间，0 起）。由引擎按相机位置维护——模型层不该知道
+    /// "一页有多高"这种设备相关的事，所以它只是个可以被赋值的数字。
+    ///
+    /// 新写的一笔在起笔时就标上这个页号（见 `Engine.OnPointerDown`）；
+    /// 撤销栈每一步也记它（见 <see cref="EditAction.Page"/>）。
+    /// </summary>
+    public int CurrentPage;
+
+    /// <summary>刚撤销/重做的那一步发生在哪一页（-1 = 不知道）——相机靠它自动翻过去。</summary>
+    public int LastActionPage = -1;
+
     public void AddStroke(Stroke s)
     {
+        // **没标过页的一律补上当前页**（这一处是"新内容进文档"的漏斗）：
+        // 画笔那条路在起笔时就标好了（按"从哪一页开始写"），而粘贴、插图、
+        // 截屏插入这些路径没有"起笔"这个动作——漏了它们，"清空本页"就清不掉
+        // 那些东西（自检里就是这么露出来的）。
+        if (s.Page < 0) s.Page = CurrentPage;
         var act = new AddStrokesAction();
         act.Strokes.Add(s);
         AppendStroke(s);
@@ -2086,6 +2159,7 @@ internal sealed class InkDocument
         if (_undo.Count == 0) return false;
         var a = _undo[^1];
         _undo.RemoveAt(_undo.Count - 1);
+        LastActionPage = a.Page;          // 相机要不要翻过去，看它（见 EditAction.Page）
 
         // 撤销也要把自己动过的那块标脏——**和 Commit 用同一句话**，理由一样：
         // 命令自己报告"我动了哪块区域"，漏标就是屏幕上留着撤销前的画面
@@ -2108,6 +2182,7 @@ internal sealed class InkDocument
         if (_redo.Count == 0) return false;
         var a = _redo[^1];
         _redo.RemoveAt(_redo.Count - 1);
+        LastActionPage = a.Page;
         a.Redo(this);
         Dirty.Add(a.AffectedUnion);      // 同 Undo：重做同样要把那块重画
         _undo.Add(a);
@@ -2122,6 +2197,20 @@ internal sealed class InkDocument
         act.Removed.AddRange(Strokes);
         ClearStrokes();
         Commit(act);
+    }
+
+    /// <summary>
+    /// **只清这一页**（页模型的核心好处：讲完一题清一屏，不毁整节课的板书）。
+    /// 返回清掉了几个对象。
+    /// </summary>
+    public int ClearPage(int page)
+    {
+        var act = new ClearPageAction(page);
+        foreach (var s in Strokes) if (s.Page == page) act.Removed.Add(s);
+        if (act.Removed.Count == 0) return 0;
+        foreach (var s in act.Removed) RemoveStroke(s);
+        Commit(act);
+        return act.Removed.Count;
     }
 
     public int EraseAt(float x, float y, float radius)

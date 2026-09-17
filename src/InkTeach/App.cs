@@ -1653,6 +1653,107 @@ internal sealed class App : InkEngine.InkEngine
                   $"笔画 {Doc.Strokes.Count}");
         }
 
+        // ---- ⑨ **页模型**：归属 / 清空只清本页 / 撤销跨页自动翻回去（2026-09-17）----
+        //
+        // 这一段的取向写在 计划-白板与PPT-页逻辑.md 第四节：**一份文档 + 对象带页归属 +
+        // 一条全局撤销栈**，切页只动相机（O(1)），不像 InkClass 那样"切页 = 清空 +
+        // 重放历史 + 清掉撤销栈"。
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            GotoPage(0);
+            SettleFrames(300);
+            Check("回到第 1 页时 CurrentPage = 0", CurrentPage == 0, $"CurrentPage = {CurrentPage}");
+
+            // 三页各写一笔。走的是"起笔时按当前页标页"这条真规则。
+            var made = new List<Stroke>();
+            for (int pg = 0; pg < 3; pg++)
+            {
+                GotoPage(pg);
+                SettleFrames(320);
+                var s = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = new Color4(0.1f, 0.1f, 0.1f, 1f), Width = 8f,
+                    Page = CurrentPage,                       // 引擎在起笔那一刻就是这么标的
+                };
+                float y = PageTopCanvas + pg * PageHeightCanvas + 300f;
+                for (int i = 0; i <= 20; i++) s.AddPoint(_virtualX + 300f + i * 40f, y, 1f, i * 8);
+                Doc.AddStroke(s);
+                made.Add(s);
+            }
+            Check("三页各一笔、页归属分别是 0/1/2",
+                  made[0].Page == 0 && made[1].Page == 1 && made[2].Page == 2,
+                  $"{made[0].Page}/{made[1].Page}/{made[2].Page}");
+            Check("页号跟着相机走（此刻在第 3 页）", CurrentPage == 2, $"CurrentPage = {CurrentPage}");
+            // 每笔落在**自己那一页的带子里**（归属不是拍脑袋标的，和几何也对得上）
+            Check("归属和几何对得上（起点落在本页的纵向带里）",
+                  PageOfCanvasY(made[0].Points[0].Y) == 0 && PageOfCanvasY(made[1].Points[0].Y) == 1
+                  && PageOfCanvasY(made[2].Points[0].Y) == 2,
+                  $"{PageOfCanvasY(made[0].Points[0].Y)}/{PageOfCanvasY(made[1].Points[0].Y)}"
+                  + $"/{PageOfCanvasY(made[2].Points[0].Y)}");
+
+            // 清空 = **只清这一页**
+            ClearFromUi();
+            SettleFrames(200);
+            Check("清空只清当前页（第 3 页），前两页原样留着",
+                  Doc.Strokes.Count == 2 && !Doc.Strokes.Contains(made[2])
+                  && Doc.Strokes.Contains(made[0]) && Doc.Strokes.Contains(made[1]),
+                  $"剩 {Doc.Strokes.Count} 笔");
+            Check("清空之后留在原地（不回第 1 页）", CurrentPage == 2, $"CurrentPage = {CurrentPage}");
+
+            // 撤销：被清掉的那一笔回来
+            UndoFromUi();
+            SettleFrames(250);
+            Check("撤销清空：第 3 页那一笔回来了、其余页没受影响",
+                  Doc.Strokes.Count == 3 && Doc.Strokes.Contains(made[2]),
+                  $"现在 {Doc.Strokes.Count} 笔");
+
+            // **撤销跨页自动翻回去**。
+            //
+            // 用"在第 3 页删掉一笔"当场景，而不是"撤销第 3 页那次落笔"：
+            // 相机**只能滚到有内容的地方**（`ClampOffset` 按画布内容范围夹），
+            // 撤销一次落笔会让第 3 页变空、于是根本滚不过去——那不算 bug，
+            // 但用那个场景验不出"相机会不会自己翻过去"。删除则相反：撤销之后
+            // 第 3 页又有内容了，正好验"相机跟到那一页、那一笔又看得见"。
+            GotoPage(2);
+            SettleFrames(320);
+            Doc.Selected.Clear();
+            Doc.Selected.Add(made[2]);
+            Doc.DeleteSelected();
+            SettleFrames(200);
+            Check("在第 3 页删掉一笔（这一步发生在第 3 页）",
+                  Doc.Strokes.Count == 2 && !Doc.Strokes.Contains(made[2]),
+                  $"剩 {Doc.Strokes.Count} 笔");
+
+            GotoPage(0);
+            SettleFrames(350);
+            Check("先回到第 1 页", CurrentPage == 0, $"CurrentPage = {CurrentPage}");
+            UndoFromUi();
+            SettleFrames(500);
+            Check("撤销跨页：相机自己翻到那一页（不然屏幕上什么都没变）",
+                  CurrentPage == 2, $"撤销后停在 CurrentPage = {CurrentPage}");
+            Check("撤销跨页：那一笔回来了、还在它的那一页",
+                  Doc.Strokes.Contains(made[2]) && made[2].Page == 2,
+                  $"剩 {Doc.Strokes.Count} 笔，Page = {made[2].Page}");
+            RedoFromUi();
+            SettleFrames(450);
+            Check("重做：又删掉了，而且相机仍在第 3 页",
+                  !Doc.Strokes.Contains(made[2]) && CurrentPage == 2,
+                  $"剩 {Doc.Strokes.Count} 笔，CurrentPage = {CurrentPage}");
+            UndoFromUi();               // 复原，后面存档那一条要三笔齐
+            SettleFrames(450);
+
+            // 存盘往返：**页归属要跟着存**（不然重开就全糊成一页了）
+            var blob = InkSerializer.Save(Doc);
+            var back = new InkDocument();
+            InkSerializer.LoadInto(back, blob);
+            var pages = back.Strokes.Select(s => s.Page).OrderBy(v => v).ToArray();
+            Check("存档带上页归属（读回来还是那几页）",
+                  pages.Length == 3 && pages[0] == 0 && pages[1] == 1 && pages[2] == 2,
+                  "读回页号 " + string.Join("/", pages));
+        }
+
         Doc.Clear();
         Doc.ClearHistory();
         ViewOffsetY = 0f;
