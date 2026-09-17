@@ -86,6 +86,8 @@ internal sealed class UiHost : IUiHost, IEngineCommands
 
     public void SetBoardPattern(int pattern, float stepLogical)
         => _engine.SetBoardPatternFromUi(pattern, stepLogical);
+
+    public void SetCaptureHideInk(bool hideInk) => _engine.SetCaptureHideInkFromUi(hideInk);
     public void Restart() => _engine.RestartFromUi();
     public void Quit() => _engine.QuitFromUi();
 

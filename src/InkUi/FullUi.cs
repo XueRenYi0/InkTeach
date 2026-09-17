@@ -604,8 +604,10 @@ public sealed class FullUi : IOverlayUi
     /// <summary>
     /// 上带里有几段。白板那一格是 5 段：**[上一屏] [白][绿][黑] [下一屏]**
     /// ——翻屏和板色是同一类事（都属于"这块板怎么摆"），放一行最顺手。
+    /// 截图那一格是 2 段：**[直接截取][隐藏批注截取]**（照 InkClass 的两项菜单，
+    /// 也照我们假面板里定的那两段）。
     /// </summary>
-    private int BandSegmentCount => _bandCell switch { 2 => 5, 6 => 2, 7 => 2, 8 => 4, _ => 0 };
+    private int BandSegmentCount => _bandCell switch { 2 => 5, 6 => 2, 7 => 2, 8 => 4, 9 => 2, _ => 0 };
 
     /// <summary>这个工具的粗细范围。**界面管范围，引擎管钳位**——引擎那边是 0.5～64。</summary>
     private (float Min, float Max) WidthRange(Tool tool) => tool switch
@@ -1014,6 +1016,11 @@ public sealed class FullUi : IOverlayUi
                 {
                     0 => Tool.Line, 1 => Tool.Rectangle, 2 => Tool.Ellipse, _ => Tool.Arrow,
                 });
+                break;
+            case 9:                       // 截图：直接截取 / 隐藏批注截取
+                // 照 InkClass 的两项菜单：默认"隐藏批注截取"（只拍下层内容），
+                // "直接截取"连板书一起拍。
+                _host.Commands.SetCaptureHideInk(i == 1);
                 break;
         }
     }
@@ -1645,7 +1652,7 @@ public sealed class FullUi : IOverlayUi
     }
 
     /// <summary>哪些格子有上带。没有的（后撤/重做/更多/截屏）点了不长出一条空带子。</summary>
-    private static bool HasBand(int cell) => cell is 2 or 3 or 4 or 5 or 6 or 7 or 8;
+    private static bool HasBand(int cell) => cell is 2 or 3 or 4 or 5 or 6 or 7 or 8 or 9;
 
     /// <summary>当前工具对应的格子——键盘换工具时用它把上带掰回来。</summary>
     private static int CellForTool(Tool t) => t switch
@@ -1941,6 +1948,8 @@ public sealed class FullUi : IOverlayUi
                 {
                     Tool.Line => 0, Tool.Rectangle => 1, Tool.Ellipse => 2, Tool.Arrow => 3, _ => -1,
                 };
+            case 9:
+                return st.CaptureHideInk ? 1 : 0;      // 0 = 直接截取，1 = 隐藏批注截取
             default:
                 return -1;
         }
@@ -2041,6 +2050,7 @@ public sealed class FullUi : IOverlayUi
     {
         6 => i == 0 ? "整笔擦" : "面积擦",
         7 => i == 0 ? "矩形" : "套索",
+        9 => i == 0 ? "直接截取" : "隐藏批注截取",
         8 => "",                                   // 图形：画图标（见 ShapeIcon）
         _ => "",
     };
@@ -2054,6 +2064,7 @@ public sealed class FullUi : IOverlayUi
              {
                  0 => Tool.Line, 1 => Tool.Rectangle, 2 => Tool.Ellipse, _ => Tool.Arrow,
              }),
+        9 => i == (st.CaptureHideInk ? 1 : 0),     // 截图：当前是哪一种截法就高亮哪一段
         _ => false,
     };
 

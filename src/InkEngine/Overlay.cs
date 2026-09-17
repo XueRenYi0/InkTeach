@@ -2637,7 +2637,8 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private void DrawCaptureRect(InkEngine app)
     {
-        if (!app.CaptureActive) return;
+        // 抓屏那一瞬不画框（"直接截取"要把板书留下、把框藏掉）
+        if (!app.CaptureActive || app.CaptureFrameHidden) return;
         var r = new Vortice.RawRectF(app.CapMinX, app.CapMinY, app.CapMaxX, app.CapMaxY);
         var accent = new Color4(1f, 0.68f, 0.10f, 1f);      // 琥珀
 

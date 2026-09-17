@@ -179,6 +179,13 @@ public interface IEngineCommands
     /// </summary>
     void SetBoardPattern(int pattern, float stepLogical);
 
+    /// <summary>
+    /// 截图模式：<paramref name="hideInk"/> true = **隐藏批注截取**（抓之前把覆盖层藏起来，
+    /// 拍到的只有下层内容）；false = **直接截取**（连板书一起拍，只把取景框藏掉）。
+    /// 参考 InkClass 的两项菜单（快速截图 / 隐藏界面截图）。
+    /// </summary>
+    void SetCaptureHideInk(bool hideInk);
+
     /// <summary>框选工具下的选择方式：矩形框（碰到墨就选中）／自由套索（圈住 80% 才选中）。</summary>
     void SetSelectMode(SelectMode mode);
 
@@ -297,6 +304,8 @@ public readonly struct UiState
     public int BoardPattern { get; init; }
     /// <summary>底纹间距（逻辑像素）。</summary>
     public float BoardPatternStep { get; init; }
+    /// <summary>截图模式：true = 隐藏批注截取（只有下层内容），false = 直接截取（连板书一起拍）。</summary>
+    public bool CaptureHideInk { get; init; }
     /// <summary>框选的选择方式（界面用它高亮"矩形/套索"那一格）。</summary>
     public SelectMode SelectMode { get; init; }
     /// <summary>现在在第几屏（1 起）。界面用它显示"第 N 屏"。</summary>

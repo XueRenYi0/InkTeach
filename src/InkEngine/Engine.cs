@@ -143,6 +143,21 @@ public class InkEngine
     internal bool CaptureActive;
     internal float CapMinX, CapMinY, CapMaxX, CapMaxY;
 
+    /// <summary>
+    /// 截图模式（用户 2026-09-17 要的"对接"，参考 InkClass 的两项菜单）：
+    ///   · **true = 隐藏批注截取**（默认，也是原来的行为）：抓之前把整个覆盖层藏起来，
+    ///     拍到的只有下层内容——批注、白板、面板一概不入镜；
+    ///   · **false = 直接截取**：**连板书一起拍**（老师想把"PPT + 我写的批注"一起给别人，
+    ///     或者把自己写的解题过程做成一张图）。
+    ///
+    /// 直接截取时**取景框本身**还是要藏掉（不然那个琥珀色框会拍进图里）——
+    /// 见 <see cref="CaptureFrameHidden"/>。
+    /// </summary>
+    internal bool CaptureHideInk = true;
+
+    /// <summary>这一帧不画取景框（只在"直接截取"抓屏的那一瞬为真）。</summary>
+    internal bool CaptureFrameHidden;
+
     // ---- 白板底纹（方格 / 横线）--------------------------------------------
     //
     // 用户 2026-09-17 要的："给白板增加网格和横线功能，可以参[考]inkclass 的实现"。
@@ -175,6 +190,13 @@ public class InkEngine
         // 和换板色一样：底纹是**画进分块缓存**的，所以所有块都过期了
         Doc.InvalidateAll();
         _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    internal void SetCaptureHideInkFromUi(bool hideInk)
+    {
+        if (CaptureHideInk == hideInk) return;
+        CaptureHideInk = hideInk;
         NotifyUiStateChanged();
     }
 
@@ -1873,6 +1895,32 @@ public class InkEngine
     /// <summary>截图落地的位置：**视口左上角**往里缩一点（见 CaptureMargin 的注释）。</summary>
     internal const float CaptureMarginLogical = 24f;
 
+    /// <summary>
+    /// "直接截取"抓屏期间：**藏掉取景框、但保留板书**。用 using 包起来，
+    /// 异常路径也不会把框永久藏掉（藏着的框=看不见自己画到哪儿，会以为软件坏了）。
+    /// </summary>
+    private IDisposable HiddenCaptureFrame()
+    {
+        CaptureFrameHidden = true;
+        _dirty = true;
+        RenderAll();                 // 先把自己这一帧重画成"没有框"的样子
+        Native.DwmFlush();           // 等合成器贴上去，再抓
+        System.Threading.Thread.Sleep(60);
+        Native.DwmFlush();
+        return new CaptureFrameRestore(this);
+    }
+
+    private sealed class CaptureFrameRestore : IDisposable
+    {
+        private readonly InkEngine _e;
+        public CaptureFrameRestore(InkEngine e) => _e = e;
+        public void Dispose()
+        {
+            _e.CaptureFrameHidden = false;
+            _e._dirty = true;
+        }
+    }
+
     private void EndCapture()
     {
         CaptureActive = false;
@@ -1893,8 +1941,22 @@ public class InkEngine
         }
 
         byte[] pixels;
-        using (ScreenCapture.HiddenOverlay(OverlayHandles()))
-            pixels = ScreenCapture.Grab(x, y, w, h);
+        if (CaptureHideInk)
+        {
+            // 隐藏批注截取（默认）：整个覆盖层藏起来，拍到的只有下层内容
+            using (ScreenCapture.HiddenOverlay(OverlayHandles()))
+                pixels = ScreenCapture.Grab(x, y, w, h);
+        }
+        else
+        {
+            // **直接截取**：连板书一起拍，只把取景框藏掉。
+            //
+            // 框是我们自己画的（浮动层），所以不用藏窗口、也不用等合成器撤窗口——
+            // 重画一帧就没了。等一拍再抓，是为了让合成器把这一帧真的贴上去
+            // （和 HiddenOverlay 那边同一个道理，只是这里只有一帧的事）。
+            using (HiddenCaptureFrame())
+                pixels = ScreenCapture.Grab(x, y, w, h);
+        }
 
         // 窗口藏过又显示，后缓冲里的内容是旧的：整层作废重画，
         // 否则屏幕上会留下一块擦不掉的残影。
@@ -3346,6 +3408,7 @@ public class InkEngine
         BoardColor = BoardColor,
         BoardPattern = BoardPattern,
         BoardPatternStep = BoardPatternStepLogical,
+        CaptureHideInk = CaptureHideInk,
         SelectMode = SelMode,
         ScreenIndex = ScreenIndex,
         CanFlipPageUp = CanFlipPageUp,

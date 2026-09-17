@@ -6431,6 +6431,31 @@ internal sealed class App : InkEngine.InkEngine
             Check("点「截屏」真的切到截图工具", Tool == Tool.Capture, $"工具 = {Tool}");
             Check("截屏那一格亮起来（点了有反馈）", ui.CellActiveForTest(9),
                   $"截屏格高亮 = {ui.CellActiveForTest(9)}");
+
+            // 截图那一格现在也长设置条了：**[直接截取][隐藏批注截取]**（照 InkClass 的两项菜单）
+            var capBar = ui.BarRectForTest;
+            SendMouse((int)((capBar.MinX + capBar.MaxX) * 0.5f * DpiScale),
+                      (int)((capBar.MinY + capBar.MaxY) * 0.5f * DpiScale), 0);
+            SettleFrames(400);
+            var segDirect = ui.SegmentRectForTest(0);
+            var segHidden = ui.SegmentRectForTest(1);
+            Check("截屏那一格有两条设置（0 宽 = 没接上）",
+                  segDirect.MaxX - segDirect.MinX > 20f && segHidden.MinX > segDirect.MaxX - 1f,
+                  $"段宽 {segDirect.MaxX - segDirect.MinX:F0}，第二段起点 {segHidden.MinX:F0}");
+
+            ClickPhysical((segDirect.MinX + segDirect.MaxX) * 0.5f * DpiScale,
+                          (segDirect.MinY + segDirect.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("点「直接截取」→ hideInk = false",
+                  !Host.State.CaptureHideInk, $"hideInk = {Host.State.CaptureHideInk}");
+
+            segHidden = ui.SegmentRectForTest(1);
+            ClickPhysical((segHidden.MinX + segHidden.MaxX) * 0.5f * DpiScale,
+                          (segHidden.MinY + segHidden.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("点「隐藏批注截取」→ hideInk = true",
+                  Host.State.CaptureHideInk, $"hideInk = {Host.State.CaptureHideInk}");
+
             Host.Commands.SetTool(Tool.Pen);
             SettleFrames(150);
         }
@@ -10609,20 +10634,25 @@ internal sealed class App : InkEngine.InkEngine
         int onScreenInk = ScreenProbe.CountMagenta((int)(cx - 200), (int)(cy - 120), 400, 260);
         Check("准备：框里已经有一片墨", onScreenInk > 5000, $"{onScreenInk} 像素");
 
-        // 换截图工具，拖一个 300×200 的框
+        // 换截图工具，拖一个 300×200 的框（两种模式各抓一次，所以抽成函数）
         Tool = Tool.Capture;
         int x0 = (int)(cx - 150), y0 = (int)(cy - 100);
         int x1 = (int)(cx + 150), y1 = (int)(cy + 100);
-        SendMouse(x0, y0, 0);
-        SettleFrames(40);
-        SendMouse(x0, y0, Native.MOUSEEVENTF_LEFTDOWN);
-        SettleFrames(60);
-        SendMouse((x0 + x1) / 2, y0 + 20, 0);
-        SettleFrames(40);
-        SendMouse(x1, y1, 0);
-        SettleFrames(60);
-        SendMouse(x1, y1, Native.MOUSEEVENTF_LEFTUP);
-        SettleFrames(900);                     // 截图里含一次"藏窗口 + 抓屏 + 显示"
+        void DragCapture()
+        {
+            Tool = Tool.Capture;
+            SendMouse(x0, y0, 0);
+            SettleFrames(40);
+            SendMouse(x0, y0, Native.MOUSEEVENTF_LEFTDOWN);
+            SettleFrames(60);
+            SendMouse((x0 + x1) / 2, y0 + 20, 0);
+            SettleFrames(40);
+            SendMouse(x1, y1, 0);
+            SettleFrames(60);
+            SendMouse(x1, y1, Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(900);                 // 截图里含一次"藏窗口 / 藏框 + 抓屏 + 恢复"
+        }
+        DragCapture();
 
         var shot = Doc.Strokes.FindLast(s => s.IsImage);
         Check("截图：生成了图像对象", shot != null, shot == null ? "没有" : $"{shot.Image.Width}×{shot.Image.Height} 物理像素");
@@ -10668,6 +10698,45 @@ internal sealed class App : InkEngine.InkEngine
         int afterInk = ScreenProbe.CountMagenta((int)(cx - 200), (int)(cy - 120), 400, 260);
         Check("截图后屏幕恢复正常（批注还在，没有残影）", afterInk > 5000,
               $"截前 {onScreenInk} 像素，截后 {afterInk} 像素");
+
+        // ---- ② 第二种模式：**直接截取**（连板书一起拍）----
+        //
+        // 用户 2026-09-17："截图功能是不是也应该对接了，也可以参考 inkclass"。
+        // InkClass 给的是两项菜单（快速截图 / 隐藏界面截图），我们把这两项放进
+        // **截图那一格的上带**：[直接截取][隐藏批注截取]（照我们假面板里定的那两段）。
+        Host.Commands.SetCaptureHideInk(false);
+        SettleFrames(250);
+        Check("模式切到「直接截取」", !Host.State.CaptureHideInk,
+              $"hideInk = {Host.State.CaptureHideInk}");
+
+        DragCapture();
+        var shot2 = Doc.Strokes.FindLast(s => s.IsImage);
+        Check("直接截取：又生成了一个图像对象", shot2 != null && !ReferenceEquals(shot2, shot),
+              shot2 == null ? "没有" : $"{shot2.Image.Width}×{shot2.Image.Height}");
+        if (shot2 != null)
+        {
+            var q = shot2.Image.Bgra;
+            int ink2 = 0, frame = 0;
+            for (int y = 0; y < shot2.Image.Height; y++)
+                for (int x = 0; x < shot2.Image.Width; x++)
+                {
+                    int i = (y * shot2.Image.Width + x) * 4;
+                    byte b = q[i], g = q[i + 1], r = q[i + 2];
+                    if (r > 200 && g < 90 && b > 200) ink2++;                       // 品红 = 板书
+                    // 取景框是琥珀色（1, 0.68, 0.10）：只查图片最外 3 像素那一圈——
+                    // 框就画在抓取矩形的边上，真被拍进去必然落在这里
+                    if ((x < 3 || y < 3 || x >= shot2.Image.Width - 3 || y >= shot2.Image.Height - 3)
+                        && r > 200 && g > 140 && g < 215 && b < 90) frame++;
+                }
+            Check("直接截取：**板书在图里**（品红 > 2000）", ink2 > 2000, $"{ink2} 像素");
+            Check("直接截取：取景框没被拍进去（最外一圈没有琥珀色）", frame == 0, $"{frame} 像素");
+        }
+
+        // 收尾：模式还原成默认的"隐藏批注截取"
+        Host.Commands.SetCaptureHideInk(true);
+        SettleFrames(150);
+        Check("收尾：模式还原成「隐藏批注截取」", Host.State.CaptureHideInk,
+              $"hideInk = {Host.State.CaptureHideInk}");
 
         Console.WriteLine();
         Console.WriteLine(fail == 0 ? $"  PASS: 截图全通（{pass} 项）" : $"  FAIL: {fail} 项不对");
