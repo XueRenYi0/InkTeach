@@ -5679,6 +5679,7 @@ internal sealed class App : InkEngine.InkEngine
         // --pixel：把工具切成面积橡皮再出图（看"橡皮按钮的图标跟着换"那一版）
         if (Environment.GetCommandLineArgs().Contains("--pixel")) Tool = Tool.PixelEraser;
         if (Environment.GetCommandLineArgs().Contains("--eraser")) Tool = Tool.Eraser;
+        if (Environment.GetCommandLineArgs().Contains("--laser")) Tool = Tool.Laser;
         SettleFrames(400);
 
         if (CurrentUi is InkUi.FullUi ui)
@@ -5692,6 +5693,14 @@ internal sealed class App : InkEngine.InkEngine
             int ci = Array.IndexOf(cli, "--cell");
             if (ci >= 0 && ci + 1 < cli.Length && int.TryParse(cli[ci + 1], out int cellArg))
                 ui.SelectBandCellForTest(cellArg);
+            // --width N：先把粗细调成 N 再出图（看"真实大小预览"用）
+            int wi = Array.IndexOf(cli, "--width");
+            if (wi >= 0 && wi + 1 < cli.Length && float.TryParse(cli[wi + 1], out float widthArg))
+            {
+                Host.Commands.SetWidth(widthArg);
+                SettleFrames(120);
+            }
+            if (cli.Contains("--preview")) ui.ShowSizePreviewForTest();
             if (_panelShowDrawer) ui.OpenDrawerForTest();   // --drawer：连抽屉一起出图
             SettleFrames(500);
 
@@ -5994,6 +6003,21 @@ internal sealed class App : InkEngine.InkEngine
             Check("橡皮的滑条拖到最左＝最小落点",
                   MathF.Abs(EraserRadiusLogical - emin) < 1.5f,
                   $"橡皮半径 {EraserRadiusLogical:F1}（应到 {emin}）");
+
+            // **真实大小预览**（用户 2026-09-17："那个点和实际大小是不是应该一样大，
+            // 但是太大了装不下，我又不希望改动界面"）。
+            // 验的是"预览整个落在 QueryBounds() 里"——引擎按那份矩形裁剪界面，
+            // 只要不包含它，画出去的部分就会被裁掉（这才是"预览看不见"的真因）。
+            // 拖完滑条指针还停在滑条上 → 预览应该在。
+            var pv = ui.SizePreviewRectForTest;
+            var qb = ui.QueryBounds();
+            Check("粗细预览画在面板外、且算进可见范围（不会被裁掉）",
+                  pv.MaxY - pv.MinY > InkUi.Tokens.BandHeight
+                  && pv.MinX >= qb.MinX - 0.5f && pv.MaxX <= qb.MaxX + 0.5f
+                  && pv.MinY >= qb.MinY - 0.5f && pv.MaxY <= qb.MaxY + 0.5f,
+                  $"预览 {pv.MaxX - pv.MinX:F0}×{pv.MaxY - pv.MinY:F0}"
+                  + $"（{pv.MinX:F0}..{pv.MaxX:F0} × {pv.MinY:F0}..{pv.MaxY:F0}），"
+                  + $"可见范围 {qb.MaxX - qb.MinX:F0}×{qb.MaxY - qb.MinY:F0}");
 
             // 面积橡皮同理，而且它的范围比笔宽大得多（30～160）
             Host.Commands.SetTool(Tool.PixelEraser);

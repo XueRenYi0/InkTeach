@@ -296,6 +296,10 @@ public sealed class FullUi : IOverlayUi
         // 占用矩形必须跟着"实际画出来的东西"走：贴边隐藏时它就只剩露头那一条，
         // 输入小窗也跟着缩——这样指针扫过露头才算"碰到面板"，其余位置照旧穿透/画线。
         var u = UnionRect();
+        // **粗细预览会画到面板外面**（带子那一侧的上/下方）：可见范围也得跟出去，
+        // 否则引擎会把超出 QueryBounds 的部分裁掉（引擎是按这份矩形做裁剪的），
+        // 表现就是"预览没画出来"。它只在拖滑条/悬停滑条时出现，平时这份矩形不变。
+        if (SizePreviewVisible && _host != null) u = Union(u, SizePreviewRect(_host.State));
         var s = Shift();
         u = new RectF
         {
@@ -631,6 +635,128 @@ public sealed class FullUi : IOverlayUi
         return (left, right);
     }
 
+    // ---- 粗细预览：数字 ＋ **真实大小** --------------------------------------
+    //
+    // 用户 2026-09-17 的三句话：
+    //   ①"笔和激光笔调节大小的时候可不可以显示笔号"（要一个读数）；
+    //   ②"调节大小的时候那个点和实际大小是不是应该一样大，但是太大了装不下，
+    //      我又不希望改动界面怎么办"；
+    //   ③"面积橡皮擦的大小调整的时候也能预览实际大小"。
+    //
+    // 矛盾在于：滑条右端那个预览点最多只能占带子高（34 像素），而笔能到 40、
+    // 整笔橡皮的圈能到 96、面积橡皮的块高能到 259 —— 装不下。
+    //
+    // 解法：**预览画到带子外面去**（带子在上就往上画，在下就往下画），
+    // 并且把它算进 `QueryBounds()`——引擎是按那份矩形裁剪界面画的，
+    // 不这么做画出去的部分会被裁掉。面板尺寸、布局一个像素都不用改，
+    // 而且它只在"拖滑条 / 指针停在滑条上"时出现，平时那份矩形一点都不变。
+
+    private bool SizePreviewVisible =>
+        BandVisible() && BandHasSlider && (_sliderDragging || _hover == 300);
+
+    /// <summary>真实落点的宽高（逻辑像素）。**和引擎里那套落点同源**（都读 st.Width）。</summary>
+    private static (float W, float H) TrueSize(in UiState st) => st.Tool switch
+    {
+        Tool.Eraser => (st.Width * 2f, st.Width * 2f),      // 引擎给的是半径 → 画出来是直径
+        Tool.PixelEraser => (st.Width, st.Width * 1.618f),  // 黄金比例矩形（和落点一模一样）
+        _ => (st.Width, st.Width),                          // 笔 / 荧光笔 / 激光 = 线宽
+    };
+
+    private RectF SizePreviewRect(in UiState st)
+    {
+        var (w, h) = TrueSize(st);
+        var band = BandRect();
+        var (left, right) = SliderTrackRange();
+        float kx = left + (right - left) * SliderT(st);
+        float bw = MathF.Max(w, 58f) + 20f;      // 形状 + 左右留白
+        float bh = h + 36f;                      // 上：形状；下：数字
+        float top = BandAbove() ? band.MinY - 8f - bh : band.MaxY + 8f;
+        // 横向夹在屏幕里：滑钮在最左/最右时，气泡会被推到屏幕外看不见
+        float x0 = kx - bw * 0.5f, x1 = kx + bw * 0.5f;
+        float lo = _screen.MinX + 4f, hi = _screen.MaxX - 4f;
+        if (x0 < lo) { x1 += lo - x0; x0 = lo; }
+        if (x1 > hi) { x0 -= x1 - hi; x1 = hi; }
+        return new RectF
+        {
+            MinX = x0, MinY = top,
+            MaxX = x1, MaxY = top + bh,
+        };
+    }
+
+    /// <summary>读数。全是**逻辑像素**，和引擎里那个值同源（面积橡皮报"宽×高"）。</summary>
+    private static string SizeLabel(in UiState st) => st.Tool switch
+    {
+        Tool.PixelEraser => $"{st.Width:F0}×{st.Width * 1.618f:F0}",
+        Tool.Eraser => $"{st.Width * 2f:F0}",
+        _ => $"{st.Width:F0}",
+    };
+
+    private void DrawSizePreview(ID2D1DeviceContext ctx, in UiState st)
+    {
+        if (!SizePreviewVisible) return;
+
+        var box = SizePreviewRect(st);
+        var (w, h) = TrueSize(st);
+        var bg = new RoundedRectangle(new Vortice.RawRectF(box.MinX, box.MinY, box.MaxX, box.MaxY), 10f, 10f);
+        ctx.FillRoundedRectangle(bg, Brush(ctx, _dark ? Tokens.PanelDark : Tokens.PanelLight));
+        ctx.DrawRoundedRectangle(bg, Brush(ctx, BorderCol), 1f);
+
+        float cx = (box.MinX + box.MaxX) * 0.5f;
+        float cy = box.MinY + 6f + h * 0.5f;
+        DrawTrueSizeShape(ctx, st, new Vector2(cx, cy), w, h);
+
+        var textBox = new RectF
+        {
+            MinX = box.MinX + 4f, MinY = box.MinY + 6f + h,
+            MaxX = box.MaxX - 4f, MaxY = box.MaxY - 3f,
+        };
+        _widgets.Text(ctx, SizeLabel(st), textBox, 12f, Brush(ctx, InkCol));
+    }
+
+    /// <summary>按真实尺寸画一个"这一笔/这一块有多大"的样子。配色和落点光标一致。</summary>
+    private void DrawTrueSizeShape(ID2D1DeviceContext ctx, in UiState st, Vector2 c, float w, float h)
+    {
+        var white = new Color4(1f, 1f, 1f, 0.85f);
+        var dark = new Color4(0.22f, 0.28f, 0.38f, 0.9f);
+        switch (st.Tool)
+        {
+            case Tool.Eraser:                       // 和整笔橡皮的落点圆环同一套
+                ctx.FillEllipse(new Ellipse(c, w * 0.5f, w * 0.5f),
+                                Brush(ctx, new Color4(0.35f, 0.55f, 0.95f, 0.10f)));
+                ctx.DrawEllipse(new Ellipse(c, w * 0.5f + 0.9f, w * 0.5f + 0.9f), Brush(ctx, white), 1.8f);
+                ctx.DrawEllipse(new Ellipse(c, w * 0.5f, w * 0.5f), Brush(ctx, dark), 1.8f);
+                break;
+
+            case Tool.PixelEraser:                  // 和面积橡皮的落点矩形同一套
+            {
+                var r = new Vortice.RawRectF(c.X - w * 0.5f, c.Y - h * 0.5f, c.X + w * 0.5f, c.Y + h * 0.5f);
+                ctx.FillRectangle(r, Brush(ctx, new Color4(0.35f, 0.55f, 0.95f, 0.22f)));
+                ctx.DrawRectangle(r, Brush(ctx, dark), 1.8f);
+                break;
+            }
+
+            case Tool.Laser:                        // 和激光落点同一个红点
+                ctx.FillEllipse(new Ellipse(c, w * 0.5f + 1f, w * 0.5f + 1f), Brush(ctx, white));
+                ctx.FillEllipse(new Ellipse(c, w * 0.5f, w * 0.5f),
+                                Brush(ctx, new Color4(1f, 0.16f, 0.16f, 0.95f)));
+                break;
+
+            case Tool.Highlighter:                  // 荧光笔是"涂一大条"：画一根那么粗的短条
+            {
+                float len = MathF.Max(40f, w * 1.4f);
+                var r = new Vortice.RawRectF(c.X - len * 0.5f, c.Y - h * 0.5f,
+                                             c.X + len * 0.5f, c.Y + h * 0.5f);
+                ctx.FillRoundedRectangle(new RoundedRectangle(r, h * 0.5f, h * 0.5f),
+                                         Brush(ctx, st.HighlighterColor));
+                break;
+            }
+
+            default:                                // 笔：一个实心圆 = 这一笔有多粗（用**当前笔色**）
+                ctx.FillEllipse(new Ellipse(c, w * 0.5f, w * 0.5f), Brush(ctx, st.Color));
+                break;
+        }
+    }
+
     private int HitSwatch(float x, float y)
     {
         if (!BandHasSwatches) return -1;
@@ -960,6 +1086,12 @@ public sealed class FullUi : IOverlayUi
             MaxX = Math.Max(p.MaxX, d.MaxX), MaxY = Math.Max(p.MaxY, d.MaxY),
         };
     }
+
+    private static RectF Union(in RectF a, in RectF b) => new()
+    {
+        MinX = Math.Min(a.MinX, b.MinX), MinY = Math.Min(a.MinY, b.MinY),
+        MaxX = Math.Max(a.MaxX, b.MaxX), MaxY = Math.Max(a.MaxY, b.MaxY),
+    };
 
     /// <summary>
     /// 贴边隐藏的位移：往贴着的那条边挪，最后只剩 `DockPeek` 那么宽露在外面。
@@ -1406,6 +1538,8 @@ public sealed class FullUi : IOverlayUi
         // 滑条：面板**最下沿那一条**（照假面板：主条下方本来就留了 8 像素余量）
         if (e > 0.55f) DrawGroove(ctx, st);
         if (_drawerOpen) DrawDrawer(ctx);
+        // 粗细预览**最后画**：它可能伸到面板外面，压在上面的东西得过它一层
+        DrawSizePreview(ctx, st);
     }
 
     // ---- 颜色（深色主题只是一整套换过来，形状一个都不动）------------------
@@ -1855,11 +1989,17 @@ public sealed class FullUi : IOverlayUi
         // 激光笔是**自绘**的（笔＋光束＋落点）：Fluent 里没有这个专名，
         // 用闪电之类的近义图标，老师看不出这是激光笔（假面板比过九个候选，选的是这个）。
         if (PerfSkipIcons) return;
-        if (i == 5) IconAtlas.DrawLaser(ctx, r, Tokens.Icon, Brush(ctx, ink));
+        // 激光笔：**未选中用线条版、选中用实心版**（和 Fluent 那批 regular／filled
+        // 同一套规矩——混着的表现就是"一排里只有它是实心的，像被填了色"）。
+        if (i == 5)
+            IconAtlas.DrawLaser(ctx, r, Tokens.Icon, Brush(ctx, ink), null,
+                                active ? IconAtlas.LaserDefault : IconAtlas.LaserOutline);
         // 两种橡皮也是**自绘**的，而且**图标跟着当前是哪种橡皮变**：
         // 整笔擦＝橡皮压着一条线；面积擦＝竖着的黄金比例矩形＋十字（和落点光标同形）。
         // 一个按钮管两个工具，图标不跟着变的话，"现在到底在擦整条还是擦一块"只能看文字。
-        else if (i == 6) IconAtlas.DrawEraser(ctx, r, Tokens.Icon, Brush(ctx, ink), area: st.Tool == Tool.PixelEraser);
+        else if (i == 6)
+            IconAtlas.DrawEraser(ctx, r, Tokens.Icon, Brush(ctx, ink),
+                                 area: st.Tool == Tool.PixelEraser, outline: !active);
         else IconAtlas.DrawCentered(ctx, icon, r, Tokens.Icon, Brush(ctx, ink));
     }
 
@@ -1965,6 +2105,31 @@ public sealed class FullUi : IOverlayUi
         _bandCell = cell;
         _railHover = true;      // 出图时假装"焦点就在面板上"
         _rail.Jump(1f);
+    }
+
+    /// <summary>出图用：把"粗细预览"摆出来（产品里是拖滑条、或指针停在滑条上时出现）。</summary>
+    internal void ShowSizePreviewForTest()
+    {
+        _hover = 300;
+        _sliderDragging = true;
+        _railHover = true;
+        _rail.Jump(1f);
+    }
+
+    /// <summary>自检用：粗细预览这一刻的矩形（屏幕坐标；没显示就是空矩形）。</summary>
+    internal RectF SizePreviewRectForTest
+    {
+        get
+        {
+            if (!SizePreviewVisible || _host == null) return RectF.Empty;
+            var r = SizePreviewRect(_host.State);
+            var s = Shift();
+            return new RectF
+            {
+                MinX = r.MinX + s.X, MinY = r.MinY + s.Y,
+                MaxX = r.MaxX + s.X, MaxY = r.MaxY + s.Y,
+            };
+        }
     }
 
     /// <summary>自检用：这一档显示几格 / 现在是第几档 / 某一格钉着没有。</summary>

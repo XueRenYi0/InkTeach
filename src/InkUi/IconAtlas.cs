@@ -123,6 +123,12 @@ internal static class IconAtlas
                 ctx.FillEllipse(new Ellipse(new Vector2(7f, 14.8f), 2.9f, 2.9f), brush);
                 break;
 
+            case LaserOutline:  // 线条版：**没选中时用这个**（见下面 LaserOutline 的注释）
+                ctx.DrawLine(new Vector2(17.6f, 4.4f), new Vector2(12.9f, 9.1f), brush, 1.8f, _round);
+                ctx.DrawLine(new Vector2(12.0f, 10.0f), new Vector2(9.1f, 12.9f), brush, 1.6f, _round);
+                ctx.DrawEllipse(new Ellipse(new Vector2(7.2f, 14.8f), 2.6f, 2.6f), brush, 1.8f);
+                break;
+
             case 3:     // 锥形 ＋ 落点光环（落点外面再套一圈，像"正在打的那一点"）
                 ctx.DrawLine(new Vector2(7.6f, 16.4f), new Vector2(20.5f, 3.5f), brush, 1.7f, _round);
                 ctx.DrawLine(new Vector2(8.4f, 18.4f), new Vector2(21.5f, 13.5f), brush, 1.7f, _round);
@@ -161,6 +167,20 @@ internal static class IconAtlas
     public const int LaserDefault = 2;
 
     /// <summary>
+    /// **没选中时的激光笔图标：线条版。**
+    ///
+    /// 用户 2026-09-17："这个笔使用的时候图标里面没有颜色，但是激光笔里面有颜色。"
+    /// 查下来不是配色漏了，是**两套图标来源的手感不一样**：
+    /// Fluent 那批是"regular（线描）／filled（实心）"一对，未选中用线描；
+    /// 而激光笔是我们自绘的，只有一副"实心"的画法（笔身 3.6 像素粗、落点是实心点），
+    /// 于是它在一排线描图标里显得最"重"、像被填了色。
+    ///
+    /// 现在补齐：**未选中＝线条版（细一号、落点空心），选中＝原来的实心版**——
+    /// 和 Fluent 那批同一套规矩。
+    /// </summary>
+    public const int LaserOutline = 5;
+
+    /// <summary>
     /// **自绘的两种橡皮图标**（<paramref name="area"/> = 面积擦 / 像素橡皮）。
     ///
     /// 为什么不用 Fluent 的 Eraser（用户 2026-09-17："笔迹擦除的图标不合理"）：
@@ -176,7 +196,7 @@ internal static class IconAtlas
     /// 网格 24、线宽 1.8～2.6，和自绘的激光笔同一套手感。
     /// </summary>
     public static void DrawEraser(ID2D1DeviceContext ctx, RectF box, float size,
-                                 ID2D1Brush brush, bool area)
+                                 ID2D1Brush brush, bool area, bool outline = false)
     {
         float cx = (box.MinX + box.MaxX) * 0.5f;
         float cy = (box.MinY + box.MaxY) * 0.5f;
@@ -209,9 +229,31 @@ internal static class IconAtlas
             // 实心的块才读得出来"这是一块橡皮"（出图比过两版）。
             // 线的起点故意留在方块**里面**（y=9.2 时方块占 x∈[10.3,13.4]），
             // 不然会从方块左上角外面露出一小截，像线穿过去了。
-            ctx.DrawLine(new Vector2(11.0f, 9.2f), new Vector2(21.2f, 9.2f), brush, 2.6f, _round);
-            var body = EraserBody();
-            if (body != null) ctx.FillGeometry(body, brush);
+            // 没选中时线宽收一号、橡皮块**画成空心**——同一排 Fluent 图标都是线描的，
+            // 只有这一个实心块的话，一眼就它最重（和激光笔同一个毛病）。
+            ctx.DrawLine(new Vector2(11.0f, 9.2f), new Vector2(21.2f, 9.2f), brush,
+                         outline ? 1.9f : 2.6f, _round);
+            if (outline)
+            {
+                var (c, ax, pe) = EraserFrame();
+                const float hl = 5.6f, hw = 3.5f;
+                var p1 = c + ax * hl + pe * hw;
+                var p2 = c + ax * hl - pe * hw;
+                var p3 = c - ax * hl - pe * hw;
+                var p4 = c - ax * hl + pe * hw;
+                ctx.DrawLine(p1, p2, brush, 1.8f, _round);
+                ctx.DrawLine(p2, p3, brush, 1.8f, _round);
+                ctx.DrawLine(p3, p4, brush, 1.8f, _round);
+                ctx.DrawLine(p4, p1, brush, 1.8f, _round);
+                // 那道"用到哪儿"的分界（几何留缝那块，空心版就画一条线）
+                var m = c - ax * 2.6f;
+                ctx.DrawLine(m + pe * hw, m - pe * hw, brush, 1.6f, _round);
+            }
+            else
+            {
+                var body = EraserBody();
+                if (body != null) ctx.FillGeometry(body, brush);
+            }
         }
 
         ctx.Transform = saved;
@@ -243,10 +285,7 @@ internal static class IconAtlas
         if (_eraserBody != null) return _eraserBody;
         if (_factory == null) return null;
 
-        var c = new Vector2(10.2f, 14.0f);
-        float r = -42f * MathF.PI / 180f;
-        var ax = new Vector2(MathF.Cos(r), MathF.Sin(r));   // 长轴（指向右上）
-        var pe = new Vector2(-ax.Y, ax.X);                   // 短轴
+        var (c, ax, pe) = EraserFrame();
         const float hl = 5.6f, hw = 3.5f;
         var p1 = c + ax * hl + pe * hw;
         var p2 = c + ax * hl - pe * hw;
@@ -266,6 +305,16 @@ internal static class IconAtlas
         }
         _eraserBody = g;
         return _eraserBody;
+    }
+
+    /// <summary>橡皮块那副固定坐标（中心 ＋ 长轴 ＋ 短轴）。实心版和空心版共用一份。</summary>
+    private static (Vector2 C, Vector2 Ax, Vector2 Pe) EraserFrame()
+    {
+        var c = new Vector2(10.2f, 14.0f);
+        float r = -42f * MathF.PI / 180f;
+        var ax = new Vector2(MathF.Cos(r), MathF.Sin(r));   // 长轴（指向右上）
+        var pe = new Vector2(-ax.Y, ax.X);                   // 短轴
+        return (c, ax, pe);
     }
 
     /// <summary>往几何里加一块"长轴从 a 到 b、半宽 hw"的矩形（自绘图标拼形状用）。</summary>
