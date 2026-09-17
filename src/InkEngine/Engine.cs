@@ -823,6 +823,14 @@ public class InkEngine
             foreach (var w in InkSettings.LoadUiPrefs(UiPrefs))
                 Console.WriteLine("settings: " + w);
 
+        // **接上幻灯片来源**（这一步以前漏了，代价是"完全操作不了 PPT"）：
+        // 之前只有自检里的探针会 `new PowerPointComSource()`，产品路径从来没接过，
+        // 于是 `Slides == null` → `PollSlides` 第一行就返回 → 放映探测一次都没跑过。
+        // 为什么现在敢在产品里常开：它是**后期绑定 + 只读**，没装 Office / 没在放映时
+        // 每次探测的结论就是"没有 PPT"，不弹错、不启动任何程序（见 调研-对接PPT.md）。
+        // 自检不接：判据要确定，各用例自己决定要不要装一个假来源。
+        if (!SelfCheckMode) Slides = new PowerPointComSource();
+
         // 上次因为界面出问题重启过？把板书读回来（读走就删，只恢复一次）。
         // 自检/基准模式不掺和：那些模式不该被"上次留下的板书"影响判据。
         if (mode.Length == 0) RestoreSessionIfAny();
