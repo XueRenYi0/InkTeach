@@ -516,6 +516,12 @@ internal sealed class App : InkEngine.InkEngine
             // 给路径时**保留文件**（人工核对 / 拿别的解码器验它）
             IoTest(args.Length > 1 ? args[1] : null);
         }
+        else if (mode == "--patterntest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PatternTest();
+        }
         else if (mode == "--coordtest")
         {
             _autoExitAt = double.MaxValue;
@@ -594,6 +600,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
         Console.WriteLine("  --pagetest          整屏翻页自检（一屏 = 一页：页高 = 视口高、只动相机、到顶就停）");
         Console.WriteLine("  --iotest [路径]     导出自检（选中的内容 → 透明底 PNG ＋ 剪贴板；给路径就保留文件）");
+        Console.WriteLine("  --patterntest       白板底纹自检（方格/横线/间距 + 数屏幕上的线 + 重铺代价）");
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
         Console.WriteLine("  --panelshow <图> [--band] [--mini] [--drawer] [--cell N]   界面出图（离屏）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
@@ -885,6 +892,159 @@ internal sealed class App : InkEngine.InkEngine
     }
 
     /// <summary>
+    /// **白板底纹（方格 / 横线）自检**——用户 2026-09-17 要的，参考 InkClass。
+    ///
+    /// 判据是**数屏幕上的线**（不是看代码里那个开关）：
+    ///   · 取一条横排像素 → 数"非板色"的段数 = 横着穿过几条**竖线**；
+    ///   · 取一条竖排像素 → 段数 = 穿过几条**横线**。
+    /// 于是：无底纹两个都是 0；横线只有横的；方格两个都有；间距变小线会变多。
+    /// 最后再量一次**代价**：底纹是烘进分块缓存的，所以只有"换底纹那一下"要整层重铺，
+    /// 之后每帧都不花钱——两个数都要报出来。
+    /// </summary>
+    private void PatternTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 白板底纹自检（方格 / 横线）===");
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-30} {detail}");
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        BoardOn = true;
+        BoardColor = InkPalette.BoardPresets[0].Color;     // 白板（浅色）
+        SetBoardPatternFromUi(0, 40f);
+        SettleFrames(400);
+
+        // 取屏幕正中偏右下的一块（避开 HUD 和面板），看里面的线
+        int px = (int)(_virtualX + _virtualW * 0.35f), py = (int)(_virtualY + _virtualH * 0.35f);
+        const int W = 400, H = 400;
+
+        // 一条横排 / 一条竖排：数"和板色不一样"的连续段数
+        (int vLines, int hLines) CountLines()
+        {
+            var buf = ScreenProbe.CaptureRegion(px, py, W, H);
+            if (buf.Length < W * H * 4) return (-1, -1);
+            int Row(int y)                      // 固定 y 扫一行 → 竖线
+            {
+                int runs = 0, o = (y * W) * 4;
+                bool inLine = false;
+                for (int x = 0; x < W; x++)
+                {
+                    int i = o + x * 4;
+                    bool lit = buf[i] < 240 || buf[i + 1] < 240 || buf[i + 2] < 240;
+                    if (lit && !inLine) runs++;
+                    inLine = lit;
+                }
+                return runs;
+            }
+            int Col(int x)                      // 固定 x 扫一列 → 横线
+            {
+                int runs = 0;
+                bool inLine = false;
+                for (int y = 0; y < H; y++)
+                {
+                    int i = (y * W + x) * 4;
+                    bool lit = buf[i] < 240 || buf[i + 1] < 240 || buf[i + 2] < 240;
+                    if (lit && !inLine) runs++;
+                    inLine = lit;
+                }
+                return runs;
+            }
+            // 多取几条取中位数（怕某一条正好压在线上）
+            var vs = new List<int>(); var hs = new List<int>();
+            for (int k = 1; k <= 5; k++) { vs.Add(Row(H * k / 6)); hs.Add(Col(W * k / 6)); }
+            vs.Sort(); hs.Sort();
+            return (vs[vs.Count / 2], hs[hs.Count / 2]);
+        }
+
+        var (v0, h0) = CountLines();
+        Check("无底纹：屏幕上一根线都没有", v0 == 0 && h0 == 0, $"竖线 {v0} 条 / 横线 {h0} 条");
+
+        SetBoardPatternFromUi(2, 40f);                     // 横线
+        SettleFrames(400);
+        var (v2, h2) = CountLines();
+        Check("横线：只有横的、没有竖的", v2 == 0 && h2 >= 2, $"竖线 {v2} 条 / 横线 {h2} 条");
+
+        SetBoardPatternFromUi(1, 40f);                     // 方格
+        SettleFrames(400);
+        var (v1, h1) = CountLines();
+        Check("方格：横竖都有", v1 >= 2 && h1 >= 2, $"竖线 {v1} 条 / 横线 {h1} 条");
+
+        SetBoardPatternFromUi(2, 64f);                     // 粗间距
+        SettleFrames(400);
+        var (_, h64) = CountLines();
+        SetBoardPatternFromUi(2, 24f);                     // 细间距
+        SettleFrames(400);
+        var (_, h24) = CountLines();
+        Check("间距生效：细间距的线明显更多", h24 > h64 && h64 >= 1,
+              $"24 逻辑像素 → {h24} 条，64 → {h64} 条");
+
+        // ---- 代价：只有"换底纹那一下"要整层重铺，之后每帧都不花钱 ----
+        double Measure(bool patternOn, int rounds = 8)
+        {
+            double total = 0;
+            for (int i = 0; i < rounds; i++)
+            {
+                Doc.InvalidateAll();                        // 逼一次整层重铺
+                NowMs = _clock.Elapsed.TotalMilliseconds;
+                RenderAll();
+                total += _windows[0].LastRebuildMs;
+            }
+            return total / rounds;
+        }
+
+        SetBoardPatternFromUi(1, 40f); SettleFrames(300);
+        double withPattern = Measure(true);
+        // 再量一次"什么都不用重铺"的那一帧：底纹烘在缓存里，这应该是 0
+        RenderAll();
+        double idleRebuild = _windows[0].LastRebuildMs;
+
+        SetBoardPatternFromUi(0, 40f); SettleFrames(300);
+        double withoutPattern = Measure(false);
+
+        Console.WriteLine($"    [性能] 整层重铺一格：有底纹 {withPattern:F2} ms，无底纹 {withoutPattern:F2} ms"
+                        + $"（差 {withPattern - withoutPattern:F2} ms）");
+        Console.WriteLine($"    [性能] 底纹画好之后的空闲帧：分块光栅 {idleRebuild:F2} ms（应为 0）");
+        Check("底纹画好之后，空闲帧不再重铺分块", idleRebuild < 0.05,
+              $"空闲帧分块光栅 {idleRebuild:F2} ms");
+        Check("整层重铺的代价在可接受范围（< 8 ms）", withPattern < 8.0,
+              $"有底纹 {withPattern:F2} ms（这是**换底纹那一下**的一次性代价，不是每帧）");
+
+        // 底纹不是笔迹：切底纹不该动文档
+        var s = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(0f, 0f, 0f, 1f), Width = 6f,
+        };
+        s.AddPoint(_virtualX + 500, _virtualY + 500, 1f, 0);
+        s.AddPoint(_virtualX + 900, _virtualY + 560, 1f, 1);
+        Doc.AddStroke(s);
+        SettleFrames(200);
+        int before = Doc.Strokes.Count;
+        SetBoardPatternFromUi(2, 40f);
+        Check("换底纹不动文档（底纹不是笔迹）",
+              Doc.Strokes.Count == before && Doc.UndoDepth == 1,
+              $"笔画 {before} → {Doc.Strokes.Count}，撤销栈 {Doc.UndoDepth}（还是 1，底纹不进撤销）");
+
+        Console.WriteLine();
+        Console.WriteLine(fail == 0
+            ? "  PASS：方格/横线/间距都对，而且底纹是烘进缓存的（只在换的时候花一次钱）"
+            : $"  FAIL：{fail} 项不对（{pass} 项通过）");
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        BoardOn = false;
+        SetBoardPatternFromUi(0, 40f);
+        _quit = true;
+    }
+
+    /// <summary>
     /// **导出（选中的内容 → 透明底 PNG）自检**。
     ///
     /// 用户 2026-09-17 定：只导选中的、透明底、弹"另存为"、**同时进剪贴板**。
@@ -897,7 +1057,7 @@ internal sealed class App : InkEngine.InkEngine
     private void IoTest(string keepPath = null)
     {
         Console.WriteLine();
-        Console.WriteLine("=== 导出自检（选中 → 透明底 PNG ＋ 剪贴板）===");
+        Console.WriteLine("=== 导出自检（选中 → 透明底 PNG；不碰剪贴板）===");
         int pass = 0, fail = 0;
         void Check(string name, bool ok, string detail)
         {
@@ -941,6 +1101,16 @@ internal sealed class App : InkEngine.InkEngine
         Doc.SelectOnly(new[] { pen, hl });
         Tool = Tool.Marquee;
         SettleFrames(300);
+
+        // 先在剪贴板上放一个"标记"（一条蓝色笔迹）：导出之后它必须**原样还在**——
+        // 用户 2026-09-17 明确："导出不用进剪贴板，因为我们有复制功能"。
+        var marker = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(0f, 0f, 1f, 1f), Width = 5f,
+        };
+        marker.AddPoint(10, 10, 1f, 0); marker.AddPoint(20, 20, 1f, 1);
+        ClipboardInk.Set(ClipboardInk.Serialize(new[] { marker }), null, 0, 0);
 
         bool ok = ExportSelectionToPathForTest(path);
         Check("导出返回成功", ok, $"返回 {ok}");
@@ -1023,15 +1193,17 @@ internal sealed class App : InkEngine.InkEngine
         Check("空白处：完全透明（透明底）", blank.A == 0 && blank.R == 0 && blank.G == 0 && blank.B == 0,
               $"RGBA = {blank.R},{blank.G},{blank.B},{blank.A}");
 
-        // ④ 剪贴板：同一次导出也要放进去（对象 ＋ 上面那张图）
+        // ④ 剪贴板：导出**不许动它**（用户 2026-09-17："导出不用进剪贴板，我们有复制功能"）。
+        // 判据：导出前放一条"标记"笔迹，导出之后读回来还得是那一条（1 个，不是选中的 2 个）。
         bool clip = ClipboardInk.TryGetObjects(out var back);
-        Check("同时进了剪贴板：能读回对象",
-              clip && back != null && back.Count == 2,
-              clip ? $"读回 {back?.Count} 个对象（应为 2）" : "剪贴板里没有我们的对象");
+        Check("导出**不动剪贴板**（复制那条路各管各的）",
+              clip && back != null && back.Count == 1,
+              clip ? $"读回 {back?.Count} 个对象（应为 1 = 导出前放的那条标记）"
+                   : "剪贴板里没有对象（不该）");
 
         Console.WriteLine();
         Console.WriteLine(fail == 0
-            ? "  PASS：导出写出的 PNG 透明底、颜色与 alpha 都对，剪贴板也拿到了"
+            ? "  PASS：导出写出的 PNG 透明底、颜色与 alpha 都对，而且没碰剪贴板"
             : $"  FAIL：{fail} 项不对（{pass} 项通过）");
         Console.WriteLine($"  文件：{path}（{png.Length} 字节）");
 
@@ -5793,6 +5965,18 @@ internal sealed class App : InkEngine.InkEngine
         SetUiFactory(() => new InkUi.FullUi());
         BoardOn = true;
         BoardColor = InkPalette.BoardPresets[0].Color;
+        // --pattern N：出图时带上白板底纹（0 无 / 1 方格 / 2 横线；--step 给间距）
+        {
+            var cli0 = Environment.GetCommandLineArgs();
+            int pi = Array.IndexOf(cli0, "--pattern");
+            int si = Array.IndexOf(cli0, "--step");
+            if (pi >= 0 && pi + 1 < cli0.Length && int.TryParse(cli0[pi + 1], out int pat))
+            {
+                float step = si >= 0 && si + 1 < cli0.Length && float.TryParse(cli0[si + 1], out float sv)
+                             ? sv : 40f;
+                SetBoardPatternFromUi(pat, step);
+            }
+        }
 
         for (int screen = 0; screen < 3; screen++)
             for (int row = 0; row < 4; row++)
@@ -6382,6 +6566,85 @@ internal sealed class App : InkEngine.InkEngine
             SettleFrames(150);
         }
 
+        // ---- ⑥.8 白板底纹：抽屉里那两行（无/方格/横线、间距）----
+        //
+        // 用户 2026-09-17："给白板增加网格和横线功能"（参考 InkClass：三档 + 间距）。
+        // 抽屉里两行的位置要**先开抽屉再重取矩形**（开合会让它挪地方，这是被踩过的坑）。
+        {
+            Host.Commands.SetBoard(true);                 // 底纹只画在板面上：先开板
+            SettleFrames(250);
+
+            var moreP = ui.CellRectForTest(12);
+            ClickPhysical((moreP.MinX + moreP.MaxX) * 0.5f * DpiScale,
+                          (moreP.MinY + moreP.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+
+            Check("白板开着时，底纹两行是可点的",
+                  !ui.RowGrayForTest(2) && !ui.RowGrayForTest(3),
+                  $"底纹行压暗 = {ui.RowGrayForTest(2)}，间距行压暗 = {ui.RowGrayForTest(3)}");
+
+            var rowPat = ui.RowRectForTest(2);
+            ClickPhysical((rowPat.MinX + rowPat.MaxX) * 0.5f * DpiScale,
+                          (rowPat.MinY + rowPat.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("点一下「白板底纹」→ 方格",
+                  Host.State.BoardPattern == 1,
+                  $"底纹 = {Host.State.BoardPattern}（1 = 方格），标签「{ui.RowLabelForTest(2)}」");
+
+            rowPat = ui.RowRectForTest(2);
+            ClickPhysical((rowPat.MinX + rowPat.MaxX) * 0.5f * DpiScale,
+                          (rowPat.MinY + rowPat.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("再点一下 → 横线", Host.State.BoardPattern == 2,
+                  $"底纹 = {Host.State.BoardPattern}（2 = 横线），标签「{ui.RowLabelForTest(2)}」");
+
+            float step0 = Host.State.BoardPatternStep;
+            var rowStep = ui.RowRectForTest(3);
+            ClickPhysical((rowStep.MinX + rowStep.MaxX) * 0.5f * DpiScale,
+                          (rowStep.MinY + rowStep.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("点一下「底纹间距」→ 换下一档",
+                  MathF.Abs(Host.State.BoardPatternStep - step0) > 1f,
+                  $"{step0:F0} → {Host.State.BoardPatternStep:F0}（标签「{ui.RowLabelForTest(3)}」）");
+
+            // 关掉白板：两行应该压暗，点了也不改状态（InkClass 也是这么守的）
+            var moreP2 = ui.CellRectForTest(12);
+            ClickPhysical((moreP2.MinX + moreP2.MaxX) * 0.5f * DpiScale,
+                          (moreP2.MinY + moreP2.MaxY) * 0.5f * DpiScale);   // 关抽屉
+            SettleFrames(200);
+            Host.Commands.SetBoard(false);
+            SettleFrames(250);
+            var moreP3 = ui.CellRectForTest(12);
+            ClickPhysical((moreP3.MinX + moreP3.MaxX) * 0.5f * DpiScale,
+                          (moreP3.MinY + moreP3.MaxY) * 0.5f * DpiScale);   // 开抽屉
+            SettleFrames(250);
+            Check("白板关着时底纹两行压暗",
+                  ui.RowGrayForTest(2) && ui.RowGrayForTest(3),
+                  $"底纹行压暗 = {ui.RowGrayForTest(2)}，间距行压暗 = {ui.RowGrayForTest(3)}");
+
+            int patBefore = Host.State.BoardPattern;
+            var rowPat2 = ui.RowRectForTest(2);
+            ClickPhysical((rowPat2.MinX + rowPat2.MaxX) * 0.5f * DpiScale,
+                          (rowPat2.MinY + rowPat2.MaxY) * 0.5f * DpiScale);
+            SettleFrames(200);
+            Check("压暗的行点了不动（不会偷偷改档）",
+                  Host.State.BoardPattern == patBefore,
+                  $"底纹 {patBefore} → {Host.State.BoardPattern}");
+
+            var moreP4 = ui.CellRectForTest(12);
+            ClickPhysical((moreP4.MinX + moreP4.MaxX) * 0.5f * DpiScale,
+                          (moreP4.MinY + moreP4.MaxY) * 0.5f * DpiScale);   // 关抽屉
+            SettleFrames(200);
+            Host.Commands.SetBoardPattern(0, 40f);       // 收尾：回到"无底纹"
+            // **收尾要把指针挪回主条**：点"更多"会把色带收起来（抽屉和它抢地方），
+            // 而色带只在指针落在面板上时才张开——指针不动就永远不张开，
+            // 后面那几条"点分段"的用例就会全部点空（这一次就是这么红的）。
+            var barBack = ui.BarRectForTest;
+            SendMouse((int)((barBack.MinX + barBack.MaxX) * 0.5f * DpiScale),
+                      (int)((barBack.MinY + barBack.MaxY) * 0.5f * DpiScale), 0);
+            SettleFrames(400);
+        }
+
         // ---- ⑥.7 白板和穿透**互斥**（用户 2026-09-17 问："鼠标和白板是不是也应该互斥"）----
         //
         // 该互斥：白板是不透明的一层，穿透是"点击落到下层程序"——两个一起开着，
@@ -6792,7 +7055,10 @@ internal sealed class App : InkEngine.InkEngine
         Doc.AddStroke(keep2);
 
         NormalizePanel();
-        var restartRow = ui.RowRectForTest(2);
+        // 行号 = Rows 里的下标：0 深色主题 / 1 贴边隐藏 / **2 白板底纹 / 3 底纹间距** /
+        // 4 重启软件 / 5 退出 / 6 检查更新 / 7 学科工具。
+        // （2026-09-17 插了底纹那两行，这里从 2 改成 4——插行不改引用，这一条当场就红了。）
+        var restartRow = ui.RowRectForTest(4);
         ClickPhysical((restartRow.MinX + restartRow.MaxX) * 0.5f * DpiScale,
                       (restartRow.MinY + restartRow.MaxY) * 0.5f * DpiScale);
         Check("点「重启软件」：先存板书再重启",

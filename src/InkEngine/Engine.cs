@@ -143,6 +143,41 @@ public class InkEngine
     internal bool CaptureActive;
     internal float CapMinX, CapMinY, CapMaxX, CapMaxY;
 
+    // ---- 白板底纹（方格 / 横线）--------------------------------------------
+    //
+    // 用户 2026-09-17 要的："给白板增加网格和横线功能，可以参[考]inkclass 的实现"。
+    // InkClass 那边（`MW_WhiteboardPattern.cs`）的做法与取舍：
+    //   · 三档：**无 / 方格 / 横线**；
+    //   · **不是笔迹**——"橡皮擦不掉、撤销不涉及、选择选不中、换页共用"；
+    //   · 线细 0.5 逻辑像素（辅助参考线，纤细不抢视觉）；线色随板面明暗自适应
+    //     （浅板：灰 60%；深板：白 20%）；
+    //   · 间距可调（它给的是 16～240 的滑块）。
+    //
+    // 我们这里更进一步：底纹和板色一起**画进分块缓存**（见 Overlay.DrawBoardPattern），
+    // 所以滚动、翻页、写字都不花额外的钱；代价只有"换底纹/换板色时整层重铺一次"，
+    // 和换板色本来就是同一件事。
+
+    /// <summary>白板底纹：0 = 无，1 = 方格，2 = 横线。</summary>
+    internal int BoardPattern;
+    /// <summary>底纹间距（逻辑像素）。InkClass 的范围是 16～240，我们按逻辑像素存。</summary>
+    internal float BoardPatternStepLogical = 40f;
+
+    /// <summary>底纹间距（画布像素 = 物理像素）。</summary>
+    internal float BoardPatternStepPx => Math.Clamp(BoardPatternStepLogical, 8f, 240f) * DpiScale;
+
+    internal void SetBoardPatternFromUi(int pattern, float stepLogical)
+    {
+        pattern = Math.Clamp(pattern, 0, 2);
+        stepLogical = Math.Clamp(stepLogical, 8f, 240f);
+        if (BoardPattern == pattern && MathF.Abs(BoardPatternStepLogical - stepLogical) < 0.01f) return;
+        BoardPattern = pattern;
+        BoardPatternStepLogical = stepLogical;
+        // 和换板色一样：底纹是**画进分块缓存**的，所以所有块都过期了
+        Doc.InvalidateAll();
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
     /// <summary>Pen width presets, in logical pixels. Cycled with Ctrl+Alt+W
     /// until there is a proper on-screen control for it.</summary>
     internal static readonly float[] WidthPresets = { 1.5f, 3f, 6f, 10f, 16f, 24f };
@@ -2011,8 +2046,9 @@ public class InkEngine
             return false;
         }
 
-        var sel = Doc.Selected;
-        if (sel.Count > 0) ClipboardInk.Set(ClipboardInk.Serialize(sel), bgra, w, h);
+        // 用户 2026-09-17 更正：**导出不再顺手放进剪贴板**——"复制"那条路已经有了
+        // （选中 → Ctrl+C / 操作条上的复制），导出就只管落盘，职责单一、也少一次
+        // 剪贴板写入（剪贴板是全局资源，能少碰就少碰）。
         SelFlashUntilMs = NowMs + SelFlashMs;
         _dirty = true;
         return true;
@@ -2564,6 +2600,8 @@ public class InkEngine
     /// </summary>
     internal float PageHeightCanvas => _virtualH;
     internal float PageTopCanvas => _virtualY;
+    /// <summary>底纹的横向锚点（第一页的左边界）——和页界线共用同一个原点。</summary>
+    internal float PageLeftCanvas => _virtualX;
 
     /// <summary>
     /// 系统的"在 Windows 中显示动画"开关（`SPI_GETCLIENTAREAANIMATION`）。
@@ -3306,6 +3344,8 @@ public class InkEngine
         PassThrough = PassThrough,
         Board = BoardOn,
         BoardColor = BoardColor,
+        BoardPattern = BoardPattern,
+        BoardPatternStep = BoardPatternStepLogical,
         SelectMode = SelMode,
         ScreenIndex = ScreenIndex,
         CanFlipPageUp = CanFlipPageUp,

@@ -172,6 +172,13 @@ public interface IEngineCommands
     /// <summary>白板的底色（白/绿/黑）。换底色会整层重画，和开关同理。</summary>
     void SetBoardColor(Color4 color);
 
+    /// <summary>
+    /// 白板底纹：<paramref name="pattern"/> 0 = 无、1 = 方格、2 = 横线；
+    /// <paramref name="stepLogical"/> 是间距（逻辑像素，8～240）。
+    /// 和板色一样，它是**画进分块缓存**的：换一次整层重铺一次，平时零开销。
+    /// </summary>
+    void SetBoardPattern(int pattern, float stepLogical);
+
     /// <summary>框选工具下的选择方式：矩形框（碰到墨就选中）／自由套索（圈住 80% 才选中）。</summary>
     void SetSelectMode(SelectMode mode);
 
@@ -286,6 +293,10 @@ public readonly struct UiState
     public bool Board { get; init; }
     /// <summary>白板底色（界面用它高亮"现在是哪种板"）。</summary>
     public Color4 BoardColor { get; init; }
+    /// <summary>白板底纹：0 = 无，1 = 方格，2 = 横线（界面用它高亮当前那一档）。</summary>
+    public int BoardPattern { get; init; }
+    /// <summary>底纹间距（逻辑像素）。</summary>
+    public float BoardPatternStep { get; init; }
     /// <summary>框选的选择方式（界面用它高亮"矩形/套索"那一格）。</summary>
     public SelectMode SelectMode { get; init; }
     /// <summary>现在在第几屏（1 起）。界面用它显示"第 N 屏"。</summary>

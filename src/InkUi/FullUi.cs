@@ -161,12 +161,17 @@ public sealed class FullUi : IOverlayUi
     private double _leftAtMs = double.NegativeInfinity;
 
     /// <summary>「更多」抽屉里的行。</summary>
-    private enum Row { DarkTheme, AutoHide, Restart, Quit, CheckUpdate, SubjectTools }
+    private enum Row { DarkTheme, AutoHide, BoardPattern, BoardStep, Restart, Quit, CheckUpdate, SubjectTools }
 
     private static readonly (Row Kind, string Label, bool Dangerous, bool Gray)[] Rows =
     {
         (Row.DarkTheme, "深色主题", false, false),
         (Row.AutoHide, "贴边隐藏", false, false),
+        // 白板底纹（用户 2026-09-17 要的，参考 InkClass 的"无/方格/横线 + 间距"）。
+        // 点一下换下一档，标签上直接写当前是哪一档。**白板没开时压暗**——
+        // 底纹只画在板面上，板子没开就改了也看不见（InkClass 也是这么守的）。
+        (Row.BoardPattern, "白板底纹", false, false),
+        (Row.BoardStep, "底纹间距", false, false),
         (Row.Restart, "重启软件", false, false),
         (Row.Quit, "退出", true, false),
         (Row.CheckUpdate, "检查更新", false, true),
@@ -273,6 +278,12 @@ public sealed class FullUi : IOverlayUi
         foreach (var s in (_host.GetPref("unpinned") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
             if (int.TryParse(s, out int cell) && cell > 0 && cell < Cells.Length && CanUnpin(cell))
                 _pinned[cell] = false;
+
+        // 白板底纹是**引擎状态**（画进分块缓存的），界面这边只是它的"存储器"：
+        // 启动时把上次的档位推给引擎一次。数值不合法就当默认。
+        int pat = int.TryParse(_host.GetPref("boardPattern"), out int p) ? p : 0;
+        float step = float.TryParse(_host.GetPref("boardStep"), out float stepPref) ? stepPref : 40f;
+        _host.Commands.SetBoardPattern(pat, step);
     }
 
     private void SavePrefs()
@@ -281,6 +292,11 @@ public sealed class FullUi : IOverlayUi
         _host.SetPref("hide", _hideEnabled ? "1" : null);
         _host.SetPref("profile", _profile == Profile.Full ? null
                                : _profile == Profile.Mini ? "mini" : "custom");
+        // 白板底纹：默认（无 / 40）不写，只写改过的
+        var st = _host.State;
+        _host.SetPref("boardPattern", st.BoardPattern == 0 ? null : st.BoardPattern.ToString());
+        _host.SetPref("boardStep", MathF.Abs(st.BoardPatternStep - 40f) < 0.5f
+                                   ? null : st.BoardPatternStep.ToString("F0"));
 
         var off = new List<string>();
         for (int i = 1; i < _pinned.Length; i++) if (!_pinned[i]) off.Add(i.ToString());
@@ -1121,7 +1137,37 @@ public sealed class FullUi : IOverlayUi
     }
 
     private bool IsToggleRow(int i) => Rows[i].Kind is Row.DarkTheme or Row.AutoHide;
-    private bool IsGrayRow(int i) => Rows[i].Gray;
+
+    /// <summary>
+    /// 这一行现在是不是压暗（点了没反应）。两种来源：
+    ///   · 表里写死的（检查更新 / 学科工具还没做）；
+    ///   · **白板没开时的底纹两行**——底纹只画在板面上，板子没开就改了也看不见，
+    ///     所以压暗（InkClass 也是这么守的：板面收起时右键不弹那个菜单）。
+    /// </summary>
+    private bool IsGrayRow(int i) =>
+        Rows[i].Gray
+        || (Rows[i].Kind is Row.BoardPattern or Row.BoardStep && _host != null && !_host.State.Board);
+
+    /// <summary>底纹三档的名字（0/1/2），和引擎那边的取值一一对应。</summary>
+    private static readonly string[] PatternNames = { "无", "方格", "横线" };
+    /// <summary>底纹间距的三档（逻辑像素）。细格写字、中格常用、粗格当横线纸。</summary>
+    private static readonly float[] PatternSteps = { 24f, 40f, 64f };
+
+    private static string PatternName(int p) =>
+        PatternNames[Math.Clamp(p, 0, PatternNames.Length - 1)];
+
+    /// <summary>行标签：底纹两行要把"当前是哪一档"写出来（它们不是开关，是循环档）。</summary>
+    private string RowLabel(int i)
+    {
+        if (_host == null) return Rows[i].Label;
+        var st = _host.State;
+        return Rows[i].Kind switch
+        {
+            Row.BoardPattern => $"白板底纹：{PatternName(st.BoardPattern)}",
+            Row.BoardStep => $"底纹间距：{st.BoardPatternStep:F0}",
+            _ => Rows[i].Label,
+        };
+    }
 
     private int HitRow(float x, float y)
     {
@@ -1148,6 +1194,27 @@ public sealed class FullUi : IOverlayUi
                 SavePrefs();
                 Invalidate();
                 break;
+
+            // 底纹两行：**循环档位**（点一下换下一档），改完顺手落盘。
+            case Row.BoardPattern:
+            {
+                var st = _host.State;
+                int next = (st.BoardPattern + 1) % PatternNames.Length;
+                _host.Commands.SetBoardPattern(next, st.BoardPatternStep);
+                SavePrefs();
+                Invalidate();
+                break;
+            }
+            case Row.BoardStep:
+            {
+                var st = _host.State;
+                int idx = Array.FindIndex(PatternSteps, v => MathF.Abs(v - st.BoardPatternStep) < 0.5f);
+                float next = PatternSteps[(idx + 1 + PatternSteps.Length) % PatternSteps.Length];
+                _host.Commands.SetBoardPattern(st.BoardPattern, next);
+                SavePrefs();
+                Invalidate();
+                break;
+            }
             case Row.Restart:
                 _host.Commands.Restart();     // 引擎会先暂存板书再重启
                 break;
@@ -2066,7 +2133,7 @@ public sealed class FullUi : IOverlayUi
                 MinX = r.MinX + 4, MinY = r.MinY,
                 MaxX = r.MaxX - (IsToggleRow(i) ? 48f : 4f), MaxY = r.MaxY,
             };
-            _widgets.Text(ctx, Rows[i].Label, label, 13f, Brush(ctx, ink), center: false);
+            _widgets.Text(ctx, RowLabel(i), label, 13f, Brush(ctx, ink), center: false);
 
             if (IsToggleRow(i)) DrawSwitch(ctx, SwitchRect(i), IsOn(i));
 
@@ -2293,6 +2360,12 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>自检用：这一格现在压暗没有（撤销/重做栈空）。</summary>
     internal bool CellUnavailableForTest(int cell) => CellUnavailable(cell, _host.State);
+
+    /// <summary>自检用：抽屉里某一行现在压暗没有（底纹两行在"白板没开"时要压暗）。</summary>
+    internal bool RowGrayForTest(int row) => IsGrayRow(row);
+
+    /// <summary>自检用：抽屉里某一行现在显示的字（底纹两行会把当前档位写出来）。</summary>
+    internal string RowLabelForTest(int row) => RowLabel(row);
 
     /// <summary>自检用：粗细预览这一刻的矩形（屏幕坐标；没显示就是空矩形）。</summary>
     internal RectF SizePreviewRectForTest

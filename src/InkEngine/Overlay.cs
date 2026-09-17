@@ -638,6 +638,56 @@ internal sealed class OverlayWindow : IDisposable
     /// （不随相机动），所以能跟白板底色一起烘进分块缓存 —— 滚动和翻页都不额外花钱。
     /// 颜色按板色明暗挑：浅板画淡黑线、深板画淡白线，只求"看得出有个分界"，不抢板书。
     /// </summary>
+    /// <summary>
+    /// **白板底纹（方格 / 横线）**。参考 InkClass 的 `MW_WhiteboardPattern.cs`：
+    /// 三档（无/方格/横线）、线极细、线色随板面明暗自适应、**不是笔迹**
+    /// （橡皮擦不掉、撤销不涉及、选择选不中）。
+    ///
+    /// 我们的实现比它省一档：它是给 `Border` 挂一个平铺画刷（固定屏幕上、不随滚动动），
+    /// 我们是**画进分块缓存**——底纹在**画布坐标**里，所以：
+    ///   · 滚动时底纹跟着板书一起走（写在横线上的字永远在那条线上，这才是"纸"的语义）；
+    ///   · 滚动/翻页/写字都不重画底纹（块里已经烘好了）；
+    ///   · 换底纹或换板色才整层重铺一次（和换板色本来就是同一件事）。
+    ///
+    /// 线宽 1 画布像素 = 200% 屏上的 0.5 逻辑像素，和 InkClass 的 0.5px 是同一个观感。
+    /// </summary>
+    private void DrawBoardPattern(InkEngine app, RectF canvas)
+    {
+        int kind = app.BoardPattern;
+        if (kind == 0) return;
+        float step = app.BoardPatternStepPx;
+        if (step < 4f) return;
+
+        var c = app.BoardColor;
+        float lum = 0.299f * c.R + 0.587f * c.G + 0.114f * c.B;
+        // 浅板：灰 60%（InkClass 的 0x99,0x99,0x99,0x99）；深板：白 20%
+        var line = lum > 0.5f
+            ? new Color4(0.60f, 0.60f, 0.60f, 0.60f)
+            : new Color4(1f, 1f, 1f, 0.20f);
+        var brush = Brush(line);
+
+        // 对齐到"第一页的左上角"（= 虚拟桌面左上角）：底纹与页界线共用同一个锚点，
+        // 翻页之后横线还在原来的高度上，不会跟页边界错开。
+        float left = app.PageLeftCanvas, top = app.PageTopCanvas;
+
+        float firstY = MathF.Floor((canvas.MinY - top) / step) * step + top;
+        for (float y = firstY; y <= canvas.MaxY + 0.5f; y += step)
+        {
+            if (y < canvas.MinY - 0.5f) continue;
+            _ctx.DrawLine(new System.Numerics.Vector2(canvas.MinX, y),
+                          new System.Numerics.Vector2(canvas.MaxX, y), brush, 1f);
+        }
+
+        if (kind != 1) return;                       // 横线只画横的，方格还要画竖的
+        float firstX = MathF.Floor((canvas.MinX - left) / step) * step + left;
+        for (float x = firstX; x <= canvas.MaxX + 0.5f; x += step)
+        {
+            if (x < canvas.MinX - 0.5f) continue;
+            _ctx.DrawLine(new System.Numerics.Vector2(x, canvas.MinY),
+                          new System.Numerics.Vector2(x, canvas.MaxY), brush, 1f);
+        }
+    }
+
     private void DrawPageLines(InkEngine app, RectF canvas)
     {
         float h = app.PageHeightCanvas;
@@ -816,9 +866,14 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.FillRectangle(clearRect, BoardBrush(app));
         _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
 
-        // 白板模式：画"页界线"（一屏一页）。它是**画布内容**——固定在图上的位置、
-        // 不随相机动，所以烘进分块缓存里，滚动与翻页都不额外花钱。
-        if (app.BoardOn) DrawPageLines(app, canvas);
+        // 白板模式：先画**底纹**（方格/横线），再画"页界线"（一屏一页）。
+        // 两个都是**画布内容**——固定在图上的位置、不随相机动，
+        // 所以一起烘进分块缓存：滚动、翻页、写字都不额外花钱。
+        if (app.BoardOn)
+        {
+            DrawBoardPattern(app, canvas);
+            DrawPageLines(app, canvas);
+        }
 
         // 空间索引按**带笔宽外扩**的框返回候选，所以跨在块边界上的粗笔画
         // 两边都会被画到，不会出现"贴边被削掉一半"的缺口。

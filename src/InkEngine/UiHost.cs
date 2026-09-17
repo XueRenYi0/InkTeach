@@ -83,6 +83,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetSelectMode(SelectMode mode) => _engine.SetSelectModeFromUi(mode);
     public void SelectAll() => _engine.SelectAllFromUi();
     public void FlipPage(bool down) => _engine.FlipPageFromUi(down);
+
+    public void SetBoardPattern(int pattern, float stepLogical)
+        => _engine.SetBoardPatternFromUi(pattern, stepLogical);
     public void Restart() => _engine.RestartFromUi();
     public void Quit() => _engine.QuitFromUi();
 
