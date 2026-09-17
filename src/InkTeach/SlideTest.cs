@@ -294,9 +294,26 @@ internal sealed partial class App
         var at3 = made[2];
         fake.Position = 2;
         SettleFrames(400);
-        Check("调换页序：第 2 页上显示的是**第 2 页自己的批注**",
-              CurrentPage == SlidePageOfPosition(2) && at3.Page == SlidePageOfPosition(3),
-              $"当前页 {CurrentPage}，那一笔仍属于 {at3.Page}（按身份，不按页号）");
+            Check("调换页序：第 2 页上显示的是**第 2 页自己的批注**",
+                  CurrentPage == SlidePageOfPosition(2) && at3.Page == SlidePageOfPosition(3),
+                  $"当前页 {CurrentPage}，那一笔仍属于 {at3.Page}（按身份，不按页号）");
+
+            // **"应用正忙"不能被当成"放映结束"**（抄 Inkeys 的一条经验）：
+            // 换页动画 / 弹对话框时 COM 会抛"稍后再试"，那时保持上一刻的状态。
+            {
+                bool wasShowing = SlideNow.Showing;
+                int wasPos = SlideNow.Position;
+                float camWas = ViewOffsetY;
+                fake.ThrowBusy = true;
+                SettleFrames(600);                      // 连过两拍轮询
+                Check("应用正忙（COM 稍后再试）：状态**保持不变**，不误判成放映结束",
+                      SlideNow.Showing == wasShowing && SlideNow.Position == wasPos
+                      && Math.Abs(ViewOffsetY - camWas) < 1f,
+                      $"Showing {wasShowing}→{SlideNow.Showing}，第 {wasPos}→{SlideNow.Position} 页");
+                fake.ThrowBusy = false;
+                SettleFrames(400);
+                Check("忙完之后接着正常探测", SlideNow.Showing, $"第 {SlideNow.Position} 页");
+            }
 
         // 清空：只清**这一页幻灯片**
         ClearFromUi();

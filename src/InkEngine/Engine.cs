@@ -3931,6 +3931,10 @@ public class InkEngine
             Slides = null;                       // 一次都不再纠缠，退回纯白板
             return;
         }
+        // **"它正忙"和"没在放映"必须分开**（抄 Inkeys）：换页动画、弹对话框、保存中
+        // 那几个"稍后再试"的 COM 错，当成"放映结束"会让老师的批注突然跳回白板、
+        // 下一拍又跳回来。这里保持上一刻的状态，下一拍再问。
+        if (!ok && st.Busy) return;
         if (!ok) st = default;
 
         bool wasShowing = SlideNow.Showing;

@@ -26,9 +26,20 @@ internal readonly struct SlideState
     /// <summary>这一叠演示文稿的身份（全路径；拿不到就给个兜底的名字＋页数）。</summary>
     public string DeckKey { get; init; }
 
+    /// <summary>
+    /// **"它正忙，这一拍没问出来"**（不是"没在放映"）。
+    ///
+    /// 抄自 Inkeys 的一条经验：PowerPoint 在换页动画 / 弹对话框 / 正在保存时，COM 会
+    /// 抛 `RPC_E_SERVERCALL_RETRYLATER(0x8001010A)`、`VBA_E_IGNORE(0x800AC472)`、
+    /// `RPC_E_CALL_REJECTED(0x80010001)` 这几个"稍后再试"的错。
+    /// 把它们当成"放映结束了"是个很糟的误判——老师会看到批注突然回白板、然后又跳回来。
+    /// 所以单列一档：**保持上一刻的状态，下一拍再问**。
+    /// </summary>
+    public bool Busy { get; init; }
+
     public bool Equals(in SlideState o)
         => Showing == o.Showing && Position == o.Position && Count == o.Count
-        && SlideId == o.SlideId && DeckKey == o.DeckKey;
+        && SlideId == o.SlideId && DeckKey == o.DeckKey && Busy == o.Busy;
 }
 
 /// <summary>
@@ -70,12 +81,16 @@ internal sealed class FakeSlideSource : ISlideSource
     public int Count = 3;
     public string Deck = @"C:\自检\演示文稿.pptx";
 
+    /// <summary>自检用：模拟"应用正忙（COM 稍后再试）"。</summary>
+    public bool ThrowBusy;
+
     /// <summary>每一页的身份：假实现里就用一个大偏移 + 页号（**故意和页号不同**，
     /// 这样"按身份归属"这件事在自检里真的被验到，而不是恰好和页号相等）。</summary>
     public long SlideIdOf(int position) => 900000 + position;
 
     public bool TryGetState(out SlideState state)
     {
+        if (ThrowBusy) { state = new SlideState { Busy = true }; return false; }
         state = new SlideState
         {
             Showing = Showing,

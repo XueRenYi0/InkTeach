@@ -46,6 +46,12 @@ internal sealed class PowerPointComSource : ISlideSource
 
         object windows = Prop(app, "SlideShowWindows");
         int n = windows == null ? 0 : ToInt(Prop(windows, "Count"));
+        if (windows == null)
+        {
+            // 读不到集合：分清楚是"它正忙"还是"真的没在放映"（见 IsBusyCode）
+            if (_busySeen) { state = new SlideState { Busy = true }; _busySeen = false; return false; }
+            return Fail("读 SlideShowWindows 失败");
+        }
         object win = n > 0 ? Item(windows, 1) : null;
         if (win == null)
         {
@@ -90,6 +96,23 @@ internal sealed class PowerPointComSource : ISlideSource
     /// 这一步很值得写：后台绑定出问题时，"没认出来"和"读到一半失败"在日志里长得一样，
     /// 而两者的修法完全不同。
     /// </summary>
+    /// <summary>
+    /// 这几个是 COM 的**"我正忙，稍后再试"**（不是错误），抄自 Inkeys：
+    /// PowerPoint 在换页动画 / 弹对话框 / 保存时会抛它们。当成"放映结束"是误判。
+    /// `0x8001010A` RPC_E_SERVERCALL_RETRYLATER、`0x800AC472` VBA_E_IGNORE、
+    /// `0x80010001` RPC_E_CALL_REJECTED。
+    /// </summary>
+    private static bool IsBusyCode(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+            if (e is COMException c)
+            {
+                uint hr = unchecked((uint)c.HResult);
+                if (hr == 0x8001010A || hr == 0x800AC472 || hr == 0x80010001) return true;
+            }
+        return false;
+    }
+
     private static bool Fail(string why)
     {
         if (_lastFail != why)
@@ -100,6 +123,9 @@ internal sealed class PowerPointComSource : ISlideSource
         }
         return false;
     }
+
+    /// <summary>自检/上层用：刚才那次失败是不是"它正忙"。</summary>
+    private static bool LastFailWasBusy;
 
     private static string _lastFail;
     private static string LastError;
@@ -249,8 +275,15 @@ internal sealed class PowerPointComSource : ISlideSource
     {
         if (o == null) return null;
         try { return o.GetType().InvokeMember(name, BindingFlags.GetProperty, null, o, null); }
-        catch (Exception ex) { LastError = $"{name}: {Short(ex)}"; return null; }
+        catch (Exception ex)
+        {
+            LastError = $"{name}: {Short(ex)}";
+            if (IsBusyCode(ex)) _busySeen = true;      // 稍后再试，不是错
+            return null;
+        }
     }
+
+    private static bool _busySeen;
 
     private static bool SetProp(object o, string name, object value)
     {
