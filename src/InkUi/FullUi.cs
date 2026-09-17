@@ -107,13 +107,13 @@ public sealed class FullUi : IOverlayUi
     private IUiHost _host;
     private Widgets _widgets;
     private RectF _screen;                 // 逻辑虚拟桌面（Layout 给的）
-    // 拖过之后的位置：**X = 面板中心，Y = 主条上边**。null = 还没拖过（下边居中）。
+    // 拖过之后的位置：**X = 主条左端，Y = 主条上边**。null = 还没拖过（用默认位置）。
     //
-    // 为什么 X 存的是**中心**而不是左上角（2026-09-17 改）：
-    // 假面板和第一版里，"没拖过"走的是"居中"公式（公式里带当前宽度），于是展开时
-    // **两边一起长**；而"拖过"之后存的是左上角，于是展开时**只往右长**。
-    // 同一个手势两种反应，用户当场就问"这是设计亮点还是考虑不周"——是后者。
-    // 现在统一成一条规则：**以球心为准，两边长；碰边就贴边**（见 RawAnchor）。
+    // 这一格 2026-09-17 来回改过一次，最后**回到假面板的规则**，理由记在 RawAnchor：
+    //   · 第一版：没拖过按"整条带子居中"算、拖过之后按左上角算 → 同一个手势两种反应；
+    //   · 中间试过"锚球心、两边长"→ 球会滑走（点它收起来要重新瞄）；
+    //   · 现在：**锚"展开后带子的左端"，而且那条带子默认屏幕居中**。
+    //     球停在带子左端不动，展开＝往右长，展开后整条带子正好居中——用户要的就是这个。
     //
     // 这里特意不用 RectF 来表示"没拖过"：`RectF` 的默认值是全 0，而
     // `IsEmpty` 判的是 `MaxX < MinX`——全 0 的矩形**不算空**，
@@ -404,21 +404,31 @@ public sealed class FullUi : IOverlayUi
     }
 
     /// <summary>
-    /// 主条左上角。**一条规则管横向和纵向**：
+    /// 主条左上角。**锚的是"展开后那条带子的左端"**——球就长在这个位置上，
+    /// 所以开合之间**球一动不动**（点它展开、再点它收起，不用重新瞄；费茨定律）。
     ///
-    ///   · 横向：以**面板中心**为准，展开时**两边一起长**（这就是用户说的"从中间向两边展开"，
-    ///     保留）；拖到屏幕边上会超出屏幕，由 <see cref="Clamp"/> 贴住边——
-    ///     贴边时看起来就是"从边上往中间长"，正是该有的样子；
-    ///   · 纵向：**主条的上边**为准（带子长在上面，主条自己不动，所以贴底时不会跳）。
+    /// 没拖过 → 那条**展开后的带子屏幕下方居中**（`x = 中心 - 展开宽度/2`），
+    /// 于是收起时球停在屏幕中心**偏左**（差半个带子宽），点开以后整条带子正好居中。
+    /// **这就是假面板当年的做法**（`MockWindow.ApplyLayout`：
+    /// `_anchorLeft = wa.Left + (wa.Width - BarContentWidth)/2`，
+    /// 注释写着"锚的是面板自己的左下角，所以抽屉展开时窗口往左上长、面板本身不动"）。
     ///
-    /// 没拖过 → 屏幕下边居中（主条底边离屏幕下边 12 像素）。
+    /// 为什么不是"球居中、往两边长"（中间试过一版）：那样球会随着宽度滑走，
+    /// 收起时要重新找它。为什么不是"球居中、只往右长"：展开后整条带子会偏到右边去。
+    ///
+    /// 贴到右边怎么办：球拖到右边缘时，往右长会顶出屏幕，由 <see cref="Clamp"/>
+    /// 把**整条带子夹回屏幕内**（看着就是"贴住右边、往左铺开"）。
+    ///
+    /// 纵向：主条的上边为准（带子长在上面，贴底时按钮不会跳）。
     /// </summary>
     private Vector2 RawAnchor()
     {
-        float w = Width();
-        float cx = _anchor?.X ?? (_screen.MinX + _screen.MaxX) * 0.5f;
         float top = _anchor?.Y ?? (_screen.MaxY - Tokens.EdgeMargin - Tokens.BarHeight);
-        return new Vector2(cx - w * 0.5f, top);
+        // 没拖过：按**展开后的宽度**居中（不是当前宽度）——这样收起态和展开态
+        // 左右两端都不会跳，只在"整条带子"这一级对齐。
+        float x = _anchor?.X
+                ?? _screen.MinX + (_screen.MaxX - _screen.MinX - ExpandedWidth()) * 0.5f;
+        return new Vector2(x, top);
     }
 
     /// <summary>
@@ -1012,9 +1022,8 @@ public sealed class FullUi : IOverlayUi
         _hoverInside = true;
         _leftAtMs = _host.NowMs;
         _pressPos = p;
-        // 拖动记的是**中心 + 上边**（和 RawAnchor 同一套语义），不是左上角：
-        // 否则松手之后面板的"中心"会随宽度漂，展开/收起时位置对不上。
-        _dragStartAnchor = new Vector2(Anchor().X + Width() * 0.5f, Anchor().Y);
+        // 拖动记的是**左上角**（和 RawAnchor 同一套语义：锚"带子的左端"）
+        _dragStartAnchor = Anchor();
 
         // **按下也算"焦点在面板上"**：手写笔和触摸没有悬停那一段，
         // 只在 PointerMove 里更新 _railHover 的话，老师用笔点面板时设置条根本不会张开
@@ -1990,6 +1999,12 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>自检用：某一格这一刻算不算"选中的"（穿透与工具互斥那条靠它看）。</summary>
     internal bool CellActiveForTest(int cell) => IsActive(cell, _host.State);
+
+    /// <summary>
+    /// 自检用：**这一刻档位下、完全展开后的带子宽**。
+    /// 默认位置（"展开后那条带子居中"）按它算，自检要按同一个数反推球该在哪儿。
+    /// </summary>
+    internal float ExpandedWidthForTest => ExpandedWidth();
 
     /// <summary>自检用：上带这一刻多高（6 = 色线，34 = 完整设置条）。</summary>
     internal float BandHeightForTest => BandRect().MaxY - BandRect().MinY;

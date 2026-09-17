@@ -5785,6 +5785,18 @@ internal sealed class App : InkEngine.InkEngine
               MathF.Abs(ball.MaxY - (VirtualScreen.MaxY / DpiScale - InkUi.Tokens.EdgeMargin)) < 1.5f,
               $"球底 {ball.MaxY:F0}，屏幕底 {VirtualScreen.MaxY / DpiScale:F0}");
 
+        // 没拖过时的横向位置：锚点是**展开后那条带子的左端**，而带子屏幕居中，
+        // 所以球停在"屏幕中心 − 带子宽/2"（偏左半个带子）。
+        // 用户 2026-09-17 要的就是这个：**点一下往右展开、展开完全局居中**。
+        {
+            float wantBallLeft = _virtualX / DpiScale
+                               + (_virtualW / DpiScale - ui.ExpandedWidthForTest) * 0.5f;
+            Check("没拖过：球停在「展开后带子居中」的左端",
+                  MathF.Abs(ball.MinX - wantBallLeft) < 1.5f,
+                  $"球左 {ball.MinX:F0}（应为 {wantBallLeft:F0} = 中心 − 带子宽/2），"
+                  + $"带子宽 {ui.ExpandedWidthForTest:F0}");
+        }
+
         // ---- ② 点球展开：动画期间必须连续出帧 ----
         int strokes0 = Doc.Strokes.Count;
         float ballCx = (ball.MinX + ball.MaxX) * 0.5f * DpiScale;
@@ -5820,6 +5832,15 @@ internal sealed class App : InkEngine.InkEngine
               && barH >= 52f && barH <= 88f      // 色线时 54、设置条时 82
               && barW > 600f,
               $"占用 {barW:F0}×{barH:F0}（主条高 {barOnly.MaxY - barOnly.MinY:F0}）");
+
+        // 展开之后**整条带子屏幕居中**（没拖过时）。球停在带子左端，从头到尾没动过。
+        {
+            float screenCx = (_virtualX + _virtualW * 0.5f) / DpiScale;
+            Check("展开后整条带子屏幕居中",
+                  MathF.Abs((barOnly.MinX + barOnly.MaxX) * 0.5f - screenCx) < 2f,
+                  $"带子中心 {(barOnly.MinX + barOnly.MaxX) * 0.5f:F0}，屏幕中心 {screenCx:F0}"
+                  + $"（带子 {barOnly.MinX:F0}..{barOnly.MaxX:F0}）");
+        }
 
         // 带子长在**上面**（贴底时朝屏幕中心）：主条位置不许动——
         // 你刚点的那个按钮要是往上跳 38 像素，下一次点它就得重新瞄（费茨定律）。
@@ -5876,9 +5897,19 @@ internal sealed class App : InkEngine.InkEngine
         // 再把指针挪回**主条**（不是色带本身）→ 不用点，它自己就该张开。
         // 这一条就是用户说的"焦点在悬浮框的时候就展开"。
         var barHover = ui.BarRectForTest;
-        SendMouse((int)((barHover.MinX + barHover.MaxX) * 0.5f * DpiScale),
-                  (int)((barHover.MinY + barHover.MaxY) * 0.5f * DpiScale), 0);
-        SettleFrames(500);
+        int hoverPx = (int)((barHover.MinX + barHover.MaxX) * 0.5f * DpiScale);
+        int hoverPy = (int)((barHover.MinY + barHover.MaxY) * 0.5f * DpiScale);
+        // 合成鼠标**偶尔会丢一次移动**（自检里见过：同一份代码，一次跑红一次跑绿）——
+        // 每次把坐标挪 1 像素再发，保证真的产生一次 WM_MOUSEMOVE，最多给三次机会。
+        for (int attempt = 0; attempt < 3 && !ui.RailOpenForTest; attempt++)
+        {
+            SendMouse(hoverPx, hoverPy - attempt, 0);
+            SettleFrames(350);
+        }
+        var hb = ui.QueryBounds();
+        Console.WriteLine($"    [诊断] 指针物理 ({hoverPx},{hoverPy})，主条 {barHover.MinX:F0}..{barHover.MaxX:F0}"
+                        + $" × {barHover.MinY:F0}..{barHover.MaxY:F0}，面板 {hb.MinX:F0}..{hb.MaxX:F0}"
+                        + $" × {hb.MinY:F0}..{hb.MaxY:F0}，railHover={ui.RailHoverForTest}");
         Check("指针回到面板（主条）上就自己张开",
               ui.RailOpenForTest && ui.RailHoverForTest,
               $"张开 = {ui.RailOpenForTest}，高 {ui.BandHeightForTest:F0}");
@@ -6284,34 +6315,39 @@ internal sealed class App : InkEngine.InkEngine
         Check("拖到左边缘会吸附", MathF.Abs(docked.MinX - wantLeft) < 3f,
               $"左边缘 {docked.MinX:F0}（贴边后应为 {wantLeft:F0}），拖动前在 {home.MinX:F0}");
 
-        // ---- ⑦.2 锚点统一：拖过之后展开，**还是"两边长"** ----
+        // ---- ⑦.2 锚点：**球不动、带子往右长**；顶到右边就整条夹回屏幕内 ----
         //
-        // 用户 2026-09-17 问的那条："有时候点击收缩像往左收缩、点击展开又向右展开，
-        // 这是设计亮点还是考虑不周"——是后者：以前"没拖过"走居中公式（两边长），
-        // "拖过"之后存的是左上角（只往右长），同一个手势两种反应。
-        // 现在统一成**以球心为准、两边长，碰边就贴边**。
-        // 这一条要说清楚：**球心是锚点**，所以展开后带子的中心必须落在原来球心的位置上。
+        // 用户 2026-09-17 定的规则（也是假面板当年的做法）：
+        //   球是锚点（它长在**展开后那条带子的左端**），展开＝从球往右铺；
+        //   铺出去会出屏时，把整条带子夹回屏幕内——看着就是"贴住右边往左铺开"。
+        //
+        // 这里要验两件事：① 拖到中间之后展开，**球一动不动**（收起时不用重新瞄）；
+        // ② 拖到右边缘再展开，**整条带子还在屏幕里**（不会有一截跑到屏幕外）。
         {
+            // ① 拖到屏幕中左部（离两边都远）→ 展开 → 球的位置必须没变
             var d0 = ui.QueryBounds();                        // 此刻贴着左边、收起态
             float sx = (d0.MinX + d0.MaxX) * 0.5f * DpiScale;
             float sy = (d0.MinY + d0.MaxY) * 0.5f * DpiScale;
-            int toX = _virtualX + (int)(500 * DpiScale);      // 拖到屏幕中左部（离两边都远）
+            int toX = _virtualX + (int)(500 * DpiScale);
             SendMouse((int)sx, (int)sy, 0);                           SettleFrames(60);
             SendMouse((int)sx, (int)sy, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(50);
             for (int i = 1; i <= 8; i++) { SendMouse((int)(sx + (toX - sx) * i / 8f), (int)sy, 0); SettleFrames(20); }
             SendMouse(toX, (int)sy, Native.MOUSEEVENTF_LEFTUP);        SettleFrames(250);
             var parked = ui.QueryBounds();
-            float parkedCx = (parked.MinX + parked.MaxX) * 0.5f;
+            float parkedLeft = parked.MinX;
 
             ClickPhysical((parked.MinX + parked.MaxX) * 0.5f * DpiScale,
                           (parked.MinY + parked.MaxY) * 0.5f * DpiScale);   // 点球展开
             SettleFrames(400);
+            var ballAfter = ui.CellRectForTest(0);                 // 展开后那一格就是球
             var anchoredBar = ui.BarRectForTest;
-            float anchoredCx = (anchoredBar.MinX + anchoredBar.MaxX) * 0.5f;
-            Check("拖到中间后展开：以球心为准、两边一起长",
-                  MathF.Abs(anchoredCx - parkedCx) < 2f,
-                  $"球心 {parkedCx:F0}，展开后带子中心 {anchoredCx:F0}"
-                  + $"（带子 {anchoredBar.MinX:F0}..{anchoredBar.MaxX:F0}）");
+            Check("拖到中间后展开：球不动、只往右长",
+                  // 比的是**锚点**（主条左端）：收起时它就是球的位置；
+                  // 展开后球那一格还要往里让 BarPad（8 像素），拿格子比会差这 8 像素。
+                  MathF.Abs(anchoredBar.MinX - parkedLeft) < 1.5f
+                  && anchoredBar.MaxX > ballAfter.MaxX + 400f,
+                  $"锚点（主条左端）{parkedLeft:F0} → {anchoredBar.MinX:F0}，"
+                  + $"带子 {anchoredBar.MinX:F0}..{anchoredBar.MaxX:F0}");
 
             // 收回去（后面几段用例都假设"面板是收起的"）
             var ballCell = ui.CellRectForTest(0);
@@ -6319,6 +6355,40 @@ internal sealed class App : InkEngine.InkEngine
                           (ballCell.MinY + ballCell.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
             Check("再点一次收起（回到球）", !ui.ExpandedForTest, $"展开状态 = {ui.ExpandedForTest}");
+
+            // ② 拖到**右边缘**（会吸附）→ 展开 → 整条带子必须还在屏幕里
+            var e0 = ui.QueryBounds();
+            float ex = (e0.MinX + e0.MaxX) * 0.5f * DpiScale;
+            float ey = (e0.MinY + e0.MaxY) * 0.5f * DpiScale;
+            int farX = (int)((_virtualX + _virtualW) - 30 * DpiScale);
+            SendMouse((int)ex, (int)ey, 0);                           SettleFrames(60);
+            SendMouse((int)ex, (int)ey, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(50);
+            for (int i = 1; i <= 10; i++) { SendMouse((int)(ex + (farX - ex) * i / 10f), (int)ey, 0); SettleFrames(20); }
+            SendMouse(farX, (int)ey, Native.MOUSEEVENTF_LEFTUP);       SettleFrames(250);
+
+            var atRight = ui.QueryBounds();
+            ClickPhysical((atRight.MinX + atRight.MaxX) * 0.5f * DpiScale,
+                          (atRight.MinY + atRight.MaxY) * 0.5f * DpiScale);  // 展开
+            SettleFrames(500);
+            var rightBar = ui.BarRectForTest;
+            float screenL = _virtualX / DpiScale, screenR = (_virtualX + _virtualW) / DpiScale;
+            Check("球贴右边时展开：整条带子夹回屏幕内（贴着右边、往左铺）",
+                  rightBar.MinX >= screenL - 1f && rightBar.MaxX <= screenR + 1f
+                  && MathF.Abs(rightBar.MaxX - (screenR - InkUi.Tokens.DockGap)) < 3f,
+                  $"带子 {rightBar.MinX:F0}..{rightBar.MaxX:F0}（屏 {screenL:F0}..{screenR:F0}）");
+
+            // 收拾干净：收回球、拖回屏幕中间，别把后面几段用例带偏
+            var ballCell2 = ui.CellRectForTest(0);
+            ClickPhysical((ballCell2.MinX + ballCell2.MaxX) * 0.5f * DpiScale,
+                          (ballCell2.MinY + ballCell2.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            var b2 = ui.QueryBounds();
+            float b2x = (b2.MinX + b2.MaxX) * 0.5f * DpiScale, b2y = (b2.MinY + b2.MaxY) * 0.5f * DpiScale;
+            SendMouse((int)b2x, (int)b2y, 0);                          SettleFrames(60);
+            SendMouse((int)b2x, (int)b2y, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(50);
+            int homeX = _virtualX + (int)(720 * DpiScale);
+            for (int i = 1; i <= 8; i++) { SendMouse((int)(b2x + (homeX - b2x) * i / 8f), (int)b2y, 0); SettleFrames(20); }
+            SendMouse(homeX, (int)b2y, Native.MOUSEEVENTF_LEFTUP);      SettleFrames(250);
         }
 
         // ---- ⑧ 抽屉里的「重启软件」：先暂存板书，再拉起新进程（这里只记一笔，不真拉）----
