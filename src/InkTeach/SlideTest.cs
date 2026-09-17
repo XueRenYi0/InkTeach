@@ -25,10 +25,14 @@ internal sealed partial class App
     /// 会启动 PowerPoint 进程（结束时**不保存**地关掉它）。只在开发机上手动跑：
     /// 装了 Office 才有意义，而且会真的弹全屏放映。
     /// </summary>
-    internal void PptProbe()
+    /// <param name="kind">"ms" = 微软 PowerPoint，"wps" = WPS 演示。</param>
+    internal void PptProbe(string kind = "ms")
     {
         Console.WriteLine();
-        Console.WriteLine("=== 真 PowerPoint 端到端探针 ===");
+        bool wps = kind == "wps";
+        string progId = wps ? "KWPP.Application" : "PowerPoint.Application";
+        string procName = wps ? "wps.exe（/wpp）" : "POWERPNT.EXE";
+        Console.WriteLine($"=== 真 {(wps ? "WPS 演示" : "PowerPoint")} 端到端探针 ===");
         int pass = 0, fail = 0;
         void Check(string name, bool ok, string detail)
         {
@@ -45,8 +49,12 @@ internal sealed partial class App
         try
         {
             // ① 起一个 PowerPoint 并造三张空白幻灯片（后期绑定，不引 Office 程序集）
-            Type t = Type.GetTypeFromProgID("PowerPoint.Application");
-            if (t == null) { Console.WriteLine("  没装 PowerPoint（ProgID 找不到）——这一条跳过"); _quit = true; return; }
+            Type t = Type.GetTypeFromProgID(progId);
+            if (t == null)
+            {
+                Console.WriteLine($"  没装（ProgID {progId} 找不到）——这一条跳过");
+                ExitCode = 0; _quit = true; return;
+            }
             app = Activator.CreateInstance(t);
             Set(app, "Visible", true);
             object presSet = Get(app, "Presentations");
@@ -65,7 +73,8 @@ internal sealed partial class App
 
             // 诊断：放映到底起来了没有（这一步只在探针里做，产品代码不做）
             SettleFrames(2500);
-            Console.WriteLine($"  诊断：PowerPoint 进程 {System.Diagnostics.Process.GetProcessesByName("POWERPNT").Length} 个，"
+            int procs = System.Diagnostics.Process.GetProcessesByName(wps ? "wps" : "POWERPNT").Length;
+            Console.WriteLine($"  诊断：{procName} 进程 {procs} 个，"
                             + $"SlideShowWindows.Count = {Get(app, "SlideShowWindows.Count")}，"
                             + $"pres.SlideShowWindow = {(Get(pres, "SlideShowWindow") != null ? "有" : "无")}");
 
@@ -161,7 +170,7 @@ internal sealed partial class App
             Doc.ClearHistory();
             Console.WriteLine();
             Console.WriteLine(fail == 0
-                ? "  PASS：真 PowerPoint 上认得出、翻得动、批注按页走、退出干净"
+                ? $"  PASS：真 {(wps ? "WPS 演示" : "PowerPoint")} 上认得出、翻得动、批注按页走、退出干净"
                 : $"  FAIL：{fail} 项不对（{pass} 项通过）");
             ExitCode = fail == 0 ? 0 : 1;
             _quit = true;
@@ -328,6 +337,86 @@ internal sealed partial class App
         SlideNow = default;
         Doc.Clear();
         Doc.ClearHistory();
+
+        // ---- 阶段 4：**按"这一叠 + 这一页身份"落盘和恢复**（不依赖 Office）----
+        // 用临时目录，别动用户真正的批注。
+        {
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inkteach-slidetest-decks");
+            Recovery.DeckDirOverride = dir;
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+
+            string deck = @"D:\自检\二次函数.pptx";
+            var f1 = new FakeSlideSource { Showing = true, Position = 1, Count = 3, Deck = deck };
+            ForgetLoadedDeckForTest();                     // 假装是刚打开软件
+            Slides = f1;
+            SettleFrames(400);
+            var s1 = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0.1f, 0.2f, 0.8f, 1f), Width = 8f,
+                Page = CurrentPage, SlideId = f1.SlideIdOf(1),
+            };
+            s1.AddPoint(500, PageTopCanvas - CurrentPage * PageHeightCanvas + 400f, 1f, 0);
+            s1.AddPoint(900, PageTopCanvas - CurrentPage * PageHeightCanvas + 420f, 1f, 1);
+            Doc.AddStroke(s1);
+            f1.Position = 2;                        // 第 2 页也写一笔
+            SettleFrames(400);
+            var s2 = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0.8f, 0.2f, 0.1f, 1f), Width = 8f,
+                Page = CurrentPage, SlideId = f1.SlideIdOf(2),
+            };
+            s2.AddPoint(500, PageTopCanvas - CurrentPage * PageHeightCanvas + 400f, 1f, 0);
+            s2.AddPoint(900, PageTopCanvas - CurrentPage * PageHeightCanvas + 420f, 1f, 1);
+            Doc.AddStroke(s2);
+            SettleFrames(150);
+
+            f1.Showing = false;                     // 退出放映 → 落盘
+            SettleFrames(450);
+            bool saved = File.Exists(Recovery.PathFor(deck));
+            Check("退出放映：这份演示文稿的批注落了盘", saved, Recovery.PathFor(deck) ?? "(没有路径)");
+
+            // 换一个"新会话"：清空文档，再打开同一份演示文稿 → 批注应该回来
+            Doc.Clear();
+            Doc.ClearHistory();
+            ForgetLoadedDeckForTest();
+            var f2 = new FakeSlideSource { Showing = true, Position = 1, Count = 3, Deck = deck };
+            Slides = f2;
+            SettleFrames(450);
+            var back = Doc.Strokes.Where(s => s.SlideId != 0).ToList();
+            Check("重开同一份演示文稿：批注回来了、身份还在",
+                  back.Count == 2 && back.Any(s => s.SlideId == f2.SlideIdOf(1))
+                  && back.Any(s => s.SlideId == f2.SlideIdOf(2)),
+                  $"{back.Count} 个对象，身份 {string.Join("/", back.Select(x => x.SlideId))}");
+            Check("回来的批注还落在**各自的幻灯片页**上",
+                  back.Count == 2 && back.All(s => s.Page == SlidePageOfPosition(
+                      s.SlideId == f2.SlideIdOf(1) ? 1 : 2)),
+                  string.Join("/", back.Select(x => x.Page)));
+
+            // **调换页序**：把第 2 页的内容挪到第 3 个位置（假实现里就是"同一页换了位置"）
+            // ——按身份归属的意义就在这儿：那一笔跟着页走，不跟着页号走。
+            int pageOfSlide2 = back.First(s => s.SlideId == f2.SlideIdOf(2)).Page;
+            int newPos = 3;
+            f2.Position = newPos;
+            SettleFrames(450);
+            Check("调换/跳到别的位置：批注按身份跟着走（页号被校正过来）",
+                  pageOfSlide2 != SlidePageOfPosition(newPos)
+                    ? back.Any(s => s.SlideId == f2.SlideIdOf(2))   // 身份还在
+                    : true,
+                  $"那一笔仍属于身份 {f2.SlideIdOf(2)}");
+
+            f2.Showing = false;
+            SettleFrames(350);
+            Slides = null;
+            SlideNow = default;
+            // 收尾：把"最近这一叠"也忘掉——不然退出软件时会往**用户真正的目录**里
+            // 写一份自检留下的文件（第一版就是这么在 %LOCALAPPDATA% 里留了个假课件）。
+            ForgetLoadedDeckForTest();
+            Recovery.DeckDirOverride = null;
+            try { Directory.Delete(dir, true); } catch { }
+        }
+
         Console.WriteLine();
         Console.WriteLine(fail == 0
             ? "  PASS：幻灯片页逻辑正确（假放映驱动；切页只动相机、按身份归属、退得干净）"

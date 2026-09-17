@@ -537,7 +537,8 @@ internal sealed partial class App : InkEngine.InkEngine
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
-            PptProbe();                // 真 PowerPoint 端到端探针（会真的起放映）
+            // 真端到端探针（会真的起放映）：`--pptprobe ms` 微软、`--pptprobe wps` WPS
+            PptProbe(args.Length > 1 ? args[1].ToLowerInvariant() : "ms");
         }
         else if (mode == "--iotest")
         {

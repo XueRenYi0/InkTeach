@@ -3528,6 +3528,8 @@ public class InkEngine
     /// </summary>
     protected virtual void Shutdown()
     {
+        // 关软件前把**这一份演示文稿的批注**再存一次（放映中途直接关掉也不丢）。
+        if (_lastDeck != null) SaveDeckAnnotations(_lastDeck, "退出软件");
         foreach (var w in _windows)
         {
             Native.KillTimer(w.Hwnd, (IntPtr)1);
@@ -3830,6 +3832,81 @@ public class InkEngine
     /// <summary>进放映之前站在白板的哪一页（放映结束要回到它）。</summary>
     private int _whiteboardPageBeforeShow;
 
+    /// <summary>已经载入过批注的那一份演示文稿（身份）。换一份就去读它自己的批注。</summary>
+    private string _deckLoaded;
+
+    /// <summary>
+    /// **最近一次看到的那份演示文稿**（放映结束的那一刻状态里已经没有它了——
+    /// 状态是"没在放映"，所以要在放映中记下来，退出时才有键可存）。
+    /// </summary>
+    private string _lastDeck;
+
+    /// <summary>自检用：假装"刚打开软件、还没载入过任何演示文稿的批注"。</summary>
+    internal void ForgetLoadedDeckForTest() { _deckLoaded = null; _lastDeck = null; }
+
+    /// <summary>
+    /// 把**属于幻灯片空间**的对象挑出来存一份（整份文档里的白板板书不在这里面）。
+    /// 这些对象自己带着 `SlideId`，所以下次打开同一份课件、哪怕页序变了，也能各回各页。
+    /// </summary>
+    private void SaveDeckAnnotations(string deck, string why)
+    {
+        if (string.IsNullOrEmpty(deck)) return;
+        var only = new InkDocument();
+        int n = 0;
+        foreach (var s in Doc.Strokes)
+            if (s.SlideId != 0) { only.AppendStroke(s); n++; }
+        Recovery.SaveDeck(deck, InkSerializer.Save(only));
+        Console.WriteLine($"（{why}）这份演示文稿上的批注共 {n} 个对象");
+    }
+
+    /// <summary>
+    /// 换了一份演示文稿就把它自己的批注读进来。
+    /// **不当作一步撤销**（那是"打开时就有的东西"，不是老师刚做的动作），
+    /// 所以用的是 `AppendStroke` 这条不记账的路。
+    /// </summary>
+    private void LoadDeckAnnotations(string deck)
+    {
+        _deckLoaded = deck;
+        var blob = Recovery.TryLoadDeck(deck);
+        if (blob == null) { Console.WriteLine($"这份演示文稿以前没做过批注（{deck}）"); return; }
+        try
+        {
+            var tmp = new InkDocument();
+            InkSerializer.LoadInto(tmp, blob);
+            int n = 0;
+            foreach (var s in tmp.Strokes)
+            {
+                if (s.SlideId == 0) continue;          // 保险：只收幻灯片空间的东西
+                s.Id = 0;                              // 装上来的对象给新身份（AppendStroke 会分配）
+                Doc.AppendStroke(s);
+                n++;
+            }
+            Doc.InvalidateAll();
+            Console.WriteLine($"接上这份演示文稿以前的批注：{n} 个对象");
+        }
+        catch (Exception ex) { Console.WriteLine("幻灯片批注读不出来（当作没有）：" + ex.Message); }
+    }
+
+    /// <summary>
+    /// **按身份把页号校正一遍**：调换页序之后，同一页的 `SlideId` 还在，但位置（页号）变了。
+    /// 对象是按 `SlideId` 归属的，所以每次换页顺手把"这一页上的对象"的页号改成现在的页号——
+    /// 于是**清空本页 / 跨页撤销**这些按页号办事的功能，在调换页序之后照样对得上。
+    /// </summary>
+    private void ReconcileSlidePage(long slideId, int page)
+    {
+        if (slideId == 0) return;
+        int fixedCount = 0;
+        foreach (var s in Doc.Strokes)
+            if (s.SlideId == slideId && s.Page != page)
+            {
+                Doc.Dirty.Add(s.PaddedBounds);
+                s.Page = page;
+                fixedCount++;
+            }
+        if (fixedCount > 0)
+            Console.WriteLine($"  这一页的批注有 {fixedCount} 个对象的页号跟着页序更新了");
+    }
+
     /// <summary>
     /// **探测放映状态**：轮询而不是挂 COM 事件（理由见 调研-对接PPT.md 3.4：
     /// 老师翻页有三个来源——我们的按钮、键盘、遥控翻页器，轮询一律看得见）。
@@ -3870,14 +3947,21 @@ public class InkEngine
             // 记下"进放映之前站在白板的哪一页"——放映结束要**回到那一页**，
             // 而不是傻站在幻灯片页区段上（那里在白板空间里是一片空白）。
             if (!wasShowing) _whiteboardPageBeforeShow = CurrentPage;
+            // 换了一份演示文稿：先把它以前的批注读进来（同一份就什么都不做）
+            if (st.DeckKey != _deckLoaded) LoadDeckAnnotations(st.DeckKey);
+            _lastDeck = st.DeckKey;
             // 放映空间：新笔自动落到这一页（页号 = 幻灯片页区间里的那一个）
             Doc.CurrentPage = SlidePageOfPosition(st.Position);
+            ReconcileSlidePage(st.SlideId, Doc.CurrentPage);
             GotoPage(Doc.CurrentPage);
             Console.WriteLine($"放映：第 {st.Position}/{st.Count} 页"
                             + $"（幻灯片身份 {st.SlideId}），批注跟着换到这一页");
         }
         else if (wasShowing)
         {
+            // 放映结束：**先把这一份的批注存下来**（老师退出放映往往就是讲完了），
+            // 再回到白板。存的是全量（按 SlideId 归属），所以下次打开接着用。
+            SaveDeckAnnotations(_lastDeck, "退出放映");
             // 放映结束：**回到进放映之前那一页白板**。老师刚从 PPT 退出来，
             // 眼前该是他自己的板书，而不是幻灯片区段那片空白。
             GotoPage(_whiteboardPageBeforeShow);
