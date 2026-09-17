@@ -741,13 +741,22 @@ public sealed class FullUi : IOverlayUi
                                 Brush(ctx, new Color4(1f, 0.16f, 0.16f, 0.95f)));
                 break;
 
-            case Tool.Highlighter:                  // 荧光笔是"涂一大条"：画一根那么粗的短条
+            case Tool.Highlighter:
             {
-                float len = MathF.Max(40f, w * 1.4f);
-                var r = new Vortice.RawRectF(c.X - len * 0.5f, c.Y - h * 0.5f,
-                                             c.X + len * 0.5f, c.Y + h * 0.5f);
-                ctx.FillRoundedRectangle(new RoundedRectangle(r, h * 0.5f, h * 0.5f),
-                                         Brush(ctx, st.HighlighterColor));
+                // **圆盘**，和屏幕上的落点一模一样（`Overlay.DrawHighlighterDisc`：
+                // 半径 = 半个笔宽，填充用荧光笔本色，外面套白／深两层描边）。
+                //
+                // 我第一版在这儿画了"一根那么粗的短条"，理由是"荧光笔画出来就是一大条"——
+                // 那是**想当然**：点一下的落点就是个圆盘，短条反而和真实落点对不上，
+                // 用户一眼就看出来了（"荧光笔的预览怎么不是圆的"）。
+                // 规矩只有一条：**预览 = 那个工具在屏幕上的落点**。
+                float r = w * 0.5f;
+                ctx.FillEllipse(new Ellipse(c, r, r),
+                                Brush(ctx, new Color4(st.HighlighterColor.R, st.HighlighterColor.G,
+                                                      st.HighlighterColor.B, 0.22f)));
+                ctx.DrawEllipse(new Ellipse(c, r + 0.75f, r + 0.75f), Brush(ctx, white), 1.5f);
+                ctx.DrawEllipse(new Ellipse(c, r - 0.75f, r - 0.75f),
+                                Brush(ctx, new Color4(0.22f, 0.28f, 0.38f, 0.55f)), 1.5f);
                 break;
             }
 

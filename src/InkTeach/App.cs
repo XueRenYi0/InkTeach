@@ -5680,6 +5680,7 @@ internal sealed class App : InkEngine.InkEngine
         if (Environment.GetCommandLineArgs().Contains("--pixel")) Tool = Tool.PixelEraser;
         if (Environment.GetCommandLineArgs().Contains("--eraser")) Tool = Tool.Eraser;
         if (Environment.GetCommandLineArgs().Contains("--laser")) Tool = Tool.Laser;
+        if (Environment.GetCommandLineArgs().Contains("--hl")) Tool = Tool.Highlighter;
         SettleFrames(400);
 
         if (CurrentUi is InkUi.FullUi ui)
