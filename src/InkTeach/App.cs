@@ -1506,6 +1506,54 @@ internal sealed class App : InkEngine.InkEngine
             ? "  PASS：整屏翻页正确（页高 = 视口高、只动相机、到顶就停、往下无限、滚轮仍是细粒度）"
             : $"  FAIL：{fail} 项不对（{pass} 项通过）");
 
+        // ---- ⑧ 清空之后**留在原地**（用户 2026-09-17 问："如果我的焦点在第 12 页，
+        //        点击清空以后要不要回到第一页？"）----
+        //
+        // 结论：**不回**。清空是"这一屏重新来"，不是"回到开头"：
+        // 老师在第 12 屏写完一题、点清空，就是要在**这一屏**接着写下一题；
+        // 把相机弹回去等于让他再翻十几次，而且下一次落笔的位置也错了
+        // （我们一直守"点下去的东西别动"，锚点、按钮位置都按它办）。
+        // 真想从头看，点"上一屏"或拖右缘滚动条就行。
+        //
+        // 这一条要**钉在自检里**，因为"清空之后镜子一照全变"这种事很容易被以后某次
+        // 改动带歪（比如"顺手把相机归零"）。
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            ViewOffsetY = 0f;
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+            Doc.InvalidateAll();
+            SettleFrames(250);
+
+            FlipPage(true); SettleFrames(300);
+            FlipPage(true); SettleFrames(300);
+            int pageKept = ScreenIndex;
+            float camKept = ViewOffsetY;
+
+            for (int i = 0; i < 3; i++)
+            {
+                var st = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = new Color4(0f, 0f, 0f, 1f), Width = 8f,
+                };
+                st.AddPoint(600 + i * 60, 300 + i * 40, 1f, 0);
+                st.AddPoint(900 + i * 60, 340 + i * 40, 1f, 1);
+                Doc.AddStroke(st);
+            }
+            SettleFrames(250);
+            ClearFromUi();
+            SettleFrames(400);
+
+            Check("清空之后：**还停在第 3 屏**，相机一动不动",
+                  ScreenIndex == pageKept && MathF.Abs(ViewOffsetY - camKept) < 0.5f,
+                  $"屏号 {pageKept} → {ScreenIndex}，相机 {camKept:F0} → {ViewOffsetY:F0}"
+                  + $"（文档 {Doc.Strokes.Count} 笔）");
+            Check("清空之后：还能接着在这一屏写",
+                  Doc.Strokes.Count == 0,
+                  $"笔画 {Doc.Strokes.Count}");
+        }
+
         Doc.Clear();
         Doc.ClearHistory();
         ViewOffsetY = 0f;
