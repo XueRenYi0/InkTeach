@@ -197,6 +197,38 @@ object show = app.GetType().InvokeMember("SlideShowWindows", BindingFlags.GetPro
 
 ## 六、来源
 
+> 下面这一节是**做到哪了**的实况（2026-09-18 凌晨），别忘了回来更新。
+
+## 七、进度实况（2026-09-18）
+
+| 阶段 | 状态 | 证据 |
+|---|---|---|
+| 0 页模型（对象带归属 / 清空只清本页 / 跨页撤销自动翻回去） | **完成** | `--pagetest` 26 项；全套连跑两遍（`reports/func-p0-a`、`func-p0-b`） |
+| 1 `ISlideSource` + 假实现 + 面板显示 `PPT 3/12` | **完成** | `--slidetest` 12 项 |
+| 2 真 COM（后期绑定） | **完成，两家真机都验过** | `--pptprobe ms` / `--pptprobe wps` **各 13/13** |
+| 3 从我们的面板翻页 | **核心完成**（`ShowNativeNavigator` 未验） | 同上探针 |
+| 4 按 deck + slideId 落盘恢复 | **完成** | `--slidetest` 16 项（含"重开接上""换页序跟着走"） |
+| 5 幻灯片截图做背景 / 导出带批注的图 | 未做 | —— |
+
+### 7.1 WPS 的事实（踩过的坑，很有用）
+
+「WPS Office 教育版」快捷方式指向 `ksolaunch.exe`，而 **`KWPP.Application` 的
+LocalServer32 是 `wps.exe /prometheus /wpp /Automation`**——也就是说：
+
+- **WPS 演示的进程名是 `wps.exe`，不是 `wpp.exe`**（InkClass 只找 `wpp`，
+  在装了新版 WPS 的机器上会误判"没装"）；
+- ProgID `KWPP.Application` 在微软 PowerPoint **不在**时才是我们要的那个；
+  两个都装时我们优先认微软（`SlideID` 更稳）。
+
+两台应用的**同一套后期绑定代码**都跑通了（认得出页码/页数/`SlideID`/文件名、
+翻页、退出干净），说明"接口 + 一个实现"这个隔法是对的。
+
+### 7.2 还没做的两件（明确记着）
+
+- `ShowNativeNavigator`（借它自己的"幻灯片导航"跳页）代码在、**真机没验**；
+- "批注跟着 pptx 文件走"（存成 `课件.pptx.ink`）：要处理只读目录、U 盘拔掉、
+  老师只拷 pptx 的情况，是**另一个决定**。
+
 **InkClass（对照实现）**
 
 - `Ink Canvas\MW_PPT.cs`：`:53/:124` 取活动实例；`:59-61` 挂三个事件；
