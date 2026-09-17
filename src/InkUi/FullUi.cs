@@ -1353,12 +1353,32 @@ public sealed class FullUi : IOverlayUi
 
         if (_press != -1)
         {
-            if (!_dragging && Vector2.Distance(p, _pressPos) > Tokens.DragThreshold)
+            // **动作按钮和抽屉里的行不参与拖动**。
+            //
+            // 用户实测报的 bug："按住清空的时候，手一抖就把整个面板拖走了"——
+            // 面板一走，按钮就不在指针下面了，看着就是"清空没反应"。
+            // 只有点在**主条上**（球或者工具格）才算"抓住面板"。
+            bool draggable = _press != 2000 && _press < 1000;
+            if (draggable && !_dragging && Vector2.Distance(p, _pressPos) > Tokens.DragThreshold)
                 _dragging = true;
             if (_dragging)
             {
                 _anchor = _dragStartAnchor + (p - _pressPos);
                 Invalidate();               // 位置一变就要重画；引擎那边每帧都会加进脏区
+            }
+
+            // 按住清空的时候指针滑出按钮 = 算了（各家按钮都是这个约定）。
+            // 判定区给 8 像素余量，免得手抖一两像素就取消。
+            if (_press == 2000)
+            {
+                var hit = ActionRect();
+                if (p.X < hit.MinX - 8f || p.X > hit.MaxX + 8f
+                    || p.Y < hit.MinY - 8f || p.Y > hit.MaxY + 8f)
+                {
+                    _actionHoldFrom = double.NegativeInfinity;
+                    _press = -1;
+                    Invalidate();
+                }
             }
             return true;
         }

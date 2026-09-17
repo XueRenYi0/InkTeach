@@ -1039,8 +1039,12 @@ public class InkEngine
                 // 用序号认出来，别让这一句 _dirty = false 把它抹掉——
                 // 抹掉的表现就是"动画或一次性外观变化卡在第一帧"。
                 long seqBefore = _uiInvalidateSeq;
+                long docVerBefore = Doc.Version;
                 RenderAll();
-                _dirty = _uiInvalidateSeq != seqBefore;
+                // 渲染期间**改了文档**（"按住清空"就是在界面的 Render 里够时间的）
+                // 也要再要一帧：这一帧贴出去的是改之前的像素。
+                // 少了后面这半句，清空之后屏幕上那层墨会一直留着——见 RenderAll 里的注释。
+                _dirty = _uiInvalidateSeq != seqBefore || Doc.Version != docVerBefore;
             }
             else
             {
@@ -1101,6 +1105,10 @@ public class InkEngine
         // 放在渲染之前：这一帧界面画在哪，输入就该收在哪，两件事同源。
         UpdateUiInputWindow();
 
+        // 记下渲染前的文档版本：**渲染期间界面可能改文档**（"按住清空"就是在界面的
+        // Render 回调里够时间的——界面没有别的"每帧回调"可用）。见下面的判断。
+        long docVerBeforeRender = Doc.Version;
+
         foreach (var w in _windows)
             w.RenderFrame(this);
         foreach (var w in _windows)
@@ -1111,13 +1119,21 @@ public class InkEngine
         // 界面自己要求的重画（InvalidateUi）已经在这一帧贴完，可以清掉了。
         UiInvalidatePending = false;
 
-        // 调试：模拟"渲染跟不上"的低配机器，用来验证委托墨迹轨迹会不会补位。
         // Every window has now applied this round of changes, so the stale
         // regions can be dropped. Doing it here (rather than inside a window)
         // is what keeps multi-monitor setups correct.
-        Doc.Dirty.Reset();
-        Doc.AppendedSinceRender.Clear();
-        Doc.StructureChangedSinceRender = false;
+        //
+        // **但渲染期间改了文档就不能清**：这一帧贴出去的是改之前的像素，
+        // 脏区得留给下一帧。这里踩过一个真 bug（用户报的"橡皮清空没有用、
+        // 还把墨迹卡住、连常规橡皮都擦不掉"）：清空是在界面的 Render 里触发的，
+        // 引擎渲染完无条件 Reset()，于是**文档已经空了、屏幕上那层墨还留着**——
+        // 看着像清空失效，而橡皮也擦不掉（文档里已经没有东西可擦了）。
+        if (Doc.Version == docVerBeforeRender)
+        {
+            Doc.Dirty.Reset();
+            Doc.AppendedSinceRender.Clear();
+            Doc.StructureChangedSinceRender = false;
+        }
 
         var w0 = _windows[0];
         _lastRebuildMs = w0.LastRebuildMs;

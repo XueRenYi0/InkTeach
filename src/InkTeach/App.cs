@@ -6099,7 +6099,21 @@ internal sealed class App : InkEngine.InkEngine
                 s.AddPoint(_virtualX + 380 + i * 40, _virtualY + 340, 1f, 1);
                 Doc.AddStroke(s);
             }
+            // 再补一笔**洋红**的：专供"屏幕像素"核对。本轮那个 bug（清空之后墨还留在
+            // 屏幕上、连橡皮都擦不掉）只有量屏幕才抓得到——当时只验了 Doc.Strokes.Count。
+            float magX = _virtualX + 900f, magY = _virtualY + 620f;
+            var magStroke = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 26f * DpiScale,
+            };
+            magStroke.AddPoint(magX - 200f, magY, 1f, 0);
+            magStroke.AddPoint(magX + 200f, magY, 1f, 1);
+            Doc.AddStroke(magStroke);
             SettleFrames(150);
+            SettleFrames(300);
+            int inkBefore = ScreenProbe.CountMagenta((int)magX - 240, (int)magY - 40, 480, 80);
+            Check("清空前：洋红那笔在屏幕上", inkBefore > 300, $"{inkBefore} 像素");
 
             Host.Commands.SetTool(Tool.Eraser);
             SettleFrames(200);
@@ -6131,10 +6145,20 @@ internal sealed class App : InkEngine.InkEngine
             SendMouse((int)ax, (int)ay, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(250);
             Check("按住 0.8 秒：清空生效", Doc.Strokes.Count == 0,
                   $"笔画 {before} → {Doc.Strokes.Count}");
+
+            // **屏幕上也得干净**。这一条是本轮真 bug 的靶子：清空是在界面的 Render 里
+            // 触发的，引擎渲染完无条件把脏区清了 → 文档空了、屏幕上那层墨还留着，
+            // 表现就是"清空没用，而且常规橡皮也擦不掉"（文档里已经没东西可擦）。
+            int inkAfter = ScreenProbe.CountMagenta((int)magX - 240, (int)magY - 40, 480, 80);
+            Check("清空之后**屏幕上**也干净了（不然就是'墨迹卡住'）", inkAfter < 40,
+                  $"{inkBefore} → {inkAfter} 像素");
+
             Host.Commands.Undo();
             SettleFrames(250);
             Check("清空能撤销回来（不是不可逆的破坏）", Doc.Strokes.Count == before,
                   $"撤销后 {Doc.Strokes.Count} 笔");
+            int inkUndo = ScreenProbe.CountMagenta((int)magX - 240, (int)magY - 40, 480, 80);
+            Check("撤销之后墨回到屏幕上", inkUndo > 300, $"{inkAfter} → {inkUndo} 像素");
 
             // 全选：挂在选择那条
             Host.Commands.SetTool(Tool.Marquee);
