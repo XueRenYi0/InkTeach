@@ -159,6 +159,11 @@ public sealed class FullUi : IOverlayUi
     private double _railExitAtMs = double.NegativeInfinity;
     private bool _hoverInside;             // 指针在"看得见的那一块"里
     private double _leftAtMs = double.NegativeInfinity;
+    /// <summary>
+    /// "可以开始自动收起来了"的开关：指针碰过面板一次之后才置真。
+    /// 没碰过之前一律保持完整显示——启动时不许一上来就收成屏幕底边那条露头（见 UpdatePeek）。
+    /// </summary>
+    private bool _peekArmed;
 
     /// <summary>「更多」抽屉里的行。</summary>
     private enum Row { DarkTheme, AutoHide, BoardPattern, BoardStep, Restart, Quit, CheckUpdate, SubjectTools }
@@ -538,7 +543,7 @@ public sealed class FullUi : IOverlayUi
         // **色片按可用宽度平分，铺满整条**（照假面板：cw = (avail - gap*(n-1)) / n）。
         // 早先我写的是固定 26 宽 ＋ 6 缝，结果右边空出一大块，跟假面板一比就露馅了。
         var band = BandRect();
-        int n = Tokens.Palette.Length;
+        int n = SwatchCount;
         float gap = 4f;
         float avail = band.MaxX - band.MinX - BarInset() * 2f
                     - (BandHasSlider ? SliderTrackW + 14f : 0f)    // 给右端的粗细滑条让位
@@ -612,10 +617,11 @@ public sealed class FullUi : IOverlayUi
     /// <summary>
     /// 上带里有几段。白板那一格是 5 段：**[上一屏] [白][绿][黑] [下一屏]**
     /// ——翻屏和板色是同一类事（都属于"这块板怎么摆"），放一行最顺手。
-    /// 截图那一格是 2 段：**[直接截取][隐藏界面]**（照 InkClass 的两项菜单，
-    /// 也照我们假面板里定的那两段）。
+    /// 截图那一格是 3 段：**[直接截取][隐藏界面][粘贴图片]**——前两段照 InkClass 的两项菜单，
+    /// 第三段是用户 2026-09-17 要的："粘贴功能，因为其他地方使用复制功能可以到剪贴板，
+    /// 但如果是触摸屏或者手写板可能没有键盘"（等于把 `Ctrl+V` 搬到屏幕上）。
     /// </summary>
-    private int BandSegmentCount => _bandCell switch { 2 => 5, 6 => 2, 7 => 2, 8 => 4, 9 => 2, _ => 0 };
+    private int BandSegmentCount => _bandCell switch { 2 => 5, 6 => 2, 7 => 2, 8 => 4, 9 => 3, _ => 0 };
 
     /// <summary>这个工具的粗细范围。**界面管范围，引擎管钳位**——引擎那边是 0.5～64。</summary>
     private (float Min, float Max) WidthRange(Tool tool) => tool switch
@@ -928,7 +934,7 @@ public sealed class FullUi : IOverlayUi
     {
         if (!BandHasSwatches) return -1;
         if (!RailOpen) return -1;      // 还是一条色线时不吃点击（指针一靠近它就会张开）
-        for (int i = 0; i < Tokens.Palette.Length; i++)
+        for (int i = 0; i < SwatchCount; i++)
             if (SwatchRect(i).Contains(x, y)) return i;
         return -1;
     }
@@ -1035,7 +1041,29 @@ public sealed class FullUi : IOverlayUi
         };
     }
 
-    private void ActivateSwatch(int i) => _host.Commands.SetColor(Tokens.Palette[i].Color);
+    /// <summary>
+    /// 这一档显示哪几个色片（返回 <see cref="Tokens.Palette"/> 里的下标）。
+    ///
+    /// **极简档只给 4 个**：短胶囊（359 宽）里塞 12 个色片、再减掉滑条占的那 146，
+    /// 每个只剩 11 像素宽——点都点不准（用户 2026-09-17："极简模式的色带展开栏里面的
+    /// 内容排布有点问题"）。4 个的话每个 42 像素，和完整档一个手感。
+    /// 颜色照假面板定的：**红 / 黑 / 蓝 / 白**（讲课时最常用的四支）。
+    /// </summary>
+    private static readonly int[] MiniSwatchIdx = { 3, 0, 8, 2 };
+    private static readonly int[] FullSwatchIdx = CreateFullSwatchIdx();
+
+    private static int[] CreateFullSwatchIdx()
+    {
+        var a = new int[Tokens.Palette.Length];
+        for (int i = 0; i < a.Length; i++) a[i] = i;
+        return a;
+    }
+
+    private int[] SwatchIdx => _profile == Profile.Mini ? MiniSwatchIdx : FullSwatchIdx;
+    private int SwatchCount => SwatchIdx.Length;
+    private Color4 SwatchColor(int i) => Tokens.Palette[SwatchIdx[i]].Color;
+
+    private void ActivateSwatch(int i) => _host.Commands.SetColor(SwatchColor(i));
 
     private void ActivateSegment(int i)
     {
@@ -1060,9 +1088,11 @@ public sealed class FullUi : IOverlayUi
                     0 => Tool.Line, 1 => Tool.Rectangle, 2 => Tool.Ellipse, _ => Tool.Arrow,
                 });
                 break;
-            case 9:                       // 截图：直接截取 / 隐藏批注截取
-                // 照 InkClass 的两项菜单：默认"隐藏批注截取"（只拍下层内容），
-                // "直接截取"连板书一起拍。
+            case 9:                       // 截图：[直接截取][隐藏界面][粘贴图片]
+                // 照 InkClass 的两项菜单：默认"隐藏界面"（只拍下层内容），
+                // "直接截取"连板书一起拍。第三段是**动作**：把剪贴板里的东西粘进来
+                // （没有键盘的触摸屏 / 手写板也能用，等于把 Ctrl+V 搬到了屏幕上）。
+                if (i == 2) { _host.Commands.Paste(); break; }
                 _host.Commands.SetCaptureHideInk(i == 1);
                 break;
         }
@@ -1355,6 +1385,14 @@ public sealed class FullUi : IOverlayUi
     {
         if (!_hideEnabled) { _peek.To(1f, 0); return; }
 
+        // **启动之后先不藏**（用户 2026-09-17："在贴边隐藏的情况下，刚启动软件的时候不要隐藏"）。
+        //
+        // 理由很实在：`_leftAtMs` 初值是负无穷，所以第一帧就满足"离开够久了"——
+        // 一开机面板立刻收成屏幕底边那条 8 像素的露头（而且露头正好压在任务栏上），
+        // 老师根本找不到它。现在改成：**先露着**，等指针碰过面板一次（`_peekArmed`）
+        // 才允许"离开就收"——那时候他已经知道东西在哪儿了。
+        if (!_peekArmed) { _peek.To(1f, 0); return; }
+
         bool keepOpen = _hoverInside || _press != -1 || _sliderDragging || _drawerOpen
                      || _host.State.IsDrawing;
         if (keepOpen)
@@ -1375,6 +1413,7 @@ public sealed class FullUi : IOverlayUi
         _press = -1;
         _dragging = false;
         _hoverInside = true;
+        _peekArmed = true;                 // 碰过了 → 之后允许"离开就收"
         _leftAtMs = _host.NowMs;
         _pressPos = p;
         // 拖动记的是**左上角**（和 RawAnchor 同一套语义：锚"带子的左端"）
@@ -1458,6 +1497,7 @@ public sealed class FullUi : IOverlayUi
     public bool PointerMove(in UiPointerEvent e)
     {
         _hoverInside = QueryBounds().Contains(e.X, e.Y);
+        if (_hoverInside) _peekArmed = true;   // 指针进过面板 → 之后允许"离开就收"
         _leftAtMs = _host.NowMs;
         var p = Local(e);
         _railHover = BandVisible() && RailHoverZone().Contains(p.X, p.Y);
@@ -1852,12 +1892,12 @@ public sealed class FullUi : IOverlayUi
 
         if (BandHasSwatches)
         {
-            for (int i = 0; i < Tokens.Palette.Length; i++)
+            for (int i = 0; i < SwatchCount; i++)
             {
                 var r = SwatchRect(i);
                 var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
                 var rr = new RoundedRectangle(box, 7f, 7f);
-                ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Palette[i].Color));
+                ctx.FillRoundedRectangle(rr, Brush(ctx, SwatchColor(i)));
                 ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
 
                 // 一道内高光：色片才有"实体感"（假面板里写着"颜值上最便宜的一笔"）
@@ -1967,7 +2007,7 @@ public sealed class FullUi : IOverlayUi
 
     private bool IsSwatchActive(in UiState st, int i)
     {
-        var c = Tokens.Palette[i].Color;
+        var c = SwatchColor(i);
         var p = st.PaletteBase;
         return MathF.Abs(c.R - p.R) < 0.02f && MathF.Abs(c.G - p.G) < 0.02f
             && MathF.Abs(c.B - p.B) < 0.02f;
@@ -2093,7 +2133,7 @@ public sealed class FullUi : IOverlayUi
     {
         6 => i == 0 ? "整笔擦" : "面积擦",
         7 => i == 0 ? "矩形" : "套索",
-        9 => i == 0 ? "直接截取" : "隐藏界面",
+        9 => i switch { 0 => "直接截取", 1 => "隐藏界面", _ => "粘贴图片" },
         8 => "",                                   // 图形：画图标（见 ShapeIcon）
         _ => "",
     };
@@ -2420,6 +2460,12 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>自检用：抽屉里某一行现在显示的字（底纹两行会把当前档位写出来）。</summary>
     internal string RowLabelForTest(int row) => RowLabel(row);
+
+    /// <summary>自检用：这一刻色片有几个（极简档应该是 4）。</summary>
+    internal int SwatchCountForTest => SwatchCount;
+
+    /// <summary>自检用："允许自动收起"的开关（启动时应该是 false）。</summary>
+    internal bool PeekArmedForTest => _peekArmed;
 
     /// <summary>自检用：粗细预览这一刻的矩形（屏幕坐标；没显示就是空矩形）。</summary>
     internal RectF SizePreviewRectForTest

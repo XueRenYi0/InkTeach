@@ -90,6 +90,8 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetCaptureHideInk(bool hideInk) => _engine.SetCaptureHideInkFromUi(hideInk);
 
     public void SetBoardOpacity(float opacity) => _engine.SetBoardOpacityFromUi(opacity);
+
+    public void Paste() => _engine.PasteFromClipboard();
     public void Restart() => _engine.RestartFromUi();
     public void Quit() => _engine.QuitFromUi();
 

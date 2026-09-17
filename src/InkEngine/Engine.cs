@@ -2158,7 +2158,11 @@ public class InkEngine
     /// **导出按钮做的事**：先渲染，再弹"另存为"，然后写盘 ＋ 进剪贴板。
     /// 用户取消对话框 = 什么都不做（不写文件、也不动剪贴板）。
     /// </summary>
-    internal void ExportSelection()
+    /// <summary>
+    /// **导出**：离屏渲染 → 弹"另存为" → 写盘。
+    /// <paramref name="jpeg"/> 由操作条上的格式面板给（PNG 透明底 / JPG 白底）。
+    /// </summary>
+    internal void ExportSelection(bool jpeg = false)
     {
         var bgra = RenderSelectionForExport(out int w, out int h);
         if (bgra == null) return;
@@ -2175,10 +2179,10 @@ public class InkEngine
 
         // 默认 PNG（透明底）：老师最常要的就是"贴到别处不带走白底"。
         // 想要白底/更小的文件，在对话框的类型里选 JPEG（或自己把扩展名改成 .jpg）。
-        string suggested = $"选中-{DateTime.Now:yyyyMMdd-HHmm}.png";
+        string suggested = $"选中-{DateTime.Now:yyyyMMdd-HHmm}" + (jpeg ? ".jpg" : ".png");
         string path = null;
         BorrowFocusForDialog();                 // 覆盖层平时不抢焦点，弹框前临时放开
-        try { path = ExportFileDialog.AskForImage(OwnerHwnd(), suggested, out _); }
+        try { path = ExportFileDialog.AskForImage(OwnerHwnd(), suggested, jpeg ? 2 : 1, out _); }
         catch (Exception ex)
         {
             // **弹框这一步出错绝不允许打死软件**。真踩过：.NET 7 起结构体字段不能用
@@ -2218,6 +2222,10 @@ public class InkEngine
     {
         if (_focusBorrowed) return;
         _focusBorrowed = true;
+        // **同时把"置顶"摘掉**：我们的覆盖层是 WS_EX_TOPMOST + 铺满整屏，
+        // 而系统对话框自己的弹层（**文件类型那个下拉列表**）是普通弹窗——
+        // 它会被置顶的覆盖层盖住，用户看到的就是"点开一下就收回去、选不到 JPG"
+        // （用户 2026-09-17 报的）。弹框期间我们不需要浮在最上面，摘掉就好。
         foreach (var w in _windows)
         {
             long ex = Native.GetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE).ToInt64();
@@ -2225,6 +2233,8 @@ public class InkEngine
             Native.SetWindowPos(w.Hwnd, IntPtr.Zero, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER
                 | 0x0020 /*SWP_FRAMECHANGED*/);
+            Native.SetWindowPos(w.Hwnd, new IntPtr(-2) /*HWND_NOTOPMOST*/, 0, 0, 0, 0,
+                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
         }
         if (_windows.Count > 0) Native.SetForegroundWindow(_windows[0].Hwnd);
     }
@@ -2241,6 +2251,9 @@ public class InkEngine
             Native.SetWindowPos(w.Hwnd, IntPtr.Zero, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER
                 | Native.SWP_NOACTIVATE | 0x0020 /*SWP_FRAMECHANGED*/);
+            // 把"置顶"装回去（覆盖层平时必须浮在所有程序上面）
+            Native.SetWindowPos(w.Hwnd, new IntPtr(-1) /*HWND_TOPMOST*/, 0, 0, 0, 0,
+                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
         }
     }
 
@@ -2541,8 +2554,9 @@ public class InkEngine
                 // 同理：矩形要一直看得见，擦除中更要说清"这一块正在被擦"。
                 return ToolCursorShape.Rect;
             case Tool.Capture:
-                // 截图：取景框角括号，一直看得见（拖动中更要——那正是"我在框这一块"的时候）
-                return ToolCursorShape.Frame;
+                // 截图：取景框角括号。**正在拖的时候不画**——那时取景框本身就是反馈，
+                // 再叠一个跟着走的角括号只是噪音（用户 2026-09-17："光标配合也感觉不好"）。
+                return CaptureActive ? ToolCursorShape.None : ToolCursorShape.Frame;
                 case Tool.Pen:
                     return penTip && _drawing ? ToolCursorShape.None : ToolCursorShape.Ring;
                 case Tool.Highlighter:
@@ -4304,6 +4318,19 @@ public class InkEngine
                 SelPanelOpen = SelPanel.None;
                 ReorderSelection(toFront: false);
                 return true;
+
+            // 导出格式：0 = PNG（透明底）、1 = JPG（白底）。
+            // 选完就**收起面板并弹"另存为"**——系统那边只管选位置和名字。
+            case SelectionHandles.PanelPart.ExportBase:
+                SelPanelOpen = SelPanel.None;
+                _dirty = true;
+                ExportSelection(jpeg: false);
+                return true;
+            case SelectionHandles.PanelPart.ExportBase + 1:
+                SelPanelOpen = SelPanel.None;
+                _dirty = true;
+                ExportSelection(jpeg: true);
+                return true;
         }
 
         if (part >= SelectionHandles.PanelPart.SwatchBase)
@@ -4855,9 +4882,10 @@ public class InkEngine
                 break;
 
             case SelBarButton.Export:
-                // 用户 2026-09-17 定：只导**选中的**、**透明底 PNG**、走系统"另存为"，
-                // 并且**同时放进剪贴板**（两样都要）。见 ExportSelection。
-                ExportSelection();
+                // 点一下**先开格式面板**（PNG 透明底 / JPG 白底），再选位置和名字。
+                // 不直接弹系统对话框：那个"保存类型"小下拉在触摸屏上本来就难瞄
+                // （用户实测："点开以后很快就收回去了，选不到 jpg"）。
+                SelPanelOpen = SelPanelOpen == SelPanel.Export ? SelPanel.None : SelPanel.Export;
                 break;
 
             // **进入/退出"复制拖拽模式"**，不是"点一下原地克隆一份"。

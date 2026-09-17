@@ -390,6 +390,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             SelShowcase();
         }
+        else if (mode == "--exportshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ExportShow(args.Length > 1 ? args[1] : "reports/export-panel.png");
+        }
         else if (mode == "--edittest")
         {
             _autoExitAt = double.MaxValue;
@@ -609,6 +615,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --patterntest       白板底纹自检（方格/横线/间距 + 数屏幕上的线 + 重铺代价）");
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
         Console.WriteLine("  --panelshow <图> [--band] [--mini] [--drawer] [--cell N]   界面出图（离屏）");
+        Console.WriteLine("  --exportshow <图>   选中框 + 导出格式面板（PNG/JPG 两格）出图（离屏）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
         Console.WriteLine("  --pixelerasetest    像素橡皮正确性（切成两段 / 框里无墨 / 一步撤销）");
         Console.WriteLine("  --pixeleraseshow    像素橡皮摆样（擦之前/之后各存一张图，自己抓屏）");
@@ -2341,6 +2348,34 @@ internal sealed class App : InkEngine.InkEngine
     }
 
     /// <summary>
+    /// **导出格式面板**的离屏出图：摆好两条笔迹和选中框 → 点一下操作条的"导出"格，
+    /// 让 `PNG / 透明底`、`JPG / 白底` 那两格露出来 → 离屏拍下来。
+    ///
+    /// 为什么单独做一条：`--edittest` 只能验几何（格子是不是在按钮下面、点不点得中），
+    /// **排版好不好看只能看图**——第一版两行字一个贴顶一个贴中，中间空一大块，
+    /// 几何全对，肉眼一看就露馅。所以出图这条路要能反复跑。
+    /// </summary>
+    private void ExportShow(string path)
+    {
+        // 离屏这条路要求"界面挂着"（见 RenderUiToBgra 的前置检查），所以先把产品界面挂上。
+        SetUiFactory(() => new InkUi.FullUi());
+        SelShowcase();                                   // 笔迹 + 选中框一起摆出来
+        SettleFrames(400);
+        RunBarActionForTest((int)SelBarButton.Export);   // 点"导出" → 开格式面板
+        SettleFrames(500);
+
+        // 拍的范围得**自己算**，而且要用**画布坐标**：选中框 / 操作条 / 导出格式面板
+        // 都画在浮动层上（不属于界面的占用区，也不跟着界面的逻辑屏幕坐标走）。
+        float dpi = DpiScale;
+        var sb = EditRegion.Of(Doc.Selected);
+        var r = SelectionHandles.BarRect(sb, dpi, ViewportCanvas);
+        var p = SelectionHandles.ExportPanelRect(sb, dpi, ViewportCanvas);
+        r.Add(sb); r.Add(p);
+        if (!OffscreenFloatingShot(path, r.Inflate(18f))) Console.WriteLine("出图失败");
+        _quit = true;
+    }
+
+    /// <summary>
     /// 编辑命令自检：复制 / 删除 / 翻转 / 旋转，外加操作条的命中判定。
     ///
     /// 这四个动作是操作条按钮直接调的，但按钮没法自动点（要合成鼠标事件），
@@ -2435,6 +2470,35 @@ internal sealed class App : InkEngine.InkEngine
         Check("每个按钮都能点中", allHit, bad);
         Check("框外不误判",
               SelectionHandles.BarButtonAt(bar.MinX - 30, bar.MinY + 5, sb, dpi, ViewportCanvas) == -1, "");
+
+        // ---- 导出格式面板（用户 2026-09-17："选不到 jpg"）----
+        //
+        // 格式**不再只靠系统对话框那个小下拉**：点"导出"先开我们自己的两格面板，
+        // 上面写着 PNG / 透明底、JPG / 白底。这里验命中与开合（真弹框那步在自检里是关掉的）。
+        {
+            RunBarActionForTest((int)SelBarButton.Export);
+            Check("点「导出」先开格式面板（不是直接弹框）",
+                  SelPanelOpen == SelPanel.Export, $"面板 = {SelPanelOpen}");
+
+            var png = SelectionHandles.ExportCellRect(0, sb, dpi, ViewportCanvas);
+            var jpg = SelectionHandles.ExportCellRect(1, sb, dpi, ViewportCanvas);
+            var partPng = SelectionHandles.PanelPartAt((png.MinX + png.MaxX) * 0.5f,
+                                                       (png.MinY + png.MaxY) * 0.5f,
+                                                       sb, dpi, ViewportCanvas, SelPanel.Export, 12);
+            var partJpg = SelectionHandles.PanelPartAt((jpg.MinX + jpg.MaxX) * 0.5f,
+                                                       (jpg.MinY + jpg.MaxY) * 0.5f,
+                                                       sb, dpi, ViewportCanvas, SelPanel.Export, 12);
+            Check("两格各自命中（0 = PNG，1 = JPG）",
+                  partPng == SelectionHandles.PanelPart.ExportBase
+                  && partJpg == SelectionHandles.PanelPart.ExportBase + 1,
+                  $"PNG → {partPng}，JPG → {partJpg}");
+            Check("面板整块能被认出来（点空白也不该收起它）",
+                  SelectionHandles.PanelContains(png.MinX - 2, png.MinY + 2, sb, dpi, ViewportCanvas,
+                                                 SelPanel.Export, 12),
+                  "");
+            RunBarActionForTest((int)SelBarButton.Export);        // 再点一下：收起来
+            Check("再点「导出」收起面板", SelPanelOpen == SelPanel.None, $"面板 = {SelPanelOpen}");
+        }
 
         Console.WriteLine();
         Console.WriteLine(fail == 0 ? "  PASS: 编辑命令与操作条命中都正确" : $"  FAIL: {fail} 项不对");
@@ -6069,6 +6133,27 @@ internal sealed class App : InkEngine.InkEngine
     {
         if (_windows.Count == 0) return false;
         var bytes = _windows[0].RenderUiToBgra(this, 24, out int w, out int h);
+        return SaveBgraAsBmp(path, bytes, w, h);
+    }
+
+    /// <summary>同上，但**画哪一块自己指定**（逻辑像素）——见 `RenderUiToBgra` 的重载。</summary>
+    private bool OffscreenShot(string path, in RectF bounds)
+    {
+        if (_windows.Count == 0) return false;
+        var bytes = _windows[0].RenderUiToBgra(this, 24, bounds, out int w, out int h);
+        return SaveBgraAsBmp(path, bytes, w, h);
+    }
+
+    /// <summary>同上，但画的是**浮动层**（选中框 / 操作条 / 小面板）——坐标给画布坐标。</summary>
+    private bool OffscreenFloatingShot(string path, in RectF canvasBounds)
+    {
+        if (_windows.Count == 0) return false;
+        var bytes = _windows[0].RenderFloatingToBgra(this, 24, canvasBounds, out int w, out int h);
+        return SaveBgraAsBmp(path, bytes, w, h);
+    }
+
+    private bool SaveBgraAsBmp(string path, byte[] bytes, int w, int h)
+    {
         if (bytes == null)
         {
             Console.WriteLine("离屏出图失败：" + (_windows[0].LastError ?? "没有占用矩形"));
@@ -6268,6 +6353,42 @@ internal sealed class App : InkEngine.InkEngine
             ExitCode = 1;
             _quit = true;
             return;
+        }
+
+        // ---- ⓪ 贴边隐藏 + **刚启动**：不许一上来就收（用户 2026-09-17）----
+        //
+        // 原来 `_leftAtMs` 初值是负无穷，第一帧就满足"离开够久了"——一开机面板立刻收成
+        // 屏幕底边那条 8 像素的露头（而且露头正好压在任务栏上），老师根本找不到它。
+        // 现在：**先露着**，等指针碰过面板一次才允许自动收。
+        {
+            // 先把指针挪到画布上（确保没碰过面板），再把"贴边隐藏"写进偏好、重新挂一个界面
+            // ——重新挂就等于"刚启动"那一刻。
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.3f), 0);
+            SettleFrames(200);
+            SetUiPref("hide", "1");
+            SetUiFactory(() => new InkUi.FullUi());
+            ui = CurrentUi as InkUi.FullUi;
+            SettleFrames(1800);                 // 等过"离开 700 毫秒才收"那一段
+            var b0 = ui.QueryBounds();
+            Check("贴边隐藏开着＋刚启动：面板还是完整的（不许一上来就收）",
+                  (b0.MaxY - b0.MinY) > 40f && !ui.PeekArmedForTest,
+                  $"占用 {b0.MaxX - b0.MinX:F0}×{b0.MaxY - b0.MinY:F0}，允许自动收 = {ui.PeekArmedForTest}");
+
+            SendMouse((int)((b0.MinX + b0.MaxX) * 0.5f * DpiScale),
+                      (int)((b0.MinY + b0.MaxY) * 0.5f * DpiScale), 0);
+            SettleFrames(250);
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.3f), 0);
+            SettleFrames(2000);
+            var b1 = ui.QueryBounds();
+            Check("碰过之后再离开：这时才收成露头",
+                  (b1.MaxY - b1.MinY) < 12f || (b1.MaxX - b1.MinX) < 12f,
+                  $"占用 {b1.MaxX - b1.MinX:F0}×{b1.MaxY - b1.MinY:F0}，允许自动收 = {ui.PeekArmedForTest}");
+
+            // 收尾：关掉贴边隐藏、重新挂回默认界面（后面几段用例都按"没开贴边隐藏"写）
+            SetUiPref("hide", null);
+            SetUiFactory(() => new InkUi.FullUi());
+            ui = CurrentUi as InkUi.FullUi;
+            SettleFrames(400);
         }
 
         // 把面板弄到"展开 ＋ 抽屉开着"这个已知状态。
@@ -6610,6 +6731,29 @@ internal sealed class App : InkEngine.InkEngine
             SettleFrames(250);
             Check("点「隐藏批注截取」→ hideInk = true",
                   Host.State.CaptureHideInk, $"hideInk = {Host.State.CaptureHideInk}");
+
+            // 第三段是**动作**：粘贴图片（没有键盘的触摸屏 / 手写板也能用）
+            {
+                // 先在剪贴板上放一张 60×40 的图（绿底），再点"粘贴图片"
+                var buf = new byte[60 * 40 * 4];
+                for (int i = 0; i < buf.Length; i += 4)
+                { buf[i] = 0; buf[i + 1] = 200; buf[i + 2] = 0; buf[i + 3] = 255; }
+                ClipboardImage.SetImage(buf, 60, 40);
+                int imgBefore = Doc.Strokes.Count(s => s.IsImage);
+
+                var segPaste = ui.SegmentRectForTest(2);
+                ClickPhysical((segPaste.MinX + segPaste.MaxX) * 0.5f * DpiScale,
+                              (segPaste.MinY + segPaste.MaxY) * 0.5f * DpiScale);
+                SettleFrames(400);
+                int imgAfter = Doc.Strokes.Count(s => s.IsImage);
+                Check("点「粘贴图片」：剪贴板里的图进了画布",
+                      imgAfter == imgBefore + 1,
+                      $"图像对象 {imgBefore} → {imgAfter}");
+
+                // 收尾：把刚粘的那张删掉
+                Doc.DeleteSelected();
+                SettleFrames(150);
+            }
 
             Host.Commands.SetTool(Tool.Pen);
             SettleFrames(150);
@@ -7034,6 +7178,29 @@ internal sealed class App : InkEngine.InkEngine
         SettleFrames(200);
 
         Check("完整档是 13 格", ui.VisibleCountForTest == 13, $"显示 {ui.VisibleCountForTest} 格");
+
+        // 极简档的色片行：**只给 4 个**（用户 2026-09-17："极简模式的色带展开栏里面的
+        // 内容排布有点问题"——短胶囊里塞 12 个色片，减掉滑条之后每个只有 11 像素宽）。
+        {
+            var miniSeg0 = ui.ProfileRectForTest(0);
+            ClickPhysical((miniSeg0.MinX + miniSeg0.MaxX) * 0.5f * DpiScale,
+                          (miniSeg0.MinY + miniSeg0.MaxY) * 0.5f * DpiScale);   // 切极简
+            SettleFrames(250);
+            ui.SelectBandCellForTest(3);                                     // 笔的设置条
+            SettleFrames(150);
+            Check("极简档：色片只有 4 个", ui.SwatchCountForTest == 4,
+                  $"色片数 {ui.SwatchCountForTest}");
+            var sw0 = ui.SwatchRectForTest(0);
+            Check("极简档：每个色片都够宽（≥ 30 逻辑像素，点得准）",
+                  sw0.MaxX - sw0.MinX >= 30f, $"色片宽 {sw0.MaxX - sw0.MinX:F0}");
+            // 切回完整档
+            var fullSeg0 = ui.ProfileRectForTest(2);
+            ClickPhysical((fullSeg0.MinX + fullSeg0.MaxX) * 0.5f * DpiScale,
+                          (fullSeg0.MinY + fullSeg0.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("完整档：色片回到 12 个", ui.SwatchCountForTest == 12,
+                  $"色片数 {ui.SwatchCountForTest}");
+        }
 
         // 切到极简：只留六格 ＋ 收起格，整条带子明显变短
         var miniSeg = ui.ProfileRectForTest(0);
@@ -10841,6 +11008,7 @@ internal sealed class App : InkEngine.InkEngine
         Tool = Tool.Capture;
         int x0 = (int)(cx - 150), y0 = (int)(cy - 100);
         int x1 = (int)(cx + 150), y1 = (int)(cy + 100);
+        int midReadoutDark = 0;                 // 拖动中"尺寸读数"那块有多深（见下面的量法）
         void DragCapture()
         {
             Tool = Tool.Capture;
@@ -10852,6 +11020,15 @@ internal sealed class App : InkEngine.InkEngine
             SettleFrames(40);
             SendMouse(x1, y1, 0);
             SettleFrames(60);
+            // **拖动中要有尺寸读数**（用户 2026-09-17："截图使用不顺手，光标配合也感觉不好"）：
+            // 框的左下角外 6 逻辑像素处会画一个深色胶囊写着 "宽 × 高"。
+            // 这里趁还没松手，量那块地方有没有深色像素（读数画出来了）。
+            {
+                int lx = (int)(Math.Min(x0, x1) * 1), ly = (int)(Math.Max(y0, y1) + 6 * DpiScale);
+                int lw = (int)(96 * DpiScale), lh = (int)(26 * DpiScale);
+                int dark = ScreenProbe.CountDark(lx, ly, lw, lh);
+                midReadoutDark = dark;
+            }
             SendMouse(x1, y1, Native.MOUSEEVENTF_LEFTUP);
             SettleFrames(900);                 // 截图里含一次"藏窗口 / 藏框 + 抓屏 + 恢复"
         }
@@ -10893,9 +11070,12 @@ internal sealed class App : InkEngine.InkEngine
 
         // 剪贴板：截图必须同时进剪贴板
         if (ClipboardImage.TryGetImage(out var clip, out int cw, out int ch, out _))
-            Check("截图：同时进了剪贴板", cw == shot.Image.Width && ch == shot.Image.Height, $"{cw}×{ch}");
+        Check("截图：同时进了剪贴板", cw == shot.Image.Width && ch == shot.Image.Height, $"{cw}×{ch}");
         else
             Console.WriteLine("    剪贴板：读不出来（可能被别的程序占着）——这项跳过");
+
+        Check("拖动中显示了尺寸读数（框下面那块有深色胶囊）", midReadoutDark > 800,
+              $"{midReadoutDark} 像素（读数是 {300 / dpi:F0}×{200 / dpi:F0} 的一个深色胶囊）");
 
         // 覆盖层藏过又显示：屏幕上不该留残影（墨应该还在原处）
         int afterInk = ScreenProbe.CountMagenta((int)(cx - 200), (int)(cy - 120), 400, 260);
@@ -11591,6 +11771,10 @@ internal static class ScreenProbe
     public static int CountGreen(int x, int y, int w, int h) => Capture(x, y, w, h, IsGreen);
     public static int CountRed(int x, int y, int w, int h) => Capture(x, y, w, h, IsRed);
     public static int CountCursor(int x, int y, int w, int h) => Capture(x, y, w, h, IsCursor);
+
+    /// <summary>深色像素数（找"深色胶囊"那种东西：截图时的尺寸读数）。</summary>
+    public static int CountDark(int x, int y, int w, int h) => Capture(x, y, w, h, IsDark);
+    private static bool IsDark(byte b, byte g, byte r) => r < 90 && g < 90 && b < 90;
 
     // 判定用色。像素是 BGRA 顺序，所以参数名按 (b, g, r)。
     private static bool IsMagenta(byte b, byte g, byte r) => b > 200 && g < 90 && r > 200;

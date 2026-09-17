@@ -1210,13 +1210,45 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     public byte[] RenderUiToBgra(InkEngine app, int padPx, out int w, out int h)
     {
+        if (app.Ui == null) { w = h = 0; return null; }
+        return RenderUiToBgra(app, padPx, app.UiQueryBoundsNow(), out w, out h);
+    }
+
+    /// <summary>
+    /// 同上，但**画哪一块自己指定**（逻辑像素）。
+    ///
+    /// 界面自己的占用区只够拍那颗球和那条带子；像"选中框 + 操作条 + 导出格式面板"
+    /// 这类画在浮动层上的东西压根不在里面，得把范围一起给进来。
+    /// </summary>
+    public byte[] RenderUiToBgra(InkEngine app, int padPx, in RectF bounds, out int w, out int h)
+        => RenderToBgra(app, padPx, bounds, dpiScale: Dpi / 96f,
+                        floatingCanvasSpace: false, out w, out h);
+
+    /// <summary>
+    /// **浮动层**离屏出图：选中框、八个手柄、操作条、挂在条下面的小面板（颜色/层级/导出格式）。
+    ///
+    /// 和上面那条的区别只在**坐标系**：界面画在自己的逻辑屏幕坐标里（乘 DPI 就完事），
+    /// 浮动层画的是**画布坐标**（相机还没减）。所以这里不乘缩放，直接把
+    /// "画布坐标 → 位图"写出来，`bounds` 也要给画布坐标。
+    ///
+    /// 单开这条的理由和界面那条一样：这些家具全在浮动层上，桌面截图截不到干净的一版，
+    /// 而它们的排版（字有没有居中、两条线离多远）**只能靠图看**，几何自检看不出来。
+    /// </summary>
+    public byte[] RenderFloatingToBgra(InkEngine app, int padPx, in RectF canvasBounds, out int w, out int h)
+        => RenderToBgra(app, padPx, canvasBounds, dpiScale: Dpi / 96f,
+                        floatingCanvasSpace: true, out w, out h);
+
+    private byte[] RenderToBgra(InkEngine app, int padPx, in RectF bounds, float dpiScale,
+                                bool floatingCanvasSpace, out int w, out int h)
+    {
         w = h = 0;
-        if (_ctx == null || app.Ui == null || !app.UiVisibleNow) return null;
-
-        var bounds = app.UiQueryBoundsNow();
+        if (_ctx == null) return null;
+        // 浮动层这条路不画界面，所以不要求界面挂着；界面那条必须挂着才有东西可画。
+        if (!floatingCanvasSpace && (app.Ui == null || !app.UiVisibleNow)) return null;
         if (bounds.IsEmpty) return null;
+        _app = app;                 // 画的过程中有几处要读"当前窗口"的状态
 
-        float dpi = Dpi / 96f;
+        float dpi = dpiScale;
         w = (int)MathF.Ceiling((bounds.MaxX - bounds.MinX) * dpi) + padPx * 2;
         h = (int)MathF.Ceiling((bounds.MaxY - bounds.MinY) * dpi) + padPx * 2;
         if (w <= 0 || h <= 0 || w > 8000 || h > 8000) return null;
@@ -1235,11 +1267,22 @@ internal sealed class OverlayWindow : IDisposable
             _ctx.BeginDraw();
             _ctx.Clear(new Color4(0.93f, 0.94f, 0.96f, 1f));
             _ctx.SetDpi(96f, 96f);
-            // 和 DrawUi 同一套坐标：先乘 DPI，再把界面左上角挪到留白处
-            _ctx.Transform = Matrix3x2.CreateScale(dpi)
-                           * Matrix3x2.CreateTranslation(-bounds.MinX * dpi + padPx,
-                                                         -bounds.MinY * dpi + padPx);
-            app.UiRenderNow(_ctx, UiTheme.Default);
+
+            if (floatingCanvasSpace)
+            {
+                // 画布坐标本来就是逻辑单位，一个单位就是一个位图像素——只挪不平移缩放。
+                _ctx.Transform = Matrix3x2.CreateTranslation(padPx - bounds.MinX * dpi,
+                                                             padPx - bounds.MinY * dpi);
+                DrawSelection(app);
+            }
+            else
+            {
+                // 和 DrawUi 同一套坐标：先乘 DPI，再把界面左上角挪到留白处
+                _ctx.Transform = Matrix3x2.CreateScale(dpi)
+                               * Matrix3x2.CreateTranslation(-bounds.MinX * dpi + padPx,
+                                                             -bounds.MinY * dpi + padPx);
+                app.UiRenderNow(_ctx, UiTheme.Default);
+            }
             _ctx.Transform = Matrix3x2.Identity;
             var hr = _ctx.EndDraw();
             _ctx.Target = null;
@@ -1497,7 +1540,17 @@ internal sealed class OverlayWindow : IDisposable
             var m = RectF.Empty;
             m.Add(app.CapMinX, app.CapMinY);
             m.Add(app.CapMaxX, app.CapMaxY);
-            r.Add(CanvasRectToWindow(m).Inflate(4f));
+            var capWin = CanvasRectToWindow(m).Inflate(4f);
+            r.Add(capWin);
+            // **取景框外面还有东西**：拖动中画在框左下角外侧的"宽 × 高"读数
+            // （见 DrawCaptureRect）。它不在上面的矩形里，不单独加一块就会被脏区裁掉——
+            // 自检当场量到 0 像素（"尺寸读数一个深色像素都没有"）。
+            r.Add(new RectF
+            {
+                MinX = capWin.MinX, MinY = capWin.MaxY,
+                MaxX = capWin.MinX + 100f * Dpi,
+                MaxY = capWin.MaxY + 36f * Dpi,
+            });
         }
 
         // 选中高亮画在浮动层上、不进内容层，所以它的区域必须每帧算进脏区。
@@ -1533,6 +1586,8 @@ internal sealed class OverlayWindow : IDisposable
                     .PanelRect(sb, dpi, app.ViewportCanvas, SelectionHandles.SwatchCount).Inflate(6f)));
             else if (app.SelPanelOpen == SelPanel.Layer)
                 r.Add(CanvasRectToWindow(SelectionHandles.LayerPanelRect(sb, dpi, app.ViewportCanvas).Inflate(6f)));
+            else if (app.SelPanelOpen == SelPanel.Export)
+                r.Add(CanvasRectToWindow(SelectionHandles.ExportPanelRect(sb, dpi, app.ViewportCanvas).Inflate(6f)));
 
             // 旋转度数标签贴在旋转手柄外侧，比选中框本身还高出去一截，
             // 同样必须进脏区；拖动中它每帧都在动，靠 _transientHistory 回溯两帧。
@@ -1777,6 +1832,7 @@ internal sealed class OverlayWindow : IDisposable
         {
             if (app.SelPanelOpen == SelPanel.Ink) DrawInkPanel(app, b);
             else if (app.SelPanelOpen == SelPanel.Layer) DrawLayerPanel(app, b);
+            else if (app.SelPanelOpen == SelPanel.Export) DrawExportPanel(app, b);
         }
 
         // 6) 旋转度数标签：只在拖旋转手柄的过程中出现。
@@ -1958,6 +2014,7 @@ internal sealed class OverlayWindow : IDisposable
     {
         SelBarButton.Color => app.SelPanelOpen == SelPanel.Ink,
         SelBarButton.Layer => app.SelPanelOpen == SelPanel.Layer,
+        SelBarButton.Export => app.SelPanelOpen == SelPanel.Export,
         SelBarButton.Copy => app.CopyDragArmed,
         _ => false,
     };
@@ -1980,10 +2037,10 @@ internal sealed class OverlayWindow : IDisposable
     private void DrawColorRing(InkEngine app, float cx, float cy, float r, bool disabled)
     {
         Color4 a = default; int distinct = 0; Color4 b2 = default;
-        bool any = false, anyImage = false;
+        bool any = false;
         foreach (var s in app.Doc.Selected)
         {
-            if (s.IsImage) { anyImage = true; continue; }
+            if (s.IsImage) continue;
             if (!any) { a = s.Color; any = true; continue; }
             if (distinct == 0 && !SameRgb(a, s.Color)) { b2 = s.Color; distinct = 1; }
             else if (distinct == 1 && !SameRgb(a, s.Color) && !SameRgb(b2, s.Color)) distinct = 2;
@@ -2163,6 +2220,61 @@ internal sealed class OverlayWindow : IDisposable
     }
 
     /// <summary>层级小面板：置顶 / 置底两格（图标用 Fluent 的"上/下箭头 + 底托"）。</summary>
+    /// <summary>
+    /// **导出格式面板**：两格并排——`PNG / 透明底`、`JPG / 白底`。
+    ///
+    /// 每格两行字：大字是格式名（PNG / JPG），小字是**它到底是什么底**
+    /// （透明底 / 白底）——用户 2026-09-17 问"要不要让用户知道 png 是透明底、jpg 是白底"：
+    /// 要，而且既写在这里（他做选择的地方），也写在系统对话框的类型栏里（他改主意的地方）。
+    /// </summary>
+    private void DrawExportPanel(InkEngine app, in RectF sel)
+    {
+        float dpi = Dpi / 96f;
+        var p = SelectionHandles.ExportPanelRect(sel, dpi, app.ViewportCanvas);
+        DrawPanelCard(p, 10f * dpi);
+
+        var th = UiTheme.Default;
+        for (int i = 0; i < 2; i++)
+        {
+            var cell = SelectionHandles.ExportCellRect(i, sel, dpi, app.ViewportCanvas);
+            float cr = 8f * dpi;
+            _scratch.Color = th.Hover;
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(cell.MinX, cell.MinY, cell.MaxX, cell.MaxY), cr, cr), _scratch);
+
+            // 两行字**当一组居中**（第一版一个贴顶、一个贴中，中间空一大块）
+            float h = cell.MaxY - cell.MinY;
+            _ctx.DrawText(i == 0 ? "PNG" : "JPG", ExportTitleFormat(),
+                          new Rect(cell.MinX, cell.MinY + h * 0.22f, cell.MaxX - cell.MinX, h * 0.30f),
+                          Brush(th.Text));
+            _ctx.DrawText(i == 0 ? "透明底" : "白底", ExportSubFormat(),
+                          new Rect(cell.MinX, cell.MinY + h * 0.52f, cell.MaxX - cell.MinX, h * 0.26f),
+                          Brush(th.Text));
+        }
+    }
+
+    private IDWriteTextFormat _exportTitleFmt, _exportSubFmt;
+
+    private IDWriteTextFormat ExportTitleFormat()
+    {
+        if (_exportTitleFmt != null) return _exportTitleFmt;
+        _exportTitleFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+            FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, 15f * (Dpi / 96f), "zh-CN");
+        _exportTitleFmt.TextAlignment = TextAlignment.Center;
+        _exportTitleFmt.ParagraphAlignment = ParagraphAlignment.Center;
+        return _exportTitleFmt;
+    }
+
+    private IDWriteTextFormat ExportSubFormat()
+    {
+        if (_exportSubFmt != null) return _exportSubFmt;
+        _exportSubFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 11.5f * (Dpi / 96f), "zh-CN");
+        _exportSubFmt.TextAlignment = TextAlignment.Center;
+        _exportSubFmt.ParagraphAlignment = ParagraphAlignment.Center;
+        return _exportSubFmt;
+    }
+
     private void DrawLayerPanel(InkEngine app, in RectF sel)
     {
         float dpi = Dpi / 96f;
@@ -2713,6 +2825,41 @@ internal sealed class OverlayWindow : IDisposable
         DrawCorner(r.Right, r.Top, -len, len, t);
         DrawCorner(r.Right, r.Bottom, -len, -len, t);
         DrawCorner(r.Left, r.Bottom, len, -len, t);
+
+        // **尺寸读数**（用户 2026-09-17："这个截图使用不顺手，光标配合也感觉不好"）。
+        //
+        // 拖动时最想知道的是"我框的这块有多大"——没有读数就得靠眼估，松手才发现多一块少一块。
+        // 数字用**逻辑像素**（老师看的坐标系，和"导出 300×200"是一套），
+        // 框贴在屏幕顶上时改画在框里面，免得跑到屏幕外看不见。
+        // 注意：`Dpi` 是**DPI 本身**（本机 192），不是缩放倍数——缩放倍数是它 ÷ 96。
+        // 第一版直接乘了 Dpi，胶囊被算到屏幕外 5000 像素（自检量到 0 像素）。
+        float s = Dpi / 96f;
+        float w = r.Right - r.Left, h = r.Bottom - r.Top;
+        if (w < 24f * s || h < 16f * s) return;                  // 刚开始拖，数字没意义
+        string text = $"{w / s:F0} × {h / s:F0}";
+        float boxW = 96f * s, boxH = 26f * s, gap = 6f * s;
+        bool below = r.Bottom + boxH + gap < Height;
+        var box = new Vortice.RawRectF(
+            r.Left, below ? r.Bottom + gap : r.Bottom - boxH - gap,
+            r.Left + boxW, (below ? r.Bottom + gap : r.Bottom - boxH - gap) + boxH);
+        _scratch.Color = new Color4(0.10f, 0.11f, 0.14f, 0.82f);
+        _ctx.FillRoundedRectangle(new RoundedRectangle(box, boxH * 0.5f, boxH * 0.5f), _scratch);
+        _ctx.DrawText(text, CaptureInfoFormat(),
+                      new Rect(box.Left, box.Top, box.Right - box.Left, box.Bottom - box.Top),
+                      Brush(new Color4(1f, 1f, 1f, 1f)));
+    }
+
+    private IDWriteTextFormat _capInfoFmt;
+
+    /// <summary>取景框旁边的尺寸读数格式（14 逻辑像素、居中、按 DPI 生成一次）。</summary>
+    private IDWriteTextFormat CaptureInfoFormat()
+    {
+        if (_capInfoFmt != null) return _capInfoFmt;
+        _capInfoFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 14f * (Dpi / 96f), "zh-CN");
+        _capInfoFmt.TextAlignment = TextAlignment.Center;
+        _capInfoFmt.ParagraphAlignment = ParagraphAlignment.Center;
+        return _capInfoFmt;
     }
 
     private void DrawCorner(float x, float y, float dx, float dy, float t)

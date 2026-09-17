@@ -280,6 +280,8 @@ internal static class ExportFileDialog
     private static extern int GetClassNameW(IntPtr hWnd, StringBuilder s, int n);
 
     private static readonly IntPtr HwndTopmost = new(-1);
+    /// <summary>`HWND_TOP`（0）：放到**非置顶**窗口的最上面。见 <see cref="ForceToFront"/>。</summary>
+    private static readonly IntPtr HwndTop = IntPtr.Zero;
     private const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_SHOWWINDOW = 0x0040;
 
     /// <summary>
@@ -360,6 +362,14 @@ internal static class ExportFileDialog
                 BringWindowToTop(hwnd);
                 SetForegroundWindow(hwnd);
             }
+
+            // **顶完马上取消置顶**（用户 2026-09-17："点击切换格式的那个地方，
+            // 再点击以后很快就收回去了，选不到 jpg"）。
+            //
+            // 原因：置顶窗口自己的**下拉列表**（文件类型那个 combobox 的弹出部分）
+            // 是普通弹窗，会被置顶的对话框盖住——看起来就是"点开一下就收回去"。
+            // 它此刻已经是前台窗口，取消置顶照样在最前面，而它的下拉列表就正常了。
+            SetWindowPos(hwnd, HwndTop, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
             Log($"对话框 {hwnd}：顶到最前（原前台 {fg}，线程 {fgTid} / 本线程 {myTid}）");
         }
         catch (Exception ex) { Log("顶对话框出错：" + ex.Message); }
@@ -403,9 +413,10 @@ internal static class ExportFileDialog
     /// **格式差别就写在文件类型那一行**（用户 2026-09-17 问"要不要让用户知道 png 是透明底、
     /// jpg 是白底？"）：那是他唯一一定会看的一行，比在别处写提示都管用。
     /// </summary>
-    public static string AskForImage(IntPtr owner, string suggestedName, out int filterIndex)
+    public static string AskForImage(IntPtr owner, string suggestedName, int defaultFilterIndex,
+                                     out int filterIndex)
     {
-        filterIndex = 1;
+        filterIndex = defaultFilterIndex;
         StartDialogWatcher();          // 先起看门线程：对话框一出现就把它顶到最前
         var ofn = new OpenFileName
         {
@@ -414,7 +425,7 @@ internal static class ExportFileDialog
             // 过滤器是"双 \0 结尾"的一串；两种类型的差别直接写在名字里
             lpstrFilter = "PNG 图片（透明底）\0*.png\0"
                         + "JPEG 图片（白底，文件更小）\0*.jpg;*.jpeg\0\0",
-            nFilterIndex = 1,
+            nFilterIndex = Math.Clamp(defaultFilterIndex, 1, 2),
             // 缓冲要**预分配成 nMaxFile 那么长**，再把建议的文件名写进开头
             lpstrFile = suggestedName + new string('\0', Math.Max(0, 512 - suggestedName.Length)),
             nMaxFile = 512,

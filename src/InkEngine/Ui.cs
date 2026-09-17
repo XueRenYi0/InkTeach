@@ -192,6 +192,13 @@ public interface IEngineCommands
     /// </summary>
     void SetBoardOpacity(float opacity);
 
+    /// <summary>
+    /// **粘贴**：剪贴板里有我们的对象就粘成可编辑对象，否则当图粘到视口左上角。
+    /// 和批注内的 `Ctrl+V` 是同一个动作——**给没有键盘的触摸屏 / 手写板留的入口**
+    /// （用户 2026-09-17："截图要不要增加一个粘贴功能…如果是触摸屏或者手写板可能没有键盘"）。
+    /// </summary>
+    void Paste();
+
     /// <summary>框选工具下的选择方式：矩形框（碰到墨就选中）／自由套索（圈住 80% 才选中）。</summary>
     void SetSelectMode(SelectMode mode);
 
