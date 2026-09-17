@@ -44,12 +44,10 @@ internal enum SelPanel
     Ink = 1,
     /// <summary>层级（挂在"层级"那一格下）。</summary>
     Layer = 2,
-    /// <summary>
-    /// 导出格式（挂在"导出"那一格下）：PNG 透明底 / JPG 白底。
-    /// 用户 2026-09-17 要的——**不把"选格式"押在系统对话框那个小下拉上**
-    /// （触摸屏 / 手写板本来就难瞄，出问题就完全选不了）。
-    /// </summary>
-    Export = 3,
+    // 注：**没有"导出"面板了**。曾经有过一种（两格：PNG 透明底 / JPG 白底），
+    // 是为了绕开"选不到 jpg"；那个 bug 的真因（覆盖层每秒抢层）修掉之后，
+    // 用户 2026-09-17 说"这两个图标没用了"，于是删掉——点导出直接弹系统对话框，
+    // 格式在它的类型栏里选（见 ExportFormats）。
 }
 
 /// <summary>
@@ -701,42 +699,6 @@ internal static class SelectionHandles
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
     }
 
-    /// <summary>
-    /// **导出格式面板**：两格并排（PNG 透明底 / JPG 白底），贴在"导出"那一格下面。
-    ///
-    /// 为什么要有它（用户 2026-09-17："点击切换格式的那个地方，再点击以后很快就收回去，
-    /// 选不到 jpg"）：格式原来**只能在系统对话框那个小下拉里选**，而教室里是触摸屏 /
-    /// 手写板——小下拉本来就难瞄，出一点问题就完全选不了。现在把"选格式"搬回我们自己的
-    /// 大按钮上：系统对话框只管选位置和名字。格子比层级那个宽，因为这里要有字
-    /// （图标说不清"透明底 / 白底"）。
-    /// </summary>
-    public const float ExportCellLogical = 124f;
-
-    /// <summary>
-    /// 导出那两格的高度。
-    ///
-    /// **第一版是正方形（124×124）**，里面上下两行字（大字 PNG、小字 透明底）——
-    /// 用户一眼就说"太丑了"：两格又高又空，像两个没填满的方块，和界面上那条
-    /// 46 高的胶囊、40 高的图标格完全不是一个语言。
-    /// 现在改成**一行字的扁片**（高 44）：`PNG 透明底` 一行读完，字号分两档
-    /// （格式名正常色、底色说明淡一点），两块并排像菜单项。
-    /// </summary>
-    public const float ExportCellHeightLogical = 44f;
-
-    public static RectF ExportPanelRect(in RectF sel, float dpi, in RectF visible)
-        => PanelBelow((int)SelBarButton.Export, ExportCellLogical, ExportCellHeightLogical,
-                      2, sel, dpi, visible);
-
-    /// <summary>导出面板里第 i 格（0 = PNG 透明底，1 = JPG 白底）。</summary>
-    public static RectF ExportCellRect(int i, in RectF sel, float dpi, in RectF visible)
-    {
-        var p = ExportPanelRect(sel, dpi, visible);
-        float pad = PanelPaddingLogical * dpi, cell = ExportCellLogical * dpi;
-        float ch = ExportCellHeightLogical * dpi;
-        float x = p.MinX + pad + i * (cell + PanelCellGapLogical * dpi);
-        return new RectF { MinX = x, MinY = p.MinY + pad, MaxX = x + cell, MaxY = p.MinY + pad + ch };
-    }
-
     /// <summary>层级小面板的矩形（两格并排，贴在"层级"那一格的下面）。</summary>
     public static RectF LayerPanelRect(in RectF sel, float dpi, in RectF visible)
         => PanelBelow((int)SelBarButton.Layer, LayerCellLogical, LayerCellLogical, 2, sel, dpi, visible);
@@ -829,8 +791,6 @@ internal static class SelectionHandles
         SwatchBase,     // + i
         LayerFront,
         LayerBack,
-        /// <summary>导出格式：PNG 透明底（+0）／JPG 白底（+1），见 <see cref="PanelPart.ExportBase"/>。</summary>
-        ExportBase,
     }
 
     /// <summary>
@@ -856,12 +816,6 @@ internal static class SelectionHandles
             if (LayerCellRect(0, sel, dpi, visible).Contains(x, y)) return PanelPart.LayerFront;
             if (LayerCellRect(1, sel, dpi, visible).Contains(x, y)) return PanelPart.LayerBack;
         }
-        else if (panel == SelPanel.Export)
-        {
-            for (int i = 0; i < 2; i++)
-                if (ExportCellRect(i, sel, dpi, visible).Contains(x, y))
-                    return PanelPart.ExportBase + i;
-        }
         return PanelPart.None;
     }
 
@@ -871,7 +825,6 @@ internal static class SelectionHandles
     {
         if (panel == SelPanel.Ink) return PanelRect(sel, dpi, visible, swatchCount).Contains(x, y);
         if (panel == SelPanel.Layer) return LayerPanelRect(sel, dpi, visible).Contains(x, y);
-        if (panel == SelPanel.Export) return ExportPanelRect(sel, dpi, visible).Contains(x, y);
         return false;
     }
 

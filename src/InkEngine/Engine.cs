@@ -2171,30 +2171,27 @@ public class InkEngine
     /// 写 PNG ＋ **同时放进剪贴板**（对象 ＋ 这张图，和 Ctrl+C 同一个剪贴板合同），
     /// 再让选区闪一下。
     /// </summary>
-    /// <summary>路径的扩展名说是哪种格式（.jpg/.jpeg → JPEG）。</summary>
-    private static bool PathWantsJpeg(string path) =>
-        path.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase)
-        || path.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase);
-
     internal bool WriteExport(byte[] bgra, int w, int h, string path)
+        => WriteExport(bgra, w, h, path, 1);
+
+    /// <summary>
+    /// 写盘。<paramref name="filterIndex"/> = 老师在类型栏选的那一条（决定"透明底 / 白底"），
+    /// 编码器按扩展名决定——两者的分工见 `ExportFormats.Encode` 的注释。
+    /// </summary>
+    internal bool WriteExport(byte[] bgra, int w, int h, string path, int filterIndex)
     {
         LastExportPath = null;
-        LastExportIsJpeg = false;
-        // 格式：**看扩展名**（老师自己敲了 .jpg 就按 JPG 存）；
-        // 敲的是 .png（或者没敲、由对话框补的）就按 PNG。
-        bool jpeg = PathWantsJpeg(path);
-        string tag = jpeg ? "JPEG（白底）" : "PNG（透明底）";
+        LastExportFilterIndex = 0;
         try
         {
-            var bytes = jpeg ? JpegWriter.EncodeBgraOverWhite(bgra, w, h)
-                             : PngWriter.EncodeBgraPremultiplied(bgra, w, h);
+            var bytes = ExportFormats.Encode(path, bgra, w, h, filterIndex, out string tag);
             if (bytes == null) { Console.WriteLine($"导出：{tag} 编码失败"); return false; }
             var dir = Path.GetDirectoryName(Path.GetFullPath(path));
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             File.WriteAllBytes(path, bytes);
             Console.WriteLine($"导出成功：{path}（{w}×{h}，{tag}，{bytes.Length / 1024.0:F0} KB）");
             LastExportPath = Path.GetFullPath(path);
-            LastExportIsJpeg = jpeg;
+            LastExportFilterIndex = filterIndex;
         }
         catch (Exception ex)
         {
@@ -2211,17 +2208,24 @@ public class InkEngine
     }
 
     /// <summary>
-    /// **导出按钮做的事**：先渲染，再弹"另存为"，然后写盘 ＋ 进剪贴板。
-    /// 用户取消对话框 = 什么都不做（不写文件、也不动剪贴板）。
+    /// **导出按钮做的事**：离屏渲染 → 弹"另存为" → 写盘。取消 = 什么都不做。
+    ///
+    /// 格式**就在那个对话框里选**（见 <see cref="ExportFormats"/>：透明底 / 白底 /
+    /// 文件大小 / 老软件兼容四种，每种把优势写在类型名里）。我们这边**不再先弹一层
+    /// 自己的格式面板**——用户 2026-09-17："那下面这两个图标就没有用了吧，用户都可以
+    /// 自己保存图片了"：说得对，两处选格式反而绕，点导出直接出对话框还少一步。
+    /// （触摸屏上那个下拉现在也点得开了：真因是覆盖层每秒抢层，见 ReassertTopmost。）
     /// </summary>
-    /// <summary>
-    /// **导出**：离屏渲染 → 弹"另存为" → 写盘。
-    /// <paramref name="jpeg"/> 由操作条上的格式面板给（PNG 透明底 / JPG 白底）。
-    /// </summary>
-    internal void ExportSelection(bool jpeg = false)
+    /// <param name="defaultFilterIndex">
+    /// 默认选中第几条（1 起）。界面把"上次用的那条"记在偏好里传进来，
+    /// 所以常用 JPG 的老师下次不用再选。
+    /// </param>
+    /// <returns>用户最终选的那一条（1 起）；取消或没导成返回 0。</returns>
+    internal int ExportSelection(int defaultFilterIndex = 1)
     {
+        ExportAttempts++;
         var bgra = RenderSelectionForExport(out int w, out int h);
-        if (bgra == null) return;
+        if (bgra == null) return 0;
 
         // 自检模式**绝不弹对话框**：系统对话框会阻塞在那里等消息，
         // 而自检是靠"抽消息 + 渲染"自己推进的——一弹就把整条自检卡死到超时。
@@ -2230,36 +2234,64 @@ public class InkEngine
         if (!ExportDialogEnabled)
         {
             Console.WriteLine("导出：自检模式不弹另存为对话框（见 --iotest）");
-            return;
+            return 0;
         }
 
-        // 默认 PNG（透明底）：老师最常要的就是"贴到别处不带走白底"。
-        // 想要白底/更小的文件，在对话框的类型里选 JPEG（或自己把扩展名改成 .jpg）。
-        string suggested = $"选中-{DateTime.Now:yyyyMMdd-HHmm}" + (jpeg ? ".jpg" : ".png");
+        // 默认扩展名跟着选的那一条走（第 1 条 PNG 透明底是老师最常要的：
+        // "贴到别处不带走白底"）。
+        int want = Math.Clamp(defaultFilterIndex, 1, ExportFormats.Count);
+        string suggested = $"选中-{DateTime.Now:yyyyMMdd-HHmm}" + ExportFormats.ExtensionFor(want);
         string path = null;
+        int chosen = want;
         BorrowFocusForDialog();                 // 覆盖层平时不抢焦点，弹框前临时放开
         ExportDialogOpen = true;                // 弹框期间不许再抬覆盖层，见 ReassertTopmost
-        try { path = ExportFileDialog.AskForImage(OwnerHwnd(), suggested, jpeg ? 2 : 1, out _); }
+        try { path = ExportFileDialog.AskForImage(OwnerHwnd(), suggested, want, out chosen); }
         catch (Exception ex)
         {
             // **弹框这一步出错绝不允许打死软件**。真踩过：.NET 7 起结构体字段不能用
             // StringBuilder，那一版一点"导出"整个进程就没了（异常从 P/Invoke 冒到 Main）。
             // 现在最坏也只是"这次导不出去"，并且把原因说清楚。
             Console.WriteLine($"导出：弹另存为失败（{ex.GetType().Name}: {ex.Message}）");
-            return;
+            return 0;
         }
         finally { ExportDialogOpen = false; ReturnFocusAfterDialog(); }
 
-        if (path == null) { Console.WriteLine("导出：取消"); return; }
-        WriteExport(bgra, w, h, path);
+        if (path == null) { Console.WriteLine("导出：取消"); return 0; }
+        return WriteExport(bgra, w, h, path, chosen) ? chosen : 0;
     }
 
+    /// <summary>
+    /// 导出按钮真正调的那一层：**记住老师上次选的那一条格式**（`ui.exportFormat`），
+    /// 下次直接默认它——常用 JPG 的老师不用每次都去下拉里找。
+    ///
+    /// 这一条偏好由**引擎自己解释**（别的 `ui.*` 都是界面说了算）。理由：操作条
+    /// 是引擎那边画和命中测试的（`Selection.cs`），导出按钮压根不经过 `InkUi`，
+    /// 所以"记住上次的选择"只能落在这里。键名照旧放在 `ui` 段，不另开一节。
+    ///
+    /// 注意：自检模式下这条偏好**读不到也写不进**（自检不碰用户配置），
+    /// 所以自检里走的是默认第 1 条，判据是确定的。
+    /// </summary>
+    private void ExportSelectionPref()
+    {
+        int last = ExportDefaultFilterIndex();
+        int chosen = ExportSelection(last);
+        if (chosen >= 1) SetUiPref("exportFormat", chosen.ToString());
+    }
+
+    /// <summary>
+    /// 默认选中第几条格式：读偏好 `ui.exportFormat`，读不出来/越界就回到第 1 条（PNG 透明底）。
+    /// 单独抽出来是为了能自检（"记住上次的选择"这条逻辑不依赖对话框）。
+    /// </summary>
+    internal int ExportDefaultFilterIndex()
+        => int.TryParse(GetUiPref("exportFormat"), out int v)
+           && v >= 1 && v <= ExportFormats.Count ? v : 1;
+
     /// <summary>自检用：不弹对话框，直接写到指定路径（其余流程一模一样）。</summary>
-    internal bool ExportSelectionToPathForTest(string path)
+    internal bool ExportSelectionToPathForTest(string path, int filterIndex = 1)
     {
         var bgra = RenderSelectionForExport(out int w, out int h);
         if (bgra == null) return false;
-        return WriteExport(bgra, w, h, path);
+        return WriteExport(bgra, w, h, path, filterIndex);
     }
 
     private IntPtr OwnerHwnd() => _windows.Count > 0 ? _windows[0].Hwnd : IntPtr.Zero;
@@ -2285,7 +2317,17 @@ public class InkEngine
     /// 而不是只看对话框弹没弹出来。
     /// </summary>
     internal string LastExportPath;
-    internal bool LastExportIsJpeg;
+    /// <summary>上一次成功导出用的那一条格式（1 起，见 <see cref="ExportFormats"/>）。</summary>
+    internal int LastExportFilterIndex;
+
+    /// <summary>
+    /// 试过几次导出（**包括没有选中、被自检挡下、用户取消**）。
+    ///
+    /// 自检要的"点一下"和"真的弹框"分开：`--edittest` 在自检模式下点导出，
+    /// 对话框是关着的，只能靠这个计数器证明那一下真的走到了导出这条路
+    /// （而不是"什么都没发生"）。
+    /// </summary>
+    internal int ExportAttempts;
 
     // 弹系统对话框期间借一下焦点：把 WS_EX_NOACTIVATE 摘掉、弹完装回去。
     // 和"批注键盘模式"同一个手法（那边是长期摘掉，这里是临时的）。
@@ -4411,17 +4453,6 @@ public class InkEngine
                 return true;
 
             // 导出格式：0 = PNG（透明底）、1 = JPG（白底）。
-            // 选完就**收起面板并弹"另存为"**——系统那边只管选位置和名字。
-            case SelectionHandles.PanelPart.ExportBase:
-                SelPanelOpen = SelPanel.None;
-                _dirty = true;
-                ExportSelection(jpeg: false);
-                return true;
-            case SelectionHandles.PanelPart.ExportBase + 1:
-                SelPanelOpen = SelPanel.None;
-                _dirty = true;
-                ExportSelection(jpeg: true);
-                return true;
         }
 
         if (part >= SelectionHandles.PanelPart.SwatchBase)
@@ -4973,10 +5004,14 @@ public class InkEngine
                 break;
 
             case SelBarButton.Export:
-                // 点一下**先开格式面板**（PNG 透明底 / JPG 白底），再选位置和名字。
-                // 不直接弹系统对话框：那个"保存类型"小下拉在触摸屏上本来就难瞄
-                // （用户实测："点开以后很快就收回去了，选不到 jpg"）。
-                SelPanelOpen = SelPanelOpen == SelPanel.Export ? SelPanel.None : SelPanel.Export;
+                // **直接弹系统"另存为"**，格式在那个对话框的类型栏里选（见 ExportFormats）。
+                //
+                // 早先前这里先开一层我们自己的两格面板，理由是"系统那个下拉点不开"
+                // （用户报的"选不到 jpg"）。那个真因后来查清了：**覆盖层每秒抢一次置顶**，
+                // 把对话框的下拉挤掉了（见 ReassertTopmost）。真因修掉之后，
+                // 用户 2026-09-17 提的那句就成立了——"那下面这两个图标就没有用了吧，
+                // 用户都可以自己保存图片了"：两处选格式反而绕，删掉还少一步。
+                ExportSelectionPref();
                 break;
 
             // **进入/退出"复制拖拽模式"**，不是"点一下原地克隆一份"。

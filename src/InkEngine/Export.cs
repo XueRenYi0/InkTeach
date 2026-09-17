@@ -5,6 +5,155 @@ using System.Text;
 namespace InkEngine;
 
 /// <summary>
+/// **导出格式表**：四种选择，各写清"适合什么、代价是什么"。**唯一的定义处**——
+/// 对话框的类型栏、默认扩展名、编码器选择、自检判据全都读它。
+///
+/// 为什么把优势**写进类型名**（用户 2026-09-17："干脆再增加几种格式，说清楚优势"）：
+/// 那一行是老师做决定时唯一一定会看到的地方。写"PNG"等于没说；
+/// 写"透明底 · 贴课件首选"才是在帮他做决定。
+///
+/// **为什么是这四个**（不是为凑数）：位图之间的差别其实只有三件事——
+/// **有没有透明底**、**无损还是有损**、**文件多大**。这四条正好对上四个真实场景：
+/// 贴课件（透明）／发微信（小文件）／贴深色模板（白底无损）／老软件打不开新格式（BMP）。
+///
+/// 真正还缺的是**矢量**（SVG/PDF："放大到投影也不糊、还能在课件里继续编辑"）——
+/// 那是另一类东西，要按几何导笔迹、还得在真实课件软件里逐个验，**单开一步做**。
+/// </summary>
+internal static class ExportFormats
+{
+    public const int Count = 4;
+
+    /// <summary>给系统对话框的过滤器串（双 `\0` 结尾，两两一组）。</summary>
+    public const string Filter =
+        "PNG 图片（透明底 · 贴课件首选，无损）\0*.png\0"
+      + "JPEG 图片（白底 · 文件最小，好发微信邮件）\0*.jpg;*.jpeg\0"
+      + "PNG 图片（白底 · 无损，深色模板上不露底）\0*.png\0"
+      + "BMP 图片（白底 · 老软件也能打开，文件最大）\0*.bmp\0\0";
+
+    /// <summary>这种选择默认用什么扩展名（写进建议文件名、也交给对话框补后缀）。</summary>
+    public static string ExtensionFor(int filterIndex) => filterIndex switch
+    {
+        2 => ".jpg",
+        4 => ".bmp",
+        _ => ".png",
+    };
+
+    /// <summary>
+    /// 编码。**两件事分开决定**：
+    ///   · **编码器看扩展名**——老师自己把名字敲成 `.jpg` 就该存 JPEG；
+    ///   · **底色看他在类型栏选的那一条**——"透明底 / 白底"是一个独立的选择。
+    ///
+    /// 唯一的例外是**有损 / 无透明通道的格式一律白底**：选了 JPEG 却把名字写成 .png
+    /// （或者反过来）时，绝不能把透明通道丢给 JPEG——那会变成一堆黑块。
+    /// </summary>
+    public static byte[] Encode(string path, byte[] bgra, int w, int h, int filterIndex,
+                                out string tag)
+    {
+        string ext = Path.GetExtension(path ?? "").ToLowerInvariant();
+        bool wantBmp = ext == ".bmp";
+        bool wantJpeg = ext == ".jpg" || ext == ".jpeg";
+        bool wantTransparent = filterIndex == 1;          // 只有第一条是"透明底"
+
+        if (wantJpeg)
+        {
+            tag = "JPEG（白底）";
+            return JpegWriter.EncodeBgraOverWhite(bgra, w, h);
+        }
+        if (wantBmp)
+        {
+            tag = "BMP（白底）";
+            return BmpWriter.EncodeBgraOverWhite(bgra, w, h);
+        }
+        if (wantTransparent)
+        {
+            tag = "PNG（透明底）";
+            return PngWriter.EncodeBgraPremultiplied(bgra, w, h);
+        }
+        tag = "PNG（白底）";
+        return PngWriter.EncodeBgraPremultiplied(ExportImages.OverWhiteBgra(bgra, w, h), w, h);
+    }
+}
+
+/// <summary>
+/// 图片的公共小工具：**把预乘 BGRA 合成到白底**。
+///
+/// 三种编码器都要这一步（JPEG 没有 alpha、BMP 的 alpha 兼容性差、白底 PNG 就是想要白底），
+/// 所以只写一遍。渲染出来的位图是**预乘 alpha**：一个像素的实际颜色 = 存储值，
+/// 它在白底上显示出来 = `存储值 + 255 × (1 - α)`。
+/// </summary>
+internal static class ExportImages
+{
+    public static byte[] OverWhiteBgra(byte[] bgra, int w, int h)
+    {
+        if (bgra == null || w <= 0 || h <= 0 || bgra.Length < (long)w * h * 4) return null;
+        var outBytes = new byte[(long)w * h * 4];
+        for (int i = 0; i < w * h; i++)
+        {
+            int p = i * 4;
+            float a = bgra[p + 3] / 255f;
+            float bg = 255f * (1f - a);
+            outBytes[p + 0] = (byte)MathF.Min(255f, bgra[p + 0] + bg);
+            outBytes[p + 1] = (byte)MathF.Min(255f, bgra[p + 1] + bg);
+            outBytes[p + 2] = (byte)MathF.Min(255f, bgra[p + 2] + bg);
+            outBytes[p + 3] = 255;
+        }
+        return outBytes;
+    }
+}
+
+/// <summary>
+/// **BMP 编码器**（24 位、白底、无损）。
+///
+/// 为什么还要它：PNG 也是无损的，但**老软件不一定认**——教室机器上常有多年没更新的
+/// 课件工具 / 老版 WPS / 投影仪自带的白板程序。BMP 是 Windows 上最古老的位图格式，
+/// 那些程序一定能打开。代价是**文件最大**（不压缩，约为 PNG 的三到十倍）。
+///
+/// 写 24 位而不是 32 位：32 位 BMP 的 alpha 各家实现不一致，很多程序会把它当
+/// "不透明"甚至显示成黑块。白底 24 位没有这个歧义。
+/// </summary>
+internal static class BmpWriter
+{
+    public static byte[] EncodeBgraOverWhite(byte[] bgra, int w, int h)
+    {
+        var over = ExportImages.OverWhiteBgra(bgra, w, h);
+        if (over == null) return null;
+
+        int stride = (w * 3 + 3) & ~3;                 // BMP 每行按 4 字节对齐
+        int imageBytes = stride * h;
+        var bytes = new byte[54 + imageBytes];
+
+        void W16(int at, int v) { bytes[at] = (byte)v; bytes[at + 1] = (byte)(v >> 8); }
+        void W32(int at, int v)
+        {
+            bytes[at] = (byte)v; bytes[at + 1] = (byte)(v >> 8);
+            bytes[at + 2] = (byte)(v >> 16); bytes[at + 3] = (byte)(v >> 24);
+        }
+
+        bytes[0] = (byte)'B'; bytes[1] = (byte)'M';
+        W32(2, bytes.Length); W32(10, 54);
+        W32(14, 40); W32(18, w); W32(22, h);           // 高度为正 = 自下而上存
+        W16(26, 1); W16(28, 24); W32(34, imageBytes);
+
+        // BMP 是**自下而上**存的：源图第 0 行要写到文件里最后一行
+        for (int y = 0; y < h; y++)
+        {
+            int src = (h - 1 - y) * w * 4;
+            int dst = 54 + y * stride;
+            for (int x = 0; x < w; x++)
+            {
+                // 注意 `src + x * 4`：第一版这里忘了随 x 走，每一行都拿"这一行第一个像素"
+                // 铺满——整张图变成一片白，`--iotest` 的"笔迹颜色一个不差"当场抓住。
+                int s = src + x * 4;
+                bytes[dst + x * 3 + 0] = over[s + 0];       // B
+                bytes[dst + x * 3 + 1] = over[s + 1];       // G
+                bytes[dst + x * 3 + 2] = over[s + 2];       // R
+            }
+        }
+        return bytes;
+    }
+}
+
+/// <summary>
 /// **JPEG 编码器**（走系统的 GDI+）。
 ///
 /// 为什么不像 PNG 那样自己写：JPEG 要 DCT ＋ 量化 ＋ 霍夫曼编码，手写不现实；
@@ -22,6 +171,9 @@ internal static class JpegWriter
     {
         if (bgra == null || w <= 0 || h <= 0 || bgra.Length < (long)w * h * 4) return null;
 
+        var over = ExportImages.OverWhiteBgra(bgra, w, h);
+        if (over == null) return null;
+
         using var bmp = new System.Drawing.Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
         var rect = new System.Drawing.Rectangle(0, 0, w, h);
         var data = bmp.LockBits(rect, System.Drawing.Imaging.ImageLockMode.WriteOnly,
@@ -31,16 +183,12 @@ internal static class JpegWriter
             var row = new byte[data.Stride];
             for (int y = 0; y < h; y++)
             {
+                // 已经是"合成到白底、不透明"的 BGRA，这里只丢掉 alpha 通道
                 int src = y * w * 4;
                 for (int x = 0; x < w; x++)
                 {
-                    // 预乘 BGRA → 合成到白底 → BGR（JPEG 要的三通道）
-                    float a = bgra[src + 3] / 255f;
-                    byte b = (byte)(bgra[src + 0] + 255f * (1f - a));
-                    byte g = (byte)(bgra[src + 1] + 255f * (1f - a));
-                    byte r = (byte)(bgra[src + 2] + 255f * (1f - a));
                     int o = x * 3;
-                    row[o + 0] = b; row[o + 1] = g; row[o + 2] = r;
+                    row[o + 0] = over[src + 0]; row[o + 1] = over[src + 1]; row[o + 2] = over[src + 2];
                     src += 4;
                 }
                 System.Runtime.InteropServices.Marshal.Copy(row, 0, nint.Add(data.Scan0, y * data.Stride), row.Length);
@@ -451,7 +599,7 @@ internal static class ExportFileDialog
     private const int OFN_EXPLORER = 0x00080000;
     private const int OFN_ENABLEHOOK = 0x00000020;
 
-    /// <summary>
+  /// <summary>
     /// `OPENFILENAMEW` 的字节数（Windows 自己也是按这个长度校验的）。
     ///
     /// **不能写成 `Marshal.SizeOf`**：这个类型里有 `string` / `StringBuilder` 字段，
@@ -464,7 +612,8 @@ internal static class ExportFileDialog
 
     /// <summary>
     /// 弹"另存为"。返回 null = 用户取消（取消就什么都不做）。
-    /// <paramref name="filterIndex"/> 回传用户选的是第几种（1 = PNG、2 = JPEG）。
+    /// <paramref name="filterIndex"/> 回传用户选的是第几条（见 <see cref="ExportFormats"/>，
+    /// 1 = PNG 透明底、2 = JPEG 白底、3 = PNG 白底、4 = BMP 白底）。
     ///
     /// **格式差别就写在文件类型那一行**（用户 2026-09-17 问"要不要让用户知道 png 是透明底、
     /// jpg 是白底？"）：那是他唯一一定会看的一行，比在别处写提示都管用。
@@ -478,15 +627,14 @@ internal static class ExportFileDialog
         {
             lStructSize = SizeOfOpenFileName,
             hwndOwner = owner,
-            // 过滤器是"双 \0 结尾"的一串；两种类型的差别直接写在名字里
-            lpstrFilter = "PNG 图片（透明底）\0*.png\0"
-                        + "JPEG 图片（白底，文件更小）\0*.jpg;*.jpeg\0\0",
-            nFilterIndex = Math.Clamp(defaultFilterIndex, 1, 2),
+            // 过滤器是"双 \0 结尾"的一串；每种类型的**优势和代价**都写在名字里（见 ExportFormats）
+            lpstrFilter = ExportFormats.Filter,
+            nFilterIndex = Math.Clamp(defaultFilterIndex, 1, ExportFormats.Count),
             // 缓冲要**预分配成 nMaxFile 那么长**，再把建议的文件名写进开头
             lpstrFile = suggestedName + new string('\0', Math.Max(0, 512 - suggestedName.Length)),
             nMaxFile = 512,
             lpstrTitle = "导出选中的内容",
-            lpstrDefExt = "png",
+            lpstrDefExt = ExportFormats.ExtensionFor(defaultFilterIndex).TrimStart('.').Split(';')[0],
             Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
         };
         if (!GetSaveFileNameW(ofn)) return null;

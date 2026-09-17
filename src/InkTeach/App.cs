@@ -390,12 +390,6 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             SelShowcase();
         }
-        else if (mode == "--exportshow")
-        {
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            ExportShow(args.Length > 1 ? args[1] : "reports/export-panel.png");
-        }
         else if (mode == "--captureshow")
         {
             _autoExitAt = double.MaxValue;
@@ -627,7 +621,6 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --patterntest       白板底纹自检（方格/横线/间距 + 数屏幕上的线 + 重铺代价）");
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
         Console.WriteLine("  --panelshow <图> [--band] [--mini] [--drawer] [--cell N]   界面出图（离屏）");
-        Console.WriteLine("  --exportshow <图>   选中框 + 导出格式面板（PNG/JPG 两格）出图（离屏）");
         Console.WriteLine("  --captureshow <图>  截图取景框 + 尺寸读数出图（离屏）");
         Console.WriteLine("  --dialogprobe <前缀> [--save]  导出对话框探针（真弹框 + 点它的下拉 + 连拍三张；");
         Console.WriteLine("                     --save 连「保存」一起点，验到落盘为止）");
@@ -1317,9 +1310,93 @@ internal sealed class App : InkEngine.InkEngine
             try { File.Delete(jpgPath); } catch { }
         }
 
+        // ⑥ **PNG 白底**（第 3 条）：无损 + 白底。
+        //    给"深色模板"用的——透明底的黑色笔迹贴到深色 PPT 上会看不见。
+        //    注意它和第 1 条**同一个扩展名**，差别只在"选了哪一条"，
+        //    所以这里必须传 filterIndex=3，不能靠扩展名区分。
+        {
+            string whiteP = Path.Combine(Path.GetTempPath(), "inkteach-iotest-white.png");
+            try { File.Delete(whiteP); } catch { }
+            bool okW = ExportSelectionToPathForTest(whiteP, 3);
+            Check("导出成「PNG 白底」（第 3 条）：文件存在", okW && File.Exists(whiteP), $"返回 {okW}");
+            if (File.Exists(whiteP))
+            {
+                var bytes = File.ReadAllBytes(whiteP);
+                Check("还是 PNG 签名（同一条扩展名，两个选择）",
+                      bytes.Length > 8 && bytes[0] == 0x89 && bytes[3] == 0x47,
+                      $"{bytes[0]:X2} {bytes[1]:X2} {bytes[2]:X2} {bytes[3]:X2}");
+                try
+                {
+                    using var bmp = new System.Drawing.Bitmap(whiteP);
+                    var blankPx = bmp.GetPixel(20, 20);
+                    Check("空白处是**白底**（透明底那条这里是全透明）",
+                          blankPx.R > 250 && blankPx.G > 250 && blankPx.B > 250 && blankPx.A == 255,
+                          $"({blankPx.R},{blankPx.G},{blankPx.B},a={blankPx.A})");
+                    var penPx = bmp.GetPixel(Math.Clamp((int)(700 - box.MinX), 0, bmp.Width - 1),
+                                             Math.Clamp((int)(400 - box.MinY), 0, bmp.Height - 1));
+                    Check("笔迹颜色**一个不差**（无损，不是 JPEG 那种有损）",
+                          Math.Abs(penPx.R - red.R * 255) < 4
+                          && Math.Abs(penPx.G - red.G * 255) < 4
+                          && Math.Abs(penPx.B - red.B * 255) < 4,
+                          $"({penPx.R},{penPx.G},{penPx.B})");
+                }
+                catch (Exception ex) { Check("白底 PNG 能被别的解码器读出来", false, ex.Message); }
+                try { File.Delete(whiteP); } catch { }
+            }
+        }
+
+        // ⑦ **BMP 白底**（第 4 条）：老软件也打得开的无损位图。
+        //    自己写的编码器，所以逐字段验：签名、宽高、位深、以及**像素真的是白的和白底**。
+        {
+            string bmpPath = Path.Combine(Path.GetTempPath(), "inkteach-iotest.bmp");
+            try { File.Delete(bmpPath); } catch { }
+            bool okB = ExportSelectionToPathForTest(bmpPath, 4);
+            Check("导出成 .bmp：返回成功、文件存在", okB && File.Exists(bmpPath),
+                  $"返回 {okB}，文件在 = {File.Exists(bmpPath)}");
+            if (File.Exists(bmpPath))
+            {
+                var b = File.ReadAllBytes(bmpPath);
+                int bw = b[18] | (b[19] << 8) | (b[20] << 16) | (b[21] << 24);
+                int bh = b[22] | (b[23] << 8) | (b[24] << 16) | (b[25] << 24);
+                int bits = b[28] | (b[29] << 8);
+                int off = b[10] | (b[11] << 8) | (b[12] << 16) | (b[13] << 24);
+                Check("BMP 文件头：'BM' + 宽高 + 24 位",
+                      b[0] == (byte)'B' && b[1] == (byte)'M' && bw == wantW && bh == wantH && bits == 24,
+                      $"{(char)b[0]}{(char)b[1]}，{bw}×{bh}，{bits} 位，像素起点 {off}，{b.Length / 1024.0:F0} KB");
+
+                // **用别的解码器读**（GDI+），不自己解——自己解只能证明"我写的我自己读得懂"，
+                // 证不了这个文件在别的程序里对不对（和上面 JPEG 那条同一个道理）。
+                try
+                {
+                    using var bmpImg = new System.Drawing.Bitmap(bmpPath);
+                    Check("GDI+ 也读得出来（尺寸对）",
+                          bmpImg.Width == wantW && bmpImg.Height == wantH,
+                          $"{bmpImg.Width}×{bmpImg.Height}");
+                    var blankPx = bmpImg.GetPixel(20, 20);
+                    Check("空白处是**白底**（不是黑块、不是透明）",
+                          blankPx.R > 250 && blankPx.G > 250 && blankPx.B > 250,
+                          $"({blankPx.R},{blankPx.G},{blankPx.B})");
+                    var penPx = bmpImg.GetPixel(Math.Clamp((int)(700 - box.MinX), 0, bmpImg.Width - 1),
+                                                Math.Clamp((int)(400 - box.MinY), 0, bmpImg.Height - 1));
+                    Check("笔迹颜色**一个不差**（无损）",
+                          Math.Abs(penPx.R - red.R * 255) < 4
+                          && Math.Abs(penPx.G - red.G * 255) < 4
+                          && Math.Abs(penPx.B - red.B * 255) < 4,
+                          $"({penPx.R},{penPx.G},{penPx.B})");
+                    // 反过来：**上下不能颠倒**（BMP 是自下而上存的，写反了图是扣着的）
+                    var topRow = bmpImg.GetPixel(Math.Clamp((int)(700 - box.MinX), 0, bmpImg.Width - 1), 1);
+                    Check("上下没写反（最上一行是空白，不是笔迹）",
+                          topRow.R > 250 && topRow.G > 250 && topRow.B > 250,
+                          $"最上一行 ({topRow.R},{topRow.G},{topRow.B})");
+                }
+                catch (Exception ex) { Check("BMP 能被别的解码器读出来", false, ex.Message); }
+                try { File.Delete(bmpPath); } catch { }
+            }
+        }
+
         Console.WriteLine();
         Console.WriteLine(fail == 0
-            ? "  PASS：PNG 透明底、JPEG 白底都对（颜色与 alpha 逐像素验过），而且没碰剪贴板"
+            ? "  PASS：四种格式都对（PNG 透明底 / JPEG 白底 / PNG 白底 / BMP 白底，逐像素验过），而且没碰剪贴板"
             : $"  FAIL：{fail} 项不对（{pass} 项通过）");
         Console.WriteLine($"  文件：{path}（{png.Length} 字节）");
 
@@ -2363,34 +2440,6 @@ internal sealed class App : InkEngine.InkEngine
     }
 
     /// <summary>
-    /// **导出格式面板**的离屏出图：摆好两条笔迹和选中框 → 点一下操作条的"导出"格，
-    /// 让 `PNG / 透明底`、`JPG / 白底` 那两格露出来 → 离屏拍下来。
-    ///
-    /// 为什么单独做一条：`--edittest` 只能验几何（格子是不是在按钮下面、点不点得中），
-    /// **排版好不好看只能看图**——第一版两行字一个贴顶一个贴中，中间空一大块，
-    /// 几何全对，肉眼一看就露馅。所以出图这条路要能反复跑。
-    /// </summary>
-    private void ExportShow(string path)
-    {
-        // 离屏这条路要求"界面挂着"（见 RenderUiToBgra 的前置检查），所以先把产品界面挂上。
-        SetUiFactory(() => new InkUi.FullUi());
-        SelShowcase();                                   // 笔迹 + 选中框一起摆出来
-        SettleFrames(400);
-        RunBarActionForTest((int)SelBarButton.Export);   // 点"导出" → 开格式面板
-        SettleFrames(500);
-
-        // 拍的范围得**自己算**，而且要用**画布坐标**：选中框 / 操作条 / 导出格式面板
-        // 都画在浮动层上（不属于界面的占用区，也不跟着界面的逻辑屏幕坐标走）。
-        float dpi = DpiScale;
-        var sb = EditRegion.Of(Doc.Selected);
-        var r = SelectionHandles.BarRect(sb, dpi, ViewportCanvas);
-        var p = SelectionHandles.ExportPanelRect(sb, dpi, ViewportCanvas);
-        r.Add(sb); r.Add(p);
-        if (!OffscreenFloatingShot(path, r.Inflate(12f * dpi))) Console.WriteLine("出图失败");
-        _quit = true;
-    }
-
-    /// <summary>
     /// **截图取景框**的离屏出图：摆几笔背景墨 → 把取景框摆在中间 → 拍下来。
     ///
     /// 看的是两件自检读不出来的事：**框和角标的粗细在 2 倍屏上顺不顺眼**，
@@ -2433,7 +2482,7 @@ internal sealed class App : InkEngine.InkEngine
         t.Start();
 
         ExportDialogEnabled = true;
-        ExportSelection(jpeg: false);       // 阻塞在系统对话框里，后台线程在操作它
+        ExportSelection(1);                 // 阻塞在系统对话框里，后台线程在操作它
         Console.WriteLine("dialogprobe：对话框已关闭（走的是取消那条路）");
 
         // 走了 `--save` 的话，这里验"真的写出来了"（写完就删，不留垃圾）
@@ -2442,7 +2491,7 @@ internal sealed class App : InkEngine.InkEngine
             var fi = new FileInfo(LastExportPath);
             Console.WriteLine(fi.Exists && fi.Length > 0
                 ? $"dialogprobe：**文件真的写出来了** {LastExportPath}（{fi.Length} 字节，"
-                  + $"{(LastExportIsJpeg ? "JPEG" : "PNG")}）——对话框那条链是通的"
+                  + $"类型第 {LastExportFilterIndex} 条）——对话框那条链是通的"
                 : $"dialogprobe：**没写出来** {LastExportPath}");
             try { fi.Delete(); } catch { }
             Console.WriteLine("dialogprobe：测试文件已删掉");
@@ -2759,33 +2808,52 @@ internal sealed class App : InkEngine.InkEngine
         Check("框外不误判",
               SelectionHandles.BarButtonAt(bar.MinX - 30, bar.MinY + 5, sb, dpi, ViewportCanvas) == -1, "");
 
-        // ---- 导出格式面板（用户 2026-09-17："选不到 jpg"）----
+        // ---- 导出：**点一下直接走导出，不再开自己的格式面板** ----
         //
-        // 格式**不再只靠系统对话框那个小下拉**：点"导出"先开我们自己的两格面板，
-        // 上面写着 PNG / 透明底、JPG / 白底。这里验命中与开合（真弹框那步在自检里是关掉的）。
+        // 曾经这里点"导出"会先开一层我们自己的两格面板（PNG 透明底 / JPG 白底），
+        // 那是为了绕开"系统对话框的下拉点不开"。真因（覆盖层每秒抢一次置顶）修掉之后，
+        // 用户 2026-09-17 说"那下面这两个图标就没有用了吧，用户都可以自己保存图片了"——
+        // 删掉。现在格式在**系统对话框**的类型栏里选（见 ExportFormats，四种都写明了优势）。
+        //
+        // 自检里对话框是关着的（`ExportDialogEnabled = false`），所以这里只能验
+        // "那一下真的走到了导出这条路"（计数器）＋"没有把任何面板打开"。
         {
+            int before = ExportAttempts;
             RunBarActionForTest((int)SelBarButton.Export);
-            Check("点「导出」先开格式面板（不是直接弹框）",
-                  SelPanelOpen == SelPanel.Export, $"面板 = {SelPanelOpen}");
+            Check("点「导出」直接走导出（不再开格式面板）",
+                  ExportAttempts == before + 1 && SelPanelOpen == SelPanel.None,
+                  $"试了 {before} → {ExportAttempts} 次，面板 = {SelPanelOpen}");
 
-            var png = SelectionHandles.ExportCellRect(0, sb, dpi, ViewportCanvas);
-            var jpg = SelectionHandles.ExportCellRect(1, sb, dpi, ViewportCanvas);
-            var partPng = SelectionHandles.PanelPartAt((png.MinX + png.MaxX) * 0.5f,
-                                                       (png.MinY + png.MaxY) * 0.5f,
-                                                       sb, dpi, ViewportCanvas, SelPanel.Export, 12);
-            var partJpg = SelectionHandles.PanelPartAt((jpg.MinX + jpg.MaxX) * 0.5f,
-                                                       (jpg.MinY + jpg.MaxY) * 0.5f,
-                                                       sb, dpi, ViewportCanvas, SelPanel.Export, 12);
-            Check("两格各自命中（0 = PNG，1 = JPG）",
-                  partPng == SelectionHandles.PanelPart.ExportBase
-                  && partJpg == SelectionHandles.PanelPart.ExportBase + 1,
-                  $"PNG → {partPng}，JPG → {partJpg}");
-            Check("面板整块能被认出来（点空白也不该收起它）",
-                  SelectionHandles.PanelContains(png.MinX - 2, png.MinY + 2, sb, dpi, ViewportCanvas,
-                                                 SelPanel.Export, 12),
-                  "");
-            RunBarActionForTest((int)SelBarButton.Export);        // 再点一下：收起来
-            Check("再点「导出」收起面板", SelPanelOpen == SelPanel.None, $"面板 = {SelPanelOpen}");
+            // 四种格式的"扩展名 → 编码器 + 底色"这套规则是纯逻辑，这里一并钉住：
+            // 尤其是**有损/无透明通道的格式绝不给透明通道**（否则透明处会变黑块）。
+            Check("格式表：四条，扩展名各就各位",
+                  ExportFormats.Count == 4
+                  && ExportFormats.ExtensionFor(1) == ".png"
+                  && ExportFormats.ExtensionFor(2) == ".jpg"
+                  && ExportFormats.ExtensionFor(3) == ".png"
+                  && ExportFormats.ExtensionFor(4) == ".bmp",
+                  string.Join(" / ", Enumerable.Range(1, ExportFormats.Count)
+                                                .Select(i => ExportFormats.ExtensionFor(i))));
+            Check("格式表：四种类型的名字里都写明了优势（不是光一个格式名）",
+                  ExportFormats.Filter.Contains("贴课件首选")
+                  && ExportFormats.Filter.Contains("好发微信邮件")
+                  && ExportFormats.Filter.Contains("深色模板上不露底")
+                  && ExportFormats.Filter.Contains("老软件也能打开"),
+                  "四条都带说明");
+
+            // **记住上次选的那一条**（常用 JPG 的老师不用每次去下拉里找）。
+            // 存的是"类型栏的第几条"，读的时候越界/坏值一律回到第 1 条。
+            var saved = GetUiPref("exportFormat");
+            SetUiPref("exportFormat", null);
+            int def0 = ExportDefaultFilterIndex();
+            SetUiPref("exportFormat", "3");
+            int def3 = ExportDefaultFilterIndex();
+            SetUiPref("exportFormat", "99");
+            int defBad = ExportDefaultFilterIndex();
+            SetUiPref("exportFormat", saved);
+            Check("记住上次的格式：没存过→第 1 条、存过→照存、坏值→回到第 1 条",
+                  def0 == 1 && def3 == 3 && defBad == 1,
+                  $"默认 {def0}，存 3 → {def3}，存 99 → {defBad}");
         }
 
         Console.WriteLine();
@@ -8023,14 +8091,14 @@ internal sealed class App : InkEngine.InkEngine
             Check("操作条 · 条内留白（箭头，不是十字）", CursorKind.Default);
 
             // 挂在下头的小面板：整块也是界面，面板的空白处同样是箭头
-            SelPanelOpen = SelPanel.Export;
-            var pnl = SelectionHandles.ExportPanelRect(aabb, dpi, ViewportCanvas);
+            SelPanelOpen = SelPanel.Layer;
+            var pnl = SelectionHandles.LayerPanelRect(aabb, dpi, ViewportCanvas);
             PointerX = pnl.MinX + 3f; PointerY = pnl.MaxY - 3f;      // 面板的内边距
-            Check("导出格式面板 · 面板空白处（箭头）", CursorKind.Default);
-            var cell0 = SelectionHandles.ExportCellRect(0, aabb, dpi, ViewportCanvas);
+            Check("层级面板 · 面板空白处（箭头）", CursorKind.Default);
+            var cell0 = SelectionHandles.LayerCellRect(0, aabb, dpi, ViewportCanvas);
             PointerX = (cell0.MinX + cell0.MaxX) * 0.5f;
             PointerY = (cell0.MinY + cell0.MaxY) * 0.5f;
-            Check("导出格式面板 · PNG 那格（箭头）", CursorKind.Default);
+            Check("层级面板 · 置顶那格（箭头）", CursorKind.Default);
             SelPanelOpen = SelPanel.None;
 
             // 收起态那颗圆钮也一样
@@ -8984,15 +9052,22 @@ internal sealed class App : InkEngine.InkEngine
                   tookFront && onTop && Doc.Strokes.IndexOf(bA) == idxBefore,
                   $"下标 {idxBefore} → 置顶后 {Doc.Strokes.Count - 1}（最上）→ 撤销后 {Doc.Strokes.IndexOf(bA)}");
 
-            // ⑨ 导出那一格：还没接（下一批做"另存为"）。判据是**点了不炸也不改任何东西**——
-            // 屏幕上不再弹提示条（用户 2026-09-16 明确不要提示条），只写控制台。
+            // ⑨ 导出那一格：**已接**（离屏渲染 → 系统"另存为" → 落盘；自检里对话框是关的）。
+            // 判据两条：
+            //   · 点了**真的走导出这条路**（`ExportAttempts` +1）——不自检这一步的话，
+            //     "点了没反应"和"点了在跑导出"长得一模一样；
+            //   · 但**不动文档、不进撤销栈、不改选中**——导出是只读操作，污染文档就是 bug。
+            // 屏幕上不弹提示条（用户 2026-09-16 明确不要提示条），只写控制台。
             {
                 int n0 = Doc.Strokes.Count, d0 = Doc.UndoDepth, sel0 = Doc.Selected.Count;
+                int a0 = ExportAttempts;
                 RunBarActionForTest((int)SelBarButton.Export);
                 SettleFrames(80);
-                Check("导出格子：还没接，点了什么都不动（不炸、不改文档、不进撤销栈）",
-                      Doc.Strokes.Count == n0 && Doc.UndoDepth == d0 && Doc.Selected.Count == sel0,
-                      $"对象 {n0}→{Doc.Strokes.Count}，撤销栈 +{Doc.UndoDepth - d0}，选中 {sel0}→{Doc.Selected.Count}");
+                Check("导出格子：点了真的走导出，而且不动文档、不进撤销栈",
+                      ExportAttempts == a0 + 1
+                      && Doc.Strokes.Count == n0 && Doc.UndoDepth == d0 && Doc.Selected.Count == sel0,
+                      $"导出 {a0}→{ExportAttempts} 次；对象 {n0}→{Doc.Strokes.Count}，"
+                      + $"撤销栈 +{Doc.UndoDepth - d0}，选中 {sel0}→{Doc.Selected.Count}");
             }
 
             // ---- 选中逻辑三连测（用户点名要的）：一条 / 多条 / 里面混着图片 ----
