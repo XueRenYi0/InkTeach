@@ -1249,8 +1249,13 @@ internal sealed class OverlayWindow : IDisposable
         _app = app;                 // 画的过程中有几处要读"当前窗口"的状态
 
         float dpi = dpiScale;
-        w = (int)MathF.Ceiling((bounds.MaxX - bounds.MinX) * dpi) + padPx * 2;
-        h = (int)MathF.Ceiling((bounds.MaxY - bounds.MinY) * dpi) + padPx * 2;
+        // **两条路的单位不一样**（这一条踩过）：界面画在自己的**逻辑**坐标里，要乘 DPI 换成
+        // 物理像素；画布坐标**本身就是物理像素**（上下文 DPI 固定 96，`CanvasToWindow`
+        // 也不带缩放），所以 1 个单位就是 1 个位图像素。第一版给浮动层也乘了 DPI，
+        // 位图开成两倍大、内容却按 1:1 画，整个画面被推到左边去了。
+        float unit = floatingCanvasSpace ? 1f : dpi;
+        w = (int)MathF.Ceiling((bounds.MaxX - bounds.MinX) * unit) + padPx * 2;
+        h = (int)MathF.Ceiling((bounds.MaxY - bounds.MinY) * unit) + padPx * 2;
         if (w <= 0 || h <= 0 || w > 8000 || h > 8000) return null;
 
         var pf = new Vortice.DCommon.PixelFormat(
@@ -1270,10 +1275,15 @@ internal sealed class OverlayWindow : IDisposable
 
             if (floatingCanvasSpace)
             {
-                // 画布坐标本来就是逻辑单位，一个单位就是一个位图像素——只挪不平移缩放。
-                _ctx.Transform = Matrix3x2.CreateTranslation(padPx - bounds.MinX * dpi,
-                                                             padPx - bounds.MinY * dpi);
+                // 画布坐标就是物理像素：只挪，不平移缩放（见上面 unit 那一段）。
+                _ctx.Transform = Matrix3x2.CreateTranslation(padPx - bounds.MinX,
+                                                             padPx - bounds.MinY);
+                // 拍这一块里的墨（内容层），否则取景框、选中框都浮在空白上，
+                // 看不出"框有没有圈住东西"。只画和这一块相交的那几条。
+                foreach (var s in app.Doc.Strokes)
+                    if (s.PaddedBounds.Intersects(bounds)) DrawStroke(s);
                 DrawSelection(app);
+                DrawCaptureRect(app);        // 截图取景框（含尺寸读数）——不在截图态就直接返回
             }
             else
             {

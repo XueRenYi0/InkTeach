@@ -622,6 +622,15 @@ internal static class SelectionHandles
     /// <summary>层级面板每一格的边长（两格并排）。</summary>
     public const float LayerCellLogical = 40f;
 
+    /// <summary>
+    /// 小面板里**两格之间留的缝**（逻辑像素）。
+    ///
+    /// 一开始是不留缝的（`x = 起点 + i * 格宽`），画出来两格**圆角贴在一起**，
+    /// 交界处出现一个"掐进去"的缺口，看着像没画好。留 8 像素之后是两块分开的按钮，
+    /// 顺便也符合"相邻的可点区域别共用一条边"这个老规矩（点歪一点不会点错一个）。
+    /// </summary>
+    public const float PanelCellGapLogical = 8f;
+
     /// <summary>色板里有几个色片（引擎侧的色板表长度）。</summary>
     public static int SwatchCount => InkPalette.SelectionSwatches.Length;
 
@@ -711,7 +720,7 @@ internal static class SelectionHandles
     {
         var p = ExportPanelRect(sel, dpi, visible);
         float pad = PanelPaddingLogical * dpi, cell = ExportCellLogical * dpi;
-        float x = p.MinX + pad + i * cell;
+        float x = p.MinX + pad + i * (cell + PanelCellGapLogical * dpi);
         return new RectF { MinX = x, MinY = p.MinY + pad, MaxX = x + cell, MaxY = p.MinY + pad + cell };
     }
 
@@ -726,7 +735,8 @@ internal static class SelectionHandles
     private static RectF PanelBelow(int button, float cellLogical, int cells,
                                     in RectF sel, float dpi, in RectF visible)
     {
-        float w = (cellLogical * cells + PanelPaddingLogical * 2) * dpi;
+        float w = (cellLogical * cells + PanelCellGapLogical * (cells - 1)
+                 + PanelPaddingLogical * 2) * dpi;
         float h = (cellLogical + PanelPaddingLogical * 2) * dpi;
         var bar = BarRect(sel, dpi, visible);
         var btn = BarButtonRect(button, sel, dpi, visible);
@@ -755,7 +765,7 @@ internal static class SelectionHandles
     {
         var p = LayerPanelRect(sel, dpi, visible);
         float pad = PanelPaddingLogical * dpi, cell = LayerCellLogical * dpi;
-        float x = p.MinX + pad + i * cell;
+        float x = p.MinX + pad + i * (cell + PanelCellGapLogical * dpi);
         return new RectF { MinX = x, MinY = p.MinY + pad, MaxX = x + cell, MaxY = p.MinY + pad + cell };
     }
 

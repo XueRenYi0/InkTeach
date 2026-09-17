@@ -396,6 +396,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             ExportShow(args.Length > 1 ? args[1] : "reports/export-panel.png");
         }
+        else if (mode == "--captureshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            CaptureShow(args.Length > 1 ? args[1] : "reports/capture-frame.png");
+        }
         else if (mode == "--edittest")
         {
             _autoExitAt = double.MaxValue;
@@ -616,6 +622,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
         Console.WriteLine("  --panelshow <图> [--band] [--mini] [--drawer] [--cell N]   界面出图（离屏）");
         Console.WriteLine("  --exportshow <图>   选中框 + 导出格式面板（PNG/JPG 两格）出图（离屏）");
+        Console.WriteLine("  --captureshow <图>  截图取景框 + 尺寸读数出图（离屏）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
         Console.WriteLine("  --pixelerasetest    像素橡皮正确性（切成两段 / 框里无墨 / 一步撤销）");
         Console.WriteLine("  --pixeleraseshow    像素橡皮摆样（擦之前/之后各存一张图，自己抓屏）");
@@ -2371,7 +2378,50 @@ internal sealed class App : InkEngine.InkEngine
         var r = SelectionHandles.BarRect(sb, dpi, ViewportCanvas);
         var p = SelectionHandles.ExportPanelRect(sb, dpi, ViewportCanvas);
         r.Add(sb); r.Add(p);
-        if (!OffscreenFloatingShot(path, r.Inflate(18f))) Console.WriteLine("出图失败");
+        if (!OffscreenFloatingShot(path, r.Inflate(12f * dpi))) Console.WriteLine("出图失败");
+        _quit = true;
+    }
+
+    /// <summary>
+    /// **截图取景框**的离屏出图：摆几笔背景墨 → 把取景框摆在中间 → 拍下来。
+    ///
+    /// 看的是两件自检读不出来的事：**框和角标的粗细在 2 倍屏上顺不顺眼**，
+    /// 以及拖动中那个**尺寸读数胶囊**跟框的距离、字的大小合不合适。
+    /// </summary>
+    private void CaptureShow(string path)
+    {
+        SetUiFactory(() => new InkUi.FullUi());
+        BoardOn = true;                     // 白底，不然框压在桌面上看不清
+        Doc.Clear();
+        Doc.ClearHistory();
+
+        float cx = VirtualScreen.MinX + 700, top = VirtualScreen.MinY + 300;
+        var s = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(0.11f, 0.12f, 0.15f, 1f), Width = 5f * DpiScale,
+        };
+        for (int i = 0; i <= 60; i++)
+        {
+            float t = i / 60f;
+            s.AddPoint(cx - 300 + t * 620, top + 120 + MathF.Sin(t * 6f) * 60f, 0.5f, i * 8);
+        }
+        Doc.AddStroke(s);
+
+        // 取景区：**故意取一块不是整数的尺寸**（520×300 逻辑像素），读数才有看头
+        CaptureActive = true;
+        CapMinX = cx - 260; CapMinY = top;
+        CapMaxX = cx + 260; CapMaxY = top + 300 * DpiScale;
+
+        var r = new RectF { MinX = CapMinX, MinY = CapMinY, MaxX = CapMaxX, MaxY = CapMaxY };
+        // 读数画在框左下角外侧，脏区那一套逻辑和抓屏时一致，所以这里也把它算进去
+        r.Add(new RectF
+        {
+            MinX = r.MinX, MinY = r.MaxY,
+            MaxX = r.MinX + 110f * DpiScale, MaxY = r.MaxY + 40f * DpiScale,
+        });
+        if (!OffscreenFloatingShot(path, r.Inflate(20f))) Console.WriteLine("出图失败");
+        CaptureActive = false;
         _quit = true;
     }
 
