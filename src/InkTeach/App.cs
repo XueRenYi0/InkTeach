@@ -6516,10 +6516,13 @@ internal sealed partial class App : InkEngine.InkEngine
         string path = Recovery.AutoSavePath;
         Recovery.DeleteAuto();
 
-        Check("存档落在 LOCALAPPDATA（不是 TEMP）",
-              path.Contains("Local", StringComparison.OrdinalIgnoreCase)
-              || Recovery.AutoSavePathOverride != null,
-              path);
+        // 存档的**默认落点**现在在"文档区的 InkTeach 里、按名字分开"（用户 2026-09-18 定），
+        // 自检跑的时候会把它指到临时文件，所以这里验的是**目录规则**而不是这一次的路径。
+        Check("默认落点是「文档\\InkTeach\\板书」，按名字分开",
+              Recovery.BoardDir.EndsWith(System.IO.Path.Combine("InkTeach", "板书"))
+              && Recovery.DeckDir.EndsWith(System.IO.Path.Combine("InkTeach", "幻灯片"))
+              && Recovery.BoardDir != Recovery.DeckDir,
+              $"板书 {Recovery.BoardDir} ｜ 幻灯片 {Recovery.DeckDir}");
 
         // ⓪ **默认档：不接上次的板书，也不写那个文件**（用户 2026-09-17）
         //

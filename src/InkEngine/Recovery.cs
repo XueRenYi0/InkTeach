@@ -37,9 +37,17 @@ internal static class Recovery
     /// <summary>自检用：指向临时文件，**别动用户真正的板书**（和设置那边同一个套路）。</summary>
     public static string AutoSavePathOverride;
 
+    /// <summary>
+    /// 白板板书的落点：**文档区的 `InkTeach\板书\` 里，按名字分开**
+    /// （用户 2026-09-18："我们自己在文档区建一个这个软件，专门用来存……
+    /// 板书或者 PPT 批注都统一保存在这里，按照名字去分开"）。
+    ///
+    /// 名字现在是**日期**（`板书-2026-09-18.ink`）：一天一份、好找、不用老师起名。
+    /// 想按班级/课题分开的话，下一步在界面上给一个"重命名/新建"的入口就行——
+    /// 存储这一层只认文件名，界面上叫什么都行。
+    /// </summary>
     public static string AutoSavePath => AutoSavePathOverride ?? System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "InkTeach", "autosave.ink");
+        BoardDir, $"板书-{DateTime.Now:yyyy-MM-dd}.ink");
 
     public static bool AutoSaveExists => File.Exists(AutoSavePath);
 
@@ -94,9 +102,28 @@ internal static class Recovery
     /// <summary>自检用：把这一整块指到临时目录，别动用户的批注。</summary>
     public static string DeckDirOverride;
 
-    public static string DeckDir => DeckDirOverride ?? System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "InkTeach", "decks");
+    /// <summary>
+    /// **我们这个软件在"文档"里的家**（用户 2026-09-18 定的）：
+    /// 板书、幻灯片批注，以后别的东西，**统一放在这儿、按名字分开**——
+    /// 老师打开"文档"就能看见自己的东西，而不是藏在 `%APPDATA%` 里找不到。
+    ///
+    /// 两条兜底（教室机器上真会遇到）：
+    ///   · "我的文档"取不到（极少数域账户/漫游配置）→ 退回 `%LOCALAPPDATA%\InkTeach`；
+    ///   · "我的文档"在只读盘/被重定向到网络盘 → 写的时候失败，调用方只提示、不打断上课
+    ///     （所有落盘都包了 try/catch，写不进去顶多这次没存上）。
+    /// </summary>
+    public static string RootDir => Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)
+        is { Length: > 0 } docs
+        ? System.IO.Path.Combine(docs, "InkTeach")
+        : System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "InkTeach");
+
+    /// <summary>幻灯片批注：一份演示文稿一个文件，**按演示文稿名分开**。</summary>
+    public static string DeckDir => DeckDirOverride ?? System.IO.Path.Combine(RootDir, "幻灯片");
+
+    /// <summary>白板板书：按"名字"分开（现在是按日期，以后可以在界面上让老师自己起名）。</summary>
+    public static string BoardDirOverride;
+    public static string BoardDir => BoardDirOverride ?? System.IO.Path.Combine(RootDir, "板书");
 
     /// <summary>
     /// 演示文稿身份 → 文件名。**路径里有 `:` `\` 这些不能当文件名的字符**，
