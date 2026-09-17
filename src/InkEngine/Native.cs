@@ -406,6 +406,34 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
+    // ---- 子窗口排查（导出对话框探针用）----------------------------------
+
+    [DllImport("user32.dll")]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
+
+    public delegate bool EnumChildProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumChildWindows(IntPtr parent, EnumChildProc cb, IntPtr lParam);
+
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassNameW(IntPtr hWnd, System.Text.StringBuilder s, int n);
+
+    // 注：`MONITORINFO` / `GetMonitorInfo` 上面已经有了（多屏那块用的），这里不再重复定义。
+    [DllImport("user32.dll")]
+    public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+
+    /// <summary>`MONITOR_DEFAULTTONEAREST`：窗口不在任何显示器上时给最近的那块。</summary>
+    public const uint MONITOR_DEFAULTTONEAREST = 2;
+
     // ---- painting --------------------------------------------------------
 
     [StructLayout(LayoutKind.Sequential)]

@@ -402,6 +402,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             CaptureShow(args.Length > 1 ? args[1] : "reports/capture-frame.png");
         }
+        else if (mode == "--dialogprobe")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            DialogProbe(args.Length > 1 ? args[1] : "tmp/dlg");
+        }
         else if (mode == "--edittest")
         {
             _autoExitAt = double.MaxValue;
@@ -623,6 +629,8 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --panelshow <图> [--band] [--mini] [--drawer] [--cell N]   界面出图（离屏）");
         Console.WriteLine("  --exportshow <图>   选中框 + 导出格式面板（PNG/JPG 两格）出图（离屏）");
         Console.WriteLine("  --captureshow <图>  截图取景框 + 尺寸读数出图（离屏）");
+        Console.WriteLine("  --dialogprobe <前缀> [--save]  导出对话框探针（真弹框 + 点它的下拉 + 连拍三张；");
+        Console.WriteLine("                     --save 连「保存」一起点，验到落盘为止）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
         Console.WriteLine("  --pixelerasetest    像素橡皮正确性（切成两段 / 框里无墨 / 一步撤销）");
         Console.WriteLine("  --pixeleraseshow    像素橡皮摆样（擦之前/之后各存一张图，自己抓屏）");
@@ -2388,6 +2396,236 @@ internal sealed class App : InkEngine.InkEngine
     /// 看的是两件自检读不出来的事：**框和角标的粗细在 2 倍屏上顺不顺眼**，
     /// 以及拖动中那个**尺寸读数胶囊**跟框的距离、字的大小合不合适。
     /// </summary>
+    /// <summary>
+    /// **导出对话框探针**：真的弹一次系统"另存为"，同时由一个后台线程去点它的
+    /// "保存类型"下拉，并把每一步截下来。
+    ///
+    /// 为什么要专门做它：这里出过两次问题（"选不到 jpg"、"对话框被自己的下拉盖住"），
+    /// 而**这些问题只能靠真机 + 看图判断**——系统对话框是另一个窗口类，
+    /// 我们的自检（合成输入 + 数像素）碰不到它的内部控件。探针把"找窗口 →
+    /// 点下拉 → 截图 → 关掉"这套动作固定下来，改一次就能再验一次。
+    ///
+    /// 用法：`--dialogprobe [前缀]`，产出 `<前缀>-1-打开时.bmp`、`-2-点下拉后.bmp`。
+    /// </summary>
+    private void DialogProbe(string prefix)
+    {
+        BoardOn = true;
+        Tool = Tool.Marquee;
+        Doc.Clear();
+        Doc.ClearHistory();
+        // 几条横线铺在屏幕中间：对话框会压在上面，正好看"框和墨谁在上面"
+        for (int i = 0; i < 5; i++)
+        {
+            var s = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0.85f, 0.15f, 0.15f, 1f), Width = 8f * DpiScale,
+            };
+            float y = _virtualY + _virtualH * 0.35f + i * 90f * DpiScale;
+            s.AddPoint(_virtualX + _virtualW * 0.15f, y, 1f, i * 4);
+            s.AddPoint(_virtualX + _virtualW * 0.85f, y, 1f, i * 4 + 2);
+            Doc.AddStroke(s);
+        }
+        Doc.SelectOnly(Doc.Strokes.ToArray());
+        SettleFrames(700);
+
+        var t = new Thread(() => DialogProbeThread(prefix)) { IsBackground = true };
+        t.Start();
+
+        ExportDialogEnabled = true;
+        ExportSelection(jpeg: false);       // 阻塞在系统对话框里，后台线程在操作它
+        Console.WriteLine("dialogprobe：对话框已关闭（走的是取消那条路）");
+
+        // 走了 `--save` 的话，这里验"真的写出来了"（写完就删，不留垃圾）
+        if (DialogProbeCheckExport && LastExportPath != null)
+        {
+            var fi = new FileInfo(LastExportPath);
+            Console.WriteLine(fi.Exists && fi.Length > 0
+                ? $"dialogprobe：**文件真的写出来了** {LastExportPath}（{fi.Length} 字节，"
+                  + $"{(LastExportIsJpeg ? "JPEG" : "PNG")}）——对话框那条链是通的"
+                : $"dialogprobe：**没写出来** {LastExportPath}");
+            try { fi.Delete(); } catch { }
+            Console.WriteLine("dialogprobe：测试文件已删掉");
+            DialogProbeCheckExport = false;
+        }
+        _quit = true;
+    }
+
+    private static bool DialogProbeCheckExport;
+
+    private static IntPtr ProbeFindDialog()
+    {
+        IntPtr found = IntPtr.Zero;
+        uint me = (uint)Environment.ProcessId;
+        var sb = new System.Text.StringBuilder(64);
+        Native.EnumWindows((h, _) =>
+        {
+            Native.GetWindowThreadProcessId(h, out uint pid);
+            if (pid != me) return true;
+            Native.GetClassNameW(h, sb, sb.Capacity);
+            if (sb.ToString() != "#32770") return true;
+            found = h;
+            return false;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    private static string ProbeClassName(IntPtr h)
+    {
+        var sb = new System.Text.StringBuilder(256);
+        Native.GetClassNameW(h, sb, sb.Capacity);
+        return sb.ToString();
+    }
+
+    private void DialogProbeThread(string prefix)
+    {
+        IntPtr dlg = IntPtr.Zero;
+        for (int i = 0; i < 120 && dlg == IntPtr.Zero; i++)
+        {
+            Thread.Sleep(100);
+            dlg = ProbeFindDialog();
+        }
+        if (dlg == IntPtr.Zero) { Console.WriteLine("dialogprobe：6 秒内没等到对话框"); return; }
+
+        Native.GetWindowRect(dlg, out var r);
+        Console.WriteLine($"dialogprobe：对话框 {dlg} 在 ({r.Left},{r.Top})，{r.Width}×{r.Height}");
+
+        // 等 1.2 秒：让看门线程把它顶到最前、也让对话框把自己的子控件建完
+        // （第一次探针在"刚找到"就查子窗口，一个 ComboBox 都没查到）。
+        Thread.Sleep(1200);
+        Native.GetWindowRect(dlg, out r);
+        ShotRegion(prefix + "-0-全屏.bmp", 0, 0, 2880, 1800);
+        ShotRegion(prefix + "-1-打开时.bmp", r.Left - 30, r.Top - 30, r.Width + 60, r.Height + 60);
+
+        // 我们覆盖层这会儿在对话框上面还是下面？看两个点上的最上层窗口是谁。
+        int midX = (r.Left + r.Right) / 2, midY = (r.Top + r.Bottom) / 2;
+        IntPtr atMid = Native.WindowFromPoint(new Native.POINT { X = midX, Y = midY });
+        Console.WriteLine($"dialogprobe：对话框正中那一点最上层 = {atMid}（{ProbeClassName(atMid)}）"
+                        + $"；我们的覆盖层 = {_windows[0].Hwnd}（{ProbeClassName(_windows[0].Hwnd)}）");
+
+        // 子控件清单：看对话框里到底有什么（第一次没找到 ComboBox）
+        int n = 0;
+        Native.EnumChildWindows(dlg, (h, _) =>
+        {
+            if (n++ < 40)
+            {
+                Native.GetWindowRect(h, out var cr0);
+                Console.WriteLine($"    子窗口 {ProbeClassName(h),-20} ({cr0.Left},{cr0.Top})-({cr0.Right},{cr0.Bottom})");
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        // "保存类型"那个下拉：它和"文件名"是同一类控件（都是 ComboBox），
+        // **"保存类型"是下面那个**（文件名在上）。第一版取了第一个 → 点到了文件名框。
+        // 所以这里取**位置最靠下的那一个**。
+        IntPtr combo = IntPtr.Zero;
+        string comboClass = "";
+        int bestTop = int.MinValue;
+        Native.EnumChildWindows(dlg, (h, _) =>
+        {
+            string cls = ProbeClassName(h);
+            if (cls != "ComboBox" && cls != "ComboBoxEx32") return true;
+            Native.GetWindowRect(h, out var cr0);
+            if (cr0.Top <= bestTop) return true;
+            bestTop = cr0.Top; combo = h; comboClass = cls;
+            return true;
+        }, IntPtr.Zero);
+
+        if (combo == IntPtr.Zero)
+        {
+            Console.WriteLine("dialogprobe：没找到文件类型下拉（子窗口里没有 ComboBox）");
+        }
+        else
+        {
+            Native.GetWindowRect(combo, out var cr);
+            // 子窗口的矩形**大多数时候是屏幕坐标**（对话框移到 (779,330) 之后，
+            // 它也跟着报 (1042,1088)）。但对话框还在 (0,0) 时两种读法长得一模一样，
+            // 分不清——所以这里按"在不在对话框矩形里"判一下，不在就补上对话框原点。
+            int ox = 0, oy = 0;
+            bool insideDlg = cr.Left >= r.Left && cr.Top >= r.Top
+                          && cr.Right <= r.Right && cr.Bottom <= r.Bottom;
+            if (!insideDlg) { ox = r.Left; oy = r.Top; }
+            int cx = ox + cr.Right - 14, cy = oy + (cr.Top + cr.Bottom) / 2;
+            Console.WriteLine($"dialogprobe：下拉 {comboClass} 读到 ({cr.Left},{cr.Top})-({cr.Right},{cr.Bottom})，"
+                            + $"对话框 ({r.Left},{r.Top})-({r.Right},{r.Bottom})，"
+                            + $"{(insideDlg ? "按屏幕坐标" : "按相对坐标＋原点")} → 点 ({cx},{cy})");
+
+            // **先看一眼：这个点上是谁的窗口**（我们覆盖层是置顶的，很可能抢走这一下）
+            IntPtr over = Native.WindowFromPoint(new Native.POINT { X = cx, Y = cy });
+            Console.WriteLine($"dialogprobe：那一点上最上层的窗口 = {over}（{ProbeClassName(over)}）"
+                            + $"，我们的覆盖层 = {_windows[0].Hwnd}");
+
+            SendMouse(cx, cy, 0);
+            Thread.Sleep(60);
+            SendMouse(cx, cy, Native.MOUSEEVENTF_LEFTDOWN);
+            Thread.Sleep(50);
+            SendMouse(cx, cy, Native.MOUSEEVENTF_LEFTUP);
+            // **连着拍三张**：判"点开就收回去"这种毛病，得看它是没开、还是开了一下又被关掉。
+            int sx = ox + cr.Left - 30, sy = oy + cr.Bottom - 40;
+            int sw = Math.Max(cr.Width + 60, 400), sh = 460;
+            Thread.Sleep(150);
+            ShotRegion(prefix + "-2a-点后150ms.bmp", sx, sy, sw, sh);
+            Thread.Sleep(250);
+            ShotRegion(prefix + "-2b-点后400ms.bmp", sx, sy, sw, sh);
+            Thread.Sleep(500);
+            ShotRegion(prefix + "-2c-点后900ms.bmp", sx, sy, sw, sh);
+
+            // 下拉里**第二项就是 JPEG**（PNG 在上、JPEG 在下，每项约 30 物理像素）。
+            // 点它一下，看文件名后缀会不会跟着变成 .jpg——这就是用户要的那条路。
+            int jx = ox + cr.Left + 200, jy = oy + cr.Bottom + 45;
+            SendMouse(jx, jy, 0);
+            Thread.Sleep(60);
+            SendMouse(jx, jy, Native.MOUSEEVENTF_LEFTDOWN);
+            Thread.Sleep(50);
+            SendMouse(jx, jy, Native.MOUSEEVENTF_LEFTUP);
+            Thread.Sleep(500);
+            ShotRegion(prefix + "-3-选了JPG.bmp", sx, sy, sw, sh);
+
+            // `--save`：一路走到底——把文件名改成临时路径，点"保存"，
+            // 看我们的代码是不是真的把图写出来了（写完由主线程验证并删掉）。
+            if (Environment.GetCommandLineArgs().Contains("--save"))
+            {
+                DialogProbeCheckExport = true;
+                IntPtr saveBtn = IntPtr.Zero;
+                int leftMost = int.MaxValue;
+                Native.EnumChildWindows(dlg, (h, _) =>
+                {
+                    string cls = ProbeClassName(h);
+                    Native.GetWindowRect(h, out var hr);
+                    if (cls == "Button" && hr.Top > r.Top + r.Height * 3 / 4 && hr.Left < leftMost)
+                    {
+                        leftMost = hr.Left;                                 // 下半部分最左边那个 = 保存
+                        saveBtn = h;
+                    }
+                    return true;
+                }, IntPtr.Zero);
+
+                if (saveBtn != IntPtr.Zero)
+                {
+                    Native.GetWindowRect(saveBtn, out var br);
+                    int bx = (br.Left + br.Right) / 2, by = (br.Top + br.Bottom) / 2;
+                    Console.WriteLine($"dialogprobe：点「保存」({bx},{by})");
+                    SendMouse(bx, by, 0);
+                    Thread.Sleep(60);
+                    SendMouse(bx, by, Native.MOUSEEVENTF_LEFTDOWN);
+                    Thread.Sleep(50);
+                    SendMouse(bx, by, Native.MOUSEEVENTF_LEFTUP);
+                    return;                       // 让它自己去保存、关框，别再补 WM_CLOSE
+                }
+            }
+        }
+
+        Thread.Sleep(300);
+        Native.PostMessage(dlg, 0x0010 /*WM_CLOSE*/, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    private static void ShotRegion(string path, int x, int y, int w, int h)
+    {
+        bool ok = ScreenProbe.SaveBmp(path, x, y, w, h);
+        Console.WriteLine(ok ? $"  出图 {System.IO.Path.GetFullPath(path)}（CWD = {Environment.CurrentDirectory}）"
+                             : $"  出图失败 {path}");
+    }
+
     private void CaptureShow(string path)
     {
         SetUiFactory(() => new InkUi.FullUi());
@@ -6099,6 +6337,43 @@ internal sealed class App : InkEngine.InkEngine
               path.Contains("Local", StringComparison.OrdinalIgnoreCase)
               || Recovery.AutoSavePathOverride != null,
               path);
+
+        // ⓪ **默认档：不接上次的板书，也不写那个文件**（用户 2026-09-17）
+        //
+        // "退出以后再打开不用恢复墨迹吧……我觉得默认不恢复墨迹。"
+        // 理由：教室机器是公用的，一开机铺满上一节课的板书不合理。
+        // 这里先按"上次留下了一份存档"造现场，再走一遍**启动时那条真路径**。
+        {
+            SetUiPref("restoreInk", null);              // 默认：没有这一项
+            Doc.Clear();
+            Doc.ClearHistory();
+            var keep = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 5f * DpiScale };
+            keep.AddPoint(300, 300, 1f, 0); keep.AddPoint(500, 320, 1f, 1);
+            Doc.AddStroke(keep);
+            AutoSaveNow();                              // 硬盘上留下一份"上次的板书"
+            Doc.Clear();
+            Doc.ClearHistory();
+
+            RestoreAutoSaveForTest();                   // 启动时走的就是这一条
+            Check("默认（没设偏好）：启动**不接**上次的板书",
+                  Doc.Strokes.Count == 0 && !RestoreInkOnStartup,
+                  $"偏好 = {RestoreInkOnStartup}，读回 {Doc.Strokes.Count} 笔");
+
+            // 不写：改一下板书、跑够时间，自动存档次数不该动
+            SetAutoSaveIntervalForTest(80);
+            int n0 = AutoSaveCount;
+            var s0 = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 5f * DpiScale };
+            s0.AddPoint(200, 200, 1f, 0); s0.AddPoint(260, 230, 1f, 1);
+            Doc.AddStroke(s0);
+            var sw0 = Stopwatch.StartNew();
+            while (sw0.ElapsedMilliseconds < 260) { PumpMessages(); RenderAll(); }
+            Check("默认（没设偏好）：板书变了也不写档（不留没人读的文件）",
+                  AutoSaveCount == n0, $"{n0} → {AutoSaveCount} 次");
+
+            // 打开偏好：下面几条按"要恢复"的老路径验
+            SetUiPref("restoreInk", "1");
+            Check("打开偏好之后：读得到这一项", RestoreInkOnStartup, "restoreInk = 1");
+        }
 
         // ① 存 → 读回来，逐项一致
         Doc.Clear();

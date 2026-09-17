@@ -280,8 +280,6 @@ internal static class ExportFileDialog
     private static extern int GetClassNameW(IntPtr hWnd, StringBuilder s, int n);
 
     private static readonly IntPtr HwndTopmost = new(-1);
-    /// <summary>`HWND_TOP`（0）：放到**非置顶**窗口的最上面。见 <see cref="ForceToFront"/>。</summary>
-    private static readonly IntPtr HwndTop = IntPtr.Zero;
     private const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_SHOWWINDOW = 0x0040;
 
     /// <summary>
@@ -301,8 +299,8 @@ internal static class ExportFileDialog
                 Thread.Sleep(50);
                 IntPtr dlg = FindOurDialog();
                 if (dlg == IntPtr.Zero) continue;
-                ForceToFront(dlg);
-                Log($"对话框 {dlg} 已顶到最前（看门线程第 {i + 1} 次尝试）");
+                CenterAndBringUp(dlg);
+                Log($"对话框 {dlg} 已居中并顶到最前（看门线程第 {i + 1} 次尝试）");
                 return;
             }
             Log("看门线程：6 秒内没等到对话框（可能用户没点开，或者系统换了实现）");
@@ -333,20 +331,37 @@ internal static class ExportFileDialog
     }
 
     /// <summary>
-    /// 把窗口顶到最前并激活。
+    /// 把对话框**摆到屏幕中间**、顶到最前并激活。
     ///
-    /// 两招一起用，缺一不可（2026-09-17 实测踩过）：
+    /// **一、为什么必须居中**（用户 2026-09-17："在弹出居中保存框"）：
+    /// 实测（`--dialogprobe`）系统把对话框摆在了 **(0,0)**——屏幕左上角，
+    /// 而屏幕是 2880×1800。老师在最左边那一小块里找一个"另存为"，很别扭。
+    /// 我们按最近那块显示器的**工作区**（`rcWork`，避让任务栏）居中，顺手也把
+    /// "两个屏幕时跑到副屏去了"这种意外一并收掉。
+    ///
+    /// **二、为什么必须置顶，而且是一直置顶**：
+    /// 我们的覆盖层是铺满全屏的画布。白板开着的时候它是**不透明的白**，
+    /// 只要它在对话框上面，对话框就**整个看不见**——实测截图上就是一大片白底 + 我们的墨，
+    /// 连标题栏都看不到（`tmp/dlg-a-1-打开时.bmp`）。
+    /// 早先那版"顶完马上取消置顶"是**错的**：取消置顶之后对话框立刻掉回覆盖层下面，
+    /// 白板一开就完全看不见它。现在**从头到尾保持置顶**：它在最上面，老师才看得见、
+    /// 点得到，它的下拉列表也才在它上面。关闭之后由
+    /// `ReturnFocusAfterDialog` 把覆盖层的置顶装回去。
+    ///
+    /// **三、激活**（这一步和置顶是两件事，缺一不可）：
     ///   ① `SetWindowPos(HWND_TOPMOST)` —— 纯 z 序调整，不受"前台锁"限制；
     ///   ② **附加到当前前台窗口的输入线程**再 `SetForegroundWindow` ——
     ///      Windows 只允许"当前前台进程"抢前台，我们不是，所以直接调必然失败；
     ///      附加线程（AttachThreadInput）是系统文档里给出的标准绕法。
     /// </summary>
-    private static void ForceToFront(IntPtr hwnd)
+    private static void CenterAndBringUp(IntPtr hwnd)
     {
         try
         {
+            // ① 先只管 z 序：把它提到置顶层，位置先别动。
             SetWindowPos(hwnd, HwndTopmost, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
 
+            // ② 激活（见下面第三段）。
             IntPtr fg = GetForegroundWindow();
             uint fgTid = GetWindowThreadProcessId(fg, out _);
             uint myTid = GetCurrentThreadId();
@@ -363,17 +378,58 @@ internal static class ExportFileDialog
                 SetForegroundWindow(hwnd);
             }
 
-            // **顶完马上取消置顶**（用户 2026-09-17："点击切换格式的那个地方，
-            // 再点击以后很快就收回去了，选不到 jpg"）。
+            // ③ **居中要"盯一会儿"，不能指望移一次就位**（这一步踩过）：
             //
-            // 原因：置顶窗口自己的**下拉列表**（文件类型那个 combobox 的弹出部分）
-            // 是普通弹窗，会被置顶的对话框盖住——看起来就是"点开一下就收回去"。
-            // 它此刻已经是前台窗口，取消置顶照样在最前面，而它的下拉列表就正常了。
-            SetWindowPos(hwnd, HwndTop, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+            // 系统对话框显示之后**自己还会再摆一次位置**：实测移完读到 (779,330)，
+            // 1.2 秒后再问它已经在 (0,0) 了（全屏截图坐实：对话框在最左上角）。
+            // 所以这里前两秒盯着——偏了就再移一次；连着三次（约 0.45 秒）都在位才算稳。
+            // 这段时间用户刚看见框，不可能已经在拖它了，所以不会跟人抢。
+            int moves = 0, okStreak = 0;
+            for (int i = 0; i < 14; i++)
+            {
+                if (!CenterOnce(hwnd, out int wantX, out int wantY)) break;
+                Thread.Sleep(150);
+                GetWindowRect(hwnd, out var cur);
+                if (Math.Abs(cur.Left - wantX) <= 4 && Math.Abs(cur.Top - wantY) <= 4)
+                {
+                    if (++okStreak >= 3)
+                    {
+                        Log($"对话框 {hwnd}：已居中到 ({wantX},{wantY})（移了 {moves} 次后稳住）");
+                        break;
+                    }
+                }
+                else okStreak = 0;
+                moves++;
+            }
             Log($"对话框 {hwnd}：顶到最前（原前台 {fg}，线程 {fgTid} / 本线程 {myTid}）");
         }
         catch (Exception ex) { Log("顶对话框出错：" + ex.Message); }
     }
+
+    /// <summary>
+    /// 按最近那块显示器的**工作区**把对话框摆到中间（工作区装不下就贴顶，
+    /// 免得标题栏被推到屏幕外、拖都拖不动）。返回 false = 没量到显示器，位置没动。
+    /// </summary>
+    private static bool CenterOnce(IntPtr hwnd, out int wantX, out int wantY)
+    {
+        wantX = wantY = int.MinValue;
+        GetWindowRect(hwnd, out var r);
+        IntPtr mon = MonitorFromWindow(hwnd, Native.MONITOR_DEFAULTTONEAREST);
+        var mi = new Native.MONITORINFO { cbSize = Marshal.SizeOf<Native.MONITORINFO>() };
+        if (!GetMonitorInfoW(mon, ref mi)) return false;
+
+        var wa = mi.rcWork;
+        int w = r.Width, h = r.Height;
+        wantX = wa.Left + (wa.Width - w) / 2;
+        wantY = wa.Top + (h >= wa.Height ? 0 : (wa.Height - h) / 2);
+        SetWindowPos(hwnd, HwndTopmost, wantX, wantY, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
+        return true;
+    }
+
+    // 量尺寸 / 找显示器 / 读工作区：走引擎已有的那一套 interop，不在这里另开一份。
+    private static void GetWindowRect(IntPtr hWnd, out Native.RECT r) => Native.GetWindowRect(hWnd, out r);
+    private static IntPtr MonitorFromWindow(IntPtr hWnd, uint flags) => Native.MonitorFromWindow(hWnd, flags);
+    private static bool GetMonitorInfoW(IntPtr mon, ref Native.MONITORINFO mi) => Native.GetMonitorInfo(mon, ref mi);
 
     /// <summary>
     /// 排查用的日志：教室机器上看不到控制台，出问题时看

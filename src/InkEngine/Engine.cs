@@ -74,6 +74,17 @@ public class InkEngine
     /// <summary>自检用：走一遍"启动时接上上次板书"这条真路径（含坏文件容错）。</summary>
     internal void RestoreAutoSaveForTest() => RestoreAutoSaveIfAny();
 
+    /// <summary>
+    /// **启动时要不要接上上次的板书**（`ui` 段里的 `restoreInk`）。**默认关**。
+    ///
+    /// 用户 2026-09-17："退出以后再打开不用恢复墨迹吧……后期可以设置，但是我觉得
+    /// 默认不恢复墨迹。" 理由写在 <see cref="RestoreAutoSaveIfAny"/> 里：教室机器是
+    /// 公用的，一开机就铺满上一节课的板书不合理。
+    ///
+    /// 它同时管**写**：不读的东西不必写（见 <see cref="MaybeAutoSave"/>）。
+    /// </summary>
+    internal bool RestoreInkOnStartup => GetUiPref("restoreInk") == "1";
+
     /// <summary>自检用：立刻按当前文档写一次自动存档（不看间隔）。</summary>
     internal void AutoSaveNow()
     {
@@ -87,9 +98,13 @@ public class InkEngine
     /// 到了间隔、而且板书真的变了，就写一次。
     /// 判据用文档版本号（`Doc.Version`）——它在每次增删改时都会加一，
     /// 比"每 15 秒无条件写一遍"省得多（一万笔的全量序列化不是白给的）。
+    ///
+    /// **偏好关着就一次都不写**：默认档不读那个文件（见 <see cref="RestoreAutoSaveIfAny"/>），
+    /// 写一个没人读的文件只是白白序列化 + 在用户的盘上留一份板书。
     /// </summary>
     private void MaybeAutoSave()
     {
+        if (!RestoreInkOnStartup) return;
         if (NowMs < _nextAutoSaveAtMs) return;
         _nextAutoSaveAtMs = NowMs + _autoSaveEveryMs;
         if (Doc.Version == _autoSavedVersion) return;
@@ -796,11 +811,23 @@ public class InkEngine
         string mode = args.Length > 0 ? args[0] : "";
         SelfCheckMode = mode.Length > 0;
 
+        // 用户偏好（深色主题/贴边隐藏/档位/钉住，以及"启动要不要接上上次的板书"）。
+        //
+        // **必须读在恢复板书之前**：接不接上次的板书由 `ui.restoreInk` 决定
+        // （默认不接，见 RestoreAutoSaveIfAny）。
+        // 自检/基准模式**不读**——判据要确定，而且不该拿用户的设置去跑自检。
+        if (InkSettings.PathOverride == null && args.Contains("--nosettings"))
+            InkSettings.PathOverride = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                                                              "inkteach-nosettings.json");
+        if (!SelfCheckMode)
+            foreach (var w in InkSettings.LoadUiPrefs(UiPrefs))
+                Console.WriteLine("settings: " + w);
+
         // 上次因为界面出问题重启过？把板书读回来（读走就删，只恢复一次）。
         // 自检/基准模式不掺和：那些模式不该被"上次留下的板书"影响判据。
         if (mode.Length == 0) RestoreSessionIfAny();
 
-        // 上次的自动存档（崩溃/正常退出都留）：产品启动时接上。
+        // 上次的自动存档（崩溃/正常退出都留）：**默认不接**，见 RestoreAutoSaveIfAny。
         if (mode.Length == 0) RestoreAutoSaveIfAny();
 
         // 宿主自己的启动分支（开发期的点击目标、截图工具等）。返回 true
@@ -864,17 +891,8 @@ public class InkEngine
 
         // 键位：先读用户配置的覆盖项，再注册全局热键。读坏了不阻塞启动——
         // 用默认键位跑起来，但把问题逐条打出来（静默回退最坑人）。
-        if (InkSettings.PathOverride == null && args.Contains("--nosettings"))
-            InkSettings.PathOverride = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
-                                                              "inkteach-nosettings.json");
         foreach (var w in InkSettings.Load(Keys))
             Console.WriteLine("settings: " + w);
-
-        // 界面偏好（深色主题/贴边隐藏/档位/钉住）：引擎原样读进来，等着界面来问。
-        // 自检模式不读——判据要确定，而且不该拿用户的设置去跑自检。
-        if (!SelfCheckMode)
-            foreach (var w in InkSettings.LoadUiPrefs(UiPrefs))
-                Console.WriteLine("settings: " + w);
 
         RegisterHotkeys();
 
@@ -940,6 +958,26 @@ public class InkEngine
     private void RestoreAutoSaveIfAny()
     {
         _nextAutoSaveAtMs = NowMs + _autoSaveEveryMs;
+
+        // **默认不接上一次的板书**（用户 2026-09-17："退出以后再打开不用恢复墨迹吧……
+        // 我觉得默认不恢复墨迹"）。
+        //
+        // 为什么这个默认是对的：教室的机器是**公用**的，上一节课（甚至上一个班）的板书
+        // 一开机又铺满整个屏幕，老师第一件事就得先清空；而且"打开就有别人的东西"
+        // 本身就不合适。课与课之间要的是一块干净的白板。
+        //
+        // 注意和图省事的临时暂存（<see cref="RestoreSessionIfAny"/>）分开：那条只在
+        // **软件自己主动重启**（界面上点"重启"、界面出问题自动重建）时才走，
+        // 那是"重启不该丢东西"，和"下次打开要不要接上"是两件事，仍然保留。
+        //
+        // 开关放在界面偏好里（`ui.restoreInk = "1"`），以后在"更多"抽屉里给一行就能改；
+        // 现在没有这一项 = 不恢复。
+        if (!RestoreInkOnStartup)
+        {
+            Console.WriteLine("启动：不接上次的板书（默认；要接上就在设置里打开 restoreInk）");
+            return;
+        }
+
         var blob = Recovery.LoadAuto();
         if (blob == null) return;
 
@@ -1508,6 +1546,20 @@ public class InkEngine
 
     private void ReassertTopmost()
     {
+        // **弹着系统对话框的时候一律不抬**（用户 2026-09-17 报的"点开一下就收回去、
+        // 选不到 jpg"，2026-09-17 探针定位）。
+        //
+        // 这一抬是每秒一次的定时器干的（WM_TIMER），平时是必要的：全屏覆盖层被别的
+        // 程序抢到后面去就"看不见也画不上"。但**弹着"另存为"的时候它是有害的**：
+        // 覆盖层被重新抬到置顶，就去跟对话框抢那一层，对话框自己的**下拉列表**
+        // （普通弹窗，不在置顶层）随即被盖住 / 被关掉——探针连着拍三张看得很清楚：
+        // 点下拉 150 毫秒时列表好好地开着（PNG / JPEG 两条），900 毫秒时已经没了。
+        // 那 900 毫秒正好压着一次定时器。
+        //
+        // 对话框期间由 ExportFileDialog 自己保证"它在最上面、而且一直置顶"
+        // （见 CenterAndBringUp），关掉之后 ReturnFocusAfterDialog 再把覆盖层拾回来。
+        if (ExportDialogOpen) return;
+
         foreach (var w in _windows)
             Native.SetWindowPos(w.Hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
@@ -2126,6 +2178,8 @@ public class InkEngine
 
     internal bool WriteExport(byte[] bgra, int w, int h, string path)
     {
+        LastExportPath = null;
+        LastExportIsJpeg = false;
         // 格式：**看扩展名**（老师自己敲了 .jpg 就按 JPG 存）；
         // 敲的是 .png（或者没敲、由对话框补的）就按 PNG。
         bool jpeg = PathWantsJpeg(path);
@@ -2139,6 +2193,8 @@ public class InkEngine
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             File.WriteAllBytes(path, bytes);
             Console.WriteLine($"导出成功：{path}（{w}×{h}，{tag}，{bytes.Length / 1024.0:F0} KB）");
+            LastExportPath = Path.GetFullPath(path);
+            LastExportIsJpeg = jpeg;
         }
         catch (Exception ex)
         {
@@ -2182,6 +2238,7 @@ public class InkEngine
         string suggested = $"选中-{DateTime.Now:yyyyMMdd-HHmm}" + (jpeg ? ".jpg" : ".png");
         string path = null;
         BorrowFocusForDialog();                 // 覆盖层平时不抢焦点，弹框前临时放开
+        ExportDialogOpen = true;                // 弹框期间不许再抬覆盖层，见 ReassertTopmost
         try { path = ExportFileDialog.AskForImage(OwnerHwnd(), suggested, jpeg ? 2 : 1, out _); }
         catch (Exception ex)
         {
@@ -2191,7 +2248,7 @@ public class InkEngine
             Console.WriteLine($"导出：弹另存为失败（{ex.GetType().Name}: {ex.Message}）");
             return;
         }
-        finally { ReturnFocusAfterDialog(); }
+        finally { ExportDialogOpen = false; ReturnFocusAfterDialog(); }
 
         if (path == null) { Console.WriteLine("导出：取消"); return; }
         WriteExport(bgra, w, h, path);
@@ -2213,6 +2270,22 @@ public class InkEngine
     /// 产品里保持 true。
     /// </summary>
     internal bool ExportDialogEnabled = true;
+
+    /// <summary>
+    /// "系统对话框正开着"。**只用来按住 <see cref="ReassertTopmost"/>**：
+    /// 那一下每秒一次的置顶重抬会去跟对话框抢层，顺手把它的下拉列表关掉
+    /// （用户报的"选不到 jpg"就是它）。见 <see cref="ReassertTopmost"/> 的注释。
+    /// </summary>
+    internal bool ExportDialogOpen;
+
+    /// <summary>
+    /// 上一次**真的写出去**的那个文件（全路径；没成功过就是 null），以及它是不是 JPEG。
+    ///
+    /// `--dialogprobe --save` 靠它确认"对话框 → 路径 → 编码 → 落盘"整条链真的通了，
+    /// 而不是只看对话框弹没弹出来。
+    /// </summary>
+    internal string LastExportPath;
+    internal bool LastExportIsJpeg;
 
     // 弹系统对话框期间借一下焦点：把 WS_EX_NOACTIVATE 摘掉、弹完装回去。
     // 和"批注键盘模式"同一个手法（那边是长期摘掉，这里是临时的）。
