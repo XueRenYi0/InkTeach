@@ -145,8 +145,10 @@ public class InkEngine
 
     /// <summary>
     /// 截图模式（用户 2026-09-17 要的"对接"，参考 InkClass 的两项菜单）：
-    ///   · **true = 隐藏批注截取**（默认，也是原来的行为）：抓之前把整个覆盖层藏起来，
-    ///     拍到的只有下层内容——批注、白板、面板一概不入镜；
+    ///   · **true = 隐藏界面截取**（默认，也是原来的行为）：抓之前把整个覆盖层藏起来，
+    ///     拍到的只有下层内容——**批注、白板、面板一起藏**，一概不入镜。
+    ///     （用户 2026-09-17 更正过叫法：原来写"隐藏批注截取"，
+    ///      但它其实连白板和面板一起藏，所以界面上把这档叫**"隐藏界面"**。）
     ///   · **false = 直接截取**：**连板书一起拍**（老师想把"PPT + 我写的批注"一起给别人，
     ///     或者把自己写的解题过程做成一张图）。
     ///
@@ -155,7 +157,10 @@ public class InkEngine
     /// </summary>
     internal bool CaptureHideInk = true;
 
-    /// <summary>这一帧不画取景框（只在"直接截取"抓屏的那一瞬为真）。</summary>
+    /// <summary>
+    /// 这一帧不画"我们自己盖在画面上的东西"——取景框**和落点光标**（只在"直接截取"
+    /// 抓屏的那一瞬为真）。光标也得藏：它是琥珀色的，留着就会被拍进图里。
+    /// </summary>
     internal bool CaptureFrameHidden;
 
     // ---- 白板底纹（方格 / 横线）--------------------------------------------
@@ -174,6 +179,29 @@ public class InkEngine
 
     /// <summary>白板底纹：0 = 无，1 = 方格，2 = 横线。</summary>
     internal int BoardPattern;
+
+    /// <summary>
+    /// **白板的不透明度**（用户 2026-09-17："增加一个透明度的拖动功能，这样可以批注的时候
+    /// 隐约看见下面的题目，但是书写有干净"）。
+    ///
+    /// 1 = 实心板面（现在这样）；调小 → 板面半透明，下面的 PPT / 题目隐约透出来。
+    /// **关键是"书写干净"**：半透明只作用于**底色**——底色是画进分块缓存的第一层，
+    /// 笔迹画在它上面、本身不透明，所以字照样是实的（自检里专门验这一条）。
+    /// </summary>
+    internal float BoardOpacity = 1f;
+    /// <summary>可调范围：0.35 再低就看不清自己写的字了，1.0 = 实心。</summary>
+    internal const float BoardOpacityMin = 0.35f, BoardOpacityMax = 1f;
+
+    internal void SetBoardOpacityFromUi(float v)
+    {
+        v = Math.Clamp(v, BoardOpacityMin, BoardOpacityMax);
+        if (MathF.Abs(BoardOpacity - v) < 0.005f) return;
+        BoardOpacity = v;
+        // 和换板色 / 换底纹一样：底色是画进分块缓存的，所以所有块都过期了
+        Doc.InvalidateAll();
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
     /// <summary>底纹间距（逻辑像素）。InkClass 的范围是 16～240，我们按逻辑像素存。</summary>
     internal float BoardPatternStepLogical = 40f;
 
@@ -2091,16 +2119,26 @@ public class InkEngine
     /// 写 PNG ＋ **同时放进剪贴板**（对象 ＋ 这张图，和 Ctrl+C 同一个剪贴板合同），
     /// 再让选区闪一下。
     /// </summary>
+    /// <summary>路径的扩展名说是哪种格式（.jpg/.jpeg → JPEG）。</summary>
+    private static bool PathWantsJpeg(string path) =>
+        path.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase)
+        || path.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase);
+
     internal bool WriteExport(byte[] bgra, int w, int h, string path)
     {
+        // 格式：**看扩展名**（老师自己敲了 .jpg 就按 JPG 存）；
+        // 敲的是 .png（或者没敲、由对话框补的）就按 PNG。
+        bool jpeg = PathWantsJpeg(path);
+        string tag = jpeg ? "JPEG（白底）" : "PNG（透明底）";
         try
         {
-            var png = PngWriter.EncodeBgraPremultiplied(bgra, w, h);
-            if (png == null) { Console.WriteLine("导出：PNG 编码失败"); return false; }
+            var bytes = jpeg ? JpegWriter.EncodeBgraOverWhite(bgra, w, h)
+                             : PngWriter.EncodeBgraPremultiplied(bgra, w, h);
+            if (bytes == null) { Console.WriteLine($"导出：{tag} 编码失败"); return false; }
             var dir = Path.GetDirectoryName(Path.GetFullPath(path));
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            File.WriteAllBytes(path, png);
-            Console.WriteLine($"导出成功：{path}（{w}×{h}，{png.Length / 1024.0:F0} KB）");
+            File.WriteAllBytes(path, bytes);
+            Console.WriteLine($"导出成功：{path}（{w}×{h}，{tag}，{bytes.Length / 1024.0:F0} KB）");
         }
         catch (Exception ex)
         {
@@ -2135,10 +2173,12 @@ public class InkEngine
             return;
         }
 
+        // 默认 PNG（透明底）：老师最常要的就是"贴到别处不带走白底"。
+        // 想要白底/更小的文件，在对话框的类型里选 JPEG（或自己把扩展名改成 .jpg）。
         string suggested = $"选中-{DateTime.Now:yyyyMMdd-HHmm}.png";
         string path = null;
         BorrowFocusForDialog();                 // 覆盖层平时不抢焦点，弹框前临时放开
-        try { path = ExportFileDialog.AskForPng(OwnerHwnd(), suggested); }
+        try { path = ExportFileDialog.AskForImage(OwnerHwnd(), suggested, out _); }
         catch (Exception ex)
         {
             // **弹框这一步出错绝不允许打死软件**。真踩过：.NET 7 起结构体字段不能用
@@ -2332,6 +2372,15 @@ public class InkEngine
         Disc,
         /// <summary>实心点：激光笔。激光表达的是"我说的是这里"，不是"多宽"。</summary>
         Dot,
+        /// <summary>
+        /// 取景框（四个角括号 + 中心小十字）：截图工具。
+        ///
+        /// 为什么单独给它一个：截图 / 框选 / 图形原来**共用一个系统十字**
+        /// （`ToolCursorKind` 里那一行 `Marquee or Capture or Line or ...`），
+        /// 老师分不出"我现在是要截图还是要选框"——用户 2026-09-17 当场点了这一条。
+        /// 取景框的角括号和"拖出来一个框"是同一个意思，一眼就分得开。
+        /// </summary>
+        Frame,
     }
 
     private IntPtr _cursorApplied;
@@ -2400,8 +2449,11 @@ public class InkEngine
         // 落点由自绘圆环 / 矩形表达；开了 EraserKeepsSystemCursor 就两个都显示（A/B 用）。
         Tool.Eraser => EraserKeepsSystemCursor ? CursorKind.Default : CursorKind.Hidden,
         Tool.PixelEraser => EraserKeepsSystemCursor ? CursorKind.Default : CursorKind.Hidden,
-        // 截图用手势（拖框），十字准星是"从这儿拖到那儿"的通用语言，和框选一致。
-        Tool.Marquee or Tool.Capture or Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Arrow
+        // 截图有**自己的**落点形状（取景框角括号，见 ToolCursorShape.Frame），
+        // 所以系统光标藏起来——不然就是"十字 + 角括号"叠在一起。
+        Tool.Capture => CursorKind.Hidden,
+        // 框选 / 图形仍然用十字准星："从这儿拖到那儿"的通用语言。
+        Tool.Marquee or Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Arrow
             => CursorKind.Cross,
         _ => CursorKind.Default,
     };
@@ -2463,7 +2515,11 @@ public class InkEngine
     {
         get
         {
-            if (PassThrough || !PointerInside || LastPointerType == Native.PT_TOUCH)
+            // CaptureFrameHidden = "正在抓屏的那一瞬"：取景框和**落点光标**都不画。
+            // 光标是琥珀色的，留着它就会被"直接截取"拍进图里（自检抓到过：图片最外一圈
+            // 多出 15 个琥珀像素——拖框正好收在角上，光标就压在那一角）。
+            if (PassThrough || !PointerInside || LastPointerType == Native.PT_TOUCH
+                || CaptureFrameHidden)
                 return ToolCursorShape.None;
 
             // 指针停在面板上（接输入小窗接管了）：这一圈落点反馈该消失。
@@ -2484,6 +2540,9 @@ public class InkEngine
             case Tool.PixelEraser:
                 // 同理：矩形要一直看得见，擦除中更要说清"这一块正在被擦"。
                 return ToolCursorShape.Rect;
+            case Tool.Capture:
+                // 截图：取景框角括号，一直看得见（拖动中更要——那正是"我在框这一块"的时候）
+                return ToolCursorShape.Frame;
                 case Tool.Pen:
                     return penTip && _drawing ? ToolCursorShape.None : ToolCursorShape.Ring;
                 case Tool.Highlighter:
@@ -2514,6 +2573,9 @@ public class InkEngine
                                     + PixelEraserHalfHeightPx * PixelEraserHalfHeightPx) + 12f;
                 case ToolCursorShape.Dot:
                     return CursorDotRadius * 1.5f + 10f;
+                case ToolCursorShape.Frame:
+                    // 取景框：半对角线（角括号撑在四角）再留一点
+                    return 12f * DpiScale * 1.4143f + 10f;
                 default:
                     return 0f;
             }
@@ -3408,6 +3470,7 @@ public class InkEngine
         BoardColor = BoardColor,
         BoardPattern = BoardPattern,
         BoardPatternStep = BoardPatternStepLogical,
+        BoardOpacity = BoardOpacity,
         CaptureHideInk = CaptureHideInk,
         SelectMode = SelMode,
         ScreenIndex = ScreenIndex,

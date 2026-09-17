@@ -284,6 +284,8 @@ public sealed class FullUi : IOverlayUi
         int pat = int.TryParse(_host.GetPref("boardPattern"), out int p) ? p : 0;
         float step = float.TryParse(_host.GetPref("boardStep"), out float stepPref) ? stepPref : 40f;
         _host.Commands.SetBoardPattern(pat, step);
+        float op = float.TryParse(_host.GetPref("boardOpacity"), out float opPref) ? opPref : BoardOpacityMax;
+        _host.Commands.SetBoardOpacity(op);
     }
 
     private void SavePrefs()
@@ -297,6 +299,8 @@ public sealed class FullUi : IOverlayUi
         _host.SetPref("boardPattern", st.BoardPattern == 0 ? null : st.BoardPattern.ToString());
         _host.SetPref("boardStep", MathF.Abs(st.BoardPatternStep - 40f) < 0.5f
                                    ? null : st.BoardPatternStep.ToString("F0"));
+        _host.SetPref("boardOpacity", st.BoardOpacity >= BoardOpacityMax - 0.005f
+                                      ? null : st.BoardOpacity.ToString("F2"));
 
         var off = new List<string>();
         for (int i = 1; i < _pinned.Length; i++) if (!_pinned[i]) off.Add(i.ToString());
@@ -600,11 +604,15 @@ public sealed class FullUi : IOverlayUi
     }
 
     private bool BandHasSwatches => _bandCell is 3 or 4;
-    private bool BandHasSlider => _bandCell is 3 or 4 or 5 or 6;
+    /// <summary>
+    /// 哪几格的设置条右边有滑条。**白板那一格也有**——它控制的是"板面不透明度"
+    /// （用户 2026-09-17："增加一个透明度的拖动功能，这样可以批注的时候隐约看见下面的题目"）。
+    /// </summary>
+    private bool BandHasSlider => _bandCell is 2 or 3 or 4 or 5 or 6;
     /// <summary>
     /// 上带里有几段。白板那一格是 5 段：**[上一屏] [白][绿][黑] [下一屏]**
     /// ——翻屏和板色是同一类事（都属于"这块板怎么摆"），放一行最顺手。
-    /// 截图那一格是 2 段：**[直接截取][隐藏批注截取]**（照 InkClass 的两项菜单，
+    /// 截图那一格是 2 段：**[直接截取][隐藏界面]**（照 InkClass 的两项菜单，
     /// 也照我们假面板里定的那两段）。
     /// </summary>
     private int BandSegmentCount => _bandCell switch { 2 => 5, 6 => 2, 7 => 2, 8 => 4, 9 => 2, _ => 0 };
@@ -627,10 +635,18 @@ public sealed class FullUi : IOverlayUi
 
     private float SliderT(in UiState st)
     {
+        // 白板那一格：滑条 = **板面不透明度**（不是粗细）。
+        // 左边的数字要和引擎里的 BoardOpacityMin/Max 一致（界面拿不到引擎的 internal 常量，
+        // 靠 --paneltest 把滑条拖到两端来卡住这两边）。
+        if (_bandCell == 2)
+            return Math.Clamp((st.BoardOpacity - BoardOpacityMin) / (BoardOpacityMax - BoardOpacityMin), 0f, 1f);
         var (min, max) = WidthRange(st.Tool);
         if (max <= min) return 0f;
         return Math.Clamp((st.Width - min) / (max - min), 0f, 1f);
     }
+
+    /// <summary>板面透明度的可调范围（要和引擎里那两个常量一致）。</summary>
+    private const float BoardOpacityMin = 0.35f, BoardOpacityMax = 1f;
 
     /// <summary>拖滑条：只在**值真的变了**的时候提交（每帧几十次 SetWidth 会连带动画与重画）。</summary>
     private void DragSlider(float x)
@@ -638,6 +654,13 @@ public sealed class FullUi : IOverlayUi
         var (left, right) = SliderTrackRange();
         float t = right <= left ? 0f : Math.Clamp((x - left) / (right - left), 0f, 1f);
 
+        if (_bandCell == 2)
+        {
+            float wantOpacity = BoardOpacityMin + (BoardOpacityMax - BoardOpacityMin) * t;
+            if (MathF.Abs(wantOpacity - _host.State.BoardOpacity) < 0.005f) return;
+            _host.Commands.SetBoardOpacity(wantOpacity);
+            return;
+        }
         var (min, max) = WidthRange(_host.State.Tool);
         float want = min + (max - min) * t;
         if (MathF.Abs(want - _host.State.Width) < 0.5f) return;   // 没变就不提交
@@ -770,12 +793,17 @@ public sealed class FullUi : IOverlayUi
         BandVisible() && BandHasSlider && (_sliderDragging || _hover == 300);
 
     /// <summary>真实落点的宽高（逻辑像素）。**和引擎里那套落点同源**（都读 st.Width）。</summary>
-    private static (float W, float H) TrueSize(in UiState st) => st.Tool switch
+    private (float W, float H) TrueSize(in UiState st)
     {
-        Tool.Eraser => (st.Width * 2f, st.Width * 2f),      // 引擎给的是半径 → 画出来是直径
-        Tool.PixelEraser => (st.Width, st.Width * 1.618f),  // 黄金比例矩形（和落点一模一样）
-        _ => (st.Width, st.Width),                          // 笔 / 荧光笔 / 激光 = 线宽
-    };
+        // 白板那一格：预览的不是"落点"，而是**板色在这个不透明度下的样子**（一块小色片）
+        if (_bandCell == 2) return (56f, 34f);
+        return st.Tool switch
+        {
+            Tool.Eraser => (st.Width * 2f, st.Width * 2f),      // 引擎给的是半径 → 画出来是直径
+            Tool.PixelEraser => (st.Width, st.Width * 1.618f),  // 黄金比例矩形（和落点一模一样）
+            _ => (st.Width, st.Width),                          // 笔 / 荧光笔 / 激光 = 线宽
+        };
+    }
 
     private RectF SizePreviewRect(in UiState st)
     {
@@ -799,12 +827,16 @@ public sealed class FullUi : IOverlayUi
     }
 
     /// <summary>读数。全是**逻辑像素**，和引擎里那个值同源（面积橡皮报"宽×高"）。</summary>
-    private static string SizeLabel(in UiState st) => st.Tool switch
+    private string SizeLabel(in UiState st)
     {
-        Tool.PixelEraser => $"{st.Width:F0}×{st.Width * 1.618f:F0}",
-        Tool.Eraser => $"{st.Width * 2f:F0}",
-        _ => $"{st.Width:F0}",
-    };
+        if (_bandCell == 2) return $"{st.BoardOpacity * 100f:F0}%";
+        return st.Tool switch
+        {
+            Tool.PixelEraser => $"{st.Width:F0}×{st.Width * 1.618f:F0}",
+            Tool.Eraser => $"{st.Width * 2f:F0}",
+            _ => $"{st.Width:F0}",
+        };
+    }
 
     private void DrawSizePreview(ID2D1DeviceContext ctx, in UiState st)
     {
@@ -833,6 +865,17 @@ public sealed class FullUi : IOverlayUi
     {
         var white = new Color4(1f, 1f, 1f, 0.85f);
         var dark = new Color4(0.22f, 0.28f, 0.38f, 0.9f);
+
+        // 白板那一格：一块**板色在这个不透明度下的色片**——所见即所得
+        if (_bandCell == 2)
+        {
+            var r = new Vortice.RawRectF(c.X - w * 0.5f, c.Y - h * 0.5f, c.X + w * 0.5f, c.Y + h * 0.5f);
+            var b = st.BoardColor;
+            ctx.FillRoundedRectangle(new RoundedRectangle(r, 6f, 6f),
+                                     Brush(ctx, new Color4(b.R, b.G, b.B, b.A * st.BoardOpacity)));
+            ctx.DrawRoundedRectangle(new RoundedRectangle(r, 6f, 6f), Brush(ctx, dark), 1.4f);
+            return;
+        }
         switch (st.Tool)
         {
             case Tool.Eraser:                       // 和整笔橡皮的落点圆环同一套
@@ -2050,7 +2093,7 @@ public sealed class FullUi : IOverlayUi
     {
         6 => i == 0 ? "整笔擦" : "面积擦",
         7 => i == 0 ? "矩形" : "套索",
-        9 => i == 0 ? "直接截取" : "隐藏批注截取",
+        9 => i == 0 ? "直接截取" : "隐藏界面",
         8 => "",                                   // 图形：画图标（见 ShapeIcon）
         _ => "",
     };

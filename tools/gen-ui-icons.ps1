@@ -107,6 +107,10 @@ $filledIcons = [ordered]@{
     'selectFilled'      = @('Select Object')
     'shapesFilled'      = @('Shapes')
     'captureFilled'     = @('Screenshot')
+    # 截屏工具的候选（用户 2026-09-17："截图图标和选中图标一样的，是不是不大好？"）——
+    # Fluent Screenshot 是"方框 + 四角括号"，和选择工具的"虚线方框 + 角点"缩到 24 像素几乎分不出。
+    # 相机最不会认错，所以常/选两态都用它。
+    'cameraFilled'      = @('Camera')
     'undoFilled'        = @('Arrow Undo')
     'redoFilled'        = @('Arrow Redo')
     'settingsFilled'    = @('Settings')

@@ -5,6 +5,61 @@ using System.Text;
 namespace InkEngine;
 
 /// <summary>
+/// **JPEG 编码器**（走系统的 GDI+）。
+///
+/// 为什么不像 PNG 那样自己写：JPEG 要 DCT ＋ 量化 ＋ 霍夫曼编码，手写不现实；
+/// 系统本来就有编码器（GDI+ / WIC），`System.Drawing.Common` 是微软官方的 Windows 包，
+/// 用它最稳（本项目已经引了 5 个 Vortice 图形包，再加这一个不影响任何架构判断）。
+///
+/// **JPEG 没有透明通道**，所以这里先把图**合成到白底**再编码——
+/// 直接丢 BGRA 进去的话，透明处会变成黑块（很多程序都踩过这个）。
+/// 这也是"PNG 透明底、JPG 白底"这条差别的由来，所以**在文件类型下拉框里就写清楚**
+/// （用户 2026-09-17 问"要不要让用户知道"，答案是：写在用户唯一会看的那一行）。
+/// </summary>
+internal static class JpegWriter
+{
+    public static byte[] EncodeBgraOverWhite(byte[] bgra, int w, int h, long quality = 88)
+    {
+        if (bgra == null || w <= 0 || h <= 0 || bgra.Length < (long)w * h * 4) return null;
+
+        using var bmp = new System.Drawing.Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+        var rect = new System.Drawing.Rectangle(0, 0, w, h);
+        var data = bmp.LockBits(rect, System.Drawing.Imaging.ImageLockMode.WriteOnly,
+                                System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+        try
+        {
+            var row = new byte[data.Stride];
+            for (int y = 0; y < h; y++)
+            {
+                int src = y * w * 4;
+                for (int x = 0; x < w; x++)
+                {
+                    // 预乘 BGRA → 合成到白底 → BGR（JPEG 要的三通道）
+                    float a = bgra[src + 3] / 255f;
+                    byte b = (byte)(bgra[src + 0] + 255f * (1f - a));
+                    byte g = (byte)(bgra[src + 1] + 255f * (1f - a));
+                    byte r = (byte)(bgra[src + 2] + 255f * (1f - a));
+                    int o = x * 3;
+                    row[o + 0] = b; row[o + 1] = g; row[o + 2] = r;
+                    src += 4;
+                }
+                System.Runtime.InteropServices.Marshal.Copy(row, 0, nint.Add(data.Scan0, y * data.Stride), row.Length);
+            }
+        }
+        finally { bmp.UnlockBits(data); }
+
+        var codec = Array.Find(System.Drawing.Imaging.ImageCodecInfo.GetImageEncoders(),
+                               c => c.FormatID == System.Drawing.Imaging.ImageFormat.Jpeg.Guid);
+        if (codec == null) return null;
+        using var pars = new System.Drawing.Imaging.EncoderParameters(1);
+        pars.Param[0] = new System.Drawing.Imaging.EncoderParameter(System.Drawing.Imaging.Encoder.Quality, quality);
+        using var ms = new MemoryStream();
+        bmp.Save(ms, codec, pars);
+        return ms.ToArray();
+    }
+}
+
+/// <summary>
 /// **最小 PNG 编码器**（零依赖，约百来行）。
 ///
 /// 为什么自己写：引擎到现在**一个第三方依赖都没引**（`InkSerializer` 那段注释里
@@ -341,25 +396,34 @@ internal static class ExportFileDialog
     /// </summary>
     private static int SizeOfOpenFileName => IntPtr.Size == 8 ? 152 : 88;
 
-    /// <summary>弹"另存为"。返回 null = 用户取消（取消就什么都不做）。</summary>
-    public static string AskForPng(IntPtr owner, string suggestedName)
+    /// <summary>
+    /// 弹"另存为"。返回 null = 用户取消（取消就什么都不做）。
+    /// <paramref name="filterIndex"/> 回传用户选的是第几种（1 = PNG、2 = JPEG）。
+    ///
+    /// **格式差别就写在文件类型那一行**（用户 2026-09-17 问"要不要让用户知道 png 是透明底、
+    /// jpg 是白底？"）：那是他唯一一定会看的一行，比在别处写提示都管用。
+    /// </summary>
+    public static string AskForImage(IntPtr owner, string suggestedName, out int filterIndex)
     {
+        filterIndex = 1;
         StartDialogWatcher();          // 先起看门线程：对话框一出现就把它顶到最前
         var ofn = new OpenFileName
         {
             lStructSize = SizeOfOpenFileName,
             hwndOwner = owner,
-            // 过滤器是"双 \0 结尾"的一串
-            lpstrFilter = "PNG 图片 (*.png)\0*.png\0\0",
+            // 过滤器是"双 \0 结尾"的一串；两种类型的差别直接写在名字里
+            lpstrFilter = "PNG 图片（透明底）\0*.png\0"
+                        + "JPEG 图片（白底，文件更小）\0*.jpg;*.jpeg\0\0",
             nFilterIndex = 1,
             // 缓冲要**预分配成 nMaxFile 那么长**，再把建议的文件名写进开头
             lpstrFile = suggestedName + new string('\0', Math.Max(0, 512 - suggestedName.Length)),
             nMaxFile = 512,
-            lpstrTitle = "导出选中的内容（透明底 PNG）",
+            lpstrTitle = "导出选中的内容",
             lpstrDefExt = "png",
             Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
         };
         if (!GetSaveFileNameW(ofn)) return null;
+        filterIndex = ofn.nFilterIndex;
         var path = (ofn.lpstrFile ?? "").Trim().TrimEnd('\0');
         return string.IsNullOrEmpty(path) ? null : path;
     }

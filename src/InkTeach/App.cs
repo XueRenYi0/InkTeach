@@ -176,6 +176,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             IconShow(args.Length > 1 ? args[1] : "reports/laser-icons.bmp");
         }
+        else if (mode == "--captureicons")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            CaptureIconShow(args.Length > 1 ? args[1] : "reports/capture-icons.bmp");
+        }
         else if (mode == "--recoverytest")
         {
             _autoExitAt = double.MaxValue;
@@ -599,7 +605,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
         Console.WriteLine("  --pagetest          整屏翻页自检（一屏 = 一页：页高 = 视口高、只动相机、到顶就停）");
-        Console.WriteLine("  --iotest [路径]     导出自检（选中的内容 → 透明底 PNG ＋ 剪贴板；给路径就保留文件）");
+        Console.WriteLine("  --iotest [路径]     导出自检（选中 → PNG 透明底 / JPEG 白底；给路径就保留文件）");
         Console.WriteLine("  --patterntest       白板底纹自检（方格/横线/间距 + 数屏幕上的线 + 重铺代价）");
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
         Console.WriteLine("  --panelshow <图> [--band] [--mini] [--drawer] [--cell N]   界面出图（离屏）");
@@ -1016,6 +1022,57 @@ internal sealed class App : InkEngine.InkEngine
         Check("整层重铺的代价在可接受范围（< 8 ms）", withPattern < 8.0,
               $"有底纹 {withPattern:F2} ms（这是**换底纹那一下**的一次性代价，不是每帧）");
 
+        // ---- 白板透明度（用户 2026-09-17："隐约看见下面的题目，但是书写有干净"）----
+        {
+            (byte R, byte G, byte B) ScreenPixel(int x, int y)
+            {
+                var buf = ScreenProbe.CaptureRegion(x, y, 1, 1);
+                return buf.Length < 4 ? ((byte)0, (byte)0, (byte)0) : (buf[2], buf[1], buf[0]);
+            }
+
+            int ox = (int)(_virtualX + _virtualW * 0.55f), oy = (int)(_virtualY + _virtualH * 0.75f);
+            BoardColor = InkPalette.BoardPresets[2].Color;      // 黑板（深色）：和桌面（浅色）差得远，好判
+            SetBoardPatternFromUi(0, 40f);
+
+            SetBoardOpacityFromUi(1f);
+            SettleFrames(400);
+            var solid = ScreenPixel(ox, oy);
+            var wantBoard = InkPalette.BoardPresets[2].Color;
+            Check("不透明度 1.0：屏幕上就是板色本身（实心板）",
+                  Math.Abs(solid.R - wantBoard.R * 255) < 6 && Math.Abs(solid.G - wantBoard.G * 255) < 6
+                  && Math.Abs(solid.B - wantBoard.B * 255) < 6,
+                  $"实测 ({solid.R},{solid.G},{solid.B})，板色 ({(int)(wantBoard.R * 255)},{(int)(wantBoard.G * 255)},{(int)(wantBoard.B * 255)})");
+
+            SetBoardOpacityFromUi(0.5f);
+            SettleFrames(400);
+            var half = ScreenPixel(ox, oy);
+            Check("不透明度 0.5：板面变浅（下面的东西透出来了）",
+                  half.R > solid.R + 20 || half.G > solid.G + 20 || half.B > solid.B + 20,
+                  $"实心 ({solid.R},{solid.G},{solid.B}) → 半透 ({half.R},{half.G},{half.B})");
+
+            // **书写仍然干净**：板面半透明时，笔迹像素还是纯的（不跟着变淡）
+            var mag = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 30f * DpiScale,
+            };
+            mag.AddPoint(ox - 100, oy + 160, 1f, 0);
+            mag.AddPoint(ox + 100, oy + 160, 1f, 1);
+            Doc.AddStroke(mag);
+            SettleFrames(400);
+            var inkPixel = ScreenPixel(ox, oy + 160);
+            Check("板面半透明时，写上去的墨**仍然是实的**（不跟着变淡）",
+                  inkPixel.R > 240 && inkPixel.G < 20 && inkPixel.B > 240,
+                  $"墨色 ({inkPixel.R},{inkPixel.G},{inkPixel.B})（应为纯品红 255,0,255）");
+
+            // 收尾：回到白板 + 实心 + 无底纹
+            Doc.Clear();
+            Doc.ClearHistory();
+            BoardColor = InkPalette.BoardPresets[0].Color;
+            SetBoardOpacityFromUi(1f);
+            SettleFrames(250);
+        }
+
         // 底纹不是笔迹：切底纹不该动文档
         var s = new Stroke
         {
@@ -1057,7 +1114,7 @@ internal sealed class App : InkEngine.InkEngine
     private void IoTest(string keepPath = null)
     {
         Console.WriteLine();
-        Console.WriteLine("=== 导出自检（选中 → 透明底 PNG；不碰剪贴板）===");
+        Console.WriteLine("=== 导出自检（选中 → PNG 透明底 / JPEG 白底；不碰剪贴板）===");
         int pass = 0, fail = 0;
         void Check(string name, bool ok, string detail)
         {
@@ -1201,9 +1258,46 @@ internal sealed class App : InkEngine.InkEngine
               clip ? $"读回 {back?.Count} 个对象（应为 1 = 导出前放的那条标记）"
                    : "剪贴板里没有对象（不该）");
 
+        // ⑤ 另一种格式：**JPEG（白底）**——用户 2026-09-17："导出功能增加 jpg 格式，
+        //    然后让用户知道 png 是透明底、jpg 是白底"。格式差别写在文件类型那一行，
+        //    这里验的是"真按 JPG 编码了、而且透明处是白的（不是黑的）"。
+        string jpgPath = System.IO.Path.ChangeExtension(path, ".jpg");
+        try { File.Delete(jpgPath); } catch { }
+        bool okJpg = ExportSelectionToPathForTest(jpgPath);
+        Check("导出成 .jpg：返回成功、文件存在", okJpg && File.Exists(jpgPath),
+              $"返回 {okJpg}，文件在 = {File.Exists(jpgPath)}");
+        if (File.Exists(jpgPath))
+        {
+            var jpg = File.ReadAllBytes(jpgPath);
+            Check("是真正的 JPEG（FF D8 FF 开头）",
+                  jpg.Length > 4 && jpg[0] == 0xFF && jpg[1] == 0xD8 && jpg[2] == 0xFF,
+                  $"{jpg[0]:X2} {jpg[1]:X2} {jpg[2]:X2}，{jpg.Length / 1024.0:F0} KB");
+            // 解码回来验像素：GDI+ 解、和我们编码用的不是同一段代码
+            try
+            {
+                using var bmp = new System.Drawing.Bitmap(jpgPath);
+                Check("JPEG 尺寸 = 选区像素尺寸", bmp.Width == wantW && bmp.Height == wantH,
+                      $"{bmp.Width}×{bmp.Height}，选区 {wantW}×{wantH}");
+                // 空白处（原来透明）必须是**白**的——JPEG 没有透明通道，
+                // 不合成白底的话那里会是黑块（很多程序都踩过）
+                var blankPx = bmp.GetPixel(20, 20);
+                Check("原来透明的地方变成**白底**（不是黑块）",
+                      blankPx.R > 235 && blankPx.G > 235 && blankPx.B > 235,
+                      $"({blankPx.R},{blankPx.G},{blankPx.B})");
+                // 笔迹颜色还在（JPEG 有损，给宽一点的容差）
+                var penPx = bmp.GetPixel(Math.Clamp((int)(700 - box.MinX), 0, bmp.Width - 1),
+                                         Math.Clamp((int)(400 - box.MinY), 0, bmp.Height - 1));
+                Check("笔迹颜色还在（有损压缩，允许偏差）",
+                      Math.Abs(penPx.R - red.R * 255) < 40 && penPx.G < 110 && penPx.B < 110,
+                      $"({penPx.R},{penPx.G},{penPx.B})，原笔色 ({(int)(red.R * 255)},{(int)(red.G * 255)},{(int)(red.B * 255)})");
+            }
+            catch (Exception ex) { Check("JPEG 能被别的解码器读出来", false, ex.Message); }
+            try { File.Delete(jpgPath); } catch { }
+        }
+
         Console.WriteLine();
         Console.WriteLine(fail == 0
-            ? "  PASS：导出写出的 PNG 透明底、颜色与 alpha 都对，而且没碰剪贴板"
+            ? "  PASS：PNG 透明底、JPEG 白底都对（颜色与 alpha 逐像素验过），而且没碰剪贴板"
             : $"  FAIL：{fail} 项不对（{pass} 项通过）");
         Console.WriteLine($"  文件：{path}（{png.Length} 字节）");
 
@@ -2700,6 +2794,7 @@ internal sealed class App : InkEngine.InkEngine
             "laser" => Tool.Laser,
             "eraser" => Tool.Eraser,
             "pixeleraser" or "blockeraser" => Tool.PixelEraser,
+            "capture" or "screenshot" => Tool.Capture,      // 截图：看自绘的取景框落点
             _ => Tool.Pen,
         };
         if (widthLogical > 0f)
@@ -5680,6 +5775,18 @@ internal sealed class App : InkEngine.InkEngine
     /// 出图这条链子是这个仓库一贯的验收方式：观感的事眼睛说了算，数字只负责证明没坏。
     /// </summary>
     /// <summary>把激光笔图标的几个候选并排出一张图（开发期比图用）。</summary>
+    /// <summary>出图：**截屏图标候选**（用户 2026-09-17："截图图标和选中图标一样的，是不是不大好？"）。</summary>
+    private void CaptureIconShow(string path)
+    {
+        SetUi(new CaptureIconSheet());
+        BoardOn = true;
+        SettleFrames(400);
+        if (OffscreenShot(path)) return;
+        Console.WriteLine("出图失败（离屏路径没走通）");
+        ExitCode = 1;
+        _quit = true;
+    }
+
     private void IconShow(string path)
     {
         SetUi(new LaserIconSheet());
@@ -6723,6 +6830,34 @@ internal sealed class App : InkEngine.InkEngine
               && MathF.Abs(wantBoard.B - gotBoard.B) < 0.02f,
               $"板开 = {BoardOn}，板色 ({gotBoard.R:F2},{gotBoard.G:F2},{gotBoard.B:F2})");
 
+        // ---- ⑥.1 白板那一格的滑条 = **板面不透明度**（用户 2026-09-17 要的）----
+        {
+            float penW = PenWidthLogical;
+            var slB = ui.SliderRectForTest;
+            float slBy = (slB.MinY + slB.MaxY) * 0.5f * DpiScale;
+            var (bl, _) = ui.SliderTrackRangeForTest;
+
+            SendMouse((int)(bl * DpiScale), (int)slBy, 0);                            SettleFrames(60);
+            SendMouse((int)(bl * DpiScale), (int)slBy, Native.MOUSEEVENTF_LEFTDOWN);   SettleFrames(50);
+            SendMouse((int)(bl * DpiScale), (int)slBy, 0);                            SettleFrames(120);
+            SendMouse((int)(bl * DpiScale), (int)slBy, Native.MOUSEEVENTF_LEFTUP);     SettleFrames(150);
+            Check("白板滑条拖到最左 = 最透（0.35）",
+                  MathF.Abs(Host.State.BoardOpacity - 0.35f) < 0.02f,
+                  $"不透明度 {Host.State.BoardOpacity:F2}");
+
+            var (_, br2) = ui.SliderTrackRangeForTest;
+            SendMouse((int)(br2 * DpiScale), (int)slBy, 0);                            SettleFrames(60);
+            SendMouse((int)(br2 * DpiScale), (int)slBy, Native.MOUSEEVENTF_LEFTDOWN);   SettleFrames(50);
+            SendMouse((int)(br2 * DpiScale), (int)slBy, 0);                            SettleFrames(120);
+            SendMouse((int)(br2 * DpiScale), (int)slBy, Native.MOUSEEVENTF_LEFTUP);     SettleFrames(150);
+            Check("白板滑条拖到最右 = 实心（1.0）",
+                  MathF.Abs(Host.State.BoardOpacity - 1f) < 0.02f,
+                  $"不透明度 {Host.State.BoardOpacity:F2}");
+            Check("拖白板滑条**不动笔宽**（和橡皮那条一个坑）",
+                  MathF.Abs(PenWidthLogical - penW) < 0.01f,
+                  $"笔宽 {penW:F2} → {PenWidthLogical:F2}");
+        }
+
         // ---- ⑥.5 白板翻页：上带上的 [上一屏] / [下一屏] ----
         // 屏幕高必须是"整数屏"的底数：跑到第一屏（相机偏移 = 0）再往下翻。
         var upSeg = ui.SegmentRectForTest(0);
@@ -7195,6 +7330,26 @@ internal sealed class App : InkEngine.InkEngine
             DrawnCursor == ToolCursorShape.Dot, $"DrawnCursor={DrawnCursor}");
         Tool = Tool.Marquee;
         Check("框选 · 空白处", CursorKind.Cross);
+
+        // ---- 截图 vs 框选/图形：**光标必须能分开** ----
+        //
+        // 用户 2026-09-17："截图图标和选中图标一样的，是不是不大好？"——
+        // 随即澄清是**鼠标光标**：截图/框选/图形原来共用一个系统十字，
+        // 老师分不出"我现在是要截图还是要选框"。
+        // 现在截图有自己的**取景框**落点（四角括号 + 中心小十字），框选/图形仍是十字。
+        Tool = Tool.Capture;
+        Check("截图 · 系统光标藏起来（落点自己画）", CursorKind.Hidden);
+        CheckBool("截图 · 落点是取景框（不是十字）",
+            DrawnCursor == ToolCursorShape.Frame && DrawnCursorRadius > 0f,
+            $"DrawnCursor={DrawnCursor} 脏区半径={DrawnCursorRadius:F0}px");
+        _drawing = true;
+        CheckBool("截图 · 拖动中也画（正在框的那一块要看得见）",
+            DrawnCursor == ToolCursorShape.Frame, $"{DrawnCursor}");
+        _drawing = false;
+        Tool = Tool.Rectangle;
+        Check("图形 · 仍是十字准星", CursorKind.Cross);
+        CheckBool("图形 · 不画自绘落点", DrawnCursor == ToolCursorShape.None, $"{DrawnCursor}");
+        Tool = Tool.Marquee;
 
         // ---- 书写中：鼠标照画，手写笔不画 ----
         _drawing = true;

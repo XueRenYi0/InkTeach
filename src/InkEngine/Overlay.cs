@@ -711,11 +711,16 @@ internal sealed class OverlayWindow : IDisposable
 
     /// <summary>
     /// 取当前该用的底色画刷。透明批注时就是全透明（等于把这一块擦干净），
-    /// 白板时是不透明的底色。底色变了才重建画刷，正常每帧不分配。
+    /// 白板时是（可调透明度的）板色。底色变了才重建画刷，正常每帧不分配。
     /// </summary>
     private ID2D1SolidColorBrush BoardBrush(InkEngine app)
     {
-        var want = app.BoardOn ? app.BoardColor : Transparent;
+        // 白板可以整体调"不透明度"（用户 2026-09-17）：底色这一层半透明，
+        // 下面的题目隐约透出来；**笔迹不受影响**（它画在底色上面、本身不透明）。
+        var want = app.BoardOn
+            ? new Color4(app.BoardColor.R, app.BoardColor.G, app.BoardColor.B,
+                         app.BoardColor.A * app.BoardOpacity)
+            : Transparent;
         if (want.R != _boardBrushColor.R || want.G != _boardBrushColor.G
             || want.B != _boardBrushColor.B || want.A != _boardBrushColor.A)
         {
@@ -2444,6 +2449,11 @@ internal sealed class OverlayWindow : IDisposable
             DrawEraserRectCursor(app, c);
             return;
         }
+        if (shape == InkEngine.ToolCursorShape.Frame)
+        {
+            DrawCaptureFrameCursor(app, c);
+            return;
+        }
 
         float outer = app.CursorOuterRadius;
         float truth = app.Tool == Tool.Eraser
@@ -2477,6 +2487,55 @@ internal sealed class OverlayWindow : IDisposable
     ///   · 白色外圈 + 深色内圈的双色描边：深色 PPT 和白色白板上都得看得见；
     ///   · 中心一个小十字：投影上写字手会抖，得知道精确落点在哪。
     /// </summary>
+    /// <summary>
+    /// 截图工具的落点：**取景框的四个角括号** ＋ 中心一个小十字。
+    ///
+    /// 为什么单独给它一个形状：截图、框选、图形原来**共用一个系统十字准星**
+    /// （`ToolCursorKind` 里一行 `Marquee or Capture or Line or … => Cross`），
+    /// 老师分不出"我现在是要截图还是要选框"——用户 2026-09-17 当场点了这一条。
+    /// 角括号和"拖出来一个框"是同一个意思，一眼就分得开；而框选/图形仍然是十字。
+    ///
+    /// 配色和取景框本身一致（琥珀），下面垫一层白描边——深色 PPT 和白色白板上都得看得见
+    /// （和圆环、矩形那两个落点是同一套双色逻辑）。
+    /// </summary>
+    private void DrawCaptureFrameCursor(InkEngine app, Vector2 c)
+    {
+        float dpi = app.DpiScale;
+        float s = 12f * dpi;          // 半宽：24 逻辑像素见方
+        float arm = 6f * dpi;         // 角括号的臂长
+        var amber = new Color4(1f, 0.68f, 0.10f, 1f);
+        var halo = new Color4(1f, 1f, 1f, 0.85f);
+
+        void Brackets(float w, Color4 col)
+        {
+            _scratch.Color = col;
+            // 左上
+            _ctx.DrawLine(new Vector2(c.X - s, c.Y - s + arm), new Vector2(c.X - s, c.Y - s), _scratch, w);
+            _ctx.DrawLine(new Vector2(c.X - s, c.Y - s), new Vector2(c.X - s + arm, c.Y - s), _scratch, w);
+            // 右上
+            _ctx.DrawLine(new Vector2(c.X + s - arm, c.Y - s), new Vector2(c.X + s, c.Y - s), _scratch, w);
+            _ctx.DrawLine(new Vector2(c.X + s, c.Y - s), new Vector2(c.X + s, c.Y - s + arm), _scratch, w);
+            // 右下
+            _ctx.DrawLine(new Vector2(c.X + s, c.Y + s - arm), new Vector2(c.X + s, c.Y + s), _scratch, w);
+            _ctx.DrawLine(new Vector2(c.X + s, c.Y + s), new Vector2(c.X + s - arm, c.Y + s), _scratch, w);
+            // 左下
+            _ctx.DrawLine(new Vector2(c.X - s + arm, c.Y + s), new Vector2(c.X - s, c.Y + s), _scratch, w);
+            _ctx.DrawLine(new Vector2(c.X - s, c.Y + s), new Vector2(c.X - s, c.Y + s - arm), _scratch, w);
+        }
+
+        Brackets(3.2f, halo);          // 先垫白（深色背景上才看得见）
+        Brackets(1.6f, amber);
+
+        // 中心小十字：投影上写字手会抖，"从哪儿开始拖"要看得准
+        float t = 4f * dpi;
+        _scratch.Color = halo;
+        _ctx.DrawLine(new Vector2(c.X - t, c.Y), new Vector2(c.X + t, c.Y), _scratch, 3.2f);
+        _ctx.DrawLine(new Vector2(c.X, c.Y - t), new Vector2(c.X, c.Y + t), _scratch, 3.2f);
+        _scratch.Color = amber;
+        _ctx.DrawLine(new Vector2(c.X - t, c.Y), new Vector2(c.X + t, c.Y), _scratch, 1.6f);
+        _ctx.DrawLine(new Vector2(c.X, c.Y - t), new Vector2(c.X, c.Y + t), _scratch, 1.6f);
+    }
+
     private void DrawEraserRectCursor(InkEngine app, Vector2 c)
     {
         float hw = MathF.Max(1f, app.PixelEraserHalfWidthPx);
