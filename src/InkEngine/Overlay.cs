@@ -296,6 +296,15 @@ internal sealed class OverlayWindow : IDisposable
     private IDWriteTextFormat _readoutFormat;
     private float _readoutFormatPx;
 
+    /// <summary>
+    /// 拖端点时的"临时几何"复用的那条 scratch 笔画（见 <see cref="DrawVertexPreview"/>）。
+    ///
+    /// 为什么复用它、而不是在这里另写一套"画一条线 / 一个箭头"：图形的画法
+    /// （几何、描边、箭头头部比例）已经在 Stroke 里了，另写一份迟早会不一样。
+    /// 它和"正在书写的那一笔"是同一种东西——每帧重建一次几何，代价一样。
+    /// </summary>
+    private Stroke _vertexGhost;
+
     // 性能面板：一帧一张缓存位图，文字变了才重画。
     private ID2D1Bitmap1 _hudTarget, _hudSource;
     private ID3D11Texture2D _hudBmpTex;
@@ -1015,6 +1024,42 @@ internal sealed class OverlayWindow : IDisposable
         return r;
     }
 
+    /// <summary>
+    /// 倾斜角标签的盒子：贴在**正在拖的那个端点**外侧（挂在它上方），按文案量宽，
+    /// 最后夹进当前可见画布。
+    ///
+    /// 和旋转标签同一套做法（连"按文案量宽"和夹取都照抄），只有锚点不同：
+    /// 旋转标签挂旋转柄，这个挂在**指针此刻所在的那个端点**上——拖到哪儿跟到哪儿，
+    /// 眼睛不用在两个地方来回找。
+    /// </summary>
+    private RectF InclinationReadoutRect(Vector2 anchor, float dpi, string text)
+    {
+        const float minWidthLogical = 84f, heightLogical = 30f;
+        float widthLogical = minWidthLogical;
+        if (!string.IsNullOrEmpty(text))
+        {
+            float textW = MeasureTextWidth(text, ReadoutFormat(dpi));
+            widthLogical = MathF.Max(minWidthLogical, textW / dpi + 24f);
+        }
+
+        float w = widthLogical * dpi, h = heightLogical * dpi;
+        float gap = (SelectionHandles.VisualSizeLogical * 0.5f + 9f) * dpi;
+        float cx = anchor.X, cy = anchor.Y - gap - h * 0.5f;
+        var r = new RectF
+        {
+            MinX = cx - w * 0.5f, MinY = cy - h * 0.5f,
+            MaxX = cx + w * 0.5f, MaxY = cy + h * 0.5f,
+        };
+
+        var vis = VisibleCanvasRect;
+        float pad = 4f * dpi;
+        if (r.MinX < vis.MinX + pad) { r.MaxX += vis.MinX + pad - r.MinX; r.MinX = vis.MinX + pad; }
+        if (r.MaxX > vis.MaxX - pad) { r.MinX -= r.MaxX - (vis.MaxX - pad); r.MaxX = vis.MaxX - pad; }
+        if (r.MinY < vis.MinY + pad) { r.MaxY += vis.MinY + pad - r.MinY; r.MinY = vis.MinY + pad; }
+        if (r.MaxY > vis.MaxY - pad) { r.MinY -= r.MaxY - (vis.MaxY - pad); r.MaxY = vis.MaxY - pad; }
+        return r;
+    }
+
     // ------------------------------------------------------------------
     //  界面层
     // ------------------------------------------------------------------
@@ -1078,12 +1123,16 @@ internal sealed class OverlayWindow : IDisposable
         // 都靠这个方法告诉引擎；否则命中测试和脏区会一直停在旧位置。
         var live = app.UiQueryBoundsNow();
         _uiLogicalBounds = live;
+        // 物理像素的占用矩形。**连"画到外面那一圈"一起算**（投影，见 IOverlayUi.PaintMargin）：
+        // 不算进去的话，面板一移动（拖动/展开/收起），旧投影就擦不掉——脏区里没有它，
+        // 屏幕上会留下一条越来越脏的印子。命中测试用的是上面那份**没放大的**逻辑矩形。
+        float paintPad = app.UiPaintMarginNow * dpiScale;
         _uiBounds = live.IsEmpty ? RectF.Empty : new RectF
         {
-            MinX = live.MinX * dpiScale,
-            MinY = live.MinY * dpiScale,
-            MaxX = live.MaxX * dpiScale,
-            MaxY = live.MaxY * dpiScale,
+            MinX = live.MinX * dpiScale - paintPad,
+            MinY = live.MinY * dpiScale - paintPad,
+            MaxX = live.MaxX * dpiScale + paintPad,
+            MaxY = live.MaxY * dpiScale + paintPad,
         };
 
         return !live.IsEmpty;
@@ -1134,11 +1183,16 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.Transform = Matrix3x2.CreateScale(dpiScale)
                        * Matrix3x2.CreateTranslation(-OriginX, -OriginY);
         // 裁剪矩形同样用逻辑坐标（会被上面的变换一起作用）。
-        var clip = new Vortice.RawRectF(_uiLogicalBounds.MinX, _uiLogicalBounds.MinY,
-                                        _uiLogicalBounds.MaxX, _uiLogicalBounds.MaxY);
+        // **往外放一圈**：界面会画到占用矩形外面（投影、浮出的预览，见 IOverlayUi.PaintMargin）。
+        // 占用矩形本身**不放**——它同时是命中测试与输入小窗的矩形。
+        float pad = app.UiPaintMarginNow;
+        var clip = new Vortice.RawRectF(_uiLogicalBounds.MinX - pad, _uiLogicalBounds.MinY - pad,
+                                        _uiLogicalBounds.MaxX + pad, _uiLogicalBounds.MaxY + pad);
         _ctx.PushAxisAlignedClip(clip, AntialiasMode.Aliased);
         // 防弹入口在引擎那边（`UiRenderNow`）：界面连抛三次就整体停用，笔迹照常。
-        app.UiRenderNow(_ctx, UiTheme.Default);
+        // 主题参数给的是"当前浮层主题"（界面推上来的那套）——我们的界面自己带令牌，
+        // 不读这个参数；但万一将来有个界面想用引擎给的配色，拿到的应该是同一套。
+        app.UiRenderNow(_ctx, app.FloatingTheme);
         _ctx.Transform = Matrix3x2.Identity;
         _ctx.PopAxisAlignedClip();
     }
@@ -1281,8 +1335,19 @@ internal sealed class OverlayWindow : IDisposable
                 // 拍这一块里的墨（内容层），否则取景框、选中框都浮在空白上，
                 // 看不出"框有没有圈住东西"。只画和这一块相交的那几条。
                 foreach (var s in app.Doc.Strokes)
-                    if (s.PaddedBounds.Intersects(bounds)) DrawStroke(s);
+                    if (s.PaddedBounds.Intersects(bounds) && !app.IsContentDetached(s)) DrawStroke(s);
+                // 拖端点手势中：模型还是旧几何，临时几何只活在浮动层上——
+                // 出图这条路不补画它，拍出来的就是"手柄不见了、线也没动"的空镜头。
+                // （被摘出去的那一批上面已经跳过，所以不会出现"旧线 + 新线"双影。）
+                DrawVertexPreview(app);
+                // **拖动预览**（移动/旋转手势中被摘出内容层的那一批）同理：
+                // 不补画的话，"旋转中"那张图会只剩一个框、线不见了（2026-09-18 出图核对时踩到）。
+                DrawDragPreview(app);
+                // **正在书写的那一笔**（画线中的实时几何）也不在 Doc 里，得单独补——
+                // 不然"画线过程中的 α 读数"这张图拍出来只有一颗标签、没有线。
+                if (app.ActiveStroke != null && !app.SuppressActiveStroke) DrawStroke(app.ActiveStroke);
                 DrawSelection(app);
+                DrawShapeInclination(app);
                 DrawCaptureRect(app);        // 截图取景框（含尺寸读数）——不在截图态就直接返回
             }
             else
@@ -1291,7 +1356,7 @@ internal sealed class OverlayWindow : IDisposable
                 _ctx.Transform = Matrix3x2.CreateScale(dpi)
                                * Matrix3x2.CreateTranslation(-bounds.MinX * dpi + padPx,
                                                              -bounds.MinY * dpi + padPx);
-                app.UiRenderNow(_ctx, UiTheme.Default);
+                app.UiRenderNow(_ctx, app.FloatingTheme);
             }
             _ctx.Transform = Matrix3x2.Identity;
             var hr = _ctx.EndDraw();
@@ -1465,7 +1530,10 @@ internal sealed class OverlayWindow : IDisposable
             DrawStroke(app.ActiveStroke);
 
             DrawDragPreview(app);
+            DrawVertexPreview(app);
             DrawSelection(app);
+            // 画线中的 α 读数画在浮动层最上面（它贴着正在拖的那一端，压住什么都不碍事）。
+            DrawShapeInclination(app);
             DrawCaptureRect(app);
             DrawLaser(app);
             DrawToolCursor(app);
@@ -1586,22 +1654,44 @@ internal sealed class OverlayWindow : IDisposable
             r.Add(CanvasRectToWindow(ui));   // 选中框也是画布坐标（它跟着墨迹走）
 
             // 操作条在选中框下方，也必须算进来，否则它自己会留下残影。
-            r.Add(CanvasRectToWindow(SelectionHandles.BarRect(sb, dpi, app.ViewportCanvas).Inflate(4f)));
+            // **余量 = 4 ＋ 投影最远伸出多少**：操作条现在带投影（主题给的），
+            // 只放 4 像素的话投影会被脏区切掉、在屏幕上留一条印子。
+            float cardPad = 4f + app.FloatingTheme.ShadowReachLogical * dpi;
+            r.Add(CanvasRectToWindow(SelectionHandles.BarRect(sb, dpi, app.ViewportCanvas).Inflate(cardPad)));
 
             // 收起态的圆钮 / 打开的面板 / 提示条：都是"每帧都在变"的浮动层，
             // 漏一块就在屏幕上留一块擦不掉的残影（这条踩过好几次了）。
-            r.Add(CanvasRectToWindow(SelectionHandles.BarCollapsedRect(sb, dpi, app.ViewportCanvas).Inflate(4f)));
+            r.Add(CanvasRectToWindow(SelectionHandles.BarCollapsedRect(sb, dpi, app.ViewportCanvas).Inflate(cardPad)));
             if (app.SelPanelOpen == SelPanel.Ink)
                 r.Add(CanvasRectToWindow(SelectionHandles
-                    .PanelRect(sb, dpi, app.ViewportCanvas, SelectionHandles.SwatchCount).Inflate(6f)));
+                    .PanelRect(sb, dpi, app.ViewportCanvas, SelectionHandles.SwatchCount)
+                    .Inflate(cardPad + 2f)));
             else if (app.SelPanelOpen == SelPanel.Layer)
-                r.Add(CanvasRectToWindow(SelectionHandles.LayerPanelRect(sb, dpi, app.ViewportCanvas).Inflate(6f)));
+                r.Add(CanvasRectToWindow(SelectionHandles.LayerPanelRect(sb, dpi, app.ViewportCanvas)
+                    .Inflate(cardPad + 2f)));
 
-            // 旋转度数标签贴在旋转手柄外侧，比选中框本身还高出去一截，
+            // 旋转读数标签贴在旋转手柄外侧，比选中框本身还高出去一截，
             // 同样必须进脏区；拖动中它每帧都在动，靠 _transientHistory 回溯两帧。
+            // **文案要和绘制用同一个函数**：单选直线时它是 `α = xx.x°`、别的对象是 `Δ`，
+            // 两者宽度不同——脏区按哪个文案算，就得画哪个文案。
             if (app.SelRotating)
-                r.Add(CanvasRectToWindow(RotationReadoutRect(frame, dpi, RotationLabel(app)).Inflate(3f)));
+                r.Add(CanvasRectToWindow(RotationReadoutRect(frame, dpi, CurrentRotationReadout(app)).Inflate(3f)));
+
+            // 拖端点时的倾斜角标签：挂在"正在拖的那个端点"上方，每帧都跟着指针走，
+            // 而且它在端点外侧、根本不在选中框里——漏了这一块就会在屏幕上留一行残影。
+            if (app.VertexDragging)
+                r.Add(CanvasRectToWindow(InclinationReadoutRect(
+                    app.VertexPreviewCanvasPoint, dpi,
+                    InclinationLabel(app.VertexInclinationDegrees)).Inflate(3f)));
         }
+
+        // 画线过程中的 α 读数（用户 2026-09-18 四条之一）。
+        // **必须在"有选中对象"那块之外**：画线的时候没有选中对象（没做画完自动选中），
+        // 挂在里面的话这块脏区永远不会被算进来，标签就会在屏幕上留一行残影。
+        if (app.ShapeInclinationActive)
+            r.Add(CanvasRectToWindow(InclinationReadoutRect(
+                app.ShapeInclinationAnchor, app.DpiScale,
+                InclinationLabel(app.ShapeInclinationDegrees)).Inflate(3f)));
 
         if (app.ShowHud)
         {
@@ -1711,6 +1801,13 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private void DrawDragPreview(InkEngine app)
     {
+        // **先问"拖动预览到底活着没有"**（DragPreviewActive），不能只看"摘出去了几条"：
+        // 拖端点的手势复用了同一套"摘出去"的机制（DetachForDrag），但那时画在浮动层上的
+        // 是**临时几何**（DrawVertexPreview），不是"这批对象按实时矩阵位移"。
+        // 少了这一句，拖端点时会用**单位矩阵**把那条旧线再画一遍——屏幕上就是"旧线不动 +
+        // 新线跟着指针"两条线，而内容层明明已经跳过它了（2026-09-18 出图核对时抓到）。
+        if (!app.DragPreviewActive) return;
+
         var strokes = app.DragPreviewStrokes;
         if (strokes.Count == 0) return;
 
@@ -1718,6 +1815,32 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.Transform = app.DragPreviewMatrix * canvasToWindow;
         foreach (var s in strokes) DrawStroke(s);
         _ctx.Transform = canvasToWindow;
+    }
+
+    /// <summary>
+    /// 拖端点时的**临时几何**：手势期模型一个字不改，只在浮动层把
+    /// "改过端点的那一条图形"按**实时端点**画出来（见 计划-图形工具.md 8.1①）。
+    ///
+    /// 和拖动预览是同一套路子（画在浮动层、松手回归内容层），区别只有一个：
+    /// 那边改的是**变换矩阵**，这里改的是**几何**——所以画的是同一条对象、换一组点，
+    /// 变换仍用它自己那个（局部坐标 → 画布）。
+    /// </summary>
+    private void DrawVertexPreview(InkEngine app)
+    {
+        var src = app.VertexPreviewStroke;
+        if (src == null) return;
+        var pts = app.VertexPreviewPoints;
+        if (pts == null || pts.Count == 0) return;
+
+        _vertexGhost ??= new Stroke();
+        var g = _vertexGhost;
+        g.Tool = src.Tool;
+        g.Kind = src.Kind;
+        g.Color = src.Color;
+        g.Width = src.Width;
+        g.Transform = src.Transform;
+        g.SetPoints(pts);           // 局部坐标：变换那一层仍由 g.Transform 负责
+        DrawStroke(g);
     }
 
     /// <summary>
@@ -1747,6 +1870,9 @@ internal sealed class OverlayWindow : IDisposable
 
         float dpi = app.DpiScale;
         var accent = new Color4(0f, 0.47f, 0.83f, 1f);      // #0078D4
+
+        // 选中一条**直线 / 箭头**时换个给手柄的方式（见下面第 4 步）：只给两个端点。
+        bool lineLike = SelectionHandles.EndpointEditable(sel, out var lineStroke);
 
         // 拖动 / 旋转期间的**装饰收敛**（方案 A）：手柄与操作条此刻点不中
         // （指针已被拖拽接管），留着就是"看得见、点不到"，还跟着内容一起晃。
@@ -1792,7 +1918,12 @@ internal sealed class OverlayWindow : IDisposable
         {
             float rotR = SelectionHandles.RotateGripLogical * 0.5f * dpi;
             var rot = SelectionHandles.CanvasPosition(SelHandle.Rotate, frame, dpi);
-            var topCenter = SelectionHandles.CanvasPosition(SelHandle.Top, frame, dpi);
+            // 连线的那一头：通用框用它上边中点；直线用**线段自己的中点**——
+            // 一条斜线的包围盒上边中点根本不在线上，连线看着像连到别的东西上去了。
+            var topCenter = lineLike
+                ? (SelectionHandles.EndpointCanvasPosition(lineStroke, 0)
+                 + SelectionHandles.EndpointCanvasPosition(lineStroke, 1)) * 0.5f
+                : SelectionHandles.CanvasPosition(SelHandle.Top, frame, dpi);
             _ctx.DrawLine(topCenter, rot, _scratch, 1.4f);
             _ctx.FillEllipse(new Ellipse(rot, rotR, rotR), white);
             _ctx.DrawEllipse(new Ellipse(rot, rotR, rotR), _scratch, 1.6f);
@@ -1803,26 +1934,33 @@ internal sealed class OverlayWindow : IDisposable
             DrawIcon(IconPaths.rotate, rot.X - glyph * 0.5f, rot.Y - glyph * 0.5f, glyph, _scratch);
         }
 
-        // 4) 八个手柄。白底 + 蓝边：深色背景上是白方块显眼，
-        //    浅色背景上靠蓝边立住，一套画法两边都成立。
-        //    拖动 / 旋转中收起来（此刻点不中，而且是最"晃眼"的一圈家具）。
+        // 4) 手柄。两种给法：
+        //    · **直线 / 箭头**（单选）：只给两个端点手柄（图形"由定义元素给手柄"，
+        //      见 调研-图形工具.md 2.4）——8 个缩放柄对它不只是多余，还会改掉倾斜角；
+        //    · 其余（矩形 / 椭圆 / 图像 / 自由笔迹 / **多选**）：通用 8 手柄，一个字不改。
+        //    白底 + 蓝边：深色背景上是白方块显眼，浅色背景上靠蓝边立住，一套画法两边都成立。
+        //    拖动 / 旋转 / 拖端点中收起来（此刻点不中，而且是最"晃眼"的一圈家具）。
         if (!collapsed)
         {
             float hs = SelectionHandles.VisualSizeLogical * dpi;
             float radius = hs * 0.28f;
-            Span<SelHandle> all = stackalloc SelHandle[]
+            if (lineLike)
             {
-                SelHandle.TopLeft, SelHandle.Top, SelHandle.TopRight, SelHandle.Right,
-                SelHandle.BottomRight, SelHandle.Bottom, SelHandle.BottomLeft, SelHandle.Left,
-            };
-            foreach (var h in all)
+                for (int slot = 0; slot < 2; slot++)
+                {
+                    var p = SelectionHandles.EndpointCanvasPosition(lineStroke, slot);
+                    DrawHandleSquare(p, hs, radius, white);
+                }
+            }
+            else
             {
-                var p = SelectionHandles.CanvasPosition(h, frame, dpi);
-                var box = new Vortice.RawRectF(p.X - hs * 0.5f, p.Y - hs * 0.5f,
-                                               p.X + hs * 0.5f, p.Y + hs * 0.5f);
-                var rr = new RoundedRectangle(box, radius, radius);
-                _ctx.FillRoundedRectangle(rr, white);
-                _ctx.DrawRoundedRectangle(rr, _scratch, 1.8f);
+                Span<SelHandle> all = stackalloc SelHandle[]
+                {
+                    SelHandle.TopLeft, SelHandle.Top, SelHandle.TopRight, SelHandle.Right,
+                    SelHandle.BottomRight, SelHandle.Bottom, SelHandle.BottomLeft, SelHandle.Left,
+                };
+                foreach (var h in all)
+                    DrawHandleSquare(SelectionHandles.CanvasPosition(h, frame, dpi), hs, radius, white);
             }
         }
 
@@ -1842,40 +1980,119 @@ internal sealed class OverlayWindow : IDisposable
             else if (app.SelPanelOpen == SelPanel.Layer) DrawLayerPanel(app, b);
         }
 
-        // 6) 旋转度数标签：只在拖旋转手柄的过程中出现。
-        //
-        // 两件事必须同时说清楚："转了多少度"和"这个角度是不是吸出来的"。
-        // 后者靠颜色：吸住时整块变强调色（Figma / Office 也是这个语言）。
-        // 没有这层提示，用户分不清"我自己转到了 90°"和"它替我吸到了 90°"。
+        // 6) 浮出的读数标签。**两个数分开显示**（见 调研-图形工具.md 2.3）：
+        //    · Δ = 我这一次**转了多少**（逆时针为正、不设上限）→ 拖旋转手柄时出现，
+        //      **单选直线/箭头时例外**：那时读的是 `α₀ + Δ`（从这条线原有的倾斜角接着转、
+        //      同样不设上限，用户 2026-09-18 澄清），写成纯数字（见 CurrentRotationReadout）；
+        //    · α = 这条线**本身**的倾斜角（[0°,180°)，永远非负）→ 画线中、拖端点时出现。
+        //    两件事都必须说清楚"这个角度是不是吸出来的"：靠颜色——吸住时整块变强调色
+        //    （Figma / Office 也是这个语言）。没有这层提示，用户分不清"我自己拖到的"
+        //    和"它替我吸上的"。
         if (app.SelRotating)
         {
-            // 同一个文案：盒子按它量宽，字也画它。**改一处就得改两处**的地方收成一个函数。
-            string readout = RotationLabel(app);
-            var label = RotationReadoutRect(frame, dpi, readout);
-            var box = new Vortice.RawRectF(label.MinX, label.MinY, label.MaxX, label.MaxY);
-            float pill = (label.MaxY - label.MinY) * 0.5f;
-            var shape = new RoundedRectangle(box, pill, pill);
-            bool snapped = app.SelRotationSnapped;
-
-            _ctx.FillRoundedRectangle(shape, Brush(snapped
-                ? new Color4(accent.R, accent.G, accent.B, 0.96f)
-                : new Color4(1f, 1f, 1f, 0.94f)));
-            _scratch.Color = snapped
-                ? new Color4(1f, 1f, 1f, 0.85f)
-                : new Color4(accent.R, accent.G, accent.B, 0.85f);
-            _ctx.DrawRoundedRectangle(shape, _scratch, 1.5f);
-
-            _scratch.Color = snapped
-                ? new Color4(1f, 1f, 1f, 1f)
-                : new Color4(0.10f, 0.12f, 0.16f, 1f);
-            _ctx.DrawText(readout, ReadoutFormat(dpi),
-                          // 注意：Vortice 的 Rect(x, y, width, height) 是"位置 + 尺寸"，
-                          // 不是 (left, top, right, bottom)。写错的话文字会被排到很远的
-                          // 地方去（居中排版时直接跑到屏幕外），看起来就像"字没画出来"。
-                          new Rect(label.MinX, label.MinY,
-                                   label.MaxX - label.MinX, label.MaxY - label.MinY),
-                          _scratch);
+            // 同一个文案：盒子按它量宽，字也画它。**改一处就得改两处**的地方收成一个函数
+            // （CurrentRotationReadout 也被 ComputeTransientBounds 用来算脏区）。
+            string readout = CurrentRotationReadout(app);
+            DrawReadoutPill(RotationReadoutRect(frame, dpi, readout), readout, app.SelRotationSnapped);
         }
+        else if (app.VertexDragging)
+        {
+            string readout = InclinationLabel(app.VertexInclinationDegrees);
+            DrawReadoutPill(InclinationReadoutRect(app.VertexPreviewCanvasPoint, dpi, readout),
+                            readout, app.VertexInclinationSnapped);
+        }
+    }
+
+    /// <summary>
+    /// 旋转中该显示哪个数：
+    ///   · **单选直线/箭头** → `按下时的倾斜角 α₀ + 转过的角 Δ`，**纯数字、一位小数、
+    ///     不折角**（`405.0°` / `-135.0°` / `45.0°`）。写成纯数字而不是 `α = …` 是有意的：
+    ///     405° 已经超出倾斜角的定义域（[0°,180°)），标成 α 反而错；而且用户说
+    ///     "其他和原来的逻辑一样"，原来那套读数就是纯数字。
+    ///   · **其它情况** → Δ（`FormatDegrees`，整度）：一行都没改。
+    /// **绘制与脏区都走它**，免得两边文案不一致
+    /// （文案不一致 → 盒子宽度不一致 → 脏区盖不住标签 → 屏幕上留残影）。
+    /// </summary>
+    private static string CurrentRotationReadout(InkEngine app)
+        => app.SelRotationReadsInclination
+            ? SelectionHandles.FormatSignedDegrees(app.SelRotationInclination)
+            : RotationLabel(app);
+
+    /// <summary>
+    /// **画线过程中的 α 读数**：用户在拉这条线的时候就要看到它现在是多少度
+    /// （2026-09-18 四条之一）。贴在被拖动的那一端外侧，和拖端点时是同一颗胶囊。
+    ///
+    /// 为什么单独一个方法、不挂在 DrawSelection 里：画线的时候**没有选中对象**
+    /// （我们没做"画完自动选中"），DrawSelection 第一行就返回了。
+    /// </summary>
+    private void DrawShapeInclination(InkEngine app)
+    {
+        if (!app.ShapeInclinationActive) return;
+        float dpi = app.DpiScale;
+        string readout = InclinationLabel(app.ShapeInclinationDegrees);
+        DrawReadoutPill(InclinationReadoutRect(app.ShapeInclinationAnchor, dpi, readout),
+                        readout, app.ShapeInclinationSnapped);
+    }
+
+    /// <summary>
+    /// 倾斜角标签的文案（画它、按它量盒子宽度、进脏区，都走这一个函数）。
+    ///
+    /// 参数是**那个要显示的 α**（三个来源：画线中 / 拖端点 / 单选直线拖旋转柄）——
+    /// 不在这里读 app 的状态，是因为"该显示哪个来源的 α"由调用点自己最清楚
+    /// （旋转那个分支还要决定读 α 还是 Δ，见 CurrentRotationReadout）。
+    /// </summary>
+    private static string InclinationLabel(float degrees)
+        => SelectionHandles.FormatInclination(degrees);
+
+    /// <summary>
+    /// 一个方形手柄（白底 + 蓝边）。八个通用手柄和两个端点手柄**共用这一份画法**：
+    /// 端点手柄只是位置不同，长得不一样会让用户以为是两种东西。
+    /// </summary>
+    private void DrawHandleSquare(Vector2 p, float size, float radius, ID2D1SolidColorBrush white)
+    {
+        var box = new Vortice.RawRectF(p.X - size * 0.5f, p.Y - size * 0.5f,
+                                       p.X + size * 0.5f, p.Y + size * 0.5f);
+        var rr = new RoundedRectangle(box, radius, radius);
+        _ctx.FillRoundedRectangle(rr, white);
+        _ctx.DrawRoundedRectangle(rr, _scratch, 1.8f);
+    }
+
+    /// <summary>
+    /// 画一颗"读数胶囊"（旋转 Δ 与倾斜角 α 共用这一份画法）。
+    ///
+    /// 抽出来是因为两处必须**长得一模一样**：它们会在同一条直线上先后出现
+    /// （先转一下、再拖端点），样式差一点用户就会以为是两种东西。
+    /// <paramref name="snapped"/> 为真时整块用强调色——"这个数是吸出来的"。
+    /// </summary>
+    private void DrawReadoutPill(in RectF label, string text, bool snapped)
+    {
+        // **这里要的是"缩放倍数"（96 DPI 基准），不是 Dpi 那个原始值**：
+        // Dpi 是窗口的物理 DPI（200% 屏上就是 192），拿它去 CreateTextFormat
+        // 会造出一个 2880 像素高的字号，字直接糊满整个画面（踩过）。
+        float dpi = _app.DpiScale;
+        var accent = new Color4(0f, 0.47f, 0.83f, 1f);      // #0078D4
+        var box = new Vortice.RawRectF(label.MinX, label.MinY, label.MaxX, label.MaxY);
+        float pill = (label.MaxY - label.MinY) * 0.5f;
+        var shape = new RoundedRectangle(box, pill, pill);
+
+        _ctx.FillRoundedRectangle(shape, Brush(snapped
+            ? new Color4(accent.R, accent.G, accent.B, 0.96f)
+            : _app.FloatingTheme.Panel));
+        _scratch.Color = snapped
+            ? new Color4(1f, 1f, 1f, 0.85f)
+            : new Color4(accent.R, accent.G, accent.B, 0.85f);
+        _ctx.DrawRoundedRectangle(shape, _scratch, 1.5f);
+
+        _scratch.Color = snapped
+            ? new Color4(1f, 1f, 1f, 1f)
+            : _app.FloatingTheme.Text;
+        _ctx.DrawText(text, ReadoutFormat(dpi),
+                      // 注意：Vortice 的 Rect(x, y, width, height) 是"位置 + 尺寸"，
+                      // 不是 (left, top, right, bottom)。写错的话文字会被排到很远的
+                      // 地方去（居中排版时直接跑到屏幕外），看起来就像"字没画出来"。
+                      new Rect(label.MinX, label.MinY,
+                               label.MaxX - label.MinX, label.MaxY - label.MinY),
+                      _scratch);
     }
 
     /// <summary>
@@ -1939,19 +2156,15 @@ internal sealed class OverlayWindow : IDisposable
         // 布局从 SelectionHandles 取，与命中判定同源：分开写迟早差几个像素，
         // 表现就是"看得见按钮却点不中"。
         var rect = SelectionHandles.BarRect(sel, dpi, visible);
-        var box = new Vortice.RawRectF(rect.MinX, rect.MinY, rect.MaxX, rect.MaxY);
         // 圆角**用界面那套令牌**（UiTheme.CornerRadius = 10），不自己发明一个胶囊：
         // 工具条、操作条、面板三样东西的圆角必须是同一个数，看着才是一家的。
-        float radius = MathF.Min(UiTheme.Default.CornerRadius * dpi, (rect.MaxY - rect.MinY) * 0.5f);
-        var rounded = new RoundedRectangle(box, radius, radius);
+        float radius = MathF.Min(app.FloatingTheme.CornerRadius * dpi, (rect.MaxY - rect.MinY) * 0.5f);
 
-        // 配色**取界面那套主题**（UiTheme.Default）：操作条和工具条必须是同一套颜色，
-        // 各写一份迟早会花（用户："纯白色也不美观……看看怎么和那个界面搭配起来"）。
-        var theme = UiTheme.Default;
-        _scratch.Color = theme.Panel;
-        _ctx.FillRoundedRectangle(rounded, _scratch);
-        _scratch.Color = theme.PanelBorder;
-        _ctx.DrawRoundedRectangle(rounded, _scratch, 1f * dpi);
+        // 配色与投影**全取界面推上来的主题**（UiTheme.Default 只是没界面时的兜底）：
+        // 操作条和工具条必须是同一套颜色，各写一份迟早会花
+        // （用户 2026-09-18 实测：浅色主题改完之后，工具条有投影、操作条没有，一眼就看得出）。
+        DrawPanelCard(app, rect, radius);
+        var theme = app.FloatingTheme;
 
         const int n = SelectionHandles.BarButtonCount;
         float glyphBox = SelectionHandles.BarIconBoxLogical * dpi;   // 图标框比字形大一点
@@ -2094,7 +2307,7 @@ internal sealed class OverlayWindow : IDisposable
         var c = new Vector2((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
 
         bool hot = app.SelBarHover == (int)SelBarButton.Collapse;
-        var th = UiTheme.Default;
+        var th = app.FloatingTheme;
         _scratch.Color = hot ? th.Hover : th.Panel;
         _ctx.FillEllipse(new Ellipse(c, d * 0.5f, d * 0.5f), _scratch);
         _scratch.Color = th.PanelBorder;
@@ -2106,25 +2319,53 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.DrawLine(new Vector2(c.X, c.Y - arm), new Vector2(c.X, c.Y + arm), _scratch, w);
     }
 
-    /// <summary>浮动面板的卡片底：白底、圆角、浅边、一层很淡的投影（和操作条同一套）。</summary>
-    private void DrawPanelCard(in RectF r, float radius)
+    /// <summary>
+    /// 浮动面板 / 操作条的卡片底：**主题给的投影 ＋ 底 ＋ 描边 ＋（浅色的）底沿内阴影**。
+    ///
+    /// 数字全部来自 `app.FloatingTheme`，而那个主题是**界面推上来的**（`InkUi.Tokens`）——
+    /// 所以浮层和工具条永远是一套，不会再出现"工具条换了投影、操作条还是老样子"。
+    /// 没有界面挂上来时用 `UiTheme.Default` 兜底（自检宿主）。
+    /// </summary>
+    private void DrawPanelCard(InkEngine app, in RectF r, float radius)
     {
         float dpi = Dpi / 96f;
-        var th = UiTheme.Default;
+        var th = app.FloatingTheme;
         var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
-        // 投影：两层就够（界面上那套四层阴影是给常驻面板用的，这里是临时浮层）
-        for (int i = 2; i >= 1; i--)
+
+        // **投影按形状大小缩一缩**：这套胀幅（最远 16 逻辑像素）是按 48 高的面板定的，
+        // 直接套在一个 28 像素的小圆（收起后那颗球）上会变成一大团光晕。
+        // 规则：比 48 矮的按比例缩，不超过 1。
+        float shadowK = MathF.Min(1f, (r.MaxY - r.MinY) / 48f);
+        for (int i = th.Shadow.Length - 1; i >= 0; i--)
         {
-            _scratch.Color = new Color4(0f, 0f, 0f, 0.045f * i);
+            var layer = th.Shadow[i];
+            float inf = layer.Inflate * dpi * shadowK;
+            float dy = layer.Dy * dpi * shadowK;
+            _scratch.Color = layer.Color;
             _ctx.FillRoundedRectangle(new RoundedRectangle(
-                new Vortice.RawRectF(r.MinX + 0.5f, r.MinY + 0.5f + i * 1.5f * dpi,
-                                     r.MaxX - 0.5f, r.MaxY - 0.5f + i * 1.5f * dpi),
-                radius, radius), _scratch);
+                new Vortice.RawRectF(r.MinX - inf, r.MinY - inf + dy, r.MaxX + inf, r.MaxY + inf + dy),
+                radius + inf, radius + inf), _scratch);
         }
+
         _scratch.Color = th.Panel;
         _ctx.FillRoundedRectangle(new RoundedRectangle(box, radius, radius), _scratch);
         _scratch.Color = th.PanelBorder;
         _ctx.DrawRoundedRectangle(new RoundedRectangle(box, radius, radius), _scratch, 1f * dpi);
+
+        // 底沿那道"卷边"（和工具条同一个做法：裁一条横带、在带子里描一遍圆角矩形，
+        // 这样两端顺着圆角收进去，不会戳出轮廓外）。深色主题这个是全透明的，等于不画。
+        if (th.EdgeBottom.A > 0.001f)
+        {
+            float y = r.MaxY - 1f * dpi;
+            _ctx.PushAxisAlignedClip(new Vortice.RawRectF(r.MinX, y - 0.75f * dpi, r.MaxX, y + 0.75f * dpi),
+                                     AntialiasMode.Aliased);
+            var edge = new Vortice.RawRectF(r.MinX + 0.5f * dpi, r.MinY + 0.5f * dpi,
+                                            r.MaxX - 0.5f * dpi, r.MaxY - 0.5f * dpi);
+            _scratch.Color = th.EdgeBottom;
+            _ctx.DrawRoundedRectangle(new RoundedRectangle(edge, radius - 0.5f * dpi, radius - 0.5f * dpi),
+                                      _scratch, 1f * dpi);
+            _ctx.PopAxisAlignedClip();
+        }
     }
 
     /// <summary>
@@ -2138,7 +2379,7 @@ internal sealed class OverlayWindow : IDisposable
         float dpi = Dpi / 96f;
         int sc = SelectionHandles.SwatchCount;
         var p = SelectionHandles.PanelRect(sel, dpi, app.ViewportCanvas, sc);
-        DrawPanelCard(p, 10f * dpi);
+        DrawPanelCard(app, p, 10f * dpi);
 
         // ---- ① 粗细滑条 ----
         var slider = SelectionHandles.SliderRect(sel, dpi, app.ViewportCanvas, sc);
@@ -2147,7 +2388,7 @@ internal sealed class OverlayWindow : IDisposable
         float cy = (slider.MinY + slider.MaxY) * 0.5f;
         float x0 = SelectionHandles.SliderStepX(0, steps, sel, dpi, app.ViewportCanvas, sc);
         float x1 = SelectionHandles.SliderStepX(steps - 1, steps, sel, dpi, app.ViewportCanvas, sc);
-        var th = UiTheme.Default;
+        var th = app.FloatingTheme;
         _scratch.Color = new Color4(th.TextMuted.R, th.TextMuted.G, th.TextMuted.B, 0.35f);
         _ctx.DrawLine(new Vector2(x0, cy), new Vector2(x1, cy), _scratch, 2.4f * dpi);
         for (int i = 0; i < steps; i++)
@@ -2230,10 +2471,10 @@ internal sealed class OverlayWindow : IDisposable
     {
         float dpi = Dpi / 96f;
         var p = SelectionHandles.LayerPanelRect(sel, dpi, app.ViewportCanvas);
-        DrawPanelCard(p, 10f * dpi);
+        DrawPanelCard(app, p, 10f * dpi);
 
         string[] icons = { IconPaths.toFront, IconPaths.toBack };
-        var th = UiTheme.Default;
+        var th = app.FloatingTheme;
         for (int i = 0; i < 2; i++)
         {
             var cell = SelectionHandles.LayerCellRect(i, sel, dpi, app.ViewportCanvas);

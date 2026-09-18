@@ -508,6 +508,22 @@ internal sealed class Stroke
         return box;
     }
 
+    /// <summary>
+    /// 一组**局部坐标点**在给定变换下占的画布范围（= <see cref="PaddedBounds"/> 的算法，
+    /// 但用的是**传进来的点**，不碰对象）。
+    ///
+    /// 需要的场景只有一个：**改几何的动作要在动手之前**算出"改完之后占哪块"，
+    /// 好把新位置的脏区标出来（见 SetStrokeGeometryAction）。先改后算的话，
+    /// 旧位置就再也问不出来了。
+    /// </summary>
+    public static RectF PaddedBoundsOf(IReadOnlyList<Vector2> local, in Matrix3x2 transform, float width)
+    {
+        var b = RectF.Empty;
+        for (int i = 0; i < local.Count; i++) b.Add(local[i].X, local[i].Y);
+        if (b.IsEmpty) return b;
+        return TransformRect(b, transform).Inflate(width * 0.5f + 2f);
+    }
+
     /// <summary>Bumped whenever the shape of this item changes. The cached GPU
     /// geometry is only trusted while it matches, which is what makes "add a
     /// point, redraw" work while a stroke is still being drawn.</summary>
@@ -607,11 +623,13 @@ internal sealed class Stroke
 
     /// <summary>
     /// 整批换掉控制点（**图形的定义**从这里改）。
+    /// 参数收 <see cref="IReadOnlyList{T}"/>：调用方手里常常只有"只读的一组点"
+    /// （例如浮动层画临时几何），没必要为了传参再复制一个数组。
     /// </summary>
-    public void SetPoints(Vector2[] pts)
+    public void SetPoints(IReadOnlyList<Vector2> pts)
     {
         Points.Clear();
-        for (int i = 0; i < pts.Length; i++)
+        for (int i = 0; i < pts.Count; i++)
             Points.Add(new InkPoint { X = pts[i].X, Y = pts[i].Y, P = 1f, T = 0 });
         RecomputeBounds();
         Revision++;
@@ -637,8 +655,14 @@ internal sealed class Stroke
 
     /// <summary>
     /// 脏区与命中测试用的外扩包围盒（**画布坐标**）。
-    /// 在 WorldBounds 基础上再按笔宽外扩——笔迹是画在线两侧的，
-    /// 只算中心线包围盒会漏掉边缘，快速书写就留残影。
+    /// 在墨迹范围基础上再留 2 像素余量——抗锯齿的边缘会跑出精确包围盒一点点，
+    /// 漏了就会在屏幕上留一条发丝一样的残影。
+    ///
+    /// **两种口径**（和 <see cref="WorldInkBounds"/> 对齐，别让它俩走岔）：
+    ///   · **直线 / 箭头**：`墨迹框 + 2`。它们的墨迹框已经含了半个笔宽（圆头线帽的半径），
+    ///     旧写法 `WorldBounds.Inflate(半宽 + 2)` 里的 `WorldBounds` 是"局部中心线框转过去
+    ///     再取外接"，对转过的直线同样虚胖——脏区会白重画一大片、命中也会连带变松。
+    ///   · **其余种类**：照旧 `WorldBounds.Inflate(半宽 + 2)`，**一个数都不改**。
     ///
     /// 外扩量 = 半个笔宽（+2 像素余量）。**2026-09-14 起这个数是精确的**：
     /// 墨迹现在是"中心线 + 等宽描边 + 圆头圆角"，离中心线最远就是半个笔宽，
@@ -646,8 +670,9 @@ internal sealed class Stroke
     /// （以前自己拼轮廓、内角要补到两条内边的交点，最远能到好几倍半宽，
     /// 那时这个系数必须留得很大——现在就按事实来。）
     /// </summary>
-    public RectF PaddedBounds => WorldBounds.Inflate(
-        Width * 0.5f + 2f);
+    public RectF PaddedBounds => IsLineLike
+        ? WorldInkBounds.Inflate(2f)
+        : WorldBounds.Inflate(Width * 0.5f + 2f);
 
     private RectF _inkBounds = RectF.Empty;
     private int _inkBoundsRevision = -1;
@@ -682,8 +707,23 @@ internal sealed class Stroke
     }
 
     /// <summary>
-    /// 墨迹包围盒的**画布坐标**版本（变换四个角取并集，理由同 <see cref="WorldBounds"/>）。
-    /// 多选时的选区框按它并起来。
+    /// 是不是"由**两个端点**定义、中间是空的"那两种图形（直线 / 箭头）。
+    ///
+    /// 这一个判断现在管着"墨迹范围"那条特殊口径（见 <see cref="LineLikeWorldInkBounds"/>）：
+    /// 直线/箭头的局部 AABB 四个角**根本不在线上**，所以"先把框转过去再取外接矩形"会虚胖。
+    /// </summary>
+    internal bool IsLineLike => Kind is StrokeKind.Line or StrokeKind.Arrow;
+
+    /// <summary>
+    /// 墨迹包围盒的**画布坐标**版本。
+    ///
+    /// **两种口径**，按对象是怎么定义的分：
+    ///   · **直线 / 箭头**：两个端点（含箭头翅膀尖）变换到画布空间后取外接矩形，再外扩半笔宽。
+    ///     它们"由两个点定义"，局部 AABB 的四个角不在线上——旧口径
+    ///     （`TransformRect(InkBounds, Transform)` = 框角整体转过去再取外接）对一条
+    ///     转过 30° 的直线会把框撑到**接近两倍宽**（实测 962 vs 线自己 490，见 --shapetooltest）。
+    ///   · **其余种类**（矩形 / 椭圆 / 图像 / 自由笔迹）：照旧"把局部墨迹框过一遍变换"。
+    ///     它们的局部 AABB 角点就是对象自己的角，这个口径本来是对的，**一个数都不改**。
     /// </summary>
     public RectF WorldInkBounds
     {
@@ -692,8 +732,40 @@ internal sealed class Stroke
             var r = InkBounds;
             if (r.IsEmpty) return r;
             if (Transform.IsIdentity) return r;
-            return TransformRect(r, Transform);
+            return IsLineLike ? LineLikeInkBounds(Matrix3x2.Identity) : TransformRect(r, Transform);
         }
+    }
+
+    /// <summary>
+    /// 直线 / 箭头的**画布空间墨迹框**：端点（+ 箭头翅膀尖）过变换之后取 min/max，
+    /// 再外扩 `Width * 0.5`（圆头线帽的半径——这是"墨迹"该有的口径）。
+    ///
+    /// <paramref name="extra"/> 是"再叠一层"的矩阵：拖动预览（移动/旋转手势）里，
+    /// 屏幕上的姿态是"对象自己的变换 × 实时矩阵"，框必须按**同一个式子**算才贴得住
+    /// （否则一条转 30° 的直线，框还是会按"把紧框整体转过去再取外接"撑成两倍宽）。
+    ///
+    /// 三个细节：
+    ///   · 端点是取 `Points` 的**首尾两个**（不写死下标，形状万一多几个点也成立）；
+    ///   · **箭头**要把头部的两个翅膀尖也算进来：它们不在两个端点之间，只按端点算会让
+    ///     翅膀落在框外，而框又是脏区/命中/导出裁切的依据（漏了就是残影）；
+    ///   · 外扩在**画布空间**做（不是先外扩再过变换）：描边宽度不随变换缩放，
+    ///     这也是命中测试那边的既有近似（见 HitTestExact 的注释）。
+    /// </summary>
+    public RectF LineLikeInkBounds(in Matrix3x2 extra)
+    {
+        var m = Transform * extra;
+        var (a, b) = Endpoints();
+        var r = RectF.Empty;
+        void Add(Vector2 p) => r.Add(p.X, p.Y);
+        Add(Vector2.Transform(new Vector2(a.X, a.Y), m));
+        Add(Vector2.Transform(new Vector2(b.X, b.Y), m));
+        if (Kind == StrokeKind.Arrow)
+        {
+            var (_, wingA, wingB) = ArrowHeadPoints();
+            Add(Vector2.Transform(wingA, m));
+            Add(Vector2.Transform(wingB, m));
+        }
+        return r.Inflate(Width * 0.5f);
     }
 
     /// <summary>Distance in pixels from a point to this item's outline.</summary>
@@ -923,19 +995,12 @@ internal sealed class Stroke
 
             case StrokeKind.Arrow:
             {
-                float dx = pb.X - pa.X, dy = pb.Y - pa.Y;
-                float len = MathF.Sqrt(dx * dx + dy * dy);
-                if (len < 1e-3f) { dx = 1; dy = 0; len = 1; }
-                dx /= len; dy /= len;
-                float head = Math.Clamp(len * 0.28f, 10f, 48f);
-                float hx = pb.X - dx * head, hy = pb.Y - dy * head;
-                float nx = -dy, ny = dx;
-                float spread = head * 0.45f;
+                var (_, wingA, wingB) = ArrowHeadPoints();
                 list.Add(pa);
                 list.Add(pb);
-                list.Add(new Vector2(hx + nx * spread, hy + ny * spread));
+                list.Add(wingA);
                 list.Add(pb);
-                list.Add(new Vector2(hx - nx * spread, hy - ny * spread));
+                list.Add(wingB);
                 break;
             }
 
@@ -1016,27 +1081,46 @@ internal sealed class Stroke
     private ID2D1PathGeometry BuildArrow(ID2D1Factory1 factory)
     {
         var (a, b) = Endpoints();
-        float dx = b.X - a.X, dy = b.Y - a.Y;
-        float len = MathF.Sqrt(dx * dx + dy * dy);
-        if (len < 1e-3f) { dx = 1; dy = 0; len = 1; }
-        dx /= len; dy /= len;
-        float head = Math.Clamp(len * 0.28f, 10f, 48f);
-        float hx = b.X - dx * head, hy = b.Y - dy * head;
-        float nx = -dy, ny = dx;
-        float spread = head * 0.45f;
-
+        var (_, wingA, wingB) = ArrowHeadPoints();
         var geo = factory.CreatePathGeometry();
         using var sink = geo.Open();
         sink.SetFillMode(FillMode.Winding);
         sink.BeginFigure(new Vector2(a.X, a.Y), FigureBegin.Hollow);
         sink.AddLine(new Vector2(b.X, b.Y));
         sink.EndFigure(FigureEnd.Open);
-        sink.BeginFigure(new Vector2(hx + nx * spread, hy + ny * spread), FigureBegin.Hollow);
+        sink.BeginFigure(wingA, FigureBegin.Hollow);
         sink.AddLine(new Vector2(b.X, b.Y));
-        sink.AddLine(new Vector2(hx - nx * spread, hy - ny * spread));
+        sink.AddLine(wingB);
         sink.EndFigure(FigureEnd.Open);
         sink.Close();
         return geo;
+    }
+
+    /// <summary>
+    /// 箭头头部的三个关键点（**局部坐标**）：轴线上的"根部"和两个翅膀尖。
+    ///
+    /// 抽出来是因为它有三个用户，**必须永远一致**：
+    ///   ① <see cref="BuildArrow"/>——真正画出来的那条折线；
+    ///   ② <see cref="ShapeOutline"/>——橡皮/框选/套索用的轮廓折线；
+    ///   ③ 墨迹范围（<see cref="LineLikeWorldInkBounds"/>）——箭头那两个翅膀尖**不在**
+    ///      "两个端点之间"，只按端点算，翅膀就会落在框外，而框又是脏区/命中/导出裁切的依据：
+    ///      脏区漏掉那一块屏幕上会留残影（这几条账见 PaddedBounds 的注释）。
+    /// 三处各写一份公式是迟早要咬人的（头部长短、张开比例都在这几行里）。
+    /// </summary>
+    private (Vector2 root, Vector2 wingA, Vector2 wingB) ArrowHeadPoints()
+    {
+        var (a, b) = Endpoints();
+        float dx = b.X - a.X, dy = b.Y - a.Y;
+        float len = MathF.Sqrt(dx * dx + dy * dy);
+        if (len < 1e-3f) { dx = 1; dy = 0; len = 1; }
+        dx /= len; dy /= len;
+        float head = Math.Clamp(len * 0.28f, 10f, 48f);
+        var root = new Vector2(b.X - dx * head, b.Y - dy * head);
+        float nx = -dy, ny = dx;
+        float spread = head * 0.45f;
+        return (root,
+                new Vector2(root.X + nx * spread, root.Y + ny * spread),
+                new Vector2(root.X - nx * spread, root.Y - ny * spread));
     }
 
     /// <summary>图像对象的矩形几何（命中测试与裁剪用，不做描边）。</summary>
@@ -1123,6 +1207,16 @@ internal abstract class EditAction
     {
         get { var r = AffectedBefore; r.Add(AffectedAfter); return r; }
     }
+
+    /// <summary>
+    /// 这条动作**自己往 `doc.Dirty` 里加矩形**，不要 `Commit` / `Undo` / `Redo`
+    /// 再用 <see cref="AffectedUnion"/> 补一次。默认 false。
+    ///
+    /// 现在只有"改几何"（拖直线端点）那一条为真：它要加的是"旧位、新位**各一个**矩形"，
+    /// 而不是两者的**并集**——对一条横跨屏幕的直线，并集几乎等于整屏（≈96 块），
+    /// 而旧、新各一个各只压十几块，差约 8 倍（见 计划-图形工具.md 8.1②）。
+    /// </summary>
+    public virtual bool SelfManagesDirty => false;
 
     /// <summary>
     /// 这条动作**引用着多少条笔画**。撤销栈的内存成本主要就在这里：
@@ -1563,6 +1657,63 @@ internal sealed class TransformObjectsAction : EditAction
     }
 }
 
+/// <summary>
+/// **改几何**：把一条图形的控制点整批换掉（这一轮只服务"拖直线 / 箭头的端点"）。
+///
+/// 和 <see cref="TransformObjectsAction"/> 是**两条不许混的路**（见 硬约束）：
+///   · 那边只改 `Transform` 矩阵，几何一个点都不动 → GPU 几何缓存不用失效；
+///   · 这边改的是几何本身 → `Revision` 跟着变，Direct2D 几何缓存**必须**重建，
+///     空间索引也要重摆（端点挪走了，它占的格子变了）。
+///
+/// 三个实现上的要点（都在 计划-图形工具.md 8.1）：
+///   ① 拖动期不碰模型，只有**松手**才构造并应用这条动作 → 一次拖拽 = 一步撤销；
+///   ② 脏区加"旧位、新位**各一个**矩形"，不用并集（见 SelfManagesDirty 的注释）；
+///   ③ 端点存的是**局部坐标**，所以外面提交之前要先过 Transform⁻¹（见 Selection.ToLocalPoint）。
+/// </summary>
+internal sealed class SetStrokeGeometryAction : EditAction
+{
+    private readonly Stroke _target;
+    private readonly Vector2[] _newPoints;
+    private readonly Vector2[] _oldPoints;
+    private readonly RectF _before;
+    private readonly RectF _after;
+
+    /// <summary>脏区自己管：要两个矩形，不要并集（见 EditAction.SelfManagesDirty）。</summary>
+    public override bool SelfManagesDirty => true;
+
+    public SetStrokeGeometryAction(Stroke target, IReadOnlyList<Vector2> newPoints)
+    {
+        _target = target;
+        _newPoints = new Vector2[newPoints.Count];
+        for (int i = 0; i < newPoints.Count; i++) _newPoints[i] = newPoints[i];
+        _oldPoints = LocalPoints(target);
+        // **两个包围盒都在动手之前算**：改完之后旧位置就再也问不出来了。
+        _before = Stroke.PaddedBoundsOf(_oldPoints, target.Transform, target.Width);
+        _after = Stroke.PaddedBoundsOf(_newPoints, target.Transform, target.Width);
+    }
+
+    public override RectF AffectedBefore => _before;
+    public override RectF AffectedAfter => _after;
+
+    public override void Undo(InkDocument doc) => Apply(doc, _oldPoints);
+    public override void Redo(InkDocument doc) => Apply(doc, _newPoints);
+
+    private void Apply(InkDocument doc, Vector2[] pts)
+    {
+        doc.ApplyGeometryCore(_target, pts);
+        doc.Dirty.Add(_before);                 // 旧位要擦
+        doc.Dirty.Add(_after);                  // 新位要画（**分开两个矩形**，见类注释 ②）
+    }
+
+    /// <summary>把对象当前的控制点抄成局部坐标数组（撤销要原样放回去）。</summary>
+    private static Vector2[] LocalPoints(Stroke s)
+    {
+        var pts = new Vector2[s.Points.Count];
+        for (int i = 0; i < pts.Length; i++) pts[i] = new Vector2(s.Points[i].X, s.Points[i].Y);
+        return pts;
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 internal sealed class InkDocument
@@ -1772,7 +1923,8 @@ internal sealed class InkDocument
 
         // 命令自己报告"我动了哪块区域"，脏区在这里统一合并。
         // 这样功能代码就不必各自记得去标脏——漏标是留残影的头号原因。
-        Dirty.Add(action.AffectedUnion);
+        // （自己管脏区的那一条除外，它在 Redo/Undo 里加的是"两个矩形"而不是并集。）
+        if (!action.SelfManagesDirty) Dirty.Add(action.AffectedUnion);
     }
 
     /// <summary>
@@ -1812,6 +1964,40 @@ internal sealed class InkDocument
         _grid.Remove(s);
         s.Transform = s.Transform * m;
         _grid.Insert(s);
+    }
+
+    /// <summary>
+    /// 改一条图形的**几何**（控制点），并把空间索引重摆。
+    ///
+    /// 为什么必须先 `Remove` 再 `Insert`：索引是按"它占哪块"记的，端点挪走之后
+    /// 原来的格子里会留下一个幽灵条目（和 <see cref="ApplyTransformCore"/> 同一条理由）。
+    ///
+    /// **调用方负责脏区**：这条只负责让模型和索引跟上，加哪个矩形由
+    /// <see cref="SetStrokeGeometryAction"/> 决定（它是"两个矩形、不是并集"）。
+    /// </summary>
+    internal void ApplyGeometryCore(Stroke s, Vector2[] localPoints)
+    {
+        StructureChangedSinceRender = true;
+        _grid.Remove(s);
+        // 一次换掉全部控制点：Revision++ → 几何缓存失效、Bounds 重算（见 Stroke.SetPoints）。
+        s.SetPoints(localPoints);
+        _grid.Insert(s);
+        Version++;
+    }
+
+    /// <summary>
+    /// 对一条图形提交一次**改几何**（拖端点松手时走这里）。一步撤销。
+    ///
+    /// 和 <see cref="ApplyTransform"/> 一样是"效果先应用、再记账"：
+    /// 拖动期间模型一个字没动，全部位移只在浮动层的预览里（见 计划-图形工具.md 8.1①）。
+    /// </summary>
+    public bool ApplyGeometry(Stroke s, IReadOnlyList<Vector2> newLocalPoints)
+    {
+        if (s == null || newLocalPoints == null || newLocalPoints.Count == 0) return false;
+        var act = new SetStrokeGeometryAction(s, newLocalPoints);
+        act.Redo(this);
+        Commit(act);
+        return true;
     }
 
     /// <summary>
@@ -2096,7 +2282,7 @@ internal sealed class InkDocument
         // **必须在改之前采样**：AffectedAfter 是"对象**现在**占哪块"（TransformObjectsAction
         // 是现算的），改完再算就变成"原位置"，于是"拖过去的那个位置"永远没被标脏、
         // 在屏幕上留一块幽灵（实测：撤销后新旧两处都有墨）。
-        var affected = a.AffectedUnion;
+        var affected = a.SelfManagesDirty ? RectF.Empty : a.AffectedUnion;
         a.Undo(this);
         Dirty.Add(affected);
         _redo.Add(a);
@@ -2109,7 +2295,8 @@ internal sealed class InkDocument
         var a = _redo[^1];
         _redo.RemoveAt(_redo.Count - 1);
         a.Redo(this);
-        Dirty.Add(a.AffectedUnion);      // 同 Undo：重做同样要把那块重画
+        // 同 Undo：重做同样要把那块重画（自己管脏区的那条已经在 Redo 里加过了）。
+        if (!a.SelfManagesDirty) Dirty.Add(a.AffectedUnion);
         _undo.Add(a);
         TrimUndo();
         return true;

@@ -9,6 +9,17 @@ internal enum SelHandle
     TopLeft, Top, TopRight, Right, BottomRight, Bottom, BottomLeft, Left,
     /// <summary>旋转手柄，在上边中点外侧。</summary>
     Rotate,
+    /// <summary>
+    /// 图形的**第一个端点**手柄（只有直线 / 箭头会用到）。
+    ///
+    /// 为什么另开两个值、而不是复用 TopLeft/BottomRight：端点手柄的语义是
+    /// "改这一条图形的定义元素"（改几何），而不是"按包围盒缩放"（改变换）。
+    /// 两者动作完全不同（见 SetStrokeGeometryAction 的注释），共用一个值迟早会串。
+    /// 值排在最后，原来那几个的数字一个都没动。
+    /// </summary>
+    EndpointA,
+    /// <summary>图形的第二个端点手柄，见 <see cref="EndpointA"/>。</summary>
+    EndpointB,
 }
 
 /// <summary>
@@ -208,6 +219,321 @@ internal static class SelectionHandles
     /// <summary>手柄在**画布坐标**里的位置。</summary>
     public static Vector2 CanvasPosition(SelHandle h, in SelectionFrame f, float dpiScale)
         => f.ToCanvasPoint(Position(h, f.Local, dpiScale));
+
+    // =====================================================================
+    //  直线 / 箭头：两个端点手柄
+    //
+    //  依据是"手柄 = 图形的定义元素"（见 调研-图形工具.md 2.4）：直线由**两个点**
+    //  定义，所以只给两个端点手柄 + 一个旋转柄。8 个缩放柄对它不只是多余，还是**错的**：
+    //  左右拉伸 2 倍会把 (0,0)→(100,50) 变成 (0,0)→(200,50)，倾斜角从 26.57° 变成 14.04°
+    //  ——用户只是想"把它变长"，线的角度却变了。
+    // =====================================================================
+
+    /// <summary>
+    /// 选区是不是"单选一条**有端点语义**的图形"（直线 / 箭头）。是的话用它替代通用 8 手柄。
+    ///
+    /// 只认单选：多选要的是"整组缩放"，那还得靠通用框（见 调研 2.4 的最后一行）。
+    /// 图像 / 自由笔迹 / 矩形 / 椭圆也没有端点语义（矩形有四个角、椭圆有半轴，是下一轮的事）。
+    /// </summary>
+    public static bool EndpointEditable(IReadOnlyList<Stroke> sel, out Stroke stroke)
+    {
+        stroke = null;
+        if (sel == null || sel.Count != 1) return false;
+        var s = sel[0];
+        if (s == null || s.IsImage || s.Points.Count < 2) return false;
+        if (s.Kind != StrokeKind.Line && s.Kind != StrokeKind.Arrow) return false;
+        stroke = s;
+        return true;
+    }
+
+    /// <summary>端点手柄的槽位（0 = 第一个控制点、1 = 最后一个）→ Points 里的下标。</summary>
+    public static int EndpointIndex(Stroke s, int slot) => slot <= 0 ? 0 : s.Points.Count - 1;
+
+    /// <summary>
+    /// 端点手柄在**画布坐标**里的位置。
+    ///
+    /// 这是"两个坐标系"最容易写错的一处：**控制点存在对象的局部坐标里**
+    /// （`Stroke.Points`），而手柄、指针都在画布坐标里——中间隔着 `Stroke.Transform`。
+    /// </summary>
+    public static Vector2 EndpointCanvasPosition(Stroke s, int slot)
+    {
+        var p = s.Points[EndpointIndex(s, slot)];
+        return Vector2.Transform(new Vector2(p.X, p.Y), s.Transform);
+    }
+
+    /// <summary>
+    /// 把**画布坐标**的点变回对象的局部坐标。
+    ///
+    /// 拖端点必须过这一步：旋转 / 缩放过的直线，如果把画布坐标直接当局部坐标写回去，
+    /// 端点会飞到一个和指针完全无关的地方（自检里"旋转过的直线拖端点之后端点仍落在
+    /// 指针位置"那一条就是盯它的）。同一套换算在 SelectionFrame.ToLocalPoint 里
+    /// 也有一份——那里是框坐标，这里是对象坐标，维度不同，不是重复。
+    /// </summary>
+    public static Vector2 ToLocalPoint(Vector2 canvasPoint, in Matrix3x2 transform)
+    {
+        if (transform.IsIdentity) return canvasPoint;
+        return Matrix3x2.Invert(transform, out var inv) ? Vector2.Transform(canvasPoint, inv) : canvasPoint;
+    }
+
+    /// <summary>
+    /// 按**选区**做手柄命中：直线 / 箭头只认两个端点 + 旋转柄，其余走通用框那一套。
+    ///
+    /// 直线那一条**不给 8 个缩放柄留后门**（连命中都不做）：画都不画了却还能点到，
+    /// 就成了"看不见但拖得动"，比"看得见点不到"更难解释。
+    /// </summary>
+    public static SelHandle HitTest(float canvasX, float canvasY, IReadOnlyList<Stroke> sel,
+                                    in SelectionFrame f, float dpiScale)
+    {
+        if (EndpointEditable(sel, out var s))
+        {
+            float rad = HitRadiusLogical * dpiScale;
+            var p = new Vector2(canvasX, canvasY);
+            if (Vector2.DistanceSquared(p, EndpointCanvasPosition(s, 0)) <= rad * rad)
+                return SelHandle.EndpointA;
+            if (Vector2.DistanceSquared(p, EndpointCanvasPosition(s, 1)) <= rad * rad)
+                return SelHandle.EndpointB;
+            // 旋转柄照旧（形状是"参数"，旋转是"姿态"，两码事）。
+            if (Vector2.DistanceSquared(p, CanvasPosition(SelHandle.Rotate, f, dpiScale)) <= rad * rad)
+                return SelHandle.Rotate;
+            return SelHandle.None;
+        }
+        return HitTest(canvasX, canvasY, f, dpiScale);
+    }
+
+    // =====================================================================
+    //  倾斜角 α 与画线吸附
+    //
+    //  α 和旋转读数 Δ 是**两个数**（见 调研-图形工具.md 2.3），必须分开显示：
+    //    · α = 这条线**本身**的姿态，范围 [0°,180°)，永远非负 → 画线、拖端点时出现；
+    //    · Δ = 我这一次**转了多少**，逆时针为正、不设上限 → 拖旋转柄时出现。
+    //  混在一起用户会以为软件自相矛盾（"这条线 135°，我刚把它转了 -20°"）。
+    //
+    //  角度换算全工程只有这一处权威实现（连同 RotateMatrix / RotationStepDegrees）：
+    //  屏幕 y 轴朝下 → 先取一次负号（逆时针为正），新代码一律复用它们，不另写一份。
+    // =====================================================================
+
+    /// <summary>
+    /// 直线的**倾斜角** α ∈ [0°,180°)：x 轴正向与直线所成的角。
+    ///
+    /// 屏幕 y 轴朝下，所以先取一次负号（和 RotationStepDegrees 同一个约定），
+    /// 再对 180° 取模折回来——**直线没有方向**，从左下到右上和从右上到左下是同一条线，
+    /// 读数必须一样。可核对的等式是 m = tan θ（见 调研 2.3）。
+    /// </summary>
+    public static float InclinationDegrees(Vector2 p0, Vector2 p1)
+    {
+        float deg = -MathF.Atan2(p1.Y - p0.Y, p1.X - p0.X) * 180f / MathF.PI;
+        return FoldInclination(deg);
+    }
+
+    /// <summary>
+    /// 把角度折到 [0°,180°)（180° 与 0° 是同一条水平线，取 0°）。
+    ///
+    /// 只在本文件内部用：判"离特殊角多远"（<see cref="InclinationDistance"/>）、
+    /// 判"还要转多少"（<see cref="InclinationShortestDelta"/>）、以及画线/拖端点那两个
+    /// 确实只需要 [0,180) 的读数。**旋转手柄那个读数是展开值，故意不过这里**（用户 2026-09-18）。
+    /// </summary>
+    private static float FoldInclination(float deg)
+    {
+        deg %= 180f;
+        if (deg < 0f) deg += 180f;
+        // 顺手把 -0 归一成 +0：IEEE 的 `-0.0 % 180` 还是 -0.0，而 "F1" 会把它印成
+        // "-0.0"——水平的线读数写成 `α = -0.0°` 就是对不上（α 按定义非负）。
+        if (deg == 0f) deg = 0f;
+        return deg;
+    }
+
+    /// <summary>
+    /// 两条直线（两个 α，都在 [0°,180°) 里）之间的**角距离**。
+    ///
+    /// **必须是环形的**：α 折在 [0,180)，0° 与 180°（也就是 -0°）是同一条水平线，
+    /// 所以 179.5° 离 0° 只有 0.5°。直接 `|d - t|` 会算成 179.5°，
+    /// 结果是"一条几乎水平的线吸不到水平"（2026-09-18 用户点出来的那条）。
+    /// </summary>
+    public static float InclinationDistance(float a, float b)
+    {
+        float d = MathF.Abs(FoldInclination(a) - FoldInclination(b));
+        return MathF.Min(d, 180f - d);
+    }
+
+    /// <summary>
+    /// 从 α = <paramref name="fromDeg"/> 走到 α = <paramref name="toDeg"/> **还要转多少度**
+    /// （视觉逆时针为正，落在 (-90°, 90°]）。
+    ///
+    /// 和 <see cref="InclinationDistance"/> 是一对：那边回答"差多少"（非负），
+    /// 这边回答"往哪边转"（带符号）。旋转吸附要用它把"吸到的角"换算成"这一拖还得转多少"。
+    /// </summary>
+    public static float InclinationShortestDelta(float fromDeg, float toDeg)
+    {
+        float d = (FoldInclination(toDeg) - FoldInclination(fromDeg)) % 180f;
+        if (d > 90f) d -= 180f;
+        if (d <= -90f) d += 180f;
+        return d;
+    }
+
+    /// <summary>
+    /// 倾斜角读数文案：`α = 45.0°`（一位小数）。
+    ///
+    /// 和旋转读数刻意长得不一样（那边不带字段名）：两个数同时挂在一条直线上是对的，
+    /// 但**必须分得清哪个是哪个**——带 `α = ` 的只可能是 [0°,180°) 那个倾斜角。
+    /// </summary>
+    public static string FormatInclination(float deg) => "α = " + FormatOneDecimal(deg);
+
+    /// <summary>
+    /// **纯数字**的角度文案：`405.0°` / `-135.0°` / `45.0°`（一位小数、不带字段名）。
+    ///
+    /// 单选直线拖旋转柄时用它（用户 2026-09-18 定）。两个理由：
+    ///   · 那个读数是"从这条线原有的倾斜角接着转"的**展开角**，无上下限——
+    ///     405° 按数学定义已经不是倾斜角了（倾斜角只在 [0°,180°)），标成 `α = ` 反而错；
+    ///   · 用户说"其他和原来的逻辑一样"，而原来那套 Δ 读数就是纯数字。
+    /// </summary>
+    public static string FormatSignedDegrees(float deg) => FormatOneDecimal(deg);
+
+    /// <summary>
+    /// 一位小数 + 度数符号，并把"会印成 -0.0 的值"归一成 +0（不然水平的线会写成 `-0.0°`）。
+    /// 上面两个文案函数共用它——**文案的格式只写这一份**。
+    ///
+    /// 注意必须**先按要印的精度取整再判零**：−0.02° 本身不是 0，但 "F1" 会把它印成 "-0.0"，
+    /// 所以直接判 `deg == 0f` 拦不住它。
+    /// </summary>
+    private static string FormatOneDecimal(float deg)
+    {
+        float rounded = MathF.Round(deg, 1);
+        if (rounded == 0f) rounded = 0f;      // -0.0 == 0f 为真，赋值就得到 +0.0
+        return rounded.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + "°";
+    }
+
+    /// <summary>
+    /// **特殊角**（度）：高中数学 [0°,180°) 上那八个"图上读得出来"的角。
+    ///
+    /// 两个地方共用这一张表（用户 2026-09-18 定）：
+    ///   · **画直线/箭头**时的方向吸附；
+    ///   · **单选直线/箭头**拖旋转柄时的吸附（读的是 α，不是转过的 Δ，见下面）。
+    /// 集合从原来的 {0,30,45,60,90} 补全成八个：120/135/150 也是老师在黑板上
+    /// 画示意图会用到的角，画得出来就该吸得到。
+    ///
+    /// **注意 0° 与 180° 是同一条线**，判距离一律走 <see cref="InclinationDistance"/>（环形）。
+    /// </summary>
+    public static readonly float[] SpecialInclinationDegrees =
+        { 0f, 30f, 45f, 60f, 90f, 120f, 135f, 150f };
+
+    /// <summary>
+    /// 特殊角软吸附的容差（度）。**±1°**（用户 2026-09-18 从 ±3° 收紧）。
+    ///
+    /// 收紧的理由：特殊角有八个、彼此只差 15°，容差 3° 时"26.5° 也被吸到 30°"
+    /// ——用户明明想画 26.5°（正好是斜率 0.5 那条），却怎么也画不出来。
+    /// 1° 只吸"我就是要这个整数角"的手。
+    ///
+    /// 这一条**只管特殊角那一套**（画线 + 单选直线旋转）；
+    /// 通用旋转（矩形 / 多选 / 自由笔迹只吸 90° 那一档）仍是 ±3°
+    /// （见 <see cref="RotationSoftSnapToleranceDegrees"/>）——用户明确要求那一档"保持现在的行为"。
+    /// </summary>
+    public const float SoftSnapToleranceDegrees = 1f;
+
+    /// <summary>
+    /// 对一个**倾斜角**做吸附，三种模式（优先级从高到低，和旋转共用同一套语义）：
+    ///   · <paramref name="noSnap"/>（Alt）：完全自由；
+    ///   · <paramref name="gridSnap"/>（Shift）：硬网格 15°（和旋转的 Shift 同一个数）；
+    ///   · 默认：软吸附到 <see cref="SpecialInclinationDegrees"/> 里最近的一条
+    ///     （**环形**距离 ≤ <see cref="SoftSnapToleranceDegrees"/> 才吸）。
+    /// 返回值折在 [0°,180°)。
+    /// </summary>
+    public static float SnapInclinationDegrees(float deg, bool gridSnap, bool noSnap, out bool snapped)
+    {
+        snapped = false;
+        // 优先级和旋转那条**一模一样**（先看 Shift 的硬网格，再看 Alt 的自由）：
+        // 两个修饰键一起按时 Shift 赢——否则同一个手势在两处会有两种行为。
+        if (gridSnap)
+        {
+            deg = MathF.Round(FoldInclination(deg) / RotationSnapDegrees) * RotationSnapDegrees;
+            snapped = true;
+            // 178° 这一档会 round 成 180°——折回来就是 0°，还是"水平"那一条（同一条线）。
+            return FoldInclination(deg);
+        }
+        if (noSnap) return FoldInclination(deg);
+
+        float folded = FoldInclination(deg);
+        float best = folded, bestDist = float.MaxValue;
+        foreach (float target in SpecialInclinationDegrees)
+        {
+            float d = InclinationDistance(folded, target);   // 环形：179.5° 离 0° 只有 0.5°
+            if (d < bestDist) { bestDist = d; best = target; }
+        }
+        if (bestDist <= SoftSnapToleranceDegrees) { folded = best; snapped = true; }
+        return FoldInclination(folded);
+    }
+
+    /// <summary>
+    /// 对**展开后的角**（可以超过 180°、也可以是负数）做吸附，**特殊角按 180° 周期**。
+    ///
+    /// 单选直线拖旋转柄用这一版（用户 2026-09-18 澄清："逆时针为正、顺时针为负，它可以
+    /// 无限转下去……除了初始角度要调一下以外，其他和原来的逻辑是一样的"）。
+    ///
+    /// 为什么不复用上面那一版（它返回折回 [0,180) 的值）：
+    ///   · 折回会把"405°"变成"45°"——用户转了两圈，读数突然跳回 45，看起来像丢了圈数；
+    ///   · 而"要不要吸"只看**离特殊角多远**，那是个周期量（405.5° 离 405° 只有 0.5°，
+    ///     405° 折回来就是 45°，还是那八个角）。
+    /// 所以这里的做法是：**折回只用来找最近的角，吸完把差值加回展开值**——
+    /// 405.5° 吸到 405.0°、−135.4° 吸到 −135.0°、765.4° 吸到 765.0°。
+    /// <paramref name="snapped"/> 与容差（±1°）的语义和上面那一版完全一致。
+    /// </summary>
+    public static float SnapExpandedInclinationDegrees(float deg, bool gridSnap, bool noSnap,
+                                                       out bool snapped)
+    {
+        snapped = false;
+        float folded = FoldInclination(deg);          // 只用于判"离哪个角最近"
+
+        if (gridSnap)
+        {
+            // Shift 的 15° 硬网格同样按 180° 周期：走到最近的一条网格线上（可以走出去好几圈）
+            float target = MathF.Round(folded / RotationSnapDegrees) * RotationSnapDegrees;
+            snapped = true;
+            return deg + InclinationShortestDelta(folded, target);
+        }
+        if (noSnap) return deg;                       // Alt：完全自由
+
+        float best = folded, bestDist = float.MaxValue;
+        foreach (float target in SpecialInclinationDegrees)
+        {
+            float d = InclinationDistance(folded, target);
+            if (d < bestDist) { bestDist = d; best = target; }
+        }
+        if (bestDist > SoftSnapToleranceDegrees) return deg;
+        snapped = true;
+        return deg + InclinationShortestDelta(folded, best);
+    }
+
+    /// <summary>
+    /// 把"指针位置"吸附成"**绕 <paramref name="start"/> 转过来、长度不变**"的端点，
+    /// 也就是画线时那个"吸附时绕起点转、保持长度"（见 计划-图形工具.md 8.2）。
+    ///
+    /// 两处细节：
+    ///   · 长度取**指针到起点的真实距离**（吸附只改方向，不偷偷改长短——用户拉多长就是多长）；
+    ///   · α 是"折过"的（直线没有方向），所以重建方向时要在"θ 和 θ+180°"里挑离当前指针方向
+    ///     最近的那一个，否则线会甩到指针的反方向去。
+    /// </summary>
+    public static Vector2 SnapEndPoint(Vector2 start, Vector2 pointer, bool gridSnap, bool noSnap,
+                                       out bool snapped)
+    {
+        snapped = false;
+        float dx = pointer.X - start.X, dy = pointer.Y - start.Y;
+        float len = MathF.Sqrt(dx * dx + dy * dy);
+        if (len < 1e-3f) return pointer;                    // 零长度：没什么可吸的
+
+        float snappedDeg = SnapInclinationDegrees(InclinationDegrees(start, pointer), gridSnap, noSnap,
+                                                  out snapped);
+        if (!snapped) return pointer;
+
+        // 屏幕方向角 θ（y 朝下）。α = -θ 折到 [0,180)，所以候选方向是 -α 与 -α+180°。
+        float theta = MathF.Atan2(dy, dx);
+        float bestTheta = theta, bestDist = float.MaxValue;
+        for (int k = 0; k < 2; k++)
+        {
+            float cand = -snappedDeg * MathF.PI / 180f + k * MathF.PI;
+            float d = MathF.Abs(NormalizeDegrees((cand - theta) * 180f / MathF.PI));
+            if (d < bestDist) { bestDist = d; bestTheta = cand; }
+        }
+        return new Vector2(start.X + MathF.Cos(bestTheta) * len, start.Y + MathF.Sin(bestTheta) * len);
+    }
 
     /// <summary>
     /// 算当前选区的坐标系：**一律轴对齐**——把每个对象变换后的**墨迹**包围盒并起来，

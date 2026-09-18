@@ -69,6 +69,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public string GetPref(string key) => _engine.GetUiPref(key);
     public void SetPref(string key, string value) => _engine.SetUiPref(key, value);
 
+    /// <summary>界面把自己的浮层主题推给引擎（见 IOverlayUi / IUiHost 的说明）。</summary>
+    public void SetFloatingTheme(UiTheme theme) => _engine.SetFloatingThemeFromUi(theme);
+
     // ---- IEngineCommands -------------------------------------------------
 
     public void SetTool(Tool tool) => _engine.SetToolFromUi(tool);

@@ -308,6 +308,20 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             ShapeTest();
         }
+        else if (mode == "--shapetooltest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ShapeToolTest();
+        }
+        else if (mode == "--shapetoolshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ShapeToolShowcase(args.Length > 1 ? args[1] : "reports/shape-line-handles.bmp",
+                              args.Contains("--drag"), args.Contains("--draw"),
+                              args.Contains("--rotate"), args.Contains("--rotated"));
+        }
         else if (mode == "--captest")
         {
             _autoExitAt = double.MaxValue;
@@ -388,7 +402,7 @@ internal sealed class App : InkEngine.InkEngine
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
-            SelShowcase();
+            SelShowcase(args.Length > 1 ? args[1] : null);
         }
         else if (mode == "--captureshow")
         {
@@ -2865,11 +2879,19 @@ internal sealed class App : InkEngine.InkEngine
     /// 把选中框和手柄摆出来给人看。跟 --beautifyshowcase 一个路子：
     /// 画好挂着不动，由外部截图，用来肉眼核对观感（不是自动判定）。
     /// </summary>
-    private void SelShowcase()
+    private void SelShowcase(string path = null)
     {
         BoardOn = true;                 // 白底，不然手柄压在桌面上看不清
         Doc.Clear();
         Doc.ClearHistory();
+
+        // **必须挂上界面**：操作条/小面板的颜色与投影是界面推给引擎的
+        // （见 IUiHost.SetFloatingTheme）——不挂界面拿到的是 UiTheme.Default 那套兜底，
+        // 出的图就不是产品里看到的样子。
+        // 注意顺序：**偏好要先设**，SetUiFactory 是立刻挂载的（挂载时就会读偏好）。
+        // --dark：深色那档也出一张（浮层的深色是这一轮新加的）
+        if (Environment.GetCommandLineArgs().Contains("--dark")) SetUiPref("dark", "1");
+        SetUiFactory(() => new InkUi.FullUi());
 
         float cx = VirtualScreen.MinX + 720;
         float top = VirtualScreen.MinY + 300;
@@ -2915,7 +2937,25 @@ internal sealed class App : InkEngine.InkEngine
         foreach (var s in Doc.Strokes) Doc.Selected.Add(s);
         Doc.InvalidateAll();
         SettleFrames(800);
-        Console.WriteLine("选中框已摆好，等外部截图（这个模式不会自己退出）");
+
+        if (path == null)
+        {
+            Console.WriteLine("选中框已摆好，等外部截图（这个模式不会自己退出）");
+            return;
+        }
+
+        // 出图（离屏，锁屏/远程也能出）：范围 = 选中框 ∪ 操作条，再留一圈给投影。
+        // 操作条挂在框下方（SelectionHandles.BarRect 算的就是那个位置），
+        // 所以把它一起并进来，否则出图会把操作条切掉一半。
+        var aabb = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
+        var bar = SelectionHandles.BarRect(aabb, DpiScale, ViewportCanvas);
+        var region = new RectF
+        {
+            MinX = MathF.Min(aabb.MinX, bar.MinX), MinY = MathF.Min(aabb.MinY, bar.MinY),
+            MaxX = MathF.Max(aabb.MaxX, bar.MaxX), MaxY = MathF.Max(aabb.MaxY, bar.MaxY),
+        };
+        if (!OffscreenFloatingShot(path, region.Inflate(30f))) Console.WriteLine("出图失败");
+        _quit = true;
     }
 
     /// <summary>
@@ -4070,6 +4110,1127 @@ internal sealed class App : InkEngine.InkEngine
 
         Console.WriteLine();
         Console.WriteLine(fail == 0 ? "  PASS: 图形命中判定正确" : $"  FAIL: {fail} 项不对");
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 图形工具第一轮（直线先行）自检。六段，前两段走**真机输入**，中间一段是纯数学，
+    /// 后面三段走"选择手势"的内部入口（自检里一直是这么驱动手柄的）。
+    ///
+    ///   A. 接线画图入口：四种工具各拖一次 → Kind 对、两端正好落在按下点 / 松手点、
+    ///      一次拖拽 = 一步撤销、撤销一次就干净；
+    ///   B. 拖动太短不产生对象（点一下、挪两个像素各一条）；
+    ///   C. 画线吸附（数学层）：软吸附 0/30/45/60/90 ±3°、Shift 15° 网格、Alt 自由，
+    ///      以及"吸附时绕起点转、保持长度"；顺带把 α 的五个读数钉死；
+    ///   D. 拖端点（真机层）：模型在拖动中一个字不改、内容层一帧不重画、
+    ///      长度与倾斜角按预期变、Revision 真的变了、一步撤销、α 标签真的上屏；
+    ///   E. 旋转过的直线拖端点：端点仍落在指针位置（走 Transform⁻¹ 那条路）。
+    /// </summary>
+    private void ShapeToolTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 图形工具自检（画图入口 / 吸附 / 端点编辑）===");
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"    {name,-34}{(ok ? "PASS" : "FAIL")}  {detail}");
+        }
+
+        // **白板打底**：后面有几条判据要数屏幕上的强调色像素，透明批注下桌面上
+        // 什么颜色都可能出现（这一条在旋转自检里踩过）。板色取深灰，和强调色分得开。
+        BoardOn = true;
+        BoardColor = new Color4(0.10f, 0.10f, 0.12f, 1f);
+        ViewOffsetY = 0f;                    // 屏幕坐标 == 画布坐标，抓屏和算位置都好对
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        CurrentColor = new Color4(1f, 0f, 1f, 1f);   // 品红：几条像素判据要靠它数
+        Doc.Clear();
+        Doc.ClearHistory();
+
+        Vector2 Pt(InkEngine.InkPoint p) => new Vector2(p.X, p.Y);
+
+        // ================= A. 四种工具各拖一次 =================
+        Console.WriteLine("  -- A. 画图入口（四种工具，真机输入）--");
+        var tools = new (Tool tool, StrokeKind kind)[]
+        {
+            (Tool.Line, StrokeKind.Line), (Tool.Rectangle, StrokeKind.Rectangle),
+            (Tool.Ellipse, StrokeKind.Ellipse), (Tool.Arrow, StrokeKind.Arrow),
+        };
+        foreach (var (tool, kind) in tools)
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetToolFromUi(tool);
+
+            // 方向刻意取 α ≈ 22.8°：离软吸附那几条（0/30/45/60/90）都超过 3°，
+            // 于是"松手点"就是最终端点，判据才干净。想验吸附在 C 段。
+            float ax = _virtualX + 600, ay = _virtualY + 900;
+            float bx = ax + 380, by = ay - 160;
+
+            SendMouse((int)ax, (int)ay, 0);                             SettleFrames(60);
+            SendMouse((int)ax, (int)ay, Native.MOUSEEVENTF_LEFTDOWN);   SettleFrames(60);
+            for (int i = 1; i <= 5; i++)
+            {
+                SendMouse((int)(ax + (bx - ax) * i / 5f), (int)(ay + (by - ay) * i / 5f), 0);
+                SettleFrames(25);
+            }
+            SendMouse((int)bx, (int)by, Native.MOUSEEVENTF_LEFTUP);     SettleFrames(220);
+
+            string tag = tool.ToString();
+            var s = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+            Check($"{tag}：拖出一个对象", s != null, $"对象数 {Doc.Strokes.Count}");
+            if (s == null) continue;
+
+            Check($"{tag}：Kind 正确", s.Kind == kind, $"Kind={s.Kind}（期望 {kind}）");
+            Check($"{tag}：控制点只有两个（图形由两端定义）", s.Points.Count == 2, $"点数 {s.Points.Count}");
+            Check($"{tag}：起点落在按下点",
+                  Vector2.Distance(Pt(s.Points[0]), new Vector2(ax, ay)) < 2f,
+                  $"起点 ({Pt(s.Points[0]).X:F0},{Pt(s.Points[0]).Y:F0}) 期望 ({ax:F0},{ay:F0})");
+            Check($"{tag}：终点落在松手点",
+                  Vector2.Distance(Pt(s.Points[^1]), new Vector2(bx, by)) < 2f,
+                  $"终点 ({Pt(s.Points[^1]).X:F0},{Pt(s.Points[^1]).Y:F0}) 期望 ({bx:F0},{by:F0})");
+            Check($"{tag}：一次拖拽 = 一步撤销", Doc.UndoDepth == 1, $"撤销栈 {Doc.UndoDepth} 步");
+            if (tool == Tool.Line)
+            {
+                // 画出来还得真的**上屏**（预览与提交后的几何是同一条，不该有跳变）
+                var mid = new Vector2((ax + bx) * 0.5f, (ay + by) * 0.5f);
+                int onScreen = ScreenProbe.CountMagenta((int)mid.X - 30, (int)mid.Y - 30, 60, 60);
+                Check($"{tag}：画出来的线真的上了屏", onScreen > 100, $"线上取一块 {onScreen} 像素");
+            }
+            Doc.Undo();
+            SettleFrames(150);
+            Check($"{tag}：撤销一次就干净", Doc.Strokes.Count == 0 && Doc.UndoDepth == 0,
+                  $"撤销后对象 {Doc.Strokes.Count} 个，撤销栈 {Doc.UndoDepth} 步");
+        }
+
+        // ================= B. 拖动太短不产生对象 =================
+        Console.WriteLine("  -- B. 拖动太短（误点）不产生对象 --");
+        Doc.Clear();
+        Doc.ClearHistory();
+        SetToolFromUi(Tool.Line);
+        CurrentColor = new Color4(1f, 0f, 1f, 1f);      // 品红：屏幕上好不好数
+        float px = _virtualX + 700, py = _virtualY + 1100;
+
+        SendMouse((int)px, (int)py, 0);                             SettleFrames(60);
+        SendMouse((int)px, (int)py, Native.MOUSEEVENTF_LEFTDOWN);   SettleFrames(60);
+        SendMouse((int)px, (int)py, Native.MOUSEEVENTF_LEFTUP);     SettleFrames(200);
+        Check("点一下不产生对象", Doc.Strokes.Count == 0 && Doc.UndoDepth == 0,
+              $"对象 {Doc.Strokes.Count} 个，撤销 {Doc.UndoDepth} 步（都不该有）");
+
+        // 2 物理像素：100% 缩放下是 2 逻辑像素，200% 下是 1 —— 两种情况都短于 4
+        SendMouse((int)px, (int)py, Native.MOUSEEVENTF_LEFTDOWN);   SettleFrames(60);
+        SendMouse((int)px + 2, (int)py + 2, 0);                     SettleFrames(100);
+        SendMouse((int)px + 2, (int)py + 2, Native.MOUSEEVENTF_LEFTUP); SettleFrames(200);
+        Check("挪 2 物理像素也不产生对象（短于 4 逻辑像素）",
+              Doc.Strokes.Count == 0 && Doc.UndoDepth == 0,
+              $"对象 {Doc.Strokes.Count} 个，撤销 {Doc.UndoDepth} 步（都不该有）");
+
+        // 连"屏幕上有没有留下杂物"一起验：拖动预览是每帧画在浮动层上的，
+        // 不提交的时候必须连预览一起消失（这里数的是屏幕像素，不是模型）。
+        int residue = ScreenProbe.CountMagenta((int)px - 60, (int)py - 60, 120, 120);
+        Check("拖动太短：屏幕上也没留下墨（不许留杂物）", residue == 0, $"{residue} 像素");
+
+        // ================= C. 吸附（数学层）=================
+        Console.WriteLine("  -- C. 画线吸附与倾斜角（数学层）--");
+        var origin = new Vector2(1000f, 1000f);
+        // 目标点：从 origin 出发、方向角 α = deg、长度 len。
+        // （α 的定义就是本段要验的东西，所以下面另有一组**写死坐标**的读数判据。）
+        Vector2 At(float deg, float len)
+            => new Vector2(origin.X + len * MathF.Cos(-deg * MathF.PI / 180f),
+                           origin.Y + len * MathF.Sin(-deg * MathF.PI / 180f));
+
+        void SnapCase(string name, float target, float want, bool wantSnap,
+                      bool shift = false, bool alt = false)
+        {
+            var e = SelectionHandles.SnapEndPoint(origin, At(target, 300f), shift, alt, out bool snapped);
+            float got = SelectionHandles.InclinationDegrees(origin, e);
+            float len = Vector2.Distance(origin, e);
+            bool ok = Math.Abs(got - want) < 0.05f && snapped == wantSnap && Math.Abs(len - 300f) < 0.05f;
+            Check(name, ok, $"{target:F1}° → {got:F1}°{(snapped ? "（吸附）" : "（自由）")}"
+                          + $"，长度 {len:F1}（期望 300）"
+                          + $"，期望 {want:F1}°{(wantSnap ? "（吸附）" : "（自由）")}");
+        }
+
+        // 容差 2026-09-18 从 ±3° 收紧到 ±1°，所以"31.5° 吸到 30°"这类旧判据已经不对了：
+        // 现在要 30.5° 才吸、31.5° 必须**不吸**（用户就是要能画出 26.5°/31.5° 这种角）。
+        SnapCase("软吸附：正对 45°", 45f, 45f, true);
+        SnapCase("软吸附：容差内吸到 30°（30.5°）", 30.5f, 30f, true);
+        SnapCase("软吸附：容差边界内（30.9°）", 30.9f, 30f, true);
+        SnapCase("软吸附：容差边界外（31.1° 不吸）", 31.1f, 31.1f, false);
+        SnapCase("软吸附：旧容差下会吸、现在不吸（31.5°）", 31.5f, 31.5f, false);
+        SnapCase("软吸附：容差内吸到 0°（水平）", 0.5f, 0f, true);
+        // 0° 与 180° 是同一条线：判距离必须是**环形**的（这条以前是错的，179.5° 吸不到 0°）
+        SnapCase("软吸附：179.5° 吸到 180≡0°（环形距离）", 179.5f, 0f, true);
+        SnapCase("软吸附：容差内吸到 60°", 60.5f, 60f, true);
+        SnapCase("软吸附：容差内吸到 90°（竖直）", 89.5f, 90f, true);
+        SnapCase("软吸附：容差内吸到 120°（新增）", 120.5f, 120f, true);
+        SnapCase("软吸附：容差内吸到 135°（新增）", 135.5f, 135f, true);
+        SnapCase("软吸附：容差内吸到 150°（新增）", 150.5f, 150f, true);
+        SnapCase("软吸附：容差外保持自由（25°）", 25f, 25f, false);
+        SnapCase("软吸附：容差外保持自由（38°）", 38f, 38f, false);
+        SnapCase("Shift：15° 硬网格（37° → 30°）", 37f, 30f, true, shift: true);
+        SnapCase("Shift：吸到 60°", 58f, 60f, true, shift: true);
+        SnapCase("Shift：15° 网格照旧覆盖特殊角（92° → 90°）", 92f, 90f, true, shift: true);
+        SnapCase("Alt：完全自由（44° 不吸 45°）", 44f, 44f, false, alt: true);
+        SnapCase("Shift+Alt：Shift 优先", 37f, 30f, true, shift: true, alt: true);
+
+        // 环形距离/最短角差是这一轮新加的，单独钉两条（旋转吸附要用它把"吸到的角"
+        // 换算成"这一拖还得转多少度"）。
+        Check("环形距离：179.5° 离 0° 是 0.5°（不是 179.5°）",
+              Math.Abs(SelectionHandles.InclinationDistance(179.5f, 0f) - 0.5f) < 1e-3f,
+              $"算出 {SelectionHandles.InclinationDistance(179.5f, 0f):F3}°");
+        Check("最短角差：从 179.5° 到 0° 是 +0.5°（不是 -179.5°）",
+              Math.Abs(SelectionHandles.InclinationShortestDelta(179.5f, 0f) - 0.5f) < 1e-3f,
+              $"算出 {SelectionHandles.InclinationShortestDelta(179.5f, 0f):F3}°");
+
+        // ---- 展开角（可以超过 180°、也可以是负数）的吸附：特殊角按 180° 周期 ----
+        // 单选直线拖旋转柄读的就是这种数（用户 2026-09-18 澄清："可以无限转下去"）。
+        // 这里的判据只看"吸完落在哪个数上"——不能折回 [0,180)，否则 405 会被印成 45。
+        void ExpSnapCase(string name, float deg, float want, bool wantSnap,
+                         bool shift = false, bool alt = false)
+        {
+            float got = SelectionHandles.SnapExpandedInclinationDegrees(deg, shift, alt, out bool snapped);
+            Check(name, Math.Abs(got - want) < 0.01f && snapped == wantSnap,
+                  $"{deg:F1}° → {got:F1}°{(snapped ? "（吸附）" : "（自由）")}"
+                  + $"，期望 {want:F1}°{(wantSnap ? "（吸附）" : "（自由）")}");
+        }
+        ExpSnapCase("展开吸附：405° 就是特殊角（45° + 一整圈）", 405f, 405f, true);
+        ExpSnapCase("展开吸附：404.5° 吸到 405°（±1° 内）", 404.5f, 405f, true);
+        ExpSnapCase("展开吸附：406.5° 不吸（±1° 外）", 406.5f, 406.5f, false);
+        ExpSnapCase("展开吸附：765.4° 吸到 765°（45° + 两圈）", 765.4f, 765f, true);
+        ExpSnapCase("展开吸附：−135.4° 吸到 −135°（负方向那一圈）", -135.4f, -135f, true);
+        ExpSnapCase("展开吸附：−180.6° 吸到 −180°（0° 的负方向）", -180.6f, -180f, true);
+        ExpSnapCase("展开吸附：−355° 保持自由（45° − 400°，离特殊角 5°）", -355f, -355f, false);
+        ExpSnapCase("展开吸附：Shift 的 15° 网格也按 180° 周期（407° → 405°）", 407f, 405f, true, shift: true);
+        ExpSnapCase("展开吸附：Alt 完全自由（405.5° 不吸）", 405.5f, 405.5f, false, alt: true);
+        Check("展开角文案：405° / −135° 都是纯数字一位小数（不带 α =）",
+              SelectionHandles.FormatSignedDegrees(405f) == "405.0°"
+              && SelectionHandles.FormatSignedDegrees(-135.4f) == "-135.4°"
+              && SelectionHandles.FormatSignedDegrees(45f) == "45.0°"
+              && SelectionHandles.FormatSignedDegrees(-0.02f) == "0.0°",
+              $"405° → \"{SelectionHandles.FormatSignedDegrees(405f)}\"，"
+              + $"−135.4° → \"{SelectionHandles.FormatSignedDegrees(-135.4f)}\"，"
+              + $"−0.02° → \"{SelectionHandles.FormatSignedDegrees(-0.02f)}\"");
+
+        // α 的五条读数：**写死坐标**，不借上面的 At（否则等于自己证自己）。
+        void InclCase(string name, Vector2 a, Vector2 b, float want)
+        {
+            float got = SelectionHandles.InclinationDegrees(a, b);
+            Check(name, Math.Abs(got - want) < 0.05f, $"{got:F2}°（期望 {want:F2}°）");
+        }
+        InclCase("α：水平 = 0°", new Vector2(0, 0), new Vector2(300, 0), 0f);
+        InclCase("α：斜率 0.5 上升 = 26.57°", new Vector2(0, 0), new Vector2(200, -100), 26.565f);
+        InclCase("α：竖直 = 90°", new Vector2(0, 0), new Vector2(0, 300), 90f);
+        InclCase("α：斜率 -1 下降 = 135°", new Vector2(0, 0), new Vector2(300, 300), 135f);
+        InclCase("α：差 1° 到水平 = 179°", new Vector2(0, 0), new Vector2(-300, -5.2365f), 179f);
+        Check("α：反向量是同一条线（读数不变）",
+              Math.Abs(SelectionHandles.InclinationDegrees(new Vector2(300, 300), new Vector2(0, 0)) - 135f) < 0.05f,
+              "180° 与 0° 是同一条水平线，读数必须折在 [0,180)");
+        Check("α：文案格式", SelectionHandles.FormatInclination(30.04f) == "α = 30.0°",
+              $"30.04° → \"{SelectionHandles.FormatInclination(30.04f)}\"");
+        Check("α：水平线不会印成 -0.0（α 按定义非负）",
+              SelectionHandles.FormatInclination(
+                  SelectionHandles.InclinationDegrees(new Vector2(0, 0), new Vector2(300, 0))) == "α = 0.0°",
+              $"水平线 → \"{SelectionHandles.FormatInclination(SelectionHandles.InclinationDegrees(new Vector2(0, 0), new Vector2(300, 0)))}\"");
+
+        // ================= D. 拖端点（真机层）=================
+        Console.WriteLine("  -- D. 拖端点（快路 / 读数 / 撤销）--");
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Marquee;
+        float lx = _virtualX + 700, ly = _virtualY + 1000;
+        var line = new Stroke
+        {
+            Tool = Tool.Line, Kind = StrokeKind.Line,
+            Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+        };
+        line.AddPoint(lx, ly, 1f, 0);             // 水平：α = 0°
+        line.AddPoint(lx + 600f, ly, 1f, 0);
+        Doc.AddStroke(line);
+        Doc.SelectOnly(new[] { line });
+        SettleFrames(300);
+
+        var pA = SelectionHandles.EndpointCanvasPosition(line, 0);
+        var pB = SelectionHandles.EndpointCanvasPosition(line, 1);
+        int revBefore = line.Revision;
+        int undoBefore = Doc.UndoDepth;          // 加这条线本身也算一步，所以比"净增 1"
+
+        // 目标：绕 pB 转、长度 620、**原始**方向 30.5°（容差 ±1° 内 → 该吸到 30°）。
+        // 屏幕方向角 θ = 149.5°（左偏下）——拖的是左边那个端点，不能把它甩到右边去。
+        const float wantLen = 620f;
+        float theta = 149.5f * MathF.PI / 180f;
+        var raw = new Vector2(pB.X + wantLen * MathF.Cos(theta), pB.Y + wantLen * MathF.Sin(theta));
+
+        bool took = SelectionGestureForTest(pA.X, pA.Y);
+        Check("按在端点手柄上被接住（不是整体拖动）",
+              took && VertexDragging, $"接住={took}，VertexDragging={VertexDragging}");
+
+        SettleFrames(60);
+        int patchAtBegin = _windows[0].LastPatchCount;   // 起手那一下要重画一次（把这条从内容层摘掉）
+        UpdateSelectionGestureForTest(raw.X, raw.Y);
+        SettleFrames(90);
+
+        Check("拖动中：模型一个字没改（走的是快路）",
+              Math.Abs(line.Points[0].X - lx) < 0.01f && Math.Abs(line.Points[1].X - (lx + 600f)) < 0.01f
+              && line.Revision == revBefore,
+              $"端点 ({line.Points[0].X:F1},{line.Points[0].Y:F1})，Revision {revBefore} → {line.Revision}");
+        Check("拖动中：内容层一帧都不重画（方案 B）",
+              _windows[0].LastPatchCount == 0,
+              $"上一帧光栅化分块 {_windows[0].LastPatchCount} 块（起手那一下是 {patchAtBegin} 块）");
+        // 旧位置那一段（离固定端很远，ghost 根本没走到那儿）**不许还有墨**：
+        // 拖端点复用了"把这条从内容层摘出去"的机制，于是"拖动预览"这条路也可能顺手把它
+        // 按单位矩阵再画一遍——屏幕上就成了"旧线不动 + 新线跟着指针"两条线（2026-09-18 抓到）。
+        int staleInk = ScreenProbe.CountMagenta((int)(lx - 30f), (int)(ly - 30f), 230, 60);
+        Check("拖动中：旧位置不许还留着那条线（预览与临时几何只能画一个）",
+              staleInk == 0, $"{staleInk} 像素（这一段在临时几何之外，正确时应为 0）");
+        Check("拖动中：α 被吸到 30°（软吸附）",
+              VertexInclinationSnapped && Math.Abs(VertexInclinationDegrees - 30f) < 0.5f,
+              $"α = {VertexInclinationDegrees:F1}°，吸住={VertexInclinationSnapped}");
+
+        var anchor = VertexPreviewCanvasPoint;
+        int labelPixels = ScreenProbe.CountNear(
+            (int)(anchor.X - 70f * DpiScale), (int)(anchor.Y - 60f * DpiScale),
+            (int)(140f * DpiScale), (int)(60f * DpiScale), 0, 120, 212, 40);
+        // 两条边界一起判：太少 = 标签没画出来；太多 = 画得比胶囊还大
+        // （字号用错单位就会这样：Dpi=192 拿去当缩放倍数，字会糊满整个画面）。
+        Check("拖动中：倾斜角读数真的上屏（吸住 → 强调色胶囊）",
+              labelPixels > 1200 && labelPixels < 20000,
+              $"{labelPixels} 像素（探针窗一半面积是 {140 * DpiScale * 60 * DpiScale / 2:F0}）");
+
+        EndSelectionGestureForTest();
+        SettleFrames(250);
+
+        Check("松手后：读数标签消失（不再拖端点）", !VertexDragging, $"VertexDragging={VertexDragging}");
+        var pA2 = SelectionHandles.EndpointCanvasPosition(line, 0);
+        float len2 = Vector2.Distance(pB, pA2);
+        Check("松手后：长度保持 620（吸附只改方向、不改长短）",
+              Math.Abs(len2 - wantLen) < 2f, $"长度 {len2:F1}（期望 {wantLen:F0}）");
+        Check("松手后：倾斜角 ≈ 30°",
+              Math.Abs(SelectionHandles.InclinationDegrees(pB, pA2) - 30f) < 0.5f,
+              $"α = {SelectionHandles.InclinationDegrees(pB, pA2):F2}°");
+        Check("松手后：另一个端点没动",
+              Vector2.Distance(SelectionHandles.EndpointCanvasPosition(line, 1), pB) < 0.5f,
+              $"另一端点 {Vector2.Distance(SelectionHandles.EndpointCanvasPosition(line, 1), pB):F2}px");
+        Check("松手后：Revision 变了（几何缓存真的失效）",
+              line.Revision > revBefore, $"Revision {revBefore} → {line.Revision}");
+        Check("松手后：一次拖拽只多了**一步**撤销（净增 1）",
+              Doc.UndoDepth == undoBefore + 1,
+              $"撤销栈 {undoBefore} → {Doc.UndoDepth} 步（拖动中的预览不该进撤销栈）");
+
+        Doc.Undo();
+        SettleFrames(200);
+        Check("撤销后：端点回到原位",
+              Vector2.Distance(SelectionHandles.EndpointCanvasPosition(line, 0), pA) < 0.5f,
+              $"端点 {SelectionHandles.EndpointCanvasPosition(line, 0)} 期望 {pA}");
+
+        // ---- D2. 只点一下端点手柄（不移动）：线不许从屏幕上消失 ----
+        //
+        // 这条防的是快路的一个副作用：起手那一下这条线已经从内容层摘出去了，
+        // 一点没动的时候如果不再标一次脏，屏幕上那块就永远是"没有这条线"。
+        Doc.Clear();
+        Doc.ClearHistory();
+        var tap = new Stroke
+        {
+            Tool = Tool.Line, Kind = StrokeKind.Line,
+            Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+        };
+        tap.AddPoint(lx, ly, 1f, 0);
+        tap.AddPoint(lx + 600f, ly, 1f, 0);
+        Doc.AddStroke(tap);
+        Doc.SelectOnly(new[] { tap });
+        SettleFrames(300);
+        var tapBox = tap.PaddedBounds.Inflate(6f);
+        int inkBefore = ScreenProbe.CountMagenta((int)tapBox.MinX, (int)tapBox.MinY,
+                                                 (int)(tapBox.MaxX - tapBox.MinX),
+                                                 (int)(tapBox.MaxY - tapBox.MinY));
+        var tapA = SelectionHandles.EndpointCanvasPosition(tap, 0);
+        bool tookTap = SelectionGestureForTest(tapA.X, tapA.Y);
+        SettleFrames(120);
+        EndSelectionGestureForTest();
+        SettleFrames(250);
+        int inkAfter = ScreenProbe.CountMagenta((int)tapBox.MinX, (int)tapBox.MinY,
+                                                (int)(tapBox.MaxX - tapBox.MinX),
+                                                (int)(tapBox.MaxY - tapBox.MinY));
+        Check("点一下端点手柄（不移动）：线还在屏幕上、也没多一条撤销",
+              tookTap && !VertexDragging && inkAfter > inkBefore / 2 && Doc.UndoDepth == 1,
+              $"接住={tookTap}，墨 {inkBefore} → {inkAfter} 像素，撤销栈 {Doc.UndoDepth} 步");
+
+        // ================= E. 旋转过的直线：端点仍落在指针位置 =================
+        Console.WriteLine("  -- E. 旋转过的直线拖端点（Transform⁻¹ 那条路）--");
+        Doc.Clear();
+        Doc.ClearHistory();
+        var rot = new Stroke
+        {
+            Tool = Tool.Line, Kind = StrokeKind.Line,
+            Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+        };
+        rot.AddPoint(lx, ly, 1f, 0);
+        rot.AddPoint(lx + 600f, ly + 300f, 1f, 0);
+        var rotCenter = new Vector2(lx + 300f, ly + 150f);
+        rot.Transform = Matrix3x2.CreateRotation(-37f * MathF.PI / 180f, rotCenter);
+        Doc.AddStroke(rot);
+        Doc.SelectOnly(new[] { rot });
+        SettleFrames(300);
+
+        var eA = SelectionHandles.EndpointCanvasPosition(rot, 0);
+        var eB = SelectionHandles.EndpointCanvasPosition(rot, 1);
+        // 原始方向 17°：离最近的吸附方向（0° / 30°）都超过 1°（现在的容差），
+        // 所以预览 = 指针，判据干净。
+        float eTheta = -17f * MathF.PI / 180f;
+        var rawE = new Vector2(eB.X + 520f * MathF.Cos(eTheta), eB.Y + 520f * MathF.Sin(eTheta));
+
+        bool tookE = SelectionGestureForTest(eA.X, eA.Y);
+        UpdateSelectionGestureForTest(rawE.X, rawE.Y);
+        SettleFrames(90);
+        Check("旋转过的直线：拖动中也就地预览（模型没动）",
+              tookE && VertexDragging && Math.Abs(rot.Points[0].X - lx) < 0.01f,
+              $"接住={tookE}，模型起点 ({rot.Points[0].X:F1},{rot.Points[0].Y:F1})");
+        EndSelectionGestureForTest();
+        SettleFrames(250);
+
+        var eA2 = SelectionHandles.EndpointCanvasPosition(rot, 0);
+        Check("旋转过的直线：拖完端点落在指针位置",
+              Vector2.Distance(eA2, rawE) < 1.5f,
+              $"端点 {eA2}，指针 {rawE}，差 {Vector2.Distance(eA2, rawE):F2}px");
+        Check("旋转过的直线：另一端不动",
+              Vector2.Distance(SelectionHandles.EndpointCanvasPosition(rot, 1), eB) < 0.5f,
+              $"差 {Vector2.Distance(SelectionHandles.EndpointCanvasPosition(rot, 1), eB):F2}px");
+        Doc.Undo();
+        SettleFrames(150);
+        Check("旋转过的直线：撤销回原位",
+              Vector2.Distance(SelectionHandles.EndpointCanvasPosition(rot, 0), eA) < 0.5f,
+              $"端点 {SelectionHandles.EndpointCanvasPosition(rot, 0)} 期望 {eA}");
+
+        // ================= F. 画线过程中也显示 α（真机层）=================
+        //
+        // 用户 2026-09-18 四条之一："画直线的时候也要显示倾斜角 α"。
+        // 这条要**数屏幕像素**（不能只判状态）：标签是画在浮动层上的，
+        // 进没进每帧脏区、会不会被裁掉，只有看像素才知道。
+        Console.WriteLine("  -- F. 画线过程中的 α 读数（真机层）--");
+        Doc.Clear();
+        Doc.ClearHistory();
+        SetToolFromUi(Tool.Line);
+        float dx0 = _virtualX + 700, dy0 = _virtualY + 1200;
+        // 原始方向 45.5°（容差 ±1° 内 → 该吸到 45°）、长度 500
+        float dTheta = -45.5f * MathF.PI / 180f;
+        var dEnd = new Vector2(dx0 + 500f * MathF.Cos(dTheta), dy0 + 500f * MathF.Sin(dTheta));
+
+        // 读数标签贴在"正在拖的那一端"上方（盒子高 30 逻辑 + 一段间距）：
+        // 探针窗按它取，取小一点，别把线本身的像素算进来。
+        int ShapeLabelPixels(Vector2 anchor)
+            => ScreenProbe.CountNear((int)(anchor.X - 70f * DpiScale), (int)(anchor.Y - 60f * DpiScale),
+                                     (int)(140f * DpiScale), (int)(60f * DpiScale), 0, 120, 212, 40);
+
+        SendMouse((int)dx0, (int)dy0, 0);                             SettleFrames(60);
+        SendMouse((int)dx0, (int)dy0, Native.MOUSEEVENTF_LEFTDOWN);   SettleFrames(60);
+        SendMouse((int)dEnd.X, (int)dEnd.Y, 0);                       SettleFrames(200);
+
+        Check("画线中：引擎报出「正在画有倾斜角的图形」并给了 α",
+              ShapeInclinationActive && ShapeInclinationSnapped
+              && Math.Abs(ShapeInclinationDegrees - 45f) < 0.5f,
+              $"active={ShapeInclinationActive}，α = {ShapeInclinationDegrees:F1}°，吸住={ShapeInclinationSnapped}");
+        int drawPixels = ShapeLabelPixels(ShapeInclinationAnchor);
+        Check("画线中：α 读数真的上了屏（吸住 → 强调色胶囊）",
+              drawPixels > 1200 && drawPixels < 20000,
+              $"{drawPixels} 像素（探针窗一半面积是 {140 * DpiScale * 60 * DpiScale / 2:F0}）");
+
+        // 再拖到 26.5°（离特殊角都超过 1° → 自由态）：读数该跟着变、胶囊该变回白底
+        var dFree = new Vector2(dx0 + 500f * MathF.Cos(-26.565f * MathF.PI / 180f),
+                                dy0 + 500f * MathF.Sin(-26.565f * MathF.PI / 180f));
+        SendMouse((int)dFree.X, (int)dFree.Y, 0);                     SettleFrames(200);
+        Check("画线中：拖到 26.5° 就是 26.5°（不再被吸到 30°）",
+              !ShapeInclinationSnapped && Math.Abs(ShapeInclinationDegrees - 26.565f) < 0.5f,
+              $"α = {ShapeInclinationDegrees:F2}°，吸住={ShapeInclinationSnapped}");
+        int freeLabelPixels = ShapeLabelPixels(ShapeInclinationAnchor);
+        Check("画线中：没吸住时胶囊是白底（强调色像素变少）",
+              freeLabelPixels < drawPixels / 2, $"{drawPixels} → {freeLabelPixels} 像素");
+
+        SendMouse((int)dFree.X, (int)dFree.Y, Native.MOUSEEVENTF_LEFTUP); SettleFrames(250);
+        Check("松手后：画线读数消失、也没留下杂物（那条线还在）",
+              !ShapeInclinationActive && ShapeLabelPixels(ShapeInclinationAnchor) < 800,
+              $"active={ShapeInclinationActive}，探针里强调色 {ShapeLabelPixels(ShapeInclinationAnchor)} 像素");
+
+        // ================= G. 单选直线拖旋转柄：读数是 α（不是 Δ）=================
+        //
+        // 用户 2026-09-18 的原话："那个旋转手柄使用直线水平为 0° 为依据，如果是这个直线初始
+        // 是倾斜的，那它就要有对应的角度。按照高中数学，在 0~180° 里面，然后在这个度数上
+        // 接着开始旋转。" —— 所以要判两件事：读数**接着它原有的 α** 变，并且**不是** Δ。
+        Console.WriteLine("  -- G. 单选直线旋转读 α / 其它对象读 Δ（真机层）--");
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Marquee;
+        // 一条初始就倾斜的直线：α = atan2(218, 600) ≈ 19.96°
+        var spinLine = new Stroke
+        {
+            Tool = Tool.Line, Kind = StrokeKind.Line,
+            Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+        };
+        spinLine.AddPoint(lx, ly, 1f, 0);
+        spinLine.AddPoint(lx + 600f, ly - 218f, 1f, 0);
+        Doc.AddStroke(spinLine);
+        Doc.SelectOnly(new[] { spinLine });
+        SettleFrames(300);
+        float a0 = SelectionHandles.InclinationDegrees(
+            SelectionHandles.EndpointCanvasPosition(spinLine, 0),
+            SelectionHandles.EndpointCanvasPosition(spinLine, 1));
+
+        // 绕选区中心把旋转柄的指针**屏幕逆时针**拖若干步（每一步都是"从这个位置直接到那个位置"，
+        // 所以累积角是精确的步进和；分步是为了能走出"一整圈"这种大角度）。
+        void SpinSteps(float[] ccwSteps, out bool took)
+        {
+            var f = SelectionHandles.FrameOf(Doc.Selected);
+            var pv = new Vector2((f.CanvasAabb.MinX + f.CanvasAabb.MaxX) * 0.5f,
+                                 (f.CanvasAabb.MinY + f.CanvasAabb.MaxY) * 0.5f);
+            var grip = SelectionHandles.CanvasPosition(SelHandle.Rotate, f, DpiScale);
+            float arm = Vector2.Distance(grip, pv);
+            float a = MathF.Atan2(grip.Y - pv.Y, grip.X - pv.X);
+            took = SelectionGestureForTest(grip.X, grip.Y);
+            float travel = 0f;
+            foreach (float step in ccwSteps)
+            {
+                // 传进来的是**增量**：一路加着走，才能真的"转了一整圈"。
+                travel += step;
+                // 屏幕坐标里 y 朝下：角度**减小**才是视觉上的逆时针（和 --rotatetest 的 Spin 同一套）
+                float rad = a - travel * MathF.PI / 180f;
+                UpdateSelectionGestureForTest(pv.X + arm * MathF.Cos(rad), pv.Y + arm * MathF.Sin(rad));
+                SettleFrames(70);
+            }
+        }
+
+        void GrabRotate(float ccwDeg, out bool took) => SpinSteps(new[] { ccwDeg }, out took);
+
+        GrabRotate(24.5f, out bool tookSpin);
+        Check("单选直线：旋转中标记为「读 α₀+Δ」而不是 Δ",
+              tookSpin && SelRotating && SelRotationReadsInclination,
+              $"接住={tookSpin}，SelRotating={SelRotating}，读数走 α₀+Δ={SelRotationReadsInclination}");
+        Check("单选直线：读数 = 这条线按下时的 α 接着转（19.96° + 24.5° → 吸到 45°）",
+              Math.Abs(SelRotationInclination - 45f) < 0.1f,
+              $"读数 {SelRotationInclination:F2}°（按下时 α={a0:F2}°），Δ 是 {SelRotationDegrees:F2}°");
+        Check("单选直线：读数 = 它原有的 α 接着变（≈ 按下时 α + 转过的角），而且不是 Δ",
+              Math.Abs(SelRotationInclination - (a0 + SelRotationDegrees)) < 0.2f
+              && Math.Abs(SelRotationInclination - SelRotationDegrees) > a0 - 5f,
+              $"按下时 α={a0:F2}°，Δ={SelRotationDegrees:F2}° → 读数 {SelRotationInclination:F2}°"
+              + $"（要是读 Δ 就该是 {SelRotationDegrees:F2}°）");
+        Check("单选直线：吸到特殊角（45°）", SelRotationSnapped, $"吸住={SelRotationSnapped}");
+
+        // 屏幕上真的画了那颗胶囊（文案是 α 那一句，宽度和 Δ 那句不同）
+        {
+            var f = SelectionHandles.FrameOf(Doc.Selected);
+            var grip = SelectionHandles.CanvasPosition(SelHandle.Rotate, f, DpiScale);
+            int rotLabel = ScreenProbe.CountNear((int)(grip.X - 80f * DpiScale), (int)(grip.Y - 90f * DpiScale),
+                                                 (int)(160f * DpiScale), (int)(80f * DpiScale), 0, 120, 212, 40);
+            Check("单选直线：旋转标签真的上屏（吸住 → 强调色胶囊）",
+                  rotLabel > 1200 && rotLabel < 20000, $"{rotLabel} 像素");
+        }
+        EndSelectionGestureForTest();
+        SettleFrames(200);
+        Check("松手：这次旋转提交成一步撤销，且直线真的转到 45° 附近",
+              Doc.UndoDepth == 2 && Math.Abs(SelectionHandles.InclinationDegrees(
+                  SelectionHandles.EndpointCanvasPosition(spinLine, 0),
+                  SelectionHandles.EndpointCanvasPosition(spinLine, 1)) - 45f) < 0.5f,
+              $"撤销栈 {Doc.UndoDepth} 步（1=加线 2=旋转），"
+              + $"线现在是 {SelectionHandles.InclinationDegrees(SelectionHandles.EndpointCanvasPosition(spinLine, 0), SelectionHandles.EndpointCanvasPosition(spinLine, 1)):F2}°");
+        Doc.Undo();
+        SettleFrames(150);
+
+        // ---- 「可以无限转下去」那一组（用户 2026-09-18 澄清）----
+        //
+        // 从一条 α₀ = 45° 的线起手：
+        //   · 逆时针转一整圈 → 读数 405.0°（不是折回 45°）；
+        //   · 顺时针转 400°  → 读数 −355.0°。
+        // 中间还插一条"读数变化量 = 视觉转角"的核对（读数 135° 时线本身也真的在 135°，
+        // 说明吸完的角同时用在矩阵和标签上）。
+        float LineInclination(Stroke s2) => SelectionHandles.InclinationDegrees(
+            SelectionHandles.EndpointCanvasPosition(s2, 0),
+            SelectionHandles.EndpointCanvasPosition(s2, 1));
+
+        // 拖动中"这条线现在是什么姿态"要问**合成后**的矩阵：方案 B 里模型到松手才动，
+        // 实时姿态活在预览矩阵里（和 --rotatetest 的 Live() 同一个式子）。
+        float LiveInclination(Stroke s2)
+        {
+            var m = DragPreviewActive ? s2.Transform * DragPreviewMatrix : s2.Transform;
+            var a = Vector2.Transform(new Vector2(s2.Points[0].X, s2.Points[0].Y), m);
+            var b = Vector2.Transform(new Vector2(s2.Points[^1].X, s2.Points[^1].Y), m);
+            return SelectionHandles.InclinationDegrees(a, b);
+        }
+
+        Stroke MakeFortyFiveLine()
+        {
+            var s2 = new Stroke
+            {
+                Tool = Tool.Line, Kind = StrokeKind.Line,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            s2.AddPoint(lx, ly, 1f, 0);
+            s2.AddPoint(lx + 520f, ly - 520f, 1f, 0);     // α = 45°
+            return s2;
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        var fullTurn = MakeFortyFiveLine();
+        Doc.AddStroke(fullTurn);
+        Doc.SelectOnly(new[] { fullTurn });
+        SettleFrames(300);
+        Check("无上限组：起手这条线是 45°", Math.Abs(LineInclination(fullTurn) - 45f) < 0.01f,
+              $"α₀ = {LineInclination(fullTurn):F2}°");
+
+        var fTurn = SelectionHandles.FrameOf(Doc.Selected);
+        var pvTurn = new Vector2((fTurn.CanvasAabb.MinX + fTurn.CanvasAabb.MaxX) * 0.5f,
+                                 (fTurn.CanvasAabb.MinY + fTurn.CanvasAabb.MaxY) * 0.5f);
+        var gripTurn = SelectionHandles.CanvasPosition(SelHandle.Rotate, fTurn, DpiScale);
+        float armTurn = Vector2.Distance(gripTurn, pvTurn);
+        float aTurn0 = MathF.Atan2(gripTurn.Y - pvTurn.Y, gripTurn.X - pvTurn.X);
+        bool tookTurn = SelectionGestureForTest(gripTurn.X, gripTurn.Y);
+        float travelTurn = 0f;
+        void TurnStep(float ccw)
+        {
+            travelTurn += ccw;               // 正数 = 屏幕逆时针（rad = a0 − 转过的角）
+            float rad = aTurn0 - travelTurn * MathF.PI / 180f;
+            UpdateSelectionGestureForTest(pvTurn.X + armTurn * MathF.Cos(rad),
+                                          pvTurn.Y + armTurn * MathF.Sin(rad));
+            SettleFrames(70);
+        }
+
+        TurnStep(90f);
+        Check("无上限组：逆时针 90° → 读数 45+90 = 135.0°（读数变化量 = 视觉转角）",
+              tookTurn && Math.Abs(SelRotationInclination - 135f) < 0.5f
+              && Math.Abs(LiveInclination(fullTurn) - 135f) < 0.5f,
+              $"读数 {SelRotationInclination:F2}°，线的实时姿态 {LiveInclination(fullTurn):F2}°"
+              + $"（模型此刻还没动，仍是 {LineInclination(fullTurn):F2}°）");
+        TurnStep(90f);
+        TurnStep(90f);
+        TurnStep(90f);
+        Check("无上限组：再转三步共**一整圈** → 读数 405.0°（不是 45.0°）",
+              Math.Abs(SelRotationInclination - 405f) < 0.5f,
+              $"读数 {SelRotationInclination:F2}°（折回的话会是 {SelRotationInclination - 360f:F2}° 那种小数字）");
+        Check("无上限组：转到 405° 时仍然吸得住特殊角（180° 周期）",
+              SelRotationSnapped, $"吸住={SelRotationSnapped}，读数 {SelRotationInclination:F2}°");
+        EndSelectionGestureForTest();
+        SettleFrames(200);
+        Check("无上限组：松手后线真的转了一整圈（视觉上回到 45°）",
+              Math.Abs(LineInclination(fullTurn) - 45f) < 0.5f,
+              $"线现在 {LineInclination(fullTurn):F2}°");
+        Doc.Undo();
+        SettleFrames(150);
+
+        // 顺时针转 400°：读数 −355.0°（负方向同样无下限）
+        Doc.Clear();
+        Doc.ClearHistory();
+        var negTurn = MakeFortyFiveLine();
+        Doc.AddStroke(negTurn);
+        Doc.SelectOnly(new[] { negTurn });
+        SettleFrames(300);
+        var fNeg = SelectionHandles.FrameOf(Doc.Selected);
+        var pvNeg = new Vector2((fNeg.CanvasAabb.MinX + fNeg.CanvasAabb.MaxX) * 0.5f,
+                                (fNeg.CanvasAabb.MinY + fNeg.CanvasAabb.MaxY) * 0.5f);
+        var gripNeg = SelectionHandles.CanvasPosition(SelHandle.Rotate, fNeg, DpiScale);
+        float armNeg = Vector2.Distance(gripNeg, pvNeg);
+        float aNeg0 = MathF.Atan2(gripNeg.Y - pvNeg.Y, gripNeg.X - pvNeg.X);
+        float travelNeg = 0f;
+        void NegStep(float cw)
+        {
+            travelNeg += cw;                 // 顺时针量：屏幕上的方向角**增大**
+            float rad = aNeg0 + travelNeg * MathF.PI / 180f;
+            UpdateSelectionGestureForTest(pvNeg.X + armNeg * MathF.Cos(rad),
+                                          pvNeg.Y + armNeg * MathF.Sin(rad));
+            SettleFrames(70);
+        }
+        bool tookNeg = SelectionGestureForTest(gripNeg.X, gripNeg.Y);   // 先按下旋转柄
+        for (int i = 0; i < 4; i++) NegStep(90f);      // 顺时针 360°
+        NegStep(40f);                                   // 再 40° → 共 400°
+        Check("无上限组：顺时针转 400° → 读数 −355.0°（负方向也没有下限）",
+              tookNeg && Math.Abs(SelRotationInclination + 355f) < 0.5f,
+              $"接住={tookNeg}，读数 {SelRotationInclination:F2}°（期望 −355.0°）");
+        EndSelectionGestureForTest();
+        SettleFrames(200);
+        Doc.Undo();
+        SettleFrames(150);
+
+        // —— 其它对象（矩形）：读数仍然是 Δ，吸附仍然是 90° 那一档 ——
+        Doc.Clear();
+        Doc.ClearHistory();
+        var spinRect = new Stroke
+        {
+            Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+            Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+        };
+        spinRect.AddPoint(lx, ly, 1f, 0);
+        spinRect.AddPoint(lx + 600f, ly - 400f, 1f, 0);
+        Doc.AddStroke(spinRect);
+        Doc.SelectOnly(new[] { spinRect });
+        SettleFrames(300);
+        GrabRotate(24.5f, out bool tookRect);
+        Check("矩形：旋转读数仍然是 Δ（不读 α）",
+              tookRect && SelRotating && !SelRotationReadsInclination
+              && Math.Abs(SelRotationDegrees - 24.5f) < 1.5f,
+              $"接住={tookRect}，读α={SelRotationReadsInclination}，读数 {SelRotationDegrees:F2}°（期望 ≈24.5）");
+        Check("矩形：24.5° 不吸（软吸附仍是 90° 那一档，保持现在的行为）",
+              !SelRotationSnapped, $"吸住={SelRotationSnapped}");
+        // 多选（两条线）：也应该退回 Δ（"单选直线"才读 α）
+        EndSelectionGestureForTest();
+        SettleFrames(150);
+        Doc.Clear();
+        Doc.ClearHistory();
+        var m1 = new Stroke { Tool = Tool.Line, Kind = StrokeKind.Line,
+                              Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale };
+        m1.AddPoint(lx, ly, 1f, 0);
+        m1.AddPoint(lx + 600f, ly - 218f, 1f, 0);
+        var m2 = new Stroke { Tool = Tool.Line, Kind = StrokeKind.Line,
+                              Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale };
+        m2.AddPoint(lx, ly + 300f, 1f, 0);
+        m2.AddPoint(lx + 600f, ly + 82f, 1f, 0);
+        Doc.AddStroke(m1);
+        Doc.AddStroke(m2);
+        Doc.SelectOnly(new[] { m1, m2 });
+        SettleFrames(300);
+        GrabRotate(24.5f, out bool tookMulti);
+        Check("多选两条直线：旋转读数也退回 Δ（只有单选直线才读 α）",
+              tookMulti && SelRotating && !SelRotationReadsInclination
+              && Math.Abs(SelRotationDegrees - 24.5f) < 1.5f,
+              $"接住={tookMulti}，读α={SelRotationReadsInclination}，读数 {SelRotationDegrees:F2}°");
+        EndSelectionGestureForTest();
+        SettleFrames(150);
+
+        // ================= H. 直线/箭头的选中框：紧框（端点口径）=================
+        //
+        // 旧口径 `TransformRect(InkBounds, Transform)` = "先取局部 AABB、整体转过去、
+        // 再取外接矩形"。直线的局部 AABB 四个角**根本不在线上**，所以一转就虚胖
+        // （2026-09-18 实测：转过 31.5° 的直线框 962×838，线自己只有 490×837）。
+        // 新口径 = 端点（箭头还要加两个翅膀尖）过变换后取外接，再外扩半笔宽。
+        //
+        // 这里的"旧口径"是**自检自己现算一遍**的（不调被测实现）——判据才有意义。
+        Console.WriteLine("  -- H. 直线/箭头选中框：紧框（端点口径）--");
+        {
+            RectF CornersBox(in RectF r, in Matrix3x2 m)
+            {
+                var box = RectF.Empty;
+                foreach (var c in new[]
+                {
+                    new Vector2(r.MinX, r.MinY), new Vector2(r.MaxX, r.MinY),
+                    new Vector2(r.MaxX, r.MaxY), new Vector2(r.MinX, r.MaxY),
+                })
+                {
+                    var q = Vector2.Transform(c, m);
+                    box.Add(q.X, q.Y);
+                }
+                return box;
+            }
+            RectF LocalInkBox(Stroke s2)
+            {
+                var r = RectF.Empty;
+                float hw = s2.Width * 0.5f;
+                foreach (var p in s2.Points) { r.Add(p.X - hw, p.Y - hw); r.Add(p.X + hw, p.Y + hw); }
+                return r;
+            }
+            string Size(in RectF r) => $"{r.MaxX - r.MinX:F0}×{r.MaxY - r.MinY:F0}";
+            bool Same(in RectF a, in RectF b, float tol = 0.01f)
+                => MathF.Abs(a.MinX - b.MinX) < tol && MathF.Abs(a.MinY - b.MinY) < tol
+                && MathF.Abs(a.MaxX - b.MaxX) < tol && MathF.Abs(a.MaxY - b.MaxY) < tol;
+
+            // ---- 一条 **45° 斜线**，四个姿态：0°（没转过）/ 30° / 60° / 90° ----
+            //
+            // 为什么用斜线而不是水平线：虚胖的幅度取决于"局部 AABB 的长短边之比 + 转了多大"。
+            // 一条水平长线（900×16）转 30° 时旧口径只胖 6 像素——判据会"看着过了但其实没验到"。
+            // 斜线的局部框是 608×608，一转就是 830×830 这种，虚胖一眼可见。
+            // 注：**不可能**要求四个姿态"都比旧口径小一大截"——90° 这种角度旧口径本来就接近
+            // （正方形框转 90° 还是它自己），所以硬判据是"≈ 按定义现算的端点外接"，
+            // 旧口径的值打印出来作对照，另有一条专门判"明显小"（45° 斜线转 30° 那一档）。
+            var slant = new Func<Stroke>(() =>
+            {
+                var s2 = new Stroke
+                {
+                    Tool = Tool.Line, Kind = StrokeKind.Line,
+                    Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+                };
+                s2.AddPoint(lx, ly, 1f, 0);
+                s2.AddPoint(lx + 600f, ly - 600f, 1f, 0);      // 45° 斜线
+                return s2;
+            });
+            foreach (float deg in new[] { 0f, 30f, 60f, 90f })
+            {
+                var s2 = slant();
+                if (deg != 0f)
+                    s2.Transform = SelectionHandles.RotateMatrix(deg, new Vector2(lx + 300f, ly - 300f));
+
+                var oldBox = CornersBox(LocalInkBox(s2), s2.Transform);   // 旧口径（自检自己算）
+                var got = s2.WorldInkBounds;
+                var e0 = SelectionHandles.EndpointCanvasPosition(s2, 0);
+                var e1 = SelectionHandles.EndpointCanvasPosition(s2, 1);
+                var want = RectF.Empty;
+                want.Add(e0.X, e0.Y);
+                want.Add(e1.X, e1.Y);
+                want = want.Inflate(s2.Width * 0.5f);
+
+                if (deg == 0f)
+                {
+                    // 没转过：新口径与旧口径**一字不差**（这条是"不改坏"的保险）
+                    Check("没转过的直线：框值与旧口径一字不差", Same(got, oldBox),
+                          $"新 {Size(got)} / 旧 {Size(oldBox)}");
+                }
+                else
+                {
+                    Check($"转 {deg:F0}° 的斜线：框 ≈ 端点外接 + 半笔宽（≤1 像素）",
+                          Same(got, want, 1f),
+                          $"框 {Size(got)}，按定义现算 {Size(want)}"
+                          + $"（旧口径 {Size(oldBox)} 作对照）");
+                }
+            }
+            {
+                // 专门判"明显小"：45° 斜线转 30° —— 旧口径约 830×830，新口径约 230×830
+                var s2 = slant();
+                s2.Transform = SelectionHandles.RotateMatrix(30f, new Vector2(lx + 300f, ly - 300f));
+                var oldBox = CornersBox(LocalInkBox(s2), s2.Transform);
+                var got = s2.WorldInkBounds;
+                Check("转 30° 的斜线：框比旧口径小了 500 像素以上（虚胖被去掉）",
+                      (got.MaxX - got.MinX) < (oldBox.MaxX - oldBox.MinX) - 500f,
+                      $"新 {Size(got)} ／ 旧 {Size(oldBox)}");
+            }
+
+            // ---- 上一轮那个现场那组数（同一条线、同一个角）----
+            {
+                var s2 = new Stroke
+                {
+                    Tool = Tool.Line, Kind = StrokeKind.Line,
+                    Color = new Color4(0.11f, 0.12f, 0.15f, 1f), Width = 6f,
+                };
+                s2.AddPoint(1020f, 1120f, 1f, 0);
+                s2.AddPoint(1860f, 680f, 1f, 0);
+                var center2 = new Vector2(1440f, 900f);
+                s2.Transform = SelectionHandles.RotateMatrix(31.5f, center2);   // → α ≈ 59.15°
+                var oldBox = CornersBox(LocalInkBox(s2), s2.Transform);
+                var got = s2.WorldInkBounds;
+                var e0 = SelectionHandles.EndpointCanvasPosition(s2, 0);
+                var e1 = SelectionHandles.EndpointCanvasPosition(s2, 1);
+                var want = RectF.Empty;
+                want.Add(e0.X, e0.Y);
+                want.Add(e1.X, e1.Y);
+                want = want.Inflate(s2.Width * 0.5f);
+                Check("上一轮那个现场（转 31.5° 的直线）：框从 962×838 收到 ≈ 490×838",
+                      Same(got, want, 1f) && (got.MaxX - got.MinX) < 550f,
+                      $"新 {Size(got)} ／ 旧 {Size(oldBox)}（上一轮实测：962×838 vs 线自己 490×837）");
+                // 导出 / 剪贴板给外部那张图的裁切范围就是 PaddedBounds —— 它跟着这条口径一起收紧
+                var pb = s2.PaddedBounds;
+                var pbOld = CornersBox(LocalInkBox(s2), s2.Transform).Inflate(s2.Width * 0.5f + 2f);
+                Check("导出/剪贴板的裁切范围（PaddedBounds）也跟着收紧",
+                      (pb.MaxX - pb.MinX) < 550f,
+                      $"新 {Size(pb)} ／ 旧 {Size(pbOld)}");
+            }
+
+            // ---- 箭头：框必须包住头部的两个翅膀尖（它们不在两端之间）----
+            {
+                var ar = new Stroke
+                {
+                    Tool = Tool.Arrow, Kind = StrokeKind.Arrow,
+                    Color = new Color4(1f, 0f, 1f, 1f), Width = 6f * DpiScale,
+                };
+                ar.AddPoint(lx, ly, 1f, 0);
+                ar.AddPoint(lx + 900f, ly, 1f, 0);
+                ar.Transform = SelectionHandles.RotateMatrix(45f, new Vector2(lx + 450f, ly));
+                var ea = SelectionHandles.EndpointCanvasPosition(ar, 0);
+                var eb = SelectionHandles.EndpointCanvasPosition(ar, 1);
+                // 头部几何按"渲染那一份的公式"独立复算：head = clamp(len*0.28,10,48)、spread = head*0.45
+                float dx = eb.X - ea.X, dy = eb.Y - ea.Y;
+                float len = MathF.Sqrt(dx * dx + dy * dy);
+                dx /= len; dy /= len;
+                float head = Math.Clamp(len * 0.28f, 10f, 48f);
+                var root = new Vector2(eb.X - dx * head, eb.Y - dy * head);
+                var nrm = new Vector2(-dy, dx);
+                float spread = head * 0.45f;
+                var want = RectF.Empty;
+                foreach (var p in new[] { ea, eb, root + nrm * spread, root - nrm * spread })
+                    want.Add(p.X, p.Y);
+                want = want.Inflate(ar.Width * 0.5f);
+                var got = ar.WorldInkBounds;
+                Check("转 45° 的箭头：框包住两端点 + 两个翅膀尖（≤1 像素）",
+                      Same(got, want, 1f), $"框 {Size(got)}，含翅膀现算 {Size(want)}");
+            }
+
+            // ---- 不变的：矩形 / 椭圆 / 图像（各转 30°）----
+            foreach (var (tool, kind, tag) in new[]
+            {
+                (Tool.Rectangle, StrokeKind.Rectangle, "矩形"),
+                (Tool.Ellipse, StrokeKind.Ellipse, "椭圆"),
+            })
+            {
+                var s2 = new Stroke
+                {
+                    Tool = tool, Kind = kind,
+                    Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+                };
+                s2.AddPoint(lx, ly, 1f, 0);
+                s2.AddPoint(lx + 600f, ly - 400f, 1f, 0);
+                s2.Transform = SelectionHandles.RotateMatrix(30f, new Vector2(lx + 300f, ly - 200f));
+                var oldBox = CornersBox(LocalInkBox(s2), s2.Transform);
+                Check($"{tag}（转过 30°）：框值与旧口径一字不差",
+                      Same(s2.WorldInkBounds, oldBox),
+                      $"新 {Size(s2.WorldInkBounds)} / 旧 {Size(oldBox)}");
+            }
+            var img = Doc.AddImage(MakeTestImage(400, 300), lx, ly, 1f / DpiScale);
+            img.Transform = SelectionHandles.RotateMatrix(30f,
+                new Vector2(lx + 200f, ly + 150f));
+            var imgOld = CornersBox(LocalInkBox(img), img.Transform);
+            Check("图像（转过 30°）：框值与旧口径一字不差",
+                  Same(img.WorldInkBounds, imgOld),
+                  $"新 {Size(img.WorldInkBounds)} / 旧 {Size(imgOld)}");
+            Doc.RemoveStroke(img);
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(fail == 0
+            ? $"  PASS: 图形工具（画图入口 / 吸附 / 端点编辑）都正确（{pass} 项）"
+            : $"  FAIL: {fail} 项不对（{pass} 项通过）");
+        Doc.Clear();
+        Doc.ClearHistory();
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 图形工具摆样出图（离屏，锁屏 / 远程也能出）。
+    ///
+    ///   · `--shapetoolshow &lt;图&gt;`：**选中一条直线**——两个端点手柄 + 旋转柄；
+    ///   · `--shapetoolshow &lt;图&gt; --drag`：**拖端点中**——临时几何 + 倾斜角读数 α；
+    ///   · `--shapetoolshow &lt;图&gt; --draw`：**正在画一条直线**——实时几何 + α 读数
+    ///     （2026-09-18 用户要的"画线时也要显示 α"）；
+    ///   · `--shapetoolshow &lt;图&gt; --rotate`：**旋转拖动中**——给用户核对
+    ///     "转的时候那个框看着不对劲"（2026-09-18 的第三条）；
+    ///   · `--shapetoolshow &lt;图&gt; --rotated`：**已经转过 60° 的线**、静止选中
+    ///     （紧框改口径前后的对照：旧口径下这张同样是虚胖的）。
+    ///
+    /// 为什么这几张必须出图而不是靠自检：手柄的样子、标签的位置与排版**只能看**，
+    /// 几何全对也一样难看（这是仓库里"出图"这一组的由来）。
+    /// </summary>
+    private void ShapeToolShowcase(string path, bool drag, bool drawing, bool rotate, bool rotated)
+    {
+        BoardOn = true;                       // 白底：手柄压在桌面上看不清
+        SetUiFactory(() => new InkUi.FullUi());   // 浮层配色/投影由界面推上来
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+
+        float cx = _virtualX + _virtualW * 0.5f, cy = _virtualY + _virtualH * 0.5f;
+
+        // ---- 一条"已经转过 60°"的直线、静止选中（紧框改口径的第二个现场）----
+        if (rotated)
+        {
+            var rl = new Stroke
+            {
+                Tool = Tool.Line, Kind = StrokeKind.Line,
+                Color = new Color4(0.11f, 0.12f, 0.15f, 1f), Width = 6f * DpiScale,
+            };
+            // 和另外几张**同一条线**（α₀ ≈ 27.65°），绕它自己的中点视觉逆时针转 32.35°
+            // → 转完 α ≈ 60°，正是 --rotate 松手之后那个状态。
+            rl.AddPoint(cx - 420f, cy + 220f, 1f, 0);
+            rl.AddPoint(cx + 420f, cy - 220f, 1f, 0);
+            rl.Transform = SelectionHandles.RotateMatrix(32.35f, new Vector2(cx, cy));
+            Doc.AddStroke(rl);
+            Doc.SelectOnly(new[] { rl });
+            Tool = Tool.Marquee;
+            Doc.InvalidateAll();
+            SettleFrames(700);
+
+            var fr = SelectionHandles.FrameOf(Doc.Selected);
+            var aabbR = fr.CanvasAabb;
+            var barR = SelectionHandles.BarRect(aabbR, DpiScale, ViewportCanvas);
+            var gripR = SelectionHandles.CanvasPosition(SelHandle.Rotate, fr, DpiScale);
+            var regionR = aabbR;
+            regionR.Add(barR);
+            regionR.Add(gripR.X - 40f * DpiScale, gripR.Y - 40f * DpiScale);
+            regionR.Add(gripR.X + 40f * DpiScale, gripR.Y + 40f * DpiScale);
+            Console.WriteLine($"转过 60° 的线、静止选中：框 {aabbR.MaxX - aabbR.MinX:F0}×{aabbR.MaxY - aabbR.MinY:F0}"
+                            + $"，线自己的墨迹 {rl.WorldInkBounds.MaxX - rl.WorldInkBounds.MinX:F0}"
+                            + $"×{rl.WorldInkBounds.MaxY - rl.WorldInkBounds.MinY:F0}"
+                            + $"，PaddedBounds {rl.PaddedBounds.MaxX - rl.PaddedBounds.MinX:F0}"
+                            + $"×{rl.PaddedBounds.MaxY - rl.PaddedBounds.MinY:F0}");
+            if (!OffscreenFloatingShot(path, regionR.Inflate(30f))) Console.WriteLine("出图失败");
+            _quit = true;
+            return;
+        }
+
+        // ---- 旋转拖动中：真按真转（用户要看的就是这一帧）----
+        if (rotate)
+        {
+            var spinLine = new Stroke
+            {
+                Tool = Tool.Line, Kind = StrokeKind.Line,
+                Color = new Color4(0.11f, 0.12f, 0.15f, 1f), Width = 6f * DpiScale,
+            };
+            // 和"静止选中"那张**同一条线**（α ≈ 27.65°），三张图才好对比
+            spinLine.AddPoint(cx - 420f, cy + 220f, 1f, 0);
+            spinLine.AddPoint(cx + 420f, cy - 220f, 1f, 0);
+            Doc.AddStroke(spinLine);
+            Doc.SelectOnly(new[] { spinLine });
+            Tool = Tool.Marquee;
+            Doc.InvalidateAll();
+            SettleFrames(700);
+
+            var f0 = SelectionHandles.FrameOf(Doc.Selected);
+            var pv = new Vector2((f0.CanvasAabb.MinX + f0.CanvasAabb.MaxX) * 0.5f,
+                                 (f0.CanvasAabb.MinY + f0.CanvasAabb.MaxY) * 0.5f);
+            var grip = SelectionHandles.CanvasPosition(SelHandle.Rotate, f0, DpiScale);
+            float arm = Vector2.Distance(grip, pv);
+            float a0 = MathF.Atan2(grip.Y - pv.Y, grip.X - pv.X);
+
+            SendMouse((int)grip.X, (int)grip.Y, 0);                          SettleFrames(60);
+            SendMouse((int)grip.X, (int)grip.Y, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+            // 逆时针 31.5°：这条线 α₀ ≈ 27.65° → 59.15°（±1° 内）→ 吸到 60°，读数好看也吸住了
+            const float Turn = 31.5f;
+            var last = grip;
+            for (int i = 1; i <= 4; i++)
+            {
+                float rad = a0 - Turn * i / 4f * MathF.PI / 180f;
+                last = new Vector2(pv.X + arm * MathF.Cos(rad), pv.Y + arm * MathF.Sin(rad));
+                SendMouse((int)last.X, (int)last.Y, 0);
+                SettleFrames(40);
+            }
+            SettleFrames(200);
+
+            // 范围：**实时框**（旋转中框按预览几何算，见 LiveSelectionFrame）∪ 旋转柄 ∪ 读数标签
+            var live = LiveSelectionFrame;
+            var aabb = live.CanvasAabb;
+            var gripNow = SelectionHandles.CanvasPosition(SelHandle.Rotate, live, DpiScale);
+            var region = aabb;
+            region.Add(gripNow.X - 60f * DpiScale, gripNow.Y - 60f * DpiScale);
+            region.Add(gripNow.X + 60f * DpiScale, gripNow.Y + 60f * DpiScale);
+            region.Add(gripNow.X - 90f * DpiScale, gripNow.Y - 90f * DpiScale);
+            region.Add(gripNow.X + 90f * DpiScale, gripNow.Y);
+            // 顺带量一个"线**真实**占多大"（把两个端点过实时矩阵再外扩半笔宽）——
+            // 用来和上面那个框比：相等就是贴合，明显小就是框虚胖（只打印，不改行为）。
+            var liveM = spinLine.Transform * DragPreviewMatrix;
+            var t0 = Vector2.Transform(new Vector2(spinLine.Points[0].X, spinLine.Points[0].Y), liveM);
+            var t1 = Vector2.Transform(new Vector2(spinLine.Points[^1].X, spinLine.Points[^1].Y), liveM);
+            var tight = RectF.Empty;
+            tight.Add(t0.X, t0.Y);
+            tight.Add(t1.X, t1.Y);
+            tight = tight.Inflate(spinLine.Width * 0.5f + 2f);
+            Console.WriteLine($"旋转中：读数 {SelRotationInclination:F1}°（吸住={SelRotationSnapped}），"
+                            + $"实时框 {aabb.MaxX - aabb.MinX:F0}×{aabb.MaxY - aabb.MinY:F0}"
+                            + $" ({(int)aabb.MinX},{(int)aabb.MinY})-({(int)aabb.MaxX},{(int)aabb.MaxY})，"
+                            + $"线自己真实占 {tight.MaxX - tight.MinX:F0}×{tight.MaxY - tight.MinY:F0}"
+                            + $" ({(int)tight.MinX},{(int)tight.MinY})-({(int)tight.MaxX},{(int)tight.MaxY})"
+                            + $"，模型里（没动）的墨迹范围 "
+                            + $"{(int)spinLine.WorldInkBounds.MinX},{(int)spinLine.WorldInkBounds.MinY}"
+                            + $"-{(int)spinLine.WorldInkBounds.MaxX},{(int)spinLine.WorldInkBounds.MaxY}");
+            if (!OffscreenFloatingShot(path, region.Inflate(30f))) Console.WriteLine("出图失败");
+
+            SendMouse((int)last.X, (int)last.Y, Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(250);
+            // 松手后框会重新按**模型**算（FrameOf）——和拖动中那个"旧框转过去的外接矩形"
+            // 差多少，这里给出数字（只打印，不改行为）。
+            var afterAabb = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
+            Console.WriteLine($"旋转松手后：框 {afterAabb.MaxX - afterAabb.MinX:F0}×{afterAabb.MaxY - afterAabb.MinY:F0}"
+                            + $"（拖动中是 {aabb.MaxX - aabb.MinX:F0}×{aabb.MaxY - aabb.MinY:F0}），"
+                            + $"线的实时姿态 "
+                            + $"{SelectionHandles.InclinationDegrees(SelectionHandles.EndpointCanvasPosition(spinLine, 0), SelectionHandles.EndpointCanvasPosition(spinLine, 1)):F1}°");
+            _quit = true;
+            return;
+        }
+
+        // ---- 正在画一条直线：按住不放，拖到**原始 45.5°**（±1° 容差内 → 吸到 45°）----
+        if (drawing)
+        {
+            SetToolFromUi(Tool.Line);
+            var from = new Vector2(cx - 380f, cy + 200f);
+            float rad = -45.5f * MathF.PI / 180f;
+            var tipTarget = new Vector2(from.X + 620f * MathF.Cos(rad), from.Y + 620f * MathF.Sin(rad));
+
+            SendMouse((int)from.X, (int)from.Y, 0);                            SettleFrames(60);
+            SendMouse((int)from.X, (int)from.Y, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+            for (int i = 1; i <= 4; i++)
+            {
+                SendMouse((int)(from.X + (tipTarget.X - from.X) * i / 4f),
+                          (int)(from.Y + (tipTarget.Y - from.Y) * i / 4f), 0);
+                SettleFrames(40);
+            }
+            SettleFrames(200);
+
+            var tip = ShapeInclinationAnchor;
+            // 起手必须是 RectF.Empty（默认构造的 RectF 是 (0,0)-(0,0)，会把画面原点算进来）
+            var drawBox = RectF.Empty;
+            drawBox.Add(from.X, from.Y);
+            drawBox.Add(tip.X, tip.Y);
+            drawBox = drawBox.Inflate(30f * DpiScale);
+            // 读数标签挂在"正在拖的那一端"上方，高度 30 逻辑 + 一段间距：一起圈进画面
+            drawBox.Add(tip.X - 80f * DpiScale, tip.Y - 60f * DpiScale);
+            drawBox.Add(tip.X + 80f * DpiScale, tip.Y);
+            Console.WriteLine($"画线中：α = {ShapeInclinationDegrees:F1}°（吸住={ShapeInclinationSnapped}）"
+                            + $"，起点 {from}，笔尖 {tip}"
+                            + $"，出图范围 ({drawBox.MinX:F0},{drawBox.MinY:F0})-({drawBox.MaxX:F0},{drawBox.MaxY:F0})");
+            if (!OffscreenFloatingShot(path, drawBox)) Console.WriteLine("出图失败");
+
+            SendMouse((int)tipTarget.X, (int)tipTarget.Y, Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(120);
+            _quit = true;
+            return;
+        }
+
+        var line = new Stroke
+        {
+            Tool = Tool.Line, Kind = StrokeKind.Line,
+            Color = new Color4(0.11f, 0.12f, 0.15f, 1f), Width = 6f * DpiScale,
+        };
+        line.AddPoint(cx - 420f, cy + 220f, 1f, 0);
+        line.AddPoint(cx + 420f, cy - 220f, 1f, 0);
+        Doc.AddStroke(line);
+        Doc.SelectOnly(new[] { line });
+        Tool = Tool.Marquee;
+        Doc.InvalidateAll();
+        SettleFrames(700);
+
+        if (!drag)
+        {
+            // 范围 = 选中框 ∪ 旋转柄 ∪ 操作条（操作条也由 DrawSelection 画，
+            // 不并进来会被裁掉一半），再留一圈给投影。
+            var aabb = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
+            var bar = SelectionHandles.BarRect(aabb, DpiScale, ViewportCanvas);
+            var grip = SelectionHandles.CanvasPosition(SelHandle.Rotate,
+                                                       SelectionHandles.FrameOf(Doc.Selected), DpiScale);
+            var region = aabb;
+            region.Add(bar);
+            region.Add(grip.X - 40f, grip.Y - 40f);
+            region.Add(grip.X + 40f, grip.Y + 40f);
+            if (!OffscreenFloatingShot(path, region.Inflate(30f))) Console.WriteLine("出图失败");
+            _quit = true;
+            return;
+        }
+
+        // 真拖一次端点：原始方向 30.5°（±1° 容差内）→ 读数该显示 α = 30.0°。
+        // 用真输入（而不是直接摆内部状态），出的图才是产品里那一帧。
+        var eFixed = SelectionHandles.EndpointCanvasPosition(line, 1);
+        var eDrag = SelectionHandles.EndpointCanvasPosition(line, 0);
+        float theta = 149.5f * MathF.PI / 180f;
+        var to = new Vector2(eFixed.X + 700f * MathF.Cos(theta), eFixed.Y + 700f * MathF.Sin(theta));
+
+        SendMouse((int)eDrag.X, (int)eDrag.Y, 0);                          SettleFrames(60);
+        SendMouse((int)eDrag.X, (int)eDrag.Y, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+        for (int i = 1; i <= 4; i++)
+        {
+            SendMouse((int)(eDrag.X + (to.X - eDrag.X) * i / 4f),
+                      (int)(eDrag.Y + (to.Y - eDrag.Y) * i / 4f), 0);
+            SettleFrames(40);
+        }
+        SettleFrames(200);
+
+        var preview = VertexPreviewCanvasPoint;
+        // 起手必须是 RectF.Empty：默认构造的 RectF 是 (0,0)-(0,0)，
+        // 直接 Add 进去会把画面原点也算进范围（出图一半是空白就是它）。
+        var box = RectF.Empty;
+        box.Add(eFixed.X, eFixed.Y);
+        box.Add(preview.X, preview.Y);
+        box = box.Inflate(40f * DpiScale);
+        // 读数标签挂在被拖端点上方，高度 30 逻辑 + 一段间距：把它一起圈进画面
+        box.Add(preview.X - 70f * DpiScale, preview.Y - 60f * DpiScale);
+        box.Add(preview.X + 70f * DpiScale, preview.Y);
+        Console.WriteLine($"拖端点中：α = {VertexInclinationDegrees:F1}°（吸住={VertexInclinationSnapped}），"
+                        + $"固定端 {eFixed}，拖动端 {preview}"
+                        + $"（模型里这条线还没动：墨迹范围 {(int)line.WorldInkBounds.MinX},{(int)line.WorldInkBounds.MinY}"
+                        + $"-{(int)line.WorldInkBounds.MaxX},{(int)line.WorldInkBounds.MaxY}），"
+                        + $"出图范围 ({box.MinX:F0},{box.MinY:F0})-({box.MaxX:F0},{box.MaxY:F0})");
+        if (!OffscreenFloatingShot(path, box)) Console.WriteLine("出图失败");
+
+        SendMouse((int)to.X, (int)to.Y, Native.MOUSEEVENTF_LEFTUP);
+        SettleFrames(120);
         _quit = true;
     }
 
@@ -6670,9 +7831,29 @@ internal sealed class App : InkEngine.InkEngine
         if (Environment.GetCommandLineArgs().Contains("--hl")) Tool = Tool.Highlighter;
         SettleFrames(400);
 
+        // --hide：贴边隐藏**要先写进偏好再挂界面**（界面是在 Attach 里读偏好的），
+        // 挂完再把露头一把按到底。配合 --ball 出"收起态露头"，不配就是"展开态露头"。
+        bool wantHide = Environment.GetCommandLineArgs().Contains("--hide");
+        if (wantHide)
+        {
+            SetUiPref("hide", "1");
+            SetUiFactory(() => new InkUi.FullUi());
+        }
+
         if (CurrentUi is InkUi.FullUi ui)
         {
-            ui.SnapForTest();                // 一步展开，不用等 200 毫秒
+            // --ball：**出收起态（那个球）**，不做"一步展开"。
+            // 默认是展开态；收起/贴边这一类毛病只在球上看得见，所以要能单拍它。
+            bool wantBall = Environment.GetCommandLineArgs().Contains("--ball");
+            if (!wantBall) ui.SnapForTest();     // 一步展开，不用等 200 毫秒
+            if (wantHide) ui.ForcePeekForTest(0f);
+            // --expand <0..1>：把"球 → 带子"的展开进度钉在中间某一帧（核对动画用）
+            {
+                var argv = Environment.GetCommandLineArgs();
+                int ei = Array.IndexOf(argv, "--expand");
+                if (ei >= 0 && ei + 1 < argv.Length && float.TryParse(argv[ei + 1], out float ex))
+                    ui.SetExpandForTest(ex);
+            }
             if (_panelShowMini) ui.SetProfileForTest(0);     // --mini：极简档（短胶囊）
             if (_panelShowBand) ui.OpenRailForTest();        // --band：把色线张开成设置条
             // --cell N：把上带掰到第 N 格再出图（N=2 就是白板那条
@@ -6692,10 +7873,17 @@ internal sealed class App : InkEngine.InkEngine
             if (_panelShowDrawer) ui.OpenDrawerForTest();   // --drawer：连抽屉一起出图
             SettleFrames(500);
 
-            // 优先离屏出图（锁屏 / 远程也能出，图里不混桌面）
-            if (OffscreenShot(path)) return;
-
+            // 优先离屏出图（锁屏 / 远程也能出，图里不混桌面）。
+            // **范围要连"画到外面那一圈"一起给**（投影，见 IOverlayUi.PaintMargin）：
+            // 这一条的边上留白只有 24 **物理**像素，200% 缩放下就是 12 逻辑像素，
+            // 而投影最远胀出去 16+8 逻辑像素——不给就会被切掉一半，图看着像"没有投影"。
             var b = ui.QueryBounds();
+            var shot = new RectF
+            {
+                MinX = b.MinX - ui.PaintMargin, MinY = b.MinY - ui.PaintMargin,
+                MaxX = b.MaxX + ui.PaintMargin, MaxY = b.MaxY + ui.PaintMargin,
+            };
+            if (OffscreenShot(path, shot)) return;
             int x = (int)MathF.Floor(b.MinX * DpiScale) - 30;
             int y = (int)MathF.Floor(b.MinY * DpiScale) - 30;
             int w = (int)MathF.Ceiling((b.MaxX - b.MinX) * DpiScale) + 60;
@@ -6777,8 +7965,111 @@ internal sealed class App : InkEngine.InkEngine
                   (b1.MaxY - b1.MinY) < 12f || (b1.MaxX - b1.MinX) < 12f,
                   $"占用 {b1.MaxX - b1.MinX:F0}×{b1.MaxY - b1.MinY:F0}，允许自动收 = {ui.PeekArmedForTest}");
 
+            // ---- 露头状态下"写一笔"：面板**不许自己蹦回来**（用户 2026-09-18 报的）----
+            //
+            // 起因是 `UpdatePeek` 里 `keepOpen` 那条把 `IsDrawing` 和"指针在面板上"混在了一起：
+            // 规则的本意是**写字中不许收**，写成了"写字中强制展开"，于是藏好的面板一落笔就被拽出来。
+            // 判据：在**画布中间**（离那条露头足够远，排除"是碰到面板才展开的"）画一笔，
+            // 画完占用矩形必须还是露头那一条。
+            {
+                float inkX = _virtualX + _virtualW * 0.5f;
+                float inkY = _virtualY + _virtualH * 0.4f;
+                SendMouse((int)inkX, (int)inkY, 0);                          SettleFrames(60);
+                SendMouse((int)inkX, (int)inkY, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+                for (int i = 1; i <= 5; i++)
+                { SendMouse((int)(inkX + 20 * i * DpiScale), (int)inkY, 0); SettleFrames(20); }
+                SendMouse((int)(inkX + 100 * DpiScale), (int)inkY, Native.MOUSEEVENTF_LEFTUP);
+                SettleFrames(250);
+
+                var b2 = ui.QueryBounds();
+                Check("露头时在画布上写一笔：面板不许被拽出来",
+                      (b2.MaxY - b2.MinY) < 12f || (b2.MaxX - b2.MinX) < 12f,
+                      $"占用 {b2.MaxX - b2.MinX:F0}×{b2.MaxY - b2.MinY:F0}"
+                      + $"，露头值 peek={ui.PeekForTest:F2}（0 = 收着），"
+                      + $"允许自动收 = {ui.PeekArmedForTest}，"
+                      + $"画完真出了笔 = {Doc.Strokes.Count > 0}");
+
+                // ---- 反过来那一半也要钉住：**面板开着的时候写字，不许它自己收** ----
+                //
+                // 这是那条规则原本的用途（"老师写到屏幕边上，工具条不能自己缩回去"）。
+                // 修上面那个 bug 时很容易顺手把这条一起弄丢，所以单独钉一条。
+                SendMouse((int)((b1.MinX + b1.MaxX) * 0.5f * DpiScale),
+                          (int)((b1.MinY + b1.MaxY) * 0.5f * DpiScale), 0);   // 碰露头，把它叫回来
+                SettleFrames(400);
+                float ix = _virtualX + _virtualW * 0.5f;
+                float iy = _virtualY + _virtualH * 0.4f;
+                SendMouse((int)ix, (int)iy, 0);                           SettleFrames(60);
+                SendMouse((int)ix, (int)iy, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+                for (int i = 1; i <= 8; i++)
+                { SendMouse((int)(ix + 18 * i * DpiScale), (int)iy, 0); SettleFrames(120); }  // 按住写约 1 秒
+                var mid = ui.QueryBounds();
+                SendMouse((int)(ix + 144 * DpiScale), (int)iy, Native.MOUSEEVENTF_LEFTUP);
+                SettleFrames(200);
+                Check("面板开着时按着写约 1 秒：不许它自己收",
+                      (mid.MaxY - mid.MinY) > 40f,
+                      $"写字中占用 {mid.MaxX - mid.MinX:F0}×{mid.MaxY - mid.MinY:F0}");
+            }
+
+            // ---- 左右两条边：**球能藏、条不藏**（用户 2026-09-18 定的规则）----
+            //
+            // 面板是横的，"缩进侧边"等于把它**侧着塞进边里**——贴左边露出来的其实是它的
+            // 右端（最后一格和动作按钮区），跟"球"没有任何关系；而球是 48×48 的正方形，
+            // 塞进哪条边都是同一个姿态。所以：收起态四边都藏，展开态只在上下藏，
+            // 左右**保留吸附停靠**但不再往里缩。
+            {
+                // 此刻面板是展开的、贴在屏幕下边（可能正在收着露头）——先碰一下叫回来，
+                // 再收成球，然后把球拖到左边缘。
+                var side0 = ui.QueryBounds();
+                SendMouse((int)((side0.MinX + side0.MaxX) * 0.5f * DpiScale),
+                          (int)((side0.MinY + side0.MaxY) * 0.5f * DpiScale), 0);
+                SettleFrames(400);
+                if (ui.ExpandedForTest)
+                {
+                    var c0 = ui.CellRectForTest(0);
+                    ClickPhysical((c0.MinX + c0.MaxX) * 0.5f * DpiScale,
+                                  (c0.MinY + c0.MaxY) * 0.5f * DpiScale);
+                    SettleFrames(350);
+                }
+
+                var side1 = ui.QueryBounds();
+                float bx = (side1.MinX + side1.MaxX) * 0.5f * DpiScale;
+                float by = (side1.MinY + side1.MaxY) * 0.5f * DpiScale;
+                int leftX = _virtualX + 20;
+                SendMouse((int)bx, (int)by, 0);                            SettleFrames(60);
+                SendMouse((int)bx, (int)by, Native.MOUSEEVENTF_LEFTDOWN);   SettleFrames(50);
+                for (int i = 1; i <= 8; i++) { SendMouse((int)(bx + (leftX - bx) * i / 8f), (int)by, 0); SettleFrames(20); }
+                SendMouse(leftX, (int)by, Native.MOUSEEVENTF_LEFTUP);       SettleFrames(200);
+
+                // 看一眼就走：球停在左边，700 毫秒后应该收成侧边那条竖的露头
+                SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.35f), 0);
+                SettleFrames(1400);
+                var tucked = ui.QueryBounds();
+                Check("收起态停在左边：会藏成侧边那条露头（竖的 8×48）",
+                      (tucked.MaxX - tucked.MinX) < 12f && (tucked.MaxY - tucked.MinY) > 30f,
+                      $"占用 {tucked.MaxX - tucked.MinX:F0}×{tucked.MaxY - tucked.MinY:F0}"
+                      + $"，展开 = {ui.ExpandedForTest}");
+
+                // 碰回来 → 点开成条 → 再走开：这一次**不许收**
+                SendMouse((int)((tucked.MinX + tucked.MaxX) * 0.5f * DpiScale),
+                          (int)((tucked.MinY + tucked.MaxY) * 0.5f * DpiScale), 0);
+                SettleFrames(450);
+                var side2 = ui.QueryBounds();
+                ClickPhysical((side2.MinX + side2.MaxX) * 0.5f * DpiScale,
+                              (side2.MinY + side2.MaxY) * 0.5f * DpiScale);
+                SettleFrames(400);
+                SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.35f), 0);
+                SettleFrames(1400);
+                var barLeft = ui.QueryBounds();
+                Check("展开态停在左边：**不缩回**（左右只吸附、不藏）",
+                      (barLeft.MaxX - barLeft.MinX) > 400f && (barLeft.MaxY - barLeft.MinY) > 40f,
+                      $"占用 {barLeft.MaxX - barLeft.MinX:F0}×{barLeft.MaxY - barLeft.MinY:F0}，"
+                      + $"展开 = {ui.ExpandedForTest}，露头值 peek={ui.PeekForTest:F2}");
+            }
+
             // 收尾：关掉贴边隐藏、重新挂回默认界面（后面几段用例都按"没开贴边隐藏"写）
             SetUiPref("hide", null);
+            Doc.Clear();                    // 上面为了验贴边隐藏画了两笔，后面的用例从空画布起
+            Doc.ClearHistory();
             SetUiFactory(() => new InkUi.FullUi());
             ui = CurrentUi as InkUi.FullUi;
             SettleFrames(400);
@@ -6811,6 +8102,22 @@ internal sealed class App : InkEngine.InkEngine
         Check("收起态是一个 48 的球",
               MathF.Abs(ballW - 48f) < 1f && MathF.Abs(ballH - 48f) < 1f,
               $"占用 {ballW:F0}×{ballH:F0}，位置 ({ball.MinX:F0},{ball.MinY:F0})");
+
+        // ---- 收起球里那两个比例：**笔图标不许碰到色圈** ----
+        //
+        // 用户 2026-09-18 报过一次"笔碰到色圈"：产品把假面板的 0.70R 抄成了 1.40R，
+        // 半边长 16.8 正好顶到色圈内沿 16.99。这条不靠眼睛——**碰没碰到是算得出来的**：
+        //   色圈内沿 = BallRing × R − 线宽/2；  图标半边长 = BallIcon × R ÷ 2
+        // 要求留 ≥ 1 像素的空（0.19 那种"看着压上去了"的余量不算）。
+        {
+            float R = InkUi.Tokens.Ball * 0.5f;
+            float ringInner = InkUi.Tokens.BallRing * R - 1.25f;      // 线宽 2.5 的一半
+            float iconHalf = InkUi.Tokens.BallIcon * R * 0.5f;
+            Check("收起球：笔图标不碰色圈（半边长 < 色圈内沿 − 1）",
+                  iconHalf < ringInner - 1f,
+                  $"图标半边长 {iconHalf:F2} vs 色圈内沿 {ringInner:F2}"
+                  + $"（BallIcon = {InkUi.Tokens.BallIcon:F2}R，留 {ringInner - iconHalf:F2} 的空）");
+        }
 
         // 按**屏幕**底边算，允许盖住任务栏（用户定的：工具条压在任务栏上是合理的，
         // 贴屏幕边 12 像素的手感比"躲开任务栏"更重要）。

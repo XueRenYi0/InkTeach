@@ -60,6 +60,20 @@ public interface IOverlayUi
     RectF QueryBounds();
 
     /// <summary>
+    /// 界面**会画到 <see cref="QueryBounds"/> 外面**的那一圈余量（逻辑像素），默认 0。
+    ///
+    /// 引擎是按 QueryBounds 裁剪界面绘制的。可界面偏偏有"必须画在外面"的东西——
+    /// 投影、浮出的预览。不给这一圈，它们会被裁掉：**屏幕上什么都看不见，
+    /// 而离屏出图看得见**（那条路不裁剪），于是"图里好好的、真机上是空的"。
+    ///
+    /// 为什么不干脆把 QueryBounds 放大：那份矩形同时是**命中测试与输入小窗**的矩形，
+    /// 放大等于"面板旁边一圈点不动、画不了线"。所以这里把"占地方"和"画出来"分开。
+    ///
+    /// 给默认实现是为了不打扰已有的界面实现（它们确实没有画到外面的东西）。
+    /// </summary>
+    float PaintMargin => 0f;
+
+    /// <summary>
     /// 绘制界面内容。坐标系原点 = 界面矩形左上角（引擎已经把画布平移到那里）。
     /// **只在缓存失效时被调用**，界面可以放心在里面做复杂绘制。
     /// </summary>
@@ -151,6 +165,20 @@ public interface IUiHost
     /// 记一条界面偏好。传 null = 回到默认（引擎会把这一项删掉，不会写进配置文件）。
     /// </summary>
     void SetPref(string key, string value);
+
+    /// <summary>
+    /// 界面把自己的**浮层主题**推给引擎：选中操作条、颜色/粗细/层级面板、导出格式面板、
+    /// 旋转读数都用它的颜色与投影画。
+    ///
+    /// 为什么要有这一条：浮层和工具条**必须是同一套颜色与投影**（"操作条和工具条要是一家"），
+    /// 而它们分别在两个工程里画。各写一份的下场实测过一次——浅色主题改完，
+    /// 工具条有了冷灰描边和五层投影，操作条还是蓝灰描边、**一层投影都没有**，
+    /// 挨在一起一眼就能看出不是一套。
+    ///
+    /// 边界不变：**引擎不解释偏好**。谁该用深色是界面的事，界面换主题就推一次，
+    /// 引擎照单画；不推 = 引擎用 <see cref="UiTheme.Default"/> 兜底。
+    /// </summary>
+    void SetFloatingTheme(UiTheme theme);
 }
 
 /// <summary>界面对引擎的全部操作能力。刻意做窄，防止界面越权。</summary>
@@ -357,14 +385,27 @@ public readonly struct UiPointerEvent
     public bool IsEraserTip { get; }
 }
 
-/// <summary>引擎给界面的配色。界面应当只用这些颜色，保证多套界面观感一致。</summary>
+/// <summary>
+/// 浮层主题里的一层投影：**往外胀多少**（四边同时胀，负值＝往里缩）、**往下挪多少**、
+/// 什么颜色。和界面那边 `Tokens.ShadowLayer` 是同一个东西——那个类型在 `InkUi` 里，
+/// 引擎看不见它，所以这里再声明一个同样形状的，由界面在推主题时搬过来。
+/// </summary>
+public readonly record struct UiShadowLayer(float Inflate, float Dy, Color4 Color);
+
+/// <summary>
+/// 引擎给界面/浮层用的配色。界面应当只用这些颜色，保证多套界面观感一致。
+/// 产品的两套（浅色/深色）由界面推上来见 <see cref="IUiHost.SetFloatingTheme"/>。
+/// </summary>
 public readonly struct UiTheme
 {
     public UiTheme(Color4 panel, Color4 panelBorder, Color4 text, Color4 textMuted,
-                   Color4 hover, Color4 activeBg, Color4 activeText, float cornerRadius)
+                   Color4 hover, Color4 activeBg, Color4 activeText, float cornerRadius,
+                   Color4 edgeBottom = default, UiShadowLayer[] shadow = null)
     {
         Panel = panel; PanelBorder = panelBorder; Text = text; TextMuted = textMuted;
         Hover = hover; ActiveBg = activeBg; ActiveText = activeText; CornerRadius = cornerRadius;
+        EdgeBottom = edgeBottom;
+        Shadow = shadow ?? Array.Empty<UiShadowLayer>();
     }
 
     public Color4 Panel { get; }
@@ -376,7 +417,36 @@ public readonly struct UiTheme
     public Color4 ActiveText { get; }
     public float CornerRadius { get; }
 
-    /// <summary>默认主题（浅色悬浮条，和教室投影的观感搭配）。</summary>
+    /// <summary>底沿那道 1 像素内阴影（"卷边"）。**默认全透明 = 不画**（深色主题就不画）。</summary>
+    public Color4 EdgeBottom { get; }
+
+    /// <summary>投影层，逐层往外胀；**空数组 = 不画投影**。</summary>
+    public UiShadowLayer[] Shadow { get; }
+
+    /// <summary>
+    /// 投影**最远能盖到形状外面多少**（逻辑像素）＝ 各层"胀幅 ＋ 下挪"的最大值。
+    ///
+    /// 脏区必须按这个往外放：浮层一移动（拖选区、开合面板），旧投影要能被擦掉。
+    /// 不放大就是"浮层旁边留一条擦不掉的印子"——和工具条那次（`IOverlayUi.PaintMargin`）
+    /// 是同一个坑，只是那边是引擎裁掉了投影、这边是脏区没盖住。
+    /// </summary>
+    public float ShadowReachLogical
+    {
+        get
+        {
+            float m = 0f;
+            foreach (var s in Shadow) m = MathF.Max(m, s.Inflate + s.Dy);
+            return MathF.Max(0f, m);
+        }
+    }
+
+    /// <summary>
+    /// 默认主题：**没有界面挂上来时的兜底**（自检宿主、无界面模式用）。
+    ///
+    /// 注意它**不是**产品的浅色主题——产品的浅色/深色两套在 `InkUi.Tokens` 里，
+    /// 界面 `Attach` 时会用 <see cref="IUiHost.SetFloatingTheme"/> 推上来。
+    /// 数字保持原样（白 94% ＋ 蓝灰描边 ＋ 两层很淡的投影），这样老出图看起来没变。
+    /// </summary>
     public static UiTheme Default => new(
         panel: new Color4(0.98f, 0.98f, 0.99f, 0.94f),
         panelBorder: new Color4(0.75f, 0.78f, 0.84f, 0.9f),
@@ -385,7 +455,12 @@ public readonly struct UiTheme
         hover: new Color4(0.90f, 0.93f, 0.98f, 1f),
         activeBg: new Color4(0.13f, 0.45f, 0.85f, 1f),
         activeText: new Color4(1f, 1f, 1f, 1f),
-        cornerRadius: 10f);
+        cornerRadius: 10f,
+        shadow: new[]
+        {
+            new UiShadowLayer(0f, 1.5f, new Color4(0f, 0f, 0f, 0.045f)),
+            new UiShadowLayer(0f, 3.0f, new Color4(0f, 0f, 0f, 0.090f)),
+        });
 }
 
 /// <summary>不显示任何界面的空实现。切边界时用它验证"引擎不依赖界面"。</summary>

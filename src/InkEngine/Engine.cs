@@ -483,6 +483,43 @@ public class InkEngine
     /// </summary>
     private RectF _dragPrevBounds;
 
+    // =====================================================================
+    //  图形端点编辑（直线 / 箭头）：和"拖对象"同一条快路
+    //
+    //  手势期**模型一个字不改**，只在浮动层按"临时几何（种类 + 改动后的端点）"画，
+    //  松手才提交一步改几何的动作（见 计划-图形工具.md 8.1①）。
+    //  每帧 SetPoint + 标脏那条路会把受影响的块整块重光栅化——实测 19ms/帧。
+    // =====================================================================
+
+    /// <summary>正在拖端点改几何（倾斜角读数靠它决定显不显示）。</summary>
+    internal bool VertexDragging => _vertexDragging;
+
+    /// <summary>预览要画的那一条（模型此刻没动，它还是旧几何）。</summary>
+    internal Stroke VertexPreviewStroke => _vertexDragging ? _vertexTarget : null;
+
+    /// <summary>预览用的**局部坐标**控制点（把拖动中那个端点换掉之后的一组点）。</summary>
+    internal IReadOnlyList<Vector2> VertexPreviewPoints => _vertexPreviewLocal;
+
+    /// <summary>拖动中的端点在**画布坐标**里的位置（读数标签贴在它外侧）。</summary>
+    internal Vector2 VertexPreviewCanvasPoint => _vertexPreviewCanvas;
+
+    /// <summary>α：这条线**本身**的倾斜角（[0°,180°)），和旋转读数 Δ 是两个数。</summary>
+    internal float VertexInclinationDegrees => _vertexInclination;
+
+    /// <summary>α 是"吸"出来的吗（软吸附 / Shift 网格）——标签按它变色，和旋转同一套语言。</summary>
+    internal bool VertexInclinationSnapped => _vertexSnapped;
+
+    private bool _vertexDragging;
+    private Stroke _vertexTarget;
+    /// <summary>被拖那个端点在 `Points` 里的下标（0 或最后）。</summary>
+    private int _vertexIndex;
+    private Vector2[] _vertexPreviewLocal;
+    private Vector2 _vertexPreviewCanvas;
+    private float _vertexInclination;
+    private bool _vertexSnapped;
+    /// <summary>上一帧"被拖的那个端点"附近的脏矩形（这一帧要连它一起标）。</summary>
+    private RectF _vertexPrevBounds;
+
     /// <summary>正在拖旋转手柄——度数标签靠它决定显不显示。</summary>
     internal bool SelRotating;
     /// <summary>
@@ -495,6 +532,32 @@ public class InkEngine
     internal float SelRotationDegrees;
     /// <summary>这个角度是"吸"出来的（90° 或 Shift 15° 网格），标签要变色提示。</summary>
     internal bool SelRotationSnapped;
+
+    /// <summary>
+    /// **单选一条直线 / 箭头**拖旋转柄时的读数：`按下时的倾斜角 α₀ + 这一拖累积转过的角 Δ`。
+    ///
+    /// **无上限、也不折角**（用户 2026-09-18 澄清："……逆时针是为正，顺时针为负，它可以无限
+    /// 转下去，也就说可以转到 360、720、1000 多度，或者说负的 2000 多度，这都是可以的。
+    /// 也就说它是除了初始角度是要调一下以外，其他和原来的最开始的逻辑是一样的。"）。
+    /// 一条 α₀ = 45° 的线：逆时针转一圈 = `405°`、再转 = `765°`；顺时针 400° = `−355°`。
+    /// 所以它**不是**倾斜角（倾斜角只在 [0°,180°)），标签上也就写成纯数字
+    /// （见 SelectionHandles.FormatSignedDegrees）。
+    ///
+    /// 只在"单选直线/箭头"这一条分支里有意义，由 <see cref="SelRotationReadsInclination"/> 决定
+    /// 标签读谁；其它情况（多选 / 矩形 / 椭圆 / 图像 / 自由笔迹）照旧读 Δ。
+    /// </summary>
+    internal float SelRotationInclination;
+    /// <summary>这一次旋转的读数是不是 α₀ + Δ（真 = 单选直线/箭头；假 = 照旧读 Δ）。</summary>
+    internal bool SelRotationReadsInclination;
+
+    /// <summary>这次旋转是不是"单选直线/箭头"那一档（按下那一刻判定一次，手势里不再变）。</summary>
+    private bool _rotLineLike;
+    /// <summary>
+    /// 按下那一刻这条线的倾斜角 α₀（折在 [0°,180)）——旋转读数就是从它开始"接着变"的。
+    /// 初始角用折过的值是有意的（用户："初始角度是要调一下"）：一条线没有方向，
+    /// 按下时读到 45° 而不是 405°，之后才按用户转的方向累加。
+    /// </summary>
+    private float _rotStartInclination;
 
     /// <summary>
     /// 本次旋转的**累积角**（度，逆时针为正）。每帧用
@@ -1720,6 +1783,15 @@ public class InkEngine
                 Laser.Add(x, y, NowMs);
                 break;
 
+            // 四种图形工具：**同一个手势**"按下记起点 → 拖动改终点 → 松手提交"
+            // （接一个等于接四个，差别只在 Kind，见 计划-图形工具.md 8.2）。
+            case Tool.Line:
+            case Tool.Rectangle:
+            case Tool.Ellipse:
+            case Tool.Arrow:
+                BeginShapeAt(tool, x, y);
+                break;
+
             default:
                 float trailW = (tool == Tool.Highlighter ? HighlighterWidthLogical
                                                          : tool == Tool.Laser ? LaserWidthLogical
@@ -1832,6 +1904,15 @@ public class InkEngine
 
             case Tool.Laser:
                 Laser.Add(x, y, NowMs);
+                break;
+
+            // 图形：只更新**终点**（几何由两个端点定义），不往里堆采样点。
+            // 预览就走"正在书写的那一笔"那条路（它本来就每帧重画），所以实时。
+            case Tool.Line:
+            case Tool.Rectangle:
+            case Tool.Ellipse:
+            case Tool.Arrow:
+                if (ActiveStroke != null) UpdateShapePreview(x, y);
                 break;
 
             default:
@@ -2434,7 +2515,12 @@ public class InkEngine
         }
         if (ActiveStroke != null)
         {
-            if (ActiveStroke.Points.Count > 0)
+            // 图形：拖动太短 = 误点，**不提交**。什么都不留（连撤销记录都不留）——
+            // 一个退化的图形（零长度直线、零面积矩形）在画面上看不见，却能被点中、
+            // 能被框选，是最难解释的一类杂物。
+            bool commit = ActiveStroke.Points.Count > 0
+                       && (!IsShapeTool(ActiveStroke.Tool) || ShapeDragLongEnough(ActiveStroke));
+            if (commit)
             {
                 Doc.AddStroke(ActiveStroke);
                 _lastStrokeReport =
@@ -2444,6 +2530,10 @@ public class InkEngine
                     + $"，压感={(ActiveStrokeHasPressure ? "有" : "无")}"
                     + $"，合并({LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 个采样点)";
                 Console.WriteLine("[笔画] " + _lastStrokeReport);
+            }
+            else if (IsShapeTool(ActiveStroke.Tool))
+            {
+                Console.WriteLine($"[图形] 拖动太短（< {ShapeMinDragLogical:F0} 逻辑像素），没提交");
             }
             ActiveStroke = null;
         }
@@ -2622,7 +2712,7 @@ public class InkEngine
                 return CursorKind.Default;
         }
 
-        var h = SelectionHandles.HitTest(canvasX, canvasY, frame, dpi);
+        var h = SelectionHandles.HitTest(canvasX, canvasY, Doc.Selected, frame, dpi);
         if (h != SelHandle.None) return HandleCursor(h);
 
         var lp = frame.ToLocalPoint(new Vector2(canvasX, canvasY));
@@ -2638,6 +2728,8 @@ public class InkEngine
         SelHandle.Left or SelHandle.Right => CursorKind.ResizeWE,
         SelHandle.Top or SelHandle.Bottom => CursorKind.ResizeNS,
         SelHandle.Rotate => CursorKind.Rotate,
+        // 端点手柄给十字准星：它是"精确取一个点"，和拉伸（四向箭头）是两种意思。
+        SelHandle.EndpointA or SelHandle.EndpointB => CursorKind.Cross,
         _ => CursorKind.Default,
     };
 
@@ -2987,6 +3079,124 @@ public class InkEngine
                 return w;
         }
         return _windows.Count > 0 ? _windows[0] : null;
+    }
+
+    // =====================================================================
+    //  图形工具：直线 / 矩形 / 椭圆 / 箭头
+    //
+    //  四种都是"拖 A→B"：按下记起点、拖动时**只改终点**、松手提交成一个
+    //  Kind 正确的图形（见 计划-图形工具.md 8.2）。几何由两个端点定义，
+    //  所以运行时只有两个点——不是"画完再拟合"，也不是先存一串采样点。
+    // =====================================================================
+
+    /// <summary>
+    /// 拖动距离短于这么多**逻辑像素**就不提交（避免误点造出一个退化的图形）。
+    ///
+    /// 4 这个数和点选容差 <see cref="ClickToleranceLogical"/> 同一个量级：
+    /// 投影上手抖个一两像素很正常，"点一下"不该留下任何东西。
+    /// </summary>
+    internal const float ShapeMinDragLogical = 4f;
+
+    /// <summary>这四种工具走"两点定义图形"那条路（其余工具照旧写自由笔迹）。</summary>
+    internal static bool IsShapeTool(Tool t)
+        => t is Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Arrow;
+
+    private static StrokeKind KindOfShapeTool(Tool t) => t switch
+    {
+        Tool.Line => StrokeKind.Line,
+        Tool.Rectangle => StrokeKind.Rectangle,
+        Tool.Ellipse => StrokeKind.Ellipse,
+        _ => StrokeKind.Arrow,
+    };
+
+    /// <summary>
+    /// 图形工具的起手：造一条**只有起点**的图形，拖动期由
+    /// <see cref="UpdateShapePreview"/> 改终点，松手由 <see cref="EndStroke"/> 提交。
+    ///
+    /// 刻意**不喂预测器、也不起委托墨迹**：那是"笔尖跟手"用的，
+    /// 而图形跟着指针走的是**吸附后的端点**——两套画在屏幕上会变成两条不一样的线。
+    /// </summary>
+    private void BeginShapeAt(Tool tool, float x, float y)
+    {
+        ActiveStroke = new Stroke
+        {
+            Tool = tool,
+            Kind = KindOfShapeTool(tool),
+            Color = CurrentColor,
+            Width = PenWidthLogical * DpiScale,
+        };
+        ActiveStroke.AddPoint(x, y, 1f, NowMs);
+        // 读数状态从这一刻重新开始：不清的话，上一次画线吸住的那个强调色会漏到
+        // 这一次的第一帧（还没收到移动消息，α 也还没算）。
+        _shapeInclination = 0f;
+        _shapeInclinationSnapped = false;
+        _shapeAnchor = new Vector2(x, y);
+        _predictor.Reset();
+        ActiveStrokeHasPressure = false;
+        LastCoalescedSamples = LastCoalescedMessages = 0;
+    }
+
+    /// <summary>
+    /// 拖动中更新图形的终点。
+    ///
+    /// 吸附只对**有方向的两个**（直线 / 箭头）做：矩形和椭圆是"两个对角点"定义的，
+    /// 没有"倾斜角"这回事，绕起点转只会把用户拉出来的框改小（见 计划-图形工具.md 8.2
+    /// 那一行只写了"画线吸附"）。Shift = 15° 硬网格、Alt = 完全自由，和旋转同一套语义。
+    /// </summary>
+    private void UpdateShapePreview(float x, float y)
+    {
+        var s = ActiveStroke;
+        if (s == null || s.Points.Count == 0) return;
+
+        var start = new Vector2(s.Points[0].X, s.Points[0].Y);
+        var end = new Vector2(x, y);
+        if (s.Kind is StrokeKind.Line or StrokeKind.Arrow)
+        {
+            bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
+            bool alt = (Native.GetAsyncKeyState(0x12 /* VK_MENU */) & 0x8000) != 0;
+            end = SelectionHandles.SnapEndPoint(start, end, shift, alt, out bool snapped);
+            // 画线过程中也把 α 报给浮动层（用户 2026-09-18 要的：边画边看这条线是多少度）。
+            // α 由**权威函数**算，这里只是把它和"吸没吸住"一起存下来，供渲染与脏区用。
+            _shapeInclination = SelectionHandles.InclinationDegrees(start, end);
+            _shapeInclinationSnapped = snapped;
+        }
+        s.SetEnd(end.X, end.Y);
+        _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);
+    }
+
+    /// <summary>
+    /// 正在画一条**有倾斜角**的图形（直线 / 箭头）。
+    ///
+    /// 矩形和椭圆是两个对角点定义的，没有"倾斜角"这回事，所以不给读数
+    /// （画线读数只对直线/箭头，见 计划-图形工具.md 8.2）。
+    /// </summary>
+    internal bool ShapeInclinationActive
+        => ActiveStroke != null && ActiveStroke.Kind is StrokeKind.Line or StrokeKind.Arrow;
+
+    /// <summary>画线中那条线**当前结果**的 α（[0°,180°)）；不在画线时是 0。</summary>
+    internal float ShapeInclinationDegrees => _shapeInclination;
+
+    /// <summary>画线中的 α 是"吸"出来的吗（特殊角 / Shift 网格）——标签按它变色。</summary>
+    internal bool ShapeInclinationSnapped => _shapeInclinationSnapped;
+
+    /// <summary>画线中那个会被拖动的端点（画布坐标）：读数标签贴它外侧。</summary>
+    internal Vector2 ShapeInclinationAnchor => _shapeAnchor;
+
+    private float _shapeInclination;
+    private bool _shapeInclinationSnapped;
+    private Vector2 _shapeAnchor;
+
+    /// <summary>
+    /// 这次拖拽够不够长（不够就当没画，什么也不留）。
+    /// 判据用**画布坐标下的实际距离**，而不是"收没收到过移动消息"——
+    /// 手抖一下也会收到移动消息。
+    /// </summary>
+    private bool ShapeDragLongEnough(Stroke s)
+    {
+        if (s.Points.Count < 2) return false;
+        var a = new Vector2(s.Points[0].X, s.Points[0].Y);
+        var b = new Vector2(s.Points[^1].X, s.Points[^1].Y);
+        return Vector2.Distance(a, b) >= ShapeMinDragLogical * DpiScale;
     }
 
     /// <summary>
@@ -3742,6 +3952,24 @@ public class InkEngine
 
     internal void QuitFromUi() => _quit = true;
 
+    // ---- 浮层主题（选中操作条 / 小面板用它画）-----------------------------
+
+    /// <summary>
+    /// 浮层主题。界面 `Attach` 时推上来（<see cref="IUiHost.SetFloatingTheme"/>），
+    /// 没界面挂上来时用 <see cref="UiTheme.Default"/> 兜底。
+    ///
+    /// 它和界面自己那颗工具条共用一套数字（都出自 `InkUi.Tokens`），
+    /// 所以"操作条和工具条是一家"这句话在代码上也有了着落，而不是靠两处各写一份。
+    /// </summary>
+    internal UiTheme FloatingTheme = UiTheme.Default;
+
+    /// <summary>界面把浮层主题推上来了。主题换了要立刻重画（浮层在这一帧就变样）。</summary>
+    internal void SetFloatingThemeFromUi(UiTheme theme)
+    {
+        FloatingTheme = theme;
+        _dirty = true;
+    }
+
     // ---- 界面偏好的存取（引擎只当仓库，不解释内容）----------------------
 
     /// <summary>界面来问一条偏好。没有就返回 null（界面自己知道默认值）。</summary>
@@ -4103,6 +4331,9 @@ public class InkEngine
     internal bool UiVisibleNow => Ui != null && UiGuard("Visible", () => Ui.Visible, false);
     internal RectF UiQueryBoundsNow() =>
         Ui == null ? RectF.Empty : UiGuard("QueryBounds", () => Ui.QueryBounds(), RectF.Empty);
+    /// <summary>界面声明"我会画到占用矩形外面一圈"（投影/浮出预览），见 IOverlayUi.PaintMargin。</summary>
+    internal float UiPaintMarginNow =>
+        Ui == null ? 0f : UiGuard("PaintMargin", () => Ui.PaintMargin, 0f);
     internal bool UiIsAnimatingNow => Ui != null && UiGuard("IsAnimating", () => Ui.IsAnimating, false);
     internal RectF UiLayoutNow(RectF screen, float dpiScale) =>
         Ui == null ? RectF.Empty : UiGuard("Layout", () => Ui.Layout(screen, dpiScale), RectF.Empty);
@@ -4302,13 +4533,17 @@ public class InkEngine
     /// **此刻根本点不中**，画着就是"看得见、点不到"。
     /// 注意：**脏区照旧算**（见 Overlay.ComputeTransientBounds），靠两帧回溯把
     /// 消失的那一块擦干净。
+    ///
+    /// 2026-09-18 补：**拖端点也收**。这时候手柄停在模型里（旧位置），
+    /// 而临时几何已经跟着指针走了——留着那个柄会指着一条线上根本没有的点。
+    /// 收起来之后画面里只剩"临时几何 + 倾斜角读数"，恰好是此刻唯一有用的两件东西。
     /// </summary>
     internal bool SelChromeCollapsed
         => SelDragging && _selDragMoved
-        && (_dragIsMove || _dragHandle == SelHandle.Rotate);
+        && (_dragIsMove || _dragHandle == SelHandle.Rotate || _vertexDragging);
 
     /// <summary>拖动预览在不在：手势进行中，而且真的有一批对象被摘出来了。</summary>
-    internal bool DragPreviewActive => SelDragging && _detachOrdered.Count > 0;
+    internal bool DragPreviewActive => SelDragging && !_vertexDragging && _detachOrdered.Count > 0;
 
     /// <summary>拖动预览要画的那一批（按文档顺序，用 <see cref="DragPreviewMatrix"/> 变换）。</summary>
     internal IReadOnlyList<Stroke> DragPreviewStrokes => _detachOrdered;
@@ -4570,6 +4805,153 @@ public class InkEngine
         _selDragMoved = false;
     }
 
+    // ---------------------------------------------------------------------
+    //  图形端点编辑：起手 / 每帧 / 提交
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// 端点手柄按下：起一次"改几何"的手势。
+    ///
+    /// 复用 <see cref="DetachForDrag"/> 那套：**只在这一刻**把这条图形压过的块标脏一次、
+    /// 并且让内容层在重画时跳过它——于是它原来待的地方当场就干净了，
+    /// 之后整个手势期内容层一帧都不用再动（自检里"内容层一帧不重画"盯的就是这条）。
+    /// </summary>
+    private void BeginVertexDrag(Stroke s, int index, float x, float y)
+    {
+        _vertexDragging = true;
+        _vertexTarget = s;
+        _vertexIndex = Math.Clamp(index, 0, s.Points.Count - 1);
+        _vertexPreviewLocal = new Vector2[s.Points.Count];
+        _vertexPrevBounds = RectF.Empty;
+        _vertexPreviewCanvas = SelectionHandles.EndpointCanvasPosition(s, _vertexIndex == 0 ? 0 : 1);
+        // 预览初始就是原样（这个时候还没动，画面不该有任何变化）。
+        WriteVertexLocalPoints(_vertexPreviewCanvas);
+        _vertexInclination = InclinationOfPreview();
+        _vertexSnapped = false;
+
+        _dragHandle = _vertexIndex == 0 ? SelHandle.EndpointA : SelHandle.EndpointB;
+        _dragIsMove = false;
+        _dragStartPoint = new Vector2(x, y);
+        _dragTargets = new[] { s };
+        _selDragMatrix = Matrix3x2.Identity;
+        _selDragMoved = false;
+        DetachForDrag();
+
+        SelDragging = true;
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// 拖动中：**模型一个字不改**——只在
+    /// <see cref="_vertexPreviewLocal"/> / <see cref="_vertexPreviewCanvas"/> 里攒出
+    /// "临时几何"，由浮动层每帧画出来（<see cref="OverlayWindow"/> 的 DrawVertexPreview）。
+    ///
+    /// 坐标系有两层，错一层端点就会飞：指针和手柄在**画布坐标**，
+    /// 而控制点存在对象的**局部坐标**里，中间隔着 `Transform`（旋转过的直线必须过
+    /// `Transform⁻¹` 才能改点）。
+    ///
+    /// 吸附也和画线同一套（绕另一个端点转、保持长度），并且是"另一个端点"——
+    /// 拖哪个点就绕对面那个转，才符合"我刚拖的那头动、那头不动"。
+    /// </summary>
+    private void UpdateVertexDrag(float x, float y)
+    {
+        var s = _vertexTarget;
+        if (s == null) return;
+
+        var fixedSlot = _vertexIndex == 0 ? 1 : 0;
+        var fixedPoint = SelectionHandles.EndpointCanvasPosition(s, fixedSlot);
+
+        bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
+        bool alt = (Native.GetAsyncKeyState(0x12 /* VK_MENU */) & 0x8000) != 0;
+        var canvasPoint = SelectionHandles.SnapEndPoint(fixedPoint, new Vector2(x, y), shift, alt,
+                                                        out bool snapped);
+
+        // 脏区只标"被拖的那个端点**走过的那一小段**"：旧、新两个小矩形分开加
+        // （上一帧 ∪ 这一帧，和拖动预览同一套账）。整条线的包围盒横跨屏幕时几乎是整屏，
+        // 而这里动的其实只有一个端点——按整条算等于每帧白重画一大片。
+        if (!_vertexPrevBounds.IsEmpty) Doc.Dirty.Add(_vertexPrevBounds);
+        var prevCanvas = _vertexPreviewCanvas;
+        _vertexPreviewCanvas = canvasPoint;
+        _vertexSnapped = snapped;
+        WriteVertexLocalPoints(canvasPoint);
+        _vertexPrevBounds = EndpointDirtyRect(prevCanvas, canvasPoint, s.Width * 0.5f + 2f);
+        if (!_vertexPrevBounds.IsEmpty) Doc.Dirty.Add(_vertexPrevBounds);
+
+        // α 按**画布坐标**量：用户看到的是屏幕上那条线（旋转过的直线，局部角不等于屏幕角）。
+        _vertexInclination = InclinationOfPreview();
+
+        if (!_selDragMoved
+            && Vector2.Distance(new Vector2(x, y), _dragStartPoint) > ClickToleranceLogical * DpiScale)
+            _selDragMoved = true;
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// 松手：把攒了一路的临时几何**提交成一步撤销**（改的是几何，不是变换）。
+    ///
+    /// 一点没移动就不提交——按一下端点手柄本来会多出一条"原样"的撤销记录。
+    /// </summary>
+    private void CommitVertexDrag()
+    {
+        var s = _vertexTarget;
+        var pts = _vertexPreviewLocal;
+        bool moved = _selDragMoved;
+
+        _vertexDragging = false;
+        _vertexTarget = null;
+        _vertexPreviewLocal = null;
+        _vertexPrevBounds = RectF.Empty;
+        _dragTargets = null;
+        _dragHandle = SelHandle.None;
+        _dragIsMove = false;
+        _selDragMoved = false;
+
+        if (moved && s != null && pts != null) Doc.ApplyGeometry(s, pts);
+        // 一点没动（只是点了一下端点手柄松手）：**也必须把它压过的那块重画一次**——
+        // 起手那一下它已经从内容层摘出去了，不重画的话这一块就一直是"没有这条线"，
+        // 屏幕上的线会当场消失（松手后模型其实什么都没变）。
+        // 走 InvalidateContent 而不是 Dirty.Add：内容层只在**版本号变了**时才消费脏区
+        // （见那个函数的注释），少抬一次版本号就等于白标。
+        else if (s != null) Doc.InvalidateContent(s.PaddedBounds);
+
+        // 回到内容层：提交那一步已经把旧位与新位都标脏了，所以这一帧的重画一定会
+        // 带上它（而不是继续画预览）。
+        ReattachAfterDrag();
+        _dirty = true;
+    }
+
+    /// <summary>把"被拖的端点落在画布坐标 <paramref name="canvasPoint"/>"写进预览的局部点。</summary>
+    private void WriteVertexLocalPoints(Vector2 canvasPoint)
+    {
+        var s = _vertexTarget;
+        var pts = _vertexPreviewLocal;
+        for (int i = 0; i < pts.Length; i++)
+            pts[i] = new Vector2(s.Points[i].X, s.Points[i].Y);
+        pts[_vertexIndex] = SelectionHandles.ToLocalPoint(canvasPoint, s.Transform);
+    }
+
+    /// <summary>
+    /// 预览那条线的倾斜角：把两个控制点**过一遍 Transform 换成画布坐标**再量——
+    /// 读数是给眼睛看的，不是给局部坐标看的。
+    /// </summary>
+    private float InclinationOfPreview()
+    {
+        var s = _vertexTarget;
+        var pts = _vertexPreviewLocal;
+        if (s == null || pts == null || pts.Length < 2) return 0f;
+        return SelectionHandles.InclinationDegrees(Vector2.Transform(pts[0], s.Transform),
+                                                   Vector2.Transform(pts[^1], s.Transform));
+    }
+
+    /// <summary>被拖端点"走过的一小段"的脏矩形（两个端点位置取并集，再按半笔宽外扩）。</summary>
+    private static RectF EndpointDirtyRect(Vector2 a, Vector2 b, float inflate)
+    {
+        var r = RectF.Empty;
+        r.Add(a.X, a.Y);
+        r.Add(b.X, b.Y);
+        return r.Inflate(inflate);
+    }
+
     /// <summary>
     /// 这一批对象在矩阵 <paramref name="m"/> 下占的画布范围（轴对齐）。
     ///
@@ -4622,6 +5004,16 @@ public class InkEngine
     {
         get
         {
+            // 拖端点：模型到松手才动，所以框必须按**临时几何**算——
+            // 照模型算的话框会留在旧位置上，和屏幕上那条线当场分家。
+            // （和下面"拖动预览用实时矩阵"是同一件事的两种形态：一个改几何、一个改变换。）
+            if (_vertexDragging && _vertexTarget != null && _vertexPreviewLocal != null)
+            {
+                var rv = Stroke.PaddedBoundsOf(_vertexPreviewLocal, _vertexTarget.Transform,
+                                               _vertexTarget.Width);
+                return new SelectionFrame { Local = rv, ToCanvas = Matrix3x2.Identity };
+            }
+
             var f = SelectionHandles.FrameOf(Doc.Selected);
             if (!DragPreviewActive || f.IsEmpty) return f;
             var r = RectF.Empty;
@@ -4629,7 +5021,13 @@ public class InkEngine
             {
                 // 锁定的对象**不跟着动**（用户 2026-09-16 定的 B 语义），
                 // 所以它们那块按"当前位置"算——不然框会跟着它们一起漂。
-                r.Add(s.Locked ? s.WorldInkBounds : TransformBounds(s.WorldInkBounds, _selDragMatrix));
+                if (s.Locked) { r.Add(s.WorldInkBounds); continue; }
+                // 直线 / 箭头要按**端点**过（对象变换 × 实时矩阵）算，不能拿"当前墨迹框"再乘矩阵：
+                // 后者等于"把一个矩形整体转过去再取外接"，一条转 30° 的直线框会撑到接近两倍宽
+                // （2026-09-18 实测：962 vs 线自己 490）。
+                r.Add(s.IsLineLike
+                    ? s.LineLikeInkBounds(_selDragMatrix)
+                    : TransformBounds(s.WorldInkBounds, _selDragMatrix));
             }
             return new SelectionFrame { Local = r, ToCanvas = Matrix3x2.Identity };
         }
@@ -4702,7 +5100,21 @@ public class InkEngine
             var aabb = frame.CanvasAabb;
 
             // （操作条与面板已经在 ⓪ 里处理过了，这里只剩手柄 / 框内拖动 / 点选）
-            h = SelectionHandles.HitTest(x, y, frame, dpi);
+            h = SelectionHandles.HitTest(x, y, Doc.Selected, frame, dpi);
+
+            // 端点手柄：走"改几何"那条路（**不是**整体拖动、也不是缩放）。
+            // 锁定语义照旧：锁定的拖不动，那就连端点也不给拖，落回"框内拖动"
+            // 让下面那段锁定分支把它吃掉（否则会退化成一个假的缩放拖动）。
+            if (h is SelHandle.EndpointA or SelHandle.EndpointB)
+            {
+                if (SelectionHandles.EndpointEditable(Doc.Selected, out var line) && !line.Locked)
+                {
+                    BeginVertexDrag(line, h == SelHandle.EndpointA ? 0 : line.Points.Count - 1, x, y);
+                    return true;
+                }
+                h = SelHandle.None;
+            }
+
             if (h == SelHandle.None)
             {
                 // 没点在手柄上：把指针变回框坐标，看是不是落在框里（整体拖动）。
@@ -4796,6 +5208,17 @@ public class InkEngine
         _rotAccumDeg = 0f;
         _rotPrevPoint = frame.ToLocalPoint(_dragStartPoint);
 
+        // 这一次旋转读 α 还是 Δ，**按下这一刻判定一次**（用户 2026-09-18 的四条之一）。
+        // 判定复用"单选一条直线/箭头"那个现成判据（终点手柄用的是同一个），
+        // 于是"何时给端点手柄、何时给 α 读数"永远是同一个答案——不会两处走岔。
+        _rotLineLike = SelectionHandles.EndpointEditable(Doc.Selected, out var rotLine);
+        _rotStartInclination = _rotLineLike
+            ? SelectionHandles.InclinationDegrees(SelectionHandles.EndpointCanvasPosition(rotLine, 0),
+                                                  SelectionHandles.EndpointCanvasPosition(rotLine, 1))
+            : 0f;
+        SelRotationInclination = _rotStartInclination;
+        SelRotationReadsInclination = false;   // 松手前标签不显示，这个标志只在拖动中为真
+
         SelDragging = true;
         _dirty = true;
         return true;
@@ -4820,6 +5243,9 @@ public class InkEngine
     /// </summary>
     private void UpdateSelDrag(float x, float y)
     {
+        // 拖端点：另一条路（改几何，模型不动），和"拖对象"分开走。
+        if (_vertexDragging) { UpdateVertexDrag(x, y); return; }
+
         var cur = new Vector2(x, y);
         bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
         // Alt = 临时关掉吸附。Shift 是"硬网格 15°"，Alt 是"完全自由"，两个修饰键
@@ -4846,13 +5272,48 @@ public class InkEngine
             _rotAccumDeg += SelectionHandles.RotationStepDegrees(c, _rotPrevPoint, p);
             _rotPrevPoint = p;
 
-            // 吸附作用在**累积角**上：90° / 15° 的整数倍在负角度、超过一圈的角度上照样对得上。
-            float localDeg = SelectionHandles.SnapRotationDegrees(_rotAccumDeg, shift, alt, out bool snapped);
+            float localDeg;
+            bool snapped;
+            if (_rotLineLike)
+            {
+                // —— 单选直线 / 箭头：读数与吸附都走 **α₀ + Δ**（用户 2026-09-18 澄清）——
+                //
+                // 用户原话："按照高中数学这个直线的倾斜角，现在是 45 度，那么我那个旋转手柄
+                // 刚开始转的时候就是 45 度。那么逆时针是为正，顺时针为负，它可以无限转下去，
+                // 也就说可以转到 360、720、1000 多度，或者说负的 2000 多度……除了初始角度
+                // 是要调一下以外，其他和原来的最开始的逻辑是一样的。"
+                //
+                // 于是这里**不折角、不取模**：读数就是 `按下时的 α₀ + 这一拖累积转过的角 Δ`
+                // （Δ 本来就无上限，见 _rotAccumDeg）。45° 的线逆时针转一圈 = 405°、
+                // 再转 = 765°；顺时针 400° = −355°。
+                // 吸附在**展开值**上做，特殊角按 180° 周期（405.5° 吸到 405°），
+                // 所以"要不要吸"和折回那一版完全一样，只是吸完的数仍是展开的。
+                float expanded = _rotStartInclination + _rotAccumDeg;
+                float snappedDeg = SelectionHandles.SnapExpandedInclinationDegrees(expanded, shift, alt,
+                                                                                  out snapped);
+                if (snapped)
+                {
+                    // "要落到那个角还得多转多少度"——把它加进累积角，
+                    // 于是**矩阵用的是吸过之后的角**，标签上的数和屏幕上看到的一致。
+                    _rotAccumDeg += snappedDeg - expanded;
+                }
+                localDeg = _rotAccumDeg;
+                SelRotationInclination = _rotStartInclination + localDeg;   // 展开值，故意不折
+                SelRotationReadsInclination = true;
+            }
+            else
+            {
+                // 其它情况（多选 / 矩形 / 椭圆 / 图像 / 自由笔迹）：照旧读 Δ、照旧吸 90°。
+                // 吸附作用在**累积角**上：90° / 15° 的整数倍在负角度、超过一圈的角度上照样对得上。
+                localDeg = SelectionHandles.SnapRotationDegrees(_rotAccumDeg, shift, alt, out snapped);
+                SelRotationReadsInclination = false;
+            }
 
             // 这一段是"框坐标和屏幕反手时，把读数翻回眼睛看到的方向"的通用保险：
             // 镜像过的对象 + 斜框的组合下，本地角度的正负和屏幕是反的。
             // 选中框改成**一律轴对齐**之后 ToCanvas 恒为单位阵，这里恒不触发；
             // 留着是因为公式本来就要覆盖"框有自己的朝向"那一天（见 SelectionFrame 的注释）。
+            // 注：它只管 Δ 那个读数；α 是从**画布坐标**量出来的，天生就是眼睛看到的方向。
             SelRotationDegrees = SelectionHandles.IsMirrored(_dragFrame.ToCanvas) ? -localDeg : localDeg;
             SelRotationSnapped = snapped;
             SelRotating = true;
@@ -4903,6 +5364,11 @@ public class InkEngine
         SelDragging = false;
         SelRotating = false;            // 度数标签只在拖动中出现
         _rotAccumDeg = 0f;              // 下一次拖拽从 0 开始数（标签也不显示了）
+        SelRotationReadsInclination = false;   // 读数归位：下一次按下时重新判定读 α 还是 Δ
+
+        // 拖端点：收尾走"改几何"那条路（一次拖拽 = 一步改几何的撤销）。
+        if (_vertexDragging) { CommitVertexDrag(); return; }
+
         if (_dragTargets == null) return;
 
         // 一批都没得动（例如选中的全锁着）：只把状态收干净，**不要**提交空动作

@@ -200,6 +200,8 @@ public sealed class FullUi : IOverlayUi
     private const float GridGap = 6f;
 
     private readonly Dictionary<uint, ID2D1SolidColorBrush> _brushes = new();
+    /// <summary>形变期间整片内容淡入用的图层（每帧现建现销，不缓存：理由见 BeginFade）。</summary>
+    private ID2D1Layer _fadeLayer;
 
     // ---- 静态底缓存：**想清楚了再做，现在没做** -----------------------------
     //
@@ -260,6 +262,39 @@ public sealed class FullUi : IOverlayUi
         _rail.Jump(0f);
         LoadPrefs();
         Layout(host.Screen, host.DpiScale);
+        PushFloatingTheme();       // 浮层（操作条/小面板/旋转读数）跟着走同一套令牌
+    }
+
+    /// <summary>
+    /// 把**同一套令牌**推给引擎，让选中操作条、颜色/层级/导出面板、旋转读数也用这套
+    /// 颜色与投影。
+    ///
+    /// 为什么要有这一步：那些东西画在**引擎**的浮层上（它们跟着选区走，不属于工具条），
+    /// 而颜色/投影的数字**只应该有一份**。以前引擎里另写了一份 `UiTheme.Default`，
+    /// 于是浅色主题改完之后，工具条有了冷灰描边和五层投影，操作条还是蓝灰描边、
+    /// 一层投影都没有——用户一眼就看出来"不是一套"。
+    ///
+    /// 引擎不解释偏好：谁该用深色是界面的事，界面换主题就推一次。
+    /// </summary>
+    private void PushFloatingTheme()
+    {
+        var layers = _dark ? Tokens.ShadowDark : Tokens.ShadowLight;
+        var ramp = new UiShadowLayer[layers.Length];
+        for (int i = 0; i < layers.Length; i++)
+            ramp[i] = new UiShadowLayer(layers[i].Inflate, layers[i].Dy, layers[i].Color);
+
+        _host.SetFloatingTheme(new UiTheme(
+            panel: _dark ? Tokens.PanelDark : Tokens.PanelLight,
+            panelBorder: _dark ? Tokens.BorderDark : Tokens.BorderLight,
+            text: _dark ? Tokens.InkDark : Tokens.InkLight,
+            textMuted: _dark ? Tokens.InkMutedDark : Tokens.InkMutedLight,
+            hover: _dark ? Tokens.HoverDark : Tokens.HoverLight,
+            activeBg: Tokens.Accent,
+            activeText: Tokens.AccentInk,
+            cornerRadius: Tokens.FloatingCorner,
+            // 底沿那道"卷边"只有浅色用：深色靠"提亮表面"读层次，给它一条暗边只会显脏
+            edgeBottom: _dark ? new Color4(0f, 0f, 0f, 0f) : Tokens.EdgeLightBottom,
+            shadow: ramp));
     }
 
     // ---- 界面自己的偏好（存哪儿、怎么存由引擎负责，这里只管键的含义）------
@@ -340,8 +375,48 @@ public sealed class FullUi : IOverlayUi
         u.MinY = Math.Max(u.MinY, _screen.MinY);
         u.MaxX = Math.Min(u.MaxX, _screen.MaxX);
         u.MaxY = Math.Min(u.MaxY, _screen.MaxY);
+
+        // 收起态贴边隐藏：露出来的那一条**画成一条短把手**（见 DrawPeekTab），
+        // 所以"点得到的地方"也得跟着收短——不然把手两边各留一截看不见、
+        // 却会吃掉点击的空地（"看得见的地方就点得到"，这句要两头都成立）。
+        if (PeekTabShown && _expand.Value < 0.5f)
+        {
+            bool horiz = (u.MaxX - u.MinX) >= (u.MaxY - u.MinY);
+            float len = MathF.Min(Tokens.PeekTab, horiz ? u.MaxX - u.MinX : u.MaxY - u.MinY);
+            if (horiz)
+            {
+                float c = (u.MinX + u.MaxX) * 0.5f;
+                u.MinX = c - len * 0.5f; u.MaxX = c + len * 0.5f;
+            }
+            else
+            {
+                float c = (u.MinY + u.MaxY) * 0.5f;
+                u.MinY = c - len * 0.5f; u.MaxY = c + len * 0.5f;
+            }
+        }
         return u;
     }
+
+    /// <summary>
+    /// 贴边隐藏是不是已经沉到"该改用把手"的地步了。
+    ///
+    /// 判据是**露出来多厚**：露头 = 8 ＋ 40 × peek（40 = 球的直径 − 露头），
+    /// 露出不到 12 像素就换。换早了不行——球里的色环和笔图标会提前消失，
+    /// 那正是用户点过名的"跳"。
+    /// </summary>
+    private bool PeekTabShown =>
+        _hideEnabled && Tokens.DockPeek + (Tokens.Ball - Tokens.DockPeek) * _peek.Value <= 12f;
+
+    /// <summary>
+    /// 现在是"展开的条"还是"球"。0.5 这条线全工程共用（贴边隐藏要不要收、内容画哪一套）。
+    /// </summary>
+    private bool Expanded => _expand.Value > 0.5f;
+
+    /// <summary>
+    /// 画到占用矩形**外面**的那一圈（投影），告诉引擎别把它裁掉。
+    /// 只影响裁剪与脏区，**不参与命中测试**——所以面板旁边照样能画线。
+    /// </summary>
+    public float PaintMargin => Tokens.PaintMargin;
 
     private RectF BarRect()
     {
@@ -1266,6 +1341,7 @@ public sealed class FullUi : IOverlayUi
             case Row.DarkTheme:
                 _dark = !_dark;
                 SavePrefs();
+                PushFloatingTheme();       // 浮层（操作条/小面板）也得跟着换
                 Invalidate();
                 break;
             case Row.AutoHide:
@@ -1371,6 +1447,15 @@ public sealed class FullUi : IOverlayUi
         // 露头会变成 8 ＋（任务栏那段高度）＝几十像素（自检当场量到过 56）。
         float sl = u.MinX - _screen.MinX, sr = _screen.MaxX - u.MaxX;
         float st = u.MinY - _screen.MinY, sb = _screen.MaxY - u.MaxY;
+
+        // **左右两条边不藏"展开态的条"**（用户 2026-09-18 定的规则，见
+        // 调研-界面-贴边与隐藏.md 附三）。理由：面板是横的，把它缩进侧边等于**侧着塞进边里**
+        // ——贴左边时露出来的其实是它的**右端**（最后一格和动作按钮区），跟"球"没有任何关系；
+        // 而球是 48×48 的正方形，塞进哪条边都是同一个姿态。
+        // 所以：**收起态四边都能藏，展开态只在上下藏**。左右仍然保留"吸附停靠"（那是拖动的事，
+        // 在 Snap 里，不在这），只是不再往里缩。
+        if ((best == dl || best == dr) && Expanded) return Vector2.Zero;
+
         if (best == dl) return new Vector2(-(w - Tokens.DockPeek + sl) * t, 0);
         if (best == dr) return new Vector2((w - Tokens.DockPeek + sr) * t, 0);
         if (best == dt) return new Vector2(0, -(h - Tokens.DockPeek + st) * t);
@@ -1393,8 +1478,20 @@ public sealed class FullUi : IOverlayUi
         // 才允许"离开就收"——那时候他已经知道东西在哪儿了。
         if (!_peekArmed) { _peek.To(1f, 0); return; }
 
-        bool keepOpen = _hoverInside || _press != -1 || _sliderDragging || _drawerOpen
-                     || _host.State.IsDrawing;
+        // **写字中：什么都不做**（原样返回），不是"强制展开"。
+        //
+        // 这条规则的本意一直是"写字的时候不许收"——老师写到屏幕边上，工具条不能自己缩回去。
+        // 但它原来和下面 `keepOpen` 用的是同一句 `_peek.To(1f)`，于是"不许收"变成了"必须展开"：
+        // **藏好的露头一落笔就被拽出来**（用户 2026-09-18 报的"贴边隐藏以后我一写它就取消贴边了"）。
+        // 现在单独拎出来**原样返回**：本来只剩露头就继续露头，本来就开着就继续开着。
+        if (_host.State.IsDrawing)
+        {
+            // 写字这段时间不算"离开"，写完还要等满 700 毫秒才允许收（防误触那条规则照旧）。
+            _leftAtMs = _host.NowMs;
+            return;
+        }
+
+        bool keepOpen = _hoverInside || _press != -1 || _sliderDragging || _drawerOpen;
         if (keepOpen)
         {
             _leftAtMs = _host.NowMs;
@@ -1412,7 +1509,13 @@ public sealed class FullUi : IOverlayUi
         var p = Local(e);
         _press = -1;
         _dragging = false;
-        _hoverInside = true;
+        // **"按下了"不等于"按在面板上"**。引擎会把**每一次**按下都转给界面
+        // （界面有权决定吃不吃），所以这里必须自己判一次位置。
+        // 无条件置 true 的后果（用户 2026-09-18 报的"贴边隐藏以后我一写它就取消贴边了"）：
+        // 在画布上落笔 → 这里置 true、随后返回 false（这一笔归画布）→ 但 true 留了下来，
+        // 而**写字期间引擎不转发 PointerMove**（那一笔已经归画布了），没人去把它改回来 →
+        // `UpdatePeek` 一直以为"指针还在面板上" → 把藏好的露头重新拽出来。
+        _hoverInside = QueryBounds().Contains(e.X, e.Y);
         _peekArmed = true;                 // 碰过了 → 之后允许"离开就收"
         _leftAtMs = _host.NowMs;
         _pressPos = p;
@@ -1800,26 +1903,111 @@ public sealed class FullUi : IOverlayUi
         // **整块面板一张卡片**（主条 ＋ 色带共用一个圆角）：圆角随展开从 24 收到 18，
         // 和假面板一样（它写的是 L.Radius = 24 - 6 * e）。
         float radius = Tokens.PillRadius(Tokens.BarHeight) - 6f * e;
-        DrawCard(ctx, panel, radius);
+        // **收起态贴边隐藏时，球本身那张卡片不画**：画了的话它的圆和投影会一起露出来，
+        // 把手下面还压着一团（露出 8 像素时看得见那一片弧——正是要收拾的那个观感）。
+        // 这一条必须在这里判：下面那个 `e < 0.5` 分支里再 return 已经晚了。
+        if (!(e < 0.5f && PeekTabShown)) DrawCard(ctx, panel, radius);
 
         var st = _host.State;
-        if (e < 0.5f)
+
+        // 贴边隐藏沉下去之后（露头已经只剩十来个像素），**不再露球的那一小片弧**，
+        // 改成一条直的把手（见 Tokens.PeekTab：那一片弧看着像残影）。
+        // 换的时机见 PeekTabShown：再早换，球里的色环和笔图标会提前消失。
+        if (e < 0.5f && PeekTabShown)
         {
-            // 收起态：一个球，圆内那圈颜色 = 当前笔色（不用点开就知道手里是哪支笔）
-            var c = new Vector2((bar.MinX + bar.MaxX) * 0.5f, (bar.MinY + bar.MaxY) * 0.5f);
-            // 数字照抄假面板：圆内那圈半径 = 0.76 × 球的半径、线宽 2.5，
-            // 中间那个笔图标 = 0.7 × 球的半径（比工具格里的图标小一圈，
-            // 不然一个 48 的球里塞一个 24 的图标会顶到边上）。
-            float half = (bar.MaxX - bar.MinX) * 0.5f;
-            var ring = new Ellipse(c, half * 0.76f, half * 0.76f);
-            ctx.DrawEllipse(ring, Brush(ctx, st.PaletteBase), 2.5f);
-            IconAtlas.DrawCentered(ctx, "pen", bar, half * 1.4f, Brush(ctx, InkCol));
+            DrawPeekTab(ctx);
             return;
         }
+
+        // ---- 内容是**两段式**的：形状先长，内容再交叉换 ----
+        //
+        // 原来是在 e = 0.5 上硬切（球在 e<0.5 画、13 格在 e≥0.5 画）。出图当场看出两个毛病
+        // （`--panelshow <图> --expand 0.15` / `0.5`）：
+        //   ① 色环和笔图标是按**面板的一半宽**算的，面板一长它们就被撑成一整个大图标，
+        //      而且还跟着面板中心往右跑；
+        //   ② 硬切那一下 13 格"啪"地出现，而且**没被面板裁住**——右边几个工具跑到面板外面。
+        // 现在：形状照旧按 e 长（200ms、ease-out），
+        //   球的内容：e 0.05→0.45 淡出；  13 格：e 0.45→0.80 淡入。
+        // 中间那段两者同时在，位置也是同一个（球那一格），读起来就是"球摊开成格子"。
+        float ballA = 1f - Smooth01((e - 0.05f) / 0.40f);
+        float cellsA = Smooth01((e - 0.45f) / 0.35f);
+
+        if (ballA > 0.004f) DrawBallContent(ctx, st, e, ballA);
 
         // 色带那条**凹槽**：把色带那一块裁出来、填一层淡淡的暗色（照假面板：
         // 裁进面板的圆角形状，顶部两个角自然跟着圆）。
         var band = BandRect();
+        if (cellsA > 0.004f)
+        {
+            // 形变期间**把内容裁进面板**：面板还没长到全宽时，右边那几格会数到面板外面去。
+            // 平时（e≈1）一次多余的裁剪都不做。
+            bool clip = e < 0.999f;
+            if (clip)
+                ctx.PushAxisAlignedClip(new Vortice.RawRectF(panel.MinX, panel.MinY, panel.MaxX, panel.MaxY),
+                                        AntialiasMode.Aliased);
+            // 淡入整层做（不透明度图层），而不是把 alpha 一路传进每个绘制函数：
+            // 要淡的东西有几十处（13 格的图标、组分隔线、色片、滑条…），传 alpha 得改十几处签名。
+            bool layered = cellsA < 0.996f && BeginFade(ctx, cellsA);
+            DrawExpandedContent(ctx, st, panel, band, radius);
+            if (layered) EndFade(ctx);
+            if (clip) ctx.PopAxisAlignedClip();
+        }
+
+        // 面板上/下沿那道 1 像素的"收边"。**两个主题走相反的方向**（理由见 Tokens）：
+        //   深色 → 顶沿一道极淡的白高光（读"接光"）；
+        //   浅色 → 底沿一道极淡的暗线（读"卷边"）。白高光画在白面板上等于没画。
+        //
+        // 画法是"裁出一条 1.5 像素高的横带、带子里描一遍圆角矩形"：这样线到两端
+        // 自然顺着圆角收进去。老代码是在带子里填一条**直**矩形，两端会戳出圆角外
+        // 十几像素（浅色那条是白高光，落在亮背景上就是一条看得见的飞边）。
+        if (!PerfSkipChrome && band.MaxY - band.MinY > 20f)
+        {
+            bool top = _dark;
+            float y = top ? panel.MinY + 1f : panel.MaxY - 1f;
+            ctx.PushAxisAlignedClip(new Vortice.RawRectF(panel.MinX, y - 0.75f, panel.MaxX, y + 0.75f),
+                                    AntialiasMode.Aliased);
+            var edge = new Vortice.RawRectF(panel.MinX + 0.5f, panel.MinY + 0.5f,
+                                            panel.MaxX - 0.5f, panel.MaxY - 0.5f);
+            ctx.DrawRoundedRectangle(new RoundedRectangle(edge, radius - 0.5f, radius - 0.5f),
+                                     Brush(ctx, top ? Tokens.TopSheenDark : Tokens.EdgeLightBottom), 1f);
+            ctx.PopAxisAlignedClip();
+
+            // 色带那条凹槽**朝主条的那一侧**再压一道 1 像素暗线（只有浅色）。
+            // 凹槽的填充已经降到黑 6%，光靠它自己只是一条淡灰带；这一道线才是
+            // "这道槽是刻进面板的"的凭据（Windows 的口径：浅色用描边定形）。
+            // 位置跟着带子在主条的哪一侧走：面板贴底时带子在上面，线就落在带子下沿。
+            //
+            // 这条线**可以是一条直横线**（不像上面那条收边要顺着圆角走）：它在面板中间，
+            // 而上面那个 `> 20` 的门槛保证了它离面板那条边至少 20 像素，
+            // 同一刻的圆角也只有 20 出头——两端伸出去的不到半个像素，量不出来。
+            if (!_dark)
+            {
+                float wy = BandAbove() ? band.MaxY - 0.5f : band.MinY + 0.5f;
+                ctx.FillRectangle(new Vortice.RawRectF(panel.MinX + 1f, wy - 0.5f,
+                                                       panel.MaxX - 1f, wy + 0.5f),
+                                  Brush(ctx, Tokens.WellEdgeLight));
+            }
+        }
+
+        // 这里原来还画一条"踢脚线"（`DrawGroove`：面板下沿 6 像素处、笔色 25% 的 2 像素横线）。
+        // 2026-09-18 删了：它当年的任务是"让面板下沿永远有东西，看着是块完整的板子"，
+        // 而现在下沿有**投影 ＋ 描边 ＋ 底沿内阴影**三条，这句话不用它承担了；
+        // 留下的坏处更实在——颜色跟着笔走（红笔时它是整块白面板上最响的东西，像根进度条），
+        // 而它想表达的"现在拿的是哪支笔"，球里那道色环已经说了、还更准。
+        if (_drawerOpen) DrawDrawer(ctx);
+        // 粗细预览**最后画**：它可能伸到面板外面，压在上面的东西得过它一层
+        DrawSizePreview(ctx, st);
+    }
+
+    // ---- 颜色（深色主题只是一整套换过来，形状一个都不动）------------------
+
+    /// <summary>
+    /// 展开态那一片内容：凹槽 ＋ 工具格 ＋ 设置条。抽出来是为了能在形变期间**整层淡入**
+    /// （用一个不透明度图层包一次就够，不必把 alpha 传进十几个绘制函数）。
+    /// </summary>
+    private void DrawExpandedContent(ID2D1DeviceContext ctx, in UiState st,
+                                     in RectF panel, in RectF band, float radius)
+    {
         if (!PerfSkipChrome && band.MaxY - band.MinY >= 2f)
         {
             ctx.PushAxisAlignedClip(new Vortice.RawRectF(band.MinX, band.MinY, band.MaxX, band.MaxY),
@@ -1830,52 +2018,176 @@ public sealed class FullUi : IOverlayUi
             ctx.PopAxisAlignedClip();
         }
 
-        // 展开态：球缩进最左一格，右边是这一档的工具格（极简档就只有六格）。
+        // 球缩进最左一格，右边是这一档的工具格（极简档就只有六格）
         var vis = VisibleCells();
         for (int k = 0; k < vis.Length; k++) DrawCell(ctx, k, st);
 
         if (BandVisible()) DrawBand(ctx, st);
-
-        // 面板顶部一道极淡的内高光（假面板原话："Windows 11 的层次感靠它"）
-        if (!PerfSkipChrome && band.MaxY - band.MinY > 20f)
-        {
-            ctx.PushAxisAlignedClip(new Vortice.RawRectF(panel.MinX, panel.MinY, panel.MaxX, panel.MaxY),
-                                    AntialiasMode.Aliased);
-            ctx.FillRectangle(
-                new Vortice.RawRectF(panel.MinX + 1, panel.MinY + 0.5f, panel.MaxX - 1, panel.MinY + 1.5f),
-                Brush(ctx, _dark ? Tokens.TopSheenDark : Tokens.TopSheenLight));
-            ctx.PopAxisAlignedClip();
-        }
-
-        // 滑条：面板**最下沿那一条**（照假面板：主条下方本来就留了 8 像素余量）
-        if (e > 0.55f) DrawGroove(ctx, st);
-        if (_drawerOpen) DrawDrawer(ctx);
-        // 粗细预览**最后画**：它可能伸到面板外面，压在上面的东西得过它一层
-        DrawSizePreview(ctx, st);
     }
 
-    // ---- 颜色（深色主题只是一整套换过来，形状一个都不动）------------------
+    /// <summary>
+    /// 收起态球里面的东西：一圈当前笔色 ＋ 一个笔图标。
+    ///
+    /// 两处**必须按球算、不能按面板算**——老代码是按"面板的一半宽"算的，面板一长
+    /// 图标就被撑成一整个大图标（出图 `--expand 0.15` 一眼就看见）：
+    ///   · 大小 = 球的半径 × 系数（照假面板的数字）；
+    ///   · 位置 = **球那一格的中心**。面板是往右长的，而球在展开态是第 0 格，
+    ///     第 0 格的中心比球的中心靠右 4 像素（BarPad 8 ＋ 按钮 40 的一半 − 球半径 24），
+    ///     所以按 e 插过去——顺手把"球缩进最左一格"这件事也演了出来。
+    /// </summary>
+    private void DrawBallContent(ID2D1DeviceContext ctx, in UiState st, float e, float alpha)
+    {
+        var bar = BarRect();
+        float ballR = Tokens.Ball * 0.5f;
+        float cx = bar.MinX + ballR + (Tokens.BarPad + Tokens.Button * 0.5f - ballR) * e;
+        var c = new Vector2(cx, (bar.MinY + bar.MaxY) * 0.5f);
+        float a = QA(alpha);
+
+        // 数字照抄假面板：圆内那圈半径 = 0.76 × 球的半径、线宽 2.5，
+        // 中间那个笔图标 = 0.70 × 球的半径。**两个比例都在 Tokens 里**（BallRing / BallIcon），
+        // 改一个数的几何关系写在那儿——产品原来把 0.70 写成 1.40，笔正好顶到色圈内沿。
+        var ink = st.PaletteBase;
+        ctx.DrawEllipse(new Ellipse(c, ballR * Tokens.BallRing, ballR * Tokens.BallRing),
+                        Brush(ctx, new Color4(ink.R, ink.G, ink.B, a)), 2.5f);
+
+        var iconBox = new RectF
+        {
+            MinX = c.X - ballR, MinY = c.Y - ballR, MaxX = c.X + ballR, MaxY = c.Y + ballR,
+        };
+        var iconInk = InkCol;
+        IconAtlas.DrawCentered(ctx, "pen", iconBox, ballR * Tokens.BallIcon,
+                               Brush(ctx, new Color4(iconInk.R, iconInk.G, iconInk.B, iconInk.A * a)));
+    }
+
+    /// <summary>
+    /// 开一个不透明度图层（形变期间整片内容淡入用）。**建不出来就返回 false**，
+    /// 让调用方照常画——不能因为一个观感把这一帧丢掉（界面连抛三次会被引擎整体停用）。
+    /// 图层**每帧现建现销**，不缓存：设备丢了之后手里就是过期的 COM 对象，
+    /// 而这条路只在形变那 200 毫秒里走，代价可以忽略（安静时一次都不走）。
+    /// </summary>
+    private bool BeginFade(ID2D1DeviceContext ctx, float opacity)
+    {
+        try { _fadeLayer = ctx.CreateLayer(null); }
+        catch { _fadeLayer = null; }
+        if (_fadeLayer == null) return false;
+
+        var p = new LayerParameters1
+        {
+            // 内容盒给"无限大"：给小了 D2D 会照它裁，内容就缺一块
+            ContentBounds = new Vortice.RawRectF(-1e6f, -1e6f, 1e6f, 1e6f),
+            Opacity = QA(opacity),
+        };
+        ctx.PushLayer(ref p, _fadeLayer);
+        return true;
+    }
+
+    private void EndFade(ID2D1DeviceContext ctx)
+    {
+        ctx.PopLayer();
+        _fadeLayer?.Dispose();
+        _fadeLayer = null;
+    }
+
+    /// <summary>
+    /// 把 0..1 之外的截掉，里面用 smoothstep（两端速度为 0）——交叉淡入的两头才不起棱。
+    /// </summary>
+    private static float Smooth01(float t)
+    {
+        t = Math.Clamp(t, 0f, 1f);
+        return t * t * (3f - 2f * t);
+    }
+
+    /// <summary>
+    /// 把透明度量化到 1/32 一档。**画刷是按颜色缓存的（建了就留着）**，逐帧喂连续值
+    /// 会往缓存里塞几百个画刷；量化之后最多多 32 个，而 1/32 的台阶看不出来。
+    /// </summary>
+    private static float QA(float a) => MathF.Round(Math.Clamp(a, 0f, 1f) * 32f) / 32f;
+
 
     private Color4 PanelFill => _dark ? Tokens.PanelDark : Tokens.PanelLight;
     private Color4 BorderCol => _dark ? Tokens.BorderDark : Tokens.BorderLight;
     private Color4 InkCol => _dark ? Tokens.InkDark : Tokens.InkLight;
     private Color4 HoverCol => _dark ? Tokens.HoverDark : Tokens.HoverLight;
 
-    /// <summary>一张"卡片"：两层投影 ＋ 底 ＋ 1px 描边（没有这道边，圆角会糊进背景里）。</summary>
+    /// <summary>
+    /// 一张"卡片"：投影（逐层往外胀）＋ 底 ＋ 1px 描边（没有这道边，圆角会糊进背景里）。
+    ///
+    /// 投影有几层、每层胀多少、多深，全在 `Tokens.ShadowLight` / `ShadowDark` 里，
+    /// 这里只负责"照单子一层层画"。**从最大的一层往最小的一层画**：大的先铺、小的后盖，
+    /// 靠近面板的地方叠得最厚，往外逐渐变薄——落差就是这么来的。
+    /// </summary>
     private void DrawCard(ID2D1DeviceContext ctx, RectF r, float radius)
     {
         if (!PerfSkipShadow)
         {
-            var sh1 = new Vortice.RawRectF(r.MinX, r.MinY + 1, r.MaxX, r.MaxY + 1);
-            ctx.FillRoundedRectangle(new RoundedRectangle(sh1, radius, radius), Brush(ctx, Tokens.Shadow1));
-            var sh2 = new Vortice.RawRectF(r.MinX, r.MinY + 3, r.MaxX, r.MaxY + 3);
-            ctx.FillRoundedRectangle(new RoundedRectangle(sh2, radius, radius), Brush(ctx, Tokens.Shadow2));
+            var layers = _dark ? Tokens.ShadowDark : Tokens.ShadowLight;
+            for (int i = layers.Length - 1; i >= 0; i--)
+            {
+                var s = layers[i];
+                // 四边一起往外胀，圆角也加上同样的量：这样每一层都和面板**同心**。
+                // 只胀矩形、不加大圆角的话，四个转角会缺一块（尖角戳出来）。
+                var layerRect = new Vortice.RawRectF(r.MinX - s.Inflate, r.MinY - s.Inflate + s.Dy,
+                                                     r.MaxX + s.Inflate, r.MaxY + s.Inflate + s.Dy);
+                float layerRad = radius + s.Inflate;
+                ctx.FillRoundedRectangle(new RoundedRectangle(layerRect, layerRad, layerRad),
+                                         Brush(ctx, s.Color));
+            }
         }
 
         var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
         var rr = new RoundedRectangle(box, radius, radius);
         ctx.FillRoundedRectangle(rr, Brush(ctx, PanelFill));
         ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+    }
+
+    /// <summary>
+    /// 贴边隐藏时露出来的那条**把手**：一条直的药丸（收起态专用，见 Tokens.PeekTab）。
+    ///
+    /// 位置**直接取引擎算给我们的占用矩形**（<see cref="QueryBounds"/>）——那正是屏幕上
+    /// 真正露出来的那一条，已经含了平移和"夹在屏幕内"。好处是**看得见的**和**点得到的**
+    /// 天然是同一个地方，不会出现"看见一条却点不到"。
+    ///
+    /// 贴着左右边时露出来的那条是**竖的**，所以长边要按方向选。
+    /// </summary>
+    private void DrawPeekTab(ID2D1DeviceContext ctx)
+    {
+        var vis = QueryBounds();
+        if (vis.IsEmpty) return;
+
+        // 渲染时外面套着一层"贴边平移"的变换（见 RenderShifted），这里先减掉，
+        // 画出来的位置才和占用矩形对得上。
+        var s = Shift();
+        var sliver = new RectF
+        {
+            MinX = vis.MinX - s.X, MinY = vis.MinY - s.Y,
+            MaxX = vis.MaxX - s.X, MaxY = vis.MaxY - s.Y,
+        };
+
+        bool horiz = (sliver.MaxX - sliver.MinX) >= (sliver.MaxY - sliver.MinY);
+        float cx = (sliver.MinX + sliver.MaxX) * 0.5f;
+        float cy = (sliver.MinY + sliver.MaxY) * 0.5f;
+        // 长边 = 把手长度（但不比露头那一条本身更长）；短边 = 露头有多厚（就填满它）
+        float half = MathF.Min(Tokens.PeekTab,
+                               horiz ? sliver.MaxX - sliver.MinX : sliver.MaxY - sliver.MinY) * 0.5f;
+        float halfT = (horiz ? sliver.MaxY - sliver.MinY : sliver.MaxX - sliver.MinX) * 0.5f;
+
+        var box = horiz
+            ? new Vortice.RawRectF(cx - half, cy - halfT, cx + half, cy + halfT)
+            : new Vortice.RawRectF(cx - halfT, cy - half, cx + halfT, cy + half);
+        float rad = MathF.Min(halfT, half);
+        var shape = new RoundedRectangle(box, rad, rad);
+
+        // **颜色 = 当前笔色**，和展开态露出来的那条色线一模一样（用户 2026-09-18：
+        // "展开条贴边以后有颜色的，这个小圆球贴边没颜色"）。
+        // 它顺手把"手里是哪支笔"这件事也说了——露头时球里的色环是看不见的。
+        var ink = _host.State.PaletteBase;
+        ctx.FillRoundedRectangle(shape, Brush(ctx, new Color4(ink.R, ink.G, ink.B, 1f)));
+
+        // 近白的时候补一道暗边：白笔的把手落在浅色桌面上会**什么都看不见**。
+        // 这条规矩和色线（`DrawBandLine`）是同一条——那边早就这么干了。
+        // 深色主题不用管：白在暗底上本来就看得见。
+        if (!_dark && ink.R > 0.9f && ink.G > 0.9f && ink.B > 0.9f)
+            ctx.DrawRoundedRectangle(shape, Brush(ctx, new Color4(0f, 0f, 0f, 0.2f)), 1f);
     }
 
     /// <summary>画上带的内容。每一项都对应引擎里真实存在的能力，摆不出来的就不摆。</summary>
@@ -1940,31 +2252,6 @@ public sealed class FullUi : IOverlayUi
             };
             _widgets.Text(ctx, $"第 {st.ScreenIndex} 屏", box, 12.5f, Brush(ctx, InkCol), center: false);
         }
-    }
-
-    /// <summary>
-    /// 面板**最下沿那一条**滑条（照假面板的 DrawGroove）：底轨 ＋ 用当前笔色画的进度
-    /// ＋ 右端一个跟着变大的笔尖预览。拖动时才浮出白色滑钮。
-    ///
-    /// 没有滑条的工具（鼠标/选择/图形…）在这里画一条"踢脚线"——
-    /// 笔色 25% 的 2 像素线。**它的作用是让面板高度不忽高忽低**，
-    /// 顺带让每个工具的下沿都有点东西，不至于是空的。
-    /// </summary>
-    private void DrawGroove(ID2D1DeviceContext ctx, in UiState st)
-    {
-        var panel = UnionRect();
-        // 2026-09-17：粗细滑条**搬进设置条**里了（见 SliderRect 的注释），
-        // 所以面板下沿不再需要"有滑条就画滑条、没滑条画踢脚线"这条分支——
-        // 现在**每格都画同一条踢脚线**：笔色 25% 的 2 像素细线。
-        // 它的作用只剩一个，但很实在：**让面板下沿永远有东西**，看着是块完整的板子。
-        float inset = BarInset();
-        float cy = panel.MaxY - 6f;
-        float left = panel.MinX + inset;
-        float w = panel.MaxX - inset - left;
-        var ink = st.PaletteBase;
-        ctx.FillRoundedRectangle(
-            new RoundedRectangle(new Vortice.RawRectF(left, cy - 1f, left + w, cy + 1f), 1f, 1f),
-            Brush(ctx, new Color4(ink.R, ink.G, ink.B, 0.25f)));
     }
 
     /// <summary>
@@ -2493,7 +2780,7 @@ public sealed class FullUi : IOverlayUi
     internal RectF ChipRectForTest(int cell) => ChipRect(cell);
 
     /// <summary>自检用：现在算"展开"吗。</summary>
-    internal bool ExpandedForTest => _expand.Value > 0.5f;
+    internal bool ExpandedForTest => Expanded;
 
     /// <summary>自检用：把展开动画一步到位（不等 200 ms）。</summary>
     internal void SnapForTest() => _expand.Jump(_expand.Value > 0.5f ? 0f : 1f);
@@ -2503,6 +2790,22 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>自检用：贴边隐藏的进度（1 = 完全显示，0 = 只剩露头）。</summary>
     internal float PeekForTest => _peek.Value;
+
+    /// <summary>
+    /// 自检/出图用：把"球 → 带子"的展开进度一把按到某个值（0 = 球，1 = 完全展开）。
+    /// 中间态平时只看得到 200 毫秒，想核对这一段长什么样就只能这么钉住它。
+    /// </summary>
+    internal void SetExpandForTest(float v) => _expand.Jump(v);
+
+    /// <summary>
+    /// 自检/出图用：把贴边隐藏一把按到某个进度（顺带允许"离开就收"）。
+    /// 平时这条路要"指针离开过 700 毫秒"，出图时等不起。
+    /// </summary>
+    internal void ForcePeekForTest(float v)
+    {
+        _peekArmed = true;
+        _peek.Jump(v);
+    }
 
     /// <summary>自检用：色线张开没有（false = 平时那条 6 像素的线）。</summary>
     internal bool RailOpenForTest => RailOpen;
