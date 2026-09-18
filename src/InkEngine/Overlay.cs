@@ -1282,9 +1282,8 @@ internal sealed class OverlayWindow : IDisposable
                 // 看不出"框有没有圈住东西"。只画和这一块相交的那几条。
                 foreach (var s in app.Doc.Strokes)
                     if (s.PaddedBounds.Intersects(bounds)) DrawStroke(s);
-            DrawSelection(app);
-            DrawCaptureRect(app);        // 截图取景框（含尺寸读数）——不在截图态就直接返回
-            DrawPptBar(app);             // 放映翻页框（只在放映时画）
+                DrawSelection(app);
+                DrawCaptureRect(app);        // 截图取景框（含尺寸读数）——不在截图态就直接返回
             }
             else
             {
@@ -1468,7 +1467,6 @@ internal sealed class OverlayWindow : IDisposable
             DrawDragPreview(app);
             DrawSelection(app);
             DrawCaptureRect(app);
-            DrawPptBar(app);             // 放映翻页框（只在放映时画；**这一条才是真上屏的**）
             DrawLaser(app);
             DrawToolCursor(app);
             DrawMarquee(app);
@@ -2800,51 +2798,6 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.DrawText(text, CaptureInfoFormat(),
                       new Rect(box.Left, box.Top, box.Right - box.Left, box.Bottom - box.Top),
                       Brush(new Color4(1f, 1f, 1f, 1f)));
-    }
-
-    /// <summary>
-    /// **放映翻页框**（S2a，2026-09-18）：横排三格 `◂ 3/12 ▸`，默认右下角、离边 12。
-    ///
-    /// 这一步只做"看得见"：**只在放映时出现**、静置 4 秒变淡到 35%（看得见、也点得着）、
-    /// 放映结束就不画。拖动 / 贴边转向 / 点击翻页 / 长按结束是 S2b。
-    /// 变淡用手里的不透明度 `app.PptBarAlpha`，卡片的底色和描边都乘上它——
-    /// 这样"变淡"是一整块一起淡，不会出现"底淡了字还黑着"那种脏样子。
-    /// </summary>
-    private void DrawPptBar(InkEngine app)
-    {
-        if (!app.SlideNow.Showing) return;
-        float a = app.PptBarAlpha;
-        if (a <= 0.01f) return;
-
-        float dpi = Dpi / 96f;
-        var r = app.PptBarRect();
-        var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
-        float pil = (r.MaxY - r.MinY) * 0.5f;
-
-        var th = UiTheme.Default;
-        _scratch.Color = new Color4(th.Panel.R, th.Panel.G, th.Panel.B, th.Panel.A * a);
-        _ctx.FillRoundedRectangle(new RoundedRectangle(box, pil, pil), _scratch);
-        _scratch.Color = new Color4(th.PanelBorder.R, th.PanelBorder.G, th.PanelBorder.B, th.PanelBorder.A * a);
-        _ctx.DrawRoundedRectangle(new RoundedRectangle(box, pil, pil), _scratch, 1f);
-
-        var ink = new Color4(th.Text.R, th.Text.G, th.Text.B, a);
-        float cell = (r.MaxX - r.MinX) / 3f;
-        float cy = (r.MinY + r.MaxY) * 0.5f;
-        DrawPptArrow(r.MinX + cell * 0.5f, cy, cell, ink, left: true, dpi);
-        DrawPptArrow(r.MinX + cell * 2.5f, cy, cell, ink, left: false, dpi);
-        _ctx.DrawText($"{app.SlideNow.Position}/{app.SlideNow.Count}", CaptureInfoFormat(),
-                      new Rect(r.MinX + cell, r.MinY, cell, r.MaxY - r.MinY), Brush(ink));
-    }
-
-    /// <summary>框两端的箭头（两段线自己画，和旋转手柄同一个理由：它不是图标，是几何符号）。</summary>
-    private void DrawPptArrow(float cx, float cy, float cell, in Color4 ink, bool left, float dpi)
-    {
-        float s = cell * 0.17f;
-        float d = left ? -1f : 1f;
-        var b = Brush(ink);
-        float w = 2f * dpi;
-        _ctx.DrawLine(new Vector2(cx - s * d, cy - s), new Vector2(cx + s * d, cy), b, w);
-        _ctx.DrawLine(new Vector2(cx + s * d, cy), new Vector2(cx - s * d, cy + s), b, w);
     }
 
     private IDWriteTextFormat _capInfoFmt;

@@ -454,35 +454,6 @@ public sealed class FullUi : IOverlayUi
     ///
     /// 纵向：主条的上边为准（带子长在上面，贴底时按钮不会跳）。
     /// </summary>
-    /// <summary>上一次界面看到的"正在放映"状态——用来抓**放映刚开始**那一瞬间。</summary>
-    private bool _slideWasShowing;
-
-    /// <summary>
-    /// **放映刚开始那一下：自动展开一次、并挪回"底部水平居中"**（用户 2026-09-18）。
-    ///
-    /// 为什么要有它：开讲之前面板多半收成一个球（或者被老师拖到了某个角）。
-    /// 放映一开始，得让他**看见**"面板在这儿、现在翻的是 PPT"——所以这一下我们替他点一次，
-    /// 而且是**有动效的明显变化**（167 毫秒长出来），不是无声无息地换一下。
-    ///
-    /// **只做这一次**：之后位置完全听老师的（拖到哪儿记哪儿），下一次放映开始再自动摆一次。
-    /// 判据用"正在放映"的**上升沿**（`SlidePosition > 0` 从无到有），不是"页面刚打开"。
-    /// </summary>
-    private void UpdateSlideIntro()
-    {
-        bool showing = _host.State.SlidePosition > 0;
-        if (showing == _slideWasShowing) return;
-        _slideWasShowing = showing;
-        if (!showing) return;
-        // **只展开，不挪位置**（2026-09-18 改）。
-        //
-        // 第一版还顺手 `_anchor = null`（挪回屏幕下方居中），实测**体验很差**：
-        // 屏幕下方正中正是老师写字的黄金位置，面板（600 多像素宽）挪过去之后，
-        // 指针/笔尖落在它上面的下一笔就变成了"点面板"——工具、粗细、颜色被改掉，
-        // 光标也跟着变，看起来就是"写字的墨迹变了"。
-        // 所以现在**只在原地长出来**：老师拖到哪儿，就在哪儿展开；想看它，它自己会亮。
-        _expand.To(1f, Tokens.ExpandMs);
-    }
-
     private Vector2 RawAnchor()
     {
         float top = _anchor?.Y ?? (_screen.MaxY - Tokens.EdgeMargin - Tokens.BarHeight);
@@ -1798,7 +1769,6 @@ public sealed class FullUi : IOverlayUi
     public void Render(ID2D1DeviceContext ctx, UiTheme theme)
     {
         if (_host == null) return;
-        UpdateSlideIntro();              // 放映刚开始那一下：自动展开一次、回到底部居中
         UpdatePeek();                    // 每帧问一次"该不该收起来"（贴边隐藏）
         UpdateRail();                    // 色线该不该长成设置条
         UpdateBandAction();              // "按住清空"够 0.8 秒没有（每帧推进）
@@ -1959,11 +1929,7 @@ public sealed class FullUi : IOverlayUi
         if (BandHasSlider) DrawBandSlider(ctx, st);
         DrawBandAction(ctx);
 
-        // 白板那一格右边显示"第 N 屏"——老师要有一点位置感（"我在第几屏"）。
-        //
-        // **放映中改显示 `PPT 3/12`**（2026-09-17）：那时候"上一屏/下一屏"驱动的是
-        // PPT 翻页（见 Engine.FlipPageFromUi），位置感就该是**幻灯片页码**，
-        // 再显示"第 3 屏"会让人以为在翻白板。
+        // 白板那一格右边显示"第 N 屏"——老师要有一点位置感（"我在第几屏"）
         if (_bandCell == 2)
         {
             var panel = UnionRect();
@@ -1972,10 +1938,7 @@ public sealed class FullUi : IOverlayUi
                 MinX = SegmentRect(4, 5).MaxX + 10f, MinY = BandRect().MinY,
                 MaxX = panel.MaxX - BarInset(), MaxY = BandRect().MaxY,
             };
-            string label = st.SlidePosition > 0
-                ? $"PPT {st.SlidePosition}/{st.SlideCount}"
-                : $"第 {st.ScreenIndex} 屏";
-            _widgets.Text(ctx, label, box, 12.5f, Brush(ctx, InkCol), center: false);
+            _widgets.Text(ctx, $"第 {st.ScreenIndex} 屏", box, 12.5f, Brush(ctx, InkCol), center: false);
         }
     }
 
@@ -2534,25 +2497,6 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>自检用：把展开动画一步到位（不等 200 ms）。</summary>
     internal void SnapForTest() => _expand.Jump(_expand.Value > 0.5f ? 0f : 1f);
-
-    /// <summary>自检用：这一刻展开到什么程度（0 = 球，1 = 完整带子）。
-    /// 上面那条 `ExpandedForTest` 是布尔版（"算不算展开"），这条给动画中间态用。</summary>
-    internal float ExpandValueForTest => _expand.Value;
-
-    /// <summary>
-    /// 自检用：面板记下的位置（null = 从没拖过、用默认位置）。
-    /// "放映开始只展开、不挪位置"这条规则就靠它钉：**前后必须一模一样**。
-    /// （不能拿坐标比——面板从球长成条子时宽度变了，夹进屏幕会让左上角动几十像素，
-    /// 那是正常几何，不是"被挪走"。）
-    /// </summary>
-    internal Vector2? AnchorForTest => _anchor;
-
-    /// <summary>自检用：把面板"拖"到某个逻辑坐标（等价于老师用手指拖过去）。</summary>
-    internal void DragToForTest(float x, float y)
-    {
-        _anchor = new Vector2(x, y);
-
-    }
 
     /// <summary>自检用：界面看到的屏幕（核对它和 IUiHost.Screen 是不是同一个）。</summary>
     internal RectF ScreenForTest => _screen;

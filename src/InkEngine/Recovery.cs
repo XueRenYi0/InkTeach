@@ -37,17 +37,9 @@ internal static class Recovery
     /// <summary>自检用：指向临时文件，**别动用户真正的板书**（和设置那边同一个套路）。</summary>
     public static string AutoSavePathOverride;
 
-    /// <summary>
-    /// 白板板书的落点：**文档区的 `InkTeach\板书\` 里，按名字分开**
-    /// （用户 2026-09-18："我们自己在文档区建一个这个软件，专门用来存……
-    /// 板书或者 PPT 批注都统一保存在这里，按照名字去分开"）。
-    ///
-    /// 名字现在是**日期**（`板书-2026-09-18.ink`）：一天一份、好找、不用老师起名。
-    /// 想按班级/课题分开的话，下一步在界面上给一个"重命名/新建"的入口就行——
-    /// 存储这一层只认文件名，界面上叫什么都行。
-    /// </summary>
     public static string AutoSavePath => AutoSavePathOverride ?? System.IO.Path.Combine(
-        BoardDir, $"板书-{DateTime.Now:yyyy-MM-dd}.ink");
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "InkTeach", "autosave.ink");
 
     public static bool AutoSaveExists => File.Exists(AutoSavePath);
 
@@ -86,93 +78,6 @@ internal static class Recovery
     public static void DeleteAuto()
     {
         try { if (File.Exists(AutoSavePath)) File.Delete(AutoSavePath); } catch { }
-    }
-
-    // ---- 幻灯片批注的落盘（阶段 4，2026-09-17）----------------------------
-    //
-    // 一份演示文稿一个文件，键 = **演示文稿身份**（全路径）。里面存的是"属于幻灯片空间"
-    // 的那些对象——每个对象自己带着 `SlideId`，所以**调换页序之后批注仍然跟着页走**
-    // （InkClass 用页号当键，那一处是它的先天缺点，见 调研-对接PPT.md 第二节）。
-    //
-    // 为什么放 `%LOCALAPPDATA%` 而不是 PPT 旁边：PPT 很可能在只读盘 / U 盘 / 共享盘上，
-    // 写它旁边随时会失败；而教室机器上"打开同一份课件接着写"是常用场景，
-    // 宁可存在我们自己的目录里。"跟着文件走"（`课件.pptx.ink`）是**另一个决定**，
-    // 要处理只读目录、U 盘拔掉、老师只拷 pptx 的情况，等这一步稳了再谈。
-
-    /// <summary>自检用：把这一整块指到临时目录，别动用户的批注。</summary>
-    public static string DeckDirOverride;
-
-    /// <summary>
-    /// **我们这个软件在"文档"里的家**（用户 2026-09-18 定的）：
-    /// 板书、幻灯片批注，以后别的东西，**统一放在这儿、按名字分开**——
-    /// 老师打开"文档"就能看见自己的东西，而不是藏在 `%APPDATA%` 里找不到。
-    ///
-    /// 两条兜底（教室机器上真会遇到）：
-    ///   · "我的文档"取不到（极少数域账户/漫游配置）→ 退回 `%LOCALAPPDATA%\InkTeach`；
-    ///   · "我的文档"在只读盘/被重定向到网络盘 → 写的时候失败，调用方只提示、不打断上课
-    ///     （所有落盘都包了 try/catch，写不进去顶多这次没存上）。
-    /// </summary>
-    public static string RootDir => Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)
-        is { Length: > 0 } docs
-        ? System.IO.Path.Combine(docs, "InkTeach")
-        : System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "InkTeach");
-
-    /// <summary>幻灯片批注：一份演示文稿一个文件，**按演示文稿名分开**。</summary>
-    public static string DeckDir => DeckDirOverride ?? System.IO.Path.Combine(RootDir, "幻灯片");
-
-    /// <summary>白板板书：按"名字"分开（现在是按日期，以后可以在界面上让老师自己起名）。</summary>
-    public static string BoardDirOverride;
-    public static string BoardDir => BoardDirOverride ?? System.IO.Path.Combine(RootDir, "板书");
-
-    /// <summary>
-    /// 演示文稿身份 → 文件名。**路径里有 `:` `\` 这些不能当文件名的字符**，
-    /// 而且可能很长，所以取"短哈希 + 可读的文件名主干"：哈希保证不撞车，
-    /// 主干让老师在资源管理器里认得出是哪份课件。
-    /// </summary>
-    public static string PathFor(string deckKey)
-    {
-        if (string.IsNullOrEmpty(deckKey)) return null;
-        uint h = 2166136261;
-        foreach (char c in deckKey) { h ^= c; h *= 16777619; }      // FNV-1a：稳定、够散
-        string stem = System.IO.Path.GetFileNameWithoutExtension(deckKey);
-        var sb = new System.Text.StringBuilder();
-        foreach (char c in stem)
-            sb.Append(char.IsLetterOrDigit(c) || c == '-' || c == '_' || c > 0x7F ? c : '_');
-        string readable = sb.ToString();
-        if (readable.Length > 40) readable = readable.Substring(0, 40);
-        if (readable.Length == 0) readable = "deck";
-        return System.IO.Path.Combine(DeckDir, $"{readable}-{h:X8}.ink");
-    }
-
-    public static void SaveDeck(string deckKey, byte[] blob)
-    {
-        string path = PathFor(deckKey);
-        if (path == null) return;
-        try
-        {
-            var dir = System.IO.Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            string tmp = path + ".tmp";
-            File.WriteAllBytes(tmp, blob);
-            File.Move(tmp, path, overwrite: true);     // 先写临时再换名：写一半断电不会留坏文件
-            Console.WriteLine($"幻灯片批注已保存：{path}（{blob.Length / 1024.0:F0} KB）");
-        }
-        catch (Exception ex) { Console.WriteLine("幻灯片批注保存失败（不影响使用）：" + ex.Message); }
-    }
-
-    public static byte[] TryLoadDeck(string deckKey)
-    {
-        string path = PathFor(deckKey);
-        if (path == null) return null;
-        try { return File.Exists(path) ? File.ReadAllBytes(path) : null; }
-        catch (Exception ex) { Console.WriteLine("幻灯片批注读取失败（当作没有）：" + ex.Message); return null; }
-    }
-
-    public static void DeleteDeck(string deckKey)
-    {
-        string path = PathFor(deckKey);
-        try { if (path != null && File.Exists(path)) File.Delete(path); } catch { }
     }
 
     private static string StatePath =>

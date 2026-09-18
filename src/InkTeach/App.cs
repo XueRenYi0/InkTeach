@@ -13,7 +13,7 @@ namespace InkTeach;
 /// 开发期宿主：持有引擎，外加一整套自动化测试/基准工具。
 /// 继承只是为了让这些工具直接读引擎内部状态（产品代码请用组合：new InkEngine()）。
 /// </summary>
-internal sealed partial class App : InkEngine.InkEngine
+internal sealed class App : InkEngine.InkEngine
 {
     private IntPtr _clickTargetHwnd;
     private string _clickLogFile;
@@ -527,37 +527,6 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PageTest();
         }
-        else if (mode == "--slidetest")
-        {
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            SlideTestEntry();          // 幻灯片页自检（假放映驱动，见 SlideTest.cs）
-        }
-        else if (mode == "--pptprobe")
-        {
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            // 真端到端探针（会真的起放映）：`--pptprobe ms` 微软、`--pptprobe wps` WPS
-            PptProbe(args.Length > 1 ? args[1].ToLowerInvariant() : "ms");
-        }
-        else if (mode == "--pptboxshow")
-        {
-            // **只画放映翻页框、不接 Office** 的出图模式（开发期自己看"它到底上不上屏"）。
-            // 它把"正在放映"这个状态直接摆上（假的状态），然后**真抓屏**——
-            // 抓的是屏幕上真的画出来的东西，能证明"绘制调用有没有走真帧路径"。
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            SlideNow = new SlideState { Showing = true, Position = 3, Count = 12, SlideId = 7, DeckKey = "自检" };
-            PptBarTouchedAtMs = NowMs;               // 先亮着（和刚开放映一样）
-            SettleFrames(500);
-            var box = PptBarRect();
-            Console.WriteLine($"框的画布矩形 = ({box.MinX:F0},{box.MinY:F0})-({box.MaxX:F0},{box.MaxY:F0})，"
-                            + $"不透明度 {PptBarAlpha:F2}，屏 {_virtualW}×{_virtualH}");
-            // 抓"右下角那一块"（含框）——用**屏幕坐标**抓，才是"屏幕上真有这个框"
-            int rx = (int)(_virtualX + _virtualW) - 360, ry = (int)(_virtualY + _virtualH) - 200;
-            ShotRegion(args.Length > 1 ? args[1] : "tmp/pptbox.bmp", rx, ry, 360, 200);
-            _quit = true;
-        }
         else if (mode == "--iotest")
         {
             _autoExitAt = double.MaxValue;
@@ -648,7 +617,6 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
         Console.WriteLine("  --pagetest          整屏翻页自检（一屏 = 一页：页高 = 视口高、只动相机、到顶就停）");
-        Console.WriteLine("  --slidetest         幻灯片页自检（假放映驱动，不需要 Office；切页只动相机、按身份归属）");
         Console.WriteLine("  --iotest [路径]     导出自检（选中 → PNG 透明底 / JPEG 白底；给路径就保留文件）");
         Console.WriteLine("  --patterntest       白板底纹自检（方格/横线/间距 + 数屏幕上的线 + 重铺代价）");
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
@@ -1683,107 +1651,6 @@ internal sealed partial class App : InkEngine.InkEngine
             Check("清空之后：还能接着在这一屏写",
                   Doc.Strokes.Count == 0,
                   $"笔画 {Doc.Strokes.Count}");
-        }
-
-        // ---- ⑨ **页模型**：归属 / 清空只清本页 / 撤销跨页自动翻回去（2026-09-17）----
-        //
-        // 这一段的取向写在 计划-白板与PPT-页逻辑.md 第四节：**一份文档 + 对象带页归属 +
-        // 一条全局撤销栈**，切页只动相机（O(1)），不像 InkClass 那样"切页 = 清空 +
-        // 重放历史 + 清掉撤销栈"。
-        {
-            Doc.Clear();
-            Doc.ClearHistory();
-            GotoPage(0);
-            SettleFrames(300);
-            Check("回到第 1 页时 CurrentPage = 0", CurrentPage == 0, $"CurrentPage = {CurrentPage}");
-
-            // 三页各写一笔。走的是"起笔时按当前页标页"这条真规则。
-            var made = new List<Stroke>();
-            for (int pg = 0; pg < 3; pg++)
-            {
-                GotoPage(pg);
-                SettleFrames(320);
-                var s = new Stroke
-                {
-                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
-                    Color = new Color4(0.1f, 0.1f, 0.1f, 1f), Width = 8f,
-                    Page = CurrentPage,                       // 引擎在起笔那一刻就是这么标的
-                };
-                float y = PageTopCanvas + pg * PageHeightCanvas + 300f;
-                for (int i = 0; i <= 20; i++) s.AddPoint(_virtualX + 300f + i * 40f, y, 1f, i * 8);
-                Doc.AddStroke(s);
-                made.Add(s);
-            }
-            Check("三页各一笔、页归属分别是 0/1/2",
-                  made[0].Page == 0 && made[1].Page == 1 && made[2].Page == 2,
-                  $"{made[0].Page}/{made[1].Page}/{made[2].Page}");
-            Check("页号跟着相机走（此刻在第 3 页）", CurrentPage == 2, $"CurrentPage = {CurrentPage}");
-            // 每笔落在**自己那一页的带子里**（归属不是拍脑袋标的，和几何也对得上）
-            Check("归属和几何对得上（起点落在本页的纵向带里）",
-                  PageOfCanvasY(made[0].Points[0].Y) == 0 && PageOfCanvasY(made[1].Points[0].Y) == 1
-                  && PageOfCanvasY(made[2].Points[0].Y) == 2,
-                  $"{PageOfCanvasY(made[0].Points[0].Y)}/{PageOfCanvasY(made[1].Points[0].Y)}"
-                  + $"/{PageOfCanvasY(made[2].Points[0].Y)}");
-
-            // 清空 = **只清这一页**
-            ClearFromUi();
-            SettleFrames(200);
-            Check("清空只清当前页（第 3 页），前两页原样留着",
-                  Doc.Strokes.Count == 2 && !Doc.Strokes.Contains(made[2])
-                  && Doc.Strokes.Contains(made[0]) && Doc.Strokes.Contains(made[1]),
-                  $"剩 {Doc.Strokes.Count} 笔");
-            Check("清空之后留在原地（不回第 1 页）", CurrentPage == 2, $"CurrentPage = {CurrentPage}");
-
-            // 撤销：被清掉的那一笔回来
-            UndoFromUi();
-            SettleFrames(250);
-            Check("撤销清空：第 3 页那一笔回来了、其余页没受影响",
-                  Doc.Strokes.Count == 3 && Doc.Strokes.Contains(made[2]),
-                  $"现在 {Doc.Strokes.Count} 笔");
-
-            // **撤销跨页自动翻回去**。
-            //
-            // 用"在第 3 页删掉一笔"当场景，而不是"撤销第 3 页那次落笔"：
-            // 相机**只能滚到有内容的地方**（`ClampOffset` 按画布内容范围夹），
-            // 撤销一次落笔会让第 3 页变空、于是根本滚不过去——那不算 bug，
-            // 但用那个场景验不出"相机会不会自己翻过去"。删除则相反：撤销之后
-            // 第 3 页又有内容了，正好验"相机跟到那一页、那一笔又看得见"。
-            GotoPage(2);
-            SettleFrames(320);
-            Doc.Selected.Clear();
-            Doc.Selected.Add(made[2]);
-            Doc.DeleteSelected();
-            SettleFrames(200);
-            Check("在第 3 页删掉一笔（这一步发生在第 3 页）",
-                  Doc.Strokes.Count == 2 && !Doc.Strokes.Contains(made[2]),
-                  $"剩 {Doc.Strokes.Count} 笔");
-
-            GotoPage(0);
-            SettleFrames(350);
-            Check("先回到第 1 页", CurrentPage == 0, $"CurrentPage = {CurrentPage}");
-            UndoFromUi();
-            SettleFrames(500);
-            Check("撤销跨页：相机自己翻到那一页（不然屏幕上什么都没变）",
-                  CurrentPage == 2, $"撤销后停在 CurrentPage = {CurrentPage}");
-            Check("撤销跨页：那一笔回来了、还在它的那一页",
-                  Doc.Strokes.Contains(made[2]) && made[2].Page == 2,
-                  $"剩 {Doc.Strokes.Count} 笔，Page = {made[2].Page}");
-            RedoFromUi();
-            SettleFrames(450);
-            Check("重做：又删掉了，而且相机仍在第 3 页",
-                  !Doc.Strokes.Contains(made[2]) && CurrentPage == 2,
-                  $"剩 {Doc.Strokes.Count} 笔，CurrentPage = {CurrentPage}");
-            UndoFromUi();               // 复原，后面存档那一条要三笔齐
-            SettleFrames(450);
-
-            // 存盘往返：**页归属要跟着存**（不然重开就全糊成一页了）
-            var blob = InkSerializer.Save(Doc);
-            var back = new InkDocument();
-            InkSerializer.LoadInto(back, blob);
-            var pages = back.Strokes.Select(s => s.Page).OrderBy(v => v).ToArray();
-            Check("存档带上页归属（读回来还是那几页）",
-                  pages.Length == 3 && pages[0] == 0 && pages[1] == 1 && pages[2] == 2,
-                  "读回页号 " + string.Join("/", pages));
         }
 
         Doc.Clear();
@@ -6534,13 +6401,10 @@ internal sealed partial class App : InkEngine.InkEngine
         string path = Recovery.AutoSavePath;
         Recovery.DeleteAuto();
 
-        // 存档的**默认落点**现在在"文档区的 InkTeach 里、按名字分开"（用户 2026-09-18 定），
-        // 自检跑的时候会把它指到临时文件，所以这里验的是**目录规则**而不是这一次的路径。
-        Check("默认落点是「文档\\InkTeach\\板书」，按名字分开",
-              Recovery.BoardDir.EndsWith(System.IO.Path.Combine("InkTeach", "板书"))
-              && Recovery.DeckDir.EndsWith(System.IO.Path.Combine("InkTeach", "幻灯片"))
-              && Recovery.BoardDir != Recovery.DeckDir,
-              $"板书 {Recovery.BoardDir} ｜ 幻灯片 {Recovery.DeckDir}");
+        Check("存档落在 LOCALAPPDATA（不是 TEMP）",
+              path.Contains("Local", StringComparison.OrdinalIgnoreCase)
+              || Recovery.AutoSavePathOverride != null,
+              path);
 
         // ⓪ **默认档：不接上次的板书，也不写那个文件**（用户 2026-09-17）
         //
@@ -7772,56 +7636,6 @@ internal sealed partial class App : InkEngine.InkEngine
                       (penChip.MinY + penChip.MaxY) * 0.5f * DpiScale);
         SettleFrames(200);
         Check("安全项（笔）取消不掉", ui.PinnedForTest(3), $"笔钉着 = {ui.PinnedForTest(3)}");
-
-        // ---- ⑩ **放映开始那一下：面板自动展开一次 + 回到底部水平居中**（S1，2026-09-18）----
-        //
-        // 为什么要这条自检：S1 的代码是挂在"正在放映"的**上升沿**上的，
-        // 而 `--paneltest` 原来没有幻灯片来源——"产品里真的会展开吗"就没人验。
-        // 这里装一个**假放映**（不需要 Office），把那条路真走一遍。
-        {
-            // 先把面板收成一个球、并且拖到一个角落（模拟"开讲前老师把它扔一边了"）
-            if (ui.ExpandValueForTest > 0.5f) ui.SnapForTest();     // 展开 → 收起
-            SettleFrames(300);
-            Check("（铺垫）面板此刻收成一个球", ui.ExpandValueForTest < 0.5f,
-                  $"展开度 {ui.ExpandValueForTest:F2}");
-
-            var fake = new FakeSlideSource { Showing = true, Position = 1, Count = 3 };
-            var anchorBefore = ui.AnchorForTest;      // 展开前记下的位置（待会儿要比它有没有变）
-            Slides = fake;
-            SettleFrames(700);                                   // 等轮询 + 展开动画
-            var b = ui.QueryBounds();
-            float scx = (Host.Screen.MinX + Host.Screen.MaxX) * 0.5f;
-            Check("放映一开始：面板**自己展开**了（明显变化）",
-                  ui.ExpandValueForTest > 0.95f, $"展开度 {ui.ExpandValueForTest:F2}");
-            // **不挪位置**（2026-09-18 改）：第一版会把面板挪到屏幕下方正中，
-            // 结果正好压在老师写字的黄金位置上，"下一笔"变成"点面板"——
-            // 工具/粗细/颜色被改掉，看起来就是"墨迹变了"。
-            //
-            // 现在这条规则是**代码层**的：`UpdateSlideIntro` 只调 `_expand.To(1f)`，
-            // **不碰 `_anchor`**。为什么这里不去断言坐标不动：面板从球长成条子时，
-            // 宽度变了、"夹进屏幕"这一步本来就会让左上角动几十像素（实测 212→424），
-            // 那是正常的几何，不是"被挪走"。所以这里只钉住"它没有跑到屏幕下方正中"——
-            // 那才是当初出问题的地方。
-            Check("放映一开始：**只展开、不挪位置**（锚点前后一模一样）",
-                  ui.ExpandValueForTest > 0.95f
-                  && Nullable.Equals(ui.AnchorForTest, anchorBefore),
-                  $"锚点 {(anchorBefore.HasValue ? "有" : "无（默认位置）")} → "
-                  + $"{(ui.AnchorForTest.HasValue ? "有" : "无（默认位置）")}");
-
-            // 只做一次：老师把它拖走之后，**再放映不会强挪回来**
-            ui.DragToForTest(Host.Screen.MinX + 80f, Host.Screen.MinY + 200f);
-            SettleFrames(200);
-            fake.Position = 2;                                   // 换页（不是新的一次放映）
-            SettleFrames(400);
-            var b2 = ui.QueryBounds();
-            Check("换页不动它的位置（只有**放映开始**那一次才自动摆）",
-                  Math.Abs(b2.MinX - b.MinX) > 100f || Math.Abs(b2.MinY - b.MinY) > 100f,
-                  $"拖到 ({b2.MinX:F0},{b2.MinY:F0})");
-
-            Slides = null;
-            SlideNow = default;
-            SettleFrames(300);
-        }
 
         // 钉回去，回到完整档，别把后面的用例带偏
         // 注意：每次点之前**重新取一次矩形**——切档会让主条宽度变、抽屉跟着挪，
