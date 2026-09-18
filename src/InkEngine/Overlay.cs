@@ -1468,6 +1468,7 @@ internal sealed class OverlayWindow : IDisposable
             DrawDragPreview(app);
             DrawSelection(app);
             DrawCaptureRect(app);
+            DrawPptBar(app);             // 放映翻页框（只在放映时画；**这一条才是真上屏的**）
             DrawLaser(app);
             DrawToolCursor(app);
             DrawMarquee(app);

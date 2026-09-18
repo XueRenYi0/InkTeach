@@ -7768,16 +7768,27 @@ internal sealed partial class App : InkEngine.InkEngine
                   $"展开度 {ui.ExpandValueForTest:F2}");
 
             var fake = new FakeSlideSource { Showing = true, Position = 1, Count = 3 };
+            var anchorBefore = ui.AnchorForTest;      // 展开前记下的位置（待会儿要比它有没有变）
             Slides = fake;
             SettleFrames(700);                                   // 等轮询 + 展开动画
             var b = ui.QueryBounds();
             float scx = (Host.Screen.MinX + Host.Screen.MaxX) * 0.5f;
             Check("放映一开始：面板**自己展开**了（明显变化）",
                   ui.ExpandValueForTest > 0.95f, $"展开度 {ui.ExpandValueForTest:F2}");
-            Check("放映一开始：面板回到**底部水平居中**",
-                  Math.Abs((b.MinX + b.MaxX) * 0.5f - scx) < 8f
-                  && b.MaxY > Host.Screen.MaxY - 120f,
-                  $"中心 {((b.MinX + b.MaxX) * 0.5f):F0}（屏幕中心 {scx:F0}），底边距 {Host.Screen.MaxY - b.MaxY:F0}");
+            // **不挪位置**（2026-09-18 改）：第一版会把面板挪到屏幕下方正中，
+            // 结果正好压在老师写字的黄金位置上，"下一笔"变成"点面板"——
+            // 工具/粗细/颜色被改掉，看起来就是"墨迹变了"。
+            //
+            // 现在这条规则是**代码层**的：`UpdateSlideIntro` 只调 `_expand.To(1f)`，
+            // **不碰 `_anchor`**。为什么这里不去断言坐标不动：面板从球长成条子时，
+            // 宽度变了、"夹进屏幕"这一步本来就会让左上角动几十像素（实测 212→424），
+            // 那是正常的几何，不是"被挪走"。所以这里只钉住"它没有跑到屏幕下方正中"——
+            // 那才是当初出问题的地方。
+            Check("放映一开始：**只展开、不挪位置**（锚点前后一模一样）",
+                  ui.ExpandValueForTest > 0.95f
+                  && Nullable.Equals(ui.AnchorForTest, anchorBefore),
+                  $"锚点 {(anchorBefore.HasValue ? "有" : "无（默认位置）")} → "
+                  + $"{(ui.AnchorForTest.HasValue ? "有" : "无（默认位置）")}");
 
             // 只做一次：老师把它拖走之后，**再放映不会强挪回来**
             ui.DragToForTest(Host.Screen.MinX + 80f, Host.Screen.MinY + 200f);

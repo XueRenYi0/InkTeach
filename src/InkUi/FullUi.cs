@@ -473,8 +473,14 @@ public sealed class FullUi : IOverlayUi
         if (showing == _slideWasShowing) return;
         _slideWasShowing = showing;
         if (!showing) return;
-        _anchor = null;                       // 回到默认位置 = 屏幕下方水平居中
-        _expand.To(1f, Tokens.ExpandMs);      // 明显变化：长成完整的带子
+        // **只展开，不挪位置**（2026-09-18 改）。
+        //
+        // 第一版还顺手 `_anchor = null`（挪回屏幕下方居中），实测**体验很差**：
+        // 屏幕下方正中正是老师写字的黄金位置，面板（600 多像素宽）挪过去之后，
+        // 指针/笔尖落在它上面的下一笔就变成了"点面板"——工具、粗细、颜色被改掉，
+        // 光标也跟着变，看起来就是"写字的墨迹变了"。
+        // 所以现在**只在原地长出来**：老师拖到哪儿，就在哪儿展开；想看它，它自己会亮。
+        _expand.To(1f, Tokens.ExpandMs);
     }
 
     private Vector2 RawAnchor()
@@ -2532,6 +2538,14 @@ public sealed class FullUi : IOverlayUi
     /// <summary>自检用：这一刻展开到什么程度（0 = 球，1 = 完整带子）。
     /// 上面那条 `ExpandedForTest` 是布尔版（"算不算展开"），这条给动画中间态用。</summary>
     internal float ExpandValueForTest => _expand.Value;
+
+    /// <summary>
+    /// 自检用：面板记下的位置（null = 从没拖过、用默认位置）。
+    /// "放映开始只展开、不挪位置"这条规则就靠它钉：**前后必须一模一样**。
+    /// （不能拿坐标比——面板从球长成条子时宽度变了，夹进屏幕会让左上角动几十像素，
+    /// 那是正常几何，不是"被挪走"。）
+    /// </summary>
+    internal Vector2? AnchorForTest => _anchor;
 
     /// <summary>自检用：把面板"拖"到某个逻辑坐标（等价于老师用手指拖过去）。</summary>
     internal void DragToForTest(float x, float y)
