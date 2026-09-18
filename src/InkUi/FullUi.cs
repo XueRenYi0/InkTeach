@@ -2529,6 +2529,17 @@ public sealed class FullUi : IOverlayUi
     /// <summary>自检用：把展开动画一步到位（不等 200 ms）。</summary>
     internal void SnapForTest() => _expand.Jump(_expand.Value > 0.5f ? 0f : 1f);
 
+    /// <summary>自检用：这一刻展开到什么程度（0 = 球，1 = 完整带子）。
+    /// 上面那条 `ExpandedForTest` 是布尔版（"算不算展开"），这条给动画中间态用。</summary>
+    internal float ExpandValueForTest => _expand.Value;
+
+    /// <summary>自检用：把面板"拖"到某个逻辑坐标（等价于老师用手指拖过去）。</summary>
+    internal void DragToForTest(float x, float y)
+    {
+        _anchor = new Vector2(x, y);
+
+    }
+
     /// <summary>自检用：界面看到的屏幕（核对它和 IUiHost.Screen 是不是同一个）。</summary>
     internal RectF ScreenForTest => _screen;
 

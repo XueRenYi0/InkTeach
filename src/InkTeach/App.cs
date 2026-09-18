@@ -7755,6 +7755,45 @@ internal sealed partial class App : InkEngine.InkEngine
         SettleFrames(200);
         Check("安全项（笔）取消不掉", ui.PinnedForTest(3), $"笔钉着 = {ui.PinnedForTest(3)}");
 
+        // ---- ⑩ **放映开始那一下：面板自动展开一次 + 回到底部水平居中**（S1，2026-09-18）----
+        //
+        // 为什么要这条自检：S1 的代码是挂在"正在放映"的**上升沿**上的，
+        // 而 `--paneltest` 原来没有幻灯片来源——"产品里真的会展开吗"就没人验。
+        // 这里装一个**假放映**（不需要 Office），把那条路真走一遍。
+        {
+            // 先把面板收成一个球、并且拖到一个角落（模拟"开讲前老师把它扔一边了"）
+            if (ui.ExpandValueForTest > 0.5f) ui.SnapForTest();     // 展开 → 收起
+            SettleFrames(300);
+            Check("（铺垫）面板此刻收成一个球", ui.ExpandValueForTest < 0.5f,
+                  $"展开度 {ui.ExpandValueForTest:F2}");
+
+            var fake = new FakeSlideSource { Showing = true, Position = 1, Count = 3 };
+            Slides = fake;
+            SettleFrames(700);                                   // 等轮询 + 展开动画
+            var b = ui.QueryBounds();
+            float scx = (Host.Screen.MinX + Host.Screen.MaxX) * 0.5f;
+            Check("放映一开始：面板**自己展开**了（明显变化）",
+                  ui.ExpandValueForTest > 0.95f, $"展开度 {ui.ExpandValueForTest:F2}");
+            Check("放映一开始：面板回到**底部水平居中**",
+                  Math.Abs((b.MinX + b.MaxX) * 0.5f - scx) < 8f
+                  && b.MaxY > Host.Screen.MaxY - 120f,
+                  $"中心 {((b.MinX + b.MaxX) * 0.5f):F0}（屏幕中心 {scx:F0}），底边距 {Host.Screen.MaxY - b.MaxY:F0}");
+
+            // 只做一次：老师把它拖走之后，**再放映不会强挪回来**
+            ui.DragToForTest(Host.Screen.MinX + 80f, Host.Screen.MinY + 200f);
+            SettleFrames(200);
+            fake.Position = 2;                                   // 换页（不是新的一次放映）
+            SettleFrames(400);
+            var b2 = ui.QueryBounds();
+            Check("换页不动它的位置（只有**放映开始**那一次才自动摆）",
+                  Math.Abs(b2.MinX - b.MinX) > 100f || Math.Abs(b2.MinY - b.MinY) > 100f,
+                  $"拖到 ({b2.MinX:F0},{b2.MinY:F0})");
+
+            Slides = null;
+            SlideNow = default;
+            SettleFrames(300);
+        }
+
         // 钉回去，回到完整档，别把后面的用例带偏
         // 注意：每次点之前**重新取一次矩形**——切档会让主条宽度变、抽屉跟着挪，
         // 复用之前算好的坐标就会点空（这一版自检就是这么把自己坑了一次）。
