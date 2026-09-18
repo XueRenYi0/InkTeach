@@ -3888,10 +3888,17 @@ public class InkEngine
     {
         const float margin = 12f;
         float w = PptBarW * DpiScale, h = PptBarH * DpiScale;
-        float x = PptBarAnchor?.X ?? (VirtualScreen.MaxX - margin - PptBarW);
-        float y = PptBarAnchor?.Y ?? (VirtualScreen.MaxY - margin - PptBarH);
-        return new RectF { MinX = x * DpiScale, MinY = y * DpiScale,
-                           MaxX = (x + PptBarW) * DpiScale, MaxY = (y + PptBarH) * DpiScale };
+        // **坐标单位要说清楚**（这里踩过一次）：`VirtualScreen` 和"画布坐标"都是**物理像素**
+        // （见 Overlay 的 CanvasToWindow：它不带缩放），所以这里的 x/y 一开始就要用物理像素算，
+        // 只有"框自己的尺寸"（逻辑像素的 PptBarW/H 和 margin）才需要乘 DpiScale。
+        // 第一版把已经算好的 x 又乘了一遍 DpiScale → 框跑到 (5472,3488)，
+        // 屏幕上整个看不见（而自检也照着同样的错公式断言，所以"通过"了——教训：
+        // 判据不能镜像代码里的公式，要用**独立的事实**，比如"必须在屏幕内"）。
+        float x = PptBarAnchor.HasValue ? PptBarAnchor.Value.X * DpiScale
+                                        : VirtualScreen.MaxX - margin * DpiScale - w;
+        float y = PptBarAnchor.HasValue ? PptBarAnchor.Value.Y * DpiScale
+                                        : VirtualScreen.MaxY - margin * DpiScale - h;
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
     }
 
     /// <summary>自检用：框这一刻的矩形（画布坐标；没在放映就是空矩形）。</summary>

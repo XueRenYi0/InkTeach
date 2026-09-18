@@ -540,6 +540,24 @@ internal sealed partial class App : InkEngine.InkEngine
             // 真端到端探针（会真的起放映）：`--pptprobe ms` 微软、`--pptprobe wps` WPS
             PptProbe(args.Length > 1 ? args[1].ToLowerInvariant() : "ms");
         }
+        else if (mode == "--pptboxshow")
+        {
+            // **只画放映翻页框、不接 Office** 的出图模式（开发期自己看"它到底上不上屏"）。
+            // 它把"正在放映"这个状态直接摆上（假的状态），然后**真抓屏**——
+            // 抓的是屏幕上真的画出来的东西，能证明"绘制调用有没有走真帧路径"。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SlideNow = new SlideState { Showing = true, Position = 3, Count = 12, SlideId = 7, DeckKey = "自检" };
+            PptBarTouchedAtMs = NowMs;               // 先亮着（和刚开放映一样）
+            SettleFrames(500);
+            var box = PptBarRect();
+            Console.WriteLine($"框的画布矩形 = ({box.MinX:F0},{box.MinY:F0})-({box.MaxX:F0},{box.MaxY:F0})，"
+                            + $"不透明度 {PptBarAlpha:F2}，屏 {_virtualW}×{_virtualH}");
+            // 抓"右下角那一块"（含框）——用**屏幕坐标**抓，才是"屏幕上真有这个框"
+            int rx = (int)(_virtualX + _virtualW) - 360, ry = (int)(_virtualY + _virtualH) - 200;
+            ShotRegion(args.Length > 1 ? args[1] : "tmp/pptbox.bmp", rx, ry, 360, 200);
+            _quit = true;
+        }
         else if (mode == "--iotest")
         {
             _autoExitAt = double.MaxValue;

@@ -358,12 +358,19 @@ internal sealed partial class App
             Slides = f3;
             SettleFrames(450);
             var r = PptBarRectForTest;
-            float wantRight = VirtualScreen.MaxX - 12f, wantBottom = VirtualScreen.MaxY - 12f;
-            Check("放映中：框出现在**右下角**（离边 12 逻辑像素）",
+            // 判据用**独立的事实**：① 整个框必须落在屏幕里（第一版框跑到了 (5472,3488)，
+            // 屏幕只有 2880 宽——而当时的自检照抄了代码里那条错公式，所以"通过"了）；
+            // ② 它的右下角离屏幕右下角正好 12 逻辑像素。
+            float wantRight = VirtualScreen.MaxX - 12f * DpiScale;
+            float wantBottom = VirtualScreen.MaxY - 12f * DpiScale;
+            Check("放映中：框出现在**右下角**，而且**整个在屏幕里**",
                   !r.IsEmpty
-                  && Math.Abs(r.MaxX / DpiScale - wantRight) < 0.5f
-                  && Math.Abs(r.MaxY / DpiScale - wantBottom) < 0.5f,
-                  $"右下角 ({r.MaxX / DpiScale:F0},{r.MaxY / DpiScale:F0})（应为 {wantRight:F0},{wantBottom:F0}）");
+                  && r.MinX >= VirtualScreen.MinX && r.MinY >= VirtualScreen.MinY
+                  && r.MaxX <= VirtualScreen.MaxX && r.MaxY <= VirtualScreen.MaxY
+                  && Math.Abs(r.MaxX - wantRight) < 0.5f
+                  && Math.Abs(r.MaxY - wantBottom) < 0.5f,
+                  $"({r.MinX:F0},{r.MinY:F0})-({r.MaxX:F0},{r.MaxY:F0})，"
+                  + $"屏 {VirtualScreen.MaxX:F0}×{VirtualScreen.MaxY:F0}");
             Check("刚开放映：先**亮着**（老师一开讲就看得见）", PptBarAlpha > 0.99f,
                   $"{PptBarAlpha:F2}");
 
