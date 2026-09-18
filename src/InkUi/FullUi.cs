@@ -454,6 +454,29 @@ public sealed class FullUi : IOverlayUi
     ///
     /// 纵向：主条的上边为准（带子长在上面，贴底时按钮不会跳）。
     /// </summary>
+    /// <summary>上一次界面看到的"正在放映"状态——用来抓**放映刚开始**那一瞬间。</summary>
+    private bool _slideWasShowing;
+
+    /// <summary>
+    /// **放映刚开始那一下：自动展开一次、并挪回"底部水平居中"**（用户 2026-09-18）。
+    ///
+    /// 为什么要有它：开讲之前面板多半收成一个球（或者被老师拖到了某个角）。
+    /// 放映一开始，得让他**看见**"面板在这儿、现在翻的是 PPT"——所以这一下我们替他点一次，
+    /// 而且是**有动效的明显变化**（167 毫秒长出来），不是无声无息地换一下。
+    ///
+    /// **只做这一次**：之后位置完全听老师的（拖到哪儿记哪儿），下一次放映开始再自动摆一次。
+    /// 判据用"正在放映"的**上升沿**（`SlidePosition > 0` 从无到有），不是"页面刚打开"。
+    /// </summary>
+    private void UpdateSlideIntro()
+    {
+        bool showing = _host.State.SlidePosition > 0;
+        if (showing == _slideWasShowing) return;
+        _slideWasShowing = showing;
+        if (!showing) return;
+        _anchor = null;                       // 回到默认位置 = 屏幕下方水平居中
+        _expand.To(1f, Tokens.ExpandMs);      // 明显变化：长成完整的带子
+    }
+
     private Vector2 RawAnchor()
     {
         float top = _anchor?.Y ?? (_screen.MaxY - Tokens.EdgeMargin - Tokens.BarHeight);
@@ -1769,6 +1792,7 @@ public sealed class FullUi : IOverlayUi
     public void Render(ID2D1DeviceContext ctx, UiTheme theme)
     {
         if (_host == null) return;
+        UpdateSlideIntro();              // 放映刚开始那一下：自动展开一次、回到底部居中
         UpdatePeek();                    // 每帧问一次"该不该收起来"（贴边隐藏）
         UpdateRail();                    // 色线该不该长成设置条
         UpdateBandAction();              // "按住清空"够 0.8 秒没有（每帧推进）
