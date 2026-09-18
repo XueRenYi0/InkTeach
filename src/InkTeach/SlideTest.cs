@@ -347,6 +347,47 @@ internal sealed partial class App
               !SlideNow.Showing && Doc.CurrentPage < SlidePageBase
               && Doc.CurrentPage == CurrentPage,
               $"页号 {Doc.CurrentPage}，相机 {ViewOffsetY:F0}");
+
+        // ---- S2a：**放映翻页框**（只在放映时出现 / 右下角 / 4 秒变淡 / 结束就收）----
+        {
+            Check("不放映时：翻页框不出现（绝不挡内容）",
+                  PptBarRectForTest.IsEmpty && PptBarAlpha <= 0.01f,
+                  $"矩形空 = {PptBarRectForTest.IsEmpty}，不透明度 {PptBarAlpha:F2}");
+
+            var f3 = new FakeSlideSource { Showing = true, Position = 2, Count = 7 };
+            Slides = f3;
+            SettleFrames(450);
+            var r = PptBarRectForTest;
+            float wantRight = VirtualScreen.MaxX - 12f, wantBottom = VirtualScreen.MaxY - 12f;
+            Check("放映中：框出现在**右下角**（离边 12 逻辑像素）",
+                  !r.IsEmpty
+                  && Math.Abs(r.MaxX / DpiScale - wantRight) < 0.5f
+                  && Math.Abs(r.MaxY / DpiScale - wantBottom) < 0.5f,
+                  $"右下角 ({r.MaxX / DpiScale:F0},{r.MaxY / DpiScale:F0})（应为 {wantRight:F0},{wantBottom:F0}）");
+            Check("刚开放映：先**亮着**（老师一开讲就看得见）", PptBarAlpha > 0.99f,
+                  $"{PptBarAlpha:F2}");
+
+            // 静置 > 4 秒 → 变淡，但**仍看得见**（这是硬要求：不能淡到找不着）
+            SettleFrames(5200);
+            Check("静置 4 秒后变淡，但**仍看得见**（不低于三成）",
+                  PptBarAlpha < 0.5f && PptBarAlpha > 0.3f, $"不透明度 {PptBarAlpha:F2}");
+            TouchPptBarForTest();                 // 碰一下（等价的还有指针靠近，S2b 接上）
+            SettleFrames(200);
+            Check("碰一下就立刻回到全亮", PptBarAlpha > 0.99f, $"{PptBarAlpha:F2}");
+
+            // 选中框/批注层该照旧能写：框**不吃**别处的输入（S2b 才加框内命中）
+            var rBar = PptBarRectForTest;
+            Check("框外的地方照旧是批注层（框只占右下角那一小块）",
+                  rBar.MaxX - rBar.MinX < 220f * DpiScale && rBar.MaxY - rBar.MinY < 60f * DpiScale,
+                  $"框 {rBar.MaxX - rBar.MinX:F0}×{rBar.MaxY - rBar.MinY:F0} 物理像素");
+
+            f3.Showing = false;
+            SettleFrames(400);
+            Check("放映结束：框**收起来**（屏幕上不留东西）",
+                  PptBarRectForTest.IsEmpty, $"矩形空 = {PptBarRectForTest.IsEmpty}");
+            Slides = null;
+            SlideNow = default;
+        }
         Check("放映结束后新写的笔**不再带幻灯片身份**",
               Doc.CurrentSlideId == 0, $"CurrentSlideId = {Doc.CurrentSlideId}");
 

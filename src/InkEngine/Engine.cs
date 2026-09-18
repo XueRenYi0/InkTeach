@@ -3835,6 +3835,62 @@ public class InkEngine
     /// <summary>最近一次探测到的放映状态（界面读它显示 `PPT 3/12`）。</summary>
     internal SlideState SlideNow;
 
+    // ---- 放映翻页框（S2，2026-09-18）--------------------------------------
+    //
+    // 用户 2026-09-18 定的设计：**单独一个浮动物件**（不做两侧对称）、
+    // 默认右下角、可拖动、贴左右边自动竖排 / 贴上下边自动横排、
+    // **4 秒不碰变淡到 35%**（看得见也点得着）、主题色跟面板、点页码=跳页、
+    // 长按=结束放映、**只在放映时出现**、结束自动收起。
+    //
+    // 这一步（S2a）先把"看得见"做对：出现 / 位置 / 变淡 / 收起。
+    // 拖动、贴边转向、点击与长按放 S2b——先让"它在哪儿、什么时候在"是对的。
+
+    /// <summary>框一直没被碰过多久之后开始变淡（毫秒）。</summary>
+    private const double PptBarFadeAfterMs = 4000;
+    /// <summary>变淡之后的不透明度（**看得见也点得着**，绝不降到看不见）。</summary>
+    private const float PptBarDimAlpha = 0.35f;
+
+    /// <summary>老师拖动后的位置（null = 用默认位置：右下角）。</summary>
+    internal Vector2? PptBarAnchor;
+    /// <summary>最近一次被碰的时刻（变淡的判据）。</summary>
+    internal double PptBarTouchedAtMs;
+
+    /// <summary>这一刻框的不透明度：刚碰过 1.0，静置 4 秒后降到 0.35。</summary>
+    internal float PptBarAlpha
+    {
+        get
+        {
+            if (!SlideNow.Showing) return 0f;
+            double idle = NowMs - PptBarTouchedAtMs;
+            if (idle <= PptBarFadeAfterMs) return 1f;
+            // 变淡也走一小段动画（300ms），别"啪"地一下切换
+            float k = (float)Math.Min(1.0, (idle - PptBarFadeAfterMs) / 300.0);
+            return 1f + (PptBarDimAlpha - 1f) * k;
+        }
+    }
+
+    /// <summary>框的逻辑尺寸（横排：宽三格、高一格）。贴边竖排是 S2b。</summary>
+    internal const float PptBarCellLogical = 44f;
+    internal float PptBarW => PptBarCellLogical * 3f;
+    internal float PptBarH => PptBarCellLogical;
+
+    /// <summary>框的画布矩形（默认**右下角、离边 12 像素**）。</summary>
+    internal RectF PptBarRect()
+    {
+        const float margin = 12f;
+        float w = PptBarW * DpiScale, h = PptBarH * DpiScale;
+        float x = PptBarAnchor?.X ?? (VirtualScreen.MaxX - margin - PptBarW);
+        float y = PptBarAnchor?.Y ?? (VirtualScreen.MaxY - margin - PptBarH);
+        return new RectF { MinX = x * DpiScale, MinY = y * DpiScale,
+                           MaxX = (x + PptBarW) * DpiScale, MaxY = (y + PptBarH) * DpiScale };
+    }
+
+    /// <summary>自检用：框这一刻的矩形（画布坐标；没在放映就是空矩形）。</summary>
+    internal RectF PptBarRectForTest => SlideNow.Showing ? PptBarRect() : RectF.Empty;
+
+    /// <summary>自检用：碰它一下（冒充老师的鼠标/笔靠近）。</summary>
+    internal void TouchPptBarForTest() => PptBarTouchedAtMs = NowMs;
+
     private double _nextSlidePollAtMs;
 
     /// <summary>进放映之前站在白板的哪一页（放映结束要回到它）。</summary>
@@ -3962,6 +4018,7 @@ public class InkEngine
             // 换了一份演示文稿：先把它以前的批注读进来（同一份就什么都不做）
             if (st.DeckKey != _deckLoaded) LoadDeckAnnotations(st.DeckKey);
             _lastDeck = st.DeckKey;
+            PptBarTouchedAtMs = NowMs;          // 刚开放映：先亮着，别一出现就是淡的
             // 放映空间：新笔自动落到这一页（页号 = 幻灯片页区间里的那一个）
             Doc.CurrentPage = SlidePageOfPosition(st.Position);
             ReconcileSlidePage(st.SlideId, Doc.CurrentPage);
