@@ -1642,6 +1642,15 @@ public class InkEngine
             return;
         }
 
+        // **放映翻页框优先吃这一下**（S2b）：框内点击 = 翻页 / 跳页，**不画一笔**。
+        // 排在选中框那套前面：它是个常驻浮动物件，老师在它上面点十次也不该落一笔墨。
+        if (SlideNow.Showing && HandlePptBarTap(x, y, ptype == Native.PT_PEN, inverted))
+        {
+            _drawing = false;
+            _dirty = true;
+            return;
+        }
+
         // 落在界面画的那一块里、但界面没吃这一下：这一下就算了。
         // ① 不落墨——面板底下的墨看不见，面板一挪又冒出来，属于"看不见却被记下来"；
         // ② 不透给下层——界面声明占用的区域（QueryBounds）就是它的地盘，
@@ -3890,6 +3899,41 @@ public class InkEngine
 
     /// <summary>自检用：碰它一下（冒充老师的鼠标/笔靠近）。</summary>
     internal void TouchPptBarForTest() => PptBarTouchedAtMs = NowMs;
+
+    /// <summary>
+    /// **点框**：左格 = 上一页、右格 = 下一页、中间 = 跳页（借 PPT 自己的幻灯片导航）。
+    ///
+    /// 三条纪律：
+    ///   · 不管手里是笔还是橡皮，**点在框上都不落墨**（否则"想翻页结果画了一笔"）；
+    ///   · 每一下都**刷新"碰过的时间"**，于是框立刻回到全亮——老师一动它就不该是淡的；
+    ///   · 命令一律经 `ISlideSource` 送出去，**我们不直接调 COM**（好测、也好换 WPS）。
+    ///
+    /// 返回 true = 这一下被框吃掉了（调用方不要再当笔划处理）。
+    /// </summary>
+    private bool HandlePptBarTap(float canvasX, float canvasY, bool fromPen, bool inverted)
+    {
+        _ = fromPen; _ = inverted;                    // 笔和橡皮在这个框上语义相同
+        var r = PptBarRect();
+        if (!r.Contains(canvasX, canvasY)) return false;
+
+        PptBarTouchedAtMs = NowMs;
+        _dirty = true;
+
+        float cell = (r.MaxX - r.MinX) / 3f;
+        int which = canvasX < r.MinX + cell ? 0 : canvasX < r.MinX + cell * 2f ? 1 : 2;
+        if (Slides == null) return true;
+
+        bool ok = which switch
+        {
+            0 => Slides.Previous(),
+            2 => Slides.Next(),
+            _ => Slides.ShowNativeNavigator(),
+        };
+        if (which != 1 && !ok)
+            Console.WriteLine(which == 0 ? "放映：已经是第一页" : "放映：已经是最后一页");
+        _nextSlidePollAtMs = 0;                       // 立刻探测，批注跟着换
+        return true;
+    }
 
     private double _nextSlidePollAtMs;
 

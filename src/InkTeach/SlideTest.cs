@@ -387,6 +387,10 @@ internal sealed partial class App
                   PptBarRectForTest.IsEmpty, $"矩形空 = {PptBarRectForTest.IsEmpty}");
             Slides = null;
             SlideNow = default;
+
+           SettleFrames(400);
+            Slides = null;
+            SlideNow = default;
         }
         Check("放映结束后新写的笔**不再带幻灯片身份**",
               Doc.CurrentSlideId == 0, $"CurrentSlideId = {Doc.CurrentSlideId}");
