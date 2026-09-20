@@ -1403,11 +1403,15 @@ public sealed class FullUi : IOverlayUi
                 if (i >= 0 && i < ShapeSegmentCount)
                 {
                     var picked = ShapeToolAt(i);
-                    // **同一个图形格再点一次 = 换一档抛物线开口方向**（用户 2026-09-20 定：
-                    // "选中框的抛物线按钮取消，我不打算从这个转开口" → 朝向改到**画之前**定）。
-                    // 只对抛物线这样：别的图形再点一次没有任何新含义，保持"再点=选中它"的老行为。
+                    // **同一个图形格再点一次 = 换一档**。只对两种图形这样，别的照旧"再点=选中它"：
+                    //   · 抛物线：换开口方向（用户 2026-09-20 定："选中框的抛物线按钮取消，
+                    //     我不打算从这个转开口" → 朝向改到**画之前**定）；
+                    //   · 直线：换线型（用户 2026-09-20 定："点击直线的图标，它会变成虚线，
+                    //     再点击变成点虚线，再点击又变成直线……这样就省了好几个空间格"）。
                     if (picked == Tool.Parabola && _host.State.Tool == Tool.Parabola)
                         _host.Commands.CycleParabolaAxis();
+                    else if (picked == Tool.Line && _host.State.Tool == Tool.Line)
+                        _host.Commands.CycleLineDash();
                     else
                         _host.Commands.SetTool(picked);
                 }
@@ -2732,11 +2736,19 @@ public sealed class FullUi : IOverlayUi
     private string ShapeIcon(int i) => ShapeIcon(ShapeToolAt(i));
 
     /// <summary>
-    /// **图形种类 → 图标名**（带上状态的那一份）：目前只有抛物线跟状态有关
-    /// ——它的图标要**转成当前开口方向**（见 <see cref="ParabolaIconName"/>）。
+    /// **图形种类 → 图标名**（带上状态的那一份）：目前两处跟状态有关——
+    /// 抛物线要**转成当前开口方向**（见 <see cref="ParabolaIconName"/>），
+    /// 直线要**换成当前线型**（见 <see cref="LineIconName"/>）。
+    ///
+    /// 为什么非跟状态不可：这两格"点第二下换一档"，图标不跟着换的话，
+    /// 老师看不出那一下到底有没有生效（两处都是用户 2026-09-20 定的）。
     /// </summary>
-    private string ShapeIcon(Tool t)
-        => t == Tool.Parabola ? ParabolaIconName(_host.State.ParabolaAxis) : ShapeIconFor(t);
+    private string ShapeIcon(Tool t) => t switch
+    {
+        Tool.Parabola => ParabolaIconName(_host.State.ParabolaAxis),
+        Tool.Line => LineIconName(_host.State.LineDash),
+        _ => ShapeIconFor(t),
+    };
 
     /// <summary>
     /// 抛物线的图标名按**当前档位**换（`parabola` = 上下抛物 / `parabolaRight` = 左右抛物，
@@ -2756,12 +2768,31 @@ public sealed class FullUi : IOverlayUi
     };
 
     /// <summary>
+    /// 直线的图标名按**当前线型**换（`line` / `lineDash` / `lineDot`，见 <see cref="IconAtlas.Draw"/>）。
+    ///
+    /// 和抛物线那条同一个理由：那一格"再点一次换一档"（用户 2026-09-20 定：
+    /// "点击直线的图标，它会变成虚线，再点击变成点虚线，再点击又变成直线……省了好几个空间格"），
+    /// 图标不跟着换的话，老师点完看不出下一笔会是实线还是虚线。
+    ///
+    /// 三张都是**自绘**的（`IconAtlas` 里同一根线只换画法）——上游图标库里一个虚线专名都没有
+    /// （连 `lineWeight` 都只有实线那一张），而且三张必须**一眼看出是同一根线的三档**，
+    /// 凑上游的三张图反而会花。
+    /// </summary>
+    private static string LineIconName(StrokeDash dash) => dash switch
+    {
+        StrokeDash.Dashed => "lineDash",
+        StrokeDash.Dotted => "lineDot",
+        _ => "line",                               // 实线（也是兜底）
+    };
+
+    /// <summary>
     /// **图形种类 → 图标名**。上带那几段和主条"图形"那一格**共用这一份**：
     /// 主条上显示的必须就是当前种类的形状，两处各写一份迟早对不上
     /// （表现是"上带里点了三角形，主条那格还是矩形"）。
     ///
-    /// 名字对不上的那几个是自绘的（`oval` / `parallelogram` / `axes` / `numberline`
-    /// 和 2026-09-20 加的四种曲线 `parabola` / `hyperbola` / `sine` / `cosine`），
+    /// 名字对不上的那几个是自绘的（`oval` / `parallelogram` / `axes` / `numberline`、
+    /// 2026-09-20 加的四种曲线 `parabola` / `hyperbola` / `sine` / `cosine`，
+    /// 以及直线的三档线型 `line` / `lineDash` / `lineDot`），
     /// 见 <see cref="IconAtlas.Draw"/>：上游图标库里没有这些专名。
     /// </summary>
     private static string ShapeIconFor(Tool t) => t switch
@@ -2790,7 +2821,10 @@ public sealed class FullUi : IOverlayUi
         Tool.Cuboid => "cuboid",
         Tool.Tetrahedron => "tetrahedron",
         Tool.Arrow => "arrowRight",
-        _ => "lineWeight",                         // 直线（也是认不出来的兜底）
+        // 直线：自绘三张（实线 / 虚线 / 点线，见 IconAtlas）。这里给的是**实线**那一张，
+        // 具体哪一张由 `ShapeIcon(Tool)` 按当前线型换（见 LineIconName）。
+        Tool.Line => "line",
+        _ => "lineWeight",                         // 认不出来的兜底
     };
 
     private string SegmentLabel(int i) => _bandCell switch

@@ -10400,6 +10400,17 @@ internal sealed class App : InkEngine.InkEngine
                 SettleFrames(120);
             }
             if (cli.Contains("--preview")) ui.ShowSizePreviewForTest();
+            // --dashline N：把「直线」那一格的档位往后切 N 下（看"图标跟着线型换"那三档：
+            // N=0 实线、1 虚线、2 点线；配 `--shape line` 用）。产品里没有这个入口，
+            // 它只服务"图上看细节"（和 --zoom / --cell 同一类）。
+            {
+                int dli = Array.IndexOf(cli, "--dashline");
+                if (dli >= 0 && dli + 1 < cli.Length && int.TryParse(cli[dli + 1], out int dashArg))
+                {
+                    for (int k = 0; k < dashArg; k++) Host.Commands.CycleLineDash();
+                    SettleFrames(120);
+                }
+            }
             if (_panelShowDrawer) ui.OpenDrawerForTest();   // --drawer：连抽屉一起出图
             SettleFrames(500);
 
@@ -11999,6 +12010,106 @@ internal sealed class App : InkEngine.InkEngine
         ClickSegment(4);
         Check("别的图形：再点一次仍然是它自己（这条规则只对抛物线）",
               Host.State.Tool == Tool.Triangle, $"工具 {Host.State.Tool}");
+
+        // ================= A3. 直线那一段：**再点一次 = 换一档线型** =================
+        //
+        // 用户 2026-09-20 定（落地记在 计划-图形工具.md §27.1）：
+        // "点击直线的图标，它会变成虚线，再点击变成点虚线，再点击又变成直线……
+        //  这样就可以在虚实之间切换，而且又**省了好几个空间格**"。
+        //
+        // 验五件事（缺哪一件都可能"看着绿其实没做"）：
+        //   ① **一轮三档**：实线 → 虚线 → 点线 → 实线（第四下回到起点，不是停在点线）；
+        //   ② 那一格的**图标名**跟着换（不换的话，老师看不出点第二下有没有生效）；
+        //   ③ 新画出来的直线**真的带那一档**（几何层，不只是界面显示）；
+        //   ④ **只影响以后画的**：先画好的那条一个字节都不许动；
+        //   ⑤ 别的图形**不吃这一档**（画出来一律实线）——这条钉住"只给直线"的口径。
+        Console.WriteLine("  -- A3. 直线格：再点一次换一档线型（实线 → 虚线 → 点线）--");
+        GotoShapeBand();
+
+        // 先归零：不写死"进来时一定是实线、一定是直线工具"——前面任何一段点过它就会错位。
+        // **两个条件都要判**：工具不是直线时，点它只是"选中它"（不换档）；
+        // 工具已经是直线时，点它才换档。最多四下一。
+        for (int k = 0; k < 4
+             && (Host.State.Tool != Tool.Line || Host.State.LineDash != StrokeDash.Solid); k++)
+        {
+            EnsureRailOpen();
+            ClickSegment(0);                          // 第一行第 1 段 = 直线
+        }
+        Check("直线：点它 = 选中直线，当前档是**实线**",
+              Host.State.Tool == Tool.Line && Host.State.LineDash == StrokeDash.Solid,
+              $"工具 {Host.State.Tool}、档位 {Host.State.LineDash}");
+        Check("直线：实线那一档的图标名 = line",
+              ui.ShapeIconNameForTest(0) == "line", ui.ShapeIconNameForTest(0));
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        // 落点和 C 段同一套：画布中上部，别落到屏幕下沿的面板上（那就变成点按钮了）。
+        int ldX = (int)(_virtualX + _virtualW * 0.28f);
+        int ldY = (int)(_virtualY + _virtualH * 0.42f);
+        void DragLine(int x, int y)
+        {
+            SendMouse(x, y, 0);                                       SettleFrames(60);
+            SendMouse(x, y, Native.MOUSEEVENTF_LEFTDOWN);             SettleFrames(60);
+            SendMouse(x + 130, y + 60, 0);                            SettleFrames(40);
+            SendMouse(x + 260, y + 120, 0);                           SettleFrames(40);
+            SendMouse(x + 260, y + 120, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(220);
+        }
+
+        // 第一条：实线（用来验 ④"老的那条不受影响"）。
+        DragLine(ldX, ldY);
+        var oldLine = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+        Check("直线·实线档：新画的直线带**实线**",
+              oldLine != null && oldLine.Kind == StrokeKind.Line && oldLine.Dash == StrokeDash.Solid,
+              $"对象 {Doc.Strokes.Count} 个，线型 "
+              + $"{(oldLine == null ? "（没画出来）" : oldLine.Dash.ToString())}（期望 Solid）");
+
+        // 一轮三档：点一下换一档，图标名跟着换。
+        var dashRun = new (StrokeDash want, string icon)[]
+        {
+            (StrokeDash.Dashed, "lineDash"),
+            (StrokeDash.Dotted, "lineDot"),
+            (StrokeDash.Solid, "line"),               // 第四下回到实线（一轮闭环）
+        };
+        for (int k = 0; k < dashRun.Length; k++)
+        {
+            EnsureRailOpen();
+            ClickSegment(0);                          // 再点一次 = 换一档
+            Check($"直线：第 {k + 2} 次点 = 换到 {dashRun[k].want}（工具没变）",
+                  Host.State.Tool == Tool.Line && Host.State.LineDash == dashRun[k].want,
+                  $"工具 {Host.State.Tool}、档位 {Host.State.LineDash}（期望 {dashRun[k].want}）");
+            Check($"直线：图标名跟着变成 {dashRun[k].icon}",
+                  ui.ShapeIconNameForTest(0) == dashRun[k].icon, ui.ShapeIconNameForTest(0));
+
+            // 第三下（点线）那一档顺手验"画出来真的是点线"——三档各画一条就够说明问题，
+            // 不必每档都拖一次（拖一次要等 400 毫秒，这段会白长三倍）。
+            if (dashRun[k].want == StrokeDash.Dotted)
+            {
+                DragLine(ldX, ldY + 200);
+                var dotLine = Doc.Strokes.Count == 2 ? Doc.Strokes[1] : null;
+                Check("直线·点线档：新画的直线带**点线**",
+                      dotLine != null && dotLine.Kind == StrokeKind.Line
+                      && dotLine.Dash == StrokeDash.Dotted,
+                      $"对象 {Doc.Strokes.Count} 个，线型 "
+                      + $"{(dotLine == null ? "（没画出来）" : dotLine.Dash.ToString())}（期望 Dotted）");
+                Check("直线：换档**只影响以后画的**，先前那条实线一个字节没动",
+                      oldLine != null && oldLine.Dash == StrokeDash.Solid,
+                      $"先前那条 = {(oldLine == null ? "（没了）" : oldLine.Dash.ToString())}（期望 Solid）");
+            }
+        }
+
+        // ⑤ 别的图形不吃这一档：切到矩形再画一条，必须是实线（哪怕直线那格刚切过点线）。
+        EnsureRailOpen();
+        ClickSegment(1);                              // 第一行第 2 段 = 矩形
+        DragLine(ldX, ldY + 400);
+        var rectLine = Doc.Strokes.Count == 3 ? Doc.Strokes[2] : null;
+        Check("别的图形不吃这一档：矩形画出来仍然是**实线**",
+              Host.State.Tool == Tool.Rectangle
+              && rectLine != null && rectLine.Kind == StrokeKind.Rectangle
+              && rectLine.Dash == StrokeDash.Solid,
+              $"对象 {Doc.Strokes.Count} 个，矩形线型 "
+              + $"{(rectLine == null ? "（没画出来）" : rectLine.Dash.ToString())}（期望 Solid）");
+        Doc.Clear();
+        Doc.ClearHistory();
 
         // ================= B. 图形**一个热键都没有**（用户 2026-09-19 定）=================
         //

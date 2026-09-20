@@ -192,6 +192,15 @@ public interface IEngineCommands
     /// "不打算从选中框调朝向"。入口在图形面板：那一格**已经选中抛物线时再点一次**。
     /// </summary>
     void CycleParabolaAxis();
+    /// <summary>
+    /// **换下一档直线的线型**（实线 → 虚线 → 点线 → 实线）。
+    ///
+    /// 只动"下一笔直线用什么线型"，**不改已经画好的那些**（那些各存各的，要改走
+    /// 选中后的操作条面板）。入口和抛物线同一个位置：图形面板里「直线」那一段
+    /// **已经选中直线时再点一次**——用户 2026-09-20 要的就是"省几个空间格"，
+    /// 不为虚线直线 / 点线直线各开一格。
+    /// </summary>
+    void CycleLineDash();
     void SetColor(Color4 color);
     void SetWidth(float logicalPx);
     /// <summary>
@@ -377,6 +386,15 @@ public readonly struct UiState
     /// 下一笔会朝哪开（那格点第二下的作用就是换它）。
     /// </summary>
     public CurveAxis ParabolaAxis { get; init; }
+    /// <summary>
+    /// **直线工具当前的线型**（用户 2026-09-20 定：图形面板里"直线"那一段
+    /// **再点一次换一档**：实线 → 虚线 → 点线 → 实线，这样不用为虚线直线单开格子）。
+    /// 界面用它把那一格的图标换成当前档——不换的话，老师看不出"点第二下到底有没有生效"。
+    ///
+    /// 和 <see cref="Dash"/>（笔的线型）是**两件事**：那一个是笔的色带条管着的，
+    /// 这一个只管直线那一格。两个都只作用于"下一笔画出来的"。
+    /// </summary>
+    public StrokeDash LineDash { get; init; }
     public bool PassThrough { get; init; }
     /// <summary>是否处于白板模式（画布有不透明底色）。</summary>
     public bool Board { get; init; }

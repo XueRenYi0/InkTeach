@@ -3561,6 +3561,39 @@ public class InkEngine
     }
 
     /// <summary>
+    /// **直线那一格当前的线型**（实线 / 虚线 / 点线）。用户 2026-09-20 定：
+    /// "点击直线的图标，它会变成虚线，再点击变成点虚线，再点击又变成直线……
+    /// **这样就省了好几个空间格**"。
+    ///
+    /// 为什么只给直线、不给全部图形：那一格点第二下**要有新含义**才敢这么用，
+    /// 而图形面板里现在只有"抛物线换开口方向"占着这个动作（见 `FullUi.ActivateSegment`）。
+    /// 直线是画得最多的一种，虚实线又是老师最常用的两种（辅助线、延长线），
+    /// 所以先给它；别的图形以后真需要，照这个模子加即可。
+    ///
+    /// **它是"下一笔用哪种"，不是"板上那些直线现在是什么"**——已经画好的各存各的
+    /// （见 <see cref="Stroke.Dash"/>），要改它们走选中后的操作条面板（`SetSelectionDash`）。
+    /// 和 `PenDash` 那条口径一样，区别只是"哪支工具吃它"。
+    ///
+    /// 存成**引擎字段**、不存偏好文件（和 <see cref="ParabolaAxis"/> 同一条理由）：
+    /// 一次课里连画几条虚线是常态，留着上一档比每次回实线顺手。
+    /// </summary>
+    public StrokeDash LineDash { get; private set; } = StrokeDash.Solid;
+
+    /// <summary>
+    /// 换下一档直线线型：**实线 → 虚线 → 点线 → 实线**（见 <see cref="LineDash"/>）。
+    /// 只影响**下一笔**画出来的直线，不碰已经画好的对象。
+    /// </summary>
+    public void CycleLineDash()
+    {
+        // 三档一轮：Solid(0) → Dashed(1) → Dotted(2) → Solid。
+        // 用取模而不是列举，是为了以后要加第四档（比如点划线）时只改这里一句话。
+        LineDash = (StrokeDash)(((int)LineDash + 1) % 3);
+        // 面板上那一格的图标要跟着换，所以推一次状态（和抛物线换朝向同一套）。
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
     /// 图形工具的起手：造一条**只有起点**的图形，拖动期由
     /// <see cref="UpdateShapePreview"/> 改控制点，松手由 <see cref="EndStroke"/> 提交。
     ///
@@ -3582,6 +3615,9 @@ public class InkEngine
             // 抛物线的**开口方向是画之前选好的**（见 ParabolaAxis）：画的那一刻写进对象，
             // 之后它就是这条曲线自己的属性，和工具当前那档再无关系。
             CurveAxis = kind == StrokeKind.Parabola ? ParabolaAxis : CurveAxis.OpenUp,
+            // 直线的**线型也是画之前选好的**（见 LineDash）：同样在画的那一刻写进对象。
+            // 别的图形一律实线——它们的线型历来是"选中之后在操作条面板里改"。
+            Dash = kind == StrokeKind.Line ? LineDash : StrokeDash.Solid,
         };
         ActiveStroke.AddPoint(x, y, 1f, NowMs);
         // 抛物线的**顶点 = 按下那个点**：它现在是**一笔画完**的（照 InkClass 的 `case 20/21`：
@@ -4395,6 +4431,7 @@ public class InkEngine
     {
         Tool = Tool,
         ParabolaAxis = ParabolaAxis,      // 界面拿它把图形面板那一格的图标转成当前朝向
+        LineDash = LineDash,              // 界面拿它把「直线」那一格的图标换成当前线型
         Color = Tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
         PaletteBase = Tool == Tool.Highlighter
             ? new Color4(HighlighterCurrent.R, HighlighterCurrent.G, HighlighterCurrent.B, 1f)

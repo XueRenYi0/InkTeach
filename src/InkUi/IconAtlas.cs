@@ -75,6 +75,12 @@ internal static class IconAtlas
         if (name == "tetrahedron") { DrawTetrahedron(ctx, x, y, size, brush); return; }
         if (name == "sine") { DrawWave(ctx, x, y, size, brush, cosine: false); return; }
         if (name == "cosine") { DrawWave(ctx, x, y, size, brush, cosine: true); return; }
+        // 直线那三档线型的图标（用户 2026-09-20 定：图形面板里"直线"那一段再点一次
+        // 就在实线 / 虚线 / 点线之间换，所以要有三张）。同样只能自绘：
+        // 上游那张 `lineWeight` 是实线的，一个虚线 / 点线专名都没有。
+        if (name == "line") { DrawLineStyle(ctx, x, y, size, brush, StrokeDash.Solid); return; }
+        if (name == "lineDash") { DrawLineStyle(ctx, x, y, size, brush, StrokeDash.Dashed); return; }
+        if (name == "lineDot") { DrawLineStyle(ctx, x, y, size, brush, StrokeDash.Dotted); return; }
 
         var geo = SvgPath.Get(PanelIcons.Get(name));
         if (geo == null) return;
@@ -708,5 +714,37 @@ internal static class IconAtlas
             float e = MathF.Min(s + dash, len);
             ctx.DrawLine(a + d * s, a + d * e, brush, w, _round);
         }
+    }
+
+    /// <summary>
+    /// **直线那三档线型的图标**：一根 24 网格里的横线（x 3→21、y 12），只换"怎么画"。
+    ///
+    /// 三个要点：
+    ///   · **同一根线**——三张图只有线型不同，老师一眼能把它们对成"同一格的三种状态"
+    ///     （凑上游三张不同的图反而会花）；
+    ///   · 段长 / 间隙按线型走：实线一整条、虚线长段（4 格）、点线短段（圆头 + 0.7 格
+    ///     ≈ 一个圆点）；点线的**间隙比虚线大**，不然点会连成一串看不清是点线；
+    ///   · 线宽 1.8：比上游 regular 那一套（1.5）粗一点点——它是"一根线"这个概念的图标，
+    ///     和旁边那些有轮廓的方块摆在一起时不该显得更细。
+    /// </summary>
+    private static void DrawLineStyle(ID2D1DeviceContext ctx, float x, float y,
+                                     float size, ID2D1Brush brush, StrokeDash dash)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        var a = new Vector2(3f, 12f);
+        var b = new Vector2(21f, 12f);
+        const float w = 1.8f;
+        switch (dash)
+        {
+            case StrokeDash.Dashed: DashedLine(ctx, a, b, 4f, 2.4f, w, brush); break;
+            case StrokeDash.Dotted: DashedLine(ctx, a, b, 0.7f, 3.4f, w, brush); break;
+            default: ctx.DrawLine(a, b, brush, w, _round); break;      // 实线
+        }
+
+        ctx.Transform = saved;
     }
 }
