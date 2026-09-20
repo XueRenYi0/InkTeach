@@ -3456,6 +3456,26 @@ internal sealed class App : InkEngine.InkEngine
         box.AddPoint(cx + 280, cy + 250, 1f, 0);
         Doc.AddStroke(box);
 
+        // **多段图形**（长方体 12 条棱、圆柱 5 笔）——2026-09-20 修的那两类：
+        // 擦一刀之后外形逐笔不变：被挡的棱 / 被挡的半圈熔完**还是细虚线**，
+        // 段与段之间也**不会连出假线**。都摆在橡皮的竖直带里，好看出"确实切了一刀"。
+        var cub = new Stroke
+        {
+            Tool = Tool.Cuboid, Kind = StrokeKind.Cuboid,
+            Color = new Color4(0.15f, 0.45f, 0.9f, 1f), Width = 5f * dpi,
+        };
+        cub.SetCuboidFront(cx - 40, cy + 40, cx + 180, cy + 240);
+        cub.SetCuboidDepth(cx + 20, cy - 20);         // 深度 = |40 − (−20)| = 60
+        Doc.AddStroke(cub);
+
+        var cyl = new Stroke
+        {
+            Tool = Tool.Cylinder, Kind = StrokeKind.Cylinder,
+            Color = new Color4(0.15f, 0.45f, 0.9f, 1f), Width = 5f * dpi,
+        };
+        cyl.SetSolidBox(cx - 320, cy - 300, cx - 80, cy + 60);   // 右边那条母线压在橡皮里
+        Doc.AddStroke(cyl);
+
         Tool = Tool.PixelEraser;
         PassThrough = false;
         ShowHud = false;
@@ -3465,8 +3485,8 @@ internal sealed class App : InkEngine.InkEngine
         Doc.InvalidateAll();
         SettleFrames(600);
 
-        int w = (int)(PixelEraserWidthLogical * dpi * 3.2f);
-        int h = (int)(PixelEraserHeightLogical * dpi * 2.4f);
+        int w = (int)(PixelEraserWidthLogical * dpi * 4.6f);
+        int h = (int)(PixelEraserHeightLogical * dpi * 3.6f);
         int x0 = (int)cx - w / 2, y0 = (int)cy - h / 2;
 
         string shot1 = Path.Combine("reports", "像素橡皮-1-落点与擦之前.bmp");
@@ -3488,8 +3508,9 @@ internal sealed class App : InkEngine.InkEngine
         ScreenProbe.SaveBmp(shot2, x0, y0, w, h);
         Console.WriteLine($"已存 {Path.GetFullPath(shot2)}");
         Console.WriteLine($"  擦之前 {before} 条 → 擦之后 {Doc.Strokes.Count} 条"
-                        + "（被擦断的每一段都是**独立对象**：三条横墨 + 荧光笔各切成两截；"
-                        + "矩形先熔成笔迹再切，同样按段分开）");
+                        + "（三条横墨 + 荧光笔各切成两截；矩形熔成笔迹后再切；"
+                        + "长方体、圆柱熔成**一条棱一段**——虚线棱 / 虚线半圈还是虚线，"
+                        + "段与段之间没有假线）");
         for (int i = 0; i < Doc.Strokes.Count; i++)
         {
             var s = Doc.Strokes[i];
@@ -7093,6 +7114,91 @@ internal sealed class App : InkEngine.InkEngine
                       $"接住={rectTook}，框右边界 {rectBefore.MaxX:F0} → {r.WorldInkBounds.MaxX:F0}，"
                       + $"松手 {commitInk} vs 整层重画 {fullInk} 像素");
             }
+        }
+
+        // 线宽**不跟着缩放**（用户 2026-09-13 拍板、2026-09-20 落地）：
+        // 横着把一个矩形拉 3 倍，四条边该多粗还是多粗。
+        // 判据用"数墨"——数出来的是屏幕上真看到的东西，比查矩阵可靠。
+        Console.WriteLine("  -- P. 拉伸 / 旋转时线宽不变（图形）--");
+        {
+            ViewOffsetY = 0f;
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+
+            var rs = new Stroke
+            {
+                Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            rs.AddPoint(700f, 320f, 1f, 0);
+            rs.AddPoint(1000f, 520f, 1f, 0);
+
+            Doc.Clear();
+            Doc.ClearHistory();
+            Tool = Tool.Marquee;
+            Doc.AddStroke(rs);
+            Doc.Selected.Clear();
+            Doc.InvalidateAll();
+            SettleFrames(300);
+
+            // 沿一条扫描线数**连续的墨**，返回最长的一段 = 那条边看起来有多粗（物理像素）
+            int ThickAcrossY(float x, float yFrom, float yTo)      // 竖着扫：量横边
+            {
+                int run = 0, best = 0;
+                for (int y = (int)yFrom; y <= (int)yTo; y++)
+                {
+                    if (ScreenProbe.CountMagenta((int)x, y, 2, 1) > 0) { run++; best = Math.Max(best, run); }
+                    else run = 0;
+                }
+                return best;
+            }
+            int ThickAcrossX(float y, float xFrom, float xTo)      // 横着扫：量竖边
+            {
+                int run = 0, best = 0;
+                for (int x = (int)xFrom; x <= (int)xTo; x++)
+                {
+                    if (ScreenProbe.CountMagenta(x, (int)y, 1, 2) > 0) { run++; best = Math.Max(best, run); }
+                    else run = 0;
+                }
+                return best;
+            }
+
+            int top0 = ThickAcrossY(850f, 300f, 345f);         // 上边（y = 320 那条）
+            int right0 = ThickAcrossX(420f, 975f, 1025f);      // 右边（x = 1000 那条）
+
+            // 用**真手势**拖右中柄（横向拉长、纵向不动）——和用户的手一模一样，
+            // 也顺便验了"缩放手势提交之后屏幕上的线宽"。
+            Doc.SelectOnly(new[] { rs });
+            SettleFrames(200);
+            var rFrame = SelectionHandles.FrameOf(Doc.Selected);
+            var rMid = SelectionHandles.CanvasPosition(SelHandle.Right, rFrame, DpiScale);
+            bool rTook = SelectionGestureForTest(rMid.X, rMid.Y);
+            UpdateSelectionGestureForTest(rMid.X + 700f, rMid.Y);     // 右边往右拖 700 → 横向拉长
+            SettleFrames(150);
+            EndSelectionGestureForTest();
+            SettleFrames(250);
+            Doc.Selected.Clear();
+            SettleFrames(250);
+
+            int top1 = ThickAcrossY(1200f, 300f, 345f);        // 上边中段（现在伸到 x = 1700）
+            int right1 = ThickAcrossX(420f, 1655f, 1710f);     // 右边（被拖到 x ≈ 1682）
+            Check("拖右中柄横拉：**横边**粗细不变（拉伸只改形状，不改线宽）",
+                  rTook && top0 >= 6 && Math.Abs(top1 - top0) <= 2,
+                  $"接住={rTook}，上边 {top0} → {top1} 物理像素");
+            Check("拖右中柄横拉：**竖边**粗细也不变（老做法这里会粗 3 倍，看着像书法笔）",
+                  rTook && rs.WorldBounds.MaxX > 1400f && right0 >= 6 && Math.Abs(right1 - right0) <= 2,
+                  $"框右边界 {rs.WorldBounds.MaxX:F0}，右边 {right0} → {right1} 物理像素"
+                  + $"（老做法约 {right0 * 3}）");
+
+            // 规则本身也钉一条：**图形**不跟着缩放、**手写墨迹**跟着缩放（像图片一样）。
+            // 免得以后有人把"线宽不变"顺手套到笔迹上，或者反过来把图形漏掉。
+            var inkProbe = new Stroke { Tool = Tool.Pen };          // 自由笔迹
+            var shapeProbe = new Stroke { Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle };
+            shapeProbe.AddPoint(0f, 0f, 1f, 0);
+            shapeProbe.AddPoint(10f, 10f, 1f, 0);
+            Check("规则：图形 KeepsWidth=true、手写墨迹=false、图像=false（三种各归各位）",
+                  shapeProbe.KeepsWidth && !inkProbe.KeepsWidth
+                  && !new Stroke { Kind = StrokeKind.Image }.KeepsWidth,
+                  $"矩形 {shapeProbe.KeepsWidth}、笔迹 {inkProbe.KeepsWidth}");
         }
 
         Console.WriteLine();
@@ -13955,7 +14061,7 @@ internal sealed class App : InkEngine.InkEngine
         foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
 
         var ink = new Color4(0.11f, 0.12f, 0.15f, 1f);      // 板书的近黑色
-        float x0 = _virtualX + 200f, y0 = _virtualY + 250f;
+        float x0 = _virtualX + 200f, y0 = _virtualY + 180f;
         const float pitch = 620f;                            // 格子间距（横竖一样，看着是网格）
 
         // 造一条曲线：只有 BeginShapeAt 铺的那一个占位点，之后交给 Set*Box
@@ -14019,8 +14125,9 @@ internal sealed class App : InkEngine.InkEngine
         // ---- 第三行：立体图形（2026-09-20 第五批，照 InkClass 的 case 6/7）----
         // 一次拖出**外接矩形**就成：椭圆由矩形派生（`ry = rx / 2.646`），
         // 底面被挡住的那半圈是**细虚线**（辅助几何槽）。
-        // 位置比第三行的格子上提了一截：出图只有 1800 高，压在格子中心会被裁掉。
-        float sy0 = CellY(2) - 140f;
+        // 位置贴着第三行的格线上沿：再往上抬就会和第二行（双曲线 / 正弦）叠在一起，
+        // 再往下压出图（1800 高）就会被裁掉——两头都试过，这个位置刚好。
+        float sy0 = CellY(2) - 20f;
         var cyl = Make(Tool.Cylinder, StrokeKind.Cylinder, CellX(0) + 130f, sy0);
         cyl.SetSolidBox(CellX(0) + 130f, sy0, CellX(0) + 430f, sy0 + 350f);
         Doc.AddStroke(cyl);
@@ -14354,11 +14461,13 @@ internal sealed class App : InkEngine.InkEngine
               Near(cy.Bounds.MinX, 200f, .5f) && Near(cy.Bounds.MaxX, 600f, .5f)
               && Near(cy.Bounds.MinY, 500f, .5f) && Near(cy.Bounds.MaxY, 900f, .5f),
               $"框 ({cy.Bounds.MinX:F0},{cy.Bounds.MinY:F0})..({cy.Bounds.MaxX:F0},{cy.Bounds.MaxY:F0})");
-        var cyOutline = cy.ShapeOutline();
-        int cyBreaks = 0;
-        foreach (var q in cyOutline) if (Stroke.IsOutlineBreak(q)) cyBreaks++;
-        Check("圆柱：轮廓里恰好一个**抬笔标记**（底面一圈 / 顶面一圈 不连线）",
-              cyBreaks == 1, $"{cyBreaks} 处抬笔");
+        // 轮廓的**分段结构**：底面一圈 / 顶面一圈 / 两条母线（2026-09-20 补了母线——
+        // 橡皮的粗筛按这份轮廓判"够不够得着"，少了母线就"明明画着线却擦不掉"）。
+        var cyParts = Stroke.SplitOutlineParts(cy.ShapeOutline());
+        Check("圆柱：轮廓分成 4 段（底圈 / 顶圈 / 两条母线），段与段之间靠抬笔标记隔开",
+              cyParts.Count == 4 && cyParts[1].Count > 8 && cyParts[2].Count == 2 && cyParts[3].Count == 2,
+              $"{cyParts.Count} 段，点数 {string.Join("/", cyParts.ConvertAll(p => p.Count))}"
+              + "（期望 4 段：圈/圈/2/2）");
 
         var co = NewCurve(Tool.Cone, StrokeKind.Cone, 200f, 500f);
         co.SetSolidBox(200f, 500f, 600f, 900f);
@@ -14406,143 +14515,59 @@ internal sealed class App : InkEngine.InkEngine
               $"控制点 {te.Points.Count} 个；轮廓 {te.ShapeOutline().Count} 点"
               + $"（6 段 × 2 点 ＋ 5 个抬笔 = 17）");
 
-        // ================= ③ 手柄：精简口径 =================
+        // ================= ③ 手柄：四种曲线走**常规操作**（2026-09-20 第五批）========
+        // 用户："抛物线、双曲线、正弦、余弦，把特殊点砍掉；通通按常规操作 ——
+        //       给操作柄和旋转，和正常的一样。"
         Span<ShapeHandle> hs = stackalloc ShapeHandle[5];
         int nPb = SelectionHandles.ShapeHandlesOf(vb, hs);
-        Check("手柄：抛物线**1 个**（曲线上的那个点；顶点靠拖整条平移）",
-              nPb == 1 && hs[0] == ShapeHandle.Rim,
-              $"{nPb} 个：{(nPb > 0 ? hs[0].ToString() : "无")}");
         int nHy = SelectionHandles.ShapeHandlesOf(hy, hs);
-        Check("手柄：双曲线**2 个**（曲线上的那个点 ＋ 渐近线角点；中心靠拖整条平移）",
-              nHy == 2 && hs[0] == ShapeHandle.Rim && hs[1] == ShapeHandle.AxisTop,
-              $"{nHy} 个：{hs[0]} / {hs[1]}");
-        Check("手柄：正弦 / 余弦各**1 个**（只剩谷点；峰点撤掉了，见下条）",
-              SelectionHandles.ShapeHandlesOf(sn, hs) == 1 && hs[0] == ShapeHandle.AxisTop
-              && SelectionHandles.ShapeHandlesOf(cs, hs) == 1 && hs[0] == ShapeHandle.AxisTop,
-              $"正弦 {SelectionHandles.ShapeHandlesOf(sn, hs)} 个、"
-              + $"余弦 {SelectionHandles.ShapeHandlesOf(cs, hs)} 个，第一格 {hs[0]}");
-        Check("手柄：四种曲线**都不给旋转柄**（函数图象转歪了就不是它了）",
-              !SelectionHandles.RotateHandleVisible(vb) && !SelectionHandles.RotateHandleVisible(hy)
-              && !SelectionHandles.RotateHandleVisible(sn) && !SelectionHandles.RotateHandleVisible(cs),
-              "抛物线 / 双曲线 / 正弦 / 余弦 都无旋转柄");
-        Check("手柄：位置 = 经过点 / 曲线上的点 / 渐近线角点 / 谷（都落在该在的地方）",
-              Near(SelectionHandles.ShapeHandleLocal(vb, ShapeHandle.Rim).X, 700f, .5f)
-              && Near(SelectionHandles.ShapeHandleLocal(vb, ShapeHandle.Rim).Y, 250f, .5f)
-              // 双曲线的 Rim = **曲线上的那个点**（第三个定义元素本身）= (1370,560)。
-              && Near(SelectionHandles.ShapeHandleLocal(hy, ShapeHandle.Rim).X, 1370f, .5f)
-              && Near(SelectionHandles.ShapeHandleLocal(hy, ShapeHandle.Rim).Y, 560f, .5f)
-              // AxisTop = **渐近线框的角点** = 中心 ＋ (A, B) = (1200,500) + (320,240) = (1520,740)。
-              && Near(SelectionHandles.ShapeHandleLocal(hy, ShapeHandle.AxisTop).X, 1520f, .5f)
-              && Near(SelectionHandles.ShapeHandleLocal(hy, ShapeHandle.AxisTop).Y, 740f, .5f)
-              && Near(SelectionHandles.ShapeHandleLocal(sn, ShapeHandle.AxisTop).X, 660f, .5f)
-              && Near(SelectionHandles.ShapeHandleLocal(sn, ShapeHandle.AxisTop).Y, 1100f, .5f),
-              "抛物线的经过点 (700,250)、双曲线的曲线点 (1370,560) / 渐近线角点 (1520,740)、"
-              + "正弦的谷点 (660,1100)");
+        int nSn = SelectionHandles.ShapeHandlesOf(sn, hs);
+        int nCs = SelectionHandles.ShapeHandlesOf(cs, hs);
+        Check("手柄：四种曲线**一个特殊点都不给**（和矩形 / 立体图形一样，走通用框）",
+              nPb == 0 && nHy == 0 && nSn == 0 && nCs == 0,
+              $"抛物线 {nPb}、双曲线 {nHy}、正弦 {nSn}、余弦 {nCs}（都该是 0）");
+        Check("手柄：四种曲线**都给旋转柄**（＝常规操作：缩放 ＋ 旋转 ＋ 平移）",
+              SelectionHandles.RotateHandleVisible(vb) && SelectionHandles.RotateHandleVisible(hy)
+              && SelectionHandles.RotateHandleVisible(sn) && SelectionHandles.RotateHandleVisible(cs),
+              "抛物线 / 双曲线 / 正弦 / 余弦 都有旋转柄");
+        Check("手柄：曲线仍然是**图形**（选中 / 移动 / 存档都走图形那一套）",
+              Stroke.IsShapeKind(vb.Kind) && Stroke.IsShapeKind(hy.Kind)
+              && Stroke.IsShapeKind(sn.Kind) && Stroke.IsShapeKind(cs.Kind),
+              "四种曲线都在 IsShapeKind 里");
 
-        // ================= ④ 拖手柄：每个手柄只改一个量 =================
-        // 注意 `ClearHistory` 要放在 **AddStroke 之后**：加对象本身也是一步撤销，
-        // 清早了就会把"一次拖手柄 = 一步"数成两步。
+        // ================= ④ 编辑：曲线走**通用框**（只动变换，不动几何）=================
+        // 曲线不再有"拖这个点只改那个量"的入口——模型层那几个函数（SetParabola… /
+        // SetHyperbola… / SetWave…）只在**画的时候**用一次（见 §19、§22）。
+        // 这里钉住通用框那条路：拖角只改 `Transform`，**局部几何一个点都不动**，
+        // 朝向 / p 这些"曲线自己的参数"也一个字不动（这正是"线宽不变"那条路的前提，
+        // 见 Stroke.KeepsWidth）。
         Doc.Clear();
-        Doc.AddStroke(hy);
+        Doc.AddStroke(vb);
         Doc.ClearHistory();
-        Doc.SelectOnly(new[] { hy });
-        var hyVertex = SelectionHandles.ShapeHandleCanvasPosition(hy, ShapeHandle.Rim);
-        bool grabbed = SelectionGestureForTest(hyVertex.X, hyVertex.Y);
-        SettleFrames(40);
-        // 把**曲线上的那个点**从 (1370,560) 拖到 (1285,530)：相对中心 `dx = 85、dy = 30`
-        // → 曲线的 `a = √(85² − 30²·(4/3)²) = √(7225 − 1600) = 75`、`b = 56.25`。
-        UpdateSelectionGestureForTest(1285f, 530f);
-        SettleFrames(40);
-        EndSelectionGestureForTest();
-        SettleFrames(60);
-        Check("双曲线：按下**曲线上的那个点**手柄被选择手势接住", grabbed, $"手柄 ({hyVertex.X:F0},{hyVertex.Y:F0})");
-        Check("双曲线：拖那个点**只改曲线的半轴**（a 150 → 75、b 112.5 → 56.25）（±0.5）",
-              Near(hy.HyperbolaCurveALocal(), 75f, .5f) && Near(hy.HyperbolaCurveBLocal(), 56.25f, .5f),
-              $"曲线 a {hy.HyperbolaCurveALocal():F1}  b {hy.HyperbolaCurveBLocal():F1}");
-        Check("双曲线：拖那个点时**渐近线框一动都不动**（A 320、B 240、斜率还是 0.75）（±0.5）",
-              Near(hy.HyperbolaALocal(), 320f, .5f) && Near(hy.HyperbolaBLocal(), 240f, .5f),
-              $"A {hy.HyperbolaALocal():F1}  B {hy.HyperbolaBLocal():F1}"
-              + $"（斜率 {hy.HyperbolaBLocal() / hy.HyperbolaALocal():F3}）");
-        Check("双曲线：一次拖手柄 = 一步撤销", Doc.UndoDepth == 1, $"撤销栈 {Doc.UndoDepth} 步");
-        Doc.Undo();
-        Check("双曲线：撤销把曲线的 a / b 放回 150 / 112.5",
-              Near(hy.HyperbolaCurveALocal(), 150f, .5f) && Near(hy.HyperbolaCurveBLocal(), 112.5f, .5f),
-              $"曲线 a {hy.HyperbolaCurveALocal():F1}  b {hy.HyperbolaCurveBLocal():F1}");
-
-        // 拖**渐近线角点**：框跟着走（A 不动、B 变小 → 斜率变小），而"曲线经过的那个点"没动，
-        // 于是曲线**重新经过它**、大小跟着新斜率变 —— 这是几何本身（曲线贴着渐近线），
-        // 不是"顺手改了别的量"。要紧的是：**不变量还在**（曲线仍然正好过那个点）。
-        Doc.SelectOnly(new[] { hy });
-        var hyCorner = SelectionHandles.ShapeHandleCanvasPosition(hy, ShapeHandle.AxisTop);
-        SelectionGestureForTest(hyCorner.X, hyCorner.Y);
-        SettleFrames(40);
-        UpdateSelectionGestureForTest(hyCorner.X, hyCorner.Y - 20f);   // 往上拖 20 → B 240 → 220
+        Doc.SelectOnly(new[] { vb });
+        var pbP0 = new Vector2(vb.Points[0].X, vb.Points[0].Y);
+        var pbP1 = new Vector2(vb.Points[1].X, vb.Points[1].Y);
+        float pbPBefore = vb.ParabolaPLocal();
+        var pbAxisBefore = vb.EffectiveAxis;
+        var vbFrame = SelectionHandles.FrameOf(Doc.Selected);
+        var vbCorner = SelectionHandles.CanvasPosition(SelHandle.BottomRight, vbFrame, DpiScale);
+        bool vbTook = SelectionGestureForTest(vbCorner.X, vbCorner.Y);
+        UpdateSelectionGestureForTest(vbCorner.X + 200f, vbCorner.Y + 120f);
         SettleFrames(40);
         EndSelectionGestureForTest();
         SettleFrames(60);
-        Check("双曲线：拖渐近线角点 → 框的 B 变了（240 → 220）、A 不动（320）（±0.5）",
-              Near(hy.HyperbolaALocal(), 320f, .5f) && Near(hy.HyperbolaBLocal(), 220f, .5f),
-              $"A {hy.HyperbolaALocal():F1}  B {hy.HyperbolaBLocal():F1}");
-        float hyFit = 170f * 170f / (hy.HyperbolaCurveALocal() * hy.HyperbolaCurveALocal())
-                    - 60f * 60f / (hy.HyperbolaCurveBLocal() * hy.HyperbolaCurveBLocal());
-        Check("双曲线：框变了之后，曲线**还是正好经过那个点**（x²/a² − y²/b² = 1）（±0.01）",
-              Near(hyFit, 1f, .01f),
-              $"代入得 {hyFit:F4}（期望 1）；曲线 a {hy.HyperbolaCurveALocal():F1}、"
-              + $"b {hy.HyperbolaCurveBLocal():F1}");
+        Check("曲线拖通用框的角：**只改 Transform，几何点一个都没动**",
+              vbTook && !vb.Transform.IsIdentity
+              && vb.Points[0].X == pbP0.X && vb.Points[0].Y == pbP0.Y
+              && vb.Points[1].X == pbP1.X && vb.Points[1].Y == pbP1.Y,
+              $"接住={vbTook}，变换={(vb.Transform.IsIdentity ? "单位（没动）" : "变了")}，"
+              + $"两个控制点 {(vb.Points[0].X == pbP0.X && vb.Points[0].Y == pbP0.Y ? "原样" : "被改了！")}");
+        Check("曲线拖通用框的角：**朝向 与 p 都不受影响**（它们是曲线自己的参数）",
+              vb.EffectiveAxis == pbAxisBefore && Near(vb.ParabolaPLocal(), pbPBefore, .01f),
+              $"{vb.EffectiveAxis}，p {vb.ParabolaPLocal():F1}（拖之前 {pbPBefore:F1}）");
+        Doc.SelectOnly(Array.Empty<Stroke>());
 
-        // 再拖一把，把斜率**扳过对角线**（B 220 → 100，斜率 0.6875 → 0.3125，
-        // 小于 `|dy|/|dx| = 60/170 ≈ 0.353`）：那个点从此落在渐近线**更竖**的一侧
-        // → 朝向**现推**成上下双曲线（见 Stroke.EffectiveAxis）。
-        // 盯的是"**不崩、也不缩成一个点**"：朝向要是读字段，这里就卡在旧朝向上、
-        // 半轴解出负数、曲线当场瘪掉——这正是把朝向改成"现推"要防的那件事。
-        Doc.SelectOnly(new[] { hy });
-        var hyCorner2 = SelectionHandles.ShapeHandleCanvasPosition(hy, ShapeHandle.AxisTop);
-        SelectionGestureForTest(hyCorner2.X, hyCorner2.Y);
-        SettleFrames(40);
-        UpdateSelectionGestureForTest(hyCorner2.X, 600f);              // 局部 y = 600 → B = 100
-        SettleFrames(40);
-        EndSelectionGestureForTest();
-        SettleFrames(60);
-        Check("双曲线：把斜率扳过对角线 → 朝向**跟着那个点翻**（左右 → 上下），曲线不缩成一点",
-              hy.EffectiveAxis == CurveAxis.TransverseY && hy.HyperbolaRealLocal() > 20f,
-              $"朝向 {hy.EffectiveAxis}（期望 TransverseY），实半轴 {hy.HyperbolaRealLocal():F1}（要 > 20）");
-
-        Doc.Clear();
-        Doc.AddStroke(sn);
-        Doc.ClearHistory();
-        Doc.SelectOnly(new[] { sn });
-        var snTrough = SelectionHandles.ShapeHandleCanvasPosition(sn, ShapeHandle.AxisTop);
-        SelectionGestureForTest(snTrough.X, snTrough.Y);
-        SettleFrames(40);
-        UpdateSelectionGestureForTest(snTrough.X + 120f, snTrough.Y);
-        SettleFrames(40);
-        EndSelectionGestureForTest();
-        SettleFrames(60);
-        // 谷点手柄在 u = 3/4 处（起手在 x = 300 + 480×3/4 = 660）：
-        // 横向拖 +120 → 周期 = (660+120−300)/0.75 = 640；纵向没动 → A 不变。
-        Check("正弦：拖**谷点**：横向改周期（T 480 → 640）、纵向不动则振幅不变（A 100）（±0.5）",
-              Near(sn.WavePeriodLocal(), 640f, .5f) && Near(sn.WaveAmplitudeLocal(), 100f, .5f),
-              $"T {sn.WavePeriodLocal():F1}  A {sn.WaveAmplitudeLocal():F1}");
-        Check("正弦：谷点**跟着手柄走**（现在在 3T/4 = 780 处，y = 1100）（±0.5）",
-              Near(sn.WaveTroughLocal().X, 780f, .5f) && Near(sn.WaveTroughLocal().Y, 1100f, .5f),
-              $"谷 ({sn.WaveTroughLocal().X:F1},{sn.WaveTroughLocal().Y:F1})");
-
-        Doc.Clear();
-        Doc.AddStroke(cs);
-        Doc.ClearHistory();
-        Doc.SelectOnly(new[] { cs });
-        var csAmp = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.AxisTop);
-        SelectionGestureForTest(csAmp.X, csAmp.Y);
-        SettleFrames(40);
-        UpdateSelectionGestureForTest(csAmp.X, csAmp.Y + 100f);      // 往下拖 = 振幅变大
-        SettleFrames(40);
-        EndSelectionGestureForTest();
-        SettleFrames(60);
-        Check("余弦：拖极值点**只改振幅**（A 150、T 逐位不变 480）",
-              Near(cs.WaveAmplitudeLocal(), 150f, .5f) && cs.WavePeriodLocal() == 480f,
-              $"A {cs.WaveAmplitudeLocal():F1}  T {cs.WavePeriodLocal():F1}");
-
-        // ================= ⑤ 朝向：**选出来的**（不再靠拖动角度推） =================
+        // ⑤ 朝向：**选出来的**（不再靠拖动角度推）
         //
         // 这是 2026-09-20 这一版的核心改动：方向从"拖出来的"变成"选出来的"，
         // 于是"方向"和"大小"两个参数彻底分开、各管各的——用户的原话是
@@ -14590,26 +14615,19 @@ internal sealed class App : InkEngine.InkEngine
               NearDir(pb2.ParabolaDirLocal(), new Vector2(0f, -1f)) && Near(pb2.ParabolaPLocal(), 240f, .5f),
               $"{pb2.ParabolaDirLocal()}，p {pb2.ParabolaPLocal():F1}");
 
-        // 真机拖**曲线上的那个点**：曲线跟着经过它、p 由新位置反解，**朝向不动**。
-        var pbPoint = SelectionHandles.ShapeHandleCanvasPosition(pb2, ShapeHandle.Rim);
-        Check("手柄：抛物线只剩**一个**（曲线上的那个点）",
-              SelectionHandles.ShapeHandlesOf(pb2, stackalloc ShapeHandle[5]) == 1,
-              $"{SelectionHandles.ShapeHandlesOf(pb2, stackalloc ShapeHandle[5])} 个");
-        SelectionGestureForTest(pbPoint.X, pbPoint.Y);
-        SettleFrames(40);
-        UpdateSelectionGestureForTest(pbPoint.X + 60f, pbPoint.Y - 120f);
-        SettleFrames(40);
-        EndSelectionGestureForTest();
-        SettleFrames(60);
-        // 新位置相对顶点是 (300, −240) → s = 240、t = 300 → p = 300²/480 = 187.5
-        Check("手柄：拖它 → 曲线**跟着经过新位置**（p = t²/2s = 187.5）（±2）",
-              Near(pb2.ParabolaPLocal(), 300f * 300f / 480f, 2f),
-              $"p {pb2.ParabolaPLocal():F1}（期望 {300f * 300f / 480f:F1}）");
-        Check("手柄：拖它**不动朝向**（朝向是选出来的，手柄碰不到它）",
-              NearDir(pb2.ParabolaDirLocal(), new Vector2(0f, -1f)), $"{pb2.ParabolaDirLocal()}");
-        Check("手柄：这一步是**一步撤销**", Doc.UndoDepth == 1, $"撤销栈 {Doc.UndoDepth} 步");
-        Doc.Undo();
-        SettleFrames(120);
+        // 曲线参数由**画的那两笔**定，编辑时不再有"拖这个点"的入口（见 ③ / ④）。
+        // 这里用一个**独立对象**直接调模型层那一份算式，验"经过点 → p 反解"这条口径没变
+        //（画的时候用它，见 §19；拖手柄那条路已经删掉）——不碰 pb2，
+        // 免得把下面"p 还是 240"那几条断言带歪。
+        var pbParam = NewCurve(Tool.Parabola, StrokeKind.Parabola, 500f, 500f);
+        pbParam.CurveAxis = CurveAxis.OpenUp;
+        pbParam.SetParabolaVertex(500f, 500f);
+        pbParam.SetParabolaThroughPoint(500f + 300f, 500f - 240f);   // s = 240、t = 300
+        Check("参数：经过点 (300, −240) → p = t²/2s = 187.5（±2）",
+              Near(pbParam.ParabolaPLocal(), 300f * 300f / 480f, 2f),
+              $"p {pbParam.ParabolaPLocal():F1}（期望 {300f * 300f / 480f:F1}）");
+        Check("参数：换经过点**不动朝向**（朝向是选出来的）",
+              NearDir(pbParam.ParabolaDirLocal(), new Vector2(0f, -1f)), $"{pbParam.ParabolaDirLocal()}");
 
         // 换朝向这件事，2026-09-20 深夜**从操作条挪到了图形面板**（用户："选中框的抛物线按钮
         // 功能取消哦，我不打算从这个转抛物线开口"）：现在条上回到九格，换朝向走的是
@@ -16889,6 +16907,139 @@ internal sealed class App : InkEngine.InkEngine
               Doc.Strokes.Count == 2 && Doc.Strokes.Contains(crossed)
               && crossed.Kind == StrokeKind.Rectangle,
               $"对象 {Doc.Strokes.Count}，原图形 {(Doc.Strokes.Contains(crossed) ? "回来了" : "没回来")}");
+
+        // --- 4b. 图形的"熔"必须是**一整组、外形逐笔不变** --------------------------
+        // 用户 2026-09-20 反馈："面积橡皮擦图形，擦掉一部分剩下的会发生很奇怪的变化，
+        // 比如虚线变实线，或者多出来线"。根因：熔的时候把轮廓（含抬笔标记）压成一条、
+        // 辅助线（渐近线 / 被挡的棱）又不在轮廓里。下面逐条钉住修好之后的样子。
+        Doc.Clear();
+        Doc.ClearHistory();
+
+        // 长方体（两笔画的）：正面 (cx−300, cy−200)..(cx+100, cy+100)，深度 = 80
+        var cube = new Stroke
+        {
+            Tool = Tool.Cuboid, Kind = StrokeKind.Cuboid,
+            Color = new Color4(0.95f, 0.18f, 0.18f, 1f), Width = 4f,
+        };
+        cube.SetCuboidFront(cx - 300, cy - 200, cx + 100, cy + 100);
+        cube.SetCuboidDepth(cx - 220, cy - 120);          // d = |cy−200 − (cy−120)| = 80
+        Doc.AddStroke(cube);
+
+        Doc.BeginEraseRect();
+        Doc.EraseRectAt(cx + 100, cy - 50, halfW, halfH);  // 只切正面右边那条竖棱
+        Doc.EndErase();
+
+        int cubeParts = 0, cubeDashed = 0, cubeMaxPts = 0;
+        bool cubeThinDash = true;
+        foreach (var s in Doc.Strokes)
+        {
+            if (s.Kind != StrokeKind.Freehand) continue;
+            cubeParts++;
+            if (s.Dash == StrokeDash.Dashed)
+            {
+                cubeDashed++;
+                if (s.Width > 3f) cubeThinDash = false;   // 辅助线是 0.6 倍细（4 × 0.6 = 2.4）
+            }
+            cubeMaxPts = Math.Max(cubeMaxPts, s.Points.Count);
+        }
+        Check("长方体被擦到 → 熔成**一条棱一段**（不再是压成一条的 24 点折线）",
+              cubeParts >= 12 && cubeMaxPts <= 4,
+              $"熔出 {cubeParts} 条、最长 {cubeMaxPts} 点（压成一条会是 1 条 24 点＋横穿的假线）");
+        Check("长方体被挡住的三条棱熔完**还是虚线、还是细的**",
+              cubeDashed == 3 && cubeThinDash,
+              $"虚线 {cubeDashed} 条（期望 3），细的={cubeThinDash}");
+
+        Doc.Undo();
+        Check("长方体熔成墨之后，一步撤销回到原图形",
+              Doc.Strokes.Count == 1 && Doc.Strokes.Contains(cube) && cube.Kind == StrokeKind.Cuboid,
+              $"对象 {Doc.Strokes.Count}（期望 1 个长方体）");
+
+        // --- 4c. 双曲线：两支之间**不许连出假线**，渐近线熔完还是虚线 -----------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        var hyp = new Stroke
+        {
+            Tool = Tool.Hyperbola, Kind = StrokeKind.Hyperbola,
+            Color = new Color4(0.95f, 0.18f, 0.18f, 1f), Width = 4f,
+        };
+        hyp.SetHyperbolaFromAsymptote(cx, cy, cx + 300, cy + 200, 8f);
+        // 经过点挑得离顶点远一点，右支才有足够长（曲线**只画到老师拖到的那个点为止**）
+        hyp.SetHyperbolaThroughPoint(cx + 250, cy + 130);
+        Doc.AddStroke(hyp);
+
+        Doc.BeginEraseRect();
+        // 落点挑在**右支的顶点附近**（x = a ≈ 156 处，该支的 y = 0）：那里离渐近线最远
+        //（渐近线在 x = 126..186 这一段是 y = 84..124，全在橡皮的 [−60,60] 之外），
+        // 于是"只切曲线、不碰渐近线"，两条渐近线正好整条保留。
+        Doc.EraseRectAt(cx + 156, cy, halfW, halfH);
+        Doc.EndErase();
+
+        int hyParts = 0, hyDashed = 0;
+        bool noBridge = true;
+        foreach (var s in Doc.Strokes)
+        {
+            if (s.Kind != StrokeKind.Freehand) continue;
+            hyParts++;
+            if (s.Dash == StrokeDash.Dashed) hyDashed++;
+            // 一支曲线整个在中心的一侧（实轴沿 x 时：右支 x ≥ cx，左支 x ≤ cx）。
+            // 熔成一条的话，这个对象会**同时**跨到两侧——那正是"多出来一条横穿的长线"。
+            if (s.Points.Count > 4)
+            {
+                float lo = float.MaxValue, hi = float.MinValue;
+                foreach (var p in s.Points) { lo = MathF.Min(lo, p.X); hi = MathF.Max(hi, p.X); }
+                if (lo < cx - 10 && hi > cx + 10) noBridge = false;
+            }
+        }
+        Check("双曲线被擦到 → 熔成好几笔，两支之间**没有横穿的假线**",
+              hyParts >= 4 && noBridge,
+              $"熔出 {hyParts} 笔（两支＋两条渐近线，被切的会再拆），跨中心的长笔={(noBridge ? "没有" : "有！")}");
+        Check("双曲线熔完，两条渐近线**还是虚线**", hyDashed == 2, $"虚线 {hyDashed} 条（期望 2）");
+
+        // --- 4d. 圆柱：熔出来是 5 笔（顶圈 / 下半圈 / 两条母线 / 虚线半圈）------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        var cyl = new Stroke
+        {
+            Tool = Tool.Cylinder, Kind = StrokeKind.Cylinder,
+            Color = new Color4(0.95f, 0.18f, 0.18f, 1f), Width = 4f,
+        };
+        cyl.SetSolidBox(cx - 200, cy - 250, cx + 200, cy + 250);
+        Doc.AddStroke(cyl);
+
+        Doc.BeginEraseRect();
+        Doc.EraseRectAt(cx - 200, cy, halfW, halfH);       // 擦左边那条母线
+        Doc.EndErase();
+
+        int cylParts = 0, cylDashed = 0;
+        foreach (var s in Doc.Strokes)
+        {
+            if (s.Kind != StrokeKind.Freehand) continue;
+            cylParts++;
+            if (s.Dash == StrokeDash.Dashed) cylDashed++;
+        }
+        Check("圆柱被擦到 → 熔成 5 笔以上（母线被切会再拆），其中虚线半圈仍是虚线",
+              cylParts >= 5 && cylDashed == 1,
+              $"熔出 {cylParts} 笔、虚线 {cylDashed} 条（顶圈＋下半圈＋两母线＋被挡的半圈）");
+
+        // --- 4e. 擦在**空白处**（轮廓够不着）→ 图形原封不动，连熔都不熔 ---------------
+        Doc.Clear();
+        Doc.ClearHistory();
+        var co = new Stroke
+        {
+            Tool = Tool.Coordinate, Kind = StrokeKind.Coordinate,
+            Color = new Color4(0.2f, 0.2f, 0.2f, 1f), Width = 3f,
+        };
+        co.SetAxisBox(cx - 400, cy - 300, cx + 400, cy + 300);
+        Doc.AddStroke(co);
+
+        Doc.BeginEraseRect();
+        // 落点在一根**网格线**上（离两条轴各一步远）：网格不在"碰到没有"那份轮廓里，
+        // 所以这里够不着这个坐标系 —— 结论应是"什么都没发生"（而不是整个坐标系被熔）。
+        int touched = Doc.EraseRectAt(cx + 200, cy + 150, halfW, halfH);
+        Doc.EndErase();
+        Check("橡皮落在坐标系的网格线上 → 不碰它（网格不是可擦对象，也不该把坐标系熔掉）",
+              touched == 0 && Doc.Strokes.Count == 1 && Doc.Strokes.Contains(co),
+              $"受影响 {touched} 条，对象 {Doc.Strokes.Count}（期望 0 / 1）");
 
         // --- 5. 一次拖拽扫过 5 条 = 一步撤销 -----------------------------------
         Doc.Clear();

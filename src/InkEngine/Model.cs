@@ -843,38 +843,180 @@ internal sealed class Stroke
     }
 
     /// <summary>
-    /// 把**图形**（直线 / 矩形 / 椭圆 / 箭头）熔成自由笔迹：按它自己的轮廓折线取点，
+    /// 熔成墨的时候的**一条折线**：点列 ＋ "它是不是辅助线"。
+    ///
+    /// 辅助线（双曲线的渐近线、立体图形被挡住的那半圈 / 那几条棱）在屏幕上恒定是
+    /// **细虚线**（见 <see cref="BuildAuxGeometry"/> 与 Overlay 里那条 0.6 倍粗细），
+    /// 所以熔成墨也得带着这个身份——不然就是用户 2026-09-20 反馈的
+    /// "擦一下**虚线变实线**"。
+    /// </summary>
+    public sealed class InkPiece
+    {
+        public readonly List<Vector2> Pts;
+        public readonly bool Aux;
+        public InkPiece(List<Vector2> pts, bool aux) { Pts = pts; Aux = aux; }
+    }
+
+    /// <summary>
+    /// 把**图形**熔成墨（**一组**笔迹，不是一个）：每一笔取它自己的一段折线，
     /// 坐标换算到画布、变换归一。
     ///
-    /// 为什么：用户 2026-09-15 定"**橡皮擦中图形，断开了也要单独算**"——图形是参数化对象
-    /// （两个端点），不先变成点列就没法"擦掉中间、剩下两截"。熔完就走和墨迹一模一样的那条路。
+    /// 为什么：用户 2026-09-15 定"橡皮擦中图形，断开了也要单独算"——图形是参数化对象
+    /// （两个端点 / 三个控制点），不先变成点列就没法"擦掉中间、剩下两截"。
+    /// 熔完就走和墨迹一模一样的那条路（区间擦除那套）。
+    ///
+    /// **为什么必须是一组**（2026-09-20 用户反馈"擦一下多出来线 / 虚线变实线"）：
+    /// 原来是把轮廓（含抬笔标记）**忽略标记压成一条**再熔，于是
+    ///   · 段与段之间被连起来 → 双曲线两支之间、长方体各条棱之间凭空多出线；
+    ///   · 辅助线（渐近线、被挡的半圈）根本不在轮廓里 → 虚线消失，或（圆柱底面）
+    ///     以实线画回来。
+    /// 现在按"画出来的每一笔"分开熔（见 <see cref="InkPieces"/>），外形与擦之前逐笔一致。
     ///
     /// 代价（明确接受）：熔完它**不再是图形**——没有顶点手柄、不能改形状参数。
-    /// 这一步靠撤销回退（原图形整个进撤销栈）。
-    ///
-    /// 轮廓顺序（见 <see cref="ShapeOutline"/>）：直线 2 点、矩形 5 点、椭圆 33 点；
-    /// 箭头是 [尾, 尖, 上翼, 尖, 下翼]——中间那两段是**沿着已经画过的翼走回去**，
-    /// 不会凭空多出墨（不透明笔下看不出双画，箭头本来就是用笔画的）。
+    /// 这一步靠撤销回退（原图形整个进撤销栈，见 EraseIntervalsAction.Item.UndoOriginal）。
     /// </summary>
-    public Stroke MeltToFreehand()
+    public List<Stroke> MeltToInkParts()
     {
-        var m = new Stroke
+        var list = new List<Stroke>();
+        foreach (var piece in InkPieces())
         {
-            Tool = Tool, Kind = StrokeKind.Freehand,
-            Color = Color, Width = Width,
-            // 线型跟过来：虚线图形熔成笔迹之后还得是虚线（见 SplitIntoRuns 那条同一个理由）。
-            Dash = Dash,
-        };
-        foreach (var p in ShapeOutline())
-        {
-            // **跳过抬笔标记**（双曲线两支之间那一下，见 OutlineBreak）：
-            // 它的坐标是 NaN，写进点列会让整条笔迹的几何变成 NaN——
-            // 那一笔画不出来、点不中、也会把包围盒污染成 NaN。
-            if (IsOutlineBreak(p)) continue;
-            var q = Transform.IsIdentity ? p : Vector2.Transform(p, Transform);
-            m.AddPoint(q.X, q.Y, 1f, 0);
+            if (piece.Pts.Count < 2) continue;
+            var m = new Stroke
+            {
+                Tool = Tool, Kind = StrokeKind.Freehand,
+                Color = Color,
+                // 辅助线在屏幕上就是 0.6 倍粗细的细虚线（Overlay.DrawStroke 那个 Max(1, Width*0.6)）。
+                Width = piece.Aux ? MathF.Max(1f, Width * 0.6f) : Width,
+                // 线型跟过来：虚线图形熔成笔迹之后还得是虚线（见 SplitIntoRuns 那条同一个理由）。
+                Dash = piece.Aux ? StrokeDash.Dashed : Dash,
+            };
+            foreach (var p in piece.Pts)
+            {
+                var q = Transform.IsIdentity ? p : Vector2.Transform(p, Transform);
+                m.AddPoint(q.X, q.Y, 1f, 0);
+            }
+            list.Add(m);
         }
-        return m;
+        return list;
+    }
+
+    /// <summary>
+    /// 这个对象**画在屏幕上的每一笔**（局部坐标，逐段）。
+    ///
+    /// 它和 <see cref="ShapeOutline"/> 的分工**不能互相顶替**：
+    ///   · `ShapeOutline` 只服务"碰到没有"（命中、套索、像素橡皮的粗筛）。为了命中方便，
+    ///     它**故意**画得比屏幕上多、少——圆柱底面列整圈（实线半圈与虚线半圈都在里面），
+    ///     坐标系只列两条轴线（网格、箭头都不列）；
+    ///   · 这一份是"擦之前屏幕上有几笔，熔完就得有几笔"，所以实 / 虚分开、箭头网格不能漏。
+    ///     （图形工具计划 §25：漏一处就是"擦一下少几笔"。）
+    /// </summary>
+    public List<InkPiece> InkPieces()
+    {
+        var list = new List<InkPiece>();
+
+        switch (Kind)
+        {
+            // ---- 圆柱 / 圆锥：可见的几笔 ＋ 被挡住的那半圈（细虚线）----
+            case StrokeKind.Cylinder:
+            case StrokeKind.Cone:
+                if (Points.Count < 2) break;
+                list.AddRange(SolidPieces(hidden: false));
+                list.AddRange(SolidPieces(hidden: true));
+                break;
+
+            // ---- 长方体：九条看得见的棱 ＋ 三条被挡住的棱（细虚线）----
+            case StrokeKind.Cuboid:
+                if (Points.Count < 3) break;
+                list.AddRange(CuboidEdges(hidden: false));
+                list.AddRange(CuboidEdges(hidden: true));
+                break;
+
+            // ---- 四面体：六条棱，全实线 ----
+            case StrokeKind.Tetrahedron:
+                if (Points.Count < 3) break;
+                list.AddRange(TetraEdges());
+                break;
+
+            // ---- 坐标系 / 数轴：轴线 ＋ 箭头（＋ 网格）----
+            case StrokeKind.Coordinate:
+            case StrokeKind.NumberLine:
+                if (Points.Count < 2) break;
+                list.AddRange(AxisPieces());
+                break;
+
+            // ---- 双曲线：两支（中间有抬笔）＋ 两条渐近线（细虚线）----
+            case StrokeKind.Hyperbola:
+                if (Points.Count < 2) break;
+                foreach (var part in SplitOutlineParts(ShapeOutline()))
+                    list.Add(new InkPiece(part, false));
+                if (ShowAsymptotes)
+                {
+                    for (int side = -1; side <= 1; side += 2)
+                    {
+                        var (from, to) = HyperbolaAsymptoteLocal(side);
+                        list.Add(new InkPiece(new List<Vector2> { from, to }, true));
+                    }
+                }
+                break;
+
+            // ---- 其余（直线 / 箭头 / 矩形 / 椭圆 / 圆 / 三角形 / 平行四边形 /
+            //      抛物线 / 正弦 / 余弦）：轮廓本来就是"画出来的那一条"，按抬笔分段即可 ----
+            default:
+                foreach (var part in SplitOutlineParts(ShapeOutline()))
+                    list.Add(new InkPiece(part, false));
+                break;
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// 把一份轮廓折线按**抬笔标记**（<see cref="OutlineBreak"/>）切成几段。
+    /// 抬笔标记本身不进结果（它的坐标是 NaN，写进点列会把整条笔迹的几何变成 NaN——
+    /// 那一笔画不出来、点不中，包围盒也会被污染）。
+    /// </summary>
+    public static List<List<Vector2>> SplitOutlineParts(List<Vector2> outline)
+    {
+        var parts = new List<List<Vector2>>();
+        var cur = new List<Vector2>();
+        foreach (var p in outline)
+        {
+            if (IsOutlineBreak(p))
+            {
+                if (cur.Count > 0) { parts.Add(cur); cur = new List<Vector2>(); }
+                continue;
+            }
+            cur.Add(p);
+        }
+        if (cur.Count > 0) parts.Add(cur);
+        return parts;
+    }
+
+    /// <summary>椭圆上一段弧的采样点列（`u0 → u1`）：**立体图形的实线几何、虚线半圈、
+    /// 以及熔墨三处共用这一份点列**（渲染与熔出来的逐点相同）。</summary>
+    private static List<Vector2> ArcPoints(Vector2 c, float rx, float ry, float u0, float u1)
+    {
+        int n = Math.Clamp((int)(MathF.Max(rx, ry) / 4f), 12, 48);
+        var pts = new List<Vector2>(n + 1);
+        for (int i = 0; i <= n; i++)
+            pts.Add(EllipseArcPoint(c, rx, ry, u0 + (u1 - u0) * i / n));
+        return pts;
+    }
+
+    /// <summary>把几段折线拼成一个 D2D 几何：**每段一条 figure**（互不相连）。
+    /// 渲染与熔共用同一份点列，见 <see cref="InkPieces"/>。</summary>
+    private static ID2D1PathGeometry FromPieces(ID2D1Factory1 factory, List<InkPiece> pieces)
+    {
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+        foreach (var pc in pieces)
+        {
+            if (pc.Pts.Count < 2) continue;
+            sink.BeginFigure(pc.Pts[0], FigureBegin.Hollow);
+            for (int i = 1; i < pc.Pts.Count; i++) sink.AddLine(pc.Pts[i]);
+            sink.EndFigure(FigureEnd.Open);
+        }
+        sink.Close();
+        return geo;
     }
 
     /// <summary>
@@ -2026,6 +2168,67 @@ internal sealed class Stroke
     private int _builtRevision2 = -1;
 
     /// <summary>
+    /// 这个对象的**线宽跟不跟着缩放**（用户 2026-09-13 拍板、2026-09-20 落地）：
+    ///
+    ///   · **图形**（直线 / 矩形 / 椭圆 / 三角形 / 四种曲线 / 立体图形 / 坐标系…）→ **不跟着缩放**：
+    ///     线宽是"这个图元自己的属性"，拉伸只是改形状。横着拉一个矩形，四条边还是原来那么粗
+    ///     （否则横边粗、竖边不变，看着像书法笔）；
+    ///   · **手写墨迹**（自由笔迹 / 荧光笔）与**图像** → **跟着缩放**（像图片一样）：
+    ///     放大一段板书，笔迹当然要跟着变粗，不然就"糊"在放大的字里了。
+    ///
+    /// 落点在描边那一步：图形的几何**带变换**画（<see cref="BuildCanvasGeometry"/>），
+    /// 于是描边发生在画布空间、宽度恒等于 <see cref="Width"/>。
+    /// </summary>
+    public bool KeepsWidth => Kind != StrokeKind.Freehand && Kind != StrokeKind.Image;
+
+    /// <summary>
+    /// **画布空间**几何（"线宽不变"那条路，见 <see cref="KeepsWidth"/>）。
+    ///
+    /// 为什么不能在描边前把 `Transform` 塞进 D2D 上下文：那样描边发生在**局部空间**，
+    /// 变换作用在描边**之后** —— 线宽被一起缩放（非等比拉伸时"竖线比横线粗"）。
+    /// 把变换折进几何里，描边就发生在画布空间，宽度就恒等于 `Width`、虚线的长短也不变。
+    ///
+    /// <paramref name="extra"/> 是拖动预览那种"额外再叠一层实时矩阵"的场合（见
+    /// Overlay.DrawDragPreview）——注意它是**画布空间里再乘**，顺序在 `Transform` 之后。
+    ///
+    /// 缓存：局部几何按 <see cref="Revision"/>，这一层再记住**上次的矩阵**——
+    /// 拖动时每帧矩阵都在变，所以每帧重建一次；一个图形几百个点，代价可忽略。
+    /// 「手写墨迹」不走这条路（<see cref="KeepsWidth"/> 为 false 时直接返回局部几何），
+    /// 所以"一次框选一万条笔迹去拉伸"不会在这里每帧重建一万次。
+    /// </summary>
+    public ID2D1Geometry BuildCanvasGeometry(ID2D1Factory1 factory, bool aux = false,
+                                             Matrix3x2? extra = null)
+    {
+        var src = aux ? BuildAuxGeometry(factory) : BuildGeometry(factory);
+        if (src == null) return null;
+        if (!KeepsWidth) return src;
+
+        var m = Transform * (extra ?? Matrix3x2.Identity);
+        if (_canvasGeoRevision != Revision || _canvasGeoMatrix != m)
+        {
+            if (_canvasGeo != null) { _canvasGeo.Dispose(); _canvasGeo = null; LiveGeometries--; }
+            if (_canvasGeoAux != null) { _canvasGeoAux.Dispose(); _canvasGeoAux = null; LiveGeometries--; }
+            _canvasGeoRevision = Revision;
+            _canvasGeoMatrix = m;
+        }
+
+        var slot = aux ? _canvasGeoAux : _canvasGeo;
+        if (slot == null)
+        {
+            if (m.IsIdentity) return src;          // 单位变换：不用白包一层
+            slot = factory.CreateTransformedGeometry(src, m);
+            LiveGeometries++;
+            if (aux) _canvasGeoAux = slot; else _canvasGeo = slot;
+        }
+        return slot;
+    }
+
+    private ID2D1Geometry _canvasGeo;
+    private ID2D1Geometry _canvasGeoAux;
+    private Matrix3x2 _canvasGeoMatrix = Matrix3x2.Identity;
+    private int _canvasGeoRevision = -1;
+
+    /// <summary>
     /// 颜色 / 粗细这类"不改几何、但改了墨迹范围"的属性变过之后调用。
     ///
     /// 为什么需要：<see cref="InkBounds"/> 按 <see cref="Revision"/> 缓存，
@@ -2064,6 +2267,10 @@ internal sealed class Stroke
         // 漏一处，"删掉之后内存不降"就是必然的。
         Geometry2?.Dispose();
         Geometry2 = null;
+        // "线宽不变"那条路的画布空间几何（见 BuildCanvasGeometry）：同样是缓存，同样要放。
+        if (_canvasGeo != null) { _canvasGeo.Dispose(); _canvasGeo = null; LiveGeometries--; }
+        if (_canvasGeoAux != null) { _canvasGeoAux.Dispose(); _canvasGeoAux = null; LiveGeometries--; }
+        _canvasGeoRevision = -1;
         // 图像对象还挂着一张 D2D 位图（可能很大：一张 800×600 的截图约 2MB）。
         // 漏掉这一句，"擦掉截图之后内存不降"就是必然的。释放之后再画会按需重建。
         Image?.Release();
@@ -2664,13 +2871,18 @@ internal sealed class Stroke
     /// </summary>
     public bool HitTestExact(float canvasX, float canvasY, float tolerance = 0f)
     {
-        var geo = BuildGeometry(Gfx.D2DFactory);
+        // **"线宽不变"的对象**（图形，见 KeepsWidth）：几何本身就带变换（画布空间），
+        // 所以查询点**不用**反变换，线宽也就是画布单位里的 Width —— 和屏幕上看到的
+        // 一致。不这么走的话，拉伸过的图形会出现"看得见却点不中"（局部空间里量的线宽
+        // 和画出来的不是一回事）。
+        bool canvasSpace = KeepsWidth;
+        var geo = canvasSpace ? BuildCanvasGeometry(Gfx.D2DFactory) : BuildGeometry(Gfx.D2DFactory);
         if (geo == null) return false;
 
         // 几何存在局部坐标里，把查询点反变换回去再测——等价于"带着变换去测"，
         // 但只用最简单的重载，少一层踩坑的机会。
         Vector2 p = new(canvasX, canvasY);
-        if (!Transform.IsIdentity)
+        if (!canvasSpace && !Transform.IsIdentity)
         {
             if (!Matrix3x2.Invert(Transform, out var inv)) return false;
             p = Vector2.Transform(p, inv);
@@ -2689,8 +2901,6 @@ internal sealed class Stroke
         //
         // 线宽用**最粗处**（<see cref="MaxHalfWidth"/> × 2）：有压感的笔迹重压处比标称宽 50%，
         // 按标称算就会出现"看得见却点不中"。
-        //
-        // 注：非等比变换下"线宽不变"还没实现（见计划文档 7.1），这里按局部线宽判定。
         return geo.StrokeContainsPoint(p, MathF.Max(1f, MaxHalfWidth * 2f) + tolerance * 2f, Gfx.Round);
     }
 
@@ -2990,6 +3200,15 @@ internal sealed class Stroke
                 {
                     for (int i = 0; i <= n; i++)
                         list.Add(EllipseArcPoint(new Vector2(cx, topCy), rx, ry, i / (float)n));
+                    // **两条母线也要列进来**（2026-09-20 补）：橡皮的粗筛就是按这份轮廓判
+                    // "够不够得着"，少了它们，橡皮落在这两条母线上会"够不着这个圆柱"——
+                    // 明明画着线却擦不掉（圆锥那两条一直都在，圆柱这两条是漏的）。
+                    list.Add(OutlineBreak);
+                    list.Add(new Vector2(cx - rx, topCy));
+                    list.Add(new Vector2(cx - rx, botCy));
+                    list.Add(OutlineBreak);
+                    list.Add(new Vector2(cx + rx, topCy));
+                    list.Add(new Vector2(cx + rx, botCy));
                 }
                 else
                 {
@@ -3257,102 +3476,93 @@ internal sealed class Stroke
         // 控制点不足两个：不该发生（画法与存档都保证），真发生了退回一条线，
         // 别让整个渲染循环崩掉（和 BuildPolygon 那条护栏同一个理由）。
         if (Points.Count < 2) return BuildLine(factory);
+        return FromPieces(factory, AxisPieces());
+    }
 
+    /// <summary>
+    /// 坐标系 / 数轴的**逐笔点列**：轴线 ＋ 箭头（坐标系还有网格）。
+    ///
+    /// **渲染与熔墨共用这一份**（<see cref="BuildAxes"/> 与 <see cref="InkPieces"/>）：
+    /// 以前轴线、箭头、网格分别写在三个地方，熔墨只认得轴线那一份，
+    /// 于是"擦一下坐标系，网格和箭头就没了"（用户 2026-09-20 反馈的那类变形）。
+    /// </summary>
+    private List<InkPiece> AxisPieces()
+    {
+        var list = new List<InkPiece>();
         var (minX, minY, maxX, maxY) = AxisFrameLocal();
         float head = AxisArrowHeadLen(Width);
-
-        var geo = factory.CreatePathGeometry();
-        using var sink = geo.Open();
 
         // ---- 数轴：一条水平线 + 右端一个箭头 ----
         if (Kind == StrokeKind.NumberLine)
         {
             float ly = Points[0].Y;                    // 两个端点 y 恒相等（见 SetAxisBox）
-            sink.BeginFigure(new Vector2(minX, ly), FigureBegin.Hollow);
-            sink.AddLine(new Vector2(maxX, ly));
-            sink.EndFigure(FigureEnd.Open);
-            AddAxisArrow(sink, new Vector2(maxX, ly), new Vector2(1f, 0f), head);
-            sink.Close();
-            return geo;
+            list.Add(new InkPiece(new List<Vector2> { new(minX, ly), new(maxX, ly) }, false));
+            list.Add(new InkPiece(AxisArrowPoints(new Vector2(maxX, ly), new Vector2(1f, 0f), head), false));
+            return list;
         }
 
         // ---- 坐标系：十字轴 + 两个箭头 ----
         var o = AxisOriginLocal();
-        sink.BeginFigure(new Vector2(minX, o.Y), FigureBegin.Hollow);
-        sink.AddLine(new Vector2(maxX, o.Y));
-        sink.EndFigure(FigureEnd.Open);
+        list.Add(new InkPiece(new List<Vector2> { new(minX, o.Y), new(maxX, o.Y) }, false));
         // 屏幕坐标 y 向下，所以"向上"是往 minY 那头走。
-        sink.BeginFigure(new Vector2(o.X, maxY), FigureBegin.Hollow);
-        sink.AddLine(new Vector2(o.X, minY));
-        sink.EndFigure(FigureEnd.Open);
+        list.Add(new InkPiece(new List<Vector2> { new(o.X, maxY), new(o.X, minY) }, false));
+        list.Add(new InkPiece(AxisArrowPoints(new Vector2(maxX, o.Y), new Vector2(1f, 0f), head), false));
+        list.Add(new InkPiece(AxisArrowPoints(new Vector2(o.X, minY), new Vector2(0f, -1f), head), false));
 
-        AddAxisArrow(sink, new Vector2(maxX, o.Y), new Vector2(1f, 0f), head);
-        AddAxisArrow(sink, new Vector2(o.X, minY), new Vector2(0f, -1f), head);
-
-        if (Grid) AddAxisGrid(sink, minX, minY, maxX, maxY, o);
-
-        sink.Close();
-        return geo;
+        if (Grid)
+        {
+            foreach (var (a, b) in AxisGridSegments(minX, minY, maxX, maxY, o))
+                list.Add(new InkPiece(new List<Vector2> { a, b }, false));
+        }
+        return list;
     }
 
     /// <summary>
-    /// 坐标系的**可选网格**：过每一格画一条贯穿外框的竖线 / 横线。
+    /// 坐标系**可选网格**的每一条线（起终点）。规则只有这一份：
+    /// <see cref="BuildAxes"/> 与熔墨都从这里取，别各写一遍。
     ///
     /// 间距 = <see cref="AxisGridStepLocal"/>（外框短边 ÷ 4，**现算不存**）。
     /// 上限定 512 条 / 方向：外框可以被拉到上万像素，不设上限的话一条病态的对象
     /// 能造出几万个 figure，一帧就把渲染拖死（和刻度时代那条上限同一个理由）。
     /// 注意网格线**不画在原点那一格上**——那两条正是轴本身，重画一遍只会加深一遍颜色。
     /// </summary>
-    private void AddAxisGrid(ID2D1GeometrySink sink, float minX, float minY, float maxX, float maxY,
-                             Vector2 origin)
+    private List<(Vector2 a, Vector2 b)> AxisGridSegments(float minX, float minY, float maxX, float maxY,
+                                                          Vector2 origin)
     {
         const int MaxLines = 512;
+        var list = new List<(Vector2, Vector2)>();
         float step = AxisGridStepLocal();
-
-        void Vertical(float x)
-        {
-            sink.BeginFigure(new Vector2(x, minY), FigureBegin.Hollow);
-            sink.AddLine(new Vector2(x, maxY));
-            sink.EndFigure(FigureEnd.Open);
-        }
-        void Horizontal(float y)
-        {
-            sink.BeginFigure(new Vector2(minX, y), FigureBegin.Hollow);
-            sink.AddLine(new Vector2(maxX, y));
-            sink.EndFigure(FigureEnd.Open);
-        }
 
         for (int k = 1; k <= MaxLines; k++)
         {
             float xr = origin.X + k * step, xl = origin.X - k * step;
             if (xr > maxX + 0.01f && xl < minX - 0.01f) break;
-            if (xr <= maxX + 0.01f) Vertical(xr);
-            if (xl >= minX - 0.01f) Vertical(xl);
+            if (xr <= maxX + 0.01f) list.Add((new Vector2(xr, minY), new Vector2(xr, maxY)));
+            if (xl >= minX - 0.01f) list.Add((new Vector2(xl, minY), new Vector2(xl, maxY)));
         }
         for (int k = 1; k <= MaxLines; k++)
         {
             float yd = origin.Y + k * step, yu = origin.Y - k * step;
             if (yd > maxY + 0.01f && yu < minY - 0.01f) break;
-            if (yd <= maxY + 0.01f) Horizontal(yd);
-            if (yu >= minY - 0.01f) Horizontal(yu);
+            if (yd <= maxY + 0.01f) list.Add((new Vector2(minX, yd), new Vector2(maxX, yd)));
+            if (yu >= minY - 0.01f) list.Add((new Vector2(minX, yu), new Vector2(maxX, yu)));
         }
+        return list;
     }
 
     /// <summary>
-    /// 往 sink 里加一个箭头：从尖端往回画一个 **V**（<c>翅膀根 → 尖端 → 另一侧翅膀根</c>）。
+    /// 一个箭头（坐标轴 / 数轴末端那种）：从尖端往回画一个 **V**
+    ///（<c>翅膀根 → 尖端 → 另一侧翅膀根</c>）。
     ///
     /// 比例照抄 <see cref="ArrowHeadPoints"/>（翅膀尖在尖端后方 `head` 处、左右各张 `0.45 × head`），
     /// 这样坐标系上的箭头和"箭头工具"画出来的那支看着是一家人。
     /// </summary>
-    private static void AddAxisArrow(ID2D1GeometrySink sink, Vector2 tip, Vector2 dir, float head)
+    private static List<Vector2> AxisArrowPoints(Vector2 tip, Vector2 dir, float head)
     {
         var root = tip - dir * head;
         float spread = head * 0.45f;
         var n = new Vector2(-dir.Y, dir.X);               // 垂直于箭头方向
-        sink.BeginFigure(root + n * spread, FigureBegin.Hollow);
-        sink.AddLine(tip);
-        sink.AddLine(root - n * spread);
-        sink.EndFigure(FigureEnd.Open);
+        return new List<Vector2> { root + n * spread, tip, root - n * spread };
     }
 
     /// <summary>
@@ -3586,78 +3796,65 @@ internal sealed class Stroke
         return new Vector2(c.X + rx * MathF.Cos(a), c.Y + ry * MathF.Sin(a));
     }
 
-    /// <summary>往 sink 里加一段**椭圆弧**（`u0 → u1`，采样成折线）。</summary>
-    private static void AddEllipseArc(ID2D1GeometrySink sink, Vector2 c, float rx, float ry,
-                                      float u0, float u1)
-    {
-        int n = Math.Clamp((int)(MathF.Max(rx, ry) / 4f), 12, 48);
-        sink.BeginFigure(EllipseArcPoint(c, rx, ry, u0), FigureBegin.Hollow);
-        for (int i = 1; i <= n; i++)
-            sink.AddLine(EllipseArcPoint(c, rx, ry, u0 + (u1 - u0) * i / n));
-        sink.EndFigure(FigureEnd.Open);
-    }
-
     /// <summary>
-    /// 立体图形的**实线几何**（看得见的那几笔）：
-    ///   · **圆柱**：顶面整圈 ＋ 底面下半圈 ＋ 两条母线；
-    ///   · **圆锥**：底面下半圈 ＋ 两条母线（顶点 = 上边中点）。
-    /// 被挡住的那半圈在 <see cref="BuildSolidHidden"/> 里（虚线走辅助几何槽）。
+    /// 立体图形的**逐笔点列**（`hidden = false` 给看得见的、`true` 给被挡住的）：
+    ///   · **圆柱**：顶面整圈 ＋ 底面下半圈 ＋ 两条母线；被挡住的是底面上半圈；
+    ///   · **圆锥**：底面下半圈 ＋ 两条母线（顶点 = 上边中点）；被挡住的是底面上半圈。
+    ///
+    /// **渲染与熔墨共用这一份**（<see cref="BuildSolid"/> / <see cref="BuildSolidHidden"/> /
+    /// <see cref="InkPieces"/>）——两边各写一套就会"画出来的和熔出来的不一样"，
+    /// 那正是用户 2026-09-20 反馈的那类问题（计划-图形工具.md §25）。
     /// </summary>
-    private ID2D1PathGeometry BuildSolid(ID2D1Factory1 factory)
+    private List<InkPiece> SolidPieces(bool hidden)
     {
-        if (Points.Count < 2) return BuildLine(factory);
+        var list = new List<InkPiece>();
         var (cx, topCy, botCy, rx, ry) = SolidEllipsesLocal();
-        var top = new Vector2(cx, topCy);
         var bot = new Vector2(cx, botCy);
-        var geo = factory.CreatePathGeometry();
-        using var sink = geo.Open();
+
+        if (hidden)
+        {
+            // 底面**上半圈**（`u` 从 0.5 走到 1，走的是 −y 那一侧 = 屏幕上方）：
+            // 从上面看下去它是被实体挡住的，课本上就画虚线。
+            list.Add(new InkPiece(ArcPoints(bot, rx, ry, 0.5f, 1f), true));
+            return list;
+        }
+
         if (Kind == StrokeKind.Cylinder)
         {
             // 顶面整圈：`u` 从 0 走到 1（闭合）
-            AddEllipseArc(sink, top, rx, ry, 0f, 1f);
+            list.Add(new InkPiece(ArcPoints(new Vector2(cx, topCy), rx, ry, 0f, 1f), false));
             // 底面**下半圈**（u: 0 → 0.5 走的是 +y 那一侧 = 屏幕上看得见的下半圈）
-            AddEllipseArc(sink, bot, rx, ry, 0f, 0.5f);
+            list.Add(new InkPiece(ArcPoints(bot, rx, ry, 0f, 0.5f), false));
             // 两条母线：底面左右端点 → 顶面左右端点
-            sink.BeginFigure(new Vector2(cx - rx, topCy), FigureBegin.Hollow);
-            sink.AddLine(new Vector2(cx - rx, botCy));
-            sink.EndFigure(FigureEnd.Open);
-            sink.BeginFigure(new Vector2(cx + rx, topCy), FigureBegin.Hollow);
-            sink.AddLine(new Vector2(cx + rx, botCy));
-            sink.EndFigure(FigureEnd.Open);
+            list.Add(new InkPiece(new List<Vector2> { new(cx - rx, topCy), new(cx - rx, botCy) }, false));
+            list.Add(new InkPiece(new List<Vector2> { new(cx + rx, topCy), new(cx + rx, botCy) }, false));
         }
         else
         {
             var apex = ConeApexLocal();
-            AddEllipseArc(sink, bot, rx, ry, 0f, 0.5f);
+            list.Add(new InkPiece(ArcPoints(bot, rx, ry, 0f, 0.5f), false));
             // 两条母线：底面左右端点 → 顶点
-            sink.BeginFigure(new Vector2(cx - rx, botCy), FigureBegin.Hollow);
-            sink.AddLine(apex);
-            sink.EndFigure(FigureEnd.Open);
-            sink.BeginFigure(new Vector2(cx + rx, botCy), FigureBegin.Hollow);
-            sink.AddLine(apex);
-            sink.EndFigure(FigureEnd.Open);
+            list.Add(new InkPiece(new List<Vector2> { new(cx - rx, botCy), apex }, false));
+            list.Add(new InkPiece(new List<Vector2> { new(cx + rx, botCy), apex }, false));
         }
-        sink.Close();
-        return geo;
+        return list;
+    }
+
+    /// <summary>立体图形的**实线几何**（看得见的那几笔）——点列在 <see cref="SolidPieces"/>。</summary>
+    private ID2D1PathGeometry BuildSolid(ID2D1Factory1 factory)
+    {
+        if (Points.Count < 2) return BuildLine(factory);
+        return FromPieces(factory, SolidPieces(hidden: false));
     }
 
     /// <summary>
     /// 立体图形**被挡住的那半圈**（虚线，走辅助几何槽 —— 和双曲线的渐近线共用一个槽）。
-    ///
-    /// 圆柱 / 圆锥都是"底面椭圆的上半圈"（`u` 从 0.5 走到 1，走的是 −y 那一侧 = 屏幕上方）
-    /// —— 从上面看下去它是被实体挡住的，课本上就画虚线。
+    /// 点列在 <see cref="SolidPieces"/>（`hidden: true`）。
     /// </summary>
     private ID2D1PathGeometry BuildSolidHidden(ID2D1Factory1 factory)
     {
         if (Points.Count < 2) return null;
-        var (cx, _, botCy, rx, ry) = SolidEllipsesLocal();
-        var geo = factory.CreatePathGeometry();
-        using (var sink = geo.Open())
-        {
-            AddEllipseArc(sink, new Vector2(cx, botCy), rx, ry, 0.5f, 1f);
-            sink.Close();
-        }
-        return geo;
+        return FromPieces(factory, SolidPieces(hidden: true));
     }
 
     /// <summary>
@@ -3667,22 +3864,16 @@ internal sealed class Stroke
     /// 实 / 虚的分配也照他：正面四条边 ＋ 背面**上横 / 右竖** ＋ **左上 / 右上 / 右下**三条斜棱是实线；
     /// 背面**下横**、**左下斜棱**、背面**左竖**是虚线（从正面看过去被挡住）。
     ///
-    /// 三条被挡住的棱走辅助几何槽（`Geometry2`），和圆柱 / 圆锥那半圈共用一个槽。
+    /// 渲染与熔墨共用这一份（见 <see cref="InkPieces"/>）。
     /// </summary>
-    private ID2D1PathGeometry BuildCuboid(ID2D1Factory1 factory, bool hidden)
+    private List<InkPiece> CuboidEdges(bool hidden)
     {
-        if (Points.Count < 2) return BuildLine(factory);
+        var list = new List<InkPiece>();
         var (x0, y0, x1, y1) = CuboidFrontLocal();
         float d = CuboidDepthLocal();
-        var geo = factory.CreatePathGeometry();
-        using var sink = geo.Open();
 
-        void Edge(Vector2 a, Vector2 b)
-        {
-            sink.BeginFigure(a, FigureBegin.Hollow);
-            sink.AddLine(b);
-            sink.EndFigure(FigureEnd.Open);
-        }
+        void Edge(Vector2 a, Vector2 b) => list.Add(new InkPiece(new List<Vector2> { a, b }, false));
+        void Hidden(Vector2 a, Vector2 b) => list.Add(new InkPiece(new List<Vector2> { a, b }, true));
 
         if (!hidden)
         {
@@ -3702,42 +3893,44 @@ internal sealed class Stroke
         else
         {
             // 被挡住的：背面下横、左下斜棱、背面左竖
-            Edge(new(x0 + d, y1 - d), new(x1 + d, y1 - d));
-            Edge(new(x0, y1), new(x0 + d, y1 - d));
-            Edge(new(x0 + d, y0 - d), new(x0 + d, y1 - d));
+            Hidden(new(x0 + d, y1 - d), new(x1 + d, y1 - d));
+            Hidden(new(x0, y1), new(x0 + d, y1 - d));
+            Hidden(new(x0 + d, y0 - d), new(x0 + d, y1 - d));
         }
+        return list;
+    }
 
-        sink.Close();
-        return geo;
+    private ID2D1PathGeometry BuildCuboid(ID2D1Factory1 factory, bool hidden)
+    {
+        if (Points.Count < 2) return BuildLine(factory);
+        return FromPieces(factory, CuboidEdges(hidden));
     }
 
     /// <summary>
-    /// **四面体**几何：底面三角形三条边 ＋ 顶点到底面三顶点的三条棱，**全是实线**（照 InkClass）。
+    /// **四面体**的棱：底面三角形三条边 ＋ 顶点到底面三顶点的三条棱，**全是实线**（照 InkClass）。
+    /// 渲染与熔墨共用这一份。
     /// </summary>
-    private ID2D1PathGeometry BuildTetra(ID2D1Factory1 factory)
+    private List<InkPiece> TetraEdges()
     {
-        if (Points.Count < 3) return BuildLine(factory);
+        var list = new List<InkPiece>();
         var p0 = CurvePointLocal(0);
         var p1 = CurvePointLocal(1);
         var p2 = CurvePointLocal(2);
         var apex = TetraApexLocal();
-        var geo = factory.CreatePathGeometry();
-        using var sink = geo.Open();
-
-        void Edge(Vector2 a, Vector2 b)
-        {
-            sink.BeginFigure(a, FigureBegin.Hollow);
-            sink.AddLine(b);
-            sink.EndFigure(FigureEnd.Open);
-        }
+        void Edge(Vector2 a, Vector2 b) => list.Add(new InkPiece(new List<Vector2> { a, b }, false));
         Edge(p0, p1);       // 底面三条边
         Edge(p1, p2);
         Edge(p2, p0);
         Edge(p0, apex);     // 三条棱
         Edge(p1, apex);
         Edge(p2, apex);
-        sink.Close();
-        return geo;
+        return list;
+    }
+
+    private ID2D1PathGeometry BuildTetra(ID2D1Factory1 factory)
+    {
+        if (Points.Count < 3) return BuildLine(factory);
+        return FromPieces(factory, TetraEdges());
     }
 
     private ID2D1PathGeometry BuildArrow(ID2D1Factory1 factory)
@@ -3999,6 +4192,16 @@ internal sealed class EraseIntervalsAction : EditAction
         /// （S 已经换成熔出来的笔迹了）。
         /// </summary>
         public Stroke UndoOriginal;
+
+        /// <summary>
+        /// 图形熔成墨时**熔出来的那一整组**（<see cref="S"/> 只是其中的第一笔，只为让
+        /// 调用方能用 <c>Strokes.IndexOf</c> 找到位置）。null = 这条记录不是"熔图形"来的。
+        ///
+        /// 为什么要一整组：一个图形可能对应屏幕上好几笔（长方体 12 条棱、圆柱 5 笔、
+        /// 双曲线两支＋两条渐近线），熔出来必须逐笔对应才不会"虚线变实线 / 凭空多出线"
+        /// （见 <see cref="Stroke.MeltToInkParts"/>）。
+        /// </summary>
+        public List<Stroke> Melted;
     }
 
     public readonly List<Item> Items = new();
@@ -5128,10 +5331,20 @@ internal sealed class InkDocument
                 Original = it.UndoOriginal ?? s,   // 熔过图形的：还的是原图形
                 Before = it.Before,
             };
-            item.Parts.AddRange(s.SplitIntoRuns());     // 剩下的每一段 = 一个独立对象
             split.Items.Add(item);
 
-            RemoveStroke(s, it.Paint);
+            // 熔过图形的：一条原对象换来**一整组**墨（见 MeltToInkParts），每一笔再各自按
+            // "剩下的段"分开；没熔过的（笔迹）就是它自己一条。
+            if (it.Melted != null)
+            {
+                foreach (var src in it.Melted) item.Parts.AddRange(src.SplitIntoRuns());
+                foreach (var src in it.Melted) RemoveStroke(src, it.Paint);
+            }
+            else
+            {
+                item.Parts.AddRange(s.SplitIntoRuns());     // 剩下的每一段 = 一个独立对象
+                RemoveStroke(s, it.Paint);
+            }
             for (int k = 0; k < item.Parts.Count; k++) InsertStroke(index + k, item.Parts[k], it.Paint);
         }
         if (split.Items.Count > 0) Commit(split);
@@ -5166,9 +5379,11 @@ internal sealed class InkDocument
     /// 切的时候按**墨迹轮廓**算——矩形往外扩半个笔宽，再和中心线求交。只按中心线
     /// 切的话，圆头端帽会戳进框里半个笔尖，"框里干干净净"就不成立（实测看得出来）。
     ///
-    /// 图形（直线 / 矩形 / 椭圆 / 箭头）碰到**整条删**：切成碎线段没有意义，用户也
-    /// 没法再拖它的顶点。图像对象**不碰**：那是老师截来的内容，要删它应该用框选 +
-    /// Delete——橡皮擦掉半张截图不是任何人想要的。
+    /// 图形（直线 / 矩形 / 椭圆 / 箭头 / 曲线 / 立体）碰到 **熔成墨再按区间切**：
+    /// 切成碎线段没有意义、也没法再拖它的顶点，但"擦一下整个图形消失"更不合直觉，
+    /// 所以先熔成一组笔迹（外形逐笔不变，见 <see cref="Stroke.MeltToInkParts"/>）、
+    /// 再走和墨迹一模一样的区间擦除。图像对象**不碰**：那是老师截来的内容，要删它
+    /// 应该用框选 + Delete——橡皮擦掉半张截图不是任何人想要的。
     /// </summary>
     public int EraseRectAt(float cx, float cy, float halfW, float halfH)
     {
@@ -5243,19 +5458,48 @@ internal sealed class InkDocument
         var item = act.Touch(s);
         item.Paint.Add(paint);
 
-        // **图形：先熔成笔迹再切**（用户 2026-09-15 定："橡皮擦中图形，断开了也要单独算"）。
-        // 熔完在文档里就地替换，下面的擦除逻辑完全不用为图形另开一条路；
-        // 撤销靠 item.UndoOriginal 记着原来那个图形。
+        // **图形：先熔成墨（一整组！）再切**（用户 2026-09-15 定："橡皮擦中图形，断开了
+        // 也要单独算"；2026-09-20 又定"擦完外形一个字不能变"——见 MeltToInkParts）。
+        // 熔完在文档里就地替换成一整组笔迹，下面的区间擦除逻辑完全不用为图形另开一条路；
+        // 撤销靠 item.UndoOriginal 记着原图形、item.Melted 记着熔出来的这一组。
         if (s.Kind != StrokeKind.Freehand)
         {
-            var melted = s.MeltToFreehand();
             int at = Strokes.IndexOf(s);
             if (at < 0) { if (isNew) act.Drop(item); return; }
+
+            // ① 先在**还没进文档**的这一组副本上算好每一笔要擦掉的区间。
+            //    一整组都没被切到就什么都不做：既不熔（熔了没切到 = 白白把图形降级成墨），
+            //    也不打掉它的几何缓存。
+            var pieces = s.MeltToInkParts();
+            var tables = new List<List<(float a, float b)>>(pieces.Count);
+            bool any = false;
+            for (int k = 0; k < pieces.Count; k++)
+            {
+                var tbl = new List<(float a, float b)>();
+                if (pieces[k].Points.Count >= 2)
+                {
+                    _intervalScratch.Clear();
+                    if (ErasedIntervals(pieces[k], rect, _intervalScratch))
+                    {
+                        tbl.AddRange(_intervalScratch);
+                        any = true;
+                    }
+                }
+                tables.Add(tbl);
+            }
+            if (!any) { if (isNew) act.Drop(item); return; }
+
+            // ② 真的切到了：把图形换成一整组墨，并把每一笔算好的区间表落上去。
             RemoveStroke(s, paint);
-            InsertStroke(at, melted, paint);
+            for (int k = 0; k < pieces.Count; k++) InsertStroke(at + k, pieces[k], paint);
             item.UndoOriginal = s;
-            item.S = melted;
-            s = melted;
+            item.Melted = pieces;
+            item.S = pieces[0];
+            item.After = tables[0];
+            for (int k = 0; k < pieces.Count; k++)
+                if (tables[k].Count > 0) SetErased(pieces[k], tables[k], paint);
+            affected++;
+            return;
         }
 
         if (s.Points.Count <= 1)

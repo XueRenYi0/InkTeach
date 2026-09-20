@@ -426,39 +426,17 @@ internal static class SelectionHandles
                 dst[1] = ShapeHandle.Vertex1;
                 return 2;
 
-            case StrokeKind.Parabola:
-                // **一个**（2026-09-20 精简）：**曲线上的那个点**（画第二步拖出来的"经过点"）。
-                // 它拖起来 = 改 `p`（朝向是操作条那格选的，不受它影响）。
-                // 原来还有一个"通径端点"，改的也是 `p` —— 两个把手管同一个量，删掉一个。
-                // 顶点不给手柄（拖整条 = 平移）。
-                if (dst.Length < 1 || s.Points.Count < 2) return 0;
-                dst[0] = ShapeHandle.Rim;
-                return 1;
-
-            case StrokeKind.Hyperbola:
-                // **两个**（中心不给手柄 = 拖整条平移）：
-                //   Rim     = **顶点**（在曲线上：只改 a，**渐近线斜率保持不变**）
-                //   AxisTop = **渐近线框的角点**（只改斜率 b/a，a 不变）
-                // 这两个手柄合起来正是老师的作图次序：先定渐近线，再拖顶点。
-                if (dst.Length < 2 || s.Points.Count < 2) return 0;
-                dst[0] = ShapeHandle.Rim;
-                dst[1] = ShapeHandle.AxisTop;
-                return 2;
-
-            case StrokeKind.Sine:
-            case StrokeKind.Cosine:
-                // **一个**（用户 2026-09-20 精简：原来是峰、谷两个）。
-                // 峰点和谷点管的是**同一对量**（横 = 周期、竖 = 振幅），
-                // 留两个等于给同一件事配两个把手 —— 所以只留一个。
-                //
-                // 留的是**谷点**（`AxisTop`）：正弦在 3/4 周期处、余弦在 1/2 周期处。
-                // **不能留余弦的峰点**：它在周期末尾（u = 1），y 恒等于起点的 y，
-                // 那个把手在设计上只能改周期、改不了振幅（见 Engine 的写回）。
-                // 起点不给手柄——拖整条图形 = 平移，起点跟着走。
-                if (dst.Length < 1 || s.Points.Count < 2) return 0;
-                dst[0] = ShapeHandle.AxisTop;
-                return 1;
-
+            // **四种曲线（抛物线 / 双曲线 / 正弦 / 余弦）不给任何特殊点手柄**
+            //（用户 2026-09-20 定："抛物线、双曲线、正弦、余弦，把特殊点砍掉，
+            //  通通按常规操作 —— 给操作柄和旋转，和正常的一样"）。
+            //
+            // 它们和矩形 / 立体图形一样走**通用框**（八个缩放柄 ＋ 旋转柄）：
+            // 通用框本质是"纯变换操作器"，对任何对象都成立，所以这里返回 0 就行。
+            // 具体到"手感"上的两处变化：
+            //   · 拉伸变得**等比/自由**：框怎么拉曲线怎么变（不再是"只改 p / 只改 a"）；
+            //   · 跟着消失的还有两条读数（姿态角 / 半轴）——那是一起拆的
+            //     （见 Engine 的顶点读数那段），因为它挂的正是这些手柄。
+            // 抛物线的**朝向**仍然在图形面板那一格切（画/编辑两套口径不变）。
             default:
                 return 0;
         }
@@ -494,33 +472,8 @@ internal static class SelectionHandles
 
         var c = s.ShapeCenterLocal;
 
-        // 四种曲线的两个手柄**各有各的含义**，位置全部由定义元素现推
-        //（下面按种类分流；同一条规矩：手柄一定落在它管的东西旁边）。
-        // 正弦 / 余弦：只剩**一个**手柄 = **谷点**（用户 2026-09-20 精简掉了峰点：
-        // 两个点管的是同一对量）。它在曲线下方，拖它同时改振幅（y）和周期（x）
-        // ——见 Engine 的写回。
-        if (s.Kind is StrokeKind.Sine or StrokeKind.Cosine)
-            return h == ShapeHandle.AxisTop ? s.WaveTroughLocal() : s.WaveStartLocal();
-
-        // 抛物线：只剩**一个**手柄 = **曲线上的那个点**（也就是画第二步拖出来的"经过点"）。
-        // 原来还有个"通径端点"（同样只改 p）——**两个把手管同一个量**，2026-09-20 精简掉了。
-        // 顶点不给手柄（拖整条就是平移）。
-        if (s.Kind == StrokeKind.Parabola)
-            return h == ShapeHandle.Rim ? s.CurvePointLocal(1) : s.CurvePointLocal(0);
-
-        // 双曲线（2026-09-20 重定，跟着"渐近线锁定后不许动"那套语义走）：
-        //   Rim     = **曲线上的那个点**（第三个定义元素）→ 拖它改曲线的半轴，
-        //             **渐近线一个字都不动**；
-        //   AxisTop = **渐近线框的角点**（第二个定义元素）→ 拖它改渐近线框（斜率与长度）。
-        // 中心不给手柄（拖整条就是平移）。
-        if (s.Kind == StrokeKind.Hyperbola)
-            return h switch
-            {
-                ShapeHandle.Rim => s.HyperbolaCurvePointLocal(),
-                ShapeHandle.AxisTop => s.HyperbolaCornerLocal(),
-                _ => s.CurvePointLocal(0),
-            };
-
+        // 四种曲线**不再有特殊点手柄**（2026-09-20 第五批），所以这里也没有它们的分支了：
+        // 那些"手柄落在曲线旁边哪个位置"的算式（谷点 / 经过点 / 渐近线角点）随手柄一起删掉。
         return h switch
         {
             ShapeHandle.Anchor => c,
@@ -545,17 +498,14 @@ internal static class SelectionHandles
     /// 给个旋转柄等于把一个画不出来也说不清的状态开放给用户。
     /// 不给就是连命中都不做，而不是"画不出来但点得到"。
     ///
-    /// **2026-09-20 第四批：四种曲线也不给**（抛物线 / 双曲线 / 正弦 / 余弦）。
-    /// 理由和坐标系同源，只是换了说法：
-    ///   · 抛物线 / 正弦 / 余弦是**函数图象**，"开口朝上、y 轴向上"是它们的一部分，
-    ///     转歪了就不是课本上那条曲线了（左右开口的抛物线要先切朝向，再转 90°，
-    ///     两条口径叠在一起更说不清）；
-    ///   · 双曲线的标准方程就是"实轴沿 x 或 y"，转歪之后既不是标准位置、
-    ///     也不好说清哪条是实轴——朝向这件事用操作条那一格去切，比用旋转柄更明确。
+    /// **2026-09-20 第五批：四种曲线改成"常规操作"之后，它们也给旋转柄了**
+    ///（用户："通通按常规操作 —— 给操作柄和旋转，和正常的一样"）。
+    /// 上一批不给的理由是"转歪了就不像课本上那条曲线"；现在的口径是：图形就是要能像
+    /// 图形那样摆弄，转歪了自己转回来（而且通用框的旋转本来就是任何对象都有的能力）。
+    /// 抛物线的朝向切换仍在图形面板那一格（不受旋转影响）。
     /// </summary>
     public static bool RotateHandleVisible(Stroke s)
-        => !(s.Kind is StrokeKind.Circle or StrokeKind.Coordinate or StrokeKind.NumberLine)
-           && !Stroke.IsCurveKind(s.Kind);
+        => !(s.Kind is StrokeKind.Circle or StrokeKind.Coordinate or StrokeKind.NumberLine);
 
     /// <summary>
     /// 这个定义元素手柄拖起来是**整体平移**还是**改几何**。

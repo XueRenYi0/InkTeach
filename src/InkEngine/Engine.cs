@@ -5763,79 +5763,10 @@ public class InkEngine
                 break;
             }
 
-            case StrokeKind.Parabola when _vertexHandle == ShapeHandle.Rim:
-            {
-                // **曲线上的那个点**（画那一笔拖出来的"经过点"）：拖到哪、曲线就经过哪 ——
-                // `p`（张口）与"画到哪"都由它反解（见 Stroke.ParabolaPThroughPoint /
-                // ParabolaSpanOf），算式只有模型层那一份，这里不另抄。
-                //
-                // 唯一的约束：这个点**不能跑到顶点背后**（沿开口方向的分量 ≤ 0）——
-                // 它定的是"张口"，跑到背后去模型那边只能把它夹到下限，
-                // 手柄就离开曲线了（拖了看得见、曲线不跟）。所以这里把它钉在**顶点前面一点点**：
-                // 往背后拖 = 曲线缩到最小，而不是"手柄不见了"。
-                var v0 = pts[0];
-                var (dir0, perp0) = Stroke.ParabolaBasis(s.EffectiveAxis);
-                var d0 = local - v0;
-                float along0 = MathF.Max(minAxis, Vector2.Dot(d0, dir0));
-                float across0 = Vector2.Dot(d0, perp0);
-                pts[1] = v0 + dir0 * along0 + perp0 * across0;
-                break;
-            }
-
-            case StrokeKind.Hyperbola when _vertexHandle is ShapeHandle.Rim or ShapeHandle.AxisTop:
-            {
-                // 两个手柄各管**一套半轴**（2026-09-20 拆开，这是"渐近线锁定之后不许动"的落点）：
-                //   · **Rim = 曲线上的那个点**（第三个定义元素）→ 拖到哪、曲线就经过哪：
-                //     **只改曲线的半轴，渐近线框一个字都不动**；
-                //   · **AxisTop = 渐近线框的角点**（第二个定义元素）→ 拖到哪、渐近线框就多大
-                //     （斜率与长度一起走）；曲线的那条经过点不动，于是曲线**重新经过它**，
-                //     大小随之变（渐近线的斜率变了，贴着它的曲线当然跟着变——这是几何本身，
-                //     不是"顺手改了别的量"）。
-                //
-                // 两条路都**只把指针位置原样写进对应的那个控制点**——"经过点 → 半轴"的反解
-                // 与朝向判定都在模型层、各只有一份（HyperbolaCurveAThroughPoint /
-                // HyperbolaAxisThroughPoint），这里不另抄几何。
-                //
-                // 朝向不用在这里维护：它是**现推的**（`Stroke.EffectiveAxis` 看"曲线经过的那个点"
-                // 落在渐近线的哪一侧）——拖角点把斜率扳过对角线时，曲线会顺滑地翻成另一个朝向，
-                // 而不是卡在"朝向说左右、点却在上下那一侧"、半轴解出负数缩成一个点。
-                if (_vertexHandle == ShapeHandle.Rim)
-                {
-                    pts[2] = local;                          // 第三个点 = 曲线要经过的位置
-                }
-                else
-                {
-                    var o = pts[0];
-                    // 角点存的是"正方向的那一个角"（A、B 恒非负，见 HyperbolaALocal）。
-                    pts[1] = new Vector2(o.X + MathF.Max(minAxis, MathF.Abs(local.X - o.X)),
-                                         o.Y + MathF.Max(minAxis, MathF.Abs(local.Y - o.Y)));
-                }
-                break;
-            }
-
-            // `when` 要**写在每一个 label 上**：C# 里 `case A: case B when 条件:` 的条件只管 B，
-            // A 会无条件命中（这一条是这种写法最容易踩的坑）。
-            case StrokeKind.Sine when _vertexHandle == ShapeHandle.AxisTop:
-            case StrokeKind.Cosine when _vertexHandle == ShapeHandle.AxisTop:
-            {
-                // **谷点**（用户 2026-09-20 精简：峰点在 `ShapeHandlesOf` 里撤掉了——
-                // 峰、谷两个把手管的是同一对量，多留一个是白给）。
-                // 它落在曲线上，拖动时**一次改两个量**，正是老师脑子里的动作：
-                //   · **纵向** = 振幅（把谷拉深 / 拉浅）；
-                //   · **横向** = 周期（谷点的 x 本来就等于"起点 ＋ 周期的几分之几"）。
-                var start = pts[0];
-                bool cos = s.Kind == StrokeKind.Cosine;
-                // 谷点在周期里的位置（周期的几分之几）：正弦 3/4、余弦 1/2。
-                float u = cos ? 0.5f : 0.75f;
-                float period = MathF.Max(minAxis, MathF.Abs(local.X - start.X) / u);
-                // 符号（先上还是先下）**保住**：拖过中轴不翻转——手柄最忌讳"跳着翻个儿"。
-                float sign = s.WaveDyLocal() >= 0f ? 1f : -1f;
-                float dy = sign * MathF.Max(minAxis, MathF.Abs(local.Y - start.Y));
-                pts[0] = start;
-                pts[1] = new Vector2(start.X + period, start.Y + dy);
-                break;
-            }
-
+            // 四种曲线（抛物线 / 双曲线 / 正弦 / 余弦）的特殊点手柄 2026-09-20 全砍了
+            //（用户："通通按常规操作，给操作柄和旋转"），所以这里也没有它们的写回分支：
+            // 那些"拖这个点 → 只改 p / 只改 a / 只改周期＋振幅"的算式一起删掉了。
+            // 曲线现在走**通用框**（纯变换：缩放 / 旋转 / 平移），模型层一个字都不用改。
             default:
                 // 直线 / 箭头：改哪一头就是哪一头（首点或末点）。
                 pts[_vertexHandle == ShapeHandle.Anchor ? 0 : pts.Length - 1] = local;
@@ -5896,55 +5827,8 @@ public class InkEngine
                 _vertexReadoutSecondary = 0f;
                 break;
 
-            case StrokeKind.Parabola:
-            {
-                // 唯一的形状参数就是 **p**（拖"曲线上的那个点"改的正是它），所以读数报它。
-                // p 的意思：焦点在 `方向·(p/2)`、准线过 `−方向·(p/2)`、通径长 `2p` ——
-                // 报它比报"半宽多少像素"有用得多。
-                // 朝向来自对象（不是从这两个点推的），所以这里要把它一起传进去。
-                _vertexReadout = VertexReadoutKind.ParabolaP;
-                _vertexReadoutValue = Stroke.ParabolaPThroughPoint(pts[0], pts[1], s.EffectiveAxis,
-                                                                  Stroke.ParabolaMinP);
-                _vertexReadoutSecondary = 0f;
-                break;
-            }
-
-            case StrokeKind.Hyperbola when _vertexHandle is ShapeHandle.Rim or ShapeHandle.AxisTop:
-            {
-                // 拖**曲线上的点**报实半轴、拖**渐近线角点**报虚半轴 —— 这两个数合起来就是
-                // 渐近线斜率 `b/a`（课本上那条 `y = ±(b/a)x`）。**名字随朝向漂**
-                //（实轴沿 y 时两个名字要互换），所以下面按 axis 分流，不是直接读 A / B。
-                //
-                // 报的是**曲线自己的**半轴（`a` / `b`），不是渐近线框的 A / B：
-                // 框的那两个是"x / y 方向的量"，和虚实名字对不上；而且拖 Rim 时它们**根本不动**，
-                // 读出来就是"拖了没反应"。
-                // 算的也全是**预览里的那几个点**（pts）—— 拖动期间模型一个字没改
-                //（见 BeginVertexDrag），读模型读到的是上一帧的位置。
-                bool vertex = _vertexHandle == ShapeHandle.Rim;
-                _vertexReadout = vertex ? VertexReadoutKind.HyperbolaReal : VertexReadoutKind.HyperbolaImag;
-                float A = Stroke.HyperbolaAOf(pts[0], pts[1]);          // 框：x 方向的半宽
-                float B = Stroke.HyperbolaBOf(pts[0], pts[1]);          // 框：y 方向的半高
-                // 第三个点由 BeginVertexDrag 保证存在（数组按 MinCurvePoints 铺的）。
-                var q = pts[2];
-                // 朝向现推，和 Stroke.EffectiveAxis 同一条口径（看那个点落在渐近线哪一侧）。
-                var axis = Stroke.HyperbolaAxisThroughPoint(q - pts[0], B / MathF.Max(1e-4f, A));
-                float a = Stroke.HyperbolaCurveAThroughPoint(pts[0], q, A, B, axis);   // 曲线：x 半宽
-                float b = a * (A > 1e-4f ? B / A : 1f);                                // 曲线：y 半高
-                _vertexReadoutValue = axis == CurveAxis.TransverseX
-                    ? (vertex ? a : b) : (vertex ? b : a);
-                _vertexReadoutSecondary = 0f;
-                break;
-            }
-
-            // 谷点（正弦 / 余弦只剩这一个把手）：**两个量一起动**（纵向 = 振幅、横向 = 周期），
-            // 所以两个数都报。
-            case StrokeKind.Sine when _vertexHandle == ShapeHandle.AxisTop:
-            case StrokeKind.Cosine when _vertexHandle == ShapeHandle.AxisTop:
-                _vertexReadout = VertexReadoutKind.WavePeriod;
-                _vertexReadoutValue = Stroke.WavePeriodOf(pts[0], pts[1]);
-                _vertexReadoutSecondary = Stroke.WaveAmplitudeOf(pts[0], pts[1], s.Kind);
-                break;
-
+            // 四种曲线的读数（p / 实半轴 / 虚半轴 / 周期＋振幅）2026-09-20 随手柄一起删了：
+            // 读数挂在手柄上，手柄没了，那个量就没人拖得动它们了（见 ShapeHandlesOf）。
             case StrokeKind.Coordinate:
             case StrokeKind.NumberLine:
                 // 坐标系 / 数轴同样**没有角度读数**：四个定义元素之间没有"倾斜角"可言

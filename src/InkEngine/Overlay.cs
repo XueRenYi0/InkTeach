@@ -1572,26 +1572,36 @@ internal sealed class OverlayWindow : IDisposable
     ///
     /// 单位变换（绝大多数对象）走的是原路，一次多余的取/设变换都不做——
     /// 这条路径每帧要给上万个对象跑，不能为了"以后可能用到"先付成本。
+    ///
+    /// <paramref name="extra"/> 是"额外再叠一层实时矩阵"的场合（拖动预览），
+    /// 传了就不去动 ctx 变换（见下面的分岔）。
     /// </summary>
-    private void DrawStroke(Stroke s)
+    private void DrawStroke(Stroke s, Matrix3x2? extra = null)
     {
-        if (s.Transform.IsIdentity)
+        // **"线宽不变"的对象**（图形，见 Stroke.KeepsWidth）：变换折进几何里
+        //（BuildCanvasGeometry），描边发生在**画布空间** —— 宽度就是 Width，
+        // 不会被缩放。好处很直接：横着拉一个矩形，四条边还是原来那么粗。
+        if (s.KeepsWidth && (!s.Transform.IsIdentity || extra.HasValue))
         {
-            DrawStrokeCore(s);
-        }
-        else
-        {
-            // 局部 → 画布（s.Transform），再 画布 → 窗口（调用方设的）。
-            // 乘法顺序按 System.Numerics 的约定：先作用左边的。
-            var canvasToWindow = _ctx.Transform;
-            _ctx.Transform = s.Transform * canvasToWindow;
-            DrawStrokeCore(s);
-            _ctx.Transform = canvasToWindow;
+            DrawStrokeCore(s, extra);
+            return;
         }
 
+        if (s.Transform.IsIdentity && extra == null)
+        {
+            DrawStrokeCore(s);
+            return;
+        }
+
+        // 局部 → 画布（s.Transform × extra），再 画布 → 窗口（调用方设的）。
+        // 乘法顺序按 System.Numerics 的约定：先作用左边的。
+        var canvasToWindow = _ctx.Transform;
+        _ctx.Transform = s.Transform * (extra ?? Matrix3x2.Identity) * canvasToWindow;
+        DrawStrokeCore(s);
+        _ctx.Transform = canvasToWindow;
     }
 
-    private void DrawStrokeCore(Stroke s)
+    private void DrawStrokeCore(Stroke s, Matrix3x2? extra = null)
     {
         // 图像对象：画的是位图，不是几何。**必须放在最前面**——它和图形一样
         // 属于"非自由笔迹"，走到下面那条 DrawGeometry 分支就会被描一个矩形边框。
@@ -1612,7 +1622,9 @@ internal sealed class OverlayWindow : IDisposable
 
         // **只画辅助几何、先不画主体**的那个判据（见 _auxOnlyStroke 那段说明）。
         bool auxOnly = ReferenceEquals(s, _auxOnlyStroke);
-        var geo = auxOnly ? null : s.BuildGeometry(Gfx.D2DFactory);
+        // 几何走 BuildCanvasGeometry：图形的变换**折进几何里**（线宽不跟着缩放，
+        // 见 Stroke.KeepsWidth），笔迹按老样子返回局部几何（ctx 上带着它的变换）。
+        var geo = auxOnly ? null : s.BuildCanvasGeometry(Gfx.D2DFactory, aux: false, extra);
         if (geo == null && !auxOnly) return;
         // **只画辅助几何、不画主体**：双曲线三步式的第一步（正在晃渐近线）——
         // 屏幕上先只出那两条虚线渐近线，曲线要等第 2 下点击之后才跟着指针出现
@@ -1635,7 +1647,7 @@ internal sealed class OverlayWindow : IDisposable
         // **辅助几何**（双曲线的两条虚线渐近线，见 Stroke.BuildAuxGeometry）：
         // 同一支笔的墨色，但线型恒定是虚线、粗细取细的（辅助线的本分是不抢主线）。
         // 放在主几何之后画：两者重叠的地方（顶点附近）以曲线为准。
-        var aux = s.BuildAuxGeometry(Gfx.D2DFactory);
+        var aux = s.BuildCanvasGeometry(Gfx.D2DFactory, aux: true, extra);
         if (aux != null)
             _ctx.DrawGeometry(aux, Brush(s.Color), MathF.Max(1f, s.Width * 0.6f),
                               Gfx.StyleFor(StrokeDash.Dashed));
@@ -2116,10 +2128,10 @@ internal sealed class OverlayWindow : IDisposable
         var strokes = app.DragPreviewStrokes;
         if (strokes.Count == 0) return;
 
-        var canvasToWindow = _ctx.Transform;                 // 此刻是 CanvasToWindow
-        _ctx.Transform = app.DragPreviewMatrix * canvasToWindow;
-        foreach (var s in strokes) DrawStroke(s);
-        _ctx.Transform = canvasToWindow;
+        // 实时矩阵**当成 extra 传下去**，而不是塞进 ctx：`KeepsWidth` 的图形
+        //（线宽不变，见 Stroke.KeepsWidth）要把这层矩阵折进几何里；塞进 ctx 的话，
+        // 拖动过程中线宽会被一起拉粗、松手又弹回去（看着像抖一下）。
+        foreach (var s in strokes) DrawStroke(s, app.DragPreviewMatrix);
     }
 
     /// <summary>
