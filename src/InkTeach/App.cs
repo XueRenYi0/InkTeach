@@ -10411,6 +10411,16 @@ internal sealed class App : InkEngine.InkEngine
                     SettleFrames(120);
                 }
             }
+            // --paraaxis N：把「抛物线」那一格的档位往后切 N 下（N=1 就是"左右抛物"那一档）。
+            // 和 --dashline 同一类，只服务"图上看细节"。
+            {
+                int pai = Array.IndexOf(cli, "--paraaxis");
+                if (pai >= 0 && pai + 1 < cli.Length && int.TryParse(cli[pai + 1], out int paArg))
+                {
+                    for (int k = 0; k < paArg; k++) Host.Commands.CycleParabolaAxis();
+                    SettleFrames(120);
+                }
+            }
             if (_panelShowDrawer) ui.OpenDrawerForTest();   // --drawer：连抽屉一起出图
             SettleFrames(500);
 
@@ -14799,6 +14809,73 @@ internal sealed class App : InkEngine.InkEngine
               $"({asFrom2.X:F1},{asFrom2.Y:F1})..({asTo2.X:F1},{asTo2.Y:F1})"
               + $" vs 框角 ({hy2Box.MaxX:F1},{hy2Box.MaxY:F1})");
 
+        // ============ ⑤b 四种开口：**真机拖出来**（用户 2026-09-20 问"是不是应该有四种"）===
+        //
+        // 面板那一格只有**两档**（上下抛物 / 左右抛物），**具体朝哪边由那一拖的符号定**
+        //（见 `Stroke.ParabolaAxisOfDrag`）——所以四种开口本来就是画得出来的，
+        // 只是"朝上还是朝下"这件事面板替不了你回答（方向被面板选死时，
+        // "选着向上、手却往下拖"会画出跟手指反过来的曲线）。
+        //
+        // 上面 ⑤ 只钉了**模型层**（直接调 `SetParabolaAxis`），这一段补**真机**：
+        // 按住顶点往四个方向各拖一次，看落点那一条的朝向对不对。
+        // 判据是 `EffectiveAxis`（读端统一走它，不是那个存下来的字段）。
+        Console.WriteLine("  -- ⑤b. 四种开口：真机拖出来的方向 --");
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+
+            // 把"哪一对"切到指定档（面板那一格点第二下就是干这个的）。
+            void SetParaPair(CurveAxis pair)
+            {
+                for (int k = 0; k < 2 && Host.State.ParabolaAxis != pair; k++)
+                    Host.Commands.CycleParabolaAxis();
+                SettleFrames(80);
+            }
+            // 按住顶点 (vx,vy) 拖到 (vx+dx, vy+dy)，松手就成一条抛物线。
+            void DragParaAxis(float vx, float vy, float dx, float dy)
+            {
+                SendMouse((int)vx, (int)vy, 0);                                    SettleFrames(60);
+                SendMouse((int)vx, (int)vy, Native.MOUSEEVENTF_LEFTDOWN);          SettleFrames(60);
+                SendMouse((int)(vx + dx * 0.5f), (int)(vy + dy * 0.5f), 0);        SettleFrames(80);
+                SendMouse((int)(vx + dx), (int)(vy + dy), 0);                      SettleFrames(160);
+                SendMouse((int)(vx + dx), (int)(vy + dy), Native.MOUSEEVENTF_LEFTUP);
+                SettleFrames(200);
+            }
+            void SetParaTool()
+            {
+                SetToolFromUi(Tool.Parabola);
+                SettleFrames(80);
+            }
+
+            float pvx = _virtualX + 700f, pvy = _virtualY + 1050f;
+            // 四个方向都拖 (±300, ±300)：`s = t = 300` → `p = 300²/600 = 150`，一格装得下。
+            var openCases = new (CurveAxis pair, float dx, float dy, CurveAxis want, string how)[]
+            {
+                (CurveAxis.OpenUp,     300f, -300f, CurveAxis.OpenUp,    "往上拖"),
+                (CurveAxis.OpenUp,     300f,  300f, CurveAxis.OpenDown,  "往下拖"),
+                (CurveAxis.OpenRight,  300f,  300f, CurveAxis.OpenRight, "往右拖"),
+                (CurveAxis.OpenRight, -300f,  300f, CurveAxis.OpenLeft,  "往左拖"),
+            };
+            foreach (var oc in openCases)
+            {
+                Doc.Clear();
+                Doc.ClearHistory();
+                SetParaTool();
+                SetParaPair(oc.pair);
+                DragParaAxis(pvx, pvy, oc.dx, oc.dy);
+
+                var ps = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+                Check($"抛物线·{oc.how}（面板「{(oc.pair == CurveAxis.OpenUp ? "上下" : "左右")}抛物」档）"
+                      + $" → 开口 {oc.want}",
+                      ps != null && ps.Kind == StrokeKind.Parabola && ps.EffectiveAxis == oc.want,
+                      $"对象 {Doc.Strokes.Count} 条，"
+                      + $"朝向 {(ps == null ? "（没画出来）" : ps.EffectiveAxis.ToString())}（期望 {oc.want}）");
+            }
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetParaPair(CurveAxis.OpenUp);       // 收尾：给别人留下一档干净的（后面几段要用）
+        }
+
         // ================= ⑥ 存档：往返 ＋ 真 v11 老文件 =================
         Doc.Clear();
         Doc.ClearHistory();
@@ -14943,19 +15020,31 @@ internal sealed class App : InkEngine.InkEngine
                 var g = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
                 if (g == null) { Check("⑦ 抛物线没画出来（后面两项没法验）", false, "对象 0 个"); break; }
 
-                // ② 那一轮：先**拖一次手柄**（改 p）再撤销——走的是"改几何"那条动作路径。
+                // ② 那一轮：先**改一下这条曲线**再撤销——走一遍和"画完就删"不同的动作路径。
+                //
+                // ⚠ 这里原来是"拖抛物线的 Rim 手柄改 p"，**2026-09-20 第六批把四种曲线的
+                //   特殊手柄全砍了**（改走通用框），那个手柄名当场失效、这一轮就静默退化成
+                //   round 0 的复制品（断言照样绿）——正是"写死的手柄名会随功能移位而失效"
+                //   那条教训。现在改拖**通用框的右下角**（缩放）：它改的是 `Transform`，
+                //   走 `SetStrokeTransformAction`，不是几何那条路。
+                //   哪天真把曲线手柄加回来，这里也该跟着改回来。
                 if (flipFirst)
                 {
                     Doc.SelectOnly(new[] { g });
                     SettleFrames(60);
-                    var gp = SelectionHandles.ShapeHandleCanvasPosition(g, ShapeHandle.Rim);
-                    SelectionGestureForTest(gp.X, gp.Y);
-                    SettleFrames(40);
-                    UpdateSelectionGestureForTest(gp.X + 120f, gp.Y - 80f);   // 换个张口再撤销
-                    SettleFrames(40);
+                    var gf = SelectionHandles.FrameOf(Doc.Selected);
+                    var gc = SelectionHandles.CanvasPosition(SelHandle.BottomRight, gf, DpiScale);
+                    bool got = SelectionGestureForTest(gc.X, gc.Y);
+                    UpdateSelectionGestureForTest(gc.X + 120f, gc.Y + 80f);
+                    SettleFrames(80);
                     EndSelectionGestureForTest();
-                    SettleFrames(120);
-                    Doc.Undo();                     // 撤销那一次改几何（再走一遍写回路径）
+                    SettleFrames(140);
+                    // 先证明"真的改了"——不然下面那条"改过形状之后删除"是假的
+                    Check("⑦ 第二轮：拖通用框真的动了这条抛物线（不然下面那条断言是假的）",
+                          got && !g.Transform.IsIdentity,
+                          $"接住={got}，变换={(g.Transform.IsIdentity ? "单位（没动）" : "变了")}");
+                    Doc.Undo();                     // 撤销那一次改动（再走一遍写回路径）
+                    SettleFrames(140);
                     Doc.SelectOnly(new[] { g });
                     SettleFrames(120);
                 }

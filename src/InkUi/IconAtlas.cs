@@ -282,6 +282,22 @@ internal static class IconAtlas
             prev = q;
         }
 
+        // **对称轴上的双向箭头**（用户 2026-09-20 定）：
+        // 面板这一格只回答"上下"还是"左右"，**具体朝上还是朝下由那一拖定**
+        //（见 Stroke.ParabolaAxisOfDrag）——所以图标要说出"这一档两个方向都行"，
+        // 只画一根开口向上的曲线看不出这件事。
+        //
+        // 画在抛物线**里面那块空白**里：抛物线的内部正好是 x = 12 那条竖线上
+        // 从顶点 (12,19) 往上的一段（外面那条曲线一个点都不占那里，所以不会搅在一起）。
+        // 线宽 1.1 比曲线细（曲线 1.5）：它是**注释**，不能看着像曲线的一部分；
+        // 两个箭头各两笔，加最后一段枪尖，缩到 18 像素刚好读得出是个"双向"。
+        const float aw = 1.1f;
+        ctx.DrawLine(new Vector2(12f, 7f), new Vector2(12f, 17.5f), brush, aw, _round);
+        ctx.DrawLine(new Vector2(10.4f, 8.9f), new Vector2(12f, 7f), brush, aw, _round);
+        ctx.DrawLine(new Vector2(13.6f, 8.9f), new Vector2(12f, 7f), brush, aw, _round);
+        ctx.DrawLine(new Vector2(10.4f, 15.6f), new Vector2(12f, 17.5f), brush, aw, _round);
+        ctx.DrawLine(new Vector2(13.6f, 15.6f), new Vector2(12f, 17.5f), brush, aw, _round);
+
         ctx.Transform = saved;
     }
 

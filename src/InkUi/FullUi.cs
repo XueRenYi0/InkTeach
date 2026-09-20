@@ -2721,11 +2721,55 @@ public sealed class FullUi : IOverlayUi
 
         string label = SegmentLabel(i);
         if (label.Length > 0)
+        {
             _widgets.Text(ctx, label, r, (r.MaxX - r.MinX) < 62f ? 11f : 12.5f,
                           Brush(ctx, active ? Tokens.AccentInk : InkCol));
-        else
-            IconAtlas.DrawCentered(ctx, ShapeIcon(i), r, 18f,
-                                   Brush(ctx, active ? Tokens.AccentInk : InkCol));
+            return;
+        }
+
+        var segInk = active ? Tokens.AccentInk : InkCol;
+        // 「直线」那一段有**三档线型**（点它一下换一档，见 ActivateSegment 的 case 8）：
+        // 图标照旧画当前那一档，**下面再加一排档位点**——大而浓的那个是当前档。
+        // 用户 2026-09-20 定：只换图标的话，老师"不知道这一格还能点"（可选的状态是隐形的）。
+        // 代价是这一个图标要比别的段小一号（16 而不是 18）并上移，把那几像素让给点 ——
+        // 只影响这一格，别的段照旧 18。
+        if (ShapeToolAt(i) == Tool.Line)
+        {
+            float icx = (r.MinX + r.MaxX) * 0.5f, icy = (r.MinY + r.MaxY) * 0.5f;
+            var iconBox = new RectF
+            {
+                MinX = r.MinX, MinY = icy - 11.5f, MaxX = r.MaxX, MaxY = icy + 4.5f,
+            };
+            IconAtlas.DrawCentered(ctx, ShapeIcon(i), iconBox, 16f, Brush(ctx, segInk));
+            DrawPips(ctx, icx, icy + 8f, (int)st.LineDash, 3, segInk);
+            return;
+        }
+
+        IconAtlas.DrawCentered(ctx, ShapeIcon(i), r, 18f, Brush(ctx, segInk));
+    }
+
+    /// <summary>
+    /// 画一排**档位点**：告诉老师"这一格有几档、现在是第几档"。
+    ///
+    /// 当前档用**大 + 浓**两个差别，其余的小一半、透明度 35%：
+    /// 用"大小"而不是只用颜色，是因为这一段可能是**选中态**（整个格子铺着品牌色、
+    /// 前景是白的），那时候用颜色区分就完全失效了。
+    ///
+    /// 点距 5、半径 2 / 1.5，是照 26 逻辑像素的段高配的：整排连点占 7 像素高，
+    /// 段高 26 里塞得下（图标让出下半部分，见 DrawSegment 里那一支）。
+    /// </summary>
+    private void DrawPips(ID2D1DeviceContext ctx, float cx, float cy,
+                          int cur, int count, Color4 fg)
+    {
+        const float gap = 5f;
+        float x0 = cx - (count - 1) * gap * 0.5f;
+        for (int k = 0; k < count; k++)
+        {
+            bool on = k == cur;
+            var c = on ? fg : new Color4(fg.R, fg.G, fg.B, 0.35f);
+            float rad = on ? 2f : 1.5f;
+            ctx.FillEllipse(new Ellipse(new Vector2(x0 + k * gap, cy), rad, rad), Brush(ctx, c));
+        }
     }
 
     /// <summary>
