@@ -72,6 +72,58 @@ internal static class Gfx
             MiterLimit = 10f,
         });
 
+    /// <summary>
+    /// 虚线 / 点线的描边样式（2026-09-19 加，见 <see cref="StrokeDash"/>）。
+    ///
+    /// **节长节距用"自定义图案"，单位是笔宽**（Direct2D 的约定：dashes 里的数字乘笔宽）——
+    /// 所以粗笔的虚线自动变长、细笔自动变密，和老师"粗笔配长虚线"的直觉一致；
+    /// 写死像素值的话，宽笔上会密得像齿锯。
+    ///
+    /// 端帽：
+    ///   · 虚线用 **平头**——圆头会让每一节两头鼓成半圆，节挨得近时糊成一串珠子；
+    ///   · 点线**必须**用 **圆头**，而且节长取一个接近 0 的值：圆头会在这一节两头
+    ///     各鼓出半个笔宽，合起来正好是**一个直径 = 笔宽的圆点**。平头 + 0 长度的节
+    ///     会**什么都画不出来**（这是 Direct2D 上一个很容易踩空的地方）。
+    /// 拐角两边都用圆角（和实线一致，粗折线上不会有尖角）。
+    /// </summary>
+    public static ID2D1StrokeStyle1 DashedStroke;
+    public static ID2D1StrokeStyle1 DottedStroke;
+
+    public static ID2D1StrokeStyle1 Dashed => DashedStroke ??= D2DFactory.CreateStrokeStyle(
+        new StrokeStyleProperties1
+        {
+            StartCap = CapStyle.Flat,
+            EndCap = CapStyle.Flat,
+            DashCap = CapStyle.Flat,
+            LineJoin = LineJoin.Round,
+            MiterLimit = 10f,
+            DashStyle = DashStyle.Custom,
+        },
+        new[] { 3f, 2f });                    // 节 3、缝 2（× 笔宽）→ 出墨约六成
+
+    public static ID2D1StrokeStyle1 Dotted => DottedStroke ??= D2DFactory.CreateStrokeStyle(
+        new StrokeStyleProperties1
+        {
+            StartCap = CapStyle.Flat,
+            EndCap = CapStyle.Flat,
+            DashCap = CapStyle.Round,         // 见上面：点线靠圆头把"零长度的节"鼓成一个圆点
+            LineJoin = LineJoin.Round,
+            MiterLimit = 10f,
+            DashStyle = DashStyle.Custom,
+        },
+        new[] { 0.01f, 2f });                 // 节≈0、缝 2（× 笔宽）→ 出墨约三成
+
+    /// <summary>
+    /// 这个线型该用哪一条描边样式。**渲染只有这一个分派点**
+    /// （见 <c>DrawStrokeCore</c>）——线型要加档位就改这里，别在各处自己判断。
+    /// </summary>
+    public static ID2D1StrokeStyle1 StyleFor(StrokeDash dash) => dash switch
+    {
+        StrokeDash.Dashed => Dashed,
+        StrokeDash.Dotted => Dotted,
+        _ => Round,
+    };
+
     public static void Init()
     {
         Mem.Stage("0. 进程启动（运行时 + 程序集）");
@@ -115,6 +167,10 @@ internal static class Gfx
     {
         RoundStroke?.Dispose();
         RoundStroke = null;
+        DashedStroke?.Dispose();          // 线型的两条（见 StyleFor）
+        DashedStroke = null;
+        DottedStroke?.Dispose();
+        DottedStroke = null;
         WriteFactory?.Dispose();
         D2DDevice?.Dispose();
         D2DFactory?.Dispose();
@@ -241,6 +297,21 @@ internal sealed class OverlayWindow : IDisposable
     private IDCompositionInkTrailDevice _inkTrailDevice;
     private IDCompositionDelegatedInkTrail _inkTrail;
     private ID2D1DeviceContext _ctx;
+    /// <summary>
+    /// D2D 1.3 的设备上下文 2：**原生墨迹**（ID2D1Ink）唯一能创建的地方
+    /// （<c>CreateInk</c> / <c>DrawInk</c> 都挂在这个接口上）。拿不到就是 null。
+    /// </summary>
+    private ID2D1DeviceContext2 _ctx2;
+    /// <summary>墨迹笔尖样式（圆头）——和"笔＝圆头"这条口径一致。</summary>
+    private ID2D1InkStyle _inkStyle;
+    /// <summary>每次画一条压感笔迹最多铺多少段（见 DrawPressureInk：压力是慢变量）。</summary>
+    private const int InkMaxSegments = 120;
+    /// <summary>段缓冲：**预分配、复用**，不在每帧绘制里 new（一条笔最多 121 个采样点）。</summary>
+    private readonly InkBezierSegment[] _inkSegs = new InkBezierSegment[InkMaxSegments];
+    /// <summary>压力的指数平滑系数（0..1，越小越稳）。见 DrawPressureInk。</summary>
+    private const float InkPressureEma = 0.35f;
+    /// <summary>最小墨迹半径（画布像素）：轻压时也不至于细到画不出来。</summary>
+    private const float InkMinRadius = 0.4f;
     private ID2D1Bitmap1 _backBuffer;
 
     // ---- 内容层（画布空间分块缓存）---------------------------------------
@@ -297,6 +368,17 @@ internal sealed class OverlayWindow : IDisposable
     private float _readoutFormatPx;
 
     /// <summary>
+    /// **角标**（三角形的三个内角 / 平行四边形的两个夹角）用的小号文字格式：
+    /// 比主读数小一号（11 逻辑像素）。
+    ///
+    /// 为什么另存一份、不把主读数调小：角标是贴在顶点旁边的，太大就会压住那条边。
+    /// （以前三角形中间还印一行"内角和"，那一行才用主读数那一号字；用户 2026-09-19
+    /// 把那一行去掉了，于是角标是这一组里唯一的字号。）
+    /// </summary>
+    private IDWriteTextFormat _readoutFormatSmall;
+    private float _readoutFormatSmallPx;
+
+    /// <summary>
     /// 拖端点时的"临时几何"复用的那条 scratch 笔画（见 <see cref="DrawVertexPreview"/>）。
     ///
     /// 为什么复用它、而不是在这里另写一套"画一条线 / 一个箭头"：图形的画法
@@ -335,6 +417,24 @@ internal sealed class OverlayWindow : IDisposable
     public static bool InkTrailAvailable;
     public static string InkTrailNote = "未尝试";
     public static string InkTrailDebug = "";
+
+    /// <summary>
+    /// 这台机器上有没有 **D2D 原生墨迹**（压感笔迹的变宽通道）。见 <see cref="InkNote"/>。
+    ///
+    /// 它决定"有压感的笔迹"怎么画：可用 → `ID2D1Ink`（每点一个半径，D2D 自己算轮廓）；
+    /// 不可用 → 退回等宽描边（也就是 2026-09-14 以来那条路，观感不变、只是不吃压感）。
+    /// </summary>
+    public static bool InkAvailable;
+    /// <summary>启动日志里那一行（可不可用、为什么）。</summary>
+    public static string InkNote = "未尝试";
+    /// <summary>
+    /// 走过**变宽墨迹**那条路的次数（自检用）。
+    ///
+    /// 为什么要这个计数：这条路"调用成功但屏幕上什么都没有"是一种可能的失败形态
+    /// （不像抛异常那样会自己喊出来），而自检的数像素判据只看屏幕——
+    /// 有这个计数才能区分"没走这条路"和"走了但没画出来"。
+    /// </summary>
+    public static int PressureInkDraws;
 
     /// <summary>
     /// 是否启用委托墨迹轨迹。**默认关闭**：我们的接口调用全部返回成功，
@@ -446,31 +546,37 @@ internal sealed class OverlayWindow : IDisposable
     /// 屏幕上短暂的一小截**，不会进文档。微软自己笔迹"跟手"的关键就在这个带预测的重载上，
     /// 而绑定我们本来就有（Vortice.DirectComposition 3.8.3）。
     /// </summary>
-    public void AddInkTrailPoints(Vector2[] real, int realCount, Vector2[] predicted, int predictedCount, float radius)
+    public void AddInkTrailPoints(Vector2[] real, int realCount, Vector2[] predicted, int predictedCount,
+                                  float radius, float[] radii = null)
     {
         if (!_trailActive || _inkTrail == null || real == null || realCount <= 0) return;
         try
         {
             float r = MathF.Max(0.5f, radius);
+            float R(int i) => radii != null && i >= 0 && i < radii.Length
+                ? MathF.Max(0.5f, radii[i]) : r;
             var realPts = new DCompositionInkTrailPoint[realCount];
             for (int i = 0; i < realCount; i++)
                 realPts[i] = new DCompositionInkTrailPoint
                 {
                     X = real[i].X - OriginX,
                     Y = real[i].Y - OriginY,
-                    Radius = r,
+                    // **逐点半径**（有压感时）：湿墨的粗细必须和干墨同一个映射，
+                    // 不然"正在写的这一笔"和抬手之后那一条粗细不一样（最扎眼的一种不一致）。
+                    Radius = R(i),
                 };
 
             var predPts = Array.Empty<DCompositionInkTrailPoint>();
             if (predicted != null && predictedCount > 0)
             {
+                float pr = R(realCount - 1);         // 预测段沿用**最后一点**的粗细
                 predPts = new DCompositionInkTrailPoint[predictedCount];
                 for (int i = 0; i < predictedCount; i++)
                     predPts[i] = new DCompositionInkTrailPoint
                     {
                         X = predicted[i].X - OriginX,
                         Y = predicted[i].Y - OriginY,
-                        Radius = r,
+                        Radius = pr,
                     };
             }
 
@@ -613,6 +719,37 @@ internal sealed class OverlayWindow : IDisposable
         // 当年做过 A/B（--mtraster），结论是收益落在噪声里，于是删掉开关、保持默认关。
         _ctx = Gfx.D2DDevice.CreateDeviceContext(DeviceContextOptions.None);
         _ctx1 = _ctx.QueryInterfaceOrNull<ID2D1DeviceContext1>();
+        // **原生墨迹**（压感 → 粗细）：`CreateInk` / `DrawInk` 在 `ID2D1DeviceContext2` 上
+        // （D2D 1.3，Win10+）。拿不到就当作这台机器不支持，压感笔迹退回等宽描边
+        // （启动日志里会打印一行，和"委托墨迹轨迹: 可用/不可用"一个样子）。
+        try
+        {
+            _ctx2 = _ctx.QueryInterfaceOrNull<ID2D1DeviceContext2>();
+            if (_ctx2 != null)
+            {
+                _inkStyle = _ctx2.CreateInkStyle(new InkStyleProperties
+                {
+                    NibShape = InkNibShape.Round,
+                    // **必须显式给单位阵**：结构体的默认值里 `NibTransform` 是**全零矩阵**
+                    // （不是单位阵），而零矩阵 = 笔尖被压成零尺寸 →
+                    // 表现是"CreateInk / AddSegments / DrawInk 全部成功，屏幕上一个像素都没有"。
+                    // 这个坑 2026-09-20 实测踩过一次（`--pressuretest` 数出全屏 0 像素）。
+                    NibTransform = Matrix3x2.Identity,
+                });
+                InkAvailable = true;
+                InkNote = "可用（D2D 原生墨迹 ID2D1Ink：压感按逐点半径改粗细）";
+            }
+            else
+            {
+                InkAvailable = false;
+                InkNote = "不可用（拿不到 ID2D1DeviceContext2）→ 压感笔迹退回等宽描边";
+            }
+        }
+        catch (Exception ex)
+        {
+            InkAvailable = false;
+            InkNote = "不可用（" + ex.Message + "）→ 压感笔迹退回等宽描边";
+        }
         _ctx.SetDpi(96f, 96f);
         _ctx.AntialiasMode = AntialiasMode.PerPrimitive;
         _ctx.TextAntialiasMode = Vortice.Direct2D1.TextAntialiasMode.Grayscale;
@@ -1033,18 +1170,46 @@ internal sealed class OverlayWindow : IDisposable
     /// 眼睛不用在两个地方来回找。
     /// </summary>
     private RectF InclinationReadoutRect(Vector2 anchor, float dpi, string text)
+        => ReadoutPillRect(anchor, dpi, text, 30f, 84f, ReadoutFormat(dpi), PillPlace.Above);
+
+    /// <summary>读数胶囊贴在锚点的哪一侧。</summary>
+    private enum PillPlace
     {
-        const float minWidthLogical = 84f, heightLogical = 30f;
+        /// <summary>锚点正上方（倾斜角 / 顶点读数那一套）。</summary>
+        Above,
+        /// <summary>锚点左边、竖直方向对齐（角标：贴在那个角的外侧）。</summary>
+        LeftOf,
+        /// <summary>锚点右边、竖直方向对齐（角标）。</summary>
+        RightOf,
+    }
+
+    /// <summary>
+    /// 一颗读数胶囊的盒子：**按文案量宽**、贴到锚点的一侧、再夹进当前可见画布。
+    ///
+    /// 全工程只有这一份"量宽 + 夹取"的实现（倾斜角 α、圆的 r/d、椭圆 a/b、旋转 Δ，
+    /// 以及第③轮的那些角标都走它）：那边当年就是"量一次、画另一份"出的残影，
+    /// 分开写迟早会在盒子的宽窄上再犯一次。
+    /// </summary>
+    private RectF ReadoutPillRect(Vector2 anchor, float dpi, string text,
+                                  float heightLogical, float minWidthLogical,
+                                  IDWriteTextFormat fmt, PillPlace place)
+    {
         float widthLogical = minWidthLogical;
         if (!string.IsNullOrEmpty(text))
         {
-            float textW = MeasureTextWidth(text, ReadoutFormat(dpi));
+            float textW = MeasureTextWidth(text, fmt);
             widthLogical = MathF.Max(minWidthLogical, textW / dpi + 24f);
         }
 
         float w = widthLogical * dpi, h = heightLogical * dpi;
         float gap = (SelectionHandles.VisualSizeLogical * 0.5f + 9f) * dpi;
-        float cx = anchor.X, cy = anchor.Y - gap - h * 0.5f;
+        float cx, cy;
+        switch (place)
+        {
+            case PillPlace.LeftOf: cx = anchor.X - gap - w * 0.5f; cy = anchor.Y; break;
+            case PillPlace.RightOf: cx = anchor.X + gap + w * 0.5f; cy = anchor.Y; break;
+            default: cx = anchor.X; cy = anchor.Y - gap - h * 0.5f; break;    // Above
+        }
         var r = new RectF
         {
             MinX = cx - w * 0.5f, MinY = cy - h * 0.5f,
@@ -1392,6 +1557,16 @@ internal sealed class OverlayWindow : IDisposable
     }
 
     /// <summary>
+    /// 这一帧"**只画辅助几何、不画主体**"的那一个对象：
+    /// 双曲线三步式的第一步（正在晃渐近线）——屏幕上先只出那两条虚线，
+    /// 曲线要等第 2 下点击之后才出现（见 <see cref="InkEngine.HyperAsymptotePreviewOnly"/>）。
+    ///
+    /// 由 <see cref="RenderFrame"/> 每帧开头设一次，**不进数据对象、不进存档、也不影响导出**
+    /// （导出走的是另一条渲染路径，根本不设它）。
+    /// </summary>
+    private Stroke _auxOnlyStroke;
+
+    /// <summary>
     /// 画一个对象。**调用方负责把 ctx 变换设成"画布坐标 → 窗口坐标"**，
     /// 这里只在对象自己带变换时再左乘一下。
     ///
@@ -1435,15 +1610,131 @@ internal sealed class OverlayWindow : IDisposable
             return;
         }
 
-        var geo = s.BuildGeometry(Gfx.D2DFactory);
-        if (geo == null) return;
-        // 两种画法：
-        //   · 单点笔迹 → 几何本身就是一个圆，填充它（零长度的线描边什么都画不出来）；
-        //   · 其余（笔迹的中心线、直线/矩形/椭圆/箭头）→ 统一交给 D2D 描边：
-        //     宽度、圆头端帽、拐角全由它算（2026-09-14 起，我们自己的轮廓代码已删除）。
-        if (s.IsSinglePoint) _ctx.FillGeometry(geo, Brush(s.Color));
-        else _ctx.DrawGeometry(geo, Brush(s.Color), MathF.Max(1f, s.Width), Gfx.Round);
+        // **只画辅助几何、先不画主体**的那个判据（见 _auxOnlyStroke 那段说明）。
+        bool auxOnly = ReferenceEquals(s, _auxOnlyStroke);
+        var geo = auxOnly ? null : s.BuildGeometry(Gfx.D2DFactory);
+        if (geo == null && !auxOnly) return;
+        // **只画辅助几何、不画主体**：双曲线三步式的第一步（正在晃渐近线）——
+        // 屏幕上先只出那两条虚线渐近线，曲线要等第 2 下点击之后才跟着指针出现
+        //（照 InkClass 的第一笔，见 Engine.HyperAsymptotePreviewOnly）。
+        // 主体不画时 `geo` 是 null，下面那两行描边自然跳过，辅助几何照画。
+        if (geo != null)
+        {
+            // 两种画法：
+            //   · 单点笔迹 → 几何本身就是一个圆，填充它（零长度的线描边什么都画不出来）；
+            //   · 其余（笔迹的中心线、直线/矩形/椭圆/箭头）→ 统一交给 D2D 描边：
+            //     宽度、端帽、拐角全由它算（2026-09-14 起，我们自己的轮廓代码已删除）；
+            //     **线型（实线/虚线/点线）就在这一步按 <see cref="StrokeDash"/> 选描边样式** ——
+            //     全引擎只此一处，任何"能画出图形的路径"（内容层、浮动预览、导出、自检出图）
+            //     都经过 DrawStroke，所以线型自动都生效，不用逐处补。
+            if (s.IsSinglePoint) _ctx.FillGeometry(geo, Brush(s.Color));
+            else if (!DrawPressureInk(s))
+                _ctx.DrawGeometry(geo, Brush(s.Color), MathF.Max(1f, s.Width), Gfx.StyleFor(s.Dash));
+        }
 
+        // **辅助几何**（双曲线的两条虚线渐近线，见 Stroke.BuildAuxGeometry）：
+        // 同一支笔的墨色，但线型恒定是虚线、粗细取细的（辅助线的本分是不抢主线）。
+        // 放在主几何之后画：两者重叠的地方（顶点附近）以曲线为准。
+        var aux = s.BuildAuxGeometry(Gfx.D2DFactory);
+        if (aux != null)
+            _ctx.DrawGeometry(aux, Brush(s.Color), MathF.Max(1f, s.Width * 0.6f),
+                              Gfx.StyleFor(StrokeDash.Dashed));
+    }
+
+    /// <summary>
+    /// **有压感的自由笔迹**走 D2D 的原生墨迹（`ID2D1Ink`：每个点自带半径 → 变宽）。
+    ///
+    /// 为什么不自己拼变宽轮廓：官方对这套图元写得很直白——"比过去应用自己用一串椭圆和
+    /// 四边形去管墨迹**更快也更漂亮**"，而我们 2026-09-14 删掉的那一层正是那种自拼轮廓
+    /// （折角被削、自交挖洞、起笔毛边都是它带来的）。用它等于把"变宽"这件事交回给 D2D。
+    ///
+    /// **四个前提，缺一个就返回 false 走回等宽描边**（老那条路一个字没改）：
+    ///   · 这台机器拿得到 `ID2D1DeviceContext2`（见 Gfx.InkAvailable）；
+    ///   · 这一笔**真的有压感**（设备报的，不是我们猜的，见 Stroke.HasPressure）；
+    ///   · **实线**——光栅化墨迹不吃 dash 图案，虚线/点线笔迹必须走老路；
+    ///   · **没被像素橡皮擦断**（擦除区间是"按段不画"，而 ink 是整条一次性铺出来的）。
+    ///
+    /// 两个实现细节：
+    ///   · **段数封顶 120**：压力是慢变量，长笔按步长抽稀即可（位置精度由 D2D 在段内插值补）。
+    ///     抽稀也让"每条笔每次重画"的代价封住——我们不缓存 ink 对象（它只能从设备上下文建，
+    ///     缓存就得按窗口分开管生命周期，不划算）；
+    ///   · **压力先做一次指数平滑**（只在这一层做，存档里留的是原始值）：
+    ///     10 bit 的原始压力在轻压段抖动明显，直接喂给宽度会"笔墨发毛"。
+    /// </summary>
+    private bool DrawPressureInk(Stroke s)
+    {
+        if (_ctx2 == null || _inkStyle == null) return false;
+        if (!InkAvailable || !PressureWidth.Enabled) return false;
+        if (!s.HasPressure || s.Dash != StrokeDash.Solid) return false;
+        if (s.Erased.Count > 0 || s.Kind != StrokeKind.Freehand) return false;
+
+        var pts = s.Points;
+        int n = pts.Count;
+        if (n < 2) return false;
+
+        // 采样步长：保证段数 ≤ InkMaxSegments，且**最后一点一定画到**。
+        int stride = Math.Max(1, (int)MathF.Ceiling((n - 1) / (float)InkMaxSegments));
+
+        float sm = pts[0].P;
+        float sx = pts[0].X, sy = pts[0].Y;
+        float sr = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, sm));
+        float startRadius = sr;
+
+        int nSeg = 0;
+        for (int i = 1; i < n && nSeg < _inkSegs.Length; i++)
+        {
+            sm += (pts[i].P - sm) * InkPressureEma;      // 平滑只作用于压力，不动位置
+            if (i % stride != 0 && i != n - 1) continue; // 中间的按步长抽稀（末点必留）
+
+            float ex = pts[i].X, ey = pts[i].Y;
+            float er = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, sm));
+            // 直线段写成三次贝塞尔：控制点落在两端之间 → 位置是直线，半径沿途线性插值。
+            //
+            // 注意**必须全限定** `Vortice.Direct2D1.InkPoint`：我们自己也有一个
+            // `InkEngine.InkPoint`（笔迹的采样点 X/Y/P/T），写裸名会被它遮住，
+            // 报错是"未包含 Radius 的定义"——一个不容易一眼看懂的编译错误。
+            _inkSegs[nSeg++] = new InkBezierSegment
+            {
+                Point1 = new Vortice.Direct2D1.InkPoint
+                {
+                    X = sx + (ex - sx) / 3f, Y = sy + (ey - sy) / 3f,
+                    Radius = sr + (er - sr) / 3f,
+                },
+                Point2 = new Vortice.Direct2D1.InkPoint
+                {
+                    X = sx + (ex - sx) * 2f / 3f, Y = sy + (ey - sy) * 2f / 3f,
+                    Radius = sr + (er - sr) * 2f / 3f,
+                },
+                Point3 = new Vortice.Direct2D1.InkPoint { X = ex, Y = ey, Radius = er },
+            };
+            sx = ex; sy = ey; sr = er;
+        }
+        if (nSeg == 0) return false;
+
+        try
+        {
+            var ink = _ctx2.CreateInk(new Vortice.Direct2D1.InkPoint
+            {
+                X = pts[0].X, Y = pts[0].Y, Radius = startRadius,
+            });
+            try
+            {
+                ink.AddSegments(_inkSegs, (uint)nSeg);
+                PressureInkDraws++;
+                _ctx2.DrawInk(ink, Brush(s.Color), _inkStyle);
+            }
+            finally { ink.Dispose(); }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // **出问题就整体退回等宽描边，绝不静默画成空白**——而且只报一次、
+            // 之后不再走这条路（否则每一帧都要抛一次，日志会被刷屏）。
+            InkAvailable = false;
+            InkNote = "运行中失败（" + ex.Message + "）→ 压感笔迹退回等宽描边";
+            Console.WriteLine("墨迹通道（ID2D1Ink）失败：" + ex.Message + " → 压感笔迹退回等宽描边");
+            return false;
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1454,6 +1745,11 @@ internal sealed class OverlayWindow : IDisposable
     {
         _app = app;
         s_frameNo++;
+
+        // 双曲线三步式的第一步：**只画渐近线、先不画曲线**（见 _auxOnlyStroke 那段说明）。
+        // 每帧在这里设一次——**只有真机渲染这条路会设**，导出/出图那条路不设，
+        // 免得半成品在导出时被误当成"该隐藏主体"的对象。
+        _auxOnlyStroke = app.HyperAsymptotePreviewOnly ? app.ActiveStroke : null;
 
         // 界面：先布局、该重画就重画一次，拿到这一帧的矩形。
         bool uiVisible = PrepareUi(app);
@@ -1677,12 +1973,21 @@ internal sealed class OverlayWindow : IDisposable
             if (app.SelRotating)
                 r.Add(CanvasRectToWindow(RotationReadoutRect(frame, dpi, CurrentRotationReadout(app)).Inflate(3f)));
 
-            // 拖端点时的倾斜角标签：挂在"正在拖的那个端点"上方，每帧都跟着指针走，
-            // 而且它在端点外侧、根本不在选中框里——漏了这一块就会在屏幕上留一行残影。
-            if (app.VertexDragging)
-                r.Add(CanvasRectToWindow(InclinationReadoutRect(
-                    app.VertexPreviewCanvasPoint, dpi,
-                    InclinationLabel(app.VertexInclinationDegrees)).Inflate(3f)));
+            // 拖定义元素 / 拖四角时的读数胶囊：挂在"正在拖的那个元素"上方，每帧都跟着指针走，
+            // 而且它在元素外侧、根本不在选中框里——漏了这一块就会在屏幕上留一行残影。
+            // **文案与绘制同一个函数**（圆的 `r = / d =`、直线的 `α = `、
+            // 吸住时的"等边/正方形"宽度都不一样）。
+            if (app.VertexDragging || app.ShapeSnapKind != ShapeSnapKind.None)
+            {
+                var pill = VertexPillRect(app);
+                if (!pill.IsEmpty) r.Add(CanvasRectToWindow(pill.Inflate(3f)));
+            }
+
+            // 多边形角标（规格 9.7）：三角形的**选中就显示**，而且每一颗都挂在顶点外侧
+            // （横着让到边的外面）、根本不在选中框里——不单独加进来就会被脏区裁掉，
+            // 屏幕上留下几行擦不掉的数字。**盒子和绘制走同一个函数**（FillAnglePills）。
+            for (int i = 0, np = FillAnglePills(app, _anglePills); i < np; i++)
+                r.Add(CanvasRectToWindow(_anglePills[i].Rect.Inflate(3f)));
         }
 
         // 画线过程中的 α 读数（用户 2026-09-18 四条之一）。
@@ -1838,6 +2143,11 @@ internal sealed class OverlayWindow : IDisposable
         g.Kind = src.Kind;
         g.Color = src.Color;
         g.Width = src.Width;
+        g.Dash = src.Dash;          // 线型也要跟着，不然拖一条虚线时预览会突然变实线
+        // **曲线朝向也必须跟着**：抛物线开了哪个口 / 双曲线哪条是实轴，
+        // 是这个对象几何的一部分。漏了它，拖动预览会按"默认那一档"画，
+        // 屏幕上就是"一个朝上的抛物线预览、松手变成朝右的"。
+        g.CurveAxis = src.CurveAxis;
         g.Transform = src.Transform;
         g.SetPoints(pts);           // 局部坐标：变换那一层仍由 g.Transform 负责
         DrawStroke(g);
@@ -1871,8 +2181,9 @@ internal sealed class OverlayWindow : IDisposable
         float dpi = app.DpiScale;
         var accent = new Color4(0f, 0.47f, 0.83f, 1f);      // #0078D4
 
-        // 选中一条**直线 / 箭头**时换个给手柄的方式（见下面第 4 步）：只给两个端点。
-        bool lineLike = SelectionHandles.EndpointEditable(sel, out var lineStroke);
+        // 单选一个"有定义元素的图形"（直线 / 箭头 / 圆 / 椭圆）时，手柄按定义元素给
+        // （见下面第 3、4 步）：两个或五个，而不是通用 8 个。
+        bool shapeLike = SelectionHandles.ShapeEditable(sel, out var shapeStroke);
 
         // 拖动 / 旋转期间的**装饰收敛**（方案 A）：手柄与操作条此刻点不中
         // （指针已被拖拽接管），留着就是"看得见、点不到"，还跟着内容一起晃。
@@ -1911,46 +2222,54 @@ internal sealed class OverlayWindow : IDisposable
             else DrawQuad(c0, c1, c2, c3, 2.5f);
         }
 
-        // 3) 旋转手柄（在上边中点外侧，先画连线再画圆）
+        // 3) 旋转手柄（在图形的上方外侧，先画连线再画圆）
         //    拖动中收起来，但**旋转中要留**（此刻它就是"正在抓的那个东西"）。
+        //    **圆不给旋转柄**（用户定："圆转了看不出来"）——画都不画，命中也一样。
         var white = Brush(new Color4(1f, 1f, 1f, 1f));
         if (!collapsed || app.SelRotating)
         {
-            float rotR = SelectionHandles.RotateGripLogical * 0.5f * dpi;
-            var rot = SelectionHandles.CanvasPosition(SelHandle.Rotate, frame, dpi);
-            // 连线的那一头：通用框用它上边中点；直线用**线段自己的中点**——
-            // 一条斜线的包围盒上边中点根本不在线上，连线看着像连到别的东西上去了。
-            var topCenter = lineLike
-                ? (SelectionHandles.EndpointCanvasPosition(lineStroke, 0)
-                 + SelectionHandles.EndpointCanvasPosition(lineStroke, 1)) * 0.5f
-                : SelectionHandles.CanvasPosition(SelHandle.Top, frame, dpi);
-            _ctx.DrawLine(topCenter, rot, _scratch, 1.4f);
-            _ctx.FillEllipse(new Ellipse(rot, rotR, rotR), white);
-            _ctx.DrawEllipse(new Ellipse(rot, rotR, rotR), _scratch, 1.6f);
-            // 圆里放**官方图标**，不是手画一段弧。
-            // 手画那版在投影上看像个"©"——旋转图标的识别特征就是那个箭头，
-            // 少一笔就不成形。这是"图标别自己画"的又一个实例。
-            float glyph = SelectionHandles.RotateGlyphLogical * dpi;
-            DrawIcon(IconPaths.rotate, rot.X - glyph * 0.5f, rot.Y - glyph * 0.5f, glyph, _scratch);
+            if (!shapeLike || SelectionHandles.RotateHandleVisible(shapeStroke))
+            {
+                float rotR = SelectionHandles.RotateGripLogical * 0.5f * dpi;
+                // 旋转柄的位置：直线/箭头/椭圆三种"定义元素图形"也用**通用框**的算法
+                // （框上边中点外再抬一段）——它只是个抓手，位置跟着框走最稳，不用另算一套。
+                var rot = SelectionHandles.CanvasPosition(SelHandle.Rotate, frame, dpi);
+                // 连线的那一头：通用框用它上边中点；图形用**它自己的中心**——
+                // 一条斜线的包围盒上边中点根本不在线上，连线看着像连到别的东西上去了。
+                var topCenter = shapeLike
+                    ? RotationGripAnchor(shapeStroke)
+                    : SelectionHandles.CanvasPosition(SelHandle.Top, frame, dpi);
+                _ctx.DrawLine(topCenter, rot, _scratch, 1.4f);
+                _ctx.FillEllipse(new Ellipse(rot, rotR, rotR), white);
+                _ctx.DrawEllipse(new Ellipse(rot, rotR, rotR), _scratch, 1.6f);
+                // 圆里放**官方图标**，不是手画一段弧。
+                // 手画那版在投影上看像个"©"——旋转图标的识别特征就是那个箭头，
+                // 少一笔就不成形。这是"图标别自己画"的又一个实例。
+                float glyph = SelectionHandles.RotateGlyphLogical * dpi;
+                DrawIcon(IconPaths.rotate, rot.X - glyph * 0.5f, rot.Y - glyph * 0.5f, glyph, _scratch);
+            }
         }
 
-        // 4) 手柄。两种给法：
-        //    · **直线 / 箭头**（单选）：只给两个端点手柄（图形"由定义元素给手柄"，
-        //      见 调研-图形工具.md 2.4）——8 个缩放柄对它不只是多余，还会改掉倾斜角；
-        //    · 其余（矩形 / 椭圆 / 图像 / 自由笔迹 / **多选**）：通用 8 手柄，一个字不改。
+        // 4) 手柄。两种给法（见 计划-图形工具.md 9.1）：
+        //    · **有定义元素的图形**（单选直线 / 箭头 / 圆 / 椭圆）：按**定义元素**给手柄——
+        //      直线/箭头/圆两个、椭圆五个（中心 + 四个轴端点）；椭圆**不给外角点**
+        //      （用户定：四个轴端点已经把拉伸给全了）。8 个缩放柄对它们是多余甚至是错的
+        //      （左右拉伸一条线会顺手改掉倾斜角；拉一个圆会把它拉成椭圆）。
+        //    · 其余（矩形 / 图像 / 自由笔迹 / **多选**）：通用 8 手柄，一个字不改。
+        //      矩形保留它们是因为它是唯一"拉了还是矩形"的图形（用户定）。
         //    白底 + 蓝边：深色背景上是白方块显眼，浅色背景上靠蓝边立住，一套画法两边都成立。
-        //    拖动 / 旋转 / 拖端点中收起来（此刻点不中，而且是最"晃眼"的一圈家具）。
+        //    拖动 / 旋转 / 拖元素中收起来（此刻点不中，而且是最"晃眼"的一圈家具）。
         if (!collapsed)
         {
             float hs = SelectionHandles.VisualSizeLogical * dpi;
             float radius = hs * 0.28f;
-            if (lineLike)
+            if (shapeLike)
             {
-                for (int slot = 0; slot < 2; slot++)
-                {
-                    var p = SelectionHandles.EndpointCanvasPosition(lineStroke, slot);
-                    DrawHandleSquare(p, hs, radius, white);
-                }
+                Span<ShapeHandle> handles = stackalloc ShapeHandle[5];
+                int n = SelectionHandles.ShapeHandlesOf(shapeStroke, handles);
+                for (int i = 0; i < n; i++)
+                    DrawHandleSquare(SelectionHandles.ShapeHandleCanvasPosition(shapeStroke, handles[i]),
+                                     hs, radius, white);
             }
             else
             {
@@ -1995,12 +2314,20 @@ internal sealed class OverlayWindow : IDisposable
             string readout = CurrentRotationReadout(app);
             DrawReadoutPill(RotationReadoutRect(frame, dpi, readout), readout, app.SelRotationSnapped);
         }
-        else if (app.VertexDragging)
+        else if (app.VertexDragging || app.ShapeSnapKind != ShapeSnapKind.None)
         {
-            string readout = InclinationLabel(app.VertexInclinationDegrees);
-            DrawReadoutPill(InclinationReadoutRect(app.VertexPreviewCanvasPoint, dpi, readout),
-                            readout, app.VertexInclinationSnapped);
+            // 拖的是**定义元素 / 四角**：直线/箭头读 α、圆读 r+d、椭圆读 a 或 b，
+            // 吸住特殊形状时改读"吸到了什么"（见 VertexReadoutLabel）。
+            // 三角形 / 平行四边形没吸住时**什么都不画**（它们的读数是下面的角标那一组）。
+            var pill = VertexPillRect(app);
+            if (!pill.IsEmpty)
+                DrawReadoutPill(pill, VertexReadoutLabel(app), VertexPillSnapped(app));
         }
+
+        // 7) 多边形读数（规格 9.7）：三角形的**三个内角**、平行四边形的**两个夹角**。
+        //    它不在上面那两个分支里，因为三角形的这一组**选中就显示**（用户定），
+        //    静止选中时也要画；平行四边形那一组只在拖顶点时出现（由 FillAnglePills 自己判）。
+        DrawAnglePills(app);
     }
 
     /// <summary>
@@ -2009,14 +2336,19 @@ internal sealed class OverlayWindow : IDisposable
     ///     不折角**（`405.0°` / `-135.0°` / `45.0°`）。写成纯数字而不是 `α = …` 是有意的：
     ///     405° 已经超出倾斜角的定义域（[0°,180°)），标成 α 反而错；而且用户说
     ///     "其他和原来的逻辑一样"，原来那套读数就是纯数字。
+    ///   · **单选一个图形**（矩形/椭圆/三角形/平行四边形）→ `姿态 = 0.0°`：这个图形
+    ///     **相对水平的姿态角**（折在 [0°,180°)，0° = 正的、90° = 竖的）。用户要的用途是
+    ///     "歪的椭圆/矩形，看着读数拖到 0° 就转正了"——所以它和 α 只是名字不同、长相一样。
     ///   · **其它情况** → Δ（`FormatDegrees`，整度）：一行都没改。
     /// **绘制与脏区都走它**，免得两边文案不一致
     /// （文案不一致 → 盒子宽度不一致 → 脏区盖不住标签 → 屏幕上留残影）。
     /// </summary>
     private static string CurrentRotationReadout(InkEngine app)
-        => app.SelRotationReadsInclination
-            ? SelectionHandles.FormatSignedDegrees(app.SelRotationInclination)
-            : RotationLabel(app);
+        => app.SelRotationReadsPose
+            ? SelectionHandles.FormatPose(app.SelRotationPose)
+            : app.SelRotationReadsInclination
+                ? SelectionHandles.FormatSignedDegrees(app.SelRotationInclination)
+                : RotationLabel(app);
 
     /// <summary>
     /// **画线过程中的 α 读数**：用户在拉这条线的时候就要看到它现在是多少度
@@ -2035,11 +2367,170 @@ internal sealed class OverlayWindow : IDisposable
     }
 
     /// <summary>
+    /// 旋转柄那根连线在**图形这一头**挂哪儿：
+    ///   · 直线 / 箭头：两个端点的中点（斜线的包围盒上边中点根本不在线上）；
+    ///   · 椭圆：它的**中心**（那是它自己的"中心"，框的中心在旋转后不是它）；
+    ///   · 三角形 / 平行四边形：三个（四个）顶点的**形心**——"多边形自己的中心"就是它，
+    ///     拿某一个顶点当挂点会让那根线看着像挂歪了。
+    /// 圆不给旋转柄，走不到这里。
+    /// </summary>
+    private static Vector2 RotationGripAnchor(Stroke s)
+    {
+        if (s.Kind == StrokeKind.Ellipse) return s.ShapeCenterLocal is var c
+            ? Vector2.Transform(c, s.Transform) : Vector2.Zero;
+        if (s.Kind is StrokeKind.Triangle or StrokeKind.Parallelogram && s.Points.Count >= 3)
+        {
+            var sum = new Vector2(s.Points[0].X, s.Points[0].Y)
+                    + new Vector2(s.Points[1].X, s.Points[1].Y)
+                    + new Vector2(s.Points[2].X, s.Points[2].Y);
+            if (s.Kind == StrokeKind.Parallelogram) sum += s.ParallelogramFourthLocal();
+            float n = s.Kind == StrokeKind.Parallelogram ? 4f : 3f;
+            return Vector2.Transform(sum / n, s.Transform);
+        }
+        var a = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.Anchor);
+        var r = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.Rim);
+        return (a + r) * 0.5f;
+    }
+
+    /// <summary>
+    /// 拖定义元素 / 拖四角时那颗胶囊的**文案**。五种量（α / r+d / a / b / 吸到了什么）
+    /// 都在这里成型，而且**绘制与脏区都调它**——文案一变宽窄就变，
+    /// 脏区按哪个文案算就得画哪个文案。**没有可显示的返回 null**（这一帧不画胶囊）。
+    ///
+    /// 优先级：**特殊形状吸附**（规格 9.6）> 老读数。理由是"吸到了什么"是**这一刻最有用的
+    /// 消息**——它回答"我这一下拖出了个什么形状"，而 α / a / b 只是当下这个数。
+    /// </summary>
+    private static string VertexReadoutLabel(InkEngine app)
+    {
+        if (app.ShapeSnapKind != ShapeSnapKind.None)
+            return SelectionHandles.ShapeSnapLabel(app.ShapeSnapKind);
+        return app.VertexReadout switch
+        {
+            // 圆：两个数一起给（半径是"拉多大"，直径是老师嘴里常说的那个数）
+            InkEngine.VertexReadoutKind.Radius =>
+                $"r = {app.VertexReadoutValue:F1}  d = {app.VertexReadoutSecondary:F1}",
+            InkEngine.VertexReadoutKind.AxisA => $"a = {app.VertexReadoutValue:F1}",
+            InkEngine.VertexReadoutKind.AxisB => $"b = {app.VertexReadoutValue:F1}",
+            // 抛物线：报课本里那个 p（焦点、准线都从它来，见 VertexReadoutKind 的注释）。
+            InkEngine.VertexReadoutKind.ParabolaP => $"p = {app.VertexReadoutValue:F1}",
+            // 双曲线：**说清是实半轴还是虚半轴**——方向一换，这两个名字会互换，
+            // 光写个 a / b 老师会在另一个朝向下看错（这是本族唯一一处"名字会漂"的地方）。
+            InkEngine.VertexReadoutKind.HyperbolaReal => $"a = {app.VertexReadoutValue:F1}（实半轴）",
+            InkEngine.VertexReadoutKind.HyperbolaImag => $"b = {app.VertexReadoutValue:F1}（虚半轴）",
+            // 正弦 / 余弦：峰点 / 谷点那两个手柄是**两个量一起动**的
+            //（纵向 = 振幅、横向 = 周期），所以两个数都报出来。
+            InkEngine.VertexReadoutKind.WavePeriod =>
+                $"T = {app.VertexReadoutValue:F1}  A = {app.VertexReadoutSecondary:F1}",
+            // 直线/箭头：倾斜角 α（[0°,180°)），和旋转读数 Δ 是两个数
+            InkEngine.VertexReadoutKind.Inclination => InclinationLabel(app.VertexReadoutValue),
+            // 三角形 / 平行四边形没吸住：这一颗胶囊没有可显示的量——它们要显示的是
+            // 内角 / 夹角，那是**另一组**角标（见 DrawAnglePills，第③轮）。
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// 拖定义元素 / 拖四角时那颗胶囊**占的那块矩形**（空 = 这一帧就没有胶囊）。
+    ///
+    /// 绘制与脏区都走它：文案、锚点、宽度三处**必须同源**——分开算的话，
+    /// 脏区按一个宽度算、画按另一个画，屏幕上就会剩下一条擦不掉的边。
+    /// 锚点也在这里定：吸住时贴"吸住的那个点"，否则贴被拖的元素。
+    /// </summary>
+    private RectF VertexPillRect(InkEngine app)
+    {
+        string text = VertexReadoutLabel(app);
+        if (string.IsNullOrEmpty(text)) return RectF.Empty;
+        var at = app.ShapeSnapKind != ShapeSnapKind.None
+            ? app.ShapeSnapAnchor
+            : app.VertexPreviewCanvasPoint;
+        return InclinationReadoutRect(at, app.DpiScale, text);
+    }
+
+    /// <summary>这颗胶囊是不是"吸出来的"（吸住时整块变强调色）。</summary>
+    private static bool VertexPillSnapped(InkEngine app)
+        => app.ShapeSnapKind != ShapeSnapKind.None || app.VertexInclinationSnapped;
+
+    // =====================================================================
+    //  多边形读数（规格 9.7）：三角形的三个内角 / 平行四边形的两个夹角
+    //
+    //  这一组不是"一颗胶囊"，是**好几颗**（最多三颗），所以另有一套"这一帧有哪些胶囊"
+    //  的收集函数：FillAnglePills。**画与脏区都只调它一次**——盒子的位置、大小、文案
+    //  全在那一份里定死，两边各算一份的话，脏区会按一个大小擦、按另一个大小画，
+    //  拖久了屏幕上就留一条边（选中框那一套 UI 踩过这个坑）。
+    //
+    //  **不再有"内角和"那一行**（用户 2026-09-19 定：显示和太乱）。为它服务的
+    //  0.1° 配平也一起撤了（见 SelectionHandles.PolygonAngles）。
+    // =====================================================================
+
+    /// <summary>一帧最多几颗角标：三角形三个角 / 平行四边形两个角。</summary>
+    private const int MaxAnglePills = 3;
+
+    /// <summary>一颗角标：盒子 + 文案 + 是不是小号（画与脏区共用同一个实例）。</summary>
+    private readonly struct AnglePill
+    {
+        public readonly RectF Rect;
+        public readonly string Text;
+        public readonly bool Small;
+        public AnglePill(in RectF rect, string text, bool small)
+        {
+            Rect = rect; Text = text; Small = small;
+        }
+    }
+
+    /// <summary>角标与角度的复用缓冲（每帧重填，不 new，理由同"手柄命中每帧都跑"那条）。</summary>
+    private readonly Vector2[] _angleVerts = new Vector2[4];
+    private readonly float[] _angleDegs = new float[3];
+    private readonly AnglePill[] _anglePills = new AnglePill[MaxAnglePills];
+
+    /// <summary>
+    /// 这一帧该画哪些角标（规格 9.7），返回几颗。**绘制与脏区唯一的来源。**
+    ///
+    /// 摆位规则：每个角标贴在它那个顶点的**外侧**，而且**只往左右放**（不往上下放）。
+    /// 两个理由，都是被现场那两样家具逼出来的：
+    ///   · 正上方那一块是**旋转柄**的（框上边中点往上 30 逻辑像素，柄 + 连线都在那儿）；
+    ///   · 正下方那一块是**操作条**的（框下边往下 14 逻辑像素，而且横跨整个选区宽度）。
+    /// 左右放还顺带保证了"不遮住要讲的那条边/那个顶点"：顶点就是图形在那一侧的最外点，
+    /// 让到它外面去，两条边和顶点都在视野里。
+    ///
+    /// 大小：一律小号字（贴在顶点旁边，太大了会压住那条边）。
+    /// </summary>
+    private int FillAnglePills(InkEngine app, Span<AnglePill> dst)
+    {
+        int n = app.FillAngleReadout(_angleVerts, _angleDegs);
+        if (n <= 0 || dst.Length < n) return 0;
+
+        float dpi = app.DpiScale;
+        var small = ReadoutFormatSmall(dpi);
+
+        // 形心：判"这个顶点在图形的哪一侧"，决定角标往左还是往右放。
+        // （三角形用三个顶点；平行四边形只报两角、就按那两个顶点的中点分左右，够用。）
+        var centroid = Vector2.Zero;
+        for (int i = 0; i < n; i++) centroid += _angleVerts[i];
+        centroid /= n;
+
+        for (int i = 0; i < n; i++)
+        {
+            string text = SelectionHandles.FormatAngleDegrees(_angleDegs[i]);
+            var place = _angleVerts[i].X >= centroid.X ? PillPlace.RightOf : PillPlace.LeftOf;
+            dst[i] = new AnglePill(
+                ReadoutPillRect(_angleVerts[i], dpi, text, 22f, 44f, small, place), text, true);
+        }
+        return n;
+    }
+
+    /// <summary>画那一组角标（盒子与文案来自 <see cref="FillAnglePills"/>，和脏区同一份）。</summary>
+    private void DrawAnglePills(InkEngine app)
+    {
+        int n = FillAnglePills(app, _anglePills);
+        for (int i = 0; i < n; i++)
+            DrawReadoutPill(_anglePills[i].Rect, _anglePills[i].Text, false, _anglePills[i].Small);
+    }
+
+    /// <summary>
     /// 倾斜角标签的文案（画它、按它量盒子宽度、进脏区，都走这一个函数）。
     ///
-    /// 参数是**那个要显示的 α**（三个来源：画线中 / 拖端点 / 单选直线拖旋转柄）——
-    /// 不在这里读 app 的状态，是因为"该显示哪个来源的 α"由调用点自己最清楚
-    /// （旋转那个分支还要决定读 α 还是 Δ，见 CurrentRotationReadout）。
+    /// 参数是**那个要显示的 α**（画线中 / 拖直线端点 / 单选直线拖旋转柄三个来源）——
+    /// 不在这里读 app 的状态，是因为"该显示哪个来源的 α"由调用点最清楚。
     /// </summary>
     private static string InclinationLabel(float degrees)
         => SelectionHandles.FormatInclination(degrees);
@@ -2063,8 +2554,10 @@ internal sealed class OverlayWindow : IDisposable
     /// 抽出来是因为两处必须**长得一模一样**：它们会在同一条直线上先后出现
     /// （先转一下、再拖端点），样式差一点用户就会以为是两种东西。
     /// <paramref name="snapped"/> 为真时整块用强调色——"这个数是吸出来的"。
+    /// <paramref name="small"/> 为真时用小一号字（三角形的三个**角标**：
+    /// 它们贴在顶点旁边，太大了会压住那条边）。
     /// </summary>
-    private void DrawReadoutPill(in RectF label, string text, bool snapped)
+    private void DrawReadoutPill(in RectF label, string text, bool snapped, bool small = false)
     {
         // **这里要的是"缩放倍数"（96 DPI 基准），不是 Dpi 那个原始值**：
         // Dpi 是窗口的物理 DPI（200% 屏上就是 192），拿它去 CreateTextFormat
@@ -2086,7 +2579,7 @@ internal sealed class OverlayWindow : IDisposable
         _scratch.Color = snapped
             ? new Color4(1f, 1f, 1f, 1f)
             : _app.FloatingTheme.Text;
-        _ctx.DrawText(text, ReadoutFormat(dpi),
+        _ctx.DrawText(text, small ? ReadoutFormatSmall(dpi) : ReadoutFormat(dpi),
                       // 注意：Vortice 的 Rect(x, y, width, height) 是"位置 + 尺寸"，
                       // 不是 (left, top, right, bottom)。写错的话文字会被排到很远的
                       // 地方去（居中排版时直接跑到屏幕外），看起来就像"字没画出来"。
@@ -2135,6 +2628,27 @@ internal sealed class OverlayWindow : IDisposable
     }
 
     /// <summary>
+    /// **角标**用的小号文字格式（11 逻辑像素，比主读数小一号）。
+    ///
+    /// 和 <see cref="ReadoutFormat"/> 同一套按 DPI 生成 + 缓存的写法（理由见那里）：
+    /// 量盒子和画字必须用**同一个格式**，量出来的宽度才和画出来的一致。
+    /// </summary>
+    private IDWriteTextFormat ReadoutFormatSmall(float dpi)
+    {
+        float px = MathF.Max(9f, MathF.Round(11f * dpi));
+        if (_readoutFormatSmall == null || _readoutFormatSmallPx != px)
+        {
+            _readoutFormatSmall?.Dispose();
+            _readoutFormatSmall = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _readoutFormatSmall.TextAlignment = TextAlignment.Center;
+            _readoutFormatSmall.ParagraphAlignment = ParagraphAlignment.Center;
+            _readoutFormatSmallPx = px;
+        }
+        return _readoutFormatSmall;
+    }
+
+    /// <summary>
     /// 操作条（九格）：收起 / 颜色 / 锁定 / 层级 / 导出 / 复制 / 左右翻转 / 上下翻转 / 删除。
     /// 顺序的语义见 <see cref="SelBarButton"/>；这一层只负责画。
     ///
@@ -2175,7 +2689,12 @@ internal sealed class OverlayWindow : IDisposable
             var kind = (SelBarButton)i;
             bool hot = app.SelBarHover == i;
             bool active = IsBarButtonActive(app, kind);
-            bool disabled = false;    // 导出**接上了**（2026-09-17）：不再压暗
+            // 禁用（图标改用 theme.TextMuted）：九格都是通用操作（收起/颜色/锁定/层级/
+            // 导出/复制/翻转×2/删除），对任何选中对象都成立，所以**当前没有一格会灰**。
+            // 这一格留着是给"以后真需要禁用"的位置——2026-09-20 加过又撤掉的
+            // 「开口方向」就是靠它灰的（现在那格整个没了，朝向改到图形面板里定，
+            // 见 Engine.CycleParabolaAxis）。
+            bool disabled = false;
 
             // 悬停 / 激活的底：参考实现就是这么做的（浅色圆角底 + 图标加深）。
             if (hot || active)
@@ -2228,6 +2747,7 @@ internal sealed class OverlayWindow : IDisposable
         SelBarButton.Delete => IconPaths.delete,
         _ => IconPaths.layer,
     };
+
 
     /// <summary>这一格是"激活"状态吗（面板开着 / 模式开着）。</summary>
     private static bool IsBarButtonActive(InkEngine app, SelBarButton b) => b switch
@@ -2403,23 +2923,44 @@ internal sealed class OverlayWindow : IDisposable
         _scratch.Color = th.ActiveBg;
         _ctx.DrawEllipse(new Ellipse(new Vector2(kx, cy), 7f * dpi, 7f * dpi), _scratch, 1.8f * dpi);
 
-        // ---- ②③ 线型：实线 / 虚线 ----
-        for (int i = 0; i < 2; i++)
+        // ---- ②③ 线型：实线 / 虚线 / 点线 ----
+        // 当前是哪一档**由 SelectionHandles 统一算**（见 DashOfSelection 的注释：
+        // 画和自检必须读同一份，不然"面板认不认得当前档"这件事自己验不了自己）。
+        var curDash = SelectionHandles.DashOfSelection(app.Doc.Selected);
+        for (int i = 0; i < SelectionHandles.StyleCellCount; i++)
         {
             var cell = SelectionHandles.StyleCellRect(i, sel, dpi, app.ViewportCanvas, sc);
-            bool solid = i == 0;
-            _scratch.Color = solid ? th.Hover : th.Panel;                   // 虚线禁用（底层还没做）
-            float cr = 7f * dpi;
-            _ctx.FillRoundedRectangle(new RoundedRectangle(
-                new Vortice.RawRectF(cell.MinX, cell.MinY, cell.MaxX, cell.MaxY), cr, cr), _scratch);
+            var dash = (StrokeDash)i;             // 格序 = 线型取值，见 StyleCellRect 的注释
+            bool active = dash == curDash;
 
-            float lx0 = cell.MinX + 10f * dpi, lx1 = cell.MaxX - 10f * dpi;
+            // 当前档：浅底 + **强调色描边**。光靠浅底不够显眼——用户 2026-09-19 报的
+            // "实线和虚线好像不能选中"，最可能看到的就是"这一行没有哪一格像被选中的样子"。
+            // 描边这一招和滑条那个当前档的圆钮、色板那个当前色的环是同一套语言。
+            // 不再用 th.Hover：那是**悬停**色，拿它表示"选中"本身就串了。
+            _scratch.Color = th.Panel;
+            float cr = 7f * dpi;
+            var cellRect = new Vortice.RawRectF(cell.MinX, cell.MinY, cell.MaxX, cell.MaxY);
+            _ctx.FillRoundedRectangle(new RoundedRectangle(cellRect, cr, cr), _scratch);
+            if (active)
+            {
+                _scratch.Color = th.ActiveBg;
+                _ctx.DrawRoundedRectangle(new RoundedRectangle(cellRect, cr, cr), _scratch, 1.6f * dpi);
+            }
+
+            // 格子里画**这一档真实的样子**（一条整线 / 一段一段 / 一小点一小点）：
+            // 老师看的是"哪格是虚线"，画个文字标签反而要多认一眼。
+            float lx0 = cell.MinX + 9f * dpi, lx1 = cell.MaxX - 9f * dpi;
             float ly = (cell.MinY + cell.MaxY) * 0.5f;
-            _scratch.Color = solid
-                ? th.Text
-                : new Color4(th.TextMuted.R, th.TextMuted.G, th.TextMuted.B, 0.55f);
-            if (solid) _ctx.DrawLine(new Vector2(lx0, ly), new Vector2(lx1, ly), _scratch, 2.6f * dpi);
-            else DrawDashed(new Vector2(lx0, ly), new Vector2(lx1, ly), 2.6f * dpi);
+            _scratch.Color = active ? th.Text : th.TextMuted;
+            var a = new Vector2(lx0, ly);
+            var b = new Vector2(lx1, ly);
+            float lw = 2.6f * dpi;
+            switch (dash)
+            {
+                case StrokeDash.Dashed: DrawDashed(a, b, lw); break;
+                case StrokeDash.Dotted: DrawDotted(a, b, lw); break;
+                default: _ctx.DrawLine(a, b, _scratch, lw); break;
+            }
         }
 
         // ---- ④ 色板 ----
@@ -2601,12 +3142,30 @@ internal sealed class OverlayWindow : IDisposable
         DrawDashed(d, a, width);
     }
 
-    private void DrawDashed(Vector2 a, Vector2 b, float width)
+    private void DrawDashed(Vector2 a, Vector2 b, float width) => DrawDashes(a, b, width, 7f, 5f);
+
+    /// <summary>
+    /// 点线（线型那一行的第 3 格）：节**短**、缝比节长，才看得出是"一点一点"
+    /// 而不是"很短的一段段"。
+    /// </summary>
+    private void DrawDotted(Vector2 a, Vector2 b, float width) => DrawDashes(a, b, width, 2f, 4.5f);
+
+    /// <summary>
+    /// 手工画虚线 / 点线，<paramref name="dash"/> 与 <paramref name="gap"/> 是**逻辑**像素。
+    ///
+    /// 为什么这里手工画、不用 <see cref="Dashed"/> 那条 D2D 描边样式：
+    /// 这个函数画的是**界面上的小预览**（选中框四角、线型格子里的那一段），
+    /// 用的是"一条直线段"而不是图形几何，预览要的是"一眼看出虚实"，
+    /// 固定节长比"按笔宽成比例"更可控。
+    /// **画布上的图形走 D2D 原生样式**（见 <see cref="StyleFor"/>），两条路各自最合适。
+    /// </summary>
+    private void DrawDashes(Vector2 a, Vector2 b, float width, float dash, float gap)
     {
         float len = Vector2.Distance(a, b);
         if (len < 0.5f) return;
         var dir = (b - a) / len;
-        float dash = 7f * Dpi / 96f, gap = 5f * Dpi / 96f;
+        float k = Dpi / 96f;
+        dash *= k; gap *= k;
         for (float t = 0; t < len; t += dash + gap)
         {
             float t1 = MathF.Min(t + dash, len);
@@ -3226,12 +3785,14 @@ internal sealed class OverlayWindow : IDisposable
         _brushes.Clear();
         _scratch?.Dispose();
         _readoutFormat?.Dispose();
+        _readoutFormatSmall?.Dispose();
         _hudFormat?.Dispose();
         _hudSource?.Dispose();
         _hudTarget?.Dispose();
         _hudBmpTex?.Dispose();
         _tiles?.Dispose();
         _backBuffer?.Dispose();
+        _inkStyle?.Dispose();          // 墨迹笔尖样式（压感变宽那条路）
         _ctx?.Dispose();
         _visual?.Dispose();
         _target?.Dispose();

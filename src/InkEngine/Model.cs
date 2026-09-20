@@ -28,6 +28,107 @@ public enum Tool
     /// 取舍与调研见 调研-橡皮擦.md。
     /// </summary>
     PixelEraser = 10,
+
+    /// <summary>
+    /// 圆（2026-09-19 第二批）：按下 = **圆心**、拖出去 = 半径。
+    ///
+    /// 和 <see cref="Ellipse"/> 是两个工具，不是"一个工具的两档"：椭圆的定义元素是
+    /// **中心 + 两条半轴**（要能分别拉长拉短），圆的定义元素是**圆心 + 半径**（拉哪边都一样）。
+    /// 用户看到的也是两件事："画个正圆"和"画个椭圆"。
+    /// </summary>
+    Circle = 11,
+
+    /// <summary>
+    /// 三角形（2026-09-19 第二批第②步）：和其余图形同一套"**一按一拖**"——
+    /// 按下拖出一个外框，松手得到"底边水平、左右对称"的三角形（见 <see cref="StrokeKind.Triangle"/>）。
+    /// </summary>
+    Triangle = 12,
+
+    /// <summary>
+    /// 平行四边形（2026-09-19 第二批第②步）：一按一拖出来的底边水平、上边右移 1/4 宽的
+    /// 平行四边形（见 <see cref="StrokeKind.Parallelogram"/>）。
+    /// </summary>
+    Parallelogram = 13,
+
+    /// <summary>
+    /// 坐标系（2026-09-19 第三批）：一按一拖定**外框**，得到一个十字轴
+    /// （x 轴向右、y 轴向上，正方向端带箭头）＋ 等距刻度线（见 <see cref="StrokeKind.Coordinate"/>）。
+    ///
+    /// 为什么老师要它：每讲一次函数就要画一次，而且是"画完还得标刻度"的活。
+    /// 刻度**数字**这一轮不做（用户 2026-09-19 定："高中数学坐标系画的时候很少会用到这个刻度，
+    /// 到时候也会简单标一下"）——所以就没有"往内容层写字"这套地基的负担。
+    /// </summary>
+    Coordinate = 14,
+
+    /// <summary>
+    /// 数轴（2026-09-19 第三批）：一按一拖得到一条**水平**直线（右端带箭头）＋ 等距刻度线。
+    /// 初高中的不等式、区间、集合都从数轴开始画（见 <see cref="StrokeKind.NumberLine"/>）。
+    /// </summary>
+    NumberLine = 15,
+
+    /// <summary>
+    /// 抛物线（2026-09-20 第四批）：按下 = **顶点**，拖出去 = **开口控制点**
+    /// （一次定下"半宽"和"深度"）。
+    ///
+    /// **四种开口（上 / 下 / 左 / 右）不是四个工具**，而是对象自己的
+    /// <see cref="Stroke.CurveAxis"/> 那一档（见 <see cref="CurveAxis"/> 的注释）：
+    /// 四种开口共用的定义元素、手柄、命中、存档全都一模一样，差别只在
+    /// "谁是自变量"这一件事上——那就是一个属性，不是一种新图形。
+    /// </summary>
+    Parabola = 16,
+
+    /// <summary>
+    /// 双曲线（2026-09-20 第四批）：按下 = **中心**，拖出去 = **外角点**
+    /// （`a = |Δx|`、`b = |Δy|`，和椭圆同一套存法）。
+    ///
+    /// 方向（实轴沿 x / 沿 y）同样由 <see cref="Stroke.CurveAxis"/> 决定。
+    /// **注意方向换了之后实半轴 / 虚半轴的语义会互换**，手柄读数和命名必须跟着换
+    /// （见 <see cref="Stroke.HyperbolaALocal"/>）。
+    /// </summary>
+    Hyperbola = 17,
+
+    /// <summary>
+    /// 正弦（2026-09-20 第四批）：**一个周期**的正弦图象。
+    ///
+    /// 按下 = **图象起点**（第一个零点，也就是老师画的那条 y 轴所在的位置），
+    /// 往右拖 = 一个周期宽 ＋ 振幅。他想要两三个周期，就并排画两三条——
+    /// 这个对象画出来**就是一个周期**，这正是课本上要的那个形状。
+    /// </summary>
+    Sine = 18,
+
+    /// <summary>
+    /// 余弦（2026-09-20 第四批）：同正弦，只是**起点在峰顶**（`f(0) = 1`）——
+    /// 老师把 y 轴画在哪个位置，那个位置就是峰。
+    /// </summary>
+    Cosine = 19,
+
+    /// <summary>
+    /// **圆柱**（2026-09-20 第五批：照 InkClass 的 `case 6` 搬过来）：
+    /// 按下 → 拖出**外接矩形**（左右 = 直径、上下 = 母线长），松手就成。
+    /// 顶面画整圈、底面只画看得见的下半圈，被挡住的上半圈走**虚线**（辅助几何槽）。
+    /// </summary>
+    Cylinder = 20,
+
+    /// <summary>
+    /// **圆锥**（照 InkClass 的 `case 7`）：同样一次拖出外接矩形，
+    /// 顶点 = 矩形**上边中点**，底面椭圆只画下半圈（上半圈虚线），两条母线连到顶点。
+    /// </summary>
+    Cone = 21,
+
+    /// <summary>
+    /// **长方体**（2026-09-20 第五批：照 InkClass 的 `case 9`，**两笔**）：
+    /// 第 1 笔拖出**正面矩形**，第 2 笔拖出**深度**（往后上方 45° 退）。
+    /// 三个控制点 = 正面矩形两角 ＋ **背面右下角**（它同时把深度记下来，见 `SetCuboidDepth`）。
+    /// 背面被挡住的三条棱（背面下横、斜左下、背面左竖）走**虚线**（辅助几何槽）。
+    /// </summary>
+    Cuboid = 22,
+
+    /// <summary>
+    /// **四面体**（照 InkClass 的 `case 26`，**两笔**）：第 1 笔拖出**底面三角形**
+    ///（底边水平、顶点居中向上），第 2 笔拖出**顶点**。四个控制点 = 底面三点 ＋ 顶点。
+    /// 他的画法里**没有虚线棱**（六条棱全实线），我们照旧。
+    /// </summary>
+    Tetrahedron = 23,
 }
 
 /// <summary>An axis-aligned rectangle in virtual-desktop pixels.</summary>
@@ -166,6 +267,291 @@ internal enum StrokeKind
     Arrow = 4,
     /// <summary>图像对象（截图 / 粘贴）。像素挂在 <see cref="Stroke.Image"/> 上。</summary>
     Image = 5,
+
+    /// <summary>
+    /// 圆（2026-09-19 加）。
+    ///
+    /// 和直线**同构**：`Points` = **圆心 ＋ 圆周点**（就 2 个点）。
+    /// 于是存档 / 变换 / 剪贴板 / 撤销 / "改几何"那条动作全部白拿——这也是规格里
+    /// 选这个存法的理由（见 计划-图形工具.md 9.2）。
+    /// 半径 = 这两点的距离；圆心 = 第一个点。
+    /// </summary>
+    Circle = 6,
+
+    /// <summary>
+    /// 三角形（2026-09-19 第二批第②步）。
+    ///
+    /// `Points` = **三个顶点**，顺序固定为 **上中 / 下左 / 下右**（见 计划-图形工具.md 9.4）：
+    /// 画出来是"底边水平、左右对称"的形状，之后拖顶点精调成任意三角形。
+    /// 三个点都是**真的顶点**（不是"外框的两个对角点"那种参数），所以紧框、轮廓折线、
+    /// 顶点手柄三处直接读它们，不需要再做任何换算。
+    /// </summary>
+    Triangle = 7,
+
+    /// <summary>
+    /// 平行四边形（2026-09-19 第二批第②步）。
+    ///
+    /// `Points` = **三个顶点**（底左 / 底右 / 顶左），**第四个 = `第2 + 第3 − 第1`**
+    /// ——自动推导、**不存**（用户定，见 计划-图形工具.md 9.5）。
+    /// 于是"永远不可能是歪的四边形"这件事是**存法本身**保证的，不是拖动时去校正的；
+    /// 代价是第四个角没有手柄（它是算出来的，拖它没有意义）。
+    /// </summary>
+    Parallelogram = 8,
+
+    /// <summary>
+    /// 坐标系（2026-09-19 第三批）。
+    ///
+    /// `Points` = **三个定义元素**：
+    ///   · `[0]` **外框的一角**
+    ///   · `[1]` **外框的对角**
+    ///   · `[2]` **原点 O**
+    ///
+    /// **为什么外框要占两个点、不能"以原点为中心推"**：推的话拖原点就会把整个框带着走，
+    /// 而老师最常用的动作恰恰是"框画完之后把原点挪到左下角，只留第一象限"。
+    /// 范围和原点两样东西互相独立，所以各占一个定义元素。
+    ///
+    /// 画出来：x 轴过 O 水平贯穿外框、y 轴过 O 竖直贯穿外框，正方向端各一个箭头。
+    /// **没有刻度**（用户 2026-09-19 定："数轴和坐标系上面的刻度太多了……不需要刻度"）
+    /// ——早先那一版有刻度、还多一个"单位长度点"，刻度撤掉之后那个点就没有任何
+    /// 可见作用了（拖了看不出变化），于是**一起撤掉**：画都不画的东西不该还占个手柄。
+    /// 仍然保留的是那个**可选网格**（默认关，见 <see cref="Stroke.Grid"/>），
+    /// 它的间距**现算**（外框短边 ÷ 4，见 <see cref="AxisGridStepLocal"/>），不再存。
+    ///
+    /// **不给旋转柄**（把坐标系转歪了不是老师要的东西，见 RotateHandleVisible）。
+    /// </summary>
+    Coordinate = 9,
+
+    /// <summary>
+    /// 数轴（2026-09-19 第三批）。
+    ///
+    /// `Points` = **两个定义元素**：`[0]` 左端、`[1]` 右端，而且**两点 y 恒相等**
+    /// （拖端点只改 x，见 <see cref="SetAxisBox"/>）——数轴歪了就不是数轴了。
+    ///
+    /// 画出来：一条水平线 ＋ 右端一个箭头。**没有刻度**（用户 2026-09-19 定）。
+    /// 早先那一版是四个点（左右端 + 零点 + 单位长度点）＋ 等距刻度，刻度撤掉之后
+    /// "零点"和"单位长度点"就都没有可见作用了，于是缩回两个点。
+    ///
+    /// 于是它和"箭头工具"的差别只剩一条，但正是要害的那一条：**永远水平**。
+    /// 不等式的解集、区间这些场景里，老师要的就是"一条不会画歪的轴"。
+    /// </summary>
+    NumberLine = 10,
+
+    /// <summary>
+    /// 抛物线（2026-09-20 第四批）。
+    ///
+    /// `Points` = **两个定义元素**：
+    ///   · `[0]` **顶点 V**（"开口那个尖"，也是位置的锚点）；
+    ///   · `[1]` **开口控制点 C**（它落在曲线的一个端点上，一次定下"半宽"和"深度"）。
+    ///
+    /// **朝上 / 朝下 / 朝左 / 朝右**由 <see cref="Stroke.CurveAxis"/> 决定，不是四个种类
+    /// （理由见 <see cref="CurveAxis"/> 的注释）。两种开口共用的东西：
+    ///   · 定义元素永远只有这两个点，`C` 一律被夹进"它该在的那个象限"（见 SetCurveBox），
+    ///     所以几何里可以直接用带符号的差值，不需要到处判方向；
+    ///   · 紧框 = "顶点 ↔ 控制点"那个矩形（开口朝上时它正好是曲线的最小外接）。
+    /// </summary>
+    Parabola = 11,
+
+    /// <summary>
+    /// 双曲线（2026-09-20 第四批）。
+    ///
+    /// `Points` = **两个定义元素**，和椭圆**完全同构**：
+    ///   · `[0]` **中心 O**；
+    ///   · `[1]` **外角点 E**，`a = |E.x − O.x|`、`b = |E.y − O.y|`（都夹成非负，见 SetCurveBox）。
+    ///
+    /// 实轴沿 x / 沿 y 由 <see cref="Stroke.CurveAxis"/> 决定：
+    ///   · <see cref="CurveAxis.TransverseX"/>：`x²/a² − y²/b² = 1`，两支左右张开，顶点在 `(±a, 0)`；
+    ///   · <see cref="CurveAxis.TransverseY"/>：`y²/a² − x²/b² = 1`，两支上下张开，顶点在 `(0, ±a)`。
+    ///
+    /// **两个朝向里 `a` / `b` 的角色会互换**（一个永远是"实半轴"、另一个是"虚半轴"）：
+    ///   · 几何只认"**x 方向的半宽 = a**、**y 方向的半高 = b**"这一套坐标事实，不认虚实；
+    ///   · "谁叫实半轴"只在**读数文案**里体现（见 Engine 的 UpdateVertexReadout）——
+    ///     几何与命名各归各的，是这里最容易出错的地方（自检里专门钉了这条）。
+    ///
+    /// 画出来的两支**有截断**：`|t| ≤ asinh 2`，即每支画到 `|y| = 2b`（横向）或
+    /// `|x| = 2b`（纵向）为止——双曲线是无限延伸的，不截断就没法存包围盒、也没法估脏区。
+    /// **渐近线这一批不画**（要"一条几何两种线型"，属渲染地基，见 计划-图形工具.md 11.4）。
+    /// </summary>
+    Hyperbola = 12,
+
+    /// <summary>
+    /// 正弦 / 余弦的**一个周期**（2026-09-20 第四批，两个种类共用一套画法）。
+    ///
+    /// `Points` = **三个定义元素**：
+    ///   · `[0]` **起点 P0**（余弦是峰顶、正弦是零点——也就是老师画的那条竖线所在处）；
+    ///   · `[1]` **周期末端 P1**（一个周期之后回到同一条水平线上，所以 `P1.y == P0.y`）；
+    ///   · `[2]` **极值点 P2**：正弦取**峰**、余弦取**谷**。
+    ///
+    /// 三个点各管一个量，所以三个手柄的语义是单值的：
+    ///   · 拖 P0 = 整条平移；拖 P1 = **只改周期**；拖 P2 = **只改振幅**。
+    ///
+    /// 为什么不像椭圆那样"中心 ＋ 外角点"（2026-09-20 用户改的口径）：
+    /// 老师是**从 y 轴起笔**画这条曲线的，中心法会让曲线先往左伸出一截、
+    /// 起笔的位置也不是曲线的起点，画出来"不是他按下的那个样子"。
+    /// </summary>
+    Sine = 13,
+
+    /// <summary>余弦：同 <see cref="Sine"/>，只是起点在峰顶（`f(0) = 1`，见那里的注释）。</summary>
+    Cosine = 14,
+
+    /// <summary>
+    /// **圆柱**（2026-09-20 第五批）：两个控制点 = **外接矩形的两个角**（拖到哪就是哪）。
+    ///
+    /// 和椭圆一样是"外框定形"的一族，但它的几何是**三个图元**：
+    ///   ① 顶面椭圆（整圈，实线）；② 底面椭圆的下半圈（实线）；③ 两条母线（实线）。
+    /// 底面被挡住的上半圈走**虚线**——那就是辅助几何槽（`Geometry2`）的第二个用户
+    ///（第一个是双曲线的渐近线）：一个对象两种线，见 计划-图形工具.md §11.4。
+    /// </summary>
+    Cylinder = 15,
+
+    /// <summary>圆锥：同 <see cref="Cylinder"/> 的一族（外接矩形定形），只是没有顶面、顶点在上边中点。</summary>
+    Cone = 16,
+
+    /// <summary>
+    /// **长方体**（2026-09-20 第五批）：三个控制点 = 正面矩形两角 ＋ 背面右下角
+    ///（见 <see cref="SetCuboidDepth"/>——存这个角而不是"指针原样"，是为了让
+    /// **控制点外接正好就是画出来的范围**，包围盒不用另算一份）。
+    ///
+    /// 两笔：正面矩形 → 深度。背面被挡住的三条棱是虚线（辅助几何槽）。
+    /// </summary>
+    Cuboid = 17,
+
+    /// <summary>四面体：四个控制点 = 底面三角形三点 ＋ 顶点；六条棱全实线（照 InkClass）。</summary>
+    Tetrahedron = 18,
+}
+
+/// <summary>
+/// **曲线的朝向**（2026-09-20 第四批：抛物线的四种开口 / 双曲线的两个方向）。
+///
+/// 为什么是一个**属性**，不是四个 `Kind`、也不是四个工具：
+///   · 同一族的四种开口共用全部东西——定义元素、手柄、命中、存档、几何构建，
+///     差别只有"谁是自变量"这一件事，而这正好是属性的形状；
+///   · 它**必须跟着对象走**（进存档）：存到文件、复制粘贴、发给别人之后朝向都不该变
+///     （和 <see cref="StrokeDash"/>、<see cref="Stroke.Grid"/> 是同一条理由：
+///     对象要自包含，全局开关换个机器就全变样了）；
+///   · 四个 `Kind` 的话，加一种开口就要重走一遍"存档升版 ＋ 手柄名单 ＋ 图标"，
+///     而它们其实是同一件事的四档。
+///
+/// 取值就是存档里的字节（见 InkSerializer v11）。读端**只认下面这几个值**，
+/// 读到别的值一律退到 `OpenUp`——一个坏字节不该让整条曲线画成说不清的东西。
+/// </summary>
+public enum CurveAxis
+{
+    /// <summary>抛物线：**开口向上**（`y = ax²`，a &gt; 0 那一支，屏幕上是个"∪"）。默认值。</summary>
+    OpenUp = 0,
+    /// <summary>抛物线：**开口向下**（"∩"）。</summary>
+    OpenDown = 1,
+    /// <summary>抛物线：**开口向右**（课本里的 `y² = 2px`，p &gt; 0 就是它）。</summary>
+    OpenRight = 2,
+    /// <summary>抛物线：**开口向左**（`y² = −2px`）。</summary>
+    OpenLeft = 3,
+
+    /// <summary>双曲线：**实轴沿 x**（`x²/a² − y²/b² = 1`），两支左右张开。默认值。</summary>
+    TransverseX = 4,
+    /// <summary>双曲线：**实轴沿 y**（`y²/a² − x²/b² = 1`），两支上下张开。</summary>
+    TransverseY = 5,
+}
+
+/// <summary>
+/// 线型（2026-09-19 加，用户定：**做成属性，不做成工具**）。
+///
+/// **为什么不做成工具**（不像 InkClass 那样"虚线直线""虚线圆"各占一个图标）：
+/// InkClass 里一切都是笔迹、**画完就改不了**，线型必须在落笔前选好，所以只能一种线型一个图标；
+/// 我们的图形是**对象**，线型事后能改，一个工具就够——上带仍然 7 段，不多占格子。
+///
+/// **范围**：一开始只是"图形"（直线/箭头/矩形/圆/椭圆/三角形/平行四边形/坐标系），
+/// 2026-09-19 之后**自由笔迹也有**：用户要求"笔的色带条上要有虚实线切换"，
+/// 并且报"选中一条笔迹再点虚线毫无反应"（那正是引擎里 `Freehand` 被跳过造成的）。
+/// 于是"画之前选"（色带条上的按钮 → <c>Engine.PenDash</c>）和"画之后改"
+/// （操作条面板 → <c>SetSelectionDash</c>）两条路对笔迹都通了。
+///
+/// 取值就是存档里的字节（见 InkSerializer v8），**不要改已有的 0/1/2 编号**。
+/// </summary>
+public enum StrokeDash
+{
+    /// <summary>实线。也是 ≤ v7 老存档的取值（老文件读进来一律实线）。</summary>
+    Solid = 0,
+    /// <summary>虚线（辅助线、渐近线、延长线最常用）。</summary>
+    Dashed = 1,
+    /// <summary>点线（比虚线更轻，画"参考用"的线）。</summary>
+    Dotted = 2,
+}
+
+/// <summary>
+/// **压力 → 笔宽** 的映射（2026-09-20 加）。**全引擎唯一一份**：
+/// 渲染（逐点半径）、湿墨轨迹（逐点半径）、紧框 / 命中 / 橡皮（按最粗处）都问它。
+///
+/// 口径**对齐 WPF / Windows Ink**，而且是**从实测图上反推**出来的——
+/// 用户在同一个程序的同一支笔下画了三条线（鼠标 / 轻轻描 / 重重压），我们逐像素量的：
+///
+/// ```
+/// 宽度 = 档位宽度 × clamp(Max × 压力, Min, Max)      // 默认 Max = 2.0、Min = 0.10、线性
+/// ```
+///
+/// | 线 | 实测宽度 | 相对鼠标 | 反推压力 |
+/// |---|---|---|---|
+/// | 鼠标（无压感） | 18.0 px | 1.00× | **0.50** |
+/// | 笔·轻轻描 | 6.0 px | **0.33×** | ≈ 0.17 |
+/// | 笔·重重压 | 31.0 px | **1.72×** | ≈ 0.86 |
+/// | （满压外推） | ≈36 px | **≈2.00×** | 1.00 |
+///
+/// 三条推理依据：
+///   ① **鼠标那条落在压力 0.5 处**：WPF 官方文档对 `StylusPoint.PressureFactor` 写得很死
+///      ——"**The default value is 0.5**"，无压感设备（鼠标）就用这个中值。
+///      所以"鼠标画的那条线"是**一半压力**的参照物，**不是满压**；
+///   ② 于是 **满压 ≈ 2 × 鼠标宽度**：重压那条实测就是鼠标的 1.72 倍（对应压力 0.86），
+///      反推 p = 1 时是 2.0 倍——**上限必须大于 1**，否则"重压比鼠标粗"这件事根本画不出来；
+///   ③ **没有 50% 地板**：上一张图里重写的两笔从 30 px 一路**收成尖**，
+///      0.5 的地板（= 半个标称宽）会把它截在 18 px 上，收不出尖。
+///
+/// **被排除的口径**：一开始抄的是老的 Tablet PC（`Microsoft.Ink`）文档那句
+/// "最大压力 = 150%、最小 = 50%"。那是**另一套栈**：上限 1.5 倍 < 实测的 1.72 倍，
+/// 而且 p = 0.5 处是"最粗"的，解释不了"鼠标那条比重压细"。
+/// 抄文档没错——**错在抄错了是哪一套栈**：`System.Windows.Ink`（WPF）
+/// 不是 `Microsoft.Ink`（Tablet PC / `InkCollector` 那一套）。
+///
+/// 三个可调项（都从命令行来，见 Engine 的 `--pressrange` / `--nopressure`）：
+///   · <see cref="Min"/> / <see cref="Max"/>：动态范围（两个都取 1 = 压感不改变粗细）；
+///   · <see cref="Gamma"/>：曲线（1 = 线性；&gt;1 把轻压区间压扁 = 更"压得住"）。
+///
+/// 处理顺序照调研的结论：**阈值 → 曲线 → 平滑**。平滑不在这一层做——它是"按点序列"的事，
+/// 放在渲染取点那一步（<c>Overlay.DrawPressureInk</c>），这样**存档里留的是原始压力**，
+/// 重开之后再画也是同一个样子。
+/// </summary>
+internal static class PressureWidth
+{
+    /// <summary>
+    /// **地板**（档位的 10%）。这一条是**我们加的**、不是学谁：真到 0 压力时 D2D 会
+    /// 渲成一片几乎透明的灰（等于画不出墨），留 10% 既看不出区别、又保证"轻描也有墨"。
+    /// </summary>
+    public static float Min = 0.10f;
+    /// <summary>
+    /// **满压时的宽度倍数 = 2.0**：从那张三线图反推出来的（重压实测 1.72 倍 ↔ 压力 0.86）。
+    ///
+    /// 于是 **p = 0.5 时正好 = 1.0 倍 = 档位宽度**（也就是"无压感那支笔"的粗细）——
+    /// 这也是**档位语义没变**的原因：档位仍然是"正常用力写出来的那条线有多粗"。
+    /// </summary>
+    public static float Max = 2.0f;
+    /// <summary>压力曲线指数（1 = 线性，和 WPF 一致；&gt;1 把轻压区间压扁）。</summary>
+    public static float Gamma = 1f;
+    /// <summary>压感要不要参与渲染（`--nopressure` 关掉，用来做"有/无"对照）。</summary>
+    public static bool Enabled = true;
+
+    /// <summary>
+    /// 压力（0..1）→ 宽度倍数：**正比于压力**（WPF 的口径）= `Max × p`，再夹到 [Min, Max]。
+    ///
+    /// 两个特征点：**p = 0.5（无压感设备的默认值）→ 1.0 倍 = 档位宽度**；
+    /// **p = 1 → 2 倍**（"比鼠标那条粗一倍"，就是用户在 WPF 里看到的观感）。
+    /// </summary>
+    public static float Factor(float p)
+    {
+        float t = Math.Clamp(p, 0f, 1f);
+        if (Gamma != 1f) t = MathF.Pow(t, Gamma);
+        return Math.Clamp(Max * t, Min, Max);
+    }
+
+    /// <summary>某一点的**半宽**（画布 / 局部像素，和标称宽度同一个尺度）。</summary>
+    public static float HalfWidth(float nominalWidth, float p)
+        => nominalWidth * 0.5f * Factor(p);
 }
 
 internal struct InkPoint
@@ -183,7 +569,59 @@ internal sealed class Stroke
     public StrokeKind Kind = StrokeKind.Freehand;
     public Color4 Color;
     public float Width;
+
+    /// <summary>
+    /// 线型（见 <see cref="StrokeDash"/>）。默认实线。
+    ///
+    /// **刻意不进 <see cref="InvalidateMetrics"/> 的重算范围**：线型只改"怎么描这条边"，
+    /// 不改形状本身，所以包围盒（<see cref="PaddedBounds"/>）一分都不变——
+    /// 改线型只需要"旧样子标脏 + 新样子标脏"，几何和缓存都不用重建。
+    /// 同理，**命中测试也照样按实线算**（见 <see cref="HitTest"/> 里的注释）。
+    /// </summary>
+    public StrokeDash Dash = StrokeDash.Solid;
+
+    /// <summary>
+    /// **坐标系要不要网格**（只有 <see cref="StrokeKind.Coordinate"/> 用得上，别的种类恒 false）。
+    ///
+    /// 为什么做成"跟着对象走"而不是"一个全局开关"：对象是**自包含**的——
+    /// 存到文件、复制粘贴、发给别人，看到的都得是同一个样子；全局开关的话，
+    /// 换台机器（或者改一次设置）整个板书上的坐标系就全变样了。
+    /// 画的时候取当时的默认值（见 Engine 的坐标系网格开关），之后选中还能单独改。
+    ///
+    /// 注意它**改的是几何**（多了那些网格线），所以改它必须让几何缓存失效
+    /// （见 SetStrokePropAction：Grid 走 InvalidateMetrics，线型不走）。
+    /// </summary>
+    public bool Grid;
+
+    /// <summary>
+    /// **曲线的朝向**（只有 <see cref="StrokeKind.Parabola"/> / <see cref="StrokeKind.Hyperbola"/>
+    /// 用得上，别的种类恒为 <see cref="CurveAxis.OpenUp"/>）。
+    ///
+    /// 和 <see cref="Grid"/> 完全是同一类东西、也是同一条规矩：
+    ///   · 它是**对象自己的样子**（不是全局开关）——存到文件、复制粘贴、发给别人都不该变；
+    ///   · 它**改的是几何**（换一种开口，曲线走的完全是另一条路），所以改它必须让几何缓存
+    ///     失效（走 <see cref="InvalidateMetrics"/>，和 Grid 一样）；
+    ///   · 进存档（v11），老文件读进来是 0（= 开口向上 / 实轴沿 x），正是它们最可能的样子。
+    /// </summary>
+    public CurveAxis CurveAxis = CurveAxis.OpenUp;
+
     public readonly List<InkPoint> Points = new();
+
+    /// <summary>
+    /// 这一笔**有没有真实压感**（设备报压力、且点处于接触状态）。
+    ///
+    /// 为什么是"整笔的属性"而不是"看某个点的压力值"：`pressure == 0` 有两种含义
+    /// （设备压根不报 / 真的写到 0），所以这件事只能由采集层按 `penMask` 判定
+    /// （见 <see cref="PenSample.HasPressure"/> 的注释）。
+    ///
+    /// 它决定渲染走哪条路：**有压感 + 实线 → D2D 原生变宽墨迹**（见
+    /// <c>Overlay.DrawPressureInk</c>）；否则走原来那条等宽描边（和 2026-09-14 之后一样）。
+    ///
+    /// **进存档（v10）**：不进的话"存盘再打开，压感笔迹就变等宽了"——那是这个功能最刺眼的
+    /// 一种 bug（当场看是好的，重开就没了）。老文件读进来是 false（老文件本来也没存压感）。
+    /// </summary>
+    public bool HasPressure;
+
 
     /// <summary>
     /// **锁定**（2026-09-16 加，用户定的语义是"能选中、但拖不动"）：
@@ -385,6 +823,9 @@ internal sealed class Stroke
             {
                 Tool = Tool, Kind = StrokeKind.Freehand,
                 Color = Color, Width = Width, Transform = Transform,
+                // 线型也算"样式"，跟着继承（2026-09-19：自由笔迹有线型之后，
+                // 虚线笔迹被拆开的两截必须还是虚线，否则"拆完样子变了"）。
+                Dash = Dash,
             };
             var start = PointAtParam(a);
             p.AddPoint(start.X, start.Y, PressureAtParam(a), TimeAtParam(a));
@@ -421,9 +862,15 @@ internal sealed class Stroke
         {
             Tool = Tool, Kind = StrokeKind.Freehand,
             Color = Color, Width = Width,
+            // 线型跟过来：虚线图形熔成笔迹之后还得是虚线（见 SplitIntoRuns 那条同一个理由）。
+            Dash = Dash,
         };
         foreach (var p in ShapeOutline())
         {
+            // **跳过抬笔标记**（双曲线两支之间那一下，见 OutlineBreak）：
+            // 它的坐标是 NaN，写进点列会让整条笔迹的几何变成 NaN——
+            // 那一笔画不出来、点不中、也会把包围盒污染成 NaN。
+            if (IsOutlineBreak(p)) continue;
             var q = Transform.IsIdentity ? p : Vector2.Transform(p, Transform);
             m.AddPoint(q.X, q.Y, 1f, 0);
         }
@@ -509,15 +956,1050 @@ internal sealed class Stroke
     }
 
     /// <summary>
+    /// 三角形 / 平行四边形的**画法**：由"拖出来的外框"（按下的点 + 当前指针，
+    /// 两个对角点的**顺序随意**，内部先归一化）一次算出三个控制点。
+    ///
+    /// 每帧都要调（拖动预览），所以既不分配、也不走 <see cref="SetPoints"/>
+    /// ——那个要造一个数组。规则就是规格 9.4 / 9.5 那两句：
+    ///   · **三角形**：上中 ＋ 下左 ＋ 下右（底边水平、左右对称）；
+    ///   · **平行四边形**：底边水平、上边右移 1/4 宽。右移取"底边两端各让出 1/4"
+    ///     （而不是整条上边往右挪出框外），于是**外框正好是它的包围盒**，
+    ///     松手那一瞬的紧框和用户拖出来的那个框重合，不会"松手就长大一截"。
+    /// </summary>
+    public void SetShapeBox(float x0, float y0, float x1, float y1)
+    {
+        // 起手只有 BeginShapeAt 铺的那一个占位点，这里补齐到三个（控制点数固定）。
+        while (Points.Count < 3) AddPoint(x0, y0, 1f, 0);
+
+        float minX = MathF.Min(x0, x1), maxX = MathF.Max(x0, x1);
+        float minY = MathF.Min(y0, y1), maxY = MathF.Max(y0, y1);
+        if (Kind == StrokeKind.Triangle)
+        {
+            SetPoint(0, new Vector2((minX + maxX) * 0.5f, minY));   // 上中
+            SetPoint(1, new Vector2(minX, maxY));                   // 下左
+            SetPoint(2, new Vector2(maxX, maxY));                   // 下右
+        }
+        else
+        {
+            float shift = (maxX - minX) * 0.25f;                    // 上边右移 1/4 宽
+            SetPoint(0, new Vector2(minX, maxY));                   // 底左
+            SetPoint(1, new Vector2(maxX - shift, maxY));           // 底右
+            SetPoint(2, new Vector2(minX + shift, minY));           // 顶左
+        }
+    }
+
+    /// <summary>
+    /// **抛物线的第一步**（用户 2026-09-20 改的口径："先设定开口，再用两点画出来"）：
+    /// 点一下 = **顶点**，定下来就不再动。
+    ///
+    /// 朝向**不在这里定**——它由操作条那一格"开口方向"先选好（存 <see cref="CurveAxis"/> 的
+    /// OpenUp / OpenDown / OpenRight / OpenLeft），和"大小"彻底分开。
+    /// 这就是这一版要解决的事：原来"方向"和"大小"挤在同一个拖动里（靠 ±12° 死区赌你要开哪个口），
+    /// 两个参数互相拽、都不好调。
+    ///
+    /// 起手先给一条"最小张口"的曲线（经过点放在 `u = 1` 那个点上，反解出来正好是下限），
+    /// 免得松手前屏幕上什么都没有。
+    /// </summary>
+    public void SetParabolaVertex(float x, float y)
+    {
+        // 起手只有 BeginShapeAt 铺的那一个占位点，这里补齐到两个（控制点数固定）。
+        while (Points.Count < 2) AddPoint(x, y, 1f, 0);
+
+        var v = new Vector2(x, y);
+        const float p = ParabolaMinP;
+        var (dir, perp) = ParabolaBasisLocal();
+        SetPoint(0, v);
+        SetPoint(1, v + perp * p + dir * (p * 0.5f));      // u = 1 处的曲线点（通径端点）
+    }
+
+    /// <summary>
+    /// **抛物线的第二步**：把"**曲线要经过的那个点**"写进模型，`p` 由它反解
+    /// （见 <see cref="ParabolaPThroughPoint"/>）。**朝向不动**——这正是"先定开口、再两点画"。
+    /// </summary>
+    public void SetParabolaThroughPoint(float x, float y)
+    {
+        if (Points.Count < 2) return;
+        SetPoint(1, new Vector2(x, y));
+    }
+
+    /// <summary>
+    /// 换朝向（操作条那格"开口方向"）：把"经过点"**跟着新朝向转一下**
+    /// ——保持它在轴上的分量 `s`、横跨分量 `t` 不变，于是 **`p` 原样保住**。
+    /// 用户看到的是"整条曲线转了个方向"，而不是"换一下朝向曲线就瘪了"。
+    /// </summary>
+    public void SetParabolaAxis(CurveAxis axis)
+    {
+        if (Kind != StrokeKind.Parabola || Points.Count < 2) return;
+        var cur = EffectiveAxis;
+        var next = NormalizeAxis(Kind, axis);
+        CurveAxis = next;                  // 顺手把字段写干净（坏值不留在里面，存档会原样写出去）
+        if (next == cur) return;           // 同一个方向就没什么要重组的
+
+        var v = CurvePointLocal(0);
+        var d = CurvePointLocal(1) - v;
+        var (oldDir, oldPerp) = ParabolaBasis(cur);
+        float s = Vector2.Dot(d, oldDir), t = Vector2.Dot(d, oldPerp);
+
+        var (newDir, newPerp) = ParabolaBasis(next);
+        SetPoint(1, v + newDir * s + newPerp * t);
+    }
+
+    /// <summary>
+    /// **双曲线的第一步**（照抄 InkClass 的第一笔，见 `MW_ShapeDrawing.cs:1203-1211`）：
+    /// 按下 = **中心（原点）**，拖出去 = **渐近线**。
+    ///
+    /// 这一步定下的是**整个渐近线框**：中心 ＋ 角点 `E`，于是 `A = |dx|`、`B = |dy|`，
+    /// 而渐近线就画到 `±(A, B)` —— **正好是你拖到的地方**（见
+    /// <see cref="HyperbolaAsymptoteLocal"/>）。用户 2026-09-20 定的口径：
+    /// "渐近线画好以后大小完全不动，长度也不动"。
+    ///
+    /// 这里**不打对折**（原来存的是 `|dx|/2`）：那时渐近线要画到 `2A、2B` 才够长，
+    /// 所以"拖多少 → 存一半"；现在渐近线自己就是框、曲线另有大小
+    ///（见 <see cref="HyperbolaCurveALocal"/>），"拖到哪就画到哪"才是直的。
+    ///
+    /// 朝向这里只是**占位**，第二步拖动时会按"点落在渐近线哪一侧"重定。
+    /// </summary>
+    public void SetHyperbolaFromAsymptote(float x0, float y0, float x1, float y1, float minSize)
+    {
+        while (Points.Count < 2) AddPoint(x0, y0, 1f, 0);
+
+        var o = new Vector2(x0, y0);
+        CurveAxis = CurveAxis.TransverseX;                     // 占位朝向，第二步重定
+        float a = MathF.Max(minSize, MathF.Abs(x1 - x0));
+        float b = MathF.Max(minSize, MathF.Abs(y1 - y0));
+        SetPoint(0, o);
+        SetPoint(1, new Vector2(o.X + a, o.Y + b));
+    }
+
+    /// <summary>
+    /// 由"曲线经过的那个点"`d`（相对中心）定**实轴朝向**：
+    ///   · `d` 落在渐近线**更横**的一侧（`|dy| &lt; m·|dx|`）→ **焦点在 x 轴**（左右双曲线）；
+    ///   · 否则（更竖）→ **焦点在 y 轴**（上下双曲线）。
+    ///
+    /// 判据用乘法（等价于 InkClass 的 `|dy/dx| &lt; k`，但不用除、不会碰除零）。
+    /// **曲线的大小不在这里算**——那是 <see cref="HyperbolaCurveAThroughPoint"/> 的事。
+    /// 拆开是因为 2026-09-20 那一版把"定朝向"和"定大小"混在一个返回值里，
+    /// 而大小又要写回第二个点（渐近线框），于是"定曲线"顺手把渐近线也改了。
+    /// </summary>
+    public static CurveAxis HyperbolaAxisThroughPoint(Vector2 d, float m)
+    {
+        if (!(m > 1e-4f)) m = 1f;                       // 斜率兜底：第一步没拖动时按 45°
+        return MathF.Abs(d.Y) < m * MathF.Abs(d.X)
+            ? CurveAxis.TransverseX : CurveAxis.TransverseY;
+    }
+
+    /// <summary>
+    /// **双曲线的第二步**（用户 2026-09-20 定的口径："渐近线画好以后大小完全不动，
+    /// 长度也不动，在通过第三个点生成双曲线"）：
+    ///
+    /// 渐近线（<see cref="Points"/>[1]）**一个字都不改**，只把"**曲线经过的那个点**"
+    /// 记进第三个控制点；曲线的实/虚半轴由它反解（见 <see cref="HyperbolaCurveALocal"/>）。
+    /// 朝向仍在这一步定（<see cref="HyperbolaAxisThroughPoint"/>）。
+    ///
+    /// **和上一版的区别（这是这次改动的全部意义）**：上一版把两个半轴反解出来**写回第二个点**，
+    /// 而渐近线是从第二个点派生的 —— 于是"定曲线大小"这一步**顺手把渐近线也改了**，
+    /// 用户的原话是"我画图的时候感觉很不适应"。
+    /// 现在渐近线（第二个点）不动、曲线大小走第三个点，两件事彻底分开。
+    /// </summary>
+    public void SetHyperbolaThroughPoint(float x, float y)
+    {
+        if (Points.Count < 2) return;
+
+        var o = CurvePointLocal(0);
+        // 渐近线斜率 = **B / A**（两种朝向下都成立：渐近线方向恒为 (±A, ±B)。
+        // 注意它不是 Imag/Real —— 那个比值在实轴沿 y 时会翻过来）。
+        float m = HyperbolaBLocal() / MathF.Max(1e-4f, HyperbolaALocal());
+        CurveAxis = HyperbolaAxisThroughPoint(new Vector2(x - o.X, y - o.Y), m);
+
+        while (Points.Count < 3) AddPoint(x, y, 1f, 0);
+        SetPoint(2, new Vector2(x, y));
+    }
+
+    /// <summary>
+    /// **正弦 / 余弦的画法**（用户 2026-09-20 定："画的时候就根据起点为原点，
+    /// 还有终点控制周期和振幅"）：按下 = **起点**（曲线的起笔处，也就是老师画的
+    /// 那条 y 轴所在的位置），拖出去 = **终点**（一个周期 ＋ 振幅）。
+    ///
+    /// 两个点都只由这一式算出，所以"拖动预览"和"松手提交"永远一致（不会松手跳一下）。
+    /// 周期恒向右展开（课本上一个周期的图象就是从左往右画的）；
+    /// `dy` **带符号**，往哪边拖，曲线就先往哪边走（见 <see cref="WaveEndLocal"/>）。
+    /// </summary>
+    public void SetWaveBox(float x0, float y0, float x1, float y1, float minSize)
+    {
+        while (Points.Count < 2) AddPoint(x0, y0, 1f, 0);
+
+        float period = MathF.Max(minSize, MathF.Abs(x1 - x0));
+        float dy = y1 - y0;
+        if (MathF.Abs(dy) < minSize) dy = dy < 0f ? -minSize : minSize;   // 振幅也有下限
+        SetPoint(0, new Vector2(x0, y0));                                  // 起点
+        SetPoint(1, new Vector2(x0 + period, y0 + dy));                     // 一个周期之后 ＋ 振幅
+    }
+
+    /// <summary>
+    /// 平行四边形的**第四个顶点**（局部坐标）：`第2 + 第3 − 第1`。
+    ///
+    /// **不存**（用户定，见 9.5）：存下来就有"存的和算的对不上"的可能，
+    /// 而只要每次现推，"永远是平行四边形"就是存法本身的性质。
+    /// 这一个式子有四个用户（渲染、轮廓折线、紧框、脏区），所以只写在这里一份。
+    /// </summary>
+    public Vector2 ParallelogramFourthLocal()
+        => ParallelogramFourth(new Vector2(Points[0].X, Points[0].Y),
+                               new Vector2(Points[1].X, Points[1].Y),
+                               new Vector2(Points[2].X, Points[2].Y));
+
+    /// <summary>同上，但三个点由调用方给（拖动预览要按**临时几何**算，见 PolygonInkBounds）。</summary>
+    public static Vector2 ParallelogramFourth(Vector2 p0, Vector2 p1, Vector2 p2)
+        => new(p1.X + p2.X - p0.X, p1.Y + p2.Y - p0.Y);
+
+    // =====================================================================
+    //  坐标系 / 数轴（2026-09-19 第三批）
+    //
+    //  两个新种类**共用同一套定义**（四个点：外框两角 / 原点 / 单位长度点），
+    //  差别只在"外框怎么理解"和"哪几端带箭头"。共用是刻意的：刻度线、单位长度、
+    //  手柄、紧框、存档这些事两边一模一样，各写一份迟早会分叉。
+    //  存法与理由见 StrokeKind.Coordinate 的注释。
+    // =====================================================================
+
+    /// <summary>
+    /// 网格那一格的**最小边长**（局部坐标）：防"外框小得离谱时网格密成一片实心"。
+    /// </summary>
+    public const float AxisMinGridStepLocal = 6f;
+
+    /// <summary>外框归一化之后的四个边界（局部坐标）。两个点顺序随意，这里统一成 min/max。</summary>
+    public (float MinX, float MinY, float MaxX, float MaxY) AxisFrameLocal()
+    {
+        float ax = Points[0].X, ay = Points[0].Y;
+        float bx = Points.Count > 1 ? Points[1].X : ax;
+        float by = Points.Count > 1 ? Points[1].Y : ay;
+        return (MathF.Min(ax, bx), MathF.Min(ay, by), MathF.Max(ax, bx), MathF.Max(ay, by));
+    }
+
+    /// <summary>
+    /// **原点 O**（局部坐标，坐标系才有；数轴返回 Zero，别处不读它）。
+    /// </summary>
+    public Vector2 AxisOriginLocal()
+        => Points.Count > 2 ? new Vector2(Points[2].X, Points[2].Y) : Vector2.Zero;
+
+    /// <summary>
+    /// **网格那一格有多大**（局部坐标）。只服务坐标系那个可选网格。
+    ///
+    /// **现算，不再存一个"单位长度点"**：用户 2026-09-19 定"不要刻度"之后，
+    /// 单位长度既没有刻度可付、也没有可见的拖动效果——留着它就是一个
+    /// "看不见但点得到"的死元素（这条规矩仓库里早就写着：画都不画的东西也不该点得到）。
+    /// 规则沿用刻度时代那档密度 = **短边 ÷ 4**，所以开网格时看着还是课本上那个格子。
+    /// </summary>
+    public float AxisGridStepLocal()
+    {
+        var (minX, minY, maxX, maxY) = AxisFrameLocal();
+        return MathF.Max(AxisMinGridStepLocal, MathF.Min(maxX - minX, maxY - minY) / 4f);
+    }
+
+    /// <summary>箭头头部的长度（和 <see cref="ArrowHeadPoints"/> 同一口径，跟着笔宽走）。</summary>
+    private static float AxisArrowHeadLen(float width) => MathF.Max(width * 5f, 12f);
+
+    /// <summary>
+    /// 坐标系 / 数轴的**画法**：由"按下的点 + 当前指针"一次算出全部定义元素。
+    ///
+    /// 和 <see cref="SetShapeBox"/> 同一个套路（拖动期每帧都要调，所以不分配、不走 SetPoints）：
+    ///   · **坐标系**：**三个点** —— 外框一角 / 对角 / **原点 = 按下点**，
+    ///     外框以原点为**中心对称展开**（拖出去的那两截就是半宽半高）；
+    ///   · **数轴**：**两个点** —— 左端 / 右端，y 一律取**按下点**的 y
+    ///     （往斜上方拖也还是水平线，见 StrokeKind.NumberLine：数轴歪了就不是数轴了）。
+    ///
+    /// 2026-09-19 用户定"两个种类都不要刻度"之后，这里从四个点缩到三个 / 两个：
+    /// 少掉的正是"单位长度点"和数轴的"零点"——它们唯一的作用就是给刻度定间距。
+    ///
+    /// 同一天用户又要求**纠正坐标系的起手**（原话："应该是先确定原点，原点确定以后，
+    /// 再把它展开"）：旧版把按下点与指针当成"外框的两个角"、原点硬写在框中心，
+    /// 于是"我先按下的那个位置"**永远不是原点**，画完还得再拖一次原点。
+    /// 现在按下那一刻原点就定了，拖出去只是让它长大。
+    /// **定义元素仍然是三个**，所以手柄 / 紧框 / 命中 / 存档 / 撤销全都不用动。
+    /// </summary>
+    public void SetAxisBox(float x0, float y0, float x1, float y1)
+    {
+        if (Kind == StrokeKind.NumberLine)
+        {
+            // 起手只有 BeginShapeAt 铺的那一个占位点，这里补齐到两个（控制点数固定）。
+            while (Points.Count < 2) AddPoint(x0, y0, 1f, 0);
+            float lx = MathF.Min(x0, x1), rx = MathF.Max(x0, x1);
+            SetPoint(0, new Vector2(lx, y0));          // 左端
+            SetPoint(1, new Vector2(rx, y0));          // 右端（箭头在这头）
+            return;
+        }
+
+        // 起手只有 BeginShapeAt 铺的那一个占位点，这里补齐到三个（控制点数固定）。
+        while (Points.Count < 3) AddPoint(x0, y0, 1f, 0);
+        // 半宽半高 = 指针离原点多远（取绝对值，往哪个方向拖都长一样大）。
+        float hw = MathF.Abs(x1 - x0), hh = MathF.Abs(y1 - y0);
+        SetPoint(0, new Vector2(x0 - hw, y0 - hh));    // 外框一角
+        SetPoint(1, new Vector2(x0 + hw, y0 + hh));    // 外框对角
+        SetPoint(2, new Vector2(x0, y0));              // 原点 = 按下点（拖到哪都不动）
+    }
+
+    /// <summary>
+    /// 坐标系 / 数轴的**画布空间墨迹框** = 定义点的外接 ＋ 半笔宽。
+    ///
+    /// 它以前要多算一截"刻度半长"（刻度是唯一伸出外框的东西）；**刻度取消之后那一截
+    /// 就该跟着取消**——框虚胖就是每帧白重画，而这一条是脏区、命中粗筛、导出裁切的依据。
+    /// 箭头仍然不用额外算：它的两个翅膀尖在尖端**后面**（见 <see cref="ArrowHeadPoints"/>），
+    /// 伸不到外框之外。
+    ///
+    /// <paramref name="extra"/> 与另外几处同一个用途：拖动预览要再叠一层实时矩阵。
+    /// </summary>
+    private static RectF AxisInkBoundsOf(ReadOnlySpan<Vector2> pts, in Matrix3x2 transform,
+                                         in Matrix3x2 extra, float width)
+    {
+        var m = transform * extra;
+        var r = RectF.Empty;
+        for (int i = 0; i < pts.Length; i++)
+        {
+            var q = Vector2.Transform(pts[i], m);
+            r.Add(q.X, q.Y);
+        }
+        if (r.IsEmpty) return r;
+        return r.Inflate(width * 0.5f);
+    }
+
+    /// <summary>同上，读模型里的定义点（静止态用）。**定义点最多三个**，所以给三格的 span 就够。</summary>
+    public RectF AxisInkBounds(in Matrix3x2 extra)
+    {
+        int n = Math.Min(Points.Count, 3);
+        Span<Vector2> pts = stackalloc Vector2[3];
+        for (int i = 0; i < n; i++) pts[i] = new Vector2(Points[i].X, Points[i].Y);
+        return AxisInkBoundsOf(pts[..n], Transform, extra, Width);
+    }
+
+    // =====================================================================
+    //  四种曲线（2026-09-20 第四批）：抛物线 / 双曲线 / 正弦 / 余弦
+    //
+    //  这一段只有三件事，但它们必须**严格同源**（仓库的老教训：
+    //  "同一个名单写在多处 = 加一项必漏一处"）：
+    //    ① 画法算式（ParabolaPointAt / HyperbolaPoint / WavePointAt）；
+    //    ② 曲线自己的那个矩形（CurveBoxOf）—— 紧框、脏区、命中粗筛、导出裁切全用它；
+    //    ③ 采样段数（CurveSegments）。
+    //
+    //  **一条硬规矩**：这四种曲线的紧框**绝不能**用"控制点的外接"。
+    //  双曲线的两支伸得比"中心 ↔ 外角点"远得多（两个方向都要伸到 2 倍），
+    //  正弦起点那一侧的半个周期也不在控制点的外接里——而这个框是空间索引的依据，
+    //  小掉的后果是"曲线上有些地方点不中"（椭圆当年踩过一模一样的坑，见
+    //  WorldInkBounds 里那段注释：紧框算成 256×16）。
+    // =====================================================================
+
+    /// <summary>第 `i` 个定义元素（局部坐标）。下标越界返回原点，不抛异常。</summary>
+    public Vector2 CurvePointLocal(int i)
+        => i >= 0 && i < Points.Count ? new Vector2(Points[i].X, Points[i].Y) : Vector2.Zero;
+
+    /// <summary>
+    /// 这种图形**至少**要几个定义元素才算完整。
+    ///
+    /// 目前只有双曲线需要它（给 3）：它的第三个点 ——"**曲线经过的那个点**"（2026-09-20 加的）
+    /// 是**可缺的**（刚起手、或迁移前的老对象只有两个点），而"拖曲线上的那个点"这个手柄
+    /// 照样得能按下去；按下去就要往第三格写，格数不够就是**数组越界**
+    ///（自检里当场崩过一次，见 Engine.BeginVertexDrag）。
+    /// 别的一律 2（它们本来就只有两个定义元素）。
+    /// </summary>
+    public static int MinCurvePoints(StrokeKind kind) => kind switch
+    {
+        StrokeKind.Hyperbola => 3,       // 中心 ＋ 渐近线角点 ＋ 曲线经过的点
+        StrokeKind.Cuboid => 3,          // 正面矩形两角 ＋ 背面右下角（深度）
+        StrokeKind.Tetrahedron => 4,     // 底面三点 ＋ 顶点
+        _ => 2,
+    };
+
+    /// <summary>
+    /// 抛物线**开口方向的单位向量**（屏幕坐标：y 向下，所以"向上"是 `(0,−1)`）。
+    ///
+    /// 用户 2026-09-20 改的口径（"先设定开口向左，然后用两点画出来"）：**方向从"拖动角度"
+    /// 里拿出来，变成四个正方向里选一个**（存进 <see cref="CurveAxis"/> 的 OpenUp / Down / Left / Right）。
+    ///
+    /// 为什么这么改：原来方向和大小**挤在同一个拖动里**（靠 ±12° 死区赌你要开哪个口），
+    /// 两个参数互相拽，用户的原话是"这两个参数很不好调整"。拆开之后
+    /// **方向用选（离散四个）、大小用拖（连续）**，各自都简单；而且老师在黑板上画的抛物线
+    /// 本来就只有正的四种（不再支持"斜的抛物线"——那本来就是上一版为了"自由"加的，
+    /// 实际没人用，反而让"想画正的"这件事变得要小心翼翼）。
+    ///
+    /// 给到四个 Open* 之外的值（坏字节等）一律当**开口向上**（也是枚举的默认值 0）。
+    /// </summary>
+    public static Vector2 ParabolaDir(CurveAxis axis) => axis switch
+    {
+        CurveAxis.OpenDown => new Vector2(0f, 1f),
+        CurveAxis.OpenRight => new Vector2(1f, 0f),
+        CurveAxis.OpenLeft => new Vector2(-1f, 0f),
+        _ => new Vector2(0f, -1f),              // OpenUp（兼兜底）
+    };
+
+    /// <summary>
+    /// 抛物线的**两个单位方向**：`dir` 朝开口外、`perp` 横跨（`dir` 转 90°）。
+    /// 几何、手柄、紧框全走它。
+    /// </summary>
+    public static (Vector2 dir, Vector2 perp) ParabolaBasis(CurveAxis axis)
+    {
+        var dir = ParabolaDir(axis);
+        return (dir, new Vector2(-dir.Y, dir.X));
+    }
+
+    /// <summary>
+    /// **抛物线开口朝哪边**：由**这一拖的符号**定（照 InkClass 的 `case 20/21`）。
+    ///
+    /// `pair` 只是"哪一对"：`OpenUp` = **上下抛物**（他的 `y = ax²`）、
+    /// `OpenRight` = **左右抛物**（他的 `y² = ax`）——图形面板那一格点一次就在这两档之间换。
+    /// 具体朝上还是朝下、朝左还是朝右，看 `q` 落在顶点哪一侧：
+    ///
+    ///   · 上下档：`q` 在顶点**上方** → 开口向上（屏幕 y 向下，所以比的是 `q.Y < v.Y`）；
+    ///   · 左右档：`q` 在顶点**左侧** → 开口向左。
+    ///
+    /// **为什么方向要跟着拖动走**（用户 2026-09-20："感觉不对，还是照搬他的逻辑"）：
+    /// 方向由面板选死的时候，"面板选着向上、手却往下拖"会反解出负的沿轴分量，
+    /// `p` 直接掉到下限 —— 曲线当场缩成一条细针。
+    /// 方向交给这一拖，怎么拖都画得出来；面板只需要回答"上下还是左右"这件推不出来的事。
+    /// </summary>
+    public static CurveAxis ParabolaAxisOfDrag(Vector2 v, Vector2 q, CurveAxis pair)
+    {
+        if (pair == CurveAxis.OpenRight || pair == CurveAxis.OpenLeft)      // 左右抛物
+            return q.X < v.X ? CurveAxis.OpenLeft : CurveAxis.OpenRight;
+        return q.Y < v.Y ? CurveAxis.OpenUp : CurveAxis.OpenDown;           // 上下抛物
+    }
+
+    /// <summary>
+    /// **焦准距 `p`**（课本里 `y² = 2px` 的那个），抛物线的**唯一**形状参数：
+    /// 顶点 ＋ 方向 ＋ `p` 就把整条曲线定死了。焦点在 `dir·(p/2)`、准线过 `−dir·(p/2)`、通径长 `2p`。
+    ///
+    /// 它由"**曲线要经过的那个点**"`q` 反解（用户的口径："另一个是抛物线的末端点"）——
+    /// 把 `q − v` 拆到 `(dir, perp)` 上得 `(s, t)`，而曲线在参数 `u` 处的点是
+    /// `v + perp·(u·p) + dir·(u²p/2)`，要求它等于 `q`：
+    ///
+    ///     u·p = t   →   u = t/p
+    ///     u²·p/2 = s   →   t²/(2p) = s   →   **p = t² / (2s)**
+    ///
+    /// 和双曲线第二步（`a² = dx² − dy²/k²`）是同一类"拿曲线上的一个点反解参数"。
+    ///
+    /// 两个分量都取**绝对值**：方向是由这一拖的符号定的（见 <see cref="ParabolaAxisOfDrag"/>），
+    /// 所以沿轴的分量本该是正的；这里再兜一层，免得"方向没跟上"时反解出负数。
+    /// 拖得**几乎平行于轴**（`s ≈ 0`）时张口会趋近无限，所以给 `s` 一个下限 ——
+    /// 画出来是一条很扁的抛物线（而不是"没反应"或"一条直线"）。
+    /// `t ≈ 0`（点落在对称轴上）没有信息定张口，给下限 `minP`。
+    /// </summary>
+    public static float ParabolaPThroughPoint(Vector2 v, Vector2 q, CurveAxis axis, float minP)
+    {
+        var (dir, perp) = ParabolaBasis(axis);
+        var d = q - v;
+        float s = MathF.Abs(Vector2.Dot(d, dir));      // 沿开口方向的分量
+        float t = MathF.Abs(Vector2.Dot(d, perp));     // 横跨方向的分量
+        s = MathF.Max(s, minP * 0.5f);
+        if (t < 1e-3f) return minP;
+        return MathF.Max(minP, t * t / (2f * s));
+    }
+
+    /// <summary>
+    /// 反解出的 `p` 的**下限**（画布单位）：`p` 太小整条曲线就缩成一个点。
+    /// **不乘 DpiScale**——这是几何下限、不是交互容差；画布缩放时它跟着缩放，正是想要的。
+    /// </summary>
+    public const float ParabolaMinP = 8f;
+
+    /// <summary>实例版（读数 / 紧框 / 手柄 / 渲染都用它）。</summary>
+    public float ParabolaPLocal()
+        => ParabolaPThroughPoint(CurvePointLocal(0), CurvePointLocal(1), EffectiveAxis, ParabolaMinP);
+
+    /// <summary>实例版的轴方向（单位向量）。</summary>
+    public Vector2 ParabolaDirLocal() => ParabolaDir(EffectiveAxis);
+
+    /// <summary>实例版的两个单位方向（单位向量）。</summary>
+    public (Vector2 dir, Vector2 perp) ParabolaBasisLocal() => ParabolaBasis(EffectiveAxis);
+
+    /// <summary>
+    /// 抛物线在参数 `t` 上的点（**以顶点为原点、轴为 x′** 的那个局部系）：
+    /// `x′ = t²·p/2`、`y′ = t·p` —— 这就是 `y′² = 2p·x′` 的现成参数化。
+    ///
+    /// `t = 0` 是顶点、`t = ±1` 正好落在**通径端点**上（`x′ = p/2、y′ = ±p` ✓ 通径长 2p）；
+    /// 画到哪为止见 <see cref="ParabolaSpanOf"/>（**画到"经过点"那儿**，照 InkClass）。
+    /// </summary>
+    public static Vector2 ParabolaPointAt(Vector2 v, Vector2 q, CurveAxis axis, float t)
+    {
+        float p = ParabolaPThroughPoint(v, q, axis, ParabolaMinP);
+        var (dir, perp) = ParabolaBasis(axis);
+        return v + perp * (t * p) + dir * (t * t * p * 0.5f);
+    }
+
+    /// <summary>实例版：按模型里的顶点 / 经过点 / 朝向算（渲染与轮廓折线走它）。</summary>
+    public Vector2 ParabolaPointAt(float t)
+        => ParabolaPointAt(CurvePointLocal(0), CurvePointLocal(1), EffectiveAxis, t);
+
+    /// <summary>
+    /// 抛物线**画到 `t` 的哪里为止**（照 InkClass 的 `case 20`：`for (i = 0; i &lt;= |dx|)`）：
+    ///
+    /// 参数 `u` 处的横跨偏移是 `u·p`，而"曲线经过的那个点"正是老师拖到的位置，
+    /// 所以让它落在端点：`u = |t_经过点| / p`。于是曲线**正好停在你拖到的那个点**，
+    /// 左右（或上下）对称地铺开 —— 这就是他那个"拖到哪、画到哪"的手感。
+    ///
+    /// 兜一个下限 `ParabolaMinSpan`：鼠标只是点了一下（几乎没拖）时不至于缩成一个点。
+    /// </summary>
+    public static float ParabolaSpanOf(Vector2 v, Vector2 q, CurveAxis axis, float minP)
+    {
+        float p = ParabolaPThroughPoint(v, q, axis, minP);
+        var (_, perp) = ParabolaBasis(axis);
+        float t = MathF.Abs(Vector2.Dot(q - v, perp));      // 那个点的横跨偏移
+        return MathF.Max(ParabolaMinSpan, t / p);
+    }
+
+    /// <summary>实例版（渲染 / 轮廓折线 / 紧框都用它）。</summary>
+    public float ParabolaSpanLocal()
+        => ParabolaSpanOf(CurvePointLocal(0), CurvePointLocal(1), EffectiveAxis, ParabolaMinP);
+
+    /// <summary>抛物线画出来至少铺这么宽（见 <see cref="ParabolaSpanOf"/>）。</summary>
+    public const float ParabolaMinSpan = 0.35f;
+
+    /// <summary>
+    /// 折线里的**抬笔标记**（双曲线两支之间那一下）。
+    ///
+    /// <see cref="ShapeOutline"/> 返回的是一条 `List&lt;Vector2&gt;`，而它的三个消费者
+    /// （橡皮判交 / 套索判圈 / 打散成笔迹）都是**按相邻两点连线段**读的——
+    /// 双曲线有两支，中间直接接过去就凭空多一条横穿包围盒的线。
+    /// 用一个"NaN 点"当抬笔，是改动最小的做法：消费者只要跳过 NaN 段即可
+    /// （它们本来就各自有一处循环）。
+    /// </summary>
+    public static readonly Vector2 OutlineBreak = new(float.NaN, float.NaN);
+
+    /// <summary>这个轮廓点是不是"抬笔标记"（见 <see cref="OutlineBreak"/>）。</summary>
+    public static bool IsOutlineBreak(Vector2 p) => float.IsNaN(p.X);
+
+    /// <summary>
+    /// 按种类**归一之后**的朝向。
+    ///
+    /// **抛物线和双曲线都需要它**（另外两条曲线没有朝向可言）：
+    ///   · 抛物线 = **四个正方向**里选一个（OpenUp / Down / Left / Right，见 <see cref="ParabolaDir"/>）
+    ///     —— 它是**选出来的**（图形面板那一格，两点里没有这个信息），只能读字段；
+    ///   · 双曲线 = **实轴沿 x 还是沿 y**（TransverseX / TransverseY）
+    ///     —— 它是**推出来的**：第三个点（"曲线经过的那个点"）落在渐近线的哪一侧就是哪个
+    ///     （见 <see cref="HyperbolaAxisThroughPoint"/>）。
+    ///
+    /// 双曲线为什么**现推**、不读字段（2026-09-20 定）：朝向和形状必须永远一致。
+    /// 读字段的话，拖渐近线角点把斜率扳过对角线之后，那条曲线会卡在
+    /// "朝向说左右、点却落在上下那一侧"—— 半轴反解出一个负数 → 曲线**当场缩成一个点**。
+    /// 现推就天然一致：点在哪一侧就是哪个朝向；越过对角线的那一刻，两个朝向给出的 `a`
+    /// 都趋近于最小，顺滑地翻过去、不会跳。
+    ///
+    /// 字段本身照样**要写、要存**：只有两个点（刚起手 / 迁移前的老对象）时没有第三个点可推，
+    /// 那时它就是兜底；`NormalizeAxis` 还要管"坏字节 / 老文件"落到合法值上。
+    /// </summary>
+    public CurveAxis EffectiveAxis
+    {
+        get
+        {
+            // 双曲线且已经有"曲线经过的那个点" → 现推（理由见上面那段注释）。
+            if (Kind == StrokeKind.Hyperbola && Points.Count >= 3)
+                return HyperbolaAxisThroughPoint(CurvePointLocal(2) - CurvePointLocal(0),
+                                                 HyperbolaBLocal() / MathF.Max(1e-4f, HyperbolaALocal()));
+            return NormalizeAxis(Kind, CurveAxis);
+        }
+    }
+
+    /// <summary>见 <see cref="EffectiveAxis"/>（静态版：读端拿到 kind 之后就地归一）。</summary>
+    public static CurveAxis NormalizeAxis(StrokeKind kind, CurveAxis axis)
+    {
+        if (kind == StrokeKind.Hyperbola)
+            return axis == CurveAxis.TransverseY ? CurveAxis.TransverseY : CurveAxis.TransverseX;
+        if (kind == StrokeKind.Parabola)
+            // 四个正方向之外的（含其它族的值、坏字节）一律当**开口向上**。
+            return axis is CurveAxis.OpenDown or CurveAxis.OpenRight or CurveAxis.OpenLeft
+                ? axis : CurveAxis.OpenUp;
+        return axis;
+    }
+
+    /// <summary>
+    /// **渐近线框的横向半宽**（`A`，= 角点到中心的 x 距离，恒非负）。
+    ///
+    /// ⚠ 双曲线**有两套"半轴"，别混**（2026-09-20 拆开，这是"渐近线不再乱动"的关键）：
+    ///
+    ///   ① **渐近线框** —— `HyperbolaALocal()` / `HyperbolaBLocal()`：
+    ///      第二步拖出来的那个矩形（`±A × ±B`），**两条虚线渐近线就是它的对角线**。
+    ///      用户定的口径是"渐近线画好以后大小完全不动，长度也不动"——
+    ///      所以锁定之后这两个值**一个都不许改**（曲线怎么变都跟它们无关）。
+    ///      `A` / `B` 是 **x 方向半宽 / y 方向半高**，不是"谁是实半轴"。
+    ///
+    ///   ② **曲线自己的半轴** —— `HyperbolaCurveALocal()` / `HyperbolaCurveBLocal()`：
+    ///      第三步由"曲线经过的那个点"反解（见 <see cref="HyperbolaCurveAThroughPoint"/>），
+    ///      比例恒等于 `B/A`（这样曲线才以那两条虚线为渐近线）。
+    ///      **几何 / 截断 / 紧框 / 采样只认这一套。**
+    ///
+    /// "谁是实半轴"是**第三件事**，随实轴朝向互换（见 <see cref="HyperbolaRealLocal"/>），
+    /// 名字只出现在读数文案里。
+    /// </summary>
+    public float HyperbolaALocal() => HyperbolaAOf(CurvePointLocal(0), CurvePointLocal(1));
+
+    /// <summary>渐近线框的**纵向半高**（`B`，见 <see cref="HyperbolaALocal"/> 那段）。</summary>
+    public float HyperbolaBLocal() => HyperbolaBOf(CurvePointLocal(0), CurvePointLocal(1));
+
+    /// <summary>上面两个量的静态核心（拖手柄时要用临时几何算读数，理由同 <see cref="ParabolaHalfSpanOf"/>）。</summary>
+    public static float HyperbolaAOf(Vector2 o, Vector2 e) => MathF.Abs(e.X - o.X);
+
+    /// <summary>见 <see cref="HyperbolaAOf"/>。</summary>
+    public static float HyperbolaBOf(Vector2 o, Vector2 e) => MathF.Abs(e.Y - o.Y);
+
+    /// <summary>双曲线的两个**轴方向**（单位向量）：`real` = 实轴、`imag` = 虚轴。</summary>
+    public static (Vector2 real, Vector2 imag) HyperbolaBasis(CurveAxis axis)
+        => axis == CurveAxis.TransverseY
+            ? (new Vector2(0f, 1f), new Vector2(1f, 0f))
+            : (new Vector2(1f, 0f), new Vector2(0f, 1f));
+
+    /// <summary>
+    /// 实轴方向 / 虚轴方向的**分量**（局部坐标，恒非负）：
+    /// 拖手柄时把指针位置拆到两个轴上用它（"拖顶点只改 a、拖渐近线点只改斜率"）。
+    /// </summary>
+    public static (float along, float across) HyperbolaComponents(Vector2 o, Vector2 p, CurveAxis axis)
+    {
+        var (real, imag) = HyperbolaBasis(axis);
+        var d = p - o;
+        return (MathF.Abs(Vector2.Dot(d, real)), MathF.Abs(Vector2.Dot(d, imag)));
+    }
+
+    /// <summary>
+    /// **实半轴**（**曲线自己的**，不是渐近线框的 `A`/`B`）：随实轴朝向互换 ——
+    /// 实轴沿 x → 就是曲线的 x 方向半宽 `a`；沿 y → 是曲线的 y 方向半高 `b`。
+    /// 只用在**读数文案**和"顶点在哪"上（几何那边一律用 <see cref="HyperbolaCurveALocal"/>）。
+    /// </summary>
+    public float HyperbolaRealLocal()
+        => EffectiveAxis == CurveAxis.TransverseX ? HyperbolaCurveALocal() : HyperbolaCurveBLocal();
+
+    /// <summary>虚半轴（详见 <see cref="HyperbolaRealLocal"/> 那段）。</summary>
+    public float HyperbolaImagLocal()
+        => EffectiveAxis == CurveAxis.TransverseX ? HyperbolaCurveBLocal() : HyperbolaCurveALocal();
+
+    /// <summary>
+    /// **曲线自己的 x 方向半宽系数**（`a`，**不是**渐近线框那个 `A`）：
+    /// 由第三个定义元素 —— "**曲线经过的那个点**" —— 反解（见
+    /// <see cref="HyperbolaCurveAThroughPoint"/>）。
+    ///
+    /// 还没定过大小（只有两个控制点）时给 `A/2`（= 曲线画到 `2a = A`，正好铺满框）。
+    /// 这种情况**不该发生**（读存档时会补齐第三个点），但兜底不能返回 0。
+    /// </summary>
+    public float HyperbolaCurveALocal()
+        => Points.Count >= 3
+            ? HyperbolaCurveAThroughPoint(CurvePointLocal(0), CurvePointLocal(2),
+                                          HyperbolaALocal(), HyperbolaBLocal(), EffectiveAxis)
+            : MathF.Max(HyperbolaMinA, HyperbolaALocal() * 0.5f);
+
+    /// <summary>曲线的 y 方向半高系数（= `a × B/A`，见 <see cref="HyperbolaCurveALocal"/>）。</summary>
+    public float HyperbolaCurveBLocal()
+    {
+        float a = HyperbolaCurveALocal();
+        float A = HyperbolaALocal();
+        return a * (A > 1e-4f ? HyperbolaBLocal() / A : 1f);
+    }
+
+    /// <summary>
+    /// 由"**曲线经过的那个点**"反解曲线的 x 方向半宽系数 `a`。
+    ///
+    /// 把点拆成 x / y 分量 `(px, py)`，配上"曲线必须以那两条虚线为渐近线"这条锁
+    /// （`b/a = B/A`），标准式两边各是一个朝向的式子：
+    ///   · **实轴沿 x**：`x²/a² − y²/b² = 1` → `a² = px² − py²·(A/B)²`；
+    ///   · **实轴沿 y**：`y²/b² − x²/a² = 1` → `a² = py²·(A/B)² − px²`。
+    ///
+    /// ⚠ **两个朝向的符号是反的**，这是最容易漏的一处：只写前一个式子的话，
+    /// 上下双曲线永远解出一个负数 → `a` 被下限兜住 → 曲线缩成一个点。
+    /// 朝向由 <see cref="EffectiveAxis"/> 给（它也是从"这一个点"推出来的，
+    /// 见 <see cref="HyperbolaAxisThroughPoint"/>），所以两边永远配套。
+    ///
+    /// **只夹下限**、不再夹"不超过 `A/2`"（2026-09-20 第二次改）：
+    /// 用户的口径是"**根据最后一个点确定双曲线**"—— 点在哪，曲线就必须过哪。
+    /// 超出框怎么办？交给**画多长**那头管（见 <see cref="HyperbolaTMaxOf"/>：
+    /// 出框就停笔），而不是把曲线的形状掐掉 ——
+    /// 掐掉的话，用户点在远处会看到"点了没反应"，那正是他说"很不适应"的那一类手感。
+    /// 点落在两支之间（`a² ≤ 0`）时给下限 —— 曲线缩到最小但**不消失**
+    /// （"看不见却占着一条对象"是仓库里的老忌）。
+    /// </summary>
+    public static float HyperbolaCurveAThroughPoint(Vector2 o, Vector2 p, float A, float B, CurveAxis axis)
+    {
+        if (A < 1e-3f || B < 1e-3f) return HyperbolaMinA;
+        float dx = p.X - o.X, dy = p.Y - o.Y;
+        float k2 = (A * A) / (B * B);                       // (A/B)²
+        float a2 = axis == CurveAxis.TransverseY
+            ? dy * dy * k2 - dx * dx                     // 上下：实轴沿 y
+            : dx * dx - dy * dy * k2;                    // 左右：实轴沿 x
+        float a = a2 > 0f ? MathF.Sqrt(a2) : 0f;
+        return MathF.Max(a, HyperbolaMinA);
+    }
+
+    /// <summary>
+    /// 曲线半轴 `a` 的**下限**（画布单位）：太小整条曲线就缩成一个点。
+    /// **不乘 DpiScale**——这是几何下限、不是交互容差（和 <see cref="ParabolaMinP"/> 同一个理由）。
+    /// </summary>
+    public const float HyperbolaMinA = 8f;
+
+    /// <summary>
+    /// **顶点**（实轴两端，落在曲线上）：`side` = ±1 选哪一端。
+    /// 用的是**曲线的**实半轴（不是渐近线框的 A/B）。
+    /// </summary>
+    public Vector2 HyperbolaVertexLocal(int side)
+    {
+        var o = CurvePointLocal(0);
+        var (real, _) = HyperbolaBasis(EffectiveAxis);
+        return o + real * (HyperbolaRealLocal() * side);
+    }
+
+    /// <summary>
+    /// **渐近线框的角点**（就是第二个定义元素本身）：拖它 = 改**渐近线框**
+    ///（斜率与长度一起变），曲线的大小不受它影响（曲线有自己的第三个点）。
+    /// </summary>
+    public Vector2 HyperbolaCornerLocal() => CurvePointLocal(1);
+
+    /// <summary>
+    /// **曲线上的那个点**（第三个定义元素 = 第二步拖出来的"经过点"）。
+    /// 拖它 = 曲线跟着经过新位置（改的是**曲线的**半轴，**渐近线一个字都不动**）。
+    ///
+    /// 还没有第三个点的老对象（迁移前）退化成顶点——不该发生（读存档时会补齐，
+    /// 见 InkSerializer 的 v14 迁移），但绝不能返回"原点"那种看着正常的错值。
+    /// </summary>
+    public Vector2 HyperbolaCurvePointLocal()
+        => Points.Count >= 3 ? CurvePointLocal(2) : HyperbolaVertexLocal(1);
+
+    /// <summary>
+    /// 双曲线的**两条渐近线**（`side` = ±1 选哪一条）：返回它在这条对象范围内的**两端点**。
+    ///
+    /// 端点 = 中心 ±(A, B)，也就是**第二步拖出来的那个角**（见 <see cref="HyperbolaCornerLocal"/>）
+    /// —— "拖到哪就画到哪"，而且**锁定之后再也不会变**（用户 2026-09-20 定的：
+    /// "渐近线画好以后大小完全不动，长度也不动"）。
+    ///
+    /// 这两个端点正是**紧框的四个角**（紧框 = 渐近线框，见 CurveBoxOf 的双曲线那一档），
+    /// 所以画渐近线**不会把紧框撑大**；曲线本体又"出框就停笔"
+    /// （见 <see cref="HyperbolaTMaxOf"/>），屏幕上就是"曲线严丝合缝地待在两条虚线张开的范围里"。
+    /// 这一条很重要：紧框是脏区 / 命中粗筛 / 导出裁切的依据，撑大了就是每帧白重画一大片。
+    ///
+    /// ⚠ 端点**不能**拿 `HyperbolaBasis` 拆成"实轴方向 A、虚轴方向 B"：
+    /// `A` / `B` 恒是 **x / y 方向的半宽半高**（见 <see cref="HyperbolaALocal"/> 那段），
+    /// 而渐近线的方向本来就是"横向 A、纵向 B"—— 拿基向量一转，上下双曲线的渐近线
+    /// 就会画到框外面去（自检里"渐近线的端点就是紧框的角"那条就是这么红的）。
+    /// </summary>
+    public (Vector2 from, Vector2 to) HyperbolaAsymptoteLocal(int side)
+    {
+        var o = CurvePointLocal(0);
+        // 方向恒为 (±A, ±B)：两种朝向同一个式子（A / B 本身就是按 x / y 定义的量）。
+        var dir = new Vector2(HyperbolaALocal(), side * HyperbolaBLocal());
+        return (o - dir, o + dir);
+    }
+
+    /// <summary>双曲线要不要画那两条虚线渐近线（对象自己的属性，进存档，默认画）。</summary>
+    public bool ShowAsymptotes = true;
+
+    /// <summary>
+    /// 双曲线**画到哪为止**（照 InkClass 的 `case 24`：`for (i = a; i &lt;= |dx|)`）：
+    /// **画到"曲线经过的那个点"那条轴为止** —— 老师拖到哪，曲线就在那儿收笔。
+    ///
+    /// 参数 `t` 处的实轴坐标是 `r·cosh t`（`r` = 实半轴），而"经过点"的实轴坐标是 `along`，
+    /// 所以让它在端点上：`t = acosh(along / r)`。因为 `r ≤ along` 恒成立
+    ///（`a` 就是从这个点反解出来的），`acosh` 的参数一定 ≥ 1，不会无解。
+    ///
+    /// 这比原来那条"出框就停笔 / 最多画到 2a"更直白：**拖到哪、曲线就画到哪**，
+    /// 也和他一模一样（原来那条会让曲线在离指针还有一截的地方就停住，用户说"感觉不对"）。
+    ///
+    /// ⚠ 于是曲线**可能伸到渐近线框外面**（他本来就没有框这个概念）——
+    /// 紧框那头已经改成"框 ∪ 曲线的实际范围"（见 <see cref="CurveBoxOf"/>）。
+    /// 兜一个下限 `HyperbolaMinT`：点正好落在实轴上时 `along = r`、`t = 0`，
+    /// 不兜的话曲线缩成一个点（"看不见却占着一条对象"是仓库里的老忌）。
+    /// </summary>
+    public static float HyperbolaTMaxOf(Vector2 o, Vector2 q, CurveAxis axis, float realSemi)
+    {
+        var (real, _) = HyperbolaBasis(axis);
+        float along = MathF.Abs(Vector2.Dot(q - o, real));     // 那个点沿实轴的坐标
+        float t = realSemi > 1e-4f ? MathF.Acosh(MathF.Max(1f, along / realSemi)) : 0f;
+        return MathF.Max(t, HyperbolaMinT);
+    }
+
+    /// <summary>实例版（画曲线、采样折线、紧框都用它，见 <see cref="HyperbolaTMaxOf"/>）。</summary>
+    public float HyperbolaTMaxLocal()
+        => HyperbolaTMaxOf(CurvePointLocal(0), HyperbolaCurvePointLocal(),
+                           EffectiveAxis, HyperbolaRealLocal());
+
+    /// <summary>双曲线画出来至少有这么一段参数（见 <see cref="HyperbolaTMaxOf"/>）。</summary>
+    public const float HyperbolaMinT = 0.25f;
+
+    /// <summary>
+    /// 双曲线的一支上、参数 `t ∈ [−T, T]` 处的点。
+    ///
+    /// `branch = 0` 是"第一个分支"、`1` 是另一个（横向时是右支 / 左支，纵向时是上支 / 下支）。
+    /// 参数方程用双曲函数：`x = ±a·cosh t、y = b·sinh t` —— 这正是 `x²/a² − y²/b² = 1`
+    /// 的现成参数化，`cosh² − sinh² = 1` 就是那个恒等式。
+    /// 屏幕 y 向下，所以"上支"是 `y` 变小。
+    /// </summary>
+    public static Vector2 HyperbolaPoint(Vector2 o, float a, float b, CurveAxis axis, int branch, float t)
+    {
+        float ch = MathF.Cosh(t), sh = MathF.Sinh(t);
+        float side = branch == 0 ? 1f : -1f;
+        // `a` / `b` 一律是**x / y 方向的半宽半高**（见 HyperbolaALocal 那段注释），
+        // 所以两种朝向下"谁是实轴"体现在：实轴方向用 cosh 铺开、另一个方向用 sinh。
+        return axis == CurveAxis.TransverseY
+            ? new Vector2(o.X + a * sh, o.Y - side * b * ch)     // 实轴沿 y：上支 / 下支
+            : new Vector2(o.X + side * a * ch, o.Y + b * sh);    // 实轴沿 x：右支 / 左支
+    }
+
+    /// <summary>正弦 / 余弦的**起点**（局部坐标）：余弦是峰顶、正弦是（第一个）零点。</summary>
+    public Vector2 WaveStartLocal() => CurvePointLocal(0);
+
+    /// <summary>
+    /// **终点**：`(起点.x ＋ 一个周期, 起点.y ＋ dy)`。它一次定下**周期**和**振幅**
+    /// （用户 2026-09-20 定："画的时候就根据起点为原点，还有终点控制周期和振幅"）。
+    ///
+    /// `dy` **带符号**，符号的含义是"曲线先往哪边去"：
+    ///   · 正弦：`dy < 0`（往上拖）= 先上后下，就是课本的 `y = sin x`；
+    ///   · 余弦：`dy > 0`（往下拖）= 从峰顶往下，就是课本的 `y = cos x`。
+    /// 带符号之后"拖出来的框"和"曲线实际占的地方"一致——上一版取绝对值，
+    /// 往下拖时曲线还是往上跑，手感是别扭的。
+    /// </summary>
+    public Vector2 WaveEndLocal() => CurvePointLocal(1);
+
+    /// <summary>终点相对起点的**纵向偏移**（带符号，见 <see cref="WaveEndLocal"/>）。</summary>
+    public static float WaveDyOf(Vector2 start, Vector2 end) => end.Y - start.Y;
+
+    /// <summary>实例版（读数与画法都用它）。</summary>
+    public float WaveDyLocal() => WaveDyOf(WaveStartLocal(), WaveEndLocal());
+
+    /// <summary>一个周期有多宽（恒非负；横向的"周期"就是它）。</summary>
+    public float WavePeriodLocal() => WavePeriodOf(WaveStartLocal(), WaveEndLocal());
+
+    /// <summary>周期 / 振幅的静态核心（拖手柄时要用临时几何算读数，理由同 <see cref="ParabolaPOf"/>）。</summary>
+    public static float WavePeriodOf(Vector2 start, Vector2 end) => MathF.Abs(end.X - start.X);
+
+    /// <summary>
+    /// 振幅 A（恒非负）。**两种曲线的换算不一样**，这是本族唯一一处不对称：
+    ///   · 正弦：起点在轴上，峰到轴的距离就是 A → `A = |dy|`；
+    ///   · 余弦：起点在峰顶，半个周期后到谷，谷离峰顶 `2A` → `A = |dy| / 2`。
+    /// </summary>
+    public float WaveAmplitudeLocal() => WaveAmplitudeOf(WaveStartLocal(), WaveEndLocal(), Kind);
+
+    /// <summary>振幅的静态核心（同一个式子只写一份）。</summary>
+    public static float WaveAmplitudeOf(Vector2 start, Vector2 end, StrokeKind kind)
+        => kind == StrokeKind.Cosine
+            ? MathF.Abs(WaveDyOf(start, end)) * 0.5f
+            : MathF.Abs(WaveDyOf(start, end));
+
+    /// <summary>
+    /// 波形上 `u ∈ [0, 1]` 处的点（`u = 0` 起点、`u = 1` 一个周期之后）。
+    ///
+    ///   · **正弦**：`y = 起点.y + dy·sin(2πu)`（`dy < 0` 就是先上后下 ✓）；
+    ///   · **余弦**：`y = 起点.y + dy·(1 − cos(2πu))/2`（起点在峰顶、中间到谷 ✓）。
+    /// 两式在 u = 0 处分别给出"轴"和"峰"，正是"从起点（y 轴）开始画"。
+    /// </summary>
+    public static float WaveYAt(Vector2 start, Vector2 end, StrokeKind kind, float u)
+    {
+        float dy = WaveDyOf(start, end);
+        double phase = u * MathF.Tau;
+        return kind == StrokeKind.Cosine
+            ? start.Y + (float)(dy * (1.0 - Math.Cos(phase)) * 0.5)
+            : start.Y + (float)(dy * Math.Sin(phase));
+    }
+
+    /// <summary>实例版：按模型里的两个定义元素算（渲染与轮廓折线走它）。</summary>
+    public Vector2 WavePointAt(float u)
+        => new(WaveStartLocal().X + WavePeriodLocal() * u,
+              WaveYAt(WaveStartLocal(), WaveEndLocal(), Kind, u));
+
+    /// <summary>
+    /// 峰 / 谷这两个**极值点**（用户说的"统一根据最大最小点来控制图形"）。
+    ///
+    /// 它们是**算出来的、不存**——存的是起点和终点两个定义元素，
+    /// 和"平行四边形的第四点现推"是同一条规矩：只存定义，其余现推。
+    /// 位置直接取曲线上的那个 u（正弦峰 1/4、谷 3/4；余弦峰在起点和周期末端、
+    /// 谷在 1/2），所以手柄**一定落在曲线上**，不会悬空。
+    /// </summary>
+    private Vector2 WaveExtremumAt(bool crest)
+    {
+        var start = WaveStartLocal();
+        var end = WaveEndLocal();
+        bool cos = Kind == StrokeKind.Cosine;
+        float u = cos ? (crest ? 1f : 0.5f) : (crest ? 0.25f : 0.75f);
+        return new Vector2(start.X + WavePeriodLocal() * u, WaveYAt(start, end, Kind, u));
+    }
+
+    /// <summary>**峰点**（在曲线上）：正弦是 1/4 处那个；余弦是周期末端那个（起点那个就是起点本身）。</summary>
+    public Vector2 WaveCrestLocal() => WaveExtremumAt(crest: true);
+
+    /// <summary>**谷点**（在曲线上）：正弦是 3/4 处那个；余弦是 1/2 处那个。</summary>
+    public Vector2 WaveTroughLocal() => WaveExtremumAt(crest: false);
+
+    /// <summary>
+    /// 曲线自己的那个矩形（**局部坐标**）。**全引擎唯一一份**，紧框 / 包围盒 / 脏区都问它。
+    ///
+    /// 四档的算式：
+    ///   · 抛物线：顶点 ↔ 控制点那个矩形（开口朝上时它正好是曲线的最小外接；
+    ///     朝左 / 朝右时控制点管的是"深度 ＋ 半高"，同样是那个矩形）；
+    ///   · 双曲线：**`±A × ±B`，就是渐近线的那个矩形**（A / B = x / y 方向的半宽半高）——
+    ///     两个朝向同一个式子，见下面那一档；
+    ///   · 正弦：`一个周期宽 × ±A`；余弦：`一个周期宽 × (起点 → 谷底 2A)`。
+    ///
+    /// `axis`（曲线朝向）：**这一档现在谁都没用**——双曲线原来按实/虚分流、各带一个 `√5`，
+    /// 改成"渐近线框"之后两个朝向是同一个式子。参数留在签名里是因为它属于"曲线框"这一层的
+    /// 一般化描述（调用方按同一套签名传参，删了要在好几处签名里绕一圈，得不偿失）。
+    /// </summary>
+    public static RectF CurveBoxOf(StrokeKind kind, CurveAxis axis, Vector2 p0, Vector2 p1, Vector2 p2)
+    {
+        switch (kind)
+        {
+            case StrokeKind.Parabola:
+            {
+                // 抛物线：**顶点 ＋ 经过点 ＋ 朝向**定形 —— 朝向给轴、`p` 由经过点反解
+                //（见 ParabolaPThroughPoint）。画出来的范围是 `|t| ≤ ParabolaSpanOf`，于是
+                //   横跨方向：±(Span·p)，沿轴方向：0 … Span²·p/2
+                // 取"顶点 + 两个端点"这三个点的外接就够（O(1)，不用逐点采样——
+                // 紧框每帧都要问，逐点算就白费了）。
+                float p = ParabolaPThroughPoint(p0, p1, axis, ParabolaMinP);
+                var (dir, perp) = ParabolaBasis(axis);
+                float t = ParabolaSpanOf(p0, p1, axis, ParabolaMinP);
+                var tip = dir * (t * t * p * 0.5f);
+                var span = perp * (t * p);
+                var r = RectF.Empty;
+                r.Add(p0.X, p0.Y);
+                r.Add(p0.X + tip.X + span.X, p0.Y + tip.Y + span.Y);
+                r.Add(p0.X + tip.X - span.X, p0.Y + tip.Y - span.Y);
+                return r;
+            }
+
+            case StrokeKind.Hyperbola:
+            {
+                // 紧框 = **渐近线框 ∪ 曲线实际画到的范围**（A / B 是 x / y 方向的半宽半高）。
+                //
+                // 这一条把三件事一次对齐：
+                //   · 渐近线的两个端点**就是** `±(A, B)`（见 HyperbolaAsymptoteLocal）→ 端点在框角上；
+                //   · 曲线"**画到"经过点"那儿为止**"（见 HyperbolaTMaxOf，照 InkClass）——
+                //     那个点通常落在框里，于是整条曲线在框内；**拖到框外时曲线也跟着出去**，
+                //     所以紧框要取**两者的并集**（下面那几行就是干这个的）。
+                //     不能只取 `±A × ±B`：曲线伸出去的那一截会被裁掉（脏区 / 导出都跟着错）。
+                //   · 于是紧框既不会被渐近线白白撑大、也不会比曲线小。
+                // 朝向**不影响**"框"这一半：A、B 本来就是"x / y 方向的量"，虚实互换不影响外接矩形。
+                float halfX = MathF.Abs(p1.X - p0.X);
+                float halfY = MathF.Abs(p1.Y - p0.Y);
+                // 第三个点**可缺**（刚起手 / 三道静态调用点会传 Zero 进来）：那时曲线根本没画
+                //（`HyperAsymptotePreviewOnly` 只画虚线），紧框就只是渐近线框本身。
+                if (p2 != Vector2.Zero)
+                {
+                    float a = HyperbolaCurveAThroughPoint(p0, p2, halfX, halfY, axis);
+                    float b = a * (halfX > 1e-4f ? halfY / halfX : 1f);
+                    float r = axis == CurveAxis.TransverseY ? b : a;              // 实半轴
+                    float sh = MathF.Sinh(HyperbolaTMaxOf(p0, p2, axis, r));
+                    float dx = MathF.Abs(p2.X - p0.X), dy = MathF.Abs(p2.Y - p0.Y);
+                    // 实轴那一侧的伸展**正好停在那个点的坐标上**（画到那儿为止），另一侧是 `半轴 × sinh`
+                    halfX = axis == CurveAxis.TransverseY ? MathF.Max(halfX, a * sh) : MathF.Max(halfX, dx);
+                    halfY = axis == CurveAxis.TransverseY ? MathF.Max(halfY, dy) : MathF.Max(halfY, b * sh);
+                }
+                return new RectF
+                {
+                    MinX = p0.X - halfX, MinY = p0.Y - halfY,
+                    MaxX = p0.X + halfX, MaxY = p0.Y + halfY,
+                };
+            }
+
+            default:
+            {
+                // 正弦 / 余弦：一个周期宽 × 各自的纵向范围。
+                //   · 正弦：以起点所在的那条水平线为中轴，上下各 |dy|；
+                //   · 余弦：起点在峰顶，纵向范围就是"起点 → 终点"那一段。
+                float dy = WaveDyOf(p0, p1);
+                float x0 = MathF.Min(p0.X, p1.X), x1 = MathF.Max(p0.X, p1.X);
+                float y0, y1;
+                if (kind == StrokeKind.Cosine)
+                {
+                    y0 = MathF.Min(p0.Y, p0.Y + dy);
+                    y1 = MathF.Max(p0.Y, p0.Y + dy);
+                }
+                else
+                {
+                    y0 = p0.Y - MathF.Abs(dy);
+                    y1 = p0.Y + MathF.Abs(dy);
+                }
+                return new RectF
+                {
+                    MinX = x0, MinY = MathF.Min(y0, y1), MaxX = x1, MaxY = MathF.Max(y0, y1),
+                };
+            }
+        }
+    }
+
+    /// <summary>实例版：读模型里的定义元素（静止态走它）。</summary>
+    public RectF CurveBoxLocal()
+        => CurveBoxOf(Kind, EffectiveAxis, CurvePointLocal(0), CurvePointLocal(1), CurvePointLocal(2));
+
+    /// <summary>
+    /// 四种曲线的**画布空间墨迹框** = 曲线矩形过变换取外接 ＋ 半笔宽。
+    ///
+    /// 和 <see cref="ParametricInkBoundsOf"/> 同一个套路（先把矩形整体过变换再取外接）：
+    /// 只有这样，转过 30° 的曲线框才不会虚胖一大圈（那是脏区白重画的经典来源）。
+    /// </summary>
+    private static RectF CurveInkBoundsOf(StrokeKind kind, CurveAxis axis, in Matrix3x2 transform,
+                                          in Matrix3x2 extra, Vector2 p0, Vector2 p1, Vector2 p2,
+                                          float width)
+        => TransformRect(CurveBoxOf(kind, axis, p0, p1, p2), transform * extra)
+           .Inflate(width * 0.5f);
+
+    /// <summary>
+    /// 曲线的折线近似**段数**：按尺寸定（每段弦长 ≈ 16 像素），夹在 [24, 128]。
+    /// 和 <see cref="EllipseSegments"/> 同一个口径——不然会出现"圆很顺、抛物线是折的"。
+    /// </summary>
+    private static int CurveSegments(float extent)
+        => Math.Clamp((int)MathF.Ceiling(extent / 16f), 24, 128);
+
+    /// <summary>
     /// 一组**局部坐标点**在给定变换下占的画布范围（= <see cref="PaddedBounds"/> 的算法，
     /// 但用的是**传进来的点**，不碰对象）。
     ///
     /// 需要的场景只有一个：**改几何的动作要在动手之前**算出"改完之后占哪块"，
     /// 好把新位置的脏区标出来（见 SetStrokeGeometryAction）。先改后算的话，
     /// 旧位置就再也问不出来了。
+    ///
+    /// **必须按"这个图形是怎么定义的"分流，和 <see cref="PaddedBounds"/> /
+    /// <see cref="PreviewInkBounds"/> 一张表**（这三个是同一件事的三个入口）：
+    ///   · 圆 / 椭圆 → 参数化外接（圆心 ± 半轴）。它们的两个控制点是**圆心 + 圆周点**，
+    ///     那两个点的外接只是形体的一角——拿它当脏区，2026-09-19 实测过一次：
+    ///     拖椭圆的轴端点松手后**左边一整块不画**（脏区窄了一列分块，那一列从
+    ///     "起手把形体摘出内容层"之后就再没被重画过）。
+    ///   · 三角形 / 平行四边形 → **每个顶点各自过变换再取外接**：转过的图形不能
+    ///     "先取局部外接再整体转"，那样框明显虚胖。平行四边形的第四个顶点不在点表里，
+    ///     少了它，脏区会漏掉整个右上角（那条边挪过去之后原地就留下一条擦不掉的残影）。
+    ///   · 直线 / 箭头 / 矩形 / 图像 / 自由笔迹 → 照旧"点的外接过变换"。
+    ///     它们不需要另开一条：端点的外接就是形体的外接（箭头的翅膀尖虽然伸到轴外
+    ///     ~22 像素，但那个距离远小于块边长 256，"漏掉的那一小条"永远和端点带同处一块，
+    ///     所以看不出缺块——2026-09-19 用像素探针验过）。
+    ///   · **曲线**（抛物线 / 双曲线 / 正弦 / 余弦）→ 曲线自己的矩形（见
+    ///     <see cref="CurveBoxOf"/>）。它们**必须**单独一档：双曲线的两支比"中心 ↔ 外角点"
+    ///     远得多，正弦起点那一侧的半个周期也不在控制点的外接里。
+    ///
+    /// <paramref name="axis"/> 只有曲线用得上（抛物线开哪个口 / 双曲线哪条是实轴）：
+    /// 朝向是"对象的样子"（见 <see cref="Stroke.CurveAxis"/>），所以**静态这一份也得知道它**，
+    /// 否则"改几何前先算新位置占哪块"（这只在动手前算，对象还是旧的）就会算错。
     /// </summary>
-    public static RectF PaddedBoundsOf(IReadOnlyList<Vector2> local, in Matrix3x2 transform, float width)
+    public static RectF PaddedBoundsOf(IReadOnlyList<Vector2> local, in Matrix3x2 transform, float width,
+                                       StrokeKind kind = StrokeKind.Freehand,
+                                       CurveAxis axis = CurveAxis.OpenUp)
     {
+        if (local == null || local.Count == 0) return RectF.Empty;
+
+        // 四种曲线（抛物线 / 双曲线 / 正弦 / 余弦）：走**曲线自己的那个矩形**
+        // （不能是"控制点的外接"：双曲线会小掉一大圈、正弦会漏掉起点那一侧）。
+        if (IsCurveKind(kind) && local.Count >= 2)
+        {
+            var q2 = local.Count >= 3 ? local[2] : Vector2.Zero;
+            // 朝向先按种类归一（见 Stroke.NormalizeAxis）：调用方给的可能还是"另一族"的值
+            // （比如 `new Stroke{Kind=Hyperbola}` 的字段默认是 0），不归一会把框算歪。
+            return CurveInkBoundsOf(kind, NormalizeAxis(kind, axis), transform, Matrix3x2.Identity,
+                                    local[0], local[1], q2, width).Inflate(2f);
+        }
+
+        // 圆 / 椭圆：走参数化外接（里面已经含了半个笔宽，见 ParametricInkBoundsOf）。
+        if (kind is StrokeKind.Circle or StrokeKind.Ellipse && local.Count >= 2)
+            return ParametricInkBoundsOf(kind, transform, Matrix3x2.Identity,
+                                         local[0], local[1], width).Inflate(2f);
+
+        // 三角形 / 平行四边形：顶点各自过变换（含平行四边形现推的第四个顶点）。
+        if (kind is StrokeKind.Triangle or StrokeKind.Parallelogram && local.Count >= 3)
+            return PolygonInkBoundsOf(kind, transform, Matrix3x2.Identity,
+                                      local[0], local[1], local[2], width).Inflate(2f);
+
+        // 坐标系 / 数轴：定义点的外接 + 半笔宽（**没有刻度了，所以不用再往外多算一截**）。
+        if (kind is StrokeKind.Coordinate or StrokeKind.NumberLine && local.Count >= 2)
+        {
+            int n = Math.Min(local.Count, 3);
+            Span<Vector2> pts = stackalloc Vector2[3];
+            for (int i = 0; i < n; i++) pts[i] = local[i];
+            return AxisInkBoundsOf(pts[..n], transform, Matrix3x2.Identity, width).Inflate(2f);
+        }
+
         var b = RectF.Empty;
         for (int i = 0; i < local.Count; i++) b.Add(local[i].X, local[i].Y);
         if (b.IsEmpty) return b;
@@ -529,6 +2011,19 @@ internal sealed class Stroke
     /// point, redraw" work while a stroke is still being drawn.</summary>
     public int Revision { get; private set; }
     private int _builtRevision = -1;
+
+    /// <summary>
+    /// **辅助几何**的缓存（目前只有双曲线的两条虚线渐近线，见
+    /// <see cref="BuildAuxGeometry"/>）。它是"一个对象、两段几何、两种线型"的落点：
+    /// 主几何的线型/颜色是这个对象自己的（老师可能把它设成虚线了），
+    /// 而渐近线**恒定是细虚线**，所以只能两段几何、两次描边。
+    ///
+    /// 它**不参与命中**（和坐标系网格同一条口径：辅助线点不中），
+    /// 也**不进紧框**（画到 `±2a, ±2b` 为止，正好落在曲线自己的框里，见
+    /// <see cref="HyperbolaAsymptoteLocal"/>）。
+    /// </summary>
+    public ID2D1Geometry Geometry2;
+    private int _builtRevision2 = -1;
 
     /// <summary>
     /// 颜色 / 粗细这类"不改几何、但改了墨迹范围"的属性变过之后调用。
@@ -565,10 +2060,15 @@ internal sealed class Stroke
             Geometry = null;
             LiveGeometries--;
         }
+        // 辅助几何（双曲线的虚线渐近线）也是缓存，同样要放——理由和下面那张位图一样：
+        // 漏一处，"删掉之后内存不降"就是必然的。
+        Geometry2?.Dispose();
+        Geometry2 = null;
         // 图像对象还挂着一张 D2D 位图（可能很大：一张 800×600 的截图约 2MB）。
         // 漏掉这一句，"擦掉截图之后内存不降"就是必然的。释放之后再画会按需重建。
         Image?.Release();
         _builtRevision = -1;
+        _builtRevision2 = -1;
     }
 
     /// <summary>
@@ -583,6 +2083,10 @@ internal sealed class Stroke
             Kind = Kind,
             Color = Color,
             Width = Width,
+            Dash = Dash,          // 线型也是"这一条的样子"，复制要跟着走
+            Grid = Grid,          // 坐标系网格同理（它是对象自己的样子，不是全局设置）
+            CurveAxis = CurveAxis,// 曲线朝向同理（双曲线哪条是实轴；抛物线现在是现推的）
+            ShowAsymptotes = ShowAsymptotes,   // 双曲线画不画那两条虚线渐近线
             Transform = Transform,
         };
         // 用 AddPoint 加：它会顺便把 Bounds 和 Revision 收拾好。
@@ -647,9 +2151,37 @@ internal sealed class Stroke
     }
 
     /// <summary>包围盒重算。它同时是脏区、命中测试和空间索引的依据，改点之后必须重算。</summary>
-    private void RecomputeBounds()
+    internal void RecomputeBounds()
     {
         Bounds = RectF.Empty;
+
+        // 四种新曲线**不能直接用"控制点的外接"**当包围盒：
+        //   · 双曲线的两支伸得比"中心 ↔ 外角点"远得多（两个方向都要伸到 2 倍），
+        //     照控制点算出来的框会小掉一大圈——而这个框是空间索引（命中粗筛）的依据，
+        //     小掉的后果是"曲线上有些地方点不中"；
+        //   · 正弦 / 余弦的三个控制点里有一个是极值点，但**起点那一侧的半个周期**
+        //     本来就不在控制点的外接里（起点在轴上，曲线却先往上跑）。
+        // 所以这几档走"曲线自己的那个矩形"（和 <see cref="CurveBoxLocal"/> 同一份算式）。
+        if (IsCurveKind(Kind) && Points.Count >= 2)
+        {
+            Bounds = CurveBoxLocal();
+            return;
+        }
+
+        // **长方体**同理：它的第三条棱伸到"正面 ∪ 背面"，
+        // 而背面左上 / 右下两个角里只有一个是控制点（第三个点存的是背面右下角），
+        // 照控制点算出来的框会**少了背面那一角**（命中粗筛在那儿就点不中）。
+        if (Kind == StrokeKind.Cuboid && Points.Count >= 2)
+        {
+            var (x0, y0, x1, y1) = CuboidFrontLocal();
+            float d = CuboidDepthLocal();
+            Bounds.Add(x0, y0);
+            Bounds.Add(x1, y1);
+            Bounds.Add(x0 + d, y0 - d);
+            Bounds.Add(x1 + d, y1 - d);
+            return;
+        }
+
         foreach (var p in Points) Bounds.Add(p.X, p.Y);
     }
 
@@ -670,9 +2202,9 @@ internal sealed class Stroke
     /// （以前自己拼轮廓、内角要补到两条内边的交点，最远能到好几倍半宽，
     /// 那时这个系数必须留得很大——现在就按事实来。）
     /// </summary>
-    public RectF PaddedBounds => IsLineLike
+    public RectF PaddedBounds => IsParametricShape
         ? WorldInkBounds.Inflate(2f)
-        : WorldBounds.Inflate(Width * 0.5f + 2f);
+        : WorldBounds.Inflate(MaxHalfWidth + 2f);
 
     private RectF _inkBounds = RectF.Empty;
     private int _inkBoundsRevision = -1;
@@ -693,26 +2225,166 @@ internal sealed class Stroke
         {
             if (_inkBoundsRevision == Revision) return _inkBounds;
 
+            // **长方体**是唯一的例外：它的几条棱伸到"控制点的外接"之外
+            //（背面左上 / 右下两个角里只有一个是控制点），而 `Bounds` 已经按真实范围
+            // 算过了（见 RecomputeBounds）——直接用"它 ＋ 半个笔宽"。
+            // 照控制点算会**少一块**，那块就是脏区盲区（搬动时留残影、命中也会漏）。
+            if (Kind == StrokeKind.Cuboid && Points.Count >= 2)
+            {
+                float hw0 = Width * 0.5f;
+                var rr = Bounds;
+                rr.MinX -= hw0; rr.MinY -= hw0; rr.MaxX += hw0; rr.MaxY += hw0;
+                _inkBounds = rr;
+                _maxHalfWidth = hw0;
+                _inkBoundsRevision = Revision;
+                return rr;
+            }
+
             var r = RectF.Empty;
-            float hw = Width * 0.5f;        // 图像对象 Width = 0，就是它自己的矩形
+            // **初值必须是 0，不能是"标称半宽"**：有压感的笔迹可能比标称**细**
+            // （满压才等于标称），初值取标称的话这些笔迹会一律报标称值——
+            // 症状是脏区偏大、细笔迹的命中范围偏宽（2026-09-20 `--pressuretest` 抓到的：
+            // "轻写那条按它自己的最粗处算" 那一条报出 6.00 vs 6.00）。
+            float maxHalf = 0f;
             for (int i = 0; i < Points.Count; i++)
             {
+                // 有压感的笔迹**逐点各算各的半宽**（宽的地方要算进去，否则紧框框不住墨）。
+                // 图像对象 Width = 0、也没有压感，所以这里算出来就是它自己的矩形。
+                float hw = HalfWidthAt(i);
+                if (hw > maxHalf) maxHalf = hw;
                 r.Add(Points[i].X - hw, Points[i].Y - hw);
                 r.Add(Points[i].X + hw, Points[i].Y + hw);
             }
             _inkBounds = r;
+            _maxHalfWidth = maxHalf > 0f ? maxHalf : Width * 0.5f;   // 没有点时退回标称
             _inkBoundsRevision = Revision;
             return r;
         }
     }
 
     /// <summary>
+    /// 第 <paramref name="i"/> 个采样点处的**半宽**（局部像素）。
+    ///
+    /// 没压感（或压感关掉）时恒等于 <c>Width / 2</c>——也就是 2026-09-14 以来那条等宽口径，
+    /// 所以"没有压感的设备"走的还是原来那条路，一个像素都不变。
+    /// </summary>
+    public float HalfWidthAt(int i)
+    {
+        float hw = Width * 0.5f;
+        if (!HasPressure || !PressureWidth.Enabled) return hw;
+        if (i < 0 || i >= Points.Count) return hw;
+        return PressureWidth.HalfWidth(Width, Points[i].P);
+    }
+
+    private float _maxHalfWidth = -1f;
+
+    /// <summary>
+    /// 这一笔**最粗那一处**的半宽（局部像素）——紧框、命中、两种橡皮都用它。
+    ///
+    /// 为什么不继续用 <c>Width / 2</c>：重压的地方比标称宽 50%，按标称算就会
+    /// "看得见却点不中"（老师的原话会是"这一笔选不上"），脏区也会漏掉最粗的那一圈。
+    /// 和 <see cref="InkBounds"/> 共用同一档缓存，每帧问它不心疼。
+    /// </summary>
+    public float MaxHalfWidth
+    {
+        get
+        {
+            _ = InkBounds;                      // 顺带把 _maxHalfWidth 算出来（同一趟循环）
+            return _maxHalfWidth >= 0f ? _maxHalfWidth : Width * 0.5f;
+        }
+    }
+
+    /// <summary>
     /// 是不是"由**两个端点**定义、中间是空的"那两种图形（直线 / 箭头）。
     ///
-    /// 这一个判断现在管着"墨迹范围"那条特殊口径（见 <see cref="LineLikeWorldInkBounds"/>）：
+    /// 这一个判断现在管着"墨迹范围"那条特殊口径（见 <see cref="LineLikeInkBounds"/>）：
     /// 直线/箭头的局部 AABB 四个角**根本不在线上**，所以"先把框转过去再取外接矩形"会虚胖。
     /// </summary>
     internal bool IsLineLike => Kind is StrokeKind.Line or StrokeKind.Arrow;
+
+    /// <summary>
+    /// 是不是"由**参数**定义的图形"（端点 / 圆心半径 / 中心半轴）。
+    ///
+    /// 这一类对象的局部 AABB **不是**它自己的边界（直线斜着时角不在线上、圆的 AABB
+    /// 四角在圆外、三角形的外接框有一半是空的），所以墨迹框一律按参数算（见
+    /// <see cref="LineLikeInkBounds(Vector2, Vector2, in Matrix3x2)"/>、
+    /// <see cref="ParametricInkBounds"/> 与 <see cref="PolygonInkBounds(Vector2, Vector2, Vector2, in Matrix3x2)"/>），
+    /// **不能**用"把局部框整体转过去再取外接"那一套（2026-09-18/19 两轮踩过）。
+    /// 自由笔迹 / 矩形 / 图像的局部 AABB 就是它们自己的边界，走老口径。
+    /// </summary>
+    internal bool IsParametricShape => IsShapeKind(Kind);
+
+    /// <summary>
+    /// 这几种是**参数化曲线**（抛物线 / 双曲线 / 正弦 / 余弦）：它们的墨迹框**不能**
+    /// 用"控制点的外接"来算（理由见 <see cref="CurveBoxOf"/>）。
+    ///
+    /// **2026-09-20 收敛**：这句话原来在**六个地方各手写了一遍**（紧框 / 重算包围盒 /
+    /// 世界墨迹框 / 预览墨迹框 / 是不是参数化图形 / 能不能编辑），加第五种曲线就得同时改六处，
+    /// 漏一处就是"框算小了、曲线上有些地方点不中"（椭圆当年就这么错过）。现在只有这一份。
+    /// </summary>
+    public static bool IsCurveKind(StrokeKind kind)
+        => kind is StrokeKind.Parabola or StrokeKind.Hyperbola
+                or StrokeKind.Sine or StrokeKind.Cosine;
+
+    /// <summary>
+    /// 这几种是**图形**（相对于自由笔迹 / 图像）：用"定义元素"描述、选中后能拖手柄改参数。
+    ///
+    /// **2026-09-20 收敛**：同一份名单原来写了三遍——这份（按 Kind）、
+    /// <see cref="SelectionHandles.ShapeEditable"/>（按 Kind，现在转发到这里）、
+    /// 以及引擎里的 `IsShapeTool`（**按 Tool**，判的是"这个工具画出的是图形还是自由笔迹"，
+    /// 维度不同，那份留着，两边靠自检卡一致）。
+    ///
+    /// 立体图形（圆柱 / 圆锥）也算：它们同样是"两个控制点定形"，选中的框、移动、旋转、
+    /// 存档都走图形那一套（`--shapebandtest` 的"名单一致"那条会卡住）。
+    /// </summary>
+    public static bool IsShapeKind(StrokeKind kind)
+        => kind is StrokeKind.Line or StrokeKind.Arrow or StrokeKind.Circle or StrokeKind.Ellipse
+                or StrokeKind.Triangle or StrokeKind.Parallelogram
+                or StrokeKind.Coordinate or StrokeKind.NumberLine
+                or StrokeKind.Cylinder or StrokeKind.Cone
+                or StrokeKind.Cuboid or StrokeKind.Tetrahedron
+           || IsCurveKind(kind);
+
+    /// <summary>圆的**圆心** / 椭圆的**中心**（局部坐标，= 第一个控制点）。</summary>
+    public Vector2 ShapeCenterLocal
+    {
+        get
+        {
+            var (c, _) = Endpoints();
+            return new Vector2(c.X, c.Y);
+        }
+    }
+
+    /// <summary>圆的**半径**（局部坐标）：圆心到圆周点的距离。</summary>
+    public float CircleRadiusLocal
+    {
+        get
+        {
+            var (c, r) = Endpoints();
+            return MathF.Sqrt((r.X - c.X) * (r.X - c.X) + (r.Y - c.Y) * (r.Y - c.Y));
+        }
+    }
+
+    /// <summary>椭圆的**横半轴 a**（局部坐标，恒非负）：中心到外角点的横向距离。</summary>
+    public float SemiAxisALocal
+    {
+        get
+        {
+            var (c, e) = Endpoints();
+            return MathF.Abs(e.X - c.X);
+        }
+    }
+
+    /// <summary>椭圆的**纵半轴 b**（局部坐标，恒非负）。</summary>
+    public float SemiAxisBLocal
+    {
+        get
+        {
+            var (c, e) = Endpoints();
+            return MathF.Abs(e.Y - c.Y);
+        }
+    }
+
 
     /// <summary>
     /// 墨迹包围盒的**画布坐标**版本。
@@ -722,18 +2394,183 @@ internal sealed class Stroke
     ///     它们"由两个点定义"，局部 AABB 的四个角不在线上——旧口径
     ///     （`TransformRect(InkBounds, Transform)` = 框角整体转过去再取外接）对一条
     ///     转过 30° 的直线会把框撑到**接近两倍宽**（实测 962 vs 线自己 490，见 --shapetooltest）。
-    ///   · **其余种类**（矩形 / 椭圆 / 图像 / 自由笔迹）：照旧"把局部墨迹框过一遍变换"。
-    ///     它们的局部 AABB 角点就是对象自己的角，这个口径本来是对的，**一个数都不改**。
+    ///   · **其余种类**（椭圆 / 圆 / 三角形 / 平行四边形 / 矩形 / 图像 / 自由笔迹）：
+    ///     照旧"把局部墨迹框过一遍变换"——但**参数化图形**（前三类）走的也是自己那条
+    ///     按定义算的路（见下面几行），只有矩形 / 图像 / 自由笔迹的局部 AABB
+    ///     就是它们自己的边界，用这一条才是对的。
     /// </summary>
     public RectF WorldInkBounds
     {
         get
         {
+            // **参数化图形一律自己算**，连"变换是单位阵"这一档也不例外：
+            // 圆的墨迹圈是"圆心 ± r"，而它的两个控制点（圆心 + 圆周点）的 AABB 只是一条
+            // 从圆心伸出去的细条（2026-09-19 出图核对时踩到：紧框算成 256×16）。
+            // 这三条都是 O(1)，短路省不了什么。
+            if (IsLineLike) return LineLikeInkBounds(Matrix3x2.Identity);
+            if (Kind is StrokeKind.Circle or StrokeKind.Ellipse)
+                return ParametricInkBounds(ShapeCenterLocal, RimLocalPoint(), Matrix3x2.Identity);
+            if (Kind is StrokeKind.Triangle or StrokeKind.Parallelogram && Points.Count >= 3)
+                return PolygonInkBounds(new Vector2(Points[0].X, Points[0].Y),
+                                        new Vector2(Points[1].X, Points[1].Y),
+                                        new Vector2(Points[2].X, Points[2].Y),
+                                        Matrix3x2.Identity);
+            // 坐标系 / 数轴：四个定义元素的外接 + **刻度半长**（刻度是唯一伸出外框的东西）。
+            if (Kind is StrokeKind.Coordinate or StrokeKind.NumberLine && Points.Count >= 4)
+                return AxisInkBounds(Matrix3x2.Identity);
+
+            // 四种曲线：**曲线自己的那个矩形** ＋ 半笔宽。
+            // 这一条**不能省**（省了就落到最后那条"点的外接过变换"上）：
+            // 双曲线的两支会伸出"中心 ↔ 外角点"很远，正弦会漏掉起点那一侧的半个周期，
+            // 而紧框是脏区 / 命中粗筛 / 导出裁切的依据（见 CurveBoxOf 的注释）。
+            if (IsCurveKind(Kind) && Points.Count >= 2)
+                return CurveInkBoundsOf(Kind, EffectiveAxis, Transform, Matrix3x2.Identity,
+                                        CurvePointLocal(0), CurvePointLocal(1), CurvePointLocal(2), Width);
+
             var r = InkBounds;
             if (r.IsEmpty) return r;
             if (Transform.IsIdentity) return r;
-            return IsLineLike ? LineLikeInkBounds(Matrix3x2.Identity) : TransformRect(r, Transform);
+            return TransformRect(r, Transform);
         }
+    }
+
+    /// <summary>第二个控制点（局部坐标）：直线的终点 / 圆的圆周点 / 椭圆的外角点。</summary>
+    public Vector2 RimLocalPoint()
+    {
+        var (_, b) = Endpoints();
+        return new Vector2(b.X, b.Y);
+    }
+
+    /// <summary>
+    /// 圆 / 椭圆的**画布空间墨迹框**（参数化外接 + 半笔宽）。
+    ///
+    /// 为什么不能沿用"把局部框整体转过去再取外接"：椭圆局部是 `(a·cos t, b·sin t)`，
+    /// 它的 AABB 是"中心 ±(a,b)"那个矩形；把**那个矩形**转 30° 再取外接，
+    /// 得到的框比椭圆本身大一圈（和直线那轮的 962 vs 490 是同一个毛病）。
+    ///
+    /// 正确的外接（对任意仿射变换都成立，含镜像 / 缩放）：
+    ///   x 的极值 = √((a·M11)² + (b·M21)²)、y 的极值 = √((a·M12)² + (b·M22)²)
+    /// —— 因为 `A·cos t + B·sin t` 的振幅就是 `√(A² + B²)`。
+    /// 旋转 θ 时代进去正是规格 9.3 写的 `√((a·cosθ)² + (b·sinθ)²)` / `√((a·sinθ)² + (b·cosθ)²)`：
+    /// 是同一个东西，这样写连镜像、缩放都不用特判。
+    ///
+    /// 圆就是 `a = b = r` 的特例，所以两者共用一个函数（圆的紧框 = `圆心 ± r`）。
+    /// <paramref name="extra"/> 与直线那边同一个用途：拖动预览要叠一层实时矩阵。
+    /// </summary>
+    public RectF ParametricInkBounds(Vector2 centerLocal, Vector2 rimLocal, in Matrix3x2 extra)
+        => ParametricInkBoundsOf(Kind, Transform, extra, centerLocal, rimLocal, Width);
+
+    /// <summary>
+    /// 上面那条式子的**静态核心**（不读实例字段：种类 / 变换 / 笔宽都由调用方给）。
+    ///
+    /// 抽出来的理由：改几何的动作要在**动手之前**算"改完占哪块"（见
+    /// <see cref="PaddedBoundsOf"/>），而那时手里只有一组点，没有对象。
+    /// 同一个式子写两份的下场，2026-09-19 已经实测过一次：脏区那份漏掉了圆 / 椭圆的
+    /// 参数化那一档，于是"拖轴端点松手之后形体缺一块"。
+    /// </summary>
+    private static RectF ParametricInkBoundsOf(StrokeKind kind, in Matrix3x2 transform, in Matrix3x2 extra,
+                                               Vector2 centerLocal, Vector2 rimLocal, float width)
+    {
+        var m = transform * extra;
+        float dx = rimLocal.X - centerLocal.X, dy = rimLocal.Y - centerLocal.Y;
+        float a = kind == StrokeKind.Circle
+            ? MathF.Sqrt(dx * dx + dy * dy)      // 圆：a = b = 半径
+            : MathF.Abs(dx);
+        float b = kind == StrokeKind.Circle
+            ? a
+            : MathF.Abs(dy);
+
+        float hx = MathF.Sqrt((a * m.M11) * (a * m.M11) + (b * m.M21) * (b * m.M21));
+        float hy = MathF.Sqrt((a * m.M12) * (a * m.M12) + (b * m.M22) * (b * m.M22));
+        var c = Vector2.Transform(centerLocal, m);
+        var r2 = new RectF
+        {
+            MinX = c.X - hx, MinY = c.Y - hy,
+            MaxX = c.X + hx, MaxY = c.Y + hy,
+        };
+        return r2.Inflate(width * 0.5f);
+    }
+
+    /// <summary>
+    /// 三角形 / 平行四边形的**画布空间墨迹框**：**各个顶点**过变换后取外接 ＋ 半笔宽。
+    ///
+    /// 为什么不能沿用"把局部框整体转过去再取外接"（H 段那条老账）：三角形的局部 AABB
+    /// 有一半是空的（斜边那一侧的角根本不在三角形上），转过去再取外接会明显虚胖，
+    /// 而这个框是**脏区、命中粗筛、导出裁切**的依据——虚胖就是每帧白重画。
+    /// 平行四边形的第四个顶点不在控制点表里，这里现推（<see cref="ParallelogramFourth"/>）。
+    ///
+    /// <paramref name="extra"/> 与另外两处同一个用途：拖动预览要再叠一层实时矩阵。
+    /// </summary>
+    public RectF PolygonInkBounds(Vector2 p0, Vector2 p1, Vector2 p2, in Matrix3x2 extra)
+        => PolygonInkBoundsOf(Kind, Transform, extra, p0, p1, p2, Width);
+
+    /// <summary>
+    /// 上面那条式子的**静态核心**，理由和 <see cref="ParametricInkBoundsOf"/> 一样：
+    /// 改几何的动作要在动手之前按"一组点"算包围盒（见 <see cref="PaddedBoundsOf"/>）。
+    /// </summary>
+    private static RectF PolygonInkBoundsOf(StrokeKind kind, in Matrix3x2 transform, in Matrix3x2 extra,
+                                            Vector2 p0, Vector2 p1, Vector2 p2, float width)
+    {
+        var m = transform * extra;
+        var r = RectF.Empty;
+        var q0 = Vector2.Transform(p0, m); r.Add(q0.X, q0.Y);
+        var q1 = Vector2.Transform(p1, m); r.Add(q1.X, q1.Y);
+        var q2 = Vector2.Transform(p2, m); r.Add(q2.X, q2.Y);
+        if (kind == StrokeKind.Parallelogram)
+        {
+            var q3 = Vector2.Transform(ParallelogramFourth(p0, p1, p2), m);
+            r.Add(q3.X, q3.Y);
+        }
+        return r.Inflate(width * 0.5f);
+    }
+
+    /// <summary>
+    /// 用**临时控制点**算墨迹紧框——手势期（模型还没动）的选中框与脏区都按它算。
+    ///
+    /// 存在的理由：<see cref="WorldInkBounds"/> 读的是模型里的点，而拖动预览那几个点
+    /// 只在 <see cref="Engine"/> 的预览数组里（见 计划-图形工具.md 8.1①）。
+    /// 口径必须和静止态**一模一样**，否则拖动中每边差几个像素、松手那一瞬框会跳一下。
+    /// 三档按对象是"怎么定义的"分流，和 <see cref="WorldInkBounds"/> 那张表一一对应。
+    /// </summary>
+    public RectF PreviewInkBounds(IReadOnlyList<Vector2> local, in Matrix3x2 extra)
+    {
+        if (local == null || local.Count < 2) return RectF.Empty;
+        if (IsLineLike) return LineLikeInkBounds(local[0], local[^1], extra);
+        if (Kind is StrokeKind.Circle or StrokeKind.Ellipse)
+            return ParametricInkBounds(local[0], local[1], extra);
+        // 曲线：除了点表还要知道"朝向"，所以转给专门那个入口（<see cref="CurvePreviewInkBounds"/>），
+        // 口径和静止态、脏区那两份**完全同源**。
+        if (IsCurveKind(Kind))
+            return CurvePreviewInkBounds(local, extra);
+        if (Kind is StrokeKind.Triangle or StrokeKind.Parallelogram && local.Count >= 3)
+            return PolygonInkBounds(local[0], local[1], local[2], extra);
+        // 坐标系 / 数轴：和静止态同一条式子（定义点的外接 + 半笔宽），口径不能差一分。
+        if (Kind is StrokeKind.Coordinate or StrokeKind.NumberLine && local.Count >= 2)
+        {
+            int n = Math.Min(local.Count, 3);
+            Span<Vector2> pts = stackalloc Vector2[3];
+            for (int i = 0; i < n; i++) pts[i] = local[i];
+            return AxisInkBoundsOf(pts[..n], Transform, extra, Width);
+        }
+
+        var b = RectF.Empty;
+        for (int i = 0; i < local.Count; i++) b.Add(local[i].X, local[i].Y);
+        // 半宽按**最粗处**算（有压感的那一笔，重压的地方比标称宽 50%）。
+        return b.IsEmpty ? b : TransformRect(b, Transform * extra).Inflate(MaxHalfWidth);
+    }
+
+    /// <summary>
+    /// 曲线（抛物线 / 双曲线 / 正弦 / 余弦）的**临时几何**包围盒：
+    /// 拖手柄 / 拖控制点时模型还没动，框必须按预览点算，口径和静止态一字不差。
+    ///
+    /// 单独一个入口、不塞进 <see cref="PreviewInkBounds"/>，是因为那条路按"点表"分流，
+    /// 而曲线这里要多传一个 <see cref="CurveAxis"/>（朝向）——两者签名对不上。
+    /// </summary>
+    public RectF CurvePreviewInkBounds(IReadOnlyList<Vector2> local, in Matrix3x2 extra)
+    {
+        if (local == null || local.Count < 2) return RectF.Empty;
+        var q2 = local.Count >= 3 ? local[2] : Vector2.Zero;
+        return CurveInkBoundsOf(Kind, EffectiveAxis, Transform, extra, local[0], local[1], q2, Width);
     }
 
     /// <summary>
@@ -753,15 +2590,29 @@ internal sealed class Stroke
     /// </summary>
     public RectF LineLikeInkBounds(in Matrix3x2 extra)
     {
-        var m = Transform * extra;
         var (a, b) = Endpoints();
+        return LineLikeInkBounds(new Vector2(a.X, a.Y), new Vector2(b.X, b.Y), extra);
+    }
+
+    /// <summary>
+    /// 同上，但端点由调用方给（**局部坐标**）。
+    ///
+    /// 存在的理由只有一个：**拖端点的手势期模型还没动**，框必须按"临时几何"的两个端点算。
+    /// 三种情况的框（静止 / 拖动预览 / 拖端点预览）因此共用同一个式子，也就不会出现
+    /// "拖的时候每边多 2 像素、松手缩一下"那种口径不一致（2026-09-19）。
+    /// 箭头按**传进来的端点**重算头部：预览改了端点，屏幕上那两条翅膀也跟着变，
+    /// 框要是还按模型里的旧翅膀算，就会和画出来的箭头对不上。
+    /// </summary>
+    public RectF LineLikeInkBounds(Vector2 a, Vector2 b, in Matrix3x2 extra)
+    {
+        var m = Transform * extra;
         var r = RectF.Empty;
         void Add(Vector2 p) => r.Add(p.X, p.Y);
-        Add(Vector2.Transform(new Vector2(a.X, a.Y), m));
-        Add(Vector2.Transform(new Vector2(b.X, b.Y), m));
+        Add(Vector2.Transform(a, m));
+        Add(Vector2.Transform(b, m));
         if (Kind == StrokeKind.Arrow)
         {
-            var (_, wingA, wingB) = ArrowHeadPoints();
+            var (_, wingA, wingB) = ArrowHeadPoints(a, b);
             Add(Vector2.Transform(wingA, m));
             Add(Vector2.Transform(wingB, m));
         }
@@ -806,6 +2657,10 @@ internal sealed class Stroke
     ///
     /// 代价：一次几何构建（有缓存）+ 一次 COM 调用。所以只对**粗筛之后的
     /// 少量候选**调用，不要拿它去遍历整个文档。
+    ///
+    /// **线型（虚线/点线）刻意不参与这里**（下面照样传 `Gfx.Round`）：
+    /// 虚线中间是**空的**，真按虚线去判，老师点在一段空白上就会"点不中"——
+    /// 而他心里点的就是"那条虚线"。所以命中一律按**实线**算，虚线整条都能点中。
     /// </summary>
     public bool HitTestExact(float canvasX, float canvasY, float tolerance = 0f)
     {
@@ -832,8 +2687,11 @@ internal sealed class Stroke
         // 所以命中判定统一走描边：线宽算进去，容差靠把线临时加粗来实现——
         // 于是"橡皮圆碰到这条线"就等价于"点落在加粗了 2r 的线上"，不用自己算距离。
         //
+        // 线宽用**最粗处**（<see cref="MaxHalfWidth"/> × 2）：有压感的笔迹重压处比标称宽 50%，
+        // 按标称算就会出现"看得见却点不中"。
+        //
         // 注：非等比变换下"线宽不变"还没实现（见计划文档 7.1），这里按局部线宽判定。
-        return geo.StrokeContainsPoint(p, MathF.Max(1f, Width) + tolerance * 2f, Gfx.Round);
+        return geo.StrokeContainsPoint(p, MathF.Max(1f, MaxHalfWidth * 2f) + tolerance * 2f, Gfx.Round);
     }
 
     public float DistanceTo(float x, float y)
@@ -946,15 +2804,25 @@ internal sealed class Stroke
         => ident ? new Vector2(x, y) : Vector2.Transform(new Vector2(x, y), Transform);
 
     /// <summary>
+    /// 圆 / 椭圆的折线近似段数：**按尺寸定**（每段弦长 ≈ 16 像素），夹在 [24, 128]。
+    ///
+    /// 固定 32 段对大圆不够圆（半径 400 时一段弦长 78 像素，肉眼就是折线），对小圆又是浪费。
+    /// 这条折线只服务"橡皮 / 框选 / 套索判交"，渲染那边走 D2D 原生几何，不受它影响。
+    /// </summary>
+    private static int EllipseSegments(float radius)
+        => Math.Clamp((int)MathF.Ceiling(radius * MathF.Tau / 16f), 24, 128);
+
+    /// <summary>
     /// 图形的**轮廓折线**（局部坐标，首尾相接，自己闭合）。
     ///
-    /// 图形不是"点列"，它的轮廓由两个端点推出来（见下面一排 Build*）。渲染和
-    /// 命中测试都交给 Direct2D，但**"这一笔和一块矩形有没有碰上"不能用包围盒回答**
+    /// 图形不是"点列"，它的轮廓由**定义元素**推出来（见下面一排 Build*）。
+    /// 渲染和命中测试都交给 Direct2D，但**"这一笔和一块矩形有没有碰上"不能用包围盒回答**
     /// ——一个画得很大的圆，它的外框矩形中间是空的，用外框判就会"橡皮从圆心里
     /// 划过，整个圆没了"。所以这里按同一套规则把它展开成折线，逐段判交。
     ///
-    /// 规则必须和 Build* 保持一致：改了一边就要改另一边（本函数只服务像素橡皮，
-    /// 所以用折线近似——圆 32 段，误差远小于一个笔宽）。
+    /// 规则必须和 Build* 保持一致：改了一边就要改另一边（本函数只服务像素橡皮 /
+    /// 套索，所以用折线近似；圆和椭圆的段数按尺寸定，见 <see cref="EllipseSegments"/>，
+    /// 误差远小于一个笔宽）。
     /// </summary>
     public List<Vector2> ShapeOutline()
     {
@@ -981,14 +2849,28 @@ internal sealed class Stroke
 
             case StrokeKind.Ellipse:
             {
-                float rx = MathF.Max(0.5f, MathF.Abs(pb.X - pa.X) * 0.5f);
-                float ry = MathF.Max(0.5f, MathF.Abs(pb.Y - pa.Y) * 0.5f);
-                float cx = (pa.X + pb.X) * 0.5f, cy = (pa.Y + pb.Y) * 0.5f;
-                const int N = 32;
-                for (int i = 0; i <= N; i++)
+                // 中心 ＋ 半轴（2026-09-19 改；以前是"外框两个对角点"）
+                var c = ShapeCenterLocal;
+                float rx = MathF.Max(0.5f, SemiAxisALocal);
+                float ry = MathF.Max(0.5f, SemiAxisBLocal);
+                int n = EllipseSegments(MathF.Max(rx, ry));
+                for (int i = 0; i <= n; i++)
                 {
-                    float t = i / (float)N * MathF.Tau;
-                    list.Add(new Vector2(cx + MathF.Cos(t) * rx, cy + MathF.Sin(t) * ry));
+                    float t = i / (float)n * MathF.Tau;
+                    list.Add(new Vector2(c.X + MathF.Cos(t) * rx, c.Y + MathF.Sin(t) * ry));
+                }
+                break;
+            }
+
+            case StrokeKind.Circle:
+            {
+                var c = ShapeCenterLocal;
+                float r = MathF.Max(0.5f, CircleRadiusLocal);
+                int n = EllipseSegments(r);
+                for (int i = 0; i <= n; i++)
+                {
+                    float t = i / (float)n * MathF.Tau;
+                    list.Add(new Vector2(c.X + MathF.Cos(t) * r, c.Y + MathF.Sin(t) * r));
                 }
                 break;
             }
@@ -1004,6 +2886,194 @@ internal sealed class Stroke
                 break;
             }
 
+            case StrokeKind.Triangle:
+            {
+                // 三个顶点直接就是轮廓：上中 → 下左 → 下右 → 回到上中（闭合）。
+                if (Points.Count < 3) break;
+                list.Add(new Vector2(Points[0].X, Points[0].Y));
+                list.Add(new Vector2(Points[1].X, Points[1].Y));
+                list.Add(new Vector2(Points[2].X, Points[2].Y));
+                list.Add(new Vector2(Points[0].X, Points[0].Y));
+                break;
+            }
+
+            case StrokeKind.Parallelogram:
+            {
+                // 底左 → 底右 → **推导出来的顶右** → 顶左 → 回到底左。
+                if (Points.Count < 3) break;
+                list.Add(new Vector2(Points[0].X, Points[0].Y));
+                list.Add(new Vector2(Points[1].X, Points[1].Y));
+                list.Add(ParallelogramFourthLocal());
+                list.Add(new Vector2(Points[2].X, Points[2].Y));
+                list.Add(new Vector2(Points[0].X, Points[0].Y));
+                break;
+            }
+
+            case StrokeKind.Coordinate:
+            case StrokeKind.NumberLine:
+            {
+                // 坐标系 / 数轴：折线这里只列**轴线**（坐标系两条、数轴一条）。
+                // 网格刻意不列：这个折线只服务像素橡皮与套索的"碰到没有"，
+                // "碰到一根网格线"本来就不该算碰到这个坐标系——
+                // 真正决定用户能不能点中它的是 HitTestExact（那条走的是完整几何）。
+                if (Points.Count < 2) break;
+                var (minX, minY, maxX, maxY) = AxisFrameLocal();
+                var o = AxisOriginLocal();
+                if (Kind == StrokeKind.NumberLine)
+                {
+                    list.Add(new Vector2(minX, Points[0].Y));
+                    list.Add(new Vector2(maxX, Points[0].Y));
+                    break;
+                }
+                list.Add(new Vector2(minX, o.Y));
+                list.Add(new Vector2(maxX, o.Y));
+                list.Add(new Vector2(o.X, minY));
+                list.Add(new Vector2(o.X, maxY));
+                break;
+            }
+
+            case StrokeKind.Parabola:
+            {
+                // 抛物线：一条开折线，t 从 −Span 走到 +Span（**和 BuildParabola 同一份算式**），
+                // Span 由"经过点"定（画到老师拖到的那个点为止，见 ParabolaSpanOf）。
+                if (Points.Count < 2) break;
+                float span = ParabolaSpanLocal();
+                var box = CurveBoxLocal();
+                int n = CurveSegments(MathF.Max(box.MaxX - box.MinX, box.MaxY - box.MinY));
+                for (int i = 0; i <= n; i++)
+                    list.Add(ParabolaPointAt(-span + 2f * span * i / n));
+                break;
+            }
+
+            case StrokeKind.Hyperbola:
+            {
+                // 双曲线：**两支**。这里有一个必须处理的坑——
+                // 这份折线是被"逐段判交 / 逐点判圈"消费的（见 ShapeTouchesRect、
+                // AppendRepresentativePoints），**两支之间直接接过去就会凭空多出一条
+                // 横穿整个包围盒的长线段**（它正好过中心）：橡皮从曲线中间那段空白
+                // 划一下，整条双曲线就被删掉了——正是当年"橡皮从圆心里划过、整个圆没了"
+                // 那个 bug 的翻版。
+                // 破法：两支之间放一个**抬笔标记**（见 <see cref="OutlineBreak"/>），
+                // 消费那三处各自跳过它。
+                if (Points.Count < 2) break;
+                var o = CurvePointLocal(0);
+                // 名字带 h 前缀：本方法开头已经有 `var (a, b) = Endpoints()`（直线的两个端点）。
+                // **用曲线的半轴**（不是渐近线框的 A / B —— 那个只画虚线用）。
+                float ha = HyperbolaCurveALocal(), hb = HyperbolaCurveBLocal();
+                float hT = HyperbolaTMaxLocal();
+                var hbox = CurveBoxLocal();
+                int hn = CurveSegments(MathF.Max(hbox.MaxX - hbox.MinX, hbox.MaxY - hbox.MinY));
+                for (int branch = 0; branch < 2; branch++)
+                {
+                    if (branch > 0) list.Add(OutlineBreak);       // 抬笔：两支之间不连线
+                    for (int i = 0; i <= hn; i++)
+                        list.Add(HyperbolaPoint(o, ha, hb, EffectiveAxis, branch,
+                                                -hT + 2f * hT * i / hn));
+                }
+                break;
+            }
+
+            case StrokeKind.Cylinder:
+            case StrokeKind.Cone:
+            {
+                // 立体图形：轮廓 = **底面一圈 ＋（圆柱）顶面一圈 /（圆锥）两条母线**。
+                // 拿"外接矩形"四边当轮廓不行：椭圆弧与矩形之间那块是空的，
+                // 橡皮从那儿划过会把整个立体删掉（和双曲线"两支之间不能连线"同一类问题）。
+                // 两段之间放**抬笔标记**，免得连出一条横穿包围盒的假线。
+                if (Points.Count < 2) break;
+                var (cx, topCy, botCy, rx, ry) = SolidEllipsesLocal();
+                int n = Math.Clamp((int)(MathF.Max(rx, ry) / 4f), 12, 48);
+                for (int i = 0; i <= n; i++)
+                    list.Add(EllipseArcPoint(new Vector2(cx, botCy), rx, ry, i / (float)n));
+                list.Add(OutlineBreak);
+                if (Kind == StrokeKind.Cylinder)
+                {
+                    for (int i = 0; i <= n; i++)
+                        list.Add(EllipseArcPoint(new Vector2(cx, topCy), rx, ry, i / (float)n));
+                }
+                else
+                {
+                    var apex = ConeApexLocal();
+                    list.Add(new Vector2(cx - rx, botCy));
+                    list.Add(apex);
+                    list.Add(OutlineBreak);
+                    list.Add(new Vector2(cx + rx, botCy));
+                    list.Add(apex);
+                }
+                break;
+            }
+
+            case StrokeKind.Cuboid:
+            case StrokeKind.Tetrahedron:
+            {
+                // 立体多面体：轮廓 = 它的各条棱（**分段**列，不许连出假线——
+                // 拿"外接矩形"当轮廓会让橡皮擦到空白处就把整个立体删掉）。
+                if (Points.Count < 3) break;
+                if (Kind == StrokeKind.Cuboid)
+                {
+                    var (x0, y0, x1, y1) = CuboidFrontLocal();
+                    float d = CuboidDepthLocal();
+                    // 正面一圈 + 背面一圈（各自闭合，两圈之间抬笔）
+                    list.Add(new Vector2(x0, y0));
+                    list.Add(new Vector2(x1, y0));
+                    list.Add(new Vector2(x1, y1));
+                    list.Add(new Vector2(x0, y1));
+                    list.Add(new Vector2(x0, y0));
+                    list.Add(OutlineBreak);
+                    list.Add(new Vector2(x0 + d, y0 - d));
+                    list.Add(new Vector2(x1 + d, y0 - d));
+                    list.Add(new Vector2(x1 + d, y1 - d));
+                    list.Add(new Vector2(x0 + d, y1 - d));
+                    list.Add(new Vector2(x0 + d, y0 - d));
+                    list.Add(OutlineBreak);
+                    // 四条斜棱（每条一段，互相之间抬笔）
+                    var corners = new[]
+                    {
+                        (new Vector2(x0, y0), new Vector2(x0 + d, y0 - d)),
+                        (new Vector2(x1, y0), new Vector2(x1 + d, y0 - d)),
+                        (new Vector2(x0, y1), new Vector2(x0 + d, y1 - d)),
+                        (new Vector2(x1, y1), new Vector2(x1 + d, y1 - d)),
+                    };
+                    foreach (var (m, n) in corners)
+                    {
+                        list.Add(m);
+                        list.Add(n);
+                        list.Add(OutlineBreak);
+                    }
+                    list.RemoveAt(list.Count - 1);      // 末尾那个抬笔没人接，去掉（免得消费者读到孤零零的 NaN）
+                }
+                else
+                {
+                    var p0 = CurvePointLocal(0);
+                    var p1 = CurvePointLocal(1);
+                    var p2 = CurvePointLocal(2);
+                    var apex = TetraApexLocal();
+                    var edges = new[]
+                    {
+                        (p0, p1), (p1, p2), (p2, p0),      // 底面三条边
+                        (p0, apex), (p1, apex), (p2, apex) // 三条棱
+                    };
+                    foreach (var (m, n) in edges)
+                    {
+                        list.Add(m);
+                        list.Add(n);
+                        list.Add(OutlineBreak);
+                    }
+                    list.RemoveAt(list.Count - 1);      // 同上：去掉末尾那个抬笔
+                }
+                break;
+            }
+
+            case StrokeKind.Sine:
+            case StrokeKind.Cosine:
+            {
+                // 正弦 / 余弦：一条开折线，u 从 0 走到 1（**和 BuildWave 同一份算式**）。
+                if (Points.Count < 2) break;
+                int n = CurveSegments(WavePeriodLocal());
+                for (int i = 0; i <= n; i++) list.Add(WavePointAt(i / (float)n));
+                break;
+            }
+
             default:
                 // 图像对象：轮廓就是它的矩形（但橡皮不碰图像，见 EraseRectAt）。
                 list.Add(new Vector2(pa.X, pa.Y));
@@ -1014,6 +3084,64 @@ internal sealed class Stroke
                 break;
         }
         return list;
+    }
+
+    /// <summary>
+    /// 这一条对象的**辅助几何**（目前只有双曲线的两条虚线渐近线，见
+    /// <see cref="HyperbolaAsymptoteLocal"/>）。
+    ///
+    /// 为什么要单独一个槽：主几何的线型是这个对象自己的（老师可能已经把曲线
+    /// 设成虚线了），而渐近线**恒定是细虚线**——"一个对象两种线"落在这里。
+    ///
+    /// 它**不参与命中**（和坐标系网格同一条口径：辅助线点不中），也在曲线紧框之内。
+    /// 缓存规则和主几何逐字一样（按 <see cref="Revision"/>）。
+    /// </summary>
+    public ID2D1Geometry BuildAuxGeometry(ID2D1Factory1 factory)
+    {
+        if (Geometry2 != null && _builtRevision2 == Revision) return Geometry2;
+        if (Geometry2 != null) { Geometry2.Dispose(); Geometry2 = null; }
+        if (Points.Count < 2)
+        {
+            _builtRevision2 = Revision;
+            return null;
+        }
+
+        // **立体图形被挡住的那几笔**（圆柱 / 圆锥的底面上半圈、长方体被挡的三条棱）：
+        // 恒定细虚线。
+        if (Kind is StrokeKind.Cylinder or StrokeKind.Cone)
+        {
+            Geometry2 = BuildSolidHidden(factory);
+            _builtRevision2 = Revision;
+            return Geometry2;
+        }
+        if (Kind == StrokeKind.Cuboid)
+        {
+            Geometry2 = BuildCuboid(factory, hidden: true);
+            _builtRevision2 = Revision;
+            return Geometry2;
+        }
+
+        if (Kind != StrokeKind.Hyperbola || !ShowAsymptotes)
+        {
+            _builtRevision2 = Revision;
+            return null;
+        }
+
+        var geo = factory.CreatePathGeometry();
+        using (var sink = geo.Open())
+        {
+            for (int side = -1; side <= 1; side += 2)
+            {
+                var (from, to) = HyperbolaAsymptoteLocal(side);
+                sink.BeginFigure(from, FigureBegin.Hollow);
+                sink.AddLine(to);
+                sink.EndFigure(FigureEnd.Open);
+            }
+            sink.Close();
+        }
+        Geometry2 = geo;
+        _builtRevision2 = Revision;
+        return Geometry2;
     }
 
     public ID2D1Geometry BuildGeometry(ID2D1Factory1 factory)
@@ -1027,8 +3155,21 @@ internal sealed class Stroke
         {
             StrokeKind.Rectangle => BuildRectangle(factory),
             StrokeKind.Ellipse => BuildEllipse(factory),
+            StrokeKind.Circle => BuildCircle(factory),
             StrokeKind.Arrow => BuildArrow(factory),
             StrokeKind.Line => BuildLine(factory),
+            StrokeKind.Triangle => BuildPolygon(factory),
+            StrokeKind.Parallelogram => BuildPolygon(factory),
+            StrokeKind.Coordinate => BuildAxes(factory),
+            StrokeKind.NumberLine => BuildAxes(factory),
+            StrokeKind.Parabola => BuildParabola(factory),
+            StrokeKind.Hyperbola => BuildHyperbola(factory),
+            StrokeKind.Sine => BuildWave(factory),
+            StrokeKind.Cosine => BuildWave(factory),
+            StrokeKind.Cylinder => BuildSolid(factory),
+            StrokeKind.Cone => BuildSolid(factory),
+            StrokeKind.Cuboid => BuildCuboid(factory, hidden: false),
+            StrokeKind.Tetrahedron => BuildTetra(factory),
             StrokeKind.Image => BuildImageRect(factory),
             // 自由笔迹：只给**中心线**，描边（宽度、端帽、拐角）交给 D2D。
             // 单点例外——那是一个圆点，几何直接建成圆（渲染那边会填充它）。
@@ -1069,13 +3210,534 @@ internal sealed class Stroke
         return geo;
     }
 
+    /// <summary>
+    /// 多边形几何（**闭合折线**）：三角形 / 平行四边形共用这一份。
+    ///
+    /// 和矩形同一个写法（`Hollow` 起点 ＋ `Closed` 收尾），于是命中判定天然就是
+    /// **只认描边、不认内部**——这正是规格要的（和矩形/椭圆一致，见 HitTestExact）。
+    /// 平行四边形的第四个顶点**现推**（<see cref="ParallelogramFourthLocal"/>），
+    /// 所以"永远是平行四边形"是几何本身的性质，不是拖动时校正出来的。
+    /// </summary>
+    private ID2D1PathGeometry BuildPolygon(ID2D1Factory1 factory)
+    {
+        // 控制点不足三个：不该发生（画法与存档都保证三个），真发生了也别抛异常，
+        // 退回一条线就行——一条画错位置的线，比整个渲染循环崩掉好得多。
+        if (Points.Count < 3) return BuildLine(factory);
+
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+        sink.SetFillMode(FillMode.Winding);
+        sink.BeginFigure(new Vector2(Points[0].X, Points[0].Y), FigureBegin.Hollow);
+        sink.AddLine(new Vector2(Points[1].X, Points[1].Y));
+        if (Kind == StrokeKind.Parallelogram) sink.AddLine(ParallelogramFourthLocal());
+        sink.AddLine(new Vector2(Points[2].X, Points[2].Y));
+        sink.EndFigure(FigureEnd.Closed);
+        sink.Close();
+        return geo;
+    }
+
+    /// <summary>
+    /// 坐标系 / 数轴的几何：**轴线 ＋ 箭头**（坐标系还可能有那个可选网格）。
+    ///
+    /// **没有刻度线**（用户 2026-09-19 定："数轴和坐标系上面的刻度太多了……不需要刻度"）。
+    /// 刻度曾经在这里画过一版，撤掉之后两个种类都清爽了：
+    ///   · 坐标系 = 十字轴 + 两个箭头；开网格时再多一组贯穿外框的格线；
+    ///   · 数轴 = 一条水平线 + 一个右箭头。
+    /// 代价是"单位长度点"和数轴的"零点"这两个定义元素随之退场（见 SetAxisBox）。
+    ///
+    /// 一条 path 里放**多个 figure**：描边、命中、虚线都按整条处理，正是我们要的
+    /// ——虚线时每一段（每条轴、每根网格线）各自起落，不会跨过拐角连成一长条。
+    ///
+    /// 箭头画成**一个 V（三段折线）**，不填充三角形：和"箭头工具"同一个做法
+    /// （见 <see cref="ArrowHeadPoints"/>），任何笔宽下都匀称；填充的话细笔会糊成一个点。
+    /// 头长按**笔宽**算而不是按轴长算——轴可以拉得很长，头跟着长就成了怪东西。
+    /// </summary>
+    private ID2D1PathGeometry BuildAxes(ID2D1Factory1 factory)
+    {
+        // 控制点不足两个：不该发生（画法与存档都保证），真发生了退回一条线，
+        // 别让整个渲染循环崩掉（和 BuildPolygon 那条护栏同一个理由）。
+        if (Points.Count < 2) return BuildLine(factory);
+
+        var (minX, minY, maxX, maxY) = AxisFrameLocal();
+        float head = AxisArrowHeadLen(Width);
+
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+
+        // ---- 数轴：一条水平线 + 右端一个箭头 ----
+        if (Kind == StrokeKind.NumberLine)
+        {
+            float ly = Points[0].Y;                    // 两个端点 y 恒相等（见 SetAxisBox）
+            sink.BeginFigure(new Vector2(minX, ly), FigureBegin.Hollow);
+            sink.AddLine(new Vector2(maxX, ly));
+            sink.EndFigure(FigureEnd.Open);
+            AddAxisArrow(sink, new Vector2(maxX, ly), new Vector2(1f, 0f), head);
+            sink.Close();
+            return geo;
+        }
+
+        // ---- 坐标系：十字轴 + 两个箭头 ----
+        var o = AxisOriginLocal();
+        sink.BeginFigure(new Vector2(minX, o.Y), FigureBegin.Hollow);
+        sink.AddLine(new Vector2(maxX, o.Y));
+        sink.EndFigure(FigureEnd.Open);
+        // 屏幕坐标 y 向下，所以"向上"是往 minY 那头走。
+        sink.BeginFigure(new Vector2(o.X, maxY), FigureBegin.Hollow);
+        sink.AddLine(new Vector2(o.X, minY));
+        sink.EndFigure(FigureEnd.Open);
+
+        AddAxisArrow(sink, new Vector2(maxX, o.Y), new Vector2(1f, 0f), head);
+        AddAxisArrow(sink, new Vector2(o.X, minY), new Vector2(0f, -1f), head);
+
+        if (Grid) AddAxisGrid(sink, minX, minY, maxX, maxY, o);
+
+        sink.Close();
+        return geo;
+    }
+
+    /// <summary>
+    /// 坐标系的**可选网格**：过每一格画一条贯穿外框的竖线 / 横线。
+    ///
+    /// 间距 = <see cref="AxisGridStepLocal"/>（外框短边 ÷ 4，**现算不存**）。
+    /// 上限定 512 条 / 方向：外框可以被拉到上万像素，不设上限的话一条病态的对象
+    /// 能造出几万个 figure，一帧就把渲染拖死（和刻度时代那条上限同一个理由）。
+    /// 注意网格线**不画在原点那一格上**——那两条正是轴本身，重画一遍只会加深一遍颜色。
+    /// </summary>
+    private void AddAxisGrid(ID2D1GeometrySink sink, float minX, float minY, float maxX, float maxY,
+                             Vector2 origin)
+    {
+        const int MaxLines = 512;
+        float step = AxisGridStepLocal();
+
+        void Vertical(float x)
+        {
+            sink.BeginFigure(new Vector2(x, minY), FigureBegin.Hollow);
+            sink.AddLine(new Vector2(x, maxY));
+            sink.EndFigure(FigureEnd.Open);
+        }
+        void Horizontal(float y)
+        {
+            sink.BeginFigure(new Vector2(minX, y), FigureBegin.Hollow);
+            sink.AddLine(new Vector2(maxX, y));
+            sink.EndFigure(FigureEnd.Open);
+        }
+
+        for (int k = 1; k <= MaxLines; k++)
+        {
+            float xr = origin.X + k * step, xl = origin.X - k * step;
+            if (xr > maxX + 0.01f && xl < minX - 0.01f) break;
+            if (xr <= maxX + 0.01f) Vertical(xr);
+            if (xl >= minX - 0.01f) Vertical(xl);
+        }
+        for (int k = 1; k <= MaxLines; k++)
+        {
+            float yd = origin.Y + k * step, yu = origin.Y - k * step;
+            if (yd > maxY + 0.01f && yu < minY - 0.01f) break;
+            if (yd <= maxY + 0.01f) Horizontal(yd);
+            if (yu >= minY - 0.01f) Horizontal(yu);
+        }
+    }
+
+    /// <summary>
+    /// 往 sink 里加一个箭头：从尖端往回画一个 **V**（<c>翅膀根 → 尖端 → 另一侧翅膀根</c>）。
+    ///
+    /// 比例照抄 <see cref="ArrowHeadPoints"/>（翅膀尖在尖端后方 `head` 处、左右各张 `0.45 × head`），
+    /// 这样坐标系上的箭头和"箭头工具"画出来的那支看着是一家人。
+    /// </summary>
+    private static void AddAxisArrow(ID2D1GeometrySink sink, Vector2 tip, Vector2 dir, float head)
+    {
+        var root = tip - dir * head;
+        float spread = head * 0.45f;
+        var n = new Vector2(-dir.Y, dir.X);               // 垂直于箭头方向
+        sink.BeginFigure(root + n * spread, FigureBegin.Hollow);
+        sink.AddLine(tip);
+        sink.AddLine(root - n * spread);
+        sink.EndFigure(FigureEnd.Open);
+    }
+
+    /// <summary>
+    /// **抛物线**几何：把 <see cref="ParabolaPointAt"/> 采成一串折线点（**开折线**，不闭合）。
+    ///
+    /// 控制点不足两个时退回一条线：不该发生（画法与存档都保证两个），真发生了也别抛异常
+    /// ——一条画错位置的线，比整个渲染循环崩掉好得多（和 BuildPolygon 那条护栏同一个理由）。
+    /// </summary>
+    private ID2D1PathGeometry BuildParabola(ID2D1Factory1 factory)
+    {
+        if (Points.Count < 2) return BuildLine(factory);
+
+        var box = CurveBoxLocal();
+        int n = CurveSegments(MathF.Max(box.MaxX - box.MinX, box.MaxY - box.MinY));
+
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+        // t 从 −Span 走到 +Span：一个端点 → 顶点 → 另一个端点
+        //（Span 见 ParabolaSpanOf：**画到"经过点"那儿为止**，和轮廓折线用同一个值）。
+        float span = ParabolaSpanLocal();
+        sink.BeginFigure(ParabolaPointAt(-span), FigureBegin.Hollow);
+        for (int i = 1; i <= n; i++)
+            sink.AddLine(ParabolaPointAt(-span + 2f * span * i / n));
+        sink.EndFigure(FigureEnd.Open);
+        sink.Close();
+        return geo;
+    }
+
+    /// <summary>
+    /// **双曲线**几何：两支各一个 figure（`t` 从 `−T` 走到 `+T`）。
+    ///
+    /// 两支放**同一条 path**里，于是描边、虚线、命中、包围盒都按"一条对象"处理
+    /// （和坐标系的多 figure 一个做法，见 <see cref="BuildAxes"/>）——
+    /// 如果拆成两个对象，"选中/拖动/撤销/存档"全都要多一层"组"的概念。
+    /// </summary>
+    private ID2D1PathGeometry BuildHyperbola(ID2D1Factory1 factory)
+    {
+        if (Points.Count < 2) return BuildLine(factory);
+
+        var o = CurvePointLocal(0);
+        // **曲线的半轴**（不是渐近线框的 A / B —— 那两个只用来画虚线渐近线，见 BuildAuxGeometry）。
+        float a = HyperbolaCurveALocal(), b = HyperbolaCurveBLocal();
+        var box = CurveBoxLocal();
+        int n = CurveSegments(MathF.Max(box.MaxX - box.MinX, box.MaxY - box.MinY));
+        float tMax = HyperbolaTMaxLocal();
+
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+        for (int branch = 0; branch < 2; branch++)
+        {
+            sink.BeginFigure(HyperbolaPoint(o, a, b, EffectiveAxis, branch, -tMax), FigureBegin.Hollow);
+            for (int i = 1; i <= n; i++)
+                sink.AddLine(HyperbolaPoint(o, a, b, EffectiveAxis, branch, -tMax + 2f * tMax * i / n));
+            sink.EndFigure(FigureEnd.Open);
+        }
+        sink.Close();
+        return geo;
+    }
+
+    /// <summary>
+    /// **正弦 / 余弦**几何：`u` 从 0 走到 1，正好一个周期（两个种类共用这一份算式，
+    /// 差别只在 <see cref="WaveYAt"/> 里那一行 sin / cos）。
+    ///
+    /// 画出来**就是一个周期**（用户 2026-09-20 定的），所以两端不闭合、也没有拐回头的部分。
+    /// </summary>
+    private ID2D1PathGeometry BuildWave(ID2D1Factory1 factory)
+    {
+        if (Points.Count < 2) return BuildLine(factory);
+
+        int n = CurveSegments(WavePeriodLocal());
+
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+        sink.BeginFigure(WavePointAt(0f), FigureBegin.Hollow);
+        for (int i = 1; i <= n; i++)
+            sink.AddLine(WavePointAt(i / (float)n));
+        sink.EndFigure(FigureEnd.Open);
+        sink.Close();
+        return geo;
+    }
+
+    /// <summary>
+    /// 椭圆几何（**中心 ＋ 两条半轴**）。
+    ///
+    /// 2026-09-19 改：以前是"两个对角点"定外框（`BuildEllipse` 从两点算中心与半轴）。
+    /// 现在 `Points[0]` 就是中心、`Points[1]` 是外角点（`a = |dx|`、`b = |dy|`），
+    /// 所以这里直接读两个半轴——**画法和手柄用的是同一个定义**，
+    /// 不会出现"画出来是按外框、手柄按半轴"这种两套账。
+    /// </summary>
     private ID2D1Geometry BuildEllipse(ID2D1Factory1 factory)
     {
-        var (a, b) = Endpoints();
-        float rx = MathF.Max(0.5f, MathF.Abs(b.X - a.X) * 0.5f);
-        float ry = MathF.Max(0.5f, MathF.Abs(b.Y - a.Y) * 0.5f);
         return factory.CreateEllipseGeometry(
-            new Ellipse(new Vector2((a.X + b.X) * 0.5f, (a.Y + b.Y) * 0.5f), rx, ry));
+            new Ellipse(ShapeCenterLocal,
+                        MathF.Max(0.5f, SemiAxisALocal),
+                        MathF.Max(0.5f, SemiAxisBLocal)));
+    }
+
+    /// <summary>圆几何（D2D 原生椭圆几何，两个半径相同）。</summary>
+    private ID2D1Geometry BuildCircle(ID2D1Factory1 factory)
+    {
+        float r = MathF.Max(0.5f, CircleRadiusLocal);
+        return factory.CreateEllipseGeometry(new Ellipse(ShapeCenterLocal, r, r));
+    }
+
+    // =====================================================================
+    //  立体图形（2026-09-20 第五批：照 InkClass 的 case 6/7 搬过来）
+    //
+    //  两个控制点 = 画出来的东西的**外接矩形**（拖到哪就是哪），
+    //  椭圆都由它派生：`rx = 宽/2`、`ry = rx / 2.646`（扁率照抄他的常数）。
+    //  这样"控制点的外接"**正好就是**真实范围（模型里默认那条包围盒算法就够用），
+    //  不用像曲线那样再单独算一份。
+    // =====================================================================
+
+    /// <summary>立体图形里椭圆的扁率（短轴 / 长轴）：照 InkClass 的 `2.646`。</summary>
+    public const float SolidEllipseRatio = 1f / 2.646f;
+
+    /// <summary>外接矩形（局部坐标，已归一成 左上 / 右下）。</summary>
+    public (float X0, float Y0, float X1, float Y1) SolidRectLocal()
+    {
+        var a = CurvePointLocal(0);
+        var b = Points.Count >= 2 ? CurvePointLocal(1) : a;
+        return (MathF.Min(a.X, b.X), MathF.Min(a.Y, b.Y),
+                MathF.Max(a.X, b.X), MathF.Max(a.Y, b.Y));
+    }
+
+    /// <summary>写外接矩形（画的时候每一帧都调它；归一成 左上 / 右下，和坐标系那套一致）。</summary>
+    public void SetSolidBox(float x0, float y0, float x1, float y1)
+    {
+        while (Points.Count < 2) AddPoint(x0, y0, 1f, 0);
+        SetPoint(0, new Vector2(MathF.Min(x0, x1), MathF.Min(y0, y1)));
+        SetPoint(1, new Vector2(MathF.Max(x0, x1), MathF.Max(y0, y1)));
+    }
+
+    /// <summary>
+    /// 上下两个**椭圆**的位置与半径（局部坐标）：`(cx, 上圆心 y, 下圆心 y, rx, ry)`。
+    ///
+    /// 椭圆的圆心**从矩形边往里缩一个 `ry`**，于是椭圆正好与矩形上下边相切
+    ///（画出来的东西刚好占满拖出来的那个矩形）。InkClass 是把圆心放在矩形边上的
+    ///（椭圆会往外冒半圈），我们往里收一下：范围好算、紧框不会漏，看着完全一样。
+    /// </summary>
+    public (float Cx, float TopCy, float BottomCy, float Rx, float Ry) SolidEllipsesLocal()
+    {
+        var (x0, y0, x1, y1) = SolidRectLocal();
+        float rx = MathF.Max(0.5f, (x1 - x0) * 0.5f);
+        float ry = MathF.Max(0.5f, rx * SolidEllipseRatio);
+        float cx = (x0 + x1) * 0.5f;
+        return (cx, y0 + ry, y1 - ry, rx, ry);
+    }
+
+    /// <summary>圆锥的顶点（局部坐标）= 外接矩形的**上边中点**（照 InkClass）。</summary>
+    public Vector2 ConeApexLocal()
+    {
+        var (x0, y0, x1, _) = SolidRectLocal();
+        return new Vector2((x0 + x1) * 0.5f, y0);
+    }
+
+    // ---- 长方体（两笔：正面矩形 → 深度）---------------------------------
+
+    /// <summary>正面矩形（局部坐标，已归一成 左上 / 右下）。</summary>
+    public (float X0, float Y0, float X1, float Y1) CuboidFrontLocal()
+    {
+        var a = CurvePointLocal(0);
+        var b = Points.Count >= 2 ? CurvePointLocal(1) : a;
+        return (MathF.Min(a.X, b.X), MathF.Min(a.Y, b.Y),
+                MathF.Max(a.X, b.X), MathF.Max(a.Y, b.Y));
+    }
+
+    /// <summary>长方体的**最小深度**：拖得太浅就不像一个立体了。</summary>
+    public const float CuboidMinDepth = 12f;
+
+    /// <summary>**第 1 笔**：正面矩形（归一成 左上 / 右下）。</summary>
+    public void SetCuboidFront(float x0, float y0, float x1, float y1)
+    {
+        while (Points.Count < 2) AddPoint(x0, y0, 1f, 0);
+        SetPoint(0, new Vector2(MathF.Min(x0, x1), MathF.Min(y0, y1)));
+        SetPoint(1, new Vector2(MathF.Max(x0, x1), MathF.Max(y0, y1)));
+    }
+
+    /// <summary>
+    /// **第 2 笔**：拖出**深度**。口径照 InkClass：`d = |正面矩形上边 − 指针 y|`，
+    /// 方向**恒定往后上方 45°**（他原话："就是懒不想做反向的"——我们也先不做）。
+    ///
+    /// 存进第三个控制点的是**背面右下角** `(右 + d, 下 − d)`，而不是指针原样：
+    /// 那个角正好是画出来的东西最外的一个角，于是"控制点外接"就是真实范围
+    ///（包围盒、命中粗筛、导出裁切都直接对）。
+    /// </summary>
+    public void SetCuboidDepth(float x, float y)
+    {
+        var (_, y0, x1, y1) = CuboidFrontLocal();
+        float d = MathF.Max(CuboidMinDepth, MathF.Abs(y0 - y));
+        while (Points.Count < 3) AddPoint(x, y, 1f, 0);
+        SetPoint(2, new Vector2(x1 + d, y1 - d));
+    }
+
+    /// <summary>深度（由背面右下角反推：`d = 正面下边 − 那个角的 y`）。</summary>
+    public float CuboidDepthLocal()
+    {
+        if (Points.Count < 3) return 0f;
+        var (_, _, _, y1) = CuboidFrontLocal();
+        return MathF.Max(0f, y1 - CurvePointLocal(2).Y);
+    }
+
+    // ---- 四面体（两笔：底面三角形 → 顶点）-------------------------------
+
+    /// <summary>**第 1 笔**：底面三角形（照他：底边水平、顶点居中向上）。</summary>
+    public void SetTetraBase(float x0, float y0, float x1, float y1)
+    {
+        while (Points.Count < 3) AddPoint(x0, y0, 1f, 0);
+        float minX = MathF.Min(x0, x1), maxX = MathF.Max(x0, x1);
+        float minY = MathF.Min(y0, y1), maxY = MathF.Max(y0, y1);
+        SetPoint(0, new Vector2(minX, maxY));                       // 底左
+        SetPoint(1, new Vector2(maxX, maxY));                       // 底右
+        SetPoint(2, new Vector2((minX + maxX) * 0.5f, minY));       // 底顶（居中）
+    }
+
+    /// <summary>**第 2 笔**：顶点（拖到哪就是哪）。</summary>
+    public void SetTetraApex(float x, float y)
+    {
+        while (Points.Count < 4) AddPoint(x, y, 1f, 0);
+        SetPoint(3, new Vector2(x, y));
+    }
+
+    /// <summary>顶点（局部坐标）：第 2 笔拖到的地方；还没拖过时退化成底面那个顶。</summary>
+    public Vector2 TetraApexLocal()
+        => Points.Count >= 4 ? CurvePointLocal(3) : CurvePointLocal(2);
+
+    /// <summary>椭圆上 `u` 处的点（`u ∈ [0,1)`：0 = 右、0.25 = 下、0.5 = 左、0.75 = 上；屏幕 y 向下）。</summary>
+    private static Vector2 EllipseArcPoint(Vector2 c, float rx, float ry, float u)
+    {
+        float a = u * MathF.Tau;
+        return new Vector2(c.X + rx * MathF.Cos(a), c.Y + ry * MathF.Sin(a));
+    }
+
+    /// <summary>往 sink 里加一段**椭圆弧**（`u0 → u1`，采样成折线）。</summary>
+    private static void AddEllipseArc(ID2D1GeometrySink sink, Vector2 c, float rx, float ry,
+                                      float u0, float u1)
+    {
+        int n = Math.Clamp((int)(MathF.Max(rx, ry) / 4f), 12, 48);
+        sink.BeginFigure(EllipseArcPoint(c, rx, ry, u0), FigureBegin.Hollow);
+        for (int i = 1; i <= n; i++)
+            sink.AddLine(EllipseArcPoint(c, rx, ry, u0 + (u1 - u0) * i / n));
+        sink.EndFigure(FigureEnd.Open);
+    }
+
+    /// <summary>
+    /// 立体图形的**实线几何**（看得见的那几笔）：
+    ///   · **圆柱**：顶面整圈 ＋ 底面下半圈 ＋ 两条母线；
+    ///   · **圆锥**：底面下半圈 ＋ 两条母线（顶点 = 上边中点）。
+    /// 被挡住的那半圈在 <see cref="BuildSolidHidden"/> 里（虚线走辅助几何槽）。
+    /// </summary>
+    private ID2D1PathGeometry BuildSolid(ID2D1Factory1 factory)
+    {
+        if (Points.Count < 2) return BuildLine(factory);
+        var (cx, topCy, botCy, rx, ry) = SolidEllipsesLocal();
+        var top = new Vector2(cx, topCy);
+        var bot = new Vector2(cx, botCy);
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+        if (Kind == StrokeKind.Cylinder)
+        {
+            // 顶面整圈：`u` 从 0 走到 1（闭合）
+            AddEllipseArc(sink, top, rx, ry, 0f, 1f);
+            // 底面**下半圈**（u: 0 → 0.5 走的是 +y 那一侧 = 屏幕上看得见的下半圈）
+            AddEllipseArc(sink, bot, rx, ry, 0f, 0.5f);
+            // 两条母线：底面左右端点 → 顶面左右端点
+            sink.BeginFigure(new Vector2(cx - rx, topCy), FigureBegin.Hollow);
+            sink.AddLine(new Vector2(cx - rx, botCy));
+            sink.EndFigure(FigureEnd.Open);
+            sink.BeginFigure(new Vector2(cx + rx, topCy), FigureBegin.Hollow);
+            sink.AddLine(new Vector2(cx + rx, botCy));
+            sink.EndFigure(FigureEnd.Open);
+        }
+        else
+        {
+            var apex = ConeApexLocal();
+            AddEllipseArc(sink, bot, rx, ry, 0f, 0.5f);
+            // 两条母线：底面左右端点 → 顶点
+            sink.BeginFigure(new Vector2(cx - rx, botCy), FigureBegin.Hollow);
+            sink.AddLine(apex);
+            sink.EndFigure(FigureEnd.Open);
+            sink.BeginFigure(new Vector2(cx + rx, botCy), FigureBegin.Hollow);
+            sink.AddLine(apex);
+            sink.EndFigure(FigureEnd.Open);
+        }
+        sink.Close();
+        return geo;
+    }
+
+    /// <summary>
+    /// 立体图形**被挡住的那半圈**（虚线，走辅助几何槽 —— 和双曲线的渐近线共用一个槽）。
+    ///
+    /// 圆柱 / 圆锥都是"底面椭圆的上半圈"（`u` 从 0.5 走到 1，走的是 −y 那一侧 = 屏幕上方）
+    /// —— 从上面看下去它是被实体挡住的，课本上就画虚线。
+    /// </summary>
+    private ID2D1PathGeometry BuildSolidHidden(ID2D1Factory1 factory)
+    {
+        if (Points.Count < 2) return null;
+        var (cx, _, botCy, rx, ry) = SolidEllipsesLocal();
+        var geo = factory.CreatePathGeometry();
+        using (var sink = geo.Open())
+        {
+            AddEllipseArc(sink, new Vector2(cx, botCy), rx, ry, 0.5f, 1f);
+            sink.Close();
+        }
+        return geo;
+    }
+
+    /// <summary>
+    /// **长方体的棱**（`hidden = false` 画看得见的、`true` 画被挡住的）。
+    ///
+    /// 八个顶点由"正面矩形 ＋ 深度 d"派生（深度方向恒定**右上 45°**，照 InkClass）。
+    /// 实 / 虚的分配也照他：正面四条边 ＋ 背面**上横 / 右竖** ＋ **左上 / 右上 / 右下**三条斜棱是实线；
+    /// 背面**下横**、**左下斜棱**、背面**左竖**是虚线（从正面看过去被挡住）。
+    ///
+    /// 三条被挡住的棱走辅助几何槽（`Geometry2`），和圆柱 / 圆锥那半圈共用一个槽。
+    /// </summary>
+    private ID2D1PathGeometry BuildCuboid(ID2D1Factory1 factory, bool hidden)
+    {
+        if (Points.Count < 2) return BuildLine(factory);
+        var (x0, y0, x1, y1) = CuboidFrontLocal();
+        float d = CuboidDepthLocal();
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+
+        void Edge(Vector2 a, Vector2 b)
+        {
+            sink.BeginFigure(a, FigureBegin.Hollow);
+            sink.AddLine(b);
+            sink.EndFigure(FigureEnd.Open);
+        }
+
+        if (!hidden)
+        {
+            // 正面矩形（第 1 笔画的四条边）
+            Edge(new(x0, y0), new(x1, y0));
+            Edge(new(x1, y0), new(x1, y1));
+            Edge(new(x1, y1), new(x0, y1));
+            Edge(new(x0, y1), new(x0, y0));
+            // 背面：上横、右竖
+            Edge(new(x0 + d, y0 - d), new(x1 + d, y0 - d));
+            Edge(new(x1 + d, y0 - d), new(x1 + d, y1 - d));
+            // 斜棱：左上、右上、右下
+            Edge(new(x0, y0), new(x0 + d, y0 - d));
+            Edge(new(x1, y0), new(x1 + d, y0 - d));
+            Edge(new(x1, y1), new(x1 + d, y1 - d));
+        }
+        else
+        {
+            // 被挡住的：背面下横、左下斜棱、背面左竖
+            Edge(new(x0 + d, y1 - d), new(x1 + d, y1 - d));
+            Edge(new(x0, y1), new(x0 + d, y1 - d));
+            Edge(new(x0 + d, y0 - d), new(x0 + d, y1 - d));
+        }
+
+        sink.Close();
+        return geo;
+    }
+
+    /// <summary>
+    /// **四面体**几何：底面三角形三条边 ＋ 顶点到底面三顶点的三条棱，**全是实线**（照 InkClass）。
+    /// </summary>
+    private ID2D1PathGeometry BuildTetra(ID2D1Factory1 factory)
+    {
+        if (Points.Count < 3) return BuildLine(factory);
+        var p0 = CurvePointLocal(0);
+        var p1 = CurvePointLocal(1);
+        var p2 = CurvePointLocal(2);
+        var apex = TetraApexLocal();
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+
+        void Edge(Vector2 a, Vector2 b)
+        {
+            sink.BeginFigure(a, FigureBegin.Hollow);
+            sink.AddLine(b);
+            sink.EndFigure(FigureEnd.Open);
+        }
+        Edge(p0, p1);       // 底面三条边
+        Edge(p1, p2);
+        Edge(p2, p0);
+        Edge(p0, apex);     // 三条棱
+        Edge(p1, apex);
+        Edge(p2, apex);
+        sink.Close();
+        return geo;
     }
 
     private ID2D1PathGeometry BuildArrow(ID2D1Factory1 factory)
@@ -1102,14 +3764,16 @@ internal sealed class Stroke
     /// 抽出来是因为它有三个用户，**必须永远一致**：
     ///   ① <see cref="BuildArrow"/>——真正画出来的那条折线；
     ///   ② <see cref="ShapeOutline"/>——橡皮/框选/套索用的轮廓折线；
-    ///   ③ 墨迹范围（<see cref="LineLikeWorldInkBounds"/>）——箭头那两个翅膀尖**不在**
-    ///      "两个端点之间"，只按端点算，翅膀就会落在框外，而框又是脏区/命中/导出裁切的依据：
-    ///      脏区漏掉那一块屏幕上会留残影（这几条账见 PaddedBounds 的注释）。
+    ///   ③ 墨迹范围（<see cref="LineLikeInkBounds(Vector2, Vector2, in Matrix3x2)"/>）——箭头那两个
+    ///      翅膀尖**不在**"两个端点之间"，只按端点算，翅膀就会落在框外，而框又是脏区/命中/
+    ///      导出裁切的依据：脏区漏掉那一块屏幕上会留残影（这几条账见 PaddedBounds 的注释）。
     /// 三处各写一份公式是迟早要咬人的（头部长短、张开比例都在这几行里）。
+    ///
+    /// 端点由调用方给（而不是自己读 `Points`）：拖端点的手势里要按**预览端点**算，
+    /// 这样画出来的箭头、框、脏区才是同一个箭头。
     /// </summary>
-    private (Vector2 root, Vector2 wingA, Vector2 wingB) ArrowHeadPoints()
+    private (Vector2 root, Vector2 wingA, Vector2 wingB) ArrowHeadPoints(Vector2 a, Vector2 b)
     {
-        var (a, b) = Endpoints();
         float dx = b.X - a.X, dy = b.Y - a.Y;
         float len = MathF.Sqrt(dx * dx + dy * dy);
         if (len < 1e-3f) { dx = 1; dy = 0; len = 1; }
@@ -1121,6 +3785,13 @@ internal sealed class Stroke
         return (root,
                 new Vector2(root.X + nx * spread, root.Y + ny * spread),
                 new Vector2(root.X - nx * spread, root.Y - ny * spread));
+    }
+
+    /// <summary>箭头头部几何，端点取模型自己的首尾两点（画箭头 / 算轮廓用）。</summary>
+    private (Vector2 root, Vector2 wingA, Vector2 wingB) ArrowHeadPoints()
+    {
+        var (a, b) = Endpoints();
+        return ArrowHeadPoints(new Vector2(a.X, a.Y), new Vector2(b.X, b.Y));
     }
 
     /// <summary>图像对象的矩形几何（命中测试与裁剪用，不做描边）。</summary>
@@ -1178,10 +3849,15 @@ internal sealed class Stroke
     /// <summary>
     /// 单点笔迹 = 一个圆点。**不能靠描边**：零长度的线描出来什么都没有，
     /// 所以直接给一个半径为半个笔宽的圆，渲染那一侧会填充它。
+    ///
+    /// 有压感时半径**取这一点的压力**：轻轻一点是一个小点、按重了是一个大点
+    /// （和真笔一样；等宽的写法会让"点一下"永远是一个固定大小的圆）。
     /// </summary>
     private ID2D1Geometry BuildDot(ID2D1Factory1 factory)
     {
-        float rad = MathF.Max(1f, Width * 0.5f);
+        float rad = MathF.Max(1f, HasPressure && PressureWidth.Enabled
+            ? PressureWidth.HalfWidth(Width, Points[0].P)
+            : Width * 0.5f);
         return factory.CreateEllipseGeometry(
             new Ellipse(new Vector2(Points[0].X, Points[0].Y), rad, rad));
     }
@@ -1499,7 +4175,7 @@ internal sealed class ClearAction : EditAction
 /// </summary>
 internal sealed class SetStrokePropAction : EditAction
 {
-    public enum Prop { Color, Width, Lock }
+    public enum Prop { Color, Width, Lock, Dash, Grid }
 
     private readonly Stroke[] _targets;
     private readonly Prop _prop;
@@ -1507,8 +4183,12 @@ internal sealed class SetStrokePropAction : EditAction
     private readonly Color4[] _newColor;      // 每条各自的"新颜色"（荧光笔要转半透明，见下）
     private readonly float[] _oldWidth;
     private readonly bool[] _oldLock;
+    private readonly bool[] _oldGrid;
+    private readonly StrokeDash[] _oldDash;
     private readonly float _width;
     private readonly bool _lock;
+    private readonly bool _grid;
+    private readonly StrokeDash _dash;
     private readonly RectF _before;
 
     /// <summary>
@@ -1537,6 +4217,25 @@ internal sealed class SetStrokePropAction : EditAction
         : this(targets) { _prop = Prop.Lock; _lock = locked; _oldLock = new bool[_targets.Length];
                           for (int i = 0; i < _targets.Length; i++) _oldLock[i] = _targets[i].Locked; }
 
+    /// <summary>
+    /// 改线型（<see cref="StrokeDash"/>）。
+    /// **按条记旧值**：一批里可能实线/虚线混着选，撤销时要各自回到各自的原样。
+    /// </summary>
+    public SetStrokePropAction(IReadOnlyList<Stroke> targets, StrokeDash dash)
+        : this(targets) { _prop = Prop.Dash; _dash = dash; _oldDash = new StrokeDash[_targets.Length];
+                          for (int i = 0; i < _targets.Length; i++) _oldDash[i] = _targets[i].Dash; }
+
+    /// <summary>
+    /// 改**坐标系网格**开关（见 <see cref="Stroke.Grid"/>）。
+    ///
+    /// **为什么要多传一个 <paramref name="tag"/>**：C# 的重载只看参数类型，
+    /// 而"锁定"那条也是 `(targets, bool)`——两个语义撞在同一个签名上，编译器分不出来。
+    /// 传一个哑参数逼调用方把意图写清楚，免得"点了一下网格，结果对象被锁上了"。
+    /// </summary>
+    public SetStrokePropAction(IReadOnlyList<Stroke> targets, bool grid, Prop tag)
+        : this(targets) { _prop = tag; _grid = grid; _oldGrid = new bool[_targets.Length];
+                          for (int i = 0; i < _targets.Length; i++) _oldGrid[i] = _targets[i].Grid; }
+
     private SetStrokePropAction(IReadOnlyList<Stroke> targets)
     {
         _targets = new Stroke[targets.Count];
@@ -1561,10 +4260,13 @@ internal sealed class SetStrokePropAction : EditAction
                 case Prop.Color: s.Color = old ? _oldColor[i] : _newColor[i]; break;
                 case Prop.Width: s.Width = old ? _oldWidth[i] : _width; break;
                 case Prop.Lock:  s.Locked = old ? _oldLock[i] : _lock; break;
+                case Prop.Dash:  s.Dash = old ? _oldDash[i] : _dash; break;
+                case Prop.Grid:  s.Grid = old ? _oldGrid[i] : _grid; break;
             }
             // 颜色/粗细会改墨迹范围（半宽），必须让 InkBounds 的缓存失效；
-            // 锁定不改外观，不用重算。
-            if (_prop != Prop.Lock) s.InvalidateMetrics();
+            // **网格也会**：它改的是形状本身（多画一堆线），几何得重建；
+            // 锁定不改外观、线型也不改形状（只改"怎么描这条边"），这两样不用重算。
+            if (_prop is Prop.Color or Prop.Width or Prop.Grid) s.InvalidateMetrics();
             doc.Dirty.Add(s.PaddedBounds);                 // 新样子要画
         }
         doc.StructureChangedSinceRender = true;
@@ -1688,8 +4390,11 @@ internal sealed class SetStrokeGeometryAction : EditAction
         for (int i = 0; i < newPoints.Count; i++) _newPoints[i] = newPoints[i];
         _oldPoints = LocalPoints(target);
         // **两个包围盒都在动手之前算**：改完之后旧位置就再也问不出来了。
-        _before = Stroke.PaddedBoundsOf(_oldPoints, target.Transform, target.Width);
-        _after = Stroke.PaddedBoundsOf(_newPoints, target.Transform, target.Width);
+        // 平行四边形的第四个顶点不在点表里，靠 kind 让它现推（脏区不能漏它）；
+        // 曲线还要多传一个**朝向**（抛物线开哪个口 / 双曲线哪条是实轴）——
+        // 朝向变了也是"改几何"，那条路同样要从这里拿框。
+        _before = Stroke.PaddedBoundsOf(_oldPoints, target.Transform, target.Width, target.Kind, target.CurveAxis);
+        _after = Stroke.PaddedBoundsOf(_newPoints, target.Transform, target.Width, target.Kind, target.CurveAxis);
     }
 
     public override RectF AffectedBefore => _before;
@@ -2344,7 +5049,8 @@ internal sealed class InkDocument
             else
             {
                 // 自由笔迹：墨就是中心线两侧各半个笔宽，点到中心线的距离已经够准，走快的那条。
-                float reach = radius + s.Width * 0.5f;
+                // 半宽用**最粗处**：有压感的笔迹重压的地方比标称宽 50%（否则那一截擦不掉）。
+                float reach = radius + s.MaxHalfWidth;
                 if (s.DistanceToCanvas(x, y) > reach) continue;
             }
             int index = Strokes.IndexOf(s);
@@ -2627,6 +5333,11 @@ internal sealed class InkDocument
         {
             var a = pts[i - 1];
             var b = pts[i];
+            // **跳过抬笔标记**（双曲线两支之间那一下，见 OutlineBreak）。
+            // 这一条不能省：NaN 喂进 SegmentHitsRect 会一路"比较全为 false"，
+            // 最后**return true**——也就是"橡皮碰到 NaN 那段就算碰到"，
+            // 于是任意一擦都把整条双曲线删掉（比不跳过还糟）。
+            if (Stroke.IsOutlineBreak(a) || Stroke.IsOutlineBreak(b)) continue;
             if (!s.Transform.IsIdentity)
             {
                 a = Vector2.Transform(a, s.Transform);
@@ -2866,6 +5577,30 @@ internal sealed class InkDocument
         return true;
     }
 
+    /// <summary>
+    /// 给一批对象改线型（一步撤销）。见 <see cref="StrokeDash"/>。
+    /// 它是**样式**不是形状：包围盒、几何缓存、命中判定都不受影响。
+    /// </summary>
+    public bool ApplyDash(IReadOnlyList<Stroke> targets, StrokeDash dash)
+    {
+        if (targets == null || targets.Count == 0) return false;
+        var act = new SetStrokePropAction(targets, dash);
+        act.Redo(this);
+        Commit(act);
+        return true;
+    }
+
+    /// <summary>给一批**坐标系**改"要不要网格"（一步撤销）。见 <see cref="Stroke.Grid"/>。
+    /// 和线型不同：网格**改的是几何**（多画那些线），所以缓存要重建。</summary>
+    public bool ApplyGrid(IReadOnlyList<Stroke> targets, bool on)
+    {
+        if (targets == null || targets.Count == 0) return false;
+        var act = new SetStrokePropAction(targets, on, SetStrokePropAction.Prop.Grid);
+        act.Redo(this);
+        Commit(act);
+        return true;
+    }
+
     /// <summary>层级：把选中的整体置顶 / 置底（一步撤销）。内部相对顺序不变。</summary>
     public bool ReorderSelected(bool toFront)
     {
@@ -3035,7 +5770,7 @@ internal sealed class InkDocument
             if (!s.PaddedBounds.Contains(x, y)) continue;
 
             bool hit = s.Kind == StrokeKind.Freehand
-                ? s.DistanceToCanvas(x, y) <= s.Width * 0.5f + tolerance
+                ? s.DistanceToCanvas(x, y) <= s.MaxHalfWidth + tolerance    // 有压感时按最粗处（否则重压处点不中）
                 : s.HitTestExact(x, y, tolerance);
             if (!hit) continue;
 

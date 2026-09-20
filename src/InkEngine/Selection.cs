@@ -20,6 +20,66 @@ internal enum SelHandle
     EndpointA,
     /// <summary>图形的第二个端点手柄，见 <see cref="EndpointA"/>。</summary>
     EndpointB,
+    /// <summary>
+    /// **三个顶点**手柄（三角形 / 平行四边形，2026-09-19 第二批第②步）。
+    ///
+    /// 为什么不用现成的八向柄顶替：那八个的语义是"按包围盒的哪条边/哪个角缩放"，
+    /// 而这三个是"这一个**顶点**"——拖动语义完全不同（拖顶点改几何、拖角改变换），
+    /// 共用一个值迟早会串（和 EndpointA 那一条是同一个理由）。
+    /// 值排在最后，前面那些数字一个都没动。
+    /// </summary>
+    VertexA, VertexB, VertexC,
+    /// <summary>
+    /// **第四个顶点**手柄（坐标系 / 数轴，2026-09-19 第三批）。
+    ///
+    /// 这两个新种类的定义元素是**四个点**（外框两角 / 原点 / 单位长度点，见
+    /// <see cref="StrokeKind.Coordinate"/>），所以顶点柄多出一格。
+    /// 值排在最后，前面那些数字一个都没动。
+    /// </summary>
+    VertexD,
+}
+
+/// <summary>
+/// 图形的**定义元素手柄**（2026-09-19 第二批加）。
+///
+/// 与 <see cref="SelHandle"/> 的分工：SelHandle 是"通用框上的哪个位置"（八向 + 旋转），
+/// 这里是"哪一个定义元素"。椭圆的四个轴端点在参数上语义不同（左右只改 a、上下只改 b），
+/// 用通用框的 Left/Top 表达会读不清楚；三角形 / 平行四边形的三个顶点同理。
+/// 两者之间的映射只写在
+/// <see cref="SelectionHandles.SelHandleOf"/> / <see cref="SelectionHandles.HandleOf"/> 里。
+/// </summary>
+internal enum ShapeHandle
+{
+    None = 0,
+    /// <summary>直线 / 箭头的起点、**圆的圆心**、椭圆的中心。（拖它 = 整体平移）</summary>
+    Anchor,
+    /// <summary>直线 / 箭头的终点、**圆的圆周点**。（拖它 = 改这个定义元素）</summary>
+    Rim,
+    /// <summary>
+    /// **横向 / 纵向的参数手柄**（用户 2026-09-20 精简："**一个量只留一个把手**"）。
+    ///
+    /// 原来椭圆有四个（左右 + 上下），可左右两个**都只改 a**、上下两个**都只改 b**——
+    /// 同一个量配两个把手，抓取目标多了一个、信息量一个没多。现在各留一个：
+    ///   · <see cref="AxisRight"/> = 椭圆的**右端点**（只改 a）、抛物线的**通径端点**（只改 p）；
+    ///   · <see cref="AxisTop"/>   = 椭圆的**上端点**（只改 b）、双曲线的**渐近线角点**（只改斜率）、
+    ///     正弦 / 余弦的**谷点**（横改周期、竖改振幅）。
+    /// 抓不到左边就把右边那个往左拖过中心（拖过头会被最小值卡住，等于一路缩到底），
+    /// 所以删掉的两个不是"少了功能"，是少了两个重复的抓取目标。
+    /// </summary>
+    AxisRight, AxisTop,
+    /// <summary>
+    /// 三角形 / 平行四边形的三个顶点（0/1/2 = `Points` 里的下标）。
+    ///
+    /// 拖哪个只动哪个；平行四边形的**第四个角不给手柄**（用户定：它是算出来的，
+    /// `第2 + 第3 − 第1`，拖它没有意义，见 计划-图形工具.md 9.5）。
+    /// 下标从 Vertex0 连续排，所以 `h - Vertex0` 就是点序号（见 <see cref="SelectionHandles.VertexIndex"/>）。
+    ///
+    /// 坐标系 / 数轴用的是**同一族**里的第四格 <see cref="Vertex3"/>：
+    /// 它们的定义元素是四个点，本身没有"推导出来的点"这回事。
+    /// </summary>
+    Vertex0, Vertex1, Vertex2,
+    /// <summary>第四个顶点（只有坐标系 / 数轴有，见 <see cref="SelectionHandles.VertexIndex"/>）。</summary>
+    Vertex3,
 }
 
 /// <summary>
@@ -47,7 +107,37 @@ internal enum SelBarButton
     Delete = 8,
 }
 
-/// <summary>浮动面板的种类。同一时刻只开一个。</summary>
+/// <summary>
+/// **吸到了什么**（一族"特殊形状"吸附，规格 9.6）。
+///
+/// 为什么要一个专门的枚举、而不是只报个 bool：三条硬要求里有一条是
+/// "**吸住时要说得出吸到了什么**"——胶囊上要写"等边"/"正方形"/"菱形"这些字。
+/// 枚举值同时也是"哪一种约束"的标识，自检直接按它断言。
+/// 文案在 <see cref="SelectionHandles.ShapeSnapLabel"/>（只有那一份，画与脏区共用）。
+/// </summary>
+internal enum ShapeSnapKind
+{
+    /// <summary>没吸住（或这一拖根本不适用吸附）。</summary>
+    None = 0,
+    /// <summary>三角形：两腰等长（被拖的点落在另两点的中垂线上）。</summary>
+    Isosceles,
+    /// <summary>三角形：三边相等。</summary>
+    Equilateral,
+    /// <summary>三角形：某个内角恰好 90°。</summary>
+    RightAngle,
+    /// <summary>矩形：两边相等（正方形）。</summary>
+    Square,
+    /// <summary>椭圆：a = b（正圆）。</summary>
+    Circle,
+    /// <summary>平行四边形：邻边相等（菱形）。</summary>
+    Rhombus,
+    /// <summary>平行四边形：邻边垂直（矩形）。</summary>
+    Rectangle,
+}
+
+/// <summary>
+/// 浮动面板的种类。同一时刻只开一个。
+/// </summary>
 internal enum SelPanel
 {
     None = 0,
@@ -249,6 +339,331 @@ internal static class SelectionHandles
     /// <summary>端点手柄的槽位（0 = 第一个控制点、1 = 最后一个）→ Points 里的下标。</summary>
     public static int EndpointIndex(Stroke s, int slot) => slot <= 0 ? 0 : s.Points.Count - 1;
 
+    // =====================================================================
+    //  图形的**定义元素**手柄（直线 / 箭头 / 圆 / 椭圆）
+    //
+    //  为什么在 SelHandle 之上再分一层：SelHandle 说的是"通用框上的哪个位置"
+    //  （八个方向 + 旋转），而这里说的是"这是哪个定义元素"。
+    //  椭圆的四个轴端点在**参数**上是不同语义的（左右只改 a、上下只改 b），
+    //  拿通用框的 Left/Top 去表达，读代码的人分不清"这是框的左边中点还是长轴左端"。
+    //  两层的映射只写在 SelHandleOf / HandleOf 这两个函数里。
+    //  见 计划-图形工具.md 9.1（"手柄 = 图形的定义元素 ＋ 一个旋转柄"）。
+    // =====================================================================
+
+    /// <summary>
+    /// 选区是不是"单选一个由定义元素驱动的图形"（直线 / 箭头 / 圆 / 椭圆 / 三角形 / 平行四边形）。
+    ///
+    /// 只认单选：多选要的是"整组缩放"，那还得靠通用框。
+    /// **矩形保留八个通用柄**（用户定：它是唯一"拉了还是矩形"的图形），
+    /// 图像 / 自由笔迹没有"定义元素"这回事。
+    /// </summary>
+    public static bool ShapeEditable(IReadOnlyList<Stroke> sel, out Stroke stroke)
+    {
+        stroke = null;
+        if (sel == null || sel.Count != 1) return false;
+        var s = sel[0];
+        if (s == null || s.IsImage || s.Points.Count < 2) return false;
+        // 名单只有一份（见 Stroke.IsShapeKind）——原来这里手写了十三项，
+        // 和 Model 里那份、以及引擎 `IsShapeTool` 那份三处并行，加图形要改三遍。
+        if (!Stroke.IsShapeKind(s.Kind)) return false;
+        stroke = s;
+        return true;
+    }
+
+    /// <summary>
+    /// 这个图形有哪些手柄，写进 <paramref name="dst"/>，返回个数（最多 5 个，调用方给 5 个格子）。
+    ///
+    /// 用"写进缓冲 + 返回个数"而不是返回 List：手柄命中在悬停时**每帧都跑**，
+    /// 每帧 new 一个 List 是白给的垃圾（这也是仓库里 SpatialGrid 那套的老规矩）。
+    /// 顺序 = 绘制顺序；命中时**倒着**遍历（后画的先中），见 HitTest。
+    /// </summary>
+    public static int ShapeHandlesOf(Stroke s, Span<ShapeHandle> dst)
+    {
+        if (s == null) return 0;
+        switch (s.Kind)
+        {
+            case StrokeKind.Line:
+            case StrokeKind.Arrow:
+            case StrokeKind.Circle:
+                if (dst.Length < 2) return 0;
+                dst[0] = ShapeHandle.Anchor;
+                dst[1] = ShapeHandle.Rim;
+                return 2;
+
+            case StrokeKind.Ellipse:
+                // **两个**（用户 2026-09-20 精简：原来是五个）：
+                //   AxisRight = **右端点**，只改 a（原来左右两个都管 a，留一个）
+                //   AxisTop   = **上端点**，只改 b（原来上下两个都管 b，留一个）
+                // 中心那个手柄也去掉了：**拖整条就是平移**，再在中心放一个把手
+                // 只是多了一个"抓了也没多出功能"的目标。
+                if (dst.Length < 2) return 0;
+                dst[0] = ShapeHandle.AxisRight;
+                dst[1] = ShapeHandle.AxisTop;
+                return 2;
+
+            case StrokeKind.Triangle:
+            case StrokeKind.Parallelogram:
+                // **只有三个**：多边形是由顶点定义的，第四个角（平行四边形）是算出来的。
+                if (dst.Length < 3 || s.Points.Count < 3) return 0;
+                dst[0] = ShapeHandle.Vertex0;
+                dst[1] = ShapeHandle.Vertex1;
+                dst[2] = ShapeHandle.Vertex2;
+                return 3;
+
+            case StrokeKind.Coordinate:
+                // **三个**（外框两角 / 原点）：这三个都是真的定义元素，都上手柄。
+                if (dst.Length < 3 || s.Points.Count < 3) return 0;
+                dst[0] = ShapeHandle.Vertex0;
+                dst[1] = ShapeHandle.Vertex1;
+                dst[2] = ShapeHandle.Vertex2;
+                return 3;
+
+            case StrokeKind.NumberLine:
+                // **两个**（左端 / 右端）。没有刻度之后，"零点"和"单位长度点"退场了
+                // （见 StrokeKind.NumberLine），所以这里是两个手柄而不是四个。
+                if (dst.Length < 2 || s.Points.Count < 2) return 0;
+                dst[0] = ShapeHandle.Vertex0;
+                dst[1] = ShapeHandle.Vertex1;
+                return 2;
+
+            case StrokeKind.Parabola:
+                // **一个**（2026-09-20 精简）：**曲线上的那个点**（画第二步拖出来的"经过点"）。
+                // 它拖起来 = 改 `p`（朝向是操作条那格选的，不受它影响）。
+                // 原来还有一个"通径端点"，改的也是 `p` —— 两个把手管同一个量，删掉一个。
+                // 顶点不给手柄（拖整条 = 平移）。
+                if (dst.Length < 1 || s.Points.Count < 2) return 0;
+                dst[0] = ShapeHandle.Rim;
+                return 1;
+
+            case StrokeKind.Hyperbola:
+                // **两个**（中心不给手柄 = 拖整条平移）：
+                //   Rim     = **顶点**（在曲线上：只改 a，**渐近线斜率保持不变**）
+                //   AxisTop = **渐近线框的角点**（只改斜率 b/a，a 不变）
+                // 这两个手柄合起来正是老师的作图次序：先定渐近线，再拖顶点。
+                if (dst.Length < 2 || s.Points.Count < 2) return 0;
+                dst[0] = ShapeHandle.Rim;
+                dst[1] = ShapeHandle.AxisTop;
+                return 2;
+
+            case StrokeKind.Sine:
+            case StrokeKind.Cosine:
+                // **一个**（用户 2026-09-20 精简：原来是峰、谷两个）。
+                // 峰点和谷点管的是**同一对量**（横 = 周期、竖 = 振幅），
+                // 留两个等于给同一件事配两个把手 —— 所以只留一个。
+                //
+                // 留的是**谷点**（`AxisTop`）：正弦在 3/4 周期处、余弦在 1/2 周期处。
+                // **不能留余弦的峰点**：它在周期末尾（u = 1），y 恒等于起点的 y，
+                // 那个把手在设计上只能改周期、改不了振幅（见 Engine 的写回）。
+                // 起点不给手柄——拖整条图形 = 平移，起点跟着走。
+                if (dst.Length < 1 || s.Points.Count < 2) return 0;
+                dst[0] = ShapeHandle.AxisTop;
+                return 1;
+
+            default:
+                return 0;
+        }
+    }
+
+    /// <summary>顶点手柄 → `Points` 里的下标（0/1/2/3）；不是顶点柄就返回 -1。</summary>
+    public static int VertexIndex(ShapeHandle h)
+        => h is ShapeHandle.Vertex0 or ShapeHandle.Vertex1 or ShapeHandle.Vertex2 or ShapeHandle.Vertex3
+            ? (int)(h - ShapeHandle.Vertex0) : -1;
+
+    /// <summary>
+    /// 这个 **SelHandle** 是不是顶点柄（`VertexA` ～ `VertexD`）。
+    ///
+    /// 归一成一条判据是必须的：引擎问"按下的是不是定义元素手柄"用的是它
+    /// （见 Engine 的手势分流）。以前那里写的是一串 `VertexA or VertexB or VertexC`，
+    /// 2026-09-19 加第四格 `VertexD` 时**就漏改了**——症状不是报错，而是
+    /// "拖单位长度点什么都没发生"（`--axistest` 当场抓到）。列一串名字的地方，
+    /// 加一格就漏一处；合成一个函数之后，加格子只需要改这里。
+    /// </summary>
+    public static bool IsVertexHandle(SelHandle h)
+        => h is SelHandle.VertexA or SelHandle.VertexB or SelHandle.VertexC or SelHandle.VertexD;
+
+    /// <summary>定义元素在**局部坐标**里的位置（= 它在 `Points` 里对应的那个定义）。</summary>
+    public static Vector2 ShapeHandleLocal(Stroke s, ShapeHandle h)
+    {
+        // 顶点手柄直接就是控制点本身（三角形 / 平行四边形：定义元素 = 顶点）。
+        int vi = VertexIndex(h);
+        if (vi >= 0)
+        {
+            if (vi >= s.Points.Count) return Vector2.Zero;
+            return new Vector2(s.Points[vi].X, s.Points[vi].Y);
+        }
+
+        var c = s.ShapeCenterLocal;
+
+        // 四种曲线的两个手柄**各有各的含义**，位置全部由定义元素现推
+        //（下面按种类分流；同一条规矩：手柄一定落在它管的东西旁边）。
+        // 正弦 / 余弦：只剩**一个**手柄 = **谷点**（用户 2026-09-20 精简掉了峰点：
+        // 两个点管的是同一对量）。它在曲线下方，拖它同时改振幅（y）和周期（x）
+        // ——见 Engine 的写回。
+        if (s.Kind is StrokeKind.Sine or StrokeKind.Cosine)
+            return h == ShapeHandle.AxisTop ? s.WaveTroughLocal() : s.WaveStartLocal();
+
+        // 抛物线：只剩**一个**手柄 = **曲线上的那个点**（也就是画第二步拖出来的"经过点"）。
+        // 原来还有个"通径端点"（同样只改 p）——**两个把手管同一个量**，2026-09-20 精简掉了。
+        // 顶点不给手柄（拖整条就是平移）。
+        if (s.Kind == StrokeKind.Parabola)
+            return h == ShapeHandle.Rim ? s.CurvePointLocal(1) : s.CurvePointLocal(0);
+
+        // 双曲线（2026-09-20 重定，跟着"渐近线锁定后不许动"那套语义走）：
+        //   Rim     = **曲线上的那个点**（第三个定义元素）→ 拖它改曲线的半轴，
+        //             **渐近线一个字都不动**；
+        //   AxisTop = **渐近线框的角点**（第二个定义元素）→ 拖它改渐近线框（斜率与长度）。
+        // 中心不给手柄（拖整条就是平移）。
+        if (s.Kind == StrokeKind.Hyperbola)
+            return h switch
+            {
+                ShapeHandle.Rim => s.HyperbolaCurvePointLocal(),
+                ShapeHandle.AxisTop => s.HyperbolaCornerLocal(),
+                _ => s.CurvePointLocal(0),
+            };
+
+        return h switch
+        {
+            ShapeHandle.Anchor => c,
+            ShapeHandle.Rim => s.RimLocalPoint(),
+            // 椭圆只剩"右端点（管 a）＋ 上端点（管 b）"两个，见 ShapeHandlesOf。
+            ShapeHandle.AxisRight => c + new Vector2(s.SemiAxisALocal, 0f),
+            ShapeHandle.AxisTop => c + new Vector2(0f, -s.SemiAxisBLocal),   // 屏幕 y 向下，"上"是 -y
+            _ => c,
+        };
+    }
+
+    /// <summary>定义元素在**画布坐标**里的位置（手柄画在哪、读数的锚点，都用它）。</summary>
+    public static Vector2 ShapeHandleCanvasPosition(Stroke s, ShapeHandle h)
+        => Vector2.Transform(ShapeHandleLocal(s, h), s.Transform);
+
+    /// <summary>
+    /// 这个图形给不给旋转柄。
+    ///
+    /// **圆不给**（用户定："圆转了看不出来"）；
+    /// **坐标系 / 数轴也不给**（2026-09-19 第三批）：它们的存在意义就是"水平轴 + 竖直轴"，
+    /// 转歪了既不是坐标系也不是数轴——而且刻度、箭头、网格全是按"轴对齐"画的，
+    /// 给个旋转柄等于把一个画不出来也说不清的状态开放给用户。
+    /// 不给就是连命中都不做，而不是"画不出来但点得到"。
+    ///
+    /// **2026-09-20 第四批：四种曲线也不给**（抛物线 / 双曲线 / 正弦 / 余弦）。
+    /// 理由和坐标系同源，只是换了说法：
+    ///   · 抛物线 / 正弦 / 余弦是**函数图象**，"开口朝上、y 轴向上"是它们的一部分，
+    ///     转歪了就不是课本上那条曲线了（左右开口的抛物线要先切朝向，再转 90°，
+    ///     两条口径叠在一起更说不清）；
+    ///   · 双曲线的标准方程就是"实轴沿 x 或 y"，转歪之后既不是标准位置、
+    ///     也不好说清哪条是实轴——朝向这件事用操作条那一格去切，比用旋转柄更明确。
+    /// </summary>
+    public static bool RotateHandleVisible(Stroke s)
+        => !(s.Kind is StrokeKind.Circle or StrokeKind.Coordinate or StrokeKind.NumberLine)
+           && !Stroke.IsCurveKind(s.Kind);
+
+    /// <summary>
+    /// 这个定义元素手柄拖起来是**整体平移**还是**改几何**。
+    ///
+    /// 只有"**圆的圆心**"是平移（用户定：拖圆心 = 整个圆平移、半径不变）。
+    /// 直线的起点**不是**——直线没有"中心"这个概念，拖它就是把那一头拉走
+    /// （这也是 <see cref="ShapeHandle.Anchor"/> 这个名字的含义："这条图形挂靠的那个点"，
+    /// 对直线是起点、对圆是圆心）。
+    ///
+    /// **椭圆的中心 2026-09-20 起不在名单里**：那个手柄本身被精简掉了（拖整条就是平移），
+    /// 所以这里也不该再认它——认了就等于给一条已经没有入口的路留后门。
+    /// 判据集中在这一个函数里：手势入口（Engine）与写点（Engine）都用它，
+    /// 免得"入口按平移处理、写点却按改几何"这种两套账。
+    /// </summary>
+    public static bool IsAnchorMove(Stroke s, ShapeHandle h)
+        => h == ShapeHandle.Anchor && s.Kind is StrokeKind.Circle;
+
+    /// <summary>ShapeHandle → SelHandle（手势状态机统一用 SelHandle 记"抓着哪个"，见 Engine）。</summary>
+    public static SelHandle SelHandleOf(ShapeHandle h) => h switch
+    {
+        ShapeHandle.Anchor => SelHandle.EndpointA,
+        ShapeHandle.Rim => SelHandle.EndpointB,
+        ShapeHandle.AxisRight => SelHandle.Right,
+        ShapeHandle.AxisTop => SelHandle.Top,
+        ShapeHandle.Vertex0 => SelHandle.VertexA,
+        ShapeHandle.Vertex1 => SelHandle.VertexB,
+        ShapeHandle.Vertex2 => SelHandle.VertexC,
+        ShapeHandle.Vertex3 => SelHandle.VertexD,
+        _ => SelHandle.None,
+    };
+
+    /// <summary>
+    /// SelHandle → ShapeHandle（命中之后翻译成"抓着哪个定义元素"）。
+    /// 椭圆不给"外角点"手柄（用户定：四个轴端点已经把拉伸给全了），所以 EndpointB 对它是 None；
+    /// 顶点柄只对"由顶点定义"的那四种图形有意义（三角形 / 平行四边形 / 坐标系 / 数轴），
+    /// 别的种类上回 None。
+    /// </summary>
+    public static ShapeHandle HandleOf(Stroke s, SelHandle h)
+    {
+        // 三角形 / 平行四边形 / 坐标系 / 数轴：定义元素**就是那些控制点**，别的 SelHandle 一律"没有"。
+        // 和"直线不给八向缩放柄留后门"是同一条规矩（见 HitTest 的注释）：
+        // 画都不画的东西，也不该点得到、更不该被翻译成一个能改几何的元素
+        // （EndpointB 落到 Rim 上，外面那条拖动分支就会去改一个顶点）。
+        //
+        // 这里**不设上限**：三角形只用到前三个顶点，第四个自然落空——多给一格
+        // 比"按种类写死 3 还是 4"少一处会写错的地方。
+        if (IsVertexDefined(s))
+            return h switch
+            {
+                SelHandle.VertexA => ShapeHandle.Vertex0,
+                SelHandle.VertexB => ShapeHandle.Vertex1,
+                SelHandle.VertexC => ShapeHandle.Vertex2,
+                SelHandle.VertexD => ShapeHandle.Vertex3,
+                _ => ShapeHandle.None,
+            };
+        return h switch
+        {
+            SelHandle.EndpointA => HasHandle(s, ShapeHandle.Anchor) ? ShapeHandle.Anchor
+                                  : HasHandle(s, ShapeHandle.Rim) ? ShapeHandle.Rim
+                                  : ShapeHandle.None,
+            // Rim = "第二个定义元素"：直线的终点 / 圆的圆周点 / **抛物线的"曲线上的点"** /
+            // **双曲线的顶点**。判据**问 ShapeHandlesOf 自己**，不是另写一份名单——
+            // 见下面 HasHandle 的注释（2026-09-20 就是这么漏的）。
+            SelHandle.EndpointB => HasHandle(s, ShapeHandle.Rim) ? ShapeHandle.Rim : ShapeHandle.None,
+            // 横向 / 纵向的"参数端点"：椭圆、双曲线、正弦 / 余弦各自含义不同
+            //（位置见 ShapeHandleLocal）。这两格**是这一族图形唯一的"改参数"入口**；
+            // 再往下那两格（Left / Bottom）只有通用框那套（矩形 / 图像 / 笔迹）用得到。
+            SelHandle.Right => HasHandle(s, ShapeHandle.AxisRight) ? ShapeHandle.AxisRight : ShapeHandle.None,
+            SelHandle.Top => HasHandle(s, ShapeHandle.AxisTop) ? ShapeHandle.AxisTop : ShapeHandle.None,
+            _ => ShapeHandle.None,
+        };
+    }
+
+    /// <summary>
+    /// 这个对象**实际发没发**某一格手柄——判据是 <see cref="ShapeHandlesOf"/> 自己。
+    ///
+    /// **2026-09-20 踩过的坑**：这里原来是另一份手写名单（`HasAxisHandles(kind)`），
+    /// 注释还写着"四种曲线都留两个参数手柄"，而抛物线 / 正余弦当天已经各精简成**一个**
+    /// （`ShapeHandlesOf` 那头的名单是准的）。两份名单一漂移，后果不是"多画一个不存在的把手"
+    /// ——画的那头是准的——而是**按住包围盒右边中点（那里根本没画任何东西）拖动，曲线会跟着变**：
+    /// `Right` 被翻译成 `AxisRight`，外面那条拖动分支以为中了个真手柄，
+    /// 一路走到 `WriteVertexLocalPoints` 的兜底分支去改"曲线上的点"。
+    /// 收敛成"问唯一那份名单"之后，这种漂移不可能再发生。
+    /// </summary>
+    private static bool HasHandle(Stroke s, ShapeHandle want)
+    {
+        Span<ShapeHandle> buf = stackalloc ShapeHandle[8];
+        int n = ShapeHandlesOf(s, buf);
+        for (int i = 0; i < n; i++) if (buf[i] == want) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// 是不是"**完全由控制点定义**"的图形：三角形 / 平行四边形（三个点）
+    /// 和坐标系 / 数轴（四个点）。
+    ///
+    /// 和 <see cref="IsPolygon"/> 的区别：这个是"手柄怎么发"的口径
+    /// （顶点柄发几格、别的 SelHandle 一律不给），那个是"几何怎么算"的口径
+    /// （平行四边形要现推第四个角）。
+    /// </summary>
+    public static bool IsVertexDefined(Stroke s)
+        => s != null && s.Kind is StrokeKind.Triangle or StrokeKind.Parallelogram
+                                   or StrokeKind.Coordinate or StrokeKind.NumberLine;
+
+    /// <summary>是不是"三个顶点定义"的多边形（三角形 / 平行四边形）。</summary>
+    public static bool IsPolygon(Stroke s)
+        => s != null && s.Kind is StrokeKind.Triangle or StrokeKind.Parallelogram;
+
     /// <summary>
     /// 端点手柄在**画布坐标**里的位置。
     ///
@@ -284,16 +699,23 @@ internal static class SelectionHandles
     public static SelHandle HitTest(float canvasX, float canvasY, IReadOnlyList<Stroke> sel,
                                     in SelectionFrame f, float dpiScale)
     {
-        if (EndpointEditable(sel, out var s))
+        if (ShapeEditable(sel, out var s))
         {
             float rad = HitRadiusLogical * dpiScale;
             var p = new Vector2(canvasX, canvasY);
-            if (Vector2.DistanceSquared(p, EndpointCanvasPosition(s, 0)) <= rad * rad)
-                return SelHandle.EndpointA;
-            if (Vector2.DistanceSquared(p, EndpointCanvasPosition(s, 1)) <= rad * rad)
-                return SelHandle.EndpointB;
-            // 旋转柄照旧（形状是"参数"，旋转是"姿态"，两码事）。
-            if (Vector2.DistanceSquared(p, CanvasPosition(SelHandle.Rotate, f, dpiScale)) <= rad * rad)
+            Span<ShapeHandle> handles = stackalloc ShapeHandle[5];
+            int n = ShapeHandlesOf(s, handles);
+            // **倒着找**：后画的手柄先命中。椭圆上"中心"和"轴端点"离得可能很近
+            // （半轴很小时），后画的轴端点是更具体的那个（拖它只改一条半轴），
+            // 让它优先，否则小椭圆上永远只能拖中心。
+            for (int i = n - 1; i >= 0; i--)
+            {
+                if (Vector2.DistanceSquared(p, ShapeHandleCanvasPosition(s, handles[i])) <= rad * rad)
+                    return SelHandleOf(handles[i]);
+            }
+            // 旋转柄照旧（形状是"参数"，旋转是"姿态"，两码事）；圆不给（见 RotateHandleVisible）。
+            if (RotateHandleVisible(s)
+                && Vector2.DistanceSquared(p, CanvasPosition(SelHandle.Rotate, f, dpiScale)) <= rad * rad)
                 return SelHandle.Rotate;
             return SelHandle.None;
         }
@@ -438,6 +860,21 @@ internal static class SelectionHandles
     /// 返回值折在 [0°,180°)。
     /// </summary>
     public static float SnapInclinationDegrees(float deg, bool gridSnap, bool noSnap, out bool snapped)
+        => SnapFoldedDegrees(deg, SpecialInclinationDegrees, gridSnap, noSnap, out snapped);
+
+    /// <summary>
+    /// 对**折在 [0°,180°) 里的角**做吸附——倾斜角与姿态角共用这一份实现，
+    /// 差别只在 <paramref name="targets"/>（直线是八个特殊角、图形是 0/90 两条）。
+    ///
+    /// 三种模式（优先级从高到低，和旋转共用同一套语义）：
+    ///   · <paramref name="noSnap"/>（Alt）：完全自由；
+    ///   · <paramref name="gridSnap"/>（Shift）：硬网格 15°（和旋转的 Shift 同一个数）；
+    ///   · 默认：软吸附到 <paramref name="targets"/> 里最近的一条
+    ///     （**环形**距离 ≤ <see cref="SoftSnapToleranceDegrees"/> 才吸）。
+    /// 返回值折在 [0°,180°)。
+    /// </summary>
+    public static float SnapFoldedDegrees(float deg, float[] targets, bool gridSnap, bool noSnap,
+                                          out bool snapped)
     {
         snapped = false;
         // 优先级和旋转那条**一模一样**（先看 Shift 的硬网格，再看 Alt 的自由）：
@@ -453,7 +890,7 @@ internal static class SelectionHandles
 
         float folded = FoldInclination(deg);
         float best = folded, bestDist = float.MaxValue;
-        foreach (float target in SpecialInclinationDegrees)
+        foreach (float target in targets)
         {
             float d = InclinationDistance(folded, target);   // 环形：179.5° 离 0° 只有 0.5°
             if (d < bestDist) { bestDist = d; best = target; }
@@ -478,6 +915,19 @@ internal static class SelectionHandles
     /// </summary>
     public static float SnapExpandedInclinationDegrees(float deg, bool gridSnap, bool noSnap,
                                                        out bool snapped)
+        => SnapExpandedDegrees(deg, SpecialInclinationDegrees, gridSnap, noSnap, out snapped);
+
+    /// <summary>
+    /// 同 <see cref="SnapExpandedInclinationDegrees"/>，但目标角由调用方给——
+    /// 直线的倾斜角喂八个特殊角，图形的**姿态角**喂 <see cref="PoseSnapDegrees"/>（0/90）。
+    ///
+    /// 姿态角为什么也要走"展开值"这一版（它读数本身是折过的）：
+    /// 三角形的姿态角折在 [0,180) 时，"179.6°"和"0°"只差 0.4°，但**两者差 180°**——
+    /// 拿折过的值去吸，一个本来只偏 0.4° 的三角形会被**翻过来 180°**（尖朝下的变成朝上）。
+    /// 所以吸附必须在连续的那个角上做，吸完把**最小**的修正量加回去。
+    /// </summary>
+    public static float SnapExpandedDegrees(float deg, float[] targets, bool gridSnap, bool noSnap,
+                                            out bool snapped)
     {
         snapped = false;
         float folded = FoldInclination(deg);          // 只用于判"离哪个角最近"
@@ -492,7 +942,7 @@ internal static class SelectionHandles
         if (noSnap) return deg;                       // Alt：完全自由
 
         float best = folded, bestDist = float.MaxValue;
-        foreach (float target in SpecialInclinationDegrees)
+        foreach (float target in targets)
         {
             float d = InclinationDistance(folded, target);
             if (d < bestDist) { bestDist = d; best = target; }
@@ -501,6 +951,11 @@ internal static class SelectionHandles
         snapped = true;
         return deg + InclinationShortestDelta(folded, best);
     }
+
+    /// <summary>姿态角的"展开值"吸附（目标 0/90，容差与直线一致 ±1°）；见 <see cref="SnapExpandedDegrees"/>。</summary>
+    public static float SnapExpandedPoseDegrees(float deg, bool gridSnap, bool noSnap,
+                                                out bool snapped)
+        => SnapExpandedDegrees(deg, PoseSnapDegrees, gridSnap, noSnap, out snapped);
 
     /// <summary>
     /// 把"指针位置"吸附成"**绕 <paramref name="start"/> 转过来、长度不变**"的端点，
@@ -533,6 +988,450 @@ internal static class SelectionHandles
             if (d < bestDist) { bestDist = d; bestTheta = cand; }
         }
         return new Vector2(start.X + MathF.Cos(bestTheta) * len, start.Y + MathF.Sin(bestTheta) * len);
+    }
+
+    // =====================================================================
+    //  一族"特殊形状"吸附（规格 9.6）
+    //
+    //  一句话：**把被拖的那个点修正到"恰好满足约束"的位置**。
+    //  三角形 → 等腰 / 等边 / 直角；矩形 → 正方形；椭圆 → 正圆；
+    //  平行四边形 → 菱形 / 矩形。
+    //
+    //  三条硬要求（不照做就会变成"手柄粘手"，见 计划-图形工具.md 9.6）：
+    //    ① **只在拖顶点 / 轴端点 / 角的时候吸**：整体移动、旋转一律不吸
+    //       （那两件事改的是位置和姿态，改不了"这是不是等腰三角形"）；
+    //    ② **容差要小**：长度 ≤ 2 逻辑像素、角度 ≤ 1°；
+    //    ③ **`Alt` 一律自由**，吸住时要说得出"吸到了什么"（胶囊上有字）。
+    //
+    //  量的都是**对象自己的局部坐标**里的量与角（顶点距离、两条边的夹角）——
+    //  那才是这个形状自己的性质。旋转不改变长度和夹角，所以"转过 30° 的三角形"照样吸；
+    //  对象被整体缩放过的情形下，容差在屏幕上会跟着放大/缩小，这是已知的近似
+    //  （与"描边宽度不随变换缩放"那一条是同一类取舍，见 HitTestExact 的注释）。
+    // =====================================================================
+
+    /// <summary>长度容差（**逻辑像素**，规格 9.6：≤ 2）。调用方乘 dpi 换算成画布单位。</summary>
+    public const float ShapeSnapLengthToleranceLogical = 2f;
+
+    /// <summary>角度容差（**度**，规格 9.6：≤ 1）。</summary>
+    public const float ShapeSnapAngleToleranceDegrees = 1f;
+
+    /// <summary>吸住了什么 → 胶囊上的字。**只有这一份**（画与脏区都读它）。</summary>
+    public static string ShapeSnapLabel(ShapeSnapKind k) => k switch
+    {
+        ShapeSnapKind.Isosceles => "等腰",
+        ShapeSnapKind.Equilateral => "等边",
+        ShapeSnapKind.RightAngle => "直角",
+        ShapeSnapKind.Square => "正方形",
+        ShapeSnapKind.Circle => "正圆",
+        ShapeSnapKind.Rhombus => "菱形",
+        ShapeSnapKind.Rectangle => "矩形",
+        _ => "",
+    };
+
+    /// <summary>
+    /// 三角形 / 平行四边形的特殊形状吸附：把被拖的第 <paramref name="index"/> 个控制点
+    /// 修正到"恰好满足约束"的位置，**其余两个点一个字不动**（这是"拖哪个只动哪个"的延续）。
+    ///
+    /// 传进来的三个点是**这次拖动的当前值**（<paramref name="proposed"/> 就是被拖那个点的
+    /// 新位置）：修正只可能改它，所以输出只有一个点。
+    /// <paramref name="lengthTol"/> 是**画布单位**下的容差（调用方按 dpi 换算）。
+    /// <paramref name="noSnap"/>（`Alt`）为真时一律返回原样。
+    /// </summary>
+    public static Vector2 SnapPolygonVertex(StrokeKind kind, int index,
+                                            Vector2 p0, Vector2 p1, Vector2 p2,
+                                            Vector2 proposed, float lengthTol, bool noSnap,
+                                            out ShapeSnapKind snapped)
+    {
+        snapped = ShapeSnapKind.None;
+        if (noSnap || index < 0 || index > 2) return proposed;   // Alt：完全自由
+
+        Span<Vector2> p = stackalloc Vector2[3];
+        p[0] = p0; p[1] = p1; p[2] = p2;
+        p[index] = proposed;
+        if (kind == StrokeKind.Triangle) return SnapTrianglePoints(p, index, lengthTol, out snapped);
+        if (kind == StrokeKind.Parallelogram)
+            return SnapParallelogramPoints(p, index, lengthTol, out snapped);
+        return proposed;
+    }
+
+    /// <summary>
+    /// 三角形的三个约束，**按优先级从上往下**判（都满足时取上面那条）：
+    ///   · **等边**（最强）→ 三边相等；
+    ///   · **等腰** → 两腰（被拖的点到另两点的距离）相等；
+    ///   · **直角** → **任意一个内角**离 90° 不超过 1°。
+    ///
+    /// 先判等边再判等腰是因为等边一定满足等腰（两边差 0）：反过来判的话，
+    /// 一个本来就等边的三角形会被"修正"成只是等腰（把第三个点拉到中垂线上就不再等边了），
+    /// 那是**把好东西改坏了**。
+    /// </summary>
+    private static Vector2 SnapTrianglePoints(ReadOnlySpan<Vector2> p, int k, float tol,
+                                              out ShapeSnapKind snapped)
+    {
+        snapped = ShapeSnapKind.None;
+        var v = p[k];
+        var a = p[(k + 1) % 3];
+        var b = p[(k + 2) % 3];
+        float ab = Vector2.Distance(a, b);
+        float va = Vector2.Distance(v, a);
+        float vb = Vector2.Distance(v, b);
+
+        // ① 等边：把被拖的点摆到"以另两点为边的正三角形第三个顶点"上
+        //    （两个候选取离现在更近的那个，也就是保持它原来在哪一侧）。
+        if (MathF.Abs(va - ab) <= tol && MathF.Abs(vb - ab) <= tol)
+        {
+            snapped = ShapeSnapKind.Equilateral;
+            return EquilateralThird(a, b, v);
+        }
+        // ② 等腰：落在另两点的**中垂线**上（"两腰等长"的全部位置就是它）。
+        if (MathF.Abs(va - vb) <= tol)
+        {
+            snapped = ShapeSnapKind.Isosceles;
+            return ProjectOntoPerpBisector(v, a, b);
+        }
+        // ③ 直角：先看被拖的那个顶点（用户正在调的就是这个角），再看另外两个。
+        for (int n = 0; n < 3; n++)
+        {
+            int j = (k + n) % 3;
+            var at = p[j];
+            var q = p[(j + 1) % 3] - at;
+            var r = p[(j + 2) % 3] - at;
+            if (MathF.Abs(AngleBetweenDegrees(q, r) - 90f) > ShapeSnapAngleToleranceDegrees)
+                continue;
+            snapped = ShapeSnapKind.RightAngle;
+            if (j == k)
+            {
+                // 直角就在被拖的这个顶点上：它必须落在"以另两点为直径的圆"上（泰勒斯定理）。
+                return ProjectOntoCircleDia(v, p[(j + 1) % 3], p[(j + 2) % 3]);
+            }
+            // 直角在另一个（固定的）顶点上：被拖的点必须落在"过那个顶点、垂直于那条固定边"的线上。
+            var fixedEnd = (j + 1) % 3 == k ? p[(j + 2) % 3] : p[(j + 1) % 3];
+            return ProjectOntoPerpLine(v, at, fixedEnd - at);
+        }
+        return v;
+    }
+
+    /// <summary>
+    /// 平行四边形的两个约束，**按优先级从上往下**判：
+    ///   · **菱形** → 邻边相等（`|u| = |v|`）；
+    ///   · **矩形** → 邻边垂直（`u · v = 0`）。
+    ///
+    /// 三条边向量按"拖的是哪个点"分化（只有被拖的那个点会动）：
+    ///   · 拖**底左**（下标 0）：两条边都挂在它身上 → 条件是"到另两点等距"→ 中垂线；
+    ///   · 拖**底右 / 顶左**（1 / 2）：只有一条边变 → 条件是"到 P0 的距离 = 另一条边的长"→ 圆。
+    /// 正方形同时满足两条，这时报**菱形**（顺序即优先级）。
+    /// </summary>
+    private static Vector2 SnapParallelogramPoints(ReadOnlySpan<Vector2> p, int k, float tol,
+                                                   out ShapeSnapKind snapped)
+    {
+        snapped = ShapeSnapKind.None;
+        var v = p[k];
+        var u = p[1] - p[0];        // 一条邻边（P0 → P1）
+        var w = p[2] - p[0];        // 另一条邻边（P0 → P2）
+        float lu = u.Length(), lw = w.Length();
+        if (lu < 1e-4f || lw < 1e-4f) return v;      // 退化成一点：没什么可吸的
+
+        if (MathF.Abs(lu - lw) <= tol)
+        {
+            snapped = ShapeSnapKind.Rhombus;
+            return k switch
+            {
+                0 => ProjectOntoPerpBisector(v, p[1], p[2]),
+                1 => RadialFrom(v, p[0], lw),      // 目标：离 P0 恰好 lw（= 另一条边的长）
+                _ => RadialFrom(v, p[0], lu),
+            };
+        }
+        if (MathF.Abs(AngleBetweenDegrees(u, w) - 90f) <= ShapeSnapAngleToleranceDegrees)
+        {
+            snapped = ShapeSnapKind.Rectangle;
+            return k switch
+            {
+                0 => ProjectOntoCircleDia(v, p[1], p[2]),
+                1 => ProjectOntoPerpLine(v, p[0], w),
+                _ => ProjectOntoPerpLine(v, p[0], u),
+            };
+        }
+        return v;
+    }
+
+    /// <summary>
+    /// 椭圆的**正圆吸附**（规格 9.6）：`|a − b| ≤ 容差` 时，把**被拖的那一条半轴**
+    /// 取成另一条的长——于是 a 与 b 逐位相等，是个正圆。
+    ///
+    /// 为什么改被拖的那一条、而不是两条各让一半：语义是"修正**被拖的那个点**的位置"，
+    /// 另一条半轴（和它那个手柄）不该跟着动。
+    /// <paramref name="other"/> = 另一条半轴的长；返回修正后的这一条。
+    /// </summary>
+    public static float SnapEllipseAxis(float current, float other, float lengthTol, bool noSnap,
+                                        out bool snapped)
+    {
+        snapped = false;
+        if (noSnap) return current;
+        if (MathF.Abs(current - other) > lengthTol) return current;
+        snapped = true;
+        return other;
+    }
+
+    /// <summary>
+    /// 拖**矩形四角**时的正方形吸附（规格 9.6）。返回 true = 吸住了，<paramref name="localM"/> 是矩阵。
+    ///
+    /// 判据量的是**矩形自己的两边长差**（不是"拖出来那一帧的框有多方"）：四角缩放是**等比**的
+    /// （见 DragMatrix 的注释），比值在整段拖动里不变，所以"这个矩形离正方形差多少"
+    /// 是按下那一刻就定下来的——按形状量才对得上用户看到的那个形状，
+    /// 否则拖出去一点就"忽然不吸了"（框上的边长差被同比放大，越过了容差）。
+    ///
+    /// 修正 = 把缩放因子拆成两个（不再是等比），让结果框的两边**恰好**相等：
+    /// `side = (w + h)/2 × s`，再按 `side/w`、`side/h` 分别缩放。因为原本就在容差内，
+    /// 修正量 ≤ 1 像素，手感上感觉不到"跳"，但结果是一个**精确**的正方形。
+    ///
+    /// 只在"单选一个矩形、而且它是**正着的**"时候生效：转过的矩形，选中框是它的外接正矩形
+    /// （虚胖的那一条），沿屏幕轴缩放和它自己的边长没有简单关系——宁可不吸，
+    /// 也不给一个解释不清的行为。**整体移动 / 旋转不走这里**（规格 9.6 第一条硬要求）。
+    /// </summary>
+    public static bool TrySnapSquareCorner(IReadOnlyList<Stroke> sel, SelHandle handle,
+                                           in SelectionFrame f, Vector2 currentPoint,
+                                           float dpiScale, bool noSnap, out Matrix3x2 localM)
+    {
+        localM = Matrix3x2.Identity;
+        if (noSnap || sel == null || sel.Count != 1) return false;         // Alt = 自由；多选不吸
+        var s = sel[0];
+        if (s == null || s.Kind != StrokeKind.Rectangle) return false;
+        if (!IsAxisAligned(s.Transform)) return false;
+        if (handle is not (SelHandle.TopLeft or SelHandle.TopRight
+                           or SelHandle.BottomLeft or SelHandle.BottomRight)) return false;
+
+        float w = f.Local.MaxX - f.Local.MinX;
+        float h = f.Local.MaxY - f.Local.MinY;
+        if (w <= 1e-3f || h <= 1e-3f) return false;
+        // **容差外一律不吸**（规格 9.6：长度 ≤ 2 逻辑像素）。
+        if (MathF.Abs(w - h) > ShapeSnapLengthToleranceLogical * dpiScale) return false;
+
+        var anchor = Position(Opposite(handle), f.Local, dpiScale);
+        var corner = Position(handle, f.Local, dpiScale);
+        float armX = corner.X - anchor.X, armY = corner.Y - anchor.Y;
+        if (MathF.Abs(armX) < 1e-3f || MathF.Abs(armY) < 1e-3f) return false;
+        float sx = (currentPoint.X - anchor.X) / armX;
+        float sy = (currentPoint.Y - anchor.Y) / armY;
+        // 四角 = 等比（取变化大的那一轴），和 DragMatrix 里那条规则同源——两边都改，
+        // 所以这里必须自己再算一遍，不能在 DragMatrix 的结果上打补丁。
+        float su = MathF.Max(MathF.Abs(sx), MathF.Abs(sy));
+        float side = (w + h) * 0.5f * su;
+        float fx = MathF.Sign(sx == 0f ? 1f : sx) * side / w;
+        float fy = MathF.Sign(sy == 0f ? 1f : sy) * side / h;
+        // 会被夹到最小缩放的不算吸住：那种时候对象已经被夹住了，"精确的正方形"没有意义，
+        // 而报"吸住了"却是假的。
+        if (MathF.Abs(fx) < MinScale || MathF.Abs(fy) < MinScale) return false;
+
+        localM = Matrix3x2.CreateScale(fx, fy, anchor);
+        return true;
+    }
+
+    /// <summary>
+    /// 把 <paramref name="v"/> 修正到"与 <paramref name="a"/>、<paramref name="b"/> 等距"的位置：
+    /// 即它在 `ab` 的**中垂线**上的最近点（沿中垂线投影）。
+    /// </summary>
+    private static Vector2 ProjectOntoPerpBisector(Vector2 v, Vector2 a, Vector2 b)
+    {
+        var m = (a + b) * 0.5f;
+        var d = b - a;
+        float len = d.Length();
+        if (len < 1e-4f) return v;
+        var n = new Vector2(-d.Y, d.X) / len;              // ab 的法线（单位）
+        return m + n * Vector2.Dot(v - m, n);
+    }
+
+    /// <summary>
+    /// 以 `ab` 为边、和 <paramref name="near"/> **同侧**的正三角形第三个顶点。
+    /// （边长 = `|ab|`，高 = `|ab|·√3/2`，从 `ab` 的中点沿法线抬高。）
+    /// </summary>
+    private static Vector2 EquilateralThird(Vector2 a, Vector2 b, Vector2 near)
+    {
+        var m = (a + b) * 0.5f;
+        var d = b - a;
+        float len = d.Length();
+        if (len < 1e-4f) return near;
+        var n = new Vector2(-d.Y, d.X) / len;
+        float h = len * 0.8660254f;                        // √3/2
+        float side = Vector2.Dot(near - m, n) < 0f ? -1f : 1f;
+        return m + n * (h * side);
+    }
+
+    /// <summary>
+    /// 把 <paramref name="v"/> 修正到"以 `ab` 为**直径**的圆"上的最近点——那是
+    /// `∠(a, v, b) = 90°`（泰勒斯定理）的全部位置。
+    /// </summary>
+    private static Vector2 ProjectOntoCircleDia(Vector2 v, Vector2 a, Vector2 b)
+    {
+        var m = (a + b) * 0.5f;
+        float r = Vector2.Distance(a, b) * 0.5f;
+        if (r < 1e-4f) return v;
+        var d = v - m;
+        float len = d.Length();
+        if (len < 1e-4f) return m + new Vector2(r, 0f);    // 正好落在圆心：随便挑一个方向
+        return m + d / len * r;
+    }
+
+    /// <summary>把 <paramref name="v"/> 修正到"过 <paramref name="p"/>、垂直于 <paramref name="dir"/>"的直线上的最近点。</summary>
+    private static Vector2 ProjectOntoPerpLine(Vector2 v, Vector2 p, Vector2 dir)
+    {
+        float len = dir.Length();
+        if (len < 1e-4f) return v;
+        var n = new Vector2(-dir.Y, dir.X) / len;
+        return p + n * Vector2.Dot(v - p, n);
+    }
+
+    /// <summary>把 <paramref name="v"/> 修正到"以 <paramref name="p0"/> 为心、半径 <paramref name="r"/> 的圆"上的最近点。</summary>
+    private static Vector2 RadialFrom(Vector2 v, Vector2 p0, float r)
+    {
+        var d = v - p0;
+        float len = d.Length();
+        if (len < 1e-4f) return p0 + new Vector2(r, 0f);
+        return p0 + d / len * r;
+    }
+
+    /// <summary>
+    /// 两条边的**内角**（度，落在 [0°,180°]）。
+    ///
+    /// 这是全工程"两边夹角"的权威实现（和 <see cref="InclinationDegrees"/> 同一层）：
+    /// 直角吸附、自检判"内角正好 90°"都走它，别在别处再写一遍 acos。
+    /// cos 夹到 [-1,1] 是必须的：`dot/(|u||v|)` 在浮点下会蹦出 1.0000001，
+    /// Acos 会返回 NaN——那个 NaN 会一路传进矩阵里。
+    /// </summary>
+    public static float AngleBetweenDegrees(Vector2 u, Vector2 v)
+    {
+        float lu = u.Length(), lv = v.Length();
+        if (lu < 1e-4f || lv < 1e-4f) return 0f;
+        float cos = Math.Clamp(Vector2.Dot(u, v) / (lu * lv), -1f, 1f);
+        return MathF.Acos(cos) * 180f / MathF.PI;
+    }
+
+    // =====================================================================
+    //  读数（规格 9.7）：图形的**姿态角** / 三角形的**内角** / 平行四边形的**夹角**
+    //
+    //  这三样都在这里成型，理由和上面那两处一样：**角度换算只有这一份**。
+    //  三个量量的都是"眼睛在屏幕上看到的那个角"，所以一律按**画布坐标**的点来算
+    //  （旋转过的图形，局部坐标里的角早就不是屏幕上的那个角了）。
+    // =====================================================================
+
+    /// <summary>
+    /// 单选拖旋转柄时读数走"**姿态角**"的那几种图形（规格 9.7）：矩形 / 椭圆 / 三角形 / 平行四边形。
+    ///
+    /// **圆不在内**（用户定："圆转了看不出来"）；直线 / 箭头也不在内——它们读倾斜角 α
+    /// （和姿态角是同一个东西，只是线上叫倾斜角）；图像 / 自由笔迹 / 多选照旧读转过的 Δ。
+    /// 和 <see cref="ShapeEditable"/> 一样只认单选，理由相同：多选要的是"整组转"，
+    /// 没有"这一个图形的姿态"可言。
+    /// </summary>
+    public static bool PoseEditable(IReadOnlyList<Stroke> sel, out Stroke stroke)
+    {
+        stroke = null;
+        if (sel == null || sel.Count != 1) return false;
+        var s = sel[0];
+        if (s == null || s.IsImage) return false;
+        if (s.Kind is not (StrokeKind.Rectangle or StrokeKind.Ellipse
+                           or StrokeKind.Triangle or StrokeKind.Parallelogram)) return false;
+        stroke = s;
+        return true;
+    }
+
+    /// <summary>
+    /// 图形**相对水平**的**姿态角**（度，折在 [0°,180°)）：0° = 正的、90° = 竖的。
+    ///
+    /// 怎么解出来：图形的局部坐标里它是"正着躺的"（矩形的四条边、椭圆的长轴、三角形的底边
+    /// 都平行于局部 x 轴），所以把**局部 x 轴**过一遍变换、量它现在的方向，就是它的姿态。
+    /// 折进 [0°,180°) 有两个作用：
+    ///   · 图形没有"正反"（转 180° 和没转看起来一样），折掉之后读数才是它真正的姿态；
+    ///   · **镜像 / 上下翻转**过的图形行列式为负，`atan2` 给出的符号是反的——折进
+    ///     [0°,180°) 之后就与镜像无关了（左右翻转的矩形照样读 0.0°），不必再判一次行列式。
+    /// 量方向这一步复用 <see cref="InclinationDegrees"/>——**不另写一份 atan2**。
+    /// </summary>
+    public static float PoseAngleDegrees(in Matrix3x2 m)
+        => InclinationDegrees(Vector2.Transform(Vector2.Zero, m), Vector2.Transform(Vector2.UnitX, m));
+
+    /// <summary>
+    /// 姿态角软吸附的目标角：**只有 0° / 90° 两条**（规格 9.7）。
+    ///
+    /// 比直线的八个特殊角少得多，因为姿态角要回答的问题只有一个——"这个图形摆正了没有"。
+    /// 0° = 正着、90° = 竖着，两条都算摆正；容差与直线那一套完全一致（±1°）。
+    /// </summary>
+    public static readonly float[] PoseSnapDegrees = { 0f, 90f };
+
+    /// <summary>
+    /// 对**姿态角**做吸附：`Shift` 15° 硬网格、`Alt` 自由、默认软吸附 0/90（±1°），
+    /// 和直线的倾斜角那一套是同一个函数（只是目标角换了一张表）。返回值折在 [0°,180°)。
+    /// </summary>
+    public static float SnapPoseDegrees(float deg, bool gridSnap, bool noSnap, out bool snapped)
+        => SnapFoldedDegrees(deg, PoseSnapDegrees, gridSnap, noSnap, out snapped);
+
+    /// <summary>姿态角读数文案：`姿态 = 0.0°`（和直线的 `α = …` 是同一种长相，只换名字）。</summary>
+    public static string FormatPose(float deg) => "姿态 = " + FormatOneDecimal(deg);
+
+    /// <summary>
+    /// 把一个角折进 [0°,180°)（里面就是 <see cref="FoldInclination"/>，只是下面那几段要用它）。
+    ///
+    /// 姿态角读数用：引擎吸住之后拿"吸到的那个展开值"折回来当标签
+    /// （0/90，或 Shift 网格上的角）——从矩阵里解出来的值在浮点噪声下可能是 179.9998°，
+    /// 数学上和 0° 是同一条线，可屏幕上写 "180.0°" 会让人以为"没转到 0"。
+    /// </summary>
+    public static float FoldDegrees(float deg) => FoldInclination(deg);
+
+    /// <summary>
+    /// 多边形要显示的那些角（度，**画布坐标**下算，规格 9.7）：三角形 = 三个内角、
+    /// 平行四边形 = **它自己那两个夹角**（对顶角相等，四个角只有两个不同的值，报一次即可）。
+    ///
+    /// <paramref name="vertices"/>：三角形给 3 个顶点；平行四边形给 **4 个**
+    /// （含那个推导出来的第四个角——它是被报出来的那个角的一条边，少了它角度就是错的）。
+    /// <paramref name="degrees"/> 至少 3 个格子。返回报了几个角。
+    ///
+    /// **每个角各自独立取值**（用户 2026-09-19 定）：以前三角形那三个还被按 0.1° 配平过，
+    /// 为的是让屏幕上那行"内角和 = 180.0°"自洽；那一行现在不显示了（用户："乱"），
+    /// 配平就一起撤了——留着它反而会让某一个角为了凑数**偏离真实角度 0.1°**。
+    /// </summary>
+    public static int PolygonAngles(StrokeKind kind, ReadOnlySpan<Vector2> vertices,
+                                    Span<float> degrees)
+    {
+        switch (kind)
+        {
+            case StrokeKind.Triangle:
+            {
+                if (vertices.Length < 3 || degrees.Length < 3) return 0;
+                for (int i = 0; i < 3; i++)
+                    degrees[i] = AngleAtVertexDegrees(vertices, i, (i + 1) % 3, (i + 2) % 3);
+                return 3;
+            }
+
+            case StrokeKind.Parallelogram:
+            {
+                if (vertices.Length < 4 || degrees.Length < 2) return 0;
+                // 报相邻的那两个顶点就够了：p0 处与 p1 处的角正好互补（同旁内角），
+                // 另外两个顶点是它们的对顶角，值一模一样。
+                degrees[0] = AngleAtVertexDegrees(vertices, 0, 1, 2);
+                degrees[1] = AngleAtVertexDegrees(vertices, 1, 0, 3);
+                return 2;
+            }
+
+            default:
+                return 0;
+        }
+    }
+
+    /// <summary>顶点 <paramref name="i"/> 处、由 <paramref name="ia"/> / <paramref name="ib"/> 两条边张成的角（度）。</summary>
+    private static float AngleAtVertexDegrees(ReadOnlySpan<Vector2> p, int i, int ia, int ib)
+        => AngleBetweenDegrees(p[ia] - p[i], p[ib] - p[i]);
+
+    /// <summary>内角 / 夹角的读数文案：`30.0°`（和直线读数胶囊同一位数的小数口径）。</summary>
+    public static string FormatAngleDegrees(float deg) => FormatOneDecimal(deg);
+
+    /// <summary>
+    /// 这个变换有没有"转过的分量"（`M12` / `M21` 非零 = 旋转或剪切）。
+    ///
+    /// 只有**正着的**矩形，"沿屏幕轴缩放"才等于"沿它自己两条边缩放"；
+    /// 转过的矩形选中框是外接正矩形（虚胖），两者没有简单关系。
+    /// 容差用相对量（千分之一）：矩阵在拖动里累积过浮点运算，拿 `== 0` 判会漏掉残留。
+    /// </summary>
+    private static bool IsAxisAligned(in Matrix3x2 m)
+    {
+        float s = MathF.Max(MathF.Abs(m.M11), MathF.Abs(m.M22));
+        if (s < 1e-6f) return false;
+        return MathF.Abs(m.M12) <= s * 1e-3f && MathF.Abs(m.M21) <= s * 1e-3f;
     }
 
     /// <summary>
@@ -878,6 +1777,17 @@ internal static class SelectionHandles
     ///   · **仍然没有"旋转 90°"**：旋转手柄 + Shift 的 15° 吸附已经覆盖任意角度，
     ///     再放一格是冗余（用户 2026-09-15 明确不要）。翻转两格**保留在条上**
     ///     （用户 2026-09-16 定：九格，不把翻转收进子面板）。
+    ///
+    /// **2026-09-20 这天第十格「开口方向」加了又撤、撤了又加，最后**真的撤掉**了**，
+    /// 三次的理由都记在这儿（免得以后又翻烧饼）：
+    ///   · **第一次撤**（用户："在选中栏调方向感觉不好"）：那时**拖手势也能改方向**，
+    ///     条上一格和手势重复，用户不知道该用哪个；
+    ///   · **加回**：抛物线改成"先选开口、再用两点画"之后，拖手势不管方向了，
+    ///     朝向只剩这一个入口——不加回的话"画完想换开口"只能删了重画；
+    ///   · **最终撤掉**（用户 2026-09-20 深夜："选中框的抛物线按钮功能取消哦，
+    ///     我不打算从这个转抛物线开口"）：朝向改到**画之前**在图形面板里定
+    ///     （那一格已经选中抛物线时**再点一次**换一档，见 Engine.CycleParabolaAxis）。
+    ///     选中之后就是不能再改朝向——这是用户的选择，不是缺功能。
     /// </summary>
     public const int BarButtonCount = 9;
     /// <summary>
@@ -1096,15 +2006,45 @@ internal static class SelectionHandles
         };
     }
 
-    /// <summary>颜色面板里"线型"那一行的第 i 格（0 = 实线，1 = 虚线）。</summary>
+    /// <summary>
+    /// 颜色面板里"线型"那一行的第 i 格：
+    /// **0 = 实线、1 = 虚线、2 = 点线**——顺序刻意与 <see cref="StrokeDash"/> 的取值一致，
+    /// 这样"第 i 格"和"第 i 号线型"不用再做一次对照表（少一张表就少一个漏改的地方）。
+    ///
+    /// 这一行原来是 2 格（实线/虚线）的占位；2026-09-19 接底层时扩成 3 格。
+    /// 格宽按"面板内宽 ÷ 格数"平分，以后再加档位只改 <see cref="StyleCellCount"/>。
+    /// </summary>
     public static RectF StyleCellRect(int i, in RectF sel, float dpi, in RectF visible, int swatchCount)
     {
         var p = PanelRect(sel, dpi, visible, swatchCount);
         float pad = PanelPaddingLogical * dpi;
+        float gap = PanelCellGapLogical * dpi;
         float rowTop = p.MinY + pad + PanelRowLogical * dpi;
-        float half = (p.MaxX - p.MinX - pad * 2 - 8 * dpi) * 0.5f;
-        float x = p.MinX + pad + i * (half + 8 * dpi);
-        return new RectF { MinX = x, MinY = rowTop, MaxX = x + half, MaxY = rowTop + PanelRowLogical * dpi };
+        float cellW = (p.MaxX - p.MinX - pad * 2 - gap * (StyleCellCount - 1)) / StyleCellCount;
+        float x = p.MinX + pad + i * (cellW + gap);
+        return new RectF { MinX = x, MinY = rowTop, MaxX = x + cellW, MaxY = rowTop + PanelRowLogical * dpi };
+    }
+
+    /// <summary>线型那一行有几格。**画与命中都读它**（见 <see cref="StyleCellRect"/>）。</summary>
+    public const int StyleCellCount = 3;
+
+    /// <summary>
+    /// 线型那一行现在该高亮哪一档 = **选中对象里第一条非图像对象的线型**
+    /// （和色板那条"取第一条的颜色"是同一个口径：多选时以第一条为准，改的时候整批一起改）。
+    ///
+    /// **画（浮动面板）与自检都读它**：以前这段"取第一条"的循环只写在绘制那一处，
+    /// 自检要断言"面板认得出现在是实线"就只能自己再抄一遍——那等于用另一份口径
+    /// 去验另一份口径，抄错了还看不出来。
+    /// </summary>
+    public static StrokeDash DashOfSelection(IReadOnlyList<Stroke> sel)
+    {
+        for (int i = 0; i < sel.Count; i++)
+        {
+            var s = sel[i];
+            if (s.IsImage) continue;              // 图像没有"线型"这个概念
+            return s.Dash;
+        }
+        return StrokeDash.Solid;                  // 没选中（或全是图像）：按实线高亮
     }
 
     /// <summary>点到面板的哪个部分了（渲染和命中同源）。</summary>
@@ -1114,6 +2054,7 @@ internal static class SelectionHandles
         Slider,
         StyleSolid,
         StyleDashed,
+        StyleDotted,
         SwatchBase,     // + i
         LayerFront,
         LayerBack,
@@ -1130,9 +2071,16 @@ internal static class SelectionHandles
         {
             var slider = SliderRect(sel, dpi, visible, swatchCount);
             if (slider.Contains(x, y)) return PanelPart.Slider;
-            for (int i = 0; i < 2; i++)
-                if (StyleCellRect(i, sel, dpi, visible, swatchCount).Contains(x, y))
-                    return i == 0 ? PanelPart.StyleSolid : PanelPart.StyleDashed;
+            for (int i = 0; i < StyleCellCount; i++)
+            {
+                if (!StyleCellRect(i, sel, dpi, visible, swatchCount).Contains(x, y)) continue;
+                return i switch
+                {
+                    1 => PanelPart.StyleDashed,
+                    2 => PanelPart.StyleDotted,
+                    _ => PanelPart.StyleSolid,
+                };
+            }
             for (int i = 0; i < swatchCount; i++)
                 if (SwatchRect(i, sel, dpi, visible, swatchCount).Contains(x, y))
                     return PanelPart.SwatchBase + i;

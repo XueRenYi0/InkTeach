@@ -28,28 +28,33 @@ internal enum KeyAction
 {
     None = 0,
 
-    // —— 全局（切换类）——
+    // —— 全局（切换类）—— 2026-09-19 起**只有 5 个动作配全局键**（见 KeyMap.GlobalAllowed）
     TogglePassThrough,
     ToolPen,
+    ToolEraser,
+    ToggleKeyboardMode,
+    Quit,
+
+    // —— 以下动作**都挂在应用内**（批注键盘模式打开时生效）——
     ToolHighlighter,
     ToolLaser,
-    ToolEraser,
     ToolPixelEraser,
     /// <summary>把选区里"被橡皮擦断"的笔迹拆成独立对象（默认不拆，见 Model.SplitErasedSelection）。</summary>
     SplitErased,
     ToolCapture,
     ToolMarquee,
+    // 图形工具（直线 / 矩形 / 椭圆 / 圆 / 三角形 / 平行四边形 / 箭头 / 坐标系）
+    // **刻意一个键都没有**（用户 2026-09-19 定："图形不需要加快捷键，通通取消掉"）。
+    // 原来给圆 / 三角形 / 平行四边形 / 坐标系 / 数轴配过 `Ctrl+Alt+O/T/G/F/N`，这一轮全撤：
+    // 它们的入口就是主条「图形」那一格的上带，点一下换一种，比记八个 `Ctrl+Alt+?` 快；
+    // 也省掉一串注册冲突（`Ctrl+Alt+H` 就被别的程序占着）。
+    // 所以这里**没有** ToolCircle / ToolTriangle / ToolParallelogram / ToolCoordinate / ToolNumberLine。
     /// <summary>框选工具下拖空白处的方式：矩形框 ←→ 自由套索（见 InkEngine.SelMode）。</summary>
     SelectShape,
     Undo,
     Clear,
     ToggleHud,
     CycleWidth,
-    ToggleKeyboardMode,
-    CyclePassThroughMode,
-    Quit,
-    HostBenchmark,          // 开发期：性能基准（宿主实现）
-    HostMemoryProbe,        // 开发期：内存探测（宿主实现）
 
     // —— 批注内（编辑类）——
     Redo,
@@ -318,10 +323,7 @@ internal sealed class KeyMap
         KeyAction.ToggleHud => "性能面板开关",
         KeyAction.CycleWidth => "切换当前工具粗细",
         KeyAction.ToggleKeyboardMode => "批注键盘模式开关",
-        KeyAction.CyclePassThroughMode => "切换穿透实现方式",
         KeyAction.Quit => "退出",
-        KeyAction.HostBenchmark => "性能基准（开发）",
-        KeyAction.HostMemoryProbe => "内存探测（开发）",
         KeyAction.SelectAll => "全选",
         KeyAction.Duplicate => "复制一份",
         KeyAction.DeleteSelected => "删除选中",
@@ -352,35 +354,42 @@ internal sealed class KeyMap
     /// <summary>
     /// 默认键位表。
     ///
-    /// 全局键一律 `Ctrl+Alt+…`：单 Ctrl/Alt 的键早被系统和其他软件占满了，
-    /// 而 Ctrl+Alt 组合既好按、又几乎没人抢（唯一踩到的是微信的 Ctrl+Alt+W）。
-    /// 批注内的键照 Windows 通用习惯（和 Word / 画图一致），不自己发明。
+    /// **两条作用域的边界（2026-09-19 收窄过一次）**：
+    ///   · **全局**（`Ctrl+Alt+…`）只放"最最最常用"的 5 条——换笔、换橡皮、穿透、
+    ///     键盘模式、退出。理由：全局热键是**抢别的程序的键**（注册多了还会撞车、
+    ///     被微信/QQ 占掉，见《快捷键总表》第五节），老师上课时真正闭着眼睛要按的
+    ///     就那么几个；
+    ///   · **应用内**（批注键盘模式打开时生效，默认开）放其余全部：工具、图形、粗细、
+    ///     性能面板、清空、撤销、编辑类……
+    ///
+    /// **键盘模式必须留在全局**，这是上面那条规则唯一的例外：它一关，键盘就还给下层程序、
+    /// **应用内快捷键全部失效**，降级等于把唯一的回头路锁死。
+    ///
+    /// 判据写在这里的用途是"下次加键时有根尺子"，不是装饰：`--keytest` 会断言
+    /// **全局里不许出现这 5 个之外的动作**。
     /// </summary>
+    private static readonly KeyAction[] GlobalAllowed =
+    {
+        KeyAction.TogglePassThrough, KeyAction.ToolPen, KeyAction.ToolEraser,
+        KeyAction.ToggleKeyboardMode, KeyAction.Quit,
+    };
+
+    /// <summary>自检用：全局作用域允许出现哪些动作（见上面的说明）。</summary>
+    internal static IReadOnlyList<KeyAction> GlobalAllowedActions => GlobalAllowed;
+
     public static KeyMap Default()
     {
         var m = new KeyMap();
         const KeyScope G = KeyScope.Global, A = KeyScope.Annotation;
 
+        // ---- 全局：最最常用的 5 条（见 GlobalAllowed 的说明）----
         m.Add(G, KeyAction.TogglePassThrough, "Ctrl+Alt+P", "全屏批注：能画 / 不能画");
         m.Add(G, KeyAction.ToolPen, "Ctrl+Alt+1", "换成笔");
-        m.Add(G, KeyAction.ToolHighlighter, "Ctrl+Alt+2", "换成荧光笔");
-        m.Add(G, KeyAction.ToolLaser, "Ctrl+Alt+3", "换成激光笔");
         m.Add(G, KeyAction.ToolEraser, "Ctrl+Alt+4", "换成橡皮擦（碰到哪一条就整条删掉）");
-        m.Add(G, KeyAction.ToolPixelEraser, "Ctrl+Alt+7", "换成像素橡皮（只擦掉碰到的一块，一笔会切成两段）");
-        m.Add(G, KeyAction.SplitErased, "Ctrl+Alt+8", "把选中的、被擦断的笔迹拆成独立对象（想单独搬动某一截时用）");
-        m.Add(G, KeyAction.ToolCapture, "Ctrl+Alt+S", "截图：拖一个框，抓到的图放到左上角并进剪贴板");
-        m.Add(G, KeyAction.ToolMarquee, "Ctrl+Alt+5", "换成框选（选择/移动/缩放/旋转）");
-        m.Add(G, KeyAction.SelectShape, "Ctrl+Alt+9", "选择方式：矩形框 ←→ 自由套索（面板上有显示）");
-        m.Add(G, KeyAction.Undo, "Ctrl+Alt+Z", "撤销一步");
-        m.Add(G, KeyAction.Clear, "Ctrl+Alt+C", "清空整页");
-        m.Add(G, KeyAction.ToggleHud, "Ctrl+Alt+I", "显示/隐藏性能面板");
-        m.Add(G, KeyAction.CycleWidth, "Ctrl+Alt+6", "切成当前工具的下一档粗细");
-        m.Add(G, KeyAction.ToggleKeyboardMode, "Ctrl+Alt+K", "键盘归批注层（编辑快捷键生效）");
-        m.Add(G, KeyAction.CyclePassThroughMode, "Ctrl+Alt+Y", "换穿透的实现方式");
+        m.Add(G, KeyAction.ToggleKeyboardMode, "Ctrl+Alt+K", "键盘归批注层（编辑与工具快捷键生效）");
         m.Add(G, KeyAction.Quit, "Ctrl+Alt+X", "退出");
-        m.Add(G, KeyAction.HostBenchmark, "Ctrl+Alt+B", "开发期：一万笔基准");
-        m.Add(G, KeyAction.HostMemoryProbe, "Ctrl+Alt+M", "开发期：内存/显存探测");
 
+        // ---- 应用内：原有那一批（编辑类 + 翻页 + 微调）----
         m.Add(A, KeyAction.Undo, "Ctrl+Z", "撤销一步");
         m.Add(A, KeyAction.Redo, "Ctrl+Y", "重做");
         m.Add(A, KeyAction.Copy, "Ctrl+C", "复制选中对象（粘回来仍是可编辑对象，同时给外部程序一张图）");
@@ -403,6 +412,30 @@ internal sealed class KeyMap
         // 教室里没键盘的老师走面板上带那两个按钮（见 InkUi.FullUi）。
         m.Add(A, KeyAction.FlipPageUp, "PageUp", "白板翻到上一屏（已经在最上面就不动）");
         m.Add(A, KeyAction.FlipPageDown, "PageDown", "白板翻到下一屏（下面永远还有一屏空白）");
+
+        // ---- 应用内：2026-09-19 从全局**降下来**的那一批 ----
+        //
+        // 键位规则只有一条：**去掉 Alt 那一层**（全局 `Ctrl+Alt+2` → 应用内 `Ctrl+2`）。
+        // 好处是肌肉记忆和《快捷键总表》里那几行都不用重新学，一句"降了一档"就说得清；
+        // Ctrl+数字本来就是应用内最顺手的一档（和 Ctrl+Z / Ctrl+C 那一套同一个手感）。
+        // 两个例外：
+        //   · **清空**用 `Ctrl+Shift+C`——`Ctrl+C` 是"复制选中"，清空占它就太危险了；
+        //   · **截图**用 `Ctrl+S`（原来全局是 Ctrl+Alt+S），不做成 Ctrl+Shift+S 是因为
+        //     S 这一档在应用内空着，按一下最快。
+        //
+        // 图形（直线/矩形/椭圆/圆/三角形/平行四边形/箭头/坐标系）**一个键都没有**
+        // （用户 2026-09-19 定："图形不需要加快捷键，通通取消掉"）：它们的入口就是
+        // 主条「图形」那一格的上带——点一下就是换一种，比记八个 `Ctrl+Alt+?` 快。
+        m.Add(A, KeyAction.ToolHighlighter, "Ctrl+2", "换成荧光笔（半透明大笔）");
+        m.Add(A, KeyAction.ToolLaser, "Ctrl+3", "换成激光笔（只留痕迹，不留墨）");
+        m.Add(A, KeyAction.ToolPixelEraser, "Ctrl+7", "换成像素橡皮（只擦掉碰到的一块，一笔会切成两段）");
+        m.Add(A, KeyAction.ToolMarquee, "Ctrl+5", "换成框选（选择/移动/缩放/旋转）");
+        m.Add(A, KeyAction.ToolCapture, "Ctrl+S", "截图：拖一个框，抓到的图放到左上角、自动选中并进剪贴板");
+        m.Add(A, KeyAction.SelectShape, "Ctrl+9", "选择方式：矩形框 ←→ 自由套索（面板上跟着显示）");
+        m.Add(A, KeyAction.CycleWidth, "Ctrl+6", "切成当前工具的下一档粗细");
+        m.Add(A, KeyAction.SplitErased, "Ctrl+8", "把选中的、被擦断的笔迹拆成独立对象（只服务老存档）");
+        m.Add(A, KeyAction.ToggleHud, "Ctrl+I", "显示/隐藏性能面板");
+        m.Add(A, KeyAction.Clear, "Ctrl+Shift+C", "清空整页（可撤销）");
         return m;
     }
 

@@ -185,8 +185,20 @@ public interface IUiHost
 public interface IEngineCommands
 {
     void SetTool(Tool tool);
+    /// <summary>
+    /// **换下一档抛物线开口方向**（向上 → 向右 → 向下 → 向左 → 向上）。
+    ///
+    /// 只动"下一笔抛物线朝哪开"，**不改已经画好的那些**——用户 2026-09-20 明确说
+    /// "不打算从选中框调朝向"。入口在图形面板：那一格**已经选中抛物线时再点一次**。
+    /// </summary>
+    void CycleParabolaAxis();
     void SetColor(Color4 color);
     void SetWidth(float logicalPx);
+    /// <summary>
+    /// **笔的线型**（实线 / 虚线 / 点线）。色带条上那个"虚实线切换"用它——
+    /// 只影响**以后新画的笔迹**，不碰已经画好的（那些走选中后的操作条面板）。
+    /// </summary>
+    void SetDash(StrokeDash dash);
     void Undo();
     void Redo();
     void Clear();
@@ -229,6 +241,21 @@ public interface IEngineCommands
 
     /// <summary>框选工具下的选择方式：矩形框（碰到墨就选中）／自由套索（圈住 80% 才选中）。</summary>
     void SetSelectMode(SelectMode mode);
+
+    /// <summary>
+    /// **新画的坐标系要不要网格**。界面在启动时把上次的偏好推一次（见 FullUi.LoadPrefs）。
+    ///
+    /// 它只影响**以后画的**：已经画在板上的坐标系各存各的（见 Stroke.Grid），
+    /// 改这个开关不会动它们——对象要自包含，不能长大了还受一个全局开关摆布。
+    /// </summary>
+    void SetCoordGridDefault(bool on);
+
+    /// <summary>
+    /// 「更多」抽屉里"坐标系网格"那一行被点了一下。
+    /// **选中了坐标系就改它们，没选中就翻"新画的默认值"**（语义见 Engine.ToggleSelectionGrid）。
+    /// 返回改了几个对象（0 = 改的是默认值，界面据此决定要不要把偏好落盘）。
+    /// </summary>
+    int ToggleCoordGrid();
 
     /// <summary>全选（引擎会顺手把工具切到框选，免得用户以为没生效）。</summary>
     void SelectAll();
@@ -336,6 +363,20 @@ public readonly struct UiState
     public float HighlighterWidth { get; init; }
     public Color4 HighlighterColor { get; init; }
     public float LaserWidth { get; init; }
+    /// <summary>
+    /// **笔的线型**（实线 / 虚线 / 点线）。界面色带条上那个"虚实线切换"按它显示当前档。
+    ///
+    /// 注意它是"**下一笔**用哪种"，不是"板子上那些笔迹现在是什么"——
+    /// 那些各存各的，选中之后在操作条的线型面板里改（那边读的是
+    /// <c>SelectionHandles.DashOfSelection</c>）。
+    /// </summary>
+    public StrokeDash Dash { get; init; }
+    /// <summary>
+    /// **抛物线工具当前的开口方向**（用户 2026-09-20 定：画**之前**定好，不在选中框里改）。
+    /// 界面用它把图形面板那一格的图标**转成这个朝向**——不转的话，老师看不出
+    /// 下一笔会朝哪开（那格点第二下的作用就是换它）。
+    /// </summary>
+    public CurveAxis ParabolaAxis { get; init; }
     public bool PassThrough { get; init; }
     /// <summary>是否处于白板模式（画布有不透明底色）。</summary>
     public bool Board { get; init; }
@@ -351,6 +392,11 @@ public readonly struct UiState
     public bool CaptureHideInk { get; init; }
     /// <summary>框选的选择方式（界面用它高亮"矩形/套索"那一格）。</summary>
     public SelectMode SelectMode { get; init; }
+    /// <summary>
+    /// **新画的坐标系要不要网格**（界面用它显示抽屉里那一行"坐标系网格：开/关"）。
+    /// 注意它是"默认值"，不是"板子上那些坐标系现在有没有格"——那些各存各的。
+    /// </summary>
+    public bool CoordGridDefault { get; init; }
     /// <summary>现在在第几屏（1 起）。界面用它显示"第 N 屏"。</summary>
     public int ScreenIndex { get; init; }
     /// <summary>还能不能往上翻（到顶了就不行）。"下一屏"永远可用。</summary>

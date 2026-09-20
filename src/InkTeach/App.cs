@@ -158,6 +158,42 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PanelTest();
         }
+        else if (mode == "--shapebandtest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ShapeBandTest();
+        }
+        else if (mode == "--dashtest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            DashTest();
+        }
+        else if (mode == "--axistest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            AxisTest();
+        }
+        else if (mode == "--curvetest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            CurveTest();
+        }
+        else if (mode == "--axisshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            AxisShowcase(args.Length > 1 ? args[1] : "reports/坐标系与数轴.bmp");
+        }
+        else if (mode == "--curveshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            CurveShowcase(args.Length > 1 ? args[1] : "reports/四种曲线.bmp");
+        }
         else if (mode == "--panelshow")
         {
             _autoExitAt = double.MaxValue;
@@ -318,9 +354,19 @@ internal sealed class App : InkEngine.InkEngine
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
+            // `--circle / --ellipse / --triangle / --parallelogram / --rectangle` 选图形
+            // （不给就是直线）；`--snap` = 那一张要拍"吸附生效中"的帧；
+            // `--angles` = 内角 / 夹角那一组读数；`--pose` = 拖旋转柄时的**姿态角**读数。
+            string kind = args.Contains("--circle") ? "circle"
+                        : args.Contains("--ellipse") ? "ellipse"
+                        : args.Contains("--triangle") ? "triangle"
+                        : args.Contains("--parallelogram") ? "parallelogram"
+                        : args.Contains("--rectangle") ? "rectangle" : "line";
             ShapeToolShowcase(args.Length > 1 ? args[1] : "reports/shape-line-handles.bmp",
-                              args.Contains("--drag"), args.Contains("--draw"),
-                              args.Contains("--rotate"), args.Contains("--rotated"));
+                              kind, args.Contains("--drag"), args.Contains("--draw"),
+                              args.Contains("--rotate"), args.Contains("--rotated"),
+                              args.Contains("--snap"), args.Contains("--angles"),
+                              args.Contains("--pose"));
         }
         else if (mode == "--captest")
         {
@@ -500,6 +546,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PressureDiagTest();
         }
+        else if (mode == "--pressuretest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PressureTest();
+        }
         else if (mode == "--predictdata")
         {
             _autoExitAt = double.MaxValue;
@@ -572,13 +624,6 @@ internal sealed class App : InkEngine.InkEngine
         return 0;
     }
 
-    /// <summary>开发期基准/内存探测挂在宿主里，引擎只留一个空钩子。</summary>
-    protected override void HandleHostHotkey(int id)
-    {
-        if (id == 10) Benchmark(10_000);
-        else if (id == 11) MemoryProbe();
-    }
-
     /// <summary>退出前把工具条的配置落盘，保证老师拖动的位置不会丢。</summary>
     protected override void Shutdown()
     {
@@ -630,11 +675,17 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --passtest          穿透真机测试（跨进程点击）");
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
+        Console.WriteLine("  --shapebandtest     图形那格的界面入口自检（七段 / 三个新热键 / 主条图标跟着变）");
+        Console.WriteLine("  --dashtest          线型自检（实线/虚线/点线上屏墨量、面板那一行、存档往返）");
+        Console.WriteLine("  --axistest          坐标系/数轴自检（画法 / 四个手柄 / 网格 / 上屏 / 存档往返）");
+        Console.WriteLine("  --axisshow [路径]   出图：坐标系（带网格/不带）+ 数轴 + 一条虚线");
+        Console.WriteLine("  --curvetest         四种曲线自检（画法 / 紧框 / 手柄精简 / 朝向 / 存档往返）");
+        Console.WriteLine("  --curveshow [路径]  出图：抛物线四种开口 + 双曲线两个方向 + 正弦/余弦各一周期");
         Console.WriteLine("  --pagetest          整屏翻页自检（一屏 = 一页：页高 = 视口高、只动相机、到顶就停）");
         Console.WriteLine("  --iotest [路径]     导出自检（选中 → PNG 透明底 / JPEG 白底；给路径就保留文件）");
         Console.WriteLine("  --patterntest       白板底纹自检（方格/横线/间距 + 数屏幕上的线 + 重铺代价）");
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
-        Console.WriteLine("  --panelshow <图> [--band] [--mini] [--drawer] [--cell N]   界面出图（离屏）");
+        Console.WriteLine("  --panelshow <图> [--band] [--mini] [--drawer] [--cell N] [--shape 名字] [--zoom N]   界面出图（离屏）");
         Console.WriteLine("  --captureshow <图>  截图取景框 + 尺寸读数出图（离屏）");
         Console.WriteLine("  --dialogprobe <前缀> [--save]  导出对话框探针（真弹框 + 点它的下拉 + 连拍三张；");
         Console.WriteLine("                     --save 连「保存」一起点，验到落盘为止）");
@@ -652,6 +703,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --trailtest         委托墨迹轨迹对照");
         Console.WriteLine("  --predicttest       笔迹预测自检（纯算法：直线/加速/急转/断笔/限幅/性能）");
         Console.WriteLine("  --pressurediag      压感采集诊断（合成笔注入：合并点、压感有效位、压力分布）");
+        Console.WriteLine("  --pressuretest      压感自检（映射函数 / 上屏粗细随压力变 / 无压感与虚线回退 / 存档往返）");
         Console.WriteLine("  --wetinktest        湿墨轨迹实测（只让系统画，数上屏像素：这条通道到底画不画）");
         Console.WriteLine("  --predictdata [路径] 真实笔迹数据上的预测评测（UCI Character Trajectories）");
         Console.WriteLine("  --latbench <csv>    延时实测（分场景 + 分位数 + 稳定性）");
@@ -3108,6 +3160,28 @@ internal sealed class App : InkEngine.InkEngine
                     || b.Action == KeyAction.SelectAll || b.Action == KeyAction.DeleteSelected
                     || b.Action == KeyAction.NudgeLeft), "");
 
+        // **全局只留最最常用的那几个**（用户 2026-09-19："除了最最最常用的功能需要全局热键以外，
+        // 其他的通通换成应用内快捷键就行了"）。判据取自 `KeyBindings.GlobalAllowed`
+        // ——那份名单是**产品的规则**，不是自检自己写的一份：两边各写一份早晚会分叉
+        // （这条仓库里踩过三次）。这里只负责"表里不许出现名单之外的动作"。
+        var allowedGlobal = new HashSet<KeyAction>(KeyMap.GlobalAllowedActions);
+        var stray = map.For(KeyScope.Global).Select(b => b.Action).Where(a => !allowedGlobal.Contains(a)).ToList();
+        Check("全局里没有那 5 个之外的动作",
+              stray.Count == 0,
+              stray.Count == 0
+                  ? $"全局 {nGlobal} 条，全是：{string.Join(" / ", allowedGlobal.Select(KeyMap.Describe))}"
+                  : "多出来：" + string.Join("、", stray.Select(KeyMap.Describe)));
+
+        // 图形**一个键都没有**（用户 2026-09-19："图形不需要加快捷键，通通取消掉"）。
+        // 查法是对着"退役的那五个组合"查，不是查动作名——动作枚举里已经没有图形那几个了，
+        // 查名字等于什么都没查。
+        foreach (var (name, vk) in new[] { ("O", 'O'), ("T", 'T'), ("G", 'G'), ("F", 'F'), ("N", 'N') })
+        {
+            var c = new KeyChord(KeyChord.ModCtrl | KeyChord.ModAlt, vk);
+            Check($"退役的图形键 Ctrl+Alt+{name} 不在任何作用域里",
+                  map.Bindings.All(b => !b.Chord.Equals(c)), "");
+        }
+
         // ---- 2. 按键解析 ----
         bool ok1 = KeyChord.TryParse("ctrl+alt+p", out var c1, out _);
         Check("解析 Ctrl+Alt+P（大小写不敏感）", ok1 && c1.ToString() == "Ctrl+Alt+P", c1.ToString());
@@ -3122,23 +3196,27 @@ internal sealed class App : InkEngine.InkEngine
         Check("只有修饰键要报错", !ok5 && err5 != null, err5);
 
         // ---- 3. 冲突检测 ----
-        bool taken = map.TrySet(KeyScope.Global, KeyAction.Undo, c1, out string errTaken);
+        // 样本动作用**笔**（全局里最常用的那一个）：以前用的是"全局撤销"，
+        // 而全局撤销 2026-09-19 已经降级成应用内的 Ctrl+Z，再拿它当样本就是拿一个
+        // 不存在的条目做实验（`TrySet` 会以"这个作用域里没有这个动作"直接失败，
+        // 冲突检测那一条于是变成假通过）。
+        bool taken = map.TrySet(KeyScope.Global, KeyAction.ToolPen, c1, out string errTaken);
         Check("撞了别人的键要拒绝并说清是谁", !taken && errTaken != null
               && errTaken.Contains("穿透"), errTaken);
 
         KeyChord.TryParse("F5", out var noMod, out _);
-        bool bare = map.TrySet(KeyScope.Global, KeyAction.Undo, noMod, out string errBare);
+        bool bare = map.TrySet(KeyScope.Global, KeyAction.ToolPen, noMod, out string errBare);
         Check("全局热键没有修饰键要拒绝", !bare && errBare != null, errBare);
 
         KeyChord.TryParse("Ctrl+Alt+F5", out var free, out _);
-        bool moved = map.TrySet(KeyScope.Global, KeyAction.Undo, free, out string errMove);
+        bool moved = map.TrySet(KeyScope.Global, KeyAction.ToolPen, free, out string errMove);
         Check("没冲突就能改，并标记成脏",
-              moved && map.Dirty && map.Find(KeyScope.Global, KeyAction.Undo).Chord.Equals(free),
-              $"撤销 → {map.Find(KeyScope.Global, KeyAction.Undo).Chord}");
+              moved && map.Dirty && map.Find(KeyScope.Global, KeyAction.ToolPen).Chord.Equals(free),
+              $"笔 → {map.Find(KeyScope.Global, KeyAction.ToolPen).Chord}");
 
-        map.ResetToDefault(KeyScope.Global, KeyAction.Undo);
-        Check("能恢复默认键", map.Find(KeyScope.Global, KeyAction.Undo).Chord.ToString() == "Ctrl+Alt+Z",
-              map.Find(KeyScope.Global, KeyAction.Undo).Chord.ToString());
+        map.ResetToDefault(KeyScope.Global, KeyAction.ToolPen);
+        Check("能恢复默认键", map.Find(KeyScope.Global, KeyAction.ToolPen).Chord.ToString() == "Ctrl+Alt+1",
+              map.Find(KeyScope.Global, KeyAction.ToolPen).Chord.ToString());
 
         // ---- 4. 落盘 / 读回 / 坏文件 ----
         string cfg = Path.Combine(Path.GetTempPath(), "inkteach-keytest.json");
@@ -3157,7 +3235,7 @@ internal sealed class App : InkEngine.InkEngine
                   warns.Count == 0 ? $"退出键 → {reloaded.Find(KeyScope.Global, KeyAction.Quit).Chord}"
                                    : string.Join("；", warns));
             Check("没改过的项仍是默认值（只写差异）",
-                  reloaded.Find(KeyScope.Global, KeyAction.Undo).Chord.ToString() == "Ctrl+Alt+Z", "");
+                  reloaded.Find(KeyScope.Global, KeyAction.ToolPen).Chord.ToString() == "Ctrl+Alt+1", "");
             Check("只写差异：文件里应当只有 1 条", File.ReadAllText(cfg).Split('\n')
                   .Count(l => l.Contains("\"Global.")) == 1, "");
 
@@ -4384,8 +4462,9 @@ internal sealed class App : InkEngine.InkEngine
         Check("拖动中：旧位置不许还留着那条线（预览与临时几何只能画一个）",
               staleInk == 0, $"{staleInk} 像素（这一段在临时几何之外，正确时应为 0）");
         Check("拖动中：α 被吸到 30°（软吸附）",
-              VertexInclinationSnapped && Math.Abs(VertexInclinationDegrees - 30f) < 0.5f,
-              $"α = {VertexInclinationDegrees:F1}°，吸住={VertexInclinationSnapped}");
+              VertexInclinationSnapped && VertexReadout == VertexReadoutKind.Inclination
+              && Math.Abs(VertexReadoutValue - 30f) < 0.5f,
+              $"α = {VertexReadoutValue:F1}°，吸住={VertexInclinationSnapped}");
 
         var anchor = VertexPreviewCanvasPoint;
         int labelPixels = ScreenProbe.CountNear(
@@ -4454,6 +4533,79 @@ internal sealed class App : InkEngine.InkEngine
         Check("点一下端点手柄（不移动）：线还在屏幕上、也没多一条撤销",
               tookTap && !VertexDragging && inkAfter > inkBefore / 2 && Doc.UndoDepth == 1,
               $"接住={tookTap}，墨 {inkBefore} → {inkAfter} 像素，撤销栈 {Doc.UndoDepth} 步");
+
+        // ---- D3. 拖端点中的框：与静止态**同一口径**（每边不再多 2 像素）----
+        //
+        // 这一处只差 2 像素，肉眼看不出来，所以**只看数字**（用户 2026-09-19 要求）。
+        // 用一条**转过 30° 的斜线**：旧口径（把整体框矩形转过去再取外接）会虚胖一大圈，
+        // 两种口径的差别在这里才看得清（用水平长线的话差 6 像素，等于没验到）。
+        Console.WriteLine("  -- D3. 拖端点中的框：与静止态同一口径 --");
+        {
+            bool SameBox(in RectF a, in RectF b, float tol = 0.01f)
+                => MathF.Abs(a.MinX - b.MinX) < tol && MathF.Abs(a.MinY - b.MinY) < tol
+                && MathF.Abs(a.MaxX - b.MaxX) < tol && MathF.Abs(a.MaxY - b.MaxY) < tol;
+            string Size(in RectF r) => $"{r.MaxX - r.MinX:F0}×{r.MaxY - r.MinY:F0}";
+
+            Doc.Clear();
+            Doc.ClearHistory();
+            Tool = Tool.Marquee;
+            var vb = new Stroke
+            {
+                Tool = Tool.Line, Kind = StrokeKind.Line,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            vb.AddPoint(lx, ly, 1f, 0);                        // 45° 斜线
+            vb.AddPoint(lx + 600f, ly - 600f, 1f, 0);
+            vb.Transform = SelectionHandles.RotateMatrix(30f, new Vector2(lx + 300f, ly - 300f));
+            Doc.AddStroke(vb);
+            Doc.SelectOnly(new[] { vb });
+            SettleFrames(300);
+
+            var vb0 = SelectionHandles.EndpointCanvasPosition(vb, 0);
+            var vb1 = SelectionHandles.EndpointCanvasPosition(vb, 1);
+            var stillBox = SelectionHandles.FrameOf(Doc.Selected).Local;
+            Check("D3：这条线是转过角度的（α = 45° + 30° = 75°）",
+                  MathF.Abs(SelectionHandles.InclinationDegrees(vb0, vb1) - 75f) < 0.5f,
+                  $"α = {SelectionHandles.InclinationDegrees(vb0, vb1):F2}°，静止框 {Size(stillBox)}");
+
+            // ① 按在端点上但**不移动**：框必须和静止态逐边相等（改前这里每边多 2 像素）
+            bool took3 = SelectionGestureForTest(vb0.X, vb0.Y);
+            SettleFrames(60);
+            var pressBox = LiveSelectionFrame.Local;
+            Check("D3：按下不移动时，框与静止态逐边相等（每边不再多 2 像素）",
+                  took3 && VertexDragging && SameBox(pressBox, stillBox),
+                  $"按下 {Size(pressBox)} / 静止 {Size(stillBox)}"
+                  + $"（旧口径会是 {Size(stillBox)} + 4 那种）");
+
+            // ② 拖到某处：框 = 按预览端点现算的墨迹框（端点外接 + 半笔宽），≤0.5 像素
+            var target3 = new Vector2(vb1.X - 320f, vb1.Y + 430f);
+            UpdateSelectionGestureForTest(target3.X, target3.Y);
+            SettleFrames(80);
+            var previewEnd = VertexPreviewCanvasPoint;
+            var wantInk = RectF.Empty;
+            wantInk.Add(previewEnd.X, previewEnd.Y);
+            wantInk.Add(vb1.X, vb1.Y);
+            wantInk = wantInk.Inflate(vb.Width * 0.5f);
+            var dragBox = LiveSelectionFrame.Local;
+            Check("D3：拖动中的框 = 按预览端点现算的墨迹框（≤0.5 像素）",
+                  SameBox(dragBox, wantInk, 0.5f),
+                  $"拖动 {Size(dragBox)} / 现算 {Size(wantInk)}"
+                  + $"（脏区口径 PaddedBoundsOf 会是 {Size(Stroke.PaddedBoundsOf(VertexPreviewPoints, vb.Transform, vb.Width))}）");
+            Check("D3：拖动中模型仍然没动（快路）",
+                  Math.Abs(vb.Points[0].X - lx) < 0.01f && Math.Abs(vb.Points[1].Y - (ly - 600f)) < 0.01f,
+                  $"模型端点 ({vb.Points[0].X:F0},{vb.Points[0].Y:F0})-({vb.Points[1].X:F0},{vb.Points[1].Y:F0})");
+
+            // ③ 松手：框前后逐边相等（不再"缩一下"），提交的几何就是刚才预览的那个端点
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            var afterBox = SelectionHandles.FrameOf(Doc.Selected).Local;
+            Check("D3：松手前后框逐边相等（不再缩一下）",
+                  SameBox(dragBox, afterBox, 0.5f),
+                  $"松手前 {Size(dragBox)} / 松手后 {Size(afterBox)}");
+            Check("D3：松手后提交的几何 = 刚才预览的端点（≤1 像素）",
+                  Vector2.Distance(SelectionHandles.EndpointCanvasPosition(vb, 0), previewEnd) < 1f,
+                  $"提交 {SelectionHandles.EndpointCanvasPosition(vb, 0)} / 预览 {previewEnd}");
+        }
 
         // ================= E. 旋转过的直线：端点仍落在指针位置 =================
         Console.WriteLine("  -- E. 旋转过的直线拖端点（Transform⁻¹ 那条路）--");
@@ -4747,7 +4899,8 @@ internal sealed class App : InkEngine.InkEngine
         Doc.Undo();
         SettleFrames(150);
 
-        // —— 其它对象（矩形）：读数仍然是 Δ，吸附仍然是 90° 那一档 ——
+        // —— 单选图形（矩形）：读数走**姿态角**（规格 9.7；在这之前它读 Δ）——
+        // 吸 0/90、矩阵与标签同角这些真机细节在下面的 G2 段，这里只钉"走哪一档"。
         Doc.Clear();
         Doc.ClearHistory();
         var spinRect = new Stroke
@@ -4761,13 +4914,14 @@ internal sealed class App : InkEngine.InkEngine
         Doc.SelectOnly(new[] { spinRect });
         SettleFrames(300);
         GrabRotate(24.5f, out bool tookRect);
-        Check("矩形：旋转读数仍然是 Δ（不读 α）",
-              tookRect && SelRotating && !SelRotationReadsInclination
-              && Math.Abs(SelRotationDegrees - 24.5f) < 1.5f,
-              $"接住={tookRect}，读α={SelRotationReadsInclination}，读数 {SelRotationDegrees:F2}°（期望 ≈24.5）");
-        Check("矩形：24.5° 不吸（软吸附仍是 90° 那一档，保持现在的行为）",
-              !SelRotationSnapped, $"吸住={SelRotationSnapped}");
-        // 多选（两条线）：也应该退回 Δ（"单选直线"才读 α）
+        Check("矩形：旋转读数走**姿态角**（不读 α、也不读 Δ）",
+              tookRect && SelRotating && SelRotationReadsPose && !SelRotationReadsInclination,
+              $"接住={tookRect}，读姿态={SelRotationReadsPose}，读α={SelRotationReadsInclination}，"
+              + $"读数 {SelRotationPose:F2}°（Δ 是 {SelRotationDegrees:F2}°）");
+        Check("矩形：姿态角读数 = 0 + 24.5 → 24.5°（离 0/90 都远，不吸）",
+              !SelRotationSnapped && MathF.Abs(SelRotationPose - 24.5f) < 1.5f,
+              $"读数 {SelRotationPose:F2}°，吸住={SelRotationSnapped}");
+        // 多选（两条线）：也应该退回 Δ（"单选一个图形 / 单选直线"才读那两个角）
         EndSelectionGestureForTest();
         SettleFrames(150);
         Doc.Clear();
@@ -4786,11 +4940,317 @@ internal sealed class App : InkEngine.InkEngine
         SettleFrames(300);
         GrabRotate(24.5f, out bool tookMulti);
         Check("多选两条直线：旋转读数也退回 Δ（只有单选直线才读 α）",
-              tookMulti && SelRotating && !SelRotationReadsInclination
+              tookMulti && SelRotating && !SelRotationReadsInclination && !SelRotationReadsPose
               && Math.Abs(SelRotationDegrees - 24.5f) < 1.5f,
               $"接住={tookMulti}，读α={SelRotationReadsInclination}，读数 {SelRotationDegrees:F2}°");
         EndSelectionGestureForTest();
         SettleFrames(150);
+
+        // ================= G2. 姿态角（图形）：提取 / 吸附 0-90 / 矩阵与标签同角 =================
+        //
+        // 规格 9.7：单选一个图形（矩形 / 椭圆 / 三角形 / 平行四边形）拖旋转柄时，
+        // 读数从"转了多少 Δ"改成"**图形相对水平的姿态角**"（0° = 正的、90° = 竖的），
+        // 软吸附 0/90（±1°）。用户要的用途写在规格里：将来手写识别出来的椭圆 / 矩形可能是
+        // 歪的，**看着读数拖到 0° 就转正了**。
+        Console.WriteLine("  -- G2. 姿态角（提取 / 吸附 / 矩阵与标签同角）--");
+        {
+            // 独立量一遍姿态角：把局部 x 轴过变换、自己 atan2、自己折进 [0,180)。
+            // **不走被测的那条路**（PoseAngleDegrees），判据才有意义。
+            float IndependentPose(Matrix3x2 m)
+            {
+                var o = Vector2.Transform(Vector2.Zero, m);
+                var v = Vector2.Transform(Vector2.UnitX, m) - o;
+                float a = -MathF.Atan2(v.Y, v.X) * 180f / MathF.PI;
+                a %= 180f;
+                if (a < 0f) a += 180f;
+                return a;
+            }
+            // 拖动中"这个图形现在什么姿态"要问**合成后**的矩阵（方案 B：模型到松手才动）。
+            float LivePose(Stroke s) => IndependentPose(
+                DragPreviewActive ? s.Transform * DragPreviewMatrix : s.Transform);
+
+            var pc = new Vector2(lx + 300f, ly - 150f);
+            foreach (float deg in new[] { 0f, 12.5f, 137.4f, 271f })
+            {
+                var m = SelectionHandles.RotateMatrix(deg, pc);
+                float got = SelectionHandles.PoseAngleDegrees(m);
+                Check($"姿态角·提取：转 {deg:F1}° 的图形",
+                      MathF.Abs(got - IndependentPose(m)) < 0.1f,
+                      $"读数 {got:F2}°，独立算 {IndependentPose(m):F2}°（折在 [0,180)）");
+            }
+            // 镜像 / 翻转：折进 [0,180) 之后与"正反"无关（图形没有正反）。
+            // 左右翻转一个正着的矩形，它照样是"水平的" → 读 0.0°。
+            var flipH = SelectionHandles.RotateMatrix(0f, pc) * Matrix3x2.CreateScale(-1f, 1f, pc);
+            Check("姿态角·提取：左右翻转过的矩形照样读 0.0°",
+                  SelectionHandles.IsMirrored(flipH)
+                  && SelectionHandles.InclinationDistance(
+                         SelectionHandles.PoseAngleDegrees(flipH), 0f) < 0.01f,
+                  $"读 {SelectionHandles.PoseAngleDegrees(flipH):F2}°（行列式为负 = 已镜像，"
+                  + $"独立算 {IndependentPose(flipH):F2}°）");
+            foreach (float deg in new[] { 0f, 30f, 95f })
+            {
+                var mm = SelectionHandles.RotateMatrix(deg, pc)
+                       * Matrix3x2.CreateScale(1f, -1f, pc);        // 上下翻转
+                float got = SelectionHandles.PoseAngleDegrees(mm);
+                Check($"姿态角·提取：上下翻转 + 转 {deg:F1}°",
+                      SelectionHandles.IsMirrored(mm)
+                      && got >= 0f && got < 180f
+                      && MathF.Abs(got - IndependentPose(mm)) < 0.1f,
+                      $"读 {got:F2}°，独立算 {IndependentPose(mm):F2}°，镜像={SelectionHandles.IsMirrored(mm)}");
+            }
+
+            // 吸附口径：**只有 0/90 两条，±1°**（和直线同一套容差；直线是八个特殊角）。
+            float F0(float d, bool shift, bool alt, out bool sn)
+                => SelectionHandles.SnapPoseDegrees(d, shift, alt, out sn);
+            Check("姿态角·吸附：0.6° 吸到 0°（±1° 内）",
+                  MathF.Abs(F0(0.6f, false, false, out bool p1) - 0f) < 0.01f && p1, "0.6° → 0.0°");
+            Check("姿态角·吸附：1.3° **不吸**（容差外，和直线同一个 ±1°）",
+                  MathF.Abs(F0(1.3f, false, false, out bool p2) - 1.3f) < 0.01f && !p2, "1.3° → 留自由");
+            Check("姿态角·吸附：89.4° 吸到 90°",
+                  MathF.Abs(F0(89.4f, false, false, out bool p3) - 90f) < 0.01f && p3, "89.4° → 90.0°");
+            Check("姿态角·吸附：91.4° 不吸（容差外）",
+                  MathF.Abs(F0(91.4f, false, false, out bool p4) - 91.4f) < 0.01f && !p4, "91.4° → 留自由");
+            // 折过的那一版在环上算：179.5° 离 0° 只有 0.5°，所以吸到的是 **0°**（同一条水平线）。
+            Check("姿态角·吸附：179.5° 吸到 0°（环形：离 0° 只有 0.5°）",
+                  MathF.Abs(F0(179.5f, false, false, out bool p5) - 0f) < 0.01f && p5, "179.5° → 0.0°");
+            Check("姿态角·吸附：45° 不吸（它不在 0/90 这两条上）",
+                  MathF.Abs(F0(45f, false, false, out bool p6) - 45f) < 0.01f && !p6, "45° → 留自由");
+            Check("姿态角·吸附：Shift = 15° 硬网格",
+                  MathF.Abs(F0(12.6f, true, false, out bool p7) - 15f) < 0.01f && p7, "12.6° → 15°");
+            Check("姿态角·吸附：Alt = 完全自由",
+                  MathF.Abs(F0(0.2f, false, true, out bool p8) - 0.2f) < 0.01f && !p8, "0.2° → 留自由");
+            // 引擎里用的是**展开值**那一版（"按下时的角 + 累积角"）：连续角上吸才不会翻 180°。
+            Check("姿态角·吸附（展开值）：179.6° → 180.0°（不是翻成 0°）",
+                  MathF.Abs(SelectionHandles.SnapExpandedPoseDegrees(179.6f, false, false, out bool p9)
+                            - 180f) < 0.01f && p9,
+                  "179.6° → 180.0°（拿折过的值去吸会得到 0.0° —— 那等于把图形翻过来 180°）");
+            Check("姿态角·吸附（展开值）：-0.4° → 0.0°（顺时针转过来的那一点点）",
+                  MathF.Abs(SelectionHandles.SnapExpandedPoseDegrees(-0.4f, false, false, out bool p10)
+                            - 0f) < 0.01f && p10,
+                  "-0.4° → 0.0°");
+
+            // ---- 真机①：一个**转过 8° 的矩形**拖旋转柄 → 吸到 0°（水平）----
+            Doc.Clear();
+            Doc.ClearHistory();
+            Tool = Tool.Marquee;
+            var poseRect = new Stroke
+            {
+                Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            poseRect.AddPoint(lx, ly, 1f, 0);
+            poseRect.AddPoint(lx + 600f, ly + 400f, 1f, 0);
+            poseRect.Transform = SelectionHandles.RotateMatrix(8f, new Vector2(lx + 300f, ly + 200f));
+            Doc.AddStroke(poseRect);
+            Doc.SelectOnly(new[] { poseRect });
+            SettleFrames(300);
+            Check("姿态角·真机：这个矩形一开始是歪的（姿态 8.0°）",
+                  MathF.Abs(SelectionHandles.PoseAngleDegrees(poseRect.Transform) - 8f) < 0.05f,
+                  $"姿态 {SelectionHandles.PoseAngleDegrees(poseRect.Transform):F3}°");
+            GrabRotate(-8.4f, out bool tookPose);     // 屏幕上顺时针 8.4°：姿态 8° → -0.4（±1° 内 → 吸到 0）
+            Check("姿态角·真机：拖旋转柄 → 走姿态角这一档",
+                  tookPose && SelRotating && SelRotationReadsPose && !SelRotationReadsInclination,
+                  $"接住={tookPose}，读姿态={SelRotationReadsPose}，读α={SelRotationReadsInclination}");
+            Check("姿态角·真机：吸到 0°（水平）", SelRotationSnapped,
+                  $"吸住={SelRotationSnapped}，读数 {SelRotationPose:F3}°");
+            Check("姿态角·真机：读数就是 0.0°（吸住时写的是吸到的那条线，不是 180.0°）",
+                  MathF.Abs(SelRotationPose - 0f) < 0.01f,
+                  $"读数 {SelRotationPose:F4}°");
+            Check("姿态角·真机：**矩阵与标签是同一个角**（拿实时变换反推）",
+                  SelectionHandles.InclinationDistance(SelRotationPose, LivePose(poseRect)) < 0.01f
+                  && SelectionHandles.InclinationDistance(LivePose(poseRect), 0f) < 0.01f,
+                  $"标签 {SelRotationPose:F4}°，实时矩阵反推 {LivePose(poseRect):F4}°");
+            EndSelectionGestureForTest();
+            SettleFrames(220);
+            Check("姿态角·真机：松手真的落到水平（对象姿态 ≈ 0°，一步撤销）",
+                  SelectionHandles.InclinationDistance(
+                      SelectionHandles.PoseAngleDegrees(poseRect.Transform), 0f) < 0.05f,
+                  $"落定姿态 {SelectionHandles.PoseAngleDegrees(poseRect.Transform):F3}°，撤销栈 {Doc.UndoDepth} 步");
+            Doc.Undo();
+            SettleFrames(150);
+
+            // ---- 真机②：一个**转过 52° 的椭圆**拖旋转柄 → 吸到 90°（竖的）----
+            // 这正是用户提这个需求的初衷：识别出来的椭圆是歪的，想把它"转正"。
+            Doc.Clear();
+            Doc.ClearHistory();
+            var poseEll = new Stroke
+            {
+                Tool = Tool.Ellipse, Kind = StrokeKind.Ellipse,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            var ellCenter = new Vector2(lx + 300f, ly);
+            poseEll.AddPoint(ellCenter.X, ellCenter.Y, 1f, 0);          // 中心
+            poseEll.AddPoint(ellCenter.X + 320f, ellCenter.Y + 140f, 1f, 0);   // 外角点（a=320, b=140）
+            poseEll.Transform = SelectionHandles.RotateMatrix(52f, ellCenter);
+            Doc.AddStroke(poseEll);
+            Doc.SelectOnly(new[] { poseEll });
+            SettleFrames(300);
+            Check("姿态角·真机：歪椭圆一开始的姿态 ≈ 52.0°",
+                  MathF.Abs(SelectionHandles.PoseAngleDegrees(poseEll.Transform) - 52f) < 0.05f,
+                  $"姿态 {SelectionHandles.PoseAngleDegrees(poseEll.Transform):F3}°");
+            GrabRotate(38.4f, out bool tookEll);      // 屏幕上逆时针 38.4°：52 → 90.4（±1° 内 → 吸到 90）
+            Check("姿态角·真机：歪椭圆拖到 90° 附近吸住（竖的）",
+                  tookEll && SelRotating && SelRotationReadsPose && SelRotationSnapped
+                  && MathF.Abs(SelRotationPose - 90f) < 0.01f,
+                  $"读数 {SelRotationPose:F4}°，吸住={SelRotationSnapped}");
+            EndSelectionGestureForTest();
+            SettleFrames(220);
+            Check("姿态角·真机：松手后椭圆真的竖起来了（姿态 ≈ 90°）",
+                  SelectionHandles.InclinationDistance(
+                      SelectionHandles.PoseAngleDegrees(poseEll.Transform), 90f) < 0.05f,
+                  $"落定姿态 {SelectionHandles.PoseAngleDegrees(poseEll.Transform):F3}°");
+            Doc.Undo();
+            SettleFrames(150);
+
+            // ---- 镜像过的图形：读数仍然以**眼睛看到的**为准（和矩阵同一个角）----
+            Doc.Clear();
+            Doc.ClearHistory();
+            var mirRect = new Stroke
+            {
+                Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            mirRect.AddPoint(lx, ly, 1f, 0);
+            mirRect.AddPoint(lx + 500f, ly - 300f, 1f, 0);
+            Doc.AddStroke(mirRect);
+            Doc.SelectOnly(new[] { mirRect });
+            SettleFrames(200);
+            Doc.ApplyTransform(SelectionHandles.MirrorMatrix(mirRect.WorldInkBounds, horizontal: true));
+            SettleFrames(250);
+            bool mirrored = SelectionHandles.IsMirrored(mirRect.Transform);
+            // 镜像过的图形"本地转 +1°"在屏幕上是 -1°：要转到 90° 得**顺时针**拖 90.4°
+            // （这正是引擎里那个 sgn 符号存在的理由，自检把这条走一遍）。
+            GrabRotate(-90.4f, out bool tookMir);
+            Check("姿态角·真机：镜像过的图形也能吸（0/90 那一档照样生效）",
+                  tookMir && mirrored && SelRotating && SelRotationReadsPose && SelRotationSnapped
+                  && SelectionHandles.InclinationDistance(SelRotationPose, 90f) < 0.01f,
+                  $"镜像={mirrored}，吸住={SelRotationSnapped}，读数 {SelRotationPose:F3}°");
+            Check("姿态角·真机：镜像 + 拖过 → 标签与实时矩阵**仍是同一个角**",
+                  SelectionHandles.InclinationDistance(SelRotationPose, LivePose(mirRect)) < 0.01f,
+                  $"标签 {SelRotationPose:F4}°，实时矩阵反推 {LivePose(mirRect):F4}°");
+            EndSelectionGestureForTest();
+            SettleFrames(150);
+
+            // ---- 直线仍然读 α（不是姿态角）；圆连姿态角这一档都进不去 ----
+            var sl = new Stroke
+            {
+                Tool = Tool.Line, Kind = StrokeKind.Line,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            sl.AddPoint(lx, ly, 1f, 0);
+            sl.AddPoint(lx + 600f, ly - 218f, 1f, 0);        // α ≈ 19.96°
+            Doc.Clear();
+            Doc.ClearHistory();
+            Doc.AddStroke(sl);
+            Doc.SelectOnly(new[] { sl });
+            SettleFrames(300);
+            GrabRotate(10.4f, out bool tookLine);
+            Check("直线：仍然读倾斜角 α（不读姿态角）",
+                  tookLine && SelRotating && SelRotationReadsInclination && !SelRotationReadsPose
+                  && MathF.Abs(SelRotationInclination - 30f) < 0.2f,
+                  $"读α={SelRotationReadsInclination}，读姿态={SelRotationReadsPose}，"
+                  + $"读数 {SelRotationInclination:F2}°（α₀≈19.96 + 10.4 → 吸到 30）");
+            EndSelectionGestureForTest();
+            SettleFrames(150);
+
+            var circ = new Stroke
+            {
+                Tool = Tool.Circle, Kind = StrokeKind.Circle,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            circ.AddPoint(lx + 200f, ly, 1f, 0);
+            circ.AddPoint(lx + 420f, ly, 1f, 0);            // 半径 220
+            Doc.Clear();
+            Doc.ClearHistory();
+            Doc.AddStroke(circ);
+            Doc.SelectOnly(new[] { circ });
+            SettleFrames(250);
+            var cFrame = SelectionHandles.FrameOf(Doc.Selected);
+            var cGrip = SelectionHandles.CanvasPosition(SelHandle.Rotate, cFrame, DpiScale);
+            bool circlePoseOk = !SelectionHandles.PoseEditable(Doc.Selected, out _)
+                                && !SelectionHandles.RotateHandleVisible(circ)
+                                && SelectionHandles.HitTest(cGrip.X, cGrip.Y, Doc.Selected, cFrame, DpiScale)
+                                   != SelHandle.Rotate;
+            bool circleCaught = SelectionGestureForTest(cGrip.X, cGrip.Y);
+            bool circleRotating = SelRotating;
+            EndSelectionGestureForTest();
+            SettleFrames(120);
+            Check("圆：没有姿态角读数（连旋转柄都不给，那个位置按下去也接不住旋转）",
+                  circlePoseOk && !circleRotating,
+                  $"PoseEditable={SelectionHandles.PoseEditable(Doc.Selected, out _)}，"
+                  + $"旋转柄可见={SelectionHandles.RotateHandleVisible(circ)}，"
+                  + $"在那个位置按下接住旋转={circleCaught && circleRotating}");
+            SettleFrames(120);
+
+            // ---- 图像 / 笔迹 / 多选：仍然读转过的 Δ，而且**通用旋转的 ±3° 口径一个字没改** ----
+            Doc.Clear();
+            Doc.ClearHistory();
+            var scribble = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 12f * DpiScale,
+            };
+            for (int i = 0; i <= 40; i++)
+                scribble.AddPoint(lx + i * 12f, ly + MathF.Sin(i * 0.3f) * 60f, 0.9f, i * 8);
+            Doc.AddStroke(scribble);
+            Doc.SelectOnly(new[] { scribble });
+            SettleFrames(250);
+            GrabRotate(24.5f, out bool tookFree);
+            Check("笔迹：旋转读数仍然是 Δ（不是姿态角）",
+                  tookFree && SelRotating && !SelRotationReadsPose && !SelRotationReadsInclination
+                  && Math.Abs(SelRotationDegrees - 24.5f) < 1.5f,
+                  $"读姿态={SelRotationReadsPose}，缺口 {SelRotationDegrees:F2}°");
+            EndSelectionGestureForTest();
+            SettleFrames(150);
+
+            Doc.Clear();
+            Doc.ClearHistory();
+            var pic = Doc.AddImage(MakeTestImage(300, 200), lx, ly - 100f, 1f);
+            Doc.SelectOnly(new[] { pic });
+            SettleFrames(250);
+            GrabRotate(24.5f, out bool tookImg);
+            Check("图像：旋转读数仍然是 Δ（不是姿态角）",
+                  tookImg && SelRotating && !SelRotationReadsPose && !SelRotationReadsInclination
+                  && Math.Abs(SelRotationDegrees - 24.5f) < 1.5f,
+                  $"读姿态={SelRotationReadsPose}，读数 {SelRotationDegrees:F2}°"
+                  + $"（PoseEditable={SelectionHandles.PoseEditable(Doc.Selected, out _)}）");
+            EndSelectionGestureForTest();
+            SettleFrames(150);
+
+            // 多选两个**图形**（都是"会读姿态角"的种类）：单选才读姿态，多选一律退回 Δ。
+            Doc.Clear();
+            Doc.ClearHistory();
+            var mr1 = new Stroke { Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+                                   Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale };
+            mr1.AddPoint(lx, ly, 1f, 0);
+            mr1.AddPoint(lx + 300f, ly - 200f, 1f, 0);
+            var mr2 = new Stroke { Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+                                   Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale };
+            mr2.AddPoint(lx + 400f, ly, 1f, 0);
+            mr2.AddPoint(lx + 700f, ly - 200f, 1f, 0);
+            Doc.AddStroke(mr1);
+            Doc.AddStroke(mr2);
+            Doc.SelectOnly(new[] { mr1, mr2 });
+            SettleFrames(300);
+            GrabRotate(24.5f, out bool tookTwoShapes);
+            Check("多选两个矩形：读数退回 Δ（姿态角只认单选）",
+                  tookTwoShapes && SelRotating && !SelRotationReadsPose && !SelRotationReadsInclination
+                  && Math.Abs(SelRotationDegrees - 24.5f) < 1.5f,
+                  $"读姿态={SelRotationReadsPose}，读数 {SelRotationDegrees:F2}°");
+            EndSelectionGestureForTest();
+            SettleFrames(150);
+
+            // 通用旋转那一档的容差**必须一个字没改**：±3°，且只吸 90° 的整数倍。
+            Check("通用旋转：92° 吸到 90°（±3° 内，保持现在的行为）",
+                  MathF.Abs(SelectionHandles.SnapRotationDegrees(92f, false, false, out bool g1) - 90f) < 0.01f
+                  && g1, "92° → 90°");
+            Check("通用旋转：94° **不吸**（±3° 外，口径没被这一轮改窄）",
+                  MathF.Abs(SelectionHandles.SnapRotationDegrees(94f, false, false, out bool g2) - 94f) < 0.01f
+                  && !g2, $"94° → 留自由（容差常量 = {SelectionHandles.RotationSoftSnapToleranceDegrees}）");
+            Check("通用旋转：45° 不吸（它只吸 90° 的整数倍，不是直线的八个特殊角）",
+                  MathF.Abs(SelectionHandles.SnapRotationDegrees(45f, false, false, out bool g3) - 45f) < 0.01f
+                  && !g3, "45° → 留自由");
+        }
 
         // ================= H. 直线/箭头的选中框：紧框（端点口径）=================
         //
@@ -4946,11 +5406,12 @@ internal sealed class App : InkEngine.InkEngine
                       Same(got, want, 1f), $"框 {Size(got)}，含翅膀现算 {Size(want)}");
             }
 
-            // ---- 不变的：矩形 / 椭圆 / 图像（各转 30°）----
+            // ---- 不变的：矩形 / 图像（各转 30°）----
+            // 注：**椭圆不在这一组**了——2026-09-19 起它和圆一样走"参数化紧框"
+            // （见下面 J 段：椭圆局部是参数曲线，把它的外框矩形转过去再取外接会虚胖）。
             foreach (var (tool, kind, tag) in new[]
             {
                 (Tool.Rectangle, StrokeKind.Rectangle, "矩形"),
-                (Tool.Ellipse, StrokeKind.Ellipse, "椭圆"),
             })
             {
                 var s2 = new Stroke
@@ -4976,6 +5437,1664 @@ internal sealed class App : InkEngine.InkEngine
             Doc.RemoveStroke(img);
         }
 
+        // ================= I. 圆：画法 / 手柄 / 紧框 / 命中 =================
+        //
+        // 规格是 计划-图形工具.md 9.2：存"圆心 + 圆周点"、按下=圆心拖=半径、
+        // 手柄只有圆心（平移）与圆周点（改半径）、**不给旋转柄**、紧框 = 圆心 ± r。
+        Console.WriteLine("  -- I. 圆 --");
+        {
+            bool Near(float a, float b, float tol) => MathF.Abs(a - b) <= tol;
+
+            // ---- 画一个圆（真机：按下拖出半径）----
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetToolFromUi(Tool.Circle);
+            float ccx = _virtualX + 800, ccy = _virtualY + 800;
+            float cRadius = 180f;                      // 物理像素：拖这么远就是半径
+            SendMouse((int)ccx, (int)ccy, 0);                            SettleFrames(60);
+            SendMouse((int)ccx, (int)ccy, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+            for (int i = 1; i <= 4; i++)
+            {
+                SendMouse((int)(ccx + cRadius * i / 4f), (int)ccy, 0);
+                SettleFrames(30);
+            }
+            SendMouse((int)(ccx + cRadius), (int)ccy, Native.MOUSEEVENTF_LEFTUP); SettleFrames(220);
+
+            var circle = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+            Check("圆：拖出一个圆对象", circle != null && circle.Kind == StrokeKind.Circle,
+                  circle == null ? "没有对象" : $"Kind={circle.Kind}");
+            if (circle != null)
+            {
+                Check("圆：圆心 = 按下的点（±1 像素）",
+                      Near(circle.ShapeCenterLocal.X, ccx, 1f) && Near(circle.ShapeCenterLocal.Y, ccy, 1f),
+                      $"圆心 ({circle.ShapeCenterLocal.X:F1},{circle.ShapeCenterLocal.Y:F1})"
+                      + $" 期望 ({ccx:F0},{ccy:F0})");
+                Check("圆：半径 = 拖动的距离（±1 像素）",
+                      Near(circle.CircleRadiusLocal, cRadius, 1f),
+                      $"半径 {circle.CircleRadiusLocal:F1} 期望 {cRadius:F0}");
+                Check("圆：一次拖拽 = 一步撤销", Doc.UndoDepth == 1, $"撤销栈 {Doc.UndoDepth} 步");
+                Doc.Undo();
+                SettleFrames(120);
+                Check("圆：撤销一次就干净", Doc.Strokes.Count == 0, $"对象 {Doc.Strokes.Count} 个");
+            }
+
+            // ---- 造一个已知的圆，验手柄 / 紧框 / 命中 ----
+            Doc.Clear();
+            Doc.ClearHistory();
+            Tool = Tool.Marquee;
+            var c2 = new Stroke
+            {
+                Tool = Tool.Circle, Kind = StrokeKind.Circle,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            c2.AddPoint(ccx, ccy, 1f, 0);            // 圆心
+            c2.AddPoint(ccx + 240f, ccy, 1f, 0);     // 圆周点（半径 240）
+            Doc.AddStroke(c2);
+            Doc.SelectOnly(new[] { c2 });
+            SettleFrames(250);
+
+            // 紧框 = 圆心 ± r（＋半笔宽）
+            var wantCircle = new RectF
+            {
+                MinX = ccx - 240f - c2.Width * 0.5f, MinY = ccy - 240f - c2.Width * 0.5f,
+                MaxX = ccx + 240f + c2.Width * 0.5f, MaxY = ccy + 240f + c2.Width * 0.5f,
+            };
+            var gotCircle = c2.WorldInkBounds;
+            Check("圆：紧框 = 圆心 ± r（＋半笔宽，±1 像素）",
+                  MathF.Abs(gotCircle.MinX - wantCircle.MinX) < 1f
+                  && MathF.Abs(gotCircle.MinY - wantCircle.MinY) < 1f
+                  && MathF.Abs(gotCircle.MaxX - wantCircle.MaxX) < 1f
+                  && MathF.Abs(gotCircle.MaxY - wantCircle.MaxY) < 1f,
+                  $"框 {gotCircle.MaxX - gotCircle.MinX:F0}×{gotCircle.MaxY - gotCircle.MinY:F0}"
+                  + $"（直径 480 + 笔宽 {c2.Width:F0}）");
+
+            // 命中：圆周上算命中、**圆心处不算**（只认描边，不认内部）
+            Check("圆：圆周上命中、圆心处不命中（只认描边）",
+                  c2.HitTestExact(ccx + 240f, ccy) && !c2.HitTestExact(ccx, ccy),
+                  $"圈上 {c2.HitTestExact(ccx + 240f, ccy)}，圆心 {c2.HitTestExact(ccx, ccy)}");
+
+            // 手柄：两个（圆心 + 圆周点）、**没有旋转柄**
+            Span<ShapeHandle> cHandles = stackalloc ShapeHandle[5];
+            int cn = SelectionHandles.ShapeHandlesOf(c2, cHandles);
+            Check("圆：手柄是两个（圆心 + 圆周点）",
+                  cn == 2 && cHandles[0] == ShapeHandle.Anchor && cHandles[1] == ShapeHandle.Rim,
+                  $"手柄数 {cn}");
+            // 旋转柄的位置上按一下：**必须是 None**（圆的旋转柄连命中都不做）
+            var cFrame = SelectionHandles.FrameOf(Doc.Selected);
+            var cRotGrip = SelectionHandles.CanvasPosition(SelHandle.Rotate, cFrame, DpiScale);
+            var circleRotateHit = SelectionHandles.HitTest(cRotGrip.X, cRotGrip.Y, Doc.Selected, cFrame, DpiScale);
+            Check("圆：不给旋转柄（画也不画、点也点不到）",
+                  !SelectionHandles.RotateHandleVisible(c2) && circleRotateHit == SelHandle.None,
+                  $"可见={SelectionHandles.RotateHandleVisible(c2)}，命中={circleRotateHit}");
+
+            // ---- 拖圆心 = 平移（半径逐位不变；几何一个点都不动）----
+            float rBefore = c2.CircleRadiusLocal;
+            // 圆心位移在**画布坐标**上比：几何点（局部坐标）本来就不动，动的是变换矩阵。
+            var cx0 = SelectionHandles.ShapeHandleCanvasPosition(c2, ShapeHandle.Anchor);
+            string ptsBefore = $"{c2.Points[0].X},{c2.Points[0].Y}|{c2.Points[1].X},{c2.Points[1].Y}";
+            bool tookCenter = SelectionGestureForTest(cx0.X, cx0.Y);
+            UpdateSelectionGestureForTest(cx0.X + 300f, cx0.Y + 150f);
+            SettleFrames(80);
+            bool geomUntouched = ptsBefore == $"{c2.Points[0].X},{c2.Points[0].Y}|{c2.Points[1].X},{c2.Points[1].Y}";
+            Check("圆：拖圆心 = 整体平移（走的是变换，几何一个点不动）",
+                  tookCenter && geomUntouched,
+                  $"接住={tookCenter}，几何原样={geomUntouched}（若走改几何这条路这里就会变）");
+            EndSelectionGestureForTest();
+            SettleFrames(180);
+            var cx1 = SelectionHandles.ShapeHandleCanvasPosition(c2, ShapeHandle.Anchor);
+            Check("圆：平移后半径逐位不变、圆心在画布上正好挪了 (300,150)",
+                  c2.CircleRadiusLocal == rBefore
+                  && Near(cx1.X - cx0.X, 300f, 1f) && Near(cx1.Y - cx0.Y, 150f, 1f),
+                  $"半径 {rBefore:F3} → {c2.CircleRadiusLocal:F3}，"
+                  + $"圆心画布位移 ({cx1.X - cx0.X:F1},{cx1.Y - cx0.Y:F1})");
+
+            // ---- 拖圆周点 = 只改半径（圆心逐位不变）----
+            Doc.Undo();   // 把平移撤掉，回到干净的圆
+            SettleFrames(150);
+            int cRevBefore = c2.Revision;
+            var rimPoint = SelectionHandles.ShapeHandleCanvasPosition(c2, ShapeHandle.Rim);
+            // 圆心在局部坐标里的值（拖圆周点不该动它）；下一段那个"圆心逐位不变"要拿它比。
+            float cxBefore = c2.Points[0].X;
+            float cyBefore = c2.Points[0].Y;
+            bool tookRim = SelectionGestureForTest(rimPoint.X, rimPoint.Y);
+            UpdateSelectionGestureForTest(rimPoint.X + 120f, rimPoint.Y);
+            SettleFrames(80);
+            Check("圆：拖圆周点时模型没动（Revision 不变、快路）",
+                  c2.Revision == cRevBefore && VertexDragging,
+                  $"Revision {cRevBefore} → {c2.Revision}，拖元素中={VertexDragging}");
+            Check("圆：拖动中内容层一帧都不重画", _windows[0].LastPatchCount == 0,
+                  $"上一帧光栅化分块 {_windows[0].LastPatchCount} 块");
+            Check("圆：读数给的是 r 和 d = 2r",
+                  VertexReadout == VertexReadoutKind.Radius
+                  && Near(VertexReadoutSecondary, VertexReadoutValue * 2f, 0.01f),
+                  $"读数 r={VertexReadoutValue:F1} d={VertexReadoutSecondary:F1}");
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            Check("圆：拖圆周点 = 只改半径（圆心逐位不变）",
+                  c2.Points[0].X == cxBefore && c2.Points[0].Y == cyBefore
+                  && Near(c2.CircleRadiusLocal, 360f, 1.5f) && c2.Revision > cRevBefore,
+                  $"圆心 ({c2.Points[0].X:F1},{c2.Points[0].Y:F1})，半径 {c2.CircleRadiusLocal:F1}（期望 ≈360）");
+            Doc.Undo();
+            SettleFrames(150);
+        }
+
+        // ================= J. 椭圆：画法变更 / 四个轴端点 / 紧框公式 =================
+        //
+        // 规格是 9.3：存"中心 + 外角点"、**按下=中心拖=同时定两条半轴**（2026-09-19 改，
+        // 以前是"拖外框对角"）、手柄 = 中心 + 四个轴端点 + 旋转柄（**不给四个角**）、
+        // 紧框 = 旋转后的参数化外接、a/b 各有最小值。
+        Console.WriteLine("  -- J. 椭圆 --");
+        {
+            bool Near(float a, float b, float tol) => MathF.Abs(a - b) <= tol;
+
+            // ---- 画一个椭圆（真机：按下=中心，横纵一起定半轴）----
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetToolFromUi(Tool.Ellipse);
+            float ecx = _virtualX + 800, ecy = _virtualY + 700;
+            float wa = 220f, wb = 140f;
+            SendMouse((int)ecx, (int)ecy, 0);                            SettleFrames(60);
+            SendMouse((int)ecx, (int)ecy, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+            for (int i = 1; i <= 4; i++)
+            {
+                SendMouse((int)(ecx + wa * i / 4f), (int)(ecy + wb * i / 4f), 0);
+                SettleFrames(30);
+            }
+            SendMouse((int)(ecx + wa), (int)(ecy + wb), Native.MOUSEEVENTF_LEFTUP); SettleFrames(220);
+
+            var ell = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+            Check("椭圆：拖出一个椭圆对象", ell != null && ell.Kind == StrokeKind.Ellipse,
+                  ell == null ? "没有对象" : $"Kind={ell.Kind}");
+            if (ell != null)
+            {
+                Check("椭圆：中心 = 按下的点（±1 像素）",
+                      Near(ell.ShapeCenterLocal.X, ecx, 1f) && Near(ell.ShapeCenterLocal.Y, ecy, 1f),
+                      $"中心 ({ell.ShapeCenterLocal.X:F1},{ell.ShapeCenterLocal.Y:F1})"
+                      + $" 期望 ({ecx:F0},{ecy:F0})");
+                Check("椭圆：a / b = 拖动的横向 / 纵向距离（±1 像素）",
+                      Near(ell.SemiAxisALocal, wa, 1f) && Near(ell.SemiAxisBLocal, wb, 1f),
+                      $"a={ell.SemiAxisALocal:F1} b={ell.SemiAxisBLocal:F1} 期望 {wa:F0}/{wb:F0}");
+                Check("椭圆：一次拖拽 = 一步撤销", Doc.UndoDepth == 1, $"撤销栈 {Doc.UndoDepth} 步");
+                Doc.Undo();
+                SettleFrames(120);
+            }
+
+            // ---- 造一个已知的椭圆：手柄 / 只改一条半轴 / 最小值 / 紧框 ----
+            Doc.Clear();
+            Doc.ClearHistory();
+            Tool = Tool.Marquee;
+            var e2 = new Stroke
+            {
+                Tool = Tool.Ellipse, Kind = StrokeKind.Ellipse,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            e2.AddPoint(lx, ly, 1f, 0);              // 中心
+            e2.AddPoint(lx + 240f, ly + 120f, 1f, 0); // 外角点 → a=240, b=120
+            Doc.AddStroke(e2);
+            Doc.SelectOnly(new[] { e2 });
+            SettleFrames(250);
+
+            Span<ShapeHandle> eHandles = stackalloc ShapeHandle[5];
+            int en = SelectionHandles.ShapeHandlesOf(e2, eHandles);
+            Check("椭圆：手柄是**两个**（右端点管 a、上端点管 b）",
+                  en == 2 && eHandles[0] == ShapeHandle.AxisRight && eHandles[1] == ShapeHandle.AxisTop
+                  && SelectionHandles.HandleOf(e2, SelHandle.EndpointB) == ShapeHandle.None,
+                  $"手柄数 {en}，外角点手柄={SelectionHandles.HandleOf(e2, SelHandle.EndpointB)}");
+            Check("椭圆：精简掉的三个（中心 + 左端点 + 下端点）**一个都不发**",
+                  SelectionHandles.HandleOf(e2, SelHandle.Left) == ShapeHandle.None
+                  && SelectionHandles.HandleOf(e2, SelHandle.Bottom) == ShapeHandle.None
+                  && !SelectionHandles.IsAnchorMove(e2, ShapeHandle.Anchor),
+                  $"左={SelectionHandles.HandleOf(e2, SelHandle.Left)}"
+                  + $"，下={SelectionHandles.HandleOf(e2, SelHandle.Bottom)}"
+                  + $"，中心算平移={SelectionHandles.IsAnchorMove(e2, ShapeHandle.Anchor)}");
+            Check("椭圆：给旋转柄（和圆不同）", SelectionHandles.RotateHandleVisible(e2),
+                  $"可见={SelectionHandles.RotateHandleVisible(e2)}");
+
+            // 拖右轴端点：只改 a，b 逐位不变
+            float bBefore = e2.SemiAxisBLocal;
+            var rightPt = SelectionHandles.ShapeHandleCanvasPosition(e2, ShapeHandle.AxisRight);
+            bool tookAxis = SelectionGestureForTest(rightPt.X, rightPt.Y);
+            UpdateSelectionGestureForTest(rightPt.X + 160f, rightPt.Y);
+            SettleFrames(80);
+            Check("椭圆：拖轴端点时的读数是 a（不是 α）",
+                  VertexReadout == VertexReadoutKind.AxisA,
+                  $"读数类型={VertexReadout}，值 {VertexReadoutValue:F1}");
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            Check("椭圆：拖右轴端点只改 a（b 逐位不变）",
+                  tookAxis && Near(e2.SemiAxisALocal, 400f, 1.5f) && e2.SemiAxisBLocal == bBefore,
+                  $"a={e2.SemiAxisALocal:F1}（期望 ≈400），b {bBefore:F3} → {e2.SemiAxisBLocal:F3}");
+            Doc.Undo();
+            SettleFrames(150);
+
+            // 拖上轴端点：只改 b，a 逐位不变
+            float aBefore = e2.SemiAxisALocal;
+            var topPt = SelectionHandles.ShapeHandleCanvasPosition(e2, ShapeHandle.AxisTop);
+            SelectionGestureForTest(topPt.X, topPt.Y);
+            UpdateSelectionGestureForTest(topPt.X, topPt.Y - 90f);
+            SettleFrames(80);
+            Check("椭圆：拖上轴端点时的读数是 b",
+                  VertexReadout == VertexReadoutKind.AxisB, $"读数类型={VertexReadout}");
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            Check("椭圆：拖上轴端点只改 b（a 逐位不变）",
+                  Near(e2.SemiAxisBLocal, 210f, 1.5f) && e2.SemiAxisALocal == aBefore,
+                  $"b={e2.SemiAxisBLocal:F1}（期望 ≈210），a {aBefore:F3} → {e2.SemiAxisALocal:F3}");
+            Doc.Undo();
+            SettleFrames(150);
+
+            // 最小值边界：把右轴端点一路拖过中心，a 不许小于 4 逻辑像素
+            var rightPt2 = SelectionHandles.ShapeHandleCanvasPosition(e2, ShapeHandle.AxisRight);
+            SelectionGestureForTest(rightPt2.X, rightPt2.Y);
+            UpdateSelectionGestureForTest(lx - 500f, rightPt2.Y);   // 拖到中心左侧老远
+            SettleFrames(80);
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            Check("椭圆：a 有最小值（拖过中心也不许退化成线段）",
+                  Near(e2.SemiAxisALocal, ShapeMinAxisLogical * DpiScale, 0.01f),
+                  $"a={e2.SemiAxisALocal:F2} 期望 {ShapeMinAxisLogical * DpiScale:F2}"
+                  + $"（{ShapeMinAxisLogical:F0} 逻辑像素 × dpi {DpiScale}）");
+            Doc.Undo();
+            SettleFrames(150);
+
+            // ---- 旋转 30° 后的紧框 = 参数化外接公式 ----
+            var eRot = new Stroke
+            {
+                Tool = Tool.Ellipse, Kind = StrokeKind.Ellipse,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            eRot.AddPoint(lx, ly, 1f, 0);
+            eRot.AddPoint(lx + 240f, ly + 120f, 1f, 0);
+            eRot.Transform = SelectionHandles.RotateMatrix(30f, new Vector2(lx, ly));
+            float th = 30f * MathF.PI / 180f;
+            float ha = 240f, hb = 120f;
+            // 规格 9.3 给的公式（自检自己算，不调被测实现）
+            float ex = MathF.Sqrt(MathF.Pow(ha * MathF.Cos(th), 2) + MathF.Pow(hb * MathF.Sin(th), 2));
+            float ey = MathF.Sqrt(MathF.Pow(ha * MathF.Sin(th), 2) + MathF.Pow(hb * MathF.Cos(th), 2));
+            var gotE = eRot.WorldInkBounds;
+            Check("椭圆：转过 30° 的紧框 = √((a·cosθ)²+(b·sinθ)²) 那两条公式（±1 像素）",
+                  Near(gotE.MaxX - gotE.MinX, 2f * ex + eRot.Width, 1f)
+                  && Near(gotE.MaxY - gotE.MinY, 2f * ey + eRot.Width, 1f),
+                  $"框 {gotE.MaxX - gotE.MinX:F1}×{gotE.MaxY - gotE.MinY:F1}"
+                  + $"，公式算 {2f * ex + eRot.Width:F1}×{2f * ey + eRot.Width:F1}");
+
+            // 拖中心 = 平移（a / b 逐位不变）
+            Doc.AddStroke(eRot);
+            Doc.SelectOnly(new[] { eRot });
+            SettleFrames(200);
+            float ea = eRot.SemiAxisALocal, eb = eRot.SemiAxisBLocal;
+            // 位移要在**画布坐标**上比：这条椭圆转过 30°，局部位移和屏幕位移不是一个方向。
+            var eCenterBefore = SelectionHandles.ShapeHandleCanvasPosition(eRot, ShapeHandle.Anchor);
+            var eCenter = eCenterBefore;
+            SelectionGestureForTest(eCenter.X, eCenter.Y);
+            UpdateSelectionGestureForTest(eCenter.X + 200f, eCenter.Y - 120f);
+            SettleFrames(80);
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            var eCenterAfter = SelectionHandles.ShapeHandleCanvasPosition(eRot, ShapeHandle.Anchor);
+            Check("椭圆：拖中心 = 平移（a / b 逐位不变，而且真的挪了）",
+                  eRot.SemiAxisALocal == ea && eRot.SemiAxisBLocal == eb
+                  && Near(eCenterAfter.X - eCenterBefore.X, 200f, 1f)
+                  && Near(eCenterAfter.Y - eCenterBefore.Y, -120f, 1f),
+                  $"a {ea:F3} → {eRot.SemiAxisALocal:F3}，b {eb:F3} → {eRot.SemiAxisBLocal:F3}，"
+                  + $"中心画布位移 ({eCenterAfter.X - eCenterBefore.X:F1},"
+                  + $"{eCenterAfter.Y - eCenterBefore.Y:F1})");
+        }
+
+        // ================= K. 三角形：画法 / 三个顶点手柄 / 紧框 / 命中 =================
+        //
+        // 规格 9.4：`Points` = 三个顶点（**上中 / 下左 / 下右**）、一按一拖出来的是
+        // "底边水平、左右对称"的三角形、手柄 = 三个顶点 + 旋转柄、紧框 = 三顶点外接、
+        // 命中只认边（和矩形 / 椭圆一致）。
+        Console.WriteLine("  -- K. 三角形 --");
+        {
+            bool Near(float a, float b, float tol) => MathF.Abs(a - b) <= tol;
+
+            // ---- 画一个三角形（真机：按下外框左上角 → 拖到右下角）----
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetToolFromUi(Tool.Triangle);
+            float tax = _virtualX + 700, tay = _virtualY + 500;
+            float tbx = tax + 400, tby = tay + 300;
+            SendMouse((int)tax, (int)tay, 0);                            SettleFrames(60);
+            SendMouse((int)tax, (int)tay, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+            for (int i = 1; i <= 4; i++)
+            {
+                SendMouse((int)(tax + (tbx - tax) * i / 4f), (int)(tay + (tby - tay) * i / 4f), 0);
+                SettleFrames(30);
+            }
+            SendMouse((int)tbx, (int)tby, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(220);
+
+            var tri = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+            Check("三角形：拖出一个三角形对象", tri != null && tri.Kind == StrokeKind.Triangle,
+                  tri == null ? "没有对象" : $"Kind={tri.Kind}");
+            if (tri != null)
+            {
+                float mid = (tax + tbx) * 0.5f;
+                Check("三角形：控制点是**三个**（顶点，不是外框对角）",
+                      tri.Points.Count == 3, $"点数 {tri.Points.Count}");
+                Check("三角形：三个顶点 = 上中 / 下左 / 下右（±1 像素）",
+                      Near(Pt(tri.Points[0]).X, mid, 1f) && Near(Pt(tri.Points[0]).Y, tay, 1f)
+                      && Near(Pt(tri.Points[1]).X, tax, 1f) && Near(Pt(tri.Points[1]).Y, tby, 1f)
+                      && Near(Pt(tri.Points[2]).X, tbx, 1f) && Near(Pt(tri.Points[2]).Y, tby, 1f),
+                      $"上中 ({Pt(tri.Points[0]).X:F1},{Pt(tri.Points[0]).Y:F1})"
+                      + $" 下左 ({Pt(tri.Points[1]).X:F1},{Pt(tri.Points[1]).Y:F1})"
+                      + $" 下右 ({Pt(tri.Points[2]).X:F1},{Pt(tri.Points[2]).Y:F1})"
+                      + $" 期望 ({mid:F0},{tay:F0})/({tax:F0},{tby:F0})/({tbx:F0},{tby:F0})");
+                Check("三角形：一次拖拽 = 一步撤销", Doc.UndoDepth == 1, $"撤销栈 {Doc.UndoDepth} 步");
+                Doc.Undo();
+                SettleFrames(120);
+                Check("三角形：撤销一次就干净", Doc.Strokes.Count == 0, $"对象 {Doc.Strokes.Count} 个");
+            }
+
+            // ---- 造一个已知的三角形：手柄 / 紧框 / 命中 / 拖顶点 ----
+            Doc.Clear();
+            Doc.ClearHistory();
+            Tool = Tool.Marquee;
+            var t2 = new Stroke
+            {
+                Tool = Tool.Triangle, Kind = StrokeKind.Triangle,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            t2.AddPoint(lx + 300f, ly - 240f, 1f, 0);     // 上中
+            t2.AddPoint(lx, ly, 1f, 0);                   // 下左
+            t2.AddPoint(lx + 600f, ly, 1f, 0);            // 下右
+            Doc.AddStroke(t2);
+            Doc.SelectOnly(new[] { t2 });
+            SettleFrames(250);
+
+            Span<ShapeHandle> tHandles = stackalloc ShapeHandle[5];
+            int tn = SelectionHandles.ShapeHandlesOf(t2, tHandles);
+            Check("三角形：手柄是三个顶点（+ 旋转柄），没有八向缩放柄",
+                  tn == 3 && tHandles[0] == ShapeHandle.Vertex0
+                  && tHandles[1] == ShapeHandle.Vertex1 && tHandles[2] == ShapeHandle.Vertex2
+                  && SelectionHandles.RotateHandleVisible(t2)
+                  && SelectionHandles.HandleOf(t2, SelHandle.EndpointB) == ShapeHandle.None,
+                  $"手柄数 {tn}，旋转柄={SelectionHandles.RotateHandleVisible(t2)}，"
+                  + $"EndpointB→{SelectionHandles.HandleOf(t2, SelHandle.EndpointB)}");
+
+            var tFrame = SelectionHandles.FrameOf(Doc.Selected);
+            var tRot = SelectionHandles.CanvasPosition(SelHandle.Rotate, tFrame, DpiScale);
+            Check("三角形：三个顶点都点得到、旋转柄也点得到",
+                  SelectionHandles.HitTest(lx + 300f, ly - 240f, Doc.Selected, tFrame, DpiScale)
+                      == SelHandle.VertexA
+                  && SelectionHandles.HitTest(lx, ly, Doc.Selected, tFrame, DpiScale) == SelHandle.VertexB
+                  && SelectionHandles.HitTest(lx + 600f, ly, Doc.Selected, tFrame, DpiScale)
+                      == SelHandle.VertexC
+                  && SelectionHandles.HitTest(tRot.X, tRot.Y, Doc.Selected, tFrame, DpiScale)
+                      == SelHandle.Rotate,
+                  "上中→VertexA，下左→VertexB，下右→VertexC");
+
+            // 紧框 = 三个顶点的外接（＋半笔宽），**不是**"外框转过去再取外接"
+            float hw = t2.Width * 0.5f;
+            var wantTri = new RectF
+            {
+                MinX = lx - hw, MinY = ly - 240f - hw,
+                MaxX = lx + 600f + hw, MaxY = ly + hw,
+            };
+            var gotTri = t2.WorldInkBounds;
+            Check("三角形：紧框 = 三个顶点的外接（＋半笔宽，±0.5 像素）",
+                  Near(gotTri.MinX, wantTri.MinX, 0.5f) && Near(gotTri.MinY, wantTri.MinY, 0.5f)
+                  && Near(gotTri.MaxX, wantTri.MaxX, 0.5f) && Near(gotTri.MaxY, wantTri.MaxY, 0.5f),
+                  $"框 ({gotTri.MinX:F1},{gotTri.MinY:F1})-({gotTri.MaxX:F1},{gotTri.MaxY:F1})"
+                  + $" 期望 ({wantTri.MinX:F1},{wantTri.MinY:F1})-({wantTri.MaxX:F1},{wantTri.MaxY:F1})");
+
+            // 命中：边上命中、**内部不命中**（只认描边，和矩形 / 椭圆一致）
+            var edgeMid = new Vector2((lx + 300f + lx) * 0.5f, (ly - 240f + ly) * 0.5f);   // 左上那条边的中点
+            var centroid = new Vector2((lx + 300f + lx + lx + 600f) / 3f,
+                                       (ly - 240f + ly + ly) / 3f);
+            Check("三角形：边上命中、内部不命中（只认描边）",
+                  t2.HitTestExact(edgeMid.X, edgeMid.Y) && !t2.HitTestExact(centroid.X, centroid.Y),
+                  $"边上 {t2.HitTestExact(edgeMid.X, edgeMid.Y)}，"
+                  + $"重心 {t2.HitTestExact(centroid.X, centroid.Y)}");
+
+            // ---- 拖一个顶点：只动它、走快路、一步撤销 ----
+            var tApex = SelectionHandles.ShapeHandleCanvasPosition(t2, ShapeHandle.Vertex0);
+            float p1x = t2.Points[1].X, p1y = t2.Points[1].Y;
+            float p2x = t2.Points[2].X, p2y = t2.Points[2].Y;
+            float p0x = t2.Points[0].X, p0y = t2.Points[0].Y;
+            int tRev = t2.Revision, tUndo = Doc.UndoDepth;
+            // 目标位置刻意挑成"离等腰 / 等边 / 直角都很远"：这一条只验拖动本身，
+            // 吸附留给 M 段（两个行为混在一起，红了也不知道是谁的错）。
+            var tApexTo = new Vector2(lx + 140f, ly - 620f);
+            bool tookApex = SelectionGestureForTest(tApex.X, tApex.Y);
+            UpdateSelectionGestureForTest(tApexTo.X, tApexTo.Y);
+            SettleFrames(80);
+            Check("三角形：拖顶点时模型没动（Revision 不变、走快路）",
+                  t2.Revision == tRev && VertexDragging,
+                  $"Revision {tRev} → {t2.Revision}，拖元素中={VertexDragging}");
+            Check("三角形：拖动中内容层一帧都不重画", _windows[0].LastPatchCount == 0,
+                  $"上一帧光栅化分块 {_windows[0].LastPatchCount} 块");
+            Check("三角形：这一拖没吸（目标离三种约束都远）",
+                  ShapeSnapKind == ShapeSnapKind.None, $"吸到={ShapeSnapKind}");
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            Check("三角形：拖一个顶点只动它（另两个顶点**逐位**不变）",
+                  tookApex
+                  && t2.Points[1].X == p1x && t2.Points[1].Y == p1y
+                  && t2.Points[2].X == p2x && t2.Points[2].Y == p2y
+                  && Near(Pt(t2.Points[0]).X, tApexTo.X, 1f)
+                  && Near(Pt(t2.Points[0]).Y, tApexTo.Y, 1f),
+                  $"顶点0 ({Pt(t2.Points[0]).X:F1},{Pt(t2.Points[0]).Y:F1}) 期望 ({tApexTo.X:F0},{tApexTo.Y:F0})，"
+                  + $"顶点1 ({t2.Points[1].X:F1},{t2.Points[1].Y:F1})，"
+                  + $"顶点2 ({t2.Points[2].X:F1},{t2.Points[2].Y:F1})");
+            Check("三角形：一次拖顶点 = 一步撤销",
+                  Doc.UndoDepth == tUndo + 1, $"撤销栈 {tUndo} → {Doc.UndoDepth} 步");
+            Doc.Undo();
+            SettleFrames(150);
+            Check("三角形：撤销把那个顶点放回原位（逐位）",
+                  t2.Points[0].X == p0x && t2.Points[0].Y == p0y,
+                  $"顶点0 ({t2.Points[0].X:F3},{t2.Points[0].Y:F3}) "
+                  + $"期望 ({p0x:F3},{p0y:F3})");
+        }
+
+        // ================= L. 平行四边形：三个顶点 / 第四个现推 / 紧框 / 命中 =================
+        //
+        // 规格 9.5：`Points` = 三个顶点，**第四个 = 第2 + 第3 − 第1**（自动推导、不存）、
+        // 一按一拖出来的是"底边水平、上边右移 1/4 宽"、手柄只有三个（第四个角不给）、
+        // 紧框 = **四个顶点**的外接。
+        Console.WriteLine("  -- L. 平行四边形 --");
+        {
+            bool Near(float a, float b, float tol) => MathF.Abs(a - b) <= tol;
+
+            // ---- 画一个平行四边形（真机）----
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetToolFromUi(Tool.Parallelogram);
+            float pax = _virtualX + 700, pay = _virtualY + 500;
+            float pbx = pax + 400, pby = pay + 300;
+            float pw = pbx - pax;
+            SendMouse((int)pax, (int)pay, 0);                            SettleFrames(60);
+            SendMouse((int)pax, (int)pay, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+            for (int i = 1; i <= 4; i++)
+            {
+                SendMouse((int)(pax + (pbx - pax) * i / 4f), (int)(pay + (pby - pay) * i / 4f), 0);
+                SettleFrames(30);
+            }
+            SendMouse((int)pbx, (int)pby, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(220);
+
+            var par = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+            Check("平行四边形：拖出一个平行四边形对象",
+                  par != null && par.Kind == StrokeKind.Parallelogram,
+                  par == null ? "没有对象" : $"Kind={par.Kind}");
+            if (par != null)
+            {
+                Check("平行四边形：控制点是**三个**（第四个不存）",
+                      par.Points.Count == 3, $"点数 {par.Points.Count}");
+                Check("平行四边形：三个顶点 = 底左 / 底右 / 顶左（上边右移 1/4 宽，±1 像素）",
+                      Near(Pt(par.Points[0]).X, pax, 1f) && Near(Pt(par.Points[0]).Y, pby, 1f)
+                      && Near(Pt(par.Points[1]).X, pbx - pw * 0.25f, 1f)
+                      && Near(Pt(par.Points[1]).Y, pby, 1f)
+                      && Near(Pt(par.Points[2]).X, pax + pw * 0.25f, 1f)
+                      && Near(Pt(par.Points[2]).Y, pay, 1f),
+                      $"底左 ({Pt(par.Points[0]).X:F1},{Pt(par.Points[0]).Y:F1})"
+                      + $" 底右 ({Pt(par.Points[1]).X:F1},{Pt(par.Points[1]).Y:F1})"
+                      + $" 顶左 ({Pt(par.Points[2]).X:F1},{Pt(par.Points[2]).Y:F1})"
+                      + $" 期望 ({pax:F0},{pby:F0})/({pbx - pw * 0.25f:F0},{pby:F0})/({pax + pw * 0.25f:F0},{pay:F0})");
+                // 第四个顶点：**两条路各算一遍**（公式 / 外框右上角），两条都得对上
+                var f4 = par.ParallelogramFourthLocal();
+                Check("平行四边形：第四点逐位 = 第2 + 第3 − 第1（并且正好是外框右上角）",
+                      f4.X == par.Points[1].X + par.Points[2].X - par.Points[0].X
+                      && f4.Y == par.Points[1].Y + par.Points[2].Y - par.Points[0].Y
+                      && Near(f4.X, pbx, 1f) && Near(f4.Y, pay, 1f),
+                      $"第四点 ({f4.X:F1},{f4.Y:F1})，外框右上角 ({pbx:F0},{pay:F0})");
+                Check("平行四边形：一次拖拽 = 一步撤销", Doc.UndoDepth == 1, $"撤销栈 {Doc.UndoDepth} 步");
+                Doc.Undo();
+                SettleFrames(120);
+                Check("平行四边形：撤销一次就干净", Doc.Strokes.Count == 0, $"对象 {Doc.Strokes.Count} 个");
+            }
+
+            // ---- 造一个已知的平行四边形：手柄 / 第四个角没有手柄 / 紧框 / 命中 ----
+            Doc.Clear();
+            Doc.ClearHistory();
+            Tool = Tool.Marquee;
+            var q2 = new Stroke
+            {
+                Tool = Tool.Parallelogram, Kind = StrokeKind.Parallelogram,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            q2.AddPoint(lx, ly, 1f, 0);                 // 底左
+            q2.AddPoint(lx + 300f, ly, 1f, 0);          // 底右
+            q2.AddPoint(lx + 75f, ly - 200f, 1f, 0);    // 顶左
+            Doc.AddStroke(q2);
+            Doc.SelectOnly(new[] { q2 });
+            SettleFrames(250);
+
+            Span<ShapeHandle> qHandles = stackalloc ShapeHandle[5];
+            int qn = SelectionHandles.ShapeHandlesOf(q2, qHandles);
+            var q4 = q2.ParallelogramFourthLocal();
+            var qFrame = SelectionHandles.FrameOf(Doc.Selected);
+            var qRot = SelectionHandles.CanvasPosition(SelHandle.Rotate, qFrame, DpiScale);
+            Check("平行四边形：手柄只有三个（第四个角不给手柄，用户定）",
+                  qn == 3 && qHandles[0] == ShapeHandle.Vertex0
+                  && qHandles[1] == ShapeHandle.Vertex1 && qHandles[2] == ShapeHandle.Vertex2
+                  && SelectionHandles.HitTest(q4.X, q4.Y, Doc.Selected, qFrame, DpiScale)
+                      == SelHandle.None,
+                  $"手柄数 {qn}，在第四点 ({q4.X:F0},{q4.Y:F0}) 上按一下 → "
+                  + $"{SelectionHandles.HitTest(q4.X, q4.Y, Doc.Selected, qFrame, DpiScale)}（期望 None）");
+            Check("平行四边形：给旋转柄", SelectionHandles.RotateHandleVisible(q2)
+                  && SelectionHandles.HitTest(qRot.X, qRot.Y, Doc.Selected, qFrame, DpiScale)
+                      == SelHandle.Rotate,
+                  $"旋转柄={SelectionHandles.RotateHandleVisible(q2)}");
+
+            // 紧框 = **四个顶点**的外接（＋半笔宽）：第四个点在右上，少了它框会小一截
+            float qhw = q2.Width * 0.5f;
+            var wantQ = new RectF
+            {
+                MinX = lx - qhw, MinY = ly - 200f - qhw,
+                MaxX = lx + 375f + qhw, MaxY = ly + qhw,
+            };
+            var gotQ = q2.WorldInkBounds;
+            Check("平行四边形：紧框 = **四个顶点**的外接（含推导出来的那个，±0.5 像素）",
+                  Near(gotQ.MinX, wantQ.MinX, 0.5f) && Near(gotQ.MinY, wantQ.MinY, 0.5f)
+                  && Near(gotQ.MaxX, wantQ.MaxX, 0.5f) && Near(gotQ.MaxY, wantQ.MaxY, 0.5f),
+                  $"框 ({gotQ.MinX:F1},{gotQ.MinY:F1})-({gotQ.MaxX:F1},{gotQ.MaxY:F1})"
+                  + $" 期望 ({wantQ.MinX:F1},{wantQ.MinY:F1})-({wantQ.MaxX:F1},{wantQ.MaxY:F1})"
+                  + $"（右上那个角就是第四点 {q4.X:F0},{q4.Y:F0}）");
+
+            var qEdgeMid = new Vector2(lx + 150f, ly);                 // 底边中点
+            var qInside = new Vector2((lx + lx + 300f + lx + 75f + q4.X) / 4f,
+                                      (ly + ly + ly - 200f + q4.Y) / 4f);
+            Check("平行四边形：边上命中、内部不命中（只认描边）",
+                  q2.HitTestExact(qEdgeMid.X, qEdgeMid.Y) && !q2.HitTestExact(qInside.X, qInside.Y),
+                  $"底边中点 {q2.HitTestExact(qEdgeMid.X, qEdgeMid.Y)}，"
+                  + $"内部 {q2.HitTestExact(qInside.X, qInside.Y)}");
+
+            // ---- 拖一个顶点：只动它，第四个角**仍逐位等于公式** ----
+            var qV1 = SelectionHandles.ShapeHandleCanvasPosition(q2, ShapeHandle.Vertex1);
+            float q0x = q2.Points[0].X, q0y = q2.Points[0].Y;
+            float q2x = q2.Points[2].X, q2y = q2.Points[2].Y;
+            int qRev = q2.Revision, qUndo = Doc.UndoDepth;
+            var qV1To = new Vector2(lx + 380f, ly + 30f);   // 离菱形 / 矩形都远（见 M 段的摆位账）
+            bool tookQ = SelectionGestureForTest(qV1.X, qV1.Y);
+            UpdateSelectionGestureForTest(qV1To.X, qV1To.Y);
+            SettleFrames(80);
+            Check("平行四边形：拖顶点时模型没动（Revision 不变、走快路）",
+                  q2.Revision == qRev && VertexDragging,
+                  $"Revision {qRev} → {q2.Revision}，拖元素中={VertexDragging}");
+            Check("平行四边形：拖动中内容层一帧都不重画", _windows[0].LastPatchCount == 0,
+                  $"上一帧光栅化分块 {_windows[0].LastPatchCount} 块");
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            var q4After = q2.ParallelogramFourthLocal();
+            Check("平行四边形：拖任一顶点后，第四个顶点仍**逐位**等于公式",
+                  tookQ && q2.Points.Count == 3
+                  && q4After.X == q2.Points[1].X + q2.Points[2].X - q2.Points[0].X
+                  && q4After.Y == q2.Points[1].Y + q2.Points[2].Y - q2.Points[0].Y
+                  && q4After.X == q4.X + (q2.Points[1].X - (lx + 300f))
+                  && q4After.Y == q4.Y + (q2.Points[1].Y - ly),
+                  $"第四个点 ({q4.X:F1},{q4.Y:F1}) → ({q4After.X:F1},{q4After.Y:F1})"
+                  + $"（右下角挪了 ({q2.Points[1].X - (lx + 300f):F1},{q2.Points[1].Y - ly:F1})，"
+                  + $"第四点跟着平移了同样的量）");
+            Check("平行四边形：拖一个顶点只动它（另两个逐位不变）",
+                  q2.Points[0].X == q0x && q2.Points[0].Y == q0y
+                  && q2.Points[2].X == q2x && q2.Points[2].Y == q2y
+                  && Near(q2.Points[1].X, qV1To.X, 1f) && Near(q2.Points[1].Y, qV1To.Y, 1f),
+                  $"底右 ({q2.Points[1].X:F1},{q2.Points[1].Y:F1}) 期望 ({qV1To.X:F0},{qV1To.Y:F0})，"
+                  + $"底左 ({q2.Points[0].X:F1},{q2.Points[0].Y:F1})，"
+                  + $"顶左 ({q2.Points[2].X:F1},{q2.Points[2].Y:F1})");
+            Check("平行四边形：一次拖顶点 = 一步撤销", Doc.UndoDepth == qUndo + 1,
+                  $"撤销栈 {qUndo} → {Doc.UndoDepth} 步");
+            Doc.Undo();
+            SettleFrames(150);
+        }
+
+        // ================= L2. 读数：三角形三个内角 / 平行四边形两个夹角（规格 9.7）=================
+        //
+        // 规格：三角形**选中就显示**三个内角（用户定），拖顶点时实时更新；
+        // 平行四边形**拖顶点时**显示它那两个互补的夹角。
+        // **不再显示"内角和"那一行**（用户 2026-09-19 定：显示和太乱），所以为它服务的
+        // 0.1° 配平也撤了——三个角**各自独立**取值，没有谁为了凑 180.0 被动过 0.1°。
+        //
+        // 这一节顺带把"**绘制与脏区同源**"验掉：浮动层是**按脏区裁剪**画的，所以
+        //   · 标签上屏了 ⟹ 那块脏区确实算上了它；
+        //   · 取消选中 / 松手之后同一块探针窗必须干净 ⟹ 消失那一帧也被算到了（不留残影）。
+        // 探针数的是角标胶囊的**底色**（默认主题 Panel 盖在深色白板上 ≈ (236,236,239)）。
+        Console.WriteLine("  -- L2. 三角形内角 / 平行四边形夹角（读数）--");
+        {
+            bool Near(float a, float b, float t) => MathF.Abs(a - b) <= t;
+            Span<Vector2> av = stackalloc Vector2[4];
+            Span<float> ad = stackalloc float[3];
+            int PanelPixels(int x, int y, int w, int h)
+                => ScreenProbe.CountNear(x, y, w, h, 236, 236, 239, 26);
+            // 两颗角标的探针窗：左顶点取它左边一截、右顶点取它右边一截（角标就挂在那儿）
+            int LeftPill(float vx, float vy) => PanelPixels((int)(vx - 90f * DpiScale),
+                (int)(vy - 14f * DpiScale), (int)(60f * DpiScale), (int)(28f * DpiScale));
+            int RightPill(float vx, float vy) => PanelPixels((int)(vx + 30f * DpiScale),
+                (int)(vy - 14f * DpiScale), (int)(60f * DpiScale), (int)(28f * DpiScale));
+
+            // ---- 数学层：一个**已知角度**的 30/60/90 三角形 ----
+            // 顶点0 = 直角，顶点1 处 30°，顶点2 处 60°（高 = 600·tan30° ≈ 346.41）。
+            var T0 = new Vector2(lx, ly);
+            var T1 = new Vector2(lx + 600f, ly);
+            var T2 = new Vector2(lx, ly - 346.4102f);
+            Span<Vector2> tri3 = stackalloc Vector2[3];
+            tri3[0] = T0; tri3[1] = T1; tri3[2] = T2;
+            Span<float> triDeg = stackalloc float[3];
+            int triN = SelectionHandles.PolygonAngles(StrokeKind.Triangle, tri3, triDeg);
+            Check("内角·数学层：30/60/90 的三角形 → 读数 90 / 30 / 60（±0.1°）",
+                  triN == 3 && Near(triDeg[0], 90f, 0.1f) && Near(triDeg[1], 30f, 0.1f)
+                  && Near(triDeg[2], 60f, 0.1f),
+                  $"读数 {triDeg[0]:F2}° / {triDeg[1]:F2}° / {triDeg[2]:F2}°");
+            // **配平撤掉了**（用户 2026-09-19 定：不再显示那一行"内角和"）：每个角都必须是
+            // "那个角本身"，不许为了凑一行 180.0 被动过 0.1°。用一个**真值不在 0.1° 网格上**
+            // 的三角形盯住它——配平过的话，三个数会变成 0.1° 的整数倍，这里当场不等。
+            var S0 = new Vector2(0f, 0f);
+            var S1 = new Vector2(300f, 0f);
+            var S2 = new Vector2(-120f, 211.36f);          // 故意摆歪：三个角都不是整齐数
+            Span<Vector2> triV = stackalloc Vector2[3];
+            triV[0] = S0; triV[1] = S1; triV[2] = S2;
+            Span<float> triRaw = stackalloc float[3];
+            int triRawN = SelectionHandles.PolygonAngles(StrokeKind.Triangle, triV, triRaw);
+            float e0 = SelectionHandles.AngleBetweenDegrees(S1 - S0, S2 - S0);
+            float e1 = SelectionHandles.AngleBetweenDegrees(S2 - S1, S0 - S1);
+            float e2 = SelectionHandles.AngleBetweenDegrees(S0 - S2, S1 - S2);
+            Check("内角·数学层：每个角都取**它自己**（独立算一遍，逐位一致 = 没配平）",
+                  triRawN == 3 && triRaw[0] == e0 && triRaw[1] == e1 && triRaw[2] == e2,
+                  $"{triRaw[0]:F4} / {triRaw[1]:F4} / {triRaw[2]:F4}"
+                  + $" vs 独立算 {e0:F4} / {e1:F4} / {e2:F4}");
+            Check("内角·数学层：三个角之和 = 180（三角形的性质，不是凑出来的，±0.01°）",
+                  Near(triRaw[0] + triRaw[1] + triRaw[2], 180f, 0.01f),
+                  $"和 = {triRaw[0] + triRaw[1] + triRaw[2]:F4}°");
+
+            // ---- 数学层：平行四边形两个夹角（互补）----
+            Span<Vector2> par4 = stackalloc Vector2[4];
+            par4[0] = new Vector2(lx, ly);
+            par4[1] = new Vector2(lx + 400f, ly);
+            par4[2] = new Vector2(lx + 100f, ly - 260f);
+            par4[3] = Stroke.ParallelogramFourth(par4[0], par4[1], par4[2]);
+            Span<float> parDeg = stackalloc float[2];
+            int parN = SelectionHandles.PolygonAngles(StrokeKind.Parallelogram, par4, parDeg);
+            float w0 = SelectionHandles.AngleBetweenDegrees(par4[1] - par4[0], par4[2] - par4[0]);
+            float w1 = SelectionHandles.AngleBetweenDegrees(par4[0] - par4[1], par4[3] - par4[1]);
+            Check("夹角·数学层：两个角 = 那两条边张成的角（独立算一遍，±0.01°）",
+                  parN == 2 && Near(parDeg[0], w0, 0.01f) && Near(parDeg[1], w1, 0.01f),
+                  $"读数 {parDeg[0]:F2}° / {parDeg[1]:F2}°，独立算 {w0:F2}° / {w1:F2}°");
+            Check("夹角·数学层：两个数互补（和 = 180 ±0.1°）",
+                  Near(parDeg[0] + parDeg[1], 180f, 0.1f),
+                  $"{parDeg[0]:F2} + {parDeg[1]:F2} = {parDeg[0] + parDeg[1]:F3}");
+
+            // ---- 真机：三角形「选中就显示」----
+            Doc.Clear();
+            Doc.ClearHistory();
+            Tool = Tool.Marquee;
+            var rt = new Stroke
+            {
+                Tool = Tool.Triangle, Kind = StrokeKind.Triangle,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            rt.AddPoint(T0.X, T0.Y, 1f, 0);
+            rt.AddPoint(T1.X, T1.Y, 1f, 0);
+            rt.AddPoint(T2.X, T2.Y, 1f, 0);
+            Doc.AddStroke(rt);
+            Doc.SelectOnly(new[] { rt });
+            SettleFrames(360);
+            int rn = FillAngleReadout(av, ad);
+            Check("内角·真机：**选中就显示**三个内角（不是只拖动时才有）",
+                  rn == 3 && !VertexDragging && Near(ad[0], 90f, 0.1f) && Near(ad[1], 30f, 0.1f)
+                  && Near(ad[2], 60f, 0.1f),
+                  $"读数 {ad[0]:F2} / {ad[1]:F2} / {ad[2]:F2}（拖元素中={VertexDragging}）");
+            // 三颗角标：左下的角挂在它左边、右边的角挂在它右边、上面的角也挂左边
+            //（左右由"顶点在形心的哪一侧"决定，见 FillAnglePills）。
+            int triLeft0 = LeftPill(T0.X, T0.Y);
+            int triRight = RightPill(T1.X, T1.Y);
+            int triLeft2 = LeftPill(T2.X, T2.Y);
+            // **形心那一块正是以前印"内角和"那一行的地方**（用户 2026-09-19 定：不显示了）。
+            // 所以这里反过来量：它必须是干净的——这一条盯住"那行真的没了"。
+            var triCentroid = new Vector2((T0.X + T1.X + T2.X) / 3f, (T0.Y + T1.Y + T2.Y) / 3f);
+            int triCenter = PanelPixels((int)(triCentroid.X - 60f * DpiScale),
+                (int)(triCentroid.Y - 14f * DpiScale), (int)(120f * DpiScale), (int)(28f * DpiScale));
+            Check("内角·真机：三颗角标都上了屏（脏区确实把每一颗都算上了）",
+                  triLeft0 > 150 && triRight > 150 && triLeft2 > 150,
+                  $"左下 {triLeft0} 像素、右 {triRight} 像素、上 {triLeft2} 像素");
+            Check("内角·真机：形心那一块**没有**\"内角和\"那一行（用户 2026-09-19 定）",
+                  triCenter < 30, $"形心窗口 {triCenter} 像素（期望 <30）");
+
+            // ---- 真机：取消选中 → 角标必须消失（同源 + 不留残影）----
+            Doc.Selected.Clear();
+            SettleFrames(360);
+            Check("内角·真机：没选中时**不显示**（读数个数 = 0）",
+                  FillAngleReadout(av, ad) == 0, $"读数个数 {FillAngleReadout(av, ad)}");
+            int goneLeft0 = LeftPill(T0.X, T0.Y);
+            int goneRight = RightPill(T1.X, T1.Y);
+            int goneLeft2 = LeftPill(T2.X, T2.Y);
+            Check("内角·真机：取消选中后三颗角标真的从屏幕消失（不留残影）",
+                  goneLeft0 < 30 && goneRight < 30 && goneLeft2 < 30,
+                  $"还剩 左下 {goneLeft0} 像素、右 {goneRight} 像素、上 {goneLeft2} 像素");
+
+            // ---- 真机：拖一个顶点 → 读数实时变（每个角各自独立，谁都不为凑和被动过）----
+            Doc.SelectOnly(new[] { rt });
+            SettleFrames(260);
+            FillAngleReadout(av, ad);
+            float b0 = ad[0], b1 = ad[1], b2 = ad[2];
+            var triApex = SelectionHandles.ShapeHandleCanvasPosition(rt, ShapeHandle.Vertex2);
+            var triApexTo = new Vector2(T2.X + 260f, T2.Y - 140f);
+            bool tookTri = SelectionGestureForTest(triApex.X, triApex.Y);
+            UpdateSelectionGestureForTest(triApexTo.X, triApexTo.Y);
+            SettleFrames(120);
+            int dn = FillAngleReadout(av, ad);
+            Check("内角·真机：拖顶点时读数**实时变**（还是三个）",
+                  tookTri && VertexDragging && dn == 3
+                  && (MathF.Abs(ad[0] - b0) > 1f || MathF.Abs(ad[1] - b1) > 1f
+                      || MathF.Abs(ad[2] - b2) > 1f),
+                  $"{b0:F1}/{b1:F1}/{b2:F1} → {ad[0]:F1}/{ad[1]:F1}/{ad[2]:F1}");
+            Check("内角·真机：拖完三个角仍是各自独立的值（和 = 180 是三角形的性质，±0.02°）",
+                  Near(ad[0] + ad[1] + ad[2], 180f, 0.02f), $"和 = {ad[0] + ad[1] + ad[2]:F4}°");
+            // 拖动中把整块都探一遍：角标跟着顶点走，走过的路上不许有残留
+            var dragBox = RectF.Empty;
+            dragBox.Add(T0.X, T0.Y);
+            dragBox.Add(T2.X - 60f, T2.Y - 60f);
+            dragBox.Add(triApexTo.X + 160f, triApexTo.Y + 60f);
+            dragBox.Add(T1.X + 160f, T1.Y + 60f);
+            int dragResidue = PanelPixels((int)dragBox.MinX, (int)dragBox.MinY,
+                                          (int)(dragBox.MaxX - dragBox.MinX),
+                                          (int)(dragBox.MaxY - dragBox.MinY));
+            Check("内角·真机：拖动中整块探针里的胶囊像素 = 那几颗角标（没有额外的残影）",
+                  dragResidue > 300, $"整块里 {dragResidue} 像素（三颗角标）");
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            Check("内角·真机：一次拖顶点 = 一步撤销",
+                  Doc.UndoDepth >= 2, $"撤销栈 {Doc.UndoDepth} 步");
+            Doc.Undo();
+            SettleFrames(150);
+
+            // ---- 真机：平行四边形只**拖顶点时**显示两个夹角 ----
+            Doc.Clear();
+            Doc.ClearHistory();
+            var rp = new Stroke
+            {
+                Tool = Tool.Parallelogram, Kind = StrokeKind.Parallelogram,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+            };
+            rp.AddPoint(par4[0].X, par4[0].Y, 1f, 0);
+            rp.AddPoint(par4[1].X, par4[1].Y, 1f, 0);
+            rp.AddPoint(par4[2].X, par4[2].Y, 1f, 0);
+            Doc.AddStroke(rp);
+            Doc.SelectOnly(new[] { rp });
+            SettleFrames(320);
+            Check("夹角·真机：**选中静止时两个角都不显示**（规格只要求拖顶点时显示）",
+                  FillAngleReadout(av, ad) == 0, $"读数个数 {FillAngleReadout(av, ad)}");
+            var qv1 = SelectionHandles.ShapeHandleCanvasPosition(rp, ShapeHandle.Vertex1);
+            bool tookQ1 = SelectionGestureForTest(qv1.X, qv1.Y);
+            UpdateSelectionGestureForTest(qv1.X + 45f, qv1.Y + 30f);
+            SettleFrames(120);
+            int qn = FillAngleReadout(av, ad);
+            float q0 = SelectionHandles.AngleBetweenDegrees(av[1] - av[0], av[2] - av[0]);
+            float q1 = SelectionHandles.AngleBetweenDegrees(av[0] - av[1], av[3] - av[1]);
+            Check("夹角·真机：拖顶点时出现**两个**角，且 = 那两条边张成的角（±0.01°）",
+                  tookQ1 && VertexDragging && qn == 2
+                  && Near(ad[0], q0, 0.01f) && Near(ad[1], q1, 0.01f),
+                  $"读数 {ad[0]:F2}° / {ad[1]:F2}°，独立算 {q0:F2}° / {q1:F2}°");
+            Check("夹角·真机：两个数互补（和 = 180 ±0.1°）",
+                  Near(ad[0] + ad[1], 180f, 0.1f), $"{ad[0]:F2} + {ad[1]:F2} = {ad[0] + ad[1]:F3}");
+            int qLeft = LeftPill(av[0].X, av[0].Y);
+            int qRight = RightPill(av[1].X, av[1].Y);
+            Check("夹角·真机：两颗角标都上了屏（贴在被拖顶点之外的左右两侧）",
+                  qLeft > 150 && qRight > 150, $"左 {qLeft} 像素，右 {qRight} 像素");
+            EndSelectionGestureForTest();
+            SettleFrames(360);
+            int qLeftGone = LeftPill(par4[0].X, par4[0].Y);
+            int qRightGone = RightPill(par4[1].X, par4[1].Y);
+            Check("夹角·真机：松手后两颗角标都消失（不留残影）",
+                  FillAngleReadout(av, ad) == 0 && qLeftGone < 30 && qRightGone < 30,
+                  $"读数个数 {FillAngleReadout(av, ad)}，左 {qLeftGone} 像素，右 {qRightGone} 像素");
+            Doc.Undo();
+            SettleFrames(150);
+        }
+
+        // ================= M. 一族"特殊形状"吸附（规格 9.6）=================
+        //
+        // 三角形 → 等腰 / 等边 / 直角；矩形 → 正方形；椭圆 → 正圆；平行四边形 → 菱形 / 矩形。
+        // 每种约束都验三档：**正例**、**容差边界（刚好在外面的不吸）**、**Alt 自由**；
+        // 外加"整体移动 / 旋转时不会吸"。
+        //
+        // 两条腿都验：数学层直接调权威函数（容差边界与 Alt 只能在这一层验——Alt 要真按
+        // 键盘，注入不了），真机层真拖一次手柄、证明它确实接在那条路上。
+        // 摆位一律按**容差的比例**（tol = 2 逻辑像素 × dpi），这样在任何 DPI 的机器上语义一样。
+        Console.WriteLine("  -- M. 一族\"特殊形状\"吸附 --");
+        {
+            bool Near(float a, float b, float t) => MathF.Abs(a - b) <= t;
+            float tol = SelectionHandles.ShapeSnapLengthToleranceLogical * DpiScale;
+            float angTol = SelectionHandles.ShapeSnapAngleToleranceDegrees;
+
+            // 三角形的两个固定顶点：底边水平、长 200（被拖的第三个点另行给）
+            var A = new Vector2(lx, ly);
+            var B = new Vector2(lx + 200f, ly);
+            float midX = lx + 100f;
+            float D(Vector2 p, Vector2 q) => Vector2.Distance(p, q);
+
+            // ---- 三角形 · 等腰 ----
+            var isoV = new Vector2(midX + tol * 0.25f, ly - 150f);
+            float isoDiff = MathF.Abs(D(isoV, A) - D(isoV, B));
+            var isoGot = SelectionHandles.SnapPolygonVertex(StrokeKind.Triangle, 0, isoV, A, B,
+                                                            isoV, tol, false, out var isoSnap);
+            Check("三角形·等腰：两边长差在容差内 → 修正到中垂线上（两腰**精确**相等）",
+                  isoSnap == ShapeSnapKind.Isosceles && Near(isoGot.X, midX, 0.01f)
+                  && Near(isoGot.Y, isoV.Y, 0.01f) && Near(D(isoGot, A), D(isoGot, B), 1e-3f),
+                  $"摆位时两边差 {isoDiff:F2}（容差 {tol:F1}）→ 吸到「{SelectionHandles.ShapeSnapLabel(isoSnap)}」，"
+                  + $"顶点 ({isoGot.X:F2},{isoGot.Y:F2}) 期望 x={midX:F2}，"
+                  + $"两腰 {D(isoGot, A):F4} / {D(isoGot, B):F4}");
+
+            var isoV2 = new Vector2(midX + tol * 1.5f, ly - 150f);
+            float isoDiff2 = MathF.Abs(D(isoV2, A) - D(isoV2, B));
+            var isoGot2 = SelectionHandles.SnapPolygonVertex(StrokeKind.Triangle, 0, isoV2, A, B,
+                                                             isoV2, tol, false, out var isoSnap2);
+            Check("三角形·等腰：差得**刚好在容差外** → 不吸（手柄不粘手）",
+                  isoDiff2 > tol && isoDiff2 < tol * 2f
+                  && isoSnap2 == ShapeSnapKind.None && isoGot2 == isoV2,
+                  $"两边差 {isoDiff2:F2} > 容差 {tol:F1} → 吸到={isoSnap2}，"
+                  + $"顶点原样 ({isoGot2.X:F2},{isoGot2.Y:F2})");
+
+            var isoAlt = SelectionHandles.SnapPolygonVertex(StrokeKind.Triangle, 0, isoV, A, B,
+                                                            isoV, tol, true, out var isoSnap3);
+            Check("三角形·等腰：**Alt 一律自由**（同样的位置，不吸）",
+                  isoSnap3 == ShapeSnapKind.None && isoAlt == isoV,
+                  $"Alt 下吸到={isoSnap3}，顶点原样 ({isoAlt.X:F2},{isoAlt.Y:F2})");
+
+            // ---- 三角形 · 等边 ----
+            var eqH = 100f * MathF.Sqrt(3f);                       // 边长 200 的正三角形的高
+            var eqV = new Vector2(midX + tol * 0.25f, ly - eqH);
+            var eqGot = SelectionHandles.SnapPolygonVertex(StrokeKind.Triangle, 0, eqV, A, B,
+                                                           eqV, tol, false, out var eqSnap);
+            Check("三角形·等边：三边都在容差内 → 修正成**精确**正三角形",
+                  eqSnap == ShapeSnapKind.Equilateral
+                  && Near(eqGot.X, midX, 0.01f) && Near(eqGot.Y, ly - eqH, 0.01f)
+                  && Near(D(eqGot, A), 200f, 1e-3f) && Near(D(eqGot, B), 200f, 1e-3f)
+                  && Near(D(A, B), 200f, 1e-3f),
+                  $"摆位：三边 {D(eqV, A):F2} / {D(eqV, B):F2} / {D(A, B):F2}（容差 {tol:F1}）"
+                  + $"→ 吸到「{SelectionHandles.ShapeSnapLabel(eqSnap)}」，"
+                  + $"修正后三边 {D(eqGot, A):F4} / {D(eqGot, B):F4} / {D(A, B):F4}");
+            // 等边一定也满足"两腰相等"：优先级必须是等边（反了会把好形状改成只等腰）
+            Check("三角形·等边 优先于 等腰（同一个位置不会报成等腰）",
+                  eqSnap == ShapeSnapKind.Equilateral, $"吸到={eqSnap}");
+
+            // 等边的容差边界：把顶点沿底边挪出去，让两条斜边一条超差、一条欠差
+            // （等边要求**三条边**都在容差内，所以挪 2 倍容差就出界了）
+            var eqV2 = new Vector2(midX + tol * 2f, ly - eqH);
+            float eqDev = MathF.Max(MathF.Abs(D(eqV2, A) - 200f), MathF.Abs(D(eqV2, B) - 200f));
+            var eqGot2 = SelectionHandles.SnapPolygonVertex(StrokeKind.Triangle, 0, eqV2, A, B,
+                                                            eqV2, tol, false, out var eqSnap2);
+            Check("三角形·等边：三边差得**刚好在容差外** → 不吸",
+                  eqDev > tol && eqDev < tol * 2f && eqSnap2 == ShapeSnapKind.None && eqGot2 == eqV2,
+                  $"摆位：离 200 最远的那条边差 {eqDev:F2}（容差 {tol:F1}）→ 吸到={eqSnap2}，顶点原样");
+            var eqAlt = SelectionHandles.SnapPolygonVertex(StrokeKind.Triangle, 0, eqV, A, B,
+                                                           eqV, tol, true, out var eqSnap3);
+            Check("三角形·等边：**Alt 一律自由**",
+                  eqSnap3 == ShapeSnapKind.None && eqAlt == eqV,
+                  $"Alt 下吸到={eqSnap3}，顶点原样");
+
+            // ---- 三角形 · 直角（被拖的那个角）----
+            // 直角顶点在以 AB 为直径的圆上（泰勒斯）：取 60° 那个位置，
+            // 它**不在**中垂线上（所以不会先被等腰抢走）
+            var rtV = new Vector2(midX + 50f, ly - 100f * MathF.Sin(60f * MathF.PI / 180f));
+            float rtAng = SelectionHandles.AngleBetweenDegrees(A - rtV, B - rtV);
+            var rtGot = SelectionHandles.SnapPolygonVertex(StrokeKind.Triangle, 0, rtV, A, B,
+                                                           rtV, tol, false, out var rtSnap);
+            float rtAngAfter = SelectionHandles.AngleBetweenDegrees(A - rtGot, B - rtGot);
+            Check("三角形·直角：内角在 1° 内 → 修正到**恰好 90°**（被拖的那个角）",
+                  rtSnap == ShapeSnapKind.RightAngle && MathF.Abs(rtAngAfter - 90f) < 1e-3f,
+                  $"摆位时内角 {rtAng:F4}°（容差 {angTol:F0}°）→ 吸到「"
+                  + $"{SelectionHandles.ShapeSnapLabel(rtSnap)}」，修正后 {rtAngAfter:F4}°，"
+                  + $"顶点挪了 {D(rtGot, rtV):F4} 像素");
+            // 容差边界：沿半径缩到 98%（同一条射线上），内角变成 ~91.3°（刚好在 1° 外）
+            var rtV2 = new Vector2(midX + 49f, ly - 98f * MathF.Sin(60f * MathF.PI / 180f));
+            float rtAng2 = SelectionHandles.AngleBetweenDegrees(A - rtV2, B - rtV2);
+            float rtDiff2 = MathF.Abs(D(rtV2, A) - D(rtV2, B));
+            var rtGot2 = SelectionHandles.SnapPolygonVertex(StrokeKind.Triangle, 0, rtV2, A, B,
+                                                            rtV2, tol, false, out var rtSnap2);
+            Check("三角形·直角：内角差得**刚好在容差外**（约 91.3°）→ 不吸",
+                  MathF.Abs(rtAng2 - 90f) > angTol && MathF.Abs(rtAng2 - 90f) < angTol * 2f
+                  && rtDiff2 > tol        // 顺带确认：也没被等腰抢走
+                  && rtSnap2 == ShapeSnapKind.None && rtGot2 == rtV2,
+                  $"摆位时内角 {rtAng2:F4}°（离 90° 差 {MathF.Abs(rtAng2 - 90f):F3}° > {angTol:F0}°），"
+                  + $"两边差 {rtDiff2:F2} > 容差 {tol:F1} → 吸到={rtSnap2}，顶点原样");
+            var rtAlt = SelectionHandles.SnapPolygonVertex(StrokeKind.Triangle, 0, rtV, A, B,
+                                                           rtV, tol, true, out var rtSnap3);
+            Check("三角形·直角：**Alt 一律自由**",
+                  rtSnap3 == ShapeSnapKind.None && rtAlt == rtV,
+                  $"Alt 下吸到={rtSnap3}，顶点原样");
+
+            // ---- 三角形 · 直角（**固定的**那个角）----
+            // 角在底左（A）上：被拖的点要落在"过 A 且垂直于 AB"的直线上
+            var rtF = new Vector2(lx + tol * 0.1f, ly - 100f);
+            float rtAngA = SelectionHandles.AngleBetweenDegrees(rtF - A, B - A);
+            var rtFGot = SelectionHandles.SnapPolygonVertex(StrokeKind.Triangle, 0, rtF, A, B,
+                                                            rtF, tol, false, out var rtFSnap);
+            float rtAngA2 = SelectionHandles.AngleBetweenDegrees(rtFGot - A, B - A);
+            Check("三角形·直角：直角在**另一个（固定的）顶点**上也能修（修正只动被拖的点）",
+                  rtFSnap == ShapeSnapKind.RightAngle && Near(rtFGot.X, A.X, 0.01f)
+                  && MathF.Abs(rtAngA2 - 90f) < 1e-3f,
+                  $"摆位时 A 处内角 {rtAngA:F4}° → 吸到「{SelectionHandles.ShapeSnapLabel(rtFSnap)}」，"
+                  + $"修正后 {rtAngA2:F4}°，被拖的点 ({rtFGot.X:F2},{rtFGot.Y:F2}) 期望 x={A.X:F2}");
+
+            // ---- 椭圆 · 正圆 ----
+            bool eSnap;
+            float eIn = SelectionHandles.SnapEllipseAxis(200f + tol * 0.5f, 200f, tol, false, out eSnap);
+            Check("椭圆·正圆：|a − b| 在容差内 → 被拖的那条半轴取成另一条（a、b **逐位**相等）",
+                  eSnap && eIn == 200f,
+                  $"a = 200 + {tol * 0.5f:F1} → 修正成 {eIn:F1}（期望正好 200），吸住={eSnap}");
+            bool eSnap2;
+            float eOut = SelectionHandles.SnapEllipseAxis(200f + tol * 1.5f, 200f, tol, false, out eSnap2);
+            Check("椭圆·正圆：差得刚好在容差外 → 不吸",
+                  !eSnap2 && eOut == 200f + tol * 1.5f,
+                  $"a = 200 + {tol * 1.5f:F1}（容差 {tol:F1}）→ 不吸，a 保持 {eOut:F2}");
+            bool eSnap3;
+            float eAlt = SelectionHandles.SnapEllipseAxis(200f + tol * 0.25f, 200f, tol, true, out eSnap3);
+            Check("椭圆·正圆：**Alt 一律自由**",
+                  !eSnap3 && eAlt == 200f + tol * 0.25f,
+                  $"Alt 下 a 保持 {eAlt:F2}，吸住={eSnap3}");
+
+            // ---- 平行四边形 · 菱形 ----
+            var P0 = new Vector2(lx, ly);
+            var P2 = new Vector2(lx + 60f, ly - 200f);
+            float lv = D(P2, P0);                                   // 另一条邻边的长
+            var rhV = new Vector2(P0.X + lv + tol * 0.2f, ly);
+            var rhGot = SelectionHandles.SnapPolygonVertex(StrokeKind.Parallelogram, 1, P0, rhV, P2,
+                                                           rhV, tol, false, out var rhSnap);
+            Check("平行四边形·菱形：邻边差在容差内 → 修正到**精确**相等",
+                  rhSnap == ShapeSnapKind.Rhombus && Near(rhGot.X, P0.X + lv, 0.01f)
+                  && rhGot.Y == ly && Near(D(rhGot, P0), lv, 1e-3f),
+                  $"另一条邻边长 {lv:F3}，摆位差 {MathF.Abs(D(rhV, P0) - lv):F2}（容差 {tol:F1}）"
+                  + $"→ 吸到「{SelectionHandles.ShapeSnapLabel(rhSnap)}」，"
+                  + $"修正后 ({rhGot.X:F3},{rhGot.Y:F3})，邻边 {D(rhGot, P0):F4} / {lv:F4}");
+
+            var rhV2 = new Vector2(P0.X + lv + tol * 1.5f, ly);
+            float rhDiff2 = MathF.Abs(D(rhV2, P0) - lv);
+            var rhGot2 = SelectionHandles.SnapPolygonVertex(StrokeKind.Parallelogram, 1, P0, rhV2, P2,
+                                                            rhV2, tol, false, out var rhSnap2);
+            Check("平行四边形·菱形：差得刚好在容差外 → 不吸",
+                  rhDiff2 > tol && rhDiff2 < tol * 2f && rhSnap2 == ShapeSnapKind.None && rhGot2 == rhV2,
+                  $"邻边差 {rhDiff2:F2} > 容差 {tol:F1} → 吸到={rhSnap2}，顶点原样");
+            var rhAlt = SelectionHandles.SnapPolygonVertex(StrokeKind.Parallelogram, 1, P0, rhV, P2,
+                                                           rhV, tol, true, out var rhSnap3);
+            Check("平行四边形·菱形：**Alt 一律自由**",
+                  rhSnap3 == ShapeSnapKind.None && rhAlt == rhV,
+                  $"Alt 下吸到={rhSnap3}，顶点原样");
+
+            // ---- 平行四边形 · 矩形（邻边垂直）----
+            var raP1 = new Vector2(lx + 200f, ly);
+            var raV = new Vector2(lx + tol * 0.1f, ly - 150f);
+            float raAng = SelectionHandles.AngleBetweenDegrees(raV - P0, raP1 - P0);
+            var raGot = SelectionHandles.SnapPolygonVertex(StrokeKind.Parallelogram, 2, P0, raP1, raV,
+                                                           raV, tol, false, out var raSnap);
+            float raAngAfter = SelectionHandles.AngleBetweenDegrees(raGot - P0, raP1 - P0);
+            Check("平行四边形·矩形：夹角在 1° 内 → 修正到**恰好 90°**",
+                  raSnap == ShapeSnapKind.Rectangle && Near(raGot.X, P0.X, 0.01f)
+                  && MathF.Abs(raAngAfter - 90f) < 1e-3f,
+                  $"摆位时夹角 {raAng:F4}°（容差 {angTol:F0}°）→ 吸到「"
+                  + $"{SelectionHandles.ShapeSnapLabel(raSnap)}」，修正后 {raAngAfter:F4}°");
+
+            var raV2 = new Vector2(lx + 3f, ly - 150f);      // 3 像素 → 夹角离 90° 约 1.15°（容差外）
+            float raAng2 = SelectionHandles.AngleBetweenDegrees(raV2 - P0, raP1 - P0);
+            var raGot2 = SelectionHandles.SnapPolygonVertex(StrokeKind.Parallelogram, 2, P0, raP1, raV2,
+                                                            raV2, tol, false, out var raSnap2);
+            Check("平行四边形·矩形：夹角刚好在容差外（约 88.85°）→ 不吸",
+                  MathF.Abs(raAng2 - 90f) > angTol && raSnap2 == ShapeSnapKind.None && raGot2 == raV2,
+                  $"夹角 {raAng2:F4}°，离 90° 差 {MathF.Abs(raAng2 - 90f):F3}° > {angTol:F0}° → "
+                  + $"吸到={raSnap2}，顶点原样");
+            var raAlt = SelectionHandles.SnapPolygonVertex(StrokeKind.Parallelogram, 2, P0, raP1, raV,
+                                                           raV, tol, true, out var raSnap3);
+            Check("平行四边形·矩形：**Alt 一律自由**",
+                  raSnap3 == ShapeSnapKind.None && raAlt == raV,
+                  $"Alt 下吸到={raSnap3}，顶点原样");
+
+            // ---- 矩形 · 正方形（拖四角：改的是矩阵，不是点）----
+            {
+                var rSq = new Stroke
+                {
+                    Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+                    Color = new Color4(1f, 0f, 1f, 1f), Width = 4f * DpiScale,
+                };
+                rSq.AddPoint(lx, ly, 1f, 0);
+                rSq.AddPoint(lx + 300f, ly + 300f + tol * 0.5f, 1f, 0);   // 两边差 = tol/2
+                var sqSel = new[] { rSq };
+                var sqFrame = SelectionHandles.FrameOf(sqSel);
+                float sqW = sqFrame.Local.MaxX - sqFrame.Local.MinX;
+                float sqH = sqFrame.Local.MaxY - sqFrame.Local.MinY;
+                var sqAnchor = SelectionHandles.CanvasPosition(SelHandle.TopLeft, sqFrame, DpiScale);
+                var sqCorner = SelectionHandles.CanvasPosition(SelHandle.BottomRight, sqFrame, DpiScale);
+                var sqTo = sqAnchor + (sqCorner - sqAnchor) * 2f;          // 拖到两倍大
+
+                bool sqOk = SelectionHandles.TrySnapSquareCorner(sqSel, SelHandle.BottomRight, sqFrame,
+                                                                 sqTo, DpiScale, false, out var sqM);
+                var s0 = Vector2.Transform(new Vector2(sqFrame.Local.MinX, sqFrame.Local.MinY), sqM);
+                var s1 = Vector2.Transform(new Vector2(sqFrame.Local.MaxX, sqFrame.Local.MaxY), sqM);
+                Check("矩形·正方形：两边差在容差内 → 拖四角时修正成**精确**正方形",
+                      sqOk && Near(s1.X - s0.X, s1.Y - s0.Y, 0.01f) && (s1.X - s0.X) > 500f,
+                      $"原框 {sqW:F2}×{sqH:F2}（差 {MathF.Abs(sqW - sqH):F2}，容差 {tol:F1}）→ "
+                      + $"结果 {s1.X - s0.X:F3}×{s1.Y - s0.Y:F2}，吸住={sqOk}");
+
+                // 对照：**不吸**的那条路（通用 DragMatrix）会保持原来的**比值**
+                // （四角是等比缩放，两条边同比放大，所以"差"会跟着变大、"比值"不变）
+                var plainM = SelectionHandles.DragMatrix(SelHandle.BottomRight, sqFrame,
+                                                         sqTo, sqTo, DpiScale, false, false, true);
+                var p0 = Vector2.Transform(new Vector2(sqFrame.Local.MinX, sqFrame.Local.MinY), plainM);
+                var p1 = Vector2.Transform(new Vector2(sqFrame.Local.MaxX, sqFrame.Local.MaxY), plainM);
+                Check("矩形·正方形：不吸的时候**比值**一个数都不改（对照）",
+                      Near((p1.X - p0.X) / (p1.Y - p0.Y), sqW / sqH, 1e-4f),
+                      $"通用换算的结果 {p1.X - p0.X:F2}×{p1.Y - p0.Y:F2}"
+                      + $"（比值 {(p1.X - p0.X) / (p1.Y - p0.Y):F5} / 原比值 {sqW / sqH:F5}，"
+                      + $"两边差被同比放大成 {MathF.Abs((p1.X - p0.X) - (p1.Y - p0.Y)):F2}"
+                      + $"= 原差值 {MathF.Abs(sqW - sqH):F2} × 缩放倍数）");
+
+                var rOut = new Stroke
+                {
+                    Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+                    Color = new Color4(1f, 0f, 1f, 1f), Width = 4f * DpiScale,
+                };
+                rOut.AddPoint(lx, ly, 1f, 0);
+                rOut.AddPoint(lx + 300f, ly + 300f + tol * 1.5f, 1f, 0);
+                var outSel = new[] { rOut };
+                var outFrame = SelectionHandles.FrameOf(outSel);
+                var outAnchor = SelectionHandles.CanvasPosition(SelHandle.TopLeft, outFrame, DpiScale);
+                var outCorner = SelectionHandles.CanvasPosition(SelHandle.BottomRight, outFrame, DpiScale);
+                var outTo = outAnchor + (outCorner - outAnchor) * 2f;
+                Check("矩形·正方形：两边差**刚好在容差外** → 不吸",
+                      !SelectionHandles.TrySnapSquareCorner(outSel, SelHandle.BottomRight, outFrame,
+                                                            outTo, DpiScale, false, out _),
+                      $"原框 {outFrame.Local.MaxX - outFrame.Local.MinX:F2}"
+                      + $"×{outFrame.Local.MaxY - outFrame.Local.MinY:F2}"
+                      + $"（差 {outFrame.Local.MaxY - outFrame.Local.MinY - (outFrame.Local.MaxX - outFrame.Local.MinX):F2}"
+                      + $" > 容差 {tol:F1}）");
+                Check("矩形·正方形：**Alt 一律自由**",
+                      !SelectionHandles.TrySnapSquareCorner(sqSel, SelHandle.BottomRight, sqFrame,
+                                                            sqTo, DpiScale, true, out _),
+                      "Alt 下同样的摆位不吸");
+                // 转过的矩形：选中框是它的外接正矩形（虚胖），沿屏幕轴缩放和它自己的边长
+                // 没有简单关系 —— 明确不吸（宁可不给，也不给一个解释不清的行为）
+                var rRot = new Stroke
+                {
+                    Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+                    Color = new Color4(1f, 0f, 1f, 1f), Width = 4f * DpiScale,
+                };
+                rRot.AddPoint(lx, ly, 1f, 0);
+                rRot.AddPoint(lx + 300f, ly + 300f + tol * 0.5f, 1f, 0);
+                rRot.Transform = SelectionHandles.RotateMatrix(30f, new Vector2(lx, ly));
+                var rotSel = new[] { rRot };
+                var rotFrame = SelectionHandles.FrameOf(rotSel);
+                var rotAnchor = SelectionHandles.CanvasPosition(SelHandle.TopLeft, rotFrame, DpiScale);
+                var rotCorner = SelectionHandles.CanvasPosition(SelHandle.BottomRight, rotFrame, DpiScale);
+                Check("矩形·正方形：**转过的**矩形不吸（范围写清楚）",
+                      !SelectionHandles.TrySnapSquareCorner(rotSel, SelHandle.BottomRight, rotFrame,
+                                                            rotAnchor + (rotCorner - rotAnchor) * 2f,
+                                                            DpiScale, false, out _),
+                      "转过 30°：沿屏幕轴缩放 ≠ 沿它自己两条边缩放，所以不吸");
+            }
+
+            // ============ 真机层：吸住时接在那条路上，而且提交的几何**精确**满足约束 ============
+            // ---- 三角形拖顶点（真机）：等腰 ----
+            Doc.Clear();
+            Doc.ClearHistory();
+            Tool = Tool.Marquee;
+            float mA = lx, mB = lx + 200f, mY = ly;
+            var mTri = new Stroke
+            {
+                Tool = Tool.Triangle, Kind = StrokeKind.Triangle,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 6f * DpiScale,
+            };
+            mTri.AddPoint(midX + tol * 0.25f, mY - 150f, 1f, 0);
+            mTri.AddPoint(mA, mY, 1f, 0);
+            mTri.AddPoint(mB, mY, 1f, 0);
+            Doc.AddStroke(mTri);
+            Doc.SelectOnly(new[] { mTri });
+            SettleFrames(250);
+            var mTriApex = SelectionHandles.ShapeHandleCanvasPosition(mTri, ShapeHandle.Vertex0);
+            var mTriTo = new Vector2(midX + tol * 0.25f, mY - 400f);   // 还在容差内 → 会吸
+            SelectionGestureForTest(mTriApex.X, mTriApex.Y);
+            UpdateSelectionGestureForTest(mTriTo.X, mTriTo.Y);
+            SettleFrames(80);
+            Check("吸附（真机）：拖三角形的顶点、吸住时胶囊说得出「等腰」",
+                  ShapeSnapKind == ShapeSnapKind.Isosceles
+                  && SelectionHandles.ShapeSnapLabel(ShapeSnapKind) == "等腰"
+                  && VertexDragging,
+                  $"吸到={ShapeSnapKind}（「{SelectionHandles.ShapeSnapLabel(ShapeSnapKind)}」），"
+                  + $"拖元素中={VertexDragging}");
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            var mA2 = new Vector2(mTri.Points[1].X, mTri.Points[1].Y);
+            var mB2 = new Vector2(mTri.Points[2].X, mTri.Points[2].Y);
+            var mApex = new Vector2(mTri.Points[0].X, mTri.Points[0].Y);
+            Check("吸附（真机）：提交的几何**精确**满足约束（两腰逐位相等）",
+                  mApex.X == midX && D(mApex, mA2) == D(mApex, mB2),
+                  $"顶点 ({mApex.X:F3},{mApex.Y:F3}) 期望 x={midX:F3}（指针本来在 "
+                  + $"{mTriTo.X:F3}，被吸回来了），两腰 {D(mApex, mA2):F6} / {D(mApex, mB2):F6}");
+
+            // ---- 椭圆拖轴端点（真机）：正圆 ----
+            Doc.Clear();
+            Doc.ClearHistory();
+            float eCx = lx + 300f, eCy = ly - 300f;
+            float eB0 = 200f + tol * 0.5f;             // b 比 a 大半个容差
+            var mEll = new Stroke
+            {
+                Tool = Tool.Ellipse, Kind = StrokeKind.Ellipse,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 6f * DpiScale,
+            };
+            mEll.AddPoint(eCx, eCy, 1f, 0);
+            // a 一开始**故意离 b 很远**（差了整整 100）：那样这一次拖动才有足够长的行程
+            // （短于"点选容差"的拖动会被当成"点了一下"，不提交几何）。
+            // 拖到最后一步时 a 落在 b 的容差里 → 才吸。
+            mEll.AddPoint(eCx + 100f, eCy + eB0, 1f, 0);      // a = 100、b = eB0
+            Doc.AddStroke(mEll);
+            Doc.SelectOnly(new[] { mEll });
+            SettleFrames(250);
+            var mRim = SelectionHandles.ShapeHandleCanvasPosition(mEll, ShapeHandle.AxisRight);
+            SelectionGestureForTest(mRim.X, mRim.Y);
+            UpdateSelectionGestureForTest(eCx + eB0 + tol * 0.5f, eCy);   // 拖到 |a − b| = tol/2
+            SettleFrames(80);
+            Check("吸附（真机）：拖椭圆的轴端点、吸住时胶囊说得出「正圆」",
+                  ShapeSnapKind == ShapeSnapKind.Circle
+                  && SelectionHandles.ShapeSnapLabel(ShapeSnapKind) == "正圆",
+                  $"吸到={ShapeSnapKind}（「{SelectionHandles.ShapeSnapLabel(ShapeSnapKind)}」）");
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            Check("吸附（真机）：提交的几何是**正圆**（a、b 逐位相等）",
+                  mEll.SemiAxisALocal == mEll.SemiAxisBLocal && mEll.SemiAxisALocal == eB0,
+                  $"a={mEll.SemiAxisALocal:F6} b={mEll.SemiAxisBLocal:F6}（期望都等于 {eB0:F6}）");
+
+            // ---- 矩形拖四角（真机）：正方形 ----
+            Doc.Clear();
+            Doc.ClearHistory();
+            var mRect = new Stroke
+            {
+                Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 4f * DpiScale,
+            };
+            mRect.AddPoint(lx, ly, 1f, 0);
+            mRect.AddPoint(lx + 300f, ly + 300f + tol * 0.5f, 1f, 0);
+            Doc.AddStroke(mRect);
+            Doc.SelectOnly(new[] { mRect });
+            SettleFrames(250);
+            var mFrame = SelectionHandles.FrameOf(Doc.Selected);
+            var mCorner = SelectionHandles.CanvasPosition(SelHandle.BottomRight, mFrame, DpiScale);
+            bool tookCorner = SelectionGestureForTest(mCorner.X, mCorner.Y);
+            UpdateSelectionGestureForTest(mCorner.X + 200f, mCorner.Y + 200f);
+            SettleFrames(80);
+            Check("吸附（真机）：拖矩形的角、吸住时胶囊说得出「正方形」",
+                  tookCorner && ShapeSnapKind == ShapeSnapKind.Square
+                  && SelectionHandles.ShapeSnapLabel(ShapeSnapKind) == "正方形",
+                  $"接住={tookCorner}，吸到={ShapeSnapKind}"
+                  + $"（「{SelectionHandles.ShapeSnapLabel(ShapeSnapKind)}」）");
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            var mRectBox = mRect.WorldInkBounds;
+            Check("吸附（真机）：提交的几何是**精确**正方形",
+                  Near(mRectBox.MaxX - mRectBox.MinX, mRectBox.MaxY - mRectBox.MinY, 0.01f),
+                  $"框 {(mRectBox.MaxX - mRectBox.MinX):F3}×{(mRectBox.MaxY - mRectBox.MinY):F3}");
+
+            // ---- 整体移动 / 旋转**不吸**（规格 9.6 第一条硬要求）----
+            Doc.Clear();
+            Doc.ClearHistory();
+            var moveTri = new Stroke
+            {
+                Tool = Tool.Triangle, Kind = StrokeKind.Triangle,
+                Color = new Color4(1f, 0f, 1f, 1f), Width = 6f * DpiScale,
+            };
+            // 这个三角形**本来就在等腰的容差里**：如果整体移动 / 旋转也做形状吸附，
+            // 三个顶点会被"修正"一个像素——自检就是盯这一条。
+            moveTri.AddPoint(midX + tol * 0.25f, mY - 150f, 1f, 0);
+            moveTri.AddPoint(mA, mY, 1f, 0);
+            moveTri.AddPoint(mB, mY, 1f, 0);
+            Doc.AddStroke(moveTri);
+            Doc.SelectOnly(new[] { moveTri });
+            SettleFrames(250);
+            string movePts0 = $"{moveTri.Points[0].X},{moveTri.Points[0].Y}"
+                            + $"|{moveTri.Points[1].X},{moveTri.Points[1].Y}"
+                            + $"|{moveTri.Points[2].X},{moveTri.Points[2].Y}";
+            var mvFrame = SelectionHandles.FrameOf(Doc.Selected);
+            var mvCenter = new Vector2((mvFrame.CanvasAabb.MinX + mvFrame.CanvasAabb.MaxX) * 0.5f,
+                                       (mvFrame.CanvasAabb.MinY + mvFrame.CanvasAabb.MaxY) * 0.5f);
+            bool tookMove = SelectionGestureForTest(mvCenter.X, mvCenter.Y);
+            UpdateSelectionGestureForTest(mvCenter.X + 150f, mvCenter.Y + 80f);
+            SettleFrames(80);
+            Check("整体移动不吸：拖的是位置，顶点一个都不动、也没有吸附",
+                  tookMove && ShapeSnapKind == ShapeSnapKind.None
+                  && movePts0 == $"{moveTri.Points[0].X},{moveTri.Points[0].Y}"
+                             + $"|{moveTri.Points[1].X},{moveTri.Points[1].Y}"
+                             + $"|{moveTri.Points[2].X},{moveTri.Points[2].Y}",
+                  $"接住={tookMove}，吸到={ShapeSnapKind}，顶点原样（逐位）");
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            var mvApex = SelectionHandles.ShapeHandleCanvasPosition(moveTri, ShapeHandle.Vertex0);
+            Check("整体移动：真的挪了 (150,80)、顶点仍然逐位不变",
+                  movePts0 == $"{moveTri.Points[0].X},{moveTri.Points[0].Y}"
+                             + $"|{moveTri.Points[1].X},{moveTri.Points[1].Y}"
+                             + $"|{moveTri.Points[2].X},{moveTri.Points[2].Y}"
+                  && Near(mvApex.X - (midX + tol * 0.25f), 150f, 1f)
+                  && Near(mvApex.Y - (mY - 150f), 80f, 1f),
+                  $"顶点画布位移 ({mvApex.X - (midX + tol * 0.25f):F1},"
+                  + $"{mvApex.Y - (mY - 150f):F1})，局部点逐位不变");
+            Doc.Undo();
+            SettleFrames(150);
+
+            // 旋转：同样不该改顶点
+            Doc.SelectOnly(new[] { moveTri });
+            SettleFrames(200);
+            var rotFrame2 = SelectionHandles.FrameOf(Doc.Selected);
+            var rotPivot = new Vector2((rotFrame2.CanvasAabb.MinX + rotFrame2.CanvasAabb.MaxX) * 0.5f,
+                                       (rotFrame2.CanvasAabb.MinY + rotFrame2.CanvasAabb.MaxY) * 0.5f);
+            var rotGrip = SelectionHandles.CanvasPosition(SelHandle.Rotate, rotFrame2, DpiScale);
+            float rotArm = Vector2.Distance(rotGrip, rotPivot);
+            float rotA0 = MathF.Atan2(rotGrip.Y - rotPivot.Y, rotGrip.X - rotPivot.X);
+            bool tookRot = SelectionGestureForTest(rotGrip.X, rotGrip.Y);
+            var rp = new Vector2(rotPivot.X + rotArm * MathF.Cos(rotA0 - 0.35f),
+                                 rotPivot.Y + rotArm * MathF.Sin(rotA0 - 0.35f));    // 逆时针 20°
+            UpdateSelectionGestureForTest(rp.X, rp.Y);
+            SettleFrames(80);
+            Check("整体旋转不吸：转的时候顶点一个都不动、也没有形状吸附",
+                  tookRot && SelRotating && ShapeSnapKind == ShapeSnapKind.None
+                  && movePts0 == $"{moveTri.Points[0].X},{moveTri.Points[0].Y}"
+                             + $"|{moveTri.Points[1].X},{moveTri.Points[1].Y}"
+                             + $"|{moveTri.Points[2].X},{moveTri.Points[2].Y}",
+                  $"接住={tookRot}，旋转中={SelRotating}，吸到={ShapeSnapKind}，顶点原样（逐位）");
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            var rotM = moveTri.Transform;
+            Check("整体旋转：变换是**纯旋转**（顶点逐位不变，只换了姿态）",
+                  movePts0 == $"{moveTri.Points[0].X},{moveTri.Points[0].Y}"
+                             + $"|{moveTri.Points[1].X},{moveTri.Points[1].Y}"
+                             + $"|{moveTri.Points[2].X},{moveTri.Points[2].Y}"
+                  && Near(rotM.M11 * rotM.M11 + rotM.M12 * rotM.M12, 1f, 1e-3f)
+                  && Near(rotM.M21, -rotM.M12, 1e-3f) && Near(rotM.M22, rotM.M11, 1e-3f),
+                  $"矩阵 ({rotM.M11:F4},{rotM.M12:F4},{rotM.M21:F4},{rotM.M22:F4})，顶点逐位不变");
+        }
+
+        // ================= N. 存档：圆 / 椭圆 / 三角形 / 平行四边形读回来逐位一致 =================
+        //
+        // 格式**没有加字段**（三角形的三个顶点、平行四边形的三个顶点都是普通控制点），
+        // 只是多了两个 `Kind` 取值，所以升版本的理由和前几版一样：
+        // 让不认识新 Kind 的老程序直接说"请升级"，而不是画出个残缺的形状；
+        // 反方向（新程序读老文件）不受影响。
+        Console.WriteLine("  -- N. 存档（圆 / 椭圆 / 三角形 / 平行四边形往返）--");
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            var kCircle = new Stroke
+            {
+                Tool = Tool.Circle, Kind = StrokeKind.Circle,
+                Color = new Color4(0.1f, 0.2f, 0.3f, 1f), Width = 6f,
+            };
+            kCircle.AddPoint(1000f, 500f, 1f, 0);
+            kCircle.AddPoint(1180f, 500f, 1f, 0);
+            var kEllipse = new Stroke
+            {
+                Tool = Tool.Ellipse, Kind = StrokeKind.Ellipse,
+                Color = new Color4(0.3f, 0.2f, 0.1f, 1f), Width = 5f,
+            };
+            kEllipse.AddPoint(400f, 300f, 1f, 0);
+            kEllipse.AddPoint(620f, 420f, 1f, 0);
+            kEllipse.Transform = SelectionHandles.RotateMatrix(25f, new Vector2(400f, 300f));
+            // 三角形 / 平行四边形也一起过一遍（第二批第②步新增的两个 Kind）
+            var kTriangle = new Stroke
+            {
+                Tool = Tool.Triangle, Kind = StrokeKind.Triangle,
+                Color = new Color4(0.2f, 0.5f, 0.3f, 1f), Width = 7f,
+            };
+            kTriangle.AddPoint(1500f, 400f, 1f, 0);
+            kTriangle.AddPoint(1300f, 700f, 1f, 0);
+            kTriangle.AddPoint(1750f, 700f, 1f, 0);
+            kTriangle.Transform = SelectionHandles.RotateMatrix(-18f, new Vector2(1500f, 600f));
+            var kPara = new Stroke
+            {
+                Tool = Tool.Parallelogram, Kind = StrokeKind.Parallelogram,
+                Color = new Color4(0.5f, 0.2f, 0.4f, 1f), Width = 4f,
+            };
+            kPara.AddPoint(200f, 900f, 1f, 0);          // 底左
+            kPara.AddPoint(520f, 900f, 1f, 0);          // 底右
+            kPara.AddPoint(280f, 620f, 1f, 0);          // 顶左
+            Doc.AddStroke(kCircle);
+            Doc.AddStroke(kEllipse);
+            Doc.AddStroke(kTriangle);
+            Doc.AddStroke(kPara);
+
+            var blob = InkSerializer.Save(Doc);
+            var back = new InkDocument();
+            InkSerializer.LoadInto(back, blob);
+
+            // 这里**不再写死版本号**：这一条要验的是"文件头里写的 = 常量"，
+            // 而不是"版本正好是 7"。写死数字的话，以后每次抬版本都要回来改一次
+            // （2026-09-19 加坐标系 / 数轴抬到 9，这里就是当场红的那一条）。
+            // `>= 7` 那一半仍然钉住"这一批的两个 Kind 存在 ⇒ 版本至少 7"。
+            Check("存档：格式版本抬过 7、且文件头里写的就是常量",
+                  InkSerializer.FormatVersion >= 7
+                  && BitConverter.ToInt32(blob, 4) == InkSerializer.FormatVersion,
+                  $"常量 {InkSerializer.FormatVersion}，文件头里的版本 {BitConverter.ToInt32(blob, 4)}");
+            Check("存档：四个对象都读回来了（Kind 也对）",
+                  back.Strokes.Count == 4
+                  && back.Strokes[0].Kind == StrokeKind.Circle
+                  && back.Strokes[1].Kind == StrokeKind.Ellipse
+                  && back.Strokes[2].Kind == StrokeKind.Triangle
+                  && back.Strokes[3].Kind == StrokeKind.Parallelogram,
+                  $"对象 {back.Strokes.Count} 个，Kind = {back.Strokes[0].Kind} / {back.Strokes[1].Kind}"
+                  + $" / {back.Strokes[2].Kind} / {back.Strokes[3].Kind}");
+
+            var bc = back.Strokes[0];
+            var be = back.Strokes[1];
+            var bt = back.Strokes[2];
+            var bp = back.Strokes[3];
+            Check("存档：圆的圆心 / 半径逐位一致",
+                  bc.Points[0].X == kCircle.Points[0].X && bc.Points[0].Y == kCircle.Points[0].Y
+                  && bc.Points[1].X == kCircle.Points[1].X && bc.Points[1].Y == kCircle.Points[1].Y
+                  && bc.CircleRadiusLocal == kCircle.CircleRadiusLocal,
+                  $"圆心 ({bc.Points[0].X:F1},{bc.Points[0].Y:F1})，半径 {bc.CircleRadiusLocal:F3}");
+            Check("存档：椭圆的中心 / 半轴 / 变换逐位一致",
+                  be.Points[0].X == kEllipse.Points[0].X && be.Points[0].Y == kEllipse.Points[0].Y
+                  && be.SemiAxisALocal == kEllipse.SemiAxisALocal
+                  && be.SemiAxisBLocal == kEllipse.SemiAxisBLocal
+                  && be.Transform.Equals(kEllipse.Transform),
+                  $"中心 ({be.Points[0].X:F1},{be.Points[0].Y:F1})，"
+                  + $"a={be.SemiAxisALocal:F1} b={be.SemiAxisBLocal:F1}");
+            Check("存档：紧框与原件一致（口径也跟着存下来的点走）",
+                  bc.WorldInkBounds.MaxX == kCircle.WorldInkBounds.MaxX
+                  && be.WorldInkBounds.MaxY == kEllipse.WorldInkBounds.MaxY,
+                  $"圆框 {bc.WorldInkBounds.MaxX - bc.WorldInkBounds.MinX:F1}"
+                  + $"/{kCircle.WorldInkBounds.MaxX - kCircle.WorldInkBounds.MinX:F1}，"
+                  + $"椭圆框 {be.WorldInkBounds.MaxY - be.WorldInkBounds.MinY:F1}"
+                  + $"/{kEllipse.WorldInkBounds.MaxY - kEllipse.WorldInkBounds.MinY:F1}");
+            Check("存档：三角形的三个顶点 / 变换逐位一致",
+                  bt.Points.Count == 3
+                  && bt.Points[0].X == kTriangle.Points[0].X && bt.Points[0].Y == kTriangle.Points[0].Y
+                  && bt.Points[1].X == kTriangle.Points[1].X && bt.Points[1].Y == kTriangle.Points[1].Y
+                  && bt.Points[2].X == kTriangle.Points[2].X && bt.Points[2].Y == kTriangle.Points[2].Y
+                  && bt.Transform.Equals(kTriangle.Transform),
+                  $"顶点0 ({bt.Points[0].X:F1},{bt.Points[0].Y:F1})，变换 {bt.Transform.M11:F4}");
+            Check("存档：平行四边形的三个顶点逐位一致（第四个读回来仍是公式推出来的）",
+                  bp.Points.Count == 3
+                  && bp.Points[0].X == kPara.Points[0].X && bp.Points[0].Y == kPara.Points[0].Y
+                  && bp.Points[1].X == kPara.Points[1].X && bp.Points[1].Y == kPara.Points[1].Y
+                  && bp.Points[2].X == kPara.Points[2].X && bp.Points[2].Y == kPara.Points[2].Y
+                  && bp.ParallelogramFourthLocal() == kPara.ParallelogramFourthLocal(),
+                  $"第四个顶点 ({bp.ParallelogramFourthLocal().X:F1},"
+                  + $"{bp.ParallelogramFourthLocal().Y:F1})");
+            Check("存档：两个多边形的紧框与原件一致",
+                  bt.WorldInkBounds.MinX == kTriangle.WorldInkBounds.MinX
+                  && bt.WorldInkBounds.MaxY == kTriangle.WorldInkBounds.MaxY
+                  && bp.WorldInkBounds.MinY == kPara.WorldInkBounds.MinY
+                  && bp.WorldInkBounds.MaxX == kPara.WorldInkBounds.MaxX,
+                  $"三角框 {bt.WorldInkBounds.MaxX - bt.WorldInkBounds.MinX:F1}"
+                  + $"/{kTriangle.WorldInkBounds.MaxX - kTriangle.WorldInkBounds.MinX:F1}，"
+                  + $"平四框 {bp.WorldInkBounds.MaxX - bp.WorldInkBounds.MinX:F1}"
+                  + $"/{kPara.WorldInkBounds.MaxX - kPara.WorldInkBounds.MinX:F1}");
+        }
+
+        // ================= O. 拉伸中的形体完整性（缺块 / 残影）=================
+        //
+        // 用户真机反馈（2026-09-19）："椭圆 / 圆在拉伸的时候有时候会消失一部分"。
+        //
+        // **触发条件**（"有时候"的那个"有时候"）：拉伸让形体跨过**分块边界**
+        // （块边长 256 画布像素）。根因在内容层这一头，两步：
+        //   ① 起手那一刻形体被摘出内容层（DetachForDrag），它压过的分块整块重画一次
+        //      ——那次是**不带它**画的，于是那些块上留着一个"洞"；
+        //   ② 松手提交几何时，新位置的脏区由 Stroke.PaddedBoundsOf 算。它以前对圆 / 椭圆
+        //      退化成"圆心 + 圆周点这两个点的外接"——那只是形体的一角（椭圆的四分之一），
+        //      于是**左边的分块没被标脏**，洞永远补不上：屏幕上就是"形体缺一大块"，
+        //      而缺到哪一刀正好落在分块边界上（所以是"有时候"）。
+        // 拖动过程本身是好的（浮动层按"实时框"画临时几何，框是完整的），
+        // 所以症状总在**手一松的那一瞬**露出来。这一节把它钉死：
+        //   · 放大（未松手）：被拖手柄那一侧的远端、对面那个极端点、以及另一条半轴的
+        //     两个极端点，四处都必须有墨——缺一块就会被抓到；
+        //   · 缩小（未松手）：旧形体外侧不许留墨（残影会被抓到），新形体外侧必须有墨；
+        //   · 松手后：整块墨量必须等于"整层作废重画"的墨量（= 静止态直接画出来）。
+        Console.WriteLine("  -- O. 拉伸中的形体完整性（缺块 / 残影）--");
+        {
+            ViewOffsetY = 0f;                       // 屏幕坐标 == 画布坐标，探针才好对位
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+
+            // 探针窗口半径（物理像素）。**别开太大**：拖元素时的读数胶囊挂在被拖的那个点
+            // **上方**（间距 ≈ 21 逻辑像素），开大了会把胶囊的底色算进来。
+            const int ProbeHalf = 12;
+            // "这一处有墨"的门槛：8 逻辑像素宽的笔画在 24×24 的窗里约 190 个核心像素，
+            // 门槛给 60 足够宽裕，又能把"整条弧少了一截"抓出来。
+            const int HasInk = 60, NoInk = 20;
+
+            int Ink(float x, float y)
+                => ScreenProbe.CountMagenta((int)x - ProbeHalf, (int)y - ProbeHalf,
+                                            ProbeHalf * 2, ProbeHalf * 2);
+
+            // 形体整块的墨量（按墨迹框四边各放 20 物理像素量）。缺一块会当场少一大截。
+            int WholeInk(Stroke s)
+            {
+                var b = s.WorldInkBounds;
+                return ScreenProbe.CountMagenta((int)b.MinX - 20, (int)b.MinY - 20,
+                                                (int)(b.MaxX - b.MinX) + 40, (int)(b.MaxY - b.MinY) + 40);
+            }
+
+            // 拖一次尺寸手柄：放大 → 缩小 → 松手，全程盯"缺块 / 残影"。
+            //   · `dir`     = 从中心出发、被拖那个手柄的单位方向（右轴端点 = (+1,0)…）；
+            //   · `r0`      = 起手时沿着 `dir` 的那条半轴（圆的半径）长度；
+            //   · `other0`  = 另一条半轴的长度（圆与 `r0` 相同）；
+            //   · `rGrow` / `rShrink` = 放大 / 缩小到多少（两次拖的是同一个手柄）。
+            void ResizeCase(string name, StrokeKind kind, float cx, float cy,
+                            ShapeHandle handle, Vector2 dir, float r0, float other0,
+                            float rGrow, float rShrink)
+            {
+                Doc.Clear();
+                Doc.ClearHistory();
+                Tool = Tool.Marquee;
+                var s = new Stroke
+                {
+                    Tool = kind == StrokeKind.Circle ? Tool.Circle : Tool.Ellipse,
+                    Kind = kind, Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+                };
+                s.AddPoint(cx, cy, 1f, 0);                       // 中心 / 圆心
+                if (kind == StrokeKind.Circle)                   // 圆周点：沿着 dir，半径 r0
+                    s.AddPoint(cx + dir.X * r0, cy + dir.Y * r0, 1f, 0);
+                else
+                {
+                    // 外角点：**横着的那条半轴总是 a、竖着的那条总是 b**（和拖的哪个手柄无关）。
+                    // 所以"被拖的那条半轴是 r0、另一条是 other0"要按 dir 落到 a / b 上。
+                    float a = MathF.Abs(dir.X) > 0.5f ? r0 : other0;
+                    float b = MathF.Abs(dir.Y) > 0.5f ? r0 : other0;
+                    s.AddPoint(cx + a, cy + b, 1f, 0);
+                }
+                Doc.AddStroke(s);
+                Doc.SelectOnly(new[] { s });
+                SettleFrames(300);
+
+                var perp = new Vector2(-dir.Y, dir.X);           // 另一条半轴的方向
+                // 四个极端点：沿被拖那条半轴的远端 / 近端，以及另一条半轴的两端。
+                Vector2 Far(float along) => new(cx + dir.X * along, cy + dir.Y * along);
+                Vector2 Near(float along) => new(cx - dir.X * along, cy - dir.Y * along);
+                Vector2 Side(float across, float sign)
+                    => new(cx + perp.X * across * sign, cy + perp.Y * across * sign);
+
+                // 按下手柄（真走一次选择手势的分流，和用户手拖是同一条路）。
+                // 顺手对一次"手柄在哪"：这里算的 Far(r0) 必须就是引擎给的那个手柄位置，
+                // 否则探针盯的地方和用户拖的地方不是一回事（判据自己会骗自己）。
+                var handlePos = SelectionHandles.ShapeHandleCanvasPosition(s, handle);
+                bool took = SelectionGestureForTest(handlePos.X, handlePos.Y);
+                Check($"{name}：{handle} 手柄就在被拖那条半轴的端点上",
+                      MathF.Abs(handlePos.X - Far(r0).X) < 0.5f && MathF.Abs(handlePos.Y - Far(r0).Y) < 0.5f,
+                      $"手柄 ({handlePos.X:F1},{handlePos.Y:F1}) 期望 ({Far(r0).X:F1},{Far(r0).Y:F1})");
+                // **一帧跳到位**：这一步正是真机上"拖快了"的那一帧。
+                var growTo = Far(rGrow);
+                UpdateSelectionGestureForTest(growTo.X, growTo.Y);
+                SettleFrames(120);
+                int farGrow = Ink(growTo.X, growTo.Y);
+                int nearGrow = Ink(Near(rGrow).X, Near(rGrow).Y);
+                var sideA = Side(kind == StrokeKind.Circle ? rGrow : other0, +1f);
+                var sideB = Side(kind == StrokeKind.Circle ? rGrow : other0, -1f);
+                int sideAGrow = Ink(sideA.X, sideA.Y);
+                int sideBGrow = Ink(sideB.X, sideB.Y);
+                Check($"{name}：放大中被拖那一侧的远端有墨（缺一块会在这儿露）",
+                      took && VertexDragging && farGrow > HasInk,
+                      $"远端 ({growTo.X:F0},{growTo.Y:F0}) {farGrow} 像素（期望 >{HasInk}）");
+                Check($"{name}：放大中对面那个极端点有墨",
+                      nearGrow > HasInk, $"对面 {nearGrow} 像素（期望 >{HasInk}）");
+                Check($"{name}：放大中另一条半轴的两个极端点都有墨",
+                      sideAGrow > HasInk && sideBGrow > HasInk,
+                      $"两个极端点 {sideAGrow} / {sideBGrow} 像素（期望都 >{HasInk}）");
+
+                // 缩小：同一个手柄往回收（rGrow → rShrink，且 rShrink < r0）。
+                var shrinkTo = Far(rShrink);
+                UpdateSelectionGestureForTest(shrinkTo.X, shrinkTo.Y);
+                SettleFrames(120);
+                int farShrink = Ink(shrinkTo.X, shrinkTo.Y);
+                int nearShrink = Ink(Near(rShrink).X, Near(rShrink).Y);
+                int oldResidue = Ink(growTo.X, growTo.Y);      // 放大时待过的地方：必须干净
+                Check($"{name}：缩小后新形体外侧有墨",
+                      farShrink > HasInk, $"新远端 {farShrink} 像素（期望 >{HasInk}）");
+                Check($"{name}：缩小后对面那个极端点也有墨",
+                      nearShrink > HasInk, $"对面 {nearShrink} 像素（期望 >{HasInk}）");
+                Check($"{name}：缩小后旧形体外侧不留墨（残影）",
+                      oldResidue < NoInk, $"放大时待过的 ({growTo.X:F0},{growTo.Y:F0}) 还剩 {oldResidue} 像素（期望 <{NoInk}）");
+
+                // 松手：模型这才改，屏幕改由内容层那一份来画。
+                EndSelectionGestureForTest();
+                SettleFrames(250);
+                // **先取消选中再量**：手柄方块正好压在被拖的那个端点上，带着选中量会把
+                // "手柄盖住了弧"当成"缺了一块"（这条自检第一版就是这么误报的）。
+                Doc.Selected.Clear();
+                SettleFrames(250);
+                int afterFar = Ink(shrinkTo.X, shrinkTo.Y);
+                int afterOld = Ink(growTo.X, growTo.Y);
+                int commitInk = WholeInk(s);
+                Check($"{name}：松手后探针与拖动中一致（还是那条几何）",
+                      afterFar > HasInk && afterOld < NoInk,
+                      $"远端 {farShrink} → {afterFar} 像素；旧位 {afterOld} 像素");
+                // **最硬的一条**：松手后的墨量 == 把内容层整层作废重画的墨量。
+                // 后者就是"静止态直接画出来"，只差一点抗锯齿接缝（实测 <1%）。
+                // 脏区算窄了 → 有分块从没重画过 → 这一条当场掉下去（修之前 6936 / 12636）。
+                Doc.InvalidateAll();
+                SettleFrames(300);
+                int fullInk = WholeInk(s);
+                Check($"{name}：松手后整块墨量 = 整层重画（脏区算窄了就会缺一块）",
+                      commitInk >= (int)(fullInk * 0.97f),
+                      $"松手 {commitInk} vs 整层重画 {fullInk} 像素");
+                Doc.Undo();
+                SettleFrames(150);
+            }
+
+            // 圆拖圆周点（半径 240 → 520 → 140）。另一条半轴 = 半径，跟着一起变。
+            ResizeCase("圆·拖圆周点", StrokeKind.Circle, lx + 900f, ly - 300f,
+                       ShapeHandle.Rim, new Vector2(1f, 0f), 240f, 240f, 520f, 140f);
+
+            // 椭圆拖两个轴端点（a/b 起手 240/120）：横着、竖着各放大缩小一次。
+            // **只有右端点和上端点两条**（用户 2026-09-20 精简：原来左右都管 a、上下都管 b，
+            // 各留一个）。"缩小"这一半由 rShrink 覆盖，不依赖另一个手柄。
+            ResizeCase("椭圆·拖右端点（管 a）", StrokeKind.Ellipse, lx + 900f, ly - 300f,
+                       ShapeHandle.AxisRight, new Vector2(1f, 0f), 240f, 120f, 520f, 140f);
+            ResizeCase("椭圆·拖上端点（管 b）", StrokeKind.Ellipse, lx + 900f, ly - 300f,
+                       ShapeHandle.AxisTop, new Vector2(0f, -1f), 120f, 240f, 360f, 70f);
+
+            // ---- 顺手检查：三角形 / 平行四边形拖顶点、矩形拖角，有没有同类问题 ----
+            //
+            // 它们和圆 / 椭圆走的是**同一条"提交时算新几何包围盒"的路**
+            // （SetStrokeGeometryAction → Stroke.PaddedBoundsOf），所以一起验。
+            // 判据只有一条但很硬：松手后的整块墨量必须等于"整层作废重画"的墨量。
+            // （按道理它们是绿的：三角形的三个顶点、平行四边形的四个顶点、矩形的两个对角点，
+            //   "点的外接"本来就等于形体自己的外接——但验过才算数。）
+            void DragReleaseCase(string name, Stroke s, Vector2 from, Vector2 to, Vector2 oldSpot)
+            {
+                Doc.Clear();
+                Doc.ClearHistory();
+                Tool = Tool.Marquee;
+                Doc.AddStroke(s);
+                Doc.SelectOnly(new[] { s });
+                SettleFrames(300);
+
+                var before = s.WorldInkBounds;
+                bool took = SelectionGestureForTest(from.X, from.Y);
+                UpdateSelectionGestureForTest(to.X, to.Y);
+                SettleFrames(120);
+                EndSelectionGestureForTest();
+                SettleFrames(250);
+                Doc.Selected.Clear();                  // 手柄 / 框会盖住形体，先取消选中再量
+                SettleFrames(250);
+
+                int commitInk = WholeInk(s);
+                int oldInk = Ink(oldSpot.X, oldSpot.Y);
+                Check($"{name}：拖到手了（几何真的变了）",
+                      took && s.WorldInkBounds.MaxX > before.MaxX + 1f,
+                      $"接住={took}，框右边界 {before.MaxX:F0} → {s.WorldInkBounds.MaxX:F0}");
+                Check($"{name}：搬走的那一头不留墨（残影）",
+                      oldInk < NoInk, $"旧位 ({oldSpot.X:F0},{oldSpot.Y:F0}) 还剩 {oldInk} 像素（期望 <{NoInk}）");
+                Doc.InvalidateAll();
+                SettleFrames(300);
+                int fullInk = WholeInk(s);
+                Check($"{name}：松手后整块墨量 = 整层重画（脏区算窄了就会缺一块）",
+                      commitInk >= (int)(fullInk * 0.97f),
+                      $"松手 {commitInk} vs 整层重画 {fullInk} 像素");
+            }
+
+            {   // 三角形：拖那个上顶点，往右搬一大段（跨分块边界的拖法）
+                var t = new Stroke
+                {
+                    Tool = Tool.Triangle, Kind = StrokeKind.Triangle,
+                    Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+                };
+                t.AddPoint(lx + 900f, ly - 700f, 1f, 0);        // 上中
+                t.AddPoint(lx + 600f, ly - 260f, 1f, 0);        // 下左
+                t.AddPoint(lx + 1200f, ly - 260f, 1f, 0);       // 下右
+                var from = SelectionHandles.ShapeHandleCanvasPosition(t, ShapeHandle.Vertex0);
+                DragReleaseCase("三角形·拖顶点", t, from, new Vector2(from.X + 460f, from.Y - 120f), from);
+            }
+
+            {   // 平行四边形：拖右下那个顶点（它一动，现推的第四个顶点跟着动）
+                var q = new Stroke
+                {
+                    Tool = Tool.Parallelogram, Kind = StrokeKind.Parallelogram,
+                    Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+                };
+                q.AddPoint(lx + 600f, ly - 260f, 1f, 0);        // 底左
+                q.AddPoint(lx + 1200f, ly - 260f, 1f, 0);       // 底右
+                q.AddPoint(lx + 750f, ly - 700f, 1f, 0);        // 顶左
+                var from = SelectionHandles.ShapeHandleCanvasPosition(q, ShapeHandle.Vertex1);
+                DragReleaseCase("平行四边形·拖顶点", q, from, new Vector2(from.X + 420f, from.Y - 90f), from);
+            }
+
+            {   // 箭头：拖端点。箭头的翅膀尖伸到轴外 ~22 像素（比端点外接宽），
+                // 所以它是最像"脏区算窄"的那一个——验下来**没有**这条毛病：
+                // 那 22 像素远小于块边长 256，漏掉的那一小条永远和端点带同处一块，
+                // 块照样被标脏、照样重画（下面这条判据绿着就是证据）。
+                var ar = new Stroke
+                {
+                    Tool = Tool.Arrow, Kind = StrokeKind.Arrow,
+                    Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+                };
+                ar.AddPoint(lx + 600f, ly - 700f, 1f, 0);       // 尾
+                ar.AddPoint(lx + 1250f, ly - 700f, 1f, 0);      // 头（水平 → 翅膀在轴上下各 ~22 像素）
+                var from = SelectionHandles.ShapeHandleCanvasPosition(ar, ShapeHandle.Rim);
+                DragReleaseCase("箭头·拖端点", ar, from, new Vector2(from.X + 320f, from.Y - 300f), from);
+            }
+
+            {   // 矩形：拖右下角。这条走的是**另一条路**（缩放矩阵，不是改几何），
+                // 所以单独写：提交的是 TransformObjectsAction（脏区按 PaddedBounds 算）。
+                var r = new Stroke
+                {
+                    Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+                    Color = new Color4(1f, 0f, 1f, 1f), Width = 8f * DpiScale,
+                };
+                r.AddPoint(lx + 600f, ly - 700f, 1f, 0);        // 左上
+                r.AddPoint(lx + 1100f, ly - 300f, 1f, 0);       // 右下
+                Doc.Clear();
+                Doc.ClearHistory();
+                Tool = Tool.Marquee;
+                Doc.AddStroke(r);
+                Doc.SelectOnly(new[] { r });
+                SettleFrames(300);
+
+                var rectFrame = SelectionHandles.FrameOf(Doc.Selected);
+                var corner = SelectionHandles.CanvasPosition(SelHandle.BottomRight, rectFrame, DpiScale);
+                var rectBefore = r.WorldInkBounds;
+                bool rectTook = SelectionGestureForTest(corner.X, corner.Y);
+                // 角往右下拖：矩形被放大（对角那个角钉住不动）
+                UpdateSelectionGestureForTest(corner.X + 380f, corner.Y + 220f);
+                SettleFrames(120);
+                EndSelectionGestureForTest();
+                SettleFrames(250);
+                Doc.Selected.Clear();
+                SettleFrames(250);
+                int commitInk = WholeInk(r);
+                Doc.InvalidateAll();
+                SettleFrames(300);
+                int fullInk = WholeInk(r);
+                Check("矩形·拖角放大：墨量 = 整层重画 + 右下角确实出去了",
+                      rectTook && r.WorldInkBounds.MaxX > rectBefore.MaxX + 1f && commitInk >= (int)(fullInk * 0.97f),
+                      $"接住={rectTook}，框右边界 {rectBefore.MaxX:F0} → {r.WorldInkBounds.MaxX:F0}，"
+                      + $"松手 {commitInk} vs 整层重画 {fullInk} 像素");
+            }
+        }
+
         Console.WriteLine();
         Console.WriteLine(fail == 0
             ? $"  PASS: 图形工具（画图入口 / 吸附 / 端点编辑）都正确（{pass} 项）"
@@ -4995,12 +7114,24 @@ internal sealed class App : InkEngine.InkEngine
     ///   · `--shapetoolshow &lt;图&gt; --rotate`：**旋转拖动中**——给用户核对
     ///     "转的时候那个框看着不对劲"（2026-09-18 的第三条）；
     ///   · `--shapetoolshow &lt;图&gt; --rotated`：**已经转过 60° 的线**、静止选中
-    ///     （紧框改口径前后的对照：旧口径下这张同样是虚胖的）。
+    ///     （紧框改口径前后的对照：旧口径下这张同样是虚胖的）；
+    ///   · `--shapetoolshow &lt;图&gt; --circle / --ellipse / --triangle / --parallelogram`：
+    ///     **那个图形静止选中**——给第二批①（圆 / 椭圆）补出图、并新增②（三角形 /
+    ///     平行四边形）那两张，看的是"手柄是不是只有定义元素那几个、第四个角有没有手柄"；
+    ///   · 再加 `--snap`：把被拖的顶点拖到"会在容差里"的位置停住，
+    ///     拍下**吸附生效的那一帧**（胶囊上写「等边」这类字，强调色）。
+    ///   · `--rectangle` + `--pose`：**拖旋转柄**、拍姿态角读数那一帧（矩形停在吸住的 0°）；
+    ///   · `--ellipse` + `--pose`：**歪椭圆拖到吸住的 90°**（用户提这个需求的初衷）；
+    ///   · `--triangle` + `--angles`：三角形**选中就显示**的三个内角（**没有**"内角和"那一行，
+    ///     用户 2026-09-19 定："显示和太乱"）；
+    ///   · `--parallelogram` + `--angles`：拖一个顶点、拍两个夹角那一帧。
     ///
     /// 为什么这几张必须出图而不是靠自检：手柄的样子、标签的位置与排版**只能看**，
     /// 几何全对也一样难看（这是仓库里"出图"这一组的由来）。
     /// </summary>
-    private void ShapeToolShowcase(string path, bool drag, bool drawing, bool rotate, bool rotated)
+    private void ShapeToolShowcase(string path, string kind, bool drag, bool drawing,
+                                   bool rotate, bool rotated, bool snap,
+                                   bool angleRead, bool poseRead)
     {
         BoardOn = true;                       // 白底：手柄压在桌面上看不清
         SetUiFactory(() => new InkUi.FullUi());   // 浮层配色/投影由界面推上来
@@ -5010,6 +7141,237 @@ internal sealed class App : InkEngine.InkEngine
         foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
 
         float cx = _virtualX + _virtualW * 0.5f, cy = _virtualY + _virtualH * 0.5f;
+
+        // ---- 第③轮（读数）那几张 ----
+        // `--pose`：拖旋转柄 → 姿态角读数（矩形停在吸住的 **0°**、椭圆停在 **90°**）。
+        if (poseRead)
+        {
+            bool isRect = kind != "ellipse";
+            var sh = new Stroke
+            {
+                Color = new Color4(0.11f, 0.12f, 0.15f, 1f), Width = 6f * DpiScale,
+            };
+            // 起手都是"歪的"：矩形 8°（差一点点就正）、椭圆 52°（很明显是歪的）。
+            float startDeg = isRect ? 8f : 52f;
+            var center = new Vector2(cx, cy);
+            if (isRect)
+            {
+                sh.Tool = Tool.Rectangle; sh.Kind = StrokeKind.Rectangle;
+                sh.AddPoint(center.X - 320f, center.Y - 200f, 1f, 0);
+                sh.AddPoint(center.X + 320f, center.Y + 200f, 1f, 0);
+            }
+            else
+            {
+                sh.Tool = Tool.Ellipse; sh.Kind = StrokeKind.Ellipse;
+                sh.AddPoint(center.X, center.Y, 1f, 0);              // 中心
+                sh.AddPoint(center.X + 330f, center.Y + 150f, 1f, 0); // 外角点（a=330, b=150）
+            }
+            sh.Transform = SelectionHandles.RotateMatrix(startDeg, center);
+            Doc.AddStroke(sh);
+            Doc.SelectOnly(new[] { sh });
+            Tool = Tool.Marquee;
+            Doc.InvalidateAll();
+            SettleFrames(700);
+
+            var f0 = SelectionHandles.FrameOf(Doc.Selected);
+            var pv = new Vector2((f0.CanvasAabb.MinX + f0.CanvasAabb.MaxX) * 0.5f,
+                                 (f0.CanvasAabb.MinY + f0.CanvasAabb.MaxY) * 0.5f);
+            var grip = SelectionHandles.CanvasPosition(SelHandle.Rotate, f0, DpiScale);
+            float arm = Vector2.Distance(grip, pv);
+            float a0 = MathF.Atan2(grip.Y - pv.Y, grip.X - pv.X);
+            // 要转到哪儿：矩形顺时针 8.4°（8 → -0.4，±1° 内 → 吸到 0）；
+            //          椭圆逆时针 38.4°（52 → 90.4，±1° 内 → 吸到 90）。
+            float turn = isRect ? -8.4f : 38.4f;
+
+            SendMouse((int)grip.X, (int)grip.Y, 0);                          SettleFrames(60);
+            SendMouse((int)grip.X, (int)grip.Y, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+            var last = grip;
+            for (int i = 1; i <= 4; i++)
+            {
+                // 屏幕坐标 y 朝下：方向角**减小**才是视觉上的逆时针，所以 rad = a0 − 转过的角。
+                float rad = a0 - turn * i / 4f * MathF.PI / 180f;
+                last = new Vector2(pv.X + arm * MathF.Cos(rad), pv.Y + arm * MathF.Sin(rad));
+                SendMouse((int)last.X, (int)last.Y, 0);
+                SettleFrames(50);
+            }
+            SettleFrames(220);
+
+            var live = LiveSelectionFrame;
+            var gripNow = SelectionHandles.CanvasPosition(SelHandle.Rotate, live, DpiScale);
+            var region = live.CanvasAabb;
+            region.Add(gripNow.X - 70f * DpiScale, gripNow.Y - 80f * DpiScale);
+            region.Add(gripNow.X + 70f * DpiScale, gripNow.Y + 20f * DpiScale);
+            Console.WriteLine($"姿态角那一帧（{(isRect ? "矩形" : "椭圆")}）：读数 {SelRotationPose:F1}°"
+                            + $"（吸住={SelRotationSnapped}），起手 {startDeg:F0}°，拖了 {turn:F1}°"
+                            + $"，标签文案「{SelectionHandles.FormatPose(SelRotationPose)}」");
+            if (!OffscreenFloatingShot(path, region.Inflate(40f))) Console.WriteLine("出图失败");
+            SendMouse((int)last.X, (int)last.Y, Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(150);
+            _quit = true;
+            return;
+        }
+
+        // `--angles`：三角形**选中就显示**三个内角（**没有**"内角和"那一行，用户 2026-09-19 定）；
+        //            平行四边形**拖顶点时不松手**，拍两个夹角。
+        if (angleRead)
+        {
+            bool para = kind == "parallelogram";
+            var sh = new Stroke
+            {
+                Color = new Color4(0.11f, 0.12f, 0.15f, 1f), Width = 6f * DpiScale,
+            };
+            if (para)
+            {
+                sh.Tool = Tool.Parallelogram; sh.Kind = StrokeKind.Parallelogram;
+                sh.AddPoint(cx - 300f, cy + 170f, 1f, 0);      // 底左
+                sh.AddPoint(cx + 300f, cy + 170f, 1f, 0);      // 底右
+                sh.AddPoint(cx - 110f, cy - 170f, 1f, 0);      // 顶左
+            }
+            else
+            {
+                // 刻意**不等边**：三个角三个不同的数，出图时一眼能看出"每个角各自独立"
+                sh.Tool = Tool.Triangle; sh.Kind = StrokeKind.Triangle;
+                sh.AddPoint(cx - 70f, cy - 250f, 1f, 0);       // 上顶点
+                sh.AddPoint(cx - 320f, cy + 170f, 1f, 0);      // 下左
+                sh.AddPoint(cx + 320f, cy + 170f, 1f, 0);      // 下右
+            }
+            Doc.AddStroke(sh);
+            Doc.SelectOnly(new[] { sh });
+            Tool = Tool.Marquee;
+            Doc.InvalidateAll();
+            SettleFrames(700);
+
+            if (para)
+            {
+                // 拖底右顶点、**停住不松手**（夹角只在拖顶点时出现）。
+                var v = SelectionHandles.ShapeHandleCanvasPosition(sh, ShapeHandle.Vertex1);
+                var toP = new Vector2(v.X + 70f, v.Y + 40f);
+                SendMouse((int)v.X, (int)v.Y, 0);                            SettleFrames(60);
+                SendMouse((int)v.X, (int)v.Y, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+                for (int i = 1; i <= 4; i++)
+                {
+                    SendMouse((int)(v.X + (toP.X - v.X) * i / 4f),
+                              (int)(v.Y + (toP.Y - v.Y) * i / 4f), 0);
+                    SettleFrames(50);
+                }
+                SettleFrames(220);
+                Span<Vector2> vs = stackalloc Vector2[4];
+                Span<float> ds = stackalloc float[3];
+                int n = FillAngleReadout(vs, ds);
+                Console.WriteLine($"夹角那一帧（平行四边形拖顶点中）：{n} 个角 = "
+                                + $"{SelectionHandles.FormatAngleDegrees(ds[0])} / "
+                                + $"{SelectionHandles.FormatAngleDegrees(ds[1])}，"
+                                + $"顶点 {vs[0]} / {vs[1]}");
+                var regionQ = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
+                regionQ = regionQ.Inflate(220f * DpiScale);     // 角标挂在顶点外侧，框要放宽
+                if (!OffscreenFloatingShot(path, regionQ)) Console.WriteLine("出图失败");
+                SendMouse((int)toP.X, (int)toP.Y, Native.MOUSEEVENTF_LEFTUP);
+                SettleFrames(150);
+                _quit = true;
+                return;
+            }
+
+            Span<Vector2> tv = stackalloc Vector2[4];
+            Span<float> td = stackalloc float[3];
+            int tn = FillAngleReadout(tv, td);
+            // **没有"内角和"那一行**（用户 2026-09-19 定），所以只报三个角自己。
+            Console.WriteLine($"内角那一帧（三角形选中态）：{tn} 个角 = "
+                            + $"{SelectionHandles.FormatAngleDegrees(td[0])} / "
+                            + $"{SelectionHandles.FormatAngleDegrees(td[1])} / "
+                            + $"{SelectionHandles.FormatAngleDegrees(td[2])}");
+            var region = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
+            region = region.Inflate(220f * DpiScale);            // 角标挂在顶点外侧，框要放宽
+            if (!OffscreenFloatingShot(path, region)) Console.WriteLine("出图失败");
+            _quit = true;
+            return;
+        }
+
+        // ---- 圆 / 椭圆 / 三角形 / 平行四边形：静止选中态（第二批那几张图）----
+        if (kind != "line")
+        {
+            var sh = new Stroke
+            {
+                Color = new Color4(0.11f, 0.12f, 0.15f, 1f), Width = 6f * DpiScale,
+            };
+            switch (kind)
+            {
+                case "circle":
+                    sh.Tool = Tool.Circle; sh.Kind = StrokeKind.Circle;
+                    sh.AddPoint(cx - 40f, cy - 40f, 1f, 0);        // 圆心
+                    sh.AddPoint(cx + 200f, cy - 40f, 1f, 0);       // 圆周点（半径 240）
+                    break;
+                case "ellipse":
+                    sh.Tool = Tool.Ellipse; sh.Kind = StrokeKind.Ellipse;
+                    sh.AddPoint(cx - 40f, cy, 1f, 0);              // 中心
+                    sh.AddPoint(cx + 260f, cy + 180f, 1f, 0);      // 外角点（a=300, b=180）
+                    break;
+                case "triangle":
+                    sh.Tool = Tool.Triangle; sh.Kind = StrokeKind.Triangle;
+                    sh.AddPoint(cx, cy - 220f, 1f, 0);             // 上中
+                    sh.AddPoint(cx - 260f, cy + 160f, 1f, 0);      // 下左
+                    sh.AddPoint(cx + 260f, cy + 160f, 1f, 0);      // 下右
+                    break;
+                default: // parallelogram
+                    sh.Tool = Tool.Parallelogram; sh.Kind = StrokeKind.Parallelogram;
+                    sh.AddPoint(cx - 250f, cy + 160f, 1f, 0);      // 底左
+                    sh.AddPoint(cx + 250f, cy + 160f, 1f, 0);      // 底右
+                    sh.AddPoint(cx - 125f, cy - 160f, 1f, 0);      // 顶左
+                    break;
+            }
+            Doc.AddStroke(sh);
+            Doc.SelectOnly(new[] { sh });
+            Tool = Tool.Marquee;
+            Doc.InvalidateAll();
+            SettleFrames(700);
+
+            // 吸附那一帧：真拖一次顶点，**停住不松手**再拍（松手就没有胶囊了）。
+            // 三角形摆到"等边"的容差里（高 = √3/2 × 底边长 520 ≈ 450.3）。
+            if (snap && kind == "triangle")
+            {
+                var apex = SelectionHandles.ShapeHandleCanvasPosition(sh, ShapeHandle.Vertex0);
+                var apexTo = new Vector2(cx + 1f, cy + 160f - 260f * MathF.Sqrt(3f));
+                SendMouse((int)apex.X, (int)apex.Y, 0);                          SettleFrames(60);
+                SendMouse((int)apex.X, (int)apex.Y, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+                for (int i = 1; i <= 4; i++)
+                {
+                    SendMouse((int)(apex.X + (apexTo.X - apex.X) * i / 4f),
+                              (int)(apex.Y + (apexTo.Y - apex.Y) * i / 4f), 0);
+                    SettleFrames(40);
+                }
+                SettleFrames(200);
+                Console.WriteLine($"吸附帧：吸到={ShapeSnapKind}"
+                                + $"（「{SelectionHandles.ShapeSnapLabel(ShapeSnapKind)}」），"
+                                + $"被拖的顶点 {apex} → {apexTo}");
+            }
+
+            var sFrame = SelectionHandles.FrameOf(Doc.Selected);
+            var sAabb = sFrame.CanvasAabb;
+            var sBar = SelectionHandles.BarRect(sAabb, DpiScale, ViewportCanvas);
+            var region = sAabb;
+            region.Add(sBar);
+            if (SelectionHandles.RotateHandleVisible(sh))       // 圆没有旋转柄，别白算一块
+            {
+                var grip = SelectionHandles.CanvasPosition(SelHandle.Rotate, sFrame, DpiScale);
+                region.Add(grip.X - 40f * DpiScale, grip.Y - 40f * DpiScale);
+                region.Add(grip.X + 40f * DpiScale, grip.Y + 40f * DpiScale);
+            }
+            // 拖元素时的胶囊挂在元素外侧：`--snap` 那张必须把它一起圈进来
+            if (snap && VertexDragging)
+            {
+                region.Add(VertexPreviewCanvasPoint.X - 90f * DpiScale,
+                           VertexPreviewCanvasPoint.Y - 60f * DpiScale);
+                region.Add(VertexPreviewCanvasPoint.X + 90f * DpiScale,
+                           VertexPreviewCanvasPoint.Y + 10f * DpiScale);
+            }
+            if (!OffscreenFloatingShot(path, region.Inflate(30f))) Console.WriteLine("出图失败");
+            if (snap && VertexDragging)
+            {
+                SendMouse((int)ShapeSnapAnchor.X, (int)ShapeSnapAnchor.Y, Native.MOUSEEVENTF_LEFTUP);
+                SettleFrames(150);
+            }
+            _quit = true;
+            return;
+        }
 
         // ---- 一条"已经转过 60°"的直线、静止选中（紧框改口径的第二个现场）----
         if (rotated)
@@ -5222,7 +7584,7 @@ internal sealed class App : InkEngine.InkEngine
         // 读数标签挂在被拖端点上方，高度 30 逻辑 + 一段间距：把它一起圈进画面
         box.Add(preview.X - 70f * DpiScale, preview.Y - 60f * DpiScale);
         box.Add(preview.X + 70f * DpiScale, preview.Y);
-        Console.WriteLine($"拖端点中：α = {VertexInclinationDegrees:F1}°（吸住={VertexInclinationSnapped}），"
+        Console.WriteLine($"拖端点中：α = {VertexReadoutValue:F1}°（吸住={VertexInclinationSnapped}），"
                         + $"固定端 {eFixed}，拖动端 {preview}"
                         + $"（模型里这条线还没动：墨迹范围 {(int)line.WorldInkBounds.MinX},{(int)line.WorldInkBounds.MinY}"
                         + $"-{(int)line.WorldInkBounds.MaxX},{(int)line.WorldInkBounds.MaxY}），"
@@ -6867,6 +9229,39 @@ internal sealed class App : InkEngine.InkEngine
         Native.SendInput(1, inp, Marshal.SizeOf<Native.INPUT>());
     }
 
+    private static Native.INPUT_KBD KeyInput(ushort vk, bool up)
+    {
+        var inp = new Native.INPUT_KBD { type = Native.INPUT_KEYBOARD };
+        inp.ki.wVk = vk;
+        inp.ki.dwFlags = up ? Native.KEYEVENTF_KEYUP : 0u;
+        return inp;
+    }
+
+    /// <summary>
+    /// 合成键盘：把一串虚拟键**按顺序按下、再倒序抬起**（Ctrl+Alt+O 这种组合必须这样发，
+    /// 只按主键是触发不了全局热键的）。
+    ///
+    /// 为什么要它（而不是像批注内按键那样直接 `PostMessage`）：全局热键是**系统**在
+    /// 键盘输入流上判定的，`RegisterHotKey` 收到的是真实的按键；要验"按下去真的切了工具"，
+    /// 就得走真实的键盘通路。批注内那些键不用它是因为它们由我们自己的窗口收，
+    /// 直接投递窗口消息就能到。
+    /// </summary>
+    private uint SendKeyChord(params ushort[] vks)
+    {
+        var seq = new List<Native.INPUT_KBD>();
+        foreach (var vk in vks) seq.Add(KeyInput(vk, false));
+        for (int i = vks.Length - 1; i >= 0; i--) seq.Add(KeyInput(vks[i], true));
+        // 返回值＝**真的塞进系统输入流的事件个数**。自检要把它打出来：
+        // 它比"工具没切"多一层信息——分得清"按键没进系统"和"进了但热键没响应"。
+        return Native.SendInput((uint)seq.Count, seq.ToArray(), Marshal.SizeOf<Native.INPUT_KBD>());
+    }
+
+    private const ushort VK_CONTROL = 0x11;
+    private const ushort VK_MENU = 0x12;        // Alt
+
+    /// <summary>按一次 Ctrl+Alt+&lt;主键&gt;（全局热键都是这个形状）。返回塞进去的事件数。</summary>
+    private uint SendCtrlAlt(ushort vk) => SendKeyChord(VK_CONTROL, VK_MENU, vk);
+
     /// <summary>
     /// Drives a real drag through SendInput so the whole input path is exercised
     /// end to end - pointer messages, stroke accumulation, redraw, and finally
@@ -7829,6 +10224,35 @@ internal sealed class App : InkEngine.InkEngine
         if (Environment.GetCommandLineArgs().Contains("--eraser")) Tool = Tool.Eraser;
         if (Environment.GetCommandLineArgs().Contains("--laser")) Tool = Tool.Laser;
         if (Environment.GetCommandLineArgs().Contains("--hl")) Tool = Tool.Highlighter;
+        // --shape <名字>：把工具切成某一种图形再出图（看"主条那一格的图标跟着种类变"）。
+        // 名字用命令行里那套小写写法，和 --shapetoolshow 的 --circle/--triangle 一致。
+        {
+            var argv = Environment.GetCommandLineArgs();
+            int si = Array.IndexOf(argv, "--shape");
+            if (si >= 0 && si + 1 < argv.Length)
+            {
+                Tool = argv[si + 1].ToLowerInvariant() switch
+                {
+                    "line" => Tool.Line,
+                    "rect" or "rectangle" => Tool.Rectangle,
+                    "ellipse" => Tool.Ellipse,
+                    "circle" => Tool.Circle,
+                    "triangle" => Tool.Triangle,
+                    "parallelogram" => Tool.Parallelogram,
+                    "arrow" => Tool.Arrow,
+                    // 2026-09-20：四种曲线（出图看"图形格两行 + 新图标"时要用）
+                    "parabola" => Tool.Parabola,
+                    "hyperbola" => Tool.Hyperbola,
+                    "sine" => Tool.Sine,
+                    "cosine" => Tool.Cosine,
+                    _ => Tool.Line,
+                };
+            }
+        }
+        // 上面那几行改的是 **App 自己的 Tool 字段**，界面不会因此重算"当前是哪一格"
+        // （`Tool` 是个裸字段，没有通知）。而出图要看的恰恰是"图形那一格的两行"，
+        // 所以这里**走一次真的换工具**（引擎 → 通知界面 → 上带跟着切到图形格）。
+        Host.Commands.SetTool(Tool);
         SettleFrames(400);
 
         // --hide：贴边隐藏**要先写进偏好再挂界面**（界面是在 Attach 里读偏好的），
@@ -7883,6 +10307,23 @@ internal sealed class App : InkEngine.InkEngine
                 MinX = b.MinX - ui.PaintMargin, MinY = b.MinY - ui.PaintMargin,
                 MaxX = b.MaxX + ui.PaintMargin, MaxY = b.MaxY + ui.PaintMargin,
             };
+            // --zoom N：只出**第 N 格的近景**（2026-09-19 加，看"图形那一格的图标"用）。
+            // 裁剪框就是那一格的矩形再松 8 逻辑像素——多给一圈是为了别把按钮的圆角
+            // 和选中底色切掉（切掉之后图上看着像"图标缺了一块"）。产品里没有这个入口，
+            // 它只服务"图上看细节"。
+            {
+                int zi = Array.IndexOf(cli, "--zoom");
+                if (zi >= 0 && zi + 1 < cli.Length && int.TryParse(cli[zi + 1], out int zoomCell))
+                {
+                    var cr = ui.CellRectForTest(zoomCell);
+                    if (!cr.IsEmpty)
+                        shot = new RectF
+                        {
+                            MinX = cr.MinX - 8f, MinY = cr.MinY - 8f,
+                            MaxX = cr.MaxX + 8f, MaxY = cr.MaxY + 8f,
+                        };
+                }
+            }
             if (OffscreenShot(path, shot)) return;
             int x = (int)MathF.Floor(b.MinX * DpiScale) - 30;
             int y = (int)MathF.Floor(b.MinY * DpiScale) - 30;
@@ -8279,6 +10720,41 @@ internal sealed class App : InkEngine.InkEngine
               && MathF.Abs(wantColor.B - gotColor.B) < 0.02f
               && !isDefault,
               $"期望 ({wantColor.R:F2},{wantColor.G:F2},{wantColor.B:F2})，实际 ({gotColor.R:F2},{gotColor.G:F2},{gotColor.B:F2})");
+
+        // ---- ⑥.1 色带条上的**虚实线切换**（用户 2026-09-19 第 2 件）----
+        //
+        // 位置是用户点的："加在'调按钮大小'和'颜色带'中间"。所以这里除了"点得到、
+        // 三档轮回"，还断言**它真的夹在色片和滑条之间**（两边都不压着）——
+        // 位置是需求的一部分，光验"有个按钮"验不出来。
+        {
+            Check("笔的设置条上有虚实线那一格", ui.DashToggleVisibleForTest, "");
+            var dashR = ui.DashToggleRectForTest;
+            var lastSw = ui.SwatchRectForTest(ui.SwatchCountForTest - 1);
+            var sliderR = ui.SliderRectForTest;
+            Check("虚实线那一格夹在色片和粗细滑条中间（两边都不压着）",
+                  dashR.MinX >= lastSw.MaxX - 0.5f && dashR.MaxX <= sliderR.MinX + 0.5f,
+                  $"色片到 {lastSw.MaxX:F0}，虚实线 {dashR.MinX:F0}..{dashR.MaxX:F0}，滑条从 {sliderR.MinX:F0}");
+
+            // 加了这一格之后色片会变窄——"挤到看不清"等于这个入口没有（和极简档 4 色那条同一个判据）。
+            var swFirst = ui.SwatchRectForTest(0);
+            Check("完整档：加了这一格之后色片仍然够宽（≥ 30 逻辑像素）",
+                  swFirst.MaxX - swFirst.MinX >= 30f, $"色片宽 {swFirst.MaxX - swFirst.MinX:F0}");
+
+            float dx = (dashR.MinX + dashR.MaxX) * 0.5f * DpiScale;
+            float dy = (dashR.MinY + dashR.MaxY) * 0.5f * DpiScale;
+            var dash0 = Host.State.Dash;
+            ClickPhysical(dx, dy); SettleFrames(120);
+            var dash1 = Host.State.Dash;
+            ClickPhysical(dx, dy); SettleFrames(120);
+            var dash2 = Host.State.Dash;
+            ClickPhysical(dx, dy); SettleFrames(150);
+            Check("点虚实线那一格：三档轮回（实线 → 虚线 → 点线 → 实线）",
+                  dash0 == StrokeDash.Solid && dash1 == StrokeDash.Dashed
+                  && dash2 == StrokeDash.Dotted && Host.State.Dash == StrokeDash.Solid,
+                  $"{dash0} → {dash1} → {dash2} → {Host.State.Dash}");
+            Check("换挡只动线型，不许顺手换工具",
+                  Tool == Tool.Pen, $"工具 = {Tool}");
+        }
 
         float widthBefore = Host.State.Width;
         var slider = ui.SliderRectForTest;
@@ -8893,6 +11369,11 @@ internal sealed class App : InkEngine.InkEngine
             var sw0 = ui.SwatchRectForTest(0);
             Check("极简档：每个色片都够宽（≥ 30 逻辑像素，点得准）",
                   sw0.MaxX - sw0.MinX >= 30f, $"色片宽 {sw0.MaxX - sw0.MinX:F0}");
+            // 极简档那条带子塞不下第三样东西（见 FullUi.BandHasDashToggle），
+            // 所以那一格**不给**——色片优先。这条要验出来，不然以后谁把它加回去，
+            // 色片会悄悄变窄、而"≥30"那条也会跟着红，两处却对不上因果。
+            Check("极简档：没有虚实线那一格（挤不下，让位给色片）",
+                  !ui.DashToggleVisibleForTest, $"可见 = {ui.DashToggleVisibleForTest}");
             // 切回完整档
             var fullSeg0 = ui.ProfileRectForTest(2);
             ClickPhysical((fullSeg0.MinX + fullSeg0.MaxX) * 0.5f * DpiScale,
@@ -9130,10 +11611,13 @@ internal sealed class App : InkEngine.InkEngine
         Doc.AddStroke(keep2);
 
         NormalizePanel();
-        // 行号 = Rows 里的下标：0 深色主题 / 1 贴边隐藏 / **2 白板底纹 / 3 底纹间距** /
-        // 4 重启软件 / 5 退出 / 6 检查更新 / 7 学科工具。
-        // （2026-09-17 插了底纹那两行，这里从 2 改成 4——插行不改引用，这一条当场就红了。）
-        var restartRow = ui.RowRectForTest(4);
+        // **按标签找那一行，不写行下标**：抽屉的行会插来插去（2026-09-17 插了底纹两行、
+        // 2026-09-19 把「学科工具」换成坐标系/数轴/网格三行），
+        // 写死下标的话每插一次就要改一处引用，而且点错行时红的是那条断言本身
+        // （"点重启没反应"）——2026-09-19 就是这么又红了一次。
+        var restartRow = ui.RowRectByLabelForTest("重启软件");
+        Check("自检能按标签找到「重启软件」那一行",
+              restartRow.MaxY > restartRow.MinY, $"行高 {restartRow.MaxY - restartRow.MinY:F0}");
         ClickPhysical((restartRow.MinX + restartRow.MaxX) * 0.5f * DpiScale,
                       (restartRow.MinY + restartRow.MaxY) * 0.5f * DpiScale);
         Check("点「重启软件」：先存板书再重启",
@@ -9141,6 +11625,394 @@ internal sealed class App : InkEngine.InkEngine
               $"重启已发起 = {RestartRequested}，板书已暂存 = {File.Exists(Recovery.SessionPath)}");
         try { File.Delete(Recovery.SessionPath); } catch { }
         Recovery.ClearRestartCount();
+
+        Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
+        ExitCode = fail == 0 ? 0 : 1;
+        _quit = true;
+    }
+
+    /// <summary>
+    /// **图形那格的界面入口自检**（2026-09-19：给圆 / 三角形 / 平行四边形补真机入口）。
+    ///
+    /// 为什么单独一支、不塞进 `--paneltest`：
+    ///   · paneltest 是"球 → 按钮带"那条最小闭环，项数是**写进报告里的 100**；
+    ///     往里加用例会把那个数字改掉，"这次和上次哪里不一样"就说不清了；
+    ///   · 这一支要**按真键**（SendInput 发 Ctrl+Alt+O），比 paneltest 慢、也更依赖桌面环境，
+    ///     单独一支好在"合成输入不可用"时整支 SKIP，不拖累别的用例。
+    ///
+    /// 四段：
+    ///   A. 上带是**七段**，逐段点一遍 → 工具切成对应的那一种（"真机上点得到"的判据）；
+    ///   B. 三个新热键（圆 / 三角形 / 平行四边形）**真按一次** → 工具跟着切；
+    ///   C. 用点段选出来的那三种工具**在画布上画一笔** → StrokeKind 就是那一种
+    ///      （工具切对了 ≠ 画得出来，最终答案在 StrokeKind 上）；
+    ///   D. 主条"图形"那一格的**图标跟着当前种类变**（七种两两不同）。
+    /// </summary>
+    private void ShapeBandTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 图形那格的界面入口自检（七段 / 三个新热键 / 主条图标）===");
+
+        if (SkipIfNoSyntheticInput("图形界面入口自检")) { _quit = true; return; }
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-32} {detail}");
+        }
+
+        void ClickPhysical(float x, float y)
+        {
+            SendMouse((int)x, (int)y, 0);                            SettleFrames(80);
+            SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+            SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(320);
+        }
+
+        // 起手和 paneltest 一样：关穿透、挂产品界面、清空文档（判据要确定）。
+        PassMode = PassThroughMode.LayeredTransparent;
+        PassThrough = false;
+        foreach (var w in _windows) ApplyPassThroughStyle(w);
+        SetUiFactory(() => new InkUi.FullUi());
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Pen;
+        SettleFrames(300);
+
+        var ui = CurrentUi as InkUi.FullUi;
+        if (ui == null)
+        {
+            Console.WriteLine($"  界面没挂上：当前 = {CurrentUi.Name}");
+            ExitCode = 1;
+            _quit = true;
+            return;
+        }
+
+        // 图形那一格从左到右、从上到下分别是什么。**这里是期望值**
+        // （界面那边读的是 FullUi.ShapeBandOrder / ShapeBandOrder2 两张表）：
+        // 自检要是也从界面的那两张表里读，就成了"自己和自己比"。
+        var want = new (Tool tool, string name)[]
+        {
+            (Tool.Line, "直线"), (Tool.Rectangle, "矩形"), (Tool.Ellipse, "椭圆"),
+            (Tool.Circle, "圆"), (Tool.Triangle, "三角形"),
+            (Tool.Parallelogram, "平行四边形"), (Tool.Arrow, "箭头"),
+            // 2026-09-19：坐标轴那一批**接在末尾**（用户要求"所有图形都从图形框那个入口进"）。
+            // **数轴那一段当天晚些又撤掉了**（用户："把快捷栏最后一个图标删掉，我感觉用不到"），
+            // 所以第一行到此为止是 8 段、坐标系是最后一段。撤的是**入口**：
+            // `StrokeKind.NumberLine` 留在存档里，老板书里的数轴照样能打开、能选中、能删
+            // （见 计划-图形工具.md 11.2）。
+            (Tool.Coordinate, "坐标系"),
+
+            // **第二行（2026-09-20 第五批）**：四种曲线。用户定的入口是
+            // "图形框里加第二行，高频的只要一行"——所以第一行八段一个没动，
+            // 段号也没挪（下面按段号点击的那些断言因此都不用改）。
+            (Tool.Parabola, "抛物线"), (Tool.Hyperbola, "双曲线"),
+            (Tool.Sine, "正弦"), (Tool.Cosine, "余弦"),
+            // 同一天又搬进来两个**立体图形**（照 InkClass 的 case 6/7）：
+            // 一次拖出外接矩形，底面被挡住的那半圈是虚线。
+            (Tool.Cylinder, "圆柱"), (Tool.Cone, "圆锥"),
+            // 这两个是**两笔**（正/底面 → 深度 / 顶点），走多笔状态机（见 Engine.StepPlan）。
+            (Tool.Cuboid, "长方体"), (Tool.Tetrahedron, "四面体"),
+        };
+        // 第一行几段（第二行的起点 = 它）——两条断言要用它。
+        const int firstRow = 8;
+
+        // 上带只在"指针落在面板上"时张开（见 FullUi.RailHoverZone）。点完一格、画完一笔
+        // 之后指针可能在画布上，所以每次要点段之前先把指针挪回主条等它张开。
+        // 合成鼠标**偶尔会丢一次移动**（paneltest 里也见过），给三次机会。
+        void EnsureRailOpen()
+        {
+            var bar = ui.BarRectForTest;
+            int px = (int)((bar.MinX + bar.MaxX) * 0.5f * DpiScale);
+            int py = (int)((bar.MinY + bar.MaxY) * 0.5f * DpiScale);
+            for (int attempt = 0; attempt < 3 && !ui.RailOpenForTest; attempt++)
+            {
+                SendMouse(px, py - attempt, 0);
+                SettleFrames(350);
+            }
+        }
+
+        void ClickSegment(int i)
+        {
+            var seg = ui.SegmentRectForTest(i);
+            ClickPhysical((seg.MinX + seg.MaxX) * 0.5f * DpiScale,
+                          (seg.MinY + seg.MaxY) * 0.5f * DpiScale);
+        }
+
+        // 让上带回到"图形"那一格，再把指针挪回主条等它张开。
+        // **每一步都要重新做**：上带是跟着当前工具走的（CellForTool），按过换工具的热键
+        // 或换成笔之后，它显示的是**那个工具**的设置条——这时去点"第 3 段"会点在
+        // 别的设置条上（笔那格是 12 个色片），点出来的结果和图形毫无关系。
+        // C 段第一次跑就是这么点空的。
+        void GotoShapeBand()
+        {
+            var cell = ui.CellRectForTest(8);
+            ClickPhysical((cell.MinX + cell.MaxX) * 0.5f * DpiScale,
+                          (cell.MinY + cell.MaxY) * 0.5f * DpiScale);
+            EnsureRailOpen();
+        }
+
+        // 面板刚挂上是**收起态（一个球）**：先点一下球展开。
+        // 不展开的话后面点"图形"那一格会点在球上（点球＝展开），一段都点不到
+        // ——这一版自检第一次跑就是全红的，原因就在这儿。
+        if (!ui.ExpandedForTest)
+        {
+            var bb = ui.QueryBounds();
+            ClickPhysical((bb.MinX + bb.MaxX) * 0.5f * DpiScale,
+                          (bb.MinY + bb.MaxY) * 0.5f * DpiScale);
+            SettleFrames(300);
+        }
+        Check("点球能展开（不然面板上的格子一个都点不到）",
+              ui.ExpandedForTest, $"展开 = {ui.ExpandedForTest}");
+
+        // ================= A. 十六段都点得到 =================
+        Console.WriteLine("  -- A. 上带图形格（两行十六段）：逐段点一遍，工具真的切了 --");
+        GotoShapeBand();
+
+        int n = ui.BandSegmentCountForTest;
+        Check("图形那格的上带是十六段（第一行 8 ＋ 第二行 8）",
+              n == want.Length, $"段数 {n}（期望 {want.Length}）");
+
+        // 段宽和越界：段宽 = 可用宽 ÷ **本行**段数，所以两行各有各的宽度
+        // （第一行 8 段时每段 ~60+，第二行 4 段反而更宽）。
+        // "挤到看不清" ＝ 这个入口等于没有，所以宽度本身就是判据（图标 18 逻辑像素，
+        // 60 的门槛给的是"图标四周还留得下 20 像素空白"）。
+        var bandRect = ui.BandRectForTest;
+        float minW = float.MaxValue, maxRight = float.MinValue;
+        float row0Top = float.MaxValue, row0Bottom = float.MinValue;
+        float row1Top = float.MaxValue, row1Bottom = float.MinValue;
+        for (int i = 0; i < n; i++)
+        {
+            var r = ui.SegmentRectForTest(i);
+            minW = MathF.Min(minW, r.MaxX - r.MinX);
+            maxRight = MathF.Max(maxRight, r.MaxX);
+            if (i < firstRow) { row0Top = MathF.Min(row0Top, r.MinY); row0Bottom = MathF.Max(row0Bottom, r.MaxY); }
+            else { row1Top = MathF.Min(row1Top, r.MinY); row1Bottom = MathF.Max(row1Bottom, r.MaxY); }
+        }
+        Check("十六段都画得下（每段 ≥ 60 宽、最右一段不越出上带）",
+              n == want.Length && minW >= 60f && maxRight <= bandRect.MaxX + 0.5f,
+              $"最窄 {minW:F0} 逻辑像素，上带宽 {bandRect.MaxX - bandRect.MinX:F0}");
+        // 两行**不许叠在一起**，而且都要落在带子里——带子为了第二行长得更高了
+        // （见 FullUi.BandHeightLogical），这一条就是钉住"长得够高"的。
+        Check("两行不重叠、且都在带子里（带子为第二行长得更高）",
+              row1Top >= row0Bottom - 0.5f
+              && row0Top >= bandRect.MinY - 0.5f && row1Bottom <= bandRect.MaxY + 0.5f,
+              $"第一行 y {row0Top:F0}..{row0Bottom:F0}，第二行 y {row1Top:F0}..{row1Bottom:F0}，"
+              + $"带子 y {bandRect.MinY:F0}..{bandRect.MaxY:F0}");
+
+        for (int i = 0; i < want.Length; i++)
+        {
+            EnsureRailOpen();
+            ClickSegment(i);
+            Check($"第 {i + 1} 段「{want[i].name}」点得到、工具切了",
+                  Host.State.Tool == want[i].tool,
+                  $"工具 = {Host.State.Tool}（期望 {want[i].tool}）");
+        }
+
+        // ---- 名单一致性：三份"图形"判据必须一一对应 ----
+        //
+        // 2026-09-20 收敛之后，"哪些是图形"只剩三个入口，维度不同但**必须同步**：
+        //   · `Engine.IsShapeTool(Tool)`  = 这个工具**画出来的是图形**（**含数轴**——
+        //     它没有面板入口了，但画法还在，老存档里的数轴要能选中、能删）；
+        //   · `FullUi` 的两张段表         = 面板上**有入口**的那些（**不含数轴**）；
+        //   · `Stroke.IsShapeKind(Kind)`  = 按种类的"参数化图形"那一份
+        //     （Model 与 Selection 共用；**矩形不在里面，是故意的**：它的局部 AABB 就是
+        //      自己的边界、选中后走通用框那套八向柄，不参与"按参数算墨迹框 / 发定义元素手柄"）。
+        //
+        // 这里逐段对照"有入口的必须能画；除矩形外还必须算参数化图形"。
+        // 加新图形时漏改一处，这一条立刻红——而不是等到"画出来点不中"才发现。
+        bool namesAgree = true;
+        string nameNote = "";
+        for (int i = 0; i < want.Length; i++)
+        {
+            var kind = KindOfShapeTool(want[i].tool);
+            if (!IsShapeTool(want[i].tool))
+            {
+                namesAgree = false;
+                nameNote = $"「{want[i].name}」面板上有入口，但 Engine.IsShapeTool 说它不是图形工具";
+                break;
+            }
+            if (kind != StrokeKind.Rectangle && !Stroke.IsShapeKind(kind))
+            {
+                namesAgree = false;
+                nameNote = $"「{want[i].name}」的 Kind = {kind}，但 Stroke.IsShapeKind 说它不是参数化图形";
+                break;
+            }
+        }
+        Check("名单一致：面板十二段 ↔ Engine.IsShapeTool ↔ Stroke.IsShapeKind 三方对得上",
+              namesAgree,
+              namesAgree ? $"逐段核对 {want.Length} 段（矩形落在 ShapeKind 之外，故意的）" : nameNote);
+        // 另一头单独验一句：数轴**能画、但面板上没入口**（2026-09-19 撤的是入口，
+        // 画法与存档都留着）。不单列的话，上面对照表只会看"有入口的那些"，
+        // 数轴这种"能画没入口"的第三种状态就没人管了。
+        Check("名单一致：数轴**能画、但面板没入口**（撤的是入口，不是画法）",
+              IsShapeTool(Tool.NumberLine) && !InkUi.FullUi.HasShapeEntryForTest(Tool.NumberLine),
+              $"能画 = {IsShapeTool(Tool.NumberLine)}，"
+              + $"有入口 = {InkUi.FullUi.HasShapeEntryForTest(Tool.NumberLine)}");
+
+        // ================= A2. 抛物线那格：**再点一次 = 换一档（上下 / 左右）** =================
+        //
+        // 用户 2026-09-20 深夜定：**上下还是左右**画之前定，不从选中框改
+        //（"选中框的抛物线按钮功能取消哦，我不打算从这个转抛物线开口"）；
+        // 后来（同一天更晚）他看了手感又说"感觉不对，还是照搬他的逻辑"——
+        // 于是**具体朝哪边**改由那一拖的符号定（照 InkClass 的 case 20/21），
+        // 面板这一格只剩"哪一对"（= 他那儿两个按钮：上下抛物 / 左右抛物）。
+        // 这里验四件事：
+        //   ① 点第一下 = 选中抛物线、还是"上下"那一档；
+        //   ② 再点 = 换到"左右"（两档循环）；
+        //   ③ 那一格的**图标名**跟着变（不换的话，老师看不出点第二下有没有生效）；
+        //   ④ 别的图形**不参与**这条规则（再点还是它自己）。
+        Console.WriteLine("  -- A2. 抛物线格：再点一次换一档（上下 / 左右，画之前定）--");
+        GotoShapeBand();
+        int paraSeg = firstRow;                       // 第二行第一段 = 抛物线
+        ClickSegment(paraSeg);
+        Check("抛物线：点第一下 = 选中它，还是「上下抛物」那一档",
+              Host.State.Tool == Tool.Parabola && Host.State.ParabolaAxis == CurveAxis.OpenUp,
+              $"工具 {Host.State.Tool}、档位 {Host.State.ParabolaAxis}");
+
+        var axisRun = new (CurveAxis want, string icon)[]
+        {
+            (CurveAxis.OpenRight, "parabolaRight"),   // 第二下 = 换到"左右抛物"
+            (CurveAxis.OpenUp, "parabola"),           // 第三下 = 转回"上下抛物"
+        };
+        for (int k = 0; k < axisRun.Length; k++)
+        {
+            EnsureRailOpen();
+            ClickSegment(paraSeg);                    // 再点一次 = 换一档
+            Check($"抛物线：第 {k + 2} 次点 = 换到 {axisRun[k].want}（工具没变）",
+                  Host.State.Tool == Tool.Parabola && Host.State.ParabolaAxis == axisRun[k].want,
+                  $"工具 {Host.State.Tool}、档位 {Host.State.ParabolaAxis}");
+            Check($"抛物线：图标名跟着变成 {axisRun[k].icon}",
+                  ui.ShapeIconNameForTest(paraSeg) == axisRun[k].icon,
+                  ui.ShapeIconNameForTest(paraSeg));
+        }
+
+        // 别的图形**不许**被这条规则影响：连点两次三角形，还是三角形。
+        EnsureRailOpen();
+        ClickSegment(4);                              // 第一行第 5 段 = 三角形
+        EnsureRailOpen();
+        ClickSegment(4);
+        Check("别的图形：再点一次仍然是它自己（这条规则只对抛物线）",
+              Host.State.Tool == Tool.Triangle, $"工具 {Host.State.Tool}");
+
+        // ================= B. 图形**一个热键都没有**（用户 2026-09-19 定）=================
+        //
+        // 用户原话："图形不需要加快捷键，通通取消掉"。原来给圆 / 三角形 / 平行四边形 /
+        // 坐标系 / 数轴 配过 `Ctrl+Alt+O/T/G/F/N`，这一轮全撤——它们的入口就是上面那 8 段。
+        //
+        // 判据分两层，缺一层都可能"看着绿其实没撤干净"：
+        //   ① **对表查**：那五个组合在任何作用域里都不许再绑着动作；
+        //   ② **真按一次**：合成键盘发一个 `Ctrl+Alt+O`，工具**不许**变——
+        //      这一层防的是"表里删了、注册那一路还留着"。
+        Console.WriteLine("  -- B. 图形一个热键都没有 --");
+        var retired = new (string chord, ushort vk)[]
+        {
+            ("Ctrl+Alt+O", 'O'), ("Ctrl+Alt+T", 'T'), ("Ctrl+Alt+G", 'G'),
+            ("Ctrl+Alt+F", 'F'), ("Ctrl+Alt+N", 'N'),
+        };
+        foreach (var (chord, vk) in retired)
+        {
+            var c = new KeyChord(KeyChord.ModCtrl | KeyChord.ModAlt, vk);
+            var hit = Keys.Bindings.FirstOrDefault(b => b.Chord.Equals(c));
+            Check($"退役键 {chord} 不再绑任何动作", hit == null,
+                  hit == null ? "表里没有这一条"
+                              : $"还绑着「{KeyMap.Describe(hit.Action)}」（{hit.Scope}）");
+        }
+
+        Host.Commands.SetTool(Tool.Line);
+        SettleFrames(150);
+        SendCtrlAlt('O');
+        SettleFrames(400);
+        Check("真按一次 Ctrl+Alt+O：工具一动不动（图形确实没有键了）",
+              Host.State.Tool == Tool.Line,
+              $"工具 = {Host.State.Tool}（期望 Line）");
+
+        // ================= C. 点段选出的工具，画出来就是那个图形 =================
+        Console.WriteLine("  -- C. 用点段选出的工具画一笔：StrokeKind 就是那一种 --");
+        var draws = new (int seg, Tool tool, StrokeKind kind, string name)[]
+        {
+            (3, Tool.Circle, StrokeKind.Circle, "圆"),
+            (4, Tool.Triangle, StrokeKind.Triangle, "三角形"),
+            (5, Tool.Parallelogram, StrokeKind.Parallelogram, "平行四边形"),
+            // 末尾这一段（2026-09-19）：点它切工具、拖出来的是坐标系
+            (7, Tool.Coordinate, StrokeKind.Coordinate, "坐标系"),
+            // 第二行第一段（2026-09-20）：**第二行真的点得到、拖出来真的是抛物线**——
+            // 其余曲线由 --curvetest 逐条验，这里只抽查（每次拖拽要等几帧，省时间）。
+            (8, Tool.Parabola, StrokeKind.Parabola, "抛物线（第二行）"),
+            // 立体图形里抽一个**两笔**的（长方体）：验"点段选的工具 ＋ 多笔状态机"
+            // 这条真路走得通（几何本身由 --curvetest 验）。
+            (14, Tool.Cuboid, StrokeKind.Cuboid, "长方体（两笔）"),
+        };
+        // 落点在画布中上部：面板在屏幕下沿，别画到面板上（那就变成点按钮了）
+        int dragX = (int)(_virtualX + _virtualW * 0.28f);
+        int dragY = (int)(_virtualY + _virtualH * 0.42f);
+        for (int i = 0; i < draws.Length; i++)
+        {
+            var d = draws[i];
+            Doc.Clear();
+            Doc.ClearHistory();
+            GotoShapeBand();
+            ClickSegment(d.seg);
+
+            // 落点：面板在屏幕下沿，别画到面板上（那就变成点按钮了）
+            int x = dragX + i * 40, y = dragY;
+            if (d.kind is StrokeKind.Hyperbola or StrokeKind.Cuboid or StrokeKind.Tetrahedron)
+            {
+                // **多笔图形**（见表 Engine.StepPlan）**都是"按住拖"、两次**：
+                // 双曲线 = 渐近线 → 曲线；长方体 = 正面矩形 → 深度；四面体 = 底面三角形 → 顶点。
+                // 画法本身由 --curvetest 逐条真机验过，这里只验"点段选出的工具、
+                // 真能画出那个种类"，所以走最短的两笔。
+                SendMouse(x, y, 0);                                       SettleFrames(60);
+                SendMouse(x, y, Native.MOUSEEVENTF_LEFTDOWN);             SettleFrames(60);
+                SendMouse(x + 200, y + 120, 0);                           SettleFrames(160);
+                SendMouse(x + 200, y + 120, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(160);
+                SendMouse(x, y, 0);                                       SettleFrames(60);
+                SendMouse(x, y, Native.MOUSEEVENTF_LEFTDOWN);             SettleFrames(60);
+                SendMouse(x + 160, y + 40, 0);                            SettleFrames(160);
+                SendMouse(x + 160, y + 40, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(260);
+            }
+            else
+            {
+                // 一笔拖（图形的画法）：抛物线也走这条（照 InkClass 的 `case 20/21`，
+                // 顶点 = 按下那个点、松手就成），拖 260×120——比"太短不产生对象"的阈值大得多
+                SendMouse(x, y, 0);                                    SettleFrames(60);
+                SendMouse(x, y, Native.MOUSEEVENTF_LEFTDOWN);           SettleFrames(60);
+                SendMouse(x + 130, y + 60, 0);                          SettleFrames(40);
+                SendMouse(x + 260, y + 120, 0);                         SettleFrames(40);
+                SendMouse(x + 260, y + 120, Native.MOUSEEVENTF_LEFTUP); SettleFrames(220);
+            }
+
+            var s = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+            Check($"「{d.name}」：点段选的工具画出来就是它",
+                  Host.State.Tool == d.tool && s != null && s.Kind == d.kind,
+                  $"工具 = {Host.State.Tool}，对象 {Doc.Strokes.Count} 个，"
+                  + $"Kind = {(s == null ? "（一个对象都没有）" : s.Kind.ToString())}"
+                  + $"（期望 {d.kind}）");
+        }
+        Doc.Clear();
+        Doc.ClearHistory();
+
+        // ================= D. 主条那一格的图标跟着种类变 =================
+        Console.WriteLine("  -- D. 主条「图形」那一格的图标跟着当前种类变 --");
+        var icons = new List<string>();
+        foreach (var (tool, name) in want)
+        {
+            Host.Commands.SetTool(tool);
+            SettleFrames(120);
+            string icon = ui.CellIconForTest(8);
+            bool changed = icons.Count == 0 || icon != icons[icons.Count - 1];
+            Check($"「{name}」那一格的图标 = {icon}", changed,
+                  changed
+                      ? $"（上一种是 {(icons.Count == 0 ? "还没切过" : icons[icons.Count - 1])}）"
+                      : $"和上一种「{icons[icons.Count - 1]}」是同一张图——切了种类图标没跟着变");
+            icons.Add(icon);
+        }
+        Check("十二种图形的图标两两不同",
+              icons.Distinct().Count() == want.Length, string.Join(" → ", icons));
+        // 这一段是**真渲染过的**：图标名一旦拼错，`IconAtlas.Draw` 会当场抛
+        // （那条"绝不画一个空图标了事"的规矩），所以它同时就是
+        // "自绘的图标（oval / parallelogram / axes / parabola / hyperbola / sine / cosine
+        // 那几张）画得出来"的判据——它们在图标库里不存在，
+        // `ShapeIconFor` 里名字写错了只会在这里露出来。
 
         Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
         ExitCode = fail == 0 ? 0 : 1;
@@ -10233,7 +13105,7 @@ internal sealed class App : InkEngine.InkEngine
                                                       barFrame.CanvasAabb, dpi, ViewportCanvas);
                 if (got != i) { allHit = false; hitNote = $"第 {i} 格命中成了 {got}"; }
             }
-            Check("操作条九格：每格都点得中自己", allHit,
+            Check("操作条十格：每格都点得中自己（灰格也占一格——它只是不响应，见下）", allHit,
                   allHit ? $"{SelectionHandles.BarButtonCount} 格逐格核对" : hitNote);
 
             // ② 收起 / 展开（用户更正：条首那个 ✕ 是"收起工具条"，不是"取消选择"）
@@ -10603,6 +13475,1870 @@ internal sealed class App : InkEngine.InkEngine
         bool saved = ScreenProbe.SaveBmp(shot, (int)(x0 - 120f), (int)(y0 - 160f), 900, 700);
         Console.WriteLine(saved ? $"  （已导出 {shot}：单击圆点 / 短拖 / 斜拖 / 荧光笔 / 竖拖）"
                                 : "  导出失败");
+
+        Console.WriteLine();
+        Console.WriteLine($"  合计 {pass + fail} 项：通过 {pass}，失败 {fail}");
+        Console.WriteLine();
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 坐标系 / 数轴自检（2026-09-19 第三批）。
+    ///
+    /// 四层判据，缺一层都可能"看着绿其实没做"：
+    ///   ① **画法**：真机拖一下 → 定义元素按规格落地（**原点 = 按下点**、外框 = 原点对称展开
+    ///      出来的半宽半高）；
+    ///   ② **手柄**：三个顶点柄、**没有旋转柄**、别的 SelHandle 不留后门；
+    ///      并真拖一遍——原点"框不动"、拖出框外会被夹回来；
+    ///   ③ **屏幕**：两条轴真的上屏（轴上有墨、框里空白处没墨），打开网格墨量明显变多；
+    ///   ④ **存档**：v10 往返（含网格与压感那两位）；再造一个**真·v8 老文件**
+    ///      （见 MakeLegacyFile），读进来必须是"没有网格"（老文件本来就没这个概念）。
+    /// </summary>
+    private void AxisTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 坐标系 / 数轴自检 ===");
+        Console.WriteLine($"  本机 DPI 缩放 {DpiScale:F2}");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-34} {detail}");
+        }
+
+        // 屏幕坐标 == 画布坐标（探针才好对位），和 O 段同一套做法。
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+
+        const int ProbeHalf = 12;
+        const int HasInk = 60, NoInk = 20;
+        int Ink(float x, float y)
+            => ScreenProbe.CountMagenta((int)x - ProbeHalf, (int)y - ProbeHalf,
+                                        ProbeHalf * 2, ProbeHalf * 2);
+        // 整块墨量（按墨迹框四边各放 20 像素量）：判"网格那些线真的画出来了没有"。
+        int WholeInk(Stroke s)
+        {
+            var b = s.WorldInkBounds;
+            return ScreenProbe.CountMagenta((int)b.MinX - 20, (int)b.MinY - 20,
+                                            (int)(b.MaxX - b.MinX) + 40, (int)(b.MaxY - b.MinY) + 40);
+        }
+        bool Near(float a, float b, float tol) => MathF.Abs(a - b) <= tol;
+
+        // **探针数的是品红**，所以真机拖出来的图形也必须是品红：
+        // 画笔的当前色默认是红的，不换色的话"轴上屏了吗"这一条永远是 0 像素
+        // ——第一版就是这么假失败的（图形好好地画在那儿，只是颜色不对）。
+        Host.Commands.SetColor(new Color4(1f, 0f, 1f, 1f));
+
+        // ================= ① 画法：真机拖一个外框 =================
+        Doc.Clear();
+        Doc.ClearHistory();
+        SetToolFromUi(Tool.Coordinate);
+        float x0 = _virtualX + 500f, y0 = _virtualY + 420f;
+        float bw = 800f, bh = 600f;
+        SendMouse((int)x0, (int)y0, 0);                              SettleFrames(60);
+        SendMouse((int)x0, (int)y0, Native.MOUSEEVENTF_LEFTDOWN);    SettleFrames(60);
+        for (int i = 1; i <= 4; i++)
+        {
+            SendMouse((int)(x0 + bw * i / 4f), (int)(y0 + bh * i / 4f), 0);
+            SettleFrames(30);
+        }
+        SendMouse((int)(x0 + bw), (int)(y0 + bh), Native.MOUSEEVENTF_LEFTUP); SettleFrames(220);
+
+        var cs = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+        Check("坐标系：拖出一个坐标系对象",
+              cs != null && cs.Kind == StrokeKind.Coordinate,
+              cs == null ? "没有对象" : $"Kind={cs.Kind}");
+        if (cs == null) { Console.WriteLine("  （后面几项没法验）"); _quit = true; return; }
+
+        Check("坐标系：三个定义元素（外框两角 / 原点）",
+              cs.Points.Count == 3, $"控制点 {cs.Points.Count} 个");
+        // 按下点 = **原点**（用户 2026-09-19："先确定原点，原点确定以后，再把它展开"）；
+        // 外框 = 原点 ± 拖动量（对称展开，所以框是拖出来的那个框的两倍大、原点在正中间）。
+        var fr = cs.AxisFrameLocal();
+        Check("坐标系：外框 = 原点 ± 拖动量（对称展开，±2 像素）",
+              Near(fr.MinX, x0 - bw, 2f) && Near(fr.MinY, y0 - bh, 2f)
+              && Near(fr.MaxX, x0 + bw, 2f) && Near(fr.MaxY, y0 + bh, 2f),
+              $"框 ({fr.MinX:F0},{fr.MinY:F0})..({fr.MaxX:F0},{fr.MaxY:F0})"
+              + $" 期望 ({x0 - bw:F0},{y0 - bh:F0})..({x0 + bw:F0},{y0 + bh:F0})");
+        var o0 = cs.AxisOriginLocal();
+        Check("坐标系：**原点就是按下的那个点**（±2 像素）",
+              Near(o0.X, x0, 2f) && Near(o0.Y, y0, 2f),
+              $"原点 ({o0.X:F0},{o0.Y:F0}) 期望按下点 ({x0:F0},{y0:F0})");
+        Check("坐标系：一次拖拽 = 一步撤销", Doc.UndoDepth == 1, $"撤销栈 {Doc.UndoDepth} 步");
+
+        // ================= ② 手柄：三格、无旋转柄、不留后门 =================
+        Span<ShapeHandle> handles = stackalloc ShapeHandle[5];
+        int hn = SelectionHandles.ShapeHandlesOf(cs, handles);
+        Check("坐标系：三个顶点柄",
+              hn == 3 && handles[0] == ShapeHandle.Vertex0 && handles[2] == ShapeHandle.Vertex2,
+              $"{hn} 个，第 3 格 = {(hn > 2 ? handles[2].ToString() : "无")}");
+        Check("坐标系：**不给旋转柄**（转歪了就不是坐标系了）",
+              !SelectionHandles.RotateHandleVisible(cs), "");
+        Check("坐标系：八向缩放柄不留后门（翻译成 None）",
+              SelectionHandles.HandleOf(cs, SelHandle.TopLeft) == ShapeHandle.None
+              && SelectionHandles.HandleOf(cs, SelHandle.Right) == ShapeHandle.None,
+              $"TopLeft → {SelectionHandles.HandleOf(cs, SelHandle.TopLeft)}");
+        Check("坐标系：顶点柄 ↔ SelHandle 双向对得上",
+              SelectionHandles.HandleOf(cs, SelHandle.VertexD) == ShapeHandle.Vertex3
+              && SelectionHandles.SelHandleOf(ShapeHandle.Vertex3) == SelHandle.VertexD,
+              "");
+
+        // ================= ③ 屏幕：轴真的上屏、框里是空的 =================
+        Doc.SelectOnly(Array.Empty<Stroke>());     // 先取消选中，免得选中框和手柄混进探针
+        SettleFrames(300);
+        // 原点在**按下的那个点**上，所以两条轴分别过 (任意 x, y0) 与 (x0, 任意 y)。
+        int onXAxis = Ink(x0 + bw * 0.2f, y0);                  // x 轴那一行、离原点远一点
+        int onYAxis = Ink(x0, y0 - bh * 0.2f);                  // y 轴那一列
+        int inBlank = Ink(x0 + bw * 0.5f, y0 + bh * 0.5f);      // 第一象限中间：两条轴都够不着
+        Check("屏幕：x 轴那一行有墨", onXAxis > HasInk, $"{onXAxis} 像素（期望 >{HasInk}）");
+        Check("屏幕：y 轴那一列有墨", onYAxis > HasInk, $"{onYAxis} 像素（期望 >{HasInk}）");
+        Check("屏幕：框里的空白处没有墨（不是画了个框）",
+              inBlank <= NoInk, $"{inBlank} 像素（期望 ≤{NoInk}）");
+
+        // ---- 拖原点：**框不动**（这是老师最常用的那个动作）----
+        Tool = Tool.Marquee;
+        Doc.SelectOnly(new[] { cs });
+        SettleFrames(300);
+        var frameBefore = cs.AxisFrameLocal();
+        var oHandle = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.Vertex2);
+        var oTarget = new Vector2(fr.MinX + 60f, fr.MaxY - 60f);      // 拖到框的左下角附近
+        bool tookO = SelectionGestureForTest(oHandle.X, oHandle.Y);
+        UpdateSelectionGestureForTest(oTarget.X, oTarget.Y);
+        SettleFrames(120);
+        EndSelectionGestureForTest();
+        SettleFrames(200);
+        var frameAfter = cs.AxisFrameLocal();
+        Check("拖原点：真的抓住了原点手柄", tookO, $"起点 ({oHandle.X:F0},{oHandle.Y:F0})");
+        Check("拖原点：原点到了目标位置（±2 像素）",
+              Near(cs.AxisOriginLocal().X, oTarget.X, 2f) && Near(cs.AxisOriginLocal().Y, oTarget.Y, 2f),
+              $"原点 ({cs.AxisOriginLocal().X:F0},{cs.AxisOriginLocal().Y:F0})"
+              + $" 期望 ({oTarget.X:F0},{oTarget.Y:F0})");
+        Check("拖原点：**外框一分不动**（哪部分是范围、哪部分是原点，各管各的）",
+              Near(frameAfter.MinX, frameBefore.MinX, 0.01f)
+              && Near(frameAfter.MaxX, frameBefore.MaxX, 0.01f)
+              && Near(frameAfter.MinY, frameBefore.MinY, 0.01f)
+              && Near(frameAfter.MaxY, frameBefore.MaxY, 0.01f),
+              $"框 {frameBefore.MinX:F0},{frameBefore.MinY:F0}..{frameBefore.MaxX:F0},{frameBefore.MaxY:F0} 未变");
+
+        // 原点拖出框外要被夹回来（跑到框外，两条轴就都不在框里交叉了）
+        {
+            var far = new Vector2(fr.MaxX + 900f, fr.MaxY + 900f);
+            SelectionGestureForTest(SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.Vertex2).X,
+                                    SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.Vertex2).Y);
+            UpdateSelectionGestureForTest(far.X, far.Y);
+            SettleFrames(120);
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            var ov = cs.AxisOriginLocal();
+            Check("拖原点：拖出框外会被夹回框里（轴永远不会跑出框）",
+                  ov.X <= fr.MaxX + 0.5f && ov.Y <= fr.MaxY + 0.5f
+                  && ov.X >= fr.MinX - 0.5f && ov.Y >= fr.MinY - 0.5f,
+                  $"原点 ({ov.X:F0},{ov.Y:F0})，框 ({fr.MinX:F0},{fr.MinY:F0})..({fr.MaxX:F0},{fr.MaxY:F0})");
+        }
+
+        // ---- 拖外框角：改范围 ----
+        var cHandle = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.Vertex0);
+        var cTarget = new Vector2(cHandle.X - 120f, cHandle.Y - 90f);
+        SelectionGestureForTest(cHandle.X, cHandle.Y);
+        UpdateSelectionGestureForTest(cTarget.X, cTarget.Y);
+        SettleFrames(120);
+        EndSelectionGestureForTest();
+        SettleFrames(200);
+        Check("拖外框角：外框跟着变大（±2 像素）",
+              Near(cs.AxisFrameLocal().MinX, cTarget.X, 2f)
+              && Near(cs.AxisFrameLocal().MinY, cTarget.Y, 2f),
+              $"左上角 ({cs.AxisFrameLocal().MinX:F0},{cs.AxisFrameLocal().MinY:F0})"
+              + $" 期望 ({cTarget.X:F0},{cTarget.Y:F0})");
+
+        // ---- 紧框就是"定义点的外接 + 半笔宽"（**刻度取消之后不该再虚报那一截**）----
+        {
+            var wb = cs.WorldInkBounds;
+            var f2 = cs.AxisFrameLocal();
+            float halfPen = cs.Width * 0.5f;
+            // 外框宽 + 半笔宽 ×2 = 紧框宽（±2 像素：渲染那边还会各留一点抗锯齿余量）。
+            float needW = (f2.MaxX - f2.MinX) + halfPen * 2f;
+            Check("紧框：等于「外框 + 半笔宽」（没有刻度就不该再往外多算）",
+                  Near(wb.MaxX - wb.MinX, needW, 2.5f),
+                  $"紧框宽 {wb.MaxX - wb.MinX:F1}，期望 {needW:F1}"
+                  + $"（外框 {f2.MaxX - f2.MinX:F0} + 2×{halfPen:F1}）");
+        }
+
+        // ================= ④ 网格：开着比关着多一大截墨 =================
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            Tool = Tool.Marquee;
+            var g = MakeCoordinateForTest(x0, y0 + 300f, 400f, 300f, grid: false);
+            Doc.AddStroke(g);
+            Doc.SelectOnly(new[] { g });
+            Doc.InvalidateAll();
+            SettleFrames(400);
+            int inkOff = WholeInk(g);
+
+            int changed = ToggleSelectionGrid();       // 选中了坐标系 → 改的是它
+            SettleFrames(400);
+            int inkOn = WholeInk(g);
+            Check("网格：选中坐标系时点那一下改的是它（返回 1）", changed == 1, $"返回 {changed}");
+            Check("网格：开关落到对象身上", g.Grid, $"Grid = {g.Grid}");
+            Check("网格：开了之后墨量明显变多（那些格线真的画出来了）",
+                  inkOn > inkOff * 1.3f, $"关 {inkOff} → 开 {inkOn} 像素");
+            Doc.Undo();
+            SettleFrames(200);
+            Check("网格：一步撤销能回到没有网格", !g.Grid, $"Grid = {g.Grid}");
+        }
+
+        // ================= ⑤ 数轴：水平锁 + 右端箭头 =================
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetToolFromUi(Tool.NumberLine);
+            float nx = _virtualX + 500f, ny = _virtualY + 1400f, nl = 900f;
+            SendMouse((int)nx, (int)(ny + 300f), 0);                     SettleFrames(60);
+            SendMouse((int)nx, (int)(ny + 300f), Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+            for (int i = 1; i <= 4; i++)
+            {
+                // 故意**斜着**拖：数轴必须还是水平的（y 钉在按下点那一行）。
+                SendMouse((int)(nx + nl * i / 4f), (int)(ny + 300f - 120f * i / 4f), 0);
+                SettleFrames(30);
+            }
+            SendMouse((int)(nx + nl), (int)(ny + 180f), Native.MOUSEEVENTF_LEFTUP); SettleFrames(220);
+
+            var nl0 = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+            Check("数轴：拖出一个数轴对象",
+                  nl0 != null && nl0.Kind == StrokeKind.NumberLine,
+                  nl0 == null ? "没有对象" : $"Kind={nl0?.Kind}");
+            if (nl0 != null)
+            {
+                Check("数轴：两个定义元素（左端 / 右端）",
+                      nl0.Points.Count == 2, $"控制点 {nl0.Points.Count} 个");
+                Check("数轴：斜着拖也还是水平的（两个点 y 相同）",
+                      Near(nl0.Points[0].Y, ny + 300f, 2f) && Near(nl0.Points[1].Y, ny + 300f, 2f),
+                      $"两个点 y = {nl0.Points[0].Y:F0} / {nl0.Points[1].Y:F0}"
+                      + $"（按下点 {ny + 300f:F0}）");
+                Span<ShapeHandle> nlh = stackalloc ShapeHandle[5];
+                Check("数轴：两个顶点柄（没有刻度之后不再有零点/单位长度两个柄）",
+                      SelectionHandles.ShapeHandlesOf(nl0, nlh) == 2
+                      && nlh[0] == ShapeHandle.Vertex0 && nlh[1] == ShapeHandle.Vertex1,
+                      $"{SelectionHandles.ShapeHandlesOf(nl0, nlh)} 个");
+
+                // 拖右端到斜上方：x 要走过去，y 一动不动。
+                Tool = Tool.Marquee;
+                Doc.SelectOnly(new[] { nl0 });
+                SettleFrames(300);
+                var rHandle = SelectionHandles.ShapeHandleCanvasPosition(nl0, ShapeHandle.Vertex1);
+                var rTarget = new Vector2(rHandle.X - 150f, rHandle.Y - 260f);
+                SelectionGestureForTest(rHandle.X, rHandle.Y);
+                UpdateSelectionGestureForTest(rTarget.X, rTarget.Y);
+                SettleFrames(120);
+                EndSelectionGestureForTest();
+                SettleFrames(200);
+                Check("数轴：拖右端到斜上方 → x 跟过去、y 一动不动",
+                      Near(nl0.Points[1].X, rTarget.X, 2f)
+                      && Near(nl0.Points[1].Y, rTarget.Y + 260f, 0.01f),
+                      $"右端 ({nl0.Points[1].X:F0},{nl0.Points[1].Y:F0})"
+                      + $" 期望 ({rTarget.X:F0},{rTarget.Y + 260f:F0})");
+
+                Doc.SelectOnly(Array.Empty<Stroke>());
+                SettleFrames(300);
+                int nlInk = Ink(nx + nl * 0.5f, ny + 300f);
+                Check("数轴：线本身有墨上屏", nlInk > HasInk, $"{nlInk} 像素");
+            }
+        }
+
+        // ================= ⑥ 存档：v9 往返 + 真·v8 老文件 =================
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            var a1 = MakeCoordinateForTest(x0, y0, bw, bh, grid: true);
+            var a2 = MakeNumberLineForTest(x0, y0 + 800f, 600f);
+            Doc.AddStroke(a1);
+            Doc.AddStroke(a2);
+
+            byte[] blob = InkSerializer.Save(Doc);
+            var back = new InkDocument();
+            InkSerializer.LoadInto(back, blob);
+            Check("存档：读回两条都在", back.Strokes.Count == 2, $"读回 {back.Strokes.Count} 条");
+            Check("存档：坐标系读回来还是坐标系、网格位也在",
+                  back.Strokes.Count > 0 && back.Strokes[0].Kind == StrokeKind.Coordinate
+                  && back.Strokes[0].Grid && back.Strokes[0].Points.Count == 3,
+                  back.Strokes.Count > 0
+                      ? $"{back.Strokes[0].Kind}，网格 {back.Strokes[0].Grid}，"
+                        + $"{back.Strokes[0].Points.Count} 个点"
+                      : "条数不对");
+            Check("存档：数轴读回来还是数轴（第二条，能验出闸门错位）",
+                  back.Strokes.Count > 1 && back.Strokes[1].Kind == StrokeKind.NumberLine
+                  && back.Strokes[1].Points.Count == 2,
+                  back.Strokes.Count > 1 ? $"{back.Strokes[1].Kind}" : "条数不对");
+
+            // 真·v8 老文件（见 MakeLegacyFile）：读进来必须是"没有网格"。
+            // 砍 4 位 = v9 网格 ＋ v10 压感 ＋ v11 朝向 ＋ v12 渐近线（**v13 没加字段**）。
+            var one = new InkDocument();
+            one.AddStroke(MakeCoordinateForTest(x0, y0, bw, bh, grid: true));
+            byte[] v8 = MakeLegacyFile(one, 8, 4);
+            var old = new InkDocument();
+            bool oldOk = true;
+            try { InkSerializer.LoadInto(old, v8); } catch (Exception ex) { oldOk = false; Console.WriteLine("    " + ex.Message); }
+            Check("真·v8 老文件读得进，网格是关的（老文件没这个概念）",
+                  oldOk && old.Strokes.Count == 1 && !old.Strokes[0].Grid
+                  && old.Strokes[0].Points.Count == 3,
+                  oldOk ? $"{old.Strokes.Count} 条，网格 {old.Strokes[0].Grid}" : "读取抛异常");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"  合计 {pass + fail} 项：通过 {pass}，失败 {fail}");
+        Console.WriteLine();
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 自检用：造一个**真·老版本**存档。
+    ///
+    /// 原理：从 v8 起，每抬一版基本就是"每条笔画末尾多 1 个字节"（v8 线型 / v9 网格 /
+    /// v10 压感 / v12 渐近线），所以"砍掉那几位 + 把版本号改回去"得到的就是货真价实的老文件。
+    ///
+    /// **为什么按"砍几位"传参、不写死**：2026-09-20 加 v10 时，三处"砍 1 字节"的自检
+    /// 一起静默失效——它们各留了一两个字节的尾巴，而读端不检查"流有没有读完"，
+    /// 于是照样通过、却不再是在验老文件（这正是仓库里那条教训：
+    /// "自检里写死常量会随功能移位而静默失效"）。
+    ///
+    /// **但 v13 破了"版本号之差 = 砍几位"这条公式**：它只改了抛物线第二个点的含义、
+    /// 没加字段。所以砍几位改成**显式传**（见下面 <paramref name="droppedBytes"/>），
+    /// 不能让调用方去猜。
+    /// </summary>
+    /// <summary>
+    /// 自检用：把当前格式的存档"退化"成某个老版本的文件。
+    ///
+    /// <paramref name="droppedBytes"/> = **从这个老版本到现在，每条笔画后面一共追加了几位**
+    /// ——**它不等于版本号之差**：v13 只改了抛物线第二个点的**含义**、没加字段，
+    /// 所以"v12 的文件"和"v13 的文件"**字节数一模一样**，要传 0。
+    /// （v12 则比 v13 少一位：少了渐近线那一个字节。）
+    /// </summary>
+    private static byte[] MakeLegacyFile(InkDocument doc, int version, int droppedBytes)
+    {
+        byte[] cur = InkSerializer.Save(doc);
+        byte[] old = droppedBytes > 0 ? new byte[cur.Length - droppedBytes] : cur;
+        if (droppedBytes > 0) Array.Copy(cur, old, old.Length);
+        // 魔数（8 字节）后面那个小端 int32 就是版本号。
+        old[4] = (byte)version; old[5] = 0; old[6] = 0; old[7] = 0;
+        return old;
+    }
+
+    /// <summary>
+    /// 自检用：造一个坐标系（不经过工具，直接摆点）。
+    /// 三个定义点 = 外框两角 + 原点，和 <see cref="Stroke.SetAxisBox"/> 的规则一致。
+    ///
+    /// 参数就是 <c>SetAxisBox</c> 的那四个：**(x, y) = 原点**、**(x+w, y+h) = 往右下拖了多远**
+    /// （外框 = 原点 ± (w, h)）。所以外框的左上角在 (x−w, y−h)——传参时留神别让它跑出屏幕。
+    /// </summary>
+    private Stroke MakeCoordinateForTest(float x, float y, float w, float h, bool grid)
+    {
+        var s = new Stroke
+        {
+            Tool = Tool.Coordinate,
+            Kind = StrokeKind.Coordinate,
+            Color = new Color4(1f, 0f, 1f, 1f),        // 品红：便于在屏幕上数像素
+            Width = 6f * DpiScale,
+            Grid = grid,
+        };
+        // 先铺够三个点（SetAxisBox 要求控制点已经够数），再按外框算。
+        for (int i = 0; i < 3; i++) s.AddPoint(x, y, 1f, NowMs);
+        s.SetAxisBox(x, y, x + w, y + h);
+        return s;
+    }
+
+    /// <summary>自检用：造一个数轴（两个定义点 = 左端 / 右端，y 相同）。</summary>
+    private Stroke MakeNumberLineForTest(float x, float y, float len)
+    {
+        var s = new Stroke
+        {
+            Tool = Tool.NumberLine,
+            Kind = StrokeKind.NumberLine,
+            Color = new Color4(1f, 0f, 1f, 1f),
+            Width = 6f * DpiScale,
+        };
+        for (int i = 0; i < 2; i++) s.AddPoint(x, y, 1f, NowMs);
+        s.SetAxisBox(x, y, x + len, y);
+        return s;
+    }
+
+    /// <summary>
+    /// 出图：坐标系（带网格 / 不带网格各一个）＋ 数轴 ＋ 一条虚线。
+    /// 用法 `--axisshow [路径]`，默认 `reports/坐标系与数轴.bmp`。
+    /// 自检盯的是"数值对不对"，这一张是给**眼睛**看的：箭头大不大、网格疏密、
+    /// 虚线在粗笔上是不是像样——这些量没有一条能写成判据。
+    /// </summary>
+    private void AxisShowcase(string path)
+    {
+        Console.WriteLine($"=== 出图：{path} ===");
+        BoardOn = true;                          // 白底：不然桌面背景会混进画面
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+
+        var ink = new Color4(0.11f, 0.12f, 0.15f, 1f);      // 板书的近黑色
+        float x0 = _virtualX + 460f, y0 = _virtualY + 400f;
+        // 外框（两张坐标系共用）：x0..x0+760 × y0..y0+620，所以半宽半高 = (380, 310)。
+        // **画法改成了"按下 = 原点、拖出去 = 展开"**（见 Stroke.SetAxisBox），
+        // 所以这里的第一参数是原点、第二参数是"往右下拖多远"，不再是外框的两个角。
+        const float hw = 380f, hh = 310f;
+
+        // ① 坐标系 · 带网格，原点摊在框的左下（老师最常用的"只留第一象限"）
+        var g = new Stroke
+        {
+            Tool = Tool.Coordinate, Kind = StrokeKind.Coordinate,
+            Color = ink, Width = 4f * DpiScale, Grid = true,
+        };
+        for (int i = 0; i < 3; i++) g.AddPoint(x0 + 130f, y0 + 470f, 1f, 0);
+        g.SetAxisBox(x0 + 130f, y0 + 470f, x0 + 130f + hw, y0 + 470f + hh);
+        Doc.AddStroke(g);
+
+        // ② 坐标系 · 不带网格，原点在框正中间（和左边对照）
+        var c = new Stroke
+        {
+            Tool = Tool.Coordinate, Kind = StrokeKind.Coordinate,
+            Color = ink, Width = 4f * DpiScale, Grid = false,
+        };
+        for (int i = 0; i < 3; i++) c.AddPoint(x0 + 900f + hw, y0 + hh, 1f, 0);
+        c.SetAxisBox(x0 + 900f + hw, y0 + hh, x0 + 900f + hw + hw, y0 + hh + hh);
+        Doc.AddStroke(c);
+
+        // ③ 数轴：一条水平线 + 右端箭头（没有刻度）
+        var n = new Stroke
+        {
+            Tool = Tool.NumberLine, Kind = StrokeKind.NumberLine,
+            Color = ink, Width = 4f * DpiScale,
+        };
+        for (int i = 0; i < 2; i++) n.AddPoint(x0, y0 + 760f, 1f, 0);
+        n.SetAxisBox(x0, y0 + 760f, x0 + 1660f, y0 + 760f);
+        Doc.AddStroke(n);
+
+        // ④ 一条虚线直线（顺带把线型也看进去：虚线在粗笔上是不是像样）
+        var d = new Stroke
+        {
+            Tool = Tool.Line, Kind = StrokeKind.Line,
+            Color = ink, Width = 7f * DpiScale, Dash = StrokeDash.Dashed,
+        };
+        d.AddPoint(x0, y0 + 960f, 1f, 0);
+        d.AddPoint(x0 + 1660f, y0 + 960f, 1f, 0);
+        Doc.AddStroke(d);
+
+        Doc.InvalidateAll();
+        SettleFrames(800);
+
+        bool ok = ScreenProbe.SaveBmp(path, (int)(x0 - 60f), (int)(y0 - 60f), 1900, 1150);
+        Console.WriteLine(ok ? $"  已保存 {path}" : "  保存失败");
+        Console.WriteLine();
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 出图：四种曲线各来一份——**抛物线四种开口、双曲线两个方向、正弦 / 余弦各一个周期**。
+    /// 用法 `--curveshow [路径]`，默认 `reports/四种曲线.bmp`。
+    ///
+    /// 自检盯的是"数值对不对"，这一张是给**眼睛**看的（这条教训见 计划-图形工具.md 10.7）：
+    ///   · 曲线胖不胖、够不够顺（段数按尺寸定，太少了看着是折线）；
+    ///   · 双曲线**截断到哪**（`Stroke.HyperbolaTMaxOf`：出框就停笔、最多画到 `2a`：
+    ///     太短看着像两根短线、太长就把包围盒撑得很大）；
+    ///   · 四种开口是不是真的四个方向（左右开口是"换自变量"，最容易写反）；
+    ///   · 正弦 / 余弦的**起点**对不对（正弦从轴起、余弦从峰起——这是用户要的那一条）。
+    /// 摆放：4 列 × 2 行，第一行四种开口、第二行"两个方向 + 正弦 + 余弦"。
+    /// </summary>
+    private void CurveShowcase(string path)
+    {
+        Console.WriteLine($"=== 出图：{path} ===");
+        BoardOn = true;                          // 白底：不然桌面背景会混进画面
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+
+        var ink = new Color4(0.11f, 0.12f, 0.15f, 1f);      // 板书的近黑色
+        float x0 = _virtualX + 200f, y0 = _virtualY + 250f;
+        const float pitch = 620f;                            // 格子间距（横竖一样，看着是网格）
+
+        // 造一条曲线：只有 BeginShapeAt 铺的那一个占位点，之后交给 Set*Box
+        Stroke Make(Tool tool, StrokeKind kind, float x, float y)
+        {
+            var s = new Stroke
+            {
+                Tool = tool, Kind = kind, Color = ink, Width = 5f * DpiScale,
+            };
+            s.AddPoint(x, y, 1f, 0);
+            return s;
+        }
+        // 每格的左上角
+        float CellX(int col) => x0 + col * pitch;
+        float CellY(int row) => y0 + row * pitch;
+
+        // ---- 第一行：抛物线的四种开口（**先选朝向，再用"顶点 + 经过点"两点画**） ----
+        // 这就是用户 2026-09-20 定的口径：方向是"选"出来的（CurveAxis），大小由"经过那个点"反解。
+        var dirs = new[] { CurveAxis.OpenUp, CurveAxis.OpenDown, CurveAxis.OpenRight, CurveAxis.OpenLeft };
+        for (int col = 0; col < dirs.Length; col++)
+        {
+            float cx = CellX(col), cy = CellY(0);
+            var v = new Vector2(cx + 280f, cy + 280f);
+            var s = Make(Tool.Parabola, StrokeKind.Parabola, v.X, v.Y);
+            s.CurveAxis = dirs[col];                              // ① 先选开口方向
+            s.SetParabolaVertex(v.X, v.Y);                        // ② 定顶点
+            // ③ 定"曲线经过的点"：取 `u = 1` 处的曲线点（`s = p/2、t = p`），
+            //    反解出来正好是 p = 140（见 Stroke.ParabolaPThroughPoint），一个格子装得下。
+            var (dir, perp) = Stroke.ParabolaBasis(dirs[col]);
+            var q = v + perp * 140f + dir * 70f;
+            s.SetParabolaThroughPoint(q.X, q.Y);
+            Doc.AddStroke(s);
+        }
+
+        // ---- 第二行：双曲线两个方向 ＋ 正弦 / 余弦各一个周期 ----
+        // 双曲线按真实的**两步**出图（第一步拖出**渐近线框**、第二步定"曲线过哪个点"），
+        // 这样图上这两条跟老师真画出来的完全一致（朝向也是那一步定的）。
+        // 渐近线框是**拖到哪就是哪**：`A = |dx|、B = |dy|`（2026-09-20 改成不再打对折）。
+        var hX = Make(Tool.Hyperbola, StrokeKind.Hyperbola, CellX(0) + 280f, CellY(1) + 280f);
+        hX.SetHyperbolaFromAsymptote(CellX(0) + 280f, CellY(1) + 280f,
+                                     CellX(0) + 280f + 300f, CellY(1) + 280f + 120f, 8f);   // 斜率 0.4
+        hX.SetHyperbolaThroughPoint(CellX(0) + 280f + 300f, CellY(1) + 280f + 104f);
+        Doc.AddStroke(hX);          // 点更横 → 焦点在 x 轴（左右双曲线）
+
+        var hY = Make(Tool.Hyperbola, StrokeKind.Hyperbola, CellX(1) + 280f, CellY(1) + 280f);
+        hY.SetHyperbolaFromAsymptote(CellX(1) + 280f, CellY(1) + 280f,
+                                     CellX(1) + 280f + 120f, CellY(1) + 280f + 300f, 8f);   // 斜率 2.5
+        hY.SetHyperbolaThroughPoint(CellX(1) + 280f + 104f, CellY(1) + 280f + 300f);
+        Doc.AddStroke(hY);          // 点更竖 → 焦点在 y 轴（上下双曲线）
+
+        // 正弦：起点在轴上（第一个零点），**往上拖 = 先上后下**（就是课本的 y = sin x）
+        var sin = Make(Tool.Sine, StrokeKind.Sine, CellX(2) + 90f, CellY(1) + 300f);
+        sin.SetWaveBox(CellX(2) + 90f, CellY(1) + 300f, CellX(2) + 490f, CellY(1) + 160f, 8f);
+        Doc.AddStroke(sin);
+
+        // 余弦：起点在**峰顶**，**往下拖 = 从峰顶往下**（就是课本的 y = cos x）
+        var cos = Make(Tool.Cosine, StrokeKind.Cosine, CellX(3) + 90f, CellY(1) + 160f);
+        cos.SetWaveBox(CellX(3) + 90f, CellY(1) + 160f, CellX(3) + 490f, CellY(1) + 300f, 8f);
+        Doc.AddStroke(cos);
+
+        // ---- 第三行：立体图形（2026-09-20 第五批，照 InkClass 的 case 6/7）----
+        // 一次拖出**外接矩形**就成：椭圆由矩形派生（`ry = rx / 2.646`），
+        // 底面被挡住的那半圈是**细虚线**（辅助几何槽）。
+        // 位置比第三行的格子上提了一截：出图只有 1800 高，压在格子中心会被裁掉。
+        float sy0 = CellY(2) - 140f;
+        var cyl = Make(Tool.Cylinder, StrokeKind.Cylinder, CellX(0) + 130f, sy0);
+        cyl.SetSolidBox(CellX(0) + 130f, sy0, CellX(0) + 430f, sy0 + 350f);
+        Doc.AddStroke(cyl);
+
+        var cone = Make(Tool.Cone, StrokeKind.Cone, CellX(1) + 130f, sy0);
+        cone.SetSolidBox(CellX(1) + 130f, sy0, CellX(1) + 430f, sy0 + 350f);
+        Doc.AddStroke(cone);
+
+        // 长方体（两笔）：第 1 笔正面矩形、第 2 笔深度（往后上方 45° 退 70）。
+        var cub = Make(Tool.Cuboid, StrokeKind.Cuboid, CellX(2) + 150f, sy0 + 60f);
+        cub.SetCuboidFront(CellX(2) + 150f, sy0 + 60f, CellX(2) + 330f, sy0 + 250f);
+        cub.SetCuboidDepth(CellX(2) + 150f, sy0 - 10f);          // d = |60 − (−10)| = 70
+        Doc.AddStroke(cub);
+
+        // 四面体（两笔）：第 1 笔底面三角形、第 2 笔顶点。
+        var tet = Make(Tool.Tetrahedron, StrokeKind.Tetrahedron, CellX(3) + 150f, sy0 + 120f);
+        tet.SetTetraBase(CellX(3) + 150f, sy0 + 120f, CellX(3) + 450f, sy0 + 300f);
+        tet.SetTetraApex(CellX(3) + 220f, sy0 - 30f);
+        Doc.AddStroke(tet);
+
+        Doc.InvalidateAll();
+        SettleFrames(800);
+
+        bool ok = ScreenProbe.SaveBmp(path, (int)_virtualX, (int)_virtualY, 2880, 1800);
+        Console.WriteLine(ok ? $"  已保存 {path}" : "  保存失败");
+        Console.WriteLine();
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 线型自检（2026-09-19）：实线 / 虚线 / 点线。
+    ///
+    /// 三层判据，缺哪一层都可能"看着绿其实没做"：
+    ///   ① **屏幕层**：同一条水平线，三种线型在屏幕上数出来的墨量依次明显递减
+    ///      （实线 ≈ 满、虚线 ≈ 六成、点线 ≈ 三成），**而包围盒一模一样**——
+    ///      这一条专抓"字段存了但渲染没接上"（只看字段的话这一层会是绿的）。
+    ///   ② **交互层**：改线型走的是面板那条真路（命中格子 → HandlePanelClick），
+    ///      **图像不被改**（自由笔迹 2026-09-19 起**也改**——用户报的"选中以后虚线面板
+    ///      还没有实现"就是它：引擎里 `Freehand` 那一行 `continue`），
+    ///      改完包围盒一分不动，一步撤销能回到原样；
+    ///   ②c **笔的线型开关**：色带条上切一档 → 新画出来的笔迹就是那一档，
+    ///      而**已经画好的不被动**（"画之前选"和"画之后改"两条路各管各的）。
+    ///   ③ **存档层**：写文件读回来线型还在；再造一个**真·v7 老文件**（见 MakeLegacyFile），
+    ///      验"老文件读进来是实线"——这是版本闸写错时唯一会炸的地方。
+    /// 最后导一张图，人能一眼看出三种样子。
+    /// </summary>
+    /// <summary>
+    /// 四种曲线（抛物线 / 双曲线 / 正弦 / 余弦）自检。
+    ///
+    /// 盯的六件事：
+    ///   ① **画法**：真机拖那一下，定义元素得落在该落的地方（顶点 / 中心 / 起点 = **按下的点**）；
+    ///   ② **紧框**：必须等于"曲线自己的那个矩形 ＋ 半笔宽"，**不能是控制点的外接**——
+    ///      双曲线会小掉一大圈、正弦会漏掉起点那一侧（椭圆当年就是这么翻的车）；
+    ///   ③ **手柄**：精简之后抛物线 1 个、其余 2 个，而且每个手柄**只改一个量**；
+    ///   ④ **朝向**：换一档几何真的换了、一步撤销回得去、四次一循环；
+    ///   ⑤ **双曲线两支之间没有"幽灵线段"**（折线那份的抬笔约定，见 ShapeOutline）；
+    ///   ⑥ **存档往返** ＋ **真 v10 老文件**读得进来（朝向位缺一位就是整体错位）。
+    /// </summary>
+    private void CurveTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 四种曲线自检（抛物线 / 双曲线 / 正弦 / 余弦）===");
+        Console.WriteLine($"  本机 DPI 缩放 {DpiScale:F2}");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-38} {detail}");
+        }
+        bool Near(float a, float b, float tol) => MathF.Abs(a - b) <= tol;
+        // 方向比较：两个单位向量「几乎相同」（用于"方向没变 / 变到哪去了"这类断言）。
+        bool NearDir(Vector2 a, Vector2 b) => Vector2.Distance(a, b) <= 0.01f;
+
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        float minAxis = ShapeMinAxisLogical * DpiScale;
+        var ink = new Color4(1f, 0f, 1f, 1f);            // 品红：屏幕上好数
+        Host.Commands.SetColor(ink);
+
+        // 造一条"刚起手"的曲线（只有 BeginShapeAt 铺的那一个占位点），
+        // 再走 Set*Box —— 和真机拖动走的是同一条路。
+        Stroke NewCurve(Tool tool, StrokeKind kind, float x, float y)
+        {
+            var s = new Stroke { Tool = tool, Kind = kind, Color = ink, Width = 4f * DpiScale };
+            s.AddPoint(x, y, 1f, 0);
+            return s;
+        }
+        // 点到线段的距离（验"两支之间有没有幽灵线段"用）。
+        float DistPointSeg(Vector2 p, Vector2 a, Vector2 b)
+        {
+            var ab = b - a;
+            float len2 = ab.LengthSquared();
+            if (len2 < 1e-6f) return Vector2.Distance(p, a);
+            float t = Math.Clamp(Vector2.Dot(p - a, ab) / len2, 0f, 1f);
+            return Vector2.Distance(p, a + ab * t);
+        }
+
+        // ================= ① 画法：真机**一笔拖**画一条抛物线 =================
+        // 口径（用户 2026-09-20 照 InkClass 的 `case 20/21`）：**顶点 = 按下那个点**，
+        // 一次拖到"曲线要经过的地方"、松手就成；朝向是画之前在图形面板上选好的
+        // （这里走默认的"开口向上"）。
+        Doc.Clear();
+        Doc.ClearHistory();
+        SetToolFromUi(Tool.Parabola);
+        float px = _virtualX + 900f, py = _virtualY + 900f;
+
+        // 按下（还没拖）：半成品不进文档。
+        SendMouse((int)px, (int)py, 0);                            SettleFrames(60);
+        SendMouse((int)px, (int)py, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+        Check("抛物线：按下（定顶点）之后**还没提交**（半成品不进文档）",
+              Doc.Strokes.Count == 0, $"对象 {Doc.Strokes.Count} 条（期望 0）");
+
+        // 拖到顶点右上方 120 × 100：曲线**经过这个点**——
+        // 朝上开口时 `s = 100、t = 120` → `p = t²/(2s) = 14400/200 = 72`。
+        SendMouse((int)(px + 120f), (int)(py - 100f), 0);   SettleFrames(240);
+        Check("抛物线：拖动的时候曲线**经过指针那个点**（p = t²/2s = 72）（±2）",
+              ActiveStroke != null && Near(ActiveStroke.ParabolaPLocal(), 72f, 2f),
+              $"p {(ActiveStroke == null ? -1f : ActiveStroke.ParabolaPLocal()):F1}（期望 72）");
+
+        // 松手：完成（提交就发生在这一刻）。
+        SendMouse((int)(px + 120f), (int)(py - 100f), Native.MOUSEEVENTF_LEFTUP); SettleFrames(180);
+
+        var pbDraw = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+        Check("抛物线：**松手之后**对象才出来（一条抛物线）",
+              pbDraw != null && pbDraw.Kind == StrokeKind.Parabola,
+              pbDraw == null ? $"对象 {Doc.Strokes.Count} 条（期望 1）" : $"Kind={pbDraw.Kind}");
+        if (pbDraw == null) { Console.WriteLine("  （后面几项没法验）"); _quit = true; return; }
+
+        Check("抛物线：两个定义元素（顶点 ＋ 曲线上的那个点）",
+              pbDraw.Points.Count == 2, $"控制点 {pbDraw.Points.Count} 个");
+        Check("抛物线：**顶点 = 按下那个点**（±2 像素）",
+              Near(pbDraw.CurvePointLocal(0).X, px, 2f) && Near(pbDraw.CurvePointLocal(0).Y, py, 2f),
+              $"顶点 ({pbDraw.CurvePointLocal(0).X:F0},{pbDraw.CurvePointLocal(0).Y:F0})"
+              + $" 期望 ({px:F0},{py:F0})");
+        Check("抛物线：**经过点 = 最后点的那个位置**（±2 像素）",
+              Near(pbDraw.CurvePointLocal(1).X, px + 120f, 2f)
+              && Near(pbDraw.CurvePointLocal(1).Y, py - 100f, 2f),
+              $"经过点 ({pbDraw.CurvePointLocal(1).X:F0},{pbDraw.CurvePointLocal(1).Y:F0})"
+              + $" 期望 ({px + 120f:F0},{py - 100f:F0})");
+        Check("抛物线：朝向 = **开口向上**（默认值，不是从两点推的）",
+              pbDraw.EffectiveAxis == CurveAxis.OpenUp && Near(pbDraw.ParabolaDirLocal().Y, -1f, .01f),
+              $"{pbDraw.EffectiveAxis} / {pbDraw.ParabolaDirLocal()}");
+        Check("抛物线：p = 72（±4）", Near(pbDraw.ParabolaPLocal(), 72f, 4f),
+              $"p {pbDraw.ParabolaPLocal():F1}");
+        Check("抛物线：一笔拖到底 = **一步撤销**（不是两步）",
+              Doc.UndoDepth == 1, $"撤销栈 {Doc.UndoDepth} 步");
+
+        // ================= ② 几何算式（直接摆点，不走工具） =================
+        Doc.Clear();
+        Doc.ClearHistory();
+
+        // ---- 抛物线：顶点 (400,400)、**开口向上**、经过点 (700,250) → p = 300 ----
+        // 经过点取的是 `u = 1` 处的曲线点（也就是通径端点）：`s = p/2 = 150、t = p = 300`
+        // → 反解 `p = t²/(2s) = 300`。它和上一版"顶点 + 张口点 (400,250)"画出来的是
+        // **同一条曲线**，所以下面那些紧框 / 脏区断言一个都不用改。
+        var vb = NewCurve(Tool.Parabola, StrokeKind.Parabola, 400f, 400f);
+        vb.CurveAxis = CurveAxis.OpenUp;
+        vb.SetParabolaVertex(400f, 400f);
+        vb.SetParabolaThroughPoint(700f, 250f);
+        Check("抛物线：顶点 (400,400)、经过点 (700,250)（±0.5）",
+              Near(vb.CurvePointLocal(0).X, 400f, .5f) && Near(vb.CurvePointLocal(0).Y, 400f, .5f)
+              && Near(vb.CurvePointLocal(1).X, 700f, .5f) && Near(vb.CurvePointLocal(1).Y, 250f, .5f),
+              $"顶点 ({vb.CurvePointLocal(0).X:F1},{vb.CurvePointLocal(0).Y:F1})"
+              + $" 经过点 ({vb.CurvePointLocal(1).X:F1},{vb.CurvePointLocal(1).Y:F1})");
+        Check("抛物线：朝向 = **选出来的开口向上**（不是从两点推的）",
+              vb.EffectiveAxis == CurveAxis.OpenUp
+              && Near(vb.ParabolaDirLocal().X, 0f, .01f) && Near(vb.ParabolaDirLocal().Y, -1f, .01f),
+              $"{vb.EffectiveAxis} / {vb.ParabolaDirLocal()}");
+        Check("抛物线：p 由经过点反解 = t²/(2s) = 300²/300 = 300（±0.5）",
+              Near(vb.ParabolaPLocal(), 300f, .5f), $"p {vb.ParabolaPLocal():F1}");
+        var vbT0 = vb.ParabolaPointAt(0f);
+        var vbT1 = vb.ParabolaPointAt(1f);
+        Check("抛物线：t=0 落在顶点、t=±1 落在**通径端点**（= 我们给的那个经过点）上（±0.5）",
+              Near(vbT0.X, 400f, .5f) && Near(vbT0.Y, 400f, .5f)
+              && Near(vbT1.X, 700f, .5f) && Near(vbT1.Y, 250f, .5f),
+              $"t0 ({vbT0.X:F1},{vbT0.Y:F1})  t1 ({vbT1.X:F1},{vbT1.Y:F1}) 期望 (400,400) / (700,250)");
+        var vbBox = vb.CurveBoxLocal();
+        // 紧框 = **"顶点 ↔ 经过点"那个矩形**（照 InkClass：画到拖到的那个点为止）——
+        // 于是那个点**正好落在框角上**：横跨 ±300、沿轴 0…150。
+        Check("抛物线：紧框 = **拖动那个矩形**（经过点正好落在框角上）（±0.5）",
+              Near(vbBox.MinX, 100f, .5f) && Near(vbBox.MaxX, 700f, .5f)
+              && Near(vbBox.MinY, 250f, .5f) && Near(vbBox.MaxY, 400f, .5f),
+              $"框 ({vbBox.MinX:F1},{vbBox.MinY:F1})..({vbBox.MaxX:F1},{vbBox.MaxY:F1})"
+              + " 期望 (100,250)..(700,400)");
+        var vbPad = vb.PaddedBounds;
+        Check("抛物线：脏区框 = 紧框 ＋ 半笔宽 ＋ 2（±0.05）",
+              Near(vbPad.MinX, vbBox.MinX - vb.Width * .5f - 2f, .05f)
+              && Near(vbPad.MaxY, 400f + vb.Width * .5f + 2f, .05f),
+              $"({vbPad.MinX:F2},{vbPad.MinY:F2})..({vbPad.MaxX:F2},{vbPad.MaxY:F2})"
+              + $" 笔宽 {vb.Width:F1}");
+
+        // ---- 双曲线：中心 (1200,500)，第一步"拖出渐近线框 (320,240)" ----
+        //      **拖到哪就是哪**：A = 320、B = 240（2026-09-20 改成不再打对折，
+        //      因为渐近线自己就是框、不再需要"画到 2a、2b"那种放大）。
+        //      第二步（第三个点）= "**曲线要经过的那个点**"：(1370,560)，相对中心 `dx = 170、dy = 60`
+        //      → 曲线的 x 方向半宽 `a = √(170² − 60²·(4/3)²) = √22500 = 150`、
+        //      y 方向半高 `b = a × B/A = 112.5`。**这一步渐近线框一个字都不动**（这次改动的核心）。
+        var hy = NewCurve(Tool.Hyperbola, StrokeKind.Hyperbola, 1200f, 500f);
+        hy.SetHyperbolaFromAsymptote(1200f, 500f, 1520f, 740f, minAxis);
+        hy.SetHyperbolaThroughPoint(1370f, 560f);
+        Check("双曲线：第一步 A = 320、B = 240（**拖到哪就是哪**）（±0.5）",
+              Near(hy.HyperbolaALocal(), 320f, .5f) && Near(hy.HyperbolaBLocal(), 240f, .5f),
+              $"A {hy.HyperbolaALocal():F1}  B {hy.HyperbolaBLocal():F1}");
+        Check("双曲线：渐近线斜率 = B/A = 240/320 = 0.75（就是 InkClass 的 |dy/dx|）（±0.001）",
+              Near(hy.HyperbolaBLocal() / hy.HyperbolaALocal(), 0.75f, .001f),
+              $"{hy.HyperbolaBLocal() / hy.HyperbolaALocal():F4}（期望 0.7500）");
+        // **第二步只写第三个点**：曲线的半轴由它反解，渐近线框（A / B）**原封不动**。
+        Check("双曲线：第二步的点反解出曲线的半轴（a = 150、b = 112.5），框不动（±0.5）",
+              Near(hy.HyperbolaCurveALocal(), 150f, .5f) && Near(hy.HyperbolaCurveBLocal(), 112.5f, .5f)
+              && Near(hy.HyperbolaALocal(), 320f, .5f) && Near(hy.HyperbolaBLocal(), 240f, .5f),
+              $"曲线 a {hy.HyperbolaCurveALocal():F1}、b {hy.HyperbolaCurveBLocal():F1}；"
+              + $"框 A {hy.HyperbolaALocal():F1}、B {hy.HyperbolaBLocal():F1}");
+        var hyBox = hy.CurveBoxLocal();
+        // 紧框 = **渐近线的那个矩形**（用户 2026-09-20 定："把双曲线限制在渐近线的矩形框内"）。
+        // hy：中心 (1200,500)、A = 320、B = 240 → 框 = ±320 × ±240。
+        Check("双曲线：紧框 = ±A × ±B（就是渐近线框）（±0.5）",
+              Near(hyBox.MinX, 1200f - 320f, .5f) && Near(hyBox.MaxX, 1200f + 320f, .5f)
+              && Near(hyBox.MinY, 500f - 240f, .5f) && Near(hyBox.MaxY, 500f + 240f, .5f),
+              $"框 ({hyBox.MinX:F1},{hyBox.MinY:F1})..({hyBox.MaxX:F1},{hyBox.MaxY:F1})"
+              + $" 期望 (880,260)..(1520,740)");
+        var hyApex = hy.HyperbolaVertexLocal(1);
+        Check("双曲线：顶点在 (中心.x ＋ a, 中心.y) = (1350, 500)（±0.5）",
+              Near(hyApex.X, 1350f, .5f) && Near(hyApex.Y, 500f, .5f),
+              $"({hyApex.X:F1},{hyApex.Y:F1}) 期望 (1350,500)");
+        // 两支之间的"幽灵线段"：轮廓折线是被逐段判交消费的（橡皮 / 套索），
+        // 中间那条横穿的连线会让"橡皮从两支之间划过 = 整条被删"。
+        var hyOutline = hy.ShapeOutline();
+        float nearest = float.MaxValue;
+        int breaks = 0;
+        for (int i = 1; i < hyOutline.Count; i++)
+        {
+            if (Stroke.IsOutlineBreak(hyOutline[i - 1]))
+            {
+                breaks++;                 // 抬笔标记（见 Stroke.OutlineBreak）：一条接在它后面
+                continue;
+            }
+            if (Stroke.IsOutlineBreak(hyOutline[i])) continue;      // 同上一条的尾巴
+            nearest = MathF.Min(nearest, DistPointSeg(new Vector2(1200f, 500f),
+                                                      hyOutline[i - 1], hyOutline[i]));
+        }
+        Check("双曲线：轮廓里恰好一个**抬笔标记**（两支分开、不连线）", breaks == 1, $"{breaks} 处抬笔");
+        Check("双曲线：轮廓里**没有横穿两支之间**的幽灵线段（中心到任一段 ≥ 0.9a）",
+              nearest >= 150f * 0.9f, $"最近距离 {nearest:F1}（a = 150，要 ≥ 135）");
+
+        // **曲线整条收在渐近线框里**（用户 2026-09-20 的诉求）：
+        // 渐近线框 = ±A × ±B = ±320 × ±240，而曲线"**出框就停笔**"（见 Stroke.HyperbolaTMaxOf）——
+        // 先到哪条边就停在哪条边。hy 的 `2a = 300 < A = 320`，所以它**先撞上那条"最多画到 2a"的上限**
+        // （`cosh t = 2`，见 HyperbolaDrawT），横向停在 300、纵向停在 `b√3 ≈ 194.9`。
+        float hMaxX = 0f, hMaxY = 0f;
+        foreach (var q in hyOutline)
+        {
+            if (Stroke.IsOutlineBreak(q)) continue;
+            hMaxX = MathF.Max(hMaxX, MathF.Abs(q.X - 1200f));
+            hMaxY = MathF.Max(hMaxY, MathF.Abs(q.Y - 500f));
+        }
+        Check("双曲线：**整条曲线收在渐近线框内**（|x| ≤ A、|y| ≤ B）（±0.5）",
+              hMaxX <= 320f + .5f && hMaxY <= 240f + .5f,
+              $"曲线最远 ({hMaxX:F1},{hMaxY:F1})，框 (±320,±240)");
+        Check("双曲线：横向**画到拖到的那个点为止**（最远 x = 170，照 InkClass）（±0.5）",
+              Near(hMaxX, 170f, .5f), $"{hMaxX:F1}（期望 170）");
+        Check("双曲线：另一条轴只到 b·sinh(t)（≈59.8，那个点在那儿）（±0.5）",
+              Near(hMaxY, 60f, .5f), $"{hMaxY:F1}（期望 ≈60）");
+
+        // ---- 正弦：起点 (300,1000)、T=480、A=100 ----
+        var sn = NewCurve(Tool.Sine, StrokeKind.Sine, 300f, 1000f);
+        sn.SetWaveBox(300f, 1000f, 780f, 900f, minAxis);
+        Check("正弦：起点 = 按下点、终点 = 起点＋(T, dy)（±0.5）",
+              Near(sn.Points[0].X, 300f, .5f) && Near(sn.Points[0].Y, 1000f, .5f)
+              && Near(sn.Points[1].X, 780f, .5f) && Near(sn.Points[1].Y, 900f, .5f),
+              $"起点 ({sn.Points[0].X:F1},{sn.Points[0].Y:F1})"
+              + $" 终点 ({sn.Points[1].X:F1},{sn.Points[1].Y:F1})");
+        Check("正弦：两个定义元素（起点 ＋ 终点，极值点是现推的）",
+              sn.Points.Count == 2, $"{sn.Points.Count} 个");
+        Check("正弦：T = 480、A = 100（±0.5）",
+              Near(sn.WavePeriodLocal(), 480f, .5f) && Near(sn.WaveAmplitudeLocal(), 100f, .5f),
+              $"T {sn.WavePeriodLocal():F1}  A {sn.WaveAmplitudeLocal():F1}");
+        var snQ = sn.WavePointAt(0.25f);
+        var snH = sn.WavePointAt(0.5f);
+        var snT = sn.WavePointAt(0.75f);
+        Check("正弦：u=0 在轴上、u=0.25 到峰、u=0.5 回轴、u=0.75 到谷（±0.5）",
+              Near(sn.WavePointAt(0f).Y, 1000f, .5f) && Near(snQ.Y, 900f, .5f)
+              && Near(snH.Y, 1000f, .5f) && Near(snT.Y, 1100f, .5f),
+              $"0:{sn.WavePointAt(0f).Y:F1} 1/4:{snQ.Y:F1} 1/2:{snH.Y:F1} 3/4:{snT.Y:F1}");
+        var snBox = sn.CurveBoxLocal();
+        Check("正弦：紧框 = 一个周期宽 × ±A（±0.5）",
+              Near(snBox.MinX, 300f, .5f) && Near(snBox.MaxX, 780f, .5f)
+              && Near(snBox.MinY, 900f, .5f) && Near(snBox.MaxY, 1100f, .5f),
+              $"框 ({snBox.MinX:F1},{snBox.MinY:F1})..({snBox.MaxX:F1},{snBox.MaxY:F1})");
+
+        // ---- 余弦：起点 (300,1400)（**峰顶**）、T=480、A=100 ----
+        var cs = NewCurve(Tool.Cosine, StrokeKind.Cosine, 300f, 1400f);
+        cs.SetWaveBox(300f, 1400f, 780f, 1600f, minAxis);   // 往下拖 200 → A = 100（= dy/2）
+        Check("余弦：起点是**峰顶**、终点在**谷**那一侧（±0.5）",
+              Near(cs.Points[0].Y, 1400f, .5f) && Near(cs.Points[1].Y, 1600f, .5f)
+              && Near(cs.WaveTroughLocal().X, 540f, .5f) && Near(cs.WaveTroughLocal().Y, 1600f, .5f),
+              $"起点 y {cs.Points[0].Y:F1}  终点 y {cs.Points[1].Y:F1}"
+              + $"  谷 ({cs.WaveTroughLocal().X:F1},{cs.WaveTroughLocal().Y:F1})");
+        Check("余弦：T = 480、A = 100（±0.5）",
+              Near(cs.WavePeriodLocal(), 480f, .5f) && Near(cs.WaveAmplitudeLocal(), 100f, .5f),
+              $"T {cs.WavePeriodLocal():F1}  A {cs.WaveAmplitudeLocal():F1}");
+        Check("余弦：u=0 在峰顶、u=0.25 到中线、u=0.5 到谷底（±0.5）",
+              Near(cs.WavePointAt(0f).Y, 1400f, .5f) && Near(cs.WavePointAt(0.25f).Y, 1500f, .5f)
+              && Near(cs.WavePointAt(0.5f).Y, 1600f, .5f),
+              $"0:{cs.WavePointAt(0f).Y:F1} 1/4:{cs.WavePointAt(0.25f).Y:F1} 1/2:{cs.WavePointAt(0.5f).Y:F1}");
+        var csBox = cs.CurveBoxLocal();
+        Check("余弦：紧框 = 一个周期宽 × (起点 → 谷底 2A)（±0.5）",
+              Near(csBox.MinX, 300f, .5f) && Near(csBox.MaxX, 780f, .5f)
+              && Near(csBox.MinY, 1400f, .5f) && Near(csBox.MaxY, 1600f, .5f),
+              $"框 ({csBox.MinX:F1},{csBox.MinY:F1})..({csBox.MaxX:F1},{csBox.MaxY:F1})");
+
+        // ---- 圆柱 / 圆锥（2026-09-20 第五批：照 InkClass 的 case 6/7）----
+        // 两个控制点就是**外接矩形**（拖到哪就是哪），椭圆由它派生：
+        // `rx = 宽/2 = 200`、`ry = rx / 2.646 ≈ 75.59`。
+        // 圆心从矩形上下边**往里缩一个 ry**，于是椭圆正好与矩形相切（范围好算、紧框不漏）。
+        var cy = NewCurve(Tool.Cylinder, StrokeKind.Cylinder, 200f, 500f);
+        cy.SetSolidBox(200f, 500f, 600f, 900f);
+        var (ccx, cTop, cBot, crx, cry) = cy.SolidEllipsesLocal();
+        Check("圆柱：外接矩形 = 拖出来的那个（200,500)..(600,900)（±0.5）",
+              Near(cy.SolidRectLocal().X0, 200f, .5f) && Near(cy.SolidRectLocal().Y1, 900f, .5f),
+              $"({cy.SolidRectLocal().X0:F0},{cy.SolidRectLocal().Y0:F0})"
+              + $"..({cy.SolidRectLocal().X1:F0},{cy.SolidRectLocal().Y1:F0})");
+        Check("圆柱：rx = 200、ry = rx/2.646 ≈ 75.6（扁率照他的常数）（±0.5）",
+              Near(crx, 200f, .5f) && Near(cry, 200f / 2.646f, .5f),
+              $"rx {crx:F1}  ry {cry:F1}（期望 200 / {200f / 2.646f:F1}）");
+        Check("圆柱：上下两个圆心从矩形边**往里缩一个 ry**（相切，不冒出去）（±0.5）",
+              Near(ccx, 400f, .5f) && Near(cTop, 500f + cry, .5f) && Near(cBot, 900f - cry, .5f),
+              $"cx {ccx:F1}  上圆心 y {cTop:F1}（期望 {500f + cry:F1}）"
+              + $"  下圆心 y {cBot:F1}（期望 {900f - cry:F1}）");
+        Check("圆柱：紧框 = 外接矩形本身（控制点外接就够，椭圆不会冒出去）（±0.5）",
+              Near(cy.Bounds.MinX, 200f, .5f) && Near(cy.Bounds.MaxX, 600f, .5f)
+              && Near(cy.Bounds.MinY, 500f, .5f) && Near(cy.Bounds.MaxY, 900f, .5f),
+              $"框 ({cy.Bounds.MinX:F0},{cy.Bounds.MinY:F0})..({cy.Bounds.MaxX:F0},{cy.Bounds.MaxY:F0})");
+        var cyOutline = cy.ShapeOutline();
+        int cyBreaks = 0;
+        foreach (var q in cyOutline) if (Stroke.IsOutlineBreak(q)) cyBreaks++;
+        Check("圆柱：轮廓里恰好一个**抬笔标记**（底面一圈 / 顶面一圈 不连线）",
+              cyBreaks == 1, $"{cyBreaks} 处抬笔");
+
+        var co = NewCurve(Tool.Cone, StrokeKind.Cone, 200f, 500f);
+        co.SetSolidBox(200f, 500f, 600f, 900f);
+        Check("圆锥：顶点 = 外接矩形的**上边中点** (400, 500)（照 InkClass）（±0.5）",
+              Near(co.ConeApexLocal().X, 400f, .5f) && Near(co.ConeApexLocal().Y, 500f, .5f),
+              $"({co.ConeApexLocal().X:F0},{co.ConeApexLocal().Y:F0}) 期望 (400,500)");
+
+        // ---- 长方体 / 四面体（2026-09-20 第五批：照 InkClass 的 case 9/26，**两笔**）----
+        // 长方体：第 1 笔正面矩形 (200,500)..(600,900)，第 2 笔拖到 y=650 → 深度 d = |500 − 650| = 150。
+        var cu = NewCurve(Tool.Cuboid, StrokeKind.Cuboid, 200f, 500f);
+        cu.SetCuboidFront(200f, 500f, 600f, 900f);
+        cu.SetCuboidDepth(500f, 650f);
+        Check("长方体：深度 = |正面上边 − 指针 y| = 150（照他的口径）（±0.5）",
+              Near(cu.CuboidDepthLocal(), 150f, .5f), $"{cu.CuboidDepthLocal():F1}（期望 150）");
+        Check("长方体：第 3 个控制点 = **背面右下角** (600+150, 900−150) = (750, 750)（±0.5）",
+              Near(cu.CurvePointLocal(2).X, 750f, .5f) && Near(cu.CurvePointLocal(2).Y, 750f, .5f),
+              $"({cu.CurvePointLocal(2).X:F0},{cu.CurvePointLocal(2).Y:F0}) 期望 (750,750)");
+        Check("长方体：三个控制点（正面两角 ＋ 背面右下角）—— 多笔状态机要它凑齐才算画完",
+              cu.Points.Count == 3 && Stroke.MinCurvePoints(StrokeKind.Cuboid) == 3,
+              $"控制点 {cu.Points.Count} 个、MinCurvePoints = {Stroke.MinCurvePoints(StrokeKind.Cuboid)}");
+        Check("长方体：紧框 = 正面 ∪ 背面（控制点外接正好就是画出来的范围）（±0.5）",
+              Near(cu.Bounds.MinX, 200f, .5f) && Near(cu.Bounds.MaxX, 750f, .5f)
+              && Near(cu.Bounds.MinY, 350f, .5f) && Near(cu.Bounds.MaxY, 900f, .5f),
+              $"框 ({cu.Bounds.MinX:F0},{cu.Bounds.MinY:F0})..({cu.Bounds.MaxX:F0},{cu.Bounds.MaxY:F0})"
+              + " 期望 (200,350)..(750,900)");
+
+        // 四面体：第 1 笔外接矩形 (200,500)..(600,900) → 底面三角形（底边在下、顶点居中在上），
+        // 第 2 笔拖到 (300, 200) = 顶点。
+        var te = NewCurve(Tool.Tetrahedron, StrokeKind.Tetrahedron, 200f, 500f);
+        te.SetTetraBase(200f, 500f, 600f, 900f);
+        te.SetTetraApex(300f, 200f);
+        Check("四面体：底面三角形 = 底左(200,900) / 底右(600,900) / 底顶(400,500)（照他）（±0.5）",
+              Near(te.CurvePointLocal(0).X, 200f, .5f) && Near(te.CurvePointLocal(0).Y, 900f, .5f)
+              && Near(te.CurvePointLocal(1).X, 600f, .5f) && Near(te.CurvePointLocal(1).Y, 900f, .5f)
+              && Near(te.CurvePointLocal(2).X, 400f, .5f) && Near(te.CurvePointLocal(2).Y, 500f, .5f),
+              $"({te.CurvePointLocal(0).X:F0},{te.CurvePointLocal(0).Y:F0}) / "
+              + $"({te.CurvePointLocal(1).X:F0},{te.CurvePointLocal(1).Y:F0}) / "
+              + $"({te.CurvePointLocal(2).X:F0},{te.CurvePointLocal(2).Y:F0})");
+        Check("四面体：顶点 = 第 2 笔拖到的地方 (300, 200)（±0.5）",
+              Near(te.TetraApexLocal().X, 300f, .5f) && Near(te.TetraApexLocal().Y, 200f, .5f),
+              $"({te.TetraApexLocal().X:F0},{te.TetraApexLocal().Y:F0}) 期望 (300,200)");
+        Check("四面体：四个控制点 ＋ 轮廓 = 六条棱（各段之间抬笔，不连出假线）",
+              te.Points.Count == 4 && Stroke.MinCurvePoints(StrokeKind.Tetrahedron) == 4
+              && te.ShapeOutline().Count == 6 * 2 + 5,
+              $"控制点 {te.Points.Count} 个；轮廓 {te.ShapeOutline().Count} 点"
+              + $"（6 段 × 2 点 ＋ 5 个抬笔 = 17）");
+
+        // ================= ③ 手柄：精简口径 =================
+        Span<ShapeHandle> hs = stackalloc ShapeHandle[5];
+        int nPb = SelectionHandles.ShapeHandlesOf(vb, hs);
+        Check("手柄：抛物线**1 个**（曲线上的那个点；顶点靠拖整条平移）",
+              nPb == 1 && hs[0] == ShapeHandle.Rim,
+              $"{nPb} 个：{(nPb > 0 ? hs[0].ToString() : "无")}");
+        int nHy = SelectionHandles.ShapeHandlesOf(hy, hs);
+        Check("手柄：双曲线**2 个**（曲线上的那个点 ＋ 渐近线角点；中心靠拖整条平移）",
+              nHy == 2 && hs[0] == ShapeHandle.Rim && hs[1] == ShapeHandle.AxisTop,
+              $"{nHy} 个：{hs[0]} / {hs[1]}");
+        Check("手柄：正弦 / 余弦各**1 个**（只剩谷点；峰点撤掉了，见下条）",
+              SelectionHandles.ShapeHandlesOf(sn, hs) == 1 && hs[0] == ShapeHandle.AxisTop
+              && SelectionHandles.ShapeHandlesOf(cs, hs) == 1 && hs[0] == ShapeHandle.AxisTop,
+              $"正弦 {SelectionHandles.ShapeHandlesOf(sn, hs)} 个、"
+              + $"余弦 {SelectionHandles.ShapeHandlesOf(cs, hs)} 个，第一格 {hs[0]}");
+        Check("手柄：四种曲线**都不给旋转柄**（函数图象转歪了就不是它了）",
+              !SelectionHandles.RotateHandleVisible(vb) && !SelectionHandles.RotateHandleVisible(hy)
+              && !SelectionHandles.RotateHandleVisible(sn) && !SelectionHandles.RotateHandleVisible(cs),
+              "抛物线 / 双曲线 / 正弦 / 余弦 都无旋转柄");
+        Check("手柄：位置 = 经过点 / 曲线上的点 / 渐近线角点 / 谷（都落在该在的地方）",
+              Near(SelectionHandles.ShapeHandleLocal(vb, ShapeHandle.Rim).X, 700f, .5f)
+              && Near(SelectionHandles.ShapeHandleLocal(vb, ShapeHandle.Rim).Y, 250f, .5f)
+              // 双曲线的 Rim = **曲线上的那个点**（第三个定义元素本身）= (1370,560)。
+              && Near(SelectionHandles.ShapeHandleLocal(hy, ShapeHandle.Rim).X, 1370f, .5f)
+              && Near(SelectionHandles.ShapeHandleLocal(hy, ShapeHandle.Rim).Y, 560f, .5f)
+              // AxisTop = **渐近线框的角点** = 中心 ＋ (A, B) = (1200,500) + (320,240) = (1520,740)。
+              && Near(SelectionHandles.ShapeHandleLocal(hy, ShapeHandle.AxisTop).X, 1520f, .5f)
+              && Near(SelectionHandles.ShapeHandleLocal(hy, ShapeHandle.AxisTop).Y, 740f, .5f)
+              && Near(SelectionHandles.ShapeHandleLocal(sn, ShapeHandle.AxisTop).X, 660f, .5f)
+              && Near(SelectionHandles.ShapeHandleLocal(sn, ShapeHandle.AxisTop).Y, 1100f, .5f),
+              "抛物线的经过点 (700,250)、双曲线的曲线点 (1370,560) / 渐近线角点 (1520,740)、"
+              + "正弦的谷点 (660,1100)");
+
+        // ================= ④ 拖手柄：每个手柄只改一个量 =================
+        // 注意 `ClearHistory` 要放在 **AddStroke 之后**：加对象本身也是一步撤销，
+        // 清早了就会把"一次拖手柄 = 一步"数成两步。
+        Doc.Clear();
+        Doc.AddStroke(hy);
+        Doc.ClearHistory();
+        Doc.SelectOnly(new[] { hy });
+        var hyVertex = SelectionHandles.ShapeHandleCanvasPosition(hy, ShapeHandle.Rim);
+        bool grabbed = SelectionGestureForTest(hyVertex.X, hyVertex.Y);
+        SettleFrames(40);
+        // 把**曲线上的那个点**从 (1370,560) 拖到 (1285,530)：相对中心 `dx = 85、dy = 30`
+        // → 曲线的 `a = √(85² − 30²·(4/3)²) = √(7225 − 1600) = 75`、`b = 56.25`。
+        UpdateSelectionGestureForTest(1285f, 530f);
+        SettleFrames(40);
+        EndSelectionGestureForTest();
+        SettleFrames(60);
+        Check("双曲线：按下**曲线上的那个点**手柄被选择手势接住", grabbed, $"手柄 ({hyVertex.X:F0},{hyVertex.Y:F0})");
+        Check("双曲线：拖那个点**只改曲线的半轴**（a 150 → 75、b 112.5 → 56.25）（±0.5）",
+              Near(hy.HyperbolaCurveALocal(), 75f, .5f) && Near(hy.HyperbolaCurveBLocal(), 56.25f, .5f),
+              $"曲线 a {hy.HyperbolaCurveALocal():F1}  b {hy.HyperbolaCurveBLocal():F1}");
+        Check("双曲线：拖那个点时**渐近线框一动都不动**（A 320、B 240、斜率还是 0.75）（±0.5）",
+              Near(hy.HyperbolaALocal(), 320f, .5f) && Near(hy.HyperbolaBLocal(), 240f, .5f),
+              $"A {hy.HyperbolaALocal():F1}  B {hy.HyperbolaBLocal():F1}"
+              + $"（斜率 {hy.HyperbolaBLocal() / hy.HyperbolaALocal():F3}）");
+        Check("双曲线：一次拖手柄 = 一步撤销", Doc.UndoDepth == 1, $"撤销栈 {Doc.UndoDepth} 步");
+        Doc.Undo();
+        Check("双曲线：撤销把曲线的 a / b 放回 150 / 112.5",
+              Near(hy.HyperbolaCurveALocal(), 150f, .5f) && Near(hy.HyperbolaCurveBLocal(), 112.5f, .5f),
+              $"曲线 a {hy.HyperbolaCurveALocal():F1}  b {hy.HyperbolaCurveBLocal():F1}");
+
+        // 拖**渐近线角点**：框跟着走（A 不动、B 变小 → 斜率变小），而"曲线经过的那个点"没动，
+        // 于是曲线**重新经过它**、大小跟着新斜率变 —— 这是几何本身（曲线贴着渐近线），
+        // 不是"顺手改了别的量"。要紧的是：**不变量还在**（曲线仍然正好过那个点）。
+        Doc.SelectOnly(new[] { hy });
+        var hyCorner = SelectionHandles.ShapeHandleCanvasPosition(hy, ShapeHandle.AxisTop);
+        SelectionGestureForTest(hyCorner.X, hyCorner.Y);
+        SettleFrames(40);
+        UpdateSelectionGestureForTest(hyCorner.X, hyCorner.Y - 20f);   // 往上拖 20 → B 240 → 220
+        SettleFrames(40);
+        EndSelectionGestureForTest();
+        SettleFrames(60);
+        Check("双曲线：拖渐近线角点 → 框的 B 变了（240 → 220）、A 不动（320）（±0.5）",
+              Near(hy.HyperbolaALocal(), 320f, .5f) && Near(hy.HyperbolaBLocal(), 220f, .5f),
+              $"A {hy.HyperbolaALocal():F1}  B {hy.HyperbolaBLocal():F1}");
+        float hyFit = 170f * 170f / (hy.HyperbolaCurveALocal() * hy.HyperbolaCurveALocal())
+                    - 60f * 60f / (hy.HyperbolaCurveBLocal() * hy.HyperbolaCurveBLocal());
+        Check("双曲线：框变了之后，曲线**还是正好经过那个点**（x²/a² − y²/b² = 1）（±0.01）",
+              Near(hyFit, 1f, .01f),
+              $"代入得 {hyFit:F4}（期望 1）；曲线 a {hy.HyperbolaCurveALocal():F1}、"
+              + $"b {hy.HyperbolaCurveBLocal():F1}");
+
+        // 再拖一把，把斜率**扳过对角线**（B 220 → 100，斜率 0.6875 → 0.3125，
+        // 小于 `|dy|/|dx| = 60/170 ≈ 0.353`）：那个点从此落在渐近线**更竖**的一侧
+        // → 朝向**现推**成上下双曲线（见 Stroke.EffectiveAxis）。
+        // 盯的是"**不崩、也不缩成一个点**"：朝向要是读字段，这里就卡在旧朝向上、
+        // 半轴解出负数、曲线当场瘪掉——这正是把朝向改成"现推"要防的那件事。
+        Doc.SelectOnly(new[] { hy });
+        var hyCorner2 = SelectionHandles.ShapeHandleCanvasPosition(hy, ShapeHandle.AxisTop);
+        SelectionGestureForTest(hyCorner2.X, hyCorner2.Y);
+        SettleFrames(40);
+        UpdateSelectionGestureForTest(hyCorner2.X, 600f);              // 局部 y = 600 → B = 100
+        SettleFrames(40);
+        EndSelectionGestureForTest();
+        SettleFrames(60);
+        Check("双曲线：把斜率扳过对角线 → 朝向**跟着那个点翻**（左右 → 上下），曲线不缩成一点",
+              hy.EffectiveAxis == CurveAxis.TransverseY && hy.HyperbolaRealLocal() > 20f,
+              $"朝向 {hy.EffectiveAxis}（期望 TransverseY），实半轴 {hy.HyperbolaRealLocal():F1}（要 > 20）");
+
+        Doc.Clear();
+        Doc.AddStroke(sn);
+        Doc.ClearHistory();
+        Doc.SelectOnly(new[] { sn });
+        var snTrough = SelectionHandles.ShapeHandleCanvasPosition(sn, ShapeHandle.AxisTop);
+        SelectionGestureForTest(snTrough.X, snTrough.Y);
+        SettleFrames(40);
+        UpdateSelectionGestureForTest(snTrough.X + 120f, snTrough.Y);
+        SettleFrames(40);
+        EndSelectionGestureForTest();
+        SettleFrames(60);
+        // 谷点手柄在 u = 3/4 处（起手在 x = 300 + 480×3/4 = 660）：
+        // 横向拖 +120 → 周期 = (660+120−300)/0.75 = 640；纵向没动 → A 不变。
+        Check("正弦：拖**谷点**：横向改周期（T 480 → 640）、纵向不动则振幅不变（A 100）（±0.5）",
+              Near(sn.WavePeriodLocal(), 640f, .5f) && Near(sn.WaveAmplitudeLocal(), 100f, .5f),
+              $"T {sn.WavePeriodLocal():F1}  A {sn.WaveAmplitudeLocal():F1}");
+        Check("正弦：谷点**跟着手柄走**（现在在 3T/4 = 780 处，y = 1100）（±0.5）",
+              Near(sn.WaveTroughLocal().X, 780f, .5f) && Near(sn.WaveTroughLocal().Y, 1100f, .5f),
+              $"谷 ({sn.WaveTroughLocal().X:F1},{sn.WaveTroughLocal().Y:F1})");
+
+        Doc.Clear();
+        Doc.AddStroke(cs);
+        Doc.ClearHistory();
+        Doc.SelectOnly(new[] { cs });
+        var csAmp = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.AxisTop);
+        SelectionGestureForTest(csAmp.X, csAmp.Y);
+        SettleFrames(40);
+        UpdateSelectionGestureForTest(csAmp.X, csAmp.Y + 100f);      // 往下拖 = 振幅变大
+        SettleFrames(40);
+        EndSelectionGestureForTest();
+        SettleFrames(60);
+        Check("余弦：拖极值点**只改振幅**（A 150、T 逐位不变 480）",
+              Near(cs.WaveAmplitudeLocal(), 150f, .5f) && cs.WavePeriodLocal() == 480f,
+              $"A {cs.WaveAmplitudeLocal():F1}  T {cs.WavePeriodLocal():F1}");
+
+        // ================= ⑤ 朝向：**选出来的**（不再靠拖动角度推） =================
+        //
+        // 这是 2026-09-20 这一版的核心改动：方向从"拖出来的"变成"选出来的"，
+        // 于是"方向"和"大小"两个参数彻底分开、各管各的——用户的原话是
+        // "开口的 4 种还要同时兼顾大小，这两个参数很不好调整"。
+        Doc.Clear();
+        var pb2 = NewCurve(Tool.Parabola, StrokeKind.Parabola, 500f, 500f);
+        pb2.CurveAxis = CurveAxis.OpenUp;                        // 选：开口向上
+        pb2.SetParabolaVertex(500f, 500f);
+        pb2.SetParabolaThroughPoint(500f + 240f, 500f - 120f);   // s = 120、t = 240 → p = 240
+        Doc.AddStroke(pb2);
+        Doc.ClearHistory();
+        Doc.SelectOnly(new[] { pb2 });
+        Check("朝向：选「开口向上」→ 方向 = (0,−1)；p 由经过点反解 = 240（±1）",
+              NearDir(pb2.ParabolaDirLocal(), new Vector2(0f, -1f)) && Near(pb2.ParabolaPLocal(), 240f, 1f),
+              $"{pb2.ParabolaDirLocal()}，p {pb2.ParabolaPLocal():F0}");
+
+        // 四个朝向各来一次：方向对得上，而且 **p 一点不变**（换朝向只转方向、不改形状——
+        // 实现上是把"经过点"的 (s, t) 分量跟着新基重组，见 Stroke.SetParabolaAxis）。
+        var axisCases = new (CurveAxis axis, Vector2 dir)[]
+        {
+            (CurveAxis.OpenUp, new Vector2(0f, -1f)),
+            (CurveAxis.OpenDown, new Vector2(0f, 1f)),
+            (CurveAxis.OpenRight, new Vector2(1f, 0f)),
+            (CurveAxis.OpenLeft, new Vector2(-1f, 0f)),
+        };
+        bool axisOk = true, pKept = true;
+        foreach (var (ax, dir) in axisCases)
+        {
+            pb2.SetParabolaAxis(ax);
+            if (!NearDir(pb2.ParabolaDirLocal(), dir)) axisOk = false;
+            if (!Near(pb2.ParabolaPLocal(), 240f, .5f)) pKept = false;
+        }
+        Check("朝向：四个方向切一圈 —— 方向都对得上，**p 始终是 240**（换朝向曲线不瘪）",
+              axisOk && pKept, $"最后 {pb2.ParabolaDirLocal()}，p {pb2.ParabolaPLocal():F1}");
+        // 坏值（比如读到别的族的值）要被归一成"开口向上"，不能带着它去算几何。
+        // **在独立对象上试**：直接给 pb2 写个坏字段会把它的几何也带歪
+        //（字段说"开口向上"、点位却是按旧朝向摆的），后面几条断言全跟着出错。
+        var badAxis = NewCurve(Tool.Parabola, StrokeKind.Parabola, 2000f, 700f);
+        badAxis.CurveAxis = CurveAxis.TransverseY;
+        badAxis.SetParabolaVertex(2000f, 700f);
+        Check("朝向：给到别的族的值 → 归一成**开口向上**（坏字节不许带进几何）",
+              badAxis.EffectiveAxis == CurveAxis.OpenUp, $"{badAxis.EffectiveAxis}");
+        pb2.SetParabolaAxis(CurveAxis.OpenUp);                   // 转回向上，下面接着用
+        Check("朝向：转回向上之后仍然 p = 240（±0.5）",
+              NearDir(pb2.ParabolaDirLocal(), new Vector2(0f, -1f)) && Near(pb2.ParabolaPLocal(), 240f, .5f),
+              $"{pb2.ParabolaDirLocal()}，p {pb2.ParabolaPLocal():F1}");
+
+        // 真机拖**曲线上的那个点**：曲线跟着经过它、p 由新位置反解，**朝向不动**。
+        var pbPoint = SelectionHandles.ShapeHandleCanvasPosition(pb2, ShapeHandle.Rim);
+        Check("手柄：抛物线只剩**一个**（曲线上的那个点）",
+              SelectionHandles.ShapeHandlesOf(pb2, stackalloc ShapeHandle[5]) == 1,
+              $"{SelectionHandles.ShapeHandlesOf(pb2, stackalloc ShapeHandle[5])} 个");
+        SelectionGestureForTest(pbPoint.X, pbPoint.Y);
+        SettleFrames(40);
+        UpdateSelectionGestureForTest(pbPoint.X + 60f, pbPoint.Y - 120f);
+        SettleFrames(40);
+        EndSelectionGestureForTest();
+        SettleFrames(60);
+        // 新位置相对顶点是 (300, −240) → s = 240、t = 300 → p = 300²/480 = 187.5
+        Check("手柄：拖它 → 曲线**跟着经过新位置**（p = t²/2s = 187.5）（±2）",
+              Near(pb2.ParabolaPLocal(), 300f * 300f / 480f, 2f),
+              $"p {pb2.ParabolaPLocal():F1}（期望 {300f * 300f / 480f:F1}）");
+        Check("手柄：拖它**不动朝向**（朝向是选出来的，手柄碰不到它）",
+              NearDir(pb2.ParabolaDirLocal(), new Vector2(0f, -1f)), $"{pb2.ParabolaDirLocal()}");
+        Check("手柄：这一步是**一步撤销**", Doc.UndoDepth == 1, $"撤销栈 {Doc.UndoDepth} 步");
+        Doc.Undo();
+        SettleFrames(120);
+
+        // 换朝向这件事，2026-09-20 深夜**从操作条挪到了图形面板**（用户："选中框的抛物线按钮
+        // 功能取消哦，我不打算从这个转抛物线开口"）：现在条上回到九格，换朝向走的是
+        // `Engine.CycleParabolaAxis`（画之前定，见 --shapebandtest 里那两条）。
+        Check("操作条：回到**九格**（「开口方向」那一格撤掉了）",
+              SelectionHandles.BarButtonCount == 9,
+              $"格子数 {SelectionHandles.BarButtonCount}");
+        // 挪走的只是"入口"，能力本身没动：`Stroke.SetParabolaAxis` 仍然**保形状地转方向**
+        //（这条前面④的四个朝向循环已经在验了，这里只补一句"入口换了、算式没换"）。
+        pb2.SetParabolaAxis(CurveAxis.OpenRight);
+        Check("朝向：入口换了之后，换朝向仍然**保形状**（p 不变）（±0.5）",
+              pb2.EffectiveAxis == CurveAxis.OpenRight && Near(pb2.ParabolaPLocal(), 240f, .5f),
+              $"{pb2.EffectiveAxis}，p {pb2.ParabolaPLocal():F1}（期望 240）");
+        pb2.SetParabolaAxis(CurveAxis.OpenUp);
+        SettleFrames(60);
+
+        // 实轴沿 y 的双曲线：轮廓同样**不能有横穿两支之间的幽灵线段**。
+        // 两步走来造：第一步拖出**渐近线框**（拖到哪就是哪：A = 300、B = 600 → 斜率 m = 2）；
+        // 第二步拖一个"**比渐近线更竖**"的点 (200, 500)（m·|dx| = 400 < 500）
+        // → 焦点落在 y 轴，也就是**上下双曲线**。
+        var hy2 = NewCurve(Tool.Hyperbola, StrokeKind.Hyperbola, 1600f, 500f);
+        hy2.SetHyperbolaFromAsymptote(1600f, 500f, 1600f + 300f, 500f + 600f, minAxis);
+        hy2.SetHyperbolaThroughPoint(1600f + 200f, 500f + 500f);
+        Check("双曲线：第二步的点更竖 → **焦点在 y 轴**（上下双曲线），半轴 300 / 150（±0.5）",
+              hy2.CurveAxis == CurveAxis.TransverseY
+              && Near(hy2.HyperbolaRealLocal(), 300f, .5f) && Near(hy2.HyperbolaImagLocal(), 150f, .5f),
+              $"{hy2.CurveAxis}，实半轴 {hy2.HyperbolaRealLocal():F1}、虚半轴 {hy2.HyperbolaImagLocal():F1}");
+        // 这一步的**核心**：曲线必须**正好经过那个点**（不是"投影到实轴"那种近似）。
+        // 实轴沿 y 时标准式是 `y²/b² − x²/a² = 1`，把 (200, 500) 代进去应当等于 1。
+        // 式子里要用**曲线自己的** x / y 方向系数（`HyperbolaCurveALocal/BLocal`），
+        // **不是**渐近线框的 `HyperbolaALocal/BLocal` —— 2026-09-20 拆开之后这两个别拿错。
+        float c2A = hy2.HyperbolaCurveALocal(), c2B = hy2.HyperbolaCurveBLocal();
+        float hy2Fit = 500f * 500f / (c2B * c2B) - 200f * 200f / (c2A * c2A);
+        Check("双曲线：曲线**正好经过那个点**（y²/b² − x²/a² = 1）（±0.01）",
+              Near(hy2Fit, 1f, .01f), $"代入得 {hy2Fit:F4}（期望 1）");
+        var hy2Outline = hy2.ShapeOutline();
+        float nearest2 = float.MaxValue;
+        for (int i = 1; i < hy2Outline.Count; i++)
+        {
+            if (Stroke.IsOutlineBreak(hy2Outline[i - 1]) || Stroke.IsOutlineBreak(hy2Outline[i])) continue;
+            nearest2 = MathF.Min(nearest2, DistPointSeg(new Vector2(1600f, 500f),
+                                                        hy2Outline[i - 1], hy2Outline[i]));
+        }
+        Check("双曲线（实轴沿 y）：轮廓也没有幽灵线段（中心到任一段 ≥ 0.9a）",
+              nearest2 >= hy2.HyperbolaRealLocal() * 0.9f,
+              $"{hy2.CurveAxis}，最近距离 {nearest2:F1}（实半轴 {hy2.HyperbolaRealLocal():F1}）");
+        var hy2Box = hy2.CurveBoxLocal();
+        Check("双曲线（实轴沿 y）：紧框 = ±A × ±B（就是渐近线框）（±0.5）",
+              Near(hy2Box.MinX, 1600f - 300f, .5f) && Near(hy2Box.MaxX, 1600f + 300f, .5f)
+              && Near(hy2Box.MinY, 500f - 600f, .5f) && Near(hy2Box.MaxY, 500f + 600f, .5f),
+              $"框 ({hy2Box.MinX:F1},{hy2Box.MinY:F1})..({hy2Box.MaxX:F1},{hy2Box.MaxY:F1})"
+              + " 期望 (1300,-100)..(1900,1100)");
+        var (asFrom2, asTo2) = hy2.HyperbolaAsymptoteLocal(1);
+        Check("双曲线：**渐近线的端点就是紧框的角**（两个朝向都成立）（默认 ShowAsymptotes = 画）",
+              hy2.ShowAsymptotes
+              && Near(asTo2.X, 1600f + 300f, .5f) && Near(asTo2.Y, 500f + 600f, .5f)
+              && Near(asTo2.X, hy2Box.MaxX, .5f) && Near(asTo2.Y, hy2Box.MaxY, .5f),
+              $"({asFrom2.X:F1},{asFrom2.Y:F1})..({asTo2.X:F1},{asTo2.Y:F1})"
+              + $" vs 框角 ({hy2Box.MaxX:F1},{hy2Box.MaxY:F1})");
+
+        // ================= ⑥ 存档：往返 ＋ 真 v11 老文件 =================
+        Doc.Clear();
+        Doc.ClearHistory();
+        var saveMe = NewCurve(Tool.Parabola, StrokeKind.Parabola, 700f, 700f);
+        saveMe.CurveAxis = CurveAxis.OpenLeft;                             // 选：开口向左
+        saveMe.SetParabolaVertex(700f, 700f);
+        saveMe.SetParabolaThroughPoint(560f, 420f);                        // s = 140、t = 280 → p = 280
+        var saveHy = NewCurve(Tool.Hyperbola, StrokeKind.Hyperbola, 1400f, 700f);
+        // 两步：第一步拖出**渐近线框**（A = 160、B = 320 → 斜率 2），
+        // 第二步拖一个更竖的点 → 焦点在 y 轴（上下双曲线）。
+        saveHy.SetHyperbolaFromAsymptote(1400f, 700f, 1560f, 1020f, minAxis);
+        saveHy.SetHyperbolaThroughPoint(1400f + 100f, 700f + 250f);
+        var saveSin = NewCurve(Tool.Sine, StrokeKind.Sine, 300f, 700f);
+        saveSin.SetWaveBox(300f, 700f, 780f, 600f, minAxis);
+        Doc.AddStroke(saveMe);
+        Doc.AddStroke(saveHy);
+        Doc.AddStroke(saveSin);
+
+        var blob = InkSerializer.Save(Doc);
+        var back = new InkDocument();
+        InkSerializer.LoadInto(back, blob);
+        bool roundTrip = back.Strokes.Count == 3
+                         && back.Strokes[0].Kind == StrokeKind.Parabola
+                         && Near(back.Strokes[0].ParabolaDirLocal().X, -1f, .01f)
+                         && back.Strokes[1].Kind == StrokeKind.Hyperbola
+                         && back.Strokes[1].CurveAxis == CurveAxis.TransverseY
+                         && back.Strokes[1].ShowAsymptotes
+                         && back.Strokes[2].Kind == StrokeKind.Sine;
+        Check("存档：三种曲线 ＋ 朝向 ＋ 渐近线开关都回来了",
+              roundTrip,
+              back.Strokes.Count == 3
+                  ? $"{back.Strokes[0].Kind}/方向 {back.Strokes[0].ParabolaDirLocal()}、"
+                    + $"{back.Strokes[1].Kind}/{back.Strokes[1].CurveAxis}/渐近线 {back.Strokes[1].ShowAsymptotes}、"
+                    + $"{back.Strokes[2].Kind}"
+                  : $"只读回 {back.Strokes.Count} 条");
+
+        // 真·v11 老文件：**一条对象**的那条笔画末尾少 1 个字节（就是 v12 的"渐近线"那一位）。
+        // 注意 `MakeLegacyFile` 是"从整个文件末尾砍 N 个字节"，所以它只对**单条笔画**成立
+        // （多条时只有最后一条被砍到，中间几条会整体错位）——这是那个工具的用法约定。
+        var legacyDoc = new InkDocument();
+        var legacyHy = NewCurve(Tool.Hyperbola, StrokeKind.Hyperbola, 1400f, 700f);
+        // **故意按 v13 及以前的语义造**：那时双曲线只有**两个**控制点，第二个点同时是
+        // "渐近线框"和"曲线半轴"（渐近线画到 ±2a、±2b）——这正是老文件里的样子。
+        // 读端那条迁移（`version <= 13`）必须能从它恢复出**形状不变**的新表示。
+        // 这里塞的是老算法下的"角点"：(1400,700) → (1475,850)，于是半轴 a = 75、b = 150、斜率 2。
+        legacyHy.SetHyperbolaFromAsymptote(1400f, 700f, 1400f + 75f, 700f + 150f, minAxis);
+        legacyHy.CurveAxis = CurveAxis.TransverseY;                              // 老文件里朝向是存的
+        // 迁移后应当是：渐近线框 A = 150、B = 300，曲线经过 `u = 1` 那个点 → **实半轴还是 150**。
+        legacyDoc.AddStroke(legacyHy);
+        var old = new InkDocument();
+        InkSerializer.LoadInto(old, MakeLegacyFile(legacyDoc, 11, 1));
+        Check("存档：真 v11 老文件读得进来（1 条对象）", old.Strokes.Count == 1, $"{old.Strokes.Count} 条");
+        if (old.Strokes.Count == 1)
+        {
+            Check("存档：老文件里朝向照旧（实轴沿 y）、渐近线退到默认（画）",
+                  old.Strokes[0].CurveAxis == CurveAxis.TransverseY
+                  && old.Strokes[0].ShowAsymptotes
+                  && Near(old.Strokes[0].HyperbolaRealLocal(), 150f, .5f),
+                  $"{old.Strokes[0].CurveAxis}，渐近线 {old.Strokes[0].ShowAsymptotes}"
+                  + $"，实半轴 {old.Strokes[0].HyperbolaRealLocal():F1}（期望 150）");
+        }
+
+        // 真·v12 老文件里的**抛物线**：这一条专盯 v13 那次"换含义"的迁移。
+        // v12 存的是"顶点 + **张口点**（落在对称轴上、离顶点 p/2）"，新读端必须把它换成
+        // "曲线上的一个点"，否则反解不出张口、曲线会缩到最小——而且**不报错**，
+        // 只是"一存一读就瘪了"。
+        //
+        // 注意这里是**故意**用一个"落在对称轴上"的点来模拟老文件：
+        // 新写法 `SetParabolaThroughPoint` 本来是要放曲线上的点，但老文件的第二位就是张口点，
+        // 只有这么造才是货真价实的 v12 语义（p = 2 × |顶点→张口点| = 280）。
+        var legacyPara = NewCurve(Tool.Parabola, StrokeKind.Parabola, 700f, 700f);
+        legacyPara.CurveAxis = CurveAxis.OpenLeft;             // 开口向左：方向 = (−1, 0)
+        legacyPara.SetParabolaVertex(700f, 700f);
+        legacyPara.SetParabolaThroughPoint(560f, 700f);        // 张口点 = 顶点 − (140, 0) → p = 280
+        var legacyParaDoc = new InkDocument();
+        legacyParaDoc.AddStroke(legacyPara);
+        var oldPara = new InkDocument();
+        // 砍 0 位：**v13 没往笔画后面加字节**，v12 的文件和它一样长（只差版本号）。
+        InkSerializer.LoadInto(oldPara, MakeLegacyFile(legacyParaDoc, 12, 0));
+        Check("存档：真 v12 老文件里的抛物线**读回来还是 p = 280**（迁移过去、形状不变）（±0.5）",
+              oldPara.Strokes.Count == 1 && Near(oldPara.Strokes[0].ParabolaPLocal(), 280f, .5f)
+              && oldPara.Strokes[0].CurveAxis == CurveAxis.OpenLeft,
+              oldPara.Strokes.Count == 1
+                  ? $"p {oldPara.Strokes[0].ParabolaPLocal():F1}（期望 280）、"
+                    + $"朝向 {oldPara.Strokes[0].CurveAxis}"
+                  : $"只读回 {oldPara.Strokes.Count} 条");
+        // 迁移之后那个点必须**真的落在曲线上**（不是随便挪一个）：
+        // `t ≠ 0` 才有信息定张口，而且代进参数方程应当能对上。
+        if (oldPara.Strokes.Count == 1)
+        {
+            var op = oldPara.Strokes[0];
+            var (odir, operp) = Stroke.ParabolaBasis(op.EffectiveAxis);
+            var od = op.CurvePointLocal(1) - op.CurvePointLocal(0);
+            float os = Vector2.Dot(od, odir), ot = Vector2.Dot(od, operp);
+            Check("存档：迁移后那个点在**曲线该在的地方**（s = p/2、t = p = 280）（±0.5）",
+                  Near(os, 140f, .5f) && Near(ot, 280f, .5f), $"s {os:F1}、t {ot:F1}（期望 140 / 280）");
+        }
+
+        // ============ ⑦ 删除 / 换方向之后不留残影（用户 2026-09-20 报的）============
+        //
+        // 用户原话："抛物线删除会留残影"。残影这一类 bug 的特点是**自检全绿也可能有**
+        // （字段、包围盒全对，只是屏幕上没擦干净），所以只能**数屏幕上的像素**：
+        // 画一条抛物线 → 量那块墨 → 删掉 → 再量同一块，必须一个像素都不剩。
+        // 两条路都要走一遍：
+        //   ① 直接画完就删；
+        //   ② **改过一次形状之后再删**——改几何走的是另一条动作路径
+        //      （见 SetStrokeGeometryAction：它必须顺手重算 Bounds，
+        //       否则 WorldBounds 会拿旧框去套新曲线、擦不干净）。
+        Console.WriteLine("  -- G. 删除之后不留残影（数屏幕像素）--");
+        {
+            var ink2 = new Color4(1f, 0f, 1f, 1f);
+            Host.Commands.SetColor(ink2);
+            // 量"这条曲线墨迹框再往外 60 像素"那一块里的品红像素。
+            // 多留 60 是因为操作条就挂在框下方——那条残影也在这一块里。
+            int InkAround(Stroke s)
+            {
+                var b = s.PaddedBounds;
+                return ScreenProbe.CountMagenta((int)b.MinX - 12, (int)b.MinY - 12,
+                                                (int)(b.MaxX - b.MinX) + 24,
+                                                (int)(b.MaxY - b.MinY) + 84);
+            }
+            // 抛物线是**一笔拖**（顶点 = 按下那个点，照 InkClass 的 `case 20/21`）：
+            // 按住顶点拖到"曲线经过的点"，松手就成。
+            // 经过点取右上方 `(gw, −gw)`：`s = t = gw` → `p = gw²/(2gw) = gw/2`。
+            void DragParabola(float gx, float gy, float gw)
+            {
+                SendMouse((int)gx, (int)gy, 0);                             SettleFrames(60);
+                SendMouse((int)gx, (int)gy, Native.MOUSEEVENTF_LEFTDOWN);   SettleFrames(60);
+                SendMouse((int)(gx + gw), (int)(gy - gw), 0);               SettleFrames(240);
+                SendMouse((int)(gx + gw), (int)(gy - gw), Native.MOUSEEVENTF_LEFTUP);
+                SettleFrames(240);
+            }
+
+            for (int round = 0; round < 2; round++)
+            {
+                bool flipFirst = round == 1;
+                Doc.Clear();
+                Doc.ClearHistory();
+                SetToolFromUi(Tool.Parabola);
+                float gx = _virtualX + 700f, gy = _virtualY + 1250f;
+                DragParabola(gx, gy, 400f);             // p = 200（曲线半宽 300、沿轴 225）
+                var g = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+                if (g == null) { Check("⑦ 抛物线没画出来（后面两项没法验）", false, "对象 0 个"); break; }
+
+                // ② 那一轮：先**拖一次手柄**（改 p）再撤销——走的是"改几何"那条动作路径。
+                if (flipFirst)
+                {
+                    Doc.SelectOnly(new[] { g });
+                    SettleFrames(60);
+                    var gp = SelectionHandles.ShapeHandleCanvasPosition(g, ShapeHandle.Rim);
+                    SelectionGestureForTest(gp.X, gp.Y);
+                    SettleFrames(40);
+                    UpdateSelectionGestureForTest(gp.X + 120f, gp.Y - 80f);   // 换个张口再撤销
+                    SettleFrames(40);
+                    EndSelectionGestureForTest();
+                    SettleFrames(120);
+                    Doc.Undo();                     // 撤销那一次改几何（再走一遍写回路径）
+                    Doc.SelectOnly(new[] { g });
+                    SettleFrames(120);
+                }
+
+                Doc.SelectOnly(new[] { g });
+                SettleFrames(120);
+                int before = InkAround(g);
+                RunBarActionForTest((int)SelBarButton.Delete);
+                SettleFrames(300);
+                int after = InkAround(g);
+                Check(flipFirst
+                        ? "⑦ 改过形状之后删除：那块地方一个墨点都不剩（残影）"
+                        : "⑦ 直接删除：那块地方一个墨点都不剩（残影）",
+                      before > 200 && after == 0,
+                      $"删前 {before} 像素 → 删后 {after}（方向 {(flipFirst ? "换过" : "没换")}）");
+            }
+        }
+
+        // ============ ⑧ 双曲线**两笔拖动式** ============
+        //
+        // 口径（用户 2026-09-20 定："他的双曲线是拖动两次吗？按照他的这个规则复刻"）：
+        // **一笔 = 按下-拖-松手，松手推进下一笔**——照 InkClass 的
+        // `drawMultiStepShapeCurrentStep` ＋ MouseUp 推进（`MW_ShapeDrawing.cs:1814-1822`）：
+        //   第 1 笔 → **从中心拖出渐近线**（拖到哪就是哪）→ 松手**锁住**，此后不再变；
+        //   第 2 笔 → **再拖一下**：拖到哪、**曲线就经过哪**（中心沿用第 1 笔那个，
+        //             InkClass 的第二笔刻意不重设 `iniP`，`:1971-1977`）；
+        // 中途松手**不进文档**（半成品留在 ActiveStroke），两笔合起来**只有一条撤销记录**。
+        //
+        // 和上一版（三下点击 + 中间悬停）的区别：**几何只在按住拖动时更新**，指针不按键时
+        // 半成品一动不动（InkClass 就是这样）——这也是触摸屏能用的根子：手指没有"悬停"，
+        // 而每一步本来就是"按住拖-松手"，笔 / 鼠标 / 手指走的是同一条路。
+        Console.WriteLine("  -- H. 双曲线两笔拖动式（从中心拖出渐近线 → 再拖一下定曲线）--");
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetToolFromUi(Tool.Hyperbola);
+            float hpx = _virtualX + 900f, hpy = _virtualY + 1300f;
+
+            // 一次"按住拖"：按下 → 挪到目标 → 抬起。
+            void Drag(float x0, float y0, float x1, float y1)
+            {
+                SendMouse((int)x0, (int)y0, 0);                            SettleFrames(60);
+                SendMouse((int)x0, (int)y0, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+                SendMouse((int)x1, (int)y1, 0);                            SettleFrames(240);
+                SendMouse((int)x1, (int)y1, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(180);
+            }
+
+            // 第 1 笔：从中心 (hpx,hpy) 拖到右下方 (hpx+400, hpy+160) → 渐近线框 A = 400、B = 160
+            //（斜率 0.4，和 InkClass 的 `k = |dy/dx|` 同一个）。
+            SendMouse((int)hpx, (int)hpy, 0);                            SettleFrames(60);
+            SendMouse((int)hpx, (int)hpy, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+            Check("两笔式：第 1 笔按下之后**还没提交**（半成品不进文档）",
+                  Doc.Strokes.Count == 0, $"对象 {Doc.Strokes.Count} 条（期望 0）");
+
+            SendMouse((int)(hpx + 200f), (int)(hpy + 80f), 0);   SettleFrames(60);
+            SendMouse((int)(hpx + 400f), (int)(hpy + 160f), 0);  SettleFrames(240);
+            Check("两笔式：第 1 笔拖动中是**只画渐近线**的阶段（状态）",
+                  HyperAsymptotePreviewOnly && ActiveStroke != null,
+                  $"只画渐近线={HyperAsymptotePreviewOnly}，半成品={(ActiveStroke != null)}");
+            // 并且要在屏幕上看得见这条差别：曲线上有一小块**渐近线根本不会经过**的地方
+            //（中心右下方 205..260 × 30..70，渐近线在那儿是 y = 0.4x ∈ [82, 104]）。
+            int inkAux = ScreenProbe.CountMagenta((int)hpx + 205, (int)hpy + 30, 55, 40);
+
+            // 松手 = **第 1 笔完成**：渐近线锁住，但对象**还不进文档**（还有第 2 笔）。
+            SendMouse((int)(hpx + 400f), (int)(hpy + 160f), Native.MOUSEEVENTF_LEFTUP); SettleFrames(180);
+            Check("两笔式：第 1 笔松手之后**仍然没提交**（还有第 2 笔）",
+                  Doc.Strokes.Count == 0, $"对象 {Doc.Strokes.Count} 条（期望 0）");
+
+            // **松手后晃鼠标（不按键）：半成品一动不动**——这是这一版和上一版最大的手感差别，
+            // 也是触摸屏上"没有悬停"这件事能成立的原因。
+            SendMouse((int)(hpx + 900f), (int)(hpy + 600f), 0);   SettleFrames(240);
+            Check("两笔式：松手后**晃鼠标不按键**，渐近线框一动不动（A 400、B 160）（±0.5）",
+                  ActiveStroke != null
+                  && Near(ActiveStroke.HyperbolaALocal(), 400f, .5f)
+                  && Near(ActiveStroke.HyperbolaBLocal(), 160f, .5f),
+                  ActiveStroke == null ? "半成品没了"
+                      : $"A {ActiveStroke.HyperbolaALocal():F1}  B {ActiveStroke.HyperbolaBLocal():F1}");
+
+            // 第 2 笔：**再拖一下**——先掠过一个"能证明曲线出来了"的位置 (220, 37)，
+            // 再拖到最终落点 (500, 150)（中心右下方、比渐近线更横）
+            // → 曲线**正好经过这个点**，朝向 = 焦点在 x 轴（左右双曲线）。
+            SendMouse((int)hpx, (int)hpy, 0);                            SettleFrames(60);
+            SendMouse((int)hpx, (int)hpy, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+            // 先停在 (220,37)：曲线此刻正好穿过那一小块（a 由这个点反解 ≈ 200），
+            // 于是"同一块地方"的墨从 0 变成"有曲线"——证明曲线是**第 2 笔才出来**的。
+            SendMouse((int)(hpx + 220f), (int)(hpy + 37f), 0);           SettleFrames(240);
+            int inkCurve = ScreenProbe.CountMagenta((int)hpx + 205, (int)hpy + 30, 55, 40);
+            Check("两笔式：曲线是**第 2 笔拖动时才出现**的（同一块地方：0 墨 → 有曲线）",
+                  inkAux == 0 && inkCurve > 50, $"只出渐近线时 {inkAux} 像素 → 出曲线后 {inkCurve} 像素");
+            // 再拖到最终落点；挪到一半时曲线也跟着走（否则松手会跳）。
+            SendMouse((int)(hpx + 500f), (int)(hpy + 150f), 0);          SettleFrames(240);
+            Check("两笔式：第 2 笔拖动中**仍然没提交**（松手才算完）",
+                  Doc.Strokes.Count == 0, $"对象 {Doc.Strokes.Count} 条（期望 0）");
+
+            // 第 2 笔松手 = 定稿：a 由那个点反解 —— a² = 500² − 150²/0.4² = 109375。
+            float k3 = 0.4f, dx3 = 500f, dy3 = 150f;
+            float wantA = MathF.Sqrt(dx3 * dx3 - dy3 * dy3 / (k3 * k3));    // ≈ 330.72
+            float wantB = wantA * k3;                                       // ≈ 132.29
+            SendMouse((int)(hpx + dx3), (int)(hpy + dy3), Native.MOUSEEVENTF_LEFTUP); SettleFrames(180);
+
+            var hyp = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+            Check("两笔式：第 2 笔松手之后对象才出来（一条双曲线、实轴沿 x）",
+                  hyp != null && hyp.Kind == StrokeKind.Hyperbola
+                  && hyp.CurveAxis == CurveAxis.TransverseX,
+                  hyp == null ? $"对象 {Doc.Strokes.Count} 条（期望 1）"
+                              : $"Kind={hyp.Kind} 朝向={hyp.CurveAxis}");
+            if (hyp == null) { Console.WriteLine("  （后面几项没法验）"); }
+            else
+            {
+                Check("两笔式：半轴由那个点反解 —— 实半轴 330.7、虚半轴 132.3（±2）",
+                      Near(hyp.HyperbolaRealLocal(), wantA, 2f)
+                      && Near(hyp.HyperbolaImagLocal(), wantB, 2f),
+                      $"实半轴 {hyp.HyperbolaRealLocal():F1}（期望 {wantA:F1}）、"
+                      + $"虚半轴 {hyp.HyperbolaImagLocal():F1}（期望 {wantB:F1}）");
+                // 这一步的**核心断言**：把那个点代进标准式，必须**正好等于 1**（曲线穿过它）。
+                // 式子里要用**曲线自己的** x / y 方向系数（`HyperbolaCurveALocal/BLocal`），
+                // **不是**渐近线框的 `HyperbolaALocal/BLocal`（那两个是框，曲线随时可能比它小）。
+                float fit = dx3 * dx3 / (hyp.HyperbolaCurveALocal() * hyp.HyperbolaCurveALocal())
+                          - dy3 * dy3 / (hyp.HyperbolaCurveBLocal() * hyp.HyperbolaCurveBLocal());
+                Check("两笔式：曲线**正好经过那个点**（x²/a² − y²/b² = 1）（±0.01）",
+                      Near(fit, 1f, .01f), $"代入得 {fit:F4}（期望 1）");
+                Check("两笔式：**渐近线斜率没动**（还是 0.4）（±0.005）",
+                      Near(hyp.HyperbolaBLocal() / hyp.HyperbolaALocal(), k3, .005f),
+                      $"{hyp.HyperbolaBLocal() / hyp.HyperbolaALocal():F4}（期望 {k3:F4}）");
+                // **这一版的正题**：第 2 笔"定曲线"不许碰第 1 笔锁住的那个框
+                //（用户原话："渐近线画好以后大小完全不动，长度也不动"）。
+                Check("两笔式：**渐近线框一动都没动**（A 400、B 160 —— 就是第 1 笔拖出来的那个）（±0.5）",
+                      Near(hyp.HyperbolaALocal(), 400f, .5f) && Near(hyp.HyperbolaBLocal(), 160f, .5f),
+                      $"A {hyp.HyperbolaALocal():F1}（期望 400）  B {hyp.HyperbolaBLocal():F1}（期望 160）");
+                Check("两笔式：两笔 = **一条**撤销记录（不是两条）",
+                      Doc.UndoDepth == 1, $"撤销栈 {Doc.UndoDepth} 步");
+                Doc.Undo();
+                Check("两笔式：撤销一步 → 整条消失",
+                      Doc.Strokes.Count == 0, $"对象 {Doc.Strokes.Count} 条（期望 0）");
+            }
+
+            // ---- 换工具 = 半成品作废：那条画了一半的必须**当场丢掉** ----
+            //
+            // 为什么值得单独验：那半条双曲线**不在文档里**，却一直被渲染（ActiveStroke 是
+            // 无条件画的）。不丢的话它会永远挂在屏幕上，而且**橡皮也擦不掉**——它根本不是
+            // 文档里的对象。所以这里用"数屏幕上的墨"来验，而不是数对象个数。
+            SetToolFromUi(Tool.Hyperbola);
+            float qx = _virtualX + 1500f, qy = _virtualY + 1300f;
+            // 第 1 笔拖到 (200, 80)：渐近线框 A = 200、B = 80（虚线就画到 ±A、±B）。
+            SendMouse((int)qx, (int)qy, 0);                            SettleFrames(60);
+            SendMouse((int)qx, (int)qy, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+            SendMouse((int)(qx + 200f), (int)(qy + 80f), 0);           SettleFrames(240);
+            int inkBefore = ScreenProbe.CountMagenta((int)qx - 260, (int)qy - 110, 520, 220);
+            SendMouse((int)(qx + 200f), (int)(qy + 80f), Native.MOUSEEVENTF_LEFTUP); SettleFrames(180);
+            SetToolFromUi(Tool.Line);                             // 换工具 → 作废
+            SettleFrames(360);
+            int inkAfter = ScreenProbe.CountMagenta((int)qx - 260, (int)qy - 110, 520, 220);
+            Check("两笔式：换工具把半成品**丢掉**（屏幕上不留痕）",
+                  inkBefore > 200 && inkAfter == 0,
+                  $"换工具前 {inkBefore} 像素 → 后 {inkAfter}");
+            SetToolFromUi(Tool.Hyperbola);
+
+            // ---- 换工具之后重新画 = **新的一条**（不是接着上一条的大小改）----
+            // 第 1 笔：从 (qx,qy) 拖出渐近线框（A = 200、B = 80）；
+            // 第 2 笔：拖到 (300, 0)（**在框内**、且在实轴上）→ 实半轴就正好是 300。
+            Doc.ClearHistory();
+            Drag(qx, qy, qx + 200f, qy + 80f);                    // 第 1 笔：渐近线
+            Drag(qx, qy, qx + 300f, qy);                          // 第 2 笔：曲线过 (300,0)
+            Check("两笔式：换过工具之后，再画一条是**新对象**（不是改上一条）",
+                  Doc.Strokes.Count == 1 && Near(Doc.Strokes[0].HyperbolaRealLocal(), 300f, 6f),
+                  $"对象 {Doc.Strokes.Count} 条，实半轴 "
+                  + $"{(Doc.Strokes.Count > 0 ? Doc.Strokes[0].HyperbolaRealLocal() : -1f):F1}（期望 1 条 / 300）");
+
+            // ---- 第 2 笔拖到"更竖"的位置 → **上下双曲线**（焦点在 y 轴）----
+            //
+            // 这一条正是用户说的"如果我选的是左右，就是左右；如果是上下，就是上下"：
+            // 渐近线斜率 m = 480/240 = 2，第 2 笔拖到 (200, 500) 比渐近线**更竖**
+            //（m·|dx| = 400 < 500）→ 焦点落在 y 轴；实半轴用**实轴沿 y**的式子反解：
+            // a = √(500²·(240/480)² − 200²) = √(62500 − 40000) = 150、b = a × 2 = 300。
+            // 报出来的"实半轴"就是 b = 300（实轴沿 y 时实半轴是纵向那个，见 HyperbolaRealLocal）。
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetToolFromUi(Tool.Hyperbola);
+            float ux = _virtualX + 1500f, uy = _virtualY + 1300f;
+            Drag(ux, uy, ux + 240f, uy + 480f);                   // 第 1 笔：渐近线（m = 2）
+            Drag(ux, uy, ux + 200f, uy + 500f);                   // 第 2 笔：更竖 → 焦点在 y 轴
+
+            var hypY = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+            Check("两笔式：第 2 笔拖到更竖的位置 → **上下双曲线**（实轴沿 y），半轴 300 / 150（±2）",
+                  hypY != null && hypY.CurveAxis == CurveAxis.TransverseY
+                  && Near(hypY.HyperbolaRealLocal(), 300f, 2f)
+                  && Near(hypY.HyperbolaImagLocal(), 150f, 2f),
+                  hypY == null ? $"对象 {Doc.Strokes.Count} 条（期望 1）"
+                               : $"{hypY.CurveAxis}，实半轴 {hypY.HyperbolaRealLocal():F1}、"
+                                 + $"虚半轴 {hypY.HyperbolaImagLocal():F1}");
+            if (hypY != null)
+            {
+                // 同样要用**曲线的** x / y 方向系数（不是渐近线框的 A / B）。
+                float fitY = 500f * 500f / (hypY.HyperbolaCurveBLocal() * hypY.HyperbolaCurveBLocal())
+                           - 200f * 200f / (hypY.HyperbolaCurveALocal() * hypY.HyperbolaCurveALocal());
+                // 容差比上面那条宽：鼠标坐标是**取整**的，一个像素的偏差在 a 只有 150 时
+                // 相对误差是 a=330 时的两倍多（上面那条 ±0.01 就够，这条要放宽到 ±0.05）。
+                Check("两笔式：上下双曲线也**正好经过那个点**（y²/b² − x²/a² = 1）（±0.05）",
+                      Near(fitY, 1f, .05f), $"代入得 {fitY:F4}（期望 1）");
+            }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"  合计 {pass + fail} 项：通过 {pass}，失败 {fail}");
+        Console.WriteLine();
+        _quit = true;
+    }
+
+    private void DashTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 线型自检（实线 / 虚线 / 点线）===");
+        Console.WriteLine($"  本机 DPI 缩放 {DpiScale:F2}");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-30} {detail}");
+        }
+
+        var ink = new Color4(1f, 0f, 1f, 1f);        // 品红：便于在屏幕上数像素
+        float w = 6f * DpiScale;
+        float len = 1000f;
+        float rowGap = 150f;
+        float x0 = _virtualX + 240f;
+        float yTop = _virtualY + 240f;
+
+        Stroke MakeLine(float y, StrokeDash dash)
+        {
+            var s = new Stroke
+            {
+                Tool = Tool.Line, Kind = StrokeKind.Line, Color = ink, Width = w, Dash = dash,
+            };
+            s.AddPoint(x0, y, 1f, NowMs);
+            s.AddPoint(x0 + len, y, 1f, NowMs);
+            return s;
+        }
+
+        bool SameBox(Stroke p, Stroke q)
+        {
+            var a = p.PaddedBounds; var b = q.PaddedBounds;
+            // 只比**大小**不比位置：三条线故意画在不同的行上（同一行会互相盖住，
+            // 屏幕上就数不出各自的墨量了），位置本来就该不一样。
+            return MathF.Abs((a.MaxX - a.MinX) - (b.MaxX - b.MinX)) < 0.5f
+                && MathF.Abs((a.MaxY - a.MinY) - (b.MaxY - b.MinY)) < 0.5f;
+        }
+
+        // ================= ① 屏幕层：三种线型上屏后的墨量 =================
+        Doc.Clear();
+        var solid = MakeLine(yTop, StrokeDash.Solid);
+        var dashed = MakeLine(yTop + rowGap, StrokeDash.Dashed);
+        var dotted = MakeLine(yTop + rowGap * 2f, StrokeDash.Dotted);
+        Doc.AddStroke(solid);
+        Doc.AddStroke(dashed);
+        Doc.AddStroke(dotted);
+        Doc.InvalidateAll();
+        SettleFrames(700);
+
+        float full = len * w;                        // 实线的"满墨量"基准
+        int bandH = (int)MathF.Max(6f, w * 3f);
+        int pxSolid = ScreenProbe.CountMagenta((int)x0, (int)(yTop - bandH * 0.5f), (int)len, bandH);
+        int pxDashed = ScreenProbe.CountMagenta((int)x0, (int)(yTop + rowGap - bandH * 0.5f), (int)len, bandH);
+        int pxDotted = ScreenProbe.CountMagenta((int)x0, (int)(yTop + rowGap * 2f - bandH * 0.5f), (int)len, bandH);
+
+        Console.WriteLine();
+        Console.WriteLine("  线型 | 屏幕墨量 | 占实线比例");
+        Console.WriteLine("  -----|----------|-----------");
+        Console.WriteLine($"  实线 | {pxSolid,8} | {pxSolid / full,9:P0}");
+        Console.WriteLine($"  虚线 | {pxDashed,8} | {pxDashed / full,9:P0}");
+        Console.WriteLine($"  点线 | {pxDotted,8} | {pxDotted / full,9:P0}");
+        Console.WriteLine();
+
+        Check("实线上屏：墨量接近满（≥85%）", pxSolid >= full * 0.85f,
+              $"{pxSolid} / 理论 {full:F0}");
+        Check("虚线上屏：出墨四到八成", pxDashed >= full * 0.40f && pxDashed <= full * 0.80f,
+              $"{pxDashed / full:P0}（图案设计值 ~60%）");
+        Check("点线上屏：出墨一成二到六成，且明显少于虚线",
+              pxDotted >= full * 0.12f && pxDotted <= full * 0.60f && pxDotted < pxDashed * 0.8f,
+              $"{pxDotted / full:P0} vs 虚线 {pxDashed / full:P0}");
+        Check("三种线型的包围盒一模一样（线型是样式，不改形状）",
+              SameBox(solid, dashed) && SameBox(solid, dotted),
+              $"{solid.PaddedBounds.MaxX - solid.PaddedBounds.MinX:F0}×"
+              + $"{solid.PaddedBounds.MaxY - solid.PaddedBounds.MinY:F0}");
+
+        string shot = Path.Combine("reports", "线型-三种.bmp");
+        bool saved = ScreenProbe.SaveBmp(shot, (int)(x0 - 60f), (int)(yTop - 60f), (int)(len + 120f), (int)(rowGap * 2f + 120f));
+        Console.WriteLine(saved ? $"  （已导出 {shot}：实线 / 虚线 / 点线）" : "  导出失败");
+        Console.WriteLine();
+
+        // ================= ② 交互层：面板那一行真的能改、该跳过的会跳过 =================
+        Doc.Clear();
+        var shape = MakeLine(_virtualY + 400f, StrokeDash.Solid);
+        var hand = new Stroke { Tool = Tool.Pen, Color = ink, Width = w };
+        hand.AddPoint(x0, _virtualY + 560f, 0.5f, NowMs);
+        hand.AddPoint(x0 + 300f, _virtualY + 560f, 0.5f, NowMs);
+        var pic = new Stroke
+        {
+            Tool = Tool.Capture, Kind = StrokeKind.Image, Color = ink, Width = w,
+            Image = ImageData.Adopt(8, 8, new byte[8 * 8 * 4], hasAlpha: true),
+        };
+        pic.AddPoint(x0, _virtualY + 700f, 1f, NowMs);
+        pic.AddPoint(x0 + 80f, _virtualY + 780f, 1f, NowMs);
+        Doc.AddStroke(shape);
+        Doc.AddStroke(hand);
+        Doc.AddStroke(pic);
+        Doc.SelectOnly(new[] { shape, hand, pic });
+        Doc.InvalidateAll();
+        SettleFrames(300);
+
+        var aabb = LiveSelectionFrame.CanvasAabb;
+        int sc = SelectionHandles.SwatchCount;
+        var c0 = SelectionHandles.StyleCellRect(0, aabb, DpiScale, ViewportCanvas, sc);
+        var c1 = SelectionHandles.StyleCellRect(1, aabb, DpiScale, ViewportCanvas, sc);
+        var c2 = SelectionHandles.StyleCellRect(2, aabb, DpiScale, ViewportCanvas, sc);
+        var panel = SelectionHandles.PanelRect(aabb, DpiScale, ViewportCanvas, sc);
+
+        Check("线型那一行是 3 格", SelectionHandles.StyleCellCount == 3,
+              $"格数 = {SelectionHandles.StyleCellCount}");
+        Check("3 格从左到右排、互不重叠",
+              c0.MaxX <= c1.MinX && c1.MaxX <= c2.MinX,
+              $"{c0.MinX:F0}..{c0.MaxX:F0} | {c1.MinX:F0}..{c1.MaxX:F0} | {c2.MinX:F0}..{c2.MaxX:F0}");
+        Check("3 格都落在面板里（四边都留了内边距）",
+              c0.MinX >= panel.MinX && c2.MaxX <= panel.MaxX
+              && c0.MinY >= panel.MinY && c0.MaxY <= panel.MaxY,
+              $"面板 {panel.MinX:F0}..{panel.MaxX:F0}，格子 {c0.MinX:F0}..{c2.MaxX:F0}");
+
+        // ---- 点那一行：**全程走真路** ----
+        //
+        // 早先这里直接调 `RunStyleClickForTest`（引擎里的测试钩子），**绕过了两层**：
+        //   ① 「这一点算不算落在面板上」（`PanelContains`）——不在的话点击会被当成
+        //      "点面板外面"，反手把面板关掉，用户看到的就是"点了没反应"；
+        //   ② 「操作条那一格点了会不会开面板」。
+        // 用户报"实线和虚线好像不能选中"时，这两层正是嫌疑最大的地方（引擎里那一层
+        // 是连通的，所以只能靠真路把它钉死或抓出来）。现在按用户的手法走一遍：
+        // 点操作条「颜色」→ 面板开 → 手势打格子中心。
+        RunBarActionForTest((int)SelBarButton.Color);
+        SettleFrames(200);
+        Check("操作条「颜色」那一格能把线型面板打开",
+              SelPanelOpen == SelPanel.Ink, $"面板 = {SelPanelOpen}");
+
+        for (int i = 0; i < SelectionHandles.StyleCellCount; i++)
+        {
+            var cellI = SelectionHandles.StyleCellRect(i, aabb, DpiScale, ViewportCanvas, sc);
+            float mx = (cellI.MinX + cellI.MaxX) * 0.5f, my = (cellI.MinY + cellI.MaxY) * 0.5f;
+            Check($"第 {i + 1} 格的中心算「落在面板上」（命中那一层过得去）",
+                  SelectionHandles.PanelContains(mx, my, aabb, DpiScale, ViewportCanvas,
+                                                 SelPanelOpen, sc),
+                  $"({mx:F0},{my:F0})，面板 {panel.MinX:F0}..{panel.MaxX:F0}"
+                  + $" × {panel.MinY:F0}..{panel.MaxY:F0}");
+        }
+
+        bool StyleClick(int i)
+        {
+            var cell = SelectionHandles.StyleCellRect(i, aabb, DpiScale, ViewportCanvas, sc);
+            bool took = SelectionGestureForTest((cell.MinX + cell.MaxX) * 0.5f,
+                                                (cell.MinY + cell.MaxY) * 0.5f);
+            EndSelectionGestureForTest();
+            SettleFrames(160);
+            return took;
+        }
+
+        var boxBefore = shape.PaddedBounds;
+        bool tookDashed = StyleClick(1);
+        Check("点第 2 格（虚线）：这一下被吞掉了（面板没被关掉）",
+              tookDashed && SelPanelOpen == SelPanel.Ink,
+              $"接住 = {tookDashed}，面板 = {SelPanelOpen}");
+        Check("点第 2 格 → 直线变虚线", shape.Dash == StrokeDash.Dashed, $"实际 = {shape.Dash}");
+        Check("同一次里：**自由笔迹也跟着改**（用户 2026-09-19 改的口径）",
+              hand.Dash == StrokeDash.Dashed, $"实际 = {hand.Dash}");
+        Check("同一次里：图像**没有**被改", pic.Dash == StrokeDash.Solid, $"实际 = {pic.Dash}");
+
+        bool tookDotted = StyleClick(2);
+        Check("点第 3 格（点线）：被吞掉且生效",
+              tookDotted && shape.Dash == StrokeDash.Dotted,
+              $"接住 = {tookDotted}，线型 = {shape.Dash}");
+
+        var boxAfter = shape.PaddedBounds;
+        Check("改线型不动包围盒",
+              MathF.Abs(boxBefore.MinX - boxAfter.MinX) < 0.01f
+              && MathF.Abs(boxBefore.MinY - boxAfter.MinY) < 0.01f
+              && MathF.Abs(boxBefore.MaxX - boxAfter.MaxX) < 0.01f
+              && MathF.Abs(boxBefore.MaxY - boxAfter.MaxY) < 0.01f,
+              $"{boxBefore.MinX:F1},{boxBefore.MinY:F1} .. {boxBefore.MaxX:F1},{boxBefore.MaxY:F1} 未变");
+
+        // 回到实线：**这一格最容易被当成"点了没反应"**——对象本来就是实线时点它是空操作，
+        // 所以下面除了"线型真的回到 Solid"，还额外断言"格子的当前档真的跟着回去了"
+        // （面板上要看得出来，不然用户只会觉得这一格坏了）。
+        bool tookSolid = StyleClick(0);
+        Check("点第 1 格（实线）：被吞掉、线型回到实线",
+              tookSolid && shape.Dash == StrokeDash.Solid,
+              $"接住 = {tookSolid}，线型 = {shape.Dash}");
+        Check("面板认得出「现在是实线」（当前档读的是选中的那一条）",
+              SelectionHandles.DashOfSelection(Doc.Selected) == StrokeDash.Solid,
+              $"当前档 = {SelectionHandles.DashOfSelection(Doc.Selected)}");
+
+        StyleClick(1);                                 // 再变虚线，留给下一条撤销用
+        bool undoOk = Doc.Undo();
+        Check("撤销一步 → 回到上一步的线型（改线型一步可撤）",
+              undoOk && shape.Dash == StrokeDash.Solid, $"撤销 = {undoOk}，线型 = {shape.Dash}");
+        Console.WriteLine();
+
+        // ---- ②b 画布上点一条线能不能选中（实线 / 虚线都试）----
+        //
+        // 这一条**以前没有任何自检覆盖**（别的自检都是用 `Doc.SelectOnly` 直接给选中的）。
+        // 用户说的"不能选中"如果是"画布上点不中"，就会在这里露出来。
+        foreach (var (dash, name) in new[] { (StrokeDash.Solid, "实线"), (StrokeDash.Dashed, "虚线") })
+        {
+            Doc.Selected.Clear();
+            SelPanelOpen = SelPanel.None;
+            var ln = MakeLine(_virtualY + 400f, dash);
+            Doc.Clear();
+            Doc.AddStroke(ln);
+            Doc.InvalidateAll();
+            Tool = Tool.Marquee;
+            SettleFrames(300);
+
+            float midX = x0 + len * 0.5f, midY = _virtualY + 400f;
+            bool tookPick = SelectionGestureForTest(midX, midY);
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            Check($"画布上点一条{name}：能选中它",
+                  tookPick && Doc.Selected.Count == 1 && Doc.Selected[0] == ln,
+                  $"接住 = {tookPick}，选中 {Doc.Selected.Count} 个");
+        }
+        Console.WriteLine();
+
+        // ============ ②c 笔的线型开关：画之前选 vs 画之后改 ============
+        //
+        // 用户 2026-09-19 第 2 件要的那个"笔的色带条上的虚实线切换"。引擎这一头只验一件事：
+        // **开关切到哪一档，新画出来的笔迹就是哪一档**，而且**不碰已经画好的**。
+        // 界面那一格本身（画在哪、点得到、三档轮回、极简档没有）在 `--paneltest` 里验——
+        // "引擎吃不吃这个值"和"界面上有没有这个入口"是两件事，混在一起验的话
+        // 坏了一处也看不出是哪一处。
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetToolFromUi(Tool.Pen);
+            SetDashFromUi(StrokeDash.Dashed);
+
+            // 真机画一笔（合成鼠标按下 → 移动 → 抬起），返回刚画出来的那一条。
+            Stroke DrawOne(float y)
+            {
+                float px = _virtualX + 600f;
+                SendMouse((int)px, (int)y, 0);                                     SettleFrames(40);
+                SendMouse((int)px, (int)y, Native.MOUSEEVENTF_LEFTDOWN);           SettleFrames(40);
+                for (int i = 1; i <= 4; i++)
+                {
+                    SendMouse((int)(px + 60f * i), (int)y, 0);
+                    SettleFrames(20);
+                }
+                SendMouse((int)(px + 240f), (int)y, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(200);
+                return Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+            }
+
+            var first = DrawOne(_virtualY + 560f);
+            Check("笔的线型：切到虚线之后，新画的一笔就是虚线",
+                  first != null && first.Kind == StrokeKind.Freehand
+                  && first.Dash == StrokeDash.Dashed,
+                  first == null ? "没有对象" : $"{first.Kind}，线型 = {first.Dash}");
+
+            SetDashFromUi(StrokeDash.Solid);
+            var second = DrawOne(_virtualY + 700f);
+            Check("笔的线型：开关只管以后——切回实线之后，**先画的那一笔还是虚线**",
+                  first != null && first.Dash == StrokeDash.Dashed
+                  && second != null && second.Dash == StrokeDash.Solid,
+                  $"第一笔 {first?.Dash}，第二笔 {second?.Dash}");
+
+            SetDashFromUi(StrokeDash.Solid);       // 收尾：别把开关留在非默认值上
+        }
+        Console.WriteLine();
+
+        // ================= ③ 存档层：写文件读回来线型还在 =================
+        Doc.Clear();
+        var sa = MakeLine(_virtualY + 300f, StrokeDash.Dashed);
+        var sb = MakeLine(_virtualY + 400f, StrokeDash.Dotted);
+        var scLine = MakeLine(_virtualY + 500f, StrokeDash.Solid);
+        Doc.AddStroke(sa);
+        Doc.AddStroke(sb);
+        Doc.AddStroke(scLine);
+
+        byte[] blob = InkSerializer.Save(Doc);
+        var back = new InkDocument();
+        InkSerializer.LoadInto(back, blob);
+
+        Check("存档读回 3 条都在", back.Strokes.Count == 3, $"读回 {back.Strokes.Count} 条");
+        Check("虚线读回来还是虚线",
+              back.Strokes.Count > 0 && back.Strokes[0].Dash == StrokeDash.Dashed,
+              back.Strokes.Count > 0 ? $"实际 = {back.Strokes[0].Dash}" : "条数不对");
+        Check("点线读回来还是点线",
+              back.Strokes.Count > 1 && back.Strokes[1].Dash == StrokeDash.Dotted,
+              back.Strokes.Count > 1 ? $"实际 = {back.Strokes[1].Dash}" : "条数不对");
+        Check("**第二条**的几何也对（读端少读一位会在这里整体错位）",
+              back.Strokes.Count > 1 && back.Strokes[1].Points.Count == 2
+              && MathF.Abs(back.Strokes[1].Points[1].X - (x0 + len)) < 0.5f,
+              back.Strokes.Count > 1
+                  ? $"第二条第 2 点 X = {back.Strokes[1].Points[1].X:F1}（应 {(x0 + len):F1}）"
+                  : "条数不对");
+
+        // 真·v7 老文件（见 MakeLegacyFile）：这一条同时钉住两件事——
+        // 老文件读得进、且读进来是实线（老文件本来的样子）。
+        // 砍 5 位 = v8 线型 ＋ v9 网格 ＋ v10 压感 ＋ v11 朝向 ＋ v12 渐近线。
+        var one = new InkDocument();
+        one.AddStroke(MakeLine(_virtualY + 300f, StrokeDash.Dotted));
+        byte[] v7 = MakeLegacyFile(one, 7, 5);
+        var old = new InkDocument();
+        bool oldOk = true;
+        try { InkSerializer.LoadInto(old, v7); } catch (Exception ex) { oldOk = false; Console.WriteLine("    " + ex.Message); }
+        Check("真·v7 老文件读得进，线型是实线",
+              oldOk && old.Strokes.Count == 1 && old.Strokes[0].Dash == StrokeDash.Solid,
+              oldOk ? $"{old.Strokes.Count} 条，线型 = {(old.Strokes.Count > 0 ? old.Strokes[0].Dash.ToString() : "?")}"
+                    : "读取抛异常");
 
         Console.WriteLine();
         Console.WriteLine($"  合计 {pass + fail} 项：通过 {pass}，失败 {fail}");
@@ -11196,6 +15932,324 @@ internal sealed class App : InkEngine.InkEngine
             ? "  PASS: 压感有效位与压力数值都对"
             : $"  FAIL: 压感判定不对（有压感={ActiveStrokeHasPressure}，范围 {pMin:F3}~{pMax:F3}）");
 
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 压感自检（2026-09-20 加：用户有了手写笔之后要"和人家一样、手感正常"）。
+    ///
+    /// 四层判据，缺一层都可能"看着绿其实没做"：
+    ///   ① **映射**（纯函数）：0 压 = 最小倍、满压 = 最大倍、单调、gamma 真的起作用；
+    ///   ② **上屏**（真机路径）：合成笔注入**从用户那张三线图反推回来的**几个力度
+    ///      （鼠标参照 / 轻描 0.17 / 半压 0.50 / 重压 0.86 / 满压 1.00），量出来的**墨量比**
+    ///      必须对得上那张图（0.33× / 1.00× / 1.72× / 2.00×）——只看 `HasPressure` 那一位的话，
+    ///      渲染没接上也会是绿的；
+    ///   ③ **回退**：鼠标画的（没有压感）与**虚线**笔迹必须仍然**等宽**（老路一个字没改）；
+    ///   ④ **存档**：v10 往返把"有压感"这一位带回来；再造一个**真·v9 老文件**，
+    ///      读进来必须是"没有压感"（老文件本来就没这一位）——版本闸写错时唯一会炸的地方。
+    ///   ⑤ **离屏那条路**（导出 / 剪贴板那张图）：换的是渲染目标，同一条 DrawStroke，
+    ///      但"同一个入口"这种事只有真画一遍、数一遍像素才算数。
+    ///
+    /// 顺带断言"最粗那一处**点得中**"：命中按最粗处算，否则重压的地方看得见、点不着。
+    /// </summary>
+    private void PressureTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 压感自检（映射 / 上屏粗细 / 回退 / 存档）===");
+        Console.WriteLine($"  本机 DPI 缩放 {DpiScale:F2}；变宽通道: {OverlayWindow.InkNote}");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-38} {detail}");
+        }
+
+        // ================= ① 映射：纯函数先钉死 =================
+        {
+            float f0 = PressureWidth.Factor(0f), f1 = PressureWidth.Factor(1f), fh = PressureWidth.Factor(0.5f);
+            Check("映射：0 压 = 最小倍、满压 = 最大倍、中点居中",
+                  MathF.Abs(f0 - PressureWidth.Min) < 1e-4f && MathF.Abs(f1 - PressureWidth.Max) < 1e-4f
+                  && fh > f0 && fh < f1,
+                  $"{f0:F3} / {fh:F3} / {f1:F3}（配置 {PressureWidth.Min:F2}~{PressureWidth.Max:F2}）");
+
+            bool mono = true;
+            float prev = -1f;
+            for (int i = 0; i <= 20; i++)
+            {
+                float f = PressureWidth.Factor(i / 20f);
+                if (f < prev - 1e-5f) mono = false;
+                prev = f;
+            }
+            Check("映射：整条曲线单调不减", mono, "0 → 1 走一遍");
+
+            float linear = PressureWidth.Factor(0.25f);
+            PressureWidth.Gamma = 2f;
+            float curved = PressureWidth.Factor(0.25f);
+            PressureWidth.Gamma = 1f;
+            Check("映射：gamma 真的起作用（>1 把轻压区间压低）",
+                  curved < linear - 1e-4f, $"线性 {linear:F3} → gamma=2 {curved:F3}");
+        }
+
+        if (!EnsureSyntheticPen())
+        {
+            Console.WriteLine("  SKIP: 拿不到合成笔设备（CreateSyntheticPointerDevice 失败），②③④ 没法验");
+            Console.WriteLine($"  合计 {pass + fail} 项：通过 {pass}，失败 {fail}");
+            _quit = true; return;
+        }
+
+        // 画面要干净：开白板（底色不透明）、关掉委托湿墨（免得系统画的那条轨迹混进探针）。
+        bool oldBoard = BoardOn, oldTrail = OverlayWindow.InkTrailEnabled;
+        float oldPenWidth = PenWidthLogical;
+        var oldColor = CurrentColor;
+        BoardOn = true;
+        OverlayWindow.InkTrailEnabled = false;
+        PenWidthLogical = 6f;                        // 粗一点：粗细差在像素上更稳
+        SetColorFromUi(new Color4(1f, 0f, 0f, 1f));  // 纯红：探针数红像素
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Pen;
+        ViewOffsetY = 0f;                            // 画布坐标 == 屏幕坐标，探针才好对位
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        SettleFrames(300);
+
+        float cx = _virtualX + _virtualW * 0.5f;
+        float cy = _virtualY + _virtualH * 0.5f;
+        const float halfLen = 260f;
+
+        void PenLine(float y, uint pressure)
+        {
+            SendPenPoint(cx - halfLen, y, pressure, contact: true, first: true);
+            for (int i = 1; i <= 24; i++)
+            {
+                SendPenPoint(cx - halfLen + i * (halfLen * 2f / 24f), y, pressure, contact: true, first: false);
+                SettleFrames(2);
+            }
+            SendPenPoint(cx + halfLen, y, pressure, contact: false, first: false);
+            SettleFrames(200);
+        }
+
+        // ================= ② 上屏：对齐用户在 WPF 里画的那三条线 =================
+        //
+        // 用户在同一台机上画了三条横线（鼠标 / 笔轻轻描 / 笔重重压），我们逐像素量出来
+        // 18.0 / 6.0 / 31.0 px，并且 WPF 官方文档写明"无压感设备的 PressureFactor 默认 0.5"，
+        // 于是反推出那张图的口径：**鼠标 = 0.5 压力处 = 档位宽度；满压 = 2 倍**。
+        //
+        // 所以下面每条笔迹的压力都是**从那三条线反推回来的值**，判据直接对着它们比：
+        //   鼠标（参照 1.00×）→ 轻描 0.17（图里 0.33×）→ 半压 0.50（应当和鼠标一样粗）
+        //   → 重压 0.86（图里 1.72×）→ 满压 1.00（外推 2.00×）→ 虚线（回退等宽的对照）
+        float yMouse = cy - 300f, yLight = cy - 210f, yHalf = cy - 120f;
+        float yHeavy = cy - 30f, yFull = cy + 60f, yDash = cy + 150f;
+
+        // ① 鼠标：没有压感那一路。**它是整段的参照物**（WPF 里那支笔的"中值压力"）。
+        SendMouse((int)(cx - halfLen), (int)yMouse, 0);
+        SendMouse((int)(cx - halfLen), (int)yMouse, Native.MOUSEEVENTF_LEFTDOWN);
+        for (int i = 1; i <= 12; i++)
+        {
+            SendMouse((int)(cx - halfLen + i * (halfLen * 2f / 12f)), (int)yMouse, 0);
+            SettleFrames(3);
+        }
+        SendMouse((int)(cx + halfLen), (int)yMouse, Native.MOUSEEVENTF_LEFTUP);
+        SettleFrames(250);
+
+        PenLine(yLight, 174);      // 0.17 轻轻描
+        PenLine(yHalf, 512);       // 0.50 半压（应当和鼠标那条一样粗）
+        PenLine(yHeavy, 881);      // 0.86 重重压
+        PenLine(yFull, 1024);      // 1.00 满压
+
+        // 虚线 + 满压：**本该最粗**，但 ink 通道不吃 dash 图案，必须回退等宽。
+        SetDashFromUi(StrokeDash.Dashed);
+        SettleFrames(120);
+        PenLine(yDash, 1024);
+        SetDashFromUi(StrokeDash.Solid);
+
+        // 墨量 = 在笔迹正上方量一块固定大小的框，**按覆盖率求和**（面积 ∝ 线宽）。
+        //
+        // 为什么不用"数红像素"：抗锯齿会把细线的两侧边缘渲成"半红的过渡色"，
+        // 严格按红色阈值数就会漏掉它们——2.8 像素宽的线只数到 2 像素（−29%），
+        // 而 12 像素宽的只少 8%。这个**偏置随线宽变化**，会把比值整体放大
+        // （实测：真实 3.71 倍量出来是 5.00 倍，2026-09-20 就是这么假红了一条）。
+        // 覆盖率是**线性叠加**的：红墨 g=0、白板 g=255，所以每个像素的墨覆盖 = (255−g)/255。
+        double Area(float y)
+        {
+            var px = ScreenProbe.CaptureRegion((int)cx - 200, (int)y - 30, 400, 60);
+            double sum = 0;
+            for (int i = 0; i + 3 < px.Length; i += 4)
+            {
+                int g = px[i + 1], r = px[i + 2];             // BGRA
+                if (r > g + 30) sum += (255.0 - g) / 255.0;   // 只算偏红的像素，免得把底纹算进去
+            }
+            return sum;
+        }
+        // 粗细（竖直游程）= 虚线那种"有缝"的笔迹要看最粗的地方，所以横向多切几刀取最大。
+        int MaxThick(float y)
+        {
+            int best = 0;
+            for (int dx = -120; dx <= 120; dx += 20)
+                best = Math.Max(best, ScreenProbe.CountRed((int)cx + dx - 1, (int)y - 40, 2, 80));
+            return best;
+        }
+
+        double aMouse = Area(yMouse), aLight = Area(yLight), aHalf = Area(yHalf);
+        double aHeavy = Area(yHeavy), aFull = Area(yFull), aDash = Area(yDash);
+
+        Check("上屏：六条笔迹都真的画出来了",
+              aMouse > 0 && aLight > 0 && aHalf > 0 && aHeavy > 0 && aFull > 0 && aDash > 0,
+              $"鼠标 {aMouse:F0} / 轻 {aLight:F0} / 半 {aHalf:F0} / 重 {aHeavy:F0} / 满 {aFull:F0} / 虚线 {aDash:F0}");
+        Check("上屏：压力越大墨越多（单调）",
+              aLight < aHalf && aHalf < aHeavy && aHeavy < aFull,
+              $"{aLight:F0} < {aHalf:F0} < {aHeavy:F0} < {aFull:F0}");
+
+        // ---- 下面四条是**对着用户那三条线**比的（这就是"和 Windows Ink 对齐了没有"）----
+        double rHalf = aMouse > 0 ? aHalf / aMouse : 0;
+        Check("上屏：半压（0.50）那条 = 鼠标那条（±10%）——「无压感设备压力 0.5」这条前提的验证",
+              rHalf >= 0.90 && rHalf <= 1.10, $"半压/鼠标 = {rHalf:F2}");
+
+        double rLight = aMouse > 0 ? aLight / aMouse : 0;
+        Check("上屏：轻描（0.17）= 鼠标的 0.33 倍（图里 6.0/18.0 = 0.333）",
+              rLight >= 0.28 && rLight <= 0.42, $"轻描/鼠标 = {rLight:F2}");
+
+        double rHeavy = aMouse > 0 ? aHeavy / aMouse : 0;
+        Check("上屏：重压（0.86）= 鼠标的 1.72 倍（图里 31.0/18.0 = 1.72）",
+              rHeavy >= 1.55 && rHeavy <= 1.90, $"重压/鼠标 = {rHeavy:F2}");
+
+        double rFull = aMouse > 0 ? aFull / aMouse : 0;
+        Check("上屏：满压 = 鼠标的 2.00 倍（图上外推值）",
+              rFull >= 1.85 && rFull <= 2.15, $"满压/鼠标 = {rFull:F2}");
+
+        // 诊断：分清"没走变宽那条路"和"走了但屏幕上没画出来"（后者是一种可能的失败形态：
+        // API 全部返回成功、却一个像素都没有——2026-09-20 就是这么踩到 NibTransform 那个坑的）。
+        int wholeScreenRed = ScreenProbe.CountRed(_virtualX, _virtualY, _virtualW, _virtualH);
+        Console.WriteLine($"    [诊断] 变宽墨迹绘制次数 = {OverlayWindow.PressureInkDraws}；"
+                          + $"全屏红像素 = {wholeScreenRed}；"
+                          + $"六条笔迹 y = {yMouse:F0}/{yLight:F0}/{yHalf:F0}/{yHeavy:F0}/{yFull:F0}/{yDash:F0}，"
+                          + $"画布偏移 {ViewOffsetY:F0}");
+
+        // 离屏那条路（导出 / 剪贴板给外部程序的那张图）也要画得出变宽墨——它换的是渲染目标，
+        // 代码上同一条 DrawStroke，但"同一个入口"这种事只有真画一遍才算数。
+        {
+            var probe = new Stroke
+            {
+                Tool = Tool.Pen, Color = new Color4(1f, 0f, 0f, 1f), Width = 12f, HasPressure = true,
+            };
+            probe.AddPoint(0f, 0f, 0.2f, 0);
+            probe.AddPoint(100f, 0f, 0.9f, 8);
+            var reg = new RectF { MinX = -40, MinY = -40, MaxX = 140, MaxY = 40 };
+            var bgra = _windows.Count > 0 ? _windows[0].RenderStrokesToBgra(new[] { probe }, reg, 180, 80) : null;
+            int offRed = 0;
+            if (bgra != null)
+                for (int i = 0; i + 3 < bgra.Length; i += 4)
+                    if (bgra[i + 2] > 170 && bgra[i + 1] < 110 && bgra[i] < 110) offRed++;
+            Check("离屏那条路（导出 / 剪贴板那张图）也画得出变宽墨",
+                  offRed > 0, $"离屏位图里红像素 {offRed}（位图 {bgra?.Length ?? 0} 字节）");
+        }
+
+        // ================= ③ 命中与回退：按"这一笔自己的最粗处"算 =================
+        {
+            // 按压力**找**两条笔迹（不按索引——自检里写死下标会随功能移位而静默失效）。
+            Stroke Light() => Doc.Strokes.FirstOrDefault(
+                s => s.Kind == StrokeKind.Freehand && !s.IsImage && s.HasPressure
+                     && s.Points.Count > 0 && s.Points[0].P < 0.3f);
+            Stroke Full() => Doc.Strokes.FirstOrDefault(
+                s => s.Kind == StrokeKind.Freehand && !s.IsImage && s.HasPressure
+                     && s.Points.Count > 0 && s.Points[0].P > 0.95f);
+            var light = Light();
+            var full = Full();
+
+            Check("命中：轻写那条按**它自己**的最粗处算（比档位半宽窄）",
+                  light != null && light.MaxHalfWidth < light.Width * 0.5f - 0.5f,
+                  light == null ? "没找到轻写那条"
+                                : $"最粗半宽 {light.MaxHalfWidth:F2} vs 档位半宽 {light.Width * 0.5f:F2}");
+            Check("命中：满压那条 = 档位宽（半宽 = 档位宽本身，因为满压是 2 倍）",
+                  full != null && MathF.Abs(full.MaxHalfWidth - full.Width) < 0.3f,
+                  full == null ? "没找到满压那条"
+                               : $"最粗半宽 {full.MaxHalfWidth:F2} vs 档位宽 {full.Width:F2}");
+            float edgeY = yFull + full.Width - 1f;      // 满压边缘往里 1 像素
+            Check("命中：满压那条在最粗边缘点得中",
+                  full != null && full.HitTestExact(cx, edgeY, 0f),
+                  $"点 ({cx:F0},{edgeY:F0})");
+        }
+
+        {
+            var ms = Doc.Strokes.FirstOrDefault(s => !s.IsImage && !s.HasPressure);
+            Check("回退：鼠标画的这一条没有压感标志",
+                  ms != null && !ms.HasPressure, ms == null ? "没找到鼠标那条" : "HasPressure = False");
+            // 没有压感 → 等宽 = 档位宽度；虚线也一样（ink 通道不吃 dash 图案）。
+            // 三条都用同一个探针量**粗细**（虚线有缝，取横向最大值），所以可以直接比。
+            int tm = MaxThick(yMouse), td = MaxThick(yDash), tf = MaxThick(yFull);
+            Check("回退：虚线笔迹仍然是等宽（粗细 = 档位宽，不随压力变）",
+                  td > 0 && td <= tm * 1.25f,
+                  $"虚线 {td} 像素 vs 档位 {tm} 像素");
+            Check("回退：满压那条确实画粗了（≈ 2 × 档位，证明它没走回退那条路）",
+                  tf > 0 && tf >= tm * 1.6f,
+                  $"满压 {tf} 像素 vs 档位 {tm} 像素");
+            var ds = Doc.Strokes.FirstOrDefault(s => s.Dash == StrokeDash.Dashed);
+            Check("回退：虚线笔迹**确实带压感**（不是没压感才等宽）",
+                  ds != null && ds.HasPressure, ds == null ? "没找到虚线那条" : $"HasPressure = {ds.HasPressure}");
+        }
+
+        // 荧光笔不吃压感（对齐官方示例的 IgnorePressure = true）：拿合成笔写一条荧光笔，
+        // 断言它**不带压感标志**（也就是会走等宽那条路）。
+        {
+            Host.Commands.SetTool(Tool.Highlighter);
+            SetColorFromUi(new Color4(1f, 0.6f, 0f, 1f));
+            SettleFrames(120);
+            PenLine(yDash + 90f, 1024);
+            var hl = Doc.Strokes.FirstOrDefault(s => s.Tool == Tool.Highlighter);
+            Check("荧光笔不吃压感（官方示例的 IgnorePressure = true 同款）",
+                  hl != null && !hl.HasPressure,
+                  hl == null ? "没找到荧光笔那条" : $"HasPressure = {hl.HasPressure}");
+            Host.Commands.SetTool(Tool.Pen);
+            SetColorFromUi(new Color4(1f, 0f, 0f, 1f));
+            SettleFrames(120);
+        }
+        Doc.Clear();
+        Doc.ClearHistory();
+        SettleFrames(150);
+
+        // ================= ④ 存档：v10 往返 + 真·v9 老文件 =================
+        {
+            var s = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 12f, HasPressure = true };
+            s.AddPoint(10f, 10f, 0.2f, 0);
+            s.AddPoint(60f, 10f, 0.9f, 8);
+            var d1 = new InkDocument();
+            d1.AddStroke(s);
+            var back = new InkDocument();
+            InkSerializer.LoadInto(back, InkSerializer.Save(d1));
+            Check("存档：v10 往返把「有压感」带回来",
+                  back.Strokes.Count == 1 && back.Strokes[0].HasPressure,
+                  back.Strokes.Count == 1 ? $"HasPressure = {back.Strokes[0].HasPressure}" : "条数不对");
+
+            // 真·v9 老文件（见 MakeLegacyFile）：读进来必须是"没有压感"。
+            var d2 = new InkDocument();
+            d2.AddStroke(new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 12f, HasPressure = true });
+            d2.Strokes[0].AddPoint(10f, 10f, 0.5f, 0);
+            d2.Strokes[0].AddPoint(60f, 10f, 0.5f, 8);
+            // 砍 3 位 = v10 压感 ＋ v11 朝向 ＋ v12 渐近线（v13 没加字段）。
+            byte[] v9 = MakeLegacyFile(d2, 9, 3);
+            var old = new InkDocument();
+            bool ok = true;
+            try { InkSerializer.LoadInto(old, v9); }
+            catch (Exception ex) { ok = false; Console.WriteLine("    " + ex.Message); }
+            Check("存档：真·v9 老文件读得进、且是「没有压感」",
+                  ok && old.Strokes.Count == 1 && !old.Strokes[0].HasPressure,
+                  ok ? $"读回 {old.Strokes.Count} 条，HasPressure = {(old.Strokes.Count > 0 ? old.Strokes[0].HasPressure.ToString() : "?")}"
+                     : "读取抛异常");
+        }
+
+        // 收尾：把状态还回去（自检不该改坏后面要用的东西）。
+        BoardOn = oldBoard;
+        OverlayWindow.InkTrailEnabled = oldTrail;
+        PenWidthLogical = oldPenWidth;
+        SetColorFromUi(oldColor);
+        SetDashFromUi(StrokeDash.Solid);
+        Doc.Clear();
+        Doc.ClearHistory();
+        SettleFrames(120);
+
+        Console.WriteLine();
+        Console.WriteLine($"  合计 {pass + fail} 项：通过 {pass}，失败 {fail}");
+        Console.WriteLine();
         _quit = true;
     }
 

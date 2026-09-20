@@ -46,6 +46,36 @@ internal static class IconAtlas
     public static void Draw(ID2D1DeviceContext ctx, string name, float x, float y,
                             float size, ID2D1Brush brush)
     {
+        // **上游图标库里没有的那两个图形图标，在这里先接住**：
+        //   · 平行四边形：Fluent / Material Symbols 都没有这个专名；
+        //   · 椭圆：Fluent 只有正圆（Circle），而"圆"和"椭圆"现在是上带上挨着的两段，
+        //     两个都画正圆的话老师分不出哪段是哪个。
+        // 接住它们而不是往 Icons.g.cs 里塞：那张表是 tools/gen-ui-icons.ps1 生成的
+        // （文件头写着"请勿手改"），手写的路径进去，下次重跑脚本就没了。
+        // 这里的画法照仓库里已有的自绘图标（激光笔、两种橡皮）：网格 24、圆头圆角、
+        // 线宽和上游 regular 那一套（1.5）对齐，混在一排里看不出是谁画的。
+        if (name == "parallelogram") { DrawParallelogram(ctx, x, y, size, brush); return; }
+        if (name == "oval") { DrawOval(ctx, x, y, size, brush); return; }
+        if (name == "axes") { DrawAxes(ctx, x, y, size, brush); return; }
+        if (name == "numberline") { DrawNumberLine(ctx, x, y, size, brush); return; }
+        // 2026-09-20 第五批：四种曲线的图标也只能自绘（上游图标库里没有抛物线 / 双曲线，
+        // 更没有"一个周期的正弦"这种专名）。
+        //
+        // 抛物线有**两个名字**（parabola = 上下抛物 / parabolaRight = 左右抛物）：
+        // 面板那一格要能看出下一笔是"上下"还是"左右"（用户 2026-09-20 定：
+        // 这一档画之前选）。**具体朝上朝下、朝左朝右**由画的时候那一拖定
+        //（照 InkClass 的 case 20/21），所以不需要四个名字。
+        if (name == "parabola") { DrawParabola(ctx, x, y, size, brush, 0f); return; }
+        if (name == "parabolaRight") { DrawParabola(ctx, x, y, size, brush, 90f); return; }
+        if (name == "hyperbola") { DrawHyperbola(ctx, x, y, size, brush); return; }
+        // 立体图形（2026-09-20 第五批）：图标同样自绘。
+        if (name == "cylinder") { DrawCylinder(ctx, x, y, size, brush); return; }
+        if (name == "cone") { DrawCone(ctx, x, y, size, brush); return; }
+        if (name == "cuboid") { DrawCuboid(ctx, x, y, size, brush); return; }
+        if (name == "tetrahedron") { DrawTetrahedron(ctx, x, y, size, brush); return; }
+        if (name == "sine") { DrawWave(ctx, x, y, size, brush, cosine: false); return; }
+        if (name == "cosine") { DrawWave(ctx, x, y, size, brush, cosine: true); return; }
+
         var geo = SvgPath.Get(PanelIcons.Get(name));
         if (geo == null) return;
 
@@ -80,6 +110,341 @@ internal static class IconAtlas
         float cx = (box.MinX + box.MaxX) * 0.5f;
         float cy = (box.MinY + box.MaxY) * 0.5f;
         Draw(ctx, name, cx - size * 0.5f, cy - size * 0.5f, size, brush);
+    }
+
+    /// <summary>
+    /// **自绘的平行四边形图标**（Fluent 里没有这个专名）。
+    ///
+    /// 形状＝引擎里真正画出来的那个：**底边水平、上边右移 1/4 宽**
+    /// （见 <see cref="InkEngine.StrokeKind.Parallelogram"/>）——图标和它代表的图形
+    /// 是同一个形状，老师不用二次翻译。
+    ///
+    /// 24 网格里的四个角（左下 → 右下 → 右上 → 左上）：
+    /// 底边 x 2→18、上边 x 6→22（右移 4 ＝ 边长的 1/4）、y 6→18。
+    /// 线宽 1.5 ＝ 上游 regular 图标那一套（正圆的环厚就是 1.5），
+    /// 线头圆角用 <see cref="_round"/>：四个角看起来是小小的圆角，
+    /// 和 Fluent 的方块（角半径 2.5）摆在一起不会显得一个是方的一个是圆的。
+    /// </summary>
+    private static void DrawParallelogram(ID2D1DeviceContext ctx, float x, float y,
+                                        float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        var bl = new Vector2(2f, 18f);      // 左下
+        var br = new Vector2(18f, 18f);     // 右下
+        var tr = new Vector2(22f, 6f);      // 右上（相对左上右移 4 = 1/4 边长）
+        var tl = new Vector2(6f, 6f);       // 左上
+        ctx.DrawLine(bl, br, brush, 1.5f, _round);
+        ctx.DrawLine(br, tr, brush, 1.5f, _round);
+        ctx.DrawLine(tr, tl, brush, 1.5f, _round);
+        ctx.DrawLine(tl, bl, brush, 1.5f, _round);
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// **自绘的椭圆图标**。Fluent 那套里只有正圆（Circle）——而"椭圆"和"圆"在
+    /// 上带上是相邻的两段，两个都画正圆的话，老师只能靠左右位置猜哪个是哪个。
+    ///
+    /// 尺寸是**从上游那个正圆量出来的**，所以并排看是一家的：
+    /// 正圆是外径 20（半径 10）、环厚 1.5（内径 17）的环；这里横向不动、纵向压扁，
+    /// 画成"中心线 rx 9.25 / ry 6.25、线宽 1.5"的椭圆——外沿正好还是 20×14，
+    /// 厚度也是 1.5。宽度保持 20 是故意的：椭圆的"宽"和圆的"直径"一样宽，
+    /// 只差在高度上，一眼就知道这两个是一对。
+    /// </summary>
+    private static void DrawOval(ID2D1DeviceContext ctx, float x, float y,
+                                float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        ctx.DrawEllipse(new Ellipse(new Vector2(12f, 12f), 9.25f, 6.25f), brush, 1.5f);
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// **自绘的坐标系图标**（2026-09-19 第三批）：带箭头的十字轴。
+    ///
+    /// 和"数轴"那个图标**必须一眼分得开**：两个都是一条带箭头的线的话，
+    /// 抽屉里那两行就成了"两个一样的图标"。所以这里画**两条轴**（横＋竖），
+    /// 数轴只画一条横的——差别就是"几条轴"，不用看细节。
+    ///
+    /// 24 网格里的摆法：原点 (8.5, 16.5) 偏左下（第一象限大一点，正是老师最常用的画法），
+    /// x 轴伸到 21、y 轴伸到 2.8；箭头画成 V 形两条短线，和画布上那两个箭头同一个套路。
+    /// 线宽 1.5、圆头圆角——和上游 Fluent 那一套（正圆环厚 1.5）混在一排里看不出是谁画的。
+    ///
+    /// 2026-09-19 用户报"图形里面坐标系的图标是带刻度线的"之后**去掉了两条刻度**：
+    /// 画布上的坐标系同一天已经定了"不画刻度"（见 StrokeKind.Coordinate），
+    /// 图标还留着刻度就是**画给用户看一个不存在的东西**。
+    /// </summary>
+    private static void DrawAxes(ID2D1DeviceContext ctx, float x, float y,
+                                 float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        // 两条轴线
+        ctx.DrawLine(new Vector2(2.5f, 16.5f), new Vector2(19.5f, 16.5f), brush, 1.5f, _round);
+        ctx.DrawLine(new Vector2(8.5f, 21.5f), new Vector2(8.5f, 4.5f), brush, 1.5f, _round);
+
+        // 两个箭头（V 形各两条，尖端在轴的末端）
+        ctx.DrawLine(new Vector2(17.4f, 14.6f), new Vector2(21f, 16.5f), brush, 1.5f, _round);
+        ctx.DrawLine(new Vector2(21f, 16.5f), new Vector2(17.4f, 18.4f), brush, 1.5f, _round);
+        ctx.DrawLine(new Vector2(6.6f, 6.2f), new Vector2(8.5f, 2.8f), brush, 1.5f, _round);
+        ctx.DrawLine(new Vector2(8.5f, 2.8f), new Vector2(10.4f, 6.2f), brush, 1.5f, _round);
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// **自绘的数轴图标**：一条带箭头的水平线 ＋ 三根刻度。
+    ///
+    /// 只画一条轴——这就是它和 <see cref="DrawAxes"/> 的差别，也是老师眼里
+    /// "数轴"和"坐标系"的差别本身。刻度**骑在线上**（上下各出一截），
+    /// 和画布上数轴的画法一致（见 Stroke.BuildAxes）。
+    /// </summary>
+    private static void DrawNumberLine(ID2D1DeviceContext ctx, float x, float y,
+                                       float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        ctx.DrawLine(new Vector2(2.5f, 12f), new Vector2(19f, 12f), brush, 1.5f, _round);
+        ctx.DrawLine(new Vector2(17.2f, 10.1f), new Vector2(21.2f, 12f), brush, 1.5f, _round);
+        ctx.DrawLine(new Vector2(21.2f, 12f), new Vector2(17.2f, 13.9f), brush, 1.5f, _round);
+
+        ctx.DrawLine(new Vector2(6f, 9.4f), new Vector2(6f, 14.6f), brush, 1.5f, _round);
+        ctx.DrawLine(new Vector2(11f, 9.4f), new Vector2(11f, 14.6f), brush, 1.5f, _round);
+        ctx.DrawLine(new Vector2(16f, 9.4f), new Vector2(16f, 14.6f), brush, 1.5f, _round);
+
+        ctx.Transform = saved;
+    }
+
+    // =====================================================================
+    //  四种曲线的图标（2026-09-20 第五批，全部自绘）
+    //
+    //  三张都是"把画布上那个形状缩到 24 网格里"：抛物线是那一支 ∪、双曲线是那两支、
+    //  正弦余弦是那一个周期。**尺寸口径和上游 regular 图标一致**（线宽 1.5、圆头圆角、
+    //  留边 3 左右），混在一排里看不出是谁画的——这一条照 DrawParallelogram / DrawOval
+    //  那两个先例。
+    //  图的形状**刻意画成"理想样子"**（抛物线的顶点在正中、双曲线的 a = b），
+    //  而不是某个具体对象的实时样子：图标要一眼认得出是哪一种图形。
+    //  （"操作条上那一格"画的是**当前朝向**，那是另一回事，见 Overlay.DrawCurveAxisGlyph。）
+    // =====================================================================
+
+    /// <summary>
+    /// 抛物线图标（"开口向上"那一张）。<paramref name="deg"/> 是**开口方向的旋转角**：
+    /// 0 = 向上、90 = 向右、180 = 向下、−90 = 向左（见 `Draw` 里的四个名字）。
+    /// </summary>
+    private static void DrawParabola(ID2D1DeviceContext ctx, float x, float y,
+                                     float size, ID2D1Brush brush, float deg)
+    {
+        var saved = ctx.Transform;
+        // 顺序（System.Numerics 约定：先作用左边）：绕**图标自己 24 网格的中心** (12,12) 转，
+        // 再缩放到目标框、平移到目标位置。绕 (0,0) 转会画到框外。
+        ctx.Transform = Matrix3x2.CreateRotation(deg * MathF.PI / 180f, new Vector2(12f, 12f))
+                      * Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        // 顶点 (12, 19)、两臂到 (3, 6) / (21, 6)：就是 x = 12 ± 9t、y = 19 − 13t²，
+        // 取 9 个点连成折线。点数够密，缩到 18 像素也看不出是折线。
+        var prev = new Vector2(12f, 19f);
+        for (int i = 1; i <= 4; i++)
+        {
+            float t = i / 4f;
+            var q = new Vector2(12f + 9f * t, 19f - 13f * t * t);
+            ctx.DrawLine(prev, q, brush, 1.5f, _round);
+            prev = q;
+        }
+        prev = new Vector2(12f, 19f);
+        for (int i = 1; i <= 4; i++)
+        {
+            float t = i / 4f;
+            var q = new Vector2(12f - 9f * t, 19f - 13f * t * t);
+            ctx.DrawLine(prev, q, brush, 1.5f, _round);
+            prev = q;
+        }
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// 自绘的双曲线图标：左右两支（对应"实轴沿 x"那一档）。
+    ///
+    /// 参数方程就是画布上那一份 `x = ±a·cosh t、y = b·sinh t`（a = b = 4）——
+    /// 两条外向的弧，中间留白，一眼和抛物线分得开（抛物线只有一支、也没有中间的空）。
+    /// </summary>
+    private static void DrawHyperbola(ID2D1DeviceContext ctx, float x, float y,
+                                      float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        const float tMax = 1.3f;
+        const int seg = 8;
+        for (int branch = 0; branch < 2; branch++)
+        {
+            var prev = Vector2.Zero;
+            for (int i = 0; i <= seg; i++)
+            {
+                float t = -tMax + 2f * tMax * i / seg;
+                float ch = MathF.Cosh(t) * 4f, sh = MathF.Sinh(t) * 4f;
+                var q = new Vector2(12f + (branch == 0 ? ch : -ch), 12f + sh);
+                if (i > 0) ctx.DrawLine(prev, q, brush, 1.5f, _round);
+                prev = q;
+            }
+        }
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// 自绘的**圆柱**图标（2026-09-20 第五批：立体图形）。
+    ///
+    /// 和画布上画出来的一样：顶面整圈、底面只画看得见的下半圈、两条母线。
+    /// 被挡住的上半圈在本体里是细虚线（辅助几何槽），图标太小就不画那一笔了。
+    /// </summary>
+    private static void DrawCylinder(ID2D1DeviceContext ctx, float x, float y,
+                                     float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        const float cx = 12f, topCy = 6.5f, botCy = 17.5f, rx = 7f, ry = 2.6f;
+        DrawEllipseArc(ctx, new Vector2(cx, topCy), rx, ry, 0f, 1f, brush);
+        DrawEllipseArc(ctx, new Vector2(cx, botCy), rx, ry, 0f, 0.5f, brush);   // 下半圈
+        ctx.DrawLine(new Vector2(cx - rx, topCy), new Vector2(cx - rx, botCy), brush, 1.5f, _round);
+        ctx.DrawLine(new Vector2(cx + rx, topCy), new Vector2(cx + rx, botCy), brush, 1.5f, _round);
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>自绘的**圆锥**图标：底面下半圈 ＋ 两条母线连到顶点（顶点在上边中点）。</summary>
+    private static void DrawCone(ID2D1DeviceContext ctx, float x, float y,
+                                 float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        const float cx = 12f, botCy = 17f, rx = 7f, ry = 2.6f;
+        var apex = new Vector2(cx, 4.5f);
+        DrawEllipseArc(ctx, new Vector2(cx, botCy), rx, ry, 0f, 0.5f, brush);
+        ctx.DrawLine(new Vector2(cx - rx, botCy), apex, brush, 1.5f, _round);
+        ctx.DrawLine(new Vector2(cx + rx, botCy), apex, brush, 1.5f, _round);
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// 自绘的**长方体**图标：正面矩形 ＋ 往后上方 45° 退出来的背面（和他一样，
+    /// 被挡住的那三条棱本来就是虚线，图标太小就只画看得见的部分）。
+    /// </summary>
+    private static void DrawCuboid(ID2D1DeviceContext ctx, float x, float y,
+                                   float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        const float x0 = 4f, y0 = 9f, x1 = 16f, y1 = 20f, d = 4f;
+        void Line(float ax, float ay, float bx, float by)
+            => ctx.DrawLine(new Vector2(ax, ay), new Vector2(bx, by), brush, 1.5f, _round);
+        // 正面
+        Line(x0, y0, x1, y0); Line(x1, y0, x1, y1); Line(x1, y1, x0, y1); Line(x0, y1, x0, y0);
+        // 背面（上横 ＋ 右竖）
+        Line(x0 + d, y0 - d, x1 + d, y0 - d); Line(x1 + d, y0 - d, x1 + d, y1 - d);
+        // 三条看得见的斜棱
+        Line(x0, y0, x0 + d, y0 - d); Line(x1, y0, x1 + d, y0 - d); Line(x1, y1, x1 + d, y1 - d);
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>自绘的**四面体**图标：底面三角形 ＋ 顶点与三条棱（照他，全是实线）。</summary>
+    private static void DrawTetrahedron(ID2D1DeviceContext ctx, float x, float y,
+                                        float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        var bl = new Vector2(3.5f, 19f);
+        var br = new Vector2(20.5f, 19f);
+        var bt = new Vector2(12f, 12.5f);
+        var apex = new Vector2(13.5f, 3.5f);
+        void Line(Vector2 a, Vector2 b) => ctx.DrawLine(a, b, brush, 1.5f, _round);
+        Line(bl, br); Line(br, bt); Line(bt, bl);      // 底面
+        Line(bl, apex); Line(br, apex); Line(bt, apex); // 三条棱
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>图标里画一段椭圆弧（`u0 → u1`，和画布上那套同一个角度约定）。</summary>
+    private static void DrawEllipseArc(ID2D1DeviceContext ctx, Vector2 c, float rx, float ry,
+                                       float u0, float u1, ID2D1Brush brush)
+    {
+        const int n = 16;
+        var prev = EllipseAt(c, rx, ry, u0);
+        for (int i = 1; i <= n; i++)
+        {
+            var q = EllipseAt(c, rx, ry, u0 + (u1 - u0) * i / n);
+            ctx.DrawLine(prev, q, brush, 1.5f, _round);
+            prev = q;
+        }
+    }
+
+    /// <summary>`u ∈ [0,1)`：0 = 右、0.25 = 下、0.5 = 左、0.75 = 上（屏幕 y 向下）。</summary>
+    private static Vector2 EllipseAt(Vector2 c, float rx, float ry, float u)
+    {
+        float a = u * MathF.Tau;
+        return new Vector2(c.X + rx * MathF.Cos(a), c.Y + ry * MathF.Sin(a));
+    }
+
+    /// <summary>
+    /// 自绘的正弦 / 余弦图标：**一个周期**（和画布上画出来的完全一样：
+    /// 正弦从轴起、余弦从峰起——这正是这两个工具的区别，图标也要说清）。
+    ///
+    /// 中线 y = 12、振幅 6、一个周期横向铺满 3→21。
+    /// </summary>
+    private static void DrawWave(ID2D1DeviceContext ctx, float x, float y,
+                                 float size, ID2D1Brush brush, bool cosine)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        const int seg = 16;
+        var prev = Vector2.Zero;
+        for (int i = 0; i <= seg; i++)
+        {
+            float u = i / (float)seg;
+            double phase = u * Math.Tau;
+            float v = cosine ? (float)Math.Cos(phase) : (float)Math.Sin(phase);
+            var q = new Vector2(3f + 18f * u, 12f - 6f * v);
+            if (i > 0) ctx.DrawLine(prev, q, brush, 1.5f, _round);
+            prev = q;
+        }
+
+        ctx.Transform = saved;
     }
 
     /// <summary>

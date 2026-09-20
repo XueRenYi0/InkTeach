@@ -137,6 +137,18 @@ public class InkEngine
     /// 落点的点大小也没法跟笔迹对上。现在四种工具各记各的。
     /// </summary>
     internal float LaserWidthLogical = 4f;
+    /// <summary>
+    /// **笔的线型**（用户 2026-09-19 第 2 件：笔的色带条上要能切虚实线）。
+    ///
+    /// 和 <see cref="PenWidthLogical"/> 同一个地位：**这支笔自己的设置**。
+    /// 只作用于新画出来的**自由笔迹**，而且是"只有笔用"——
+    /// 荧光笔与激光笔的两条半透明/发光轨迹画成虚线没有意义，图形也不吃它
+    /// （图形的线型历来是"选中之后在操作条面板里改"，见 <see cref="SetSelectionDash"/>）。
+    ///
+    /// 画的时候取当时的值写进对象（见 <see cref="Stroke.Dash"/>），之后各存各的：
+    /// 改这个开关**不会**动已经写在板上的东西——和坐标系网格那条一个口径。
+    /// </summary>
+    internal StrokeDash PenDash = StrokeDash.Solid;
     internal float EraserRadius => EraserRadiusLogical * DpiScale;
     private float _lastEraseX, _lastEraseY;
 
@@ -484,41 +496,128 @@ public class InkEngine
     private RectF _dragPrevBounds;
 
     // =====================================================================
-    //  图形端点编辑（直线 / 箭头）：和"拖对象"同一条快路
+    //  图形定义元素编辑（直线 / 箭头 / 圆 / 椭圆）：和"拖对象"同一条快路
     //
-    //  手势期**模型一个字不改**，只在浮动层按"临时几何（种类 + 改动后的端点）"画，
+    //  手势期**模型一个字不改**，只在浮动层按"临时几何（种类 + 改动后的定义元素）"画，
     //  松手才提交一步改几何的动作（见 计划-图形工具.md 8.1①）。
     //  每帧 SetPoint + 标脏那条路会把受影响的块整块重光栅化——实测 19ms/帧。
     // =====================================================================
 
-    /// <summary>正在拖端点改几何（倾斜角读数靠它决定显不显示）。</summary>
+    /// <summary>正在拖定义元素改几何（读数标签靠它决定显不显示）。</summary>
     internal bool VertexDragging => _vertexDragging;
 
     /// <summary>预览要画的那一条（模型此刻没动，它还是旧几何）。</summary>
     internal Stroke VertexPreviewStroke => _vertexDragging ? _vertexTarget : null;
 
-    /// <summary>预览用的**局部坐标**控制点（把拖动中那个端点换掉之后的一组点）。</summary>
+    /// <summary>预览用的**局部坐标**控制点（把拖动中那个定义元素换掉之后的一组点）。</summary>
     internal IReadOnlyList<Vector2> VertexPreviewPoints => _vertexPreviewLocal;
 
-    /// <summary>拖动中的端点在**画布坐标**里的位置（读数标签贴在它外侧）。</summary>
+    /// <summary>拖动中的那个元素在**画布坐标**里的位置（读数标签贴在它外侧）。</summary>
     internal Vector2 VertexPreviewCanvasPoint => _vertexPreviewCanvas;
 
-    /// <summary>α：这条线**本身**的倾斜角（[0°,180°)），和旋转读数 Δ 是两个数。</summary>
-    internal float VertexInclinationDegrees => _vertexInclination;
+    /// <summary>读数该显示哪一种量（直线是 α、圆是 r/d、椭圆是 a 或 b）。</summary>
+    internal VertexReadoutKind VertexReadout => _vertexReadout;
 
-    /// <summary>α 是"吸"出来的吗（软吸附 / Shift 网格）——标签按它变色，和旋转同一套语言。</summary>
+    /// <summary>读数的主数值（α / r / a / b）；单位由 <see cref="VertexReadout"/> 决定。</summary>
+    internal float VertexReadoutValue => _vertexReadoutValue;
+
+    /// <summary>读数的次要值（只有圆用：直径 d = 2r）；其它情况是 0。</summary>
+    internal float VertexReadoutSecondary => _vertexReadoutSecondary;
+
+    /// <summary>读数是不是"吸"出来的（软吸附 / Shift 网格）——标签按它变色。</summary>
     internal bool VertexInclinationSnapped => _vertexSnapped;
 
+    /// <summary>
+    /// 拖顶点 / 轴端点 / 四角时**吸到了什么**（规格 9.6）。`None` = 这一帧没吸住
+    /// （也可能这一拖根本不适用吸附——整体移动、旋转就永远是 `None`）。
+    /// 胶囊上的字由它决定（<see cref="SelectionHandles.ShapeSnapLabel"/>）。
+    /// </summary>
+    internal ShapeSnapKind ShapeSnapKind => _shapeSnap;
+
+    /// <summary>吸住时那颗胶囊贴哪儿（画布坐标）：拖元素 = 被拖的那个元素、拖四角 = 指针。</summary>
+    internal Vector2 ShapeSnapAnchor => _shapeSnapAnchor;
+
     private bool _vertexDragging;
+
+    /// <summary>
+    /// **多笔图形**已经拖完几笔（0 = 还没开始）。画法与"一共有几笔"都在
+    /// <see cref="PlanOf"/> 那张表里（目前只有双曲线：**两笔**）。
+    ///
+    /// 规则是照 **InkClass** 的（用户 2026-09-20 定："按照他的这个规则复刻"）——
+    /// 它的多笔图形就是"**一笔 = 按下-拖-松手**"，松手推进下一笔
+    ///（`MW_ShapeDrawing.cs` 的 `drawMultiStepShapeCurrentStep` ＋ `inkCanvas_MouseUp`）：
+    ///
+    ///   · **双曲线两笔**（`drawingShapeMode = 24/25`，`MW_ShapeDrawing.cs:1051-1152`）：
+    ///     ① **从中心拖出渐近线**（拖到哪、`A / B` 就是多少）→ 松手**锁住**，此后不再变；
+    ///     ② **再拖一下**：拖到哪、**曲线就经过哪**（中心沿用第 1 笔那个，
+    ///        InkClass 的 `NeedUpdateIniP()` 在第二笔刻意**不重设 `iniP`**，`:1971-1977`）。
+    ///
+    /// 中途几笔松手**都不算完**：半成品留在 `ActiveStroke`（**不进文档、不写撤销记录**），
+    /// 最后那一笔松手才统一提交 —— 所以两笔合起来**只有一条撤销记录**（InkClass 也是
+    /// 这个口径：`:1846-1850` 把渐近线笔画和曲线笔画塞进同一个提交里）。
+    /// </summary>
+    private int _stepIndex;
+
+    /// <summary>
+    /// 正在画的这个半成品用的是哪张表（null = 不是多笔图形）。它和 <see cref="_stepIndex"/>
+    /// 一起回答"**还有没有下一笔**"，所以换工具 / 认输时两件都要清（见 <see cref="SwitchTool"/>）。
+    /// </summary>
+    private StepPlan _stepPlan;
+
+    /// <summary>
+    /// 多步图形的**第一个点**（双曲线的中心 / 抛物线的顶点，画布坐标）：后面几步都围着它转。
+    /// </summary>
+    private Vector2 _stepOrigin;
     private Stroke _vertexTarget;
-    /// <summary>被拖那个端点在 `Points` 里的下标（0 或最后）。</summary>
-    private int _vertexIndex;
+    /// <summary>被拖的那个**定义元素**（圆是圆心/圆周点、椭圆是中心/四个轴端点、多边形是顶点）。</summary>
+    private ShapeHandle _vertexHandle;
     private Vector2[] _vertexPreviewLocal;
     private Vector2 _vertexPreviewCanvas;
-    private float _vertexInclination;
+    private VertexReadoutKind _vertexReadout;
+    private float _vertexReadoutValue;
+    private float _vertexReadoutSecondary;
     private bool _vertexSnapped;
-    /// <summary>上一帧"被拖的那个端点"附近的脏矩形（这一帧要连它一起标）。</summary>
+    /// <summary>这一帧的"特殊形状吸附"结果（见 <see cref="ShapeSnapKind"/>）。</summary>
+    private ShapeSnapKind _shapeSnap;
+    private Vector2 _shapeSnapAnchor;
+    /// <summary>上一帧"被拖的那个元素"附近的脏矩形（这一帧要连它一起标）。</summary>
     private RectF _vertexPrevBounds;
+
+    /// <summary>
+    /// 拖定义元素时的最小尺寸（**逻辑像素**）：圆的半径、椭圆的半轴都不许小于它。
+    ///
+    /// 理由和"画图时拖动距离短于 4 逻辑像素就不提交"是同一个：退化成线段 / 点的图形
+    /// 在屏幕上看不见，却还占着一条对象、还能被框选到——是最难解释的一类杂物。
+    /// 用户对椭圆的要求原话是"a、b 各要有最小值（不许退化成线段）"。
+    /// </summary>
+    internal const float ShapeMinAxisLogical = 4f;
+
+    /// <summary>拖定义元素时，那个读数**是什么量**（决定胶囊上写 α / r / a / b）。</summary>
+    internal enum VertexReadoutKind
+    {
+        None = 0,
+        /// <summary>直线的倾斜角 α（[0°,180°)）。</summary>
+        Inclination,
+        /// <summary>圆的半径 r（胶囊上顺带写直径 d = 2r）。</summary>
+        Radius,
+        /// <summary>椭圆的横半轴 a。</summary>
+        AxisA,
+        /// <summary>椭圆的纵半轴 b。</summary>
+        AxisB,
+        /// <summary>
+        /// 抛物线：课本里那个 **p**（`y² = 2px` / `x² = 2py` 里的 p）。
+        ///
+        /// 为什么报 p 而不是"半宽多少像素"：焦点 `(p/2, 0)`、准线 `x = −p/2` 全从它来，
+        /// 而且**四种开口同一个式子**（p = 半跨² ÷ (2 × 深度)）——不需要按方向分文案。
+        /// </summary>
+        ParabolaP,
+        /// <summary>双曲线：**实半轴**（曲线自己的那一半，实轴沿 y 时报的是纵向那个）。</summary>
+        HyperbolaReal,
+        /// <summary>双曲线：**虚半轴**（曲线自己的另一半；**不是**渐近线框的 A / B——那两个只画虚线）。</summary>
+        HyperbolaImag,
+        /// <summary>正弦 / 余弦：**周期 T**（一个周期有多宽；secondary 是振幅 A）。</summary>
+        WavePeriod,
+    }
 
     /// <summary>正在拖旋转手柄——度数标签靠它决定显不显示。</summary>
     internal bool SelRotating;
@@ -544,14 +643,41 @@ public class InkEngine
     /// （见 SelectionHandles.FormatSignedDegrees）。
     ///
     /// 只在"单选直线/箭头"这一条分支里有意义，由 <see cref="SelRotationReadsInclination"/> 决定
-    /// 标签读谁；其它情况（多选 / 矩形 / 椭圆 / 图像 / 自由笔迹）照旧读 Δ。
+    /// 标签读谁；其它情况（多选 / 图像 / 自由笔迹 / 圆）照旧读 Δ，
+    /// 单选一个图形（矩形 / 椭圆 / 三角形 / 平行四边形）读的是姿态角（见 <see cref="SelRotationPose"/>）。
     /// </summary>
     internal float SelRotationInclination;
     /// <summary>这一次旋转的读数是不是 α₀ + Δ（真 = 单选直线/箭头；假 = 照旧读 Δ）。</summary>
     internal bool SelRotationReadsInclination;
 
+    /// <summary>
+    /// **单选一个图形**（矩形 / 椭圆 / 三角形 / 平行四边形）拖旋转柄时的读数：这个图形
+    /// **相对水平的姿态角**（度，折在 [0°,180°)；0° = 正的、90° = 竖的）。
+    ///
+    /// 和直线的那个读数有两处**故意不一样**（规格 9.7）：
+    ///   · **折在 [0°,180°)**：姿态角只是"这个图形朝哪边躺着"，没有圈数可言
+    ///     （直线那个是"从 α₀ 接着转了多少"，用户 2026-09-18 明确要不设上限，两者用途不同）；
+    ///   · 它**每帧从最终矩阵里解出来**（见 UpdateSelDrag 末尾），不是"按下时的角 + 累积角"
+    ///     一路累加出来的——于是"矩阵与标签是同一个角"是**构造出来的**性质：镜像 / 上下翻转
+    ///     过的图形（行列式为负，本地转 +1° 在屏幕上是 -1°）也不会对不上。
+    ///     累积角照样在管吸附：吸住了就把差额加回去（和直线那一支是同一套账）。
+    /// </summary>
+    internal float SelRotationPose;
+    /// <summary>这一次旋转的读数是不是姿态角（真 = 单选一个图形；见 <see cref="SelectionHandles.PoseEditable"/>）。</summary>
+    internal bool SelRotationReadsPose;
+
     /// <summary>这次旋转是不是"单选直线/箭头"那一档（按下那一刻判定一次，手势里不再变）。</summary>
     private bool _rotLineLike;
+    /// <summary>这次旋转是不是"单选一个图形"那一档（读姿态角；同样按下时判定一次）。</summary>
+    private bool _rotPoseLike;
+    /// <summary>被转的图形是不是**镜像过**的（行列式为负）：修正要反着加回累积角（见 UpdateSelDrag）。</summary>
+    private bool _rotMirrored;
+    /// <summary>
+    /// 按下那一刻这个**图形**的姿态角（折在 [0°,180°)）——它对应直线那一支的 α₀：
+    /// 吸附要在"它 + 累积角"这个**连续**的角上做（折过的值直接吸会把三角形翻 180°，见
+    /// SelectionHandles.SnapExpandedDegrees 的注释）。
+    /// </summary>
+    private float _rotStartPose;
     /// <summary>
     /// 按下那一刻这条线的倾斜角 α₀（折在 [0°,180)）——旋转读数就是从它开始"接着变"的。
     /// 初始角用折过的值是有意的（用户："初始角度是要调一下"）：一条线没有方向，
@@ -612,6 +738,9 @@ public class InkEngine
     private readonly InkPredictor _predictor = new();
     private readonly PredictedPoint[] _predBuf = new PredictedPoint[8];
     private readonly Vector2[] _trailReal = new Vector2[PenSampleBuffer.MaxSamples];
+    /// <summary>湿墨**逐点半径**（和 _trailReal 一一对应）：有压感时湿墨也得有粗有细，
+    /// 否则抬手那一下粗细会跳（见 <see cref="TrailRadius"/>）。</summary>
+    private readonly float[] _trailRadii = new float[PenSampleBuffer.MaxSamples];
     private readonly Vector2[] _trailPred = new Vector2[8];
 
     /// <summary>湿墨预测开关。真笔专属，<c>--nopredict</c> 关掉。</summary>
@@ -935,6 +1064,31 @@ public class InkEngine
                 _predictor.MaxDistance = Math.Clamp(pl, 4f, 40f);
         _predictor.ClampHorizon();
 
+        // ---- 压感 → 粗细 ------------------------------------------------------
+        //
+        // 默认**开**：设备报压力就按压力改粗细——和系统墨迹（Tablet PC / OneNote 那一档）
+        // 同一个口径：最小压力 50%、最大 150%（见 PressureWidth）。
+        //
+        // 两个开关都是**给真机调手感用的**，不是给用户平时按的：
+        //   · `--nopressure` 关掉，用来做"有/无"对照（差异要当场看得出来才算数）；
+        //   · `--pressrange min,max[,gamma]` 现调动态范围与曲线，不用重编。
+        PressureWidth.Enabled = !args.Contains("--nopressure");
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] != "--pressrange") continue;
+            var parts = args[i + 1].Split(',');
+            if (parts.Length >= 2
+                && float.TryParse(parts[0], out float pmin)
+                && float.TryParse(parts[1], out float pmax)
+                && pmax > pmin)
+            {
+                PressureWidth.Min = Math.Clamp(pmin, 0.05f, 2f);
+                PressureWidth.Max = Math.Clamp(pmax, 0.10f, 3f);
+                if (parts.Length >= 3 && float.TryParse(parts[2], out float pg) && pg > 0.05f)
+                    PressureWidth.Gamma = Math.Clamp(pg, 0.1f, 4f);
+            }
+        }
+
         // ---- 呈现节奏 ---------------------------------------------------------
         // 默认改成"等到合成边界再抽输入、立刻 Present(0)"。实测这一项把
         // "Present 返回 → 像素亮"从 3.5 个刷新周期压到 1 个（见
@@ -1112,6 +1266,9 @@ public class InkEngine
             _windows.Add(w);
             Console.WriteLine($"overlay on monitor {hMon}: {r.Width}x{r.Height} at ({r.Left},{r.Top}) dpi={w.Dpi}");
             Console.WriteLine($"委托墨迹轨迹(InkTrail): {OverlayWindow.InkTrailNote}");
+            Console.WriteLine($"压感→粗细: {(PressureWidth.Enabled
+                ? $"开（{PressureWidth.Min:F2}~{PressureWidth.Max:F2} 倍，曲线 gamma {PressureWidth.Gamma:F2}）"
+                : "关（--nopressure）")}；变宽通道: {OverlayWindow.InkNote}");
             return true;
         }, IntPtr.Zero);
 
@@ -1450,6 +1607,7 @@ public class InkEngine
     private string SelectModeTag()
         => Tool == Tool.Marquee ? (SelMode == SelectMode.Lasso ? "·套索" : "·矩形") : "";
 
+    /// <summary>工具名（遥测 / HUD / 日志用）。</summary>
     private static string ToolName(Tool t) => t switch
     {
         Tool.Pen => "笔",
@@ -1461,8 +1619,23 @@ public class InkEngine
         Tool.Marquee => "框选",
         Tool.Line => "直线",
         Tool.Rectangle => "矩形",
-        Tool.Ellipse => "圆",
+        Tool.Ellipse => "椭圆",
+        Tool.Circle => "圆",
+        Tool.Triangle => "三角形",
+        Tool.Parallelogram => "平行四边形",
         Tool.Arrow => "箭头",
+        // 2026-09-20 补：这六个以前落在 `_ => "?"`，HUD 和橡皮日志里显示成问号
+        //（加图形时最容易漏的一处，因为漏了不报错、只是显示难看）。
+        Tool.Coordinate => "坐标系",
+        Tool.NumberLine => "数轴",
+        Tool.Parabola => "抛物线",
+        Tool.Hyperbola => "双曲线",
+        Tool.Sine => "正弦",
+        Tool.Cosine => "余弦",
+        Tool.Cylinder => "圆柱",
+        Tool.Cone => "圆锥",
+        Tool.Cuboid => "长方体",
+        Tool.Tetrahedron => "四面体",
         _ => "?",
     };
 
@@ -1783,22 +1956,50 @@ public class InkEngine
                 Laser.Add(x, y, NowMs);
                 break;
 
-            // 四种图形工具：**同一个手势**"按下记起点 → 拖动改终点 → 松手提交"
-            // （接一个等于接四个，差别只在 Kind，见 计划-图形工具.md 8.2）。
-            case Tool.Line:
-            case Tool.Rectangle:
-            case Tool.Ellipse:
-            case Tool.Arrow:
-                BeginShapeAt(tool, x, y);
-                break;
-
+            // 图形工具：**同一个手势**"按下记起点 → 拖动改终点 → 松手提交"
+            // （接一个等于接七个，差别只在 Kind，见 计划-图形工具.md 8.2 / 9.1）。
+            //
+            // 判据走 <see cref="IsShapeTool"/>，**不再在这里逐个列 case**：
+            // 以前这里是一串 `case Tool.Line: …`，和 IsShapeTool 是**同一件事的两份名单**。
+            // 2026-09-19 加坐标系 / 数轴时这里就漏改了，症状是"工具切过去了、
+            // 画出来的还是一坨自由笔迹"——`--axistest` 第一次跑就把它抓出来了。
+            // 合成一份之后，以后再加图形种类不会再漏第二个地方。
             default:
+                if (IsShapeTool(tool))
+                {
+                    // **多笔图形**（目前只有双曲线：两笔，见表 StepPlan）。规则照 InkClass：
+                    // **一笔 = 按下-拖-松手**，松手推进下一笔（见 _stepIndex 那段注释）。
+                    //   ① 第 1 笔按下 → 起半成品（`_stepPlan` / `_stepIndex` 也在那里落）；
+                    //   ② 后面几笔按下 → **什么都不新建**，只接着改那个半成品
+                    //     （中心沿用第 1 笔那个，InkClass 也是这么干的）。
+                    if (_stepPlan != null && _stepIndex > 0)
+                    {
+                        ApplyStepGeometry(x, y);
+                        break;
+                    }
+                    var plan = PlanOf(tool);
+                    if (plan != null)
+                    {
+                        BeginStepShape(tool, plan, x, y);
+                        ApplyStepGeometry(x, y);      // 按下也算一次（见那个函数的注释）
+                        break;
+                    }
+                    BeginShapeAt(tool, x, y);
+                    break;
+                }
+
                 float trailW = (tool == Tool.Highlighter ? HighlighterWidthLogical
                                                          : tool == Tool.Laser ? LaserWidthLogical
                                                          : PenWidthLogical) * DpiScale;
+                // 这一笔的线型：**只有笔吃那个开关**（见 PenDash），别的工具一律实线。
+                var dash = tool == Tool.Pen ? PenDash : StrokeDash.Solid;
                 // 只对真笔（PT_PEN）起轨迹：这条通道是给"笔尖跟手"用的，
                 // 鼠标/触摸走它没有意义，而且会平白多一条系统画出来的线。
-                if (ptype == Native.PT_PEN)
+                //
+                // **虚线笔迹不起委托墨迹**：那条轨迹由系统合成器画，画不出我们的线型
+                // （它只会画一条实线），一笔写完就会"实线突然变虚线"闪一下。
+                // 退回落自己画反而是对的——自己画的湿墨本来就是虚线，前后一致。
+                if (ptype == Native.PT_PEN && dash == StrokeDash.Solid)
                     WindowAt(screenX, screenY)?.BeginInkTrail(
                         tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f);
                 ActiveStroke = new Stroke
@@ -1808,6 +2009,7 @@ public class InkEngine
                     Width = (tool == Tool.Highlighter ? HighlighterWidthLogical
                                                       : tool == Tool.Laser ? LaserWidthLogical
                                                       : PenWidthLogical) * DpiScale,
+                    Dash = dash,
                 };
                 // 起笔：预测器从这一刻开始积累；落笔这条消息里可能已经合并了几个采样点，
                 // 一起收进来（以前只取最新那一个）。
@@ -1815,7 +2017,8 @@ public class InkEngine
                 ActiveStrokeHasPressure = false;
                 LastCoalescedSamples = LastCoalescedMessages = 0;
                 AppendStrokeSamples(id, ptype, x, y, pressure);
-                FeedInkTrail(ptype, trailW * 0.5f, screenX, screenY);
+                // 半径**逐点算**（见 TrailRadius）：有压感的笔，湿墨的粗细必须和干墨一致。
+                FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
                 break;
         }
         _dirty = true;
@@ -1906,16 +2109,25 @@ public class InkEngine
                 Laser.Add(x, y, NowMs);
                 break;
 
-            // 图形：只更新**终点**（几何由两个端点定义），不往里堆采样点。
+            // 图形：只更新**控制点**（图形由它的定义元素决定），不往里堆采样点。
             // 预览就走"正在书写的那一笔"那条路（它本来就每帧重画），所以实时。
-            case Tool.Line:
-            case Tool.Rectangle:
-            case Tool.Ellipse:
-            case Tool.Arrow:
-                if (ActiveStroke != null) UpdateShapePreview(x, y);
-                break;
-
+            //
+            // 判据同样走 <see cref="IsShapeTool"/>，**不在这里逐个列 case**——
+            // 和 OnPointerDown 那条是同一个理由（那边漏改过一次，两个地方一起修掉）。
             default:
+                // 拖**手柄**（改几何）排在图形前面：手柄拖动是在选择工具下起手的，
+                // 拖到一半可能被热键换成图形工具（见 SwitchTool），那时 `ActiveStroke` 还是
+                // null —— 落到下面 UpdateShapePreview 上就什么都不发生（鼠标拖得动、模型一动不动）。
+                if (_vertexDragging && _vertexTarget != null)
+                {
+                    UpdateSelDrag(x, y);
+                    break;
+                }
+                if (ActiveStroke != null && IsShapeTool(tool))
+                {
+                    UpdateShapePreview(x, y);
+                    break;
+                }
                 if (ActiveStroke != null)
                 {
                     // 指针报什么坐标就存什么坐标：不做平滑、不做抽稀。
@@ -1923,7 +2135,7 @@ public class InkEngine
                     // （自己实测：注入 140 Hz，应用只收到约 60 条消息，其余在 history 里），
                     // 只取最新那一个等于把笔的采样率砍半（见 Input/PenInput.cs）。
                     AppendStrokeSamples(id, ptype, x, y, pressure);
-                    FeedInkTrail(ptype, ActiveStroke.Width * 0.5f, screenX, screenY);
+                    FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
                 }
                 break;
         }
@@ -2515,11 +2727,34 @@ public class InkEngine
         }
         if (ActiveStroke != null)
         {
+            // **多笔图形**：松手 = **这一笔完成**（照 InkClass：推进就发生在 MouseUp，
+            // 见 `MW_ShapeDrawing.cs:1814-1822` 的 `drawMultiStepShapeCurrentStep`）。
+            // 推进一步之后再看"还有没有下一笔"。
+            //
+            // 注意这里**不以"拖了多远"为准**：多笔图形的每一笔定的是**一个几何量**
+            //（渐近线框 / 曲线过哪），"在目标位置点一下"和"拖过去"一样有效 ——
+            // 所以不拿 ShapeDragLongEnough 去卡它（那是给一笔成形的图形防误点用的）。
+            if (_stepPlan != null) _stepIndex++;
+
+            // 还有下一笔 → 这一下松手**不算完**：半成品停在 ActiveStroke 里
+            //（**不进文档、也不写撤销记录**），等最后一笔松手再统一提交。
+            // 这样在用户眼里这几笔是连着的，中途不会先冒出一条"半成品"曲线、再把它改掉，
+            // 撤销也不会多出好几条记录（InkClass 同样把两笔塞进同一个提交里，`:1846-1850`）。
+            bool stepPending = _stepPlan != null && _stepIndex < _stepPlan.Apply.Length;
+
             // 图形：拖动太短 = 误点，**不提交**。什么都不留（连撤销记录都不留）——
             // 一个退化的图形（零长度直线、零面积矩形）在画面上看不见，却能被点中、
             // 能被框选，是最难解释的一类杂物。
-            bool commit = ActiveStroke.Points.Count > 0
-                       && (!IsShapeTool(ActiveStroke.Tool) || ShapeDragLongEnough(ActiveStroke));
+            //
+            // **多笔图形**没有"拖多长"可依（见上），所以改看**定义元素齐没齐**：
+            // 双曲线少一个"曲线经过的点"就等于什么都没定下来（`MinCurvePoints` 说它要三个点），
+            // 这种半成品不提交。尺寸下限在各自的算式里已经卡死
+            //（`SetHyperbolaFromAsymptote`），退化不成"看不见却占着一条对象"。
+            bool commit = !stepPending
+                       && ActiveStroke.Points.Count > 0
+                       && (_stepPlan != null
+                           ? ActiveStroke.Points.Count >= Stroke.MinCurvePoints(ActiveStroke.Kind)
+                           : (!IsShapeTool(ActiveStroke.Tool) || ShapeDragLongEnough(ActiveStroke)));
             if (commit)
             {
                 Doc.AddStroke(ActiveStroke);
@@ -2531,13 +2766,28 @@ public class InkEngine
                     + $"，合并({LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 个采样点)";
                 Console.WriteLine("[笔画] " + _lastStrokeReport);
             }
-            else if (IsShapeTool(ActiveStroke.Tool))
+            else if (!stepPending && IsShapeTool(ActiveStroke.Tool) && _stepPlan == null)
             {
                 Console.WriteLine($"[图形] 拖动太短（< {ShapeMinDragLogical:F0} 逻辑像素），没提交");
             }
-            ActiveStroke = null;
+            // 多笔式没走完：**连 ActiveStroke 都不清**——它还要接着给下一笔当预览用；
+            // 表和"画到第几笔"也跟着留在原地（下一笔按下时要用）。
+            if (!stepPending)
+            {
+                ActiveStroke = null;
+                _stepPlan = null;
+                _stepIndex = 0;
+            }
         }
-        if (Tool == Tool.Marquee)
+        // 拖动**手柄**（改几何）的收尾：**和当前工具无关**。
+        //
+        // 挂在下面"选择工具"那条分支里是不够的：手柄拖动属于**选中**那一套，
+        // 而松手时手上的工具可能已经不是选择工具了（拖到一半按热键换了工具，
+        // 见 SwitchTool——它只作废多笔图形的半成品，不动手柄拖动）。
+        // 那种情况下这一拖会**永远不提交**：屏幕上拖得好好的，松手一看 a 一点没变
+        //（自检当场抓出来过）。
+        if (_vertexDragging) EndSelDrag();
+        else if (Tool == Tool.Marquee)
         {
             if (_sliderDragging) _sliderDragging = false;      // 滑条松手：只是停，不用收尾
             else if (SelDragging) EndSelDrag();
@@ -3097,51 +3347,268 @@ public class InkEngine
     /// </summary>
     internal const float ShapeMinDragLogical = 4f;
 
-    /// <summary>这四种工具走"两点定义图形"那条路（其余工具照旧写自由笔迹）。</summary>
+    /// <summary>这几种工具走"拖出来一个图形"那条路（其余工具照旧写自由笔迹）。</summary>
     internal static bool IsShapeTool(Tool t)
-        => t is Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Arrow;
+        => t is Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Circle
+             or Tool.Triangle or Tool.Parallelogram or Tool.Arrow
+             or Tool.Coordinate or Tool.NumberLine
+             or Tool.Parabola or Tool.Hyperbola or Tool.Sine or Tool.Cosine
+             or Tool.Cylinder or Tool.Cone or Tool.Cuboid or Tool.Tetrahedron;
 
-    private static StrokeKind KindOfShapeTool(Tool t) => t switch
+    /// <summary>
+    /// **一笔**做什么：把"这一笔拖到的位置"写进半成品的几何。
+    ///
+    /// 参数含义：`s` = 半成品对象、`origin` = **第 1 笔按下的那个点**（双曲线的中心；
+    /// 后面几笔沿用，不在自己那一笔重设）、`p` = 这一笔指针所在的位置、
+    /// `minSize` = 几何下限（见 <see cref="ShapeMinAxisLogical"/>，防"零尺寸图形"）。
+    /// </summary>
+    private delegate void StepApply(Stroke s, Vector2 origin, Vector2 p, float minSize);
+
+    /// <summary>
+    /// 一种**多笔图形**的表：**一笔一行**（`Apply` 的长度 = 这种图形要拖几笔）。
+    ///
+    /// 为什么要收成一张表（用户 2026-09-20 定："照他的规则复刻……用状态机"）：
+    /// InkClass 里"现在画到第几笔"这件事**抄了三遍**——双曲线用自己的
+    /// `drawMultiStepShapeCurrentStep`、长方体用自己的 `CuboidStrokeCollection`、
+    /// 四面体用自己的 `isFirstTouchTetrahedron`，三份各写各的、各在 MouseUp 里各判一次。
+    /// 我们收成**一行表**：以后加一种多笔图形 = **表里加一行 ＋ 写它那几笔的算式**，
+    /// 推进 / 提交 / 作废 / 触摸那套逻辑一个字都不用动。
+    ///
+    /// 表里**暂时不写提示文案**：提示是 §18 那件事（用户定"最后做"），
+    /// 到时候在这一行旁边加一列就够了。
+    /// </summary>
+    private sealed class StepPlan
+    {
+        public StepApply[] Apply = Array.Empty<StepApply>();
+    }
+
+    /// <summary>
+    /// **双曲线：两笔**（照 InkClass 的 `drawingShapeMode = 24/25`，`MW_ShapeDrawing.cs:1051-1152`）：
+    ///
+    ///   第 1 笔：**从中心拖出渐近线**（`A = |dx|、B = |dy|`，"拖到哪就是哪"）；
+    ///   第 2 笔：**拖到哪、曲线就经过哪**（中心沿用第 1 笔那个）。
+    ///
+    /// 算式各只有一份、都在模型层（<see cref="Stroke.SetHyperbolaFromAsymptote"/> /
+    /// <see cref="Stroke.SetHyperbolaThroughPoint"/>），这张表只负责"第几笔调哪一个"。
+    /// </summary>
+    private static readonly StepPlan HyperbolaPlan = new()
+    {
+        Apply = new StepApply[]
+        {
+            static (s, o, p, min) => s.SetHyperbolaFromAsymptote(o.X, o.Y, p.X, p.Y, min),
+            static (s, o, p, _) => s.SetHyperbolaThroughPoint(p.X, p.Y),
+        },
+    };
+
+    /// <summary>
+    /// **长方体：两笔**（照 InkClass 的 `case 9`）——第 1 笔正面矩形、第 2 笔深度。
+    /// </summary>
+    private static readonly StepPlan CuboidPlan = new()
+    {
+        Apply = new StepApply[]
+        {
+            static (s, o, p, _) => s.SetCuboidFront(o.X, o.Y, p.X, p.Y),
+            static (s, o, p, _) => s.SetCuboidDepth(p.X, p.Y),
+        },
+    };
+
+    /// <summary>**四面体：两笔**（照他的 `case 26`）——第 1 笔底面三角形、第 2 笔顶点。</summary>
+    private static readonly StepPlan TetrahedronPlan = new()
+    {
+        Apply = new StepApply[]
+        {
+            static (s, o, p, _) => s.SetTetraBase(o.X, o.Y, p.X, p.Y),
+            static (s, o, p, _) => s.SetTetraApex(p.X, p.Y),
+        },
+    };
+
+    /// <summary>
+    /// 这种工具是不是**多笔**的；是的话它的表在哪（见 <see cref="StepPlan"/>）。
+    /// **判据只有这一处**：按下（起半成品 / 接着改）与松手（推进还是提交）都问它，
+    /// 各写一份名单就是"加一种图形必漏一处"的老毛病。
+    /// </summary>
+    private static StepPlan PlanOf(Tool t) => t switch
+    {
+        Tool.Hyperbola => HyperbolaPlan,
+        Tool.Cuboid => CuboidPlan,
+        Tool.Tetrahedron => TetrahedronPlan,
+        _ => null,
+    };
+
+    /// <summary>
+    /// **多笔图形的第 1 笔**按下：起一条**还没进文档**的半成品，并记下"第一个点"
+    ///（双曲线的**中心**）—— 后面几笔都围着它算。InkClass 也是这个口径：
+    /// 第二笔刻意**不重设** `iniP`（`NeedUpdateIniP()`，`:1971-1977`）。
+    /// </summary>
+    private void BeginStepShape(Tool tool, StepPlan plan, float x, float y)
+    {
+        BeginShapeAt(tool, x, y);
+        _stepPlan = plan;
+        _stepIndex = 0;
+        _stepOrigin = new Vector2(x, y);
+    }
+
+    /// <summary>
+    /// 把"**当前这一笔**、指针在 `(x, y)`"写进半成品的几何（查表 → 调模型那一份算式）。
+    ///
+    /// **按下和拖动都调它**：按下也调，是为了"在目标位置点一下、没怎么拖"也算数
+    ///（老师很可能就直接点在要经过的地方）。
+    /// </summary>
+    private bool ApplyStepGeometry(float x, float y)
+    {
+        var s = ActiveStroke;
+        if (s == null || _stepPlan == null) return false;
+        if (_stepIndex < 0 || _stepIndex >= _stepPlan.Apply.Length) return false;
+        _stepPlan.Apply[_stepIndex](s, _stepOrigin, new Vector2(x, y),
+                                    ShapeMinAxisLogical * DpiScale);
+        _dirty = true;
+        return true;
+    }
+
+    /// <summary>
+    /// **多笔图形的第 1 笔**里"屏幕上先只出现一半"的那一个：双曲线还没定"曲线经过的点"时，
+    /// **只画渐近线、先不画曲线**——照 InkClass（第一笔只画两条虚线渐近线，
+    /// `MW_ShapeDrawing.cs:1059-1068`，曲线是第二笔才出现的）。
+    ///
+    /// 判据直接看**模型有没有第三个点**，不另设状态位：没有那个点，曲线本来就没定义
+    ///（`HyperbolaCurveALocal` 只能给一个兜底大小），画出来是假的。
+    /// 渲染那一头在 Overlay 里读它（见 `DrawStrokeCore` 开头的说明）。
+    /// </summary>
+    internal bool HyperAsymptotePreviewOnly
+        => ActiveStroke?.Kind == StrokeKind.Hyperbola && ActiveStroke.Points.Count < 3;
+
+    /// <summary>图形工具 → 它画出来的种类。**和 <see cref="IsShapeTool"/> 同一份名单**，
+    /// 加图形时两处都要动（自检 `--shapebandtest` 的"名单一致"那条会卡住）。</summary>
+    internal static StrokeKind KindOfShapeTool(Tool t) => t switch
     {
         Tool.Line => StrokeKind.Line,
         Tool.Rectangle => StrokeKind.Rectangle,
         Tool.Ellipse => StrokeKind.Ellipse,
+        Tool.Circle => StrokeKind.Circle,
+        Tool.Triangle => StrokeKind.Triangle,
+        Tool.Parallelogram => StrokeKind.Parallelogram,
+        Tool.Coordinate => StrokeKind.Coordinate,
+        Tool.NumberLine => StrokeKind.NumberLine,
+        Tool.Parabola => StrokeKind.Parabola,
+        Tool.Hyperbola => StrokeKind.Hyperbola,
+        Tool.Sine => StrokeKind.Sine,
+        Tool.Cosine => StrokeKind.Cosine,
+        Tool.Cylinder => StrokeKind.Cylinder,
+        Tool.Cone => StrokeKind.Cone,
+        Tool.Cuboid => StrokeKind.Cuboid,
+        Tool.Tetrahedron => StrokeKind.Tetrahedron,
         _ => StrokeKind.Arrow,
     };
 
     /// <summary>
+    /// 抛物线**一笔**（照 InkClass 的 `case 20/21`：顶点 → 末端点，一次拖完）：
+    ///
+    ///   · 顶点 = **按下那一刻**那个点（见 <see cref="BeginShapeAt"/>）；
+    ///   · **开口朝哪边**由这一拖的符号定（见 <see cref="Stroke.ParabolaAxisOfDrag"/>）
+    ///     —— 面板那一格只回答"**上下还是左右**"这件推不出来的事（`ParabolaAxis`）；
+    ///   · `p`（张口）与"**画到哪**"都由这一拖定：曲线**正好停在你拖到的那个点**上
+    ///     （`p = t²/(2s)` 反解；画出范围见 `Stroke.ParabolaSpanOf`）。
+    ///
+    /// 用户 2026-09-20 的口径（原话）："现在这个双曲线和抛物线的感觉不对，还是照搬他的逻辑吧"
+    /// —— 上一版"方向由面板选死"的问题是：面板选着向上、手却往下拖时反解出负数，
+    /// 曲线会当场缩成一条细针（`p` 掉到下限）。方向跟着拖动走就再也不会出这种事。
+    /// </summary>
+    private bool UpdateParabolaPreview(float x, float y)
+    {
+        var s = ActiveStroke;
+        if (s == null || s.Kind != StrokeKind.Parabola) return false;
+        var v = new Vector2(s.Points[0].X, s.Points[0].Y);
+        var q = new Vector2(x, y);
+        // **方向先定**：`SetParabolaVertex` 要用它来铺那个占位点（见模型里那段注释）。
+        s.CurveAxis = Stroke.ParabolaAxisOfDrag(v, q, ParabolaAxis);
+        s.SetParabolaVertex(v.X, v.Y);
+        s.SetParabolaThroughPoint(q.X, q.Y);
+        _dirty = true;
+        return true;
+    }
+
+    /// <summary>
+    /// **抛物线工具当前的"哪一对"**（用户 2026-09-20 定：画**之前**定好，不在选中框里改——
+    /// 他原话是"选中框的抛物线按钮功能取消，我不打算从这个转抛物线开口"）。
+    ///
+    /// 只两档、也正是 InkClass 的那两个按钮：
+    ///   · `OpenUp` = **上下抛物**（他的 `y = ax²`，`case 20`）；
+    ///   · `OpenRight` = **左右抛物**（他的 `y² = ax`，`case 21`）。
+    ///
+    /// **具体朝哪边不在这里**——由画的时候那一拖的符号定（见 `Stroke.ParabolaAxisOfDrag`）。
+    /// 2026-09-20 晚用户看过之后定："感觉不对，还是照搬他的逻辑"：
+    /// 方向由面板选死时，"选着向上、手却往下拖"会让曲线缩成一条细针。
+    /// 面板只回答推不出来的那件事（上下还是左右），连续量（朝哪边、多大、多长）全交给手。
+    ///
+    /// 它只在两处出现：图形面板里**再点一次那一格**换一档（见 FullUi.ActivateSegment 与
+    /// <see cref="CycleParabolaAxis"/>），以及画的时候写进对象（见 <see cref="BeginShapeAt"/>）。
+    ///
+    /// 存成**引擎字段**、不存偏好文件：一次课里连画几条同向的抛物线是常态，
+    /// 留着上一次那个方向比每次回"上下"顺手；但也犯不上跨进程记着，所以不进偏好。
+    /// </summary>
+    public CurveAxis ParabolaAxis { get; private set; } = CurveAxis.OpenUp;
+
+    /// <summary>
+    /// 换下一档"哪一对"：**上下 → 左右 → 上下**（见 <see cref="ParabolaAxis"/>）。
+    /// 只影响**下一笔**画出来的抛物线，不碰已经画好的对象。
+    /// </summary>
+    public void CycleParabolaAxis()
+    {
+        ParabolaAxis = ParabolaAxis == CurveAxis.OpenUp ? CurveAxis.OpenRight : CurveAxis.OpenUp;
+        // 面板上那一格的图标要跟着换，所以推一次状态（同时标脏，HUD 之类也读它）。
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
     /// 图形工具的起手：造一条**只有起点**的图形，拖动期由
-    /// <see cref="UpdateShapePreview"/> 改终点，松手由 <see cref="EndStroke"/> 提交。
+    /// <see cref="UpdateShapePreview"/> 改控制点，松手由 <see cref="EndStroke"/> 提交。
     ///
     /// 刻意**不喂预测器、也不起委托墨迹**：那是"笔尖跟手"用的，
-    /// 而图形跟着指针走的是**吸附后的端点**——两套画在屏幕上会变成两条不一样的线。
+    /// 而图形跟着指针走的是**吸附后的控制点**——两套画在屏幕上会变成两条不一样的线。
     /// </summary>
     private void BeginShapeAt(Tool tool, float x, float y)
     {
+        var kind = KindOfShapeTool(tool);
         ActiveStroke = new Stroke
         {
             Tool = tool,
-            Kind = KindOfShapeTool(tool),
+            Kind = kind,
             Color = CurrentColor,
             Width = PenWidthLogical * DpiScale,
+            // 坐标系要不要网格 = **画的那一刻那个开关的状态**（见 CoordGridDefault）。
+            // 存到对象自己身上，之后单独改它不影响别的坐标系（见 Stroke.Grid 的注释）。
+            Grid = kind == StrokeKind.Coordinate && CoordGridDefault,
+            // 抛物线的**开口方向是画之前选好的**（见 ParabolaAxis）：画的那一刻写进对象，
+            // 之后它就是这条曲线自己的属性，和工具当前那档再无关系。
+            CurveAxis = kind == StrokeKind.Parabola ? ParabolaAxis : CurveAxis.OpenUp,
         };
         ActiveStroke.AddPoint(x, y, 1f, NowMs);
+        // 抛物线的**顶点 = 按下那个点**：它现在是**一笔画完**的（照 InkClass 的 `case 20/21`：
+        // 顶点 → 末端点，一次拖完），所以顶点在这里就落定，拖动只负责"曲线过哪、开多大"
+        //（见 UpdateParabolaPreview）。多笔图形的第一个点不在这里定（它们各有各的算式）。
+        if (kind == StrokeKind.Parabola) ActiveStroke.SetParabolaVertex(x, y);
         // 读数状态从这一刻重新开始：不清的话，上一次画线吸住的那个强调色会漏到
         // 这一次的第一帧（还没收到移动消息，α 也还没算）。
         _shapeInclination = 0f;
         _shapeInclinationSnapped = false;
         _shapeAnchor = new Vector2(x, y);
+        // 三角形 / 平行四边形是"外框 → 三个顶点"，拖动期每一帧都要拿**按下那一刻**的
+        // 那个角去算外框——它不在控制点表里（控制点已经被推成三个顶点了）。
+        _shapeBoxOrigin = new Vector2(x, y);
         _predictor.Reset();
         ActiveStrokeHasPressure = false;
         LastCoalescedSamples = LastCoalescedMessages = 0;
     }
 
     /// <summary>
-    /// 拖动中更新图形的终点。
+    /// 拖动中更新图形的控制点。
     ///
-    /// 吸附只对**有方向的两个**（直线 / 箭头）做：矩形和椭圆是"两个对角点"定义的，
-    /// 没有"倾斜角"这回事，绕起点转只会把用户拉出来的框改小（见 计划-图形工具.md 8.2
+    /// 吸附只对**有方向的两个**（直线 / 箭头）做：矩形和椭圆是"两个对角点 / 中心+外角点"
+    /// 定义的，没有"倾斜角"这回事，绕起点转只会把用户拉出来的框改小（见 计划-图形工具.md 8.2
     /// 那一行只写了"画线吸附"）。Shift = 15° 硬网格、Alt = 完全自由，和旋转同一套语义。
+    /// 三角形 / 平行四边形没有"倾斜角"可吸，它们的"特殊形状吸附"发生在**拖顶点**时
+    /// （见 计划-图形工具.md 9.6：画的时候不吸，改的时候才吸）。
     /// </summary>
     private void UpdateShapePreview(float x, float y)
     {
@@ -3150,6 +3617,64 @@ public class InkEngine
 
         var start = new Vector2(s.Points[0].X, s.Points[0].Y);
         var end = new Vector2(x, y);
+
+        // 三角形 / 平行四边形：外框（按下点 ＋ 指针）→ **三个控制点**一次算出来。
+        if (s.Kind is StrokeKind.Triangle or StrokeKind.Parallelogram)
+        {
+            s.SetShapeBox(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y);
+            _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);
+            return;
+        }
+
+        // 坐标系 / 数轴：同样是"外框 → 一次算出全部控制点"，只是控制点是四个。
+        // 拖动期就必须写成**最终那一份定义**，否则预览和松手的结果会差一下
+        // （和三角形那条同一个理由：两套算法 = 松手就跳）。
+        // 数轴在这里顺手把 y 钉在按下点那一行上（往斜上方拖也还是水平线）。
+        if (s.Kind is StrokeKind.Coordinate or StrokeKind.NumberLine)
+        {
+            s.SetAxisBox(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y);
+            _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);
+            return;
+        }
+
+        // **多笔图形**：这一笔的几何交给表里那一行（见表 StepPlan）。
+        // **只有按住拖动才更新**——InkClass 就是这样（多步图形的几何只在 `MouseTouchMove` 里更新，
+        // 指针不按键时半成品一动不动）。这也是"触摸屏也能用"的根子：手指没有悬停，
+        // 而每一步本来就是"按住拖-松手"，笔 / 鼠标 / 手指走的是**同一条路**。
+        if (_stepPlan != null)
+        {
+            ApplyStepGeometry(x, y);
+            _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);
+            return;
+        }
+
+        // 抛物线走**一笔**（照 InkClass 的 `case 20/21`）：顶点在按下那一刻就定下了
+        //（见 BeginShapeAt），这一拖只定"曲线经过哪个点、开多大"。
+        if (s.Kind == StrokeKind.Parabola)
+        {
+            UpdateParabolaPreview(x, y);
+            _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);
+            return;
+        }
+
+        // 立体图形（圆柱 / 圆锥）：**外接矩形 → 一次算出全部几何**（和坐标系那条同一个套路：
+        // 拖动期就写成最终那一份定义，否则预览和松手的结果会差一下）。
+        if (s.Kind is StrokeKind.Cylinder or StrokeKind.Cone)
+        {
+            s.SetSolidBox(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y);
+            _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);
+            return;
+        }
+
+        // 正弦 / 余弦：按下 = **起点**（"从 y 轴开始画"），拖出去 = **终点**
+        // （一个周期 ＋ 振幅，两个都由这一拖定下）。
+        if (s.Kind is StrokeKind.Sine or StrokeKind.Cosine)
+        {
+            s.SetWaveBox(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y, ShapeMinAxisLogical * DpiScale);
+            _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);
+            return;
+        }
+
         if (s.Kind is StrokeKind.Line or StrokeKind.Arrow)
         {
             bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
@@ -3185,6 +3710,12 @@ public class InkEngine
     private float _shapeInclination;
     private bool _shapeInclinationSnapped;
     private Vector2 _shapeAnchor;
+    /// <summary>
+    /// 图形起手时按下的那个点（画布坐标）。只有三角形 / 平行四边形用得到：
+    /// 它们是"外框 → 三个顶点"，而外框的两个角里有一个（按下的那个）**不在控制点表里**，
+    /// 必须在起手那一刻记下来，否则拖动中做不出"外框"这个中间量。
+    /// </summary>
+    private Vector2 _shapeBoxOrigin;
 
     /// <summary>
     /// 这次拖拽够不够长（不够就当没画，什么也不留）。
@@ -3194,6 +3725,15 @@ public class InkEngine
     private bool ShapeDragLongEnough(Stroke s)
     {
         if (s.Points.Count < 2) return false;
+        // 坐标系要单独算：它的**原点是按下点**（见 Stroke.SetAxisBox），
+        // 而"拖出去的那一下" = 原点 ↔ 外框角的距离（外框角 = 原点 ± 拖动量，所以正好等于拖动量）。
+        // 拿外框对角去判的话（= √2 × 拖动量）会把"只拖了 3 像素"也当成够长。
+        if (s.Kind == StrokeKind.Coordinate && s.Points.Count >= 3)
+        {
+            var o = new Vector2(s.Points[2].X, s.Points[2].Y);
+            var c = new Vector2(s.Points[0].X, s.Points[0].Y);
+            return Vector2.Distance(o, c) >= ShapeMinDragLogical * DpiScale;
+        }
         var a = new Vector2(s.Points[0].X, s.Points[0].Y);
         var b = new Vector2(s.Points[^1].X, s.Points[^1].Y);
         return Vector2.Distance(a, b) >= ShapeMinDragLogical * DpiScale;
@@ -3236,6 +3776,29 @@ public class InkEngine
             if (s.HasPressure) PenPressurePoints++;
         }
         ActiveStrokeHasPressure |= _pen.AnyPressure;
+        // 压感是**整笔的属性**（见 Stroke.HasPressure）：这一笔只要有一条消息报过有效压力，
+        // 它就从此刻起按压感渲染。**当场写进对象**（而不是渲染时再问一次），
+        // 因为湿墨、干墨、紧框、存档读的都是这一个标志。
+        //
+        // **压感只作用于「笔」这一支**（2026-09-20 对齐 WPF 时定的，也是官方示例的做法：
+        // 荧光笔的 `DrawingAttributes.IgnorePressure = true`）：
+        //   · 荧光笔是一支"平头马克笔"，粗细随压力变会让划出来的带子忽宽忽窄（满压还是 2 倍宽）；
+        //   · 激光笔只是指一下，没有"笔迹粗细"这回事。
+        if (ActiveStrokeHasPressure && ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
+    }
+
+    /// <summary>
+    /// 湿墨该用多粗的半径：**和干墨同一个映射**（见 <see cref="PressureWidth"/>）。
+    ///
+    /// 不做这一步的后果很扎眼：抬手那一瞬间，湿墨（固定半径）会跳成干墨（有粗有细）——
+    /// 正在写的"一"和落笔后的"一"粗细不是一条线。
+    /// </summary>
+    private float TrailRadius()
+    {
+        var s = ActiveStroke;
+        if (s == null) return 0f;
+        if (!s.HasPressure || !PressureWidth.Enabled || s.Points.Count == 0) return s.Width * 0.5f;
+        return PressureWidth.HalfWidth(s.Width, s.Points[^1].P);
     }
 
     /// <summary>
@@ -3254,9 +3817,19 @@ public class InkEngine
         if (_pen.Count > 0)
         {
             for (int i = 0; i < _pen.Count && realCount < _trailReal.Length; i++)
-                _trailReal[realCount++] = new Vector2(_pen[i].X, _pen[i].Y);
+            {
+                _trailReal[realCount] = new Vector2(_pen[i].X, _pen[i].Y);
+                // 逐点半径 = 这一点的压力走**和干墨同一个映射**（见 PressureWidth）。
+                _trailRadii[realCount] = PressureRadiusOf(_pen[i].Pressure);
+                realCount++;
+            }
         }
-        if (realCount == 0) _trailReal[realCount++] = new Vector2(screenX, screenY);
+        if (realCount == 0)
+        {
+            _trailReal[realCount] = new Vector2(screenX, screenY);
+            _trailRadii[realCount] = radius;
+            realCount++;
+        }
 
         int predCount = 0;
         if (PredictEnabled)
@@ -3274,7 +3847,16 @@ public class InkEngine
             if (lead > PredLeadMax) PredLeadMax = lead;
         }
 
-        win.AddInkTrailPoints(_trailReal, realCount, _trailPred, predCount, radius);
+        win.AddInkTrailPoints(_trailReal, realCount, _trailPred, predCount, radius, _trailRadii);
+    }
+
+    /// <summary>一个压力值 → 湿墨半径（和干墨同一映射、同一单位）。</summary>
+    private float PressureRadiusOf(float p)
+    {
+        var s = ActiveStroke;
+        if (s == null) return 0f;
+        if (!s.HasPressure || !PressureWidth.Enabled) return s.Width * 0.5f;
+        return PressureWidth.HalfWidth(s.Width, p);
     }
 
     private void ApplyMarquee()
@@ -3507,20 +4089,17 @@ public class InkEngine
         // id 是"注册顺序"，动作由键位表决定（见 RegisterHotkeys）。
         var action = ActionForHotkeyId(id);
         if (action == KeyAction.None) return;
-        RunAction(action, id);
+        RunAction(action);
         // 换工具/换模式之后指针形状立刻要跟着变。
         ApplyCursor();
         _dirty = true;
     }
 
-    /// <summary>快捷键里属于宿主（开发工具）的那几个。产品界面用不到。</summary>
-    protected virtual void HandleHostHotkey(int id) { }
-
     /// <summary>
     /// 执行一个动作。**全局热键和批注内快捷键走同一个入口**——否则同一个动作
-    /// 会有两份实现，早晚会不一致（"按 Ctrl+Alt+Z 撤销得好好的，按 Ctrl+Z 却少清了激光"）。
+    /// 会有两份实现，早晚会不一致（"按 Ctrl+Alt+1 换笔换得好好的，按 Ctrl+1 却少清了激光"）。
     /// </summary>
-    private void RunAction(KeyAction action, int hotkeyId = 0)
+    private void RunAction(KeyAction action)
     {
         // 手测台：事件流水。撤销尤其重要——"擦完马上撤销"就是"这一擦不是我想要的"。
         if (EraserTelemetry != null && action != KeyAction.None)
@@ -3543,6 +4122,8 @@ public class InkEngine
             }
             case KeyAction.ToolCapture: SwitchTool(Tool.Capture); break;
             case KeyAction.ToolMarquee: SwitchTool(Tool.Marquee); break;
+            // 图形**没有键位动作**（用户 2026-09-19 定：图形通通不要快捷键），
+            // 换种类只有面板上带那一条路（`FullUi.ActivateSegment` → `SwitchTool`）。
             case KeyAction.SelectShape: ToggleSelectMode(); break;
             case KeyAction.Undo: Doc.Undo(); Laser.Clear(); break;
             case KeyAction.Redo: Doc.Redo(); break;
@@ -3551,13 +4132,7 @@ public class InkEngine
             case KeyAction.ToggleHud: ShowHud = !ShowHud; break;
             case KeyAction.CycleWidth: CycleWidth(); break;
             case KeyAction.ToggleKeyboardMode: SetKeyboardMode(!KeyboardMode); break;
-            case KeyAction.CyclePassThroughMode: CyclePassThroughMode(); break;
             case KeyAction.Quit: _quit = true; break;
-            // 开发期的基准与内存探测不属于引擎，交给宿主覆写
-            case KeyAction.HostBenchmark:
-            case KeyAction.HostMemoryProbe:
-                HandleHostHotkey(hotkeyId != 0 ? hotkeyId : (int)action);
-                break;
 
             case KeyAction.SelectAll: SelectAll(); break;
             case KeyAction.Duplicate: Doc.DuplicateSelected(); break;
@@ -3602,6 +4177,20 @@ public class InkEngine
     private void SwitchTool(Tool t)
     {
         if (Tool != t && t != Tool.Marquee) ClearSelectionForNewContext();
+        // **换工具 = 多笔图形作废**（见表 StepPlan，目前只有双曲线两笔）。
+        //
+        // 两件事不能少：① 状态归零——不清的话，切走再切回来按第一笔，会接着上一轮去改
+        // 那条画了一半的曲线，而不是画新的；② **把那条半成品丢掉**——它一直挂在
+        // ActiveStroke 上、**不在文档里**，而 ActiveStroke 是无条件参与渲染的
+        //（见 Overlay 的 DrawStroke），不丢就会变成"屏幕上留着一条怎么也擦不掉的曲线"
+        //（自检里有一条专门数屏幕上那一块的墨）。
+        if (_stepPlan != null)
+        {
+            ActiveStroke = null;
+            _dirty = true;
+        }
+        _stepPlan = null;
+        _stepIndex = 0;
         Tool = t;
 
         // **穿透和工具是互斥的**（用户 2026-09-17 定）。
@@ -3678,13 +4267,6 @@ public class InkEngine
         Console.WriteLine($"pass-through = {on} (mode {PassMode})");
     }
 
-
-    private void CyclePassThroughMode()
-    {
-        PassMode = (PassThroughMode)(((int)PassMode + 1) % 3);
-        foreach (var w in _windows) ApplyPassThroughStyle(w);
-        Console.WriteLine($"pass-through implementation = {PassMode}");
-    }
 
     internal void ApplyPassThroughStyle(OverlayWindow w)
     {
@@ -3812,6 +4394,7 @@ public class InkEngine
     internal UiState SnapshotState() => new()
     {
         Tool = Tool,
+        ParabolaAxis = ParabolaAxis,      // 界面拿它把图形面板那一格的图标转成当前朝向
         Color = Tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
         PaletteBase = Tool == Tool.Highlighter
             ? new Color4(HighlighterCurrent.R, HighlighterCurrent.G, HighlighterCurrent.B, 1f)
@@ -3822,6 +4405,7 @@ public class InkEngine
         HighlighterWidth = HighlighterWidthLogical,
         HighlighterColor = HighlighterCurrent,
         LaserWidth = LaserWidthLogical,
+        Dash = PenDash,
         PassThrough = PassThrough,
         Board = BoardOn,
         BoardColor = BoardColor,
@@ -3830,6 +4414,7 @@ public class InkEngine
         BoardOpacity = BoardOpacity,
         CaptureHideInk = CaptureHideInk,
         SelectMode = SelMode,
+        CoordGridDefault = CoordGridDefault,
         ScreenIndex = ScreenIndex,
         CanFlipPageUp = CanFlipPageUp,
         IsDrawing = _drawing,
@@ -3875,6 +4460,59 @@ public class InkEngine
         else
             CurrentColor = color;
         _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// **新画的坐标系要不要网格**（用户在「更多」抽屉里开关，见 FullUi 的"坐标系网格"那一行）。
+    ///
+    /// 它只是"画的时候取哪个值"：每个坐标系自己存了一份（见 <see cref="Stroke.Grid"/>），
+    /// 所以改这个开关**不会**动已经画在板上的坐标系——那些要选中之后单独改
+    /// （<see cref="ToggleSelectionGrid"/>）。理由见 Stroke.Grid 的注释：
+    /// 对象要自包含，不能让它长大以后还受一个全局开关摆布。
+    ///
+    /// 默认**关**：黑板上的坐标系本来就是光秃秃一个十字，格子是要的时候才要。
+    /// </summary>
+    internal bool CoordGridDefault;
+
+    /// <summary>
+    /// 「更多」抽屉里那一行"坐标系网格"被点了一下。
+    ///
+    /// **选中了坐标系就改它们，没选中就改"以后新画的默认值"**：
+    /// 老师的预期是"我点这一下是冲着眼前这个东西来的"，而抽屉里没有"操作谁"的概念，
+    /// 于是用"当前有没有选中坐标系"来分派——一次点击只干一件事。
+    /// 返回改了几个对象（0 = 改的是新画的默认值）。
+    /// </summary>
+    internal int ToggleSelectionGrid()
+    {
+        var targets = new List<Stroke>();
+        foreach (var s in Doc.Selected)
+            if (s.Kind == StrokeKind.Coordinate) targets.Add(s);   // 数轴没有网格
+
+        if (targets.Count == 0)
+        {
+            CoordGridDefault = !CoordGridDefault;
+            Console.WriteLine($"坐标系网格（新画的默认值）：{(CoordGridDefault ? "开" : "关")}");
+            _dirty = true;
+            NotifyUiStateChanged();
+            return 0;
+        }
+
+        // 一批里"有格 / 没格"混着时，按"只要还有没格的，就全给开上"来定
+        // ——和锁定那一条同一个口径（有没锁的就全锁上）。
+        bool anyOff = false;
+        foreach (var s in targets) if (!s.Grid) { anyOff = true; break; }
+        Doc.ApplyGrid(targets, anyOff);
+        Console.WriteLine($"坐标系网格：{targets.Count} 个对象 → {(anyOff ? "开" : "关")}");
+        _dirty = true;
+        return targets.Count;
+    }
+
+    /// <summary>界面启动时把"坐标系网格"的偏好推过来（见 FullUi.LoadPrefs）。</summary>
+    internal void SetCoordGridDefaultFromUi(bool on)
+    {
+        if (CoordGridDefault == on) return;
+        CoordGridDefault = on;
         NotifyUiStateChanged();
     }
 
@@ -4618,6 +5256,57 @@ public class InkEngine
     }
 
     /// <summary>
+    /// 改选中对象的线型（见 <see cref="StrokeDash"/>）。返回改了几条。
+    ///
+    /// **只跳过图像**——它根本没有"描边"这回事。
+    ///
+    /// 自由笔迹**也给改**（用户 2026-09-19 改的口径）：原来这里跳过 Freehand，
+    /// 依据是"手写虚线没有意义"，于是老师选中一条笔迹再点虚线**一点反应都没有**
+    /// （面板那一行还不高亮，因为高亮读的是"第一条非图像对象的线型"）。
+    /// 用户报的"选中以后虚线面板还没有实现"就是它。
+    /// 渲染那边**本来就支持**（`Gfx.StyleFor(s.Dash)` 在 DrawStrokeCore 一处统一生效），
+    /// 所以这条限制一撤，"虚线笔迹"从画到存到导出全都通。
+    /// </summary>
+    internal int SetSelectionDash(StrokeDash dash)
+    {
+        var targets = new List<Stroke>();
+        foreach (var s in Doc.Selected)
+        {
+            if (s.IsImage) continue;
+            if (s.Dash == dash) continue;          // 已经是这一档，不用记一步空撤销
+            targets.Add(s);
+        }
+        if (targets.Count == 0) return 0;
+        Doc.ApplyDash(targets, dash);              // 一条动作 = 一步撤销
+        Console.WriteLine($"改线型：{targets.Count} 个对象 → {DashName(dash)}");
+        return targets.Count;
+    }
+
+    /// <summary>
+    /// 线型的中文名（控制台痕迹用）。**只此一份**——散在各处又是一份"同一件事的两份名单"。
+    /// </summary>
+    internal static string DashName(StrokeDash d) => d switch
+    {
+        StrokeDash.Dashed => "虚线",
+        StrokeDash.Dotted => "点线",
+        _ => "实线",
+    };
+
+    /// <summary>
+    /// 界面色带条上那个**虚实线切换**被点了一下（三档轮流，见 FullUi 的 DrawDashToggle）。
+    ///
+    /// 它改的是**以后新画的笔迹**用哪种线型，不碰已经画好的（那些要选中之后再改，
+    /// 走 <see cref="SetSelectionDash"/>）——和颜色/粗细的"画之前选、画之后改"两条路一样。
+    /// </summary>
+    internal void SetDashFromUi(StrokeDash dash)
+    {
+        if (PenDash == dash) return;
+        PenDash = dash;
+        Console.WriteLine($"笔的线型：{DashName(dash)}（下一笔开始生效）");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
     /// 锁定 / 解锁选中对象（用户 2026-09-16 定的语义：**锁定后能选中、但拖不动**）。
     /// 全部未锁 → 全锁；全部已锁 → 全解；混合 → 全锁。
     /// </summary>
@@ -4669,12 +5358,18 @@ public class InkEngine
                 SetWidthStepAt(x, aabb);
                 return true;
 
+            // 线型三格（实线 / 虚线 / 点线）。**格序就是 StrokeDash 的取值**，
+            // 所以"第 i 格"能直接转成线型，不用再维护一张对照表（见 StyleCellRect）。
             case SelectionHandles.PanelPart.StyleSolid:
-                return true;                       // 现在就是实线，点了不变
+                SetSelectionDash(StrokeDash.Solid);
+                return true;
 
             case SelectionHandles.PanelPart.StyleDashed:
-                // 用户 2026-09-16 定：先放控件，虚线底层下一批做（要加 dash 渲染 + 存档一位）。
-                Console.WriteLine("虚线：底层还没做（下一批接 dash 渲染）");
+                SetSelectionDash(StrokeDash.Dashed);
+                return true;
+
+            case SelectionHandles.PanelPart.StyleDotted:
+                SetSelectionDash(StrokeDash.Dotted);
                 return true;
 
             case SelectionHandles.PanelPart.LayerFront:
@@ -4810,26 +5505,32 @@ public class InkEngine
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// 端点手柄按下：起一次"改几何"的手势。
+    /// 定义元素手柄按下：起一次"改几何"的手势。
     ///
     /// 复用 <see cref="DetachForDrag"/> 那套：**只在这一刻**把这条图形压过的块标脏一次、
     /// 并且让内容层在重画时跳过它——于是它原来待的地方当场就干净了，
     /// 之后整个手势期内容层一帧都不用再动（自检里"内容层一帧不重画"盯的就是这条）。
     /// </summary>
-    private void BeginVertexDrag(Stroke s, int index, float x, float y)
+    private void BeginVertexDrag(Stroke s, ShapeHandle h, float x, float y)
     {
         _vertexDragging = true;
         _vertexTarget = s;
-        _vertexIndex = Math.Clamp(index, 0, s.Points.Count - 1);
-        _vertexPreviewLocal = new Vector2[s.Points.Count];
+        _vertexHandle = h;
+        // 格数**不能只看"现在有几个点"**：双曲线的第三个点（"曲线经过的那个点"）是**可缺的**
+        // （刚起手、或迁移前的老对象就只有两个），而"拖曲线上的那个点"这个手柄照样要能按下——
+        // 按下就得往第三格写，格数不够就是**数组越界**（自检里当场崩过一次）。
+        // 提交时会把这第三格写进模型（ApplyGeometry），对象也就从两个点补成三个。
+        _vertexPreviewLocal = new Vector2[Math.Max(s.Points.Count, Stroke.MinCurvePoints(s.Kind))];
         _vertexPrevBounds = RectF.Empty;
-        _vertexPreviewCanvas = SelectionHandles.EndpointCanvasPosition(s, _vertexIndex == 0 ? 0 : 1);
+        _vertexPreviewCanvas = SelectionHandles.ShapeHandleCanvasPosition(s, h);
         // 预览初始就是原样（这个时候还没动，画面不该有任何变化）。
         WriteVertexLocalPoints(_vertexPreviewCanvas);
-        _vertexInclination = InclinationOfPreview();
+        UpdateVertexReadout();
         _vertexSnapped = false;
+        _shapeSnap = ShapeSnapKind.None;
+        _shapeSnapAnchor = _vertexPreviewCanvas;
 
-        _dragHandle = _vertexIndex == 0 ? SelHandle.EndpointA : SelHandle.EndpointB;
+        _dragHandle = SelectionHandles.SelHandleOf(h);
         _dragIsMove = false;
         _dragStartPoint = new Vector2(x, y);
         _dragTargets = new[] { s };
@@ -4846,39 +5547,48 @@ public class InkEngine
     /// <see cref="_vertexPreviewLocal"/> / <see cref="_vertexPreviewCanvas"/> 里攒出
     /// "临时几何"，由浮动层每帧画出来（<see cref="OverlayWindow"/> 的 DrawVertexPreview）。
     ///
-    /// 坐标系有两层，错一层端点就会飞：指针和手柄在**画布坐标**，
-    /// 而控制点存在对象的**局部坐标**里，中间隔着 `Transform`（旋转过的直线必须过
+    /// 坐标系有两层，错一层元素就会飞：指针和手柄在**画布坐标**，
+    /// 而定义元素存在对象的**局部坐标**里，中间隔着 `Transform`（旋转过的图形必须过
     /// `Transform⁻¹` 才能改点）。
     ///
-    /// 吸附也和画线同一套（绕另一个端点转、保持长度），并且是"另一个端点"——
-    /// 拖哪个点就绕对面那个转，才符合"我刚拖的那头动、那头不动"。
+    /// 吸附有**两套**，各管各的：
+    ///   · 直线 / 箭头 → **方向**吸附（绕另一个端点转、保持长度）；
+    ///   · 椭圆 / 三角形 / 平行四边形 → **特殊形状**吸附（正圆 / 等腰 / 等边 / 直角 /
+    ///     菱形 / 矩形），在 <see cref="WriteVertexLocalPoints"/> 里做，
+    ///     语义是"把被拖的那个点修正到恰好满足约束的位置"（规格 9.6）。
+    /// 两套都可能同时"吸住"，所以胶囊上的字由 <see cref="ShapeSnapKind"/> 与
+    /// α 读数分别负责，互不覆盖。
     /// </summary>
     private void UpdateVertexDrag(float x, float y)
     {
         var s = _vertexTarget;
         if (s == null) return;
 
-        var fixedSlot = _vertexIndex == 0 ? 1 : 0;
-        var fixedPoint = SelectionHandles.EndpointCanvasPosition(s, fixedSlot);
-
         bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
         bool alt = (Native.GetAsyncKeyState(0x12 /* VK_MENU */) & 0x8000) != 0;
-        var canvasPoint = SelectionHandles.SnapEndPoint(fixedPoint, new Vector2(x, y), shift, alt,
-                                                        out bool snapped);
+        var canvasPoint = new Vector2(x, y);
+        bool snapped = false;
+        if (s.Kind is StrokeKind.Line or StrokeKind.Arrow)
+        {
+            // "对面那个端点"：拖哪一头就绕另一头转，才符合"我刚拖的这头动、那头不动"。
+            var fixedHandle = _vertexHandle == ShapeHandle.Anchor ? ShapeHandle.Rim : ShapeHandle.Anchor;
+            var fixedPoint = SelectionHandles.ShapeHandleCanvasPosition(s, fixedHandle);
+            canvasPoint = SelectionHandles.SnapEndPoint(fixedPoint, canvasPoint, shift, alt, out snapped);
+        }
 
-        // 脏区只标"被拖的那个端点**走过的那一小段**"：旧、新两个小矩形分开加
+        // 脏区只标"被拖的那个元素**走过的那一小段**"：旧、新两个小矩形分开加
         // （上一帧 ∪ 这一帧，和拖动预览同一套账）。整条线的包围盒横跨屏幕时几乎是整屏，
-        // 而这里动的其实只有一个端点——按整条算等于每帧白重画一大片。
+        // 而这里动的其实只有一个元素——按整条算等于每帧白重画一大片。
         if (!_vertexPrevBounds.IsEmpty) Doc.Dirty.Add(_vertexPrevBounds);
         var prevCanvas = _vertexPreviewCanvas;
         _vertexPreviewCanvas = canvasPoint;
         _vertexSnapped = snapped;
-        WriteVertexLocalPoints(canvasPoint);
+        _shapeSnapAnchor = canvasPoint;         // 吸住时胶囊贴在被拖的那个元素上
+        WriteVertexLocalPoints(canvasPoint);    // 里面顺手判"特殊形状吸附"（见 9.6）
         _vertexPrevBounds = EndpointDirtyRect(prevCanvas, canvasPoint, s.Width * 0.5f + 2f);
         if (!_vertexPrevBounds.IsEmpty) Doc.Dirty.Add(_vertexPrevBounds);
 
-        // α 按**画布坐标**量：用户看到的是屏幕上那条线（旋转过的直线，局部角不等于屏幕角）。
-        _vertexInclination = InclinationOfPreview();
+        UpdateVertexReadout();
 
         if (!_selDragMoved
             && Vector2.Distance(new Vector2(x, y), _dragStartPoint) > ClickToleranceLogical * DpiScale)
@@ -4905,6 +5615,7 @@ public class InkEngine
         _dragHandle = SelHandle.None;
         _dragIsMove = false;
         _selDragMoved = false;
+        _shapeSnap = ShapeSnapKind.None;        // 手势结束：胶囊跟着消失
 
         if (moved && s != null && pts != null) Doc.ApplyGeometry(s, pts);
         // 一点没动（只是点了一下端点手柄松手）：**也必须把它压过的那块重画一次**——
@@ -4920,27 +5631,393 @@ public class InkEngine
         _dirty = true;
     }
 
-    /// <summary>把"被拖的端点落在画布坐标 <paramref name="canvasPoint"/>"写进预览的局部点。</summary>
+    /// <summary>
+    /// 把"被拖的定义元素落在画布坐标 <paramref name="canvasPoint"/>"写进预览的局部点。
+    ///
+    /// 这里是**全部拖动语义**所在：同一个函数要伺候六种对象
+    /// （直线/箭头改端点、圆改半径、圆心平移、椭圆改一条半轴、三角形/平行四边形改顶点），
+    /// 所以按 `(Kind, 手柄)` 分派，而不是"替换第 N 个点"。
+    ///
+    /// 三条硬规矩：
+    ///   · 指针在**画布坐标**、点存在**局部坐标**，必须过 `Transform⁻¹`（旋转过的对象尤其）；
+    ///   · 拖圆心/中心时**两个点一起平移**——半径 / 半轴因此逐位不变
+    ///     （这也是"拖圆心 = 平移"的判据）；
+    ///   · **特殊形状吸附**（规格 9.6）只在这条路上做：它改的是"被拖的那个点"，
+    ///     而不是形状的种类。`Alt` 传进去就变成完全自由。
+    /// </summary>
     private void WriteVertexLocalPoints(Vector2 canvasPoint)
     {
         var s = _vertexTarget;
         var pts = _vertexPreviewLocal;
+        // 拷的是"模型里**现在有的**点"，而 `pts` 可能**比它长**（双曲线那个可缺的第三个点，
+        // 见 BeginVertexDrag）——长出来的那几格先留零向量，由下面的分支按需填。
         for (int i = 0; i < pts.Length; i++)
-            pts[i] = new Vector2(s.Points[i].X, s.Points[i].Y);
-        pts[_vertexIndex] = SelectionHandles.ToLocalPoint(canvasPoint, s.Transform);
+            pts[i] = i < s.Points.Count ? new Vector2(s.Points[i].X, s.Points[i].Y) : Vector2.Zero;
+
+        var local = SelectionHandles.ToLocalPoint(canvasPoint, s.Transform);
+        var c = s.ShapeCenterLocal;
+        float minAxis = ShapeMinAxisLogical * DpiScale;
+        bool alt = (Native.GetAsyncKeyState(0x12 /* VK_MENU */) & 0x8000) != 0;
+        float lenTol = SelectionHandles.ShapeSnapLengthToleranceLogical * DpiScale;
+        _shapeSnap = ShapeSnapKind.None;        // 每帧重判：不吸的帧必须回到"没有"
+
+        switch (s.Kind)
+        {
+            case StrokeKind.Triangle:
+            case StrokeKind.Parallelogram:
+            {
+                // 顶点：**拖哪个只动哪个**，第四个角（平行四边形）永远是算出来的。
+                int idx = SelectionHandles.VertexIndex(_vertexHandle);
+                if (idx < 0 || idx >= pts.Length) break;
+                pts[idx] = SelectionHandles.SnapPolygonVertex(
+                    s.Kind, idx, pts[0], pts[1], pts[2], local, lenTol, alt, out _shapeSnap);
+                break;
+            }
+
+            case StrokeKind.Coordinate:
+            case StrokeKind.NumberLine:
+            {
+                // 定义元素**各拖各的**——这正是"它们都是真的定义元素"那件事的兑现。
+                // 这里没有"特殊形状吸附"：坐标系 / 数轴没有等腰、直角那一类的约束，
+                // `_shapeSnap` 就一直是 None（上面已经重置过）。
+                int idx = SelectionHandles.VertexIndex(_vertexHandle);
+                if (idx < 0 || idx >= pts.Length) break;
+                float minLen = ShapeMinAxisLogical * DpiScale;
+
+                if (s.Kind == StrokeKind.NumberLine)
+                {
+                    // **数轴的两个端点**：只改 x，y 一律保持 —— 往斜上方拖也还是水平线
+                    // （数轴歪了就不是数轴了）。同时不许互相越过：越过去"左端/右端"
+                    // 这两个名字就撒谎了，手柄也会互换位置。
+                    float x = local.X;
+                    if (idx == 0) x = MathF.Min(x, pts[1].X - minLen);
+                    else x = MathF.Max(x, pts[0].X + minLen);
+                    pts[idx] = new Vector2(x, pts[0].Y);
+                    break;
+                }
+
+                if (idx == 2)
+                {
+                    // **原点**：在外框里随便挪（老师最常用的动作就是"框画完了，
+                    // 把原点拖到左下角，只留第一象限"）。
+                    // 夹在外框内是必须的：跑到框外，两条轴就都不在框里交叉了，
+                    // 画出来是个说不清的东西（而贴在框角上正是想要的那种用法）。
+                    float fx0 = MathF.Min(pts[0].X, pts[1].X), fx1 = MathF.Max(pts[0].X, pts[1].X);
+                    float fy0 = MathF.Min(pts[0].Y, pts[1].Y), fy1 = MathF.Max(pts[0].Y, pts[1].Y);
+                    pts[2] = new Vector2(Math.Clamp(local.X, fx0, fx1), Math.Clamp(local.Y, fy0, fy1));
+                }
+                else
+                {
+                    pts[idx] = local;                 // 外框任意一角都能拖（改范围）
+                }
+                break;
+            }
+
+            case StrokeKind.Circle when _vertexHandle == ShapeHandle.Rim:
+            {
+                // 圆的圆周点：**只改半径，圆心钉住**。半径在局部坐标里量（两点距离），
+                // 方向照指针走；太小就夹到最小值（不然圆退化成一点，看不见还点不中）。
+                var dir = local - c;
+                float r = dir.Length();
+                if (r < minAxis)
+                    local = c + (r > 1e-3f ? dir / r : new Vector2(1f, 0f)) * minAxis;
+                pts[1] = local;
+                break;
+            }
+
+            case StrokeKind.Circle when _vertexHandle == ShapeHandle.Anchor:
+            {
+                // 圆心：**整条平移**（半径逐位不变）。
+                // 正常路径上拖它走的是"整体拖动"（改变换矩阵，见 TryBeginSelectionGesture），
+                // 这里只是兜底——万一哪天真从这条路进来，语义也必须是"平移"而不是"改一个点"。
+                //
+                // `when` 必须写在这里：`case A: case B when 条件:` 的条件**只管 B**，
+                // A 会无条件命中（这一条在下面 sine/cosine 那段也专门提醒过）。
+                var d = local - c;
+                pts[0] = c + d;
+                pts[1] = s.RimLocalPoint() + d;
+                break;
+            }
+
+            case StrokeKind.Ellipse when _vertexHandle == ShapeHandle.AxisRight:
+            {
+                // 右端点：**只改 a**，b 保持（这就是"每次只动那一条"）。
+                // 往左拖过中心也照样缩（负数被下面的 minAxis 卡住），
+                // 所以"想缩左边"不需要另一个手柄——抓右端点一路往左拖就行。
+                float a = MathF.Max(minAxis, local.X - c.X);
+                // 正圆吸附（规格 9.6）：|a − b| 在容差内就取成 b —— 于是 a、b 逐位相等。
+                a = SelectionHandles.SnapEllipseAxis(a, s.SemiAxisBLocal, lenTol, alt, out bool snapA);
+                if (snapA) _shapeSnap = ShapeSnapKind.Circle;
+                pts[1] = new Vector2(c.X + a, c.Y + s.SemiAxisBLocal);
+                break;
+            }
+
+            case StrokeKind.Ellipse when _vertexHandle == ShapeHandle.AxisTop:
+            {
+                // 上端点：**只改 b**，a 保持（同理，往下拖过中心也能缩）。
+                float b = MathF.Max(minAxis, c.Y - local.Y);
+                // 正圆吸附（规格 9.6）：|b − a| 在容差内就取成 a。
+                b = SelectionHandles.SnapEllipseAxis(b, s.SemiAxisALocal, lenTol, alt, out bool snapB);
+                if (snapB) _shapeSnap = ShapeSnapKind.Circle;
+                pts[1] = new Vector2(c.X + s.SemiAxisALocal, c.Y + b);
+                break;
+            }
+
+            case StrokeKind.Parabola when _vertexHandle == ShapeHandle.Rim:
+            {
+                // **曲线上的那个点**（画那一笔拖出来的"经过点"）：拖到哪、曲线就经过哪 ——
+                // `p`（张口）与"画到哪"都由它反解（见 Stroke.ParabolaPThroughPoint /
+                // ParabolaSpanOf），算式只有模型层那一份，这里不另抄。
+                //
+                // 唯一的约束：这个点**不能跑到顶点背后**（沿开口方向的分量 ≤ 0）——
+                // 它定的是"张口"，跑到背后去模型那边只能把它夹到下限，
+                // 手柄就离开曲线了（拖了看得见、曲线不跟）。所以这里把它钉在**顶点前面一点点**：
+                // 往背后拖 = 曲线缩到最小，而不是"手柄不见了"。
+                var v0 = pts[0];
+                var (dir0, perp0) = Stroke.ParabolaBasis(s.EffectiveAxis);
+                var d0 = local - v0;
+                float along0 = MathF.Max(minAxis, Vector2.Dot(d0, dir0));
+                float across0 = Vector2.Dot(d0, perp0);
+                pts[1] = v0 + dir0 * along0 + perp0 * across0;
+                break;
+            }
+
+            case StrokeKind.Hyperbola when _vertexHandle is ShapeHandle.Rim or ShapeHandle.AxisTop:
+            {
+                // 两个手柄各管**一套半轴**（2026-09-20 拆开，这是"渐近线锁定之后不许动"的落点）：
+                //   · **Rim = 曲线上的那个点**（第三个定义元素）→ 拖到哪、曲线就经过哪：
+                //     **只改曲线的半轴，渐近线框一个字都不动**；
+                //   · **AxisTop = 渐近线框的角点**（第二个定义元素）→ 拖到哪、渐近线框就多大
+                //     （斜率与长度一起走）；曲线的那条经过点不动，于是曲线**重新经过它**，
+                //     大小随之变（渐近线的斜率变了，贴着它的曲线当然跟着变——这是几何本身，
+                //     不是"顺手改了别的量"）。
+                //
+                // 两条路都**只把指针位置原样写进对应的那个控制点**——"经过点 → 半轴"的反解
+                // 与朝向判定都在模型层、各只有一份（HyperbolaCurveAThroughPoint /
+                // HyperbolaAxisThroughPoint），这里不另抄几何。
+                //
+                // 朝向不用在这里维护：它是**现推的**（`Stroke.EffectiveAxis` 看"曲线经过的那个点"
+                // 落在渐近线的哪一侧）——拖角点把斜率扳过对角线时，曲线会顺滑地翻成另一个朝向，
+                // 而不是卡在"朝向说左右、点却在上下那一侧"、半轴解出负数缩成一个点。
+                if (_vertexHandle == ShapeHandle.Rim)
+                {
+                    pts[2] = local;                          // 第三个点 = 曲线要经过的位置
+                }
+                else
+                {
+                    var o = pts[0];
+                    // 角点存的是"正方向的那一个角"（A、B 恒非负，见 HyperbolaALocal）。
+                    pts[1] = new Vector2(o.X + MathF.Max(minAxis, MathF.Abs(local.X - o.X)),
+                                         o.Y + MathF.Max(minAxis, MathF.Abs(local.Y - o.Y)));
+                }
+                break;
+            }
+
+            // `when` 要**写在每一个 label 上**：C# 里 `case A: case B when 条件:` 的条件只管 B，
+            // A 会无条件命中（这一条是这种写法最容易踩的坑）。
+            case StrokeKind.Sine when _vertexHandle == ShapeHandle.AxisTop:
+            case StrokeKind.Cosine when _vertexHandle == ShapeHandle.AxisTop:
+            {
+                // **谷点**（用户 2026-09-20 精简：峰点在 `ShapeHandlesOf` 里撤掉了——
+                // 峰、谷两个把手管的是同一对量，多留一个是白给）。
+                // 它落在曲线上，拖动时**一次改两个量**，正是老师脑子里的动作：
+                //   · **纵向** = 振幅（把谷拉深 / 拉浅）；
+                //   · **横向** = 周期（谷点的 x 本来就等于"起点 ＋ 周期的几分之几"）。
+                var start = pts[0];
+                bool cos = s.Kind == StrokeKind.Cosine;
+                // 谷点在周期里的位置（周期的几分之几）：正弦 3/4、余弦 1/2。
+                float u = cos ? 0.5f : 0.75f;
+                float period = MathF.Max(minAxis, MathF.Abs(local.X - start.X) / u);
+                // 符号（先上还是先下）**保住**：拖过中轴不翻转——手柄最忌讳"跳着翻个儿"。
+                float sign = s.WaveDyLocal() >= 0f ? 1f : -1f;
+                float dy = sign * MathF.Max(minAxis, MathF.Abs(local.Y - start.Y));
+                pts[0] = start;
+                pts[1] = new Vector2(start.X + period, start.Y + dy);
+                break;
+            }
+
+            default:
+                // 直线 / 箭头：改哪一头就是哪一头（首点或末点）。
+                pts[_vertexHandle == ShapeHandle.Anchor ? 0 : pts.Length - 1] = local;
+                break;
+        }
     }
 
     /// <summary>
-    /// 预览那条线的倾斜角：把两个控制点**过一遍 Transform 换成画布坐标**再量——
-    /// 读数是给眼睛看的，不是给局部坐标看的。
+    /// 刷新"拖动中的读数"：直线是倾斜角 α、圆是 `r`（附带直径 d = 2r）、椭圆是 `a` 或 `b`。
+    ///
+    /// 量的都是**用户看到的那个量**：
+    ///   · 直线的 α 按**画布坐标**量（旋转过的线，局部角不等于屏幕角）；
+    ///   · 圆的 r 按**画布坐标**量（屏幕上这个圆多大）；
+    ///   · 椭圆的 a / b 按**局部坐标**量 —— 那是椭圆自己的半轴
+    ///     （它转到哪个方向，长轴都是那么长）。
     /// </summary>
-    private float InclinationOfPreview()
+    private void UpdateVertexReadout()
     {
         var s = _vertexTarget;
         var pts = _vertexPreviewLocal;
-        if (s == null || pts == null || pts.Length < 2) return 0f;
-        return SelectionHandles.InclinationDegrees(Vector2.Transform(pts[0], s.Transform),
-                                                   Vector2.Transform(pts[^1], s.Transform));
+        if (s == null || pts == null || pts.Length < 2)
+        {
+            _vertexReadout = VertexReadoutKind.None;
+            return;
+        }
+
+        var c = Vector2.Transform(pts[0], s.Transform);
+        var e = Vector2.Transform(pts[^1], s.Transform);
+        switch (s.Kind)
+        {
+            case StrokeKind.Circle:
+            {
+                float r = Vector2.Distance(c, e);
+                _vertexReadout = VertexReadoutKind.Radius;
+                _vertexReadoutValue = r;
+                _vertexReadoutSecondary = r * 2f;
+                break;
+            }
+
+            case StrokeKind.Ellipse:
+            {
+                bool vertical = _vertexHandle == ShapeHandle.AxisTop;
+                var d = pts[^1] - pts[0];
+                _vertexReadout = vertical ? VertexReadoutKind.AxisB : VertexReadoutKind.AxisA;
+                _vertexReadoutValue = vertical ? MathF.Abs(d.Y) : MathF.Abs(d.X);
+                _vertexReadoutSecondary = 0f;
+                break;
+            }
+
+            case StrokeKind.Triangle:
+            case StrokeKind.Parallelogram:
+                // 三角形 / 平行四边形**这一轮没有读数**：它们要显示的是内角 / 夹角，
+                // 那是第③轮（9.7）的事；现在改顶点时只有"吸到了什么"那一颗胶囊
+                // （见 ShapeSnapKind）。**不要**落到 default 去报一个 α：
+                // 三个顶点之间根本没有"倾斜角"这个量。
+                _vertexReadout = VertexReadoutKind.None;
+                _vertexReadoutValue = 0f;
+                _vertexReadoutSecondary = 0f;
+                break;
+
+            case StrokeKind.Parabola:
+            {
+                // 唯一的形状参数就是 **p**（拖"曲线上的那个点"改的正是它），所以读数报它。
+                // p 的意思：焦点在 `方向·(p/2)`、准线过 `−方向·(p/2)`、通径长 `2p` ——
+                // 报它比报"半宽多少像素"有用得多。
+                // 朝向来自对象（不是从这两个点推的），所以这里要把它一起传进去。
+                _vertexReadout = VertexReadoutKind.ParabolaP;
+                _vertexReadoutValue = Stroke.ParabolaPThroughPoint(pts[0], pts[1], s.EffectiveAxis,
+                                                                  Stroke.ParabolaMinP);
+                _vertexReadoutSecondary = 0f;
+                break;
+            }
+
+            case StrokeKind.Hyperbola when _vertexHandle is ShapeHandle.Rim or ShapeHandle.AxisTop:
+            {
+                // 拖**曲线上的点**报实半轴、拖**渐近线角点**报虚半轴 —— 这两个数合起来就是
+                // 渐近线斜率 `b/a`（课本上那条 `y = ±(b/a)x`）。**名字随朝向漂**
+                //（实轴沿 y 时两个名字要互换），所以下面按 axis 分流，不是直接读 A / B。
+                //
+                // 报的是**曲线自己的**半轴（`a` / `b`），不是渐近线框的 A / B：
+                // 框的那两个是"x / y 方向的量"，和虚实名字对不上；而且拖 Rim 时它们**根本不动**，
+                // 读出来就是"拖了没反应"。
+                // 算的也全是**预览里的那几个点**（pts）—— 拖动期间模型一个字没改
+                //（见 BeginVertexDrag），读模型读到的是上一帧的位置。
+                bool vertex = _vertexHandle == ShapeHandle.Rim;
+                _vertexReadout = vertex ? VertexReadoutKind.HyperbolaReal : VertexReadoutKind.HyperbolaImag;
+                float A = Stroke.HyperbolaAOf(pts[0], pts[1]);          // 框：x 方向的半宽
+                float B = Stroke.HyperbolaBOf(pts[0], pts[1]);          // 框：y 方向的半高
+                // 第三个点由 BeginVertexDrag 保证存在（数组按 MinCurvePoints 铺的）。
+                var q = pts[2];
+                // 朝向现推，和 Stroke.EffectiveAxis 同一条口径（看那个点落在渐近线哪一侧）。
+                var axis = Stroke.HyperbolaAxisThroughPoint(q - pts[0], B / MathF.Max(1e-4f, A));
+                float a = Stroke.HyperbolaCurveAThroughPoint(pts[0], q, A, B, axis);   // 曲线：x 半宽
+                float b = a * (A > 1e-4f ? B / A : 1f);                                // 曲线：y 半高
+                _vertexReadoutValue = axis == CurveAxis.TransverseX
+                    ? (vertex ? a : b) : (vertex ? b : a);
+                _vertexReadoutSecondary = 0f;
+                break;
+            }
+
+            // 谷点（正弦 / 余弦只剩这一个把手）：**两个量一起动**（纵向 = 振幅、横向 = 周期），
+            // 所以两个数都报。
+            case StrokeKind.Sine when _vertexHandle == ShapeHandle.AxisTop:
+            case StrokeKind.Cosine when _vertexHandle == ShapeHandle.AxisTop:
+                _vertexReadout = VertexReadoutKind.WavePeriod;
+                _vertexReadoutValue = Stroke.WavePeriodOf(pts[0], pts[1]);
+                _vertexReadoutSecondary = Stroke.WaveAmplitudeOf(pts[0], pts[1], s.Kind);
+                break;
+
+            case StrokeKind.Coordinate:
+            case StrokeKind.NumberLine:
+                // 坐标系 / 数轴同样**没有角度读数**：四个定义元素之间没有"倾斜角"可言
+                // （轴永远是水平的 / 竖直的，刻度间距也只是个长度）。
+                // 落到 default 去报 α 的话，拖框角会给出一个毫无意义的度数。
+                _vertexReadout = VertexReadoutKind.None;
+                _vertexReadoutValue = 0f;
+                _vertexReadoutSecondary = 0f;
+                break;
+
+            default:
+                _vertexReadout = VertexReadoutKind.Inclination;
+                _vertexReadoutValue = SelectionHandles.InclinationDegrees(c, e);
+                _vertexReadoutSecondary = 0f;
+                break;
+        }
+    }
+
+    /// <summary>
+    /// 多边形读数（规格 9.7）：三角形 = **三个内角**（**选中就显示**，用户定），
+    /// 平行四边形 = **它自己那两个夹角**（规格只要求"拖顶点时显示"，不多给）。
+    ///
+    /// 两个输出：<paramref name="vertices"/> 是那些角的顶点（**画布坐标**，标签贴在它外侧），
+    /// <paramref name="degrees"/> 是角度（度）。返回要显示几个角（0 = 这一帧没有这套读数）。
+    ///
+    /// 顶点一律取**这一帧屏幕上那个几何**：
+    ///   · 拖顶点中 → 临时几何（模型此刻一个字没改）；
+    ///   · 整体移动 / 旋转中 → 乘上实时预览矩阵（标签跟着图形走，不会留在原地）；
+    ///   · 静止 → 模型里的点。
+    /// **绘制与脏区都只走这一个函数**：两边各算一份的话，标签会按一个位置擦、按另一个位置画，
+    /// 拖动久了屏幕上就留一条擦不掉的边（选中框那一套踩过这个坑）。
+    /// </summary>
+    internal int FillAngleReadout(Span<Vector2> vertices, Span<float> degrees)
+    {
+        Stroke s = null;
+        bool previewing = false;
+        if (_vertexDragging && _vertexTarget != null
+            && _vertexTarget.Kind is StrokeKind.Triangle or StrokeKind.Parallelogram)
+        {
+            s = _vertexTarget;
+            previewing = true;
+        }
+        else if (Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.Triangle)
+        {
+            // 只有三角形"选中静止也显示"（用户定）；平行四边形的夹角要拖顶点（上面那一支）
+            // 才出现——规格只要求"拖顶点时显示"，不替用户扩大范围。
+            s = Doc.Selected[0];
+        }
+        if (s == null) return 0;
+
+        int n = s.Kind == StrokeKind.Triangle ? 3 : 4;
+        if (vertices.Length < n || degrees.Length < 3) return 0;
+
+        if (previewing)
+        {
+            var m0 = s.Transform;
+            for (int i = 0; i < 3; i++) vertices[i] = Vector2.Transform(_vertexPreviewLocal[i], m0);
+            // 第四个顶点**不在临时点表里**（平行四边形存三个点），现推一个——
+            // 少了它，报出来的那个角就少了一条边，角度会算错。
+            if (n == 4)
+                vertices[3] = Vector2.Transform(Stroke.ParallelogramFourth(
+                    _vertexPreviewLocal[0], _vertexPreviewLocal[1], _vertexPreviewLocal[2]), m0);
+        }
+        else
+        {
+            // 拖动预览里对象是"按实时矩阵画出来的"，读数得跟着它走（角度本身不变，
+            // 但标签的位置要跟着图形，不然转起来标签会落在原地）。
+            var m = DragPreviewActive ? s.Transform * _selDragMatrix : s.Transform;
+            for (int i = 0; i < 3; i++)
+                vertices[i] = Vector2.Transform(new Vector2(s.Points[i].X, s.Points[i].Y), m);
+            if (n == 4) vertices[3] = Vector2.Transform(s.ParallelogramFourthLocal(), m);
+        }
+        return SelectionHandles.PolygonAngles(s.Kind, vertices[..n], degrees);
     }
 
     /// <summary>被拖端点"走过的一小段"的脏矩形（两个端点位置取并集，再按半笔宽外扩）。</summary>
@@ -5004,13 +6081,20 @@ public class InkEngine
     {
         get
         {
-            // 拖端点：模型到松手才动，所以框必须按**临时几何**算——
+            // 拖端点 / 拖顶点：模型到松手才动，所以框必须按**临时几何**算——
             // 照模型算的话框会留在旧位置上，和屏幕上那条线当场分家。
             // （和下面"拖动预览用实时矩阵"是同一件事的两种形态：一个改几何、一个改变换。）
+            //
+            // 口径必须和静止态**一模一样**（2026-09-19）：走 PreviewInkBounds
+            // （端点外接 / 圆的参数化外接 / 顶点外接 + 半笔宽），它和 WorldInkBounds 一张表。
+            // 以前这里写死了 LineLikeInkBounds —— 那是**直线专用**的一条式子，
+            // 圆/椭圆/三角形拖元素时框会退化成"两个控制点的外接"（圆的紧框一度算成 256×16）。
+            // 另：这儿以前用的是 PaddedBoundsOf —— 那是**脏区**的口径（墨迹 + 2 像素），
+            // 于是拖动中每边比对象多 2 像素，松手那一瞬框会缩一下。
             if (_vertexDragging && _vertexTarget != null && _vertexPreviewLocal != null)
             {
-                var rv = Stroke.PaddedBoundsOf(_vertexPreviewLocal, _vertexTarget.Transform,
-                                               _vertexTarget.Width);
+                var pv = _vertexPreviewLocal;
+                var rv = _vertexTarget.PreviewInkBounds(pv, Matrix3x2.Identity);
                 return new SelectionFrame { Local = rv, ToCanvas = Matrix3x2.Identity };
             }
 
@@ -5102,29 +6186,55 @@ public class InkEngine
             // （操作条与面板已经在 ⓪ 里处理过了，这里只剩手柄 / 框内拖动 / 点选）
             h = SelectionHandles.HitTest(x, y, Doc.Selected, frame, dpi);
 
-            // 端点手柄：走"改几何"那条路（**不是**整体拖动、也不是缩放）。
-            // 锁定语义照旧：锁定的拖不动，那就连端点也不给拖，落回"框内拖动"
-            // 让下面那段锁定分支把它吃掉（否则会退化成一个假的缩放拖动）。
-            if (h is SelHandle.EndpointA or SelHandle.EndpointB)
+            // 定义元素手柄（直线 / 箭头 / 圆 / 椭圆）：**两种语义分派**
+            //   · **圆心 / 中心**（Anchor）：拖它 = 整体平移（改变换矩阵、几何一个点不动，
+            //     半径 / 半轴因此逐位不变）。
+            //   · **端点 / 圆周点 / 轴端点**：走"改几何"那条快路（手势期不碰模型、松手一步撤销）。
+            // 锁定语义照旧：锁定的拖不动，落回"框内拖动"让下面那段锁定分支把它吃掉。
+            bool anchorMove = false;
+            // "按下的是不是定义元素手柄"——顶点那几格**走 IsVertexHandle 一条判据**，
+            // 不在这里再列一遍名字（列名字的写法 2026-09-19 漏过一次 VertexD，
+            // 症状是"拖单位长度点什么都没发生"，见 SelectionHandles.IsVertexHandle）。
+            bool handleLike = h is SelHandle.EndpointA or SelHandle.EndpointB
+                                 or SelHandle.Left or SelHandle.Right or SelHandle.Top or SelHandle.Bottom
+                              || SelectionHandles.IsVertexHandle(h);
+            if (handleLike && SelectionHandles.ShapeEditable(Doc.Selected, out var shape))
             {
-                if (SelectionHandles.EndpointEditable(Doc.Selected, out var line) && !line.Locked)
+                var sh = SelectionHandles.HandleOf(shape, h);
+                if (SelectionHandles.IsAnchorMove(shape, sh))
                 {
-                    BeginVertexDrag(line, h == SelHandle.EndpointA ? 0 : line.Points.Count - 1, x, y);
+                    anchorMove = true;
+                    _dragHitStroke = shape;    // 松手若没动 → 收窄成"只选中它"（和点选同一条路）
+                    h = SelHandle.None;
+                }
+                else if (sh != ShapeHandle.None && !shape.Locked)
+                {
+                    BeginVertexDrag(shape, sh, x, y);
                     return true;
                 }
-                h = SelHandle.None;
+                else h = SelHandle.None;
             }
 
             if (h == SelHandle.None)
             {
-                // 没点在手柄上：把指针变回框坐标，看是不是落在框里（整体拖动）。
-                var lp = frame.ToLocalPoint(new Vector2(x, y));
-                move = lp.X >= frame.Local.MinX && lp.X <= frame.Local.MaxX
-                    && lp.Y >= frame.Local.MinY && lp.Y <= frame.Local.MaxY;
+                if (anchorMove)
+                {
+                    // 圆心 / 中心：**直接算作整体拖动**，不走下面"指针底下有没有东西"那一关。
+                    // 理由是几何事实：圆心离描边一整个半径那么远，而点选只认描边
+                    // （见 HitObjectAt）——靠那一段的话"拖圆心"根本拖不动（2026-09-19 自检抓到）。
+                    move = true;
+                }
+                else
+                {
+                    // 没点在手柄上：把指针变回框坐标，看是不是落在框里（整体拖动）。
+                    var lp = frame.ToLocalPoint(new Vector2(x, y));
+                    move = lp.X >= frame.Local.MinX && lp.X <= frame.Local.MaxX
+                        && lp.Y >= frame.Local.MinY && lp.Y <= frame.Local.MaxY;
 
-                // 顺手记下"指针底下是哪一条"：松手时若一点没移动，就把多选**收窄成只选它**
-                // （PPT/Figma 的行为）。落在框内空白处 → 记不到东西 → 松手不改选择。
-                if (move) _dragHitStroke = Doc.HitObjectAt(x, y, ClickToleranceLogical * dpi);
+                    // 顺手记下"指针底下是哪一条"：松手时若一点没移动，就把多选**收窄成只选它**
+                    // （PPT/Figma 的行为）。落在框内空白处 → 记不到东西 → 松手不改选择。
+                    if (move) _dragHitStroke = Doc.HitObjectAt(x, y, ClickToleranceLogical * dpi);
+                }
             }
         }
 
@@ -5219,6 +6329,15 @@ public class InkEngine
         SelRotationInclination = _rotStartInclination;
         SelRotationReadsInclination = false;   // 松手前标签不显示，这个标志只在拖动中为真
 
+        // 单选一个图形（矩形 / 椭圆 / 三角形 / 平行四边形）→ 读数走**姿态角**（规格 9.7）。
+        // 圆不在内（转了看不出来），图像 / 笔迹改不进来（PoseEditable 只认那四种）。
+        // 镜像状态也在这里记一次：手势里它不会变（乘上去的是纯旋转，行列式恒正）。
+        _rotPoseLike = SelectionHandles.PoseEditable(Doc.Selected, out var rotPose);
+        _rotMirrored = _rotPoseLike && SelectionHandles.IsMirrored(rotPose.Transform);
+        _rotStartPose = _rotPoseLike ? SelectionHandles.PoseAngleDegrees(rotPose.Transform) : 0f;
+        SelRotationPose = _rotStartPose;
+        SelRotationReadsPose = false;          // 同上：只在拖动中为真
+
         SelDragging = true;
         _dirty = true;
         return true;
@@ -5253,6 +6372,10 @@ public class InkEngine
         bool alt = (Native.GetAsyncKeyState(0x12 /* VK_MENU */) & 0x8000) != 0;
 
         Matrix3x2 m, localM;
+        // 特殊形状吸附（规格 9.6）**只在拖四角时可能出现**：整体移动、旋转一律不吸
+        // （那两件事改的是位置和姿态，改不了"这是不是个正方形"）。每帧先清空，
+        // 下面那条分支吸住了再填。
+        _shapeSnap = ShapeSnapKind.None;
         if (_dragIsMove)
         {
             // 整体移动：指针在画布上走多少，对象就走多少。**不能**在框坐标里算
@@ -5301,9 +6424,38 @@ public class InkEngine
                 SelRotationInclination = _rotStartInclination + localDeg;   // 展开值，故意不折
                 SelRotationReadsInclination = true;
             }
+            else if (_rotPoseLike && _dragTargets.Length == 1)
+            {
+                // —— 单选一个图形：读数与吸附都走**姿态角**（规格 9.7）——
+                //
+                // 和直线那一支是同一套账，只是目标角不同（那边是八个特殊角，这边是 0/90）：
+                //   "按下时的姿态角 ＋ 累积角" → 在这个**连续**的角上吸 → 把最小修正
+                //   加回累积角。必须在连续角上吸：折过的 [0,180) 里 "179.6°" 离 0° 只有 0.4°，
+                //   但它们差整整 180°——直接吸会把只偏 0.4° 的三角形**翻过来**。
+                //
+                // 镜像过的图形"本地转 +1°"在屏幕上是 -1°（行列式为负），所以两个方向都要乘
+                // _rotMirrored 的符号；同一个手势里镜像状态不会变（乘上去的是纯旋转）。
+                float sgn = _rotMirrored ? -1f : 1f;
+                float expanded = _rotStartPose + sgn * _rotAccumDeg;
+                float snappedExpanded = SelectionHandles.SnapExpandedPoseDegrees(expanded, shift, alt,
+                                                                                out snapped);
+                if (snapped)
+                {
+                    _rotAccumDeg += sgn * (snappedExpanded - expanded);
+                    // 吸住时标签直接写"**吸到的那条线**"（0 / 90，或 Shift 网格上的角）：
+                    // 从矩阵里解出来的值在浮点噪声下可能印成 `180.0°`（数学上和 0° 是同一条线，
+                    // 但用户要的就是"拖到读数 0° 就转正了"）。两者差在 0.001° 以内，
+                    // 所以下面那条"矩阵与标签同一个角"的自检照样成立。
+                    // 先按 0.001° 抹一遍浮点噪声再折：`-0.0000001` 折进 [0,180) 会变成 179.9999999，
+                    // 印出来还是 "180.0°"——把噪声抹掉才拿得到干净的 0.0（远细于一位小数的显示精度）。
+                    SelRotationPose = SelectionHandles.FoldDegrees(MathF.Round(snappedExpanded, 3));
+                }
+                localDeg = _rotAccumDeg;
+                SelRotationReadsPose = true;    // 没吸住时数值在下面 m 算出来之后再填
+            }
             else
             {
-                // 其它情况（多选 / 矩形 / 椭圆 / 图像 / 自由笔迹）：照旧读 Δ、照旧吸 90°。
+                // 其它情况（多选 / 图像 / 自由笔迹 / 圆）：照旧读 Δ、照旧吸 90°。
                 // 吸附作用在**累积角**上：90° / 15° 的整数倍在负角度、超过一圈的角度上照样对得上。
                 localDeg = SelectionHandles.SnapRotationDegrees(_rotAccumDeg, shift, alt, out snapped);
                 SelRotationReadsInclination = false;
@@ -5326,10 +6478,32 @@ public class InkEngine
         {
             // 手柄换算在**框坐标**里做（缩放的锚点是"对角那个手柄"，只有在框坐标里
             // 才是"沿着框的两条边"），再共轭回画布坐标：M = F⁻¹ · M_local · F
-            localM = SelectionHandles.DragMatrix(_dragHandle, _dragFrame,
-                                                 _dragStartPoint, cur, DpiScale, shift, shift, alt);
+            //
+            // 拖**矩形四角**时先问一句"要不要吸成正方形"（规格 9.6）。顺序是先吸附、
+            // 再回退到通用换算：吸住了就用吸附给的那个矩阵，没吸住一个字都不改。
+            // 注意它只改 `localM`（框坐标里的矩阵），共轭那一步照旧——这样"转过/镜像过的
+            // 框"那种情形（今天框恒轴对齐，但公式留着）不会被绕过。
+            if (SelectionHandles.TrySnapSquareCorner(_dragTargets, _dragHandle, _dragFrame,
+                                                     cur, DpiScale, alt, out var squareM))
+            {
+                _shapeSnap = ShapeSnapKind.Square;
+                _shapeSnapAnchor = cur;             // 胶囊贴在指针（= 被拖的那个角）上
+                localM = squareM;
+            }
+            else
+            {
+                localM = SelectionHandles.DragMatrix(_dragHandle, _dragFrame,
+                                                     _dragStartPoint, cur, DpiScale, shift, shift, alt);
+            }
             m = Conjugate(_dragFrame.ToCanvas, localM);
         }
+
+        // 姿态角读数**从最终矩阵里解出来**：`对象变换 × 预览矩阵` 正是浮动层画那一帧用的式子，
+        // 所以标签上的数就是屏幕上那个姿态——"矩阵与标签同一个角"是构造出来的，不是凑出来的
+        // （直线那一支当年就是在这里对不上：标签用一个角、矩阵用另一个角）。
+        // 吸住那一档已经在上面填成"吸到的那个角"了（0/90 更好看，见那里的注释），跳过。
+        if (_rotPoseLike && _dragTargets.Length == 1 && !SelRotationSnapped)
+            SelRotationPose = SelectionHandles.PoseAngleDegrees(_dragTargets[0].Transform * m);
 
         // 方案 B：**不动模型**，实时位移只活在 _selDragMatrix 里，由浮动层画预览。
         //
@@ -5365,6 +6539,8 @@ public class InkEngine
         SelRotating = false;            // 度数标签只在拖动中出现
         _rotAccumDeg = 0f;              // 下一次拖拽从 0 开始数（标签也不显示了）
         SelRotationReadsInclination = false;   // 读数归位：下一次按下时重新判定读 α 还是 Δ
+        SelRotationReadsPose = false;          // 姿态角那一档同样归位
+        _shapeSnap = ShapeSnapKind.None;       // "正方形"那颗胶囊也只在拖动中出现
 
         // 拖端点：收尾走"改几何"那条路（一次拖拽 = 一步改几何的撤销）。
         if (_vertexDragging) { CommitVertexDrag(); return; }

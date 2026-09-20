@@ -139,6 +139,19 @@ public sealed class FullUi : IOverlayUi
 
     private bool _sliderDragging;
 
+    // ---- 笔的虚实线切换（用户 2026-09-19 第 2 件）--------------------------
+    /// <summary>
+    /// 色带条上那个**虚实线切换**的换挡动画（0 → 1 = "新线型淡入"）。
+    ///
+    /// 为什么给它一个动画：这一格画的是**一小段线**（实线/虚线/点线的样子），
+    /// 直接换会像闪一下屏、而且看不出"刚才按到了没有"——46×26 的小格子里，
+    /// 颜色与形状都是一次性跳变的。做法：旧线型淡出、新线型淡入，
+    /// 同时强调色描边闪一下；时长复用 <see cref="Tokens.RailMs"/>（和色带开合同一套）。
+    /// </summary>
+    private readonly Anim _dashFade;
+    /// <summary>换挡动画里"从哪一档来"（淡出的那一条线画的是它）。</summary>
+    private StrokeDash _dashFadeFrom = StrokeDash.Solid;
+
     // ---- 「更多」抽屉 ------------------------------------------------------
     private bool _drawerOpen;
     private int _drawerHover = -1;
@@ -166,7 +179,7 @@ public sealed class FullUi : IOverlayUi
     private bool _peekArmed;
 
     /// <summary>「更多」抽屉里的行。</summary>
-    private enum Row { DarkTheme, AutoHide, BoardPattern, BoardStep, Restart, Quit, CheckUpdate, SubjectTools }
+    private enum Row { DarkTheme, AutoHide, BoardPattern, BoardStep, CoordGrid, Restart, Quit, CheckUpdate }
 
     private static readonly (Row Kind, string Label, bool Dangerous, bool Gray)[] Rows =
     {
@@ -177,14 +190,23 @@ public sealed class FullUi : IOverlayUi
         // 底纹只画在板面上，板子没开就改了也看不见（InkClass 也是这么守的）。
         (Row.BoardPattern, "白板底纹", false, false),
         (Row.BoardStep, "底纹间距", false, false),
+        // 坐标系网格（2026-09-19 第三批）。
+        //
+        // 坐标系 / 数轴这两个**画图种类**已经进了上带（见 ShapeBandOrder），
+        // 抽屉里只留这个"设置"。原先这里有一行灰着的「学科工具」占位，
+        // 2026-09-19 一度被三行真东西（坐标系/数轴/网格）替掉，随后用户要求
+        // "所有的图形都从图形框那个入口进"，于是两个工具挪走上带、这一行留下。
+        (Row.CoordGrid, "坐标系网格", false, false),
         (Row.Restart, "重启软件", false, false),
         (Row.Quit, "退出", true, false),
         (Row.CheckUpdate, "检查更新", false, true),
-        (Row.SubjectTools, "学科工具", false, true),
     };
 
-    /// <summary>第 1、3 行是分隔线（画的时候跳过的位置）。</summary>
-    private static bool IsSeparatorAfter(int row) => row == 1 || row == 3;
+    /// <summary>
+    /// 第 1、3、4 行后面画分隔线（画的时候跳过的位置）。
+    /// 三刀切出四组：主题/贴边 · 底纹 · 坐标系网格 · 系统。
+    /// </summary>
+    private static bool IsSeparatorAfter(int row) => row is 1 or 3 or 4;
 
     private const float DrawerW = 260f;
     private const float DrawerRowH = 40f;
@@ -222,6 +244,7 @@ public sealed class FullUi : IOverlayUi
         _expand = new Anim(0f);
         _peek = new Anim(1f);
         _rail = new Anim(0f);
+        _dashFade = new Anim(1f);      // 1 = 换挡动画已经结束（平时就是新档的样子）
     }
 
     public string Name => "完整界面";
@@ -234,6 +257,7 @@ public sealed class FullUi : IOverlayUi
             // 没有帧就没有时机去收（引擎只在有脏区或界面说要动时才渲染）。
             if (_peek.Running) return true;
             if (_rail.Running) return true;
+            if (_dashFade.Running) return true;      // 换挡那一下要把淡入淡出画完
             // 按住清空、或者刚按完那一下的闪光：都要继续给帧，否则进度条不走、
             // 也永远到不了 0.8 秒那个点（"按住不放"这条全靠帧在推进）。
             if (ActionHolding) return true;
@@ -256,10 +280,12 @@ public sealed class FullUi : IOverlayUi
         _expand.Bind(host);        // 时钟必须接真的那个（见 Anim.Bind 的注释）
         _peek.Bind(host);
         _rail.Bind(host);
+        _dashFade.Bind(host);
         _lastTool = host.State.Tool;
         _expand.Jump(0f);
         _peek.Jump(1f);
         _rail.Jump(0f);
+        _dashFade.Jump(1f);
         LoadPrefs();
         Layout(host.Screen, host.DpiScale);
         PushFloatingTheme();       // 浮层（操作条/小面板/旋转读数）跟着走同一套令牌
@@ -326,6 +352,10 @@ public sealed class FullUi : IOverlayUi
         _host.Commands.SetBoardPattern(pat, step);
         float op = float.TryParse(_host.GetPref("boardOpacity"), out float opPref) ? opPref : BoardOpacityMax;
         _host.Commands.SetBoardOpacity(op);
+
+        // 坐标系网格也是**引擎状态**（它决定新画的坐标系带不带格），同一套做法：
+        // 启动时推一次。默认**关**（见 Engine.CoordGridDefault 的注释）。
+        _host.Commands.SetCoordGridDefault(_host.GetPref("coordGrid") == "1");
     }
 
     private void SavePrefs()
@@ -341,6 +371,8 @@ public sealed class FullUi : IOverlayUi
                                    ? null : st.BoardPatternStep.ToString("F0"));
         _host.SetPref("boardOpacity", st.BoardOpacity >= BoardOpacityMax - 0.005f
                                       ? null : st.BoardOpacity.ToString("F2"));
+        // 坐标系网格：默认关，只写"开了"这一种情况。
+        _host.SetPref("coordGrid", st.CoordGridDefault ? "1" : null);
 
         var off = new List<string>();
         for (int i = 1; i < _pinned.Length; i++) if (!_pinned[i]) off.Add(i.ToString());
@@ -458,7 +490,20 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>上带这一刻的高度：平时 6 像素的色线，碰到了长成 34 像素的设置条。</summary>
     private float BandHeightFull() =>
-        Tokens.BandLine + (Tokens.BandHeight - Tokens.BandLine) * _rail.Value;
+        Tokens.BandLine + (BandHeightLogical() - Tokens.BandLine) * _rail.Value;
+
+    /// <summary>
+    /// 这一格的上带**完全张开**时有多高（逻辑像素）。
+    ///
+    /// 从 2026-09-20 起它**按格子算**、不是一个常量：图形那一格是**两行**
+    /// （第一行 8 个高频图形、第二行 4 种曲线），所以它比别的格子高一整行
+    /// （段高 ＋ 行间距）。带子朝屏幕中心那一侧长（见 <see cref="BandRect"/>），
+    /// 所以变高是往上/往下长，不会把主条顶走。
+    /// </summary>
+    private float BandHeightLogical()
+        => _bandCell == ShapeCell && ShapeBandOrder2.Length > 0
+            ? Tokens.BandHeight + Tokens.SegmentHeight + ShapeRowGap
+            : Tokens.BandHeight;
 
     /// <summary>色线 / 设置条：数值够大了才按"设置条"那套画与命中（中间态归短的这边）。</summary>
     private bool RailOpen => _rail.Value >= 0.5f;
@@ -607,7 +652,7 @@ public sealed class FullUi : IOverlayUi
     //
     // 一条规则贯穿到底：**上带显示"现在这个按钮的设置"**。
     // 笔/荧光笔 = 12 色片 ＋ 粗细；激光 = 光点大小；橡皮 = 整笔/面积 ＋ 大小；
-    // 选择 = 矩形/套索；白板 = 三种板色；图形 = 四种图形。
+    // 选择 = 矩形/套索；白板 = 三种板色；图形 = 七种图形（见 ShapeBandOrder）。
     // 没有设置项的（后撤/重做/更多/截屏）就不长上带——不做一排空按钮。
 
     private float BandCenterY() => (BandRect().MinY + BandRect().MaxY) * 0.5f;
@@ -622,6 +667,7 @@ public sealed class FullUi : IOverlayUi
         float gap = 4f;
         float avail = band.MaxX - band.MinX - BarInset() * 2f
                     - (BandHasSlider ? SliderTrackW + 14f : 0f)    // 给右端的粗细滑条让位
+                    - (BandHasDashToggle ? DashToggleW + DashToggleGap : 0f)   // 给虚实线那一格让位
                     - ActionReserve;                                // 给最右端的动作按钮让位
         float w = (avail - gap * (n - 1)) / n;
         float h = SwatchHeight();
@@ -635,6 +681,34 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>色片的高：最多 26，带子矮的时候按比例缩（假面板：min(26, band * 0.8)）。</summary>
     private float SwatchHeight() => MathF.Min(Tokens.Swatch, BandHeightFull() * 0.8f);
+
+    /// <summary>虚实线那一格的宽（逻辑像素）：46 = 里面还画得下一小段线 + 左右各留 8。</summary>
+    private const float DashToggleW = 46f;
+    /// <summary>它和左边色片、右边滑条之间的缝。</summary>
+    private const float DashToggleGap = 8f;
+
+    /// <summary>
+    /// **虚实线切换那一格**：从滑条左边往左让出"一格 + 一道缝"算出来。
+    ///
+    /// 为什么锚在滑条上、不锚在色片上：滑条是**贴着面板右沿**摆的（位置由 BarInset 定死），
+    /// 所以从它往左量出来的这一格**不会随色片个数变**——极简档 4 个色片、完整档 12 个，
+    /// 它都不会跳。色片那边再让开同一对常量（见 <see cref="SwatchRect"/>），两边同源。
+    /// </summary>
+    private RectF DashToggleRect()
+    {
+        var band = BandRect();
+        float cy = (band.MinY + band.MaxY) * 0.5f;
+        float right = SliderRect().MinX - DashToggleGap;
+        return new RectF
+        {
+            MinX = right - DashToggleW, MinY = cy - Tokens.SegmentHeight * 0.5f,
+            MaxX = right, MaxY = cy + Tokens.SegmentHeight * 0.5f,
+        };
+    }
+
+    /// <summary>指针在不在那一格上（**画与命中同源**，和别的格子一个规矩）。</summary>
+    private bool HitDashToggle(float x, float y)
+        => BandHasDashToggle && RailOpen && DashToggleRect().Contains(x, y);
 
     /// <summary>粗细滑条的轨道宽（逻辑像素）。</summary>
     private const float SliderTrackW = 132f;
@@ -665,6 +739,10 @@ public sealed class FullUi : IOverlayUi
     private RectF SegmentRect(int i, int count)
     {
         var band = BandRect();
+        // 和色片一样：右端有滑条的时候要给滑条让位，否则分段会和滑条叠在一起
+        float total = band.MaxX - band.MinX - BarInset() * 2
+                    - (BandHasSlider ? SliderTrackW + 14f : 0f)
+                    - ActionReserve;
         // 白板那一格：5 段固定宽（70），右边留出来给"第 N 屏"
         if (_bandCell == 2)
         {
@@ -673,17 +751,44 @@ public sealed class FullUi : IOverlayUi
             float by = BandCenterY() - Tokens.SegmentHeight * 0.5f;
             return new RectF { MinX = bx, MinY = by, MaxX = bx + bw, MaxY = by + Tokens.SegmentHeight };
         }
-        // 和色片一样：右端有滑条的时候要给滑条让位，否则分段会和滑条叠在一起
-        float total = band.MaxX - band.MinX - BarInset() * 2
-                    - (BandHasSlider ? SliderTrackW + 14f : 0f)
-                    - ActionReserve;
+        // **图形那一格是两行**（2026-09-20 第五批：第一行 8 个高频图形、第二行 4 种曲线）。
+        // 行/列从"这一段排第几"推出来（见 ShapeToolAt / ShapeSegmentRow 那两张表），
+        // 两行的段宽各自按"可用宽度 ÷ 本行段数"算——所以第二行只有 4 段，反而更宽。
+        // 两行以带子中线为界上下分（各让出半个行间距），和段间距 6 是同一套网格。
+        if (_bandCell == ShapeCell)
+        {
+            int row = ShapeSegmentRow(i);
+            int cols = ShapeRowCount(row);
+            int col = row == 0 ? i : i - ShapeBandOrder.Length;
+            float sw = Math.Min(120f, (total - (cols - 1) * 6f) / cols);
+            float sx = BandContentLeft() + col * (sw + 6f);
+            float sy = row == 0
+                ? BandCenterY() - Tokens.SegmentHeight - ShapeRowGap * 0.5f
+                : BandCenterY() + ShapeRowGap * 0.5f;
+            return new RectF { MinX = sx, MinY = sy, MaxX = sx + sw, MaxY = sy + Tokens.SegmentHeight };
+        }
         float w = Math.Min(120f, (total - (count - 1) * 6f) / count);
         float x = BandContentLeft() + i * (w + 6f);
         float y = BandCenterY() - Tokens.SegmentHeight * 0.5f;
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + Tokens.SegmentHeight };
     }
 
+    /// <summary>图形那一格两行之间的间距（也是段与段之间的 6，见 <see cref="SegmentRect"/>）。</summary>
+    private const float ShapeRowGap = 6f;
+
     private bool BandHasSwatches => _bandCell is 3 or 4;
+    /// <summary>
+    /// 这一格的设置条上要不要那个**虚实线切换**（夹在色片和粗细滑条之间，
+    /// 用户 2026-09-19 定的位置："加在'调按钮大小'和'颜色带'中间"）。
+    ///
+    /// **只有完整档的笔有**，两条理由：
+    ///   · 荧光笔 / 激光笔的轨迹画成虚线没有意义（见 Engine.PenDash），图形的线型历来
+    ///     是"选中之后在操作条面板里改"——所以只有第 3 格；
+    ///   · 极简档那条带子只有 ~333 宽，4 个色片 + 粗细滑条已经吃掉 155，再塞一格
+    ///     就把色片压到 30 像素以下——而"色片挤到看不清"等于这个入口没有
+    ///     （自检里"每个色片 ≥30 宽"那条就是这个意思）。极简档想要虚线就切回完整档。
+    /// </summary>
+    private bool BandHasDashToggle => _bandCell == 3 && _profile != Profile.Mini;
     /// <summary>
     /// 哪几格的设置条右边有滑条。**白板那一格也有**——它控制的是"板面不透明度"
     /// （用户 2026-09-17："增加一个透明度的拖动功能，这样可以批注的时候隐约看见下面的题目"）。
@@ -695,8 +800,119 @@ public sealed class FullUi : IOverlayUi
     /// 截图那一格是 3 段：**[直接截取][隐藏界面][粘贴图片]**——前两段照 InkClass 的两项菜单，
     /// 第三段是用户 2026-09-17 要的："粘贴功能，因为其他地方使用复制功能可以到剪贴板，
     /// 但如果是触摸屏或者手写板可能没有键盘"（等于把 `Ctrl+V` 搬到屏幕上）。
+    ///
+    /// 图形那一格是 **7 段**（2026-09-19 补上第二批三种之后）：段数和顺序都取自
+    /// <see cref="ShapeBandOrder"/>，不再写死数字——段宽是按"可用宽度 ÷ 段数"算的
+    /// （见 <see cref="SegmentRect"/>），加图形不用再动布局，也不会挤成一团。
     /// </summary>
-    private int BandSegmentCount => _bandCell switch { 2 => 5, 6 => 2, 7 => 2, 8 => 4, 9 => 3, _ => 0 };
+    private int BandSegmentCount => _bandCell switch
+    {
+        2 => 5, 6 => 2, 7 => 2, 8 => ShapeSegmentCount, 9 => 3, _ => 0,
+    };
+
+    /// <summary>
+    /// **图形种类在上带里的顺序**（从左到右）：
+    /// 直线 → 矩形 → 椭圆 → 圆 → 三角形 → 平行四边形 → 箭头 → 坐标系。
+    ///
+    /// 为什么把三种新的插在"椭圆"后面、把箭头挪到最后：
+    ///   · 矩形 / 椭圆 / 圆 是"一按一拖、拖出来的那个框就是它"的同一类（都只有一个中心，
+    ///     四个角由外框定），**圆紧挨着椭圆**最顺——两个都是"中心 + 半径"的东西，
+    ///     分家反而要多找一眼；
+    ///   · 三角形 / 平行四边形 虽然也是拖一个外框，但形状是**按固定规则从框里归一出来的**
+    ///     （三角形底边水平、左右对称；平行四边形上边固定右移 1/4 宽），排在上一类后面；
+    ///   · 箭头是"拖一条线"那一类，和直线一头一尾，所以被挤到最后。
+    /// 原有的四段**相对次序一个没动**（直线 < 矩形 < 椭圆 < 箭头），只是箭头挪到了末尾
+    /// ——上带那四段的位置语义早就在老师的肌肉记忆里了，不重排。
+    ///
+    /// 2026-09-19 第二批加坐标系 / 数轴时，用户看过之后要求**它们也走这里**
+    /// （原话："我希望所有的图形都放到我们现成的面板上，也就是图形框里面，
+    /// 从那个地方入口，不要放到'更多'里面"）。于是接了**末尾**两段：
+    ///   · 接在末尾 = 前面七段的编号一个不变（`--shapebandtest` 里那些段号一个不用改）；
+    ///   · 坐标系在数轴前面（大件在前，也和后加的两个热键 F / N 的顺序一致）；
+    ///   · 它们和前面七段**不混排**：这两个是"一节课画一次"的学科件，
+    ///     紧挨着自成一组，比插在矩形和椭圆之间更好找。
+    ///
+    /// **2026-09-19 稍后又撤掉了末尾那一段「数轴」**（用户："把快捷栏最后一个图标删掉，
+    /// 我感觉用不到——图形里面有一个坐标系，只有向右箭头的那个坐标系"）。
+    /// 于是上带 **8 段**。**只撤入口**：`Tool.NumberLine` / `StrokeKind.NumberLine`
+    /// 都留着——存档里存的是一条字节，删了就是"打开旧板书少一条"（见 计划-图形工具.md 11.2）。
+    /// 撤掉之后"每段 ≥ 60 逻辑像素"那条自检反而更宽松了。
+    ///
+    /// 这张表是**唯一来源**：画哪段（<see cref="ShapeIcon"/>）、点哪段切什么工具
+    /// （<see cref="ActivateSegment"/>）、哪段高亮（<see cref="IsSegmentActive"/>）、
+    /// 主条那一格画什么图标（<see cref="ShapeIconFor"/>）都读它——
+    /// 各写一份的话，加一种图形就会漏掉一处。
+    /// </summary>
+    private static readonly Tool[] ShapeBandOrder =
+    {
+        Tool.Line, Tool.Rectangle, Tool.Ellipse, Tool.Circle,
+        Tool.Triangle, Tool.Parallelogram, Tool.Arrow,
+        Tool.Coordinate,
+    };
+
+    /// <summary>
+    /// **第二行**的图形（2026-09-20 第五批，用户定："图形框里加第二列，
+    /// 教师实际使用时高频的只有一行就行，到时候再调"）：
+    /// 抛物线 → 双曲线 → 正弦 → 余弦。
+    ///
+    /// 三件事照着用户那句话定：
+    ///   · **第一行一个都不动**——那八个是肌肉记忆（`--shapebandtest` 里那些按段号点击的
+    ///     断言，也正因此一个都不用改）；
+    ///   · 第二行放"一节课画一两次"的曲线，所以**只有 4 段**，每段反而比第一行宽；
+    ///   · 两行的段数写在**这两张表**里，段宽照旧"可用宽度 ÷ 本行段数"算
+    ///     （见 <see cref="SegmentRect"/>），所以以后往第二行加图形不用动布局。
+    ///
+    /// 它是"点哪一段切什么工具 / 哪段高亮 / 画哪张图标"的**唯一来源**（和第一行一样）：
+    /// 三处各写一份的话，加一种图形就会漏掉一处（这条教训仓库里吃过三次）。
+    /// </summary>
+    private static readonly Tool[] ShapeBandOrder2 =
+    {
+        Tool.Parabola, Tool.Hyperbola, Tool.Sine, Tool.Cosine,
+        // 2026-09-20 第五批：立体图形（照 InkClass 的 case 6/7/9/26 搬过来）。
+        // 第二行从 4 段长到 8 段（和第一行一样宽）——段宽是"可用宽度 ÷ 本行段数"算出来的，
+        // 加段不用动布局。
+        Tool.Cylinder, Tool.Cone, Tool.Cuboid, Tool.Tetrahedron,
+    };
+
+    /// <summary>图形那一格在上带里的下标（两行都在这一个格子里）。</summary>
+    private const int ShapeCell = 8;
+
+    /// <summary>图形那一格一共几段（两行加起来）——命中与绘制的循环都用它。</summary>
+    private static int ShapeSegmentCount => ShapeBandOrder.Length + ShapeBandOrder2.Length;
+
+    /// <summary>
+    /// 第 `i` 段（在图形那一格里，**两行拉平编号**：前 8 个是第一行、接着 4 个是第二行）
+    /// 对应哪个工具。越界回第一段——宁可画错一个图标，也不让下标越界。
+    /// </summary>
+    private static Tool ShapeToolAt(int i)
+    {
+        if (i < 0) return ShapeBandOrder[0];
+        if (i < ShapeBandOrder.Length) return ShapeBandOrder[i];
+        int j = i - ShapeBandOrder.Length;
+        return j < ShapeBandOrder2.Length ? ShapeBandOrder2[j] : ShapeBandOrder[0];
+    }
+
+    /// <summary>这一段在第几行（0 = 第一行高频图形、1 = 第二行曲线）。</summary>
+    private static int ShapeSegmentRow(int i) => i < ShapeBandOrder.Length ? 0 : 1;
+
+    /// <summary>这一行有几段（决定段宽）。</summary>
+    private static int ShapeRowCount(int row) => row == 0 ? ShapeBandOrder.Length : ShapeBandOrder2.Length;
+
+    /// <summary>
+    /// 这个工具**在图形面板里有没有入口**（点主条那一格时用它判断"要不要偷偷换工具"）。
+    ///
+    /// **名字说明白点**：`Engine` 里也有一个 `IsShapeTool`，判的是"**这个工具画出来的是
+    /// 图形还是自由笔迹**"（含数轴——它没入口但画法还在，老存档里那些数轴要能选中、能删）。
+    /// 两个名字撞着、语义不同，2026-09-20 顺手把这个改成 `HasShapeEntry`：
+    /// **有入口** ⊂ **能画**，差的就是数轴那一个。
+    ///
+    /// 判据是**那两张段表**（`ShapeBandOrder` / `ShapeBandOrder2`）——它们是"点哪一段切什么
+    /// 工具 / 哪段高亮 / 画哪张图标"的唯一来源，所以这里 IndexOf 一下就够，
+    /// 加图形只改表（见 2026-09-19 那一轮：这里曾经是"上带七段 **或** 坐标系/数轴那一段"，
+    /// 两者合流之后收敛回一句）。
+    /// </summary>
+    private static bool HasShapeEntry(Tool t)
+        => Array.IndexOf(ShapeBandOrder, t) >= 0 || Array.IndexOf(ShapeBandOrder2, t) >= 0;
 
     /// <summary>这个工具的粗细范围。**界面管范围，引擎管钳位**——引擎那边是 0.5～64。</summary>
     private (float Min, float Max) WidthRange(Tool tool) => tool switch
@@ -1140,6 +1356,32 @@ public sealed class FullUi : IOverlayUi
 
     private void ActivateSwatch(int i) => _host.Commands.SetColor(SwatchColor(i));
 
+    /// <summary>
+    /// 点了一下虚实线那一格：**三档轮流**（实线 → 虚线 → 点线 → 实线）。
+    ///
+    /// 和橡皮那一格"点一下换一次"是同一个约定——上带里摆不下下拉框，**点就是切**；
+    /// 三档而不是两档，是因为引擎那边线型本来就是三档（见 StrokeDash），
+    /// 少给一档等于把"点线"藏起来。
+    ///
+    /// 顺手起一次换挡动画（见 <see cref="_dashFade"/>）：**旧档要先当场记下来**，
+    /// 不然命令一发、状态就变了，动画开始之后再也问不出"从哪一档来的"。
+    /// </summary>
+    private void CycleDash()
+    {
+        var cur = _host.State.Dash;
+        var next = cur switch
+        {
+            StrokeDash.Solid => StrokeDash.Dashed,
+            StrokeDash.Dashed => StrokeDash.Dotted,
+            _ => StrokeDash.Solid,
+        };
+        _dashFadeFrom = cur;
+        _dashFade.Jump(0f);
+        _dashFade.To(1f, Tokens.RailMs);
+        _host.Commands.SetDash(next);
+        Invalidate();
+    }
+
     private void ActivateSegment(int i)
     {
         switch (_bandCell)
@@ -1157,11 +1399,18 @@ public sealed class FullUi : IOverlayUi
             case 7:                       // 矩形框选 / 自由套索
                 _host.Commands.SetSelectMode(i == 0 ? SelectMode.Rect : SelectMode.Lasso);
                 break;
-            case 8:                       // 四种图形（三角与平行四边形底层还没做）
-                _host.Commands.SetTool(i switch
+            case 8:                       // 图形那一格：**两行**拉平编号，顺序见两张表
+                if (i >= 0 && i < ShapeSegmentCount)
                 {
-                    0 => Tool.Line, 1 => Tool.Rectangle, 2 => Tool.Ellipse, _ => Tool.Arrow,
-                });
+                    var picked = ShapeToolAt(i);
+                    // **同一个图形格再点一次 = 换一档抛物线开口方向**（用户 2026-09-20 定：
+                    // "选中框的抛物线按钮取消，我不打算从这个转开口" → 朝向改到**画之前**定）。
+                    // 只对抛物线这样：别的图形再点一次没有任何新含义，保持"再点=选中它"的老行为。
+                    if (picked == Tool.Parabola && _host.State.Tool == Tool.Parabola)
+                        _host.Commands.CycleParabolaAxis();
+                    else
+                        _host.Commands.SetTool(picked);
+                }
                 break;
             case 9:                       // 截图：[直接截取][隐藏界面][粘贴图片]
                 // 照 InkClass 的两项菜单：默认"隐藏界面"（只拍下层内容），
@@ -1291,7 +1540,7 @@ public sealed class FullUi : IOverlayUi
         return new RectF { MinX = r.MaxX - w, MinY = cy - h * 0.5f, MaxX = r.MaxX, MaxY = cy + h * 0.5f };
     }
 
-    private bool IsToggleRow(int i) => Rows[i].Kind is Row.DarkTheme or Row.AutoHide;
+    private bool IsToggleRow(int i) => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.CoordGrid;
 
     /// <summary>
     /// 这一行现在是不是压暗（点了没反应）。两种来源：
@@ -1371,6 +1620,14 @@ public sealed class FullUi : IOverlayUi
                 Invalidate();
                 break;
             }
+            // 坐标系网格：**选中了坐标系就改它们，没选中就翻"新画的默认值"**
+            // （分派规则见 Engine.ToggleSelectionGrid）。落盘**只在改默认值时**做——
+            // 改对象是一次编辑动作，不该顺手把偏好也改了。
+            case Row.CoordGrid:
+                if (_host.Commands.ToggleCoordGrid() == 0) SavePrefs();
+                Invalidate();
+                break;
+
             case Row.Restart:
                 _host.Commands.Restart();     // 引擎会先暂存板书再重启
                 break;
@@ -1581,6 +1838,9 @@ public sealed class FullUi : IOverlayUi
         // 上带：色片 / 分段（滑条已经在上面判过了）
         if (BandVisible())
         {
+            // 虚实线那一格：**按下即生效**（和色片同一个手感——点一下就该看见结果，
+            // 不用等抬手；抬手那一下还要给"拖动面板"让路）。
+            if (HitDashToggle(p.X, p.Y)) { CycleDash(); return true; }
             int sw = HitSwatch(p.X, p.Y);
             if (sw >= 0) { ActivateSwatch(sw); return true; }
             int sg = HitSegment(p.X, p.Y);
@@ -1687,6 +1947,7 @@ public sealed class FullUi : IOverlayUi
         // 动作按钮（清空/全选）：编号 400，和色片 100、分段 200、滑条 300 排成一套
         if (CurAction != BandAction.None && RailOpen && ActionRect().Contains(x, y)) return 400;
         if (BandHasSlider && Widgets.SliderHit(SliderRect()).Contains(x, y)) return 300;
+        if (HitDashToggle(x, y)) return 500;                       // 虚实线那一格
         int sw = HitSwatch(x, y);
         if (sw >= 0) return 100 + sw;
         int sg = HitSegment(x, y);
@@ -1822,7 +2083,12 @@ public sealed class FullUi : IOverlayUi
                 break;
             case 7: cmd.SetTool(Tool.Marquee); break;
             case 8:
-                cmd.SetTool(st.Tool == Tool.Rectangle ? Tool.Line : Tool.Rectangle);
+                // 七种图形之后**不能再"两档对切"**了（以前是直线 ↔ 矩形）。
+                //
+                // 现在的规则：已经是图形工具就**不动工具**——用户只是想看上带（指针就在
+                // 面板上，下一手点哪一段都行）；偷偷换成矩形是最气人的，画到一半的
+                // 三角形会被换掉。不是图形工具才给一个默认种类（矩形，沿用老行为）。
+                if (!HasShapeEntry(st.Tool)) cmd.SetTool(Tool.Rectangle);
                 break;
             case 9: cmd.SetTool(Tool.Capture); break;
             case 10: cmd.Undo(); break;
@@ -1841,16 +2107,21 @@ public sealed class FullUi : IOverlayUi
     private static bool HasBand(int cell) => cell is 2 or 3 or 4 or 5 or 6 or 7 or 8 or 9;
 
     /// <summary>当前工具对应的格子——键盘换工具时用它把上带掰回来。</summary>
-    private static int CellForTool(Tool t) => t switch
+    private static int CellForTool(Tool t)
     {
-        Tool.Highlighter => 4,
-        Tool.Laser => 5,
-        Tool.Eraser or Tool.PixelEraser => 6,
-        Tool.Marquee => 7,
-        Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Arrow => 8,
-        Tool.Capture => 9,
-        _ => 3,
-    };
+        // 七种图形共用第 8 格（哪一种是哪一段由上带里的高亮标出来）。
+        // 判据走 HasShapeEntry 而不是再列一遍七个名字：加一种图形只改 ShapeBandOrder。
+        if (HasShapeEntry(t)) return 8;
+        return t switch
+        {
+            Tool.Highlighter => 4,
+            Tool.Laser => 5,
+            Tool.Eraser or Tool.PixelEraser => 6,
+            Tool.Marquee => 7,
+            Tool.Capture => 9,
+            _ => 3,
+        };
+    }
 
     public void OnStateChanged(in UiState state)
     {
@@ -2235,6 +2506,8 @@ public sealed class FullUi : IOverlayUi
             }
         }
 
+        DrawDashToggle(ctx, st);
+
         int n = BandSegmentCount;
         for (int i = 0; i < n; i++) DrawSegment(ctx, i, n, st);
 
@@ -2292,37 +2565,81 @@ public sealed class FullUi : IOverlayUi
                         Brush(ctx, ink));
     }
 
+    /// <summary>
+    /// 虚实线切换那一格。**画的是"下一笔会长什么样"**：一小段按当前线型画出来的线
+    /// （和选中面板里那三格同一个语言——老师看的是线本身，不是文字）。
+    ///
+    /// 样本线的节长比例照抄引擎那两条 D2D dash 图案（虚线"节 3 缝 2"、点线"节≈0 缝 2"，
+    /// 单位都是笔宽，见 <c>Gfx</c>），但**不能直接用那条描边样式**：
+    /// 它的节长按**真实笔宽**算，46×26 的小格子里会碎成一串看不清的点。
+    /// 这里按这一格自己的样本线宽算节长，看着才是"缩小的虚线"。
+    /// </summary>
+    private void DrawDashToggle(ID2D1DeviceContext ctx, in UiState st)
+    {
+        if (!BandHasDashToggle || !RailOpen) return;
+        var r = DashToggleRect();
+        var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 8f, 8f);
+
+        if (_hover == 500) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+        ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+
+        // 样本线用**当前笔色**：这一格顺手把"下一笔是什么颜色"也说了一遍。
+        float lx0 = r.MinX + 9f, lx1 = r.MaxX - 9f;
+        float ly = (r.MinY + r.MaxY) * 0.5f;
+        float v = _dashFade.Value;                    // 0 = 全是旧档，1 = 全是新档
+        if (v < 0.999f) DrawDashSample(ctx, _dashFadeFrom, lx0, lx1, ly, st.PaletteBase, 1f - v);
+        DrawDashSample(ctx, st.Dash, lx0, lx1, ly, st.PaletteBase, v);
+
+        // 换挡那一瞬间描一道强调色：三档的样本线在 46 像素里差别不大，
+        // 光看"线变了"不容易确认"我刚才按到了没有"。
+        if (v < 0.999f)
+            ctx.DrawRoundedRectangle(rr, Brush(ctx, Alpha(Tokens.Accent, 1f - v)), 1.6f);
+    }
+
+    /// <summary>
+    /// 按线型画一小段样本。<paramref name="alpha"/> ≤ 0.01 就整段不画（换挡动画的淡出那半程走这条）。
+    /// </summary>
+    private void DrawDashSample(ID2D1DeviceContext ctx, StrokeDash dash, float x0, float x1, float y,
+                                in Color4 ink, float alpha)
+    {
+        if (alpha <= 0.01f) return;
+        var brush = Brush(ctx, Alpha(ink, alpha));
+        const float w = 2.4f;                  // 样本线宽（和选中面板那三格的 2.6 一个量级）
+        switch (dash)
+        {
+            case StrokeDash.Dashed:
+                // 节 3w、缝 2w —— 和 Gfx 里那对数字同一个比例
+                for (float x = x0; x < x1; x += w * 5f)
+                    ctx.DrawLine(new Vector2(x, y),
+                                 new Vector2(MathF.Min(x + w * 3f, x1), y), brush, w);
+                break;
+            case StrokeDash.Dotted:
+                // 缝 2w、每个点是一个"直径 = w"的圆（引擎那边靠圆头 dash cap 鼓出来，同一个样子）
+                for (float x = x0 + w * 0.5f; x < x1; x += w * 2f)
+                    ctx.FillEllipse(new Ellipse(new Vector2(x, y), w * 0.5f, w * 0.5f), brush);
+                break;
+            default:
+                ctx.DrawLine(new Vector2(x0, y), new Vector2(x1, y), brush, w);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// 换个透明度（换挡动画要淡入淡出用）。
+    ///
+    /// **透明度按 1/32 量化**：<see cref="Brush"/> 那个缓存是按颜色查的，
+    /// 每帧一个新透明度就是一"把"新笔刷（167 毫秒 × 每帧两次 ≈ 几十把）。
+    /// 量化之后一趟动画最多用 33 个值——肉眼看不出差别，缓存也不再被动画撑大。
+    /// </summary>
+    private static Color4 Alpha(in Color4 c, float a)
+        => new(c.R, c.G, c.B, Math.Clamp(MathF.Round(a * 32f) / 32f, 0f, 1f));
+
     private bool IsSwatchActive(in UiState st, int i)
     {
         var c = SwatchColor(i);
         var p = st.PaletteBase;
         return MathF.Abs(c.R - p.R) < 0.02f && MathF.Abs(c.G - p.G) < 0.02f
             && MathF.Abs(c.B - p.B) < 0.02f;
-    }
-
-    /// <summary>当前那一档在下标几（色线里靠它标出"你现在在哪一段"）。</summary>
-    private int ActiveSegmentIndex(in UiState st)
-    {
-        switch (_bandCell)
-        {
-            case 2:
-                for (int i = 0; i < InkPalette.BoardPresets.Length; i++)
-                    if (BoardColorIs(st, i)) return i;
-                return -1;
-            case 6:
-                return st.Tool == Tool.Eraser ? 0 : st.Tool == Tool.PixelEraser ? 1 : -1;
-            case 7:
-                return st.SelectMode == SelectMode.Rect ? 0 : 1;
-            case 8:
-                return st.Tool switch
-                {
-                    Tool.Line => 0, Tool.Rectangle => 1, Tool.Ellipse => 2, Tool.Arrow => 3, _ => -1,
-                };
-            case 9:
-                return st.CaptureHideInk ? 1 : 0;      // 0 = 直接截取，1 = 隐藏批注截取
-            default:
-                return -1;
-        }
     }
 
     /// <summary>
@@ -2408,12 +2725,72 @@ public sealed class FullUi : IOverlayUi
     }
 
     /// <summary>
-    /// 图形那一排**用图标不用文字**（照假面板）：四种图形的轮廓比"直线/矩形"四个字
-    /// 一眼得多，而且不用为四个字去量宽度。
+    /// 图形那一排**用图标不用文字**（照假面板）：图形的轮廓比"直线/矩形/椭圆"几个字
+    /// 一眼得多，而且不用为几个字去量宽度（七段之后每段只有 ~79 像素，写"平行四边形"
+    /// 四个字根本放不下）。
     /// </summary>
-    private static string ShapeIcon(int i) => i switch
+    private string ShapeIcon(int i) => ShapeIcon(ShapeToolAt(i));
+
+    /// <summary>
+    /// **图形种类 → 图标名**（带上状态的那一份）：目前只有抛物线跟状态有关
+    /// ——它的图标要**转成当前开口方向**（见 <see cref="ParabolaIconName"/>）。
+    /// </summary>
+    private string ShapeIcon(Tool t)
+        => t == Tool.Parabola ? ParabolaIconName(_host.State.ParabolaAxis) : ShapeIconFor(t);
+
+    /// <summary>
+    /// 抛物线的图标名按**当前档位**换（`parabola` = 上下抛物 / `parabolaRight` = 左右抛物，
+    /// 见 <see cref="IconAtlas.Draw"/>）。
+    ///
+    /// 为什么非得变：用户 2026-09-20 把"上下还是左右"从选中框挪到了**画之前**定
+    /// （那格已经选中抛物线时再点一次，见 `ActivateSegment` 的 case 8）。
+    /// 图标不跟着换的话，"点第二下到底有没有生效"就没法看出来。
+    ///
+    /// 只有两个名字：**具体朝哪边由画的时候那一拖定**（用户 2026-09-20 更晚的口径：
+    /// "感觉不对，还是照搬他的逻辑"；InkClass 也是两个按钮 `case 20/21`）。
+    /// </summary>
+    private static string ParabolaIconName(CurveAxis axis) => axis switch
     {
-        0 => "lineWeight", 1 => "square", 2 => "circle", _ => "arrowRight",
+        CurveAxis.OpenRight or CurveAxis.OpenLeft => "parabolaRight",
+        _ => "parabola",                           // 上下抛物（也是兜底）
+    };
+
+    /// <summary>
+    /// **图形种类 → 图标名**。上带那几段和主条"图形"那一格**共用这一份**：
+    /// 主条上显示的必须就是当前种类的形状，两处各写一份迟早对不上
+    /// （表现是"上带里点了三角形，主条那格还是矩形"）。
+    ///
+    /// 名字对不上的那几个是自绘的（`oval` / `parallelogram` / `axes` / `numberline`
+    /// 和 2026-09-20 加的四种曲线 `parabola` / `hyperbola` / `sine` / `cosine`），
+    /// 见 <see cref="IconAtlas.Draw"/>：上游图标库里没有这些专名。
+    /// </summary>
+    private static string ShapeIconFor(Tool t) => t switch
+    {
+        Tool.Rectangle => "square",
+        Tool.Ellipse => "oval",                    // 自绘：Fluent 只有正圆
+        Tool.Circle => "circle",
+        Tool.Triangle => "triangle",
+        Tool.Parallelogram => "parallelogram",     // 自绘：Fluent 没有这个专名
+        // 坐标系 / 数轴也是自绘的（见 IconAtlas.DrawAxes / DrawNumberLine）：
+        // 上游图标库里没有"两条轴"和"一条带刻度的轴"这两个专名。
+        Tool.Coordinate => "axes",
+        Tool.NumberLine => "numberline",
+        // 四种曲线：同样自绘（见 IconAtlas.DrawParabola / DrawHyperbola / DrawWave）。
+        // 图标画的是"理想样子"（开口向上的抛物线 / a = b 的双曲线 / 一个周期）。
+        // **抛物线那一张会跟着当前开口方向转**——它不是这一个名字的事：
+        // `ShapeIcon(Tool)` 会替它换成 `parabolaRight` / `parabolaDown` / `parabolaLeft`，
+        // 所以这里给的是"默认（开口向上）"那一档，也是名字不对时的兜底。
+        Tool.Parabola => "parabola",
+        Tool.Hyperbola => "hyperbola",
+        Tool.Sine => "sine",
+        Tool.Cosine => "cosine",
+        // 立体图形（2026-09-20 第五批）：同样自绘（见 IconAtlas.DrawCylinder / DrawCone 等）。
+        Tool.Cylinder => "cylinder",
+        Tool.Cone => "cone",
+        Tool.Cuboid => "cuboid",
+        Tool.Tetrahedron => "tetrahedron",
+        Tool.Arrow => "arrowRight",
+        _ => "lineWeight",                         // 直线（也是认不出来的兜底）
     };
 
     private string SegmentLabel(int i) => _bandCell switch
@@ -2430,10 +2807,7 @@ public sealed class FullUi : IOverlayUi
         2 => i >= 1 && i <= 3 && BoardColorIs(st, i - 1),
         6 => i == 0 ? st.Tool == Tool.Eraser : st.Tool == Tool.PixelEraser,
         7 => i == 0 ? st.SelectMode == SelectMode.Rect : st.SelectMode == SelectMode.Lasso,
-        8 => st.Tool == (i switch
-             {
-                 0 => Tool.Line, 1 => Tool.Rectangle, 2 => Tool.Ellipse, _ => Tool.Arrow,
-             }),
+        8 => i >= 0 && i < ShapeSegmentCount && st.Tool == ShapeToolAt(i),
         9 => i == (st.CaptureHideInk ? 1 : 0),     // 截图：当前是哪一种截法就高亮哪一段
         _ => false,
     };
@@ -2527,7 +2901,15 @@ public sealed class FullUi : IOverlayUi
         }
     }
 
-    private bool IsOn(int i) => Rows[i].Kind == Row.DarkTheme ? _dark : _hideEnabled;
+    private bool IsOn(int i) => Rows[i].Kind switch
+    {
+        Row.DarkTheme => _dark,
+        // 坐标系网格这一行显示的是**"以后新画的那些"要不要格**——
+        // 已经画在板上的坐标系各存各的（见 Stroke.Grid），
+        // 所以选中一个坐标系再点这一下时，改的是它，这个开关的位置不动。
+        Row.CoordGrid => _host != null && _host.State.CoordGridDefault,
+        _ => _hideEnabled,
+    };
 
     private static string ProfileName(int i) => i switch { 0 => "极简", 1 => "自定义", _ => "完整" };
 
@@ -2588,7 +2970,15 @@ public sealed class FullUi : IOverlayUi
             return;
         }
 
-        var icon = active ? Cells[i].Filled : Cells[i].Icon;
+        // **图形那一格（8）的图标跟着当前种类走**（2026-09-19）：
+        // 七种图形挤在一格里之后，"shapes" 那个"两个图形叠在一起"的通用图标
+        // 什么也没说——手里是三角形还是平行四边形，只能打开上带才知道。
+        // 现在画的就是当前那一种（和上带里高亮的那一段同一张图，共用 ShapeIconFor）。
+        //
+        // 代价（明确接受）：七种图形**都没有 filled 变体**（Fluent 表里没有生成），
+        // 所以选中态不再像别的格那样变实心，而是"同一个轮廓 + 强调色底 + 白图标"
+        // ——和上带里选中的那一段是同一种画法。
+        var icon = i == 8 ? ShapeIcon(st.Tool) : active ? Cells[i].Filled : Cells[i].Icon;
         var ink = active ? Tokens.AccentInk : InkCol;
         // **撤销/重做栈空 → 压暗**（用户 2026-09-17："撤销重做灰度"）。
         // 引擎早就把 UndoDepth / RedoDepth 递给界面了，只是界面一直没用。
@@ -2634,7 +3024,7 @@ public sealed class FullUi : IOverlayUi
             5 => st.Tool == Tool.Laser,
             6 => st.Tool is Tool.Eraser or Tool.PixelEraser,
             7 => st.Tool == Tool.Marquee,
-            8 => st.Tool is Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Arrow,
+            8 => HasShapeEntry(st.Tool),
             9 => st.Tool == Tool.Capture,
             _ => false,
         };
@@ -2687,8 +3077,46 @@ public sealed class FullUi : IOverlayUi
     /// <summary>自检用：第 i 个色片的矩形。</summary>
     internal RectF SwatchRectForTest(int i) => SwatchRect(i);
 
+    /// <summary>
+    /// 自检用：这一格的设置条上**有没有**那个虚实线切换（笔 + 完整档才有，见 <see cref="BandHasDashToggle"/>）。
+    /// 极简档那一条断言靠它——"挤不下所以不给"这件事必须验得出来，不然下一轮加宽了会静默变样。
+    /// </summary>
+    internal bool DashToggleVisibleForTest => BandHasDashToggle;
+
+    /// <summary>自检用：虚实线那一格的矩形（点它要按物理像素）。</summary>
+    internal RectF DashToggleRectForTest => DashToggleRect();
+
+    /// <summary>自检用：换挡动画是不是还在跑（换挡完了要停，空闲帧要回 0）。</summary>
+    internal bool DashFadeRunningForTest => _dashFade.Running;
+
     /// <summary>自检用：上带里第 i 个分段的矩形。</summary>
     internal RectF SegmentRectForTest(int i) => SegmentRect(i, BandSegmentCount);
+
+    /// <summary>
+    /// 自检用：上带现在有几段。
+    /// 自检要断言"图形那格是七段"，但**段数只能从绘制/命中用的这一份真值里读**：
+    /// <see cref="SegmentRectForTest"/> 不校验下标（越界的下标照样算得出一个矩形），
+    /// 光靠它数不出上界。
+    /// </summary>
+    internal int BandSegmentCountForTest => BandSegmentCount;
+
+    /// <summary>
+    /// 自检用：某一格现在画的是哪个图标名。
+    /// 图形那一格（8）的图标**跟着当前种类变**，所以它得问一次状态；
+    /// 其余的格子图标是写死在 Cells 表里的，直接给。
+    /// </summary>
+    internal string CellIconForTest(int cell)
+        => cell == 8 ? ShapeIcon(_host.State.Tool) : Cells[cell].Icon;
+
+    /// <summary>
+    /// 自检用：图形那一格**第 i 段**的图标名。
+    /// 用来验"抛物线那一段的图标跟着当前开口方向转"（见 <see cref="ParabolaIconName"/>）——
+    /// 图标不转的话，老师看不出"再点一次"到底有没有生效。
+    /// </summary>
+    internal string ShapeIconNameForTest(int i) => ShapeIcon(i);
+
+    /// <summary>自检用：这个工具在图形面板里有没有入口（见 <see cref="HasShapeEntry"/>）。</summary>
+    internal static bool HasShapeEntryForTest(Tool t) => HasShapeEntry(t);
 
     /// <summary>自检用：滑条的矩形。</summary>
     internal RectF SliderRectForTest => SliderRect();
@@ -2703,6 +3131,22 @@ public sealed class FullUi : IOverlayUi
     internal bool DrawerOpenForTest => _drawerOpen;
     internal RectF DrawerRectForTest => DrawerRect();
     internal RectF RowRectForTest(int i) => RowRect(i);
+
+    /// <summary>
+    /// 自检用：**按行标签**找那一行的矩形（找不到返回空矩形）。
+    ///
+    /// 为什么不让自检写行下标：抽屉里的行是会被插来插去的——2026-09-17 插了底纹两行、
+    /// 2026-09-19 把灰着的「学科工具」换成了坐标系 / 数轴 / 坐标系网格三行。
+    /// 每插一次，写死下标的自检就要去改一处引用，而且**改错了是静默的**：
+    /// 点到了别的行，红色的却是那一条断言（"点重启没反应"）。
+    /// 按标签找，以后插行就不会再碰到自检。
+    /// </summary>
+    internal RectF RowRectByLabelForTest(string labelPart)
+    {
+        for (int i = 0; i < Rows.Length; i++)
+            if (Rows[i].Label.Contains(labelPart, StringComparison.Ordinal)) return RowRect(i);
+        return RectF.Empty;
+    }
 
     /// <summary>自检用：深色主题与贴边隐藏的开关状态。</summary>
     internal bool DarkForTest => _dark;

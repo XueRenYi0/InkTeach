@@ -75,8 +75,10 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     // ---- IEngineCommands -------------------------------------------------
 
     public void SetTool(Tool tool) => _engine.SetToolFromUi(tool);
+    public void CycleParabolaAxis() => _engine.CycleParabolaAxis();
     public void SetColor(Color4 color) => _engine.SetColorFromUi(color);
     public void SetWidth(float logicalPx) => _engine.SetWidthFromUi(logicalPx);
+    public void SetDash(StrokeDash dash) => _engine.SetDashFromUi(dash);
     public void Undo() => _engine.UndoFromUi();
     public void Redo() => _engine.RedoFromUi();
     public void Clear() => _engine.ClearFromUi();
@@ -86,6 +88,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetSelectMode(SelectMode mode) => _engine.SetSelectModeFromUi(mode);
     public void SelectAll() => _engine.SelectAllFromUi();
     public void FlipPage(bool down) => _engine.FlipPageFromUi(down);
+
+    public void SetCoordGridDefault(bool on) => _engine.SetCoordGridDefaultFromUi(on);
+    public int ToggleCoordGrid() => _engine.ToggleSelectionGrid();
 
     public void SetBoardPattern(int pattern, float stepLogical)
         => _engine.SetBoardPatternFromUi(pattern, stepLogical);

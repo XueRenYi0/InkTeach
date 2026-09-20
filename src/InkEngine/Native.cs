@@ -695,6 +695,45 @@ internal static class Native
     [DllImport("user32.dll", SetLastError = true)]
     public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
+    // ---- 合成键盘输入（自检用：验证全局热键真的能"按"出来）------------------
+    //
+    // Windows 的 INPUT 是一个**联合体**：前 4 字节是 type，后面按 type 解释成
+    // 鼠标 / 键盘 / 硬件事件。上面那个 INPUT 是按鼠标那一支写的（自检一直在用），
+    // 这里再给键盘写一支**同布局的**结构，而不是把 INPUT 改成 Explicit 联合：
+    // 联合成员的偏移在 x64 是 8、在 x86 是 4，写成 Explicit 就得按位数分两套，
+    // 代价比分两份结构大。SendInput 只认那块内存的前 4 字节（type）和 cbSize，
+    // 所以传键盘这一支的结构体一样能进去。
+
+    public const uint INPUT_KEYBOARD = 1;
+    public const uint KEYEVENTF_KEYUP = 0x0002;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KEYBDINPUT
+    {
+        public ushort wVk, wScan;
+        public uint dwFlags, time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct INPUT_KBD
+    {
+        public uint type;
+        public KEYBDINPUT ki;
+        /// <summary>
+        /// 补到和 <see cref="INPUT"/> 一样大（这个工程是 x64 的，INPUT = 40 字节）。
+        ///
+        /// **不是凑数**：SendInput 要求 cbSize 就是 INPUT 的大小（不是"这一支联合体成员"的大小），
+        /// 而且它是按 cbSize 当步长遍历数组的——少这几个字节，一次发多个事件就会错位，
+        /// 函数直接返回 0（一个事件都没进系统）。第一次写这版就是这样，自检里"注入事件 0/6"，
+        /// 而工具一个没换。
+        /// </summary>
+        private ulong _pad;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern uint SendInput(uint nInputs, INPUT_KBD[] pInputs, int cbSize);
+
     [StructLayout(LayoutKind.Sequential)]
     public struct BITMAPINFOHEADER
     {
