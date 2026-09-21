@@ -194,6 +194,20 @@ public enum Tool
     /// 不然画出来的球和「圆」长得一样（详见 <see cref="StrokeKind.Sphere"/> 那段）。
     /// </summary>
     Sphere = 28,
+
+    /// <summary>
+    /// **正切 y = tan x**（2026-09-20 第十五批，用户："可以画正切"）：和正弦 / 余弦放在
+    /// 同一行、同一族，但**画法是一笔**（它没有"周期"和"振幅"两个可以分开拖的量）。
+    ///
+    /// 按下 = 原点（这一支的中心，也是图象和 x 轴的交点）；拖出去 = **以它为中心的框**：
+    ///   · 横向 = **半支长** → 左右两条渐近线正好落在框的左右两边；
+    ///   · 纵向 = **可视半高** → 曲线冲到那儿就截断（框外的部分不画）。
+    /// 横竖**共用一个单位**（见 <see cref="Stroke.TangentUnitLocal"/>），所以它**拖不变形**。
+    ///
+    /// 一笔图形 → 不在 `Engine.PlanOf` 那张多笔表里；也没有档位点。详见
+    /// <see cref="StrokeKind.Tangent"/> 那段。
+    /// </summary>
+    Tangent = 29,
 }
 
 /// <summary>An axis-aligned rectangle in virtual-desktop pixels.</summary>
@@ -537,6 +551,24 @@ internal enum StrokeKind
     /// 值同样只能追加在末尾。
     /// </summary>
     Sphere = 23,
+
+    /// <summary>
+    /// **正切 y = tan x**（2026-09-20 第十五批，用户："可以画正切"）：画**一支**。
+    ///
+    /// 一支的定义域是 `(−π/2, π/2)`、两端冲到无穷，所以画法单独定了一套
+    ///（见 <see cref="SetTangentBox"/>）：**按下 = 原点**（这一支的中心，
+    /// 也就是图象与 x 轴相交的那个点），**拖出 = 以原点为中心的框**：
+    ///   · **横向 = 半支长** → 两条**渐近线**就落在框的左右边上；
+    ///   · **纵向 = 可视半高** → 曲线冲到框的上下边就**截断**（课本就这么画）。
+    ///
+    /// ⚠ 和正弦 / 余弦**不一样的地方**：正切的横竖**共用一个单位**
+    ///（π/2 个单位 = 半支长，见 <see cref="TangentUnitLocal"/>），所以它**不会被拖变形**——
+    /// "纵向拖多高"只是决定"看得见多少"（显示范围是可以挑的），
+    /// 而正弦 / 余弦的"周期 : 振幅"是数学事实，才需要一个固定比例。
+    ///
+    /// 值同样只能追加在末尾。
+    /// </summary>
+    Tangent = 24,
 }
 
 /// <summary>
@@ -1076,6 +1108,19 @@ internal sealed class Stroke
                 list.AddRange(AxisPieces());
                 break;
 
+            // ---- 正切：一支（一条开曲线）＋ 两条竖直渐近线（细虚线）----
+            //      实虚和双曲线同一个排法：曲线走主几何、渐近线走辅助几何。
+            case StrokeKind.Tangent:
+                if (Points.Count < 2) break;
+                foreach (var part in SplitOutlineParts(ShapeOutline()))
+                    list.Add(new InkPiece(part, false));
+                for (int side = -1; side <= 1; side += 2)
+                {
+                    var (from, to) = TangentAsymptoteLocal(side);
+                    list.Add(new InkPiece(new List<Vector2> { from, to }, true));
+                }
+                break;
+
             // ---- 双曲线：两支（中间有抬笔）＋ 两条渐近线（细虚线）----
             case StrokeKind.Hyperbola:
                 if (Points.Count < 2) break;
@@ -1390,23 +1435,29 @@ internal sealed class Stroke
     }
 
     /// <summary>
-    /// **正弦 / 余弦的画法**（用户 2026-09-20 定："画的时候就根据起点为原点，
-    /// 还有终点控制周期和振幅"）：按下 = **起点**（曲线的起笔处，也就是老师画的
-    /// 那条 y 轴所在的位置），拖出去 = **终点**（一个周期 ＋ 振幅）。
+    /// **正弦 / 余弦的画法**：按下 = **起点**（曲线的起笔处，也就是老师画的那条
+    /// y 轴所在的位置），拖出去 = **终点**。一次拖出**两件事**：
+    ///   · **横向 = 要画多长**（可以不足一个周期，也可以三四个周期）；
+    ///   · **纵向 = 曲线多高**（正弦从轴拖到峰、余弦从峰拖到谷，见 <see cref="WaveAmplitudeLocal"/>）。
+    ///
+    /// ⚠ 2026-09-20 **改过一次**：原来横向是"**一个周期**"，纵向是振幅——两个量互相独立，
+    /// 于是拖一个又宽又矮的框会把波形**拉变形**（画出来不成正弦）；而且一张图上要画好几个
+    /// 周期只能重复画好几条。现在横向是"**长度**"，**周期由振幅定**（见
+    /// <see cref="WavePeriodLocal"/>）：波形比例恒定，横向拖多长就画多长（用户："画正余弦
+    /// **很多个周期**的波浪线"）。
     ///
     /// 两个点都只由这一式算出，所以"拖动预览"和"松手提交"永远一致（不会松手跳一下）。
-    /// 周期恒向右展开（课本上一个周期的图象就是从左往右画的）；
-    /// `dy` **带符号**，往哪边拖，曲线就先往哪边走（见 <see cref="WaveEndLocal"/>）。
+    /// 横向恒向右展开；`dy` **带符号**，往哪边拖，曲线就先往哪边走。
     /// </summary>
     public void SetWaveBox(float x0, float y0, float x1, float y1, float minSize)
     {
         while (Points.Count < 2) AddPoint(x0, y0, 1f, 0);
 
-        float period = MathF.Max(minSize, MathF.Abs(x1 - x0));
+        float length = MathF.Max(minSize, MathF.Abs(x1 - x0));             // 要画多长
         float dy = y1 - y0;
-        if (MathF.Abs(dy) < minSize) dy = dy < 0f ? -minSize : minSize;   // 振幅也有下限
+        if (MathF.Abs(dy) < minSize) dy = dy < 0f ? -minSize : minSize;   // 高度也有下限
         SetPoint(0, new Vector2(x0, y0));                                  // 起点
-        SetPoint(1, new Vector2(x0 + period, y0 + dy));                     // 一个周期之后 ＋ 振幅
+        SetPoint(1, new Vector2(x0 + length, y0 + dy));                    // 长度 ＋ 高度
     }
 
     /// <summary>
@@ -2031,16 +2082,53 @@ internal sealed class Stroke
     /// <summary>实例版（读数与画法都用它）。</summary>
     public float WaveDyLocal() => WaveDyOf(WaveStartLocal(), WaveEndLocal());
 
-    /// <summary>一个周期有多宽（恒非负；横向的"周期"就是它）。</summary>
-    public float WavePeriodLocal() => WavePeriodOf(WaveStartLocal(), WaveEndLocal());
+    /// <summary>
+    /// 波形**一个周期的长度 ÷ 振幅**。
+    ///
+    /// 数学上是 **2π ≈ 6.283** —— 取这个值，画出来才是 `y = sin x` 的**原比例**
+    ///（x 轴与 y 轴单位相同）。**但那个比例在屏幕上太扁**（用户 2026-09-20 的原话：
+    /// "如果是高度 1 和周期 2Π 那么图形就很扁"），一屏放不下两个周期，
+    /// 所以取一个"看着像课本"的值。
+    ///
+    /// ⚠ **将来做"曲线挂坐标系 / 按格吸附"时要回到 2π**：那时"1 个单位"由格数定，
+    /// 比例就不该由我们瞎定（否则图象和坐标系对不上）。
+    /// </summary>
+    public const float WavePeriodPerAmplitude = 4f;
 
-    /// <summary>周期 / 振幅的静态核心（拖手柄时要用临时几何算读数，理由同 <see cref="ParabolaPOf"/>）。</summary>
-    public static float WavePeriodOf(Vector2 start, Vector2 end) => MathF.Abs(end.X - start.X);
+    /// <summary>
+    /// **一个周期的长度**（像素）＝ `WavePeriodPerAmplitude × 振幅`。
+    ///
+    /// ⚠ 2026-09-20 **改过含义**：以前它就是"框宽"（拖多宽算一个周期），
+    /// 现在**框宽 = 要画多长**（见 <see cref="WaveLengthLocal"/>）、**周期由振幅定**。
+    /// 改的理由是用户那句"画正余弦**很多个周期**的波浪线"：
+    ///   · 旧定义下要多个周期只能重复画好几条；
+    ///   · 而且旧定义里"框宽"和"框高"**互相独立**，拖一个又宽又矮的框会把波形**拉变形**
+    ///     —— 画出来的根本不是正弦的样子；
+    ///   · 现在**波形的比例恒定**（永远是同一个正弦），拖动的两个方向分别是
+    ///     "**画多长**"（横向）和"**多高**"（纵向）。
+    /// </summary>
+    public float WavePeriodLocal() => WavePeriodPerAmplitude * WaveAmplitudeLocal();
+
+    /// <summary>**要画多长**（＝拖出来的框宽）。可能不足一个周期，也可能好几个。</summary>
+    public float WaveLengthLocal() => MathF.Abs(WaveEndLocal().X - WaveStartLocal().X);
+
+    /// <summary>
+    /// 画出来一共**几个周期**（**可以不是整数**：拖到哪儿画到哪儿，最后一段是半截）。
+    /// 渲染的采样密度也按它算（见 <see cref="WavePointAt"/> 的调用方）。
+    /// </summary>
+    public float WaveCyclesLocal()
+    {
+        float t = WavePeriodLocal();
+        return t > 1e-3f ? WaveLengthLocal() / t : 1f;
+    }
 
     /// <summary>
     /// 振幅 A（恒非负）。**两种曲线的换算不一样**，这是本族唯一一处不对称：
     ///   · 正弦：起点在轴上，峰到轴的距离就是 A → `A = |dy|`；
     ///   · 余弦：起点在峰顶，半个周期后到谷，谷离峰顶 `2A` → `A = |dy| / 2`。
+    ///
+    /// 它俩共同点是"**拖出来的终点都落在曲线的极值点上**"（正弦拖到峰的高度、
+    /// 余弦从峰拖到谷），所以"拖到哪儿"和"看着多高"是一致的，所见即所得。
     /// </summary>
     public float WaveAmplitudeLocal() => WaveAmplitudeOf(WaveStartLocal(), WaveEndLocal(), Kind);
 
@@ -2051,11 +2139,15 @@ internal sealed class Stroke
             : MathF.Abs(WaveDyOf(start, end));
 
     /// <summary>
-    /// 波形上 `u ∈ [0, 1]` 处的点（`u = 0` 起点、`u = 1` 一个周期之后）。
+    /// 波形上 `u` 处的点（`u` 的**单位是周期**：`u = 0` 起点、`u = 1` 一个周期之后）。
+    /// 画出来的那一段是 `u ∈ [0, <see cref="WaveCyclesLocal"/>]`（可以不是整数）。
     ///
     ///   · **正弦**：`y = 起点.y + dy·sin(2πu)`（`dy < 0` 就是先上后下 ✓）；
     ///   · **余弦**：`y = 起点.y + dy·(1 − cos(2πu))/2`（起点在峰顶、中间到谷 ✓）。
     /// 两式在 u = 0 处分别给出"轴"和"峰"，正是"从起点（y 轴）开始画"。
+    ///
+    /// **横向一律往右画**（长度取框宽的绝对值）：左右拖动只影响"画多长"，
+    /// 不影响朝向（朝向由**上下**拖的符号定）——和抛物线"开口朝哪边由这一拖定"是两回事。
     /// </summary>
     public static float WaveYAt(Vector2 start, Vector2 end, StrokeKind kind, float u)
     {
@@ -2072,12 +2164,30 @@ internal sealed class Stroke
               WaveYAt(WaveStartLocal(), WaveEndLocal(), Kind, u));
 
     /// <summary>
+    /// **画出来的那一段**上 `t ∈ [0, 1]` 处的点（`t = 0` 起点、`t = 1` 终点）。
+    ///
+    /// 渲染 / 轮廓折线 / 紧框采样都走它——它们要的是"整条曲线从这头到那头"，
+    /// 而不是"第几个周期"。**换算只有这一处**（把"按周期数"折成"按比例"）。
+    /// </summary>
+    public Vector2 WaveTracedPointAt(float t) => WavePointAt(WaveCyclesLocal() * t);
+
+    /// <summary>波形那一段的**采样段数**：按总长算，并且保证每个周期至少 24 段（多个周期才够滑）。</summary>
+    private int WaveSegmentsLocal()
+        => Math.Clamp((int)MathF.Ceiling(WaveLengthLocal() / 16f * MathF.Max(1f, WaveCyclesLocal())),
+                      24, 512);
+
+
+    /// <summary>
     /// 峰 / 谷这两个**极值点**（用户说的"统一根据最大最小点来控制图形"）。
     ///
     /// 它们是**算出来的、不存**——存的是起点和终点两个定义元素，
     /// 和"平行四边形的第四点现推"是同一条规矩：只存定义，其余现推。
-    /// 位置直接取曲线上的那个 u（正弦峰 1/4、谷 3/4；余弦峰在起点和周期末端、
-    /// 谷在 1/2），所以手柄**一定落在曲线上**，不会悬空。
+    /// 位置直接取曲线上那个周期数（正弦峰 1/4、谷 3/4；余弦峰在起点、
+    /// 谷在 1/2），所以**一定落在曲线上**，不会悬空。
+    ///
+    /// ⚠ 2026-09-20：`u` 现在要**夹在画出来的范围里**（`WaveCyclesLocal`）——
+    /// 画多长由拖动定，**可以不足四分之一个周期**（那时峰还没到就收笔了），
+    /// 不夹的话这两个点会落在曲线外面。
     /// </summary>
     private Vector2 WaveExtremumAt(bool crest)
     {
@@ -2085,6 +2195,7 @@ internal sealed class Stroke
         var end = WaveEndLocal();
         bool cos = Kind == StrokeKind.Cosine;
         float u = cos ? (crest ? 1f : 0.5f) : (crest ? 0.25f : 0.75f);
+        u = MathF.Min(u, WaveCyclesLocal());
         return new Vector2(start.X + WavePeriodLocal() * u, WaveYAt(start, end, Kind, u));
     }
 
@@ -2093,6 +2204,107 @@ internal sealed class Stroke
 
     /// <summary>**谷点**（在曲线上）：正弦是 3/4 处那个；余弦是 1/2 处那个。</summary>
     public Vector2 WaveTroughLocal() => WaveExtremumAt(crest: false);
+
+    // =====================================================================
+    //  **正切 y = tan x**（2026-09-20 第十五批）
+    //
+    //  一支（定义域 (−π/2, π/2)）画成"以原点为中心的一个框"：
+    //    按下 = **原点**（这一支的中心、图象与 x 轴相交处），拖出 = 那个框的一角。
+    //    横向 = **半支长**（渐近线就在 ±这个距离上）、纵向 = **可视半高**（曲线冲到那儿截断）。
+    //
+    //  为什么它和正弦 / 余弦的画法不一样：
+    //    · 正弦 / 余弦的形状比例（周期 : 振幅 = 2π : 1）是**数学事实**，只能有一个自由度，
+    //      所以纵向拖的是"振幅"、横向拖的是"长度"，`ShapeSpec` 之外那个比例常数负责固定形状；
+    //    · 正切**值域无界**，"画到多高"是个**显示选择**（课本一般画到 ±3 左右），
+    //      所以纵向那一拖本来就该是"看得见多少"。
+    //    · 而它的**形状**由"横竖同一个单位"钉死（π/2 个单位 = 半支长）→
+    //      **不会被拖变形**，也就不需要比例常数。
+    // =====================================================================
+
+    /// <summary>正切那**一支的中心**（＝按下那个点：图象与 x 轴的交点，也是原点）。</summary>
+    public Vector2 TangentOriginLocal() => CurvePointLocal(0);
+
+    /// <summary>拖出去的那个点（它和原点一起定下"半支长"和"可视半高"）。</summary>
+    public Vector2 TangentEndLocal() => CurvePointLocal(1);
+
+    /// <summary>**半支长**：渐近线离原点这么远（两条渐近线在 `原点 ± 半支长`）。</summary>
+    public float TangentHalfSpanLocal()
+        => MathF.Max(0.5f, MathF.Abs(TangentEndLocal().X - TangentOriginLocal().X));
+
+    /// <summary>**可视半高**：曲线冲到离原点这么高就截断（框的上下边）。</summary>
+    public float TangentHalfHeightLocal()
+        => MathF.Max(0.5f, MathF.Abs(TangentEndLocal().Y - TangentOriginLocal().Y));
+
+    /// <summary>
+    /// **一个单位有多长**（像素）＝ 半支长 ÷ (π/2)。
+    ///
+    /// 因为 `x = ±π/2` 正好是渐近线，而渐近线又落在框的左右边上 ——
+    /// 于是"横向拖多宽"就把 x 方向的**单位**定死了；正切图象要求**横竖同尺度**
+    ///（`y = tan x` 这条曲线本身），所以 y 方向的单位**同一个**。
+    /// </summary>
+    public float TangentUnitLocal() => TangentHalfSpanLocal() / (MathF.PI * 0.5f);
+
+    /// <summary>画得到的最大参数：`|tan θ| ≤ 可视半高 / 单位` 处（再往外就冲出框了）。</summary>
+    public float TangentThetaMaxLocal()
+    {
+        float u = TangentUnitLocal();
+        return MathF.Min(MathF.PI * 0.5f * 0.999f, MathF.Atan(TangentHalfHeightLocal() / u));
+    }
+
+    /// <summary>
+    /// 正切一支上、参数 `θ ∈ (−π/2, π/2)` 处的点（局部坐标）。
+    /// 屏幕 y 向下，所以 `tan` 越大越**往上**（`y` 越小）——曲线从左下冲到右上，正是课本的样子。
+    /// </summary>
+    public Vector2 TangentPointAtTheta(float theta)
+    {
+        var o = TangentOriginLocal();
+        float u = TangentUnitLocal();
+        return new Vector2(o.X + theta * u, o.Y - MathF.Tan(theta) * u);
+    }
+
+    /// <summary>
+    /// **画出来的那一支**上 `t ∈ [0, 1]` 处的点（`t = 0` 左下、`t = 1` 右上）。
+    /// 渲染 / 轮廓折线共用它（和正弦那条 `WaveTracedPointAt` 同一个套路）。
+    /// </summary>
+    public Vector2 TangentTracedPointAt(float t)
+    {
+        float m = TangentThetaMaxLocal();
+        return TangentPointAtTheta(-m + 2f * m * t);
+    }
+
+    /// <summary>
+    /// 正切的**两条渐近线**（`side = −1` 左边、`+1` 右边）：都从框的上下边穿过，
+    /// 所以端点就是框的上下角。走**辅助几何槽**画成细虚线（和双曲线的渐近线同一种画法）。
+    /// </summary>
+    public (Vector2 From, Vector2 To) TangentAsymptoteLocal(int side)
+    {
+        var o = TangentOriginLocal();
+        float x = o.X + side * TangentHalfSpanLocal();
+        float h = TangentHalfHeightLocal();
+        return (new Vector2(x, o.Y - h), new Vector2(x, o.Y + h));
+    }
+
+    /// <summary>
+    /// **正切的画法**：按下 = 原点（这一支的中心），拖出 = 以它为中心的框的一角
+    ///（横向 = 半支长、纵向 = 可视半高）。两个方向都取绝对值：
+    /// 这一支**永远是"左下 → 右上"**，往哪个方向拖都是同一支（它没有"开口朝哪边"这回事）。
+    /// </summary>
+    public void SetTangentBox(float x0, float y0, float x1, float y1, float minSize)
+    {
+        while (Points.Count < 2) AddPoint(x0, y0, 1f, 0);
+        // 半支长 / 半高都有下限（拖得太小会退化成一个点那么高，没法看）
+        float hx = MathF.Max(minSize, MathF.Abs(x1 - x0));
+        float hy = MathF.Max(minSize, MathF.Abs(y1 - y0));
+        SetPoint(0, new Vector2(x0, y0));                        // 原点
+        SetPoint(1, new Vector2(x0 + hx, y0 + hy));              // 框的一角
+    }
+
+    /// <summary>
+    /// 正切那一支的**采样段数**：两端越靠近渐近线越陡（`tan` 在那儿变化极快），
+    /// 所以按"半支长的像素"给密度，而不是按段数写死。
+    /// </summary>
+    private int TangentSegmentsLocal()
+        => Math.Clamp((int)MathF.Ceiling(TangentHalfSpanLocal() / 4f), 24, 256);
 
     /// <summary>
     /// 曲线自己的那个矩形（**局部坐标**）。**全引擎唯一一份**，紧框 / 包围盒 / 脏区都问它。
@@ -2165,27 +2377,54 @@ internal sealed class Stroke
                 };
             }
 
+            case StrokeKind.Tangent:
+            {
+                // 正切一支：**正好就是那个框**（两条渐近线在左右边上、曲线截断在上下边上）——
+                // 所以紧框 = 框本身，一句就够，而且**精确**（见 TangentAsymptoteLocal）。
+                float hx = MathF.Max(0.5f, MathF.Abs(p1.X - p0.X));
+                float hy = MathF.Max(0.5f, MathF.Abs(p1.Y - p0.Y));
+                return new RectF
+                {
+                    MinX = p0.X - hx, MinY = p0.Y - hy,
+                    MaxX = p0.X + hx, MaxY = p0.Y + hy,
+                };
+            }
+
             default:
             {
-                // 正弦 / 余弦：一个周期宽 × 各自的纵向范围。
-                //   · 正弦：以起点所在的那条水平线为中轴，上下各 |dy|；
-                //   · 余弦：起点在峰顶，纵向范围就是"起点 → 终点"那一段。
+                // 正弦 / 余弦：**按解析式给纵向极值**。
+                //
+                // 2026-09-20 改过：以前这里是"一个周期宽 × 各自的纵向范围"，因为那时
+                // "框宽 = 一个周期"。改成"**框宽 = 画多长**"之后（见 WavePeriodLocal），
+                // 画出来可能**不足一个周期**（峰还没到就收笔）、也可能三四个周期，
+                // 所以要回答"峰到没到、谷到没到"。
+                //
+                // ⚠ **必须精确，不能采样**：采样写的话极值点大多落在两个采样点之间，
+                // 框会比曲线**小一点点** —— 那点差值正好是脏区少算的部分（曲线末梢会留旧像素）。
+                // 分两种情况讨论虽然啰嗦，但每个都是教科书上的初等结论。
+                float t = WavePeriodPerAmplitude * WaveAmplitudeOf(p0, p1, kind);
+                float len = MathF.Abs(p1.X - p0.X);
+                float cycles = t > 1e-3f ? len / t : 1f;
                 float dy = WaveDyOf(p0, p1);
-                float x0 = MathF.Min(p0.X, p1.X), x1 = MathF.Max(p0.X, p1.X);
-                float y0, y1;
+                float lo, hi;                       // 纵向占到的比例（乘 dy 就是位移）
                 if (kind == StrokeKind.Cosine)
                 {
-                    y0 = MathF.Min(p0.Y, p0.Y + dy);
-                    y1 = MathF.Max(p0.Y, p0.Y + dy);
+                    // `f(u) = (1 − cos 2πu)/2`：u=0 处为 0，之后**单调升**到 u=1 处的 1
+                    //（所以"谷"不一定出现：只有一个周期以上才落到 1）。
+                    lo = 0f;
+                    hi = cycles >= 1f ? 1f : (1f - MathF.Cos(MathF.Tau * cycles)) * 0.5f;
                 }
                 else
                 {
-                    y0 = p0.Y - MathF.Abs(dy);
-                    y1 = p0.Y + MathF.Abs(dy);
+                    // 正弦：峰在 1/4 处、谷在 3/4 处 —— **画到哪儿就认到哪儿**。
+                    hi = cycles >= 0.25f ? 1f : MathF.Sin(MathF.Tau * cycles);
+                    lo = cycles >= 0.75f ? -1f : 0f;
                 }
+                float yA = p0.Y + dy * lo, yB = p0.Y + dy * hi;
                 return new RectF
                 {
-                    MinX = x0, MinY = MathF.Min(y0, y1), MaxX = x1, MaxY = MathF.Max(y0, y1),
+                    MinX = p0.X, MinY = MathF.Min(yA, yB),
+                    MaxX = p0.X + t * cycles, MaxY = MathF.Max(yA, yB),
                 };
             }
         }
@@ -2697,7 +2936,7 @@ internal sealed class Stroke
     /// </summary>
     public static bool IsCurveKind(StrokeKind kind)
         => kind is StrokeKind.Parabola or StrokeKind.Hyperbola
-                or StrokeKind.Sine or StrokeKind.Cosine;
+                or StrokeKind.Sine or StrokeKind.Cosine or StrokeKind.Tangent;
 
     /// <summary>
     /// 这几种是**图形**（相对于自由笔迹 / 图像）：用"定义元素"描述、选中后能拖手柄改参数。
@@ -3536,10 +3775,22 @@ internal sealed class Stroke
             case StrokeKind.Sine:
             case StrokeKind.Cosine:
             {
-                // 正弦 / 余弦：一条开折线，u 从 0 走到 1（**和 BuildWave 同一份算式**）。
+                // 正弦 / 余弦：一条开折线，t 从 0 走到 1（**和 BuildWave 同一份算式**）。
+                // 注意 `WaveTracedPointAt` 而不是 `WavePointAt`：前者按"整条曲线"的比例走，
+                // 后者按"周期数"走（画出来的可能是 2.7 个周期，见 WaveCyclesLocal）。
                 if (Points.Count < 2) break;
-                int n = CurveSegments(WavePeriodLocal());
-                for (int i = 0; i <= n; i++) list.Add(WavePointAt(i / (float)n));
+                int n = WaveSegmentsLocal();
+                for (int i = 0; i <= n; i++) list.Add(WaveTracedPointAt(i / (float)n));
+                break;
+            }
+
+            case StrokeKind.Tangent:
+            {
+                // 正切：一条开折线，t 从 0 走到 1（左下的截断点 → 右上的截断点；
+                // **和 BuildTangent 同一份算式**，所以橡皮的轮廓和画出来的一模一样）。
+                if (Points.Count < 2) break;
+                int nt = TangentSegmentsLocal();
+                for (int i = 0; i <= nt; i++) list.Add(TangentTracedPointAt(i / (float)nt));
                 break;
             }
 
@@ -3597,6 +3848,14 @@ internal sealed class Stroke
             _builtRevision2 = Revision;
             return Geometry2;
         }
+        // **正切的两条竖直渐近线**（x = ±π/2）——恒定细虚线，和双曲线那两条同一种画法。
+        // 它**没有开关**：那两条线是"这一支画到哪儿为止"的边界，不是可选的辅助线。
+        if (Kind == StrokeKind.Tangent)
+        {
+            Geometry2 = BuildTangentAsymptotes(factory);
+            _builtRevision2 = Revision;
+            return Geometry2;
+        }
 
         if (Kind != StrokeKind.Hyperbola || !ShowAsymptotes)
         {
@@ -3621,6 +3880,42 @@ internal sealed class Stroke
         return Geometry2;
     }
 
+    /// <summary>
+    /// **正切**几何：一支（`t` 从 0 走到 1 ＝ 左下的截断点 → 右上的截断点）。
+    /// 形状由"横竖同一个单位"钉死，所以它**不会被拖变形**（见 TangentUnitLocal）。
+    /// </summary>
+    private ID2D1PathGeometry BuildTangent(ID2D1Factory1 factory)
+    {
+        if (Points.Count < 2) return BuildLine(factory);
+
+        int n = TangentSegmentsLocal();
+
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+        sink.BeginFigure(TangentTracedPointAt(0f), FigureBegin.Hollow);
+        for (int i = 1; i <= n; i++)
+            sink.AddLine(TangentTracedPointAt(i / (float)n));
+        sink.EndFigure(FigureEnd.Open);
+        sink.Close();
+        return geo;
+    }
+
+    /// <summary>正切的**两条渐近线**（细虚线）——走辅助几何槽，和双曲线那两条同一种画法。</summary>
+    private ID2D1PathGeometry BuildTangentAsymptotes(ID2D1Factory1 factory)
+    {
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+        for (int side = -1; side <= 1; side += 2)
+        {
+            var (from, to) = TangentAsymptoteLocal(side);
+            sink.BeginFigure(from, FigureBegin.Hollow);
+            sink.AddLine(to);
+            sink.EndFigure(FigureEnd.Open);
+        }
+        sink.Close();
+        return geo;
+    }
+
     public ID2D1Geometry BuildGeometry(ID2D1Factory1 factory)
     {
         if (Geometry != null && _builtRevision == Revision) return Geometry;
@@ -3643,6 +3938,7 @@ internal sealed class Stroke
             StrokeKind.Hyperbola => BuildHyperbola(factory),
             StrokeKind.Sine => BuildWave(factory),
             StrokeKind.Cosine => BuildWave(factory),
+            StrokeKind.Tangent => BuildTangent(factory),
             StrokeKind.Cylinder => BuildSolid(factory),
             StrokeKind.Cone => BuildSolid(factory),
             StrokeKind.ConeFrustum => BuildSolid(factory),
@@ -3886,22 +4182,23 @@ internal sealed class Stroke
     }
 
     /// <summary>
-    /// **正弦 / 余弦**几何：`u` 从 0 走到 1，正好一个周期（两个种类共用这一份算式，
+    /// **正弦 / 余弦**几何：`t` 从 0 走到 1 —— 也就是**从起点画到终点**（几个周期由框宽定，
+    /// 见 <see cref="WaveCyclesLocal"/>；两个种类共用这一份算式，
     /// 差别只在 <see cref="WaveYAt"/> 里那一行 sin / cos）。
     ///
-    /// 画出来**就是一个周期**（用户 2026-09-20 定的），所以两端不闭合、也没有拐回头的部分。
+    /// 两端不闭合、也没有拐回头的部分（它是一条"图象"，不是封闭图形）。
     /// </summary>
     private ID2D1PathGeometry BuildWave(ID2D1Factory1 factory)
     {
         if (Points.Count < 2) return BuildLine(factory);
 
-        int n = CurveSegments(WavePeriodLocal());
+        int n = WaveSegmentsLocal();
 
         var geo = factory.CreatePathGeometry();
         using var sink = geo.Open();
-        sink.BeginFigure(WavePointAt(0f), FigureBegin.Hollow);
+        sink.BeginFigure(WaveTracedPointAt(0f), FigureBegin.Hollow);
         for (int i = 1; i <= n; i++)
-            sink.AddLine(WavePointAt(i / (float)n));
+            sink.AddLine(WaveTracedPointAt(i / (float)n));
         sink.EndFigure(FigureEnd.Open);
         sink.Close();
         return geo;

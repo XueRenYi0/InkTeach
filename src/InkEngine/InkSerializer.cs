@@ -141,12 +141,14 @@ internal static class InkSerializer
     ///         读老文件同样**不需要迁移**。
     ///   · v20：新增**球**（取值 23）。同样没加字节、同样不用迁移
     ///         （和圆台一样是一笔画完的旋转体）。
+    ///   · v21：新增**正切**（取值 24）。同样没加字节、同样不用迁移
+    ///         （它和正弦 / 余弦一样是两个控制点：起手点 ＋ 拖出去那个角点）。
     ///
     /// ⚠ **面板入口可以撤，`Kind` 的取值一个都不许删**（2026-09-20 第十二批撤了长方体 /
     /// 四面体的入口）：存档里存的是**一个字节**，删了就是"打开旧板书少一条"
     /// （同 2026-09-19 撤「数轴」入口那条规矩，见 计划-图形工具.md 11.2）。
     /// </summary>
-    public const int FormatVersion = 20;
+    public const int FormatVersion = 21;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";

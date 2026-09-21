@@ -1632,6 +1632,7 @@ public class InkEngine
         Tool.Hyperbola => "双曲线",
         Tool.Sine => "正弦",
         Tool.Cosine => "余弦",
+        Tool.Tangent => "正切",
         Tool.Cylinder => "圆柱",
         Tool.Cone => "圆锥",
         Tool.Cuboid => "长方体",
@@ -3362,6 +3363,7 @@ public class InkEngine
              or Tool.Triangle or Tool.Parallelogram or Tool.Arrow
              or Tool.Coordinate or Tool.NumberLine
              or Tool.Parabola or Tool.Hyperbola or Tool.Sine or Tool.Cosine
+             or Tool.Tangent
              or Tool.Cylinder or Tool.Cone or Tool.Cuboid or Tool.Tetrahedron
              or Tool.Prism or Tool.Pyramid or Tool.Frustum
              or Tool.ConeFrustum or Tool.Sphere;
@@ -3606,6 +3608,7 @@ public class InkEngine
         Tool.Hyperbola => StrokeKind.Hyperbola,
         Tool.Sine => StrokeKind.Sine,
         Tool.Cosine => StrokeKind.Cosine,
+        Tool.Tangent => StrokeKind.Tangent,
         Tool.Cylinder => StrokeKind.Cylinder,
         Tool.Cone => StrokeKind.Cone,
         Tool.Cuboid => StrokeKind.Cuboid,
@@ -3891,6 +3894,17 @@ public class InkEngine
         if (s.Kind is StrokeKind.Sine or StrokeKind.Cosine)
         {
             s.SetWaveBox(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y, ShapeMinAxisLogical * DpiScale);
+            _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);
+            return;
+        }
+
+        // 正切：按下 = **原点**（这一支的中心），拖出去 = **以它为中心的框**——
+        // 横向是半支长（渐近线正好落框边）、纵向是可视半高（超出就截断）。
+        // 它和正弦/余弦**不一样**：正弦是把"起点"拖到终点（起手点留在原地），
+        // 正切是**中心不动、四周一起长**。所以调用的是 `SetTangentBox` 不是 `SetWaveBox`。
+        if (s.Kind == StrokeKind.Tangent)
+        {
+            s.SetTangentBox(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y, ShapeMinAxisLogical * DpiScale);
             _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);
             return;
         }

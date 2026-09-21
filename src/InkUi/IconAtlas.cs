@@ -91,6 +91,7 @@ internal static class IconAtlas
         if (name == "frustum6") { DrawFrustum(ctx, x, y, size, brush, 6); return; }
         if (name == "sine") { DrawWave(ctx, x, y, size, brush, cosine: false); return; }
         if (name == "cosine") { DrawWave(ctx, x, y, size, brush, cosine: true); return; }
+        if (name == "tangent") { DrawTangent(ctx, x, y, size, brush); return; }
         // 直线那三档线型的图标（用户 2026-09-20 定：图形面板里"直线"那一段再点一次
         // 就在实线 / 虚线 / 点线之间换，所以要有三张）。同样只能自绘：
         // 上游那张 `lineWeight` 是实线的，一个虚线 / 点线专名都没有。
@@ -671,6 +672,45 @@ internal static class IconAtlas
             if (i > 0) ctx.DrawLine(prev, q, brush, 1.5f, _round);
             prev = q;
         }
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// **自绘的正切图标**：一支曲线 ＋ 两条**渐近线**（虚线）。
+    ///
+    /// 画的是 y = tan x 在 (−π/2, π/2) 上的那一支：过中点 (12,12)、左右各一条竖渐近线。
+    /// 横竖**共用一个单位**（和画布上画的完全一致，见 `Stroke.TangentUnitLocal`）：
+    /// 半支长 8 对应 π/2，曲线冲到 y = 12 ∓ 8 就截断——所以它**并不真的碰到渐近线**，
+    /// 那点缝隙正是"无限接近"的样子（这两条虚线是这个图形唯一的识别特征，
+    /// 少了它们这一张和「双曲线的一支」会看不出区别）。
+    /// </summary>
+    private static void DrawTangent(ID2D1DeviceContext ctx, float x, float y,
+                                    float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        const float hx = 8f;                             // 半支长（渐近线落在 12 ± hx）
+        const float hy = 8f;                             // 可视半高（曲线冲到这儿截断）
+        float unit = hx / (MathF.PI * 0.5f);             // 横竖共用的单位
+        float thetaMax = MathF.Atan(hy / unit);          // 截断处的 θ
+
+        const int seg = 16;                              // 整支的段数（均匀按 θ 采）
+        var prev = new Vector2(12f - hx, 12f - hy);      // 左端（θ = −thetaMax）
+        for (int i = 1; i <= seg; i++)
+        {
+            float th = -thetaMax + 2f * thetaMax * i / seg;
+            var q = new Vector2(12f + th * unit, 12f - MathF.Tan(th) * unit);
+            ctx.DrawLine(prev, q, brush, 1.5f, _round);
+            prev = q;
+        }
+
+        // 两条渐近线：细虚线，上下铺满图标（±8 = 曲线的截断高度）。
+        DashedLine(ctx, new Vector2(12f - hx, 12f - hy), new Vector2(12f - hx, 12f + hy), 2.4f, 2f, 1.2f, brush);
+        DashedLine(ctx, new Vector2(12f + hx, 12f - hy), new Vector2(12f + hx, 12f + hy), 2.4f, 2f, 1.2f, brush);
 
         ctx.Transform = saved;
     }
