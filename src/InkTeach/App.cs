@@ -10408,6 +10408,7 @@ internal sealed class App : InkEngine.InkEngine
                     "hyperbola" => Tool.Hyperbola,
                     "sine" => Tool.Sine,
                     "cosine" => Tool.Cosine,
+                    "wave" => Tool.Wave,
                     "tangent" => Tool.Tangent,
                     "cylinder" => Tool.Cylinder,
                     "cone" => Tool.Cone,
@@ -11901,6 +11902,11 @@ internal sealed class App : InkEngine.InkEngine
             // 段号也没挪（下面按段号点击的那些断言因此都不用改）。
             (Tool.Parabola, "抛物线"), (Tool.Hyperbola, "双曲线"),
             (Tool.Sine, "正弦"), (Tool.Cosine, "余弦"),
+            // 2026-09-20 第十六批：**波浪线**（用户："还有一个另外的**很多周期的波浪**的弦函数线"）。
+            // 它和正弦是同一条曲线，差别只在**这一拖管什么**：
+            // 正弦的框宽 = 一个周期（讲"一个周期的图象"）、波浪线的框宽 = 要画多长
+            //（周期由振幅定，讲周期性用）。所以两格紧挨着排，曲线那一行六格。
+            (Tool.Wave, "波浪线"),
             // 2026-09-20 第十五批：**正切**（用户："可以画正切"）。它和正弦 / 余弦同族
             // （都在第二行这一族曲线上），但**一笔**画完：按下是原点、拖出去是以它为中心的框
             //（见 StrokeKind.Tangent）。⚠ 它在余弦**后面**——同一族的曲线连着排。
@@ -11932,8 +11938,8 @@ internal sealed class App : InkEngine.InkEngine
         // 2026-09-20 第十三批：从"两行 8+10"改成"三行 8+4+6"——第二行 10 段时每格
         // 只有 55 宽，低于"每段 ≥ 60"那条量出来的门槛（见 计划-图形工具.md §35）；
         // 第十四批加球：第三行 6 → **7** 段（604 ÷ 7 ≈ 81，还在门槛之上）。
-        // 第十五批加正切：**第二行 4 → 5** 段（604 ÷ 5 ≈ 121）。
-        int[] wantRowLens = { 8, 5, 7 };
+        // 第十五批加正切、第十六批加波浪线：**第二行 4 → 6** 段（604 ÷ 6 ≈ 101）。
+        int[] wantRowLens = { 8, 6, 7 };
 
         // 上带只在"指针落在面板上"时张开（见 FullUi.RailHoverZone）。点完一格、画完一笔
         // 之后指针可能在画布上，所以每次要点段之前先把指针挪回主条等它张开。
@@ -12348,9 +12354,15 @@ internal sealed class App : InkEngine.InkEngine
         //   · **拖几笔** → 问引擎 `ShapeStepCount(tool)`（它是从那张三笔表算出来的）；
         //   · **段号** → 问界面 `ShapeSegmentIndexForTest(tool)`。
         Console.WriteLine($"  -- C. 逐个图形真拖一笔（{want.Length} 个）：StrokeKind 就是那一种 --");
-        // 落点在画布中上部：面板在屏幕下沿，别画到面板上（那就变成点按钮了）
+        // 落点在画布中上部：面板在屏幕下沿，别画到面板上（那就变成点按钮了）。
+        //
+        // ⚠ 格子是"每行 4 个、行距 120"**从上面往下排**的，所以**图形越多、最后几个越靠下** ——
+        // 2026-09-20 第十六批加到 21 个时，最后那格正好排进了面板（症状是"对象 0 个"，
+        // 看着像功能坏了）。所以起点取在画布 30% 高处、行距收紧到 120：
+        // 21 个图形最底下一格的落点是 `0.30 × 1800 ＋ 5 × 120 ＝ 1140`，
+        // 再加拖出去的 120 也才 1260，离下沿的面板还有一大截。
         int dragX = (int)(_virtualX + _virtualW * 0.28f);
-        int dragY = (int)(_virtualY + _virtualH * 0.42f);
+        int dragY = (int)(_virtualY + _virtualH * 0.30f);
         for (int i = 0; i < want.Length; i++)
         {
             var d = want[i];
@@ -12360,7 +12372,7 @@ internal sealed class App : InkEngine.InkEngine
             ClickSegment(InkUi.FullUi.ShapeSegmentIndexForTest(d.tool));
 
             // 一个图形一格（互相别叠上），按引擎说的**笔数**一笔一笔拖
-            int x = dragX + (i % 4) * 260, y = dragY + (i / 4) * 150;
+            int x = dragX + (i % 4) * 260, y = dragY + (i / 4) * 120;
             int steps = ShapeStepCount(d.tool);
             for (int k = 0; k < steps; k++)
             {
@@ -14328,8 +14340,8 @@ internal sealed class App : InkEngine.InkEngine
     }
 
     /// <summary>
-    /// 出图：函数曲线各来一份——**抛物线四种开口、双曲线两个方向、正弦 / 余弦多周期、
-    /// 正切一支**。
+    /// 出图：函数曲线各来一份——**抛物线四种开口、双曲线两个方向、正弦 / 余弦各一个周期、
+    /// 波浪线三个周期、正切一支**。
     /// 用法 `--curveshow [路径]`，默认 `reports/四种曲线.bmp`。
     ///
     /// 自检盯的是"数值对不对"，这一张是给**眼睛**看的（这条教训见 计划-图形工具.md 10.7）：
@@ -14337,11 +14349,12 @@ internal sealed class App : InkEngine.InkEngine
     ///   · 双曲线**截断到哪**（`Stroke.HyperbolaTMaxOf`：出框就停笔、最多画到 `2a`：
     ///     太短看着像两根短线、太长就把包围盒撑得很大）；
     ///   · 四种开口是不是真的四个方向（左右开口是"换自变量"，最容易写反）；
-    ///   · 正弦 / 余弦的**起点**对不对（正弦从轴起、余弦从峰起——这是用户要的那一条），
-    ///     以及**波形有没有被拖扁**（周期长 = 4 × 振幅，三张都是 3 个周期）；
-    ///   · 正切**两侧的渐近线**在不在、曲线有没有在框边截断（这两条是它的识别特征）。
-    /// 摆放：4 列 × 3 行，第一行四种开口、第二行"双曲线两个方向 ＋ 正弦 / 余弦 / 正切"、
-    /// 第三行四种立体。第二行比一格挤（5 个图形），所以余弦往左让了 100、正切并排在最右。
+    ///   · 正弦 / 余弦的**起点**对不对（正弦从轴起、余弦从峰起），而且**都是一个周期**；
+    ///   · **波浪线**是不是"很多个周期"（和正弦那一张摆在一起看，一眼就该分得开）；
+    ///   · 正切**两侧的渐近线**在不在、曲线有没有贴着它上去（这条靠 `TangentMinAspect` 兜着，
+    ///     所以这一张**故意只拖 60 高**：画出来仍该是贴着渐近线的那一支）。
+    /// 摆放：4 列 × 3 行，第一行四种开口、第二行"双曲线两个方向 ＋ 正弦 / 余弦 / 波浪线 / 正切"、
+    /// 第三行四种立体。第二行挤了 6 个图形，所以位置是按"不碰上邻居"逐个摆的（见各段注释）。
     /// </summary>
     private void CurveShowcase(string path)
     {
@@ -14405,29 +14418,38 @@ internal sealed class App : InkEngine.InkEngine
         Doc.AddStroke(hY);          // 点更竖 → 焦点在 y 轴（上下双曲线）
 
         // 正弦：起点在轴上（第一个零点），**往上拖 = 先上后下**（就是课本的 y = sin x）。
-        // 2026-09-20 起**横向 = 要画多长**（不是"一个周期"），所以这里拖出 **3 个周期**
-        // 给眼睛看（一屏能放好几个周期正是用户要的；周期长 = 4 × 振幅，见 WavePeriodPerAmplitude）。
-        // ⚠ 起点比 `CellX(2)` 往左挪了 60（第二行现在挤了 5 个图形，见下面正切那条注释）。
-        float sinX = x0 + 1270f;
-        var sin = Make(Tool.Sine, StrokeKind.Sine, sinX, CellY(1) + 280f);
-        sin.SetWaveBox(sinX, CellY(1) + 280f, sinX + 480f, CellY(1) + 240f, 8f);
+        // ⚠ 2026-09-20 第十六批：**框宽就是一个周期**（用户："正弦和余弦用一个周期的图"）——
+        // 所以这一张拖出来的是**一个周期**（300 宽、A = 75）。多周期那件事在下一格「波浪线」。
+        // ⚠ 这一行的**纵向位置都写成 `CellY(1) + 本行内偏移`**：格子间距是 620，
+        // 第三行（立体）从 `CellY(1) + 600` 就开始了 —— 偏移超过 600 就压在立体上了
+        //（2026-09-20 第十六批把波浪线摆到 +760、当场压住圆台和球，出图才发现）。
+        float sinX = x0 + 1250f;
+        var sin = Make(Tool.Sine, StrokeKind.Sine, sinX, CellY(1) + 300f);
+        sin.SetWaveBox(sinX, CellY(1) + 300f, sinX + 300f, CellY(1) + 225f, 8f);   // dy = −75 → A = 75
         Doc.AddStroke(sin);
 
         // 余弦：起点在**峰顶**，**往下拖 = 从峰顶往下**（就是课本的 y = cos x）。
-        // 同样是 3 个周期（纵向拖的是"峰 → 谷"＝2A，所以这一拖是正弦的两倍高）。
-        float cosX = x0 + 1780f;
-        var cos = Make(Tool.Cosine, StrokeKind.Cosine, cosX, CellY(1) + 190f);
-        cos.SetWaveBox(cosX, CellY(1) + 190f, cosX + 480f, CellY(1) + 270f, 8f);
+        // 同样是**一个周期**（纵拖 = 峰 → 谷 = 2A，所以同样 75 的振幅要拖 150 高）。
+        float cosX = x0 + 1600f;
+        var cos = Make(Tool.Cosine, StrokeKind.Cosine, cosX, CellY(1) + 225f);
+        cos.SetWaveBox(cosX, CellY(1) + 225f, cosX + 300f, CellY(1) + 375f, 8f);
         Doc.AddStroke(cos);
+
+        // 波浪线（第十六批）：**多周期的正弦波**——横向拖的是"要画多长"、周期由振幅定
+        //（`T = 4 × A`）。这里 A = 40、画 480 宽 → **3 个周期**，正是用户要的"很多个周期的波浪线"。
+        // 摆在正弦 / 余弦下面一点（同一行里错开，三张并排看"一个周期 vs 多周期"最直观）。
+        float wavX = x0 + 1950f;
+        var wav = Make(Tool.Wave, StrokeKind.Wave, wavX, CellY(1) + 520f);
+        wav.SetWaveBox(wavX, CellY(1) + 520f, wavX + 480f, CellY(1) + 480f, 8f);
+        Doc.AddStroke(wav);
 
         // 正切（2026-09-20 第十五批）：**一支**，按下 = 原点、拖出以它为中心的框
         //（横向 = 半支长、纵向 = 可视半高，两条渐近线就落在框的左右两边）。
-        // 摆放：紧接着余弦往右排（第二行挤了 5 个图形：双曲线 ×2 ＋ 正弦 / 余弦 / 正切，
-        // 所以正弦和余弦都比原来往左让了一点；**改的只是这张出图，画法一个字没动**）。
-        // 位置留出了余量：正切的右渐近线在 x0 + 2570，离右边界还有一截，不会被裁。
-        float tanX = x0 + 2430f, tanY = CellY(1) + 260f;
+        // ⚠ 视觉半高有**下限比例 3:1**（见 Stroke.TangentMinAspect）：这里故意只拖 60 高，
+        // 画出来会被顶到 240 —— 图上要看的正是"随手一拖就贴着渐近线"这件事。
+        float tanX = x0 + 2560f, tanY = CellY(1) + 330f;
         var tan = Make(Tool.Tangent, StrokeKind.Tangent, tanX, tanY);
-        tan.SetTangentBox(tanX, tanY, tanX + 140f, tanY + 150f, 8f);
+        tan.SetTangentBox(tanX, tanY, tanX + 80f, tanY + 60f, 8f);
         Doc.AddStroke(tan);
 
         // ---- 第三行：立体图形（2026-09-20 第五批，照 InkClass 的 case 6/7）----
@@ -15219,9 +15241,11 @@ internal sealed class App : InkEngine.InkEngine
         Check("双曲线：另一条轴只到 b·sinh(t)（≈59.8，那个点在那儿）（±0.5）",
               Near(hMaxY, 60f, .5f), $"{hMaxY:F1}（期望 ≈60）");
 
-        // ---- 正弦：起点 (300,1000)；拖出 480 宽 × 100 高 ----
-        // ⚠ 2026-09-20 起**横向拖的是"要画多长"**（不是"一个周期"）：所以这里
-        //   A = 100（正弦：纵拖 = 振幅）→ **T = 4×A = 400**（周期由振幅定）→ 画 1.2 个周期。
+        // ---- 正弦：起点 (300,1000)；拖出 **480 宽 × 100 高 = 一个周期 + 振幅** ----
+        // ⚠ 2026-09-20 第十六批：正弦 / 余弦回到"**框宽就是一个周期**"
+        //（用户："正弦和余弦用一个周期的图"）——多周期那件事交给**波浪线**那一格
+        //（横向 = 要画多长，见下面 ⑥ 段）。
+        //   A = 100（正弦：纵拖 = 振幅）→ **T = 框宽 = 480** → 画 1 个周期。
         var sn = NewCurve(Tool.Sine, StrokeKind.Sine, 300f, 1000f);
         sn.SetWaveBox(300f, 1000f, 780f, 900f, minAxis);
         Check("正弦：起点 = 按下点、终点 = 起点＋(长度, 高度)（±0.5）",
@@ -15231,13 +15255,13 @@ internal sealed class App : InkEngine.InkEngine
               + $" 终点 ({sn.Points[1].X:F1},{sn.Points[1].Y:F1})");
         Check("正弦：两个定义元素（起点 ＋ 终点，极值点是现推的）",
               sn.Points.Count == 2, $"{sn.Points.Count} 个");
-        Check($"正弦：A = 100、**T = 4×A = 400**、长度 480 → 画 {480f / 400f:F1} 个周期（±0.5）",
+        Check("正弦：A = 100、**T = 框宽 = 480**、正好画 1 个周期（±0.5）",
               Near(sn.WaveAmplitudeLocal(), 100f, .5f)
-              && Near(sn.WavePeriodLocal(), 400f, .5f)
+              && Near(sn.WavePeriodLocal(), 480f, .5f)
               && Near(sn.WaveLengthLocal(), 480f, .5f)
-              && Near(sn.WaveCyclesLocal(), 1.2f, .02f),
+              && Near(sn.WaveCyclesLocal(), 1f, .01f),
               $"A {sn.WaveAmplitudeLocal():F1}  T {sn.WavePeriodLocal():F1}"
-              + $"  长 {sn.WaveLengthLocal():F1}  周期数 {sn.WaveCyclesLocal():F2}");
+              + $"  长 {sn.WaveLengthLocal():F1}  周期数 {sn.WaveCyclesLocal():F2}（期望 1.00）");
         var snQ = sn.WavePointAt(0.25f);
         var snH = sn.WavePointAt(0.5f);
         var snT = sn.WavePointAt(0.75f);
@@ -15246,81 +15270,110 @@ internal sealed class App : InkEngine.InkEngine
               && Near(snH.Y, 1000f, .5f) && Near(snT.Y, 1100f, .5f),
               $"0:{sn.WavePointAt(0f).Y:F1} 1/4:{snQ.Y:F1} 1/2:{snH.Y:F1} 3/4:{snT.Y:F1}");
         var snBox = sn.CurveBoxLocal();
-        Check("正弦：紧框 = 画出来的那一段 × ±A（这里画满了峰和谷 → 就是 ±A）（±0.5）",
+        Check("正弦：紧框 = 一个周期宽 × ±A（峰和谷都在里面）（±0.5）",
               Near(snBox.MinX, 300f, .5f) && Near(snBox.MaxX, 780f, .5f)
               && Near(snBox.MinY, 900f, .5f) && Near(snBox.MaxY, 1100f, .5f),
               $"框 ({snBox.MinX:F1},{snBox.MinY:F1})..({snBox.MaxX:F1},{snBox.MaxY:F1})");
 
-        // == 多周期：**同一个高度拖得更宽 → 周期数翻倍，而周期 / 振幅一个字不变** ==
-        // 这一条是"画很多个周期的波浪线"（用户 2026-09-20）的正面断言，
-        // 同时也是"波形不会因为拖宽而被拉变形"的证明 —— 旧定义下拖宽一倍，
-        // 画出来的是一条"周期变长"的波，根本不是同一个正弦。
-        var sn2 = NewCurve(Tool.Sine, StrokeKind.Sine, 300f, 1000f);
-        sn2.SetWaveBox(300f, 1000f, 1260f, 900f, minAxis);      // 同样 100 高、宽一倍（960）
-        Check("正弦：**拖宽一倍 → 周期数翻倍（1.2 → 2.4）**，而 T 和 A 一个字没变（不变形）",
-              Near(sn2.WaveAmplitudeLocal(), 100f, .5f) && Near(sn2.WavePeriodLocal(), 400f, .5f)
-              && Near(sn2.WaveCyclesLocal(), 2.4f, .02f),
-              $"A {sn2.WaveAmplitudeLocal():F1}  T {sn2.WavePeriodLocal():F1}"
-              + $"  周期数 {sn2.WaveCyclesLocal():F2}（期望 2.4）");
-        Check("正弦：宽一倍的紧框 = 长度也翻倍、**上下两条线还是 ±A**（波形没被拉扁）",
-              Near(sn2.CurveBoxLocal().MinX, 300f, .5f) && Near(sn2.CurveBoxLocal().MaxX, 1260f, .5f)
-              && Near(sn2.CurveBoxLocal().MinY, 900f, .5f) && Near(sn2.CurveBoxLocal().MaxY, 1100f, .5f),
-              $"框 ({sn2.CurveBoxLocal().MinX:F1},{sn2.CurveBoxLocal().MinY:F1})"
-              + $"..({sn2.CurveBoxLocal().MaxX:F1},{sn2.CurveBoxLocal().MaxY:F1})");
-        // **不到一个周期**也要能画（拖得短）：那时紧框不该撑到 ±A（峰还没到）
-        var sn3 = NewCurve(Tool.Sine, StrokeKind.Sine, 300f, 1000f);
-        sn3.SetWaveBox(300f, 1000f, 350f, 900f, minAxis);       // 长 50、A = 100 → 0.125 个周期
-        Check("正弦：拖得**不足一个周期**时紧框跟着收（不撑到 ±A，峰根本还没到）（±0.5）",
-              Near(sn3.WaveCyclesLocal(), 0.125f, .01f)
-              && Near(sn3.CurveBoxLocal().MinY, 1000f - 100f * MathF.Sin(MathF.Tau * 0.125f), 1f)
-              && sn3.CurveBoxLocal().MinY > 925f,
-              $"周期数 {sn3.WaveCyclesLocal():F3}  框上沿 {sn3.CurveBoxLocal().MinY:F1}"
-              + $"（期望 {1000f - 100f * MathF.Sin(MathF.Tau * 0.125f):F1}；"
-              + "满峰才是 900 —— 这里峰还没到，框跟着收）");
-
-        // ---- 余弦：起点 (300,1400)（**峰顶**）；拖出 480 宽 × 200 高 ----
+        // ---- 余弦：起点 (300,1400)（**峰顶**）；拖出 480 宽 × 200 高 = 一个周期 ----
+        // 纵向拖的是"峰 → 谷"＝ 2A（这是余弦和正弦唯一的不对称，见 WaveAmplitudeOf），
+        // 横向那一拖同样是**一个周期**。
         var cs = NewCurve(Tool.Cosine, StrokeKind.Cosine, 300f, 1400f);
         cs.SetWaveBox(300f, 1400f, 780f, 1600f, minAxis);   // 纵拖 = 峰→谷 = 2A → A = 100
         Check("余弦：起点是**峰顶**、终点在**谷**那一侧（±0.5）",
               Near(cs.Points[0].Y, 1400f, .5f) && Near(cs.Points[1].Y, 1600f, .5f)
-              && Near(cs.WaveTroughLocal().X, 500f, .5f) && Near(cs.WaveTroughLocal().Y, 1600f, .5f),
+              && Near(cs.WaveTroughLocal().X, 540f, .5f) && Near(cs.WaveTroughLocal().Y, 1600f, .5f),
               $"起点 y {cs.Points[0].Y:F1}  终点 y {cs.Points[1].Y:F1}"
-              + $"  谷 ({cs.WaveTroughLocal().X:F1},{cs.WaveTroughLocal().Y:F1})（期望 x=500 = 半个周期）");
-        Check("余弦：A = 100、T = 400、画 1.2 个周期（和正弦同一条算式）（±0.5）",
-              Near(cs.WaveAmplitudeLocal(), 100f, .5f) && Near(cs.WavePeriodLocal(), 400f, .5f)
-              && Near(cs.WaveCyclesLocal(), 1.2f, .02f),
+              + $"  谷 ({cs.WaveTroughLocal().X:F1},{cs.WaveTroughLocal().Y:F1})"
+              + "（期望 x=540 = 300 ＋ 半个周期 240）");
+        Check("余弦：A = 100、T = 框宽 = 480、正好 1 个周期（和正弦同一条算式）（±0.5）",
+              Near(cs.WaveAmplitudeLocal(), 100f, .5f) && Near(cs.WavePeriodLocal(), 480f, .5f)
+              && Near(cs.WaveCyclesLocal(), 1f, .01f),
               $"A {cs.WaveAmplitudeLocal():F1}  T {cs.WavePeriodLocal():F1}"
-              + $"  周期数 {cs.WaveCyclesLocal():F2}");
+              + $"  周期数 {cs.WaveCyclesLocal():F2}（期望 1.00）");
         Check("余弦：u=0 在峰顶、u=0.25 到中线、u=0.5 到谷底（±0.5）",
               Near(cs.WavePointAt(0f).Y, 1400f, .5f) && Near(cs.WavePointAt(0.25f).Y, 1500f, .5f)
               && Near(cs.WavePointAt(0.5f).Y, 1600f, .5f),
               $"0:{cs.WavePointAt(0f).Y:F1} 1/4:{cs.WavePointAt(0.25f).Y:F1} 1/2:{cs.WavePointAt(0.5f).Y:F1}");
         var csBox = cs.CurveBoxLocal();
-        Check("余弦：紧框 = 画出来的那一段 × (起点 → 谷底 2A)（±0.5）",
+        Check("余弦：紧框 = 一个周期宽 × (起点 → 谷底 2A)（±0.5）",
               Near(csBox.MinX, 300f, .5f) && Near(csBox.MaxX, 780f, .5f)
               && Near(csBox.MinY, 1400f, .5f) && Near(csBox.MaxY, 1600f, .5f),
               $"框 ({csBox.MinX:F1},{csBox.MinY:F1})..({csBox.MaxX:F1},{csBox.MaxY:F1})");
+
+        // ---- 波浪线（2026-09-20 第十六批，用户："还有一个另外的很多周期的波浪的弦函数线"）----
+        // 和正弦是**同一条曲线**，差别只在**这一拖管什么**：正弦的框宽 = 一个周期、
+        // 波浪线的框宽 = **要画多长**（周期由振幅定：`T = 4 × A`，见 WavePeriodPerAmplitude）。
+        // 所以下面这几条就是**"多周期"这件事的正面断言**：
+        //   · 拖得宽 → 周期数跟着涨，而 **T 和 A 一个字不变**（波形不会被拉变形）；
+        //   · 拖得不足一个周期 → 紧框跟着收（峰还没到，不能撑到 ±A）。
+        var wv = NewCurve(Tool.Wave, StrokeKind.Wave, 300f, 1000f);
+        wv.SetWaveBox(300f, 1000f, 780f, 900f, minAxis);          // 480 宽、A = 100
+        Check("波浪线：A = 100、**T = 4×A = 400**、画 480 宽 → 1.2 个周期（±0.5）",
+              Near(wv.WaveAmplitudeLocal(), 100f, .5f)
+              && Near(wv.WavePeriodLocal(), 400f, .5f)
+              && Near(wv.WaveLengthLocal(), 480f, .5f)
+              && Near(wv.WaveCyclesLocal(), 1.2f, .02f),
+              $"A {wv.WaveAmplitudeLocal():F1}  T {wv.WavePeriodLocal():F1}"
+              + $"  长 {wv.WaveLengthLocal():F1}  周期数 {wv.WaveCyclesLocal():F2}（期望 1.20）");
+        // **拖宽一倍**：周期数翻倍，而波形一个字不变（"画多长画多长"这件事的正面断言）。
+        var wv2 = NewCurve(Tool.Wave, StrokeKind.Wave, 300f, 1000f);
+        wv2.SetWaveBox(300f, 1000f, 1260f, 900f, minAxis);       // 同样 A = 100、宽一倍（960）
+        Check("波浪线：**同一个高度拖宽一倍（480 → 960）→ 周期数翻倍（1.2 → 2.4）**，"
+              + "而 T 和 A 一个字没变（不变形）",
+              Near(wv2.WaveCyclesLocal(), 2.4f, .02f)
+              && Near(wv2.WaveAmplitudeLocal(), 100f, .5f)
+              && Near(wv2.WavePeriodLocal(), 400f, .5f),
+              $"A {wv2.WaveAmplitudeLocal():F1}  T {wv2.WavePeriodLocal():F1}"
+              + $"  周期数 {wv2.WaveCyclesLocal():F2}（期望 2.40）");
+        Check("波浪线：宽一倍的紧框 = 长度也翻倍、**上下两条线还是 ±A**（波形没被拉扁）",
+              Near(wv2.CurveBoxLocal().MinX, 300f, .5f) && Near(wv2.CurveBoxLocal().MaxX, 1260f, .5f)
+              && Near(wv2.CurveBoxLocal().MinY, 900f, .5f) && Near(wv2.CurveBoxLocal().MaxY, 1100f, .5f),
+              $"框 ({wv2.CurveBoxLocal().MinX:F1},{wv2.CurveBoxLocal().MinY:F1})"
+              + $"..({wv2.CurveBoxLocal().MaxX:F1},{wv2.CurveBoxLocal().MaxY:F1})");
+        // **拖得短**（不足一个周期）也要能画：那时紧框不该撑到 ±A（峰还没到）
+        var wv3 = NewCurve(Tool.Wave, StrokeKind.Wave, 300f, 1000f);
+        wv3.SetWaveBox(300f, 1000f, 350f, 900f, minAxis);         // 长 50、A = 100 → 0.125 个周期
+        Check("波浪线：拖得**不足一个周期**时紧框跟着收（不撑到 ±A，峰根本还没到）（±0.5）",
+              Near(wv3.WaveCyclesLocal(), 0.125f, .01f)
+              && Near(wv3.CurveBoxLocal().MinY, 1000f - 100f * MathF.Sin(MathF.Tau * 0.125f), 1f)
+              && wv3.CurveBoxLocal().MinY > 925f,
+              $"周期数 {wv3.WaveCyclesLocal():F3}  框上沿 {wv3.CurveBoxLocal().MinY:F1}"
+              + $"（期望 {1000f - 100f * MathF.Sin(MathF.Tau * 0.125f):F1}；"
+              + "满峰才是 900 —— 这里峰还没到，框跟着收）");
+        // 两种波浪**同一个框拖出来的东西不一样**（这是"分两格"的意义所在）：
+        // 同样 480 宽 × 100 高 —— 正弦是**一个周期**（T = 480）、波浪线是 **1.2 个周期**（T = 400）。
+        Check("正弦 / 波浪线**同一个框拖出来不是同一条**：T 480（一个周期）vs T 400（1.2 个周期）",
+              Near(sn.WavePeriodLocal(), 480f, .5f) && Near(sn.WaveCyclesLocal(), 1f, .01f)
+              && Near(wv.WavePeriodLocal(), 400f, .5f) && Near(wv.WaveCyclesLocal(), 1.2f, .02f),
+              $"正弦 T {sn.WavePeriodLocal():F0}/周期数 {sn.WaveCyclesLocal():F2}、"
+              + $"波浪线 T {wv.WavePeriodLocal():F0}/周期数 {wv.WaveCyclesLocal():F2}");
 
         // ---- 正切（2026-09-20 第十五批，用户："可以画正切"）----
         // 和正弦 / 余弦同族，但**一笔**：按下 = 原点（这一支的中心，也是图象与 x 轴的交点），
         // 拖出去 = **以它为中心的框**——横向 = 半支长（两条渐近线正好落在框的左右边）、
         // 纵向 = 可视半高（曲线冲到那儿就截断）。
         //
-        // ⚠ 最要紧的一条是**它不该被拖变形**：横竖共用一个单位（`半支长 ↔ π/2`），
-        // 所以框拖成什么形状，画出来的**都是同一个正切**（只是看得见的部分多少不同）——
-        // 这正是"正弦那套横向拖长度"改完之后、正切不需要比例常数的原因。
+        // ⚠ 两条最要紧的：
+        //   ① **它不该被拖变形**：横竖共用一个单位（`半支长 ↔ π/2`），所以框拖成什么形状，
+        //      画出来的都是同一个正切（只是看得见的部分多少不同）；
+        //   ② **可视半高有个下限**（`TangentMinAspect = 3`）：横竖既然同一个尺度，
+        //      "看得见多高"就直接决定"两头离渐近线还有多远" —— 框太矮时曲线只画到一半就截断，
+        //      看着是**一条斜线**（用户 2026-09-20 上手就是这个印象：他得故意拖得又高又窄才像）。
+        //      所以引擎把高度顶到"贴着渐近线"的那个最小比例，**随手一拖就是课本的样子**。
         var tg = NewCurve(Tool.Tangent, StrokeKind.Tangent, 300f, 2400f);
-        tg.SetTangentBox(300f, 2400f, 420f, 2540f, minAxis);      // 半支长 120、可视半高 140
+        tg.SetTangentBox(300f, 2400f, 420f, 2540f, minAxis);      // 半支长 120、拖的半高只有 140
         Check("正切：两个定义元素（原点 ＋ 拖出去那个角），是**一笔**图形",
               tg.Points.Count == 2 && ShapeStepCount(Tool.Tangent) == 1,
               $"{tg.Points.Count} 个控制点、{ShapeStepCount(Tool.Tangent)} 笔"
               + "（期望 2 个 / 1 笔）");
-        Check("正切：原点 = 按下点；半支长 120、可视半高 140（±0.5）",
+        Check("正切：原点 = 按下点；半支长 120；可视半高**被顶到下限 360 = 3 × 120**（拖的是 140）（±0.5）",
               Near(tg.TangentOriginLocal().X, 300f, .5f) && Near(tg.TangentOriginLocal().Y, 2400f, .5f)
               && Near(tg.TangentHalfSpanLocal(), 120f, .5f)
-              && Near(tg.TangentHalfHeightLocal(), 140f, .5f),
+              && Near(tg.TangentHalfHeightLocal(), 3f * 120f, .5f),
               $"原点 ({tg.TangentOriginLocal().X:F1},{tg.TangentOriginLocal().Y:F1})"
-              + $"  半支长 {tg.TangentHalfSpanLocal():F1}  可视半高 {tg.TangentHalfHeightLocal():F1}");
+              + $"  半支长 {tg.TangentHalfSpanLocal():F1}  可视半高 {tg.TangentHalfHeightLocal():F1}"
+              + $"（拖的 {MathF.Abs(tg.TangentEndLocal().Y - tg.TangentOriginLocal().Y):F1}）");
         // 单位 = 半支长 ÷ π/2 —— **这一条就是"横竖同一个尺度"的定义**（不变形的根）
         Check($"正切：横竖**共用一个单位**（半支长 120 ÷ π/2 ≈ {120f / (MathF.PI * .5f):F1}）（±0.5）",
               Near(tg.TangentUnitLocal(), 120f / (MathF.PI * 0.5f), .5f),
@@ -15334,23 +15387,32 @@ internal sealed class App : InkEngine.InkEngine
               + $"（期望 {2400f - tg.TangentUnitLocal():F1}）");
         // 截断：曲线**冲到框的上下边就收笔**（框外的不画），所以首末两点的 y 正好是 ±半高
         Check("正切：一支的**首末两点正好落在框的上下边**（冲出框就截断）（±0.5）",
-              Near(tg.TangentTracedPointAt(0f).Y, 2540f, .5f)
-              && Near(tg.TangentTracedPointAt(1f).Y, 2260f, .5f)
+              Near(tg.TangentTracedPointAt(0f).Y, 2400f + 360f, .5f)
+              && Near(tg.TangentTracedPointAt(1f).Y, 2400f - 360f, .5f)
               && tg.TangentTracedPointAt(0f).X < 300f && tg.TangentTracedPointAt(1f).X > 300f,
               $"端头 ({tg.TangentTracedPointAt(0f).X:F1},{tg.TangentTracedPointAt(0f).Y:F1})"
               + $" 和 ({tg.TangentTracedPointAt(1f).X:F1},{tg.TangentTracedPointAt(1f).Y:F1})");
+        // **"贴着渐近线"的正面判据**：曲线两头停在离渐近线 13% 的地方（θ 走到 π/2 的 87%）
+        // —— 这一条就是用户那句"很窄很高的时候才贴着渐近线"要做成默认行为的那件事。
+        float tgGap = 1f - MathF.Abs(300f - tg.TangentTracedPointAt(1f).X) / tg.TangentHalfSpanLocal();
+        Check("正切：两头**贴着渐近线**（只差 13% 的半支长；θ 走到 π/2 的 87%）（±0.02）",
+              Near(tgGap, 0.133f, .02f)
+              && Near(tg.TangentThetaMaxLocal() / (MathF.PI * .5f), 0.867f, .02f),
+              $"离渐近线还差 {tgGap * 100f:F1}%（期望 13.3），"
+              + $"θ 走到 π/2 的 {tg.TangentThetaMaxLocal() / (MathF.PI * .5f) * 100f:F1}%");
         // 两条渐近线：x = ±半支长（**正好落在框的左右边**）、上下从 −半高 到 ＋半高
         var (aFrom, aTo) = tg.TangentAsymptoteLocal(1);
         Check("正切：两条渐近线在 x = 原点 ± 半支长（就落在框的左右边上）（±0.5）",
               Near(tg.TangentAsymptoteLocal(-1).From.X, 180f, .5f)
-              && Near(aFrom.X, 420f, .5f) && Near(aFrom.Y, 2260f, .5f) && Near(aTo.Y, 2540f, .5f),
+              && Near(aFrom.X, 420f, .5f) && Near(aFrom.Y, 2400f - 360f, .5f)
+              && Near(aTo.Y, 2400f + 360f, .5f),
               $"左 x {tg.TangentAsymptoteLocal(-1).From.X:F1}（期望 180）"
-              + $"  右 x {aFrom.X:F1}（期望 420）  上下 {aFrom.Y:F1}..{aTo.Y:F1}（期望 2260..2540）");
+              + $"  右 x {aFrom.X:F1}（期望 420）  上下 {aFrom.Y:F1}..{aTo.Y:F1}（期望 2040..2760）");
         // 紧框 = **那个框本身**（不用采样求极值：曲线的范围就是 ±半支长 / ±半高）
         var tgBox = tg.CurveBoxLocal();
-        Check("正切：紧框 = 那个框本身 (180,2260)..(420,2540)（±0.5）",
+        Check("正切：紧框 = 那个框本身 (180,2040)..(420,2760)（±0.5）",
               Near(tgBox.MinX, 180f, .5f) && Near(tgBox.MaxX, 420f, .5f)
-              && Near(tgBox.MinY, 2260f, .5f) && Near(tgBox.MaxY, 2540f, .5f),
+              && Near(tgBox.MinY, 2400f - 360f, .5f) && Near(tgBox.MaxY, 2400f + 360f, .5f),
               $"框 ({tgBox.MinX:F1},{tgBox.MinY:F1})..({tgBox.MaxX:F1},{tgBox.MaxY:F1})");
         // == 不变形：**同一个比例放大一倍** → 曲线逐点也放大一倍（形状一个字不变） ==
         // 这条比"看着像"硬得多：它证的是横竖**同一个**单位，也就是说
@@ -15374,16 +15436,26 @@ internal sealed class App : InkEngine.InkEngine
         }
         Check("正切：框**按同一比例放大一倍** → 曲线逐点放大一倍（拖不变形）", tgScaleOk,
               tgScaleOk ? "5 个采样点全是 ×2（形状一个字没变）" : tgScaleNote);
-        // 反过来：**扁框**（横向拖得远、纵向拖得矮）画出来还是同一个正切，只是**看得见的更少**
-        //（截断得更早）——所以它的半支长明明更长，却**不该**看着更平。
+        // 拖得**又宽又矮**（480 × 70）：高度照样被顶到 3 倍下限，于是画出来的还是
+        // "贴着渐近线的那一支"——**这就是这条下限存在的理由**（不然它是一条斜线）。
+        // 注意 θ 的上限和半支长**无关**（`tan θmax = 3·π/2`），所以它和 tg 走到同一个 θ。
         var tg3 = NewCurve(Tool.Tangent, StrokeKind.Tangent, 300f, 2400f);
         tg3.SetTangentBox(300f, 2400f, 300f + 480f, 2400f + 70f, minAxis);   // 又宽又矮
-        Check("正切：**又宽又矮**的框 = 同一个正切、只是截断得更早（单位随半支长变、仍不变形）",
+        Check("正切：**又宽又矮**的框也被顶到同一条下限（θ 上限和 tg 一样、不走成斜线）",
               Near(tg3.CurveBoxLocal().MaxX - tg3.TangentOriginLocal().X, 480f, .5f)
-              && Near(tg3.TangentThetaMaxLocal(), MathF.Atan(70f / tg3.TangentUnitLocal()), .01f)
-              && tg3.TangentThetaMaxLocal() < tg.TangentThetaMaxLocal(),
-              $"半支长 480、可视半高 70 → θ 最多到 {tg3.TangentThetaMaxLocal():F3} rad"
-               + $"（那条高的框能到 {tg.TangentThetaMaxLocal():F3}）");
+              && Near(tg3.TangentHalfHeightLocal(), 3f * 480f, .5f)
+              && Near(tg3.TangentThetaMaxLocal(), tg.TangentThetaMaxLocal(), .01f)
+              && tg3.TangentThetaMaxLocal() < MathF.PI * .5f,
+              $"半支长 480、拖的半高 70 → 实际半高 {tg3.TangentHalfHeightLocal():F0}、"
+              + $"θ 上限 {tg3.TangentThetaMaxLocal():F3}（tg 是 {tg.TangentThetaMaxLocal():F3}）");
+        // 反过来说：**拖得比下限更高就照你的来**（越高血压到越近）。
+        var tg4 = NewCurve(Tool.Tangent, StrokeKind.Tangent, 300f, 2400f);
+        tg4.SetTangentBox(300f, 2400f, 300f + 120f, 2400f + 700f, minAxis);   // 半支长 120、半高 700
+        Check("正切：拖得**比下限更高**就照你的来（半高 700 > 360 → θ 上限更大、贴得更近）",
+              Near(tg4.TangentHalfHeightLocal(), 700f, .5f)
+              && tg4.TangentThetaMaxLocal() > tg.TangentThetaMaxLocal() + 0.05f,
+              $"半支长 120、拖的半高 700 → θ 上限 {tg4.TangentThetaMaxLocal():F3} rad"
+              + $"（下限那一档是 {tg.TangentThetaMaxLocal():F3}，π/2 是 {MathF.PI * .5f:F3}）");
 
         // ---- 圆柱 / 圆锥（2026-09-20 第五批：照 InkClass 的 case 6/7）----
         // 两个控制点就是**外接矩形**（拖到哪就是哪），椭圆由它派生：
@@ -15906,9 +15978,9 @@ internal sealed class App : InkEngine.InkEngine
                   ts == null ? "（没画出来）"
                   : $"原点 ({ts.TangentOriginLocal().X:F0},{ts.TangentOriginLocal().Y:F0})"
                     + $"（按下的 ({ox:F0},{oy:F0})）");
-            Check("正切·真机一笔：半支长 = |dx| = 160、可视半高 = |dy| = 180（±2）",
+            Check("正切·真机一笔：半支长 = |dx| = 160；可视半高**被顶到下限 480**（拖的是 180）（±2）",
                   ts != null && Near(ts.TangentHalfSpanLocal(), 160f, 2f)
-                  && Near(ts.TangentHalfHeightLocal(), 180f, 2f),
+                  && Near(ts.TangentHalfHeightLocal(), 3f * 160f, 2f),
                   ts == null ? "（没画出来）"
                   : $"半支长 {ts.TangentHalfSpanLocal():F0}、可视半高 {ts.TangentHalfHeightLocal():F0}");
 
@@ -15916,9 +15988,44 @@ internal sealed class App : InkEngine.InkEngine
             //（这一段的探针口径和上面几段一样，见 `CountMagenta`）。
             Doc.InvalidateAll();
             SettleFrames(200);
-            int inkOn = ScreenProbe.CountMagenta((int)(ox - 180f), (int)(oy - 200f), 360, 400);
+            int inkOn = ScreenProbe.CountMagenta((int)(ox - 180f), (int)(oy - 560f), 360, 1120);
             Check("正切·真机一笔：屏幕上真有墨（不是只进了文档没画）", inkOn > 300,
                   $"{inkOn} 个品红像素（门槛 300）");
+        }
+
+        // ================= ⑤d. 波浪线：真机一笔拖出来（拖多长画多长） =================
+        //
+        // 这一格和「正弦」的差别全在"这一拖管什么"上，所以真机这一笔要盯住的就一件事：
+        // **横向拖多远 → 画出来几个周期**（`框宽 ÷ (4 × 振幅)`），而不是"拖出来的框就是一个周期"。
+        Console.WriteLine("  -- ⑤d. 波浪线：真机一笔拖出来（拖多长画多长）--");
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetToolFromUi(Tool.Wave);
+            SettleFrames(80);
+
+            float wx = _virtualX + 700f, wy = _virtualY + 900f;
+            SendMouse((int)wx, (int)wy, 0);                                        SettleFrames(60);
+            SendMouse((int)wx, (int)wy, Native.MOUSEEVENTF_LEFTDOWN);              SettleFrames(60);
+            SendMouse((int)(wx + 240f), (int)(wy - 50f), 0);                       SettleFrames(80);
+            SendMouse((int)(wx + 480f), (int)(wy - 100f), 0);                      SettleFrames(160);
+            SendMouse((int)(wx + 480f), (int)(wy - 100f), Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(250);
+
+            var ws = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+            Check("波浪线·真机一笔：画出来的是**波浪线**一个对象",
+                  ws != null && ws.Kind == StrokeKind.Wave,
+                  $"对象 {Doc.Strokes.Count} 条，种类 {(ws == null ? "（没画出来）" : ws.Kind.ToString())}");
+            Check("波浪线·真机一笔：A = 100、T = 4×A = 400、画 480 宽 → **1.2 个周期**（±2）",
+                  ws != null && Near(ws.WaveAmplitudeLocal(), 100f, 2f)
+                  && Near(ws.WavePeriodLocal(), 400f, 2f)
+                  && Near(ws.WaveCyclesLocal(), 1.2f, .02f),
+                  ws == null ? "（没画出来）"
+                  : $"A {ws.WaveAmplitudeLocal():F0}  T {ws.WavePeriodLocal():F0}"
+                    + $"  周期数 {ws.WaveCyclesLocal():F2}（期望 1.20）");
+            Check("波浪线·真机一笔：两个定义元素（起点 ＋ 终点，极值点是现推的）",
+                  ws != null && ws.Points.Count == 2,
+                  $"{ws?.Points.Count ?? -1} 个控制点（期望 2）");
         }
 
         // ================= ⑥ 存档：往返 ＋ 真 v11 老文件 =================
@@ -15936,17 +16043,22 @@ internal sealed class App : InkEngine.InkEngine
         var saveSin = NewCurve(Tool.Sine, StrokeKind.Sine, 300f, 700f);
         saveSin.SetWaveBox(300f, 700f, 780f, 600f, minAxis);
         // 正切（v21 新增的取值）：一笔，存的就是"原点 ＋ 那个角"，形状全由这两个点派生。
+        // ⚠ 存的是**拖出来的那个角**（180），画的时候半高会被下限顶到 480 —— 两个都要读回来。
         var saveTan = NewCurve(Tool.Tangent, StrokeKind.Tangent, 900f, 1200f);
-        saveTan.SetTangentBox(900f, 1200f, 1060f, 1380f, minAxis);          // 半支长 160、半高 180
+        saveTan.SetTangentBox(900f, 1200f, 1060f, 1380f, minAxis);          // 半支长 160、拖的半高 180
+        // 波浪线（v22 新增的取值）：和正弦同一套"起点 ＋ 终点"，差别只是**这一拖管什么**。
+        var saveWave = NewCurve(Tool.Wave, StrokeKind.Wave, 900f, 1700f);
+        saveWave.SetWaveBox(900f, 1700f, 1380f, 1600f, minAxis);            // A = 100 → 1.2 个周期
         Doc.AddStroke(saveMe);
         Doc.AddStroke(saveHy);
         Doc.AddStroke(saveSin);
         Doc.AddStroke(saveTan);
+        Doc.AddStroke(saveWave);
 
         var blob = InkSerializer.Save(Doc);
         var back = new InkDocument();
         InkSerializer.LoadInto(back, blob);
-        bool roundTrip = back.Strokes.Count == 4
+        bool roundTrip = back.Strokes.Count == 5
                          && back.Strokes[0].Kind == StrokeKind.Parabola
                          && Near(back.Strokes[0].ParabolaDirLocal().X, -1f, .01f)
                          && back.Strokes[1].Kind == StrokeKind.Hyperbola
@@ -15955,14 +16067,17 @@ internal sealed class App : InkEngine.InkEngine
                          && back.Strokes[2].Kind == StrokeKind.Sine
                          && back.Strokes[3].Kind == StrokeKind.Tangent
                          && Near(back.Strokes[3].TangentHalfSpanLocal(), 160f, .5f)
-                         && Near(back.Strokes[3].TangentHalfHeightLocal(), 180f, .5f);
-        Check("存档：四种曲线 ＋ 朝向 ＋ 渐近线开关都回来了（含 v21 的正切）",
+                         && Near(back.Strokes[3].TangentHalfHeightLocal(), 3f * 160f, .5f)
+                         && back.Strokes[4].Kind == StrokeKind.Wave
+                         && Near(back.Strokes[4].WaveCyclesLocal(), 1.2f, .02f);
+        Check("存档：五种曲线 ＋ 朝向 ＋ 渐近线开关都回来了（含 v21 正切 / v22 波浪线）",
               roundTrip,
-              back.Strokes.Count == 4
+              back.Strokes.Count == 5
                   ? $"{back.Strokes[0].Kind}/方向 {back.Strokes[0].ParabolaDirLocal()}、"
                     + $"{back.Strokes[1].Kind}/{back.Strokes[1].CurveAxis}/渐近线 {back.Strokes[1].ShowAsymptotes}、"
                     + $"{back.Strokes[2].Kind}、"
-                    + $"{back.Strokes[3].Kind}（半支长 {back.Strokes[3].TangentHalfSpanLocal():F0}）"
+                    + $"{back.Strokes[3].Kind}（半支长 {back.Strokes[3].TangentHalfSpanLocal():F0}）、"
+                    + $"{back.Strokes[4].Kind}（周期数 {back.Strokes[4].WaveCyclesLocal():F2}）"
                   : $"只读回 {back.Strokes.Count} 条");
 
         // 真·v11 老文件：**一条对象**的那条笔画末尾少 1 个字节（就是 v12 的"渐近线"那一位）。

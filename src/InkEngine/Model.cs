@@ -208,6 +208,18 @@ public enum Tool
     /// <see cref="StrokeKind.Tangent"/> 那段。
     /// </summary>
     Tangent = 29,
+
+    /// <summary>
+    /// **波浪线**（2026-09-20 第十六批，用户："还有一个另外的很多周期的波浪的弦函数线"）：
+    /// 多周期正弦波，**一笔**（和正弦 / 余弦同族，手感也同族）。
+    ///
+    /// 和「正弦」那一格的分工（用户定的，两格都在曲线那一行）：
+    ///   · **正弦** = 框宽就是**一个周期**（讲"一个周期的图象"用）；
+    ///   · **波浪线** = 横向拖的是**要画多长**、周期由振幅定
+    ///     （讲周期性、多个周期一起看用）。
+    /// 详见 <see cref="StrokeKind.Wave"/>。
+    /// </summary>
+    Wave = 30,
 }
 
 /// <summary>An axis-aligned rectangle in virtual-desktop pixels.</summary>
@@ -569,6 +581,21 @@ internal enum StrokeKind
     /// 值同样只能追加在末尾。
     /// </summary>
     Tangent = 24,
+
+    /// <summary>
+    /// **波浪线**（2026-09-20 第十六批，用户："还有一个另外的很多周期的波浪的弦函数线"）：
+    /// 就是**多周期的正弦波**——和 <see cref="Sine"/> 是同一条曲线，差别只在**这一拖管什么**：
+    ///   · 正弦：框宽 = **一个周期**（拖多宽就是一个周期，用来讲"一个周期的图象"）；
+    ///   · 波浪线：框宽 = **要画多长**（拖多长画多长，可以好几个周期），
+    ///     周期由**振幅**定（`WavePeriodPerAmplitude`，见 <see cref="Stroke.WavePeriodLocal"/>）。
+    ///
+    /// **为什么要分成两种**（用户 2026-09-20 定的）：课堂上这两件事是分开讲的——
+    /// "正弦函数的图象（一个周期）"和"周期性的波浪线（很多个周期）"，
+    /// 各占面板一格比"一格两种含义、靠拖多长暗中决定"更好懂（也更好选）。
+    ///
+    /// 值同样只能追加在末尾。
+    /// </summary>
+    Wave = 25,
 }
 
 /// <summary>
@@ -1137,7 +1164,8 @@ internal sealed class Stroke
                 break;
 
             // ---- 其余（直线 / 箭头 / 矩形 / 椭圆 / 圆 / 三角形 / 平行四边形 /
-            //      抛物线 / 正弦 / 余弦）：轮廓本来就是"画出来的那一条"，按抬笔分段即可 ----
+            //      抛物线 / 正弦 / 余弦 / 波浪线）：轮廓本来就是"画出来的那一条"，
+            //      按抬笔分段即可 ----
             default:
                 foreach (var part in SplitOutlineParts(ShapeOutline()))
                     list.Add(new InkPiece(part, false));
@@ -2096,24 +2124,28 @@ internal sealed class Stroke
     public const float WavePeriodPerAmplitude = 4f;
 
     /// <summary>
-    /// **一个周期的长度**（像素）＝ `WavePeriodPerAmplitude × 振幅`。
+    /// **一个周期的长度**（像素）。**两种波浪的算法不一样**（2026-09-20 第十六批分的工）：
+    ///   · **正弦 / 余弦**（`Sine` / `Cosine`）：**框宽就是一个周期** ——
+    ///     `周期 = 框宽`。拖多宽就是"画一个多大周期的图象"，讲课时最直白；
+    ///   · **波浪线**（`Wave`）：**周期由振幅定** —— `周期 = WavePeriodPerAmplitude × 振幅`，
+    ///     框宽是"**要画多长**"（可以好几个周期）。
     ///
-    /// ⚠ 2026-09-20 **改过含义**：以前它就是"框宽"（拖多宽算一个周期），
-    /// 现在**框宽 = 要画多长**（见 <see cref="WaveLengthLocal"/>）、**周期由振幅定**。
-    /// 改的理由是用户那句"画正余弦**很多个周期**的波浪线"：
-    ///   · 旧定义下要多个周期只能重复画好几条；
-    ///   · 而且旧定义里"框宽"和"框高"**互相独立**，拖一个又宽又矮的框会把波形**拉变形**
-    ///     —— 画出来的根本不是正弦的样子；
-    ///   · 现在**波形的比例恒定**（永远是同一个正弦），拖动的两个方向分别是
-    ///     "**画多长**"（横向）和"**多高**"（纵向）。
+    /// 为什么波浪线要"周期由振幅定"：用户 2026-09-20 那句"**在画正余弦很多个周期的波浪线**"
+    /// —— 旧定义里"框宽"和"框高"**互相独立**，拖一个又宽又矮的框会把波形**拉变形**
+    ///（画出来的根本不是正弦的样子）。让周期跟着振幅走，**波形比例就恒定了**，
+    /// 横向那一拖只剩下一个含义：画多长。
     /// </summary>
-    public float WavePeriodLocal() => WavePeriodPerAmplitude * WaveAmplitudeLocal();
+    public float WavePeriodLocal() => Kind == StrokeKind.Wave
+        ? WavePeriodPerAmplitude * WaveAmplitudeLocal()
+        : WaveLengthLocal();
 
-    /// <summary>**要画多长**（＝拖出来的框宽）。可能不足一个周期，也可能好几个。</summary>
+    /// <summary>**框宽**（＝横向拖了多远）。正弦 / 余弦里它就是"一个周期"，波浪线里是"要画多长"。</summary>
     public float WaveLengthLocal() => MathF.Abs(WaveEndLocal().X - WaveStartLocal().X);
 
     /// <summary>
-    /// 画出来一共**几个周期**（**可以不是整数**：拖到哪儿画到哪儿，最后一段是半截）。
+    /// 画出来一共**几个周期**。
+    ///   · 正弦 / 余弦：**恒为 1**（框宽就是一个周期）；
+    ///   · 波浪线：`要画多长 ÷ 周期`，**可以不是整数**（拖到哪儿画到哪儿，最后一段是半截）。
     /// 渲染的采样密度也按它算（见 <see cref="WavePointAt"/> 的调用方）。
     /// </summary>
     public float WaveCyclesLocal()
@@ -2123,8 +2155,8 @@ internal sealed class Stroke
     }
 
     /// <summary>
-    /// 振幅 A（恒非负）。**两种曲线的换算不一样**，这是本族唯一一处不对称：
-    ///   · 正弦：起点在轴上，峰到轴的距离就是 A → `A = |dy|`；
+    /// 振幅 A（恒非负）。**余弦和另外两种的换算不一样**，这是本族唯一一处不对称：
+    ///   · 正弦 / **波浪线**：起点在轴上，峰到轴的距离就是 A → `A = |dy|`；
     ///   · 余弦：起点在峰顶，半个周期后到谷，谷离峰顶 `2A` → `A = |dy| / 2`。
     ///
     /// 它俩共同点是"**拖出来的终点都落在曲线的极值点上**"（正弦拖到峰的高度、
@@ -2218,7 +2250,8 @@ internal sealed class Stroke
     //    · 正切**值域无界**，"画到多高"是个**显示选择**（课本一般画到 ±3 左右），
     //      所以纵向那一拖本来就该是"看得见多少"。
     //    · 而它的**形状**由"横竖同一个单位"钉死（π/2 个单位 = 半支长）→
-    //      **不会被拖变形**，也就不需要比例常数。
+    //      **不会被拖变形**，所以不需要"周期 : 振幅"那种比例常数；
+    //      只有一个**下限比例**（`TangentMinAspect`）兜着"别画成一条斜线"（见那一处注释）。
     // =====================================================================
 
     /// <summary>正切那**一支的中心**（＝按下那个点：图象与 x 轴的交点，也是原点）。</summary>
@@ -2231,9 +2264,31 @@ internal sealed class Stroke
     public float TangentHalfSpanLocal()
         => MathF.Max(0.5f, MathF.Abs(TangentEndLocal().X - TangentOriginLocal().X));
 
-    /// <summary>**可视半高**：曲线冲到离原点这么高就截断（框的上下边）。</summary>
+    /// <summary>
+    /// **可视半高**（像素）：曲线冲到离原点这么高就截断（＝框的上下边）。
+    ///
+    /// ⚠ **有一个下限比例**（<see cref="TangentMinAspect"/>）：横竖既然共用一个单位，
+    /// "看得见多高"就直接决定"两头离渐近线还有多远"——框太矮的时候曲线只画到一半就截断了，
+    /// 看着是**一条斜线**、不像正切（用户 2026-09-20 上手就发现了：他要"很窄很高"才贴着渐近线，
+    /// 而那本来不该靠手感去拖）。所以这里把高度**顶到"贴着渐近线"的那个最小比例**：
+    /// 随手拖个方框，画出来也是课本那个样子；拖得更高仍然照你的来（越高越贴）。
+    /// </summary>
     public float TangentHalfHeightLocal()
-        => MathF.Max(0.5f, MathF.Abs(TangentEndLocal().Y - TangentOriginLocal().Y));
+    {
+        float dragged = MathF.Max(0.5f, MathF.Abs(TangentEndLocal().Y - TangentOriginLocal().Y));
+        return MathF.Max(dragged, TangentMinAspect * TangentHalfSpanLocal());
+    }
+
+    /// <summary>
+    /// 正切的**最小高宽比**（可视半高 ÷ 半支长）＝ **3**。
+    ///
+    /// 横竖共用一个单位（见 <see cref="TangentUnitLocal"/>），所以这个比例等价于
+    /// "曲线画到 `θ = arctan(3·π/2) ≈ 1.36 rad ≈ 78°`"，也就是**画到离渐近线只差 13% 的地方**
+    /// —— 课本上的正切正是这个"两头几乎竖直、贴着渐近线"的样子（再往下拖就该截断了）。
+    /// 用户 2026-09-20 的原话："很窄很高的时候会贴着渐近线，说明这个比例的设置比较重要"：
+    /// 把这条**做进引擎**，就不用老师靠手感去拖高拖窄了。
+    /// </summary>
+    public const float TangentMinAspect = 3f;
 
     /// <summary>
     /// **一个单位有多长**（像素）＝ 半支长 ÷ (π/2)。
@@ -2288,6 +2343,9 @@ internal sealed class Stroke
     /// **正切的画法**：按下 = 原点（这一支的中心），拖出 = 以它为中心的框的一角
     ///（横向 = 半支长、纵向 = 可视半高）。两个方向都取绝对值：
     /// 这一支**永远是"左下 → 右上"**，往哪个方向拖都是同一支（它没有"开口朝哪边"这回事）。
+    ///
+    /// ⚠ 存下来的是**你拖的那个值**，"看得见多高"另有下限（见 `TangentHalfHeightLocal`）——
+    /// 读的时候才顶上去，所以**画、紧框、渐近线三者用的是同一个数**。
     /// </summary>
     public void SetTangentBox(float x0, float y0, float x1, float y1, float minSize)
     {
@@ -2301,10 +2359,12 @@ internal sealed class Stroke
 
     /// <summary>
     /// 正切那一支的**采样段数**：两端越靠近渐近线越陡（`tan` 在那儿变化极快），
-    /// 所以按"半支长的像素"给密度，而不是按段数写死。
+    /// 所以按"半支长 **或可视半高**的像素"给密度（高度被下限顶高之后，尾巴也变长了，
+    /// 只看半支长会让那一段看着是折线）。
     /// </summary>
     private int TangentSegmentsLocal()
-        => Math.Clamp((int)MathF.Ceiling(TangentHalfSpanLocal() / 4f), 24, 256);
+        => Math.Clamp((int)MathF.Ceiling(
+               MathF.Max(TangentHalfSpanLocal(), TangentHalfHeightLocal()) / 4f), 24, 512);
 
     /// <summary>
     /// 曲线自己的那个矩形（**局部坐标**）。**全引擎唯一一份**，紧框 / 包围盒 / 脏区都问它。
@@ -2314,7 +2374,8 @@ internal sealed class Stroke
     ///     朝左 / 朝右时控制点管的是"深度 ＋ 半高"，同样是那个矩形）；
     ///   · 双曲线：**`±A × ±B`，就是渐近线的那个矩形**（A / B = x / y 方向的半宽半高）——
     ///     两个朝向同一个式子，见下面那一档；
-    ///   · 正弦：`一个周期宽 × ±A`；余弦：`一个周期宽 × (起点 → 谷底 2A)`。
+    ///   · 正弦：`一个周期宽 × ±A`；余弦：`一个周期宽 × (起点 → 谷底 2A)`；
+    ///     波浪线：`画多长 × 按周期数算到的峰 / 谷`（拖不足一个周期时峰还没到，框跟着收）。
     ///
     /// `axis`（曲线朝向）：**这一档现在谁都没用**——双曲线原来按实/虚分流、各带一个 `√5`，
     /// 改成"渐近线框"之后两个朝向是同一个式子。参数留在签名里是因为它属于"曲线框"这一层的
@@ -2381,8 +2442,11 @@ internal sealed class Stroke
             {
                 // 正切一支：**正好就是那个框**（两条渐近线在左右边上、曲线截断在上下边上）——
                 // 所以紧框 = 框本身，一句就够，而且**精确**（见 TangentAsymptoteLocal）。
+                //
+                // ⚠ 高度那一维必须**和 `TangentHalfHeightLocal` 用同一份算式**（含下限比例）：
+                // 少算这一条，被顶高的那一截就落在紧框外面 —— 脏区少算 → 曲线尾巴留旧像素。
                 float hx = MathF.Max(0.5f, MathF.Abs(p1.X - p0.X));
-                float hy = MathF.Max(0.5f, MathF.Abs(p1.Y - p0.Y));
+                float hy = MathF.Max(MathF.Abs(p1.Y - p0.Y), TangentMinAspect * hx);
                 return new RectF
                 {
                     MinX = p0.X - hx, MinY = p0.Y - hy,
@@ -2392,18 +2456,21 @@ internal sealed class Stroke
 
             default:
             {
-                // 正弦 / 余弦：**按解析式给纵向极值**。
+                // 正弦 / 余弦 / **波浪线**：**按解析式给纵向极值**。
                 //
-                // 2026-09-20 改过：以前这里是"一个周期宽 × 各自的纵向范围"，因为那时
-                // "框宽 = 一个周期"。改成"**框宽 = 画多长**"之后（见 WavePeriodLocal），
-                // 画出来可能**不足一个周期**（峰还没到就收笔）、也可能三四个周期，
-                // 所以要回答"峰到没到、谷到没到"。
+                // 2026-09-20 改过两轮：先是从"一个周期宽 × 各自的纵向范围"改成
+                // "框宽 = 画多长"（那时多周期是正弦自己干的），第十六批又把这两件事**分给两种图形**：
+                //   · 正弦 / 余弦：**框宽就是一个周期** → 周期数恒为 1（峰和谷都在里面）；
+                //   · 波浪线：**周期由振幅定** → 周期数可以是小数（峰还没到就收笔）也可以是好几个。
+                // 所以下面这套"按周期数算纵向极值"的算式对两种都成立，是同一份。
                 //
                 // ⚠ **必须精确，不能采样**：采样写的话极值点大多落在两个采样点之间，
                 // 框会比曲线**小一点点** —— 那点差值正好是脏区少算的部分（曲线末梢会留旧像素）。
                 // 分两种情况讨论虽然啰嗦，但每个都是教科书上的初等结论。
-                float t = WavePeriodPerAmplitude * WaveAmplitudeOf(p0, p1, kind);
                 float len = MathF.Abs(p1.X - p0.X);
+                float t = kind == StrokeKind.Wave
+                    ? WavePeriodPerAmplitude * WaveAmplitudeOf(p0, p1, kind)
+                    : len;                          // 正弦 / 余弦：一个周期 = 框宽（同 WavePeriodLocal）
                 float cycles = t > 1e-3f ? len / t : 1f;
                 float dy = WaveDyOf(p0, p1);
                 float lo, hi;                       // 纵向占到的比例（乘 dy 就是位移）
@@ -2927,7 +2994,7 @@ internal sealed class Stroke
     internal bool IsParametricShape => IsShapeKind(Kind);
 
     /// <summary>
-    /// 这几种是**参数化曲线**（抛物线 / 双曲线 / 正弦 / 余弦）：它们的墨迹框**不能**
+    /// 这几种是**参数化曲线**（抛物线 / 双曲线 / 正弦 / 余弦 / 波浪线 / 正切）：它们的墨迹框**不能**
     /// 用"控制点的外接"来算（理由见 <see cref="CurveBoxOf"/>）。
     ///
     /// **2026-09-20 收敛**：这句话原来在**六个地方各手写了一遍**（紧框 / 重算包围盒 /
@@ -2936,7 +3003,8 @@ internal sealed class Stroke
     /// </summary>
     public static bool IsCurveKind(StrokeKind kind)
         => kind is StrokeKind.Parabola or StrokeKind.Hyperbola
-                or StrokeKind.Sine or StrokeKind.Cosine or StrokeKind.Tangent;
+                or StrokeKind.Sine or StrokeKind.Cosine or StrokeKind.Wave
+                or StrokeKind.Tangent;
 
     /// <summary>
     /// 这几种是**图形**（相对于自由笔迹 / 图像）：用"定义元素"描述、选中后能拖手柄改参数。
@@ -3774,10 +3842,13 @@ internal sealed class Stroke
 
             case StrokeKind.Sine:
             case StrokeKind.Cosine:
+            case StrokeKind.Wave:
             {
-                // 正弦 / 余弦：一条开折线，t 从 0 走到 1（**和 BuildWave 同一份算式**）。
-                // 注意 `WaveTracedPointAt` 而不是 `WavePointAt`：前者按"整条曲线"的比例走，
-                // 后者按"周期数"走（画出来的可能是 2.7 个周期，见 WaveCyclesLocal）。
+                // 正弦 / 余弦 / **波浪线**：一条开折线，t 从 0 走到 1
+                //（**和 BuildWave 同一份算式**）。
+                // 注意 `WaveTracedPointAt` 而不是 `WavePointAt`：前者按"整条曲线"的比例走、
+                // 对三种都对；后者按"周期数"走（正弦恒等于前者，波浪线可能是 2.7 个周期，
+                // 见 WaveCyclesLocal）。
                 if (Points.Count < 2) break;
                 int n = WaveSegmentsLocal();
                 for (int i = 0; i <= n; i++) list.Add(WaveTracedPointAt(i / (float)n));
@@ -3938,6 +4009,7 @@ internal sealed class Stroke
             StrokeKind.Hyperbola => BuildHyperbola(factory),
             StrokeKind.Sine => BuildWave(factory),
             StrokeKind.Cosine => BuildWave(factory),
+            StrokeKind.Wave => BuildWave(factory),
             StrokeKind.Tangent => BuildTangent(factory),
             StrokeKind.Cylinder => BuildSolid(factory),
             StrokeKind.Cone => BuildSolid(factory),
@@ -4182,8 +4254,9 @@ internal sealed class Stroke
     }
 
     /// <summary>
-    /// **正弦 / 余弦**几何：`t` 从 0 走到 1 —— 也就是**从起点画到终点**（几个周期由框宽定，
-    /// 见 <see cref="WaveCyclesLocal"/>；两个种类共用这一份算式，
+    /// **正弦 / 余弦 / 波浪线**几何：`t` 从 0 走到 1 —— 也就是**从起点画到终点**
+    ///（正弦 / 余弦：框宽 = 一个周期；波浪线：框宽 = 画多长、周期由振幅定，
+    /// 见 <see cref="WaveCyclesLocal"/>；三个种类共用这一份算式，
     /// 差别只在 <see cref="WaveYAt"/> 里那一行 sin / cos）。
     ///
     /// 两端不闭合、也没有拐回头的部分（它是一条"图象"，不是封闭图形）。

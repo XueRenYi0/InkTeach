@@ -91,6 +91,7 @@ internal static class IconAtlas
         if (name == "frustum6") { DrawFrustum(ctx, x, y, size, brush, 6); return; }
         if (name == "sine") { DrawWave(ctx, x, y, size, brush, cosine: false); return; }
         if (name == "cosine") { DrawWave(ctx, x, y, size, brush, cosine: true); return; }
+        if (name == "wave") { DrawWaveLine(ctx, x, y, size, brush); return; }
         if (name == "tangent") { DrawTangent(ctx, x, y, size, brush); return; }
         // 直线那三档线型的图标（用户 2026-09-20 定：图形面板里"直线"那一段再点一次
         // 就在实线 / 虚线 / 点线之间换，所以要有三张）。同样只能自绘：
@@ -677,13 +678,48 @@ internal static class IconAtlas
     }
 
     /// <summary>
+    /// **自绘的波浪线图标**：**三个周期**的正弦波（用户 2026-09-20 要的"很多个周期的波浪线"）。
+    ///
+    /// 和「正弦」那一张（`DrawWave`：**一个周期**、铺满整格）**必须一眼分得开**——
+    /// 这正是用户把这两件事分成两格的原因（"正弦和余弦用一个周期的图，还有一个另外的
+    /// 很多周期的波浪的弦函数线"）。所以这一张走"**周期明显变小、个数明显变多**"：
+    /// 同样铺满 3→21，周期 6（正弦那张是 18），振幅 3.5（正弦那张是 6）。
+    ///
+    /// ⚠ 图标是**示意**：画布上的真比例是"周期 = 4 × 振幅"（见 `Stroke.WavePeriodPerAmplitude`），
+    /// 照那个比例在 24 格里只能画出一根直线，看不出是波。
+    /// </summary>
+    private static void DrawWaveLine(ID2D1DeviceContext ctx, float x, float y,
+                                     float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        const int seg = 36;                      // 三个周期共 36 段（每周期 12 段，够滑）
+        const float amp = 3.5f;
+        var prev = Vector2.Zero;
+        for (int i = 0; i <= seg; i++)
+        {
+            float u = i / (float)seg;                       // 0 → 1 走完 3 → 21
+            double ph = u * Math.Tau * 3.0;                 // 三个周期
+            var q = new Vector2(3f + 18f * u, 12f - amp * (float)Math.Sin(ph));
+            if (i > 0) ctx.DrawLine(prev, q, brush, 1.5f, _round);
+            prev = q;
+        }
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
     /// **自绘的正切图标**：一支曲线 ＋ 两条**渐近线**（虚线）。
     ///
     /// 画的是 y = tan x 在 (−π/2, π/2) 上的那一支：过中点 (12,12)、左右各一条竖渐近线。
-    /// 横竖**共用一个单位**（和画布上画的完全一致，见 `Stroke.TangentUnitLocal`）：
-    /// 半支长 8 对应 π/2，曲线冲到 y = 12 ∓ 8 就截断——所以它**并不真的碰到渐近线**，
-    /// 那点缝隙正是"无限接近"的样子（这两条虚线是这个图形唯一的识别特征，
-    /// 少了它们这一张和「双曲线的一支」会看不出区别）。
+    ///
+    /// ⚠ 它是**示意**（不是画布上那个等比例的形状）：真画布上"贴着渐近线"要求高度是宽度的
+    /// 3 倍（见 `Stroke.TangentMinAspect`），24 格里放不下那种细高条，
+    /// 所以这里把曲线**压扁着画**——两个端头都画到 θ = 0.9·(π/2)，也就是**贴着那两条虚线**为止。
+    /// 那两条虚线是这个图形唯一的识别特征（少了它们，这一张会和「双曲线的一支」看不出区别）。
     /// </summary>
     private static void DrawTangent(ID2D1DeviceContext ctx, float x, float y,
                                     float size, ID2D1Brush brush)
@@ -693,22 +729,23 @@ internal static class IconAtlas
                       * Matrix3x2.CreateTranslation(x, y)
                       * saved;
 
-        const float hx = 8f;                             // 半支长（渐近线落在 12 ± hx）
-        const float hy = 8f;                             // 可视半高（曲线冲到这儿截断）
-        float unit = hx / (MathF.PI * 0.5f);             // 横竖共用的单位
-        float thetaMax = MathF.Atan(hy / unit);          // 截断处的 θ
+        const float hx = 4.5f;                   // 渐近线离中点多远（虚线就画在那儿）
+        const float hy = 8.5f;                   // 曲线冲到多高（＝虚线的上下端）
+        const float frac = 0.9f;                 // 画到 π/2 的 90%（再往外就贴着渐近线了）
+        float thetaMax = frac * MathF.PI * 0.5f;
+        float tanMax = MathF.Tan(thetaMax);
 
-        const int seg = 16;                              // 整支的段数（均匀按 θ 采）
-        var prev = new Vector2(12f - hx, 12f - hy);      // 左端（θ = −thetaMax）
+        const int seg = 20;
+        var prev = new Vector2(12f - hx * frac, 12f + hy);
         for (int i = 1; i <= seg; i++)
         {
             float th = -thetaMax + 2f * thetaMax * i / seg;
-            var q = new Vector2(12f + th * unit, 12f - MathF.Tan(th) * unit);
+            var q = new Vector2(12f + hx * (th / (MathF.PI * 0.5f)), 12f - hy * (MathF.Tan(th) / tanMax));
             ctx.DrawLine(prev, q, brush, 1.5f, _round);
             prev = q;
         }
 
-        // 两条渐近线：细虚线，上下铺满图标（±8 = 曲线的截断高度）。
+        // 两条渐近线：细虚线，上下铺满（±hy 就是曲线的截断高度）。
         DashedLine(ctx, new Vector2(12f - hx, 12f - hy), new Vector2(12f - hx, 12f + hy), 2.4f, 2f, 1.2f, brush);
         DashedLine(ctx, new Vector2(12f + hx, 12f - hy), new Vector2(12f + hx, 12f + hy), 2.4f, 2f, 1.2f, brush);
 

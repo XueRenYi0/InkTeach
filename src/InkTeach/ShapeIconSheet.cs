@@ -33,9 +33,10 @@ internal sealed class ShapeIconSheet : IOverlayUi
         ("oval", "椭圆"), ("circle", "圆"), ("triangle", "三角形"),
         ("parallelogram", "平行四边形"), ("arrowRight", "箭头"), ("axes", "坐标系"),
         ("numberline", "数轴（撤了入口）"),
-        // 曲线：抛物线 / 双曲线 / 正弦 / 余弦 / **正切**（第十五批）
+        // 曲线：抛物线 / 双曲线 / 正弦 / 余弦 / 波浪线 / **正切**（第十五、十六批）
         ("parabola", "抛物线（上下）"), ("parabolaRight", "抛物线（左右）"),
-        ("hyperbola", "双曲线"), ("sine", "正弦"), ("cosine", "余弦"), ("tangent", "正切"),
+        ("hyperbola", "双曲线"), ("sine", "正弦"), ("cosine", "余弦"),
+        ("wave", "波浪线"), ("tangent", "正切"),
         // 旋转体
         ("cylinder", "圆柱"), ("cone", "圆锥"), ("conefrustum", "圆台"), ("sphere", "球"),
         // 棱柱一族：三 / 四 / 五 / 六（每一档一张）

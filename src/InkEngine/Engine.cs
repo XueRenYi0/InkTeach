@@ -1632,6 +1632,7 @@ public class InkEngine
         Tool.Hyperbola => "双曲线",
         Tool.Sine => "正弦",
         Tool.Cosine => "余弦",
+        Tool.Wave => "波浪线",
         Tool.Tangent => "正切",
         Tool.Cylinder => "圆柱",
         Tool.Cone => "圆锥",
@@ -3363,7 +3364,7 @@ public class InkEngine
              or Tool.Triangle or Tool.Parallelogram or Tool.Arrow
              or Tool.Coordinate or Tool.NumberLine
              or Tool.Parabola or Tool.Hyperbola or Tool.Sine or Tool.Cosine
-             or Tool.Tangent
+             or Tool.Wave or Tool.Tangent
              or Tool.Cylinder or Tool.Cone or Tool.Cuboid or Tool.Tetrahedron
              or Tool.Prism or Tool.Pyramid or Tool.Frustum
              or Tool.ConeFrustum or Tool.Sphere;
@@ -3608,6 +3609,7 @@ public class InkEngine
         Tool.Hyperbola => StrokeKind.Hyperbola,
         Tool.Sine => StrokeKind.Sine,
         Tool.Cosine => StrokeKind.Cosine,
+        Tool.Wave => StrokeKind.Wave,
         Tool.Tangent => StrokeKind.Tangent,
         Tool.Cylinder => StrokeKind.Cylinder,
         Tool.Cone => StrokeKind.Cone,
@@ -3889,9 +3891,11 @@ public class InkEngine
             return;
         }
 
-        // 正弦 / 余弦：按下 = **起点**（"从 y 轴开始画"），拖出去 = **终点**
-        // （一个周期 ＋ 振幅，两个都由这一拖定下）。
-        if (s.Kind is StrokeKind.Sine or StrokeKind.Cosine)
+        // 正弦 / 余弦 / 波浪线：按下 = **起点**（"从 y 轴开始画"），拖出去 = **终点**。
+        // 正弦 / 余弦：这一拖定下**一个周期**和**振幅**（框宽就是一个周期）；
+        // 波浪线：这一拖定下**画多长**和**振幅**（周期由振幅定，见 Stroke.WavePeriodLocal）。
+        // 三者的算式同一份，差别只在 `WavePeriodLocal` 那一行。
+        if (s.Kind is StrokeKind.Sine or StrokeKind.Cosine or StrokeKind.Wave)
         {
             s.SetWaveBox(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y, ShapeMinAxisLogical * DpiScale);
             _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);

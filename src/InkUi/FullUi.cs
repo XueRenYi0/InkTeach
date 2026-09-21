@@ -828,7 +828,7 @@ public sealed class FullUi : IOverlayUi
     ///
     /// **为什么从"两行"改成"三行"**：第三行凑到 6 个之后，第二行会有 10 段，
     /// 每段宽度掉到 **55 逻辑像素**——而"每段 ≥ 60"是量出来的门槛（图标 18 ＋ 四周留白），
-    /// `--shapebandtest` 里那条断言当场就红了。三行之后每行 8 / 5 / 7 段，
+    /// `--shapebandtest` 里那条断言当场就红了。三行之后每行 8 / 6 / 7 段，
     /// 每段 70 / 96 / 81，都还在门槛之上；而且读法更顺：**曲线一行、旋转体一行、棱柱体一行**。
     /// 代价是开带时面板高一整行（只在指针停在面板上时，画的时候不受影响）。
     ///
@@ -844,10 +844,10 @@ public sealed class FullUi : IOverlayUi
             Tool.Triangle, Tool.Parallelogram, Tool.Arrow,
             Tool.Coordinate,     // 2026-09-19 第二批接在末尾（只撤了它后面的"数轴"那一段）
         },
-        // ② 曲线（第二行）：抛物线 / 双曲线 / 正弦 / 余弦 / **正切**（第十五批）
+        // ② 曲线（第二行）：抛物线 / 双曲线 / 正弦 / 余弦 / **波浪线** / **正切**（第十五、十六批）
         new[]
         {
-            Tool.Parabola, Tool.Hyperbola, Tool.Sine, Tool.Cosine, Tool.Tangent,
+            Tool.Parabola, Tool.Hyperbola, Tool.Sine, Tool.Cosine, Tool.Wave, Tool.Tangent,
         },
         // ③ 立体（第三行）：**旋转体 4 ＋ 棱柱体 3**。
         //   · 旋转体：一次拖出**外接矩形**、一笔画完、被挡住的是"远侧那一圈/半圈"
@@ -2959,6 +2959,9 @@ public sealed class FullUi : IOverlayUi
         Tool.Hyperbola => "hyperbola",
         Tool.Sine => "sine",
         Tool.Cosine => "cosine",
+        // 波浪线（第十六批）：自绘（见 IconAtlas.DrawWaveLine）——**好几个周期**的正弦波，
+        // 和「正弦」那一张（一个周期）一眼能分开。
+        Tool.Wave => "wave",
         // 正切（第十五批）：自绘（见 IconAtlas.DrawTangent）——一支曲线 ＋ 两条渐近线。
         Tool.Tangent => "tangent",
         // 立体图形（2026-09-20 第五批）：同样自绘（见 IconAtlas.DrawCylinder / DrawCone 等）。
