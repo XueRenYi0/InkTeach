@@ -2738,10 +2738,14 @@ public sealed class FullUi : IOverlayUi
         // **有档位的那两段**（点它一下换一档，见 ActivateSegment 的 case 8）：
         //   · 「直线」= 3 档线型（实 / 虚 / 点）；
         //   · 「棱柱」= 4 档边数（三 / 四 / 五 / 六）。
-        // 图标照旧画当前那一档，**下面再加一排档位点**——大而浓的那个是当前档。
+        // 图标照旧画当前那一档，**右边再加一竖列档位点**——大而浓的那个是当前档。
         // 用户 2026-09-20 定：只换图标的话，老师"不知道这一格还能点"（可选的状态是隐形的）。
-        // 代价是这两个图标要比别的段小一号（16 而不是 18）并上移，把那几像素让给点 ——
-        // 只影响这两格，别的段照旧 18。
+        //
+        // **点从"图标下面"挪到了"图标右边"**（还是 2026-09-20，用户看出来的）：
+        // 图形段是"宽 × 26"的长方形（第二行 9 段时每格约 80 宽），而图标只占 18 ——
+        // 左右各有约 30 的空白。横排放在下面的时候，为了挤出那 7 像素高，
+        // 棱柱图标得**压到 16 并整体上移 3.5**；竖着放到右边之后那一列点只占约 7 宽，
+        // 图标就能回到 18 并留在正中。只有这两格有档位，别的段照旧。
         //
         // **档数与当前档都从这一处算**（不在绘制里再列一遍工具名）：
         // 下面 `ShapeToolAt(i)` 判"这是哪一段"，这里判"它有几档、现在是第几档"。
@@ -2758,13 +2762,15 @@ public sealed class FullUi : IOverlayUi
             int pipCur = ShapeToolAt(i) == Tool.Line
                 ? (int)st.LineDash
                 : Math.Clamp(st.PrismSides, st.PrismMinSides, st.PrismMaxSides) - st.PrismMinSides;
-            float icx = (r.MinX + r.MaxX) * 0.5f, icy = (r.MinY + r.MaxY) * 0.5f;
+            // 右边让出这么宽的一条给竖排的点（点距/半径在 `DrawPips` 里，最浓的那个半径 2，
+            //  所以这一列实际占 ~4 宽、居中在这条带的中间）。
+            const float PipStripW = 12f;
             var iconBox = new RectF
             {
-                MinX = r.MinX, MinY = icy - 11.5f, MaxX = r.MaxX, MaxY = icy + 4.5f,
+                MinX = r.MinX, MinY = r.MinY, MaxX = r.MaxX - PipStripW, MaxY = r.MaxY,
             };
-            IconAtlas.DrawCentered(ctx, ShapeIcon(i), iconBox, 16f, Brush(ctx, segInk));
-            DrawPips(ctx, icx, icy + 8f, pipCur, pipCount, segInk);
+            IconAtlas.DrawCentered(ctx, ShapeIcon(i), iconBox, 18f, Brush(ctx, segInk));
+            DrawPips(ctx, r.MaxX - PipStripW * 0.5f, (r.MinY + r.MaxY) * 0.5f, pipCur, pipCount, segInk);
             return;
         }
 
@@ -2772,26 +2778,26 @@ public sealed class FullUi : IOverlayUi
     }
 
     /// <summary>
-    /// 画一排**档位点**：告诉老师"这一格有几档、现在是第几档"。
+    /// 画一**竖列档位点**：告诉老师"这一格有几档、现在是第几档"（从上往下 = 第 1 档 → 第 n 档）。
     ///
     /// 当前档用**大 + 浓**两个差别，其余的小一半、透明度 35%：
     /// 用"大小"而不是只用颜色，是因为这一段可能是**选中态**（整个格子铺着品牌色、
     /// 前景是白的），那时候用颜色区分就完全失效了。
     ///
-    /// 点距 5、半径 2 / 1.5，是照 26 逻辑像素的段高配的：整排连点占 7 像素高，
-    /// 段高 26 里塞得下（图标让出下半部分，见 DrawSegment 里那一支）。
+    /// 点距 5、半径 2 / 1.5：4 个点竖排连起来占 19 高，段高 26 里塞得下（上下各余 3.5），
+    /// 横着只占 4 宽——这就是"点挪到图标右边"能省出来给图标的那点地方（见 `DrawSegment`）。
     /// </summary>
     private void DrawPips(ID2D1DeviceContext ctx, float cx, float cy,
                           int cur, int count, Color4 fg)
     {
         const float gap = 5f;
-        float x0 = cx - (count - 1) * gap * 0.5f;
+        float y0 = cy - (count - 1) * gap * 0.5f;
         for (int k = 0; k < count; k++)
         {
             bool on = k == cur;
             var c = on ? fg : new Color4(fg.R, fg.G, fg.B, 0.35f);
             float rad = on ? 2f : 1.5f;
-            ctx.FillEllipse(new Ellipse(new Vector2(x0 + k * gap, cy), rad, rad), Brush(ctx, c));
+            ctx.FillEllipse(new Ellipse(new Vector2(cx, y0 + k * gap), rad, rad), Brush(ctx, c));
         }
     }
 
