@@ -192,7 +192,7 @@ public sealed class FullUi : IOverlayUi
         (Row.BoardStep, "底纹间距", false, false),
         // 坐标系网格（2026-09-19 第三批）。
         //
-        // 坐标系 / 数轴这两个**画图种类**已经进了上带（见 ShapeBandOrder），
+        // 坐标系 / 数轴这两个**画图种类**已经进了上带（见 ShapeRows），
         // 抽屉里只留这个"设置"。原先这里有一行灰着的「学科工具」占位，
         // 2026-09-19 一度被三行真东西（坐标系/数轴/网格）替掉，随后用户要求
         // "所有的图形都从图形框那个入口进"，于是两个工具挪走上带、这一行留下。
@@ -501,8 +501,9 @@ public sealed class FullUi : IOverlayUi
     /// 所以变高是往上/往下长，不会把主条顶走。
     /// </summary>
     private float BandHeightLogical()
-        => _bandCell == ShapeCell && ShapeBandOrder2.Length > 0
-            ? Tokens.BandHeight + Tokens.SegmentHeight + ShapeRowGap
+        => _bandCell == ShapeCell && ShapeRows.Length > 1
+            ? Tokens.BandHeight
+              + (ShapeRows.Length - 1) * (Tokens.SegmentHeight + ShapeRowGap)
             : Tokens.BandHeight;
 
     /// <summary>色线 / 设置条：数值够大了才按"设置条"那套画与命中（中间态归短的这边）。</summary>
@@ -652,7 +653,7 @@ public sealed class FullUi : IOverlayUi
     //
     // 一条规则贯穿到底：**上带显示"现在这个按钮的设置"**。
     // 笔/荧光笔 = 12 色片 ＋ 粗细；激光 = 光点大小；橡皮 = 整笔/面积 ＋ 大小；
-    // 选择 = 矩形/套索；白板 = 三种板色；图形 = 七种图形（见 ShapeBandOrder）。
+    // 选择 = 矩形/套索；白板 = 三种板色；图形 = 整块图形面板（见 ShapeRows）。
     // 没有设置项的（后撤/重做/更多/截屏）就不长上带——不做一排空按钮。
 
     private float BandCenterY() => (BandRect().MinY + BandRect().MaxY) * 0.5f;
@@ -751,20 +752,22 @@ public sealed class FullUi : IOverlayUi
             float by = BandCenterY() - Tokens.SegmentHeight * 0.5f;
             return new RectF { MinX = bx, MinY = by, MaxX = bx + bw, MaxY = by + Tokens.SegmentHeight };
         }
-        // **图形那一格是两行**（2026-09-20 第五批：第一行 8 个高频图形、第二行 4 种曲线）。
-        // 行/列从"这一段排第几"推出来（见 ShapeToolAt / ShapeSegmentRow 那两张表），
-        // 两行的段宽各自按"可用宽度 ÷ 本行段数"算——所以第二行只有 4 段，反而更宽。
-        // 两行以带子中线为界上下分（各让出半个行间距），和段间距 6 是同一套网格。
+        // **图形那一格是好几行**（2026-09-20 第十三批起是 3 行，见 `ShapeRows`）。
+        // 行/列从"这一段排第几"推出来（`ShapeSegmentRow` / `ShapeSegmentCol`），
+        // 每行的段宽各自按"可用宽度 ÷ **本行**段数"算——所以 4 段的曲线那行反而更宽。
+        // 整块**以带子中线为中心**上下摊开（N=2 时就是老写法"各让出半个行间距"，
+        // 所以那一版的位置一个像素没动），行间距和段间距是同一个 6。
         if (_bandCell == ShapeCell)
         {
             int row = ShapeSegmentRow(i);
+            int col = ShapeSegmentCol(i);
             int cols = ShapeRowCount(row);
-            int col = row == 0 ? i : i - ShapeBandOrder.Length;
+            int rows = ShapeRows.Length;
             float sw = Math.Min(120f, (total - (cols - 1) * 6f) / cols);
             float sx = BandContentLeft() + col * (sw + 6f);
-            float sy = row == 0
-                ? BandCenterY() - Tokens.SegmentHeight - ShapeRowGap * 0.5f
-                : BandCenterY() + ShapeRowGap * 0.5f;
+            float rowsTop = BandCenterY()
+                          - (rows * Tokens.SegmentHeight + (rows - 1) * ShapeRowGap) * 0.5f;
+            float sy = rowsTop + row * (Tokens.SegmentHeight + ShapeRowGap);
             return new RectF { MinX = sx, MinY = sy, MaxX = sx + sw, MaxY = sy + Tokens.SegmentHeight };
         }
         float w = Math.Min(120f, (total - (count - 1) * 6f) / count);
@@ -801,9 +804,10 @@ public sealed class FullUi : IOverlayUi
     /// 第三段是用户 2026-09-17 要的："粘贴功能，因为其他地方使用复制功能可以到剪贴板，
     /// 但如果是触摸屏或者手写板可能没有键盘"（等于把 `Ctrl+V` 搬到屏幕上）。
     ///
-    /// 图形那一格是 **7 段**（2026-09-19 补上第二批三种之后）：段数和顺序都取自
-    /// <see cref="ShapeBandOrder"/>，不再写死数字——段宽是按"可用宽度 ÷ 段数"算的
-    /// （见 <see cref="SegmentRect"/>），加图形不用再动布局，也不会挤成一团。
+    /// 图形那一格是**整块图形面板**（18 段、三行）：段数和顺序都取自
+    /// <see cref="ShapeRows"/>，不再写死数字——段宽是按"可用宽度 ÷ **本行**段数"算的
+    /// （见 <see cref="SegmentRect"/>），加图形不用再动布局，也不会挤成一团
+    /// （挤不下会有 `--shapebandtest` 里"每段 ≥ 60 宽"那条兜着）。
     /// </summary>
     private int BandSegmentCount => _bandCell switch
     {
@@ -811,104 +815,108 @@ public sealed class FullUi : IOverlayUi
     };
 
     /// <summary>
-    /// **图形种类在上带里的顺序**（从左到右）：
-    /// 直线 → 矩形 → 椭圆 → 圆 → 三角形 → 平行四边形 → 箭头 → 坐标系。
+    /// **图形那一格的段表**（一行一个数组，从上到下、从左到右）——这是整个面板里
+    /// **唯一一份**"点哪一段切什么工具 / 哪段高亮 / 画哪张图标"的来源
+    /// （`ShapeToolAt` / `ActivateSegment` / `IsSegmentActive` / `ShapeIconFor` 都读它）。
+    /// 各写一份的话，加一种图形就会漏掉一处——这条教训仓库里吃过好几次。
     ///
-    /// 为什么把三种新的插在"椭圆"后面、把箭头挪到最后：
-    ///   · 矩形 / 椭圆 / 圆 是"一按一拖、拖出来的那个框就是它"的同一类（都只有一个中心，
-    ///     四个角由外框定），**圆紧挨着椭圆**最顺——两个都是"中心 + 半径"的东西，
-    ///     分家反而要多找一眼；
-    ///   · 三角形 / 平行四边形 虽然也是拖一个外框，但形状是**按固定规则从框里归一出来的**
-    ///     （三角形底边水平、左右对称；平行四边形上边固定右移 1/4 宽），排在上一类后面；
-    ///   · 箭头是"拖一条线"那一类，和直线一头一尾，所以被挤到最后。
-    /// 原有的四段**相对次序一个没动**（直线 < 矩形 < 椭圆 < 箭头），只是箭头挪到了末尾
-    /// ——上带那四段的位置语义早就在老师的肌肉记忆里了，不重排。
+    /// **三行**（2026-09-20 第十三批定的，见 计划-图形工具.md §35）：
+    ///   ① **高频图形 8 个**（用户 2026-09-19 那批，**位置一个都不许动**——肌肉记忆）；
+    ///   ② **4 种曲线**（2026-09-20 第五批："图形框里加第二列，教师实际使用时高频的只要一行"）；
+    ///   ③ **6 个立体图形**（第五批搬来圆柱 / 圆锥，第十一/十二批加棱柱 / 棱锥 / 棱台，
+    ///      第十三批加圆台）。
     ///
-    /// 2026-09-19 第二批加坐标系 / 数轴时，用户看过之后要求**它们也走这里**
-    /// （原话："我希望所有的图形都放到我们现成的面板上，也就是图形框里面，
-    /// 从那个地方入口，不要放到'更多'里面"）。于是接了**末尾**两段：
-    ///   · 接在末尾 = 前面七段的编号一个不变（`--shapebandtest` 里那些段号一个不用改）；
-    ///   · 坐标系在数轴前面（大件在前，也和后加的两个热键 F / N 的顺序一致）；
-    ///   · 它们和前面七段**不混排**：这两个是"一节课画一次"的学科件，
-    ///     紧挨着自成一组，比插在矩形和椭圆之间更好找。
+    /// **为什么从"两行"改成"三行"**：第三行凑到 6 个之后，第二行会有 10 段，
+    /// 每段宽度掉到 **55 逻辑像素**——而"每段 ≥ 60"是量出来的门槛（图标 18 ＋ 四周留白），
+    /// `--shapebandtest` 里那条断言当场就红了。三行之后每行 8 / 4 / 6 段，
+    /// 每段 70 / 120 / 95，都很宽松；而且读法更顺：**曲线一行、旋转体一行、棱柱体一行**。
+    /// 代价是开带时面板高一整行（只在指针停在面板上时，画的时候不受影响）。
     ///
-    /// **2026-09-19 稍后又撤掉了末尾那一段「数轴」**（用户："把快捷栏最后一个图标删掉，
-    /// 我感觉用不到——图形里面有一个坐标系，只有向右箭头的那个坐标系"）。
-    /// 于是上带 **8 段**。**只撤入口**：`Tool.NumberLine` / `StrokeKind.NumberLine`
-    /// 都留着——存档里存的是一条字节，删了就是"打开旧板书少一条"（见 计划-图形工具.md 11.2）。
-    /// 撤掉之后"每段 ≥ 60 逻辑像素"那条自检反而更宽松了。
-    ///
-    /// 这张表是**唯一来源**：画哪段（<see cref="ShapeIcon"/>）、点哪段切什么工具
-    /// （<see cref="ActivateSegment"/>）、哪段高亮（<see cref="IsSegmentActive"/>）、
-    /// 主条那一格画什么图标（<see cref="ShapeIconFor"/>）都读它——
-    /// 各写一份的话，加一种图形就会漏掉一处。
+    /// 第一行那八个的**相对次序一个没动**（直线 < 矩形 < 椭圆 < 箭头 是老师最早的肌肉记忆，
+    /// 2026-09-19 又接了坐标系），这条规矩从第一版起就没破过。
     /// </summary>
-    private static readonly Tool[] ShapeBandOrder =
+    private static readonly Tool[][] ShapeRows =
     {
-        Tool.Line, Tool.Rectangle, Tool.Ellipse, Tool.Circle,
-        Tool.Triangle, Tool.Parallelogram, Tool.Arrow,
-        Tool.Coordinate,
-    };
-
-    /// <summary>
-    /// **第二行**的图形（2026-09-20 第五批，用户定："图形框里加第二列，
-    /// 教师实际使用时高频的只有一行就行，到时候再调"）：
-    /// 抛物线 → 双曲线 → 正弦 → 余弦。
-    ///
-    /// 三件事照着用户那句话定：
-    ///   · **第一行一个都不动**——那八个是肌肉记忆（`--shapebandtest` 里那些按段号点击的
-    ///     断言，也正因此一个都不用改）；
-    ///   · 第二行放"一节课画一两次"的曲线，所以**只有 4 段**，每段反而比第一行宽；
-    ///   · 两行的段数写在**这两张表**里，段宽照旧"可用宽度 ÷ 本行段数"算
-    ///     （见 <see cref="SegmentRect"/>），所以以后往第二行加图形不用动布局。
-    ///
-    /// 它是"点哪一段切什么工具 / 哪段高亮 / 画哪张图标"的**唯一来源**（和第一行一样）：
-    /// 三处各写一份的话，加一种图形就会漏掉一处（这条教训仓库里吃过三次）。
-    /// </summary>
-    private static readonly Tool[] ShapeBandOrder2 =
-    {
-        Tool.Parabola, Tool.Hyperbola, Tool.Sine, Tool.Cosine,
-        // 2026-09-20 第五批：立体图形（照 InkClass 的 case 6/7/9/26 搬过来）。
-        // 第二行从 4 段长到 8 段（和第一行一样宽）——段宽是"可用宽度 ÷ 本行段数"算出来的，
-        // 加段不用动布局。
-        Tool.Cylinder, Tool.Cone,
-        // 2026-09-20 第十一批：棱柱（3/4/5/6 棱柱 ＋ 直/斜，用户提的，见 计划-图形工具.md §32）。
-        // 第二行因此从 8 段长到 9 段——段宽是"可用宽度 ÷ 本行段数"算出来的，加段不用动布局。
-        Tool.Prism,
-        // 2026-09-20 第十二批：棱锥 / 棱台（用户提的，见 §34）。它们和棱柱**同一族**
-        //（底面正 n 边形 ＋ 顶上一个中心、一样两笔、一样 3/4/5/6 档、一样有 "直" 吸附），
-        // 所以紧挨着棱柱排（"三兄弟挨着"最好找）。
-        Tool.Pyramid, Tool.Frustum,
-        // ⚠ **长方体 / 四面体从这一行撤掉了**（同一天，用户："那两格似乎可以删除掉了，没用了"）：
-        // 四棱柱（直）就是长方体、三棱锥就是四面体，它们被上面那几段覆盖了。
-        // 撤的是**入口**，不是画法——`Tool.Cuboid` / `StrokeKind.Cuboid` 与整条画法都留着，
+        // ① 高频图形（第一行，位置冻结）
+        new[]
+        {
+            Tool.Line, Tool.Rectangle, Tool.Ellipse, Tool.Circle,
+            Tool.Triangle, Tool.Parallelogram, Tool.Arrow,
+            Tool.Coordinate,     // 2026-09-19 第二批接在末尾（只撤了它后面的"数轴"那一段）
+        },
+        // ② 曲线（第二行）
+        new[]
+        {
+            Tool.Parabola, Tool.Hyperbola, Tool.Sine, Tool.Cosine,
+        },
+        // ③ 立体（第三行）：**旋转体 3 ＋ 棱柱体 3**，两组各自"柱 / 锥 / 台"同序。
+        //   · 旋转体：一次拖出**外接矩形**、一笔画完、被挡住的是下底上半圈；
+        //   · 棱柱体：**两笔**（底面外接框 → 顶上那个中心）、3/4/5/6 档、"直"那档有轻微吸附。
+        // ⚠ 圆台（第十三批）紧挨着圆柱 / 圆锥；棱柱 / 棱锥 / 棱台三兄弟挨着。
+        // ⚠ **长方体 / 四面体不在这张表里了**（2026-09-20 第十二批撤的**入口**）：
+        // 四棱柱（直）就是长方体、三棱锥就是四面体，被上面那几段覆盖了。
+        // 撤的是入口，不是画法——`Tool.Cuboid` / `StrokeKind.Cuboid` 与整条画法都留着，
         // 旧板书里的长方体照样能打开、能选中、能删（同 2026-09-19 撤「数轴」的规矩，见 11.2）。
-        // 第二行**还是 9 段**（去掉 2 段、加上 2 段）——所以段宽一点没变。
+        new[]
+        {
+            Tool.Cylinder, Tool.Cone, Tool.ConeFrustum,
+            Tool.Prism, Tool.Pyramid, Tool.Frustum,
+        },
     };
 
-    /// <summary>图形那一格在上带里的下标（两行都在这一个格子里）。</summary>
+    /// <summary>图形那一格在上带里的下标（三行都在这一个格子里）。</summary>
     private const int ShapeCell = 8;
 
-    /// <summary>图形那一格一共几段（两行加起来）——命中与绘制的循环都用它。</summary>
-    private static int ShapeSegmentCount => ShapeBandOrder.Length + ShapeBandOrder2.Length;
+    /// <summary>图形那一格一共几段（各行加起来）——命中与绘制的循环都用它。</summary>
+    private static int ShapeSegmentCount
+    {
+        get
+        {
+            int sum = 0;
+            foreach (var row in ShapeRows) sum += row.Length;
+            return sum;
+        }
+    }
+
+    /// <summary>第 `row` 行有几段（决定本行的段宽）。</summary>
+    private static int ShapeRowCount(int row)
+        => row >= 0 && row < ShapeRows.Length ? ShapeRows[row].Length : 0;
 
     /// <summary>
-    /// 第 `i` 段（在图形那一格里，**两行拉平编号**：前 8 个是第一行、接着 4 个是第二行）
-    /// 对应哪个工具。越界回第一段——宁可画错一个图标，也不让下标越界。
+    /// 第 `i` 段（在图形那一格里，**各行从上到下、行内从左到右拉平编号**）
+    /// 在第几行。越界回第 0 行。
+    /// </summary>
+    private static int ShapeSegmentRow(int i)
+    {
+        if (i < 0) return 0;
+        int seen = 0;
+        for (int r = 0; r < ShapeRows.Length; r++)
+        {
+            seen += ShapeRows[r].Length;
+            if (i < seen) return r;
+        }
+        return ShapeRows.Length - 1;
+    }
+
+    /// <summary>第 `i` 段在**它那一行里**排第几（画/命中的 x 用它）。</summary>
+    private static int ShapeSegmentCol(int i)
+    {
+        int row = ShapeSegmentRow(i);
+        int before = 0;
+        for (int r = 0; r < row; r++) before += ShapeRows[r].Length;
+        return i - before;
+    }
+
+    /// <summary>
+    /// 第 `i` 段对应哪个工具。越界回第一段——宁可画错一个图标，也不让下标越界。
     /// </summary>
     private static Tool ShapeToolAt(int i)
     {
-        if (i < 0) return ShapeBandOrder[0];
-        if (i < ShapeBandOrder.Length) return ShapeBandOrder[i];
-        int j = i - ShapeBandOrder.Length;
-        return j < ShapeBandOrder2.Length ? ShapeBandOrder2[j] : ShapeBandOrder[0];
+        int row = ShapeSegmentRow(i);
+        int col = ShapeSegmentCol(i);
+        var cells = ShapeRows[row];
+        return col >= 0 && col < cells.Length ? cells[col] : ShapeRows[0][0];
     }
-
-    /// <summary>这一段在第几行（0 = 第一行高频图形、1 = 第二行曲线）。</summary>
-    private static int ShapeSegmentRow(int i) => i < ShapeBandOrder.Length ? 0 : 1;
-
-    /// <summary>这一行有几段（决定段宽）。</summary>
-    private static int ShapeRowCount(int row) => row == 0 ? ShapeBandOrder.Length : ShapeBandOrder2.Length;
 
     /// <summary>
     /// 这个工具**在图形面板里有没有入口**（点主条那一格时用它判断"要不要偷偷换工具"）。
@@ -918,13 +926,17 @@ public sealed class FullUi : IOverlayUi
     /// 两个名字撞着、语义不同，2026-09-20 顺手把这个改成 `HasShapeEntry`：
     /// **有入口** ⊂ **能画**，差的就是数轴那一个。
     ///
-    /// 判据是**那两张段表**（`ShapeBandOrder` / `ShapeBandOrder2`）——它们是"点哪一段切什么
-    /// 工具 / 哪段高亮 / 画哪张图标"的唯一来源，所以这里 IndexOf 一下就够，
+    /// 判据是**那张段表**（`ShapeRows`，一行一个数组）——它是"点哪一段切什么
+    /// 工具 / 哪段高亮 / 画哪张图标"的唯一来源，所以这里扫一下就够，
     /// 加图形只改表（见 2026-09-19 那一轮：这里曾经是"上带七段 **或** 坐标系/数轴那一段"，
     /// 两者合流之后收敛回一句）。
     /// </summary>
     private static bool HasShapeEntry(Tool t)
-        => Array.IndexOf(ShapeBandOrder, t) >= 0 || Array.IndexOf(ShapeBandOrder2, t) >= 0;
+    {
+        foreach (var row in ShapeRows)
+            if (Array.IndexOf(row, t) >= 0) return true;
+        return false;
+    }
 
     /// <summary>这个工具的粗细范围。**界面管范围，引擎管钳位**——引擎那边是 0.5～64。</summary>
     private (float Min, float Max) WidthRange(Tool tool) => tool switch
@@ -2131,7 +2143,7 @@ public sealed class FullUi : IOverlayUi
     private static int CellForTool(Tool t)
     {
         // 七种图形共用第 8 格（哪一种是哪一段由上带里的高亮标出来）。
-        // 判据走 HasShapeEntry 而不是再列一遍七个名字：加一种图形只改 ShapeBandOrder。
+        // 判据走 HasShapeEntry 而不是再列一遍图形名字：加一种图形只改 ShapeRows。
         if (HasShapeEntry(t)) return 8;
         return t switch
         {
@@ -2924,7 +2936,9 @@ public sealed class FullUi : IOverlayUi
         // 立体图形（2026-09-20 第五批）：同样自绘（见 IconAtlas.DrawCylinder / DrawCone 等）。
         Tool.Cylinder => "cylinder",
         Tool.Cone => "cone",
-        // ⚠ 长方体 / 四面体 2026-09-20 第十二批**撤了面板入口**（见 ShapeBandOrder2 那段），
+        // 圆台（第十三批）：自绘的第三张旋转体图标（见 IconAtlas.DrawConeFrustum）。
+        Tool.ConeFrustum => "conefrustum",
+        // ⚠ 长方体 / 四面体 2026-09-20 第十二批**撤了面板入口**（见 ShapeRows 里立体那行），
         // 但它们的两张图标留着——主条那一格在"选中的是旧板书里的一个长方体"时还要画它。
         Tool.Cuboid => "cuboid",
         Tool.Tetrahedron => "tetrahedron",
@@ -3265,6 +3279,12 @@ public sealed class FullUi : IOverlayUi
     /// <summary>自检用：这个工具在图形面板里有没有入口（见 <see cref="HasShapeEntry"/>）。</summary>
     internal static bool HasShapeEntryForTest(Tool t) => HasShapeEntry(t);
 
+    /// <summary>自检用：图形那一格排了**几行**（自检要靠它把各段分回行里，去验"行不重叠"）。</summary>
+    internal static int ShapeRowCountForTest => ShapeRows.Length;
+
+    /// <summary>自检用：第 `row` 行**几段**（自检按"行"分组时要知道每行的段数）。</summary>
+    internal static int ShapeRowLengthForTest(int row) => ShapeRowCount(row);
+
     /// <summary>
     /// 自检用：这个工具在图形那一格里是**第几段**（两行拉平编号；没入口就 −1）。
     ///
@@ -3274,10 +3294,14 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     internal static int ShapeSegmentIndexForTest(Tool t)
     {
-        int i = Array.IndexOf(ShapeBandOrder, t);
-        if (i >= 0) return i;
-        int j = Array.IndexOf(ShapeBandOrder2, t);
-        return j >= 0 ? ShapeBandOrder.Length + j : -1;
+        int seen = 0;
+        foreach (var row in ShapeRows)
+        {
+            int j = Array.IndexOf(row, t);
+            if (j >= 0) return seen + j;
+            seen += row.Length;
+        }
+        return -1;
     }
 
     /// <summary>自检用：滑条的矩形。</summary>

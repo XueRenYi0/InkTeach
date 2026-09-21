@@ -3363,7 +3363,7 @@ public class InkEngine
              or Tool.Coordinate or Tool.NumberLine
              or Tool.Parabola or Tool.Hyperbola or Tool.Sine or Tool.Cosine
              or Tool.Cylinder or Tool.Cone or Tool.Cuboid or Tool.Tetrahedron
-             or Tool.Prism or Tool.Pyramid or Tool.Frustum;
+             or Tool.Prism or Tool.Pyramid or Tool.Frustum or Tool.ConeFrustum;
 
     /// <summary>
     /// **一笔**做什么：把"这一笔拖到的位置"写进半成品的几何。
@@ -3612,6 +3612,7 @@ public class InkEngine
         Tool.Prism => StrokeKind.Prism,
         Tool.Pyramid => StrokeKind.Pyramid,
         Tool.Frustum => StrokeKind.Frustum,
+        Tool.ConeFrustum => StrokeKind.ConeFrustum,
         _ => StrokeKind.Arrow,
     };
 

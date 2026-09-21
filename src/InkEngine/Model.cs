@@ -173,6 +173,18 @@ public enum Tool
     /// ⚠ 因此**拖得越高、看起来越"尖"**是错觉：上底大小由比例定，只跟着下底走。
     /// </summary>
     Frustum = 26,
+
+    /// <summary>
+    /// **圆台**（2026-09-20 第十三批，用户："再加一个圆台"）：<see cref="Cone"/> 截掉上面一截。
+    ///
+    /// 画法和 <see cref="Cylinder"/> / <see cref="Cone"/> **一模一样**：
+    /// **拖一个外接矩形，一笔画完**（左右 = 下底直径、上下 = 总高）。上底多大不靠拖——
+    /// 按固定比例缩（<see cref="ShapeSpec.FrustumTopScale"/>，和「棱台」同一个数）。
+    ///
+    /// 所以它是个**一笔**图形（不在 `Engine.PlanOf` 那张多笔表里），
+    /// 也没有档位点（和圆柱 / 圆锥一样）。
+    /// </summary>
+    ConeFrustum = 27,
 }
 
 /// <summary>An axis-aligned rectangle in virtual-desktop pixels.</summary>
@@ -484,6 +496,21 @@ internal enum StrokeKind
     /// 上下两面都是 n 边形，所以底面一圈、顶面一圈、n 条侧棱都在。
     /// </summary>
     Frustum = 21,
+
+    /// <summary>
+    /// **圆台**（2026-09-20 第十三批，用户："再加一个圆台"）：圆锥**截掉上面一截**剩下的部分——
+    /// 上下两个面都是圆、下面的比上面大。
+    ///
+    /// 和 <see cref="Cylinder"/> / <see cref="Cone"/> 同一族（都是一次拖出**外接矩形**、
+    /// 一笔画完），所以它**没有多笔**、也没进 `Engine.PlanOf` 那张表。
+    /// 上下底各是一个椭圆，画法与实虚也**和圆柱 / 圆锥共用一份**（见 <see cref="SolidPieces"/>）：
+    /// 上底整圈实线 ＋ 下底下半圈实线 ＋ 两条母线（收进去），**被挡住的是下底的上半圈**（虚线）——
+    /// 这些和圆柱完全一样，唯一的差别是"上底小一圈"。
+    ///
+    /// ⚠ 值**只能追加在末尾**：`Kind` 是要写进存档的（见 InkSerializer），
+    /// 插在中间会把老文件里所有后面的种类改成别的意思。
+    /// </summary>
+    ConeFrustum = 22,
 }
 
 /// <summary>
@@ -983,9 +1010,10 @@ internal sealed class Stroke
 
         switch (Kind)
         {
-            // ---- 圆柱 / 圆锥：可见的几笔 ＋ 被挡住的那半圈（细虚线）----
+            // ---- 圆柱 / 圆锥 / 圆台：可见的几笔 ＋ 被挡住的那半圈（细虚线）----
             case StrokeKind.Cylinder:
             case StrokeKind.Cone:
+            case StrokeKind.ConeFrustum:
                 if (Points.Count < 2) break;
                 list.AddRange(SolidPieces(hidden: false));
                 list.AddRange(SolidPieces(hidden: true));
@@ -2646,7 +2674,7 @@ internal sealed class Stroke
         => kind is StrokeKind.Line or StrokeKind.Arrow or StrokeKind.Circle or StrokeKind.Ellipse
                 or StrokeKind.Triangle or StrokeKind.Parallelogram
                 or StrokeKind.Coordinate or StrokeKind.NumberLine
-                or StrokeKind.Cylinder or StrokeKind.Cone
+                or StrokeKind.Cylinder or StrokeKind.Cone or StrokeKind.ConeFrustum
                 or StrokeKind.Cuboid or StrokeKind.Tetrahedron
                 or StrokeKind.Prism or StrokeKind.Pyramid or StrokeKind.Frustum
            || IsCurveKind(kind);
@@ -3296,8 +3324,9 @@ internal sealed class Stroke
 
             case StrokeKind.Cylinder:
             case StrokeKind.Cone:
+            case StrokeKind.ConeFrustum:
             {
-                // 立体图形：轮廓 = **底面一圈 ＋（圆柱）顶面一圈 /（圆锥）两条母线**。
+                // 立体图形：轮廓 = **底面一圈 ＋（圆柱 / 圆台）顶面一圈 /（圆锥）两条母线**。
                 // 拿"外接矩形"四边当轮廓不行：椭圆弧与矩形之间那块是空的，
                 // 橡皮从那儿划过会把整个立体删掉（和双曲线"两支之间不能连线"同一类问题）。
                 // 两段之间放**抬笔标记**，免得连出一条横穿包围盒的假线。
@@ -3320,6 +3349,20 @@ internal sealed class Stroke
                     list.Add(OutlineBreak);
                     list.Add(new Vector2(cx + rx, topCy));
                     list.Add(new Vector2(cx + rx, botCy));
+                }
+                else if (Kind == StrokeKind.ConeFrustum)
+                {
+                    // 圆台：上底那一圈换成**小一圈**的椭圆，两条母线跟着**收进去**
+                    //（母线一样要列——理由同上，少了它们橡皮够不着这两条线）。
+                    var (tc, trx, try_) = ConeFrustumTopLocal();
+                    for (int i = 0; i <= n; i++)
+                        list.Add(EllipseArcPoint(tc, trx, try_, i / (float)n));
+                    list.Add(OutlineBreak);
+                    list.Add(new Vector2(cx - rx, botCy));
+                    list.Add(new Vector2(tc.X - trx, tc.Y));
+                    list.Add(OutlineBreak);
+                    list.Add(new Vector2(cx + rx, botCy));
+                    list.Add(new Vector2(tc.X + trx, tc.Y));
                 }
                 else
                 {
@@ -3462,9 +3505,9 @@ internal sealed class Stroke
             return null;
         }
 
-        // **立体图形被挡住的那几笔**（圆柱 / 圆锥的底面上半圈、长方体被挡的三条棱）：
+        // **立体图形被挡住的那几笔**（圆柱 / 圆锥 / 圆台的下底上半圈、长方体被挡的三条棱）：
         // 恒定细虚线。
-        if (Kind is StrokeKind.Cylinder or StrokeKind.Cone)
+        if (Kind is StrokeKind.Cylinder or StrokeKind.Cone or StrokeKind.ConeFrustum)
         {
             Geometry2 = BuildSolidHidden(factory);
             _builtRevision2 = Revision;
@@ -3531,6 +3574,7 @@ internal sealed class Stroke
             StrokeKind.Cosine => BuildWave(factory),
             StrokeKind.Cylinder => BuildSolid(factory),
             StrokeKind.Cone => BuildSolid(factory),
+            StrokeKind.ConeFrustum => BuildSolid(factory),
             StrokeKind.Cuboid => BuildCuboid(factory, hidden: false),
             StrokeKind.Tetrahedron => BuildTetra(factory),
             StrokeKind.Prism => BuildPrism(factory, hidden: false),
@@ -3864,6 +3908,25 @@ internal sealed class Stroke
     {
         var (x0, y0, x1, _) = SolidRectLocal();
         return new Vector2((x0 + x1) * 0.5f, y0);
+    }
+
+    /// <summary>
+    /// **圆台的上底**那个椭圆（圆心 ＋ 两个半轴，局部坐标）——它和 <see cref="Cylinder"/> /
+    /// <see cref="Cone"/> 唯一的差别就在这一处。
+    ///
+    /// 上底 = 下底**同形缩一个固定比例**（<see cref="ShapeSpec.FrustumTopScale"/>，
+    /// 和「棱台」用的是**同一个数**——两个台体在面板上挨着，看着该是同一个收法）：
+    ///   · 两个半轴**都乘那个比例**（圆还是圆，只是小了）；
+    ///   · 圆心**从上边往里缩 `ry × 比例`**（不是缩 `ry`）——这样上底椭圆正好与矩形上边
+    ///     **相切**，画出来的东西刚好占满拖出来的那个矩形（和圆柱 / 圆锥同一条老规矩：
+    ///     范围好算、紧框不会漏、看着完全一样）。
+    /// </summary>
+    public (Vector2 Center, float Rx, float Ry) ConeFrustumTopLocal()
+    {
+        var (cx, _, _, rx, ry) = SolidEllipsesLocal();
+        var (_, y0, _, _) = SolidRectLocal();
+        float k = ShapeSpec.FrustumTopScale;
+        return (new Vector2(cx, y0 + ry * k), rx * k, ry * k);
     }
 
     // ---- 长方体（两笔：正面矩形 → 深度）---------------------------------
@@ -4202,7 +4265,8 @@ internal sealed class Stroke
     /// <summary>
     /// 立体图形的**逐笔点列**（`hidden = false` 给看得见的、`true` 给被挡住的）：
     ///   · **圆柱**：顶面整圈 ＋ 底面下半圈 ＋ 两条母线；被挡住的是底面上半圈；
-    ///   · **圆锥**：底面下半圈 ＋ 两条母线（顶点 = 上边中点）；被挡住的是底面上半圈。
+    ///   · **圆锥**：底面下半圈 ＋ 两条母线（顶点 = 上边中点）；被挡住的是底面上半圈；
+    ///   · **圆台**：上底整圈（小一圈）＋ 底面下半圈 ＋ 两条**收进去**的母线；被挡住的同样。
     ///
     /// **渲染与熔墨共用这一份**（<see cref="BuildSolid"/> / <see cref="BuildSolidHidden"/> /
     /// <see cref="InkPieces"/>）——两边各写一套就会"画出来的和熔出来的不一样"，
@@ -4218,6 +4282,7 @@ internal sealed class Stroke
         {
             // 底面**上半圈**（`u` 从 0.5 走到 1，走的是 −y 那一侧 = 屏幕上方）：
             // 从上面看下去它是被实体挡住的，课本上就画虚线。
+            // **三种旋转体共用这一条**——圆台也一样（被挡住的永远只有下底的上半圈）。
             list.Add(new InkPiece(ArcPoints(bot, rx, ry, 0.5f, 1f), true));
             return list;
         }
@@ -4231,6 +4296,16 @@ internal sealed class Stroke
             // 两条母线：底面左右端点 → 顶面左右端点
             list.Add(new InkPiece(new List<Vector2> { new(cx - rx, topCy), new(cx - rx, botCy) }, false));
             list.Add(new InkPiece(new List<Vector2> { new(cx + rx, topCy), new(cx + rx, botCy) }, false));
+        }
+        else if (Kind == StrokeKind.ConeFrustum)
+        {
+            // 上底整圈：**小一圈的那个椭圆**（圆心 / 半轴的算式只有一处，见 ConeFrustumTopLocal）
+            var (tc, trx, try_) = ConeFrustumTopLocal();
+            list.Add(new InkPiece(ArcPoints(tc, trx, try_, 0f, 1f), false));
+            list.Add(new InkPiece(ArcPoints(bot, rx, ry, 0f, 0.5f), false));
+            // 两条母线：底面左右端点 → **上底**左右端点（所以它们是往中间收的斜线）
+            list.Add(new InkPiece(new List<Vector2> { new(cx - rx, botCy), new(tc.X - trx, tc.Y) }, false));
+            list.Add(new InkPiece(new List<Vector2> { new(cx + rx, botCy), new(tc.X + trx, tc.Y) }, false));
         }
         else
         {

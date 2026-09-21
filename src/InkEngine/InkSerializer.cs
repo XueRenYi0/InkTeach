@@ -136,12 +136,15 @@ internal static class InkSerializer
     ///         升版本的理由同前面几条：老程序读到 20 / 21 会当成"不认识的种类"
     ///         掉进自由笔迹那条兜底（画出来是一坨线），不如直接让它说"请升级"。
     ///         读老文件**不需要迁移**（老文件里本来就没有这两种）。
+    ///   · v19：新增**圆台**（取值 22）。同样**没加任何字节**（它是一笔画完的旋转体，
+    ///         和圆柱 / 圆锥一样只有两个控制点），升版本的理由也同上。
+    ///         读老文件同样**不需要迁移**。
     ///
     /// ⚠ **面板入口可以撤，`Kind` 的取值一个都不许删**（2026-09-20 第十二批撤了长方体 /
     /// 四面体的入口）：存档里存的是**一个字节**，删了就是"打开旧板书少一条"
     /// （同 2026-09-19 撤「数轴」入口那条规矩，见 计划-图形工具.md 11.2）。
     /// </summary>
-    public const int FormatVersion = 18;
+    public const int FormatVersion = 19;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";

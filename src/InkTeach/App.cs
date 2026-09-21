@@ -10399,6 +10399,9 @@ internal sealed class App : InkEngine.InkEngine
                     "hyperbola" => Tool.Hyperbola,
                     "sine" => Tool.Sine,
                     "cosine" => Tool.Cosine,
+                    "cylinder" => Tool.Cylinder,
+                    "cone" => Tool.Cone,
+                    "conefrustum" => Tool.ConeFrustum,
                     // 立体那一族（出图看"图形格第二行 + 档位点"时要用）：三个的名字就是
                     // 它们各自的工具名小写（棱柱 / 棱锥 / 棱台）。
                     "prism" => Tool.Prism,
@@ -11868,8 +11871,8 @@ internal sealed class App : InkEngine.InkEngine
         }
 
         // 图形那一格从左到右、从上到下分别是什么。**这里是期望值**
-        // （界面那边读的是 FullUi.ShapeBandOrder / ShapeBandOrder2 两张表）：
-        // 自检要是也从界面的那两张表里读，就成了"自己和自己比"。
+        // （界面那边读的是 FullUi.ShapeRows，一行一个数组）：
+        // 自检要是也从界面那张表里读，就成了"自己和自己比"。
         var want = new (Tool tool, string name)[]
         {
             (Tool.Line, "直线"), (Tool.Rectangle, "矩形"), (Tool.Ellipse, "椭圆"),
@@ -11890,6 +11893,9 @@ internal sealed class App : InkEngine.InkEngine
             // 同一天又搬进来两个**立体图形**（照 InkClass 的 case 6/7）：
             // 一次拖出外接矩形，底面被挡住的那半圈是虚线。
             (Tool.Cylinder, "圆柱"), (Tool.Cone, "圆锥"),
+            // 2026-09-20 第十三批：**圆台**（用户："再加一个圆台"）。和圆柱 / 圆锥同族
+            //（一笔拖出外接矩形），所以紧挨着它们放。
+            (Tool.ConeFrustum, "圆台"),
             // 2026-09-20 第十一批：**棱柱**（3/4/5/6 棱柱 ＋ 直/斜）。两笔，
             // 而且那一格"再点一次换一档"（和直线的线型同构，见 §32）。
             (Tool.Prism, "棱柱"),
@@ -11899,10 +11905,14 @@ internal sealed class App : InkEngine.InkEngine
             // ⚠ **长方体 / 四面体那两段撤掉了**（同一天，用户："那两格似乎可以删除掉了"）——
             // 所以这张期望表里也没有它们了，但**画法与存档都还在**（下面单列一条断言钉住
             // "能画、没入口"这第三种状态，正因为"有入口的那些"这张表管不到它们）。
-            // 第二行**仍然是 9 段**（去 2 段、加 2 段），所以段宽与带高一点没变。
+            // 行结构见下面的 `wantRowLens`（2026-09-20 第十三批从两行改成三行）。
         };
-        // 第一行几段（第二行的起点 = 它）——两条断言要用它。
-        const int firstRow = 8;
+        // 图形那一格的**行结构**（每行几段）——**期望值，独立于界面那张表**。
+        // 加图形时必须一起改：下面先断一句"各行加起来 = want 的段数"，对不上就红
+        //（这就是"自检表本身也要被卡住"那条规矩在这里的落点）。
+        // 2026-09-20 第十三批：从"两行 8+10"改成"三行 8+4+6"——第二行 10 段时每格
+        // 只有 55 宽，低于"每段 ≥ 60"那条量出来的门槛（见 计划-图形工具.md §35）。
+        int[] wantRowLens = { 8, 4, 6 };
 
         // 上带只在"指针落在面板上"时张开（见 FullUi.RailHoverZone）。点完一格、画完一笔
         // 之后指针可能在画布上，所以每次要点段之前先把指针挪回主条等它张开。
@@ -11952,40 +11962,67 @@ internal sealed class App : InkEngine.InkEngine
         Check("点球能展开（不然面板上的格子一个都点不到）",
               ui.ExpandedForTest, $"展开 = {ui.ExpandedForTest}");
 
-        // ================= A. 十七段都点得到 =================
-        Console.WriteLine("  -- A. 上带图形格（两行十七段）：逐段点一遍，工具真的切了 --");
+        // ================= A. 每一段都点得到 =================
+        //
+        // ⚠ 段数**不写死在文案里**（"十七段"这种字眼一加图形就过期）：下面几条断言全用
+        // `want.Length` / `n` 现算。
+        Console.WriteLine($"  -- A. 上带图形格（{want.Length} 段）：逐段点一遍，工具真的切了 --");
         GotoShapeBand();
 
         int n = ui.BandSegmentCountForTest;
-        Check("图形那格的上带是十七段（第一行 8 ＋ 第二行 9）",
-              n == want.Length, $"段数 {n}（期望 {want.Length}）");
+        Check($"自检表：行结构 {string.Join("＋", wantRowLens)} = {want.Length} 段（和 want 对得上）",
+              wantRowLens.Sum() == want.Length && wantRowLens.All(v => v > 0),
+              $"{string.Join("＋", wantRowLens)} = {wantRowLens.Sum()}（期望 {want.Length}）");
+        Check($"图形那格的上带是 {want.Length} 段（{wantRowLens.Length} 行：{string.Join("＋", wantRowLens)}）",
+              n == want.Length && InkUi.FullUi.ShapeRowCountForTest == wantRowLens.Length,
+              $"段数 {n}（期望 {want.Length}），行数 {InkUi.FullUi.ShapeRowCountForTest}"
+              + $"（期望 {wantRowLens.Length}）");
 
-        // 段宽和越界：段宽 = 可用宽 ÷ **本行**段数，所以两行各有各的宽度
-        // （第一行 8 段时每段 ~60+，第二行 4 段反而更宽）。
+        // 段宽和越界：段宽 = 可用宽 ÷ **本行**段数，所以各行各有各的宽度。
         // "挤到看不清" ＝ 这个入口等于没有，所以宽度本身就是判据（图标 18 逻辑像素，
-        // 60 的门槛给的是"图标四周还留得下 20 像素空白"）。
+        // 60 的门槛给的是"图标四周还留得下 20 像素空白"）——2026-09-20 第十三批
+        // 就是这条把"第二行 10 段（每格 55 宽）"当场拦下来的，所以才改成三行。
+        //
+        // 行分组按**自检自己那份 `wantRowLens`** 走（不读界面的行表，那成了自己和自己比）；
+        // 每行再从界面拿一次段矩形，验"行不重叠、都在带子里"。
         var bandRect = ui.BandRectForTest;
         float minW = float.MaxValue, maxRight = float.MinValue;
-        float row0Top = float.MaxValue, row0Bottom = float.MinValue;
-        float row1Top = float.MaxValue, row1Bottom = float.MinValue;
-        for (int i = 0; i < n; i++)
+        var rowTop = new float[wantRowLens.Length];
+        var rowBottom = new float[wantRowLens.Length];
+        for (int r = 0; r < wantRowLens.Length; r++) { rowTop[r] = float.MaxValue; rowBottom[r] = float.MinValue; }
+        int segIdx = 0;
+        for (int r = 0; r < wantRowLens.Length; r++)
         {
-            var r = ui.SegmentRectForTest(i);
-            minW = MathF.Min(minW, r.MaxX - r.MinX);
-            maxRight = MathF.Max(maxRight, r.MaxX);
-            if (i < firstRow) { row0Top = MathF.Min(row0Top, r.MinY); row0Bottom = MathF.Max(row0Bottom, r.MaxY); }
-            else { row1Top = MathF.Min(row1Top, r.MinY); row1Bottom = MathF.Max(row1Bottom, r.MaxY); }
+            for (int c = 0; c < wantRowLens[r]; c++, segIdx++)
+            {
+                var rr = ui.SegmentRectForTest(segIdx);
+                minW = MathF.Min(minW, rr.MaxX - rr.MinX);
+                maxRight = MathF.Max(maxRight, rr.MaxX);
+                rowTop[r] = MathF.Min(rowTop[r], rr.MinY);
+                rowBottom[r] = MathF.Max(rowBottom[r], rr.MaxY);
+            }
         }
-        Check("十七段都画得下（每段 ≥ 60 宽、最右一段不越出上带）",
+        Check($"{want.Length} 段都画得下（每段 ≥ 60 宽、最右一段不越出上带）",
               n == want.Length && minW >= 60f && maxRight <= bandRect.MaxX + 0.5f,
-              $"最窄 {minW:F0} 逻辑像素，上带宽 {bandRect.MaxX - bandRect.MinX:F0}");
-        // 两行**不许叠在一起**，而且都要落在带子里——带子为了第二行长得更高了
-        // （见 FullUi.BandHeightLogical），这一条就是钉住"长得够高"的。
-        Check("两行不重叠、且都在带子里（带子为第二行长得更高）",
-              row1Top >= row0Bottom - 0.5f
-              && row0Top >= bandRect.MinY - 0.5f && row1Bottom <= bandRect.MaxY + 0.5f,
-              $"第一行 y {row0Top:F0}..{row0Bottom:F0}，第二行 y {row1Top:F0}..{row1Bottom:F0}，"
-              + $"带子 y {bandRect.MinY:F0}..{bandRect.MaxY:F0}");
+              $"最窄 {minW:F0} 逻辑像素（门槛 60），上带宽 {bandRect.MaxX - bandRect.MinX:F0}");
+        // 各行**不许叠在一起**，而且都要落在带子里——带子为多行长得更高
+        // （见 FullUi.BandHeightLogical），这一条就是钉住"长得够高"。
+        bool rowsOk = true;
+        string rowNote = "";
+        for (int r = 0; r < wantRowLens.Length; r++)
+        {
+            if (rowTop[r] < bandRect.MinY - 0.5f || rowBottom[r] > bandRect.MaxY + 0.5f)
+            { rowsOk = false; rowNote = $"第 {r + 1} 行出了带子"; }
+            if (r > 0 && rowTop[r] < rowBottom[r - 1] - 0.5f)
+            { rowsOk = false; rowNote = $"第 {r + 1} 行和第 {r} 行叠了"; }
+        }
+        Check($"{wantRowLens.Length} 行不重叠、且都在带子里（带子为多行长得更高）",
+              rowsOk,
+              rowsOk
+                  ? "各行 y " + string.Join(" / ", Enumerable.Range(0, wantRowLens.Length)
+                        .Select(r => $"{rowTop[r]:F0}..{rowBottom[r]:F0}"))
+                    + $"，带子 y {bandRect.MinY:F0}..{bandRect.MaxY:F0}"
+                  : rowNote);
 
         for (int i = 0; i < want.Length; i++)
         {
@@ -12085,7 +12122,7 @@ internal sealed class App : InkEngine.InkEngine
         //   ④ 别的图形**不参与**这条规则（再点还是它自己）。
         Console.WriteLine("  -- A2. 抛物线格：再点一次换一档（上下 / 左右，画之前定）--");
         GotoShapeBand();
-        int paraSeg = firstRow;                       // 第二行第一段 = 抛物线
+        int paraSeg = InkUi.FullUi.ShapeSegmentIndexForTest(Tool.Parabola);   // 按工具名找（不写死段号）
         ClickSegment(paraSeg);
         Check("抛物线：点第一下 = 选中它，还是「上下抛物」那一档",
               Host.State.Tool == Tool.Parabola && Host.State.ParabolaAxis == CurveAxis.OpenUp,
@@ -15189,6 +15226,40 @@ internal sealed class App : InkEngine.InkEngine
               Near(co.ConeApexLocal().X, 400f, .5f) && Near(co.ConeApexLocal().Y, 500f, .5f),
               $"({co.ConeApexLocal().X:F0},{co.ConeApexLocal().Y:F0}) 期望 (400,500)");
 
+        // ---- 圆台（2026-09-20 第十三批，用户："再加一个圆台"）----
+        // 它和圆柱 / 圆锥**共用同一份画法**（`Stroke.SolidPieces`：上底整圈 ＋ 下底下半圈 ＋
+        // 两条母线，被挡的是下底上半圈），差别只在**上底小一圈**。所以这一节只钉那一点：
+        // 上底的比例 / 相切、母线**往中间收**、轮廓还是 4 段。
+        var cf = NewCurve(Tool.ConeFrustum, StrokeKind.ConeFrustum, 200f, 500f);
+        cf.SetSolidBox(200f, 500f, 600f, 900f);
+        var (fTop, frx, fry) = cf.ConeFrustumTopLocal();
+        float fk = ShapeSpec.FrustumTopScale;
+        Check($"圆台：上底 = 下底**同形缩 {fk:F2}**（两个半轴都乘，和棱台同一个数）（±0.5）",
+              Near(frx, crx * fk, .5f) && Near(fry, cry * fk, .5f),
+              $"上底 ({frx:F1}, {fry:F1})（期望 ({crx * fk:F1}, {cry * fk:F1})）");
+        Check("圆台：上底与矩形上边**相切**（圆心往里缩的是 ry×比例，不是 ry）（±0.5）",
+              Near(fTop.Y - fry, 500f, .5f),
+              $"上底上沿 {fTop.Y - fry:F1}（期望 500 = 矩形上边）");
+        var cfParts = Stroke.SplitOutlineParts(cf.ShapeOutline());
+        Check("圆台：轮廓分 4 段（下底圈 / 上底圈 / 两条母线）——和圆柱同一个结构",
+              cfParts.Count == 4 && cfParts[1].Count > 8 && cfParts[2].Count == 2 && cfParts[3].Count == 2,
+              $"{cfParts.Count} 段，点数 {string.Join("/", cfParts.ConvertAll(p => p.Count))}"
+              + "（期望 4 段：圈/圈/2/2）");
+        // 母线**不是竖的**（是竖的就成圆柱了）；而且上端**正好落在上底左右端点**。
+        Check("圆台：两条母线**往中间收**，上端落在上底左右端点（不是竖直的）",
+              cfParts.Count == 4
+              && Near(cfParts[2][0].X, 200f, .5f) && Near(cfParts[2][1].X, fTop.X - frx, .5f)
+              && Near(cfParts[3][0].X, 600f, .5f) && Near(cfParts[3][1].X, fTop.X + frx, .5f)
+              && cfParts[2][1].X > cfParts[2][0].X && cfParts[3][1].X < cfParts[3][0].X,
+              cfParts.Count == 4
+                  ? $"左 {cfParts[2][0].X:F0}→{cfParts[2][1].X:F0}、右 {cfParts[3][0].X:F0}→{cfParts[3][1].X:F0}"
+                    + $"（期望 200→{fTop.X - frx:F0}、600→{fTop.X + frx:F0}）"
+                  : "（轮廓没分成 4 段）");
+        Check("圆台：紧框 = 外接矩形本身（上底缩小后不会冒出去）（±0.5）",
+              Near(cf.Bounds.MinX, 200f, .5f) && Near(cf.Bounds.MaxX, 600f, .5f)
+              && Near(cf.Bounds.MinY, 500f, .5f) && Near(cf.Bounds.MaxY, 900f, .5f),
+              $"框 ({cf.Bounds.MinX:F0},{cf.Bounds.MinY:F0})..({cf.Bounds.MaxX:F0},{cf.Bounds.MaxY:F0})");
+
         // ---- 长方体 / 四面体（2026-09-20 第五批：照 InkClass 的 case 9/26，**两笔**）----
         // 长方体：第 1 笔正面矩形 (200,500)..(600,900)，第 2 笔拖到 y=650 → 深度 d = |500 − 650| = 150。
         var cu = NewCurve(Tool.Cuboid, StrokeKind.Cuboid, 200f, 500f);
@@ -15262,7 +15333,8 @@ internal sealed class App : InkEngine.InkEngine
             var noSpecial = new (Stroke st, string name)[]
             {
                 (vb, "抛物线"), (hy, "双曲线"), (sn, "正弦"), (cs, "余弦"),
-                (cy, "圆柱"), (co, "圆锥"), (cu, "长方体"), (te, "四面体"),
+                (cy, "圆柱"), (co, "圆锥"), (cf, "圆台"),
+                (cu, "长方体"), (te, "四面体"),
             };
             int hitOk = 0;
             var missed = new List<string>();
@@ -15275,7 +15347,7 @@ internal sealed class App : InkEngine.InkEngine
                     hitOk++;
                 else missed.Add(nm);
             }
-            Check("手柄：四种曲线 ＋ 四个立体图形**都点得中通用框的角**（＝八个缩放柄真的给了）",
+            Check("手柄：四种曲线 ＋ 五个立体图形**都点得中通用框的角**（＝八个缩放柄真的给了）",
                   hitOk == noSpecial.Length,
                   $"点得中 {hitOk}/{noSpecial.Length}"
                   + (missed.Count > 0 ? $"，点不中：{string.Join("/", missed)}" : ""));

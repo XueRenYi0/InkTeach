@@ -71,6 +71,7 @@ internal static class IconAtlas
         // 立体图形（2026-09-20 第五批）：图标同样自绘。
         if (name == "cylinder") { DrawCylinder(ctx, x, y, size, brush); return; }
         if (name == "cone") { DrawCone(ctx, x, y, size, brush); return; }
+        if (name == "conefrustum") { DrawConeFrustum(ctx, x, y, size, brush); return; }
         if (name == "cuboid") { DrawCuboid(ctx, x, y, size, brush); return; }
         if (name == "tetrahedron") { DrawTetrahedron(ctx, x, y, size, brush); return; }
         // 棱柱 / 棱锥 / 棱台各四档（三/四/五/六）：各自段画法只换底面边数
@@ -384,6 +385,35 @@ internal static class IconAtlas
         DrawEllipseArc(ctx, new Vector2(cx, botCy), rx, ry, 0f, 0.5f, brush);
         ctx.DrawLine(new Vector2(cx - rx, botCy), apex, brush, 1.5f, _round);
         ctx.DrawLine(new Vector2(cx + rx, botCy), apex, brush, 1.5f, _round);
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// 自绘的**圆台**图标：下底下半圈 ＋ 上底整圈（**小一圈**）＋ 两条往中间收的母线。
+    ///
+    /// 上底的比例读 <see cref="ShapeSpec.FrustumTopScale"/>——和画布上**同一个数**，
+    /// 也和三兄弟里那个「棱台」同一个数（两个台体挨着放，收法该是一样的）。
+    /// 比例写死的话，图标和画出来的东西就不是一回事（这一族最容易出的错）。
+    /// </summary>
+    private static void DrawConeFrustum(ID2D1DeviceContext ctx, float x, float y,
+                                        float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        const float cx = 12f, botCy = 17f, rx = 7f, ry = 2.6f;
+        float k = ShapeSpec.FrustumTopScale;
+        float trx = rx * k, try_ = ry * k;
+        // 上底圆心**从上边往里缩 try_**（不是缩 ry）——于是上底正好与图标上边相切，
+        // 和圆柱 / 圆锥那两张同一个口径（画出来的东西刚好占满那一格）。
+        var top = new Vector2(cx, 4.5f + try_);
+        DrawEllipseArc(ctx, top, trx, try_, 0f, 1f, brush);                      // 上底整圈
+        DrawEllipseArc(ctx, new Vector2(cx, botCy), rx, ry, 0f, 0.5f, brush);    // 下底下半圈
+        ctx.DrawLine(new Vector2(cx - rx, botCy), new Vector2(top.X - trx, top.Y), brush, 1.5f, _round);
+        ctx.DrawLine(new Vector2(cx + rx, botCy), new Vector2(top.X + trx, top.Y), brush, 1.5f, _round);
 
         ctx.Transform = saved;
     }
