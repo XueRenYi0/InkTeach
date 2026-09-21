@@ -3693,7 +3693,7 @@ public class InkEngine
     }
 
     /// <summary>
-    /// **棱柱那一格当前的档**：底面几边形（3~6）。用户 2026-09-20 定：
+    /// **立体那一格当前的档**：底面几边形（3~6）。用户 2026-09-20 定：
     /// "我想想能不能做成像直线切换那样切换三四五六"——于是它和 <see cref="LineDash"/>
     /// **完全同构**：面板上那一格**再点一次换一档**（配 4 个档位点），
     /// 画的那一刻写进对象（见 `BeginShapeAt`）。
@@ -3702,20 +3702,47 @@ public class InkEngine
     ///（见 <see cref="Stroke.PrismSides"/>），面板换档不会回头改它们。
     /// 存成引擎字段、不存偏好文件（和抛物线朝向、直线线型同一条理由）：
     /// 一次课里连画几个同一种棱柱是常态，留着上一档比每次回到默认顺手。
+    ///
+    /// ⚠ **棱柱 / 棱锥 / 棱台各记各的档，不是一个共享的档**——用户 2026-09-20 上手就发现
+    /// "切一个另外两个也动"，那是 bug：一个人完全可能"四棱柱配三棱锥"，
+    /// 三格共用一个数反而没法表达。所以这里是**三个字段**，问谁要问
+    /// <see cref="SidesFor"/>（**唯一判据**，别在外面各写一份 switch）。
     /// </summary>
-    public int PrismSides { get; private set; } = Stroke.DefaultPrismSides;
+    private int _sidesPrism = Stroke.DefaultPrismSides;
+    private int _sidesPyramid = Stroke.DefaultPrismSides;
+    private int _sidesFrustum = Stroke.DefaultPrismSides;
 
     /// <summary>
-    /// 换下一档棱柱：**3 → 4 → 5 → 6 → 3**（见 <see cref="PrismSides"/>）。
-    /// 只影响**下一笔**画出来的棱柱，不碰已经画好的对象。
+    /// **某个立体工具当前那一档**（底面几边形，3~6）。不是这一族的工具给默认档
+    ///（调用方也就不会拿它去画什么）。
     /// </summary>
-    public void CyclePrismSides()
+    public int SidesFor(Tool tool) => tool switch
     {
+        Tool.Pyramid => _sidesPyramid,
+        Tool.Frustum => _sidesFrustum,
+        Tool.Prism => _sidesPrism,
+        _ => Stroke.DefaultPrismSides,
+    };
+
+    /// <summary>
+    /// 换**当前工具**那一档：**3 → 4 → 5 → 6 → 3**（见 <see cref="SidesFor"/>）。
+    /// 只影响**下一笔**画出来的那一个，既不碰已经画好的对象，也**不动另外两格**
+    ///（"棱柱换档 → 棱锥的档跟着走"是用户 2026-09-20 报的 bug）。
+    /// </summary>
+    public void CycleSolidSides()
+    {
+        var t = this.Tool;
+        if (!ShapeSpec.HasSideCount(t)) return;          // 不是那一族就什么也不做
         // 四档一轮，**按边数升序**（用户定：三/四/五/六）——升序比"按常用度"更好记，
-        // 而且档位点从左到右读出来就是 3/4/5/6，不用额外记顺序。
-        PrismSides = PrismSides >= Stroke.MaxPrismSides
-            ? Stroke.MinPrismSides
-            : PrismSides + 1;
+        // 而且档位点从上往下读出来就是 3/4/5/6，不用额外记顺序。
+        int cur = SidesFor(t);
+        int next = cur >= Stroke.MaxPrismSides ? Stroke.MinPrismSides : cur + 1;
+        switch (t)
+        {
+            case Tool.Pyramid: _sidesPyramid = next; break;
+            case Tool.Frustum: _sidesFrustum = next; break;
+            default: _sidesPrism = next; break;
+        }
         // 面板上那一格的图标要跟着换，所以推一次状态（和直线换线型同一套）。
         _dirty = true;
         NotifyUiStateChanged();
@@ -3746,9 +3773,11 @@ public class InkEngine
             // 直线的**线型也是画之前选好的**（见 LineDash）：同样在画的那一刻写进对象。
             // 别的图形一律实线——它们的线型历来是"选中之后在操作条面板里改"。
             Dash = kind == StrokeKind.Line ? LineDash : StrokeDash.Solid,
-            // 棱柱的**底面几边形**同样是画之前选好的（见 PrismSides）：
+            // 立体那一族的**底面几边形**同样是画之前选好的（见 SidesFor）：
             // 画的那一刻写进对象，之后面板再换档也不回头改它。
-            PrismSides = kind == StrokeKind.Prism ? PrismSides : Stroke.DefaultPrismSides,
+            // ⚠ 三兄弟都要走这一句——2026-09-20 第一版写成 `kind == StrokeKind.Prism`，
+            // 结果**棱锥 / 棱台永远画成四棱**（用户上手一句就抓出来了）。
+            PrismSides = Stroke.IsPrismFamily(kind) ? SidesFor(tool) : Stroke.DefaultPrismSides,
         };
         ActiveStroke.AddPoint(x, y, 1f, NowMs);
         // 抛物线的**顶点 = 按下那个点**：它现在是**一笔画完**的（照 InkClass 的 `case 20/21`：
@@ -4564,9 +4593,11 @@ public class InkEngine
         Tool = Tool,
         ParabolaAxis = ParabolaAxis,      // 界面拿它把图形面板那一格的图标转成当前朝向
         LineDash = LineDash,              // 界面拿它把「直线」那一格的图标换成当前线型
-        PrismSides = PrismSides,          // 界面拿它把「棱柱」那一格的图标换成当前档（＋档位点）
-        PrismMinSides = Stroke.MinPrismSides,   // 档位范围也推上去（界面才知道点几个点）
-        PrismMaxSides = Stroke.MaxPrismSides,
+        PrismSides = _sidesPrism,         // 界面拿它把「棱柱」那一格的图标换成当前档（＋档位点）
+        PyramidSides = _sidesPyramid,     // 棱锥 / 棱台各记各的档（三格的档位点互不影响）
+        FrustumSides = _sidesFrustum,
+        SolidMinSides = Stroke.MinPrismSides,   // 档位范围也推上去（界面才知道点几个点）
+        SolidMaxSides = Stroke.MaxPrismSides,
         Color = Tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
         PaletteBase = Tool == Tool.Highlighter
             ? new Color4(HighlighterCurrent.R, HighlighterCurrent.G, HighlighterCurrent.B, 1f)

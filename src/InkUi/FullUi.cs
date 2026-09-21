@@ -1421,14 +1421,14 @@ public sealed class FullUi : IOverlayUi
                     //   · 直线：换线型（用户 2026-09-20 定："点击直线的图标，它会变成虚线，
                     //     再点击变成点虚线，再点击又变成直线……这样就省了好几个空间格"）；
                     //   · 棱柱 / 棱锥 / 棱台：换底面几边形（用户 2026-09-20 定："我想想能不能做成
-                    //     像直线切换那样切换三四五六"）。**三格共用同一档**，判据只有
-                    //     `ShapeSpec.HasSideCount` 一处——加棱锥 / 棱台时这里差点漏掉。
+                    //     像直线切换那样切换三四五六"）。**三格各记各的档**（换谁只动谁），
+                    //     判据只有 `ShapeSpec.HasSideCount` 一处——加棱锥 / 棱台时这里差点漏掉。
                     if (picked == Tool.Parabola && _host.State.Tool == Tool.Parabola)
                         _host.Commands.CycleParabolaAxis();
                     else if (picked == Tool.Line && _host.State.Tool == Tool.Line)
                         _host.Commands.CycleLineDash();
                     else if (ShapeSpec.HasSideCount(picked) && _host.State.Tool == picked)
-                        _host.Commands.CyclePrismSides();
+                        _host.Commands.CycleSolidSides();
                     else
                         _host.Commands.SetTool(picked);
                 }
@@ -2747,11 +2747,14 @@ public sealed class FullUi : IOverlayUi
         var segInk = active ? Tokens.AccentInk : InkCol;
         // **有档位的那两段**（点它一下换一档，见 ActivateSegment 的 case 8）：
         //   · 「直线」= 3 档线型（实 / 虚 / 点）；
-        //   · 「棱柱 / 棱锥 / 棱台」= 4 档边数（三 / 四 / 五 / 六）——**三格共用同一档**
-        //     （`UiState.PrismSides`），因为它们就是同一族（底面正 n 边形），换了一格
-        //     另外两格也跟着走，这正合直觉。
+        //   · 「棱柱 / 棱锥 / 棱台」= 4 档边数（三 / 四 / 五 / 六）。
         // 图标照旧画当前那一档，**右边再加一竖列档位点**——大而浓的那个是当前档。
         // 用户 2026-09-20 定：只换图标的话，老师"不知道这一格还能点"（可选的状态是隐形的）。
+        //
+        // ⚠ **三格各有各的档**（`st.SidesOf(tool)`）：第一版三格共用一个数，结果是
+        // "点棱锥那一格，棱柱、棱台的点跟着一起动"——用户上手就报了这个。
+        // 档位点画的是**这一格自己的档**，所以这里必须问 `SidesOf(segTool)`，
+        // 而不是随手读一个 `st.PrismSides`。
         //
         // **点从"图标下面"挪到了"图标右边"**（还是 2026-09-20，用户看出来的）：
         // 图形段是"宽 × 26"的长方形（第二行 9 段时每格约 80 宽），而图标只占 18 ——
@@ -2761,17 +2764,17 @@ public sealed class FullUi : IOverlayUi
         //
         // **档数与当前档都从这一处算**（不在绘制里再列一遍工具名）：
         // `ShapeSpec.HasSideCount(tool)` 判"是不是那一族"，这里判"它有几档、现在是第几档"。
-        // 棱柱那几档的**范围来自引擎**（`st.PrismMin/MaxSides`）——`Stroke` 是引擎内部类型，
+        // 档位范围**来自引擎**（`st.SolidMin/MaxSides`）——`Stroke` 是引擎内部类型，
         // 界面看不到它，也不该在这里写死一份 3/6。
         var segTool = ShapeToolAt(i);
         int pipCount = segTool == Tool.Line ? 3
-            : ShapeSpec.HasSideCount(segTool) ? st.PrismMaxSides - st.PrismMinSides + 1
+            : ShapeSpec.HasSideCount(segTool) ? st.SolidMaxSides - st.SolidMinSides + 1
             : 0;
         if (pipCount > 0)
         {
             int pipCur = segTool == Tool.Line
                 ? (int)st.LineDash
-                : Math.Clamp(st.PrismSides, st.PrismMinSides, st.PrismMaxSides) - st.PrismMinSides;
+                : Math.Clamp(st.SidesOf(segTool), st.SolidMinSides, st.SolidMaxSides) - st.SolidMinSides;
             // 右边让出这么宽的一条给竖排的点（点距/半径在 `DrawPips` 里，最浓的那个半径 2，
             //  所以这一列实际占 ~4 宽、居中在这条带的中间）。
             const float PipStripW = 12f;
@@ -2831,7 +2834,7 @@ public sealed class FullUi : IOverlayUi
     {
         Tool.Parabola => ParabolaIconName(_host.State.ParabolaAxis),
         Tool.Line => LineIconName(_host.State.LineDash),
-        _ when ShapeSpec.HasSideCount(t) => SolidIconName(t, _host.State.PrismSides),
+        _ when ShapeSpec.HasSideCount(t) => SolidIconName(t, _host.State.SidesOf(t)),
         _ => ShapeIconFor(t),
     };
 

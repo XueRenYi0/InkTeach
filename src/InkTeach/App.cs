@@ -14446,10 +14446,14 @@ internal sealed class App : InkEngine.InkEngine
         // 这个表跟着那个起始角走：改起始角，四个数都要重算。
         int HiddenWant(int nsides) => nsides switch { 3 => 3, 4 => 3, 5 => 3, 6 => 5, _ => -1 };
 
-        // 把引擎那一档拧到指定值（走的就是面板上"再点一次"那个命令）。
-        void SetPrismSides(int want)
+        // 把**某个立体工具**那一档拧到指定值（走的就是面板上"再点一次"那个命令）。
+        // ⚠ 必须先切到那个工具——引擎换的是"**当前工具**那一档"（三格各记各的，
+        // 见 `UiState.SidesOf`），不切工具就会一直拧棱柱那一档。
+        void SetSides(Tool tool, int want)
         {
-            for (int k = 0; k < 8 && Host.State.PrismSides != want; k++) Host.Commands.CyclePrismSides();
+            SetToolFromUi(tool);
+            for (int k = 0; k < 8 && Host.State.SidesOf(tool) != want; k++)
+                Host.Commands.CycleSolidSides();
             SettleFrames(60);
         }
 
@@ -14636,8 +14640,7 @@ internal sealed class App : InkEngine.InkEngine
 
         Doc.Clear();
         Doc.ClearHistory();
-        SetPrismSides(4);
-        SetToolFromUi(Tool.Prism);
+        SetSides(Tool.Prism, 4);
         float bx0 = _virtualX + 900f, by0 = _virtualY + 900f;
         DragBase(bx0, by0);
         Check("真机：第 1 笔松手后**还没提交**（两笔图形，半成品不进文档）",
@@ -14689,20 +14692,23 @@ internal sealed class App : InkEngine.InkEngine
 
         // ---- 棱锥 / 棱台：**同一套动作、同一个吸附**，只是胶囊上的字和"顶上那点"不同 ----
         //
-        // 这三条一起看的就是"**族内一致**"：容差同一个（12）、判据同一条（顶上那个中心在
-        // 底心正上方）、只是报出来的名字按种类分。所以这里最要紧的断言是**胶囊上的字**
-        // ——它错了用户就会看到"画棱锥却写着直棱柱"。
-        var familyReal = new (Tool tool, StrokeKind kind, string name, ShapeSnapKind snap, string label)[]
+        // 这几条一起看的就是"**族内一致**"：容差同一个（12）、判据同一条（顶上那个中心在
+        // 底心正上方）、只是报出来的名字按种类分。所以这里最要紧的两条断言是：
+        //   · **胶囊上的字**——它错了用户就会看到"画棱锥却写着直棱柱"；
+        //   · **底面边数 = 这一格自己的档**——2026-09-20 第一版把"写档"那句写成
+        //     `kind == StrokeKind.Prism`，于是棱锥 / 棱台**永远画成四棱**（用户："锥体和台体
+        //     只能画四棱，不能画其他的"）。所以这里**故意给两家不同的档**（3 / 5）：
+        //     要是又有人漏了那一句，两条都会红。
+        var familyReal = new (Tool tool, StrokeKind kind, string name, ShapeSnapKind snap, string label, int sides)[]
         {
-            (Tool.Pyramid, StrokeKind.Pyramid, "棱锥", ShapeSnapKind.RightPyramid, "直棱锥"),
-            (Tool.Frustum, StrokeKind.Frustum, "棱台", ShapeSnapKind.RightFrustum, "直棱台"),
+            (Tool.Pyramid, StrokeKind.Pyramid, "棱锥", ShapeSnapKind.RightPyramid, "直棱锥", 3),
+            (Tool.Frustum, StrokeKind.Frustum, "棱台", ShapeSnapKind.RightFrustum, "直棱台", 5),
         };
-        foreach (var (tool, kind, fname, snap, label) in familyReal)
+        foreach (var (tool, kind, fname, snap, label, wantSides) in familyReal)
         {
             Doc.Clear();
             Doc.ClearHistory();
-            SetPrismSides(4);
-            SetToolFromUi(tool);
+            SetSides(tool, wantSides);
             DragBase(bx0, by0);
 
             float px = bx0 + 150f + 8f, py = by0 + 60f - 180f;      // 故意偏 8 像素（容差 12）
@@ -14717,60 +14723,68 @@ internal sealed class App : InkEngine.InkEngine
             var made = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
             float tilt = made == null ? -1f
                 : MathF.Abs(made.PrismApexLocal().X - made.PrismBaseCenterLocal().X);
-            Check($"真机·{fname}：提交之后顶上那个中心**严格在底心正上方**、边数是当前档（4）",
-                  made != null && made.Kind == kind && tilt < 0.5f && made.PrismSidesClamped == 4,
+            Check($"真机·{fname}：提交之后顶上那个中心**严格在底心正上方**",
+                  made != null && made.Kind == kind && tilt < 0.5f,
+                  made == null ? "（没画出来）" : $"侧倾 {tilt:F2}（期望 < 0.5）");
+            Check($"真机·{fname}：底面是**这一格自己的档**（{wantSides} 棱）——不是永远四棱",
+                  made != null && made.PrismSidesClamped == wantSides
+                  && made.PrismBaseLocal().Length == wantSides,
                   made == null ? "（没画出来）"
-                               : $"侧倾 {tilt:F2}（期望 < 0.5）、{made.PrismSidesClamped} 边形");
+                               : $"存档里的档 {made.PrismSidesClamped}、底面 {made.PrismBaseLocal().Length} 个顶点");
         }
 
         // ================= ⑥ 档位 ＋ 长方体没被碰 =================
         Console.WriteLine("  -- 档位：点那一格再点一次 3→4→5→6→3 --");
-        SetPrismSides(3);
+        SetSides(Tool.Prism, 3);
         var iconNames = new List<string>();
         for (int k = 0; k < 4; k++)
         {
             iconNames.Add(ui.ShapeIconNameForTest(InkUi.FullUi.ShapeSegmentIndexForTest(Tool.Prism)));
-            Host.Commands.CyclePrismSides();
+            Host.Commands.CycleSolidSides();
             SettleFrames(60);
         }
         Check("档位：一轮四档，回到三棱柱（3→4→5→6→3）",
-              Host.State.PrismSides == 3, $"现在是 {Host.State.PrismSides}");
+              Host.State.SidesOf(Tool.Prism) == 3, $"现在是 {Host.State.SidesOf(Tool.Prism)}");
         Check("档位：四张图标两两不同，而且都是 prism 那四张",
               iconNames.Distinct().Count() == 4 && iconNames.All(nm => nm.StartsWith("prism")),
               string.Join(" / ", iconNames));
         Check("档位：范围**随状态推上界面**（3 / 6）——界面靠它决定画几个档位点",
-              Host.State.PrismMinSides == 3 && Host.State.PrismMaxSides == 6,
-              $"{Host.State.PrismMinSides} ~ {Host.State.PrismMaxSides}");
+              Host.State.SolidMinSides == 3 && Host.State.SolidMaxSides == 6,
+              $"{Host.State.SolidMinSides} ~ {Host.State.SolidMaxSides}");
 
-        // **三格共用同一档**：棱柱 / 棱锥 / 棱台都是"底面几边形"那一族（判据只有
-        // `ShapeSpec.HasSideCount` 一处），换了一格、另外两格**跟着走**。
-        // ⚠ 段号**按工具名问**（`ShapeSegmentIndexForTest`），不写死：
-        // 写死的话，第二行一旦插 / 删图形就会静默点错段（这次加棱锥 / 棱台时就栽了一下
-        // ——写死的 16 其实已经是"棱台"了）。
-        // 要钉的是"**加了一种立体、面板那两处忘了跟着改**"：档位点与换档那条分支
-        // 这次都差点漏掉，所以用一个循环把三格一起比。
-        var solidSegs = new (Tool tool, string stem)[]
-        {
-            (Tool.Prism, "prism"), (Tool.Pyramid, "pyramid"), (Tool.Frustum, "frustum"),
-        };
-        foreach (int wantSides in new[] { 3, 6 })
-        {
-            SetPrismSides(wantSides);
-            bool allFollow = true;
-            string got = "";
-            foreach (var (tool, stem) in solidSegs)
-            {
-                int seg = InkUi.FullUi.ShapeSegmentIndexForTest(tool);
-                string nm = ui.ShapeIconNameForTest(seg);
-                if (nm != stem + wantSides) allFollow = false;
-                got += (got.Length > 0 ? " / " : "") + nm;
-            }
-            Check($"档位：三格共用同一档——切到 {wantSides} 时 棱柱/棱锥/棱台 的图标一起换",
-                  allFollow, got);
-        }
-        SetPrismSides(3);
+        // **三格各记各的档**（用户 2026-09-20 上手就报的 bug："切一个另外两个也动"）。
+        //
+        // 第一版是"三格共用一个 `PrismSides`"——写的时候觉得"它们本来就是同一族，
+        // 跟着走正好"，实际用起来完全不是：老师完全可能"四棱柱 ＋ 三棱锥"混着画。
+        // 所以现在是引擎里**三个字段**，换档命令换的是"**当前工具**那一档"。
+        // 这里就钉住那件事：先把三格拧成**三个不同的档**，再单独换一格，看另外两格动没动。
+        //
+        // ⚠ 段号一律**按工具名问**（`ShapeSegmentIndexForTest`），不写死：
+        // 写死的话，第二行一旦插 / 删图形就会静默点错段（这一轮加棱锥 / 棱台时就栽了一下
+        // ——写死的"16 = 棱柱"其实已经是"棱台"）。
+        SetSides(Tool.Prism, 3);
+        SetSides(Tool.Pyramid, 4);
+        SetSides(Tool.Frustum, 5);
+        string Sides3() => $"{Host.State.SidesOf(Tool.Prism)}/"
+                         + $"{Host.State.SidesOf(Tool.Pyramid)}/{Host.State.SidesOf(Tool.Frustum)}";
+        Check("档位：三格**各记各的档**（四棱柱 ＋ 三棱锥 ＋ 五棱台 这种配法要能存在）",
+              Host.State.SidesOf(Tool.Prism) == 3 && Host.State.SidesOf(Tool.Pyramid) == 4
+              && Host.State.SidesOf(Tool.Frustum) == 5,
+              Sides3() + "（期望 3/4/5）");
+        SetToolFromUi(Tool.Pyramid);                 // 换档换的是"当前工具那一档"
+        Host.Commands.CycleSolidSides();
+        SettleFrames(60);
+        Check("档位：只换棱锥那一格 → **棱柱和棱台的档一点没动**",
+              Host.State.SidesOf(Tool.Prism) == 3 && Host.State.SidesOf(Tool.Pyramid) == 5
+              && Host.State.SidesOf(Tool.Frustum) == 5,
+              Sides3() + "（期望 3/5/5）");
+        string IconOf(Tool t) => ui.ShapeIconNameForTest(InkUi.FullUi.ShapeSegmentIndexForTest(t));
+        Check("档位：三格的图标各按**自己那一档**画（棱柱 3 / 棱锥 5 / 棱台 5）",
+              IconOf(Tool.Prism) == "prism3" && IconOf(Tool.Pyramid) == "pyramid5"
+              && IconOf(Tool.Frustum) == "frustum5",
+              $"{IconOf(Tool.Prism)} / {IconOf(Tool.Pyramid)} / {IconOf(Tool.Frustum)}");
+        SetSides(Tool.Prism, 3);
 
-        SetToolFromUi(Tool.Prism);
         Doc.Clear();
         Doc.ClearHistory();
         DragBase(bx0, by0);

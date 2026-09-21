@@ -202,13 +202,14 @@ public interface IEngineCommands
     /// </summary>
     void CycleLineDash();
     /// <summary>
-    /// **换下一档棱柱**：3 → 4 → 5 → 6 → 3（底面几边形）。
+    /// **换下一档立体**：3 → 4 → 5 → 6 → 3（底面几边形）——只动**当前工具那一格**，
+    /// 另外两格的档**不受影响**（各记各的，见 <see cref="UiState.SidesOf"/>）。
     ///
-    /// 和 <see cref="CycleLineDash"/> 完全同构：入口是图形面板里「棱柱」那一段
-    /// **已经选中棱柱时再点一次**（用户 2026-09-20："做成像直线切换那样切换三四五六"）。
+    /// 和 <see cref="CycleLineDash"/> 完全同构：入口是图形面板里那一格
+    /// **已经选中它时再点一次**（用户 2026-09-20："做成像直线切换那样切换三四五六"）。
     /// 只动"下一笔用几边形"，**不改已经画好的那些**（它们各存各的）。
     /// </summary>
-    void CyclePrismSides();
+    void CycleSolidSides();
     void SetColor(Color4 color);
     void SetWidth(float logicalPx);
     /// <summary>
@@ -448,8 +449,8 @@ public static class ShapeSpec
     public const float FrustumTopScale = 0.5f;
 
     /// <summary>
-    /// 这个工具**是不是"底面有几边形"那一族**（棱柱 / 棱锥 / 棱台）：它们共用
-    /// <c>UiState.PrismSides</c> 那一档，界面上也就是"点那一格再点一次 3→4→5→6→3"。
+    /// 这个工具**是不是"底面有几边形"那一族**（棱柱 / 棱锥 / 棱台）：那一格都
+    /// "再点一次换一档 3→4→5→6→3"，但**三格各记各的档**（见 <see cref="UiState.SidesOf"/>）。
     ///
     /// **界面上凡是"按这一族分支"的地方都该问它**（现在有两处：那一格画几个档位点、
     /// 再点一次要不要换档）——各写一份名单的话，加一种立体图形就会漏掉一处
@@ -507,19 +508,38 @@ public readonly struct UiState
     /// </summary>
     public StrokeDash LineDash { get; init; }
     /// <summary>
-    /// **棱柱那一格当前的档**：底面几边形（3~6）。用户 2026-09-20 定：
+    /// **立体那一格当前的档**：底面几边形（3~6）。用户 2026-09-20 定：
     /// "我想想能不能做成像直线切换那样切换三四五六"——界面拿它把那一格的图标
-    /// 换成三/四/五/六棱柱，并在下面点出**4 个档位点**（和直线那格同一套）。
+    /// 换成三/四/五/六棱柱，并在右边点出**4 个档位点**（和直线那格同一套）。
+    ///
+    /// ⚠ **棱柱 / 棱锥 / 棱台各一个数，不是一个共享的数**：三格各有各的档位点，
+    /// 点谁都只动它自己（用户上手就发现"切一个另外两个也动"是 bug）。
+    /// 要哪一个问 <see cref="SidesOf"/>——别自己在界面那边按工具写 switch。
     /// </summary>
     public int PrismSides { get; init; }
+    /// <summary>棱锥那一格当前的档（含义同 <see cref="PrismSides"/>，只是各记各的）。</summary>
+    public int PyramidSides { get; init; }
+    /// <summary>棱台那一格当前的档（含义同上）。</summary>
+    public int FrustumSides { get; init; }
 
     /// <summary>
-    /// 棱柱档位的**上下限**（3 / 6）。界面要知道"这一格一共几档"才能画档位点，
+    /// 某个立体工具当前那一档（界面画档位点、选图标都用它）。
+    /// **判据只有这一处**：三格的名字散在界面各处就又会"加一种立体漏一处"。
+    /// </summary>
+    public int SidesOf(Tool tool) => tool switch
+    {
+        Tool.Pyramid => PyramidSides,
+        Tool.Frustum => FrustumSides,
+        _ => PrismSides,
+    };
+
+    /// <summary>
+    /// 立体档位的**上下限**（3 / 6）。界面要知道"这一格一共几档"才能画档位点，
     /// 而 `Stroke` 是引擎内部类型、InkUi 看不到——所以把这两个数**随状态一起推上去**
     ///（不在界面那边写死一份 3/6：档位范围以后要改成 3~8 的话，那种写法必漏一处）。
     /// </summary>
-    public int PrismMinSides { get; init; }
-    public int PrismMaxSides { get; init; }
+    public int SolidMinSides { get; init; }
+    public int SolidMaxSides { get; init; }
     public bool PassThrough { get; init; }
     /// <summary>是否处于白板模式（画布有不透明底色）。</summary>
     public bool Board { get; init; }

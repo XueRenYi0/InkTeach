@@ -3952,7 +3952,7 @@ internal sealed class Stroke
     /// <summary>
     /// **底面几边形**（3~6）。和 <see cref="CurveAxis"/>（抛物线朝向）同一个地位：
     /// **画之前选好**，画的那一刻写进对象，之后它就是这条对象自己的属性——
-    /// 面板再换档也不会回头改已经画好的（见 Engine.CyclePrismSides）。
+    /// 面板再换档也不会回头改已经画好的（见 Engine.CycleSolidSides）。
     ///
     /// 存成一个**可读的整数**而不是四个枚举值：3/4/5/6 本来就是这条对象唯一想知道的事，
     /// 拆成 `Prism3/Prism4/...` 反而要在四处做映射。

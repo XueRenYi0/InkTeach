@@ -77,7 +77,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetTool(Tool tool) => _engine.SetToolFromUi(tool);
     public void CycleParabolaAxis() => _engine.CycleParabolaAxis();
     public void CycleLineDash() => _engine.CycleLineDash();
-    public void CyclePrismSides() => _engine.CyclePrismSides();
+    public void CycleSolidSides() => _engine.CycleSolidSides();
     public void SetColor(Color4 color) => _engine.SetColorFromUi(color);
     public void SetWidth(float logicalPx) => _engine.SetWidthFromUi(logicalPx);
     public void SetDash(StrokeDash dash) => _engine.SetDashFromUi(dash);
