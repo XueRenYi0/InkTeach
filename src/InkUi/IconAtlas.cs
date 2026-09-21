@@ -518,8 +518,17 @@ internal static class IconAtlas
     }
 
     /// <summary>
-    /// 自绘的**棱锥**图标：底面正 n 边形 ＋ 一个顶点（三条棱收到一点）。
+    /// 自绘的**棱锥**图标：底面正 n 边形 ＋ 一个顶点（n 条棱收到一点）。
     /// 和 <see cref="DrawPrism"/> 共用底面与可见性判据，只把"顶面"换成**一个点**。
+    ///
+    /// ⚠ **只有三棱锥画完整线框**（藏起来的棱也画），这是用户 2026-09-20 看出来的
+    ///（"三棱锥图标看着不对"，见 `--shapeiconshow` 那张对照表）：
+    /// 三棱锥一共 6 条棱，按"只画看得见的"筛完只剩 **3 条**（前面那条底边 ＋ 两条侧棱），
+    /// 而这三条画出来**正好是一个平面正三角形**——和「三角形」那一格**一模一样**，
+    /// 完全看不出是个立体。补上藏起来的那 3 条（另外两条底边 ＋ 后面那条侧棱）就立起来了。
+    ///
+    /// **四棱以上不补**：它们的可见棱里至少还有**两条底边**（前后各一条），
+    /// 形状立得住；补成全线框反而在 18 像素下发糊（出图比过，2026-09-20）。
     /// </summary>
     private static void DrawPyramid(ID2D1DeviceContext ctx, float x, float y,
                                     float size, ID2D1Brush brush, int sides)
@@ -536,7 +545,7 @@ internal static class IconAtlas
         var top = new Vector2[sides];
         for (int k = 0; k < sides; k++) top[k] = apex;   // 顶面退化成一个点
 
-        DrawRingSolid(ctx, b, top, hasTopRing: false, rx, ry, brush);
+        DrawRingSolid(ctx, b, top, hasTopRing: false, rx, ry, brush, fullWire: sides == 3);
         ctx.Transform = saved;
     }
 
@@ -588,9 +597,12 @@ internal static class IconAtlas
     /// 每个侧面看得见吗：**和画布上同一个判据**（`ShapeSpec.PrismFaceVisible`，
     /// 连错切那一项都算进去——漏了它，四棱柱的图标会少画右侧那一面）。
     /// `hasTopRing = false` 是棱锥（顶面只是一个点，画"面"就成了墨疙瘩）。
+    ///
+    /// `fullWire`：**画完整线框**（藏起来的棱也画）。只有**棱锥**需要它，理由见 DrawPyramid。
     /// </summary>
     private static void DrawRingSolid(ID2D1DeviceContext ctx, Vector2[] b, Vector2[] top,
-                                      bool hasTopRing, float rx, float ry, ID2D1Brush brush)
+                                      bool hasTopRing, float rx, float ry, ID2D1Brush brush,
+                                      bool fullWire = false)
     {
         int n = b.Length;
         void Line(Vector2 p, Vector2 q) => ctx.DrawLine(p, q, brush, 1.5f, _round);
@@ -607,9 +619,9 @@ internal static class IconAtlas
         {
             int nx = (k + 1) % n;
             if (hasTopRing) Line(top[k], top[nx]);    // 顶面：俯视下恒可见
-            if (face[k]) Line(b[k], b[nx]);           // 底面：只有看得见的那几条
+            if (fullWire || face[k]) Line(b[k], b[nx]);           // 底面
             // 侧棱：相邻两个侧面有一个看得见就画（棱锥时 top[k] 就是顶点）
-            if (face[k] || face[(k + n - 1) % n]) Line(b[k], top[k]);
+            if (fullWire || face[k] || face[(k + n - 1) % n]) Line(b[k], top[k]);
         }
     }
 

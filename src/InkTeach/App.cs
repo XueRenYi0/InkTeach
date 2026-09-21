@@ -224,6 +224,13 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             IconShow(args.Length > 1 ? args[1] : "reports/laser-icons.bmp");
         }
+        else if (mode == "--shapeiconshow")
+        {
+            // 图形面板那些自绘图标的**对照表**（含每一档的变体），见 ShapeIconSheet。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ShapeIconShow(args.Length > 1 ? args[1] : "reports/shape-icons.bmp");
+        }
         else if (mode == "--captureicons")
         {
             _autoExitAt = double.MaxValue;
@@ -691,6 +698,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --passtest          穿透真机测试（跨进程点击）");
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
+        Console.WriteLine("  --shapeiconshow [路径] 出图：图形面板图标的对照表（含每一档的变体）");
         Console.WriteLine("  --shapebandtest     图形那格的界面入口自检（七段 / 三个新热键 / 主条图标跟着变）");
         Console.WriteLine("  --dashtest          线型自检（实线/虚线/点线上屏墨量、面板那一行、存档往返）");
         Console.WriteLine("  --axistest          坐标系/数轴自检（画法 / 四个手柄 / 网格 / 上屏 / 存档往返）");
@@ -9953,22 +9961,22 @@ internal sealed class App : InkEngine.InkEngine
     /// 把界面挂上、展开、出图（给人看的，不判红绿）。
     /// 出图这条链子是这个仓库一贯的验收方式：观感的事眼睛说了算，数字只负责证明没坏。
     /// </summary>
-    /// <summary>把激光笔图标的几个候选并排出一张图（开发期比图用）。</summary>
     /// <summary>出图：**截屏图标候选**（用户 2026-09-17："截图图标和选中图标一样的，是不是不大好？"）。</summary>
-    private void CaptureIconShow(string path)
-    {
-        SetUi(new CaptureIconSheet());
-        BoardOn = true;
-        SettleFrames(400);
-        if (OffscreenShot(path)) return;
-        Console.WriteLine("出图失败（离屏路径没走通）");
-        ExitCode = 1;
-        _quit = true;
-    }
+    private void CaptureIconShow(string path) => SheetShow(new CaptureIconSheet(), path);
 
-    private void IconShow(string path)
+    /// <summary>出图：**激光笔图标候选**（开发期比图用，见 <see cref="LaserIconSheet"/>）。</summary>
+    private void IconShow(string path) => SheetShow(new LaserIconSheet(), path);
+
+    /// <summary>出图：图形面板那些自绘图标的对照表（见 <see cref="ShapeIconSheet"/>）。</summary>
+    private void ShapeIconShow(string path) => SheetShow(new ShapeIconSheet(), path);
+
+    /// <summary>
+    /// **把一张"图标对照表"的图截下来**——`--iconshow` / `--captureicons` / `--shapeiconshow`
+    /// 三处共用这一份（原来只有前面两个、各写了一遍，加第三个时收过来的）。
+    /// </summary>
+    private void SheetShow(IOverlayUi sheet, string path)
     {
-        SetUi(new LaserIconSheet());
+        SetUi(sheet);
         BoardOn = true;                      // 白板打底：图里没有桌面上的杂东西
         SettleFrames(400);
 
@@ -11898,15 +11906,16 @@ internal sealed class App : InkEngine.InkEngine
             // 2026-09-20 第十三批：**圆台**（用户："再加一个圆台"）。和圆柱 / 圆锥同族
             //（一笔拖出外接矩形），所以紧挨着它们放。
             (Tool.ConeFrustum, "圆台"),
+            // 2026-09-20 第十四批：**球**（用户："在加入球"）。一笔拖外接矩形。
+            // ⚠ 位置按用户同一天的口径改过："把球放在旋转体后面" —— 所以它在圆台之后、
+            // 棱柱之前（旋转体那一组"柱 / 锥 / 台 / 球"连着排）。
+            (Tool.Sphere, "球"),
             // 2026-09-20 第十一批：**棱柱**（3/4/5/6 棱柱 ＋ 直/斜）。两笔，
             // 而且那一格"再点一次换一档"（和直线的线型同构，见 §32）。
             (Tool.Prism, "棱柱"),
             // 2026-09-20 第十二批：**棱锥 / 棱台**（见 §34）。它们和棱柱是**一族**
             //（同样的两笔、同样的 3/4/5/6 档、同样的"直"吸附），所以紧挨着排。
             (Tool.Pyramid, "棱锥"), (Tool.Frustum, "棱台"),
-            // 2026-09-20 第十四批：**球**（用户："在加入球"）。一笔拖外接矩形，
-            // 排在**最后**——它不是"柱 / 锥 / 台"那条线（那条线的上下两个面是平行截面）。
-            (Tool.Sphere, "球"),
             // ⚠ **长方体 / 四面体那两段撤掉了**（同一天，用户："那两格似乎可以删除掉了"）——
             // 所以这张期望表里也没有它们了，但**画法与存档都还在**（下面单列一条断言钉住
             // "能画、没入口"这第三种状态，正因为"有入口的那些"这张表管不到它们）。
@@ -12029,6 +12038,37 @@ internal sealed class App : InkEngine.InkEngine
                         .Select(r => $"{rowTop[r]:F0}..{rowBottom[r]:F0}"))
                     + $"，带子 y {bandRect.MinY:F0}..{bandRect.MaxY:F0}"
                   : rowNote);
+
+        // **哪几格该有档位点、各有几档**——期望值独立写在下面这张表里。
+        // 用户 2026-09-20 提的两条都落在这上面：
+        //   · "你把档位点挪到图标右边"（位置）—— 那条只有出图看得见；
+        //   · "抛物线页增加小圆点"（**这一格原来没有点**）—— 这条能断，而且该断：
+        //     它有"再点一次换一档"却一直没给点，是**漏的**（和加图形忘了自检同一类）。
+        // 所以这里逐段比：该有几档就几档，别的图形必须 0。
+        {
+            var pipWant = new Dictionary<Tool, int>
+            {
+                [Tool.Line] = 3,        // 实 / 虚 / 点
+                [Tool.Parabola] = 2,    // 上下 / 左右
+                [Tool.Prism] = 4, [Tool.Pyramid] = 4, [Tool.Frustum] = 4,   // 三 / 四 / 五 / 六
+            };
+            int pipOk = 0, pipNo = 0;
+            var pipWrong = new List<string>();
+            for (int i = 0; i < want.Length; i++)
+            {
+                int wantCount = pipWant.TryGetValue(want[i].tool, out int c) ? c : 0;
+                var (gotCount, gotCur) = ui.ShapePipsForTest(i);
+                bool ok = gotCount == wantCount && (gotCount == 0 || (gotCur >= 0 && gotCur < gotCount));
+                if (ok && gotCount > 0) pipOk++; else if (ok) pipNo++;
+                if (!ok)
+                    pipWrong.Add($"{want[i].name}：{gotCount} 个（期望 {wantCount}）");
+            }
+            Check("档位点：**该有的那几格**有（直线 3 / 抛物线 2 / 棱柱族 4），别的图形一个点都没有",
+                  pipWrong.Count == 0,
+                  pipWrong.Count > 0
+                      ? string.Join("；", pipWrong)
+                      : $"有档位的 {pipOk} 格、没档位的 {pipNo} 格，当前档也都在范围内");
+        }
 
         for (int i = 0; i < want.Length; i++)
         {

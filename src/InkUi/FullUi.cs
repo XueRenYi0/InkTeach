@@ -853,18 +853,16 @@ public sealed class FullUi : IOverlayUi
         //   · 旋转体：一次拖出**外接矩形**、一笔画完、被挡住的是"远侧那一圈/半圈"
         //     （圆柱 / 圆锥 / 圆台 / **球**；球多画一个赤道椭圆，不然它和「圆」长得一样）；
         //   · 棱柱体：**两笔**（底面外接框 → 顶上那个中心）、3/4/5/6 档、"直"那档有轻微吸附。
-        // ⚠ 圆台（第十三批）紧挨着圆柱 / 圆锥；棱柱 / 棱锥 / 棱台三兄弟挨着；
-        //   **球排在最后**——它不是"柱 / 锥 / 台"那条线（那条线的上下两个面是平行的截面），
-        //   摆尾巴上比插在圆台后面更好找。
+        // ⚠ **球紧跟着圆台**（用户 2026-09-20："把球放在旋转体后面"）——旋转体那一组
+        //   "柱 / 锥 / 台 / 球"连着排，后面才是棱柱体那一组。
         // ⚠ **长方体 / 四面体不在这张表里了**（2026-09-20 第十二批撤的**入口**）：
         // 四棱柱（直）就是长方体、三棱锥就是四面体，被上面那几段覆盖了。
         // 撤的是入口，不是画法——`Tool.Cuboid` / `StrokeKind.Cuboid` 与整条画法都留着，
         // 旧板书里的长方体照样能打开、能选中、能删（同 2026-09-19 撤「数轴」的规矩，见 11.2）。
         new[]
         {
-            Tool.Cylinder, Tool.Cone, Tool.ConeFrustum,
+            Tool.Cylinder, Tool.Cone, Tool.ConeFrustum, Tool.Sphere,
             Tool.Prism, Tool.Pyramid, Tool.Frustum,
-            Tool.Sphere,
         },
     };
 
@@ -2761,11 +2759,14 @@ public sealed class FullUi : IOverlayUi
         }
 
         var segInk = active ? Tokens.AccentInk : InkCol;
-        // **有档位的那两段**（点它一下换一档，见 ActivateSegment 的 case 8）：
+        // **有档位的那几格**（点它一下换一档，见 ActivateSegment 的 case 8）：
         //   · 「直线」= 3 档线型（实 / 虚 / 点）；
+        //   · 「抛物线」= 2 档（上下 / 左右）；
         //   · 「棱柱 / 棱锥 / 棱台」= 4 档边数（三 / 四 / 五 / 六）。
         // 图标照旧画当前那一档，**右边再加一竖列档位点**——大而浓的那个是当前档。
         // 用户 2026-09-20 定：只换图标的话，老师"不知道这一格还能点"（可选的状态是隐形的）。
+        // 抛物线那格是**同一天稍后补上的**（用户："抛物线页增加小圆点"）——
+        // 它从加进来那天起就是"再点一次换一档"，却一直没给点，是漏的。
         //
         // ⚠ **三格各有各的档**（`st.SidesOf(tool)`）：第一版三格共用一个数，结果是
         // "点棱锥那一格，棱柱、棱台的点跟着一起动"——用户上手就报了这个。
@@ -2773,24 +2774,16 @@ public sealed class FullUi : IOverlayUi
         // 而不是随手读一个 `st.PrismSides`。
         //
         // **点从"图标下面"挪到了"图标右边"**（还是 2026-09-20，用户看出来的）：
-        // 图形段是"宽 × 26"的长方形（第二行 9 段时每格约 80 宽），而图标只占 18 ——
-        // 左右各有约 30 的空白。横排放在下面的时候，为了挤出那 7 像素高，
-        // 图标得**压到 16 并整体上移 3.5**；竖着放到右边之后那一列点只占约 7 宽，
-        // 图标就能回到 18 并留在正中。只有这几格有档位，别的段照旧。
+        // 图形段是"宽 × 26"的长方形，而图标只占 18 —— 横排放在下面的时候，为了挤出
+        // 那 7 像素高，图标得**压到 16 并整体上移 3.5**；竖着放到右边之后那一列点
+        // 只占约 4 宽，图标就能回到 18 并留在正中。
         //
-        // **档数与当前档都从这一处算**（不在绘制里再列一遍工具名）：
-        // `ShapeSpec.HasSideCount(tool)` 判"是不是那一族"，这里判"它有几档、现在是第几档"。
-        // 档位范围**来自引擎**（`st.SolidMin/MaxSides`）——`Stroke` 是引擎内部类型，
-        // 界面看不到它，也不该在这里写死一份 3/6。
+        // **"这一格有几档、现在是第几档"只有 `PipsOf` 那一处**（绘制与自检共用）：
+        // 在这里再列一遍工具名，加一种图形就会漏一处。
         var segTool = ShapeToolAt(i);
-        int pipCount = segTool == Tool.Line ? 3
-            : ShapeSpec.HasSideCount(segTool) ? st.SolidMaxSides - st.SolidMinSides + 1
-            : 0;
+        var (pipCount, pipCur) = PipsOf(segTool, st);
         if (pipCount > 0)
         {
-            int pipCur = segTool == Tool.Line
-                ? (int)st.LineDash
-                : Math.Clamp(st.SidesOf(segTool), st.SolidMinSides, st.SolidMaxSides) - st.SolidMinSides;
             // 右边让出这么宽的一条给竖排的点（点距/半径在 `DrawPips` 里，最浓的那个半径 2，
             //  所以这一列实际占 ~4 宽、居中在这条带的中间）。
             const float PipStripW = 12f;
@@ -2804,6 +2797,27 @@ public sealed class FullUi : IOverlayUi
         }
 
         IconAtlas.DrawCentered(ctx, ShapeIcon(segTool), r, 18f, Brush(ctx, segInk));
+    }
+
+    /// <summary>
+    /// 这一格右边该点**几个档位点**、第几个是当前档（`Count = 0` ＝ 这一格没有档位，
+    /// 绘制那边就照原样画大图标）。**判据只有这一处**——绘制和自检都问它：
+    ///   · 「直线」= 3 档线型，当前档就是 <c>LineDash</c>；
+    ///   · 「抛物线」= **2 档**（上下 / 左右），当前档按 <see cref="ParabolaAxisIndex"/> 折算
+    ///     ——注意 `CurveAxis` 本身是四个值（上下左右各有两向），面板这一格只管"哪一对"；
+    ///   · 「棱柱 / 棱锥 / 棱台」= 4 档边数，**三格各记各的**（见 `UiState.SidesOf`）；
+    ///   · 别的图形 0（它们还没有第二档）。
+    /// 档位范围**来自引擎**（`st.SolidMin/MaxSides`）——`Stroke` 是引擎内部类型，
+    /// 界面看不到它，也不该在这里写死一份 3/6。
+    /// </summary>
+    private static (int Count, int Current) PipsOf(Tool tool, in UiState st)
+    {
+        if (tool == Tool.Line) return (3, (int)st.LineDash);
+        if (tool == Tool.Parabola) return (2, ParabolaAxisIndex(st.ParabolaAxis));
+        if (ShapeSpec.HasSideCount(tool))
+            return (st.SolidMaxSides - st.SolidMinSides + 1,
+                    Math.Clamp(st.SidesOf(tool), st.SolidMinSides, st.SolidMaxSides) - st.SolidMinSides);
+        return (0, 0);
     }
 
     /// <summary>
@@ -2883,11 +2897,19 @@ public sealed class FullUi : IOverlayUi
     /// 只有两个名字：**具体朝哪边由画的时候那一拖定**（用户 2026-09-20 更晚的口径：
     /// "感觉不对，还是照搬他的逻辑"；InkClass 也是两个按钮 `case 20/21`）。
     /// </summary>
-    private static string ParabolaIconName(CurveAxis axis) => axis switch
-    {
-        CurveAxis.OpenRight or CurveAxis.OpenLeft => "parabolaRight",
-        _ => "parabola",                           // 上下抛物（也是兜底）
-    };
+    private static string ParabolaIconName(CurveAxis axis)
+        => ParabolaAxisIndex(axis) == 1 ? "parabolaRight" : "parabola";
+
+    /// <summary>
+    /// 抛物线那一格**两档**里的第几档（0 = 上下抛物、1 = 左右抛物）。
+    ///
+    /// 为什么要有它：`CurveAxis` 是**四个值**（上下左右各一个方向，具体朝哪边由画的时候
+    /// 那一拖定），而面板这一格只管"**哪一对**"。所以"图标画哪张"和"档位点点第几个"
+    /// 都得先把四个值折成两档——**这个折算只有这一处**，两处各写一遍迟早对不上
+    /// （表现是"图标换了、点没跟着动"）。
+    /// </summary>
+    private static int ParabolaAxisIndex(CurveAxis axis)
+        => axis is CurveAxis.OpenRight or CurveAxis.OpenLeft ? 1 : 0;
 
     /// <summary>
     /// 直线的图标名按**当前线型**换（`line` / `lineDash` / `lineDot`，见 <see cref="IconAtlas.Draw"/>）。
@@ -3281,6 +3303,14 @@ public sealed class FullUi : IOverlayUi
     /// 图标不转的话，老师看不出"再点一次"到底有没有生效。
     /// </summary>
     internal string ShapeIconNameForTest(int i) => ShapeIcon(i);
+
+    /// <summary>
+    /// 自检用：图形那一格**第 i 段**右边有几个档位点、第几个是当前档（见 <see cref="PipsOf"/>）。
+    /// 拿它验"哪几格该有档位点、各有几档"——用户 2026-09-20 问"抛物线那格怎么没有小圆点"
+    /// 就是这类漏了才发现的，所以这条要有断言卡住。
+    /// </summary>
+    internal (int Count, int Current) ShapePipsForTest(int i)
+        => PipsOf(ShapeToolAt(i), _host.State);
 
     /// <summary>自检用：这个工具在图形面板里有没有入口（见 <see cref="HasShapeEntry"/>）。</summary>
     internal static bool HasShapeEntryForTest(Tool t) => HasShapeEntry(t);
