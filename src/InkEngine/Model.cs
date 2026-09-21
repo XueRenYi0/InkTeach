@@ -220,26 +220,6 @@ public enum Tool
     /// 详见 <see cref="StrokeKind.Wave"/>。
     /// </summary>
     Wave = 30,
-
-    /// <summary>
-    /// **指数 y = aˣ**（2026-09-20 第十七批）：面板一格，**三档底数**（2 / 3 / 1/2，
-    /// "再点一次换一档"，和棱柱那三格同一套）。画法见 <see cref="StrokeKind.Exponential"/>。
-    /// </summary>
-    Exponential = 31,
-
-    /// <summary>
-    /// **对数 y = log_a x**（2026-09-20 第十七批）：一格、三档底数（**和指数同一组**，
-    /// 好讲"互为反函数"）。画法见 <see cref="StrokeKind.Logarithm"/>。
-    /// </summary>
-    Logarithm = 32,
-
-    /// <summary>
-    /// **幂 y = x^α**（2026-09-20 第十七批）：一格、**五档**（x / x² / x³ / √x / 1/x，
-    /// 用户定的"课本那 5 个"）。⚠ 五档是**一格的档位点上限**（第 6 个点塞不进段高），
-    /// 所以"6 类幂函数全覆盖"做不到、也不需要（课本就不画 x⁻² 和 x^(−½)）。
-    /// 画法见 <see cref="StrokeKind.Power"/>。
-    /// </summary>
-    Power = 33,
 }
 
 /// <summary>An axis-aligned rectangle in virtual-desktop pixels.</summary>
@@ -616,46 +596,6 @@ internal enum StrokeKind
     /// 值同样只能追加在末尾。
     /// </summary>
     Wave = 25,
-
-    /// <summary>
-    /// **指数函数 y = aˣ**（2026-09-20 第十七批，用户拍板："形状固定 ＋ 拖框定大小"）。
-    ///
-    /// 和正弦 / 波浪线同一族的**一笔**图形，但形状不是靠"拖出来的两个自由度"定的，
-    /// 而是**分档选好的**（三档底数，见 <see cref="ShapeSpec.FunctionBases"/>）——
-    /// 因为指数 / 对数 / 幂这三条**只由一个参数定形状**，而画布上没有刻度，
-    /// "1 个单位有多长"没法从像素读出来（用户原话："如果我有一个坐标系，我还需要先找到 1、1，
-    /// 这个就挺难的"）。所以改成：
-    ///   · **形状定死**（档位选底数）；
-    ///   · **拖框只定大小和看得多宽**（见 <see cref="SetFunctionBox"/>）：
-    ///     按下 = 曲线**必然经过的那个点**（这里 (0,1)）、
-    ///     往下拖 = **一个单位多长**、往右拖 = **往右看多少个单位**。
-    /// 于是**不用找任何点** —— 按在哪儿，那个点就在哪儿。
-    ///
-    /// 值同样只能追加在末尾。
-    /// </summary>
-    Exponential = 26,
-
-    /// <summary>
-    /// **对数函数 y = log_a x**（2026-09-20 第十七批）：和 <see cref="Exponential"/> 同一族，
-    /// 按下 = **(1,0)**（`log_a 1 = 0`，与底数无关）。
-    ///
-    /// 两格的**底数是同一组**（见 <see cref="ShapeSpec.FunctionBases"/>）：
-    /// 这样画出来正好**关于 y = x 对称**，讲"互为反函数"最方便（用户定的口径）。
-    /// </summary>
-    Logarithm = 27,
-
-    /// <summary>
-    /// **幂函数 y = x^α**（2026-09-20 第十七批）：同族，按下 = **(1,1)**（`1^α = 1`，与 α 无关）。
-    ///
-    /// ⚠ 它是三条里**唯一"定义域会变"**的一条，所以分档不只分"陡一点平一点"，而是
-    /// **连定义域、支数、有没有渐近线一起分**（五档，见 <see cref="ShapeSpec.PowerExponents"/>）：
-    ///   · α = 1 / 2 / 3：定义域全体实数 → 左右**两支**，过原点；
-    ///   · α = 1/2（√x）：定义域 x ≥ 0 → **只有右支**；
-    ///   · α = −1（1/x）：定义域 x ≠ 0 → **两支**（都不含原点）＋ **两条渐近线**
-    ///     （x = 0、y = 0，走辅助几何槽，和正切同一套）。
-    /// 用户 2026-09-20 原话："最麻烦的是幂函数……而且它的定义域也可能变"——这条注释就是那个答复。
-    /// </summary>
-    Power = 28,
 }
 
 /// <summary>
@@ -1218,24 +1158,6 @@ internal sealed class Stroke
                     for (int side = -1; side <= 1; side += 2)
                     {
                         var (from, to) = HyperbolaAsymptoteLocal(side);
-                        list.Add(new InkPiece(new List<Vector2> { from, to }, true));
-                    }
-                }
-                break;
-
-            // ---- 指数 / 对数 / 幂：每一支一笔（抬高分开的那些自然分成几笔）----
-            //      1/x 还多两条**渐近线**（细虚线）——和双曲线同一个排法。
-            case StrokeKind.Exponential:
-            case StrokeKind.Logarithm:
-            case StrokeKind.Power:
-                if (Points.Count < 2) break;
-                foreach (var part in SplitOutlineParts(FunctionOutlineLocal()))
-                    list.Add(new InkPiece(part, false));
-                if (PowerHasAsymptotes)
-                {
-                    for (int side = 0; side <= 1; side++)
-                    {
-                        var (from, to) = PowerAsymptoteLocal(side);
                         list.Add(new InkPiece(new List<Vector2> { from, to }, true));
                     }
                 }
@@ -2451,319 +2373,6 @@ internal sealed class Stroke
         => Math.Clamp((int)MathF.Ceiling(
                MathF.Max(TangentHalfSpanLocal(), TangentHalfHeightLocal()) / 4f), 24, 512);
 
-    // =====================================================================
-    //  **函数曲线：指数 / 对数 / 幂**（2026-09-20 第十七批，用户拍板）
-    //
-    //  三条共用"锚点 ＋ 拖出去那个点"两个控制点，差别只在**每个点是什么**、
-    //  以及**形状从哪儿来**：
-    //    · **指数** y = aˣ：按下 = **(0,1)**（图象与 y 轴的交点）；拖出去 = **`x = 1` 那个点**
-    //      —— 于是"横向那一拖就是 x 从 0 到 1（一个单位）"、"竖着拖多高 = 底数 a"
-    //      （拖成 45° 正好 2ˣ：往上拖得越陡底数越大、往下拖得到 a < 1）；
-    //    · **对数** y = log_a x：按下 = **(1,0)**（图象与 x 轴的交点）；拖出去 = **`y = 1` 那个点**
-    //      —— 所以是"纵向那一拖 = 一个单位"、"横着拖多远 = 底数 a"（和指数刚好互换）；
-    //    · **幂** y = x^α：按下 = **(1,1)**（所有幂函数都过它）；拖出去 = **只定大小**
-    //      （纵向 = 一个单位、横向 = 往右看多少个单位），**形状由档位定死**。
-    //
-    //  **为什么指数 / 对数不用分档、幂必须分档**（用户 2026-09-20 原话："指数对数不是确定
-    //  顶点以后再根据拖动确定，不需要考虑几档吧？……最麻烦的是幂函数，而且它的定义域也可能变"）：
-    //    · 前两条的**形状只有一个自由度**（底数），而"锚点 ＋ 一个拖动点"正好给两个数
-    //      —— 一个定单位、一个定底数，**刚好解得出**，所以老师按一下、拖一下就有了；
-    //    · 幂的档里含**离散信息**（定义域 / 画几支 / 有没有渐近线：√x 只有右支、
-    //      1/x 两支＋两条渐近线），这种东西**拖不出来**，只能先选。
-    //
-    //  **为什么这样就绕开了"找不到 (1,1)"**：三条的锚点都是"图象必然经过的那个点"，
-    //  而它**落在你按下的位置**——不需要先在画布上量出一格、再去找它。
-    // =====================================================================
-
-    /// <summary>函数曲线的**锚点**（＝按下那个点：图象必然经过的那个点，局部坐标）。</summary>
-    public Vector2 FunctionAnchorLocal() => CurvePointLocal(0);
-
-    /// <summary>拖出去的那个点（和锚点一起定下单位 / 底数 / 看多宽）。</summary>
-    public Vector2 FunctionDragLocal() => CurvePointLocal(1);
-
-    /// <summary>锚点在**数学坐标**里是哪个点：指数 (0,1)、对数 (1,0)、幂 (1,1)。</summary>
-    public static Vector2 FunctionAnchorMathOf(StrokeKind kind) => kind switch
-    {
-        StrokeKind.Logarithm => new Vector2(1f, 0f),
-        StrokeKind.Power => new Vector2(1f, 1f),
-        _ => new Vector2(0f, 1f),                    // 指数（也是兜底）
-    };
-
-    /// <summary>
-    /// **一个单位有多长**（像素）。三条里"哪一拖是单位"不一样（见这一区的注释）：
-    ///   · **指数**：**横向**那一拖（"往右拖出去的那一段就是 x 从 0 到 1"）；
-    ///   · **对数 / 幂**：**纵向**那一拖。
-    /// 兜一个下限（拖得太短时整条曲线会缩成一个点那样，没法看）。
-    /// </summary>
-    public static float FunctionUnitOf(StrokeKind kind, Vector2 p0, Vector2 p1)
-    {
-        float raw = kind == StrokeKind.Exponential ? MathF.Abs(p1.X - p0.X) : MathF.Abs(p1.Y - p0.Y);
-        return MathF.Max(1f, raw);
-    }
-
-    /// <summary>实例版：读对象上的两个控制点。</summary>
-    public float FunctionUnitLocal() => FunctionUnitOf(Kind, FunctionAnchorLocal(), FunctionDragLocal());
-
-    /// <summary>
-    /// 指数 / 对数的**底数 a**：**拖出来的**（所以这两格没有档位）。
-    ///
-    /// 拖出去的那个点标定的是"图象上的另一点"：
-    ///   · **指数**：那个点的横坐标是 `1`（即拖到 `x = 1` 处）→ 竖着每多拖**一个单位**，
-    ///     底数就**翻一倍** → **45° 正好 2ˣ**、再陡一点 4ˣ、**往下拖一个单位就是 (1/2)ˣ**；
-    ///   · **对数**：那个点的纵坐标是 `1`（即拖到 `y = 1` 处）→ 横着每多拖一个单位翻一倍
-    ///     （和指数刚好互换：往右 = 底数大（图象平缓）、往左 = 底数小）。
-    ///
-    /// 为什么是"翻倍"而不是线性：线性的话"往下拖一个单位"会直接掉到 `a = 0`（退化），
-    /// 而 `2ˣ` 和 `(1/2)ˣ` 这两张**对称的图**本该由**对称的一拖**得到（用户讲课时最常用的就是这一对）。
-    /// 夹在 `[FunctionBaseMin, FunctionBaseMax]`：`a = 1` 是水平直线（退化），
-    /// 拖到那儿附近就贴住不动（"看不见却占着一条对象"是这个仓库的老忌）。
-    /// </summary>
-    public static float ExpBaseOf(StrokeKind kind, Vector2 p0, Vector2 p1)
-    {
-        float u = FunctionUnitOf(kind, p0, p1);
-        // 竖（指数）/ 横（对数）拖了几个单位 —— **带上下的符号**（往上拖是正的）
-        float v = kind == StrokeKind.Logarithm ? (p1.X - p0.X) / u : (p0.Y - p1.Y) / u;
-        return Math.Clamp(MathF.Pow(2f, v), ShapeSpec.FunctionBaseMin, ShapeSpec.FunctionBaseMax);
-    }
-
-    /// <summary>实例版：底数（只有指数 / 对数读得到有意义的值）。</summary>
-    public float ExpBaseLocal() => ExpBaseOf(Kind, FunctionAnchorLocal(), FunctionDragLocal());
-
-    /// <summary>幂函数的**指数 α**（档位选的，见 <see cref="ShapeSpec.PowerExponents"/>）。</summary>
-    public float PowerAlphaLocal() => CurveParam;
-
-    /// <summary>
-    /// 把 α **夹到合法的档位值上**（`ShapeSpec.PowerExponents` 里离它最近的那一个）。
-    ///
-    /// 两个地方要用：**读存档**（存的是值不是序号，一个坏字节 / 表改过之后可能给来一个
-    /// 不存在的 α——不夹就会画出一条"看着对、其实哪一档都不是"的曲线）和**画之前**。
-    /// 0（老文件、或别的种类根本没设过）也会被夹到第一档。
-    /// </summary>
-    public static float ClampCurveParam(float alpha)
-    {
-        // 0 = "从来没设过"（老文件、或别的种类），**直接给第一档**——
-        // 不能按"离谁近"算：0 离 0.5 比离 1 更近，会悄悄变成 0.5（自检里当场抓出来过）。
-        if (alpha == 0f) return ShapeSpec.PowerExponents[0];
-        float best = ShapeSpec.PowerExponents[0], bestD = float.MaxValue;
-        foreach (float v in ShapeSpec.PowerExponents)
-        {
-            float d = MathF.Abs(v - alpha);
-            if (d < bestD) { bestD = d; best = v; }
-        }
-        return best;
-    }
-
-    /// <summary>幂函数**往右看多少个单位**（＝横向那一拖 ÷ 单位长；拖得越宽看得越远）。</summary>
-    private static float FunctionSpanUnitsOf(StrokeKind kind, Vector2 p0, Vector2 p1)
-        => MathF.Max(0.5f, MathF.Abs(p1.X - p0.X) / FunctionUnitOf(kind, p0, p1));
-
-    /// <summary>数学坐标 → 屏幕坐标（局部）：锚点那个数学点正好落在按下的位置。</summary>
-    public static Vector2 FunctionPointOf(StrokeKind kind, Vector2 p0, Vector2 p1, float mx, float my)
-    {
-        var om = FunctionAnchorMathOf(kind);
-        float u = FunctionUnitOf(kind, p0, p1);
-        return new Vector2(p0.X + (mx - om.X) * u, p0.Y - (my - om.Y) * u);
-    }
-
-    /// <summary>实例版：数学坐标 → 屏幕坐标。</summary>
-    public Vector2 FunctionPointLocal(float mx, float my)
-        => FunctionPointOf(Kind, FunctionAnchorLocal(), FunctionDragLocal(), mx, my);
-
-    /// <summary>
-    /// 由**数学 y 反求数学 x**（三条共用；`leftBranch` 只有幂的左支用得到）。
-    /// 采样走它——"为什么按 y 采"见 <see cref="FunctionBranchesOf"/>。
-    /// </summary>
-    private static float FunctionXOfY(StrokeKind kind, float my, bool leftBranch,
-                                      Vector2 p0, Vector2 p1, float curveParam)
-    {
-        switch (kind)
-        {
-            case StrokeKind.Exponential:
-                return MathF.Log(my) / MathF.Log(ExpBaseOf(kind, p0, p1));   // y = aˣ → x = log_a y
-            case StrokeKind.Logarithm:
-                return MathF.Pow(ExpBaseOf(kind, p0, p1), my);               // y = log_a x → x = aʸ
-            default:
-            {
-                // y = x^α → x = |y|^(1/α)；左支取负。
-                // ⚠ α < 0 且 y < 0 时（1/x 的左支）这一条也成立：|y|^(1/α) = 1/|y| ✓
-                float x = MathF.Pow(MathF.Abs(my), 1f / curveParam);
-                return leftBranch ? -x : x;
-            }
-        }
-    }
-
-    /// <summary>
-    /// 这条曲线要画的**每一支**：`(yFrom, yTo, left)`。一支＝一段**单调**曲线，
-    /// 画的时候 y 从 yFrom 均匀走到 yTo、x 用 <see cref="FunctionXOfY"/> 反求。
-    ///
-    /// **这一份列表是"画（BuildFunction）/ 轮廓（ShapeOutline）/ 紧框（CurveBoxOf）"三处
-    /// 唯一的来源**——各写一份必然对不上（这个仓库为"同一个形状算三遍"栽过好几次）。
-    ///
-    /// **为什么按 y 采样**：这三条在渐近线附近（对数的 `x → 0⁺`、1/x 的 `x → 0`）y 变得极快，
-    /// 按 x 均匀采会画成折线；按 y 均匀采，屏幕上的分段长短正好均匀。
-    /// 顺带好处：**两端点一定精确**（单调 ⇒ x 的极值就在两端），紧框直接读两端就行。
-    ///
-    /// 可见范围（<see cref="ShapeSpec"/> 里那几个常数）：
-    ///   · **指数**：x 从 −2 个单位画到 +4 个单位（左边那一截贴着 x 轴），y 截断在 ±6 个单位；
-    ///   · **对数**：x 从 `0⁺` 画到 `1 + 4` 个单位（**左边界就是它的渐近线 y 轴**，
-    ///     不用另画虚线——曲线自己贴着它），y 截断在 ±6；
-    ///   · **幂**：x 从 `1 − span` 画到 `1 + span`（`span` = 往右拖了几个单位），
-    ///     y 截断在 ±6，**定义域决定有没有左支**。
-    /// </summary>
-    private static List<(float YFrom, float YTo, bool Left)> FunctionBranchesOf(
-        StrokeKind kind, Vector2 p0, Vector2 p1, float curveParam)
-    {
-        var list = new List<(float, float, bool)>();
-        const float down = ShapeSpec.FunctionDownUnits, up = ShapeSpec.FunctionUpUnits;
-
-        if (kind == StrokeKind.Exponential)
-        {
-            // 一支到底：x 从 −2 到 +4 个单位，y 取两端的值再夹进可视范围
-            // ⚠ `down` 是个**正数**（`FunctionDownUnits = 6`），下界要用 `-down`——
-            // 写成 `down` 会让"下界 = +6 > 上界"、整支都不画（框会退成那个拖动矩形）。
-            float a = ExpBaseOf(kind, p0, p1);
-            float yA = MathF.Pow(a, -ShapeSpec.ExpLeftUnits);
-            float yB = MathF.Pow(a, ShapeSpec.ExpRightUnits);
-            float lo = MathF.Max(MathF.Min(yA, yB), -down);
-            float hi = MathF.Min(MathF.Max(yA, yB), up);
-            if (hi > lo) list.Add((lo, hi, false));
-            return list;
-        }
-
-        if (kind == StrokeKind.Logarithm)
-        {
-            float a = ExpBaseOf(kind, p0, p1);
-            // 右端钉在 `x = 1 + 4` 个单位上：**两个上限都要**，只夹高度的话曲线会一直往右伸
-            // 到 `a⁶`（a = 2 时是 64 个单位，离谱）。
-            float yAtRight = MathF.Log(1f + ShapeSpec.LogRightUnits) / MathF.Log(a);
-            // ⚠ **底数小于 1 时（往左拖出来的那种）图象是递减的**：x→0⁺ 时 y→**+∞**，
-            // 所以"低的那个头"在右端、"高的那个头"冲到 +6 才截断——和 a > 1 正好相反。
-            // 只按 a > 1 写的话，递减那一支会从右端**一直往右跑**（出图里当场看见一条飞出画面的长线）。
-            float lo = a > 1f ? -down : MathF.Max(-down, yAtRight);
-            float hi = a > 1f ? MathF.Min(up, yAtRight) : up;
-            if (hi > lo) list.Add((lo, hi, false));
-            return list;
-        }
-
-        // ---- 幂：定义域决定画几支 ----
-        float alpha = curveParam;
-        float span = FunctionSpanUnitsOf(kind, p0, p1);
-        float xr = 1f + span;                       // 右端（数学 x）
-        float xl = 1f - span;                       // 左端（可能 < 0）
-
-        // ⚠ **左支先加、右支后加**：这样"接缝"落在原点那一侧——
-        // 过原点的那些档（x / x² / x³）两支本来就该**连成一条**（见 FunctionOutlineOf
-        // 那条"接缝是不是同一个点"的判据）；反过来加的话接缝在"右上角 ↔ 左下角"之间，
-        // 会被判成两支、还会在中间连出一条横穿原点的假线。
-        // 左支（x < 0）：只有定义域含负数才有（√x 没有）；**1/x 的左支在 y < 0 那一侧**
-        if (xl < 0f)
-        {
-            float yAtXl = MathF.Pow(xl, alpha);                     // 最左端那个高度（带符号）
-            if (alpha > 0f)
-            {
-                float hi = MathF.Min(up, yAtXl);
-                if (hi > 0f) list.Add((hi, 0f, true));              // 从最左端回到原点
-            }
-            else if (yAtXl > -down)
-            {
-                list.Add((-down, yAtXl, true));                     // 从最左端（冲到 −6）回到 0⁻
-            }
-        }
-        // 右支（x > 0）：从靠近 x 轴的那一端画到另一端
-        {
-            float yAtXr = MathF.Pow(xr, alpha);
-            float lo = alpha > 0f ? 0f : yAtXr;                        // α > 0：从原点起
-            float hi = alpha > 0f ? MathF.Min(up, yAtXr) : up;         // α < 0：往上是无穷，截断
-            if (hi > lo) list.Add((lo, hi, false));
-        }
-        return list;
-    }
-
-    /// <summary>把一支曲线采成折线（`yFrom → yTo`，两端点精确）。</summary>
-    private static List<Vector2> FunctionBranchPointsOf(
-        StrokeKind kind, Vector2 p0, Vector2 p1, float curveParam, float yFrom, float yTo, bool left)
-    {
-        int n = Math.Clamp((int)MathF.Ceiling(MathF.Abs(yTo - yFrom) * 24f), 24, 400);
-        var pts = new List<Vector2>(n + 1);
-        for (int i = 0; i <= n; i++)
-        {
-            float my = yFrom + (yTo - yFrom) * i / n;
-            float mx = FunctionXOfY(kind, my, left, p0, p1, curveParam);
-            pts.Add(FunctionPointOf(kind, p0, p1, mx, my));
-        }
-        return pts;
-    }
-
-    /// <summary>
-    /// 轮廓折线（**含抬笔标记**）：画法、轮廓、紧框三处都从它出发。
-    ///
-    /// **抬笔的判据是"两支的接缝是不是同一个点"**：
-    ///   · 幂的 `x² / x³` 两支在**原点**收尾（同一个点）→ **不抬笔**，它本来就是一条连续的线；
-    ///   · 1/x 的两支一头冲到 `+∞`、一头冲到 `−∞`（不是同一点）→ **抬笔**，不许连出一条假线
-    ///     （双曲线那次的教训：跨支连线会让橡皮"擦一下多出两笔"）。
-    /// </summary>
-    public static List<Vector2> FunctionOutlineOf(StrokeKind kind, Vector2 p0, Vector2 p1, float curveParam)
-    {
-        var list = new List<Vector2>();
-        if (p1 == p0) return list;
-        Vector2? last = null;
-        foreach (var (yFrom, yTo, left) in FunctionBranchesOf(kind, p0, p1, curveParam))
-        {
-            var pts = FunctionBranchPointsOf(kind, p0, p1, curveParam, yFrom, yTo, left);
-            if (pts.Count == 0) continue;
-            if (last.HasValue && Vector2.Distance(last.Value, pts[0]) > 0.01f)
-                list.Add(OutlineBreak);
-            list.AddRange(pts);
-            last = pts[^1];
-        }
-        return list;
-    }
-
-    /// <summary>实例版：轮廓折线。</summary>
-    public List<Vector2> FunctionOutlineLocal()
-        => Points.Count < 2
-            ? new List<Vector2>()
-            : FunctionOutlineOf(Kind, FunctionAnchorLocal(), FunctionDragLocal(), CurveParam);
-
-    /// <summary>
-    /// 幂函数 α &lt; 0（1/x）时的**两条渐近线**：`x = 0`（竖）与 `y = 0`（横），
-    /// 走**辅助几何槽**画成细虚线（和双曲线、正切同一套）。
-    /// `side`：0 = 竖的那条、1 = 横的那条。
-    /// </summary>
-    public (Vector2 From, Vector2 To) PowerAsymptoteLocal(int side)
-    {
-        var p0 = FunctionAnchorLocal();
-        var p1 = FunctionDragLocal();
-        if (side == 0)
-        {
-            return (FunctionPointOf(Kind, p0, p1, 0f, -ShapeSpec.FunctionDownUnits),
-                    FunctionPointOf(Kind, p0, p1, 0f, ShapeSpec.FunctionUpUnits));
-        }
-        float span = FunctionSpanUnitsOf(Kind, p0, p1);
-        return (FunctionPointOf(Kind, p0, p1, 1f - span, 0f),
-                FunctionPointOf(Kind, p0, p1, 1f + span, 0f));
-    }
-
-    /// <summary>幂函数的这一档**要不要画那两条渐近线**（只有 α &lt; 0 的 1/x 有）。</summary>
-    public bool PowerHasAsymptotes => Kind == StrokeKind.Power && PowerAlphaLocal() < 0f;
-
-    /// <summary>
-    /// **函数曲线的画法**：按下 = 锚点，拖出去 = 那个点（含义见这一区的注释）。
-    /// 两个方向都**保留符号**——指数 / 对数的底数就是靠符号分"大于 1 / 小于 1"的，
-    /// 取绝对值会把 (1/2)ˣ 和 2ˣ 画成同一条。
-    /// </summary>
-    public void SetFunctionBox(float x0, float y0, float x1, float y1, float minSize)
-    {
-        while (Points.Count < 2) AddPoint(x0, y0, 1f, 0);
-        // ⚠ **不许取绝对值**（见上面那句）。只兜一个最小位移，防的是"按一下就松手"那种误点
-        //（那时单位 / 底数都退化了）。
-        float dx = x1 - x0, dy = y1 - y0;
-        if (MathF.Abs(dx) < minSize) dx = dx < 0f ? -minSize : minSize;
-        if (MathF.Abs(dy) < minSize) dy = dy < 0f ? -minSize : minSize;
-        SetPoint(0, new Vector2(x0, y0));                     // 锚点
-        SetPoint(1, new Vector2(x0 + dx, y0 + dy));           // 拖出去的那个点
-    }
-
     /// <summary>
     /// 曲线自己的那个矩形（**局部坐标**）。**全引擎唯一一份**，紧框 / 包围盒 / 脏区都问它。
     ///
@@ -2778,13 +2387,8 @@ internal sealed class Stroke
     /// `axis`（曲线朝向）：**这一档现在谁都没用**——双曲线原来按实/虚分流、各带一个 `√5`，
     /// 改成"渐近线框"之后两个朝向是同一个式子。参数留在签名里是因为它属于"曲线框"这一层的
     /// 一般化描述（调用方按同一套签名传参，删了要在好几处签名里绕一圈，得不偿失）。
-    ///
-    /// `curveParam`：**幂函数必须传**（它的形状由 α 定，见 <see cref="PowerAlphaLocal"/>），
-    /// 别的曲线用不上（默认 0）。这一份是**静态**的（引擎与界面共用），
-    /// 所以它读不到对象上的字段，只能由调用方递进来。
     /// </summary>
-    public static RectF CurveBoxOf(StrokeKind kind, CurveAxis axis, Vector2 p0, Vector2 p1, Vector2 p2,
-                                   float curveParam = 0f)
+    public static RectF CurveBoxOf(StrokeKind kind, CurveAxis axis, Vector2 p0, Vector2 p1, Vector2 p2)
     {
         switch (kind)
         {
@@ -2857,36 +2461,6 @@ internal sealed class Stroke
                 };
             }
 
-            case StrokeKind.Exponential:
-            case StrokeKind.Logarithm:
-            case StrokeKind.Power:
-            {
-                // **指数 / 对数 / 幂**：紧框 = **每一支两端那四个点的外接**。
-                //
-                // 为什么不用采样求极值：这三条要画的那一段都是**单调**的（见 FunctionBranchesOf），
-                // 所以 x 的极值**一定落在两端**——端点又是精确算出来的（不是采出来的），
-                // 于是这个框既准又便宜（O(支数)，每帧问也不怕）。
-                var box = RectF.Empty;
-                foreach (var (yFrom, yTo, left) in FunctionBranchesOf(kind, p0, p1, curveParam))
-                {
-                    foreach (float my in stackalloc[] { yFrom, yTo })
-                    {
-                        var q = FunctionPointOf(kind, p0, p1, FunctionXOfY(kind, my, left, p0, p1, curveParam), my);
-                        box.MinX = MathF.Min(box.MinX, q.X); box.MaxX = MathF.Max(box.MaxX, q.X);
-                        box.MinY = MathF.Min(box.MinY, q.Y); box.MaxY = MathF.Max(box.MaxY, q.Y);
-                    }
-                }
-                // 一支都没有（例如参数是坏的）→ 退到"锚点 ↔ 拖出去那个点"那个框，
-                // 免得返回一个空矩形（空框会让脏区算成 0，屏幕上留旧像素）。
-                if (box.IsEmpty)
-                    return new RectF
-                    {
-                        MinX = MathF.Min(p0.X, p1.X), MinY = MathF.Min(p0.Y, p1.Y),
-                        MaxX = MathF.Max(p0.X, p1.X), MaxY = MathF.Max(p0.Y, p1.Y),
-                    };
-                return box;
-            }
-
             default:
             {
                 // 正弦 / 余弦 / **波浪线**：**按解析式给纵向极值**。
@@ -2932,20 +2506,18 @@ internal sealed class Stroke
 
     /// <summary>实例版：读模型里的定义元素（静止态走它）。</summary>
     public RectF CurveBoxLocal()
-        => CurveBoxOf(Kind, EffectiveAxis, CurvePointLocal(0), CurvePointLocal(1), CurvePointLocal(2),
-                      CurveParam);
+        => CurveBoxOf(Kind, EffectiveAxis, CurvePointLocal(0), CurvePointLocal(1), CurvePointLocal(2));
 
     /// <summary>
     /// 四种曲线的**画布空间墨迹框** = 曲线矩形过变换取外接 ＋ 半笔宽。
     ///
     /// 和 <see cref="ParametricInkBoundsOf"/> 同一个套路（先把矩形整体过变换再取外接）：
     /// 只有这样，转过 30° 的曲线框才不会虚胖一大圈（那是脏区白重画的经典来源）。
-    /// `curveParam` 只对幂函数有意义（见 <see cref="CurveBoxOf"/>）。
     /// </summary>
     private static RectF CurveInkBoundsOf(StrokeKind kind, CurveAxis axis, in Matrix3x2 transform,
                                           in Matrix3x2 extra, Vector2 p0, Vector2 p1, Vector2 p2,
-                                          float width, float curveParam = 0f)
-        => TransformRect(CurveBoxOf(kind, axis, p0, p1, p2, curveParam), transform * extra)
+                                          float width)
+        => TransformRect(CurveBoxOf(kind, axis, p0, p1, p2), transform * extra)
            .Inflate(width * 0.5f);
 
     /// <summary>
@@ -2986,8 +2558,7 @@ internal sealed class Stroke
     /// </summary>
     public static RectF PaddedBoundsOf(IReadOnlyList<Vector2> local, in Matrix3x2 transform, float width,
                                        StrokeKind kind = StrokeKind.Freehand,
-                                       CurveAxis axis = CurveAxis.OpenUp,
-                                       float curveParam = 0f)
+                                       CurveAxis axis = CurveAxis.OpenUp)
     {
         if (local == null || local.Count == 0) return RectF.Empty;
 
@@ -2999,7 +2570,7 @@ internal sealed class Stroke
             // 朝向先按种类归一（见 Stroke.NormalizeAxis）：调用方给的可能还是"另一族"的值
             // （比如 `new Stroke{Kind=Hyperbola}` 的字段默认是 0），不归一会把框算歪。
             return CurveInkBoundsOf(kind, NormalizeAxis(kind, axis), transform, Matrix3x2.Identity,
-                                    local[0], local[1], q2, width, curveParam).Inflate(2f);
+                                    local[0], local[1], q2, width).Inflate(2f);
         }
 
         // 圆 / 椭圆：走参数化外接（里面已经含了半个笔宽，见 ParametricInkBoundsOf）。
@@ -3430,8 +3001,8 @@ internal sealed class Stroke
     internal bool IsParametricShape => IsShapeKind(Kind);
 
     /// <summary>
-    /// 这几种是**参数化曲线**（抛物线 / 双曲线 / 正弦 / 余弦 / 波浪线 / 正切 /
-    /// **指数 / 对数 / 幂**）：它们的墨迹框**不能**用"控制点的外接"来算（理由见 <see cref="CurveBoxOf"/>）。
+    /// 这几种是**参数化曲线**（抛物线 / 双曲线 / 正弦 / 余弦 / 波浪线 / 正切）：它们的墨迹框**不能**
+    /// 用"控制点的外接"来算（理由见 <see cref="CurveBoxOf"/>）。
     ///
     /// **2026-09-20 收敛**：这句话原来在**六个地方各手写了一遍**（紧框 / 重算包围盒 /
     /// 世界墨迹框 / 预览墨迹框 / 是不是参数化图形 / 能不能编辑），加第五种曲线就得同时改六处，
@@ -3440,15 +3011,7 @@ internal sealed class Stroke
     public static bool IsCurveKind(StrokeKind kind)
         => kind is StrokeKind.Parabola or StrokeKind.Hyperbola
                 or StrokeKind.Sine or StrokeKind.Cosine or StrokeKind.Wave
-                or StrokeKind.Tangent
-                or StrokeKind.Exponential or StrokeKind.Logarithm or StrokeKind.Power;
-
-    /// <summary>
-    /// **函数曲线**那一族吗（指数 / 对数 / 幂）：它们的画法、轮廓、紧框、参数全共用一套
-    ///（见这一族的那一段注释）。凡是"按这一族分支"的地方都该问它，别各写一份名单。
-    /// </summary>
-    public static bool IsFunctionKind(StrokeKind kind)
-        => kind is StrokeKind.Exponential or StrokeKind.Logarithm or StrokeKind.Power;
+                or StrokeKind.Tangent;
 
     /// <summary>
     /// 这几种是**图形**（相对于自由笔迹 / 图像）：用"定义元素"描述、选中后能拖手柄改参数。
@@ -3577,8 +3140,7 @@ internal sealed class Stroke
             // 而紧框是脏区 / 命中粗筛 / 导出裁切的依据（见 CurveBoxOf 的注释）。
             if (IsCurveKind(Kind) && Points.Count >= 2)
                 return CurveInkBoundsOf(Kind, EffectiveAxis, Transform, Matrix3x2.Identity,
-                                        CurvePointLocal(0), CurvePointLocal(1), CurvePointLocal(2), Width,
-                                        CurveParam);
+                                        CurvePointLocal(0), CurvePointLocal(1), CurvePointLocal(2), Width);
 
             var r = InkBounds;
             if (r.IsEmpty) return r;
@@ -3723,8 +3285,7 @@ internal sealed class Stroke
     {
         if (local == null || local.Count < 2) return RectF.Empty;
         var q2 = local.Count >= 3 ? local[2] : Vector2.Zero;
-        return CurveInkBoundsOf(Kind, EffectiveAxis, Transform, extra, local[0], local[1], q2, Width,
-                                CurveParam);
+        return CurveInkBoundsOf(Kind, EffectiveAxis, Transform, extra, local[0], local[1], q2, Width);
     }
 
     /// <summary>
@@ -4311,18 +3872,6 @@ internal sealed class Stroke
                 break;
             }
 
-            case StrokeKind.Exponential:
-            case StrokeKind.Logarithm:
-            case StrokeKind.Power:
-            {
-                // **指数 / 对数 / 幂**：轮廓就是"每一支"（1/x 两支、√x 只有右支、
-                // x² / x³ 那种左右两支在原点接上、**不抬笔**）——算式只有一份，
-                // 见 FunctionOutlineLocal（画法、轮廓、紧框三处都从它出发）。
-                if (Points.Count < 2) break;
-                list.AddRange(FunctionOutlineLocal());
-                break;
-            }
-
             default:
                 // 图像对象：轮廓就是它的矩形（但橡皮不碰图像，见 EraseRectAt）。
                 list.Add(new Vector2(pa.X, pa.Y));
@@ -4386,16 +3935,6 @@ internal sealed class Stroke
             return Geometry2;
         }
 
-        // **幂函数 1/x 的两条渐近线**（x = 0 与 y = 0）——同样恒定细虚线、同样没有开关：
-        // 它们是这一档图象的形状本身（课本画幂函数 x⁻¹ 一定带这两条）。
-        // 别的两档（α > 0）没有渐近线，落到下面那条"返回 null"。
-        if (PowerHasAsymptotes)
-        {
-            Geometry2 = BuildPowerAsymptotes(factory);
-            _builtRevision2 = Revision;
-            return Geometry2;
-        }
-
         if (Kind != StrokeKind.Hyperbola || !ShowAsymptotes)
         {
             _builtRevision2 = Revision;
@@ -4455,25 +3994,6 @@ internal sealed class Stroke
         return geo;
     }
 
-    /// <summary>
-    /// **幂函数 1/x 的两条渐近线**（`x = 0` 竖的、`y = 0` 横的）：恒定细虚线。
-    /// 和正切那两条同一个排法（走辅助几何槽、没有开关）。
-    /// </summary>
-    private ID2D1PathGeometry BuildPowerAsymptotes(ID2D1Factory1 factory)
-    {
-        var geo = factory.CreatePathGeometry();
-        using var sink = geo.Open();
-        for (int side = 0; side <= 1; side++)
-        {
-            var (from, to) = PowerAsymptoteLocal(side);
-            sink.BeginFigure(from, FigureBegin.Hollow);
-            sink.AddLine(to);
-            sink.EndFigure(FigureEnd.Open);
-        }
-        sink.Close();
-        return geo;
-    }
-
     public ID2D1Geometry BuildGeometry(ID2D1Factory1 factory)
     {
         if (Geometry != null && _builtRevision == Revision) return Geometry;
@@ -4498,9 +4018,6 @@ internal sealed class Stroke
             StrokeKind.Cosine => BuildWave(factory),
             StrokeKind.Wave => BuildWave(factory),
             StrokeKind.Tangent => BuildTangent(factory),
-            StrokeKind.Exponential => BuildFunction(factory),
-            StrokeKind.Logarithm => BuildFunction(factory),
-            StrokeKind.Power => BuildFunction(factory),
             StrokeKind.Cylinder => BuildSolid(factory),
             StrokeKind.Cone => BuildSolid(factory),
             StrokeKind.ConeFrustum => BuildSolid(factory),
@@ -4739,41 +4256,6 @@ internal sealed class Stroke
                 sink.AddLine(HyperbolaPoint(o, a, b, EffectiveAxis, branch, -tMax + 2f * tMax * i / n));
             sink.EndFigure(FigureEnd.Open);
         }
-        sink.Close();
-        return geo;
-    }
-
-    /// <summary>
-    /// **函数曲线（指数 / 对数 / 幂）的几何**：按"每一支"各建一条 figure——
-    /// 1/x 是两条（中间不断线），√x 是一条，x² / x³ 是一条（左右两半在原点**接成一条**，
-    /// 见 <see cref="FunctionOutlineOf"/> 里那条"同名点就不抬笔"的判据）。
-    ///
-    /// 和 <see cref="ShapeOutline"/> **同一份算式**（都走 `FunctionOutlineLocal`），
-    /// 所以像素橡皮的轮廓和屏幕上看见的一模一样。
-    /// </summary>
-    private ID2D1PathGeometry BuildFunction(ID2D1Factory1 factory)
-    {
-        if (Points.Count < 2) return BuildLine(factory);
-
-        var pts = FunctionOutlineLocal();
-        var geo = factory.CreatePathGeometry();
-        using var sink = geo.Open();
-        bool open = false;
-        foreach (var q in pts)
-        {
-            if (IsOutlineBreak(q))
-            {
-                if (open) { sink.EndFigure(FigureEnd.Open); open = false; }
-                continue;
-            }
-            if (!open)
-            {
-                sink.BeginFigure(q, FigureBegin.Hollow);
-                open = true;
-            }
-            else sink.AddLine(q);
-        }
-        if (open) sink.EndFigure(FigureEnd.Open);
         sink.Close();
         return geo;
     }
@@ -5032,18 +4514,6 @@ internal sealed class Stroke
 
     /// <summary>这一档的边数（夹过上下限的）。**所有几何都读它**，不要直接读字段。</summary>
     public int PrismSidesClamped => Math.Clamp(PrismSides, MinPrismSides, MaxPrismSides);
-
-    /// <summary>
-    /// **函数曲线的那个参数**（2026-09-20 第十七批）：目前只有**幂函数**用得到（指数 α），
-    /// 取 <see cref="ShapeSpec.PowerExponents"/> 里的某个值；其余曲线一律 0。
-    ///
-    /// 和 <see cref="PrismSides"/> 同一个地位：**画之前选好**（面板那一格"再点一次换一档"），
-    /// 画的那一刻写进对象，之后面板再换档也不回头改已画好的。
-    ///
-    /// ⚠ 指数 / 对数**不要这个参数**：它们的底数是**拖出来的**（见 `Stroke.ExpBaseLocal`），
-    /// 用户 2026-09-20 定的——"指数对数不是确定顶点以后再根据拖动确定，不需要考虑几档吧？"
-    /// </summary>
-    public float CurveParam;
 
     /// <summary>底面外接框（局部坐标，已归一成 左上 / 右下）——`Points[0]` 与 `Points[1]`。</summary>
     public (float X0, float Y0, float X1, float Y1) PrismBaseBoxLocal()
@@ -6108,10 +5578,8 @@ internal sealed class SetStrokeGeometryAction : EditAction
         // 平行四边形的第四个顶点不在点表里，靠 kind 让它现推（脏区不能漏它）；
         // 曲线还要多传一个**朝向**（抛物线开哪个口 / 双曲线哪条是实轴）——
         // 朝向变了也是"改几何"，那条路同样要从这里拿框。
-        _before = Stroke.PaddedBoundsOf(_oldPoints, target.Transform, target.Width, target.Kind, target.CurveAxis,
-                                        target.CurveParam);
-        _after = Stroke.PaddedBoundsOf(_newPoints, target.Transform, target.Width, target.Kind, target.CurveAxis,
-                                       target.CurveParam);
+        _before = Stroke.PaddedBoundsOf(_oldPoints, target.Transform, target.Width, target.Kind, target.CurveAxis);
+        _after = Stroke.PaddedBoundsOf(_newPoints, target.Transform, target.Width, target.Kind, target.CurveAxis);
     }
 
     public override RectF AffectedBefore => _before;

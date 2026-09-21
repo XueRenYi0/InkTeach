@@ -845,9 +845,8 @@ public sealed class FullUi : IOverlayUi
     ///
     /// **为什么从"两行"改成"三行"**：第三行凑到 6 个之后，第二行会有 10 段，
     /// 每段宽度掉到 **55 逻辑像素**——而"每段 ≥ 60"是量出来的门槛（图标 18 ＋ 四周留白），
-    /// `--shapebandtest` 里那条断言当场就红了。三行之后每行 8 / 9 / 7 段，
-    /// 每段 70 / 67 / 81——**第二行 9 段是这条门槛的极限**（604 ÷ 9 ≈ 67，
-    /// 再加第 10 格就掉到 60 以下）；读法也更顺：**曲线一行、旋转体一行、棱柱体一行**。
+    /// `--shapebandtest` 里那条断言当场就红了。三行之后每行 8 / 6 / 7 段，
+    /// 每段 70 / 96 / 81，都还在门槛之上；而且读法更顺：**曲线一行、旋转体一行、棱柱体一行**。
     /// 代价是开带时面板高一整行（只在指针停在面板上时，画的时候不受影响）。
     ///
     /// 第一行那八个的**相对次序一个没动**（直线 < 矩形 < 椭圆 < 箭头 是老师最早的肌肉记忆，
@@ -862,12 +861,10 @@ public sealed class FullUi : IOverlayUi
             Tool.Triangle, Tool.Parallelogram, Tool.Arrow,
             Tool.Coordinate,     // 2026-09-19 第二批接在末尾（只撤了它后面的"数轴"那一段）
         },
-        // ② 曲线（第二行）：抛物线 / 双曲线 / 正弦 / 余弦 / **波浪线** / **正切** /
-        //    **指数 / 对数 / 幂**（第十五、十六、十七批）
+        // ② 曲线（第二行）：抛物线 / 双曲线 / 正弦 / 余弦 / **波浪线** / **正切**（第十五、十六批）
         new[]
         {
             Tool.Parabola, Tool.Hyperbola, Tool.Sine, Tool.Cosine, Tool.Wave, Tool.Tangent,
-            Tool.Exponential, Tool.Logarithm, Tool.Power,
         },
         // ③ 立体（第三行）：**旋转体 4 ＋ 棱柱体 3**。
         //   · 旋转体：一次拖出**外接矩形**、一笔画完、被挡住的是"远侧那一圈/半圈"
@@ -1459,16 +1456,12 @@ public sealed class FullUi : IOverlayUi
                     //   · 棱柱 / 棱锥 / 棱台：换底面几边形（用户 2026-09-20 定："我想想能不能做成
                     //     像直线切换那样切换三四五六"）。**三格各记各的档**（换谁只动谁），
                     //     判据只有 `ShapeSpec.HasSideCount` 一处——加棱锥 / 棱台时这里差点漏掉。
-                    //   · 幂函数：换 α（x / x² / x³ / √x / 1/x）。**只有它有档位**：
-                    //     指数 / 对数点第二下不会有反应（底数是拖出来的，见 ShapeSpec.HasFunctionParam）。
                     if (picked == Tool.Parabola && _host.State.Tool == Tool.Parabola)
                         _host.Commands.CycleParabolaAxis();
                     else if (picked == Tool.Line && _host.State.Tool == Tool.Line)
                         _host.Commands.CycleLineDash();
                     else if (ShapeSpec.HasSideCount(picked) && _host.State.Tool == picked)
                         _host.Commands.CycleSolidSides();
-                    else if (ShapeSpec.HasFunctionParam(picked) && _host.State.Tool == picked)
-                        _host.Commands.CycleFunctionParam();
                     else
                         _host.Commands.SetTool(picked);
                 }
@@ -2832,8 +2825,6 @@ public sealed class FullUi : IOverlayUi
     ///   · 「抛物线」= **2 档**（上下 / 左右），当前档按 <see cref="ParabolaAxisIndex"/> 折算
     ///     ——注意 `CurveAxis` 本身是四个值（上下左右各有两向），面板这一格只管"哪一对"；
     ///   · 「棱柱 / 棱锥 / 棱台」= 4 档边数，**三格各记各的**（见 `UiState.SidesOf`）；
-    ///   · 「幂函数」= **5 档**（x / x² / x³ / √x / 1/x，见 `UiState.ParamIndexOf`）；
-    ///   · **「指数 / 对数」= 0**（它们没有第二档：底数是画的时候拖出来的）；
     ///   · 别的图形 0（它们还没有第二档）。
     /// 档位范围**来自引擎**（`st.SolidMin/MaxSides`）——`Stroke` 是引擎内部类型，
     /// 界面看不到它，也不该在这里写死一份 3/6。
@@ -2845,10 +2836,6 @@ public sealed class FullUi : IOverlayUi
         if (ShapeSpec.HasSideCount(tool))
             return (st.SolidMaxSides - st.SolidMinSides + 1,
                     Math.Clamp(st.SidesOf(tool), st.SolidMinSides, st.SolidMaxSides) - st.SolidMinSides);
-        // 幂函数 = 5 档（x / x² / x³ / √x / 1/x）。**指数 / 对数没有档位点**——
-        // 它们的底数是拖出来的（见 ShapeSpec.HasFunctionParam 那一带的注释）。
-        if (ShapeSpec.HasFunctionParam(tool))
-            return (ShapeSpec.FunctionParamCount(tool), st.ParamIndexOf(tool));
         return (0, 0);
     }
 
@@ -2884,33 +2871,21 @@ public sealed class FullUi : IOverlayUi
     private string ShapeIcon(int i) => ShapeIcon(ShapeToolAt(i));
 
     /// <summary>
-    /// **图形种类 → 图标名**（带上状态的那一份）：目前四处跟状态有关——
+    /// **图形种类 → 图标名**（带上状态的那一份）：目前两处跟状态有关——
     /// 抛物线要**转成当前开口方向**（见 <see cref="ParabolaIconName"/>）、
-    /// 直线要**换成当前线型**（见 <see cref="LineIconName"/>）、
-    /// 棱柱 / 棱锥 / 棱台要**换成当前档的边数**（见 <see cref="SolidIconName"/>）、
-    /// 幂函数要**换成当前那一档的 α**（见 <see cref="PowerIconName"/>）。
+    /// 直线要**换成当前线型**（见 <see cref="LineIconName"/>），
+    /// 棱柱 / 棱锥 / 棱台要**换成当前档的边数**（见 <see cref="SolidIconName"/>）。
     ///
     /// 为什么非跟状态不可：这几格"点第二下换一档"，图标不跟着换的话，
-    /// 老师看不出那一下到底有没有生效（四处都是用户 2026-09-20 定的）。
+    /// 老师看不出那一下到底有没有生效（三处都是用户 2026-09-20 定的）。
     /// </summary>
     private string ShapeIcon(Tool t) => t switch
     {
         Tool.Parabola => ParabolaIconName(_host.State.ParabolaAxis),
         Tool.Line => LineIconName(_host.State.LineDash),
         _ when ShapeSpec.HasSideCount(t) => SolidIconName(t, _host.State.SidesOf(t)),
-        _ when ShapeSpec.HasFunctionParam(t) => PowerIconName(_host.State.ParamIndexOf(t)),
         _ => ShapeIconFor(t),
     };
-
-    /// <summary>
-    /// 幂函数的图标名按**当前档位**换：`power1` ～ `power5`（对应 `ShapeSpec.PowerExponents`
-    /// 的 x / x² / x³ / √x / 1/x，顺序一致）。
-    ///
-    /// 和棱柱那三格同一条理由：那一格"再点一次换一档"，图标不跟着换就看不出来；
-    /// 右边还有 **5 个档位点**兜底（√x 和 x 在 18 像素下确实可能看混）。
-    /// </summary>
-    private static string PowerIconName(int index)
-        => "power" + (Math.Clamp(index, 0, ShapeSpec.PowerExponents.Length - 1) + 1);
 
     /// <summary>
     /// 立体图形那一族的图标名：`prism3` ～ `frustum6`（前缀按工具、后缀按当前档边数）。
@@ -3008,12 +2983,6 @@ public sealed class FullUi : IOverlayUi
         Tool.Wave => "wave",
         // 正切（第十五批）：自绘（见 IconAtlas.DrawTangent）——一支曲线 ＋ 两条渐近线。
         Tool.Tangent => "tangent",
-        // 函数曲线（第十七批）：三张 / 八张，都自绘（见 IconAtlas.DrawExponential /
-        // DrawLogarithm / DrawPower）。底数和 α **不是名字里带的**——它们是"当前那一档"，
-        // 由 `ShapeIcon(Tool)` 按 `st.ParamIndexOf(tool)` 换成对应的那一张。
-        Tool.Exponential => "exp",
-        Tool.Logarithm => "log",
-        Tool.Power => "power1",                    // 默认第一档（y = x）
         // 立体图形（2026-09-20 第五批）：同样自绘（见 IconAtlas.DrawCylinder / DrawCone 等）。
         Tool.Cylinder => "cylinder",
         Tool.Cone => "cone",
