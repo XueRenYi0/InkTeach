@@ -458,6 +458,19 @@ public static class ShapeSpec
     /// </summary>
     public static bool HasSideCount(Tool tool)
         => tool is Tool.Prism or Tool.Pyramid or Tool.Frustum;
+
+    /// <summary>
+    /// 立体图形里椭圆的**扁率**（短半轴 / 长半轴）：照 InkClass 的 `2.646`。
+    ///
+    /// 它是"从上往下看"的那个**俯角**——所以一个画面里所有圆都该用同一个：
+    /// 圆柱 / 圆锥 / 圆台的底面椭圆、**球的赤道**、以及**图标上那几个椭圆**。
+    ///
+    /// **为什么放在这里**：图标层（InkUi）看不到 `Stroke`（引擎内部类型），
+    /// 而图标上那个椭圆必须和画布上用**同一个俯角**，否则图标比画出来的"躺得更平"。
+    /// 所以它是"引擎和界面都要用的那一条规则"，按这个类开头的规矩放这儿、**只有一份**；
+    /// `Stroke.SolidEllipseRatio` 只是转发给它（老代码仍然读得到那个名字）。
+    /// </summary>
+    public const float SolidEllipseRatio = 1f / 2.646f;
 }
 
 /// <summary>

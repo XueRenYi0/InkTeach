@@ -849,10 +849,13 @@ public sealed class FullUi : IOverlayUi
         {
             Tool.Parabola, Tool.Hyperbola, Tool.Sine, Tool.Cosine,
         },
-        // ③ 立体（第三行）：**旋转体 3 ＋ 棱柱体 3**，两组各自"柱 / 锥 / 台"同序。
-        //   · 旋转体：一次拖出**外接矩形**、一笔画完、被挡住的是下底上半圈；
+        // ③ 立体（第三行）：**旋转体 4 ＋ 棱柱体 3**。
+        //   · 旋转体：一次拖出**外接矩形**、一笔画完、被挡住的是"远侧那一圈/半圈"
+        //     （圆柱 / 圆锥 / 圆台 / **球**；球多画一个赤道椭圆，不然它和「圆」长得一样）；
         //   · 棱柱体：**两笔**（底面外接框 → 顶上那个中心）、3/4/5/6 档、"直"那档有轻微吸附。
-        // ⚠ 圆台（第十三批）紧挨着圆柱 / 圆锥；棱柱 / 棱锥 / 棱台三兄弟挨着。
+        // ⚠ 圆台（第十三批）紧挨着圆柱 / 圆锥；棱柱 / 棱锥 / 棱台三兄弟挨着；
+        //   **球排在最后**——它不是"柱 / 锥 / 台"那条线（那条线的上下两个面是平行的截面），
+        //   摆尾巴上比插在圆台后面更好找。
         // ⚠ **长方体 / 四面体不在这张表里了**（2026-09-20 第十二批撤的**入口**）：
         // 四棱柱（直）就是长方体、三棱锥就是四面体，被上面那几段覆盖了。
         // 撤的是入口，不是画法——`Tool.Cuboid` / `StrokeKind.Cuboid` 与整条画法都留着，
@@ -861,6 +864,7 @@ public sealed class FullUi : IOverlayUi
         {
             Tool.Cylinder, Tool.Cone, Tool.ConeFrustum,
             Tool.Prism, Tool.Pyramid, Tool.Frustum,
+            Tool.Sphere,
         },
     };
 
@@ -2938,6 +2942,8 @@ public sealed class FullUi : IOverlayUi
         Tool.Cone => "cone",
         // 圆台（第十三批）：自绘的第三张旋转体图标（见 IconAtlas.DrawConeFrustum）。
         Tool.ConeFrustum => "conefrustum",
+        // 球（第十四批）：自绘（见 IconAtlas.DrawSphere）——轮廓圆 ＋ 赤道椭圆。
+        Tool.Sphere => "sphere",
         // ⚠ 长方体 / 四面体 2026-09-20 第十二批**撤了面板入口**（见 ShapeRows 里立体那行），
         // 但它们的两张图标留着——主条那一格在"选中的是旧板书里的一个长方体"时还要画它。
         Tool.Cuboid => "cuboid",

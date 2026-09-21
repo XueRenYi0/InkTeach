@@ -72,6 +72,7 @@ internal static class IconAtlas
         if (name == "cylinder") { DrawCylinder(ctx, x, y, size, brush); return; }
         if (name == "cone") { DrawCone(ctx, x, y, size, brush); return; }
         if (name == "conefrustum") { DrawConeFrustum(ctx, x, y, size, brush); return; }
+        if (name == "sphere") { DrawSphere(ctx, x, y, size, brush); return; }
         if (name == "cuboid") { DrawCuboid(ctx, x, y, size, brush); return; }
         if (name == "tetrahedron") { DrawTetrahedron(ctx, x, y, size, brush); return; }
         // 棱柱 / 棱锥 / 棱台各四档（三/四/五/六）：各自段画法只换底面边数
@@ -414,6 +415,30 @@ internal static class IconAtlas
         DrawEllipseArc(ctx, new Vector2(cx, botCy), rx, ry, 0f, 0.5f, brush);    // 下底下半圈
         ctx.DrawLine(new Vector2(cx - rx, botCy), new Vector2(top.X - trx, top.Y), brush, 1.5f, _round);
         ctx.DrawLine(new Vector2(cx + rx, botCy), new Vector2(top.X + trx, top.Y), brush, 1.5f, _round);
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// 自绘的**球**图标：**轮廓圆 ＋ 赤道椭圆**（只画看得见的那半圈，和别的立体同一个口径）。
+    ///
+    /// 为什么非要那个椭圆：光一个圆，18 像素下和「圆」那一格**完全一样**——
+    /// 赤道才是"这是个球"的唯一线索。
+    /// 扁率读 <see cref="ShapeSpec.SolidEllipseRatio"/>——**和画布上是同一个数**
+    ///（那是"从上往下看"的俯角，图标要是不跟着，看着会比画出来的"躺得更平"）。
+    /// </summary>
+    private static void DrawSphere(ID2D1DeviceContext ctx, float x, float y,
+                                   float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        const float c = 12f, r = 7.5f;
+        float eqRy = r * ShapeSpec.SolidEllipseRatio;
+        DrawEllipseArc(ctx, new Vector2(c, c), r, r, 0f, 1f, brush);              // 轮廓整圆
+        DrawEllipseArc(ctx, new Vector2(c, c), r, eqRy, 0f, 0.5f, brush);         // 赤道近侧
 
         ctx.Transform = saved;
     }

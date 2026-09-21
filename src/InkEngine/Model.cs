@@ -185,6 +185,15 @@ public enum Tool
     /// 也没有档位点（和圆柱 / 圆锥一样）。
     /// </summary>
     ConeFrustum = 27,
+
+    /// <summary>
+    /// **球**（2026-09-20 第十四批，用户："再加加入球"）：和圆柱 / 圆锥 / 圆台同族，
+    /// **拖一个外接矩形、一笔画完**（半径取矩形里内切的正圆，见 `Stroke.SphereLocal`）。
+    ///
+    /// 它比别的立体多两笔"内部线"：赤道那个椭圆（下半圈实线、上半圈虚线）——
+    /// 不然画出来的球和「圆」长得一样（详见 <see cref="StrokeKind.Sphere"/> 那段）。
+    /// </summary>
+    Sphere = 28,
 }
 
 /// <summary>An axis-aligned rectangle in virtual-desktop pixels.</summary>
@@ -511,6 +520,23 @@ internal enum StrokeKind
     /// 插在中间会把老文件里所有后面的种类改成别的意思。
     /// </summary>
     ConeFrustum = 22,
+
+    /// <summary>
+    /// **球**（2026-09-20 第十四批，用户："再加加入球"）：和圆柱 / 圆锥 / 圆台同一族——
+    /// **拖一个外接矩形、一笔画完**。
+    ///
+    /// 三件事和别的立体**不一样**，都是"球"这个东西本身的约束：
+    ///   · 投影永远是**圆**（不像别的立体分 rx / ry）→ 取矩形里能内切的**正圆**
+    ///     （半径 = min(半宽, 半高)，见 <see cref="SphereLocal"/>）：拖成方的就是标准球，
+    ///     拖长了也不会画出一个"扁球"；
+    ///   · 只画轮廓会**和「圆」一模一样**，所以必须把**赤道**那个椭圆画出来
+    ///     （见 <see cref="SphereEquatorLocal"/>），它才是"这是个球"的唯一线索；
+    ///   · 赤道的**近侧（下半圈）是实线、远侧（上半圈）是虚线**——近的那半圈露在球面上、
+    ///     远的那半圈被球自己挡住。和圆柱底圈那条判据**同一个口径**（"屏幕上方 = 远处"）。
+    ///
+    /// 值同样只能追加在末尾。
+    /// </summary>
+    Sphere = 23,
 }
 
 /// <summary>
@@ -1010,10 +1036,11 @@ internal sealed class Stroke
 
         switch (Kind)
         {
-            // ---- 圆柱 / 圆锥 / 圆台：可见的几笔 ＋ 被挡住的那半圈（细虚线）----
+            // ---- 圆柱 / 圆锥 / 圆台 / 球：可见的几笔 ＋ 被挡住的那半圈（细虚线）----
             case StrokeKind.Cylinder:
             case StrokeKind.Cone:
             case StrokeKind.ConeFrustum:
+            case StrokeKind.Sphere:
                 if (Points.Count < 2) break;
                 list.AddRange(SolidPieces(hidden: false));
                 list.AddRange(SolidPieces(hidden: true));
@@ -2499,6 +2526,16 @@ internal sealed class Stroke
             return;
         }
 
+        // **球**：包围盒是**那个圆的外接方形**（圆心 ± 半径），不是拖出来的矩形——
+        // 拖长了（400×200）的时候圆是内切的，照矩形算框会左右各空出一截。
+        if (Kind == StrokeKind.Sphere && Points.Count >= 2)
+        {
+            var (sc, sr) = SphereLocal();
+            Bounds.Add(sc.X - sr, sc.Y - sr);
+            Bounds.Add(sc.X + sr, sc.Y + sr);
+            return;
+        }
+
         // **棱柱 / 棱锥 / 棱台**：包围盒取**真正的那些顶点**（底面 n 个 ∪ 顶面 n 个），
         // 不是"底面外接框 ∪ 框+侧棱"——后者会**偏大**：底面的正 n 边形并不填满外接框
         //（六棱柱的顶端只到 0.866·ry），于是选中框的上沿会空出一条缝
@@ -2556,13 +2593,16 @@ internal sealed class Stroke
         {
             if (_inkBoundsRevision == Revision) return _inkBounds;
 
-            // **长方体 / 棱柱一族**是仅有的两个例外：它们的棱伸到"控制点的外接"之外——
+            // **长方体 / 棱柱一族 / 球**是仅有的几个例外：它们的墨迹伸到"控制点的外接"之外
+            //（球反过来——是**控制在画出来的东西之外**，所以照控制点算框会虚胖）——
             //   · 长方体：背面左上 / 右下两个角里只有一个是控制点；
             //   · 棱柱一族：第三个控制点是**顶面中心**，而顶面那一圈是从"底面 ＋ 顶上那个中心"
             //     算出来的，**整个在控制点外面**（照控制点算出来的框，上沿会少掉一大块：
-            //     用户 2026-09-20 说的"外接矩形上面会漏一块"）。
-            // 而 `Bounds` 已经按**真实顶点**算过了（见 RecomputeBounds）——直接用"它 ＋ 半笔宽"。
-            if ((Kind == StrokeKind.Cuboid || IsPrismFamily(Kind)) && Points.Count >= 2)
+            //     用户 2026-09-20 说的"外接矩形上面会漏一块"）；
+            //   · 球：拖长了的时候圆是内切的，控制点（矩形）比圆大。
+            // 这几族的 `Bounds` 都已经按**真实几何**算过了（见 RecomputeBounds）——直接用"它 ＋ 半笔宽"。
+            if ((Kind == StrokeKind.Cuboid || Kind == StrokeKind.Sphere || IsPrismFamily(Kind))
+                && Points.Count >= 2)
             {
                 float hw0 = Width * 0.5f;
                 var rr = Bounds;
@@ -2675,6 +2715,7 @@ internal sealed class Stroke
                 or StrokeKind.Triangle or StrokeKind.Parallelogram
                 or StrokeKind.Coordinate or StrokeKind.NumberLine
                 or StrokeKind.Cylinder or StrokeKind.Cone or StrokeKind.ConeFrustum
+                or StrokeKind.Sphere
                 or StrokeKind.Cuboid or StrokeKind.Tetrahedron
                 or StrokeKind.Prism or StrokeKind.Pyramid or StrokeKind.Frustum
            || IsCurveKind(kind);
@@ -2690,6 +2731,20 @@ internal sealed class Stroke
     /// </summary>
     public static bool IsPrismFamily(StrokeKind kind)
         => kind is StrokeKind.Prism or StrokeKind.Pyramid or StrokeKind.Frustum;
+
+    /// <summary>
+    /// **旋转体那一族**吗（圆柱 / 圆锥 / 圆台 / 球）：四个**都是一次拖出外接矩形、一笔画完**，
+    /// 几何全由那两个角派生（见 <see cref="SolidRectLocal"/>），而且被挡住的部分都是
+    /// "远侧那一圈/半圈"（见 <see cref="SolidPieces"/>）。
+    ///
+    /// **为什么要有这个判据**：2026-09-20 加圆台和球时，"圆柱 / 圆锥"这两个名字
+    /// 又散在了好几处（`Engine.UpdateShapePreview` 的逐帧写法、各处的 case 组）——
+    /// **加一种旋转体就要挨个补**。凡是"按这一族分支"的地方都该问它
+    /// （和 <see cref="IsPrismFamily"/> 是同一条规矩：名单只写一处）。
+    /// </summary>
+    public static bool IsRevolutionSolid(StrokeKind kind)
+        => kind is StrokeKind.Cylinder or StrokeKind.Cone
+                or StrokeKind.ConeFrustum or StrokeKind.Sphere;
 
     /// <summary>圆的**圆心** / 椭圆的**中心**（局部坐标，= 第一个控制点）。</summary>
     public Vector2 ShapeCenterLocal
@@ -3325,12 +3380,27 @@ internal sealed class Stroke
             case StrokeKind.Cylinder:
             case StrokeKind.Cone:
             case StrokeKind.ConeFrustum:
+            case StrokeKind.Sphere:
             {
-                // 立体图形：轮廓 = **底面一圈 ＋（圆柱 / 圆台）顶面一圈 /（圆锥）两条母线**。
-                // 拿"外接矩形"四边当轮廓不行：椭圆弧与矩形之间那块是空的，
-                // 橡皮从那儿划过会把整个立体删掉（和双曲线"两支之间不能连线"同一类问题）。
+                // 立体图形：轮廓 = **底面一圈 ＋（圆柱 / 圆台）顶面一圈 /（圆锥）两条母线**
+                // ／（球）**赤道那一圈**。拿"外接矩形"四边当轮廓不行：椭圆弧与矩形之间
+                // 那块是空的，橡皮从那儿划过会把整个立体删掉（和双曲线"两支之间不能连线"同类）。
                 // 两段之间放**抬笔标记**，免得连出一条横穿包围盒的假线。
                 if (Points.Count < 2) break;
+                if (Kind == StrokeKind.Sphere)
+                {
+                    // 球的轮廓就是"轮廓整圆 ＋ 赤道整圈"两段（赤道的上下两半**都要列进来**：
+                    // 上半虽然画成虚线，但橡皮得够得着它——轮廓只要求"覆盖到画出来的每一笔"）。
+                    var (sc, sr) = SphereLocal();
+                    var (_, eqRx, eqRy) = SphereEquatorLocal();
+                    int sn = Math.Clamp((int)(sr / 4f), 12, 48);
+                    for (int i = 0; i <= sn; i++)
+                        list.Add(EllipseArcPoint(sc, sr, sr, i / (float)sn));
+                    list.Add(OutlineBreak);
+                    for (int i = 0; i <= sn; i++)
+                        list.Add(EllipseArcPoint(sc, eqRx, eqRy, i / (float)sn));
+                    break;
+                }
                 var (cx, topCy, botCy, rx, ry) = SolidEllipsesLocal();
                 int n = Math.Clamp((int)(MathF.Max(rx, ry) / 4f), 12, 48);
                 for (int i = 0; i <= n; i++)
@@ -3505,9 +3575,10 @@ internal sealed class Stroke
             return null;
         }
 
-        // **立体图形被挡住的那几笔**（圆柱 / 圆锥 / 圆台的下底上半圈、长方体被挡的三条棱）：
-        // 恒定细虚线。
-        if (Kind is StrokeKind.Cylinder or StrokeKind.Cone or StrokeKind.ConeFrustum)
+        // **立体图形被挡住的那几笔**（圆柱 / 圆锥 / 圆台的下底上半圈、**球的赤道远侧半圈**、
+        // 长方体被挡的三条棱）：恒定细虚线。
+        if (Kind is StrokeKind.Cylinder or StrokeKind.Cone or StrokeKind.ConeFrustum
+            or StrokeKind.Sphere)
         {
             Geometry2 = BuildSolidHidden(factory);
             _builtRevision2 = Revision;
@@ -3575,6 +3646,7 @@ internal sealed class Stroke
             StrokeKind.Cylinder => BuildSolid(factory),
             StrokeKind.Cone => BuildSolid(factory),
             StrokeKind.ConeFrustum => BuildSolid(factory),
+            StrokeKind.Sphere => BuildSolid(factory),
             StrokeKind.Cuboid => BuildCuboid(factory, hidden: false),
             StrokeKind.Tetrahedron => BuildTetra(factory),
             StrokeKind.Prism => BuildPrism(factory, hidden: false),
@@ -3867,8 +3939,10 @@ internal sealed class Stroke
     //  不用像曲线那样再单独算一份。
     // =====================================================================
 
-    /// <summary>立体图形里椭圆的扁率（短轴 / 长轴）：照 InkClass 的 `2.646`。</summary>
-    public const float SolidEllipseRatio = 1f / 2.646f;
+    /// <summary>立体图形里椭圆的扁率（短轴 / 长轴）：照 InkClass 的 `2.646`。
+    /// **只有一份**在 <see cref="ShapeSpec.SolidEllipseRatio"/>（图标层看不到 `Stroke`，
+    /// 而图标上那个椭圆得和画布同一个俯角）——这里只是转发，老代码照旧读这个名。</summary>
+    public const float SolidEllipseRatio = ShapeSpec.SolidEllipseRatio;
 
     /// <summary>外接矩形（局部坐标，已归一成 左上 / 右下）。</summary>
     public (float X0, float Y0, float X1, float Y1) SolidRectLocal()
@@ -3901,6 +3975,38 @@ internal sealed class Stroke
         float ry = MathF.Max(0.5f, rx * SolidEllipseRatio);
         float cx = (x0 + x1) * 0.5f;
         return (cx, y0 + ry, y1 - ry, rx, ry);
+    }
+
+    /// <summary>
+    /// **球**在画面上的那个圆（圆心 ＋ 半径，局部坐标）。
+    ///
+    /// 球投影下来**永远是圆**，所以这里不像别的立体那样分 rx / ry，而是取外接矩形里
+    /// **能内切的那个正圆**：半径 = `min(半宽, 半高)`、圆心 = 矩形中心。
+    /// 拖成方的就是标准球；拖长了（比如 400×200）也**不会**画出一个"扁球"，
+    /// 而是画一个内切的圆——"球一定是圆的"这件事由算式保证，不靠用户手稳。
+    ///
+    /// ⚠ 因此它的**真实范围 = 圆心 ± 半径**，不是那个外接矩形（矩形拖长了就有富余）——
+    /// 所以 `RecomputeBounds` 与 `InkBounds` 都得有球这一支（照棱柱一族那套）。
+    /// </summary>
+    public (Vector2 Center, float R) SphereLocal()
+    {
+        var (x0, y0, x1, y1) = SolidRectLocal();
+        float r = MathF.Max(0.5f, MathF.Min(x1 - x0, y1 - y0) * 0.5f);
+        return (new Vector2((x0 + x1) * 0.5f, (y0 + y1) * 0.5f), r);
+    }
+
+    /// <summary>
+    /// **球的赤道**那个椭圆（圆心 = 球心、两个半轴）：
+    /// 长半轴 = 球的半径（赤道的左右两端正好落在轮廓圆上那两个点），
+    /// 短半轴 = 半径 × <see cref="SolidEllipseRatio"/>。
+    ///
+    /// ⚠ 扁率**和圆柱 / 圆锥 / 圆台用同一个数**：那是"从上往下看"的俯角，
+    /// 一个画面里所有圆都该用同一个俯角，不然球看起来比圆柱"躺得更平"。
+    /// </summary>
+    public (Vector2 Center, float Rx, float Ry) SphereEquatorLocal()
+    {
+        var (c, r) = SphereLocal();
+        return (c, r, MathF.Max(0.5f, r * SolidEllipseRatio));
     }
 
     /// <summary>圆锥的顶点（局部坐标）= 外接矩形的**上边中点**（照 InkClass）。</summary>
@@ -4266,7 +4372,9 @@ internal sealed class Stroke
     /// 立体图形的**逐笔点列**（`hidden = false` 给看得见的、`true` 给被挡住的）：
     ///   · **圆柱**：顶面整圈 ＋ 底面下半圈 ＋ 两条母线；被挡住的是底面上半圈；
     ///   · **圆锥**：底面下半圈 ＋ 两条母线（顶点 = 上边中点）；被挡住的是底面上半圈；
-    ///   · **圆台**：上底整圈（小一圈）＋ 底面下半圈 ＋ 两条**收进去**的母线；被挡住的同样。
+    ///   · **圆台**：上底整圈（小一圈）＋ 底面下半圈 ＋ 两条**收进去**的母线；被挡住的同样；
+    ///   · **球**：轮廓**整圆** ＋ 赤道椭圆的**下半圈**；被挡住的是赤道的**上半圈**
+    ///     （远侧那半圈被球自己挡着）。
     ///
     /// **渲染与熔墨共用这一份**（<see cref="BuildSolid"/> / <see cref="BuildSolidHidden"/> /
     /// <see cref="InkPieces"/>）——两边各写一套就会"画出来的和熔出来的不一样"，
@@ -4275,6 +4383,25 @@ internal sealed class Stroke
     private List<InkPiece> SolidPieces(bool hidden)
     {
         var list = new List<InkPiece>();
+
+        // **球先单独走**：它的圆不是从"上下两个椭圆"派生的（见 SphereLocal 那段），
+        // 所以不能落进下面那套 `SolidEllipsesLocal` 的算法里。
+        if (Kind == StrokeKind.Sphere)
+        {
+            var (sc, sr) = SphereLocal();
+            var (_, eqRx, eqRy) = SphereEquatorLocal();
+            if (hidden)
+            {
+                list.Add(new InkPiece(ArcPoints(sc, eqRx, eqRy, 0.5f, 1f), true));   // 赤道远侧
+            }
+            else
+            {
+                list.Add(new InkPiece(ArcPoints(sc, sr, sr, 0f, 1f), false));        // 轮廓整圆
+                list.Add(new InkPiece(ArcPoints(sc, eqRx, eqRy, 0f, 0.5f), false));  // 赤道近侧
+            }
+            return list;
+        }
+
         var (cx, topCy, botCy, rx, ry) = SolidEllipsesLocal();
         var bot = new Vector2(cx, botCy);
 

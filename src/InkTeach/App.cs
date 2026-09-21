@@ -697,6 +697,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --axisshow [路径]   出图：坐标系（带网格/不带）+ 数轴 + 一条虚线");
         Console.WriteLine("  --curvetest         四种曲线自检（画法 / 紧框 / 手柄精简 / 朝向 / 存档往返）");
         Console.WriteLine("  --curveshow [路径]  出图：抛物线四种开口 + 双曲线两个方向 + 正弦/余弦各一周期");
+        Console.WriteLine("                      （第三行顺带出**旋转体那一族**：圆柱 / 圆锥 / 圆台 / 球）");
         Console.WriteLine("  --pagetest          整屏翻页自检（一屏 = 一页：页高 = 视口高、只动相机、到顶就停）");
         Console.WriteLine("  --iotest [路径]     导出自检（选中 → PNG 透明底 / JPEG 白底；给路径就保留文件）");
         Console.WriteLine("  --patterntest       白板底纹自检（方格/横线/间距 + 数屏幕上的线 + 重铺代价）");
@@ -10402,6 +10403,7 @@ internal sealed class App : InkEngine.InkEngine
                     "cylinder" => Tool.Cylinder,
                     "cone" => Tool.Cone,
                     "conefrustum" => Tool.ConeFrustum,
+                    "sphere" => Tool.Sphere,
                     // 立体那一族（出图看"图形格第二行 + 档位点"时要用）：三个的名字就是
                     // 它们各自的工具名小写（棱柱 / 棱锥 / 棱台）。
                     "prism" => Tool.Prism,
@@ -11902,6 +11904,9 @@ internal sealed class App : InkEngine.InkEngine
             // 2026-09-20 第十二批：**棱锥 / 棱台**（见 §34）。它们和棱柱是**一族**
             //（同样的两笔、同样的 3/4/5/6 档、同样的"直"吸附），所以紧挨着排。
             (Tool.Pyramid, "棱锥"), (Tool.Frustum, "棱台"),
+            // 2026-09-20 第十四批：**球**（用户："在加入球"）。一笔拖外接矩形，
+            // 排在**最后**——它不是"柱 / 锥 / 台"那条线（那条线的上下两个面是平行截面）。
+            (Tool.Sphere, "球"),
             // ⚠ **长方体 / 四面体那两段撤掉了**（同一天，用户："那两格似乎可以删除掉了"）——
             // 所以这张期望表里也没有它们了，但**画法与存档都还在**（下面单列一条断言钉住
             // "能画、没入口"这第三种状态，正因为"有入口的那些"这张表管不到它们）。
@@ -11911,8 +11916,9 @@ internal sealed class App : InkEngine.InkEngine
         // 加图形时必须一起改：下面先断一句"各行加起来 = want 的段数"，对不上就红
         //（这就是"自检表本身也要被卡住"那条规矩在这里的落点）。
         // 2026-09-20 第十三批：从"两行 8+10"改成"三行 8+4+6"——第二行 10 段时每格
-        // 只有 55 宽，低于"每段 ≥ 60"那条量出来的门槛（见 计划-图形工具.md §35）。
-        int[] wantRowLens = { 8, 4, 6 };
+        // 只有 55 宽，低于"每段 ≥ 60"那条量出来的门槛（见 计划-图形工具.md §35）；
+        // 第十四批加球：第三行 6 → **7** 段（604 ÷ 7 ≈ 81，还在门槛之上）。
+        int[] wantRowLens = { 8, 4, 7 };
 
         // 上带只在"指针落在面板上"时张开（见 FullUi.RailHoverZone）。点完一格、画完一笔
         // 之后指针可能在画布上，所以每次要点段之前先把指针挪回主条等它张开。
@@ -14359,10 +14365,15 @@ internal sealed class App : InkEngine.InkEngine
         Doc.AddStroke(cos);
 
         // ---- 第三行：立体图形（2026-09-20 第五批，照 InkClass 的 case 6/7）----
-        // 一次拖出**外接矩形**就成：椭圆由矩形派生（`ry = rx / 2.646`），
-        // 底面被挡住的那半圈是**细虚线**（辅助几何槽）。
+        // **旋转体那一族**：一次拖出**外接矩形**就成（椭圆由矩形派生，
+        // 扁率 = `Stroke.SolidEllipseRatio`），被挡住的那半圈是**细虚线**（辅助几何槽）。
         // 位置贴着第三行的格线上沿：再往上抬就会和第二行（双曲线 / 正弦）叠在一起，
         // 再往下压出图（1800 高）就会被裁掉——两头都试过，这个位置刚好。
+        //
+        // ⚠ 这一行原来放的是**圆柱 / 圆锥 / 长方体 / 四面体**——后两个 2026-09-20 第十二批
+        // 撤了面板入口（见 ShapeRows），所以这里换成**用户现在真能拖出来的四个**：
+        // 圆柱 / 圆锥 / 圆台 / 球。（长方体 / 四面体的画法没删，`--curvetest` 里那些
+        // 几何断言照旧在管着它们，旧板书也照样打开。）
         float sy0 = CellY(2) - 20f;
         var cyl = Make(Tool.Cylinder, StrokeKind.Cylinder, CellX(0) + 130f, sy0);
         cyl.SetSolidBox(CellX(0) + 130f, sy0, CellX(0) + 430f, sy0 + 350f);
@@ -14372,17 +14383,16 @@ internal sealed class App : InkEngine.InkEngine
         cone.SetSolidBox(CellX(1) + 130f, sy0, CellX(1) + 430f, sy0 + 350f);
         Doc.AddStroke(cone);
 
-        // 长方体（两笔）：第 1 笔正面矩形、第 2 笔深度（往后上方 45° 退 70）。
-        var cub = Make(Tool.Cuboid, StrokeKind.Cuboid, CellX(2) + 150f, sy0 + 60f);
-        cub.SetCuboidFront(CellX(2) + 150f, sy0 + 60f, CellX(2) + 330f, sy0 + 250f);
-        cub.SetCuboidDepth(CellX(2) + 150f, sy0 - 10f);          // d = |60 − (−10)| = 70
-        Doc.AddStroke(cub);
+        // 圆台（2026-09-20 第十三批）：同一个外接矩形，上底是一圈**小一圈**的椭圆。
+        var cfz = Make(Tool.ConeFrustum, StrokeKind.ConeFrustum, CellX(2) + 130f, sy0);
+        cfz.SetSolidBox(CellX(2) + 130f, sy0, CellX(2) + 430f, sy0 + 350f);
+        Doc.AddStroke(cfz);
 
-        // 四面体（两笔）：第 1 笔底面三角形、第 2 笔顶点。
-        var tet = Make(Tool.Tetrahedron, StrokeKind.Tetrahedron, CellX(3) + 150f, sy0 + 120f);
-        tet.SetTetraBase(CellX(3) + 150f, sy0 + 120f, CellX(3) + 450f, sy0 + 300f);
-        tet.SetTetraApex(CellX(3) + 220f, sy0 - 30f);
-        Doc.AddStroke(tet);
+        // 球（第十四批）：半径 = min(半宽, 半高) 的内切正圆 ＋ 赤道椭圆（近侧实线）。
+        // 这里**故意拖一个正方**（350×350）——球本来就该是个圆。
+        var sph = Make(Tool.Sphere, StrokeKind.Sphere, CellX(3) + 130f, sy0);
+        sph.SetSolidBox(CellX(3) + 130f, sy0, CellX(3) + 480f, sy0 + 350f);
+        Doc.AddStroke(sph);
 
         Doc.InvalidateAll();
         SettleFrames(800);
@@ -15201,9 +15211,11 @@ internal sealed class App : InkEngine.InkEngine
               Near(cy.SolidRectLocal().X0, 200f, .5f) && Near(cy.SolidRectLocal().Y1, 900f, .5f),
               $"({cy.SolidRectLocal().X0:F0},{cy.SolidRectLocal().Y0:F0})"
               + $"..({cy.SolidRectLocal().X1:F0},{cy.SolidRectLocal().Y1:F0})");
-        Check("圆柱：rx = 200、ry = rx/2.646 ≈ 75.6（扁率照他的常数）（±0.5）",
-              Near(crx, 200f, .5f) && Near(cry, 200f / 2.646f, .5f),
-              $"rx {crx:F1}  ry {cry:F1}（期望 200 / {200f / 2.646f:F1}）");
+        // 期望值**读引擎那个常量**，不在这里再抄一遍 2.646——写死的常数会随它改而静默失效
+        //（仓库里为这类事栽过，见 计划-图形工具.md 的教训那几条）。
+        Check($"圆柱：rx = 200、ry = rx × 扁率 ≈ {200f * Stroke.SolidEllipseRatio:F1}（照他的常数）（±0.5）",
+              Near(crx, 200f, .5f) && Near(cry, 200f * Stroke.SolidEllipseRatio, .5f),
+              $"rx {crx:F1}  ry {cry:F1}（期望 200 / {200f * Stroke.SolidEllipseRatio:F1}）");
         Check("圆柱：上下两个圆心从矩形边**往里缩一个 ry**（相切，不冒出去）（±0.5）",
               Near(ccx, 400f, .5f) && Near(cTop, 500f + cry, .5f) && Near(cBot, 900f - cry, .5f),
               $"cx {ccx:F1}  上圆心 y {cTop:F1}（期望 {500f + cry:F1}）"
@@ -15259,6 +15271,44 @@ internal sealed class App : InkEngine.InkEngine
               Near(cf.Bounds.MinX, 200f, .5f) && Near(cf.Bounds.MaxX, 600f, .5f)
               && Near(cf.Bounds.MinY, 500f, .5f) && Near(cf.Bounds.MaxY, 900f, .5f),
               $"框 ({cf.Bounds.MinX:F0},{cf.Bounds.MinY:F0})..({cf.Bounds.MaxX:F0},{cf.Bounds.MaxY:F0})");
+
+        // ---- 球（2026-09-20 第十四批，用户："在加入球"）----
+        // 它有三件事和别的立体不同，都得钉住（不然"球"会退化成"圆"）：
+        //   ① 投影永远是**圆**（取矩形里内切的圆，拖长了也不许画成扁球）；
+        //   ② 必须画**赤道**那个椭圆（否则和「圆」那一格长得一样，看不出是个球）；
+        //   ③ 赤道的近侧（下半圈）实线、远侧（上半圈）虚线。
+        // 特意用**长方形** 400×200 来拖（不是正方形）：这样"内切正圆"这条才会真的被验到。
+        var sp = NewCurve(Tool.Sphere, StrokeKind.Sphere, 200f, 500f);
+        sp.SetSolidBox(200f, 500f, 600f, 700f);                      // 400×200
+        var (spC, spR) = sp.SphereLocal();
+        var (spEqC, spEqRx, spEqRy) = sp.SphereEquatorLocal();
+        Check("球：投影是**内切正圆**——半径 = min(半宽, 半高) = 100（不是 200）、圆心 = 矩形中心（±0.5）",
+              Near(spR, 100f, .5f) && Near(spC.X, 400f, .5f) && Near(spC.Y, 600f, .5f),
+              $"半径 {spR:F1}（期望 100）、圆心 ({spC.X:F0},{spC.Y:F0})（期望 (400,600)）");
+        Check("球：赤道椭圆 —— 长半轴 = 半径、圆心 = 球心、短半轴 = 半径 × 那个俯角（±0.5）",
+              Near(spEqRx, spR, .5f) && Near(spEqRy, spR * Stroke.SolidEllipseRatio, .5f)
+              && Near(spEqC.X, spC.X, .5f) && Near(spEqC.Y, spC.Y, .5f),
+              $"赤道 ({spEqRx:F1}, {spEqRy:F1})（期望 ({spR:F1}, {spR * Stroke.SolidEllipseRatio:F1})），"
+              + $"圆心 ({spEqC.X:F0},{spEqC.Y:F0})");
+        Check("球：赤道**不是正圆**（短半轴 < 长半轴 —— 那个「从上往下看」的俯角）",
+              spEqRy < spEqRx - 1f, $"短半轴 {spEqRy:F1} vs 长半轴 {spEqRx:F1}");
+        var spParts = Stroke.SplitOutlineParts(sp.ShapeOutline());
+        Check("球：轮廓分 2 段（外圈 / 赤道圈）——赤道的上下两半都要列进来（橡皮得够得着）",
+              spParts.Count == 2 && spParts[0].Count > 8 && spParts[1].Count > 8,
+              $"{spParts.Count} 段，点数 {string.Join("/", spParts.ConvertAll(p => p.Count))}"
+              + "（期望 2 段：圈/圈）");
+        Check("球：紧框 = **那个圆的外接方形**（圆心 ± 半径），不是拖出来的 400×200 矩形（±0.5）",
+              Near(sp.Bounds.MinX, 300f, .5f) && Near(sp.Bounds.MaxX, 500f, .5f)
+              && Near(sp.Bounds.MinY, 500f, .5f) && Near(sp.Bounds.MaxY, 700f, .5f),
+              $"框 ({sp.Bounds.MinX:F0},{sp.Bounds.MinY:F0})..({sp.Bounds.MaxX:F0},{sp.Bounds.MaxY:F0})"
+              + "（期望 (300,500)..(500,700)）");
+        // 墨迹框（脏区/命中用）必须跟着**真实几何**走，不能是外接矩形——
+        // 这和棱柱那次的"外接矩形上面漏一块"是同一类毛病，只是方向相反（这里是虚胖）。
+        Check("球：墨迹框也按真实几何算（= 圆的外接方形 ＋ 半个笔宽，不是矩形 ＋ 半个笔宽）",
+              Near(sp.WorldInkBounds.MaxY - sp.WorldInkBounds.MinY,
+                   (500f - 300f) + sp.Width, 1.5f),
+              $"墨迹框高 {sp.WorldInkBounds.MaxY - sp.WorldInkBounds.MinY:F1}"
+              + $"（期望 {(500f - 300f) + sp.Width:F1} = 200 + 笔宽 {sp.Width:F1}）");
 
         // ---- 长方体 / 四面体（2026-09-20 第五批：照 InkClass 的 case 9/26，**两笔**）----
         // 长方体：第 1 笔正面矩形 (200,500)..(600,900)，第 2 笔拖到 y=650 → 深度 d = |500 − 650| = 150。
@@ -15333,7 +15383,7 @@ internal sealed class App : InkEngine.InkEngine
             var noSpecial = new (Stroke st, string name)[]
             {
                 (vb, "抛物线"), (hy, "双曲线"), (sn, "正弦"), (cs, "余弦"),
-                (cy, "圆柱"), (co, "圆锥"), (cf, "圆台"),
+                (cy, "圆柱"), (co, "圆锥"), (cf, "圆台"), (sp, "球"),
                 (cu, "长方体"), (te, "四面体"),
             };
             int hitOk = 0;
@@ -15347,7 +15397,7 @@ internal sealed class App : InkEngine.InkEngine
                     hitOk++;
                 else missed.Add(nm);
             }
-            Check("手柄：四种曲线 ＋ 五个立体图形**都点得中通用框的角**（＝八个缩放柄真的给了）",
+            Check("手柄：四种曲线 ＋ 六个立体图形**都点得中通用框的角**（＝八个缩放柄真的给了）",
                   hitOk == noSpecial.Length,
                   $"点得中 {hitOk}/{noSpecial.Length}"
                   + (missed.Count > 0 ? $"，点不中：{string.Join("/", missed)}" : ""));

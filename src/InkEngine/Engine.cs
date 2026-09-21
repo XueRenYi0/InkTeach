@@ -3363,7 +3363,8 @@ public class InkEngine
              or Tool.Coordinate or Tool.NumberLine
              or Tool.Parabola or Tool.Hyperbola or Tool.Sine or Tool.Cosine
              or Tool.Cylinder or Tool.Cone or Tool.Cuboid or Tool.Tetrahedron
-             or Tool.Prism or Tool.Pyramid or Tool.Frustum or Tool.ConeFrustum;
+             or Tool.Prism or Tool.Pyramid or Tool.Frustum
+             or Tool.ConeFrustum or Tool.Sphere;
 
     /// <summary>
     /// **一笔**做什么：把"这一笔拖到的位置"写进半成品的几何。
@@ -3613,6 +3614,7 @@ public class InkEngine
         Tool.Pyramid => StrokeKind.Pyramid,
         Tool.Frustum => StrokeKind.Frustum,
         Tool.ConeFrustum => StrokeKind.ConeFrustum,
+        Tool.Sphere => StrokeKind.Sphere,
         _ => StrokeKind.Arrow,
     };
 
@@ -3870,9 +3872,14 @@ public class InkEngine
             return;
         }
 
-        // 立体图形（圆柱 / 圆锥）：**外接矩形 → 一次算出全部几何**（和坐标系那条同一个套路：
-        // 拖动期就写成最终那一份定义，否则预览和松手的结果会差一下）。
-        if (s.Kind is StrokeKind.Cylinder or StrokeKind.Cone)
+        // 立体图形（**旋转体那一族**：圆柱 / 圆锥 / 圆台 / 球）：**外接矩形 → 一次算出全部几何**
+        //（和坐标系那条同一个套路：拖动期就写成最终那一份定义，否则预览和松手的结果会差一下）。
+        //
+        // ⚠ 判据走 `Stroke.IsRevolutionSolid`，**不再写"圆柱 or 圆锥"**：
+        // 2026-09-20 加圆台时就漏了这一处（当时靠"没走到这儿也能画对"蒙过去了——
+        // 兜底那条 `SetEnd` 写进去的角点虽然没归一，但 `SolidRectLocal` 自己会 min/max，
+        // 结果一样）。加球时把它一并收成判据函数：**加一种旋转体不用再来补这一行**。
+        if (Stroke.IsRevolutionSolid(s.Kind))
         {
             s.SetSolidBox(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y);
             _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);
