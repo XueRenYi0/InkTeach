@@ -354,13 +354,17 @@ internal sealed class App : InkEngine.InkEngine
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
-            // `--circle / --ellipse / --triangle / --parallelogram / --rectangle` 选图形
-            // （不给就是直线）；`--snap` = 那一张要拍"吸附生效中"的帧；
+            // `--circle / --ellipse / --triangle / --parallelogram / --rectangle / --parabola /
+            //  --cuboid` 选图形（不给就是直线）；`--snap` = 那一张要拍"吸附生效中"的帧；
             // `--angles` = 内角 / 夹角那一组读数；`--pose` = 拖旋转柄时的**姿态角**读数。
+            // 后两个（抛物线 / 长方体）是 2026-09-20 加的：它们代表"**没有特殊手柄**"的那一类，
+            // 要拍的是"通用八手柄 ＋ 旋转柄那根线挂哪儿"（用户："抛物线的旋转手柄线连的地方很奇怪"）。
             string kind = args.Contains("--circle") ? "circle"
                         : args.Contains("--ellipse") ? "ellipse"
                         : args.Contains("--triangle") ? "triangle"
                         : args.Contains("--parallelogram") ? "parallelogram"
+                        : args.Contains("--parabola") ? "parabola"
+                        : args.Contains("--cuboid") ? "cuboid"
                         : args.Contains("--rectangle") ? "rectangle" : "line";
             ShapeToolShowcase(args.Length > 1 ? args[1] : "reports/shape-line-handles.bmp",
                               kind, args.Contains("--drag"), args.Contains("--draw"),
@@ -7406,7 +7410,8 @@ internal sealed class App : InkEngine.InkEngine
             return;
         }
 
-        // ---- 圆 / 椭圆 / 三角形 / 平行四边形：静止选中态（第二批那几张图）----
+        // ---- 圆 / 椭圆 / 三角形 / 平行四边形 / 抛物线 / 长方体：静止选中态 ----
+        //（后两种是"**没有特殊手柄**"的那一类：拍的是通用八手柄 ＋ 旋转柄那根连线）
         if (kind != "line")
         {
             var sh = new Stroke
@@ -7430,6 +7435,23 @@ internal sealed class App : InkEngine.InkEngine
                     sh.AddPoint(cx, cy - 220f, 1f, 0);             // 上中
                     sh.AddPoint(cx - 260f, cy + 160f, 1f, 0);      // 下左
                     sh.AddPoint(cx + 260f, cy + 160f, 1f, 0);      // 下右
+                    break;
+                case "parabola":
+                    // 抛物线：顶点在左下、经过点在右上 → 开口向上（四个朝向里最好认的那个）。
+                    // 它是"没有特殊手柄"那一类的代表：选中后该看到**通用八手柄**，
+                    // 旋转柄那根线该连到**框上边中点**（不是顶点与经过点的中点）。
+                    sh.Tool = Tool.Parabola; sh.Kind = StrokeKind.Parabola;
+                    sh.CurveAxis = CurveAxis.OpenUp;
+                    sh.AddPoint(cx - 240f, cy + 150f, 1f, 0);      // 顶点（按下那个点）
+                    sh.SetParabolaVertex(cx - 240f, cy + 150f);
+                    sh.SetParabolaThroughPoint(cx + 200f, cy - 170f);
+                    break;
+                case "cuboid":
+                    // 长方体：正面矩形 ＋ 深度 150（照画法：深度往右上退）。
+                    sh.Tool = Tool.Cuboid; sh.Kind = StrokeKind.Cuboid;
+                    sh.AddPoint(cx - 260f, cy - 40f, 1f, 0);
+                    sh.SetCuboidFront(cx - 260f, cy - 40f, cx + 180f, cy + 200f);
+                    sh.SetCuboidDepth(cy - 40f, cy - 40f + 150f);  // 深 = |正面上边 − 这个 y| = 150
                     break;
                 default: // parallelogram
                     sh.Tool = Tool.Parallelogram; sh.Kind = StrokeKind.Parallelogram;
@@ -14670,6 +14692,38 @@ internal sealed class App : InkEngine.InkEngine
               && Stroke.IsShapeKind(sn.Kind) && Stroke.IsShapeKind(cs.Kind),
               "四种曲线都在 IsShapeKind 里");
 
+        // **通用八手柄真的给到了**（用户 2026-09-20 问"没有特殊点的图形……那八个是不是应该都给"）。
+        //
+        // 修的是一处**两头空**：Overlay 和 HitTest 原来都判"**是不是图形**"（`ShapeEditable`），
+        // 而四种曲线 / 四个立体图形**是图形但没有特殊点** —— 于是既画不出特殊手柄、
+        // 又拿不到通用八手柄，**画不出来也点不中**（真机上就只能整体拖，拉不动大小）。
+        // 判据换成"**有没有特殊手柄**"之后，它们和矩形走同一条路。
+        //
+        // 这里对八个对象各点一次"框的右下角"：**点得中**才算给了（画的那一半靠出图看，
+        // 拖的那一半由下面 ④ 验——那边还要求框**真的被拉大**，不然"整体挪一下"也能骗过去）。
+        {
+            var noSpecial = new (Stroke st, string name)[]
+            {
+                (vb, "抛物线"), (hy, "双曲线"), (sn, "正弦"), (cs, "余弦"),
+                (cy, "圆柱"), (co, "圆锥"), (cu, "长方体"), (te, "四面体"),
+            };
+            int hitOk = 0;
+            var missed = new List<string>();
+            foreach (var (st, nm) in noSpecial)
+            {
+                var one = new[] { st };
+                var f2 = SelectionHandles.FrameOf(one);
+                var c2 = SelectionHandles.CanvasPosition(SelHandle.BottomRight, f2, DpiScale);
+                if (SelectionHandles.HitTest(c2.X, c2.Y, one, f2, DpiScale) == SelHandle.BottomRight)
+                    hitOk++;
+                else missed.Add(nm);
+            }
+            Check("手柄：四种曲线 ＋ 四个立体图形**都点得中通用框的角**（＝八个缩放柄真的给了）",
+                  hitOk == noSpecial.Length,
+                  $"点得中 {hitOk}/{noSpecial.Length}"
+                  + (missed.Count > 0 ? $"，点不中：{string.Join("/", missed)}" : ""));
+        }
+
         // ================= ④ 编辑：曲线走**通用框**（只动变换，不动几何）=================
         // 曲线不再有"拖这个点只改那个量"的入口——模型层那几个函数（SetParabola… /
         // SetHyperbola… / SetWave…）只在**画的时候**用一次（见 §19、§22）。
@@ -14686,6 +14740,16 @@ internal sealed class App : InkEngine.InkEngine
         var pbAxisBefore = vb.EffectiveAxis;
         var vbFrame = SelectionHandles.FrameOf(Doc.Selected);
         var vbCorner = SelectionHandles.CanvasPosition(SelHandle.BottomRight, vbFrame, DpiScale);
+        float vbW0 = vbFrame.CanvasAabb.MaxX - vbFrame.CanvasAabb.MinX;
+        float vbH0 = vbFrame.CanvasAabb.MaxY - vbFrame.CanvasAabb.MinY;
+        // 先确认"按的是**手柄**，不是框内的空白"——不确认的话，按下会被当成"整体拖动"，
+        // 下面那条 `!Transform.IsIdentity` 照样成立（整体挪一下也改变换），**断言等于白写**：
+        // 这正是这一条原来漏掉的那半（用户 2026-09-20 问出来的那件事）。
+        Check("曲线拖通用框的角：按下去命中**右下角手柄**（不是框内空白 → 不是整体拖动）",
+              SelectionHandles.HitTest(vbCorner.X, vbCorner.Y, Doc.Selected, vbFrame, DpiScale)
+                  == SelHandle.BottomRight,
+              $"{SelectionHandles.HitTest(vbCorner.X, vbCorner.Y, Doc.Selected, vbFrame, DpiScale)}"
+              + "（期望 BottomRight）");
         bool vbTook = SelectionGestureForTest(vbCorner.X, vbCorner.Y);
         UpdateSelectionGestureForTest(vbCorner.X + 200f, vbCorner.Y + 120f);
         SettleFrames(40);
@@ -14697,6 +14761,14 @@ internal sealed class App : InkEngine.InkEngine
               && vb.Points[1].X == pbP1.X && vb.Points[1].Y == pbP1.Y,
               $"接住={vbTook}，变换={(vb.Transform.IsIdentity ? "单位（没动）" : "变了")}，"
               + $"两个控制点 {(vb.Points[0].X == pbP0.X && vb.Points[0].Y == pbP0.Y ? "原样" : "被改了！")}");
+        // **框真的被拉大了**才算"八个缩放柄能用"：往右下角拖 200×120，
+        // 框的宽高该跟着长——"整体挪一下"改的是位置、宽高一点不变，这一条能把它筛掉。
+        var vbFrameAfter = SelectionHandles.FrameOf(Doc.Selected);
+        float vbW1 = vbFrameAfter.CanvasAabb.MaxX - vbFrameAfter.CanvasAabb.MinX;
+        float vbH1 = vbFrameAfter.CanvasAabb.MaxY - vbFrameAfter.CanvasAabb.MinY;
+        Check("曲线拖通用框的角：框**真的被拉大了**（不是整体挪了一下）",
+              vbW1 > vbW0 + 40f && vbH1 > vbH0 + 20f,
+              $"框 {vbW0:F0}×{vbH0:F0} → {vbW1:F0}×{vbH1:F0}");
         Check("曲线拖通用框的角：**朝向 与 p 都不受影响**（它们是曲线自己的参数）",
               vb.EffectiveAxis == pbAxisBefore && Near(vb.ParabolaPLocal(), pbPBefore, .01f),
               $"{vb.EffectiveAxis}，p {vb.ParabolaPLocal():F1}（拖之前 {pbPBefore:F1}）");

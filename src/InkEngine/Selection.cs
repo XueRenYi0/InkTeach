@@ -642,9 +642,15 @@ internal static class SelectionHandles
 
     /// <summary>
     /// 按**选区**做手柄命中：直线 / 箭头只认两个端点 + 旋转柄，其余走通用框那一套。
-    ///
     /// 直线那一条**不给 8 个缩放柄留后门**（连命中都不做）：画都不画了却还能点到，
     /// 就成了"看不见但拖得动"，比"看得见点不到"更难解释。
+    ///
+    /// **判据是"这个对象有没有定义元素手柄"，不是"它是不是图形"**（2026-09-20 修）：
+    /// 四种曲线和四个立体图形**是图形**但一个特殊手柄都没有，原来在这里直接
+    /// `return None`，于是它们的八个缩放柄"画不出来、也点不中"——两头空。
+    /// 现在这种情况下**继续往下走通用框那一关**（和矩形 / 墨迹 / 图像同一条路）。
+    /// 判据换没换的一致性由自检盯着：`--shapetooltest` 会当场拖一次通用框的角，
+    /// 而且要求**框真的被拉大了**（不是"整体挪了一下"）。
     /// </summary>
     public static SelHandle HitTest(float canvasX, float canvasY, IReadOnlyList<Stroke> sel,
                                     in SelectionFrame f, float dpiScale)
@@ -667,7 +673,9 @@ internal static class SelectionHandles
             if (RotateHandleVisible(s)
                 && Vector2.DistanceSquared(p, CanvasPosition(SelHandle.Rotate, f, dpiScale)) <= rad * rad)
                 return SelHandle.Rotate;
-            return SelHandle.None;
+            // **有**特殊手柄 → 到此为止（绝不给通用八手柄留后门，理由见上面那句）；
+            // **没有** → 落到下面通用框那一关。
+            if (n > 0) return SelHandle.None;
         }
         return HitTest(canvasX, canvasY, f, dpiScale);
     }

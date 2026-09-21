@@ -2198,6 +2198,17 @@ internal sealed class OverlayWindow : IDisposable
         // （见下面第 3、4 步）：两个或五个，而不是通用 8 个。
         bool shapeLike = SelectionHandles.ShapeEditable(sel, out var shapeStroke);
 
+        // **这一帧要画几个"定义元素手柄"**（0 = 一个都没有）。
+        //
+        // 判据是"**这个对象有没有特殊手柄**"，不是"它是不是图形" —— 后者（`shapeLike`）
+        // 对**四种曲线**（抛物线 / 双曲线 / 正弦 / 余弦）和**四个立体图形**
+        //（圆柱 / 圆锥 / 长方体 / 四面体）也成立，而它们一个特殊手柄都没有，
+        // 于是两头空：既画不出特殊手柄，又拿不到下面 else 里的**通用八手柄**
+        //（缩放 / 对角拉伸）。用户 2026-09-20 问的就是这件事：
+        // "没有特殊点的图形选中以后那八个拉伸对角拉伸旋转这些是不是应该都给？"——**该给**。
+        Span<ShapeHandle> shapeHandles = stackalloc ShapeHandle[5];
+        int nh = shapeLike ? SelectionHandles.ShapeHandlesOf(shapeStroke, shapeHandles) : 0;
+
         // 拖动 / 旋转期间的**装饰收敛**（方案 A）：手柄与操作条此刻点不中
         // （指针已被拖拽接管），留着就是"看得见、点不到"，还跟着内容一起晃。
         //
@@ -2247,9 +2258,17 @@ internal sealed class OverlayWindow : IDisposable
                 // 旋转柄的位置：直线/箭头/椭圆三种"定义元素图形"也用**通用框**的算法
                 // （框上边中点外再抬一段）——它只是个抓手，位置跟着框走最稳，不用另算一套。
                 var rot = SelectionHandles.CanvasPosition(SelHandle.Rotate, frame, dpi);
-                // 连线的那一头：通用框用它上边中点；图形用**它自己的中心**——
-                // 一条斜线的包围盒上边中点根本不在线上，连线看着像连到别的东西上去了。
-                var topCenter = shapeLike
+                // 连线的那一头，和"给不给特殊手柄"**同一条判据**：
+                //   · **有**定义元素手柄的（直线 / 圆 / 椭圆 / 三角形 / 平行四边形…）
+                //     → 连到**它自己的中心**（一条斜线的包围盒上边中点根本不在线上，
+                //       连线看着像连到别的东西上去了）；
+                //   · **没有**的（矩形 / 墨迹 / 图像 / 四种曲线 / 四个立体图形）
+                //     → 和通用框一样，连到**框上边中点**。
+                //     四种曲线和立体图形原来落进的是"图形"那一支，于是那根线连到了
+                //     `Points[0]` 与 `Points[1]` 的中点——对抛物线就是"顶点和经过点的中点"，
+                //     一个跟图形看起来毫无关系的点（用户 2026-09-20："抛物线的旋转手柄线
+                //     连的地方很奇怪"）。判据换过来之后它们和矩形一个样子。
+                var topCenter = nh > 0
                     ? RotationGripAnchor(shapeStroke)
                     : SelectionHandles.CanvasPosition(SelHandle.Top, frame, dpi);
                 _ctx.DrawLine(topCenter, rot, _scratch, 1.4f);
@@ -2263,25 +2282,25 @@ internal sealed class OverlayWindow : IDisposable
             }
         }
 
-        // 4) 手柄。两种给法（见 计划-图形工具.md 9.1）：
-        //    · **有定义元素的图形**（单选直线 / 箭头 / 圆 / 椭圆）：按**定义元素**给手柄——
-        //      直线/箭头/圆两个、椭圆五个（中心 + 四个轴端点）；椭圆**不给外角点**
-        //      （用户定：四个轴端点已经把拉伸给全了）。8 个缩放柄对它们是多余甚至是错的
+        // 4) 手柄。**判据只有一条：这个对象有没有"定义元素手柄"**（`nh`，见上面那段）：
+        //    · **有**（单选直线 / 箭头 / 圆 / 椭圆 / 三角形 / 平行四边形 / 坐标系 / 数轴）：
+        //      按**定义元素**给——直线/箭头/圆两个、椭圆两个（右端点管 a、上端点管 b）、
+        //      三角形/平行四边形三个顶点、坐标系三个。8 个缩放柄对它们是多余甚至是错的
         //      （左右拉伸一条线会顺手改掉倾斜角；拉一个圆会把它拉成椭圆）。
-        //    · 其余（矩形 / 图像 / 自由笔迹 / **多选**）：通用 8 手柄，一个字不改。
-        //      矩形保留它们是因为它是唯一"拉了还是矩形"的图形（用户定）。
+        //    · **没有**（矩形 / 图像 / 自由笔迹 / 多选 / **四种曲线** / **四个立体图形**）：
+        //      **通用 8 手柄**（四角 ＋ 四边中点）。矩形保留它们是因为它是唯一
+        //      "拉了还是矩形"的图形；曲线和立体图形是 2026-09-20 补上的
+        //      ——在那之前它们两头空（见上面 `nh` 那段）。
         //    白底 + 蓝边：深色背景上是白方块显眼，浅色背景上靠蓝边立住，一套画法两边都成立。
         //    拖动 / 旋转 / 拖元素中收起来（此刻点不中，而且是最"晃眼"的一圈家具）。
         if (!collapsed)
         {
             float hs = SelectionHandles.VisualSizeLogical * dpi;
             float radius = hs * 0.28f;
-            if (shapeLike)
+            if (nh > 0)
             {
-                Span<ShapeHandle> handles = stackalloc ShapeHandle[5];
-                int n = SelectionHandles.ShapeHandlesOf(shapeStroke, handles);
-                for (int i = 0; i < n; i++)
-                    DrawHandleSquare(SelectionHandles.ShapeHandleCanvasPosition(shapeStroke, handles[i]),
+                for (int i = 0; i < nh; i++)
+                    DrawHandleSquare(SelectionHandles.ShapeHandleCanvasPosition(shapeStroke, shapeHandles[i]),
                                      hs, radius, white);
             }
             else
