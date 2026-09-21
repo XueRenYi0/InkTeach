@@ -12050,6 +12050,27 @@ internal sealed class App : InkEngine.InkEngine
                   $"Kind = {KindOfShapeTool(tool)}");
         }
 
+        // **自检表本身也要被卡住**——这一条是给"**以后每个新增图形都要自检**"立的规矩。
+        //
+        // 做法：把引擎里所有"能画的图形"**枚举出来**（`IsShapeTool` 说了算），要求它们
+        // 一个不漏地出现在上面两张表里。以后新加一种图形、只要忘了写进自检表，
+        // **这条当场红**——而不是像棱锥 / 棱台这一轮那样，靠用户上手才发现。
+        //
+        // （为什么要"枚举 + 集合比较"，而不是"再数一遍个数"：个数对不上说明不了**谁**漏了，
+        //   而这里错了会直接把名字打出来。）
+        var engineShapes = Enum.GetValues<Tool>().Where(IsShapeTool).ToArray();
+        var listedTools = want.Select(w => w.tool).Concat(noEntry.Select(n => n.tool)).ToArray();
+        var missingShapes = engineShapes.Where(t => !listedTools.Contains(t)).ToArray();
+        var extraShapes = listedTools.Where(t => !engineShapes.Contains(t)).ToArray();
+        Check("自检覆盖：引擎里**每一个**图形都在自检表里（新增图形忘了写自检 → 这里红）",
+              missingShapes.Length == 0 && extraShapes.Length == 0,
+              missingShapes.Length > 0
+                  ? $"自检表漏了：{string.Join(" / ", missingShapes)}"
+                  : extraShapes.Length > 0
+                      ? $"自检表里多出（引擎说它不是图形）：{string.Join(" / ", extraShapes)}"
+                      : $"引擎 {engineShapes.Length} 个图形 = 自检表 {listedTools.Length} 个"
+                        + $"（有入口 {want.Length} ＋ 没入口 {noEntry.Length}），两边完全对上");
+
         // ================= A2. 抛物线那格：**再点一次 = 换一档（上下 / 左右）** =================
         //
         // 用户 2026-09-20 深夜定：**上下还是左右**画之前定，不从选中框改
@@ -12227,71 +12248,50 @@ internal sealed class App : InkEngine.InkEngine
               Host.State.Tool == Tool.Line,
               $"工具 = {Host.State.Tool}（期望 Line）");
 
-        // ================= C. 点段选出的工具，画出来就是那个图形 =================
-        Console.WriteLine("  -- C. 用点段选出的工具画一笔：StrokeKind 就是那一种 --");
-        var draws = new (Tool tool, StrokeKind kind, string name)[]
-        {
-            (Tool.Circle, StrokeKind.Circle, "圆"),
-            (Tool.Triangle, StrokeKind.Triangle, "三角形"),
-            (Tool.Parallelogram, StrokeKind.Parallelogram, "平行四边形"),
-            // 末尾那一段（2026-09-19）：点它切工具、拖出来的是坐标系
-            (Tool.Coordinate, StrokeKind.Coordinate, "坐标系"),
-            // 第二行第一段（2026-09-20）：**第二行真的点得到、拖出来真的是抛物线**——
-            // 其余曲线由 --curvetest 逐条验，这里只抽查（每次拖拽要等几帧，省时间）。
-            (Tool.Parabola, StrokeKind.Parabola, "抛物线（第二行）"),
-            // 立体图形里抽一个**两笔**的（棱柱）：验"点段选的工具 ＋ 多笔状态机"
-            // 这条真路走得通（几何本身由 --prismtest 验）。
-            // ⚠ 段号**按工具名现查**（`ShapeSegmentIndexForTest`）——原来这里写死"第 14 段
-            // 是长方体"，长方体撤了入口之后那个 14 已经变成棱柱；写死的段号会随
-            // 面板增删**静默点错段**，所以这一轮统一改成按工具名找。
-            (Tool.Prism, StrokeKind.Prism, "棱柱（两笔）"),
-        };
+        // ================= C. **每一个有入口的图形**都真拖一笔，画出来就是那一种 =================
+        //
+        // ⚠ 这一段原来是**抽查 6 个**（"每次拖拽要等几帧，省时间"），结果正好漏在
+        // 棱锥 / 棱台身上（用户："锥体和台体只能画四棱"）。省下的那几秒，换来的是
+        // **一个图形入口整整没走过一遍**——不值。现在**逐段全拖**：
+        // 判据表就是上面那张 `want`（有入口的那些），一个都跑不掉。
+        //
+        // 两件事**不再由人写**（写了就会跟不上）：
+        //   · **拖几笔** → 问引擎 `ShapeStepCount(tool)`（它是从那张三笔表算出来的）；
+        //   · **段号** → 问界面 `ShapeSegmentIndexForTest(tool)`。
+        Console.WriteLine($"  -- C. 逐个图形真拖一笔（{want.Length} 个）：StrokeKind 就是那一种 --");
         // 落点在画布中上部：面板在屏幕下沿，别画到面板上（那就变成点按钮了）
         int dragX = (int)(_virtualX + _virtualW * 0.28f);
         int dragY = (int)(_virtualY + _virtualH * 0.42f);
-        for (int i = 0; i < draws.Length; i++)
+        for (int i = 0; i < want.Length; i++)
         {
-            var d = draws[i];
+            var d = want[i];
             Doc.Clear();
             Doc.ClearHistory();
             GotoShapeBand();
             ClickSegment(InkUi.FullUi.ShapeSegmentIndexForTest(d.tool));
 
-            // 落点：面板在屏幕下沿，别画到面板上（那就变成点按钮了）
-            int x = dragX + i * 40, y = dragY;
-            if (d.kind is StrokeKind.Hyperbola or StrokeKind.Prism
-                or StrokeKind.Pyramid or StrokeKind.Frustum)
+            // 一个图形一格（互相别叠上），按引擎说的**笔数**一笔一笔拖
+            int x = dragX + (i % 4) * 260, y = dragY + (i / 4) * 150;
+            int steps = ShapeStepCount(d.tool);
+            for (int k = 0; k < steps; k++)
             {
-                // **多笔图形**（见表 Engine.StepPlan）**都是"按住拖"、两次**：
-                // 双曲线 = 渐近线 → 曲线；棱柱 / 棱锥 / 棱台 = 底面外接框 → 顶上那个中心。
-                // 画法本身由 --prismtest / --curvetest 逐条真机验过，这里只验"点段选出的工具、
-                // 真能画出那个种类"，所以走最短的两笔。
-                SendMouse(x, y, 0);                                       SettleFrames(60);
-                SendMouse(x, y, Native.MOUSEEVENTF_LEFTDOWN);             SettleFrames(60);
-                SendMouse(x + 200, y + 120, 0);                           SettleFrames(160);
-                SendMouse(x + 200, y + 120, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(160);
-                SendMouse(x, y, 0);                                       SettleFrames(60);
-                SendMouse(x, y, Native.MOUSEEVENTF_LEFTDOWN);             SettleFrames(60);
-                SendMouse(x + 160, y + 40, 0);                            SettleFrames(160);
-                SendMouse(x + 160, y + 40, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(260);
-            }
-            else
-            {
-                // 一笔拖（图形的画法）：抛物线也走这条（照 InkClass 的 `case 20/21`，
-                // 顶点 = 按下那个点、松手就成），拖 260×120——比"太短不产生对象"的阈值大得多
+                // 第 1 笔拖 260×120（比"太短不产生对象"的阈值大得多）；第 2 笔（多笔图形的
+                // "方向 / 深度 / 顶上那个中心"）拖 160×40——和 --prismtest 那套最短两笔同一个口径。
+                int dx = k == 0 ? 260 : 160, dy = k == 0 ? 120 : 40;
                 SendMouse(x, y, 0);                                    SettleFrames(60);
                 SendMouse(x, y, Native.MOUSEEVENTF_LEFTDOWN);           SettleFrames(60);
-                SendMouse(x + 130, y + 60, 0);                          SettleFrames(40);
-                SendMouse(x + 260, y + 120, 0);                         SettleFrames(40);
-                SendMouse(x + 260, y + 120, Native.MOUSEEVENTF_LEFTUP); SettleFrames(220);
+                SendMouse(x + dx / 2, y + dy / 2, 0);                   SettleFrames(40);
+                SendMouse(x + dx, y + dy, 0);                           SettleFrames(40);
+                SendMouse(x + dx, y + dy, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(k + 1 < steps ? 120 : 220);
             }
 
             var s = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
-            Check($"「{d.name}」：点段选的工具画出来就是它",
-                  Host.State.Tool == d.tool && s != null && s.Kind == d.kind,
+            var kindWant = KindOfShapeTool(d.tool);      // 期望值**从引擎问**，不再表里再抄一遍
+            Check($"「{d.name}」：点段选的工具、拖 {steps} 笔，画出来就是它",
+                  Host.State.Tool == d.tool && s != null && s.Kind == kindWant,
                   $"工具 = {Host.State.Tool}，对象 {Doc.Strokes.Count} 个，"
                   + $"Kind = {(s == null ? "（一个对象都没有）" : s.Kind.ToString())}"
-                  + $"（期望 {d.kind}）");
+                  + $"（期望 {kindWant}）");
         }
         Doc.Clear();
         Doc.ClearHistory();
