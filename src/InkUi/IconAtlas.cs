@@ -73,11 +73,20 @@ internal static class IconAtlas
         if (name == "cone") { DrawCone(ctx, x, y, size, brush); return; }
         if (name == "cuboid") { DrawCuboid(ctx, x, y, size, brush); return; }
         if (name == "tetrahedron") { DrawTetrahedron(ctx, x, y, size, brush); return; }
-        // 棱柱四档（三/四/五/六）：同一段画法，只换底面的边数（见 DrawPrism）。
+        // 棱柱 / 棱锥 / 棱台各四档（三/四/五/六）：各自段画法只换底面边数
+        //（见 DrawPrism / DrawPyramid / DrawFrustum，三者共用底面与可见性那份）。
         if (name == "prism3") { DrawPrism(ctx, x, y, size, brush, 3); return; }
         if (name == "prism4") { DrawPrism(ctx, x, y, size, brush, 4); return; }
         if (name == "prism5") { DrawPrism(ctx, x, y, size, brush, 5); return; }
         if (name == "prism6") { DrawPrism(ctx, x, y, size, brush, 6); return; }
+        if (name == "pyramid3") { DrawPyramid(ctx, x, y, size, brush, 3); return; }
+        if (name == "pyramid4") { DrawPyramid(ctx, x, y, size, brush, 4); return; }
+        if (name == "pyramid5") { DrawPyramid(ctx, x, y, size, brush, 5); return; }
+        if (name == "pyramid6") { DrawPyramid(ctx, x, y, size, brush, 6); return; }
+        if (name == "frustum3") { DrawFrustum(ctx, x, y, size, brush, 3); return; }
+        if (name == "frustum4") { DrawFrustum(ctx, x, y, size, brush, 4); return; }
+        if (name == "frustum5") { DrawFrustum(ctx, x, y, size, brush, 5); return; }
+        if (name == "frustum6") { DrawFrustum(ctx, x, y, size, brush, 6); return; }
         if (name == "sine") { DrawWave(ctx, x, y, size, brush, cosine: false); return; }
         if (name == "cosine") { DrawWave(ctx, x, y, size, brush, cosine: true); return; }
         // 直线那三档线型的图标（用户 2026-09-20 定：图形面板里"直线"那一段再点一次
@@ -427,12 +436,11 @@ internal static class IconAtlas
     /// <summary>
     /// 自绘的**棱柱**图标（三 / 四 / 五 / 六棱柱）：**立着**的底面正 n 边形 ＋ 顶面 ＋ 侧棱。
     ///
-    /// 只画**看得见的棱**（被挡住的那些在 18 像素下就是一团虚线，反而看不出形）——
-    /// 和 <see cref="DrawCuboid"/> 同一个口径（它也省掉了三条被挡的）。
-    /// 可见性判据和画布上那份**是同一条**（计划-图形工具.md §32.4）：底面中点在底心下方 = 近侧；
-    /// 侧棱只要相邻两个侧面里有一个看得见就画。
+    /// 判据和画布上那份**是同一条**（计划-图形工具.md §32.4 / §34）：底面中点在底心下方 = 近侧；
+    /// 侧棱只要相邻两个侧面里有一个看得见就画。**只画看得见的棱**——被挡住的那些在 18 像素下
+    /// 就是一团虚线，反而看不出形（和 <see cref="DrawCuboid"/> 同一个口径）。
     ///
-    /// ⚠ 五 / 六两张在 18 像素下**不太分得开**（只差底面上一条边）——那一格下面有
+    /// ⚠ 五 / 六两张在 18 像素下**不太分得开**（只差底面上一条边）——那一格右边有
     /// **4 个档位点**兜底（见 FullUi 的 DrawPips）：数点比数边可靠。
     /// </summary>
     private static void DrawPrism(ID2D1DeviceContext ctx, float x, float y,
@@ -446,25 +454,92 @@ internal static class IconAtlas
         var bc = new Vector2(12f, 17f);
         const float rx = 8f, ry = 3.4f;      // 底面是"俯视压扁"的，和画布上那个观感一致
         const float height = 11f;
-        // 边数由**调用方按图标名**给（`prism3`/`prism4`/`prism5`/`prism6` 四张各自硬编码），
-        // 所以这里不再夹一道——`Stroke` 是引擎内部类型，界面层看不到它的上下限常量。
-        int n = sides;
+        var b = IconBasePoints(bc, rx, ry, sides);
+        var top = new Vector2[sides];
+        for (int k = 0; k < sides; k++) top[k] = new Vector2(b[k].X, b[k].Y - height);
+
+        DrawRingSolid(ctx, b, top, hasTopRing: true, rx, ry, brush);
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// 自绘的**棱锥**图标：底面正 n 边形 ＋ 一个顶点（三条棱收到一点）。
+    /// 和 <see cref="DrawPrism"/> 共用底面与可见性判据，只把"顶面"换成**一个点**。
+    /// </summary>
+    private static void DrawPyramid(ID2D1DeviceContext ctx, float x, float y,
+                                    float size, ID2D1Brush brush, int sides)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        var bc = new Vector2(12f, 18.5f);
+        const float rx = 8f, ry = 3.4f;
+        var b = IconBasePoints(bc, rx, ry, sides);
+        var apex = new Vector2(12f, 4f);                 // 顶点（图标里就立在底心正上方）
+        var top = new Vector2[sides];
+        for (int k = 0; k < sides; k++) top[k] = apex;   // 顶面退化成一个点
+
+        DrawRingSolid(ctx, b, top, hasTopRing: false, rx, ry, brush);
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// 自绘的**棱台**图标：底面正 n 边形 ＋ 一个**缩小**的同形上底 ＋ n 条收进去的侧棱。
+    /// 上底比例读 <see cref="ShapeSpec.FrustumTopScale"/>——和画布上**同一个数**，
+    /// 不然图标和画出来的东西不一样（那是这一族最容易出的错）。
+    /// </summary>
+    private static void DrawFrustum(ID2D1DeviceContext ctx, float x, float y,
+                                    float size, ID2D1Brush brush, int sides)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        var bc = new Vector2(12f, 18.5f);
+        const float rx = 8f, ry = 3.4f;
+        var b = IconBasePoints(bc, rx, ry, sides);
+        var apex = new Vector2(12f, 6f);                 // 上底中心（和棱柱那个"顶面中心"同一含义）
+        float k0 = ShapeSpec.FrustumTopScale;
+        var top = new Vector2[sides];
+        for (int k = 0; k < sides; k++) top[k] = apex + (b[k] - bc) * k0;
+
+        DrawRingSolid(ctx, b, top, hasTopRing: true, rx, ry, brush);
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// 图标里那 `n` 个底面顶点：**和画布上同一套算式**（`ShapeSpec.PrismBasePointOffset`：
+    /// 压扁 ＋ 错切，起始角也是同一个判据）——两边不一致的话，图标画的和画出来的
+    /// 就不是一个东西。三个立体图标（<see cref="DrawPrism"/> / <see cref="DrawPyramid"/> /
+    /// <see cref="DrawFrustum"/>）都从它出发。
+    /// </summary>
+    private static Vector2[] IconBasePoints(Vector2 bc, float rx, float ry, int n)
+    {
         var b = new Vector2[n];
-        var t = new Vector2[n];
         for (int k = 0; k < n; k++)
         {
-            // 和画布上**同一套算式**（`ShapeSpec.PrismBasePointOffset`：压扁 ＋ 错切，
-            // 起始角也是同一个判据）——两边不一致的话，图标画的和画出来的就不是一个东西。
             float a = (ShapeSpec.PrismBaseOffsetDegrees(n) * MathF.PI / 180f) + k * MathF.Tau / n;
             b[k] = bc + ShapeSpec.PrismBasePointOffset(MathF.Cos(a), MathF.Sin(a), rx, ry);
-            t[k] = new Vector2(b[k].X, b[k].Y - height);
         }
+        return b;
+    }
 
+    /// <summary>
+    /// 把"底面 ＋ 顶面"这两圈点画成一个立体图标（三个立体的共用收尾）。
+    ///
+    /// 每个侧面看得见吗：**和画布上同一个判据**（`ShapeSpec.PrismFaceVisible`，
+    /// 连错切那一项都算进去——漏了它，四棱柱的图标会少画右侧那一面）。
+    /// `hasTopRing = false` 是棱锥（顶面只是一个点，画"面"就成了墨疙瘩）。
+    /// </summary>
+    private static void DrawRingSolid(ID2D1DeviceContext ctx, Vector2[] b, Vector2[] top,
+                                      bool hasTopRing, float rx, float ry, ID2D1Brush brush)
+    {
+        int n = b.Length;
         void Line(Vector2 p, Vector2 q) => ctx.DrawLine(p, q, brush, 1.5f, _round);
 
-        // 每个侧面看得见吗：**和画布上同一个判据**（`ShapeSpec.PrismFaceVisible`，
-        // 连错切那一项都算进去——漏了它，四棱柱的图标会少画右侧那一面）。
-        // 弧段中点的参数角 = 两个端点参数角的中间。
         float ang0 = ShapeSpec.PrismBaseOffsetDegrees(n) * MathF.PI / 180f;
         var face = new bool[n];
         for (int k = 0; k < n; k++)
@@ -476,13 +551,11 @@ internal static class IconAtlas
         for (int k = 0; k < n; k++)
         {
             int nx = (k + 1) % n;
-            Line(t[k], t[nx]);                        // 顶面：俯视下恒可见
+            if (hasTopRing) Line(top[k], top[nx]);    // 顶面：俯视下恒可见
             if (face[k]) Line(b[k], b[nx]);           // 底面：只有看得见的那几条
-            // 侧棱：相邻两个侧面有一个看得见就画
-            if (face[k] || face[(k + n - 1) % n]) Line(b[k], t[k]);
+            // 侧棱：相邻两个侧面有一个看得见就画（棱锥时 top[k] 就是顶点）
+            if (face[k] || face[(k + n - 1) % n]) Line(b[k], top[k]);
         }
-
-        ctx.Transform = saved;
     }
 
     /// <summary>图标里画一段椭圆弧（`u0 → u1`，和画布上那套同一个角度约定）。</summary>

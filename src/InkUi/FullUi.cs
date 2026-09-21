@@ -871,10 +871,19 @@ public sealed class FullUi : IOverlayUi
         // 2026-09-20 第五批：立体图形（照 InkClass 的 case 6/7/9/26 搬过来）。
         // 第二行从 4 段长到 8 段（和第一行一样宽）——段宽是"可用宽度 ÷ 本行段数"算出来的，
         // 加段不用动布局。
-        Tool.Cylinder, Tool.Cone, Tool.Cuboid, Tool.Tetrahedron,
+        Tool.Cylinder, Tool.Cone,
         // 2026-09-20 第十一批：棱柱（3/4/5/6 棱柱 ＋ 直/斜，用户提的，见 计划-图形工具.md §32）。
         // 第二行因此从 8 段长到 9 段——段宽是"可用宽度 ÷ 本行段数"算出来的，加段不用动布局。
         Tool.Prism,
+        // 2026-09-20 第十二批：棱锥 / 棱台（用户提的，见 §34）。它们和棱柱**同一族**
+        //（底面正 n 边形 ＋ 顶上一个中心、一样两笔、一样 3/4/5/6 档、一样有 "直" 吸附），
+        // 所以紧挨着棱柱排（"三兄弟挨着"最好找）。
+        Tool.Pyramid, Tool.Frustum,
+        // ⚠ **长方体 / 四面体从这一行撤掉了**（同一天，用户："那两格似乎可以删除掉了，没用了"）：
+        // 四棱柱（直）就是长方体、三棱锥就是四面体，它们被上面那几段覆盖了。
+        // 撤的是**入口**，不是画法——`Tool.Cuboid` / `StrokeKind.Cuboid` 与整条画法都留着，
+        // 旧板书里的长方体照样能打开、能选中、能删（同 2026-09-19 撤「数轴」的规矩，见 11.2）。
+        // 第二行**还是 9 段**（去掉 2 段、加上 2 段）——所以段宽一点没变。
     };
 
     /// <summary>图形那一格在上带里的下标（两行都在这一个格子里）。</summary>
@@ -1411,13 +1420,14 @@ public sealed class FullUi : IOverlayUi
                     //     我不打算从这个转开口" → 朝向改到**画之前**定）；
                     //   · 直线：换线型（用户 2026-09-20 定："点击直线的图标，它会变成虚线，
                     //     再点击变成点虚线，再点击又变成直线……这样就省了好几个空间格"）；
-                    //   · 棱柱：换底面几边形（用户 2026-09-20 定："我想想能不能做成像直线切换
-                    //     那样切换三四五六"）。
+                    //   · 棱柱 / 棱锥 / 棱台：换底面几边形（用户 2026-09-20 定："我想想能不能做成
+                    //     像直线切换那样切换三四五六"）。**三格共用同一档**，判据只有
+                    //     `ShapeSpec.HasSideCount` 一处——加棱锥 / 棱台时这里差点漏掉。
                     if (picked == Tool.Parabola && _host.State.Tool == Tool.Parabola)
                         _host.Commands.CycleParabolaAxis();
                     else if (picked == Tool.Line && _host.State.Tool == Tool.Line)
                         _host.Commands.CycleLineDash();
-                    else if (picked == Tool.Prism && _host.State.Tool == Tool.Prism)
+                    else if (ShapeSpec.HasSideCount(picked) && _host.State.Tool == picked)
                         _host.Commands.CyclePrismSides();
                     else
                         _host.Commands.SetTool(picked);
@@ -2737,29 +2747,29 @@ public sealed class FullUi : IOverlayUi
         var segInk = active ? Tokens.AccentInk : InkCol;
         // **有档位的那两段**（点它一下换一档，见 ActivateSegment 的 case 8）：
         //   · 「直线」= 3 档线型（实 / 虚 / 点）；
-        //   · 「棱柱」= 4 档边数（三 / 四 / 五 / 六）。
+        //   · 「棱柱 / 棱锥 / 棱台」= 4 档边数（三 / 四 / 五 / 六）——**三格共用同一档**
+        //     （`UiState.PrismSides`），因为它们就是同一族（底面正 n 边形），换了一格
+        //     另外两格也跟着走，这正合直觉。
         // 图标照旧画当前那一档，**右边再加一竖列档位点**——大而浓的那个是当前档。
         // 用户 2026-09-20 定：只换图标的话，老师"不知道这一格还能点"（可选的状态是隐形的）。
         //
         // **点从"图标下面"挪到了"图标右边"**（还是 2026-09-20，用户看出来的）：
         // 图形段是"宽 × 26"的长方形（第二行 9 段时每格约 80 宽），而图标只占 18 ——
         // 左右各有约 30 的空白。横排放在下面的时候，为了挤出那 7 像素高，
-        // 棱柱图标得**压到 16 并整体上移 3.5**；竖着放到右边之后那一列点只占约 7 宽，
-        // 图标就能回到 18 并留在正中。只有这两格有档位，别的段照旧。
+        // 图标得**压到 16 并整体上移 3.5**；竖着放到右边之后那一列点只占约 7 宽，
+        // 图标就能回到 18 并留在正中。只有这几格有档位，别的段照旧。
         //
         // **档数与当前档都从这一处算**（不在绘制里再列一遍工具名）：
-        // 下面 `ShapeToolAt(i)` 判"这是哪一段"，这里判"它有几档、现在是第几档"。
+        // `ShapeSpec.HasSideCount(tool)` 判"是不是那一族"，这里判"它有几档、现在是第几档"。
         // 棱柱那几档的**范围来自引擎**（`st.PrismMin/MaxSides`）——`Stroke` 是引擎内部类型，
         // 界面看不到它，也不该在这里写死一份 3/6。
-        int pipCount = ShapeToolAt(i) switch
-        {
-            Tool.Line => 3,
-            Tool.Prism => st.PrismMaxSides - st.PrismMinSides + 1,
-            _ => 0,
-        };
+        var segTool = ShapeToolAt(i);
+        int pipCount = segTool == Tool.Line ? 3
+            : ShapeSpec.HasSideCount(segTool) ? st.PrismMaxSides - st.PrismMinSides + 1
+            : 0;
         if (pipCount > 0)
         {
-            int pipCur = ShapeToolAt(i) == Tool.Line
+            int pipCur = segTool == Tool.Line
                 ? (int)st.LineDash
                 : Math.Clamp(st.PrismSides, st.PrismMinSides, st.PrismMaxSides) - st.PrismMinSides;
             // 右边让出这么宽的一条给竖排的点（点距/半径在 `DrawPips` 里，最浓的那个半径 2，
@@ -2769,12 +2779,12 @@ public sealed class FullUi : IOverlayUi
             {
                 MinX = r.MinX, MinY = r.MinY, MaxX = r.MaxX - PipStripW, MaxY = r.MaxY,
             };
-            IconAtlas.DrawCentered(ctx, ShapeIcon(i), iconBox, 18f, Brush(ctx, segInk));
+            IconAtlas.DrawCentered(ctx, ShapeIcon(segTool), iconBox, 18f, Brush(ctx, segInk));
             DrawPips(ctx, r.MaxX - PipStripW * 0.5f, (r.MinY + r.MaxY) * 0.5f, pipCur, pipCount, segInk);
             return;
         }
 
-        IconAtlas.DrawCentered(ctx, ShapeIcon(i), r, 18f, Brush(ctx, segInk));
+        IconAtlas.DrawCentered(ctx, ShapeIcon(segTool), r, 18f, Brush(ctx, segInk));
     }
 
     /// <summary>
@@ -2810,19 +2820,38 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>
     /// **图形种类 → 图标名**（带上状态的那一份）：目前两处跟状态有关——
-    /// 抛物线要**转成当前开口方向**（见 <see cref="ParabolaIconName"/>），
-    /// 直线要**换成当前线型**（见 <see cref="LineIconName"/>）。
+    /// 抛物线要**转成当前开口方向**（见 <see cref="ParabolaIconName"/>）、
+    /// 直线要**换成当前线型**（见 <see cref="LineIconName"/>），
+    /// 棱柱 / 棱锥 / 棱台要**换成当前档的边数**（见 <see cref="SolidIconName"/>）。
     ///
-    /// 为什么非跟状态不可：这两格"点第二下换一档"，图标不跟着换的话，
-    /// 老师看不出那一下到底有没有生效（两处都是用户 2026-09-20 定的）。
+    /// 为什么非跟状态不可：这几格"点第二下换一档"，图标不跟着换的话，
+    /// 老师看不出那一下到底有没有生效（三处都是用户 2026-09-20 定的）。
     /// </summary>
     private string ShapeIcon(Tool t) => t switch
     {
         Tool.Parabola => ParabolaIconName(_host.State.ParabolaAxis),
         Tool.Line => LineIconName(_host.State.LineDash),
-        Tool.Prism => PrismIconName(_host.State.PrismSides),
+        _ when ShapeSpec.HasSideCount(t) => SolidIconName(t, _host.State.PrismSides),
         _ => ShapeIconFor(t),
     };
+
+    /// <summary>
+    /// 立体图形那一族的图标名：`prism3` ～ `frustum6`（前缀按工具、后缀按当前档边数）。
+    ///
+    /// 和直线 / 抛物线同一条理由：那几格"再点一次换一档"，图标不跟着换就看不出来。
+    /// ⚠ **18 像素下"五"和"六"、以及棱柱 / 棱台**可能不太分得开，所以那一格右边
+    /// 还有 **4 个档位点**兜底（见 `DrawPips`）——数点比数边可靠。
+    /// </summary>
+    private static string SolidIconName(Tool t, int sides)
+    {
+        string stem = t switch
+        {
+            Tool.Pyramid => "pyramid",
+            Tool.Frustum => "frustum",
+            _ => "prism",                              // 棱柱（也是兜底）
+        };
+        return stem + Math.Clamp(sides, 3, 6);
+    }
 
     /// <summary>
     /// 抛物线的图标名按**当前档位**换（`parabola` = 上下抛物 / `parabolaRight` = 左右抛物，
@@ -2860,21 +2889,6 @@ public sealed class FullUi : IOverlayUi
     };
 
     /// <summary>
-    /// 棱柱的图标名按**当前档**换（`prism3` ～ `prism6`，见 <see cref="IconAtlas.Draw"/>）。
-    ///
-    /// 和直线 / 抛物线同一条理由：那一格"再点一次换一档"，图标不跟着换就看不出来。
-    /// ⚠ **18 像素下"五棱柱"和"六棱柱"可能不太分得开**（底面多一条边），
-    /// 所以那一格下面还有 **4 个档位点**兜底（见 `DrawPips`）——数点比数边可靠。
-    /// </summary>
-    private static string PrismIconName(int sides) => sides switch
-    {
-        3 => "prism3",
-        5 => "prism5",
-        6 => "prism6",
-        _ => "prism4",                             // 四棱柱（也是兜底）
-    };
-
-    /// <summary>
     /// **图形种类 → 图标名**。上带那几段和主条"图形"那一格**共用这一份**：
     /// 主条上显示的必须就是当前种类的形状，两处各写一份迟早对不上
     /// （表现是"上带里点了三角形，主条那格还是矩形"）。
@@ -2907,11 +2921,15 @@ public sealed class FullUi : IOverlayUi
         // 立体图形（2026-09-20 第五批）：同样自绘（见 IconAtlas.DrawCylinder / DrawCone 等）。
         Tool.Cylinder => "cylinder",
         Tool.Cone => "cone",
+        // ⚠ 长方体 / 四面体 2026-09-20 第十二批**撤了面板入口**（见 ShapeBandOrder2 那段），
+        // 但它们的两张图标留着——主条那一格在"选中的是旧板书里的一个长方体"时还要画它。
         Tool.Cuboid => "cuboid",
         Tool.Tetrahedron => "tetrahedron",
-        // 棱柱：具体哪一张由 `ShapeIcon(Tool)` 按当前档换（见 PrismIconName）。
-        // 这里是**四棱柱**那张，也是认不出来的兜底。
+        // 棱柱 / 棱锥 / 棱台：具体哪一张由 `ShapeIcon(Tool)` 按当前档换（见 SolidIconName）。
+        // 这里是**默认（四棱）**那张，也是认不出来的兜底。
         Tool.Prism => "prism4",
+        Tool.Pyramid => "pyramid4",
+        Tool.Frustum => "frustum4",
         Tool.Arrow => "arrowRight",
         // 直线：自绘三张（实线 / 虚线 / 点线，见 IconAtlas）。这里给的是**实线**那一张，
         // 具体哪一张由 `ShapeIcon(Tool)` 按当前线型换（见 LineIconName）。
@@ -3243,6 +3261,21 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>自检用：这个工具在图形面板里有没有入口（见 <see cref="HasShapeEntry"/>）。</summary>
     internal static bool HasShapeEntryForTest(Tool t) => HasShapeEntry(t);
+
+    /// <summary>
+    /// 自检用：这个工具在图形那一格里是**第几段**（两行拉平编号；没入口就 −1）。
+    ///
+    /// **为什么要有它**：自检里写死段号会随"加一种图形 / 撤一种图形"**静默失效**
+    /// ——这次加棱锥 / 棱台时第二行往下挪了两格，写死的 16 就不声不响点了别的段。
+    /// 按工具名问一句就跟着表走，挪多少次都不怕（仓库教训里那一条）。
+    /// </summary>
+    internal static int ShapeSegmentIndexForTest(Tool t)
+    {
+        int i = Array.IndexOf(ShapeBandOrder, t);
+        if (i >= 0) return i;
+        int j = Array.IndexOf(ShapeBandOrder2, t);
+        return j >= 0 ? ShapeBandOrder.Length + j : -1;
+    }
 
     /// <summary>自检用：滑条的矩形。</summary>
     internal RectF SliderRectForTest => SliderRect();

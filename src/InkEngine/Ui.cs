@@ -427,13 +427,36 @@ public static class ShapeSpec
     ///      后面 ＋ 左面虚掉，虚掉的三条棱正好是"背面下横 / 左下斜 / 背面左竖"）。
     /// 漏掉它的话，四棱柱会退化成"只有正面看得见"，看着像个空壳子。
     ///
-    /// 画布（`Stroke.PrismEdges`）和图标（`IconAtlas.DrawPrism`）**都调它**。
+    /// 画布（`Stroke.PrismFamilyEdges`）和图标（`IconAtlas.DrawPrism`）**都调它**。
     /// </summary>
     public static bool PrismFaceVisible(float midCos, float midSin, float rx, float ry)
     {
         PrismFrame(rx, ry, out float rxUse, out float skew);
         return midCos * (skew / rxUse) + midSin > 0f;
     }
+
+    /// <summary>
+    /// **棱台的上底缩到多大**（相对下底的比例，按半宽 / 半高一起缩——同形）。
+    ///
+    /// 用户 2026-09-20 定的口径："上底按**固定比例**缩，**两笔**画完"——
+    /// 意思是上底大小**不靠第三笔拖**，画的时候只定它**在哪儿**（第 2 笔那个中心）。
+    /// 好处是棱台和棱柱**手感一模一样**（都是两笔），代价是上底大小不能单独调。
+    ///
+    /// 0.5 是照课本上正四棱台的常见画法取的（上底看起来约是下底的一半）。
+    /// 想让上底更大 / 更小，只改这一个数——**画布和图标都读它**（同一份实现）。
+    /// </summary>
+    public const float FrustumTopScale = 0.5f;
+
+    /// <summary>
+    /// 这个工具**是不是"底面有几边形"那一族**（棱柱 / 棱锥 / 棱台）：它们共用
+    /// <c>UiState.PrismSides</c> 那一档，界面上也就是"点那一格再点一次 3→4→5→6→3"。
+    ///
+    /// **界面上凡是"按这一族分支"的地方都该问它**（现在有两处：那一格画几个档位点、
+    /// 再点一次要不要换档）——各写一份名单的话，加一种立体图形就会漏掉一处
+    /// （这次加棱锥 / 棱台时正是一次要改三处：这里、图标的档位名、引擎的 PlanOf）。
+    /// </summary>
+    public static bool HasSideCount(Tool tool)
+        => tool is Tool.Prism or Tool.Pyramid or Tool.Frustum;
 }
 
 /// <summary>

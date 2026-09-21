@@ -3351,14 +3351,19 @@ public class InkEngine
     /// </summary>
     internal const float ShapeMinDragLogical = 4f;
 
-    /// <summary>这几种工具走"拖出来一个图形"那条路（其余工具照旧写自由笔迹）。</summary>
+    /// <summary>这几种工具走"拖出来一个图形"那条路（其余工具照旧写自由笔迹）。
+    ///
+    /// ⚠ **名单里留着长方体 / 四面体**（2026-09-20 第十二批撤的是**面板入口**，
+    /// 不是画法）：它们画出来仍然是图形，旧板书里的那些要能选中、能移动、能删。
+    /// 也就是"**能画**"比"**有入口**"宽一层——数轴是这个道理的第一例
+    /// （见 计划-图形工具.md 11.2 与 FullUi.HasShapeEntry）。</summary>
     internal static bool IsShapeTool(Tool t)
         => t is Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Circle
              or Tool.Triangle or Tool.Parallelogram or Tool.Arrow
              or Tool.Coordinate or Tool.NumberLine
              or Tool.Parabola or Tool.Hyperbola or Tool.Sine or Tool.Cosine
              or Tool.Cylinder or Tool.Cone or Tool.Cuboid or Tool.Tetrahedron
-             or Tool.Prism;
+             or Tool.Prism or Tool.Pyramid or Tool.Frustum;
 
     /// <summary>
     /// **一笔**做什么：把"这一笔拖到的位置"写进半成品的几何。
@@ -3428,11 +3433,16 @@ public class InkEngine
     };
 
     /// <summary>
-    /// **棱柱：两笔**（2026-09-20 用户提的，见 计划-图形工具.md §32）——
-    /// 第 1 笔拖出**底面外接框**（内接正 n 边形）、第 2 笔拖到**顶面中心**。
+    /// **棱柱 / 棱锥 / 棱台：两笔**（2026-09-20 用户提的，见 计划-图形工具.md §32 / §34）——
+    /// 第 1 笔拖出**底面外接框**（内接正 n 边形）、第 2 笔拖到**顶上那个中心**
+    ///（棱柱 = 顶面中心、棱锥 = 顶点、棱台 = 上底中心）。
     ///
-    /// 和四面体**同一套口径**（第 2 笔"拖到哪就是哪"），所以"往上拖 = 直棱柱、
-    /// 拖歪 = 斜棱柱"是同一个动作的自然结果；"直"那一档的**轻微吸附**在
+    /// ⚠ **三兄弟共用这一张表、一个字都不用改**——因为它们的控制点**完全一样**
+    ///（底面外接框两角 ＋ 顶上那个中心），差别只在模型里"顶上那个中心算出来的面
+    /// 长什么样"（`Stroke.PrismTopLocal`）。这就是"一个动作定三种立体"的由来。
+    ///
+    /// 和四面体**同一套口径**（第 2 笔"拖到哪就是哪"），所以"往上拖 = 直棱柱 / 直棱锥 /
+    /// 直棱台、拖歪 = 斜的"是同一个动作的自然结果；"直"那一档的**轻微吸附**在
     /// `ApplyStepGeometry` 里补（那一步不在表里，因为它要读/换档位之外的状态）。
     /// </summary>
     private static readonly StepPlan PrismPlan = new()
@@ -3454,7 +3464,9 @@ public class InkEngine
         Tool.Hyperbola => HyperbolaPlan,
         Tool.Cuboid => CuboidPlan,
         Tool.Tetrahedron => TetrahedronPlan,
-        Tool.Prism => PrismPlan,
+        // 棱柱 / 棱锥 / 棱台**共用一张表**（控制点完全一样，见 PrismPlan 的注释）——
+        // 所以"加一种立体"这件事在这里是**零改动**。
+        Tool.Prism or Tool.Pyramid or Tool.Frustum => PrismPlan,
         _ => null,
     };
 
@@ -3494,14 +3506,18 @@ public class InkEngine
         //
         // 判据用**长度**（"顶心和底心的横向差"小于容差），和"正圆"那条吸附同一个口径：
         // "轻微吸附"就该是"手抖一点点也算直"，用角度在柱子很高时会变得很难吸住。
+        //
+        // **棱柱 / 棱锥 / 棱台共用这一条**（问 `Stroke.IsPrismFamily`，不各写一份名单）：
+        // 三兄弟的"直"是同一件事——**顶上那个中心在底心正上方**。
+        // 报给界面的胶囊名字按种类分（直棱柱 / 直棱锥 / 直棱台，见 UprightSnapOf）。
         _stepSnap = ShapeSnapKind.None;
-        if (s.Kind == StrokeKind.Prism && _stepIndex == 1)
+        if (_stepIndex == 1 && Stroke.IsPrismFamily(s.Kind))
         {
             float dx = MathF.Abs(s.PrismApexLocal().X - s.PrismBaseCenterLocal().X);
             if (dx <= PrismUprightToleranceLogical * DpiScale)
             {
                 s.SnapPrismApexVertical();
-                _stepSnap = ShapeSnapKind.RightPrism;
+                _stepSnap = UprightSnapOf(s.Kind);
             }
         }
         // 胶囊挂在"**吸完之后**那个顶面中心"上（画布坐标）——绘制与脏区都读这一个数
@@ -3517,6 +3533,20 @@ public class InkEngine
     /// 因为这是个"轻微吸附"，不是"精确判定"。
     /// </summary>
     internal const float PrismUprightToleranceLogical = 12f;
+
+    /// <summary>
+    /// 吸到竖直时该报哪一颗胶囊：**名字按种类分**（直棱柱 / 直棱锥 / 直棱台），
+    /// 因为老师说出口的是"这是个直棱锥"，不是笼统的"吸住了"。
+    ///
+    /// 吸附的**判据**三兄弟共用（都在 <see cref="ApplyStepGeometry"/> 里那一处），
+    /// 这里只是把"吸到了什么"翻成人话（标签本体在 `SelectionHandles.ShapeSnapLabel`）。
+    /// </summary>
+    private static ShapeSnapKind UprightSnapOf(StrokeKind k) => k switch
+    {
+        StrokeKind.Pyramid => ShapeSnapKind.RightPyramid,
+        StrokeKind.Frustum => ShapeSnapKind.RightFrustum,
+        _ => ShapeSnapKind.RightPrism,
+    };
 
     /// <summary>
     /// **多笔图形当前那一笔吸到了什么**（现在只有棱柱的「直棱柱」一档）。
@@ -3564,6 +3594,8 @@ public class InkEngine
         Tool.Cuboid => StrokeKind.Cuboid,
         Tool.Tetrahedron => StrokeKind.Tetrahedron,
         Tool.Prism => StrokeKind.Prism,
+        Tool.Pyramid => StrokeKind.Pyramid,
+        Tool.Frustum => StrokeKind.Frustum,
         _ => StrokeKind.Arrow,
     };
 

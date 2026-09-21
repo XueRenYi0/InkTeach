@@ -140,6 +140,14 @@ internal enum ShapeSnapKind
     /// 但**走的是同一颗胶囊、同一套语言**（"吸到了什么"）。
     /// </summary>
     RightPrism,
+    /// <summary>
+    /// 棱锥：顶点**在底心正上方**（＝直棱锥）。和 <see cref="RightPrism"/> 是**同一件事、
+    /// 同一个判据、同一个容差**，只是"顶上那个东西"是顶点而不是一个面——
+    /// 分成两档纯粹是为了胶囊上写的字对（老师说出口的是"直棱锥"）。
+    /// </summary>
+    RightPyramid,
+    /// <summary>棱台：上底中心**在底心正上方**（＝直棱台）。同上，只是名字不同。</summary>
+    RightFrustum,
 }
 
 /// <summary>
@@ -1012,6 +1020,8 @@ internal static class SelectionHandles
         ShapeSnapKind.Rhombus => "菱形",
         ShapeSnapKind.Rectangle => "矩形",
         ShapeSnapKind.RightPrism => "直棱柱",
+        ShapeSnapKind.RightPyramid => "直棱锥",
+        ShapeSnapKind.RightFrustum => "直棱台",
         _ => "",
     };
 
