@@ -1995,9 +1995,10 @@ internal sealed class OverlayWindow : IDisposable
                 if (!pill.IsEmpty) r.Add(CanvasRectToWindow(pill.Inflate(3f)));
             }
 
-            // 多边形角标（规格 9.7）：三角形的**选中就显示**，而且每一颗都挂在顶点外侧
-            // （横着让到边的外面）、根本不在选中框里——不单独加进来就会被脏区裁掉，
-            // 屏幕上留下几行擦不掉的数字。**盒子和绘制走同一个函数**（FillAnglePills）。
+            // 多边形角标（规格 9.7）：**拖顶点时**才有（三角形 / 平行四边形都是），而且每一颗
+            // 都挂在顶点外侧（横着让到边的外面）、根本不在选中框里——不单独加进来就会被脏区裁掉，
+            // 屏幕上留下几行擦不掉的数字。**盒子和绘制走同一个函数**（FillAnglePills），
+            // 所以它说这一帧有几颗，这里就加几块。
             for (int i = 0, np = FillAnglePills(app, _anglePills); i < np; i++)
                 r.Add(CanvasRectToWindow(_anglePills[i].Rect.Inflate(3f)));
         }
@@ -2337,8 +2338,9 @@ internal sealed class OverlayWindow : IDisposable
         }
 
         // 7) 多边形读数（规格 9.7）：三角形的**三个内角**、平行四边形的**两个夹角**。
-        //    它不在上面那两个分支里，因为三角形的这一组**选中就显示**（用户定），
-        //    静止选中时也要画；平行四边形那一组只在拖顶点时出现（由 FillAnglePills 自己判）。
+        //    它不在上面那两个分支里，因为这一组是**好几颗**角标（最多三颗），有一套自己的
+        //    "这一帧有哪些"（见 FillAnglePills）。**两个图形都只在拖顶点时出现**
+        //    （用户 2026-09-20 定："三角形应该在拖动的时候再显示角度，要不然看起来也乱"）。
         DrawAnglePills(app);
     }
 

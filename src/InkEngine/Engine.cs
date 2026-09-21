@@ -5885,59 +5885,42 @@ public class InkEngine
     }
 
     /// <summary>
-    /// 多边形读数（规格 9.7）：三角形 = **三个内角**（**选中就显示**，用户定），
-    /// 平行四边形 = **它自己那两个夹角**（规格只要求"拖顶点时显示"，不多给）。
+    /// 多边形读数（规格 9.7）：三角形 = **三个内角**，平行四边形 = **它自己那两个夹角**。
+    /// 两个都**只在拖顶点时显示**。
+    ///
+    /// **2026-09-20 用户定**："三角形应该在拖动的时候再显示角度，要不然看起来也乱"——
+    /// 在那之前三角形是"一选中就显示三个角"，静止摆着也一直挂着三颗角标。
+    /// 现在它和平行四边形**走同一条判据**（平行四边形从 2026-09-19 起就是这样）。
+    /// 顺带也没了"整体移动 / 旋转三角形时显示角度"：转一个三角形并不会改变它的内角，
+    /// 那几个数在那两件事里都是噪音。
     ///
     /// 两个输出：<paramref name="vertices"/> 是那些角的顶点（**画布坐标**，标签贴在它外侧），
     /// <paramref name="degrees"/> 是角度（度）。返回要显示几个角（0 = 这一帧没有这套读数）。
     ///
-    /// 顶点一律取**这一帧屏幕上那个几何**：
-    ///   · 拖顶点中 → 临时几何（模型此刻一个字没改）；
-    ///   · 整体移动 / 旋转中 → 乘上实时预览矩阵（标签跟着图形走，不会留在原地）；
-    ///   · 静止 → 模型里的点。
+    /// 顶点取**这一帧屏幕上那个几何**：拖顶点中模型一个字没改，所以走临时几何
+    /// （`_vertexPreviewLocal`）乘上它自己的 `Transform`。
     /// **绘制与脏区都只走这一个函数**：两边各算一份的话，标签会按一个位置擦、按另一个位置画，
     /// 拖动久了屏幕上就留一条擦不掉的边（选中框那一套踩过这个坑）。
     /// </summary>
     internal int FillAngleReadout(Span<Vector2> vertices, Span<float> degrees)
     {
-        Stroke s = null;
-        bool previewing = false;
-        if (_vertexDragging && _vertexTarget != null
-            && _vertexTarget.Kind is StrokeKind.Triangle or StrokeKind.Parallelogram)
-        {
-            s = _vertexTarget;
-            previewing = true;
-        }
-        else if (Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.Triangle)
-        {
-            // 只有三角形"选中静止也显示"（用户定）；平行四边形的夹角要拖顶点（上面那一支）
-            // 才出现——规格只要求"拖顶点时显示"，不替用户扩大范围。
-            s = Doc.Selected[0];
-        }
-        if (s == null) return 0;
+        // **只有"拖顶点中"才出读数**（见上面那段）：不是拖顶点这一件事 → 这一帧没有读数。
+        if (!_vertexDragging || _vertexTarget == null
+            || _vertexTarget.Kind is not (StrokeKind.Triangle or StrokeKind.Parallelogram)
+            || _vertexPreviewLocal == null)
+            return 0;
 
+        var s = _vertexTarget;
         int n = s.Kind == StrokeKind.Triangle ? 3 : 4;
         if (vertices.Length < n || degrees.Length < 3) return 0;
 
-        if (previewing)
-        {
-            var m0 = s.Transform;
-            for (int i = 0; i < 3; i++) vertices[i] = Vector2.Transform(_vertexPreviewLocal[i], m0);
-            // 第四个顶点**不在临时点表里**（平行四边形存三个点），现推一个——
-            // 少了它，报出来的那个角就少了一条边，角度会算错。
-            if (n == 4)
-                vertices[3] = Vector2.Transform(Stroke.ParallelogramFourth(
-                    _vertexPreviewLocal[0], _vertexPreviewLocal[1], _vertexPreviewLocal[2]), m0);
-        }
-        else
-        {
-            // 拖动预览里对象是"按实时矩阵画出来的"，读数得跟着它走（角度本身不变，
-            // 但标签的位置要跟着图形，不然转起来标签会落在原地）。
-            var m = DragPreviewActive ? s.Transform * _selDragMatrix : s.Transform;
-            for (int i = 0; i < 3; i++)
-                vertices[i] = Vector2.Transform(new Vector2(s.Points[i].X, s.Points[i].Y), m);
-            if (n == 4) vertices[3] = Vector2.Transform(s.ParallelogramFourthLocal(), m);
-        }
+        var m = s.Transform;
+        for (int i = 0; i < 3; i++) vertices[i] = Vector2.Transform(_vertexPreviewLocal[i], m);
+        // 第四个顶点**不在临时点表里**（平行四边形存三个点），现推一个——
+        // 少了它，报出来的那个角就少了一条边，角度会算错。
+        if (n == 4)
+            vertices[3] = Vector2.Transform(Stroke.ParallelogramFourth(
+                _vertexPreviewLocal[0], _vertexPreviewLocal[1], _vertexPreviewLocal[2]), m);
         return SelectionHandles.PolygonAngles(s.Kind, vertices[..n], degrees);
     }
 

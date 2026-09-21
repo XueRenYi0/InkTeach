@@ -6062,14 +6062,14 @@ internal sealed class App : InkEngine.InkEngine
 
         // ================= L2. 读数：三角形三个内角 / 平行四边形两个夹角（规格 9.7）=================
         //
-        // 规格：三角形**选中就显示**三个内角（用户定），拖顶点时实时更新；
-        // 平行四边形**拖顶点时**显示它那两个互补的夹角。
+        // **两个图形都只在"拖顶点时"显示**（三角形原来"选中就显示"，用户 2026-09-20 定：
+        // "应该在拖动的时候再显示角度，要不然看起来也乱"），拖的时候实时更新。
         // **不再显示"内角和"那一行**（用户 2026-09-19 定：显示和太乱），所以为它服务的
         // 0.1° 配平也撤了——三个角**各自独立**取值，没有谁为了凑 180.0 被动过 0.1°。
         //
         // 这一节顺带把"**绘制与脏区同源**"验掉：浮动层是**按脏区裁剪**画的，所以
         //   · 标签上屏了 ⟹ 那块脏区确实算上了它；
-        //   · 取消选中 / 松手之后同一块探针窗必须干净 ⟹ 消失那一帧也被算到了（不留残影）。
+        //   · 松手之后同一块探针窗必须干净 ⟹ 消失那一帧也被算到了（不留残影）。
         // 探针数的是角标胶囊的**底色**（默认主题 Panel 盖在深色白板上 ≈ (236,236,239)）。
         Console.WriteLine("  -- L2. 三角形内角 / 平行四边形夹角（读数）--");
         {
@@ -6135,7 +6135,15 @@ internal sealed class App : InkEngine.InkEngine
                   Near(parDeg[0] + parDeg[1], 180f, 0.1f),
                   $"{parDeg[0]:F2} + {parDeg[1]:F2} = {parDeg[0] + parDeg[1]:F3}");
 
-            // ---- 真机：三角形「选中就显示」----
+            // ---- 真机：三角形**也改成"只在拖顶点时显示"**（用户 2026-09-20 定）----
+            //
+            // 用户原话："三角形应该在拖动的时候再显示角度，要不然看起来也乱。"
+            // 在那之前它是"一选中就挂三颗角标"，静止摆着也一直显示。
+            // 所以这一节四条按顺序钉住：
+            //   ① 静止选中 → 一个角都不显示、屏幕上也没有角标；
+            //   ② **按住顶点**（还没移动）→ 三个角立刻出来，而且是这个三角形的真值 90/30/60；
+            //   ③ 继续拖 → 读数实时变；④ 松手 → 立刻收回去、不留残影；
+            //   ⑤ 一次拖顶点仍然只是一步撤销。
             Doc.Clear();
             Doc.ClearHistory();
             Tool = Tool.Marquee;
@@ -6150,11 +6158,27 @@ internal sealed class App : InkEngine.InkEngine
             Doc.AddStroke(rt);
             Doc.SelectOnly(new[] { rt });
             SettleFrames(360);
+
+            // ① 静止选中：读数一个都没有，三颗角标也都不在屏幕上
+            Check("内角·真机：**选中静止时一个角都不显示**（用户 2026-09-20 定：拖动时才显示）",
+                  FillAngleReadout(av, ad) == 0, $"读数个数 {FillAngleReadout(av, ad)}");
+            int idleLeft0 = LeftPill(T0.X, T0.Y);
+            int idleRight = RightPill(T1.X, T1.Y);
+            int idleLeft2 = LeftPill(T2.X, T2.Y);
+            Check("内角·真机：静止选中时三颗角标都不在屏幕上（不是\"画了但看不见\"）",
+                  idleLeft0 < 30 && idleRight < 30 && idleLeft2 < 30,
+                  $"左下 {idleLeft0} 像素、右 {idleRight} 像素、上 {idleLeft2} 像素");
+
+            // ② 按住上顶点、**先别挪**：按住那一刻三个角就该出来
+            var triApex = SelectionHandles.ShapeHandleCanvasPosition(rt, ShapeHandle.Vertex2);
+            bool tookTri = SelectionGestureForTest(triApex.X, triApex.Y);
+            SettleFrames(160);
             int rn = FillAngleReadout(av, ad);
-            Check("内角·真机：**选中就显示**三个内角（不是只拖动时才有）",
-                  rn == 3 && !VertexDragging && Near(ad[0], 90f, 0.1f) && Near(ad[1], 30f, 0.1f)
-                  && Near(ad[2], 60f, 0.1f),
-                  $"读数 {ad[0]:F2} / {ad[1]:F2} / {ad[2]:F2}（拖元素中={VertexDragging}）");
+            Check("内角·真机：**按住顶点就显示**三个内角（90 / 30 / 60，±0.1°）",
+                  tookTri && VertexDragging && rn == 3
+                  && Near(ad[0], 90f, 0.1f) && Near(ad[1], 30f, 0.1f) && Near(ad[2], 60f, 0.1f),
+                  $"接住={tookTri}，拖元素中={VertexDragging}，"
+                  + $"读数 {ad[0]:F2} / {ad[1]:F2} / {ad[2]:F2}");
             // 三颗角标：左下的角挂在它左边、右边的角挂在它右边、上面的角也挂左边
             //（左右由"顶点在形心的哪一侧"决定，见 FillAnglePills）。
             int triLeft0 = LeftPill(T0.X, T0.Y);
@@ -6171,31 +6195,14 @@ internal sealed class App : InkEngine.InkEngine
             Check("内角·真机：形心那一块**没有**\"内角和\"那一行（用户 2026-09-19 定）",
                   triCenter < 30, $"形心窗口 {triCenter} 像素（期望 <30）");
 
-            // ---- 真机：取消选中 → 角标必须消失（同源 + 不留残影）----
-            Doc.Selected.Clear();
-            SettleFrames(360);
-            Check("内角·真机：没选中时**不显示**（读数个数 = 0）",
-                  FillAngleReadout(av, ad) == 0, $"读数个数 {FillAngleReadout(av, ad)}");
-            int goneLeft0 = LeftPill(T0.X, T0.Y);
-            int goneRight = RightPill(T1.X, T1.Y);
-            int goneLeft2 = LeftPill(T2.X, T2.Y);
-            Check("内角·真机：取消选中后三颗角标真的从屏幕消失（不留残影）",
-                  goneLeft0 < 30 && goneRight < 30 && goneLeft2 < 30,
-                  $"还剩 左下 {goneLeft0} 像素、右 {goneRight} 像素、上 {goneLeft2} 像素");
-
-            // ---- 真机：拖一个顶点 → 读数实时变（每个角各自独立，谁都不为凑和被动过）----
-            Doc.SelectOnly(new[] { rt });
-            SettleFrames(260);
-            FillAngleReadout(av, ad);
+            // ③ 继续拖 → 读数实时变（每个角各自独立，谁都不为凑和被动过）
             float b0 = ad[0], b1 = ad[1], b2 = ad[2];
-            var triApex = SelectionHandles.ShapeHandleCanvasPosition(rt, ShapeHandle.Vertex2);
             var triApexTo = new Vector2(T2.X + 260f, T2.Y - 140f);
-            bool tookTri = SelectionGestureForTest(triApex.X, triApex.Y);
             UpdateSelectionGestureForTest(triApexTo.X, triApexTo.Y);
-            SettleFrames(120);
+            SettleFrames(140);
             int dn = FillAngleReadout(av, ad);
             Check("内角·真机：拖顶点时读数**实时变**（还是三个）",
-                  tookTri && VertexDragging && dn == 3
+                  VertexDragging && dn == 3
                   && (MathF.Abs(ad[0] - b0) > 1f || MathF.Abs(ad[1] - b1) > 1f
                       || MathF.Abs(ad[2] - b2) > 1f),
                   $"{b0:F1}/{b1:F1}/{b2:F1} → {ad[0]:F1}/{ad[1]:F1}/{ad[2]:F1}");
@@ -6212,8 +6219,20 @@ internal sealed class App : InkEngine.InkEngine
                                           (int)(dragBox.MaxY - dragBox.MinY));
             Check("内角·真机：拖动中整块探针里的胶囊像素 = 那几颗角标（没有额外的残影）",
                   dragResidue > 300, $"整块里 {dragResidue} 像素（三颗角标）");
+
+            // ④ 松手 = 角标立刻收回去（这一条正是这次改动的核心）
             EndSelectionGestureForTest();
-            SettleFrames(200);
+            SettleFrames(260);
+            Check("内角·真机：**松手就不显示**（读数个数 = 0）",
+                  !VertexDragging && FillAngleReadout(av, ad) == 0,
+                  $"拖元素中={VertexDragging}，读数个数 {FillAngleReadout(av, ad)}");
+            int goneLeft0 = LeftPill(T0.X, T0.Y);      // 这两个角没被拖，还在原位
+            int goneRight = RightPill(T1.X, T1.Y);
+            Check("内角·真机：松手后角标真的从屏幕消失（不留残影）",
+                  goneLeft0 < 30 && goneRight < 30,
+                  $"还剩 左下 {goneLeft0} 像素、右 {goneRight} 像素");
+
+            // ⑤ 一次拖顶点 = 一步撤销
             Check("内角·真机：一次拖顶点 = 一步撤销",
                   Doc.UndoDepth >= 2, $"撤销栈 {Doc.UndoDepth} 步");
             Doc.Undo();
@@ -7228,8 +7247,9 @@ internal sealed class App : InkEngine.InkEngine
     ///     拍下**吸附生效的那一帧**（胶囊上写「等边」这类字，强调色）。
     ///   · `--rectangle` + `--pose`：**拖旋转柄**、拍姿态角读数那一帧（矩形停在吸住的 0°）；
     ///   · `--ellipse` + `--pose`：**歪椭圆拖到吸住的 90°**（用户提这个需求的初衷）；
-    ///   · `--triangle` + `--angles`：三角形**选中就显示**的三个内角（**没有**"内角和"那一行，
-    ///     用户 2026-09-19 定："显示和太乱"）；
+    ///   · `--triangle` + `--angles`：**拖着一个顶点、不松手**，拍三个内角那一帧
+    ///     （**没有**"内角和"那一行，用户 2026-09-19 定："显示和太乱"；
+    ///      2026-09-20 又定"三角形改成**拖动时才显示**"，所以这张也必须拖着拍）；
     ///   · `--parallelogram` + `--angles`：拖一个顶点、拍两个夹角那一帧。
     ///
     /// 为什么这几张必须出图而不是靠自检：手柄的样子、标签的位置与排版**只能看**，
@@ -7317,8 +7337,8 @@ internal sealed class App : InkEngine.InkEngine
             return;
         }
 
-        // `--angles`：三角形**选中就显示**三个内角（**没有**"内角和"那一行，用户 2026-09-19 定）；
-        //            平行四边形**拖顶点时不松手**，拍两个夹角。
+        // `--angles`：三角形和平行四边形**都要拖着一个顶点不松手**才出角度
+        //（用户 2026-09-20 定：三角形也改成"拖动时才显示"，和平行四边形一条判据）。
         if (angleRead)
         {
             bool para = kind == "parallelogram";
@@ -7347,47 +7367,41 @@ internal sealed class App : InkEngine.InkEngine
             Doc.InvalidateAll();
             SettleFrames(700);
 
-            if (para)
+            // 拖一个顶点、**停住不松手**：三角形和平行四边形**都只在拖顶点时**才出角度
+            // （用户 2026-09-20 定："三角形应该在拖动的时候再显示角度，要不然看起来也乱"），
+            // 所以拍这一张必须按住不放——松手拍出来是空的。
+            // 三角形拖**上顶点**（Vertex0）、平行四边形拖**底右顶点**（Vertex1）。
+            var dragHandle = para ? ShapeHandle.Vertex1 : ShapeHandle.Vertex0;
+            var dragBy = para ? new Vector2(70f, 40f) : new Vector2(90f, 70f);
+            var v = SelectionHandles.ShapeHandleCanvasPosition(sh, dragHandle);
+            var toP = new Vector2(v.X + dragBy.X, v.Y + dragBy.Y);
+            SendMouse((int)v.X, (int)v.Y, 0);                            SettleFrames(60);
+            SendMouse((int)v.X, (int)v.Y, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+            for (int i = 1; i <= 4; i++)
             {
-                // 拖底右顶点、**停住不松手**（夹角只在拖顶点时出现）。
-                var v = SelectionHandles.ShapeHandleCanvasPosition(sh, ShapeHandle.Vertex1);
-                var toP = new Vector2(v.X + 70f, v.Y + 40f);
-                SendMouse((int)v.X, (int)v.Y, 0);                            SettleFrames(60);
-                SendMouse((int)v.X, (int)v.Y, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
-                for (int i = 1; i <= 4; i++)
-                {
-                    SendMouse((int)(v.X + (toP.X - v.X) * i / 4f),
-                              (int)(v.Y + (toP.Y - v.Y) * i / 4f), 0);
-                    SettleFrames(50);
-                }
-                SettleFrames(220);
-                Span<Vector2> vs = stackalloc Vector2[4];
-                Span<float> ds = stackalloc float[3];
-                int n = FillAngleReadout(vs, ds);
-                Console.WriteLine($"夹角那一帧（平行四边形拖顶点中）：{n} 个角 = "
-                                + $"{SelectionHandles.FormatAngleDegrees(ds[0])} / "
-                                + $"{SelectionHandles.FormatAngleDegrees(ds[1])}，"
-                                + $"顶点 {vs[0]} / {vs[1]}");
-                var regionQ = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
-                regionQ = regionQ.Inflate(220f * DpiScale);     // 角标挂在顶点外侧，框要放宽
-                if (!OffscreenFloatingShot(path, regionQ)) Console.WriteLine("出图失败");
-                SendMouse((int)toP.X, (int)toP.Y, Native.MOUSEEVENTF_LEFTUP);
-                SettleFrames(150);
-                _quit = true;
-                return;
+                SendMouse((int)(v.X + (toP.X - v.X) * i / 4f),
+                          (int)(v.Y + (toP.Y - v.Y) * i / 4f), 0);
+                SettleFrames(50);
             }
+            SettleFrames(220);
 
-            Span<Vector2> tv = stackalloc Vector2[4];
-            Span<float> td = stackalloc float[3];
-            int tn = FillAngleReadout(tv, td);
-            // **没有"内角和"那一行**（用户 2026-09-19 定），所以只报三个角自己。
-            Console.WriteLine($"内角那一帧（三角形选中态）：{tn} 个角 = "
-                            + $"{SelectionHandles.FormatAngleDegrees(td[0])} / "
-                            + $"{SelectionHandles.FormatAngleDegrees(td[1])} / "
-                            + $"{SelectionHandles.FormatAngleDegrees(td[2])}");
+            Span<Vector2> vs = stackalloc Vector2[4];
+            Span<float> ds = stackalloc float[3];
+            int n = FillAngleReadout(vs, ds);
+            // **没有"内角和"那一行**（用户 2026-09-19 定），所以只报那几个角自己。
+            Console.WriteLine(para
+                ? $"夹角那一帧（平行四边形拖顶点中）：{n} 个角 = "
+                  + $"{SelectionHandles.FormatAngleDegrees(ds[0])} / "
+                  + $"{SelectionHandles.FormatAngleDegrees(ds[1])}，顶点 {vs[0]} / {vs[1]}"
+                : $"内角那一帧（三角形拖顶点中）：{n} 个角 = "
+                  + $"{SelectionHandles.FormatAngleDegrees(ds[0])} / "
+                  + $"{SelectionHandles.FormatAngleDegrees(ds[1])} / "
+                  + $"{SelectionHandles.FormatAngleDegrees(ds[2])}");
             var region = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
             region = region.Inflate(220f * DpiScale);            // 角标挂在顶点外侧，框要放宽
             if (!OffscreenFloatingShot(path, region)) Console.WriteLine("出图失败");
+            SendMouse((int)toP.X, (int)toP.Y, Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(150);
             _quit = true;
             return;
         }
