@@ -495,16 +495,32 @@ public sealed class FullUi : IOverlayUi
     /// <summary>
     /// 这一格的上带**完全张开**时有多高（逻辑像素）。
     ///
-    /// 从 2026-09-20 起它**按格子算**、不是一个常量：图形那一格是**两行**
-    /// （第一行 8 个高频图形、第二行 4 种曲线），所以它比别的格子高一整行
-    /// （段高 ＋ 行间距）。带子朝屏幕中心那一侧长（见 <see cref="BandRect"/>），
+    /// 从 2026-09-20 起它**按格子算**、不是一个常量：图形那一格是**三行**
+    /// （第一行 8 个高频图形、第二行 6 个曲线、第三行 7 个立体），所以它比别的格子高两整行。
+    /// 带子朝屏幕中心那一侧长（见 <see cref="BandRect"/>），
     /// 所以变高是往上/往下长，不会把主条顶走。
+    ///
+    /// ⚠ **"带子多高"只能问这一处**（2026-09-20 第十六批收的口子）：以前有四处各写一遍
+    /// `Tokens.BandHeight`（判定区 / 夹取 / 总高 / 抽屉定位），而那一格从第十三批起就是多行，
+    /// 于是判定区只盖住**最下面那一行** —— 用户 2026-09-20 报的正是这个：
+    /// "**鼠标移动到第一行的任何图形位置，色带会收起来**"（指针一挪到上面那行就被判成
+    /// "离开面板"，220 毫秒后带子收回去）。四处都改问这个函数之后，
+    /// 加行/加图形都不用再来补一遍。
     /// </summary>
     private float BandHeightLogical()
         => _bandCell == ShapeCell && ShapeRows.Length > 1
             ? Tokens.BandHeight
               + (ShapeRows.Length - 1) * (Tokens.SegmentHeight + ShapeRowGap)
             : Tokens.BandHeight;
+
+    /// <summary>
+    /// 上带**完全张开**时那一整块占多高（含它与主条之间的缝）——
+    /// 夹取屏幕、抽屉定位、判定区都问它（见 <see cref="BandHeightLogical"/> 那条注释）。
+    /// </summary>
+    private float BandBlockFull() => BandGap + BandHeightLogical();
+
+    /// <summary>上带**这一刻**占多高（跟着"展开"那一档动画长/收）。</summary>
+    private float BandBlockNow() => BandBlockFull() * BandProgress();
 
     /// <summary>色线 / 设置条：数值够大了才按"设置条"那套画与命中（中间态归短的这边）。</summary>
     private bool RailOpen => _rail.Value >= 0.5f;
@@ -537,7 +553,7 @@ public sealed class FullUi : IOverlayUi
     private float Height() => Tokens.BarHeight;
 
     /// <summary>整个面板现在有多高（主条 ＋ 上带）。默认位置按它算，所以是往上长。</summary>
-    private float TotalHeight() => Tokens.BarHeight + (BandGap + Tokens.BandHeight) * BandProgress();
+    private float TotalHeight() => Tokens.BarHeight + BandBlockNow();
 
     private float Width()
     {
@@ -600,8 +616,9 @@ public sealed class FullUi : IOverlayUi
     private Vector2 Clamp(Vector2 a, float w, float h)
     {
         // 夹取要按**整个面板**（主条 ＋ 带子）算：a 是主条左上角，
-        // 带子在上面时整块的顶边在 a.Y 之上。
-        float bandH = (BandGap + Tokens.BandHeight) * BandProgress();
+        // 带子在上面时整块的顶边在 a.Y 之上。带子那一块的高度**问 `BandBlockNow`**、
+        // 不写字面量：图形那一格是三行，写一行高会让整块被夹进屏幕里一格（见那处的注释）。
+        float bandH = BandBlockNow();
         float top = BandAbove() ? a.Y - bandH : a.Y;
         float bottom = top + h;
 
@@ -1320,7 +1337,9 @@ public sealed class FullUi : IOverlayUi
     private RectF RailZone()
     {
         var bar = BarRect();
-        float h = Tokens.BandHeight + Tokens.RailHoverPad * 2f;
+        // ⚠ 这里以前是 `Tokens.BandHeight`（**一行**的高），图形那一格改成多行之后就短了一截：
+        // 指针挪到上面那几行会被判成"离开面板"、带子当场收（用户 2026-09-20 报的 bug）。
+        float h = BandBlockFull() + Tokens.RailHoverPad * 2f;
         return BandAbove()
             ? new RectF
             {
@@ -1541,7 +1560,7 @@ public sealed class FullUi : IOverlayUi
     private RectF PanelRectFullBand()
     {
         var bar = BarRect();
-        float h = Tokens.BandHeight + BandGap;
+        float h = BandBlockFull();
         return BandAbove()
             ? new RectF { MinX = bar.MinX, MinY = bar.MinY - h, MaxX = bar.MaxX, MaxY = bar.MaxY }
             : new RectF { MinX = bar.MinX, MinY = bar.MinY, MaxX = bar.MaxX, MaxY = bar.MaxY + h };

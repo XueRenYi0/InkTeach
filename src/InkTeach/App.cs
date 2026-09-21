@@ -12051,6 +12051,37 @@ internal sealed class App : InkEngine.InkEngine
                     + $"，带子 y {bandRect.MinY:F0}..{bandRect.MaxY:F0}"
                   : rowNote);
 
+        // == 指针停在**任何一行**上，带子都得留得住（不许收） ==
+        //
+        // 用户 2026-09-20 报的 bug 就是这一条："**鼠标移动到第一行的任何图形位置，
+        // 色带会收起来**"——根因是"焦点在面板上"的判定区用了**一行**的带子高
+        //（`Tokens.BandHeight`），而这一格是三行：指针挪到上面那两行就落到判定区外面，
+        // 220 毫秒后带子收回。
+        //
+        // 所以判据要**逐行**来，而且要看**两件事**：判定为悬停（`RailHoverForTest`）
+        // 和真的没收（`RailOpenForTest`）—— 只看前者的话，"判定区对了但动画被别处打断"
+        // 会溜过去。等 400 毫秒是故意的：退出判定要 220 毫秒才动，等短了测不出来。
+        {
+            string badRow = "";
+            for (int r = 0; r < wantRowLens.Length && badRow.Length == 0; r++)
+            {
+                EnsureRailOpen();
+                // 段矩形 / 带子矩形都是**逻辑**坐标，合成鼠标要的是屏幕像素 → 乘 DpiScale
+                //（和上面 `EnsureRailOpen` 同一个口径）。
+                int cx = (int)((bandRect.MinX + bandRect.MaxX) * 0.5f * DpiScale);
+                int cy = (int)((rowTop[r] + rowBottom[r]) * 0.5f * DpiScale);
+                SendMouse(cx, cy, 0);
+                SettleFrames(400);
+                if (!ui.RailHoverForTest || !ui.RailOpenForTest)
+                    badRow = $"第 {r + 1} 行（y {cy}）：悬停={ui.RailHoverForTest}，张开={ui.RailOpenForTest}";
+            }
+            Check($"{wantRowLens.Length} 行的**每一行**都留得住带子（指针停上去不许收）",
+                  badRow.Length == 0,
+                  badRow.Length == 0
+                      ? $"逐行停 400 毫秒，带子一直张开（带子 y {bandRect.MinY:F0}..{bandRect.MaxY:F0}）"
+                      : badRow);
+        }
+
         // **哪几格该有档位点、各有几档**——期望值独立写在下面这张表里。
         // 用户 2026-09-20 提的两条都落在这上面：
         //   · "你把档位点挪到图标右边"（位置）—— 那条只有出图看得见；
@@ -14436,11 +14467,12 @@ internal sealed class App : InkEngine.InkEngine
         Doc.AddStroke(cos);
 
         // 波浪线（第十六批）：**多周期的正弦波**——横向拖的是"要画多长"、周期由振幅定
-        //（`T = 4 × A`）。这里 A = 40、画 480 宽 → **3 个周期**，正是用户要的"很多个周期的波浪线"。
+        //（`T = 1 × A`，用户定的"振幅 = 一个周期"）。这里 A = 70、画 210 宽 → **3 个整周期**，
+        // 正是用户要的"很多个周期的波浪线"。
         // 摆在正弦 / 余弦下面一点（同一行里错开，三张并排看"一个周期 vs 多周期"最直观）。
         float wavX = x0 + 1950f;
-        var wav = Make(Tool.Wave, StrokeKind.Wave, wavX, CellY(1) + 520f);
-        wav.SetWaveBox(wavX, CellY(1) + 520f, wavX + 480f, CellY(1) + 480f, 8f);
+        var wav = Make(Tool.Wave, StrokeKind.Wave, wavX, CellY(1) + 400f);
+        wav.SetWaveBox(wavX, CellY(1) + 400f, wavX + 210f, CellY(1) + 330f, 8f);
         Doc.AddStroke(wav);
 
         // 正切（2026-09-20 第十五批）：**一支**，按下 = 原点、拖出以它为中心的框
@@ -15303,51 +15335,55 @@ internal sealed class App : InkEngine.InkEngine
 
         // ---- 波浪线（2026-09-20 第十六批，用户："还有一个另外的很多周期的波浪的弦函数线"）----
         // 和正弦是**同一条曲线**，差别只在**这一拖管什么**：正弦的框宽 = 一个周期、
-        // 波浪线的框宽 = **要画多长**（周期由振幅定：`T = 4 × A`，见 WavePeriodPerAmplitude）。
+        // 波浪线的框宽 = **要画多长**（周期由振幅定：**`T = 1 × A`** —— 用户 2026-09-20 定的
+        // "振幅 = 一个周期"，见 WavePeriodPerAmplitude）。
         // 所以下面这几条就是**"多周期"这件事的正面断言**：
         //   · 拖得宽 → 周期数跟着涨，而 **T 和 A 一个字不变**（波形不会被拉变形）；
         //   · 拖得不足一个周期 → 紧框跟着收（峰还没到，不能撑到 ±A）。
         var wv = NewCurve(Tool.Wave, StrokeKind.Wave, 300f, 1000f);
-        wv.SetWaveBox(300f, 1000f, 780f, 900f, minAxis);          // 480 宽、A = 100
-        Check("波浪线：A = 100、**T = 4×A = 400**、画 480 宽 → 1.2 个周期（±0.5）",
+        wv.SetWaveBox(300f, 1000f, 600f, 900f, minAxis);          // 300 宽、A = 100
+        Check("波浪线：A = 100、**T = 1×A = 100**、画 300 宽 → 3 个整周期（±0.5）",
               Near(wv.WaveAmplitudeLocal(), 100f, .5f)
-              && Near(wv.WavePeriodLocal(), 400f, .5f)
-              && Near(wv.WaveLengthLocal(), 480f, .5f)
-              && Near(wv.WaveCyclesLocal(), 1.2f, .02f),
+              && Near(wv.WavePeriodLocal(), 100f, .5f)
+              && Near(wv.WaveLengthLocal(), 300f, .5f)
+              && Near(wv.WaveCyclesLocal(), 3f, .02f),
               $"A {wv.WaveAmplitudeLocal():F1}  T {wv.WavePeriodLocal():F1}"
-              + $"  长 {wv.WaveLengthLocal():F1}  周期数 {wv.WaveCyclesLocal():F2}（期望 1.20）");
+              + $"  长 {wv.WaveLengthLocal():F1}  周期数 {wv.WaveCyclesLocal():F2}（期望 3.00）");
         // **拖宽一倍**：周期数翻倍，而波形一个字不变（"画多长画多长"这件事的正面断言）。
         var wv2 = NewCurve(Tool.Wave, StrokeKind.Wave, 300f, 1000f);
-        wv2.SetWaveBox(300f, 1000f, 1260f, 900f, minAxis);       // 同样 A = 100、宽一倍（960）
-        Check("波浪线：**同一个高度拖宽一倍（480 → 960）→ 周期数翻倍（1.2 → 2.4）**，"
+        wv2.SetWaveBox(300f, 1000f, 900f, 900f, minAxis);        // 同样 A = 100、宽一倍（600）
+        Check("波浪线：**同一个高度拖宽一倍（300 → 600）→ 周期数翻倍（3.0 → 6.0）**，"
               + "而 T 和 A 一个字没变（不变形）",
-              Near(wv2.WaveCyclesLocal(), 2.4f, .02f)
+              Near(wv2.WaveCyclesLocal(), 6f, .02f)
               && Near(wv2.WaveAmplitudeLocal(), 100f, .5f)
-              && Near(wv2.WavePeriodLocal(), 400f, .5f),
+              && Near(wv2.WavePeriodLocal(), 100f, .5f),
               $"A {wv2.WaveAmplitudeLocal():F1}  T {wv2.WavePeriodLocal():F1}"
-              + $"  周期数 {wv2.WaveCyclesLocal():F2}（期望 2.40）");
+              + $"  周期数 {wv2.WaveCyclesLocal():F2}（期望 6.00）");
         Check("波浪线：宽一倍的紧框 = 长度也翻倍、**上下两条线还是 ±A**（波形没被拉扁）",
-              Near(wv2.CurveBoxLocal().MinX, 300f, .5f) && Near(wv2.CurveBoxLocal().MaxX, 1260f, .5f)
+              Near(wv2.CurveBoxLocal().MinX, 300f, .5f) && Near(wv2.CurveBoxLocal().MaxX, 900f, .5f)
               && Near(wv2.CurveBoxLocal().MinY, 900f, .5f) && Near(wv2.CurveBoxLocal().MaxY, 1100f, .5f),
               $"框 ({wv2.CurveBoxLocal().MinX:F1},{wv2.CurveBoxLocal().MinY:F1})"
               + $"..({wv2.CurveBoxLocal().MaxX:F1},{wv2.CurveBoxLocal().MaxY:F1})");
         // **拖得短**（不足一个周期）也要能画：那时紧框不该撑到 ±A（峰还没到）
         var wv3 = NewCurve(Tool.Wave, StrokeKind.Wave, 300f, 1000f);
-        wv3.SetWaveBox(300f, 1000f, 350f, 900f, minAxis);         // 长 50、A = 100 → 0.125 个周期
+        wv3.SetWaveBox(300f, 1000f, 320f, 900f, minAxis);         // 长 20、A = 100 → 0.2 个周期
         Check("波浪线：拖得**不足一个周期**时紧框跟着收（不撑到 ±A，峰根本还没到）（±0.5）",
-              Near(wv3.WaveCyclesLocal(), 0.125f, .01f)
-              && Near(wv3.CurveBoxLocal().MinY, 1000f - 100f * MathF.Sin(MathF.Tau * 0.125f), 1f)
-              && wv3.CurveBoxLocal().MinY > 925f,
+              Near(wv3.WaveCyclesLocal(), 0.2f, .01f)
+              && Near(wv3.CurveBoxLocal().MinY, 1000f - 100f * MathF.Sin(MathF.Tau * 0.2f), .5f)
+              && wv3.CurveBoxLocal().MinY > 900.5f,
               $"周期数 {wv3.WaveCyclesLocal():F3}  框上沿 {wv3.CurveBoxLocal().MinY:F1}"
-              + $"（期望 {1000f - 100f * MathF.Sin(MathF.Tau * 0.125f):F1}；"
+              + $"（期望 {1000f - 100f * MathF.Sin(MathF.Tau * 0.2f):F1}；"
               + "满峰才是 900 —— 这里峰还没到，框跟着收）");
         // 两种波浪**同一个框拖出来的东西不一样**（这是"分两格"的意义所在）：
-        // 同样 480 宽 × 100 高 —— 正弦是**一个周期**（T = 480）、波浪线是 **1.2 个周期**（T = 400）。
-        Check("正弦 / 波浪线**同一个框拖出来不是同一条**：T 480（一个周期）vs T 400（1.2 个周期）",
+        // 拿**同一个框**（正弦那一条：480 宽 × 100 高）比 —— 正弦是**一个周期**（T = 480）、
+        // 波浪线是 **4.8 个周期**（T = 100 = A）。
+        var wv4 = NewCurve(Tool.Wave, StrokeKind.Wave, 300f, 1000f);
+        wv4.SetWaveBox(300f, 1000f, 780f, 900f, minAxis);         // 和上面 sn **一模一样的一拖**
+        Check("正弦 / 波浪线**同一个框拖出来不是同一条**：T 480（一个周期）vs T 100（4.8 个周期）",
               Near(sn.WavePeriodLocal(), 480f, .5f) && Near(sn.WaveCyclesLocal(), 1f, .01f)
-              && Near(wv.WavePeriodLocal(), 400f, .5f) && Near(wv.WaveCyclesLocal(), 1.2f, .02f),
+              && Near(wv4.WavePeriodLocal(), 100f, .5f) && Near(wv4.WaveCyclesLocal(), 4.8f, .02f),
               $"正弦 T {sn.WavePeriodLocal():F0}/周期数 {sn.WaveCyclesLocal():F2}、"
-              + $"波浪线 T {wv.WavePeriodLocal():F0}/周期数 {wv.WaveCyclesLocal():F2}");
+              + $"波浪线 T {wv4.WavePeriodLocal():F0}/周期数 {wv4.WaveCyclesLocal():F2}");
 
         // ---- 正切（2026-09-20 第十五批，用户："可以画正切"）----
         // 和正弦 / 余弦同族，但**一笔**：按下 = 原点（这一支的中心，也是图象与 x 轴的交点），
@@ -15996,7 +16032,8 @@ internal sealed class App : InkEngine.InkEngine
         // ================= ⑤d. 波浪线：真机一笔拖出来（拖多长画多长） =================
         //
         // 这一格和「正弦」的差别全在"这一拖管什么"上，所以真机这一笔要盯住的就一件事：
-        // **横向拖多远 → 画出来几个周期**（`框宽 ÷ (4 × 振幅)`），而不是"拖出来的框就是一个周期"。
+        // **横向拖多远 → 画出来几个周期**（`框宽 ÷ 振幅`，因为用户定的"振幅 = 一个周期"），
+        // 而不是"拖出来的框就是一个周期"。
         Console.WriteLine("  -- ⑤d. 波浪线：真机一笔拖出来（拖多长画多长）--");
         {
             Doc.Clear();
@@ -16007,22 +16044,22 @@ internal sealed class App : InkEngine.InkEngine
             float wx = _virtualX + 700f, wy = _virtualY + 900f;
             SendMouse((int)wx, (int)wy, 0);                                        SettleFrames(60);
             SendMouse((int)wx, (int)wy, Native.MOUSEEVENTF_LEFTDOWN);              SettleFrames(60);
-            SendMouse((int)(wx + 240f), (int)(wy - 50f), 0);                       SettleFrames(80);
-            SendMouse((int)(wx + 480f), (int)(wy - 100f), 0);                      SettleFrames(160);
-            SendMouse((int)(wx + 480f), (int)(wy - 100f), Native.MOUSEEVENTF_LEFTUP);
+            SendMouse((int)(wx + 150f), (int)(wy - 50f), 0);                       SettleFrames(80);
+            SendMouse((int)(wx + 300f), (int)(wy - 100f), 0);                      SettleFrames(160);
+            SendMouse((int)(wx + 300f), (int)(wy - 100f), Native.MOUSEEVENTF_LEFTUP);
             SettleFrames(250);
 
             var ws = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
             Check("波浪线·真机一笔：画出来的是**波浪线**一个对象",
                   ws != null && ws.Kind == StrokeKind.Wave,
                   $"对象 {Doc.Strokes.Count} 条，种类 {(ws == null ? "（没画出来）" : ws.Kind.ToString())}");
-            Check("波浪线·真机一笔：A = 100、T = 4×A = 400、画 480 宽 → **1.2 个周期**（±2）",
+            Check("波浪线·真机一笔：A = 100、T = 100、画 300 宽 → **3 个整周期**（±2）",
                   ws != null && Near(ws.WaveAmplitudeLocal(), 100f, 2f)
-                  && Near(ws.WavePeriodLocal(), 400f, 2f)
-                  && Near(ws.WaveCyclesLocal(), 1.2f, .02f),
+                  && Near(ws.WavePeriodLocal(), 100f, 2f)
+                  && Near(ws.WaveCyclesLocal(), 3f, .02f),
                   ws == null ? "（没画出来）"
                   : $"A {ws.WaveAmplitudeLocal():F0}  T {ws.WavePeriodLocal():F0}"
-                    + $"  周期数 {ws.WaveCyclesLocal():F2}（期望 1.20）");
+                    + $"  周期数 {ws.WaveCyclesLocal():F2}（期望 3.00）");
             Check("波浪线·真机一笔：两个定义元素（起点 ＋ 终点，极值点是现推的）",
                   ws != null && ws.Points.Count == 2,
                   $"{ws?.Points.Count ?? -1} 个控制点（期望 2）");
@@ -16048,7 +16085,7 @@ internal sealed class App : InkEngine.InkEngine
         saveTan.SetTangentBox(900f, 1200f, 1060f, 1380f, minAxis);          // 半支长 160、拖的半高 180
         // 波浪线（v22 新增的取值）：和正弦同一套"起点 ＋ 终点"，差别只是**这一拖管什么**。
         var saveWave = NewCurve(Tool.Wave, StrokeKind.Wave, 900f, 1700f);
-        saveWave.SetWaveBox(900f, 1700f, 1380f, 1600f, minAxis);            // A = 100 → 1.2 个周期
+        saveWave.SetWaveBox(900f, 1700f, 1200f, 1600f, minAxis);            // A = 100 → 3 个周期
         Doc.AddStroke(saveMe);
         Doc.AddStroke(saveHy);
         Doc.AddStroke(saveSin);
@@ -16069,7 +16106,7 @@ internal sealed class App : InkEngine.InkEngine
                          && Near(back.Strokes[3].TangentHalfSpanLocal(), 160f, .5f)
                          && Near(back.Strokes[3].TangentHalfHeightLocal(), 3f * 160f, .5f)
                          && back.Strokes[4].Kind == StrokeKind.Wave
-                         && Near(back.Strokes[4].WaveCyclesLocal(), 1.2f, .02f);
+                         && Near(back.Strokes[4].WaveCyclesLocal(), 3f, .02f);
         Check("存档：五种曲线 ＋ 朝向 ＋ 渐近线开关都回来了（含 v21 正切 / v22 波浪线）",
               roundTrip,
               back.Strokes.Count == 5

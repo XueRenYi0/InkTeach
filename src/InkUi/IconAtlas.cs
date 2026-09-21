@@ -678,15 +678,16 @@ internal static class IconAtlas
     }
 
     /// <summary>
-    /// **自绘的波浪线图标**：**三个周期**的正弦波（用户 2026-09-20 要的"很多个周期的波浪线"）。
+    /// **自绘的波浪线图标**：**四个周期**的正弦波（用户 2026-09-20 要的"很多个周期的波浪线"）。
     ///
     /// 和「正弦」那一张（`DrawWave`：**一个周期**、铺满整格）**必须一眼分得开**——
     /// 这正是用户把这两件事分成两格的原因（"正弦和余弦用一个周期的图，还有一个另外的
     /// 很多周期的波浪的弦函数线"）。所以这一张走"**周期明显变小、个数明显变多**"：
-    /// 同样铺满 3→21，周期 6（正弦那张是 18），振幅 3.5（正弦那张是 6）。
+    /// 同样铺满 3→21，周期 4.5（正弦那张是 18），振幅 3.2（正弦那张是 6）。
     ///
-    /// ⚠ 图标是**示意**：画布上的真比例是"周期 = 4 × 振幅"（见 `Stroke.WavePeriodPerAmplitude`），
-    /// 照那个比例在 24 格里只能画出一根直线，看不出是波。
+    /// ⚠ 图标是**示意**：画布上的真比例是"**一个周期 = 一个振幅**"（见 `Stroke.WavePeriodPerAmplitude`），
+    /// 照那个比例在 24 格里挤不出"几个周期还看得出是波"的样子，所以这里画得略松一点
+    ///（**4 个周期、振幅 3.2** → 比例约 1.4）。
     /// </summary>
     private static void DrawWaveLine(ID2D1DeviceContext ctx, float x, float y,
                                      float size, ID2D1Brush brush)
@@ -696,13 +697,13 @@ internal static class IconAtlas
                       * Matrix3x2.CreateTranslation(x, y)
                       * saved;
 
-        const int seg = 36;                      // 三个周期共 36 段（每周期 12 段，够滑）
-        const float amp = 3.5f;
+        const int seg = 48;                      // 四个周期共 48 段（每周期 12 段，够滑）
+        const float amp = 3.2f;
         var prev = Vector2.Zero;
         for (int i = 0; i <= seg; i++)
         {
             float u = i / (float)seg;                       // 0 → 1 走完 3 → 21
-            double ph = u * Math.Tau * 3.0;                 // 三个周期
+            double ph = u * Math.Tau * 4.0;                 // 四个周期
             var q = new Vector2(3f + 18f * u, 12f - amp * (float)Math.Sin(ph));
             if (i > 0) ctx.DrawLine(prev, q, brush, 1.5f, _round);
             prev = q;
