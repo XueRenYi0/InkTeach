@@ -1634,6 +1634,9 @@ public class InkEngine
         Tool.Cosine => "余弦",
         Tool.Wave => "波浪线",
         Tool.Tangent => "正切",
+        Tool.Exponential => "指数",
+        Tool.Logarithm => "对数",
+        Tool.Power => "幂函数",
         Tool.Cylinder => "圆柱",
         Tool.Cone => "圆锥",
         Tool.Cuboid => "长方体",
@@ -3365,6 +3368,7 @@ public class InkEngine
              or Tool.Coordinate or Tool.NumberLine
              or Tool.Parabola or Tool.Hyperbola or Tool.Sine or Tool.Cosine
              or Tool.Wave or Tool.Tangent
+             or Tool.Exponential or Tool.Logarithm or Tool.Power
              or Tool.Cylinder or Tool.Cone or Tool.Cuboid or Tool.Tetrahedron
              or Tool.Prism or Tool.Pyramid or Tool.Frustum
              or Tool.ConeFrustum or Tool.Sphere;
@@ -3611,6 +3615,9 @@ public class InkEngine
         Tool.Cosine => StrokeKind.Cosine,
         Tool.Wave => StrokeKind.Wave,
         Tool.Tangent => StrokeKind.Tangent,
+        Tool.Exponential => StrokeKind.Exponential,
+        Tool.Logarithm => StrokeKind.Logarithm,
+        Tool.Power => StrokeKind.Power,
         Tool.Cylinder => StrokeKind.Cylinder,
         Tool.Cone => StrokeKind.Cone,
         Tool.Cuboid => StrokeKind.Cuboid,
@@ -3737,6 +3744,37 @@ public class InkEngine
     private int _sidesFrustum = Stroke.DefaultPrismSides;
 
     /// <summary>
+    /// **幂函数那一格当前是第几档**（0…4 → `ShapeSpec.PowerExponents`：
+    /// x / x² / x³ / √x / 1/x）。
+    ///
+    /// ⚠ 只有幂有档位：**指数 / 对数没有**（它们的底数是**拖出来的**，用户 2026-09-20 定：
+    /// "指数对数不是确定顶点以后再根据拖动确定，不需要考虑几档吧？"）——
+    /// 所以这一族里只有一个字段，不是三个。
+    /// </summary>
+    private int _powerIndex;
+
+    /// <summary>
+    /// **这一格当前是第几档**（0 起算）。不是"分档的函数曲线"（只有幂是）就返回 0 ——
+    /// **界面画几个档位点、引擎写进对象的是哪个 α，都问这一处**（别在两边各写一份名单）。
+    /// </summary>
+    public int ParamIndexOf(Tool tool) => ShapeSpec.HasFunctionParam(tool) ? _powerIndex : 0;
+
+    /// <summary>
+    /// 换**当前那一格**的档：一轮走到底就回到第 1 档（和棱柱那三格同一套）。
+    /// 只影响**下一笔画出来的**，不碰已经画好的对象。
+    /// </summary>
+    public void CycleFunctionParam()
+    {
+        var t = this.Tool;
+        if (!ShapeSpec.HasFunctionParam(t)) return;          // 只有幂有档位
+        int n = ShapeSpec.FunctionParamCount(t);
+        _powerIndex = n > 0 ? (_powerIndex + 1) % n : 0;
+        // 面板上那一格的图标要跟着换，所以推一次状态（和直线换线型、棱柱换档同一套）。
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
     /// **某个立体工具当前那一档**（底面几边形，3~6）。不是这一族的工具给默认档
     ///（调用方也就不会拿它去画什么）。
     /// </summary>
@@ -3802,6 +3840,13 @@ public class InkEngine
             // ⚠ 三兄弟都要走这一句——2026-09-20 第一版写成 `kind == StrokeKind.Prism`，
             // 结果**棱锥 / 棱台永远画成四棱**（用户上手一句就抓出来了）。
             PrismSides = Stroke.IsPrismFamily(kind) ? SidesFor(tool) : Stroke.DefaultPrismSides,
+            // 函数曲线那一族的**档位参数**：目前只有幂有档位（α = 1 / 2 / 3 / 0.5 / −1），
+            // 画的那一刻写进对象（见 ShapeSpec.PowerExponents）。
+            // ⚠ 指数 / 对数不写（它们没有档位，底数是拖出来的）——所以这里必须问
+            // `HasFunctionParam`，别按"三个种类"写名单（那一族真正的判据就这一个函数）。
+            CurveParam = ShapeSpec.HasFunctionParam(tool)
+                ? ShapeSpec.FunctionParamOf(tool, ParamIndexOf(tool))
+                : 0f,
         };
         ActiveStroke.AddPoint(x, y, 1f, NowMs);
         // 抛物线的**顶点 = 按下那个点**：它现在是**一笔画完**的（照 InkClass 的 `case 20/21`：
@@ -3909,6 +3954,17 @@ public class InkEngine
         if (s.Kind == StrokeKind.Tangent)
         {
             s.SetTangentBox(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y, ShapeMinAxisLogical * DpiScale);
+            _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);
+            return;
+        }
+
+        // 指数 / 对数 / 幂：按下 = **锚点**（图象必然经过的那个点），拖出去 = **那个点**
+        //（含义见 Stroke 那一族的注释：指数拖的是 `x = 1` 处那个点、对数拖的是 `y = 1` 处那个点、
+        // 幂只拿它定大小）。⚠ 这一拖**不许取绝对值**——指数 / 对数的底数就是靠符号分
+        // "大于 1 / 小于 1"的（取绝对值会把 (1/2)ˣ 和 2ˣ 画成同一条）。
+        if (Stroke.IsFunctionKind(s.Kind))
+        {
+            s.SetFunctionBox(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y, ShapeMinAxisLogical * DpiScale);
             _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);
             return;
         }
@@ -4640,6 +4696,7 @@ public class InkEngine
         FrustumSides = _sidesFrustum,
         SolidMinSides = Stroke.MinPrismSides,   // 档位范围也推上去（界面才知道点几个点）
         SolidMaxSides = Stroke.MaxPrismSides,
+        PowerIndex = _powerIndex,               // 幂函数那一格的档（界面换图标 / 点档位点）
         Color = Tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
         PaletteBase = Tool == Tool.Highlighter
             ? new Color4(HighlighterCurrent.R, HighlighterCurrent.G, HighlighterCurrent.B, 1f)

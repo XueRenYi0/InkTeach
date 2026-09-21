@@ -206,6 +206,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             CurveShowcase(args.Length > 1 ? args[1] : "reports/四种曲线.bmp");
         }
+        else if (mode == "--funcshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            FunctionShowcase(args.Length > 1 ? args[1] : "reports/函数曲线.bmp");
+        }
         else if (mode == "--panelshow")
         {
             _autoExitAt = double.MaxValue;
@@ -10410,6 +10416,10 @@ internal sealed class App : InkEngine.InkEngine
                     "cosine" => Tool.Cosine,
                     "wave" => Tool.Wave,
                     "tangent" => Tool.Tangent,
+                    // 第十七批：函数曲线三格（出图看"图标 / 档位"时要用）
+                    "exp" => Tool.Exponential,
+                    "log" => Tool.Logarithm,
+                    "power" => Tool.Power,
                     "cylinder" => Tool.Cylinder,
                     "cone" => Tool.Cone,
                     "conefrustum" => Tool.ConeFrustum,
@@ -11911,6 +11921,12 @@ internal sealed class App : InkEngine.InkEngine
             // （都在第二行这一族曲线上），但**一笔**画完：按下是原点、拖出去是以它为中心的框
             //（见 StrokeKind.Tangent）。⚠ 它在余弦**后面**——同一族的曲线连着排。
             (Tool.Tangent, "正切"),
+            // 2026-09-20 第十七批：**指数 / 对数 / 幂**（用户："指数对数不是确定顶点以后再根据
+            // 拖动确定，不需要考虑几档吧？……最麻烦的是幂函数，而且它的定义域也可能变"）。
+            // 所以这三格的"档"不一样：
+            //   · 指数 / 对数：**没有档位**（底数是画的时候拖出来的）；
+            //   · 幂函数：**5 档**（x / x² / x³ / √x / 1/x，定义域和支数都在档里）。
+            (Tool.Exponential, "指数"), (Tool.Logarithm, "对数"), (Tool.Power, "幂函数"),
             // 同一天又搬进来两个**立体图形**（照 InkClass 的 case 6/7）：
             // 一次拖出外接矩形，底面被挡住的那半圈是虚线。
             (Tool.Cylinder, "圆柱"), (Tool.Cone, "圆锥"),
@@ -11938,8 +11954,10 @@ internal sealed class App : InkEngine.InkEngine
         // 2026-09-20 第十三批：从"两行 8+10"改成"三行 8+4+6"——第二行 10 段时每格
         // 只有 55 宽，低于"每段 ≥ 60"那条量出来的门槛（见 计划-图形工具.md §35）；
         // 第十四批加球：第三行 6 → **7** 段（604 ÷ 7 ≈ 81，还在门槛之上）。
-        // 第十五批加正切、第十六批加波浪线：**第二行 4 → 6** 段（604 ÷ 6 ≈ 101）。
-        int[] wantRowLens = { 8, 6, 7 };
+        // 第十五批加正切、第十六批加波浪线、**第十七批加指数 / 对数 / 幂**：
+        // **第二行 4 → 9** 段（604 ÷ 9 ≈ 67）——**这是"每段 ≥ 60"那条门槛的极限**，
+        // 再加第 10 格就会顶穿（所以以后加函数曲线得先想办法，别硬塞）。
+        int[] wantRowLens = { 8, 9, 7 };
 
         // 上带只在"指针落在面板上"时张开（见 FullUi.RailHoverZone）。点完一格、画完一笔
         // 之后指针可能在画布上，所以每次要点段之前先把指针挪回主条等它张开。
@@ -12094,6 +12112,10 @@ internal sealed class App : InkEngine.InkEngine
                 [Tool.Line] = 3,        // 实 / 虚 / 点
                 [Tool.Parabola] = 2,    // 上下 / 左右
                 [Tool.Prism] = 4, [Tool.Pyramid] = 4, [Tool.Frustum] = 4,   // 三 / 四 / 五 / 六
+                // 幂函数 5 档（x / x² / x³ / √x / 1/x）。
+                // ⚠ **指数 / 对数故意不在这张表里**（期望 0 个点）：它们的底数是画的时候
+                // 拖出来的、没有"当前档"，所以那一格右边**一个点都不该有**（用户 2026-09-20 定的）。
+                [Tool.Power] = 5,
             };
             int pipOk = 0, pipNo = 0;
             var pipWrong = new List<string>();
@@ -14371,6 +14393,104 @@ internal sealed class App : InkEngine.InkEngine
     }
 
     /// <summary>
+    /// 出图：**函数曲线（指数 / 对数 / 幂）**各来一份，看"形状像不像课本"。
+    /// 用法 `--funcshow [路径]`，默认 `reports/函数曲线.bmp`。
+    ///
+    /// 为什么单独一张：`--curveshow` 那一行已经挤了 6 个图形、再塞就没地方了；
+    /// 而这一族的**手感全在"怎么拖"上**（指数拖成 45° 就是 2ˣ、往下拖一个单位就是 (1/2)ˣ），
+    /// 所以这一张要按"**不同的拖法**"摆，而不是"不同的图形各一个"：
+    ///   · 第一行：指数 —— 三种拖法（45° / 更陡 / 往下拖）＋ 一个大的（单位拖得大）；
+    ///   · 第二行：对数 —— 三种拖法 ＋ 幂函数的 1/x（唯一带渐近线的那一档）；
+    ///   · 第三行：幂函数另外四档（x / x² / x³ / √x，**形状是选档定的**）。
+    /// </summary>
+    private void FunctionShowcase(string path)
+    {
+        Console.WriteLine($"=== 出图：{path} ===");
+        BoardOn = true;
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+
+        var ink = new Color4(0.11f, 0.12f, 0.15f, 1f);
+        float x0 = _virtualX + 200f, y0 = _virtualY + 180f;
+        const float pitch = 620f;
+        // ⚠ **三行的纵坐标要留够**：幂 / 对数都是"上下各 6 个单位"，单位取 30 就是 360 高；
+        // 锚点又在中间偏上（y = 1），所以行距给 400、锚点放在行顶下面 210——
+        // 加起来最下面那行也才到 1400，出图（1800 高）装得下
+        //（第一版把第三行排到 1880，被裁掉了，出图一看才发现）。
+        float rowTop(int r) => y0 + 30f + r * 400f;
+        float anchorY(int r) => rowTop(r) + 210f;
+
+        Stroke Make(Tool tool, StrokeKind kind, float x, float y, float alpha = 0f)
+        {
+            var s = new Stroke { Tool = tool, Kind = kind, Color = ink, Width = 5f * DpiScale };
+            s.CurveParam = alpha;
+            s.AddPoint(x, y, 1f, 0);
+            return s;
+        }
+        // 造一条：锚点 (ax,ay)、一个单位 = unit 像素、**竖着拖 vUnits 个单位**（指数 / 对数用它定底数）、
+        // 横向拖 hUnits 个单位（对数用它定底数、幂用它定"看多宽"）。
+        Stroke Curve(Tool tool, StrokeKind kind, float ax, float ay, float unit,
+                     float hUnits, float vUnits, float alpha = 0f)
+        {
+            var s = Make(tool, kind, ax, ay, alpha);
+            // 指数：横向那一拖 = 一个单位 → 横向拖 1 个单位；纵向 = 底数（vUnits）
+            // 对数：纵向那一拖 = 一个单位 → 纵向拖 1 个单位；横向 = 底数（hUnits）
+            float dx = tool == Tool.Logarithm ? hUnits * unit : unit;
+            float dy = tool == Tool.Logarithm ? unit : -vUnits * unit;
+            s.SetFunctionBox(ax, ay, ax + dx, ay + dy, 8f);
+            return s;
+        }
+
+        // ---- 第一行：指数（三种拖法 ＋ 一个"单位拖得大"的）----
+        for (int i = 0; i < 4; i++)
+        {
+            float cx = x0 + i * pitch, cy = anchorY(0);
+            var s = i switch
+            {
+                0 => Curve(Tool.Exponential, StrokeKind.Exponential, cx + 200f, cy, 40f, 1f, 1f),   // 45° → 2ˣ
+                1 => Curve(Tool.Exponential, StrokeKind.Exponential, cx + 200f, cy, 40f, 1f, 2f),   // 更陡 → 4ˣ
+                2 => Curve(Tool.Exponential, StrokeKind.Exponential, cx + 200f, cy, 40f, 1f, -1f),  // 往下拖 → (1/2)ˣ
+                _ => Curve(Tool.Exponential, StrokeKind.Exponential, cx + 200f, cy, 55f, 1f, 1f),   // 单位大
+            };
+            Doc.AddStroke(s);
+        }
+
+        // ---- 第二行：对数（三种拖法）＋ 幂函数的 1/x ----
+        for (int i = 0; i < 3; i++)
+        {
+            float cx = x0 + i * pitch, cy = anchorY(1);
+            var s = i switch
+            {
+                0 => Curve(Tool.Logarithm, StrokeKind.Logarithm, cx + 240f, cy, 30f, 1f, 1f),   // 45° → log₂
+                1 => Curve(Tool.Logarithm, StrokeKind.Logarithm, cx + 240f, cy, 30f, 2f, 1f),   // 拖平 → log₄
+                _ => Curve(Tool.Logarithm, StrokeKind.Logarithm, cx + 240f, cy, 30f, -1f, 1f),  // 往回拖 → log_{1/2}
+            };
+            Doc.AddStroke(s);
+        }
+        {
+            float cx = x0 + 3f * pitch, cy = anchorY(1);
+            Doc.AddStroke(Curve(Tool.Power, StrokeKind.Power, cx + 240f, cy, 30f, 2f, 1f,
+                                ShapeSpec.PowerExponents[4]));      // 1/x：唯一带两条渐近线的
+        }
+
+        // ---- 第三行：幂函数另外四档（形状由**档位**定）----
+        for (int i = 0; i < 4; i++)
+        {
+            float cx = x0 + i * pitch, cy = anchorY(2);
+            Doc.AddStroke(Curve(Tool.Power, StrokeKind.Power, cx + 240f, cy, 30f, 2f, 1f,
+                                ShapeSpec.PowerExponents[i]));
+        }
+
+        Doc.InvalidateAll();
+        SettleFrames(800);
+        bool ok = ScreenProbe.SaveBmp(path, (int)_virtualX, (int)_virtualY, 2880, 1800);
+        Console.WriteLine(ok ? $"  已保存 {path}" : "  保存失败");
+        _quit = true;                     // 出完图就走（别的出图那一串也是这么收的）
+    }
+
+    /// <summary>
     /// 出图：函数曲线各来一份——**抛物线四种开口、双曲线两个方向、正弦 / 余弦各一个周期、
     /// 波浪线三个周期、正切一支**。
     /// 用法 `--curveshow [路径]`，默认 `reports/四种曲线.bmp`。
@@ -15493,6 +15613,158 @@ internal sealed class App : InkEngine.InkEngine
               $"半支长 120、拖的半高 700 → θ 上限 {tg4.TangentThetaMaxLocal():F3} rad"
               + $"（下限那一档是 {tg.TangentThetaMaxLocal():F3}，π/2 是 {MathF.PI * .5f:F3}）");
 
+        // ---- 函数曲线：指数 / 对数 / 幂（2026-09-20 第十七批，用户拍板）----
+        // 口径分两种（用户原话："指数对数不是确定顶点以后再根据拖动确定，不需要考虑几档吧？
+        // ……最麻烦的是幂函数，而且它的定义域也可能变"）：
+        //   · **指数 / 对数**：拖动定形、**不分档** —— 按下 = 图象与轴的那个交点，
+        //     拖出去 = 图象上的另一点（指数拖到 `x = 1` 那儿、对数拖到 `y = 1` 那儿）；
+        //   · **幂**：分档（α 由面板选），拖出去只定大小 / 看多宽。
+        // 下面每一条都钉住"用户拖出来的那一笔"和"画出来的形状"之间的关系。
+
+        // == 指数：拖成 45° 就是 2ˣ（横向那一拖 = 一个单位） ==
+        var ex = NewCurve(Tool.Exponential, StrokeKind.Exponential, 300f, 1000f);
+        ex.SetFunctionBox(300f, 1000f, 400f, 900f, minAxis);       // 横 100、往上 100
+        Check("指数：**横向那一拖 = 一个单位**（这里 100 像素）（±0.5）",
+              Near(ex.FunctionUnitLocal(), 100f, .5f), $"{ex.FunctionUnitLocal():F1}（期望 100）");
+        Check("指数：**拖成 45° 就是 2ˣ**（a = 1 + 竖拖的单位数 = 2）（±0.001）",
+              Near(ex.ExpBaseLocal(), 2f, .001f), $"a = {ex.ExpBaseLocal():F3}（期望 2.000）");
+        Check("指数：曲线**过按下那个点 (0,1)**（它就是锚点）（±0.5）",
+              Near(ex.FunctionPointLocal(0f, 1f).X, 300f, .5f)
+              && Near(ex.FunctionPointLocal(0f, 1f).Y, 1000f, .5f),
+              $"({ex.FunctionPointLocal(0f, 1f).X:F1},{ex.FunctionPointLocal(0f, 1f).Y:F1})（期望 (300,1000)）");
+        Check("指数：曲线**过拖出去那个点 (1, a) = (1, 2)**（这一条就是「拖出去定形状」）（±0.5）",
+              Near(ex.FunctionPointLocal(1f, ex.ExpBaseLocal()).X, 400f, .5f)
+              && Near(ex.FunctionPointLocal(1f, ex.ExpBaseLocal()).Y, 900f, .5f),
+              $"({ex.FunctionPointLocal(1f, ex.ExpBaseLocal()).X:F1},"
+              + $"{ex.FunctionPointLocal(1f, ex.ExpBaseLocal()).Y:F1})（期望 (400,900)）");
+        // **往上拖得更陡 = 底数更大；往下拖 = a < 1**（符号不许取绝对值，见 SetFunctionBox）
+        var ex2 = NewCurve(Tool.Exponential, StrokeKind.Exponential, 300f, 1000f);
+        ex2.SetFunctionBox(300f, 1000f, 400f, 800f, minAxis);      // 往上 200 = 两个单位 → a = 4
+        Check("指数：**往上拖得越陡、底数越大**（往上两个单位 → a = 4 —— 每个单位翻一倍）（±0.001）",
+              Near(ex2.ExpBaseLocal(), 4f, .001f), $"a = {ex2.ExpBaseLocal():F3}（期望 4.000）");
+        var ex3 = NewCurve(Tool.Exponential, StrokeKind.Exponential, 300f, 1000f);
+        ex3.SetFunctionBox(300f, 1000f, 400f, 1100f, minAxis);      // 往下 100 → a = 0.5
+        Check("指数：**往下拖 → a < 1**（往下一个单位 → a = 1/2，就是 (1/2)ˣ）（±0.001）",
+              Near(ex3.ExpBaseLocal(), 0.5f, .001f), $"a = {ex3.ExpBaseLocal():F3}（期望 0.500）");
+        var ex4 = NewCurve(Tool.Exponential, StrokeKind.Exponential, 300f, 1000f);
+        ex4.SetFunctionBox(300f, 1000f, 400f, 0f, minAxis);         // 往上 1000、横只有 100
+        Check("指数：底数**夹在 [0.2, 5]**（拖得太陡也不许跑到 11 去，那已经不像课本了）（±0.001）",
+              Near(ex4.ExpBaseLocal(), ShapeSpec.FunctionBaseMax, .001f),
+              $"a = {ex4.ExpBaseLocal():F3}（期望夹到 {ShapeSpec.FunctionBaseMax:F1}）");
+        // 紧框：左边贴着 x 轴那一截（x = −2 个单位）、右边冲到可视高度就停（y = +6 个单位）
+        var exBox = ex.CurveBoxLocal();
+        Check("指数：紧框的左边界 = **往左 2 个单位**（x = −2）（±0.5）",
+              Near(exBox.MinX, 300f - 2f * 100f, .5f),
+              $"{exBox.MinX:F1}（期望 {300f - 200f:F1}）");
+        Check("指数：紧框的上边界 = **画到 +6 个单位就停**（锚点在 y = 1，所以上边界 = 1 ＋ 5 个单位）（±0.5）",
+              Near(exBox.MinY, 1000f - 5f * 100f, .5f)
+              && Near(exBox.MaxX, 300f + MathF.Log(6f) / MathF.Log(2f) * 100f, 1f),
+              $"框上沿 {exBox.MinY:F1}（期望 {1000f - 500f:F1}），右边界 {exBox.MaxX:F1}"
+              + $"（期望 {300f + MathF.Log(6f) / MathF.Log(2f) * 100f:F1} = log₂6 个单位）");
+
+        // == 对数：**纵向那一拖 = 一个单位**、横着拖多远 = 底数（和指数刚好互换） ==
+        var lg = NewCurve(Tool.Logarithm, StrokeKind.Logarithm, 300f, 1000f);
+        lg.SetFunctionBox(300f, 1000f, 400f, 1100f, minAxis);      // 往下 100（一个单位）、往右 100
+        Check("对数：**纵向那一拖 = 一个单位**（100 像素）（±0.5）",
+              Near(lg.FunctionUnitLocal(), 100f, .5f), $"{lg.FunctionUnitLocal():F1}（期望 100）");
+        Check("对数：**拖成 45° 也是 2ˣ 的底数 2**（a = 1 + 横拖的单位数）（±0.001）",
+              Near(lg.ExpBaseLocal(), 2f, .001f), $"a = {lg.ExpBaseLocal():F3}（期望 2.000）");
+        Check("对数：曲线**过按下那个点 (1,0)**、以及拖出去那个点 (a,1) = (2,1)（±0.5）",
+              Near(lg.FunctionPointLocal(1f, 0f).X, 300f, .5f)
+              && Near(lg.FunctionPointLocal(1f, 0f).Y, 1000f, .5f)
+              && Near(lg.FunctionPointLocal(2f, 1f).X, 400f, .5f)
+              && Near(lg.FunctionPointLocal(2f, 1f).Y, 900f, .5f),
+              $"锚点 ({lg.FunctionPointLocal(1f, 0f).X:F1},{lg.FunctionPointLocal(1f, 0f).Y:F1})、"
+              + $"(2,1) → ({lg.FunctionPointLocal(2f, 1f).X:F1},{lg.FunctionPointLocal(2f, 1f).Y:F1})");
+        var lgBox = lg.CurveBoxLocal();
+        // ⚠ 上边界**不是** +6 个单位：右端被 x = 5 个单位先拦住了，所以图象顶点只有
+        // `log₂5 ≈ 2.32` 个单位高（v = log_a(1 + 4)）——这正是"两个上限都要"的那件事。
+        float lgTopY = 1000f - MathF.Log(1f + 4f) / MathF.Log(2f) * 100f;
+        Check("对数：紧框 = 左边贴着渐近线（x → 0⁺）、右边到 `1 + 4` 个单位、"
+              + "上边界 = min(+6 个单位, log_a5)（±1）",
+              lgBox.MinX < 300f && Near(lgBox.MaxX, 300f + 4f * 100f, 1f)
+              && Near(lgBox.MinY, lgTopY, 1f) && Near(lgBox.MaxY, 1000f + 6f * 100f, 1f),
+              $"框 ({lgBox.MinX:F1},{lgBox.MinY:F1})..({lgBox.MaxX:F1},{lgBox.MaxY:F1})"
+              + $"（右边界 = 锚点 x = 1 再往右 4 个单位 = {700f:F0}；"
+              + $"上边界 = log₂5 个单位 = {lgTopY:F1}）");
+
+        // == 对数：**往左拖 → a < 1**（递减的那一支）——必须也收在可视范围里 ==
+        // 这一条是**出图时看出来的**：递减的图象 x→0⁺ 时 y→+∞，只按"a > 1"写的话，
+        // 那一支会从右端**一直往右跑**（画面上一条飞出去的长线）。
+        var lg2 = NewCurve(Tool.Logarithm, StrokeKind.Logarithm, 300f, 1000f);
+        lg2.SetFunctionBox(300f, 1000f, 200f, 1100f, minAxis);     // 往左拖一个单位 → a = 1/2
+        Check("对数：**往左拖 → a < 1**（图象递减，就是 log_{1/2}x）（±0.001）",
+              Near(lg2.ExpBaseLocal(), 0.5f, .001f), $"a = {lg2.ExpBaseLocal():F3}（期望 0.500）");
+        var lg2Box = lg2.CurveBoxLocal();
+        Check("对数：a < 1 时图象**仍然收在可视范围里**（右边不超出 `1 + 4` 个单位、上面不超出 +6）（±1）",
+              Near(lg2Box.MaxX, 300f + 4f * 100f, 1f) && Near(lg2Box.MinY, 1000f - 6f * 100f, 1f),
+              $"框 ({lg2Box.MinX:F1},{lg2Box.MinY:F1})..({lg2Box.MaxX:F1},{lg2Box.MaxY:F1})"
+              + $"（右边界期望 {700f:F0}、上边界期望 {400f:F0}）");
+
+        // == 幂：**定义域决定画几支**（这是它非要分档的原因） ==
+        // 五档：x / x² / x³ / √x / 1/x。同一个拖法（纵 100 = 一个单位、横 200 = 往右 2 个单位），
+        // 只有 α 不同 → 画出来的"支数 / 有没有渐近线"应该跟着变。
+        int PowerBranchCount(float alpha)
+        {
+            var s = NewCurve(Tool.Power, StrokeKind.Power, 300f, 1000f);
+            s.CurveParam = alpha;
+            s.SetFunctionBox(300f, 1000f, 500f, 1100f, minAxis);
+            var parts = Stroke.SplitOutlineParts(s.ShapeOutline());
+            return parts.Count;
+        }
+        Check("幂 · y = x：**一支**（过原点的一条直线）（±0）",
+              PowerBranchCount(1f) == 1, $"{PowerBranchCount(1f)} 支（期望 1）");
+        Check("幂 · y = x²：**一支**（左右两半在原点接上，不许抬笔）（±0）",
+              PowerBranchCount(2f) == 1, $"{PowerBranchCount(2f)} 支（期望 1）");
+        Check("幂 · y = √x：**只有右支**（定义域 x ≥ 0）（±0）",
+              PowerBranchCount(0.5f) == 1, $"{PowerBranchCount(0.5f)} 支（期望 1）");
+        Check("幂 · y = 1/x：**两支**（x = 0 处断开、不许连出一条假线）（±0）",
+              PowerBranchCount(-1f) == 2, $"{PowerBranchCount(-1f)} 支（期望 2）");
+        {
+            var pw = NewCurve(Tool.Power, StrokeKind.Power, 300f, 1000f);
+            pw.CurveParam = 2f;
+            pw.SetFunctionBox(300f, 1000f, 500f, 1100f, minAxis);   // 一个单位 = 100、往右 2 个单位
+            Check("幂：**拖出去只定大小**（纵向 = 一个单位、横向 = 往右看几个单位）——"
+                  + "按下那个点永远是 (1,1)（±0.5）",
+                  Near(pw.FunctionUnitLocal(), 100f, .5f)
+                  && Near(pw.FunctionPointLocal(1f, 1f).X, 300f, .5f)
+                  && Near(pw.FunctionPointLocal(1f, 1f).Y, 1000f, .5f),
+                  $"单位 {pw.FunctionUnitLocal():F1}、锚点 "
+                  + $"({pw.FunctionPointLocal(1f, 1f).X:F1},{pw.FunctionPointLocal(1f, 1f).Y:F1})");
+            Check("幂 · y = x²：曲线过 (0,0) 和 (2,4)（拖出来的大小对得上）（±0.5）",
+                  Near(pw.FunctionPointLocal(0f, 0f).X, 300f - 100f, .5f)
+                  && Near(pw.FunctionPointLocal(0f, 0f).Y, 1000f + 100f, .5f)
+                  && Near(pw.FunctionPointLocal(2f, 4f).X, 300f + 100f, .5f),
+                  $"原点 ({pw.FunctionPointLocal(0f, 0f).X:F1},{pw.FunctionPointLocal(0f, 0f).Y:F1})、"
+                  + $"(2,4) x {pw.FunctionPointLocal(2f, 4f).X:F1}");
+        }
+        {
+            var inv = NewCurve(Tool.Power, StrokeKind.Power, 300f, 1000f);
+            inv.CurveParam = -1f;
+            inv.SetFunctionBox(300f, 1000f, 500f, 1100f, minAxis);
+            Check("幂 · y = 1/x：这一档**有两条渐近线**（x = 0 竖的、y = 0 横的）（±0.5）",
+                  inv.PowerHasAsymptotes
+                  && Near(inv.PowerAsymptoteLocal(0).From.X, 300f - 100f, .5f)
+                  && Near(inv.PowerAsymptoteLocal(1).From.Y, 1000f + 100f, .5f),
+                  $"竖的那条 x {inv.PowerAsymptoteLocal(0).From.X:F1}（期望原点那个 x）、"
+                  + $"横的那条 y {inv.PowerAsymptoteLocal(1).From.Y:F1}（期望 x 轴那个 y）");
+            var invBox = inv.CurveBoxLocal();
+            Check("幂 · y = 1/x：紧框 = 两条渐近线张开的那一块（左右各 2 个单位、上下到 ±6 个单位）",
+                  Near(invBox.MinX, 300f - 2f * 100f, 1f) && Near(invBox.MaxX, 300f + 2f * 100f, 1f)
+                  && Near(invBox.MinY, 1000f - 5f * 100f, 1f),
+                  $"框 ({invBox.MinX:F1},{invBox.MinY:F1})..({invBox.MaxX:F1},{invBox.MaxY:F1})"
+                  + $"（上边界 = 锚点 y = 1 再加 5 个单位 = {500f:F0}）");
+        }
+        // 别的档没有渐近线（只有 1/x 那一档有）
+        {
+            var sq = NewCurve(Tool.Power, StrokeKind.Power, 300f, 1000f);
+            sq.CurveParam = 2f;
+            sq.SetFunctionBox(300f, 1000f, 500f, 1100f, minAxis);
+            Check("幂 · y = x²：**没有渐近线**（只有 1/x 那一档有）",
+                  !sq.PowerHasAsymptotes, "x² 不该带虚线");
+        }
+
+
         // ---- 圆柱 / 圆锥（2026-09-20 第五批：照 InkClass 的 case 6/7）----
         // 两个控制点就是**外接矩形**（拖到哪就是哪），椭圆由它派生：
         // `rx = 宽/2 = 200`、`ry = rx / 2.646 ≈ 75.59`。
@@ -16065,6 +16337,70 @@ internal sealed class App : InkEngine.InkEngine
                   $"{ws?.Points.Count ?? -1} 个控制点（期望 2）");
         }
 
+        // ================= ⑤e. 函数曲线：真机一笔（指数拖成 45° 就该是 2ˣ） =================
+        //
+        // 这一族的"手感"全在**这一笔怎么拖**上，所以必须真机走一遍：
+        //   · 指数：按下 = (0,1)，**横向那一拖 = 一个单位**、竖着拖多高 = 底数 ——
+        //     所以"往右上拖成 45°"出来必须正好是 **2ˣ**（拖出去那个点落在图象上）；
+        //   · 幂：横向 / 纵向只定大小，形状是**面板那一档**选出来的（这里验"那一档的 α 真写进对象了"）。
+        Console.WriteLine("  -- ⑤e. 函数曲线：真机一笔（拖成 45° = 2ˣ）--");
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetToolFromUi(Tool.Exponential);
+            SettleFrames(80);
+
+            float fx = _virtualX + 700f, fy = _virtualY + 900f;
+            SendMouse((int)fx, (int)fy, 0);                                        SettleFrames(60);
+            SendMouse((int)fx, (int)fy, Native.MOUSEEVENTF_LEFTDOWN);              SettleFrames(60);
+            SendMouse((int)(fx + 60f), (int)(fy - 60f), 0);                        SettleFrames(80);
+            SendMouse((int)(fx + 120f), (int)(fy - 120f), 0);                      SettleFrames(160);
+            SendMouse((int)(fx + 120f), (int)(fy - 120f), Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(250);
+
+            var es = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+            Check("指数·真机一笔：画出来的是**指数**一个对象",
+                  es != null && es.Kind == StrokeKind.Exponential,
+                  $"对象 {Doc.Strokes.Count} 条，种类 {(es == null ? "（没画出来）" : es.Kind.ToString())}");
+            Check("指数·真机一笔：锚点 = 按下那一点（图象过 (0,1) 就在这儿）（±2）",
+                  es != null && Near(es.FunctionAnchorLocal().X, fx, 2f)
+                  && Near(es.FunctionAnchorLocal().Y, fy, 2f),
+                  es == null ? "（没画出来）"
+                  : $"锚点 ({es.FunctionAnchorLocal().X:F0},{es.FunctionAnchorLocal().Y:F0})"
+                    + $"（按下的 ({fx:F0},{fy:F0})）");
+            Check("指数·真机一笔：**45° 拖出来就是 2ˣ**（横向那一拖 = 一个单位）（±0.05）",
+                  es != null && Near(es.FunctionUnitLocal(), 120f, 2f)
+                  && Near(es.ExpBaseLocal(), 2f, .05f),
+                  es == null ? "（没画出来）"
+                  : $"单位 {es.FunctionUnitLocal():F0}、a = {es.ExpBaseLocal():F3}（期望 2.000）");
+        }
+        {
+            // 幂：形状由**档位**定（面板上选），真机这一笔只该改大小
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetToolFromUi(Tool.Power);
+            SettleFrames(80);
+            while (Host.State.ParamIndexOf(Tool.Power) != 1)   // 第 2 档 = x²（按标签找，不写死下标）
+            {
+                Host.Commands.CycleFunctionParam();
+                SettleFrames(60);
+            }
+            float px2 = _virtualX + 700f, py2 = _virtualY + 900f;
+            SendMouse((int)px2, (int)py2, 0);                                      SettleFrames(60);
+            SendMouse((int)px2, (int)py2, Native.MOUSEEVENTF_LEFTDOWN);            SettleFrames(60);
+            SendMouse((int)(px2 + 100f), (int)(py2 + 50f), 0);                     SettleFrames(80);
+            SendMouse((int)(px2 + 200f), (int)(py2 + 100f), 0);                    SettleFrames(160);
+            SendMouse((int)(px2 + 200f), (int)(py2 + 100f), Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(250);
+            var ps = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+            Check("幂·真机一笔：**面板那一档的 α 写进了对象**（第 2 档 → α = 2 = x²）（±0.001）",
+                  ps != null && Near(ps.PowerAlphaLocal(), 2f, .001f),
+                  ps == null ? "（没画出来）" : $"α = {ps.PowerAlphaLocal():F3}（期望 2.000）");
+            Check("幂·真机一笔：拖出去只定大小（一个单位 = 纵向 100）（±2）",
+                  ps != null && Near(ps.FunctionUnitLocal(), 100f, 2f),
+                  ps == null ? "（没画出来）" : $"单位 {ps.FunctionUnitLocal():F0}（期望 100）");
+        }
+
         // ================= ⑥ 存档：往返 ＋ 真 v11 老文件 =================
         Doc.Clear();
         Doc.ClearHistory();
@@ -16086,16 +16422,22 @@ internal sealed class App : InkEngine.InkEngine
         // 波浪线（v22 新增的取值）：和正弦同一套"起点 ＋ 终点"，差别只是**这一拖管什么**。
         var saveWave = NewCurve(Tool.Wave, StrokeKind.Wave, 900f, 1700f);
         saveWave.SetWaveBox(900f, 1700f, 1200f, 1600f, minAxis);            // A = 100 → 3 个周期
+        // 幂函数（v23 新增的取值 ＋ **4 个字节**）：α 是**档位选出来的**，两个控制点反推不出来
+        //（x² 和 x³ 的外接框一模一样），所以它必须进存档——这一条就是 v23 那次"真的加了字节"的理由。
+        var savePow = NewCurve(Tool.Power, StrokeKind.Power, 300f, 1700f);
+        savePow.CurveParam = 3f;                                            // 第 3 档 = x³
+        savePow.SetFunctionBox(300f, 1700f, 500f, 1600f, minAxis);
         Doc.AddStroke(saveMe);
         Doc.AddStroke(saveHy);
         Doc.AddStroke(saveSin);
         Doc.AddStroke(saveTan);
         Doc.AddStroke(saveWave);
+        Doc.AddStroke(savePow);
 
         var blob = InkSerializer.Save(Doc);
         var back = new InkDocument();
         InkSerializer.LoadInto(back, blob);
-        bool roundTrip = back.Strokes.Count == 5
+        bool roundTrip = back.Strokes.Count == 6
                          && back.Strokes[0].Kind == StrokeKind.Parabola
                          && Near(back.Strokes[0].ParabolaDirLocal().X, -1f, .01f)
                          && back.Strokes[1].Kind == StrokeKind.Hyperbola
@@ -16106,16 +16448,39 @@ internal sealed class App : InkEngine.InkEngine
                          && Near(back.Strokes[3].TangentHalfSpanLocal(), 160f, .5f)
                          && Near(back.Strokes[3].TangentHalfHeightLocal(), 3f * 160f, .5f)
                          && back.Strokes[4].Kind == StrokeKind.Wave
-                         && Near(back.Strokes[4].WaveCyclesLocal(), 3f, .02f);
-        Check("存档：五种曲线 ＋ 朝向 ＋ 渐近线开关都回来了（含 v21 正切 / v22 波浪线）",
+                         && Near(back.Strokes[4].WaveCyclesLocal(), 3f, .02f)
+                         && back.Strokes[5].Kind == StrokeKind.Power
+                         && Near(back.Strokes[5].PowerAlphaLocal(), 3f, .001f);
+        Check("存档：六种曲线 ＋ 朝向 ＋ 渐近线开关 ＋ **幂那一档的 α** 都回来了（v21 / v22 / v23）",
               roundTrip,
-              back.Strokes.Count == 5
+              back.Strokes.Count == 6
                   ? $"{back.Strokes[0].Kind}/方向 {back.Strokes[0].ParabolaDirLocal()}、"
                     + $"{back.Strokes[1].Kind}/{back.Strokes[1].CurveAxis}/渐近线 {back.Strokes[1].ShowAsymptotes}、"
                     + $"{back.Strokes[2].Kind}、"
                     + $"{back.Strokes[3].Kind}（半支长 {back.Strokes[3].TangentHalfSpanLocal():F0}）、"
-                    + $"{back.Strokes[4].Kind}（周期数 {back.Strokes[4].WaveCyclesLocal():F2}）"
+                    + $"{back.Strokes[4].Kind}（周期数 {back.Strokes[4].WaveCyclesLocal():F2}）、"
+                    + $"{back.Strokes[5].Kind}（α = {back.Strokes[5].PowerAlphaLocal():F1}）"
                   : $"只读回 {back.Strokes.Count} 条");
+
+        // **真 v22 老文件**：那 4 个字节还不存在（结尾砍掉 4 位就是 v22 的笔画记录）。
+        // 读端卡在 `version >= 23` 上读它，所以 v22 的文件**不该乱位**；α 退到默认那档（第一档）。
+        {
+            var v22Doc = new InkDocument();
+            var v22Pow = NewCurve(Tool.Power, StrokeKind.Power, 300f, 1700f);
+            v22Pow.CurveParam = 3f;
+            v22Pow.SetFunctionBox(300f, 1700f, 500f, 1600f, minAxis);
+            v22Doc.AddStroke(v22Pow);
+            var oldPow = new InkDocument();
+            InkSerializer.LoadInto(oldPow, MakeLegacyFile(v22Doc, 22, 4));
+            Check("存档：真 v22 老文件读得进来（那 4 个字节还没出生 → α 退到第一档）（1 条对象）",
+                  oldPow.Strokes.Count == 1
+                  && oldPow.Strokes[0].Kind == StrokeKind.Power
+                  && Near(oldPow.Strokes[0].PowerAlphaLocal(), ShapeSpec.PowerExponents[0], .001f),
+                  oldPow.Strokes.Count == 1
+                      ? $"{oldPow.Strokes[0].Kind}，α = {oldPow.Strokes[0].PowerAlphaLocal():F1}"
+                        + $"（期望第一档 {ShapeSpec.PowerExponents[0]:F1}）"
+                      : $"只读回 {oldPow.Strokes.Count} 条");
+        }
 
         // 真·v11 老文件：**一条对象**的那条笔画末尾少 1 个字节（就是 v12 的"渐近线"那一位）。
         // 注意 `MakeLegacyFile` 是"从整个文件末尾砍 N 个字节"，所以它只对**单条笔画**成立

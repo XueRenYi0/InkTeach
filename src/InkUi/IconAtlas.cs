@@ -93,6 +93,15 @@ internal static class IconAtlas
         if (name == "cosine") { DrawWave(ctx, x, y, size, brush, cosine: true); return; }
         if (name == "wave") { DrawWaveLine(ctx, x, y, size, brush); return; }
         if (name == "tangent") { DrawTangent(ctx, x, y, size, brush); return; }
+        // 函数曲线（第十七批）：指数 / 对数 / 幂那一档的 5 个值。**只给一个名字前缀**，
+        // 具体哪一张由 `FullUi.PowerIconName` 按当前档拼出来（power1 … power5）。
+        if (name == "exp") { DrawFunctionIcon(ctx, x, y, size, brush, Tool.Exponential, 0); return; }
+        if (name == "log") { DrawFunctionIcon(ctx, x, y, size, brush, Tool.Logarithm, 0); return; }
+        if (name.StartsWith("power") && name.Length == 6 && char.IsDigit(name[5]))
+        {
+            DrawFunctionIcon(ctx, x, y, size, brush, Tool.Power, name[5] - '1');
+            return;
+        }
         // 直线那三档线型的图标（用户 2026-09-20 定：图形面板里"直线"那一段再点一次
         // 就在实线 / 虚线 / 点线之间换，所以要有三张）。同样只能自绘：
         // 上游那张 `lineWeight` 是实线的，一个虚线 / 点线专名都没有。
@@ -672,6 +681,89 @@ internal static class IconAtlas
             var q = new Vector2(3f + 18f * u, 12f - 6f * v);
             if (i > 0) ctx.DrawLine(prev, q, brush, 1.5f, _round);
             prev = q;
+        }
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// **函数曲线的小图**（指数 / 对数 / 幂共用）：把那一档"长什么样"画进 24 格里。
+    ///
+    /// 三条约定：
+    ///   · **式子和画布同源**：取值一律走 <see cref="ShapeSpec"/> 的那几个函数
+    ///     （`ExpValueOf` / `LogValueOf` / `PowerValueOf`），所以"图标像 2ˣ、画出来是别的"
+    ///     这种事不会发生；底数 / α 也读同一张表。
+    ///   · **图标是示意**：画布上"一个单位"是拖出来的（可以是 40 像素，也可以是 200），
+    ///     图标里固定取 **3 格 = 1 个单位**、纵向只画到 **±2 个单位**（24 格里放不下画布上那个 ±6）。
+    ///   · **指数 / 对数没有档位**（底数是拖出来的），所以图标给的是**典型样子**
+    ///     （2ˣ / log₂x）——它们本来就没有"当前档"可言。
+    ///   · 幂函数 1/x 那一档多画两条**细虚线渐近线**（x = 0 与 y = 0），和画布上一致。
+    /// </summary>
+    private static void DrawFunctionIcon(ID2D1DeviceContext ctx, float x, float y, float size,
+                                         ID2D1Brush brush, Tool tool, int index)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        // 一个单位几格、纵向截到几（**都是"图标里"的示意值**，画布上"一个单位"是拖出来的）：
+        // 指数那条**必须把单位放大**——它长得太快，单位小了只看得见贴着 x 轴的那一小段
+        // （第一版就是那么画的：24 格里成了一条平线，出图标对照表才发现）。
+        float unit, clip;
+        Vector2 anchor, anchorMath;
+        switch (tool)
+        {
+            case Tool.Logarithm:
+                unit = 3f; clip = 2f; anchor = new Vector2(7f, 12f); anchorMath = new Vector2(1f, 0f); break;
+            case Tool.Power:
+                unit = 3f; clip = 2f; anchor = new Vector2(7f, 12f); anchorMath = new Vector2(1f, 1f); break;
+            default:
+                unit = 4f; clip = 2.5f; anchor = new Vector2(12f, 19f); anchorMath = new Vector2(0f, 1f); break;
+        }
+        // 数学坐标 → 格坐标
+        Vector2 P(float mx, float my)
+            => new(anchor.X + (mx - anchorMath.X) * unit, anchor.Y - (my - anchorMath.Y) * unit);
+
+        // 三条曲线各画哪一段（数学 x 的范围；只画这一段够看出形状了）
+        float xFrom, xTo;
+        switch (tool)
+        {
+            case Tool.Exponential: xFrom = -2.5f; xTo = 4f; break;      // 左边贴着 x 轴那一截
+            case Tool.Logarithm: xFrom = 0.25f; xTo = 4f; break;        // 左端已经贴着 y 轴
+            default: xFrom = 1f - clip; xTo = 1f + clip; break;         // 幂：左右各 2 个单位
+        }
+
+        // 按 x 均匀采样（图标只要"看得出形状"）：**域外 / 冲出可视高度就断开一笔**——
+        // 断开这一手同时解决了"√x 没有左半""1/x 在 0 处断成两支"两件事。
+        const int seg = 48;
+        var prev = Vector2.Zero;
+        bool pen = false;
+        for (int i = 0; i <= seg; i++)
+        {
+            float mx = xFrom + (xTo - xFrom) * i / seg;
+            float my = 0f;
+            bool ok;
+            switch (tool)
+            {
+                case Tool.Exponential:
+                    ok = (my = ShapeSpec.ExpValueOf(ShapeSpec.IconTypicalBase, mx)) <= clip; break;
+                case Tool.Logarithm:
+                    ok = (my = ShapeSpec.LogValueOf(ShapeSpec.IconTypicalBase, mx)) <= clip; break;
+                default: ok = ShapeSpec.PowerValueOf(index, mx, out my) && my <= clip; break;
+            }
+            if (!ok || my < -clip) { pen = false; continue; }
+            var q = P(mx, my);
+            if (pen) ctx.DrawLine(prev, q, brush, 1.5f, _round);
+            prev = q;
+            pen = true;
+        }
+
+        // 1/x 那两条渐近线：x = 0（竖）与 y = 0（横）——**细虚线**，和画布上一个排法。
+        if (tool == Tool.Power && ShapeSpec.PowerHasAsymptotes(index))
+        {
+            DashedLine(ctx, P(0f, -clip), P(0f, clip), 2.2f, 1.8f, 1.1f, brush);
+            DashedLine(ctx, P(1f - clip, 0f), P(1f + clip, 0f), 2.2f, 1.8f, 1.1f, brush);
         }
 
         ctx.Transform = saved;

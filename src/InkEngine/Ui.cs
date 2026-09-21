@@ -210,6 +210,14 @@ public interface IEngineCommands
     /// 只动"下一笔用几边形"，**不改已经画好的那些**（它们各存各的）。
     /// </summary>
     void CycleSolidSides();
+    /// <summary>
+    /// **换下一档函数曲线**：幂函数那一格的 α 轮一圈（x → x² → x³ → √x → 1/x → x）。
+    ///
+    /// 和 <see cref="CycleSolidSides"/> 完全同构（入口也是"那一格已经选中时再点一次"）。
+    /// ⚠ **只有幂有档位**：指数 / 对数那一格点了不会有任何反应——它们的底数是**拖出来的**
+    ///（用户 2026-09-20 定："指数对数不是确定顶点以后再根据拖动确定，不需要考虑几档吧？"）。
+    /// </summary>
+    void CycleFunctionParam();
     void SetColor(Color4 color);
     void SetWidth(float logicalPx);
     /// <summary>
@@ -471,6 +479,124 @@ public static class ShapeSpec
     /// `Stroke.SolidEllipseRatio` 只是转发给它（老代码仍然读得到那个名字）。
     /// </summary>
     public const float SolidEllipseRatio = 1f / 2.646f;
+
+    // =====================================================================
+    //  **函数曲线（指数 / 对数 / 幂）**（2026-09-20 第十七批，用户拍的）
+    // =====================================================================
+    //
+    //  用户 2026-09-20 拍板的口径，分两种（**为什么不是全套都分档**，见下面两条注释）：
+    //    · **指数 / 对数**：**拖动定形，不分档** —— 按下 = 图象与轴的那个交点，
+    //      拖出去 = 图象上另一点（指数拖到 `x = 1` 那儿、对数拖到 `y = 1` 那儿）。
+    //      用户原话："指数对数不是确定顶点以后再根据拖动确定，**不需要考虑几档**吧？"
+    //      —— 对：它俩的**形状只有底数一个自由度**，而"锚点 ＋ 一个拖动点"正好给两个数
+    //      （一个定单位、一个定底数），**刚好解得出**，所以不用让老师先选档。
+    //    · **幂函数**：**必须分档**（五档）—— 它的"档"不只是陡一点平一点，而是
+    //      **定义域 / 支数 / 有没有渐近线都不一样**（√x 只有右支、1/x 两支＋渐近线），
+    //      这些东西**拖不出来**，只能选。用户原话："最麻烦的是幂函数……而且它的定义域也可能变"。
+
+    /// <summary>
+    /// 幂函数的**五档指数**：**x / x² / x³ / √x / 1/x**（用户 2026-09-20 定：照课本那 5 个）。
+    ///
+    /// ⚠ 幂函数按"定义域 × 对称性"分**一共只有 6 类**（用户问过"需要几种"）：
+    ///   ① 奇、定义域 ℝ、过原点（x³，y = x 同类）② 偶、ℝ、过原点（x²）
+    ///   ③ 只在 x ≥ 0、过原点（√x）  ④ 奇、x ≠ 0、两支＋渐近线（1/x）
+    ///   ⑤ 偶、x ≠ 0、两支＋渐近线（1/x²）  ⑥ 只在 x > 0、一支＋渐近线（1/√x）
+    /// 要全覆盖得 6 档，而**一格的档位点上限是 5**（第 6 个点塞不进段高）——
+    /// 所以照课本舍掉 ⑤⑥（那两种课本本来就不单独画）。y = x 占一格是因为它同时是
+    /// "指数与对数关于 y = x 对称"的那条参照线。
+    /// ⚠ **只能往后追加**：面板档位点的位置、图标的档位名都按这个顺序读。
+    /// </summary>
+    public static readonly float[] PowerExponents = { 1f, 2f, 3f, 0.5f, -1f };
+
+    /// <summary>
+    /// 这个工具**是不是"分档选参数"的函数曲线**——按用户 2026-09-20 的口径，
+    /// **只有幂函数**是（指数 / 对数拖动定形，见这个区域开头的注释）。
+    ///
+    /// **界面上凡是"按这一族分支"的地方都该问它**（画几个档位点、再点一次要不要换档、
+    /// 图标要不要按档换）——各写一份名单的话，加第四种就会漏掉一处（这个仓库的老毛病）。
+    /// </summary>
+    public static bool HasFunctionParam(Tool tool) => tool is Tool.Power;
+
+    /// <summary>这一格**几档**（只有幂有：5 档；别的函数曲线 0 档 —— 它们没有档位点）。</summary>
+    public static int FunctionParamCount(Tool tool)
+        => HasFunctionParam(tool) ? PowerExponents.Length : 0;
+
+    /// <summary>某一档是**哪个值**（幂的指数 α）。越界一律夹到合法范围（坏值不该画出个怪东西）。</summary>
+    public static float FunctionParamOf(Tool tool, int index)
+        => PowerExponents[Math.Clamp(index, 0, PowerExponents.Length - 1)];
+
+    /// <summary>
+    /// 指数 / 对数的底数**夹在 [0.2, 5]**：这两个数是拖出来的（<see cref="Stroke.ExpBaseLocal"/>），
+    /// 而 `a = 1` 会退化成水平直线（"看不见却占着一条对象"是这个仓库的老忌），
+    /// 所以贴上两头就夹住。0.2 = 1/5、5 互为倒数，正好对称。
+    /// </summary>
+    public const float FunctionBaseMin = 0.2f;
+
+    /// <summary>见 <see cref="FunctionBaseMin"/>：底数上限。</summary>
+    public const float FunctionBaseMax = 5f;
+
+    /// <summary>
+    /// 指数曲线**往左还画多少个单位**（x &lt; 0 那一侧，图象在那儿贴着 x 轴）。
+    /// 2 个单位够看出"无限接近 x 轴"这件事，再多只是浪费地方。
+    /// </summary>
+    public const float ExpLeftUnits = 2f;
+
+    /// <summary>指数曲线**往右画多少个单位**（x &gt; 0 那一侧，冲到可视高度就截断）。</summary>
+    public const float ExpRightUnits = 4f;
+
+    /// <summary>
+    /// 对数曲线**往右画多少个单位**（从锚点 `(1,0)` 起算，所以右边界是 `x = 1 + 这个数`）。
+    /// 左边界是 `x → 0⁺`（y 轴就是它的渐近线，不需要另画虚线：曲线自己会贴着它）。
+    /// </summary>
+    public const float LogRightUnits = 4f;
+
+    /// <summary>
+    /// 函数曲线的**可视纵向范围**（单位数）：往上画到 +6、往下画到 −6 就截断——
+    /// 和正切"冲出框就停笔"同一条口径（指数往上冲、对数和 1/x 两支往上下冲，
+    /// 值域都是无界的，不截断就画到天上去）。
+    /// </summary>
+    public const float FunctionUpUnits = 6f;
+
+    /// <summary>见 <see cref="FunctionUpUnits"/>：往下画到 −6 个单位截断。</summary>
+    public const float FunctionDownUnits = 6f;
+
+    /// <summary>
+    /// 指数 / 对数**图标用哪个底数**：这两格的底数是**画的时候拖出来的**、没有"当前档"，
+    /// 所以图标只能画一个**典型样子**——取 2（课本里出现最多的那个）。
+    /// 画布上真正用哪个一由那一拖决定，见 `Stroke.ExpBaseOf`。
+    /// </summary>
+    public const float IconTypicalBase = 2f;
+
+    /// <summary>
+    /// 指数曲线的取值 `y = aˣ`。
+    ///
+    /// **谁在用**：图标层（`IconAtlas`）——它看不到 `Stroke`（引擎内部类型），
+    /// 但"这一档长什么样"必须和画布上用**同一个式子**，否则会出现"图标像 2ˣ、画出来是别的"。
+    /// 画布那边算的是"像素版"（带单位 / 截断），式子的核心就是这一个 `MathF.Pow`。
+    /// </summary>
+    public static float ExpValueOf(float a, float x) => MathF.Pow(a, x);
+
+    /// <summary>对数曲线的取值 `y = log_a x`（见 <see cref="ExpValueOf"/>）。</summary>
+    public static float LogValueOf(float a, float x) => MathF.Log(x) / MathF.Log(a);
+
+    /// <summary>
+    /// 幂曲线的取值 `y = x^α`（**定义域外返回 `false`**：α = 1/2 时 x &lt; 0 没有图象）。
+    /// 见 <see cref="ExpValueOf"/>。
+    /// </summary>
+    public static bool PowerValueOf(int index, float x, out float y)
+    {
+        float a = FunctionParamOf(Tool.Power, index);
+        // 定义域：α 不是整数时 x &lt; 0 没有实数幂；α = 1 / 2 / 3 是整数、整个实数轴都有。
+        bool integer = MathF.Abs(a - MathF.Round(a)) < 1e-4f;
+        if (x < 0f && !integer) { y = 0f; return false; }
+        if (x == 0f && a < 0f) { y = 0f; return false; }      // 1/x 在 0 处没有定义
+        y = MathF.Pow(x, a);
+        return true;
+    }
+
+    /// <summary>幂函数某一档**有没有两条渐近线**（只有 α &lt; 0 的 1/x 有）——图标也要照着画。</summary>
+    public static bool PowerHasAsymptotes(int index)
+        => FunctionParamOf(Tool.Power, index) < 0f;
 }
 
 /// <summary>
@@ -534,6 +660,24 @@ public readonly struct UiState
     public int PyramidSides { get; init; }
     /// <summary>棱台那一格当前的档（含义同上）。</summary>
     public int FrustumSides { get; init; }
+
+    /// <summary>
+    /// **幂函数那一格当前的档**（0 起算 → `ShapeSpec.PowerExponents`：
+    /// x / x² / x³ / √x / 1/x）。界面拿它把那一格的图标换成当前那一档的图画，
+    /// 并在右边点出 **5 个档位点**。
+    ///
+    /// ⚠ **只有幂有档位**：指数 / 对数的底数是**拖出来的**（见 <see cref="ShapeSpec.HasFunctionParam"/>
+    /// 那一带的注释），所以这一族只有一个索引字段；要它问 <see cref="ParamIndexOf"/>。
+    /// </summary>
+    public int PowerIndex { get; init; }
+
+    /// <summary>
+    /// 某个函数曲线工具当前那一档（界面画档位点、选图标都用它）。
+    /// **判据只有这一处**（和 <see cref="SidesOf"/> 同一条规矩）。
+    /// 不是分档的那两格（指数 / 对数）返回 0，界面那边靠
+    /// <see cref="ShapeSpec.HasFunctionParam"/> 决定"这一格压根不画点"。
+    /// </summary>
+    public int ParamIndexOf(Tool tool) => ShapeSpec.HasFunctionParam(tool) ? PowerIndex : 0;
 
     /// <summary>
     /// 某个立体工具当前那一档（界面画档位点、选图标都用它）。

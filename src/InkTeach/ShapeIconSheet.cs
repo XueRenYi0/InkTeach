@@ -37,6 +37,11 @@ internal sealed class ShapeIconSheet : IOverlayUi
         ("parabola", "抛物线（上下）"), ("parabolaRight", "抛物线（左右）"),
         ("hyperbola", "双曲线"), ("sine", "正弦"), ("cosine", "余弦"),
         ("wave", "波浪线"), ("tangent", "正切"),
+        // 函数曲线（第十七批）：指数 / 对数各一张（**没有档位**，图标给的是典型样子），
+        // 幂函数五张（一张一档，和面板上"再点一次换一档"一一对应）。
+        ("exp", "指数"), ("log", "对数"),
+        ("power1", "幂 · y = x"), ("power2", "幂 · y = x²"), ("power3", "幂 · y = x³"),
+        ("power4", "幂 · y = √x"), ("power5", "幂 · y = 1/x"),
         // 旋转体
         ("cylinder", "圆柱"), ("cone", "圆锥"), ("conefrustum", "圆台"), ("sphere", "球"),
         // 棱柱一族：三 / 四 / 五 / 六（每一档一张）

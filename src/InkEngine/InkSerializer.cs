@@ -145,12 +145,19 @@ internal static class InkSerializer
     ///         （它和正弦 / 余弦一样是两个控制点：起手点 ＋ 拖出去那个角点）。
     ///   · v22：新增**波浪线**（取值 25）。同样没加字节、同样不用迁移
     ///         （它和正弦同一套"起点 ＋ 终点"）。
+    ///   · v23：新增**指数 / 对数 / 幂**（取值 26 / 27 / 28），并且每条笔画多
+    ///         **4 字节的 `float`：函数曲线那一档的参数**（见 <see cref="Stroke.CurveParam"/>，
+    ///         幂函数的 α；别的种类写 1，读回来也不影响它们画成什么样）。
+    ///         加字段的理由同 v8 / v9 / v11 / v17：**必须卡在 `version >= 23` 上读**，
+    ///         否则读 v22 的文件会整体错位。升版本的理由同 v6 / v7 / v15 / v21：
+    ///         老程序读到 26 / 27 / 28 会当成"不认识的种类"掉进自由笔迹那条兜底。
+    ///         读老文件**不需要迁移**（≤ v22 的文件里既没有这三种、也没有那 4 个字节）。
     ///
     /// ⚠ **面板入口可以撤，`Kind` 的取值一个都不许删**（2026-09-20 第十二批撤了长方体 /
     /// 四面体的入口）：存档里存的是**一个字节**，删了就是"打开旧板书少一条"
     /// （同 2026-09-19 撤「数轴」入口那条规矩，见 计划-图形工具.md 11.2）。
     /// </summary>
-    public const int FormatVersion = 22;
+    public const int FormatVersion = 23;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -273,6 +280,14 @@ internal static class InkSerializer
         // ---- v17：棱柱底面几边形（见 Stroke.PrismSides）----
         // 一个字节（3~6；别的种类恒 DefaultPrismSides）。读端卡在 `version >= 17`。
         w.Write((byte)s.PrismSidesClamped);
+
+        // ---- v23：函数曲线那一档的参数（见 Stroke.CurveParam）----
+        // ⚠ **这一次真的要加字节了**（前几批都是"多一个 Kind 取值、不加字节"）：
+        // 幂函数的 α 是**离散档位选出来的**（1 / 2 / 3 / 0.5 / −1），从两个控制点**反推不出来**
+        //（而且同一条 x² 和 x³ 在外接框上完全一样），所以只能存。
+        // 写 float 而不是"档位序号"：序号以后一改表就变味（这个仓库吃过这种亏），
+        // 而 α 本身是**自解释**的——读回来永远还是那个 α。
+        w.Write(s.CurveParam);
     }
 
     // =====================================================================
@@ -457,6 +472,13 @@ internal static class InkSerializer
             s.PrismSides = ps >= Stroke.MinPrismSides && ps <= Stroke.MaxPrismSides
                 ? ps : Stroke.DefaultPrismSides;
         }
+
+        // ---- v23：函数曲线那一档的参数（老文件没有这四位，一律 0）----
+        // 0 只对"幂函数"是坏值，所以读进来先夹到合法的 α 上（见 Stroke.CurveParamClamped）——
+        // 别的种类本来就不用它，读到什么都不会影响画出来的样子。
+        // ⚠ **必须卡在 `version >= 23` 上读**，否则读 v22 的文件会多读 4 个字节、整体错位。
+        if (version >= 23) s.CurveParam = r.ReadSingle();
+        s.CurveParam = Stroke.ClampCurveParam(s.CurveParam);
 
         // ---- v13：抛物线的第二个点**换了含义**，老文件要迁移一次 ----
         //
