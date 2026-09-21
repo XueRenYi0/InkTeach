@@ -508,6 +508,27 @@ internal static class SelectionHandles
         => !(s.Kind is StrokeKind.Circle or StrokeKind.Coordinate or StrokeKind.NumberLine);
 
     /// <summary>
+    /// **这个对象有没有"定义元素手柄"**——也就是它走**特殊手柄那一套**（直线 / 箭头 / 圆 /
+    /// 椭圆 / 三角形 / 平行四边形 / 坐标系 / 数轴），还是走**通用框那一套**（缩放 ＋ 对角拉伸：
+    /// 矩形 / 图像 / 自由笔迹 / 多选 / 四种曲线 / 四个立体图形）。
+    ///
+    /// 全工程只有这一条判据，三处调用点都问它（不要各自写一份）：
+    ///   · `Overlay` 第 3 / 4 步——画不画旋转柄的连线中心、画特殊手柄还是通用八手柄；
+    ///   · `HitTest(…, sel, …)`——查完特殊手柄要不要继续落到通用框那一关；
+    ///   · `Engine` 的手势分流——按下 `Top/Bottom/Left/Right` 时，
+    ///     这个 `h` 是"定义元素"还是"通用框的四边中点缩放柄"。
+    ///
+    /// 2026-09-20 前面写错过两次（判的是"是不是图形"）：四种曲线和四个立体图形
+    /// **是图形但没有特殊点**，一次被漏成"一个手柄都不画、也点不中"，
+    /// 一次被漏成"四角能拉、四边中点只能整体拖"。
+    /// </summary>
+    public static bool HasShapeHandles(Stroke s)
+    {
+        Span<ShapeHandle> buf = stackalloc ShapeHandle[5];
+        return ShapeHandlesOf(s, buf) > 0;
+    }
+
+    /// <summary>
     /// 这个定义元素手柄拖起来是**整体平移**还是**改几何**。
     ///
     /// 只有"**圆的圆心**"是平移（用户定：拖圆心 = 整个圆平移、半径不变）。

@@ -6116,7 +6116,17 @@ public class InkEngine
                     BeginVertexDrag(shape, sh, x, y);
                     return true;
                 }
-                else h = SelHandle.None;
+                // **别急着把 h 抹掉**：`Top / Bottom / Left / Right` 这四个名字是**两用**的——
+                //   · 对椭圆 / 坐标系 / 数轴：它们是"定义元素"（走上面那条改几何的路）；
+                //   · 对**没有定义元素手柄**的对象（矩形 / 墨迹 / 图像 / 四种曲线 / 四个立体图形）：
+                //     它们就是**通用框的四边中点缩放柄**。
+                // 原来这里无条件 `h = SelHandle.None`，于是那类对象"四角能拉、四边中点只能整体拖"
+                //（用户 2026-09-20："那八个点出现了，但是我看着只有对角线能拖动放缩？
+                //  我觉得左右拉伸也可以给"）。
+                // 判据还是那一条：**它到底有没有定义元素手柄**——有，才说明这个 h 真的"没有"，
+                // 该抹掉（"画都不画就别点得到"，见 HitTest 那段）；没有，就留给下面的通用框。
+                else if (SelectionHandles.HasShapeHandles(shape))
+                    h = SelHandle.None;
             }
 
             if (h == SelHandle.None)

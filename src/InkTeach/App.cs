@@ -14774,6 +14774,52 @@ internal sealed class App : InkEngine.InkEngine
               $"{vb.EffectiveAxis}，p {vb.ParabolaPLocal():F1}（拖之前 {pbPBefore:F1}）");
         Doc.SelectOnly(Array.Empty<Stroke>());
 
+        // ④b **四边中点也要能拉伸**（用户 2026-09-20："那八个点出现了，但是我看着只有对角线
+        //     能拖动放缩？我觉得左右拉伸也可以给"）。
+        //
+        // 根因：`Top / Bottom / Left / Right` 这四个名字是**两用**的——对椭圆 / 坐标系 / 数轴
+        // 它们是"定义元素"，对没有定义元素手柄的对象它们就是通用框的**四边中点缩放柄**。
+        // 手势分流那里原来无条件把它们抹成 `None`，于是那类对象"四角能拉、四边中点只能整体拖"。
+        // 这里拖**右边中点**：宽该变大、**高一个点不该变**（整体拖动是宽高都不变，
+        // 等比缩放是宽高一起变——两头都能把"其实没在缩放"筛出来）。
+        Doc.SelectOnly(new[] { vb });        // ④ 尾巴上把选择清空了，框要从"选中它"重新算
+        var vbF2 = SelectionHandles.FrameOf(Doc.Selected);
+        float vbW2a = vbF2.CanvasAabb.MaxX - vbF2.CanvasAabb.MinX;
+        float vbH2a = vbF2.CanvasAabb.MaxY - vbF2.CanvasAabb.MinY;
+        var vbMid = SelectionHandles.CanvasPosition(SelHandle.Right, vbF2, DpiScale);
+        Check("曲线拖通用框：**右边中点**按下去命中的是缩放柄（不是框内空白）",
+              SelectionHandles.HitTest(vbMid.X, vbMid.Y, Doc.Selected, vbF2, DpiScale) == SelHandle.Right,
+              $"{SelectionHandles.HitTest(vbMid.X, vbMid.Y, Doc.Selected, vbF2, DpiScale)}（期望 Right）");
+        bool vbTookMid = SelectionGestureForTest(vbMid.X, vbMid.Y);
+        UpdateSelectionGestureForTest(vbMid.X + 200f, vbMid.Y);
+        SettleFrames(40);
+        EndSelectionGestureForTest();
+        SettleFrames(60);
+        var vbF3 = SelectionHandles.FrameOf(Doc.Selected);
+        float vbW2b = vbF3.CanvasAabb.MaxX - vbF3.CanvasAabb.MinX;
+        float vbH2b = vbF3.CanvasAabb.MaxY - vbF3.CanvasAabb.MinY;
+        Check("曲线拖通用框的**右边中点**：横向拉长（宽变大、高基本不变）",
+              vbTookMid && MathF.Abs(vbW2b - (vbW2a + 200f)) < 6f && MathF.Abs(vbH2b - vbH2a) < 2f,
+              $"接住={vbTookMid}，框 {vbW2a:F0}×{vbH2a:F0} → {vbW2b:F0}×{vbH2b:F0}"
+              + $"（期望 宽 {(vbW2a + 200f):F0}、高 {vbH2a:F0}）");
+        // 判据自洽：**有**定义元素手柄的（直线）为真、**没有**的（曲线 / 立体图形 / 矩形）为假。
+        // 三处调用点（Overlay 画手柄、HitTest 命中、手势分流认不认四边中点）问的都是它，
+        // 所以它错了就是三处一起错——一条断言盯住三种成分。
+        var vbLine = new Stroke { Tool = Tool.Line, Kind = StrokeKind.Line };
+        vbLine.AddPoint(0f, 0f, 1f, 0);
+        vbLine.AddPoint(10f, 0f, 1f, 0);
+        var vbRect = new Stroke { Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle };
+        vbRect.AddPoint(0f, 0f, 1f, 0);
+        vbRect.AddPoint(10f, 10f, 1f, 0);
+        Check("判据自洽：HasShapeHandles —— 直线 true，曲线 / 立体图形 / 矩形 false",
+              SelectionHandles.HasShapeHandles(vbLine)
+              && !SelectionHandles.HasShapeHandles(vb)
+              && !SelectionHandles.HasShapeHandles(cy)
+              && !SelectionHandles.HasShapeHandles(cu)
+              && !SelectionHandles.HasShapeHandles(vbRect),
+              "直线该 true；四种曲线 / 立体图形 / 矩形都该 false");
+        Doc.SelectOnly(Array.Empty<Stroke>());
+
         // ⑤ 朝向：**选出来的**（不再靠拖动角度推）
         //
         // 这是 2026-09-20 这一版的核心改动：方向从"拖出来的"变成"选出来的"，
