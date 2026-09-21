@@ -2736,6 +2736,10 @@ public class InkEngine
             // 所以不拿 ShapeDragLongEnough 去卡它（那是给一笔成形的图形防误点用的）。
             if (_stepPlan != null) _stepIndex++;
 
+            // 松手就把"**这一笔吸到了什么**"收回去（「直棱柱」那颗胶囊只在拖动中出现，
+            // 和拖顶点吸附那边同一个口径：松手就没有了）。不清的话它会一直挂在屏幕上。
+            _stepSnap = ShapeSnapKind.None;
+
             // 还有下一笔 → 这一下松手**不算完**：半成品停在 ActiveStroke 里
             //（**不进文档、也不写撤销记录**），等最后一笔松手再统一提交。
             // 这样在用户眼里这几笔是连着的，中途不会先冒出一条"半成品"曲线、再把它改掉，
@@ -3353,7 +3357,8 @@ public class InkEngine
              or Tool.Triangle or Tool.Parallelogram or Tool.Arrow
              or Tool.Coordinate or Tool.NumberLine
              or Tool.Parabola or Tool.Hyperbola or Tool.Sine or Tool.Cosine
-             or Tool.Cylinder or Tool.Cone or Tool.Cuboid or Tool.Tetrahedron;
+             or Tool.Cylinder or Tool.Cone or Tool.Cuboid or Tool.Tetrahedron
+             or Tool.Prism;
 
     /// <summary>
     /// **一笔**做什么：把"这一笔拖到的位置"写进半成品的几何。
@@ -3423,6 +3428,23 @@ public class InkEngine
     };
 
     /// <summary>
+    /// **棱柱：两笔**（2026-09-20 用户提的，见 计划-图形工具.md §32）——
+    /// 第 1 笔拖出**底面外接框**（内接正 n 边形）、第 2 笔拖到**顶面中心**。
+    ///
+    /// 和四面体**同一套口径**（第 2 笔"拖到哪就是哪"），所以"往上拖 = 直棱柱、
+    /// 拖歪 = 斜棱柱"是同一个动作的自然结果；"直"那一档的**轻微吸附**在
+    /// `ApplyStepGeometry` 里补（那一步不在表里，因为它要读/换档位之外的状态）。
+    /// </summary>
+    private static readonly StepPlan PrismPlan = new()
+    {
+        Apply = new StepApply[]
+        {
+            static (s, o, p, _) => s.SetPrismBase(o.X, o.Y, p.X, p.Y),
+            static (s, o, p, _) => s.SetPrismApex(p.X, p.Y),
+        },
+    };
+
+    /// <summary>
     /// 这种工具是不是**多笔**的；是的话它的表在哪（见 <see cref="StepPlan"/>）。
     /// **判据只有这一处**：按下（起半成品 / 接着改）与松手（推进还是提交）都问它，
     /// 各写一份名单就是"加一种图形必漏一处"的老毛病。
@@ -3432,6 +3454,7 @@ public class InkEngine
         Tool.Hyperbola => HyperbolaPlan,
         Tool.Cuboid => CuboidPlan,
         Tool.Tetrahedron => TetrahedronPlan,
+        Tool.Prism => PrismPlan,
         _ => null,
     };
 
@@ -3461,9 +3484,52 @@ public class InkEngine
         if (_stepIndex < 0 || _stepIndex >= _stepPlan.Apply.Length) return false;
         _stepPlan.Apply[_stepIndex](s, _stepOrigin, new Vector2(x, y),
                                     ShapeMinAxisLogical * DpiScale);
+
+        // **棱柱第 2 笔的"直棱柱"轻微吸附**（用户 2026-09-20："直棱柱有一个轻微吸附"）——
+        // 写在**这一步之后**：先按指针老老实实落一次，再看要不要把它扳直。
+        //
+        // 为什么放在这里而不是放进 `PrismPlan` 那张表：表里的每一行是**纯算式**
+        //（`(s,o,p,min) => …`，不读引擎状态、不出状态），而吸附要**把结果报给界面**
+        //（出「直棱柱」那颗胶囊，见 `_stepSnap`），还要有一份容差常量。留在这里两边都干净。
+        //
+        // 判据用**长度**（"顶心和底心的横向差"小于容差），和"正圆"那条吸附同一个口径：
+        // "轻微吸附"就该是"手抖一点点也算直"，用角度在柱子很高时会变得很难吸住。
+        _stepSnap = ShapeSnapKind.None;
+        if (s.Kind == StrokeKind.Prism && _stepIndex == 1)
+        {
+            float dx = MathF.Abs(s.PrismApexLocal().X - s.PrismBaseCenterLocal().X);
+            if (dx <= PrismUprightToleranceLogical * DpiScale)
+            {
+                s.SnapPrismApexVertical();
+                _stepSnap = ShapeSnapKind.RightPrism;
+            }
+        }
+        // 胶囊挂在"**吸完之后**那个顶面中心"上（画布坐标）——绘制与脏区都读这一个数
+        //（理由同 VertexPreviewCanvasPoint：两边各算一份就会差一帧、留残影）。
+        StepSnapAnchor = Vector2.Transform(s.PrismApexLocal(), s.Transform);
         _dirty = true;
         return true;
     }
+
+    /// <summary>
+    /// "直棱柱"吸附的**横向容差**（逻辑像素）：顶心和底心的横坐标差在这个范围内就扳直。
+    /// 12 是照"手抖一两像素 + 投影上的一点偏"定的；比点选容差（4）宽，
+    /// 因为这是个"轻微吸附"，不是"精确判定"。
+    /// </summary>
+    internal const float PrismUprightToleranceLogical = 12f;
+
+    /// <summary>
+    /// **多笔图形当前那一笔吸到了什么**（现在只有棱柱的「直棱柱」一档）。
+    /// 和 <see cref="ShapeSnapKind"/> 同一个枚举、同一颗胶囊——用户看到的语言要一致。
+    /// 松手 / 收笔时必须清掉（见 `EndStroke`），否则那颗胶囊会留在屏幕上。
+    /// </summary>
+    internal ShapeSnapKind StepSnap => _stepSnap;
+    private ShapeSnapKind _stepSnap = ShapeSnapKind.None;
+
+    /// <summary>「直棱柱」那颗胶囊挂在哪（**画布坐标** = 吸完之后的顶面中心）。
+    /// 绘制与脏区都读它，不许各算一份（同 <see cref="VertexPreviewCanvasPoint"/>）。</summary>
+    internal Vector2 StepSnapAnchor;
+
 
     /// <summary>
     /// **多笔图形的第 1 笔**里"屏幕上先只出现一半"的那一个：双曲线还没定"曲线经过的点"时，
@@ -3497,6 +3563,7 @@ public class InkEngine
         Tool.Cone => StrokeKind.Cone,
         Tool.Cuboid => StrokeKind.Cuboid,
         Tool.Tetrahedron => StrokeKind.Tetrahedron,
+        Tool.Prism => StrokeKind.Prism,
         _ => StrokeKind.Arrow,
     };
 
@@ -3594,6 +3661,35 @@ public class InkEngine
     }
 
     /// <summary>
+    /// **棱柱那一格当前的档**：底面几边形（3~6）。用户 2026-09-20 定：
+    /// "我想想能不能做成像直线切换那样切换三四五六"——于是它和 <see cref="LineDash"/>
+    /// **完全同构**：面板上那一格**再点一次换一档**（配 4 个档位点），
+    /// 画的那一刻写进对象（见 `BeginShapeAt`）。
+    ///
+    /// 和 <see cref="LineDash"/> 一样只管"**下一笔**"：已经画好的棱柱各存各的
+    ///（见 <see cref="Stroke.PrismSides"/>），面板换档不会回头改它们。
+    /// 存成引擎字段、不存偏好文件（和抛物线朝向、直线线型同一条理由）：
+    /// 一次课里连画几个同一种棱柱是常态，留着上一档比每次回到默认顺手。
+    /// </summary>
+    public int PrismSides { get; private set; } = Stroke.DefaultPrismSides;
+
+    /// <summary>
+    /// 换下一档棱柱：**3 → 4 → 5 → 6 → 3**（见 <see cref="PrismSides"/>）。
+    /// 只影响**下一笔**画出来的棱柱，不碰已经画好的对象。
+    /// </summary>
+    public void CyclePrismSides()
+    {
+        // 四档一轮，**按边数升序**（用户定：三/四/五/六）——升序比"按常用度"更好记，
+        // 而且档位点从左到右读出来就是 3/4/5/6，不用额外记顺序。
+        PrismSides = PrismSides >= Stroke.MaxPrismSides
+            ? Stroke.MinPrismSides
+            : PrismSides + 1;
+        // 面板上那一格的图标要跟着换，所以推一次状态（和直线换线型同一套）。
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
     /// 图形工具的起手：造一条**只有起点**的图形，拖动期由
     /// <see cref="UpdateShapePreview"/> 改控制点，松手由 <see cref="EndStroke"/> 提交。
     ///
@@ -3618,6 +3714,9 @@ public class InkEngine
             // 直线的**线型也是画之前选好的**（见 LineDash）：同样在画的那一刻写进对象。
             // 别的图形一律实线——它们的线型历来是"选中之后在操作条面板里改"。
             Dash = kind == StrokeKind.Line ? LineDash : StrokeDash.Solid,
+            // 棱柱的**底面几边形**同样是画之前选好的（见 PrismSides）：
+            // 画的那一刻写进对象，之后面板再换档也不回头改它。
+            PrismSides = kind == StrokeKind.Prism ? PrismSides : Stroke.DefaultPrismSides,
         };
         ActiveStroke.AddPoint(x, y, 1f, NowMs);
         // 抛物线的**顶点 = 按下那个点**：它现在是**一笔画完**的（照 InkClass 的 `case 20/21`：
@@ -4227,6 +4326,7 @@ public class InkEngine
         }
         _stepPlan = null;
         _stepIndex = 0;
+        _stepSnap = ShapeSnapKind.None;      // 「直棱柱」那颗胶囊跟着半成品一起作废
         Tool = t;
 
         // **穿透和工具是互斥的**（用户 2026-09-17 定）。
@@ -4432,6 +4532,9 @@ public class InkEngine
         Tool = Tool,
         ParabolaAxis = ParabolaAxis,      // 界面拿它把图形面板那一格的图标转成当前朝向
         LineDash = LineDash,              // 界面拿它把「直线」那一格的图标换成当前线型
+        PrismSides = PrismSides,          // 界面拿它把「棱柱」那一格的图标换成当前档（＋档位点）
+        PrismMinSides = Stroke.MinPrismSides,   // 档位范围也推上去（界面才知道点几个点）
+        PrismMaxSides = Stroke.MaxPrismSides,
         Color = Tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
         PaletteBase = Tool == Tool.Highlighter
             ? new Color4(HighlighterCurrent.R, HighlighterCurrent.G, HighlighterCurrent.B, 1f)

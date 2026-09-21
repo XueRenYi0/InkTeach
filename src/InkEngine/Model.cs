@@ -129,6 +129,18 @@ public enum Tool
     /// 他的画法里**没有虚线棱**（六条棱全实线），我们照旧。
     /// </summary>
     Tetrahedron = 23,
+
+    /// <summary>
+    /// **棱柱**（2026-09-20 第十一批，用户提的）：3/4/5/6 棱柱 ＋ 直/斜通吃。
+    ///
+    /// 画法是**立着**的（和长方体**不是**一个朝向，两者并存，见 计划-图形工具.md §32）：
+    ///   · 第 1 笔拖一个框 = **底面投影后的外接框**，底面是内接其中的**正 n 边形**；
+    ///   · 第 2 笔拖到**顶面中心**该在的地方（照四面体"拖到哪就是哪"）：
+    ///     往上拖 = **直棱柱**（那一笔会被轻微吸附吸到竖直），拖歪 = **斜棱柱**。
+    /// 三个控制点 = 底面外接框两角 ＋ **顶面中心**（侧棱向量 = 顶心 − 底心）。
+    /// 几边形由 <see cref="Stroke.PrismSides"/> 决定（画之前在图形面板那一格选）。
+    /// </summary>
+    Prism = 24,
 }
 
 /// <summary>An axis-aligned rectangle in virtual-desktop pixels.</summary>
@@ -417,6 +429,13 @@ internal enum StrokeKind
 
     /// <summary>四面体：四个控制点 = 底面三角形三点 ＋ 顶点；六条棱全实线（照 InkClass）。</summary>
     Tetrahedron = 18,
+
+    /// <summary>
+    /// **棱柱**（2026-09-20）：三个控制点 = 底面外接框两角 ＋ **顶面中心**
+    ///（侧棱向量 = 顶心 − 底心）。3~6 边形由 <see cref="Stroke.PrismSides"/> 这一档决定。
+    /// 被挡住的底边与侧棱走辅助几何槽（细虚线，判据见 `Stroke.PrismEdges`）。
+    /// </summary>
+    Prism = 19,
 }
 
 /// <summary>
@@ -929,6 +948,13 @@ internal sealed class Stroke
                 if (Points.Count < 3) break;
                 list.AddRange(CuboidEdges(hidden: false));
                 list.AddRange(CuboidEdges(hidden: true));
+                break;
+
+            // ---- 棱柱：看得见的棱 ＋ 被挡住的（细虚线）——实虚由通用判据分（见 PrismEdges）----
+            case StrokeKind.Prism:
+                if (Points.Count < 2) break;
+                list.AddRange(PrismEdges(hidden: false));
+                list.AddRange(PrismEdges(hidden: true));
                 break;
 
             // ---- 四面体：六条棱，全实线 ----
@@ -1445,6 +1471,7 @@ internal sealed class Stroke
         StrokeKind.Hyperbola => 3,       // 中心 ＋ 渐近线角点 ＋ 曲线经过的点
         StrokeKind.Cuboid => 3,          // 正面矩形两角 ＋ 背面右下角（深度）
         StrokeKind.Tetrahedron => 4,     // 底面三点 ＋ 顶点
+        StrokeKind.Prism => 3,           // 底面外接框两角 ＋ 顶面中心（侧棱向量）
         _ => 2,
     };
 
@@ -2389,6 +2416,19 @@ internal sealed class Stroke
             return;
         }
 
+        // **棱柱**：底面顶点是"内接于外接框"算出来的，本来就落在外接框里面，
+        // 所以"底面框 ∪ 底面框+侧棱"就是它的完整范围（斜棱柱也覆盖得住）。
+        if (Kind == StrokeKind.Prism && Points.Count >= 2)
+        {
+            var (x0, y0, x1, y1) = PrismBaseBoxLocal();
+            var lat = PrismLateralLocal();
+            Bounds.Add(x0, y0);
+            Bounds.Add(x1, y1);
+            Bounds.Add(x0 + lat.X, y0 + lat.Y);
+            Bounds.Add(x1 + lat.X, y1 + lat.Y);
+            return;
+        }
+
         foreach (var p in Points) Bounds.Add(p.X, p.Y);
     }
 
@@ -2550,6 +2590,7 @@ internal sealed class Stroke
                 or StrokeKind.Coordinate or StrokeKind.NumberLine
                 or StrokeKind.Cylinder or StrokeKind.Cone
                 or StrokeKind.Cuboid or StrokeKind.Tetrahedron
+                or StrokeKind.Prism
            || IsCurveKind(kind);
 
     /// <summary>圆的**圆心** / 椭圆的**中心**（局部坐标，= 第一个控制点）。</summary>
@@ -3224,10 +3265,31 @@ internal sealed class Stroke
 
             case StrokeKind.Cuboid:
             case StrokeKind.Tetrahedron:
+            case StrokeKind.Prism:
             {
                 // 立体多面体：轮廓 = 它的各条棱（**分段**列，不许连出假线——
                 // 拿"外接矩形"当轮廓会让橡皮擦到空白处就把整个立体删掉）。
                 if (Points.Count < 3) break;
+                if (Kind == StrokeKind.Prism)
+                {
+                    // 棱柱：底面一圈 ＋ 顶面一圈 ＋ n 条侧棱，**每段之间抬笔**。
+                    // 和长方体那支同一个口径：轮廓只要求"覆盖到画出来的每一笔"，
+                    // 不分实 / 虚（实虚是渲染与熔墨的事，见 PrismEdges）。
+                    var bp = PrismBaseLocal();
+                    var lat = PrismLateralLocal();
+                    int np = bp.Length;
+                    for (int k = 0; k <= np; k++) list.Add(bp[k % np]);   // 底面闭合一圈
+                    list.Add(OutlineBreak);
+                    for (int k = 0; k <= np; k++) list.Add(bp[k % np] + lat);  // 顶面闭合一圈
+                    for (int k = 0; k < np; k++)
+                    {
+                        list.Add(OutlineBreak);
+                        list.Add(bp[k]);
+                        list.Add(bp[k] + lat);
+                    }
+                    list.Add(OutlineBreak);
+                    break;
+                }
                 if (Kind == StrokeKind.Cuboid)
                 {
                     var (x0, y0, x1, y1) = CuboidFrontLocal();
@@ -3339,6 +3401,12 @@ internal sealed class Stroke
             _builtRevision2 = Revision;
             return Geometry2;
         }
+        if (Kind == StrokeKind.Prism)
+        {
+            Geometry2 = BuildPrism(factory, hidden: true);
+            _builtRevision2 = Revision;
+            return Geometry2;
+        }
 
         if (Kind != StrokeKind.Hyperbola || !ShowAsymptotes)
         {
@@ -3389,6 +3457,7 @@ internal sealed class Stroke
             StrokeKind.Cone => BuildSolid(factory),
             StrokeKind.Cuboid => BuildCuboid(factory, hidden: false),
             StrokeKind.Tetrahedron => BuildTetra(factory),
+            StrokeKind.Prism => BuildPrism(factory, hidden: false),
             StrokeKind.Image => BuildImageRect(factory),
             // 自由笔迹：只给**中心线**，描边（宽度、端帽、拐角）交给 D2D。
             // 单点例外——那是一个圆点，几何直接建成圆（渲染那边会填充它）。
@@ -3788,6 +3857,198 @@ internal sealed class Stroke
     /// <summary>顶点（局部坐标）：第 2 笔拖到的地方；还没拖过时退化成底面那个顶。</summary>
     public Vector2 TetraApexLocal()
         => Points.Count >= 4 ? CurvePointLocal(3) : CurvePointLocal(2);
+
+    // ---- 棱柱（两笔：底面正 n 边形 → 顶面中心）---------------------------
+    //
+    // 用户 2026-09-20 提出，见 计划-图形工具.md §32。三个"为什么这么定"：
+    //   · **立着画**（底面水平俯视压扁 ＋ 侧棱竖直）：课本上正三/五/六棱柱都是这个样子。
+    //     长方体是另一个朝向（正面矩形 ＋ 纵深 45°），两者**并存**、各有各的用处。
+    //   · **几边形是可选的档位**（3~6），和直线的线型同构：画之前在图形面板那一格选，
+    //     画的那一刻写进对象（见 Stroke.PrismSides）。
+    //   · **第 2 笔拖到哪就是哪**（照四面体的顶点）：所以"往上拖 = 直棱柱、
+    //     拖歪 = 斜棱柱"是**同一个动作的自然结果**，不需要再分两个工具。
+
+    /// <summary>
+    /// **底面几边形**（3~6）。和 <see cref="CurveAxis"/>（抛物线朝向）同一个地位：
+    /// **画之前选好**，画的那一刻写进对象，之后它就是这条对象自己的属性——
+    /// 面板再换档也不会回头改已经画好的（见 Engine.CyclePrismSides）。
+    ///
+    /// 存成一个**可读的整数**而不是四个枚举值：3/4/5/6 本来就是这条对象唯一想知道的事，
+    /// 拆成 `Prism3/Prism4/...` 反而要在四处做映射。
+    /// </summary>
+    public int PrismSides = 4;
+
+    /// <summary>档位的上下限（<see cref="PrismSides"/> 读出来先夹一道，坏值也不至于画出怪东西）。</summary>
+    public const int MinPrismSides = 3;
+    public const int MaxPrismSides = 6;
+
+    /// <summary>不开棱柱工具时（别的图形 / 反序列化兜底）用的默认档：**四棱柱**。</summary>
+    public const int DefaultPrismSides = 4;
+
+    /// <summary>这一档的边数（夹过上下限的）。**所有几何都读它**，不要直接读字段。</summary>
+    public int PrismSidesClamped => Math.Clamp(PrismSides, MinPrismSides, MaxPrismSides);
+
+    /// <summary>底面外接框（局部坐标，已归一成 左上 / 右下）——`Points[0]` 与 `Points[1]`。</summary>
+    public (float X0, float Y0, float X1, float Y1) PrismBaseBoxLocal()
+    {
+        var a = CurvePointLocal(0);
+        var b = Points.Count >= 2 ? CurvePointLocal(1) : a;
+        return (MathF.Min(a.X, b.X), MathF.Min(a.Y, b.Y),
+                MathF.Max(a.X, b.X), MathF.Max(a.Y, b.Y));
+    }
+
+    /// <summary>底面中心（局部坐标）= 外接框的中心。也是**侧棱向量的起点**。</summary>
+    public Vector2 PrismBaseCenterLocal()
+    {
+        var (x0, y0, x1, y1) = PrismBaseBoxLocal();
+        return new Vector2((x0 + x1) * 0.5f, (y0 + y1) * 0.5f);
+    }
+
+    /// <summary>
+    /// 顶面中心（局部坐标）= **第 2 笔拖到的地方**；还没拖过时退化成底心
+    ///（这时侧棱向量是零，画出来是一条扁的底边，不会崩）。
+    /// </summary>
+    public Vector2 PrismApexLocal()
+        => Points.Count >= 3 ? CurvePointLocal(2) : PrismBaseCenterLocal();
+
+    /// <summary>
+    /// **侧棱向量**（顶心 − 底心）。零向量 = 还没拖第二笔。
+    /// 它就是"这一步拖出来的方向"：竖直 = 直棱柱，歪 = 斜棱柱。
+    /// </summary>
+    public Vector2 PrismLateralLocal() => PrismApexLocal() - PrismBaseCenterLocal();
+
+    /// <summary>
+    /// 底面的 `n` 个顶点（局部坐标）：**内接于外接框那个椭圆**（按参数角均匀取）。
+    ///
+    /// 起始角由**奇偶**定，就一条规矩：**不能让某条边落在"与视线平行"的位置**
+    ///（那条边会成为 edge-on，四棱柱会塌成一块平板；2026-09-20 出图当场抓到）：
+    ///   · **偶数边** → 顶点落在水平轴上（左右两个**尖点**）：六棱柱就是课本那个样子，
+    ///     四棱柱则是"菱形底面"（＝立着的正方形），四个侧面都看得见；
+    ///   · **奇数边** → **正前方正好是一条边**：三棱柱因此是"一条边在前、顶点朝后"
+    ///     （课本那个帐篷形），五棱柱同理。
+    ///
+    /// 顶点在参数意义下是**正** n 边形，所以"正三棱柱 / 正六棱柱"是白拿的。
+    /// </summary>
+    public Vector2[] PrismBaseLocal()
+    {
+        var (x0, y0, x1, y1) = PrismBaseBoxLocal();
+        float rx = MathF.Max(0.5f, (x1 - x0) * 0.5f);
+        float ry = MathF.Max(0.5f, (y1 - y0) * 0.5f);
+        var c = PrismBaseCenterLocal();
+        int n = PrismSidesClamped;
+        int offsetDeg = ShapeSpec.PrismBaseOffsetDegrees(n);
+        var pts = new Vector2[n];
+        for (int k = 0; k < n; k++)
+        {
+            // 屏幕 y 向下，所以参数角 90° 落在**下方**（= "正前方"）。
+            float a = (offsetDeg * MathF.PI / 180f) + k * MathF.Tau / n;
+            pts[k] = new Vector2(c.X + rx * MathF.Cos(a), c.Y + ry * MathF.Sin(a));
+        }
+        return pts;
+    }
+
+    /// <summary>**第 1 笔**：底面外接框（归一成 左上 / 右下，和长方体那一笔同一套）。</summary>
+    public void SetPrismBase(float x0, float y0, float x1, float y1)
+    {
+        while (Points.Count < 2) AddPoint(x0, y0, 1f, 0);
+        SetPoint(0, new Vector2(MathF.Min(x0, x1), MathF.Min(y0, y1)));
+        SetPoint(1, new Vector2(MathF.Max(x0, x1), MathF.Max(y0, y1)));
+    }
+
+    /// <summary>
+    /// **第 2 笔**：顶面中心（拖到哪就是哪）。侧棱向量由它和底心相减得到。
+    /// 和长方体的第 2 笔**不同**：那边只吃竖直分量、方向恒定 45°；这边**方向也吃**，
+    /// 因为"直还是斜"就是由它定的（用户要的就是这个）。
+    /// </summary>
+    public void SetPrismApex(float x, float y)
+    {
+        while (Points.Count < 3) AddPoint(x, y, 1f, 0);
+        SetPoint(2, new Vector2(x, y));
+    }
+
+    /// <summary>
+    /// 把"顶面中心"**吸到竖直**（直棱柱）——只改 x，y 一个字不动。
+    /// 由引擎在拖第二笔时先探一次（见 Engine 的 `ApplyStep`），
+    /// 所以落进模型的就已经是吸过的位置了（和"拖顶点吸附"同一个口径：吸完才写模型）。
+    /// </summary>
+    public void SnapPrismApexVertical()
+    {
+        if (Points.Count < 3) return;
+        var p = CurvePointLocal(2);
+        SetPoint(2, new Vector2(PrismBaseCenterLocal().X, p.Y));
+    }
+
+    /// <summary>
+    /// **棱柱的棱**（`hidden = false` 给看得见的、`true` 给被挡住的）。
+    ///
+    /// 实 / 虚的判据**只有一条、而且是通用的**（计划-图形工具.md §32.4）——
+    /// 因为底面是"俯视压扁"画的，**"远近"就等于屏幕上的上下**：
+    ///   · **底面某条边**：中点在底心**下方** → 近侧、看得见；否则被挡住（虚线）；
+    ///   · **某条侧棱**：它相邻的两个侧面**只要有一个看得见** → 这条棱看得见；
+    ///   · **顶面**：全部看得见（俯视角度下顶面恒可见）。
+    ///
+    /// 这条判据对**斜棱柱**同样成立：侧面的朝向只由底面那条边定，和棱歪不歪无关。
+    /// 长方体现在还是硬编码三条虚线（它是另一个朝向的画法，见 CuboidEdges），**两边不共用**——
+    /// 硬编码那三条是照 InkClass 抄的，换成通用判据会改变长方体的既有外观（那是不许动的）。
+    ///
+    /// 渲染与熔墨共用这一份（见 <see cref="InkPieces"/>）。自检也数它（`--prismtest` 数
+    /// "几条实线几条虚线"），所以是 internal 而不是 private。
+    /// </summary>
+    internal List<InkPiece> PrismEdges(bool hidden)
+    {
+        var list = new List<InkPiece>();
+        if (Points.Count < 2) return list;
+
+        var b = PrismBaseLocal();
+        var lat = PrismLateralLocal();
+        var c = PrismBaseCenterLocal();
+        int n = b.Length;
+
+        // **还没拖第二笔**（侧棱还是零）：只画底面那一圈、全实线——
+        // 这是第 1 笔的预览（拖出来是个扁的正 n 边形，正好告诉用户"底面画好了"）。
+        // 不给它走下面那套判据：那时"顶面"和"底面"重合，虚实分出来的线会叠在一起。
+        if (lat.LengthSquared() < 1e-6f)
+        {
+            if (!hidden)
+            {
+                var ring = new List<Vector2>(n + 1);
+                for (int k = 0; k <= n; k++) ring.Add(b[k % n]);
+                list.Add(new InkPiece(ring, false));
+            }
+            return list;
+        }
+
+        var top = new Vector2[n];
+        for (int k = 0; k < n; k++) top[k] = b[k] + lat;
+
+        // 侧面 k（= 底边 k）看得见吗：它的中点在底心下方就是近侧那一面。
+        var faceVisible = new bool[n];
+        for (int k = 0; k < n; k++)
+            faceVisible[k] = (b[k].Y + b[(k + 1) % n].Y) * 0.5f > c.Y;
+
+        void Add(Vector2 p, Vector2 q, bool hid)
+        {
+            if (hid != hidden) return;      // 这一趟只要这一类
+            list.Add(new InkPiece(new List<Vector2> { p, q }, hid));
+        }
+
+        for (int k = 0; k < n; k++)
+        {
+            int nx = (k + 1) % n;
+            Add(b[k], b[nx], !faceVisible[k]);                  // 底面的边
+            Add(top[k], top[nx], false);                        // 顶面的边：恒实线
+            // 侧棱 k：相邻的两个侧面（k−1 与 k）有一个看得见，这条棱就在轮廓上
+            Add(b[k], top[k], !(faceVisible[k] || faceVisible[(k + n - 1) % n]));
+        }
+        return list;
+    }
+
+    private ID2D1PathGeometry BuildPrism(ID2D1Factory1 factory, bool hidden)
+    {
+        if (Points.Count < 2) return hidden ? null : BuildLine(factory);
+        var pieces = PrismEdges(hidden);
+        return pieces.Count == 0 ? null : FromPieces(factory, pieces);
+    }
 
     /// <summary>椭圆上 `u` 处的点（`u ∈ [0,1)`：0 = 右、0.25 = 下、0.5 = 左、0.75 = 上；屏幕 y 向下）。</summary>
     private static Vector2 EllipseArcPoint(Vector2 c, float rx, float ry, float u)

@@ -182,6 +182,18 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             CurveTest();
         }
+        else if (mode == "--prismtest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PrismTest();
+        }
+        else if (mode == "--prismshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PrismShowcase(args.Length > 1 ? args[1] : "reports/棱柱.bmp");
+        }
         else if (mode == "--axisshow")
         {
             _autoExitAt = double.MaxValue;
@@ -11875,6 +11887,11 @@ internal sealed class App : InkEngine.InkEngine
             (Tool.Cylinder, "圆柱"), (Tool.Cone, "圆锥"),
             // 这两个是**两笔**（正/底面 → 深度 / 顶点），走多笔状态机（见 Engine.StepPlan）。
             (Tool.Cuboid, "长方体"), (Tool.Tetrahedron, "四面体"),
+            // 2026-09-20 第十一批：**棱柱**（3/4/5/6 棱柱 ＋ 直/斜）。同样是两笔，
+            // 而且那一格"再点一次换一档"（和直线的线型同构，见 §32）。
+            // 第二行因此从 8 段长到 9 段——两行现在**不一样宽**（8 段 vs 9 段），
+            // 段宽是"可用宽度 ÷ 本行段数"算的，所以每段比第一行窄一点，但都还 ≥ 60。
+            (Tool.Prism, "棱柱"),
         };
         // 第一行几段（第二行的起点 = 它）——两条断言要用它。
         const int firstRow = 8;
@@ -11927,12 +11944,12 @@ internal sealed class App : InkEngine.InkEngine
         Check("点球能展开（不然面板上的格子一个都点不到）",
               ui.ExpandedForTest, $"展开 = {ui.ExpandedForTest}");
 
-        // ================= A. 十六段都点得到 =================
-        Console.WriteLine("  -- A. 上带图形格（两行十六段）：逐段点一遍，工具真的切了 --");
+        // ================= A. 十七段都点得到 =================
+        Console.WriteLine("  -- A. 上带图形格（两行十七段）：逐段点一遍，工具真的切了 --");
         GotoShapeBand();
 
         int n = ui.BandSegmentCountForTest;
-        Check("图形那格的上带是十六段（第一行 8 ＋ 第二行 8）",
+        Check("图形那格的上带是十七段（第一行 8 ＋ 第二行 9）",
               n == want.Length, $"段数 {n}（期望 {want.Length}）");
 
         // 段宽和越界：段宽 = 可用宽 ÷ **本行**段数，所以两行各有各的宽度
@@ -11951,7 +11968,7 @@ internal sealed class App : InkEngine.InkEngine
             if (i < firstRow) { row0Top = MathF.Min(row0Top, r.MinY); row0Bottom = MathF.Max(row0Bottom, r.MaxY); }
             else { row1Top = MathF.Min(row1Top, r.MinY); row1Bottom = MathF.Max(row1Bottom, r.MaxY); }
         }
-        Check("十六段都画得下（每段 ≥ 60 宽、最右一段不越出上带）",
+        Check("十七段都画得下（每段 ≥ 60 宽、最右一段不越出上带）",
               n == want.Length && minW >= 60f && maxRight <= bandRect.MaxX + 0.5f,
               $"最窄 {minW:F0} 逻辑像素，上带宽 {bandRect.MaxX - bandRect.MinX:F0}");
         // 两行**不许叠在一起**，而且都要落在带子里——带子为了第二行长得更高了
@@ -14343,6 +14360,301 @@ internal sealed class App : InkEngine.InkEngine
     ///   ⑤ **双曲线两支之间没有"幽灵线段"**（折线那份的抬笔约定，见 ShapeOutline）；
     ///   ⑥ **存档往返** ＋ **真 v10 老文件**读得进来（朝向位缺一位就是整体错位）。
     /// </summary>
+    // =====================================================================
+    //  棱柱自检（2026-09-20 第十一批，用户提的，见 计划-图形工具.md §32）
+    // =====================================================================
+
+    /// <summary>
+    /// **棱柱自检**：3/4/5/6 棱柱 ＋ 直/斜 ＋ 档位 ＋ "长方体没被碰"。用法：`--prismtest`
+    ///
+    /// 验五件事：
+    ///   ① **底面是正 n 边形**：顶点数 = n，而且**参数角均匀**——不是"边长相等"：
+    ///      底面是"俯视压扁"画的，边长方差被压过，只有参数角才是那个不变量；
+    ///   ② **三族边各 n 条**（顶面 / 底面 / 侧棱 = 3n），其中侧棱那 n 条的向量
+    ///      就是"侧棱向量"（逐条对得上）；
+    ///   ③ **隐藏棱条数** = §32.4 那条通用判据算出来的定值（见下面的小表）；
+    ///   ④ **真机直 / 斜**：往上拖偏一点点 → 吸住（胶囊「直棱柱」）且侧棱严格竖直；
+    ///      拖歪 → 不吸、方向就是那一拖的方向；
+    ///   ⑤ **档位**：3→4→5→6→3、四张图标两两不同；**长方体一个字没动**。
+    /// </summary>
+    private void PrismTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 棱柱自检（3/4/5/6 棱柱 ＋ 直/斜）===");
+        Console.WriteLine($"  本机 DPI 缩放 {DpiScale:F2}");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-46} {detail}");
+        }
+        bool Near(float a, float b, float tol) => MathF.Abs(a - b) <= tol;
+
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        var ink = new Color4(1f, 0f, 1f, 1f);
+        Host.Commands.SetColor(ink);
+        // 界面那一层（问"这一段现在画的是哪张图标"要用它）——和 `--shapebandtest` 同一套起手：
+        // 挂产品界面、等它铺开。**不挂的话 `CurrentUi` 不是 FullUi**，下面会 NRE。
+        PassMode = PassThroughMode.LayeredTransparent;
+        PassThrough = false;
+        foreach (var w in _windows) ApplyPassThroughStyle(w);
+        SetUiFactory(() => new InkUi.FullUi());
+        SettleFrames(300);
+        var ui = CurrentUi as InkUi.FullUi;
+        if (ui == null)
+        {
+            Console.WriteLine($"  界面没挂上：当前 = {CurrentUi.Name}");
+            ExitCode = 1;
+            _quit = true;
+            return;
+        }
+
+        // **被挡住的棱有几条**：§32.4 那条通用判据（底边中点在底心下方 = 近侧）手算的结果。
+        // 起始角见 `ShapeSpec.PrismBaseOffsetDegrees`（偶数边左右尖点、奇数边一条边在前）——
+        // 这个表跟着那个起始角走：改起始角，四个数都要重算。
+        int HiddenWant(int nsides) => nsides switch { 3 => 3, 4 => 3, 5 => 3, 6 => 5, _ => -1 };
+
+        // 把引擎那一档拧到指定值（走的就是面板上"再点一次"那个命令）。
+        void SetPrismSides(int want)
+        {
+            for (int k = 0; k < 8 && Host.State.PrismSides != want; k++) Host.Commands.CyclePrismSides();
+            SettleFrames(60);
+        }
+
+        Stroke NewPrism(int sides, float x, float y)
+        {
+            var s = new Stroke
+            {
+                Tool = Tool.Prism, Kind = StrokeKind.Prism, Color = ink, Width = 4f * DpiScale,
+                PrismSides = sides,
+            };
+            s.AddPoint(x, y, 1f, 0);
+            return s;
+        }
+
+        // ================= ①②③ 数学层：四个 n 各造一个 =================
+        Console.WriteLine("  -- 数学层：底面 / 三族边 / 隐藏棱 --");
+        foreach (int sides in new[] { 3, 4, 5, 6 })
+        {
+            var s = NewPrism(sides, 400f, 300f);
+            s.SetPrismBase(400f, 300f, 700f, 420f);      // 外接框 300×120
+            s.SetPrismApex(550f, 120f);                  // 顶心：往上拖 180
+
+            var b = s.PrismBaseLocal();
+            var lat = s.PrismLateralLocal();
+            Check($"底面顶点数 = {sides}", b.Length == sides, $"{b.Length} 个");
+
+            // 参数角均匀：把顶点反变换回单位圆，相邻夹角差该是 360/n。
+            var c = s.PrismBaseCenterLocal();
+            const float rx = 150f, ry = 60f;
+            float maxDev = 0f;
+            for (int k = 0; k < sides; k++)
+            {
+                var a = b[k];
+                var nx = b[(k + 1) % sides];
+                float ang0 = MathF.Atan2((a.Y - c.Y) / ry, (a.X - c.X) / rx);
+                float ang1 = MathF.Atan2((nx.Y - c.Y) / ry, (nx.X - c.X) / rx);
+                float d = ang1 - ang0;
+                while (d <= 0f) d += MathF.Tau;
+                maxDev = MathF.Max(maxDev, MathF.Abs(d - MathF.Tau / sides));
+            }
+            Check($"{sides} 棱柱·底面是**正** {sides} 边形（参数角均匀，±0.5°）",
+                  maxDev <= .5f * MathF.PI / 180f, $"最大偏差 {maxDev * 180f / MathF.PI:F4}°");
+
+            // 三族边各 n 条；侧棱那 n 条的两端点之差 = 侧棱向量。
+            // （`InkPiece` 是 Stroke 的**嵌套内部类型**，这里用 `var` 免得写全名。）
+            var vis = s.PrismEdges(hidden: false);
+            var hid = s.PrismEdges(hidden: true);
+            int latCount = 0;
+            foreach (var pc in vis)
+                if (pc.Pts.Count == 2 && Vector2.Distance(pc.Pts[0] + lat, pc.Pts[1]) < 0.01f) latCount++;
+            foreach (var pc in hid)
+                if (pc.Pts.Count == 2 && Vector2.Distance(pc.Pts[0] + lat, pc.Pts[1]) < 0.01f) latCount++;
+            Check($"{sides} 棱柱·三族边各 {sides} 条（顶面 ＋ 底面 ＋ 侧棱 = {3 * sides}）",
+                  vis.Count + hid.Count == 3 * sides && latCount == sides,
+                  $"共 {vis.Count + hid.Count} 条（实 {vis.Count} / 虚 {hid.Count}），侧棱 {latCount} 条");
+
+            Check($"{sides} 棱柱·被挡住 {HiddenWant(sides)} 条（§32.4 判据的定值）",
+                  hid.Count == HiddenWant(sides), $"{hid.Count} 条（期望 {HiddenWant(sides)}）");
+        }
+
+        // ================= ④ 真机：第 2 笔的直 / 斜 =================
+        Console.WriteLine("  -- 真机：第 2 笔往上拖 = 直棱柱（吸附）／拖歪 = 斜棱柱 --");
+
+        // 第 1 笔（两处都要用）：拖一个底面外接框。
+        void DragBase(float bx, float by)
+        {
+            SendMouse((int)bx, (int)by, 0);                                          SettleFrames(50);
+            SendMouse((int)bx, (int)by, Native.MOUSEEVENTF_LEFTDOWN);                 SettleFrames(50);
+            SendMouse((int)(bx + 300f), (int)(by + 120f), 0);                         SettleFrames(80);
+            SendMouse((int)(bx + 300f), (int)(by + 120f), Native.MOUSEEVENTF_LEFTUP); SettleFrames(180);
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        SetPrismSides(4);
+        SetToolFromUi(Tool.Prism);
+        float bx0 = _virtualX + 900f, by0 = _virtualY + 900f;
+        DragBase(bx0, by0);
+        Check("真机：第 1 笔松手后**还没提交**（两笔图形，半成品不进文档）",
+              Doc.Strokes.Count == 0 && ActiveStroke != null,
+              $"文档 {Doc.Strokes.Count} 条");
+        Check("真机：第 1 笔的预览就是底面那一圈（侧棱还没拖，几何是扁的）",
+              ActiveStroke != null && ActiveStroke.PrismLateralLocal().LengthSquared() < 1e-6f,
+              $"侧棱 {ActiveStroke?.PrismLateralLocal()}");
+
+        // 第 2 笔：**故意偏 8 像素**（容差 12）→ 该吸住
+        float ax = bx0 + 150f + 8f, ay = by0 + 60f - 180f;
+        SendMouse((int)ax, (int)ay, 0);                                    SettleFrames(50);
+        SendMouse((int)ax, (int)ay, Native.MOUSEEVENTF_LEFTDOWN);           SettleFrames(50);
+        SendMouse((int)ax, (int)ay, 0);                                    SettleFrames(180);
+        Check("真机·直棱柱：第 2 笔偏 8 像素 → **吸住**", StepSnap == ShapeSnapKind.RightPrism,
+              $"StepSnap = {StepSnap}（期望 RightPrism）");
+        Check("真机·直棱柱：那颗胶囊写的是「直棱柱」（和「等边/正方形」同一套语言）",
+              SelectionHandles.ShapeSnapLabel(StepSnap) == "直棱柱",
+              $"「{SelectionHandles.ShapeSnapLabel(StepSnap)}」");
+        Check("真机·直棱柱：吸住那一刻侧棱**已经竖直**（吸附写在模型上，不只是显示）",
+              ActiveStroke != null && MathF.Abs(ActiveStroke.PrismLateralLocal().X) < 0.5f,
+              $"侧棱 {ActiveStroke?.PrismLateralLocal()}");
+        SendMouse((int)ax, (int)ay, Native.MOUSEEVENTF_LEFTUP);             SettleFrames(240);
+        Check("真机·直棱柱：松手后胶囊收回去", StepSnap == ShapeSnapKind.None,
+              $"StepSnap = {StepSnap}");
+        Check("真机·直棱柱：提交之后**侧棱严格竖直**（横向差 < 0.5）",
+              Doc.Strokes.Count == 1 && MathF.Abs(Doc.Strokes[0].PrismLateralLocal().X) < 0.5f,
+              $"侧棱 {(Doc.Strokes.Count == 1 ? Doc.Strokes[0].PrismLateralLocal().ToString() : "（没提交）")}");
+        Check("真机·直棱柱：底面边数 = 当前那一档（4）",
+              Doc.Strokes.Count == 1 && Doc.Strokes[0].PrismSidesClamped == 4,
+              $"{(Doc.Strokes.Count == 1 ? Doc.Strokes[0].PrismSidesClamped : 0)} 边形");
+
+        // 拖歪 → 不吸，方向就是那一拖的方向
+        Doc.Clear();
+        Doc.ClearHistory();
+        SetToolFromUi(Tool.Prism);
+        DragBase(bx0, by0);
+        float sx = bx0 + 150f + 220f, sy = by0 + 60f - 140f;      // 明显偏右 → 斜棱柱
+        SendMouse((int)sx, (int)sy, 0);                                    SettleFrames(50);
+        SendMouse((int)sx, (int)sy, Native.MOUSEEVENTF_LEFTDOWN);           SettleFrames(50);
+        SendMouse((int)sx, (int)sy, 0);                                    SettleFrames(160);
+        Check("真机·斜棱柱：拖歪 → **不吸**（没有胶囊）", StepSnap == ShapeSnapKind.None,
+              $"StepSnap = {StepSnap}");
+        SendMouse((int)sx, (int)sy, Native.MOUSEEVENTF_LEFTUP);             SettleFrames(240);
+        var slat = Doc.Strokes.Count == 1 ? Doc.Strokes[0].PrismLateralLocal() : Vector2.Zero;
+        Check("真机·斜棱柱：侧棱方向 = 那一拖的方向（横向差 ≈ 220−8，不被动过）",
+              Doc.Strokes.Count == 1 && Near(slat.X, 220f, 2f) && Near(slat.Y, -140f, 2f),
+              $"侧棱 {slat}（期望 ≈ (220, −140)）");
+
+        // ================= ⑤ 档位 ＋ 长方体没被碰 =================
+        Console.WriteLine("  -- 档位：点那一格再点一次 3→4→5→6→3 --");
+        SetPrismSides(3);
+        var iconNames = new List<string>();
+        for (int k = 0; k < 4; k++)
+        {
+            iconNames.Add(ui.ShapeIconNameForTest(16));     // 棱柱是第 17 段（第二行最后一段）
+            Host.Commands.CyclePrismSides();
+            SettleFrames(60);
+        }
+        Check("档位：一轮四档，回到三棱柱（3→4→5→6→3）",
+              Host.State.PrismSides == 3, $"现在是 {Host.State.PrismSides}");
+        Check("档位：四张图标两两不同，而且都是 prism 那四张",
+              iconNames.Distinct().Count() == 4 && iconNames.All(nm => nm.StartsWith("prism")),
+              string.Join(" / ", iconNames));
+        Check("档位：范围**随状态推上界面**（3 / 6）——界面靠它决定画几个档位点",
+              Host.State.PrismMinSides == 3 && Host.State.PrismMaxSides == 6,
+              $"{Host.State.PrismMinSides} ~ {Host.State.PrismMaxSides}");
+
+        SetToolFromUi(Tool.Prism);
+        Doc.Clear();
+        Doc.ClearHistory();
+        DragBase(bx0, by0);
+        SendMouse((int)(bx0 + 150f), (int)(by0 + 60f - 200f), 0);             SettleFrames(50);
+        SendMouse((int)(bx0 + 150f), (int)(by0 + 60f - 200f), Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(50);
+        SendMouse((int)(bx0 + 150f), (int)(by0 + 60f - 200f), Native.MOUSEEVENTF_LEFTUP);   SettleFrames(240);
+        Check("档位：三棱柱真的画得出来（底面 3 个顶点、侧棱 3 条）",
+              Doc.Strokes.Count == 1 && Doc.Strokes[0].PrismBaseLocal().Length == 3
+              && Doc.Strokes[0].PrismEdges(hidden: false).Count
+                 + Doc.Strokes[0].PrismEdges(hidden: true).Count == 9,
+              Doc.Strokes.Count == 1
+                ? $"底面 {Doc.Strokes[0].PrismBaseLocal().Length} 个顶点、"
+                  + $"棱 {Doc.Strokes[0].PrismEdges(false).Count + Doc.Strokes[0].PrismEdges(true).Count} 条"
+                : "（没画出来）");
+
+        // 长方体：一个数都不许变（它是另一族，见 §32.2 第 2 条）。
+        var cu = new Stroke { Tool = Tool.Cuboid, Kind = StrokeKind.Cuboid, Color = ink, Width = 4f * DpiScale };
+        cu.AddPoint(200f, 500f, 1f, 0);
+        cu.SetCuboidFront(200f, 500f, 600f, 900f);
+        cu.SetCuboidDepth(500f, 650f);
+        Check("长方体不受影响：深度 150、第三个控制点还是背面右下角 (750, 750)",
+              Near(cu.CuboidDepthLocal(), 150f, .5f)
+              && Near(cu.CurvePointLocal(2).X, 750f, .5f) && Near(cu.CurvePointLocal(2).Y, 750f, .5f),
+              $"深度 {cu.CuboidDepthLocal():F1}，第 3 点 "
+              + $"({cu.CurvePointLocal(2).X:F0},{cu.CurvePointLocal(2).Y:F0})");
+        Check("长方体不受影响：它给的还是**通用八手柄**那一套（棱柱没有碰它）",
+              !SelectionHandles.HasShapeHandles(cu)
+              && SelectionHandles.HasShapeHandles(NewPrism(4, 0f, 0f)) == false,
+              "长方体 / 棱柱 都没有定义元素手柄（走通用框）");
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        SettleFrames(120);
+
+        Console.WriteLine();
+        Console.WriteLine($"  合计 {pass + fail} 项：通过 {pass}，失败 {fail}");
+        _quit = true;
+    }
+
+    // =====================================================================
+    //  棱柱出图（2026-09-20 第十一批）：`--prismshow <路径>`
+    // =====================================================================
+
+    /// <summary>
+    /// 出图：**三/四/五/六棱柱**各一个（都是直棱柱）＋ 一行"**直 vs 斜**"的四棱柱。
+    ///
+    /// 为什么必须出图：棱柱"立着画得对不对、虚线配得对不对"**只能看**——
+    /// 几何全对（顶点数、边长、侧棱向量）也一样可能看着别扭。
+    /// 尤其两点：① 四棱柱那条（底面是扁的正方形，左右两条边与视线平行，
+    /// 按 §32.4 的判据算出来**底面只有正前方一条实线**）；② 五/六两张的底面看得出分别吗。
+    /// </summary>
+    private void PrismShowcase(string path)
+    {
+        BoardOn = true;                       // 白底：虚线压在桌面上看不清
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Marquee;
+        var ink = new Color4(0.11f, 0.12f, 0.15f, 1f);
+
+        void Put(int sides, float bx, float by, float dx, float dy)
+        {
+            var s = new Stroke
+            {
+                Tool = Tool.Prism, Kind = StrokeKind.Prism, Color = ink,
+                Width = 6f * DpiScale, PrismSides = sides,
+            };
+            s.AddPoint(bx, by, 1f, 0);
+            s.SetPrismBase(bx, by, bx + 340f, by + 140f);        // 底面外接框 340×140（压扁比 ≈ 0.41）
+            s.SetPrismApex(bx + 170f + dx, by + 70f + dy);       // 顶心（dx/dy 决定直还是斜）
+            Doc.AddStroke(s);
+        }
+
+        // 第一行：三/四/五/六棱柱，**都是直的**（顶心正对底心上方 240）
+        Put(3, _virtualX + 200f, _virtualY + 520f, 0f, -240f);
+        Put(4, _virtualX + 820f, _virtualY + 520f, 0f, -240f);
+        Put(5, _virtualX + 1440f, _virtualY + 520f, 0f, -240f);
+        Put(6, _virtualX + 2060f, _virtualY + 520f, 0f, -240f);
+        // 第二行：同一个四棱柱，**直 vs 斜**（右边那个顶心往右挪 220）
+        Put(4, _virtualX + 420f, _virtualY + 1280f, 0f, -240f);
+        Put(4, _virtualX + 1240f, _virtualY + 1280f, 220f, -200f);
+
+        Doc.InvalidateAll();
+        SettleFrames(800);
+
+        bool ok = ScreenProbe.SaveBmp(path, (int)_virtualX, (int)_virtualY, 2880, 1800);
+        Console.WriteLine(ok ? $"  已保存 {path}（上排：三/四/五/六棱柱，都是直的；下排：直 vs 斜）"
+                             : "  保存失败");
+        _quit = true;
+    }
+
     private void CurveTest()
     {
         Console.WriteLine();

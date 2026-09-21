@@ -133,6 +133,13 @@ internal enum ShapeSnapKind
     Rhombus,
     /// <summary>平行四边形：邻边垂直（矩形）。</summary>
     Rectangle,
+    /// <summary>
+    /// 棱柱：侧棱**竖直**（＝直棱柱）。用户 2026-09-20："直棱柱有一个轻微吸附"。
+    /// 和前几档不一样，它不发生在"拖顶点"上，而是**画棱柱第 2 笔**的时候
+    ///（见 Engine.ApplyStepGeometry），所以它由 `Engine.StepSnap` 报出来——
+    /// 但**走的是同一颗胶囊、同一套语言**（"吸到了什么"）。
+    /// </summary>
+    RightPrism,
 }
 
 /// <summary>
@@ -1004,6 +1011,7 @@ internal static class SelectionHandles
         ShapeSnapKind.Circle => "正圆",
         ShapeSnapKind.Rhombus => "菱形",
         ShapeSnapKind.Rectangle => "矩形",
+        ShapeSnapKind.RightPrism => "直棱柱",
         _ => "",
     };
 

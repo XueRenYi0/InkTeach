@@ -872,6 +872,9 @@ public sealed class FullUi : IOverlayUi
         // 第二行从 4 段长到 8 段（和第一行一样宽）——段宽是"可用宽度 ÷ 本行段数"算出来的，
         // 加段不用动布局。
         Tool.Cylinder, Tool.Cone, Tool.Cuboid, Tool.Tetrahedron,
+        // 2026-09-20 第十一批：棱柱（3/4/5/6 棱柱 ＋ 直/斜，用户提的，见 计划-图形工具.md §32）。
+        // 第二行因此从 8 段长到 9 段——段宽是"可用宽度 ÷ 本行段数"算出来的，加段不用动布局。
+        Tool.Prism,
     };
 
     /// <summary>图形那一格在上带里的下标（两行都在这一个格子里）。</summary>
@@ -1403,15 +1406,19 @@ public sealed class FullUi : IOverlayUi
                 if (i >= 0 && i < ShapeSegmentCount)
                 {
                     var picked = ShapeToolAt(i);
-                    // **同一个图形格再点一次 = 换一档**。只对两种图形这样，别的照旧"再点=选中它"：
+                    // **同一个图形格再点一次 = 换一档**。只对三种图形这样，别的照旧"再点=选中它"：
                     //   · 抛物线：换开口方向（用户 2026-09-20 定："选中框的抛物线按钮取消，
                     //     我不打算从这个转开口" → 朝向改到**画之前**定）；
                     //   · 直线：换线型（用户 2026-09-20 定："点击直线的图标，它会变成虚线，
-                    //     再点击变成点虚线，再点击又变成直线……这样就省了好几个空间格"）。
+                    //     再点击变成点虚线，再点击又变成直线……这样就省了好几个空间格"）；
+                    //   · 棱柱：换底面几边形（用户 2026-09-20 定："我想想能不能做成像直线切换
+                    //     那样切换三四五六"）。
                     if (picked == Tool.Parabola && _host.State.Tool == Tool.Parabola)
                         _host.Commands.CycleParabolaAxis();
                     else if (picked == Tool.Line && _host.State.Tool == Tool.Line)
                         _host.Commands.CycleLineDash();
+                    else if (picked == Tool.Prism && _host.State.Tool == Tool.Prism)
+                        _host.Commands.CyclePrismSides();
                     else
                         _host.Commands.SetTool(picked);
                 }
@@ -2728,20 +2735,36 @@ public sealed class FullUi : IOverlayUi
         }
 
         var segInk = active ? Tokens.AccentInk : InkCol;
-        // 「直线」那一段有**三档线型**（点它一下换一档，见 ActivateSegment 的 case 8）：
+        // **有档位的那两段**（点它一下换一档，见 ActivateSegment 的 case 8）：
+        //   · 「直线」= 3 档线型（实 / 虚 / 点）；
+        //   · 「棱柱」= 4 档边数（三 / 四 / 五 / 六）。
         // 图标照旧画当前那一档，**下面再加一排档位点**——大而浓的那个是当前档。
         // 用户 2026-09-20 定：只换图标的话，老师"不知道这一格还能点"（可选的状态是隐形的）。
-        // 代价是这一个图标要比别的段小一号（16 而不是 18）并上移，把那几像素让给点 ——
-        // 只影响这一格，别的段照旧 18。
-        if (ShapeToolAt(i) == Tool.Line)
+        // 代价是这两个图标要比别的段小一号（16 而不是 18）并上移，把那几像素让给点 ——
+        // 只影响这两格，别的段照旧 18。
+        //
+        // **档数与当前档都从这一处算**（不在绘制里再列一遍工具名）：
+        // 下面 `ShapeToolAt(i)` 判"这是哪一段"，这里判"它有几档、现在是第几档"。
+        // 棱柱那几档的**范围来自引擎**（`st.PrismMin/MaxSides`）——`Stroke` 是引擎内部类型，
+        // 界面看不到它，也不该在这里写死一份 3/6。
+        int pipCount = ShapeToolAt(i) switch
         {
+            Tool.Line => 3,
+            Tool.Prism => st.PrismMaxSides - st.PrismMinSides + 1,
+            _ => 0,
+        };
+        if (pipCount > 0)
+        {
+            int pipCur = ShapeToolAt(i) == Tool.Line
+                ? (int)st.LineDash
+                : Math.Clamp(st.PrismSides, st.PrismMinSides, st.PrismMaxSides) - st.PrismMinSides;
             float icx = (r.MinX + r.MaxX) * 0.5f, icy = (r.MinY + r.MaxY) * 0.5f;
             var iconBox = new RectF
             {
                 MinX = r.MinX, MinY = icy - 11.5f, MaxX = r.MaxX, MaxY = icy + 4.5f,
             };
             IconAtlas.DrawCentered(ctx, ShapeIcon(i), iconBox, 16f, Brush(ctx, segInk));
-            DrawPips(ctx, icx, icy + 8f, (int)st.LineDash, 3, segInk);
+            DrawPips(ctx, icx, icy + 8f, pipCur, pipCount, segInk);
             return;
         }
 
@@ -2791,6 +2814,7 @@ public sealed class FullUi : IOverlayUi
     {
         Tool.Parabola => ParabolaIconName(_host.State.ParabolaAxis),
         Tool.Line => LineIconName(_host.State.LineDash),
+        Tool.Prism => PrismIconName(_host.State.PrismSides),
         _ => ShapeIconFor(t),
     };
 
@@ -2830,6 +2854,21 @@ public sealed class FullUi : IOverlayUi
     };
 
     /// <summary>
+    /// 棱柱的图标名按**当前档**换（`prism3` ～ `prism6`，见 <see cref="IconAtlas.Draw"/>）。
+    ///
+    /// 和直线 / 抛物线同一条理由：那一格"再点一次换一档"，图标不跟着换就看不出来。
+    /// ⚠ **18 像素下"五棱柱"和"六棱柱"可能不太分得开**（底面多一条边），
+    /// 所以那一格下面还有 **4 个档位点**兜底（见 `DrawPips`）——数点比数边可靠。
+    /// </summary>
+    private static string PrismIconName(int sides) => sides switch
+    {
+        3 => "prism3",
+        5 => "prism5",
+        6 => "prism6",
+        _ => "prism4",                             // 四棱柱（也是兜底）
+    };
+
+    /// <summary>
     /// **图形种类 → 图标名**。上带那几段和主条"图形"那一格**共用这一份**：
     /// 主条上显示的必须就是当前种类的形状，两处各写一份迟早对不上
     /// （表现是"上带里点了三角形，主条那格还是矩形"）。
@@ -2864,6 +2903,9 @@ public sealed class FullUi : IOverlayUi
         Tool.Cone => "cone",
         Tool.Cuboid => "cuboid",
         Tool.Tetrahedron => "tetrahedron",
+        // 棱柱：具体哪一张由 `ShapeIcon(Tool)` 按当前档换（见 PrismIconName）。
+        // 这里是**四棱柱**那张，也是认不出来的兜底。
+        Tool.Prism => "prism4",
         Tool.Arrow => "arrowRight",
         // 直线：自绘三张（实线 / 虚线 / 点线，见 IconAtlas）。这里给的是**实线**那一张，
         // 具体哪一张由 `ShapeIcon(Tool)` 按当前线型换（见 LineIconName）。

@@ -124,8 +124,14 @@ internal static class InkSerializer
     ///         读老文件**不需要迁移**（老文件里本来就没有这两种）。
     ///   · v16：同上，再加两种**立体图形**（长方体 / 四面体，取值 17 / 18）。
     ///         同样没加字节、同样不用迁移。
+    ///   · v17：新增**棱柱**（取值 19），并且每条笔画多一个
+    ///         **"底面几边形"字节**（见 <see cref="Stroke.PrismSides"/>；别的种类恒 4）。
+    ///         加字段的理由同 v8 / v9 / v11：**必须卡在 `version >= 17` 上读那一位**，
+    ///         否则读 v16 的文件会去读下一个字节（整体错位）。
+    ///         升版本的理由同 v6 / v7 / v15：老程序不认识 19 这个 `Kind`。
+    ///         读老文件**不需要迁移**（≤ v16 的文件里既没有棱柱、也没有那一位）。
     /// </summary>
-    public const int FormatVersion = 16;
+    public const int FormatVersion = 17;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -244,6 +250,10 @@ internal static class InkSerializer
         // ---- v12：双曲线画不画那两条虚线渐近线（见 Stroke.ShowAsymptotes）----
         // 同样一个字节、同样不按 Kind 判断要不要写。
         w.Write((byte)(s.ShowAsymptotes ? 1 : 0));
+
+        // ---- v17：棱柱底面几边形（见 Stroke.PrismSides）----
+        // 一个字节（3~6；别的种类恒 DefaultPrismSides）。读端卡在 `version >= 17`。
+        w.Write((byte)s.PrismSidesClamped);
     }
 
     // =====================================================================
@@ -419,6 +429,15 @@ internal static class InkSerializer
         // ---- v12：渐近线开关（老文件没有这一位，一律"画"）----
         // 默认值就是 true，所以老文件读进来正好是"像课本那样画出渐近线"。
         if (version >= 12) s.ShowAsymptotes = r.ReadByte() != 0;
+
+        // ---- v17：棱柱底面几边形（老文件没有这一位，一律四棱柱）----
+        // 越界值退到默认档（理由同线型 / 朝向那两位：一个坏字节不该让整个文件读不进来）。
+        if (version >= 17)
+        {
+            byte ps = r.ReadByte();
+            s.PrismSides = ps >= Stroke.MinPrismSides && ps <= Stroke.MaxPrismSides
+                ? ps : Stroke.DefaultPrismSides;
+        }
 
         // ---- v13：抛物线的第二个点**换了含义**，老文件要迁移一次 ----
         //

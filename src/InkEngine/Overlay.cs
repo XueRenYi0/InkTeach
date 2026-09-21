@@ -2011,6 +2011,14 @@ internal sealed class OverlayWindow : IDisposable
                 app.ShapeInclinationAnchor, app.DpiScale,
                 InclinationLabel(app.ShapeInclinationDegrees)).Inflate(3f)));
 
+        // 多笔图形"这一笔吸到了什么"那颗胶囊（现在只有棱柱的「直棱柱」）。
+        // **同样必须在"有选中对象"那块之外**：画棱柱的时候一个对象都没选中。
+        if (app.StepSnap != ShapeSnapKind.None)
+        {
+            var stepPill = StepSnapPillRect(app);
+            if (!stepPill.IsEmpty) r.Add(CanvasRectToWindow(stepPill.Inflate(3f)));
+        }
+
         if (app.ShowHud)
         {
             // 面板区域每帧都要进脏区：后缓冲里躺着的是两帧前的画面，不重贴就会闪。
@@ -2355,6 +2363,15 @@ internal sealed class OverlayWindow : IDisposable
             if (!pill.IsEmpty)
                 DrawReadoutPill(pill, VertexReadoutLabel(app), VertexPillSnapped(app));
         }
+        else if (app.StepSnap != ShapeSnapKind.None)
+        {
+            // **画多笔图形时吸住的**（现在只有棱柱第 2 笔吸到「直棱柱」）。
+            // 和拖顶点吸住"等边 / 正方形"是**同一颗胶囊、同一套语言**：
+            // 吸住了就整块用强调色（`snapped: true`）——"这个结果是它替我吸上的"。
+            var pill = StepSnapPillRect(app);
+            if (!pill.IsEmpty)
+                DrawReadoutPill(pill, SelectionHandles.ShapeSnapLabel(app.StepSnap), true);
+        }
 
         // 7) 多边形读数（规格 9.7）：三角形的**三个内角**、平行四边形的**两个夹角**。
         //    它不在上面那两个分支里，因为这一组是**好几颗**角标（最多三颗），有一套自己的
@@ -2482,6 +2499,22 @@ internal sealed class OverlayWindow : IDisposable
     /// <summary>这颗胶囊是不是"吸出来的"（吸住时整块变强调色）。</summary>
     private static bool VertexPillSnapped(InkEngine app)
         => app.ShapeSnapKind != ShapeSnapKind.None || app.VertexInclinationSnapped;
+
+    /// <summary>
+    /// **多笔图形"这一笔吸到了什么"**那颗胶囊占的那块矩形（空 = 这一帧没有胶囊）。
+    ///
+    /// 现在只有棱柱第 2 笔吸到「直棱柱」这一种（见 `Engine.StepSnap`）。
+    /// 和 <see cref="VertexPillRect"/> 同一套规矩：**绘制与脏区都走它**，
+    /// 锚点取"吸完之后那个顶面中心"（`Engine.StepSnapAnchor`）——不能这里另算一份，
+    /// 两边差一帧的话屏幕上就会留一条擦不掉的边。
+    /// </summary>
+    private RectF StepSnapPillRect(InkEngine app)
+    {
+        if (app.StepSnap == ShapeSnapKind.None) return RectF.Empty;
+        string text = SelectionHandles.ShapeSnapLabel(app.StepSnap);
+        if (string.IsNullOrEmpty(text)) return RectF.Empty;
+        return InclinationReadoutRect(app.StepSnapAnchor, app.DpiScale, text);
+    }
 
     // =====================================================================
     //  多边形读数（规格 9.7）：三角形的三个内角 / 平行四边形的两个夹角

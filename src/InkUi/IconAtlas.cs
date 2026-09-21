@@ -73,6 +73,11 @@ internal static class IconAtlas
         if (name == "cone") { DrawCone(ctx, x, y, size, brush); return; }
         if (name == "cuboid") { DrawCuboid(ctx, x, y, size, brush); return; }
         if (name == "tetrahedron") { DrawTetrahedron(ctx, x, y, size, brush); return; }
+        // 棱柱四档（三/四/五/六）：同一段画法，只换底面的边数（见 DrawPrism）。
+        if (name == "prism3") { DrawPrism(ctx, x, y, size, brush, 3); return; }
+        if (name == "prism4") { DrawPrism(ctx, x, y, size, brush, 4); return; }
+        if (name == "prism5") { DrawPrism(ctx, x, y, size, brush, 5); return; }
+        if (name == "prism6") { DrawPrism(ctx, x, y, size, brush, 6); return; }
         if (name == "sine") { DrawWave(ctx, x, y, size, brush, cosine: false); return; }
         if (name == "cosine") { DrawWave(ctx, x, y, size, brush, cosine: true); return; }
         // 直线那三档线型的图标（用户 2026-09-20 定：图形面板里"直线"那一段再点一次
@@ -415,6 +420,58 @@ internal static class IconAtlas
         void Line(Vector2 a, Vector2 b) => ctx.DrawLine(a, b, brush, 1.5f, _round);
         Line(bl, br); Line(br, bt); Line(bt, bl);      // 底面
         Line(bl, apex); Line(br, apex); Line(bt, apex); // 三条棱
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// 自绘的**棱柱**图标（三 / 四 / 五 / 六棱柱）：**立着**的底面正 n 边形 ＋ 顶面 ＋ 侧棱。
+    ///
+    /// 只画**看得见的棱**（被挡住的那些在 18 像素下就是一团虚线，反而看不出形）——
+    /// 和 <see cref="DrawCuboid"/> 同一个口径（它也省掉了三条被挡的）。
+    /// 可见性判据和画布上那份**是同一条**（计划-图形工具.md §32.4）：底面中点在底心下方 = 近侧；
+    /// 侧棱只要相邻两个侧面里有一个看得见就画。
+    ///
+    /// ⚠ 五 / 六两张在 18 像素下**不太分得开**（只差底面上一条边）——那一格下面有
+    /// **4 个档位点**兜底（见 FullUi 的 DrawPips）：数点比数边可靠。
+    /// </summary>
+    private static void DrawPrism(ID2D1DeviceContext ctx, float x, float y,
+                                  float size, ID2D1Brush brush, int sides)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        var bc = new Vector2(12f, 17f);
+        const float rx = 8f, ry = 3.4f;      // 底面是"俯视压扁"的，和画布上那个观感一致
+        const float height = 11f;
+        // 边数由**调用方按图标名**给（`prism3`/`prism4`/`prism5`/`prism6` 四张各自硬编码），
+        // 所以这里不再夹一道——`Stroke` 是引擎内部类型，界面层看不到它的上下限常量。
+        int n = sides;
+        var b = new Vector2[n];
+        var t = new Vector2[n];
+        for (int k = 0; k < n; k++)
+        {
+            // 和画布上**同一套参数角**（起始角读同一个判据 ShapeSpec.PrismBaseOffsetDegrees，
+            // 见那里的注释：偶数边左右尖点、奇数边一条边在前——就是为了不出现 edge-on 的边）；
+            // 顶面就是底面往上抬一个高。
+            float a = (ShapeSpec.PrismBaseOffsetDegrees(n) * MathF.PI / 180f) + k * MathF.Tau / n;
+            b[k] = new Vector2(bc.X + rx * MathF.Cos(a), bc.Y + ry * MathF.Sin(a));
+            t[k] = new Vector2(b[k].X, b[k].Y - height);
+        }
+
+        void Line(Vector2 p, Vector2 q) => ctx.DrawLine(p, q, brush, 1.5f, _round);
+
+        for (int k = 0; k < n; k++)
+        {
+            int nx = (k + 1) % n;
+            bool face = (b[k].Y + b[nx].Y) * 0.5f > bc.Y;                        // 侧面 k（近侧）
+            bool prevFace = (b[(k + n - 1) % n].Y + b[k].Y) * 0.5f > bc.Y;       // 侧面 k−1
+            Line(t[k], t[nx]);                        // 顶面：俯视下恒可见
+            if (face) Line(b[k], b[nx]);              // 底面的近侧那几条
+            if (face || prevFace) Line(b[k], t[k]);   // 侧棱：有一个邻面可见就画
+        }
 
         ctx.Transform = saved;
     }

@@ -201,6 +201,14 @@ public interface IEngineCommands
     /// 不为虚线直线 / 点线直线各开一格。
     /// </summary>
     void CycleLineDash();
+    /// <summary>
+    /// **换下一档棱柱**：3 → 4 → 5 → 6 → 3（底面几边形）。
+    ///
+    /// 和 <see cref="CycleLineDash"/> 完全同构：入口是图形面板里「棱柱」那一段
+    /// **已经选中棱柱时再点一次**（用户 2026-09-20："做成像直线切换那样切换三四五六"）。
+    /// 只动"下一笔用几边形"，**不改已经画好的那些**（它们各存各的）。
+    /// </summary>
+    void CyclePrismSides();
     void SetColor(Color4 color);
     void SetWidth(float logicalPx);
     /// <summary>
@@ -349,6 +357,30 @@ public static class InkPalette
 }
 
 /// <summary>
+/// **图形学上那几个"界面也要用"的规则**住在这一份公开的地方。
+///
+/// 为什么需要它：`Stroke` / `SelectionHandles` 都是引擎**内部**类型，InkUi 看不到
+/// （只对 InkTeach 开了 InternalsVisibleTo）。所以凡是"引擎和界面都必须用同一条规则"
+/// 的东西，就放到这里——**只有一份实现**，两边都调它，不许各写一份。
+/// </summary>
+public static class ShapeSpec
+{
+    /// <summary>
+    /// 棱柱**底面顶点的起始角**（度）：**偶数边取 0°**（顶点落在水平轴上 = 左右两个尖点，
+    /// 六棱柱是课本那个样子、四棱柱是"菱形底面"）；**奇数边取 90° + 180°/n**
+    /// （正前方正好是一条边：三棱柱就是课本那个帐篷形）。
+    ///
+    /// 规矩只有一条：**不能让某条边与视线平行**——那种边是 edge-on，
+    /// 四棱柱会当场塌成一块平板（2026-09-20 出图抓到的）。
+    ///
+    /// 画布上（`Stroke.PrismBaseLocal`）和图标上（`IconAtlas.DrawPrism`）**都读它**，
+    /// 两边不一致的话，图标画的和画出来的就不是一个东西。
+    /// </summary>
+    public static int PrismBaseOffsetDegrees(int sides)
+        => sides % 2 == 0 ? 0 : 90 + 180 / Math.Max(3, sides);
+}
+
+/// <summary>
 /// 引擎状态的只读快照，界面拿来显示。
 ///
 /// 用 init 属性而不是十几个位置参数：这个快照只会越加越多（每加一个界面要显示的东西
@@ -395,6 +427,20 @@ public readonly struct UiState
     /// 这一个只管直线那一格。两个都只作用于"下一笔画出来的"。
     /// </summary>
     public StrokeDash LineDash { get; init; }
+    /// <summary>
+    /// **棱柱那一格当前的档**：底面几边形（3~6）。用户 2026-09-20 定：
+    /// "我想想能不能做成像直线切换那样切换三四五六"——界面拿它把那一格的图标
+    /// 换成三/四/五/六棱柱，并在下面点出**4 个档位点**（和直线那格同一套）。
+    /// </summary>
+    public int PrismSides { get; init; }
+
+    /// <summary>
+    /// 棱柱档位的**上下限**（3 / 6）。界面要知道"这一格一共几档"才能画档位点，
+    /// 而 `Stroke` 是引擎内部类型、InkUi 看不到——所以把这两个数**随状态一起推上去**
+    ///（不在界面那边写死一份 3/6：档位范围以后要改成 3~8 的话，那种写法必漏一处）。
+    /// </summary>
+    public int PrismMinSides { get; init; }
+    public int PrismMaxSides { get; init; }
     public bool PassThrough { get; init; }
     /// <summary>是否处于白板模式（画布有不透明底色）。</summary>
     public bool Board { get; init; }
