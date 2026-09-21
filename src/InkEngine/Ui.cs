@@ -366,18 +366,74 @@ public static class InkPalette
 public static class ShapeSpec
 {
     /// <summary>
-    /// 棱柱**底面顶点的起始角**（度）：**偶数边取 0°**（顶点落在水平轴上 = 左右两个尖点，
-    /// 六棱柱是课本那个样子、四棱柱是"菱形底面"）；**奇数边取 90° + 180°/n**
-    /// （正前方正好是一条边：三棱柱就是课本那个帐篷形）。
+    /// 棱柱底面的**错切量**：相对"底面半高"的比例——**"远处"那一侧往右挪这么多**，
+    /// 就是斜二测画法里那条 45° 的纵深轴（这里取一半，稍稍错开一点就够）。
     ///
-    /// 规矩只有一条：**不能让某条边与视线平行**——那种边是 edge-on，
-    /// 四棱柱会当场塌成一块平板（2026-09-20 出图抓到的）。
+    /// 它**不是装饰**，是两个真问题的解（用户 2026-09-20 出图时一眼看出来的）：
+    ///   · **前后两半完全对齐**：对称压扁的投影下，六棱柱后面那两条被挡住的竖棱
+    ///     正好落在前面两条实线的正后方——**完全被挡住，看不见**；
+    ///   · **四棱柱没有水平边**：对称投影下它的底面是"正着放的正方形"（左右两条边
+    ///     与视线平行 = edge-on），整条立体塌成一块平板。
+    /// 错开一点之后：四棱柱的底面成了**前边水平、后边也水平**的平行四边形
+    ///（课本上那个样子），六棱柱的虚线也从实线之间露出来了。
+    /// </summary>
+    public const float PrismDepthSkew = 0.5f;
+
+    /// <summary>
+    /// 棱柱**底面顶点的起始角**（度）：`90° + 180°/n`——**正前方（屏幕下方）正好是一条边**。
+    /// 三棱柱因此是课本那个帐篷形；偶数边则**恰好有两条水平边**（前边与后边）。
     ///
     /// 画布上（`Stroke.PrismBaseLocal`）和图标上（`IconAtlas.DrawPrism`）**都读它**，
     /// 两边不一致的话，图标画的和画出来的就不是一个东西。
     /// </summary>
-    public static int PrismBaseOffsetDegrees(int sides)
-        => sides % 2 == 0 ? 0 : 90 + 180 / Math.Max(3, sides);
+    public static int PrismBaseOffsetDegrees(int sides) => 90 + 180 / Math.Max(3, sides);
+
+    /// <summary>
+    /// 底面在画面里用的两个尺度：<paramref name="rxUse"/>（横向半边，已经让出错切的位置）
+    /// 与 <paramref name="skew"/>（错切量）。**只有这一处实现**——
+    /// 顶点位置（`PrismBasePointOffset`）和"哪个侧面看得见"（`PrismFaceVisible`）都从它出发。
+    /// </summary>
+    public static void PrismFrame(float rx, float ry, out float rxUse, out float skew)
+    {
+        skew = PrismDepthSkew * ry;
+        rxUse = MathF.Max(0.5f, rx - skew * 0.5f);
+    }
+
+    /// <summary>
+    /// 一个底面顶点**相对底心**的偏移（画面坐标）：输入是它的参数角余弦 / 正弦
+    ///（底面上那个**正** n 边形的坐标）＋ 底面外接框的两个半边长。
+    ///
+    /// 两步，就是一张很朴素的斜二测：
+    ///   ① **压扁**：纵向乘 `ry`（底面是"俯视"看的）；
+    ///   ② **错切**：越远（`sin` 越负 = 越靠上）越往右挪 `PrismDepthSkew × ry`。
+    ///
+    /// **只有这一份实现**：画布与图标共用（见 <see cref="PrismBaseOffsetDegrees"/> 那段）。
+    /// </summary>
+    public static System.Numerics.Vector2 PrismBasePointOffset(float cosT, float sinT, float rx, float ry)
+    {
+        PrismFrame(rx, ry, out float rxUse, out float skew);
+        return new System.Numerics.Vector2(rxUse * cosT - skew * sinT, ry * sinT);
+    }
+
+    /// <summary>
+    /// **底面上第 k 个侧面看得见吗**（决定那一条底边和两条竖棱画实线还是虚线）。
+    ///
+    /// 判据是几何事实："**侧面的外法向朝向观察者**"。底面（半径归一成 1 的圆）上，
+    /// 弧段中点在 `(midCos, midSin)` 的那个侧面，外法向就是 `(midCos, midSin)` 方向；
+    /// 而**观察者在底面坐标里不是正的**——它是 `(错切比, 1)` 方向：
+    ///   ① `1` 是"朝观察者"（底面是俯视压扁的，`sin > 0` 那一半离观察者近）；
+    ///   ② 那个 `错切比` 是**斜二测带来的水平偏移**，不能漏——正是它让"斜二测的四棱柱"
+    ///      **右侧**那个面看得见（和课本上的长方体一模一样：前面 ＋ 右面可见、
+    ///      后面 ＋ 左面虚掉，虚掉的三条棱正好是"背面下横 / 左下斜 / 背面左竖"）。
+    /// 漏掉它的话，四棱柱会退化成"只有正面看得见"，看着像个空壳子。
+    ///
+    /// 画布（`Stroke.PrismEdges`）和图标（`IconAtlas.DrawPrism`）**都调它**。
+    /// </summary>
+    public static bool PrismFaceVisible(float midCos, float midSin, float rx, float ry)
+    {
+        PrismFrame(rx, ry, out float rxUse, out float skew);
+        return midCos * (skew / rxUse) + midSin > 0f;
+    }
 }
 
 /// <summary>

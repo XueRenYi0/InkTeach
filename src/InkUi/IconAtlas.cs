@@ -453,24 +453,33 @@ internal static class IconAtlas
         var t = new Vector2[n];
         for (int k = 0; k < n; k++)
         {
-            // 和画布上**同一套参数角**（起始角读同一个判据 ShapeSpec.PrismBaseOffsetDegrees，
-            // 见那里的注释：偶数边左右尖点、奇数边一条边在前——就是为了不出现 edge-on 的边）；
-            // 顶面就是底面往上抬一个高。
+            // 和画布上**同一套算式**（`ShapeSpec.PrismBasePointOffset`：压扁 ＋ 错切，
+            // 起始角也是同一个判据）——两边不一致的话，图标画的和画出来的就不是一个东西。
             float a = (ShapeSpec.PrismBaseOffsetDegrees(n) * MathF.PI / 180f) + k * MathF.Tau / n;
-            b[k] = new Vector2(bc.X + rx * MathF.Cos(a), bc.Y + ry * MathF.Sin(a));
+            b[k] = bc + ShapeSpec.PrismBasePointOffset(MathF.Cos(a), MathF.Sin(a), rx, ry);
             t[k] = new Vector2(b[k].X, b[k].Y - height);
         }
 
         void Line(Vector2 p, Vector2 q) => ctx.DrawLine(p, q, brush, 1.5f, _round);
 
+        // 每个侧面看得见吗：**和画布上同一个判据**（`ShapeSpec.PrismFaceVisible`，
+        // 连错切那一项都算进去——漏了它，四棱柱的图标会少画右侧那一面）。
+        // 弧段中点的参数角 = 两个端点参数角的中间。
+        float ang0 = ShapeSpec.PrismBaseOffsetDegrees(n) * MathF.PI / 180f;
+        var face = new bool[n];
+        for (int k = 0; k < n; k++)
+        {
+            float mid = ang0 + (k + 0.5f) * MathF.Tau / n;
+            face[k] = ShapeSpec.PrismFaceVisible(MathF.Cos(mid), MathF.Sin(mid), rx, ry);
+        }
+
         for (int k = 0; k < n; k++)
         {
             int nx = (k + 1) % n;
-            bool face = (b[k].Y + b[nx].Y) * 0.5f > bc.Y;                        // 侧面 k（近侧）
-            bool prevFace = (b[(k + n - 1) % n].Y + b[k].Y) * 0.5f > bc.Y;       // 侧面 k−1
             Line(t[k], t[nx]);                        // 顶面：俯视下恒可见
-            if (face) Line(b[k], b[nx]);              // 底面的近侧那几条
-            if (face || prevFace) Line(b[k], t[k]);   // 侧棱：有一个邻面可见就画
+            if (face[k]) Line(b[k], b[nx]);           // 底面：只有看得见的那几条
+            // 侧棱：相邻两个侧面有一个看得见就画
+            if (face[k] || face[(k + n - 1) % n]) Line(b[k], t[k]);
         }
 
         ctx.Transform = saved;

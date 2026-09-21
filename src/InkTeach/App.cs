@@ -14411,8 +14411,9 @@ internal sealed class App : InkEngine.InkEngine
             return;
         }
 
-        // **被挡住的棱有几条**：§32.4 那条通用判据（底边中点在底心下方 = 近侧）手算的结果。
-        // 起始角见 `ShapeSpec.PrismBaseOffsetDegrees`（偶数边左右尖点、奇数边一条边在前）——
+        // **被挡住的棱有几条**：§32.4 那条通用判据手算的结果，判据本体在 `ShapeSpec.PrismFaceVisible`
+        //（"侧面的外法向朝向观察者吗"——观察者是 `(错切比, 1)` 方向，**错切那一项不能漏**）。
+        // 起始角见 `ShapeSpec.PrismBaseOffsetDegrees`（统一 `90° + 180°/n`，正前方永远是一条边）——
         // 这个表跟着那个起始角走：改起始角，四个数都要重算。
         int HiddenWant(int nsides) => nsides switch { 3 => 3, 4 => 3, 5 => 3, 6 => 5, _ => -1 };
 
@@ -14446,17 +14447,22 @@ internal sealed class App : InkEngine.InkEngine
             var lat = s.PrismLateralLocal();
             Check($"底面顶点数 = {sides}", b.Length == sides, $"{b.Length} 个");
 
-            // 参数角均匀：把顶点反变换回单位圆，相邻夹角差该是 360/n。
+            // 参数角均匀：把顶点**按画布上那套投影反算回单位圆**，相邻夹角差该是 360/n。
+            // 反算必须把**错切**一起减掉（`ShapeSpec`：x = rxUse·cos − skew·sin, y = ry·sin），
+            // 不然后面那步"除以 rx"减不掉错切，算出来的角就不均匀（这一条当场抓到过）。
             var c = s.PrismBaseCenterLocal();
             const float rx = 150f, ry = 60f;
+            ShapeSpec.PrismFrame(rx, ry, out float rxUse, out float skew);
             float maxDev = 0f;
             for (int k = 0; k < sides; k++)
             {
                 var a = b[k];
                 var nx = b[(k + 1) % sides];
-                float ang0 = MathF.Atan2((a.Y - c.Y) / ry, (a.X - c.X) / rx);
-                float ang1 = MathF.Atan2((nx.Y - c.Y) / ry, (nx.X - c.X) / rx);
-                float d = ang1 - ang0;
+                float v0 = (a.Y - c.Y) / ry;
+                float v1 = (nx.Y - c.Y) / ry;
+                float u0 = (a.X - c.X + skew * v0) / rxUse;
+                float u1 = (nx.X - c.X + skew * v1) / rxUse;
+                float d = MathF.Atan2(v1, u1) - MathF.Atan2(v0, u0);
                 while (d <= 0f) d += MathF.Tau;
                 maxDev = MathF.Max(maxDev, MathF.Abs(d - MathF.Tau / sides));
             }
@@ -14467,17 +14473,56 @@ internal sealed class App : InkEngine.InkEngine
             // （`InkPiece` 是 Stroke 的**嵌套内部类型**，这里用 `var` 免得写全名。）
             var vis = s.PrismEdges(hidden: false);
             var hid = s.PrismEdges(hidden: true);
+            var visLat = new List<float>();      // 看得见的竖棱的 x
+            var hidLat = new List<float>();      // 被挡住的竖棱的 x
             int latCount = 0;
             foreach (var pc in vis)
-                if (pc.Pts.Count == 2 && Vector2.Distance(pc.Pts[0] + lat, pc.Pts[1]) < 0.01f) latCount++;
+                if (pc.Pts.Count == 2 && Vector2.Distance(pc.Pts[0] + lat, pc.Pts[1]) < 0.01f)
+                { latCount++; visLat.Add(pc.Pts[0].X); }
             foreach (var pc in hid)
-                if (pc.Pts.Count == 2 && Vector2.Distance(pc.Pts[0] + lat, pc.Pts[1]) < 0.01f) latCount++;
+                if (pc.Pts.Count == 2 && Vector2.Distance(pc.Pts[0] + lat, pc.Pts[1]) < 0.01f)
+                { latCount++; hidLat.Add(pc.Pts[0].X); }
             Check($"{sides} 棱柱·三族边各 {sides} 条（顶面 ＋ 底面 ＋ 侧棱 = {3 * sides}）",
                   vis.Count + hid.Count == 3 * sides && latCount == sides,
                   $"共 {vis.Count + hid.Count} 条（实 {vis.Count} / 虚 {hid.Count}），侧棱 {latCount} 条");
 
             Check($"{sides} 棱柱·被挡住 {HiddenWant(sides)} 条（§32.4 判据的定值）",
                   hid.Count == HiddenWant(sides), $"{hid.Count} 条（期望 {HiddenWant(sides)}）");
+
+            // ---- 用户 2026-09-20 要求的三条（每一条都是一个"看着不对"的现场）----
+
+            // ① **最靠前的那一条边必须是水平的**（四棱柱原来"最前面那条棱是斜的"）。
+            //    判据：落在最前那一排（y 最大）的顶点得**不止一个**——两个以上才谈得上一条边。
+            float maxY = float.MinValue;
+            foreach (var v in b) maxY = MathF.Max(maxY, v.Y);
+            int frontVerts = 0;
+            foreach (var v in b) if (MathF.Abs(v.Y - maxY) < 0.5f) frontVerts++;
+            Check($"{sides} 棱柱·最靠前那一条边是**水平的**（两个顶点同高）",
+                  frontVerts >= 2, $"最前一排有 {frontVerts} 个顶点");
+
+            // ② **被挡住的竖棱不能躲在前面的实线背后**（六棱柱原来后面两条虚线完全看不见）。
+            //    判据用**模型自己分出来的那两组**（上面 visLat / hidLat 就是 PrismEdges 的产物）——
+            //    不在这里另写一份"哪个面看得见"，那份判据只有 `ShapeSpec.PrismFaceVisible` 一条。
+            float minGap = float.MaxValue;
+            foreach (var hx in hidLat)
+                foreach (var vx in visLat) minGap = MathF.Min(minGap, MathF.Abs(hx - vx));
+            Check($"{sides} 棱柱·被挡住的竖棱**错开**了可见的竖棱（x 上拉开 ≥ 0.1×半宽）",
+                  hidLat.Count == 0 || minGap >= 0.1f * rx,
+                  $"虚 {hidLat.Count} 条 / 实 {visLat.Count} 条，最小间距 "
+                  + $"{(float.IsPositiveInfinity(minGap) ? 0f : minGap):F1}（半宽 {rx:F0}）");
+
+            // ③ **紧框上沿要贴住最高的那个顶点**（原来"上面会漏一块"：
+            //    包围盒按"底面外接框"算，而正 n 边形并不填满那个框）。
+            float topmost = float.MaxValue;
+            foreach (var v in b)
+            {
+                topmost = MathF.Min(topmost, v.Y);
+                topmost = MathF.Min(topmost, v.Y + lat.Y);
+            }
+            float frameGap = topmost - s.WorldInkBounds.MinY;      // 期望 = 半个笔宽
+            Check($"{sides} 棱柱·紧框上沿贴着最高顶点（差 ≈ 半笔宽，不漏块）",
+                  Near(frameGap, s.Width * 0.5f, 1.5f),
+                  $"差 {frameGap:F2}（半笔宽 {s.Width * 0.5f:F2}）");
         }
 
         // ================= ④ 真机：第 2 笔的直 / 斜 =================

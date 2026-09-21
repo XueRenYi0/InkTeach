@@ -2416,16 +2416,18 @@ internal sealed class Stroke
             return;
         }
 
-        // **棱柱**：底面顶点是"内接于外接框"算出来的，本来就落在外接框里面，
-        // 所以"底面框 ∪ 底面框+侧棱"就是它的完整范围（斜棱柱也覆盖得住）。
+        // **棱柱**：包围盒取**真正的那些顶点**（底面 n 个 ∪ 顶面 n 个），
+        // 不是"底面外接框 ∪ 框+侧棱"——后者会**偏大**：底面的正 n 边形并不填满外接框
+        //（六棱柱的顶端只到 0.866·ry），于是选中框的上沿会空出一条缝
+        //（用户 2026-09-20："外接矩形上面会漏一块"）。逐点算既准又不受错切影响。
         if (Kind == StrokeKind.Prism && Points.Count >= 2)
         {
-            var (x0, y0, x1, y1) = PrismBaseBoxLocal();
             var lat = PrismLateralLocal();
-            Bounds.Add(x0, y0);
-            Bounds.Add(x1, y1);
-            Bounds.Add(x0 + lat.X, y0 + lat.Y);
-            Bounds.Add(x1 + lat.X, y1 + lat.Y);
+            foreach (var v in PrismBaseLocal())
+            {
+                Bounds.Add(v.X, v.Y);
+                Bounds.Add(v.X + lat.X, v.Y + lat.Y);
+            }
             return;
         }
 
@@ -2472,11 +2474,13 @@ internal sealed class Stroke
         {
             if (_inkBoundsRevision == Revision) return _inkBounds;
 
-            // **长方体**是唯一的例外：它的几条棱伸到"控制点的外接"之外
-            //（背面左上 / 右下两个角里只有一个是控制点），而 `Bounds` 已经按真实范围
-            // 算过了（见 RecomputeBounds）——直接用"它 ＋ 半个笔宽"。
-            // 照控制点算会**少一块**，那块就是脏区盲区（搬动时留残影、命中也会漏）。
-            if (Kind == StrokeKind.Cuboid && Points.Count >= 2)
+            // **长方体 / 棱柱**是仅有的两个例外：它们的棱伸到"控制点的外接"之外——
+            //   · 长方体：背面左上 / 右下两个角里只有一个是控制点；
+            //   · 棱柱：第三个控制点是**顶面中心**，而顶面那一圈是从"底面 ＋ 侧棱向量"
+            //     算出来的，**整个在控制点外面**（照控制点算出来的框，上沿会少掉一大块：
+            //     用户 2026-09-20 说的"外接矩形上面会漏一块"）。
+            // 而 `Bounds` 已经按**真实顶点**算过了（见 RecomputeBounds）——直接用"它 ＋ 半笔宽"。
+            if ((Kind is StrokeKind.Cuboid or StrokeKind.Prism) && Points.Count >= 2)
             {
                 float hw0 = Width * 0.5f;
                 var rr = Bounds;
@@ -3918,16 +3922,17 @@ internal sealed class Stroke
     public Vector2 PrismLateralLocal() => PrismApexLocal() - PrismBaseCenterLocal();
 
     /// <summary>
-    /// 底面的 `n` 个顶点（局部坐标）：**内接于外接框那个椭圆**（按参数角均匀取）。
+    /// 底面的 `n` 个顶点（局部坐标）：底面上是一个**正** n 边形，落到画面上两步——
+    /// **压扁**（俯视）＋ **错切**（远侧往右挪一点，斜二测）。
+    /// 两条都在 <see cref="ShapeSpec.PrismBasePointOffset"/> 那一份实现里（画布与图标共用）。
     ///
-    /// 起始角由**奇偶**定，就一条规矩：**不能让某条边落在"与视线平行"的位置**
-    ///（那条边会成为 edge-on，四棱柱会塌成一块平板；2026-09-20 出图当场抓到）：
-    ///   · **偶数边** → 顶点落在水平轴上（左右两个**尖点**）：六棱柱就是课本那个样子，
-    ///     四棱柱则是"菱形底面"（＝立着的正方形），四个侧面都看得见；
-    ///   · **奇数边** → **正前方正好是一条边**：三棱柱因此是"一条边在前、顶点朝后"
-    ///     （课本那个帐篷形），五棱柱同理。
+    /// 结果长什么样（都是课本那个样子）：
+    ///   · **三 / 五棱柱**：正前方是一条边（帐篷形）；
+    ///   · **四棱柱**：底面是**前边水平、后边也水平**的平行四边形（＝斜二测的正方形）；
+    ///   · **六棱柱**：左右两个尖点。
     ///
-    /// 顶点在参数意义下是**正** n 边形，所以"正三棱柱 / 正六棱柱"是白拿的。
+    /// 起始角见 <see cref="ShapeSpec.PrismBaseOffsetDegrees"/>。顶点在底面参数意义下是
+    /// **正** n 边形，所以"正三棱柱 / 正六棱柱"是白拿的。
     /// </summary>
     public Vector2[] PrismBaseLocal()
     {
@@ -3936,13 +3941,13 @@ internal sealed class Stroke
         float ry = MathF.Max(0.5f, (y1 - y0) * 0.5f);
         var c = PrismBaseCenterLocal();
         int n = PrismSidesClamped;
-        int offsetDeg = ShapeSpec.PrismBaseOffsetDegrees(n);
+        float offset = ShapeSpec.PrismBaseOffsetDegrees(n) * MathF.PI / 180f;
         var pts = new Vector2[n];
         for (int k = 0; k < n; k++)
         {
             // 屏幕 y 向下，所以参数角 90° 落在**下方**（= "正前方"）。
-            float a = (offsetDeg * MathF.PI / 180f) + k * MathF.Tau / n;
-            pts[k] = new Vector2(c.X + rx * MathF.Cos(a), c.Y + ry * MathF.Sin(a));
+            float a = offset + k * MathF.Tau / n;
+            pts[k] = c + ShapeSpec.PrismBasePointOffset(MathF.Cos(a), MathF.Sin(a), rx, ry);
         }
         return pts;
     }
@@ -4001,7 +4006,6 @@ internal sealed class Stroke
 
         var b = PrismBaseLocal();
         var lat = PrismLateralLocal();
-        var c = PrismBaseCenterLocal();
         int n = b.Length;
 
         // **还没拖第二笔**（侧棱还是零）：只画底面那一圈、全实线——
@@ -4021,10 +4025,21 @@ internal sealed class Stroke
         var top = new Vector2[n];
         for (int k = 0; k < n; k++) top[k] = b[k] + lat;
 
-        // 侧面 k（= 底边 k）看得见吗：它的中点在底心下方就是近侧那一面。
+        // 侧面 k（= 底边 k）看得见吗：判据在 `ShapeSpec.PrismFaceVisible`
+        //（"外法向朝向观察者"，**错切要算进去**——那是斜二测的四棱柱"右面可见"的来源）。
+        var (bx0, by0, bx1, by1) = PrismBaseBoxLocal();
+        float rx = MathF.Max(0.5f, (bx1 - bx0) * 0.5f);
+        float ry = MathF.Max(0.5f, (by1 - by0) * 0.5f);
+        float offset = ShapeSpec.PrismBaseOffsetDegrees(n) * MathF.PI / 180f;
         var faceVisible = new bool[n];
         for (int k = 0; k < n; k++)
-            faceVisible[k] = (b[k].Y + b[(k + 1) % n].Y) * 0.5f > c.Y;
+        {
+            int nx = (k + 1) % n;
+            float a0 = offset + k * MathF.Tau / n, a1 = offset + nx * MathF.Tau / n;
+            faceVisible[k] = ShapeSpec.PrismFaceVisible(
+                (MathF.Cos(a0) + MathF.Cos(a1)) * 0.5f,
+                (MathF.Sin(a0) + MathF.Sin(a1)) * 0.5f, rx, ry);
+        }
 
         void Add(Vector2 p, Vector2 q, bool hid)
         {
