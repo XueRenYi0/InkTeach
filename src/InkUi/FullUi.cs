@@ -861,10 +861,15 @@ public sealed class FullUi : IOverlayUi
             Tool.Triangle, Tool.Parallelogram, Tool.Arrow,
             Tool.Coordinate,     // 2026-09-19 第二批接在末尾（只撤了它后面的"数轴"那一段）
         },
-        // ② 曲线（第二行）：抛物线 / 双曲线 / 正弦 / 余弦 / **波浪线** / **正切**（第十五、十六批）
+        // ② 曲线（第二行）：**椭圆（带焦点）/ 双曲线 / 抛物线** / 正弦 / 余弦 / 波浪线 / 正切。
+        //
+        // ⚠ **2026-09-22 用户重排了这一行的头三格**（原话："椭圆排在第二行的最前面，
+        //   然后是……图标前三个是椭圆，双曲线，抛物线"）——也就是把「椭圆（带焦点）」放到行首、
+        //   抛物线挪到第三。第一行那八个的**位置仍然冻结**（那条规矩没破，用户只说了第二行）。
         new[]
         {
-            Tool.Parabola, Tool.Hyperbola, Tool.Sine, Tool.Cosine, Tool.Wave, Tool.Tangent,
+            Tool.ConicEllipse, Tool.Hyperbola, Tool.Parabola,
+            Tool.Sine, Tool.Cosine, Tool.Wave, Tool.Tangent,
         },
         // ③ 立体（第三行）：**旋转体 4 ＋ 棱柱体 3**。
         //   · 旋转体：一次拖出**外接矩形**、一笔画完、被挡住的是"远侧那一圈/半圈"
@@ -1460,6 +1465,13 @@ public sealed class FullUi : IOverlayUi
                         _host.Commands.CycleParabolaAxis();
                     else if (picked == Tool.Line && _host.State.Tool == Tool.Line)
                         _host.Commands.CycleLineDash();
+                    // 双曲线：换"画不画渐近线"（2026-09-22，用户："增加两挡，有渐近线和无渐近线
+                    // ……图标就按照有渐近线和无渐近线"）。
+                    else if (picked == Tool.Hyperbola && _host.State.Tool == Tool.Hyperbola)
+                        _host.Commands.CycleHyperbolaAsymptotes();
+                    // 椭圆（带焦点）：换"画不画焦点三角形"（2026-09-22，用户："椭圆也有两档"）。
+                    else if (picked == Tool.ConicEllipse && _host.State.Tool == Tool.ConicEllipse)
+                        _host.Commands.CycleEllipseFocusTriangle();
                     else if (ShapeSpec.HasSideCount(picked) && _host.State.Tool == picked)
                         _host.Commands.CycleSolidSides();
                     else
@@ -2833,6 +2845,11 @@ public sealed class FullUi : IOverlayUi
     {
         if (tool == Tool.Line) return (3, (int)st.LineDash);
         if (tool == Tool.Parabola) return (2, ParabolaAxisIndex(st.ParabolaAxis));
+        // **双曲线**（2026-09-22）：2 档 = 有 / 无渐近线。
+        // 顺序按"播放先后"排：第 1 档 = 有渐近线（默认）、第 2 档 = 无。
+        if (tool == Tool.Hyperbola) return (2, st.HyperbolaAsymptotes ? 0 : 1);
+        // **椭圆（带焦点）**（2026-09-22）：2 档 = 有 / 无焦点三角形（默认有）。
+        if (tool == Tool.ConicEllipse) return (2, st.EllipseFocusTriangle ? 0 : 1);
         if (ShapeSpec.HasSideCount(tool))
             return (st.SolidMaxSides - st.SolidMinSides + 1,
                     Math.Clamp(st.SidesOf(tool), st.SolidMinSides, st.SolidMaxSides) - st.SolidMinSides);
@@ -2883,6 +2900,11 @@ public sealed class FullUi : IOverlayUi
     {
         Tool.Parabola => ParabolaIconName(_host.State.ParabolaAxis),
         Tool.Line => LineIconName(_host.State.LineDash),
+        // 双曲线：有 / 无渐近线两张（2026-09-22）——那一格"再点一次换一档"，
+        // 图标不跟着换的话，老师看不出这一笔到底会不会带那两条虚线。
+        Tool.Hyperbola => _host.State.HyperbolaAsymptotes ? "hyperbola" : "hyperbolaNoAsym",
+        // 椭圆（带焦点）：有 / 无焦点三角形两张（2026-09-22），理由同上。
+        Tool.ConicEllipse => _host.State.EllipseFocusTriangle ? "ovalFocusTri" : "ovalFocus",
         _ when ShapeSpec.HasSideCount(t) => SolidIconName(t, _host.State.SidesOf(t)),
         _ => ShapeIconFor(t),
     };
@@ -2976,6 +2998,10 @@ public sealed class FullUi : IOverlayUi
         // 所以这里给的是"默认（开口向上）"那一档，也是名字不对时的兜底。
         Tool.Parabola => "parabola",
         Tool.Hyperbola => "hyperbola",
+        // 椭圆（带焦点）（2026-09-22）：自绘（见 IconAtlas.DrawOvalFocus）——椭圆 ＋ 两焦点
+        // ＋（默认那一档）焦点三角形。具体哪一张由 `ShapeIcon(Tool)` 按当前档换
+        //（见那里的注释），这里是**默认（有焦点三角形）**那张，也是认不出来时的兜底。
+        Tool.ConicEllipse => "ovalFocusTri",
         Tool.Sine => "sine",
         Tool.Cosine => "cosine",
         // 波浪线（第十六批）：自绘（见 IconAtlas.DrawWaveLine）——**好几个周期**的正弦波，

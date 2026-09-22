@@ -512,6 +512,17 @@ public class InkEngine
     /// <summary>预览用的**局部坐标**控制点（把拖动中那个定义元素换掉之后的一组点）。</summary>
     internal IReadOnlyList<Vector2> VertexPreviewPoints => _vertexPreviewLocal;
 
+    /// <summary>
+    /// 拖**焦点三角形的顶点 P** 时，这一帧算出来的参数角；`NaN` = 这一拖不是拖 P。
+    ///
+    /// 为什么要单独走一个字段、不塞进 <see cref="VertexPreviewPoints"/>：
+    /// **P 根本不是控制点**——它是"参数角"算出来的（见 <see cref="Stroke.ConicEllipsePointLocal"/>），
+    /// 塞进点表就等于承认"P 是第 3 个定义元素"，那紧框 / 存档 / 变换都得为它多写一套规矩。
+    /// 所以预览只多带**这一个数**，浮动层拿它画预览（见 Overlay 的 DrawVertexPreview）。
+    /// </summary>
+    internal float VertexPreviewFocusU => _vertexPreviewFocusU;
+    private float _vertexPreviewFocusU = float.NaN;
+
     /// <summary>拖动中的那个元素在**画布坐标**里的位置（读数标签贴在它外侧）。</summary>
     internal Vector2 VertexPreviewCanvasPoint => _vertexPreviewCanvas;
 
@@ -1638,6 +1649,14 @@ public class InkEngine
         Tool.Cone => "圆锥",
         Tool.Cuboid => "长方体",
         Tool.Tetrahedron => "四面体",
+        // ⚠ **加图形别忘了这里**（漏了不报错，只是 HUD / 日志里显示成问号）。
+        // 2026-09-22 补上一批漏掉的五个（圆台 / 球 / 棱柱 / 棱锥 / 棱台）＋ 本批的椭圆（带焦点）。
+        Tool.ConeFrustum => "圆台",
+        Tool.Sphere => "球",
+        Tool.Prism => "棱柱",
+        Tool.Pyramid => "棱锥",
+        Tool.Frustum => "棱台",
+        Tool.ConicEllipse => "椭圆（带焦点）",
         _ => "?",
     };
 
@@ -2763,6 +2782,15 @@ public class InkEngine
                            : (!IsShapeTool(ActiveStroke.Tool) || ShapeDragLongEnough(ActiveStroke)));
             if (commit)
             {
+                // **双曲线的渐近线按档收口**（用户 2026-09-22："化的时候是都有渐近线，
+                // 但是最终显示没有"）：画的过程中一直是"有"（那是向导，见 BeginShapeAt），
+                // 交到文档里的这一刻才按面板那一档决定 —— 于是"无渐近线"那一档
+                // 画的时候照样看得到那两条虚线，画完就只剩曲线。
+                // ⚠ 必须走 `SetShowAsymptotes`（它会抬 Revision）——直接给字段赋值的话，
+                // 屏幕上那份"带渐近线"的辅助几何缓存在那儿不重建，画完照样看得见那两条虚线
+                //（用户 2026-09-22 报的就是这个："我选择的不带渐近线的，但是画完以后还有渐近线"）。
+                if (ActiveStroke.Kind == StrokeKind.Hyperbola)
+                    ActiveStroke.SetShowAsymptotes(HyperbolaAsymptotes);
                 Doc.AddStroke(ActiveStroke);
                 _lastStrokeReport =
                     $"采集到 {ActiveStroke.Points.Count} 个点"
@@ -2929,6 +2957,8 @@ public class InkEngine
         // 框选 / 图形仍然用十字准星："从这儿拖到那儿"的通用语言。
         Tool.Marquee or Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Arrow
             => CursorKind.Cross,
+        // 椭圆（带焦点）：和椭圆一样是"从这儿拖到那儿"的一拖，给十字准星。
+        Tool.ConicEllipse => CursorKind.Cross,
         _ => CursorKind.Default,
     };
 
@@ -2986,6 +3016,8 @@ public class InkEngine
         SelHandle.Rotate => CursorKind.Rotate,
         // 端点手柄给十字准星：它是"精确取一个点"，和拉伸（四向箭头）是两种意思。
         SelHandle.EndpointA or SelHandle.EndpointB => CursorKind.Cross,
+        // 焦点三角形的顶点 P 同理：它也是"精确取一个点"（同 EndpointA 那条理由）。
+        SelHandle.FocusPoint => CursorKind.Cross,
         _ => CursorKind.Default,
     };
 
@@ -3365,6 +3397,9 @@ public class InkEngine
              or Tool.Coordinate or Tool.NumberLine
              or Tool.Parabola or Tool.Hyperbola or Tool.Sine or Tool.Cosine
              or Tool.Wave or Tool.Tangent
+             // 椭圆（带焦点）（2026-09-22）：和第二行那些曲线同一族——
+             // 它也是"一按一拖出一个参数化对象"，不是自由笔迹。
+             or Tool.ConicEllipse
              or Tool.Cylinder or Tool.Cone or Tool.Cuboid or Tool.Tetrahedron
              or Tool.Prism or Tool.Pyramid or Tool.Frustum
              or Tool.ConeFrustum or Tool.Sphere;
@@ -3600,6 +3635,7 @@ public class InkEngine
         Tool.Line => StrokeKind.Line,
         Tool.Rectangle => StrokeKind.Rectangle,
         Tool.Ellipse => StrokeKind.Ellipse,
+        Tool.ConicEllipse => StrokeKind.ConicEllipse,
         Tool.Circle => StrokeKind.Circle,
         Tool.Triangle => StrokeKind.Triangle,
         Tool.Parallelogram => StrokeKind.Parallelogram,
@@ -3773,6 +3809,52 @@ public class InkEngine
     }
 
     /// <summary>
+    /// **双曲线那一格当前的档**：画不画那两条虚线渐近线（用户 2026-09-22 提的
+    /// "增加两挡，有渐近线和无渐近线"）。
+    ///
+    /// 和 <see cref="LineDash"/> / <see cref="CycleSolidSides"/> **完全同构**：
+    /// 面板上那一格**再点一次换一档**（配 2 个档位点、图标跟着换），
+    /// 画的那一刻写进对象（见 <see cref="BeginShapeAt"/> 与 <see cref="EndStroke"/>）。
+    ///
+    /// ⚠ **画的时候一律画渐近线**（用户 2026-09-22 的原话："化的时候是都有渐近线，
+    /// 但是最终显示没有"）——那两条虚线是**画法的向导**（第一步就是"从中心拖出渐近线框"，
+    /// 见 <see cref="HyperbolaPlan"/>），边画边看是必须的；它按档**收口在松手那一刻**
+    ///（见 <see cref="EndStroke"/> 里的提交那一段）。
+    ///
+    /// 存成引擎字段、不存偏好文件（和抛物线朝向、直线线型、立体边数同一条理由）：
+    /// 一节课里连画几条同一种双曲线是常态，留着上一档比每次回默认顺手。
+    /// </summary>
+    public bool HyperbolaAsymptotes { get; private set; } = true;
+
+    /// <summary>换下一档"双曲线画不画渐近线"：**有 → 无 → 有**（见 <see cref="HyperbolaAsymptotes"/>）。</summary>
+    public void CycleHyperbolaAsymptotes()
+    {
+        HyperbolaAsymptotes = !HyperbolaAsymptotes;
+        // 面板上那一格的图标要跟着换，所以推一次状态（和换棱柱边数同一套）。
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// **椭圆（带焦点）那一格当前的档**：画不画焦点三角形（用户 2026-09-22 提的
+    /// "两档：有焦点三角形和没有焦点三角形"；**两个焦点两档都画**，见
+    /// <see cref="Stroke.FocusTriangle"/>）。
+    ///
+    /// 和 <see cref="HyperbolaAsymptotes"/> 同一套：面板那一格再点一次换档、
+    /// 画的那一刻写进对象、只管"下一笔"（已经画好的各存各的）。
+    /// 默认**有**：这一格的存在意义就是讲焦点三角形（只要一个椭圆的话用第一行那个椭圆）。
+    /// </summary>
+    public bool EllipseFocusTriangle { get; private set; } = true;
+
+    /// <summary>换下一档"椭圆画不画焦点三角形"：**有 → 无 → 有**（见 <see cref="EllipseFocusTriangle"/>）。</summary>
+    public void CycleEllipseFocusTriangle()
+    {
+        EllipseFocusTriangle = !EllipseFocusTriangle;
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
     /// 图形工具的起手：造一条**只有起点**的图形，拖动期由
     /// <see cref="UpdateShapePreview"/> 改控制点，松手由 <see cref="EndStroke"/> 提交。
     ///
@@ -3802,6 +3884,12 @@ public class InkEngine
             // ⚠ 三兄弟都要走这一句——2026-09-20 第一版写成 `kind == StrokeKind.Prism`，
             // 结果**棱锥 / 棱台永远画成四棱**（用户上手一句就抓出来了）。
             PrismSides = Stroke.IsPrismFamily(kind) ? SidesFor(tool) : Stroke.DefaultPrismSides,
+            // 椭圆（带焦点）的**焦点三角形开关**同样是画之前选好的（见 EllipseFocusTriangle）：
+            // 画的那一刻写进对象，之后面板再换档也不回头改它。
+            FocusTriangle = kind != StrokeKind.ConicEllipse || EllipseFocusTriangle,
+            // 双曲线的渐近线**画的时候一律画**（那是画法的向导，见 HyperbolaAsymptotes）
+            // ——按档收口在松手那一刻（见 EndStroke 的提交那一段）。
+            ShowAsymptotes = true,
         };
         ActiveStroke.AddPoint(x, y, 1f, NowMs);
         // 抛物线的**顶点 = 按下那个点**：它现在是**一笔画完**的（照 InkClass 的 `case 20/21`：
@@ -4640,6 +4728,10 @@ public class InkEngine
         FrustumSides = _sidesFrustum,
         SolidMinSides = Stroke.MinPrismSides,   // 档位范围也推上去（界面才知道点几个点）
         SolidMaxSides = Stroke.MaxPrismSides,
+        // 图形面板里那两格"再点一次换一档"的当前档（界面拿它画图标 + 档位点）：
+        // 双曲线的渐近线（有 / 无）、椭圆（带焦点）的焦点三角形（有 / 无）。
+        HyperbolaAsymptotes = HyperbolaAsymptotes,
+        EllipseFocusTriangle = EllipseFocusTriangle,
         Color = Tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
         PaletteBase = Tool == Tool.Highlighter
             ? new Color4(HighlighterCurrent.R, HighlighterCurrent.G, HighlighterCurrent.B, 1f)
@@ -5851,10 +5943,15 @@ public class InkEngine
         var s = _vertexTarget;
         var pts = _vertexPreviewLocal;
         bool moved = _selDragMoved;
+        // 这一拖是不是"拖焦点三角形的顶点 P"（见 _vertexPreviewFocusU）——
+        // 取值要在**清字段之前**，而且只有真的动过才算数。
+        float focusU = _vertexPreviewFocusU;
+        bool focusDrag = moved && s != null && !float.IsNaN(focusU);
 
         _vertexDragging = false;
         _vertexTarget = null;
         _vertexPreviewLocal = null;
+        _vertexPreviewFocusU = float.NaN;       // 手势结束：预览字段归位
         _vertexPrevBounds = RectF.Empty;
         _dragTargets = null;
         _dragHandle = SelHandle.None;
@@ -5862,7 +5959,11 @@ public class InkEngine
         _selDragMoved = false;
         _shapeSnap = ShapeSnapKind.None;        // 手势结束：胶囊跟着消失
 
-        if (moved && s != null && pts != null) Doc.ApplyGeometry(s, pts);
+        // 拖 P：**点表一个字没变**（P 不是控制点），只有那个参数角要写
+        //（撤销要不要跟着回，见 SetStrokeGeometryAction 的 newFocusU）。
+        // ⚠ 传的是 `float?`：只有"真的在拖 P"才带值，别的改几何动作传 null（一个字都不动 P）。
+        if (focusDrag) Doc.ApplyGeometry(s, pts, focusU);
+        else if (moved && s != null && pts != null) Doc.ApplyGeometry(s, pts);
         // 一点没动（只是点了一下端点手柄松手）：**也必须把它压过的那块重画一次**——
         // 起手那一下它已经从内容层摘出去了，不重画的话这一块就一直是"没有这条线"，
         // 屏幕上的线会当场消失（松手后模型其实什么都没变）。
@@ -5985,10 +6086,12 @@ public class InkEngine
             }
 
             case StrokeKind.Ellipse when _vertexHandle == ShapeHandle.AxisRight:
+            case StrokeKind.ConicEllipse when _vertexHandle == ShapeHandle.AxisRight:
             {
                 // 右端点：**只改 a**，b 保持（这就是"每次只动那一条"）。
                 // 往左拖过中心也照样缩（负数被下面的 minAxis 卡住），
                 // 所以"想缩左边"不需要另一个手柄——抓右端点一路往左拖就行。
+                // ⚠ 两个 case 都带 `when`：`case A: case B when 条件:` 的条件**只管 B**（老账）。
                 float a = MathF.Max(minAxis, local.X - c.X);
                 // 正圆吸附（规格 9.6）：|a − b| 在容差内就取成 b —— 于是 a、b 逐位相等。
                 a = SelectionHandles.SnapEllipseAxis(a, s.SemiAxisBLocal, lenTol, alt, out bool snapA);
@@ -5998,6 +6101,7 @@ public class InkEngine
             }
 
             case StrokeKind.Ellipse when _vertexHandle == ShapeHandle.AxisTop:
+            case StrokeKind.ConicEllipse when _vertexHandle == ShapeHandle.AxisTop:
             {
                 // 上端点：**只改 b**，a 保持（同理，往下拖过中心也能缩）。
                 float b = MathF.Max(minAxis, c.Y - local.Y);
@@ -6005,6 +6109,16 @@ public class InkEngine
                 b = SelectionHandles.SnapEllipseAxis(b, s.SemiAxisALocal, lenTol, alt, out bool snapB);
                 if (snapB) _shapeSnap = ShapeSnapKind.Circle;
                 pts[1] = new Vector2(c.X + s.SemiAxisALocal, c.Y + b);
+                break;
+            }
+
+            case StrokeKind.ConicEllipse when _vertexHandle == ShapeHandle.FocusPoint:
+            {
+                // **焦点三角形的顶点 P**：它**不在 pts 里**（P 是参数角算出来的，
+                // 不是控制点，见 ShapeHandle.FocusPoint），所以这里一个点都不写，
+                // 只把"拖到哪儿"折成参数角记到预览字段里——浮动层拿它画预览，
+                // 松手由 CommitVertexDrag 写进对象（那一步才进撤销栈）。
+                _vertexPreviewFocusU = s.ConicEllipseAngleOf(local);
                 break;
             }
 
@@ -6051,7 +6165,17 @@ public class InkEngine
                 break;
             }
 
+            case StrokeKind.ConicEllipse when _vertexHandle == ShapeHandle.FocusPoint:
+            {
+                // 拖**焦点三角形的顶点 P**：这一拖没有读数。
+                // 理由同三角形顶点那条：P 本身不是老师要看的那个数，
+                // 而"|PF₁| + |PF₂| = 2a"是**另一个**读数（不在这一批里，别把 α 报出来充数）。
+                _vertexReadout = VertexReadoutKind.None;
+                break;
+            }
+
             case StrokeKind.Ellipse:
+            case StrokeKind.ConicEllipse:
             {
                 bool vertical = _vertexHandle == ShapeHandle.AxisTop;
                 var d = pts[^1] - pts[0];
@@ -6309,7 +6433,10 @@ public class InkEngine
             // 症状是"拖单位长度点什么都没发生"，见 SelectionHandles.IsVertexHandle）。
             bool handleLike = h is SelHandle.EndpointA or SelHandle.EndpointB
                                  or SelHandle.Left or SelHandle.Right or SelHandle.Top or SelHandle.Bottom
-                              || SelectionHandles.IsVertexHandle(h);
+                              || SelectionHandles.IsVertexHandle(h)
+                              // 焦点三角形的顶点 P（2026-09-22）：**它也是一格定义元素手柄**
+                              // ——少写这一格，屏幕上会画出一个"看得见、按不动"的圆点。
+                              || h == SelHandle.FocusPoint;
             if (handleLike && SelectionHandles.ShapeEditable(Doc.Selected, out var shape))
             {
                 var sh = SelectionHandles.HandleOf(shape, h);

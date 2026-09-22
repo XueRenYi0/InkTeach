@@ -37,6 +37,17 @@ internal enum SelHandle
     /// 值排在最后，前面那些数字一个都没动。
     /// </summary>
     VertexD,
+    /// <summary>
+    /// **焦点三角形的顶点 P**（椭圆（带焦点），2026-09-22）。
+    ///
+    /// 单独占一格、不复用顶点柄那几格：它**不是 `Points` 里的控制点**——P 是"参数角"
+    /// 算出来的（见 <see cref="Stroke.ConicEllipsePointLocal"/>），拖动语义也不同
+    /// （拖它 = 改那个角，椭圆本身一动不动）。混进顶点柄会让"顶点手柄 ↔ 控制点下标"
+    /// 那条约定撒谎。
+    ///
+    /// 值排在最后，前面那些数字一个都没动。
+    /// </summary>
+    FocusPoint,
 }
 
 /// <summary>
@@ -80,6 +91,13 @@ internal enum ShapeHandle
     Vertex0, Vertex1, Vertex2,
     /// <summary>第四个顶点（只有坐标系 / 数轴有，见 <see cref="SelectionHandles.VertexIndex"/>）。</summary>
     Vertex3,
+    /// <summary>
+    /// **焦点三角形的顶点 P**（只有椭圆（带焦点）有，2026-09-22）。
+    ///
+    /// 位置由参数角算出来（见 <see cref="SelectionHandles.ShapeHandleLocal"/>），
+    /// 所以它**不在** `Points` 里，也没有"第几个点"这回事——这就是它不复用 Vertex 那几格的原因。
+    /// </summary>
+    FocusPoint,
 }
 
 /// <summary>
@@ -416,6 +434,24 @@ internal static class SelectionHandles
                 dst[1] = ShapeHandle.AxisTop;
                 return 2;
 
+            case StrokeKind.ConicEllipse:
+            {
+                // **带焦点的那种椭圆**（2026-09-22）：两个半轴手柄和上面那个椭圆
+                // **一模一样**（定义元素就是同一套），只在"有焦点三角形"那一档多一个 P。
+                //
+                // P **放在最后**：命中是倒着找的（后画的先中），而 P 就在椭圆上、
+                // 和半轴端点可能离得很近——它更"具体"（拖它只动这个点），该优先。
+                if (dst.Length < 2) return 0;
+                dst[0] = ShapeHandle.AxisRight;
+                dst[1] = ShapeHandle.AxisTop;
+                if (s.FocusTriangle && dst.Length >= 3)
+                {
+                    dst[2] = ShapeHandle.FocusPoint;
+                    return 3;
+                }
+                return 2;
+            }
+
             case StrokeKind.Triangle:
             case StrokeKind.Parallelogram:
                 // **只有三个**：多边形是由顶点定义的，第四个角（平行四边形）是算出来的。
@@ -496,6 +532,8 @@ internal static class SelectionHandles
             // 椭圆只剩"右端点（管 a）＋ 上端点（管 b）"两个，见 ShapeHandlesOf。
             ShapeHandle.AxisRight => c + new Vector2(s.SemiAxisALocal, 0f),
             ShapeHandle.AxisTop => c + new Vector2(0f, -s.SemiAxisBLocal),   // 屏幕 y 向下，"上"是 -y
+            // 焦点三角形的顶点 P：由参数角算（不在 Points 里，见 ShapeHandle.FocusPoint）
+            ShapeHandle.FocusPoint => s.ConicEllipsePointLocal(),
             _ => c,
         };
     }
@@ -570,6 +608,7 @@ internal static class SelectionHandles
         ShapeHandle.Vertex1 => SelHandle.VertexB,
         ShapeHandle.Vertex2 => SelHandle.VertexC,
         ShapeHandle.Vertex3 => SelHandle.VertexD,
+        ShapeHandle.FocusPoint => SelHandle.FocusPoint,
         _ => SelHandle.None,
     };
 
@@ -611,6 +650,9 @@ internal static class SelectionHandles
             // 再往下那两格（Left / Bottom）只有通用框那套（矩形 / 图像 / 笔迹）用得到。
             SelHandle.Right => HasHandle(s, ShapeHandle.AxisRight) ? ShapeHandle.AxisRight : ShapeHandle.None,
             SelHandle.Top => HasHandle(s, ShapeHandle.AxisTop) ? ShapeHandle.AxisTop : ShapeHandle.None,
+            // 焦点三角形的顶点 P（只有"椭圆（带焦点）"的"有三角形"那一档会发这一格）：
+            // 和上面两格同一条判据——**问 ShapeHandlesOf 自己**，不另写名单。
+            SelHandle.FocusPoint => HasHandle(s, ShapeHandle.FocusPoint) ? ShapeHandle.FocusPoint : ShapeHandle.None,
             _ => ShapeHandle.None,
         };
     }
@@ -1324,6 +1366,7 @@ internal static class SelectionHandles
         var s = sel[0];
         if (s == null || s.IsImage) return false;
         if (s.Kind is not (StrokeKind.Rectangle or StrokeKind.Ellipse
+                           or StrokeKind.ConicEllipse
                            or StrokeKind.Triangle or StrokeKind.Parallelogram)) return false;
         stroke = s;
         return true;

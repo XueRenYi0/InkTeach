@@ -67,7 +67,13 @@ internal static class IconAtlas
         //（照 InkClass 的 case 20/21），所以不需要四个名字。
         if (name == "parabola") { DrawParabola(ctx, x, y, size, brush, 0f); return; }
         if (name == "parabolaRight") { DrawParabola(ctx, x, y, size, brush, 90f); return; }
-        if (name == "hyperbola") { DrawHyperbola(ctx, x, y, size, brush); return; }
+        if (name == "hyperbola") { DrawHyperbola(ctx, x, y, size, brush, asymptotes: true); return; }
+        // 「无渐近线」那一档（2026-09-22）：同两支曲线，只是不画那两条虚线辅助线。
+        if (name == "hyperbolaNoAsym") { DrawHyperbola(ctx, x, y, size, brush, asymptotes: false); return; }
+        // 椭圆（带焦点）（2026-09-22）：椭圆 ＋ 两个焦点（小点）＋（有那一档）焦点三角形。
+        // 和「椭圆」那张（`oval`）必须一眼分得开：多了两个点、以及两条连到 P 的线。
+        if (name == "ovalFocusTri") { DrawOvalFocus(ctx, x, y, size, brush, triangle: true); return; }
+        if (name == "ovalFocus") { DrawOvalFocus(ctx, x, y, size, brush, triangle: false); return; }
         // 立体图形（2026-09-20 第五批）：图标同样自绘。
         if (name == "cylinder") { DrawCylinder(ctx, x, y, size, brush); return; }
         if (name == "cone") { DrawCone(ctx, x, y, size, brush); return; }
@@ -320,13 +326,19 @@ internal static class IconAtlas
     }
 
     /// <summary>
-    /// 自绘的双曲线图标：左右两支（对应"实轴沿 x"那一档）。
+    /// 自绘的双曲线图标：左右两支（对应"实轴沿 x"那一档）＋（可选）**两条渐近线**。
     ///
     /// 参数方程就是画布上那一份 `x = ±a·cosh t、y = b·sinh t`（a = b = 4）——
     /// 两条外向的弧，中间留白，一眼和抛物线分得开（抛物线只有一支、也没有中间的空）。
+    ///
+    /// **2026-09-22 加了 `asymptotes` 这一档**（用户："图标就按照有渐近线和无渐近线"）：
+    /// 面板那一格有两档（画不画那两条虚线），图标必须能分开这两档。
+    /// 两条斜线画成**细的直线**（1.0，比曲线那 1.5 细）：图标只有 18 像素，
+    /// 画成虚线会糊成一团，而"比曲线细"这一点在屏幕上就够读成"这是辅助线"了。
+    /// 它们交于图标中心、斜率照 24 网格里那对 4 / 4 的框（和曲线同一个 a = b）。
     /// </summary>
     private static void DrawHyperbola(ID2D1DeviceContext ctx, float x, float y,
-                                      float size, ID2D1Brush brush)
+                                      float size, ID2D1Brush brush, bool asymptotes = true)
     {
         var saved = ctx.Transform;
         ctx.Transform = Matrix3x2.CreateScale(size / 24f)
@@ -335,6 +347,14 @@ internal static class IconAtlas
 
         const float tMax = 1.3f;
         const int seg = 8;
+        // 渐近线先画（在曲线下面），两条都过中心 (12, 12)，斜率的绝对值 = 1（a = b）。
+        if (asymptotes)
+        {
+            ctx.DrawLine(new Vector2(12f - 9f, 12f - 9f), new Vector2(12f + 9f, 12f + 9f),
+                         brush, 1f, _round);
+            ctx.DrawLine(new Vector2(12f - 9f, 12f + 9f), new Vector2(12f + 9f, 12f - 9f),
+                         brush, 1f, _round);
+        }
         for (int branch = 0; branch < 2; branch++)
         {
             var prev = Vector2.Zero;
@@ -347,6 +367,54 @@ internal static class IconAtlas
                 prev = q;
             }
         }
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// **自绘的「椭圆（带焦点）」图标**（2026-09-22）：椭圆 ＋ 两个焦点（小点）
+    /// ＋（`triangle` 为真时）焦点三角形。
+    ///
+    /// 摆法照画布上的几何（24 网格里取 a = 9.25、b = 6.25 → c = √(a²−b²) ≈ 6.82）：
+    ///   · 两个焦点在长轴（水平）上，画成**实心小点**（半径 1.6 的小圆涂实）；
+    ///   · 焦点三角形的顶点 P **落在椭圆上**（参数角 −120° = 左上方，和画布上那个默认角
+    ///     **同一个数**：`ShapeSpec.FocusPointDefaultU`）——用户 2026-09-22 要的就是
+    ///     "那个顶点弄在椭圆上面"：P 贴着椭圆那条线，一眼看出它在这个椭圆上；
+    ///   · 椭圆本体沿用 <see cref="DrawOval"/> 那对半轴（9.25 / 6.25）——和「椭圆」那一格
+    ///     摆在一起时"看得出是同一个椭圆、多了焦点"。
+    ///
+    /// 两档的差别就是**连不连那两条边**：不连时只剩两个点（用户 2026-09-22 定的口径：
+    /// "还是画焦点，只是不连三角形"）。
+    ///
+    /// ⚠ 顶点为什么**不取正上方**（`u = −π/2`）：正上方那个点正好落在椭圆的**上端点手柄**
+    /// 上（见 `ShapeHandle.AxisTop`）——画布上 P 会把手柄抢走。图标和画布**共用同一个角**
+    /// （`ShapeSpec.FocusPointDefaultU`），所以图标也用左上方那个点。
+    /// </summary>
+    private static void DrawOvalFocus(ID2D1DeviceContext ctx, float x, float y,
+                                      float size, ID2D1Brush brush, bool triangle)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        const float cx = 12f, cy = 12f, rx = 9.25f, ry = 6.25f;
+        const float c = 6.82f;                   // √(9.25² − 6.25²)
+        var f1 = new Vector2(cx - c, cy);
+        var f2 = new Vector2(cx + c, cy);
+        // P：椭圆上"参数角 120°"那个点（＝画布上焦点三角形顶点 P 的默认位置，
+        //    见 ShapeSpec.FocusPointDefaultU——**两边同一个数**）。
+        var p = new Vector2(cx + rx * MathF.Cos(ShapeSpec.FocusPointDefaultU),
+                            cy + ry * MathF.Sin(ShapeSpec.FocusPointDefaultU));
+
+        ctx.DrawEllipse(new Ellipse(new Vector2(cx, cy), rx, ry), brush, 1.5f);
+        if (triangle)
+        {
+            ctx.DrawLine(f1, p, brush, 1.5f, _round);
+            ctx.DrawLine(p, f2, brush, 1.5f, _round);
+        }
+        ctx.FillEllipse(new Ellipse(f1, 1.6f, 1.6f), brush);
+        ctx.FillEllipse(new Ellipse(f2, 1.6f, 1.6f), brush);
 
         ctx.Transform = saved;
     }

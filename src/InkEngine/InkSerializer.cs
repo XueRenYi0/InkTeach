@@ -145,12 +145,19 @@ internal static class InkSerializer
     ///         （它和正弦 / 余弦一样是两个控制点：起手点 ＋ 拖出去那个角点）。
     ///   · v22：新增**波浪线**（取值 25）。同样没加字节、同样不用迁移
     ///         （它和正弦同一套"起点 ＋ 终点"）。
+    ///   · v23：新增**椭圆（带焦点）**（取值 26），并且每条笔画多**两个字段**：
+    ///         一个字节的"画不画焦点三角形"（<see cref="Stroke.FocusTriangle"/>）
+    ///         ＋ 4 字节的"焦点三角形顶点 P 的参数角"（<see cref="Stroke.FocusPointU"/>）。
+    ///         加字段的理由同 v8 / v9 / v11 / v17：**必须卡在 `version >= 23` 上读**，
+    ///         否则读 v22 的文件会去读下一个字节（整体错位）。
+    ///         升版本的理由同 v6 / v7 / v15：老程序不认识 26 这个 `Kind`。
+    ///         读老文件**不需要迁移**（≤ v22 的文件里既没有这种椭圆、也没有这两位）。
     ///
     /// ⚠ **面板入口可以撤，`Kind` 的取值一个都不许删**（2026-09-20 第十二批撤了长方体 /
     /// 四面体的入口）：存档里存的是**一个字节**，删了就是"打开旧板书少一条"
     /// （同 2026-09-19 撤「数轴」入口那条规矩，见 计划-图形工具.md 11.2）。
     /// </summary>
-    public const int FormatVersion = 22;
+    public const int FormatVersion = 23;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -273,6 +280,14 @@ internal static class InkSerializer
         // ---- v17：棱柱底面几边形（见 Stroke.PrismSides）----
         // 一个字节（3~6；别的种类恒 DefaultPrismSides）。读端卡在 `version >= 17`。
         w.Write((byte)s.PrismSidesClamped);
+
+        // ---- v23：椭圆（带焦点）的两个字段（见 Stroke.FocusTriangle / FocusPointU）----
+        // 一个字节 ＋ 一个 float。同样**不按 Kind 判断要不要写**（理由同上面几位：
+        // 写起来省事，读端也不用再复现一遍同样的判断）。
+        // ⚠ `FocusPointU` 可能是 **NaN**（= "P 还没被拖过、按短半轴那一端自动摆"，
+        // 见那个字段的注释）——float 的位模式原样写出去就好，不要在这里做任何"清洗"。
+        w.Write((byte)(s.FocusTriangle ? 1 : 0));
+        w.Write(s.FocusPointU);
     }
 
     // =====================================================================
@@ -456,6 +471,15 @@ internal static class InkSerializer
             byte ps = r.ReadByte();
             s.PrismSides = ps >= Stroke.MinPrismSides && ps <= Stroke.MaxPrismSides
                 ? ps : Stroke.DefaultPrismSides;
+        }
+
+        // ---- v23：椭圆（带焦点）的"画不画焦点三角形" ＋ "P 的参数角"----
+        // 老文件没有这两位：三角形那个字节默认 true（画），参数角默认 **NaN**
+        //（= 还没定过，P 按短半轴那一端自动摆）——两个默认值正好就是"没拖过"的状态。
+        if (version >= 23)
+        {
+            s.FocusTriangle = r.ReadByte() != 0;
+            s.FocusPointU = r.ReadSingle();
         }
 
         // ---- v13：抛物线的第二个点**换了含义**，老文件要迁移一次 ----

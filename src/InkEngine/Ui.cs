@@ -210,6 +210,24 @@ public interface IEngineCommands
     /// 只动"下一笔用几边形"，**不改已经画好的那些**（它们各存各的）。
     /// </summary>
     void CycleSolidSides();
+    /// <summary>
+    /// **换下一档"双曲线画不画渐近线"**（有 → 无 → 有）。
+    ///
+    /// 只动"下一笔双曲线画不画那两条虚线"，**不改已经画好的那些**（它们各存各的）。
+    /// 入口和抛物线 / 直线 / 棱柱同一个位置：图形面板里「双曲线」那一段
+    /// **已经选中它时再点一次**——用户 2026-09-22 要的就是这个："图标就按照有渐近线和无渐近线"。
+    ///
+    /// ⚠ 画的过程中**一律画**那两条虚线（它们是画法的向导），松手那一刻才按档收口。
+    /// </summary>
+    void CycleHyperbolaAsymptotes();
+    /// <summary>
+    /// **换下一档"椭圆（带焦点）画不画焦点三角形"**（有 → 无 → 有）。
+    ///
+    /// 两档都是"椭圆 ＋ 两个焦点"，差别只在**连不连** F₁P、F₂P 那两条边
+    /// （用户 2026-09-22 定的口径："还是画焦点，只是不连三角形"）。
+    /// 入口同上：那一格**已经选中它时再点一次**；只动"下一笔"，不改已经画好的。
+    /// </summary>
+    void CycleEllipseFocusTriangle();
     void SetColor(Color4 color);
     void SetWidth(float logicalPx);
     /// <summary>
@@ -460,6 +478,24 @@ public static class ShapeSpec
         => tool is Tool.Prism or Tool.Pyramid or Tool.Frustum;
 
     /// <summary>
+    /// **「椭圆（带焦点）」那一格的默认顶点位置**：椭圆左上方那个点
+    /// （参数角 **−120°**，也就是 `P = O + (−a/2, −√3·b/2)`；局部坐标里 **+y 朝下**，
+    /// 所以"负的 sin"才是**上面**）。
+    ///
+    /// 它是"焦点三角形第三个顶点 P 还没被拖过"时摆的地方，所以**画布和图标读的是同一个数**
+    /// （图标层看不到 `Stroke`，那里是引擎内部类型——这一条和 <see cref="SolidEllipseRatio"/>
+    /// 同一个理由，只能放在这个公开的规则层里）。
+    ///
+    /// 为什么是"左上方"而不是"正上方"（看起来最上面）：
+    ///   · 正上方 `(0, −b)` 正好是椭圆**上端点手柄**待的地方，P 压上去会把那个手柄**抢走**
+    ///     （命中倒着找，后画的 P 先中）——"想拉长半轴，结果拖走的是 P"；
+    ///   · 左上这个角离上端点 / 右端点两个手柄都够远，而且**两种朝向的椭圆都适用**
+    ///     （横椭圆竖椭圆都是"左上方"，不用按 a / b 谁大分两支）；
+    ///   · 它的 x 分量 ≠ 0，所以**永远不和两个焦点共线**（三角形不会退化成一条线段）。
+    /// </summary>
+    public const float FocusPointDefaultU = -2f * MathF.PI / 3f;     // −120°（左上方）
+
+    /// <summary>
     /// 立体图形里椭圆的**扁率**（短半轴 / 长半轴）：照 InkClass 的 `2.646`。
     ///
     /// 它是"从上往下看"的那个**俯角**——所以一个画面里所有圆都该用同一个：
@@ -553,6 +589,21 @@ public readonly struct UiState
     /// </summary>
     public int SolidMinSides { get; init; }
     public int SolidMaxSides { get; init; }
+    /// <summary>
+    /// **双曲线那一格当前的档**：画不画那两条虚线渐近线（2026-09-22 加，见
+    /// <c>Engine.HyperbolaAsymptotes</c>）。界面拿它把那一格的图标在"有渐近线 / 无渐近线"
+    /// 两张之间换，并在右边点出**2 个档位点**。
+    ///
+    /// 注意它是"**下一笔**画不画"，不是"板上那些双曲线现在有没有"——那些各存各的
+    /// （见 <c>Stroke.ShowAsymptotes</c>）。和 <see cref="LineDash"/> 是同一条口径。
+    /// </summary>
+    public bool HyperbolaAsymptotes { get; init; }
+    /// <summary>
+    /// **椭圆（带焦点）那一格当前的档**：画不画焦点三角形（2026-09-22 加，见
+    /// <c>Engine.EllipseFocusTriangle</c>）。两档**都画两个焦点**，差别只在连不连那两条边。
+    /// 界面拿它换图标 + 点 2 个档位点。同 <see cref="HyperbolaAsymptotes"/>：只管"下一笔"。
+    /// </summary>
+    public bool EllipseFocusTriangle { get; init; }
     public bool PassThrough { get; init; }
     /// <summary>是否处于白板模式（画布有不透明底色）。</summary>
     public bool Board { get; init; }

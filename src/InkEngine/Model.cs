@@ -220,6 +220,22 @@ public enum Tool
     /// 详见 <see cref="StrokeKind.Wave"/>。
     /// </summary>
     Wave = 30,
+
+    /// <summary>
+    /// **椭圆（带焦点）**（2026-09-22，用户："还有在第二行增加椭圆，要带焦点"）：
+    /// 放在**第二行（曲线那一行）**的一格，画出来是一个**圆锥曲线意义上的椭圆**——
+    /// 椭圆本身 ＋ **两个焦点**；另有一档"有 / 无焦点三角形"（三角形第三个顶点在椭圆上，
+    /// 可以在椭圆上拖着走，用来讲 `|PF₁| + |PF₂| = 2a`）。
+    ///
+    /// 和第一行那个 <see cref="Tool.Ellipse"/> **两个工具并存**（用户 2026-09-22 拍板：
+    /// "新增一格，两格并存"）：那一个是"画个椭圆图形"（只要形状、没有焦点），
+    /// 这一个是为了讲焦点 / 焦点三角形的题。
+    ///
+    /// 定义元素和 <see cref="StrokeKind.Ellipse"/> **完全一样**（中心 ＋ 外角点，
+    /// 于是 a = |dx|、b = |dy|），所以画法、两个半轴手柄、紧框**全都共用那一份**
+    /// —— 多出来的只有一个"P 在椭圆上的角度"和一个"画不画焦点三角形"的开关。
+    /// </summary>
+    ConicEllipse = 31,
 }
 
 /// <summary>An axis-aligned rectangle in virtual-desktop pixels.</summary>
@@ -596,6 +612,26 @@ internal enum StrokeKind
     /// 值同样只能追加在末尾。
     /// </summary>
     Wave = 25,
+
+    /// <summary>
+    /// **椭圆（带焦点）**（2026-09-22，见 <see cref="Tool.ConicEllipse"/>）。
+    ///
+    /// `Points` = **两个定义元素**，和 <see cref="Ellipse"/> **完全一样**：
+    ///   · `[0]` **中心 O**；`[1]` **外角点 E**，`a = |E.x − O.x|`、`b = |E.y − O.y|`。
+    ///
+    /// 多出来的两件事都**不是"点"**，所以没有占 `Points`（占的话，紧框 / 存档 /
+    /// 变换那一套全得为它多写一份"这条点不算定义元素"的规矩）：
+    ///   · <see cref="Stroke.FocusTriangle"/> = 画不画焦点三角形（对象自己的档，进存档）；
+    ///   · <see cref="Stroke.FocusPointU"/> = 焦点三角形第三个顶点 P **在椭圆上的参数角**
+    ///     （P 由它现算，见 <see cref="Stroke.ConicEllipsePointLocal"/>）——
+    ///     存角不存点，于是"拖半轴把它拉扁"之后 P **自动还在椭圆上**（不必再校正一次）。
+    ///
+    /// 两个焦点由长短轴现算（`c = √(a² − b²)`，见 <see cref="Stroke.ConicEllipseFociLocal"/>），
+    /// 不存：它们是椭圆的**函数**，存下来就会跟半轴对不上（老毛病："同一个量存两份"）。
+    ///
+    /// 值同样只能追加在末尾。
+    /// </summary>
+    ConicEllipse = 26,
 }
 
 /// <summary>
@@ -2039,6 +2075,146 @@ internal sealed class Stroke
     public bool ShowAsymptotes = true;
 
     /// <summary>
+    /// 改"画不画那两条虚线渐近线"，**并且让几何缓存失效**。
+    ///
+    /// ⚠ **光给字段赋值是不够的**（2026-09-22 用户报的就是这件事："我选择的不带渐近线的，
+    /// 但是画完以后还有渐近线？"）：渐近线走的是**辅助几何槽**，那个槽按 `Revision` 缓存
+    /// （见 <see cref="BuildAuxGeometry"/>）。而画的过程中**恒为"画"**（那是画法的向导，
+    /// 见 `Engine.BeginShapeAt`），松手那一刻才按面板那一档收口——如果只是把字段改成 false，
+    /// 屏幕上那份"带渐近线"的缓存几何**原样留着**，于是看着像"这一档根本没生效"
+    ///（下一次编辑把它重建出来才会消失，更让人摸不着头脑）。
+    ///
+    /// ⚠ 教训（记在 计划-图形工具.md §39.5）：**改一个进几何的字段，就得让它对应的缓存失效**；
+    /// 而且只查字段的自检**照不出这个 bug**（第一版就是这么漏的）——现在两处自检都改成
+    /// **数屏幕像素**（有那一档那块必须有墨、无那一档必须一个墨点都没有）。
+    /// </summary>
+    public void SetShowAsymptotes(bool on)
+    {
+        if (ShowAsymptotes == on) return;
+        ShowAsymptotes = on;
+        Revision++;                     // 辅助几何（那两条虚线）重建的触发点
+    }
+
+    /// <summary>
+    /// **椭圆（带焦点）要不要画焦点三角形**（对象自己的档，进存档，默认画）。
+    ///
+    /// 两档的含义（用户 2026-09-22 定的口径）：**两个焦点永远画**（"要带焦点"），
+    /// 这一档只管**连不连** F₁P、F₂P 那两条边——
+    ///   · `true`  ＝ 椭圆 ＋ 两焦点 ＋ 焦点三角形（P 可拖，讲 `|PF₁| + |PF₂| = 2a` 用）；
+    ///   · `false` ＝ 椭圆 ＋ 两焦点（只有点，没有三角形）。
+    ///
+    /// 只对 <see cref="StrokeKind.ConicEllipse"/> 有意义（别的种类恒 true，照旧不读它）。
+    /// </summary>
+    public bool FocusTriangle = true;
+
+    /// <summary>
+    /// 画焦点那两个**小圆点**的半径（局部坐标，逻辑像素）。
+    ///
+    /// 3 是试出来的：再小（1.5）就只是一个 5 像素的小疙瘩、在板书上找不着；
+    /// 再大（6）就盖住了它附近那段椭圆弧，看着像个洞。描边用的是这一笔自己的宽度，
+    /// 所以小圆点画出来是"一个略粗的实心点"（内圈只剩 1~2 像素）。
+    /// </summary>
+    public const float FocusDotRadius = 3f;
+
+    /// <summary>
+    /// 焦点三角形第三个顶点 P **在椭圆上的参数角**（弧度，见 <see cref="ConicEllipsePointLocal"/>）：
+    /// `P = O + (a·cos u, b·sin u)`。
+    ///
+    /// **`NaN` = "还没定过"**，这时按 <see cref="DefaultFocusPointU"/> 取**短半轴那一端**
+    /// （见那里的注释）。用 NaN 当"自动"这个语义是仓库里已有的约定
+    /// （<see cref="OutlineBreak"/> 就是这么标"这里抬笔"的），好处是**不用再加一个
+    /// "用户动过没有"的布尔位**——那个位一旦加进来，就又多一处"复制 / 存档 / 撤销
+    /// 忘记带上它"的地方。
+    /// </summary>
+    public float FocusPointU = float.NaN;
+
+    /// <summary>
+    /// **P 还没被拖过时的默认位置**：椭圆**左上方**那个点（参数角 −120°）。
+    ///
+    /// 这个数是**公开规则层**的常量（<see cref="ShapeSpec.FocusPointDefaultU"/>），
+    /// 转发一下只是为了"读起来贴着 P"——**画布和图标读的是同一个数**，
+    /// 所以图标上那个焦点三角形和真画出来的一模一样。
+    /// 为什么选左上方（而不是"正上方"）、为什么是常数（不随 a / b 变），见那边的注释。
+    /// </summary>
+    public const float DefaultFocusPointU = ShapeSpec.FocusPointDefaultU;
+
+    /// <summary>P 的参数角：没定过（NaN）就取默认那个（左上方，见 <see cref="DefaultFocusPointU"/>）。</summary>
+    public float FocusPointAngleLocal
+        => float.IsNaN(FocusPointU) ? DefaultFocusPointU : FocusPointU;
+
+    /// <summary>
+    /// 焦点三角形第三个顶点 **P**（局部坐标）：按参数角算出来的椭圆上的一个点
+    /// （`P = O + (a·cos u, b·sin u)`）。
+    ///
+    /// **存角不存点**的收益就在这里：a / b 被拖手柄改掉之后 P **自动还在椭圆上**，
+    /// 不需要任何一处"改完几何记得把 P 拉回椭圆"的补丁（那种补丁必定有人漏）。
+    /// </summary>
+    public Vector2 ConicEllipsePointLocal()
+    {
+        var c = ShapeCenterLocal;
+        float u = FocusPointAngleLocal;
+        return new Vector2(c.X + MathF.Cos(u) * SemiAxisALocal,
+                           c.Y + MathF.Sin(u) * SemiAxisBLocal);
+    }
+
+    /// <summary>
+    /// **两个焦点**（局部坐标，`F1` 在长轴的负方向那头）：`c = √(a² − b²)`，
+    /// 长轴是哪一条由 a / b 谁大决定。
+    ///
+    /// 退化（正圆，a == b）时 `c = 0`，两个焦点都落在中心——照画（两个点叠在一起），
+    /// 不做"正圆不画焦点"那种特例：老师画圆的时候本来就不该用这个工具，
+    /// 而半路上把它拖成圆的，看到"焦点收进圆心"正是他想要的那个事实。
+    /// </summary>
+    public (Vector2 F1, Vector2 F2) ConicEllipseFociLocal()
+    {
+        var c = ShapeCenterLocal;
+        float a = SemiAxisALocal, b = SemiAxisBLocal;
+        float cc = a * a - b * b;
+        if (cc <= 0f) return (c, c);                 // 圆（或更扁的反向）：焦点收在中心
+        float f = MathF.Sqrt(cc);
+        return a >= b ? (new Vector2(c.X - f, c.Y), new Vector2(c.X + f, c.Y))
+                      : (new Vector2(c.X, c.Y - f), new Vector2(c.X, c.Y + f));
+    }
+
+    /// <summary>
+    /// 把 P **拖到哪儿**（画布上拖那个圆点时调）：把那个位置折成参数角存起来
+    /// （`u = atan2(Δy/b, Δx/a)`）。
+    ///
+    /// 折算这一步就是"P 永远在椭圆上"的保证：拖到椭圆里面 / 外面都无所谓，
+    /// 落到屏幕上的永远是椭圆上离那个方向最近的一点。
+    /// </summary>
+    public void SetConicEllipsePointFromLocal(float x, float y)
+        => SetConicEllipsePointAngle(ConicEllipseAngleOf(new Vector2(x, y)));
+
+    /// <summary>直接写 P 的参数角（拖 P 松手时走这条，见 <see cref="ConicEllipseAngleOf"/>）。</summary>
+    public void SetConicEllipsePointAngle(float u)
+    {
+        FocusPointU = u;
+        Revision++;                                  // 几何变了：缓存失效、脏区重算（同 SetPoint）
+    }
+
+    /// <summary>
+    /// 一个**局部坐标**的点折成 P 的参数角（`atan2(Δy/b, Δx/a)`）。
+    ///
+    /// 拖 P 的**预览**和**落笔**都调它——两处各写一份 atan2 的话，
+    /// 屏幕上拖到的地方和松手之后停的地方会差一点点（"松手跳一下"）。
+    /// </summary>
+    public float ConicEllipseAngleOf(Vector2 local)
+    {
+        var c = ShapeCenterLocal;
+        float a = MathF.Max(1e-3f, SemiAxisALocal), b = MathF.Max(1e-3f, SemiAxisBLocal);
+        return MathF.Atan2((local.Y - c.Y) / b, (local.X - c.X) / a);
+    }
+
+    /// <summary>换一下"画不画焦点三角形"（面板那一格再点一次，只作用于**下一笔**）。</summary>
+    public void SetFocusTriangle(bool on)
+    {
+        if (FocusTriangle == on) return;
+        FocusTriangle = on;
+        Revision++;
+    }
+
+    /// <summary>
     /// 双曲线**画到哪为止**（照 InkClass 的 `case 24`：`for (i = a; i &lt;= |dx|)`）：
     /// **画到"曲线经过的那个点"那条轴为止** —— 老师拖到哪，曲线就在那儿收笔。
     ///
@@ -2573,8 +2749,8 @@ internal sealed class Stroke
                                     local[0], local[1], q2, width).Inflate(2f);
         }
 
-        // 圆 / 椭圆：走参数化外接（里面已经含了半个笔宽，见 ParametricInkBoundsOf）。
-        if (kind is StrokeKind.Circle or StrokeKind.Ellipse && local.Count >= 2)
+        // 圆 / 椭圆（含带焦点的那种）：走参数化外接（里面已经含了半个笔宽，见 ParametricInkBoundsOf）。
+        if (local.Count >= 2 && (kind == StrokeKind.Circle || IsSemiAxisEllipse(kind)))
             return ParametricInkBoundsOf(kind, transform, Matrix3x2.Identity,
                                          local[0], local[1], width).Inflate(2f);
 
@@ -2744,6 +2920,8 @@ internal sealed class Stroke
             Grid = Grid,          // 坐标系网格同理（它是对象自己的样子，不是全局设置）
             CurveAxis = CurveAxis,// 曲线朝向同理（双曲线哪条是实轴；抛物线现在是现推的）
             ShowAsymptotes = ShowAsymptotes,   // 双曲线画不画那两条虚线渐近线
+            FocusTriangle = FocusTriangle,     // 椭圆（带焦点）画不画焦点三角形
+            FocusPointU = FocusPointU,         // 焦点三角形的顶点 P 在椭圆上哪个位置（NaN = 还没定过）
             Transform = Transform,
         };
         // 用 AddPoint 加：它会顺便把 Bounds 和 Revision 收拾好。
@@ -3026,6 +3204,7 @@ internal sealed class Stroke
     /// </summary>
     public static bool IsShapeKind(StrokeKind kind)
         => kind is StrokeKind.Line or StrokeKind.Arrow or StrokeKind.Circle or StrokeKind.Ellipse
+                or StrokeKind.ConicEllipse
                 or StrokeKind.Triangle or StrokeKind.Parallelogram
                 or StrokeKind.Coordinate or StrokeKind.NumberLine
                 or StrokeKind.Cylinder or StrokeKind.Cone or StrokeKind.ConeFrustum
@@ -3033,6 +3212,20 @@ internal sealed class Stroke
                 or StrokeKind.Cuboid or StrokeKind.Tetrahedron
                 or StrokeKind.Prism or StrokeKind.Pyramid or StrokeKind.Frustum
            || IsCurveKind(kind);
+
+    /// <summary>
+    /// **"中心 ＋ 两个半轴"定义的那两种椭圆**（<see cref="StrokeKind.Ellipse"/> 与
+    /// <see cref="StrokeKind.ConicEllipse"/>）——几何、紧框、两个半轴手柄、存档
+    /// **全部共用一份**，差别只有"带不带焦点"。
+    ///
+    /// **为什么要有这一个判据函数**：仓库里"圆 / 椭圆"出现过的地方有六七处
+    /// （紧框两处、轮廓折线、几何构建、手柄、姿态角读数……），加一种椭圆要是逐处去补
+    /// `or StrokeKind.ConicEllipse`，那就是"同一个名单写多处"的老毛病——
+    /// 漏一处的表现是"新椭圆画得出来，但点不中 / 紧框不对"（这种最难查）。
+    /// 所以凡是"按这一族分支"的地方都问它。
+    /// </summary>
+    public static bool IsSemiAxisEllipse(StrokeKind kind)
+        => kind is StrokeKind.Ellipse or StrokeKind.ConicEllipse;
 
     /// <summary>
     /// **棱柱 / 棱锥 / 棱台这一族**吗：底面都是那个正 n 边形、控制点都是"底面外接框两角 ＋
@@ -3123,7 +3316,7 @@ internal sealed class Stroke
             // 从圆心伸出去的细条（2026-09-19 出图核对时踩到：紧框算成 256×16）。
             // 这三条都是 O(1)，短路省不了什么。
             if (IsLineLike) return LineLikeInkBounds(Matrix3x2.Identity);
-            if (Kind is StrokeKind.Circle or StrokeKind.Ellipse)
+            if (Kind == StrokeKind.Circle || IsSemiAxisEllipse(Kind))
                 return ParametricInkBounds(ShapeCenterLocal, RimLocalPoint(), Matrix3x2.Identity);
             if (Kind is StrokeKind.Triangle or StrokeKind.Parallelogram && Points.Count >= 3)
                 return PolygonInkBounds(new Vector2(Points[0].X, Points[0].Y),
@@ -3251,7 +3444,7 @@ internal sealed class Stroke
     {
         if (local == null || local.Count < 2) return RectF.Empty;
         if (IsLineLike) return LineLikeInkBounds(local[0], local[^1], extra);
-        if (Kind is StrokeKind.Circle or StrokeKind.Ellipse)
+        if (Kind == StrokeKind.Circle || IsSemiAxisEllipse(Kind))
             return ParametricInkBounds(local[0], local[1], extra);
         // 曲线：除了点表还要知道"朝向"，所以转给专门那个入口（<see cref="CurvePreviewInkBounds"/>），
         // 口径和静止态、脏区那两份**完全同源**。
@@ -3566,6 +3759,7 @@ internal sealed class Stroke
                 break;
 
             case StrokeKind.Ellipse:
+            case StrokeKind.ConicEllipse:
             {
                 // 中心 ＋ 半轴（2026-09-19 改；以前是"外框两个对角点"）
                 var c = ShapeCenterLocal;
@@ -3577,6 +3771,33 @@ internal sealed class Stroke
                     float t = i / (float)n * MathF.Tau;
                     list.Add(new Vector2(c.X + MathF.Cos(t) * rx, c.Y + MathF.Sin(t) * ry));
                 }
+
+                // **带焦点的那种**（2026-09-22）多出三样，都得列进这份折线：
+                // 两个焦点 ＋（有档时）焦点三角形的两条边。理由是这一份折线的用途——
+                // 像素橡皮 / 套索判"碰到没有"（见 ShapeTouchesRect）：
+                // 漏掉谁的后果就是"这两条边明明画着、rub 过去擦不掉"，
+                // 而焦点坐在椭圆**里面**，不从这儿单独列一笔，橡皮根本够不着它。
+                if (Kind != StrokeKind.ConicEllipse) break;
+
+                var (f1, f2) = ConicEllipseFociLocal();
+                if (FocusTriangle)
+                {
+                    var p = ConicEllipsePointLocal();
+                    list.Add(OutlineBreak);        // 抬笔：F1→P、F2→P 是两笔，不能接成一条来回线
+                    list.Add(f1);
+                    list.Add(p);
+                    list.Add(OutlineBreak);
+                    list.Add(f2);
+                    list.Add(p);
+                }
+                // 两个焦点：屏幕上是个**小圆点**，折线这里用一小段近似
+                // （只要"橡皮 / 套索够得着"，形状不参与渲染，见 BuildConicEllipse）。
+                list.Add(OutlineBreak);
+                list.Add(f1);
+                list.Add(new Vector2(f1.X + FocusDotRadius, f1.Y));
+                list.Add(OutlineBreak);
+                list.Add(f2);
+                list.Add(new Vector2(f2.X + FocusDotRadius, f2.Y));
                 break;
             }
 
@@ -4005,6 +4226,8 @@ internal sealed class Stroke
         {
             StrokeKind.Rectangle => BuildRectangle(factory),
             StrokeKind.Ellipse => BuildEllipse(factory),
+            // 椭圆（带焦点）：椭圆 ＋ 两焦点 ＋（有档时）焦点三角形，见 BuildConicEllipse
+            StrokeKind.ConicEllipse => BuildConicEllipse(factory),
             StrokeKind.Circle => BuildCircle(factory),
             StrokeKind.Arrow => BuildArrow(factory),
             StrokeKind.Line => BuildLine(factory),
@@ -4305,6 +4528,75 @@ internal sealed class Stroke
     {
         float r = MathF.Max(0.5f, CircleRadiusLocal);
         return factory.CreateEllipseGeometry(new Ellipse(ShapeCenterLocal, r, r));
+    }
+
+    /// <summary>
+    /// **椭圆（带焦点）**的几何（2026-09-22）：椭圆本体 ＋ 两个焦点（小圆点）
+    /// ＋（有档时）焦点三角形的两条边 F₁P / F₂P。
+    ///
+    /// **为什么不用 `ID2D1EllipseGeometry`**：这里要的是"圆 ＋ 两条边 ＋ 两个点"**四段几何的并**，
+    /// 只有路径几何能装；而 `ID2D1GeometrySink` 在 Vortice 里没有 `AddEllipse`，
+    /// 所以椭圆本体按**折线**画（`EllipseSegments` 份，和 `ShapeOutline` 同一份口径、
+    /// 同一个段数函数——两处差一段就是"橡皮擦得掉、D2D 命中差一点"这种说不清的小账）。
+    ///
+    /// **为什么焦点和三角形走主几何、不走虚线那个辅助槽**（`Geometry2`）：
+    /// 辅助槽是"细虚线的辅助线"（渐近线、被挡住的棱）专用的；而焦点三角形是这道题的
+    /// **主体**——它得是实线、和椭圆同一个颜色同一个粗细，放辅助槽里就成了一条虚线。
+    /// </summary>
+    private ID2D1PathGeometry BuildConicEllipse(ID2D1Factory1 factory)
+    {
+        var c = ShapeCenterLocal;
+        float rx = MathF.Max(0.5f, SemiAxisALocal);
+        float ry = MathF.Max(0.5f, SemiAxisBLocal);
+
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+
+        // ① 椭圆本体：一圈折线（首尾相接 → 闭合）
+        int n = EllipseSegments(MathF.Max(rx, ry));
+        sink.BeginFigure(new Vector2(c.X + rx, c.Y), FigureBegin.Hollow);
+        for (int i = 1; i <= n; i++)
+        {
+            float t = i / (float)n * MathF.Tau;
+            sink.AddLine(new Vector2(c.X + MathF.Cos(t) * rx, c.Y + MathF.Sin(t) * ry));
+        }
+        sink.EndFigure(FigureEnd.Closed);
+
+        var (f1, f2) = ConicEllipseFociLocal();
+
+        // ② 焦点三角形的两条边：**一笔画 F₁ → P → F₂**（两条边共用中间的 P，
+        //    写成一条折线就是"画出来的那个三角形去掉底边"）。
+        if (FocusTriangle)
+        {
+            var p = ConicEllipsePointLocal();
+            sink.BeginFigure(f1, FigureBegin.Hollow);
+            sink.AddLine(p);
+            sink.AddLine(f2);
+            sink.EndFigure(FigureEnd.Open);
+        }
+
+        // ③ 两个焦点：小圆点（描边＝这一笔的宽度，见 FocusDotRadius 的注释）。
+        //    同样按折线画一圈（8 段足够小到看不出棱角）。
+        //    **两档都画**：用户 2026-09-22 定的"无焦点三角形"只是不连那两条边，焦点还在。
+        AddDot(sink, f1);
+        AddDot(sink, f2);
+
+        sink.Close();
+        return geo;
+
+        // 小工具：画一个"小圆点"（8 段折线的小圆）。
+        static void AddDot(ID2D1GeometrySink sink, Vector2 at)
+        {
+            const int seg = 8;
+            sink.BeginFigure(new Vector2(at.X + FocusDotRadius, at.Y), FigureBegin.Hollow);
+            for (int i = 1; i <= seg; i++)
+            {
+                float t = i / (float)seg * MathF.Tau;
+                sink.AddLine(new Vector2(at.X + MathF.Cos(t) * FocusDotRadius,
+                                         at.Y + MathF.Sin(t) * FocusDotRadius));
+            }
+            sink.EndFigure(FigureEnd.Closed);
+        }
     }
 
     // =====================================================================
@@ -5562,18 +5854,32 @@ internal sealed class SetStrokeGeometryAction : EditAction
     private readonly Stroke _target;
     private readonly Vector2[] _newPoints;
     private readonly Vector2[] _oldPoints;
+    /// <summary>焦点三角形顶点 P 的参数角（旧 / 新）。`null` = 这次改几何与它无关。</summary>
+    private readonly float? _oldFocusU;
+    private readonly float? _newFocusU;
     private readonly RectF _before;
     private readonly RectF _after;
 
     /// <summary>脏区自己管：要两个矩形，不要并集（见 EditAction.SelfManagesDirty）。</summary>
     public override bool SelfManagesDirty => true;
 
-    public SetStrokeGeometryAction(Stroke target, IReadOnlyList<Vector2> newPoints)
+    /// <param name="newFocusU">
+    /// 拖**焦点三角形的顶点 P** 时那个新的参数角；别的改几何动作传 `null`（默认）。
+    /// **为什么用可空的 float、不拿 `NaN` 当"没有"**：`NaN` 本身是 P 的一个**合法值**
+    ///（= "还没拖过、按短半轴那一端自动摆"），两种含义挤在一个数里，
+    /// 撤销那一路就会把"该恢复成 NaN"误判成"这次不关它的事"——
+    /// 表现是"拖完 P 按撤销，椭圆回去了、P 还停在新位置"（自检当场抓到过）。
+    /// </param>
+    public SetStrokeGeometryAction(Stroke target, IReadOnlyList<Vector2> newPoints,
+                                   float? newFocusU = null)
     {
         _target = target;
         _newPoints = new Vector2[newPoints.Count];
         for (int i = 0; i < newPoints.Count; i++) _newPoints[i] = newPoints[i];
         _oldPoints = LocalPoints(target);
+        _newFocusU = newFocusU;
+        // 旧值**永远要记**（哪怕是个 NaN）：撤销时要原样写回去。
+        _oldFocusU = newFocusU.HasValue ? target.FocusPointU : null;
         // **两个包围盒都在动手之前算**：改完之后旧位置就再也问不出来了。
         // 平行四边形的第四个顶点不在点表里，靠 kind 让它现推（脏区不能漏它）；
         // 曲线还要多传一个**朝向**（抛物线开哪个口 / 双曲线哪条是实轴）——
@@ -5585,12 +5891,16 @@ internal sealed class SetStrokeGeometryAction : EditAction
     public override RectF AffectedBefore => _before;
     public override RectF AffectedAfter => _after;
 
-    public override void Undo(InkDocument doc) => Apply(doc, _oldPoints);
-    public override void Redo(InkDocument doc) => Apply(doc, _newPoints);
+    public override void Undo(InkDocument doc) => Apply(doc, _oldPoints, _oldFocusU);
+    public override void Redo(InkDocument doc) => Apply(doc, _newPoints, _newFocusU);
 
-    private void Apply(InkDocument doc, Vector2[] pts)
+    private void Apply(InkDocument doc, Vector2[] pts, float? focusU)
     {
         doc.ApplyGeometryCore(_target, pts);
+        // P 的位置：这一拖带了它就写它（**该是 NaN 就写 NaN**，见构造函数的注释）；没带就一个字不动。
+        // **框不用重算**：P 在椭圆上、两个焦点在椭圆里，所以"P 动"不会把紧框撑出去
+        // （`_before` / `_after` 那份已然覆盖了整条椭圆）。
+        if (focusU.HasValue) _target.SetConicEllipsePointAngle(focusU.Value);
         doc.Dirty.Add(_before);                 // 旧位要擦
         doc.Dirty.Add(_after);                  // 新位要画（**分开两个矩形**，见类注释 ②）
     }
@@ -5881,10 +6191,15 @@ internal sealed class InkDocument
     /// 和 <see cref="ApplyTransform"/> 一样是"效果先应用、再记账"：
     /// 拖动期间模型一个字没动，全部位移只在浮动层的预览里（见 计划-图形工具.md 8.1①）。
     /// </summary>
-    public bool ApplyGeometry(Stroke s, IReadOnlyList<Vector2> newLocalPoints)
+    /// <param name="newFocusU">
+    /// 拖**焦点三角形的顶点 P** 时那个新的参数角（别的动作传 `null`，默认）——
+    /// P 不在控制点表里，所以它得单独当一路参数传进来（见 <see cref="ShapeHandle.FocusPoint"/>）。
+    /// </param>
+    public bool ApplyGeometry(Stroke s, IReadOnlyList<Vector2> newLocalPoints,
+                              float? newFocusU = null)
     {
         if (s == null || newLocalPoints == null || newLocalPoints.Count == 0) return false;
-        var act = new SetStrokeGeometryAction(s, newLocalPoints);
+        var act = new SetStrokeGeometryAction(s, newLocalPoints, newFocusU);
         act.Redo(this);
         Commit(act);
         return true;
@@ -6549,29 +6864,56 @@ internal sealed class InkDocument
         return DistToRect(p, rect) <= MathF.Max(1f, s.Width) * 0.5f;
     }
 
-    /// <summary>图形和这块矩形碰上了没有（按轮廓判，不按外框——见 Stroke.ShapeOutline）。</summary>
+    /// <summary>
+    /// 图形和这块矩形碰上了没有（**轮廓 ＋ 辅助线**两趟，不按外框——
+    /// 见 <see cref="Stroke.ShapeOutline"/> 与 <see cref="Stroke.InkPieces"/>）。
+    ///
+    /// ⚠ **2026-09-21 补上第二趟（辅助线）**，修的是用户报的
+    /// "**双曲线的渐近线好像擦不掉**"：轮廓里**没有**渐近线（它只在辅助槽里），
+    /// 所以橡皮从虚线上掠过时判定"没碰上"，那一刀**什么也没擦**（曲线能擦、虚线纹丝不动）。
+    /// 被挡的那几条棱（立体图形）、正切的两条渐近线同理，现在都能擦到了。
+    ///
+    /// **为什么不干脆按 `InkPieces` 全量判**：坐标系 / 数轴的**网格**也在 pieces 里，
+    /// 而网格是**有意做成"不可擦"**的装饰（见 `--shapetest` 那条"落在网格线上 → 不碰它"）
+    /// —— 全量判会让"擦一下网格"把整个坐标系熔成一堆笔迹。
+    /// 网格那一笔的 `Aux` 是 false，所以"轮廓 ＋ 辅助线"这个判据正好把它挡在外面。
+    /// </summary>
     private static bool ShapeTouchesRect(Stroke s, in RectF rect)
     {
-        // 轮廓往外扩半个笔宽（+1 余量）再判交：笔身擦到就算碰到。
+        // 往外扩半个笔宽（+1 余量）再判交：笔身擦到就算碰到。①②两趟共用这个扩过的框。
         var r = rect.Inflate(MathF.Max(1f, s.Width) * 0.5f + 1f);
+        // ① 轮廓（曲线 / 边本身）。**跳过抬笔标记**（双曲线两支之间那一下）：
+        //    这一条不能省 —— NaN 喂进 SegmentHitsRect 会"比较全为 false"、
+        //    最后 return true，变成"任意一擦就整条删掉"。
         var pts = s.ShapeOutline();
         for (int i = 1; i < pts.Count; i++)
         {
+            if (Stroke.IsOutlineBreak(pts[i - 1]) || Stroke.IsOutlineBreak(pts[i])) continue;
             var a = pts[i - 1];
             var b = pts[i];
-            // **跳过抬笔标记**（双曲线两支之间那一下，见 OutlineBreak）。
-            // 这一条不能省：NaN 喂进 SegmentHitsRect 会一路"比较全为 false"，
-            // 最后**return true**——也就是"橡皮碰到 NaN 那段就算碰到"，
-            // 于是任意一擦都把整条双曲线删掉（比不跳过还糟）。
-            if (Stroke.IsOutlineBreak(a) || Stroke.IsOutlineBreak(b)) continue;
+            if (Hit(s, a, b, r)) return true;
+        }
+        // ② **辅助线**（渐近线 / 被挡住的棱）：它们**不在轮廓里**，所以得单独走一遍 ——
+        //    这正是"双曲线的渐近线擦不掉"的修法。网格那一笔的 Aux 是 false，不会被误判
+        //    （网格有意做成不可擦，见上面那条注释）。
+        foreach (var piece in s.InkPieces())
+        {
+            if (!piece.Aux) continue;
+            for (int k = 1; k < piece.Pts.Count; k++)
+                if (Hit(s, piece.Pts[k - 1], piece.Pts[k], r)) return true;
+        }
+        return false;
+
+        // 小工具：把一段（局部坐标）过变换再判交。
+        static bool Hit(Stroke s, Vector2 a, Vector2 b, in RectF r)
+        {
             if (!s.Transform.IsIdentity)
             {
                 a = Vector2.Transform(a, s.Transform);
                 b = Vector2.Transform(b, s.Transform);
             }
-            if (SegmentHitsRect(a, b, r)) return true;
+            return SegmentHitsRect(a, b, r);
         }
-        return false;
     }
 
     /// <summary>线段与轴对齐矩形相交（slab 法）。</summary>

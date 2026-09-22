@@ -206,6 +206,14 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             CurveShowcase(args.Length > 1 ? args[1] : "reports/四种曲线.bmp");
         }
+        else if (mode == "--conicshow")
+        {
+            // 2026-09-22：双曲线两档（有 / 无渐近线）＋ 椭圆两档（有 / 无焦点三角形）
+            // 摆成一张四格的图——这一批要看的正是"两档之间的差别"。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ConicShowcase(args.Length > 1 ? args[1] : "reports/圆锥曲线-两档.bmp");
+        }
         else if (mode == "--panelshow")
         {
             _autoExitAt = double.MaxValue;
@@ -705,6 +713,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --axisshow [路径]   出图：坐标系（带网格/不带）+ 数轴 + 一条虚线");
         Console.WriteLine("  --curvetest         四种曲线自检（画法 / 紧框 / 手柄精简 / 朝向 / 存档往返）");
         Console.WriteLine("  --curveshow [路径]  出图：抛物线四种开口 + 双曲线两个方向 + 正弦/余弦各一周期");
+        Console.WriteLine("  --conicshow [路径]  出图：双曲线两档（有/无渐近线）+ 椭圆两档（有/无焦点三角形）");
         Console.WriteLine("                      （第三行顺带出**旋转体那一族**：圆柱 / 圆锥 / 圆台 / 球）");
         Console.WriteLine("  --pagetest          整屏翻页自检（一屏 = 一页：页高 = 视口高、只动相机、到顶就停）");
         Console.WriteLine("  --iotest [路径]     导出自检（选中 → PNG 透明底 / JPEG 白底；给路径就保留文件）");
@@ -11898,14 +11907,21 @@ internal sealed class App : InkEngine.InkEngine
             (Tool.Coordinate, "坐标系"),
 
             // **第二行（2026-09-20 第五批）**：四种曲线。用户定的入口是
-            // "图形框里加第二行，高频的只要一行"——所以第一行八段一个没动，
-            // 段号也没挪（下面按段号点击的那些断言因此都不用改）。
-            (Tool.Parabola, "抛物线"), (Tool.Hyperbola, "双曲线"),
+            // "图形框里加第二行，高频的只要一行"——所以第一行八段一个没动。
+            //
+            // ⚠ **2026-09-22 用户重排了行首三格**（原话："椭圆排在第二行的最前面，
+            // 然后是椭圆的……图标前三个是椭圆，双曲线，抛物线"）：
+            //   ① 椭圆（带焦点）② 双曲线 ③ 抛物线 —— 三个**圆锥曲线**连在一起，
+            //   双曲线那一格当天还多了"有 / 无渐近线"两档、椭圆那一格多了"有 / 无焦点三角形"。
+            //   注意段落号是按**工具名**找的（`ShapeSegmentIndexForTest`），所以这次重排
+            //   不会让下面任何一条断言点错格子。
+            (Tool.ConicEllipse, "椭圆（带焦点）"),
+            (Tool.Hyperbola, "双曲线"), (Tool.Parabola, "抛物线"),
             (Tool.Sine, "正弦"), (Tool.Cosine, "余弦"),
             // 2026-09-20 第十六批：**波浪线**（用户："还有一个另外的**很多周期的波浪**的弦函数线"）。
             // 它和正弦是同一条曲线，差别只在**这一拖管什么**：
             // 正弦的框宽 = 一个周期（讲"一个周期的图象"）、波浪线的框宽 = 要画多长
-            //（周期由振幅定，讲周期性用）。所以两格紧挨着排，曲线那一行六格。
+            //（周期由振幅定，讲周期性用）。所以两格紧挨着排，曲线那一行七格。
             (Tool.Wave, "波浪线"),
             // 2026-09-20 第十五批：**正切**（用户："可以画正切"）。它和正弦 / 余弦同族
             // （都在第二行这一族曲线上），但**一笔**画完：按下是原点、拖出去是以它为中心的框
@@ -11939,7 +11955,9 @@ internal sealed class App : InkEngine.InkEngine
         // 只有 55 宽，低于"每段 ≥ 60"那条量出来的门槛（见 计划-图形工具.md §35）；
         // 第十四批加球：第三行 6 → **7** 段（604 ÷ 7 ≈ 81，还在门槛之上）。
         // 第十五批加正切、第十六批加波浪线：**第二行 4 → 6** 段（604 ÷ 6 ≈ 101）。
-        int[] wantRowLens = { 8, 6, 7 };
+        // 2026-09-22 加椭圆（带焦点）：**第二行 6 → 7** 段（604 ÷ 7 ≈ 86，和第三行一样宽，
+        // 仍在"每段 ≥ 60"那条门槛之上）。
+        int[] wantRowLens = { 8, 7, 7 };
 
         // 上带只在"指针落在面板上"时张开（见 FullUi.RailHoverZone）。点完一格、画完一笔
         // 之后指针可能在画布上，所以每次要点段之前先把指针挪回主条等它张开。
@@ -12094,6 +12112,9 @@ internal sealed class App : InkEngine.InkEngine
                 [Tool.Line] = 3,        // 实 / 虚 / 点
                 [Tool.Parabola] = 2,    // 上下 / 左右
                 [Tool.Prism] = 4, [Tool.Pyramid] = 4, [Tool.Frustum] = 4,   // 三 / 四 / 五 / 六
+                // 2026-09-22 加的两格，各 2 档：双曲线（有 / 无渐近线）、
+                // 椭圆（带焦点）（有 / 无焦点三角形）。
+                [Tool.Hyperbola] = 2, [Tool.ConicEllipse] = 2,
             };
             int pipOk = 0, pipNo = 0;
             var pipWrong = new List<string>();
@@ -12106,7 +12127,7 @@ internal sealed class App : InkEngine.InkEngine
                 if (!ok)
                     pipWrong.Add($"{want[i].name}：{gotCount} 个（期望 {wantCount}）");
             }
-            Check("档位点：**该有的那几格**有（直线 3 / 抛物线 2 / 棱柱族 4），别的图形一个点都没有",
+            Check("档位点：**该有的那几格**有（直线 3 / 抛物线 2 / 双曲线 2 / 椭圆带焦点 2 / 棱柱族 4），别的图形一个点都没有",
                   pipWrong.Count == 0,
                   pipWrong.Count > 0
                       ? string.Join("；", pipWrong)
@@ -12341,6 +12362,218 @@ internal sealed class App : InkEngine.InkEngine
               + $"{(rectLine == null ? "（没画出来）" : rectLine.Dash.ToString())}（期望 Solid）");
         Doc.Clear();
         Doc.ClearHistory();
+
+        // ================= A4. 双曲线 / 椭圆（带焦点）那两格：**再点一次换一档** =================
+        //
+        // 用户 2026-09-22 定的两条（原话）：
+        //   · 双曲线"增加两挡，有渐近线和无渐近线？**就是化的时候是都有渐近线，但是最终显示没有**，
+        //     图标就按照有渐近线和无渐近线"；
+        //   · 椭圆（带焦点）"也有两档，有焦点三角形和没有焦点三角形，焦点三角形顶点在椭圆上，
+        //     可以在椭圆上拖动"（"拖 P"那一条在 `--curvetest` 的 ⑤e 里验，这里只管格子）。
+        //
+        // 两格同构，所以一段里一起验，每格盯四件事：
+        //   ① 一轮两档（点第二下换到另一档、第三下转回来）；② 图标名跟着换；
+        //   ③ **真的画出来是按那一档**（几何层：`ShowAsymptotes` / `FocusTriangle`）；
+        //   ④ 双曲线多一条"**画的过程中一律有渐近线**"——半成品那一位必须是 true，
+        //      哪怕当前档是"无"（收口在松手那一刻，见 Engine.EndStroke）。
+        Console.WriteLine("  -- A4. 双曲线 / 椭圆（带焦点）：再点一次换一档（各 2 档）--");
+        GotoShapeBand();
+        int hySeg = InkUi.FullUi.ShapeSegmentIndexForTest(Tool.Hyperbola);          // 按工具名找（不写死段号）
+        int ceSeg = InkUi.FullUi.ShapeSegmentIndexForTest(Tool.ConicEllipse);
+
+        // 下面两条**屏幕像素**断言要数品红（照 --curvetest 那一套），所以这一段先换成品红，
+        // 段落末尾再换回原来的颜色（后面的 B/C/D 段不该受这一段影响）。
+        var colorBeforeA4 = Host.State.PaletteBase;
+        Host.Commands.SetColor(new Color4(1f, 0f, 1f, 1f));
+
+        // 渐近线上"离曲线足够远"的一个取样点（照 --pixelerasetest 4b 段那套）＋
+        // "数它周围那一小块的品红像素"。**为什么要数像素**：见下面"无渐近线"那条断言
+        // ——只查字段的话，"字段对了、屏幕上那两条虚线还留着"这种 bug 照不出来
+        //（第一版就是这么漏的，用户一眼就看见了）。
+        Vector2 AsymSample(Stroke s)
+        {
+            var outline = s.ShapeOutline();
+            for (int side = -1; side <= 1; side += 2)
+            {
+                var (from, to) = s.HyperbolaAsymptoteLocal(side);
+                for (int k = 1; k < 20; k++)
+                {
+                    var q = Vector2.Lerp(from, to, k / 20f);
+                    float d = float.MaxValue;
+                    for (int m = 0; m < outline.Count; m++)
+                        if (!Stroke.IsOutlineBreak(outline[m]))
+                            d = MathF.Min(d, Vector2.Distance(q, outline[m]));
+                    if (d > 14f) return q;
+                }
+            }
+            return new Vector2(float.NaN, float.NaN);
+        }
+        int InkAt(Vector2 q) => float.IsNaN(q.X)
+            ? -1
+            : ScreenProbe.CountMagenta((int)q.X - 18, (int)q.Y - 18, 36, 36);
+
+        // 归零到"有渐近线"那一档（最多三下：选中它 / 换一档 / 再换回来）。
+        for (int k = 0; k < 3
+             && (Host.State.Tool != Tool.Hyperbola || !Host.State.HyperbolaAsymptotes); k++)
+        {
+            EnsureRailOpen();
+            ClickSegment(hySeg);
+        }
+        Check("双曲线：点它 = 选中它，当前档 = **有渐近线**（默认档）",
+              Host.State.Tool == Tool.Hyperbola && Host.State.HyperbolaAsymptotes,
+              $"工具 {Host.State.Tool}、档 {Host.State.HyperbolaAsymptotes}");
+        Check("双曲线：有渐近线那一档的图标名 = hyperbola（两支 ＋ 两条细斜线）",
+              ui.ShapeIconNameForTest(hySeg) == "hyperbola", ui.ShapeIconNameForTest(hySeg));
+        Check("双曲线：那一格右边点**2 个档位点**、当前是第 1 个",
+              ui.ShapePipsForTest(hySeg) == (2, 0), $"{ui.ShapePipsForTest(hySeg)}");
+
+        // 真机画一条（双曲线是**两笔**：渐近线框 → 曲线经过的点）。
+        // `midCheck` 在**两笔之间**跑——那一刻半成品还在引擎手里（没进文档），
+        // 正好用来验 ④"画的过程里渐近线一直在"。
+        int hyX = (int)(_virtualX + _virtualW * 0.30f);
+        int hyY = (int)(_virtualY + _virtualH * 0.34f);
+        void DragHyperbola(int x, int y, Action midCheck)
+        {
+            SendMouse(x, y, 0);                                       SettleFrames(60);
+            SendMouse(x, y, Native.MOUSEEVENTF_LEFTDOWN);             SettleFrames(60);
+            SendMouse(x + 130, y + 60, 0);                            SettleFrames(40);
+            SendMouse(x + 260, y + 120, 0);                           SettleFrames(40);
+            SendMouse(x + 260, y + 120, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(160);   // 第 1 笔完
+            midCheck();
+            // 第 2 笔：**也是一次完整的按下-拖-松手**（照 --curvetest ⑧ 段那套；
+            // 只发移动 + 松手是**不算一笔**的——自检第一版就这么写的，画出来 0 个对象）。
+            SendMouse(x + 300, y + 80, 0);                            SettleFrames(50);
+            SendMouse(x + 300, y + 80, Native.MOUSEEVENTF_LEFTDOWN);   SettleFrames(60);
+            SendMouse(x + 330, y + 60, 0);                            SettleFrames(50);
+            SendMouse(x + 340, y + 50, Native.MOUSEEVENTF_LEFTUP);     SettleFrames(240);   // 第 2 笔完 → 提交
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        bool midAsymOn = false, midAsymOff = false;
+        DragHyperbola(hyX, hyY, () => midAsymOn = ActiveStroke != null && ActiveStroke.ShowAsymptotes);
+        var hyOn = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+        Check("双曲线·有渐近线档：画出来带那两条虚线（ShowAsymptotes = true）",
+              hyOn != null && hyOn.Kind == StrokeKind.Hyperbola && hyOn.ShowAsymptotes,
+              hyOn == null ? $"对象 {Doc.Strokes.Count} 个（没画出来）"
+                           : $"Kind {hyOn.Kind}、渐近线 {hyOn.ShowAsymptotes}（期望 true）");
+        Check("双曲线：画的过程中也画渐近线（有那一档，两笔之间为 true）",
+              midAsymOn, $"两笔之间 ShowAsymptotes = {midAsymOn}");
+        // **屏幕上也真有那两条虚线**（不是只在字段里）：在离曲线 > 14 像素的那段虚线上数品红。
+        var qOnAsym = AsymSample(hyOn);
+        Doc.InvalidateAll();
+        SettleFrames(200);
+        int asymInkOn = InkAt(qOnAsym);
+        Check("双曲线·有渐近线档：屏幕上**真有**那两条虚线（离曲线 14 像素以外那块有墨）",
+              asymInkOn > 20, $"{asymInkOn} 个品红像素（门槛 20）");
+
+        EnsureRailOpen();
+        ClickSegment(hySeg);                              // 再点一次 = 换到"无渐近线"
+        Check("双曲线：第 2 次点 = 换到**无渐近线**（工具没变）",
+              Host.State.Tool == Tool.Hyperbola && !Host.State.HyperbolaAsymptotes,
+              $"工具 {Host.State.Tool}、档 {Host.State.HyperbolaAsymptotes}（期望 False）");
+        Check("双曲线：图标名跟着变成 hyperbolaNoAsym",
+              ui.ShapeIconNameForTest(hySeg) == "hyperbolaNoAsym", ui.ShapeIconNameForTest(hySeg));
+        Check("双曲线：档位点跟着移到第 2 个",
+              ui.ShapePipsForTest(hySeg) == (2, 1), $"{ui.ShapePipsForTest(hySeg)}");
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        DragHyperbola(hyX, hyY + 320, () => midAsymOff = ActiveStroke != null && ActiveStroke.ShowAsymptotes);
+        var hyOff = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+        Check("双曲线：**无渐近线那一档，画的时候照样有**（向导不能少）",
+              midAsymOff, $"两笔之间 ShowAsymptotes = {midAsymOff}（期望 true）");
+        Check("双曲线·无渐近线档：画完只剩曲线（ShowAsymptotes = false）",
+              hyOff != null && hyOff.Kind == StrokeKind.Hyperbola && !hyOff.ShowAsymptotes,
+              hyOff == null ? $"对象 {Doc.Strokes.Count} 个（没画出来）"
+                            : $"Kind {hyOff.Kind}、渐近线 {hyOff.ShowAsymptotes}（期望 false）");
+        Check("双曲线：换档**只影响以后画的**，先前那条（有渐近线）一个字节没动",
+              hyOn != null && hyOn.ShowAsymptotes,
+              $"先前那条 = {(hyOn == null ? "（没了）" : hyOn.ShowAsymptotes.ToString())}（期望 true）");
+        // ⚠ **这一条才是用户报的那个 bug 的判据**："我选择的不带渐近线的，但是画完以后还有渐近线？"
+        // 根因是**改了字段、没让几何缓存失效**（见 Stroke.SetShowAsymptotes）——屏幕上那份
+        // "带渐近线"的辅助几何原样留着。**只查字段是绿的**，所以这里必须数屏幕像素：
+        // 同一个取样点（在渐近线上、离曲线 > 14 像素），"无"那一档必须**一个墨点都没有**。
+        var qOffAsym = AsymSample(hyOff);
+        Doc.InvalidateAll();
+        SettleFrames(200);
+        int asymInkOff = InkAt(qOffAsym);
+        Check("双曲线·无渐近线档：画完之后屏幕上**一个虚线墨点都没有**（不是只在字段里）",
+              asymInkOff == 0, $"{asymInkOff} 个品红像素（期望 0；非 0 就是缓存没重建）");
+
+        EnsureRailOpen();
+        ClickSegment(hySeg);                              // 第三下 = 转回来（一轮闭环）
+        Check("双曲线：第 3 次点 = 转回**有渐近线**（两档一轮）",
+              Host.State.Tool == Tool.Hyperbola && Host.State.HyperbolaAsymptotes,
+              $"工具 {Host.State.Tool}、档 {Host.State.HyperbolaAsymptotes}（期望 true）");
+
+        // ---- 椭圆（带焦点）：两档 = 有 / 无焦点三角形 ----
+        for (int k = 0; k < 3
+             && (Host.State.Tool != Tool.ConicEllipse || !Host.State.EllipseFocusTriangle); k++)
+        {
+            EnsureRailOpen();
+            ClickSegment(ceSeg);
+        }
+        Check("椭圆（带焦点）：点它 = 选中它，当前档 = **有焦点三角形**（默认档）",
+              Host.State.Tool == Tool.ConicEllipse && Host.State.EllipseFocusTriangle,
+              $"工具 {Host.State.Tool}、档 {Host.State.EllipseFocusTriangle}");
+        Check("椭圆（带焦点）：那一格的图标名 = ovalFocusTri",
+              ui.ShapeIconNameForTest(ceSeg) == "ovalFocusTri", ui.ShapeIconNameForTest(ceSeg));
+        Check("椭圆（带焦点）：那一格右边点**2 个档位点**、当前是第 1 个",
+              ui.ShapePipsForTest(ceSeg) == (2, 0), $"{ui.ShapePipsForTest(ceSeg)}");
+        Check("两格并存：第一行的「椭圆」和这一格是**两个格子、两张图标**（不是同一个）",
+              InkUi.FullUi.ShapeSegmentIndexForTest(Tool.Ellipse) != ceSeg
+              && ui.ShapeIconNameForTest(InkUi.FullUi.ShapeSegmentIndexForTest(Tool.Ellipse)) == "oval",
+              $"「椭圆」段 {InkUi.FullUi.ShapeSegmentIndexForTest(Tool.Ellipse)} 图标 "
+              + $"{ui.ShapeIconNameForTest(InkUi.FullUi.ShapeSegmentIndexForTest(Tool.Ellipse))}、"
+              + $"「椭圆（带焦点）」段 {ceSeg} 图标 {ui.ShapeIconNameForTest(ceSeg)}");
+
+        int ceX = (int)(_virtualX + _virtualW * 0.30f);
+        int ceY = (int)(_virtualY + _virtualH * 0.62f);
+        void DragConicEllipse(int x, int y)
+        {
+            SendMouse(x, y, 0);                                       SettleFrames(60);
+            SendMouse(x, y, Native.MOUSEEVENTF_LEFTDOWN);             SettleFrames(60);
+            SendMouse(x + 130, y + 60, 0);                            SettleFrames(40);
+            SendMouse(x + 260, y + 120, 0);                           SettleFrames(40);
+            SendMouse(x + 260, y + 120, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(240);
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        DragConicEllipse(ceX, ceY);
+        var ceOn = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+        Check("椭圆（带焦点）·有三角形档：画出来带焦点三角形（FocusTriangle = true）",
+              ceOn != null && ceOn.Kind == StrokeKind.ConicEllipse && ceOn.FocusTriangle,
+              ceOn == null ? $"对象 {Doc.Strokes.Count} 个（没画出来）"
+                           : $"Kind {ceOn.Kind}、焦点三角形 {ceOn.FocusTriangle}（期望 true）");
+        Check("椭圆（带焦点）：焦点 / 三角形走的是**主几何**（虚线辅助槽一笔都没有）",
+              ceOn != null && ceOn.InkPieces().Count(pc => pc.Aux) == 0,
+              ceOn == null ? "（没画出来）" : $"{ceOn.InkPieces().Count(pc => pc.Aux)} 笔 Aux（期望 0）");
+
+        EnsureRailOpen();
+        ClickSegment(ceSeg);                              // 再点一次 = 换到"无焦点三角形"
+        Check("椭圆（带焦点）：第 2 次点 = 换到**无焦点三角形**（工具没变）",
+              Host.State.Tool == Tool.ConicEllipse && !Host.State.EllipseFocusTriangle,
+              $"工具 {Host.State.Tool}、档 {Host.State.EllipseFocusTriangle}（期望 False）");
+        Check("椭圆（带焦点）：图标名跟着变成 ovalFocus",
+              ui.ShapeIconNameForTest(ceSeg) == "ovalFocus", ui.ShapeIconNameForTest(ceSeg));
+        Check("椭圆（带焦点）：档位点跟着移到第 2 个",
+              ui.ShapePipsForTest(ceSeg) == (2, 1), $"{ui.ShapePipsForTest(ceSeg)}");
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        DragConicEllipse(ceX, ceY);
+        var ceOff = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+        Check("椭圆（带焦点）·无三角形档：还是画两个焦点、只是不连那两条边（FocusTriangle = false）",
+              ceOff != null && ceOff.Kind == StrokeKind.ConicEllipse && !ceOff.FocusTriangle,
+              ceOff == null ? $"对象 {Doc.Strokes.Count} 个（没画出来）"
+                            : $"Kind {ceOff.Kind}、焦点三角形 {ceOff.FocusTriangle}（期望 false）");
+        EnsureRailOpen();
+        ClickSegment(ceSeg);                              // 第三下 = 转回来（留给后面 C 段按默认档拖）
+        Doc.Clear();
+        Doc.ClearHistory();
+        Host.Commands.SetColor(colorBeforeA4);            // 品红只借这一段用（见段首注释）
 
         // ================= B. 图形**一个热键都没有**（用户 2026-09-19 定）=================
         //
@@ -14524,6 +14757,80 @@ internal sealed class App : InkEngine.InkEngine
     }
 
     /// <summary>
+    /// 出图（2026-09-22）：**双曲线两档 ＋ 椭圆（带焦点）两档**摆成一张四格的图。
+    /// 用法 `--conicshow [路径]`，默认 `reports/圆锥曲线-两档.bmp`。
+    ///
+    /// 为什么单开一张、不塞进 `--curveshow`：那一张的三行已经满了（第二行末尾离立体
+    /// 只有 600 像素），塞进去会叠在一起（第十六批就这么出过一次错）。而这一批要看的
+    /// 正是"**两档之间的差别**"——四格并排、同一套尺寸，一眼就能对比：
+    ///   上排：双曲线**有 / 无**渐近线；下排：椭圆**有焦点三角形 / 只有焦点**。
+    /// 椭圆的 P 用**默认位置**（椭圆左上方那个点，见 `Stroke.DefaultFocusPointU`）——
+    /// 图上要看的正是"顶点**在椭圆上**、三角形在上半边"，和面板图标同一个位置。
+    /// </summary>
+    private void ConicShowcase(string path)
+    {
+        Console.WriteLine($"=== 出图：{path} ===");
+        BoardOn = true;                          // 白底：不然桌面背景会混进画面
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+
+        var ink = new Color4(0.11f, 0.12f, 0.15f, 1f);      // 板书的近黑色
+        const float colPitch = 1440f, rowPitch = 720f;
+        float x0 = _virtualX + 720f, y0 = _virtualY + 300f;
+
+        Stroke Make(Tool tool, StrokeKind kind, float x, float y)
+        {
+            var s = new Stroke
+            {
+                Tool = tool, Kind = kind, Color = ink, Width = 5f * DpiScale,
+            };
+            s.AddPoint(x, y, 1f, 0);
+            return s;
+        }
+
+        // ---- 上排：双曲线两档（**同一个几何**，只差那两条虚线在不在）----
+        // 画法按真实的两步来：第一步拖出**渐近线框**（+300, +120，斜率 0.4），
+        // 第二步定"曲线经过哪个点"（更横 → 焦点在 x 轴）。
+        for (int col = 0; col < 2; col++)
+        {
+            float cx = x0 + col * colPitch, cy = y0;
+            var h = Make(Tool.Hyperbola, StrokeKind.Hyperbola, cx, cy);
+            h.SetHyperbolaFromAsymptote(cx, cy, cx + 300f, cy + 120f, 8f);
+            h.SetHyperbolaThroughPoint(cx + 300f, cy + 104f);
+            h.ShowAsymptotes = col == 0;                 // 左：有渐近线；右：无渐近线
+            Doc.AddStroke(h);
+        }
+
+        // ---- 下排：椭圆（带焦点）两档（**同一个椭圆**，只差那两条边在不在）----
+        // 中心 ＋ 外角点拖 300 × 160 → 宽椭圆，焦点在横轴上、离中心 ±254。
+        // 左：有焦点三角形（**P 用默认位置**，也就是"顶点在椭圆上"的那个样子）；
+        // 右：只有两个焦点。
+        // ⚠ P 的默认角是**左上方**（120°，见 `Stroke.DefaultFocusPointU`）——图上看的就是
+        // "三角形的顶点贴着椭圆那条线、在上半边"，和面板图标上画的是同一个位置。
+        for (int col = 0; col < 2; col++)
+        {
+            float cx = x0 + col * colPitch, cy = y0 + rowPitch;
+            var e = Make(Tool.ConicEllipse, StrokeKind.ConicEllipse, cx, cy);
+            // ⚠ **不要用 `SetShapeBox`**：那是"三角形 / 平行四边形"的外框写法（会写三个顶点），
+            // 而椭圆的定义是"**中心 ＋ 外角点**"两个点 —— 用错的话画出来是个又细又高的怪东西
+            //（第一版出图时就是这么翻的：a 和 b 全错了）。正确写法是"起手点当中心、再拖出外角点"。
+            e.SetEnd(cx + 300f, cy + 160f);
+            e.FocusTriangle = col == 0;
+            Doc.AddStroke(e);
+        }
+
+        Doc.InvalidateAll();
+        SettleFrames(800);
+
+        bool ok = ScreenProbe.SaveBmp(path, (int)_virtualX, (int)_virtualY, 2880, 1800);
+        Console.WriteLine(ok ? $"  已保存 {path}" : "  保存失败");
+        Console.WriteLine();
+        _quit = true;
+    }
+
+    /// <summary>
     /// 线型自检（2026-09-19）：实线 / 虚线 / 点线。
     ///
     /// 三层判据，缺哪一层都可能"看着绿其实没做"：
@@ -16065,6 +16372,142 @@ internal sealed class App : InkEngine.InkEngine
                   $"{ws?.Points.Count ?? -1} 个控制点（期望 2）");
         }
 
+        // ================= ⑤e. 椭圆（带焦点）：真机一笔 ＋ 焦点 ＋ 拖 P =================
+        //
+        // 用户 2026-09-22 定的口径：
+        //   · 第二行加一格**椭圆（带焦点）**（和第一行那个"纯椭圆"**并存**，两个工具）；
+        //   · **两档**：有焦点三角形 / 没有焦点三角形——**两个焦点两档都画**，
+        //     "无"那一档只是**不连** F₁P、F₂P（原话："还是画焦点，只是不连三角形"）；
+        //   · 焦点三角形的**顶点 P 在椭圆上、可以拖着走**。
+        //
+        // 所以这一段盯五件事（第 ③/④ 条是硬判据，不是"看起来对"）：
+        //   ① 真机一笔画出来的是它；② 两个焦点满足 `c² = a² − b²`、在长轴上；
+        //   ③ **P 一定在椭圆上**——用椭圆的定义判：`|PF₁| + |PF₂| = 2a`（比"反解参数角"硬得多）；
+        //   ④ 拖 P：角变了、"和"照样 2a、**一步撤销回得去**；
+        //   ⑤ 两档：有三角形时多一笔、无三角形时它没了**但两个焦点还在**，
+        //      而且都不走虚线辅助槽（`Aux == false`，焦点三角形是主体不是辅助线）。
+        Console.WriteLine("  -- ⑤e. 椭圆（带焦点）：真机一笔 ＋ 焦点三角形 ＋ 拖 P --");
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetToolFromUi(Tool.ConicEllipse);
+            // 归到"有焦点三角形"那一档：不写死"进来时一定是默认档"（前面几段可能点过它）。
+            for (int k = 0; k < 4 && !Host.State.EllipseFocusTriangle; k++)
+                Host.Commands.CycleEllipseFocusTriangle();
+            SettleFrames(80);
+
+            // 按下 = **中心**、拖出去 = **外角点**（和第一行那个椭圆同一套定义）：
+            // 这里拖 260 × 120 → a = 260、b = 120，于是 c = √(260² − 120²) ≈ 230.65。
+            float ex = _virtualX + 1100f, ey = _virtualY + 1000f;
+            const float wa = 260f, wb = 120f;
+            SendMouse((int)ex, (int)ey, 0);                                        SettleFrames(60);
+            SendMouse((int)ex, (int)ey, Native.MOUSEEVENTF_LEFTDOWN);              SettleFrames(60);
+            SendMouse((int)(ex + wa), (int)(ey + wb / 2f), 0);                     SettleFrames(80);
+            SendMouse((int)(ex + wa), (int)(ey + wb), 0);                          SettleFrames(160);
+            SendMouse((int)(ex + wa), (int)(ey + wb), Native.MOUSEEVENTF_LEFTUP);  SettleFrames(250);
+
+            var ce = Doc.Strokes.Count == 1 ? Doc.Strokes[0] : null;
+            Check("带焦点椭圆·真机一笔：画出来的是**椭圆（带焦点）**一个对象",
+                  ce != null && ce.Kind == StrokeKind.ConicEllipse,
+                  $"对象 {Doc.Strokes.Count} 条，种类 {(ce == null ? "（没画出来）" : ce.Kind.ToString())}");
+            if (ce == null)
+            {
+                Console.WriteLine("  （后面几项没法验）");
+            }
+            else
+            {
+                Check("带焦点椭圆：两个定义元素（中心 ＋ 外角点，和第一行那个椭圆同一套）",
+                      ce.Points.Count == 2, $"{ce.Points.Count} 个控制点（期望 2）");
+                Check("带焦点椭圆：中心 = 按下那一点、a = 260、b = 120（±2）",
+                      Near(ce.ShapeCenterLocal.X, ex, 2f) && Near(ce.ShapeCenterLocal.Y, ey, 2f)
+                      && Near(ce.SemiAxisALocal, wa, 2f) && Near(ce.SemiAxisBLocal, wb, 2f),
+                      $"中心 ({ce.ShapeCenterLocal.X:F0},{ce.ShapeCenterLocal.Y:F0})"
+                      + $"（按下 ({ex:F0},{ey:F0})）、a {ce.SemiAxisALocal:F0}、b {ce.SemiAxisBLocal:F0}");
+
+                // ---- ② 两个焦点：c² = a² − b²，且落在**长轴**上 ----
+                float cc = MathF.Sqrt(wa * wa - wb * wb);                   // ≈ 230.65
+                var (f1, f2) = ce.ConicEllipseFociLocal();
+                Check($"带焦点椭圆：焦点在长轴上、c = √(a²−b²) ≈ {cc:F0}（±2）",
+                      Near(f1.X, ex - cc, 2f) && Near(f1.Y, ey, 2f)
+                      && Near(f2.X, ex + cc, 2f) && Near(f2.Y, ey, 2f),
+                      $"F1 ({f1.X:F0},{f1.Y:F0})、F2 ({f2.X:F0},{f2.Y:F0})（期望 y = {ey:F0}，x = ∓{cc:F0}）");
+
+                // ---- ③ P 在椭圆上：|PF₁| + |PF₂| = 2a（椭圆的定义） ----
+                // 这是"P 一定在椭圆上"最硬的一条判据：它不依赖我们对参数角的理解对不对。
+                float SumOfDists(Vector2 p) => Vector2.Distance(p, f1) + Vector2.Distance(p, f2);
+                var p0 = ce.ConicEllipsePointLocal();
+                Check($"带焦点椭圆：默认的 P 在椭圆上（|PF₁|+|PF₂| = 2a = {2 * wa:F0}）（±1）",
+                      Near(SumOfDists(p0), 2f * wa, 1f),
+                      $"和 = {SumOfDists(p0):F1}（期望 {2 * wa:F0}）");
+                // 默认角是**左上方**（120°，见 Stroke.DefaultFocusPointU）：
+                // 用户 2026-09-22 的口径"焦点三角形那个顶点……弄在椭圆上面"。
+                Check("带焦点椭圆：默认的 P 在椭圆的**左上方**（120° 那个点）",
+                      Near(p0.X, ex + wa * MathF.Cos(Stroke.DefaultFocusPointU), 2f)
+                      && Near(p0.Y, ey + wb * MathF.Sin(Stroke.DefaultFocusPointU), 2f),
+                      $"P ({p0.X:F0},{p0.Y:F0})（期望 ({ex + wa * MathF.Cos(Stroke.DefaultFocusPointU):F0},"
+                      + $"{ey + wb * MathF.Sin(Stroke.DefaultFocusPointU):F0})）");
+                Check("带焦点椭圆：默认的 P 不跟两个焦点共线（三角形不会退化成一条线段）",
+                      MathF.Abs(p0.Y - ey) > 1f && MathF.Abs(p0.X - ex) > 1f,
+                      $"P 相对中心 ({p0.X - ex:F0},{p0.Y - ey:F0})，焦点在 y = {ey:F0} 这条线上");
+                Check("带焦点椭圆：默认档 = **有焦点三角形**",
+                      ce.FocusTriangle, $"FocusTriangle = {ce.FocusTriangle}");
+
+                // ---- ⑤ 两档：折线笔数（① 椭圆 ②③ 三角形的两条边 ④⑤ 两个焦点），且都不走辅助槽 ----
+                int Pieces() => ce.InkPieces().Count(pc => pc.Pts.Count >= 2);
+                int AuxPieces() => ce.InkPieces().Count(pc => pc.Aux);
+                int piecesWithTri = Pieces();
+                Check("带焦点椭圆·有三角形档：画出来 5 笔（椭圆 ＋ 两条边 ＋ 两个焦点小圆点）",
+                      piecesWithTri == 5, $"{piecesWithTri} 笔（期望 5）");
+                Check("带焦点椭圆：**一笔都不走虚线辅助槽**（焦点三角形是主体，不是辅助线）",
+                      AuxPieces() == 0, $"{AuxPieces()} 笔是 Aux（期望 0）");
+
+                ce.SetFocusTriangle(false);
+                int piecesNoTri = Pieces();
+                Check("带焦点椭圆·无三角形档：少一笔（椭圆 ＋ 两个焦点小圆点 = 3 笔）、焦点还在",
+                      piecesNoTri == 3 && AuxPieces() == 0, $"{piecesNoTri} 笔（期望 3）");
+                ce.SetFocusTriangle(true);                     // 后面的断言接着按"有"那一档走
+
+                // ---- ④ 拖 P：模型里的角变了、"和"照样 2a、一步撤销回得去 ----
+                Doc.SelectOnly(new[] { ce });
+                SettleFrames(300);
+                var pHandleFrom = SelectionHandles.ShapeHandleCanvasPosition(ce, ShapeHandle.FocusPoint);
+                // 目标：把 P 拖到"参数角 45°"那个方向上的点（椭圆上那一点：
+                // center + (a·cos45°, b·sin45°) —— 注意**拖到哪儿都行**，模型会把方向折成角）。
+                var pTarget = new Vector2(ex + wa * 0.70711f, ey + wb * 0.70711f);
+                bool tookP = SelectionGestureForTest(pHandleFrom.X, pHandleFrom.Y);
+                UpdateSelectionGestureForTest(pTarget.X, pTarget.Y);
+                SettleFrames(140);
+                EndSelectionGestureForTest();
+                SettleFrames(250);
+
+                Check("带焦点椭圆·拖 P：真的抓住了那个圆点（手柄在 P 上）",
+                      tookP, $"接住 = {tookP}");
+                Check("带焦点椭圆·拖 P：角变成 45°（±0.03 弧度）",
+                      !float.IsNaN(ce.FocusPointU) && Near(ce.FocusPointU, MathF.PI / 4f, .03f),
+                      $"u = {(float.IsNaN(ce.FocusPointU) ? "NaN（没写进去）" : ce.FocusPointU.ToString("F4"))}"
+                      + $"（期望 {MathF.PI / 4f:F4}）");
+                var p1 = ce.ConicEllipsePointLocal();
+                Check($"带焦点椭圆·拖 P 之后：P **还在椭圆上**（|PF₁|+|PF₂| = 2a = {2 * wa:F0}）（±1）",
+                      Near(SumOfDists(p1), 2f * wa, 1f),
+                      $"P ({p1.X:F0},{p1.Y:F0})，和 = {SumOfDists(p1):F1}");
+                Check("带焦点椭圆·拖 P：**椭圆本身一动没动**（只有那个角变了）",
+                      Near(ce.SemiAxisALocal, wa, 2f) && Near(ce.SemiAxisBLocal, wb, 2f),
+                      $"a {ce.SemiAxisALocal:F0}、b {ce.SemiAxisBLocal:F0}");
+
+                Doc.Undo();
+                SettleFrames(200);
+                Check("带焦点椭圆·拖 P：一步撤销回到「还没拖过」的状态（P 回默认那一端）",
+                      float.IsNaN(ce.FocusPointU)
+                      || Near(ce.ConicEllipsePointLocal().X, p0.X, 2f)
+                      && Near(ce.ConicEllipsePointLocal().Y, p0.Y, 2f),
+                      $"FocusPointU = {(float.IsNaN(ce.FocusPointU) ? "NaN（自动）" : ce.FocusPointU.ToString("F4"))}"
+                      + $"，P = ({ce.ConicEllipsePointLocal().X:F0},{ce.ConicEllipsePointLocal().Y:F0})"
+                      + $"（默认 ({p0.X:F0},{p0.Y:F0})）");
+                Doc.Selected.Clear();
+                SettleFrames(120);
+            }
+        }
+
         // ================= ⑥ 存档：往返 ＋ 真 v11 老文件 =================
         Doc.Clear();
         Doc.ClearHistory();
@@ -16086,16 +16529,23 @@ internal sealed class App : InkEngine.InkEngine
         // 波浪线（v22 新增的取值）：和正弦同一套"起点 ＋ 终点"，差别只是**这一拖管什么**。
         var saveWave = NewCurve(Tool.Wave, StrokeKind.Wave, 900f, 1700f);
         saveWave.SetWaveBox(900f, 1700f, 1200f, 1600f, minAxis);            // A = 100 → 3 个周期
+        // 椭圆（带焦点）（v23 新增的取值 ＋ 两个新字段）：存"**无焦点三角形**那一档 ＋
+        // 一个**拖过的 P**"，这样两个字段都被真正走到（不是靠默认值蒙过去）。
+        var saveCe = NewCurve(Tool.ConicEllipse, StrokeKind.ConicEllipse, 400f, 1200f);
+        saveCe.SetEnd(660f, 1320f);                                        // a = 260、b = 120
+        saveCe.FocusTriangle = false;
+        saveCe.SetConicEllipsePointAngle(MathF.PI / 3f);                    // 60°（不用默认值）
         Doc.AddStroke(saveMe);
         Doc.AddStroke(saveHy);
         Doc.AddStroke(saveSin);
         Doc.AddStroke(saveTan);
         Doc.AddStroke(saveWave);
+        Doc.AddStroke(saveCe);
 
         var blob = InkSerializer.Save(Doc);
         var back = new InkDocument();
         InkSerializer.LoadInto(back, blob);
-        bool roundTrip = back.Strokes.Count == 5
+        bool roundTrip = back.Strokes.Count == 6
                          && back.Strokes[0].Kind == StrokeKind.Parabola
                          && Near(back.Strokes[0].ParabolaDirLocal().X, -1f, .01f)
                          && back.Strokes[1].Kind == StrokeKind.Hyperbola
@@ -16106,8 +16556,13 @@ internal sealed class App : InkEngine.InkEngine
                          && Near(back.Strokes[3].TangentHalfSpanLocal(), 160f, .5f)
                          && Near(back.Strokes[3].TangentHalfHeightLocal(), 3f * 160f, .5f)
                          && back.Strokes[4].Kind == StrokeKind.Wave
-                         && Near(back.Strokes[4].WaveCyclesLocal(), 3f, .02f);
-        Check("存档：五种曲线 ＋ 朝向 ＋ 渐近线开关都回来了（含 v21 正切 / v22 波浪线）",
+                         && Near(back.Strokes[4].WaveCyclesLocal(), 3f, .02f)
+                         && back.Strokes[5].Kind == StrokeKind.ConicEllipse
+                          && Near(back.Strokes[5].SemiAxisALocal, 260f, .5f)
+                          && Near(back.Strokes[5].SemiAxisBLocal, 120f, .5f)
+                          && !back.Strokes[5].FocusTriangle
+                          && Near(back.Strokes[5].FocusPointU, MathF.PI / 3f, .001f);
+        Check("存档：五种曲线 ＋ 椭圆（带焦点）＋ 朝向 ＋ 渐近线开关都回来了（含 v21 正切 / v22 波浪线 / v23 椭圆）",
               roundTrip,
               back.Strokes.Count == 5
                   ? $"{back.Strokes[0].Kind}/方向 {back.Strokes[0].ParabolaDirLocal()}、"
@@ -16115,7 +16570,30 @@ internal sealed class App : InkEngine.InkEngine
                     + $"{back.Strokes[2].Kind}、"
                     + $"{back.Strokes[3].Kind}（半支长 {back.Strokes[3].TangentHalfSpanLocal():F0}）、"
                     + $"{back.Strokes[4].Kind}（周期数 {back.Strokes[4].WaveCyclesLocal():F2}）"
-                  : $"只读回 {back.Strokes.Count} 条");
+                  : back.Strokes.Count == 6
+                    ? $"{back.Strokes[5].Kind}（焦点三角形 {back.Strokes[5].FocusTriangle}、"
+                      + $"P 的角 {back.Strokes[5].FocusPointU:F4} —— 期望 False / {MathF.PI / 3f:F4}）"
+                    : $"只读回 {back.Strokes.Count} 条");
+
+        // 真·v22 老文件：**一条带焦点椭圆**的末尾少 5 个字节（v23 新增的那两位：
+        // 1 字节开关 ＋ 4 字节 float）。读端必须退到"画三角形 ＋ P 还没定过（NaN）"。
+        // `MakeLegacyFile` 是"从整个文件末尾砍 N 个字节"，所以这里只能是**单条对象**的文件。
+        var legacyCeDoc = new InkDocument();
+        var legacyCe = NewCurve(Tool.ConicEllipse, StrokeKind.ConicEllipse, 600f, 900f);
+        legacyCe.SetEnd(860f, 1020f);
+        legacyCeDoc.AddStroke(legacyCe);
+        var oldCe = new InkDocument();
+        InkSerializer.LoadInto(oldCe, MakeLegacyFile(legacyCeDoc, 22, 5));
+        Check("存档：真 v22 老文件读得进来（1 条对象）", oldCe.Strokes.Count == 1, $"{oldCe.Strokes.Count} 条");
+        if (oldCe.Strokes.Count == 1)
+        {
+            var oc = oldCe.Strokes[0];
+            Check("存档：v22 老文件里没有那两位 → 焦点三角形退到默认（画）、P 退到「还没定过」",
+                  oc.Kind == StrokeKind.ConicEllipse && oc.FocusTriangle && float.IsNaN(oc.FocusPointU),
+                  $"Kind {oc.Kind}、FocusTriangle {oc.FocusTriangle}、"
+                  + $"FocusPointU {(float.IsNaN(oc.FocusPointU) ? "NaN（= 自动摆）" : oc.FocusPointU.ToString())}");
+        }
+
 
         // 真·v11 老文件：**一条对象**的那条笔画末尾少 1 个字节（就是 v12 的"渐近线"那一位）。
         // 注意 `MakeLegacyFile` 是"从整个文件末尾砍 N 个字节"，所以它只对**单条笔画**成立
@@ -18445,6 +18923,49 @@ internal sealed class App : InkEngine.InkEngine
         Check("橡皮落在坐标系的网格线上 → 不碰它（网格不是可擦对象，也不该把坐标系熔掉）",
               touched == 0 && Doc.Strokes.Count == 1 && Doc.Strokes.Contains(co),
               $"受影响 {touched} 条，对象 {Doc.Strokes.Count}（期望 0 / 1）");
+
+        // --- 4b. **双曲线的渐近线：橡皮必须擦得到**（用户 2026-09-21 报的 bug）----------
+        // 症状："双曲线的渐近线好像擦不掉"——判定"碰到没有"的那一份里**没有辅助线**
+        //（轮廓只含两支曲线），所以橡皮从虚线上掠过时判定"没碰上"、那一刀什么也没擦。
+        //
+        // 判据要挑得准：**沿渐近线找一个"离曲线足够远（> 10 像素）"的点**再擦 ——
+        // 只有这样才排除"其实是擦到曲线了"，老写法在这儿必然一条都碰不到。
+        Doc.Clear();
+        Doc.ClearHistory();
+        var hb = new Stroke
+        {
+            Tool = Tool.Hyperbola, Kind = StrokeKind.Hyperbola,
+            Color = new Color4(0f, 0f, 1f, 1f), Width = 4f * DpiScale,
+            ShowAsymptotes = true,
+        };
+        hb.AddPoint(cx, cy, 1f, 0);                  // 中心
+        hb.AddPoint(cx + 150f, cy + 100f, 1f, 0);    // 渐近线框的角点
+        hb.AddPoint(cx + 200f, cy + 60f, 1f, 0);     // 曲线经过的一点
+        Doc.AddStroke(hb);
+
+        Vector2 pickOnAsym = default;
+        bool foundAsym = false;
+        var hbOutline = hb.ShapeOutline();
+        for (int side = -1; side <= 1 && !foundAsym; side += 2)
+        {
+            var (from, to) = hb.HyperbolaAsymptoteLocal(side);
+            for (int k = 1; k < 20 && !foundAsym; k++)
+            {
+                var q = Vector2.Lerp(from, to, k / 20f);
+                float d = float.MaxValue;
+                for (int m = 0; m < hbOutline.Count; m++)
+                    if (!Stroke.IsOutlineBreak(hbOutline[m])) d = MathF.Min(d, Vector2.Distance(q, hbOutline[m]));
+                if (d > 10f) { pickOnAsym = q; foundAsym = true; }
+            }
+        }
+        Doc.BeginEraseRect();
+        int asymHit = foundAsym ? Doc.EraseRectAt(pickOnAsym.X, pickOnAsym.Y, 10f, 10f) : -1;
+        Doc.EndErase();
+        Check("双曲线的**渐近线**：橡皮从虚线上擦过去必须算碰到（老写法：这一刀什么也没擦）",
+              foundAsym && asymHit >= 1,
+              foundAsym
+                  ? $"在离曲线 {10f:F0} 像素以上的虚线上擦 → 受影响 {asymHit} 条"
+                  : "没找到「离曲线足够远」的渐近线取样点（几何变了？）");
 
         // --- 5. 一次拖拽扫过 5 条 = 一步撤销 -----------------------------------
         Doc.Clear();

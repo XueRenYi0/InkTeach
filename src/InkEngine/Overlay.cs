@@ -2169,6 +2169,13 @@ internal sealed class OverlayWindow : IDisposable
         // 是这个对象几何的一部分。漏了它，拖动预览会按"默认那一档"画，
         // 屏幕上就是"一个朝上的抛物线预览、松手变成朝右的"。
         g.CurveAxis = src.CurveAxis;
+        // **渐近线开关 / 焦点三角形**也要跟着（2026-09-22）：它们同样"是这个对象几何的一部分"
+        // ——漏了的话，一条"无渐近线"的双曲线在拖动预览里会突然长出两条虚线，松手又没了。
+        g.ShowAsymptotes = src.ShowAsymptotes;
+        g.FocusTriangle = src.FocusTriangle;
+        // P 的位置：拖动中用的是**预览那个角**（见 Engine.VertexPreviewFocusU），
+        // 没在拖 P 时（NaN）就照模型里那个（可能是 NaN = 自动摆，交给模型自己判）。
+        g.FocusPointU = float.IsNaN(app.VertexPreviewFocusU) ? src.FocusPointU : app.VertexPreviewFocusU;
         g.Transform = src.Transform;
         g.SetPoints(pts);           // 局部坐标：变换那一层仍由 g.Transform 负责
         DrawStroke(g);
@@ -2426,7 +2433,7 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private static Vector2 RotationGripAnchor(Stroke s)
     {
-        if (s.Kind == StrokeKind.Ellipse) return s.ShapeCenterLocal is var c
+        if (s.Kind == StrokeKind.Ellipse || Stroke.IsSemiAxisEllipse(s.Kind)) return s.ShapeCenterLocal is var c
             ? Vector2.Transform(c, s.Transform) : Vector2.Zero;
         if (s.Kind is StrokeKind.Triangle or StrokeKind.Parallelogram && s.Points.Count >= 3)
         {
