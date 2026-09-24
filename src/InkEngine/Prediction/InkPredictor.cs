@@ -18,7 +18,8 @@ internal struct PredictedPoint
 /// 不用"消息到达时刻"（那是投递节奏，不是笔的节奏）。
 ///
 /// **这份实现的重点不是公式，是"别甩墨"**（见 调研-压感与预测-原理.md 第三节）：
-///   · 地平线限幅：预测时长 ≤ MaxHorizonMs（默认 10 ms，允许 8~15）
+///   · 地平线限幅：预测时长默认 10 ms（推荐区间 8~15；命令行可调到硬上限 200 ms，
+///     只为把"过头"看明白，日常别用）
 ///   · 整体阻尼 Damping（默认 0.7）：宁可少补，不要冲过头
 ///   · 加速度单独衰减 AccelDamping（默认 0.4）后再限幅——差分出来的项噪声最大
 ///   · 慢速不预测（速度 < MinSpeed）：慢写时预测没有收益，只有抖动
@@ -60,7 +61,17 @@ internal sealed class InkPredictor
     public int MaxPoints { get; set; } = 4;
 
     public const double MinHorizonMs = 8.0;
+    /// <summary>地平线的**推荐区间上界**：默认 10 ms 与 8~15 这个区间都是用真实笔迹数据扫出来的。</summary>
     public const double MaxHorizonMs = 15.0;
+    /// <summary>
+    /// 地平线的**硬上限**：命令行（`--predictms`）给的再大也收在这里。
+    ///
+    /// 「推荐 8~15」和「只能到 15」是两件事，2026-09-22 分开：要把"预测过头有多难受"
+    /// 这件事在真机上看明白，就得敢把地平线调到远超推荐值——夹在 15 的话，人只会觉得
+    /// "开了跟没开一样"，然后把"功能没用"这个错误结论记下来（用户原话：
+    /// "我调到 100 试一下，看是不是感觉非常难受"）。上限仍然留着，防的是手滑填个 100000。
+    /// </summary>
+    public const double HardMaxHorizonMs = 200.0;
 
     // ---- 状态 -------------------------------------------------------------
 
@@ -155,7 +166,7 @@ internal sealed class InkPredictor
         float speed = Speed;
         if (speed < MinSpeed) return 0;                 // 慢写：不预测
 
-        double horizon = Math.Clamp(HorizonMs, MinHorizonMs, MaxHorizonMs);
+        double horizon = Math.Clamp(HorizonMs, MinHorizonMs, HardMaxHorizonMs);
 
         // 采样间隔：优先用真实间隔，异常时退回 8 ms（Chromium 的 kTimeInterval）。
         double interval = 0;
@@ -208,5 +219,5 @@ internal sealed class InkPredictor
     }
 
     /// <summary>地平线/参数越界时收进合法范围（命令行传进来的值也走这里）。</summary>
-    public void ClampHorizon() => HorizonMs = Math.Clamp(HorizonMs, MinHorizonMs, MaxHorizonMs);
+    public void ClampHorizon() => HorizonMs = Math.Clamp(HorizonMs, MinHorizonMs, HardMaxHorizonMs);
 }

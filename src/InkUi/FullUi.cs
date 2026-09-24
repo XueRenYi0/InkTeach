@@ -179,7 +179,7 @@ public sealed class FullUi : IOverlayUi
     private bool _peekArmed;
 
     /// <summary>「更多」抽屉里的行。</summary>
-    private enum Row { DarkTheme, AutoHide, BoardPattern, BoardStep, CoordGrid, Restart, Quit, CheckUpdate }
+    private enum Row { DarkTheme, AutoHide, BoardPattern, BoardStep, DwellShape, Restart, Quit, CheckUpdate }
 
     private static readonly (Row Kind, string Label, bool Dangerous, bool Gray)[] Rows =
     {
@@ -190,13 +190,11 @@ public sealed class FullUi : IOverlayUi
         // 底纹只画在板面上，板子没开就改了也看不见（InkClass 也是这么守的）。
         (Row.BoardPattern, "白板底纹", false, false),
         (Row.BoardStep, "底纹间距", false, false),
-        // 坐标系网格（2026-09-19 第三批）。
-        //
-        // 坐标系 / 数轴这两个**画图种类**已经进了上带（见 ShapeRows），
-        // 抽屉里只留这个"设置"。原先这里有一行灰着的「学科工具」占位，
-        // 2026-09-19 一度被三行真东西（坐标系/数轴/网格）替掉，随后用户要求
-        // "所有的图形都从图形框那个入口进"，于是两个工具挪走上带、这一行留下。
-        (Row.CoordGrid, "坐标系网格", false, false),
+        // 停顿成型（2026-09-23 第二十批，见 计划-图形工具.md §四十二）：
+        // 手写一笔停住 400ms → 把它变成规整图形。**默认开**（用户定的：
+        // "因为是停顿变，所以默认开"），所以这一行的开关初始就是「开」。
+        // 关掉 = 以后画的那些不再参与；已经变出来的图形不受影响（那是撤销的事）。
+        (Row.DwellShape, "停顿变图形", false, false),
         (Row.Restart, "重启软件", false, false),
         (Row.Quit, "退出", true, false),
         (Row.CheckUpdate, "检查更新", false, true),
@@ -204,7 +202,11 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>
     /// 第 1、3、4 行后面画分隔线（画的时候跳过的位置）。
-    /// 三刀切出四组：主题/贴边 · 底纹 · 坐标系网格 · 系统。
+    /// 三刀切出四组：主题/贴边 · 底纹 · 图形 · 系统。
+    ///
+    /// ⚠ **这几个数是行下标，插一行 / 删一行都必须跟着改**——2026-09-24 把「坐标系网格」
+    /// 挪进图形面板（见 <see cref="ShapeIcon"/>(Tool) 那一格）时就踩过一次：
+    /// 那一行删掉之后，"图形"这一组的线会落到「重启软件」后面去（分组看着就错了）。
     /// </summary>
     private static bool IsSeparatorAfter(int row) => row is 1 or 3 or 4;
 
@@ -356,6 +358,10 @@ public sealed class FullUi : IOverlayUi
         // 坐标系网格也是**引擎状态**（它决定新画的坐标系带不带格），同一套做法：
         // 启动时推一次。默认**关**（见 Engine.CoordGridDefault 的注释）。
         _host.Commands.SetCoordGridDefault(_host.GetPref("coordGrid") == "1");
+
+        // 停顿成型同样是引擎状态，而且**默认开**（用户 2026-09-23 定）。
+        // 所以这里读的是"关过的"那一份：只有明确写着 "0" 才关，没有这一项就是开。
+        _host.Commands.SetDwellShape(_host.GetPref("dwellShape") != "0");
     }
 
     private void SavePrefs()
@@ -373,6 +379,8 @@ public sealed class FullUi : IOverlayUi
                                       ? null : st.BoardOpacity.ToString("F2"));
         // 坐标系网格：默认关，只写"开了"这一种情况。
         _host.SetPref("coordGrid", st.CoordGridDefault ? "1" : null);
+        // 停顿成型：**默认开**，所以只写"关了"这一种情况（写成 "0"）。
+        _host.SetPref("dwellShape", st.DwellShapeOn ? null : "0");
 
         var off = new List<string>();
         for (int i = 1; i < _pinned.Length; i++) if (!_pinned[i]) off.Add(i.ToString());
@@ -508,9 +516,9 @@ public sealed class FullUi : IOverlayUi
     /// 加行/加图形都不用再来补一遍。
     /// </summary>
     private float BandHeightLogical()
-        => _bandCell == ShapeCell && ShapeRows.Length > 1
+        => _bandCell == ShapeCell && ShapeBandRows > 1
             ? Tokens.BandHeight
-              + (ShapeRows.Length - 1) * (Tokens.SegmentHeight + ShapeRowGap)
+              + (ShapeBandRows - 1) * (Tokens.SegmentHeight + ShapeRowGap)
             : Tokens.BandHeight;
 
     /// <summary>
@@ -779,7 +787,7 @@ public sealed class FullUi : IOverlayUi
             int row = ShapeSegmentRow(i);
             int col = ShapeSegmentCol(i);
             int cols = ShapeRowCount(row);
-            int rows = ShapeRows.Length;
+            int rows = ShapeBandRows;
             float sw = Math.Min(120f, (total - (cols - 1) * 6f) / cols);
             float sx = BandContentLeft() + col * (sw + 6f);
             float rowsTop = BandCenterY()
@@ -828,7 +836,7 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private int BandSegmentCount => _bandCell switch
     {
-        2 => 5, 6 => 2, 7 => 2, 8 => ShapeSegmentCount, 9 => 3, _ => 0,
+        2 => 5, 6 => 2, 7 => 2, 8 => ShapeBandSegments, 9 => 3, _ => 0,
     };
 
     /// <summary>
@@ -891,6 +899,31 @@ public sealed class FullUi : IOverlayUi
     /// <summary>图形那一格在上带里的下标（三行都在这一个格子里）。</summary>
     private const int ShapeCell = 8;
 
+    /// <summary>
+    /// 图形那一格**最后那一段**：「图库」（我的图形，2026-09-22 加，用户要的"图像收藏"）。
+    ///
+    /// 它**不是图形工具、是动作**（点开图库面板），所以**不进 <see cref="ShapeRows"/>**：
+    /// 那张表是"段 ↔ 工具"的唯一来源，塞一个非工具进去，`ShapeToolAt`、段高亮、
+    /// 以及 `--shapebandtest` 那条"每个有入口的图形都要真拖一笔"全都会跟着错。
+    /// 它单独占**第四行**一段（放在所有图形之后 = 不影响任何现有段号，肌肉记忆不动）。
+    ///
+    /// 纪律：**加图形只动 `ShapeRows`；加动作才动这里**。
+    /// </summary>
+    private static int LibrarySegment => ShapeSegmentCount;
+
+    /// <summary>「图库」那一段在第几行（工具表之后紧挨着的一行）。</summary>
+    private static int LibraryBandRow => ShapeRows.Length;
+
+    /// <summary>
+    /// 上带图形那一格一共几行：**工具表那几行 ＋ 最后那段「图库」自己一行**。
+    /// 布局（`SegmentRect` 的行高/居中）和带子总高（`BandHeightLogical`）都问它——
+    /// 少算一行的话，最后那一段会**画到带子外面去**（落在主条上），看着"点不动"。
+    /// </summary>
+    private static int ShapeBandRows => ShapeRows.Length + 1;
+
+    /// <summary>图形那一格一共几段（工具段 ＋ 最后那段「图库」）。命中与绘制都用它。</summary>
+    private static int ShapeBandSegments => ShapeSegmentCount + 1;
+
     /// <summary>图形那一格一共几段（各行加起来）——命中与绘制的循环都用它。</summary>
     private static int ShapeSegmentCount
     {
@@ -902,9 +935,12 @@ public sealed class FullUi : IOverlayUi
         }
     }
 
-    /// <summary>第 `row` 行有几段（决定本行的段宽）。</summary>
+    /// <summary>第 `row` 行有几段（决定本行的段宽）。「图库」那一行只有一段。</summary>
     private static int ShapeRowCount(int row)
-        => row >= 0 && row < ShapeRows.Length ? ShapeRows[row].Length : 0;
+    {
+        if (row == LibraryBandRow) return 1;
+        return row >= 0 && row < ShapeRows.Length ? ShapeRows[row].Length : 0;
+    }
 
     /// <summary>
     /// 第 `i` 段（在图形那一格里，**各行从上到下、行内从左到右拉平编号**）
@@ -913,6 +949,7 @@ public sealed class FullUi : IOverlayUi
     private static int ShapeSegmentRow(int i)
     {
         if (i < 0) return 0;
+        if (i >= ShapeSegmentCount) return LibraryBandRow;   // 最后那一段「图库」自己一行
         int seen = 0;
         for (int r = 0; r < ShapeRows.Length; r++)
         {
@@ -936,6 +973,9 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private static Tool ShapeToolAt(int i)
     {
+        // 最后那一段是**动作**（图库），没有工具：调用处都先判过 `i >= ShapeSegmentCount`，
+        // 走到这儿说明有谁漏判了——回第一个工具，宁可画错一个图标也不越界。
+        if (i >= ShapeSegmentCount) return ShapeRows[0][0];
         int row = ShapeSegmentRow(i);
         int col = ShapeSegmentCol(i);
         var cells = ShapeRows[row];
@@ -1450,8 +1490,12 @@ public sealed class FullUi : IOverlayUi
                 _host.Commands.SetSelectMode(i == 0 ? SelectMode.Rect : SelectMode.Lasso);
                 break;
             case 8:                       // 图形那一格：**两行**拉平编号，顺序见两张表
-                if (i >= 0 && i < ShapeSegmentCount)
+                if (i >= 0 && i < ShapeBandSegments)
                 {
+                    // 最后那一段是**动作**：点开图库面板（"我的图形"，2026-09-22）。
+                    // 它不进 ShapeRows（那张表是工具表），所以这里**必须先判**。
+                    if (i >= ShapeSegmentCount) { _host.Commands.ToggleLibraryPanel(); break; }
+
                     var picked = ShapeToolAt(i);
                     // **同一个图形格再点一次 = 换一档**。只对三种图形这样，别的照旧"再点=选中它"：
                     //   · 抛物线：换开口方向（用户 2026-09-20 定："选中框的抛物线按钮取消，
@@ -1472,6 +1516,16 @@ public sealed class FullUi : IOverlayUi
                     // 椭圆（带焦点）：换"画不画焦点三角形"（2026-09-22，用户："椭圆也有两档"）。
                     else if (picked == Tool.ConicEllipse && _host.State.Tool == Tool.ConicEllipse)
                         _host.Commands.CycleEllipseFocusTriangle();
+                    // **坐标系：换"要不要网格"**（用户 2026-09-24："我打算把它挪到图形里面的那个
+                    // 坐标系……点一下切换成网格，点一下网格没了"）。
+                    // 原来这一档在「更多」抽屉里（"坐标系网格"那一行），挪到这一格之后
+                    // **和抛物线/直线/双曲线一样是"同一个格再点一次换一档"**——一致，而且
+                    // 画之前手指就在这一格上，不用再去抽屉里找。
+                    // 落盘只看"改的是不是新画的默认值"（返回值 0 = 是；改已画的对象不算偏好）。
+                    else if (picked == Tool.Coordinate && _host.State.Tool == Tool.Coordinate)
+                    {
+                        if (_host.Commands.ToggleCoordGrid() == 0) SavePrefs();
+                    }
                     else if (ShapeSpec.HasSideCount(picked) && _host.State.Tool == picked)
                         _host.Commands.CycleSolidSides();
                     else
@@ -1606,7 +1660,7 @@ public sealed class FullUi : IOverlayUi
         return new RectF { MinX = r.MaxX - w, MinY = cy - h * 0.5f, MaxX = r.MaxX, MaxY = cy + h * 0.5f };
     }
 
-    private bool IsToggleRow(int i) => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.CoordGrid;
+    private bool IsToggleRow(int i) => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.DwellShape;
 
     /// <summary>
     /// 这一行现在是不是压暗（点了没反应）。两种来源：
@@ -1686,11 +1740,11 @@ public sealed class FullUi : IOverlayUi
                 Invalidate();
                 break;
             }
-            // 坐标系网格：**选中了坐标系就改它们，没选中就翻"新画的默认值"**
-            // （分派规则见 Engine.ToggleSelectionGrid）。落盘**只在改默认值时**做——
-            // 改对象是一次编辑动作，不该顺手把偏好也改了。
-            case Row.CoordGrid:
-                if (_host.Commands.ToggleCoordGrid() == 0) SavePrefs();
+            // 停顿成型：翻转开关 → 推给引擎 → 落盘（**只写"关过的"那一份**：
+            // 配置里没有这一项就是默认开，以后默认值改了老配置不会把新默认顶掉）。
+            case Row.DwellShape:
+                _host.Commands.SetDwellShape(!(_host.State.DwellShapeOn));
+                SavePrefs();
                 Invalidate();
                 break;
 
@@ -2793,6 +2847,8 @@ public sealed class FullUi : IOverlayUi
         // **有档位的那几格**（点它一下换一档，见 ActivateSegment 的 case 8）：
         //   · 「直线」= 3 档线型（实 / 虚 / 点）；
         //   · 「抛物线」= 2 档（上下 / 左右）；
+        //   · 「双曲线」= 2 档（有 / 无渐近线）、「椭圆」= 2 档（有 / 无焦点三角形）；
+        //   · 「坐标系」= 2 档（带网格 / 不带网格，2026-09-24 从「更多」抽屉挪进来的）；
         //   · 「棱柱 / 棱锥 / 棱台」= 4 档边数（三 / 四 / 五 / 六）。
         // 图标照旧画当前那一档，**右边再加一竖列档位点**——大而浓的那个是当前档。
         // 用户 2026-09-20 定：只换图标的话，老师"不知道这一格还能点"（可选的状态是隐形的）。
@@ -2811,6 +2867,14 @@ public sealed class FullUi : IOverlayUi
         //
         // **"这一格有几档、现在是第几档"只有 `PipsOf` 那一处**（绘制与自检共用）：
         // 在这里再列一遍工具名，加一种图形就会漏一处。
+        // 最后那一段是**动作**不是图形：画书架图标（自绘，见 `IconAtlas.DrawLibrary`），
+        // 没有档位点、也不参与"哪个图形选中了"的高亮。
+        if (i >= ShapeSegmentCount)
+        {
+            IconAtlas.DrawCentered(ctx, "library", r, 18f, Brush(ctx, segInk));
+            return;
+        }
+
         var segTool = ShapeToolAt(i);
         var (pipCount, pipCur) = PipsOf(segTool, st);
         if (pipCount > 0)
@@ -2850,6 +2914,13 @@ public sealed class FullUi : IOverlayUi
         if (tool == Tool.Hyperbola) return (2, st.HyperbolaAsymptotes ? 0 : 1);
         // **椭圆（带焦点）**（2026-09-22）：2 档 = 有 / 无焦点三角形（默认有）。
         if (tool == Tool.ConicEllipse) return (2, st.EllipseFocusTriangle ? 0 : 1);
+        // **坐标系**（2026-09-24）：2 档 = 带网格 / 不带网格。
+        // 用户那天原话："我打算把它挪到图形里面的那个坐标系……点一下切换成网格，点一下网格没了"，
+        // 紧接着又说"它档位之间是有切换按钮的，你可以参照一下其他那个切换逻辑"——
+        // 说的就是这个**档位点**：只换图标不给点的话，"这一格还能点"是隐形的
+        //（用户 2026-09-20 就为抛物线补过一次，见上面那段）。
+        // 顺序按"播放先后"排：第 1 档 = 不带网格（默认，就是画出来没格子的那个）、第 2 档 = 带网格。
+        if (tool == Tool.Coordinate) return (2, st.CoordGridDefault ? 1 : 0);
         if (ShapeSpec.HasSideCount(tool))
             return (st.SolidMaxSides - st.SolidMinSides + 1,
                     Math.Clamp(st.SidesOf(tool), st.SolidMinSides, st.SolidMaxSides) - st.SolidMinSides);
@@ -2888,10 +2959,11 @@ public sealed class FullUi : IOverlayUi
     private string ShapeIcon(int i) => ShapeIcon(ShapeToolAt(i));
 
     /// <summary>
-    /// **图形种类 → 图标名**（带上状态的那一份）：目前两处跟状态有关——
+    /// **图形种类 → 图标名**（带上状态的那一份）：目前几处跟状态有关——
     /// 抛物线要**转成当前开口方向**（见 <see cref="ParabolaIconName"/>）、
-    /// 直线要**换成当前线型**（见 <see cref="LineIconName"/>），
-    /// 棱柱 / 棱锥 / 棱台要**换成当前档的边数**（见 <see cref="SolidIconName"/>）。
+    /// 直线要**换成当前线型**（见 <see cref="LineIconName"/>）、
+    /// 棱柱 / 棱锥 / 棱台要**换成当前档的边数**（见 <see cref="SolidIconName"/>）、
+    /// 坐标系要**换成"带不带网格"**（2026-09-24，见下面那一行）。
     ///
     /// 为什么非跟状态不可：这几格"点第二下换一档"，图标不跟着换的话，
     /// 老师看不出那一下到底有没有生效（三处都是用户 2026-09-20 定的）。
@@ -2905,6 +2977,11 @@ public sealed class FullUi : IOverlayUi
         Tool.Hyperbola => _host.State.HyperbolaAsymptotes ? "hyperbola" : "hyperbolaNoAsym",
         // 椭圆（带焦点）：有 / 无焦点三角形两张（2026-09-22），理由同上。
         Tool.ConicEllipse => _host.State.EllipseFocusTriangle ? "ovalFocusTri" : "ovalFocus",
+        // 坐标系：带网格 / 不带网格两张（2026-09-24）——这一档从「更多」抽屉挪到了这一格
+        //（用户："点一下切换成网格，点一下网格没了"），图标同样必须跟着换，否则
+        // "这一笔画出来带不带格子"看不出来。显示的是**"以后新画的那些"**那一档
+        //（已经画在板上的各存各的，见 Stroke.Grid）。
+        Tool.Coordinate => _host.State.CoordGridDefault ? "axesGrid" : "axes",
         _ when ShapeSpec.HasSideCount(t) => SolidIconName(t, _host.State.SidesOf(t)),
         _ => ShapeIconFor(t),
     };
@@ -3143,10 +3220,9 @@ public sealed class FullUi : IOverlayUi
     private bool IsOn(int i) => Rows[i].Kind switch
     {
         Row.DarkTheme => _dark,
-        // 坐标系网格这一行显示的是**"以后新画的那些"要不要格**——
-        // 已经画在板上的坐标系各存各的（见 Stroke.Grid），
-        // 所以选中一个坐标系再点这一下时，改的是它，这个开关的位置不动。
-        Row.CoordGrid => _host != null && _host.State.CoordGridDefault,
+        // 停顿成型：**默认开**，所以配置里没有这一项时显示的就是"开"
+        //（见 LoadPrefs 里那一行：只有读到 "0" 才关）。
+        Row.DwellShape => _host == null || _host.State.DwellShapeOn,
         _ => _hideEnabled,
     };
 
@@ -3209,15 +3285,21 @@ public sealed class FullUi : IOverlayUi
             return;
         }
 
-        // **图形那一格（8）的图标跟着当前种类走**（2026-09-19）：
-        // 七种图形挤在一格里之后，"shapes" 那个"两个图形叠在一起"的通用图标
-        // 什么也没说——手里是三角形还是平行四边形，只能打开上带才知道。
-        // 现在画的就是当前那一种（和上带里高亮的那一段同一张图，共用 ShapeIconFor）。
+        // **图形那一格（8）的图标**：**这一格亮着（手里就是某种图形）才跟着当前种类走**；
+        // 没亮的时候画 Fluent 那个通用的"两个图形叠在一起"（`Cells[8].Icon`）。
+        //
+        // 为什么加了后半个条件（用户 2026-09-22 定）：这一格原来**任何时候**都画当前种类，
+        // 于是"上次用过矩形"之后，手里明明是笔，图标还画着一个矩形——没选中就是通用的
+        // 图形入口，画成某一种具体的图形，不熟悉的人会以为"这一格就是矩形"。
+        // 选中之后跟着种类变的那半条照旧（2026-09-19 定的理由）：七种图形挤在一格里，
+        // "shapes" 那个通用图标什么也没说——手里是三角形还是平行四边形，只能打开上带才知道。
+        // 所以现在是**当前那一种**（和上带里高亮的那一段同一张图，共用 ShapeIconFor）。
         //
         // 代价（明确接受）：七种图形**都没有 filled 变体**（Fluent 表里没有生成），
         // 所以选中态不再像别的格那样变实心，而是"同一个轮廓 + 强调色底 + 白图标"
         // ——和上带里选中的那一段是同一种画法。
-        var icon = i == 8 ? ShapeIcon(st.Tool) : active ? Cells[i].Filled : Cells[i].Icon;
+        var icon = i == 8 ? (active ? ShapeIcon(st.Tool) : Cells[8].Icon)
+                          : active ? Cells[i].Filled : Cells[i].Icon;
         var ink = active ? Tokens.AccentInk : InkCol;
         // **撤销/重做栈空 → 压暗**（用户 2026-09-17："撤销重做灰度"）。
         // 引擎早就把 UndoDepth / RedoDepth 递给界面了，只是界面一直没用。
@@ -3343,9 +3425,14 @@ public sealed class FullUi : IOverlayUi
     /// 自检用：某一格现在画的是哪个图标名。
     /// 图形那一格（8）的图标**跟着当前种类变**，所以它得问一次状态；
     /// 其余的格子图标是写死在 Cells 表里的，直接给。
+    /// ⚠ 图形这一格的判据和绘制必须**同一条**（"亮着才画当前种类，没亮画通用图标"）：
+    /// 自检要是无条件问 ShapeIcon，就会出现"自检说画的是三角形、屏幕上其实是通用图标"
+    /// ——这正是这条自检要盯的东西（见 ShapeBandTest 的 D 段）。
     /// </summary>
     internal string CellIconForTest(int cell)
-        => cell == 8 ? ShapeIcon(_host.State.Tool) : Cells[cell].Icon;
+        => cell == 8
+            ? (HasShapeEntry(_host.State.Tool) ? ShapeIcon(_host.State.Tool) : Cells[8].Icon)
+            : Cells[cell].Icon;
 
     /// <summary>
     /// 自检用：图形那一格**第 i 段**的图标名。
@@ -3366,7 +3453,7 @@ public sealed class FullUi : IOverlayUi
     internal static bool HasShapeEntryForTest(Tool t) => HasShapeEntry(t);
 
     /// <summary>自检用：图形那一格排了**几行**（自检要靠它把各段分回行里，去验"行不重叠"）。</summary>
-    internal static int ShapeRowCountForTest => ShapeRows.Length;
+    internal static int ShapeRowCountForTest => ShapeBandRows;
 
     /// <summary>自检用：第 `row` 行**几段**（自检按"行"分组时要知道每行的段数）。</summary>
     internal static int ShapeRowLengthForTest(int row) => ShapeRowCount(row);

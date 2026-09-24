@@ -156,8 +156,15 @@ internal static class InkSerializer
     /// ⚠ **面板入口可以撤，`Kind` 的取值一个都不许删**（2026-09-20 第十二批撤了长方体 /
     /// 四面体的入口）：存档里存的是**一个字节**，删了就是"打开旧板书少一条"
     /// （同 2026-09-19 撤「数轴」入口那条规矩，见 计划-图形工具.md 11.2）。
+    ///
+    /// **v24（2026-09-24）：坐标系网格的格距**（<see cref="Stroke.AxisGridStep"/>，1 个 float）。
+    /// 加字段的理由同 v8 / v9 / v11 / v17 / v23：**必须卡在 `version >= 24` 上读**，
+    /// 否则读 v23 的文件会去读下一个字节（整体错位）。
+    /// 读老文件**不需要迁移**：v23 及以前没有这一位，读进来是 0 = 自动（短边 ÷ 4），
+    /// 正好就是加这一位之前的行为。升版本号的理由同 v6 / v7 / v15 / v23：
+    /// 老程序读 v24 的文件会在"这一位是不是格距"上错位，所以得让它明确报"版本太新"。
     /// </summary>
-    public const int FormatVersion = 23;
+    public const int FormatVersion = 24;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -288,6 +295,12 @@ internal static class InkSerializer
         // 见那个字段的注释）——float 的位模式原样写出去就好，不要在这里做任何"清洗"。
         w.Write((byte)(s.FocusTriangle ? 1 : 0));
         w.Write(s.FocusPointU);
+
+        // ---- v24：坐标系网格的格距（见 Stroke.AxisGridStep）----
+        // 一个 float。**0 = 自动**（短边 ÷ 4，加这一位之前的行为）——所以只拖过格点手柄的
+        // 那些坐标系才非零，老板书原样读回来还是老密度，不用迁移。
+        // 同样**不按 Kind 判断要不要写**（理由同上面几位：写起来省事，读端也不用再复现判断）。
+        w.Write(s.AxisGridStep);
     }
 
     // =====================================================================
@@ -480,6 +493,17 @@ internal static class InkSerializer
         {
             s.FocusTriangle = r.ReadByte() != 0;
             s.FocusPointU = r.ReadSingle();
+        }
+
+        // ---- v24：坐标系网格的**格距**（见 Stroke.AxisGridStep）----
+        // 老文件没有这一位：读进来是 0 = **自动**（短边 ÷ 4），正好就是加这一位之前的行为，
+        // 所以**不用迁移**——老板书打开之后格子还是原来那个密度。
+        // 越界值（负数 / NaN）也一律退成 0（理由同线型 / 朝向那几位：它只是"格子多大"，
+        // 一个坏字节不该让整个文件读不进来；而且负数会让 AxisGridStepLocal 算出个负格子）。
+        if (version >= 24)
+        {
+            float gs = r.ReadSingle();
+            s.AxisGridStep = float.IsFinite(gs) && gs > 0f ? gs : 0f;
         }
 
         // ---- v13：抛物线的第二个点**换了含义**，老文件要迁移一次 ----

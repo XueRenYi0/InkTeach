@@ -352,6 +352,8 @@ internal sealed class OverlayWindow : IDisposable
     private RectF _transientNow = RectF.Empty;
     /// <summary>上一帧界面占的矩形。界面消失时得靠它把旧画面擦掉。</summary>
     private RectF _uiBoundsPrev = RectF.Empty;
+    /// <summary>上一帧图库面板占的矩形（窗口坐标）。面板关掉时要靠它把那张卡片擦掉。</summary>
+    private RectF _libraryRectPrev = RectF.Empty;
 
     // 内容层的改动也要记两帧：后缓冲里躺着的是两帧前的画面。
     private readonly List<RectF> _contentDirtyNow = new();
@@ -444,6 +446,15 @@ internal sealed class OverlayWindow : IDisposable
     /// 用 --inktrail 打开。
     /// </summary>
     public static bool InkTrailEnabled;
+
+    /// <summary>
+    /// "按住不动 = 右键"这条**系统手势**在本窗口内关掉了吗（见
+    /// <see cref="Native.DisableSystemPressAndHold"/>）。
+    ///
+    /// 做成静态字段是为了**印进启动横幅**：它生效没有直接决定"停顿成型"试得出来试不出来，
+    /// 而失效时的现象（笔尖停住弹右键环）看起来像"识别不准"，很容易查错方向。
+    /// </summary>
+    public static bool PressAndHoldDisabled;
 
     public double LastRebuildMs;
     /// <summary>上一帧性能面板自己的代价（重排 + 贴图）。面板的代价也要能被质疑。</summary>
@@ -626,6 +637,12 @@ internal sealed class OverlayWindow : IDisposable
 
         if (Hwnd == IntPtr.Zero)
             return $"CreateWindowEx failed: {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}";
+
+        // **在本窗口内关掉"按住不动 = 右键"这条系统手势**（理由见 Native 里那一段注释）：
+        // 我们要用"笔按住不动"当停顿成型的信号，和系统那条同款手势直接撞车。
+        // 每个覆盖层窗口都要关一次——手势是按窗口算的，只关主屏那一个，
+        // 副屏上写字照样弹右键环。
+        PressAndHoldDisabled = Native.DisableSystemPressAndHold(Hwnd);
 
         Dpi = Native.GetDpiForWindow(Hwnd);
         if (Dpi == 0) Dpi = 96;
@@ -1512,6 +1529,10 @@ internal sealed class OverlayWindow : IDisposable
                 // 不然"画线过程中的 α 读数"这张图拍出来只有一颗标签、没有线。
                 if (app.ActiveStroke != null && !app.SuppressActiveStroke) DrawStroke(app.ActiveStroke);
                 DrawSelection(app);
+                // **图库面板**同理（2026-09-22 加）：它是浮动层上的东西，不补画的话
+                // "面板长什么样"这张图永远拍不到（这条路是给自检/出图用的，
+                // 少画一样就是"看了一张没有面板的图还以为面板没开"）。
+                DrawLibraryPanel(app);
                 DrawShapeInclination(app);
                 DrawCaptureRect(app);        // 截图取景框（含尺寸读数）——不在截图态就直接返回
             }
@@ -1644,13 +1665,21 @@ internal sealed class OverlayWindow : IDisposable
                 _ctx.DrawGeometry(geo, Brush(s.Color), MathF.Max(1f, s.Width), Gfx.StyleFor(s.Dash));
         }
 
-        // **辅助几何**（双曲线的两条虚线渐近线，见 Stroke.BuildAuxGeometry）：
-        // 同一支笔的墨色，但线型恒定是虚线、粗细取细的（辅助线的本分是不抢主线）。
-        // 放在主几何之后画：两者重叠的地方（顶点附近）以曲线为准。
+        // **辅助几何**（双曲线的两条虚线渐近线、立体图形被挡的半圈、**坐标系的网格**）：
+        // 同一支笔的墨色，但**风格由身份定**——
+        //   · 辅助线（渐近线 / 被挡的棱）：恒定细虚线，粗细 0.6 倍（辅助线的本分是不抢主线）；
+        //   · **坐标系网格**（用户 2026-09-24："变细变淡"）：**细一半、淡一半的实线**——
+        //     整屏格子铺开时，"淡"比"细"更决定它抢不抢眼。
+        // 放在主几何之后画：两者重叠的地方（顶点附近 / 原点）以主线为准。
         var aux = s.BuildCanvasGeometry(Gfx.D2DFactory, aux: true, extra);
         if (aux != null)
-            _ctx.DrawGeometry(aux, Brush(s.Color), MathF.Max(1f, s.Width * 0.6f),
-                              Gfx.StyleFor(StrokeDash.Dashed));
+        {
+            bool grid = s.Kind == StrokeKind.Coordinate && s.Grid;
+            _ctx.DrawGeometry(aux,
+                              Brush(grid ? Stroke.Fade(s.Color, Stroke.AxisGridAlpha) : s.Color),
+                              MathF.Max(1f, s.Width * (grid ? Stroke.AxisGridWidthFactor : 0.6f)),
+                              Gfx.StyleFor(grid ? StrokeDash.Solid : StrokeDash.Dashed));
+        }
     }
 
     /// <summary>
@@ -1722,6 +1751,40 @@ internal sealed class OverlayWindow : IDisposable
             sx = ex; sy = ey; sr = er;
         }
         if (nSeg == 0) return false;
+
+        // ---- 渲染尾（预测段）**也要接在这一路** ------------------------------
+        //
+        // ⚠ 两处渲染路必须都带上尾，漏一处就是"鼠标有效果、手写板毫无反应"：
+        //   · 无压感的笔迹 → 上面那条等宽描边（几何出自 BuildCenterline，那里带尾）；
+        //   · **有压感的笔迹 → 就是这里**，ink 对象只按 `s.Points` 建，
+        //     不加这段的话尾被整个丢掉。
+        // 而真笔**必然**报压感，所以这个漏法只在真笔上现形，鼠标和自检都照不出来
+        //（2026-09-22 用户实测：两边的 `[笔画]` 行都报"预测尾=有（最多 100 px）"，
+        //  只有鼠标看得见——出问题的不是预测，是这一条渲染路）。
+        //
+        // 半径沿用最后一段的：尾是"还没发生的墨"，不该自己变粗变细。
+        if (s.RenderTail != null)
+        {
+            float tx = sx, ty = sy, tr = sr;      // 循环结束时 sx/sy/sr 停在最后一个真实点
+            foreach (var tp in s.RenderTail)
+            {
+                if (nSeg >= _inkSegs.Length) break;
+                // 直线段写成三次贝塞尔：控制点落在两端之间 → 位置是直线。
+                _inkSegs[nSeg++] = new InkBezierSegment
+                {
+                    Point1 = new Vortice.Direct2D1.InkPoint
+                    {
+                        X = tx + (tp.X - tx) / 3f, Y = ty + (tp.Y - ty) / 3f, Radius = tr,
+                    },
+                    Point2 = new Vortice.Direct2D1.InkPoint
+                    {
+                        X = tx + (tp.X - tx) * 2f / 3f, Y = ty + (tp.Y - ty) * 2f / 3f, Radius = tr,
+                    },
+                    Point3 = new Vortice.Direct2D1.InkPoint { X = tp.X, Y = tp.Y, Radius = tr },
+                };
+                tx = tp.X; ty = tp.Y;
+            }
+        }
 
         try
         {
@@ -1840,6 +1903,8 @@ internal sealed class OverlayWindow : IDisposable
             DrawDragPreview(app);
             DrawVertexPreview(app);
             DrawSelection(app);
+            // 图库面板：它从工具条上沿往上长，压在内容之上（不压界面——界面比它更靠下）
+            DrawLibraryPanel(app);
             // 画线中的 α 读数画在浮动层最上面（它贴着正在拖的那一端，压住什么都不碍事）。
             DrawShapeInclination(app);
             DrawCaptureRect(app);
@@ -1875,6 +1940,10 @@ internal sealed class OverlayWindow : IDisposable
 
         // 记住这一帧界面的位置，下一帧靠它把"刚刚消失"的界面擦干净。
         _uiBoundsPrev = uiVisible ? _uiBounds : RectF.Empty;
+        // 图库面板同理：下一帧用它把刚刚关掉的那张卡片从屏幕上擦掉。
+        _libraryRectPrev = app.LibraryPanelOpen
+            ? CanvasRectToWindow(app.LibraryPanelRectNow()).Inflate(4f * Dpi / 96f)
+            : RectF.Empty;
     }
 
     /// <summary>
@@ -1887,7 +1956,13 @@ internal sealed class OverlayWindow : IDisposable
         var r = RectF.Empty;
 
         if (app.ActiveStroke != null)
-            r.Add(CanvasRectToWindow(app.ActiveStroke.PaddedBounds));
+        {
+            // 渲染尾（预测段）画在**最后一个真实点的前面**，所以不在 PaddedBounds 里。
+            // 要按引擎报的尾长往外扩：不扩的话，尾巴走过的那几个像素擦不干净（残影）。
+            var ab = app.ActiveStroke.PaddedBounds;
+            if (app.PredictedTailLead > 0f) ab = ab.Inflate(app.PredictedTailLead + 2f);
+            r.Add(CanvasRectToWindow(ab));
+        }
 
         var laser = app.Laser.Points;
         if (app.Laser.Visible && laser.Count > 0)
@@ -1938,6 +2013,13 @@ internal sealed class OverlayWindow : IDisposable
                 MaxY = capWin.MaxY + 36f * Dpi,
             });
         }
+
+        // 图库面板：开合、悬停高亮、整理模式删格子都会变，所以**每帧按当前矩形算进脏区**；
+        // 关掉之后旧位置也要擦干净——所以上一帧那份矩形同样并进来
+        //（和界面 `_uiBoundsPrev` 一模一样的做法：只算当前，屏幕会留一张擦不掉的卡片印子）。
+        if (app.LibraryPanelOpen)
+            r.Add(CanvasRectToWindow(app.LibraryPanelRectNow()).Inflate(4f * Dpi / 96f));
+        if (!_libraryRectPrev.IsEmpty) r.Add(_libraryRectPrev);
 
         // 选中高亮画在浮动层上、不进内容层，所以它的区域必须每帧算进脏区。
         //
@@ -2176,6 +2258,10 @@ internal sealed class OverlayWindow : IDisposable
         // P 的位置：拖动中用的是**预览那个角**（见 Engine.VertexPreviewFocusU），
         // 没在拖 P 时（NaN）就照模型里那个（可能是 NaN = 自动摆，交给模型自己判）。
         g.FocusPointU = float.IsNaN(app.VertexPreviewFocusU) ? src.FocusPointU : app.VertexPreviewFocusU;
+        // **网格**（2026-09-24）：开关跟着，格距也要跟着——拖那颗格点手柄改的正是格距，
+        // 只在松手后才变的话，拖动全程屏幕上的格子纹丝不动，手感就是"这一拖什么也没发生"。
+        g.Grid = src.Grid;
+        g.AxisGridStep = app.VertexPreviewGridStep > 0f ? app.VertexPreviewGridStep : src.AxisGridStep;
         g.Transform = src.Transform;
         g.SetPoints(pts);           // 局部坐标：变换那一层仍由 g.Transform 负责
         DrawStroke(g);
@@ -2333,14 +2419,18 @@ internal sealed class OverlayWindow : IDisposable
         // 5) 操作条（九格）/ 收起态的圆钮。放在下方，理由见 DrawSelectionBar 的注释。
         //    拖动 / 旋转中收起来：此刻点不中；而且贴着屏幕下边时它会**停在原地**，
         //    内容继续走、条不跟——那是最像卡死的一幕（见 SelectionHandles.BarRect）。
-        if (!collapsed)
+        //
+        // ⚠ 那一块画不画由 `SelectionBarShown` 定；**画整条还是画那颗圆钮**由
+        // `BarDrawnCollapsed` 定（两种收起：用户自己收的、画完自动选中那个框——见那里的注释）。
+        if (!collapsed && app.SelectionBarShown)
         {
-            if (app.SelBarCollapsed) DrawCollapsedDot(app, b);
+            if (app.BarDrawnCollapsed) DrawCollapsedDot(app, b);
             else DrawSelectionBar(app, b);
         }
 
         // 5.5) 浮动面板（颜色/粗细、层级）。画在条之后，盖在内容之上。
-        if (!collapsed && !app.SelBarCollapsed)
+        //     和条同一条判据：整条不在的时候，它下面挂的面板当然也不在。
+        if (!collapsed && app.SelectionBarShown && !app.BarDrawnCollapsed)
         {
             if (app.SelPanelOpen == SelPanel.Ink) DrawInkPanel(app, b);
             else if (app.SelPanelOpen == SelPanel.Layer) DrawLayerPanel(app, b);
@@ -2412,7 +2502,8 @@ internal sealed class OverlayWindow : IDisposable
     /// （2026-09-18 四条之一）。贴在被拖动的那一端外侧，和拖端点时是同一颗胶囊。
     ///
     /// 为什么单独一个方法、不挂在 DrawSelection 里：画线的时候**没有选中对象**
-    /// （我们没做"画完自动选中"），DrawSelection 第一行就返回了。
+    /// （画完自动选中（见 Engine.EndStroke）发生在**松手之后**，拉线的这一路上选区还是空的），
+    /// DrawSelection 第一行就返回了。
     /// </summary>
     private void DrawShapeInclination(InkEngine app)
     {
@@ -2722,7 +2813,128 @@ internal sealed class OverlayWindow : IDisposable
     }
 
     /// <summary>
-    /// 操作条（九格）：收起 / 颜色 / 锁定 / 层级 / 导出 / 复制 / 左右翻转 / 上下翻转 / 删除。
+    /// **图库面板**（"我的图形"）：从工具条上沿往上长的一张卡片，里面是收藏的缩略图墙。
+    ///
+    /// 为什么这个面板归引擎画（而不是界面）：格子里的内容是**画笔迹**——把条目的包围盒
+    /// 等比缩进格子、`DrawStroke(s, fit)` 直接画。这条路现成、零新机制，而且**不落缩略图位图**：
+    /// 存的是对象，画的时候就永远和对象一致（参考实现也是"加载时现渲染"，只是它那边得
+    /// 造一张 RenderTargetBitmap，我们连位图都不用建）。
+    /// 代价：每帧重画 N 个格子里的笔画——格子最多 16 个、每个条目几个对象，忽略不计。
+    ///
+    /// 画法与操作条/其它面板同一套：`DrawPanelCard` 卡片 ＋ 主题色，圆角取界面推上来的
+    /// `CornerRadius`（三块东西必须是一家）。
+    /// </summary>
+    private void DrawLibraryPanel(InkEngine app)
+    {
+        if (!app.LibraryPanelOpen) return;
+        float dpi = Dpi / 96f;
+        var theme = app.FloatingTheme;
+        var panel = app.LibraryPanelRectNow();
+        int n = app.LibraryEntries.Count;
+
+        float radius = MathF.Min(theme.CornerRadius * dpi, 12f * dpi);
+        DrawPanelCard(app, panel, radius);
+
+        // ---- 标题行：「图库 · N 个」＋ 右边「整理」「✕」 ----
+        var head = LibraryLayout.HeaderRect(panel, dpi);
+        _scratch.Color = theme.Text;
+        _ctx.DrawText(n > 0 ? $"图库 · {n} 个" : "图库",
+                      ReadoutFormat(dpi),
+                      new Rect(head.MinX, head.MinY, head.MaxX - head.MinX, head.MaxY - head.MinY),
+                      _scratch);
+
+        var edit = LibraryLayout.EditRect(panel, dpi);
+        if (app.LibraryEditMode)
+        {
+            // 激活态用主题的实心蓝（和操作条上"复制模式开着"同一种表达）
+            _scratch.Color = theme.ActiveBg;
+            float br = (edit.MaxY - edit.MinY) * 0.32f;
+            _ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(edit.MinX, edit.MinY, edit.MaxX, edit.MaxY),
+                                     br, br), _scratch);
+        }
+        _scratch.Color = app.LibraryEditMode ? theme.ActiveText : theme.TextMuted;
+        _ctx.DrawText(app.LibraryEditMode ? "完成" : "整理", ReadoutFormatSmall(dpi),
+                      new Rect(edit.MinX, edit.MinY, edit.MaxX - edit.MinX, edit.MaxY - edit.MinY),
+                      _scratch);
+
+        var close = LibraryLayout.CloseRect(panel, dpi);
+        _scratch.Color = theme.TextMuted;
+        _ctx.DrawText("✕", ReadoutFormatSmall(dpi),
+                      new Rect(close.MinX, close.MinY, close.MaxX - close.MinX, close.MaxY - close.MinY),
+                      _scratch);
+
+        // ---- 空库：给一句"怎么存"，而不是空白一片（参考实现的空态文案同款）----
+        if (n == 0)
+        {
+            _scratch.Color = theme.TextMuted;
+            float gap = LibraryLayout.CellGapLogical * dpi;
+            float y = panel.MinY + LibraryLayout.PadLogical * dpi + LibraryLayout.HeaderHLogical * dpi + gap;
+            _ctx.DrawText("图库还是空的", ReadoutFormat(dpi),
+                          new Rect(panel.MinX, y, panel.MaxX - panel.MinX, 24f * dpi), _scratch);
+            _ctx.DrawText("选中对象 → 操作条那颗「图库」图标存进来", ReadoutFormatSmall(dpi),
+                          new Rect(panel.MinX, y + 26f * dpi, panel.MaxX - panel.MinX, 20f * dpi), _scratch);
+            return;
+        }
+
+        // ---- 缩略图墙 ----
+        for (int i = 0; i < n; i++)
+        {
+            var cell = LibraryLayout.CellRect(panel, dpi, i);
+            if (cell.MinY > panel.MaxY) break;        // 超出面板的行不画（列数 × 行数已由布局夹住）
+
+            if (i == app.LibraryHover)
+            {
+                _scratch.Color = theme.Hover;
+                float inset = 2f * dpi;
+                float hr = radius * 0.6f;
+                _ctx.FillRoundedRectangle(new RoundedRectangle(
+                    new Vortice.RawRectF(cell.MinX + inset, cell.MinY + inset,
+                                         cell.MaxX - inset, cell.MaxY - inset), hr, hr), _scratch);
+            }
+
+            // 缩略图：条目包围盒等比缩进格子（内缩 4 逻辑像素），整格裁掉溢出的部分。
+            var entry = app.LibraryEntries[i];
+            var box = EditRegion.Of(entry.Strokes);
+            float boxW = box.MaxX - box.MinX, boxH = box.MaxY - box.MinY;
+            if (boxW > 0.1f && boxH > 0.1f)
+            {
+                float inner = 4f * dpi;
+                float availW = MathF.Max(1f, (cell.MaxX - cell.MinX) - inner * 2f);
+                float availH = MathF.Max(1f, (cell.MaxY - cell.MinY) - inner * 2f);
+                float k = MathF.Min(availW / boxW, availH / boxH);
+                var fit = Matrix3x2.CreateScale(k) * Matrix3x2.CreateTranslation(
+                    (cell.MinX + cell.MaxX) * 0.5f - k * (box.MinX + box.MaxX) * 0.5f,
+                    (cell.MinY + cell.MaxY) * 0.5f - k * (box.MinY + box.MaxY) * 0.5f);
+
+                // 裁剪必须用**窗口坐标**（PushAxisAlignedClip 吃的是窗口坐标，见
+                // CanvasRectToWindow 上面那条注释）——喂画布坐标在相机滚过之后会裁歪。
+                var clipWin = CanvasRectToWindow(cell);
+                _ctx.PushAxisAlignedClip(
+                    new Vortice.RawRectF(clipWin.MinX, clipWin.MinY, clipWin.MaxX, clipWin.MaxY),
+                    AntialiasMode.Aliased);
+                foreach (var s in entry.Strokes) DrawStroke(s, fit);
+                _ctx.PopAxisAlignedClip();
+            }
+
+            // 整理模式：右上角一颗红 ✕（触摸屏的删除入口——那儿没有右键）
+            if (app.LibraryEditMode)
+            {
+                var badge = LibraryLayout.BadgeRect(cell, dpi);
+                float br = (badge.MaxY - badge.MinY) * 0.5f;
+                _scratch.Color = new Color4(0.90f, 0.28f, 0.30f, 1f);
+                _ctx.FillEllipse(new Ellipse(new System.Numerics.Vector2(
+                    (badge.MinX + badge.MaxX) * 0.5f, (badge.MinY + badge.MaxY) * 0.5f), br, br), _scratch);
+                _scratch.Color = new Color4(1f, 1f, 1f, 1f);
+                _ctx.DrawText("✕", ReadoutFormatSmall(dpi),
+                              new Rect(badge.MinX, badge.MinY, badge.MaxX - badge.MinX, badge.MaxY - badge.MinY),
+                              _scratch);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 操作条（十格）：收起 / 颜色 / 锁定 / 层级 / 导出 / **图库** / 复制 / 左右翻转 / 上下翻转 / 删除。
     /// 顺序的语义见 <see cref="SelBarButton"/>；这一层只负责画。
     ///
     /// **为什么在下方而不是上方**：选中内容靠屏幕上边时，上方的操作条要么被顶出
@@ -2808,12 +3020,13 @@ internal sealed class OverlayWindow : IDisposable
         }
     }
 
-    /// <summary>操作条九格各自的图标（颜色那格是自绘的"当前色环"，不在这里）。</summary>
+    /// <summary>操作条十格各自的图标（颜色那格是自绘的"当前色环"，不在这里）。</summary>
     private static string IconForBar(SelBarButton b) => b switch
     {
         SelBarButton.Collapse => IconPaths.collapse,
         SelBarButton.Layer => IconPaths.layer,
         SelBarButton.Export => IconPaths.export,
+        SelBarButton.Library => IconPaths.library,
         SelBarButton.Copy => IconPaths.copy,
         SelBarButton.FlipH => IconPaths.flipH,
         SelBarButton.FlipV => IconPaths.flipV,

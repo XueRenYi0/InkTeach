@@ -47,6 +47,9 @@ $icons = [ordered]@{
     # 导出用 **Save**（软盘）而不是 Arrow Export Up：后者画出来是"上箭头 + 底托"，
     # 和置顶用的 Arrow Upload 几乎一模一样，同一屏里两个一样的图标就废了（实测发现）。
     'export'     = @('Save', 'Arrow Export Up')       # 导出（另存为）
+    # 图库（用户 2026-09-22 要的"图像收藏"）：操作条上那颗「存入图库」＋ 图形面板最后
+    # 那一段「图库」。用书架那个 Library（参考实现 InkClass 的图形面板也是用这张）。
+    'library'    = @('Library')                       # 图库（我的图形）
 }
 
 function Get-UpstreamFile([string]$folder, [string]$fileName) {

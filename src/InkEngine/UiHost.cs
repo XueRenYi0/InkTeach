@@ -79,6 +79,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void CycleLineDash() => _engine.CycleLineDash();
     public void CycleSolidSides() => _engine.CycleSolidSides();
     public void CycleHyperbolaAsymptotes() => _engine.CycleHyperbolaAsymptotes();
+    public void ToggleLibraryPanel() => _engine.ToggleLibraryPanel();
     public void CycleEllipseFocusTriangle() => _engine.CycleEllipseFocusTriangle();
     public void SetColor(Color4 color) => _engine.SetColorFromUi(color);
     public void SetWidth(float logicalPx) => _engine.SetWidthFromUi(logicalPx);
@@ -94,6 +95,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void FlipPage(bool down) => _engine.FlipPageFromUi(down);
 
     public void SetCoordGridDefault(bool on) => _engine.SetCoordGridDefaultFromUi(on);
+    public void SetDwellShape(bool on) => _engine.SetDwellShapeFromUi(on);
     public int ToggleCoordGrid() => _engine.ToggleSelectionGrid();
 
     public void SetBoardPattern(int pattern, float stepLogical)

@@ -32,6 +32,8 @@ internal sealed class ShapeIconSheet : IOverlayUi
         ("square", "矩形"),
         ("oval", "椭圆"), ("circle", "圆"), ("triangle", "三角形"),
         ("parallelogram", "平行四边形"), ("arrowRight", "箭头"), ("axes", "坐标系"),
+        // 坐标系有两档（2026-09-24）：带网格 / 不带网格——那一格"再点一次换一档"。
+        ("axesGrid", "坐标系（带网格）"),
         ("numberline", "数轴（撤了入口）"),
         // 曲线：抛物线 / 双曲线 / 正弦 / 余弦 / 波浪线 / **正切**（第十五、十六批）
         // ＋ **椭圆（带焦点）**（2026-09-22）：它和双曲线**各两张**（各有一个"两档"）

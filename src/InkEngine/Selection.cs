@@ -118,11 +118,16 @@ internal enum SelBarButton
     Layer = 3,
     /// <summary>导出（另存为）。</summary>
     Export = 4,
+    /// <summary>
+    /// **存入图库**（用户 2026-09-22 要的"图像收藏"）：把选中的对象存进图形库，
+    /// 之后从图形面板最后那一段「图库」里取出来复用。见 <see cref="ShapeLibrary"/>。
+    /// </summary>
+    Library = 5,
     /// <summary>复制拖拽模式（点一下进入/退出）。</summary>
-    Copy = 5,
-    FlipH = 6,
-    FlipV = 7,
-    Delete = 8,
+    Copy = 6,
+    FlipH = 7,
+    FlipV = 8,
+    Delete = 9,
 }
 
 /// <summary>
@@ -467,6 +472,18 @@ internal static class SelectionHandles
                 dst[0] = ShapeHandle.Vertex0;
                 dst[1] = ShapeHandle.Vertex1;
                 dst[2] = ShapeHandle.Vertex2;
+                // **开了网格还有第四颗：格距**（用户 2026-09-24："那个第一个方格上那个格点，
+                // 它也做一个空心点，这样的话我就可以通过拖动那个点来改变这个方格的大小"）。
+                // 它**不是控制点**——拖它只改 `Stroke.AxisGridStep`（见 Engine 那一支）。
+                //
+                // ⚠ **只有开网格时才给**：没画格子就没有"第一个格子"这个可见的东西，
+                // 那时给一颗"拖了也看不见变化"的手柄，正是 2026-09-19 撤掉
+                // "单位长度点"时说的那种"画都不画却点得到"的死元素。
+                if (s.Grid && dst.Length >= 4)
+                {
+                    dst[3] = ShapeHandle.Vertex3;
+                    return 4;
+                }
                 return 3;
 
             case StrokeKind.NumberLine:
@@ -517,6 +534,9 @@ internal static class SelectionHandles
         int vi = VertexIndex(h);
         if (vi >= 0)
         {
+            // **坐标系的第 4 颗不是控制点，是"格距"**（2026-09-24）：它落在
+            // "第一象限第一个格子的外角"，由原点 ＋ 格距现算（见 AxisGridStepHandleLocal）。
+            if (vi == 3 && s.Kind == StrokeKind.Coordinate) return s.AxisGridStepHandleLocal();
             if (vi >= s.Points.Count) return Vector2.Zero;
             return new Vector2(s.Points[vi].X, s.Points[vi].Y);
         }
@@ -1808,8 +1828,9 @@ internal static class SelectionHandles
     // =====================================================================
 
     /// <summary>
-    /// 操作条按钮数（2026-09-16 从 4 扩到 9，顺序见 <see cref="SelBarButton"/>）：
-    /// 收起 / 颜色 / 锁定 / 层级 / 导出 / 复制 / 左右翻转 / 上下翻转 / 删除。
+    /// 操作条按钮数（2026-09-16 从 4 扩到 9；**2026-09-22 从 9 扩到 10**，顺序见
+    /// <see cref="SelBarButton"/>）：
+    /// 收起 / 颜色 / 锁定 / 层级 / 导出 / **图库** / 复制 / 左右翻转 / 上下翻转 / 删除。
     ///
     /// 三条排布上的理由：
     ///   · **危险动作在最右**（删除），离手远一点；
@@ -1817,6 +1838,10 @@ internal static class SelectionHandles
     ///   · **仍然没有"旋转 90°"**：旋转手柄 + Shift 的 15° 吸附已经覆盖任意角度，
     ///     再放一格是冗余（用户 2026-09-15 明确不要）。翻转两格**保留在条上**
     ///     （用户 2026-09-16 定：九格，不把翻转收进子面板）。
+    ///
+    /// **2026-09-22 加的第十格是「图库」**（用户："墨迹选中的操作栏有一个收藏的图标"）。
+    /// 位置挑在**导出旁边**：两者都是"把选中的东西弄到别处去"，而且离删除这一格还隔着
+    /// 复制/翻转三格——不会手滑点到删除。整条从 348 宽变 386（38×10），仍然是胶囊。
     ///
     /// **2026-09-20 这天第十格「开口方向」加了又撤、撤了又加，最后**真的撤掉**了**，
     /// 三次的理由都记在这儿（免得以后又翻烧饼）：
@@ -1829,7 +1854,7 @@ internal static class SelectionHandles
     ///     （那一格已经选中抛物线时**再点一次**换一档，见 Engine.CycleParabolaAxis）。
     ///     选中之后就是不能再改朝向——这是用户的选择，不是缺功能。
     /// </summary>
-    public const int BarButtonCount = 9;
+    public const int BarButtonCount = 10;
     /// <summary>
     /// 操作条的高度 / 每格宽度 / 内边距 / 格间距（逻辑像素）。
     ///

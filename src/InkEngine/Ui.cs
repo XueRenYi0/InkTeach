@@ -221,6 +221,14 @@ public interface IEngineCommands
     /// </summary>
     void CycleHyperbolaAsymptotes();
     /// <summary>
+    /// **开/关图库面板**（"我的图形"，2026-09-22 用户要的"图像收藏"）。
+    ///
+    /// 入口：图形面板那一格的**最后一段**「图库」（那一段是动作、不是图形工具，
+    /// 见 `FullUi.LibrarySegment`）。面板本身由引擎画（缩略图是现场画笔迹，不是位图），
+    /// 所以界面这边只需要这一句开关。
+    /// </summary>
+    void ToggleLibraryPanel();
+    /// <summary>
     /// **换下一档"椭圆（带焦点）画不画焦点三角形"**（有 → 无 → 有）。
     ///
     /// 两档都是"椭圆 ＋ 两个焦点"，差别只在**连不连** F₁P、F₂P 那两条边
@@ -285,6 +293,12 @@ public interface IEngineCommands
     /// 改这个开关不会动它们——对象要自包含，不能长大了还受一个全局开关摆布。
     /// </summary>
     void SetCoordGridDefault(bool on);
+
+    /// <summary>
+    /// 「更多」抽屉里"停顿成型"那一行（**默认开**，见 计划-图形工具.md §四十二）。
+    /// 它只管"以后画的那些参不参与"，不动已经画在板上的东西。
+    /// </summary>
+    void SetDwellShape(bool on);
 
     /// <summary>
     /// 「更多」抽屉里"坐标系网格"那一行被点了一下。
@@ -624,6 +638,9 @@ public readonly struct UiState
     /// 注意它是"默认值"，不是"板子上那些坐标系现在有没有格"——那些各存各的。
     /// </summary>
     public bool CoordGridDefault { get; init; }
+    /// <summary>**停顿成型**开着吗（界面用它显示抽屉里那一行的开关）。
+    /// 默认开；关掉只是"以后画的那些不参与"，不影响已经变出来的图形。</summary>
+    public bool DwellShapeOn { get; init; }
     /// <summary>现在在第几屏（1 起）。界面用它显示"第 N 屏"。</summary>
     public int ScreenIndex { get; init; }
     /// <summary>还能不能往上翻（到顶了就不行）。"下一屏"永远可用。</summary>

@@ -322,6 +322,92 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
 
+    // ---- 系统手势：在本窗口内关掉"按住不动 = 右键" ------------------------
+    //
+    // 为什么需要它：我们要做"笔按住不动 400ms → 把这一笔变成规整图形"（见
+    // 计划-图形工具.md 的停顿成型那一批）。而 Windows 自己就有一条同款手势——
+    // 笔/手指按住不动 = 右键（带一圈反馈动画）。两条撞在一起的结果是：
+    // 用户按得越稳，系统越可能先弹右键环，我们的"停顿"根本轮不到。
+    //
+    // 关掉的是**我们窗口内**的这一条，不改系统全局设置（用户自己开的那个开关
+    // 只影响别的程序）。三条路都走一遍，理由见各自的注释：
+    //   · `WM_TABLET_QUERYSYSTEMGESTURESTATUS` 回 `TABLET_DISABLE_PRESSANDHOLD`
+    //     —— 官方文档原话就写着它 "disables press and hold (right-click) gesture"，
+    //     是**同时关手势和右键消息**的那一条（其余两条只保证关反馈/关手势）；
+    //   · `SetProp(MicrosoftTabletPenServiceProperty, 1)` —— 官方 how-to 的等价写法；
+    //   · `SetGestureConfig` 把全部手势挡掉 —— Raymond Chen 给的 Win7+ 路径。
+    //
+    // ⚠ 拿不准的一条（**不许当结论**）：`SetWindowFeedbackSetting(FEEDBACK_*_PRESSANDHOLD)`
+    // 名字和文档都只说"visual feedback（反馈/动画）"，**它到底阻不阻止右键消息，官方没说**。
+    // 所以这里**不用它**——要靠"关反馈"来解决问题的话，等于赌一条没有出处的结论。
+    public const uint WM_TABLET_DEFBASE = 0x02C0;
+    public const uint WM_TABLET_QUERYSYSTEMGESTURESTATUS = WM_TABLET_DEFBASE + 12;   // 0x02CC
+
+    /// <summary>关掉"按住不动 → 右键"这条手势。官方文档（Tpcshrd.h）原话：
+    /// "disables press and hold (right-click) gesture"，也就是我们窗口内不再产生右键。</summary>
+    public const int TABLET_DISABLE_PRESSANDHOLD = 0x0001;
+
+    /// <summary>关掉抬笔那一下的水波反馈（顺带关，和按压无关但同属"别在板书时闪一下"）。</summary>
+    public const int TABLET_DISABLE_PENTAPFEEDBACK = 0x0008;
+
+    /// <summary>关掉笔筒按钮那一圈反馈。</summary>
+    public const int TABLET_DISABLE_PENBARRELFEEDBACK = 0x0010;
+
+    /// <summary>SetGestureConfig 的一条配置：`dwID = 0` 时 `dwBlock = GC_ALLGESTURES` 挡掉全部手势。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct GESTURECONFIG
+    {
+        public uint dwID;
+        public uint dwWant;
+        public uint dwBlock;
+    }
+
+    public const uint GC_ALLGESTURES = 0x00000001;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SetGestureConfig(IntPtr hwnd, uint dwReserved, uint cIDs,
+                                               ref GESTURECONFIG pGestureConfig, uint cbSize);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool SetProp(IntPtr hWnd, string lpString, IntPtr hData);
+
+    /// <summary>
+    /// 在本窗口内关掉系统的"按住不动 = 右键"手势（见上面那一段常量注释）。
+    ///
+    /// 三条路一起走、任一条成功就算成功：单条路在不同驱动/系统版本上偶有失效的报告，
+    /// 而三条都是幂等且互不冲突的。返回"至少一条成功"，调用方把它印进启动横幅
+    /// ——**这个开关到底生效没有，必须一眼看得见**（不然"停顿没反应"这件事
+    /// 会被记成"识别不准"，排查方向从一开始就错了）。
+    /// </summary>
+    public static bool DisableSystemPressAndHold(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        bool ok = false;
+
+        // ① 窗口属性：官方 how-to 的写法（"只要能拿到窗口句柄，就能关掉长按"）。
+        try
+        {
+            int flags = TABLET_DISABLE_PRESSANDHOLD
+                      | TABLET_DISABLE_PENTAPFEEDBACK
+                      | TABLET_DISABLE_PENBARRELFEEDBACK;
+            if (SetProp(hwnd, "MicrosoftTabletPenServiceProperty", new IntPtr(flags))) ok = true;
+        }
+        catch { }
+
+        // ② 挡掉全部系统手势（Win7+）。我们本来就不吃 WM_GESTURE —— 笔迹、翻页、
+        //    滚动条全是自己按 WM_POINTER 算的，挡掉不存在"误伤自己"的问题。
+        try
+        {
+            var cfg = new GESTURECONFIG { dwID = 0, dwWant = 0, dwBlock = GC_ALLGESTURES };
+            if (SetGestureConfig(hwnd, 0, 1, ref cfg, (uint)Marshal.SizeOf<GESTURECONFIG>())) ok = true;
+        }
+        catch { }
+
+        // ③ 消息那条在 WndProc 里回（见 Engine.WndProc 的 WM_TABLET_QUERYSYSTEMGESTURESTATUS）——
+        //    它是系统主动来问的，答在那边才生效，这里没有对应调用。
+        return ok;
+    }
+
     // ---- pointer input ---------------------------------------------------
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -641,6 +727,64 @@ internal static class Native
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool InjectSyntheticPointerInput(
         IntPtr device, POINTER_TYPE_INFO[] pointerInfo, uint count);
+
+    // ---- 注册表（只读，用来诊断"系统笔设置"）------------------------------
+    //
+    // 为什么用 P/Invoke 而不是 Microsoft.Win32.Registry：那个类型在 .NET Core 上要额外引包，
+    // 而这个项目没有引；advapi32 的这几个函数一直是系统自带的，零依赖。
+    //
+    // 用途只有一个：把**系统级的笔延迟来源**打印出来。最典型的是"长按当右键"——
+    // 笔尖停住不动会被判成长按，而板书时停顿是常态。
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern int RegOpenKeyExW(IntPtr hKey, string subKey, uint options, uint samDesired,
+                                           out IntPtr phkResult);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern int RegQueryValueExW(IntPtr hKey, string valueName, IntPtr reserved,
+                                              out uint type, byte[] data, ref uint cbData);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    public static extern int RegCloseKey(IntPtr hKey);
+
+    public static readonly IntPtr HKEY_CURRENT_USER = new IntPtr(unchecked((int)0x80000001));
+    public const uint KEY_READ = 0x00020019;
+    public const uint REG_DWORD = 4;
+    public const int ERROR_SUCCESS = 0;
+    public const int ERROR_FILE_NOT_FOUND = 2;
+
+    /// <summary>
+    /// 读一个 HKCU 下的 DWORD。读不到就把原因放在 <paramref name="err"/> 里返回 false
+    /// （键不存在 / 值不存在 / 读失败）——**不猜、不用默认值顶替**。
+    /// </summary>
+    public static bool ReadDword(string subKey, string valueName, out uint value, out string err)
+    {
+        value = 0;
+        err = null;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, subKey, 0, KEY_READ, out IntPtr hk) != ERROR_SUCCESS)
+        {
+            err = "键不存在";
+            return false;
+        }
+        try
+        {
+            uint type = 0, cb = 4;
+            var buf = new byte[4];
+            int rc = RegQueryValueExW(hk, valueName, IntPtr.Zero, out type, buf, ref cb);
+            if (rc != ERROR_SUCCESS)
+            {
+                err = rc == ERROR_FILE_NOT_FOUND ? "值不存在" : $"读失败 rc={rc}";
+                return false;
+            }
+            if (type != REG_DWORD)
+            {
+                err = $"类型不是 DWORD（{type}）";
+                return false;
+            }
+            value = BitConverter.ToUInt32(buf, 0);
+            return true;
+        }
+        finally { RegCloseKey(hk); }
+    }
 
     [DllImport("user32.dll")]
     public static extern void DestroySyntheticPointerDevice(IntPtr device);

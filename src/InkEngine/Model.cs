@@ -809,6 +809,25 @@ internal sealed class Stroke
     public bool Grid;
 
     /// <summary>
+    /// 网格线的**粗细系数**（乘在对象自己的 <see cref="Width"/> 上）。
+    ///
+    /// 用户 2026-09-24："把那个网格的线**变细变淡**一些"——网格是**底子**，
+    /// 不该和两条轴抢眼：一条黑 3 像素的格线铺满整屏，比题目本身还显眼。
+    ///
+    /// 为什么非要单独一段几何：**一个几何只能有一种描边**（粗细 + 颜色 + 线型是一起给的），
+    /// 所以"轴线一种、网格另一种"只能拆成两段——落点见 <see cref="BuildAuxGeometry"/>
+    /// 与 `Overlay.DrawStroke` 的辅助几何那一段（同一个槽本来在装渐近线）。
+    /// 熔墨（<see cref="MeltToInkParts"/>）也要按这两个系数还回去，不然"擦一下网格变粗"。
+    /// </summary>
+    internal const float AxisGridWidthFactor = 0.5f;
+
+    /// <summary>网格线的**浓淡系数**（乘在 alpha 上）。理由同 <see cref="AxisGridWidthFactor"/>。</summary>
+    internal const float AxisGridAlpha = 0.45f;
+
+    /// <summary>把颜色按比例调淡（只动 alpha）。网格线用它。</summary>
+    internal static Color4 Fade(Color4 c, float f) => new Color4(c.R, c.G, c.B, c.A * f);
+
+    /// <summary>
     /// **曲线的朝向**（只有 <see cref="StrokeKind.Parabola"/> / <see cref="StrokeKind.Hyperbola"/>
     /// 用得上，别的种类恒为 <see cref="CurveAxis.OpenUp"/>）。
     ///
@@ -849,6 +868,41 @@ internal sealed class Stroke
     public bool Locked;
 
     public ID2D1Geometry Geometry;
+
+    /// <summary>
+    /// **只用于渲染的"预测尾"**（画布坐标）：画这一笔时在末尾接上这几个点，
+    /// 让正在写的那一笔的末端落在"现在"而不是"上一帧"。
+    ///
+    /// 三条纪律，缺一条都会出问题：
+    ///   ① **不进 <see cref="Points"/>**——它是画出来的，不是采到的。所以存档、
+    ///      撤销、命中测试、紧框、空间索引一概看不见它（`--predicttailtest` 有断言）；
+    ///   ② **只在"正在写的那一笔"上设**（由引擎每帧写入，见 `Engine.UpdateRenderTail`），
+    ///      松手那一刻清空，绝不会留在文档里；
+    ///   ③ **接在同一份几何里**（见 <see cref="BuildCenterline"/>）：另起一笔画会在
+    ///      接缝处混合两次，半透明荧光笔会露出重叠的深色斑。
+    ///
+    /// 什么时候有它：鼠标 / 触摸（那条路没有系统湿墨通道），以及真笔但走不了
+    /// 委托墨迹轨迹时（虚线、或者轨迹通道不可用）。真笔交给系统合成器画的时候
+    /// 不需要它，也**不能**有它——两边一起补会在笔尖前面重复画出一小截。
+    /// </summary>
+    internal List<Vector2> RenderTail;
+
+    /// <summary>
+    /// 渲染尾的"第几个版本"。几何缓存的键必须带上它：否则尾巴内容变了、
+    /// `Revision` 没变，缓存会把**旧的**几何（可能带尾、也可能没有尾）还回去。
+    /// </summary>
+    private int _tailStamp;
+    private int _builtTailStamp = -1;
+
+    /// <summary>
+    /// 引擎每帧调用：设这一笔的渲染尾（传 null 或空表 = 这一帧没有尾）。
+    /// 传进来的表由调用方复用，所以每次调用都要当作"内容变了"。
+    /// </summary>
+    internal void SetRenderTail(List<Vector2> tail)
+    {
+        RenderTail = (tail != null && tail.Count > 0) ? tail : null;
+        _tailStamp++;
+    }
 
     /// <summary>
     /// 图像对象的像素（只有 <see cref="StrokeKind.Image"/> 有）。
@@ -1069,7 +1123,21 @@ internal sealed class Stroke
     {
         public readonly List<Vector2> Pts;
         public readonly bool Aux;
-        public InkPiece(List<Vector2> pts, bool aux) { Pts = pts; Aux = aux; }
+
+        /// <summary>
+        /// **坐标系网格线**（用户 2026-09-24："网格的线变细变淡"）。
+        /// 它和辅助线一样"不参与命中"（见 <see cref="ShapeOutline"/>：轮廓里只列两条轴线），
+        /// 但画法不同——网格是**细一半、淡一半的实线**（辅助线是细虚线），
+        /// 系数见 <see cref="AxisGridWidthFactor"/> / <see cref="AxisGridAlpha"/>。
+        /// </summary>
+        public readonly bool Grid;
+
+        public InkPiece(List<Vector2> pts, bool aux) : this(pts, aux, false) { }
+
+        public InkPiece(List<Vector2> pts, bool aux, bool grid)
+        {
+            Pts = pts; Aux = aux; Grid = grid;
+        }
     }
 
     /// <summary>
@@ -1099,9 +1167,13 @@ internal sealed class Stroke
             var m = new Stroke
             {
                 Tool = Tool, Kind = StrokeKind.Freehand,
-                Color = Color,
+                // 网格线熔成墨之后也**得是细的淡的**（见 AxisGridWidthFactor / AxisGridAlpha）：
+                // 不然"擦一下坐标系，网格变粗变黑"——和辅助线那条是同一类毛病。
+                Color = piece.Grid ? Fade(Color, AxisGridAlpha) : Color,
                 // 辅助线在屏幕上就是 0.6 倍粗细的细虚线（Overlay.DrawStroke 那个 Max(1, Width*0.6)）。
-                Width = piece.Aux ? MathF.Max(1f, Width * 0.6f) : Width,
+                Width = piece.Aux ? MathF.Max(1f, Width * 0.6f)
+                      : piece.Grid ? MathF.Max(1f, Width * AxisGridWidthFactor)
+                      : Width,
                 // 线型跟过来：虚线图形熔成笔迹之后还得是虚线（见 SplitIntoRuns 那条同一个理由）。
                 Dash = piece.Aux ? StrokeDash.Dashed : Dash,
             };
@@ -1554,6 +1626,25 @@ internal sealed class Stroke
     /// </summary>
     public const float AxisMinGridStepLocal = 6f;
 
+    /// <summary>
+    /// **网格那一格的边长**（局部坐标）——2026-09-24 用户要的"拖那个格点改方格大小"。
+    ///
+    /// `0` = **自动**：短边 ÷ 4（老行为，见 <see cref="AxisGridStepLocal"/>）。
+    /// 所以老板书打开还是原来那个格子密度，**不用迁移**（存档 v24 新加的那一位读到 0 就是这个意思）。
+    ///
+    /// **为什么这一次可以存**：2026-09-19 立过一条"单位长度**现算，不存**"——
+    /// 理由是那时那个点**画都不画**，留着它就是个"看不见却点得到"的死元素
+    /// （仓库里那条"画都不画的东西也不该点得到"）。现在它**画出来了**
+    ///（第一象限第一个格子的外角一颗空心点），拖它屏幕上的格子当场变大变小：
+    /// 有了可付的可见效果，就该存。
+    /// </summary>
+    public float AxisGridStep;
+
+    /// <summary>格距的**上限**：再大整个外框里就只剩轴线了（夹住手柄，别拖出个"没有格子的网格"）。</summary>
+    public static float AxisMaxGridStepLocal(Vector2 frameA, Vector2 frameB)
+        => MathF.Max(AxisMinGridStepLocal,
+                     MathF.Min(MathF.Abs(frameB.X - frameA.X), MathF.Abs(frameB.Y - frameA.Y)));
+
     /// <summary>外框归一化之后的四个边界（局部坐标）。两个点顺序随意，这里统一成 min/max。</summary>
     public (float MinX, float MinY, float MaxX, float MaxY) AxisFrameLocal()
     {
@@ -1570,15 +1661,36 @@ internal sealed class Stroke
         => Points.Count > 2 ? new Vector2(Points[2].X, Points[2].Y) : Vector2.Zero;
 
     /// <summary>
+    /// **格距手柄的位置**（局部坐标）= 第一象限第一个格子的外角 = 原点 + (格距, −格距)。
+    ///
+    /// 屏幕 y 向下，所以"第一象限"是**右上** = y 取 −格距（同 <see cref="ShapeHandleLocal"/>
+    /// 里 AxisTop 那条注释）。
+    /// 它只在 <see cref="Grid"/> 为真时作为手柄存在（没画格子就没有"第一个格子"，
+    /// 也就没有"格子多大"这件事可说——见 SelectionHandles.ShapeHandlesOf）。
+    /// </summary>
+    public Vector2 AxisGridStepHandleLocal()
+    {
+        float step = AxisGridStepLocal();
+        var o = AxisOriginLocal();
+        return new Vector2(o.X + step, o.Y - step);
+    }
+
+    /// <summary>
     /// **网格那一格有多大**（局部坐标）。只服务坐标系那个可选网格。
     ///
-    /// **现算，不再存一个"单位长度点"**：用户 2026-09-19 定"不要刻度"之后，
-    /// 单位长度既没有刻度可付、也没有可见的拖动效果——留着它就是一个
-    /// "看不见但点得到"的死元素（这条规矩仓库里早就写着：画都不画的东西也不该点得到）。
-    /// 规则沿用刻度时代那档密度 = **短边 ÷ 4**，所以开网格时看着还是课本上那个格子。
+    /// 优先用**存下来的那个值**（<see cref="AxisGridStep"/>，2026-09-24 起：用户拖过那颗
+    /// 格点手柄就存下来）——夹在 [最小, 外框短边] 之间，所以把外框拉小之后格子会跟着变小，
+    /// 不会出现"格子比外框还大、一个格子都看不见"。
+    ///
+    /// 没拖过（存的是 0）就**现算**：规则沿用刻度时代那档密度 = **短边 ÷ 4**，
+    /// 所以开网格时看着还是课本上那个格子。
     /// </summary>
     public float AxisGridStepLocal()
     {
+        var p0 = new Vector2(Points[0].X, Points[0].Y);
+        var p1 = Points.Count > 1 ? new Vector2(Points[1].X, Points[1].Y) : p0;
+        if (AxisGridStep > 0f)
+            return Math.Clamp(AxisGridStep, AxisMinGridStepLocal, AxisMaxGridStepLocal(p0, p1));
         var (minX, minY, maxX, maxY) = AxisFrameLocal();
         return MathF.Max(AxisMinGridStepLocal, MathF.Min(maxX - minX, maxY - minY) / 4f);
     }
@@ -4125,6 +4237,17 @@ internal sealed class Stroke
             return null;
         }
 
+        // **坐标系的网格**（2026-09-24，用户："把那个网格的线变细变淡一些"）：
+        // 它走这个槽，是因为"一个对象、两种线"这件事这个槽已经在装了（原来是渐近线）。
+        // 描边风格在 Overlay.DrawStroke 里按"是不是网格"分：网格 **细一半、淡一半、实线**，
+        // 辅助线照旧 0.6 倍、虚线。坐标系没有网格时这个槽是空的（返回 null）。
+        if (Kind == StrokeKind.Coordinate && Grid)
+        {
+            Geometry2 = BuildAxes(factory, gridOnly: true);
+            _builtRevision2 = Revision;
+            return Geometry2;
+        }
+
         // **立体图形被挡住的那几笔**（圆柱 / 圆锥 / 圆台的下底上半圈、**球的赤道远侧半圈**、
         // 长方体被挡的三条棱）：恒定细虚线。
         if (Kind is StrokeKind.Cylinder or StrokeKind.Cone or StrokeKind.ConeFrustum
@@ -4217,7 +4340,10 @@ internal sealed class Stroke
 
     public ID2D1Geometry BuildGeometry(ID2D1Factory1 factory)
     {
-        if (Geometry != null && _builtRevision == Revision) return Geometry;
+        // 缓存键 = 几何版本（Revision）**加上**渲染尾的版本：只比 Revision 的话，
+        // "点数没变、只有尾巴在每帧滑动"这种情况会把上一帧的几何还回去。
+        if (Geometry != null && _builtRevision == Revision && _builtTailStamp == _tailStamp)
+            return Geometry;
         if (Points.Count == 0) return null;
 
         if (Geometry != null) { Geometry.Dispose(); Geometry = null; LiveGeometries--; }
@@ -4257,6 +4383,7 @@ internal sealed class Stroke
         };
         if (Geometry != null) LiveGeometries++;
         _builtRevision = Revision;
+        _builtTailStamp = _tailStamp;
         return Geometry;
     }
 
@@ -4332,12 +4459,18 @@ internal sealed class Stroke
     /// （见 <see cref="ArrowHeadPoints"/>），任何笔宽下都匀称；填充的话细笔会糊成一个点。
     /// 头长按**笔宽**算而不是按轴长算——轴可以拉得很长，头跟着长就成了怪东西。
     /// </summary>
-    private ID2D1PathGeometry BuildAxes(ID2D1Factory1 factory)
+    private ID2D1PathGeometry BuildAxes(ID2D1Factory1 factory, bool gridOnly = false)
     {
         // 控制点不足两个：不该发生（画法与存档都保证），真发生了退回一条线，
         // 别让整个渲染循环崩掉（和 BuildPolygon 那条护栏同一个理由）。
-        if (Points.Count < 2) return BuildLine(factory);
-        return FromPieces(factory, AxisPieces());
+        if (Points.Count < 2) return gridOnly ? null : BuildLine(factory);
+
+        // **轴线与网格分成两段几何**：一个几何只能有一种描边，而网格要细一半、淡一半
+        //（用户 2026-09-24）。这里按 Grid 位分拣，别的地方都当"一个对象"看它。
+        var pieces = new List<InkPiece>();
+        foreach (var p in AxisPieces())
+            if (p.Grid == gridOnly) pieces.Add(p);
+        return pieces.Count == 0 ? null : FromPieces(factory, pieces);
     }
 
     /// <summary>
@@ -4372,8 +4505,10 @@ internal sealed class Stroke
 
         if (Grid)
         {
+            // 网格线单独一段身份（见 InkPiece.Grid）：**细一半、淡一半的实线**，
+            // 而且不参与命中（ShapeOutline 里只列两条轴线）。
             foreach (var (a, b) in AxisGridSegments(minX, minY, maxX, maxY, o))
-                list.Add(new InkPiece(new List<Vector2> { a, b }, false));
+                list.Add(new InkPiece(new List<Vector2> { a, b }, false, grid: true));
         }
         return list;
     }
@@ -5290,6 +5425,10 @@ internal sealed class Stroke
         var geo = factory.CreatePathGeometry();
         using var sink = geo.Open();
 
+        // 渲染尾（预测段）只加在"没被擦过"的笔迹上：擦除区间的几何要按段重拼，
+        // 尾巴挂在哪一段上会变得说不清；而正在写的那一笔本来也不可能被擦。
+        var tail = Erased.Count == 0 ? RenderTail : null;
+
         // **每条剩下的段一个 figure，但它们在同一条几何里**——这一点是关键：
         // 一次 DrawGeometry 只混合一次，所以半透明荧光笔即使自相重叠也不会变深。
         // 拆成两个对象（两个 DrawGeometry）就会混合两次（实测差 0 → 56）。
@@ -5307,6 +5446,10 @@ internal sealed class Stroke
             // 没被擦过的笔迹（a=0、b=末尾）必须和"没有区间表"时**逐点一致**，
             // 否则等于凭空改了笔迹几何。
             if (MathF.Abs(b - MathF.Round(b)) > 1e-6f) sink.AddLine(PointAtParam(b));
+            // 渲染尾接在**同一份几何**的末尾（理由见 Stroke.RenderTail 第 ③ 条）。
+            // 上面的前提（Erased 为空）保证这里只会被加一次。
+            if (tail != null)
+                foreach (var p in tail) sink.AddLine(p);
             sink.EndFigure(FigureEnd.Open);
         }
         sink.Close();
@@ -5387,6 +5530,45 @@ internal sealed class AddStrokesAction : EditAction
     public override void Undo(InkDocument doc) { foreach (var s in Strokes) doc.RemoveStroke(s); }
     public override void Redo(InkDocument doc) { foreach (var s in Strokes) doc.AppendStroke(s); }
     public override RectF AffectedAfter => EditRegion.Of(Strokes);
+}
+
+/// <summary>
+/// **停顿成型**：把用户手画的那一笔换成规整图形，**一步撤销、撤了回到手绘原迹**
+///（见 计划-图形工具.md §四十二）。
+///
+/// 为什么不用 <see cref="AddStrokesAction"/>：那条路撤销之后是"图形没了、什么都不剩"——
+/// 用户手画的那一笔就永远找不回来了。而"停顿变"是**默认开**的功能，变的又不是用户明确
+/// 要的形状（他只是在写字 / 画草图），所以必须留一条"这是我看错了"的退路：
+/// 按一次 Ctrl+Z 回到**自己画的那一笔**，而不是回到空白。
+/// （InkClass 的"替换型历史"就是干这个的，见 §42.1。）
+///
+/// 注意手绘原迹**从来没进过文档**（停顿是在笔还按着的时候就触发、当场把它换掉的），
+/// 所以它只活在这条记录里 —— `HeldStrokes` 因此是 2。
+/// </summary>
+internal sealed class DwellShapeAction : EditAction
+{
+    public Stroke Shape;      // 变出来的图形（已经在文档里）
+    public Stroke Ink;        // 手绘原迹
+    public int Index;         // 提交时的层序：撤销要把原迹放回**同一个位置**
+
+    public override int HeldStrokes => 2;
+
+    public override void Undo(InkDocument doc)
+    {
+        doc.RemoveStroke(Shape);
+        doc.InsertStroke(Index, Ink);
+    }
+
+    public override void Redo(InkDocument doc)
+    {
+        doc.RemoveStroke(Ink);
+        doc.InsertStroke(Index, Shape);
+    }
+
+    // 两个方向都要重绘（旧位置擦、新位置画），所以前后**都**算上：
+    // 少了任何一半，屏幕上都会留一条"擦不掉的旧墨"或"看不见的新墨"。
+    public override RectF AffectedBefore => EditRegion.Of(new[] { Ink });
+    public override RectF AffectedAfter => EditRegion.Of(new[] { Shape });
 }
 
 /// <summary>
@@ -5857,6 +6039,9 @@ internal sealed class SetStrokeGeometryAction : EditAction
     /// <summary>焦点三角形顶点 P 的参数角（旧 / 新）。`null` = 这次改几何与它无关。</summary>
     private readonly float? _oldFocusU;
     private readonly float? _newFocusU;
+    /// <summary>坐标系网格的格距（旧 / 新）。`null` = 这次改几何与它无关（见构造函数的注释）。</summary>
+    private readonly float? _oldGridStep;
+    private readonly float? _newGridStep;
     private readonly RectF _before;
     private readonly RectF _after;
 
@@ -5870,8 +6055,13 @@ internal sealed class SetStrokeGeometryAction : EditAction
     /// 撤销那一路就会把"该恢复成 NaN"误判成"这次不关它的事"——
     /// 表现是"拖完 P 按撤销，椭圆回去了、P 还停在新位置"（自检当场抓到过）。
     /// </param>
+    /// <param name="newGridStep">
+    /// 拖**坐标系的格距手柄**时那个新的格距（局部坐标）；别的改几何动作传 `null`（默认）。
+    /// 理由和 P 一模一样：**`0` 是格距的一个合法值**（= 自动，见 <see cref="Stroke.AxisGridStep"/>），
+    /// 拿它当"没有"就会"撤销回不到自动那一档"。
+    /// </param>
     public SetStrokeGeometryAction(Stroke target, IReadOnlyList<Vector2> newPoints,
-                                   float? newFocusU = null)
+                                   float? newFocusU = null, float? newGridStep = null)
     {
         _target = target;
         _newPoints = new Vector2[newPoints.Count];
@@ -5880,6 +6070,8 @@ internal sealed class SetStrokeGeometryAction : EditAction
         _newFocusU = newFocusU;
         // 旧值**永远要记**（哪怕是个 NaN）：撤销时要原样写回去。
         _oldFocusU = newFocusU.HasValue ? target.FocusPointU : null;
+        _newGridStep = newGridStep;
+        _oldGridStep = newGridStep.HasValue ? target.AxisGridStep : null;
         // **两个包围盒都在动手之前算**：改完之后旧位置就再也问不出来了。
         // 平行四边形的第四个顶点不在点表里，靠 kind 让它现推（脏区不能漏它）；
         // 曲线还要多传一个**朝向**（抛物线开哪个口 / 双曲线哪条是实轴）——
@@ -5891,16 +6083,19 @@ internal sealed class SetStrokeGeometryAction : EditAction
     public override RectF AffectedBefore => _before;
     public override RectF AffectedAfter => _after;
 
-    public override void Undo(InkDocument doc) => Apply(doc, _oldPoints, _oldFocusU);
-    public override void Redo(InkDocument doc) => Apply(doc, _newPoints, _newFocusU);
+    public override void Undo(InkDocument doc) => Apply(doc, _oldPoints, _oldFocusU, _oldGridStep);
+    public override void Redo(InkDocument doc) => Apply(doc, _newPoints, _newFocusU, _newGridStep);
 
-    private void Apply(InkDocument doc, Vector2[] pts, float? focusU)
+    private void Apply(InkDocument doc, Vector2[] pts, float? focusU, float? gridStep)
     {
         doc.ApplyGeometryCore(_target, pts);
         // P 的位置：这一拖带了它就写它（**该是 NaN 就写 NaN**，见构造函数的注释）；没带就一个字不动。
         // **框不用重算**：P 在椭圆上、两个焦点在椭圆里，所以"P 动"不会把紧框撑出去
         // （`_before` / `_after` 那份已然覆盖了整条椭圆）。
         if (focusU.HasValue) _target.SetConicEllipsePointAngle(focusU.Value);
+        // 格距：同一个套路（`0` = 自动，是个合法值，所以"带没带"只能看可空）。
+        // **框也不用重算**：网格线一律夹在外框里（见 AxisGridSegments），格距再大也撑不出框。
+        if (gridStep.HasValue) _target.AxisGridStep = gridStep.Value;
         doc.Dirty.Add(_before);                 // 旧位要擦
         doc.Dirty.Add(_after);                  // 新位要画（**分开两个矩形**，见类注释 ②）
     }
@@ -6196,10 +6391,10 @@ internal sealed class InkDocument
     /// P 不在控制点表里，所以它得单独当一路参数传进来（见 <see cref="ShapeHandle.FocusPoint"/>）。
     /// </param>
     public bool ApplyGeometry(Stroke s, IReadOnlyList<Vector2> newLocalPoints,
-                              float? newFocusU = null)
+                              float? newFocusU = null, float? newGridStep = null)
     {
         if (s == null || newLocalPoints == null || newLocalPoints.Count == 0) return false;
-        var act = new SetStrokeGeometryAction(s, newLocalPoints, newFocusU);
+        var act = new SetStrokeGeometryAction(s, newLocalPoints, newFocusU, newGridStep);
         act.Redo(this);
         Commit(act);
         return true;
@@ -6429,6 +6624,17 @@ internal sealed class InkDocument
             act.Strokes.Add(items[i]);
             AppendStroke(items[i]);
         }
+        Commit(act);
+    }
+
+    /// <summary>
+    /// **停顿成型**的提交：图形进文档，手绘原迹留给撤销栈（一步撤销能回手绘）。
+    /// 细节与理由见 <see cref="DwellShapeAction"/>。
+    /// </summary>
+    public void AddDwellShape(Stroke shape, Stroke ink)
+    {
+        var act = new DwellShapeAction { Shape = shape, Ink = ink, Index = Strokes.Count };
+        AppendStroke(shape);
         Commit(act);
     }
 

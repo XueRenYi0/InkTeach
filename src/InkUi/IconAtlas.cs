@@ -57,6 +57,8 @@ internal static class IconAtlas
         if (name == "parallelogram") { DrawParallelogram(ctx, x, y, size, brush); return; }
         if (name == "oval") { DrawOval(ctx, x, y, size, brush); return; }
         if (name == "axes") { DrawAxes(ctx, x, y, size, brush); return; }
+        // "坐标系 + 网格"那一档（2026-09-24）：同一张图多一层细格线。
+        if (name == "axesGrid") { DrawAxes(ctx, x, y, size, brush, grid: true); return; }
         if (name == "numberline") { DrawNumberLine(ctx, x, y, size, brush); return; }
         // 2026-09-20 第五批：四种曲线的图标也只能自绘（上游图标库里没有抛物线 / 双曲线，
         // 更没有"一个周期的正弦"这种专名）。
@@ -105,6 +107,10 @@ internal static class IconAtlas
         if (name == "line") { DrawLineStyle(ctx, x, y, size, brush, StrokeDash.Solid); return; }
         if (name == "lineDash") { DrawLineStyle(ctx, x, y, size, brush, StrokeDash.Dashed); return; }
         if (name == "lineDot") { DrawLineStyle(ctx, x, y, size, brush, StrokeDash.Dotted); return; }
+        // 「图库」那一段的图标（2026-09-22，用户要的"图像收藏"）：**书架**那个意思
+        //（Fluent 上游有 Library，但沿用"平行四边形 / 抛物线"那几位的既成做法——
+        //  没进生成表的名字在这里自绘，别去手改 `Icons.g.cs`，那份脚本一重跑就没了）。
+        if (name == "library") { DrawLibrary(ctx, x, y, size, brush); return; }
 
         var geo = SvgPath.Get(PanelIcons.Get(name));
         if (geo == null) return;
@@ -214,12 +220,24 @@ internal static class IconAtlas
     /// 图标还留着刻度就是**画给用户看一个不存在的东西**。
     /// </summary>
     private static void DrawAxes(ID2D1DeviceContext ctx, float x, float y,
-                                 float size, ID2D1Brush brush)
+                                 float size, ID2D1Brush brush, bool grid = false)
     {
         var saved = ctx.Transform;
         ctx.Transform = Matrix3x2.CreateScale(size / 24f)
                       * Matrix3x2.CreateTranslation(x, y)
                       * saved;
+
+        // **格线先画、轴线压在上面**（2026-09-24：面板那一格现在"再点一次"换要不要网格，
+        // 图标得跟着换——理由和抛物线 / 直线那几格一样）。
+        // 格线用 **0.9 的细线**（轴线 1.5）：图标是单色的，"淡"只能靠"细"表达，
+        // 这正好和画布上那条"网格比轴线细一半"（Stroke.AxisGridWidthFactor）对上。
+        if (grid)
+        {
+            for (float gx = 5f; gx <= 19f; gx += 3.5f)
+                ctx.DrawLine(new Vector2(gx, 3.2f), new Vector2(gx, 20.8f), brush, 0.9f, _round);
+            for (float gy = 6f; gy <= 20f; gy += 3.5f)
+                ctx.DrawLine(new Vector2(2.6f, gy), new Vector2(20.6f, gy), brush, 0.9f, _round);
+        }
 
         // 两条轴线
         ctx.DrawLine(new Vector2(2.5f, 16.5f), new Vector2(19.5f, 16.5f), brush, 1.5f, _round);
@@ -1095,6 +1113,29 @@ internal static class IconAtlas
     ///   · 线宽 1.8：比上游 regular 那一套（1.5）粗一点点——它是"一根线"这个概念的图标，
     ///     和旁边那些有轮廓的方块摆在一起时不该显得更细。
     /// </summary>
+    /// <summary>
+    /// 「图库」的图标（2026-09-22，用户要的"图像收藏"）：**书架**——两根直的书 ＋ 一根靠着的书。
+    ///
+    /// 和"平行四边形 / 抛物线 / 立体图形"那几位同一个处境：上游 Fluent 有 `Library`，
+    /// 但我们的图标表是 `tools/gen-ui-icons.ps1` 生成的，**手写进去下次重跑就没了**，
+    /// 所以按仓库既成做法**在这里自绘**（24 网格、圆头圆角、线宽和上游 regular 对齐）。
+    /// </summary>
+    private static void DrawLibrary(ID2D1DeviceContext ctx, float x, float y,
+                                    float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        const float w = 2.6f;
+        ctx.DrawLine(new Vector2(7f, 5.5f), new Vector2(7f, 18.5f), brush, w, _round);
+        ctx.DrawLine(new Vector2(12f, 5.5f), new Vector2(12f, 18.5f), brush, w, _round);
+        ctx.DrawLine(new Vector2(17f, 5.5f), new Vector2(20f, 18.5f), brush, w, _round);
+
+        ctx.Transform = saved;
+    }
+
     private static void DrawLineStyle(ID2D1DeviceContext ctx, float x, float y,
                                      float size, ID2D1Brush brush, StrokeDash dash)
     {

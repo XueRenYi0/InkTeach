@@ -371,6 +371,138 @@ public class InkEngine
     /// </summary>
     internal bool SelBarCollapsed;
 
+    /// <summary>
+    /// **画完自动选中那个框**现在把操作条"收起来"画（只挂一颗圆钮 ＋ 框 ＋ 手柄 ＋ 旋转柄）。
+    ///
+    /// 用户 2026-09-22 上手之后定的口径，原话两句：
+    /// "刚选中以后，使用收起来的那个形态，然后操作了这个状态栏以后，就按照常规逻辑走吧"、
+    /// "**我现在是只要收缩，其他的都不变**"。
+    ///
+    /// 所以要分清这个标志**管什么、不管什么**：
+    ///   · **管**：操作条那一块画成"一颗圆钮"还是"一整条九格"（见 <see cref="BarDrawnCollapsed"/>）。
+    ///     刚画完摊开一整条，观感太重、那张卡片又正好压在图形下面；点一下圆钮就摊开。
+    ///   · **不管**：拖动 / 拉手柄 / 旋转 / 点条 —— 这些**和框选工具下一个样**
+    ///    （`AutoSelectionZoneAt` 压根不读这个标志；第一版读了，结果就是用户报的
+    ///     "不能拖动位置，只能拉伸缩放"）。
+    ///
+    /// 它和用户自己那个"收起"偏好（<see cref="SelBarCollapsed"/>）是**两路**：
+    /// 点开圆钮时两个一起清（不然会"点了圆钮还是圆钮"）；这个标志本身不写回偏好。
+    /// </summary>
+    private bool _autoSelCollapsed;
+
+    /// <summary>画完自动选中那个框现在是不是"收起来"的形态（见 <see cref="_autoSelCollapsed"/>）。</summary>
+    internal bool AutoSelCollapsed => _autoSelCollapsed;
+
+    // =====================================================================
+    //  停顿成型（手写一笔停一下 → 变成图形）。规格与实测数据见 计划-图形工具.md §四十二。
+    // =====================================================================
+
+    /// <summary>开关（**默认开**，用户 2026-09-23 定的："因为是停顿变，所以默认开"）。
+    /// 偏好只写"关过的"那一份（照 `InkSettings` 的规矩：和默认一样就不写）。</summary>
+    internal bool DwellShapeEnabled = true;
+
+    /// <summary>停顿状态机本体（"停了多久"那件事全在它里面，见 <see cref="DwellAssist"/>）。</summary>
+    private readonly DwellAssist _dwell = new();
+
+    /// <summary>armed 时被换下来的**手绘原迹**（撤销要把它放回文档，见 `DwellShapeAction`）。</summary>
+    private Stroke _dwellInk;
+
+    /// <summary>这一笔提交的是不是"停顿变出来的图形"（决定：自动选中 ＋ 撤销走替换）。</summary>
+    private bool _dwellCommitted;
+
+    /// <summary>轮询定时器开着没有（只在笔画进行中开，见 <see cref="DwellAssist.TickMs"/>）。</summary>
+    private bool _dwellTimerOn;
+
+    /// <summary>定时器 id：1 是"置顶"那颗（别人的），2 是停顿成型这颗。</summary>
+    private const int DwellTimerId = 2;
+
+    /// <summary>
+    /// **这一次的自动选中是"停顿变出来的"**（而不是图形工具画完选的）。
+    ///
+    /// 为什么要单有一个标志：图形工具下那个自动选中的框，是按"当前工具是不是图形工具"
+    /// 来放行的（见 `SelectionBarShown` / `SelectionInteractiveAt`）。而停顿成型**工具还是笔**
+    /// （用户手里那支笔没变），所以只按工具判的话，那个框会"画得出来、点不着"。
+    ///
+    /// 它只在这一个来源下为真：框选 / 图形工具画完都不会置它，**所以笔下面不会凭空多出交互**。
+    /// 清它的地方也只有一处（`ClearSelectionForNewContext`），和 `_autoSelCollapsed` 同一处。
+    /// </summary>
+    private bool _dwellSelected;
+
+    /// <summary>刚把"停顿变出来的选中框"收起来的那一下——**如果只是点一下，不许留墨**
+    ///（用户 2026-09-23 定的："点别处取消选中，而且也不会留墨迹"）。
+    /// 见 <see cref="DwellTapLeaveNoInk"/>。</summary>
+    private bool _dismissTapArmed;
+
+    /// <summary>"取消选中那一击"的容差（逻辑像素）：整段位移不超过它就算"点一下，不是画"。
+    /// 取 8：鼠标点一下通常只飘 1~2 px，手写笔更小；真画一笔不会只有 8 px。</summary>
+    internal const float DwellTapSlopLogical = 8f;
+
+    // ---- armed（幽灵期）"按住拖动"的两件事（**只给直线用**，见 ArmedStrokeMove）--------
+
+    /// <summary>
+    /// 成型那一刻的**笔尖位置**（直线的"起步死区"基准）。
+    /// 用途见 <see cref="DwellDragSlopLogical"/>：笔尖还在这儿附近时，线一个像素都不改。
+    /// </summary>
+    private Vector2 _dwellArmAnchor;
+
+    /// <summary>直线：**钉住的那一头**（成型时定下来，拖动全程不变）。
+    /// 为什么不能直接拿 `Points[0]`：识别器给的端点是"拟合方向的投影极值"，
+    /// 哪一头落到 `Points[0]` 是不定的（见 <see cref="ShapeRecognize.TryLine"/>）。</summary>
+    private Vector2 _dwellLinePin;
+
+    /// <summary>
+    /// "这一笔在这个点数上已经试过保形平滑了"（记点数，-1 = 还没试）。
+    /// 为什么需要：`TickDwellShape` 每 40ms 走一次，而笔尖停着不动时**点数是不会变的**——
+    /// 不记一笔就会每 40ms 重跑一遍拟合（白烧 CPU）。点数一变（用户又开始画了）自然重试。
+    /// </summary>
+    private int _dwellSmoothTriedAt = -1;
+
+    /// <summary>
+    /// armed 之后"按住拖动"的**起步死区**（逻辑像素）：笔尖在这个范围内动，线一个像素都不改。
+    ///
+    /// 为什么非有不可（和 `DwellAssist.DeadZoneLogical` 同一个道理，但后果更凶）：
+    /// 笔尖"静止"按在屏幕上时，驱动仍在上报亚像素抖动。没有死区的话，那段抖动会被当成
+    /// "用户在拖"——**直线最惨**：笔尖就停在"跟着笔尖走的那一头"，抖 1 个画布单位就够
+    /// 把线压成零长度，`SnapToAxis` 一看没有方向 → 吸成水平 → **一条很短的小横线**
+    /// （用户 2026-09-24 报的"竖着画的直线变成很短的一个横直线"；`--dwelltest` H6 钉住：
+    /// 修之前那一档漂移 299.51 画布单位，整条 300 的线只剩一个点）。
+    /// </summary>
+    internal const float DwellDragSlopLogical = 5f;
+
+    /// <summary>停顿成型定型时的**角度吸附容差**（度）：照 InkClass 的 `LineAssistSnapDeg = 4`
+    /// （画坐标轴 / 分割线刚需，见 计划-图形工具.md §42.1）。</summary>
+    internal const float DwellSnapDeg = 4f;
+
+    // ---- "保形平滑"（认不出图形时的兜底，用户 2026-09-24 定的第一步）------------------
+
+    /// <summary>
+    /// **保形平滑的容差**（逻辑像素）：拟合出的光滑曲线离原始笔迹的最大偏差不许超过它。
+    /// 这就是用户说的"**大差不差**"的量法——只去抖、不改形状。
+    ///
+    /// 2.5 逻辑像素 ≈ 0.66 mm：手画的抖动量级是 5~30 像素，这个带子远小于它，
+    /// 又远大于渲染/展平的误差（所以"形状没变"是真的，不是嘴说的）。
+    /// 自检 `--smoothtest` 会独立量这个数（到展平折线的欧氏距离），不靠拟合器自报。
+    /// </summary>
+    internal const float CurveFitMaxErrorLogical = 2.5f;
+
+    /// <summary>
+    /// 平滑后**展平点串**的采样间距（逻辑像素）。引擎里"墨"就是一个点串，
+    /// 展平之后渲染/命中/存档/导出一行都不用改；1.5 逻辑像素比原迹采样还密一点，
+    /// 所以肉眼看不到折线感，点数通常还比原迹少。
+    /// </summary>
+    internal const float CurveFitSpacingLogical = 1.5f;
+
+    /// <summary>
+    /// 操作条那一块现在画成**收起来那一颗圆钮**吗（而不是一整条九格）。
+    /// 两种来源：用户自己收的（<see cref="SelBarCollapsed"/>）、**画完自动选中那个框**
+    /// （见 <see cref="_autoSelCollapsed"/>）。
+    ///
+    /// ⚠ 绘制 / 命中 / 光标**都必须问这一条**：只判 `SelBarCollapsed` 的话，
+    /// 自动选中那个框会"画的是圆钮、点的是一整条"，两边对不上
+    ///（"同一个名单写在多处必漏一处"，见 架构-分层与规则.md 五-7）。
+    /// </summary>
+    internal bool BarDrawnCollapsed => SelBarCollapsed || _autoSelCollapsed;
+
     /// <summary>当前开着的浮动面板（同一时刻只开一个）。见 <see cref="SelPanel"/>。</summary>
     internal SelPanel SelPanelOpen = SelPanel.None;
 
@@ -522,6 +654,18 @@ public class InkEngine
     /// </summary>
     internal float VertexPreviewFocusU => _vertexPreviewFocusU;
     private float _vertexPreviewFocusU = float.NaN;
+
+    /// <summary>
+    /// 拖**坐标系的格距手柄**（第四颗）时，这一帧算出来的格距；`0` = 这一拖不是拖它。
+    ///
+    /// 和 `FocusPointU` 同一个道理：**格距不是控制点**（坐标系永远只有三个点，
+    /// 见 <see cref="StrokeKind.Coordinate"/>），所以预览只多带这一个数，
+    /// 浮动层拿它画预览（见 Overlay 的 DrawVertexPreview 里那个 `g.AxisGridStep`）。
+    /// 用手势开始时那个 `0` 当"没在拖"的记号，是因为格距本身**不许是 0**
+    ///（0 = 自动，见 <see cref="Stroke.AxisGridStep"/> 的注释）。
+    /// </summary>
+    internal float VertexPreviewGridStep => _vertexPreviewGridStep;
+    private float _vertexPreviewGridStep;
 
     /// <summary>拖动中的那个元素在**画布坐标**里的位置（读数标签贴在它外侧）。</summary>
     internal Vector2 VertexPreviewCanvasPoint => _vertexPreviewCanvas;
@@ -746,6 +890,12 @@ public class InkEngine
     // ---- 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictor.cs）----
     //  这两件事共用同一条时间轴：采样点自带硬件时标，压感保真靠它，外推预测也靠它。
     private readonly PenSampleBuffer _pen = new();
+    /// <summary>
+    /// 非笔指针（鼠标 / 触摸）的合并点。手写板**没开 Windows Ink** 时设备是以
+    /// `PT_MOUSE` 上报的，触摸屏是 `PT_TOUCH`——这两条路以前一条消息只取一个点，
+    /// 快写时轨迹被静默抽稀（见 Input/PointerInput.cs）。
+    /// </summary>
+    private readonly PointerSampleBuffer _ptr = new();
     private readonly InkPredictor _predictor = new();
     private readonly PredictedPoint[] _predBuf = new PredictedPoint[8];
     private readonly Vector2[] _trailReal = new Vector2[PenSampleBuffer.MaxSamples];
@@ -753,9 +903,78 @@ public class InkEngine
     /// 否则抬手那一下粗细会跳（见 <see cref="TrailRadius"/>）。</summary>
     private readonly float[] _trailRadii = new float[PenSampleBuffer.MaxSamples];
     private readonly Vector2[] _trailPred = new Vector2[8];
+    /// <summary>渲染尾的复用缓冲（画布坐标）。每帧清空重填，不分配。</summary>
+    private readonly List<Vector2> _tailScratch = new(8);
 
-    /// <summary>湿墨预测开关。真笔专属，<c>--nopredict</c> 关掉。</summary>
+    /// <summary>
+    /// 预测开关。**不只服务真笔的委托轨迹**：鼠标与触摸那条路没有系统湿墨通道，
+    /// 预测段由我们画进"正在写的那一笔"（见 <see cref="UpdateRenderTail"/>）。
+    /// <c>--nopredict</c> 关掉。
+    /// </summary>
     internal bool PredictEnabled = true;
+    /// <summary>
+    /// 正在写的这一笔**已经交给系统合成器画**了吗（<see cref="FeedInkTrail"/> 真的喂了点）。
+    /// 喂过就不再加自己的渲染尾——两边一起补会在笔尖前面重复画出一小截。
+    /// </summary>
+    internal bool ActiveStrokeOnTrail;
+    /// <summary>渲染尾相对最后一个真实点的最远距离（画布像素）。脏区要按它往外扩。</summary>
+    internal float PredictedTailLead;
+    /// <summary>自画预测尾的累计统计（诊断用）：算过多少次、一共报过多少个点、最大前带量。</summary>
+    internal int TailComputes, TailPointsTotal;
+    internal float TailLeadMax;
+    /// <summary>这一笔有没有出过预测尾、以及最大前带量（`[笔画]` 那一行要用）。</summary>
+    private bool _strokeHadTail;
+    private float _strokeTailMax;
+
+    // ---- 书写期间的分配 / GC 仪表（低配机排查用）--------------------------
+    //
+    // 低配机上"卡"的第一来源不是平均帧时间，而是**偶发长帧**，其中最凶的一种就是
+    // GC 的前台第 2 代回收（要扫整个堆、还可能压缩内存，一次几十毫秒）。
+    // 所以这两件事必须能打印出来，否则优化只能靠猜：
+    //   · 写一笔到底分配了多少字节（分配越多，越容易触发回收）；
+    //   · 这一笔期间真的发生了几次 GC、是哪一代（**第 2 代出现在书写期间 = 危险信号**）。
+    /// <summary>这一笔期间本线程的托管分配字节数。</summary>
+    internal long StrokeAllocBytes;
+    /// <summary>这一笔期间完成的 GC 次数（第 0 / 1 / 2 代）。</summary>
+    internal int StrokeGc0, StrokeGc1, StrokeGc2;
+    /// <summary>累计统计（`--penlive` 汇总那一行要用）。</summary>
+    internal int StrokesMeasured, StrokesWithGc2;
+    internal long AllocBytesMax;
+    internal double AllocKbSum;
+
+    long _mAlloc0;
+    int _mGc0, _mGc1, _mGc2;
+    bool _measureDone;
+
+    /// <summary>起仪表：记下这一刻的分配计数和三代 GC 次数。</summary>
+    private void BeginStrokeMeasure()
+    {
+        // GetAllocatedBytesForCurrentThread 只是读一个计数器，很便宜，不会自己触发回收。
+        _mAlloc0 = GC.GetAllocatedBytesForCurrentThread();
+        _mGc0 = GC.CollectionCount(0);
+        _mGc1 = GC.CollectionCount(1);
+        _mGc2 = GC.CollectionCount(2);
+        _measureDone = false;
+    }
+
+    /// <summary>收仪表：算差额，累进总账。重复调用只算第一次（收笔有几条分支）。</summary>
+    private void EndStrokeMeasure()
+    {
+        if (_measureDone) return;
+        _measureDone = true;
+        StrokeAllocBytes = GC.GetAllocatedBytesForCurrentThread() - _mAlloc0;
+        StrokeGc0 = GC.CollectionCount(0) - _mGc0;
+        StrokeGc1 = GC.CollectionCount(1) - _mGc1;
+        StrokeGc2 = GC.CollectionCount(2) - _mGc2;
+
+        StrokesMeasured++;
+        AllocKbSum += StrokeAllocBytes / 1024.0;
+        if (StrokeAllocBytes > AllocBytesMax) AllocBytesMax = StrokeAllocBytes;
+        if (StrokeGc2 > 0) StrokesWithGc2++;
+    }
+
+    /// <summary>当前这一笔的渲染尾点数（诊断与自检用；0 = 没有尾）。</summary>
+    internal int RenderTailPoints => ActiveStroke?.RenderTail?.Count ?? 0;
     /// <summary>当前预测地平线（毫秒，8~15）。诊断用。</summary>
     internal double PredictHorizonMs => _predictor.HorizonMs;
     /// <summary>前带量的硬上限（像素）。诊断用。</summary>
@@ -767,6 +986,8 @@ public class InkEngine
     /// <summary>累计统计（--penlive 结束时汇总用）：真笔的压感/倾角/合并情况。</summary>
     internal int PenTotalPoints, PenPressurePoints, PenMessages, PenSamples;
     internal bool PenSawPressureMask, PenSawTiltMask, PenSawRotationMask;
+    /// <summary>累计统计：非笔指针（鼠标 / 触摸）读到多少消息、多少合并采样点。</summary>
+    internal int PtrTotalPoints, PtrMessages, PtrSamples, PtrCoalescedExtra;
     /// <summary>预测把湿墨往前带了多少（像素）——"说不清有没有用"时就看这个数。</summary>
     internal double PredLeadSum; internal int PredLeadCount; internal float PredLeadMax;
     internal int _cntDown, _cntMove, _cntUp, _cntCaptureLost;
@@ -1063,17 +1284,34 @@ public class InkEngine
         if (args.Contains("--noinktrail")) OverlayWindow.InkTrailEnabled = false;
 
         // ---- 笔迹预测 ---------------------------------------------------------
-        // 默认跟着湿墨轨迹一起开（只对真笔生效）。--nopredict 关掉；
+        // **不再跟着湿墨轨迹开**：轨迹只有真笔能用，而预测现在还要给鼠标 / 触摸用
+        //（那两条路没有系统湿墨通道，预测段由我们自己画进正在写的那一笔，
+        // 见 UpdateRenderTail）。所以只有 --nopredict 才关。
         // --predictms N 调地平线，超出 8~15 ms 会被收进范围（见原理文档第三节）。
-        PredictEnabled = OverlayWindow.InkTrailEnabled && !args.Contains("--nopredict");
+        PredictEnabled = !args.Contains("--nopredict");
         for (int i = 0; i < args.Length - 1; i++)
             if (args[i] == "--predictms" && double.TryParse(args[i + 1], out double pm))
                 _predictor.HorizonMs = pm;
         // 前带量的硬上限（像素）。默认 12 px 足够快机器；负载大、延迟高时要放宽才看得清效果。
+        // 上界给到 400 而不是 40：这是**真机调手感**的旋钮，"100 到底难不难受"必须能真的调到
+        // 100（夹在 40 的话人会以为功能就这样，见 InkPredictor.HardMaxHorizonMs 那段说明）。
         for (int i = 0; i < args.Length - 1; i++)
             if (args[i] == "--predictlead" && float.TryParse(args[i + 1], out float pl))
-                _predictor.MaxDistance = Math.Clamp(pl, 4f, 40f);
+                _predictor.MaxDistance = Math.Clamp(pl, 4f, 400f);
         _predictor.ClampHorizon();
+
+        // ---- 书写期间的 GC 低延迟档 -------------------------------------------
+        //
+        // 默认**开**：书写期间用 SustainedLowLatency 抑制"前台第 2 代回收"
+        //（那是最重的一种回收，一次几十毫秒，落在书写中间就是"笔突然卡一下"）。
+        // 详见 GcLatency.cs 的说明与两个坑。
+        //
+        // `--nogclatency` 关掉它，专门用来做"开 / 不开"的对照测量——
+        // 低配机上到底是不是它对卡顿有用，得靠这个开关量，不能凭感觉。
+        GcLatency.Enabled = !args.Contains("--nogclatency");
+        for (int i = 0; i < args.Length - 1; i++)
+            if (args[i] == "--gchold" && double.TryParse(args[i + 1], out double gh))
+                GcLatency.HoldMs = Math.Clamp(gh, 0, 60000);
 
         // ---- 压感 → 粗细 ------------------------------------------------------
         //
@@ -1276,7 +1514,54 @@ public class InkEngine
             s_map[w.Hwnd] = w;
             _windows.Add(w);
             Console.WriteLine($"overlay on monitor {hMon}: {r.Width}x{r.Height} at ({r.Left},{r.Top}) dpi={w.Dpi}");
-            Console.WriteLine($"委托墨迹轨迹(InkTrail): {OverlayWindow.InkTrailNote}");
+            Console.WriteLine($"委托墨迹轨迹(InkTrail): {(OverlayWindow.InkTrailEnabled ? "开" : "关")}"
+                              + $"（接口{OverlayWindow.InkTrailNote}）");
+            // 调参时"我到底调上了没有"必须一眼看得见：这里印的是**生效值**，不是"可用/不可用"。
+            // （2026-09-22 用户碰到的两个坑：--predictms 100 被静默夹到 15；--noinktrail 生效了没有
+            //   只能靠猜。这两件事都不该靠猜。）
+            Console.WriteLine($"笔迹预测: {(PredictEnabled ? "开" : "关（--nopredict）")}"
+                              + $"，地平线 {PredictHorizonMs:F0} ms（推荐 8~{InkPredictor.MaxHorizonMs:F0}，硬上限 {InkPredictor.HardMaxHorizonMs:F0}）"
+                              + $"，前带量上限 {PredictLeadCap:F0} px");
+            Console.WriteLine($"预测尾（鼠标/触摸自画的那一截）：{(OverlayWindow.InkTrailEnabled
+                ? "真笔那一笔让给系统轨迹，鼠标/触摸仍然画"
+                : "真笔也画（委托轨迹已关）")}");
+            // 书写期间的 GC 低延迟档：低配上"偶发卡一下"的第一嫌疑就是它没生效。
+            // 这里印的是**读回来的实际状态**（见 GcLatency.Describe），不是"我们想让它开"。
+            Console.WriteLine($"书写期间 GC 低延迟档: {GcLatency.Describe()}"
+                              + $"（SustainedLowLatency，最后一笔后 {GcLatency.HoldMs / 1000:F0} 秒退回）");
+
+            // 系统笔设置：**"长按当右键"最容易在板书时添乱**——笔尖停住不动会被判成长按，
+            // 而板书时停顿是常态。这里只**如实打印读到的数值**，不解释哪个取值代表开还是关
+            //（那套取值我们没有可靠出处，不能猜；本项目的规矩是不许把猜的写成结论）。
+            // 想改就去：设置 → 蓝牙和设备 → 笔和 Windows Ink → 其他笔设置。
+            {
+                const string penKey = @"Software\Microsoft\Wisp\Pen\SysEventParameters";
+                bool hasMode = Native.ReadDword(penKey, "HoldMode", out uint hm, out _);
+                bool hasWait = Native.ReadDword(penKey, "WaitTime", out uint wt, out _);
+                bool hasHold = Native.ReadDword(penKey, "HoldTime", out uint ht, out _);
+                if (hasMode || hasWait || hasHold)
+                {
+                    var parts = new List<string>();
+                    if (hasMode) parts.Add($"HoldMode={hm}");
+                    if (hasWait) parts.Add($"长按判定等待 {wt} ms");
+                    if (hasHold) parts.Add($"长按保持 {ht} ms");
+                    Console.WriteLine("系统笔设置: " + string.Join("、", parts)
+                                      + "（这一份是**系统全局**的设置，只列出来看清楚——"
+                                      + "我们自己的窗口已经单独关掉了这条手势，见下一行）");
+                }
+                else
+                {
+                    Console.WriteLine(@"系统笔设置: 读不到 HKCU\Software\Microsoft\Wisp\Pen\SysEventParameters"
+                                      + "（这台机器没有这套笔设置；真笔设备可能由驱动自己管）");
+                }
+            }
+            // **这条是"无论系统怎么设，我们这边都不认它"的验收口**（用户 2026-09-23 要的）：
+            // 三条 Window 级关法见 Native.DisableSystemPressAndHold。为什么必须印出来：
+            // 它失效时的现象是"笔尖停住弹右键环"，看起来像"停顿成型没识别出来"，
+            // 排查方向会从一开始就错。
+            Console.WriteLine("长按=右键手势: " + (OverlayWindow.PressAndHoldDisabled
+                ? "已在本窗口内关掉（系统里开着也不影响我们）"
+                : "⚠ 没关掉（真笔上笔尖停住可能弹右键环，会和停顿成型抢）"));
             Console.WriteLine($"压感→粗细: {(PressureWidth.Enabled
                 ? $"开（{PressureWidth.Min:F2}~{PressureWidth.Max:F2} 倍，曲线 gamma {PressureWidth.Gamma:F2}）"
                 : "关（--nopressure）")}；变宽通道: {OverlayWindow.InkNote}");
@@ -1359,6 +1644,10 @@ public class InkEngine
     {
         while (!_quit)
         {
+            // 每帧开头先把渲染尾收掉：指针停住但画面还在刷（动画、界面失效、激光衰减）
+            // 的时候，不收就会一直重画上一帧算出来的那一小截预测墨。
+            // 紧接着的 DrainMessages 会把这一帧真的到过的点算成新的尾。
+            ClearRenderTail();
             DrainMessages();
             if (_quit) break;
 
@@ -1431,6 +1720,11 @@ public class InkEngine
         // 自检就永远验不到它（第一版就是这么漏的：改了板书也不写）。
         // 自检模式走临时路径（Recovery.AutoSavePathOverride），不会碰用户的板书。
         MaybeAutoSave();
+
+        // 书写期间的 GC 低延迟档：超时退回。放在这里**和自动存档同一个理由**——
+        // 挂主循环里的话，自检那条路永远验不到"超时能退回"（见 GcLatency.cs）。
+        // `_drawing` 传进去：手势还在进行就一直保持，别在一笔的中途退出来。
+        GcLatency.Tick(_drawing);
 
         // The HUD text and the process counters cost an order of magnitude more
         // than drawing the ink does, so they refresh a few times a second rather
@@ -1666,6 +1960,18 @@ public class InkEngine
 
     private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
+        // **系统来问"要不要那条长按手势"**：一律回"不要"。
+        //
+        // 这是关掉"按住不动 = 右键"的**主路**（另两条在 Native.DisableSystemPressAndHold 里）：
+        // 官方文档对这一位的原话就是 "disables press and hold (right-click) gesture"，
+        // 也就是它同时干掉手势和右键消息。回在这里而不是某个窗口分支里，
+        // 是因为系统可能拿**任意一个**我们的窗口来问（覆盖层、接输入小窗都算）。
+        //
+        // 顺带一条官方说明：关掉之后左键消息**不再需要等那段"区分长按与单击"的延迟**，
+        // 落笔更跟手。
+        if (msg == Native.WM_TABLET_QUERYSYSTEMGESTURESTATUS)
+            return new IntPtr(Native.TABLET_DISABLE_PRESSANDHOLD);
+
         // 面板的"接输入小窗"（方案 B）：它只收输入，什么都不画。
         if (_uiInputHwnd != IntPtr.Zero && hWnd == _uiInputHwnd)
             return UiInputWndProc(hWnd, msg, wParam, lParam);
@@ -1770,6 +2076,14 @@ public class InkEngine
                 return IntPtr.Zero;
 
             case Native.WM_TIMER:
+                // **停顿成型那颗 40ms 的定时器**（id = 2）只问一件事："笔停了多久"。
+                // 顺手做的置顶那一套（id = 1 那颗 250ms 的）在这里**不重复做**——
+                // 不分开的话它会跟着 40ms 的节奏跑，一秒凭空多 25 次置顶。
+                if (wParam.ToInt32() == DwellTimerId)
+                {
+                    TickDwellShape();
+                    return IntPtr.Zero;
+                }
                 // 只有要显示性能面板时才需要周期性重绘；面板关掉还每秒重画 4 次
                 // 纯属白烧电。
                 if (ShowHud) _dirty = true;
@@ -1864,6 +2178,17 @@ public class InkEngine
         float x = sx, y = sy;
         ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布
 
+        // 图库面板排在界面之前：它从工具条上沿**往上长**，两块本来不重叠，
+        // 但顺序写清楚——面板是自己的浮层，先问它。
+        // 按在面板外 = 先把它收起来，然后这一下**照常往下面走**（同颜色/层级面板的口径：
+        // 面板外的第一下既收面板、也不耽误画）。`LibraryPointerDown` 内部还会管
+        // "面板里的空白"（吃掉，不穿透到画布）。
+        if (LibraryPanelOpen)
+        {
+            if (LibraryPointerDown(x, y)) { ApplyCursor(); return; }
+            CloseLibraryPanel();
+        }
+
         // 界面优先：点在悬浮条上就是操作界面，不是画一笔。
         //
         // 两件容易踩的事：
@@ -1898,6 +2223,27 @@ public class InkEngine
         // 界面之外的穿透：交下层窗口，我们不收这一下。
         if (PassThrough) return;
 
+        // 图库里点了一张之后（`_libraryPending` 非空）：**这一次按下就是"把它放下来"**
+        // ——和"粘贴对象"同一条路（一步撤销、放完自动选中）。
+        // 位置：排在界面之后（点在工具条上不该跑到画布上插东西）、落笔之前
+        //（它不是"画一笔"，不能进 _drawing）。
+        if (LibraryInsertArmed)
+        {
+            TryInsertLibraryAt(x, y);
+            ApplyCursor();
+            return;
+        }
+
+        // **同一时刻只跟一条指针**——这是 OnPointerMove/OnPointerUp 里那句
+        // `id != _activePointer` 的另一半。已经有指针在手（正在写、正在拖滚动条）时，
+        // 后来的按下直接忽略。
+        //
+        // 这条守卫以前没有，而**只有触摸踩得到**：鼠标和笔一次只有一个指针，
+        // 触摸屏上写字时蹭到的第二根手指（或者落屏的掌根）会让下面 `_activePointer = id`
+        // 把指针抢走、`ActiveStroke` 被换成新的一笔——而正在写的那一笔**还没进文档**，
+        // 于是"写一半的字凭空消失"。它顺带就是最基础的掌心抑制：掌根不再抢笔。
+        if (_drawing) return;
+
         _activePointer = id;
         _activePointerType = ptype;
         PointerX = x; PointerY = y; PointerInside = true;
@@ -1914,6 +2260,10 @@ public class InkEngine
 
         _drawing = true;
         Native.SetCapture(hWnd);
+        // 书写会话开始：进 GC 低延迟档（见 GcLatency.cs），并起分配/GC 仪表。
+        // 一笔接一笔写的时候，低延迟档会一直待着；最后一笔结束满几秒才退回。
+        GcLatency.Enter();
+        BeginStrokeMeasure();
         // 拖拽中系统不再发 WM_SETCURSOR（输入已被捕获），光标必须在按下这一刻定下来。
         ApplyCursor();
 
@@ -1988,6 +2338,22 @@ public class InkEngine
             default:
                 if (IsShapeTool(tool))
                 {
+                    // **画完自动选中那个框**（见 EndStroke）：按下先问"这一下是不是在动它"。
+                    //   · 在它身上（圆钮 / 操作条 / 手柄 / 旋转柄 / **框内任意一点**）
+                    //     → 交给选择手势那一套（拖动、拉手柄、点条，和框选工具下**完全一样**）；
+                    //   · 在**框外** → 收起这个框，这一笔照常画。
+                    // 用户 2026-09-22 定的口径："点击了其他地方，这个选中框就取消"；
+                    // 而"只要收缩，其他的都不变"——所以框里照样能拖（第一版把框里判成
+                    // "接着画一笔"，用户上手就是"不能拖动位置，只能拉伸缩放"）。
+                    // 判据只有 `AutoSelectionZoneAt` 这一处（光标那边问 `SelectionInteractiveAt`）。
+                    if (Doc.Selected.Count > 0)
+                    {
+                        bool shift = (Native.GetAsyncKeyState(0x10 /*VK_SHIFT*/) & 0x8000) != 0;
+                        bool alt = (Native.GetAsyncKeyState(0x12 /*VK_MENU*/) & 0x8000) != 0;
+                        if (AutoSelectionPress(x, y, shift, alt)) { _dirty = true; return; }
+                        ClearSelectionForNewContext();
+                    }
+
                     // **多笔图形**（目前只有双曲线：两笔，见表 StepPlan）。规则照 InkClass：
                     // **一笔 = 按下-拖-松手**，松手推进下一笔（见 _stepIndex 那段注释）。
                     //   ① 第 1 笔按下 → 起半成品（`_stepPlan` / `_stepIndex` 也在那里落）；
@@ -2009,41 +2375,464 @@ public class InkEngine
                     break;
                 }
 
-                float trailW = (tool == Tool.Highlighter ? HighlighterWidthLogical
-                                                         : tool == Tool.Laser ? LaserWidthLogical
-                                                         : PenWidthLogical) * DpiScale;
-                // 这一笔的线型：**只有笔吃那个开关**（见 PenDash），别的工具一律实线。
-                var dash = tool == Tool.Pen ? PenDash : StrokeDash.Solid;
-                // 只对真笔（PT_PEN）起轨迹：这条通道是给"笔尖跟手"用的，
-                // 鼠标/触摸走它没有意义，而且会平白多一条系统画出来的线。
+                // **停顿成型刚变出来的那个框**：工具还是笔，但这一下同样要先问"是不是在动它"。
+                // 用户 2026-09-23 定的口径和图形工具下**完全一样**：点框里 → 拖动 / 拉手柄；
+                // 点框外 → 收起这个框、**这一笔照常画**（只是"只不过点了一下"的话不留墨）。
                 //
-                // **虚线笔迹不起委托墨迹**：那条轨迹由系统合成器画，画不出我们的线型
-                // （它只会画一条实线），一笔写完就会"实线突然变虚线"闪一下。
-                // 退回落自己画反而是对的——自己画的湿墨本来就是虚线，前后一致。
-                if (ptype == Native.PT_PEN && dash == StrokeDash.Solid)
-                    WindowAt(screenX, screenY)?.BeginInkTrail(
-                        tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f);
-                ActiveStroke = new Stroke
-                {
-                    Tool = tool,
-                    Color = tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
-                    Width = (tool == Tool.Highlighter ? HighlighterWidthLogical
-                                                      : tool == Tool.Laser ? LaserWidthLogical
-                                                      : PenWidthLogical) * DpiScale,
-                    Dash = dash,
-                };
-                // 起笔：预测器从这一刻开始积累；落笔这条消息里可能已经合并了几个采样点，
-                // 一起收进来（以前只取最新那一个）。
-                _predictor.Reset();
-                ActiveStrokeHasPressure = false;
-                LastCoalescedSamples = LastCoalescedMessages = 0;
-                AppendStrokeSamples(id, ptype, x, y, pressure);
-                // 半径**逐点算**（见 TrailRadius）：有压感的笔，湿墨的粗细必须和干墨一致。
-                FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
+                // 判据是 `_dwellSelected`（只有停顿变出来的选中框才为真）——所以笔下面
+                // 不会凭空多出交互：框选 / 图形工具画完那些选中，在笔下面仍然是"接着画"。
+                if (TryDwellSelectionPress(x, y)) { _dirty = true; return; }
+
+                BeginFreehandStrokeAt(id, ptype, x, y, screenX, screenY, pressure);
                 break;
         }
         _dirty = true;
     }
+
+    /// <summary>
+    /// 笔下面那一下：**如果"停顿变出来的选中框"还在，先问它是不是在动它**
+    ///（返回 true = 这一下被选择手势吃掉了，调用方直接收工）。
+    ///
+    /// ⚠ **只有这一处实现**：`OnPointerDown` 和 `--dwelltest` 都问它。
+    /// 判据写两份的话，自检验的其实是"自检自己那一份"，等于没验
+    ///（"同一个名单写在多处必漏一处"，见 架构-分层与规则.md 五-7）。
+    /// </summary>
+    private bool TryDwellSelectionPress(float x, float y)
+    {
+        if (!_dwellSelected || Doc.Selected.Count == 0) return false;
+        bool shiftKey = (Native.GetAsyncKeyState(0x10 /*VK_SHIFT*/) & 0x8000) != 0;
+        bool altKey = (Native.GetAsyncKeyState(0x12 /*VK_MENU*/) & 0x8000) != 0;
+        if (AutoSelectionPress(x, y, shiftKey, altKey)) return true;
+        // 框外：收起这个框，这一笔照常画——只是"如果这一下只是个点"，墨不留
+        //（见 EndStroke 里那条 `_dismissTapArmed`）。
+        ClearSelectionForNewContext();
+        _dismissTapArmed = true;
+        return false;
+    }
+
+    /// <summary>
+    /// 起一笔自由笔迹（笔 / 荧光笔 / 激光笔都走这里）。
+    ///
+    /// 从 `OnPointerDown` 里**抽出来**的理由有两条：
+    ///   · 停顿成型的自检要能从"按下"这一步**真跑一遍**（`--dwelltest`），
+    ///     而不是在测试里另造一条笔迹对象——那样测的就不是这条路了
+    ///     （"我造了个对象、字段是我自己填的"不算测，见 project_memory 的教训）；
+    ///   · 起笔的几件事（线型 / 合成器轨迹 / 预测器 / 停顿跟踪）本来就该在一处写完。
+    /// </summary>
+    private void BeginFreehandStrokeAt(uint id, uint ptype, float x, float y,
+                                       float screenX, float screenY, float pressure)
+    {
+        var tool = Tool;
+        float trailW = (tool == Tool.Highlighter ? HighlighterWidthLogical
+                                                 : tool == Tool.Laser ? LaserWidthLogical
+                                                 : PenWidthLogical) * DpiScale;
+        // 这一笔的线型：**只有笔吃那个开关**（见 PenDash），别的工具一律实线。
+        var dash = tool == Tool.Pen ? PenDash : StrokeDash.Solid;
+        // 只对真笔（PT_PEN）起轨迹：这条通道是给"笔尖跟手"用的，
+        // 鼠标/触摸走它没有意义，而且会平白多一条系统画出来的线。
+        //
+        // **虚线笔迹不起委托墨迹**：那条轨迹由系统合成器画，画不出我们的线型
+        // （它只会画一条实线），一笔写完就会"实线突然变虚线"闪一下。
+        // 退回落自己画反而是对的——自己画的湿墨本来就是虚线，前后一致。
+        if (ptype == Native.PT_PEN && dash == StrokeDash.Solid)
+            WindowAt(screenX, screenY)?.BeginInkTrail(
+                tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f);
+        ActiveStroke = new Stroke
+        {
+            Tool = tool,
+            Color = tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
+            Width = (tool == Tool.Highlighter ? HighlighterWidthLogical
+                                              : tool == Tool.Laser ? LaserWidthLogical
+                                              : PenWidthLogical) * DpiScale,
+            Dash = dash,
+        };
+        // 起笔：预测器从这一刻开始积累；落笔这条消息里可能已经合并了几个采样点，
+        // 一起收进来（以前只取最新那一个）。
+        _predictor.Reset();
+        ActiveStrokeHasPressure = false;
+        LastCoalescedSamples = LastCoalescedMessages = 0;
+        // 这一笔还没交给系统合成器；渲染尾也先清掉（上一笔可能留了一截）。
+        ActiveStrokeOnTrail = false;
+        _strokeHadTail = false;
+        _strokeTailMax = 0f;
+        ClearRenderTail();
+        AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
+        // 半径**逐点算**（见 TrailRadius）：有压感的笔，湿墨的粗细必须和干墨一致。
+        FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
+
+        // **停顿成型跟着这一笔开始计时**（见 计划-图形工具.md §四十二）。
+        // 激光笔不参与：它只是"指一下"，本来就不留墨，把它变出一个图形来没有意义。
+        _dwellInk = null;
+        _dwellCommitted = false;
+        if (DwellShapeEnabled && tool != Tool.Laser)
+        {
+            _dwell.Begin(NowMs, new Vector2(x, y), DwellAssist.DeadZoneLogical * DpiScale);
+            _dwellSmoothTriedAt = -1;      // 新的一笔：平滑那次重试的记录作废
+            StartDwellTimer();
+        }
+        else _dwell.Reset();
+    }
+
+    /// <summary>
+    /// 这一帧的指针移动（自由笔迹那一支）。从 `OnPointerMove` 抽出来，
+    /// 理由和 <see cref="BeginFreehandStrokeAt"/> 同一个：停顿成型的自检要能**真跑**这一条。
+    /// </summary>
+    private void ExtendFreehandStroke(uint id, uint ptype, float x, float y,
+                                      float screenX, float screenY, float pressure)
+    {
+        // **停顿成型**：armed 之后这一笔不再堆采样点（它已经变成幽灵图形了），
+        // 指针移动一律交给 `ArmedStrokeMove`：**只有直线**会动（拖另一头转向 / 伸缩），
+        // 其它图形**只预览、什么都不改**（抬手才定型 + 自动选中，见那个函数）。
+        // ⚠ 这里**没有"取消"**：早先那条"非直线拖走就取消、这一帧的点照常进笔迹"是
+        //    我们自己定的，早去掉了。
+        bool dwellConsumed = _dwell.State == DwellState.Armed
+                          && ArmedStrokeMove(x, y, screenX, screenY);
+        if (dwellConsumed) return;
+
+        // 指针报什么坐标就存什么坐标：不做平滑、不做抽稀。
+        // 但**一条消息里的点要全部收下**——系统会把来不及投递的移动合并
+        // （自己实测：注入 140 Hz，应用只收到约 60 条消息，其余在 history 里），
+        // 只取最新那一个等于把笔的采样率砍半（见 Input/PenInput.cs）。
+        AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
+        FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
+        // 停顿跟踪：**死区内的抖动不算"动过"**（见 DwellAssist.DeadZoneLogical）——
+        // 少了它，笔尖静止时那点亚像素抖动会把计时一直刷新，
+        // "停 600ms"永远攒不满，整条功能看着像没生效。
+        _dwell.Sample(NowMs, new Vector2(x, y));
+    }
+
+    // ---------------------------------------------------------------------
+    //  停顿成型：计时 / 触发 / 按住调整 / 定型（规格见 计划-图形工具.md §四十二）
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// 开那颗 40ms 的轮询定时器（**只在笔画进行中开**）。
+    ///
+    /// 为什么非要有它：**笔不动就没有 `WM_POINTERUPDATE`**，而主循环空闲时阻塞在
+    /// `WaitMessage()`（见 `Loop`）——不主动醒过来，就永远问不出"停了多久"。
+    ///
+    /// 为什么单独一颗而不是搭现成那颗 250ms 的：250ms 的粒度下一笔"600ms 的停顿"
+    /// 会在 500~750ms 之间随机触发，手感是飘的；40ms 只多醒 25 次/秒，而且**只在写字期间**。
+    /// </summary>
+    private void StartDwellTimer()
+    {
+        if (_dwellTimerOn || _windows.Count == 0) return;
+        Native.SetTimer(_windows[0].Hwnd, (IntPtr)DwellTimerId, DwellAssist.TickMs, IntPtr.Zero);
+        _dwellTimerOn = true;
+    }
+
+    private void StopDwellTimer()
+    {
+        if (!_dwellTimerOn || _windows.Count == 0) return;
+        Native.KillTimer(_windows[0].Hwnd, (IntPtr)DwellTimerId);
+        _dwellTimerOn = false;
+    }
+
+    /// <summary>
+    /// **轮询那一刻**：笔停够了就识别一次。这是整条路上唯一的"时间判据"入口
+    ///（`Engine.Loop` 里 `NowMs` 已经刷新过了，见那里的顺序）。
+    /// </summary>
+    private void TickDwellShape()
+    {
+        if (_dwell.State != DwellState.Tracking) return;
+        if (!_dwell.StillEnough(NowMs)) return;
+
+        var ink = ActiveStroke;
+        if (ink == null || ink.Points.Count < 3) return;
+
+        var pts = new Vector2[ink.Points.Count];
+        for (int i = 0; i < pts.Length; i++) pts[i] = new Vector2(ink.Points[i].X, ink.Points[i].Y);
+        // 最短长度那条门槛**在识别器里**（见 ShapeRecognize.Recognize 的 scale 参数）——
+        // 这里不再自己乘一遍 DpiScale：同一个数写在两处，迟早会漂（用户 2026-09-23 的教训清单里
+        // 第一条就是这个）。
+        var guess = ShapeRecognize.Recognize(pts, DpiScale);
+        if (guess.IsNothing)
+        {
+            // 认不出图形 → **兜底试"保形平滑"**（用户 2026-09-24 定的第一步）。
+            // 每点一次 40ms 都会走到这儿，所以要记住"这一笔这个长度已经试过了"，
+            // 别在笔尖停着不动的时候每 40ms 重算一遍拟合。
+            if (ink.Points.Count != _dwellSmoothTriedAt)
+            {
+                _dwellSmoothTriedAt = ink.Points.Count;
+                TrySmoothDwellStroke(ink, pts);
+            }
+            return;
+        }
+
+        ArmDwellShape(ink, guess);
+    }
+
+    /// <summary>
+    /// **保形平滑**（用户 2026-09-24 定，第一步）：停顿之后**认不出任何图形**的那一笔，
+    /// 换成"误差带内的光滑曲线"（逐段三次贝塞尔，算法见 <see cref="CurveFit"/>）。
+    ///
+    /// 为什么挂在"认不出图形"这一档：图形优先——认出直线/圆/椭圆/三角/矩形/平行四边形
+    /// 就走图形那条路；认不出才轮到平滑。于是**平滑是兜底，不会抢图形的活**。
+    ///
+    /// 三条门槛（都要过）：
+    ///   · **够长**：用 <see cref="ShapeRecognize.MinLength"/>——和识别器同一个数。
+    ///     用户定过"图形太小不用出图"，平滑同理（短笔画平滑没意义，还白占一步撤销）；
+    ///   · **误差在带内**：原始每个采样点到光滑曲线的最大距离 ≤ 容差。
+    ///     这就是"大差不差"的量法：**只去抖，不改形状**；
+    ///   · **真的产出了曲线**（退化输入直接放弃）。
+    ///
+    /// 有意不做的事：
+    ///   · **不选中**——它是"更顺的墨"，不是带手柄的图形；选中它会弹出一个没法用的框
+    ///     （用户 2026-09-24 那套"只有图形才自动选中"的口径）；
+    ///   · **不动手势**：和"认出图形"那条一样，定型之后这一笔就结束了（笔尖再动什么都不做）。
+    ///
+    /// 撤销：走同一个 <see cref="DwellShapeAction"/> —— **一步回到手绘原迹**（不是回到空白）。
+    /// </summary>
+    private void TrySmoothDwellStroke(Stroke ink, Vector2[] pts)
+    {
+        float tol = CurveFitMaxErrorLogical * DpiScale;
+        float total = ShapeRecognize.PathLength(pts);
+        if (total < ShapeRecognize.MinLength * DpiScale) return;
+
+        var segs = CurveFit.Fit(pts, tol);
+        if (segs.Count == 0) return;
+        // 展平间距**不比原迹更密**（否则点数反而变多，白占内存和渲染）——见那个函数。
+        var smooth = CurveFit.Flatten(segs, CurveFit.FlattenSpacing(
+            total, ink.Points.Count, CurveFitSpacingLogical, DpiScale));
+        if (smooth.Length < 3) return;
+
+        // **独立验收**：拿"到展平折线的欧氏距离"再量一遍（不是拟合器自己报的那个数）。
+        // 多给 1 个逻辑像素，是因为展平本身有微小弦高误差（间距越小越小）。
+        float worst = CurveFit.MaxDeviationToPolyline(pts, smooth);
+        if (worst > tol + DpiScale) return;
+
+        // 停手 = 这一笔到此结束（和图形那条一样的三件事）
+        foreach (var w in _windows) w.EndInkTrail();
+        ActiveStrokeOnTrail = false;
+        ClearRenderTail();
+        _predictor.Reset();
+
+        // 样式照抄手里那支笔；压感按"原迹最近的采样点"带过来（笔尖粗细的手感别丢）
+        var sa = new Stroke
+        {
+            Tool = ink.Tool,
+            Color = ink.Color,
+            Width = ink.Width,
+            Dash = ink.Dash,
+            Kind = StrokeKind.Freehand,
+        };
+        var carry = CarryPressureByNearest(ink, smooth);
+        for (int i = 0; i < smooth.Length; i++) sa.AddPoint(smooth[i].X, smooth[i].Y, carry[i], 0);
+        sa.HasPressure = ink.HasPressure;
+
+        Doc.AddDwellShape(sa, ink);          // 撤销 = 拿回手绘原迹（同一个机制）
+        _dwellCommitted = true;
+        ActiveStroke = null;
+        _dwellInk = null;
+        double stillMs = _dwell.StillMs(NowMs);    // 复位之前先量
+        _dwell.Reset();
+        StopDwellTimer();
+        _dirty = true;
+        Console.WriteLine($"[停顿成型] 停 {stillMs:F0}ms → **保形平滑**"
+                          + $"（{segs.Count} 段、最大偏差 {worst / DpiScale:F1} 逻辑像素、"
+                          + $"{ink.Points.Count} 点 → {smooth.Length} 点）；Ctrl+Z 可回手绘");
+    }
+
+    /// <summary>
+    /// 把原迹的**压感**带到平滑后的点串上：两边都沿着曲线单调走，各取最近的原始采样点。
+    /// （点数变了，不能按下标对应；这笔墨的粗细变化要留住。）
+    /// </summary>
+    private static float[] CarryPressureByNearest(Stroke ink, Vector2[] smooth)
+    {
+        var p = new float[smooth.Length];
+        if (!ink.HasPressure) { Array.Fill(p, 1f); return p; }
+        int j = 0;
+        for (int i = 0; i < smooth.Length; i++)
+        {
+            var q = smooth[i];
+            float bestD = float.MaxValue;
+            int bestJ = j;
+            // 只往后看一小段（两边顺序一致，不用全局搜），找不到更好的就沿用上一个
+            for (int k = j; k < ink.Points.Count; k++)
+            {
+                float d = Vector2.DistanceSquared(q, new Vector2(ink.Points[k].X, ink.Points[k].Y));
+                if (d < bestD) { bestD = d; bestJ = k; }
+                if (d > bestD * 4f && k > j + 4) break;
+            }
+            j = bestJ;
+            p[i] = ink.Points[j].P;
+        }
+        return p;
+    }
+
+    /// <summary>
+    /// **认出图形了**：把正在写的这一笔换成幽灵预览（用户还按着笔）。
+    ///
+    /// 做法就是**换掉 `ActiveStroke` 指向的对象**（换成一个普通图形对象）：
+    ///   · 渲染不用写一行新代码——"正在书写的那一笔"本来就是每帧重画的（见 `DrawStroke`）；
+    ///   · 抬手时 `EndStroke` 提交的就是这个对象，**图形从来没进过文档**，
+    ///     所以"一步撤销回手绘"靠的是 <see cref="DwellShapeAction"/> 把原迹带在记录里。
+    /// </summary>
+    private void ArmDwellShape(Stroke ink, in ShapeGuess guess)
+    {
+        var shape = DwellAssist.BuildShapeStroke(guess, ink);
+
+        // 停手 = 这一笔不再长了：把"正在写"的三条通道全收掉。
+        // 不收的话屏幕上会同时留着一条手绘的歪线和一条规整图形（InkClass 那边
+        // 为此要切 `EditingMode`，还留下过"两条线""预览残留"一串坑；我们这边
+        // 采样和上屏都在引擎手里，所以要收的只有这三处）。
+        foreach (var w in _windows) w.EndInkTrail();
+        ActiveStrokeOnTrail = false;
+        ClearRenderTail();
+        _predictor.Reset();
+
+        var anchor = _dwell.Anchor;                       // 笔停住的位置
+        double stillMs = _dwell.StillMs(NowMs);           // 复位之前先量
+
+        if (guess.Kind == StrokeKind.Line)
+        {
+            // ── **直线：唯一的例外，继续当"幽灵"按住**（用户 2026-09-24 定）────────
+            // 直线的另一头正是画完最常要调的（转成水平 / 竖直），按住就能拖——比"先松手、
+            // 再点它、再拖手柄"少两步。抬手才定型，而且**不选中**（顺手一划，接着写）。
+            // 要记两件事：
+            //   · 起步死区基准：笔尖还在这儿附近 → 线一个像素都不改（见 DwellDragSlopLogical）；
+            //   · 钉住的那一头：**离笔尖远的那一头**。不能拿 `Points[0]`：识别器给的端点是
+            //     "拟合方向的投影极值"，哪一头落在那里**不定**，钉错时抖一下就把线压成零长度
+            //     （用户 2026-09-24 报的"竖线变成很短的小横线"）。
+            _dwellInk = ink;
+            ActiveStroke = shape;
+            _dwellArmAnchor = anchor;
+            if (guess.Def.Length >= 2)
+                _dwellLinePin = Vector2.Distance(guess.Def[0], anchor) >= Vector2.Distance(guess.Def[1], anchor)
+                              ? guess.Def[0] : guess.Def[1];
+            _dwell.Fire();
+            _dirty = true;
+            Console.WriteLine($"[停顿成型] 停 {stillMs:F0}ms → {guess.Kind}（{guess.Rule}）"
+                              + "；按住还能拖另一头转向，松手定型（**不选中**，接着写）");
+            return;
+        }
+
+        // ── **其它图形：识别到就定型 ＋ 选中**（用户 2026-09-24 定）──────────────
+        // 为什么不"等抬手"：那半秒里没有别的事可做（幽灵态那套"按住改大小/转角"已经砍掉，
+        // 见 ArmedStrokeMove），早定型 = 早看到结果、抬手就能拖。
+        // ⚠ 定型就在这一刻发生，所以**这一笔到此结束**：`ActiveStroke` 放手、状态机复位、
+        //   定时器关掉 —— 笔尖接着怎么动都不做任何事（那是"上一笔的余波"，不该变成新墨）。
+        //   抬手时 `EndStroke` 看到 `ActiveStroke == null`，只做收尾，不会再提交一次。
+        Doc.AddDwellShape(shape, ink);
+        _dwellCommitted = true;
+        ActiveStroke = null;
+        _dwellInk = null;
+        _dwell.Reset();
+        StopDwellTimer();
+        Doc.SelectOnly(new[] { shape });
+        _autoSelCollapsed = true;
+        _dwellSelected = true;        // 笔下面那个框照样能点能拖（判据见 TryDwellSelectionPress）
+        _dirty = true;
+        Console.WriteLine($"[停顿成型] 停 {stillMs:F0}ms → {guess.Kind}（{guess.Rule}）"
+                          + "；**已定型并选中**（还没抬手；Ctrl+Z 可回手绘）");
+    }
+
+    /// <summary>
+    /// armed 之后的指针移动。返回 true = 这一下被"幽灵预览"吃掉了（不再往笔迹里堆点）。
+    ///
+    /// **只有直线还吃移动**（用户 2026-09-24 定）：
+    ///   · **直线**：**离笔尖远的那一头钉住**、拖出去就是**转向 / 伸缩**（照 ClassIn / InkClass 的
+    ///     `LineAssistMove`），并在容差内吸到 0/90 —— 画坐标轴就靠这一下。留着它，是因为
+    ///     直线是"顺手一划"，它的另一头正是画完最常要调的（转成水平 / 竖直），
+    ///     而在选中态里调要多两步（先点它、再拖手柄）。
+    ///   · **其它图形**：按住期间**只预览、什么都不改**。道理：那套"按住改大小/转角"和
+    ///     "定型后自动选中 + 拖手柄"**完全重复**——幽灵态是 OneNote / GoodNotes 的做法，
+    ///     而它们画完**不自动选中**（得多点一下），才需要把调整塞进按住那一下；
+    ///     我们画完就自动选中，那一段就是多余的中间状态（少一个状态 = 少一类 bug：
+    ///     上一批"图形消失 / 变形"三条病因全出在它身上）。
+    ///     抬手 → 定型 + 自动选中 → 拖动、放大缩小、旋转都在选中框上做。
+    /// </summary>
+    private bool ArmedStrokeMove(float x, float y, float screenX, float screenY)
+    {
+        var s = ActiveStroke;
+        if (s == null) return false;
+        if (s.Kind != StrokeKind.Line || s.Points.Count < 2) return true;   // 只预览，不改
+
+        var p = new Vector2(x, y);
+        // **起步死区**：笔尖还在成型时那个位置附近（只有驱动上报的亚像素抖动）→ 线一个像素都不改。
+        // 没有它，"按住不动"其实一直在改——笔尖正好停在支点那一头时会把线压成零长度
+        //（用户 2026-09-24 报的"竖线变成很短的小横线"；`--dwelltest` H6 实测漂移 299.51）。
+        if (Vector2.Distance(p, _dwellArmAnchor) <= DwellDragSlopLogical * DpiScale)
+            return true;      // 这一下照样被"幽灵预览"吃掉，只是不改线
+
+        var a = _dwellLinePin;
+        var (_, b, _) = ShapeRecognize.SnapToAxis(a, p, DwellSnapDeg);
+        s.SetPoints(new[] { a, b });
+        _shapeInclination = SelectionHandles.InclinationDegrees(a, b);
+        _shapeInclinationSnapped = Vector2.Distance(b, p) > 0.01f;
+        _shapeAnchor = b;
+        return true;
+    }
+
+    /// <summary>
+    /// **取消选中那一击不留墨**（用户 2026-09-23 定）：这一笔如果是"点一下"
+    /// （**笔尖走过的总路程** ≤ <see cref="DwellTapSlopLogical"/> 逻辑像素），
+    /// 就不提交、不进撤销栈。
+    ///
+    /// 为什么单独定这条：点一下空白原本会落**一个点**（`Stroke.IsSinglePoint` 渲染成一个实心圆点），
+    /// 而"点一下别处"的意图是"收起那个选中框"，留一个墨点等于**每次取消选中都脏一块屏幕**
+    /// （InkClass 也是这么处理的，见它的 `TryDiscardDismissTapStroke`）。
+    ///
+    /// ⚠ **判据为什么不是"首末两点的位移"**（两个来源都那么写，这里都不能照搬）：
+    ///   · 参考实现 Ink Canvas 用的是"**抬起点 − 按下点** ≤ 6px"
+    ///     （`画布测试/Ink-Canvas-Dev/Ink Canvas/MW_PopupLayers.cs:230` 的
+    ///      `DismissTapMaxMovePx`；它只在"按下真的收起了可见面板"时才立这个标记，
+    ///      所以踩到的机会少）；
+    ///   · 我们早先量的是**笔迹首末两点**。
+    ///   两者对"点一下"都对，但对"**一笔画成个闭合圈**"（圆 / 四边形 / 五边形……首末两点
+    ///   天生重合，位移 ≈ 0）会把**整笔**判成"点一下" → 用户的墨凭空消失。
+    ///   这不是推演：`--dwelltest` 的 L 扫掠当场抓到 6 例（"五边形（认不出）"三档尺寸 ×
+    ///   两档乱动 × 带选中，全部消失）。
+    ///   换成**路程**就天然分得开：点在原地 ≈ 0，任何真画的一笔都是几十上百像素。
+    /// </summary>
+    private bool DwellTapLeaveNoInk(Stroke s)
+    {
+        if (s.Points.Count < 2) return true;
+        var pts = new Vector2[s.Points.Count];
+        for (int i = 0; i < pts.Length; i++) pts[i] = new Vector2(s.Points[i].X, s.Points[i].Y);
+        return ShapeRecognize.PathLength(pts) <= DwellTapSlopLogical * DpiScale;
+    }
+
+    // ---- 自检入口（`--dwelltest` 用；四条都是"薄封装"，不含任何逻辑）--------
+    //
+    // 为什么做成四个薄壳而不是一个"大模拟函数"：自检要能在**中间任何一步**断言
+    //（比如"停 559ms 时**还没**变"），塞进一个函数里就只能在最后看一眼结果。
+    // 时钟是自检**直接推 `NowMs`** 的——不许 sleep（600ms 一次、十几个用例，
+    // 自检会从"一眼看完"变成"等十秒"，而且真机上时序不可复现）。
+
+    /// <summary>自检用：按一下（**连"笔下面那个选中框"的分流一起走**，判据就是
+    /// <see cref="TryDwellSelectionPress"/> 那一份，和真按下同源）。</summary>
+    internal void DwellBeginForTest(float x, float y)
+    {
+        if (TryDwellSelectionPress(x, y)) return;      // 被选择手势吃掉：这一笔不该起
+        BeginFreehandStrokeAt(0, Native.PT_MOUSE, x, y, x, y, 0.5f);
+    }
+
+    /// <summary>自检用：喂一个采样点（走真入口 <see cref="ExtendFreehandStroke"/>）。</summary>
+    internal void DwellMoveForTest(float x, float y)
+    {
+        // 和真入口 `OnPointerMove` 一样：**手里没有活笔画就没有"移动"可言**
+        // （非直线是"识别到就定型"，那一刻这一笔已经结束、`ActiveStroke` 已放手；
+        //  真机的移动落在 `OnPointerMove` 的 `if (ActiveStroke != null)` 外面，什么都不做）。
+        // 这里少写这一句的话，自检喂点会直接捅进 `ExtendFreehandStroke` 里的空引用。
+        if (ActiveStroke == null) return;
+        ExtendFreehandStroke(0, Native.PT_MOUSE, x, y, x, y, 0.5f);
+    }
+
+    /// <summary>自检用：假装 40ms 定时器响了一次。</summary>
+    internal void DwellTickForTest() => TickDwellShape();
+
+    /// <summary>自检用：抬手（走真入口 <see cref="EndStroke"/>）。</summary>
+    internal void DwellEndForTest() => EndStroke();
+
+    /// <summary>自检用：状态机在哪一档。</summary>
+    internal DwellState DwellStateForTest => _dwell.State;
+
+    /// <summary>自检用：这一次自动选中是不是"停顿变出来的"。</summary>
+    internal bool DwellSelectedForTest => _dwellSelected;
+
+    /// <summary>自检用：开关（默认开的那个）。用完要还原。</summary>
+    internal void SetDwellEnabledForTest(bool on) => DwellShapeEnabled = on;
 
     private void OnPointerMove(IntPtr hWnd, IntPtr wParam)
     {
@@ -2056,6 +2845,22 @@ public class InkEngine
         float x = sx, y = sy;
         ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布，下游全按画布坐标走
         PointerX = x; PointerY = y; PointerInside = true;
+
+        // 图库面板的悬停（和按下同一条口径：面板是最上面那一层）。
+        // 格子亮一下是"这一格点得中"的反馈；整理模式下光标停在红 ✕ 上也是同一套。
+        if (LibraryPanelOpen && !_drawing)
+        {
+            float dpi = DpiScale;
+            var panel = LibraryPanelRectNow();
+            bool inside = LibraryLayout.Contains(panel, x, y);
+            int hov = inside ? LibraryLayout.CellAt(panel, dpi, LibraryEntries.Count, x, y) : -1;
+            if (hov != LibraryHover)
+            {
+                LibraryHover = hov;
+                _dirty = true;      // 悬停高亮变了才重画，不是每次移动都重画
+            }
+            if (inside) { ApplyCursor(); return; }     // 面板里：吃掉，别让底下的内容跟着动
+        }
 
         // 界面捕获了指针（例如按下按钮后滑出去），消息全归界面。
         if (UiCapturing)
@@ -2136,10 +2941,12 @@ public class InkEngine
             // 判据同样走 <see cref="IsShapeTool"/>，**不在这里逐个列 case**——
             // 和 OnPointerDown 那条是同一个理由（那边漏改过一次，两个地方一起修掉）。
             default:
-                // 拖**手柄**（改几何）排在图形前面：手柄拖动是在选择工具下起手的，
-                // 拖到一半可能被热键换成图形工具（见 SwitchTool），那时 `ActiveStroke` 还是
-                // null —— 落到下面 UpdateShapePreview 上就什么都不发生（鼠标拖得动、模型一动不动）。
-                if (_vertexDragging && _vertexTarget != null)
+                // 拖**手柄**（改几何）/ 拖整条，排在图形前面：这一类拖动是在**按下那一刻**
+                // 被 OnPointerDown 接下的，而那时的工具可能还是图形工具
+                //（画完自动选中那个框，见 `AutoSelectionPress` 那一段），也可能拖到一半
+                // 被热键换了工具（见 SwitchTool）。两种情况 `ActiveStroke` 都是 null ——
+                // 落到下面 UpdateShapePreview 上就什么都不发生（鼠标拖得动、模型一动不动）。
+                if (SelDragging)
                 {
                     UpdateSelDrag(x, y);
                     break;
@@ -2151,12 +2958,7 @@ public class InkEngine
                 }
                 if (ActiveStroke != null)
                 {
-                    // 指针报什么坐标就存什么坐标：不做平滑、不做抽稀。
-                    // 但**一条消息里的点要全部收下**——系统会把来不及投递的移动合并
-                    // （自己实测：注入 140 Hz，应用只收到约 60 条消息，其余在 history 里），
-                    // 只取最新那一个等于把笔的采样率砍半（见 Input/PenInput.cs）。
-                    AppendStrokeSamples(id, ptype, x, y, pressure);
-                    FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
+                    ExtendFreehandStroke(id, ptype, x, y, screenX, screenY, pressure);
                 }
                 break;
         }
@@ -2733,10 +3535,181 @@ public class InkEngine
         return true;
     }
 
+    // ==================================================================
+    //  图库（"我的图形"）：把选中的对象存起来，之后从图形面板最后那一段取回来
+    //
+    //  口径与取舍见 计划-图形工具.md §41 和 ShapeLibrary 的注释；这里只写引擎这一侧：
+    //    · 保存：选中 → 一个文件（磁盘那点事全在 ShapeLibrary 里）；
+    //    · 面板开合 + 重读目录；
+    //    · 落笔插入：点一张 → 待插入 → 画布上按下就落在那儿。**和"粘贴对象"同一条路**
+    //      （平移对齐落点、进文档一步撤销、插入后自动选中）——不另造一套。
+    // ==================================================================
+
+    /// <summary>图库面板开着吗（引擎侧浮动面板，和颜色 / 层级面板同一套画法）。</summary>
+    internal bool LibraryPanelOpen;
+    /// <summary>面板里的条目。打开面板时读一次，存 / 删之后重读——不做增量更新（条目很少）。</summary>
+    internal List<ShapeLibrary.Entry> LibraryEntries = new();
+    /// <summary>指针悬停在哪个格子上（-1 = 没在格子上）。</summary>
+    internal int LibraryHover = -1;
+    /// <summary>
+    /// 「整理」模式：每个格子上叠一颗红 ✕，点它就是删。
+    /// 为什么要有这个模式（参考实现也有一模一样的一个）：**触摸屏没有右键**，
+    /// 而"点格子"本身已经是"插入"，所以删除必须换一种手势。
+    /// </summary>
+    internal bool LibraryEditMode;
+    /// <summary>待插入的内容（非空 = 已经点了格子，下一次在画布上按下就落在那里）。</summary>
+    private List<Stroke> _libraryPending;
+
+    /// <summary>是不是"等着落笔插入"（自检 / 光标要看它）。</summary>
+    internal bool LibraryInsertArmed => _libraryPending != null;
+
+    /// <summary>把选中的对象存成一个图库条目。返回存了几个（0 = 没存成）。</summary>
+    internal int SaveSelectionToLibrary()
+    {
+        if (Doc.Selected.Count == 0) return 0;
+        var items = new List<Stroke>(Doc.Selected);
+        if (ShapeLibrary.Save(items) == null) return 0;
+        // 反馈只有"闪一下"（和全选同一个 `SelFlashUntilMs`）：这一版没有 toast，
+        // 而存进图库这件事**必须有个动静**——不然老师不知道点中了没有。
+        SelFlashUntilMs = NowMs + SelFlashMs;
+        _dirty = true;
+        return items.Count;
+    }
+
+    internal void OpenLibraryPanel()
+    {
+        ReloadLibrary();
+        LibraryPanelOpen = true;
+        LibraryEditMode = false;
+        _dirty = true;
+    }
+
+    internal void CloseLibraryPanel()
+    {
+        if (!LibraryPanelOpen && !LibraryEditMode) return;
+        LibraryPanelOpen = false;
+        LibraryEditMode = false;
+        LibraryHover = -1;
+        _dirty = true;
+    }
+
+    internal void ToggleLibraryPanel()
+    {
+        if (LibraryPanelOpen) CloseLibraryPanel();
+        else OpenLibraryPanel();
+    }
+
+    /// <summary>重读目录（打开面板 / 存完 / 删完都走这里）。</summary>
+    internal void ReloadLibrary()
+    {
+        LibraryEntries = ShapeLibrary.List();
+        LibraryHover = -1;
+        _dirty = true;
+    }
+
+    /// <summary>点了第 i 个格子 = 进"落笔插入"态（面板自己收起来，别挡着要落的地方）。</summary>
+    internal bool ArmLibraryInsert(int index)
+    {
+        if (index < 0 || index >= LibraryEntries.Count) return false;
+        _libraryPending = LibraryEntries[index].Strokes;
+        CloseLibraryPanel();
+        // 手头正在画的东西作废（和粘贴前一样：免得这一次按下又被当成接着画）
+        ActiveStroke = null;
+        _stepPlan = null;
+        _stepIndex = 0;
+        Console.WriteLine($"图库：已选中第 {index + 1} 个条目（{_libraryPending.Count} 个对象），到画布上按下就落在那里");
+        _dirty = true;
+        return true;
+    }
+
+    /// <summary>
+    /// 把待插入的图库内容落在 (x, y)：**包围盒左上角对齐落点**、原始大小、进文档**一步撤销**、
+    /// 插入后**自动选中**——和"粘贴对象"完全同一条路（用户要的就是"点一下就有份能拖的"）。
+    /// </summary>
+    internal bool TryInsertLibraryAt(float x, float y)
+    {
+        if (_libraryPending == null) return false;
+        var src = _libraryPending;
+        _libraryPending = null;
+
+        var objs = new List<Stroke>(src.Count);
+        foreach (var s in src) objs.Add(s.Clone());
+        foreach (var s in objs) s.Id = 0;          // 身份重新发（同剪贴板那条教训：撞号会指错对象）
+
+        var box = EditRegion.Of(objs);
+        var move = Matrix3x2.CreateTranslation(x - box.MinX, y - box.MinY);
+        foreach (var s in objs) s.Transform = s.Transform * move;
+
+        Doc.AddStrokes(objs);
+        Doc.SelectOnly(objs);
+        // **收起来那一态**：和"刚画完一个图形"一致（见 `_autoSelCollapsed`）——
+        // 插进来只是先给个轻的框，要整条操作条点一下圆钮。
+        _autoSelCollapsed = true;
+        SelFlashUntilMs = NowMs + SelFlashMs;
+        _dirty = true;
+        Console.WriteLine($"从图库插入 {objs.Count} 个对象");
+        return true;
+    }
+
+    /// <summary>图库面板这一刻的矩形（**画布坐标**）。绘制、命中、脏区都问它。</summary>
+    internal RectF LibraryPanelRectNow()
+    {
+        float dpi = DpiScale;
+        var ui = UiQueryBoundsNow();                 // 界面那套是**逻辑**像素，要自己乘回 dpi
+        var screen = LogicalVirtualScreen;           // 逻辑虚拟桌面
+        float uiTop = ui.IsEmpty
+            ? screen.MinY + 80f
+            : ui.MinY * dpi;                         // 界面块的上沿（工具条在最下，上带在它上面）
+        return LibraryLayout.PanelRect(screen.MinX * dpi, screen.MaxX * dpi, uiTop, dpi,
+                                       LibraryEntries.Count);
+    }
+
+    /// <summary>图库面板上的按下。返回 true = 这一下归面板（不再往下走到画布）。</summary>
+    private bool LibraryPointerDown(float x, float y)
+    {
+        float dpi = DpiScale;
+        var panel = LibraryPanelRectNow();
+        if (!LibraryLayout.Contains(panel, x, y)) return false;    // 面板外：交给调用方收面板
+
+        if (LibraryLayout.CloseRect(panel, dpi).Contains(x, y)) { CloseLibraryPanel(); return true; }
+
+        if (LibraryLayout.EditRect(panel, dpi).Contains(x, y))
+        {
+            LibraryEditMode = !LibraryEditMode;
+            LibraryHover = -1;
+            _dirty = true;
+            return true;
+        }
+
+        int idx = LibraryLayout.CellAt(panel, dpi, LibraryEntries.Count, x, y);
+        if (idx < 0) return true;                 // 面板里的空白：吃掉，别穿透到画布上去
+
+        if (LibraryEditMode)
+        {
+            var cell = LibraryLayout.CellRect(panel, dpi, idx);
+            if (LibraryLayout.BadgeRect(cell, dpi).Contains(x, y))
+            {
+                ShapeLibrary.Delete(LibraryEntries[idx].Path);
+                ReloadLibrary();
+            }
+            // 整理模式下点格子本体**不插入**（参考实现同款：防止整理时误插一堆）
+            return true;
+        }
+
+        ArmLibraryInsert(idx);
+        return true;
+    }
+
     private void EndStroke()
     {
         if (ScrollBarDragging) EndScrollBarDrag();
         foreach (var w in _windows) w.EndInkTrail();
+        // **抬手就关掉停顿那颗定时器**：它只在"有笔在写"的时候有意义（见 StartDwellTimer）。
+        StopDwellTimer();
+        // 收笔：渲染尾立刻作废（它是"正在写"才有的东西）。**必须在提交进文档之前**清——
+        // 不清的话这一条会永远在末尾带着一小截预测出来的墨，存档、导出、下次打开都带着。
+        ClearRenderTail();
+        ActiveStrokeOnTrail = false;
         Doc.EndErase();
         if (CaptureActive)
         {
@@ -2779,7 +3752,46 @@ public class InkEngine
                        && ActiveStroke.Points.Count > 0
                        && (_stepPlan != null
                            ? ActiveStroke.Points.Count >= Stroke.MinCurvePoints(ActiveStroke.Kind)
-                           : (!IsShapeTool(ActiveStroke.Tool) || ShapeDragLongEnough(ActiveStroke)));
+                           // 三种来源分三档：
+                           //   · 自由笔迹：不卡长度（它本来就是一笔一画）；
+                           //   · **停顿变出来的图形**：也不卡长度 —— 识别器已经验收过它
+                           //    （总长 ≥ 40 逻辑像素、每条边都贴得住墨，见 ShapeRecognize）；
+                           //     而**这条门槛量的是图形、不是墨**（"定义元素首末两点够不够远"），
+                           //     对"定义元素天生就短"的图形会误杀，一误杀就是**图形和手绘原迹
+                           //     一起被丢掉**（用户 2026-09-24 报的"图形整个会消失掉"就是这一类）。
+                           //     ⚠ 今天这一档**够不到**：识别器的"总长 ≥ 40 逻辑像素"把定义元素的
+                           //     尺度顶在了这条门槛之上（圆：r ≥ 6.4 逻辑像素 > 4）。留着它是防
+                           //     "以后加一个定义元素很小的图形"（比如一个"点"）——那时它会立刻用上，
+                           //     而它挡的是**用户的墨凭空消失**，不是省一行代码的事；
+                           //   · 图形工具：照旧要"拖够长"（防误点、防画出退化的零面积图形
+                           //     ——那种东西看不见却点得中，是最难解释的一类杂物）。
+                           : (!IsShapeTool(ActiveStroke.Tool) && _dwellInk == null)
+                             || _dwellInk != null
+                             || ShapeDragLongEnough(ActiveStroke));
+
+            // **取消选中那一击不留墨**（用户 2026-09-23 定）。
+            //
+            // 起因：停顿变出来的图形是自动选中的，而"点一下别处"的意图是收起那个框。
+            // 那一击原本会落**一个实心圆点**（`Stroke.IsSinglePoint`），于是"取消选中"
+            // 这个纯粹的动作会在屏幕上留下墨——**每次取消都脏一块**，板书时特别烦。
+            // 判据是"整段位移 ≤ DwellTapSlopLogical"，所以真画一笔绝不会被吃掉。
+            //
+            // ⚠ **停顿成型那一笔不在这条里**（`_dwellInk == null` 才算）：它既然被识别器
+            //   认出来了，就绝不可能是"点一下"（识别器要总长 ≥ 40 逻辑像素）；而这里量的是
+            //   **图形**的首末两点 —— 圆的定义元素是（圆心，圆周点），首末两点距离就是**半径**，
+            //   半径小于点选容差（8 逻辑像素）的圆会正好落进来，整笔（图形 ＋ 手绘原迹）
+            //   被当成"点一下"抹掉。而这条**够得着**：圆的识别门槛是 2πr ≥ 40 → r ≥ 6.4 逻辑
+            //   像素，所以 6.4~8 这一段的圆真会被误杀（`--dwelltest` H4 用半径 7.5 逻辑像素的圆
+            //   钉住；把那半句删掉它当场红："整笔没了"）。
+            if (commit && _dwellInk == null && _dismissTapArmed && !IsShapeTool(ActiveStroke.Tool)
+                && _stepPlan == null && DwellTapLeaveNoInk(ActiveStroke))
+            {
+                commit = false;
+                Console.WriteLine("[停顿成型] 这一下只是取消选中，不留墨");
+            }
+
+            // 这一次提交的是不是一个**刚成型的图形**（要不要自动选中它，见下面"画完自动选中"）
+            Stroke committedShape = null;
             if (commit)
             {
                 // **双曲线的渐近线按档收口**（用户 2026-09-22："化的时候是都有渐近线，
@@ -2791,14 +3803,46 @@ public class InkEngine
                 //（用户 2026-09-22 报的就是这个："我选择的不带渐近线的，但是画完以后还有渐近线"）。
                 if (ActiveStroke.Kind == StrokeKind.Hyperbola)
                     ActiveStroke.SetShowAsymptotes(HyperbolaAsymptotes);
-                Doc.AddStroke(ActiveStroke);
+                if (_dwellInk != null)
+                {
+                    // **停顿成型**：走"替换型"提交——图形进文档，手绘原迹跟着撤销栈走，
+                    // 于是按一次 Ctrl+Z 回到**自己画的那一笔**（见 DwellShapeAction）。
+                    Doc.AddDwellShape(ActiveStroke, _dwellInk);
+                    _dwellCommitted = true;
+                    // **直线抬手后不选中**（用户 2026-09-23 定）：直线是"顺手一划"，画完要立刻接着
+                    // 写下一笔——弹出一个选中框 + 操作条反而挡路；按住期间已经能调（转向/伸缩），
+                    // 抬手之后想再调就再点它一下（和 GoodNotes"松手后点一下才选中"同一个手感）。
+                    // ⚠ 这一条例外**只在这条路上**：图形工具画的直线照旧自动选中（那是既有设计）。
+                    if (ActiveStroke.Kind != StrokeKind.Line) committedShape = ActiveStroke;
+                    Console.WriteLine($"[停顿成型] 定型 {ActiveStroke.Kind}"
+                                      + (committedShape != null ? "（已选中；Ctrl+Z 可回手绘）" : "（未选中；Ctrl+Z 可回手绘）"));
+                }
+                else
+                {
+                    Doc.AddStroke(ActiveStroke);
+                    // 真提交进文档了才算"成型"——下面那一步要拿它做自动选中。
+                    if (IsShapeTool(ActiveStroke.Tool)) committedShape = ActiveStroke;
+                }
+                // **先结账再打印**：这一段（含 AddStroke 的快照/缓存收拾）才是分配最集中的地方，
+                // 晚一步收仪表，印出来的就是上一笔的数字。
+                EndStrokeMeasure();
                 _lastStrokeReport =
                     $"采集到 {ActiveStroke.Points.Count} 个点"
                     + $"，收到 按下{_cntDown} 移动{_cntMove} 抬起{_cntUp} 丢失捕获{_cntCaptureLost}"
                     + $"，设备={PointerTypeName(_activePointerType)}"
                     + $"，压感={(ActiveStrokeHasPressure ? "有" : "无")}"
-                    + $"，合并({LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 个采样点)";
+                    + $"，合并({LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 个采样点)"
+                    // 预测器与预测尾：调参时这两项是**唯一能证明"到底生效没有"的东西**
+                    // （速度低于 MinSpeed 时预测器会主动不出点，光看屏幕分不清是"没生效"还是"没必要"）。
+                    + $"，预测器={_predictor.Count} 点/末速度 {_predictor.Speed:F3} px/ms"
+                    + $"，预测尾={(_strokeHadTail ? $"有（最多 {_strokeTailMax:F1} px）" : "无")}"
+                    // 分配与 GC：低配机排查"偶发卡顿"的**唯一依据**。
+                    // 第 2 代那一位出现在书写期间，就说明这一笔画到一半被全堆回收打断过。
+                    + $"，分配 {StrokeAllocBytes / 1024.0:F1} KB/GC {StrokeGc0}/{StrokeGc1}/{StrokeGc2}";
                 Console.WriteLine("[笔画] " + _lastStrokeReport);
+                if (StrokeGc2 > 0)
+                    Console.WriteLine($"  ⚠ 这一笔期间发生了 {StrokeGc2} 次第 2 代 GC"
+                                      + "（低配机上这就是一次可见的卡顿，值得查是哪里在分配）");
             }
             else if (!stepPending && IsShapeTool(ActiveStroke.Tool) && _stepPlan == null)
             {
@@ -2812,7 +3856,33 @@ public class InkEngine
                 _stepPlan = null;
                 _stepIndex = 0;
             }
+
+            // **画完自动选中**（用户 2026-09-22 定）：图形一成型就把它的选中框亮出来，
+            // 老师可以立刻拖它、拖顶点改形状——不用先去点"框选"再回头点它一下。
+            // （截图和粘贴早就是"落下就选中"，这条把图形也拉齐了。）
+            //
+            // **工具不换**（这一点和截图 / 粘贴不同，它们换成了框选，因为"接着画下一个"
+            // 对它们不存在）：手里还是原来那个图形工具，所以"这一下算动它还是算接着画"
+            // 的分流落在 `OnPointerDown`（`AutoSelectionPress`）。
+            //
+            // 而且刚画完是**收起来**的形态（一颗圆钮），点一下它才展开成常规那一套
+            // ——理由见 `_autoSelCollapsed`（用户上手之后定的：一整条摊在图形下面又重又挡）。
+            if (committedShape != null)
+            {
+                Doc.SelectOnly(new[] { committedShape });
+                _autoSelCollapsed = true;
+                _dirty = true;
+            }
+            // **停顿变出来的那个框，工具还是笔** —— 所以还要记一笔"这一次选中
+            // 是停顿给的"，否则那个框会"画得出来、点不着"（见 `_dwellSelected`）。
+            // 直线上这一位是 false（它抬手不选中，见上面）：没有选中框，也就没有"点不着"的问题。
+            _dwellSelected = committedShape != null && _dwellCommitted;
         }
+        // 停顿成型这一笔的账在这里结清：状态机复位、原迹引用放手
+        //（原迹已经交给撤销栈了，见 DwellShapeAction —— 这里放手不会丢东西）。
+        _dwell.Reset();
+        _dwellInk = null;
+        _dismissTapArmed = false;
         // 拖动**手柄**（改几何）的收尾：**和当前工具无关**。
         //
         // 挂在下面"选择工具"那条分支里是不够的：手柄拖动属于**选中**那一套，
@@ -2820,13 +3890,17 @@ public class InkEngine
         // 见 SwitchTool——它只作废多笔图形的半成品，不动手柄拖动）。
         // 那种情况下这一拖会**永远不提交**：屏幕上拖得好好的，松手一看 a 一点没变
         //（自检当场抓出来过）。
-        if (_vertexDragging) EndSelDrag();
+        //
+        // ⚠ 判据是 `SelDragging` 而**不是**"是不是框选工具"：画完自动选中那个框
+        //（见上面 `AutoSelectionPress` 那段）是在**图形工具**下起手拖的，
+        // 按工具判的话这一拖同样永远不提交。
+        if (SelDragging) EndSelDrag();
         else if (Tool == Tool.Marquee)
         {
             if (_sliderDragging) _sliderDragging = false;      // 滑条松手：只是停，不用收尾
-            else if (SelDragging) EndSelDrag();
             else ApplyMarquee();
         }
+        EndStrokeMeasure();      // 兜底：没收过的分支（取消、切换工具等）也把总账结掉
         _drawing = false;
         _dirty = true;
         _cntDown = _cntMove = _cntUp = _cntCaptureLost = 0;
@@ -2921,7 +3995,9 @@ public class InkEngine
         if (_drawing)
         {
             // 拖拽中不重新做命中测试：指针早就离开手柄了，重测会让光标在半路变回去。
-            if (Tool == Tool.Marquee && SelDragging)
+            // **不再问"是不是框选工具"**：图形工具下也可能正在拖那个画完自动出现的框
+            //（见 `OnPointerDown` 里 `AutoSelectionPress` 那一段）。
+            if (SelDragging)
                 return _dragIsMove ? CursorKind.Move : HandleCursor(_dragHandle);
             return ToolCursorKind;
         }
@@ -2930,7 +4006,9 @@ public class InkEngine
         // "能拖"这件事交给滑块自己的悬停反馈（变粗、变深）去说。
         if (ScrollBarHover) return CursorKind.Default;
 
-        if (Tool == Tool.Marquee && Doc.Selected.Count > 0)
+        // 选中框那一套：框选工具下整个框都算；**图形工具下只有框的家具 / 图形自己那条墨算**
+        //（别处一按是接着画一笔，光标就该是画的十字——判据在 SelectionInteractiveAt）。
+        if (SelectionInteractiveAt(PointerX, PointerY))
         {
             var k = SelectionCursor(PointerX, PointerY);
             if (k.HasValue) return k.Value;      // null = 这一带没有特殊语义，交给工具
@@ -2983,19 +4061,25 @@ public class InkEngine
         // 于是那些位置上就退回工具光标——框选工具是十字，鼠标在条上横着滑过去就是
         // 箭头／十字／箭头／十字。条在视觉上是一整块白色胶囊，指针落在它上面就该是箭头。
         // 收起态那颗圆钮、以及挂在条下面的小面板（颜色/粗细、层级、导出）同理。
-        if (SelBarCollapsed)
+        //
+        // ⚠ 这一块由 `SelectionBarShown` 把守（图形工具下只有那个自动选中的框挂着一颗圆钮，
+        // 见那里的注释）；画整条还是画圆钮由 `BarDrawnCollapsed` 定。
+        if (SelectionBarShown)
         {
-            if (SelectionHandles.BarCollapsedRect(aabb, dpi, ViewportCanvas).Contains(canvasX, canvasY))
-                return CursorKind.Default;
-        }
-        else
-        {
-            if (SelectionHandles.BarRect(aabb, dpi, ViewportCanvas).Contains(canvasX, canvasY))
-                return CursorKind.Default;
-            if (SelPanelOpen != SelPanel.None
-                && SelectionHandles.PanelContains(canvasX, canvasY, aabb, dpi, ViewportCanvas,
-                                                  SelPanelOpen, SelectionHandles.SwatchCount))
-                return CursorKind.Default;
+            if (BarDrawnCollapsed)
+            {
+                if (SelectionHandles.BarCollapsedRect(aabb, dpi, ViewportCanvas).Contains(canvasX, canvasY))
+                    return CursorKind.Default;
+            }
+            else
+            {
+                if (SelectionHandles.BarRect(aabb, dpi, ViewportCanvas).Contains(canvasX, canvasY))
+                    return CursorKind.Default;
+                if (SelPanelOpen != SelPanel.None
+                    && SelectionHandles.PanelContains(canvasX, canvasY, aabb, dpi, ViewportCanvas,
+                                                      SelPanelOpen, SelectionHandles.SwatchCount))
+                    return CursorKind.Default;
+            }
         }
 
         var h = SelectionHandles.HitTest(canvasX, canvasY, Doc.Selected, frame, dpi);
@@ -4074,43 +5158,138 @@ public class InkEngine
     ///
     /// 坐标：笔画存**画布**坐标；预测器喂**屏幕**坐标（湿墨轨迹也是屏幕空间）。
     /// </summary>
-    private void AppendStrokeSamples(uint id, uint ptype, float curCanvasX, float curCanvasY, float curPressure)
+    private void AppendStrokeSamples(uint id, uint ptype, float curCanvasX, float curCanvasY,
+                                     float screenX, float screenY, float curPressure)
     {
         if (ActiveStroke == null) return;
 
-        if (ptype != Native.PT_PEN || _pen.Read(id, NowMs, _lastInputMsgQpc) == 0)
+        if (ptype == Native.PT_PEN && _pen.Read(id, NowMs, _lastInputMsgQpc) > 0)
         {
-            ActiveStroke.AddPoint(curCanvasX, curCanvasY, curPressure, NowMs);
+            LastCoalescedMessages++;
+            LastCoalescedSamples += _pen.Count;
+            PenMessages++;
+            PenSamples += _pen.Count;
+            PenSawPressureMask |= _pen.AnyPressure;
+            PenSawTiltMask |= _pen.HasTilt;
+            PenSawRotationMask |= _pen.Last.Rotation != 0;
+            for (int i = 0; i < _pen.Count; i++)
+            {
+                var s = _pen[i];
+                float cx = s.X, cy = s.Y;
+                ScreenToCanvas(ref cx, ref cy);
+                ActiveStroke.AddPoint(cx, cy, s.Pressure, s.TimeMs);
+                _predictor.Add(s.X, s.Y, s.TimeMs);
+                PenTotalPoints++;
+                if (s.HasPressure) PenPressurePoints++;
+            }
+            ActiveStrokeHasPressure |= _pen.AnyPressure;
+            // 压感是**整笔的属性**（见 Stroke.HasPressure）：这一笔只要有一条消息报过有效压力，
+            // 它就从此刻起按压感渲染。**当场写进对象**（而不是渲染时再问一次），
+            // 因为湿墨、干墨、紧框、存档读的都是这一个标志。
+            //
+            // **压感只作用于「笔」这一支**（2026-09-20 对齐 WPF 时定的，也是官方示例的做法：
+            // 荧光笔的 `DrawingAttributes.IgnorePressure = true`）：
+            //   · 荧光笔是一支"平头马克笔"，粗细随压力变会让划出来的带子忽宽忽窄（满压还是 2 倍宽）；
+            //   · 激光笔只是指一下，没有"笔迹粗细"这回事。
+            if (ActiveStrokeHasPressure && ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
+            UpdateRenderTail();
             return;
         }
 
-        LastCoalescedMessages++;
-        LastCoalescedSamples += _pen.Count;
-        PenMessages++;
-        PenSamples += _pen.Count;
-        PenSawPressureMask |= _pen.AnyPressure;
-        PenSawTiltMask |= _pen.HasTilt;
-        PenSawRotationMask |= _pen.Last.Rotation != 0;
-        for (int i = 0; i < _pen.Count; i++)
-        {
-            var s = _pen[i];
-            float cx = s.X, cy = s.Y;
-            ScreenToCanvas(ref cx, ref cy);
-            ActiveStroke.AddPoint(cx, cy, s.Pressure, s.TimeMs);
-            _predictor.Add(s.X, s.Y, s.TimeMs);
-            PenTotalPoints++;
-            if (s.HasPressure) PenPressurePoints++;
-        }
-        ActiveStrokeHasPressure |= _pen.AnyPressure;
-        // 压感是**整笔的属性**（见 Stroke.HasPressure）：这一笔只要有一条消息报过有效压力，
-        // 它就从此刻起按压感渲染。**当场写进对象**（而不是渲染时再问一次），
-        // 因为湿墨、干墨、紧框、存档读的都是这一个标志。
+        // ---- 鼠标 / 触摸：同一个道理，读 POINTER_INFO 的合并点 --------------------
         //
-        // **压感只作用于「笔」这一支**（2026-09-20 对齐 WPF 时定的，也是官方示例的做法：
-        // 荧光笔的 `DrawingAttributes.IgnorePressure = true`）：
-        //   · 荧光笔是一支"平头马克笔"，粗细随压力变会让划出来的带子忽宽忽窄（满压还是 2 倍宽）；
-        //   · 激光笔只是指一下，没有"笔迹粗细"这回事。
-        if (ActiveStrokeHasPressure && ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
+        // 这条以前不存在，代价在两类设备上同时体现：手写板**没开 Windows Ink** 时
+        // 以 PT_MOUSE 上报、触摸屏是 PT_TOUCH，它们一条消息只取最新那一个点，
+        // 快写时轨迹被静默抽稀，而且预测器拿不到足够密的速度估计。
+        if (ptype != Native.PT_PEN && _ptr.Read(id, NowMs, _lastInputMsgQpc) > 0)
+        {
+            LastCoalescedMessages++;
+            LastCoalescedSamples += _ptr.Count;
+            PtrMessages++;
+            PtrSamples += _ptr.Count;
+            // HistoryCount 是"系统本来说有几条消息"，减掉我们真的收下的那几条，
+            // 就是被合并掉的中间点（合并率就是它除以 HistoryCount）。
+            PtrCoalescedExtra += Math.Max(0, _ptr.HistoryCount - 1);
+            for (int i = 0; i < _ptr.Count; i++)
+            {
+                var s = _ptr[i];
+                float cx = s.X, cy = s.Y;
+                ScreenToCanvas(ref cx, ref cy);
+                ActiveStroke.AddPoint(cx, cy, s.Pressure, s.TimeMs);
+                _predictor.Add(s.X, s.Y, s.TimeMs);
+                PtrTotalPoints++;
+            }
+            // 非笔设备没有 penMask，也就永远不会给这一笔打上 HasPressure——
+            // 这正是 WPF / 微软白板里"鼠标画的那条线是等宽"的来源。
+            UpdateRenderTail();
+            return;
+        }
+
+        // ---- 读不到合并点：退回"一个消息一个点"的老路（行为与以前完全一致）------
+        ActiveStroke.AddPoint(curCanvasX, curCanvasY, curPressure, NowMs);
+        _predictor.Add(screenX, screenY, NowMs);
+        UpdateRenderTail();
+    }
+
+    /// <summary>
+    /// 算出"正在写的那一笔"的**渲染尾**（预测段），写进 <see cref="Stroke.RenderTail"/>。
+    ///
+    /// 为什么要在我们自己画的那一笔上补：委托墨迹轨迹只对真笔开，鼠标 / 触摸没有任何
+    /// 低延时通道——它们的墨完全由我们画，于是墨的末端永远落在上一帧的位置。
+    /// 把预测段接上，末端就回到"现在"（模型见 Prediction/InkPredictor.cs）。
+    ///
+    /// 四条前提，缺一条就不加尾：
+    ///   · 预测开着；
+    ///   · 这一笔**没有**交给系统合成器画（交给它了就不能重复补，见 ActiveStrokeOnTrail）；
+    ///   · 自由笔迹 ＋ 笔 / 荧光笔 ＋ 实线（图形由控制点定义，没有"末端滞后"这回事；
+    ///     虚线接尾会让 dash 图案从接缝处重新开始，看着是断的）；
+    ///   · 预测器真的给出了点（刚起笔、慢写、急转弯时它会主动不给，见 Predict）。
+    ///
+    /// 预测在**屏幕**空间算（和委托轨迹同一条），画的时候换回**画布**空间——
+    /// 滚动之后尾巴才会跟着笔迹走。
+    /// </summary>
+    private void UpdateRenderTail()
+    {
+        var s = ActiveStroke;
+        if (s == null) return;
+
+        bool eligible = PredictEnabled && !ActiveStrokeOnTrail
+            && s.Kind == StrokeKind.Freehand
+            && (s.Tool == Tool.Pen || s.Tool == Tool.Highlighter)
+            && s.Dash == StrokeDash.Solid;
+
+        if (!eligible || s.Points.Count == 0) { ClearRenderTail(); return; }
+
+        int n = _predictor.Predict(_predBuf);
+        if (n == 0) { ClearRenderTail(); return; }
+
+        _tailScratch.Clear();
+        for (int i = 0; i < n; i++)
+        {
+            float cx = _predBuf[i].X, cy = _predBuf[i].Y;
+            ScreenToCanvas(ref cx, ref cy);
+            _tailScratch.Add(new Vector2(cx, cy));
+        }
+        var last = s.Points[^1];
+        PredictedTailLead = Vector2.Distance(new Vector2(last.X, last.Y), _tailScratch[^1]);
+        s.SetRenderTail(_tailScratch);
+        // 统计：这一笔到底有没有尾、最长多长。**必须能打印出来**——不然"手写板上看不出来"
+        // 这种事只能靠猜（2026-09-22 用户实测：鼠标甩得很难受、手写板毫无反应）。
+        _strokeHadTail = true;
+        if (PredictedTailLead > _strokeTailMax) _strokeTailMax = PredictedTailLead;
+        TailComputes++;
+        TailPointsTotal += n;
+        if (PredictedTailLead > TailLeadMax) TailLeadMax = PredictedTailLead;
+    }
+
+    /// <summary>
+    /// 把渲染尾收掉：起笔、收笔、以及"这一帧指针根本没动"的时候都要收。
+    /// 不收的后果是笔停住时笔尖前面一直挂着一小截预测出来的墨。
+    /// </summary>
+    private void ClearRenderTail()
+    {
+        ActiveStroke?.SetRenderTail(null);
+        PredictedTailLead = 0;
     }
 
     /// <summary>
@@ -4174,6 +5353,11 @@ public class InkEngine
         }
 
         win.AddInkTrailPoints(_trailReal, realCount, _trailPred, predCount, radius, _trailRadii);
+
+        // 系统合成器接手了这一笔的湿墨 → 把我们自己那份"渲染尾"收掉。
+        // 不收就是两边一起补，笔尖前面会出现重复的一小截。
+        ActiveStrokeOnTrail = true;
+        ClearRenderTail();
     }
 
     /// <summary>一个压力值 → 湿墨半径（和干墨同一映射、同一单位）。</summary>
@@ -4503,6 +5687,11 @@ public class InkEngine
     private void SwitchTool(Tool t)
     {
         if (Tool != t && t != Tool.Marquee) ClearSelectionForNewContext();
+        // **换到框选工具 = 那个"刚画完"的框从此按常规那一套走**（整条操作条、框里任意一点
+        // 都能拖）。理由：`SwitchTool` 对"换到框选"本来就**不清选区**（见上一句），
+        // 而"选择"这个工具的名字本身就是在说"我要整理它"——那时还给一颗圆钮、
+        // 要老师再点一下才摊开，反而绕（这一路的口径见 `_autoSelCollapsed`）。
+        if (t == Tool.Marquee) _autoSelCollapsed = false;
         // **换工具 = 多笔图形作废**（见表 StepPlan，目前只有双曲线两笔）。
         //
         // 两件事不能少：① 状态归零——不清的话，切走再切回来按第一笔，会接着上一轮去改
@@ -4532,6 +5721,12 @@ public class InkEngine
     private void ClearSelectionForNewContext()
     {
         CopyDragArmed = false;
+        // 选区没了，"画完自动选中那个框还收没收着"也就没有意义了——归零，
+        // 免得下一个自动选中的框刚开始就带着上一轮的展开状态（见 `_autoSelCollapsed`）。
+        _autoSelCollapsed = false;
+        // **停顿成型那一路的"选中"也一起归零**（见 `_dwellSelected`）：它比 `_autoSelCollapsed`
+        // 多担一件事——放行"笔下面那个框能不能点"，所以更不能跟着上一轮留到下一轮。
+        _dwellSelected = false;
         if (Doc.Selected.Count == 0) return;
         Doc.Selected.Clear();
         _dirty = true;
@@ -4752,6 +5947,7 @@ public class InkEngine
         CaptureHideInk = CaptureHideInk,
         SelectMode = SelMode,
         CoordGridDefault = CoordGridDefault,
+        DwellShapeOn = DwellShapeEnabled,
         ScreenIndex = ScreenIndex,
         CanFlipPageUp = CanFlipPageUp,
         IsDrawing = _drawing,
@@ -4850,6 +6046,21 @@ public class InkEngine
     {
         if (CoordGridDefault == on) return;
         CoordGridDefault = on;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 「更多」抽屉里那一行"停顿成型"被点了一下 / 界面启动时把偏好推过来
+    ///（见 FullUi.LoadPrefs）。规格见 计划-图形工具.md §四十二。
+    ///
+    /// 它只管"以后画的那些参不参与"，**不动已经画在板上的任何东西**——
+    /// 变出来的图形是普通对象，开关关掉不会把它们变回手绘（撤销才是那条路）。
+    /// </summary>
+    internal void SetDwellShapeFromUi(bool on)
+    {
+        if (DwellShapeEnabled == on) return;
+        DwellShapeEnabled = on;
+        Console.WriteLine($"停顿成型：{(on ? "开（停一下就把手绘变图形）" : "关")}");
         NotifyUiStateChanged();
     }
 
@@ -4994,13 +6205,25 @@ public class InkEngine
     /// <summary>
     /// 界面上那个"重启"：给老师一个"感觉不对就重开一次"的出口
     /// （教室大屏 + 手写板的机器上可能没有键盘，界面是唯一入口）。
-    /// 走的是和"界面崩了自动重启"同一条路：**先暂存板书**，再拉起新进程、退出自己；
-    /// 新进程启动时会把它读回来，所以重启不丢东西。
+    ///
+    /// **语义 = 像电脑重启：板书不接回来**（用户 2026-09-22 定）。走的是真拉新进程 + 自己退出，
+    /// 所以内存（含驱动内部缓冲那约 100 MB）全部还给系统；新进程起来是一块**干净白板**。
+    ///
+    /// 和"界面崩了自己重建"那条路（<see cref="RestartNow"/>）**刻意不同**，别把两处一起改：
+    ///   · 这里：老师**主动**点的，他要的就是"重来一次"；
+    ///   · 那里：老师没要求、App 自己决定重启，**丢了板书是事故**——所以那边照旧
+    ///     写会话暂存、启动时读回来。
+    ///
+    /// 两个文件的分工别搞混（见 Recovery）：
+    ///   · 会话暂存（TEMP，读走就删）="重启不丢东西"，这里**明确不写**，还要把残留删掉；
+    ///   · 自动存档（LOCALAPPDATA，读走不删）="盘上留一份"，这里照写——
+    ///     屏幕上是干净白板，但那份板书还在盘上，需要时能找回来（体感像电脑重启：
+    ///     桌面是干净的，硬盘上的文件还在）。
     /// </summary>
     internal void RestartFromUi()
     {
-        try { Recovery.SaveSession(InkSerializer.Save(Doc)); }
-        catch (Exception ex) { Console.WriteLine("板书暂存失败：" + ex.Message); }
+        Recovery.DiscardSession();   // 保证新进程是空白：不写，而且删掉上次的残留
+        AutoSaveNow();               // 盘上留一份（不受"下次打开要不要接上"那个偏好影响）
 
         if (!RestartSelf("界面上的重启"))
         {
@@ -5375,6 +6598,10 @@ public class InkEngine
 
         // 1/255 的不透明度：肉眼看不见，但对命中测试来说它**实实在在地在这**。
         Native.SetLayeredWindowAttributes(_uiInputHwnd, 0, 1, Native.LWA_ALPHA);
+
+        // 这个小窗也算"我们的窗口"：系统可能拿它来问长按手势（消息那条见 WndProc），
+        // 窗口属性的那两条要在这里补一次（手势按窗口算，漏一个窗口就漏一块地方）。
+        Native.DisableSystemPressAndHold(_uiInputHwnd);
     }
 
     /// <summary>
@@ -5785,14 +7012,17 @@ public class InkEngine
     /// <summary>
     /// 操作条上鼠标悬停的是哪一格（-1 = 没在条上）。**只在没按住时算**：
     /// 拖动中指针早就离开按钮了，重算只会让高亮乱跳。
+    ///
+    /// 判据走 <see cref="SelectionBarShown"/>（和绘制、光标同一条）：那一块不在的时候
+    /// 悬停高亮也不该亮。收起态（用户自己收的 / 画完自动选中那个框）只高亮那颗圆钮。
     /// </summary>
     private void UpdateBarHover(float x, float y)
     {
         int hover = -1;
-        if (Tool == Tool.Marquee && Doc.Selected.Count > 0 && !_drawing)
+        if (!_drawing && SelectionBarShown)
         {
             var aabb = LiveSelectionFrame.CanvasAabb;
-            if (SelBarCollapsed)
+            if (BarDrawnCollapsed)
             {
                 var dot = SelectionHandles.BarCollapsedRect(aabb, DpiScale, ViewportCanvas);
                 hover = dot.Contains(x, y) ? (int)SelBarButton.Collapse : -1;
@@ -5860,6 +7090,8 @@ public class InkEngine
         _vertexPreviewLocal = new Vector2[Math.Max(s.Points.Count, Stroke.MinCurvePoints(s.Kind))];
         _vertexPrevBounds = RectF.Empty;
         _vertexPreviewCanvas = SelectionHandles.ShapeHandleCanvasPosition(s, h);
+        // "这一拖不是拖格距"（0 = 没在拖；格距自己不许是 0，见那个字段的注释）。
+        _vertexPreviewGridStep = 0f;
         // 预览初始就是原样（这个时候还没动，画面不该有任何变化）。
         WriteVertexLocalPoints(_vertexPreviewCanvas);
         UpdateVertexReadout();
@@ -5947,11 +7179,15 @@ public class InkEngine
         // 取值要在**清字段之前**，而且只有真的动过才算数。
         float focusU = _vertexPreviewFocusU;
         bool focusDrag = moved && s != null && !float.IsNaN(focusU);
+        // 同一个道理：这一拖是不是"拖坐标系的格距手柄"（见 _vertexPreviewGridStep）。
+        float gridStep = _vertexPreviewGridStep;
+        bool gridDrag = moved && s != null && gridStep > 0f;
 
         _vertexDragging = false;
         _vertexTarget = null;
         _vertexPreviewLocal = null;
         _vertexPreviewFocusU = float.NaN;       // 手势结束：预览字段归位
+        _vertexPreviewGridStep = 0f;
         _vertexPrevBounds = RectF.Empty;
         _dragTargets = null;
         _dragHandle = SelHandle.None;
@@ -5963,6 +7199,8 @@ public class InkEngine
         //（撤销要不要跟着回，见 SetStrokeGeometryAction 的 newFocusU）。
         // ⚠ 传的是 `float?`：只有"真的在拖 P"才带值，别的改几何动作传 null（一个字都不动 P）。
         if (focusDrag) Doc.ApplyGeometry(s, pts, focusU);
+        // 拖格距：同一个套路——点表一个字没变（格距不是控制点），只有那一个数要写。
+        else if (gridDrag) Doc.ApplyGeometry(s, pts, null, gridStep);
         else if (moved && s != null && pts != null) Doc.ApplyGeometry(s, pts);
         // 一点没动（只是点了一下端点手柄松手）：**也必须把它压过的那块重画一次**——
         // 起手那一下它已经从内容层摘出去了，不重画的话这一块就一直是"没有这条线"，
@@ -6027,7 +7265,24 @@ public class InkEngine
                 // 这里没有"特殊形状吸附"：坐标系 / 数轴没有等腰、直角那一类的约束，
                 // `_shapeSnap` 就一直是 None（上面已经重置过）。
                 int idx = SelectionHandles.VertexIndex(_vertexHandle);
-                if (idx < 0 || idx >= pts.Length) break;
+                if (idx < 0) break;
+
+                // **第 4 颗 = 格距手柄**（用户 2026-09-24："拖动那个点来改变这个方格的大小"）：
+                // 它**不是控制点**，所以这一支要判在"点数"那道闸**之前**（坐标系只有三个点），
+                // 而且**一个点都不动**——外框、原点都保持原样，改的只有格距。
+                if (idx == 3 && s.Kind == StrokeKind.Coordinate)
+                {
+                    // 手柄落在"原点 + (格距, −格距)"上，所以两个方向的偏移量都等于格距；
+                    // 取平均（= 打到那条对角线上的投影）而不是单看某一轴：拖动方向偏一点也不会跳。
+                    var d = local - pts[2];
+                    float want = (MathF.Abs(d.X) + MathF.Abs(d.Y)) * 0.5f;
+                    _vertexPreviewGridStep = Math.Clamp(want,
+                        Stroke.AxisMinGridStepLocal,
+                        Stroke.AxisMaxGridStepLocal(pts[0], pts[1]));
+                    break;
+                }
+
+                if (idx >= pts.Length) break;
                 float minLen = ShapeMinAxisLogical * DpiScale;
 
                 if (s.Kind == StrokeKind.NumberLine)
@@ -6354,6 +7609,113 @@ public class InkEngine
     }
 
     /// <summary>
+    /// **画完自动选中那个框**（见 <see cref="EndStroke"/>）：指针落在哪一档。
+    ///
+    /// **和框选工具下那一套完全一样**，只有"按到框外"这一种情况不同：
+    ///   · <see cref="AutoSelZone.Furniture"/> ＝ 操作条那一块（圆钮或整条）/ 面板 /
+    ///     手柄 / 旋转柄——交给 <see cref="TryBeginSelectionGesture"/> 那一套分流；
+    ///   · <see cref="AutoSelZone.Grab"/> ＝ **框内任意一点**（含图形自己那条墨）
+    ///     → 整体拖动，和框选工具下同一条路（按住框里哪儿都能拖）；
+    ///   · <see cref="AutoSelZone.None"/> ＝ 框**外**：收起这个框，**这一笔照常画**
+    ///     ——用户 2026-09-22 的口径："点击了其他地方，这个选中框就取消"。
+    ///
+    /// 用户上手之后的原话是"**我现在是只要收缩，其他的都不变**"——所以这一档判据
+    /// **不认识 `_autoSelCollapsed`**：收起 / 摊开只影响"条"画成圆钮还是一整条
+    ///（见 <see cref="BarDrawnCollapsed"/>），拖动、拉手柄、点条这些行为一个字都不变。
+    /// ⚠ 第一版把"框里"判成"接着画一笔"，结果就是用户报的那句
+    /// "它好像不能拖动位置，只能拉伸缩放"——**框里那块地方必须能拖**。
+    ///
+    /// ⚠ **只有这一份判据**：按下时往哪条路走（`OnPointerDown` → <see cref="AutoSelectionPress"/>）
+    /// 和光标形状（<see cref="ComputeCursorKind"/>）都问它，两处各写一遍的话就会出现
+    /// "光标看着能拖、按下去却在画图"这种一半对一半错的状态
+    ///（"同一个名单写在多处必漏一处"的教训见 架构-分层与规则.md 五-7）。
+    /// </summary>
+    private AutoSelZone AutoSelectionZoneAt(float x, float y)
+    {
+        float dpi = DpiScale;
+        var frame = SelectionHandles.FrameOf(Doc.Selected);
+        var aabb = frame.CanvasAabb;
+
+        // ① 操作条那一块——**收起来就是那一颗圆钮，摊开了就是一整条 ＋ 面板**。
+        //    范围和 SelectionCursor 里那几块**同一个**（"看得见的一块"和"点得到的一块"
+        //    必须是同一个）。
+        if (BarDrawnCollapsed)
+        {
+            if (SelectionHandles.BarCollapsedRect(aabb, dpi, ViewportCanvas).Contains(x, y))
+                return AutoSelZone.Furniture;
+        }
+        else
+        {
+            if (SelectionHandles.BarRect(aabb, dpi, ViewportCanvas).Contains(x, y))
+                return AutoSelZone.Furniture;
+            if (SelPanelOpen != SelPanel.None
+                && SelectionHandles.PanelContains(x, y, aabb, dpi, ViewportCanvas,
+                                                  SelPanelOpen, SelectionHandles.SwatchCount))
+                return AutoSelZone.Furniture;
+        }
+
+        // ② 手柄（八个缩放柄 / 旋转柄 / 定义元素手柄）。**必须排在"整体拖动"那条前面**：
+        //    直线的两个端点手柄正好压在框边上，先判框内的话那一按会被当成"拖整条"。
+        if (SelectionHandles.HitTest(x, y, Doc.Selected, frame, dpi) != SelHandle.None)
+            return AutoSelZone.Furniture;
+
+        // ③ **框内** → 整体拖动（`TryBeginSelectionGesture` 里第 3 / 4 步那一套：
+        //    框里空白处是"拖动"、按在某条墨上是"收窄成只选它"）。
+        //    判据就是框选工具下那一条（`frame.ToLocalPoint` 落在 `frame.Local` 里），
+        //    不另写一份"离轮廓多远算按上了"。
+        var lp = frame.ToLocalPoint(new Vector2(x, y));
+        if (lp.X >= frame.Local.MinX && lp.X <= frame.Local.MaxX
+            && lp.Y >= frame.Local.MinY && lp.Y <= frame.Local.MaxY)
+            return AutoSelZone.Grab;
+
+        // ④ 框**外**：不算动它——收起这个框，这一笔照常画。
+        return AutoSelZone.None;
+    }
+
+    /// <summary>图形工具下、那个自动出现的框：这一次按下算不算"在动它"。</summary>
+    private bool AutoSelectionPress(float x, float y, bool shift, bool alt)
+        => AutoSelectionZoneAt(x, y) != AutoSelZone.None
+           && TryBeginSelectionGesture(x, y, shift, alt);
+
+    /// <summary>
+    /// 此刻指针所在这一带，"选中框那一套"（手柄 / 框内拖动）是不是可用。
+    ///
+    /// 框选工具下**整个框**都可用；图形工具下按 <see cref="AutoSelectionZoneAt"/> 那两档走。
+    /// 这一条也**只有这一份**——光标都问它。
+    /// </summary>
+    private bool SelectionInteractiveAt(float canvasX, float canvasY)
+        => Doc.Selected.Count > 0
+           && (Tool == Tool.Marquee
+               || ((IsShapeTool(Tool) || _dwellSelected)
+                   && AutoSelectionZoneAt(canvasX, canvasY) != AutoSelZone.None));
+
+    /// <summary>
+    /// **操作条那一块（整条 / 圆钮 / 它下面挂的面板）画不画、点不点**。
+    ///
+    /// 框选工具下当然有；**图形工具下也有**——画完自动选中那个框会挂一**颗圆钮**
+    /// （见 <see cref="_autoSelCollapsed"/>）：不画的话老师不知道该去哪儿把它摊开，
+    /// 而那只是一颗 26 逻辑像素的圆钮，不像整条九格那样会把"接着画"的地方占掉。
+    /// 摊开之后行为**一个字都不变**（只是"条"长得完整了）。
+    ///
+    /// ⚠ 这是**唯一**判据：绘制（Overlay）/ 按下分流（TryBeginSelectionGesture）/ 悬停高亮
+    /// （UpdateBarHover）/ 光标（SelectionCursor）四处都问它，任一处漏了都会变成
+    /// "画了但点不到"或者反过来"点得到但看不见"。具体画整条还是画圆钮，问 `BarDrawnCollapsed`。
+    /// </summary>
+    internal bool SelectionBarShown
+        => Doc.Selected.Count > 0 && (Tool == Tool.Marquee || IsShapeTool(Tool) || _dwellSelected);
+
+    /// <summary>图形工具下那个自动选中的框：指针落在"家具 / 算动它 / 都不是"哪一档。</summary>
+    private enum AutoSelZone
+    {
+        /// <summary>都不算——按下去是接着画一笔。</summary>
+        None,
+        /// <summary>框的家具：圆钮 / 操作条 / 面板 / 手柄 / 旋转柄（交给选择手势那一套分流）。</summary>
+        Furniture,
+        /// <summary>框内任意一点（含图形自己那条墨）：拖它走。</summary>
+        Grab,
+    }
+
+    /// <summary>
     /// 框选工具按下时的分流。返回 true 表示这次按下已经被选择手势接掉。
     ///
     /// 顺序有讲究（从 1 到 5，**不能换**）：
@@ -6382,17 +7744,24 @@ public class InkEngine
         // 面板开着时去点"层级"那一格，应该直接换成层级面板，而不是"先关掉再被这一格
         // 又打开"。而点面板和条以外的任何地方，才把面板收起来（并且这一次点击**继续**
         // 往下走，于是"点空白取消选中"的习惯不会因为面板开着就失灵）。
-        if (Doc.Selected.Count > 0)
+        //
+        // ⚠ 整段由 `SelectionBarShown` 把守：只有"框选工具 / 图形工具下那个自动选中的框"
+        // 才有点得到的那一块（见那里的注释）——不把守的话，操作条会隔空吃掉
+        // "接着画下一个"的那一下。
+        if (SelectionBarShown)
         {
             var aabb0 = LiveSelectionFrame.CanvasAabb;
 
-            if (SelBarCollapsed)
+            if (BarDrawnCollapsed)
             {
                 // 收起态：只有一个圆钮，点它展开（框和手柄照旧，收起的只是"条"）。
                 var dot = SelectionHandles.BarCollapsedRect(aabb0, dpi, ViewportCanvas);
                 if (dot.Contains(x, y))
                 {
                     SelBarCollapsed = false;
+                    // **画完自动选中那个框**：点开这颗圆钮之后就成"常规那一套"了
+                    //（整条操作条出来、框内任意一点都能拖）——用户 2026-09-22 定的就是这一步。
+                    _autoSelCollapsed = false;
                     _dirty = true;
                     return true;
                 }
@@ -6904,6 +8273,18 @@ public class InkEngine
                 // 用户都可以自己保存图片了"：两处选格式反而绕，删掉还少一步。
                 ExportSelectionPref();
                 break;
+
+            case SelBarButton.Library:
+            {
+                // **存入图库**：把选中的对象存成一个条目（磁盘那点事在 ShapeLibrary 里）。
+                // 反馈只有"闪一下"——这一版没有 toast；存进去之后从图形面板最后那一段
+                // 「图库」里能看见（`--librarytest` 就是照这条链路量的）。
+                int saved = SaveSelectionToLibrary();
+                Console.WriteLine(saved > 0
+                    ? $"已存入图库（{saved} 个对象）"
+                    : "存入图库失败（选中为空或者写不进去）");
+                break;
+            }
 
             // **进入/退出"复制拖拽模式"**，不是"点一下原地克隆一份"。
             // 抄 InkClass 的结论：点击即克隆那版"副本固定偏移 24px、落点不可控"，已废弃；
