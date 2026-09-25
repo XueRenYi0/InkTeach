@@ -450,12 +450,40 @@ public class InkEngine
     /// 哪一头落到 `Points[0]` 是不定的（见 <see cref="ShapeRecognize.TryLine"/>）。</summary>
     private Vector2 _dwellLinePin;
 
-    /// <summary>
-    /// "这一笔在这个点数上已经试过保形平滑了"（记点数，-1 = 还没试）。
-    /// 为什么需要：`TickDwellShape` 每 40ms 走一次，而笔尖停着不动时**点数是不会变的**——
-    /// 不记一笔就会每 40ms 重跑一遍拟合（白烧 CPU）。点数一变（用户又开始画了）自然重试。
-    /// </summary>
-    private int _dwellSmoothTriedAt = -1;
+    /// <summary>**上一笔"收笔"的时刻**（引擎时钟，毫秒）。两笔配对要用它算时间窗口 ——
+    /// 用户 2026-09-25 定了 **5 秒**（见 <see cref="TwoBranchWindowMs"/>）。
+    /// 写在 `EndStroke` 里（截屏那条分支之后）：截一次屏不该把两笔的窗口冲掉。</summary>
+    private double _lastInkEndMs = double.MinValue;
+
+    /// <summary>**两笔成型**时"第一笔"那个对象（用户 2026-09-25："画两支就是双曲线"）。
+    /// 非 null = 抬手提交时要把**上一笔也收走**（见 `EndStroke` 里那段）。
+    /// 认出来的那一刻钉住；`_dwellInk` 清哪儿它就清哪儿（取消、复位都要跟）。</summary>
+    private Stroke _twoBranchPrev;
+    private int _twoBranchIndex = -1;
+
+    /// <summary>配对诊断日志的**限流**时刻（`TryTwoBranchPair` 每 40ms 走一次，不限流会刷屏）。</summary>
+    private double _pairLogMs = double.MinValue;
+
+    /// <summary>**两笔配对的时间窗口**（毫秒）：用户 2026-09-25 定的 **5 秒**。
+    /// 太短 → 老师画完第一支要想一下再画第二支就配不上；
+    /// 太长 → "画完一条抛物线、过一会又画一条"会被误配成双曲线。</summary>
+    internal const double TwoBranchWindowMs = 5000;
+
+    /// <summary>其它图形：**识别那一刻的定义元素点**（幽灵改大小的基准，见 ArmedStrokeMove）。
+    /// 存"基准"而不是"累计位移"：一律从基准算**绝对值** —— 累计会跟着亚像素抖动漂，
+    /// 直线那边的起步死区（<see cref="DwellDragSlopLogical"/>）就是为了这件事。
+    /// 直线不吃这一位（它拖另一头改形状）。</summary>
+    private Vector2[] _dwellGhostOrigin;
+
+    /// <summary>幽灵期**不动的那个定义元素**的下标（锚点）。判据 = **离笔尖最远**的那一个
+    /// —— 和直线的 <see cref="_dwellLinePin"/> 是**同一条判据**（用户 2026-09-25 定：
+    /// "圆形圆心不动、矩形有一个顶点不动"；人收笔的位置就在"终点"那一带，所以远端才是起点）。
+    /// 成型时挑定、拖动全程不变。−1 = 这一笔不吃幽灵改大小。</summary>
+    private int _dwellGhostAnchorIdx = -1;
+
+    /// <summary>幽灵期**跟着笔尖走的那个定义元素**的下标。判据 = **离笔尖最近**的那一个
+    /// （就是"用户拖出来的那个终点"）。和锚点一起在成型时挑定。</summary>
+    private int _dwellGhostNearIdx = -1;
 
     /// <summary>
     /// armed 之后"按住拖动"的**起步死区**（逻辑像素）：笔尖在这个范围内动，线一个像素都不改。
@@ -472,25 +500,6 @@ public class InkEngine
     /// <summary>停顿成型定型时的**角度吸附容差**（度）：照 InkClass 的 `LineAssistSnapDeg = 4`
     /// （画坐标轴 / 分割线刚需，见 计划-图形工具.md §42.1）。</summary>
     internal const float DwellSnapDeg = 4f;
-
-    // ---- "保形平滑"（认不出图形时的兜底，用户 2026-09-24 定的第一步）------------------
-
-    /// <summary>
-    /// **保形平滑的容差**（逻辑像素）：拟合出的光滑曲线离原始笔迹的最大偏差不许超过它。
-    /// 这就是用户说的"**大差不差**"的量法——只去抖、不改形状。
-    ///
-    /// 2.5 逻辑像素 ≈ 0.66 mm：手画的抖动量级是 5~30 像素，这个带子远小于它，
-    /// 又远大于渲染/展平的误差（所以"形状没变"是真的，不是嘴说的）。
-    /// 自检 `--smoothtest` 会独立量这个数（到展平折线的欧氏距离），不靠拟合器自报。
-    /// </summary>
-    internal const float CurveFitMaxErrorLogical = 2.5f;
-
-    /// <summary>
-    /// 平滑后**展平点串**的采样间距（逻辑像素）。引擎里"墨"就是一个点串，
-    /// 展平之后渲染/命中/存档/导出一行都不用改；1.5 逻辑像素比原迹采样还密一点，
-    /// 所以肉眼看不到折线感，点数通常还比原迹少。
-    /// </summary>
-    internal const float CurveFitSpacingLogical = 1.5f;
 
     /// <summary>
     /// 操作条那一块现在画成**收起来那一颗圆钮**吗（而不是一整条九格）。
@@ -2464,10 +2473,17 @@ public class InkEngine
         // 激光笔不参与：它只是"指一下"，本来就不留墨，把它变出一个图形来没有意义。
         _dwellInk = null;
         _dwellCommitted = false;
+        // 上一笔要是还挂着（**配对没走到提交**就复位了，比如中途换了工具），
+        // **必须把它放回可见** —— 否则那一笔会**永远隐身** ✗（见 `Stroke.HiddenForPairing`）。
+        // ⚠ 走 `SetPairHidden`：它同时把那一笔占的块标脏，否则"放回来了、屏幕上还是不显示"
+        //   （配对期那几帧已经把块重画成"没有它"的版本了）。
+        SetPairHidden(_twoBranchPrev, false);
+        _twoBranchPrev = null;
+        _twoBranchIndex = -1;
+
         if (DwellShapeEnabled && tool != Tool.Laser)
         {
             _dwell.Begin(NowMs, new Vector2(x, y), DwellAssist.DeadZoneLogical * DpiScale);
-            _dwellSmoothTriedAt = -1;      // 新的一笔：平滑那次重试的记录作废
             StartDwellTimer();
         }
         else _dwell.Reset();
@@ -2545,119 +2561,37 @@ public class InkEngine
         // 最短长度那条门槛**在识别器里**（见 ShapeRecognize.Recognize 的 scale 参数）——
         // 这里不再自己乘一遍 DpiScale：同一个数写在两处，迟早会漂（用户 2026-09-23 的教训清单里
         // 第一条就是这个）。
+        // ★ **两笔 → 双曲线**（用户 2026-09-25 定的约定："**画两支就是双曲线，画一支就是抛物线**"）。
+        //
+        // ⚠⚠ **必须排在"认不出图形就返回"那道闸【之前】** —— 这是自检抓出来的致命错位：
+        //   单独一支双曲线**本来就不该被认成六种图形里的任何一种**（新约定：单笔不出双曲线，
+        //   而它也不是抛物线）→ `Recognize` 返回 `IsNothing`；要是把配对挡在它后面，
+        //   **这条路永远走不到**（实测：语料完全对称、一个都不出，日志里连一行配对记录都没有）。
+        var pair = TryTwoBranchPair(ink, pts);
+        if (!pair.IsNothing)
+        {
+            ArmDwellShape(ink, pair);
+            return;
+        }
+
         var guess = ShapeRecognize.Recognize(pts, DpiScale);
         if (guess.IsNothing)
         {
-            // 认不出图形 → **兜底试"保形平滑"**（用户 2026-09-24 定的第一步）。
-            // 每点一次 40ms 都会走到这儿，所以要记住"这一笔这个长度已经试过了"，
-            // 别在笔尖停着不动的时候每 40ms 重算一遍拟合。
-            if (ink.Points.Count != _dwellSmoothTriedAt)
-            {
-                _dwellSmoothTriedAt = ink.Points.Count;
-                TrySmoothDwellStroke(ink, pts);
-            }
+            // 认不出图形 → **什么都不做，墨迹原样留着**（用户 2026-09-25 定）。
+            //
+            // 这里原先兜底"保形平滑"（把这一笔换成误差带内的光滑曲线，§43 第一步），
+            // 2026-09-25 用户上手之后**取消**了 —— 原话："把'保形平滑'这个功能取消掉吧，
+            // 因为它影响我画抛物线"。
+            // 原因很实在：平滑**只在"认不出图形"时生效**，而**画抛物线（尤其只画半支的）
+            // 经常正好落在这一档** —— 于是老师画的那条曲线被悄悄换成另一条，
+            // 看着像"它自己变了形"。而这恰恰违反 §42 那条老规矩。
+            //
+            // 换成"什么都不做"之后：**认不出 = 良性失败**（墨还是他自己那一笔），
+            // 规矩回到"**宁可不变，也不能变出一个对不上的**"。
             return;
         }
 
         ArmDwellShape(ink, guess);
-    }
-
-    /// <summary>
-    /// **保形平滑**（用户 2026-09-24 定，第一步）：停顿之后**认不出任何图形**的那一笔，
-    /// 换成"误差带内的光滑曲线"（逐段三次贝塞尔，算法见 <see cref="CurveFit"/>）。
-    ///
-    /// 为什么挂在"认不出图形"这一档：图形优先——认出直线/圆/椭圆/三角/矩形/平行四边形
-    /// 就走图形那条路；认不出才轮到平滑。于是**平滑是兜底，不会抢图形的活**。
-    ///
-    /// 三条门槛（都要过）：
-    ///   · **够长**：用 <see cref="ShapeRecognize.MinLength"/>——和识别器同一个数。
-    ///     用户定过"图形太小不用出图"，平滑同理（短笔画平滑没意义，还白占一步撤销）；
-    ///   · **误差在带内**：原始每个采样点到光滑曲线的最大距离 ≤ 容差。
-    ///     这就是"大差不差"的量法：**只去抖，不改形状**；
-    ///   · **真的产出了曲线**（退化输入直接放弃）。
-    ///
-    /// 有意不做的事：
-    ///   · **不选中**——它是"更顺的墨"，不是带手柄的图形；选中它会弹出一个没法用的框
-    ///     （用户 2026-09-24 那套"只有图形才自动选中"的口径）；
-    ///   · **不动手势**：和"认出图形"那条一样，定型之后这一笔就结束了（笔尖再动什么都不做）。
-    ///
-    /// 撤销：走同一个 <see cref="DwellShapeAction"/> —— **一步回到手绘原迹**（不是回到空白）。
-    /// </summary>
-    private void TrySmoothDwellStroke(Stroke ink, Vector2[] pts)
-    {
-        float tol = CurveFitMaxErrorLogical * DpiScale;
-        float total = ShapeRecognize.PathLength(pts);
-        if (total < ShapeRecognize.MinLength * DpiScale) return;
-
-        var segs = CurveFit.Fit(pts, tol);
-        if (segs.Count == 0) return;
-        // 展平间距**不比原迹更密**（否则点数反而变多，白占内存和渲染）——见那个函数。
-        var smooth = CurveFit.Flatten(segs, CurveFit.FlattenSpacing(
-            total, ink.Points.Count, CurveFitSpacingLogical, DpiScale));
-        if (smooth.Length < 3) return;
-
-        // **独立验收**：拿"到展平折线的欧氏距离"再量一遍（不是拟合器自己报的那个数）。
-        // 多给 1 个逻辑像素，是因为展平本身有微小弦高误差（间距越小越小）。
-        float worst = CurveFit.MaxDeviationToPolyline(pts, smooth);
-        if (worst > tol + DpiScale) return;
-
-        // 停手 = 这一笔到此结束（和图形那条一样的三件事）
-        foreach (var w in _windows) w.EndInkTrail();
-        ActiveStrokeOnTrail = false;
-        ClearRenderTail();
-        _predictor.Reset();
-
-        // 样式照抄手里那支笔；压感按"原迹最近的采样点"带过来（笔尖粗细的手感别丢）
-        var sa = new Stroke
-        {
-            Tool = ink.Tool,
-            Color = ink.Color,
-            Width = ink.Width,
-            Dash = ink.Dash,
-            Kind = StrokeKind.Freehand,
-        };
-        var carry = CarryPressureByNearest(ink, smooth);
-        for (int i = 0; i < smooth.Length; i++) sa.AddPoint(smooth[i].X, smooth[i].Y, carry[i], 0);
-        sa.HasPressure = ink.HasPressure;
-
-        Doc.AddDwellShape(sa, ink);          // 撤销 = 拿回手绘原迹（同一个机制）
-        _dwellCommitted = true;
-        ActiveStroke = null;
-        _dwellInk = null;
-        double stillMs = _dwell.StillMs(NowMs);    // 复位之前先量
-        _dwell.Reset();
-        StopDwellTimer();
-        _dirty = true;
-        Console.WriteLine($"[停顿成型] 停 {stillMs:F0}ms → **保形平滑**"
-                          + $"（{segs.Count} 段、最大偏差 {worst / DpiScale:F1} 逻辑像素、"
-                          + $"{ink.Points.Count} 点 → {smooth.Length} 点）；Ctrl+Z 可回手绘");
-    }
-
-    /// <summary>
-    /// 把原迹的**压感**带到平滑后的点串上：两边都沿着曲线单调走，各取最近的原始采样点。
-    /// （点数变了，不能按下标对应；这笔墨的粗细变化要留住。）
-    /// </summary>
-    private static float[] CarryPressureByNearest(Stroke ink, Vector2[] smooth)
-    {
-        var p = new float[smooth.Length];
-        if (!ink.HasPressure) { Array.Fill(p, 1f); return p; }
-        int j = 0;
-        for (int i = 0; i < smooth.Length; i++)
-        {
-            var q = smooth[i];
-            float bestD = float.MaxValue;
-            int bestJ = j;
-            // 只往后看一小段（两边顺序一致，不用全局搜），找不到更好的就沿用上一个
-            for (int k = j; k < ink.Points.Count; k++)
-            {
-                float d = Vector2.DistanceSquared(q, new Vector2(ink.Points[k].X, ink.Points[k].Y));
-                if (d < bestD) { bestD = d; bestJ = k; }
-                if (d > bestD * 4f && k > j + 4) break;
-            }
-            j = bestJ;
-            p[i] = ink.Points[j].P;
-        }
-        return p;
     }
 
     /// <summary>
@@ -2697,6 +2631,9 @@ public class InkEngine
             _dwellInk = ink;
             ActiveStroke = shape;
             _dwellArmAnchor = anchor;
+            _dwellGhostOrigin = null;   // 直线走"拖另一头改形状"那条路，不吃幽灵改大小的基准
+            _dwellGhostAnchorIdx = -1;
+            _dwellGhostNearIdx = -1;
             if (guess.Def.Length >= 2)
                 _dwellLinePin = Vector2.Distance(guess.Def[0], anchor) >= Vector2.Distance(guess.Def[1], anchor)
                               ? guess.Def[0] : guess.Def[1];
@@ -2707,60 +2644,160 @@ public class InkEngine
             return;
         }
 
-        // ── **其它图形：识别到就定型 ＋ 选中**（用户 2026-09-24 定）──────────────
-        // 为什么不"等抬手"：那半秒里没有别的事可做（幽灵态那套"按住改大小/转角"已经砍掉，
-        // 见 ArmedStrokeMove），早定型 = 早看到结果、抬手就能拖。
-        // ⚠ 定型就在这一刻发生，所以**这一笔到此结束**：`ActiveStroke` 放手、状态机复位、
-        //   定时器关掉 —— 笔尖接着怎么动都不做任何事（那是"上一笔的余波"，不该变成新墨）。
-        //   抬手时 `EndStroke` 看到 `ActiveStroke == null`，只做收尾，不会再提交一次。
-        Doc.AddDwellShape(shape, ink);
-        _dwellCommitted = true;
-        ActiveStroke = null;
-        _dwellInk = null;
-        _dwell.Reset();
-        StopDwellTimer();
-        Doc.SelectOnly(new[] { shape });
-        _autoSelCollapsed = true;
-        _dwellSelected = true;        // 笔下面那个框照样能点能拖（判据见 TryDwellSelectionPress）
+        // ── **其它图形：也是幽灵 —— 按住拖到位，松手才定型 ＋ 选中** ──────────────────
+        // 用户 2026-09-25 试过 ClassIn 之后改的（上一版 2026-09-24 是"识别到就定型并选中"）：
+        // ClassIn 的手感是"图形变出来以后先别松手，直接把它拖到位，松手才选中"——
+        // 比"松手 → 再点它 → 再拖"少两步，而画完就想挪位置这件事在板书里非常常见。
+        //
+        // ⚠ 和 2026-09-24 砍掉的那套幽灵**不是一回事**：砍掉的是"按住改大小 / 转角"，
+        //   这里**只平移**（见 ArmedStrokeMove）——定义元素之间的相对关系一个都不动，
+        //   而那批"图形消失 / 变形"的病因全出在改几何上。
+        //   机制也完全复用直线那条：图形**从来没进过文档**，它就是 `ActiveStroke`；
+        //   抬手时 `EndStroke` 提交（`_dwellInk != null` 那条路），并因为"不是直线"
+        //   走 `committedShape` → 自动选中。
+        _dwellInk = ink;
+        ActiveStroke = shape;
+        _dwellArmAnchor = anchor;
+        var org = new Vector2[shape.Points.Count];
+        for (int i = 0; i < org.Length; i++)
+            org[i] = new Vector2(shape.Points[i].X, shape.Points[i].Y);
+        _dwellGhostOrigin = org;
+
+        // **锚点 / 跟着笔尖走的那一点**：**成型时挑定、拖动全程不变**。
+        //   · 锚点 = 离笔尖**最远**的那个定义元素 —— 和直线的 `_dwellLinePin` **同一条判据**
+        //     （人收笔就停在"终点"那一带，所以远端才是"起点"）；
+        //   · 跟着走的 = 离笔尖**最近**的那一个（= 用户拖出来的那个终点）。
+        // ⚠ 两个下标必须在这里定死：拖动中再算的话，指针一移动它们就可能互换
+        //   → 图形会"翻来翻去"（同一个病根见 §42.6.2 第三条：直线当初拿 `Points[0]` 当支点）。
+        //
+        // ★ **双曲线：锚点钉死"中心"**（用户 2026-09-25 定）：
+        //     "它在幽灵模式下，应该是**按照中心为锚点**进行放大缩小。"
+        //   通用规则（离笔尖最远的那一个）在这里会挑错 —— 双曲线有**三个**定义元素
+        //   （中心 / 渐近线角点 / 经过点），笔尖停在支线上时"离笔尖最远的"很可能是
+        //   **渐近线角点**，那样缩放就绕那个角点转，图形会整个跑偏 ✗
+        //   所以中心一律不动，**跟着笔尖走的那一个在"其余两点"里挑**（离笔尖最近的）。
+        if (guess.Kind == StrokeKind.Hyperbola && org.Length >= 3)
+        {
+            _dwellGhostAnchorIdx = 0;                       // 中心 = `Points[0]`，一律不动
+            _dwellGhostNearIdx = 1;
+            float nD = float.MaxValue;
+            for (int i = 1; i < org.Length; i++)
+            {
+                float dd = Vector2.Distance(org[i], anchor);
+                if (dd < nD) { nD = dd; _dwellGhostNearIdx = i; }
+            }
+        }
+        else
+        {
+            _dwellGhostAnchorIdx = 0;
+            _dwellGhostNearIdx = 1;
+            float farD = -1f, nearD = float.MaxValue;
+            for (int i = 0; i < org.Length; i++)
+            {
+                float dd = Vector2.Distance(org[i], anchor);
+                if (dd > farD) { farD = dd; _dwellGhostAnchorIdx = i; }
+                if (dd < nearD) { nearD = dd; _dwellGhostNearIdx = i; }
+            }
+        }
+        if (org.Length < 2 || _dwellGhostAnchorIdx == _dwellGhostNearIdx)
+        {
+            // 退化（少于两个点 / 两点重合）→ 不吃幽灵改大小，只预览（和 2026-09-24 那版一样）
+            _dwellGhostAnchorIdx = -1;
+            _dwellGhostNearIdx = -1;
+        }
+
+        _dwell.Fire();
         _dirty = true;
         Console.WriteLine($"[停顿成型] 停 {stillMs:F0}ms → {guess.Kind}（{guess.Rule}）"
-                          + "；**已定型并选中**（还没抬手；Ctrl+Z 可回手绘）");
+                          + "；按住能拖到位，松手定型（**并选中**；Ctrl+Z 可回手绘）");
     }
 
     /// <summary>
     /// armed 之后的指针移动。返回 true = 这一下被"幽灵预览"吃掉了（不再往笔迹里堆点）。
     ///
-    /// **只有直线还吃移动**（用户 2026-09-24 定）：
+    /// **两种图形都吃移动**（用户 2026-09-25 试过 ClassIn 之后定），差别只在"拖的是什么"：
     ///   · **直线**：**离笔尖远的那一头钉住**、拖出去就是**转向 / 伸缩**（照 ClassIn / InkClass 的
     ///     `LineAssistMove`），并在容差内吸到 0/90 —— 画坐标轴就靠这一下。留着它，是因为
     ///     直线是"顺手一划"，它的另一头正是画完最常要调的（转成水平 / 竖直），
     ///     而在选中态里调要多两步（先点它、再拖手柄）。
-    ///   · **其它图形**：按住期间**只预览、什么都不改**。道理：那套"按住改大小/转角"和
-    ///     "定型后自动选中 + 拖手柄"**完全重复**——幽灵态是 OneNote / GoodNotes 的做法，
-    ///     而它们画完**不自动选中**（得多点一下），才需要把调整塞进按住那一下；
-    ///     我们画完就自动选中，那一段就是多余的中间状态（少一个状态 = 少一类 bug：
-    ///     上一批"图形消失 / 变形"三条病因全出在它身上）。
-    ///     抬手 → 定型 + 自动选中 → 拖动、放大缩小、旋转都在选中框上做。
+    ///   · **其它图形**：**改大小**（用户 2026-09-25 上手 ClassIn 之后逐条定的）——
+    ///     **锚点不动，拖出去就是改另一个对角 / 半径**：
+    ///     圆形"圆心不动、改变圆的大小"；矩形"有一个顶点不动，相当于拖另外一个对角线"；
+    ///     而且"**旋转功能好像不能转了，应该就是拖动改大小**"（幽灵期不做旋转）。
+    ///     通用规则 = **离笔尖最远的那个定义元素钉住、离笔尖最近的那个跟笔尖走**，
+    ///     其余定义元素按**逐分量比例**跟着走（见下面实现）。
+    ///     ⚠ 和 2026-09-24 砍掉的那套**不是**同一批代码：那三条"图形消失 / 变形"的病因
+    ///     查清了**都不是幽灵态的错**（是 `EndStroke` 两道门槛量错了对象、以及直线锚点
+    ///     拿了 `Points[0]` —— 三条现在都已修，见 §42.6.2）；而同节实测的"所有图形都在
+    ///     跟着手抖改大小"则由**起步死区**挡着（下面第一段）。
+    ///     抬手 → 定型 + 自动选中（见 `EndStroke`）。
     /// </summary>
     private bool ArmedStrokeMove(float x, float y, float screenX, float screenY)
     {
         var s = ActiveStroke;
         if (s == null) return false;
-        if (s.Kind != StrokeKind.Line || s.Points.Count < 2) return true;   // 只预览，不改
 
         var p = new Vector2(x, y);
-        // **起步死区**：笔尖还在成型时那个位置附近（只有驱动上报的亚像素抖动）→ 线一个像素都不改。
-        // 没有它，"按住不动"其实一直在改——笔尖正好停在支点那一头时会把线压成零长度
-        //（用户 2026-09-24 报的"竖线变成很短的小横线"；`--dwelltest` H6 实测漂移 299.51）。
+        // **起步死区**（两条路共用）：笔尖还在成型那一刻的位置附近（只有驱动上报的亚像素抖动）
+        // → 一个像素都不改。没有它，"按住不动"其实一直在改：直线那边笔尖正好停在支点
+        // 那一头时会把线压成零长度（用户 2026-09-24 报的"竖线变成很短的小横线"；
+        // `--dwelltest` H6 实测漂移 299.51）；图形这边会看到图形"自己抖着改大小"。
+        // ⚠ **这一条是幽灵改大小的前提**（不是可选优化）：§42.6.2 实测过"所有图形当时都在
+        //   跟着手抖改大小（1.0~3.4 画布单位）"，没有死区，重新加回来就是把那个毛病一起加回来。
         if (Vector2.Distance(p, _dwellArmAnchor) <= DwellDragSlopLogical * DpiScale)
-            return true;      // 这一下照样被"幽灵预览"吃掉，只是不改线
+            return true;      // 这一下照样被"幽灵预览"吃掉，只是不改
 
-        var a = _dwellLinePin;
-        var (_, b, _) = ShapeRecognize.SnapToAxis(a, p, DwellSnapDeg);
-        s.SetPoints(new[] { a, b });
-        _shapeInclination = SelectionHandles.InclinationDegrees(a, b);
-        _shapeInclinationSnapped = Vector2.Distance(b, p) > 0.01f;
-        _shapeAnchor = b;
+        // ── 直线：拖另一头 → 转向 / 伸缩（改形状）────────────────────────────────
+        if (s.Kind == StrokeKind.Line)
+        {
+            if (s.Points.Count < 2) return true;
+            var a = _dwellLinePin;
+            var (_, b, _) = ShapeRecognize.SnapToAxis(a, p, DwellSnapDeg);
+            s.SetPoints(new[] { a, b });
+            _shapeInclination = SelectionHandles.InclinationDegrees(a, b);
+            _shapeInclinationSnapped = Vector2.Distance(b, p) > 0.01f;
+            _shapeAnchor = b;
+            return true;
+        }
+
+        // ── 其它图形：改大小（锚点不动，拖出去 = 改另一个对角 / 半径）────────────────
+        // 用户 2026-09-25 上手 ClassIn 逐条定的规则：
+        //   (a) 圆形：**圆心不动**，改变圆的大小；
+        //   (b) 矩形：**有一个顶点不动**，拖动相当于拖另外一个对角线；
+        //   (c) **旋转功能不能转**，就是拖动改大小。
+        // 下面这一小段同时覆盖 (a)(b)(c)，而且**一行几何都不重写**（照 42.9 第 3 条）：
+        //   ① 锚点（离笔尖最远那个定义元素）**一个像素都不动** → (a)(b) 的"不动"那半句；
+        //   ② "跟着走的那个"（离笔尖最近的定义元素）**直接设成指针** → 对圆就是
+        //      "圆周点搬到指针上"，半径自然 = |指针 − 圆心|，圆心没动 —— 正好是 (a)；
+        //      对矩形就是"另一个对角 = 指针"，起始角没动 —— 正好是 (b)；
+        //   ③ 其余定义元素（三角形 / 平行四边形 / 坐标系那种三个点以上的）按**逐分量比例**
+        //      跟着走，比例从"锚点 → 跟着走的那点"这一段算；
+        //   ④ 全程只挪点、**不做姿态旋转** → (c)。
+        // ⚠ ③ 的除法要防零：某分量在基准里就是 0（比如圆的圆周点正好在正右方）时，
+        //   那个分量取 1（不变）。②对"跟着走的那个"是**直接赋值**，不经过除法，所以
+        //   圆永远不会因为这个退化。
+        if (_dwellGhostOrigin == null || _dwellGhostOrigin.Length < 2
+            || _dwellGhostAnchorIdx < 0 || _dwellGhostNearIdx < 0) return true;
+
+        int n = _dwellGhostOrigin.Length;
+        var moved = new Vector2[n];
+        for (int i = 0; i < n; i++) moved[i] = _dwellGhostOrigin[i];
+
+        var A = _dwellGhostOrigin[_dwellGhostAnchorIdx];
+        moved[_dwellGhostAnchorIdx] = A;          // ① 锚点不动（写一遍，意思写在代码里）
+        moved[_dwellGhostNearIdx] = p;            // ② 跟着笔尖走的那一点
+
+        var e0 = _dwellGhostOrigin[_dwellGhostNearIdx] - A;
+        var e1 = p - A;
+        float sx = MathF.Abs(e0.X) > 1e-3f ? e1.X / e0.X : 1f;
+        float sy = MathF.Abs(e0.Y) > 1e-3f ? e1.Y / e0.Y : 1f;
+        for (int i = 0; i < n; i++)               // ③ 其余点按比例
+        {
+            if (i == _dwellGhostAnchorIdx || i == _dwellGhostNearIdx) continue;
+            var rel = _dwellGhostOrigin[i] - A;
+            moved[i] = A + new Vector2(rel.X * sx, rel.Y * sy);
+        }
+        s.SetPoints(moved);
         return true;
     }
 
@@ -3700,6 +3737,102 @@ public class InkEngine
         return true;
     }
 
+    /// <summary>
+    /// 改**配对期隐藏**这一位，并且**顺手让它对应的内容块失效**。
+    ///
+    /// ## 为什么必须有这个函数的"顺手失效"（这是用户 2026-09-25 报的 bug）
+    ///
+    /// 症状：画两支的时候，**停顿那一刻第一笔没消失，等抬手才消失**。
+    ///
+    /// 根因是**只改了字段、没让渲染缓存失效**（正是本仓库记过的一条老教训）：
+    /// 内容层不是每帧重画、而是**分块位图缓存**（`CanvasTileCache`），第一笔这一刻
+    /// **早就烘进块里**了；而块只在 `Doc.Version` 变化时才重光栅化（`Overlay.SyncTiles`）。
+    /// 于是只置字段的话：`Overlay.DrawStroke` 确实会跳过它，但**没有任何一帧重画那一块**，
+    /// 屏幕上原样留着旧像素 —— 一直留到抬手提交（那一步 `RemoveStroke` 抬了版本号，
+    /// 块被重画），**看起来就是"松手以后才消失"**。
+    ///
+    /// 所以"藏"和"让那一块重画"必须**同时**发生 —— 这就是这个函数存在的全部理由，
+    /// 两个调用点（藏 / 放回来）都要走它，**不要直接给字段赋值**。
+    /// </summary>
+    private void SetPairHidden(Stroke s, bool on)
+    {
+        if (s == null || s.HiddenForPairing == on) return;
+        s.HiddenForPairing = on;
+        // 模型本身一个字没改（这一笔还在文档原处、撤销栈照样靠它），
+        // 只是告诉渲染层"这块要重来"（见 Document.InvalidateContent 的注释）。
+        Doc.InvalidateContent(s.PaddedBounds);
+    }
+
+    /// <summary>
+    /// **两笔配对**：这一笔和"上一笔"是不是同一个双曲线的两支（用户 2026-09-25 定的约定）。
+    ///
+    /// &gt; "**画两支就是双曲线，画一支就是抛物线**。不管它实际上是抛物线还是双曲线，
+    /// &gt;  我们只要按照这个来区分。"
+    ///
+    /// 为什么这一刀比"判形状"干净：形状判断是**连续、有噪声**的（夹角、残差都栽在这儿 ——
+    /// 真实手抖下双曲线只剩 25~40%），而"**画了几笔**"是**离散、零噪声**的：老师画两支的时候，
+    /// **他自己知道**在画双曲线。所以族的选择**不再交给拟合**，拟合只负责"造一个像的"。
+    ///
+    /// 认出来 → 返回那个双曲线，并把"上一笔"钉在 <see cref="_twoBranchPrev"/> 上
+    /// （抬手提交时**一起收走**，见 `EndStroke`）；认不出 → `IsNothing`，
+    /// **这一笔照原来的单笔路走**（绝不抢活）。
+    ///
+    /// 挑"上一笔"的四条，都很保守 —— 因为**误配的代价是"把两笔变成一个"**：
+    ///   ① **文档里最后一笔**（不往前找更早的，那会开始猜）；
+    ///   ② 在 **5 秒**窗口内（用户定的，见 <see cref="TwoBranchWindowMs"/>）；
+    ///   ③ 是**手绘的墨**（`Freehand`）—— 已经成型的对象不参与；
+    ///   ④ 两边点数都够，最后交给 `TryTwoBranchHyperbola` 判**中心对称**。
+    /// </summary>
+    private ShapeGuess TryTwoBranchPair(Stroke ink, Vector2[] pts)
+    {
+        if (Doc.Strokes.Count == 0) return ShapeGuess.None("没有上一笔");
+        if (NowMs - _lastInkEndMs > TwoBranchWindowMs) return ShapeGuess.None("上一笔太久");
+        var prev = Doc.Strokes[^1];
+
+        // **诊断日志**（用户 2026-09-25 上手"一个也画不出来"）：
+        // 一行说清"上一笔什么样、这一笔什么样、卡在哪一道闸"。
+        // 真机排查全靠它 —— 否则只能靠猜，而这条路已经猜错好几轮了。
+        // 限流：最多每 500ms 一行（这个方法在停顿期间每 40ms 走一次）。
+        bool log = NowMs - _pairLogMs > 500;
+        if (log) _pairLogMs = NowMs;
+
+        ShapeGuess g;
+        if (prev.Kind != StrokeKind.Freehand)
+        {
+            // ⚠ 这一条**很容易中**：第一支要是也停顿过（那 400ms 的静止），
+            //   它就**已经变成一个抛物线对象**了，而对象的 `Points` 只剩 3 个定义点、
+            //   **拿不回原来那些采样点**，于是配不成对。日志里会打出 `上一笔 Parabola`。
+            g = ShapeGuess.None("上一笔不是手绘的墨（它已经被成型过了）");
+        }
+        else if (prev.Points.Count < 8 || pts.Length < 8)
+        {
+            g = ShapeGuess.None("有一笔太短");
+        }
+        else
+        {
+            var prevPts = new Vector2[prev.Points.Count];
+            for (int i = 0; i < prevPts.Length; i++)
+                prevPts[i] = new Vector2(prev.Points[i].X, prev.Points[i].Y);
+            g = ShapeRecognize.TryTwoBranchHyperbola(prevPts, pts, DpiScale);
+            if (!g.IsNothing)
+            {
+                _twoBranchPrev = prev;
+                _twoBranchIndex = Doc.Strokes.Count - 1;
+                // ★ **幽灵期先把第一笔藏起来**（用户 2026-09-25 定：
+                //   "识别的那一刻，第一笔就该消失"）—— 原来要等抬手提交才消失。
+                //   ⚠ 只是**不画**（`Overlay.DrawStroke` 会跳过），文档一个字没动 ——
+                //     撤销栈要靠它还在原处。
+                SetPairHidden(prev, true);
+            }
+        }
+
+        if (log)
+            Console.WriteLine($"[两笔配对] {(g.IsNothing ? "否" : "**是双曲线**")}：{g.Rule}"
+                              + $"（上一笔 {prev.Kind}·{prev.Points.Count} 点，"
+                              + $"这一笔 {pts.Length} 点）");
+        return g;
+    }
+
     private void EndStroke()
     {
         if (ScrollBarDragging) EndScrollBarDrag();
@@ -3719,6 +3852,12 @@ public class InkEngine
             _cntDown = _cntMove = _cntUp = _cntCaptureLost = 0;
             return;
         }
+        // 记下"**这一笔到此结束**"的时刻 —— 两笔配对（画两支 = 双曲线）要用它算时间窗口
+        // （用户 2026-09-25 定的 5 秒，见 `TwoBranchWindowMs`）。
+        // ⚠ 放在这里（**截屏那条分支之后**）：`CaptureActive` 那条路也走 `EndStroke`，
+        //   截一次屏不该把两笔的窗口冲掉。
+        _lastInkEndMs = NowMs;
+
         if (ActiveStroke != null)
         {
             // **多笔图形**：松手 = **这一笔完成**（照 InkClass：推进就发生在 MouseUp，
@@ -3807,7 +3946,29 @@ public class InkEngine
                 {
                     // **停顿成型**：走"替换型"提交——图形进文档，手绘原迹跟着撤销栈走，
                     // 于是按一次 Ctrl+Z 回到**自己画的那一笔**（见 DwellShapeAction）。
-                    Doc.AddDwellShape(ActiveStroke, _dwellInk);
+                    //
+                    // ★ **两笔成型**（`_twoBranchPrev != null`，用户 2026-09-25 定的
+                    //   "**画两支就是双曲线**"）：这时**上一笔也要收走** ——
+                    //   `RemoveStroke` 是"效果先应用"，记账全由下面那条动作负责
+                    //   （它带两笔原迹，所以 **一步 Ctrl+Z 回到两笔手绘**）。
+                    if (_twoBranchPrev != null)
+                    {
+                        var prev = _twoBranchPrev;
+                        int prevIdx = _twoBranchIndex;
+                        _twoBranchPrev = null;
+                        _twoBranchIndex = -1;
+                        // ⚠ **必须先把隐藏位清掉**：不清的话 Ctrl+Z 把这一笔放回来时
+                        //   它还是隐身的 —— 屏幕上"撤销之后什么都没回来"，而且再也变不回来 ✗
+                        //   （走 `SetPairHidden` 而不是直接赋值：它会把"那一笔原来待的块"
+                        //     一起标脏，见那个函数的注释）
+                        SetPairHidden(prev, false);
+                        Doc.RemoveStroke(prev);
+                        Doc.AddDwellShape(ActiveStroke, _dwellInk, prev, prevIdx);
+                    }
+                    else
+                    {
+                        Doc.AddDwellShape(ActiveStroke, _dwellInk);
+                    }
                     _dwellCommitted = true;
                     // **直线抬手后不选中**（用户 2026-09-23 定）：直线是"顺手一划"，画完要立刻接着
                     // 写下一笔——弹出一个选中框 + 操作条反而挡路；按住期间已经能调（转向/伸缩），

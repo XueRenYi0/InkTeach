@@ -114,6 +114,9 @@ internal sealed class DwellAssist
         // 按压力逐点变宽（一条忽粗忽细的直线）。
         s.HasPressure = false;
         ShapeRecognize.ApplyRotation(s, g);
+        // 曲线朝向（抛物线 / 双曲线）—— 它**不在 `Def` 里**，得单独写。
+        // ⚠ 那三句的顺序一句都不能动，理由全写在 `ShapeRecognize.ApplyAxis` 上。
+        ShapeRecognize.ApplyAxis(s, g);
         return s;
     }
 }

@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 using InkEngine;
 
 namespace InkTeach;
@@ -128,23 +128,61 @@ internal static class RecoProbe
         //   · **本来就是直线型**的汉字笔画（横 / 竖 / 竖弯钩）——判成直线不算错，
         //     那是"这条功能在写字时会咬人多少"的量，靠**停顿 600ms**那道闸门挡，
         //     不靠识别器挡。这一档**只报告、不断言**。
+        // ── 【选特征用・只报告不断言】两端切线的夹角分布（抛物线 vs 双曲线）────────
+        //
+        // §43.4.11：用户 2026-09-25 定的约定 —— "末端攒到一块（平行）→ 抛物线；
+        // 留着一个中间夹角 → 双曲线"。这一段**先看两堆分不分得开**，再定阈值。
+        // **不许先拍一个数再让用户去真机上发现不行**（那正是上一轮栽跟头的方式）。
+        // 顺带按**弧长**分组报一遍：这样能直接看出"**画到多长才认得出来**"，
+        // 也就是用户那句"开口大才认得出来"的精确边界。
+        Console.WriteLine();
+        Console.WriteLine("  ── 两端切线夹角的分布（选特征用，只报告）──");
+        foreach (var fam in new[] { "抛物线", "双曲线" })
+        {
+            var cs = positives.Where(c => c.Family == fam).ToList();
+            if (cs.Count == 0) continue;
+            var rows = cs.Select(c => (ang: ShapeRecognize.EndTangentAngleDeg(c.Pts),
+                                       len: ShapeRecognize.PathLength(c.Pts))).ToList();
+            var byAng = rows.OrderBy(r => r.ang).ToList();
+            float lenMid = rows.OrderBy(r => r.len).ElementAt(rows.Count / 2).len;
+            var shortOnes = rows.Where(r => r.len <= lenMid).Select(r => r.ang).OrderBy(a => a).ToList();
+            var longOnes = rows.Where(r => r.len > lenMid).Select(r => r.ang).OrderBy(a => a).ToList();
+            Console.WriteLine($"   {fam,-4} 夹角排序："
+                + string.Join(" ", byAng.Select(r => $"{r.ang:F0}")));
+            Console.WriteLine($"        中位 {byAng[byAng.Count / 2].ang:F0}°"
+                + $" ｜ 短弧(长≤{lenMid:F0}) 中位 {shortOnes[shortOnes.Count / 2]:F0}°"
+                + $" ｜ 长弧 中位 {longOnes[longOnes.Count / 2]:F0}°");
+        }
+
         Console.WriteLine();
         Console.WriteLine("  ── 反例（不该认出来的）──");
         var negatives = corpus.Where(c => !c.ExpectShape && !c.Informational).ToList();
+
+        // **四分之一弧（90° 圆弧）判成抛物线，按口径不算误报**（用户 2026-09-25 选的 A）。
+        // 理由：90° 圆弧和抛物线**在数学上只差约 1.4%** —— 圆的四次项相对二次项只有 12%，
+        // 落在容差（2.5 逻辑像素）之内，**肉眼上就是同一个形状**。而拟合出来的抛物线顶点
+        // 落在弧的中间、左右对称铺开，看着就是原来那段弧（符合"大差不差"）。
+        // ⚠ **180° 半圆弧照旧是硬反例**（实测 0%）：那种开口太宽，抛物线贴不住。
+        // ⚠ 判成**别的**形状仍然算误报 —— 这一档放开的只有"抛物线"这一种结果。
+        var quarterArcOk = new HashSet<string> { "四分之一弧" };
+
         foreach (var fam in negatives.Select(c => c.Family).Distinct())
         {
             var cases = negatives.Where(c => c.Family == fam).ToList();
-            int bad = 0;
+            int bad = 0, asParabola = 0;
             var asWhat = new Dictionary<string, int>();
             foreach (var c in cases)
             {
                 var g = ShapeRecognize.Recognize(c.Pts);
                 if (g.IsNothing) continue;
+                if (quarterArcOk.Contains(fam) && g.Kind == StrokeKind.Parabola) { asParabola++; continue; }
                 bad++;
                 string k = Label(g.Kind);
                 asWhat[k] = asWhat.TryGetValue(k, out var n) ? n + 1 : 1;
             }
             string note = bad == 0 ? "" : "  误判成: " + string.Join("，", asWhat.Select(kv => $"{kv.Key}×{kv.Value}"));
+            // **放开的那几条要明说** —— 藏起来就成了"把 bug 写成期望"的反面（把行为藏起来）。
+            if (asParabola > 0) note += $"（另有 {asParabola} 条判成了抛物线 —— 按口径算对）";
             Console.WriteLine($"   {fam,-16} {bad,3}/{cases.Count,-3} 误报 {bad * 100f / cases.Count,5:F1}%{note}");
             negativeRate[fam] = bad / (float)cases.Count;
         }
@@ -187,6 +225,8 @@ internal static class RecoProbe
             s.SetPoints(g.Def);
             // **姿态角也要写**——斜椭圆 / 斜矩形靠它（走的是和引擎拖旋转柄同一个矩阵）。
             ShapeRecognize.ApplyRotation(s, g);
+            // **曲线朝向也走同一个函数**（不能各写各的：本轮漏过一处，包围盒差 53.7%）。
+            ShapeRecognize.ApplyAxis(s, g);
             // ⚠ 比的是 **WorldInkBounds（墨迹框）**，不是 `Bounds`（控制点框）、也不是
             //   `InkBounds`（那个是**局部控制点**的框）：圆 / 椭圆那两个控制点是
             //   "圆心 + 一个点"，照控制点算出来的框是**扁的**（第一版踩了两次：
@@ -194,9 +234,26 @@ internal static class RecoProbe
             //   引擎里"选中框 / 脏区"吃的也是墨迹框，所以它才是"用户看到的那个框"。
             var got = s.WorldInkBounds;
             var ink = InkBounds(c.Pts, out float diag);
+
+            // ★ **双曲线要按"两支"比**（2026-09-25 实测发现的）：
+            //   墨迹只画了**一支**，而对象内部那个 `branch` 循环**永远画两支**
+            //   —— 那正是我们要的"画一支就补出另一支"。所以拿"一支的框"去比"两支的框"
+            //   必然差一大截（实测最差 **78.8%**），看着像几何错了，
+            //   其实是**框就取错了**（和圆那次"取成控制点框"是同一类错，见下面那段注释）。
+            //   做法：双曲线**关于中心是中心对称的**，所以把墨迹的框**按中心点反射**再取并集，
+            //   得到的就是"两支"的框。
+            float inkMinX = ink.MinX, inkMaxX = ink.MaxX, inkMinY = ink.MinY, inkMaxY = ink.MaxY;
+            if (g.Kind == StrokeKind.Hyperbola && g.Def != null && g.Def.Length >= 1)
+            {
+                var o = g.Def[0];
+                inkMinX = MathF.Min(ink.MinX, 2f * o.X - ink.MaxX);
+                inkMaxX = MathF.Max(ink.MaxX, 2f * o.X - ink.MinX);
+                inkMinY = MathF.Min(ink.MinY, 2f * o.Y - ink.MaxY);
+                inkMaxY = MathF.Max(ink.MaxY, 2f * o.Y - ink.MinY);
+            }
             float dev = MathF.Max(
-                MathF.Max(MathF.Abs(got.MinX - ink.MinX), MathF.Abs(got.MaxX - ink.MaxX)),
-                MathF.Max(MathF.Abs(got.MinY - ink.MinY), MathF.Abs(got.MaxY - ink.MaxY)));
+                MathF.Max(MathF.Abs(got.MinX - inkMinX), MathF.Abs(got.MaxX - inkMaxX)),
+                MathF.Max(MathF.Abs(got.MinY - inkMinY), MathF.Abs(got.MaxY - inkMaxY)));
             float rel = dev / MathF.Max(1f, diag);
             checkedWriteBack++;
 
@@ -339,9 +396,16 @@ internal static class RecoProbe
         Check("多笔：四条边分着画 → 矩形", rectChain.Kind == StrokeKind.Rectangle,
               $"{Label(rectChain.Kind)}（{ShortRule(rectChain.Rule)}）；语料 {rectNote}");
 
-        // ⑥ 多笔：双曲线的两支**接不上**，所以必须什么都不认（宁可不认，不能乱认）
-        Check("多笔：双曲线两支 → 不认（接不上）", hyperChain.IsNothing,
-              hyperChain.IsNothing ? $"未识别：{ShortRule(hyperChain.Rule)}" : $"错认成 {Label(hyperChain.Kind)}");
+        // ⑥ 多笔：双曲线的两支 —— **用户 2026-09-25 定的约定**：
+        //    "**画两支就是双曲线，画一支就是抛物线**"（见 `TryTwoBranchHyperbola`）。
+        //    所以两支**对称**时必须认成双曲线。
+        //
+        //    ⚠ 这条**原先是反过来的**（"接不上 → 不认"）—— 那是旧口径，2026-09-25 改掉。
+        //      旧口径的理由是"两支的缝 277 > 上限 25，不硬接"；而新路**根本不看缝**，
+        //      看的是"两笔是不是关于同一个中心点对称"（中心对称正是双曲线自己的性质）。
+        Check("多笔：双曲线两支（对称）→ 双曲线", hyperChain.Kind == StrokeKind.Hyperbola,
+              hyperChain.IsNothing ? $"未识别：{ShortRule(hyperChain.Rule)}"
+                                   : $"认成 {Label(hyperChain.Kind)}");
 
         // ⑦ 吸附边界：3.9° 吸、4.1° 不吸（画坐标轴刚需）
         Check("角度吸附边界（±4°）", snapIn.b.Y == 0f && snapOut.b.Y != 0f,
@@ -387,6 +451,15 @@ internal static class RecoProbe
         for (int i = 0; i < PositivePerKind; i++) list.Add(MakeRectangle(rnd));
         for (int i = 0; i < PositivePerKind; i++) list.Add(MakeTiltedRectangle(rnd));
         for (int i = 0; i < PositivePerKind; i++) list.Add(MakeParallelogram(rnd));
+        // 抛物线**单独一个随机种子**：它和别的族共用 `rnd` 的话，多插几句就整体挪位，
+        // 别的族的用例会跟着换一批（实测：加进来之后"矩形·过冲"从 90% 掉到 87.5%，
+        // 那是语料换了、不是功能坏了）。独立的种子 = **扰动不了别人**。
+        var paraRnd = new Random(20260925);
+        for (int i = 0; i < PositivePerKind; i++) list.Add(MakeParabola(paraRnd));
+
+        // **双曲线**（§43.4.11）：同样带**自己的种子**（理由同上：不能扰动别的族）。
+        var hypRnd = new Random(20260926);
+        for (int i = 0; i < PositivePerKind; i++) list.Add(MakeHyperbola(hypRnd));
 
         // **难例**（用户 2026-09-23 上手反馈那一批）：真手写全是这个样子。
         // 这一档的判据不一样：**认对 / 不认都行，就是不许认成另一个形状**
@@ -414,6 +487,114 @@ internal static class RecoProbe
     }
 
     private static float J(Random rnd) => (float)(rnd.NextDouble() * 2 - 1) * Jitter;
+
+    /// <summary>
+    /// **二次函数（四种开口）**：随机开口方向、随机张口、随机顶点位置，
+    /// **顶点落在墨迹中间**（绕顶点左右都画了）。
+    ///
+    /// ⚠ **现在只造"整支"**，不造"只画半支"：模型画抛物线是**绕顶点对称铺开**的
+    /// （见 `Model.ParabolaSpanOf`），半支会被凭空补出另一半，所以半支**暂时不认**
+    /// （`TryFitParabola` 门槛 ③ 明确挡住了）。等用户定"半支要不要补另一半"再补语料 ——
+    /// 那和 §43.4.4（二）里双曲线"补出另一支"是同一个决策点。
+    /// </summary>
+    private static Case MakeParabola(Random rnd)
+    {
+        int d4 = rnd.Next(4);
+        var dir = d4 switch
+        {
+            0 => new Vector2(0f, -1f),      // 开口向上（画布 y 向下，所以是 −y）
+            1 => new Vector2(0f, 1f),       // 向下
+            2 => new Vector2(1f, 0f),       // 向右
+            _ => new Vector2(-1f, 0f),      // 向左
+        };
+        var perp = new Vector2(-dir.Y, dir.X);
+
+        float T = 90f + (float)rnd.NextDouble() * 170f;              // 横向半跨度
+        float rise = T * (0.4f + (float)rnd.NextDouble() * 0.9f);    // 两端比顶点高多少
+        float aMag = rise / (T * T);                                 // 沿轴 = a·横跨²
+        var v = new Vector2(600f + (float)rnd.NextDouble() * 300f,
+                            500f + (float)rnd.NextDouble() * 300f);  // 顶点
+
+        int n = 72;
+        var pts = new Vector2[n + 1];
+        for (int i = 0; i <= n; i++)
+        {
+            float s = (-1f + 2f * i / n) * T;                        // 横跨偏移 −T..T
+            var p = v + perp * s + dir * (aMag * s * s);
+            // 低频漂移 ＋ 高频噪声（和 `--smoothtest` 的语料同一个口径）
+            float ph = i / (float)n * MathF.PI * 2f;
+            pts[i] = p + perp * (2.5f * MathF.Sin(ph))
+                       + new Vector2(J(rnd) * 0.6f, J(rnd) * 0.6f);
+        }
+        string side = d4 switch { 0 => "上", 1 => "下", 2 => "右", _ => "左" };
+        return new Case { Family = "抛物线", Pts = pts, Want = StrokeKind.Parabola, ExpectShape = true,
+                          Note = $"开口向{side}、T {T:F0}、抬高 {rise:F0}" };
+    }
+
+    /// <summary>
+    /// **高中双曲线**（§43.4.11）：按标准方程 `x²/a² − y²/b² = 1`（或上下开口）造**一支**的墨迹。
+    ///
+    /// **为什么只造一支**：这正是课上最常见的画法，也是口径里定的那条路 ——
+    /// "一笔画一支 → 对象自己把另一支补出来"（`HyperbolaPoint` 里那个 `branch` 循环）。
+    /// "两笔各画一支"是**多笔**那条路（§42.7 第 7 条），要单独一轮。
+    ///
+    /// **为什么"画多长"要拉开**：用户 2026-09-25 上手的原话是"**双曲线只有在开口很大时
+    /// 才能识别出来**"。按 §43.4.11 门槛 ①，这不是算法不够好 —— **短弧上判据要的信息
+    /// 根本不在墨迹里**（近渐近区之前，双曲线支和抛物线真的分不出来）。
+    /// 所以语料里把"画多长"（参数 `t` 的范围）拉开，才能看出召回率**随弧长**怎么变，
+    /// 而不是只报一个平均分。
+    ///
+    /// 参数化：`x = ±a·cosh t`、`y = b·sinh t`（`t` 的绝对值越大 = 越靠外 = 越接近渐近线），
+    /// **渐近线斜率 = b / a**（就是用户说的"开口大小"）。
+    /// </summary>
+    private static Case MakeHyperbola(Random rnd)
+    {
+        bool transX = rnd.Next(2) == 0;                          // 左右开口 / 上下开口
+        int branch = rnd.Next(2);                                // 画哪一支（±）
+        // ⚠ 2026-09-25 用户上手实测：**一条都没认出来** —— 说明第一版语料**太干净、太均衡**
+        //   （噪声 0.6 px、`a` 50~90、开口 0.6~1.4、弧长 1.2~1.8），那种"标准漂亮"的双曲线
+        //   真机上不会出现。这里按**真实手感**重造：噪声 2 px 高频 ＋ 4 px 低频、`a` 30~110。
+        //
+        // ⚠⚠ **开口和弧长要按"老师真会画的"来定，不能什么都造**（第二版踩的）：
+        //   把开口造到 0.4（很扁）之后，**27.5% 被判成了直线** —— 因为扁的双曲线支
+        //   在一段弧内**本来就近乎一条直线**，被 `TryLine` 半路接走。
+        //   而那恰好违反用户 2026-09-25 定的那条规矩："**开口大 = 双曲线**"
+        //   —— 老师真画的时候，**画的就是那个"开口大"的**。所以语料就按这条造：
+        //   开口 0.9~1.8、弧长 1.3~2.1（**画到能看见渐近区**）。
+        //   分母里塞进"老师不会画的扁短弧"，量出来的只是自己的自娱自乐。
+        float a = 40f + (float)rnd.NextDouble() * 70f;           // 实半轴
+        float slope = 0.9f + (float)rnd.NextDouble() * 0.9f;     // 渐近线斜率 = "开口大小"
+        float b = slope * a;
+        float tMax = 1.3f + (float)rnd.NextDouble() * 0.8f;      // 画到多远（越小 = 越短弧）
+        var o = new Vector2(600f + (float)rnd.NextDouble() * 300f,
+                            500f + (float)rnd.NextDouble() * 300f);
+
+        int n = 72;
+        var pts = new Vector2[n + 1];
+        for (int i = 0; i <= n; i++)
+        {
+            float t = (-1f + 2f * i / n) * tMax;
+            float cu = a * MathF.Cosh(t);
+            float cv = b * MathF.Sinh(t);
+            // 实轴方向放 cosh、另一个方向放 sinh（两种朝向只换谁是谁）
+            var p = transX
+                ? o + new Vector2(branch == 0 ? cu : -cu, cv)      // 左右：x = ±a·cosh t
+                : o + new Vector2(cv, branch == 0 ? cu : -cu);      // 上下：y = ±a·cosh t
+            float ph = i / (float)n * MathF.PI * 2f;
+            var perp = transX ? new Vector2(0f, 1f) : new Vector2(1f, 0f);
+            pts[i] = p + perp * (4f * MathF.Sin(ph))
+                       + new Vector2(J(rnd) * 2f, J(rnd) * 2f);
+        }
+        return new Case
+        {
+            Family = "双曲线",
+            Pts = pts,
+            Want = StrokeKind.Hyperbola,
+            ExpectShape = true,
+            Note = $"{(transX ? "左右" : "上下")}开口·{(branch == 0 ? "右/上" : "左/下")}支、"
+                 + $"实半轴 {a:F0}、开口 {slope:F1}、tMax {tMax:F2}",
+        };
+    }
 
     /// <summary>直线：随机方向、随机长度、**带一点弓**（手画的线不可能是尺子画的）。</summary>
     private static Case MakeLine(Random rnd)

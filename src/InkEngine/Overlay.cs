@@ -1599,6 +1599,14 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private void DrawStroke(Stroke s, Matrix3x2? extra = null)
     {
+        // **配对期的那一笔先别画**（用户 2026-09-25 定："识别的那一刻，第一笔就该消失"）。
+        //
+        // ⚠ 放在**逐笔绘制**这一层、不是放在主循环里：这样**所有调用方**都会跳过它
+        //   （主渲染 / 导出 / 自检 / 剪贴板），一处就够，不会出现"某条路忘了过滤、
+        //   导出的图里多出一条墨"那种不一致。
+        //   这一位只管**画**：文档不动、撤销不动（见 `Stroke.HiddenForPairing`）。
+        if (s.HiddenForPairing) return;
+
         // **"线宽不变"的对象**（图形，见 Stroke.KeepsWidth）：变换折进几何里
         //（BuildCanvasGeometry），描边发生在**画布空间** —— 宽度就是 Width，
         // 不会被缩放。好处很直接：横着拉一个矩形，四条边还是原来那么粗。
@@ -2328,23 +2336,36 @@ internal sealed class OverlayWindow : IDisposable
         var c2 = SelectionHandles.CanvasPosition(SelHandle.BottomRight, frame, dpi);
         var c3 = SelectionHandles.CanvasPosition(SelHandle.BottomLeft, frame, dpi);
 
-        // 1) 光晕
-        _scratch.Color = new Color4(accent.R, accent.G, accent.B, 0.16f);
-        DrawQuad(c0, c1, c2, c3, 6.5f);
+        // **旋转中不画这个框**（用户 2026-09-25 试过 ClassIn 之后定）：ClassIn 转的时候没有矩形框。
+        // 两个理由：
+        //   · 框是**轴对齐**的，一转就每帧重新贴合内容，边角跟着内容一起跳 —— 看着像"框在抖"
+        //     （用户："我们的外接矩形框在转的时候总有点小 bug"）；而转的当下没人看框，
+        //     都在看内容转到哪个角度了（那个角度有专门的度数标签，见第 6 步）。
+        //   · 少画一层，就少一处"框和内容不同步"的机会。
+        // 松手（`SelRotating` 落回 false）之后框自己就回来了 —— 什么都不用补。
+        //
+        // 只收"框"这两步（光晕 ＋ 描边）：手柄那一圈本来就随 `collapsed` 收起来了（见上面），
+        // 旋转柄和度数标签在第 3 / 6 步里单独判据，**照旧留着**（此刻它就是"我抓着的那个东西"）。
+        if (!app.SelRotating)
+        {
+            // 1) 光晕
+            _scratch.Color = new Color4(accent.R, accent.G, accent.B, 0.16f);
+            DrawQuad(c0, c1, c2, c3, 6.5f);
 
-        // 2) 描边。两种特殊状态在这里体现：
-        //    · **复制拖拽模式**：框画成虚线（"按着拖 = 拖出副本"的通用语言）；
-        //    · **复制成功那 0.25 秒**：框加粗变亮，闪一下（用户反馈"复制以后看不出来"）。
-        if (app.SelFlashing)
-        {
-            _scratch.Color = new Color4(accent.R, accent.G, accent.B, 1f);
-            DrawQuad(c0, c1, c2, c3, 5.5f);
-        }
-        else
-        {
-            _scratch.Color = accent;
-            if (app.CopyDragArmed) DrawQuadDashed(c0, c1, c2, c3, 2.5f);
-            else DrawQuad(c0, c1, c2, c3, 2.5f);
+            // 2) 描边。两种特殊状态在这里体现：
+            //    · **复制拖拽模式**：框画成虚线（"按着拖 = 拖出副本"的通用语言）；
+            //    · **复制成功那 0.25 秒**：框加粗变亮，闪一下（用户反馈"复制以后看不出来"）。
+            if (app.SelFlashing)
+            {
+                _scratch.Color = new Color4(accent.R, accent.G, accent.B, 1f);
+                DrawQuad(c0, c1, c2, c3, 5.5f);
+            }
+            else
+            {
+                _scratch.Color = accent;
+                if (app.CopyDragArmed) DrawQuadDashed(c0, c1, c2, c3, 2.5f);
+                else DrawQuad(c0, c1, c2, c3, 2.5f);
+            }
         }
 
         // 3) 旋转手柄（在图形的上方外侧，先画连线再画圆）

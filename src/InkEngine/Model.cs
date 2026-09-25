@@ -2200,6 +2200,20 @@ internal sealed class Stroke
     /// 而且只查字段的自检**照不出这个 bug**（第一版就是这么漏的）——现在两处自检都改成
     /// **数屏幕像素**（有那一档那块必须有墨、无那一档必须一个墨点都没有）。
     /// </summary>
+    /// <summary>
+    /// **配对期暂时别画**（用户 2026-09-25 定："识别的那一刻，第一笔就该消失"）。
+    ///
+    /// 只影响**画**：`Overlay.DrawStroke` 开头一句就返回 —— 文档、撤销、存档都不动，
+    /// 那一笔还躺在原处，提交时 `DwellShapeAction` 靠它的引用把它记进撤销栈。
+    ///
+    /// ⚠ **提交时必须清掉**（`Engine` 里那段）：不清的话，Ctrl+Z 把这一笔放回来时
+    /// 它还是隐藏的 —— 屏幕上"撤销之后什么都没回来"，而且**再也变不回来** ✗
+    /// 这也是自检里专门钉的一条（见 `--dwelltest` 的"两笔"那组）。
+    ///
+    /// ⚠ **不存档**：它是纯运行期的临时状态（和 `ShowAsymptotes` 那种"用户设定"不是一类）。
+    /// </summary>
+    internal bool HiddenForPairing;
+
     public void SetShowAsymptotes(bool on)
     {
         if (ShowAsymptotes == on) return;
@@ -5551,23 +5565,36 @@ internal sealed class DwellShapeAction : EditAction
     public Stroke Ink;        // 手绘原迹
     public int Index;         // 提交时的层序：撤销要把原迹放回**同一个位置**
 
-    public override int HeldStrokes => 2;
+    /// <summary>**两笔成型**时的**第一笔原迹**（用户 2026-09-25 定的"画两支就是双曲线"）。
+    /// 非 null 时：撤销要**一步把两笔都放回去**（"一步回两笔手绘"），重做要**一步把两笔都收走**。
+    /// 为什么不开一个新动作类：这条路和"一笔 → 一个图形"**是同一条路**，
+    /// 只多了一笔原迹 —— 新开一个类等于把同一段记账抄一遍（同一个坑这个仓库踩过好几次）。
+    /// </summary>
+    public Stroke Ink2;
+    public int Index2;
+
+    public override int HeldStrokes => Ink2 == null ? 2 : 3;
 
     public override void Undo(InkDocument doc)
     {
         doc.RemoveStroke(Shape);
+        // 先放第二笔、再放第一笔 —— 和提交时"先收第一笔"的顺序**反着来**，
+        // 这样两笔回到文档里仍是原来那个相对次序。
+        if (Ink2 != null) doc.InsertStroke(Index2, Ink2);
         doc.InsertStroke(Index, Ink);
     }
 
     public override void Redo(InkDocument doc)
     {
         doc.RemoveStroke(Ink);
+        if (Ink2 != null) doc.RemoveStroke(Ink2);
         doc.InsertStroke(Index, Shape);
     }
 
     // 两个方向都要重绘（旧位置擦、新位置画），所以前后**都**算上：
     // 少了任何一半，屏幕上都会留一条"擦不掉的旧墨"或"看不见的新墨"。
-    public override RectF AffectedBefore => EditRegion.Of(new[] { Ink });
+    public override RectF AffectedBefore =>
+        Ink2 == null ? EditRegion.Of(new[] { Ink }) : EditRegion.Of(new[] { Ink, Ink2 });
     public override RectF AffectedAfter => EditRegion.Of(new[] { Shape });
 }
 
@@ -6634,6 +6661,25 @@ internal sealed class InkDocument
     public void AddDwellShape(Stroke shape, Stroke ink)
     {
         var act = new DwellShapeAction { Shape = shape, Ink = ink, Index = Strokes.Count };
+        AppendStroke(shape);
+        Commit(act);
+    }
+
+    /// <summary>
+    /// **两笔成型**的提交（用户 2026-09-25 定的"**画两支就是双曲线**"）：
+    /// 图形进文档，**两笔**手绘原迹都留给撤销栈 —— 按一次 Ctrl+Z 回到**两笔手绘**。
+    ///
+    /// ⚠ **调用方要先把第一笔从文档里拿掉**（`RemoveStroke(ink2)`）：这个方法只管
+    /// "把图形放进去 + 记好账"，和上面那条一笔的约定完全一样。
+    /// `index2` 传**第一笔被拿掉之前在文档里的下标**。
+    /// </summary>
+    public void AddDwellShape(Stroke shape, Stroke ink, Stroke ink2, int index2)
+    {
+        var act = new DwellShapeAction
+        {
+            Shape = shape, Ink = ink, Index = Strokes.Count,
+            Ink2 = ink2, Index2 = index2,
+        };
         AppendStroke(shape);
         Commit(act);
     }

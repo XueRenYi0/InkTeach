@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime;
 using System.Runtime.InteropServices;
@@ -180,13 +180,6 @@ internal sealed class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             ExitCode = DwellProbe.Run(this);
-            _quit = true;
-        }
-        else if (mode == "--smoothtest")
-        {
-            // 保形平滑：**纯算法**（不需要窗口/笔/屏幕），所以不进引擎。
-            // 走引擎那条路（停顿 → 换成光滑墨）在 `--dwelltest` 里验。
-            ExitCode = SmoothProbe.Run();
             _quit = true;
         }
         else if (mode == "--librarytest")
@@ -760,7 +753,6 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --shapebandtest     图形那格的界面入口自检（七段 / 三个新热键 / 主条图标跟着变）");
         Console.WriteLine("  --inktest           **墨迹识别的单独测试**（日常改识别只跑这一条：准确率 / 误报 / 难例 / 写回）");
         Console.WriteLine("  --dwelltest         停顿成型的手势自检（真入口 + 推时钟：触发 / 定型 / 撤销回手绘 / 不留墨）");
-        Console.WriteLine("  --smoothtest        **保形平滑的算法自检**（保形偏差 / 变滑倍数 / 直角不被磨圆 / 成本）");
         Console.WriteLine("  --dashtest          线型自检（实线/虚线/点线上屏墨量、面板那一行、存档往返）");
         Console.WriteLine("  --axistest          坐标系/数轴自检（画法 / 四个手柄 / 网格 / 上屏 / 存档往返）");
         Console.WriteLine("  --axisshow [路径]   出图：坐标系（带网格/不带）+ 数轴 + 一条虚线");
@@ -7156,10 +7148,33 @@ internal sealed class App : InkEngine.InkEngine
             float rotArm = Vector2.Distance(rotGrip, rotPivot);
             float rotA0 = MathF.Atan2(rotGrip.Y - rotPivot.Y, rotGrip.X - rotPivot.X);
             bool tookRot = SelectionGestureForTest(rotGrip.X, rotGrip.Y);
+            // **旋转中不画框**（用户 2026-09-25 照 ClassIn 定）：框是轴对齐的，一转就每帧重贴
+            // 内容、边角看着像在抖；转的当下也没人看框 —— 干脆收起来，松手再出现。
+            // 量法：在**框上边那一段**数强调色（#0078D4）像素。
+            // ⚠ 窗口必须**每次从"当前框"重算**（写成局部函数、两次调用各算一次）：
+            //   转起来框会被重新贴合，窗口固定不动就量不到转后的边 —— 变异抽查时只差 16 像素，
+            //   余量小到不够硬（2026-09-25 实测）。跟着当前框走，两边都压在"今天这个框的上边"，
+            //   对比才有意义。
+            int FrameTopPixels()
+            {
+                var bx = LiveSelectionFrame.CanvasAabb;
+                return ScreenProbe.CountNear(
+                    (int)bx.MinX, (int)(bx.MinY - 3f * DpiScale),
+                    Math.Max(8, (int)((bx.MaxX - bx.MinX) * 0.6f)), Math.Max(4, (int)(8f * DpiScale)),
+                    0, 120, 212, 60);
+            }
+            int framePixStatic = FrameTopPixels();
+
             var rp = new Vector2(rotPivot.X + rotArm * MathF.Cos(rotA0 - 0.35f),
                                  rotPivot.Y + rotArm * MathF.Sin(rotA0 - 0.35f));    // 逆时针 20°
             UpdateSelectionGestureForTest(rp.X, rp.Y);
             SettleFrames(80);
+            int framePixRotating = FrameTopPixels();
+            // 判据：静止时那一段**必须有**框的强调色（太少说明窗口没压住边、这条就白验了）；
+            //       旋转中必须**一个都没有**。
+            Check("旋转中**不画**选中框（ClassIn 的手感：转的时候没有矩形框）",
+                  framePixStatic > 100 && framePixRotating == 0,
+                  $"框上边那一段：静止 {framePixStatic} 像素 → 旋转中 {framePixRotating} 像素（期望 0）");
             Check("整体旋转不吸：转的时候顶点一个都不动、也没有形状吸附",
                   tookRot && SelRotating && ShapeSnapKind == ShapeSnapKind.None
                   && movePts0 == $"{moveTri.Points[0].X},{moveTri.Points[0].Y}"
