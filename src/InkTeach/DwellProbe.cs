@@ -310,7 +310,7 @@ internal static class DwellProbe
             {
                 foreach (float size in new[] { 0.55f, 1f, 1.7f })
                 {
-                    foreach (string kind in new[] { "圆", "直线", "三角形", "矩形", "平行四边形", "抛物线", "椭圆", "五边形（认不出）" })
+                    foreach (string kind in new[] { "圆", "直线", "三角形", "矩形", "平行四边形", "抛物线", "正弦", "余弦", "波浪线", "椭圆", "五边形（认不出）" })
                     {
                         trials++;
                         t8 += 3000;
@@ -554,18 +554,26 @@ internal static class DwellProbe
             // ③ **一步** Ctrl+Z 回到**两笔手绘**
             // ⚠ 数的是**增量**，不是"文档里一共几笔手绘" —— 前面各组还留着十几笔呢
             //   （第一版就是数总数，于是报"手绘 18 笔"当失败，其实是断言写错了）。
-            int freeBefore = 0;
-            foreach (var s in app.Doc.Strokes) if (s.Kind == StrokeKind.Freehand) freeBefore++;
+            int freeBefore = 0, hyperBefore = 0;
+            foreach (var s in app.Doc.Strokes)
+            {
+                if (s.Kind == StrokeKind.Freehand) freeBefore++;
+                if (s.Kind == StrokeKind.Hyperbola) hyperBefore++;
+            }
             app.RunActionForTest(KeyAction.Undo);
-            int freeAfter = 0, hyper = 0;
+            int freeAfter = 0, hyperAfter = 0;
             foreach (var s in app.Doc.Strokes)
             {
                 if (s.Kind == StrokeKind.Freehand) freeAfter++;
-                if (s.Kind == StrokeKind.Hyperbola) hyper++;
+                if (s.Kind == StrokeKind.Hyperbola) hyperAfter++;
             }
-            Check("两笔⑤ 一步 Ctrl+Z 回到**两笔**手绘（双曲线没了）",
-                  freeAfter == freeBefore + 2 && hyper == 0,
-                  $"手绘 {freeBefore} → {freeAfter}（期望 +2）、双曲线还剩 {hyper} 个");
+            // ⚠ **两项都按"增量"比，不比总数**（2026-09-26 改）：原来写的是 `hyper == 0`
+            //   —— 那假设"整个文档只有这一条双曲线"，而前面几段之后文档里已经有别的双曲线了
+            //   （判据一放宽，这里立刻报"还剩 4 个"，其实是**断言写错了**）。
+            Check("两笔⑤ 一步 Ctrl+Z 回到**两笔**手绘（这一对双曲线没了）",
+                  freeAfter == freeBefore + 2 && hyperAfter == hyperBefore - 1,
+                  $"手绘 {freeBefore} → {freeAfter}（期望 +2）、"
+                  + $"双曲线 {hyperBefore} → {hyperAfter}（期望 −1）");
             app.RunActionForTest(KeyAction.Redo);
 
             // ⑦ 渐近线要**铺到和支线一样远**（用户 2026-09-25 上手反馈："**渐近线看起来
@@ -600,6 +608,79 @@ internal static class DwellProbe
                   bad != null && bad.Kind != StrokeKind.Hyperbola,
                   bad == null ? "文档里没多东西" : KindName(bad));
         }
+        {
+            // 反例：**两支尺寸差太多**（一个"太小不转换"留下的小团 ＋ 一条长直线）→ **不许**配对。
+            //
+            // ⚠ 这一条本来是**碰巧**被 I 段（"直线拖端点：转向 + 吸水平"）抓到的：I 段前面那个
+            //   用例正好留下一个小圆（r=15、直径 30），紧接着那支 300 长的直线就和它配成了
+            //   一对双曲线（尺寸比 0.14）→ 直线成了"双曲线的一支"，拖端点当场不对。
+            //   靠"碰巧"是不行的：**用例一挪位置，这条判据就静默失效**（本项目的老教训）。
+            //   所以在这里**显式**把这组输入造一遍（口径和那次误配一模一样）。
+            app.NowMs += 30000;                        // 挪开时钟（配对窗口 20s，别和上一组串）
+            Drive(app, Circle(2600f, 400f, 15f), 200); // 半径 15 → 周长 47 < 门槛 56，认不出、不转换
+            app.NowMs += DwellAssist.HoldMs;
+            app.DwellTickForTest();
+            app.DwellEndForTest();
+            var tiny = app.Doc.Strokes.Count > 0 ? app.Doc.Strokes[^1] : null;
+            bool tinyStayedInk = tiny != null && tiny.Kind == StrokeKind.Freehand;   // 前提：小团真留下了
+
+            int nBeforeSize = app.Doc.Strokes.Count;
+            Drive(app, WobblyLine(300f, 500f, LineLen, 0), 200);
+            app.NowMs += DwellAssist.HoldMs;
+            app.DwellTickForTest();
+            app.DwellEndForTest();
+            var afterSize = app.Doc.Strokes.Count > nBeforeSize ? app.Doc.Strokes[^1] : null;
+            Check("两笔⑧ 一支只有另一支的 1/7（小团 30 ＋ 直线 300）→ **不许**配成双曲线",
+                  tinyStayedInk && afterSize != null && afterSize.Kind == StrokeKind.Line,
+                  $"小团留下的是 {KindName(tiny)}（前提：得是手绘的墨），"
+                  + $"长直线认成了 {KindName(afterSize)}（期望 直线）");
+        }
+
+        // ── 两笔·**第一支先被停顿成型**了，还要能配成双曲线（2026-09-26 加）──────────
+        //
+        // 用户 2026-09-26 报："双曲线**画几次才成一次**"。原因之一：画第一支时收笔前手停
+        // 一下（400ms），这一支就**先被停顿时成一个抛物线对象** —— 对象里只剩两三个定义点、
+        // **拿不回采样点**，于是配对**永远**配不上。要不要停那一下是随机的，用户看到的就是
+        // "这次不行、再画一次说不定行"。修法是引擎里留一个"这一支的**原迹**"的引用
+        //（见 `Engine._lastDwellShape`）。
+        //
+        // ⚠ 断言写成"**不管第一支变成了什么，两笔都要配成双曲线**"：
+        //   第一支到底会不会被判成抛物线，取决于它的形状（短支更像抛物线）——
+        //   语料不该假定这一点（写死"它一定会变成抛物线"就是**把猜想当期望**）。
+        //   所以这里**数一遍**"第一支真被成型了的次数"，它 > 0 才算这条路真被走到了。
+        app.NowMs = 950000;
+        int firstShaped = 0, firstShapedPaired = 0;
+        foreach (float tMax in new[] { 0.8f, 1.2f, 1.6f })
+        {
+            var r1 = Branch(2200f, 36000f, 80f, 90f, tMax, +1f);
+            var l1 = Branch(2200f, 36000f, 80f, 90f, tMax, -1f);
+            app.NowMs += 30000;                       // 挪开时钟，别和别组共用（配对窗口是 20s）
+
+            // 第一支：画完**停够** → 它会被成型成一个对象（多半是抛物线）
+            Drive(app, r1, 300);
+            app.NowMs += DwellAssist.HoldMs;
+            app.DwellTickForTest();
+            app.DwellEndForTest();
+            var ink1 = app.Doc.Strokes.Count > 0 ? app.Doc.Strokes[^1] : null;
+            bool shaped = ink1 != null && ink1.Kind != StrokeKind.Freehand;
+            if (shaped) firstShaped++;
+
+            // 第二支：画完停顿 → 应当照样配成双曲线（用第一支的**原迹**）
+            Drive(app, l1, 300);
+            app.NowMs += DwellAssist.HoldMs;
+            app.DwellTickForTest();
+            var armed = app.ActiveStroke;
+            app.DwellEndForTest();
+            var got = app.Doc.Strokes.Count > 0 ? app.Doc.Strokes[^1] : null;
+            if (got != null && got.Kind == StrokeKind.Hyperbola) firstShapedPaired++;
+            if (shaped && (armed == null || armed.Kind != StrokeKind.Hyperbola))
+                Console.WriteLine($"       ⚠ tMax {tMax:F1}：第一支被成型成 {KindName(ink1)} 之后，"
+                                  + $"第二支没能配成双曲线（幽灵 {KindName(armed)}）");
+        }
+        Check("两笔·第一支先被停顿成型 → 照样配成双曲线",
+              firstShaped > 0 && firstShapedPaired == 3,
+              $"3 组里第一支被成型了 {firstShaped} 次，配成双曲线 {firstShapedPaired}/3"
+              + $"（第一支没被成型的那几组走的是老路，一样该配成）");
 
         // ── 覆盖断言（放在最后：`seenKinds` 由上面**所有**小组一起喂）────────────────
         //    识别表里能认的每一种图形，这一趟自检必须**真认出来过**：加了新识别器
@@ -796,8 +877,53 @@ internal static class DwellProbe
             // ⚠ 只画半支的**故意不认** —— 模型画抛物线是绕顶点对称铺开的（见
             //   `ShapeRecognize.TryFitParabola` 门槛 ③），半支会被凭空补出另一半。
             "抛物线" => ParabolaPath(cx, cy, 150f * s, 130f * s),
+            // 正弦 / 余弦（§43.4.4 三）：**一个周期**，从**特征相位**起笔
+            //（正弦从零点、余弦从峰顶）。
+            // ⚠ 起笔相位是这一族的硬约束 —— 模型的起点只能落在零点 / 极值点上
+            //   （见 `Model.WaveYAt`）。"偏多少就不认"有一张专门的窗口表
+            //   （`--inktest` 里那段"起笔相位窗口"），这里只验**真入口这条路通不通**。
+            "正弦" => WavePath(cx, cy, 300f * s, 110f * s, cosine: false),
+            "余弦" => WavePath(cx, cy, 300f * s, 110f * s, cosine: true),
+            // **波浪线**（多个周期，2026-09-26 加）：周期和振幅**没有固定比例**
+            //（工具那条路是 T = A，识别这条路不是）—— 这正是它的第三个定义元素在管的量。
+            "波浪线" => WaveMultiPath(cx, cy, 150f * s, 90f * s, 3f),
             _ => PentagonPath(cx, cy, 120f * s),          // "五边形（认不出）"
         };
+
+    /// <summary>**多个周期**的波浪线：`cycles` 个周期、每个周期 `period` 宽、振幅 `amp`。
+    /// 起点**故意不在零点**（挪 1/8 个周期）—— 多周期这条路不受起笔相位限制
+    ///（长度自由，起点挪到零点之后补到右端就行），语料就该把这一点量出来。</summary>
+    private static Vector2[] WaveMultiPath(float cx, float cy, float period, float amp, float cycles)
+    {
+        int n = 160;
+        var pts = new Vector2[n + 1];
+        var start = new Vector2(cx, cy);
+        var end = new Vector2(cx + period * cycles, cy + amp);
+        for (int i = 0; i <= n; i++)
+        {
+            float u = cycles * i / (float)n;
+            pts[i] = new Vector2(cx + period * u, Stroke.WaveYAt(start, end, StrokeKind.Wave, u + 0.125f));
+        }
+        return pts;
+    }
+
+    /// <summary>**一个周期**的正弦 / 余弦：横向跨度就是一个周期，而且**用模型自己那两条算式**
+    /// （`Stroke.WaveYAt`）采样 —— 于是"墨迹"和"对象会画出来的曲线"天生同族，
+    /// 量出来的才是识别器、不是语料自己造的偏差。</summary>
+    private static Vector2[] WavePath(float cx, float cy, float period, float amp, bool cosine)
+    {
+        int n = 96;
+        var pts = new Vector2[n + 1];
+        var start = new Vector2(cx, cy);
+        var end = new Vector2(cx + period, cy + amp);
+        var kind = cosine ? StrokeKind.Cosine : StrokeKind.Sine;
+        for (int i = 0; i <= n; i++)
+        {
+            float u = i / (float)n;                       // u 的单位就是"周期"
+            pts[i] = new Vector2(cx + period * u, Stroke.WaveYAt(start, end, kind, u));
+        }
+        return pts;
+    }
 
     /// <summary>一条**顶点在中间**的抛物线（开口向上）：横向半跨度 `hw`、两端比顶点高 `rise`。
     /// 画布 y 向下，所以"向上开口"是 `cy − …`。</summary>

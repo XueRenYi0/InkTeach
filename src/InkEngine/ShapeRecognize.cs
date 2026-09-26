@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 
 namespace InkEngine;
 
@@ -207,11 +207,37 @@ internal static class ShapeRecognize
     /// "小到这个程度，说明他本来就想画正的"。</summary>
     internal const float TiltSnapDeg = 4f;
 
-    /// <summary>圆和椭圆的仲裁：轴比（长轴÷短轴）**大于**这个数才判椭圆，
-    /// 否则判圆。手画的圆本来就有一点扁，判据太松就会被吸成椭圆
-    ///（用户 2026-09-23 反馈的"圆也是（和墨迹对不上）"就是这条太松：一个收口差一点的圈
-    /// 被外接框拉扁，判成了椭圆）。</summary>
-    internal const float EllipseAxisRatioMin = 1.12f;
+    /// <summary>
+    /// 圆和椭圆的仲裁：轴比（长轴÷短轴）**大于**这个数才判椭圆，否则判圆。
+    ///
+    /// ★ **2026-09-26 从 1.12 改成 1.20 —— 这一条是量出来的，不是拍的**
+    /// （用户报："圆老是识别不出来，是因为椭圆抢它的吗？我们这里是不是要定一个分界线，
+    ///   接近于某一个分界线就是圆，扁的就是椭圆"——判据本来就是这个，问题在**线划在哪**）。
+    ///
+    /// 原来的 1.12 是对着**理想圆**的语料定的（`RecoProbe` 那条 `MakeCircle` 径向只抖
+    /// **1.5%** → 拟合出来的轴比永远 ≈1.00 → 必然 `<1.12` → 必然判圆）。
+    /// 所以它**恒过**，而**真手画**的圆是被压出来的：径向有一个二倍角分量
+    /// （`r(θ)=r₀(1+ε·cos2θ)` 的轴比 ≈ `1+2ε`），ε 取 3~8% → 轴比 1.06~1.19。
+    /// `--inktest` 里那张"分界线扫描表"（50 条手画圆 + 50 条手画椭圆）实测：
+    ///
+    /// | 阈值 | 判对(圆) | 判对(椭圆) | 合计 |
+    /// |---|---|---|---|
+    /// | 1.10 | 38% | 98% | 68% |
+    /// | **1.12（原来）** | **50%** | 96% | 73% |
+    /// | 1.15 | 76% | 94% | 85% |
+    /// | **1.20（现在）** | **100%** | 88% | **94%** |
+    /// | 1.25 | 100% | 86% | 93% |
+    /// | 1.40 | 100% | 66% | 83% |
+    ///
+    /// —— 手画圆的轴比中位**正好落在 1.12**，所以原来那条线把**一半的圆**送给了椭圆。
+    /// 1.20 是合计最高的一档（94%），代价是"轴比 1.15~1.20 的椭圆会被当成圆"（约 8%）：
+    /// 那一档**本来就分不开**（见下表），按用户"接近分界线就算圆"的口径，
+    /// **往圆那边让**是对的（圆是更高频、也更"该圆"的形状）。
+    ///
+    /// ⚠ 这一条**只影响"圆还是椭圆"**：两个拟合各自的残差闸（`CircleResidualRatio`
+    /// 9% / `EllipseResidualRatio`）照旧，所以"四不像"不会因为这条线被吸进圆里。
+    /// </summary>
+    internal const float EllipseAxisRatioMin = 1.20f;
 
     /// <summary>重采样间距（逻辑像素）：角点检测和拟合都要求点大致等距，
     /// 而原始采样是"快的地方稀、慢的地方密"。4 这个数和笔迹在屏幕上的
@@ -243,6 +269,9 @@ internal static class ShapeRecognize
         StrokeKind.Parallelogram,
         StrokeKind.Parabola,        // 二次函数四种开口（§43.4.4 一）—— 2026-09-25 加
         StrokeKind.Hyperbola,       // 高中双曲线（§43.4.11）—— 2026-09-25 加
+        StrokeKind.Sine,            // 正弦（§43.4.4 三）—— 2026-09-26 加
+        StrokeKind.Cosine,          // 余弦（§43.4.4 三）—— 2026-09-26 加
+        StrokeKind.Wave,            // 波浪线（多个周期，§43.4.4 三）—— 2026-09-26 加
     };
 
     /// <summary>
@@ -286,6 +315,33 @@ internal static class ShapeRecognize
             s.SetHyperbolaThroughPoint(hd[2].X, hd[2].Y);
             // 渐近线是**拟合出来的已知量**，默认画上（和图形工具那两档里的"带渐近线"一致）。
             s.SetShowAsymptotes(true);
+            return;
+        }
+
+        // **正弦 / 余弦**：走对象自己的入口 `SetWaveBox`（和图形工具那一拖**同一个函数**）。
+        //
+        // 它的两个定义元素是"**起点 ＋ 终点**"，终点一次定下**周期和振幅**
+        // （见 `Model.SetWaveBox`：终点 = `(起点.x + 周期, 起点.y + dy)`）。
+        // 识别器给的 `Def` 已经是这两个点，所以这里只是把它落到对象上 ——
+        // **没有姿态角、没有曲线朝向**（正余弦不旋转、也没有开口方向那一维）。
+        if (g.Kind == StrokeKind.Sine || g.Kind == StrokeKind.Cosine)
+        {
+            if (g.Def == null || g.Def.Length < 2) return;
+            var wd = g.Def;
+            // 末位 `minSize` 是"防零宽 / 零高"的下限，真实大小由这两点决定（和双曲线那处同理）。
+            s.SetWaveBox(wd[0].X, wd[0].Y, wd[1].X, wd[1].Y, 1f);
+            return;
+        }
+
+        // **波浪线**（多周期）：两个定义元素和上面一样（起点 ＋ 终点＝要画多长 ＋ 振幅），
+        // **但周期是第三个点**（`Def[2]`，只用到它的 x —— 见 `Stroke.SetWavePeriod`）。
+        // 这一步不能少：不写的话周期会落回"= 振幅"那条老规矩，多周期墨迹会被压扁/拉长。
+        if (g.Kind == StrokeKind.Wave)
+        {
+            if (g.Def == null || g.Def.Length < 3) return;
+            var wd = g.Def;
+            s.SetWaveBox(wd[0].X, wd[0].Y, wd[1].X, wd[1].Y, 1f);
+            s.SetWavePeriod(wd[2].X - wd[0].X);
             return;
         }
 
@@ -353,9 +409,15 @@ internal static class ShapeRecognize
     }
 
     /// <summary>两笔合成双曲线时，**对称校验的容差**（占另一笔尺度的比例）。
-    /// 放宽到 25% —— 用户 2026-09-25 定的："**可以先放宽一点要求，争取让识别率上来**"，
-    /// 因为"双曲线太难画了"（真手画一支大一支小、位置差一点都很常见）。</summary>
-    private const float TwoBranchSymmetryTol = 0.25f;
+    ///
+    /// ⚠ 它是 **static 字段**（不是 const）**只为一件事**：`--inktest` 里那段
+    /// "手画两支"的**只报告扫描表**要把它**扫一遍**（0.25 / 0.35 / 0.45 / 0.6），
+    /// 拿"正例识别率 ↑"和"误报率 ↑"两条曲线一起看，才知道该停在哪一档 ——
+    /// 用户 2026-09-26 第二次报"双曲线怎么都变不出来，是不是卡得太严"，
+    /// 而**松到多少**必须量出来（不许拍）。
+    /// ⚠ 除自检外**没有第二处写它**。
+    /// </summary>
+    internal static float TwoBranchSymmetryTol = 0.25f;
 
     /// <summary>
     /// **两笔 → 双曲线**（用户 2026-09-25 定的约定）：
@@ -382,6 +444,20 @@ internal static class ShapeRecognize
     {
         if (a.Count < 8 || b.Count < 8) return ShapeGuess.None("两笔里有一笔太短");
 
+        // ①b **两支的尺寸必须相当**（2026-09-26 加，`--dwelltest` 抓到的真误配）。
+        //
+        //   双曲线的两支**全等**，所以人画出来的两支尺寸自然接近（实测 14 对真样本：
+        //   0.83~0.99）。反例是"**一个没成型的小团 ＋ 一条长直线**"（0.14）——
+        //   它居然能过"对称"那道闸（原因见 `TwoBranchSizeRatioMin` 的注释：小支当查询时
+        //   偏差天然小、容差又按大支算）。放在这里（**所有闸之前、且是 O(n)**）：
+        //   最便宜的一条先挡掉，后面那些 O(n·m) 的校验就不用白算了。
+        float diagA = Diag(a), diagB = Diag(b);
+        float sizeRatio = MathF.Min(diagA, diagB) / MathF.Max(diagA, diagB);
+        if (sizeRatio < TwoBranchSizeRatioMin)
+            return ShapeGuess.None($"两支大小差太多（尺寸比 {sizeRatio:F2} < {TwoBranchSizeRatioMin:F2}，"
+                                   + $"A 对角线 {diagA:F0}、B 对角线 {diagB:F0}）"
+                                   + "—— 小的那支比大的小一倍多，不像同一个双曲线的两支");
+
         // ① 中心 = "两支**离得最近的那一对点**"的中点。
         //    对称的两支，最近的一对正是**两个顶点**，它们的中点也就是双曲线的中心 ——
         //    这一步不需要拟合，所以不受手抖影响。
@@ -406,29 +482,317 @@ internal static class ShapeRecognize
         //   实测：**自己造的对称语料被判成"镜像偏差 412 > 容差 111"**，
         //   看着像"两笔不对称"，其实是比法错了。而**用户画第二支时从上往下还是
         //   从下往上本来就是随机的**，所以不能假定顺序。
+        //
+        // ❗❗ **还有第三个方向：`B → 镜像 A`**（2026-09-26 加，用户报"画几次才成一次"）。
+        //   上面那两种都是"拿**镜像 A** 当查询" —— 用户要是第一支画得长、第二支画得短
+        //   （手画天天这样），镜像 A 多出来的那一截**全都算成"不对称"**：
+        //   实测（`--inktest` 的"手画两支"只报告段）**识别率只有 58%，25 条失败里 23 条
+        //   卡在这一条**。而"一支画得长一支画得短"**根本不是不对称** ——
+        //   两条曲线在**重叠的那一段**上贴得住就够了。
+        //   所以四个方向取最小：这等于**拿短的那一支当查询**（谁是短的、由数值自己定）——
+        //   和 `InkNearOutline` 只查"墨迹 → 轮廓"那一个方向是**同一条口径**
+        //  （那边：不查"轮廓 → 墨迹"，因为"用户没画完的那一段"正是要补的）。
         var mirrored = new Vector2[a.Count];
         for (int i = 0; i < a.Count; i++) mirrored[i] = 2f * o - a[a.Count - 1 - i];
         var mirroredRev = new Vector2[a.Count];
         for (int i = 0; i < a.Count; i++) mirroredRev[i] = 2f * o - a[i];
         float devA = CurveFit.MaxDeviationToPolyline(mirrored, b);
         float devB = CurveFit.MaxDeviationToPolyline(mirroredRev, b);
-        float dev = MathF.Min(devA, devB);
+        float devC = CurveFit.MaxDeviationToPolyline(b, mirrored);      // 短的那支当查询
+        float devD = CurveFit.MaxDeviationToPolyline(b, mirroredRev);
+        float dev = MathF.Min(MathF.Min(devA, devB), MathF.Min(devC, devD));
         float sizeB = Diag(b);
-        if (dev > TwoBranchSymmetryTol * sizeB)
+        bool symmetric = dev <= TwoBranchSymmetryTol * sizeB;
+
+        // ★★ **第三轮（用户 2026-09-26）：对称过不了时，退一步只问"是不是两段反弧"** ——
+        //
+        // 用户原话："**双曲线识别可不可以改为，连续两段反弧线就识别为双曲线？
+        // 因为我手测了一下，双曲线还是很难画出来**。"
+        //
+        // 他的理由站得住：**"中心对称"是拿"理想作图"当门槛**，而老师是**手画**的
+        // （一支大一支小、位置差一截都常见）。所以对称过不了时**不再直接否掉**，
+        // 退一步问一个**只跟形状有关、跟"画得多准"无关**的问题。
+        //
+        // ⚠⚠ **"反弧"必须问对**：第一版写成"两段的拱起方向符号相反"，实测**误报 12%**
+        //（"同一边画两遍"两支的拱向本来就同号 ✗ 判据没抓住）✗。
+        //   正确的问法是"**两段的拱起方向都朝向对方**"—— 因为双曲线的一支，
+        //   **顶点是这一支最靠内的一点**：把它首末连成弦，弧是**朝中心那股**鼓的
+        //（弧口朝外、顶点朝内）。所以两支的拱向必然**互指** ✓✓。
+        //   这样一来，"同一边画两遍"**必然被挡住**：两支拱向同侧 ⇒ 对其中一支来说，
+        //   另一支在它拱向的**背面** ✗（同号的两支，不可能同时"都朝对方拱"）✓。
+        //
+        // ⚠ **这条判据挡不住什么**（所以下面②b、③那两道闸一道都不能少）：
+        //   · "**半个椭圆 ＋ 半个椭圆**"（画一个椭圆分两笔）—— 它们**也是两段反弧** ✗，
+        //     要靠 **②b 端点不能接在一起** 挡住（原来是靠 `TryFitConic` 的判别式，
+        //     换成"直接按双曲线拟合"之后那道闸没了，所以**换了一条**——见 ②b）；
+        //   · 两支大小 / 位置差得太离谱（那已经不是同一个双曲线了）→ 拟合残差那道闸 ✓。
+        var bulgeA = BulgeDir(a);
+        var bulgeB = BulgeDir(b);
+        bool towardEachOther = false;
+        if (bulgeA != Vector2.Zero && bulgeB != Vector2.Zero)
+        {
+            var ca = Centroid(a);
+            var cb = Centroid(b);
+            var ab = cb - ca;
+            if (ab.LengthSquared() > 1e-6f)
+            {
+                var dir = Vector2.Normalize(ab);
+                // 0.2 是"别只靠一点点夹角就认"，不是精细阈值：真正的双曲线两支这一项 ≈1。
+                towardEachOther = Vector2.Dot(bulgeA, dir) > 0.2f
+                               && Vector2.Dot(bulgeB, -dir) > 0.2f;
+            }
+        }
+        if (!symmetric && !towardEachOther)
             return ShapeGuess.None($"两笔不像同一个双曲线的两支（镜像偏差 {dev:F0} > "
-                                   + $"{TwoBranchSymmetryTol * sizeB:F0}；中心 ({o.X:F0},{o.Y:F0})；"
+                                   + $"{TwoBranchSymmetryTol * sizeB:F0}，而且不是两段反弧"
+                                   + $"（拱起方向 A {BulgeWord(bulgeA)}、B {BulgeWord(bulgeB)}，"
+                                   + $"要**互指**才算）；中心 ({o.X:F0},{o.Y:F0})；"
                                    + $"A 框 {BBox(a)}；B 框 {BBox(b)}）");
 
-        // ③ 两笔的点**并起来**直接交给圆锥曲线拟合 ——
-        //    **最小二乘不看点的顺序**，所以"断开"这件事对它没有影响
-        //   （正因为如此才**不能**把它们拼成一串喂给 `RecognizeCore`：那会让 $P 的重采样
-        //     在两个支之间连出一条不存在的线，`ids` 那个参数就是防这个的）。
-        //    并且 `familyKnown: true` —— 跳掉夹角闸（族已经由"画了几笔"定了）。
+        // ②b **两笔的端点不能"接在一起"**（2026-09-26 加，**用手画的 14 对真样本量出来的**）。
+        //
+        //   ⚠ 这一条是**原来那道"判别式"闸的替身**：这一轮把"自由拟合圆锥曲线、看判别式分族"
+        //     换成了"**直接按双曲线拟合**"（理由见 ③），判别式那道闸就没了 ——
+        //     而"**半个椭圆 ＋ 半个椭圆**"（一个椭圆分两笔画）会被新拟合器愉快地当成
+        //     一条很扁的双曲线 ✗✗，**必须换一条判据挡住它**。
+        //
+        //   两者的区别很干净：**半椭圆的两笔端点接在一起**（首尾就是同一个点、间隙 ≈ 0），
+        //   而**双曲线的两支离得很开**（最近的一对点是顶点，端点还要更远）。
+        //   实测：用户 14 对真样本这一项都在 0.3 以上，半椭圆那一档 ≈ 0.00 → 分得开 ✓。
+        float endGap = MathF.Min(MathF.Min(Vector2.Distance(a[0], b[0]), Vector2.Distance(a[0], b[^1])),
+                                 MathF.Min(Vector2.Distance(a[^1], b[0]), Vector2.Distance(a[^1], b[^1])));
+        float sizeAB = MathF.Max(Diag(a), Diag(b));
+        if (endGap < TwoBranchEndGapTol * sizeAB)
+            return ShapeGuess.None($"两笔的端点接在一起（{endGap:F0} < {TwoBranchEndGapTol * sizeAB:F0}）"
+                                   + "—— 像是一条闭合曲线分成两笔画的，不是双曲线的两支");
+
+        // ③ **直接按双曲线拟合**（不再"自由拟合圆锥曲线 ＋ 看判别式"）——
+        //
+        //    ⚠ 这一改是**用户手画的 14 对真样本**逼出来的：14 对里 **8 对**卡在
+        //      「判别式说这是椭圆」✗。原因很实在：老师画的双曲线**常常只画到顶点附近**，
+        //      那两段弧并起来，**自由拟合最省事的那条圆锥曲线就是一条扁椭圆** ✗。
+        //      但按用户定的口径"**画两支就是双曲线**"，族**早在笔数上定了**，
+        //      拟合只负责**定形** —— 所以正确做法是"**就按双曲线拟合、看它贴不贴得住**" ✓。
+        //
+        //    拟合的式子：`u·x̂² − v·ŷ² = 1`（`u = 1/a²`、`v = 1/b²`，`x̂ = x − 中心`）——
+        //    对 `u`、`v` 是**线性**的，正规方程 2×2 有闭式解 ✓。
+        //    朝向（实轴在 x 还是 y）问**拱起方向**：两支拱向互指的那个方向就是实轴方向 ✓。
+        var axisDir = bulgeA != Vector2.Zero && bulgeB != Vector2.Zero
+                    ? bulgeA - bulgeB                      // 两支拱向相反 ⇒ 差向量就是实轴方向
+                    : Centroid(b) - Centroid(a);
+        if (axisDir.LengthSquared() < 1e-6f) axisDir = Vector2.UnitX;
+        bool transverseX = MathF.Abs(axisDir.X) >= MathF.Abs(axisDir.Y);
         var union = new List<Vector2>(a.Count + b.Count);
         union.AddRange(a);
         union.AddRange(b);
-        return TryFitConic(union, scale, familyKnown: true);
+        // ★ **验收容差乘一个倍率**（2026-09-26 加，用户第二次报"双曲线怎么都变不出来"）。
+        //   原来倍率是 1（和单笔同一条容差），而**两笔拼出来的墨迹天生比一笔"散"**：
+        //   两支各自的大小、开口、位置都有出入，并起来喂给一条双曲线，残差必然比单笔大。
+        //   实测（`--inktest` 那张扫描表）：**28 条失败里 27 条**卡的就是"贴不住墨迹"，
+        //   而且**和对称容差一点关系都没有**（对称容差从 0.25 扫到 0.80，识别率一动不动）。
+        float tolScale = symmetric ? TwoBranchAcceptTolScale : TwoBranchLooseTolScale;
+        // 两个朝向都试一遍（万一"拱向"给的朝向和真正的实轴差了 90°），取先成功的那个 ——
+        // **不写死"就用拱向给的那个"**，免得一条判据错两层。
+        var guessX = FitTwoBranchHyperbolaAs(union, o, transverseX, scale, tolScale);
+        if (!guessX.IsNothing) return guessX;
+        return FitTwoBranchHyperbolaAs(union, o, !transverseX, scale, tolScale);
     }
+
+    /// <summary>
+    /// **按给定朝向拟合一条轴对齐双曲线**：`u·x̂² − v·ŷ² = 1`（`u = 1/a²`、`v = 1/b²`），
+    /// 验收集是"**拟合出来的这条双曲线贴不贴得住墨迹**"（最大 Sampson 距离）。
+    ///
+    /// 参数不合法（`u ≤ 0` 或 `v ≤ 0` —— 说明这一族在这个朝向下拟合不出来，比如它其实是椭圆）
+    /// 就返回 `IsNothing`，由调用方换个朝向再试。
+    /// </summary>
+    private static ShapeGuess FitTwoBranchHyperbolaAs(IReadOnlyList<Vector2> src, Vector2 o,
+                                                      bool transverseX, float scale, float tolScale)
+    {
+        // ① **实半轴 `a` = 这堆墨迹离中心最近的距离**（也就是顶点到中心的距离）。
+        //
+        //    ⚠ 为什么把 `a` **先钉住**、而不和 `b` 一起最小二乘（2026-09-26，**用户手画的
+        //      14 对真样本量出来的**）：老师画双曲线**常常只画到顶点附近**，而那些点上
+        //      `ŷ ≈ 0` —— **共轭半轴 `b` 几乎不可辨识** ✗。一起解的话，`b` 连**符号**都被
+        //      噪声带着跑（实测 8/14 报 `u>0、v<0`，判据自己都说不清是双曲线还是椭圆 ✗）。
+        //      而**顶点距离 `a` 是认得出来的**：它就是最近的那一点 ✓（和画多长、画多草无关）。
+        float aAxis = float.MaxValue;
+        foreach (var p in src)
+            aAxis = MathF.Min(aAxis, MathF.Abs(transverseX ? p.X - o.X : p.Y - o.Y));
+        if (aAxis < ConicMinHalfAxis * scale)
+            return ShapeGuess.None($"墨迹离中心太近（{aAxis:F1}）——不像双曲线的顶点");
+
+        // ② **共轭半轴 `b`：从每一点的"弯"里反解，取中位数**（抗离群）。
+        //    反解：`x̂²/a² − ŷ²/b² = 1` ⇒ `b² = ŷ² / (x̂²/a² − 1)`。
+        //
+        //    ⚠ 分母 ≤ 0 的点（落在**顶点以内** = 弧**朝里**弯）**没有 `b²` 可言** ——
+        //      那正是"**它其实是椭圆的头**"的情形（椭圆在顶点附近 `x ≈ a − a·ŷ²/(2b²)`，
+        //      弧朝里弯 ✗）。所以这一条**就是原来那道"判别式"的替身**，但它量的是
+        //      **弧朝哪边弯**（几何上直接可读），比拟合系数的符号稳得多 ✓。
+        //      —— 实测：用户 14 对真样本的弧**全部朝外弯**（弧口朝外、顶点朝内），
+        //         而"半椭圆分两笔"那一档全部落在这一条上 ✓。
+        var b2 = new List<float>();
+        foreach (var p in src)
+        {
+            float x = transverseX ? p.X - o.X : p.Y - o.Y;
+            float y = transverseX ? p.Y - o.Y : p.X - o.X;
+            float denom = x * x / (aAxis * aAxis) - 1f;
+            if (denom > 0.01f) b2.Add(y * y / denom);      // 1% 以上才算"弯得可信"
+        }
+        if (b2.Count < 6 || b2.Count < src.Count / 8)
+            return ShapeGuess.None($"这两笔的弧**朝里弯**（{src.Count - b2.Count}/{src.Count} 个点"
+                                   + "落在顶点以内）—— 像椭圆的头，不是双曲线");
+        b2.Sort();
+        float bAxis = MathF.Sqrt(MathF.Max(b2[b2.Count / 2], 1e-6f));
+        if (bAxis < ConicMinHalfAxis * scale)
+            return ShapeGuess.None($"共轭半轴太小（{bAxis:F1}）——模型会缩成一个点");
+
+        // ③ 验收：**最大 Sampson 距离** `|f| / |∇f|`（比代数残差稳，§43.4.6 那条）
+        double u = 1.0 / ((double)aAxis * aAxis), v = 1.0 / ((double)bAxis * bAxis);
+        float worst = 0f;
+        foreach (var p in src)
+        {
+            double dx = p.X - o.X, dy = p.Y - o.Y;
+            double X = transverseX ? dx * dx : dy * dy;
+            double Y = transverseX ? dy * dy : dx * dx;
+            double f = u * X - v * Y - 1.0;
+            double gx = transverseX ? 2 * u * dx : -2 * v * dx;
+            double gy = transverseX ? -2 * v * dy : 2 * u * dy;
+            float g = MathF.Sqrt((float)(gx * gx + gy * gy));
+            float d = g > 1e-6f ? (float)Math.Abs(f) / g : float.MaxValue;
+            worst = MathF.Max(worst, d);
+        }
+        float tol = FitTol(scale, src) * tolScale;
+        if (worst > tol)
+            return ShapeGuess.None($"按双曲线拟合了，还是贴不住墨迹（最远 {worst:F0} > 容差 {tol:F0}）");
+
+        // ④ 组装定义元素（口径和原来完全一样：中心 ＋ 渐近线框上的点 ＋ 曲线上的点）
+        float reach = 0f;
+        foreach (var p in src)
+            reach = MathF.Max(reach, MathF.Abs(transverseX ? p.X - o.X : p.Y - o.Y));
+        float tEnd = MathF.Acosh(MathF.Max(1f, reach / MathF.Max(aAxis, 1e-3f)));
+        var axis = transverseX ? CurveAxis.TransverseX : CurveAxis.TransverseY;
+        var q = Stroke.HyperbolaPoint(o, aAxis, bAxis, axis, 1, tEnd);
+        var box = new Vector2(aAxis, bAxis) * MathF.Cosh(tEnd);   // 渐近线框放大一档（照旧）
+        return ShapeGuess.HitAxis(StrokeKind.Hyperbola, 0.85f,
+            $"双曲线·两支（{(transverseX ? "左右" : "上下")}开口，实半轴 {aAxis:F0}、共轭 {bAxis:F0}，"
+            + $"贴住墨迹：最远差 {worst:F0} ≤ 容差 {tol:F0}）",
+            axis, o, o + box, q);
+    }
+
+    /// <summary>
+    /// **这一笔朝哪边"拱"**：返回**拱起方向的单位向量**（弦的法向）；太直了看不出拱向 → `Zero`。
+    ///
+    /// 做法：取**首末点连成的弦**，把弦**规范化**（保证 `dx > 0`；`dx ≈ 0` 时保证 `dy > 0`），
+    /// 再算**中段那些点**在弦的哪一侧 —— 叉积的**平均符号**决定方向，法向就是那个方向。
+    ///
+    /// ⚠ **必须先规范化弦的方向**：叉积符号会随"**从哪一头画起**"整体翻转，
+    ///   而用户画第二支时从上往下还是从下往上**本来就是随机的** ——
+    ///   不规范化的话"拱向"会时对时错（和上一轮"镜像要试两个顺序"是同一个坑）。
+    ///
+    /// ⚠ 判"太直"的阈值取 **2% 弦长**（中段平均偏离）：手抖是 ±0.8px 量级，
+    ///   而一段真正的弧，中段偏离弦是**弦长的百分之几到几十**，两者量级差得开。
+    /// </summary>
+    private static Vector2 BulgeDir(IReadOnlyList<Vector2> pts)
+    {
+        int n = pts.Count;
+        if (n < 5) return Vector2.Zero;
+        var p0 = pts[0];
+        var p1 = pts[n - 1];
+        var chord = p1 - p0;
+        if (chord.LengthSquared() < 1e-6f) return Vector2.Zero;
+        // 规范化：让弦指向"右 / 下"（dx>0，或 dx≈0 时 dy>0）
+        if (chord.X < 0f || (MathF.Abs(chord.X) < 1e-3f * MathF.Abs(chord.Y) && chord.Y < 0f))
+        {
+            (p0, p1) = (p1, p0);
+            chord = -chord;
+        }
+        float sum = 0f;
+        int cnt = 0;
+        for (int i = n / 4; i <= n * 3 / 4; i++)          // 中段：避开两端的手抖和收笔
+        {
+            var d = pts[i] - p0;
+            sum += chord.X * d.Y - chord.Y * d.X;          // 叉积（>0 = 在弦的"正法向"那一侧）
+            cnt++;
+        }
+        if (cnt == 0) return Vector2.Zero;
+        float mean = sum / cnt;
+        if (MathF.Abs(mean) < 0.02f * chord.LengthSquared()) return Vector2.Zero;
+        var normal = new Vector2(-chord.Y, chord.X);       // `cross(chord, normal) = |chord|² > 0`
+        var dir = Vector2.Normalize(normal);
+        return mean > 0f ? dir : -dir;
+    }
+
+    /// <summary>一串点的**重心**（判"拱起方向是不是朝向对方"用）。</summary>
+    private static Vector2 Centroid(IReadOnlyList<Vector2> pts)
+    {
+        var s = Vector2.Zero;
+        foreach (var p in pts) s += p;
+        return pts.Count > 0 ? s / pts.Count : Vector2.Zero;
+    }
+
+    /// <summary>拱起方向写成给人看的话（判据字符串里用）。</summary>
+    private static string BulgeWord(Vector2 dir)
+        => dir == Vector2.Zero ? "没拱（太直）" : $"({dir.X:F2},{dir.Y:F2})";
+
+    /// <summary>`BulgeDir` / `Centroid` 的**自检与离线分析入口**（`--inkfile` 要按同一条口径
+    /// 量用户手画的样本，所以判据只留上面那一份，这里只开个口子）。</summary>
+    internal static Vector2 BulgeDirForTest(IReadOnlyList<Vector2> pts) => BulgeDir(pts);
+
+    /// <inheritdoc cref="BulgeDirForTest"/>
+    internal static Vector2 CentroidForTest(IReadOnlyList<Vector2> pts) => Centroid(pts);
+
+    /// <summary>
+    /// **只靠"反弧"认下时，验收容差的倍率**（比 <see cref="TwoBranchAcceptTolScale"/> 松得多）。
+    ///
+    /// 依据是用户 2026-09-25 自己定的那条口径：
+    /// "**只要用户有这个意向，且匹配度超过一定百分比，我们就把它拟合出来。
+    ///   不需要拟合得有多准确，只要能识别对即可。**"
+    /// —— 画两段反弧就是"有这个意向"，此时该由模型给出一条**规整的双曲线**，
+    /// 而不是拿"贴得多紧"去把人挡在门外。
+    ///
+    /// ⚠ 松的是**残差**，**判别式（异号才算双曲线）和中心对称那道闸的替代品（反弧）都不松** ——
+    ///   所以"半个椭圆 + 半个椭圆"变不成双曲线。
+    /// ⚠ 取值 **扫出来**（`--inktest` 那张扫描表）。
+    /// </summary>
+    internal static float TwoBranchLooseTolScale = 8f;
+
+    /// <summary>
+    /// **两笔合成时，验收容差的倍率**（默认 1 = 和单笔同一条）。
+    ///
+    /// ⚠ 和 <see cref="TwoBranchSymmetryTol"/> 一样是 **static 字段**，只为让
+    /// `--inktest` 那张扫描表把它**扫一遍**（倍率 ↑ → 正例识别率 ↑，但要同时看
+    /// "同一边画两遍 / 中心离很远"两类误报有没有抬头）—— **松到多少必须量出来**。
+    /// 除自检外没有第二处写它。
+    /// </summary>
+    internal static float TwoBranchAcceptTolScale = 3f;
+
+    /// <summary>
+    /// **两笔的端点"接在一起"的判定**（占尺度的比例，小于它就否掉）：见 `TryTwoBranchHyperbola`
+    /// 的 ②b —— 它是**"判别式"那道闸的替身**，专门挡"**一个椭圆分成两笔**"（两笔共用端点）。
+    ///
+    /// 实测：用户手画的 14 对真样本，这一项**都在 0.3 以上**；"半椭圆分两笔"那一档 ≈ 0.00
+    /// —— 取 **0.10** 落在中间，两边都留足余量（`--inktest` 那张表盯着两边的误报）。
+    /// </summary>
+    internal static float TwoBranchEndGapTol = 0.10f;
+
+    /// <summary>
+    /// **两支的尺寸比下限**（小/大，小于它就否掉）：见 `TryTwoBranchHyperbola` 的 ①b。
+    ///
+    /// ⚠ 这一条是 `--dwelltest` 的「直线拖端点：转向 + 吸水平」**当场抓出来的真误配**：
+    ///   上一个用例留下一个"太小不转换"的小圆（r=15，直径 30），接着画的直线长 300
+    ///   —— 这两个**被配成了一对双曲线**（尺寸比 0.14），于是那支直线变成了双曲线的一支、
+    ///   拖端点当然就不对了。
+    ///
+    /// 为什么"对称"那道闸拦不住它：对称校验的容差是 `TwoBranchSymmetryTol × 大支的对角线`，
+    ///   而偏差是"**查询点 → 参考折线**"的最大距离。**小支当查询**时，它那几十个点全落在
+    ///   大支附近（那个小圆镜像后正好落在大支的端点上，偏差只有 15）→ 15 ≤ 0.25×300 = 75
+    ///   → 判"对称" ✓。**这条洞是系统性的**：查询越小，越容易"贴住"，所以必须**另外**卡尺寸。
+    ///
+    /// 实测分得很开：用户手画的 **14 对真样本，尺寸比全在 0.83~0.99**（双曲线的两支本来就
+    ///   全等，画得像的人自然是 1:1）；这次误配那对是 **0.14**。取 **0.45**（≈2.2 倍）
+    ///   落在中间，两边都留足余量。
+    /// </summary>
+    internal static float TwoBranchSizeRatioMin = 0.45f;
 
     /// <summary>一串点的**包围盒对角线**（当这一笔的"尺度"用）。</summary>
     private static float Diag(IReadOnlyList<Vector2> p)
@@ -673,6 +1037,15 @@ internal static class ShapeRecognize
         if (!para.IsNothing) return para;
         reasons.Add("二次函数:" + para.Rule);
 
+        // ②.7 **正弦 / 余弦** —— 计划 §43.4.4（三）。**排最后**，两个理由：
+        //   · 它是这一族里**参数最多**的一个（4 个：偏移 / 两个系数 / 频率），
+        //     而"多一个参数必须换来成倍的改善"那条规矩要求它**排在更少承诺的候选之后**
+        //     （抛物线只有 3 个参数，前面刚试过、没贴住才会走到这里）；
+        //   · 它是**唯一要搜频率**的一族 —— 最贵，也该最后做（计划 §43.4.8 那张顺序表）。
+        var wave = TryFitWave(pts, scale);
+        if (!wave.IsNothing) return wave;
+        reasons.Add("正余弦:" + wave.Rule);
+
         // ③ 所有候选都贴不住 → **什么都不认**（宁可不变，也不能变出一个对不上的）。
         return ShapeGuess.None(string.Join("；", reasons));
     }
@@ -702,10 +1075,26 @@ internal static class ShapeRecognize
                 // （官方 `Scale`：除以 max(宽, 高)），缺口那一侧框小了，圈就被拉扁成椭圆的样子。
                 // 这和 §42.6.1 里那个病根同源，只不过那一关已经在拟合里治好了：
                 // 椭圆拟合给出的是**真的轴比**，轴比接近 1 就说明它是圈。
+                //
+                // ★★ **2026-09-26：不再"另跑一次圆拟合"**（用户报"圆老是识别不出来"）。
+                //   原来这一支是 `TryCircle(p, scale)`，失败就退回椭圆 —— 而**真手画的圆**
+                //   （径向被压 3~8%）**圆拟合经常过不了**（残差闸 9% ＋ 手抖 ＋ 缺口把圆心推偏），
+                //   于是退回椭圆 ✗。实测：40 条手画圆里 **19 条**就是这么变成椭圆的
+                //   （`--inktest` 里"圆·手画"那一族，52.5%）。
+                //   现在改成**直接用椭圆拟合自己的结果造一个圆**：轴比 <
+                //   `EllipseAxisRatioMin`（1.20）本来就等价于"离圆最远 ~9%"
+                //   —— 那正是 `CircleResidualRatio` 那个量级，**两条闸在这里是同一件事**，
+                //   再卡一次只是把已经认下的东西退回去。
+                //   ⚠ 覆盖度（`MinArcCoverageDeg`）不用再查：`TryEllipse` 刚刚查过同一条。
                 if (EllipseAxisRatioOf(el) < EllipseAxisRatioMin)
                 {
-                    var c = TryCircle(p, scale);
-                    if (!c.IsNothing) return c;
+                    float ra = MathF.Abs(el.Def[1].X - el.Def[0].X);
+                    float rb = MathF.Abs(el.Def[1].Y - el.Def[0].Y);
+                    float rr = (ra + rb) * 0.5f;                       // 长短轴的均值当半径
+                    var cc = el.Def[0];
+                    return ShapeGuess.Hit(StrokeKind.Circle, el.Score,
+                                          $"圆（轴比 {EllipseAxisRatioOf(el):F2} 够圆，"
+                                          + $"由椭圆拟合定半径 {rr:F0}）", cc, cc + new Vector2(rr, 0f));
                 }
                 return el;
             }
@@ -901,8 +1290,9 @@ internal static class ShapeRecognize
         var quad = RectQuad(ca, cb, boxTilted ? -boxTilt : 0f, boxCenter);
         if (!InkNearBoxLines(src, quad, tol, out float dR))
             return ShapeGuess.None($"矩形框贴不住（最远 {dR:F0} > 容差 {tol:F0}）");
-        if (!InkCoversEveryEdge(src, quad, tol))
-            return ShapeGuess.None("矩形框有一条边没画（不凭空补一整条边）");
+        if (!InkCoversEveryEdge(src, quad, tol, out float coverR))
+            return ShapeGuess.None($"矩形框有一条边没画：最差那条边只盖住 {coverR * 100f:F0}%"
+                                   + "（要 ≥60%；收笔差一截 或 框对歪了，都落在这条上）");
 
         string rule = boxTilted
             ? $"矩形 {bw:F0}×{bh:F0}，姿态 {-boxTilt:F0}°（最远差 {dR:F0}）"
@@ -924,8 +1314,8 @@ internal static class ShapeRecognize
         float tol = FitTol(scale, src);
         if (!InkNearOutline(src, tri, tol, out float d))
             return ShapeGuess.None($"三条边贴不住墨迹（最远 {d:F0} > 容差 {tol:F0}）");
-        if (!InkCoversEveryEdge(src, tri, tol))
-            return ShapeGuess.None("有一条边没画（不凭空补一整条边）");
+        if (!InkCoversEveryEdge(src, tri, tol, out float coverT))
+            return ShapeGuess.None($"三角形有一条边没画：最差那条边只盖住 {coverT * 100f:F0}%");
         return ShapeGuess.Hit(StrokeKind.Triangle, 0.9f, $"三角形（最远差 {d:F0}）", tri[0], tri[1], tri[2]);
     }
 
@@ -941,8 +1331,8 @@ internal static class ShapeRecognize
         var paraQuad = new[] { quad[0], quad[1], quad[1] + quad[3] - quad[0], quad[3] };
         if (!InkNearOutline(src, paraQuad, tol, out float d))
             return ShapeGuess.None($"四条边贴不住墨迹（最远 {d:F0} > 容差 {tol:F0}）");
-        if (!InkCoversEveryEdge(src, paraQuad, tol))
-            return ShapeGuess.None("有一条边没画（不凭空补一整条边）");
+        if (!InkCoversEveryEdge(src, paraQuad, tol, out float coverP))
+            return ShapeGuess.None($"平行四边形有一条边没画：最差那条边只盖住 {coverP * 100f:F0}%");
         return ShapeGuess.Hit(StrokeKind.Parallelogram, 0.9f, $"平行四边形（最远差 {d:F0}）",
                               quad[0], quad[1], quad[3]);
     }
@@ -992,6 +1382,74 @@ internal static class ShapeRecognize
 
     /// <summary>双曲线的半轴下限（逻辑像素）：太小的话模型会缩成一个点。</summary>
     private const float ConicMinHalfAxis = 6f;
+
+    // =====================================================================
+    //  正弦 / 余弦（计划-图形工具.md §43.4.4 三）
+    // =====================================================================
+
+    /// <summary>**周期数的搜索区间**：`k = f·L`（`L` = 墨迹横向跨度、`f` = 频率）。
+    ///
+    /// ★ **2026-09-26 放宽成 [0.85, 12]**（原来只到 1.20）：多周期那条路（写回**波浪线**）
+    /// 打开了，所以搜索要能覆盖"好几个周期"。
+    ///
+    /// **为什么放宽不怕倍频错误**（当初把"多周期正弦"列进"不做"就是怕它）：
+    ///   ① 验收那一关是"**对象会画的那条曲线贴不贴得住墨迹**" —— 倍频解（钻到 2f、3f）
+    ///      在**多周期**墨迹上残差极大（模型只有一个"周期数"参数，套不上别的周期数）；
+    ///   ② 更根本的：**多周期数据本身让频率良态**（病态的是"不到一个周期"那一头，
+    ///      见 `WaveMinCycles`）。当初的担心来自短弧，不是长弧。
+    ///   ③ 粗网格步长（≈ 0.07 个周期）**细于周期图主瓣宽度**（≈ 1 个周期），
+    ///      细化窗口又只有 ±1 步 —— 所以细化**不可能跳到隔壁那个瓣上去**。
+    /// 区间取得比验收门槛宽：**拟合要能找到真频率**，才轮得到"该不该认"那两道闸去判。</summary>
+    private const float WaveCyclesSearchMin = 0.85f;
+    private const float WaveCyclesSearchMax = 12f;
+
+    /// <summary>
+    /// **至少要"将近一个周期"才认**（用户 2026-09-26 定："我打算正弦余弦**最起码一个周期
+    /// 起步**才能识别"）。
+    ///
+    /// 取 **0.90** 而不是 1.00：老师"画一个周期"时**收笔早一点**很常见，而那**不丢信息**
+    /// —— 模型那一个周期本来就会比墨迹**长出去一点**（长出去没关系，见 `TryFitWave` 的注释）。
+    /// 卡死 1.00 的手感是"我明明画了一个周期它不认"。
+    ///
+    /// ⚠ **试过放宽到 0.75，量出代价后放回来了**（2026-09-26 第二次，用户："正余弦波浪线
+    ///   也把它放松一点，因为这种图形一般比较少画"——他说得有理，但实测不行）：
+    ///   0.75 时 **单支双曲线有 11/40 被认成 Cosine** ✗（而且那一档原来误报是 **0**）。
+    ///   原因很直白：**这一族参数最多（频率 / 相位 / 振幅 / 中线），是最"全能"的模型** ——
+    ///   门槛一低，它就会去覆盖别的族的笔画（一支双曲线看着就像一段余弦）。
+    ///   一句话：**"出现得少"不等于"可以松"**，因为松的是**判据**，被抢的是**别的族**。
+    ///   它自己的识别率本来就 95~100%，没有量出卡的地方。
+    ///
+    /// ⚠ 这一条为什么不能没有：只画半截的墨迹本身确实**躺在**某个完整正弦的曲线上，
+    ///   没有门槛的话"半个拱"会被认出来、然后被补成整个周期 —— 那不是用户要的。</summary>
+    private const float WaveMinCycles = 0.90f;
+
+    /// <summary>频率搜索的网格与细化：三段（粗扫 → 细化 → 再细化）。
+    /// 分辨率 = 区间宽 ÷ (160×32×32)，远远够用（验收那一关是"曲线贴不贴得住墨迹"，
+    /// 周期差一点点都会顶出来，所以频率必须搜准）。
+    /// 粗扫 **160 步**是为了让步长（≈0.07 个周期）细于周期图主瓣（≈1 个周期）—— 见
+    /// <see cref="WaveCyclesSearchMax"/> 那条注释第 ③ 点。</summary>
+    private const int WaveFreqSteps = 160;
+    private const int WaveFreqRefine = 32;
+    private const int WaveFreqPasses = 3;
+
+    /// <summary>
+    /// **明显多个周期才算波浪线**（周期数下限）。
+    ///
+    /// 分流口径（和 `FitByLabel` 里"四边形族里**矩形优先**"同一条规矩：**更具体的先认**）：
+    ///   · 约一个周期 → **正弦 / 余弦**（课本上那一格，就是用户要的那个对象）——
+    ///     它**先试**，贴得住就是它；
+    ///   · 贴不住（起笔相位偏了 / 画出了一个多周期）→ 让**波浪线**接（它的长度是自由的，
+    ///     能把"起点挪到零点"那一点偏移补回来，所以宽容得多）；
+    ///   · 但波浪线只在**k ≥ 1.25** 时才接：把"只有 1.1 个周期"的墨迹塞进波浪线，
+    ///     会得到一个"既不像课本的正弦、也不是多周期波"的对象 —— 那一档**不认**，
+    ///     墨迹原样留着（用户 2026-09-26 定的"不改模型、表达不了就用判据挡"）。
+    /// </summary>
+    private const float WaveMultiMinCycles = 1.25f;
+
+    /// <summary>**单值检验**允许的回退比例（相对横向跨度）：模型**横向一律往右画**
+    /// （见 `Model.WavePointAt` 的注释），所以这一笔在 x 上来回走就不是它的函数图象。
+    /// 5% 是给"手抖 + 收笔过冲"留的量。</summary>
+    private const float WaveMonoSlack = 0.05f;
 
     /// <summary>
     /// **二次函数（四种开口）**。规格见 计划-图形工具.md §43.4.4（一）。
@@ -1139,175 +1597,316 @@ internal static class ShapeRecognize
     }
 
     /// <summary>
-    /// **一般轴对齐圆锥曲线 → 用判别式分流**（§43.4.11）。现在只用它认**双曲线**。
+    /// **正弦 / 余弦**（计划-图形工具.md §43.4.4 三）。
     ///
-    /// 拟合 `a·x² + c·y² + d·x + e·y = 1`（**4 参数、线性、闭式解**），再用**判别式**分类 ——
-    /// 圆锥曲线一般式 `A·x² + Bxy + Cy² + Dx + Ey + F = 0` 的分类判据是 `Δ = B² − 4AC`
-    /// （**高中/大学都教的标准方法**）。我们只拟合**轴对齐**的（`B = 0`），于是
-    /// **`Δ = −4·a·c`**：`a·c < 0` 双曲线、`a·c > 0` 椭圆、`a·c = 0` 抛物线。
-    /// 所以"要不要第二个二次项"就是这三族的分界，**一个拟合器顺着参数个数往上加**即可。
+    /// ## 公式从哪来（照搬，不是自己推的）
     ///
-    /// 三条必须的（前两条是实测/调研踩出来的）：
-    ///   ① **必须拟合 4 参数一般式，不能拟合 `A·u² + B·v² = 1`** —— 那种写法要求中心已知，
-    ///      而**单支墨迹的包围盒中心根本不是双曲线的中心**（只画一支正好是课上最常见的画法）。
-    ///      4 参数版才能把中心从数据里解出来。
-    ///   ② **"是不是双曲线"不能只看判别式的符号，还要看它有没有说服力**：
-    ///      短弧上 `a`、`c` 几乎不可辨识 → 判别式的**符号是噪声**。所以多一道
-    ///      "**加第二个二次项，残差改善显著吗**"的闸；不显著就让它退回抛物线
-    ///      （最不承诺的解读，和"90° 圆弧认抛物线"同一条口径）。
-    ///      这正是用户上手后的观察 —— "**双曲线只有开口很大时才认得出来**"。
-    ///   ③ 残差用 **Sampson 距离** `|f| / |∇f|`（§43.4.6 坑 2），不用代数距离：
-    ///      代数距离在远端被 `x²` 放大，拟合会被远处的点带跑。
+    /// 固定频率的三系数**谐波回归**：`y = β₀ + β₁·cos(2πfx) + β₂·sin(2πfx)`。
+    /// **固定 `f` 时它对 β 是线性的**（正规方程 3×3 闭式解），所以只需要在 `f` 上做
+    /// **一维搜索** —— 这就是"变量投影 / 浓缩代价函数"那一套（Handel 在 IEEE T-IM 2000
+    /// 上比过：**数据只盖住一个周期的一小部分时，一维浓缩搜索比 IEEE-1057 那套四参数迭代更稳**），
+    /// 也是统计课上的标准课件做法（Berkeley Stat 153：对 `f` 建网格、每个 `f` 做一次 OLS、
+    /// 取 RSS 最小的那个）。振幅 `A = √(β₁²+β₂²)`、相位由 `atan2` 给。
+    /// **不需要 Levenberg–Marquardt。**
+    ///
+    /// ## 为什么"至少要一个周期"是**技术上的必要条件**（不只是用户的手感要求）
+    ///
+    /// 少于一个周期时，`cos` 和 `sin` 两列在采样点上**近似共线** → 正规方程病态，
+    /// `A`、相位全是噪声（这正是上面那篇论文说的"只盖住一小部分周期"那一档）。
+    /// 计划 §43.4.4（三）当初也写着"至少覆盖一个完整峰谷"。
+    ///
+    /// ## 验收：**先把对象会画的那条曲线建出来，再量墨迹贴不贴得住它**
+    ///
+    /// 这是本仓库的验收规矩（"自己不能给自己打分"+"宁可不变，也不能变出一条对不上的"）。
+    /// 模型曲线**直接调对象自己那条算式**（`Stroke.WaveYAt`，和渲染 / 轮廓折线同一份），
+    /// 采成折线之后用 `CurveFit.MaxDeviationToPolyline` 量 —— 于是"识别出来的正弦"
+    /// 和"用图形工具拖出来的正弦"**同一条几何**（§42.9 第 3 条：不许再抄一份几何）。
+    ///
+    /// 这一条尺子顺手把三件事一起管了（所以**不需要**另写判据）：
+    ///   · **形状 + 周期 + 振幅**对不对；
+    ///   · **起点相位**：模型的正弦起点**只能落在零点上**、余弦只能落在**极值点**上
+    ///     （见 `Model.WaveYAt`）—— 老师从任意相位起笔时，模型必须在这些点上落笔，
+    ///     "落错相位"的代价会**当场变成墨迹贴不住曲线**；
+    ///   · **"多画出去的那一截"**：模型只有**一个周期**，墨迹要是画了一个半周期，
+    ///     多出来的那半截必然离曲线很远 → 直接不认（用户 2026-09-26 拍板：**不改模型**，
+    ///     遇到模型表达不了的画法就用判据挡，保持手绘）。
+    ///
+    /// ## 写回
+    ///
+    /// `Def = [起点, 终点]`，口径和图形工具那两格**完全一样**（见 `Model.SetWaveBox`）：
+    /// 终点 = `(起点.x + 周期, 起点.y + dy)`，`|dy|` = 正弦的振幅（余弦是 2 倍，因为
+    /// `(1−cos)/2` 的峰谷差是 2A），`dy` 的符号 = "先往上还是先往下"。
+    /// 直线 / 抛物线用的"姿态角""曲线朝向"这两位**正余弦都不需要**（它没有旋转、没有开口方向）。
     /// </summary>
-    private static ShapeGuess TryFitConic(IReadOnlyList<Vector2> src, float scale,
-                                          bool familyKnown = false)
+    private static ShapeGuess TryFitWave(IReadOnlyList<Vector2> src, float scale)
     {
         int n = src.Count;
-        if (n < 8) return ShapeGuess.None("点太少");
+        if (n < 8) return ShapeGuess.None("正余弦：点太少");
+
+        // ── 单值检验（§43.4.3 第 1 步）+ "横向一律往右画"那条模型语义 ──────────
+        float xMin = float.MaxValue, xMax = float.MinValue;
+        foreach (var q in src) { xMin = MathF.Min(xMin, q.X); xMax = MathF.Max(xMax, q.X); }
+        float L = xMax - xMin;
+        if (L < 1e-3f) return ShapeGuess.None("正余弦：横向没有跨度");
+        float run = src[0].X, back = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            run = MathF.Max(run, src[i].X);
+            back = MathF.Max(back, run - src[i].X);
+        }
+        if (back > WaveMonoSlack * L)
+            return ShapeGuess.None($"正余弦：这一笔在横向来回走（回退 {back:F0}）——不是函数图象");
+
         float tol = FitTol(scale, src);
 
-        // 归一化：先中心化、再用"离中心最远的距离"当尺度（和 `TryFitPoly` 同一个思路）。
-        // ⚠ 不归一化的话正规方程里 `x⁴` 到 10¹³，解出来全是数值噪声（§43.4.6 坑 1）。
-        double mx = 0, my = 0;
-        foreach (var p in src) { mx += p.X; my += p.Y; }
-        mx /= n; my /= n;
-        double sc = 0;
-        foreach (var p in src) sc = Math.Max(sc, Math.Max(Math.Abs(p.X - mx), Math.Abs(p.Y - my)));
-        if (sc < 1e-6) return ShapeGuess.None("没有跨度");
-
-        // 4 参数（两个二次项都要）
-        if (!FitConicNorm(src, mx, my, sc, true, true,
-                          out double a, out double c, out double dd, out double ee, out double worstFull))
-            return ShapeGuess.None("方程奇异");
-        if (Math.Abs(a) < 1e-12 || Math.Abs(c) < 1e-12)
-            return ShapeGuess.None($"有一项退化成零（a={a:E1}、c={c:E1}）");
-
-        // ★ 门槛 ①（**用户 2026-09-25 定的约定**）：用"**两端切线的夹角**"分族。
-        //
-        // ⚠ 这里以前是"两个模型比残差、看第二个二次项有没有说服力"——**换掉了**。
-        //   理由（实测）：残差是**逐点比**的，真实手抖下噪声直接进分子，比值被噪声主导，
-        //   双曲线只剩 40%。夹角是**窗口里几十个点的方向**，噪声被平均掉，稳得多。
-        //   量出来的两族分布见 <see cref="ConicAngleThresholdDeg"/>。
-        float endAngle = EndTangentAngleDeg(src);
-        // ⚠ **两笔合成那条路要跳过这道闸**（`familyKnown`）：族已经由"**画了几笔**"定了，
-        //   而"两笔并起来"的夹角是没有意义的（它们本来就断开）。见 `TryTwoBranchHyperbola`。
-        if (!familyKnown && endAngle < ConicAngleThresholdDeg)
-            return ShapeGuess.None($"两端切线夹角 {endAngle:F0}° < {ConicAngleThresholdDeg:F0}°"
-                                   + "（末端攒住了）→ 判抛物线");
-
-        // ★ 门槛 ②：判别式分流 —— 异号才是双曲线
-        if (a * c > 0)
-            return ShapeGuess.None($"判别式说这是椭圆（a·c = {a * c:E2} > 0）");
-
-        // ★ 门槛 ③：几何残差（归一化坐标 → 画布单位）
-        float worst = (float)(worstFull * sc);
-        if (worst > tol)
-            return ShapeGuess.None($"曲线贴不住墨迹（最远 {worst:F0} > 容差 {tol:F0}）");
-
-        // 中心（归一化坐标）：h = −d/(2a)、k = −e/(2c)；平移到中心后 a·u² + c·v² = R
-        double h = -dd / (2 * a), k = -ee / (2 * c);
-        double R = 1 - a * h * h - c * k * k;
-        if (R <= 1e-12) return ShapeGuess.None($"常数项不是正的（R = {R:E2}）");
-        double aq = a / R, cq = c / R;      // 形状：aq·u² + cq·v² = 1（aq·cq < 0 = 双曲线）
-
-        // 半宽半高（**x / y 方向的**，和 `Stroke.HyperbolaPoint` 的口径一致）：
-        // 两种朝向下都是 `1/√|系数|` —— 实轴在"系数为正"的那一维（见 43.4.11 第 6 条）。
-        double halfX = 1.0 / Math.Sqrt(Math.Abs(aq));
-        double halfY = 1.0 / Math.Sqrt(Math.Abs(cq));
-        float hx = (float)(halfX * sc), hy = (float)(halfY * sc);
-        if (hx < ConicMinHalfAxis * scale || hy < ConicMinHalfAxis * scale)
-            return ShapeGuess.None($"半轴太小（{hx:F1} × {hy:F1}）——模型会缩成一个点");
-
-        bool transverseX = aq > 0;          // 实轴在 x 方向 ⇔ x² 的系数为正
-        var axis = transverseX ? CurveAxis.TransverseX : CurveAxis.TransverseY;
-        var o = new Vector2((float)(mx + h * sc), (float)(my + k * sc));
-
-        // 经过点：取曲线上"离中心最远的那个墨迹点所在处"——
-        //   `SetHyperbolaThroughPoint` 会**从它反解曲线自己的实半轴**，所以这个点必须落在
-        //   我们拟合出来的这条曲线上（下面用 `HyperbolaPoint` 算，不用墨迹里的点）。
-        float reach = 0f, sumS = 0f;
-        foreach (var p in src)
+        // ── 频率搜索：横坐标写成"周期数 k = f·L"，在窄带里三段细化 ──────────────
+        double kLo = WaveCyclesSearchMin, kHi = WaveCyclesSearchMax, step = 0, kBest = 0;
+        double bestSq = double.MaxValue;
+        for (int pass = 0; pass < WaveFreqPasses; pass++)
         {
-            float du = p.X - o.X, dv = p.Y - o.Y;
-            float s = transverseX ? du : dv;         // 实轴方向的偏移
-            reach = MathF.Max(reach, MathF.Abs(s));
-            sumS += s;
+            int steps = pass == 0 ? WaveFreqSteps : WaveFreqRefine;
+            step = (kHi - kLo) / steps;
+            for (int i = 0; i <= steps; i++)
+            {
+                double k = kLo + step * i;
+                if (!TryHarmonic(src, k / L, out _, out double sq, out _)) continue;
+                if (sq < bestSq) { bestSq = sq; kBest = k; }
+            }
+            if (bestSq == double.MaxValue) return ShapeGuess.None("正余弦：拟合退化（方程奇异）");
+            kLo = kBest - step; kHi = kBest + step;      // 下一轮在这个小区间里细化
         }
-        int branch = sumS >= 0f ? 0 : 1;             // 墨迹画在哪一支
-        float aAxis = transverseX ? hx : hy;
-        float tEnd = MathF.Acosh(MathF.Max(1f, reach / MathF.Max(aAxis, 1e-3f)));
-        var q = Stroke.HyperbolaPoint(o, hx, hy, axis, branch, tEnd);
 
-        // ★ **渐近线框等比放大一档**：让那两条虚线铺到**和支线一样远**。
-        //
-        //   用户 2026-09-25 上手反馈（并给了对照图）："**渐近线看起来明显太短了，
-        //   长度要和双曲线匹配**"——不是斜率问题，是长度问题。对象那边渐近线只画到
-        //   框角点 `±(A, B)`（见 `HyperbolaAsymptoteLocal`），而我原来传的框就是
-        //   拟合出的半轴 `(hx, hy)`，那是**顶点附近**的量级，自然短。
-        //
-        //   **等比放大 ⇒ 斜率一个数都不变**（渐近线斜率 = `B/A`），只是把虚线拉长；
-        //   而**曲线本身完全不受影响** —— 它的大小是由"经过点"反解的
-        //   （`HyperbolaCurveALocal`），和框的大小无关。这正是"曲线另有大小"
-        //   那个设计的用处。
-        //   放大 `cosh(tEnd)` 倍正好让框的实轴方向半宽 = 支线实际铺到的距离。
-        float spread = MathF.Cosh(tEnd);
-        var box = new Vector2(hx * spread, hy * spread);
+        double f = kBest / L, T = L / kBest;
+        if (!TryHarmonic(src, f, out var beta, out _, out double maxResid))
+            return ShapeGuess.None("正余弦：拟合退化（方程奇异）");
 
-        // 置信度：夹角离阈值越远越自信（原来的 `gain` 已经随判据一起换掉了）
-        float score = 0.7f + 0.25f * MathF.Min(1f, (endAngle - ConicAngleThresholdDeg) / 35f);
-        string orient = transverseX ? "左右" : "上下";
-        return ShapeGuess.HitAxis(StrokeKind.Hyperbola, score,
-            $"双曲线（{orient}开口，实半轴 {aAxis:F0}、共轭 {MathF.Min(hx, hy):F0}，"
-            + $"最远差 {worst:F0}，两端夹角 {endAngle:F0}°）",
-            axis, o, o + box, q);
+        double amp = Math.Sqrt(beta[1] * beta[1] + beta[2] * beta[2]);
+        if (amp < 1e-3) return ShapeGuess.None("正余弦：振幅退化成零");
+        float c0 = (float)beta[0];
+
+        // `y = c0 + A·sin(2πf·x + ψ)`，其中 `β₁ = A·sinψ`、`β₂ = A·cosψ`
+        // → 相位零点（`y = c0` 且斜率大于零的那个）在 `xZero`，其后每隔 `T` 一个。
+        double xZero = -Math.Atan2(beta[1], beta[2]) / Math.Tau / f;
+
+        // ── 六族"落笔方式"，每种再按周期平移找最贴的一个 ──────────────────────
+        //
+        // 模型那两条算式（`Model.WaveYAt`）决定了起点**只能**在下面这些点上：
+        //   · 正弦 / **波浪线**：`y = c0` 的**零点**上（斜率朝下的那个 dy<0、朝上的 dy>0）；
+        //   · 余弦：**极值点**上（从"屏幕上那个峰"起 dy>0、从"谷"起 dy<0）。
+        // 于是六族 = 正弦·升 / 正弦·降 / 余弦·峰起 / 余弦·谷起 / 波浪线·升 / 波浪线·降。
+        //
+        // **波浪线那两族的长度是自由的**（它的定义元素就是"起点 ＋ 终点"，而且终点
+        // 是"要画多长"、周期另外存一个量）—— 所以起点被挪到零点之后，把长度补到
+        // 墨迹的右端就够了：**曲线从头到尾和墨迹完全重合**，多出来的只是起点左边
+        // 那一小截 δ（见下面 `frameW`）。这也正是它比正弦 / 余弦宽容得多的原因。
+        var best = ShapeGuess.None("正余弦：模型那条曲线贴不住墨迹");
+        float bestWorst = float.MaxValue, bestT = 0f, bestA = 0f;
+        float bestOverhang = float.MaxValue;
+        // **每族最好的那一条**（只给"没认出来"时的判据字符串用）：不认的时候
+        // 光有一句"贴不住"没法判断是谁贴不住、差多少 —— 六族的数字摆出来，一眼就知道
+        // 卡在"多画出去的那一截"还是"起笔相位"。这是本仓库一直用的排查抓手
+        //（见 `RecoProbe` 里"错例要能一眼看出被哪条规矩拦下的"）。
+        var famWorst = new float[6];
+        var famCycles = new float[6];
+        for (int i = 0; i < 6; i++) famWorst[i] = float.MaxValue;
+
+        float y0Base = c0;
+        // **波浪线这一族只在"墨迹真的画了多个周期"时才参与**（`allowWave`）。
+        // 为什么不交给后面的闸：一条**一个周期**的墨迹，波浪线那条路**照样能贴到 0**
+        //（起点挪到零点、长度往左补出半个周期，就变成"2 个周期"的对象了）——
+        // 于是它会**抢走正弦 / 余弦**，最后被闸拦掉，**连本来合格的 Sin/Cos 一起丢**。
+        // 实测：不设这一条时 正弦 97.5% → 22.5% ✗。
+        bool allowWave = kBest >= WaveMultiMinCycles;
+
+        for (int fam = 0; fam < 6; fam++)
+        {
+            bool wave = fam >= 4;                                     // 4/5 = 波浪线（多周期）
+            bool cos = fam >= 2 && !wave;                             // 2/3 = 余弦（一个周期）
+            if (wave && !allowWave) continue;
+            float dyMag = cos ? 2f * (float)amp : (float)amp;
+            // 起点相位的基准：正弦 / 波浪线用零点；余弦用极值点（峰在 xZero − T/4）。
+            double xRef = (fam % 2) == 0 ? xZero : xZero + T * 0.5;   // 升 / 降 两族
+            float dy = (fam % 2) == 0 ? dyMag : -dyMag;               // 先下 / 先上
+            if (cos)
+            {
+                // 余弦：family 2 = 起点在屏幕上的**峰**（画布 y 小）→ dy > 0 往谷走；
+                //       family 3 = 起点在**谷** → dy < 0。
+                bool fromCrest = fam == 2;
+                xRef = fromCrest ? xZero - T * 0.25 : xZero + T * 0.25;
+                dy = fromCrest ? dyMag : -dyMag;
+            }
+            float y0 = cos ? c0 - dy * 0.5f : y0Base;
+
+            // **这一族的候选起点**（起点.x ＋ 框宽，两个数就定下这一条曲线）：
+            //
+            //   · 正弦 / 余弦：长度**固定 = 一个周期**，所以左右各试一个，看谁盖得住墨迹；
+            //   · **波浪线：只试两个"端点方案"**（长度自由，中间那些只是白多画一截）：
+            //       **A 对齐墨迹左端** —— 起点就放在墨迹开始的地方，框宽 = 墨迹跨度。
+            //         长度和墨迹**一模一样**，代价是"起笔相位偏多少，曲线就偏多少"。
+            //       **B 对齐零点** —— 起点挪到左边最近的零点（相位零误差），
+            //         代价是**往左多伸出一小截 δ**（≤ 半个周期）。
+            //     A 先试：它在**不改变对象占的地方**的前提下尽量贴住；A 贴不住才退到 B。
+            var places = new List<(float sx, float fw)>(3);
+            if (wave)
+            {
+                float crossX = (float)(xRef + Math.Floor((xMin - xRef) / T) * T);   // 左边最近的零点
+                places.Add((xMin, L));                          // A
+                places.Add((crossX, xMax - crossX));            // B
+            }
+            else
+            {
+                int j0 = (int)Math.Round((xMin - xRef) / T);
+                for (int d = 0; d < 3; d++)
+                    places.Add(((float)(xRef + (j0 + (d == 0 ? 0 : d == 1 ? -1 : 1)) * T), (float)T));
+            }
+
+            foreach (var (sx, fw) in places)
+            {
+                var start = new Vector2(sx, y0);
+                var end = new Vector2(sx + fw, y0 + dy);
+                var kind = wave ? StrokeKind.Wave : (cos ? StrokeKind.Cosine : StrokeKind.Sine);
+                // `uFrom`：起点落在墨迹左端之外时，把多出来的那一截剪掉（见 `WavePolyline`）。
+                float uFrom = (float)((xMin - sx) / T);
+                var poly = WavePolyline(start, end, kind, (float)T, uFrom);
+                float worst = CurveFit.MaxDeviationToPolyline(src, poly);
+                if (worst < famWorst[fam]) { famWorst[fam] = worst; famCycles[fam] = fw / (float)T; }
+                // 往左多伸出去多少：越少越好（它不改形状，只改"对象比墨迹宽多少"）。
+                float overhang = MathF.Max(0f, xMin - sx);
+                // 排序键，按重要性从先到后：① **贴不贴得住**（进容差的一律优于进不去的）；
+                //   ② **往左多伸出去多少**（都贴得住时，占地方最准的那个赢）；
+                //   ③ 偏差本身。
+                // ⚠ 次序不能反：先比偏差的话，"对齐零点"那条（偏差 0、但多伸半格的）
+                //   会打败"对齐墨迹左端"（偏差一点、但一格不多）—— 实测就是这么
+                //   写回包围盒差出 27.7% 的。
+                int fit = worst <= tol ? 0 : 1;
+                int bestFit = bestWorst <= tol ? 0 : 1;
+                bool better = fit < bestFit
+                           || (fit == bestFit && overhang < bestOverhang - 1e-3f)
+                           || (fit == bestFit && MathF.Abs(overhang - bestOverhang) <= 1e-3f
+                               && worst < bestWorst - 1e-3f);
+                if (better)
+                {
+                    bestWorst = worst; bestOverhang = overhang;
+                    bestT = (float)T; bestA = (float)amp;
+                    string name = wave ? "波浪线" : (cos ? "余弦" : "正弦");
+                    // 波浪线的第三个定义元素 = **一个周期的宽度**（见 `Stroke.SetWavePeriod`）。
+                    best = wave
+                        ? ShapeGuess.Hit(StrokeKind.Wave,
+                                         MathF.Max(0.5f, 1f - 0.5f * worst / tol),
+                                         $"{name}（{fw / (float)T:F2} 个周期，周期 {T:F0}、振幅 {amp:F0}，"
+                                         + $"最远差 {worst:F0}，谐波回归残差 {maxResid:F1}）",
+                                         start, end, start + new Vector2((float)T, 0f))
+                        : ShapeGuess.Hit(kind,
+                                         MathF.Max(0.5f, 1f - 0.5f * worst / tol),
+                                         $"{name}（{kBest:F2} 个周期，周期 {T:F0}、振幅 {amp:F0}，"
+                                         + $"最远差 {worst:F0}，谐波回归残差 {maxResid:F1}）",
+                                         start, end);
+                }
+            }
+        }
+
+        // ── 两道闸：先"至少一个周期"，再"贴得住" ─────────────────────────────
+        if (kBest < WaveMinCycles)
+            return ShapeGuess.None($"正余弦：只画了 {kBest:F2} 个周期（< {WaveMinCycles:F2}）"
+                                   + "——至少要一个完整周期才认");
+        if (bestWorst > tol)
+            return ShapeGuess.None($"正余弦：模型那条曲线贴不住墨迹（最远 {bestWorst:F0} > "
+                                   + $"容差 {tol:F0}；{bestT:F0} 宽 / 振幅 {bestA:F0}）"
+                                   + "——多画出去的那一截、或起笔相位对不上，都落在这一条上"
+                                   + FamilyDiagnostics(famWorst, famCycles));
+        return best;
+    }
+
+    /// <summary>六族候选各自的"最远差 / 周期数"，拼成一段给人看的排查字符串
+    /// （只在**没认出来**时进判据，认出来了不花这个钱）。</summary>
+    private static string FamilyDiagnostics(float[] famWorst, float[] famCycles)
+    {
+        string[] names = { "正弦·升", "正弦·降", "余弦·峰", "余弦·谷", "波浪·升", "波浪·降" };
+        var sb = new System.Text.StringBuilder("【各族最远差/周期数：");
+        for (int i = 0; i < famWorst.Length; i++)
+        {
+            if (i > 0) sb.Append('、');
+            sb.Append(names[i]).Append(' ')
+              .Append(famWorst[i] == float.MaxValue ? "未试" : $"{famWorst[i]:F0}/{famCycles[i]:F2}");
+        }
+        return sb.Append('】').ToString();
+    }
+
+    /// <summary>把模型那条曲线采成折线 —— **调的就是对象自己的算式**（`Stroke.WaveYAt`），
+    /// 不重抄一份几何（§42.9 第 3 条）。
+    ///
+    /// 采样范围 `u ∈ [uFrom, 周期数]`（`周期数 = 框宽 ÷ 周期`），**和 `Stroke.WavePointAt` 一致**：
+    ///   · 正弦 / 余弦：框宽 = 一个周期 → `u ∈ [0,1]`；
+    ///   · 波浪线：框宽 = 要画多长、周期是第三个定义元素 → `u` 可以走好几个周期。
+    ///
+    /// ⚠ **`uFrom` 这一刀不能省**（2026-09-26 实测踩到的）：起点落在零点上 ⇒ 模型会
+    /// **从墨迹左端之外**开始（最多一个周期）。而 `CurveFit.MaxDeviationToPolyline`
+    /// 是**两条单调点串的滑窗比对**，它默认"第一个点对第一段" —— 模型左边多出来那一截
+    /// 会让最近段的下标被打到窗口右端、然后**一路追不上**，量出来的偏差是**假的**
+    ///（实测：真正贴合的波浪线被报成"最远差 38"）。所以这里**把左端多出来的那一段剪掉**：
+    /// 从墨迹左端对应的相位开始采 —— 墨迹仍然全在采样范围里，量的还是"墨迹贴不贴得住曲线"。
+    /// </summary>
+    private static Vector2[] WavePolyline(Vector2 start, Vector2 end, StrokeKind kind,
+                                          float period, float uFrom)
+    {
+        float width = MathF.Abs(end.X - start.X);
+        float cycles = period > 1e-3f ? width / period : 1f;
+        if (uFrom < 0f) uFrom = 0f;
+        if (uFrom > cycles) uFrom = cycles;
+        float span = cycles - uFrom;
+        // 段数**按周期数给**（每个周期 64 段）：折线弦高误差 ≈ (2π/64)²/8×振幅 ≈ 0.2% 振幅，
+        // 远小于容差；写死 128 段的话 12 个周期只剩每周期 10 段，误差会盖过容差本身。
+        int seg = Math.Clamp((int)MathF.Ceiling(64f * span), 16, 1024);
+        var poly = new Vector2[seg + 1];
+        for (int i = 0; i <= seg; i++)
+        {
+            float u = uFrom + span * i / (float)seg;
+            poly[i] = new Vector2(start.X + period * u, Stroke.WaveYAt(start, end, kind, u));
+        }
+        return poly;
     }
 
     /// <summary>
-    /// 归一化坐标下解 `a·x̂² + c·ŷ² + d·x̂ + e·ŷ = 1` 的最小二乘（正规方程），
-    /// 并给出**最大 Sampson 距离**（归一化单位，调用方乘回尺度）。
-    /// `useX2` / `useY2` 用来做"少一个二次项"的那两档（3 参数 = 抛物线）。
+    /// **固定频率的三系数谐波回归**：`y = β₀ + β₁·cos(2πfx) + β₂·sin(2πfx)`，
+    /// 正规方程 3×3 闭式解（对 β 线性，所以只需要搜 `f` 一个维度）。
+    /// 返回 false = 方程奇异（采样点退化 / 横向没有跨度）。
+    ///
+    /// 同时给出两个残差：`sq`（平方和，**搜索 `f` 用它** —— 它就是最小二乘的目标函数）
+    /// 和 `maxResid`（最大竖直残差，**只进诊断字符串**）。**验收不看这两个** ——
+    /// 验收走几何距离（`MaxDeviationToPolyline`），和抛物线 / 双曲线同一把尺子。
     /// </summary>
-    private static bool FitConicNorm(IReadOnlyList<Vector2> src, double mx, double my, double sc,
-                                     bool useX2, bool useY2,
-                                     out double a, out double c, out double d, out double e,
-                                     out double worstSampson)
+    private static bool TryHarmonic(IReadOnlyList<Vector2> src, double f,
+                                    out double[] beta, out double sq, out double maxResid)
     {
-        int k = (useX2 ? 1 : 0) + (useY2 ? 1 : 0) + 2;   // 未知数个数
-        var m = new double[k, k];
-        var rhs = new double[k];
-        var bs = new double[k];
-        foreach (var p in src)
+        beta = new double[3];
+        sq = double.MaxValue; maxResid = double.MaxValue;
+        if (f <= 0) return false;
+
+        var m = new double[3, 3];
+        var rhs = new double[3];
+        var col = new double[3];
+        for (int i = 0; i < src.Count; i++)
         {
-            double x = (p.X - mx) / sc, y = (p.Y - my) / sc;
-            int t = 0;
-            if (useX2) bs[t++] = x * x;
-            if (useY2) bs[t++] = y * y;
-            bs[t++] = x; bs[t++] = y;
-            for (int i = 0; i < k; i++)
+            double ph = Math.Tau * f * src[i].X;
+            col[0] = 1.0; col[1] = Math.Cos(ph); col[2] = Math.Sin(ph);
+            for (int r = 0; r < 3; r++)
             {
-                rhs[i] += bs[i];
-                for (int j = 0; j < k; j++) m[i, j] += bs[i] * bs[j];
+                for (int c = 0; c < 3; c++) m[r, c] += col[r] * col[c];
+                rhs[r] += col[r] * src[i].Y;
             }
         }
-        var sol = new double[k];
-        if (!SolveSmall(m, rhs, sol)) { a = c = d = e = 0; worstSampson = double.MaxValue; return false; }
-        int idx = 0;
-        a = useX2 ? sol[idx++] : 0;
-        c = useY2 ? sol[idx++] : 0;
-        d = sol[idx++];
-        e = sol[idx];
+        if (!SolveSmall(m, rhs, beta)) return false;
 
-        // Sampson 距离：|f| / |∇f|（只在采样点上算最大值，够用且便宜）
-        worstSampson = 0;
-        foreach (var p in src)
+        double ss = 0, worst = 0;
+        for (int i = 0; i < src.Count; i++)
         {
-            double x = (p.X - mx) / sc, y = (p.Y - my) / sc;
-            double f = a * x * x + c * y * y + d * x + e * y - 1;
-            double gx = 2 * a * x + d, gy = 2 * c * y + e;
-            double g = Math.Sqrt(gx * gx + gy * gy);
-            if (g < 1e-12) { worstSampson = double.MaxValue; break; }
-            worstSampson = Math.Max(worstSampson, Math.Abs(f) / g);
+            double ph = Math.Tau * f * src[i].X;
+            double fit = beta[0] + beta[1] * Math.Cos(ph) + beta[2] * Math.Sin(ph);
+            double d = src[i].Y - fit;
+            ss += d * d;
+            worst = Math.Max(worst, Math.Abs(d));
         }
+        sq = ss; maxResid = worst;
         return true;
     }
 
@@ -1544,12 +2143,26 @@ internal static class ShapeRecognize
     /// V 的两条臂在**收口边**的两端附近确实有墨，于是那条凭空多出来的边"看着有墨"。
     /// 所以判据要落到**整条边的长度**上：V 的收口边只有两头有墨（覆盖率约 20%），
     /// 而手画矩形收口差一截时每条边的覆盖率还有 80~95%。
+    ///
+    /// ★ **2026-09-26：加 `out worstCover`**（用户报"矩形常常什么都不认"）——
+    /// 原来这条只回答"过 / 不过"，**不报"最差那条边盖住多少"**，于是真机上报的
+    /// "有一条边没画"完全看不出是"收笔差一截"还是"框整个对歪了"。
+    /// 这两个病因的修法完全不同（放宽收口容差 vs 修 `BestFitBox`），
+    /// 所以数字必须摆出来 —— 这是本仓库那条"**判据要能一眼看出卡在哪**"的老规矩。
     /// </summary>
-    private static bool InkCoversEveryEdge(IReadOnlyList<Vector2> ink, IReadOnlyList<Vector2> outline, float tol)
+    private static bool InkCoversEveryEdge(IReadOnlyList<Vector2> ink, IReadOnlyList<Vector2> outline,
+                                           float tol, out float worstCover)
     {
         const int Samples = 20;
+        // ⚠ **门槛试过放宽到 0.45，又放回来了**（2026-09-26，用户报"椭圆和矩形两个都常常
+        //   什么都不认"之后做的实验）：实测对**手画语料没有任何影响** ——
+        //   因为"收笔差半条边"的那个缺口，在**角上那截墨**（离缺口端点不到一个容差）
+        //   的帮衬下覆盖率本来就过了 60%（`--inktest` 里"矩形·大缺口"这条难例
+        //   在 0.6 和 0.45 下都是 **40/40 认对**）。没有量出好处，就不动它
+        //   —— 这道闸的本职是挡"V 形被补成三角形 / U 形被补成矩形"（那些覆盖率只有约 20%）。
         const float Enough = 0.6f;
         int n = outline.Count;
+        worstCover = 1f;
         for (int k = 0; k < n; k++)
         {
             var a = outline[k];
@@ -1563,6 +2176,8 @@ internal static class ShapeRecognize
                     if (Vector2.Distance(q, p) <= tol) { hit++; break; }
                 }
             }
+            float cover = hit / (float)Samples;
+            if (cover < worstCover) worstCover = cover;
             if (hit < Samples * Enough) return false;
         }
         return true;
@@ -2163,6 +2778,24 @@ internal static class ShapeRecognize
         }
         hull.RemoveAt(hull.Count - 1);             // 首尾重复
         return hull;
+    }
+
+    /// <summary>
+    /// **自检专用**：这一笔按椭圆拟合出来的**轴比**（≥1）；拟合不出来给 **0**。
+    ///
+    /// 只给 `--inktest` 里那张"**圆 / 椭圆的分界线该划在哪**"的扫描表用 ——
+    /// 那条线（<see cref="EllipseAxisRatioMin"/>）原来是对着"**理想圆**"的语料定的，
+    /// 而真手画的圆径向能抖 3~8%、拟合出来的轴比经常 1.1~1.2，于是**被椭圆抢走**
+    ///（用户 2026-09-26："圆老是识别不出来，是因为椭圆抢它的吗？"——就是）。
+    /// 要把线划对，就得先能量出两种语料各自的轴比分布，所以留这个薄封装。
+    /// ⚠ 它**不含任何逻辑**（和 `Recognize` 走的是同一个 `TryEllipse`），
+    /// 也别拿它去做判据。
+    /// </summary>
+    internal static float EllipseAxisRatioForTest(IReadOnlyList<Vector2> raw)
+    {
+        if (raw == null || raw.Count < 3) return 0f;
+        var g = TryEllipse(Resample(Clean(raw)), 1f);
+        return g.IsNothing ? 0f : EllipseAxisRatioOf(g);
     }
 
     /// <summary>椭圆定义元素（中心 + 外角点）的轴比，≥ 1。</summary>

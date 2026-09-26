@@ -451,7 +451,7 @@ public class InkEngine
     private Vector2 _dwellLinePin;
 
     /// <summary>**上一笔"收笔"的时刻**（引擎时钟，毫秒）。两笔配对要用它算时间窗口 ——
-    /// 用户 2026-09-25 定了 **5 秒**（见 <see cref="TwoBranchWindowMs"/>）。
+    /// 用户 2026-09-25 定 5 秒，2026-09-26 **放开到 20 秒**（见 <see cref="TwoBranchWindowMs"/>）。
     /// 写在 `EndStroke` 里（截屏那条分支之后）：截一次屏不该把两笔的窗口冲掉。</summary>
     private double _lastInkEndMs = double.MinValue;
 
@@ -464,10 +464,73 @@ public class InkEngine
     /// <summary>配对诊断日志的**限流**时刻（`TryTwoBranchPair` 每 40ms 走一次，不限流会刷屏）。</summary>
     private double _pairLogMs = double.MinValue;
 
-    /// <summary>**两笔配对的时间窗口**（毫秒）：用户 2026-09-25 定的 **5 秒**。
-    /// 太短 → 老师画完第一支要想一下再画第二支就配不上；
-    /// 太长 → "画完一条抛物线、过一会又画一条"会被误配成双曲线。</summary>
-    internal const double TwoBranchWindowMs = 5000;
+    /// <summary>
+    /// **最后一次"停顿成型"出来的对象**，以及**它当初那一笔原迹**（用户 2026-09-26 报
+    /// "画几次才成一次"之后加的）。
+    ///
+    /// 为什么需要：画双曲线的**第一支**时，如果收笔前手停了一下（400ms），这一支就**先被
+    /// 停顿时成了一个抛物线对象** —— 而对象的 `Points` 只剩 2~3 个定义点，**拿不回原来
+    /// 那些采样点**，于是两笔配对**永远配不上**，用户看到的就是"这次不行、再画一次说不定行"
+    /// （要不要停那一下是随机的）。对象本身已经在文档里了，撤销栈也记着它的原迹 ——
+    /// 这里只是**在引擎里留一个引用**，配对时拿它当"第一支"用。
+    ///
+    /// ⚠ 只在**引擎**里留，不进模型、不进存档：它是个纯粹的运行期便利。
+    /// ⚠ 用它之前必须确认 `prev == _lastDwellShape`（引用比较）—— 用户中间画了别的、
+    ///   或撤销掉了，`Doc.Strokes[^1]` 就不再是它了，自动失效。
+    /// </summary>
+    private Stroke _lastDwellShape;
+    private Stroke _lastDwellInk;
+
+    /// <summary>
+    /// **识别诊断日志开关**（2026-09-26 加，给"真机上为什么没认出来"留的口子）。
+    ///
+    /// 由来：用户报"椭圆和矩形两个都**常常什么都不认**"，而**真机上"没认出来"一点痕迹都没有**
+    /// （认不出 = 静默什么都不做，见 §42）—— 只能靠合成语料去猜，猜了两轮都没复现。
+    /// 开了它，停顿定型那一刻会往控制台打一行：认成了什么（带 `Rule`）、或者**为什么没认**
+    /// （`Rule` 里每一道闸都带着数字，比如"矩形框贴不住（最远 18 > 容差 16）"）。
+    ///
+    /// 用法：`InkTeach.exe --reclog`（终端里跑），或环境变量 `INKTEACH_RECLOG=1`
+    /// （后者对所有自检模式也生效，`--dwelltest` 就能把日志打出来）。
+    /// ⚠ 默认为 false：正常开窗跑**不刷屏**。
+    /// </summary>
+    internal static bool InkLogEnabled;
+
+    /// <summary>
+    /// **墨迹录制**（用户 2026-09-26 提："**我手画多少条双曲线给你，你根据这些双曲线来定制
+    /// 一个方案**"）。非 null 时，每一笔收笔都把**原始采样点**追加到这个文件里。
+    ///
+    /// 用法：`InkTeach.exe --recink reports/我的双曲线.txt`，然后照常画。
+    /// **识别失败的那几笔才是最值钱的样本**，所以看到没变出来不用管，照画完抬手就行。
+    ///
+    /// ⚠ 记的是**识别器看到的那串点**（`TickDwellShape` 里那份 `pts`，坐标口径完全一致）——
+    ///   不是成型后的对象：对象里只剩两三个定义点，**原始的采样点拿不回来了**。
+    /// ⚠ 一笔里**没停顿**（没触发识别）时，用收笔那一刻的 `ActiveStroke` 兜底（点数够才算）。
+    /// </summary>
+    internal static string InkRecordPath;
+
+    /// <summary>录制缓冲：**识别器这一笔看到的那串点**（`TickDwellShape` 每次攒一份）。
+    /// 只存引用、不复制 —— 没开录制时一个字节都不花。</summary>
+    private Vector2[] _recordPts;
+
+    /// <summary>这一笔认成了什么 / 为什么没认（写进录制文件的段头，方便按"失败的样本"归类）。</summary>
+    private string _recordGuess = "";
+
+    /// <summary>录制文件里的笔序号（从 1 开始）。</summary>
+    private int _recordSeq;
+
+    /// <summary>**两笔配对的时间窗口**（毫秒）。原来是用户 2026-09-25 定的 **5 秒**，
+    /// **2026-09-26 放宽到 20 秒**（用户报"画几次才成一次"之后核对的）。
+    ///
+    /// ⚠ 5 秒为什么不够：这个窗口量的是"**上一笔收笔那一刻**"到"**这一笔停顿**"之间的时间，
+    /// 也就是"**画第二支花了多久 ＋ 停顿**"—— 一笔画得慢一点（想一下、比一下两支对不对称）
+    /// 就超了。实测这对语料里的时间分布没有意义（自检是推时钟的），但从"画一支要几秒"
+    /// 这个量级看，5 秒**必然**经常不够。
+    ///
+    /// ⚠ 放宽**没有引入新的误配风险**：挑"上一笔"的第一条就是"**文档里最后一笔**"，
+    /// 所以中间只要画了别的，`prev` 就已经换人了；这个窗口只是"别跟很久以前那一笔硬凑"
+    /// 的一道兜底。真要误配，挡住它的是那条**中心对称**校验（自检里"两笔不相干
+    /// （同一边画两遍）→ 不许变成双曲线"盯着它）。</summary>
+    internal const double TwoBranchWindowMs = 20000;
 
     /// <summary>其它图形：**识别那一刻的定义元素点**（幽灵改大小的基准，见 ArmedStrokeMove）。
     /// 存"基准"而不是"累计位移"：一律从基准算**绝对值** —— 累计会跟着亚像素抖动漂，
@@ -2473,6 +2536,9 @@ public class InkEngine
         // 激光笔不参与：它只是"指一下"，本来就不留墨，把它变出一个图形来没有意义。
         _dwellInk = null;
         _dwellCommitted = false;
+        // 录墨迹（`--recink`）：这一笔从零开始攒（见 `FlushInkRecord`）。
+        _recordPts = null;
+        _recordGuess = "";
         // 上一笔要是还挂着（**配对没走到提交**就复位了，比如中途换了工具），
         // **必须把它放回可见** —— 否则那一笔会**永远隐身** ✗（见 `Stroke.HiddenForPairing`）。
         // ⚠ 走 `SetPairHidden`：它同时把那一笔占的块标脏，否则"放回来了、屏幕上还是不显示"
@@ -2558,6 +2624,8 @@ public class InkEngine
 
         var pts = new Vector2[ink.Points.Count];
         for (int i = 0; i < pts.Length; i++) pts[i] = new Vector2(ink.Points[i].X, ink.Points[i].Y);
+        // **录墨迹**（`--recink`）：识别器看到的就是这一串点，直接留个引用给它存 ✓
+        if (InkRecordPath != null) _recordPts = pts;
         // 最短长度那条门槛**在识别器里**（见 ShapeRecognize.Recognize 的 scale 参数）——
         // 这里不再自己乘一遍 DpiScale：同一个数写在两处，迟早会漂（用户 2026-09-23 的教训清单里
         // 第一条就是这个）。
@@ -2570,6 +2638,8 @@ public class InkEngine
         var pair = TryTwoBranchPair(ink, pts);
         if (!pair.IsNothing)
         {
+            if (InkLogEnabled) Console.WriteLine($"[成型] 两笔 → 双曲线：{pair.Rule}");
+            if (InkRecordPath != null) _recordGuess = "两笔 → 双曲线：" + pair.Rule;
             ArmDwellShape(ink, pair);
             return;
         }
@@ -2577,6 +2647,12 @@ public class InkEngine
         var guess = ShapeRecognize.Recognize(pts, DpiScale);
         if (guess.IsNothing)
         {
+            // **`--reclog` 诊断**（用户 2026-09-26 报"椭圆和矩形两个都常常什么都不认"那一条）：
+            // 真机上"没认出来"原来**一点痕迹都没有**，只能靠合成语料去猜。
+            // 这一行把"为什么没认"直接打出来（`Rule` 里每一道闸都带着数字）。
+            if (InkLogEnabled)
+                Console.WriteLine($"[成型] 没认出来：{guess.Rule}（{pts.Length} 点）");
+            if (InkRecordPath != null) _recordGuess = "没认出来：" + guess.Rule;
             // 认不出图形 → **什么都不做，墨迹原样留着**（用户 2026-09-25 定）。
             //
             // 这里原先兜底"保形平滑"（把这一笔换成误差带内的光滑曲线，§43 第一步），
@@ -2591,7 +2667,60 @@ public class InkEngine
             return;
         }
 
+        if (InkLogEnabled) Console.WriteLine($"[成型] 认出了 {guess.Kind}：{guess.Rule}");
+        if (InkRecordPath != null) _recordGuess = $"认出了 {guess.Kind}：" + guess.Rule;
         ArmDwellShape(ink, guess);
+    }
+
+    /// <summary>
+    /// **把这一笔写进录制文件**（见 `InkRecordPath`）——`EndStroke` 一进来就调。
+    ///
+    /// 格式（好读、也好写脚本解析）：
+    /// <code>
+    /// --- stroke 3  t=812345  guess=没认出来：两笔不像同一个双曲线的两支（…）
+    /// 301.25,400.50
+    /// 305.10,402.75
+    /// …
+    /// </code>
+    /// 段头一行给出"第几笔 / 什么时候 / 当时认成了什么（或为什么没认）"，
+    /// 后面一行一个原始采样点。**连续两笔就是一条双曲线**（我按这个来配对统计）。
+    ///
+    /// ⚠ 写不进去（路径不对 / 文件被占）**绝不能影响画图** —— 整段包在 try 里，
+    ///   失败了只往控制台说一声。
+    /// </summary>
+    private void FlushInkRecord()
+    {
+        if (InkRecordPath == null) return;
+        // 优先用"识别器看到的那串点"；这一笔没停顿（没触发识别）就用收笔时的手绘点兜底。
+        // ⚠ 兜底要**点数够**才算：停顿成型后 `ActiveStroke` 已经被换成图形对象（只剩两三个
+        //   定义点），那种不能当墨迹录进去（否则我会拿一堆"两根点"当样本 ✗）。
+        var pts = _recordPts;
+        if ((pts == null || pts.Length < 8) && ActiveStroke != null && ActiveStroke.Points.Count >= 8)
+        {
+            pts = new Vector2[ActiveStroke.Points.Count];
+            for (int i = 0; i < pts.Length; i++)
+                pts[i] = new Vector2(ActiveStroke.Points[i].X, ActiveStroke.Points[i].Y);
+        }
+        try
+        {
+            using var w = new StreamWriter(InkRecordPath, append: true);
+            _recordSeq++;
+            if (pts == null || pts.Length < 8)
+                w.WriteLine($"--- stroke {_recordSeq}  t={NowMs:F0}  "
+                            + $"guess=（这一笔没录到原始点：没停顿、或点数不够）");
+            else
+            {
+                w.WriteLine($"--- stroke {_recordSeq}  t={NowMs:F0}  "
+                            + $"guess={(_recordGuess.Length == 0 ? "（没到识别那一步）" : _recordGuess)}");
+                foreach (var p in pts) w.WriteLine($"{p.X:F2},{p.Y:F2}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[录墨迹] 写不进去（{InkRecordPath}）：{ex.Message}");
+        }
+        _recordPts = null;
+        _recordGuess = "";
     }
 
     /// <summary>
@@ -3779,7 +3908,7 @@ public class InkEngine
     ///
     /// 挑"上一笔"的四条，都很保守 —— 因为**误配的代价是"把两笔变成一个"**：
     ///   ① **文档里最后一笔**（不往前找更早的，那会开始猜）；
-    ///   ② 在 **5 秒**窗口内（用户定的，见 <see cref="TwoBranchWindowMs"/>）；
+    ///   ② 在 **20 秒**窗口内（见 <see cref="TwoBranchWindowMs"/>）；
     ///   ③ 是**手绘的墨**（`Freehand`）—— 已经成型的对象不参与；
     ///   ④ 两边点数都够，最后交给 `TryTwoBranchHyperbola` 判**中心对称**。
     /// </summary>
@@ -3797,22 +3926,32 @@ public class InkEngine
         if (log) _pairLogMs = NowMs;
 
         ShapeGuess g;
+        // **"第一支"用哪一串点**：正常就是那一笔手绘的墨；
+        // 但要是它**刚被停顿成型过**（收笔前手停了一下），对象里只剩 2~3 个定义点，
+        // 这里就用**当初那一笔原迹**（引用比较确认它还是文档里最后一笔，见字段注释）。
+        // 拿不到就置 null（= 这一笔不能当"第一支"用）。
+        var prevInk = prev;
         if (prev.Kind != StrokeKind.Freehand)
+            prevInk = prev == _lastDwellShape && _lastDwellInk != null ? _lastDwellInk : null;
+
+        if (prevInk == null)
         {
             // ⚠ 这一条**很容易中**：第一支要是也停顿过（那 400ms 的静止），
-            //   它就**已经变成一个抛物线对象**了，而对象的 `Points` 只剩 3 个定义点、
+            //   它就**已经变成一个对象**了，而对象的 `Points` 只剩定义点、
             //   **拿不回原来那些采样点**，于是配不成对。日志里会打出 `上一笔 Parabola`。
+            //   （2026-09-26 起：**刚停顿成型的那一笔**能从 `_lastDwellInk` 拿回原迹，
+            //    所以只有"更早的、别处来的对象"才会走到这里。）
             g = ShapeGuess.None("上一笔不是手绘的墨（它已经被成型过了）");
         }
-        else if (prev.Points.Count < 8 || pts.Length < 8)
+        else if (prevInk.Points.Count < 8 || pts.Length < 8)
         {
             g = ShapeGuess.None("有一笔太短");
         }
         else
         {
-            var prevPts = new Vector2[prev.Points.Count];
+            var prevPts = new Vector2[prevInk.Points.Count];
             for (int i = 0; i < prevPts.Length; i++)
-                prevPts[i] = new Vector2(prev.Points[i].X, prev.Points[i].Y);
+                prevPts[i] = new Vector2(prevInk.Points[i].X, prevInk.Points[i].Y);
             g = ShapeRecognize.TryTwoBranchHyperbola(prevPts, pts, DpiScale);
             if (!g.IsNothing)
             {
@@ -3828,7 +3967,8 @@ public class InkEngine
 
         if (log)
             Console.WriteLine($"[两笔配对] {(g.IsNothing ? "否" : "**是双曲线**")}：{g.Rule}"
-                              + $"（上一笔 {prev.Kind}·{prev.Points.Count} 点，"
+                              + $"（上一笔 {prev.Kind}·{prevInk?.Points.Count ?? 0} 点"
+                              + $"{(prevInk != null && prevInk != prev ? "（用它当初的原迹）" : "")}，"
                               + $"这一笔 {pts.Length} 点）");
         return g;
     }
@@ -3837,6 +3977,10 @@ public class InkEngine
     {
         if (ScrollBarDragging) EndScrollBarDrag();
         foreach (var w in _windows) w.EndInkTrail();
+        // **录墨迹**（用户 2026-09-26 提"我手画多少条双曲线给你，你按这些来定制判据"）：
+        // 把这一笔的**原始采样点**追加到录制文件。放在最前面 —— 此时 `ActiveStroke`
+        // 要么还是原始墨、要么是停顿成型换掉的那个对象（所以真正要用的点见 `_recordPts`）。
+        FlushInkRecord();
         // **抬手就关掉停顿那颗定时器**：它只在"有笔在写"的时候有意义（见 StartDwellTimer）。
         StopDwellTimer();
         // 收笔：渲染尾立刻作废（它是"正在写"才有的东西）。**必须在提交进文档之前**清——
@@ -3853,7 +3997,7 @@ public class InkEngine
             return;
         }
         // 记下"**这一笔到此结束**"的时刻 —— 两笔配对（画两支 = 双曲线）要用它算时间窗口
-        // （用户 2026-09-25 定的 5 秒，见 `TwoBranchWindowMs`）。
+        // （见 `TwoBranchWindowMs`，现在是 20 秒）。
         // ⚠ 放在这里（**截屏那条分支之后**）：`CaptureActive` 那条路也走 `EndStroke`，
         //   截一次屏不该把两笔的窗口冲掉。
         _lastInkEndMs = NowMs;
@@ -3968,6 +4112,16 @@ public class InkEngine
                     else
                     {
                         Doc.AddDwellShape(ActiveStroke, _dwellInk);
+                        // **把"这一支的原迹"留一个引用**（见 `_lastDwellShape` 那段注释）：
+                        // 画双曲线的第一支时手要是停了一下，它就先变成了一个**抛物线对象**，
+                        // 而对象里拿不回采样点 → 两笔配对就断了。只认**抛物线**这一种：
+                        // 那是"画一支双曲线被误判成抛物线"的真实情形；别的种类（圆 / 椭圆…）
+                        // 不在这里放行 —— 它们的形状和"一支双曲线"差太远，误配的代价更大。
+                        if (ActiveStroke.Kind == StrokeKind.Parabola)
+                        {
+                            _lastDwellShape = ActiveStroke;
+                            _lastDwellInk = _dwellInk;
+                        }
                     }
                     _dwellCommitted = true;
                     // **直线抬手后不选中**（用户 2026-09-23 定）：直线是"顺手一划"，画完要立刻接着

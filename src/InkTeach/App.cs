@@ -43,6 +43,20 @@ internal sealed class App : InkEngine.InkEngine
             if (args[i] == "--tilesize" && int.TryParse(args[i + 1], out var ts) && ts >= 64)
                 CanvasTileCache.TileSize = ts;
 
+        // **识别诊断日志**（见 `Engine.InkLogEnabled`）：`--reclog` 或环境变量
+        // `INKTEACH_RECLOG=1`。放在 `PrepareHostStartup` 里，所有模式（含各种自检）都吃得到。
+        if (args.Contains("--reclog") || Environment.GetEnvironmentVariable("INKTEACH_RECLOG") == "1")
+            InkLogEnabled = true;
+
+        // **录墨迹**（`--recink <文件>`）：见 `InkRecordPath`。用户 2026-09-26 提的做法 ——
+        // "我手画多少条双曲线给你，你根据这些来定制判据"：**真手画的样本**比任何合成语料都值钱。
+        for (int i = 0; i + 1 < args.Length; i++)
+            if (args[i] == "--recink")
+            {
+                InkRecordPath = System.IO.Path.GetFullPath(args[i + 1]);
+                Console.WriteLine($"[录墨迹] 每一笔都会追加写进：{InkRecordPath}");
+            }
+
         // A separate process that just sits there waiting to be clicked. The
         // pass-through test uses it as the window *underneath* the overlay, so
         // the test observes real cross-process mouse routing.
@@ -171,6 +185,15 @@ internal sealed class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             ExitCode = RecoProbe.Run();
+            _quit = true;
+        }
+        else if (mode == "--inkfile")
+        {
+            // **读用户手画的样本**（`--recink` 录出来的那份）：见 `RecoProbe.RunInkFile`。
+            // 纯离线：不建窗口、不碰界面。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ExitCode = RecoProbe.RunInkFile(args.Length > 1 ? args[1] : "reports/我的双曲线.txt");
             _quit = true;
         }
         else if (mode == "--dwelltest")

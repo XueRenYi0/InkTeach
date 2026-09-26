@@ -2443,10 +2443,56 @@ internal sealed class Stroke
     /// —— 旧定义里"框宽"和"框高"**互相独立**，拖一个又宽又矮的框会把波形**拉变形**
     ///（画出来的根本不是正弦的样子）。让周期跟着振幅走，**波形比例就恒定了**，
     /// 横向那一拖只剩下一个含义：画多长。
+    ///
+    /// ★ **2026-09-26：波浪线的周期可以"自带一个"了**（见 <see cref="WavePeriodOf"/>）。
+    /// 图形工具那条路一个字节没改（它不写第三个点 → 还是上面这条 T = A）；
+    /// 只有**停顿识别**那条路会写 —— 因为老师手画的波，周期和振幅**本来就没关系**
+    ///（手画的三个波 T/A 通常是 3~6），锁死 T = A 就只能认"我们自己工具画出来那种比例"。
     /// </summary>
-    public float WavePeriodLocal() => Kind == StrokeKind.Wave
-        ? WavePeriodPerAmplitude * WaveAmplitudeLocal()
-        : WaveLengthLocal();
+    public float WavePeriodLocal()
+        => WavePeriodOf(Kind, WaveStartLocal(), WaveEndLocal(), CurvePointLocal(2));
+
+    /// <summary>
+    /// **一个周期的宽度**（三种波共用的一份算式，p0/p1/p2 = 起点 / 终点 / 第三个点）。
+    ///
+    /// 第三个点**可缺**（`CurvePointLocal(2)` 在点数不够时给 `Vector2.Zero`）：
+    ///   · **有**它 → **`周期 = |p2.x − p0.x|`** —— 周期是**对象自己带的一个量**，
+    ///     和振幅**互不相干**（识别那条路写的就是它）；
+    ///   · **没有**它 → 落回老规矩（波浪线 `T = 振幅`、正弦 / 余弦 `T = 框宽`）。
+    ///
+    /// ⚠ 为什么用 `Vector2.Zero` 当"没有"的哨兵：和双曲线第三个点**同一个约定**
+    ///（见 `CurveBoxOf` 里那句"第三个点可缺"，那边也是这么判的）。
+    /// 不会误判：识别写进去的是 `p0 + (周期, 0)`，而周期 ≥ 1 像素，
+    /// 只有"p0 正好在原点且周期为 0"才会撞上 —— 那个状态不存在。
+    ///
+    /// ⚠ **只写这一份**：`WavePeriodLocal`（实例、渲染/手柄/读数走它）和
+    /// `CurveBoxOf`（静态、紧框走它）都调它 —— 以前是两份手抄的同一句话，
+    /// 加这个自由度时正好收敛掉（"同一个名单写两处必漏一处"是本仓库的老账）。
+    /// </summary>
+    public static float WavePeriodOf(StrokeKind kind, Vector2 p0, Vector2 p1, Vector2 p2)
+    {
+        if (kind != StrokeKind.Wave) return MathF.Abs(p1.X - p0.X);    // 正弦 / 余弦：框宽就是周期
+        if (p2 != Vector2.Zero) return MathF.Max(1e-3f, MathF.Abs(p2.X - p0.X));
+        return WavePeriodPerAmplitude * WaveAmplitudeOf(p0, p1, kind); // 老规矩：周期 = 振幅
+    }
+
+    /// <summary>
+    /// **给波浪线写"一个周期的宽度"**（第三个定义元素，2026-09-26 加）。
+    ///
+    /// 只有**停顿识别**那条路调它（`ShapeRecognize.ApplyAxis`）：老师手画的多周期波，
+    /// 周期和振幅没有固定比例，锁死 `T = 振幅` 会把波形**压扁或拉长** ——
+    /// 那正是"变出来和画的不一样 = 比不变更糟"。
+    ///
+    /// 图形的**第三个点只用到 x**（周期 = `|p2.x − p0.x|`），y 写成起点的 y 就行
+    ///（`CurveBoxOf` / `WaveTracedPointAt` 都不读它的 y）。
+    /// ⚠ 它**不是手柄**：四种曲线走通用框（见 `Selection.HasShapeHandles`），
+    /// 所以识别出来的周期**暂时拖不动**——想改得再补一个手柄。
+    /// </summary>
+    public void SetWavePeriod(float period)
+    {
+        while (Points.Count < 3) AddPoint(Points[0].X, Points[0].Y, 1f, 0);
+        SetPoint(2, new Vector2(Points[0].X + MathF.Max(1f, period), Points[0].Y));
+    }
 
     /// <summary>**框宽**（＝横向拖了多远）。正弦 / 余弦里它就是"一个周期"，波浪线里是"要画多长"。</summary>
     public float WaveLengthLocal() => MathF.Abs(WaveEndLocal().X - WaveStartLocal().X);
@@ -2777,9 +2823,10 @@ internal sealed class Stroke
                 // 框会比曲线**小一点点** —— 那点差值正好是脏区少算的部分（曲线末梢会留旧像素）。
                 // 分两种情况讨论虽然啰嗦，但每个都是教科书上的初等结论。
                 float len = MathF.Abs(p1.X - p0.X);
-                float t = kind == StrokeKind.Wave
-                    ? WavePeriodPerAmplitude * WaveAmplitudeOf(p0, p1, kind)
-                    : len;                          // 正弦 / 余弦：一个周期 = 框宽（同 WavePeriodLocal）
+                // **周期走共用的那一份算式**（见 `WavePeriodOf`）—— 波浪线的周期现在
+                // **可以自带**（第三个定义元素，识别那条路写的），所以这里不能再用
+                // "周期 = 振幅"那一句手抄；没有第三个点时它自己就落回老规矩。
+                float t = WavePeriodOf(kind, p0, p1, p2);
                 float cycles = t > 1e-3f ? len / t : 1f;
                 float dy = WaveDyOf(p0, p1);
                 float lo, hi;                       // 纵向占到的比例（乘 dy 就是位移）
