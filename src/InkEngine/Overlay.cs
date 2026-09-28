@@ -304,10 +304,14 @@ internal sealed class OverlayWindow : IDisposable
     private ID2D1DeviceContext2 _ctx2;
     /// <summary>墨迹笔尖样式（圆头）——和"笔＝圆头"这条口径一致。</summary>
     private ID2D1InkStyle _inkStyle;
-    /// <summary>每次画一条压感笔迹最多铺多少段（见 DrawPressureInk：压力是慢变量）。</summary>
+    /// <summary>每次画一条压感笔迹最多铺多少段（**只在曲线化关着时**生效，见 DrawPressureInk）。</summary>
     private const int InkMaxSegments = 120;
-    /// <summary>段缓冲：**预分配、复用**，不在每帧绘制里 new（一条笔最多 121 个采样点）。</summary>
-    private readonly InkBezierSegment[] _inkSegs = new InkBezierSegment[InkMaxSegments];
+    /// <summary>
+    /// 段缓冲：**预分配、复用**，不在每帧绘制里 new。
+    /// 曲线化打开时会按点数增长（`--smooth`）：折线段少是有意抽稀的，曲线段不能抽——
+    /// 一抽就把刚算出来的弯又拉直了。
+    /// </summary>
+    private InkBezierSegment[] _inkSegs = new InkBezierSegment[InkMaxSegments];
     /// <summary>压力的指数平滑系数（0..1，越小越稳）。见 DrawPressureInk。</summary>
     private const float InkPressureEma = 0.35f;
     /// <summary>最小墨迹半径（画布像素）：轻压时也不至于细到画不出来。</summary>
@@ -354,6 +358,14 @@ internal sealed class OverlayWindow : IDisposable
     private RectF _uiBoundsPrev = RectF.Empty;
     /// <summary>上一帧图库面板占的矩形（窗口坐标）。面板关掉时要靠它把那张卡片擦掉。</summary>
     private RectF _libraryRectPrev = RectF.Empty;
+
+    /// <summary>PPT 控件条上一帧的矩形（退出放映 / 拖动那一帧要靠它把旧位置擦干净，
+    /// 同 `_libraryRectPrev` 的做法）。</summary>
+    private RectF _pptBarRectPrev = RectF.Empty;
+
+    /// <summary>页码那一段文字的格式（13 逻辑像素，见 `PptPageFormat`）。</summary>
+    private IDWriteTextFormat _pptPageFmt;
+    private float _pptPageFmtPx;
 
     // 内容层的改动也要记两帧：后缓冲里躺着的是两帧前的画面。
     private readonly List<RectF> _contentDirtyNow = new();
@@ -1461,6 +1473,18 @@ internal sealed class OverlayWindow : IDisposable
                         floatingCanvasSpace: false, out w, out h);
 
     /// <summary>
+    /// 同上，但底色**透明**（给"用界面自己的渲染生成程序图标"用，见 `--makeicon`）。
+    ///
+    /// 为什么单开一条而不是给上面那条加参数：那条的灰底是给"出图给人看"用的
+    /// （图里得有底色才看得清白卡片），而图标要的是"只有那个圆"。
+    /// </summary>
+    public byte[] RenderUiToBgraTransparent(InkEngine app, int padPx, in RectF bounds,
+                                            out int w, out int h)
+        => RenderToBgra(app, padPx, bounds, dpiScale: Dpi / 96f,
+                        floatingCanvasSpace: false, out w, out h,
+                        clear: new Color4(0f, 0f, 0f, 0f));
+
+    /// <summary>
     /// **浮动层**离屏出图：选中框、八个手柄、操作条、挂在条下面的小面板（颜色/层级/导出格式）。
     ///
     /// 和上面那条的区别只在**坐标系**：界面画在自己的逻辑屏幕坐标里（乘 DPI 就完事），
@@ -1475,7 +1499,8 @@ internal sealed class OverlayWindow : IDisposable
                         floatingCanvasSpace: true, out w, out h);
 
     private byte[] RenderToBgra(InkEngine app, int padPx, in RectF bounds, float dpiScale,
-                                bool floatingCanvasSpace, out int w, out int h)
+                                bool floatingCanvasSpace, out int w, out int h,
+                                Color4? clear = null)
     {
         w = h = 0;
         if (_ctx == null) return null;
@@ -1506,7 +1531,11 @@ internal sealed class OverlayWindow : IDisposable
 
             _ctx.Target = target;
             _ctx.BeginDraw();
-            _ctx.Clear(new Color4(0.93f, 0.94f, 0.96f, 1f));
+            // 底色：**没指定**才铺浅灰（出图给人看时要有底）；指定了就照指定的来——
+            // 尤其是"指定成全透明"（图标那条路），以前用 `clear.A > 0` 判，
+            // 把"没指定"和"要透明"混成了一件事，结果图标里永远垫着一块浅灰方块
+            //（2026-09-29 用户："图标虽然是圆的，但它实际上是一个方形"）。
+            _ctx.Clear(clear ?? new Color4(0.93f, 0.94f, 0.96f, 1f));
             _ctx.SetDpi(96f, 96f);
 
             if (floatingCanvasSpace)
@@ -1717,88 +1746,15 @@ internal sealed class OverlayWindow : IDisposable
         if (!s.HasPressure || s.Dash != StrokeDash.Solid) return false;
         if (s.Erased.Count > 0 || s.Kind != StrokeKind.Freehand) return false;
 
-        var pts = s.Points;
-        int n = pts.Count;
-        if (n < 2) return false;
-
-        // 采样步长：保证段数 ≤ InkMaxSegments，且**最后一点一定画到**。
-        int stride = Math.Max(1, (int)MathF.Ceiling((n - 1) / (float)InkMaxSegments));
-
-        float sm = pts[0].P;
-        float sx = pts[0].X, sy = pts[0].Y;
-        float sr = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, sm));
-        float startRadius = sr;
-
-        int nSeg = 0;
-        for (int i = 1; i < n && nSeg < _inkSegs.Length; i++)
-        {
-            sm += (pts[i].P - sm) * InkPressureEma;      // 平滑只作用于压力，不动位置
-            if (i % stride != 0 && i != n - 1) continue; // 中间的按步长抽稀（末点必留）
-
-            float ex = pts[i].X, ey = pts[i].Y;
-            float er = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, sm));
-            // 直线段写成三次贝塞尔：控制点落在两端之间 → 位置是直线，半径沿途线性插值。
-            //
-            // 注意**必须全限定** `Vortice.Direct2D1.InkPoint`：我们自己也有一个
-            // `InkEngine.InkPoint`（笔迹的采样点 X/Y/P/T），写裸名会被它遮住，
-            // 报错是"未包含 Radius 的定义"——一个不容易一眼看懂的编译错误。
-            _inkSegs[nSeg++] = new InkBezierSegment
-            {
-                Point1 = new Vortice.Direct2D1.InkPoint
-                {
-                    X = sx + (ex - sx) / 3f, Y = sy + (ey - sy) / 3f,
-                    Radius = sr + (er - sr) / 3f,
-                },
-                Point2 = new Vortice.Direct2D1.InkPoint
-                {
-                    X = sx + (ex - sx) * 2f / 3f, Y = sy + (ey - sy) * 2f / 3f,
-                    Radius = sr + (er - sr) * 2f / 3f,
-                },
-                Point3 = new Vortice.Direct2D1.InkPoint { X = ex, Y = ey, Radius = er },
-            };
-            sx = ex; sy = ey; sr = er;
-        }
-        if (nSeg == 0) return false;
-
-        // ---- 渲染尾（预测段）**也要接在这一路** ------------------------------
-        //
-        // ⚠ 两处渲染路必须都带上尾，漏一处就是"鼠标有效果、手写板毫无反应"：
-        //   · 无压感的笔迹 → 上面那条等宽描边（几何出自 BuildCenterline，那里带尾）；
-        //   · **有压感的笔迹 → 就是这里**，ink 对象只按 `s.Points` 建，
-        //     不加这段的话尾被整个丢掉。
-        // 而真笔**必然**报压感，所以这个漏法只在真笔上现形，鼠标和自检都照不出来
-        //（2026-09-22 用户实测：两边的 `[笔画]` 行都报"预测尾=有（最多 100 px）"，
-        //  只有鼠标看得见——出问题的不是预测，是这一条渲染路）。
-        //
-        // 半径沿用最后一段的：尾是"还没发生的墨"，不该自己变粗变细。
-        if (s.RenderTail != null)
-        {
-            float tx = sx, ty = sy, tr = sr;      // 循环结束时 sx/sy/sr 停在最后一个真实点
-            foreach (var tp in s.RenderTail)
-            {
-                if (nSeg >= _inkSegs.Length) break;
-                // 直线段写成三次贝塞尔：控制点落在两端之间 → 位置是直线。
-                _inkSegs[nSeg++] = new InkBezierSegment
-                {
-                    Point1 = new Vortice.Direct2D1.InkPoint
-                    {
-                        X = tx + (tp.X - tx) / 3f, Y = ty + (tp.Y - ty) / 3f, Radius = tr,
-                    },
-                    Point2 = new Vortice.Direct2D1.InkPoint
-                    {
-                        X = tx + (tp.X - tx) * 2f / 3f, Y = ty + (tp.Y - ty) * 2f / 3f, Radius = tr,
-                    },
-                    Point3 = new Vortice.Direct2D1.InkPoint { X = tp.X, Y = tp.Y, Radius = tr },
-                };
-                tx = tp.X; ty = tp.Y;
-            }
-        }
+        // 段由两条路生成（旧的"按步长抽稀" / `--smooth` 的"曲线化"），
+        // 生成完的 `_inkSegs` ＋ `nSeg` 在这里交给同一条 D2D 墨迹通道画出去。
+        if (!BuildPressureSegments(s, out float startRadius, out int nSeg)) return false;
 
         try
         {
             var ink = _ctx2.CreateInk(new Vortice.Direct2D1.InkPoint
             {
-                X = pts[0].X, Y = pts[0].Y, Radius = startRadius,
+                X = s.Points[0].X, Y = s.Points[0].Y, Radius = startRadius,
             });
             try
             {
@@ -1818,6 +1774,139 @@ internal sealed class OverlayWindow : IDisposable
             Console.WriteLine("墨迹通道（ID2D1Ink）失败：" + ex.Message + " → 压感笔迹退回等宽描边");
             return false;
         }
+    }
+
+    /// <summary>
+    /// 生成压感墨迹的段（含渲染尾），写进复用的 <c>_inkSegs</c>。两条路：
+    ///   · **曲线化开着**（`--smooth`）→ <see cref="StrokeSmoothing"/> 的过点贝塞尔；
+    ///     段数按点数走，**不再按 120 抽稀**（抽稀会把刚算出来的弯又拉直）；
+    ///   · **关着**（默认）→ 原来的"按步长抽稀到 ≤120 段 ＋ 控制点落在直线上"，行为一字不改。
+    /// 返回 false = 没有段，调用方直接不画。
+    /// </summary>
+    private bool BuildPressureSegments(Stroke s, out float startRadius, out int count)
+    {
+        var pts = s.Points;
+        int n = pts.Count;
+        count = 0;
+        startRadius = 0f;
+        if (n < 2) return false;
+
+        startRadius = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, pts[0].P));
+        float lastX = pts[0].X, lastY = pts[0].Y, lastR = startRadius;
+
+        if (StrokeSmoothing.Enabled && !s.RawWhileLive)
+        {
+            StrokeSmoothing.Begin();
+            for (int i = 0; i < n; i++) StrokeSmoothing.Add(pts[i].X, pts[i].Y, pts[i].P);
+            int segs = StrokeSmoothing.Finish();
+            if (segs <= 0) return false;
+            EnsureInkSegs(segs + (s.RenderTail?.Count ?? 0));
+
+            var cs = StrokeSmoothing.Out;
+            float ema = StrokeSmoothing.PressureAt(0);
+            for (int k = 0; k < segs; k++)
+            {
+                ema += (StrokeSmoothing.PressureAt(k + 1) - ema) * InkPressureEma;
+                float r1 = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, ema));
+                _inkSegs[count++] = new InkBezierSegment
+                {
+                    Point1 = new Vortice.Direct2D1.InkPoint
+                    {
+                        X = cs[k].C1.X, Y = cs[k].C1.Y, Radius = lastR + (r1 - lastR) / 3f,
+                    },
+                    Point2 = new Vortice.Direct2D1.InkPoint
+                    {
+                        X = cs[k].C2.X, Y = cs[k].C2.Y, Radius = lastR + (r1 - lastR) * 2f / 3f,
+                    },
+                    Point3 = new Vortice.Direct2D1.InkPoint { X = cs[k].P1.X, Y = cs[k].P1.Y, Radius = r1 },
+                };
+                lastR = r1;
+                lastX = cs[k].P1.X;
+                lastY = cs[k].P1.Y;
+            }
+        }
+        else
+        {
+            // 采样步长：保证段数 ≤ InkMaxSegments，且**最后一点一定画到**。
+            int stride = Math.Max(1, (int)MathF.Ceiling((n - 1) / (float)InkMaxSegments));
+            int cap = Math.Min(_inkSegs.Length, InkMaxSegments);
+            float sm = pts[0].P;
+            float sx = pts[0].X, sy = pts[0].Y, sr = startRadius;
+            for (int i = 1; i < n && count < cap; i++)
+            {
+                sm += (pts[i].P - sm) * InkPressureEma;      // 平滑只作用于压力，不动位置
+                if (i % stride != 0 && i != n - 1) continue; // 中间的按步长抽稀（末点必留）
+
+                float ex = pts[i].X, ey = pts[i].Y;
+                float er = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, sm));
+                // 直线段写成三次贝塞尔：控制点落在两端之间 → 位置是直线，半径沿途线性插值。
+                //
+                // 注意**必须全限定** `Vortice.Direct2D1.InkPoint`：我们自己也有一个
+                // `InkEngine.InkPoint`（笔迹的采样点 X/Y/P/T），写裸名会被它遮住，
+                // 报错是"未包含 Radius 的定义"——一个不容易一眼看懂的编译错误。
+                _inkSegs[count++] = new InkBezierSegment
+                {
+                    Point1 = new Vortice.Direct2D1.InkPoint
+                    {
+                        X = sx + (ex - sx) / 3f, Y = sy + (ey - sy) / 3f,
+                        Radius = sr + (er - sr) / 3f,
+                    },
+                    Point2 = new Vortice.Direct2D1.InkPoint
+                    {
+                        X = sx + (ex - sx) * 2f / 3f, Y = sy + (ey - sy) * 2f / 3f,
+                        Radius = sr + (er - sr) * 2f / 3f,
+                    },
+                    Point3 = new Vortice.Direct2D1.InkPoint { X = ex, Y = ey, Radius = er },
+                };
+                sx = ex; sy = ey; sr = er;
+                lastX = sx; lastY = sy; lastR = sr;
+            }
+        }
+
+        if (count == 0) return false;
+
+        // ---- 渲染尾（预测段）**也要接在这一路** ------------------------------
+        //
+        // ⚠ 两处渲染路必须都带上尾，漏一处就是"鼠标有效果、手写板毫无反应"：
+        //   · 无压感的笔迹 → 上面那条等宽描边（几何出自 BuildCenterline，那里带尾）；
+        //   · **有压感的笔迹 → 就是这里**，ink 对象只按 `s.Points` 建，
+        //     不加这段的话尾被整个丢掉。
+        // 而真笔**必然**报压感，所以这个漏法只在真笔上现形，鼠标和自检都照不出来
+        //（2026-09-22 用户实测：两边的 `[笔画]` 行都报"预测尾=有（最多 100 px）"，
+        //  只有鼠标看得见——出问题的不是预测，是这一条渲染路）。
+        //
+        // 半径沿用最后一段的：尾是"还没发生的墨"，不该自己变粗变细。
+        if (s.RenderTail != null)
+        {
+            EnsureInkSegs(count + s.RenderTail.Count);
+            float tx = lastX, ty = lastY, tr = lastR;
+            foreach (var tp in s.RenderTail)
+            {
+                if (count >= _inkSegs.Length) break;
+                // 直线段写成三次贝塞尔：控制点落在两端之间 → 位置是直线。
+                _inkSegs[count++] = new InkBezierSegment
+                {
+                    Point1 = new Vortice.Direct2D1.InkPoint
+                    {
+                        X = tx + (tp.X - tx) / 3f, Y = ty + (tp.Y - ty) / 3f, Radius = tr,
+                    },
+                    Point2 = new Vortice.Direct2D1.InkPoint
+                    {
+                        X = tx + (tp.X - tx) * 2f / 3f, Y = ty + (tp.Y - ty) * 2f / 3f, Radius = tr,
+                    },
+                    Point3 = new Vortice.Direct2D1.InkPoint { X = tp.X, Y = tp.Y, Radius = tr },
+                };
+                tx = tp.X; ty = tp.Y;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>段缓冲按需增长（曲线化时一条笔的段数可能远超 120）。</summary>
+    private void EnsureInkSegs(int need)
+    {
+        if (_inkSegs.Length >= need) return;
+        Array.Resize(ref _inkSegs, Math.Max(need, _inkSegs.Length * 2));
     }
 
     // ------------------------------------------------------------------
@@ -1932,6 +2021,11 @@ internal sealed class OverlayWindow : IDisposable
         // 滚动条（样式 B：一根细线）。画在浮动层，不进内容层。
         DrawScrollBar(app);
 
+        // 底部那两条 PPT 控件（放映时才画）。**必须画在 `Matrix3x2.Identity` 之下**：
+        // 它们的矩形是**屏幕坐标**（贴屏幕底边、只跟屏幕走），画在上面的画布变换里
+        // 会被相机整体平移——相机一滚，条就跟着跑偏（和 HUD、滚动条同一批，同一理由）。
+        DrawPptBar(app);
+
         _ctx.PopAxisAlignedClip();
         }
 
@@ -1972,12 +2066,18 @@ internal sealed class OverlayWindow : IDisposable
             r.Add(CanvasRectToWindow(ab));
         }
 
-        var laser = app.Laser.Points;
-        if (app.Laser.Visible && laser.Count > 0)
+        var laser = app.Laser;
+        if (laser.Visible)
         {
+            // 轨迹有宽度和发光，往外留一点。
+            // ⚠ 系数 1.7 是跟着 `DrawLaser` 那五层柔光来的：最外那层半径 = 1.55 × 主带直径
+            //   = 1.55 × 粗细 × DPI，留 1.7 倍才有富余（以前发光只到 0.95 倍，所以那时
+            //   写的是 1.0 倍；发光一加宽，这里不跟着加宽就会**留下没被重画的红边**）。
+            float pad = 32f + laser.MaxWidthLogical * app.DpiScale * 1.7f;
             var b = RectF.Empty;
-            foreach (var p in laser) b.Add(p.X, p.Y);
-            r.Add(CanvasRectToWindow(b.Inflate(32f)));      // 轨迹有宽度和发光，往外留一点
+            foreach (var s in laser.Strokes)
+                foreach (var p in s.Points) b.Add(p.X, p.Y);
+            if (!b.IsEmpty) r.Add(CanvasRectToWindow(b.Inflate(pad)));
         }
 
         // 自绘的落点反馈（橡皮圆环 / 笔尖环 / 荧光笔圆盘）。它比图形本身大一圈
@@ -2028,6 +2128,25 @@ internal sealed class OverlayWindow : IDisposable
         if (app.LibraryPanelOpen)
             r.Add(CanvasRectToWindow(app.LibraryPanelRectNow()).Inflate(4f * Dpi / 96f));
         if (!_libraryRectPrev.IsEmpty) r.Add(_libraryRectPrev);
+
+        // PPT 控件条（含它上面的页号面板 / 长按菜单）：悬停、拖动、长按进度每帧都在变，
+        // 必须按当前矩形算进脏区；**退出放映那一帧**旧位置也要擦掉，所以上一帧那份矩形
+        // 同样并进来（同图库面板、界面 `_uiBoundsPrev` 的做法）。
+        {
+            var cur = RectF.Empty;
+            if (app.PptMode)
+            {
+                cur = app.PptBarRect();
+                if (app.PptPagePanelOpen) { app.PptPanelRect(out var pp); cur.Add(pp.MinX, pp.MinY); cur.Add(pp.MaxX, pp.MaxY); }
+                // 菜单和首次引导都长在条的上方（引导还比菜单窄一点，用同一个矩形兜住就够）
+                if (app.PptHintVisible || app.PptMenuOpen)
+                { app.PptMenuRect(out var pm); cur.Add(pm.MinX, pm.MinY); cur.Add(pm.MaxX, pm.MaxY); }
+                float barPad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
+                r.Add(cur.Inflate(barPad));
+            }
+            if (!_pptBarRectPrev.IsEmpty) r.Add(_pptBarRectPrev);
+            _pptBarRectPrev = cur;
+        }
 
         // 选中高亮画在浮动层上、不进内容层，所以它的区域必须每帧算进脏区。
         //
@@ -3496,39 +3615,390 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.Transform = saved;
     }
 
+    /// <summary>
+    /// PPT 放映时贴在屏幕上的**那一条**控件（`[◀] [页码] [▶]`），外加它上面的两个浮层
+    /// （点页码弹的**页号面板**、长按弹的菜单）。几何在 `PptBar`、交互状态在 `InkEngine`（Ppt.cs）。
+    ///
+    /// 它是**浮层**（和选中操作条同一层、同一套令牌）——位置只跟屏幕走（可拖、可记），
+    /// 不跟工具条、不受贴边隐藏影响（用户 2026-09-26："外部就是 ppt 页面上，
+    /// 不跟着批注软件走"）。
+    /// </summary>
+    private void DrawPptBar(InkEngine app)
+    {
+        if (!app.PptMode) return;
+        float dpi = Dpi / 96f;
+        var theme = app.FloatingTheme;
+        var bar = app.PptBarRect();
+        float radius = MathF.Min(theme.CornerRadius * dpi, (bar.MaxY - bar.MinY) * 0.5f);
+
+        DrawPanelCard(app, bar, radius);
+
+        // **拖动中**：整条描边变强调色（"它现在拿在你手里"）。拖起来本身看得见，
+        // 这个描边是给"抓起来那一刻"一个明确回应。
+        if (app.PptBarDragging)
+        {
+            _scratch.Color = theme.ActiveBg;
+            _ctx.DrawRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(bar.MinX, bar.MinY, bar.MaxX, bar.MaxY),
+                                     radius, radius), _scratch, 2f * dpi);
+        }
+
+        float aw = PptBar.ArrowW * dpi;
+        var la = new RectF { MinX = bar.MinX, MinY = bar.MinY, MaxX = bar.MinX + aw, MaxY = bar.MaxY };
+        var ra = new RectF { MinX = bar.MaxX - aw, MinY = bar.MinY, MaxX = bar.MaxX, MaxY = bar.MaxY };
+        DrawPptArrow(app, la, left: true, hot: app.PptBarHover == (int)PptBarZone.LeftArrow);
+        DrawPptArrow(app, ra, left: false, hot: app.PptBarHover == (int)PptBarZone.RightArrow);
+
+        // 页码格的**悬停高亮**（用户 2026-09-26 指出："页码那里没有悬停指示"）。
+        // 箭头早就有、就它没有——而它恰恰是"按住不动弹菜单 / 点一下弹页号面板"的那块：
+        // 没有高亮，整条上最该点的地方看着反而是"死的"。
+        // 「⋮」删掉之后（2026-09-27）这一块就是**整个中格**，数字也在它的正中间。
+        if (app.PptBarHover == (int)PptBarZone.Page)
+        {
+            var pc = PptBar.MidCell(bar, dpi);
+            float cIn = 4f * dpi;
+            var cBg = new Vortice.RawRectF(pc.MinX + cIn, pc.MinY + cIn, pc.MaxX - cIn, pc.MaxY - cIn);
+            float cBr = MathF.Min(cBg.Right - cBg.Left, cBg.Bottom - cBg.Top) * 0.28f;
+            _scratch.Color = theme.Hover;
+            _ctx.FillRoundedRectangle(new RoundedRectangle(cBg, cBr, cBr), _scratch);
+        }
+
+        // 页码（**条上的主角**，13 逻辑像素，比角标大一档）：数字用正文色、"/ 总数"用次要色。
+        // 分两段画就是"层级"——一个字号一口色的话，"3" 和 "/ 12" 一样重，读不出"我在第几页"。
+        // ⚠ `ReadoutFormat*` 那一族的参数是**缩放比**（`px = 13 * dpi`），不是物理 DPI——
+        // 传 `Dpi`（200% 屏上是 192）会把字号放大 192 倍、字被排到矩形外，看起来就是"字没画出来"。
+        var mid = PptBar.MidCell(bar, dpi);
+        var pfmt = PptPageFormat(dpi);
+        string pCur = app.PptSlide.ToString();
+        string pRest = $" / {app.PptTotal}";
+        float pWCur = MeasureTextWidth(pCur, pfmt);
+        float pWRest = MeasureTextWidth(pRest, pfmt);
+        float pX0 = (mid.MinX + mid.MaxX) * 0.5f - (pWCur + pWRest) * 0.5f;
+        _scratch.Color = theme.Text;
+        _ctx.DrawText(pCur, pfmt, new Rect(pX0, mid.MinY, pWCur, mid.MaxY - mid.MinY), _scratch);
+        _scratch.Color = theme.TextMuted;
+        _ctx.DrawText(pRest, pfmt, new Rect(pX0 + pWCur, mid.MinY, pWRest, mid.MaxY - mid.MinY), _scratch);
+
+        // 长按反馈：页码格下沿一条进度线（没有反馈的长按等于没实现）。
+        // 到点就直接弹菜单了（见 StepPptBar），所以它只在"按住这 600ms"里出现。
+        if (app.PptLongPressProgress > 0f && !app.PptBarDragging && !app.PptMenuOpen && !app.PptPagePanelOpen)
+        {
+            float inset = 10f * dpi;
+            float y = mid.MaxY - 5f * dpi;
+            _scratch.Color = theme.ActiveBg;
+            _ctx.FillRoundedRectangle(new RoundedRectangle(new Vortice.RawRectF(
+                mid.MinX + inset, y,
+                mid.MinX + inset + (mid.MaxX - mid.MinX - inset * 2f) * app.PptLongPressProgress,
+                y + 3f * dpi), 1.5f * dpi, 1.5f * dpi), _scratch);
+        }
+
+        if (app.PptHintVisible) DrawPptHint(app);
+        if (app.PptPagePanelOpen) DrawPptPagePanel(app);
+        if (app.PptMenuOpen) DrawPptMenu(app);
+    }
+
+    /// <summary>
+    /// **页号面板**：点页码弹出来的那张格子墙（点哪页跳哪页）。用户 2026-09-26 选的方案 B
+    /// （"我们下面那个进度条可以不用，我们可以点击页码这里实现快速跳页"）。
+    ///
+    /// 为什么归引擎画（而不是界面）：它长在条的正上方、要跟着条的位置走，
+    /// 而条本身就是引擎画的（见 PptBar）；交给界面会多一条"位置同步"的缝。
+    /// 画法照抄现成的图库面板（同一套 DrawPanelCard + 悬停高亮）。
+    /// </summary>
+    private void DrawPptPagePanel(InkEngine app)
+    {
+        float dpi = Dpi / 96f;
+        var theme = app.FloatingTheme;
+        app.PptPanelRect(out var panel);
+        DrawPanelCard(app, panel, theme.CornerRadius * dpi);
+
+        int total = Math.Max(1, app.PptTotal);
+        var fmt = ReadoutFormatSmall(dpi);
+        for (int i = 0; i < total; i++)
+        {
+            app.PptPanelCellRectAt(i, out var cell);
+            int page = i + 1;
+            bool cur = page == app.PptSlide;             // 当前页：实心强调底
+            bool hot = app.PptBarHover == 200 + i;
+
+            if (cur || hot)
+            {
+                float inset = 2f * dpi;
+                var bg = new Vortice.RawRectF(cell.MinX + inset, cell.MinY + inset,
+                                              cell.MaxX - inset, cell.MaxY - inset);
+                float br = MathF.Min(bg.Right - bg.Left, bg.Bottom - bg.Top) * 0.25f;
+                _scratch.Color = cur ? theme.ActiveBg : theme.Hover;
+                _ctx.FillRoundedRectangle(new RoundedRectangle(bg, br, br), _scratch);
+            }
+
+            _scratch.Color = cur ? theme.ActiveText : theme.Text;
+            _ctx.DrawText(page.ToString(), fmt,
+                          new Rect(cell.MinX, cell.MinY, cell.MaxX - cell.MinX, cell.MaxY - cell.MinY),
+                          _scratch);
+        }
+    }
+
+    /// <summary>页码的文字格式（**13 逻辑像素**：条上的主角，比角标 11 大一档）。</summary>
+    private IDWriteTextFormat PptPageFormat(float dpi)
+    {
+        float px = MathF.Max(11f, MathF.Round(13f * dpi));
+        if (_pptPageFmt == null || _pptPageFmtPx != px)
+        {
+            _pptPageFmt?.Dispose();
+            _pptPageFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _pptPageFmt.TextAlignment = TextAlignment.Center;
+            _pptPageFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _pptPageFmtPx = px;
+        }
+        return _pptPageFmt;
+    }
+
+    /// <summary>
+    /// 翻页箭头：**自绘**（两条线组成的 chevron）。
+    ///
+    /// 为什么不用 `IconPaths`：那张表是 `tools/gen-icons.ps1` 从官方图标库生成的
+    /// （文件头写着"请勿手改"），而且里面没有 chevron（`chevronRight` 在**界面**那本
+    /// `InkUi/Icons.g.cs` 里，引擎看不到）——为两个箭头改生成流程不划算，
+    /// 两条线更简单，也不会随图标库版本漂移。
+    ///
+    /// **视觉重量**（用户 2026-09-26："我感觉是这个翻页箭头太大了"）：
+    ///   · **尺寸基本不缩**：我们高 15 逻辑像素 / 卡片 56 = 27%，而 Inkeys 的箭头图标框
+    ///     是 40 / 组件 60 = **67%**（数据见 调研-PPT模式-参考InkClass.md）——
+    ///     我们本来就比人家小一半多，再缩触摸屏上就点不中了，这里只微收 7%；
+    ///   · **真正重的是笔画**：9 像素宽的 chevron 配 2 逻辑像素线宽（物理 4px），
+    ///     短笔画上显得又粗又黑 → 线宽降到 1.5（对齐项目图标规范"1.4~1.5 描边"，
+    ///     见 调研-界面-假面板与图标.md）；
+    ///   · 常态用**次要色**、悬停才转深——页码才是主角，箭头是配角。
+    /// </summary>
+    private void DrawPptArrow(InkEngine app, in RectF box, bool left, bool hot)
+    {
+        float dpi = Dpi / 96f;
+        var theme = app.FloatingTheme;
+        if (hot)
+        {
+            float inset = 4f * dpi;
+            var bg = new Vortice.RawRectF(box.MinX + inset, box.MinY + inset,
+                                          box.MaxX - inset, box.MaxY - inset);
+            float br = MathF.Min(bg.Right - bg.Left, bg.Bottom - bg.Top) * 0.3f;
+            _scratch.Color = theme.Hover;
+            _ctx.FillRoundedRectangle(new RoundedRectangle(bg, br, br), _scratch);
+        }
+
+        float cx = (box.MinX + box.MaxX) * 0.5f, cy = (box.MinY + box.MaxY) * 0.5f;
+        float h = 7f * dpi;        // 半高（原 7.5，微收）
+        float w = 4.2f * dpi;      // 两翼相对中心的偏移（原 4.5）
+        float wing = left ? w : -w;         // 左箭头：两翼在右边、尖端在左
+        float tipX = cx - wing;
+        _scratch.Color = hot ? theme.Text : theme.TextMuted;
+        float lw = 1.5f * dpi;
+        _ctx.DrawLine(new Vector2(cx + wing, cy - h), new Vector2(tipX, cy), _scratch, lw);
+        _ctx.DrawLine(new Vector2(tipX, cy), new Vector2(cx + wing, cy + h), _scratch, lw);
+    }
+
+    /// <summary>
+    /// 菜单（**长按页码格**开）。三项**一律四字**（用户 2026-09-26："菜单可以四字对齐吗"），
+    /// 所以文字天然对齐、不用逐项量宽；分隔线是"一项一组"。
+    ///
+    /// 两个临时样子：
+    ///   · 「墨迹保存」右边跟一个"开 / 关"（开关项）；
+    ///   · 「墨迹清空」点过一次之后，整行文字变成「再点确认」并上强调底——
+    ///     这是**不弹窗的确认**（我们的规矩是"屏幕上一个字都不留"，见 README 的提示条那段）。
+    /// </summary>
+    private void DrawPptMenu(InkEngine app)
+    {
+        float dpi = Dpi / 96f;
+        var theme = app.FloatingTheme;
+        app.PptMenuRect(out var menu);
+        DrawPanelCard(app, menu, theme.CornerRadius * dpi);
+
+        var fmt = ReadoutFormatSmall(dpi);
+        float padX = 16f * dpi;
+
+        for (int i = 0; i < InkEngine.PptMenuItemCount; i++)
+        {
+            app.PptMenuItemRectAt(i, out var item);
+
+            // 分隔线画在"这一项和上一项之间"（一眼看出分组）
+            if (InkEngine.PptMenuDividerBefore(i) && i > 0)
+            {
+                app.PptMenuItemRectAt(i - 1, out var prev);
+                float y = (prev.MaxY + item.MinY) * 0.5f;
+                _scratch.Color = new Color4(theme.PanelBorder.R, theme.PanelBorder.G,
+                                            theme.PanelBorder.B, 0.6f);
+                _ctx.DrawLine(new Vector2(item.MinX + 10f * dpi, y),
+                              new Vector2(item.MaxX - 10f * dpi, y), _scratch, 1f * dpi);
+            }
+
+            bool danger = InkEngine.PptMenuItemDanger(i);
+            bool waiting = danger && app.PptClearConfirm;       // 正在等确认：整行上强调底
+            if (app.PptBarHover == 100 + i || waiting)
+            {
+                float inset = 3f * dpi;
+                var bg = new Vortice.RawRectF(item.MinX + inset, item.MinY + inset,
+                                              item.MaxX - inset, item.MaxY - inset);
+                float br = MathF.Min(bg.Right - bg.Left, bg.Bottom - bg.Top) * 0.25f;
+                _scratch.Color = waiting ? theme.ActiveBg : theme.Hover;
+                _ctx.FillRoundedRectangle(new RoundedRectangle(bg, br, br), _scratch);
+            }
+
+            // 文字：框宽**按文字自己量**（而不是整行）——这样四字从左起一样的位置开始，
+            // 就是"四字对齐"；用整行居中排的话，字数一变（"再点确认"）就会左右晃。
+            string label = app.PptMenuItemText(i);
+            float lw = MeasureTextWidth(label, fmt);
+            _scratch.Color = waiting ? theme.ActiveText : theme.Text;
+            _ctx.DrawText(label, fmt,
+                          new Rect(item.MinX + padX, item.MinY, lw, item.MaxY - item.MinY),
+                          _scratch);
+
+            // 右边的状态（只有开关项有）
+            string st = app.PptMenuItemStatus(i);
+            if (st != null)
+            {
+                float sw = MeasureTextWidth(st, fmt);
+                _scratch.Color = app.PptAutoSaveOn ? theme.ActiveBg : theme.TextMuted;
+                _ctx.DrawText(st, fmt,
+                              new Rect(item.MaxX - padX - sw, item.MinY, sw, item.MaxY - item.MinY),
+                              _scratch);
+            }
+        }
+    }
+
+    /// <summary>
+    /// **引导**：进放映的头 1.5 秒，在条的上方浮一行小字（"长按页码可呼出菜单"）。
+    ///
+    /// 位置**和菜单同一处**——它淡出之后菜单正好在那儿出现，老师会自然地把两件事连起来。
+    /// 生命周期见 <see cref="InkEngine.PptHintVisible"/>：**每次进放映都提示一遍、只停 1.5 秒**
+    /// （用户 2026-09-27 定的）——因为「⋮」删掉之后菜单只剩长按这一条路，
+    /// "只提示一次"会让老师第二次上课就想不起来它了。
+    /// </summary>
+    private void DrawPptHint(InkEngine app)
+    {
+        float dpi = Dpi / 96f;
+        var theme = app.FloatingTheme;
+        app.PptMenuRect(out var anchor);            // 借菜单的位置（就是条的上方）
+        var hint = new RectF
+        {
+            MinX = anchor.MinX, MinY = anchor.MinY,
+            MaxX = anchor.MinX + 172f * dpi, MaxY = anchor.MinY + 32f * dpi,
+        };
+        DrawPanelCard(app, hint, 8f * dpi);
+        _scratch.Color = theme.Text;
+        // 文案里**不能再提「⋮」**（2026-09-27 删掉了）——菜单现在只有长按一条路，
+        // 这句话就是把那条路说清楚。用户的原话："提示'长按可以呼出退出菜单'"。
+        _ctx.DrawText("长按页码可呼出菜单", ReadoutFormatSmall(dpi),
+                      new Rect(hint.MinX, hint.MinY, hint.MaxX - hint.MinX, hint.MaxY - hint.MinY),
+                      _scratch);
+    }
+
+    /// <summary>
+    /// 画激光笔的轨迹。用户 2026-09-27 要的是 ClassIn 那个「**拖拽激光笔**」的样子：
+    /// **等宽的发光带**（不是旧版那条从尾到头渐细的彗星尾），松手后停 2 秒再整条淡出。
+    ///
+    /// **比例照 ClassIn 量出来的数据定**（用户："我们这个发光好像和 ClassIn 的不大一样，
+    /// 我感觉 ClassIn 的那种似乎好看一点"）。
+    ///
+    /// 量法：`tmp/measure-laser.ps1` 在参考图上竖着切一刀，从边缘到中心打印 RGB
+    ///（那条笔画略斜，竖切比真横截面宽约 1.13 倍，比例不受影响）。一刀下去长这样
+    ///（r ＝ 离轨迹中心的像素，a ＝ "那一点的红有多实"，按白底反算）：
+    ///
+    ///   | r（像素） | 颜色           | a    | 是什么             |
+    ///   |-----------|----------------|------|--------------------|
+    ///   | 0 ～ 6    | 255,255,255    | —    | **纯白芯**（约 12 像素宽） |
+    ///   | 6 ～ 10   | 215,2,21       | ≈1   | **饱和红边**（两侧各约 4 像素） |
+    ///   | 10 ～ 12  | 244,94,106     | 0.64 | 柔光起点           |
+    ///   | 12 ～ 16  | 246,137..203   | 0.47 → 0.21 | 柔光中段    |
+    ///   | 16 ～ 26  | 249,217..235   | 0.15 → 0.08 | 柔光后段    |
+    ///   | 26 ～ 33  | 244..247       | 0.05 → 0.03 | 柔光尾巴（快贴到纸白了） |
+    ///
+    /// 三条结论（我们第一版全反着做的，所以出图一看是"两条细红线夹一条白缝"——
+    /// 白芯和红环太窄、**光晕几乎没画**，整条读起来是个空心管）：
+    ///   ① 白芯**很宽**（半径 ≈ 0.30 × 红带直径，即整条白芯占红带的六成）；
+    ///   ② 红边**很实**（215,2,21，几乎不透明），不是淡红；
+    ///   ③ **光晕拖得很远**：一直拖到约 **1.55 × 红带直径**（是红带半径的 3 倍），
+    ///      而且是一条从 0.64 平滑掉到 0.03 的渐变——**这才是"发光"的本体**。
+    ///
+    /// 因为 ③ 是渐变，一根等宽带子画不出来，这里用**五层同心带**分段近似
+    ///（Direct2D 的径向渐变笔刷是绕一个圆心的，套不到任意形状的轨迹上）。
+    /// 每层的半径/不透明度见 `DrawLaser` 里那五行 `Glow(...)`，数字对应的就是上表。
+    ///
+    /// 于是**粗细滑条终于是真管用的**（以前那个滑条只管落点那个圆点，轨迹宽度是写死的 13 / 6）。
+    ///
+    /// ⚠ 粗细**按每条自己记的那份**读（`Stroke.WidthLogical`），不是读"当前值"：
+    ///   读当前值的话，画完一条、抬手调粗、再画一条，**前一条会跟着一起变胖**。
+    /// ⚠ 加宽了发光就要**同步加宽脏区**（`Overlay` 里那条 `pad`，见那里的注释）：
+    ///   发光画到 1.3 倍直径，脏区还按 1.0 倍算的话，抬手/淡出时会留下没被重画的红边。
+    /// ⚠ **换成默认的 SourceOver 混合**（原来是 `PrimitiveBlend.Add`）：
+    ///   加法只加亮，"红 + 白 = 白"，在**白板 / 浅色 PPT** 上整条轨迹会直接看不见
+    ///   （自检里"白板上看得见"那条就是量这个：加法混合会量出 0 个像素）。
+    ///   注意白芯在白板上本来就"看不见"，真正让它在白底上立住的是**那圈红边和柔光**——
+    ///   所以红边给到 0.95、柔光最里那一层给到 0.29，不许再调淡。
+    ///
+    /// 两端补一个圆帽（半径 = 各自的半宽）：带子是"两侧各偏半个宽度"描出来的多边形，
+    /// 端口是平头；补上圆帽才像**写出来的一笔**，而不是被切断的一条带子。
+    /// </summary>
     private void DrawLaser(InkEngine app)
     {
-        var pts = app.Laser.Points;
-        int n = pts.Count;
-        if (n < 2) return;
+        var strokes = app.Laser.Strokes;
+        if (strokes.Count == 0) return;
 
-        double now = app.NowMs;
-        // 加法混合：激光要"发光"，叠在深色 PPT 上才有那个感觉。
-        _ctx.PrimitiveBlend = PrimitiveBlend.Add;
+        var glow = new Color4(0.98f, 0.06f, 0.10f, 1f);    // 柔光：亮红（量到的 R 一直≈248，绿蓝往下掉）
+        var edge = new Color4(0.85f, 0.01f, 0.08f, 1f);    // 红边：饱和红（量到的就是 215,2,21）
+        var core = new Color4(1f, 1f, 1f, 1f);             // 白芯：量到的是**纯白** 255,255,255
 
-        // 尾巴做成"填充的渐细带子"（越老越细直到消失），读起来像彗星尾——
-        // 这正是激光笔该有的样子。实测：填充一条几何是几十微秒，
-        // 而描边一条几何是毫秒级，所以这里不用描边。
-        using (var glow = BuildTaperedRibbon(pts, 0, n - 1, 13f, 0f))
+        foreach (var s in strokes)
         {
-            if (glow != null)
-            {
-                _scratch.Color = new Color4(1f, 0.16f, 0.16f, 0.45f);
-                _ctx.FillGeometry(glow, _scratch);
-            }
+            int n = s.Points.Count;
+            if (n < 2) continue;
+            float a = 1f - s.Fade;              // 停留期 = 1（一点没淡）；淡出时一路到 0
+            if (a <= 0.001f) continue;
+
+            float d = MathF.Max(6f, s.WidthLogical * app.DpiScale);   // 红色主带的直径
+
+            // ---- 外面那圈柔光：**六层**同心、越外越淡 ----
+            // 层数和不透明度不是拍脑袋定的：量出来那条"红→白"是一条从 0.64 平滑掉到 0.03、
+            // 一直拖到约 1.55 倍主带直径的渐变（见上面表格），同心带是把它**分段近似**
+            //（Direct2D 的径向渐变笔刷是"绕一个圆心"的，套不到任意形状的轨迹上）。
+            // 每层的 alpha 是**反推**的：要让叠完之后的累计不透明度刚好等于量到的那个值
+            //（0.60 / 0.32 / 0.20 / 0.11 / 0.07 / 0.03），所以越里层的"单层"值越大。
+            // 最后一层 0.41 看着很大，其实它只露在"红边外沿到 0.58 倍"这一圈上——
+            // 参考图在那里的落崖最陡（0.64 → 0.47），就得靠这一层顶上去。
+            // 反推完再回头量我们自己的出图（`tmp/measure-own*.txt`），逐点对上了参考图。
+            Glow(1.60f, 0.03f, a);
+            Glow(1.25f, 0.04f, a);
+            Glow(0.98f, 0.043f, a);
+            Glow(0.80f, 0.10f, a);
+            Glow(0.68f, 0.15f, a);
+            Glow(0.58f, 0.41f, a);
+
+            // ---- 红边 ----（白芯随后盖掉中间，只在两侧各留 0.20d 的红）
+            Layer(s.Points, d * 0.50f, new Color4(edge.R, edge.G, edge.B, 0.95f * a));
+
+            // ---- 白芯 ----（占大头：0.60d 宽的白。量到的白芯/红带 ≈ 6/10。
+            //   **不分粗细都画**——新比例里白芯是主体，细笔时它两边自然只剩一条细红线，
+            //   正是 ClassIn 那个样子；旧版那种"太细就不画白芯"的门槛是给
+            //   "白芯只占 0.32d"的旧比例设的，现在不需要了。）
+            Layer(s.Points, MathF.Max(0.6f, d * 0.30f), new Color4(core.R, core.G, core.B, 0.98f * a));
+
+            // 柔光那一层（半径按主带直径的倍数给，见上面那串数字）
+            void Glow(float k, float alpha, float fade)
+                => Layer(s.Points, d * k, new Color4(glow.R, glow.G, glow.B, alpha * fade));
         }
 
-        int head = Math.Max(1, n / 3);
-        using (var core = BuildTaperedRibbon(pts, n - 1 - head, n - 1, 6f, 0f))
+        // 一小层：等宽的带子 ＋ 两端的圆帽
+        void Layer(IReadOnlyList<InkPoint> pts, float half, in Color4 col)
         {
-            if (core != null)
+            using (var geo = BuildTaperedRibbon(pts, 0, pts.Count - 1, half, half))
             {
-                _scratch.Color = new Color4(1f, 0.96f, 0.92f, 0.95f);
-                _ctx.FillGeometry(core, _scratch);
+                if (geo == null) return;
+                _scratch.Color = col;
+                _ctx.FillGeometry(geo, _scratch);
             }
+            _scratch.Color = col;
+            var head = pts[0]; var tail = pts[pts.Count - 1];
+            _ctx.FillEllipse(new Ellipse(new Vector2(head.X, head.Y), half, half), _scratch);
+            _ctx.FillEllipse(new Ellipse(new Vector2(tail.X, tail.Y), half, half), _scratch);
         }
-
-        _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
     }
 
     private static ID2D1PathGeometry BuildPolyline(IReadOnlyList<InkPoint> pts, int start, int end)
@@ -3625,11 +4095,16 @@ internal sealed class OverlayWindow : IDisposable
             return;
         }
 
+        // 问 EffectiveTool（不是 Tool）：**笔倒过来拿（笔尾橡皮）时，这一圈就是橡皮的圈**
+        // ——半径按橡皮、颜色按橡皮。引擎那边（DrawnCursor / CursorOuterRadius）也是问它，
+        // 两处同一个判据，不然会出现"半径是橡皮的、颜色是笔的"这种半吊子。
+        bool erasing = app.EffectiveTool == Tool.Eraser;
+
         float outer = app.CursorOuterRadius;
-        float truth = app.Tool == Tool.Eraser
+        float truth = erasing
             ? app.EraserRadius
             : app.CursorRingTrueRadius;
-        var fill = app.Tool == Tool.Eraser
+        var fill = erasing
             ? new Color4(0.35f, 0.55f, 0.95f, 0.10f)      // 橡皮：淡蓝，"要擦掉这一块"
             : new Color4(0.35f, 0.55f, 0.95f, 0.06f);     // 笔尖：更淡，不挡视线
         DrawRingCursor(c, truth, outer, fill);

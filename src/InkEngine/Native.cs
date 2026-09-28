@@ -77,6 +77,12 @@ internal static class Native
     public const int IDC_WAIT = 32514;       // Busy：只有真卡住才该出现
     public const int IDC_CROSS = 32515;      // Precision select
     public const int IDC_UPARROW = 32516;    // Alternate select
+    // 笔（"a pen cursor"）：微软的附加光标，WinUser.h 里**没有**给它名字，序号就是 32631。
+    // InkClass / Ink Canvas 的 Cursor="Pen"（WPF）拿到的就是它。实测（tmp/penprobe）：
+    // 32×32、热点在笔尖 (0,0)、白笔身黑描边、固定配色（不跟墨色/笔宽）。
+    // ⚠ 产品现在不加载它了（2026-09-27 换成自绘"彩笔"，跟墨色/笔宽，见 Cursors.RenderPen）
+    // ——这里留着当**出处**：姿态、热点、比例都是照它量的，也留着做 A/B。
+    public const int IDC_PEN = 32631;
     public const int IDC_SIZENWSE = 32642;   // Diagonal resize 1
     public const int IDC_SIZENESW = 32643;   // Diagonal resize 2
     public const int IDC_SIZEWE = 32644;     // Horizontal resize
@@ -121,6 +127,11 @@ internal static class Native
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr CreateIconIndirect(ref ICONINFO iconInfo);
+
+    /// <summary>读一个光标的详情（热点 + 两个位图）。⚠ 两个位图是**副本**，用完要 DeleteObject。
+    /// 自检读"斜笔的热点在不在笔尖"用（见 Cursors.HotspotOf）。</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO iconInfo);
 
     [DllImport("user32.dll")]
     public static extern bool DestroyCursor(IntPtr hCursor);
@@ -282,6 +293,21 @@ internal static class Native
     public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint crKey, byte bAlpha, uint dwFlags);
 
     /// <summary>
+    /// 把自己挂到**父进程的控制台**上（没有就失败）。
+    ///
+    /// 为什么要它：产品发布时工程改成 WinExe（双击不能弹出黑框），但**自检和出图几乎
+    /// 全是从命令行跑的**，那些 `Console.WriteLine` 不能一起丢掉。两者兼顾的做法就是
+    /// "有命令行参数时试着接父控制台"：从终端跑 → 接上、输出照旧；
+    /// 从资源管理器双击（无参数）→ 接不上、也就不会有黑框。
+    /// 见 <c>InkTeach.Program.Main</c>。
+    /// </summary>
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool AttachConsole(int dwProcessId);
+
+    /// <summary><see cref="AttachConsole"/> 的参数：挂到父进程上。</summary>
+    public const int ATTACH_PARENT_PROCESS = -1;
+
+    /// <summary>
     /// 读系统设置。自检/翻页用它问"在 Windows 中显示动画"这一条
     /// （`SPI_GETCLIENTAREAANIMATION`）：关掉时动效直接跳终态。
     /// </summary>
@@ -289,6 +315,21 @@ internal static class Native
     public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, ref int pvParam, uint fWinIni);
 
     public const uint SPI_GETCLIENTAREAANIMATION = 0x1042;
+
+    /// <summary>
+    /// 读系统设置（这是另一个入参形态）：<c>SPI_GETWORKAREA</c> 要的是一个 <see cref="RECT"/>，
+    /// 它给的是**主屏的工作区**——屏幕减掉任务栏之后剩下的那块。
+    ///
+    /// 为什么要它（用户 2026-09-27）：悬浮条的默认位置要"落在任务栏**上方**、两者不重叠"。
+    /// 按整个屏幕算的话，贴底那一条会压住任务栏（我们的覆盖层是置顶的，任务栏挡不住它，
+    /// 而且面板矩形是"我们的地盘"、会吃掉那一块的点击）。工作区这个数天然把任务栏扣掉了，
+    /// 任务栏在底部/左侧/顶部都成立。
+    /// </summary>
+    [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW", SetLastError = true)]
+    public static extern bool SystemParametersInfoRect(uint uiAction, uint uiParam,
+                                                       ref RECT pvParam, uint fWinIni);
+
+    public const uint SPI_GETWORKAREA = 0x0030;
 
     public const uint LWA_ALPHA = 0x00000002;
 
@@ -492,6 +533,18 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
+    // ---- 线程消息（PPT 轮询线程 → 主线程的唤醒）---------------------------
+    //
+    // 为什么不给窗口 PostMessage：**不需要 hwnd**。主循环的消息泵本来就是
+    // "当前线程的队列"（`PeekMessage(hWnd: IntPtr.Zero, ...)`），线程消息
+    // 直接落在同一个队列里，引擎在 DrainMessages 里认一个自定义消息号就够了。
+
+    [DllImport("kernel32.dll")]
+    public static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool PostThreadMessage(uint idThread, uint msg, IntPtr wParam, IntPtr lParam);
+
     // ---- 子窗口排查（导出对话框探针用）----------------------------------
 
     [DllImport("user32.dll")]
@@ -567,6 +620,20 @@ internal static class Native
 
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    /// <summary>前台窗口。PPT 联动用它判"哪个放映窗口在前面"（多个 PPT 实例时挑对那个）。</summary>
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    /// <summary>
+    /// 最简单的消息框。**只在"没有控制台"的场合用**（WinExe 双击启动）：
+    /// 崩溃时那句话没人看得到，至少得让用户看见一眼、知道去哪找详情。
+    /// </summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
+
+    public const uint MB_OK = 0x00000000;
+    public const uint MB_ICONERROR = 0x00000010;
 
     [DllImport("user32.dll")]
     public static extern IntPtr SetFocus(IntPtr hWnd);
@@ -811,6 +878,19 @@ internal static class Native
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetPointerDevices(ref uint deviceCount, [Out] POINTER_DEVICE_INFO[] devices);
+
+    // POINTER_DEVICE_TYPE：设备的"出身"。**这块板子/这支笔的笔尖是不是就在屏幕上**，
+    // 就靠它区分（见 Engine.PenDeviceOnScreen）：
+    //   INTEGRATED_PEN = 触摸屏自带的笔（写字时笔尖压着屏幕，落点就是笔尖）；
+    //   EXTERNAL_PEN   = 外接手写板/数位屏（笔尖在板子上，屏幕上必须给光标指示）。
+    public const uint POINTER_DEVICE_TYPE_INTEGRATED_PEN = 0x00000001;
+    public const uint POINTER_DEVICE_TYPE_EXTERNAL_PEN = 0x00000002;
+    public const uint POINTER_DEVICE_TYPE_INTEGRATED_TOUCH = 0x00000003;
+    public const uint POINTER_DEVICE_TYPE_EXTERNAL_TOUCH = 0x00000004;
+
+    /// <summary>按设备句柄（POINTER_INFO.sourceDevice）查这一个设备的详情。</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool GetPointerDevice(IntPtr device, out POINTER_DEVICE_INFO pointerDevice);
 
     // ---- synthetic input (used by the automated input-path test) ----------
 

@@ -101,6 +101,26 @@ internal static class InkSettings
         return warnings;
     }
 
+    /// <summary>
+    /// 读 `update` 段（目前只有 `url`）。**没有更新源是完全正常的状态**（默认就是没有），
+    /// 所以这里读不到就返回 null，不产生任何警告。
+    /// </summary>
+    public static string LoadUpdateUrl()
+    {
+        string path = FilePath;
+        if (!File.Exists(path)) return null;
+        try
+        {
+            string body = SectionBody(File.ReadAllText(path), "update");
+            if (body == null) return null;
+            foreach (var (key, value, bad) in Pairs(body))
+                if (bad == null && string.Equals(key, "url", StringComparison.OrdinalIgnoreCase))
+                    return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        }
+        catch { }
+        return null;
+    }
+
     /// <summary>取出某个段的正文（不含最外层大括号）。段不存在或大括号不配对就返回 null。</summary>
     private static string SectionBody(string text, string name)
     {
@@ -126,7 +146,8 @@ internal static class InkSettings
     /// 把"和默认不一样"的键位、以及界面偏好写进配置文件。
     /// 键位只写差异（理由见类注释）；界面偏好是引擎原样存下来的，界面那边只放"和默认不一样"的项。
     /// </summary>
-    public static void Save(KeyMap map, IReadOnlyDictionary<string, string> uiPrefs = null)
+    public static void Save(KeyMap map, IReadOnlyDictionary<string, string> uiPrefs = null,
+                            string updateUrl = null)
     {
         string path = FilePath;
         try
@@ -158,6 +179,17 @@ internal static class InkSettings
                     sb.Append($"    \"{kv.Key}\": \"{kv.Value}\"");
                     sb.AppendLine(++n == uiPrefs.Count ? "" : ",");
                 }
+                sb.AppendLine("  }");
+            }
+
+            // 自动更新的来源。**留空就不写这一段**（没配更新源是正常状态）。
+            // ⚠ 注意要"原样带回去"：这个函数是整文件重写，不写这一段就会把用户填的
+            //   更新源抹掉（键位那一段有同样的坑，所以那边只写差异、这边是整段透传）。
+            if (!string.IsNullOrWhiteSpace(updateUrl))
+            {
+                sb.AppendLine(",");
+                sb.AppendLine("  \"update\": {");
+                sb.AppendLine($"    \"url\": \"{updateUrl.Trim()}\"");
                 sb.AppendLine("  }");
             }
             sb.AppendLine("}");

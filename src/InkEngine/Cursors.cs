@@ -17,6 +17,21 @@ internal enum CursorKind
     /// <summary>精确取点。图形类工具（笔、荧光笔、图形、框选）都用它。</summary>
     Cross,
 
+    /// <summary>
+    /// 斜笔（系统"笔"光标 IDC_PEN，InkClass / Ink Canvas 同款）：笔工具在
+    /// **鼠标 / 手写板**下用它（2026-09-27 加，用户点名要的）。
+    ///
+    /// 为什么它合适：热点在**笔尖**、笔杆朝右下，写字时笔杆不盖落点；
+    /// 而且它就是系统光标——跟随用户的"指针大小/颜色/指针方案"辅助设置，
+    /// 这两条自绘做不到。
+    ///
+    /// ⚠ 它**不跟墨色、不跟笔宽**（固定黑白位图，实测见 tmp/penprobe）。
+    /// 2026-09-27 晚试过一版"自绘彩笔"（笔身填墨色、笔杆跟笔宽），用户看过真机后
+    /// 判定"填充颜色有点难看，原来那支就挺好"，**已整批撤回**——想要"看得见真实粗细"
+    /// 的人可以切到落点环那条路（见 Engine.PenShowsCursor），不在这支笔上做。
+    /// </summary>
+    Pen,
+
     /// <summary>整体移动（选中框内部）。</summary>
     Move,
 
@@ -104,8 +119,13 @@ internal static class Cursors
         return h;
     }
 
+    /// <summary>
+    /// 光标工厂总入口。能用系统现成的就用系统现成的（它们自动跟随用户的
+    /// "指针大小 / 颜色 / 指针方案"辅助设置）；系统没有的才自绘（见类注释）。
+    /// </summary>
     public static IntPtr HandleFor(CursorKind kind, int sizePx) => kind switch
     {
+        CursorKind.Pen => System(Native.IDC_PEN),
         CursorKind.Cross => System(Native.IDC_CROSS),
         CursorKind.Move => System(Native.IDC_SIZEALL),
         CursorKind.ResizeWE => System(Native.IDC_SIZEWE),
@@ -120,6 +140,7 @@ internal static class Cursors
     /// <summary>只用来把光标名字打进日志/自检表。</summary>
     public static string Name(CursorKind kind) => kind switch
     {
+        CursorKind.Pen => "IDC_PEN 斜笔",
         CursorKind.Cross => "IDC_CROSS 十字",
         CursorKind.Move => "IDC_SIZEALL 移动",
         CursorKind.ResizeWE => "IDC_SIZEWE 左右拉伸",
@@ -138,6 +159,23 @@ internal static class Cursors
         foreach (var h in s_rotate.Values) if (h != IntPtr.Zero) Native.DestroyCursor(h);
         s_rotate.Clear();
         if (s_hidden != IntPtr.Zero) { Native.DestroyCursor(s_hidden); s_hidden = IntPtr.Zero; }
+    }
+
+    /// <summary>
+    /// 自检用：读一个光标的**热点**。读不到返回 (-1,-1)。
+    ///
+    /// 用途：斜笔的"不挡视线"全靠热点在笔尖——一旦哪天取错光标序号
+    /// （或系统换了资源），屏幕上就会变成"笔杆压在落点上"，肉眼很难第一时间发现。
+    /// 实测值：斜笔热点 = (0,0) = 位图左上角 = 笔尖（见 tmp/penprobe）。
+    /// </summary>
+    public static (int x, int y) HotspotOf(IntPtr h)
+    {
+        if (h == IntPtr.Zero || !Native.GetIconInfo(h, out var info)) return (-1, -1);
+        var pt = (info.xHotspot, info.yHotspot);
+        // GetIconInfo 给的是位图**副本**，不删就是 GDI 对象泄漏（自检里跑一次也要收干净）
+        if (info.hbmColor != IntPtr.Zero) Native.DeleteObject(info.hbmColor);
+        if (info.hbmMask != IntPtr.Zero) Native.DeleteObject(info.hbmMask);
+        return pt;
     }
 
     /// <summary>

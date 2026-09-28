@@ -20,6 +20,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
 
     private readonly InkEngine _engine;
     private RectF _screen;
+    private RectF _workArea;
     private readonly float _dpiScale;
 
     /// <summary>UI 之外的代码要求重画界面时，先记在这里，由主线程消费。</summary>
@@ -29,6 +30,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     {
         _engine = engine;
         _screen = screen;
+        // 工作区一开始就从引擎取一次（后面的刷新走 UpdateWorkArea）：
+        // 界面的"默认位置"要它，而它在 Attach → Layout 那一刻就要用上。
+        _workArea = engine.LogicalPrimaryWorkArea;
         _dpiScale = dpiScale;
         IsReattach = isReattach;
         Commands = this;
@@ -41,10 +45,19 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public RectF Screen => _screen;
 
     /// <summary>
+    /// **主屏工作区**（逻辑像素，屏幕减掉任务栏）。界面算默认位置用它——
+    /// 见 <see cref="InkEngine.PrimaryWorkArea"/> 的注释。
+    /// </summary>
+    public RectF WorkArea => _workArea;
+
+    /// <summary>
     /// 屏幕范围是**逻辑像素**（界面自己的坐标空间），屏幕尺寸/DPI 变化时由
     /// 引擎刷新。早先给的是物理像素，2 倍屏上悬浮条会被算到屏幕外。
     /// </summary>
     internal void UpdateScreen(RectF logicalScreen) => _screen = logicalScreen;
+
+    /// <summary>工作区同理（逻辑像素）。和 <see cref="UpdateScreen"/> 一起由引擎刷。</summary>
+    internal void UpdateWorkArea(RectF logicalWorkArea) => _workArea = logicalWorkArea;
 
     public float DpiScale => _dpiScale;
 
@@ -108,6 +121,8 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void Paste() => _engine.PasteFromClipboard();
     public void Restart() => _engine.RestartFromUi();
     public void Quit() => _engine.QuitFromUi();
+    public void CheckUpdate() => _engine.CheckUpdateFromUi();
+    public void ApplyUpdate() => _engine.ApplyUpdateFromUi();
 
     /// <summary>
     /// 把跨线程请求合并成"退出"和"清空"两个标志，主线程在下一帧开头消费。

@@ -429,6 +429,175 @@ internal static class ExportFileDialog
 
     private static readonly IntPtr HwndTopmost = new(-1);
     private const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_SHOWWINDOW = 0x0040;
+    private const uint SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
+
+    // ---- 对话框"第一帧就在中间"：WH_CBT 钩子 ----------------------------------
+    //
+    // 为什么需要（用户 2026-09-27："它出现的时候就直接在中间，现在会先跳出来、
+    // 然后再移动到中间"）：只靠看门线程"出现后 50ms 内发现、再搬"总会先闪一下——
+    // 系统先按自己的算法摆一次（实测会摆到 (0,0)，见 CenterAndBringUp 的注释），
+    // 我们随后才把它挪到中间。WH_CBT 的 **HCBT_ACTIVATE 在窗口激活之前**送达，
+    // 此刻改坐标，显示出来的第一帧就在中间；看门线程保留——它管"置顶 + 激活 +
+    // 防系统再摆回来"（那两件事仍然需要）。
+    //
+    // 注：`OPENFILENAME` 自带的 lpfnHook / OFN_ENABLEHOOK 在 Vista 之后不触发
+    //（见 StartDialogWatcher 的注释），WH_CBT 是另一套机制，两者无关。
+    private const int WH_CBT = 5;
+    private const int HCBT_CREATEWND = 3;
+    private const int HCBT_ACTIVATE = 5;
+    private const int WS_CHILD = unchecked((int)0x40000000);
+
+    /// <summary>
+    /// `CREATESTRUCT`（只用到几个字段，但**布局必须完整照抄**——少一个字段偏移就全错，
+    /// 写回 x/y 时就是写坏内存）。字段顺序按官方定义：cy, cx, y, x 这个顺序容易记反。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CREATESTRUCT_W
+    {
+        public IntPtr lpCreateParams;
+        public IntPtr hInstance;
+        public IntPtr hMenu;
+        public IntPtr hwndParent;
+        public int cy;
+        public int cx;
+        public int y;
+        public int x;
+        public int style;
+        public IntPtr lpszName;
+        public IntPtr lpszClass;
+        public int dwExStyle;
+    }
+
+    private delegate IntPtr CbtProcDelegate(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int idHook, CbtProcDelegate lpfn, IntPtr hMod, uint dwThreadId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    private static IntPtr _cbtHook = IntPtr.Zero;
+    /// <summary>必须保持引用：委托被 GC 回收之后系统回调会直接崩进程。</summary>
+    private static CbtProcDelegate _cbtProc;
+    /// <summary>这一次弹框已经摆过位置了（**只摆一次**：用户拖过之后不许再抢）。</summary>
+    private static bool _cbtCenteredOnce;
+    /// <summary>排查用（跑 --dialogprobe 看日志）：钩子触发那一刻窗口在哪、有没有摆成功。</summary>
+    private static int _cbtSeenX = int.MinValue, _cbtSeenY = int.MinValue;
+    private static bool _cbtApplied;
+    /// <summary>排查用：钩子一共被调用了几次（区分"钩子没挂上"和"没收到 ACTIVATE"）。</summary>
+    private static int _cbtCalls;
+    /// <summary>排查用：各 nCode 的调用次数（0..9）。</summary>
+    private static readonly int[] _cbtHist = new int[10];
+    /// <summary>排查用：出生分支看到的窗口信息（**内存记录**——系统回调里不写文件）。</summary>
+    private static string _cbtBirthNote = "（出生分支一次都没被走到）";
+
+    /// <summary>
+    /// 装"对话框激活前摆位置"的钩子。**只钩本线程**（对话框就在调用线程上创建，
+    /// 见 AskForImage）。
+    ///
+    /// ⚠ `hMod` 必须是**本进程的模块句柄**，不能传 NULL：托管委托的代码地址不在任何
+    /// "匿名可执行页"里，系统按 hMod 去校验过程地址时对不上，钩子会**静默不投递**
+    /// ——2026-09-27 实测（`--dialogprobe` 日志："CBT 钩子已装"但"没触发"）。
+    /// </summary>
+    private static void InstallDialogPositionHook()
+    {
+        try
+        {
+            _cbtProc ??= OnCbt;
+            _cbtCenteredOnce = false;
+            _cbtHook = SetWindowsHookEx(WH_CBT, _cbtProc, Native.GetModuleHandle(null),
+                                        GetCurrentThreadId());
+            Log(_cbtHook != IntPtr.Zero
+                ? "CBT 钩子已装（对话框第一帧就居中）"
+                : "CBT 钩子装不上（回退：看门线程出现后再居中）");
+        }
+        catch (Exception ex) { Log("CBT 钩子装出错：" + ex.Message); }
+    }
+
+    private static void RemoveDialogPositionHook()
+    {
+        try
+        {
+            if (_cbtHook != IntPtr.Zero) { UnhookWindowsHookEx(_cbtHook); _cbtHook = IntPtr.Zero; }
+        }
+        catch { }
+    }
+
+    /// <summary>钩子回调：在对话框**出生/激活**的那一刻把它摆到中间。</summary>
+    private static IntPtr OnCbt(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        _cbtCalls++;
+        if (nCode >= 0 && nCode < _cbtHist.Length) _cbtHist[nCode]++;
+        // HCBT_CREATEWND：**窗口刚创建、还没显示**——改 CREATESTRUCT 的 x/y 就是
+        // "出生就在中间"，这才是"第一帧就在中间"的正解。
+        //（HCBT_ACTIVATE 那条路 2026-09-27 实测**收不到**：钩子在跑（调用 36 次），
+        //  但通用对话框第一次显示走的不发 ACTIVATE——所以主路放在 CREATEWND。）
+        if (nCode == HCBT_CREATEWND && lParam != IntPtr.Zero && !_cbtCenteredOnce)
+        {
+            try { TryPlaceAtBirth(wParam, lParam); } catch { }
+        }
+        // HCBT_ACTIVATE：兜底——若某条路径真的是"先激活"（窗口已创建但没经过上面那条），
+        // 在激活前再用"只挪位置"的方式摆一次。异常绝不许外抛（系统回调，抛=crupt）。
+        else if (nCode == HCBT_ACTIVATE && wParam != IntPtr.Zero && !_cbtCenteredOnce)
+        {
+            _cbtCenteredOnce = true;
+            try
+            {
+                GetWindowRect(wParam, out var before);       // 排查用：钩子那一刻它在哪
+                _cbtSeenX = before.Left; _cbtSeenY = before.Top;
+                _cbtApplied = CenterOnce(wParam, out _, out _, quiet: true);
+            }
+            catch { }
+        }
+        return CallNextHookEx(_cbtHook, nCode, wParam, lParam);
+    }
+
+    /// <summary>
+    /// 在窗口"出生"时改它 CREATESTRUCT 里的 x/y，让它显示出来的第一帧就在工作区中间。
+    ///
+    /// **只认"顶层 + 类名 #32770（系统对话框）"**：弹框期间这条线程还会创建别的窗口
+    /// （对话框的每个子控件都会走这里），动错了就是"按钮跑到别处"。
+    ///
+    /// ⚠ 类名**必须用 `GetClassName` 从窗口句柄反查**，不能读 CREATESTRUCT 里的
+    /// `lpszClass`：2026-09-27 实测系统对话框是**用原子创建的**（读到的是 atom 0xC018
+    /// 而不是字符串 "#32770"），按字符串比对会全部落空——那版日志里"出生摆位未成"
+    /// 就是这个原因。
+    /// </summary>
+    private static void TryPlaceAtBirth(IntPtr hwnd, IntPtr cbtCreateWndPtr)
+    {
+        // 拿类名（窗口这时已经建好了，只是还没显示；wParam 就是它的句柄）。
+        var sb = new StringBuilder(32);
+        Native.GetClassNameW(hwnd, sb, sb.Capacity);
+        string className = sb.ToString();
+        _cbtBirthNote = $"类名={className}";
+        if (className != "#32770") return;                       // 不是系统对话框：跳过
+
+        IntPtr csPtr = Marshal.ReadIntPtr(cbtCreateWndPtr);      // CBT_CREATEWND 第一个字段就是 lpcs
+        if (csPtr == IntPtr.Zero) return;
+        var cs = Marshal.PtrToStructure<CREATESTRUCT_W>(csPtr);
+
+        if ((cs.style & WS_CHILD) != 0) return;                  // 子控件：跳过（对话框的控件都是子窗口）
+
+        // 居中到**光标所在那块屏**的工作区（多屏时，对话框该出现在老师正在看的那块屏）。
+        if (!Native.GetCursorPos(out var pt)) return;
+        IntPtr mon = Native.MonitorFromWindow(Native.WindowFromPoint(pt), Native.MONITOR_DEFAULTTONEAREST);
+        var mi = new Native.MONITORINFO { cbSize = Marshal.SizeOf<Native.MONITORINFO>() };
+        if (!Native.GetMonitorInfo(mon, ref mi)) return;
+        var wa = mi.rcWork;
+        int w = cs.cx, h = cs.cy;
+        int nx = wa.Left + (wa.Width - w) / 2;
+        int ny = wa.Top + (h >= wa.Height ? 0 : (wa.Height - h) / 2);
+
+        // 写回 x / y：偏移**问 OffsetOf，不手算**（手算错一个字节就是写坏内存）。
+        Marshal.WriteInt32(csPtr, (int)Marshal.OffsetOf<CREATESTRUCT_W>(nameof(CREATESTRUCT_W.x)), nx);
+        Marshal.WriteInt32(csPtr, (int)Marshal.OffsetOf<CREATESTRUCT_W>(nameof(CREATESTRUCT_W.y)), ny);
+        _cbtCenteredOnce = true;
+        _cbtApplied = true;
+        Log($"CBT：对话框 {w}×{h} 出生时即被摆到 ({nx},{ny})（居中于光标所在屏）");
+    }
 
     /// <summary>
     /// **看门线程**：对话框是模态调用（`GetSaveFileNameW` 不返回我们就拿不到它的句柄），
@@ -442,9 +611,11 @@ internal static class ExportFileDialog
     {
         var t = new Thread(() =>
         {
-            for (int i = 0; i < 120; i++)          // 最多等 6 秒
+            // 10 毫秒一轮（不是 50）：发现得越快，"系统初摆 → 我们纠正"之间留给眼睛的
+            // 那一帧越少——对话框出生位置已经由 CBT 钩子管了，这里只是兜底与纠偏。
+            for (int i = 0; i < 600; i++)          // 最多等 6 秒
             {
-                Thread.Sleep(50);
+                Thread.Sleep(10);
                 IntPtr dlg = FindOurDialog();
                 if (dlg == IntPtr.Zero) continue;
                 CenterAndBringUp(dlg);
@@ -506,6 +677,16 @@ internal static class ExportFileDialog
     {
         try
         {
+            // 排查记录（--dialogprobe 看日志）：看门线程第一次发现它时在哪 + 钩子干了什么。
+            // 这两行回答的是"用户看到的'先出现再移动'发生在哪一步"。
+            GetWindowRect(hwnd, out var seen);
+            string hist = string.Join(" ", System.Linq.Enumerable.Range(0, _cbtHist.Length)
+                                    .Where(i => _cbtHist[i] > 0)
+                                    .Select(i => $"code{i}×{_cbtHist[i]}"));
+            Log($"对话框 {hwnd}：看门线程发现于 ({seen.Left},{seen.Top})；"
+                + $"CBT 钩子调用 {_cbtCalls} 次（{hist}）；出生摆位{(_cbtApplied ? "成功" : "未成")}；"
+                + $"出生看到：{_cbtBirthNote}");
+
             // ① 先只管 z 序：把它提到置顶层，位置先别动。
             SetWindowPos(hwnd, HwndTopmost, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
 
@@ -526,28 +707,43 @@ internal static class ExportFileDialog
                 SetForegroundWindow(hwnd);
             }
 
-            // ③ **居中要"盯一会儿"，不能指望移一次就位**（这一步踩过）：
+            // ③ **兜底纠偏**（2026-09-27 起改成"先判后动"）：
             //
-            // 系统对话框显示之后**自己还会再摆一次位置**：实测移完读到 (779,330)，
-            // 1.2 秒后再问它已经在 (0,0) 了（全屏截图坐实：对话框在最左上角）。
-            // 所以这里前两秒盯着——偏了就再移一次；连着三次（约 0.45 秒）都在位才算稳。
-            // 这段时间用户刚看见框，不可能已经在拖它了，所以不会跟人抢。
+            // 对话框"出生"的位置已经由 CBT 钩子管住了（实测出生就在 (779,330)，随后
+            // 系统/对话框自己按最终尺寸精修到 (720,372)，只差几十像素）——**这种小偏差
+            // 我们不插手**：原来的"每轮都重新居中"会把那几十像素再搬一次，用户反而
+            // 看见一次小跳。现在只在**偏得离谱**（>200 像素，比如系统把它扔到 (0,0)）
+            // 时才拉回居中——那才是这层兜底真正要防的事。
+            //
+            // 容差 200 是这么定的：正常"出生位置 → 最终位置"的自我精修是几十像素
+            //（实测 72px）；要防的故障是"摆到屏幕角上"（700+ 像素）。中间没有别的量级。
+            const int WayOffPx = 200;
             int moves = 0, okStreak = 0;
             for (int i = 0; i < 14; i++)
             {
-                if (!CenterOnce(hwnd, out int wantX, out int wantY)) break;
-                Thread.Sleep(150);
+                if (!MeasureCenter(hwnd, out int wantX, out int wantY)) break;
                 GetWindowRect(hwnd, out var cur);
-                if (Math.Abs(cur.Left - wantX) <= 4 && Math.Abs(cur.Top - wantY) <= 4)
+                int dx = cur.Left - wantX, dy = cur.Top - wantY;
+
+                if (Math.Abs(dx) > WayOffPx || Math.Abs(dy) > WayOffPx)
                 {
+                    // 真出事了（被摆到别处）：拉回居中，并记下它偏去了哪（排查用）。
+                    Log($"对话框 {hwnd}：偏到 ({cur.Left},{cur.Top})，拉回居中 ({wantX},{wantY})");
+                    MoveTo(hwnd, wantX, wantY, quiet: false);
+                    moves++;
+                    okStreak = 0;
+                }
+                else
+                {
+                    // 在中心附近（含正常的几十像素精修）：算"到位"。连看 3 轮都到位即收工。
                     if (++okStreak >= 3)
                     {
-                        Log($"对话框 {hwnd}：已居中到 ({wantX},{wantY})（移了 {moves} 次后稳住）");
+                        Log($"对话框 {hwnd}：已在居中位置 ({cur.Left},{cur.Top})"
+                            + $"（我们动手 {moves} 次）");
                         break;
                     }
                 }
-                else okStreak = 0;
-                moves++;
+                Thread.Sleep(150);
             }
             Log($"对话框 {hwnd}：顶到最前（原前台 {fg}，线程 {fgTid} / 本线程 {myTid}）");
         }
@@ -558,7 +754,23 @@ internal static class ExportFileDialog
     /// 按最近那块显示器的**工作区**把对话框摆到中间（工作区装不下就贴顶，
     /// 免得标题栏被推到屏幕外、拖都拖不动）。返回 false = 没量到显示器，位置没动。
     /// </summary>
-    private static bool CenterOnce(IntPtr hwnd, out int wantX, out int wantY)
+    /// <param name="quiet">
+    /// true = **只挪位置**：不置顶、不显示、不激活（CBT 钩子里用——那一刻窗口还没
+    /// 显示出来，显示与 z 序交给系统自己的流程去做）；false = 看门线程那一套
+    /// （顺带置顶 + 确保显示）。
+    /// </param>
+    private static bool CenterOnce(IntPtr hwnd, out int wantX, out int wantY, bool quiet = false)
+    {
+        if (!MeasureCenter(hwnd, out wantX, out wantY)) return false;
+        MoveTo(hwnd, wantX, wantY, quiet);
+        return true;
+    }
+
+    /// <summary>
+    /// **只算"该在哪"、不动手**（居中到最近显示器的工作区）。false = 没量到显示器。
+    /// 拆开是为了让看门线程能"先判后动"——偏得离谱才动手（见那个循环里的注释）。
+    /// </summary>
+    private static bool MeasureCenter(IntPtr hwnd, out int wantX, out int wantY)
     {
         wantX = wantY = int.MinValue;
         GetWindowRect(hwnd, out var r);
@@ -567,12 +779,15 @@ internal static class ExportFileDialog
         if (!GetMonitorInfoW(mon, ref mi)) return false;
 
         var wa = mi.rcWork;
-        int w = r.Width, h = r.Height;
-        wantX = wa.Left + (wa.Width - w) / 2;
-        wantY = wa.Top + (h >= wa.Height ? 0 : (wa.Height - h) / 2);
-        SetWindowPos(hwnd, HwndTopmost, wantX, wantY, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
+        wantX = wa.Left + (wa.Width - r.Width) / 2;
+        wantY = wa.Top + (r.Height >= wa.Height ? 0 : (wa.Height - r.Height) / 2);
         return true;
     }
+
+    private static void MoveTo(IntPtr hwnd, int x, int y, bool quiet)
+        => SetWindowPos(hwnd, quiet ? IntPtr.Zero : HwndTopmost, x, y, 0, 0,
+                        quiet ? (SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+                              : (SWP_NOSIZE | SWP_SHOWWINDOW));
 
     // 量尺寸 / 找显示器 / 读工作区：走引擎已有的那一套 interop，不在这里另开一份。
     private static void GetWindowRect(IntPtr hWnd, out Native.RECT r) => Native.GetWindowRect(hWnd, out r);
@@ -622,7 +837,8 @@ internal static class ExportFileDialog
                                      out int filterIndex)
     {
         filterIndex = defaultFilterIndex;
-        StartDialogWatcher();          // 先起看门线程：对话框一出现就把它顶到最前
+        StartDialogWatcher();          // 看门线程：对话框出现后置顶 + 激活 + 防系统再摆
+        InstallDialogPositionHook();   // CBT 钩子：**第一帧就出现在中间**（见那个函数）
         var ofn = new OpenFileName
         {
             lStructSize = SizeOfOpenFileName,
@@ -637,7 +853,11 @@ internal static class ExportFileDialog
             lpstrDefExt = ExportFormats.ExtensionFor(defaultFilterIndex).TrimStart('.').Split(';')[0],
             Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
         };
-        if (!GetSaveFileNameW(ofn)) return null;
+        // 钩子必须在**本线程、调用期间**挂着（对话框就在这个调用里创建）——用完立刻卸。
+        bool ok;
+        try { ok = GetSaveFileNameW(ofn); }
+        finally { RemoveDialogPositionHook(); }
+        if (!ok) return null;
         filterIndex = ofn.nFilterIndex;
         var path = (ofn.lpstrFile ?? "").Trim().TrimEnd('\0');
         return string.IsNullOrEmpty(path) ? null : path;

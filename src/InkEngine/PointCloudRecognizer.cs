@@ -1,5 +1,5 @@
 // =====================================================================================
-//  $P Point-Cloud Recognizer —— **照搬官方实现**（JavaScript 版逐函数搬成 C#）
+//  $P Point-Cloud Recognizer —— **参考官方实现**（JavaScript 版逐函数搬成 C#）
 //
 //  来源与许可（New BSD，按许可要求保留版权声明）：
 //    The $P Point-Cloud Recognizer (JavaScript version)

@@ -11,9 +11,22 @@ namespace InkEngine;
 /// 专业图标库都调过；手画出来的通常一看就别扭。所以路径数据从
 /// Fluent UI System Icons 抓（见 tools/gen-icons.ps1），这里只负责解析。
 ///
-/// 支持的命令只有 M / L / H / V / C / Z（含相对形式）——这不是偷懒，
+/// 支持的命令：M / L / H / V / C / Q / T / A / Z（含相对形式）——这不是偷懒，
 /// 是**照着上游实际用到的命令写的**：生成脚本会统计 d 里出现过哪些命令，
-/// 目前只有这六个。真需要弧线（A）时，脚本的统计会先报出来，再加也不迟。
+/// 用到哪几个就支持哪几个（这一条从第一版起就是这规矩：先报统计，再加实现）。
+///
+/// **Q / T（二次贝塞尔）是 2026-09-26 补的**：那天要画 Material Symbols 的
+/// `stylus_laser_pointer`（"笔射出一道光"那个激光笔图标），它的 d 里全是
+/// `q` / `t`，而当时只认 M/L/H/V/C/Z ——**画出来是空的**（出图时三个格子全白，
+/// 一眼就看见了）。补的时候按 SVG 规范来：`T`/`t` 是"平滑二次"，
+/// 控制点 = 上一个控制点关于当前点的**镜像**；上一条不是二次曲线时控制点就取当前点
+/// （退化成一个直线段，这也是规范里写的）。
+///
+/// **A / a（圆弧）是同日再补的**：同一天要落两张上游图（MDI 的 `selection`、
+/// Lucide 的 `square-dashed-mouse-pointer`），它们的圆角都是 `a`（圆弧）——
+/// 又是"默默画不出来"（圆弧那段直接丢掉，剩下几条直线看着像图标缺了一角）。
+/// 按 SVG 规范 F.6.5 的"端点 → 圆心"参数化换算，再按 ≤90° 分段、
+/// 每段用三次贝塞尔逼近（k = 4/3·tan(Δθ/4)，各家 SVG 渲染器的通行做法）。
 ///
 /// 几何按 24×24 的原始坐标缓存，绘制时用 ctx 的变换缩放到目标尺寸——
 /// 这样同一份几何可以在不同尺寸/DPI 下复用，不用重建。
@@ -58,6 +71,10 @@ public static class SvgPath
             char cmd = 'M';
             Vector2 cur = default, sub = default;
             bool figureOpen = false;
+            // Q / T 要用：上一个二次曲线的控制点，以及"上一条命令是不是二次曲线"
+            //（`T` 是"平滑二次"——控制点要拿上一条的控制点做镜像，见类注释）。
+            Vector2 quadCtrl = default;
+            bool prevWasQuad = false;
 
             while (i < tokens.Count)
             {
@@ -66,6 +83,9 @@ public static class SvgPath
                 if (char.IsLetter(tokens[i].Value[0])) { cmd = tokens[i].Value[0]; i++; }
                 char c = char.ToUpperInvariant(cmd);
                 bool rel = char.IsLower(cmd);
+
+                // 除了 Q / T，别的命令都会"打断"平滑二次的那条链（T 只能在 Q/T 之后用）。
+                if (c is not ('Q' or 'T')) prevWasQuad = false;
 
                 switch (c)
                 {
@@ -109,6 +129,41 @@ public static class SvgPath
                         cur = end;
                         break;
                     }
+                    case 'Q':
+                    {
+                        // 二次贝塞尔：只给一个控制点 ＋ 终点（起点是当前点）。
+                        quadCtrl = Point(tokens, ref i, cur, rel);
+                        var end = Point(tokens, ref i, cur, rel);
+                        // Vortice 里这个结构体没有"两点版"的构造函数，只能对象初始化器填字段
+                        sink.AddQuadraticBezier(new QuadraticBezierSegment { Point1 = quadCtrl, Point2 = end });
+                        cur = end;
+                        prevWasQuad = true;
+                        break;
+                    }
+                    case 'T':
+                    {
+                        // 平滑二次：控制点 = 上一条二次曲线的控制点关于**当前点**的镜像；
+                        // 上一条不是二次曲线时取当前点（这时它退化成一条直线，规范如此）。
+                        quadCtrl = prevWasQuad ? cur * 2f - quadCtrl : cur;
+                        var end = Point(tokens, ref i, cur, rel);
+                        sink.AddQuadraticBezier(new QuadraticBezierSegment { Point1 = quadCtrl, Point2 = end });
+                        cur = end;
+                        prevWasQuad = true;
+                        break;
+                    }
+                    case 'A':
+                    {
+                        // 圆弧：rx ry 旋转角 大弧标志 方向标志 x y（终点；x/y 才分相对/绝对）
+                        float rx = Number(tokens, ref i);
+                        float ry = Number(tokens, ref i);
+                        float rot = Number(tokens, ref i);
+                        bool largeArc = Number(tokens, ref i) != 0f;
+                        bool sweep = Number(tokens, ref i) != 0f;
+                        var end = Point(tokens, ref i, cur, rel);
+                        AddArc(sink, cur, rx, ry, rot, largeArc, sweep, end);
+                        cur = end;
+                        break;
+                    }
                     case 'Z':
                         if (figureOpen) { sink.EndFigure(FigureEnd.Closed); figureOpen = false; }
                         cur = sub;
@@ -124,6 +179,80 @@ public static class SvgPath
             sink.Close();
         }
         return geo;
+    }
+
+    /// <summary>
+    /// 把一段 SVG 圆弧（`A` / `a`）加进几何里。
+    ///
+    /// **照 SVG 规范 F.6.5「端点参数 → 圆心参数」那一套算**（这段没有"自己发明"的余地：
+    /// 规范给了伪码，照抄即可）：先把椭圆半径按需要放大到能容纳两端点、求出圆心，
+    /// 再算出起始角与扫过的角度，最后按 **≤90° 分段**、每段用**三次贝塞尔**逼近
+    ///（控制点距 = k = 4/3·tan(Δθ/4)）——90° 一段的误差约 0.027%，图标尺寸下看不出来，
+    /// 各家 SVG 渲染器都是这么干的。
+    ///
+    /// 三种退化按规范处理：两端点重合 → 整段不画；半径里有一个是 0 → 退化成直线；
+    /// 半径太小装不下两端点 → 两个半径一起放大到刚好装下。
+    /// </summary>
+    private static void AddArc(ID2D1GeometrySink sink, Vector2 p0, float rx, float ry,
+                               float rotDeg, bool largeArc, bool sweep, Vector2 p1)
+    {
+        if (p0 == p1) return;                                  // 规范：端点重合 → 这段省略
+        rx = MathF.Abs(rx); ry = MathF.Abs(ry);
+        if (rx < 1e-6f || ry < 1e-6f) { sink.AddLine(p1); return; }   // 规范：退化成直线
+
+        float phi = rotDeg * MathF.PI / 180f;
+        float cosPhi = MathF.Cos(phi), sinPhi = MathF.Sin(phi);
+
+        // ① 把两端点搬到"椭圆自己的坐标系"里（先平移到中点、再反向旋转）
+        float dx = (p0.X - p1.X) * 0.5f, dy = (p0.Y - p1.Y) * 0.5f;
+        float x1 = cosPhi * dx + sinPhi * dy;
+        float y1 = -sinPhi * dx + cosPhi * dy;
+
+        // ② 半径不够大就一起放大（规范 F.6.6）
+        float lambda = x1 * x1 / (rx * rx) + y1 * y1 / (ry * ry);
+        if (lambda > 1f)
+        {
+            float s = MathF.Sqrt(lambda);
+            rx *= s; ry *= s;
+        }
+
+        // ③ 求圆心（规范 F.6.5.2）——注意两个标志的取值决定走哪一边
+        float rx2 = rx * rx, ry2 = ry * ry, x12 = x1 * x1, y12 = y1 * y1;
+        float den = rx2 * y12 + ry2 * x12;
+        float num = rx2 * ry2 - den;
+        float coef = (largeArc == sweep ? -1f : 1f) * MathF.Sqrt(MathF.Max(0f, num / den));
+        float cxp = coef * (rx * y1 / ry);
+        float cyp = coef * (-ry * x1 / rx);
+        float cx = cosPhi * cxp - sinPhi * cyp + (p0.X + p1.X) * 0.5f;
+        float cy = sinPhi * cxp + cosPhi * cyp + (p0.Y + p1.Y) * 0.5f;
+
+        // ④ 起始角与扫过的角（扫到哪边由 sweep 决定，符号不对就补一整圈）
+        float theta1 = MathF.Atan2((y1 - cyp) / ry, (x1 - cxp) / rx);
+        float theta2 = MathF.Atan2((-y1 - cyp) / ry, (-x1 - cxp) / rx);
+        float delta = theta2 - theta1;
+        if (!sweep && delta > 0f) delta -= MathF.Tau;
+        if (sweep && delta < 0f) delta += MathF.Tau;
+
+        // ⑤ 分段 → 每段一条三次贝塞尔。E(θ) 是椭圆上的点，E'(θ) 是它的切向（用来定两个控制点）
+        int steps = Math.Max(1, (int)MathF.Ceiling(MathF.Abs(delta) / (MathF.PI * 0.5f)));
+        float step = delta / steps;
+        float k = 4f / 3f * MathF.Tan(step / 4f);
+
+        Vector2 At(float th) => new(
+            cx + rx * cosPhi * MathF.Cos(th) - ry * sinPhi * MathF.Sin(th),
+            cy + rx * sinPhi * MathF.Cos(th) + ry * cosPhi * MathF.Sin(th));
+        Vector2 Dir(float th) => new(
+            -rx * cosPhi * MathF.Sin(th) - ry * sinPhi * MathF.Cos(th),
+            -rx * sinPhi * MathF.Sin(th) + ry * cosPhi * MathF.Cos(th));
+
+        for (int s = 0; s < steps; s++)
+        {
+            float a0 = theta1 + step * s;
+            float a1 = a0 + step;
+            var c1 = At(a0) + Dir(a0) * k;
+            var c2 = At(a1) - Dir(a1) * k;
+            sink.AddBezier(new BezierSegment(c1, c2, At(a1)));
+        }
     }
 
     private static float Number(MatchCollection t, ref int i)

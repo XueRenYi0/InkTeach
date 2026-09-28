@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 
 namespace InkEngine;
 
@@ -996,7 +996,7 @@ internal static class ShapeRecognize
 
         // ② **$P 点云识别**决定"先按哪个图形去定形"。
         //
-        // 为什么把分类交给 $P（照搬官方实现，见 PointCloudRecognizer.cs 的文件头）：
+        // 为什么把分类交给 $P（参考官方实现，见 PointCloudRecognizer.cs 的文件头）：
         //    原来是自己"数角点 + 判直角/平行"——那是**单点判据**，手画的圆角、过冲、
         //    波浪边随便一样就能把它带偏（用户 2026-09-23 反馈的"矩形识别形变太大、
         //    完全和墨迹对不上"就是它）。$P 把整条笔迹当**无序点云**和模板比，
@@ -1599,7 +1599,7 @@ internal static class ShapeRecognize
     /// <summary>
     /// **正弦 / 余弦**（计划-图形工具.md §43.4.4 三）。
     ///
-    /// ## 公式从哪来（照搬，不是自己推的）
+    /// ## 公式从哪来（参考，不是自己推的）
     ///
     /// 固定频率的三系数**谐波回归**：`y = β₀ + β₁·cos(2πfx) + β₂·sin(2πfx)`。
     /// **固定 `f` 时它对 β 是线性的**（正规方程 3×3 闭式解），所以只需要在 `f` 上做

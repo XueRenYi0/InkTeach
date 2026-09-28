@@ -7,6 +7,9 @@ obj/
 # 临时中间产物（例如下载下来核对过的规范 PDF、抽取出来的文本）
 tmp/
 
+# 发布产物（publish.ps1 的输出：绿色版目录 + zip，几十 MB，随时能重新生成）
+dist/
+
 # 大体积的产物 / 参考件，不进版本库（文件仍留在磁盘上，不受影响）
 #   reports/shots          全屏截图，可重新生成，单个约 20 MB
 #   reports/peers          竞品程序副本
@@ -14,3 +17,16 @@ tmp/
 reports/shots/
 reports/peers/
 reports/wpf-build-verify/
+
+# 自检 / 出图的产物（2026-09-29：这一轮跑测试往 reports/ 里写了 539 个文件、
+# 光截图就 1.3 GB）。**gitignore 只影响未跟踪的新文件**——`reports/` 里那些
+# 手写进库的报告（inkprobe-report.txt、lat-*.csv 等）照旧在库里，不受影响。
+reports/**/*.bmp
+reports/**/*.png
+reports/**/*.jpg
+reports/func-*/
+reports/perf-*/
+reports/stress-*/
+reports/ui-audit/
+reports/backdrop-probe/
+reports/_*

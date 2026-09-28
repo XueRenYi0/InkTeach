@@ -113,6 +113,12 @@ public interface IUiHost
     /// <summary>屏幕范围（虚拟桌面坐标）。</summary>
     RectF Screen { get; }
 
+    /// <summary>
+    /// **主屏的工作区**（逻辑像素）：屏幕减掉任务栏之后剩下的那块矩形。
+    /// 界面算"默认位置"用它——见 <c>InkEngine.PrimaryWorkArea</c> 的注释（用户 2026-09-27）。
+    /// </summary>
+    RectF WorkArea { get; }
+
     /// <summary>DPI 缩放（逻辑像素 → 物理像素）。</summary>
     float DpiScale { get; }
 
@@ -322,6 +328,21 @@ public interface IEngineCommands
     /// 和"界面崩了自动重启"走的是同一条路（见 Recovery）：重启的前提是不丢东西。
     /// 教室里没有键盘的机器上，这是"感觉不对就重开一次"的唯一入口。
     /// </summary>
+    /// <summary>
+    /// 「更多」抽屉里的「检查更新」被点了一下。
+    ///
+    /// **没配更新源就什么都不做**（只把状态文字改成"未配置更新源"）——这是默认状态，完全正常。
+    /// 检查在**后台线程**做（网络最长 15 秒），所以界面绝不会卡。
+    /// </summary>
+    void CheckUpdate();
+
+    /// <summary>
+    /// 已经查到新版本了，再点一下就**下载 → 校验 sha256 → 换壳重启**。
+    /// 下载也在后台线程；下完由引擎拉起换壳脚本并自己退出（脚本等我们退了才换文件）。
+    /// 校验不过一律不装（宁可留在旧版本）。
+    /// </summary>
+    void ApplyUpdate();
+
     void Restart();
 
     void Quit();
@@ -533,6 +554,16 @@ public static class ShapeSpec
 public readonly struct UiState
 {
     public Tool Tool { get; init; }
+
+    /// <summary>
+    /// **正在 PPT 放映中**（`InkEngine.PptMode` 的转发）。
+    ///
+    /// 界面用它做一件事（用户 2026-09-27 定）：**进放映的那一刻**把悬浮条展开、
+    /// 并摆回"工作区底边居中"——老师一放片，笔就自己出来了。
+    /// ⚠ 只在**边沿**做，不能每次状态变化都摆（否则他拖走的面板会被翻页之类的
+    /// 无关状态变化拽回去）。
+    /// </summary>
+    public bool PptMode { get; init; }
     /// <summary>当前工具实际用的颜色（荧光笔是半透明的）。</summary>
     public Color4 Color { get; init; }
     /// <summary>
@@ -645,6 +676,7 @@ public readonly struct UiState
     public int ScreenIndex { get; init; }
     /// <summary>还能不能往上翻（到顶了就不行）。"下一屏"永远可用。</summary>
     public bool CanFlipPageUp { get; init; }
+
     /// <summary>
     /// 老师这一刻是不是正在写。界面用它判断"别在人家写字的时候动界面"——
     /// 比如贴边隐藏：手正在写，界面突然收起来或者浮出来，都会打断。
@@ -654,6 +686,15 @@ public readonly struct UiState
     public int UndoDepth { get; init; }
     public int RedoDepth { get; init; }
     public int StrokeCount { get; init; }
+
+    /// <summary>
+    /// **自动更新的状态**（2026-09-29 加）。「更多」抽屉里的「检查更新」那一行：
+    /// 显示什么文字、点一下做什么，全部看它 + <see cref="UpdateText"/>。
+    /// 状态由引擎在后台线程算好、在主线程推进（界面永远不会卡在网络上）。
+    /// </summary>
+    public UpdateStage UpdateStage { get; init; }
+    /// <summary>自动更新的一行状态文字（"未配置更新源" / "检查中…" / "已是最新" / "下载 42%" …）。</summary>
+    public string UpdateText { get; init; }
 }
 
 /// <summary>

@@ -1,7 +1,28 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!--
+      **OutputType 默认是 Exe（控制台程序）——这是故意的**：这个仓库的干活方式就是
+      "跑一条自检、看它的输出"，而输出要被管道抓住就必须是控制台子系统
+      （GUI 子系统进程拿不到父进程的管道：实测改成 WinExe 之后，
+      自检的输出被管道抓到的是空的）。
+
+      发布给用户时切到 GUI 子系统（那样双击启动不会弹黑框），根目录 publish.ps1 会传
+      `PublishAsWinExe=true` 过来。两条路各管一边。
+      （发布版从终端跑时，Main 里那句 AttachConsole 会让日志照旧打到那个终端上。）
+
+      ⚠ 别改成"命令行直接传 OutputType=WinExe"：那是 MSBuild 的**全局属性**，
+        会一起传给被引用的 InkEngine / InkUi——它们是库、没有 Main，
+        整个构建直接报 CS5001（这个坑实测踩过，所以专门开了这个自定义开关）。
+
+      程序图标 = 界面里**收起态那颗球**（白面 + 当前笔色那圈 + 自绘笔图标）。
+      它不是手画的，是 makeicon 那条命令用界面自己的渲染生成的
+      （保证和屏幕上那颗一模一样），见 App.MakeIcon。
+
+      版本从 8.0.0 起（用户 2026-09-27 定）。文件属性里那几行都跟着它走。
+    -->
+    <OutputType Condition="'$(PublishAsWinExe)' == 'true'">WinExe</OutputType>
+    <OutputType Condition="'$(PublishAsWinExe)' != 'true'">Exe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
@@ -13,6 +34,15 @@
     <LangVersion>latest</LangVersion>
     <InvariantGlobalization>false</InvariantGlobalization>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+
+    <ApplicationIcon>assets\InkTeach.ico</ApplicationIcon>
+
+    <Version>8.0.0</Version>
+    <AssemblyVersion>8.0.0.0</AssemblyVersion>
+    <FileVersion>8.0.0.0</FileVersion>
+    <Product>InkTeach 批注</Product>
+    <AssemblyTitle>InkTeach 批注</AssemblyTitle>
+    <Description>屏幕批注工具：白板 / PPT 放映批注 / 图形与曲线 / 回放导出</Description>
   </PropertyGroup>
 
   <ItemGroup>

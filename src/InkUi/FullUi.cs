@@ -32,7 +32,7 @@ public sealed class FullUi : IOverlayUi
     private static readonly (string Icon, string Filled, string Tip)[] Cells =
     {
         ("pen",       "penFilled",       "收起"),
-        ("mouse",     "mouseFilled",     "鼠标（穿透点击）"),
+        ("cursorArrow", "cursorArrowFilled", "鼠标（穿透点击）"),
         ("board",     "board",           "白板"),
         ("pen",       "penFilled",       "笔"),
         ("highlighter","highlighterFilled","荧光笔"),
@@ -107,6 +107,14 @@ public sealed class FullUi : IOverlayUi
     private IUiHost _host;
     private Widgets _widgets;
     private RectF _screen;                 // 逻辑虚拟桌面（Layout 给的）
+    /// <summary>
+    /// 逻辑**主屏工作区**（屏幕减掉任务栏）。只用在**默认位置**上（见 <see cref="RawAnchor"/>）：
+    /// 用户 2026-09-27 要"面板紧贴任务栏上方、两者不重叠"。
+    ///
+    /// ⚠ 别拿它替代 <see cref="_screen"/>：夹取、贴边隐藏的位移、吸附都还得按**屏幕**算——
+    /// 贴边隐藏那条注释写得很清楚（面板不会"藏到任务栏后面"，只有推出屏幕才真的看不见）。
+    /// </summary>
+    private RectF _work;
     // 拖过之后的位置：**X = 主条左端，Y = 主条上边**。null = 还没拖过（用默认位置）。
     //
     // 这一格 2026-09-17 来回改过一次，最后**回到假面板的规则**，理由记在 RawAnchor：
@@ -136,6 +144,12 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>上一次看到的工具。用它判断"工具真的换了"，而不是"带子对不对"。</summary>
     private Tool _lastTool = Tool.Pen;
+
+    /// <summary>
+    /// 上一次看到的"在放映吗"。用它认**进放映的那一刻**（边沿），
+    /// 见 <see cref="OnStateChanged"/> 里那一段。
+    /// </summary>
+    private bool _lastPpt;
 
     private bool _sliderDragging;
 
@@ -179,17 +193,12 @@ public sealed class FullUi : IOverlayUi
     private bool _peekArmed;
 
     /// <summary>「更多」抽屉里的行。</summary>
-    private enum Row { DarkTheme, AutoHide, BoardPattern, BoardStep, DwellShape, Restart, Quit, CheckUpdate }
+    private enum Row { DarkTheme, AutoHide, DwellShape, Restart, Quit, CheckUpdate }
 
     private static readonly (Row Kind, string Label, bool Dangerous, bool Gray)[] Rows =
     {
         (Row.DarkTheme, "深色主题", false, false),
         (Row.AutoHide, "贴边隐藏", false, false),
-        // 白板底纹（用户 2026-09-17 要的，参考 InkClass 的"无/方格/横线 + 间距"）。
-        // 点一下换下一档，标签上直接写当前是哪一档。**白板没开时压暗**——
-        // 底纹只画在板面上，板子没开就改了也看不见（InkClass 也是这么守的）。
-        (Row.BoardPattern, "白板底纹", false, false),
-        (Row.BoardStep, "底纹间距", false, false),
         // 停顿成型（2026-09-23 第二十批，见 计划-图形工具.md §四十二）：
         // 手写一笔停住 400ms → 把它变成规整图形。**默认开**（用户定的：
         // "因为是停顿变，所以默认开"），所以这一行的开关初始就是「开」。
@@ -197,18 +206,20 @@ public sealed class FullUi : IOverlayUi
         (Row.DwellShape, "停顿变图形", false, false),
         (Row.Restart, "重启软件", false, false),
         (Row.Quit, "退出", true, false),
-        (Row.CheckUpdate, "检查更新", false, true),
+        (Row.CheckUpdate, "检查更新", false, false),
     };
 
     /// <summary>
-    /// 第 1、3、4 行后面画分隔线（画的时候跳过的位置）。
-    /// 三刀切出四组：主题/贴边 · 底纹 · 图形 · 系统。
+    /// 哪几行后面画分隔线（画的时候跳过的位置）。
+    /// 两刀切出三组：主题/贴边 · 图形 · 系统。
     ///
     /// ⚠ **这几个数是行下标，插一行 / 删一行都必须跟着改**——2026-09-24 把「坐标系网格」
     /// 挪进图形面板（见 <see cref="ShapeIcon"/>(Tool) 那一格）时就踩过一次：
     /// 那一行删掉之后，"图形"这一组的线会落到「重启软件」后面去（分组看着就错了）。
+    /// 2026-09-27 又删了「白板底纹 / 底纹间距」两行（搬进白板色带，见 <see cref="BoardSegKind"/>），
+    /// 下标从 `1 or 3 or 4` 跟着改成 `1 or 2`。
     /// </summary>
-    private static bool IsSeparatorAfter(int row) => row is 1 or 3 or 4;
+    private static bool IsSeparatorAfter(int row) => row is 1 or 2;
 
     private const float DrawerW = 260f;
     private const float DrawerRowH = 40f;
@@ -284,10 +295,16 @@ public sealed class FullUi : IOverlayUi
         _rail.Bind(host);
         _dashFade.Bind(host);
         _lastTool = host.State.Tool;
-        _expand.Jump(0f);
+        // **启动即展开**（用户 2026-09-27 定："第一次打开以后，默认就展开"）。
+        //
+        // 原来是 `Jump(0f)`——启动是一颗球，得先点一下才展开。用户上手后发现"每次开机
+        // 都要先点那一下"是多余的：工具的入口本来就该摆在那儿。
+        // 收起仍然能用（点一下条自己就收成球），只是**不再是默认态**。
+        _expand.Jump(1f);
         _peek.Jump(1f);
         _rail.Jump(0f);
         _dashFade.Jump(1f);
+        _lastPpt = host.State.PptMode;
         LoadPrefs();
         Layout(host.Screen, host.DpiScale);
         PushFloatingTheme();       // 浮层（操作条/小面板/旋转读数）跟着走同一套令牌
@@ -349,9 +366,11 @@ public sealed class FullUi : IOverlayUi
 
         // 白板底纹是**引擎状态**（画进分块缓存的），界面这边只是它的"存储器"：
         // 启动时把上次的档位推给引擎一次。数值不合法就当默认。
+        // ⚠ 间距要**吸附到最近的档位**：档位表 2026-09-27 换过（原 24/40/64 → 现 20/30/40/64/96），
+        //   老配置里存的 24 不在新表里，不吸附的话档位点会指错一格。
         int pat = int.TryParse(_host.GetPref("boardPattern"), out int p) ? p : 0;
         float step = float.TryParse(_host.GetPref("boardStep"), out float stepPref) ? stepPref : 40f;
-        _host.Commands.SetBoardPattern(pat, step);
+        _host.Commands.SetBoardPattern(pat, SnapPatternStep(step));
         float op = float.TryParse(_host.GetPref("boardOpacity"), out float opPref) ? opPref : BoardOpacityMax;
         _host.Commands.SetBoardOpacity(op);
 
@@ -392,6 +411,11 @@ public sealed class FullUi : IOverlayUi
     public RectF Layout(RectF screen, float dpiScale)
     {
         _screen = screen;
+        // 工作区在**每次布局**时重取一次（屏幕/DPI 变了会走到这里，Layout 因此是天然的刷新点）。
+        // 读不到或给了空矩形就退回屏幕——**绝不留下一个 0×0 的"工作区"**，
+        // 那会让默认位置把面板夹到屏幕左上角。
+        var w = _host?.WorkArea ?? default;
+        _work = (w.MaxX > w.MinX && w.MaxY > w.MinY) ? w : screen;
         return QueryBounds();
     }
 
@@ -585,11 +609,17 @@ public sealed class FullUi : IOverlayUi
     /// 主条左上角。**锚的是"展开后那条带子的左端"**——球就长在这个位置上，
     /// 所以开合之间**球一动不动**（点它展开、再点它收起，不用重新瞄；费茨定律）。
     ///
-    /// 没拖过 → 那条**展开后的带子屏幕下方居中**（`x = 中心 - 展开宽度/2`），
+    /// 没拖过 → 那条**展开后的带子贴着工作区底边居中**（`x = 工作区中心 - 展开宽度/2`），
     /// 于是收起时球停在屏幕中心**偏左**（差半个带子宽），点开以后整条带子正好居中。
     /// **这就是假面板当年的做法**（`MockWindow.ApplyLayout`：
     /// `_anchorLeft = wa.Left + (wa.Width - BarContentWidth)/2`，
     /// 注释写着"锚的是面板自己的左下角，所以抽屉展开时窗口往左上长、面板本身不动"）。
+    ///
+    /// **为什么用工作区而不是屏幕**（用户 2026-09-27）：他说的是"贴着任务栏上方一点点、
+    /// 两者不重叠"。工作区就是"屏幕减掉任务栏"那块，按它算出来的位置天然满足这一条；
+    /// 按屏幕底算的话，面板会**压在任务栏上**（覆盖层置顶，任务栏挡不住它，而且面板矩形
+    /// 是"我们的地盘"、那一块的任务栏也就点不到了）。
+    /// 任务栏在底部/左侧/顶部，工作区都会跟着让开，不用为它单写分支。
     ///
     /// 为什么不是"球居中、往两边长"（中间试过一版）：那样球会随着宽度滑走，
     /// 收起时要重新找它。为什么不是"球居中、只往右长"：展开后整条带子会偏到右边去。
@@ -601,11 +631,11 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private Vector2 RawAnchor()
     {
-        float top = _anchor?.Y ?? (_screen.MaxY - Tokens.EdgeMargin - Tokens.BarHeight);
+        float top = _anchor?.Y ?? (_work.MaxY - Tokens.EdgeMargin - Tokens.BarHeight);
         // 没拖过：按**展开后的宽度**居中（不是当前宽度）——这样收起态和展开态
         // 左右两端都不会跳，只在"整条带子"这一级对齐。
         float x = _anchor?.X
-                ?? _screen.MinX + (_screen.MaxX - _screen.MinX - ExpandedWidth()) * 0.5f;
+                ?? _work.MinX + (_work.MaxX - _work.MinX - ExpandedWidth()) * 0.5f;
         return new Vector2(x, top);
     }
 
@@ -769,13 +799,25 @@ public sealed class FullUi : IOverlayUi
         float total = band.MaxX - band.MinX - BarInset() * 2
                     - (BandHasSlider ? SliderTrackW + 14f : 0f)
                     - ActionReserve;
-        // 白板那一格：5 段固定宽（70），右边留出来给"第 N 屏"
+        // 白板那一格：**按内容定宽的几段**（见 BoardBand），放不下就整体等比缩。
+        // 原来这里是"5 段固定 70 宽"，结果极简档那条带子只有 315 宽，5×70 直接把
+        // 色带撑爆（滑条压在黑板上、页码被挤出面板）——2026-09-27 重排时修掉。
         if (_bandCell == 2)
         {
-            float bw = 70f;
-            float bx = BandContentLeft() + i * (bw + 6f);
+            var segs = BoardBand;
+            // ⚠ 也要给最右端的动作按钮（关闭白板那个 ✕）让位——漏了这一项的话，
+            //    段会铺到按钮底下去（2026-09-27 加关闭按钮时补的）。
+            float avail = band.MaxX - band.MinX - BarInset() * 2
+                        - (BandHasSlider ? SliderTrackW + 14f : 0f)
+                        - ActionReserve;
+            float need = BoardBandWidth(segs);
+            float k = need <= 0f || avail >= need ? 1f : avail / need;   // 放不下等比缩，绝不越界
+            float sx = BandContentLeft();
+            for (int j = 0; j < i && j < segs.Length; j++)
+                sx += (BoardSegW(segs[j].Kind) + BoardSegGap(segs[j].Kind, segs[j + 1].Kind)) * k;
+            float bw = (i < segs.Length ? BoardSegW(segs[i].Kind) : 0f) * k;
             float by = BandCenterY() - Tokens.SegmentHeight * 0.5f;
-            return new RectF { MinX = bx, MinY = by, MaxX = bx + bw, MaxY = by + Tokens.SegmentHeight };
+            return new RectF { MinX = sx, MinY = by, MaxX = sx + bw, MaxY = by + Tokens.SegmentHeight };
         }
         // **图形那一格是好几行**（2026-09-20 第十三批起是 3 行，见 `ShapeRows`）。
         // 行/列从"这一段排第几"推出来（`ShapeSegmentRow` / `ShapeSegmentCol`），
@@ -804,6 +846,154 @@ public sealed class FullUi : IOverlayUi
     /// <summary>图形那一格两行之间的间距（也是段与段之间的 6，见 <see cref="SegmentRect"/>）。</summary>
     private const float ShapeRowGap = 6f;
 
+    // ---- 白板那一格的色带（2026-09-27 重排）--------------------------------
+    //
+    // 这一格原来只有 `[上一屏][白][绿][黑][下一屏]` ＋ 右边一块"第 N 屏"文字，
+    // 段宽**写死 70**。用户 2026-09-27 提了两件事，外加顺带查出来的一件老 bug：
+    //   ① "上下翻页和页码应该挨着？" —— 原来是上一屏在最左、下一屏在第 4 段之后，
+    //      中间被三个板色劈开，页码孤零零贴在"下一屏"右边
+    //      → 改成 `[‹] 第 N 屏 [›]` **三件挨着**，摆在带子最左；
+    //   ② "调整透明的的滑块似乎后面跟着一个小圆点？" —— 那个点是**笔宽预览点**，
+    //      拿的还是当前笔色（所以在白板上是一颗红点），这一格它没有意义
+    //      → 白板不画它（见 DrawBandSlider）；
+    //   ③ 写死的 5×70 在**极简档**（带子只有 315 宽）会把色带撑爆：滑条压在黑板上、
+    //      页码被挤出面板（现场就是出图 `reports/_b-mini.png`）
+    //      → 段宽改成"按内容定宽 ＋ 放不下就等比缩"，并且放不下时退到紧凑布局。
+    //
+    // 同时把「更多」抽屉里的「白板底纹 / 底纹间距」搬了过来（用户："我现在要把更多里面的
+    // 白板底纹，底纹间距这些设置移动到白板的展开色带里面"）。它们本来就是**循环档**
+    // （点一下换下一档），搬过来保持这个手感，另外补上"一共几档、现在第几档"的档位点。
+    // ⚠ 只搬**界面入口**：引擎接口 `SetBoardPattern` 和偏好键 `boardPattern/boardStep`
+    //   一个没动，所以**存档格式不变**。
+
+    /// <summary>白板色带上的一段是干什么的。**名单只有这一份**：布局 / 绘制 / 命中 / 激活都问它。</summary>
+    private enum BoardSegKind { PageUp, PageLabel, PageDown, Color, Pattern, Step }
+
+    /// <summary>
+    /// 白板色带的段表。`Idx` 只有 <see cref="BoardSegKind.Color"/> 用得上
+    /// （0/1/2 ＝ 白/绿/黑，就是 `InkPalette.BoardPresets` 的下标）。
+    ///
+    /// 两份布局是**同一套逻辑的两种裁剪**，不是两套代码：
+    ///   · 完整：翻页器 ＋ 板色 ＋ 底纹 ＋ 间距（带子够宽时用这份）；
+    ///   · 紧凑：板色 ＋ 底纹 ＋ 间距（极简档用——用户 2026-09-27 定的原话：
+    ///     "翻页不要，保留黑白色，底纹 间距"）。
+    /// </summary>
+    private static readonly (BoardSegKind Kind, int Idx)[] BoardBandFull =
+    {
+        (BoardSegKind.PageUp, 0), (BoardSegKind.PageLabel, 0), (BoardSegKind.PageDown, 0),
+        (BoardSegKind.Color, 0), (BoardSegKind.Color, 1), (BoardSegKind.Color, 2),
+        (BoardSegKind.Pattern, 0), (BoardSegKind.Step, 0),
+    };
+    private static readonly (BoardSegKind Kind, int Idx)[] BoardBandCompact =
+    {
+        (BoardSegKind.Color, 0), (BoardSegKind.Color, 1), (BoardSegKind.Color, 2),
+        (BoardSegKind.Pattern, 0), (BoardSegKind.Step, 0),
+    };
+
+    /// <summary>
+    /// 每一段多宽（逻辑像素）。**按内容给**、不平摊：翻页那两个箭头只要一格窄的，
+    /// "第 N 屏"和"底纹 / 间距"要放得下两三个字。
+    /// </summary>
+    private static float BoardSegW(BoardSegKind k) => k switch
+    {
+        BoardSegKind.PageUp or BoardSegKind.PageDown => 34f,
+        BoardSegKind.PageLabel => 58f,
+        BoardSegKind.Color => 44f,        // 用户 2026-09-27："你把颜色缩短，颜色不用那么宽"
+        _ => 58f,                          // 底纹 / 间距
+    };
+
+    /// <summary>
+    /// 段与段之间的缝。**翻页器那三件贴紧（2）**，其余 6；组与组之间让开 12
+    /// ——"第 N 屏"夹在两个箭头中间不贴紧的话，看着还是三块东西，不是"一个翻页器"。
+    /// </summary>
+    private static float BoardSegGap(BoardSegKind a, BoardSegKind b) => (a, b) switch
+    {
+        (BoardSegKind.PageUp, BoardSegKind.PageLabel) => 2f,
+        (BoardSegKind.PageLabel, BoardSegKind.PageDown) => 2f,
+        (BoardSegKind.PageDown, BoardSegKind.Color) => 12f,
+        (BoardSegKind.Color, BoardSegKind.Pattern) => 12f,
+        _ => 6f,
+    };
+
+    /// <summary>这一份段表一共要占多宽（含缝）。</summary>
+    private static float BoardBandWidth((BoardSegKind Kind, int Idx)[] segs)
+    {
+        float w = 0;
+        for (int i = 0; i < segs.Length; i++)
+        {
+            w += BoardSegW(segs[i].Kind);
+            if (i + 1 < segs.Length) w += BoardSegGap(segs[i].Kind, segs[i + 1].Kind);
+        }
+        return w;
+    }
+
+    /// <summary>
+    /// 完整布局**最少要占这么多比例的可用宽度**才还留着它，否则退到紧凑布局。
+    ///
+    /// 为什么不写成"放不下才退"（也就是比例 = 1.0）：完整档 623 宽时可用 445，而完整布局
+    /// 要 420——只有 25 的余量。自定义档**只要取消钉住一格**（少 ~44 宽）就会掉到 420 以下，
+    /// 那一格就会突然从"有翻页器、有透明度滑条"跳成"都没有"，看着像个 bug。
+    /// 让它在 85% 以上都还走完整布局（差的那点靠 `SegmentRect` 里的等比缩补上），
+    /// 就平滑多了；再窄下去文字该碰边了，那时候退紧凑才是对的。
+    /// </summary>
+    private const float BoardBandMinSqueeze = 0.85f;
+
+    /// <summary>
+    /// 白板这一格用**紧凑**布局吗？
+    ///
+    /// 判据是**真的量一下放不放得下**（不是写死"极简档"）：完整布局要占"段总宽 ＋ 滑条 ＋
+    /// 最右端那个动作按钮（关闭白板 ✕，2026-09-27 加）＋ 两侧内边距"，放不下就退到紧凑布局。
+    /// 这样"自定义档里把格子取消钉得只剩几格"也照样不会撑爆——那正是这一格原来坏掉的根因。
+    /// ⚠ 量的是 <see cref="ExpandedWidth"/>（展开后的整条宽），不是当前动画中的宽：
+    ///    跟着动画走的话，色线张开到一半就会从完整布局跳成紧凑布局，看着像闪了一下。
+    /// ⚠ 滑条那一项这里**写死常量、不走 `BandHasSlider`**：那个属性要先问 `BoardCompactBand`，
+    ///    反过来问它就是自己咬自己（无限递归）。完整布局下滑条一定在（见 `BandHasSlider`），
+    ///    所以写死是对的。动作按钮那边可以直接用 `ActionReserve`——它只看 `_bandCell`，不回环。
+    /// </summary>
+    private bool BoardCompactBand =>
+        ExpandedWidth() - BarInset() * 2f - (SliderTrackW + 14f) - ActionReserve
+        < BoardBandWidth(BoardBandFull) * BoardBandMinSqueeze;
+
+    private (BoardSegKind Kind, int Idx)[] BoardBand =>
+        BoardCompactBand ? BoardBandCompact : BoardBandFull;
+
+    /// <summary>第 i 段是什么（越界给"只读文字"那种无动作的，省得调用处判空）。</summary>
+    private (BoardSegKind Kind, int Idx) BoardSegAt(int i)
+    {
+        var segs = BoardBand;
+        return i >= 0 && i < segs.Length ? segs[i] : (BoardSegKind.PageLabel, 0);
+    }
+
+    /// <summary>
+    /// 白板那两格（底纹 / 间距）各有几档、现在第几档（给 <see cref="DrawPips"/> 用）。
+    /// 和图形那一格的 <see cref="PipsOf"/> 同一个意思，只是这两格不是"工具"、是白板的状态。
+    /// </summary>
+    private static (int Count, int Current) BoardPips(BoardSegKind kind, in UiState st)
+    {
+        if (kind == BoardSegKind.Pattern)
+            return (PatternNames.Length, Math.Clamp(st.BoardPattern, 0, PatternNames.Length - 1));
+        // ⚠ 先把值抄到局部再进 lambda：`in` 参数不许被 lambda 捕获（CS1628）。
+        float step = st.BoardPatternStep;
+        int idx = Array.FindIndex(PatternSteps, v => MathF.Abs(v - step) < 0.5f);
+        return (PatternSteps.Length, idx < 0 ? 0 : idx);
+    }
+
+    /// <summary>
+    /// 把盘上读回来的间距**吸附到最近的档位**。
+    /// 档位表是换过的（原来是 24/40/64，2026-09-27 改成 20/30/40/64/96），
+    /// 老配置里存的 24 不在新表里——不吸附的话档位点会指到第 1 档上，等于显示一个谎。
+    /// </summary>
+    private static float SnapPatternStep(float v)
+    {
+        float best = PatternSteps[0], bestD = float.MaxValue;
+        foreach (var s in PatternSteps)
+        {
+            float d = MathF.Abs(s - v);
+            if (d < bestD) { bestD = d; best = s; }
+        }
+        return best;
+    }
+
     private bool BandHasSwatches => _bandCell is 3 or 4;
     /// <summary>
     /// 这一格的设置条上要不要那个**虚实线切换**（夹在色片和粗细滑条之间，
@@ -818,13 +1008,17 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private bool BandHasDashToggle => _bandCell == 3 && _profile != Profile.Mini;
     /// <summary>
-    /// 哪几格的设置条右边有滑条。**白板那一格也有**——它控制的是"板面不透明度"
-    /// （用户 2026-09-17："增加一个透明度的拖动功能，这样可以批注的时候隐约看见下面的题目"）。
+    /// 哪几格的设置条右边有滑条。
+    ///
+    /// 白板那一格**看布局**：它控制的是"板面不透明度"（用户 2026-09-17："增加一个透明度的
+    /// 拖动功能，这样可以批注的时候隐约看见下面的题目"），但紧凑布局（极简档那条带子只有
+    /// 315 宽）里"板色 + 底纹 + 间距"已经占满，塞不下 146 宽的滑条——所以退到紧凑布局时
+    /// 滑条一起去掉（用户 2026-09-27 选的口径：极简档"翻页不要，保留黑白色，底纹 间距"）。
     /// </summary>
-    private bool BandHasSlider => _bandCell is 2 or 3 or 4 or 5 or 6;
+    private bool BandHasSlider => _bandCell == 2 ? !BoardCompactBand : _bandCell is 3 or 4 or 5 or 6;
     /// <summary>
-    /// 上带里有几段。白板那一格是 5 段：**[上一屏] [白][绿][黑] [下一屏]**
-    /// ——翻屏和板色是同一类事（都属于"这块板怎么摆"），放一行最顺手。
+    /// 上带里有几段。白板那一格取自 <see cref="BoardBand"/>（完整 8 段 / 紧凑 5 段，
+    /// **不写死数字**——2026-09-27 重排时就是靠这条把"5 段写死"的旧账还掉的）。
     /// 截图那一格是 3 段：**[直接截取][隐藏界面][粘贴图片]**——前两段照 InkClass 的两项菜单，
     /// 第三段是用户 2026-09-17 要的："粘贴功能，因为其他地方使用复制功能可以到剪贴板，
     /// 但如果是触摸屏或者手写板可能没有键盘"（等于把 `Ctrl+V` 搬到屏幕上）。
@@ -836,7 +1030,7 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private int BandSegmentCount => _bandCell switch
     {
-        2 => 5, 6 => 2, 7 => 2, 8 => ShapeBandSegments, 9 => 3, _ => 0,
+        2 => BoardBand.Length, 6 => 2, 7 => 2, 8 => ShapeBandSegments, 9 => 3, _ => 0,
     };
 
     /// <summary>
@@ -1006,16 +1200,17 @@ public sealed class FullUi : IOverlayUi
     private (float Min, float Max) WidthRange(Tool tool) => tool switch
     {
         // 两边的数字要和引擎里各工具的档位对得上（引擎那边是
-        // HighlighterWidthPresets 8/18/32、LaserWidthPresets 4/8/14、
-        // EraserRadiusPresets 12/22/34、PixelEraserWidthPresets 46/93/150）。
+        // HighlighterWidthPresets 8/18/32、LaserWidthPresets **4/8/14/22**、
+        // WidthPresets **1**/3/6/10/16/24、EraserRadiusPresets 12/22/34、
+        // PixelEraserWidthPresets 46/93/150）。
         // 界面拿不到引擎的 internal 常量（那是**故意**的：界面只认公开契约），
         // 所以两边各留一份数字，靠自检卡住：--paneltest 会把滑条拖到两端，
         // 断言引擎里那个值真的走到了范围的端点。
         Tool.Highlighter => (8f, 64f),
-        Tool.Laser => (4f, 24f),
+        Tool.Laser => (4f, 24f),           // 左端 ＝ 最细那一档 4（2026-09-27 晚补的；默认档是 8）
         Tool.Eraser => (8f, 48f),          // 整笔橡皮改的是**落点半径**
         Tool.PixelEraser => (30f, 160f),   // 面积橡皮改的是**那一块的横边**（高 = 横边 × 1.618）
-        _ => (1.5f, 40f),
+        _ => (1f, 40f),                    // 画笔：左端 = 1（2026-09-27 从 1.5 降下来）
     };
 
     private float SliderT(in UiState st)
@@ -1074,12 +1269,17 @@ public sealed class FullUi : IOverlayUi
     // **全选**挂在选择那条的右端，点一下就执行。
     // 这两条我们一直缺（计划 10.1 的第 1 条），2026-09-17 用户点名要。
     //
+    // **关闭白板**（2026-09-27 用户定的）挂白板那条的右端，点一下就执行。
+    // 它是"白板格点第一下不再关板"补上的那一半：关板从此**只有这一个手动入口**
+    //（另一条是"开穿透会自动关板"的互斥，那是自动的、不是入口）。
+    //
     // 位置：上带**最右端**。粗细滑条也在右端，所以橡皮那条是
     // `[整笔擦][面积擦] …… [粗细滑条][清空]`——动作永远贴在最外沿。
-    private enum BandAction { None = 0, Clear, SelectAll }
+    private enum BandAction { None = 0, Clear, SelectAll, CloseBoard }
 
     private BandAction ActionOf(int bandCell) => bandCell switch
     {
+        2 => BandAction.CloseBoard,   // 白板那条：最右端一个"关闭白板"
         6 => BandAction.Clear,        // 清空 ≈ "全擦掉"，和两种橡皮排一条
         7 => BandAction.SelectAll,    // 全选 ≈ "把要操作的东西一次选上"，归选择这条
         _ => BandAction.None,
@@ -1087,6 +1287,19 @@ public sealed class FullUi : IOverlayUi
     private BandAction CurAction => ActionOf(_bandCell);
 
     private const float ActionW = 92f;
+    /// <summary>
+    /// **窄的那个动作按钮**（白板的"关闭白板"用它，只有图标、没有文字）。
+    ///
+    /// 为什么单独给一个宽度：白板那条带子本来就满——8 段（翻页器 ＋ 三色 ＋ 底纹 ＋ 间距）
+    /// 要 420，加上 146 的透明度滑条只剩 25 的余量；再塞一个 92 宽的动作按钮，
+    /// 段会被挤到 89% 缩放（`SegmentRect` 里的等比缩）。"关闭"这件事一个 ✕ 就够，
+    /// 46 宽刚好（图标 18 ＋ 左右各 14），段就不用缩那么狠。
+    /// </summary>
+    private const float ActionWNarrow = 46f;
+
+    private static float ActionWidthOf(BandAction a) =>
+        a == BandAction.CloseBoard ? ActionWNarrow : ActionW;
+
     private const double ClearHoldMs = 800;
 
     private RectF ActionRect()
@@ -1094,20 +1307,41 @@ public sealed class FullUi : IOverlayUi
         var band = BandRect();
         float right = band.MaxX - BarInset();
         float cy = (band.MinY + band.MaxY) * 0.5f;
+        float w = ActionWidthOf(CurAction);
         return new RectF
         {
-            MinX = right - ActionW, MinY = cy - Tokens.SegmentHeight * 0.5f,
+            MinX = right - w, MinY = cy - Tokens.SegmentHeight * 0.5f,
             MaxX = right, MaxY = cy + Tokens.SegmentHeight * 0.5f,
         };
     }
 
     /// <summary>动作按钮要占的横向空间（色片 / 分段 / 滑条都得让位）。</summary>
-    private float ActionReserve => CurAction == BandAction.None ? 0f : ActionW + 10f;
+    private float ActionReserve =>
+        CurAction == BandAction.None ? 0f : ActionWidthOf(CurAction) + 10f;
 
     /// <summary>清空的按住计时（-inf = 没在按）与"刚按完闪一下"的时刻。</summary>
     private double _actionHoldFrom = double.NegativeInfinity;
     private double _actionFlashUntil = double.NegativeInfinity;
     private bool ActionHolding => !double.IsNegativeInfinity(_actionHoldFrom);
+
+    /// <summary>
+    /// **双击选择格 = 全选**（用户 2026-09-27 定）。照的是 InkClass 那个"经典交互"：
+    /// 它那边是 500ms 内双击选择图标 = 全选（`MW_FloatBar.cs` 的 500ms 双击检测）。
+    ///
+    /// ⚠ **双击能跟"单击换档"共存，全靠"只有两档"**：连点两下正好转两格、回到原档，
+    ///   所以双击的净效果就是"全选，模式没动"（见 `Activate` 里 case 7 那一支）。
+    ///   哪天选择方式加到**三档**，这条就不成立了（连点两下会净退一格）——
+    ///   那时候要么去掉双击全选，要么加判定延迟（那时单击换档会迟钝，不划算）。
+    /// </summary>
+    private const double SelectDoubleClickMs = 500;
+    private double _lastSelCellClickMs = double.NegativeInfinity;
+    /// <summary>
+    /// 双击的**第一下之前**那一档选择方式。
+    /// 第二下用它把档位抵回去（第一下若已经切过档，这里正好抵掉）——
+    /// 这样"从别的工具双击进来"和"已经在选择工具上双击"两种情况的结果一致：
+    /// **全选 + 模式回到双击前**。
+    /// </summary>
+    private SelectMode _selModeBeforeDoubleClick = SelectMode.Rect;
 
     /// <summary>按住进度 0..1（画那个从左往右的填充）。</summary>
     private float HoldProgress()
@@ -1130,17 +1364,26 @@ public sealed class FullUi : IOverlayUi
         Invalidate();
     }
 
-    /// <summary>动作按钮：图标 ＋ 文字；清空那条按住时从左边往右填进度。</summary>
+    /// <summary>
+    /// 动作按钮：图标 ＋ 文字；清空那条按住时从左边往右填进度。
+    ///
+    /// 白板那条的「关闭白板」只有**一个 ✕**（窄版，没有文字，见 <see cref="ActionWNarrow"/>），
+    /// 而且**板已经关着时整块压暗、点了也不动**——那时候关板没有意义
+    ///（压暗的写法沿用"到顶时上一屏"那一套：同色降到 30% 不透明度）。
+    /// </summary>
     private void DrawBandAction(ID2D1DeviceContext ctx)
     {
         var a = CurAction;
         if (a == BandAction.None || !RailOpen) return;
         var r = ActionRect();
         bool clear = a == BandAction.Clear;
+        bool closeBoard = a == BandAction.CloseBoard;
+        bool dim = closeBoard && (_host == null || !_host.State.Board);
+        var ink = dim ? new Color4(InkCol.R, InkCol.G, InkCol.B, 0.30f) : InkCol;
         var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f, 7f);
         var tint = clear ? new Color4(0.90f, 0.35f, 0.25f, 1f) : Tokens.Accent;
 
-        ctx.FillRoundedRectangle(rr, Brush(ctx, new Color4(tint.R, tint.G, tint.B, 0.08f)));
+        ctx.FillRoundedRectangle(rr, Brush(ctx, new Color4(tint.R, tint.G, tint.B, (dim ? 0.03f : 0.08f))));
         float t = HoldProgress();
         if (t > 0.002f)
             ctx.FillRoundedRectangle(
@@ -1148,6 +1391,15 @@ public sealed class FullUi : IOverlayUi
                                      r.MinX + (r.MaxX - r.MinX) * t, r.MaxY), 7f, 7f),
                 Brush(ctx, new Color4(tint.R, tint.G, tint.B, 0.45f)));
         ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+
+        // 窄版（关闭白板）：图标居中占满，没有文字那一栏
+        if (closeBoard)
+        {
+            IconAtlas.DrawCentered(ctx, "dismiss", r, 16f, Brush(ctx, ink));
+            if (_host != null && _host.NowMs < _actionFlashUntil)
+                ctx.DrawRoundedRectangle(rr, Brush(ctx, Tokens.Accent), 2f);
+            return;
+        }
 
         var iconBox = new RectF { MinX = r.MinX + 6f, MinY = r.MinY, MaxX = r.MinX + 28f, MaxY = r.MaxY };
         IconAtlas.DrawCentered(ctx, clear ? "broom" : "selectAll", iconBox, 16f, Brush(ctx, InkCol));
@@ -1323,7 +1575,12 @@ public sealed class FullUi : IOverlayUi
         int n = BandSegmentCount;
         if (!RailOpen) return -1;
         for (int i = 0; i < n; i++)
+        {
+            // 白板那一格中间那块「第 N 屏」是**只读**的（不是按钮）：它夹在两个翻页箭头
+            // 中间、和它们贴在一起组成一个"翻页器"，点它什么都不该发生。
+            if (_bandCell == 2 && BoardSegAt(i).Kind == BoardSegKind.PageLabel) continue;
             if (SegmentRect(i, n).Contains(x, y)) return i;
+        }
         return -1;
     }
 
@@ -1423,28 +1680,98 @@ public sealed class FullUi : IOverlayUi
     }
 
     /// <summary>
-    /// 这一档显示哪几个色片（返回 <see cref="Tokens.Palette"/> 里的下标）。
+    /// 这一档显示哪几个色片（返回**色片表**里的下标）。
     ///
-    /// **极简档只给 4 个**：短胶囊（359 宽）里塞 12 个色片、再减掉滑条占的那 146，
-    /// 每个只剩 11 像素宽——点都点不准（用户 2026-09-17："极简模式的色带展开栏里面的
-    /// 内容排布有点问题"）。4 个的话每个 42 像素，和完整档一个手感。
-    /// 颜色照假面板定的：**红 / 黑 / 蓝 / 白**（讲课时最常用的四支）。
+    /// 三张映射各有各的用法（表本身在 <see cref="Tokens"/> 里）：
+    ///   · **荧光笔**（`HlSwatchIdx`）：用 `Tokens.HighlighterPalette` 那张亮色表，
+    ///     5 个全给——2026-09-27 用户定的"独立一张亮色表"；
+    ///   · **极简档的笔**只给 4 个：短胶囊（359 宽）里塞 12 个色片、再减掉滑条占的那 146，
+    ///     每个只剩 11 像素宽——点都点不准（用户 2026-09-17："极简模式的色带展开栏里面的
+    ///     内容排布有点问题"）。4 个的话每个 42 像素，和完整档一个手感。
+    ///     颜色照假面板定的：**红 / 黑 / 蓝 / 白**（讲课时最常用的四支）；
+    ///   · **完整档的笔**：12 个全给。
+    ///
+    /// ⚠ 极简档里**没有荧光笔那一格**（见 `MiniCells`），所以那里不会用到荧光笔表；
+    ///    但映射还是给全了——哪天极简档加了荧光笔格，这里不用再补。
+    /// ⚠ `MiniSwatchIdx` 里那几个数是**新色表的下标**：2026-09-27 换表时颜色位次动过
+    ///   （绿和蓝对调、灰/青/粉/棕拿掉），所以这一行跟着改成了 { 1 红, 0 黑, 2 蓝, 7 白 }。
     /// </summary>
-    private static readonly int[] MiniSwatchIdx = { 3, 0, 8, 2 };
-    private static readonly int[] FullSwatchIdx = CreateFullSwatchIdx();
+    private static readonly int[] MiniSwatchIdx = { 1, 0, 2, 7 };      // 红 / 黑 / 蓝 / 白
+    private static readonly int[] FullSwatchIdx = CreateAllIdx(Tokens.Palette.Length);
+    private static readonly int[] HlSwatchIdx = CreateAllIdx(Tokens.HighlighterPalette.Length);
 
-    private static int[] CreateFullSwatchIdx()
+    private static int[] CreateAllIdx(int n)
     {
-        var a = new int[Tokens.Palette.Length];
-        for (int i = 0; i < a.Length; i++) a[i] = i;
+        var a = new int[n];
+        for (int i = 0; i < n; i++) a[i] = i;
         return a;
     }
 
-    private int[] SwatchIdx => _profile == Profile.Mini ? MiniSwatchIdx : FullSwatchIdx;
+    /// <summary>这一刻用的是荧光笔那张表吗（色片表 / 切色循环都看它）。</summary>
+    private bool UsingHighlighterSwatches => _host != null && _host.State.Tool == Tool.Highlighter;
+
+    /// <summary>这一刻生效的色片表（笔那张 / 荧光笔那张）。</summary>
+    private (string Name, Color4 Color)[] SwatchTable =>
+        UsingHighlighterSwatches ? Tokens.HighlighterPalette : Tokens.Palette;
+
+    private int[] SwatchIdx => UsingHighlighterSwatches
+        ? HlSwatchIdx
+        : (_profile == Profile.Mini ? MiniSwatchIdx : FullSwatchIdx);
     private int SwatchCount => SwatchIdx.Length;
-    private Color4 SwatchColor(int i) => Tokens.Palette[SwatchIdx[i]].Color;
+    private Color4 SwatchColor(int i) => SwatchTable[SwatchIdx[i]].Color;
 
     private void ActivateSwatch(int i) => _host.Commands.SetColor(SwatchColor(i));
+
+    /// <summary>
+    /// **已经是它了，再点一下 = 换下一个颜色**（用户 2026-09-27 定的）。
+    ///
+    /// 老师用着笔想换个色，原来是"把指针挪到色带上、瞄准某个色片"（还得先等色带张开）；
+    /// 现在直接在工具格上连点就行——**手不用离开那一格**。荧光笔同理。
+    ///
+    /// 三条规矩：
+    ///   · 循环范围 = **色带上看得见的那排色片**（`SwatchIdx`）：所见即所得，不会切到一个
+    ///     色带上没有的颜色；色片的高亮圈就是"我现在是哪个色"的指示器；
+    ///   · 顺序 = 色片表顺序（常用的排前面，见 `Tokens.Palette` 的注释）；
+    ///   · 当前色不在表里（比如从选中面板改过色）→ 落到**第 1 个**。
+    ///
+    /// ⚠ **只在"色带本来就在这一格"时才切色**（调用处的判据）：老师从图形面板点回笔那一格，
+    ///   意思是"把笔拿回来"，那时候悄悄换个颜色是最气人的（同图形那一格"不动工具"的规矩）。
+    /// </summary>
+    private void CycleColor()
+    {
+        int n = SwatchCount;
+        if (n == 0) return;
+        var cur = _host.State.PaletteBase;
+        int at = -1;
+        for (int i = 0; i < n; i++)
+            if (SameColor(SwatchColor(i), cur)) { at = i; break; }
+        _host.Commands.SetColor(SwatchColor((at + 1) % n));
+        Invalidate();
+    }
+
+    /// <summary>
+    /// 两个颜色算不算同一个（阈值 0.02）。
+    /// **色片高亮和切色找位置共用这一把尺子**——各写一份的话迟早不一致：
+    /// 会出现"高亮看着在这个色上，点一下却从下一个色开始切"这种事。
+    /// </summary>
+    private static bool SameColor(in Color4 a, in Color4 b) =>
+        MathF.Abs(a.R - b.R) < 0.02f && MathF.Abs(a.G - b.G) < 0.02f && MathF.Abs(a.B - b.B) < 0.02f;
+
+    /// <summary>
+    /// **已经是选择工具了，再点一下 = 换下一个选择方式**（用户 2026-09-27 定的，
+    /// 和笔 / 荧光笔"再点一下换个颜色"是同一条规矩）。
+    ///
+    /// 目前**两档**：矩形框选 ←→ 自由套索。档位点（色带那两段的高亮）就是"现在是哪一档"的指示器。
+    /// ⚠ 这里刻意**不写死"两档"的假设**：按"当前档 → 下一个档"算，
+    ///    以后真加了第三档（例如"只点选不框选"），这里不用改；但**双击全选那条规矩要重看**
+    ///    （见 <see cref="SelectDoubleClickMs"/> 的注释）。
+    /// </summary>
+    private void CycleSelectMode()
+    {
+        var next = _host.State.SelectMode == SelectMode.Lasso ? SelectMode.Rect : SelectMode.Lasso;
+        _host.Commands.SetSelectMode(next);
+        Invalidate();
+    }
 
     /// <summary>
     /// 点了一下虚实线那一格：**三档轮流**（实线 → 虚线 → 点线 → 实线）。
@@ -1474,15 +1801,59 @@ public sealed class FullUi : IOverlayUi
 
     private void ActivateSegment(int i)
     {
+        // 色带上的动静也算"离开了那一格"：双击序列断掉（同 `Activate` 里那一句）。
+        _lastSelCellClickMs = double.NegativeInfinity;
         switch (_bandCell)
         {
-            case 2:                       // 白板：[上一屏] [白][绿][黑] [下一屏]
-                if (i == 0) { _host.Commands.FlipPage(false); break; }        // 上一屏
-                if (i == 4) { _host.Commands.FlipPage(true); break; }         // 下一屏
-                // 三色：选板色＝要用板，所以顺手把板打开
-                _host.Commands.SetBoardColor(InkPalette.BoardPresets[i - 1].Color);
-                _host.Commands.SetBoard(true);
+            case 2:                       // 白板：[‹] 第 N 屏 [›] │ [白][绿][黑] │ [底纹][间距]
+            {
+                // 这一格**只管白板的事**：翻页永远是白板的"上一屏 / 下一屏"。
+                //
+                // ⚠ 2026-09-26 改回来过一次：中间曾让它"放映时变成 PPT 的上一页/下一页"，
+                // 用户的结论是**不要**——原话"取消掉白板区的翻页，白板区不需要 ppt 翻页"。
+                // 语义上也是对的：这一格是"这块板怎么摆"，不该管幻灯片翻到第几张。
+                // PPT 的翻页入口只有**底部那两条**（`PptBar`）＋ PPT 自己的遥控器/键盘。
+                //
+                // 段序**不写死下标**，一律问 `BoardSegAt`（段表只有 BoardBand 那一份；
+                // 2026-09-27 重排之前这里写的是 `i == 0` / `i == 4`，段序一动就会静默点错）。
+                var seg = BoardSegAt(i);
+                switch (seg.Kind)
+                {
+                    case BoardSegKind.PageUp: _host.Commands.FlipPage(false); break;
+                    case BoardSegKind.PageDown: _host.Commands.FlipPage(true); break;
+                    case BoardSegKind.PageLabel: break;    // 只读的一块，点它什么都不做
+
+                    // 板色 / 底纹 / 间距：都是"要用板"的意思，所以都顺手把板打开
+                    //（底纹只在板面上画得出来，不打开就等于改了看不见——这一条原来是靠
+                    //  "白板没开就把那两行压暗"来守的，搬进色带之后改成"顺手打开"更好用）。
+                    case BoardSegKind.Color:
+                        _host.Commands.SetBoardColor(InkPalette.BoardPresets[seg.Idx].Color);
+                        _host.Commands.SetBoard(true);
+                        break;
+                    case BoardSegKind.Pattern:
+                    {
+                        var st = _host.State;
+                        int next = (st.BoardPattern + 1) % PatternNames.Length;
+                        _host.Commands.SetBoardPattern(next, st.BoardPatternStep);
+                        _host.Commands.SetBoard(true);
+                        SavePrefs();
+                        Invalidate();
+                        break;
+                    }
+                    case BoardSegKind.Step:
+                    {
+                        var st = _host.State;
+                        int idx = Array.FindIndex(PatternSteps, v => MathF.Abs(v - st.BoardPatternStep) < 0.5f);
+                        float next = PatternSteps[(idx + 1 + PatternSteps.Length) % PatternSteps.Length];
+                        _host.Commands.SetBoardPattern(st.BoardPattern, next);
+                        _host.Commands.SetBoard(true);
+                        SavePrefs();
+                        Invalidate();
+                        break;
+                    }
+                }
                 break;
+            }
             case 6:                       // 整笔擦 / 面积擦 —— 引擎里是**两个工具**
                 _host.Commands.SetTool(i == 0 ? Tool.Eraser : Tool.PixelEraser);
                 break;
@@ -1663,33 +2034,44 @@ public sealed class FullUi : IOverlayUi
     private bool IsToggleRow(int i) => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.DwellShape;
 
     /// <summary>
-    /// 这一行现在是不是压暗（点了没反应）。两种来源：
-    ///   · 表里写死的（检查更新 / 学科工具还没做）；
-    ///   · **白板没开时的底纹两行**——底纹只画在板面上，板子没开就改了也看不见，
-    ///     所以压暗（InkClass 也是这么守的：板面收起时右键不弹那个菜单）。
+    /// 这一行现在是不是压暗（点了没反应）。
+    /// 目前只有一种来源：表里写死的（检查更新还没做）。
+    ///
+    /// ⚠ 2026-09-27 之前还有一条"白板没开时底纹两行压暗"——那两行已经搬进白板色带
+    /// （见 <see cref="BoardSegKind"/>），所以这条特例跟着删了。
     /// </summary>
-    private bool IsGrayRow(int i) =>
-        Rows[i].Gray
-        || (Rows[i].Kind is Row.BoardPattern or Row.BoardStep && _host != null && !_host.State.Board);
+    private bool IsGrayRow(int i) => Rows[i].Gray;
 
     /// <summary>底纹三档的名字（0/1/2），和引擎那边的取值一一对应。</summary>
     private static readonly string[] PatternNames = { "无", "方格", "横线" };
-    /// <summary>底纹间距的三档（逻辑像素）。细格写字、中格常用、粗格当横线纸。</summary>
-    private static readonly float[] PatternSteps = { 24f, 40f, 64f };
+    /// <summary>
+    /// 底纹间距的档位（逻辑像素）。**五档**（2026-09-27 用户："间距可以档位，但需要多几档"）：
+    /// 20 最细（密集格子当坐标纸）、40 是默认（＝引擎默认值，出厂就在正中间）、96 最粗（当横线纸）。
+    /// ⚠ 引擎那边夹在 8～240 之间（`Engine.SetBoardPatternFromUi`），这几个值都在里面。
+    /// ⚠ **最多六档**：档位点是竖排的（点距 5、段高只有 26），第七个就漏出段外了。
+    /// </summary>
+    private static readonly float[] PatternSteps = { 20f, 30f, 40f, 64f, 96f };
 
     private static string PatternName(int p) =>
         PatternNames[Math.Clamp(p, 0, PatternNames.Length - 1)];
 
-    /// <summary>行标签：底纹两行要把"当前是哪一档"写出来（它们不是开关，是循环档）。</summary>
+    /// <summary>
+    /// 行标签（只有开关那几行有文字，别的行就是表里那个 Label）。
+    ///
+    /// 「检查更新」那一行例外：**显示引擎报的当前状态**。文案必须短——抽屉那一行
+    /// 只有一格宽（`RowRect` 减去内边距），长了会被切掉，所以引擎那边给的就是
+    /// "检查中…" / "有新版本 8.0.1" / "下载中 42%" 这种短句。
+    /// </summary>
     private string RowLabel(int i)
     {
-        if (_host == null) return Rows[i].Label;
+        if (Rows[i].Kind != Row.CheckUpdate || _host == null) return Rows[i].Label;
         var st = _host.State;
-        return Rows[i].Kind switch
+        return st.UpdateStage switch
         {
-            Row.BoardPattern => $"白板底纹：{PatternName(st.BoardPattern)}",
-            Row.BoardStep => $"底纹间距：{st.BoardPatternStep:F0}",
-            _ => Rows[i].Label,
+            UpdateStage.Idle => Rows[i].Label,
+            // 抽屉宽 260 逻辑像素（13 号字能放约 19 个字），下面这些都短：
+            UpdateStage.NotConfigured => "检查更新（未配置源）",
+            _ => string.IsNullOrEmpty(st.UpdateText) ? Rows[i].Label : st.UpdateText,
         };
     }
 
@@ -1720,31 +2102,22 @@ public sealed class FullUi : IOverlayUi
                 Invalidate();
                 break;
 
-            // 底纹两行：**循环档位**（点一下换下一档），改完顺手落盘。
-            case Row.BoardPattern:
-            {
-                var st = _host.State;
-                int next = (st.BoardPattern + 1) % PatternNames.Length;
-                _host.Commands.SetBoardPattern(next, st.BoardPatternStep);
-                SavePrefs();
-                Invalidate();
-                break;
-            }
-            case Row.BoardStep:
-            {
-                var st = _host.State;
-                int idx = Array.FindIndex(PatternSteps, v => MathF.Abs(v - st.BoardPatternStep) < 0.5f);
-                float next = PatternSteps[(idx + 1 + PatternSteps.Length) % PatternSteps.Length];
-                _host.Commands.SetBoardPattern(st.BoardPattern, next);
-                SavePrefs();
-                Invalidate();
-                break;
-            }
             // 停顿成型：翻转开关 → 推给引擎 → 落盘（**只写"关过的"那一份**：
             // 配置里没有这一项就是默认开，以后默认值改了老配置不会把新默认顶掉）。
             case Row.DwellShape:
                 _host.Commands.SetDwellShape(!(_host.State.DwellShapeOn));
                 SavePrefs();
+                Invalidate();
+                break;
+
+            // 检查更新（2026-09-29）：**没配更新源就只把状态文字改成"未配置更新源"**，
+            // 不弹任何东西（默认就是这个状态）；查到新版本之后**再点一下**才开始下载
+            // → 校验 → 换壳重启。
+            case Row.CheckUpdate:
+                var stage = _host.State.UpdateStage;
+                if (stage == UpdateStage.Available) _host.Commands.ApplyUpdate();
+                else if (stage != UpdateStage.Downloading && stage != UpdateStage.Ready)
+                    _host.Commands.CheckUpdate();
                 Invalidate();
                 break;
 
@@ -1813,7 +2186,16 @@ public sealed class FullUi : IOverlayUi
         var u = UnionRect();
         float w = u.MaxX - u.MinX, h = u.MaxY - u.MinY;
         float dl = u.MinX - _screen.MinX, dr = _screen.MaxX - u.MaxX;
-        float dt = u.MinY - _screen.MinY, db = _screen.MaxY - u.MaxY;
+        float dt = u.MinY - _screen.MinY;
+        // **下边按工作区算**（用户 2026-09-27，默认位置改成"贴任务栏上方"之后必须跟着改）。
+        //
+        // 默认位置现在是"工作区底边 − 4"，而工作区底边离**屏幕**底边还差一个任务栏
+        // （本机 48）——按屏幕算就是 52 > SnapDistance(40)，于是"贴在工作区底边"这个
+        // 最常见的位置会被判成"**没贴边、不藏**"，贴边隐藏直接失效。
+        // 自检当场抓到过：碰过再离开之后占用还是 636×54（压根没藏），而 `peek` 已经是 0——
+        // 逻辑以为藏了、画面上一动不动，是最难看的一种坏法。
+        // 判定用工作区（那才是视觉上的"底"），**位移量仍按屏幕**（见下面那段的论证）。
+        float db = WorkOrScreenBottom() - u.MaxY;
         float best = Math.Min(Math.Min(dl, dr), Math.Min(dt, db));
         if (best > Tokens.SnapDistance) return Vector2.Zero;      // 没贴边就不藏
 
@@ -1838,6 +2220,20 @@ public sealed class FullUi : IOverlayUi
         if (best == dt) return new Vector2(0, -(h - Tokens.DockPeek + st) * t);
         return new Vector2(0, (h - Tokens.DockPeek + sb) * t);
     }
+
+    /// <summary>
+    /// "底"按哪条线算：**工作区底边**（读不到就退回屏幕底边）。
+    ///
+    /// 用在**判定**"贴没贴底"上（<see cref="Shift"/>）：默认位置贴在任务栏上方，
+    /// 离**屏幕**底边还差一个任务栏的高度，按屏幕算会把"贴着工作区底"判成"没贴边"。
+    /// ⚠ **位移量不许用它**：覆盖层是全屏置顶的，面板不会"藏到任务栏后面"，
+    /// 只有推出**屏幕**才真的看不见（按工作区算露头会变成 8 + 任务栏高，自检量到过 56）。
+    ///
+    /// ⚠ 多屏时它只认**主屏**的工作区底（引擎那边给的就是主屏，用户 2026-09-27 选的）。
+    /// 把面板拖到副屏之后，"贴副屏底边"不再算贴边——**记账**，和多屏 DPI 是同一批的活；
+    /// 面板默认就在主屏、位置又不记盘，日常路径碰不到。
+    /// </summary>
+    private float WorkOrScreenBottom() => _work.MaxY > _work.MinY ? _work.MaxY : _screen.MaxY;
 
     /// <summary>
     /// 每帧更新"该不该收起来"。写得像个小状态机，因为规则就三条：
@@ -1931,6 +2327,17 @@ public sealed class FullUi : IOverlayUi
                 // 清空：**按住才算数**（0.8 秒），松手即取消。进度由 UpdateBandAction 每帧推进。
                 _actionHoldFrom = _host.NowMs;
                 _press = 2000;
+            }
+            else if (CurAction == BandAction.CloseBoard)
+            {
+                // 关闭白板：**点一下就执行**（和全选一样）——关板是可逆的（再点白板格就开回来），
+                // 不像清空那样代价大，所以不必按住。
+                // ⚠ 板已经关着时这一下什么都不做（按钮也是压暗的，见 DrawBandAction）。
+                if (_host.State.Board)
+                {
+                    _host.Commands.SetBoard(false);
+                    _actionFlashUntil = _host.NowMs + 260;
+                }
             }
             else
             {
@@ -2172,6 +2579,15 @@ public sealed class FullUi : IOverlayUi
         var cmd = _host.Commands;
         var st = _host.State;
 
+        // **点之前**上带停在哪一格。笔 / 荧光笔那一格要用它判"这一下是切色、还是只是把设置条拿过来"
+        //（`_bandCell` 在下面 `HasBand` 那一块里会被改成 idx，改完就问不出"原来在哪"了）。
+        int prevBand = _bandCell;
+
+        // **点了别的格子 = 选择格那次"双击"序列到此为止**。
+        // 不这么做的话，"选择格 →（200ms）笔格 →（200ms）选择格"会被算成对选择格的双击，
+        // 于是老师只是在两个格子之间来回看一眼，就被全选了。
+        if (idx != 7) _lastSelCellClickMs = double.NegativeInfinity;
+
         // 点工具格时，上带跟着换成这个工具的设置（"上带＝这个按钮的设置条"），
         // 并且**钉住展开**——不钉的话指针一移开就收了，选项来不及选。
         //
@@ -2192,16 +2608,77 @@ public sealed class FullUi : IOverlayUi
         switch (idx)
         {
             case 1: cmd.SetPassThrough(!st.PassThrough); break;
-            case 2: cmd.SetBoard(!st.Board); break;
-            case 3: cmd.SetTool(Tool.Pen); break;
-            case 4: cmd.SetTool(Tool.Highlighter); break;
+            // 白板那一格：**点三下是一个来回**（用户 2026-09-27 第三次定的）。
+            //
+            //   ① 板关着               → 开板（顺手把设置条拿过来）
+            //   ② 板开着、色带在别处     → **只把色带拿过来，板一动不动**
+            //   ③ 板开着、色带也在这一格 → **关板**
+            //   ④ 再点一下 → 又回到 ①（开板），往后就这三下循环
+            //
+            // 为什么要改（用户原话："那个白板我试了几遍，感觉单独弄一个开关还是不习惯"）：
+            // 上一版把"关板"挪去了设置条最右端的 ✕，格子上怎么点都关不掉——用起来
+            // 反而别扭。现在这一个格子自己就是那个开关，✕ 留着当"一眼看得见的关板键"。
+            //
+            // 同时**去掉了"再点一下换下一个板色"**（用户："单击切换上面的白板颜色，
+            // 我感觉不需要了"）：换板色色带上就摆着三格（白/绿/黑），一点就到；
+            // 而这一个格子到底是"开"还是"关"才是大家点它的本意。
+            //
+            // ② 那条判据必须带 `prevBand == 2`：老师从图形面板点回白板那一格，
+            // 意思是"把板拿回来用"，那时候不该顺手把它关掉（同笔 / 荧光笔 / 图形那几格）。
+            case 2:
+                if (!st.Board) cmd.SetBoard(true);             // ① 开板
+                else if (prevBand == 2) cmd.SetBoard(false);   // ③ 关板
+                break;                                         // ② 只把色带拿过来，板不动
+            // 笔 / 荧光笔那两格：**已经是它、而且色带本来就在这一格 → 换下一个颜色**
+            //（用户 2026-09-27 定的"已经是它了，点击切换颜色"）。
+            //
+            // ⚠ 判据必须带上前一提"色带本来就在这一格"：老师从图形面板点回笔那一格，
+            //   意思是"把笔拿回来"，那时候不能悄悄把颜色也换了；而老师一直在用笔时
+            //   色带本来就停在笔那一格，连点就是连着换色——正好是想要的手感。
+            //
+            // ⚠ **切色那条路上也要走一次 `SetTool`**：引擎的 `SwitchTool` 里还兼着
+            //   "顺手把穿透关掉"（穿透和工具互斥，见 Engine.SwitchTool）。漏了它就会出现
+            //   "点笔格换了色、但还在穿透"——自检里"点工具格＝顺手关掉穿透"那两条当场就红。
+            //   `SetTool` 是幂等的（工具没变时只做清理），重复调没有副作用。
+            case 3:
+                cmd.SetTool(Tool.Pen);
+                if (prevBand == 3) CycleColor();
+                break;
+            case 4:
+                cmd.SetTool(Tool.Highlighter);
+                if (prevBand == 4) CycleColor();
+                break;
             case 5: cmd.SetTool(Tool.Laser); break;
             case 6:
                 // 引擎里"整笔擦/面积擦"是**两个工具**，不是一个工具的两档；
                 // 第一版就点一下换一次（真正的两档要等上带做出来）。
                 cmd.SetTool(st.Tool == Tool.PixelEraser ? Tool.Eraser : Tool.PixelEraser);
                 break;
-            case 7: cmd.SetTool(Tool.Marquee); break;
+            case 7:
+                // 选择那一格：**已经是它了、再点一下 = 换下一个选择方式**
+                //（矩形框选 ←→ 自由套索），和笔 / 荧光笔换色是同一条规矩。
+                //
+                // **双击 = 全选**（500ms 内两击，照 InkClass 那个经典交互）。
+                // 两档时"连点两下 = 转两格 = 回到原档"，所以双击的净效果正好是
+                // "全选、模式没动"——不冲突（三档就不成立了，见 SelectDoubleClickMs 的注释）。
+                // 第二下不靠"再转一格抵掉"，而是**直接把档位写回双击前那一档**：
+                // 这样"从别的工具双击进来"（第一下只切了工具、没转档）也得到同一个结果。
+                if (_host.NowMs - _lastSelCellClickMs < SelectDoubleClickMs)
+                {
+                    _lastSelCellClickMs = double.NegativeInfinity;   // 这一次序列到此为止
+                    cmd.SetTool(Tool.Marquee);
+                    cmd.SetSelectMode(_selModeBeforeDoubleClick);
+                    cmd.SelectAll();
+                    // 闪一下：闪的是色带上那个「全选」按钮（和点它自己一样，
+                    // 见调研-界面-上下文设置条.md 里"点一下 → 全部进选中框 → 按钮闪一下"）。
+                    _actionFlashUntil = _host.NowMs + 260;
+                    break;
+                }
+                _lastSelCellClickMs = _host.NowMs;
+                _selModeBeforeDoubleClick = st.SelectMode;           // 记下"双击前"的档
+                cmd.SetTool(Tool.Marquee);
+                if (prevBand == 7) CycleSelectMode();
+                break;
             case 8:
                 // 七种图形之后**不能再"两档对切"**了（以前是直线 ↔ 矩形）。
                 //
@@ -2255,6 +2732,28 @@ public sealed class FullUi : IOverlayUi
             int cell = CellForTool(state.Tool);
             if (HasBand(cell)) _bandCell = cell;
         }
+
+        // ---- 进放映的那一刻：**展开 + 回到默认位置**（用户 2026-09-27 定）----
+        //
+        // 用户原话："PPT 开始播放以后，把它打开放到居中靠底部。"
+        // 他要的是"一放片，笔就自己出来"——老师上课的第一件事往往是拿起笔，
+        // 不该先去找那颗球、或者去把上次拖到角落的面板拽回来。
+        //
+        // ⚠ **只在边沿做一次**（`!state.PptMode` 之外的那一下）：这一段要是写成
+        // "放映中就归位"，那么他放映中把面板拖到一边、翻一页（状态变化 → 又走这里）
+        // 就会被**拽回底部居中**——那是比"不归位"更烦人的行为。
+        // ⚠ **退出放映不还原**（用户 2026-09-27 选的）：面板保持展开、位置不动。
+        // 理由是他刚用完笔，回桌面还要接着写板书，再收起来等于多一步。
+        if (state.PptMode && !_lastPpt)
+        {
+            _anchor = null;                       // 回默认位置（工作区底边居中）
+            _peek.Jump(1f);                       // 贴边隐藏开着的话，也先完整露出来
+            _leftAtMs = _host.NowMs;              // 这次"露面"重新计离开时间
+            if (_expand.Value < 0.5f) _expand.To(1f, Tokens.ExpandMs);
+            else _expand.Jump(1f);
+        }
+        _lastPpt = state.PptMode;
+
         Invalidate();
     }
 
@@ -2634,17 +3133,9 @@ public sealed class FullUi : IOverlayUi
         if (BandHasSlider) DrawBandSlider(ctx, st);
         DrawBandAction(ctx);
 
-        // 白板那一格右边显示"第 N 屏"——老师要有一点位置感（"我在第几屏"）
-        if (_bandCell == 2)
-        {
-            var panel = UnionRect();
-            var box = new RectF
-            {
-                MinX = SegmentRect(4, 5).MaxX + 10f, MinY = BandRect().MinY,
-                MaxX = panel.MaxX - BarInset(), MaxY = BandRect().MaxY,
-            };
-            _widgets.Text(ctx, $"第 {st.ScreenIndex} 屏", box, 12.5f, Brush(ctx, InkCol), center: false);
-        }
+        // ⚠ 「第 N 屏」原来是**单画在带子右边**的一段文字（用的是写死的 `SegmentRect(4, 5)`），
+        // 2026-09-27 改成翻页器中间那一段（见 <see cref="BoardSegKind.PageLabel"/>）——
+        // 那块就是原来那个入口，只是搬到了两个箭头中间，成了"翻页器"的一部分。
     }
 
     /// <summary>
@@ -2680,9 +3171,17 @@ public sealed class FullUi : IOverlayUi
         ctx.DrawEllipse(new Ellipse(new Vector2(kx, cy), 7f, 7f),
                         Brush(ctx, new Color4(0.19f, 0.20f, 0.24f, 1f)), 1f);
 
-        float pr = Math.Clamp(2f + t * 6.5f, 2f, 8.5f);
-        ctx.FillEllipse(new Ellipse(new Vector2(box.MaxX - SliderPreviewW * 0.5f - 2f, cy), pr, pr),
-                        Brush(ctx, ink));
+        // 右端那个"笔尖预览"：**白板那一格不画**。
+        // 它画的是"这一笔有多粗"（半径跟着滑条位置变），而白板这一格拖的是**板面不透明度**，
+        // 跟笔宽没有半点关系——它还会拿**当前笔色**（所以在白板上是颗红点）。
+        // 用户 2026-09-27 就是在图上看见它才问的："调整透明的的滑块似乎后面跟着一个小圆点？"
+        // 拖滑条 / 悬停时本来就有气泡在显示板色和百分比（DrawSizePreview），信息不缺。
+        if (_bandCell != 2)
+        {
+            float pr = Math.Clamp(2f + t * 6.5f, 2f, 8.5f);
+            ctx.FillEllipse(new Ellipse(new Vector2(box.MaxX - SliderPreviewW * 0.5f - 2f, cy), pr, pr),
+                            Brush(ctx, ink));
+        }
     }
 
     /// <summary>
@@ -2754,13 +3253,8 @@ public sealed class FullUi : IOverlayUi
     private static Color4 Alpha(in Color4 c, float a)
         => new(c.R, c.G, c.B, Math.Clamp(MathF.Round(a * 32f) / 32f, 0f, 1f));
 
-    private bool IsSwatchActive(in UiState st, int i)
-    {
-        var c = SwatchColor(i);
-        var p = st.PaletteBase;
-        return MathF.Abs(c.R - p.R) < 0.02f && MathF.Abs(c.G - p.G) < 0.02f
-            && MathF.Abs(c.B - p.B) < 0.02f;
-    }
+    /// <summary>这一片色片是不是"当前色"（比较尺度见 <see cref="SameColor"/>，和切色共用一把）。</summary>
+    private bool IsSwatchActive(in UiState st, int i) => SameColor(SwatchColor(i), st.PaletteBase);
 
     /// <summary>
     /// 平时那条色线：**整条用当前笔色**，不分段、没有文字（照假面板）。
@@ -2792,6 +3286,83 @@ public sealed class FullUi : IOverlayUi
             ctx.DrawRoundedRectangle(rr, Brush(ctx, new Color4(0f, 0f, 0f, 0.2f * alpha)), 1f);
     }
 
+    /// <summary>
+    /// 画白板色带上的一段（段表见 <see cref="BoardBand"/>）。六种段各有各的画法：
+    ///   · **上一屏 / 下一屏**：圆角小格 ＋ 上下箭头；到顶了"上一屏"压暗（反馈在这里给）；
+    ///   · **第 N 屏**：**光写字，不画框、不响应悬停**——它夹在两个箭头中间，和它们是一体的；
+    ///   · **板色**：直接把那块板的颜色铺出来（颜色本身就是内容，写字反而多余），
+    ///     当前板色描一圈品牌色 ＋ 里面再套一圈白（第二重标记，不靠颜色单独区分）；
+    ///   · **底纹 / 间距**：文字写"现在在哪一档" ＋ 右边一竖列**档位点**。
+    ///
+    /// 底纹 / 间距这两格是**循环档**（点一下换下一档），这套手感是它们原来在「更多」抽屉里
+    /// 就有的，搬过来没改。档位点是 2026-09-20 在图形那一格上定的规矩：
+    /// **只换文字不给点的话，"这一格还能点"是隐形的**。
+    /// </summary>
+    private void DrawBoardSegment(ID2D1DeviceContext ctx, int i, in RectF r, in UiState st)
+    {
+        var seg = BoardSegAt(i);
+        var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
+        var rr = new RoundedRectangle(box, 8f, 8f);
+        bool hover = _hover == 200 + i;
+
+        switch (seg.Kind)
+        {
+            case BoardSegKind.PageUp:
+            case BoardSegKind.PageDown:
+            {
+                // 这条判据**与放映状态无关**——这一格只管白板（见 ActivateSegment 的说明）。
+                bool enabled = seg.Kind == BoardSegKind.PageDown || _host.State.CanFlipPageUp;
+                var fg = enabled ? InkCol : new Color4(InkCol.R, InkCol.G, InkCol.B, 0.30f);
+                if (hover && enabled) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+                ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+                IconAtlas.DrawCentered(ctx,
+                    seg.Kind == BoardSegKind.PageUp ? "chevronUp" : "chevronDown",
+                    r, 16f, Brush(ctx, fg));
+                return;
+            }
+
+            case BoardSegKind.PageLabel:
+                _widgets.Text(ctx, $"第 {st.ScreenIndex} 屏", r, 12.5f, Brush(ctx, InkCol));
+                return;
+
+            case BoardSegKind.Color:
+            {
+                ctx.FillRoundedRectangle(rr, Brush(ctx, InkPalette.BoardPresets[seg.Idx].Color));
+                bool active = BoardColorIs(st, seg.Idx);
+                ctx.DrawRoundedRectangle(rr, active ? Brush(ctx, Tokens.Accent) : Brush(ctx, BorderCol),
+                                         active ? 2f : 1f);
+                if (active)
+                {
+                    var inner = new Vortice.RawRectF(r.MinX + 2, r.MinY + 2, r.MaxX - 2, r.MaxY - 2);
+                    ctx.DrawRoundedRectangle(new RoundedRectangle(inner, 6f, 6f),
+                                             Brush(ctx, Tokens.AccentInk), 1.5f);
+                }
+                return;
+            }
+
+            default:                       // 底纹 / 间距
+            {
+                if (hover) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+                ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+
+                // 右边留一条给竖排的档位点（宽度和图形那一格同一个 12，见 DrawSegment）
+                const float PipStripW = 12f;
+                var textBox = new RectF
+                {
+                    MinX = r.MinX, MinY = r.MinY, MaxX = r.MaxX - PipStripW, MaxY = r.MaxY,
+                };
+                string label = seg.Kind == BoardSegKind.Pattern
+                    ? PatternName(st.BoardPattern)
+                    : $"{st.BoardPatternStep:F0}";
+                _widgets.Text(ctx, label, textBox, 12.5f, Brush(ctx, InkCol));
+
+                var (count, cur) = BoardPips(seg.Kind, st);
+                DrawPips(ctx, r.MaxX - PipStripW * 0.5f, (r.MinY + r.MaxY) * 0.5f, cur, count, InkCol);
+                return;
+            }
+        }
+    }
+
     private void DrawSegment(ID2D1DeviceContext ctx, int i, int count, in UiState st)
     {
         var r = SegmentRect(i, count);
@@ -2799,31 +3370,8 @@ public sealed class FullUi : IOverlayUi
         var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
         var rr = new RoundedRectangle(box, 8f, 8f);
 
-        // 白板那三格直接画板色（颜色本身就是内容，写字反而多余）
-        if (_bandCell == 2)
-        {
-            // 两端是"上一屏 / 下一屏"：到顶了"上一屏"压暗（点不动，反馈在这里给）
-            if (i == 0 || i == 4)
-            {
-                bool enabled = i == 4 || _host.State.CanFlipPageUp;
-                var fg = enabled ? InkCol : new Color4(InkCol.R, InkCol.G, InkCol.B, 0.30f);
-                if (_hover == 200 + i) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
-                ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
-                IconAtlas.DrawCentered(ctx, i == 0 ? "chevronUp" : "chevronDown", r, 16f, Brush(ctx, fg));
-                return;
-            }
-
-            int bi = i - 1;                       // 1..3 → 白/绿/黑
-            ctx.FillRoundedRectangle(rr, Brush(ctx, InkPalette.BoardPresets[bi].Color));
-            ctx.DrawRoundedRectangle(rr, active ? Brush(ctx, Tokens.Accent) : Brush(ctx, BorderCol),
-                                     active ? 2f : 1f);
-            if (active)
-            {
-                var inner = new Vortice.RawRectF(r.MinX + 2, r.MinY + 2, r.MaxX - 2, r.MaxY - 2);
-                ctx.DrawRoundedRectangle(new RoundedRectangle(inner, 6f, 6f), Brush(ctx, Tokens.AccentInk), 1.5f);
-            }
-            return;
-        }
+        // 白板那一格：段表说了算（见 BoardBand / DrawBoardSegment）
+        if (_bandCell == 2) { DrawBoardSegment(ctx, i, r, st); return; }
 
         if (active)
         {
@@ -3013,7 +3561,7 @@ public sealed class FullUi : IOverlayUi
     /// 图标不跟着换的话，"点第二下到底有没有生效"就没法看出来。
     ///
     /// 只有两个名字：**具体朝哪边由画的时候那一拖定**（用户 2026-09-20 更晚的口径：
-    /// "感觉不对，还是照搬他的逻辑"；InkClass 也是两个按钮 `case 20/21`）。
+    /// "感觉不对，还是参考他的逻辑"；InkClass 也是两个按钮 `case 20/21`）。
     /// </summary>
     private static string ParabolaIconName(CurveAxis axis)
         => ParabolaAxisIndex(axis) == 1 ? "parabolaRight" : "parabola";
@@ -3120,7 +3668,7 @@ public sealed class FullUi : IOverlayUi
 
     private bool IsSegmentActive(in UiState st, int i) => _bandCell switch
     {
-        2 => i >= 1 && i <= 3 && BoardColorIs(st, i - 1),
+        2 => BoardSegAt(i).Kind == BoardSegKind.Color && BoardColorIs(st, BoardSegAt(i).Idx),
         6 => i == 0 ? st.Tool == Tool.Eraser : st.Tool == Tool.PixelEraser,
         7 => i == 0 ? st.SelectMode == SelectMode.Rect : st.SelectMode == SelectMode.Lasso,
         8 => i >= 0 && i < ShapeSegmentCount && st.Tool == ShapeToolAt(i),
@@ -3174,8 +3722,10 @@ public sealed class FullUi : IOverlayUi
                 ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
             }
             var ink = pinned ? InkCol : new Color4(InkCol.R, InkCol.G, InkCol.B, 0.35f);
-            if (cell == 5) IconAtlas.DrawLaser(ctx, r, 18f, Brush(ctx, ink));
-            else IconAtlas.DrawCentered(ctx, Cells[cell].Icon, r, 18f, Brush(ctx, ink));
+            // **和主条同一处判据、同一个画法**（用户 2026-09-26："更多里面有一个设置，
+            // 那里面的图标也要同步起来"）——只是小一号（18）而且按"未选中"那一档画
+            //（抽屉里的格都不是选中态）。**不许在这儿另写一份图标名单**，见 DrawCellIcon 的说明。
+            DrawCellIcon(ctx, cell, r, 18f, ink, active: false, _host.State);
             if (!CanUnpin(cell))
             {
                 // 安全项：右上角一个小点，意思是"这个取消不掉"
@@ -3298,29 +3848,73 @@ public sealed class FullUi : IOverlayUi
         // 代价（明确接受）：七种图形**都没有 filled 变体**（Fluent 表里没有生成），
         // 所以选中态不再像别的格那样变实心，而是"同一个轮廓 + 强调色底 + 白图标"
         // ——和上带里选中的那一段是同一种画法。
-        var icon = i == 8 ? (active ? ShapeIcon(st.Tool) : Cells[8].Icon)
-                          : active ? Cells[i].Filled : Cells[i].Icon;
         var ink = active ? Tokens.AccentInk : InkCol;
         // **撤销/重做栈空 → 压暗**（用户 2026-09-17："撤销重做灰度"）。
         // 引擎早就把 UndoDepth / RedoDepth 递给界面了，只是界面一直没用。
         // 压暗而不是藏起来：位置固定、老师不用去找；点它也没事（引擎那边是空操作）。
         if (CellUnavailable(i, st)) ink = new Color4(ink.R, ink.G, ink.B, 0.30f);
-        // 激光笔是**自绘**的（笔＋光束＋落点）：Fluent 里没有这个专名，
-        // 用闪电之类的近义图标，老师看不出这是激光笔（假面板比过九个候选，选的是这个）。
         if (PerfSkipIcons) return;
-        // 激光笔：**未选中用线条版、选中用实心版**（和 Fluent 那批 regular／filled
-        // 同一套规矩——混着的表现就是"一排里只有它是实心的，像被填了色"）。
-        if (i == 5)
-            IconAtlas.DrawLaser(ctx, r, Tokens.Icon, Brush(ctx, ink), null,
-                                active ? IconAtlas.LaserDefault : IconAtlas.LaserOutline);
-        // 两种橡皮也是**自绘**的，而且**图标跟着当前是哪种橡皮变**：
-        // 整笔擦＝橡皮压着一条线；面积擦＝竖着的黄金比例矩形＋十字（和落点光标同形）。
-        // 一个按钮管两个工具，图标不跟着变的话，"现在到底在擦整条还是擦一块"只能看文字。
-        else if (i == 6)
-            IconAtlas.DrawEraser(ctx, r, Tokens.Icon, Brush(ctx, ink),
-                                 area: st.Tool == Tool.PixelEraser, outline: !active);
-        else IconAtlas.DrawCentered(ctx, icon, r, Tokens.Icon, Brush(ctx, ink));
+        DrawCellIcon(ctx, i, r, Tokens.Icon, ink, active, st);
     }
+
+    /// <summary>
+    /// **画某一格的图标**——主条（<see cref="DrawCell"/>）和「更多」抽屉（<see cref="DrawDrawer"/>）
+    /// **共用这一处**。
+    ///
+    /// 为什么必须收成一处：用户 2026-09-26 特意提醒"更多里面有一个设置，那里面的图标也要同步起来"。
+    /// 原来两处各写了一遍（抽屉那句只认 `Cells[cell].Icon`），于是白板那一格在带子上是自绘的板、
+    /// 在抽屉里还是 Fluent 那个"窗口布局"；橡皮 / 选择这一轮换了图标之后也会立刻再犯一次。
+    /// 仓库里"同一个名单写两处、改一处必漏一处"已经栽过好几次（见 架构-分层与规则.md 五-7），
+    /// 所以这不是"顺手合并"，是修那个毛病本身。
+    ///
+    /// <paramref name="active"/>：这一格亮不亮（抽屉里恒为 false——抽屉里的格都不是选中态）。
+    /// </summary>
+    private void DrawCellIcon(ID2D1DeviceContext ctx, int cell, RectF r, float size,
+                              in Color4 ink, bool active, in UiState st)
+    {
+        var brush = Brush(ctx, ink);
+        switch (cell)
+        {
+            // 白板：板开着的时候板面填成**这块板的颜色**（见 IconAtlas.DrawBoard）
+            case 2:
+                IconAtlas.DrawBoard(ctx, r, size, brush, active ? st.BoardColor : null);
+                return;
+            // 激光笔：那两张（见 IconAtlas.DrawLaserCell）
+            case 5:
+                IconAtlas.DrawLaserCell(ctx, r, size, brush, active);
+                return;
+            default:
+                IconAtlas.DrawCentered(ctx, CellIconName(cell, st), r, size, brush);
+                return;
+        }
+    }
+
+    /// <summary>
+    /// **这一格画哪个图标名**——"格子 → 图标"的**唯一一处判据**：
+    /// 绘制（<see cref="DrawCellIcon"/>）和自检（<see cref="CellIconForTest"/>）都问它，
+    /// 免得又出现"自检说画的是 A、屏幕上其实是 B"（那条 ⚠ 见 CellIconForTest）。
+    /// 白板 / 激光那两格要额外参数（板色、两态），不在这张表里，由 DrawCellIcon 直接调绘制。
+    ///
+    /// 2026-09-26 用户挑的这一轮：
+    ///   · **橡皮（6）**：未选中＝`eraserPure`（**Radix 那张纯橡皮**，MIT，15 网格；
+    ///     用户 2026-09-26 从候选里挑的 B2——理由是这一族里它路径中**一根横线都没有**）；
+    ///     选中＝跟着当前是哪种橡皮换：
+    ///     整笔擦＝`eraser`（Fluent 原版，带横线）、面积擦＝`eraserMedium`（橡皮＋一个大圈）；
+    ///   · **选择（7）**：未选中＝`lucideSelectPointer`（Lucide 虚线框＋指针）；
+    ///     选中＝框选 `mdiSelection`（MDI 四角括号＋断续边）/ 套索 `lasso`（Fluent）。
+    /// </summary>
+    private string CellIconName(int cell, in UiState st) => cell switch
+    {
+        // 图形那一格：亮着（手里就是某种图形）才跟着当前种类走，没亮画通用的那张（见 DrawCell 那段）
+        8 => IsActive(8, st) ? ShapeIcon(st.Tool) : Cells[8].Icon,
+        6 => IsActive(6, st)
+                ? (st.Tool == Tool.PixelEraser ? "eraserMedium" : "eraser")
+                : "eraserPure",
+        7 => IsActive(7, st)
+                ? (st.SelectMode == SelectMode.Lasso ? "lasso" : "mdiSelection")
+                : "lucideSelectPointer",
+        _ => IsActive(cell, st) ? Cells[cell].Filled : Cells[cell].Icon,
+    };
 
     /// <summary>
     /// 这一格现在算不算"选中的"。
@@ -3422,6 +4016,31 @@ public sealed class FullUi : IOverlayUi
     internal int BandSegmentCountForTest => BandSegmentCount;
 
     /// <summary>
+    /// 自检用：白板色带上"某一种段"排第几个（找不到 -1）。名字：翻页那两个是 `PageUp` /
+    /// `PageDown`、页码是 `PageLabel`、底纹 `Pattern`、间距 `Step`；板色带下标，`Color0/1/2`
+    /// （0/1/2 ＝ 白/绿/黑）。
+    ///
+    /// 为什么要这么一个入口：**自检不许写死段下标**。段序是会被重排的——2026-09-27 这一轮
+    /// 就把 `[上一屏][白][绿][黑][下一屏]` 重排成了 `[‹] 第 N 屏 [›] [白][绿][黑] [底纹][间距]`，
+    /// 而写死下标的自检**改错了是静默的**：点到了别的段，红的却是那一条断言（这条教训
+    /// 在抽屉那几行上吃过一次，见 `RowRectByLabelForTest` 的注释）。
+    /// </summary>
+    internal int BoardSegIndexOfForTest(string name)
+    {
+        if (_bandCell != 2) return -1;
+        var segs = BoardBand;
+        for (int i = 0; i < segs.Length; i++)
+            if (BoardSegName(segs[i]) == name) return i;
+        return -1;
+    }
+
+    /// <summary>自检用：白板色带这一刻走的是**紧凑布局**（极简档那种，没有翻页和滑条）。</summary>
+    internal bool BoardCompactBandForTest => BoardCompactBand;
+
+    private static string BoardSegName((BoardSegKind Kind, int Idx) s) =>
+        s.Kind == BoardSegKind.Color ? $"Color{s.Idx}" : s.Kind.ToString();
+
+    /// <summary>
     /// 自检用：某一格现在画的是哪个图标名。
     /// 图形那一格（8）的图标**跟着当前种类变**，所以它得问一次状态；
     /// 其余的格子图标是写死在 Cells 表里的，直接给。
@@ -3430,9 +4049,30 @@ public sealed class FullUi : IOverlayUi
     /// ——这正是这条自检要盯的东西（见 ShapeBandTest 的 D 段）。
     /// </summary>
     internal string CellIconForTest(int cell)
-        => cell == 8
-            ? (HasShapeEntry(_host.State.Tool) ? ShapeIcon(_host.State.Tool) : Cells[8].Icon)
-            : Cells[cell].Icon;
+    {
+        var st = _host.State;
+        // 白板那一格：板开着时画的是**自绘的板 ＋ 这块板的颜色**，名字写成 "board:白板" 这样
+        // ——盘里没有这个名字的图标，它只是给自检一个"现在画的是哪一块板"的判据
+        //（真画法是 IconAtlas.DrawBoard，见 DrawCell）。
+        if (cell == 2)
+            return st.Board ? "board:" + BoardColorName(st.BoardColor) : "board";
+        // 激光笔那一格：**判据直接问 IconAtlas**（`LaserIconNameForTest`）——换一支图标时
+        // 只要改那边一处，这里跟着变，不会出现"自检说 Material、屏幕上其实是自绘的那支"。
+        if (cell == 5)
+            return IconAtlas.LaserIconNameForTest(IsActive(5, st));
+        // 其余格子（含橡皮 / 选择那两格的"选中显示选中什么"）：**和绘制问同一个函数**
+        //（`CellIconName`）。两处各写一遍的话，自检就成了"测另一个东西"，见上面那条 ⚠。
+        return CellIconName(cell, st);
+    }
+
+    /// <summary>自检用：现在这块板是白的 / 绿的 / 黑的（按板色和三个预设比，见 InkPalette.BoardPresets）。</summary>
+    private static string BoardColorName(in Color4 c)
+    {
+        foreach (var (name, preset) in InkPalette.BoardPresets)
+            if (MathF.Abs(preset.R - c.R) < 0.02f && MathF.Abs(preset.G - c.G) < 0.02f
+                && MathF.Abs(preset.B - c.B) < 0.02f) return name;
+        return "自定义色";
+    }
 
     /// <summary>
     /// 自检用：图形那一格**第 i 段**的图标名。
@@ -3528,6 +4168,9 @@ public sealed class FullUi : IOverlayUi
         _rail.Jump(1f);
     }
 
+    /// <summary>自检用：上带这一刻停在哪一格（"现在是谁的设置条"）。</summary>
+    internal int BandCellForTest => _bandCell;
+
     /// <summary>出图用：把"粗细预览"摆出来（产品里是拖滑条、或指针停在滑条上时出现）。</summary>
     internal void ShowSizePreviewForTest()
     {
@@ -3544,12 +4187,6 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>自检用：这一格现在压暗没有（撤销/重做栈空）。</summary>
     internal bool CellUnavailableForTest(int cell) => CellUnavailable(cell, _host.State);
-
-    /// <summary>自检用：抽屉里某一行现在压暗没有（底纹两行在"白板没开"时要压暗）。</summary>
-    internal bool RowGrayForTest(int row) => IsGrayRow(row);
-
-    /// <summary>自检用：抽屉里某一行现在显示的字（底纹两行会把当前档位写出来）。</summary>
-    internal string RowLabelForTest(int row) => RowLabel(row);
 
     /// <summary>自检用：这一刻色片有几个（极简档应该是 4）。</summary>
     internal int SwatchCountForTest => SwatchCount;
@@ -3590,6 +4227,20 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>自检用：界面看到的屏幕（核对它和 IUiHost.Screen 是不是同一个）。</summary>
     internal RectF ScreenForTest => _screen;
+
+    /// <summary>自检用：界面看到的**工作区**（默认位置按它算，见 <see cref="RawAnchor"/>）。</summary>
+    internal RectF WorkAreaForTest => _work;
+
+    /// <summary>
+    /// 自检用：直接指定"拖过的位置"（`null` = 回默认位置），不经过真鼠标拖动。
+    /// 用来验"进放映时归位"——那条要看的是**归位前**已经拖到别处这个前提，
+    /// 而不是拖动手势本身（手势另有专测）。
+    /// </summary>
+    internal void SetAnchorForTest(Vector2? anchor)
+    {
+        _anchor = anchor;
+        Invalidate();
+    }
 
     /// <summary>自检用：贴边隐藏的进度（1 = 完全显示，0 = 只剩露头）。</summary>
     internal float PeekForTest => _peek.Value;

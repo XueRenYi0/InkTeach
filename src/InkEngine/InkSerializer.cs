@@ -203,6 +203,35 @@ internal static class InkSerializer
         return ms.ToArray();
     }
 
+    /// <summary>
+    /// 把**一页**的对象序列化成字节（PPT 模式"每页一个文件"用，见 PptStore）。
+    ///
+    /// 格式与 <see cref="Save"/> 完全一致（只是块固定一个空白块）——
+    /// **刻意不发明第二套格式**：解析、版本迁移、老文件兼容全部共用一条路，
+    /// 而且这种字节将来直接塞进剪贴板/被别的工具读都不会有歧义。
+    /// </summary>
+    public static byte[] SaveStrokes(IReadOnlyList<Stroke> strokes)
+    {
+        using var ms = new MemoryStream(64 * 1024);
+        using (var w = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true))
+        {
+            w.Write(Magic);
+            w.Write(FormatVersion);
+            w.Write(0);                       // flags
+            w.Write(1);                       // 一个块（空白；页的底图以后再说）
+            w.Write((byte)BlockKind.Blank);
+            w.Write(0f); w.Write(0f); w.Write(0f); w.Write(0f);
+            w.Write("");
+            w.Write(strokes.Count);
+            foreach (var s in strokes) WriteStroke(w, s);
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>读一页的字节，返回对象表（PPT 模式装载某一页用）。</summary>
+    public static List<Stroke> LoadStrokes(byte[] data, out int maxId)
+        => ParseCore(data, out _, out maxId);
+
     private static void WriteStroke(BinaryWriter w, Stroke s)
     {
         w.Write(s.Id);
@@ -324,6 +353,18 @@ internal static class InkSerializer
     /// </summary>
     public static void LoadInto(InkDocument doc, byte[] data)
     {
+        var strokes = ParseCore(data, out var blocks, out int maxId);
+        // 走到这里才算读成功——中途抛异常时文档原样不动。
+        doc.ReplaceAll(blocks, strokes, maxId);
+    }
+
+    /// <summary>
+    /// 把字节解析成"块 ＋ 对象 ＋ id 水位"。**只解析、不碰文档**——
+    /// <see cref="LoadInto"/>（整份文档）和 <see cref="LoadStrokes"/>（一页）
+    /// 共用这一份，两条路对格式的理解不可能跑偏（那是最难查的一类 bug）。
+    /// </summary>
+    private static List<Stroke> ParseCore(byte[] data, out List<CanvasBlock> blocks, out int maxId)
+    {
         if (!LooksLikeInk(data))
             throw new InvalidDataException("不是 InkTeach 的批注数据（文件头不对）。");
 
@@ -341,7 +382,7 @@ internal static class InkSerializer
         if (blockCount < 0 || blockCount > 1_000_000)
             throw new InvalidDataException($"画布块数量不合理：{blockCount}。");
 
-        var blocks = new List<CanvasBlock>(blockCount);
+        blocks = new List<CanvasBlock>(blockCount);
         for (int i = 0; i < blockCount; i++)
         {
             blocks.Add(new CanvasBlock
@@ -361,16 +402,14 @@ internal static class InkSerializer
             throw new InvalidDataException($"对象数量不合理：{objCount}。");
 
         var strokes = new List<Stroke>(objCount);
-        int maxId = 0;
+        maxId = 0;
         for (int i = 0; i < objCount; i++)
         {
             var s = ReadStroke(r, version);
             if (s.Id > maxId) maxId = s.Id;
             strokes.Add(s);
         }
-
-        // 走到这里才算读成功——中途抛异常时文档原样不动。
-        doc.ReplaceAll(blocks, strokes, maxId);
+        return strokes;
     }
 
     private static Stroke ReadStroke(BinaryReader r, int version)

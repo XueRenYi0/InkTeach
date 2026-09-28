@@ -33,7 +33,10 @@ internal enum PassThroughMode
     LayeredTransparent = 2,
 }
 
-public class InkEngine
+/// <summary>
+/// 引擎本体。部分实现按职责拆在别的文件里（`Ppt.cs` = PPT 放映联动）。
+/// </summary>
+public partial class InkEngine
 {
     // ---- document / interaction state ------------------------------------
     internal readonly InkDocument Doc = new();
@@ -108,6 +111,20 @@ public class InkEngine
         if (NowMs < _nextAutoSaveAtMs) return;
         _nextAutoSaveAtMs = NowMs + _autoSaveEveryMs;
         if (Doc.Version == _autoSavedVersion) return;
+
+        // PPT 模式：**改成写当前这一页到 PPT 自己的目录**，不写自动存档。
+        // 为什么：自动存档是"桌面的那一份板书"，下次启动会被当成桌面批注接回来——
+        // 把某一页 PPT 的内容写进去就串了（那是另一条路的数据）。
+        // PPT 页本来就有自己的落盘通道（翻页时、退出时各一次），这里补上"放映中途"
+        // 那一段（老师在一页上写很久、还没翻页就崩了，内容不至于丢）。
+        if (PptMode)
+        {
+            SaveCurrentPptPage();
+            _autoSavedVersion = Doc.Version;
+            AutoSaveCount++;
+            return;
+        }
+
         AutoSaveNow();
     }
     internal Stroke ActiveStroke;
@@ -135,8 +152,14 @@ public class InkEngine
     /// 激光笔的粗细。以前激光借的是**笔宽**（`Engine.cs` 里那条
     /// `tool == Highlighter ? Highlighter : Pen`），于是"切粗细"对激光没意义、
     /// 落点的点大小也没法跟笔迹对上。现在四种工具各记各的。
+    ///
+    /// ⚠ 默认档 2026-09-27 从 4 改粗到 8（用户："可以把默认档改粗一点"）。
+    /// 为什么当时显得细：那条轨迹是"**细白芯 ＋ 一层淡红晕**"，
+    /// 白芯只占 0.32 个直径 → 4 的直径下白芯才 1.3 像素，肉眼基本只剩一点红雾。
+    /// 现在发光比例改成 ClassIn 那种（**宽白芯 ＋ 细红边 ＋ 柔光**，见 `Overlay.DrawLaser`），
+    /// 同一档在屏幕上也更"实"。
     /// </summary>
-    internal float LaserWidthLogical = 4f;
+    internal float LaserWidthLogical = 8f;
     /// <summary>
     /// **笔的线型**（用户 2026-09-19 第 2 件：笔的色带条上要能切虚实线）。
     ///
@@ -256,19 +279,27 @@ public class InkEngine
     }
 
     /// <summary>Pen width presets, in logical pixels. Cycled with Ctrl+Alt+W
-    /// until there is a proper on-screen control for it.</summary>
-    internal static readonly float[] WidthPresets = { 1.5f, 3f, 6f, 10f, 16f, 24f };
+    /// until there is a proper on-screen control for it.
+    /// 最细档 2026-09-27 从 1.5 降到 **1**（用户："画笔的最小笔宽设成 1 可以吗？"——
+    /// 1.5 写细字、画坐标轴刻度时还是偏粗）。</summary>
+    internal static readonly float[] WidthPresets = { 1f, 3f, 6f, 10f, 16f, 24f };
     internal int WidthPresetIndex = 1;
 
     /// <summary>
     /// 每种工具各自的粗细档位。**笔和荧光笔的档位不是一回事**：荧光笔是"涂一大条"，
-    /// 1.5 像素这种档位对它没意义；激光更小。共用一张表的结果就是
+    /// 1 像素这种档位对它没意义；激光更小。共用一张表的结果就是
     /// "选了荧光笔按 Ctrl+Alt+6 没反应"（它改的是笔宽）——实测就是这个 bug。
     /// </summary>
     internal static readonly float[] HighlighterWidthPresets = { 8f, 18f, 32f };
-    internal static readonly float[] LaserWidthPresets = { 4f, 8f, 14f };
+    /// <summary>
+    /// 激光的四档。沿革：4/8/14（初版）→ 8/14/22（2026-09-27 白天"默认档粗一点"）
+    /// → **4/8/14/22**（2026-09-27 晚：用户说"最小笔宽是 8，我感觉有点宽了"）。
+    /// 补一档更细的 4 回来，**默认档仍是 8**（`LaserWidthIndex = 1`）——
+    /// "想要更细"和"默认别太细"这两条要求这样同时满足。
+    /// </summary>
+    internal static readonly float[] LaserWidthPresets = { 4f, 8f, 14f, 22f };
     internal int HighlighterWidthIndex = 1;
-    internal int LaserWidthIndex = 0;
+    internal int LaserWidthIndex = 1;
 
     /// <summary>当前工具的粗细（逻辑像素）。落点反馈、界面状态都读它。</summary>
     internal float CurrentToolWidthLogical => Tool switch
@@ -287,6 +318,68 @@ public class InkEngine
     /// 指针形状直接取决于它，见 <see cref="ComputeCursorKind"/>。
     /// </summary>
     internal uint LastPointerType = Native.PT_MOUSE;
+
+    /// <summary>
+    /// 当前这支笔的**笔尖是不是就在屏幕上**（触摸屏自带的笔 = true；外接手写板 = false）。
+    ///
+    /// 为什么要分这一刀（2026-09-27 用户报的 bug）："手写笔落笔后不画落点、把系统光标也
+    /// 藏起来"这条规则的依据是"**笔尖本身就是落点**"。可手写板的笔尖在**板子上**、
+    /// 根本不在屏幕里——写字时屏幕上什么都没有，用户的原话是"感觉不太流畅、有点奇怪"。
+    /// 所以这条规则**只对触摸屏自带的笔成立**；鼠标、手写板（以及认不出设备的笔）
+    /// 一律给"斜笔"光标，让它一路跟着落点走。
+    ///
+    /// 设备句柄 → 结论只查一次（同一支笔不会一会儿在屏上一会儿在板子上），缓存住；
+    /// 查不到（老驱动 / 合成设备）按 false 走 = "给光标"——**宁可多给，不能没有**。
+    /// </summary>
+    internal bool PenDeviceOnScreen;
+
+    /// <summary>设备句柄 → "笔尖在屏幕上吗"的缓存（见 <see cref="PenDeviceOnScreen"/>）。</summary>
+    private readonly Dictionary<IntPtr, bool> _penOnScreenCache = new();
+
+    /// <summary>查一次"这个设备句柄的笔尖在不在屏幕上"，结果进缓存。</summary>
+    private bool QueryPenOnScreen(IntPtr sourceDevice)
+    {
+        if (sourceDevice == IntPtr.Zero) return false;
+        if (_penOnScreenCache.TryGetValue(sourceDevice, out bool known)) return known;
+        bool onScreen = false;
+        if (Native.GetPointerDevice(sourceDevice, out var info))
+            onScreen = info.pointerDeviceType == Native.POINTER_DEVICE_TYPE_INTEGRATED_PEN;
+        _penOnScreenCache[sourceDevice] = onScreen;
+        return onScreen;
+    }
+
+    /// <summary>
+    /// 笔工具此刻**该不该给斜笔光标**（而不是藏起来交给自绘落点）。
+    /// 规则：只有"笔尖就在屏幕上"的那支笔才藏（笔尖即落点）；鼠标、手写板、认不出的笔
+    /// 都给斜笔（系统 IDC_PEN）。触摸轮不到它（<see cref="ComputeCursorKind"/> 开头就返回了）。
+    /// </summary>
+    internal bool PenShowsCursor
+        => LastPointerType != Native.PT_PEN || !PenDeviceOnScreen;
+
+    /// <summary>
+    /// 最后一条指针消息里**笔是不是倒过来拿的**（笔尾橡皮，PEN_FLAG_INVERTED / ERASER）。
+    ///
+    /// 为什么要留这个状态（用户 2026-09-27 报的）：倒持的笔**画的时候**早就按橡皮走了
+    /// （`OnPointerDown` / `OnPointerMove` 里那句 `inverted ? Tool.Eraser : Tool`），
+    /// 唯独**光标没跟着变**——笔尾悬停在画布上时，屏幕上还是斜笔 / 笔尖环，
+    /// 老师看不出"这一头是橡皮"，也看不出"会擦掉多大一块"。
+    ///
+    /// 生命周期跟着 <see cref="LastPointerType"/> 走：读指针消息时一起更新（见
+    /// <see cref="ReadPointer"/>）；鼠标 / 触摸永远读不到倒持（它们没有笔尾），
+    /// 于是每条消息都会把它复位成 false。
+    /// </summary>
+    internal bool LastPointerInverted;
+
+    /// <summary>
+    /// 此刻**实际在用的工具**：笔倒过来拿时就是橡皮，其余情况就是 <see cref="Tool"/>。
+    ///
+    /// 光标这一族（<see cref="ToolCursorKind"/> / <see cref="DrawnCursor"/> /
+    /// <see cref="CursorOuterRadius"/>）必须问它而不是直接问 Tool——**判据只写一处**，
+    /// 不然"倒持"这个判断就会散到好几处（本项目为这种散落栽过四次，
+    /// 见 架构-分层与规则.md 五-7）。
+    /// </summary>
+    internal Tool EffectiveTool => LastPointerInverted ? Tool.Eraser : Tool;
+
     internal bool ShowHud = true;
 
     /// <summary>
@@ -979,11 +1072,19 @@ public class InkEngine
     private readonly List<Vector2> _tailScratch = new(8);
 
     /// <summary>
-    /// 预测开关。**不只服务真笔的委托轨迹**：鼠标与触摸那条路没有系统湿墨通道，
-    /// 预测段由我们画进"正在写的那一笔"（见 <see cref="UpdateRenderTail"/>）。
-    /// <c>--nopredict</c> 关掉。
+    /// 预测开关。**默认关**（2026-09-29 用户拍板）。
+    ///
+    /// 关它的原因（都是实测的，别再"顺手打开"）：
+    ///   · 真笔那一条：DWM **不把我们喂的预测点画出来**（用 `--predictms 200 --predictlead 400`
+    ///     当探针验过：鼠标那条会窜出去，手写板那条纹丝不动）——所以对笔，它一直是白喂；
+    ///   · 鼠标/触摸那一条：预测段由我们画（见 <see cref="UpdateRenderTail"/>），
+    ///     而输入是突发的，尾巴会**一出一进**，屏幕上是末端"突突突往外跳"（用户原话）；
+    ///   · 收益又測不出来：同一支笔、开与关，"手感分不出来"。
+    ///
+    /// 配置：`--predict` 打开（做对照用）；开了之后 `--predictms N` 调地平线、
+    /// `--predictlead N` 调前带量上限。
     /// </summary>
-    internal bool PredictEnabled = true;
+    internal bool PredictEnabled;
     /// <summary>
     /// 正在写的这一笔**已经交给系统合成器画**了吗（<see cref="FeedInkTrail"/> 真的喂了点）。
     /// 喂过就不再加自己的渲染尾——两边一起补会在笔尖前面重复画出一小截。
@@ -1026,6 +1127,10 @@ public class InkEngine
         _mGc0 = GC.CollectionCount(0);
         _mGc1 = GC.CollectionCount(1);
         _mGc2 = GC.CollectionCount(2);
+        // 预测那本账也要按笔分开记（真笔的预测在 DWM 那条路上）
+        _mPredCount = PredLeadCount;
+        _mPredSum0 = PredLeadSum;
+        _strokePredMax = 0f;
         _measureDone = false;
     }
 
@@ -1038,6 +1143,10 @@ public class InkEngine
         StrokeGc0 = GC.CollectionCount(0) - _mGc0;
         StrokeGc1 = GC.CollectionCount(1) - _mGc1;
         StrokeGc2 = GC.CollectionCount(2) - _mGc2;
+
+        StrokePredCount = PredLeadCount - _mPredCount;
+        StrokePredLeadAvg = StrokePredCount > 0 ? (PredLeadSum - _mPredSum0) / StrokePredCount : 0;
+        StrokePredLeadMax = _strokePredMax;
 
         StrokesMeasured++;
         AllocKbSum += StrokeAllocBytes / 1024.0;
@@ -1062,6 +1171,18 @@ public class InkEngine
     internal int PtrTotalPoints, PtrMessages, PtrSamples, PtrCoalescedExtra;
     /// <summary>预测把湿墨往前带了多少（像素）——"说不清有没有用"时就看这个数。</summary>
     internal double PredLeadSum; internal int PredLeadCount; internal float PredLeadMax;
+    /// <summary>
+    /// 这一笔**喂给委托轨迹（DWM）**的预测段：次数 / 平均前带量 / 最大前带量。
+    /// 真笔的预测全在这条路上（由系统合成器画），和"我们自己画的尾"是两回事——
+    /// 报告里必须分开写，否则真笔那几笔会显示成"预测尾=无"，看起来像没预测
+    ///（2026-09-29 用户就是这么被误导的）。
+    /// </summary>
+    internal int StrokePredCount;
+    internal double StrokePredLeadAvg;
+    internal float StrokePredLeadMax;
+    int _mPredCount;
+    double _mPredSum0;
+    float _strokePredMax;
     internal int _cntDown, _cntMove, _cntUp, _cntCaptureLost;
     internal string _lastStrokeReport;
     private long _hotkeysRegistered;
@@ -1116,8 +1237,9 @@ public class InkEngine
     /// 指针这一刻是不是停在界面自己那一块上。
     /// 两个地方要用：悬停时光标要给箭头（不是笔尖/橡皮圈）；穿透模式下
     /// WM_SETCURSOR 要区分"面板之外让下层决定"与"面板之上我们自己给箭头"。
+    /// （internal 是为了自检能构造"从画布直入 / 从工具条进入"两种来路，见 --cursortest。）
     /// </summary>
-    private bool _uiHover;
+    internal bool _uiHover;
 
     /// <summary>
     /// 白板模式：给整块画布铺一层不透明的底色，遮住桌面和别的程序。
@@ -1292,7 +1414,13 @@ public class InkEngine
 
     internal int Run(string[] args)
     {
-        Console.OutputEncoding = System.Text.Encoding.UTF8;
+        // 设置控制台输出编码。
+        // 【为什么必须包 try】：发布版是 GUI 子系统（无控制台），双击启动时进程手里
+        // 根本没有控制台句柄，这个 setter 会走 SetConsoleOutputEncoding 抛
+        // IOException“句柄无效”，把整个启动流程打断（踩过：双击发布版启动失败）。
+        // 有控制台（命令行/带参数自检）时才真正生效，没控制台就跳过——
+        // 反正没控制台时所有 Console.WriteLine 本来也是空操作，不影响任何功能。
+        try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
         Native.SetProcessDpiAwarenessContext(Native.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         Native.EnableMouseInPointer(true);
 
@@ -1331,6 +1459,11 @@ public class InkEngine
         if (PrepareHostStartup(mode, args, out int hostExit))
             return hostExit;
 
+        // PPT 放映联动：**只在产品模式下真的接**（自检/基准模式不接——那要碰 COM，
+        // 判据会变得不确定；而且探针 `--pptprobe` 自己 new 一个源去问，
+        // 不走这条路）。没装 Office / 没开 PPT 时它什么都不做。
+        StartPptLink();
+
         // --nohud：关掉调试性能面板。它是给开发看的，每帧要花约 1.9 ms
         // （文字排版 + 进程计数），测底层性能时必须排除掉，否则量到的是
         // 测量工具本身而不是渲染引擎。
@@ -1355,12 +1488,11 @@ public class InkEngine
         if (args.Contains("--inktrail")) OverlayWindow.InkTrailEnabled = true;
         if (args.Contains("--noinktrail")) OverlayWindow.InkTrailEnabled = false;
 
-        // ---- 笔迹预测 ---------------------------------------------------------
-        // **不再跟着湿墨轨迹开**：轨迹只有真笔能用，而预测现在还要给鼠标 / 触摸用
-        //（那两条路没有系统湿墨通道，预测段由我们自己画进正在写的那一笔，
-        // 见 UpdateRenderTail）。所以只有 --nopredict 才关。
-        // --predictms N 调地平线，超出 8~15 ms 会被收进范围（见原理文档第三节）。
-        PredictEnabled = !args.Contains("--nopredict");
+        // ---- 笔迹预测（**默认关**，2026-09-29）--------------------------------
+        // 关的理由见 PredictEnabled 那段注释：真笔那条 DWM 不画我们的预测点（白喂），
+        // 鼠标/触摸那条自绘尾会"一出一进"（末端突突跳），而收益又测不出来。
+        // 想要对照就 `--predict`；开了之后 --predictms 调地平线、--predictlead 调前带量。
+        PredictEnabled = args.Contains("--predict");
         for (int i = 0; i < args.Length - 1; i++)
             if (args[i] == "--predictms" && double.TryParse(args[i + 1], out double pm))
                 _predictor.HorizonMs = pm;
@@ -1410,6 +1542,27 @@ public class InkEngine
             }
         }
 
+        // ---- 中心线曲线化（过点 Catmull-Rom ＋ 角点保护）------------------------
+        //
+        // **默认开**（2026-09-28 用户拍板："默认开也没关系"）：把"逐点直线段"换成
+        // "过每一个采样点的三次贝塞尔"，急转处由角点保护切断切线。
+        // **不改存档里的点、不改形状语义**——曲线严格过点，直角/顿笔/尖角原样保留；
+        // 正在写的那一笔走折线（`Stroke.RawWhileLive`），落笔那一刻才换成曲线。
+        //
+        //   --nosmooth          退回折线（做"开 / 关"对照用）
+        //   --smoothcorner N    角点阈值（度）。默认 35：转得比它急就保留尖角。
+        StrokeSmoothing.SetEnabled(!args.Contains("--nosmooth"));
+        for (int i = 0; i < args.Length - 1; i++)
+            if (args[i] == "--smoothcorner" && float.TryParse(args[i + 1], out float sc))
+            {
+                StrokeSmoothing.CornerAngleDeg = Math.Clamp(sc, 5f, 90f);
+                StrokeSmoothing.BumpVersion();
+            }
+        Console.WriteLine(StrokeSmoothing.Enabled
+            ? $"中心线曲线化: 开（过点曲线 ＋ 角点保护，角点阈值 {StrokeSmoothing.CornerAngleDeg}°；"
+              + "活笔走折线，落笔才换曲线）"
+            : "中心线曲线化: 关（折线；--nosmooth 的效果）");
+
         // ---- 呈现节奏 ---------------------------------------------------------
         // 默认改成"等到合成边界再抽输入、立刻 Present(0)"。实测这一项把
         // "Present 返回 → 像素亮"从 3.5 个刷新周期压到 1 个（见
@@ -1431,6 +1584,10 @@ public class InkEngine
         // 用默认键位跑起来，但把问题逐条打出来（静默回退最坑人）。
         foreach (var w in InkSettings.Load(Keys))
             Console.WriteLine("settings: " + w);
+
+        // 自动更新的来源：settings.json 覆盖默认值（默认是空的 = 不检查）。
+        // 放这里读，是为了"用户改配置文件不用重新编译"。
+        UpdateFeed.Url = InkSettings.LoadUpdateUrl() ?? UpdateFeed.DefaultUrl;
 
         RegisterHotkeys();
 
@@ -1591,7 +1748,7 @@ public class InkEngine
             // 调参时"我到底调上了没有"必须一眼看得见：这里印的是**生效值**，不是"可用/不可用"。
             // （2026-09-22 用户碰到的两个坑：--predictms 100 被静默夹到 15；--noinktrail 生效了没有
             //   只能靠猜。这两件事都不该靠猜。）
-            Console.WriteLine($"笔迹预测: {(PredictEnabled ? "开" : "关（--nopredict）")}"
+            Console.WriteLine($"笔迹预测: {(PredictEnabled ? "开（--predict）" : "关（默认）")}"
                               + $"，地平线 {PredictHorizonMs:F0} ms（推荐 8~{InkPredictor.MaxHorizonMs:F0}，硬上限 {InkPredictor.HardMaxHorizonMs:F0}）"
                               + $"，前带量上限 {PredictLeadCap:F0} px");
             Console.WriteLine($"预测尾（鼠标/触摸自画的那一截）：{(OverlayWindow.InkTrailEnabled
@@ -1657,6 +1814,7 @@ public class InkEngine
         DpiScale = _windows[0].Dpi / 96f;
 
         Host?.UpdateScreen(LogicalVirtualScreen);
+        Host?.UpdateWorkArea(LogicalPrimaryWorkArea);
         Console.WriteLine($"DPI 缩放 {DpiScale:F2}（逻辑 {_windows[0].Width / DpiScale:F0}x{_windows[0].Height / DpiScale:F0}）");
 
         // 把键盘模式落到窗口样式上。字段默认是开的，但样式要等窗口建好才能改——
@@ -1721,6 +1879,7 @@ public class InkEngine
             // 紧接着的 DrainMessages 会把这一帧真的到过的点算成新的尾。
             ClearRenderTail();
             DrainMessages();
+            PumpUpdate();                 // 自动更新：把后台结果搬过来，该换壳就换壳
             if (_quit) break;
 
             NowMs = _clock.Elapsed.TotalMilliseconds;
@@ -1737,6 +1896,8 @@ public class InkEngine
 
             Laser.Prune(NowMs);
             StepCameraAnim();                 // 翻页动画（167ms）
+            StepPpt();                        // PPT 放映联动（没变化时只读一个 bool，不碰 COM）
+            StepPptBar();                     // 底部那两条的长按判定（只有按住那一会儿有活）
             if (NeedsFrame())
             {
                 // VBlankPaced：先等到合成边界，**再抽一次消息**，然后画、提交。
@@ -1775,6 +1936,9 @@ public class InkEngine
         while (Native.PeekMessage(out var msg, IntPtr.Zero, 0, 0, 1))
         {
             if (msg.message == 0x0012 /*WM_QUIT*/) { _quit = true; break; }
+            // PPT 轮询线程的唤醒消息：**不派发**（它没有对应的窗口）——
+            // 主循环紧接着的 StepPpt() 会把新快照处理掉。
+            if (msg.message == PptWatcher.WakeMessage) continue;
             Native.TranslateMessage(ref msg);
             Native.DispatchMessage(ref msg);
         }
@@ -1792,6 +1956,13 @@ public class InkEngine
         // 自检就永远验不到它（第一版就是这么漏的：改了板书也不写）。
         // 自检模式走临时路径（Recovery.AutoSavePathOverride），不会碰用户的板书。
         MaybeAutoSave();
+
+        // PPT 状态机。**为什么两处都调**（这里 + 主循环 Loop 里）：主循环那条路
+        // 只在"真有帧"时才走到，而自检是用"抽消息＋渲染"驱动的（同 MaybeAutoSave
+        // 的理由）；反过来，空闲无帧时也要能响应翻页，所以 Loop 里那一句不能省。
+        // 两边都是幂等的（TakeDirty 取走就清、SameAs 挡重复）。
+        StepPpt();
+        StepPptBar();     // 底部那两条的长按判定（理由同上，自检那条路也走它）
 
         // 书写期间的 GC 低延迟档：超时退回。放在这里**和自动存档同一个理由**——
         // 挂主循环里的话，自检那条路永远验不到"超时能退回"（见 GcLatency.cs）。
@@ -2048,6 +2219,13 @@ public class InkEngine
         if (_uiInputHwnd != IntPtr.Zero && hWnd == _uiInputHwnd)
             return UiInputWndProc(hWnd, msg, wParam, lParam);
 
+        // PPT 条那一块的"接输入小窗"（同一套方案，只在放映 + 穿透时存在）。
+        // 为什么条需要它、而覆盖层那条 NCHITTEST 豁免不够用，见 Ppt.cs 里
+        // `_pptInputHwnd` 那一段注释（一句话：穿透用的 WS_EX_TRANSPARENT 让
+        // 系统跳过命中测试，豁免根本执行不到）。
+        if (_pptInputHwnd != IntPtr.Zero && hWnd == _pptInputHwnd)
+            return PptInputWndProc(hWnd, msg, wParam, lParam);
+
         // 宿主自己的窗口（开发期的点击目标）先处理。产品界面不会用到这一层。
         if (HandleHostWindowMessage(hWnd, msg, wParam, lParam, out var hostResult))
             return hostResult;
@@ -2075,7 +2253,9 @@ public class InkEngine
                 // 最常见的组合直接失效：命中测试在系统那一层就把我们排除了，
                 // WM_POINTERDOWN 根本轮不到引擎，悬浮球变成了一个画出来的装饰。
                 HitTestPoint(lParam, out float hitX, out float hitY);
-                bool mine = UiContains(hitX, hitY);
+                // PPT 条（放映时底部那两条）也算"我的地盘"：**开着穿透时老师照样得能
+                // 点翻页 / 拖进度条**——不然那一下会落到下层 PPT 上，被它当成翻页点击。
+                bool mine = UiContains(hitX, hitY) || PptBarContains(hitX, hitY);
                 if (mine) _cntNcHitClient++;
                 return new IntPtr(mine ? Native.HTCLIENT : Native.HTTRANSPARENT);
 
@@ -2219,8 +2399,8 @@ public class InkEngine
     /// 这一刻该不该出一帧：脏了，或者有东西还在动。
     ///
     /// 三个"在动"的来源，各有各的理由：
-    ///   · 激光轨迹：它自己会到期消失，不驱动的话最后一帧画完就没人再画了，
-    ///     那道高亮会一直挂在屏幕上；
+    ///   · 激光轨迹：它**松手后停留 2 秒再整体淡出**（见 `LaserTrail`），不驱动的话
+    ///     停留结束那一刻没人去推进淡出，那道光芒会一直挂在屏幕上；
     ///   · 正在书写：笔尖这条线每帧都在变；
     ///   · **界面自己声明的动画**（<see cref="IOverlayUi.IsAnimating"/>）：
     ///     展开/收起、悬停展开、贴边吸附全靠它，缺了就是"动画停在第一帧"。
@@ -2230,7 +2410,7 @@ public class InkEngine
     /// </summary>
     internal bool NeedsFrame()
     {
-        _animating = Laser.ActiveAt(NowMs) || _drawing || SelFlashing
+        _animating = Laser.Visible || _drawing || SelFlashing
                    || UiIsAnimatingNow || _camAnimating;
         return _dirty || _animating;
     }
@@ -2289,6 +2469,20 @@ public class InkEngine
             _uiHover = true;
             _drawing = false;
             _dirty = true;
+            return;
+        }
+
+        // 底部那两条 PPT 控件（放映时才在）：**排在界面之后、穿透之前**。
+        //   · 界面在它上面（见 RenderFrame 的绘制顺序），所以界面先问；
+        //   · 必须在穿透之前——开着穿透时老师照样得能点翻页 / 拖进度条
+        //     （NCHITTEST 里给它开了区域豁免，见那里的注释）。
+        if (PptBarPointerDown(screenX, screenY))
+        {
+            _drawing = false;
+            _pptCapturing = true;           // 这一次归它：松手时由它收尾（见 OnPointerUp）
+            Native.SetCapture(hWnd);        // 长按要持续收到移动（判"拿起后有没有拖走"）
+            _dirty = true;
+            ApplyCursor();
             return;
         }
 
@@ -2394,9 +2588,9 @@ public class InkEngine
                 break;
 
             case Tool.Laser:
-                Laser.Clear();
-                Laser.Visible = true;
-                Laser.Add(x, y, NowMs);
+                // **新起一条**（抬手那几条还在淡出，原样留着——照 ClassIn：可以同时有好几条）。
+                // 粗细在这里记进这一条（每条自己记，见 `LaserTrail.Stroke.WidthLogical`）。
+                Laser.Begin(x, y, NowMs, LaserWidthLogical);
                 break;
 
             // 图形工具：**同一个手势**"按下记起点 → 拖动改终点 → 松手提交"
@@ -2517,6 +2711,10 @@ public class InkEngine
                                               : tool == Tool.Laser ? LaserWidthLogical
                                               : PenWidthLogical) * DpiScale,
             Dash = dash,
+            // **正在写的这一笔画折线**（曲线只用在落笔之后）：曲线的最后一段每来一个
+            // 新点就要回头重算，笔尖后面那几十像素会一直微微动 —— 用户 2026-09-28
+            // 实测的原话是"上面会出残影一直在那闪"。见 Stroke.RawWhileLive。
+            RawWhileLive = true,
         };
         // 起笔：预测器从这一刻开始积累；落笔这条消息里可能已经合并了几个采样点，
         // 一起收进来（以前只取最新那一个）。
@@ -2939,7 +3137,7 @@ public class InkEngine
     /// 而"点一下别处"的意图是"收起那个选中框"，留一个墨点等于**每次取消选中都脏一块屏幕**
     /// （InkClass 也是这么处理的，见它的 `TryDiscardDismissTapStroke`）。
     ///
-    /// ⚠ **判据为什么不是"首末两点的位移"**（两个来源都那么写，这里都不能照搬）：
+    /// ⚠ **判据为什么不是"首末两点的位移"**（两个来源都那么写，这里都不能参考）：
     ///   · 参考实现 Ink Canvas 用的是"**抬起点 − 按下点** ≤ 6px"
     ///     （`画布测试/Ink-Canvas-Dev/Ink Canvas/MW_PopupLayers.cs:230` 的
     ///      `DismissTapMaxMovePx`；它只在"按下真的收起了可见面板"时才立这个标记，
@@ -3025,6 +3223,10 @@ public class InkEngine
                 LibraryHover = hov;
                 _dirty = true;      // 悬停高亮变了才重画，不是每次移动都重画
             }
+            // 进 / 出面板各标一次脏：从画布带进来的落点环（笔 / 橡皮的圈）要擦掉。
+            // 光靠脏区的"前两帧临时图元"不够——最后一步移动若没别的原因标脏，
+            // 就不会有渲染帧去擦那一圈（屏幕上会留一个圆环印子）。
+            if (inside != _onDrawnChrome) { _onDrawnChrome = inside; _dirty = true; }
             if (inside) { ApplyCursor(); return; }     // 面板里：吃掉，别让底下的内容跟着动
         }
 
@@ -3049,6 +3251,15 @@ public class InkEngine
             return;
         }
         if (_uiHover) { _uiHover = false; ApplyCursor(); }
+
+        // 底部那两条 PPT 控件（放映时才在）：悬停高亮 / 进度条拖动。
+        // 排在穿透之前——穿透时它的悬停与拖动照样要跟手。
+        if (!_drawing && PptBarPointerMove(screenX, screenY))
+        {
+            ApplyCursor();
+            _dirty = true;
+            return;
+        }
 
         // 穿透模式：我们不收输入，也不该动光标（那是下层窗口的事）。
         if (PassThrough) { _dirty = true; return; }
@@ -3166,6 +3377,21 @@ public class InkEngine
             return;
         }
 
+        // PPT 控件条（放映时才在）：**这一次按下是它吃掉的就由它收尾**——
+        // 长按（拿起 / 拖走）和短按（弹页号面板）都在这里结束。
+        // 必须显式 ReleaseCapture（按下那一刻 SetCapture 过）：忘了这一句，
+        // **整台机器的鼠标都还挂在我们窗口上**（见上面那句注释）。
+        if (_pptCapturing && ReadPointer(id, out float bx, out float by, out _, out _, out _))
+        {
+            _pptCapturing = false;
+            PptBarPointerUp(bx, by);
+            Native.ReleaseCapture();
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
         if (id != _activePointer) return;
         Native.ReleaseCapture();
         _drawing = false;
@@ -3250,7 +3476,9 @@ public class InkEngine
         foreach (var w in _windows) list.Add(w.Hwnd);
         // 抓屏时要连"接输入小窗"一起藏：它是 1/255 的一层灰，肉眼看不见，
         // 但拍进图里就是一层脏（截图界面永远不该出现在截图里）。
+        // PPT 条那块小窗同理（它也是我们的窗口）。
         if (_uiInputHwnd != IntPtr.Zero) list.Add(_uiInputHwnd);
+        if (_pptInputHwnd != IntPtr.Zero) list.Add(_pptInputHwnd);
         return list.ToArray();
     }
 
@@ -3718,6 +3946,11 @@ public class InkEngine
     /// <summary>指针悬停在哪个格子上（-1 = 没在格子上）。</summary>
     internal int LibraryHover = -1;
     /// <summary>
+    /// 上一帧指针在不在"自绘界面块"（图库面板）上。只用来在**进出那一刻标脏**：
+    /// 从画布带进来的落点环要擦掉（见 <see cref="PointerOnDrawnChrome"/> 的注释）。
+    /// </summary>
+    private bool _onDrawnChrome;
+    /// <summary>
     /// 「整理」模式：每个格子上叠一颗红 ✕，点它就是删。
     /// 为什么要有这个模式（参考实现也有一模一样的一个）：**触摸屏没有右键**，
     /// 而"点格子"本身已经是"插入"，所以删除必须换一种手势。
@@ -3756,6 +3989,7 @@ public class InkEngine
         LibraryPanelOpen = false;
         LibraryEditMode = false;
         LibraryHover = -1;
+        _onDrawnChrome = false;   // 面板没了，"在界面上"这条状态跟着清零（下次打开重新触发标脏）
         _dirty = true;
     }
 
@@ -3975,6 +4209,12 @@ public class InkEngine
 
     private void EndStroke()
     {
+        // 激光笔抬手：这条**开始计时**（停留 2 秒后再整体淡出，见 `LaserTrail.HoldMs`）。
+        // 放在最前面：下面那几条分支（截屏 / 图形 / 多笔）都和激光笔无关，不必等它们；
+        // 而且**每一条收笔路径都要走到**（正常抬手、丢捕获都走 `EndStroke`）——
+        // 漏一次的话那条轨迹就永远是"还在写"，既不淡也不会消失。
+        Laser.Release(NowMs);
+
         if (ScrollBarDragging) EndScrollBarDrag();
         foreach (var w in _windows) w.EndInkTrail();
         // **录墨迹**（用户 2026-09-26 提"我手画多少条双曲线给你，你按这些来定制判据"）：
@@ -4088,6 +4328,9 @@ public class InkEngine
                     ActiveStroke.SetShowAsymptotes(HyperbolaAsymptotes);
                 if (_dwellInk != null)
                 {
+                    // 停顿成型：这一笔不再是"正在写"（曲线化恢复生效）。即使定型成的是
+                    // 自由笔迹（`_dwellInk` 那条路），也不该再带着"活笔"的标志。
+                    ActiveStroke.RawWhileLive = false;
                     // **停顿成型**：走"替换型"提交——图形进文档，手绘原迹跟着撤销栈走，
                     // 于是按一次 Ctrl+Z 回到**自己画的那一笔**（见 DwellShapeAction）。
                     //
@@ -4134,6 +4377,8 @@ public class InkEngine
                 }
                 else
                 {
+                    // 落笔：从这一刻起曲线化生效（几何缓存键里带着这个标志，会自己重画）
+                    ActiveStroke.RawWhileLive = false;
                     Doc.AddStroke(ActiveStroke);
                     // 真提交进文档了才算"成型"——下面那一步要拿它做自动选中。
                     if (IsShapeTool(ActiveStroke.Tool)) committedShape = ActiveStroke;
@@ -4150,7 +4395,10 @@ public class InkEngine
                     // 预测器与预测尾：调参时这两项是**唯一能证明"到底生效没有"的东西**
                     // （速度低于 MinSpeed 时预测器会主动不出点，光看屏幕分不清是"没生效"还是"没必要"）。
                     + $"，预测器={_predictor.Count} 点/末速度 {_predictor.Speed:F3} px/ms"
-                    + $"，预测尾={(_strokeHadTail ? $"有（最多 {_strokeTailMax:F1} px）" : "无")}"
+                    + $"，预测尾={(_strokeHadTail ? $"自绘有（最多 {_strokeTailMax:F1} px）" : "自绘无")}"
+                    + (StrokePredCount > 0
+                        ? $"，喂DWM {StrokePredCount} 段（平均 {StrokePredLeadAvg:F1} / 最大 {StrokePredLeadMax:F1} px）"
+                        : "")
                     // 分配与 GC：低配机排查"偶发卡顿"的**唯一依据**。
                     // 第 2 代那一位出现在书写期间，就说明这一笔画到一半被全堆回收打断过。
                     + $"，分配 {StrokeAllocBytes / 1024.0:F1} KB/GC {StrokeGc0}/{StrokeGc1}/{StrokeGc2}";
@@ -4299,10 +4547,10 @@ public class InkEngine
     /// <summary>当前该显示什么光标。纯函数（不碰系统），所以能拿来做自检。</summary>
     internal CursorKind ComputeCursorKind()
     {
-        // 指针停在界面自己那一块上：给箭头。
+        // 指针停在**界面块**上（接输入小窗 / 图库面板这类自绘界面）：给箭头。
         // 界面上的按钮不该顶着一个笔尖圈/橡皮圈——那一圈是"落点反馈"，
         // 只对画布有意义。
-        if (_uiHover && !_drawing) return CursorKind.Default;
+        if (!_drawing && (_uiHover || PointerOnDrawnChrome())) return CursorKind.Default;
 
         if (PassThrough) return CursorKind.Leave;                 // 谁来接管由系统决定
         if (LastPointerType == Native.PT_TOUCH) return CursorKind.Hidden;
@@ -4314,6 +4562,23 @@ public class InkEngine
             //（见 `OnPointerDown` 里 `AutoSelectionPress` 那一段）。
             if (SelDragging)
                 return _dragIsMove ? CursorKind.Move : HandleCursor(_dragHandle);
+
+            // **按在操作条 / 面板 / 圆钮上的那一下：保持箭头**（用户 2026-09-27 报的
+            // "悬浮过去是鼠标，点一下它又变成十字了"）。
+            //
+            // 根因：`OnPointerDown` 在"这一下归谁"分流**之前**就设了 `_drawing = true`
+            // 并调了一次 ApplyCursor（见那里的注释），于是按下的那一帧光标落到
+            // ToolCursorKind——框选工具下就是十字；等分流走完（点中按钮）已经晚了，
+            // 光标那一下的跳变用户看得见。
+            //
+            // 判据**复用 SelectionCursor**（"一块是界面就是界面"的唯一判据，见它的注释）：
+            // 它给 Default 的地方（条 / 面板 / 圆钮）就是界面操作，光标别动——不另列名单。
+            // 放过两种情形：框选拖动中（MarqueeActive：框经过条的上方时也该保持十字）
+            // 和手柄 / 框内拖动（那种按下当帧就进了 SelDragging，走上面那条）。
+            if (!MarqueeActive && SelectionBarShown
+                && SelectionCursor(PointerX, PointerY) == CursorKind.Default)
+                return CursorKind.Default;
+
             return ToolCursorKind;
         }
 
@@ -4332,13 +4597,44 @@ public class InkEngine
         return ToolCursorKind;
     }
 
-    /// <summary>画布上的工具光标（不含滚动条、操作条、手柄）。</summary>
-    private CursorKind ToolCursorKind => Tool switch
+    /// <summary>
+    /// 指针正落在**引擎自绘的界面块**（图库面板 / PPT 条那一族）上吗。
+    ///
+    /// 为什么单列成一条判据（2026-09-27 修）：这些浮层都不在"接输入小窗"里，它们自己的
+    /// 悬停分支只调 ApplyCursor、**没有任何地方更新"指针在界面上"这个状态**，于是同一块
+    /// 面板上的光标取决于来路（从工具条过来是箭头、从画布直入是工具光标）。
+    /// 修法不是"顺手把 _uiHover 也置上"（那是接输入小窗的状态，混着用早晚再出错），
+    /// 而是把这个几何判据**收成一条**：光标（<see cref="ComputeCursorKind"/>）和
+    /// 落点反馈（<see cref="DrawnCursor"/>）都问它——"一块是界面就是界面"，名单只写一处
+    /// （教训见 架构-分层与规则.md 五-7）。
+    ///
+    /// 名单：图库面板（画布坐标）+ PPT 条/长按菜单/页号面板（**物理屏幕坐标**，
+    /// 借 `PptBarContains` 那份"穿透豁免与命中"的现成判据——它们本来就是"一块"）。
+    /// </summary>
+    private bool PointerOnDrawnChrome()
     {
-        // 现在四种工具都自己画落点反馈，所以系统光标一律藏起来——
-        // 自绘落点 + 系统光标叠在一起是"箭头套圆环"，很难看（见 DrawnCursor 的注释）。
-        // 以前笔在鼠标下用的是系统十字（没有宽度信息），那正是这次要补的。
-        Tool.Pen => CursorKind.Hidden,
+        if (LibraryPanelOpen && LibraryLayout.Contains(LibraryPanelRectNow(), PointerX, PointerY))
+            return true;
+        // 画布坐标 → 屏幕坐标只差一个垂直滚动量（ScreenToCanvas 就是 `y -= ViewOffsetY`），
+        // x 没有滚动、直接用。
+        return PptBarContains(PointerX, PointerY + ViewOffsetY);
+    }
+
+    /// <summary>
+    /// 画布上的工具光标（不含滚动条、操作条、手柄）。
+    ///
+    /// 问的是 <see cref="EffectiveTool"/>：**笔倒过来拿（笔尾橡皮）时，光标要是橡皮的**
+    /// （用户 2026-09-27 报的"笔尾悬停没有指示"）。倒持时上面那行 Tool.Pen 的分支根本走不到，
+    /// 直接落到 Tool.Eraser —— 系统光标藏起来、落点由自绘圆环表达（半径见 CursorOuterRadius）。
+    /// </summary>
+    private CursorKind ToolCursorKind => EffectiveTool switch
+    {
+        // 笔：**能给斜笔就给斜笔**（鼠标 / 手写板 / 认不出设备的笔）——2026-09-27 加的，
+        // 用户点名要 InkClass 那种斜笔：热点在笔尖、不挡视线，且一路跟着落点走
+        // （手写板写字时尤其需要，见 PenDeviceOnScreen 的注释）。
+        // 用的是**系统那支 IDC_PEN**（自绘彩笔版试过、被用户否掉，见 CursorKind.Pen 的注释）。
+        // 只有"笔尖就压在屏幕上"的触屏笔才藏起来（笔尖即落点，环由自绘表达）。
+        Tool.Pen => PenShowsCursor ? CursorKind.Pen : CursorKind.Hidden,
         Tool.Highlighter => CursorKind.Hidden,      // 落点由自绘的宽度圆盘表达
         Tool.Laser => CursorKind.Hidden,            // 落点由自绘的实心点表达
         // 落点由自绘圆环 / 矩形表达；开了 EraserKeepsSystemCursor 就两个都显示（A/B 用）。
@@ -4420,17 +4716,39 @@ public class InkEngine
         _ => CursorKind.Default,
     };
 
-    /// <summary>把当前该有的光标设上。重复调用是安全的（同一个句柄不重复设）。</summary>
+    /// <summary>
+    /// 把当前该有的光标设上。
+    ///
+    /// ⚠ **"同一个句柄不重复设"只是一句优化，不能当事实用**（2026-09-27 修）：
+    /// 有好几处我们**把光标交出去了**或**让别人改掉了它**——
+    ///   · 穿透模式（`CursorKind.Leave`）：指针归下层窗口，它自己会换成箭头；
+    ///   · 改窗口扩展样式（`ApplyPassThroughStyle` 的 SWP_FRAMECHANGED）：
+    ///     系统会顺手把光标恢复成类光标（箭头）。
+    /// 这些时刻之后，`_cursorApplied` 记的还是"我们设过的那一个"，而屏幕上是箭头——
+    /// 于是后面所有"设成同一个"的请求全被这句优化跳过，**光标就卡在箭头上不动了**。
+    /// 用户 2026-09-27 报的正是这个："切到穿透再切回画笔，还是三角形；
+    /// 切荧光笔更明显——箭头和自绘圆盘一起出现；多切几次有时候又能切回来"。
+    /// 修法：凡是"放手"或"别人可能改过"的地方，都把 `_cursorApplied` 作废。
+    /// </summary>
     internal void ApplyCursor(bool force = false)
     {
         var kind = ComputeCursorKind();
-        if (kind == CursorKind.Leave) return;          // 不插手
+        if (kind == CursorKind.Leave)
+        {
+            // 不插手：指针归下层窗口。**顺手把缓存作废**——从现在起屏幕上是什么光标
+            // 已经不由我们决定，下一次要设的时候必须真设（见上面那段）。
+            _cursorApplied = IntPtr.Zero;
+            return;
+        }
         var h = Cursors.HandleFor(kind, CursorSizePx);
         if (h == IntPtr.Zero) return;
         if (!force && h == _cursorApplied) return;
         Native.SetCursor(h);
         _cursorApplied = h;
     }
+
+    /// <summary>自检用：我们最后一次真的设下去的光标（IntPtr.Zero = 已作废 / 还没设过）。</summary>
+    internal IntPtr CursorAppliedForTest => _cursorApplied;
 
     /// <summary>
     /// 自己要画落点反馈（橡皮圆环、笔尖环、荧光笔圆盘）时，必须把系统光标藏起来，
@@ -4447,17 +4765,26 @@ public class InkEngine
                 || CaptureFrameHidden)
                 return ToolCursorShape.None;
 
-            // 指针停在面板上（接输入小窗接管了）：这一圈落点反馈该消失。
+            // 指针停在界面块上（接输入小窗 / 图库面板）：这一圈落点反馈该消失。
             // 不判这一条的话，指针移到面板上之后，覆盖层收不到任何指针消息，
             // 上一帧的圆环会**留在屏幕上不动**——看起来就像卡住了。
-            if (_uiHover) return ToolCursorShape.None;
+            if (_uiHover || PointerOnDrawnChrome()) return ToolCursorShape.None;
 
-            // 规则一句话：**鼠标没有笔尖，所以悬停和书写都要画**；
-            // **手写笔的笔尖本身就是落点**，一落笔就不该再跟一个圈
+            // 规则一句话：**落点离屏幕远的（鼠标 / 手写板）一路画**；
+            // **笔尖就压在屏幕上的**（触摸屏自带笔），一落笔就不该再跟一个圈
             // （会把手写的位置挡住，而且笔尖和圈的中心差一两像素时看着像错位）。
-            bool penTip = LastPointerType == Native.PT_PEN;
+            //
+            // ⚠ 2026-09-27 修过一次（用户报"手写板写字时光标消失、不流畅"）：
+            // 以前这句是"只要 PT_PEN 就算笔尖在屏幕上"——**手写板的笔尖在板子上、
+            // 根本不在屏幕里**，于是写字全程屏幕上什么都没有。现在按设备出身分：
+            // 只有触摸屏自带的笔（PenDeviceOnScreen）才享受"落笔不画"，
+            // 手写板与鼠标一样一路画（区别只是手写板给系统斜笔、不用自绘，见工具分支）。
+            bool penTip = LastPointerType == Native.PT_PEN && PenDeviceOnScreen;
 
-            switch (Tool)
+            // 问 EffectiveTool：**笔倒过来拿就是橡皮的落点反馈**（半径 = 橡皮半径，
+            // 见 CursorOuterRadius）——不然笔尾悬停时画的是"笔尖有多粗"的环，
+            // 与它真实会擦掉的那一块对不上（用户 2026-09-27 报的）。
+            switch (EffectiveTool)
             {
             case Tool.Eraser:
                 // 橡皮反过来：它表达的是"这一块会被擦掉"，擦除中更要看得到。
@@ -4470,6 +4797,9 @@ public class InkEngine
                 // 再叠一个跟着走的角括号只是噪音（用户 2026-09-17："光标配合也感觉不好"）。
                 return CaptureActive ? ToolCursorShape.None : ToolCursorShape.Frame;
                 case Tool.Pen:
+                    // 已经在显示斜笔（鼠标 / 手写板，自绘彩笔）：落点由它一路表达，
+                    // **不再叠自绘环**——"笔上再套一个圈"就是这段开头说的那种叠影。
+                    if (PenShowsCursor) return ToolCursorShape.None;
                     return penTip && _drawing ? ToolCursorShape.None : ToolCursorShape.Ring;
                 case Tool.Highlighter:
                     return penTip && _drawing ? ToolCursorShape.None : ToolCursorShape.Disc;
@@ -4538,7 +4868,7 @@ public class InkEngine
     ///   外圈 = 最小可见尺寸（"落点在这儿"）
     /// 橡皮本来就只表达范围，只有一个圈。
     /// </summary>
-    internal float CursorOuterRadius => Tool == Tool.Eraser
+    internal float CursorOuterRadius => EffectiveTool == Tool.Eraser
         ? EraserRadius
         : MathF.Max(CursorRingTrueRadius, Cursors.RingMinRadiusLogical * DpiScale);
 
@@ -5067,7 +5397,7 @@ public class InkEngine
     ///   · `p`（张口）与"**画到哪**"都由这一拖定：曲线**正好停在你拖到的那个点**上
     ///     （`p = t²/(2s)` 反解；画出范围见 `Stroke.ParabolaSpanOf`）。
     ///
-    /// 用户 2026-09-20 的口径（原话）："现在这个双曲线和抛物线的感觉不对，还是照搬他的逻辑吧"
+    /// 用户 2026-09-20 的口径（原话）："现在这个双曲线和抛物线的感觉不对，还是参考他的逻辑吧"
     /// —— 上一版"方向由面板选死"的问题是：面板选着向上、手却往下拖时反解出负数，
     /// 曲线会当场缩成一条细针（`p` 掉到下限）。方向跟着拖动走就再也不会出这种事。
     /// </summary>
@@ -5094,7 +5424,7 @@ public class InkEngine
     ///   · `OpenRight` = **左右抛物**（他的 `y² = ax`，`case 21`）。
     ///
     /// **具体朝哪边不在这里**——由画的时候那一拖的符号定（见 `Stroke.ParabolaAxisOfDrag`）。
-    /// 2026-09-20 晚用户看过之后定："感觉不对，还是照搬他的逻辑"：
+    /// 2026-09-20 晚用户看过之后定："感觉不对，还是参考他的逻辑"：
     /// 方向由面板选死时，"选着向上、手却往下拖"会让曲线缩成一条细针。
     /// 面板只回答推不出来的那件事（上下还是左右），连续量（朝哪边、多大、多长）全交给手。
     ///
@@ -5624,6 +5954,14 @@ public class InkEngine
     /// <summary>
     /// 湿墨：把这一条消息里的真实点（屏幕坐标）连同**预测点**一起交给系统合成器。
     ///
+    /// ⚠ **实测（2026-09-29）：DWM 不把我们喂的预测点画出来。**
+    /// 判据用最大档 `--predictms 200 --predictlead 400` 做探针：同一时刻鼠标那条
+    /// （预测尾由我们自己画）会窜出去一大截，**手写板那条毫无变化**。
+    /// 也就是说真笔的"跟手"完全来自委托轨迹本身，预测这几段目前是**白喂**。
+    /// 先留着（几次 COM 调用，代价可以忽略；万一以后系统版本开始认了就直接生效），
+    /// 但**别把"笔的预测"算进效果账里**——笔那条路的效果全在弧线和宽度上。
+    /// 报告里 `喂DWM N 段（平均 X / 最大 Y px）` 这一项只在排查"到底喂没喂"时看。
+    /// </summary>
     /// 预测只作用于湿墨——它画的是"正在写的这一笔"的最后一小段，真实点一到就被覆盖，
     /// 不进存档、也不会变成一条真的笔画。这是"不甩墨"的第一道保险。
     /// </summary>
@@ -5665,6 +6003,7 @@ public class InkEngine
             PredLeadSum += lead;
             PredLeadCount++;
             if (lead > PredLeadMax) PredLeadMax = lead;
+            if (lead > _strokePredMax) _strokePredMax = lead;      // 这一笔自己的最大值
         }
 
         win.AddInkTrailPoints(_trailReal, realCount, _trailPred, predCount, radius, _trailRadii);
@@ -5896,12 +6235,20 @@ public class InkEngine
         x = pi.ptPixelLocationX;
         y = pi.ptPixelLocationY;
         pointerType = pi.pointerType;
+        // 笔的"出身"（笔尖在不在屏幕上）：**手写板和触屏笔的落点规则不同**，这条必须
+        // 每条笔消息都确认一遍（换设备/换笔会变），结果按设备句柄缓存、只查一次。
+        // 鼠标/触摸不查（它们的路不需要这个信息）。
+        if (pi.pointerType == Native.PT_PEN)
+            PenDeviceOnScreen = QueryPenOnScreen(pi.sourceDevice);
         if (pi.pointerType == Native.PT_PEN && Native.GetPointerPenInfo(id, out var pen))
         {
             pressure = pen.pressure / 1024f;
             if (pressure <= 0.01f) pressure = 0.5f;
             inverted = (pen.penFlags & (Native.PEN_FLAG_INVERTED | Native.PEN_FLAG_ERASER)) != 0;
         }
+        // 留给光标那一族用（EffectiveTool）：**每条消息都写**，鼠标 / 触摸自然落回 false。
+        // 光标的形状必须在"悬停"（还没落笔）时就对，所以不能等 OnPointerDown 里那个局部变量。
+        LastPointerInverted = inverted;
         return true;
     }
 
@@ -6030,6 +6377,13 @@ public class InkEngine
         // 按钮亮着、写不出字。所以换工具（点面板也好、按热键也好）等于一句"我要开始用了"，
         // 顺手把穿透关掉。反过来，点面板上那个"鼠标"格是明说要穿透，它单独开。
         if (PassThrough) SetPassThrough(false);
+
+        // 半路换工具：那条还在写的激光轨迹**当作抬手收尾**（整批开始 2 秒计时）。
+        // 不这么做的话这批轨迹永远是"还在写"（计时器停在 -inf），于是既不淡出、
+        // 又让 `Laser.Visible` 一直为真 → **每一帧都出一帧**（白烧 CPU）。
+        // ⚠ `Release` 自己会判"有没有正在写的"：没有就直接返回，所以这里可以无脑调，
+        //   不会把上一批还在淡的激光给"续命"（见 `LaserTrail.Release`）。
+        Laser.Release(NowMs);
     }
 
     /// <summary>收起选区（换工具、以及"与选中无关的新操作"走这里）。</summary>
@@ -6083,7 +6437,10 @@ public class InkEngine
     private void SetPassThrough(bool on)
     {
         PassThrough = on;
-        if (!on) Laser.Visible = false;
+        // 穿透打开/关掉时把激光轨迹清掉（原来是把 `Visible` 置假，等价于"立刻全没"）。
+        // ⚠ 别只隐藏不清：轨迹会一直留在集合里，`Laser.Visible` 仍为真 →
+        //    每一帧都出一帧（白烧 CPU），而且下次一进来它们又冒出来。
+        if (!on) Laser.Clear();
 
         // **穿透和白板互斥**（用户 2026-09-17 问的那条）。两个方向都要挡：
         //   · 开白板 → 关穿透：白板是不透明的一层，穿透是"点击落到下层程序"；
@@ -6098,9 +6455,10 @@ public class InkEngine
             NotifyUiStateChanged();
         }
         foreach (var w in _windows) ApplyPassThroughStyle(w);
-        // 穿透时把指针交还给下层窗口（ApplyCursor 会在穿透模式下自动放手）；
-        // 退出穿透要立刻把属于我们的光标设回来，不必等下一次鼠标移动。
-        if (!on) ApplyCursor(force: true);
+        // 穿透时把指针交还给下层窗口（ApplyCursor 会在穿透模式下自动放手，并作废缓存）；
+        // 退出穿透要立刻把属于我们的光标设回来，不必等下一次鼠标移动
+        //（这一句是 `force`：改样式刚把光标恢复成箭头，而缓存里的值已经不成立了）。
+        ApplyCursor(force: true);
         Console.WriteLine($"pass-through = {on} (mode {PassMode})");
     }
 
@@ -6123,6 +6481,11 @@ public class InkEngine
         Native.SetWindowPos(w.Hwnd, IntPtr.Zero, 0, 0, 0, 0,
             Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER
             | Native.SWP_NOACTIVATE | 0x0020 /*SWP_FRAMECHANGED*/);
+
+        // 改扩展样式会让系统**顺手把光标恢复成类光标（箭头）**——我们那个
+        // "已设过就不重设"的缓存这时就成了假事实（见 ApplyCursor 的注释）。
+        // 作废它，下一次 ApplyCursor 才会把属于我们的光标真设回去。
+        _cursorApplied = IntPtr.Zero;
     }
 
     /// <summary>
@@ -6147,6 +6510,12 @@ public class InkEngine
             Native.DestroyWindow(_uiInputHwnd);
             _uiInputHwnd = IntPtr.Zero;
             _uiInputShown = false;
+        }
+        if (_pptInputHwnd != IntPtr.Zero)
+        {
+            Native.DestroyWindow(_pptInputHwnd);
+            _pptInputHwnd = IntPtr.Zero;
+            _pptInputShown = false;
         }
 
         _windows.Clear();
@@ -6212,6 +6581,46 @@ public class InkEngine
     };
 
     /// <summary>
+    /// **主屏的工作区**（物理像素）：屏幕减掉任务栏之后剩下的那块矩形。
+    ///
+    /// 为什么界面需要它（用户 2026-09-27）：悬浮条的**默认位置**要"紧贴任务栏上方、
+    /// 两者不重叠"。按整个屏幕算做不到——覆盖层是置顶的，任务栏挡不住它，于是贴底那一条
+    /// 会**压在任务栏上**（而面板矩形是"我们的地盘"，那一块的点击也一并被吃掉）。
+    /// 工作区这个数天然把任务栏扣掉了，任务栏在底/左/上/右都成立。
+    ///
+    /// 读不到（老系统 / 合成环境）就退回虚拟桌面——**宁可按"没有任务栏"算，也不能给空矩形**：
+    /// 给了空矩形，界面会把它当"屏幕是 0×0"从而把面板夹到左上角。
+    ///
+    /// ⚠ 多屏时给的是**主屏**（不是"面板当前所在那块屏"）：用户 2026-09-27 选的。
+    /// 位置本来就不记盘，所以"每次都回主屏"是可预测的那一档。
+    /// </summary>
+    public RectF PrimaryWorkArea
+    {
+        get
+        {
+            var r = default(Native.RECT);
+            if (Native.SystemParametersInfoRect(Native.SPI_GETWORKAREA, 0, ref r, 0)
+                && r.Width > 0 && r.Height > 0)
+                return new RectF { MinX = r.Left, MinY = r.Top, MaxX = r.Right, MaxY = r.Bottom };
+            return VirtualScreen;
+        }
+    }
+
+    /// <summary>主屏工作区的**逻辑**范围（除以 DPI），界面算"默认位置"用它。</summary>
+    public RectF LogicalPrimaryWorkArea
+    {
+        get
+        {
+            var w = PrimaryWorkArea;
+            return new RectF
+            {
+                MinX = w.MinX / DpiScale, MinY = w.MinY / DpiScale,
+                MaxX = w.MaxX / DpiScale, MaxY = w.MaxY / DpiScale,
+            };
+        }
+    }
+
+    /// <summary>
     /// 界面声明"外观变了，请重画我的缓存"。可以由界面的任意线程调用，
     /// 主线程在下一帧消费。**不要每帧调**，那等于每帧重画整个界面。
     /// </summary>
@@ -6231,6 +6640,8 @@ public class InkEngine
     internal UiState SnapshotState() => new()
     {
         Tool = Tool,
+        // 放映中：界面的"进放映就把面板展开 + 归位"靠它（只在边沿用一次，见 UiState.PptMode）。
+        PptMode = PptMode,
         ParabolaAxis = ParabolaAxis,      // 界面拿它把图形面板那一格的图标转成当前朝向
         LineDash = LineDash,              // 界面拿它把「直线」那一格的图标换成当前线型
         PrismSides = _sidesPrism,         // 界面拿它把「棱柱」那一格的图标换成当前档（＋档位点）
@@ -6269,6 +6680,8 @@ public class InkEngine
         UndoDepth = Doc.UndoDepth,
         RedoDepth = Doc.RedoDepth,
         StrokeCount = Doc.Strokes.Count,
+        UpdateStage = UpdateState,
+        UpdateText = UpdateText,
     };
 
     private void NotifyUiStateChanged()
@@ -6499,12 +6912,12 @@ public class InkEngine
     {
         if (SelfCheckMode) return;
         if (!Keys.Dirty && !_uiPrefsDirty) return;
-        InkSettings.Save(Keys, UiPrefs);
+        InkSettings.Save(Keys, UiPrefs, UpdateFeed.Url);
         _uiPrefsDirty = false;
     }
 
     /// <summary>自检用：**无视自检模式的禁令**，立刻把设置写盘（用来验证"记得住"这条链子）。</summary>
-    internal void SaveSettingsForTest() => InkSettings.Save(Keys, UiPrefs);
+    internal void SaveSettingsForTest() => InkSettings.Save(Keys, UiPrefs, UpdateFeed.Url);
 
     /// <summary>
     /// 自检用：把内存里的界面偏好清空、**从文件重读**。
@@ -6535,6 +6948,220 @@ public class InkEngine
     ///     屏幕上是干净白板，但那份板书还在盘上，需要时能找回来（体感像电脑重启：
     ///     桌面是干净的，硬盘上的文件还在）。
     /// </summary>
+    // =====================================================================
+    //  自动更新（2026-09-29）
+    // =====================================================================
+    //
+    // 分工：**网络全在后台线程**，主线程只做两件事——把结果变成状态文字、
+    // 以及（下完之后）拉起换壳脚本然后退出自己。理由：主循环还扛着渲染和输入，
+    // 让它在十几秒的下载里卡住是不能接受的。
+    //
+    // 状态字段由**主线程**写（界面在读），后台线程只往 `_updResult` / `_updZipPath`
+    // 里放结果、再把 `_updPost` / `_updApplyPosted` 立起来。主循环每帧 `PumpUpdate()` 收一次。
+
+    /// <summary>自动更新的状态（界面那一行显示什么、点了做什么，都看它）。</summary>
+    internal UpdateStage UpdateState = UpdateStage.NotConfigured;
+    /// <summary>自动更新的一行状态文字。</summary>
+    internal string UpdateText = "未配置更新源";
+
+    private float UpdateProgress;                       // 0..1（下载中，只给界面看）
+    private string _updVersion = "", _updNotes = "", _updZipUrl = "", _updSha = "";
+    private volatile bool _updPost;                     // 后台：检查结果放好了
+    private volatile bool _updApplyPosted;              // 后台：下载结束了
+    private volatile bool _updBusy;                     // 有后台任务在跑（别叠加）
+    /// <summary>
+    /// 自检/验收用：查到新版本就**自动继续下载安装**（不用等人再点一下）。
+    /// 产品里永远是 false（用户点两下：一下查、一下装）。
+    /// </summary>
+    internal bool AutoApplyUpdate;
+    private readonly object _updLock = new();
+    private (UpdateFeed.Manifest m, string err) _updResult;
+    private string _updZipPath = "", _updError = "";
+    private long _updGot, _updTotal;                    // 下载进度（后台写、主线程读）
+
+    /// <summary>「检查更新」被点了一下（见 <see cref="IEngineCommands.CheckUpdate"/>）。</summary>
+    internal void CheckUpdateFromUi()
+    {
+        if (UpdateFeed.Url.Length == 0)
+        {
+            // **没配更新源是默认状态，不是错误**（用户 2026-09-29："先不补，后期再补"）
+            UpdateState = UpdateStage.NotConfigured;
+            UpdateText = "未配置更新源";
+            NotifyUiStateChanged();
+            Console.WriteLine("自动更新：没有配置更新源（settings.json 的 update.url，或 UpdateFeed.DefaultUrl）");
+            return;
+        }
+        if (_updBusy) return;                           // 已经在查 / 在下，别叠加
+
+        UpdateState = UpdateStage.Checking;
+        UpdateText = "检查中…";
+        NotifyUiStateChanged();
+
+        string url = UpdateFeed.Url;
+        Console.WriteLine($"自动更新：检查 {url}（当前 {UpdateFeed.CurrentVersion}）");
+        _updBusy = true;
+        var th = new System.Threading.Thread(() =>
+        {
+            var m = UpdateFeed.Fetch(url, out string err);
+            lock (_updLock) _updResult = (m, err);
+            _updPost = true;
+        })
+        { IsBackground = true, Name = "InkTeach-Update-Check" };
+        th.Start();
+    }
+
+    /// <summary>已经查到新版本了，再点一下：**下载 → 校验 → 换壳重启**。</summary>
+    internal void ApplyUpdateFromUi()
+    {
+        if (_updBusy || UpdateState != UpdateStage.Available || _updZipUrl.Length == 0) return;
+
+        UpdateState = UpdateStage.Downloading;
+        UpdateProgress = 0f;
+        UpdateText = "下载中 0%";
+        NotifyUiStateChanged();
+
+        string url = _updZipUrl, sha = _updSha, ver = _updVersion;
+        Console.WriteLine($"自动更新：开始下载 {ver} → {url}");
+        _updBusy = true;
+        var th = new System.Threading.Thread(() =>
+        {
+            string dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "InkTeach", "update", ver);
+            string zip = Path.Combine(dir, $"InkTeach-{ver}-win-x64.zip");
+            bool ok = UpdateFeed.Download(url, zip, sha,
+                (got, total) =>
+                {
+                    System.Threading.Interlocked.Exchange(ref _updGot, got);
+                    System.Threading.Interlocked.Exchange(ref _updTotal, total);
+                }, out string err);
+            lock (_updLock)
+            {
+                _updZipPath = ok ? zip : "";
+                _updError = err;
+            }
+            _updApplyPosted = true;
+        })
+        { IsBackground = true, Name = "InkTeach-Update-Download" };
+        th.Start();
+    }
+
+    /// <summary>主循环每帧叫一次：把后台结果搬成状态；下完了就拉换壳脚本并退出自己。**只在主线程跑。**</summary>
+    private void PumpUpdate()
+    {
+        if (UpdateState == UpdateStage.Downloading)
+        {
+            long got = System.Threading.Interlocked.Read(ref _updGot);
+            long total = System.Threading.Interlocked.Read(ref _updTotal);
+            float p = total > 0 ? Math.Clamp(got / (float)total, 0f, 1f) : 0f;
+            if (p - UpdateProgress > 0.01f)
+            {
+                UpdateProgress = p;
+                UpdateText = $"下载中 {p * 100:F0}%";
+                NotifyUiStateChanged();
+            }
+        }
+
+        if (_updPost)
+        {
+            _updPost = false;
+            _updBusy = false;
+            UpdateFeed.Manifest m;
+            string err;
+            lock (_updLock) (m, err) = _updResult;
+
+            if (m == null)
+            {
+                UpdateState = UpdateStage.Failed;
+                UpdateText = "检查失败，再点重试";
+                Console.WriteLine("自动更新：检查失败：" + err);
+            }
+            else if (UpdateFeed.CompareVersions(m.Version, UpdateFeed.CurrentVersion) <= 0)
+            {
+                UpdateState = UpdateStage.UpToDate;
+                UpdateText = "已是最新";
+                Console.WriteLine($"自动更新：已是最新（{UpdateFeed.CurrentVersion}）");
+            }
+            else if (m.Url.Length == 0 || m.Sha256.Length == 0)
+            {
+                UpdateState = UpdateStage.Failed;
+                UpdateText = "清单不完整";
+                Console.WriteLine($"自动更新：清单里 {m.Version} 缺 url 或 sha256，拒绝");
+            }
+            else
+            {
+                _updVersion = m.Version;
+                _updNotes = m.Notes;
+                _updZipUrl = m.Url;
+                _updSha = m.Sha256;
+                UpdateState = UpdateStage.Available;
+                UpdateText = $"有新版本 {m.Version}";
+                Console.WriteLine($"自动更新：发现 {m.Version}（当前 {UpdateFeed.CurrentVersion}）"
+                                  + (m.Notes.Length > 0 ? "：" + Shorten(m.Notes) : ""));
+                NotifyUiStateChanged();
+                if (AutoApplyUpdate) ApplyUpdateFromUi();      // 验收用：一条命令走到底
+                return;
+            }
+            NotifyUiStateChanged();
+        }
+
+        if (_updApplyPosted)
+        {
+            _updApplyPosted = false;
+            _updBusy = false;
+            string zip, err;
+            lock (_updLock) { zip = _updZipPath; err = _updError; }
+
+            if (zip.Length == 0)
+            {
+                UpdateState = UpdateStage.Failed;
+                UpdateText = "下载失败，再点重试";
+                Console.WriteLine("自动更新：下载失败：" + err + "（软件保持原样）");
+                NotifyUiStateChanged();
+                return;
+            }
+
+            // 换壳：脚本**等我们退出之后**才动文件（见 UpdateFeed.LaunchSwap）。
+            // 拉不起来就留在原地——"更新没装成、软件也没了"是最坏的结果。
+            string exe = Environment.ProcessPath;
+            string appDir = Path.GetDirectoryName(exe);
+            try
+            {
+                string script = UpdateFeed.WriteSwapScript(Path.GetDirectoryName(zip));
+                if (UpdateFeed.LaunchSwap(script, appDir, zip, exe, out string lerr))
+                {
+                    UpdateState = UpdateStage.Ready;
+                    UpdateText = "正在重启…";
+                    Console.WriteLine($"自动更新：{_updVersion} 已下载并校验，换壳脚本已拉起，本进程退出");
+                    NotifyUiStateChanged();
+                    _quit = true;                       // 退出 → 脚本接手：改名旧目录、解压、重启
+                }
+                else
+                {
+                    UpdateState = UpdateStage.Failed;
+                    UpdateText = "换壳失败（保持原样）";
+                    Console.WriteLine("自动更新：换壳启动失败：" + lerr);
+                    NotifyUiStateChanged();
+                }
+            }
+            catch (Exception ex)
+            {
+                UpdateState = UpdateStage.Failed;
+                UpdateText = "换壳失败（保持原样）";
+                Console.WriteLine("自动更新：换壳失败：" + ex.Message);
+                NotifyUiStateChanged();
+            }
+        }
+    }
+
+    /// <summary>状态文字要能塞进面板那一行，长的截掉（换行会让行高乱掉）。</summary>
+    private static string Shorten(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        s = s.Replace('\n', ' ').Replace('\r', ' ');
+        return s.Length <= 60 ? s : s[..60] + "…";
+    }
+
     internal void RestartFromUi()
     {
         Recovery.DiscardSession();   // 保证新进程是空白：不写，而且删掉上次的残留
@@ -6936,6 +7563,14 @@ public class InkEngine
             // 点面板不许把下层程序的焦点抢走（老师点一下按钮，PPT 还是前台）。
             case Native.WM_MOUSEACTIVATE:
                 return new IntPtr(Native.MA_NOACTIVATE);
+
+            // 光标：和覆盖层那条路**问同一份判据**（指针在面板上 = 箭头）。
+            // 不答这一条的话系统会拿**类光标**兜底（NULL → 默认箭头）：面板上看着没问题，
+            // 但"面板 ↔ 画布"来回走时，我们那个"已设过就不重设"的缓存会被这一次
+            // 兜底悄悄作废（见 ApplyCursor 的注释）。
+            case Native.WM_SETCURSOR:
+                ApplyCursor(force: true);
+                return new IntPtr(1);
 
             case Native.WM_ERASEBKGND:
                 return new IntPtr(1);

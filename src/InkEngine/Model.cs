@@ -856,6 +856,20 @@ internal sealed class Stroke
     /// </summary>
     public bool HasPressure;
 
+    /// <summary>
+    /// **正在写的那一笔：按原始折线画**（曲线只用在落笔之后，2026-09-28 用户实测后定的）。
+    ///
+    /// 为什么要有这个开关：过点曲线（centripetal Catmull-Rom）每来一个新采样点，
+    /// 都要**回头重算最后一段**——切线要用到那个新点。于是笔尖后面 ~2 段（几十像素）
+    /// 的墨每帧都在微微挪动，屏幕上看就是"一直在闪"（实测：折线在笔尖后 24px 以外
+    /// 完全静止，曲线一直动到 46px）。**这是样条画法的固有性质，不是 bug**；
+    /// 想要"画的时候一个像素都不许自己动"，就只能让活笔走折线。
+    ///
+    /// 代价：落笔那一刻形状会换成曲线。密采样（Windows Ink 的笔）下差别是亚像素级、
+    /// 看不出来；鼠标/快画这种稀采样才看得出来——而那正是曲线真正有用的地方。
+    /// </summary>
+    internal bool RawWhileLive;
+
 
     /// <summary>
     /// **锁定**（2026-09-16 加，用户定的语义是"能选中、但拖不动"）：
@@ -893,6 +907,15 @@ internal sealed class Stroke
     /// </summary>
     private int _tailStamp;
     private int _builtTailStamp = -1;
+
+    /// <summary>
+    /// 建几何时的"曲线化版本"。和渲染尾同理：开关一拨（`--smooth` 对照实验、
+    /// `--smoothshow` 出图），`Revision` 没变，缓存会把旧折线还回来。
+    /// </summary>
+    private int _builtSmoothVer = -1;
+    /// <summary>建几何时这一笔是不是"正在写"。和曲线化版本同理，必须进缓存键：
+    /// 落笔那一刻 `RawWhileLive` 由真变假，几何要跟着从折线换成曲线。</summary>
+    private bool _builtRawLive;
 
     /// <summary>
     /// 引擎每帧调用：设这一笔的渲染尾（传 null 或空表 = 这一帧没有尾）。
@@ -1854,7 +1877,7 @@ internal sealed class Stroke
     ///   · 上下档：`q` 在顶点**上方** → 开口向上（屏幕 y 向下，所以比的是 `q.Y < v.Y`）；
     ///   · 左右档：`q` 在顶点**左侧** → 开口向左。
     ///
-    /// **为什么方向要跟着拖动走**（用户 2026-09-20："感觉不对，还是照搬他的逻辑"）：
+    /// **为什么方向要跟着拖动走**（用户 2026-09-20："感觉不对，还是参考他的逻辑"）：
     /// 方向由面板选死的时候，"面板选着向上、手却往下拖"会反解出负的沿轴分量，
     /// `p` 直接掉到下限 —— 曲线当场缩成一条细针。
     /// 方向交给这一拖，怎么拖都画得出来；面板只需要回答"上下还是左右"这件推不出来的事。
@@ -4403,7 +4426,8 @@ internal sealed class Stroke
     {
         // 缓存键 = 几何版本（Revision）**加上**渲染尾的版本：只比 Revision 的话，
         // "点数没变、只有尾巴在每帧滑动"这种情况会把上一帧的几何还回去。
-        if (Geometry != null && _builtRevision == Revision && _builtTailStamp == _tailStamp)
+        if (Geometry != null && _builtRevision == Revision && _builtTailStamp == _tailStamp
+            && _builtSmoothVer == StrokeSmoothing.Version && _builtRawLive == RawWhileLive)
             return Geometry;
         if (Points.Count == 0) return null;
 
@@ -4445,6 +4469,8 @@ internal sealed class Stroke
         if (Geometry != null) LiveGeometries++;
         _builtRevision = Revision;
         _builtTailStamp = _tailStamp;
+        _builtSmoothVer = StrokeSmoothing.Version;
+        _builtRawLive = RawWhileLive;
         return Geometry;
     }
 
@@ -5495,18 +5521,25 @@ internal sealed class Stroke
         // 拆成两个对象（两个 DrawGeometry）就会混合两次（实测差 0 → 56）。
         foreach (var (a, b) in RemainingRuns())
         {
-            sink.BeginFigure(PointAtParam(a), FigureBegin.Hollow);
-            for (int i = 1; i < Points.Count; i++)
+            // 曲线化（`--smooth`）：把这一段 run 的采样点喂给曲线器，输出一串三次贝塞尔。
+            // **点还是原来那些点**——曲线严格过每一个采样点，直角由角点保护保住；
+            // 不生效时（开关关着 / 段数不够）原样退回下面的折线路径。
+            bool smoothed = StrokeSmoothing.Enabled && !RawWhileLive && AppendSmoothedRun(sink, a, b);
+            if (!smoothed)
             {
-                if (i < a - 1e-6f) continue;
-                if (i > b + 1e-6f) break;
-                sink.AddLine(new Vector2(Points[i].X, Points[i].Y));
+                sink.BeginFigure(PointAtParam(a), FigureBegin.Hollow);
+                for (int i = 1; i < Points.Count; i++)
+                {
+                    if (i < a - 1e-6f) continue;
+                    if (i > b + 1e-6f) break;
+                    sink.AddLine(new Vector2(Points[i].X, Points[i].Y));
+                }
+                // 终点只在"切出来的插值点"时才补。**必须是这个条件**：如果这一段的终点正好落在
+                // 某个采样点上，上面的循环已经把它加进去了，再补一次就给几何多出一个零长段——
+                // 没被擦过的笔迹（a=0、b=末尾）必须和"没有区间表"时**逐点一致**，
+                // 否则等于凭空改了笔迹几何。
+                if (MathF.Abs(b - MathF.Round(b)) > 1e-6f) sink.AddLine(PointAtParam(b));
             }
-            // 终点只在"切出来的插值点"时才补。**必须是这个条件**：如果这一段的终点正好落在
-            // 某个采样点上，上面的循环已经把它加进去了，再补一次就给几何多出一个零长段——
-            // 没被擦过的笔迹（a=0、b=末尾）必须和"没有区间表"时**逐点一致**，
-            // 否则等于凭空改了笔迹几何。
-            if (MathF.Abs(b - MathF.Round(b)) > 1e-6f) sink.AddLine(PointAtParam(b));
             // 渲染尾接在**同一份几何**的末尾（理由见 Stroke.RenderTail 第 ③ 条）。
             // 上面的前提（Erased 为空）保证这里只会被加一次。
             if (tail != null)
@@ -5515,6 +5548,37 @@ internal sealed class Stroke
         }
         sink.Close();
         return geo;
+    }
+
+    /// <summary>
+    /// 曲线化的那一支：把 run `[a, b]` 的采样点（含两端可能被橡皮切出来的插值点）
+    /// 喂给 <see cref="StrokeSmoothing"/>，写成三次贝塞尔。
+    /// 返回 false = 段数不够、什么都没写（调用方退回折线，所以这里**不许先动 sink**）。
+    /// </summary>
+    private bool AppendSmoothedRun(ID2D1GeometrySink sink, float a, float b)
+    {
+        StrokeSmoothing.Begin();
+
+        var start = PointAtParam(a);
+        StrokeSmoothing.Add(start.X, start.Y, PressureAtParam(a));
+        int i0 = (int)MathF.Floor(a) + 1;
+        int i1 = (int)MathF.Floor(b);
+        for (int i = i0; i <= i1 && i < Points.Count; i++)
+            StrokeSmoothing.Add(Points[i].X, Points[i].Y, Points[i].P);
+        if (MathF.Abs(b - MathF.Round(b)) > 1e-6f)
+        {
+            var end = PointAtParam(b);
+            StrokeSmoothing.Add(end.X, end.Y, PressureAtParam(b));
+        }
+
+        int n = StrokeSmoothing.Finish();
+        if (n <= 0) return false;
+
+        var segs = StrokeSmoothing.Out;
+        sink.BeginFigure(segs[0].P0, FigureBegin.Hollow);
+        for (int k = 0; k < n; k++)
+            sink.AddBezier(new BezierSegment(segs[k].C1, segs[k].C2, segs[k].P1));
+        return true;
     }
 
     /// <summary>
@@ -6185,9 +6249,51 @@ internal sealed class SetStrokeGeometryAction : EditAction
 
 // ---------------------------------------------------------------------------
 
-internal sealed class InkDocument
+/// <summary>
+/// **一页的内容槽**：这一页的对象、空间索引、撤销栈、计数。
+///
+/// 为什么要有它（用户 2026-09-26 拍板"PPT 模式参考 InkClass 原味——完全隔离"）：
+/// 参考的是它们的**语义**（每页一套笔迹、切页看不到别页、清空只清本页），
+/// 但实现换掉——InkClass 切页要"清空 + 逐条重放撤销历史"，ICC 要换 MemoryStream
+/// 再反序列化；我们是**换一个槽的引用**：
+///   · 对象、网格、撤销栈、计数全在槽里，谁都不搬；
+///   · 切页 = 换引用 + 标脏，**O(1)**（真正的代价只剩"整层重铺"那一次绘制）。
+/// 这也是为什么 `_undo` / `_grid` 在下面写成了转发属性：调用处一个字都不用改。
+/// </summary>
+internal sealed class PageSlot
 {
     public readonly List<Stroke> Strokes = new();
+    public readonly List<EditAction> Undo = new();
+    public readonly List<EditAction> Redo = new();
+    public readonly SpatialGrid Grid = new();
+    public long TotalPoints;
+    public int TotalIntervals;
+}
+
+internal sealed class InkDocument
+{
+    // ---- 页（每页一套内容）------------------------------------------------
+    //
+    // 0 号页 = **桌面批注页**（没有 PPT 时唯一的那一页，也是退出放映后回来的地方）。
+    // > 0    = PPT 的某一页，键取 PowerPoint 的 **SlideID**（参考 Ink Canvas Ultra：
+    //          页码会随插入/删除页漂移，SlideID 不会）。
+    //
+    // 页槽只增不减（第一批：内存换简单）；上限与清理见 `--ppttest` 的待办。
+
+    private PageSlot _cur;
+    private readonly Dictionary<int, PageSlot> _pages = new();
+    private int _pageKey;
+
+    public InkDocument()
+    {
+        _cur = new PageSlot();
+        _pages[0] = _cur;
+    }
+
+    /// <summary>当前页的键：0 = 桌面批注页；&gt; 0 = PPT 那一页的 SlideID。</summary>
+    public int PageKey => _pageKey;
+
+    public List<Stroke> Strokes => _cur.Strokes;
     public readonly List<Stroke> Selected = new();
     public readonly DirtyRegion Dirty = new();
 
@@ -6247,6 +6353,114 @@ internal sealed class InkDocument
         return r;
     }
 
+    // ---- 页（每页一套内容）--------------------------------------------------
+
+    /// <summary>
+    /// 切到另一页（不存在就新建一个空页）。返回是否真的换了页。
+    ///
+    /// 切页 = **换槽的引用**：对象、空间索引、撤销栈、点数计数都在槽里，一样都不搬，
+    /// 所以是 O(1)。真正的开销只有调用方那一次"整层重铺"（分块缓存要作废）。
+    ///
+    /// 跨页要清的三样（它们不属于任何一页）：
+    ///   · 选中集合（别让"上一页的选中"挂到这一页的对象上）；
+    ///   · 本帧新增的笔画暂存（渲染快路径用的，换页后前提不成立）；
+    ///   · 脏区改为"整层"（旧页的缓存像素必须全部作废，否则会在新页的屏上露出来）。
+    /// </summary>
+    internal bool SwitchPage(int key)
+    {
+        if (key == _pageKey) return false;
+        _cur = GetOrCreateSlot(key);
+        _pageKey = key;
+
+        Selected.Clear();
+        AppendedSinceRender.Clear();
+        Dirty.MarkFull();
+        StructureChangedSinceRender = true;
+        Version++;
+        return true;
+    }
+
+    private PageSlot GetOrCreateSlot(int key)
+    {
+        if (_pages.TryGetValue(key, out var slot)) return slot;
+        slot = new PageSlot();
+        _pages[key] = slot;
+        return slot;
+    }
+
+    /// <summary>所有页的键（含 0 号桌面页）。PPT 模式退出时按它逐页写盘。</summary>
+    internal List<int> PageKeys()
+    {
+        var keys = new List<int>(_pages.Count);
+        foreach (var kv in _pages) keys.Add(kv.Key);
+        return keys;
+    }
+
+    /// <summary>某一页的对象表（写盘用；调用方只读，不要改）。没有这一页就是 null。</summary>
+    internal List<Stroke> StrokesOf(int key)
+        => _pages.TryGetValue(key, out var s) ? s.Strokes : null;
+
+    /// <summary>
+    /// 往指定页槽装一页的内容（PPT 模式从磁盘读回某一页时用）。
+    ///
+    /// **绕开 <see cref="AppendStroke"/>**：那个只服务"当前页"，还会记历史、标脏区；
+    /// 这是一次批量装载（和 <see cref="ReplaceAll"/> 同类，不产生撤销动作），
+    /// 所以计数、网格、几何释放在这里自己管一遍。
+    /// 装完如果这一页正好是当前页，要整层作废重画。
+    /// </summary>
+    internal void LoadPageContent(int key, List<Stroke> strokes, int maxId)
+    {
+        var slot = GetOrCreateSlot(key);
+        foreach (var s in slot.Strokes) s.Release();
+        slot.Strokes.Clear();
+        slot.Grid.Clear();
+
+        long points = 0;
+        int intervals = 0;
+        foreach (var s in strokes)
+        {
+            if (s.Id == 0) s.Id = NextId();
+            slot.Strokes.Add(s);
+            slot.Grid.Insert(s);
+            points += s.Points.Count;
+            intervals += s.Erased.Count;
+        }
+        slot.TotalPoints = points;
+        slot.TotalIntervals = intervals;
+        slot.Undo.Clear();
+        slot.Redo.Clear();
+        ReserveIdsUpTo(maxId);
+
+        if (key == _pageKey)
+        {
+            Dirty.MarkFull();
+            StructureChangedSinceRender = true;
+            Version++;
+        }
+    }
+
+    /// <summary>
+    /// 丢掉所有页、回到"只有 0 号页"（加载一份新文件时用：那是一份新文档，
+    /// 不该带着上一份的 PPT 页）。**旧槽里的对象要逐个 Release**——它们缓存着
+    /// Direct2D 几何，直接丢字典会泄漏 GPU 侧内存（同 RemoveStroke 那条注释）。
+    /// </summary>
+    internal void ResetToSinglePage()
+    {
+        foreach (var kv in _pages)
+            foreach (var s in kv.Value.Strokes) s.Release();
+
+        _cur = new PageSlot();
+        _pages.Clear();
+        _pages[0] = _cur;
+        _pageKey = 0;
+
+        Selected.Clear();
+        AppendedSinceRender.Clear();
+        Dirty.MarkFull();
+        StructureChangedSinceRender = true;
+        Version++;
+    }
+
     // 撤销栈必须有上限。原来用无上限的 Stack，一节课下来会堆进十万条动作、
     // 每条还持有笔画对象——实测 3 分钟就多占约 80 MB。主流软件的撤销深度
     // 都在 100~200 步，超过就从最旧的开始丢。
@@ -6264,13 +6478,18 @@ internal sealed class InkDocument
     /// 超出的部分才丢。
     /// </summary>
     public const int MaxUndoStrokes = 30_000;
-    private readonly List<EditAction> _undo = new();
-    private readonly List<EditAction> _redo = new();
+
+    // 撤销栈与重做栈**也是每页一套**（参考 InkClass 的 TimeMachineHistories[页]：
+    // 切页后 Ctrl+Z 撤的是本页自己的动作，不会撤出"看不见的东西"）。
+    // 写成转发属性而不是字段，是为了让下面所有 `_undo.Xxx()` 的调用一个字都不用改。
+    private List<EditAction> _undo => _cur.Undo;
+    private List<EditAction> _redo => _cur.Redo;
 
     /// <summary>Bumped on every change so windows know to repaint.</summary>
     public int Version;
 
-    public long TotalPoints;
+    /// <summary>当前页的点数总数（切页跟着换页槽走）。</summary>
+    public long TotalPoints { get => _cur.TotalPoints; set => _cur.TotalPoints = value; }
 
     /// <summary>
     /// 全文档的**擦除区间总段数**（像素橡皮擦了多少段）。
@@ -6278,7 +6497,7 @@ internal sealed class InkDocument
     /// 维护成 O(1) 的计数而不是每次遍历统计：手测台要按秒采样它（见 EraserTelemetry），
     /// 遍历一万笔只为了显示一个数，纯属浪费。增删改三处跟着维护。
     /// </summary>
-    public int TotalIntervals;
+    public int TotalIntervals { get => _cur.TotalIntervals; set => _cur.TotalIntervals = value; }
     public int UndoDepth => _undo.Count;
     public int RedoDepth => _redo.Count;
 
@@ -6300,7 +6519,8 @@ internal sealed class InkDocument
         }
     }
 
-    private readonly SpatialGrid _grid = new();
+    /// <summary>空间索引**每页一个**（切页跟着换，也是"切页 O(1)"的一半）。</summary>
+    private SpatialGrid _grid => _cur.Grid;
     private readonly List<Stroke> _queryScratch = new();
     /// <summary>像素橡皮的候选集合（HashSet 是为了"扫一遍笔画列表时 O(1) 判断在不在候选里"）。</summary>
     private readonly HashSet<Stroke> _candidateSet = new();
@@ -6661,7 +6881,10 @@ internal sealed class InkDocument
     /// </summary>
     internal void ReplaceAll(List<CanvasBlock> blocks, List<Stroke> strokes, int maxId)
     {
-        ClearStrokes();
+        // 加载是一份新文档的开始：**只留 0 号页**（上一份的 PPT 页连同键一起丢掉）。
+        // 它换的是全新的空槽，所以这里不再需要 ClearStrokes（旧对象的几何
+        // 已经由 ResetToSinglePage 逐个 Release 掉了）。
+        ResetToSinglePage();
         Blocks.Clear();
         Blocks.AddRange(blocks);
         if (Blocks.Count == 0) Blocks.Add(CanvasBlock.Default);
@@ -7676,32 +7899,156 @@ internal sealed class InkDocument
     }
 }
 
-/// <summary>Laser pointer trail: a ring of timestamped points that fade out.</summary>
+/// <summary>
+/// 激光笔的轨迹（**可以同时有好几条**）。
+///
+/// 用户 2026-09-27 定的行为，照 ClassIn 那个叫「**拖拽激光笔**」的工具
+/// （ClassIn 帮助中心把它和普通的「激光笔」并列成两个工具）：
+///   · **手写期间整条一直留着**——以前是 600ms 的滑动窗口，写着写着开头就没了；
+///   · **松手之后先停留 2 秒**（<see cref="HoldMs"/>），再**整条一起淡出**（<see cref="FadeMs"/>）；
+///   · 抬手再写一条时，**上一条还在淡出，不会被新的顶掉**（所以这里是个集合）。
+///
+/// 业界对照：Drawboard 的 Laser Pointer 把这两种做成同一工具的两个模式
+/// （Trail ↔ Point），并把"松手后才开始淡出"叫 Timing = After complete；
+/// InkCanvas-Ultra 的 `MW_LaserPointer.cs` 是"停留 1.2 秒 + 淡出 0.6 秒"，
+/// 这里按用户定的 2 秒。
+///
+/// ⚠ 它**不是笔迹**（这一条一直没变）：不进文档、橡皮擦不掉、不撤销、不存档。
+/// </summary>
 internal sealed class LaserTrail
 {
-    public const double LifetimeMs = 600;
+    /// <summary>松手后停留多久才开始淡出（用户 2026-09-27 定的 **2 秒**）。</summary>
+    public const double HoldMs = 2000;
+    /// <summary>淡出用多久（整条一起淡）。</summary>
+    public const double FadeMs = 600;
 
-    private readonly List<InkPoint> _pts = new();
-    public double LastAddMs;
-    public bool Visible;
+    /// <summary>
+    /// 采样门槛（**平方**距离，画布像素）。
+    ///
+    /// 数值参考 InkCanvas-Ultra 的 `LaserSampleThreshold = 6.25`（＝ 2.5 像素的平方，
+    /// 见它的 `MW_LaserPointer.cs:39`）。为什么现在必须设：以前靠 600ms 窗口顺带把点数限住了，
+    /// 现在**整条一直留着**，不设门槛的话一条长轨迹能攒到几千个点，
+    /// 而每一帧都要绕着它重算三次轮廓（三层发光，见 Overlay.DrawLaser）。
+    /// </summary>
+    private const float SampleThresholdSq = 6.25f;
 
-    public IReadOnlyList<InkPoint> Points => _pts;
+    /// <summary>一条轨迹：一串采样点 ＋ "淡到哪儿了"。</summary>
+    internal sealed class Stroke
+    {
+        public readonly List<InkPoint> Points = new();
+        /// <summary>
+        /// 这一条的粗细（逻辑像素，写下那一刻的激光宽）。
+        /// **必须每条自己记一份**：它是"写下时"的属性——共用当前值的话，
+        /// 老师画完一条、抬手把粗细调大、再画下一条，**上一条会跟着一起变胖**。
+        /// </summary>
+        public float WidthLogical = 4f;
+        /// <summary>淡出进度 0..1（1 ＝ 已经淡完、会被丢掉）。</summary>
+        public float Fade;
+    }
 
+    private readonly List<Stroke> _strokes = new();
+
+    /// <summary>正在写的那条（没有就 null）。</summary>
+    public Stroke Writing { get; private set; }
+
+    /// <summary>
+    /// **最后一条抬手的时刻**；`-inf` ＝ 还有笔在写（或者这一批还没开始抬手）。
+    ///
+    /// ⚠ 计时是**整批共用一个**，不是每条各算各的——这正是用户 2026-09-27 报的那条：
+    /// "我第一笔写完写第二笔……只要它还在写，第一笔就不会消失；等最后写完以后，
+    /// 它们才会一起消失"。每条各算的话，第二笔还在写的时候第一笔就已经到点淡掉了。
+    /// </summary>
+    private double _releasedAtMs = double.NegativeInfinity;
+
+    /// <summary>这一刻要画的所有轨迹（正在写的 ＋ 还在停留/淡出的）。</summary>
+    public IReadOnlyList<Stroke> Strokes => _strokes;
+
+    /// <summary>有没有轨迹要画。**画不画、要不要继续出帧都问它**（见 `NeedsFrame`）——
+    /// 停留那 2 秒里画面其实没变，但必须继续出帧，否则淡出的那一刻没人去推进。
+    /// </summary>
+    public bool Visible => _strokes.Count > 0;
+
+    /// <summary>这一刻所有轨迹里最粗的那一条（脏区要按它往外扩）。</summary>
+    public float MaxWidthLogical
+    {
+        get
+        {
+            float w = 0f;
+            foreach (var s in _strokes) if (s.WidthLogical > w) w = s.WidthLogical;
+            return w;
+        }
+    }
+
+    /// <summary>按下：**新起一条**（还在淡出的那些原样留着，不能被顶掉）。</summary>
+    public void Begin(float x, float y, double now, float widthLogical)
+    {
+        // 有新笔在写 → 这一批**重新算作"还没抬手"**：
+        // 计时器打回 -inf，正在停留/淡出的那几条也跟着一起"续命"
+        //（用户定的：只要还在写，前面那些就不许消失）。
+        _releasedAtMs = double.NegativeInfinity;
+        Writing = new Stroke { WidthLogical = widthLogical };
+        Writing.Points.Add(new InkPoint { X = x, Y = y, P = 1, T = now });
+        _strokes.Add(Writing);
+    }
+
+    /// <summary>移动：往正在写的那条上追加（太密的点不要，见 <see cref="SampleThresholdSq"/>）。</summary>
     public void Add(float x, float y, double now)
     {
-        _pts.Add(new InkPoint { X = x, Y = y, P = 1, T = now });
-        LastAddMs = now;
-        if (_pts.Count > 4096) _pts.RemoveRange(0, 1024);
+        var s = Writing;
+        if (s == null || s.Points.Count == 0) return;
+        var last = s.Points[s.Points.Count - 1];
+        float dx = x - last.X, dy = y - last.Y;
+        if (dx * dx + dy * dy < SampleThresholdSq) return;
+        s.Points.Add(new InkPoint { X = x, Y = y, P = 1, T = now });
     }
 
+    /// <summary>
+    /// 抬手：**整批开始计时**（不是给这一条单独计时）。
+    /// 抬手后先停留 <see cref="HoldMs"/> 再一起淡出；中途再落笔会由 <see cref="Begin"/>
+    /// 把计时器打回 -inf，等于"这笔还没写完，先别淡"。
+    /// </summary>
+    public void Release(double now)
+    {
+        // ⚠ 没有正在写的就直接返回：`EndStroke` / `SwitchTool` 是**所有工具**收笔都会走的，
+        //   在这里无条件写计时器的话，老师用画笔画一条、抬手，就会顺手给
+        //   还在淡出的激光"续命"（激光从此老是不消失）。
+        if (Writing == null) return;
+        _releasedAtMs = now;
+        Writing = null;
+    }
+
+    /// <summary>
+    /// 每帧推进：算淡出进度、丢掉已经淡完的。
+    /// **必须每帧调**（和面板动画同一套节奏）：只在抬手那一刻算的话，
+    /// 停留结束之后没人去改 `Fade`，那条轨迹会永远挂在屏幕上。
+    /// </summary>
     public void Prune(double now)
     {
-        int drop = 0;
-        while (drop < _pts.Count && now - _pts[drop].T > LifetimeMs) drop++;
-        if (drop > 0) _pts.RemoveRange(0, drop);
+        // 还有笔在写（或者这一批压根没抬手过）→ 全部原样留着，一点都别淡。
+        if (double.IsNegativeInfinity(_releasedAtMs))
+        {
+            for (int i = 0; i < _strokes.Count; i++) _strokes[i].Fade = 0f;
+            return;
+        }
+
+        // 整批共用同一个"抬手到现在"的时间差 → 所有条的 Fade 一模一样，
+        // 所以它们总是**一起**淡完、一起被丢掉（用户要的正是这个）。
+        double since = now - _releasedAtMs;
+        float fade = since <= HoldMs
+            ? 0f                                                    // 停留期：一点都没淡
+            : (float)Math.Clamp((since - HoldMs) / FadeMs, 0.0, 1.0);
+
+        for (int i = _strokes.Count - 1; i >= 0; i--)
+        {
+            _strokes[i].Fade = fade;
+            if (fade >= 1f) _strokes.RemoveAt(i);
+        }
     }
 
-    public bool ActiveAt(double now) => Visible && _pts.Count > 1 && (now - LastAddMs) < LifetimeMs * 1.5;
-
-    public void Clear() => _pts.Clear();
+    public void Clear()
+    {
+        _strokes.Clear();
+        Writing = null;
+        _releasedAtMs = double.NegativeInfinity;
+    }
 }
