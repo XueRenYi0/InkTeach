@@ -397,7 +397,11 @@ internal sealed class KeyMap
         const KeyScope G = KeyScope.Global, A = KeyScope.Annotation;
 
         // ---- 全局：最最常用的 5 条（见 GlobalAllowed 的说明）----
-        m.Add(G, KeyAction.TogglePassThrough, "Ctrl+Alt+P", "全屏批注：能画 / 不能画");
+        // ⚠ 2026-09-30：穿透从 `Ctrl+Alt+P` 换成 **`Ctrl+Alt+T`**——用户报"P 容易和笔的
+        // `Ctrl+P` 撞"（同一个 P，一个是全局一个是批注内，肌肉记忆上确实容易串）。
+        // 选 T 的理由：T = "透"的拼音首字母、不撞任何常用组合（Ctrl+P 打印、Ctrl+T 新建标签页
+        // 都是**不带 Alt** 的，加了 Alt 就没冲突），也和工具那五个键（P/I/L/E/M）错开。
+        m.Add(G, KeyAction.TogglePassThrough, "Ctrl+Alt+T", "全屏批注：能画 / 不能画（穿透给下层）");
         // **键盘模式（键盘归批注层）这条全局键 2026-09-30 暂时取消**（用户："我暂时没有
         // 需求，可不可以取消这个快捷键，防止误触，然后你留好注释，默认就行"）。
         //
