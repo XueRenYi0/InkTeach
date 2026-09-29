@@ -445,9 +445,9 @@ internal sealed class KeyMap
         m.Add(A, KeyAction.ToolLaser, "Ctrl+L", "换成激光笔（只留痕迹，不留墨）");
         m.Add(A, KeyAction.ToolEraser, "Ctrl+E", "换成橡皮擦（碰到哪一条就整条删掉；连按切整笔/面积）");
         m.Add(A, KeyAction.ToolMarquee, "Ctrl+M", "换成框选（选择/移动/缩放/旋转；连按切矩形/套索）");
-        // 下面两条是**旧键留的别名**（学过的老师和文档不用改）
-        m.Add(A, KeyAction.ToolPixelEraser, "Ctrl+7", "换成像素橡皮（只擦掉碰到的一块，一笔会切成两段）");
-        m.Add(A, KeyAction.SelectShape, "Ctrl+9", "选择方式：矩形框 ←→ 自由套索（面板上跟着显示）");
+        // **旧别名取消**（用户 2026-09-30："只保留一套"）：原来的 Ctrl+7（面积擦）、
+        // Ctrl+9（切选择方式）删掉——那两件事现在都归"连按同一个工具键"：
+        // Ctrl+E 连按切整笔/面积、Ctrl+M 连按切矩形/套索，不再占额外键位。
         m.Add(A, KeyAction.ToolCapture, "Ctrl+S", "截图：拖一个框，抓到的图放到左上角、自动选中并进剪贴板");
         m.Add(A, KeyAction.CycleWidth, "Ctrl+6", "切成当前工具的下一档粗细");
         m.Add(A, KeyAction.SplitErased, "Ctrl+8", "把选中的、被擦断的笔迹拆成独立对象（只服务老存档）");
