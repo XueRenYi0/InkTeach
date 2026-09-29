@@ -679,8 +679,51 @@ public partial class InkEngine
     /// <summary>当前开着的浮动面板（同一时刻只开一个）。见 <see cref="SelPanel"/>。</summary>
     internal SelPanel SelPanelOpen = SelPanel.None;
 
-    /// <summary>正在拖颜色面板里的粗细滑条。</summary>
+    /// <summary>
+    /// **自定义取色板开着吗**（8.2.0 加，`SelectionSwatches` 最后一格点开的那个小色板）。
+    ///
+    /// 它是墨迹面板的**子面板**：面板关 / 换面板 / 收条 / 选区没了，它都跟着关
+    ///（见 CloseCustomColor），统一收在一处，免得出现"面板关了色板还挂在屏幕上"。
+    /// </summary>
+    internal bool CustomColorOpen;
+
+    /// <summary>
+    /// 正在拖颜色面板里的粗细滑条。
+    ///
+    /// 8.2.0 起它是**连续滑条**（不再是"点一下就吸到档位"）：拖动期间动作直接作用在
+    /// 选中对象上（`_widthDragAction` 反复 Redo，屏幕实时变），松手才挂上撤销栈
+    /// ——「一次拖拽 = 一步撤销」。
+    /// </summary>
     private bool _sliderDragging;
+
+    /// <summary>粗细滑条这一次拖拽对应的动作（拖动中反复改目标值；松手提交或丢弃）。</summary>
+    private SetStrokePropAction _widthDragAction;
+    /// <summary>按下那一刻滑条的值（松手要不要提交的判据之一）。</summary>
+    private float _widthDragStartValue;
+    /// <summary>拖拽中滑条的值（逻辑像素；画数值和判"没变就不重画"都用它）。</summary>
+    private float _widthDragValue;
+
+    /// <summary>拖动中的粗细值（逻辑像素）——绘制那行数值、自检读值都走它。</summary>
+    internal float WidthSliderDragValue => _widthDragValue;
+    /// <summary>鼠标正按在粗细滑条上吗（绘制"拖动中显示数值"那条判据）。</summary>
+    internal bool WidthSliderDragging => _sliderDragging;
+    /// <summary>取色板里当前选的 HSV（0..1）——绘制和自检都读它。</summary>
+    internal (float H, float S, float V) PickHsv => (_pickH, _pickS, _pickV);
+
+    /// <summary>粗细滑条这一次拖拽的目标（按下那一刻的非图像选中对象）。</summary>
+    private readonly List<Stroke> _propDragTargets = new();
+
+    /// <summary>
+    /// **自定义取色板**（8.2.0）的三件状态：
+    ///   · `_pickH/_pickS/_pickV` = 色板里当前选的 HSV（0..1）；
+    ///   · `_colorDragging` / `_colorDragOnHue` = 正在拖色相条还是饱和度/明度方块；
+    ///   · `_colorDragAction` = 这一次拖拽的属性动作（同名一套：松开在色板里 = 应用，
+    ///     松开在外面 = 撤销并丢弃 —— 见 <see cref="EndColorPickerDrag"/>）。
+    /// </summary>
+    private float _pickH, _pickS = 1f, _pickV = 1f;
+    private bool _colorDragging;
+    private bool _colorDragOnHue;
+    private SetStrokePropAction _colorDragAction;
 
     /// <summary>复制成功之后选区"闪一下"的到期时刻（0.25 秒，见 Overlay.DrawSelection）。</summary>
     internal double SelFlashUntilMs;
@@ -3418,6 +3461,12 @@ public partial class InkEngine
             return;
         }
 
+        // 浮层面板里的拖动（粗细滑条 / 自定义取色板）：**和当前工具无关**。
+        // 面板在任何工具下都可能开着（图形工具那个自动选中的框也能摊开），
+        // 旧实现只在 Marquee 分支里处理滑条——图形工具里就拖不动。
+        if (_sliderDragging) { DragWidthSliderTo(x); return; }
+        if (_colorDragging) { DragColorPickerTo(x, y); return; }
+
         var tool = inverted ? Tool.Eraser : Tool;
         // 手测台：数"指针消息"而不是"擦除步"——消息之间的间隔才是跟不跟手。
         if (tool == Tool.Eraser || tool == Tool.PixelEraser) EraserTelemetry?.Move(NowMs);
@@ -3436,9 +3485,7 @@ public partial class InkEngine
                 break;
 
             case Tool.Marquee:
-                // 拖着颜色面板里的粗细滑条：只吸档位，不进"整体拖动"。
-                if (_sliderDragging) SetWidthStepAt(x, LiveSelectionFrame.CanvasAabb);
-                else if (SelDragging) UpdateSelDrag(x, y);
+                if (SelDragging) UpdateSelDrag(x, y);
                 else ExtendMarqueeTo(x, y);
                 break;
 
@@ -4592,11 +4639,9 @@ public partial class InkEngine
         //（见上面 `AutoSelectionPress` 那段）是在**图形工具**下起手拖的，
         // 按工具判的话这一拖同样永远不提交。
         if (SelDragging) EndSelDrag();
-        else if (Tool == Tool.Marquee)
-        {
-            if (_sliderDragging) _sliderDragging = false;      // 滑条松手：只是停，不用收尾
-            else ApplyMarquee();
-        }
+        else if (_sliderDragging) EndWidthSliderDrag();        // 粗细滑条：松手 = 一步撤销
+        else if (_colorDragging) EndColorPickerDrag(PointerX, PointerY);   // 取色板：板内应用 / 板外取消
+        else if (Tool == Tool.Marquee) ApplyMarquee();
         EndStrokeMeasure();      // 兜底：没收过的分支（取消、切换工具等）也把总账结掉
         _drawing = false;
         _dirty = true;
@@ -4818,6 +4863,10 @@ public partial class InkEngine
             }
             else
             {
+                if (CustomColorOpen
+                    && SelectionHandles.PickContains(canvasX, canvasY, aabb, dpi, ViewportCanvas,
+                                                     SelectionHandles.SwatchCount))
+                    return CursorKind.Default;
                 if (SelectionHandles.BarRect(aabb, dpi, ViewportCanvas).Contains(canvasX, canvasY))
                     return CursorKind.Default;
                 if (SelPanelOpen != SelPanel.None
@@ -6560,6 +6609,10 @@ public partial class InkEngine
     private void ClearSelectionForNewContext()
     {
         CopyDragArmed = false;
+        // 选区没了，面板和它下面挂的自定义取色板也一起收掉——
+        // 不收的话"面板关了色板还挂在屏幕上"（见 CloseCustomColor 那段注释）。
+        CloseCustomColor();
+        SelPanelOpen = SelPanel.None;
         // 选区没了，"画完自动选中那个框还收没收着"也就没有意义了——归零，
         // 免得下一个自动选中的框刚开始就带着上一轮的展开状态（见 `_autoSelCollapsed`）。
         _autoSelCollapsed = false;
@@ -7947,7 +8000,8 @@ public partial class InkEngine
             if (s.IsImage) continue;
             // 荧光笔与普通墨迹共用同一个"基色"，但荧光笔要转成半透明——
             // 直接按基色刷会把荧光笔刷成实心（那种"越改越糟"的效果）。
-            var c = s.Color.A < 0.99f ? InkPalette.ToHighlighter(baseColor) : baseColor;
+            // 规则只有一份：`InkPalette.ForStroke`（自定义取色板也走它）。
+            var c = InkPalette.ForStroke(baseColor, s);
             if (s.Color.Equals(c)) continue;
             targets.Add(s);
             colors.Add(c);
@@ -8082,8 +8136,7 @@ public partial class InkEngine
         switch (part)
         {
             case SelectionHandles.PanelPart.Slider:
-                _sliderDragging = true;
-                SetWidthStepAt(x, aabb);
+                BeginWidthSliderDrag(x, aabb);
                 return true;
 
             // 线型三格（实线 / 虚线 / 点线）。**格序就是 StrokeDash 的取值**，
@@ -8101,11 +8154,13 @@ public partial class InkEngine
                 return true;
 
             case SelectionHandles.PanelPart.LayerFront:
+                CloseCustomColor();
                 SelPanelOpen = SelPanel.None;
                 ReorderSelection(toFront: true);
                 return true;
 
             case SelectionHandles.PanelPart.LayerBack:
+                CloseCustomColor();
                 SelPanelOpen = SelPanel.None;
                 ReorderSelection(toFront: false);
                 return true;
@@ -8118,15 +8173,41 @@ public partial class InkEngine
             int i = part - SelectionHandles.PanelPart.SwatchBase;
             var swatches = InkPalette.SelectionSwatches;
             if (i < 0 || i >= swatches.Length) return true;
-            if (i == swatches.Length - 1)      // 末格 = 自定义取色（本轮占位）
+            if (i == swatches.Length - 1)      // 末格 = 自定义取色（8.2.0：内置 HSV 小色板）
             {
-                Console.WriteLine("自定义取色：下一批接系统取色器");
+                if (CustomColorOpen) CloseCustomColor();       // 再点一下 = 收起
+                else OpenCustomColor();
                 return true;
             }
+            CloseCustomColor();                // 点了常规色片 = 不玩自定义了（否则色板会挂在那儿）
             SetSelectionColor(swatches[i].Color);
             return true;
         }
         return false;                          // 面板的空白处：什么都不做
+    }
+
+    /// <summary>
+    /// 点了**自定义取色板**上的东西（它挂在墨迹面板旁边，优先级比面板本身高）。
+    /// 返回 true = 这一次按下被色板消费掉了（包括卡片里没控件的空白处——
+    /// 那不算"点在外面"，不触发取消）。
+    /// </summary>
+    private bool HandlePickClick(float x, float y)
+    {
+        var aabb = LiveSelectionFrame.CanvasAabb;
+        var part = SelectionHandles.PickPartAt(x, y, aabb, DpiScale, ViewportCanvas,
+                                               SelectionHandles.SwatchCount);
+        switch (part)
+        {
+            case SelectionHandles.PickPart.Hue:
+                BeginColorPickerDrag(x, y, aabb, onHue: true);
+                return true;
+            case SelectionHandles.PickPart.Sv:
+                BeginColorPickerDrag(x, y, aabb, onHue: false);
+                return true;
+            case SelectionHandles.PickPart.Inside:
+                return true;                   // 卡片空白：吃掉这一下，但什么都不改
+        }
+        return false;
     }
 
     /// <summary>颜色面板里"粗细滑条"当前的档位表：全荧光笔就用荧光笔那三档。</summary>
@@ -8141,37 +8222,214 @@ public partial class InkEngine
         return (anyHighlighter && !anyPen) ? HighlighterWidthPresets : WidthPresets;
     }
 
-    /// <summary>把滑条拖到 x 处 → 吸附到最近的档位并应用。</summary>
-    private void SetWidthStepAt(float x, in RectF aabb)
+    /// <summary>
+    /// 颜色面板里那条粗细滑条的**取值范围**（连续滑条的两端，逻辑像素）。
+    /// = 该档位表的首尾：全荧光笔 8..32、其余 1..24。**滑条夹在它里面**——
+    /// 荧光笔不许被拖成实心细线（用户 2026-09-27 定的"独立一张亮色表"那套）。
+    /// </summary>
+    internal (float Min, float Max) WidthRangeForSelection()
     {
         var steps = WidthStepsForSelection();
-        int i = SelectionHandles.SliderNearestStep(x, steps.Length, aabb, DpiScale, ViewportCanvas,
-                                                   SelectionHandles.SwatchCount);
-        SetSelectionWidth(steps[i]);
+        return (steps[0], steps[^1]);
     }
 
-    /// <summary>当前选区在滑条上对应的档位（取第一条非图像对象）。</summary>
-    internal int SliderStepOfSelection(in RectF aabb)
+    /// <summary>选区在滑条上的位置（0..1；取第一条非图像对象；空选区/范围退化 = 0）。</summary>
+    internal float SliderTofSelection()
     {
-        var steps = WidthStepsForSelection();
-        float wLogical = 0f;
+        var (min, max) = WidthRangeForSelection();
+        if (max <= min) return 0f;
+        return Math.Clamp((SliderValueOfSelection() - min) / (max - min), 0f, 1f);
+    }
+
+    /// <summary>选区第一条非图像对象的宽度（逻辑像素；没有 = 0）。</summary>
+    internal float SliderValueOfSelection()
+    {
         foreach (var s in Doc.Selected)
         {
             if (s.IsImage) continue;
-            wLogical = s.Width / DpiScale;
-            break;
+            return s.Width / DpiScale;
         }
-        int best = 0; float bestD = float.MaxValue;
-        for (int i = 0; i < steps.Length; i++)
-        {
-            float d = MathF.Abs(steps[i] - wLogical);
-            if (d < bestD) { bestD = d; best = i; }
-        }
-        return best;
+        return 0f;
     }
 
-    /// <summary>选区里的档位表长度（渲染滑条刻度、命中同源用）。</summary>
+    /// <summary>选区里的档位表长度（滑条那排参考刻度有几个点）。</summary>
     internal int SliderStepCount() => WidthStepsForSelection().Length;
+
+    /// <summary>
+    /// 按下粗细滑条：**连续拖动**开始（8.2.0，不再是"点一下吸到档位"）。
+    /// 按下这一下就立刻生效（和旧手感一致：点哪儿就是哪儿），拖动中反复改、
+    /// 松手才进撤销栈（<see cref="EndWidthSliderDrag"/>）。
+    /// </summary>
+    private void BeginWidthSliderDrag(float x, in RectF aabb)
+    {
+        _propDragTargets.Clear();
+        foreach (var s in Doc.Selected) if (!s.IsImage) _propDragTargets.Add(s);
+        if (_propDragTargets.Count == 0) return;
+
+        _sliderDragging = true;
+        _widthDragValue = SliderValueAtX(x, aabb);
+
+        // 荧光笔选区的滑条只给 8..32（见 WidthRangeForSelection）——
+        // 从外面（比如更粗的旧数据）拖进来也不会越界。
+        _widthDragStartValue = SliderValueOfSelection();
+        _widthDragAction = new SetStrokePropAction(_propDragTargets, _widthDragValue * DpiScale);
+        _widthDragAction.Redo(Doc);
+
+        if (MathF.Abs(_widthDragValue - _widthDragStartValue) > 0.01f)
+            Console.WriteLine($"拖粗细：{_widthDragStartValue:F1} → {_widthDragValue:F1} 逻辑像素");
+        _dirty = true;
+    }
+
+    /// <summary>拖动中：把滑条拖到 x 处（连续值，夹在范围的端点上）。</summary>
+    private void DragWidthSliderTo(float x)
+    {
+        if (_widthDragAction == null) return;
+        float v = SliderValueAtX(x, LiveSelectionFrame.CanvasAabb);
+        if (MathF.Abs(v - _widthDragValue) < 0.05f) return;   // 没变不重画（每帧几十次 Redo 是白给）
+        _widthDragValue = v;
+        _widthDragAction.RetargetWidth(v * DpiScale);
+        _widthDragAction.Redo(Doc);
+        _dirty = true;
+    }
+
+    /// <summary>松手：一次拖拽 = 一步撤销（值真的变了才记）。</summary>
+    private void EndWidthSliderDrag()
+    {
+        _sliderDragging = false;
+        var act = _widthDragAction;
+        _widthDragAction = null;
+        _propDragTargets.Clear();
+        if (act != null && act.HasChange)
+        {
+            Doc.CommitInteractive(act);
+            Console.WriteLine($"改粗细：{act.TargetCount} 个对象 → {_widthDragValue:F1} 逻辑像素");
+        }
+        _dirty = true;
+    }
+
+    /// <summary>x → 滑条上的连续值（逻辑像素），夹在 <see cref="WidthRangeForSelection"/> 里。</summary>
+    private float SliderValueAtX(float x, in RectF aabb)
+    {
+        var (min, max) = WidthRangeForSelection();
+        float t = SelectionHandles.SliderTAt(x, aabb, DpiScale, ViewportCanvas, SelectionHandles.SwatchCount);
+        return min + (max - min) * t;
+    }
+
+    // ---- 自定义取色板（8.2.0：色相条 + 饱和度/明度方块 + 当前色预览）--------
+
+    /// <summary>
+    /// 点开自定义取色板（色板最后一格）：**起点 = 当前选中墨迹的颜色**（换算成 HSV），
+    /// 这样打开时预览色和墨迹一致，不会"一开就跳色"。全选图像时退回手里那支笔的色。
+    /// </summary>
+    private void OpenCustomColor()
+    {
+        CustomColorOpen = true;
+        Color4 c = Tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor;
+        foreach (var s in Doc.Selected)
+        {
+            if (s.IsImage) continue;
+            c = s.Color;
+            break;
+        }
+        (_pickH, _pickS, _pickV) = Hsv.FromRgb(c);
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// 关掉自定义取色板。**拖动中被打断的话，把还没提交的那次改动撤回来**
+    ///（用户定的"点面板外 = 取消，保持原色"）。
+    /// </summary>
+    private void CloseCustomColor()
+    {
+        if (!CustomColorOpen) return;
+        CustomColorOpen = false;
+        _colorDragging = false;
+        if (_colorDragAction != null)
+        {
+            _colorDragAction.Undo(Doc);
+            _colorDragAction = null;
+        }
+        _dirty = true;
+    }
+
+    /// <summary>按下取色板：开始一次"实时预览"的拖拽（松手在板内 = 应用，板外 = 取消）。</summary>
+    private void BeginColorPickerDrag(float x, float y, in RectF aabb, bool onHue)
+    {
+        UpdatePickAtPoint(x, y, aabb, onHue);
+        _colorDragging = true;
+        _colorDragOnHue = onHue;
+
+        _propDragTargets.Clear();
+        foreach (var s in Doc.Selected) if (!s.IsImage) _propDragTargets.Add(s);
+        if (_propDragTargets.Count == 0) { _colorDragAction = null; return; }
+
+        var baseColor = Hsv.ToRgb(_pickH, _pickS, _pickV);
+        var colors = new Color4[_propDragTargets.Count];
+        for (int i = 0; i < colors.Length; i++)
+            colors[i] = InkPalette.ForStroke(baseColor, _propDragTargets[i]);
+        _colorDragAction = new SetStrokePropAction(_propDragTargets, colors);
+        _colorDragAction.Redo(Doc);
+        _dirty = true;
+    }
+
+    /// <summary>指针位置 → 取色板里的 HSV（拖哪块更新哪块）。</summary>
+    private void UpdatePickAtPoint(float x, float y, in RectF aabb, bool hue)
+    {
+        int sc = SelectionHandles.SwatchCount;
+        if (hue)
+        {
+            var r = SelectionHandles.PickHueRect(aabb, DpiScale, ViewportCanvas, sc);
+            if (r.MaxY > r.MinY) _pickH = Math.Clamp((y - r.MinY) / (r.MaxY - r.MinY), 0f, 1f);
+        }
+        else
+        {
+            var r = SelectionHandles.PickSvRect(aabb, DpiScale, ViewportCanvas, sc);
+            if (r.MaxX > r.MinX) _pickS = Math.Clamp((x - r.MinX) / (r.MaxX - r.MinX), 0f, 1f);
+            if (r.MaxY > r.MinY) _pickV = Math.Clamp((y - r.MinY) / (r.MaxY - r.MinY), 0f, 1f);
+        }
+    }
+
+    /// <summary>拖动取色板：实时把新颜色作用到选中对象上（还没进撤销栈）。</summary>
+    private void DragColorPickerTo(float x, float y)
+    {
+        if (!_colorDragging) return;
+        UpdatePickAtPoint(x, y, LiveSelectionFrame.CanvasAabb, _colorDragOnHue);
+        if (_colorDragAction != null)
+        {
+            _colorDragAction.RetargetColor(Hsv.ToRgb(_pickH, _pickS, _pickV));
+            _colorDragAction.Redo(Doc);
+        }
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// 松手：指针**在色板里** = 这一次选取算数（一步撤销）；**在外面** = 取消
+    ///（把预览撤回去，保持原色）。用户 2026-09-30 定的口径："点面板外 = 取消（保持原色）"。
+    /// </summary>
+    private void EndColorPickerDrag(float x, float y)
+    {
+        if (!_colorDragging) return;
+        _colorDragging = false;
+        var act = _colorDragAction;
+        _colorDragAction = null;
+        if (act == null) { _dirty = true; return; }
+
+        bool inside = SelectionHandles.PickContains(x, y, LiveSelectionFrame.CanvasAabb, DpiScale,
+                                                    ViewportCanvas, SelectionHandles.SwatchCount);
+        if (inside && act.HasChange)
+        {
+            Doc.CommitInteractive(act);
+            Console.WriteLine($"自定义取色：{act.TargetCount} 个对象 → "
+                              + $"RGB({_pickH:F2}, {_pickS:F2}, {_pickV:F2})");
+        }
+        else
+        {
+            act.Undo(Doc);                     // 取消 / 没变化：预览撤回去，不记撤销
+        }
+        _propDragTargets.Clear();
+        _dirty = true;
+    }
+
 
     /// <summary>
     /// 操作条上鼠标悬停的是哪一格（-1 = 没在条上）。**只在没按住时算**：
@@ -8812,6 +9070,10 @@ public partial class InkEngine
         {
             if (SelectionHandles.BarRect(aabb, dpi, ViewportCanvas).Contains(x, y))
                 return AutoSelZone.Furniture;
+            if (CustomColorOpen
+                && SelectionHandles.PickContains(x, y, aabb, dpi, ViewportCanvas,
+                                                 SelectionHandles.SwatchCount))
+                return AutoSelZone.Furniture;
             if (SelPanelOpen != SelPanel.None
                 && SelectionHandles.PanelContains(x, y, aabb, dpi, ViewportCanvas,
                                                   SelPanelOpen, SelectionHandles.SwatchCount))
@@ -8930,6 +9192,15 @@ public partial class InkEngine
                     return true;
                 }
             }
+            // **自定义取色板优先**：它挂在墨迹面板旁边，可能压着别的控件，而且
+            // "点它自己 = 不算点在外面"（点空白不取消，只有点卡片以外才取消）。
+            else if (CustomColorOpen
+                     && SelectionHandles.PickContains(x, y, aabb0, dpi, ViewportCanvas,
+                                                      SelectionHandles.SwatchCount))
+            {
+                HandlePickClick(x, y);
+                return true;                        // 色板上的点击一律吃掉（包括空白处）
+            }
             else if (SelPanelOpen != SelPanel.None
                      && SelectionHandles.PanelContains(x, y, aabb0, dpi, ViewportCanvas,
                                                        SelPanelOpen, SelectionHandles.SwatchCount))
@@ -8941,7 +9212,12 @@ public partial class InkEngine
             {
                 int btn0 = SelectionHandles.BarButtonAt(x, y, aabb0, dpi, ViewportCanvas);
                 if (btn0 >= 0) { RunBarAction(btn0, frame, aabb0); return true; }
-                if (SelPanelOpen != SelPanel.None) { SelPanelOpen = SelPanel.None; _dirty = true; }
+                if (SelPanelOpen != SelPanel.None || CustomColorOpen)
+                {
+                    CloseCustomColor();
+                    SelPanelOpen = SelPanel.None;
+                    _dirty = true;
+                }
             }
         }
 
@@ -9137,6 +9413,30 @@ public partial class InkEngine
 
     /// <summary>自检用：结束一次选择手势（松手）。</summary>
     internal void EndSelectionGestureForTest() => EndSelDrag();
+
+    /// <summary>
+    /// 自检用：走一遍"指针移动"里**浮层拖动**那一段（粗细滑条 / 自定义取色板）。
+    /// 真机上这段在 `OnPointerMove` 里排在工具 switch 之前（和工具无关）；
+    /// 自检没法合成系统指针消息，所以把同一小段逻辑暴露出来（和上面那条同一个套路）。
+    /// </summary>
+    internal void PanelDragMoveForTest(float x, float y)
+    {
+        if (_sliderDragging) { DragWidthSliderTo(x); return; }
+        if (_colorDragging) DragColorPickerTo(x, y);
+    }
+
+    /// <summary>自检用：结束浮层拖动（松手）——滑条提交、取色板按指针在不在板内决定应用/取消。</summary>
+    internal void EndPanelDragForTest(float x, float y)
+    {
+        if (_sliderDragging) EndWidthSliderDrag();
+        else if (_colorDragging) EndColorPickerDrag(x, y);
+    }
+
+    /// <summary>自检用：自定义取色板开着吗。</summary>
+    internal bool CustomColorOpenForTest => CustomColorOpen;
+
+    /// <summary>自检/出图用：按真实入口打开自定义取色板（起点色 = 选中墨迹/手里那支笔）。</summary>
+    internal void OpenCustomColorForTest() => OpenCustomColor();
 
     /// <summary>
     /// 拖动中：每帧都从**按下那一刻的变换**重算，而不是在上一帧结果上继续乘。
@@ -9411,12 +9711,21 @@ public partial class InkEngine
             // 收起后只剩一个小圆钮，点它展开；框和手柄照旧，收起的只是"条"。
             case SelBarButton.Collapse:
                 SelBarCollapsed = true;
+                CloseCustomColor();
                 SelPanelOpen = SelPanel.None;
                 CopyDragArmed = false;
                 break;
 
             case SelBarButton.Color:
-                SelPanelOpen = SelPanelOpen == SelPanel.Ink ? SelPanel.None : SelPanel.Ink;
+                if (SelPanelOpen == SelPanel.Ink)
+                {
+                    CloseCustomColor();                         // 关面板 = 色板一起关
+                    SelPanelOpen = SelPanel.None;
+                }
+                else
+                {
+                    SelPanelOpen = SelPanel.Ink;
+                }
                 break;
 
             case SelBarButton.Lock:
@@ -9424,6 +9733,7 @@ public partial class InkEngine
                 break;
 
             case SelBarButton.Layer:
+                CloseCustomColor();                             // 换面板 = 色板跟着关
                 SelPanelOpen = SelPanelOpen == SelPanel.Layer ? SelPanel.None : SelPanel.Layer;
                 break;
 

@@ -375,6 +375,15 @@ public static class InkPalette
     public static Color4 ToHighlighter(Color4 pen) => new(pen.R, pen.G, pen.B, 0.32f);
 
     /// <summary>
+    /// **把基色套到某个对象上**：荧光笔（半透明墨）走 <see cref="ToHighlighter"/>，
+    /// 其余原样。判据是"这条墨自己的 alpha"。**只有这一份**——原来这条规则在
+    /// `SetSelectionColor` 里手写了一遍，自定义取色板又要用（8.2.0），
+    /// 抄第二遍就等着哪天两边不一致。
+    /// </summary>
+    internal static Color4 ForStroke(Color4 baseColor, Stroke s)
+        => s.Color.A < 0.99f ? ToHighlighter(baseColor) : baseColor;
+
+    /// <summary>
     /// **笔的色带顺序**（和界面上那排色片一一对应）。放在引擎层是因为**热键换色要用它**
     /// （Ctrl+P 连按 = 换下一个颜色、按住 1 秒 = 回第一个），见 Engine.CycleBandColor。
     /// 界面那边的 `InkUi.Tokens.Palette` 就是**指向这张表**（别各写一份，会飘）。
@@ -443,8 +452,60 @@ public static class InkPalette
         ("蓝",   new Color4(0.13f, 0.45f, 0.90f, 1f)),
         ("紫",   new Color4(0.55f, 0.28f, 0.86f, 1f)),
         ("粉",   new Color4(0.98f, 0.55f, 0.68f, 1f)),
-        ("自定义", new Color4(0f, 0f, 0f, 0f)),      // 占位：要接系统取色器，下一批
+        ("自定义", new Color4(0f, 0f, 0f, 0f)),      // 8.2.0 起：这一格点开**内置 HSV 小色板**（见 Overlay.DrawPickPanel）
     };
+}
+
+/// <summary>
+/// **HSV ↔ RGB**（0..1，8.2.0 的自定义取色板用）。
+///
+/// 为什么放在引擎、只有这一份：色相条和饱和度/明度方块本来就是 HSV 空间的东西，
+/// 而引擎其余地方一律 RGB；这个转换只在"取色板进 / 出"两处用，所以给一个十行的
+/// 极简实现就够，不引第三方色彩库（和仓库"能用系统/自带就不加依赖"的口径一致）。
+/// </summary>
+internal static class Hsv
+{
+    /// <summary>HSV → RGB。h/s/v 都夹在 0..1。</summary>
+    public static Color4 ToRgb(float h, float s, float v)
+    {
+        h = h - MathF.Floor(h);
+        s = Math.Clamp(s, 0f, 1f);
+        v = Math.Clamp(v, 0f, 1f);
+        float c = v * s;
+        float hp = h * 6f;
+        float x = c * (1f - MathF.Abs(hp % 2f - 1f));
+        float r1, g1, b1;
+        switch ((int)MathF.Floor(hp) % 6)
+        {
+            case 0: r1 = c; g1 = x; b1 = 0f; break;
+            case 1: r1 = x; g1 = c; b1 = 0f; break;
+            case 2: r1 = 0f; g1 = c; b1 = x; break;
+            case 3: r1 = 0f; g1 = x; b1 = c; break;
+            case 4: r1 = x; g1 = 0f; b1 = c; break;
+            default: r1 = c; g1 = 0f; b1 = x; break;
+        }
+        float m = v - c;
+        return new Color4(r1 + m, g1 + m, b1 + m, 1f);
+    }
+
+    /// <summary>RGB → HSV。h 在 0..1（环形），灰度色 h = 0。</summary>
+    public static (float H, float S, float V) FromRgb(in Color4 c)
+    {
+        float r = Math.Clamp(c.R, 0f, 1f), g = Math.Clamp(c.G, 0f, 1f), b = Math.Clamp(c.B, 0f, 1f);
+        float max = MathF.Max(r, MathF.Max(g, b));
+        float min = MathF.Min(r, MathF.Min(g, b));
+        float d = max - min;
+        float h = 0f;
+        if (d > 1e-6f)
+        {
+            if (max == r) h = ((g - b) / d + 6f) % 6f;
+            else if (max == g) h = (b - r) / d + 2f;
+            else h = (r - g) / d + 4f;
+            h /= 6f;
+        }
+        float s = max <= 1e-6f ? 0f : d / max;
+        return (h, s, max);
+    }
 }
 
 /// <summary>

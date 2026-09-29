@@ -1856,19 +1856,20 @@ internal static class SelectionHandles
     /// </summary>
     public const int BarButtonCount = 10;
     /// <summary>
-    /// 操作条的高度 / 每格宽度 / 内边距 / 格间距（逻辑像素）。
+    /// 操作条的高度 / 每格宽度 / 格间距（逻辑像素）。
     ///
     /// **2026-09-16 缩小过一轮**：九格铺开之后整条 440×34 太"厚"、太占屏幕
-    /// （用户："工具条太大，没有之前美观"）。现在 38×30、内边距 3、格间距 0
-    /// ——整条 348×30，比原来窄 20%、矮 12%，而且圆角取高度一半做成**胶囊**，
+    /// （用户："工具条太大，没有之前美观"）。现在 38×30、格间距 0
+    /// ——整条比原来窄 20%、矮 12%，而且圆角取高度一半做成**胶囊**，
     /// 视觉上比"厚矩形"轻一档。
     /// 38 这个数不是随手取的：Windows 11 任务栏按钮 40 逻辑像素是"看得清又点得中"的
     /// 那个量级（见 调研-界面-高度.md），再小投影上就吃力了。
+    ///
+    /// ⚠ 两端内边距不在这里，用浮层那套 token（<see cref="FloatPadLogical"/> = 6）：
+    /// "三处浮层共用一套尺寸"是 8.2.0 定的（用户 2026-09-30："有点松散，不精致"）。
     /// </summary>
     public const float BarHeightLogical = 30f;
     public const float BarButtonWidthLogical = 38f;
-    /// <summary>两端内边距。给 6：胶囊的两端是圆的，图标贴太近会像"要掉出来"。</summary>
-    public const float BarPaddingLogical = 6f;
     public const float BarGapLogical = 0f;
     /// <summary>选中框下边到操作条的距离（逻辑像素）。</summary>
     public const float BarOffsetLogical = 14f;
@@ -1907,11 +1908,28 @@ internal static class SelectionHandles
     /// <summary>收起态圆钮与选中框下边的距离（逻辑像素，和展开态一致，位置不跳）。</summary>
     public const float BarCollapsedOffsetLogical = 14f;
 
-    // ---- 浮动面板（颜色/粗细、层级）的尺寸（逻辑像素）----
-    public const float PanelPaddingLogical = 10f;
-    /// <summary>色片边长。</summary>
+    // ---- 浮层尺寸 token（8.2.0：三处浮层共用这一套）------------------------
+    //
+    // 用户 2026-09-30："有点松散，不精致" → 只把**尺寸**统一到这一套，不动交互。
+    // 为什么这么定（都不新开数）：外框内边距沿用操作条原来那个 6（比面板原来的 10 紧一档）；
+    // 格间距取 4，和主工具条的 `GapInGroup` 同一个节奏；圆角走界面推上来的
+    // `UiTheme.CornerRadius`（= InkUi.Tokens.FloatingCorner 10），不在这里再写一份。
+    // 分组缝沿用各自已有的数（操作条格缝 0、面板与条之间 10），没有新开。
+
+    /// <summary>
+    /// 浮层外框的内边距（逻辑像素）：操作条两端、墨迹/层级面板四边、取色板四边。
+    /// 6 = 原有操作条的那个数；面板原来 10，8.2.0 收到 6（"对齐主工具条的密度"）。
+    /// </summary>
+    public const float FloatPadLogical = 6f;
+
+    /// <summary>
+    /// 浮层里的格间距（逻辑像素）：面板里相邻色片 / 线型格 / 层级格 / 行与行之间。
+    /// 4 = 和主工具条组内缝（`Tokens.GapInGroup`）同一个节奏；面板原来 7/8，收到 4。
+    /// </summary>
+    public const float FloatGapLogical = 4f;
+
+    /// <summary>色片边长。26 不动：三处浮层收的是"缝"，不是控件本身。</summary>
     public const float SwatchSizeLogical = 26f;
-    public const float SwatchGapLogical = 7f;
     /// <summary>色板列数（4 列：中性一行、暖一行、冷一行 + 末格自定义）。</summary>
     public const int SwatchColumns = 4;
     /// <summary>面板里"滑条行""线型行"的高度。</summary>
@@ -1921,14 +1939,117 @@ internal static class SelectionHandles
     /// <summary>层级面板每一格的边长（两格并排）。</summary>
     public const float LayerCellLogical = 40f;
 
+    /// <summary>滑条右端留给"笔尖预览点"的宽度（逻辑像素）。和主条那条滑条同一个语言：
+    /// 右端一颗跟着值变大的点——粗细一眼看得见，不用读数字。</summary>
+    public const float SliderTailLogical = 30f;
+    /// <summary>滑条两端的缩进：滑钮（半径 7）不许贴着面板边。</summary>
+    public const float SliderInsetLogical = 8f;
+
+    // ---- 自定义取色板（8.2.0，色相条 + 饱和度/明度方块）的尺寸（逻辑像素）----
+
+    /// <summary>饱和度/明度方块的边长。104 够用：它是最主要的那块取色面。</summary>
+    public const float PickSvLogical = 104f;
+
+    /// <summary>竖直色相条的宽。16 在投影上也点得中、拖得住。</summary>
+    public const float PickHueLogical = 16f;
+
+    /// <summary>底部"当前色预览"那一行的高（和色片 26 同一个量级）。</summary>
+    public const float PickPreviewLogical = 26f;
+
     /// <summary>
-    /// 小面板里**两格之间留的缝**（逻辑像素）。
+    /// 自定义取色板里那三个可点部分。
     ///
-    /// 一开始是不留缝的（`x = 起点 + i * 格宽`），画出来两格**圆角贴在一起**，
-    /// 交界处出现一个"掐进去"的缺口，看着像没画好。留 8 像素之后是两块分开的按钮，
-    /// 顺便也符合"相邻的可点区域别共用一条边"这个老规矩（点歪一点不会点错一个）。
+    /// 单独一枚枚举（不复用 <see cref="PanelPart"/>）：取色板是**另一张卡片**，
+    /// 它和墨迹面板的格子没有任何语义重叠，混进一张表只会让"点到哪儿了"更难读。
     /// </summary>
-    public const float PanelCellGapLogical = 8f;
+    internal enum PickPart
+    {
+        None = 0,
+        /// <summary>饱和度（横）／明度（纵）方块。</summary>
+        Sv,
+        /// <summary>竖直色相条。</summary>
+        Hue,
+        /// <summary>卡片里除了上面两块的空白处（点了不做事，但**不算"点在外面"**）。</summary>
+        Inside,
+    }
+
+    /// <summary>
+    /// 自定义取色板的外框：挂在墨迹面板旁边（右边放不下翻到左边），**底边对齐**——
+    /// 离"自定义"那一格（色板末格）最近，眼睛不用跨半张面板找。
+    /// </summary>
+    public static RectF CustomPanelRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
+    {
+        float w = (FloatPadLogical * 2 + PickSvLogical + FloatGapLogical + PickHueLogical) * dpi;
+        float h = (FloatPadLogical * 2 + PickSvLogical + FloatGapLogical + PickPreviewLogical) * dpi;
+        var ink = PanelRect(sel, dpi, visible, swatchCount);
+        float gap = PanelGapLogical * dpi;
+        float x = ink.MaxX + gap;
+        float y = ink.MaxY - h;
+
+        if (!visible.IsEmpty)
+        {
+            float margin = BarScreenPaddingLogical * dpi;
+            float left = visible.MinX + margin;
+            float right = MathF.Max(left, visible.MaxX - margin - w);
+            if (x > right) x = ink.MinX - gap - w;             // 右边放不下 → 翻到左边
+            x = Math.Clamp(x, left, right);
+            float top = visible.MinY + margin;
+            float bottom = MathF.Max(top, visible.MaxY - margin - h);
+            y = Math.Clamp(y, top, bottom);
+        }
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    /// <summary>取色板里饱和度/明度方块的矩形（画与命中同源）。</summary>
+    public static RectF PickSvRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
+    {
+        var p = CustomPanelRect(sel, dpi, visible, swatchCount);
+        float pad = FloatPadLogical * dpi;
+        return new RectF
+        {
+            MinX = p.MinX + pad, MinY = p.MinY + pad,
+            MaxX = p.MinX + pad + PickSvLogical * dpi, MaxY = p.MinY + pad + PickSvLogical * dpi,
+        };
+    }
+
+    /// <summary>取色板里竖直色相条的矩形。</summary>
+    public static RectF PickHueRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
+    {
+        var sv = PickSvRect(sel, dpi, visible, swatchCount);
+        float gap = FloatGapLogical * dpi;
+        return new RectF
+        {
+            MinX = sv.MaxX + gap, MinY = sv.MinY,
+            MaxX = sv.MaxX + gap + PickHueLogical * dpi, MaxY = sv.MaxY,
+        };
+    }
+
+    /// <summary>取色板底部"当前色预览"那一格（含原色／新色两块色片）。</summary>
+    public static RectF PickPreviewRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
+    {
+        var sv = PickSvRect(sel, dpi, visible, swatchCount);
+        float gap = FloatGapLogical * dpi;
+        return new RectF
+        {
+            MinX = sv.MinX, MinY = sv.MaxY + gap,
+            MaxX = PickHueRect(sel, dpi, visible, swatchCount).MaxX, MaxY = sv.MaxY + gap + PickPreviewLogical * dpi,
+        };
+    }
+
+    /// <summary>点到取色板的哪一块了（<see cref="PickPart.Inside"/> = 卡片里、控件外）。</summary>
+    public static PickPart PickPartAt(float x, float y, in RectF sel, float dpi, in RectF visible,
+                                      int swatchCount)
+    {
+        if (!CustomPanelRect(sel, dpi, visible, swatchCount).Contains(x, y)) return PickPart.None;
+        if (PickSvRect(sel, dpi, visible, swatchCount).Contains(x, y)) return PickPart.Sv;
+        if (PickHueRect(sel, dpi, visible, swatchCount).Contains(x, y)) return PickPart.Hue;
+        return PickPart.Inside;
+    }
+
+    /// <summary>点在不在取色板这张卡片里（"点外面 = 取消"那条判据用它）。</summary>
+    public static bool PickContains(float x, float y, in RectF sel, float dpi, in RectF visible,
+                                    int swatchCount)
+        => CustomPanelRect(sel, dpi, visible, swatchCount).Contains(x, y);
 
     /// <summary>色板里有几个色片（引擎侧的色板表长度）。</summary>
     public static int SwatchCount => InkPalette.SelectionSwatches.Length;
@@ -1959,8 +2080,8 @@ internal static class SelectionHandles
     public static float PanelHeightLogical(int swatchCount)
     {
         int rows = (swatchCount + SwatchColumns - 1) / SwatchColumns;
-        float gridH = rows * SwatchSizeLogical + MathF.Max(0, rows - 1) * SwatchGapLogical;
-        return PanelPaddingLogical * 2 + PanelRowLogical * 2 + gridH;
+        float gridH = rows * SwatchSizeLogical + MathF.Max(0, rows - 1) * FloatGapLogical;
+        return FloatPadLogical * 2 + PanelRowLogical * 2 + gridH;
     }
 
     /// <summary>
@@ -1972,8 +2093,8 @@ internal static class SelectionHandles
     /// </summary>
     public static RectF PanelRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
     {
-        float w = PanelPaddingLogical * 2
-                + SwatchColumns * SwatchSizeLogical + (SwatchColumns - 1) * SwatchGapLogical;
+        float w = FloatPadLogical * 2
+                + SwatchColumns * SwatchSizeLogical + (SwatchColumns - 1) * FloatGapLogical;
         float h = PanelHeightLogical(swatchCount) * dpi;
         w *= dpi;
 
@@ -2011,9 +2132,9 @@ internal static class SelectionHandles
     private static RectF PanelBelow(int button, float cellLogical, float cellHeightLogical, int cells,
                                     in RectF sel, float dpi, in RectF visible)
     {
-        float w = (cellLogical * cells + PanelCellGapLogical * (cells - 1)
-                 + PanelPaddingLogical * 2) * dpi;
-        float h = (cellHeightLogical + PanelPaddingLogical * 2) * dpi;
+        float w = (cellLogical * cells + FloatGapLogical * (cells - 1)
+                 + FloatPadLogical * 2) * dpi;
+        float h = (cellHeightLogical + FloatPadLogical * 2) * dpi;
         var bar = BarRect(sel, dpi, visible);
         var btn = BarButtonRect(button, sel, dpi, visible);
 
@@ -2040,8 +2161,8 @@ internal static class SelectionHandles
     public static RectF LayerCellRect(int i, in RectF sel, float dpi, in RectF visible)
     {
         var p = LayerPanelRect(sel, dpi, visible);
-        float pad = PanelPaddingLogical * dpi, cell = LayerCellLogical * dpi;
-        float x = p.MinX + pad + i * (cell + PanelCellGapLogical * dpi);
+        float pad = FloatPadLogical * dpi, cell = LayerCellLogical * dpi;
+        float x = p.MinX + pad + i * (cell + FloatGapLogical * dpi);
         return new RectF { MinX = x, MinY = p.MinY + pad, MaxX = x + cell, MaxY = p.MinY + pad + cell };
     }
 
@@ -2049,8 +2170,8 @@ internal static class SelectionHandles
     public static RectF SwatchRect(int i, in RectF sel, float dpi, in RectF visible, int swatchCount)
     {
         var p = PanelRect(sel, dpi, visible, swatchCount);
-        float pad = PanelPaddingLogical * dpi;
-        float size = SwatchSizeLogical * dpi, gap = SwatchGapLogical * dpi;
+        float pad = FloatPadLogical * dpi;
+        float size = SwatchSizeLogical * dpi, gap = FloatGapLogical * dpi;
         float gridTop = p.MaxY - pad - ((swatchCount + SwatchColumns - 1) / SwatchColumns) * size
                       - (((swatchCount + SwatchColumns - 1) / SwatchColumns) - 1) * gap;
         int col = i % SwatchColumns, row = i / SwatchColumns;
@@ -2063,7 +2184,7 @@ internal static class SelectionHandles
     public static RectF SliderRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
     {
         var p = PanelRect(sel, dpi, visible, swatchCount);
-        float pad = PanelPaddingLogical * dpi;
+        float pad = FloatPadLogical * dpi;
         return new RectF
         {
             MinX = p.MinX + pad, MinY = p.MinY + pad,
@@ -2082,8 +2203,8 @@ internal static class SelectionHandles
     public static RectF StyleCellRect(int i, in RectF sel, float dpi, in RectF visible, int swatchCount)
     {
         var p = PanelRect(sel, dpi, visible, swatchCount);
-        float pad = PanelPaddingLogical * dpi;
-        float gap = PanelCellGapLogical * dpi;
+        float pad = FloatPadLogical * dpi;
+        float gap = FloatGapLogical * dpi;
         float rowTop = p.MinY + pad + PanelRowLogical * dpi;
         float cellW = (p.MaxX - p.MinX - pad * 2 - gap * (StyleCellCount - 1)) / StyleCellCount;
         float x = p.MinX + pad + i * (cellW + gap);
@@ -2167,28 +2288,43 @@ internal static class SelectionHandles
         return false;
     }
 
-    /// <summary>滑条上第 i 档（共 n 档）的圆钮中心 X。</summary>
-    public static float SliderStepX(int i, int n, in RectF sel, float dpi, in RectF visible, int swatchCount)
+    /// <summary>
+    /// 滑条**轨道**的左右端（逻辑像素）。**画与拖共用这一份**——各算一份的话，
+    /// 迟早会出现"看着在中间、点出来偏一截"（和滚动条那条老规矩一样）。
+    ///
+    /// 右端让出 <see cref="SliderTailLogical"/>：那是"笔尖预览点"的地盘
+    /// （和主条那条滑条同一个语言，见 `DrawBandSlider`）。
+    /// </summary>
+    public static (float Left, float Right) SliderTrackRange(in RectF sel, float dpi, in RectF visible,
+                                                              int swatchCount)
     {
         var r = SliderRect(sel, dpi, visible, swatchCount);
-        float inset = 10f * dpi;                       // 两端留白，圆钮不贴边
-        float a = r.MinX + inset, b = r.MaxX - inset;
-        if (n <= 1) return (a + b) * 0.5f;
-        return a + (b - a) * i / (n - 1);
+        float a = r.MinX + SliderInsetLogical * dpi;
+        float b = r.MaxX - SliderTailLogical * dpi;
+        return (a, MathF.Max(a, b));
     }
 
-    /// <summary>离 (x,y) 最近的档位下标（滑条拖动时吸附用）。</summary>
-    public static int SliderNearestStep(float x, int n, in RectF sel, float dpi, in RectF visible, int swatchCount)
+    /// <summary>0..1 → 滑条上的 x（连续；不再吸档位）。</summary>
+    public static float SliderXOfT(float t, in RectF sel, float dpi, in RectF visible, int swatchCount)
     {
-        int best = 0; float bestD = float.MaxValue;
-        for (int i = 0; i < n; i++)
-        {
-            float sx = SliderStepX(i, n, sel, dpi, visible, swatchCount);
-            float d = MathF.Abs(sx - x);
-            if (d < bestD) { bestD = d; best = i; }
-        }
-        return best;
+        var (a, b) = SliderTrackRange(sel, dpi, visible, swatchCount);
+        return a + (b - a) * Math.Clamp(t, 0f, 1f);
     }
+
+    /// <summary>x → 0..1（连续；越界夹住）。</summary>
+    public static float SliderTAt(float x, in RectF sel, float dpi, in RectF visible, int swatchCount)
+    {
+        var (a, b) = SliderTrackRange(sel, dpi, visible, swatchCount);
+        if (b <= a) return 0f;
+        return Math.Clamp((x - a) / (b - a), 0f, 1f);
+    }
+
+    /// <summary>
+    /// 档位点在滑条上的 x（**只作为参考刻度**：滑条 8.2.0 起是连续的，
+    /// 那排小点还画——它们说的是"以前那几个档位在这儿"，老师凭肌肉记忆找得到地方）。
+    /// </summary>
+    public static float SliderStepX(int i, int n, in RectF sel, float dpi, in RectF visible, int swatchCount)
+        => SliderXOfT(n <= 1 ? 0f : (float)i / (n - 1), sel, dpi, visible, swatchCount);
 
     /// <summary>
     /// 操作条在画布坐标里的矩形。<paramref name="visible"/> 是当前可见的画布范围
@@ -2201,7 +2337,7 @@ internal static class SelectionHandles
     {
         float btnW = BarButtonWidthLogical * dpi;
         float h = BarHeightLogical * dpi;
-        float pad = BarPaddingLogical * dpi;
+        float pad = FloatPadLogical * dpi;
         float gap = BarGapLogical * dpi;
         float w = pad * 2 + BarButtonCount * btnW + (BarButtonCount - 1) * gap;
 
@@ -2229,7 +2365,7 @@ internal static class SelectionHandles
     {
         var bar = BarRect(sel, dpi, visible);
         float btnW = BarButtonWidthLogical * dpi;
-        float pad = BarPaddingLogical * dpi;
+        float pad = FloatPadLogical * dpi;
         float gap = BarGapLogical * dpi;
         float x = bar.MinX + pad + i * (btnW + gap);
         return new RectF { MinX = x, MinY = bar.MinY, MaxX = x + btnW, MaxY = bar.MaxY };

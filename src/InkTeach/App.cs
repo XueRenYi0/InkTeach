@@ -4132,10 +4132,44 @@ internal sealed class App : InkEngine.InkEngine
         wide.AddPoint(cx + 420, top + 690, 0.5f, 1);
         Doc.AddStroke(wide);
 
+        // 2026-09-30（8.2.0）：出图也把**面板**带上——
+        //   --ink    开墨迹面板（颜色/粗细/线型，含新的连续滑条）
+        //   --layer  开层级面板
+        //   --custom 再叠上自定义取色板（色相条 + 饱和度/明度方块）
+        // 排版好不好看只能靠图看，所以这些"一张图里要有面板"的对照必须有出口。
+        //
+        // ⚠ 工具必须是**框选**：操作条/面板由 `SelectionBarShown` 把守
+        //（只有框选 / 图形工具才有点得到的那一块）。忘了这一句时出图里只有框和手柄，
+        // 看图的还以为"面板没开"——出图这条路第一版就踩了这个。
+        var cmdArgs = Environment.GetCommandLineArgs();
+        Tool = Tool.Marquee;
+        SelBarCollapsed = false;
+        bool wantInk = cmdArgs.Contains("--ink"), wantLayer = cmdArgs.Contains("--layer");
+        bool wantCustom = cmdArgs.Contains("--custom");
+        SelPanelOpen = (wantInk || wantCustom) ? SelPanel.Ink : wantLayer ? SelPanel.Layer : SelPanel.None;
+
         Doc.Selected.Clear();
         foreach (var s in Doc.Strokes) Doc.Selected.Add(s);
         Doc.InvalidateAll();
+        // 色板放在**选中摆好之后**开：起点色取的是"选中墨迹"，先开就退成手里那支笔的默认色
+        // （第一版出图就踩了这个：选中那条黑墨，色板却停在红色上）。
+        if (wantCustom) OpenCustomColorForTest();
+
+        // `--dragmid`：把粗细滑条**按在中间不松手**——给"拖动中显示数值"出对照图用。
+        // 真机上它靠指针消息驱动，出图这条路没有指针，只能借自检那两个钩子把它摆出来。
+        if (cmdArgs.Contains("--dragmid"))
+        {
+            var sl = SelectionHandles.SliderRect(SelectionHandles.FrameOf(Doc.Selected).CanvasAabb,
+                                                  DpiScale, ViewportCanvas, SelectionHandles.SwatchCount);
+            float mx = SelectionHandles.SliderXOfT(0.62f, SelectionHandles.FrameOf(Doc.Selected).CanvasAabb,
+                                                   DpiScale, ViewportCanvas, SelectionHandles.SwatchCount);
+            SelectionGestureForTest(mx, (sl.MinY + sl.MaxY) * 0.5f);
+            PanelDragMoveForTest(mx + 2f, (sl.MinY + sl.MaxY) * 0.5f);
+        }
         SettleFrames(800);
+
+        // 量尺：把三处浮层的实际尺寸/间距打出来（不凭感觉调，前后两版都跑同一条）。
+        PrintOverlayMetrics();
 
         if (path == null)
         {
@@ -4143,7 +4177,7 @@ internal sealed class App : InkEngine.InkEngine
             return;
         }
 
-        // 出图（离屏，锁屏/远程也能出）：范围 = 选中框 ∪ 操作条，再留一圈给投影。
+        // 出图（离屏，锁屏/远程也能出）：范围 = 选中框 ∪ 操作条 ∪（开着的）面板，再留一圈给投影。
         // 操作条挂在框下方（SelectionHandles.BarRect 算的就是那个位置），
         // 所以把它一起并进来，否则出图会把操作条切掉一半。
         var aabb = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
@@ -4153,9 +4187,162 @@ internal sealed class App : InkEngine.InkEngine
             MinX = MathF.Min(aabb.MinX, bar.MinX), MinY = MathF.Min(aabb.MinY, bar.MinY),
             MaxX = MathF.Max(aabb.MaxX, bar.MaxX), MaxY = MathF.Max(aabb.MaxY, bar.MaxY),
         };
+        if (SelPanelOpen == SelPanel.Ink)
+        {
+            region.Add(SelectionHandles
+                .PanelRect(aabb, DpiScale, ViewportCanvas, SelectionHandles.SwatchCount));
+            if (CustomColorOpen)
+                region.Add(SelectionHandles.CustomPanelRect(aabb, DpiScale, ViewportCanvas,
+                                                           SelectionHandles.SwatchCount));
+        }
+        else if (SelPanelOpen == SelPanel.Layer)
+        {
+            region.Add(SelectionHandles.LayerPanelRect(aabb, DpiScale, ViewportCanvas));
+        }
         if (!OffscreenFloatingShot(path, region.Inflate(30f))) Console.WriteLine("出图失败");
         _quit = true;
     }
+
+    /// <summary>
+    /// **浮层量尺**（8.2.0）：把三处浮层（操作条 / 墨迹面板 / 层级面板）的实际尺寸和
+    /// 内边距 / 格间距 / 分组缝按**几何读出来**打成一张表。
+    ///
+    /// 为什么要有它（用户 2026-09-30："先用 --uitest 把三处浮层的实际尺寸/间距量出来，
+    /// 不凭感觉调"）：收紧要收在哪儿、收了多少，得先有前后两版的同一把尺子。
+    /// 它走的是**绘制/命中同一份几何函数**，所以量出来的就是屏幕上真正画出来的那个数，
+    /// 不是另抄一份"设计稿数字"。
+    ///
+    /// 单位一律逻辑像素（dpi 传 1、visible 传空 = 不夹取，量的是纯公式）。
+    /// </summary>
+    private void PrintOverlayMetrics()
+    {
+        const float dpi = 1f;
+        var sel = new RectF { MinX = 400, MinY = 300, MaxX = 800, MaxY = 600 };
+        var none = RectF.Empty;
+        int sc = SelectionHandles.SwatchCount;
+
+        var bar = SelectionHandles.BarRect(sel, dpi, none);
+        var b0 = SelectionHandles.BarButtonRect(0, sel, dpi, none);
+        var b1 = SelectionHandles.BarButtonRect(1, sel, dpi, none);
+        float barPad = b0.MinX - bar.MinX;
+        float barGap = b1.MinX - b0.MaxX;
+        float barH = bar.MaxY - bar.MinY;
+        float barRadius = MathF.Min(FloatingTheme.CornerRadius, barH * 0.5f);
+
+        var p = SelectionHandles.PanelRect(sel, dpi, none, sc);
+        var s0 = SelectionHandles.SwatchRect(0, sel, dpi, none, sc);
+        var s1 = SelectionHandles.SwatchRect(1, sel, dpi, none, sc);
+        var sRow = SelectionHandles.SwatchRect(SelectionHandles.SwatchColumns, sel, dpi, none, sc);
+        var c0 = SelectionHandles.StyleCellRect(0, sel, dpi, none, sc);
+        var c1 = SelectionHandles.StyleCellRect(1, sel, dpi, none, sc);
+
+        var lp = SelectionHandles.LayerPanelRect(sel, dpi, none);
+        var l0 = SelectionHandles.LayerCellRect(0, sel, dpi, none);
+        var l1 = SelectionHandles.LayerCellRect(1, sel, dpi, none);
+
+        Console.WriteLine();
+        Console.WriteLine("=== 浮层量尺（逻辑像素；dpi=1、不夹取）===");
+        Console.WriteLine($"  操作条     {bar.MaxX - bar.MinX:F0} × {barH:F0}   两端内边距 {barPad:F1}   "
+                          + $"按钮 {b0.MaxX - b0.MinX:F0} 格缝 {barGap:F1}  圆角 min(主题 {FloatingTheme.CornerRadius:F0}, 半高) = {barRadius:F0}");
+        Console.WriteLine($"  墨迹面板   {p.MaxX - p.MinX:F0} × {p.MaxY - p.MinY:F0}   内边距 {s0.MinX - p.MinX:F1}   "
+                          + $"色片 {s0.MaxX - s0.MinX:F0} 缝 {s1.MinX - s0.MaxX:F1} 行缝 {sRow.MinY - s0.MaxY:F1}");
+        Console.WriteLine($"            线型格 {c0.MaxX - c0.MinX:F1} 宽、格缝 {c1.MinX - c0.MaxX:F1}，"
+                          + $"行高 {SelectionHandles.PanelRowLogical:F0}，面板离条 {SelectionHandles.PanelGapLogical:F0}");
+        Console.WriteLine($"  层级面板   {lp.MaxX - lp.MinX:F0} × {lp.MaxY - lp.MinY:F0}   内边距 {l0.MinX - lp.MinX:F1}   "
+                          + $"格 {l0.MaxX - l0.MinX:F0} 缝 {l1.MinX - l0.MaxX:F1}");
+        var pk = SelectionHandles.CustomPanelRect(sel, dpi, none, sc);
+        var psv = SelectionHandles.PickSvRect(sel, dpi, none, sc);
+        var phue = SelectionHandles.PickHueRect(sel, dpi, none, sc);
+        Console.WriteLine($"  取色板     {pk.MaxX - pk.MinX:F0} × {pk.MaxY - pk.MinY:F0}   内边距 {psv.MinX - pk.MinX:F1}   "
+                          + $"SV {psv.MaxX - psv.MinX:F0} 色相条 {phue.MaxX - phue.MinX:F0}  格缝 {phue.MinX - psv.MaxX:F1}");
+        Console.WriteLine();
+    }
+
+    /// <summary>
+    /// **浮层尺寸 token 自检**（8.2.0 验收①）：三处浮层（操作条 / 墨迹面板 / 层级面板 / 取色板）
+    /// 的内边距、格间距、格与缝必须**从同一套 token 读出来**。
+    ///
+    /// 判据是"几何读出来的数 == token 算出来的数"（容差 0.01）——哪天有人绕过 token
+    /// 顺手写一个 10f，这里当场变红。`--selftest` 和 `--uitest` 共用同一份（计划里写的是
+    /// 两条自检，两边跑到的就是同一个它）。
+    ///
+    /// <paramref name="check"/> 是调用方自己的红绿回调（两边的输出格式不一样）。
+    /// </summary>
+    private void CheckFloatOverlayTokens(Action<string, bool, string> check)
+    {
+        float dpi = DpiScale;
+        const float tol = 0.01f;
+        var sel = new RectF { MinX = 400, MinY = 300, MaxX = 800, MaxY = 600 };
+        int sc = SelectionHandles.SwatchCount;
+
+        var bar = SelectionHandles.BarRect(sel, dpi, RectF.Empty);
+        var btn0 = SelectionHandles.BarButtonRect(0, sel, dpi, RectF.Empty);
+        var btn1 = SelectionHandles.BarButtonRect(1, sel, dpi, RectF.Empty);
+        float barPad = (btn0.MinX - bar.MinX) / dpi;
+        float barGap = (btn1.MinX - btn0.MaxX) / dpi;
+        float barW = (bar.MaxX - bar.MinX) / dpi;
+        float barWTok = SelectionHandles.FloatPadLogical * 2
+                      + SelectionHandles.BarButtonCount * SelectionHandles.BarButtonWidthLogical
+                      + (SelectionHandles.BarButtonCount - 1) * SelectionHandles.BarGapLogical;
+        bool barOk = Near(barPad, SelectionHandles.FloatPadLogical, tol)
+                  && Near(barGap, SelectionHandles.BarGapLogical, tol)
+                  && Near(barW, barWTok, tol)
+                  && Near((bar.MaxY - bar.MinY) / dpi, SelectionHandles.BarHeightLogical, tol);
+
+        var p = SelectionHandles.PanelRect(sel, dpi, RectF.Empty, sc);
+        var s0 = SelectionHandles.SwatchRect(0, sel, dpi, RectF.Empty, sc);
+        var s1 = SelectionHandles.SwatchRect(1, sel, dpi, RectF.Empty, sc);
+        var sRow = SelectionHandles.SwatchRect(SelectionHandles.SwatchColumns, sel, dpi, RectF.Empty, sc);
+        var c0 = SelectionHandles.StyleCellRect(0, sel, dpi, RectF.Empty, sc);
+        var c1 = SelectionHandles.StyleCellRect(1, sel, dpi, RectF.Empty, sc);
+        int rows = (sc + SelectionHandles.SwatchColumns - 1) / SelectionHandles.SwatchColumns;
+        float panelWTok = SelectionHandles.FloatPadLogical * 2
+                        + SelectionHandles.SwatchColumns * SelectionHandles.SwatchSizeLogical
+                        + (SelectionHandles.SwatchColumns - 1) * SelectionHandles.FloatGapLogical;
+        float panelHTok = SelectionHandles.FloatPadLogical * 2
+                        + SelectionHandles.PanelRowLogical * 2
+                        + rows * SelectionHandles.SwatchSizeLogical + (rows - 1) * SelectionHandles.FloatGapLogical;
+        bool panelOk = Near((s0.MinX - p.MinX) / dpi, SelectionHandles.FloatPadLogical, tol)
+                    && Near((s1.MinX - s0.MaxX) / dpi, SelectionHandles.FloatGapLogical, tol)
+                    && Near((sRow.MinY - s0.MaxY) / dpi, SelectionHandles.FloatGapLogical, tol)
+                    && Near((s0.MaxX - s0.MinX) / dpi, SelectionHandles.SwatchSizeLogical, tol)
+                    && Near((c1.MinX - c0.MaxX) / dpi, SelectionHandles.FloatGapLogical, tol)
+                    && Near((p.MaxX - p.MinX) / dpi, panelWTok, tol)
+                    && Near((p.MaxY - p.MinY) / dpi, panelHTok, tol);
+
+        var lp = SelectionHandles.LayerPanelRect(sel, dpi, RectF.Empty);
+        var l0 = SelectionHandles.LayerCellRect(0, sel, dpi, RectF.Empty);
+        var l1 = SelectionHandles.LayerCellRect(1, sel, dpi, RectF.Empty);
+        bool layerOk = Near((l0.MinX - lp.MinX) / dpi, SelectionHandles.FloatPadLogical, tol)
+                    && Near((l1.MinX - l0.MaxX) / dpi, SelectionHandles.FloatGapLogical, tol)
+                    && Near((l0.MaxX - l0.MinX) / dpi, SelectionHandles.LayerCellLogical, tol);
+
+        var pk = SelectionHandles.CustomPanelRect(sel, dpi, RectF.Empty, sc);
+        var psv = SelectionHandles.PickSvRect(sel, dpi, RectF.Empty, sc);
+        var phue = SelectionHandles.PickHueRect(sel, dpi, RectF.Empty, sc);
+        bool pickOk = Near((psv.MinX - pk.MinX) / dpi, SelectionHandles.FloatPadLogical, tol)
+                   && Near((phue.MinX - psv.MaxX) / dpi, SelectionHandles.FloatGapLogical, tol)
+                   && Near((psv.MaxX - psv.MinX) / dpi, SelectionHandles.PickSvLogical, tol)
+                   && Near((phue.MaxX - phue.MinX) / dpi, SelectionHandles.PickHueLogical, tol);
+
+        // 圆角也是 token：三处浮层都读界面推上来的主题（= InkUi.Tokens.FloatingCorner）。
+        bool cornerOk = Near(FloatingTheme.CornerRadius, InkUi.Tokens.FloatingCorner, tol);
+
+        check("浮层尺寸：内边距/格间距/格尺寸/圆角都在 token 上（操作条）", barOk,
+              $"内边距 {barPad:F1}、格缝 {barGap:F1}、整条 {barW:F0}×{(bar.MaxY - bar.MinY) / dpi:F0}");
+        check("浮层尺寸：墨迹面板在 token 上（含行缝与整卡宽高）", panelOk,
+              $"内边距 {(s0.MinX - p.MinX) / dpi:F1}、色片缝 {(s1.MinX - s0.MaxX) / dpi:F1}、"
+              + $"行缝 {(sRow.MinY - s0.MaxY) / dpi:F1}、卡片 {(p.MaxX - p.MinX) / dpi:F0}×{(p.MaxY - p.MinY) / dpi:F0}");
+        check("浮层尺寸：层级面板在 token 上", layerOk,
+              $"内边距 {(l0.MinX - lp.MinX) / dpi:F1}、格缝 {(l1.MinX - l0.MaxX) / dpi:F1}");
+        check("浮层尺寸：自定义取色板在 token 上", pickOk,
+              $"内边距 {(psv.MinX - pk.MinX) / dpi:F1}、SV {(psv.MaxX - psv.MinX) / dpi:F0}、"
+              + $"色相条 {(phue.MaxX - phue.MinX) / dpi:F0}");
+        check("浮层圆角：走界面主题令牌（三处一个数）", cornerOk,
+              $"主题 {FloatingTheme.CornerRadius:F0} vs InkUi.Tokens.FloatingCorner {InkUi.Tokens.FloatingCorner:F0}");
+    }
+
+    private static bool Near(float a, float b, float tol) => MathF.Abs(a - b) <= tol;
 
     /// <summary>
     /// 选中手柄自检：位置、命中、以及每个手柄拖出来的是什么矩阵。
@@ -4322,12 +4509,20 @@ internal sealed class App : InkEngine.InkEngine
         // 图形**一个键都没有**（用户 2026-09-19："图形不需要加快捷键，通通取消掉"）。
         // 查法是对着"退役的那五个组合"查，不是查动作名——动作枚举里已经没有图形那几个了，
         // 查名字等于什么都没查。
-        foreach (var (name, vk) in new[] { ("O", 'O'), ("T", 'T'), ("G", 'G'), ("F", 'F'), ("N", 'N') })
+        //
+        // ⚠ `Ctrl+Alt+T` 2026-09-30 起**不再是退役键**：穿透从 `Ctrl+Alt+P` 换成了它
+        //（用户报"P 和笔的 Ctrl+P 撞"，见 KeyBindings.Default 里那段注释）。
+        // 所以这里只查真正空着的四个组合。
+        foreach (var (name, vk) in new[] { ("O", 'O'), ("G", 'G'), ("F", 'F'), ("N", 'N') })
         {
             var c = new KeyChord(KeyChord.ModCtrl | KeyChord.ModAlt, vk);
             Check($"退役的图形键 Ctrl+Alt+{name} 不在任何作用域里",
                   map.Bindings.All(b => !b.Chord.Equals(c)), "");
         }
+        // 顺手钉住"T 现在是穿透、不是退役键"（哪天有人换回去，这里会给出说得清的红）。
+        Check("Ctrl+Alt+T 现在是穿透模式的默认键（不再是退役图形键）",
+              map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+T",
+              map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString());
 
         // ---- 2. 按键解析 ----
         bool ok1 = KeyChord.TryParse("ctrl+alt+p", out var c1, out _);
@@ -4362,7 +4557,8 @@ internal sealed class App : InkEngine.InkEngine
               $"穿透 → {map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord}");
 
         map.ResetToDefault(KeyScope.Global, KeyAction.TogglePassThrough);
-        Check("能恢复默认键", map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+P",
+        Check("能恢复默认键",
+              map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+T",
               map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString());
 
         // ---- 4. 落盘 / 读回 / 坏文件 ----
@@ -4382,7 +4578,7 @@ internal sealed class App : InkEngine.InkEngine
                   warns.Count == 0 ? $"退出键 → {reloaded.Find(KeyScope.Global, KeyAction.Quit).Chord}"
                                    : string.Join("；", warns));
             Check("没改过的项仍是默认值（只写差异）",
-                  reloaded.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+P", "");
+                  reloaded.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+T", "");
             Check("只写差异：文件里应当只有 1 条", File.ReadAllText(cfg).Split('\n')
                   .Count(l => l.Contains("\"Global.")) == 1, "");
 
@@ -11199,6 +11395,11 @@ internal sealed class App : InkEngine.InkEngine
             Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-26} {detail}");
         }
 
+        // 浮层尺寸 token（8.2.0 验收①）——和 `--selftest` 共用同一份判据
+        //（计划里点名"补在 --uitest 里"，那边跑到的就是这个）。
+        PrintOverlayMetrics();
+        CheckFloatOverlayTokens((n, ok, d) => Check(n, ok, d));
+
         void Click(int x, int y)
         {
             SendMouse(x, y, 0);                            SettleFrames(80);
@@ -13899,7 +14100,7 @@ internal sealed class App : InkEngine.InkEngine
         Check("完整档是 13 格", ui.VisibleCountForTest == 13, $"显示 {ui.VisibleCountForTest} 格");
 
         // 极简档的色片行：**只给 4 个**（用户 2026-09-17："极简模式的色带展开栏里面的
-        // 内容排布有点问题"——短胶囊里塞 12 个色片，减掉滑条之后每个只有 11 像素宽）。
+        // 内容排布有点问题"——短胶囊里塞一整排色片，减掉滑条之后每个只有十几像素宽）。
         {
             var miniSeg0 = ui.ProfileRectForTest(0);
             ClickPhysical((miniSeg0.MinX + miniSeg0.MaxX) * 0.5f * DpiScale,
@@ -13922,8 +14123,11 @@ internal sealed class App : InkEngine.InkEngine
             ClickPhysical((fullSeg0.MinX + fullSeg0.MaxX) * 0.5f * DpiScale,
                           (fullSeg0.MinY + fullSeg0.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
-            Check("完整档：色片回到 12 个", ui.SwatchCountForTest == 12,
-                  $"色片数 {ui.SwatchCountForTest}");
+            // **不与写死的数字比**：完整档的色片数 = 笔色带的长度（8.1.4 从 12 砍到 8，
+            // 这条自检当时跟着红了一次——以后改色带只改引擎那一张表，这里自动跟上）。
+            Check("完整档：色片回到一整排（= 笔色带长度）",
+                  ui.SwatchCountForTest == InkPalette.PenBand.Length,
+                  $"色片数 {ui.SwatchCountForTest}（笔色带 {InkPalette.PenBand.Length} 个）");
         }
 
         // 切到极简：只留六格 ＋ 收起格，整条带子明显变短
@@ -15046,13 +15250,16 @@ internal sealed class App : InkEngine.InkEngine
         // 坐标系 / 数轴 配过 `Ctrl+Alt+O/T/G/F/N`，这一轮全撤——它们的入口就是上面那 8 段。
         //
         // 判据分两层，缺一层都可能"看着绿其实没撤干净"：
-        //   ① **对表查**：那五个组合在任何作用域里都不许再绑着动作；
+        //   ① **对表查**：那几个组合在任何作用域里都不许再绑着动作；
         //   ② **真按一次**：合成键盘发一个 `Ctrl+Alt+O`，工具**不许**变——
         //      这一层防的是"表里删了、注册那一路还留着"。
+        //
+        // ⚠ `Ctrl+Alt+T` 2026-09-30 起**不再是退役键**（穿透从 P 换成了它，见
+        // KeyBindings.Default），所以这里只查真正空着的四个组合。
         Console.WriteLine("  -- B. 图形一个热键都没有 --");
         var retired = new (string chord, ushort vk)[]
         {
-            ("Ctrl+Alt+O", 'O'), ("Ctrl+Alt+T", 'T'), ("Ctrl+Alt+G", 'G'),
+            ("Ctrl+Alt+O", 'O'), ("Ctrl+Alt+G", 'G'),
             ("Ctrl+Alt+F", 'F'), ("Ctrl+Alt+N", 'N'),
         };
         foreach (var (chord, vk) in retired)
@@ -16454,6 +16661,13 @@ internal sealed class App : InkEngine.InkEngine
                   + $"圆钮的白 {dotWhite}（圆心 {dotR.MinX:F0},{dotR.MinY:F0}），"
                   + $"点中圆钮={tookDot}，收起态={SelBarCollapsed}");
 
+            // ②.5（8.2.0 验收①）浮层尺寸在 token 容差内 + 量尺打表
+            //
+            // 量尺（PrintOverlayMetrics）先打一张表：收紧要收在哪儿、收了多少，前后两版
+            // 用的是同一把尺子；然后是判据本身（见 CheckFloatOverlayTokens）。
+            PrintOverlayMetrics();
+            CheckFloatOverlayTokens((n, ok, d) => Check(n, ok, d));
+
             // ③ 颜色面板：点"颜色"开面板 → 点色片改色 → 一次撤销回原色
             RunBarActionForTest((int)SelBarButton.Color);
             SettleFrames(140);
@@ -16481,26 +16695,118 @@ internal sealed class App : InkEngine.InkEngine
                   $"面板白底 {panelWhite} 像素；改色 {(colorChanged ? "对" : "不对")}，"
                   + $"撤销后回原色 {(colorBack ? "是" : "否")}");
 
-            // ⑤ 粗细滑条：拖到最粗那一档 → Width 变 + 选中框跟着变大
+            // ⑤ 粗细滑条（8.2.0：连续拖动 + 实时数值）
+            //
+            // 判据（用户 2026-09-30："做滑动，记得滑动的时候显示值，参考色带"）：
+            //   · 按下 → 拖到**中点** → 松手：选中对象的宽度 == 滑条中点的连续值
+            //     （不再是"最近的那一档"）；
+            //   · 拖动中引擎报的"显示值" == 同一个数（画在滑钮上方的那行字读的就是它）；
+            //   · 这一次拖拽**只记一步撤销**（拖动中反复 Redo、松手才提交）；
+            //   · 选中框跟着变（墨真的变粗了），一次撤销回原宽。
             var sliderT = SelectionHandles.SliderRect(barFrame.CanvasAabb, dpi, ViewportCanvas,
                                                       SelectionHandles.SwatchCount);
-            // 档位表由引擎决定（全荧光笔用荧光笔那三档）——自检这边跟着引擎的口径走
-            int lastStep = SliderStepCount();
-            float wBefore = bA.Width;
+            var (wMin, wMax) = WidthRangeForSelection();
+            float wBefore = bA.Width / dpi;
             var frameWBeforeBox = LiveSelectionFrame.CanvasAabb;
             float frameWBefore = frameWBeforeBox.MaxX - frameWBeforeBox.MinX;
-            float sx = SelectionHandles.SliderStepX(lastStep - 1, lastStep, barFrame.CanvasAabb, dpi,
-                                                    ViewportCanvas, SelectionHandles.SwatchCount);
-            bool tookSlider = SelectionGestureForTest(sx, (sliderT.MinY + sliderT.MaxY) * 0.5f);
-            EndSelectionGestureForTest();
+            int undoBefore = Doc.UndoDepth;
+            float sx0 = SelectionHandles.SliderXOfT(0.25f, barFrame.CanvasAabb, dpi, ViewportCanvas,
+                                                    SelectionHandles.SwatchCount);
+            float sx1 = SelectionHandles.SliderXOfT(0.5f, barFrame.CanvasAabb, dpi, ViewportCanvas,
+                                                    SelectionHandles.SwatchCount);
+            float sy = (sliderT.MinY + sliderT.MaxY) * 0.5f;
+            bool tookSlider = SelectionGestureForTest(sx0, sy);
+            PanelDragMoveForTest(sx1, sy);
+            SettleFrames(60);
+            float shownValue = WidthSliderDragValue;       // 拖动中"显示的值"（HUD 同口径）
+            EndPanelDragForTest(sx1, sy);
             SettleFrames(140);
+            float midWant = wMin + (wMax - wMin) * 0.5f;
+            bool midApplied = MathF.Abs(bA.Width / dpi - midWant) < 0.15f;
+            bool shownMatches = MathF.Abs(shownValue - midWant) < 0.15f;
+            int depthAfterDrag = Doc.UndoDepth;
+            bool oneUndoStep = depthAfterDrag == undoBefore + 1;
+            float midAppliedValue = bA.Width / dpi;
             float frameWAfter = LiveSelectionFrame.CanvasAabb.MaxX - LiveSelectionFrame.CanvasAabb.MinX;
-            bool widthChanged = bA.Width > wBefore + 1f;
-            Check("粗细滑条：拖到最粗 → 墨变粗、选中框跟着变大",
-                  tookSlider && widthChanged && frameWAfter > frameWBefore + 1f,
-                  $"宽 {wBefore:F1} → {bA.Width:F1}；框宽 {frameWBefore:F0} → {frameWAfter:F0}");
+            bool widthChanged = midAppliedValue > wBefore + 1f;
             Doc.Undo();
-            SettleFrames(120);
+            SettleFrames(140);
+            bool widthBack = MathF.Abs(bA.Width / dpi - wBefore) < 0.02f;
+            Check("粗细滑条：拖到中点 → 连续值生效、显示值一致、一步撤销、框跟着变",
+                  tookSlider && midApplied && shownMatches && oneUndoStep && widthChanged
+                  && frameWAfter > frameWBefore + 1f && widthBack,
+                  $"宽 {wBefore:F1} → {midAppliedValue:F1}（拖动中显示 {shownValue:F1}，中点 {midWant:F1}）；"
+                  + $"撤销栈 +{depthAfterDrag - undoBefore}（该是 1），撤销后回 {bA.Width / dpi:F1}；"
+                  + $"框宽 {frameWBefore:F0} → {frameWAfter:F0}");
+
+            // ⑤.2 工具宽那条路的记档（计划里点名的那半条）：
+            // 面板滑条改的是**选中对象**；"改当前工具 + 落盘"仍走主条滑条那条
+            // `SetWidthFromUi`——这里直接用那条真实入口点一下，确认引擎值和偏好都落上
+            // （8.0.8/8.0.9 加的 wv.pen）。
+            {
+                float oldPen = PenWidthLogical;
+                SetWidthFromUi(11.5f);
+                bool engineValue = MathF.Abs(PenWidthLogical - 11.5f) < 0.01f;
+                bool prefSaved = GetUiPref("wv.pen") == "11.5";
+                Check("工具粗细：SetWidthFromUi 改引擎值 + 写 wv.pen（能落盘）",
+                      engineValue && prefSaved,
+                      $"笔宽 {PenWidthLogical:F1}，wv.pen={GetUiPref("wv.pen") ?? "(空)"}");
+                SetWidthFromUi(oldPen);                    // 还原
+            }
+
+            // ⑤.5 自定义取色（8.2.0）：点末格开色板 → 拖色相条 → 直接改选中墨迹、一步撤销
+            {
+                int sc = SelectionHandles.SwatchCount;
+                var customR = SelectionHandles.SwatchRect(sc - 1, barFrame.CanvasAabb, dpi, ViewportCanvas, sc);
+                bool opened = SelectionGestureForTest((customR.MinX + customR.MaxX) * 0.5f,
+                                                      (customR.MinY + customR.MaxY) * 0.5f);
+                EndSelectionGestureForTest();
+                SettleFrames(120);
+                bool pickShown = CustomColorOpenForTest;
+
+                var hueR = SelectionHandles.PickHueRect(barFrame.CanvasAabb, dpi, ViewportCanvas, sc);
+                float hx = (hueR.MinX + hueR.MaxX) * 0.5f;
+                float hy = hueR.MinY + (hueR.MaxY - hueR.MinY) * 0.5f;      // h ≈ 0.5 = 青
+                int depth0 = Doc.UndoDepth;
+                bool tookHue = SelectionGestureForTest(hx, hy);
+                PanelDragMoveForTest(hx, hy + 1f);                          // 一点点位移 = 真的拖动
+                EndPanelDragForTest(hx, hy + 1f);
+                SettleFrames(140);
+                var (ph, ps, pv) = PickHsv;
+                bool hueTurned = MathF.Abs(ph - 0.5f) < 0.03f;
+                // h=0.5、s=1、v=1 的青：G、B 接近 1、R 接近 0
+                bool inkCyan = bA.Color.R < 0.08f && bA.Color.G > 0.9f && bA.Color.B > 0.9f;
+                int depthAfterApply = Doc.UndoDepth;
+                bool oneStep = depthAfterApply == depth0 + 1;
+                Doc.Undo();
+                SettleFrames(120);
+                bool inkBack = bA.Color.R > 0.9f && bA.Color.B > 0.9f;      // 回品红
+                Check("自定义取色：点末格开板、拖色相条直接改选中墨、一步撤销",
+                      opened && pickShown && tookHue && hueTurned && inkCyan && oneStep && inkBack,
+                      $"开板={opened}（开着 {pickShown}）；H {ph:F2}（期望 0.50）；"
+                      + $"墨色 ({bA.Color.R:F2},{bA.Color.G:F2},{bA.Color.B:F2})；撤销栈 +{depthAfterApply - depth0}");
+
+                // **松开在色板外 = 取消**（用户定的"点面板外 = 取消，保持原色"）
+                var svR = SelectionHandles.PickSvRect(barFrame.CanvasAabb, dpi, ViewportCanvas, sc);
+                int depth1 = Doc.UndoDepth;
+                bool tookSv = SelectionGestureForTest(svR.MinX + (svR.MaxX - svR.MinX) * 0.25f,
+                                                      svR.MinY + 8f);
+                PanelDragMoveForTest(svR.MaxX - 2f, svR.MinY + 2f);
+                EndPanelDragForTest(0f, 0f);                                // 松在屏幕外 = 板外
+                SettleFrames(120);
+                bool stillMagenta = bA.Color.R > 0.9f && bA.Color.B > 0.9f;
+                bool noUndo = Doc.UndoDepth == depth1;
+                Check("自定义取色：松开在板外 = 取消（预览撤回、保持原色、不记撤销）",
+                      tookSv && stillMagenta && noUndo,
+                      $"墨色 ({bA.Color.R:F2},{bA.Color.G:F2},{bA.Color.B:F2})，撤销栈 +{Doc.UndoDepth - depth1}");
+
+                // 荧光笔套色必须保留半透明（`InkPalette.ForStroke` 是唯一那份规则）
+                var hl = new Stroke { Color = InkPalette.ToHighlighter(new Color4(1f, 0.5f, 0.2f, 1f)) };
+                var applied = InkPalette.ForStroke(new Color4(0f, 0f, 1f, 1f), hl);
+                Check("自定义取色：荧光笔（半透明墨）套色时保留半透明",
+                      MathF.Abs(applied.A - 0.32f) < 0.001f && applied.B > 0.99f && applied.R < 0.01f,
+                      $"alpha {applied.A:F2}（该 0.32），RGB ({applied.R:F2},{applied.G:F2},{applied.B:F2})");
+            }
 
             // ⑥ 锁定（用户定的 B 语义）：锁上以后能选中、但拖不动、也删不掉
             RunBarActionForTest((int)SelBarButton.Color);          // 先收面板（免得盖住条）

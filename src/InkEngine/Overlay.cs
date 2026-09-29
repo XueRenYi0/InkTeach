@@ -2180,9 +2180,15 @@ internal sealed class OverlayWindow : IDisposable
             // 漏一块就在屏幕上留一块擦不掉的残影（这条踩过好几次了）。
             r.Add(CanvasRectToWindow(SelectionHandles.BarCollapsedRect(sb, dpi, app.ViewportCanvas).Inflate(cardPad)));
             if (app.SelPanelOpen == SelPanel.Ink)
+            {
                 r.Add(CanvasRectToWindow(SelectionHandles
                     .PanelRect(sb, dpi, app.ViewportCanvas, SelectionHandles.SwatchCount)
                     .Inflate(cardPad + 2f)));
+                if (app.CustomColorOpen)
+                    r.Add(CanvasRectToWindow(SelectionHandles
+                        .CustomPanelRect(sb, dpi, app.ViewportCanvas, SelectionHandles.SwatchCount)
+                        .Inflate(cardPad + 2f)));
+            }
             else if (app.SelPanelOpen == SelPanel.Layer)
                 r.Add(CanvasRectToWindow(SelectionHandles.LayerPanelRect(sb, dpi, app.ViewportCanvas)
                     .Inflate(cardPad + 2f)));
@@ -2574,6 +2580,9 @@ internal sealed class OverlayWindow : IDisposable
         {
             if (app.SelPanelOpen == SelPanel.Ink) DrawInkPanel(app, b);
             else if (app.SelPanelOpen == SelPanel.Layer) DrawLayerPanel(app, b);
+            // 自定义取色板挂在墨迹面板旁边（画在面板之后 = 压在它上面）。
+            // 它只在墨迹面板开着时才有意义（面板一关，子面板由引擎一起清掉）。
+            if (app.CustomColorOpen && app.SelPanelOpen == SelPanel.Ink) DrawPickPanel(app, b);
         }
 
         // 6) 浮出的读数标签。**两个数分开显示**（见 调研-图形工具.md 2.3）：
@@ -3319,35 +3328,92 @@ internal sealed class OverlayWindow : IDisposable
     ///
     /// 色板的"当前色"用**环**标出来（参考实现的做法）：比整块换色省地方，
     /// 而且混合选区（几种颜色混着选）也能表达——那时环画成双色（见 DrawColorRing）。
+    ///
+    /// 8.2.0 两处变化：
+    ///   · 滑条从"点档位"改成**连续拖动**：拖动中在滑钮上方显示实时数值（逻辑像素，
+    ///     和 HUD 的「粗细」同一口径）、右端一颗跟着变粗的笔尖预览，视觉和色板那一排
+    ///     （底轨/已选段/白钮 + 强调色描边）是同一套语言；
+    ///   · 色板末格从"虚线灰环占位"改成**色相环**：点它弹出内置 HSV 小色板
+    ///     （见 <see cref="DrawPickPanel"/>）。
     /// </summary>
     private void DrawInkPanel(InkEngine app, in RectF sel)
     {
         float dpi = Dpi / 96f;
         int sc = SelectionHandles.SwatchCount;
-        var p = SelectionHandles.PanelRect(sel, dpi, app.ViewportCanvas, sc);
-        DrawPanelCard(app, p, 10f * dpi);
-
-        // ---- ① 粗细滑条 ----
-        var slider = SelectionHandles.SliderRect(sel, dpi, app.ViewportCanvas, sc);
-        int steps = app.SliderStepCount();
-        int cur = app.SliderStepOfSelection(sel);
-        float cy = (slider.MinY + slider.MaxY) * 0.5f;
-        float x0 = SelectionHandles.SliderStepX(0, steps, sel, dpi, app.ViewportCanvas, sc);
-        float x1 = SelectionHandles.SliderStepX(steps - 1, steps, sel, dpi, app.ViewportCanvas, sc);
         var th = app.FloatingTheme;
-        _scratch.Color = new Color4(th.TextMuted.R, th.TextMuted.G, th.TextMuted.B, 0.35f);
-        _ctx.DrawLine(new Vector2(x0, cy), new Vector2(x1, cy), _scratch, 2.4f * dpi);
+        var p = SelectionHandles.PanelRect(sel, dpi, app.ViewportCanvas, sc);
+        // 圆角用界面推上来的主题令牌（= InkUi.Tokens.FloatingCorner 10），
+        // 三处浮层同一个数——以前这两张面板各写了一个 10f 字面量。
+        DrawPanelCard(app, p, th.CornerRadius * dpi);
+
+        // ---- ① 粗细滑条（连续；拖动实时数值；右端笔尖预览）----
+        var slider = SelectionHandles.SliderRect(sel, dpi, app.ViewportCanvas, sc);
+        var (tx0, tx1) = SelectionHandles.SliderTrackRange(sel, dpi, app.ViewportCanvas, sc);
+        int steps = app.SliderStepCount();
+        float cy = (slider.MinY + slider.MaxY) * 0.5f;
+
+        // 当前值：拖动中用手里的那个（实时），平时取选区第一条墨的宽度。
+        var (minW, maxW) = app.WidthRangeForSelection();
+        bool dragging = app.WidthSliderDragging;
+        float value = dragging ? app.WidthSliderDragValue : app.SliderValueOfSelection();
+        float t = maxW > minW ? Math.Clamp((value - minW) / (maxW - minW), 0f, 1f) : 0f;
+        float kx = tx0 + (tx1 - tx0) * t;
+
+        // 已选段用**当前墨色**（和主条那条滑条一个语言：这一段是"这一批墨的粗细"）。
+        Color4 selColor = th.ActiveBg;
+        foreach (var s in app.Doc.Selected)
+        {
+            if (s.IsImage) continue;
+            selColor = new Color4(s.Color.R, s.Color.G, s.Color.B, 1f);
+            break;
+        }
+
+        // 底轨（凹槽）＋ 已选段。拖动中轨道加粗 1 像素 = "手里握着它"的反馈。
+        float hTrack = (dragging ? 6f : 5f) * dpi;
+        _scratch.Color = new Color4(th.TextMuted.R, th.TextMuted.G, th.TextMuted.B, 0.30f);
+        _ctx.FillRoundedRectangle(new RoundedRectangle(
+            new Vortice.RawRectF(tx0, cy - hTrack * 0.5f, tx1, cy + hTrack * 0.5f),
+            hTrack * 0.5f, hTrack * 0.5f), _scratch);
+        if (kx - tx0 > 0.5f * dpi)
+        {
+            _scratch.Color = new Color4(selColor.R, selColor.G, selColor.B, dragging ? 0.85f : 0.55f);
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(tx0, cy - hTrack * 0.5f, kx, cy + hTrack * 0.5f),
+                hTrack * 0.5f, hTrack * 0.5f), _scratch);
+        }
+
+        // 旧档位的位置留一排**参考刻度**（滑条连续了，点还在——凭肌肉记忆找得到地方）。
         for (int i = 0; i < steps; i++)
         {
             float x = SelectionHandles.SliderStepX(i, steps, sel, dpi, app.ViewportCanvas, sc);
-            _scratch.Color = i == cur ? th.ActiveBg : th.TextMuted;
-            _ctx.FillEllipse(new Ellipse(new Vector2(x, cy), 1.9f * dpi, 1.9f * dpi), _scratch);
+            _scratch.Color = new Color4(th.TextMuted.R, th.TextMuted.G, th.TextMuted.B, 0.55f);
+            _ctx.FillEllipse(new Ellipse(new Vector2(x, cy), 1.4f * dpi, 1.4f * dpi), _scratch);
         }
-        float kx = SelectionHandles.SliderStepX(cur, steps, sel, dpi, app.ViewportCanvas, sc);
+
+        // 滑钮：白底 + 强调色描边（和色板当前色的环、线型当前档的描边同一套）。
         _ctx.FillEllipse(new Ellipse(new Vector2(kx, cy), 7f * dpi, 7f * dpi),
                          Brush(new Color4(1f, 1f, 1f, 1f)));
         _scratch.Color = th.ActiveBg;
         _ctx.DrawEllipse(new Ellipse(new Vector2(kx, cy), 7f * dpi, 7f * dpi), _scratch, 1.8f * dpi);
+
+        // 右端"笔尖预览"：一颗跟着值变大的点（和主条那条滑条同一个公式）。
+        {
+            float pr = Math.Clamp(2f + t * 6.5f, 2f, 8.5f) * dpi;
+            float px = slider.MaxX - SelectionHandles.SliderTailLogical * 0.5f * dpi;
+            _scratch.Color = selColor;
+            _ctx.FillEllipse(new Ellipse(new Vector2(px, cy), pr, pr), _scratch);
+        }
+
+        // 拖动中：数值显示在滑钮上方（"拖动的时候显示值"——用户 2026-09-30）。
+        if (dragging)
+        {
+            string text = value.ToString("0.0");
+            float tx = Math.Clamp(kx, p.MinX + 18f * dpi, slider.MaxX - 18f * dpi);
+            float tw = 44f * dpi;
+            _scratch.Color = th.Text;
+            _ctx.DrawText(text, ReadoutFormatSmall(dpi),
+                          new Rect(tx - tw * 0.5f, cy - 26f * dpi, tw, 18f * dpi), _scratch);
+        }
 
         // ---- ②③ 线型：实线 / 虚线 / 点线 ----
         // 当前是哪一档**由 SelectionHandles 统一算**（见 DashOfSelection 的注释：
@@ -3402,18 +3468,36 @@ internal sealed class OverlayWindow : IDisposable
             var cell = SelectionHandles.SwatchRect(i, sel, dpi, app.ViewportCanvas, sc);
             var c = new Vector2((cell.MinX + cell.MaxX) * 0.5f, (cell.MinY + cell.MaxY) * 0.5f);
             float rad = (cell.MaxX - cell.MinX) * 0.5f;
-            bool custom = i == swatches.Length - 1;      // 末格 = 自定义取色（本轮占位）
+            bool custom = i == swatches.Length - 1;      // 末格 = 自定义取色（8.2.0：色相环）
 
             if (custom)
             {
-                // 占位不画彩虹（那要引渐变），画一个虚线灰环表示"这里还没接"
-                _scratch.Color = new Color4(th.TextMuted.R, th.TextMuted.G, th.TextMuted.B, 0.7f);
-                for (int k = 0; k < 8; k++)
+                // **色相环**：24 段、每段一个色相（往两边各多画半段，避免段间露缝）。
+                // 它是"自定义颜色"的通用语言；内侧再点一颗当前色，说明"现在这个色也是自定义来的"。
+                const int segs = 24;
+                float rw = 2.8f * dpi;
+                for (int k = 0; k < segs; k++)
                 {
-                    float t0 = k / 8f * MathF.PI * 2f, t1 = t0 + MathF.PI * 2f / 16f;
-                    _ctx.DrawLine(new Vector2(c.X + MathF.Cos(t0) * rad, c.Y + MathF.Sin(t0) * rad),
-                                  new Vector2(c.X + MathF.Cos(t1) * rad, c.Y + MathF.Sin(t1) * rad),
-                                  _scratch, 2f * dpi);
+                    float a0 = k / (float)segs * MathF.PI * 2f;
+                    float a1 = (k + 1.5f) / segs * MathF.PI * 2f;       // +半段重叠
+                    _scratch.Color = Hsv.ToRgb(k / (float)segs, 0.85f, 0.95f);
+                    _ctx.DrawLine(new Vector2(c.X + MathF.Cos(a0) * rad, c.Y + MathF.Sin(a0) * rad),
+                                  new Vector2(c.X + MathF.Cos(a1) * rad, c.Y + MathF.Sin(a1) * rad),
+                                  _scratch, rw);
+                }
+                if (anyColor)
+                {
+                    _scratch.Color = curColor;
+                    _ctx.FillEllipse(new Ellipse(c, rad * 0.42f, rad * 0.42f), _scratch);
+                }
+                // 激活：色板开着，或者当前色**不在**这张色板里（那次取色就是从这儿来的）。
+                bool customActive = app.CustomColorOpen
+                    || (anyColor && !PaletteContains(swatches, curColor));
+                if (customActive)
+                {
+                    _scratch.Color = th.ActiveBg;
+                    _ctx.DrawEllipse(new Ellipse(c, rad + 3.5f * dpi, rad + 3.5f * dpi),
+                                     _scratch, 2.2f * dpi);
                 }
                 continue;
             }
@@ -3433,12 +3517,158 @@ internal sealed class OverlayWindow : IDisposable
         }
     }
 
+    /// <summary>这张色板里有没有这个颜色（阈值同 <see cref="SameRgb"/>）。</summary>
+    private static bool PaletteContains((string Name, Color4 Color)[] swatches, in Color4 c)
+    {
+        for (int i = 0; i < swatches.Length - 1; i++)          // 末格是自定义，不参与
+            if (SameRgb(swatches[i].Color, c)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// **自定义取色板**（8.2.0，色板末格点开）：色相条 + 饱和度/明度方块 + 当前色预览。
+    ///
+    /// 用户当时选的是 A 方案（"轻量 HSV 色板"，不弹系统对话框）：
+    /// 点末格 → 弹出这张小卡片 → 选完**直接应用到选中墨迹**（荧光笔自动保半透明，
+    /// 走 <see cref="InkPalette.ForStroke"/>）；点卡片外面 = 取消（保持原色）。
+    ///
+    /// 尺寸和圆角跟墨迹/层级面板共用一套 token（`FloatPadLogical` / `FloatGapLogical` /
+    /// `theme.CornerRadius`），挂在墨迹面板旁边、**底边对齐**——离"自定义"那一格最近。
+    ///
+    /// 两块取色面用**缓存位图**画（饱和度/明度方块：色相变了才重画一张 104² 的小图；
+    /// 色相条：尺寸变了才重画）。不用 D2D 渐变笔刷：那是这套代码里从没出现过的
+    /// API 面，而"手算一张小图"是这条渲染管线里现成的做法（HUD 缓存就是这么干的）。
+    /// </summary>
+    private void DrawPickPanel(InkEngine app, in RectF sel)
+    {
+        float dpi = Dpi / 96f;
+        int sc = SelectionHandles.SwatchCount;
+        var th = app.FloatingTheme;
+        var p = SelectionHandles.CustomPanelRect(sel, dpi, app.ViewportCanvas, sc);
+        DrawPanelCard(app, p, th.CornerRadius * dpi);
+
+        var sv = SelectionHandles.PickSvRect(sel, dpi, app.ViewportCanvas, sc);
+        var hue = SelectionHandles.PickHueRect(sel, dpi, app.ViewportCanvas, sc);
+        var prev = SelectionHandles.PickPreviewRect(sel, dpi, app.ViewportCanvas, sc);
+        var (ph, ps, pv) = app.PickHsv;
+        var picked = Hsv.ToRgb(ph, ps, pv);
+
+        EnsurePickBitmaps(dpi, ph);
+
+        // ---- ① 饱和度（横）／明度（纵）方块 ----
+        if (_pickSvBmp != null)
+            _ctx.DrawBitmap(_pickSvBmp, new Vortice.RawRectF(sv.MinX, sv.MinY, sv.MaxX, sv.MaxY),
+                            1f, Vortice.Direct2D1.InterpolationMode.Linear, null, null);
+        _scratch.Color = new Color4(0f, 0f, 0f, 0.22f);
+        _ctx.DrawRectangle(new Vortice.RawRectF(sv.MinX, sv.MinY, sv.MaxX, sv.MaxY), _scratch, 1f * dpi);
+
+        // 选中的那一点：白圈 + 一圈暗边（压在亮色上、暗色上都看得见）
+        float sx = sv.MinX + (sv.MaxX - sv.MinX) * ps;
+        float sy = sv.MinY + (sv.MaxY - sv.MinY) * pv;
+        _ctx.DrawEllipse(new Ellipse(new Vector2(sx, sy), 5.5f * dpi, 5.5f * dpi),
+                         Brush(new Color4(1f, 1f, 1f, 1f)), 2.2f * dpi);
+        _scratch.Color = new Color4(0f, 0f, 0f, 0.55f);
+        _ctx.DrawEllipse(new Ellipse(new Vector2(sx, sy), 6.8f * dpi, 6.8f * dpi), _scratch, 1f * dpi);
+
+        // ---- ② 竖直色相条 ----
+        if (_pickHueBmp != null)
+            _ctx.DrawBitmap(_pickHueBmp, new Vortice.RawRectF(hue.MinX, hue.MinY, hue.MaxX, hue.MaxY),
+                            1f, Vortice.Direct2D1.InterpolationMode.Linear, null, null);
+        _scratch.Color = new Color4(0f, 0f, 0f, 0.22f);
+        _ctx.DrawRectangle(new Vortice.RawRectF(hue.MinX, hue.MinY, hue.MaxX, hue.MaxY), _scratch, 1f * dpi);
+
+        // 当前色相那条指示线（白线 + 暗边，和方块那颗点同一套）
+        float hy = hue.MinY + (hue.MaxY - hue.MinY) * ph;
+        _ctx.DrawLine(new Vector2(hue.MinX + 1f * dpi, hy), new Vector2(hue.MaxX - 1f * dpi, hy),
+                      Brush(new Color4(1f, 1f, 1f, 1f)), 2.2f * dpi);
+        _scratch.Color = new Color4(0f, 0f, 0f, 0.45f);
+        _ctx.DrawLine(new Vector2(hue.MinX + 1f * dpi, hy - 1.9f * dpi),
+                      new Vector2(hue.MaxX - 1f * dpi, hy - 1.9f * dpi), _scratch, 0.9f * dpi);
+        _ctx.DrawLine(new Vector2(hue.MinX + 1f * dpi, hy + 1.9f * dpi),
+                      new Vector2(hue.MaxX - 1f * dpi, hy + 1.9f * dpi), _scratch, 0.9f * dpi);
+
+        // ---- ③ 当前色预览 ----
+        // 预览画的是**基色**（荧光笔选出来的也是这个色；实际描上去会自动保半透明）。
+        float side = MathF.Min(prev.MaxY - prev.MinY, 30f * dpi);
+        var sw = new RoundedRectangle(
+            new Vortice.RawRectF(prev.MinX, prev.MinY, prev.MinX + side, prev.MinY + side), 7f * dpi, 7f * dpi);
+        _scratch.Color = picked;
+        _ctx.FillRoundedRectangle(sw, _scratch);
+        _scratch.Color = new Color4(0f, 0f, 0f, 0.22f);
+        _ctx.DrawRoundedRectangle(sw, _scratch, 1f * dpi);
+        _scratch.Color = th.ActiveBg;
+        _ctx.DrawRoundedRectangle(new RoundedRectangle(
+            new Vortice.RawRectF(prev.MinX - 2f * dpi, prev.MinY - 2f * dpi,
+                                 prev.MinX + side + 2f * dpi, prev.MinY + side + 2f * dpi),
+            8f * dpi, 8f * dpi), _scratch, 1.6f * dpi);
+    }
+
+    // ---- 取色板两张缓存位图（色相/尺寸变了才重画）----------------------------
+
+    private ID2D1Bitmap _pickSvBmp, _pickHueBmp;
+    private float _pickSvHue = -1f;
+    private int _pickSvPix = -1, _pickHueWPix = -1, _pickHueHPix = -1;
+
+    private void EnsurePickBitmaps(float dpi, float hue)
+    {
+        int svPix = Math.Max(2, (int)MathF.Round(SelectionHandles.PickSvLogical * dpi));
+        int hueW = Math.Max(1, (int)MathF.Round(SelectionHandles.PickHueLogical * dpi));
+        int hueH = svPix;
+
+        if (_pickHueBmp == null || _pickHueWPix != hueW || _pickHueHPix != hueH)
+        {
+            _pickHueBmp?.Dispose();
+            _pickHueBmp = CreatePickBitmap(hueW, hueH, (x, y) => Hsv.ToRgb(y / (hueH - 1f), 1f, 1f));
+            _pickHueWPix = hueW; _pickHueHPix = hueH;
+        }
+        if (_pickSvBmp == null || _pickSvPix != svPix || MathF.Abs(_pickSvHue - hue) > 0.004f)
+        {
+            _pickSvBmp?.Dispose();
+            _pickSvBmp = CreatePickBitmap(svPix, svPix,
+                (x, y) => Hsv.ToRgb(hue, x / (svPix - 1f), 1f - y / (svPix - 1f)));
+            _pickSvPix = svPix; _pickSvHue = hue;
+        }
+    }
+
+    /// <summary>按逐像素函数建一张 CPU 数据的一次性 D2D 位图（BGRA、不透明）。</summary>
+    private ID2D1Bitmap CreatePickBitmap(int w, int h, Func<int, int, Color4> colorAt)
+    {
+        var buf = new byte[w * h * 4];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                var c = colorAt(x, y);
+                int i = (y * w + x) * 4;
+                buf[i + 0] = (byte)Math.Clamp((int)(c.B * 255f + 0.5f), 0, 255);
+                buf[i + 1] = (byte)Math.Clamp((int)(c.G * 255f + 0.5f), 0, 255);
+                buf[i + 2] = (byte)Math.Clamp((int)(c.R * 255f + 0.5f), 0, 255);
+                buf[i + 3] = 255;
+            }
+        var props = new BitmapProperties1(
+            new Vortice.DCommon.PixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied),
+            96f, 96f, BitmapOptions.None);
+        var handle = GCHandle.Alloc(buf, GCHandleType.Pinned);
+        try
+        {
+            return _ctx.CreateBitmap(new SizeI(w, h), handle.AddrOfPinnedObject(), (uint)(w * 4), props);
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            handle.Free();
+        }
+    }
+
     /// <summary>层级小面板：置顶 / 置底两格（图标用 Fluent 的"上/下箭头 + 底托"）。</summary>
     private void DrawLayerPanel(InkEngine app, in RectF sel)
     {
         float dpi = Dpi / 96f;
         var p = SelectionHandles.LayerPanelRect(sel, dpi, app.ViewportCanvas);
-        DrawPanelCard(app, p, 10f * dpi);
+        // 圆角同样取界面推上来的主题令牌（三处浮层一个数，8.2.0 收口）。
+        DrawPanelCard(app, p, app.FloatingTheme.CornerRadius * dpi);
 
         string[] icons = { IconPaths.toFront, IconPaths.toBack };
         var th = app.FloatingTheme;
@@ -4572,6 +4802,8 @@ internal sealed class OverlayWindow : IDisposable
         _hudSource?.Dispose();
         _hudTarget?.Dispose();
         _hudBmpTex?.Dispose();
+        _pickSvBmp?.Dispose();           // 自定义取色板的缓存位图（8.2.0）
+        _pickHueBmp?.Dispose();
         _tiles?.Dispose();
         _backBuffer?.Dispose();
         _inkStyle?.Dispose();          // 墨迹笔尖样式（压感变宽那条路）

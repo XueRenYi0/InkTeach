@@ -5982,7 +5982,7 @@ internal sealed class SetStrokePropAction : EditAction
     private readonly bool[] _oldLock;
     private readonly bool[] _oldGrid;
     private readonly StrokeDash[] _oldDash;
-    private readonly float _width;
+    private float _width;                     // 拖动中会被 RetargetWidth 改（8.2.0）
     private readonly bool _lock;
     private readonly bool _grid;
     private readonly StrokeDash _dash;
@@ -6042,6 +6042,49 @@ internal sealed class SetStrokePropAction : EditAction
 
     public override RectF AffectedBefore => _before;
     public override RectF AffectedAfter => EditRegion.Of(_targets);
+
+    /// <summary>这一批里有几个对象（控制台留痕 / 自检用）。</summary>
+    public int TargetCount => _targets.Length;
+
+    /// <summary>
+    /// **拖动中更新目标粗细**（8.2.0 面板滑条：同一个动作反复 `Redo`、松手才提交——
+    /// 「一次拖拽 = 一步撤销」）。用同一个动作对象，才能保证撤销回到**按下那一刻**的值。
+    /// </summary>
+    public void RetargetWidth(float width) => _width = width;
+
+    /// <summary>
+    /// **拖动中更新目标颜色**（自定义取色板用，同 <see cref="RetargetWidth"/> 那一套）。
+    /// **按条重算**：荧光笔要保留半透明（见 `InkPalette.ForStroke`），不能一个色值套下去。
+    /// </summary>
+    public void RetargetColor(Color4 baseColor)
+    {
+        for (int i = 0; i < _targets.Length; i++)
+            _newColor[i] = InkPalette.ForStroke(baseColor, _targets[i]);
+    }
+
+    /// <summary>
+    /// 这个动作**真的会改变什么吗**（拖拽松手时用它决定要不要进撤销栈：
+    /// 按下去没动、或者选的就是同一个值，不该留一步空撤销）。
+    /// </summary>
+    public bool HasChange
+    {
+        get
+        {
+            switch (_prop)
+            {
+                case Prop.Width:
+                    foreach (float old in _oldWidth)
+                        if (MathF.Abs(old - _width) > 0.001f) return true;
+                    return false;
+                case Prop.Color:
+                    for (int i = 0; i < _targets.Length; i++)
+                        if (!_oldColor[i].Equals(_newColor[i])) return true;
+                    return false;
+                default:
+                    return true;
+            }
+        }
+    }
 
     public override void Redo(InkDocument doc) => Apply(doc, old: false);
     public override void Undo(InkDocument doc) => Apply(doc, old: true);
@@ -6615,6 +6658,15 @@ internal sealed class InkDocument
         // （自己管脏区的那一条除外，它在 Redo/Undo 里加的是"两个矩形"而不是并集。）
         if (!action.SelfManagesDirty) Dirty.Add(action.AffectedUnion);
     }
+
+    /// <summary>
+    /// **交互式拖动**的提交口（8.2.0：面板粗细滑条 / 自定义取色板）。
+    ///
+    /// 拖动期间那个动作已经反复 `Redo` 过（屏幕上是实时的），这里只是把它**挂上撤销栈**：
+    /// 于是"一次拖拽 = 一步撤销"，而不是每移动一格记一步。
+    /// 松手时传进来的动作如果其实没改变什么（`HasChange` = false），调用方**不要**提交它。
+    /// </summary>
+    internal void CommitInteractive(EditAction action) => Commit(action);
 
     /// <summary>
     /// 撤销栈两道闸：**步数**（不超过 <see cref="MaxUndoDepth"/>）和
