@@ -1603,10 +1603,16 @@ public partial class InkEngine
         // 读不到 / 对不上就用默认色（笔=红、荧光=黄）——那是 InkPalette 里的默认。
         if (int.TryParse(GetUiPref("penColor"), out int penIdx)
             && penIdx >= 0 && penIdx < InkPalette.PenBand.Length)
+        {
             CurrentColor = InkPalette.PenBand[penIdx].Color;
+            _penColorIdx = penIdx;                     // 连按时从这里往下走
+        }
         if (int.TryParse(GetUiPref("hlColor"), out int hlIdx)
             && hlIdx >= 0 && hlIdx < InkPalette.HighlighterBand.Length)
+        {
             HighlighterCurrent = InkPalette.ToHighlighter(InkPalette.HighlighterBand[hlIdx].Color);
+            _hlColorIdx = hlIdx;
+        }
 
         // **上一次是自动更新装上来的吗**：换壳脚本会在更新目录里留一个 done.txt。
         // 看到它 = 本次启动就是"更新完的第一次启动"，在界面上明说一句
@@ -6773,6 +6779,7 @@ public partial class InkEngine
         for (int i = 0; i < band.Length; i++)
             if (CloseColor(band[i].Color, color))
             {
+                if (Tool == Tool.Highlighter) _hlColorIdx = i; else _penColorIdx = i;
                 SetUiPref(Tool == Tool.Highlighter ? "hlColor" : "penColor", i.ToString());
                 break;
             }
@@ -9564,18 +9571,27 @@ public partial class InkEngine
         }
     }
 
-    /// <summary>连按换色：在色带里往后走一格（转圈，转满一圈就回到第一个）。</summary>
+    /// <summary>
+    /// 连按换色：在色带里往后走一格（转圈）。
+    ///
+    /// ⚠ **用记下来的序号走，不靠"按颜色值找当前位置"**——2026-09-30 修的真 bug：
+    /// 以前每按一下都拿当前颜色去色带里匹配，容差 0.10 把「深蓝 / 藏青」认成同一个，
+    /// 于是在 墨绿→酒红→藏青→(被当成深蓝)→墨绿 之间来回蹦，用户实测"只有后面三种在切"。
+    /// 现在序号只在 SetColorFromUi（别人改了色）时同步，循环本身永远 +1。
+    /// </summary>
     private void CycleBandColor(bool highlighter)
     {
         var band = highlighter ? InkPalette.HighlighterBand : InkPalette.PenBand;
-        Color4 cur = highlighter ? HighlighterCurrent : CurrentColor;
-        int idx = -1;
-        for (int i = 0; i < band.Length; i++)
-            if (CloseColor(band[i].Color, cur)) { idx = i; break; }
-        int next = (idx + 1) % band.Length;
+        int idx = highlighter ? _hlColorIdx : _penColorIdx;
+        int next = ((idx % band.Length) + 1) % band.Length;
+        if (highlighter) _hlColorIdx = next; else _penColorIdx = next;
         SetColorFromUi(band[next].Color);      // 荧光笔的透明度由 SetColorFromUi 自己加
         Console.WriteLine($"连按 → {band[next].Name}");
     }
+
+    /// <summary>当前笔色 / 荧光色在色带里的序号（默认 红 / 荧光黄）。</summary>
+    private int _penColorIdx = 1;
+    private int _hlColorIdx;
 
     private static bool CloseColor(Color4 a, Color4 b) =>
         Math.Abs(a.R - b.R) < 0.10f && Math.Abs(a.G - b.G) < 0.10f && Math.Abs(a.B - b.B) < 0.10f;

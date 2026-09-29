@@ -383,6 +383,9 @@ public static class InkPalette
     /// </summary>
     public static readonly (string Name, Color4 Color)[] PenBand =
     {
+        // 2026-09-30 砍到 **8 格**（用户定）：删掉原来的 4 个"深色包边"（深蓝/墨绿/酒红/藏青）——
+        // 它们是给"浅底上用白笔包边"做的，老师日常用不到，混在循环里只会让人觉得"越转越暗"。
+        // 现在绕一圈 8 下（比 12 下快三分之一），而且全是投影上亮得起来的颜色。
         ("黑", new Color4(0.11f, 0.12f, 0.15f, 1f)),
         ("红", new Color4(0.95f, 0.18f, 0.18f, 1f)),
         ("蓝", new Color4(0.13f, 0.45f, 0.90f, 1f)),
@@ -391,10 +394,6 @@ public static class InkPalette
         ("橙", new Color4(0.98f, 0.55f, 0.09f, 1f)),
         ("紫", new Color4(0.55f, 0.28f, 0.86f, 1f)),
         ("白", new Color4(1.00f, 1.00f, 1.00f, 1f)),
-        ("深蓝", new Color4(0.086f, 0.204f, 0.369f, 1f)),
-        ("墨绿", new Color4(0.090f, 0.251f, 0.173f, 1f)),
-        ("酒红", new Color4(0.431f, 0.106f, 0.133f, 1f)),
-        ("藏青", new Color4(0.137f, 0.165f, 0.408f, 1f)),
     };
 
     /// <summary>
