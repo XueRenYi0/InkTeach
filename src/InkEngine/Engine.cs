@@ -1955,6 +1955,8 @@ public partial class InkEngine
         // （键盘在我们手里，不拦的话 WPS 收不到 ←→，什么都不发生——用户 2026-09-30 实测）。
         (0u, 0x25 /*←*/, KeyAction.PptPrev),
         (0u, 0x27 /*→*/, KeyAction.PptNext),
+        (0u, 0x26 /*↑*/, KeyAction.PanUp),
+        (0u, 0x28 /*↓*/, KeyAction.PanDown),
     };
     private bool _pptHotkeysOn;
 
@@ -6469,6 +6471,14 @@ public partial class InkEngine
             case KeyAction.PptNext:
                 if (Doc.Selected.Count > 0) Nudge(1f, 0f); else PptNextFromUi();
                 break;
+            // 放映时 ↑↓：**有选中 → 微调；没选中 → 上下挪视野**（和滚轮同一条"相机偏移"，
+            // 符号照滚轮那条注释：往"下"看 = ViewOffsetY 变小）。
+            case KeyAction.PanUp:
+                if (Doc.Selected.Count > 0) Nudge(0f, -1f); else ScrollCanvasBy(+72f);
+                break;
+            case KeyAction.PanDown:
+                if (Doc.Selected.Count > 0) Nudge(0f, 1f); else ScrollCanvasBy(-72f);
+                break;
         }
     }
 
@@ -9801,6 +9811,19 @@ public partial class InkEngine
     /// 变成"贴图 + 偶尔补一两块"。这也正是 Win32 ScrollWindowEx 和浏览器
     /// 合成器滚动图层用的手法。
     /// </summary>
+    /// <summary>
+    /// ↑↓（放映时）上下挪视野——和滚轮**同一条"相机偏移"**（只动视野，不动墨迹数据）。
+    /// 符号照滚轮那条：往"下"看 = <see cref="ViewOffsetY"/> 变小，所以 <paramref name="logicalDelta"/>
+    /// 为正 = 看上面的内容。一格 72 逻辑像素，和滚轮一格一致。
+    /// </summary>
+    private void ScrollCanvasBy(float logicalDelta)
+    {
+        ViewOffsetY += logicalDelta * DpiScale;
+        ClampViewOffset();
+        ScrollBarActiveAtMs = NowMs;
+        _dirty = true;
+    }
+
     internal IntPtr HandleWheel(IntPtr wParam)
     {
         int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);

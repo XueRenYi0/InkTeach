@@ -82,6 +82,10 @@ internal enum KeyAction
     PptPrev,
     /// <summary>放映批注模式：**代 WPS/PPT 翻下一页**。</summary>
     PptNext,
+    /// <summary>放映批注模式：↑ = 视口上移（看上面的内容；有选中时改为微调）。</summary>
+    PanUp,
+    /// <summary>放映批注模式：↓ = 视口下移（看下面的内容；有选中时改为微调）。</summary>
+    PanDown,
 }
 
 /// <summary>
