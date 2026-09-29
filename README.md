@@ -259,12 +259,39 @@ dotnet run --project src/InkTeach -c Release -- --memory reports/inkprobe-memory
 
 ### 自动更新（2026-09-29 起）
 
-**默认不检查**——没有配"更新源"时，「更多」抽屉里那一行显示"检查更新（未配置源）"，
-点它什么都不做。配好之后，那一行会变成"检查更新"→"检查中…"→"有新版本 8.0.1"，
-**再点一下**才开始下载（下载完校验 sha256 → 自动重启换成新版本）。
+**只在用户点击时才检查**（不联网偷看、不弹窗骚扰）：「更多」抽屉里那一行
+"检查更新"→点一下→"检查中…"→"已是最新" / "有新版本 8.0.1"，
+**再点一下**才开始下载（下载完校验 sha256 → 自动重启换成新版本；不到"下载"这一步不写盘）。
 
-**怎么配**（两种，都不用改 App）：`publish.ps1` 顶部的 `$updateBase`，
-或者用户机器上 `%APPDATA%\InkTeach\settings.json` 的 `update.url`（后者能覆盖前者）。
+**更新源是一串候选、按序回退**（`src/InkEngine/Update.cs` 的 `Sources`）：
+
+| 顺序 | 源 | 说明 |
+|---|---|---|
+| 1–5 | 国内 GitHub 加速站：`gh-proxy.com` / `ghfast.top` / `gh.jasonzeng.dev` / `gh.llkk.cc` / `ghproxy.net` | 教室机连不上 GitHub，靠它们过去。清单和 33 MB 的 zip 都实测能过（zip 走 `gh-proxy.com` 实测 **32.9 MB / 3 秒**，sha256 与清单一致） |
+| 6 | GitHub 直连 | 能上的机器走它最省事（但这台开发机的直连时好时坏，实测过 21 秒超时，所以放最后） |
+| 覆盖 | `settings.json` 的 `update.url`（**非空就只用它**） | 教室/校内：指到局域网共享最稳（见下） |
+
+三条实测结论（2026-09-29，动手选源前先看）：
+
+1. **大学镜像站这条路走不通**：清华 / 南大 / 北外 / 中科大 / CERNET 的
+   `github-release` 连 `cli/cli` 都是 404——那是**白名单制**，不覆盖任意仓库；
+2. **加速站会生老病死**：同批测的 `mirror.ghproxy.com`、`hub.gitmirror.com`、
+   `github.moeyy.xyz`、`ghproxy.cc`、`ghps.cc`、`gitdl.cn`、`kkgithub` 当时已挂/超时，
+   `bgithub` 只收 raw 文件、不收 zip。所以**要多列几条、按序回退**；
+   内容安全不靠它们——**sha256 对不上直接拒绝安装**（来路不明的东西绝不落盘）；
+3. 走加速站时，App 会把清单里的 **zip 地址自动套上同一个前缀**
+   （只重写 `github.com` 直链；局域网 / Gitee / 已带前缀的地址一律不动）——
+   不这么做就会出现"查得到新版、下不动包"。
+
+**换源不用改 App**，两种办法：
+`publish.ps1` 顶部的 `$updateBase`（改的是清单里 zip 的落点）；
+或者用户机器上 `%APPDATA%\InkTeach\settings.json`：
+
+```json
+{ "update": { "url": "\\\\教室服务器\\InkTeach\\update.json" } }
+```
+
+（局域网共享里放 `update.json` + zip 即可；这一条**最稳**，教室里推荐它。）
 
 **拿 GitHub 当源**（本项目现在就是这么配的，仓库 <https://github.com/XueRenYi0/InkTeach>）：
 

@@ -75,6 +75,25 @@ internal static class UpdateProbe
         var f3 = UpdateFeed.Fetch(Path.Combine(dir, "不存在.json"), out string e3);
         Check("取清单：不存在的文件 → 失败且给出原因", f3 == null && !string.IsNullOrEmpty(e3), e3 ?? "");
 
+        // ---- ③b 镜像加速站：候选表 + zip 地址前缀重写 ---------------------------
+        // 背景：教室机连不上 GitHub（实测 21 秒超时），所以候选表前面是国内加速站。
+        // 这里盯住两件"错了就装不上"的事：①候选表结构没被改坏；②清单里的 GitHub
+        // 直链必须被套上同一个前缀，否则会"查得到新版、下不动包"。
+        const string ghZip = "https://github.com/a/b/releases/download/v1/x.zip";
+        const string px = "https://gh-proxy.com/";
+        Check("镜像：候选源 >= 5 条且都指向同一份 raw 清单",
+              UpdateFeed.Sources.Length >= 5
+              && UpdateFeed.Sources.All(s => s.Url.Contains("InkTeach/main/update.json")));
+        Check("镜像：至少 3 条带加速前缀，GitHub 直连放最后一条",
+              UpdateFeed.Sources.Count(s => s.Prefix.Length > 0) >= 3
+              && UpdateFeed.Sources[UpdateFeed.Sources.Length - 1].Prefix.Length == 0);
+        Check("镜像：GitHub 直链 → 套上前缀", UpdateFeed.RewriteZipUrl(ghZip, px) == px + ghZip);
+        Check("镜像：局域网 / Gitee 地址 → 一律不动",
+              UpdateFeed.RewriteZipUrl(@"\\server\share\x.zip", px) == @"\\server\share\x.zip"
+              && UpdateFeed.RewriteZipUrl("https://gitee.com/a/b/raw/main/x.zip", px) == "https://gitee.com/a/b/raw/main/x.zip");
+        Check("镜像：无前缀（GitHub 直连那条）→ 不动", UpdateFeed.RewriteZipUrl(ghZip, "") == ghZip);
+        Check("镜像：已带前缀 → 不叠两次", UpdateFeed.RewriteZipUrl(px + ghZip, px) == px + ghZip);
+
         // ---- ④ sha256 与下载校验 ---------------------------------------------
         string payload = Path.Combine(dir, "payload.bin");
         var bytes = new byte[4096];

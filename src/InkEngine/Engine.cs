@@ -7092,7 +7092,7 @@ public partial class InkEngine
             {
                 UpdateState = UpdateStage.UpToDate;
                 UpdateText = "已是最新";
-                Console.WriteLine($"自动更新：已是最新（{UpdateFeed.CurrentVersion}）");
+                Console.WriteLine($"自动更新：已是最新（{UpdateFeed.CurrentVersion}；源 {UpdateFeed.HostOf(_updUsedUrl)}）");
             }
             else if (m.Url.Length == 0 || m.Sha256.Length == 0)
             {

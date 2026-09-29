@@ -37,31 +37,46 @@ public enum UpdateStage
 ///
 /// 三个设计决定：
 ///   1. **不用 GitHub API**（`/releases/latest` 那个匿名限流 60 次/小时，几十台教室机一起
-///      点就废了）。用 `releases/latest/download/update.json` 这个**恒定重定向**——
-///      每个 release 把 update.json 挂成附件即可，没有 API、没有 token。
-///   2. **地址默认留空**（<see cref="DefaultUrl"/>）：没配就什么都不做，
-///      界面显示"未配置更新源"。想换成局域网共享只改字符串，代码不动。
+///      点就废了）。清单放在**仓库里的一个文件**（raw 地址）——没有 API、没有 token，
+///      而且比 release 附件新（附件走 CDN，刚发新版时会有一段时间取回来还是旧的，实测过）。
+///   2. **一串候选源、按序回退**（见 <see cref="Sources"/>）：国内教室机连不上 GitHub，
+///      所以前面几项是国内加速站、最后一项才是 GitHub 直连；用户还可以用
+///      settings.json 的 `update.url` 换成局域网共享（**非空就只用它**）。
 ///   3. **换壳用 PowerShell 脚本**（Win10/11 自带），不落地 .cmd：路径里的空格、
 ///      中文、引号在 .cmd 里是灾难。脚本内容固定，路径用参数传。
 /// </summary>
 internal static class UpdateFeed
 {
+    /// <summary>清单在 GitHub 仓库里的原始地址（所有加速站都指向它）。</summary>
+    private const string RawUrl =
+        "https://raw.githubusercontent.com/XueRenYi0/InkTeach/main/update.json";
+
     /// <summary>
-    /// 更新源候选表（**按顺序试，第一个成功的算数**）。
+    /// 更新源候选表（**按顺序试，第一个成功的算数**）。每项 = (前缀, 上游地址)：
+    /// 前缀非空 = "这台机器连不上 GitHub，借一个国内加速站过去"。
     ///
-    /// 为什么是"一串"而不是"一个"：国内教室机连不上 GitHub（本机实测 21 秒超时），
-    /// 所以**主源放国内镜像**（Gitee），GitHub 那条留作备选；用户还可以用
-    /// settings.json 的 `update.url` 覆盖成局域网共享（教室环境最稳的一条）。
+    /// 为什么需要它们（2026-09-29 实测：教室网络直连 GitHub 21 秒超时）：
+    /// 下面 5 个加速站当时**清单和 33 MB 的 zip 都能过**——zip 走 gh-proxy.com
+    /// 实测 32.9 MB / 3 秒、**sha256 与清单一致**；同时测的另外 9 个
+    /// （mirror.ghproxy.com / hub.gitmirror.com / github.moeyy.xyz / ghproxy.cc /
+    /// ghps.cc / gitdl.cn / kkgithub / bgithub[只收 raw、不收 zip] 等）当时已挂或超时。
+    /// 加速站会生老病死，**多列几个、按序回退**就是为这个；内容安全不靠它们：
+    /// 下载后 sha256 对不上直接拒绝安装。
     ///
-    /// ⚠ 每面镜像要**各自的清单**：清单里的 `url` 得指向那一侧的 zip
-    /// （`publish.ps1` 按 `$updateBase` 生成；多镜像时每侧各生成一份）。
+    /// 大学镜像站那条路走不通：清华 / 南大 / 北外 / 中科大 / CERNET 的
+    /// `github-release` 实测**都不覆盖任意仓库**（连 cli/cli 都是 404，白名单制）。
+    ///
+    /// 用户可以用 settings.json 的 `update.url` 换成局域网共享（**非空就只用它**，
+    /// 教室环境最稳的一条）。
     /// </summary>
-    public static readonly string[] Sources =
+    public static readonly (string Prefix, string Url)[] Sources =
     {
-        // TODO(镜像)：建好 Gitee 仓库后把这条填上（格式：https://gitee.com/<账号>/<仓库>/raw/<分支>/update.json）。
-        //            没填（含"&lt;账号&gt;"）会被自动跳过，不影响 GitHub 那条。
-        "https://gitee.com/<账号>/<仓库>/raw/master/update.json",
-        "https://raw.githubusercontent.com/XueRenYi0/InkTeach/main/update.json",
+        ("https://gh-proxy.com/",     RawUrl),
+        ("https://ghfast.top/",       RawUrl),
+        ("https://gh.jasonzeng.dev/", RawUrl),
+        ("https://gh.llkk.cc/",       RawUrl),
+        ("https://ghproxy.net/",      RawUrl),
+        ("",                          RawUrl),   // GitHub 直连（能上的机器走它最省事）
     };
 
     /// <summary>
@@ -76,8 +91,8 @@ internal static class UpdateFeed
         get
         {
             if (Url.Length > 0) return true;
-            foreach (var u in Sources)
-                if (!string.IsNullOrWhiteSpace(u) && !u.Contains("<账号>")) return true;
+            foreach (var s in Sources)
+                if (!string.IsNullOrWhiteSpace(s.Url) && !s.Url.Contains("<账号>")) return true;
             return false;
         }
     }
@@ -99,15 +114,41 @@ internal static class UpdateFeed
         }
 
         var errs = new List<string>();
-        foreach (var u in Sources)
+        foreach (var s in Sources)
         {
-            if (string.IsNullOrWhiteSpace(u) || u.Contains("<账号>")) continue;   // 还没填的跳过
-            var m = Fetch(u, out string e);
-            if (m != null) { usedUrl = u; return m; }
-            errs.Add($"{HostOf(u)}：{e}");
+            if (string.IsNullOrWhiteSpace(s.Url) || s.Url.Contains("<账号>")) continue;   // 还没填的跳过
+            var m = Fetch(s.Url, out string e);
+            if (m != null)
+            {
+                usedUrl = s.Prefix + s.Url;
+                RewriteZipUrl(m, s.Prefix);
+                return m;
+            }
+            errs.Add($"{HostOf(s.Url)}：{e}");
         }
         error = errs.Count > 0 ? string.Join("；", errs) : "没有配置任何更新源";
         return null;
+    }
+
+    /// <summary>
+    /// 走加速站时，把清单里的 **zip 地址也套上同一个前缀**。
+    ///
+    /// 为什么必须重写：教室机连不上 GitHub，清单里写的是 `github.com/.../下载/zip`
+    /// 直链，不套前缀就下不动（清单几百字节能过、33 MB 的包过不去，那就成了
+    /// "查得到新版、装不上"）。只重写**指向 GitHub 的**地址：局域网共享、
+    /// 已经带前缀的、或其它镜像的地址一律不动。
+    /// </summary>
+    private static void RewriteZipUrl(Manifest m, string prefix) => m.Url = RewriteZipUrl(m.Url, prefix);
+
+    /// <summary>（纯函数版，方便自检）把 GitHub 直链套上加速站前缀，见上面的说明。</summary>
+    internal static string RewriteZipUrl(string url, string prefix)
+    {
+        if (prefix.Length == 0 || url.Length == 0) return url;
+        if (url.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return url;
+        if (url.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase) ||
+            url.StartsWith("http://github.com/", StringComparison.OrdinalIgnoreCase))
+            return prefix + url;
+        return url;
     }
 
     /// <summary>日志里只写主机名，别把整条长 URL 糊上去。</summary>
