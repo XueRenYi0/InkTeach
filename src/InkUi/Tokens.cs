@@ -305,23 +305,7 @@ internal static class Tokens
     /// ⚠ 色片的高亮是**按颜色值比**的（`IsSwatchActive`，阈值 0.02），所以这张表里
     /// 的颜色值和引擎的默认色（`InkPalette.PenDefault` = 红）必须对得上——现在一致。
     /// </summary>
-    public static readonly (string Name, Color4 Color)[] Palette =
-    {
-        // ---- 1~8 常用 ----
-        ("黑", new Color4(0.11f, 0.12f, 0.15f, 1f)),
-        ("红", new Color4(0.95f, 0.18f, 0.18f, 1f)),
-        ("蓝", new Color4(0.13f, 0.45f, 0.90f, 1f)),
-        ("绿", new Color4(0.13f, 0.70f, 0.33f, 1f)),
-        ("黄", new Color4(0.98f, 0.82f, 0.12f, 1f)),
-        ("橙", new Color4(0.98f, 0.55f, 0.09f, 1f)),
-        ("紫", new Color4(0.55f, 0.28f, 0.86f, 1f)),
-        ("白", new Color4(1.00f, 1.00f, 1.00f, 1f)),
-        // ---- 9~12 深色「包边」----
-        ("深蓝", new Color4(0.086f, 0.204f, 0.369f, 1f)),
-        ("墨绿", new Color4(0.090f, 0.251f, 0.173f, 1f)),
-        ("酒红", new Color4(0.431f, 0.106f, 0.133f, 1f)),
-        ("藏青", new Color4(0.137f, 0.165f, 0.408f, 1f)),
-    };
+    public static readonly (string Name, Color4 Color)[] Palette = InkEngine.InkPalette.PenBand;
 
     /// <summary>
     /// **荧光笔的色片表**（和笔那张分开，2026-09-27 用户定的"独立一张亮色表"）。
@@ -336,12 +320,5 @@ internal static class Tokens
     ///（高亮是按颜色值比出来的，阈值 0.02，差一点就匹配不上）。
     /// 所以这张表**别单独改第一个色**，要改就两处一起改。
     /// </summary>
-    public static readonly (string Name, Color4 Color)[] HighlighterPalette =
-    {
-        ("荧光黄", new Color4(1.00f, 0.85f, 0.15f, 1f)),
-        ("荧光绿", new Color4(0.47f, 0.94f, 0.47f, 1f)),
-        ("荧光青", new Color4(0.43f, 0.92f, 0.96f, 1f)),
-        ("荧光粉", new Color4(1.00f, 0.51f, 0.71f, 1f)),
-        ("荧光橙", new Color4(1.00f, 0.67f, 0.27f, 1f)),
-    };
+    public static readonly (string Name, Color4 Color)[] HighlighterPalette = InkEngine.InkPalette.HighlighterBand;
 }

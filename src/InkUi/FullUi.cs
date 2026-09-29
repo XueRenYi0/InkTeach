@@ -2523,7 +2523,15 @@ public sealed class FullUi : IOverlayUi
         float left = a.X - _screen.MinX;
         float right = _screen.MaxX - (a.X + w);
         float top = a.Y - _screen.MinY;
-        float bottom = _screen.MaxY - (a.Y + h);
+        // **下边按"工作区底"算**（2026-09-29 用户反馈修）：以前按**屏幕**底，面板一拖到
+        // 任务栏附近就被吸到**任务栏后面**——视觉上"往下掉了一大截"。默认位置和贴边隐藏
+        // 早就按工作区算了，只有这里漏了。
+        // ⚠ 面板在主屏那一块时才用工作区底；拖到副屏就退回屏幕底（多屏的工作区拿不到，
+        //   见 WorkOrScreenBottom 的说明——那条和多屏 DPI 是同一批的活）。
+        float cx = a.X + w * 0.5f, cy = a.Y + h * 0.5f;
+        bool onPrimary = cx >= _work.MinX && cx <= _work.MaxX && cy >= _work.MinY && cy <= _work.MaxY;
+        float bottomLine = onPrimary ? WorkOrScreenBottom() : _screen.MaxY;
+        float bottom = bottomLine - (a.Y + h);
 
         float best = Math.Min(Math.Min(left, right), Math.Min(top, bottom));
         if (best > Tokens.SnapDistance) return;          // 不够近：不吸附（拖到哪儿就哪儿）
@@ -2532,7 +2540,7 @@ public sealed class FullUi : IOverlayUi
         if (best == left) want.X = _screen.MinX + Tokens.DockGap;
         else if (best == right) want.X = _screen.MaxX - Tokens.DockGap - w;
         else if (best == top) want.Y = _screen.MinY + Tokens.DockGap;
-        else want.Y = _screen.MaxY - Tokens.DockGap - h;
+        else want.Y = bottomLine - Tokens.DockGap - h;
 
         _anchor = want;
     }

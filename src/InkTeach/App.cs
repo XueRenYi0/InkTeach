@@ -4343,27 +4343,27 @@ internal sealed class App : InkEngine.InkEngine
         Check("只有修饰键要报错", !ok5 && err5 != null, err5);
 
         // ---- 3. 冲突检测 ----
-        // 样本动作用**笔**（全局里最常用的那一个）：以前用的是"全局撤销"，
-        // 而全局撤销 2026-09-19 已经降级成应用内的 Ctrl+Z，再拿它当样本就是拿一个
-        // 不存在的条目做实验（`TrySet` 会以"这个作用域里没有这个动作"直接失败，
-        // 冲突检测那一条于是变成假通过）。
-        bool taken = map.TrySet(KeyScope.Global, KeyAction.ToolPen, c1, out string errTaken);
+        // 样本用**穿透模式开关**：它是全局里必留的那几条之一（2026-09-29 全局只剩
+        // 穿透/键盘模式/退出，笔和橡皮都降到批注内了——拿 ToolPen 当样本会以
+        // "这个作用域里没有这个动作"直接失败，冲突检测那一条就成了假通过）。
+        KeyChord.TryParse("Ctrl+Alt+X", out var takenChord, out _);     // 被"退出"占着
+        bool taken = map.TrySet(KeyScope.Global, KeyAction.TogglePassThrough, takenChord, out string errTaken);
         Check("撞了别人的键要拒绝并说清是谁", !taken && errTaken != null
-              && errTaken.Contains("穿透"), errTaken);
+              && errTaken.Contains("退出"), errTaken);
 
         KeyChord.TryParse("F5", out var noMod, out _);
-        bool bare = map.TrySet(KeyScope.Global, KeyAction.ToolPen, noMod, out string errBare);
+        bool bare = map.TrySet(KeyScope.Global, KeyAction.TogglePassThrough, noMod, out string errBare);
         Check("全局热键没有修饰键要拒绝", !bare && errBare != null, errBare);
 
         KeyChord.TryParse("Ctrl+Alt+F5", out var free, out _);
-        bool moved = map.TrySet(KeyScope.Global, KeyAction.ToolPen, free, out string errMove);
+        bool moved = map.TrySet(KeyScope.Global, KeyAction.TogglePassThrough, free, out string errMove);
         Check("没冲突就能改，并标记成脏",
-              moved && map.Dirty && map.Find(KeyScope.Global, KeyAction.ToolPen).Chord.Equals(free),
-              $"笔 → {map.Find(KeyScope.Global, KeyAction.ToolPen).Chord}");
+              moved && map.Dirty && map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.Equals(free),
+              $"穿透 → {map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord}");
 
-        map.ResetToDefault(KeyScope.Global, KeyAction.ToolPen);
-        Check("能恢复默认键", map.Find(KeyScope.Global, KeyAction.ToolPen).Chord.ToString() == "Ctrl+Alt+1",
-              map.Find(KeyScope.Global, KeyAction.ToolPen).Chord.ToString());
+        map.ResetToDefault(KeyScope.Global, KeyAction.TogglePassThrough);
+        Check("能恢复默认键", map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+P",
+              map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString());
 
         // ---- 4. 落盘 / 读回 / 坏文件 ----
         string cfg = Path.Combine(Path.GetTempPath(), "inkteach-keytest.json");
@@ -4382,7 +4382,7 @@ internal sealed class App : InkEngine.InkEngine
                   warns.Count == 0 ? $"退出键 → {reloaded.Find(KeyScope.Global, KeyAction.Quit).Chord}"
                                    : string.Join("；", warns));
             Check("没改过的项仍是默认值（只写差异）",
-                  reloaded.Find(KeyScope.Global, KeyAction.ToolPen).Chord.ToString() == "Ctrl+Alt+1", "");
+                  reloaded.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+P", "");
             Check("只写差异：文件里应当只有 1 条", File.ReadAllText(cfg).Split('\n')
                   .Count(l => l.Contains("\"Global.")) == 1, "");
 
@@ -11863,6 +11863,14 @@ internal sealed class App : InkEngine.InkEngine
         }
         Console.WriteLine($"  渲染尺寸 {bw}×{bh}（为它把窗口 DPI 临时抬到 {want}）");
 
+        // **圆外一律清成完全透明**（用户 2026-09-29 反馈："图标不是正圆、隐约能看见方框"）：
+        // 球底下的投影是一团**方形**柔光，方框那圈像素带一点点黑——实测 256×256 那帧
+        // 最外一圈 1020 个像素里 782 个 α>0、最高 α≈23/255，圆外也有一批 α≈26。
+        // 图标就该是一个干净的圆，所以按量出来的球半径做一次圆形蒙版（边缘 1px 抗锯齿）。
+        int rIcon = IconRadiusPx(px, bw, bh);
+        MaskIconToCircle(px, bw, bh, rIcon);
+        Console.WriteLine($"  圆形蒙版：半径 {rIcon}px（球外面那圈方形投影清成透明）");
+
         try
         {
             string dir = Path.GetDirectoryName(Path.GetFullPath(path));
@@ -11877,6 +11885,43 @@ internal sealed class App : InkEngine.InkEngine
         }
         catch (Exception ex) { Console.WriteLine("  出图标失败：" + ex.Message); }
         _quit = true;
+    }
+
+    /// <summary>
+    /// 量出"球"的半径（像素）：沿中心行/列找 α≥96 的最远点，取两者的较小值。
+    /// 为什么要量而不是算：真实半径由界面渲染（含 DPI 缩放与投影）决定，硬算容易差几像素。
+    /// 投影的 α 很小（≤30 上下），进不了 96 这道门，所以量到的是球本身。
+    /// </summary>
+    private static int IconRadiusPx(byte[] bgra, int w, int h)
+    {
+        int cx = w / 2, cy = h / 2, rx = 0, ry = 0;
+        for (int x = 0; x < w; x++) if (bgra[(cy * w + x) * 4 + 3] >= 96) rx = Math.Max(rx, Math.Abs(x - cx));
+        for (int y = 0; y < h; y++) if (bgra[(y * w + cx) * 4 + 3] >= 96) ry = Math.Max(ry, Math.Abs(y - cy));
+        return Math.Max(1, Math.Min(rx, ry) - 1);      // 再收 1px：把抗锯齿那圈也收进去
+    }
+
+    /// <summary>
+    /// 圆形 alpha 蒙版：圆外全透明，边缘 1px 线性过渡（抗锯齿）。
+    /// ⚠ 数据是**预乘** BGRA，四个分量要一起乘——只把 α 清零会留下黑边（预乘的经典坑）。
+    /// </summary>
+    private static void MaskIconToCircle(byte[] bgra, int w, int h, int radius)
+    {
+        float cx = w / 2f, cy = h / 2f;
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
+                float d = MathF.Sqrt(dx * dx + dy * dy);
+                float k = Math.Clamp(radius - d + 0.5f, 0f, 1f);      // 圆内 1、圆外 0、边缘过渡
+                if (k >= 1f) continue;
+                int o = (y * w + x) * 4;
+                bgra[o]     = (byte)(bgra[o]     * k);
+                bgra[o + 1] = (byte)(bgra[o + 1] * k);
+                bgra[o + 2] = (byte)(bgra[o + 2] * k);
+                bgra[o + 3] = (byte)(bgra[o + 3] * k);
+            }
+        }
     }
 
     /// <summary>BGRA（D2D 的**预乘**格式）→ GDI+ 位图。像素行是自上而下的。</summary>

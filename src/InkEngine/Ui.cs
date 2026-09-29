@@ -375,6 +375,44 @@ public static class InkPalette
     public static Color4 ToHighlighter(Color4 pen) => new(pen.R, pen.G, pen.B, 0.32f);
 
     /// <summary>
+    /// **笔的色带顺序**（和界面上那排色片一一对应）。放在引擎层是因为**热键换色要用它**
+    /// （Ctrl+P 连按 = 换下一个颜色、按住 1 秒 = 回第一个），见 Engine.CycleBandColor。
+    /// 界面那边的 `InkUi.Tokens.Palette` 就是**指向这张表**（别各写一份，会飘）。
+    ///
+    /// 顺序 = 点笔格切色的顺序：常用的排前面（黑红蓝绿黄橙紫白），深色「包边」垫后。
+    /// </summary>
+    public static readonly (string Name, Color4 Color)[] PenBand =
+    {
+        ("黑", new Color4(0.11f, 0.12f, 0.15f, 1f)),
+        ("红", new Color4(0.95f, 0.18f, 0.18f, 1f)),
+        ("蓝", new Color4(0.13f, 0.45f, 0.90f, 1f)),
+        ("绿", new Color4(0.13f, 0.70f, 0.33f, 1f)),
+        ("黄", new Color4(0.98f, 0.82f, 0.12f, 1f)),
+        ("橙", new Color4(0.98f, 0.55f, 0.09f, 1f)),
+        ("紫", new Color4(0.55f, 0.28f, 0.86f, 1f)),
+        ("白", new Color4(1.00f, 1.00f, 1.00f, 1f)),
+        ("深蓝", new Color4(0.086f, 0.204f, 0.369f, 1f)),
+        ("墨绿", new Color4(0.090f, 0.251f, 0.173f, 1f)),
+        ("酒红", new Color4(0.431f, 0.106f, 0.133f, 1f)),
+        ("藏青", new Color4(0.137f, 0.165f, 0.408f, 1f)),
+    };
+
+    /// <summary>
+    /// **荧光笔的色带顺序**（界面上的 `Tokens.HighlighterPalette` 指向它）。
+    /// 表里存的是**基色**，画的时候要过一遍 <see cref="ToHighlighter"/>（`SwitchTool` 里做）。
+    /// ⚠ 第一个「荧光黄」的基色必须等于 <see cref="HighlighterDefault"/> 的 RGB——
+    /// 否则启动时那个色片不会亮（高亮是按颜色值比的）。
+    /// </summary>
+    public static readonly (string Name, Color4 Color)[] HighlighterBand =
+    {
+        ("荧光黄", new Color4(1.00f, 0.85f, 0.15f, 1f)),
+        ("荧光绿", new Color4(0.47f, 0.94f, 0.47f, 1f)),
+        ("荧光青", new Color4(0.43f, 0.92f, 0.96f, 1f)),
+        ("荧光粉", new Color4(1.00f, 0.51f, 0.71f, 1f)),
+        ("荧光橙", new Color4(1.00f, 0.67f, 0.27f, 1f)),
+    };
+
+    /// <summary>
     /// 白板的三种底色。老师实际就这三种用法：白板讲课、绿板（像传统黑板）、
     /// 黑板（投影暗的时候不刺眼）。界面直接拿它画那三格。
     /// </summary>

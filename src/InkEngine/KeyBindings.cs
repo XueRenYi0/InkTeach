@@ -366,12 +366,18 @@ internal sealed class KeyMap
     /// **应用内快捷键全部失效**，降级等于把唯一的回头路锁死。
     ///
     /// 判据写在这里的用途是"下次加键时有根尺子"，不是装饰：`--keytest` 会断言
-    /// **全局里不许出现这 5 个之外的动作**。
+    /// **全局里不许出现这 2 个之外的动作**。
     /// </summary>
+    /// <remarks>
+    /// 2026-09-29 又砍了一次（用户定）：**只留穿透 + 退出**。
+    /// 理由：老师的手写板笔上只有两个按钮，工具类靠"应用内 + 手势"（Ctrl+P 那套）就够了；
+    /// 全局热键是**抢别的程序的键**，越少越好。键盘模式（原来 Ctrl+Alt+K）挪到
+    /// 「更多」抽屉里用鼠标点（见 FullUi 的 Row.KeyboardMode）——因为它一关，
+    /// 应用内快捷键全部失效，**回头路必须留一条**（鼠标那条）。
+    /// </remarks>
     private static readonly KeyAction[] GlobalAllowed =
     {
-        KeyAction.TogglePassThrough, KeyAction.ToolPen, KeyAction.ToolEraser,
-        KeyAction.ToggleKeyboardMode, KeyAction.Quit,
+        KeyAction.TogglePassThrough, KeyAction.ToggleKeyboardMode, KeyAction.Quit,
     };
 
     /// <summary>自检用：全局作用域允许出现哪些动作（见上面的说明）。</summary>
@@ -384,9 +390,7 @@ internal sealed class KeyMap
 
         // ---- 全局：最最常用的 5 条（见 GlobalAllowed 的说明）----
         m.Add(G, KeyAction.TogglePassThrough, "Ctrl+Alt+P", "全屏批注：能画 / 不能画");
-        m.Add(G, KeyAction.ToolPen, "Ctrl+Alt+1", "换成笔");
-        m.Add(G, KeyAction.ToolEraser, "Ctrl+Alt+4", "换成橡皮擦（碰到哪一条就整条删掉）");
-        m.Add(G, KeyAction.ToggleKeyboardMode, "Ctrl+Alt+K", "键盘归批注层（编辑与工具快捷键生效）");
+        m.Add(G, KeyAction.ToggleKeyboardMode, "Ctrl+Alt+K", "键盘归批注层（编辑与工具快捷键生效）——唯一的回头路，必须全局");
         m.Add(G, KeyAction.Quit, "Ctrl+Alt+X", "退出");
 
         // ---- 应用内：原有那一批（编辑类 + 翻页 + 微调）----
@@ -426,15 +430,27 @@ internal sealed class KeyMap
         // 图形（直线/矩形/椭圆/圆/三角形/平行四边形/箭头/坐标系）**一个键都没有**
         // （用户 2026-09-19 定："图形不需要加快捷键，通通取消掉"）：它们的入口就是
         // 主条「图形」那一格的上带——点一下就是换一种，比记八个 `Ctrl+Alt+?` 快。
-        m.Add(A, KeyAction.ToolHighlighter, "Ctrl+2", "换成荧光笔（半透明大笔）");
-        m.Add(A, KeyAction.ToolLaser, "Ctrl+3", "换成激光笔（只留痕迹，不留墨）");
+        // ---- 五个主工具键：对齐 PowerPoint 放映那一套（用户 2026-09-29 定）----
+        //
+        // 为什么是 PPT 那套：Ctrl+P / Ctrl+I / Ctrl+E / Ctrl+L 正好是 PowerPoint 放映里的
+        // 笔 / 荧光笔 / 橡皮 / 激光笔，老师换软件不用重新学；Ctrl+M = 选中是我们自己补的一格。
+        //
+        // **每个工具键都有三段手势**（手写板的笔上只有两个按钮，靠它把功能摊开，
+        // 见 Engine.ToolKeyDown / ToolKeyUp / PumpKeyGestures）：
+        //   · 单击           = 切到它；**已经是它** → 连按就换色/换档（和点面板那一格一样）
+        //   · 快速双击(≤350ms) = 主工具往后轮一格：笔 → 荧光笔 → 激光笔 → 橡皮 → 选中 → 笔
+        //   · 按住(≥0.6s)     = 回第一个颜色 / 第一档
+        m.Add(A, KeyAction.ToolPen, "Ctrl+P", "换成笔（已是笔→连按换色；双击换主工具；按住回第一色）");
+        m.Add(A, KeyAction.ToolHighlighter, "Ctrl+I", "换成荧光笔（半透明大笔；手势同笔）");
+        m.Add(A, KeyAction.ToolLaser, "Ctrl+L", "换成激光笔（只留痕迹，不留墨）");
+        m.Add(A, KeyAction.ToolEraser, "Ctrl+E", "换成橡皮擦（碰到哪一条就整条删掉；连按切整笔/面积）");
+        m.Add(A, KeyAction.ToolMarquee, "Ctrl+M", "换成框选（选择/移动/缩放/旋转；连按切矩形/套索）");
+        // 下面两条是**旧键留的别名**（学过的老师和文档不用改）
         m.Add(A, KeyAction.ToolPixelEraser, "Ctrl+7", "换成像素橡皮（只擦掉碰到的一块，一笔会切成两段）");
-        m.Add(A, KeyAction.ToolMarquee, "Ctrl+5", "换成框选（选择/移动/缩放/旋转）");
-        m.Add(A, KeyAction.ToolCapture, "Ctrl+S", "截图：拖一个框，抓到的图放到左上角、自动选中并进剪贴板");
         m.Add(A, KeyAction.SelectShape, "Ctrl+9", "选择方式：矩形框 ←→ 自由套索（面板上跟着显示）");
+        m.Add(A, KeyAction.ToolCapture, "Ctrl+S", "截图：拖一个框，抓到的图放到左上角、自动选中并进剪贴板");
         m.Add(A, KeyAction.CycleWidth, "Ctrl+6", "切成当前工具的下一档粗细");
         m.Add(A, KeyAction.SplitErased, "Ctrl+8", "把选中的、被擦断的笔迹拆成独立对象（只服务老存档）");
-        m.Add(A, KeyAction.ToggleHud, "Ctrl+I", "显示/隐藏性能面板");
         m.Add(A, KeyAction.Clear, "Ctrl+Shift+C", "清空整页（可撤销）");
         return m;
     }

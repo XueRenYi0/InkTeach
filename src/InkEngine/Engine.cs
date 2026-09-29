@@ -1589,6 +1589,16 @@ public partial class InkEngine
         // 放这里读，是为了"用户改配置文件不用重新编译"。
         UpdateFeed.Url = InkSettings.LoadUpdateUrl() ?? "";
 
+        // **有更新源 → 初始状态就是"检查更新"**（而不是"未配置源"）。
+        // `UpdateText` 的默认值是"未配置更新源"，那是给"真的一个源都没有"准备的；
+        // 以前不管有没有源，一打开就显示"检查更新（未配置源）"，看着像坏了
+        // （用户 2026-09-29 反馈）。界面那边 `UpdateStage.Idle` 显示的就是"检查更新"。
+        if (UpdateFeed.HasAnySource)
+        {
+            UpdateState = UpdateStage.Idle;
+            UpdateText = "";
+        }
+
         // **上一次是自动更新装上来的吗**：换壳脚本会在更新目录里留一个 done.txt。
         // 看到它 = 本次启动就是"更新完的第一次启动"，在界面上明说一句
         // （「更多」抽屉那一行会显示"已更新到 x.y.z"），然后把标记删掉——只说一次。
@@ -1903,6 +1913,7 @@ public partial class InkEngine
             if (_quit) break;
 
             NowMs = _clock.Elapsed.TotalMilliseconds;
+            PumpKeyGestures();            // 工具键的手势：长按判定 + 连按换色的延迟结算
 
             if (NowMs >= _autoExitAt) break;
 
@@ -2253,7 +2264,14 @@ public partial class InkEngine
         // 滚轮：滚动画布（只改相机偏移，不动对象数据）。见 HandleWheel。
         if (msg == 0x020A /*WM_MOUSEWHEEL*/) return HandleWheel(wParam);
         // 批注键盘模式下的按键。只有这个模式收得到——见 SetKeyboardMode。
-        if ((msg == Native.WM_KEYDOWN || msg == Native.WM_SYSKEYDOWN) && HandleKeyDown(wParam))
+        // 工具键（Ctrl+P/I/L/E/M）走手势状态机，需要"松键"和"是不是自动重复"两件事：
+        // 自动重复 = lParam bit30（见 ToolKeyDown 的说明）。
+        if (msg == Native.WM_KEYDOWN || msg == Native.WM_SYSKEYDOWN)
+        {
+            bool repeat = (lParam.ToInt64() & 0x40000000) != 0;
+            if (HandleKeyDown(wParam, repeat)) return IntPtr.Zero;
+        }
+        if ((msg == Native.WM_KEYUP || msg == Native.WM_SYSKEYUP) && HandleKeyUp(wParam))
             return IntPtr.Zero;
 
         switch (msg)
@@ -9362,7 +9380,189 @@ public partial class InkEngine
     /// 已知待改：方向键按住会重复触发，每次都是一条撤销记录。要接"连续微调
     /// 合并成一步"，得等编辑命令支持合并（撤销栈里相邻同类动作合并）。
     /// </summary>
-    private bool HandleKeyDown(IntPtr wParam)
+    // ================= 工具键的"手势"状态机 =================
+    //
+    // 手写板的笔上只有两个按钮，所以工具键要"一键多用"（用户 2026-09-29 定）：
+    //   · 单击             = 切到它；**已经是它** → 连按换色/换档（和点面板那一格一个规矩）
+    //   · 快速双击(≤350ms) = 主工具往后轮一格：笔 → 荧光笔 → 激光笔 → 橡皮 → 选中 → 笔
+    //   · 按住(≥0.6s)      = 回第一个颜色 / 第一档
+    //
+    // 为什么要"延迟 250ms 结算连按换色"：双击和"同键连按"只能靠时间分开。
+    // 延迟只落在**最后一击**上：连按时下一击一到就立刻结算，手感是连续的。
+    private const double ToolKeyDoubleMs = 350;   // 两击间隔 ≤ 它 = 双击
+    private const double ToolKeyHoldMs = 600;     // 按住 ≥ 它 = 长按
+    // 连按动作（换色/换档）在**松手后**再等这么久才结算。
+    // ⚠ 必须 > ToolKeyDoubleMs：双击是"第二次按下落在上次松手后 350ms 内"，
+    //   结算若比它早，双击就会被"先换了色、再切工具"（2026-09-29 自己踩过）。
+    private const double ToolKeyRepeatMs = 400;
+
+    private sealed class KeyGesture
+    {
+        public double DownAt = -1;      // 本次按下时刻；-1 = 没按着
+        public double UpAt = -1;        // 上次松开时刻；-1 = 不参与双击判定（刚长按完）
+        public bool HoldFired;          // 本次按住已经触发过长按
+        public bool WantsRepeat;        // 这一击落在"已经在这个工具上" → 松手后要换色/换档
+        public double PendingAt = -1;   // 待结算的"连按动作"时刻
+        public KeyAction PendingWhat;
+    }
+
+    private readonly Dictionary<KeyAction, KeyGesture> _gestures = new();
+
+    private KeyGesture Gest(KeyAction a)
+    {
+        if (!_gestures.TryGetValue(a, out var g)) _gestures[a] = g = new KeyGesture();
+        return g;
+    }
+
+    /// <summary>这些键走手势状态机（单击/双击/长按），其余键照旧一按一动。</summary>
+    private static bool IsToolKey(KeyAction a) => a
+        is KeyAction.ToolPen or KeyAction.ToolHighlighter or KeyAction.ToolLaser
+        or KeyAction.ToolEraser or KeyAction.ToolPixelEraser or KeyAction.ToolMarquee;
+
+    /// <summary>主工具的轮换顺序（双击往后一格）。</summary>
+    private static readonly Tool[] MainToolCycle =
+        { Tool.Pen, Tool.Highlighter, Tool.Laser, Tool.Eraser, Tool.Marquee };
+
+    private static Tool ToolOf(KeyAction a) => a switch
+    {
+        KeyAction.ToolPen => Tool.Pen,
+        KeyAction.ToolHighlighter => Tool.Highlighter,
+        KeyAction.ToolLaser => Tool.Laser,
+        KeyAction.ToolEraser => Tool.Eraser,
+        KeyAction.ToolPixelEraser => Tool.PixelEraser,
+        _ => Tool.Marquee,
+    };
+
+    /// <summary>双击：主工具往后轮一格（图形/截图这些不在循环里 → 从笔开始）。</summary>
+    private void NextMainTool()
+    {
+        int i = Array.IndexOf(MainToolCycle, Tool);
+        var next = MainToolCycle[(i + 1) % MainToolCycle.Length];
+        SwitchTool(next);
+        Console.WriteLine($"工具键双击 → {ToolName(next)}");
+    }
+
+    private bool ToolKeyDown(KeyAction a, double now)
+    {
+        var g = Gest(a);
+        if (g.DownAt >= 0) return true;                            // 自动重复的按下：忽略，等松手
+        bool dbl = g.UpAt >= 0 && now - g.UpAt <= ToolKeyDoubleMs;
+        g.DownAt = now;
+        g.HoldFired = false;
+        g.WantsRepeat = false;
+        if (dbl)
+        {
+            CancelPending(g);
+            g.UpAt = -1;                                            // 双击后不再连着判"第三击"
+            NextMainTool();
+            return true;
+        }
+        var target = ToolOf(a);
+        if (Tool != target) { SwitchTool(target); return true; }     // 单击：立即切（要快）
+        // 已经在这个工具上 → 松手后 400ms 执行"连按动作"（等一等看是不是双击）
+        g.WantsRepeat = true;
+        return true;
+    }
+
+    private bool ToolKeyUp(KeyAction a, double now)
+    {
+        var g = Gest(a);
+        if (g.DownAt < 0) return false;
+        double held = now - g.DownAt;
+        g.DownAt = -1;
+        if (held >= ToolKeyHoldMs || g.HoldFired) { g.UpAt = -1; g.WantsRepeat = false; return true; }
+        g.UpAt = now;                                               // 短按：记下来给双击判定用
+        if (g.WantsRepeat)
+        {
+            g.WantsRepeat = false;
+            g.PendingAt = now + ToolKeyRepeatMs;
+            g.PendingWhat = a;
+        }
+        return true;
+    }
+
+    /// <summary>每帧一次：长按判定 + 连按动作的延迟结算。</summary>
+    private void PumpKeyGestures()
+    {
+        double now = NowMs;
+        foreach (var (a, g) in _gestures)
+        {
+            if (g.DownAt >= 0 && !g.HoldFired && now - g.DownAt >= ToolKeyHoldMs)
+            {
+                g.HoldFired = true;
+                CancelPending(g);
+                ResetToolToFirst(a);
+                continue;
+            }
+            if (g.PendingAt >= 0 && now >= g.PendingAt)
+            {
+                var what = g.PendingWhat;
+                CancelPending(g);
+                DoToolKeyRepeat(what);
+            }
+        }
+    }
+
+    private static void CancelPending(KeyGesture g) => g.PendingAt = -1;
+
+    /// <summary>连按要干的事：笔/荧光笔换色，橡皮切整笔↔面积，选中切矩形↔套索。</summary>
+    private void DoToolKeyRepeat(KeyAction a)
+    {
+        switch (a)
+        {
+            case KeyAction.ToolPen: CycleBandColor(highlighter: false); break;
+            case KeyAction.ToolHighlighter: CycleBandColor(highlighter: true); break;
+            case KeyAction.ToolEraser:
+            case KeyAction.ToolPixelEraser:
+                SwitchTool(Tool == Tool.PixelEraser ? Tool.Eraser : Tool.PixelEraser);
+                Console.WriteLine($"橡皮连按 → {(Tool == Tool.PixelEraser ? "面积擦" : "整笔擦")}");
+                break;
+            case KeyAction.ToolMarquee: ToggleSelectMode(); break;
+        }
+    }
+
+    /// <summary>长按：回第一个颜色 / 第一档。</summary>
+    private void ResetToolToFirst(KeyAction a)
+    {
+        switch (a)
+        {
+            case KeyAction.ToolPen:
+                SetColorFromUi(InkPalette.PenBand[0].Color);
+                Console.WriteLine($"长按 → 笔回到「{InkPalette.PenBand[0].Name}」");
+                break;
+            case KeyAction.ToolHighlighter:
+                SetColorFromUi(InkPalette.HighlighterBand[0].Color);
+                Console.WriteLine($"长按 → 荧光笔回到「{InkPalette.HighlighterBand[0].Name}」");
+                break;
+            case KeyAction.ToolEraser:
+            case KeyAction.ToolPixelEraser:
+                SwitchTool(Tool.Eraser);
+                Console.WriteLine("长按 → 橡皮回到「整笔擦」");
+                break;
+            case KeyAction.ToolMarquee:
+                if (SelMode == SelectMode.Lasso) ToggleSelectMode();
+                Console.WriteLine("长按 → 框选回到「矩形框」");
+                break;
+        }
+    }
+
+    /// <summary>连按换色：在色带里往后走一格（转圈，转满一圈就回到第一个）。</summary>
+    private void CycleBandColor(bool highlighter)
+    {
+        var band = highlighter ? InkPalette.HighlighterBand : InkPalette.PenBand;
+        Color4 cur = highlighter ? HighlighterCurrent : CurrentColor;
+        int idx = -1;
+        for (int i = 0; i < band.Length; i++)
+            if (CloseColor(band[i].Color, cur)) { idx = i; break; }
+        int next = (idx + 1) % band.Length;
+        SetColorFromUi(band[next].Color);      // 荧光笔的透明度由 SetColorFromUi 自己加
+        Console.WriteLine($"连按 → {band[next].Name}");
+    }
+
+    private static bool CloseColor(Color4 a, Color4 b) =>
+        Math.Abs(a.R - b.R) < 0.10f && Math.Abs(a.G - b.G) < 0.10f && Math.Abs(a.B - b.B) < 0.10f;
+
+    private bool HandleKeyDown(IntPtr wParam, bool isRepeat)
     {
         // 键位表驱动：按"当前修饰键状态 + 主键"拼成一个和弦，去批注内作用域里查。
         // 查不到就**不吞这个键**（返回 false），交给系统/下层程序——吞掉所有按键
@@ -9376,8 +9576,29 @@ public partial class InkEngine
         var hit = Keys.For(KeyScope.Annotation).FirstOrDefault(b => b.Chord.Equals(chord));
         if (hit == null) return false;
 
+        if (IsToolKey(hit.Action))
+        {
+            // 工具键：走手势状态机（自动重复的按下直接吞掉，别在状态机里乱动）
+            ToolKeyDown(hit.Action, NowMs);
+            _dirty = true;
+            return true;
+        }
         RunAction(hit.Action);
         _dirty = true;
+        return true;
+    }
+
+    /// <summary>松键：只服务工具键的手势（长按/双击判定），其余键不看松键。</summary>
+    private bool HandleKeyUp(IntPtr wParam)
+    {
+        uint mods = 0;
+        if ((Native.GetAsyncKeyState(0x11 /*VK_CONTROL*/) & 0x8000) != 0) mods |= KeyChord.ModCtrl;
+        if ((Native.GetAsyncKeyState(0x12 /*VK_MENU*/) & 0x8000) != 0) mods |= KeyChord.ModAlt;
+        if ((Native.GetAsyncKeyState(0x10 /*VK_SHIFT*/) & 0x8000) != 0) mods |= KeyChord.ModShift;
+        var chord = new KeyChord(mods, (uint)wParam.ToInt32());
+        var hit = Keys.For(KeyScope.Annotation).FirstOrDefault(b => b.Chord.Equals(chord));
+        if (hit == null || !IsToolKey(hit.Action)) return false;
+        ToolKeyUp(hit.Action, NowMs);
         return true;
     }
 
