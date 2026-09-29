@@ -7030,7 +7030,7 @@ public partial class InkEngine
         _updBusy = true;
         var th = new System.Threading.Thread(() =>
         {
-            var m = UpdateFeed.FetchBest(out string used, out string err);
+            var m = UpdateFeed.FetchBest(UpdateFeed.CurrentVersion, out string used, out string err);
             lock (_updLock)
             {
                 _updResult = (m, err);

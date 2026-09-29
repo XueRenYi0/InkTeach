@@ -199,6 +199,37 @@ internal static class UpdateProbe
         bool doneWrote = File.Exists(Path.Combine(swapDir, "done.txt"));
         Check("换壳（沙箱真跑）：写了 done.txt（下次启动显示「已更新到 x.y.z」）", doneWrote,
               doneWrote ? "内容 " + (File.ReadAllText(Path.Combine(swapDir, "done.txt")).Trim()) : "没写");
+        Check("换壳（沙箱真跑）：更新包用完就删（不留 33 MB 的 zip）", !File.Exists(newZip),
+              File.Exists(newZip) ? "zip 还在" : "");
+
+        // ---- ⑥b 加速站缓存：不能"第一个说已是最新"就收工 -------------------------
+        // 2026-09-29 真机踩到：发了 8.0.2 之后 gh-proxy.com 还在送 8.0.1 的清单，
+        // App 于是显示"已是最新"，用户再也点不动。规则改成：**任一源报"有新版"就采纳**，
+        // 全都说"已是最新"才算数。这里用两个本地清单把这条规则钉住。
+        string staleJson = Path.Combine(dir, "stale-8.0.2.json");
+        File.WriteAllText(staleJson, """{ "version": "8.0.2", "url": "x.zip", "sha256": "00", "notes": "", "minVersion": "" }""");
+        string freshJson = Path.Combine(dir, "fresh-8.0.3.json");
+        File.WriteAllText(freshJson, """{ "version": "8.0.3", "url": "y.zip", "sha256": "00", "notes": "", "minVersion": "" }""");
+        var savedSources = UpdateFeed.Sources;
+        string savedUrl = UpdateFeed.Url;
+        try
+        {
+            UpdateFeed.Url = "";
+            UpdateFeed.Sources = new[] { (Prefix: "", Url: staleJson) };
+            var onlyStale = UpdateFeed.FetchBest("8.0.2", out _, out _);
+            Check("镜像：所有源都说「已是最新」→ 才报已是最新",
+                  onlyStale != null && onlyStale.Version == "8.0.2", onlyStale?.Version ?? "null");
+
+            UpdateFeed.Sources = new[] { (Prefix: "", Url: staleJson), (Prefix: "", Url: freshJson) };
+            var found = UpdateFeed.FetchBest("8.0.2", out string usedBy, out _);
+            Check("镜像：第一个源缓存着旧清单时**继续找** → 找到 8.0.3",
+                  found != null && found.Version == "8.0.3", usedBy ?? "null");
+        }
+        finally
+        {
+            UpdateFeed.Sources = savedSources;
+            UpdateFeed.Url = savedUrl;
+        }
 
         Console.WriteLine();
         Console.WriteLine($"  合计 {pass + fail} 条：通过 {pass}，失败 {fail}");

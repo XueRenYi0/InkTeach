@@ -69,7 +69,7 @@ internal static class UpdateFeed
     /// 用户可以用 settings.json 的 `update.url` 换成局域网共享（**非空就只用它**，
     /// 教室环境最稳的一条）。
     /// </summary>
-    public static readonly (string Prefix, string Url)[] Sources =
+    public static (string Prefix, string Url)[] Sources =
     {
         ("https://gh-proxy.com/",     RawUrl),
         ("https://ghfast.top/",       RawUrl),
@@ -98,17 +98,24 @@ internal static class UpdateFeed
     }
 
     /// <summary>
-    /// 按 <see cref="Url"/> → <see cref="Sources"/> 的顺序试，返回第一个成功的清单，
+    /// 按 <see cref="Url"/> → <see cref="Sources"/> 的顺序试，返回**可用的清单**，
     /// 并给出**实际用的是哪条**（日志/诊断要）与失败详情（每条一行）。
+    ///
+    /// ⚠ 规则不是"第一个能取到就用"，而是**"第一个报'有新版'的才收工"**：
+    /// 每个加速站都有自己的缓存，刚发新版的那几分钟它可能还在送旧清单
+    /// （2026-09-29 真机踩到：发了 8.0.2 之后 gh-proxy.com 仍送 8.0.1，App 显示
+    /// "已是最新"，用户就再也点不动了）。所以：**任一源报了比当前新的版本就采纳**；
+    /// 全都说"已是最新"才算数，这时返回其中任意一份（内容等价）。
+    /// 代价是"已是最新"时要多问几个源（一般 6 条、几秒钟），值得。
     /// </summary>
-    public static Manifest FetchBest(out string usedUrl, out string error)
+    public static Manifest FetchBest(string currentVersion, out string usedUrl, out string error)
     {
         usedUrl = null;
         error = null;
 
         if (Url.Length > 0)
         {
-            // 用户自己填的源：照他用系统代理（他的环境他自己清楚）
+            // 用户自己填的源：照他用系统代理（他的环境他自己清楚）。只用它，不试候选表。
             _skipProxyForDownload = false;
             var one = Fetch(Url, out error);
             if (one != null) usedUrl = Url;
@@ -116,20 +123,47 @@ internal static class UpdateFeed
         }
 
         var errs = new List<string>();
+        Manifest firstUpToDate = null;
+        string firstUsed = null, firstPrefix = "";
+        bool firstMirror = false;
+
         foreach (var s in Sources)
         {
             if (string.IsNullOrWhiteSpace(s.Url) || s.Url.Contains("<账号>")) continue;   // 还没填的跳过
             bool viaMirror = s.Prefix.Length > 0;                 // 带前缀 = 国内加速站
             var m = Fetch(s.Url, out string e, useProxy: !viaMirror);
-            if (m != null)
+            if (m == null)
+            {
+                errs.Add($"{HostOf(s.Url)}（{(viaMirror ? "直连" : "走系统代理")}）：{e}");
+                continue;
+            }
+
+            if (CompareVersions(m.Version, currentVersion) > 0)
             {
                 usedUrl = s.Prefix + s.Url;
                 _skipProxyForDownload = viaMirror;                // zip 也跟着直连
                 RewriteZipUrl(m, s.Prefix);
                 return m;
             }
-            errs.Add($"{HostOf(s.Url)}（{(viaMirror ? "直连" : "走系统代理")}）：{e}");
+
+            // 这个源说"已是最新"：记下第一份，但**继续往下问**（见上面的说明）
+            if (firstUpToDate == null)
+            {
+                firstUpToDate = m;
+                firstUsed = s.Prefix + s.Url;
+                firstPrefix = s.Prefix;
+                firstMirror = viaMirror;
+            }
         }
+
+        if (firstUpToDate != null)
+        {
+            usedUrl = firstUsed;
+            _skipProxyForDownload = firstMirror;
+            RewriteZipUrl(firstUpToDate, firstPrefix);
+            return firstUpToDate;
+        }
+
         error = errs.Count > 0 ? string.Join("；", errs) : "没有配置任何更新源";
         return null;
     }
@@ -539,6 +573,11 @@ internal static class UpdateFeed
             Set-Content -LiteralPath (Join-Path (Split-Path -Parent $PSCommandPath) 'done.txt') -Value (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') -Encoding ASCII -ErrorAction Stop
             Log "wrote done.txt"
         } catch { Log ("done.txt failed: " + $_.Exception.Message) }
+
+        # The downloaded update package (~33 MB) has served its purpose -- drop it so the
+        # update dir does not grow by one copy per version. The log and done.txt stay.
+        try { Remove-Item -LiteralPath $Zip -Force -ErrorAction Stop; Log "removed update zip" }
+        catch { Log ("zip cleanup failed: " + $_.Exception.Message) }
 
         try { Start-Process -FilePath $Exe; Log "restarted $Exe" }
         catch { Log ("restart failed: " + $_.Exception.Message) }
