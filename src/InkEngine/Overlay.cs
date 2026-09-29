@@ -3130,14 +3130,13 @@ internal sealed class OverlayWindow : IDisposable
             // 见 Engine.CycleParabolaAxis）。
             bool disabled = false;
 
-            // 悬停 / 激活的底：参考实现就是这么做的（浅色圆角底 + 图标加深）。
+            // 悬停 / 激活的底：**正方形**，画与自检同源（见 SelectionHandles.BarHoverChip）。
+            // 8.2.1 之前这里是"四周各缩 3"：38×30 的格子里画出来是 **32×24 的长方形**，
+            // 用户一眼看出"悬停是长方形不是正方形，所以分散"——现在 30×30 的格子里是 26×26。
             if (hot || active)
             {
-                // 激活底比按钮小一圈（内缩 3），圆角接近半个身位——小按钮上
-                // 大圆角会显得"胖"，这一圈内缩就是让它看起来利落的关键。
-                float inset = 3f * dpi;
-                var bg = new Vortice.RawRectF(btn.MinX + inset, btn.MinY + inset,
-                                              btn.MaxX - inset, btn.MaxY - inset);
+                var chip = SelectionHandles.BarHoverChip(i, sel, dpi, visible);
+                var bg = new Vortice.RawRectF(chip.MinX, chip.MinY, chip.MaxX, chip.MaxY);
                 float br = MathF.Min(bg.Bottom - bg.Top, bg.Right - bg.Left) * 0.32f;
                 _scratch.Color = active
                     ? theme.ActiveBg                            // 激活：主题的实心蓝
@@ -3405,6 +3404,7 @@ internal sealed class OverlayWindow : IDisposable
         }
 
         // 拖动中：数值显示在滑钮上方（"拖动的时候显示值"——用户 2026-09-30）。
+        // 行高 30（8.2.1 收矮过）：字号 11 + 盒高 16，正好卡在卡片上沿和轨道之间。
         if (dragging)
         {
             string text = value.ToString("0.0");
@@ -3412,7 +3412,7 @@ internal sealed class OverlayWindow : IDisposable
             float tw = 44f * dpi;
             _scratch.Color = th.Text;
             _ctx.DrawText(text, ReadoutFormatSmall(dpi),
-                          new Rect(tx - tw * 0.5f, cy - 26f * dpi, tw, 18f * dpi), _scratch);
+                          new Rect(tx - tw * 0.5f, cy - 19f * dpi, tw, 16f * dpi), _scratch);
         }
 
         // ---- ②③ 线型：实线 / 虚线 / 点线 ----

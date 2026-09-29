@@ -1858,19 +1858,44 @@ internal static class SelectionHandles
     /// <summary>
     /// 操作条的高度 / 每格宽度 / 格间距（逻辑像素）。
     ///
-    /// **2026-09-16 缩小过一轮**：九格铺开之后整条 440×34 太"厚"、太占屏幕
-    /// （用户："工具条太大，没有之前美观"）。现在 38×30、格间距 0
-    /// ——整条比原来窄 20%、矮 12%，而且圆角取高度一半做成**胶囊**，
-    /// 视觉上比"厚矩形"轻一档。
-    /// 38 这个数不是随手取的：Windows 11 任务栏按钮 40 逻辑像素是"看得清又点得中"的
-    /// 那个量级（见 调研-界面-高度.md），再小投影上就吃力了。
+    /// 沿革：九格铺开时 44×34（太厚）→ 2026-09-16 缩到 38×30 → **8.2.1 收成 30×30 方格子**
+    /// （用户 2026-09-30 第二轮："选中条还是太松散——选中悬停是长方形不是正方形，所以分散"）。
+    /// 30 是条件定出来的：条高就是 30，格子宽取同一个数 → **每格是正方形**；
+    /// 图标 18 / 格子 30 = **0.6**，正好和主工具条那条的 24 / 40 同比例。
+    /// 悬停 / 激活的底也跟着变成正方形（见 <see cref="BarHoverChip"/>）。
     ///
     /// ⚠ 两端内边距不在这里，用浮层那套 token（<see cref="FloatPadLogical"/> = 6）：
-    /// "三处浮层共用一套尺寸"是 8.2.0 定的（用户 2026-09-30："有点松散，不精致"）。
+    /// "三处浮层共用一套尺寸"是 8.2.0 定的。
     /// </summary>
     public const float BarHeightLogical = 30f;
-    public const float BarButtonWidthLogical = 38f;
+    public const float BarButtonWidthLogical = 30f;
     public const float BarGapLogical = 0f;
+
+    /// <summary>
+    /// 悬停 / 激活那块**正方形底**从格子边缘往里缩多少（逻辑像素）。
+    ///
+    /// 8.2.1 之前它是"四周各缩 3"，于是 38×30 的格子里画出来是 **32×24 的长方形**——
+    /// 用户一眼就看出问题（"悬停是长方形不是正方形，所以分散"）。
+    /// 现在：底 = min(格宽, 格高) − 2×2 = **26×26 正方形**，居中；格与格之间只隔 4 像素，
+    /// 高亮连成"一排小方块"，比原来那种扁长高亮收紧得多。
+    /// **画和自检都读这一份**（见 <see cref="BarHoverChip"/>）。
+    /// </summary>
+    public const float BarHoverInsetLogical = 2f;
+
+    /// <summary>
+    /// 操作条第 <paramref name="i"/> 格"悬停 / 激活"那块正方形底。
+    /// 尺寸 = `min(格宽,格高) − 2×inset`，居中放在格子里——**画与自检同源**
+    /// （见 <see cref="BarHoverInsetLogical"/> 那段：这个形状是用户点名要改的，别再各算一份）。
+    /// </summary>
+    public static RectF BarHoverChip(int i, in RectF sel, float dpi, in RectF visible)
+    {
+        var btn = BarButtonRect(i, sel, dpi, visible);
+        float side = MathF.Min(btn.MaxX - btn.MinX, btn.MaxY - btn.MinY) - BarHoverInsetLogical * 2f * dpi;
+        side = MathF.Max(1f, side);
+        float cx = (btn.MinX + btn.MaxX) * 0.5f, cy = (btn.MinY + btn.MaxY) * 0.5f;
+        return new RectF { MinX = cx - side * 0.5f, MinY = cy - side * 0.5f,
+                           MaxX = cx + side * 0.5f, MaxY = cy + side * 0.5f };
+    }
     /// <summary>选中框下边到操作条的距离（逻辑像素）。</summary>
     public const float BarOffsetLogical = 14f;
     /// <summary>
@@ -1932,8 +1957,16 @@ internal static class SelectionHandles
     public const float SwatchSizeLogical = 26f;
     /// <summary>色板列数（4 列：中性一行、暖一行、冷一行 + 末格自定义）。</summary>
     public const int SwatchColumns = 4;
-    /// <summary>面板里"滑条行""线型行"的高度。</summary>
-    public const float PanelRowLogical = 34f;
+    /// <summary>
+    /// 面板里那两行的高度（逻辑像素）：**滑条行 30、线型行 26**。
+    ///
+    /// 原来两行都是 34；8.2.1 用户第二眼："那三个（实/虚/点）线占位太多"——
+    /// 线型行收到 26、滑条行收到 30，面板总高 196 → **184**。
+    /// 滑条行比线型行多 4：它上方要留"拖动中的数值"那行字的位置（见
+    /// `DrawInkPanel` 里画数值那段）。
+    /// </summary>
+    public const float SliderRowLogical = 30f;
+    public const float StyleRowLogical = 26f;
     /// <summary>面板与它上面那条（操作条）的距离。</summary>
     public const float PanelGapLogical = 10f;
     /// <summary>层级面板每一格的边长（两格并排）。</summary>
@@ -2081,7 +2114,7 @@ internal static class SelectionHandles
     {
         int rows = (swatchCount + SwatchColumns - 1) / SwatchColumns;
         float gridH = rows * SwatchSizeLogical + MathF.Max(0, rows - 1) * FloatGapLogical;
-        return FloatPadLogical * 2 + PanelRowLogical * 2 + gridH;
+        return FloatPadLogical * 2 + SliderRowLogical + StyleRowLogical + gridH;
     }
 
     /// <summary>
@@ -2180,7 +2213,7 @@ internal static class SelectionHandles
         return new RectF { MinX = x, MinY = y, MaxX = x + size, MaxY = y + size };
     }
 
-    /// <summary>颜色面板里"粗细滑条"那一行的矩形。</summary>
+    /// <summary>颜色面板里"粗细滑条"那一行的矩形（行高见 <see cref="SliderRowLogical"/>）。</summary>
     public static RectF SliderRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
     {
         var p = PanelRect(sel, dpi, visible, swatchCount);
@@ -2188,7 +2221,7 @@ internal static class SelectionHandles
         return new RectF
         {
             MinX = p.MinX + pad, MinY = p.MinY + pad,
-            MaxX = p.MaxX - pad, MaxY = p.MinY + pad + PanelRowLogical * dpi,
+            MaxX = p.MaxX - pad, MaxY = p.MinY + pad + SliderRowLogical * dpi,
         };
     }
 
@@ -2205,10 +2238,10 @@ internal static class SelectionHandles
         var p = PanelRect(sel, dpi, visible, swatchCount);
         float pad = FloatPadLogical * dpi;
         float gap = FloatGapLogical * dpi;
-        float rowTop = p.MinY + pad + PanelRowLogical * dpi;
+        float rowTop = p.MinY + pad + SliderRowLogical * dpi;
         float cellW = (p.MaxX - p.MinX - pad * 2 - gap * (StyleCellCount - 1)) / StyleCellCount;
         float x = p.MinX + pad + i * (cellW + gap);
-        return new RectF { MinX = x, MinY = rowTop, MaxX = x + cellW, MaxY = rowTop + PanelRowLogical * dpi };
+        return new RectF { MinX = x, MinY = rowTop, MaxX = x + cellW, MaxY = rowTop + StyleRowLogical * dpi };
     }
 
     /// <summary>线型那一行有几格。**画与命中都读它**（见 <see cref="StyleCellRect"/>）。</summary>

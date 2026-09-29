@@ -4243,11 +4243,15 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine();
         Console.WriteLine("=== 浮层量尺（逻辑像素；dpi=1、不夹取）===");
         Console.WriteLine($"  操作条     {bar.MaxX - bar.MinX:F0} × {barH:F0}   两端内边距 {barPad:F1}   "
-                          + $"按钮 {b0.MaxX - b0.MinX:F0} 格缝 {barGap:F1}  圆角 min(主题 {FloatingTheme.CornerRadius:F0}, 半高) = {barRadius:F0}");
+                          + $"按钮 {b0.MaxX - b0.MinX:F0}（方格子）格缝 {barGap:F1}  "
+                          + $"悬停底 {SelectionHandles.BarButtonWidthLogical - SelectionHandles.BarHoverInsetLogical * 2:F0}×"
+                          + $"{SelectionHandles.BarButtonWidthLogical - SelectionHandles.BarHoverInsetLogical * 2:F0}  "
+                          + $"圆角 {barRadius:F0}");
         Console.WriteLine($"  墨迹面板   {p.MaxX - p.MinX:F0} × {p.MaxY - p.MinY:F0}   内边距 {s0.MinX - p.MinX:F1}   "
                           + $"色片 {s0.MaxX - s0.MinX:F0} 缝 {s1.MinX - s0.MaxX:F1} 行缝 {sRow.MinY - s0.MaxY:F1}");
-        Console.WriteLine($"            线型格 {c0.MaxX - c0.MinX:F1} 宽、格缝 {c1.MinX - c0.MaxX:F1}，"
-                          + $"行高 {SelectionHandles.PanelRowLogical:F0}，面板离条 {SelectionHandles.PanelGapLogical:F0}");
+        Console.WriteLine($"            线型格 {c0.MaxX - c0.MinX:F1}×{c0.MaxY - c0.MinY:F0}、格缝 {c1.MinX - c0.MaxX:F1}，"
+                          + $"滑条行 {SelectionHandles.SliderRowLogical:F0} / 线型行 {SelectionHandles.StyleRowLogical:F0}，"
+                          + $"面板离条 {SelectionHandles.PanelGapLogical:F0}");
         Console.WriteLine($"  层级面板   {lp.MaxX - lp.MinX:F0} × {lp.MaxY - lp.MinY:F0}   内边距 {l0.MinX - lp.MinX:F1}   "
                           + $"格 {l0.MaxX - l0.MinX:F0} 缝 {l1.MinX - l0.MaxX:F1}");
         var pk = SelectionHandles.CustomPanelRect(sel, dpi, none, sc);
@@ -4300,15 +4304,34 @@ internal sealed class App : InkEngine.InkEngine
                         + SelectionHandles.SwatchColumns * SelectionHandles.SwatchSizeLogical
                         + (SelectionHandles.SwatchColumns - 1) * SelectionHandles.FloatGapLogical;
         float panelHTok = SelectionHandles.FloatPadLogical * 2
-                        + SelectionHandles.PanelRowLogical * 2
+                        + SelectionHandles.SliderRowLogical + SelectionHandles.StyleRowLogical
                         + rows * SelectionHandles.SwatchSizeLogical + (rows - 1) * SelectionHandles.FloatGapLogical;
         bool panelOk = Near((s0.MinX - p.MinX) / dpi, SelectionHandles.FloatPadLogical, tol)
                     && Near((s1.MinX - s0.MaxX) / dpi, SelectionHandles.FloatGapLogical, tol)
                     && Near((sRow.MinY - s0.MaxY) / dpi, SelectionHandles.FloatGapLogical, tol)
                     && Near((s0.MaxX - s0.MinX) / dpi, SelectionHandles.SwatchSizeLogical, tol)
                     && Near((c1.MinX - c0.MaxX) / dpi, SelectionHandles.FloatGapLogical, tol)
+                    && Near((c0.MaxY - c0.MinY) / dpi, SelectionHandles.StyleRowLogical, tol)
                     && Near((p.MaxX - p.MinX) / dpi, panelWTok, tol)
                     && Near((p.MaxY - p.MinY) / dpi, panelHTok, tol);
+
+        // 8.2.1：悬停 / 激活的底必须是**正方形**（用户点名的那条："悬停是长方形不是正方形，
+        // 所以分散"）——逐格核对"宽 = 高 = 格宽 − 2×inset"，并检查它居中。
+        bool chipOk = true; string chipNote = "";
+        for (int i = 0; i < SelectionHandles.BarButtonCount; i++)
+        {
+            var chip = SelectionHandles.BarHoverChip(i, sel, dpi, RectF.Empty);
+            var btnI = SelectionHandles.BarButtonRect(i, sel, dpi, RectF.Empty);
+            float cw = (chip.MaxX - chip.MinX) / dpi, chh = (chip.MaxY - chip.MinY) / dpi;
+            float want = SelectionHandles.BarButtonWidthLogical - SelectionHandles.BarHoverInsetLogical * 2;
+            if (MathF.Abs(cw - chh) > tol || MathF.Abs(cw - want) > tol
+                || MathF.Abs((chip.MinX + chip.MaxX) * 0.5f - (btnI.MinX + btnI.MaxX) * 0.5f) > tol * dpi)
+            {
+                chipOk = false;
+                chipNote = $"第 {i} 格底 {cw:F1}×{chh:F1}（该 {want:F0}×{want:F0} 且居中）";
+                break;
+            }
+        }
 
         var lp = SelectionHandles.LayerPanelRect(sel, dpi, RectF.Empty);
         var l0 = SelectionHandles.LayerCellRect(0, sel, dpi, RectF.Empty);
@@ -4330,6 +4353,12 @@ internal sealed class App : InkEngine.InkEngine
 
         check("浮层尺寸：内边距/格间距/格尺寸/圆角都在 token 上（操作条）", barOk,
               $"内边距 {barPad:F1}、格缝 {barGap:F1}、整条 {barW:F0}×{(bar.MaxY - bar.MinY) / dpi:F0}");
+        check("浮层尺寸：操作条悬停/激活底是正方形（8.2.1，用户点名）", chipOk,
+              chipOk
+                  ? $"{SelectionHandles.BarButtonCount} 格逐格核对："
+                    + $"{SelectionHandles.BarButtonWidthLogical - SelectionHandles.BarHoverInsetLogical * 2:F0}×"
+                    + $"{SelectionHandles.BarButtonWidthLogical - SelectionHandles.BarHoverInsetLogical * 2:F0}、居中"
+                  : chipNote);
         check("浮层尺寸：墨迹面板在 token 上（含行缝与整卡宽高）", panelOk,
               $"内边距 {(s0.MinX - p.MinX) / dpi:F1}、色片缝 {(s1.MinX - s0.MaxX) / dpi:F1}、"
               + $"行缝 {(sRow.MinY - s0.MaxY) / dpi:F1}、卡片 {(p.MaxX - p.MinX) / dpi:F0}×{(p.MaxY - p.MinY) / dpi:F0}");
