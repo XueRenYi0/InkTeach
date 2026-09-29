@@ -269,6 +269,7 @@ public partial class InkEngine
     private void EnterPptMode(in PptSnapshot s)
     {
         PptMode = true;
+        RegisterPptHotkeys(true);      // 放映时工具键临时升级为全局（见 RegisterPptHotkeys）
         _pptKey = s.Key ?? "";
         PptSlide = s.Slide;
         PptTotal = s.Total;
@@ -296,6 +297,7 @@ public partial class InkEngine
     private void ExitPptMode()
     {
         PptMode = false;
+        RegisterPptHotkeys(false);     // 退出放映：临时全局热键注销（平时一个键都不多占）
 
         // 条的状态跟着收场：菜单/页号面板还开着、或者正被拿在手里的话，退出放映后
         // 它们就成了"看不见却还在吃输入"的孤儿（和界面"收起不清临时状态"是同一个坑）。

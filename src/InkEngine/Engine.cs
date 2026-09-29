@@ -1924,11 +1924,55 @@ public partial class InkEngine
         Console.WriteLine($"registered {_hotkeysRegistered}/{Keys.Bindings.Count(b => b.Scope == KeyScope.Global)} global hotkeys");
     }
 
+    // ---- 放映期间的"临时全局热键"（2026-09-30 用户定方案①）-----------------
+    //
+    // 背景：放映时**前台是 WPS/PPT**，我们的覆盖层收不到键盘（键盘按"焦点"投递；
+    // 鼠标才是按"位置"，所以滚轮/点击在放映中照样有效）。而我们的工具键是"应用内
+    // 快捷键"，靠焦点 → 放映时全失效 ✗。
+    //
+    // 办法：**一进放映批注模式，就把这几个键临时注册成全局热键**——系统直接投给我们、
+    // 不看焦点；而且键被我们吞掉、**不会传给 WPS**，所以不会有"我们切了工具、PPT 又翻
+    // 一页"的双发副作用（隔壁 InkClass 那种"打架"就是它用全局钩子但不吞键造成的）。
+    // 退出放映立刻注销：平时一个键都不多占。
+    private const int PptHotkeyBase = 81;          // 一小段专用 id（常规热键是 1..N，别撞）
+    private static readonly (uint Mod, uint Vk, KeyAction Act)[] PptHotkeys =
+    {
+        (Native.MOD_CONTROL, 0x50 /*P*/, KeyAction.ToolPen),
+        (Native.MOD_CONTROL, 0x49 /*I*/, KeyAction.ToolHighlighter),
+        (Native.MOD_CONTROL, 0x4C /*L*/, KeyAction.ToolLaser),
+        (Native.MOD_CONTROL, 0x45 /*E*/, KeyAction.ToolEraser),
+        (Native.MOD_CONTROL, 0x5A /*Z*/, KeyAction.Undo),
+    };
+    private bool _pptHotkeysOn;
+
+    /// <summary>进/出放映批注模式时调它（见 Ppt.EnterPptMode / ExitPptMode）。</summary>
+    private void RegisterPptHotkeys(bool on)
+    {
+        if (_pptHotkeysOn == on || _windows.Count == 0) return;
+        IntPtr h = _windows[0].Hwnd;
+        for (int i = 0; i < PptHotkeys.Length; i++)
+        {
+            int id = PptHotkeyBase + i;
+            var (mod, vk, _) = PptHotkeys[i];
+            if (on)
+            {
+                if (!Native.RegisterHotKey(h, id, mod | Native.MOD_NOREPEAT, vk))
+                    Console.WriteLine($"hotkey 放映临时键 #{i} 注册失败，错误 {Marshal.GetLastWin32Error()}");
+            }
+            else Native.UnregisterHotKey(h, id);
+        }
+        _pptHotkeysOn = on;
+        Console.WriteLine(on ? "放映批注模式：工具键（Ctrl+P/I/L/E/Z）已临时升级为全局热键"
+                            : "退出放映：临时全局热键已注销");
+    }
+
     /// <summary>注册顺序 → 动作。按这个顺序 RegisterHotKey，WM_HOTKEY 的 id 就是它。</summary>
     private readonly List<KeyAction> _hotkeyActions = new();
 
     internal KeyAction ActionForHotkeyId(int id)
-        => id >= 1 && id <= _hotkeyActions.Count ? _hotkeyActions[id - 1] : KeyAction.None;
+        => id >= 1 && id <= _hotkeyActions.Count ? _hotkeyActions[id - 1]
+         : id >= PptHotkeyBase && id < PptHotkeyBase + PptHotkeys.Length ? PptHotkeys[id - PptHotkeyBase].Act
+         : KeyAction.None;
 
     /// <summary>自检用：这批全局热键实际注册成功了几个。</summary>
     internal long HotkeysRegistered => _hotkeysRegistered;
