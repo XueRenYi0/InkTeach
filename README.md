@@ -202,25 +202,46 @@ dotnet run --project src/InkTeach -c Release -- --memory reports/inkprobe-memory
 
 ## 发布 / 打包（拿给别人用）
 
-一条命令：
+一条命令（绿色版和安装包一起出）：
 
 ```powershell
-.\publish.ps1              # 绿色版目录 + zip（推荐）
+.\publish.ps1              # 目录 + zip + 安装包 Setup.exe
+.\publish.ps1 -NoSetup     # 只出绿色版（机器上没装 Inno Setup 时也会自动跳过）
 .\publish.ps1 -SingleFile  # 单文件版（就一个 exe，方便拷，启动稍慢）
 ```
 
-产物落在 `dist\InkTeach-<版本>-win-x64\`（外加同名 zip）。脚本会自己核对
-"发布出来的 exe 是 GUI 子系统"（= 双击不弹黑框），不合就报错。
+产物落在 `dist\`：`InkTeach-<版本>-win-x64\`（目录）、同名 `.zip`（绿色版）、
+`InkTeach-Setup-<版本>.exe`（安装包）。脚本会自己核对"发布出来的 exe 是 GUI 子系统"
+（= 双击不弹黑框），不合就报错。
 
-**为什么是绿色版而不是安装包**（2026-09-27 定）：
+**安装版 vs 绿色版**（两个都发，看对象给）：
 
-| | 绿色版（现在） | 安装包 |
+| | 安装包 `Setup.exe`（发给别人，推荐） | 绿色版 zip |
 |---|---|---|
-| 要不要管理员 | **不要**（清单里没有 requireAdministrator，数据只写用户目录） | 装的时候通常要 |
-| 教室机器常见情况 | 直接能用 | **装不上 = 用不了** |
-| 依赖 | 自包含发布后**连 .NET 都不用装**；图形栈是系统自带的 D2D/DComp，没有要另装的 VC 运行库 | 同 |
-| 快捷方式 / 卸载 | 手动（拷一个快捷方式就行） | 有 |
-| 什么时候该换 | —— | 要发给不认识的老师、要开始菜单入口和卸载时，再上 Inno Setup 那类 |
+| 装 | 双击 → 下一步 → 完事，**不弹 UAC** | 解压就能用 |
+| 快捷方式 | **桌面 + 开始菜单自动建** | 自己建 |
+| 卸载 | 设置 → 应用 → 卸载（目录、快捷方式一起清） | 直接删目录 |
+| 装到哪 | `%LOCALAPPDATA%\Programs\InkTeach`（**只给当前用户**，不需要管理员） | 你放哪就哪 |
+| 自动更新 | **一样能用**（见「自动更新」：下载 → 换壳 → 重启） | 同 |
+| 什么时候用 | 发给不认识的老师、要开始菜单入口和卸载 | 自己拷 U 盘、临时用、免安装 |
+
+**为什么装"只给当前用户"**：① 教室机器多半没有管理员权限，不弹 UAC 就能装；
+② **自动更新要能写自己的目录**——装到 `Program Files` 就得每次更新弹 UAC
+（或者干脆失败）。装到用户目录就有写权限，更新全程无感。代价是"每台机器每个用户
+各装一份"，对教室场景无所谓。
+
+**安装包怎么做的**（`installer\InkTeach.iss`，Inno Setup 6）：
+
+- 编译器是 Inno Setup 6（本机已装在 `%LOCALAPPDATA%\Programs\Inno Setup 6`，用
+  `ISCC.exe` 编译）。**只有开发机需要它**，用户机不用；
+- 中文界面用社区翻译 `installer\ChineseSimplified.isl`（MIT，出处见
+  `src/InkEngine/THIRD-PARTY-NOTICES.md`）；
+- 装之前会 `taskkill` 掉正在运行的 InkTeach（常驻覆盖层，礼貌关窗口未必管用）；
+- 卸载按"整目录删"，所以**换壳更新进来的新文件也能卸干净**；
+- 教室批量部署可以静默安装（不弹界面、装完也不自动启动）：
+  ```powershell
+  .\InkTeach-Setup-8.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+  ```
 
 **几个已经配好的东西**（免得重复劳动）：
 
@@ -293,6 +314,12 @@ dotnet run --project src/InkTeach -c Release -- --memory reports/inkprobe-memory
 
 （局域网共享里放 `update.json` + zip 即可；这一条**最稳**，教室里推荐它。）
 
+**装过安装包的机器也一样更新**：换壳会把新版文件铺回安装目录（桌面 / 开始菜单快捷方式
+指向的路径没变，照常能用），而且换壳时会**把卸载程序 `unins000.*` 从旧目录带过去**——
+不然"设置 → 应用"里的卸载按钮会指向一个不存在的文件（2026-09-29 加安装包时发现并修了，
+`--updatetest` 里有一条沙箱测试专门盯着它）。一个已知小瑕疵：**卸载列表里显示的版本号
+是"安装时"记的**，换壳更新后不会跟着变（不影响功能——卸载按"整目录删"走，能删干净）。
+
 **拿 GitHub 当源**（本项目现在就是这么配的，仓库 <https://github.com/XueRenYi0/InkTeach>）：
 
 1. `publish.ps1` 顶部填 zip 的落点前缀：
@@ -304,8 +331,11 @@ dotnet run --project src/InkTeach -c Release -- --memory reports/inkprobe-memory
 3. **发新版三步**（`publish.ps1` 跑完会把这行提醒再打一遍）：
    ```powershell
    git add update.json && git commit -m "发布 vX.Y.Z" && git push
-   gh release create vX.Y.Z dist\InkTeach-X.Y.Z-win-x64.zip dist\update.json
+   gh release create vX.Y.Z dist\InkTeach-X.Y.Z-win-x64.zip dist\update.json `
+                           dist\InkTeach-Setup-X.Y.Z.exe
    ```
+   （zip 是给自动更新用的；安装包 `Setup.exe` 挂上去是给人手动下载的。
+   Release 页面上建议把**安装包写在最前面**——老师要的就是"双击下一步"。）
 
 **为什么清单放"仓库 raw 文件"、zip 放 release 附件**（2026-09-29 实测踩出来的）：
 

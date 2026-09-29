@@ -465,6 +465,24 @@ internal static class UpdateFeed
             exit 1
         }
 
+        # Keep the uninstaller alive across the swap. For an installed copy (Inno Setup),
+        # unins000.exe/.dat/.msg live inside AppDir and the update zip does NOT contain
+        # them -- without this, the "Apps & features" uninstall entry would point at a
+        # missing file. The copied .dat still carries the [UninstallDelete] rule that
+        # removes the whole directory, so uninstalling stays clean afterwards.
+        Get-ChildItem -LiteralPath $bak -File -Filter 'unins*.exe' -ErrorAction SilentlyContinue | ForEach-Object {
+            $stamp = $_.BaseName
+            foreach ($ext in @('.exe', '.dat', '.msg')) {
+                $src = Join-Path $bak ($stamp + $ext)
+                if (Test-Path -LiteralPath $src) {
+                    try {
+                        Copy-Item -LiteralPath $src -Destination (Join-Path $AppDir ($stamp + $ext)) -Force -ErrorAction Stop
+                        Log ("kept " + $stamp + $ext)
+                    } catch { Log ("keep failed " + $stamp + $ext + ": " + $_.Exception.Message) }
+                }
+            }
+        }
+
         try { Start-Process -FilePath $Exe; Log "restarted $Exe" }
         catch { Log ("restart failed: " + $_.Exception.Message) }
         """;

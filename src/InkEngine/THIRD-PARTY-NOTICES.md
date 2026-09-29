@@ -40,6 +40,19 @@ MIT 是宽松许可：可以商用、可以闭源，只需保留版权与许可�
 
 ---
 
+## Inno Setup（只在**打安装包**时用到，不进 App）
+
+- **文件**：`installer\InkTeach.iss`（安装脚本）、`installer\ChineseSimplified.isl`（中文界面文字）
+- **来源**：https://jrsoftware.org/isinfo.php （安装包编译器本体，免费、闭源、宽松的自行分发许可）
+  中文语言包取自社区翻译：https://github.com/kira-96/Inno-Setup-Chinese-Simplified-Translation
+- **许可证**：Inno Setup 本体按其自带许可（允许自由分发用它生成的安装包，包含商用）；
+  中文语言包为 **MIT License，Copyright (c) 2019-2020 kirakira**
+- **说明**：Inno Setup **不进入 App 的运行时**，只由 `publish.ps1` 在开发机上生成
+  `InkTeach-Setup-<版本>.exe`；生成的安装包里**不包含** Inno Setup 本身。中文语言包
+  （MIT）随仓库放了一份，仅用于编译期，须保留其版权声明。
+
+---
+
 ## 本项目自身的许可证
 
 **GPL-3.0**（见仓库根目录的 `LICENSE`）。作者选它，是打算用

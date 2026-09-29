@@ -163,6 +163,11 @@ internal static class UpdateProbe
         string instDir = Path.Combine(sandbox, "App-1.0");
         Directory.CreateDirectory(instDir);
         File.WriteAllText(Path.Combine(instDir, "old-marker.txt"), "old");
+        // 安装版特有：卸载程序 unins000.* 住在 AppDir 里，而更新包里**没有**它们——
+        // 换壳必须把它们带到新目录，否则"Apps & 功能"里的卸载按钮会指向不存在的文件
+        // （2026-09-29 加安装包时发现的坑，见 SwapScriptBody 里对应那段）。
+        foreach (var un in new[] { "unins000.exe", "unins000.dat", "unins000.msg" })
+            File.WriteAllText(Path.Combine(instDir, un), "fake-uninstaller");
         string stage = Path.Combine(sandbox, "stage");
         Directory.CreateDirectory(stage);
         File.WriteAllText(Path.Combine(stage, "new-marker.txt"), "new");
@@ -174,6 +179,9 @@ internal static class UpdateProbe
         var (swapOk, swapMsg) = RunSwapSandbox(swapScript, instDir, newZip);
         bool newArrived = File.Exists(Path.Combine(instDir, "new-marker.txt"));
         bool backupKept = Directory.GetDirectories(sandbox, "App-1.0.old-*").Length > 0;
+        bool uninsKept = File.Exists(Path.Combine(instDir, "unins000.exe"))
+                      && File.Exists(Path.Combine(instDir, "unins000.dat"))
+                      && File.Exists(Path.Combine(instDir, "unins000.msg"));
         string swapLog = "";
         try { swapLog = File.ReadAllText(Path.Combine(swapDir, "swap.log")); } catch { }
 
@@ -186,6 +194,8 @@ internal static class UpdateProbe
         Check("换壳：脚本内容**纯 ASCII**（PS 5.1 按 ANSI 读无 BOM 脚本，中文会吃掉引号）",
               UpdateFeed.SwapScriptBody.All(c => c < 128),
               "含非 ASCII 字符");
+        Check("换壳（沙箱真跑）：安装版的卸载程序 unins000.* 被带到了新目录", uninsKept,
+              uninsKept ? "" : "新目录里缺 unins000.*（卸载按钮会失效）");
 
         Console.WriteLine();
         Console.WriteLine($"  合计 {pass + fail} 条：通过 {pass}，失败 {fail}");

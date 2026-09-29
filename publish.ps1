@@ -18,7 +18,8 @@
 [CmdletBinding()]
 param(
     [switch]$SingleFile,
-    [switch]$NoZip
+    [switch]$NoZip,
+    [switch]$NoSetup
 )
 
 $ErrorActionPreference = "Stop"
@@ -114,14 +115,18 @@ Write-Host "  exe 子系统 = GUI（双击不弹黑框）" -ForegroundColor Gree
 
 # ---- 随手塞一份"怎么用"，省得拷过去之后没人知道怎么退出 ------------------------------
 $readme = @"
-InkTeach $ver（绿色版，win-x64）
+InkTeach $ver（win-x64）
 
-怎么用：双击 InkTeach.exe。它是**一层透明的批注覆盖层**，屏幕底部中间那条就是工具条。
+怎么用：双击 InkTeach.exe（装了安装包的话，桌面/开始菜单的快捷方式就是它）。
+它是一层透明的批注覆盖层，屏幕底部中间那条就是工具条。
 
 三个最常用的：
   · 写一笔       —— 直接画（默认就是画笔）
   · 让它"过手"   —— 点工具条上的「鼠标（穿透）」，鼠标就还给下面的 PPT / 软件
   · 退出         —— 点工具条的「更多」（最右那格）→「退出」
+
+新版本：点「更多」→「检查更新」（会在后台查，按提示点第二下才开始下载，
+下载完校验完自己换壳重启；也会自动从国内加速站取，连不上 GitHub 也能用）。
 
 系统要求：Windows 10 / 11，64 位。**不需要装 .NET**（运行时已经打进来了）。
 
@@ -138,6 +143,30 @@ $zip = Join-Path $root "dist\$name.zip"
 if (-not $NoZip) {
     if (Test-Path $zip) { Remove-Item $zip -Force }
     Compress-Archive -Path (Join-Path $outDir "*") -DestinationPath $zip
+}
+
+# ---- 安装包（Inno Setup；没装 Inno 就跳过——发布绿色版不受影响）---------------------------
+#
+#  为什么是"每用户安装"（PrivilegesRequired=lowest）：不弹 UAC，而且 App 能写自己的
+#  目录 → "下载 → 换壳 → 重启"的自动更新在安装版上**照样能用**（装到 Program Files
+#  就得每次更新弹 UAC）。细节见 installer\InkTeach.iss 的注释。
+$setup = Join-Path $root "dist\InkTeach-Setup-$ver.exe"
+if ($NoSetup) {
+    Write-Host "  （-NoSetup：跳过安装包）" -ForegroundColor DarkGray
+} else {
+    $iscc = @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'),
+        'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+        'C:\Program Files\Inno Setup 6\ISCC.exe'
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $iscc) {
+        Write-Host "  （没找到 Inno Setup 的 ISCC.exe：跳过安装包。装 Inno Setup 6 即可，见 README「安装」）" -ForegroundColor DarkGray
+    } else {
+        $iss = Join-Path $root 'installer\InkTeach.iss'
+        & $iscc "/DAppVersion=$ver" "/DPayloadDir=$outDir" "/DOutDir=$(Join-Path $root 'dist')" $iss | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $setup)) { throw "Inno Setup 编译失败（退出码 $LASTEXITCODE）" }
+        Write-Host ("  安装包 dist\{0}（{1:N1} MB）" -f (Split-Path $setup -Leaf), ((Get-Item $setup).Length / 1MB)) -ForegroundColor Green
+    }
 }
 
 # ---- update.json（自动更新的清单；配了更新源才生成）--------------------------------------
@@ -182,7 +211,7 @@ else {
     $rootJson = Join-Path $root "update.json"
     Set-Content -Path $rootJson -Value $body -Encoding UTF8
     Write-Host "  自动更新清单 dist\update.json ＋ 仓库根 update.json（sha256 $($hash.Substring(0,12))…）" -ForegroundColor Green
-    Write-Host "  ⚠ 发新版：先 git add update.json && git commit && git push（App 从 raw 地址取它），再把 zip 传成 release 附件" -ForegroundColor Yellow
+    Write-Host "  ⚠ 发新版：先 git add update.json && git commit && git push（App 从 raw 地址取它），再把 zip 和 setup.exe 一起挂到 release 附件" -ForegroundColor Yellow
 }
 
 $files = (Get-ChildItem $outDir -Recurse -File)
@@ -191,3 +220,4 @@ Write-Host ""
 Write-Host "完成：" -ForegroundColor Green
 Write-Host "  目录 $outDir（$($files.Count) 个文件，$mb MB）"
 if (-not $NoZip) { Write-Host "  压缩包 $zip（$([math]::Round((Get-Item $zip).Length / 1MB, 1)) MB）" }
+if (-not $NoSetup -and (Test-Path $setup)) { Write-Host ("  安装包 $setup（{0:N1} MB）" -f ((Get-Item $setup).Length / 1MB)) }
