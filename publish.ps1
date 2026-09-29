@@ -174,7 +174,15 @@ else {
 }
 "@
     Set-Content -Path $json -Value $body -Encoding UTF8
-    Write-Host "  自动更新清单 dist\update.json（sha256 $($hash.Substring(0,12))…）" -ForegroundColor Green
+    # **再往仓库根目录写一份**：App 的默认更新源取的是
+    #   https://raw.githubusercontent.com/<账号>/<仓库>/main/update.json
+    # 为什么不用 release 附件当清单：附件走 CDN，刚发新版时"附件已换、取回来还是旧的"
+    #（2026-09-29 实测），而更新检查最需要立刻看到新版。zip 仍旧放 release 附件。
+    # ⚠ 发新版时**这两件事都要做**：把这份 update.json 提交推送，再把 zip 传成 release 附件。
+    $rootJson = Join-Path $root "update.json"
+    Set-Content -Path $rootJson -Value $body -Encoding UTF8
+    Write-Host "  自动更新清单 dist\update.json ＋ 仓库根 update.json（sha256 $($hash.Substring(0,12))…）" -ForegroundColor Green
+    Write-Host "  ⚠ 发新版：先 git add update.json && git commit && git push（App 从 raw 地址取它），再把 zip 传成 release 附件" -ForegroundColor Yellow
 }
 
 $files = (Get-ChildItem $outDir -Recurse -File)

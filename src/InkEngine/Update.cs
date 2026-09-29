@@ -47,11 +47,18 @@ public enum UpdateStage
 internal static class UpdateFeed
 {
     /// <summary>
-    /// 默认更新源（**本项目的正式地址**）。用户也可以用 settings.json 的
-    /// `update.url` 覆盖它——比如教室里改成局域网共享（那台机器可能连不上 GitHub）。
+    /// 默认更新源（**本项目的正式地址**）。
+    ///
+    /// ⚠ 这里用**仓库里的 raw 文件**、不用 release 附件：release 附件走 CDN，
+    /// 刚发新版时"附件已换、取回来还是旧的"（2026-09-29 实测），而更新检查恰恰
+    /// 最需要"立刻看到新版"。raw 地址 + 每次带一个查询串（见 <see cref="Fetch"/>）
+    /// 就能保证每次都是新的。zip 仍旧放 release 附件（大文件、版本固定，缓存是好事）。
+    ///
+    /// 用户可以用 settings.json 的 `update.url` 覆盖它——比如教室里改成局域网共享
+    /// （那台机器很可能连不上 GitHub，这条实测过）。
     /// </summary>
     public const string DefaultUrl =
-        "https://github.com/XueRenYi0/InkTeach/releases/latest/download/update.json";
+        "https://raw.githubusercontent.com/XueRenYi0/InkTeach/main/update.json";
 
     /// <summary>实际用的源：settings.json 覆盖默认值（引擎启动时赋值）。</summary>
     public static string Url = DefaultUrl;
@@ -137,7 +144,12 @@ internal static class UpdateFeed
             {
                 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
                 http.DefaultRequestHeaders.UserAgent.ParseAdd("InkTeach-updater/" + CurrentVersion);
-                text = http.GetStringAsync(url).GetAwaiter().GetResult();
+                // **清单一定要"新鲜"的**：GitHub 的 release 附件走 CDN，刚发新版时
+                // 会有一段时间仍然返回旧清单（2026-09-29 实测：附件 digest 已经换了，
+                // 取回来还是旧的）。加一个每次都不同的查询串逼它回源——
+                // 清单只有几百字节，不值得省这一次请求；zip 那边照旧吃缓存（好事）。
+                string fresh = url + (url.Contains('?') ? "&" : "?") + "t=" + DateTime.UtcNow.Ticks;
+                text = http.GetStringAsync(fresh).GetAwaiter().GetResult();
             }
         }
         catch (Exception ex)
