@@ -38,7 +38,7 @@ $proj = Join-Path $root "src\InkTeach\InkTeach.csproj"
 #       Gitee：     $updateBase = "https://gitee.com/<账号>/<仓库>/raw/<分支>"
 #       局域网共享：$updateBase = "\\教室服务器\InkTeach"
 #       对象存储：   $updateBase = "https://<桶>.oss-cn-….aliyuncs.com"
-$updateBase = ""
+$updateBase = "https://github.com/XueRenYi0/InkTeach/releases/latest/download"
 
 # ---- 版本号从工程里读，不在这里再写一份（写两份迟早对不上）----------------------------
 $ver = (Select-String -Path $proj -Pattern '<Version>([^<]+)</Version>').Matches[0].Groups[1].Value
