@@ -78,6 +78,10 @@ internal enum KeyAction
     FlipPageUp,
     /// <summary>白板整屏翻页：相机下移一屏（下面永远还有一屏空白）。</summary>
     FlipPageDown,
+    /// <summary>放映批注模式：**代 WPS/PPT 翻上一页**（键盘在我们手里，它收不到 ← 了）。</summary>
+    PptPrev,
+    /// <summary>放映批注模式：**代 WPS/PPT 翻下一页**。</summary>
+    PptNext,
 }
 
 /// <summary>

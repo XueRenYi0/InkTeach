@@ -1951,6 +1951,10 @@ public partial class InkEngine
         (Native.MOD_CONTROL, 0x4C /*L*/, KeyAction.ToolLaser),
         (Native.MOD_CONTROL, 0x45 /*E*/, KeyAction.ToolEraser),
         (Native.MOD_CONTROL, 0x5A /*Z*/, KeyAction.Undo),
+        // 放映时方向键也归我们：**有选中 → 微调；没选中 → ←→ 代 WPS 翻页**
+        // （键盘在我们手里，不拦的话 WPS 收不到 ←→，什么都不发生——用户 2026-09-30 实测）。
+        (0u, 0x25 /*←*/, KeyAction.PptPrev),
+        (0u, 0x27 /*→*/, KeyAction.PptNext),
     };
     private bool _pptHotkeysOn;
 
@@ -6457,6 +6461,14 @@ public partial class InkEngine
             case KeyAction.NudgeDownFar: Nudge(0f, 10f); break;
             case KeyAction.FlipPageUp: FlipPageFromUi(false); break;
             case KeyAction.FlipPageDown: FlipPageFromUi(true); break;
+            // 放映时 ←→（临时全局热键送进来的）：**有选中 → 微调；没选中 → 代 WPS/PPT 翻页**。
+            // 键盘在我们手里，不拦的话 WPS 收不到 ←→，表现就是"按了没反应"（用户实测）。
+            case KeyAction.PptPrev:
+                if (Doc.Selected.Count > 0) Nudge(-1f, 0f); else PptPrevFromUi();
+                break;
+            case KeyAction.PptNext:
+                if (Doc.Selected.Count > 0) Nudge(1f, 0f); else PptNextFromUi();
+                break;
         }
     }
 
