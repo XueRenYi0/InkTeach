@@ -266,20 +266,31 @@ dotnet run --project src/InkTeach -c Release -- --memory reports/inkprobe-memory
 **怎么配**（两种，都不用改 App）：`publish.ps1` 顶部的 `$updateBase`，
 或者用户机器上 `%APPDATA%\InkTeach\settings.json` 的 `update.url`（后者能覆盖前者）。
 
-**拿 GitHub 当源**（推荐，免费、没有 API 限流）：
+**拿 GitHub 当源**（本项目现在就是这么配的，仓库 <https://github.com/XueRenYi0/InkTeach>）：
 
-1. 建仓库 → 发一个 release，把这三个附件挂上去：
-   `update.json`、`InkTeach-<版本>-win-x64.zip`（以后再加安装包）；
-2. `publish.ps1` 顶部填：
+1. `publish.ps1` 顶部填 zip 的落点前缀：
    ```powershell
    $updateBase = "https://github.com/<账号>/<仓库>/releases/latest/download"
    ```
-3. 再跑一次 `publish.ps1`：`dist\update.json` 会带着**版本号 + zip 地址 + sha256**，
-   把它和 zip 一起传上去即可。
+2. 跑 `publish.ps1`：它会写**两份一样的清单**——
+   `dist\update.json`（跟 zip 一起当 release 附件）和**仓库根目录的 `update.json`**；
+3. **发新版三步**（`publish.ps1` 跑完会把这行提醒再打一遍）：
+   ```powershell
+   git add update.json && git commit -m "发布 vX.Y.Z" && git push
+   gh release create vX.Y.Z dist\InkTeach-X.Y.Z-win-x64.zip dist\update.json
+   ```
 
-为什么用 `releases/latest/download/…` 而不是 GitHub API：那个 API 匿名限流
-**60 次/小时**，几十台教室机一起点就废了；而这个地址是**恒定重定向**（永远指向最新
-release 的附件），没有 token、没有限流。以后要换成局域网共享，只改这一行字符串。
+**为什么清单放"仓库 raw 文件"、zip 放 release 附件**（2026-09-29 实测踩出来的）：
+
+| | 结论 |
+|---|---|
+| release 附件 | 走 CDN。**刚发新版时"附件 digest 已经换了、取回来还是旧内容"**（实测：附件换了，`releases/…/update.json` 取回来还是上一版） |
+| 清单 | 所以放**仓库文件**，App 从 `raw.githubusercontent.com/<账号>/<仓库>/main/update.json` 取，而且 `UpdateFeed.Fetch` 每次会**带一个查询串**击穿缓存（清单只有几百字节，不值得省这次请求） |
+| zip | 继续放 release 附件：大文件、**版本固定**（URL 里带 tag），缓存是好事 |
+
+为什么不用 GitHub API：那个 API 匿名限流 **60 次/小时**，几十台教室机一起点就废了；
+`releases/latest/download/…` 那个恒定重定向也**不能用**——它 302 到不带查询串的附件地址，
+照样命中 CDN 缓存（实测）。以后要换成局域网共享，只改 `settings.json` 里的 `update.url`。
 
 **⚠ 网络现实（2026-09-29 实测，动手前先看这一条）**：本机**连不上 github.com**——
 `Invoke-WebRequest -Head https://github.com` 直接超时、`git ls-remote` 21 秒后失败、
