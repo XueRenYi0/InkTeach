@@ -3912,16 +3912,15 @@ internal sealed class App : InkEngine.InkEngine
         CaptureActive = true;
         CapMinX = cx - 260; CapMinY = top;
         CapMaxX = cx + 260; CapMaxY = top + 300 * DpiScale;
+        // `--adjust`：出"松开后调整"那一版（8.3.0：8 个手柄 + ✓/✕ 两颗按钮）
+        CaptureAdjusting = Environment.GetCommandLineArgs().Contains("--adjust");
 
+        // 出图范围 = 框 + 四周一圈（遮罩/准线/读数/按钮都可能有）：整块视口太大，
+        // 给"框 + 120 逻辑像素"就够（看图看的是那几个控件的排版）。
         var r = new RectF { MinX = CapMinX, MinY = CapMinY, MaxX = CapMaxX, MaxY = CapMaxY };
-        // 读数画在框左下角外侧，脏区那一套逻辑和抓屏时一致，所以这里也把它算进去
-        r.Add(new RectF
-        {
-            MinX = r.MinX, MinY = r.MaxY,
-            MaxX = r.MinX + 110f * DpiScale, MaxY = r.MaxY + 40f * DpiScale,
-        });
-        if (!OffscreenFloatingShot(path, r.Inflate(20f))) Console.WriteLine("出图失败");
+        if (!OffscreenFloatingShot(path, r.Inflate(120f * DpiScale))) Console.WriteLine("出图失败");
         CaptureActive = false;
+        CaptureAdjusting = false;
         _quit = true;
     }
 
@@ -13258,7 +13257,9 @@ internal sealed class App : InkEngine.InkEngine
             Check("截屏那一格亮起来（点了有反馈）", ui.CellActiveForTest(9),
                   $"截屏格高亮 = {ui.CellActiveForTest(9)}");
 
-            // 截图那一格现在也长设置条了：**[直接截取][隐藏批注截取]**（照 InkClass 的两项菜单）
+            // 截图那一格现在也长设置条了：**[连批注拍][只拍下层]**（8.3.0 改的名；
+            // 原来叫"直接截取/隐藏界面"）+ 右端一颗**动作按钮「粘贴图片」**
+            //（它以前是第三段，混在"模式"里永远不亮；8.3.0 拆出来挂到动作位）。
             var capBar = ui.BarRectForTest;
             SendMouse((int)((capBar.MinX + capBar.MaxX) * 0.5f * DpiScale),
                       (int)((capBar.MinY + capBar.MaxY) * 0.5f * DpiScale), 0);
@@ -13266,34 +13267,39 @@ internal sealed class App : InkEngine.InkEngine
             var segDirect = ui.SegmentRectForTest(0);
             var segHidden = ui.SegmentRectForTest(1);
             Check("截屏那一格有两条设置（0 宽 = 没接上）",
-                  segDirect.MaxX - segDirect.MinX > 20f && segHidden.MinX > segDirect.MaxX - 1f,
-                  $"段宽 {segDirect.MaxX - segDirect.MinX:F0}，第二段起点 {segHidden.MinX:F0}");
+                  ui.BandSegmentCountForTest == 2
+                  && segDirect.MaxX - segDirect.MinX > 20f && segHidden.MinX > segDirect.MaxX - 1f,
+                  $"段数 {ui.BandSegmentCountForTest}，段宽 {segDirect.MaxX - segDirect.MinX:F0}，"
+                  + $"第二段起点 {segHidden.MinX:F0}");
 
             ClickPhysical((segDirect.MinX + segDirect.MaxX) * 0.5f * DpiScale,
                           (segDirect.MinY + segDirect.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
-            Check("点「直接截取」→ hideInk = false",
+            Check("点「连批注拍」→ hideInk = false",
                   !Host.State.CaptureHideInk, $"hideInk = {Host.State.CaptureHideInk}");
 
             segHidden = ui.SegmentRectForTest(1);
             ClickPhysical((segHidden.MinX + segHidden.MaxX) * 0.5f * DpiScale,
                           (segHidden.MinY + segHidden.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
-            Check("点「隐藏批注截取」→ hideInk = true",
+            Check("点「只拍下层」→ hideInk = true",
                   Host.State.CaptureHideInk, $"hideInk = {Host.State.CaptureHideInk}");
 
-            // 第三段是**动作**：粘贴图片（没有键盘的触摸屏 / 手写板也能用）
+            // 「粘贴图片」：右端的动作按钮（没有键盘的触摸屏 / 手写板也能用）
             {
-                // 先在剪贴板上放一张 60×40 的图（绿底），再点"粘贴图片"
+                // 先在剪贴板上放一张 60×40 的图（绿底），再点动作按钮
                 var buf = new byte[60 * 40 * 4];
                 for (int i = 0; i < buf.Length; i += 4)
                 { buf[i] = 0; buf[i + 1] = 200; buf[i + 2] = 0; buf[i + 3] = 255; }
                 ClipboardImage.SetImage(buf, 60, 40);
                 int imgBefore = Doc.Strokes.Count(s => s.IsImage);
 
-                var segPaste = ui.SegmentRectForTest(2);
-                ClickPhysical((segPaste.MinX + segPaste.MaxX) * 0.5f * DpiScale,
-                              (segPaste.MinY + segPaste.MaxY) * 0.5f * DpiScale);
+                var actPaste = ui.ActionRectForTest;
+                Check("「粘贴图片」是右端的动作按钮（不再是第三段）",
+                      actPaste.MaxX - actPaste.MinX > 40f,
+                      $"动作按钮宽 {actPaste.MaxX - actPaste.MinX:F0}（0 = 没有）");
+                ClickPhysical((actPaste.MinX + actPaste.MaxX) * 0.5f * DpiScale,
+                              (actPaste.MinY + actPaste.MaxY) * 0.5f * DpiScale);
                 SettleFrames(400);
                 int imgAfter = Doc.Strokes.Count(s => s.IsImage);
                 Check("点「粘贴图片」：剪贴板里的图进了画布",
@@ -24113,7 +24119,7 @@ internal sealed class App : InkEngine.InkEngine
     private void CaptureTest()
     {
         Console.WriteLine();
-        Console.WriteLine("=== 截图自检（拖框 → 左上角 → 剪贴板）===");
+        Console.WriteLine("=== 截图自检（拖框 → 调整 → 原位落 → 剪贴板）===");
         int pass = 0, fail = 0;
         void Check(string name, bool ok, string detail)
         {
@@ -24145,11 +24151,28 @@ internal sealed class App : InkEngine.InkEngine
         int onScreenInk = ScreenProbe.CountMagenta((int)(cx - 200), (int)(cy - 120), 400, 260);
         Check("准备：框里已经有一片墨", onScreenInk > 5000, $"{onScreenInk} 像素");
 
-        // 换截图工具，拖一个 300×200 的框（两种模式各抓一次，所以抽成函数）
+        // 换截图工具，拖一个 300×200 的框（两种模式各抓一次，所以抽成函数）。
+        //
+        // 8.3.0 起流程是"**拖框 → 松手进调整 → Enter/✓ 确认**"（不再松手即落图）：
+        // 拖完直接量读数/遮罩，再确认；每段都用**真实键盘**（PostMessage 一个 Enter/Esc 到窗口，
+        // 和 --keytest 那条一样）。
+        bool boardWas = BoardOn;
+        BoardOn = true;                    // 白底：亮度/像素判据才稳（桌面颜色不可控）
+        Doc.InvalidateAll();
+        SettleFrames(300);
         Tool = Tool.Capture;
         int x0 = (int)(cx - 150), y0 = (int)(cy - 100);
         int x1 = (int)(cx + 150), y1 = (int)(cy + 100);
         int midReadoutDark = 0;                 // 拖动中"尺寸读数"那块有多深（见下面的量法）
+        bool midAdjusting = false;              // 松手之后进没进"调整"（不再立刻落图）
+        float lumaBefore = (float)ScreenProbe.AvgLuma((int)(x0 - 220), (int)(cy - 15), 60, 30);
+
+        void PostKey(ushort vk)
+        {
+            Native.PostMessage(_windows[0].Hwnd, (uint)Native.WM_KEYDOWN, new IntPtr(vk), IntPtr.Zero);
+            Native.PostMessage(_windows[0].Hwnd, (uint)Native.WM_KEYUP, new IntPtr(vk), IntPtr.Zero);
+        }
+
         void DragCapture()
         {
             Tool = Tool.Capture;
@@ -24162,21 +24185,37 @@ internal sealed class App : InkEngine.InkEngine
             SendMouse(x1, y1, 0);
             SettleFrames(60);
             // **拖动中要有尺寸读数**（用户 2026-09-17："截图使用不顺手，光标配合也感觉不好"）：
-            // 框的左下角外 6 逻辑像素处会画一个深色胶囊写着 "宽 × 高"。
-            // 这里趁还没松手，量那块地方有没有深色像素（读数画出来了）。
+            // 框的**右下角**外侧 6 逻辑像素处会画一个深色胶囊写着 "宽 × 高"
+            //（8.3.0 从"左下角"挪到"正在拖的那个角"）。
             {
-                int lx = (int)(Math.Min(x0, x1) * 1), ly = (int)(Math.Max(y0, y1) + 6 * DpiScale);
-                int lw = (int)(96 * DpiScale), lh = (int)(26 * DpiScale);
-                int dark = ScreenProbe.CountDark(lx, ly, lw, lh);
-                midReadoutDark = dark;
+                float s = dpi;
+                int lx = (int)(x1 - 110 * s), ly = (int)(y1 + 4 * s);
+                int lw = (int)(110 * s), lh = (int)(30 * s);
+                midReadoutDark = ScreenProbe.CountDark(lx, ly, lw, lh);
             }
             SendMouse(x1, y1, Native.MOUSEEVENTF_LEFTUP);
-            SettleFrames(900);                 // 截图里含一次"藏窗口 / 藏框 + 抓屏 + 恢复"
+            SettleFrames(300);
+            midAdjusting = CaptureActive && CaptureAdjusting;
         }
+
         DragCapture();
+        Check("拖框松手：**先进调整阶段**（不立刻落图，可以拖边/确认/取消）",
+              midAdjusting && Doc.Strokes.FindLast(s => s.IsImage) == null,
+              $"调整={CaptureAdjusting}，活动={CaptureActive}，"
+              + $"图形对象 {(Doc.Strokes.Where(s => s.IsImage).Count())} 个（该 0）");
+
+        // 遮罩（8.3.0）：同一处（框外的白板）在被遮罩压暗
+        {
+            float lumaMasked = (float)ScreenProbe.AvgLuma((int)(x0 - 220), (int)(cy - 15), 60, 30);
+            Check("遮罩：框外被压暗（同一处亮度明显下降）", lumaBefore - lumaMasked > 30f,
+                  $"遮罩前 {lumaBefore:F0} → 遮罩后 {lumaMasked:F0}");
+        }
+
+        PostKey(0x0D);                     // Enter = 完成
+        SettleFrames(700);
 
         var shot = Doc.Strokes.FindLast(s => s.IsImage);
-        Check("截图：生成了图像对象", shot != null, shot == null ? "没有" : $"{shot.Image.Width}×{shot.Image.Height} 物理像素");
+        Check("确认：生成了图像对象", shot != null, shot == null ? "没有" : $"{shot.Image.Width}×{shot.Image.Height} 物理像素");
         if (shot == null)
         {
             Console.WriteLine();
@@ -24188,19 +24227,21 @@ internal sealed class App : InkEngine.InkEngine
         Check("截图：物理尺寸 = 拖出来的框", Math.Abs(shot.Image.Width - 300) <= 2
                                           && Math.Abs(shot.Image.Height - 200) <= 2,
               $"{shot.Image.Width}×{shot.Image.Height}，期望 300×200");
-        Check("截图：画布尺寸按 DPI 折算",
-              Math.Abs((shot.Transform.M11 * shot.Image.Width) - 300f / dpi) < 3f,
-              $"画布宽 {(shot.Transform.M11 * shot.Image.Width):F0}，期望 {300f / dpi:F0}（dpi={dpi:F2}）");
+        Check("截图：画布尺寸 = 物理像素 1:1（修掉高 DPI 下「贴出来只有一半大」的老 bug）",
+              Math.Abs((shot.Transform.M11 * shot.Image.Width) - 300f) < 3f,
+              $"画布宽 {(shot.Transform.M11 * shot.Image.Width):F0}，期望 300（dpi={dpi:F2}）");
 
-        var vp = ViewportCanvas;
-        float margin = CaptureMarginLogical * dpi;
-        Check("截图：落在视口左上角（带一点边距）",
-              Math.Abs(shot.WorldBounds.MinX - (vp.MinX + margin)) < 3f
-              && Math.Abs(shot.WorldBounds.MinY - (vp.MinY + margin)) < 3f,
-              $"({shot.WorldBounds.MinX:F0},{shot.WorldBounds.MinY:F0})，期望 ({vp.MinX + margin:F0},{vp.MinY + margin:F0})");
+        Check("截图：**原位落**（屏幕上截哪儿、画布上就落在哪儿，夹进视口留边距）",
+              Math.Abs(shot.WorldBounds.MinX - x0) < 3f
+              && Math.Abs(shot.WorldBounds.MinY - (y0 - ViewOffsetY)) < 3f,
+              $"落在 ({shot.WorldBounds.MinX:F0},{shot.WorldBounds.MinY:F0})，"
+              + $"期望 ({x0},{y0 - ViewOffsetY:F0})");
         Check("截图：自动选中、并切回框选工具",
               Doc.Selected.Count == 1 && ReferenceEquals(Doc.Selected[0], shot) && Tool == Tool.Marquee,
               $"选中 {Doc.Selected.Count} 个，工具 {Tool}");
+        Check("截图：确认之后状态收干净（不在调整里）",
+              !CaptureActive && !CaptureAdjusting && CaptureFrozenBgra == null,
+              $"活动={CaptureActive}，调整={CaptureAdjusting}，冻结帧={(CaptureFrozenBgra == null ? "已放" : "还拿着")}");
 
         // 核心一条：抓到的图里不该有自己的墨
         int shotInk = 0;
@@ -24215,7 +24256,7 @@ internal sealed class App : InkEngine.InkEngine
         else
             Console.WriteLine("    剪贴板：读不出来（可能被别的程序占着）——这项跳过");
 
-        Check("拖动中显示了尺寸读数（框下面那块有深色胶囊）", midReadoutDark > 800,
+        Check("拖动中显示了尺寸读数（框右下角那块有深色胶囊）", midReadoutDark > 800,
               $"{midReadoutDark} 像素（读数是 {300 / dpi:F0}×{200 / dpi:F0} 的一个深色胶囊）");
 
         // 覆盖层藏过又显示：屏幕上不该留残影（墨应该还在原处）
@@ -24223,19 +24264,57 @@ internal sealed class App : InkEngine.InkEngine
         Check("截图后屏幕恢复正常（批注还在，没有残影）", afterInk > 5000,
               $"截前 {onScreenInk} 像素，截后 {afterInk} 像素");
 
-        // ---- ② 第二种模式：**直接截取**（连板书一起拍）----
+        // ---- ①b Esc = 取消（不落图、状态清干净）----
+        int imgsBeforeCancel = Doc.Strokes.Count(s => s.IsImage);
+        DragCapture();
+        PostKey(0x1B);
+        SettleFrames(400);
+        Check("Esc 取消：不落图、状态清干净",
+              Doc.Strokes.Count(s => s.IsImage) == imgsBeforeCancel
+              && !CaptureActive && !CaptureAdjusting && CaptureFrozenBgra == null,
+              $"图像 {imgsBeforeCancel} → {Doc.Strokes.Count(s => s.IsImage)}，"
+              + $"活动={CaptureActive}，调整={CaptureAdjusting}");
+
+        // ---- ①c 调整：拖右下角手柄 → 确认出来的图就是框最后的大小 ----
+        DragCapture();
+        {
+            SendMouse(x1, y1, 0);                                   SettleFrames(60);
+            SendMouse(x1, y1, Native.MOUSEEVENTF_LEFTDOWN);          SettleFrames(50);
+            SendMouse(x1 - 40, y1 - 30, 0);                         SettleFrames(40);
+            SendMouse(x1 - 80, y1 - 60, 0);                         SettleFrames(40);
+            SendMouse(x1 - 80, y1 - 60, Native.MOUSEEVENTF_LEFTUP);  SettleFrames(200);
+        }
+        PostKey(0x0D);
+        SettleFrames(700);
+        var shot3 = Doc.Strokes.FindLast(s => s.IsImage);
+        Check("调整：拖右下角手柄之后确认，图 = 框最后的大小（约 220×140）",
+              shot3 != null && Math.Abs(shot3.Image.Width - 220) <= 6 && Math.Abs(shot3.Image.Height - 140) <= 6,
+              shot3 == null ? "没有对象" : $"{shot3.Image.Width}×{shot3.Image.Height}，期望约 220×140");
+
+        // ---- ② 第二种模式：**连批注拍**（连板书一起拍）----
         //
         // 用户 2026-09-17："截图功能是不是也应该对接了，也可以参考 inkclass"。
         // InkClass 给的是两项菜单（快速截图 / 隐藏界面截图），我们把这两项放进
-        // **截图那一格的上带**：[直接截取][隐藏批注截取]（照我们假面板里定的那两段）。
+        // **截图那一格的上带**：[连批注拍][只拍下层]（8.3.0 改的名）。
+        //
+        // ⚠ 先把前两次落下的图删掉：**原位落**之后它们正好盖在接下来要拍的那一块上，
+        // 不删的话拍到的是那两张图（白板，没有墨），"板书在图里"这条必然假红。
+        Doc.Selected.Clear();
+        foreach (var s in Doc.Strokes) if (s.IsImage) Doc.Selected.Add(s);
+        Doc.DeleteSelected();
+        Doc.ClearHistory();
+        SettleFrames(200);
+
         Host.Commands.SetCaptureHideInk(false);
         SettleFrames(250);
-        Check("模式切到「直接截取」", !Host.State.CaptureHideInk,
+        Check("模式切到「连批注拍」", !Host.State.CaptureHideInk,
               $"hideInk = {Host.State.CaptureHideInk}");
 
         DragCapture();
+        PostKey(0x0D);
+        SettleFrames(700);
         var shot2 = Doc.Strokes.FindLast(s => s.IsImage);
-        Check("直接截取：又生成了一个图像对象", shot2 != null && !ReferenceEquals(shot2, shot),
+        Check("连批注拍：又生成了一个图像对象", shot2 != null && !ReferenceEquals(shot2, shot3 ?? shot),
               shot2 == null ? "没有" : $"{shot2.Image.Width}×{shot2.Image.Height}");
         if (shot2 != null)
         {
@@ -24247,17 +24326,19 @@ internal sealed class App : InkEngine.InkEngine
                     int i = (y * shot2.Image.Width + x) * 4;
                     byte b = q[i], g = q[i + 1], r = q[i + 2];
                     if (r > 200 && g < 90 && b > 200) ink2++;                       // 品红 = 板书
-                    // 取景框是琥珀色（1, 0.68, 0.10）：只查图片最外 3 像素那一圈——
+                    // 取景框/准线是琥珀色（1, 0.68, 0.10）：只查图片最外 3 像素那一圈——
                     // 框就画在抓取矩形的边上，真被拍进去必然落在这里
                     if ((x < 3 || y < 3 || x >= shot2.Image.Width - 3 || y >= shot2.Image.Height - 3)
                         && r > 200 && g > 140 && g < 215 && b < 90) frame++;
                 }
-            Check("直接截取：**板书在图里**（品红 > 2000）", ink2 > 2000, $"{ink2} 像素");
-            Check("直接截取：取景框没被拍进去（最外一圈没有琥珀色）", frame == 0, $"{frame} 像素");
+            Check("连批注拍：**板书在图里**（品红 > 2000）", ink2 > 2000, $"{ink2} 像素");
+            Check("连批注拍：取景框/准线没被拍进去（最外一圈没有琥珀色）", frame == 0, $"{frame} 像素");
         }
 
-        // 收尾：模式还原成默认的"隐藏批注截取"
+        // 收尾：模式还原成默认的"只拍下层"；白板还原
         Host.Commands.SetCaptureHideInk(true);
+        BoardOn = boardWas;
+        Doc.InvalidateAll();
         SettleFrames(150);
         Check("收尾：模式还原成「隐藏批注截取」", Host.State.CaptureHideInk,
               $"hideInk = {Host.State.CaptureHideInk}");
@@ -24936,6 +25017,20 @@ internal static class ScreenProbe
     /// <summary>深色像素数（找"深色胶囊"那种东西：截图时的尺寸读数）。</summary>
     public static int CountDark(int x, int y, int w, int h) => Capture(x, y, w, h, IsDark);
     private static bool IsDark(byte b, byte g, byte r) => r < 90 && g < 90 && b < 90;
+
+    /// <summary>
+    /// 一块区域的**平均亮度**（0..255，BT.601 权重）。给"遮罩压暗没压暗"这类判据用——
+    /// 数像素（Count*）分不清"整块都暗了一点"和"少数像素很暗"。
+    /// </summary>
+    public static double AvgLuma(int x, int y, int w, int h)
+    {
+        var buf = CaptureRegion(x, y, w, h);
+        if (buf.Length < 4) return 0;
+        double sum = 0; int n = 0;
+        for (int i = 0; i + 3 < buf.Length; i += 4)
+        { sum += 0.114 * buf[i] + 0.587 * buf[i + 1] + 0.299 * buf[i + 2]; n++; }
+        return n == 0 ? 0 : sum / n;
+    }
 
     // 判定用色。像素是 BGRA 顺序，所以参数名按 (b, g, r)。
     private static bool IsMagenta(byte b, byte g, byte r) => b > 200 && g < 90 && r > 200;

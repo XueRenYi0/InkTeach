@@ -359,6 +359,9 @@ internal sealed class OverlayWindow : IDisposable
     /// <summary>上一帧图库面板占的矩形（窗口坐标）。面板关掉时要靠它把那张卡片擦掉。</summary>
     private RectF _libraryRectPrev = RectF.Empty;
 
+    /// <summary>上一帧"截图取景"开着吗——收场那一帧要整窗重画，把遮罩擦干净（8.3.0）。</summary>
+    private bool _captureWasActive;
+
     /// <summary>PPT 控件条上一帧的矩形（退出放映 / 拖动那一帧要靠它把旧位置擦干净，
     /// 同 `_libraryRectPrev` 的做法）。</summary>
     private RectF _pptBarRectPrev = RectF.Empty;
@@ -1284,6 +1287,18 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private bool PrepareUi(InkEngine app)
     {
+        // 截图取景/调整期间：界面整块收起来（8.3.0）。
+        //
+        // 遮罩是"模态"的：工具条留在上面会跟遮罩打架（它在遮罩之上画、会亮着），
+        // 而且"直接截取"会把它拍进图里。收起这一块由引擎做（不管界面自己怎么想），
+        // 只是这一帧不画/不接输入——"界面崩了再造一个"那三级阶梯说的是 Ui 对象，不受影响。
+        if (app.CaptureActive)
+        {
+            _uiLogicalBounds = RectF.Empty;
+            _uiBounds = RectF.Empty;
+            return false;
+        }
+
         if (!app.UiVisibleNow)
         {
             _uiLogicalBounds = RectF.Empty;
@@ -1563,7 +1578,7 @@ internal sealed class OverlayWindow : IDisposable
                 // 少画一样就是"看了一张没有面板的图还以为面板没开"）。
                 DrawLibraryPanel(app);
                 DrawShapeInclination(app);
-                DrawCaptureRect(app);        // 截图取景框（含尺寸读数）——不在截图态就直接返回
+                DrawCaptureOverlay(app, _ctx.Transform);   // 截图取景（含遮罩/冻结帧）——不在截图态就直接返回
             }
             else
             {
@@ -2004,7 +2019,6 @@ internal sealed class OverlayWindow : IDisposable
             DrawLibraryPanel(app);
             // 画线中的 α 读数画在浮动层最上面（它贴着正在拖的那一端，压住什么都不碍事）。
             DrawShapeInclination(app);
-            DrawCaptureRect(app);
             DrawLaser(app);
             DrawToolCursor(app);
             DrawMarquee(app);
@@ -2025,6 +2039,13 @@ internal sealed class OverlayWindow : IDisposable
         // 它们的矩形是**屏幕坐标**（贴屏幕底边、只跟屏幕走），画在上面的画布变换里
         // 会被相机整体平移——相机一滚，条就跟着跑偏（和 HUD、滚动条同一批，同一理由）。
         DrawPptBar(app);
+
+        // 截图整层（8.3.0）：遮罩/冻结帧/取景框/准线/读数/调整手柄。
+        // 放在最后 = 盖住上面所有东西（滚动条、PPT 条、HUD）；界面那一块在截图期间
+        // 由引擎收起（见 PrepareUi），所以这就是屏幕上看到的全部。
+        // 截图结束那一帧顺手把冻结帧位图放掉（它位图里存着整屏像素，不留着占显存/内存）。
+        if (app.CaptureActive) DrawCaptureOverlay(app, CanvasToWindow);
+        else ReleaseFrozenBitmap();
 
         _ctx.PopAxisAlignedClip();
         }
@@ -2103,24 +2124,12 @@ internal sealed class OverlayWindow : IDisposable
             r.Add(m.Inflate(3f));
         }
 
-        // 截图取景框：角标比线宽出去一截，多留 4 像素。
-        if (app.CaptureActive)
-        {
-            var m = RectF.Empty;
-            m.Add(app.CapMinX, app.CapMinY);
-            m.Add(app.CapMaxX, app.CapMaxY);
-            var capWin = CanvasRectToWindow(m).Inflate(4f);
-            r.Add(capWin);
-            // **取景框外面还有东西**：拖动中画在框左下角外侧的"宽 × 高"读数
-            // （见 DrawCaptureRect）。它不在上面的矩形里，不单独加一块就会被脏区裁掉——
-            // 自检当场量到 0 像素（"尺寸读数一个深色像素都没有"）。
-            r.Add(new RectF
-            {
-                MinX = capWin.MinX, MinY = capWin.MaxY,
-                MaxX = capWin.MinX + 100f * Dpi,
-                MaxY = capWin.MaxY + 36f * Dpi,
-            });
-        }
+        // 截图（8.3.0）：整屏遮罩 + 冻结帧挖洞 + 准线 + 取景框，**每帧都在动**，
+        // 所以取景期间干脆把整个窗口进脏区（这段时间本来就每帧全屏重画，一两秒的事）；
+        // **收场那一帧**同样要整窗——把遮罩擦干净。
+        if (app.CaptureActive || _captureWasActive)
+            r.Add(new RectF { MinX = OriginX, MinY = OriginY, MaxX = OriginX + Width, MaxY = OriginY + Height });
+        _captureWasActive = app.CaptureActive;
 
         // 图库面板：开合、悬停高亮、整理模式删格子都会变，所以**每帧按当前矩形算进脏区**；
         // 关掉之后旧位置也要擦干净——所以上一帧那份矩形同样并进来
@@ -4560,61 +4569,236 @@ internal sealed class OverlayWindow : IDisposable
         return geo;
     }
 
-    /// <summary>
-    /// 截图时拖出来的那个框。
-    ///
-    /// 和框选**刻意画得不一样**：框选是蓝色（"我在选东西"），截图是琥珀色 +
-    /// 四角短角标（"我在取景"）。同一个手势、两套皮肤，用户一眼就知道
-    /// 松手之后会发生什么——这个区分在投影上很值。
-    ///
-    /// 框里面**不填充**：截图要看见底下的内容才知道该取到哪儿。
-    /// </summary>
-    private void DrawCaptureRect(InkEngine app)
+    // =====================================================================
+    //  截图模式（8.3.0）：遮罩/挖洞（洞里是冻结帧）/取景框/准线/读数/调整手柄
+    //
+    //  全部画在**画布坐标**里（传进来的 canvasToTarget 决定落到哪儿）：
+    //    · 实机渲染：canvasToTarget = CanvasToWindow（窗口/屏幕）；
+    //    · 离屏出图（--captureshow）：canvasToTarget = 出图那条路的平移矩阵。
+    //  同一份画法两条路都对（出图那条路以前只能出一圈框，现在遮罩也能拍出来）。
+    // =====================================================================
+
+    private void DrawCaptureOverlay(InkEngine app, Matrix3x2 canvasToTarget)
     {
-        // 抓屏那一瞬不画框（"直接截取"要把板书留下、把框藏掉）
+        // 抓屏那一瞬不画我们自己的任何东西（冻结帧就抓在这一瞬，见 Engine.CaptureFrameHidden）
         if (!app.CaptureActive || app.CaptureFrameHidden) return;
-        var r = new Vortice.RawRectF(app.CapMinX, app.CapMinY, app.CapMaxX, app.CapMaxY);
-        var accent = new Color4(1f, 0.68f, 0.10f, 1f);      // 琥珀
 
-        _scratch.Color = new Color4(accent.R, accent.G, accent.B, 0.9f);
-        _ctx.DrawRectangle(r, _scratch, 1.6f);
-
-        // 四角角标：长度取短边的 1/6，但夹在 8~28 之间——
-        // 框很小时角标不能糊成一片，很大时也不能细得看不见。
-        float shortSide = MathF.Min(r.Right - r.Left, r.Bottom - r.Top);
-        float len = Math.Clamp(shortSide / 6f, 8f, 28f);
-        float t = 3f;
-        DrawCorner(r.Left, r.Top, len, len, t);
-        DrawCorner(r.Right, r.Top, -len, len, t);
-        DrawCorner(r.Right, r.Bottom, -len, -len, t);
-        DrawCorner(r.Left, r.Bottom, len, -len, t);
-
-        // **尺寸读数**（用户 2026-09-17："这个截图使用不顺手，光标配合也感觉不好"）。
-        //
-        // 拖动时最想知道的是"我框的这块有多大"——没有读数就得靠眼估，松手才发现多一块少一块。
-        // 数字用**逻辑像素**（老师看的坐标系，和"导出 300×200"是一套），
-        // 框贴在屏幕顶上时改画在框里面，免得跑到屏幕外看不见。
-        // 注意：`Dpi` 是**DPI 本身**（本机 192），不是缩放倍数——缩放倍数是它 ÷ 96。
-        // 第一版直接乘了 Dpi，胶囊被算到屏幕外 5000 像素（自检量到 0 像素）。
         float s = Dpi / 96f;
-        float w = r.Right - r.Left, h = r.Bottom - r.Top;
-        if (w < 24f * s || h < 16f * s) return;                  // 刚开始拖，数字没意义
-        string text = $"{w / s:F0} × {h / s:F0}";
-        float boxW = 96f * s, boxH = 26f * s, gap = 6f * s;
-        bool below = r.Bottom + boxH + gap < Height;
-        var box = new Vortice.RawRectF(
-            r.Left, below ? r.Bottom + gap : r.Bottom - boxH - gap,
-            r.Left + boxW, (below ? r.Bottom + gap : r.Bottom - boxH - gap) + boxH);
-        _scratch.Color = new Color4(0.10f, 0.11f, 0.14f, 0.82f);
-        _ctx.FillRoundedRectangle(new RoundedRectangle(box, boxH * 0.5f, boxH * 0.5f), _scratch);
-        _ctx.DrawText(text, CaptureInfoFormat(),
-                      new Rect(box.Left, box.Top, box.Right - box.Left, box.Bottom - box.Top),
-                      Brush(new Color4(1f, 1f, 1f, 1f)));
+        var amber = new Color4(1f, 0.68f, 0.10f, 1f);
+        var white = new Color4(1f, 1f, 1f, 0.92f);
+        var saved = _ctx.Transform;
+        _ctx.Transform = canvasToTarget;
+
+        var fr = new RectF
+        {
+            MinX = MathF.Min(app.CapMinX, app.CapMaxX), MinY = MathF.Min(app.CapMinY, app.CapMaxY),
+            MaxX = MathF.Max(app.CapMinX, app.CapMaxX), MaxY = MathF.Max(app.CapMinY, app.CapMaxY),
+        };
+        var screen = app.ViewportCanvas;      // 可见画布 = 屏幕
+        bool hasHole = fr.MaxX - fr.MinX >= 2f && fr.MaxY - fr.MinY >= 2f;
+
+        // ---- ① 遮罩：42% 黑铺满整个屏幕，框里挖洞（EvenOdd）----
+        _scratch.Color = new Color4(0f, 0f, 0f, 0.42f);
+        if (!hasHole)
+        {
+            _ctx.FillRectangle(new Vortice.RawRectF(screen.MinX, screen.MinY, screen.MaxX, screen.MaxY), _scratch);
+        }
+        else
+        {
+            using var geo = Gfx.D2DFactory.CreatePathGeometry();
+            using (var sink = geo.Open())
+            {
+                sink.SetFillMode(Vortice.Direct2D1.FillMode.Alternate);
+                sink.BeginFigure(new Vector2(screen.MinX, screen.MinY), FigureBegin.Filled);
+                sink.AddLine(new Vector2(screen.MaxX, screen.MinY));
+                sink.AddLine(new Vector2(screen.MaxX, screen.MaxY));
+                sink.AddLine(new Vector2(screen.MinX, screen.MaxY));
+                sink.EndFigure(FigureEnd.Closed);
+                sink.BeginFigure(new Vector2(fr.MinX, fr.MinY), FigureBegin.Filled);
+                sink.AddLine(new Vector2(fr.MaxX, fr.MinY));
+                sink.AddLine(new Vector2(fr.MaxX, fr.MaxY));
+                sink.AddLine(new Vector2(fr.MinX, fr.MaxY));
+                sink.EndFigure(FigureEnd.Closed);
+                sink.Close();
+            }
+            _ctx.FillGeometry(geo, _scratch);
+        }
+
+        // ---- ② 洞里画**冻结帧**（所见即所得：拍到的就是看到的）。
+        //      没有冻结帧时（出图/兜底）洞里就是下面的实时内容。----
+        if (hasHole && app.CaptureFrozen && app.CaptureFrozenBgra != null)
+        {
+            var bmp = EnsureFrozenBitmap(app);
+            if (bmp != null)
+            {
+                _ctx.PushAxisAlignedClip(new Vortice.RawRectF(fr.MinX, fr.MinY, fr.MaxX, fr.MaxY),
+                                         AntialiasMode.Aliased);
+                _ctx.DrawBitmap(bmp,
+                    new Vortice.RawRectF(app.CaptureFrozenX, app.CaptureFrozenY - app.ViewOffsetY,
+                                         app.CaptureFrozenX + app.CaptureFrozenW,
+                                         app.CaptureFrozenY - app.ViewOffsetY + app.CaptureFrozenH),
+                    1f, Vortice.Direct2D1.InterpolationMode.NearestNeighbor, null, null);
+                _ctx.PopAxisAlignedClip();
+            }
+        }
+
+        if (!hasHole) { _ctx.Transform = saved; return; }
+
+        // ---- ③ 起框/拖动中：全屏准线 + 指针十字（调整阶段换系统箭头，不画）----
+        if (!app.CaptureAdjusting)
+        {
+            float gx = app.PointerX, gy = app.PointerY;
+            _scratch.Color = new Color4(1f, 1f, 1f, 0.14f);
+            _ctx.DrawLine(new Vector2(gx, screen.MinY), new Vector2(gx, screen.MaxY), _scratch, 3f * s);
+            _ctx.DrawLine(new Vector2(screen.MinX, gy), new Vector2(screen.MaxX, gy), _scratch, 3f * s);
+            _scratch.Color = new Color4(amber.R, amber.G, amber.B, 0.55f);
+            _ctx.DrawLine(new Vector2(gx, screen.MinY), new Vector2(gx, screen.MaxY), _scratch, 1f * s);
+            _ctx.DrawLine(new Vector2(screen.MinX, gy), new Vector2(screen.MaxX, gy), _scratch, 1f * s);
+
+            float arm = 7f * s;
+            _scratch.Color = white;
+            _ctx.DrawLine(new Vector2(gx - arm, gy), new Vector2(gx + arm, gy), _scratch, 2.6f * s);
+            _ctx.DrawLine(new Vector2(gx, gy - arm), new Vector2(gx, gy + arm), _scratch, 2.6f * s);
+            _scratch.Color = amber;
+            _ctx.DrawLine(new Vector2(gx - arm, gy), new Vector2(gx + arm, gy), _scratch, 1.2f * s);
+            _ctx.DrawLine(new Vector2(gx, gy - arm), new Vector2(gx, gy + arm), _scratch, 1.2f * s);
+            _ctx.FillEllipse(new Ellipse(new Vector2(gx, gy), 1.5f * s, 1.5f * s), _scratch);
+        }
+
+        // ---- ④ 取景框：白垫 + 琥珀线 + 四角小方块 ----
+        var box = new Vortice.RawRectF(fr.MinX, fr.MinY, fr.MaxX, fr.MaxY);
+        _ctx.DrawRectangle(box, Brush(white), 3.4f * s);
+        _scratch.Color = amber;
+        _ctx.DrawRectangle(box, _scratch, 1.8f * s);
+        void CornerSq(float x, float y)
+        {
+            float q = 5f * s;
+            var r2 = new Vortice.RawRectF(x - q * 0.5f, y - q * 0.5f, x + q * 0.5f, y + q * 0.5f);
+            _ctx.FillRectangle(r2, Brush(white));
+            _scratch.Color = amber;
+            _ctx.DrawRectangle(r2, _scratch, 1.2f * s);
+        }
+        CornerSq(fr.MinX, fr.MinY); CornerSq(fr.MaxX, fr.MinY);
+        CornerSq(fr.MaxX, fr.MaxY); CornerSq(fr.MinX, fr.MaxY);
+
+        // ---- ⑤ 尺寸读数：贴在框的**右下角**外侧（贴边自动翻到上方/夹进屏幕）；
+        //      调整阶段改画在**框内右下角**——框下面那一块让给「✓ ✕」两颗按钮了。----
+        float rw = fr.MaxX - fr.MinX, rh = fr.MaxY - fr.MinY;
+        if (rw >= 24f * s && rh >= 16f * s)
+        {
+            string text = $"{rw / s:F0} × {rh / s:F0}";
+            float boxW = 104f * s, boxH = 26f * s, gap = 6f * s;
+            float bx, by;
+            if (app.CaptureAdjusting)
+            {
+                bx = fr.MaxX - boxW - 8f * s;
+                by = fr.MaxY - boxH - 8f * s;
+            }
+            else
+            {
+                bx = Math.Clamp(fr.MaxX - boxW, screen.MinX + 4f * s, screen.MaxX - boxW - 4f * s);
+                by = fr.MaxY + gap;
+                if (by + boxH > screen.MaxY - 4f * s) by = fr.MinY - gap - boxH;
+                by = Math.Clamp(by, screen.MinY + 4f * s, screen.MaxY - boxH - 4f * s);
+            }
+            var pill = new Vortice.RawRectF(bx, by, bx + boxW, by + boxH);
+            _scratch.Color = new Color4(0.10f, 0.11f, 0.14f, 0.82f);
+            _ctx.FillRoundedRectangle(new RoundedRectangle(pill, boxH * 0.5f, boxH * 0.5f), _scratch);
+            _ctx.DrawText(text, CaptureInfoFormat(),
+                          new Rect(pill.Left, pill.Top, pill.Right - pill.Left, pill.Bottom - pill.Top),
+                          Brush(new Color4(1f, 1f, 1f, 1f)));
+        }
+
+        // ---- ⑥ 顶部提示（起框/拖动的说明；调整阶段换文案）----
+        {
+            string hint = app.CaptureAdjusting
+                ? "拖动边角调整 · Enter 或 ✓ 完成 · Esc / 右键取消"
+                : "拖动框选截图区域 · Esc / 右键取消";
+            float cx = (screen.MinX + screen.MaxX) * 0.5f;
+            var pill = new Vortice.RawRectF(cx - 230f * s, screen.MinY + 40f * s,
+                                            cx + 230f * s, screen.MinY + 74f * s);
+            _scratch.Color = new Color4(0.10f, 0.11f, 0.14f, 0.72f);
+            _ctx.FillRoundedRectangle(new RoundedRectangle(pill, 17f * s, 17f * s), _scratch);
+            _ctx.DrawText(hint, CaptureInfoFormat(),
+                          new Rect(pill.Left, pill.Top, pill.Right - pill.Left, pill.Bottom - pill.Top),
+                          Brush(new Color4(1f, 1f, 1f, 0.95f)));
+        }
+
+        // ---- ⑦ 调整阶段：8 个手柄 + 「✓ 完成 / ✕ 取消」----
+        if (app.CaptureAdjusting)
+        {
+            app.CaptureHandles(out var tl, out var t, out var tr, out var r,
+                               out var br, out var b, out var bl, out var l);
+            void Handle(Vector2 p)
+            {
+                float q = 3.5f * s;
+                var r2 = new Vortice.RawRectF(p.X - q, p.Y - q, p.X + q, p.Y + q);
+                _ctx.FillRectangle(r2, Brush(white));
+                _scratch.Color = amber;
+                _ctx.DrawRectangle(r2, _scratch, 1.2f * s);
+            }
+            Handle(tl); Handle(t); Handle(tr); Handle(r);
+            Handle(br); Handle(b); Handle(bl); Handle(l);
+
+            app.CaptureButtons(out var okBtn, out var cancelBtn);
+            void Button(in RectF rc, string label, bool primary)
+            {
+                var r3 = new Vortice.RawRectF(rc.MinX, rc.MinY, rc.MaxX, rc.MaxY);
+                _scratch.Color = primary ? amber : new Color4(0.16f, 0.17f, 0.20f, 0.86f);
+                _ctx.FillRoundedRectangle(new RoundedRectangle(r3, 8f * s, 8f * s), _scratch);
+                _ctx.DrawRoundedRectangle(new RoundedRectangle(r3, 8f * s, 8f * s), Brush(white), 1.2f * s);
+                _ctx.DrawText(label, CaptureInfoFormat(),
+                              new Rect(r3.Left, r3.Top, r3.Right - r3.Left, r3.Bottom - r3.Top),
+                              Brush(primary ? new Color4(0.12f, 0.12f, 0.14f, 1f)
+                                            : new Color4(1f, 1f, 1f, 1f)));
+            }
+            Button(okBtn, "✓ 完成", primary: true);
+            Button(cancelBtn, "✕ 取消", primary: false);
+        }
+
+        _ctx.Transform = saved;
     }
 
-    private IDWriteTextFormat _capInfoFmt;
+    // ---- 冻结帧位图缓存（每个窗口一份，按 buffer 引用判"换没换"）----
 
-    /// <summary>取景框旁边的尺寸读数格式（14 逻辑像素、居中、按 DPI 生成一次）。</summary>
+    private ID2D1Bitmap _frozenBmp;
+    private byte[] _frozenSrc;
+    private int _frozenW, _frozenH;
+
+    /// <summary>放掉冻结帧位图（截图收场后调用）。**连着那份像素数组一起松开**——
+    /// 只清位图不清引用的话，那张 20MB 的整屏像素会被这块缓存一直拽着不放。</summary>
+    private void ReleaseFrozenBitmap()
+    {
+        if (_frozenBmp == null && _frozenSrc == null) return;
+        _frozenBmp?.Dispose();
+        _frozenBmp = null; _frozenSrc = null; _frozenW = _frozenH = 0;
+    }
+
+    private ID2D1Bitmap EnsureFrozenBitmap(InkEngine app)
+    {
+        if (app.CaptureFrozenBgra == null) return null;
+        if (_frozenBmp != null && ReferenceEquals(_frozenSrc, app.CaptureFrozenBgra)
+            && _frozenW == app.CaptureFrozenW && _frozenH == app.CaptureFrozenH)
+            return _frozenBmp;
+        _frozenBmp?.Dispose(); _frozenBmp = null; _frozenSrc = null;
+        var props = new BitmapProperties1(
+            new Vortice.DCommon.PixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Ignore),
+            96f, 96f, BitmapOptions.None);
+        var handle = GCHandle.Alloc(app.CaptureFrozenBgra, GCHandleType.Pinned);
+        try
+        {
+            _frozenBmp = _ctx.CreateBitmap(new SizeI(app.CaptureFrozenW, app.CaptureFrozenH),
+                                           handle.AddrOfPinnedObject(), (uint)(app.CaptureFrozenW * 4), props);
+        }
+        catch { _frozenBmp = null; }
+        finally { handle.Free(); }
+        if (_frozenBmp != null)
+        { _frozenSrc = app.CaptureFrozenBgra; _frozenW = app.CaptureFrozenW; _frozenH = app.CaptureFrozenH; }
+        return _frozenBmp;
+    }
+
+    /// <summary>取景框旁边的读数/提示/按钮的文字格式（14 逻辑像素、居中、按 DPI 生成一次）。</summary>
+    private IDWriteTextFormat _capInfoFmt;
     private IDWriteTextFormat CaptureInfoFormat()
     {
         if (_capInfoFmt != null) return _capInfoFmt;
@@ -4623,13 +4807,6 @@ internal sealed class OverlayWindow : IDisposable
         _capInfoFmt.TextAlignment = TextAlignment.Center;
         _capInfoFmt.ParagraphAlignment = ParagraphAlignment.Center;
         return _capInfoFmt;
-    }
-
-    private void DrawCorner(float x, float y, float dx, float dy, float t)
-    {
-        _scratch.Color = new Color4(1f, 0.68f, 0.10f, 1f);
-        _ctx.DrawLine(new Vector2(x, y), new Vector2(x + dx, y), _scratch, t);
-        _ctx.DrawLine(new Vector2(x, y), new Vector2(x, y + dy), _scratch, t);
     }
 
     private float HudScale => Dpi / 96f;
@@ -4804,6 +4981,7 @@ internal sealed class OverlayWindow : IDisposable
         _hudBmpTex?.Dispose();
         _pickSvBmp?.Dispose();           // 自定义取色板的缓存位图（8.2.0）
         _pickHueBmp?.Dispose();
+        _frozenBmp?.Dispose();           // 截图的冻结帧位图（8.3.0）
         _tiles?.Dispose();
         _backBuffer?.Dispose();
         _inkStyle?.Dispose();          // 墨迹笔尖样式（压感变宽那条路）

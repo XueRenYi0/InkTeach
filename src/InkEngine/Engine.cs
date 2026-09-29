@@ -194,6 +194,46 @@ public partial class InkEngine
     internal float CapMinX, CapMinY, CapMaxX, CapMaxY;
 
     /// <summary>
+    /// **松开之后、确认之前**的"调整"阶段（8.3.0 加的）。
+    ///
+    /// 以前松手 = 立刻抓屏落图，框歪了只能删掉重截。现在松手先留框：
+    /// 可以拖边/拖角/拖整体，`Enter` 或点「✓ 完成」才落图，`Esc`/右键/点框外取消
+    ///（微信 / QQ / Snipaste 都是这个手感）。
+    /// </summary>
+    internal bool CaptureAdjusting;
+
+    /// <summary>
+    /// **冻结帧**（8.3.0）：按下截图的那一瞬间，先把**整块虚拟桌面**抓下来存着，
+    /// 松手/确认时只是**裁剪**它。
+    ///
+    /// 为什么这么改（用户 2026-09-30 选的方案）：旧流程是松手时藏窗口（60ms）再抓屏，
+    /// 老师能看到"批注整层闪一下"；而且松手就定局、没法调整。冻结之后：
+    ///   · 抓取只发生在**按下那一刻**一次（`隐藏界面` 模式的那 60ms 闪在刚按下时，之后全程不闪）；
+    ///   · 松手只裁剪内存，屏幕不动 → 调整阶段可以随便拖；
+    ///   · 洞里画的是**冻结帧本身**（所见即所得：拍到的就是看到的）。
+    /// 代价：拍到的画面 = 按下那一刻（PPT 动画会停在按下时）；内存瞬态 ~20MB（一块整屏）。
+    /// </summary>
+    internal byte[] CaptureFrozenBgra;          // 物理像素、BGRA、自上而下、整块虚拟桌面
+    internal int CaptureFrozenX, CaptureFrozenY, CaptureFrozenW, CaptureFrozenH;
+    internal bool CaptureFrozen;                // 冻结帧在手上吗（抓失败 → false，退回松手时抓）
+
+    private enum CaptureDrag { None, Move, L, R, T, B, TL, TR, BL, BR }
+    private CaptureDrag _capDrag = CaptureDrag.None;
+    private float _capDragX, _capDragY;         // 按下时的指针（画布）
+    private float _capD0MinX, _capD0MinY, _capD0MaxX, _capD0MaxY;   // 按下时的框
+    /// <summary>调整阶段那一次按下已经被截图吃掉（抬手时别再走框选那套）。</summary>
+    private bool _capturePressHandled;
+
+    /// <summary>框的最小边长（逻辑像素）：比这还小当成误点/取消。</summary>
+    internal const float CaptureMinSizeLogical = 10f;
+
+    /// <summary>调整阶段的 8 个手柄命中半径（逻辑像素）。</summary>
+    internal const float CaptureHandleHitLogical = 14f;
+
+    /// <summary>「✓ 完成 / ✕ 取消」两颗按钮的尺寸与间距（逻辑像素）。</summary>
+    internal const float CaptureBtnWLogical = 86f, CaptureBtnHLogical = 30f, CaptureBtnGapLogical = 8f;
+
+    /// <summary>
     /// 截图模式（用户 2026-09-17 要的"对接"，参考 InkClass 的两项菜单）：
     ///   · **true = 隐藏界面截取**（默认，也是原来的行为）：抓之前把整个覆盖层藏起来，
     ///     拍到的只有下层内容——**批注、白板、面板一起藏**，一概不入镜。
@@ -210,6 +250,7 @@ public partial class InkEngine
     /// <summary>
     /// 这一帧不画"我们自己盖在画面上的东西"——取景框**和落点光标**（只在"直接截取"
     /// 抓屏的那一瞬为真）。光标也得藏：它是琥珀色的，留着就会被拍进图里。
+    /// 8.3.0 起连**遮罩/准线**一起不画（冻结帧就抓在这一瞬，一丁点我们自己的东西都不能进图）。
     /// </summary>
     internal bool CaptureFrameHidden;
 
@@ -2407,6 +2448,16 @@ public partial class InkEngine
         // 自动重复 = lParam bit30（见 ToolKeyDown 的说明）。
         if (msg == Native.WM_KEYDOWN || msg == Native.WM_SYSKEYDOWN)
         {
+            // 截图流程里的两个键**先于键位表**处理（8.3.0）：
+            //   · Esc = 取消（拖框中/调整中都取消，什么都不落）；
+            //   · Enter = 完成（只在调整阶段有意义）。
+            if (CaptureActive)
+            {
+                int vk = wParam.ToInt32();
+                if (vk == 0x1B /*VK_ESCAPE*/) { CancelCapture(); return IntPtr.Zero; }
+                if (CaptureAdjusting && (vk == 0x0D || vk == 0x0A) /*VK_RETURN*/)
+                { ConfirmCapture(); return IntPtr.Zero; }
+            }
             bool repeat = (lParam.ToInt64() & 0x40000000) != 0;
             if (HandleKeyDown(wParam, repeat)) return IntPtr.Zero;
         }
@@ -2499,6 +2550,12 @@ public partial class InkEngine
                 _cntCaptureLost++;
                 EndStroke();
                 return IntPtr.Zero;
+
+            // 右键：截图流程里 = 取消（和 Esc 一条口径，8.3.0）。
+            // 鼠标和笔的桶状键都会合成 WM_RBUTTONDOWN，所以这一条两种设备都覆盖。
+            case Native.WM_RBUTTONDOWN:
+                if (CaptureActive) { CancelCapture(); return IntPtr.Zero; }
+                break;
 
             case Native.WM_HOTKEY:
                 HandleHotkey(wParam.ToInt32() & 0xFFFF);
@@ -2709,6 +2766,14 @@ public partial class InkEngine
         BeginStrokeMeasure();
         // 拖拽中系统不再发 WM_SETCURSOR（输入已被捕获），光标必须在按下这一刻定下来。
         ApplyCursor();
+
+        // 截图的"松开后调整"（8.3.0）：这一下是拖手柄/拖整体/点✓✕/点框外。
+        // 放在工具分流**之前**：调整阶段的工具名义上还是截图，但按下的语义完全不同。
+        if (CaptureAdjusting)
+        {
+            _capturePressHandled = CaptureAdjustDown(x, y);
+            return;
+        }
 
         var tool = inverted ? Tool.Eraser : Tool;
         switch (tool)
@@ -3461,6 +3526,9 @@ public partial class InkEngine
             return;
         }
 
+        // 截图的"松开后调整"（8.3.0）：拖手柄/拖整体。**和当前工具无关**。
+        if (CaptureAdjusting) { CaptureAdjustMove(x, y); return; }
+
         // 浮层面板里的拖动（粗细滑条 / 自定义取色板）：**和当前工具无关**。
         // 面板在任何工具下都可能开着（图形工具那个自动选中的框也能摊开），
         // 旧实现只在 Marquee 分支里处理滑条——图形工具里就拖不动。
@@ -3667,98 +3735,228 @@ public partial class InkEngine
     internal const float CaptureMarginLogical = 24f;
 
     /// <summary>
-    /// "直接截取"抓屏期间：**藏掉取景框、但保留板书**。用 using 包起来，
-    /// 异常路径也不会把框永久藏掉（藏着的框=看不见自己画到哪儿，会以为软件坏了）。
+    /// 松手：**先不定局**（8.3.0）——框太小当取消，否则进入"调整"阶段等确认。
+    /// 抓屏已经在按下时做完了（冻结帧），这里只判尺寸、切状态。
     /// </summary>
-    private IDisposable HiddenCaptureFrame()
-    {
-        CaptureFrameHidden = true;
-        _dirty = true;
-        RenderAll();                 // 先把自己这一帧重画成"没有框"的样子
-        Native.DwmFlush();           // 等合成器贴上去，再抓
-        System.Threading.Thread.Sleep(60);
-        Native.DwmFlush();
-        return new CaptureFrameRestore(this);
-    }
-
-    private sealed class CaptureFrameRestore : IDisposable
-    {
-        private readonly InkEngine _e;
-        public CaptureFrameRestore(InkEngine e) => _e = e;
-        public void Dispose()
-        {
-            _e.CaptureFrameHidden = false;
-            _e._dirty = true;
-        }
-    }
-
     private void EndCapture()
     {
-        CaptureActive = false;
         _dirty = true;
 
-        // 画布坐标 → 屏幕坐标：相机偏移加回去（ScreenToCanvas 的逆运算）。
-        // 相机只有纵向偏移（横向没有滚动），所以 x 不用换算。
-        int x = (int)MathF.Round(MathF.Min(CapMinX, CapMaxX));
-        int y = (int)MathF.Round(MathF.Min(CapMinY, CapMaxY) + ViewOffsetY);
-        int w = (int)MathF.Round(MathF.Abs(CapMaxX - CapMinX));
-        int h = (int)MathF.Round(MathF.Abs(CapMaxY - CapMinY));
-
-        // 抓 1 像素宽的框没有意义（多半是"点了一下"），直接当没发生过。
-        if (w < 4 || h < 4)
+        var s = CaptureFrameScreen();
+        int w = (int)MathF.Round(s.MaxX - s.MinX);
+        int h = (int)MathF.Round(s.MaxY - s.MinY);
+        float minPx = CaptureMinSizeLogical * DpiScale;
+        if (w < minPx || h < minPx)
         {
             Console.WriteLine("截图取消：框太小");
+            CancelCapture();
             return;
         }
 
-        byte[] pixels;
-        if (CaptureHideInk)
-        {
-            // 隐藏批注截取（默认）：整个覆盖层藏起来，拍到的只有下层内容
-            using (ScreenCapture.HiddenOverlay(OverlayHandles()))
-                pixels = ScreenCapture.Grab(x, y, w, h);
-        }
-        else
-        {
-            // **直接截取**：连板书一起拍，只把取景框藏掉。
-            //
-            // 框是我们自己画的（浮动层），所以不用藏窗口、也不用等合成器撤窗口——
-            // 重画一帧就没了。等一拍再抓，是为了让合成器把这一帧真的贴上去
-            // （和 HiddenOverlay 那边同一个道理，只是这里只有一帧的事）。
-            using (HiddenCaptureFrame())
-                pixels = ScreenCapture.Grab(x, y, w, h);
-        }
+        CaptureAdjusting = true;
+        _capDrag = CaptureDrag.None;
+        Console.WriteLine($"截图：框 {w}×{h} 物理像素（松开后可调整：拖边/拖角/拖整体，"
+                          + "Enter 或点「✓」完成，Esc 取消）");
+    }
 
-        // 窗口藏过又显示，后缓冲里的内容是旧的：整层作废重画，
-        // 否则屏幕上会留下一块擦不掉的残影。
-        Doc.InvalidateAll();
+    /// <summary>
+    /// **确认截图**：裁冻结帧 → 剪贴板 → **原位落图** → 选中、切回框选。
+    /// 返回是否真的落了图。`Enter` / 点「✓ 完成」都走它。
+    /// </summary>
+    internal bool ConfirmCapture()
+    {
+        if (!CaptureActive) return false;
+        var s = CaptureFrameScreen();
+        int x = (int)MathF.Round(s.MinX), y = (int)MathF.Round(s.MinY);
+        int w = (int)MathF.Round(s.MaxX - s.MinX), h = (int)MathF.Round(s.MaxY - s.MinY);
+        if (w <= 0 || h <= 0) { CancelCapture(); return false; }
+
+        byte[] pixels = CaptureFrozen
+            ? CropCaptureFrozen(x, y, w, h)
+            : GrabCaptureNow(x, y, w, h);          // 兜底：冻结没抓到 → 老路径现抓
+
+        // 状态先收干净：遮罩/框/冻结帧立刻消失（屏幕上"啪"地回到常态）
+        CaptureActive = false;
+        CaptureAdjusting = false;
+        _capDrag = CaptureDrag.None;
+        ReleaseCaptureFrozen();
+        _dirty = true;
 
         if (pixels == null)
         {
             Console.WriteLine("截图失败：抓屏返回空");
-            return;
+            return false;
         }
 
         ClipboardImage.SetImage(pixels, w, h);
 
         var img = ImageData.Adopt(w, h, pixels);
-        if (img == null) return;
+        if (img == null) return false;
 
-        // 画布坐标 = 视口左上角 + 一点边距。**边距是必须的**：贴着 (0,0) 的话
-        // 选中框的旋转手柄会跑到屏幕外，用户抓不到它。
+        // **原位落**（8.3.0，用户定的）：画布坐标 = 屏幕坐标 − 相机纵向偏移（x 不滚）。
+        // 夹进视口、留一圈边距——**边距是必须的**：贴着 (0,0) 的话选中框的旋转手柄会跑到屏幕外。
+        //
+        // ⚠ `scale = 1`：**1 物理像素 = 1 画布单位**（画布坐标就是物理像素，见 ViewportCanvas
+        //   与 `--imagetest` 的上屏探针）。旧版写的是 `1f / DpiScale`，那是把图**缩小 DpiScale 倍**——
+        //   200% 缩放的屏上贴出来只有一半大（用户 2026-09-30："截图感觉也不对"，这条是硬伤）。
         var vp = ViewportCanvas;
         float m = CaptureMarginLogical * DpiScale;
-        var placed = Doc.AddImage(img, vp.MinX + m, vp.MinY + m, 1f / DpiScale);
-
-        // 落到视口左上角之后可能超出视口（图比屏幕大），把相机拉回去看全它。
-        EnsureVisible(placed);
+        float px = Math.Clamp(x, vp.MinX + m, MathF.Max(vp.MinX + m, vp.MaxX - m - w));
+        float py = Math.Clamp(y - ViewOffsetY, vp.MinY + m, MathF.Max(vp.MinY + m, vp.MaxY - m - h));
+        var placed = Doc.AddImage(img, px, py, 1f);
         if (placed != null)
         {
             Doc.SelectOnly(new[] { placed });
             Tool = Tool.Marquee;             // 刚截完图，最可能的下一件事是摆放它
             NotifyUiStateChanged();
         }
-        Console.WriteLine($"截图 {w}×{h} 物理像素 → 画布 {w / DpiScale:F0}×{h / DpiScale:F0}，已放到左上角并选中");
+        Console.WriteLine($"截图 {w}×{h} 物理像素 → 原位落在画布 ({px:F0},{py:F0})，已选中");
+        return placed != null;
+    }
+
+    /// <summary>
+    /// 兜底：冻结帧不在（按下时抓失败）时按老路径**现抓**——
+    /// 隐藏界面模式藏整个覆盖层（60ms 的闪就闪在这里），直接截取只藏我们的框/光标。
+    /// </summary>
+    private byte[] GrabCaptureNow(int x, int y, int w, int h)
+    {
+        if (CaptureHideInk)
+        {
+            using (ScreenCapture.HiddenOverlay(OverlayHandles()))
+                return ScreenCapture.Grab(x, y, w, h);
+        }
+        CaptureFrameHidden = true;
+        _dirty = true;
+        RenderAll();
+        Native.DwmFlush();
+        var p = ScreenCapture.Grab(x, y, w, h);
+        CaptureFrameHidden = false;
+        _dirty = true;
+        return p;
+    }
+
+    /// <summary>取消截图（Esc / 右键 / 点框外）：什么都不落，把冻结帧和状态收干净。</summary>
+    internal void CancelCapture()
+    {
+        if (!CaptureActive) return;
+        CaptureActive = false;
+        CaptureAdjusting = false;
+        _capDrag = CaptureDrag.None;
+        ReleaseCaptureFrozen();
+        _dirty = true;
+        Console.WriteLine("截图取消");
+    }
+
+    // ---- 截图：松开后的调整（8.3.0）----------------------------------------
+    //
+    // 手感照微信/QQ/Snipaste：松手后框还在，可以拖边、拖角、拖整体；
+    // 「✓ 完成」/Enter 落图，「✕ 取消」/Esc/右键/点框外取消。
+    // 几何全在引擎里（命中测试和绘制共用）：按钮与手柄都是**画布坐标**。
+
+    /// <summary>调整阶段的两颗按钮：「✓ 完成」「✕ 取消」。挂在框的右下方，贴边自动翻面。</summary>
+    internal void CaptureButtons(out RectF ok, out RectF cancel)
+    {
+        float w = CaptureBtnWLogical * DpiScale, h = CaptureBtnHLogical * DpiScale;
+        float gap = CaptureBtnGapLogical * DpiScale;
+        var vp = ViewportCanvas;
+        float x0 = CapMaxX - (w * 2 + gap);
+        x0 = Math.Clamp(x0, vp.MinX + 4f, MathF.Max(vp.MinX + 4f, vp.MaxX - (w * 2 + gap) - 4f));
+        float y0 = CapMaxY + gap;
+        if (y0 + h > vp.MaxY) y0 = CapMinY - gap - h;              // 下方放不下 → 放框上方
+        y0 = Math.Clamp(y0, vp.MinY + 4f, MathF.Max(vp.MinY + 4f, vp.MaxY - h - 4f));
+        cancel = new RectF { MinX = x0, MinY = y0, MaxX = x0 + w, MaxY = y0 + h };
+        ok = new RectF { MinX = x0 + w + gap, MinY = y0, MaxX = x0 + w + gap + w, MaxY = y0 + h };
+    }
+
+    /// <summary>调整阶段的 8 个手柄中心（左上/上中/右上/右中/右下/下中/左下/左中）。</summary>
+    internal void CaptureHandles(out Vector2 tl, out Vector2 t, out Vector2 tr, out Vector2 r,
+                                out Vector2 br, out Vector2 b, out Vector2 bl, out Vector2 l)
+    {
+        float cx = (CapMinX + CapMaxX) * 0.5f, cy = (CapMinY + CapMaxY) * 0.5f;
+        tl = new Vector2(CapMinX, CapMinY); t = new Vector2(cx, CapMinY);
+        tr = new Vector2(CapMaxX, CapMinY); r = new Vector2(CapMaxX, cy);
+        br = new Vector2(CapMaxX, CapMaxY); b = new Vector2(cx, CapMaxY);
+        bl = new Vector2(CapMinX, CapMaxY); l = new Vector2(CapMinX, cy);
+    }
+
+    private static bool Near(float x, float y, Vector2 p, float r)
+        => MathF.Abs(x - p.X) <= r && MathF.Abs(y - p.Y) <= r;
+
+    /// <summary>调整阶段的按下。返回 true = 这一下被截图吃掉（调用方直接 return）。</summary>
+    private bool CaptureAdjustDown(float x, float y)
+    {
+        CaptureButtons(out var ok, out var cancel);
+        if (ok.Contains(x, y)) { ConfirmCapture(); return true; }
+        if (cancel.Contains(x, y)) { CancelCapture(); return true; }
+
+        CaptureHandles(out var tl, out var t, out var tr, out var r,
+                       out var br, out var b, out var bl, out var l);
+        float hit = CaptureHandleHitLogical * DpiScale;
+        _capDragX = x; _capDragY = y;
+        _capD0MinX = CapMinX; _capD0MinY = CapMinY; _capD0MaxX = CapMaxX; _capD0MaxY = CapMaxY;
+        if (Near(x, y, tl, hit)) _capDrag = CaptureDrag.TL;
+        else if (Near(x, y, tr, hit)) _capDrag = CaptureDrag.TR;
+        else if (Near(x, y, bl, hit)) _capDrag = CaptureDrag.BL;
+        else if (Near(x, y, br, hit)) _capDrag = CaptureDrag.BR;
+        else if (Near(x, y, l, hit)) _capDrag = CaptureDrag.L;
+        else if (Near(x, y, r, hit)) _capDrag = CaptureDrag.R;
+        else if (Near(x, y, t, hit)) _capDrag = CaptureDrag.T;
+        else if (Near(x, y, b, hit)) _capDrag = CaptureDrag.B;
+        else if (x >= CapMinX && x <= CapMaxX && y >= CapMinY && y <= CapMaxY)
+            _capDrag = CaptureDrag.Move;
+        else { CancelCapture(); return true; }        // 点框外 = 取消（微信/QQ 的口径）
+        _dirty = true;
+        return true;
+    }
+
+    /// <summary>调整阶段拖动：整体移 / 拖某条边 / 拖某个角，夹在屏幕里、不小于最小尺寸。</summary>
+    private void CaptureAdjustMove(float x, float y)
+    {
+        if (_capDrag == CaptureDrag.None) return;
+        float dx = x - _capDragX, dy = y - _capDragY;
+        float minSz = CaptureMinSizeLogical * DpiScale;
+        var vs = VirtualScreen;
+        float minYc = vs.MinY - ViewOffsetY, maxYc = vs.MaxY - ViewOffsetY;
+
+        float l = _capD0MinX, r = _capD0MaxX, t = _capD0MinY, b = _capD0MaxY;
+        switch (_capDrag)
+        {
+            case CaptureDrag.Move: l += dx; r += dx; t += dy; b += dy; break;
+            case CaptureDrag.L: l = MathF.Min(l + dx, r - minSz); break;
+            case CaptureDrag.R: r = MathF.Max(r + dx, l + minSz); break;
+            case CaptureDrag.T: t = MathF.Min(t + dy, b - minSz); break;
+            case CaptureDrag.B: b = MathF.Max(b + dy, t + minSz); break;
+            case CaptureDrag.TL:
+                l = MathF.Min(l + dx, r - minSz); t = MathF.Min(t + dy, b - minSz); break;
+            case CaptureDrag.TR:
+                r = MathF.Max(r + dx, l + minSz); t = MathF.Min(t + dy, b - minSz); break;
+            case CaptureDrag.BL:
+                l = MathF.Min(l + dx, r - minSz); b = MathF.Max(b + dy, t + minSz); break;
+            case CaptureDrag.BR:
+                r = MathF.Max(r + dx, l + minSz); b = MathF.Max(b + dy, t + minSz); break;
+        }
+        // 夹在屏幕里；夹完尺寸可能被压小 → 按"拖的是哪条边"把对边让回去，守住最小尺寸
+        l = Math.Clamp(l, vs.MinX, vs.MaxX); r = Math.Clamp(r, vs.MinX, vs.MaxX);
+        t = Math.Clamp(t, minYc, maxYc);   b = Math.Clamp(b, minYc, maxYc);
+        if (r - l < minSz)
+        {
+            if (_capDrag is CaptureDrag.L or CaptureDrag.TL or CaptureDrag.BL) l = r - minSz;
+            else r = l + minSz;
+        }
+        if (b - t < minSz)
+        {
+            if (_capDrag is CaptureDrag.T or CaptureDrag.TL or CaptureDrag.TR) t = b - minSz;
+            else b = t + minSz;
+        }
+        CapMinX = l; CapMaxX = r; CapMinY = t; CapMaxY = b;
+        _dirty = true;
+    }
+
+    /// <summary>调整拖动收尾（抬手）。</summary>
+    private void EndCaptureAdjustDrag()
+    {
+        _capDrag = CaptureDrag.None;
+        _dirty = true;
     }
 
     /// <summary>把相机滚到"这个对象看得见"。只做纵向——横向没有滚动这回事。</summary>
@@ -4411,7 +4609,20 @@ public partial class InkEngine
         Doc.EndErase();
         if (CaptureActive)
         {
-            EndCapture();
+            // 起框那一次松手 → 进调整阶段；调整里拖手柄那几次松手 → 只收手。
+            if (!CaptureAdjusting) EndCapture();
+            else EndCaptureAdjustDrag();
+            _capturePressHandled = false;
+            _drawing = false;
+            _dirty = true;
+            _cntDown = _cntMove = _cntUp = _cntCaptureLost = 0;
+            return;
+        }
+        // 确认/取消那一下抬手：截图已经收场，别再落到"框选"那条路上
+        //（不然 Tool=Marquee 会让它顺手把刚落下的图取消选中）。
+        if (_capturePressHandled)
+        {
+            _capturePressHandled = false;
             _drawing = false;
             _dirty = true;
             _cntDown = _cntMove = _cntUp = _cntCaptureLost = 0;
@@ -4821,7 +5032,9 @@ public partial class InkEngine
         Tool.PixelEraser => EraserKeepsSystemCursor ? CursorKind.Default : CursorKind.Hidden,
         // 截图有**自己的**落点形状（取景框角括号，见 ToolCursorShape.Frame），
         // 所以系统光标藏起来——不然就是"十字 + 角括号"叠在一起。
-        Tool.Capture => CursorKind.Hidden,
+        // 8.3.0：**调整阶段换回系统箭头**（那一阶段要认手柄、要看得见指针点在哪，
+        // 而且框已经定住、不需要"精确对准"的十字了；画出来的准线只在起框/拖动时给）。
+        Tool.Capture => CaptureAdjusting ? CursorKind.Default : CursorKind.Hidden,
         // 框选 / 图形仍然用十字准星："从这儿拖到那儿"的通用语言。
         Tool.Marquee or Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Arrow
             => CursorKind.Cross,
@@ -6323,19 +6536,127 @@ public partial class InkEngine
         MqMinY = MathF.Min(MqMinY, y); MqMaxY = MathF.Max(MqMaxY, y);
     }
 
-    /// <summary>截图取景框按下（和框选同一套锚点算法）。</summary>
-    private void BeginCaptureAt(float x, float y)
+    /// <summary>
+    /// 截图取景框按下（和框选同一套锚点算法）。
+    ///
+    /// 8.3.0 起还多做一件事：**按下这一下就把整块屏幕抓成"冻结帧"**（见
+    /// <see cref="BeginCaptureFreeze"/>）——之后松手/调整都不再碰屏幕，只裁剪内存。
+    /// </summary>
+    private void BeginCaptureAt(float x, float y, bool freeze = true)
     {
         CaptureActive = true;
+        CaptureAdjusting = false;
+        _capDrag = CaptureDrag.None;
         _capAnchorX = x; _capAnchorY = y;
         CapMinX = CapMaxX = x; CapMinY = CapMaxY = y;
+        if (freeze) BeginCaptureFreeze();
     }
 
-    /// <summary>截图取景框拖动：锚点 ↔ 当前点（往回拖要跟着缩，否则就是"不跟手"）。</summary>
+    /// <summary>
+    /// 按下时抓"冻结帧"：**整块虚拟桌面**，抓到内存里。
+    ///
+    /// 两种模式抓的东西不一样（和松手时那份口径完全一致）：
+    ///   · **隐藏界面**：把整个覆盖层藏起来再抓（拍到的只有下层内容）——
+    ///     那 ~60ms 的"闪"从"松手时"挪到了"刚按下时"（老师刚发起操作，预期就是切模式）；
+    ///   · **直接截取**：只藏我们自己的**遮罩/取景框/光标**，板书一起拍进去。
+    ///     用 `CaptureFrameHidden` 重画一帧就走（不用藏窗口、不用等合成器撤窗口）。
+    ///
+    /// 抓失败（返回 null）就保持 `CaptureFrozen = false`，松手时退回老路径现抓——
+    /// 截图不能因为"冻结没抓到"整个失效。
+    /// </summary>
+    private void BeginCaptureFreeze()
+    {
+        ReleaseCaptureFrozen();
+        var vs = VirtualScreen;
+        int x = (int)MathF.Round(vs.MinX), y = (int)MathF.Round(vs.MinY);
+        int w = (int)MathF.Round(vs.MaxX - vs.MinX), h = (int)MathF.Round(vs.MaxY - vs.MinY);
+        if (w <= 0 || h <= 0) return;
+
+        byte[] px;
+        if (CaptureHideInk)
+        {
+            // 藏整个覆盖层（含接输入小窗）→ 抓 → 恢复。恢复之后把内容层整层作废：
+            // 窗口藏过又显示，后缓冲里躺的是旧画面（这条老注释里记过）。
+            using (ScreenCapture.HiddenOverlay(OverlayHandles()))
+                px = ScreenCapture.Grab(x, y, w, h);
+            Doc.InvalidateAll();
+        }
+        else
+        {
+            // 只藏我们自己的东西：重画一帧 → 等合成器贴上去 → 抓 → 恢复。
+            CaptureFrameHidden = true;
+            _dirty = true;
+            RenderAll();
+            Native.DwmFlush();
+            px = ScreenCapture.Grab(x, y, w, h);
+            CaptureFrameHidden = false;
+            _dirty = true;
+        }
+
+        if (px == null)
+        {
+            Console.WriteLine("截图：冻结帧没抓到，退回松手时抓屏");
+            return;
+        }
+        CaptureFrozenBgra = px;
+        CaptureFrozenX = x; CaptureFrozenY = y;
+        CaptureFrozenW = w; CaptureFrozenH = h;
+        CaptureFrozen = true;
+    }
+
+    /// <summary>放掉冻结帧的内存（确认/取消/重新截图时都走它）。</summary>
+    private void ReleaseCaptureFrozen()
+    {
+        CaptureFrozenBgra = null;
+        CaptureFrozen = false;
+        CaptureFrozenW = CaptureFrozenH = 0;
+    }
+
+    /// <summary>当前取景框在**屏幕**（物理像素）里的矩形。</summary>
+    internal RectF CaptureFrameScreen()
+    {
+        float x0 = MathF.Min(CapMinX, CapMaxX), y0 = MathF.Min(CapMinY, CapMaxY);
+        float x1 = MathF.Max(CapMinX, CapMaxX), y1 = MathF.Max(CapMinY, CapMaxY);
+        return new RectF
+        {
+            MinX = x0, MinY = y0 + ViewOffsetY,          // 相机只有纵向偏移
+            MaxX = x1, MaxY = y1 + ViewOffsetY,
+        };
+    }
+
+    /// <summary>从冻结帧里裁出指定屏幕矩形（物理像素）。越界自动夹取（框永远在屏内，兜底而已）。</summary>
+    private byte[] CropCaptureFrozen(int x, int y, int w, int h)
+    {
+        if (!CaptureFrozen || CaptureFrozenBgra == null || w <= 0 || h <= 0) return null;
+        var dst = new byte[(long)w * h * 4 <= int.MaxValue ? w * h * 4 : 0];
+        if (dst.Length == 0) return null;
+        for (int row = 0; row < h; row++)
+        {
+            int sy = y + row - CaptureFrozenY;
+            if (sy < 0 || sy >= CaptureFrozenH) continue;
+            int sx = x - CaptureFrozenX;
+            int n = w, so = 0;
+            if (sx < 0) { n += sx; so = -sx; sx = 0; }
+            if (sx + n > CaptureFrozenW) n = CaptureFrozenW - sx;
+            if (n <= 0) continue;
+            int soB = so * 4 + row * w * 4;
+            int siB = (sy * CaptureFrozenW + sx) * 4;
+            Array.Copy(CaptureFrozenBgra, siB, dst, soB, n * 4);
+        }
+        return dst;
+    }
+
+    /// <summary>
+    /// 截图取景框拖动：锚点 ↔ 当前点（往回拖要跟着缩，否则就是"不跟手"）。
+    /// 拖出屏幕也没有意义，夹在屏幕里（和框选那种"贴边=无限延伸"不同：截图就是要看见的那一块）。
+    /// </summary>
     private void ExtendCaptureTo(float x, float y)
     {
-        CapMinX = MathF.Min(_capAnchorX, x); CapMaxX = MathF.Max(_capAnchorX, x);
-        CapMinY = MathF.Min(_capAnchorY, y); CapMaxY = MathF.Max(_capAnchorY, y);
+        var vs = VirtualScreen;
+        float sx = Math.Clamp(x, vs.MinX, vs.MaxX);
+        float sy = Math.Clamp(y, vs.MinY - ViewOffsetY, vs.MaxY - ViewOffsetY);
+        CapMinX = MathF.Min(_capAnchorX, sx); CapMaxX = MathF.Max(_capAnchorX, sx);
+        CapMinY = MathF.Min(_capAnchorY, sy); CapMaxY = MathF.Max(_capAnchorY, sy);
     }
 
     /// <summary>
@@ -6344,7 +6665,7 @@ public partial class InkEngine
     /// </summary>
     internal void CaptureFrameDragForTest(float ax, float ay, float x1, float y1, float x2 = float.NaN, float y2 = float.NaN)
     {
-        BeginCaptureAt(ax, ay);
+        BeginCaptureAt(ax, ay, freeze: false);          // 不抓屏：这里只验取景框的锚点算法
         ExtendCaptureTo(x1, y1);
         if (!float.IsNaN(x2)) ExtendCaptureTo(x2, y2);
     }
@@ -7753,7 +8074,9 @@ public partial class InkEngine
     /// </summary>
     private void UpdateUiInputWindow()
     {
-        RectF logical = UiVisibleNow ? UiQueryBoundsNow() : RectF.Empty;
+        // 截图期间界面是收起的（见 PrepareUi 开头那段）：接输入小窗也一起收——
+        // 不然"看不见的工具条"那一条还会把点击吃掉（截图拖框正好要用那一片）。
+        RectF logical = (UiVisibleNow && !CaptureActive) ? UiQueryBoundsNow() : RectF.Empty;
 
         if (logical.IsEmpty)
         {

@@ -1030,7 +1030,7 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private int BandSegmentCount => _bandCell switch
     {
-        2 => BoardBand.Length, 6 => 2, 7 => 2, 8 => ShapeBandSegments, 9 => 3, _ => 0,
+        2 => BoardBand.Length, 6 => 2, 7 => 2, 8 => ShapeBandSegments, 9 => 2, _ => 0,
     };
 
     /// <summary>
@@ -1275,13 +1275,14 @@ public sealed class FullUi : IOverlayUi
     //
     // 位置：上带**最右端**。粗细滑条也在右端，所以橡皮那条是
     // `[整笔擦][面积擦] …… [粗细滑条][清空]`——动作永远贴在最外沿。
-    private enum BandAction { None = 0, Clear, SelectAll, CloseBoard }
+    private enum BandAction { None = 0, Clear, SelectAll, CloseBoard, PasteImage }
 
     private BandAction ActionOf(int bandCell) => bandCell switch
     {
         2 => BandAction.CloseBoard,   // 白板那条：最右端一个"关闭白板"
         6 => BandAction.Clear,        // 清空 ≈ "全擦掉"，和两种橡皮排一条
         7 => BandAction.SelectAll,    // 全选 ≈ "把要操作的东西一次选上"，归选择这条
+        9 => BandAction.PasteImage,   // 截图那条：把剪贴板里的东西粘进来（8.3.0 从分段里拆出来）
         _ => BandAction.None,
     };
     private BandAction CurAction => ActionOf(_bandCell);
@@ -1378,6 +1379,7 @@ public sealed class FullUi : IOverlayUi
         var r = ActionRect();
         bool clear = a == BandAction.Clear;
         bool closeBoard = a == BandAction.CloseBoard;
+        bool paste = a == BandAction.PasteImage;
         bool dim = closeBoard && (_host == null || !_host.State.Board);
         var ink = dim ? new Color4(InkCol.R, InkCol.G, InkCol.B, 0.30f) : InkCol;
         var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f, 7f);
@@ -1402,9 +1404,9 @@ public sealed class FullUi : IOverlayUi
         }
 
         var iconBox = new RectF { MinX = r.MinX + 6f, MinY = r.MinY, MaxX = r.MinX + 28f, MaxY = r.MaxY };
-        IconAtlas.DrawCentered(ctx, clear ? "broom" : "selectAll", iconBox, 16f, Brush(ctx, InkCol));
+        IconAtlas.DrawCentered(ctx, paste ? "image" : clear ? "broom" : "selectAll", iconBox, 16f, Brush(ctx, ink));
         var labelBox = new RectF { MinX = r.MinX + 28f, MinY = r.MinY, MaxX = r.MaxX - 6f, MaxY = r.MaxY };
-        _widgets.Text(ctx, clear ? "清空" : "全选", labelBox, 12.5f, Brush(ctx, InkCol));
+        _widgets.Text(ctx, paste ? "粘贴图片" : clear ? "清空" : "全选", labelBox, 12.5f, Brush(ctx, InkCol));
 
         if (_host != null && _host.NowMs < _actionFlashUntil)
             ctx.DrawRoundedRectangle(rr, Brush(ctx, Tokens.Accent), 2f);
@@ -1903,11 +1905,11 @@ public sealed class FullUi : IOverlayUi
                         _host.Commands.SetTool(picked);
                 }
                 break;
-            case 9:                       // 截图：[直接截取][隐藏界面][粘贴图片]
-                // 照 InkClass 的两项菜单：默认"隐藏界面"（只拍下层内容），
-                // "直接截取"连板书一起拍。第三段是**动作**：把剪贴板里的东西粘进来
-                // （没有键盘的触摸屏 / 手写板也能用，等于把 Ctrl+V 搬到了屏幕上）。
-                if (i == 2) { _host.Commands.Paste(); break; }
+            case 9:                       // 截图：[连批注拍][只拍下层]（"粘贴图片"已挪到右端的动作按钮）
+                // 照 InkClass 的两项菜单：默认"只拍下层"（hidden = true），
+                // "连批注拍"连板书一起拍。**这两段是"截法"**；"粘贴图片"是个**动作**，
+                // 8.3.0 起从上带里拆出来、挂到右端那颗动作按钮上（和"清空/全选/关闭白板"
+                // 同一套位置语言）——它以前混在分段里，永远不点亮，老师也看不出那是按钮。
                 _host.Commands.SetCaptureHideInk(i == 1);
                 break;
         }
@@ -2308,6 +2310,14 @@ public sealed class FullUi : IOverlayUi
                     _host.Commands.SetBoard(false);
                     _actionFlashUntil = _host.NowMs + 260;
                 }
+            }
+            else if (CurAction == BandAction.PasteImage)
+            {
+                // 粘贴图片：点一下就执行——就是批注内的 Ctrl+V。
+                // 它以前是截图那格的第三段（分段=模式，它=动作，混着永远不亮）；
+                // 8.3.0 拆到这里之后，触摸屏/手写板没键盘的老师照样够得着。
+                _host.Commands.Paste();
+                _actionFlashUntil = _host.NowMs + 260;
             }
             else
             {
@@ -3613,7 +3623,7 @@ public sealed class FullUi : IOverlayUi
     {
         6 => i == 0 ? "整笔擦" : "面积擦",
         7 => i == 0 ? "矩形" : "套索",
-        9 => i switch { 0 => "直接截取", 1 => "隐藏界面", _ => "粘贴图片" },
+        9 => i == 0 ? "连批注拍" : "只拍下层",
         8 => "",                                   // 图形：画图标（见 ShapeIcon）
         _ => "",
     };
