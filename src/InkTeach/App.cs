@@ -12574,13 +12574,27 @@ internal sealed class App : InkEngine.InkEngine
                   (b0.MaxY - b0.MinY) > 40f && !ui.PeekArmedForTest,
                   $"占用 {b0.MaxX - b0.MinX:F0}×{b0.MaxY - b0.MinY:F0}，允许自动收 = {ui.PeekArmedForTest}");
 
-            SendMouse((int)((b0.MinX + b0.MaxX) * 0.5f * DpiScale),
-                      (int)((b0.MinY + b0.MaxY) * 0.5f * DpiScale), 0);
-            SettleFrames(250);
+            // 先碰一下面板（把 `_peekArmed` 置真 = 允许自动收），再把它**拖到屏幕最底下**。
+            //
+            // ⚠ 2026-09-30 第二轮收紧后，触发条件是"**离屏幕底边 ≤10**"（`DockHideDistance`）：
+            // 默认位置离屏幕底 52（任务栏 48 + 离任务栏 4），**不再触发隐藏**——
+            // 要收起来就得把它拖到屏幕最底下（这一段压过任务栏）。
+            var b0c = ui.QueryBounds();
+            float m0x = (b0c.MinX + b0c.MaxX) * 0.5f * DpiScale;
+            float m0y = (b0c.MinY + b0c.MaxY) * 0.5f * DpiScale;
+            SendMouse((int)m0x, (int)m0y, 0);                              SettleFrames(250);
+            SendMouse((int)m0x, (int)m0y, Native.MOUSEEVENTF_LEFTDOWN);     SettleFrames(50);
+            float toBottomY = _virtualY + _virtualH + 60 * (float)DpiScale; // 拖过屏幕底，靠夹取兜住
+            for (int i = 1; i <= 8; i++)
+            {
+                SendMouse((int)m0x, (int)(m0y + (toBottomY - m0y) * i / 8f), 0);
+                SettleFrames(20);
+            }
+            SendMouse((int)m0x, (int)toBottomY, Native.MOUSEEVENTF_LEFTUP);  SettleFrames(200);
             SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.3f), 0);
             SettleFrames(2000);
             var b1 = ui.QueryBounds();
-            Check("碰过之后再离开：这时才收成露头",
+            Check("碰过 + 拖到屏幕底边附近再离开：这时才收成露头",
                   (b1.MaxY - b1.MinY) < 12f || (b1.MaxX - b1.MinX) < 12f,
                   $"占用 {b1.MaxX - b1.MinX:F0}×{b1.MaxY - b1.MinY:F0}，允许自动收 = {ui.PeekArmedForTest}");
 
@@ -12676,13 +12690,15 @@ internal sealed class App : InkEngine.InkEngine
                       $"占用 {atLeft.MaxX - atLeft.MinX:F0}×{atLeft.MaxY - atLeft.MinY:F0}，"
                       + $"展开 = {ui.ExpandedForTest}");
 
-                // 再把它拖到**底边附近**（球底离工作区底 12 逻辑像素）→ 走开 → 这一次才该藏。
-                var wk = ui.WorkAreaForTest;
+                // 再把它拖到**屏幕底边附近**（球底离屏幕底 5 逻辑像素）→ 走开 → 这一次才该藏。
+                //
+                // ⚠ 触发条件按**屏幕**底边算（2026-09-30 第二批收紧：离屏幕底 ≤10）；
+                // 工作区底（任务栏上沿）那条线**不算**——默认位置离屏幕底 52，根本不触发。
                 var side2 = ui.QueryBounds();
                 float c2x = (side2.MinX + side2.MaxX) * 0.5f * DpiScale;
                 float c2y = (side2.MinY + side2.MaxY) * 0.5f * DpiScale;
-                // 球高 48：中心放在"工作区底 − 12 − 24"处，球底就落在离底 12 的位置。
-                float toY2 = (float)((wk.MaxY - 36f) * DpiScale);
+                // 球高 48：中心放在"屏幕底 − 5 − 24"处，球底就落在离屏幕底 5 的位置。
+                float toY2 = (float)(_virtualY + _virtualH) - 29f * (float)DpiScale;
                 SendMouse((int)c2x, (int)c2y, 0);                          SettleFrames(60);
                 SendMouse((int)c2x, (int)c2y, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(50);
                 for (int i = 1; i <= 8; i++) { SendMouse((int)c2x, (int)(c2y + (toY2 - c2y) * i / 8f), 0); SettleFrames(20); }
@@ -12690,7 +12706,7 @@ internal sealed class App : InkEngine.InkEngine
                 SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.35f), 0);
                 SettleFrames(1400);
                 var tucked = ui.QueryBounds();
-                Check("拖到底边附近：这时才藏（横的那条露头）",
+                Check("拖到屏幕底边附近：这时才藏（横的那条露头）",
                       (tucked.MaxY - tucked.MinY) < 12f && (tucked.MaxX - tucked.MinX) > 30f,
                       $"占用 {tucked.MaxX - tucked.MinX:F0}×{tucked.MaxY - tucked.MinY:F0}，"
                       + $"展开 = {ui.ExpandedForTest}，露头值 peek={ui.PeekForTest:F2}");
@@ -14127,16 +14143,26 @@ internal sealed class App : InkEngine.InkEngine
                       (hideRow.MinY + hideRow.MaxY) * 0.5f * DpiScale);
         Check("点「贴边隐藏」打开", ui.HideEnabledForTest, $"开关 = {ui.HideEnabledForTest}");
 
-        // 关掉抽屉（点「更多」再点一下），然后把指针移到画布上：
-        // 贴边状态下应该收成一条 8 像素的"露头"，悬停露头再长回来。
+        // 关掉抽屉（点「更多」再点一下），然后把面板**拖到屏幕最底下**：
+        // 现行规则是"离屏幕底边 ≤10 才藏"（默认位置离屏幕底 52，不再触发隐藏）。
         ClickPhysical((moreCell.MinX + moreCell.MaxX) * 0.5f * DpiScale,
                       (moreCell.MinY + moreCell.MaxY) * 0.5f * DpiScale);
-        SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.4f), 0);
+        SettleFrames(150);
+        var dragDown = ui.BarRectForTest;
+        float ddx = (dragDown.MinX + dragDown.MaxX) * 0.5f * DpiScale;
+        float ddy = (dragDown.MinY + dragDown.MaxY) * 0.5f * DpiScale;
+        float ddyTo = _virtualY + _virtualH + 60 * (float)DpiScale;      // 拖过屏幕底，靠夹取兜住
+        SendMouse((int)ddx, (int)ddy, 0);                              SettleFrames(60);
+        SendMouse((int)ddx, (int)ddy, Native.MOUSEEVENTF_LEFTDOWN);     SettleFrames(50);
+        for (int i = 1; i <= 8; i++) { SendMouse((int)ddx, (int)(ddy + (ddyTo - ddy) * i / 8f), 0); SettleFrames(20); }
+        SendMouse((int)ddx, (int)ddyTo, Native.MOUSEEVENTF_LEFTUP);     SettleFrames(200);
+        // 指针移到画布上：贴边状态下应该收成一条 8 像素的"露头"，悬停露头再长回来。
         // 等过"离开 700 毫秒才收"＋收起动画那一段（167 毫秒）：留足余量，别把动画
         // 中间态当成终态来判——第一版就是这么误判成"露头 56 像素"的。
+        SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.4f), 0);
         SettleFrames(2000);
         var peeked = ui.QueryBounds();
-        Check("贴边隐藏收成露头",
+        Check("贴边隐藏收成露头（先拖到屏幕底边附近）",
               (peeked.MaxY - peeked.MinY) < 12f || (peeked.MaxX - peeked.MinX) < 12f,
               $"占用 {peeked.MaxX - peeked.MinX:F0}×{peeked.MaxY - peeked.MinY:F0}（应只剩露头那条）");
 
