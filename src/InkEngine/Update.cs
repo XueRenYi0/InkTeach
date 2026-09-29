@@ -108,6 +108,8 @@ internal static class UpdateFeed
 
         if (Url.Length > 0)
         {
+            // 用户自己填的源：照他用系统代理（他的环境他自己清楚）
+            _skipProxyForDownload = false;
             var one = Fetch(Url, out error);
             if (one != null) usedUrl = Url;
             return one;
@@ -117,14 +119,16 @@ internal static class UpdateFeed
         foreach (var s in Sources)
         {
             if (string.IsNullOrWhiteSpace(s.Url) || s.Url.Contains("<账号>")) continue;   // 还没填的跳过
-            var m = Fetch(s.Url, out string e);
+            bool viaMirror = s.Prefix.Length > 0;                 // 带前缀 = 国内加速站
+            var m = Fetch(s.Url, out string e, useProxy: !viaMirror);
             if (m != null)
             {
                 usedUrl = s.Prefix + s.Url;
+                _skipProxyForDownload = viaMirror;                // zip 也跟着直连
                 RewriteZipUrl(m, s.Prefix);
                 return m;
             }
-            errs.Add($"{HostOf(s.Url)}：{e}");
+            errs.Add($"{HostOf(s.Url)}（{(viaMirror ? "直连" : "走系统代理")}）：{e}");
         }
         error = errs.Count > 0 ? string.Join("；", errs) : "没有配置任何更新源";
         return null;
@@ -175,6 +179,30 @@ internal static class UpdateFeed
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "InkTeach", "update", SafeVer(ver));
+
+    /// <summary>
+    /// 建一个取清单 / 下载用的 <see cref="HttpClient"/>。<paramref name="useProxy"/>=false
+    /// 时**显式不走系统代理**。
+    ///
+    /// 为什么要有这个开关（2026-09-29 实测踩到）：很多机器上留着"给 GitHub 用的"
+    /// 系统代理（VPN / 加速器留下的 `127.0.0.1:端口`）。那个代理一旦没在跑（或者
+    /// 半死不活），**走它的请求会一直卡到超时**——于是"明明直连就能用的国内加速站"
+    /// 全被否决，更新检查看起来像坏了（开发机上蹲了半小时才看清）。
+    /// 规矩：**加速站一律直连**（它们本来就是国内直连的）；只有最后那条 GitHub
+    /// 直连才用系统代理——那条本来就是给"有代理/VPN 的人"准备的。
+    /// </summary>
+    private static HttpClient NewHttp(TimeSpan timeout, bool useProxy)
+    {
+        HttpClient http = useProxy
+            ? new HttpClient()
+            : new HttpClient(new HttpClientHandler { UseProxy = false });
+        http.Timeout = timeout;
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("InkTeach-updater/" + CurrentVersion);
+        return http;
+    }
+
+    /// <summary>取清单时选中的源是不是"加速站直连"——下载 zip 也跟着走同一条路。</summary>
+    private static bool _skipProxyForDownload;
 
     /// <summary>本程序的版本（入口程序集，即 InkTeach.exe 的 `&lt;Version&gt;`）。</summary>
     public static string CurrentVersion { get; } = ReadVersion();
@@ -242,7 +270,11 @@ internal static class UpdateFeed
     /// 自检不能依赖网络（也不该往真 GitHub 上打请求）。
     /// 失败返回 null 并给出用户能看懂的原因（网络错误、404、格式不对……）。
     /// </summary>
-    public static Manifest Fetch(string url, out string error)
+    /// <summary>
+    /// 取清单。<paramref name="useProxy"/>=false 表示**完全不走系统代理**
+    /// （加速站一律如此，理由见 <see cref="NewHttp"/>）。
+    /// </summary>
+    public static Manifest Fetch(string url, out string error, bool useProxy = true)
     {
         error = null;
         string text;
@@ -255,8 +287,7 @@ internal static class UpdateFeed
             }
             else
             {
-                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-                http.DefaultRequestHeaders.UserAgent.ParseAdd("InkTeach-updater/" + CurrentVersion);
+                using var http = NewHttp(TimeSpan.FromSeconds(15), useProxy);
                 // **清单一定要"新鲜"的**：GitHub 的 release 附件走 CDN，刚发新版时
                 // 会有一段时间仍然返回旧清单（2026-09-29 实测：附件 digest 已经换了，
                 // 取回来还是旧的）。加一个每次都不同的查询串逼它回源——
@@ -352,8 +383,7 @@ internal static class UpdateFeed
             }
             else
             {
-                using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-                http.DefaultRequestHeaders.UserAgent.ParseAdd("InkTeach-updater/" + CurrentVersion);
+                using var http = NewHttp(TimeSpan.FromMinutes(10), !_skipProxyForDownload);
                 using var resp = http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead)
                                      .GetAwaiter().GetResult();
                 resp.EnsureSuccessStatusCode();

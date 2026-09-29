@@ -7025,7 +7025,8 @@ public partial class InkEngine
         NotifyUiStateChanged();
 
         Console.WriteLine($"自动更新：检查（当前 {UpdateFeed.CurrentVersion}；"
-                          + (UpdateFeed.Url.Length > 0 ? "用户配置源" : $"候选 {UpdateFeed.Sources.Length} 条，按序试") + "）");
+                          + (UpdateFeed.Url.Length > 0 ? "用户配置源" : $"候选 {UpdateFeed.Sources.Length} 条，按序试")
+                          + (UpdateFeed.Url.Length > 0 ? "" : "；加速站直连、GitHub 那条走系统代理") + "）");
         _updBusy = true;
         var th = new System.Threading.Thread(() =>
         {
