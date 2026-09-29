@@ -513,6 +513,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             CaptureTest();
         }
+        else if (mode == "--hotkeytest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            HotkeyTest();
+        }
         else if (mode == "--savetest")
         {
             _autoExitAt = double.MaxValue;
@@ -24462,6 +24468,151 @@ internal sealed class App : InkEngine.InkEngine
 
         Console.WriteLine();
         Console.WriteLine(fail == 0 ? $"  PASS: 截图全通（{pass} 项）" : $"  FAIL: {fail} 项不对");
+        _quit = true;
+    }
+
+    /// <summary>
+    /// **快捷键自检**（用户 2026-09-30 要的独立一条）：截图前后 + 焦点丢/恢复之后，
+    /// 应用内快捷键（`Ctrl+P` 这些）还灵不灵。
+    ///
+    /// 为什么单开一条、而且**必须用真实键盘**（`SendKeyChord`，不是 `PostMessage`）：
+    /// 这类故障是"**前台被系统转给了别人**"——按键发给了别的窗口，我们的 WndProc
+    /// 根本收不到。`PostMessage` 是直接投给窗口的，焦点丢了也照样"通过"，**测不出来**。
+    /// 所以这条自检的判据是两件事一起看：
+    ///   ① `GetForegroundWindow()` 是不是我们的窗口；
+    ///   ② 真按一次 `Ctrl+P`，工具是不是真的换成了笔。
+    ///
+    /// 场景（照用户的要求排的）：基线 → 隐藏窗口截图（藏窗口那一瞬最容易掉前台）→
+    /// 取消 → 拖框 + 确认 → 截图（连批注）→ "焦点被抢走再要回来"。
+    /// </summary>
+    private void HotkeyTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 快捷键自检（截图前后的键盘前台）===");
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"    {name,-30}{(ok ? "PASS" : "FAIL")}  {detail}");
+        }
+
+        if (SkipIfNoSyntheticInput("快捷键全流程（需要合成键盘/鼠标）")) { _quit = true; return; }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        SettleFrames(200);
+
+        // "键盘在我们这儿"＝ 前台是我们的窗口 **且** 焦点也在它上面。
+        // 只查前台会漏掉"前台是我们、焦点还留在别人那儿"这一种——屏幕上看着一切正常、
+        // 按键却全收不到（8.3.2 的自检里最后一条红就是这个样子）。
+        bool FgOurs()
+        {
+            if (_windows.Count == 0) return false;
+            if (Native.GetForegroundWindow() != _windows[0].Hwnd) return false;
+            return Native.GetFocus() == _windows[0].Hwnd;
+        }
+
+        // 真按一个组合键。**要按真实手的节奏来**：修饰键先按住、隔一会儿再按主键——
+        // 一次 SendInput 把四个事件全灌进去的话，我们处理 KEYDOWN 时修饰键可能已经抬了
+        //（`HandleKeyDown` 读的是 `GetAsyncKeyState`），会被误判成"没按 Ctrl"。
+        // 这一条也让测试更接近老师真实的按键节奏。
+        void RealChord(bool ctrl, ushort vk)
+        {
+            var downs = ctrl
+                ? new[] { KeyInput(VK_CONTROL, false), KeyInput(vk, false) }
+                : new[] { KeyInput(vk, false) };
+            Native.SendInput((uint)downs.Length, downs, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(90);
+            var ups = ctrl
+                ? new[] { KeyInput(vk, true), KeyInput(VK_CONTROL, true) }
+                : new[] { KeyInput(vk, true) };
+            Native.SendInput((uint)ups.Length, ups, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(160);
+        }
+
+        // 真按 Ctrl+P：焦点在不在我们这儿，这一条说了算。
+        bool RealPenKeyWorks(string what)
+        {
+            Host.Commands.SetTool(Tool.Eraser);        // 摆到"不按就看得出来"的位置
+            SettleFrames(120);
+            RealChord(ctrl: true, 'P');
+            bool ok = Tool == Tool.Pen;
+            Console.WriteLine($"      （{what}）真按 Ctrl+P → 工具 = {Tool}，前台是我们 = {FgOurs()}");
+            return ok;
+        }
+
+        // ---- ① 基线：还没截图，键盘在我们这儿 ----
+        Check("基线：批注窗口是前台", FgOurs(),
+              $"前台 = {(FgOurs() ? "批注窗口" : "别的窗口")}");
+        Check("基线：真按 Ctrl+P 切到笔", RealPenKeyWorks("基线"), $"工具 = {Tool}");
+
+        // ---- ② 隐藏窗口截图：进屋那一瞬藏过窗口（漏要前台的正是这一步）----
+        Host.Commands.SetCaptureHideInk(true);
+        Host.Commands.EnterCapture();
+        SettleFrames(400);
+        Check("隐藏窗口截图 · 取景中：前台还是我们（Esc/Enter 才有地方落地）",
+              FgOurs(), $"前台 = {(FgOurs() ? "批注窗口" : "别的窗口")}，取景 = {CaptureActive}");
+        SendKeyChord(0x1B);                        // 真按 Esc
+        SettleFrames(400);
+        Check("隐藏窗口截图 · 真按 Esc 能退出取景", !CaptureActive && !CaptureAdjusting,
+              $"取景 = {CaptureActive}，工具 = {Tool}");
+        Check("隐藏窗口截图 · 退出后真按 Ctrl+P 能用", RealPenKeyWorks("Esc 退出后"), $"工具 = {Tool}");
+
+        // ---- ③ 隐藏窗口截图：拖框 + 真按 Enter 确认 ----
+        Host.Commands.EnterCapture();
+        SettleFrames(300);
+        int cx = (int)(_virtualX + _virtualW * 0.5f), cy = (int)(_virtualY + _virtualH * 0.5f);
+        SendMouse(cx - 120, cy - 80, 0);                              SettleFrames(60);
+        SendMouse(cx - 120, cy - 80, Native.MOUSEEVENTF_LEFTDOWN);     SettleFrames(60);
+        SendMouse(cx, cy, 0);                                        SettleFrames(50);
+        SendMouse(cx + 120, cy + 80, 0);                              SettleFrames(50);
+        SendMouse(cx + 120, cy + 80, Native.MOUSEEVENTF_LEFTUP);       SettleFrames(300);
+        SendKeyChord(0x0D);                        // 真按 Enter
+        SettleFrames(500);
+        Check("隐藏窗口截图 · 拖框 + 真按 Enter 确认落图",
+              Doc.Strokes.Count(s => s.IsImage) == 1,
+              $"图像对象 {Doc.Strokes.Count(s => s.IsImage)} 个");
+        Check("隐藏窗口截图 · 落图后真按 Ctrl+P 能用", RealPenKeyWorks("确认后"), $"工具 = {Tool}");
+
+        // ---- ④ 截图（连批注）：同一套 ----
+        Host.Commands.SetCaptureHideInk(false);
+        Host.Commands.EnterCapture();
+        SettleFrames(300);
+        Check("截图（连批注）· 取景中：前台还是我们", FgOurs(),
+              $"前台 = {(FgOurs() ? "批注窗口" : "别的窗口")}");
+        SendKeyChord(0x1B);
+        SettleFrames(400);
+        Check("截图（连批注）· 真按 Esc 退出 + Ctrl+P 能用",
+              !CaptureActive && RealPenKeyWorks("连批注退出后"), $"工具 = {Tool}");
+
+        // ---- ⑤ 焦点被抢走 → 回到批注态要得回来 ----
+        // 模拟"前台被系统转给了别人"：藏窗口 + 用 SW_SHOWNOACTIVATE 显示
+        //（截图藏窗口那一下就是这个效果）。这时真按键到不了批注层——
+        // 这就是用户看到的"快捷键没用"。
+        Native.ShowWindow(_windows[0].Hwnd, Native.SW_HIDE);
+        Native.ShowWindow(_windows[0].Hwnd, Native.SW_SHOWNOACTIVATE);
+        SettleFrames(250);
+        bool lost = !FgOurs();
+        bool worksWhileLost = RealPenKeyWorks("焦点丢了");
+        Check("焦点丢了：此时按键到不了批注层（用户遇到的'快捷键没用'）",
+              !lost || !worksWhileLost,
+              $"焦点丢了 = {lost}，按键还能用 = {worksWhileLost}");
+
+        // 产品里"回到批注态"都走这一句（截图收场 / 退出放映 / 关掉穿透）：
+        SetKeyboardMode(KeyboardMode);
+        SettleFrames(250);
+        Check("回到批注态：焦点要得回来", FgOurs(),
+              $"前台 = {(FgOurs() ? "批注窗口" : "别的窗口")}");
+        Check("焦点恢复后：真按 Ctrl+P 立刻能用", RealPenKeyWorks("焦点恢复后"), $"工具 = {Tool}");
+
+        // 收尾：模式还原、画布清干净
+        Host.Commands.SetCaptureHideInk(true);
+        Doc.Clear();
+        Doc.ClearHistory();
+        SettleFrames(150);
+
+        Console.WriteLine();
+        Console.WriteLine(fail == 0 ? $"  PASS: 快捷键全通（{pass} 项）" : $"  FAIL: {fail} 项不对");
         _quit = true;
     }
 

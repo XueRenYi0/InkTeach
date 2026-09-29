@@ -3849,6 +3849,7 @@ public partial class InkEngine
             NotifyUiStateChanged();
         }
         Console.WriteLine($"截图 {w}×{h} 物理像素 → 原位落在画布 ({px:F0},{py:F0})，已选中");
+        RegainKeyboardFocus();          // 回到批注态：前台/键盘要回来（见那段注释）
         return placed != null;
     }
 
@@ -3891,6 +3892,7 @@ public partial class InkEngine
         _dirty = true;
         ApplyCursor();
         NotifyUiStateChanged();
+        RegainKeyboardFocus();          // 回到批注态：前台/键盘要回来（见那段注释）
         Console.WriteLine("截图取消");
     }
 
@@ -6784,6 +6786,12 @@ public partial class InkEngine
             CaptureFrameHidden = false;
             _dirty = true;
         }
+
+        // **把前台/键盘要回来**（用户 2026-09-30 报的"截完图笔的快捷键没有用了"）：
+        // 上面那一下藏窗会把前台让给别人，恢复显示用的是 SW_SHOWNOACTIVATE、不会自己回来。
+        // 不补这一句，不只"截完图"的快捷键是死的——**取景中的 Esc/Enter 也收不到**
+        //（它们同样靠我们的窗口收键）。详见 RegainKeyboardFocus 那段。
+        RegainKeyboardFocus();
 
         if (px == null)
         {
@@ -10356,11 +10364,44 @@ public partial class InkEngine
             Native.SetWindowPos(w.Hwnd, IntPtr.Zero, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER
                 | Native.SWP_NOACTIVATE | 0x0020 /*SWP_FRAMECHANGED*/);
-            if (on) Native.SetForegroundWindow(w.Hwnd);
+            if (on)
+            {
+                Native.SetForegroundWindow(w.Hwnd);
+                // **前台 + 焦点要一起给**（2026-09-30）：只 SetForegroundWindow 的话，
+                // 在某些路径下（从"被藏过/被抢过"的状态回来）窗口虽然是前台，
+                // 键盘焦点却还留在别人那儿——屏幕上看着一切正常，按键全收不到。
+                Native.SetFocus(w.Hwnd);
+            }
         }
         Console.WriteLine($"批注键盘模式 = {on}"
             + (on ? "（键盘归批注层；此时下层程序收不到键盘）" : "（键盘还给下层程序）"));
         _dirty = true;
+    }
+
+    /// <summary>
+    /// **把前台/键盘要回来**——"从别的状态切回批注态"的统一补丁。
+    ///
+    /// 为什么必须有这一句：藏窗口（`ScreenCapture.HiddenOverlay`）/ 摘置顶 / 换窗口样式
+    /// 之后，前台会被系统转给别人，而恢复显示用的是 `SW_SHOWNOACTIVATE`（不许抢焦点），
+    /// **它不会自己回来**。于是 `Ctrl+P` 这些应用内快捷键全被别的窗口收走；更隐蔽的是
+    /// **截图取景中的 `Esc`/`Enter` 也收不到**（它们同样靠我们的窗口收键），
+    /// 而我们的窗口 `WM_MOUSEACTIVATE → MA_NOACTIVATE`，**点它也不会激活**，
+    /// 用户自己救不回来——只能重启软件。
+    ///
+    /// 已经踩过三次，**全是同一个坑**：
+    ///   ① 穿透开开关关（见 SetPassThrough 那段注释）；
+    ///   ② 退出放映（见 Ppt.ExitPptMode）；
+    ///   ③ **截完图**（用户 2026-09-30 报的"截完图以后笔的快捷键没有用了"）。
+    /// 以后凡是"从别的状态切回批注态"的地方都要调它。幂等。
+    /// </summary>
+    private void RegainKeyboardFocus()
+    {
+        if (!KeyboardMode || _windows.Count == 0) return;
+        foreach (var w in _windows)
+        {
+            Native.SetForegroundWindow(w.Hwnd);
+            Native.SetFocus(w.Hwnd);
+        }
     }
 
     /// <summary>

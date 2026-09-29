@@ -641,6 +641,10 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern IntPtr SetFocus(IntPtr hWnd);
 
+    /// <summary>本线程输入队列当前的焦点窗口（别的线程拿着焦点时返回 NULL）。</summary>
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetFocus();
+
     [DllImport("user32.dll")]
     public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
 
