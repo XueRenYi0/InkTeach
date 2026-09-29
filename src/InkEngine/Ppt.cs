@@ -298,6 +298,11 @@ public partial class InkEngine
     {
         PptMode = false;
         RegisterPptHotkeys(false);     // 退出放映：临时全局热键注销（平时一个键都不多占）
+        // **把键盘/前台要回来**：放映时前台是 WPS，退出后如果不管，我们的窗口还是非前台，
+        // 应用内快捷键（Ctrl+P 等）就一直是死的（用户 2026-09-30 实测："退出放映后 Ctrl+P
+        // 也没用了"）。`SetKeyboardMode` 里那句 SetForegroundWindow 正是干这个的，
+        // 顺手把窗口样式也重新落一遍（两种状态都是幂等的）。
+        if (_windows.Count > 0) SetKeyboardMode(KeyboardMode);
 
         // 条的状态跟着收场：菜单/页号面板还开着、或者正被拿在手里的话，退出放映后
         // 它们就成了"看不见却还在吃输入"的孤儿（和界面"收起不清临时状态"是同一个坑）。
