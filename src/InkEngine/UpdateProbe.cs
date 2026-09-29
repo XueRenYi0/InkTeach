@@ -18,7 +18,10 @@ internal static class UpdateProbe
     public static int Run()
     {
         Console.WriteLine("=== 自动更新自检（离线）===");
-        Console.WriteLine($"  当前版本 {UpdateFeed.CurrentVersion}；更新源 {(UpdateFeed.Url.Length > 0 ? UpdateFeed.Url : "（未配置）")}");
+        Console.WriteLine($"  当前版本 {UpdateFeed.CurrentVersion}；"
+                          + (UpdateFeed.Url.Length > 0
+                             ? $"用户配置源 {UpdateFeed.Url}"
+                             : $"候选源 {UpdateFeed.Sources.Length} 条（未填的会跳过）"));
         Console.WriteLine();
 
         int pass = 0, fail = 0;

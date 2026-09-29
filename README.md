@@ -915,11 +915,13 @@ min/max，框只会越拉越大，手感"不跟手"）。套索的线头也咬�
 
 ## 许可
 
+**Copyright (C) 2026 XueRenYi0** —— 版权归作者所有（下面的商业授权就以这份版权为基础）。
+
 **GPL-3.0**（见 [LICENSE](LICENSE)）。你可以自由使用、修改、分发，**包括商用**；
 按 GPL 的规矩，**衍生产品也要以 GPL-3.0 开源**（并保留出处与许可声明）。
 
 想要**闭源商用 / 把代码嵌进自己的产品**的，可以联系作者谈**商业授权**——
-本项目版权归作者一人所有，具备双许可（GPL + 商业授权）的条件。
+本项目版权归作者一人所有，具备**双许可**（GPL 免费版 + 商业授权）的条件。
 
 **参考过做法、但没有复制代码**的项目（Ink Canvas / Inkeys / perfect-freehand / $P 等）
 的出处与许可，见 [src/InkEngine/THIRD-PARTY-NOTICES.md](src/InkEngine/THIRD-PARTY-NOTICES.md)。

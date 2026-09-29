@@ -1587,7 +1587,7 @@ public partial class InkEngine
 
         // 自动更新的来源：settings.json 覆盖默认值（默认是空的 = 不检查）。
         // 放这里读，是为了"用户改配置文件不用重新编译"。
-        UpdateFeed.Url = InkSettings.LoadUpdateUrl() ?? UpdateFeed.DefaultUrl;
+        UpdateFeed.Url = InkSettings.LoadUpdateUrl() ?? "";
 
         RegisterHotkeys();
 
@@ -6981,19 +6981,21 @@ public partial class InkEngine
     internal bool AutoCheckOnly;
     private readonly object _updLock = new();
     private (UpdateFeed.Manifest m, string err) _updResult;
+    private string _updUsedUrl = "";
     private string _updZipPath = "", _updError = "";
     private long _updGot, _updTotal;                    // 下载进度（后台写、主线程读）
 
     /// <summary>「检查更新」被点了一下（见 <see cref="IEngineCommands.CheckUpdate"/>）。</summary>
     internal void CheckUpdateFromUi()
     {
-        if (UpdateFeed.Url.Length == 0)
+        if (!UpdateFeed.HasAnySource)
         {
-            // **没配更新源是默认状态，不是错误**（用户 2026-09-29："先不补，后期再补"）
+            // **没配更新源是正常状态，不是错误**（教室机器可以指到局域网共享；
+            // 一条都没有时点「检查更新」只改一行状态文字）
             UpdateState = UpdateStage.NotConfigured;
             UpdateText = "未配置更新源";
             NotifyUiStateChanged();
-            Console.WriteLine("自动更新：没有配置更新源（settings.json 的 update.url，或 UpdateFeed.DefaultUrl）");
+            Console.WriteLine("自动更新：没有可用的更新源（settings.json 的 update.url，或 UpdateFeed.Sources）");
             return;
         }
         if (_updBusy) return;                           // 已经在查 / 在下，别叠加
@@ -7002,13 +7004,17 @@ public partial class InkEngine
         UpdateText = "检查中…";
         NotifyUiStateChanged();
 
-        string url = UpdateFeed.Url;
-        Console.WriteLine($"自动更新：检查 {url}（当前 {UpdateFeed.CurrentVersion}）");
+        Console.WriteLine($"自动更新：检查（当前 {UpdateFeed.CurrentVersion}；"
+                          + (UpdateFeed.Url.Length > 0 ? "用户配置源" : $"候选 {UpdateFeed.Sources.Length} 条，按序试") + "）");
         _updBusy = true;
         var th = new System.Threading.Thread(() =>
         {
-            var m = UpdateFeed.Fetch(url, out string err);
-            lock (_updLock) _updResult = (m, err);
+            var m = UpdateFeed.FetchBest(out string used, out string err);
+            lock (_updLock)
+            {
+                _updResult = (m, err);
+                _updUsedUrl = used;
+            }
             _updPost = true;
         })
         { IsBackground = true, Name = "InkTeach-Update-Check" };
@@ -7102,7 +7108,8 @@ public partial class InkEngine
                 _updSha = m.Sha256;
                 UpdateState = UpdateStage.Available;
                 UpdateText = $"有新版本 {m.Version}";
-                Console.WriteLine($"自动更新：发现 {m.Version}（当前 {UpdateFeed.CurrentVersion}）"
+                Console.WriteLine($"自动更新：发现 {m.Version}（当前 {UpdateFeed.CurrentVersion}；"
+                                  + $"源 {UpdateFeed.HostOf(_updUsedUrl)}）"
                                   + (m.Notes.Length > 0 ? "：" + Shorten(m.Notes) : ""));
                 needApply = AutoApplyUpdate;
             }

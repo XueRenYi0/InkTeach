@@ -47,21 +47,74 @@ public enum UpdateStage
 internal static class UpdateFeed
 {
     /// <summary>
-    /// 默认更新源（**本项目的正式地址**）。
+    /// 更新源候选表（**按顺序试，第一个成功的算数**）。
     ///
-    /// ⚠ 这里用**仓库里的 raw 文件**、不用 release 附件：release 附件走 CDN，
-    /// 刚发新版时"附件已换、取回来还是旧的"（2026-09-29 实测），而更新检查恰恰
-    /// 最需要"立刻看到新版"。raw 地址 + 每次带一个查询串（见 <see cref="Fetch"/>）
-    /// 就能保证每次都是新的。zip 仍旧放 release 附件（大文件、版本固定，缓存是好事）。
+    /// 为什么是"一串"而不是"一个"：国内教室机连不上 GitHub（本机实测 21 秒超时），
+    /// 所以**主源放国内镜像**（Gitee），GitHub 那条留作备选；用户还可以用
+    /// settings.json 的 `update.url` 覆盖成局域网共享（教室环境最稳的一条）。
     ///
-    /// 用户可以用 settings.json 的 `update.url` 覆盖它——比如教室里改成局域网共享
-    /// （那台机器很可能连不上 GitHub，这条实测过）。
+    /// ⚠ 每面镜像要**各自的清单**：清单里的 `url` 得指向那一侧的 zip
+    /// （`publish.ps1` 按 `$updateBase` 生成；多镜像时每侧各生成一份）。
     /// </summary>
-    public const string DefaultUrl =
-        "https://raw.githubusercontent.com/XueRenYi0/InkTeach/main/update.json";
+    public static readonly string[] Sources =
+    {
+        // TODO(镜像)：建好 Gitee 仓库后把这条填上（格式：https://gitee.com/<账号>/<仓库>/raw/<分支>/update.json）。
+        //            没填（含"&lt;账号&gt;"）会被自动跳过，不影响 GitHub 那条。
+        "https://gitee.com/<账号>/<仓库>/raw/master/update.json",
+        "https://raw.githubusercontent.com/XueRenYi0/InkTeach/main/update.json",
+    };
 
-    /// <summary>实际用的源：settings.json 覆盖默认值（引擎启动时赋值）。</summary>
-    public static string Url = DefaultUrl;
+    /// <summary>
+    /// 用户配置的更新源（settings.json 的 `update.url`）。**非空就只用它**（不试候选表）——
+    /// 教室机器上指到局域网共享，比任何公网镜像都稳。
+    /// </summary>
+    public static string Url = "";
+
+    /// <summary>有没有可用的更新源（用户配置的算一条；候选表里未填写的会跳过）。</summary>
+    public static bool HasAnySource
+    {
+        get
+        {
+            if (Url.Length > 0) return true;
+            foreach (var u in Sources)
+                if (!string.IsNullOrWhiteSpace(u) && !u.Contains("<账号>")) return true;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 按 <see cref="Url"/> → <see cref="Sources"/> 的顺序试，返回第一个成功的清单，
+    /// 并给出**实际用的是哪条**（日志/诊断要）与失败详情（每条一行）。
+    /// </summary>
+    public static Manifest FetchBest(out string usedUrl, out string error)
+    {
+        usedUrl = null;
+        error = null;
+
+        if (Url.Length > 0)
+        {
+            var one = Fetch(Url, out error);
+            if (one != null) usedUrl = Url;
+            return one;
+        }
+
+        var errs = new List<string>();
+        foreach (var u in Sources)
+        {
+            if (string.IsNullOrWhiteSpace(u) || u.Contains("<账号>")) continue;   // 还没填的跳过
+            var m = Fetch(u, out string e);
+            if (m != null) { usedUrl = u; return m; }
+            errs.Add($"{HostOf(u)}：{e}");
+        }
+        error = errs.Count > 0 ? string.Join("；", errs) : "没有配置任何更新源";
+        return null;
+    }
+
+    /// <summary>日志里只写主机名，别把整条长 URL 糊上去。</summary>
+    internal static string HostOf(string url)
+    {
+        try { return new Uri(url).Host; } catch { return url; }
+    }
 
     /// <summary>本程序的版本（入口程序集，即 InkTeach.exe 的 `&lt;Version&gt;`）。</summary>
     public static string CurrentVersion { get; } = ReadVersion();
