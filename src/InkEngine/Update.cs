@@ -157,6 +157,25 @@ internal static class UpdateFeed
         try { return new Uri(url).Host; } catch { return url; }
     }
 
+    /// <summary>版本号里可能有路径非法字符（清单是外来的）——化作安全文件名。</summary>
+    internal static string SafeVer(string ver)
+    {
+        if (string.IsNullOrWhiteSpace(ver)) return "0";
+        var bad = Path.GetInvalidFileNameChars();
+        var sb = new System.Text.StringBuilder(ver.Length);
+        foreach (char c in ver) sb.Append(Array.IndexOf(bad, c) >= 0 ? '_' : c);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// 某个版本的更新工作目录（下载的 zip、换壳脚本、swap.log、done.txt 都在这儿）。
+    /// **换壳脚本自己算出来的目录必须和这里一致**（它用 <c>$PSCommandPath</c> 的父目录）。
+    /// </summary>
+    public static string UpdateDirFor(string ver) =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "InkTeach", "update", SafeVer(ver));
+
     /// <summary>本程序的版本（入口程序集，即 InkTeach.exe 的 `&lt;Version&gt;`）。</summary>
     public static string CurrentVersion { get; } = ReadVersion();
 
@@ -482,6 +501,14 @@ internal static class UpdateFeed
                 }
             }
         }
+
+        # Tell the next startup that this launch came from an auto-update: the app shows
+        # "updated to x.y.z" once and deletes the file. Written next to this script,
+        # i.e. into the update dir (same place as swap.log).
+        try {
+            Set-Content -LiteralPath (Join-Path (Split-Path -Parent $PSCommandPath) 'done.txt') -Value (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') -Encoding ASCII -ErrorAction Stop
+            Log "wrote done.txt"
+        } catch { Log ("done.txt failed: " + $_.Exception.Message) }
 
         try { Start-Process -FilePath $Exe; Log "restarted $Exe" }
         catch { Log ("restart failed: " + $_.Exception.Message) }

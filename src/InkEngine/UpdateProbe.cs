@@ -196,6 +196,9 @@ internal static class UpdateProbe
               "含非 ASCII 字符");
         Check("换壳（沙箱真跑）：安装版的卸载程序 unins000.* 被带到了新目录", uninsKept,
               uninsKept ? "" : "新目录里缺 unins000.*（卸载按钮会失效）");
+        bool doneWrote = File.Exists(Path.Combine(swapDir, "done.txt"));
+        Check("换壳（沙箱真跑）：写了 done.txt（下次启动显示「已更新到 x.y.z」）", doneWrote,
+              doneWrote ? "内容 " + (File.ReadAllText(Path.Combine(swapDir, "done.txt")).Trim()) : "没写");
 
         Console.WriteLine();
         Console.WriteLine($"  合计 {pass + fail} 条：通过 {pass}，失败 {fail}");

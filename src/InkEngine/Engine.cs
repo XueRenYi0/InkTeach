@@ -1589,6 +1589,26 @@ public partial class InkEngine
         // 放这里读，是为了"用户改配置文件不用重新编译"。
         UpdateFeed.Url = InkSettings.LoadUpdateUrl() ?? "";
 
+        // **上一次是自动更新装上来的吗**：换壳脚本会在更新目录里留一个 done.txt。
+        // 看到它 = 本次启动就是"更新完的第一次启动"，在界面上明说一句
+        // （「更多」抽屉那一行会显示"已更新到 x.y.z"），然后把标记删掉——只说一次。
+        // 为什么要这一步：换壳重启之后界面原本什么提示都没有，老师根本不知道成没成。
+        try
+        {
+            string done = Path.Combine(UpdateFeed.UpdateDirFor(UpdateFeed.CurrentVersion), "done.txt");
+            if (File.Exists(done))
+            {
+                File.Delete(done);
+                UpdateState = UpdateStage.UpToDate;
+                UpdateText = $"已更新到 {UpdateFeed.CurrentVersion}";
+                Console.WriteLine($"自动更新：本次启动是换壳更新上来的（{UpdateFeed.CurrentVersion}）");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("自动更新：检查 done.txt 失败：" + ex.Message);
+        }
+
         RegisterHotkeys();
 
         // 自检/基准模式下面板默认关掉，除非显式 --hud。
@@ -7036,10 +7056,8 @@ public partial class InkEngine
         _updBusy = true;
         var th = new System.Threading.Thread(() =>
         {
-            string dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "InkTeach", "update", ver);
-            string zip = Path.Combine(dir, $"InkTeach-{ver}-win-x64.zip");
+            string dir = UpdateFeed.UpdateDirFor(ver);
+            string zip = Path.Combine(dir, $"InkTeach-{UpdateFeed.SafeVer(ver)}-win-x64.zip");
             bool ok = UpdateFeed.Download(url, zip, sha,
                 (got, total) =>
                 {
