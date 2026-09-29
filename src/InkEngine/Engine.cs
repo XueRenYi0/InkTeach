@@ -380,7 +380,15 @@ public partial class InkEngine
     /// </summary>
     internal Tool EffectiveTool => LastPointerInverted ? Tool.Eraser : Tool;
 
-    internal bool ShowHud = true;
+    /// <summary>
+    /// 左上角那个黑色性能面板（FPS/延时）。
+    ///
+    /// **默认关**（用户 2026-09-30：普通用户不该看到它，取消默认开）。
+    /// 要看数字时用命令行 `--hud` 开（自检/基准那批模式另有一套规则：
+    /// 它们默认也不开，除非显式 `--hud`——面板会盖住屏幕上的墨，数墨的用例会假失败）。
+    /// 快捷键已经没有了（原 Ctrl+I 已删）。
+    /// </summary>
+    internal bool ShowHud = false;
 
     /// <summary>
     /// 橡皮的实测采集（"手测台" --eraserlab）。**平时是 null**，所有上报点都是 `?.`，
@@ -1613,8 +1621,20 @@ public partial class InkEngine
             HighlighterCurrent = InkPalette.ToHighlighter(InkPalette.HighlighterBand[hlIdx].Color);
             _hlColorIdx = hlIdx;
         }
+        // **粗细档**（每个工具分开记，用户 2026-09-30 定）：存的是"第几档"，
+        // 读回来时把档位和对应的逻辑宽度一起恢复（见 CycleWidth 里的写入）。
+        if (int.TryParse(GetUiPref("w.pen"), out int wPen) && wPen >= 0 && wPen < WidthPresets.Length)
+        { WidthPresetIndex = wPen; PenWidthLogical = WidthPresets[wPen]; }
+        if (int.TryParse(GetUiPref("w.hl"), out int wHl) && wHl >= 0 && wHl < HighlighterWidthPresets.Length)
+        { HighlighterWidthIndex = wHl; HighlighterWidthLogical = HighlighterWidthPresets[wHl]; }
+        if (int.TryParse(GetUiPref("w.laser"), out int wLaser) && wLaser >= 0 && wLaser < LaserWidthPresets.Length)
+        { LaserWidthIndex = wLaser; LaserWidthLogical = LaserWidthPresets[wLaser]; }
+        if (int.TryParse(GetUiPref("w.pixel"), out int wPixel) && wPixel >= 0 && wPixel < PixelEraserWidthPresets.Length)
+        { PixelEraserWidthIndex = wPixel; PixelEraserWidthLogical = PixelEraserWidthPresets[wPixel]; }
         // 上次用的橡皮形态（整笔擦 / 面积擦）
         if (GetUiPref("eraserKind") == "pixel") _eraserKind = Tool.PixelEraser;
+        // 上次用的选择方式（矩形 / 套索）
+        if (GetUiPref("selMode") == "lasso") SelMode = SelectMode.Lasso;
 
         // **上一次是自动更新装上来的吗**：换壳脚本会在更新目录里留一个 done.txt。
         // 看到它 = 本次启动就是"更新完的第一次启动"，在界面上明说一句
@@ -6125,6 +6145,9 @@ public partial class InkEngine
     private void SetSelectMode(SelectMode mode)
     {
         SelMode = mode;
+        // **记住选择方式**（矩形 / 套索，用户 2026-09-30 定）：键盘和界面两条路都走这里，
+        // 所以只在这一处写就够了；启动时读回来（见 Run 里那句 selMode）。
+        SetUiPref("selMode", mode == SelectMode.Lasso ? "lasso" : "rect");
         // 半路切就把没画完的圈丢掉，免得下一次按下接在旧路径后面。
         LassoPath.Clear();
         MarqueeActive = false;
@@ -6493,6 +6516,11 @@ public partial class InkEngine
         Console.WriteLine($"{Tool} 粗细 -> {CurrentToolWidthLogical} 逻辑像素"
                         + $"（本机实际 {CurrentToolWidthLogical * DpiScale:F0} 物理像素）");
         EraserTelemetry?.Note($"{ToolName(Tool)}粗细 → {CurrentToolWidthLogical:F0} 逻辑像素", NowMs);
+        // **记住粗细档**（用户 2026-09-30 定：笔 / 荧光笔 / 激光笔 / 面积擦 分开记）
+        SetUiPref("w.pen", WidthPresetIndex.ToString());
+        SetUiPref("w.hl", HighlighterWidthIndex.ToString());
+        SetUiPref("w.laser", LaserWidthIndex.ToString());
+        SetUiPref("w.pixel", PixelEraserWidthIndex.ToString());
         NotifyUiStateChanged();
     }
 
