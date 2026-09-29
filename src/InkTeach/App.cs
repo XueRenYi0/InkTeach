@@ -721,6 +721,7 @@ internal sealed class App : InkEngine.InkEngine
             string u = (args.Length > 1 && !args[1].StartsWith("--")) ? args[1] : null;
             if (u != null) UpdateFeed.Url = u;
             AutoApplyUpdate = args.Contains("--apply");
+            AutoCheckOnly = !AutoApplyUpdate;      // 只查不装 → 查完自己退（别把界面挂在屏幕上）
             Console.WriteLine($"=== 自动更新验收：源={(UpdateFeed.Url.Length > 0 ? UpdateFeed.Url : "（未配置）")}"
                               + $"，apply={AutoApplyUpdate} ===");
             CheckUpdateFromUi();

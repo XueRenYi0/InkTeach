@@ -6974,6 +6974,11 @@ public partial class InkEngine
     /// 产品里永远是 false（用户点两下：一下查、一下装）。
     /// </summary>
     internal bool AutoApplyUpdate;
+    /// <summary>
+    /// 自检/验收用：`--updatecheck` 只查不装时，**查完就自己退出**
+    /// （产品里没有这个开关——用户点一下查、再点一下装，界面当然要留着）。
+    /// </summary>
+    internal bool AutoCheckOnly;
     private readonly object _updLock = new();
     private (UpdateFeed.Manifest m, string err) _updResult;
     private string _updZipPath = "", _updError = "";
@@ -7070,6 +7075,7 @@ public partial class InkEngine
             string err;
             lock (_updLock) (m, err) = _updResult;
 
+            bool needApply = false;
             if (m == null)
             {
                 UpdateState = UpdateStage.Failed;
@@ -7098,11 +7104,14 @@ public partial class InkEngine
                 UpdateText = $"有新版本 {m.Version}";
                 Console.WriteLine($"自动更新：发现 {m.Version}（当前 {UpdateFeed.CurrentVersion}）"
                                   + (m.Notes.Length > 0 ? "：" + Shorten(m.Notes) : ""));
-                NotifyUiStateChanged();
-                if (AutoApplyUpdate) ApplyUpdateFromUi();      // 验收用：一条命令走到底
-                return;
+                needApply = AutoApplyUpdate;
             }
             NotifyUiStateChanged();
+
+            // `--updatecheck`（验收用）：**查完就退**，别把界面挂在屏幕上。
+            // 产品里没有这个开关（用户点一下查、再点一下装，界面当然要留着）。
+            if (AutoCheckOnly) { _quit = true; return; }
+            if (needApply) ApplyUpdateFromUi();
         }
 
         if (_updApplyPosted)

@@ -47,11 +47,11 @@ public enum UpdateStage
 internal static class UpdateFeed
 {
     /// <summary>
-    /// 默认更新源。**留空 = 不检查**（用户 2026-09-29："先不补，后期再补"）。
-    /// 以后填成：`https://github.com/&lt;账号&gt;/&lt;仓库&gt;/releases/latest/download/update.json`
-    /// 用户也可以用 settings.json 的 `update.url` 覆盖它（不用重新编译）。
+    /// 默认更新源（**本项目的正式地址**）。用户也可以用 settings.json 的
+    /// `update.url` 覆盖它——比如教室里改成局域网共享（那台机器可能连不上 GitHub）。
     /// </summary>
-    public const string DefaultUrl = "";
+    public const string DefaultUrl =
+        "https://github.com/XueRenYi0/InkTeach/releases/latest/download/update.json";
 
     /// <summary>实际用的源：settings.json 覆盖默认值（引擎启动时赋值）。</summary>
     public static string Url = DefaultUrl;
