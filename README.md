@@ -345,6 +345,17 @@ dotnet run --project src/InkTeach -c Release -- --memory reports/inkprobe-memory
 | 清单 | 所以放**仓库文件**，App 从 `raw.githubusercontent.com/<账号>/<仓库>/main/update.json` 取，而且 `UpdateFeed.Fetch` 每次会**带一个查询串**击穿缓存（清单只有几百字节，不值得省这次请求） |
 | zip | 继续放 release 附件：大文件、**版本固定**（URL 里带 tag），缓存是好事 |
 
+**发布后别急着验证，等约 2~5 分钟**（2026-09-29 实测三遍）：raw 清单本身也在 CDN 上，
+刚 `git push` 完的那一两分钟，**六条源全都在送旧清单**（连 GitHub 直连都是）。
+App 的规矩是"**任一源报新版就采纳，所有源都说已是最新才算数**"，所以：
+
+- 只要有一面镜像先刷新，用户点「检查更新」立刻就能查到（实测第三次升级就是
+  `gh-proxy.com` 还旧、`ghfast.top` 已新，靠这条规则才升上去的）；
+- 全都没刷新时，点了会显示"已是最新"——**过几分钟再点一次即可**，不是坏了。
+
+所以发完新版请**隔几分钟**再在机器上验证；要"发布即生效"就得换掉 raw 这条路
+（比如自己的对象存储 / Gitee），`settings.json` 的 `update.url` 可以随时覆盖。
+
 为什么不用 GitHub API：那个 API 匿名限流 **60 次/小时**，几十台教室机一起点就废了；
 `releases/latest/download/…` 那个恒定重定向也**不能用**——它 302 到不带查询串的附件地址，
 照样命中 CDN 缓存（实测）。以后要换成局域网共享，只改 `settings.json` 里的 `update.url`。
