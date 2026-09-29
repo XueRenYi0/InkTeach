@@ -1633,6 +1633,15 @@ public partial class InkEngine
         { PixelEraserWidthIndex = wPixel; PixelEraserWidthLogical = PixelEraserWidthPresets[wPixel]; }
         // 上次用的橡皮形态（整笔擦 / 面积擦）
         if (GetUiPref("eraserKind") == "pixel") _eraserKind = Tool.PixelEraser;
+        // 上次用的线型（实线 / 虚线 / 点线）
+        if (int.TryParse(GetUiPref("lineDash"), out int dash) && dash >= 0 && dash <= 2)
+            LineDash = (StrokeDash)dash;
+        // **粗细的"数值"版**：界面拖滑条设的是任意值（不一定落在档位上），
+        // 所以除了上面那四行"档位"之外再记一份具体数值，谁后写谁生效。
+        if (float.TryParse(GetUiPref("wv.pen"), out float vPen)) PenWidthLogical = vPen;
+        if (float.TryParse(GetUiPref("wv.hl"), out float vHl)) HighlighterWidthLogical = vHl;
+        if (float.TryParse(GetUiPref("wv.laser"), out float vLaser)) LaserWidthLogical = vLaser;
+        if (float.TryParse(GetUiPref("wv.pixel"), out float vPixel)) PixelEraserWidthLogical = vPixel;
         // 上次用的选择方式（矩形 / 套索）
         if (GetUiPref("selMode") == "lasso") SelMode = SelectMode.Lasso;
 
@@ -5595,6 +5604,8 @@ public partial class InkEngine
         // 三档一轮：Solid(0) → Dashed(1) → Dotted(2) → Solid。
         // 用取模而不是列举，是为了以后要加第四档（比如点划线）时只改这里一句话。
         LineDash = (StrokeDash)(((int)LineDash + 1) % 3);
+        // **记住线型**（实线 / 虚线 / 点线，用户 2026-09-30 定：重启回来还是它）
+        SetUiPref("lineDash", ((int)LineDash).ToString());
         // 面板上那一格的图标要跟着换，所以推一次状态（和抛物线换朝向同一套）。
         _dirty = true;
         NotifyUiStateChanged();
@@ -6962,6 +6973,7 @@ public partial class InkEngine
         {
             case Tool.Highlighter:
                 HighlighterWidthLogical = v;
+                SetUiPref("wv.hl", v.ToString("0.##"));
                 int hi = Array.IndexOf(HighlighterWidthPresets, v);
                 if (hi >= 0) HighlighterWidthIndex = hi;
                 break;
