@@ -12629,15 +12629,17 @@ internal sealed class App : InkEngine.InkEngine
                       $"写字中占用 {mid.MaxX - mid.MinX:F0}×{mid.MaxY - mid.MinY:F0}");
             }
 
-            // ---- 左右两条边：**球能藏、条不藏**（用户 2026-09-18 定的规则）----
+            // ---- 贴边隐藏**只认底边**（用户 2026-09-30："只要拖动到底边或者离底边很近才贴边隐"）----
             //
-            // 面板是横的，"缩进侧边"等于把它**侧着塞进边里**——贴左边露出来的其实是它的
-            // 右端（最后一格和动作按钮区），跟"球"没有任何关系；而球是 48×48 的正方形，
-            // 塞进哪条边都是同一个姿态。所以：收起态四边都藏，展开态只在上下藏，
-            // 左右**保留吸附停靠**但不再往里缩。
+            // 沿革：这一格原来验的是"收起态四边都能藏、展开态只在上下藏"（2026-09-18 定的）。
+            // 现在规则收紧成一条：**只有贴底才藏**。所以三件事都要钉：
+            //   · 球停在左边中段（**离底边远**）→ **不许藏**（旧规则会藏成竖的 8×48）；
+            //   · 球拖到底边附近 → **必须藏**（横的那条露头）；
+            //   · 展开态停在左边中段 → 也不藏（只有底边才贴边隐）。
+            // ⚠ 位置必须"左**且**不贴底"才算数：停在左下角时它当然该藏（那本来就是站在底边上）。
             {
                 // 此刻面板是展开的、贴在屏幕下边（可能正在收着露头）——先碰一下叫回来，
-                // 再收成球，然后把球拖到左边缘。
+                // 再收成球。
                 var side0 = ui.QueryBounds();
                 SendMouse((int)((side0.MinX + side0.MaxX) * 0.5f * DpiScale),
                           (int)((side0.MinY + side0.MaxY) * 0.5f * DpiScale), 0);
@@ -12650,36 +12652,74 @@ internal sealed class App : InkEngine.InkEngine
                     SettleFrames(350);
                 }
 
+                // 把球拖到**左边中段**：球左落在离边 20、纵向在屏幕 40% 处（离底边远着呢）。
                 var side1 = ui.QueryBounds();
                 float bx = (side1.MinX + side1.MaxX) * 0.5f * DpiScale;
                 float by = (side1.MinY + side1.MaxY) * 0.5f * DpiScale;
-                int leftX = _virtualX + 20;
+                int toX = _virtualX + (int)((20f + 24f) * DpiScale);        // 球宽 48：中心 = 左 + 24
+                int toY = (int)(_virtualY + _virtualH * 0.4f);              // 纵向中段
                 SendMouse((int)bx, (int)by, 0);                            SettleFrames(60);
                 SendMouse((int)bx, (int)by, Native.MOUSEEVENTF_LEFTDOWN);   SettleFrames(50);
-                for (int i = 1; i <= 8; i++) { SendMouse((int)(bx + (leftX - bx) * i / 8f), (int)by, 0); SettleFrames(20); }
-                SendMouse(leftX, (int)by, Native.MOUSEEVENTF_LEFTUP);       SettleFrames(200);
+                for (int i = 1; i <= 8; i++)
+                {
+                    SendMouse((int)(bx + (toX - bx) * i / 8f), (int)(by + (toY - by) * i / 8f), 0);
+                    SettleFrames(20);
+                }
+                SendMouse(toX, toY, Native.MOUSEEVENTF_LEFTUP);             SettleFrames(200);
 
-                // 看一眼就走：球停在左边，700 毫秒后应该收成侧边那条竖的露头
+                // 看一眼就走：球停在左边中段——**不许藏**
+                SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.7f), 0);
+                SettleFrames(1400);
+                var atLeft = ui.QueryBounds();
+                Check("收起态停在左边中段：**不藏**（贴边隐藏只认底边）",
+                      (atLeft.MaxX - atLeft.MinX) > 30f && (atLeft.MaxY - atLeft.MinY) > 30f,
+                      $"占用 {atLeft.MaxX - atLeft.MinX:F0}×{atLeft.MaxY - atLeft.MinY:F0}，"
+                      + $"展开 = {ui.ExpandedForTest}");
+
+                // 再把它拖到**底边附近**（球底离工作区底 12 逻辑像素）→ 走开 → 这一次才该藏。
+                var wk = ui.WorkAreaForTest;
+                var side2 = ui.QueryBounds();
+                float c2x = (side2.MinX + side2.MaxX) * 0.5f * DpiScale;
+                float c2y = (side2.MinY + side2.MaxY) * 0.5f * DpiScale;
+                // 球高 48：中心放在"工作区底 − 12 − 24"处，球底就落在离底 12 的位置。
+                float toY2 = (float)((wk.MaxY - 36f) * DpiScale);
+                SendMouse((int)c2x, (int)c2y, 0);                          SettleFrames(60);
+                SendMouse((int)c2x, (int)c2y, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(50);
+                for (int i = 1; i <= 8; i++) { SendMouse((int)c2x, (int)(c2y + (toY2 - c2y) * i / 8f), 0); SettleFrames(20); }
+                SendMouse((int)c2x, (int)toY2, Native.MOUSEEVENTF_LEFTUP);  SettleFrames(200);
                 SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.35f), 0);
                 SettleFrames(1400);
                 var tucked = ui.QueryBounds();
-                Check("收起态停在左边：会藏成侧边那条露头（竖的 8×48）",
-                      (tucked.MaxX - tucked.MinX) < 12f && (tucked.MaxY - tucked.MinY) > 30f,
-                      $"占用 {tucked.MaxX - tucked.MinX:F0}×{tucked.MaxY - tucked.MinY:F0}"
-                      + $"，展开 = {ui.ExpandedForTest}");
+                Check("拖到底边附近：这时才藏（横的那条露头）",
+                      (tucked.MaxY - tucked.MinY) < 12f && (tucked.MaxX - tucked.MinX) > 30f,
+                      $"占用 {tucked.MaxX - tucked.MinX:F0}×{tucked.MaxY - tucked.MinY:F0}，"
+                      + $"展开 = {ui.ExpandedForTest}，露头值 peek={ui.PeekForTest:F2}");
 
-                // 碰回来 → 点开成条 → 再走开：这一次**不许收**
+                // 碰回来 → 点开成条 → 再拖到**左边中段**、走开：展开态同样**不藏**
                 SendMouse((int)((tucked.MinX + tucked.MaxX) * 0.5f * DpiScale),
                           (int)((tucked.MinY + tucked.MaxY) * 0.5f * DpiScale), 0);
                 SettleFrames(450);
-                var side2 = ui.QueryBounds();
-                ClickPhysical((side2.MinX + side2.MaxX) * 0.5f * DpiScale,
-                              (side2.MinY + side2.MaxY) * 0.5f * DpiScale);
+                var side3 = ui.QueryBounds();
+                ClickPhysical((side3.MinX + side3.MaxX) * 0.5f * DpiScale,
+                              (side3.MinY + side3.MaxY) * 0.5f * DpiScale);   // 展开
                 SettleFrames(400);
-                SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.35f), 0);
+                var bar0 = ui.QueryBounds();
+                float d3x = (bar0.MinX + bar0.MaxX) * 0.5f * DpiScale;
+                float d3y = (bar0.MinY + bar0.MaxY) * 0.5f * DpiScale;
+                float d3w = bar0.MaxX - bar0.MinX;                             // 逻辑宽（636）
+                float to3x = (float)((20f + d3w * 0.5f) * DpiScale);           // 条左落在离边 20
+                SendMouse((int)d3x, (int)d3y, 0);                          SettleFrames(60);
+                SendMouse((int)d3x, (int)d3y, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(50);
+                for (int i = 1; i <= 8; i++)
+                {
+                    SendMouse((int)(d3x + (to3x - d3x) * i / 8f), (int)(d3y + (toY - d3y) * i / 8f), 0);
+                    SettleFrames(20);
+                }
+                SendMouse((int)to3x, (int)toY, Native.MOUSEEVENTF_LEFTUP);  SettleFrames(200);
+                SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.7f), 0);
                 SettleFrames(1400);
                 var barLeft = ui.QueryBounds();
-                Check("展开态停在左边：**不缩回**（左右只吸附、不藏）",
+                Check("展开态停在左边中段：也不藏（只有底边才贴边隐）",
                       (barLeft.MaxX - barLeft.MinX) > 400f && (barLeft.MaxY - barLeft.MinY) > 40f,
                       $"占用 {barLeft.MaxX - barLeft.MinX:F0}×{barLeft.MaxY - barLeft.MinY:F0}，"
                       + $"展开 = {ui.ExpandedForTest}，露头值 peek={ui.PeekForTest:F2}");
@@ -14240,11 +14280,15 @@ internal sealed class App : InkEngine.InkEngine
         }
         Check("空闲 0 帧", quiet == 0, $"安静 150 毫秒出了 {quiet} 帧");
 
-        // ---- ⑦ 拖动并贴边：拖到左边缘附近松手，应该吸附过去（离边 2）----
+        // ---- ⑦ 拖动**不吸附**（用户 2026-09-30："拖到任务栏下面自动靠底边这种不用了"）----
+        //
+        // 判据：把球拖到离左边 20 逻辑像素（原来的吸附范围 40 以内）松手——
+        // **停在原地**，不许被吸到 DockGap(2) 去；夹取（不许拖出屏幕）照旧还在。
         var home = ui.QueryBounds();
         float hx = (home.MinX + home.MaxX) * 0.5f * DpiScale;
         float hy = (home.MinY + home.MaxY) * 0.5f * DpiScale;
-        int targetX = _virtualX + 20;
+        // 球宽 48：中心放在"离左边 20 + 24"处，球左就落在离边 20 的位置。
+        int targetX = _virtualX + (int)((20f + 24f) * DpiScale);
         SendMouse((int)hx, (int)hy, 0);                          SettleFrames(60);
         SendMouse((int)hx, (int)hy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(50);
         for (int i = 1; i <= 10; i++)
@@ -14255,10 +14299,11 @@ internal sealed class App : InkEngine.InkEngine
         SendMouse(targetX, (int)hy, Native.MOUSEEVENTF_LEFTUP);
         SettleFrames(200);
 
-        var docked = ui.QueryBounds();
-        float wantLeft = _virtualX / DpiScale + InkUi.Tokens.DockGap;
-        Check("拖到左边缘会吸附", MathF.Abs(docked.MinX - wantLeft) < 3f,
-              $"左边缘 {docked.MinX:F0}（贴边后应为 {wantLeft:F0}），拖动前在 {home.MinX:F0}");
+        var dropped = ui.QueryBounds();
+        Check("拖到左边缘附近松手：**不吸附**（停在拖到的位置）",
+              MathF.Abs(dropped.MinX - 20f) < 3f,
+              $"落下后左边缘 {dropped.MinX:F0}（应为 20 = 拖到的位置；"
+              + $"旧行为会吸到 {InkUi.Tokens.DockGap:F0}），拖动前在 {home.MinX:F0}");
 
         // ---- ⑦.2 锚点：**球不动、带子往右长**；顶到右边就整条夹回屏幕内 ----
         //
@@ -14301,7 +14346,7 @@ internal sealed class App : InkEngine.InkEngine
             SettleFrames(250);
             Check("再点一次收起（回到球）", !ui.ExpandedForTest, $"展开状态 = {ui.ExpandedForTest}");
 
-            // ② 拖到**右边缘**（会吸附）→ 展开 → 整条带子必须还在屏幕里
+            // ② 拖到**右边缘**（贴住右边靠的是夹取，不是吸附）→ 展开 → 整条带子必须还在屏幕里
             var e0 = ui.QueryBounds();
             float ex = (e0.MinX + e0.MaxX) * 0.5f * DpiScale;
             float ey = (e0.MinY + e0.MaxY) * 0.5f * DpiScale;

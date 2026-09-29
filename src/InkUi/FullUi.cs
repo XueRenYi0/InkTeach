@@ -2173,9 +2173,20 @@ public sealed class FullUi : IOverlayUi
     };
 
     /// <summary>
-    /// 贴边隐藏的位移：往贴着的那条边挪，最后只剩 `DockPeek` 那么宽露在外面。
-    /// 几何全部按"没挪"算，只有最后一步整体平移——这样命中、绘制、占用矩形三处
-    /// 不会各写一份坐标换算（那是这类 bug 的老窝）。
+    /// 贴边隐藏的位移：**只有"贴底"才藏**（用户 2026-09-30 定的口径：
+    /// "贴边（吸附）隐藏要只要拖动到底边或者离底边很近才贴边隐"）。
+    ///
+    /// 沿革：以前四条边都判——收起态四边都能藏、展开态上下能藏，左右只吸附不缩
+    ///（理由是横条侧着塞进边里很怪）。现在干脆只认**底边**一条线：
+    /// 面板本来就默认停在底边、底边也是它最自然的"收起来"方向；往上/往左右缩
+    /// 要么和默认位置打架，要么仍是那把"侧着塞"的怪相。
+    ///
+    /// 判定按**工作区底边**（任务栏上沿，那才是视觉上的"底"），
+    /// **位移量仍按屏幕底边**算：覆盖层是全屏置顶的，不推出**屏幕**就藏不掉
+    ///（按工作区算的话露头会变成 8 + 任务栏高度，自检量到过 56 像素）。
+    ///
+    /// 收不收由 `_peek` 那个状态机管（见 <see cref="UpdatePeek"/>）；这里只回答
+    /// "该不该移动、往哪移"。
     /// </summary>
     private Vector2 Shift()
     {
@@ -2184,40 +2195,13 @@ public sealed class FullUi : IOverlayUi
         if (t <= 0.001f) return Vector2.Zero;
 
         var u = UnionRect();
-        float w = u.MaxX - u.MinX, h = u.MaxY - u.MinY;
-        float dl = u.MinX - _screen.MinX, dr = _screen.MaxX - u.MaxX;
-        float dt = u.MinY - _screen.MinY;
-        // **下边按工作区算**（用户 2026-09-27，默认位置改成"贴任务栏上方"之后必须跟着改）。
-        //
-        // 默认位置现在是"工作区底边 − 4"，而工作区底边离**屏幕**底边还差一个任务栏
-        // （本机 48）——按屏幕算就是 52 > SnapDistance(40)，于是"贴在工作区底边"这个
-        // 最常见的位置会被判成"**没贴边、不藏**"，贴边隐藏直接失效。
-        // 自检当场抓到过：碰过再离开之后占用还是 636×54（压根没藏），而 `peek` 已经是 0——
-        // 逻辑以为藏了、画面上一动不动，是最难看的一种坏法。
-        // 判定用工作区（那才是视觉上的"底"），**位移量仍按屏幕**（见下面那段的论证）。
+        float h = u.MaxY - u.MinY;
+        // 判定：离"底"（工作区底边）还差多少。负数 = 已经压在任务栏那一带上，也算贴底。
         float db = WorkOrScreenBottom() - u.MaxY;
-        float best = Math.Min(Math.Min(dl, dr), Math.Min(dt, db));
-        if (best > Tokens.SnapDistance) return Vector2.Zero;      // 没贴边就不藏
+        if (db > Tokens.DockHideDistance) return Vector2.Zero;      // 不够近：不藏
 
-        // **方向**按工作区挑（面板停在哪儿），**位移量**按**屏幕**边算。
-        //
-        // 为什么位移量不能按工作区：面板不会"藏到任务栏后面"——我们的覆盖层是全屏置顶的，
-        // 任务栏挡不住它。只有把面板推出**屏幕**，它才真的看不见。按工作区算的话，
-        // 露头会变成 8 ＋（任务栏那段高度）＝几十像素（自检当场量到过 56）。
-        float sl = u.MinX - _screen.MinX, sr = _screen.MaxX - u.MaxX;
-        float st = u.MinY - _screen.MinY, sb = _screen.MaxY - u.MaxY;
-
-        // **左右两条边不藏"展开态的条"**（用户 2026-09-18 定的规则，见
-        // 调研-界面-贴边与隐藏.md 附三）。理由：面板是横的，把它缩进侧边等于**侧着塞进边里**
-        // ——贴左边时露出来的其实是它的**右端**（最后一格和动作按钮区），跟"球"没有任何关系；
-        // 而球是 48×48 的正方形，塞进哪条边都是同一个姿态。
-        // 所以：**收起态四边都能藏，展开态只在上下藏**。左右仍然保留"吸附停靠"（那是拖动的事，
-        // 在 Snap 里，不在这），只是不再往里缩。
-        if ((best == dl || best == dr) && Expanded) return Vector2.Zero;
-
-        if (best == dl) return new Vector2(-(w - Tokens.DockPeek + sl) * t, 0);
-        if (best == dr) return new Vector2((w - Tokens.DockPeek + sr) * t, 0);
-        if (best == dt) return new Vector2(0, -(h - Tokens.DockPeek + st) * t);
+        // 位移量按**屏幕**底边（见上面那段论证）。
+        float sb = _screen.MaxY - u.MaxY;
         return new Vector2(0, (h - Tokens.DockPeek + sb) * t);
     }
 
@@ -2497,7 +2481,11 @@ public sealed class FullUi : IOverlayUi
 
         if (dragged)
         {
-            SnapNearEdge();
+            // **松手不吸附**（用户 2026-09-30："我（说的）吸附是比如拖到任务栏下、它自动靠底边，
+            // 这种的不用了"）：拖到哪儿就停在哪儿。
+            // 拖动过程本身已经把它夹在屏幕内（每次读 `Anchor()` 都过 `Clamp`），
+            // 所以"拖出去找不回来"这条底线仍然在；只是不再自动贴边。
+            // 贴边**隐藏**是另一回事：只认底边、离底边够近才触发（见 Shift）。
             return true;
         }
 
@@ -2513,36 +2501,6 @@ public sealed class FullUi : IOverlayUi
         if (idx == 0) { Toggle(); return true; }         // 点带子最左那格：收起
         Activate(idx);
         return true;
-    }
-
-    /// <summary>松手时离最近的边够近就贴过去。</summary>
-    private void SnapNearEdge()
-    {
-        var a = Anchor();
-        float w = Width(), h = Height();
-        float left = a.X - _screen.MinX;
-        float right = _screen.MaxX - (a.X + w);
-        float top = a.Y - _screen.MinY;
-        // **下边按"工作区底"算**（2026-09-29 用户反馈修）：以前按**屏幕**底，面板一拖到
-        // 任务栏附近就被吸到**任务栏后面**——视觉上"往下掉了一大截"。默认位置和贴边隐藏
-        // 早就按工作区算了，只有这里漏了。
-        // ⚠ 面板在主屏那一块时才用工作区底；拖到副屏就退回屏幕底（多屏的工作区拿不到，
-        //   见 WorkOrScreenBottom 的说明——那条和多屏 DPI 是同一批的活）。
-        float cx = a.X + w * 0.5f, cy = a.Y + h * 0.5f;
-        bool onPrimary = cx >= _work.MinX && cx <= _work.MaxX && cy >= _work.MinY && cy <= _work.MaxY;
-        float bottomLine = onPrimary ? WorkOrScreenBottom() : _screen.MaxY;
-        float bottom = bottomLine - (a.Y + h);
-
-        float best = Math.Min(Math.Min(left, right), Math.Min(top, bottom));
-        if (best > Tokens.SnapDistance) return;          // 不够近：不吸附（拖到哪儿就哪儿）
-
-        var want = a;
-        if (best == left) want.X = _screen.MinX + Tokens.DockGap;
-        else if (best == right) want.X = _screen.MaxX - Tokens.DockGap - w;
-        else if (best == top) want.Y = _screen.MinY + Tokens.DockGap;
-        else want.Y = bottomLine - Tokens.DockGap - h;
-
-        _anchor = want;
     }
 
     private int HitCell(float x, float y)

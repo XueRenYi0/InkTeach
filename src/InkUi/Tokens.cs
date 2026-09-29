@@ -102,8 +102,16 @@ internal static class Tokens
     /// </summary>
     public const float PeekTab = 48f;
 
-    /// <summary>拖到离边 40 以内就吸附。</summary>
-    public const float SnapDistance = 40f;
+    /// <summary>
+    /// **离底边多近才算"贴边"、才允许贴边隐藏**（逻辑像素）。
+    ///
+    /// 沿革：原来叫 `SnapDistance`——拖动松手时离**任意一条边** 40 以内就自动吸过去；
+    /// **2026-09-30 用户取消拖动吸附**（"拖到任务栏下面自动靠底边这种不用了"，
+    /// 拖到哪就停哪），这个数就只剩一个用途：贴边**隐藏**的触发距离，
+    /// 而且只认**底边**（同样是他定的："只要拖动到底边或者离底边很近才贴边隐"）。
+    /// 40 没动：默认位置本来就离工作区底边 4，往下一带就能触发；再大会误伤"停在半空"的位置。
+    /// </summary>
+    public const float DockHideDistance = 40f;
 
     /// <summary>拖动的判定阈值：超过它才算"拖动"，否则算"点了一下"。</summary>
     public const float DragThreshold = 4f;
