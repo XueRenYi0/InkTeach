@@ -7002,6 +7002,7 @@ public partial class InkEngine
 
             default:
                 PenWidthLogical = v;
+                SetUiPref("wv.pen", v.ToString("0.##"));
                 int idx = Array.IndexOf(WidthPresets, v);
                 if (idx >= 0) WidthPresetIndex = idx;
                 break;
