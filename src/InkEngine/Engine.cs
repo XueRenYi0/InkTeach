@@ -1599,6 +1599,15 @@ public partial class InkEngine
             UpdateText = "";
         }
 
+        // **上次用的颜色**：每个工具各记一个（存的是色带序号，见 SetColorFromUi）。
+        // 读不到 / 对不上就用默认色（笔=红、荧光=黄）——那是 InkPalette 里的默认。
+        if (int.TryParse(GetUiPref("penColor"), out int penIdx)
+            && penIdx >= 0 && penIdx < InkPalette.PenBand.Length)
+            CurrentColor = InkPalette.PenBand[penIdx].Color;
+        if (int.TryParse(GetUiPref("hlColor"), out int hlIdx)
+            && hlIdx >= 0 && hlIdx < InkPalette.HighlighterBand.Length)
+            HighlighterCurrent = InkPalette.ToHighlighter(InkPalette.HighlighterBand[hlIdx].Color);
+
         // **上一次是自动更新装上来的吗**：换壳脚本会在更新目录里留一个 done.txt。
         // 看到它 = 本次启动就是"更新完的第一次启动"，在界面上明说一句
         // （「更多」抽屉那一行会显示"已更新到 x.y.z"），然后把标记删掉——只说一次。
@@ -6758,6 +6767,15 @@ public partial class InkEngine
             HighlighterCurrent = InkPalette.ToHighlighter(color);
         else
             CurrentColor = color;
+        // **记住这个颜色**（用户 2026-09-30 定：每个工具各记一个色，重启回来还是它）。
+        // 存的是**色带里的序号**而不是 RGB：色带以后微调颜色值，存档也不用跟着迁。
+        var band = Tool == Tool.Highlighter ? InkPalette.HighlighterBand : InkPalette.PenBand;
+        for (int i = 0; i < band.Length; i++)
+            if (CloseColor(band[i].Color, color))
+            {
+                SetUiPref(Tool == Tool.Highlighter ? "hlColor" : "penColor", i.ToString());
+                break;
+            }
         _dirty = true;
         NotifyUiStateChanged();
     }
