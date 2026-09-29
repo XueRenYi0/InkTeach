@@ -270,11 +270,24 @@ public interface IEngineCommands
     void SetBoardPattern(int pattern, float stepLogical);
 
     /// <summary>
-    /// 截图模式：<paramref name="hideInk"/> true = **隐藏批注截取**（抓之前把覆盖层藏起来，
-    /// 拍到的只有下层内容）；false = **直接截取**（连板书一起拍，只把取景框藏掉）。
-    /// 参考 InkClass 的两项菜单（快速截图 / 隐藏界面截图）。
+    /// 截图模式：<paramref name="hideInk"/> true = **隐藏窗口截图**（抓之前把覆盖层藏起来，
+    /// 拍到的只有下层内容——屏幕上"我们的笔迹和工具条整个消失"）；false = **截图**
+    /// （连板书一起拍，只把我们的取景层藏掉）。参考 InkClass 的两项菜单
+    /// （快速截图 / 隐藏界面截图）。
+    ///
+    /// 它只**换档**、不进取景；真进取景是 <see cref="EnterCapture"/>（8.3.1：
+    /// 面板上点哪一段，就用哪种模式进屋）。
     /// </summary>
     void SetCaptureHideInk(bool hideInk);
+
+    /// <summary>
+    /// **进入截图取景**（8.3.1，照微信的节奏）：整屏立刻灰下来（遮罩 + 冻结帧当底）、
+    /// 系统十字全程跟着、顶部一行提示 + 右上角「✕ 取消」。
+    ///
+    /// 入口是面板「截屏」格上带里的那两个模式段（点哪段 = 用哪种截法进屋）。
+    /// <see cref="SetCaptureHideInk"/> 负责"选哪种"，这一条负责"进屋"。
+    /// </summary>
+    void EnterCapture();
 
     /// <summary>
     /// **白板的不透明度**（0.35～1，1 = 实心）。调小 → 下面的题目隐约透出来，

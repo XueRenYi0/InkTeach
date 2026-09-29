@@ -3914,6 +3914,9 @@ internal sealed class App : InkEngine.InkEngine
         CapMaxX = cx + 260; CapMaxY = top + 300 * DpiScale;
         // `--adjust`：出"松开后调整"那一版（8.3.0：8 个手柄 + ✓/✕ 两颗按钮）
         CaptureAdjusting = Environment.GetCommandLineArgs().Contains("--adjust");
+        // `--ready`：出"刚进屋"那一版（8.3.1：整屏灰 + 顶部提示 + 右上角「✕ 取消」，还没有框）
+        if (Environment.GetCommandLineArgs().Contains("--ready"))
+            CapMinX = CapMaxX = CapMinY = CapMaxY = cx;
 
         // 出图范围 = 框 + 四周一圈（遮罩/准线/读数/按钮都可能有）：整块视口太大，
         // 给"框 + 120 逻辑像素"就够（看图看的是那几个控件的排版）。
@@ -13246,6 +13249,10 @@ internal sealed class App : InkEngine.InkEngine
         // 面板上第 9 格也在走 SetTool(Capture)。这一条把它**钉在自检里**：
         // 点一下必须真的切到截图工具、而且那一格要亮——不然老师点了没反应，
         // 只能得出"还没接进来"这个结论（这正是用户看到的）。
+        //
+        // 8.3.1 又补了两条（用户 2026-09-30："我点了这个按钮以后屏幕没有灰下来"）：
+        //   · 点格子 = **只出模式条**（还不进取景）；
+        //   · 点模式段 = **进入取景**（遮罩铺上，屏幕灰下来）；Esc 退出并**还给上一个工具**。
         {
             Host.Commands.SetTool(Tool.Pen);
             SettleFrames(150);
@@ -13256,36 +13263,69 @@ internal sealed class App : InkEngine.InkEngine
             Check("点「截屏」真的切到截图工具", Tool == Tool.Capture, $"工具 = {Tool}");
             Check("截屏那一格亮起来（点了有反馈）", ui.CellActiveForTest(9),
                   $"截屏格高亮 = {ui.CellActiveForTest(9)}");
+            Check("点格子**先不进取景**（8.3.1：出模式条，屏幕还没灰）",
+                  !CaptureActive, $"取景 = {CaptureActive}");
 
-            // 截图那一格现在也长设置条了：**[连批注拍][只拍下层]**（8.3.0 改的名；
-            // 原来叫"直接截取/隐藏界面"）+ 右端一颗**动作按钮「粘贴图片」**
-            //（它以前是第三段，混在"模式"里永远不亮；8.3.0 拆出来挂到动作位）。
+            // 截图那一格的上带：**[截图][隐藏窗口截图]**（8.3.1 照微信改的名；
+            // 8.3.0 叫"连批注拍/只拍下层"）+ 右端一颗**动作按钮「粘贴图片」**。
             var capBar = ui.BarRectForTest;
             SendMouse((int)((capBar.MinX + capBar.MaxX) * 0.5f * DpiScale),
                       (int)((capBar.MinY + capBar.MaxY) * 0.5f * DpiScale), 0);
             SettleFrames(400);
             var segDirect = ui.SegmentRectForTest(0);
             var segHidden = ui.SegmentRectForTest(1);
-            Check("截屏那一格有两条设置（0 宽 = 没接上）",
+            Check("截屏那一格有两条截法（0 宽 = 没接上）",
                   ui.BandSegmentCountForTest == 2
                   && segDirect.MaxX - segDirect.MinX > 20f && segHidden.MinX > segDirect.MaxX - 1f,
                   $"段数 {ui.BandSegmentCountForTest}，段宽 {segDirect.MaxX - segDirect.MinX:F0}，"
                   + $"第二段起点 {segHidden.MinX:F0}");
 
+            void EscKey()
+            {
+                Native.PostMessage(_windows[0].Hwnd, (uint)Native.WM_KEYDOWN,
+                                   new IntPtr(0x1B), IntPtr.Zero);
+                SettleFrames(400);
+            }
+
+            // 第一段「截图」= 进屋（整屏灰下来）
             ClickPhysical((segDirect.MinX + segDirect.MaxX) * 0.5f * DpiScale,
                           (segDirect.MinY + segDirect.MaxY) * 0.5f * DpiScale);
-            SettleFrames(250);
-            Check("点「连批注拍」→ hideInk = false",
+            SettleFrames(450);
+            Check("点「截图」：**进入取景**（遮罩铺上）",
+                  CaptureActive && !CaptureAdjusting && Tool == Tool.Capture,
+                  $"取景={CaptureActive} 调整={CaptureAdjusting} 工具={Tool}");
+            Check("点「截图」→ hideInk = false",
                   !Host.State.CaptureHideInk, $"hideInk = {Host.State.CaptureHideInk}");
+            EscKey();
+            Check("Esc 退出取景：**还给进来之前的工具**",
+                  !CaptureActive && Tool == Tool.Pen,
+                  $"取景={CaptureActive}，工具={Tool}（期望 Pen）");
 
+            // 第二段「隐藏窗口截图」= 进屋 + hideInk = true
+            ClickPhysical((cap.MinX + cap.MaxX) * 0.5f * DpiScale,
+                          (cap.MinY + cap.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            SendMouse((int)((capBar.MinX + capBar.MaxX) * 0.5f * DpiScale),
+                      (int)((capBar.MinY + capBar.MaxY) * 0.5f * DpiScale), 0);
+            SettleFrames(400);
             segHidden = ui.SegmentRectForTest(1);
             ClickPhysical((segHidden.MinX + segHidden.MaxX) * 0.5f * DpiScale,
                           (segHidden.MinY + segHidden.MaxY) * 0.5f * DpiScale);
-            SettleFrames(250);
-            Check("点「只拍下层」→ hideInk = true",
-                  Host.State.CaptureHideInk, $"hideInk = {Host.State.CaptureHideInk}");
+            SettleFrames(450);
+            Check("点「隐藏窗口截图」：进入取景 + hideInk = true",
+                  CaptureActive && Host.State.CaptureHideInk,
+                  $"取景={CaptureActive}，hideInk = {Host.State.CaptureHideInk}");
+            EscKey();
+            Check("Esc 再退一次（截图模式不粘手）", !CaptureActive && Tool == Tool.Pen,
+                  $"取景={CaptureActive}，工具={Tool}");
 
             // 「粘贴图片」：右端的动作按钮（没有键盘的触摸屏 / 手写板也能用）
+            ClickPhysical((cap.MinX + cap.MaxX) * 0.5f * DpiScale,
+                          (cap.MinY + cap.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            SendMouse((int)((capBar.MinX + capBar.MaxX) * 0.5f * DpiScale),
+                      (int)((capBar.MinY + capBar.MaxY) * 0.5f * DpiScale), 0);
+            SettleFrames(400);
             {
                 // 先在剪贴板上放一张 60×40 的图（绿底），再点动作按钮
                 var buf = new byte[60 * 40 * 4];
@@ -15630,20 +15670,21 @@ internal sealed class App : InkEngine.InkEngine
         Tool = Tool.Marquee;
         Check("框选 · 空白处", CursorKind.Cross);
 
-        // ---- 截图 vs 框选/图形：**光标必须能分开** ----
+        // ---- 截图 vs 框选/图形：光标怎么分 ----
         //
-        // 用户 2026-09-17："截图图标和选中图标一样的，是不是不大好？"——
-        // 随即澄清是**鼠标光标**：截图/框选/图形原来共用一个系统十字，
-        // 老师分不出"我现在是要截图还是要选框"。
-        // 现在截图有自己的**取景框**落点（四角括号 + 中心小十字），框选/图形仍是十字。
+        // 2026-09-17 那位用户要的是"截图和框选用不同的光标"（当时给了取景框角括号）。
+        // **8.3.1 起照微信改了**：截图 = **系统十字**，不再自绘角括号
+        // （用户 2026-09-30 真机反馈："微信截图之后鼠标一直是那个样子，
+        //   没有切换成我们现在那个比较难用的光标"）。
+        // 和框选分开的任务交给**取景时那两条全屏准线**（见 Overlay.DrawCaptureOverlay），
+        // 光标本身不动——"从哪儿开始"也就永远看得见。
         Tool = Tool.Capture;
-        Check("截图 · 系统光标藏起来（落点自己画）", CursorKind.Hidden);
-        CheckBool("截图 · 落点是取景框（不是十字）",
-            DrawnCursor == ToolCursorShape.Frame && DrawnCursorRadius > 0f,
-            $"DrawnCursor={DrawnCursor} 脏区半径={DrawnCursorRadius:F0}px");
+        Check("截图 · 系统十字（不再自绘角括号）", CursorKind.Cross);
+        CheckBool("截图 · 不画自绘落点",
+            DrawnCursor == ToolCursorShape.None, $"DrawnCursor={DrawnCursor}");
         _drawing = true;
-        CheckBool("截图 · 拖动中也画（正在框的那一块要看得见）",
-            DrawnCursor == ToolCursorShape.Frame, $"{DrawnCursor}");
+        CheckBool("截图 · 拖动中也不自绘（准线画在截图那一层）",
+            DrawnCursor == ToolCursorShape.None, $"{DrawnCursor}");
         _drawing = false;
         Tool = Tool.Rectangle;
         Check("图形 · 仍是十字准星", CursorKind.Cross);
@@ -24119,7 +24160,7 @@ internal sealed class App : InkEngine.InkEngine
     private void CaptureTest()
     {
         Console.WriteLine();
-        Console.WriteLine("=== 截图自检（拖框 → 调整 → 原位落 → 剪贴板）===");
+        Console.WriteLine("=== 截图自检（模式段进屋 → 拖框 → 调整 → 原位落 → 剪贴板）===");
         int pass = 0, fail = 0;
         void Check(string name, bool ok, string detail)
         {
@@ -24175,7 +24216,7 @@ internal sealed class App : InkEngine.InkEngine
 
         void DragCapture()
         {
-            Tool = Tool.Capture;
+            Host.Commands.SetTool(Tool.Capture);      // 等价于"点了一下「截屏」格"（不进取景）
             SendMouse(x0, y0, 0);
             SettleFrames(40);
             SendMouse(x0, y0, Native.MOUSEEVENTF_LEFTDOWN);
@@ -24196,6 +24237,52 @@ internal sealed class App : InkEngine.InkEngine
             SendMouse(x1, y1, Native.MOUSEEVENTF_LEFTUP);
             SettleFrames(300);
             midAdjusting = CaptureActive && CaptureAdjusting;
+        }
+
+        // ---- 0. 进入取景（8.3.1，照微信）：点格子只出模式条；点模式段 = 进屋 ----
+        Host.Commands.SetTool(Tool.Capture);        // 等价于"点了一下「截屏」格"
+        SettleFrames(200);
+        Check("点「截屏」格：先不进取景（出模式条，屏幕还没灰）",
+              !CaptureActive && Tool == Tool.Capture,
+              $"取景={CaptureActive}，工具={Tool}");
+        Host.Commands.EnterCapture();               // 等价于"点了一下模式段"
+        SettleFrames(400);
+        Check("点模式段：**立刻进入取景**（整屏灰下来、工具还是截图）",
+              CaptureActive && !CaptureAdjusting && Tool == Tool.Capture,
+              $"取景={CaptureActive}，调整={CaptureAdjusting}，工具={Tool}");
+        {
+            float lumaIn = (float)ScreenProbe.AvgLuma((int)(x0 - 220), (int)(cy - 15), 60, 30);
+            Check("进入取景屏幕就压暗（同一处亮度下降）", lumaBefore - lumaIn > 30f,
+                  $"进之前 {lumaBefore:F0} → 进之后 {lumaIn:F0}");
+        }
+
+        // 单击一下（没拖出框）＝ 不退出取景（8.3.1；以前这一下会把整个模式退掉）
+        SendMouse((int)cx, (int)cy, 0);
+        SettleFrames(60);
+        SendMouse((int)cx, (int)cy, Native.MOUSEEVENTF_LEFTDOWN);
+        SettleFrames(60);
+        SendMouse((int)cx, (int)cy, Native.MOUSEEVENTF_LEFTUP);
+        SettleFrames(300);
+        Check("单击一下（没拖出框）：**继续取景**、不落图",
+              CaptureActive && !CaptureAdjusting && Doc.Strokes.FindLast(s => s.IsImage) == null,
+              $"取景={CaptureActive}，调整={CaptureAdjusting}");
+
+        // ---- 0b 右上角「✕ 取消」：触摸屏没有 Esc / 右键，得有颗点得到的出口 ----
+        {
+            var cancelBtn = CaptureCancelRect();       // 画布坐标；鼠标给的是屏幕坐标
+            Check("右上角挂着「✕ 取消」（触摸屏的出口）",
+                  cancelBtn.MaxX - cancelBtn.MinX > 40f
+                  && cancelBtn.MinY < ViewportCanvas.MinY + ViewportCanvas.MaxY / 2f,
+                  $"按钮 ({cancelBtn.MinX:F0},{cancelBtn.MinY:F0})..({cancelBtn.MaxX:F0},{cancelBtn.MaxY:F0})");
+            int bx = (int)((cancelBtn.MinX + cancelBtn.MaxX) * 0.5f);
+            int by = (int)((cancelBtn.MinY + cancelBtn.MaxY) * 0.5f + ViewOffsetY);
+            SendMouse(bx, by, 0);                              SettleFrames(80);
+            SendMouse(bx, by, Native.MOUSEEVENTF_LEFTDOWN);     SettleFrames(80);
+            SendMouse(bx, by, Native.MOUSEEVENTF_LEFTUP);       SettleFrames(300);
+            Check("点右上角「✕」：退出取景、不落图、还给上一个工具",
+                  !CaptureActive && !CaptureAdjusting
+                  && Doc.Strokes.FindLast(s => s.IsImage) == null && Tool != Tool.Capture,
+                  $"取景={CaptureActive}，调整={CaptureAdjusting}，工具={Tool}");
         }
 
         DragCapture();
@@ -24264,16 +24351,17 @@ internal sealed class App : InkEngine.InkEngine
         Check("截图后屏幕恢复正常（批注还在，没有残影）", afterInk > 5000,
               $"截前 {onScreenInk} 像素，截后 {afterInk} 像素");
 
-        // ---- ①b Esc = 取消（不落图、状态清干净）----
+        // ---- ①b Esc = 退出取景、**还给进来之前的工具**（不落图，8.3.1）----
         int imgsBeforeCancel = Doc.Strokes.Count(s => s.IsImage);
         DragCapture();
         PostKey(0x1B);
         SettleFrames(400);
-        Check("Esc 取消：不落图、状态清干净",
+        Check("Esc 退出取景：不落图、状态清干净、**工具还给上一个**",
               Doc.Strokes.Count(s => s.IsImage) == imgsBeforeCancel
-              && !CaptureActive && !CaptureAdjusting && CaptureFrozenBgra == null,
+              && !CaptureActive && !CaptureAdjusting && CaptureFrozenBgra == null
+              && Tool != Tool.Capture,
               $"图像 {imgsBeforeCancel} → {Doc.Strokes.Count(s => s.IsImage)}，"
-              + $"活动={CaptureActive}，调整={CaptureAdjusting}");
+              + $"取景={CaptureActive}，工具={Tool}（进截图之前是 Marquee）");
 
         // ---- ①c 调整：拖右下角手柄 → 确认出来的图就是框最后的大小 ----
         DragCapture();
@@ -24291,11 +24379,40 @@ internal sealed class App : InkEngine.InkEngine
               shot3 != null && Math.Abs(shot3.Image.Width - 220) <= 6 && Math.Abs(shot3.Image.Height - 140) <= 6,
               shot3 == null ? "没有对象" : $"{shot3.Image.Width}×{shot3.Image.Height}，期望约 220×140");
 
-        // ---- ② 第二种模式：**连批注拍**（连板书一起拍）----
+        // ---- ①d 双击框内 = 完成（微信的手感，8.3.1）----
+        DragCapture();
+        {
+            // 两下"按—放"**挨着发**：判据是 400ms / 6 逻辑像素以内算同一处，
+            // 中间不能 SettleFrames（一帧 16ms 也可能把两次按下拉开）。
+            SendMouse((int)cx, (int)cy, 0);
+            SendMouse((int)cx, (int)cy, Native.MOUSEEVENTF_LEFTDOWN);
+            SendMouse((int)cx, (int)cy, Native.MOUSEEVENTF_LEFTUP);
+            SendMouse((int)cx, (int)cy, Native.MOUSEEVENTF_LEFTDOWN);
+            SendMouse((int)cx, (int)cy, Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(600);
+        }
+        var shot4 = Doc.Strokes.FindLast(s => s.IsImage);
+        Check("双击框内 = 完成（落了一张新的、截图模式收场）",
+              shot4 != null && !ReferenceEquals(shot4, shot3) && !CaptureActive,
+              shot4 == null ? "没有对象" : $"{shot4.Image.Width}×{shot4.Image.Height}，取景={CaptureActive}");
+
+        // ---- ①e 方向键微调框（8.3.1；投影上鼠标很难微调一格）----
+        DragCapture();
+        PostKey(0x27);                       // →：框整体右移 1 逻辑像素
+        SettleFrames(150);
+        PostKey(0x0D);
+        SettleFrames(700);
+        var shot5 = Doc.Strokes.FindLast(s => s.IsImage);
+        Check("调整：方向键把框右移 1 逻辑像素，确认出来的图也跟着右移",
+              shot5 != null && Math.Abs(shot5.WorldBounds.MinX - (x0 + DpiScale)) < 3f,
+              shot5 == null ? "没有对象" : $"落在 {shot5.WorldBounds.MinX:F0}，期望 {x0 + DpiScale:F0}");
+
+        // ---- ② 第二种模式：**截图**（连批注一起拍）----
         //
         // 用户 2026-09-17："截图功能是不是也应该对接了，也可以参考 inkclass"。
         // InkClass 给的是两项菜单（快速截图 / 隐藏界面截图），我们把这两项放进
-        // **截图那一格的上带**：[连批注拍][只拍下层]（8.3.0 改的名）。
+        // **截图那一格的上带**：[截图][隐藏窗口截图]（8.3.1 照微信改的名；
+        // 8.3.0 叫"连批注拍/只拍下层"，"直接截取/隐藏界面"是最早的名字）。
         //
         // ⚠ 先把前两次落下的图删掉：**原位落**之后它们正好盖在接下来要拍的那一块上，
         // 不删的话拍到的是那两张图（白板，没有墨），"板书在图里"这条必然假红。
@@ -24307,14 +24424,14 @@ internal sealed class App : InkEngine.InkEngine
 
         Host.Commands.SetCaptureHideInk(false);
         SettleFrames(250);
-        Check("模式切到「连批注拍」", !Host.State.CaptureHideInk,
+        Check("模式切到「截图」", !Host.State.CaptureHideInk,
               $"hideInk = {Host.State.CaptureHideInk}");
 
         DragCapture();
         PostKey(0x0D);
         SettleFrames(700);
         var shot2 = Doc.Strokes.FindLast(s => s.IsImage);
-        Check("连批注拍：又生成了一个图像对象", shot2 != null && !ReferenceEquals(shot2, shot3 ?? shot),
+        Check("截图：又生成了一个图像对象", shot2 != null && !ReferenceEquals(shot2, shot5),
               shot2 == null ? "没有" : $"{shot2.Image.Width}×{shot2.Image.Height}");
         if (shot2 != null)
         {
@@ -24331,11 +24448,11 @@ internal sealed class App : InkEngine.InkEngine
                     if ((x < 3 || y < 3 || x >= shot2.Image.Width - 3 || y >= shot2.Image.Height - 3)
                         && r > 200 && g > 140 && g < 215 && b < 90) frame++;
                 }
-            Check("连批注拍：**板书在图里**（品红 > 2000）", ink2 > 2000, $"{ink2} 像素");
-            Check("连批注拍：取景框/准线没被拍进去（最外一圈没有琥珀色）", frame == 0, $"{frame} 像素");
+            Check("截图（连批注）：**板书在图里**（品红 > 2000）", ink2 > 2000, $"{ink2} 像素");
+            Check("截图（连批注）：取景框/准线没被拍进去（最外一圈没有琥珀色）", frame == 0, $"{frame} 像素");
         }
 
-        // 收尾：模式还原成默认的"只拍下层"；白板还原
+        // 收尾：模式还原成默认的"隐藏窗口截图"；白板还原
         Host.Commands.SetCaptureHideInk(true);
         BoardOn = boardWas;
         Doc.InvalidateAll();
