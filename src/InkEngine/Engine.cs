@@ -6593,6 +6593,16 @@ public partial class InkEngine
         // 退出穿透要立刻把属于我们的光标设回来，不必等下一次鼠标移动
         //（这一句是 `force`：改样式刚把光标恢复成箭头，而缓存里的值已经不成立了）。
         ApplyCursor(force: true);
+
+        // **穿透关掉 = 回到"能批注"的状态 → 必须把键盘/前台要回来**。
+        // 用户 2026-09-30 复现的真 bug：穿透开开关关几次之后，Ctrl+P 这些应用内快捷键
+        // 就彻底死了——因为穿透期间我们的窗口不是前台（样式里也不让它被激活），
+        // 关掉穿透时只恢复了样式、**没人把前台还给我们**，于是按键全被别的窗口收走。
+        // `SetKeyboardMode` 里那句 SetForegroundWindow 正是干这个的（幂等，重复调没副作用）。
+        // ⚠ 和"退出放映要把前台要回来"是同一类补丁，见 Ppt.ExitPptMode——以后凡是
+        //   "从别的状态切回批注态"的地方都要做这一步。
+        if (!on && _windows.Count > 0) SetKeyboardMode(KeyboardMode);
+
         Console.WriteLine($"pass-through = {on} (mode {PassMode})");
     }
 
