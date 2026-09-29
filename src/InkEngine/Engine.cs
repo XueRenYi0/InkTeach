@@ -1613,6 +1613,8 @@ public partial class InkEngine
             HighlighterCurrent = InkPalette.ToHighlighter(InkPalette.HighlighterBand[hlIdx].Color);
             _hlColorIdx = hlIdx;
         }
+        // 上次用的橡皮形态（整笔擦 / 面积擦）
+        if (GetUiPref("eraserKind") == "pixel") _eraserKind = Tool.PixelEraser;
 
         // **上一次是自动更新装上来的吗**：换壳脚本会在更新目录里留一个 done.txt。
         // 看到它 = 本次启动就是"更新完的第一次启动"，在界面上明说一句
@@ -6423,6 +6425,13 @@ public partial class InkEngine
         _stepIndex = 0;
         _stepSnap = ShapeSnapKind.None;      // 「直棱柱」那颗胶囊跟着半成品一起作废
         Tool = t;
+        // **记住"橡皮用的是哪一种形态"**（整笔擦 / 面积擦）：按 Ctrl+E 回来时切回它，
+        // 并且下次启动也还在（见 ToolKeyPress 与 Run 里的读取）。
+        if (t == Tool.Eraser || t == Tool.PixelEraser)
+        {
+            _eraserKind = t;
+            SetUiPref("eraserKind", t == Tool.PixelEraser ? "pixel" : "whole");
+        }
 
         // **穿透和工具是互斥的**（用户 2026-09-17 定）。
         //
@@ -9596,6 +9605,9 @@ public partial class InkEngine
     private static bool CloseColor(Color4 a, Color4 b) =>
         Math.Abs(a.R - b.R) < 0.10f && Math.Abs(a.G - b.G) < 0.10f && Math.Abs(a.B - b.B) < 0.10f;
 
+    /// <summary>上次用的橡皮形态（整笔擦 / 面积擦）——按 Ctrl+E 时切回它，见 SetUiPref("eraserKind")。</summary>
+    private Tool _eraserKind = Tool.Eraser;
+
     /// <summary>
     /// 工具键的**单击**逻辑（2026-09-30 收口：双击/长按那套手势全部取消，只留单击）：
     ///   · 不是这个工具 → 切过去
@@ -9604,6 +9616,8 @@ public partial class InkEngine
     private void ToolKeyPress(KeyAction a)
     {
         var target = ToolOf(a);
+        // 橡皮：回到"上次用的那一种形态"（整笔/面积），不是永远回整笔擦
+        if (target == Tool.Eraser) target = _eraserKind;
         if (Tool != target) { SwitchTool(target); return; }
         DoToolKeyRepeat(a);
     }
