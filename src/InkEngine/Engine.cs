@@ -6401,11 +6401,14 @@ public partial class InkEngine
         switch (action)
         {
             case KeyAction.TogglePassThrough: SetPassThrough(!PassThrough); break;
-            case KeyAction.ToolPen: SwitchTool(Tool.Pen); break;
-            case KeyAction.ToolHighlighter: SwitchTool(Tool.Highlighter); break;
-            case KeyAction.ToolLaser: SwitchTool(Tool.Laser); break;
-            case KeyAction.ToolEraser: SwitchTool(Tool.Eraser); break;
-            case KeyAction.ToolPixelEraser: SwitchTool(Tool.PixelEraser); break;
+            // 工具键统一走 ToolKeyPress：**不管是应用内键还是"放映时的临时全局热键"**，
+            // 都要有"已经是它 → 换色/换档"这条逻辑（用户 2026-09-30 实测：放映里 Ctrl+P
+            // 能切到笔了，但已经是笔时再按不换色——就是因为这条热键路径漏了 ToolKeyPress）。
+            case KeyAction.ToolPen: ToolKeyPress(KeyAction.ToolPen); break;
+            case KeyAction.ToolHighlighter: ToolKeyPress(KeyAction.ToolHighlighter); break;
+            case KeyAction.ToolLaser: ToolKeyPress(KeyAction.ToolLaser); break;
+            case KeyAction.ToolEraser: ToolKeyPress(KeyAction.ToolEraser); break;
+            case KeyAction.ToolPixelEraser: ToolKeyPress(KeyAction.ToolPixelEraser); break;
             case KeyAction.SplitErased:
             {
                 int n = Doc.SplitErasedSelection();
