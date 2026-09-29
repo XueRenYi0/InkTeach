@@ -9562,6 +9562,18 @@ public partial class InkEngine
     private static bool CloseColor(Color4 a, Color4 b) =>
         Math.Abs(a.R - b.R) < 0.10f && Math.Abs(a.G - b.G) < 0.10f && Math.Abs(a.B - b.B) < 0.10f;
 
+    /// <summary>
+    /// 工具键的**单击**逻辑（2026-09-30 收口：双击/长按那套手势全部取消，只留单击）：
+    ///   · 不是这个工具 → 切过去
+    ///   · 已经是它    → 换一个：笔/荧光笔换颜色、橡皮切整笔⇄面积、选择切矩形⇄套索
+    /// </summary>
+    private void ToolKeyPress(KeyAction a)
+    {
+        var target = ToolOf(a);
+        if (Tool != target) { SwitchTool(target); return; }
+        DoToolKeyRepeat(a);
+    }
+
     private bool HandleKeyDown(IntPtr wParam, bool isRepeat)
     {
         // 键位表驱动：按"当前修饰键状态 + 主键"拼成一个和弦，去批注内作用域里查。
@@ -9578,8 +9590,9 @@ public partial class InkEngine
 
         if (IsToolKey(hit.Action))
         {
-            // 工具键：走手势状态机（自动重复的按下直接吞掉，别在状态机里乱动）
-            ToolKeyDown(hit.Action, NowMs);
+            // **自动重复的按下吞掉**：按住不放时 Windows 会连发 KEYDOWN，而"已经是它 →
+            // 换色"这条会被连发带着一路狂转（所以工具键只看第一次按下，松手才算一次）。
+            if (!isRepeat) ToolKeyPress(hit.Action);
             _dirty = true;
             return true;
         }
