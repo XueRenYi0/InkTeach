@@ -142,7 +142,20 @@ Set-Content -Path (Join-Path $outDir "使用说明.txt") -Value $readme -Encodin
 $zip = Join-Path $root "dist\$name.zip"
 if (-not $NoZip) {
     if (Test-Path $zip) { Remove-Item $zip -Force }
-    Compress-Archive -Path (Join-Path $outDir "*") -DestinationPath $zip
+    # 刚写出来的 dll 可能正被杀软/索引器扫着——2026-09-29 真踩过：Compress-Archive
+    # 报 PermissionDenied，整个发布卡在"压包"这一步（前面的目录已经重发过了）。
+    # 退一步重试三次；还不行就抛出去（那时的报错信息才是有用的）。
+    $zipped = $false
+    for ($try = 1; $try -le 3 -and -not $zipped; $try++) {
+        try {
+            Compress-Archive -Path (Join-Path $outDir "*") -DestinationPath $zip -ErrorAction Stop
+            $zipped = $true
+        } catch {
+            if ($try -ge 3) { throw }
+            Write-Host ("  压包被占用（第 $try 次失败），3 秒后重试…") -ForegroundColor Yellow
+            Start-Sleep -Seconds 3
+        }
+    }
 }
 
 # ---- 安装包（Inno Setup；没装 Inno 就跳过——发布绿色版不受影响）---------------------------
