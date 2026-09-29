@@ -6454,9 +6454,15 @@ public partial class InkEngine
             case KeyAction.CancelSelection: Doc.Selected.Clear(); break;
             case KeyAction.Paste: PasteFromClipboard(); break;
             case KeyAction.NudgeLeft: Nudge(-1f, 0f); break;
-            case KeyAction.NudgeUp: Nudge(0f, -1f); break;
+            // ↑↓：**有选中 → 微调；没选中 → 上下滚画布**（用户 2026-09-30 定："任何情况下
+            // 都能上下滑动画布"，一格 = 屏幕高的 1/10，照 ClassIn 的手感）。
+            case KeyAction.NudgeUp:
+                if (Doc.Selected.Count > 0) Nudge(0f, -1f); else ScrollCanvasBy(+ScrollStepLogical);
+                break;
             case KeyAction.NudgeRight: Nudge(1f, 0f); break;
-            case KeyAction.NudgeDown: Nudge(0f, 1f); break;
+            case KeyAction.NudgeDown:
+                if (Doc.Selected.Count > 0) Nudge(0f, 1f); else ScrollCanvasBy(-ScrollStepLogical);
+                break;
             case KeyAction.NudgeLeftFar: Nudge(-10f, 0f); break;
             case KeyAction.NudgeUpFar: Nudge(0f, -10f); break;
             case KeyAction.NudgeRightFar: Nudge(10f, 0f); break;
@@ -6471,13 +6477,12 @@ public partial class InkEngine
             case KeyAction.PptNext:
                 if (Doc.Selected.Count > 0) Nudge(1f, 0f); else PptNextFromUi();
                 break;
-            // 放映时 ↑↓：**有选中 → 微调；没选中 → 上下挪视野**（和滚轮同一条"相机偏移"，
-            // 符号照滚轮那条注释：往"下"看 = ViewOffsetY 变小）。
+            // 放映时 ↑↓（临时全局热键送进来的）：和普通模式同一条逻辑——一格 = 屏幕高的 1/10。
             case KeyAction.PanUp:
-                if (Doc.Selected.Count > 0) Nudge(0f, -1f); else ScrollCanvasBy(+72f);
+                if (Doc.Selected.Count > 0) Nudge(0f, -1f); else ScrollCanvasBy(+ScrollStepLogical);
                 break;
             case KeyAction.PanDown:
-                if (Doc.Selected.Count > 0) Nudge(0f, 1f); else ScrollCanvasBy(-72f);
+                if (Doc.Selected.Count > 0) Nudge(0f, 1f); else ScrollCanvasBy(-ScrollStepLogical);
                 break;
         }
     }
@@ -9812,12 +9817,19 @@ public partial class InkEngine
     /// 合成器滚动图层用的手法。
     /// </summary>
     /// <summary>
-    /// ↑↓（放映时）上下挪视野——和滚轮**同一条"相机偏移"**（只动视野，不动墨迹数据）。
+    /// 一"格"的滑动距离 = **屏幕高度的 1/10**（用户 2026-09-30 定，照 ClassIn 的手感）。
+    /// 上下方向键、以及放映期的同名键都用它。
+    /// </summary>
+    private float ScrollStepLogical => _windows.Count > 0 ? _windows[0].Height / DpiScale / 10f : 60f;
+
+    /// <summary>
+    /// ↑↓（任何模式）上下挪视野——和滚轮**同一条"相机偏移"**（只动视野，不动墨迹数据）。
     /// 符号照滚轮那条：往"下"看 = <see cref="ViewOffsetY"/> 变小，所以 <paramref name="logicalDelta"/>
-    /// 为正 = 看上面的内容。一格 72 逻辑像素，和滚轮一格一致。
+    /// 为正 = 看上面的内容。
     /// </summary>
     private void ScrollCanvasBy(float logicalDelta)
     {
+        if (_windows.Count == 0) return;
         ViewOffsetY += logicalDelta * DpiScale;
         ClampViewOffset();
         ScrollBarActiveAtMs = NowMs;
