@@ -6980,6 +6980,7 @@ public partial class InkEngine
 
             case Tool.Laser:
                 LaserWidthLogical = v;
+                SetUiPref("wv.laser", v.ToString("0.##"));
                 int li = Array.IndexOf(LaserWidthPresets, v);
                 if (li >= 0) LaserWidthIndex = li;
                 break;
@@ -6989,6 +6990,7 @@ public partial class InkEngine
                 // 它的范围比笔宽大得多（一块橡皮 30～160 逻辑像素），
                 // 所以这里单独夹一次，不跟笔共用那个 64 的上限。
                 PixelEraserWidthLogical = Math.Clamp(v, PixelEraserMinWidth, PixelEraserMaxWidth);
+                SetUiPref("wv.pixel", PixelEraserWidthLogical.ToString("0.##"));
                 int pi = Array.IndexOf(PixelEraserWidthPresets, PixelEraserWidthLogical);
                 if (pi >= 0) PixelEraserWidthIndex = pi;
                 break;
