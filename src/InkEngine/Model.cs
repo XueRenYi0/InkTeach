@@ -870,6 +870,18 @@ internal sealed class Stroke
     /// </summary>
     internal bool RawWhileLive;
 
+    /// <summary>
+    /// **成型几何**（8.4.5）：这一条笔迹的 `Points` 就是"要画的那条中心线"，渲染时
+    /// **不要再做曲线化**（按折线直接画）。
+    ///
+    /// 谁会用：擦断拆出来的碎片——拆段时它拿的不是"原始采样点的子序列"，而是**擦之前
+    /// 屏幕上真正渲染的那条曲线**沿弧采样出来的密集点（见 `SplitIntoRuns`）。
+    /// 碎片再被擦、再拆，也一样是成型几何（采样函数原样返回）。
+    /// 背景与业界做法见 `调研-擦除保真.md`（"擦到什么就变什么样"）。
+    /// **不进存档**：碎片存的就是这些密集点，重开时按它们再拟合≈原样。
+    /// </summary>
+    internal bool NoRefit;
+
 
     /// <summary>
     /// **锁定**（2026-09-16 加，用户定的语义是"能选中、但拖不动"）：
@@ -1105,6 +1117,11 @@ internal sealed class Stroke
     /// <summary>
     /// 把这一条按**剩下的段**拆成几个新对象（局部坐标 + 原变换，样式继承）。
     /// 只有"用户要单独摆弄某一段"时才调用，见 <see cref="InkDocument.SplitErasedSelection"/>。
+    ///
+    /// **8.4.5：碎片带的是"成型几何"**（见 调研-擦除保真.md）。拆段时不再拿"原始采样点的
+    /// 子序列"去重新拟合曲线（那会让切口附近得到另一条曲线 → 用户报的"奇怪的形状"），
+    /// 而是把**擦之前真正渲染的那条中心线**沿曲线采样后照抄给碎片，并置 `NoRefit`——
+    /// 渲染按折线直接用，一个小数点都不重算。"擦到什么就变什么样"。
     /// </summary>
     public List<Stroke> SplitIntoRuns()
     {
@@ -1119,19 +1136,84 @@ internal sealed class Stroke
                 // 虚线笔迹被拆开的两截必须还是虚线，否则"拆完样子变了"）。
                 Dash = Dash,
             };
-            var start = PointAtParam(a);
-            p.AddPoint(start.X, start.Y, PressureAtParam(a), TimeAtParam(a));
-            for (int i = 1; i < Points.Count; i++)
-            {
-                if (i < a - 1e-6f) continue;
-                if (i > b + 1e-6f) break;
-                p.AddPoint(Points[i].X, Points[i].Y, Points[i].P, Points[i].T);
-            }
-            var end = PointAtParam(b);
-            p.AddPoint(end.X, end.Y, PressureAtParam(b), TimeAtParam(b));
+            var pts = SampleResolvedRun(a, b);
+            for (int i = 0; i < pts.Count; i++)
+                p.AddPoint(pts[i].x, pts[i].y, pts[i].pr, pts[i].tm);
+            p.NoRefit = true;
             parts.Add(p);
         }
         return parts;
+    }
+
+    /// <summary>
+    /// 把 run `[a, b]` 的**成型中心线**采样成一串点（画布坐标 + 压力 + 时间），给拆段用。
+    ///
+    /// 和渲染那条路（`AppendSmoothedRun` → `StrokeSmoothing`）吃的是**同一份输入**、
+    /// 走的是**同一条曲线**：`Seg[k]` 正好连接第 k、k+1 个输入点，所以按段采样即可。
+    /// 本来就是成型几何（碎片再被擦）或曲线化关着时，原样返回这份折线。
+    /// </summary>
+    private List<(float x, float y, float pr, double tm)> SampleResolvedRun(float a, float b)
+    {
+        // ① 攒出这一段 run 的输入点（含两端可能被橡皮切出来的插值点）——与 AppendSmoothedRun 一致。
+        var src = new List<(float x, float y, float pr, double tm)>();
+        var start = PointAtParam(a);
+        src.Add((start.X, start.Y, PressureAtParam(a), TimeAtParam(a)));
+        int i0 = (int)MathF.Floor(a) + 1;
+        int i1 = (int)MathF.Floor(b);
+        for (int i = i0; i <= i1 && i < Points.Count; i++)
+            src.Add((Points[i].X, Points[i].Y, Points[i].P, Points[i].T));
+        if (MathF.Abs(b - MathF.Round(b)) > 1e-6f)
+        {
+            var end = PointAtParam(b);
+            src.Add((end.X, end.Y, PressureAtParam(b), TimeAtParam(b)));
+        }
+        if (src.Count < 2) return src;
+
+        // ② 本来就是成型几何（碎片再被擦）或曲线化关着：原样返回这份折线。
+        if (NoRefit || !StrokeSmoothing.Enabled) return src;
+
+        // ③ 用**整条笔迹的成型曲线**裁到这个 run（和渲染走同一条：`ClippedChain` → de Casteljau
+        //    精确细分），再按弧长采样（每 ~1.5 像素一个点：弦高误差远在亚像素以下）。
+        var chain = ClippedChain(a, b);
+        if (chain.Count == 0) return src;
+
+        var outp = new List<(float x, float y, float pr, double tm)>(chain.Count * 4);
+        for (int k = 0; k < chain.Count; k++)
+        {
+            var s = chain[k];
+            float len = Vector2.Distance(s.P0, s.C1) + Vector2.Distance(s.C1, s.C2)
+                      + Vector2.Distance(s.C2, s.P1);
+            int steps = Math.Clamp((int)MathF.Ceiling(len / 1.5f), 2, 64);
+            int from = outp.Count == 0 ? 0 : 1;        // 段间不重复放点
+            for (int j = from; j <= steps; j++)
+            {
+                float u = j / (float)steps;
+                var q = CubicAt(s.P0, s.C1, s.C2, s.P1, u);
+                outp.Add((q.X, q.Y, 1f, 0));
+            }
+        }
+
+        // 压力/时间：按这一段的**弧长比例**在两端之间插值。
+        // （鼠标没有压感，这里是恒等；压感笔迹的宽度本来就是平滑变化的，误差在亚像素级。）
+        float prA = src[0].pr, prB = src[^1].pr;
+        double tmA = src[0].tm, tmB = src[^1].tm;
+        for (int i = 0; i < outp.Count; i++)
+        {
+            float f = outp.Count <= 1 ? 0f : i / (float)(outp.Count - 1);
+            outp[i] = (outp[i].x, outp[i].y, prA + (prB - prA) * f, tmA + (tmB - tmA) * f);
+        }
+
+        Simplify(outp, 0.05f);         // 亚像素容差的 RDP：点数压下来，形状肉眼看不出差别
+        return outp;
+    }
+
+    /// <summary>三次贝塞尔在 u 处的点（采样用）。</summary>
+    private static Vector2 CubicAt(Vector2 p0, Vector2 c1, Vector2 c2, Vector2 p1, float u)
+    {
+        float v = 1f - u;
+        float b0 = v * v * v, b1 = 3f * v * v * u, b2 = 3f * v * u * u, b3 = u * u * u;
+        return new Vector2(b0 * p0.X + b1 * c1.X + b2 * c2.X + b3 * p1.X,
+                           b0 * p0.Y + b1 * c1.Y + b2 * c2.Y + b3 * p1.Y);
     }
 
     /// <summary>
@@ -5512,6 +5594,18 @@ internal sealed class Stroke
         var geo = factory.CreatePathGeometry();
         using var sink = geo.Open();
 
+        // **成型几何**（8.4.5）：碎片带的就是"擦之前那条曲线"的密集采样，直接按折线画——
+        // 绝不再拟合一次（那会让切口附近和原来不一样，见 调研-擦除保真.md）。
+        if (NoRefit && Points.Count >= 2)
+        {
+            sink.BeginFigure(new Vector2(Points[0].X, Points[0].Y), FigureBegin.Hollow);
+            for (int i = 1; i < Points.Count; i++)
+                sink.AddLine(new Vector2(Points[i].X, Points[i].Y));
+            sink.EndFigure(FigureEnd.Open);
+            sink.Close();
+            return geo;
+        }
+
         // 渲染尾（预测段）只加在"没被擦过"的笔迹上：擦除区间的几何要按段重拼，
         // 尾巴挂在哪一段上会变得说不清；而正在写的那一笔本来也不可能被擦。
         var tail = Erased.Count == 0 ? RenderTail : null;
@@ -5521,10 +5615,11 @@ internal sealed class Stroke
         // 拆成两个对象（两个 DrawGeometry）就会混合两次（实测差 0 → 56）。
         foreach (var (a, b) in RemainingRuns())
         {
-            // 曲线化（`--smooth`）：把这一段 run 的采样点喂给曲线器，输出一串三次贝塞尔。
-            // **点还是原来那些点**——曲线严格过每一个采样点，直角由角点保护保住；
-            // 不生效时（开关关着 / 段数不够）原样退回下面的折线路径。
-            bool smoothed = StrokeSmoothing.Enabled && !RawWhileLive && AppendSmoothedRun(sink, a, b);
+            // **成型曲线按 run 裁**（8.4.5，见 调研-擦除保真.md）：曲线是**从整条的点**算出来的
+            // （和没被擦时一模一样），这里的 run 只是在它的参数域上切一刀（两端 de Casteljau
+            // 精确细分）——所以切口以外的形状与擦之前**逐像素一致**。
+            // 以前是"拿这一段的点重新拟合"，切口附近的切线少了邻居 → 用户报的"奇怪的形状"。
+            bool smoothed = StrokeSmoothing.Enabled && !RawWhileLive && AppendChain(sink, a, b);
             if (!smoothed)
             {
                 sink.BeginFigure(PointAtParam(a), FigureBegin.Hollow);
@@ -5579,6 +5674,108 @@ internal sealed class Stroke
         for (int k = 0; k < n; k++)
             sink.AddBezier(new BezierSegment(segs[k].C1, segs[k].C2, segs[k].P1));
         return true;
+    }
+
+    /// <summary>
+    /// 把**整条笔迹的成型曲线**裁到 run `[a, b]`（单位 = 采样点参数，第 k 段连接第 k、k+1 个点），
+    /// 返回一串三次贝塞尔段。这就是"擦掉一截、剩下的形状一个像素都不许变"的正确做法：
+    /// 曲线**从整条的点**算（和没被擦时完全一样），两端各在切口处用 **de Casteljau** 精确细分
+    /// （切出来的两段与原来**完全重合**）。见 调研-擦除保真.md。
+    /// </summary>
+    private List<(Vector2 P0, Vector2 C1, Vector2 C2, Vector2 P1)> ClippedChain(float a, float b)
+    {
+        var res = new List<(Vector2, Vector2, Vector2, Vector2)>();
+        if (Points.Count < 2) return res;
+
+        StrokeSmoothing.Begin();
+        for (int i = 0; i < Points.Count; i++) StrokeSmoothing.Add(Points[i].X, Points[i].Y, Points[i].P);
+        int n = StrokeSmoothing.Finish();
+        if (n <= 0) return res;
+
+        var segs = StrokeSmoothing.Out;
+        int i0 = Math.Max(0, (int)MathF.Floor(a));
+        int i1 = Math.Min(n - 1, (int)MathF.Floor(b));
+        if (i1 < i0) return res;
+        float fa = a - MathF.Floor(a), fb = b - MathF.Floor(b);
+
+        for (int k = i0; k <= i1; k++)
+        {
+            var s = segs[k];
+            float sig = k == i0 ? Math.Clamp(fa, 0f, 1f) : 0f;
+            float eps = k == i1 ? Math.Clamp(fb, 0f, 1f) : 1f;
+            if (eps - sig < 1e-5f) continue;
+            var right = SplitCubic(s.P0, s.C1, s.C2, s.P1, sig).R;              // 丢掉 [0, sig]
+            float rel = (eps - sig) / MathF.Max(1e-6f, 1f - sig);               // 再切出 [sig, eps]
+            res.Add(SplitCubic(right.P0, right.C1, right.C2, right.P1, rel).L);
+        }
+        return res;
+    }
+
+    /// <summary>把裁好的曲线写成几何（一段一个贝塞尔）。返回 false = 空、什么都没写。</summary>
+    private bool AppendChain(ID2D1GeometrySink sink, float a, float b)
+    {
+        var chain = ClippedChain(a, b);
+        if (chain.Count == 0) return false;
+        sink.BeginFigure(chain[0].P0, FigureBegin.Hollow);
+        for (int k = 0; k < chain.Count; k++)
+            sink.AddBezier(new BezierSegment(chain[k].C1, chain[k].C2, chain[k].P1));
+        return true;
+    }
+
+    /// <summary>三次贝塞尔在 t 处切开：左段 `(P0,c1,c2,mid)`、右段 `(mid,c1',c2',P1)`（de Casteljau）。</summary>
+    private static ((Vector2 P0, Vector2 C1, Vector2 C2, Vector2 P1) L,
+                    (Vector2 P0, Vector2 C1, Vector2 C2, Vector2 P1) R)
+        SplitCubic(Vector2 p0, Vector2 c1, Vector2 c2, Vector2 p1, float t)
+    {
+        t = Math.Clamp(t, 0f, 1f);
+        var a = Vector2.Lerp(p0, c1, t);
+        var b = Vector2.Lerp(c1, c2, t);
+        var c = Vector2.Lerp(c2, p1, t);
+        var d = Vector2.Lerp(a, b, t);
+        var e = Vector2.Lerp(b, c, t);
+        var m = Vector2.Lerp(d, e, t);
+        return ((p0, a, d, m), (m, e, c, p1));
+    }
+
+    /// <summary>RDP 简化（给"成型几何"压点数用；容差亚像素，肉眼看不出，见 调研-擦除保真.md 的 B 方案）。</summary>
+    private static void Simplify(List<(float x, float y, float pr, double tm)> pts, float tol)
+    {
+        if (pts.Count < 3) return;
+        var keep = new bool[pts.Count];
+        keep[0] = keep[pts.Count - 1] = true;
+        var stack = new Stack<(int i0, int i1)>();
+        stack.Push((0, pts.Count - 1));
+        while (stack.Count > 0)
+        {
+            var (i0, i1) = stack.Pop();
+            if (i1 <= i0 + 1) continue;
+            var a = new Vector2(pts[i0].x, pts[i0].y);
+            var b = new Vector2(pts[i1].x, pts[i1].y);
+            float maxD = -1f; int idx = -1;
+            for (int i = i0 + 1; i < i1; i++)
+            {
+                float d = DistToSegment(new Vector2(pts[i].x, pts[i].y), a, b);
+                if (d > maxD) { maxD = d; idx = i; }
+            }
+            if (maxD > tol && idx > 0)
+            {
+                keep[idx] = true;
+                stack.Push((i0, idx));
+                stack.Push((idx, i1));
+            }
+        }
+        var outp = new List<(float x, float y, float pr, double tm)>(pts.Count);
+        for (int i = 0; i < pts.Count; i++) if (keep[i]) outp.Add(pts[i]);
+        if (outp.Count >= 2) { pts.Clear(); pts.AddRange(outp); }
+    }
+
+    private static float DistToSegment(Vector2 p, Vector2 a, Vector2 b)
+    {
+        var ab = b - a;
+        float len2 = ab.LengthSquared();
+        if (len2 < 1e-9f) return Vector2.Distance(p, a);
+        float t = Math.Clamp(Vector2.Dot(p - a, ab) / len2, 0f, 1f);
+        return Vector2.Distance(p, a + ab * t);
     }
 
     /// <summary>
