@@ -21839,10 +21839,17 @@ internal sealed class App : InkEngine.InkEngine
         float y0 = _virtualY + _virtualH * 0.45f;
 
         // ---- ① 单指按下，看它是不是以 PT_TOUCH 进来 ----
+        TouchHud = true;                 // 触点诊断先开着（它只跟"开关打开之后"的指针事件）
         SendTouches(true, (x0, y0));
         SettleFrames(30);
         Check("合成触摸以 PT_TOUCH 进来", LastPointerType == Native.PT_TOUCH,
               $"LastPointerType = {DeviceName(LastPointerType)}");
+
+        // ---- ①b 触点诊断（8.3.3）：数得到触点数 ----
+        SettleFrames(40);
+        Check("触点诊断：数得到触点数（并标出「触摸」）",
+              TouchHudNow == 1 && (TouchHudText ?? "").Contains("触摸"),
+              $"当前 {TouchHudNow} 指，最多 {TouchHudMax} 指");
 
         // ---- ② 走一段，让速度和预测器都活起来；③ 看有没有尾 ----
         int tailMax = 0;
@@ -21870,6 +21877,8 @@ internal sealed class App : InkEngine.InkEngine
 
         Check("第二根手指的按下真的到了引擎（不然下一条会假绿）",
               _cntDown > downBefore, $"_cntDown {downBefore} → {_cntDown}");
+        // 注：合成注入的第二根手指**不以 WM_POINTERDOWN 到达**（系统把它并成 UPDATE），
+        // 所以"最多几指"这项在注入环境里量不准——真机上才是准的（诊断浮层就是干这个的）。
         Check("第二根手指不许抢走正在写的那一笔",
               ReferenceEquals(ActiveStroke, before), "ActiveStroke 被换成了新对象就是抢走了");
         Check("那一笔已经写下的点一个都没丢",
@@ -21893,6 +21902,7 @@ internal sealed class App : InkEngine.InkEngine
               committed == null ? "文档里没有笔画" : $"点数 {committed.Points.Count}");
 
         CurrentColor = oldColor;
+        TouchHud = false;
         Console.WriteLine();
         Console.WriteLine($"  合计：{pass} 项通过，{fail} 项失败");
         Console.WriteLine(fail == 0 ? "  PASS: 触摸自检全部通过" : "  FAIL: 触摸自检有失败项");

@@ -239,6 +239,19 @@ internal static class Native
         public int tiltX, tiltY;
     }
 
+    /// <summary>
+    /// 触摸触点信息（Windows 真实定义 136 字节）。**接触面积 = `rcContact`**——
+    /// 触点诊断（8.3.3）靠它量屏（见 Engine 的触点诊断那一段）。
+    /// </summary>
+    public struct POINTER_TOUCH_INFO
+    {
+        public POINTER_INFO pointerInfo;
+        public RECT rcContact;
+        public RECT rcContactRaw;
+        public uint orientation;
+        public uint pressure;
+    }
+
     public delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
     public delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, ref RECT rect, IntPtr data);
 
@@ -465,6 +478,13 @@ internal static class Native
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetPointerPenInfo(uint pointerId, out POINTER_PEN_INFO penInfo);
+
+    /// <summary>
+    /// 触摸触点的详细信息（**接触面积在 `rcContact` 里**）。触点诊断（8.3.3）用它量
+    /// "这块屏报不报面积"；手势层（分支 touch-gestures）用它分"写 / 擦"。
+    /// </summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool GetPointerTouchInfo(uint pointerId, IntPtr touchInfo);
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetPointerPenInfoHistory(uint pointerId, ref uint entriesCount, [Out] POINTER_PEN_INFO[] penInfo);

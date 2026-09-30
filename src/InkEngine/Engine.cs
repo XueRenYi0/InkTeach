@@ -471,6 +471,24 @@ public partial class InkEngine
     /// </summary>
     internal bool EraserKeepsSystemCursor;
     internal string HudText = "";
+
+    /// <summary>
+    /// **触点诊断**（8.3.3）：给学校大屏量"同时报几个触点 / 报不报接触面积"的小浮层。
+    ///
+    /// 为什么要它：手势方案（见 调研-触摸手势-学校大屏.md）能不能落地，全看这块屏
+    /// ①一次能不能报 ≥2 个触点、②接触面积报不报——而这两件事**只有真机才能量**
+    ///（无触摸屏的机器上合成注入不可靠：隔壁 InkClass 实测 0 命中，文档写明"不要承诺本机注入"）。
+    /// 默认关、`--touchhud` 开、限频刷新（照他们的硬约束 ≥200ms）、不落盘。
+    /// </summary>
+    internal bool TouchHud;
+    internal string TouchHudText = "";
+    internal int TouchHudMax;                    // 见过的最大同时触点数
+    internal bool TouchHudSawArea;               // 见过非零接触面积吗
+    internal int TouchHudNow => _touchDiagIds.Count;
+    private readonly HashSet<uint> _touchDiagIds = new();
+    private float _touchDiagMaxW, _touchDiagMaxH;
+    private double _touchDiagNextMs;
+    private string _touchDiagLast = "—";
     internal bool MarqueeActive;
 
     /// <summary>
@@ -1573,6 +1591,8 @@ public partial class InkEngine
         // （文字排版 + 进程计数），测底层性能时必须排除掉，否则量到的是
         // 测量工具本身而不是渲染引擎。
         if (args.Contains("--nohud")) ShowHud = false;
+        // 触点诊断（8.3.3）：`--touchhud` 直接开着启动。
+        if (args.Contains("--touchhud")) TouchHud = true;
 
         // 对照实验用：--nohist 关掉脏区的多帧回溯，应当立刻出现残影，
         // 用来证明残影测试本身是有效的（而不是永远通过）。
@@ -2353,6 +2373,66 @@ public partial class InkEngine
         }
         catch { return 0; }
     }
+    /// <summary>触点诊断：指针事件顺手更新（只有开关打开时才走，平时零开销）。</summary>
+    private void TouchDiagFeed(uint id, uint ptype, bool down)
+    {
+        if (!TouchHud) return;
+        if (ptype == Native.PT_TOUCH)
+        {
+            if (down)
+            {
+                _touchDiagIds.Add(id);
+                if (_touchDiagIds.Count > TouchHudMax) TouchHudMax = _touchDiagIds.Count;
+            }
+            var (w, h) = ReadTouchSizePx(id);
+            if (w > 0f || h > 0f)
+            {
+                TouchHudSawArea = true;
+                if (w > _touchDiagMaxW) _touchDiagMaxW = w;
+                if (h > _touchDiagMaxH) _touchDiagMaxH = h;
+            }
+        }
+        _touchDiagLast = ptype switch
+        {
+            Native.PT_TOUCH => "触摸",
+            Native.PT_PEN => "笔",
+            Native.PT_MOUSE => "鼠标",
+            _ => _touchDiagLast,
+        };
+        // 限频重建（触点数量变化时立刻重建；面积那种连续变化按 200ms 收口）
+        if (down || NowMs >= _touchDiagNextMs)
+        {
+            _touchDiagNextMs = NowMs + 200;
+            RebuildTouchHud();
+            _dirty = true;
+        }
+    }
+
+    private void RebuildTouchHud()
+    {
+        string area = TouchHudSawArea
+            ? $"接触面积：见过最大 {_touchDiagMaxW:F0} × {_touchDiagMaxH:F0} 物理像素"
+            : "接触面积：没见过非零值 → 这块屏不上报面积（手掌擦不可用，三指擦照常）";
+        TouchHudText = $"最近输入：{_touchDiagLast}　当前 {_touchDiagIds.Count} 指　最多 {TouchHudMax} 指\n"
+                     + area + "\n"
+                     + "试：1 / 2 / 3 根手指各按一下，再用手掌压一下";
+    }
+
+    /// <summary>读一个触摸触点的接触尺寸（物理像素）。用显式缓冲区（见 Native 那边的说明）。</summary>
+    private static (float w, float h) ReadTouchSizePx(uint id)
+    {
+        IntPtr buf = System.Runtime.InteropServices.Marshal.AllocHGlobal(160);
+        try
+        {
+            if (!Native.GetPointerTouchInfo(id, buf)) return (0f, 0f);
+            var ti = System.Runtime.InteropServices.Marshal.PtrToStructure<Native.POINTER_TOUCH_INFO>(buf);
+            int w = ti.rcContact.Width, h = ti.rcContact.Height;
+            if (w <= 0 && h <= 0) { w = ti.rcContactRaw.Width; h = ti.rcContactRaw.Height; }
+            return (w, h);
+        }
+        finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buf); }
+    }
+
     private string BuildHudText()
     {
         // 面板的排版原则：**一行一类事**，数字对齐，单位统一。
@@ -2693,6 +2773,7 @@ public partial class InkEngine
         uint id = (uint)(wParam.ToInt64() & 0xFFFF);
         if (!ReadPointer(id, out float sx, out float sy, out float pressure, out bool inverted, out uint ptype)) return;
         LastPointerType = ptype;
+        TouchDiagFeed(id, ptype, down: true);
         float screenX = sx, screenY = sy;
         float x = sx, y = sy;
         ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布
@@ -3480,6 +3561,7 @@ public partial class InkEngine
         uint id = (uint)(wParam.ToInt64() & 0xFFFF);
         if (!ReadPointer(id, out float sx, out float sy, out float pressure, out bool inverted, out uint ptype)) return;
         LastPointerType = ptype;
+        TouchDiagFeed(id, ptype, down: false);
         float screenX = sx, screenY = sy;
         float x = sx, y = sy;
         ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布，下游全按画布坐标走
@@ -3631,6 +3713,11 @@ public partial class InkEngine
         StampInput();
         _cntUp++;
         uint id = (uint)(wParam.ToInt64() & 0xFFFF);
+        if (TouchHud && _touchDiagIds.Remove(id))
+        {
+            RebuildTouchHud();
+            _dirty = true;
+        }
 
         // 界面优先收尾，否则会留下"按钮一直按着"的状态。
         if (UiCapturing && ReadPointer(id, out float ux, out float uy, out float upressure,

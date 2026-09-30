@@ -2029,6 +2029,7 @@ internal sealed class OverlayWindow : IDisposable
         {
             var swBlit = Stopwatch.StartNew();
             DrawHud();
+        DrawTouchHud(app);       // 触点诊断（8.3.3，默认关）
             LastHudMs += swBlit.Elapsed.TotalMilliseconds;
         }
 
@@ -2251,6 +2252,13 @@ internal sealed class OverlayWindow : IDisposable
             h.Add(OriginX + m - 2, OriginY + m - 2);
             h.Add(OriginX + m + HudWidthPx + 2, OriginY + m + HudHeightPx + 2);
             r.Add(h);
+        }
+
+        if (app.TouchHud)
+        {
+            // 触点诊断（8.3.3）：左下角的小浮层，同性能面板的道理——每帧都要进脏区。
+            var h = TouchHudRect(app);
+            if (!h.IsEmpty) r.Add(h);
         }
 
         // 滚动条画在右边缘，而且要每帧淡出，所以必须算进脏区，
@@ -4862,6 +4870,57 @@ internal sealed class OverlayWindow : IDisposable
         var dst = new Vortice.RawRectF(m, m, m + _hudBmpW, m + _hudBmpH);
         _ctx.DrawBitmap(_hudSource, dst, 1f,
                         Vortice.Direct2D1.InterpolationMode.NearestNeighbor, null, null);
+    }
+
+    // ---- 触点诊断浮层（8.3.3，默认关）------------------------------------
+
+    private const float TouchHudWidthLogical = 470f;
+    private const float TouchHudHeightLogical = 86f;
+
+    /// <summary>触点诊断浮层的**屏幕坐标**矩形（脏区用；绘制那份是它的窗口局部版）。</summary>
+    private RectF TouchHudRect(InkEngine app)
+    {
+        float s = Dpi / 96f;
+        float m = HudMarginLogical * s;
+        float w = TouchHudWidthLogical * s, h = TouchHudHeightLogical * s;
+        if (Width <= 0 || Height <= 0) return RectF.Empty;
+        return new RectF
+        {
+            MinX = OriginX + m, MinY = OriginY + Height - m - h,
+            MaxX = OriginX + m + w, MaxY = OriginY + Height - m,
+        };
+    }
+
+    private IDWriteTextFormat _touchHudFmt;
+    private IDWriteTextFormat TouchHudFormat()
+    {
+        if (_touchHudFmt != null) return _touchHudFmt;
+        _touchHudFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 13.5f * (Dpi / 96f), "zh-CN");
+        _touchHudFmt.TextAlignment = TextAlignment.Leading;
+        _touchHudFmt.ParagraphAlignment = ParagraphAlignment.Near;
+        _touchHudFmt.WordWrapping = WordWrapping.NoWrap;
+        return _touchHudFmt;
+    }
+
+    private void DrawTouchHud(InkEngine app)
+    {
+        if (!app.TouchHud) return;
+        float s = Dpi / 96f;
+        float m = HudMarginLogical * s;
+        float w = TouchHudWidthLogical * s, h = TouchHudHeightLogical * s;
+        if (Width <= 0 || Height <= 0) return;
+
+        // 画在**窗口局部**坐标（Origin 那一份只用在脏区上，和性能面板同一个套路）。
+        var box = new Vortice.RawRectF(m, Height - m - h, m + w, Height - m);
+        _scratch.Color = new Color4(0.10f, 0.11f, 0.14f, 0.80f);
+        _ctx.FillRoundedRectangle(new RoundedRectangle(box, 8f * s, 8f * s), _scratch);
+        _ctx.DrawRoundedRectangle(new RoundedRectangle(box, 8f * s, 8f * s),
+                                  Brush(new Color4(1f, 1f, 1f, 0.25f)), 1f * s);
+        _ctx.DrawText(app.TouchHudText ?? "", TouchHudFormat(),
+                      new Rect(box.Left + 10f * s, box.Top + 6f * s,
+                               box.Right - box.Left - 20f * s, box.Bottom - box.Top - 12f * s),
+                      Brush(new Color4(1f, 1f, 1f, 0.95f)));
     }
 
     public void Present()
