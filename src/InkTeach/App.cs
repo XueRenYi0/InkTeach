@@ -24819,18 +24819,24 @@ internal sealed class App : InkEngine.InkEngine
                   $"笔画 {before} → {Doc.Strokes.Count}，撤销深度 {undo0} → {Doc.UndoDepth}");
         }
 
-        // ---- ⑥ 手掌判定的分级（自适应基线）----
-        // ⚠ 合成触摸的 `rcContact` 系统不认（注入被忽略）→ 面积分级这一条**直接喂判定**；
-        //   擦除这个"动作"由下面 ⑦ 的三指用例走真注入验。
+        // ---- ⑥ 角色判定表（**面积不参与**）：1 指写 / 2 指手势 / ≥3 指擦 ----
+        // 走"直接喂判定"的口子（`TouchClassifyForTest`）：合成触摸的 `rcContact` 系统不认，
+        // 而判定本来也只看"触点数 + 干净开始"。
         {
             TouchResetForTest();
-            var vFinger = TouchClassifyForTest(1, cx, cy, 24f);      // 先立基线
+            var v1 = TouchClassifyForTest(1, cx, cy, 24f);
             TouchResetForTest();
-            var vPalm = TouchClassifyForTest(1, cx, cy, 220f);       // 同一块屏上的"手掌"
+            var v2a = TouchClassifyForTest(1, cx, cy, 24f);
+            var v2b = TouchClassifyForTest(2, cx + 200, cy, 24f);
             TouchResetForTest();
-            Check("手掌判定：指尖 = 写、大面积 = 擦（自适应基线，免校准）",
-                  vFinger == TouchVerdict.Write && vPalm == TouchVerdict.Erase,
-                  $"指尖 {vFinger}，手掌 {vPalm}");
+            var v3a = TouchClassifyForTest(1, cx, cy, 24f);
+            var v3b = TouchClassifyForTest(2, cx + 150, cy, 24f);
+            var v3c = TouchClassifyForTest(3, cx + 300, cy, 24f);
+            TouchResetForTest();
+            Check("角色判定：1 指 = 写、2 指 = 手势、≥3 指 = 擦（面积不参与）",
+                  v1 == TouchVerdict.Write && v2a == TouchVerdict.Write && v2b == TouchVerdict.Gesture2
+                  && v3a == TouchVerdict.Write && v3b == TouchVerdict.Gesture2 && v3c == TouchVerdict.Erase,
+                  $"1 指 {v1}，2 指 {v2b}，3 指 {v3c}");
         }
 
         // ---- ⑦ 三指一起落下 = 擦（不依赖面积）----

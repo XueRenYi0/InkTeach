@@ -241,21 +241,7 @@ internal static class Native
 
     /// <summary>
     /// 触摸触点信息（Windows 真实定义 136 字节）。**接触面积 = `rcContact`**——
-    /// 触点诊断靠它量屏（见 Engine 的触点诊断那一段）。
-    /// </summary>
-    public struct POINTER_TOUCH_INFO
-    {
-        public POINTER_INFO pointerInfo;
-        public RECT rcContact;
-        public RECT rcContactRaw;
-        public uint orientation;
-        public uint pressure;
-    }
-
-    /// <summary>
-    /// 触摸触点信息（Windows 真实定义 136 字节）。**我们要的是 `rcContact`**——
-    /// 触点的接触矩形，手掌/拳头和指尖、笔尖在这里差得很明显（手势层拿它分"写/擦"，
-    /// 见 调研-触摸手势-学校大屏.md §3.2）。
+    /// 触点诊断（`--touchhud`）靠它量屏；**手势层不用它**（"什么时候擦"由三指回答）。
     /// </summary>
     public struct POINTER_TOUCH_INFO
     {
@@ -495,12 +481,8 @@ internal static class Native
 
     /// <summary>
     /// 触摸触点的详细信息（**接触面积在 `rcContact` 里**）。触点诊断（8.3.3）用它量
-    /// "这块屏报不报面积"；手势层（分支 touch-gestures）用它分"写 / 擦"。
+    /// "这块屏报不报面积"；**手势层不用它**（"什么时候擦"由三指回答，"擦多大"由动态橡皮回答）。
     /// </summary>
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool GetPointerTouchInfo(uint pointerId, IntPtr touchInfo);
-
-    /// <summary>触摸触点的详细信息（**接触面积在 `rcContact` 里**），手势层用它分"写/擦"。</summary>
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetPointerTouchInfo(uint pointerId, IntPtr touchInfo);
 
