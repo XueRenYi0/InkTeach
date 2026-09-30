@@ -175,6 +175,22 @@ public partial class InkEngine
     internal float EraserRadius => EraserRadiusLogical * DpiScale;
     private float _lastEraseX, _lastEraseY;
 
+    // ---- 动态橡皮（8.3.4）------------------------------------------------
+    //
+    // 面积擦的尺寸跟着**移动速度**走：慢 = 基准（滑条值）、快 = 更大（最多 ×2.5）。
+    // 照 Inkeys 的"笔速橡皮"口径起手（他们那条曲线本来就是**给触屏设备**的：
+    // `speed≤20 → max(25, speed×2.33+13.33)`、`speed>20 → min(200, 3.0×speed)`），
+    // 这里换成"×系数"：`factor = clamp(0.6 + 速度(px/ms)×0.6, 0.6, 2.5)`——真机再调这一个常数。
+    //
+    // ⚠ **只作用于面积擦**。"整笔擦"的"大小"是**命中半径**（碰到哪条删哪条），
+    //   让半径随速度变 = "点到哪条全看手速"，不可预期，所以整笔擦恒定。
+    // ✅ **不分设备**：笔 / 鼠标 / 手指走的是同一段擦除代码，所以手指在触摸屏上抹面积擦照样有。
+    // 后门：`--eraserfixed` 关掉动态（不进界面；真到"很多老师觉得别扭"再考虑做滑条档位点）。
+    internal bool DynamicEraser = true;
+    private float _eraseSpeedEma;        // 速度的指数移动平均（物理像素/毫秒）
+    private double _eraseLastMs;         // 上一次速度采样时刻
+    private float _eraseDynFactor = 1f;  // 当前尺寸系数（落笔 = 1）
+
     /// <summary>
     /// 像素橡皮的落点尺寸（逻辑像素）：**竖着的黄金比例矩形**，高 : 宽 = 1.618。
     ///
@@ -1593,6 +1609,8 @@ public partial class InkEngine
         if (args.Contains("--nohud")) ShowHud = false;
         // 触点诊断（8.3.3）：`--touchhud` 直接开着启动（也可以代码里 TouchHud = true 打开）。
         if (args.Contains("--touchhud")) TouchHud = true;
+        // 动态橡皮的后门（8.3.4）：关掉"速度→尺寸"，擦除尺寸恒定（不进界面）。
+        if (args.Contains("--eraserfixed")) DynamicEraser = false;
 
         // 对照实验用：--nohist 关掉脏区的多帧回溯，应当立刻出现残影，
         // 用来证明残影测试本身是有效的（而不是永远通过）。
@@ -2925,6 +2943,7 @@ public partial class InkEngine
 
             case Tool.PixelEraser:
                 _lastEraseX = x; _lastEraseY = y;
+                ResetDynamicEraser();
                 Doc.BeginEraseRect();
                 EraserTelemetry?.BeginDrag(Tool.PixelEraser, x, y, NowMs);
                 {
@@ -3818,6 +3837,43 @@ public partial class InkEngine
         EndStroke();
     }
 
+    /// <summary>动态橡皮：落笔那一刻把速度与系数归到基准（第一下不放大，移动中才渐入）。</summary>
+    private void ResetDynamicEraser()
+    {
+        _eraseSpeedEma = 0f;
+        _eraseDynFactor = 1f;
+        _eraseLastMs = NowMs;
+    }
+
+    /// <summary>
+    /// 动态橡皮：喂一个采样点（画布坐标）更新"速度 → 尺寸系数"。
+    /// 曲线：`factor = clamp(0.6 + 速度(物理像素/毫秒) × 0.6, 0.6, 2.5)`——
+    /// 慢（<0.2）≈0.7×、中（1.0）≈1.2×、快（≥3）≈2.4×，真机再调这一个系数。
+    /// 速度走 EMA（0.35）滑动，不然手一抖尺寸就跳。
+    /// </summary>
+    private void UpdateDynamicEraser(float x, float y)
+    {
+        if (!DynamicEraser) { _eraseDynFactor = 1f; return; }
+        double now = NowMs;
+        float dx = x - _lastEraseX, dy = y - _lastEraseY;
+        float dist = MathF.Sqrt(dx * dx + dy * dy);
+        float dt = (float)Math.Max(0.5, now - _eraseLastMs);   // 夹住：防除 0 / 时间戳抖动
+        _eraseLastMs = now;
+        float speed = dist / dt;                               // 物理像素 / 毫秒
+        _eraseSpeedEma = _eraseSpeedEma <= 0f
+            ? speed
+            : _eraseSpeedEma + (speed - _eraseSpeedEma) * 0.35f;
+        _eraseDynFactor = Math.Clamp(0.6f + _eraseSpeedEma * 0.6f, 0.6f, 2.5f);
+    }
+
+    /// <summary>自检用：把一个速度（物理像素/毫秒）喂进去，看算出什么尺寸系数。</summary>
+    internal float DynamicEraserFactorForTest(float speedPxPerMs)
+    {
+        _eraseSpeedEma = speedPxPerMs;
+        _eraseDynFactor = Math.Clamp(0.6f + _eraseSpeedEma * 0.6f, 0.6f, 2.5f);
+        return _eraseDynFactor;
+    }
+
     /// <summary>
     /// Walks the eraser along the segment the pointer just travelled instead of
     /// only testing the newest position. Without this, a quick flick leaves gaps
@@ -3855,6 +3911,10 @@ public partial class InkEngine
     {
         float hw = PixelEraserHalfWidthPx, hh = PixelEraserHalfHeightPx;
         float dx = x - _lastEraseX, dy = y - _lastEraseY;
+        // 动态橡皮：按这一段的"速度"把尺寸放大（落笔第一下用基准，移动中才渐入）
+        UpdateDynamicEraser(x, y);
+        hw *= _eraseDynFactor;
+        hh *= _eraseDynFactor;
         float dist = MathF.Sqrt(dx * dx + dy * dy);
         int steps = Math.Clamp((int)(dist / MathF.Max(1f, MathF.Min(hw, hh))), 1, 64);
 
