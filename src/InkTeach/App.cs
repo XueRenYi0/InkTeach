@@ -23610,6 +23610,39 @@ internal sealed class App : InkEngine.InkEngine
               MathF.Abs(slowFactor - 1f) < 0.001f && fastFactor > slowFactor * 1.5f,
               $"慢扫 ×{slowFactor:F3}（应 1.00 = 基准）、快扫 ×{fastFactor:F3}");
 
+        // --- ②e 停住 → 缓释（用户报的"停住不回落、再轻动一下猛变小"）----------------
+        ResetDynamicEraserForTest();
+        PixelEraseDragging = true;                     // 模拟"按住擦"
+        float peak = 1f;
+        for (int i = 0; i < 30; i++)                   // 快扫：(43px, 8ms) → 5.4 px/ms
+        {
+            float v = DynamicEraserFeedForTest(43f, 8.0);
+            peak = DynamicEraserAdvanceForTest(v, 8.0);
+        }
+        float at100 = peak, at600 = peak, decayF = peak;
+        bool decayRose = false;
+        for (int k = 1; k <= 36; k++)                  // 停住 1.8 秒（每次推进 50ms）
+        {
+            float f = DynamicEraserIdleForTest(50f);
+            if (f > decayF + 0.0005f) decayRose = true;   // 空闲里**不许涨**
+            decayF = f;
+            if (k == 2) at100 = f;                     // 100ms：保持期内，该纹丝不动
+            if (k == 12) at600 = f;                    // 600ms：该开始收了
+        }
+        Check("停住：先保持、之后顺着回落、1.8s 回到基准（不回升）",
+              MathF.Abs(at100 - peak) < 0.002f && at600 < peak - 0.1f
+              && !decayRose && MathF.Abs(decayF - 1f) < 0.08f,
+              $"峰值 ×{peak:F2} → 100ms ×{at100:F2}（该不动）、600ms ×{at600:F2}、1.8s ×{decayF:F2}（该 ≈1.00）");
+
+        // 回落途中"轻动一下"：不许向上跳（用户原话："接着鼠标稍微再动一下…"）
+        float before = decayF;
+        float lightV = DynamicEraserFeedForTest(3f, 40.0);   // 轻动：3px / 40ms ≈ 0.075 px/ms
+        float after = DynamicEraserAdvanceForTest(lightV, 40.0);
+        Check("回落途中轻动一下：不许向上跳变",
+              after <= before + 0.002f,
+              $"轻动前 ×{before:F3} → 轻动后 ×{after:F3}");
+        PixelEraseDragging = false;
+
         // --- ③ 看的框 = 擦的范围（同一份尺寸：拖动中跟速度、悬停回基准）----------
         DynamicEraserFactorForTest(5f);                 // → ×2.5
         PixelEraseDragging = true;

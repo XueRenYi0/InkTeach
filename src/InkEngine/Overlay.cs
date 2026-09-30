@@ -1959,6 +1959,9 @@ internal sealed class OverlayWindow : IDisposable
         LastHudMs = swHud.Elapsed.TotalMilliseconds;
         LastHudRedrawMs = _hudRedrewThisFrame ? LastHudMs : 0;
 
+        // 动态橡皮：指针停住之后把尺寸**缓释**回去（每帧推一次；续帧由引擎那边的 `_dirty` 保证）。
+        app.TickEraserIdleDecay();
+
         _transientNow = ComputeTransientBounds(app);
         UpdateFrameDirty(app, uiVisible);
 

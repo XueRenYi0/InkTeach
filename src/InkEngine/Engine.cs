@@ -226,19 +226,30 @@ public partial class InkEngine
     internal const float EraserGrowTauMs = 220f, EraserShrinkTauMs = 450f;
     /// <summary>每步最少挪动的系数（Inkeys 那 0.1px 保底步长的同源做法，保证收得回来）。</summary>
     private const float EraserMinStep = 0.01f;
-    /// <summary>速度窗口长度（毫秒）：窗口内 Σ距离 ÷ Σ时间。**按时间攒**是关键：
-    /// 8.3.6 按"攒够 6 像素"——常规速度下几毫秒就攒满，等于没有窗口（还是逐次估法的抖）。</summary>
-    internal const float EraserSpeedWindowMs = 100f;
-    /// <summary>速度窗口的**距离上限**（像素）：快扫时不能等满 100ms 才更新（12 个采样才 96ms
-    /// 就会一个窗口都攒不满、速度恒 0）。攒够 40px 也结算一次——40px 的样本平均已经够稳。</summary>
-    internal const float EraserSpeedWindowPx = 40f;
+    /// <summary>
+    /// 速度通道（抄 MyPaint 的 **Fine/Gross Speed**：fine 跟手、gross "changes very slowly"）。
+    /// 目标速度取两者的**较大值**：快扫时 fine 立刻起作用；慢下来时 gross 还停在旧速度上，
+    /// **尺寸不会一慢就塌**——这就是"停住再轻动一下突然变小"的一半解法（另一半是下面的缓释）。
+    /// 每个通道"攒够时间或距离就结算一次"。
+    /// </summary>
+    internal const float EraserFineWindowMs = 40f, EraserFineWindowPx = 12f;
+    internal const float EraserGrossWindowMs = 350f, EraserGrossWindowPx = 120f;
+    /// <summary>指针停住之后先**保持**多久才开始缓释（免得扫到一半停一下、尺寸就缩）。</summary>
+    internal const float EraserIdleHoldMs = 150f;
+    /// <summary>"正在减速"时的保持时间（更短 → 提前开始收）。判据 = `fine &lt; gross × 0.7`：
+    /// 两个滤波量的差就是**加速度的符号**，噪声被压了两遍——用户想要"加速度"的稳定代理。</summary>
+    internal const float EraserDecelHoldMs = 60f;
 
-    private float _eraseSpeedEma;        // 窗口平均速度（物理像素/毫秒）
+    private float _eraseSpeedEma;        // 当前用的速度 = max(fine, gross)（物理像素/毫秒）
     private double _eraseLastMs;         // 上一次速度采样时刻
-    private float _eraseWinDist;         // 当前速度窗口累计的距离
-    private float _eraseWinMs;           // 当前速度窗口累计的时间
+    private float _eraseFine, _eraseGross;                       // 两条速度通道（px/ms）
+    private float _eraseFineDist, _eraseFineMs;                  // fine 窗口累计（40ms / 12px）
+    private float _eraseGrossDist, _eraseGrossMs;                // gross 窗口累计（350ms / 120px）
     private float _eraseDynFactor = 1f;  // 当前尺寸系数（落笔 = 1）
     private float _eraseTarget = 1f;     // 平滑的目标（回差状态也存这儿）
+    private double _eraseHoldBaseMs;     // 上一次**移动**的时刻（缓释的保持期从这里算）
+    private bool _eraseDecaying;         // 已经进入"停住缓释"阶段（每帧推；一动就退出）
+    private float _eraseTestIdle;        // 自检用：累计的空闲时间
 
     /// <summary>橡皮诊断浮层（`--eraserhud`）：实时显示 速度 / 目标 / 当前系数 / 尺寸。
     /// 它是**调参工具**：真机上擦几下，读出"常规速度是多少 px/ms"，门槛就按那个数定。</summary>
@@ -3865,10 +3876,14 @@ public partial class InkEngine
     {
         double now = NowMs;
         _eraseSpeedEma = 0f;
+        _eraseFine = _eraseGross = 0f;
+        _eraseFineDist = _eraseFineMs = 0f;
+        _eraseGrossDist = _eraseGrossMs = 0f;
         _eraseDynFactor = 1f;
         _eraseTarget = 1f;
-        _eraseWinDist = 0f;
-        _eraseWinMs = 0f;
+        _eraseHoldBaseMs = now;
+        _eraseDecaying = false;
+        _eraseTestIdle = 0f;
         _eraseLastMs = now;
         RebuildEraserHud();
     }
@@ -3887,14 +3902,18 @@ public partial class InkEngine
     /// <summary>
     /// 平滑一步：朝目标挪（涨/收时间常数不同 + 最少步长），带**回差**——
     /// 速度落在 [0.6, 0.8] 之间时目标保持不变，速度在门槛附近抖也不会来回切。
+    ///
+    /// <paramref name="allowGrow"/> = false 时**只许收、不许涨**（空闲缓释用）：
+    /// 停住不动的时候 gross 通道还没漏空、目标暂时还在高处，不允许它把尺寸**越停越大**。
     /// </summary>
-    private void ApplyEraserTarget(double nowMs)
+    private void ApplyEraserTarget(double nowMs, bool allowGrow = true)
     {
         float target;
         if (_eraseSpeedEma < EraserSpeedBack) target = EraserFactorMin;
         else if (_eraseSpeedEma > EraserSpeedKnee) target = EraserTargetFactorForSpeed(_eraseSpeedEma);
         else target = _eraseTarget;                          // 回差带：保持
 
+        if (!allowGrow && target > _eraseDynFactor) target = _eraseDynFactor;   // 空闲：只许收
         _eraseTarget = target;
         float gap = target - _eraseDynFactor;
         if (MathF.Abs(gap) < 0.001f) { _eraseDynFactor = target; return; }
@@ -3908,20 +3927,30 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 速度估计：**按时间攒满一个窗口**再算一次（窗口内 Σ距离 ÷ Σ时间）。
-    /// 为什么必须按时间：8.3.6 是"攒够 6 像素"——常规速度下几毫秒就攒满，于是又变成
-    /// "6px÷3ms=2.0 / 6px÷8ms=0.75"这种逐次估法，时间戳的量化被小 dt 放大。**那才是病根**。
+    /// 速度估计：两条通道各自"按时间/距离攒满一个窗口"再结算，取**较大值**当目标速度。
+    /// · fine（40ms / 12px）：跟手，快扫立刻反映；
+    /// · gross（350ms / 120px）：慢通道——慢下来时它还停在旧速度上，尺寸不会一慢就塌。
+    /// （抄 MyPaint 的 Fine/Gross Speed：fine 跟手、gross "changes very slowly"。）
     /// </summary>
     private void FeedEraserSpeed(float dist, float dtMs)
     {
-        _eraseWinDist += dist;
-        _eraseWinMs += MathF.Max(0.5f, dtMs);
-        if (_eraseWinMs >= EraserSpeedWindowMs || _eraseWinDist >= EraserSpeedWindowPx)
+        float dt = MathF.Max(0.5f, dtMs);
+
+        _eraseFineDist += dist; _eraseFineMs += dt;
+        if (_eraseFineMs >= EraserFineWindowMs || _eraseFineDist >= EraserFineWindowPx)
         {
-            _eraseSpeedEma = _eraseWinDist / MathF.Max(1f, _eraseWinMs);
-            _eraseWinDist = 0f;
-            _eraseWinMs = 0f;
+            _eraseFine = _eraseFineDist / MathF.Max(1f, _eraseFineMs);
+            _eraseFineDist = 0f; _eraseFineMs = 0f;
         }
+
+        _eraseGrossDist += dist; _eraseGrossMs += dt;
+        if (_eraseGrossMs >= EraserGrossWindowMs || _eraseGrossDist >= EraserGrossWindowPx)
+        {
+            _eraseGross = _eraseGrossDist / MathF.Max(1f, _eraseGrossMs);
+            _eraseGrossDist = 0f; _eraseGrossMs = 0f;
+        }
+
+        _eraseSpeedEma = MathF.Max(_eraseFine, _eraseGross);
     }
 
     /// <summary>
@@ -3938,6 +3967,9 @@ public partial class InkEngine
         FeedEraserSpeed(MathF.Sqrt(dx * dx + dy * dy), dt);
         ApplyEraserTarget(now);
         _eraseLastMs = now;
+        _eraseHoldBaseMs = now;          // 有新移动：缓释的保持期重新开始
+        _eraseDecaying = false;
+        _eraseTestIdle = 0f;
 
         // 诊断浮层：拖动中限频刷新（60ms），让人能看清"我这一下是什么速度"。
         if (EraserHud && now >= _eraserHudNextMs)
@@ -3948,16 +3980,70 @@ public partial class InkEngine
         }
     }
 
+    /// <summary>
+    /// 每帧推一次：指针**停住**之后把尺寸顺着缓释回去（不再等下一次移动来触发）。
+    ///
+    /// 为什么要这一条：尺寸只在**收到指针消息**时才更新——鼠标停住 = 没有消息 = 尺寸**冻在最大**；
+    /// 再轻轻一动，速度窗口立刻算出很小的速度 → 目标回到下限 → 看起来"突然变小"（用户报的）。
+    /// 现在停住超过 HoldMs 就每帧喂一个"零距离"样本：两条通道随时间自己漏空，目标随之回落到下限，
+    /// 尺寸按"收"的时间常数顺着缩回去——**不需要另写一套衰减逻辑**（和 MyPaint 的"输入滤波"同源：
+    /// 他们的速度输入在停止时自然归零，我们只是把"归零"在空闲时也喂进去）。
+    ///
+    /// "正在减速"（fine 明显小于 gross）= 快扫刚停下 → 用更短的保持时间**提前**开始收；
+    /// 这就是"加速度"以稳定形式入场的位置（两个滤波量的差 = 加速度的符号，噪声被压了两遍）。
+    /// </summary>
+    internal void TickEraserIdleDecay()
+    {
+        if (!DynamicEraser || !PixelEraseDragging) return;
+        if (TickEraserIdleDecayCore(NowMs)) _dirty = true;   // 还在缓释 → 保证还有下一帧
+    }
+
+    /// <summary>缓释一步。返回 true = 这一步动过（调用方据此保持刷新）。</summary>
+    private bool TickEraserIdleDecayCore(double nowMs)
+    {
+        if (!_eraseDecaying)
+        {
+            // 保持期：从"上一次移动"开始算，够 HoldMs 才进入缓释（期间尺寸**故意冻住**）。
+            float idle = (float)(nowMs - _eraseHoldBaseMs);
+            if (idle < EraserIdleHoldMs) return false;
+            _eraseDecaying = true;
+            _eraseLastMs = nowMs - 1.0;                 // 缓释的第一步按 1ms 推进
+        }
+        float step = (float)Math.Max(1.0, nowMs - _eraseLastMs);
+        FeedEraserSpeed(0f, step);                      // 零距离样本 → 通道随时间漏空
+        ApplyEraserTarget(nowMs, allowGrow: false);     // 空闲：只许收、不许涨
+        _eraseLastMs = nowMs;
+        return true;
+    }
+
+    /// <summary>自检用：模拟"空闲 dtMs"（保持期累计、之后每步缓释），返回当前系数。</summary>
+    internal float DynamicEraserIdleForTest(float dtMs)
+    {
+        if (!_eraseDecaying)
+        {
+            _eraseTestIdle += dtMs;
+            if (_eraseTestIdle < EraserIdleHoldMs) return _eraseDynFactor;   // 保持期内不动
+            _eraseDecaying = true;
+        }
+        FeedEraserSpeed(0f, dtMs);
+        ApplyEraserTarget(_eraseLastMs + dtMs, allowGrow: false);
+        _eraseLastMs += dtMs;
+        return _eraseDynFactor;
+    }
+
     /// <summary>刷新橡皮诊断浮层的文字（速度 / 目标 / 当前系数 / 尺寸 + 曲线参数）。</summary>
     private void RebuildEraserHud()
     {
         if (!EraserHud) return;
         float f = PixelEraseDragging ? _eraseDynFactor : 1f;
-        EraserHudText = $"速度 {_eraseSpeedEma:F2} px/ms　目标 ×{_eraseTarget:F2}　当前 ×{f:F2}　"
+        EraserHudText = $"速度 {_eraseSpeedEma:F2} px/ms（fine {_eraseFine:F2} / gross {_eraseGross:F2}）　"
+                      + $"目标 ×{_eraseTarget:F2}　当前 ×{f:F2}　"
                       + $"尺寸 {PixelEraserWidthLogical * f:F0}×{PixelEraserHeightLogical * f:F0} 逻辑像素"
                       + $"（基准 {PixelEraserWidthLogical:F0}×{PixelEraserHeightLogical:F0}）\n"
                       + $"曲线：≤{EraserSpeedKnee:F2} 恒 ×{EraserFactorMin:F1}（死区）→ ≥{EraserSpeedTop:F1} 封顶 ×{EraserFactorMax:F1}；"
-                      + $"回差 {EraserSpeedBack:F2}/{EraserSpeedKnee:F2}；窗口 {EraserSpeedWindowMs:F0}ms；"
+                      + $"回差 {EraserSpeedBack:F2}/{EraserSpeedKnee:F2}；"
+                      + $"通道 fine {EraserFineWindowMs:F0}ms / gross {EraserGrossWindowMs:F0}ms；"
+                      + $"停 {EraserIdleHoldMs:F0}ms 后缓释（减速 {EraserDecelHoldMs:F0}ms）；"
                       + $"平滑 涨 {EraserGrowTauMs:F0} / 收 {EraserShrinkTauMs:F0} ms";
     }
 
