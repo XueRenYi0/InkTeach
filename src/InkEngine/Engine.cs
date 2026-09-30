@@ -177,12 +177,15 @@ public partial class InkEngine
 
     // ---- 动态橡皮（8.3.4 起；8.3.6 换形状；8.3.7 定窗口与门槛）--------------
     //
-    // 面积擦的尺寸跟着**移动速度**走：慢 = 基准的 0.7 倍（更精细）、快 = 最多 2.5 倍。
+    // 面积擦的尺寸跟着**移动速度**走：**静止/慢 = 你调的那个基准（不缩）**、快 = 最多 2.5 倍。
     // 形状照隔壁 Inkeys「笔速橡皮」定（他们那条本来就是给触屏设备的）：
     //   他们：`speed≤20 → max(25, speed×2.33+13.33)`、`speed>20 → min(200, 3.0×speed)`
     //         → 有**下限 25px**（慢到底不再小）、有**上限 200px**、中间一段线性斜坡；
-    //   我们：`factor = clamp(0.7 + (v − 0.80) × 1.0, 0.7, 2.5)`（v 单位物理像素/毫秒）
-    //         → 0.80 以下恒 0.7（**死区**，常规速度全落在里头）、以上线性涨、2.6 到顶。
+    //   我们：`factor = clamp(1.0 + (v − 0.80) × 1.0, 1.0, 2.5)`（v 单位物理像素/毫秒）
+    //         → 0.80 以下恒 **1.0（基准，一点不缩）**、以上线性涨、2.3 到顶。
+    //         **8.3.8**：下限从 0.7 提到 1.0（用户："点击一下不动的时候，橡皮会缩小吗？我调的
+    //         初始值应该就是默认大小，点击以后不缩小"）——按住不动时手指/鼠标的**微小抖动**
+    //         也会被算成"速度"，于是慢慢滑到 0.7 倍。现在**静止/慢速就是基准**，不缩。
     //
     // 8.3.4 的两个毛病（用户报"慢速下忽大忽小"）8.3.6 都治了：
     //   ① 速度原来用"这一次消息的 dist ÷ dt"——慢速时一次只走一两像素、除以很小的 dt，
@@ -204,8 +207,10 @@ public partial class InkEngine
     // 后门：`--eraserfixed` 关掉动态（不进界面）。
     internal bool DynamicEraser = true;
 
-    /// <summary>最慢时的系数下限（基准的 0.7 倍；Inkeys 的对应物是那个 25px 地板）。</summary>
-    internal const float EraserFactorMin = 0.7f;
+    /// <summary>最慢/静止时的系数下限 = **1.0（就是基准）**：你调的那个大小就是默认大小，
+    /// 按住不动、慢慢抹都不缩（8.3.8 从 0.7 提上来；Inkeys 那边是个 25px 地板，但我们的
+    /// 基准是用户自己调的滑条，"静止 = 你调的值"才符合直觉）。</summary>
+    internal const float EraserFactorMin = 1.0f;
     /// <summary>最快时的系数上限（基准的 2.5 倍；Inkeys 的对应物是 200px 封顶）。</summary>
     internal const float EraserFactorMax = 2.5f;
     /// <summary>开始涨的门槛（物理像素/毫秒）——**必须高于"常规抹"的速度**（8.3.7 实测口径：
@@ -213,7 +218,7 @@ public partial class InkEngine
     internal const float EraserSpeedKnee = 0.8f;
     /// <summary>回差下沿：掉到这以下才回下限（0.6~0.8 之间保持，防门槛附近来回切）。</summary>
     internal const float EraserSpeedBack = 0.6f;
-    /// <summary>斜坡斜率：`factor = 下限 + (v − 门槛) × 斜率`（0.8 → 2.6 px/ms 之间涨到顶）。</summary>
+    /// <summary>斜坡斜率：`factor = 下限 + (v − 门槛) × 斜率`（0.8 → 2.3 px/ms 之间涨到顶）。</summary>
     internal const float EraserSpeedSlope = 1.0f;
     /// <summary>到顶的速度（px/ms）：`门槛 + (上限 − 下限) ÷ 斜率`。给读数/文档用。</summary>
     internal static float EraserSpeedTop => EraserSpeedKnee + (EraserFactorMax - EraserFactorMin) / EraserSpeedSlope;
@@ -3870,7 +3875,7 @@ public partial class InkEngine
 
     /// <summary>
     /// 给定速度的**稳态**目标系数（自检和文档共用；回差带里取"从慢往上走"那一支）。
-    /// 曲线：`0.8 以下 → 0.7`；以上 `0.7 + (v − 0.8) × 1.0`，夹到 0.7~2.5（2.6 到顶）。
+    /// 曲线：`0.8 以下 → 1.0`（基准，不缩）；以上 `1.0 + (v − 0.8) × 1.0`，夹到 1.0~2.5（2.3 到顶）。
     /// </summary>
     internal static float EraserTargetFactorForSpeed(float speedPxPerMs)
     {

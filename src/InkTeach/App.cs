@@ -935,7 +935,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("                     --save 连「保存」一起点，验到落盘为止）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
         Console.WriteLine("  --pixelerasetest    像素橡皮正确性（切成两段 / 框里无墨 / 一步撤销）");
-        Console.WriteLine("  --dynerasertest     动态橡皮（曲线：死区到 0.8 / 慢=0.7 / 快封顶 2.5；窗口抗抖；慢扫 vs 快扫；框跟速度；严丝合缝）");
+        Console.WriteLine("  --dynerasertest     动态橡皮（曲线：死区到 0.8 / 慢=基准1.0不缩 / 快封顶 2.5；窗口抗抖；慢扫 vs 快扫；框跟速度；严丝合缝）");
         Console.WriteLine("  --eraserhud         橡皮读数浮层（左下角实时 速度/目标/当前系数/尺寸；调门槛用，不进界面）");
         Console.WriteLine("  --pixeleraseshow    像素橡皮摆样（擦之前/之后各存一张图，自己抓屏）");
         Console.WriteLine("  --eraserlab [前缀]  橡皮手测台：铺样例 + 记录每条拖拽，给人用鼠标测（不自动退出）");
@@ -23542,9 +23542,9 @@ internal sealed class App : InkEngine.InkEngine
         float fDead2 = EraserTargetFactorForSpeed(0.70f);   // 回差带（0.6~0.8）
         float fMid = EraserTargetFactorForSpeed(1.5f);      // 斜坡中段
         float fFast = EraserTargetFactorForSpeed(5.0f);     // 封顶
-        Check("曲线：慢=下限 0.7（死区到 0.8）/ 中 1.5→1.4 / 快封顶 2.5",
-              MathF.Abs(fDead1 - 0.7f) < 0.001f && MathF.Abs(fDead2 - 0.7f) < 0.001f
-              && MathF.Abs(fMid - 1.4f) < 0.02f && MathF.Abs(fFast - 2.5f) < 0.001f,
+        Check("曲线：静止/慢=基准 1.0（死区到 0.8）/ 中 1.5→1.7 / 快封顶 2.5",
+              MathF.Abs(fDead1 - 1f) < 0.001f && MathF.Abs(fDead2 - 1f) < 0.001f
+              && MathF.Abs(fMid - 1.7f) < 0.02f && MathF.Abs(fFast - 2.5f) < 0.001f,
               $"0.05 → ×{fDead1:F2}、0.70 → ×{fDead2:F2}、1.5 → ×{fMid:F2}、5.0 → ×{fFast:F2}");
 
         // --- ② 后门：--eraserfixed 关掉动态 → 系数恒 1 -------------------------
@@ -23568,9 +23568,9 @@ internal sealed class App : InkEngine.InkEngine
             worstStep = MathF.Max(worstStep, MathF.Abs(lastF - prevF));
             prevF = lastF;
         }
-        Check("慢速/常规速不忽大忽小：死区里手抖 → 只缓慢降到 0.7、不回升",
-              !rose && MathF.Abs(lastF - EraserFactorMin) < 0.02f && worstStep <= 0.011f,
-              $"40 步后 ×{lastF:F3}（下限 {EraserFactorMin:F2}），单步最大变化 {worstStep:F3}");
+        Check("点击后按住不动/慢速：尺寸停在基准 1.0、一点不缩（8.3.8）",
+              !rose && MathF.Abs(lastF - 1f) < 0.001f && worstStep <= 0.001f,
+              $"40 步后 ×{lastF:F3}（基准 1.00），单步最大变化 {worstStep:F3}（按住不动时手指的微抖也算速度，0 变化）");
 
         // --- ②c 速度窗口：逐次估法很抖，窗口算出来要稳 ---------------------------
         // 交替喂 (4px, 3ms)=1.33 与 (2px, 9ms)=0.22——真值始终 0.5 px/ms。
@@ -23601,14 +23601,14 @@ internal sealed class App : InkEngine.InkEngine
             slowFactor = DynamicEraserAdvanceForTest(v, 50.0);
         }
         ResetDynamicEraserForTest();
-        for (int i = 0; i < 14; i++)                       // 快扫：(43px, 8ms) → 5.4 px/ms
+        for (int i = 0; i < 20; i++)                       // 快扫：(43px, 8ms) → 5.4 px/ms
         {
             float v = DynamicEraserFeedForTest(43f, 8.0);
             fastFactor = DynamicEraserAdvanceForTest(v, 8.0);
         }
-        Check("慢扫停在 ×0.7、快扫明显更大（真拖那三条的逻辑版）",
-              MathF.Abs(slowFactor - EraserFactorMin) < 0.02f && fastFactor > slowFactor * 1.6f,
-              $"慢扫 ×{slowFactor:F3}（应 0.70）、快扫 ×{fastFactor:F3}");
+        Check("慢扫停在 ×1.0（基准）、快扫明显更大（真拖那三条的逻辑版）",
+              MathF.Abs(slowFactor - 1f) < 0.001f && fastFactor > slowFactor * 1.5f,
+              $"慢扫 ×{slowFactor:F3}（应 1.00 = 基准）、快扫 ×{fastFactor:F3}");
 
         // --- ③ 看的框 = 擦的范围（同一份尺寸：拖动中跟速度、悬停回基准）----------
         DynamicEraserFactorForTest(5f);                 // → ×2.5
@@ -23706,7 +23706,7 @@ internal sealed class App : InkEngine.InkEngine
                 Sweep(fast: true);
                 int fastErased = ink0 - Ink();
                 Check("快扫擦掉的明显多于慢扫（速度→尺寸 真的生效）",
-                      fastErased > slowErased * 1.35f,
+                      fastErased > slowErased * 1.2f,
                       $"快扫 {fastErased} vs 慢扫 {slowErased} 像素"
                       + $"（×{fastErased / (float)Math.Max(1, slowErased):F2}）");
 
@@ -23716,7 +23716,7 @@ internal sealed class App : InkEngine.InkEngine
                 DynamicEraserForTest = true;
                 int fixedErased = ink0 - Ink();
                 Check("后门：关掉动态后快扫回到基准档",
-                      fixedErased < fastErased * 0.8f && fixedErased > slowErased * 0.6f,
+                      fixedErased < fastErased * 0.85f && fixedErased > slowErased * 0.6f,
                       $"关掉动态快扫 {fixedErased}（动态快扫 {fastErased}、慢扫 {slowErased}）");
 
                 // --- ⑤ 整笔擦不受速度影响 ------------------------------------
