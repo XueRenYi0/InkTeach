@@ -2087,6 +2087,20 @@ internal sealed class OverlayWindow : IDisposable
     {
         var r = RectF.Empty;
 
+        // 自绘的落点反馈（橡皮方框 / 圆环 / 圆盘）：每帧都重画，而且**一帧可能移动超过半径**
+        //（快擦；面积擦的框还会随速度变大变小）。所以它必须走这条"最近三帧"的集合，
+        // 不能只算当帧或"当帧＋上一帧"——双缓冲里躺着的是**两帧前**的画面（见下面
+        // `_transientHistory` 那条注释）。用户 2026-09-30 报的"面积橡皮左侧出现一条条
+        // 细密的竖线、颜色像变深了"就是这个：旧框只有一帧的覆盖，第三帧那一条擦不掉。
+        if (app.DrawnCursor != InkEngine.ToolCursorShape.None)
+        {
+            float rad = app.DrawnCursorRadius;
+            var c = RectF.Empty;
+            c.Add(app.PointerX - rad, app.PointerY - rad);
+            c.Add(app.PointerX + rad, app.PointerY + rad);
+            r.Add(CanvasRectToWindow(c));
+        }
+
         if (app.ActiveStroke != null)
         {
             // 渲染尾（预测段）画在**最后一个真实点的前面**，所以不在 PaddedBounds 里。
