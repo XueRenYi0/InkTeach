@@ -172,6 +172,18 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PanelTest();
         }
+        else if (mode == "--radialtest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            RadialTest();
+        }
+        else if (mode == "--radialshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            RadialShow(args.Length > 1 ? args[1] : "reports/radial-palette.bmp");
+        }
         else if (mode == "--shapebandtest")
         {
             _autoExitAt = double.MaxValue;
@@ -907,6 +919,8 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --passtest          穿透真机测试（跨进程点击）");
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
+        Console.WriteLine("  --radialtest        呼出盘自检（Ctrl+Q：开 / 划 / 松 / 取消 / 穿透 / 松键轮询）");
+        Console.WriteLine("  --radialshow [图]   呼出盘摆样：定格在屏幕中央出图（默认 reports/radial-palette.bmp）");
         Console.WriteLine("  --shapeiconshow [路径] 出图：图形面板图标的对照表（含每一档的变体）");
         Console.WriteLine("  --toolicons [路径]  出图：白板 / 激光笔的图标候选（未选中 / 选中 / 放大三格）");
         Console.WriteLine("  --penshow [路径] [bars]  出图：上游那批「带笔的」图标；带第 2 个参数就每格加一副「三道杠」");
@@ -12548,6 +12562,267 @@ internal sealed class App : InkEngine.InkEngine
                 : "出图失败");
             ExitCode = ok ? 0 : 1;
         }
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 呼出盘自检（--radialtest）：全走引擎里真在用的那套状态机（开 / 划 / 松 / 取消）。
+    ///
+    /// 不依赖真键盘：按住/松手的"真实键路由"由发布前手测覆盖；这里钉住的是
+    /// 其余全部行为——扇区几何、死区、滞回、和工具键同一条命令、穿透语义、
+    /// 松键轮询、放映临时键表。对照文档见《调研-笔键方案.md》附录 C/D。
+    /// </summary>
+    private void RadialTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 呼出盘自检（Ctrl+Q：按住 → 划向扇区 → 松手）===");
+
+        if (SkipIfNoSyntheticInput("呼出盘自检")) { _quit = true; return; }
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-32} {detail}");
+        }
+        static bool SameCol(Color4 a, Color4 b) =>
+            MathF.Abs(a.R - b.R) < 0.02f && MathF.Abs(a.G - b.G) < 0.02f
+            && MathF.Abs(a.B - b.B) < 0.02f;
+
+        SetUiFactory(() => new InkUi.FullUi());
+        PassThrough = false;
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Pen;
+        SettleFrames(300);
+
+        // 自检期间**先按住"测试保持"**：不然一次 Settle 的泵就会把盘当成"已松手"提交掉。
+        // ⑩ 单独把它放开来验轮询。
+        RadialTestHold = true;
+
+        float cx = _virtualX + _virtualW * 0.5f;
+        float cy = _virtualY + _virtualH * 0.5f;
+
+        // ---- ① 打开：盘心 = 按下那一刻的指针 ----
+        RadialOpenForTest(cx, cy);
+        Check("打开：进入呼出盘状态", RadialPaletteActive, $"active = {RadialPaletteActive}");
+        Check("盘心 = 按下那一刻的指针位置",
+              MathF.Abs(RadialCenterX - cx) < 0.5f && MathF.Abs(RadialCenterY - cy) < 0.5f,
+              $"({RadialCenterX:F0},{RadialCenterY:F0}) vs ({cx:F0},{cy:F0})");
+
+        // ---- ② 死区（没移动）松手 = 取消 ----
+        Host.Commands.SetTool(Tool.Pen);
+        Host.Commands.SetColor(InkPalette.PenBand[0].Color);
+        SettleFrames(120);
+        var tool0 = Host.State.Tool;
+        RadialCommitForTest();
+        Check("死区松手 = 取消：工具/颜色都不动",
+              !RadialPaletteActive && Host.State.Tool == tool0,
+              $"active = {RadialPaletteActive}，工具 = {Host.State.Tool}");
+
+        // ---- ③ 划向正东 =「红」：执行后是红笔 ----
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx + 120f, cy);
+        Check("划向正东 = 选中「红」扇区", RadialPaletteSector == 2, $"扇区 {RadialPaletteSector}");
+        RadialCommitForTest();
+        Check("松手执行：切成红笔",
+              !RadialPaletteActive && Host.State.Tool == Tool.Pen
+              && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
+              $"工具 = {Host.State.Tool}，色 = {Host.State.PaletteBase}");
+
+        // ---- ④ 在别的工具上选颜色 = "给我这支颜色的笔"（切回笔） ----
+        Host.Commands.SetTool(Tool.Eraser);
+        SettleFrames(120);
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx + 85f, cy - 85f);          // 东北 = 黑
+        Check("划向东北 = 选中「黑」扇区", RadialPaletteSector == 1, $"扇区 {RadialPaletteSector}");
+        RadialCommitForTest();
+        Check("在橡皮上选颜色：会切回笔并给对应色",
+              Host.State.Tool == Tool.Pen
+              && SameCol(Host.State.PaletteBase, InkPalette.PenBand[0].Color),
+              $"工具 = {Host.State.Tool}，色 = {Host.State.PaletteBase}");
+
+        // ---- ⑤ 工具扇区 = 和按 Ctrl+P 同一条命令（已经是它 → 换色） ----
+        Host.Commands.SetTool(Tool.Pen);
+        Host.Commands.SetColor(InkPalette.PenBand[0].Color);
+        SettleFrames(120);
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx, cy - 120f);               // 北 = 笔
+        Check("划向正北 = 选中「笔」扇区", RadialPaletteSector == 0, $"扇区 {RadialPaletteSector}");
+        RadialCommitForTest();
+        Check("已经是笔时选「笔」= 连按语义（换下一色）",
+              Host.State.Tool == Tool.Pen
+              && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
+              $"色 = {Host.State.PaletteBase}");
+
+        // ---- ⑥ 其余扇区各换一次工具 ----
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx, cy + 120f);               // 南 = 荧光笔
+        RadialCommitForTest();
+        Check("划向正南 = 荧光笔", Host.State.Tool == Tool.Highlighter, $"工具 = {Host.State.Tool}");
+
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx - 85f, cy + 85f);          // 西南 = 橡皮
+        RadialCommitForTest();
+        Check("划向西南 = 橡皮", Host.State.Tool == Tool.Eraser, $"工具 = {Host.State.Tool}");
+
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx - 120f, cy);               // 西 = 框选
+        RadialCommitForTest();
+        Check("划向正西 = 框选", Host.State.Tool == Tool.Marquee, $"工具 = {Host.State.Tool}");
+
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx - 85f, cy - 85f);          // 西北 = 激光
+        RadialCommitForTest();
+        Check("划向西北 = 激光", Host.State.Tool == Tool.Laser, $"工具 = {Host.State.Tool}");
+
+        // ---- ⑦ 跨扇区滞回：出界 9° 以内不跳扇区 ----
+        RadialOpenForTest(cx, cy);
+        float rr = 120f;
+        RadialMoveForTest(cx + rr, cy);                 // 正东 = 红
+        float a23 = 23f * MathF.PI / 180f;              // 刚过 22.5° 边界
+        RadialMoveForTest(cx + rr * MathF.Cos(a23), cy + rr * MathF.Sin(a23));
+        Check("越过扇区边界 9° 内：不跳扇区（滞回）", RadialPaletteSector == 2,
+              $"扇区 {RadialPaletteSector}");
+        float a40 = 40f * MathF.PI / 180f;
+        RadialMoveForTest(cx + rr * MathF.Cos(a40), cy + rr * MathF.Sin(a40));
+        Check("出界超过 9°：正常换到下一扇区", RadialPaletteSector == 3,
+              $"扇区 {RadialPaletteSector}");
+        RadialCancelForTest("自检收尾");
+
+        // ---- ⑧ 穿透下不响应（和工具键 8.5 同一条语义） ----
+        Host.Commands.SetPassThrough(true);
+        SettleFrames(150);
+        RadialOpenForTest(cx, cy);
+        Check("穿透开着：呼出盘不响应", !RadialPaletteActive, $"active = {RadialPaletteActive}");
+        Host.Commands.SetPassThrough(false);
+        SettleFrames(150);
+
+        // ---- ⑨ 写字中（笔尖在屏上）不响应 ----
+        SendMouse((int)cx, (int)cy, 0);                          SettleFrames(60);
+        SendMouse((int)cx, (int)cy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(120);
+        RadialOpenForTest(cx, cy);
+        Check("落笔中：呼出盘不响应（抬笔后再按）", !RadialPaletteActive, $"active = {RadialPaletteActive}");
+        SendMouse((int)cx, (int)cy, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(200);
+
+        // ---- ⑩ 松键轮询：放映那条路没有 KeyUp，靠每帧 GetAsyncKeyState ----
+        RadialTestHold = false;
+        RadialOpenForTest(cx, cy);
+        Check("按住状态：盘是活的", RadialPaletteActive, $"active = {RadialPaletteActive}");
+        RadialPumpForTest();     // 物理 Q 没按着 → 应当按"已松手"提交（这里没位移 = 取消）
+        Check("轮询发现松手：自动提交（没位移 = 取消）", !RadialPaletteActive,
+              $"active = {RadialPaletteActive}");
+
+        // ---- ⑪ 放映临时全局键表里有它（Ctrl+Q） ----
+        var entry = PptHotkeyEntryForTest(KeyAction.RadialPalette);
+        Check("放映临时全局键表：包含呼出盘，且是 Ctrl+Q",
+              entry.HasValue && entry.Value.Mod == Native.MOD_CONTROL && entry.Value.Vk == 0x51,
+              entry.HasValue ? $"mod=0x{entry.Value.Mod:X} vk=0x{entry.Value.Vk:X}" : "表里没有");
+
+        // ---- ⑫ 真键盘 + 真鼠标：应用内那条路（窗口消息 → 键盘模式 → 打开/松手提交） ----
+        // 前面都是引擎钩子；这一条和 --hotkeytest 同一套方法，走真实输入流。
+        if (!SkipIfNoSyntheticInput("呼出盘真键盘"))
+        {
+            Host.Commands.SetTool(Tool.Pen);
+            Host.Commands.SetColor(InkPalette.PenBand[0].Color);
+            SettleFrames(200);
+            SendMouse((int)cx, (int)cy, 0);
+            SettleFrames(150);
+
+            var qDown = new[] { KeyInput(VK_CONTROL, false), KeyInput(0x51, false) };
+            Native.SendInput((uint)qDown.Length, qDown, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(250);
+            Check("真键盘：按住 Ctrl+Q 能打开呼出盘", RadialPaletteActive,
+                  $"active = {RadialPaletteActive}");
+
+            SendMouse((int)(cx + 120f), (int)cy, 0);      // 正东 = 红
+            SettleFrames(150);
+            var qUp = new[] { KeyInput(0x51, true), KeyInput(VK_CONTROL, true) };
+            Native.SendInput((uint)qUp.Length, qUp, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(250);
+            Check("真键盘：松手确认为红笔",
+                  !RadialPaletteActive && Host.State.Tool == Tool.Pen
+                  && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
+                  $"active = {RadialPaletteActive}，色 = {Host.State.PaletteBase}");
+
+            // ---- ⑬ 真键盘：先松 Ctrl（盘还在）→ 按 Esc 取消 ----
+            // 这条同时钉住两件事：提交只认 Q（松 Ctrl 不提交）；Esc 要在没有 Ctrl 压着时按
+            // （Ctrl+Esc 是系统开始菜单，收不到——⑫ 那版就是这么发现问题的）。
+            SendMouse((int)cx, (int)cy, 0);
+            SettleFrames(120);
+            Native.SendInput((uint)qDown.Length, qDown, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(250);
+            var ctrlUp = new[] { KeyInput(VK_CONTROL, true) };
+            Native.SendInput((uint)ctrlUp.Length, ctrlUp, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(150);
+            Check("真键盘：先松 Ctrl，盘还在（提交只认 Q 松手）", RadialPaletteActive,
+                  $"active = {RadialPaletteActive}");
+            SendKeyChord(0x1B);                            // 真按 Esc（此时没有 Ctrl 压着）
+            SettleFrames(200);
+            Check("真键盘：Esc 取消（工具/颜色都不动）",
+                  !RadialPaletteActive && Host.State.Tool == Tool.Pen,
+                  $"active = {RadialPaletteActive}，工具 = {Host.State.Tool}");
+            var qUpOnly = new[] { KeyInput(0x51, true) };
+            Native.SendInput((uint)qUpOnly.Length, qUpOnly, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(150);
+        }
+
+        // 收尾
+        Host.Commands.SetTool(Tool.Pen);
+        PassThrough = false;
+        Doc.Clear();
+        Doc.ClearHistory();
+        SettleFrames(150);
+
+        Console.WriteLine();
+        Console.WriteLine(fail == 0
+            ? $"  PASS: 呼出盘 {pass} 项全过"
+            : $"  FAIL: {fail} 项不对（{pass} 项通过）");
+        if (fail > 0) ExitCode = 1;
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 呼出盘摆样（--radialshow）：把盘定格在屏幕中央、自己抓屏出图——
+    /// 给"长什么样"留底稿（和 --cursorshow / --pixeleraseshow 同一套做法）。
+    /// 出两张：没划的、划到「红」的。
+    /// </summary>
+    private void RadialShow(string path)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 呼出盘摆样（Ctrl+Q）===");
+
+        // --dark：深色那档也出一张（呼出盘跟着 FloatingTheme 走，这里顺手验观感）。
+        // 自检模式用临时配置（`_selfCheckMode`），不会碰用户的 settings.json。
+        if (Environment.GetCommandLineArgs().Contains("--dark")) SetUiPref("dark", "1");
+
+        SetUiFactory(() => new InkUi.FullUi());
+        PassThrough = false;
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Pen;
+        ShowHud = false;
+        RadialTestHold = true;
+
+        float cx = _virtualX + _virtualW * 0.5f;
+        float cy = _virtualY + _virtualH * 0.5f;
+
+        // ① 打开（还没划）
+        RadialOpenForTest(cx, cy);
+        SettleFrames(400);
+        bool ok1 = ScreenProbe.SaveBmp(path, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+
+        // ② 划向「红」（正东）
+        RadialMoveForTest(cx + 120f, cy);
+        SettleFrames(300);
+        string path2 = System.IO.Path.ChangeExtension(path, null) + "-red.bmp";
+        bool ok2 = ScreenProbe.SaveBmp(path2, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+
+        RadialCancelForTest("摆样结束");
+        RadialTestHold = false;
+        Console.WriteLine(ok1 && ok2 ? $"出图：{path} / {path2}" : "抓屏失败（看上一行）");
         _quit = true;
     }
 

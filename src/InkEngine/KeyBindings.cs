@@ -43,6 +43,11 @@ internal enum KeyAction
     SplitErased,
     ToolCapture,
     ToolMarquee,
+
+    /// <summary>呼出盘（Ctrl+Q）：按住 → 划向扇区 → 松手。
+    /// 八扇区 = 笔 / 黑 / 红 / 蓝 / 荧光笔 / 橡皮 / 框选 / 激光（见 Engine 的呼出盘那段）。
+    /// **批注内作用域**（和工具键同一档）；放映时进"临时全局键"表，穿透下不响应。</summary>
+    RadialPalette,
     // 图形工具（直线 / 矩形 / 椭圆 / 圆 / 三角形 / 平行四边形 / 箭头 / 坐标系）
     // **刻意一个键都没有**（用户 2026-09-19 定："图形不需要加快捷键，通通取消掉"）。
     // 原来给圆 / 三角形 / 平行四边形 / 坐标系 / 数轴配过 `Ctrl+Alt+O/T/G/F/N`，这一轮全撤：
@@ -323,6 +328,7 @@ internal sealed class KeyMap
         KeyAction.SplitErased => "拆开擦断的笔迹",
         KeyAction.ToolCapture => "截图",
         KeyAction.ToolMarquee => "框选",
+        KeyAction.RadialPalette => "呼出盘",
         KeyAction.SelectShape => "选择方式",
         KeyAction.Undo => "撤销",
         KeyAction.Redo => "重做",
@@ -458,20 +464,24 @@ internal sealed class KeyMap
         // 为什么是 PPT 那套：Ctrl+P / Ctrl+I / Ctrl+E / Ctrl+L 正好是 PowerPoint 放映里的
         // 笔 / 荧光笔 / 橡皮 / 激光笔，老师换软件不用重新学；Ctrl+M = 选中是我们自己补的一格。
         //
-        // **每个工具键都有三段手势**（手写板的笔上只有两个按钮，靠它把功能摊开，
-        // 见 Engine.ToolKeyDown / ToolKeyUp / PumpKeyGestures）：
-        //   · 单击           = 切到它；**已经是它** → 连按就换色/换档（和点面板那一格一样）
-        //   · 快速双击(≤350ms) = 主工具往后轮一格：笔 → 荧光笔 → 激光笔 → 橡皮 → 选中 → 笔
-        //   · 按住(≥0.6s)     = 回第一个颜色 / 第一档
-        m.Add(A, KeyAction.ToolPen, "Ctrl+P", "换成笔（已是笔→连按换色；双击换主工具；按住回第一色）");
-        m.Add(A, KeyAction.ToolHighlighter, "Ctrl+I", "换成荧光笔（半透明大笔；手势同笔）");
+        // **2026-09-30 收口为"只留单击"**（双击轮换与按住回第一色那两套手势停用，
+        // 见 commit addc4ce 与《调研-快捷键-焦点与穿透》）：单击 = 切到它；
+        // **已经是它** → 再按就换色/换档（和点面板那一格一样）。
+        m.Add(A, KeyAction.ToolPen, "Ctrl+P", "换成笔（已经是笔→再按换色）");
+        m.Add(A, KeyAction.ToolHighlighter, "Ctrl+I", "换成荧光笔（半透明大笔；单击语义同笔）");
         m.Add(A, KeyAction.ToolLaser, "Ctrl+L", "换成激光笔（只留痕迹，不留墨）");
-        m.Add(A, KeyAction.ToolEraser, "Ctrl+E", "换成橡皮擦（碰到哪一条就整条删掉；连按切整笔/面积）");
-        m.Add(A, KeyAction.ToolMarquee, "Ctrl+M", "换成框选（选择/移动/缩放/旋转；连按切矩形/套索）");
+        m.Add(A, KeyAction.ToolEraser, "Ctrl+E", "换成橡皮擦（碰到哪一条就整条删掉；再按切整笔/面积）");
+        m.Add(A, KeyAction.ToolMarquee, "Ctrl+M", "换成框选（选择/移动/缩放/旋转；再按切矩形/套索）");
         // **旧别名取消**（用户 2026-09-30："只保留一套"）：原来的 Ctrl+7（面积擦）、
         // Ctrl+9（切选择方式）删掉——那两件事现在都归"连按同一个工具键"：
         // Ctrl+E 连按切整笔/面积、Ctrl+M 连按切矩形/套索，不再占额外键位。
         m.Add(A, KeyAction.ToolCapture, "Ctrl+S", "截图：拖一个框，抓到的图放到左上角、自动选中并进剪贴板");
+        // 呼出盘（用户 2026-09-30 定「Ctrl+Q」）：按住 → 光标处出八扇区 → 划向扇区 → 松手。
+        // 扇区 = 笔 / 黑 / 红 / 蓝 / 荧光笔 / 橡皮 / 框选 / 激光（黑红蓝 = 色带前三）。
+        // 设计稿、理论、和其它快捷键的对应关系见《调研-笔键方案.md》附录 C/D；
+        // 行为要点：穿透下不响应（和工具键 8.5 同一条）、放映时随"临时全局键"表走、
+        // 扇区里全是现有命令（工具=按 Ctrl+P/I/L/E/M 同一条路，颜色="给我这支颜色的笔"）。
+        m.Add(A, KeyAction.RadialPalette, "Ctrl+Q", "呼出盘：按住 → 划向扇区 → 松手（笔/黑/红/蓝/荧光笔/橡皮/框选/激光）");
         m.Add(A, KeyAction.CycleWidth, "Ctrl+6", "切成当前工具的下一档粗细");
         m.Add(A, KeyAction.SplitErased, "Ctrl+8", "把选中的、被擦断的笔迹拆成独立对象（只服务老存档）");
         m.Add(A, KeyAction.Clear, "Ctrl+Shift+C", "清空整页（可撤销）");

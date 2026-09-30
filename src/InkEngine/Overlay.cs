@@ -2029,6 +2029,7 @@ internal sealed class OverlayWindow : IDisposable
             // 画线中的 α 读数画在浮动层最上面（它贴着正在拖的那一端，压住什么都不碍事）。
             DrawShapeInclination(app);
             DrawLaser(app);
+            DrawRadialPalette(app);   // 呼出盘压着墨和激光；落点反馈（下面那一句）在它上面
             DrawToolCursor(app);
             DrawMarquee(app);
 
@@ -2111,6 +2112,19 @@ internal sealed class OverlayWindow : IDisposable
             var ab = app.ActiveStroke.PaddedBounds;
             if (app.PredictedTailLead > 0f) ab = ab.Inflate(app.PredictedTailLead + 2f);
             r.Add(CanvasRectToWindow(ab));
+        }
+
+        // 呼出盘（Ctrl+Q）：固定画在盘心，但轨迹线跟着指针、内容随扇区变——
+        // 脏区按"盘 ＋ 投影 ＋ 盘下那行字 ∪ 当前指针"给（盘一转、线一动，旧像素才擦得掉）。
+        if (app.RadialPaletteActive)
+        {
+            float rad = (96f + app.FloatingTheme.ShadowReachLogical + 4f) * app.DpiScale;
+            var box = RectF.Empty;
+            box.Add(app.RadialCenterX - rad, app.RadialCenterY - rad);
+            box.Add(app.RadialCenterX + rad, app.RadialCenterY + rad);
+            box.Add(app.RadialCenterX, app.RadialCenterY + rad + 56f * app.DpiScale);  // 悬停字条
+            box.Add(app.PointerX, app.PointerY);
+            r.Add(CanvasRectToWindow(box));
         }
 
         var laser = app.Laser;
@@ -4366,6 +4380,285 @@ internal sealed class OverlayWindow : IDisposable
             sink.Close();
         }
         return geo;
+    }
+
+    // =====================================================================
+    //  呼出盘（Ctrl+Q）：按住 → 划向扇区 → 松手
+    // =====================================================================
+    //
+    // 和落点反馈一样画在**浮动层**、坐标和指针同源（画布坐标 + CanvasToWindow），
+    // 所以相机一滚它不会漂。配色**用界面推上来的 FloatingTheme**：浅色/深色主题
+    // 各一套，和面板/操作条同一个观感（"界面逻辑跟主程序走"那条要求的落点）。
+    //
+    // 视觉规格（2026-09-30 用户拍板：方案 A「面板盘」+ 极简标签 + 直径 192；
+    // 见《计划-呼出盘-视觉改版.md》第四节）：
+    //   · 盘半径 96（直径 192）、投影走主题的层叠胀法（`DrawDiscShadow`）；
+    //   · 8 个 46×46、圆角 12 的方块按钮摆在半径 60 的环上（照主条按钮的语言）；
+    //   · 工具选中 = 强调色实心 + 白图标；颜色选中 = 色片 + 一圈强调色描边（不压蓝底）；
+    //   · **没有常显标签**：名字只出现在中央读数；悬停时盘下"浮一行字"（人话提示）。
+    private const float RadialPlateRadiusLogical = 96f;
+    private const float RadialButtonHalfLogical = 23f;
+    private const float RadialRingLogical = 60f;
+    private const float RadialCenterLogical = 34f;
+
+    /// <summary>第 i 个扇区是不是"颜色"（黑/红/蓝 = 1/2/3）——选中态画法不同。</summary>
+    private static readonly bool[] RadialSectorIsColor =
+        { false, true, true, true, false, false, false, false };
+
+    private void DrawRadialPalette(InkEngine app)
+    {
+        if (!app.RadialPaletteActive || !app.RadialPaletteVisible) return;
+
+        float dpi = Dpi / 96f;
+        float R = RadialPlateRadiusLogical * dpi;
+        float ring = RadialRingLogical * dpi;
+        float bh = RadialButtonHalfLogical * dpi;
+        float rc = RadialCenterLogical * dpi;
+        var c = new Vector2(app.RadialCenterX, app.RadialCenterY);
+        var theme = app.FloatingTheme;
+        int sel = app.RadialPaletteSector;
+
+        // 投影：照面板那套"层叠胀法"（由大到小叠、贴着形状最暗）
+        DrawDiscShadow(app, c, R);
+
+        // 指针 → 盘心：点线（让"我在划"这件事有个因果）
+        var ptr = new Vector2(app.PointerX, app.PointerY);
+        if (Vector2.Distance(c, ptr) > 8f * dpi)
+        {
+            _scratch.Color = new Color4(theme.TextMuted.R, theme.TextMuted.G,
+                                        theme.TextMuted.B, 0.55f);
+            _ctx.DrawLine(c, ptr, _scratch, 2.4f * dpi, Gfx.Dotted);
+        }
+
+        // 底盘
+        _ctx.FillEllipse(new Ellipse(c, R, R), Brush(theme.Panel));
+        _scratch.Color = theme.PanelBorder;
+        _ctx.DrawEllipse(new Ellipse(c, R, R), _scratch, 1f * dpi);
+
+        // 八个方块按钮
+        for (int i = 0; i < 8; i++)
+        {
+            var bp = OnCircle(c, ring, -90f + 45f * i);
+            bool on = i == sel;
+            bool isColor = RadialSectorIsColor[i];
+
+            if (on)
+            {
+                _scratch.Color = isColor
+                    ? new Color4(theme.ActiveBg.R, theme.ActiveBg.G, theme.ActiveBg.B, 0.14f)
+                    : theme.ActiveBg;
+                _ctx.FillRoundedRectangle(new RoundedRectangle(
+                    new Vortice.RawRectF(bp.X - bh, bp.Y - bh, bp.X + bh, bp.Y + bh),
+                    12f * dpi, 12f * dpi), _scratch);
+            }
+
+            DrawRadialIcon(i, bp, dpi, theme, on);
+
+            if (on && isColor)
+            {
+                _scratch.Color = theme.ActiveBg;
+                _ctx.DrawRoundedRectangle(new RoundedRectangle(
+                    new Vortice.RawRectF(bp.X - 16f * dpi, bp.Y - 16f * dpi,
+                                         bp.X + 16f * dpi, bp.Y + 16f * dpi),
+                    10f * dpi, 10f * dpi), _scratch, 2.5f * dpi);
+            }
+        }
+
+        // 中央读数（这是唯一常显的文字）
+        _ctx.FillEllipse(new Ellipse(c, rc, rc), Brush(theme.Panel));
+        _scratch.Color = theme.PanelBorder;
+        _ctx.DrawEllipse(new Ellipse(c, rc, rc), _scratch, 1f * dpi);
+        string centerText = sel >= 0 ? InkEngine.RadialSectorNames[sel]
+                                     : (app.RadialMovedForDraw ? "取消" : "工具");
+        _scratch.Color = sel >= 0 ? theme.Text : theme.TextMuted;
+        _ctx.DrawText(centerText, RadialCenterFormat(dpi),
+                      new Rect(c.X - rc, c.Y - rc * 0.8f, rc * 2f, rc * 1.6f), _scratch);
+
+        // 悬停时"浮一行字"：盘外下方的小白条，给一句人话
+        if (sel >= 0)
+        {
+            string hint = RadialHintFor(app, sel);
+            var fmt = RadialHintFormat(dpi);
+            float tw = MeasureTextWidth(hint, fmt) + 30f * dpi;
+            float hh = 26f * dpi;
+            float top = c.Y + R + 12f * dpi;
+            DrawPanelCard(app, new RectF
+            {
+                MinX = c.X - tw * 0.5f, MinY = top,
+                MaxX = c.X + tw * 0.5f, MaxY = top + hh,
+            }, hh * 0.5f);
+            _scratch.Color = theme.Text;
+            _ctx.DrawText(hint, fmt, new Rect(c.X - tw * 0.5f, top, tw, hh), _scratch);
+        }
+    }
+
+    /// <summary>圆盘投影：照面板的"层叠胀法"（主题推上来几层就画几层，由大到小）。</summary>
+    private void DrawDiscShadow(InkEngine app, Vector2 c, float R)
+    {
+        var th = app.FloatingTheme;
+        float dpi = Dpi / 96f;
+        for (int i = th.Shadow.Length - 1; i >= 0; i--)
+        {
+            var layer = th.Shadow[i];
+            _scratch.Color = layer.Color;
+            float r2 = R + layer.Inflate * dpi;
+            _ctx.FillEllipse(new Ellipse(new Vector2(c.X, c.Y + layer.Dy * dpi), r2, r2), _scratch);
+        }
+    }
+
+    /// <summary>悬停那一行字：一句人话（"已经是笔：换下一色"这种）。</summary>
+    private static string RadialHintFor(InkEngine app, int i)
+    {
+        bool already = i switch
+        {
+            0 => app.Tool == Tool.Pen,
+            4 => app.Tool == Tool.Highlighter,
+            5 => app.Tool == Tool.Eraser || app.Tool == Tool.PixelEraser,
+            6 => app.Tool == Tool.Marquee,
+            7 => app.Tool == Tool.Laser,
+            _ => false,
+        };
+        return i switch
+        {
+            0 => already ? "已经是笔：换下一色" : "切到笔",
+            1 => "用黑笔",
+            2 => "用红笔",
+            3 => "用蓝笔",
+            4 => already ? "已经是荧光笔：换下一色" : "切到荧光笔",
+            5 => already ? "整笔擦 ⇄ 面积擦" : "切到橡皮",
+            6 => already ? "矩形 ⇄ 套索" : "切到框选",
+            _ => already ? "已经是激光笔" : "切到激光笔",
+        };
+    }
+
+    /// <summary>
+    /// 呼出盘里的一个图标：照主条那套线性 24px 画（坐标以按钮中心为原点）。
+    /// 颜色不是图标，是"色片"（和上带色片同款：26 圆角方块 + 顶部高光）。
+    /// </summary>
+    private void DrawRadialIcon(int i, Vector2 p, float dpi, UiTheme theme, bool selected)
+    {
+        if (i >= 1 && i <= 3)
+        {
+            DrawRadialSwatch(i, p, dpi);
+            return;
+        }
+
+        var ink = selected ? theme.ActiveText : theme.Text;
+        float w = 1.9f * dpi;
+        _scratch.Color = ink;
+        Vector2 V(float x, float y) => p + new Vector2(x * dpi, y * dpi);
+
+        switch (i)
+        {
+            case 0:   // 笔（主条那支"笔尖"：五段轮廓 + 中缝）
+                _ctx.DrawLine(V(-7.5f, 7.5f), V(-5f, 0.2f), _scratch, w, Gfx.Round);
+                _ctx.DrawLine(V(-5f, 0.2f), V(3.4f, -8.2f), _scratch, w, Gfx.Round);
+                _ctx.DrawLine(V(3.4f, -8.2f), V(8.2f, -3.4f), _scratch, w, Gfx.Round);
+                _ctx.DrawLine(V(8.2f, -3.4f), V(-0.2f, 5f), _scratch, w, Gfx.Round);
+                _ctx.DrawLine(V(-0.2f, 5f), V(-7.5f, 7.5f), _scratch, w, Gfx.Round);
+                _ctx.DrawLine(V(-5f, 0.2f), V(-0.2f, 5f), _scratch, w * 0.8f, Gfx.Round);
+                break;
+
+            case 4:   // 荧光笔：粗斜条 + 亮头
+            {
+                var hl = InkPalette.HighlighterBand[0].Color;
+                _ctx.DrawLine(V(-8.5f, 7.5f), V(3.5f, -4.5f),
+                              Brush(new Color4(hl.R, hl.G, hl.B, 0.95f)), 6.5f * dpi, Gfx.Round);
+                _ctx.DrawLine(V(3.5f, -4.5f), V(8f, -9f),
+                              Brush(new Color4(hl.R, hl.G, hl.B, 0.55f)), 3.6f * dpi, Gfx.Round);
+                break;
+            }
+
+            case 5:   // 橡皮：斜块轮廓 + 中缝
+                _ctx.DrawLine(V(-8.5f, 3.5f), V(0f, -5f), _scratch, w, Gfx.Round);
+                _ctx.DrawLine(V(0f, -5f), V(5f, 0f), _scratch, w, Gfx.Round);
+                _ctx.DrawLine(V(5f, 0f), V(-3.5f, 8.5f), _scratch, w, Gfx.Round);
+                _ctx.DrawLine(V(-3.5f, 8.5f), V(-8.5f, 8.5f), _scratch, w, Gfx.Round);
+                _ctx.DrawLine(V(-8.5f, 8.5f), V(-8.5f, 3.5f), _scratch, w, Gfx.Round);
+                _ctx.DrawLine(V(-5.5f, 0.5f), V(1f, 7f), _scratch, w * 0.8f, Gfx.Round);
+                break;
+
+            case 6:   // 框选：虚线方框 + 四角点
+                _ctx.DrawRectangle(new Vortice.RawRectF(p.X - 8f * dpi, p.Y - 8f * dpi,
+                                                        p.X + 8f * dpi, p.Y + 8f * dpi),
+                                   _scratch, w, Gfx.Dashed);
+                foreach (var (sx, sy) in new[] { (-1f, -1f), (1f, -1f), (-1f, 1f), (1f, 1f) })
+                    _ctx.FillEllipse(new Ellipse(V(sx * 8f, sy * 8f), 1.9f * dpi, 1.9f * dpi), _scratch);
+                break;
+
+            default:  // 7 激光：红点 + 光晕 + 三道光束
+            {
+                var red = new Color4(1f, 0.16f, 0.16f, 0.95f);
+                _ctx.FillEllipse(new Ellipse(V(-3.5f, 3.5f), 3.4f * dpi, 3.4f * dpi), Brush(red));
+                _scratch.Color = new Color4(red.R, red.G, red.B, 0.45f);
+                _ctx.DrawEllipse(new Ellipse(V(-3.5f, 3.5f), 6f * dpi, 6f * dpi), _scratch, 1.4f * dpi);
+                _scratch.Color = new Color4(red.R, red.G, red.B, 0.85f);
+                _ctx.DrawLine(V(1f, -1f), V(8.5f, -8.5f), _scratch, w, Gfx.Round);
+                _ctx.DrawLine(V(1f, -1f), V(-4.5f, -6.5f), _scratch, w * 0.9f, Gfx.Round);
+                _ctx.DrawLine(V(1f, -1f), V(6.5f, 4.5f), _scratch, w * 0.9f, Gfx.Round);
+                break;
+            }
+        }
+    }
+
+    /// <summary>颜色扇区的"色片"：26 圆角方块 + 顶部白高光 + 暗描边（和上带色片同款）。</summary>
+    private void DrawRadialSwatch(int i, Vector2 p, float dpi)
+    {
+        var col = InkPalette.PenBand[i - 1].Color;
+        float r = 13f * dpi;
+        var box = new Vortice.RawRectF(p.X - r, p.Y - r, p.X + r, p.Y + r);
+        var rr = new RoundedRectangle(box, 8f * dpi, 8f * dpi);
+
+        _ctx.FillRoundedRectangle(rr, Brush(col));
+        _ctx.PushAxisAlignedClip(new Vortice.RawRectF(p.X - r - 1f, p.Y - r - 1f, p.X + r + 1f, p.Y),
+                                 AntialiasMode.Aliased);
+        _scratch.Color = new Color4(1f, 1f, 1f, 0.16f);
+        _ctx.FillRoundedRectangle(rr, _scratch);
+        _ctx.PopAxisAlignedClip();
+        _scratch.Color = new Color4(0f, 0f, 0f, 0.28f);
+        _ctx.DrawRoundedRectangle(rr, _scratch, 1f * dpi);
+    }
+
+    private static Vector2 OnCircle(Vector2 c, float r, float deg)
+    {
+        float a = deg * MathF.PI / 180f;
+        return new Vector2(c.X + r * MathF.Cos(a), c.Y + r * MathF.Sin(a));
+    }
+
+    private IDWriteTextFormat _radialHintFmt;
+    private float _radialHintPx;
+    private IDWriteTextFormat _radialCenterFmt;
+    private float _radialCenterPx;
+
+    /// <summary>悬停那一行字的格式（12px，塞在盘下的小白条里）。</summary>
+    private IDWriteTextFormat RadialHintFormat(float dpi)
+    {
+        float px = MathF.Max(10f, MathF.Round(12f * dpi));
+        if (_radialHintFmt == null || _radialHintPx != px)
+        {
+            _radialHintFmt?.Dispose();
+            _radialHintFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _radialHintFmt.TextAlignment = TextAlignment.Center;
+            _radialHintFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _radialHintPx = px;
+        }
+        return _radialHintFmt;
+    }
+
+    private IDWriteTextFormat RadialCenterFormat(float dpi)
+    {
+        float px = MathF.Max(12f, MathF.Round(17f * dpi));
+        if (_radialCenterFmt == null || _radialCenterPx != px)
+        {
+            _radialCenterFmt?.Dispose();
+            _radialCenterFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.Bold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _radialCenterFmt.TextAlignment = TextAlignment.Center;
+            _radialCenterFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _radialCenterPx = px;
+        }
+        return _radialCenterFmt;
     }
 
     /// <summary>

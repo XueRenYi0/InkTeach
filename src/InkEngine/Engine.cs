@@ -2181,6 +2181,10 @@ public partial class InkEngine
         (Native.MOD_CONTROL, 0x4C /*L*/, KeyAction.ToolLaser),
         (Native.MOD_CONTROL, 0x45 /*E*/, KeyAction.ToolEraser),
         (Native.MOD_CONTROL, 0x5A /*Z*/, KeyAction.Undo),
+        // 呼出盘也进这张表（用户 2026-09-30 定 "Ctrl+Q"）：放映时前台是 PPT/WPS，
+        // 应用内收不到键盘；挂成临时全局键之后，按住/划/松手两条路都归我们。
+        // ⚠ WM_HOTKEY 只有按下、没有松手——松手靠 PumpRadialPalette 每帧轮询（见那里）。
+        (Native.MOD_CONTROL, 0x51 /*Q*/, KeyAction.RadialPalette),
         // 放映时方向键也归我们：**有选中 → 微调；没选中 → ←→ 代 WPS 翻页**
         // （键盘在我们手里，不拦的话 WPS 收不到 ←→，什么都不发生——用户 2026-09-30 实测）。
         (0u, 0x25 /*←*/, KeyAction.PptPrev),
@@ -2216,7 +2220,7 @@ public partial class InkEngine
             else Native.UnregisterHotKey(h, id);
         }
         _pptHotkeysOn = on;
-        Console.WriteLine(on ? "放映批注模式：工具键（Ctrl+P/I/L/E/Z）与方向键已临时升级为全局热键"
+        Console.WriteLine(on ? "放映批注模式：工具键（Ctrl+P/I/L/E/Z/Q）与方向键已临时升级为全局热键"
                             : "放映临时全局热键已注销（退出放映或开着穿透）");
     }
 
@@ -2252,6 +2256,7 @@ public partial class InkEngine
 
             NowMs = _clock.Elapsed.TotalMilliseconds;
             PumpKeyGestures();            // 工具键的手势：长按判定 + 连按换色的延迟结算
+            PumpRadialPalette();          // 呼出盘：出盘延迟 / 松手轮询 / 超时
 
             if (NowMs >= _autoExitAt) break;
 
@@ -2332,6 +2337,7 @@ public partial class InkEngine
         // 两边都是幂等的（TakeDirty 取走就清、SameAs 挡重复）。
         StepPpt();
         StepPptBar();     // 底部那两条的长按判定（理由同上，自检那条路也走它）
+        PumpRadialPalette();   // 呼出盘同理：自检用"抽消息＋渲染"驱动，不走主循环
 
         // 书写期间的 GC 低延迟档：超时退回。放在这里**和自动存档同一个理由**——
         // 挂主循环里的话，自检那条路永远验不到"超时能退回"（见 GcLatency.cs）。
@@ -2883,7 +2889,8 @@ public partial class InkEngine
     internal bool NeedsFrame()
     {
         _animating = Laser.Visible || _drawing || SelFlashing
-                   || UiIsAnimatingNow || _camAnimating;
+                   || UiIsAnimatingNow || _camAnimating
+                   || RadialPaletteActive;   // 呼出盘开着要连续出帧（出盘延迟 + 松手轮询）
         return _dirty || _animating;
     }
 
@@ -2899,6 +2906,10 @@ public partial class InkEngine
         if (!ReadPointer(id, out float sx, out float sy, out float pressure, out bool inverted, out uint ptype)) return;
         LastPointerType = ptype;
         TouchDiagFeed(id, ptype, down: true);
+
+        // **落笔 = 取消呼出盘**：划盘是悬停动作，落笔表示"我要写字了"（设计稿附录 C）。
+        if (RadialPaletteActive) CancelRadialPalette("落笔");
+
         float screenX = sx, screenY = sy;
         float x = sx, y = sy;
         ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布
@@ -7420,11 +7431,18 @@ public partial class InkEngine
         // 手测台：事件流水。撤销尤其重要——"擦完马上撤销"就是"这一擦不是我想要的"。
         if (EraserTelemetry != null && action != KeyAction.None)
             EraserTelemetry.Note(KeyMap.Describe(action), NowMs);
+
+        // 呼出盘开着时，别的动作先把它收掉（它自己的"再按一次"不算；Esc 在 HandleKeyDown 里单独处理）。
+        if (RadialPaletteActive && action != KeyAction.RadialPalette)
+            CancelRadialPalette("其它动作");
+
         switch (action)
         {
             // 穿透开关（全局 Ctrl+Alt+T 这条同一条路）：退出时恢复进穿透前的板态，
             // 见 SetPassThrough 的 restoreBoard。
             case KeyAction.TogglePassThrough: SetPassThrough(!PassThrough, restoreBoard: true); break;
+            // 呼出盘：按住才出来的"标迹菜单"（松手确认，见 OpenRadialPalette）。
+            case KeyAction.RadialPalette: OpenRadialPalette(); break;
             // 工具键统一走 ToolKeyPress：**不管是应用内键还是"放映时的临时全局热键"**，
             // 都要有"已经是它 → 换色/换档"这条逻辑（用户 2026-09-30 实测：放映里 Ctrl+P
             // 能切到笔了，但已经是笔时再按不换色——就是因为这条热键路径漏了 ToolKeyPress）。
@@ -7518,6 +7536,9 @@ public partial class InkEngine
     /// </summary>
     private void SwitchTool(Tool t)
     {
+        // 任何换工具（面板格 / 工具键 / 自检）都要先把呼出盘收掉——盘还在、
+        // 工具已经换走，是最容易看出来的状态打架。
+        if (RadialPaletteActive) CancelRadialPalette("换工具");
         // 换到截图工具 = 记下"进截图之前用的工具"（8.3.1：Esc 取消时要回到它）。
         // 只记第一次（进来之后 Tool 已经是 Capture，不会再覆盖）。
         if (t == Tool.Capture && Tool != Tool.Capture) _toolBeforeCapture = Tool;
@@ -7641,6 +7662,9 @@ public partial class InkEngine
         // 只在"真的从关到开"这一下记——重复调 SetPassThrough(true) 时 BoardOn 已经被关掉了，
         // 再记一次就会把外面的快照覆盖成 false，退出时反而不恢复。
         if (on && !PassThrough) _boardBeforePassThrough = BoardOn;
+
+        // 进穿透 = "键盘/指针都给下层"：开着的呼出盘收掉（和 8.5 工具键不响应同一条语义）。
+        if (on && RadialPaletteActive) CancelRadialPalette("进穿透");
 
         PassThrough = on;
         // 穿透 = "键盘让给下层"：放映临时全局键跟着挂/摘（用户 2026-09-30 定，
@@ -11104,6 +11128,248 @@ public partial class InkEngine
         DoToolKeyRepeat(a);
     }
 
+    // =====================================================================
+    //  呼出盘（Ctrl+Q）：按住 → 划向扇区 → 松手
+    // =====================================================================
+    //
+    // 来龙去脉：《调研-笔键方案.md》附录 C/D（键盘呼出版；笔身键版留待真机实测硬件）。
+    // 行为一句话：**按住才出来的标迹菜单**——按着不动会看到盘，120ms 内直接划走 =
+    // 盘不闪（熟手路），松手确认、Esc / 落笔 / 松在中心 = 取消。
+    //
+    // 和主程序其它部分的接口，全部照现有语义：
+    //   · 穿透下不响应（和工具键 8.5 同一条："穿透 = 用下面那个软件"）；
+    //   · 放映时它进 "临时全局键" 那张表（前台是 PPT/WPS，应用内收不到键盘）；
+    //   · 扇区里选工具 = 和按 Ctrl+P/I/L/E/M **同一条命令**（含"已经是它 → 换色/换档"）；
+    //   · 颜色扇区 = "给我这支颜色的笔"（不在笔上就切到笔，走 SwitchTool）。
+    //
+    // 扇区顺序（从北起、顺时针）：笔 / 黑 / 红 / 蓝 / 荧光笔 / 橡皮 / 框选 / 激光。
+    // 黑红蓝 = `InkPalette.PenBand` 的前三个（色带本来就是"常用的排前面：黑红蓝绿…"）。
+    // 尺寸与视觉规格对齐（2026-09-30 用户拍板：方案 A、直径 192）：
+    // 盘半径 96、死区 24、锁定 36。按钮环半径 60、按钮半宽 23（见 Overlay）——
+    // 锁定距离 36 ≈ 按钮内沿（60−23=37），"划出去"和"摸到按钮"是同一个动作。
+    private const float RadialRadiusLogical = 96f;
+    private const float RadialDeadZoneLogical = 24f;
+    private const float RadialLockLogical = 36f;
+    private const double RadialShowDelayMs = 120;     // 出盘延迟（熟手路：不等盘直接划）
+    private const double RadialTimeoutMs = 5000;      // 防呆：按太久没松手就自行取消
+
+    internal bool RadialPaletteActive { get; private set; }
+    internal bool RadialPaletteVisible { get; private set; }
+    internal int RadialPaletteSector { get; private set; } = -1;
+    internal float RadialCenterX, RadialCenterY;      // 画布坐标（和 PointerX/Y 同源）
+
+    private double _radialOpenedAtMs;
+    private bool _radialMoved;                        // 离开过锁定距离（中央文案用）
+    private uint _radialVk = 0x51;                    // 呼出键的主键（松手轮询按它查）
+
+    /// <summary>扇区名：画盘、日志、自检共用一份（顺序 = 从北顺时针）。</summary>
+    internal static readonly string[] RadialSectorNames =
+        { "笔", "黑", "红", "蓝", "荧光笔", "橡皮", "框选", "激光" };
+
+    /// <summary>中央文案要用的"划过又回中心"判据（盘开着时才有意义）。</summary>
+    internal bool RadialMovedForDraw => _radialMoved;
+
+    /// <summary>打开呼出盘（按住的那一刻）。条件不满足就静默不动。</summary>
+    private void OpenRadialPalette()
+    {
+        if (RadialPaletteActive) return;
+        if (PassThrough)
+        {
+            Console.WriteLine("穿透模式下：呼出盘不响应（先退出穿透）");
+            return;
+        }
+        if (CaptureActive) return;
+        if (_drawing)
+        {
+            Console.WriteLine("书写中：呼出盘不响应（抬笔后再按）");
+            return;
+        }
+
+        // 记下这次实际绑定的主键（键位可改；松手轮询按它查，写死 Q 会在改键后失灵）。
+        var binding = Keys.Find(KeyScope.Annotation, KeyAction.RadialPalette);
+        _radialVk = binding != null && binding.Chord.IsValid ? binding.Chord.Vk : 0x51;
+
+        RadialPaletteActive = true;
+        RadialPaletteVisible = false;          // 120ms 之后（或移动之后）才真正画出来
+        RadialPaletteSector = -1;
+        _radialMoved = false;
+        _radialOpenedAtMs = NowMs;
+        RadialCenterX = PointerX;              // 盘心 = 按下的那一刻指针在哪
+        RadialCenterY = PointerY;
+        _dirty = true;
+        Console.WriteLine("呼出盘：按住划向扇区，松手确认（松在中心/划回中心/落笔 = 取消）");
+    }
+
+    /// <summary>松手 = 确认。没位移/死区 = 取消；有扇区就执行那条命令。</summary>
+    private void CommitRadialPalette()
+    {
+        if (!RadialPaletteActive) return;
+        UpdateRadialSelection();               // 以松手这一刻的指针为准（快划不丢）
+        int sec = RadialPaletteSector;
+
+        RadialPaletteActive = false;
+        RadialPaletteVisible = false;
+        RadialPaletteSector = -1;
+        _dirty = true;
+
+        if (sec < 0)
+        {
+            Console.WriteLine("呼出盘 → 取消");
+        }
+        else
+        {
+            Console.WriteLine($"呼出盘 → {RadialSectorNames[sec]}");
+            switch (sec)
+            {
+                case 0: ToolKeyPress(KeyAction.ToolPen); break;
+                case 1: PickPenColorFromPalette(0); break;
+                case 2: PickPenColorFromPalette(1); break;
+                case 3: PickPenColorFromPalette(2); break;
+                case 4: ToolKeyPress(KeyAction.ToolHighlighter); break;
+                case 5: ToolKeyPress(KeyAction.ToolEraser); break;
+                case 6: ToolKeyPress(KeyAction.ToolMarquee); break;
+                case 7: ToolKeyPress(KeyAction.ToolLaser); break;
+            }
+        }
+        ApplyCursor();
+        _dirty = true;
+    }
+
+    /// <summary>颜色扇区 = "给我这支颜色的笔"（不在笔上就切到笔；穿透互斥等照常态）。</summary>
+    private void PickPenColorFromPalette(int bandIndex)
+    {
+        bandIndex = Math.Clamp(bandIndex, 0, InkPalette.PenBand.Length - 1);
+        if (Tool != Tool.Pen) SwitchTool(Tool.Pen);
+        SetColorFromUi(InkPalette.PenBand[bandIndex].Color);
+    }
+
+    private void CancelRadialPalette(string why)
+    {
+        if (!RadialPaletteActive) return;
+        RadialPaletteActive = false;
+        RadialPaletteVisible = false;
+        RadialPaletteSector = -1;
+        _dirty = true;
+        Console.WriteLine($"呼出盘 → 取消（{why}）");
+    }
+
+    /// <summary>
+    /// 每帧一次：出盘延迟、方向重算、松手轮询、超时。
+    ///
+    /// **为什么要有轮询**：放映里的临时全局键只给 WM_HOTKEY（按下），没有松手消息；
+    /// 应用内那条一旦中途丢了焦点也收不到 KeyUp。`GetAsyncKeyState` 看的是物理键状态，
+    /// 两条路都能兜住（60fps 下误差 ≤16ms）。
+    /// </summary>
+    private void PumpRadialPalette()
+    {
+        if (!RadialPaletteActive) return;
+
+        if (RadialTestHold)
+        {
+            // 自检/摆样：不轮询、不超时，只把盘按出来（出图与状态断言用）。
+            if (!RadialPaletteVisible) { RadialPaletteVisible = true; _dirty = true; }
+            UpdateRadialSelection();
+            return;
+        }
+
+        if (!RadialPaletteVisible && NowMs - _radialOpenedAtMs >= RadialShowDelayMs)
+        {
+            RadialPaletteVisible = true;
+            _dirty = true;
+        }
+
+        UpdateRadialSelection();
+
+        if ((Native.GetAsyncKeyState((int)_radialVk) & 0x8000) == 0)
+        {
+            CommitRadialPalette();
+            return;
+        }
+        if (NowMs - _radialOpenedAtMs > RadialTimeoutMs)
+            CancelRadialPalette("按太久");
+    }
+
+    /// <summary>按当前指针位置重算扇区（死区 / 锁定距离 / 跨扇区滞回都在这里）。</summary>
+    private void UpdateRadialSelection()
+    {
+        float dpi = DpiScale;
+        float dx = PointerX - RadialCenterX, dy = PointerY - RadialCenterY;
+        float dist = MathF.Sqrt(dx * dx + dy * dy);
+        float dead = RadialDeadZoneLogical * dpi;
+        float lockR = RadialLockLogical * dpi;
+
+        int sec;
+        if (dist < dead)
+        {
+            sec = -1;                                   // 死区：松手 = 取消
+        }
+        else
+        {
+            float deg = MathF.Atan2(dy, dx) * (180f / MathF.PI);
+            if (RadialPaletteSector < 0 && dist < lockR)
+            {
+                sec = -1;                               // 还不够远：先别锁方向
+            }
+            else if (RadialPaletteSector >= 0)
+            {
+                // 滞回：已经选中一个扇区时，出界 9° 以内仍算它（边界抖动不跳扇区）。
+                float delta = Normalize180(deg - (-90f + 45f * RadialPaletteSector));
+                sec = MathF.Abs(delta) <= 22.5f + 9f ? RadialPaletteSector : SectorIndexFromDeg(deg);
+            }
+            else sec = SectorIndexFromDeg(deg);
+        }
+
+        if (dist >= lockR) _radialMoved = true;
+        if (sec != RadialPaletteSector)
+        {
+            RadialPaletteSector = sec;
+            _dirty = true;
+        }
+    }
+
+    /// <summary>指针角度 → 扇区号（0 = 北，顺时针）。北在上：-90° 起、每 45° 一个。</summary>
+    internal static int SectorIndexFromDeg(float deg)
+    {
+        int i = (int)MathF.Round(deg / 45f);
+        return ((i + 2) % 8 + 8) % 8;
+    }
+
+    private static float Normalize180(float deg)
+    {
+        while (deg <= -180f) deg += 360f;
+        while (deg > 180f) deg -= 360f;
+        return deg;
+    }
+
+    // ---- 呼出盘自检钩子（--radialtest / --radialshow）----
+
+    /// <summary>自检/摆样：跳过松手轮询与超时（状态断言与"定格出图"用）。</summary>
+    internal bool RadialTestHold;
+
+    internal void RadialOpenForTest(float canvasX, float canvasY)
+    {
+        PointerX = canvasX; PointerY = canvasY;
+        OpenRadialPalette();
+    }
+
+    internal void RadialMoveForTest(float canvasX, float canvasY)
+    {
+        PointerX = canvasX; PointerY = canvasY;
+        UpdateRadialSelection();
+    }
+
+    internal void RadialPumpForTest() => PumpRadialPalette();
+    internal void RadialCommitForTest() => CommitRadialPalette();
+    internal void RadialCancelForTest(string why) => CancelRadialPalette(why);
+
+    /// <summary>自检：放映临时全局键表里有没有某个动作（以及它的键）。</summary>
+    internal static (uint Mod, uint Vk)? PptHotkeyEntryForTest(KeyAction a)
+    {
+        foreach (var (mod, vk, act) in PptHotkeys)
+            if (act == a) return (mod, vk);
+        return null;
+    }
+
     private bool HandleKeyDown(IntPtr wParam, bool isRepeat)
     {
         // 键位表驱动：按"当前修饰键状态 + 主键"拼成一个和弦，去批注内作用域里查。
@@ -11115,8 +11381,30 @@ public partial class InkEngine
         if ((Native.GetAsyncKeyState(0x10 /*VK_SHIFT*/) & 0x8000) != 0) mods |= KeyChord.ModShift;
 
         var chord = new KeyChord(mods, (uint)wParam.ToInt32());
+
+        // 呼出盘开着时，Esc = 取消。
+        // ⚠ 这条只在"Ctrl 已经先松开"之后才真能收到——**Ctrl+Esc 是系统保留的
+        //    "打开开始菜单"**，Windows 不会把它送进窗口（真机自检里量到过：
+        //    按住 Ctrl+Q 时按 Esc，我们一条消息都收不到）。所以提交只认 Q 松手
+        //    （见 HandleKeyUp），先松 Ctrl 盘还留着，这时 Esc 才有效；
+        //    主取消路径是"松在死区 / 划回中心 / 落笔"。
+        if (RadialPaletteActive && wParam.ToInt32() == 0x1B /*VK_ESCAPE*/)
+        {
+            CancelRadialPalette("Esc");
+            _dirty = true;
+            return true;
+        }
+
         var hit = Keys.For(KeyScope.Annotation).FirstOrDefault(b => b.Chord.Equals(chord));
         if (hit == null) return false;
+
+        // 呼出盘和工具键一样"只看第一次按下"（按住不放的自动重复不再重开）。
+        if (hit.Action == KeyAction.RadialPalette)
+        {
+            if (!isRepeat) RunAction(hit.Action);
+            _dirty = true;
+            return true;
+        }
 
         if (IsToolKey(hit.Action))
         {
@@ -11134,6 +11422,17 @@ public partial class InkEngine
     /// <summary>松键：只服务工具键的手势（长按/双击判定），其余键不看松键。</summary>
     private bool HandleKeyUp(IntPtr wParam)
     {
+        // 呼出盘：**Q 松手 = 确认；只认主键，不认 Ctrl**。
+        // 为什么不认 Ctrl：① 用户经常先松 Ctrl 再松 Q，按和弦查会漏；
+        // ② 先松 Ctrl 之后盘还留着，这时按 Esc 才是"真能送到我们手里"的取消
+        //   （Ctrl+Esc 被系统的开始菜单占了，见 HandleKeyDown 那段）。
+        if (RadialPaletteActive && wParam.ToInt32() == _radialVk)
+        {
+            CommitRadialPalette();
+            _dirty = true;
+            return true;
+        }
+
         uint mods = 0;
         if ((Native.GetAsyncKeyState(0x11 /*VK_CONTROL*/) & 0x8000) != 0) mods |= KeyChord.ModCtrl;
         if ((Native.GetAsyncKeyState(0x12 /*VK_MENU*/) & 0x8000) != 0) mods |= KeyChord.ModAlt;
