@@ -24874,7 +24874,8 @@ internal sealed class App : InkEngine.InkEngine
             SettleFrames(700);                       // 心跳（40ms 一颗）在笔画进行中一直在跑
             Check("长按 0.5 秒 = 进入选择（对象上 = 点选）",
                   Doc.Selected.Count == 1 && TouchModeForTest == TouchMode.SelDrag,
-                  $"选中 {Doc.Selected.Count}，模式 {TouchModeForTest}");
+                  $"选中 {Doc.Selected.Count}，模式 {TouchModeForTest}，"
+                  + $"拖动中 = {SelDragging}，丢了捕获 {_cntCaptureLost} 次");
 
             // 选中后：单指拖 = 移动（一步撤销）
             var before = s.WorldBounds;
