@@ -1247,6 +1247,12 @@ public partial class InkEngine
     internal float MqMinX, MqMinY, MqMaxX, MqMaxY;
     internal bool PassThrough;
     /// <summary>
+    /// 进穿透前的白板状态——"穿透开关"退出时按它恢复（见 <see cref="SetPassThrough"/> 的
+    /// `restoreBoard`；用户 2026-09-30 拍板："白板开还是开、关还是关"）。
+    /// 换工具退出穿透**不**恢复（那是"我就要写"，见 SwitchTool 与 SetPassThrough 的注释）。
+    /// </summary>
+    private bool _boardBeforePassThrough;
+    /// <summary>
     /// Windows only honours click-through for a *layered* window, so the
     /// default has to include WS_EX_LAYERED. The other modes are kept as
     /// controls for the automated pass-through test.
@@ -7399,7 +7405,9 @@ public partial class InkEngine
             EraserTelemetry.Note(KeyMap.Describe(action), NowMs);
         switch (action)
         {
-            case KeyAction.TogglePassThrough: SetPassThrough(!PassThrough); break;
+            // 穿透开关（全局 Ctrl+Alt+T 这条同一条路）：退出时恢复进穿透前的板态，
+            // 见 SetPassThrough 的 restoreBoard。
+            case KeyAction.TogglePassThrough: SetPassThrough(!PassThrough, restoreBoard: true); break;
             // 工具键统一走 ToolKeyPress：**不管是应用内键还是"放映时的临时全局热键"**，
             // 都要有"已经是它 → 换色/换档"这条逻辑（用户 2026-09-30 实测：放映里 Ctrl+P
             // 能切到笔了，但已经是笔时再按不换色——就是因为这条热键路径漏了 ToolKeyPress）。
@@ -7531,6 +7539,8 @@ public partial class InkEngine
         // 穿透开着的时候点击落到下层程序上，画布根本收不到笔——这时"选中了笔"是个假状态：
         // 按钮亮着、写不出字。所以换工具（点面板也好、按热键也好）等于一句"我要开始用了"，
         // 顺手把穿透关掉。反过来，点面板上那个"鼠标"格是明说要穿透，它单独开。
+        // 这条退出**不恢复白板**（restoreBoard: false）：换工具的意思是"我现在就要写"，
+        // 画布要保持眼前所见——突然盖回白板反而是惊吓（和"穿透开关"退出区分，见 SetPassThrough）。
         if (PassThrough) SetPassThrough(false);
 
         // 半路换工具：那条还在写的激光轨迹**当作抬手收尾**（整批开始 2 秒计时）。
@@ -7598,8 +7608,23 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
-    private void SetPassThrough(bool on)
+    /// <summary>
+    /// 开关穿透。
+    ///
+    /// `restoreBoard`：退出穿透时，要不要把**进穿透时被顺手关掉的白板**恢复。
+    ///   · **穿透开关**退出（面板那一格 / 全局 `Ctrl+Alt+T`）传 true——
+    ///     老师按它的意思是"回到刚才"，所以"板开还是开、关还是关"；
+    ///   · **换工具**退出（`SwitchTool` 里的自动关穿透）传 false——那条路的意思是
+    ///     "我现在就要写"，画布要保持眼前所见（露出来的下层应用），突然盖回白板反而是惊吓；
+    ///     想回板，再点一下白板格就行（用户 2026-09-30 拍板，见《调研-快捷键-焦点与穿透》8.3）。
+    /// </summary>
+    private void SetPassThrough(bool on, bool restoreBoard = false)
     {
+        // 进穿透先记下板态（要被"开关退出"用来恢复）。
+        // 只在"真的从关到开"这一下记——重复调 SetPassThrough(true) 时 BoardOn 已经被关掉了，
+        // 再记一次就会把外面的快照覆盖成 false，退出时反而不恢复。
+        if (on && !PassThrough) _boardBeforePassThrough = BoardOn;
+
         PassThrough = on;
         // 穿透打开/关掉时把激光轨迹清掉（原来是把 `Visible` 置假，等价于"立刻全没"）。
         // ⚠ 别只隐藏不清：轨迹会一直留在集合里，`Laser.Visible` 仍为真 →
@@ -7610,8 +7635,8 @@ public partial class InkEngine
         //   · 开白板 → 关穿透：白板是不透明的一层，穿透是"点击落到下层程序"；
         //     两个一起开着，老师看到的是白板、点到的却是白板下面那个看不见的窗口。
         //   · 开穿透 → 关白板：同上，反过来也一样说不通。
-        // 关掉的那一方**不自动回来**（和"关板不自动开穿透"一致）：老师再点一下就行，
-        // 而"悄悄替你恢复"才是难查的那类行为。
+        // 被关掉的白板**开关退出时恢复**（restoreBoard，用户 2026-09-30 拍板）；
+        // **换工具退出不恢复**——理由见方法头那两行。
         if (on && BoardOn)
         {
             BoardOn = false;
@@ -7624,14 +7649,29 @@ public partial class InkEngine
         //（这一句是 `force`：改样式刚把光标恢复成箭头，而缓存里的值已经不成立了）。
         ApplyCursor(force: true);
 
-        // **穿透关掉 = 回到"能批注"的状态 → 必须把键盘/前台要回来**。
-        // 用户 2026-09-30 复现的真 bug：穿透开开关关几次之后，Ctrl+P 这些应用内快捷键
-        // 就彻底死了——因为穿透期间我们的窗口不是前台（样式里也不让它被激活），
-        // 关掉穿透时只恢复了样式、**没人把前台还给我们**，于是按键全被别的窗口收走。
-        // `SetKeyboardMode` 里那句 SetForegroundWindow 正是干这个的（幂等，重复调没副作用）。
-        // ⚠ 和"退出放映要把前台要回来"是同一类补丁，见 Ppt.ExitPptMode——以后凡是
-        //   "从别的状态切回批注态"的地方都要做这一步。
-        if (!on && _windows.Count > 0) SetKeyboardMode(KeyboardMode);
+        if (!on)
+        {
+            // **恢复板态**（只挂"开关退出"）：进穿透前板是开的、现在被我们一起关着 → 开回来。
+            // 恢复要跟 SetBoardFromUi 一样整层作废（底色是烘进分块缓存的）。
+            if (restoreBoard && _boardBeforePassThrough && !BoardOn)
+            {
+                BoardOn = true;
+                Doc.InvalidateAll();
+                NotifyUiStateChanged();
+                _dirty = true;
+                Console.WriteLine("退出穿透：白板恢复到进穿透之前（开着）");
+            }
+            _boardBeforePassThrough = false;   // 快照只服务相邻这几次穿透，用完即清
+
+            // **穿透关掉 = 回到"能批注"的状态 → 必须把键盘/前台要回来**。
+            // 用户 2026-09-30 复现的真 bug：穿透开开关关几次之后，Ctrl+P 这些应用内快捷键
+            // 就彻底死了——因为穿透期间我们的窗口不是前台（样式里也不让它被激活），
+            // 关掉穿透时只恢复了样式、**没人把前台还给我们**，于是按键全被别的窗口收走。
+            // `SetKeyboardMode` 里那句 SetForegroundWindow 正是干这个的（幂等，重复调没副作用）。
+            // ⚠ 和"退出放映要把前台要回来"是同一类补丁，见 Ppt.ExitPptMode——以后凡是
+            //   "从别的状态切回批注态"的地方都要做这一步。
+            if (_windows.Count > 0) SetKeyboardMode(KeyboardMode);
+        }
 
         Console.WriteLine($"pass-through = {on} (mode {PassMode})");
     }
@@ -8381,7 +8421,9 @@ public partial class InkEngine
 
     internal void SetPassThroughFromUi(bool on)
     {
-        SetPassThrough(on);
+        // 界面那格只发"切换"（`!st.PassThrough`），所以这就是"穿透开关"这条路：
+        // 退出时恢复进穿透前的板态（用户 2026-09-30 拍板）。
+        SetPassThrough(on, restoreBoard: true);
         NotifyUiStateChanged();
     }
 
@@ -11020,9 +11062,21 @@ public partial class InkEngine
     /// 工具键的**单击**逻辑（2026-09-30 收口：双击/长按那套手势全部取消，只留单击）：
     ///   · 不是这个工具 → 切过去
     ///   · 已经是它    → 换一个：笔/荧光笔换颜色、橡皮切整笔⇄面积、选择切矩形⇄套索
+    ///
+    /// **穿透模式下整个失效**（用户 2026-09-30 拍板："开了穿透以后，笔、橡皮这些快捷键
+    /// 应该就没有用了，等退出穿透才有用"）：穿透 = "不能画"，这时换工具/换色都没有着落，
+    /// 而且"已经不是笔了、颜色却还在变"正是用户报的那个怪状态。想画画先退出穿透
+    /// （全局 `Ctrl+Alt+T` / 点穿透格），工具键随即恢复。
+    /// 只挡**键盘**这两条路（应用内键 + 放映临时全局键，都汇到这里）；
+    /// 面板上那一格不在此列——点它仍然"顺手关穿透 + 换工具"（没键盘的教室靠它）。
     /// </summary>
     private void ToolKeyPress(KeyAction a)
     {
+        if (PassThrough)
+        {
+            Console.WriteLine("穿透模式下：工具键不响应（先退出穿透）");
+            return;
+        }
         var target = ToolOf(a);
         // 橡皮：回到"上次用的那一种形态"（整笔/面积），不是永远回整笔擦
         if (target == Tool.Eraser) target = _eraserKind;

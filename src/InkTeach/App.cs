@@ -13981,9 +13981,90 @@ internal sealed class App : InkEngine.InkEngine
                   BoardOn && !Host.State.PassThrough,
                   $"板开 = {BoardOn}，穿透 = {Host.State.PassThrough}");
 
+            // ---- ⑥.7b 退出穿透时的板态恢复（2026-09-30 用户拍板）----
+            // 规格：**开关退出**（面板那一格 / Ctrl+Alt+T）= "回到之前"，板开就恢复；
+            //       **换工具退出**（Ctrl+P 等）= "我现在就要写"，板保持关，不能突然盖回来。
+            //       （"墨迹不隐藏"是同一批拍板的结果——那一半没有代码改动，无需断言。）
+            Host.Commands.SetBoard(true);
+            SettleFrames(200);
+            Host.Commands.SetPassThrough(true);      // 进穿透：板被自动关，快照"板开"
+            SettleFrames(250);
+            Host.Commands.SetPassThrough(false);     // 开关退出（和面板格、全局热键同一条路）
+            SettleFrames(250);
+            Check("开关退出穿透：白板恢复到进穿透之前（开着）",
+                  BoardOn && !Host.State.PassThrough,
+                  $"板开 = {BoardOn}，穿透 = {Host.State.PassThrough}");
+
+            Host.Commands.SetPassThrough(true);
+            SettleFrames(250);
+            Host.Commands.SetTool(Tool.Pen);         // 换工具退出（和按 Ctrl+P 同一条路）
+            SettleFrames(250);
+            Check("换工具退出穿透：白板保持关（不自动盖回来）",
+                  !BoardOn && !Host.State.PassThrough && Tool == Tool.Pen,
+                  $"板开 = {BoardOn}，穿透 = {Host.State.PassThrough}，工具 = {Tool}");
+
             Host.Commands.SetBoard(false);
+            Host.Commands.SetPassThrough(true);      // 板本来关着：进出穿透不该凭空开板
+            SettleFrames(200);
+            Host.Commands.SetPassThrough(false);
+            SettleFrames(200);
+            Check("板本来关着：进出穿透后仍是关着", !BoardOn,
+                  $"板开 = {BoardOn}，穿透 = {Host.State.PassThrough}");
+
             Host.Commands.SetTool(Tool.Pen);
             SettleFrames(200);
+        }
+
+        // ---- ⑥.7c 穿透模式下工具键一律不响应（2026-09-30 用户拍板）----
+        //
+        // 用户原话："开了穿透模式以后，快捷键还能调颜色，但是这个时候它又不是笔，
+        // 我感觉这个算 bug。开了穿透模式以后，笔、橡皮这些快捷键应该就没有用了，
+        // 等退出穿透模式以后才有用。"
+        // 判据：穿透开着时按 Ctrl+P（走同一个命令入口）——不换色、不切工具、也不顺手退穿透；
+        // 退出穿透后同一个键立刻恢复。**面板上的工具格不在此列**（点了仍会关穿透，照旧）。
+        {
+            bool SameCol(Color4 a, Color4 b) =>
+                MathF.Abs(a.R - b.R) < 0.02f && MathF.Abs(a.G - b.G) < 0.02f
+                && MathF.Abs(a.B - b.B) < 0.02f;
+
+            // ① 是笔：按 Ctrl+P 不许换色
+            Host.Commands.SetBoard(false);
+            Host.Commands.SetTool(Tool.Pen);
+            Host.Commands.SetColor(InkPalette.PenDefault);
+            SettleFrames(200);
+            var color0 = Host.State.PaletteBase;
+            Host.Commands.SetPassThrough(true);
+            SettleFrames(200);
+            RunActionForTest(KeyAction.ToolPen);
+            RunActionForTest(KeyAction.ToolPen);
+            SettleFrames(200);
+            Check("穿透开着：Ctrl+P 不换色（已经是笔也一样）",
+                  Host.State.PassThrough && Tool == Tool.Pen && SameCol(Host.State.PaletteBase, color0),
+                  $"穿透 = {Host.State.PassThrough}，工具 = {Tool}，色 {Host.State.PaletteBase}");
+
+            // ② 不是笔：不许切工具、也不许顺手退穿透
+            Host.Commands.SetPassThrough(false);
+            Host.Commands.SetTool(Tool.Eraser);
+            SettleFrames(200);
+            Host.Commands.SetPassThrough(true);
+            SettleFrames(200);
+            RunActionForTest(KeyAction.ToolPen);
+            SettleFrames(200);
+            Check("穿透开着：Ctrl+P 不切工具、不顺手退穿透",
+                  Host.State.PassThrough && Tool == Tool.Eraser,
+                  $"穿透 = {Host.State.PassThrough}，工具 = {Tool}");
+
+            // ③ 退出穿透：同一个键立刻恢复
+            Host.Commands.SetPassThrough(false);
+            SettleFrames(200);
+            RunActionForTest(KeyAction.ToolPen);
+            SettleFrames(200);
+            Check("退出穿透后：Ctrl+P 恢复（切回笔）",
+                  !Host.State.PassThrough && Tool == Tool.Pen,
+                  $"穿透 = {Host.State.PassThrough}，工具 = {Tool}");
+
+            Host.Commands.SetTool(Tool.Pen);
+            SettleFrames(150);
         }
 
         // 换工具（走引擎那条路，等同按热键）：上带要跟着换成"选择"的设置条
