@@ -935,7 +935,8 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("                     --save 连「保存」一起点，验到落盘为止）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
         Console.WriteLine("  --pixelerasetest    像素橡皮正确性（切成两段 / 框里无墨 / 一步撤销）");
-        Console.WriteLine("  --dynerasertest     动态橡皮（曲线：慢=0.7 死区 / 快封顶 2.5 / 慢速不抖 / 后门 / 框跟速度 / 快慢扫对比 / 严丝合缝 / 整笔擦）");
+        Console.WriteLine("  --dynerasertest     动态橡皮（曲线：死区到 0.8 / 慢=0.7 / 快封顶 2.5；窗口抗抖；慢扫 vs 快扫；框跟速度；严丝合缝）");
+        Console.WriteLine("  --eraserhud         橡皮读数浮层（左下角实时 速度/目标/当前系数/尺寸；调门槛用，不进界面）");
         Console.WriteLine("  --pixeleraseshow    像素橡皮摆样（擦之前/之后各存一张图，自己抓屏）");
         Console.WriteLine("  --eraserlab [前缀]  橡皮手测台：铺样例 + 记录每条拖拽，给人用鼠标测（不自动退出）");
         Console.WriteLine("  --imagetest         图像对象（上屏 / 复制翻转 / 存档 / 剪贴板）");
@@ -23534,17 +23535,17 @@ internal sealed class App : InkEngine.InkEngine
             Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-38} {detail}");
         }
 
-        // --- ① 曲线（下限 0.7 / 死区 / 斜坡 / 封顶 2.5）------------------------
+        // --- ① 曲线（下限 0.7 / 死区到 0.8 / 斜坡 / 封顶 2.5）--------------------
         bool savedDyn = DynamicEraserForTest;
         DynamicEraserForTest = true;
         float fDead1 = EraserTargetFactorForSpeed(0.05f);   // 死区里头
-        float fDead2 = EraserTargetFactorForSpeed(0.30f);   // 死区边缘（回差带）
-        float fMid = EraserTargetFactorForSpeed(1.0f);      // 斜坡中段
+        float fDead2 = EraserTargetFactorForSpeed(0.70f);   // 回差带（0.6~0.8）
+        float fMid = EraserTargetFactorForSpeed(1.5f);      // 斜坡中段
         float fFast = EraserTargetFactorForSpeed(5.0f);     // 封顶
-        Check("曲线：慢=下限 0.7（死区）/ 中≈1.19 / 快封顶 2.5",
+        Check("曲线：慢=下限 0.7（死区到 0.8）/ 中 1.5→1.4 / 快封顶 2.5",
               MathF.Abs(fDead1 - 0.7f) < 0.001f && MathF.Abs(fDead2 - 0.7f) < 0.001f
-              && MathF.Abs(fMid - 1.1875f) < 0.02f && MathF.Abs(fFast - 2.5f) < 0.001f,
-              $"0.05 → ×{fDead1:F2}、0.30 → ×{fDead2:F2}、1.0 → ×{fMid:F2}、5.0 → ×{fFast:F2}");
+              && MathF.Abs(fMid - 1.4f) < 0.02f && MathF.Abs(fFast - 2.5f) < 0.001f,
+              $"0.05 → ×{fDead1:F2}、0.70 → ×{fDead2:F2}、1.5 → ×{fMid:F2}、5.0 → ×{fFast:F2}");
 
         // --- ② 后门：--eraserfixed 关掉动态 → 系数恒 1 -------------------------
         DynamicEraserForTest = false;
@@ -23553,23 +23554,61 @@ internal sealed class App : InkEngine.InkEngine
               MathF.Abs(fFixed - 1f) < 0.001f, $"5.0px/ms → ×{fFixed:F2}");
         DynamicEraserForTest = true;
 
-        // --- ②b 慢速不忽大忽小（用户 8.3.6 报的）--------------------------------
-        // 手在慢速段本来就是抖的：速度在 0.05~0.28 px/ms 之间来回（全落在死区/回差带里）。
+        // --- ②b 慢速/常规速度不忽大忽小（用户两轮反馈）---------------------------
+        // 手本来就是抖的：速度在 0.05~0.55 px/ms 之间来回（**全落在死区 0.8 以下**）。
         // 合格的样子：系数**单调**朝下限走、绝不回升，而且每步只挪一丁点。
         ResetDynamicEraserForTest();
         float prevF = 1f, worstStep = 0f, lastF = 1f;
         bool rose = false;
-        for (int i = 0; i < 30; i++)
+        for (int i = 0; i < 40; i++)
         {
-            float v = (i % 3 == 0) ? 0.05f : (i % 3 == 1 ? 0.28f : 0.16f);
+            float v = (i % 3 == 0) ? 0.05f : (i % 3 == 1 ? 0.55f : 0.30f);
             lastF = DynamicEraserAdvanceForTest(v, 8.0);
             if (lastF > prevF + 0.0005f) rose = true;
             worstStep = MathF.Max(worstStep, MathF.Abs(lastF - prevF));
             prevF = lastF;
         }
-        Check("慢速不忽大忽小：死区里手抖 → 只缓慢降到 0.7、不回升",
-              !rose && MathF.Abs(lastF - EraserFactorMin) < 0.02f && worstStep <= 0.021f,
-              $"30 步后 ×{lastF:F3}（下限 {EraserFactorMin:F2}），单步最大变化 {worstStep:F3}");
+        Check("慢速/常规速不忽大忽小：死区里手抖 → 只缓慢降到 0.7、不回升",
+              !rose && MathF.Abs(lastF - EraserFactorMin) < 0.02f && worstStep <= 0.011f,
+              $"40 步后 ×{lastF:F3}（下限 {EraserFactorMin:F2}），单步最大变化 {worstStep:F3}");
+
+        // --- ②c 速度窗口：逐次估法很抖，窗口算出来要稳 ---------------------------
+        // 交替喂 (4px, 3ms)=1.33 与 (2px, 9ms)=0.22——真值始终 0.5 px/ms。
+        // 窗口（100ms / 40px 先到先算）出来的速度必须**几乎不动**。
+        ResetDynamicEraserForTest();
+        float wMin = float.MaxValue, wMax = 0f, wLast = 0f;
+        for (int i = 0; i < 90; i++)
+        {
+            bool big = (i % 2 == 0);
+            wLast = DynamicEraserFeedForTest(big ? 4f : 2f, big ? 3.0 : 9.0);
+            if (i >= 24)                                  // 头一个窗口攒满之前不算
+            {
+                wMin = MathF.Min(wMin, wLast);
+                wMax = MathF.Max(wMax, wLast);
+            }
+        }
+        Check("速度窗口：逐次 dist÷dt 在 1.33/0.22 之间跳，窗口稳在真值 0.5",
+              MathF.Abs(wMax - wMin) < 0.05f && MathF.Abs(wLast - 0.5f) < 0.06f,
+              $"窗口速度 {wMin:F3}~{wMax:F3}（真值 0.50）、最后 {wLast:F3}；"
+              + $"逐次估法会跳在 {4f / 3f:F2} 与 {2f / 9f:F2} 之间");
+
+        // --- ②d 真拖那三条的"逻辑版"（不依赖鼠标/抓屏，跑哪儿都验）--------------
+        ResetDynamicEraserForTest();
+        float slowFactor = 1f, fastFactor = 1f;
+        for (int i = 0; i < 40; i++)                       // 慢扫：(20px, 50ms) → 0.4 px/ms，跑 2 秒
+        {
+            float v = DynamicEraserFeedForTest(20f, 50.0);
+            slowFactor = DynamicEraserAdvanceForTest(v, 50.0);
+        }
+        ResetDynamicEraserForTest();
+        for (int i = 0; i < 14; i++)                       // 快扫：(43px, 8ms) → 5.4 px/ms
+        {
+            float v = DynamicEraserFeedForTest(43f, 8.0);
+            fastFactor = DynamicEraserAdvanceForTest(v, 8.0);
+        }
+        Check("慢扫停在 ×0.7、快扫明显更大（真拖那三条的逻辑版）",
+              MathF.Abs(slowFactor - EraserFactorMin) < 0.02f && fastFactor > slowFactor * 1.6f,
+              $"慢扫 ×{slowFactor:F3}（应 0.70）、快扫 ×{fastFactor:F3}");
 
         // --- ③ 看的框 = 擦的范围（同一份尺寸：拖动中跟速度、悬停回基准）----------
         DynamicEraserFactorForTest(5f);                 // → ×2.5

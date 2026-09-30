@@ -2033,6 +2033,8 @@ internal sealed class OverlayWindow : IDisposable
             LastHudMs += swBlit.Elapsed.TotalMilliseconds;
         }
 
+        if (app.EraserHud) DrawEraserHud(app);   // 橡皮读数（8.3.7，默认关；调参用）
+
         // 滚动条（样式 B：一根细线）。画在浮动层，不进内容层。
         DrawScrollBar(app);
 
@@ -2258,6 +2260,13 @@ internal sealed class OverlayWindow : IDisposable
         {
             // 触点诊断（8.3.3）：左下角的小浮层，同性能面板的道理——每帧都要进脏区。
             var h = TouchHudRect(app);
+            if (!h.IsEmpty) r.Add(h);
+        }
+
+        if (app.EraserHud)
+        {
+            // 橡皮读数（8.3.7）：同一角落，每帧都要进脏区（数字一直在变）。
+            var h = EraserHudRect(app);
             if (!h.IsEmpty) r.Add(h);
         }
 
@@ -4920,6 +4929,58 @@ internal sealed class OverlayWindow : IDisposable
         _ctx.DrawRoundedRectangle(new RoundedRectangle(box, 8f * s, 8f * s),
                                   Brush(new Color4(1f, 1f, 1f, 0.25f)), 1f * s);
         _ctx.DrawText(app.TouchHudText ?? "", TouchHudFormat(),
+                      new Rect(box.Left + 10f * s, box.Top + 6f * s,
+                               box.Right - box.Left - 20f * s, box.Bottom - box.Top - 12f * s),
+                      Brush(new Color4(1f, 1f, 1f, 0.95f)));
+    }
+
+    // ---- 橡皮读数浮层（8.3.7，默认关；调参用）--------------------------------
+
+    private const float EraserHudWidthLogical = 760f;
+    private const float EraserHudHeightLogical = 62f;
+
+    /// <summary>橡皮读数浮层的**屏幕坐标**矩形（脏区用）。放在左下角（触点浮层开着就让到它上面）。</summary>
+    private RectF EraserHudRect(InkEngine app)
+    {
+        float s = Dpi / 96f;
+        float m = HudMarginLogical * s;
+        float w = EraserHudWidthLogical * s, h = EraserHudHeightLogical * s;
+        if (Width <= 0 || Height <= 0) return RectF.Empty;
+        float bottom = Height - m - (app.TouchHud ? (TouchHudHeightLogical + 8f) * s : 0f);
+        return new RectF
+        {
+            MinX = OriginX + m, MinY = OriginY + bottom - h,
+            MaxX = OriginX + m + w, MaxY = OriginY + bottom,
+        };
+    }
+
+    private IDWriteTextFormat _eraserHudFmt;
+    private IDWriteTextFormat EraserHudFormat()
+    {
+        if (_eraserHudFmt != null) return _eraserHudFmt;
+        _eraserHudFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 13.5f * (Dpi / 96f), "zh-CN");
+        _eraserHudFmt.TextAlignment = TextAlignment.Leading;
+        _eraserHudFmt.ParagraphAlignment = ParagraphAlignment.Near;
+        _eraserHudFmt.WordWrapping = WordWrapping.NoWrap;
+        return _eraserHudFmt;
+    }
+
+    private void DrawEraserHud(InkEngine app)
+    {
+        if (!app.EraserHud) return;
+        float s = Dpi / 96f;
+        float m = HudMarginLogical * s;
+        float w = EraserHudWidthLogical * s, h = EraserHudHeightLogical * s;
+        if (Width <= 0 || Height <= 0) return;
+
+        float bottom = Height - m - (app.TouchHud ? (TouchHudHeightLogical + 8f) * s : 0f);
+        var box = new Vortice.RawRectF(m, bottom - h, m + w, bottom);
+        _scratch.Color = new Color4(0.10f, 0.11f, 0.14f, 0.80f);
+        _ctx.FillRoundedRectangle(new RoundedRectangle(box, 8f * s, 8f * s), _scratch);
+        _ctx.DrawRoundedRectangle(new RoundedRectangle(box, 8f * s, 8f * s),
+                                  Brush(new Color4(1f, 1f, 1f, 0.25f)), 1f * s);
+        _ctx.DrawText(app.EraserHudText ?? "", EraserHudFormat(),
                       new Rect(box.Left + 10f * s, box.Top + 6f * s,
                                box.Right - box.Left - 20f * s, box.Bottom - box.Top - 12f * s),
                       Brush(new Color4(1f, 1f, 1f, 0.95f)));
