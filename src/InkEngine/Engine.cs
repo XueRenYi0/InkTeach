@@ -1741,6 +1741,8 @@ public partial class InkEngine
         if (float.TryParse(GetUiPref("wv.pixel"), out float vPixel)) PixelEraserWidthLogical = vPixel;
         // 上次用的选择方式（矩形 / 套索）
         if (GetUiPref("selMode") == "lasso") SelMode = SelectMode.Lasso;
+        // 触摸手势的旋钮（8.4.0）：双指总闸 / 手掌擦 / 三指擦 / 长按选择 / 两指点选 / 单指漫游。
+        LoadTouchPrefs();
 
         // **上一次是自动更新装上来的吗**：换壳脚本会在更新目录里留一个 done.txt。
         // 看到它 = 本次启动就是"更新完的第一次启动"，在界面上明说一句
@@ -2791,6 +2793,21 @@ public partial class InkEngine
             return;
         }
 
+        // 触摸手势层（8.4.0）：**定角色**（写字 / 擦 / 双指 / 漫游 / 忽略）。
+        // 位置在"界面 / 图库 / 滚动条"之后、"起笔"之前——面板和滚动条上的触摸不参与手势。
+        if (ptype == Native.PT_TOUCH)
+        {
+            if (TouchDownDispatch(hWnd, id, x, y, ReadTouchSize(id)))
+            {
+                _activePointer = id;
+                _activePointerType = ptype;
+                PointerX = x; PointerY = y; PointerInside = true;
+                return;
+            }
+            _touchMode = TouchMode.Write;      // 单指写字：长按由心跳判（见 TouchTick）
+            StartDwellTimer();
+        }
+
         _drawing = true;
         Native.SetCapture(hWnd);
         // 书写会话开始：进 GC 低延迟档（见 GcLatency.cs），并起分配/GC 仪表。
@@ -3089,6 +3106,11 @@ public partial class InkEngine
     /// </summary>
     private void TickDwellShape()
     {
+        // 触摸手势的长按（8.4.0）：**和停顿成型共用这一次心跳**。
+        // 两者靠判据分开：停顿成型要"已经画出东西"（点数 ≥3 + 识别器的最短长度），
+        // 长按要"从头到尾没画出去"（路径 ≤8 逻辑像素，和"点一下不留墨"同一个数）。
+        TouchTick();
+
         if (_dwell.State != DwellState.Tracking) return;
         if (!_dwell.StillEnough(NowMs)) return;
 
@@ -3548,6 +3570,14 @@ public partial class InkEngine
             return;
         }
 
+        // 触摸手势的移动（8.4.0）：**排在"同一指针"那道判定之前**——
+        // 双指手势里第二根手指的移动本来会被它挡掉（id != _activePointer）。
+        if (_touchMode != TouchMode.None && TouchMoveDispatch(id, x, y))
+        {
+            ApplyCursor();
+            return;
+        }
+
         if (!_drawing || id != _activePointer)
         {
             // 悬停路径。以前这里直接 return，"没落笔"时引擎完全不知道指针在哪儿，
@@ -3671,6 +3701,20 @@ public partial class InkEngine
             _drawing = false;
             _dirty = true;
             ApplyCursor();
+            return;
+        }
+
+        // 触摸手势收尾（8.4.0）：和界面 / 滚动条那两块同一个形状——自己收尾、自己放捕获。
+        // **不能等 `id != _activePointer` 那道闸**：双指手势里第二根手指的抬手本来会被它挡掉。
+        if (TouchUpDispatch(id))
+        {
+            if (!_touch.Any)                    // 全部抬起：这一轮手势收场
+            {
+                Native.ReleaseCapture();
+                _drawing = false;
+                ApplyCursor();
+            }
+            _dirty = true;
             return;
         }
 
@@ -4082,6 +4126,393 @@ public partial class InkEngine
         _capDrag = CaptureDrag.None;
         _dirty = true;
     }
+
+    // =====================================================================
+    //  触摸手势（8.4.0）——规格与调研见 调研-触摸手势-学校大屏.md
+    //
+    //  分工：Touch.cs 只回答"这一下是什么"（触点表 + 干净开始的角色判定 + 长按计时）；
+    //  这里按 _touchMode 路由动作：写字 / 擦 / 漫游 / 翻页 / 框选·点选 / 选中变换。
+    // =====================================================================
+
+    private readonly TouchGestures _touch = new();
+    private TouchMode _touchMode = TouchMode.None;
+
+    /// <summary>触摸选出来的选中：**临时**的（框和操作条要显示，但工具不换）——和 `_dwellSelected` 同一路。</summary>
+    private bool _touchSelected;
+
+    private Vector2 _g2StartMid, _g2LastMid, _g2StartVec;   // 双指：起点中点 / 上一帧中点 / 起始向量
+    private int _g2Axis;              // 0 未定 / 1 横（翻页）/ 2 纵（漫游）
+    private bool _g2Turned;           // 这一次手势已经翻过页（一次手势只翻一页）
+    private bool _g2Transform;        // 有选中：这一次双指是在变换对象
+    private bool _g2Tap;              // 两指点按候选（松手时结算）
+    private float _g2Dist0, _g2Ang0;  // 变换用：起始两指距离 / 夹角
+    private Vector2 _roamLast;        // 单指漫游：上一帧位置
+
+    /// <summary>从设置里读触摸手势的旋钮（启动时一次）。</summary>
+    internal void LoadTouchPrefs()
+    {
+        _touch.Enabled = GetUiPref("touch.gestures") != "0";
+        _touch.PalmErase = GetUiPref("touch.palm") != "0";
+        _touch.ThreeFingerErase = GetUiPref("touch.three") != "0";
+        _touch.LongPressSelect = GetUiPref("touch.longpress") != "0";
+        _touch.TwoFingerTapSelect = GetUiPref("touch.2tap") != "0";
+        _touch.SingleFingerRoam = GetUiPref("touch.roam") == "1";
+        _touch.PalmFactor = GetUiPref("touch.palmLevel") switch
+        {
+            "0" => 4f,      // 保守
+            "2" => 2f,      // 灵敏
+            _ => 3f,        // 标准
+        };
+    }
+
+    /// <summary>这块屏"报不报多个触点 / 报不报面积"——只给设置页和日志用，不影响判定。</summary>
+    internal (int maxTouches, bool sawArea) TouchCapability => (_touch.MaxSeen, _touch.SawArea);
+
+    /// <summary>
+    /// 触摸触点落下。返回 true = 这一下**已经被触摸层接掉**（调用方直接 return）；
+    /// 返回 false = 按普通写字那条路走（单指小面积）。
+    /// </summary>
+    private bool TouchDownDispatch(IntPtr hWnd, uint id, float x, float y, float sizePx)
+    {
+        var v = _touch.Down(id, x, y, sizePx, NowMs, DpiScale);
+        switch (v)
+        {
+            case TouchVerdict.Ignore:
+                return true;                       // 吃掉：不抢正在写的那一笔、也不落墨
+
+            case TouchVerdict.Erase:
+                CancelTouchStroke();
+                _touchMode = TouchMode.Erase;
+                _drawing = true;
+                Native.SetCapture(hWnd);
+                GcLatency.Enter();
+                BeginStrokeMeasure();
+                Doc.BeginEraseRect();
+                TouchEraseSample();
+                Console.WriteLine("触摸：手掌 / 三指 → 擦除");
+                return true;
+
+            case TouchVerdict.Gesture2:
+                CancelTouchStroke();
+                _touchMode = TouchMode.Gesture2;
+                _drawing = true;
+                Native.SetCapture(hWnd);
+                BeginTouchTwoFinger();
+                return true;
+
+            case TouchVerdict.Roam:
+                CancelTouchStroke();
+                _touchMode = TouchMode.Roam;
+                _drawing = true;
+                Native.SetCapture(hWnd);
+                _roamLast = new Vector2(x, y);
+                Console.WriteLine("触摸：单指漫游");
+                return true;
+
+            default:
+                return false;                      // Write：走原来的写字那条路
+        }
+    }
+
+    /// <summary>触摸触点移动（按当前模式路由）。返回 true = 已经处理完（调用方直接 return）。</summary>
+    private bool TouchMoveDispatch(uint id, float x, float y)
+    {
+        if (_touchMode == TouchMode.None) return false;
+        _touch.Move(id, x, y, DpiScale);
+
+        switch (_touchMode)
+        {
+            case TouchMode.Write:
+                return false;                      // 写字：走原来的路（长按由定时器判）
+
+            case TouchMode.Erase:
+                TouchEraseSample();
+                return true;
+
+            case TouchMode.Gesture2:
+                TouchGestureMove();
+                return true;
+
+            case TouchMode.Marquee:
+                ExtendMarqueeTo(x, y);
+                _dirty = true;
+                return true;
+
+            case TouchMode.SelDrag:
+                UpdateSelDrag(x, y);
+                return true;
+
+            case TouchMode.Roam:
+            {
+                var p = new Vector2(x, y);
+                ViewOffsetY += p.Y - _roamLast.Y;   // 1:1 跟手（画布单位 = 物理像素）
+                _roamLast = p;
+                ClampViewOffset();
+                ScrollBarActiveAtMs = NowMs;
+                _dirty = true;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>触摸触点抬起（按当前模式收尾）。返回 true = 调用方直接 return（写字那条除外）。</summary>
+    private bool TouchUpDispatch(uint id)
+    {
+        if (_touchMode == TouchMode.None) return false;
+        bool normalStroke = _touchMode == TouchMode.Write;
+
+        // 两指点按要在"减掉这一根之前"判（判据要求两个触点都还在）
+        if (_touchMode == TouchMode.Gesture2 && _touch.TwoFingerTap(NowMs, DpiScale, out _))
+            _g2Tap = true;
+
+        switch (_touchMode)
+        {
+            case TouchMode.Erase:
+                Doc.EndErase();                 // 一次擦除 = 一步撤销
+                EndStrokeMeasure();
+                break;
+
+            case TouchMode.Gesture2:
+                TouchGestureReleased();
+                break;
+
+            case TouchMode.Marquee:
+                ApplyMarquee();                 // 松手出选区
+                _touchSelected = Doc.Selected.Count > 0;
+                break;
+
+            case TouchMode.SelDrag:
+                EndSelDrag();                   // 提交（一步撤销；一点没动就不进撤销栈）
+                _touchSelected = Doc.Selected.Count > 0;
+                break;
+        }
+
+        _touch.Up(id);
+
+        if (_touch.Any) return !normalStroke;   // 还有手指按着：手势继续
+
+        _touchMode = TouchMode.None;
+        _touch.Reset();
+        _g2Transform = false;
+        _g2Axis = 0;
+        _g2Turned = false;
+        _g2Tap = false;
+        StopDwellTimer();
+        _dirty = true;
+        return !normalStroke;                   // 写字那条：清完触点后照常走 EndStroke
+    }
+
+    /// <summary>中断触摸手势（丢捕获 / 换设备 / 意外路径）：把开了头的都收干净。</summary>
+    private void TouchAbort()
+    {
+        if (_touchMode == TouchMode.None && !_touch.Any) return;
+        if (_touchMode == TouchMode.Erase) { Doc.EndErase(); EndStrokeMeasure(); }
+        if (_touchMode == TouchMode.Marquee) MarqueeActive = false;
+        if (_touchMode == TouchMode.SelDrag && SelDragging) EndSelDrag();
+        _touch.Reset();
+        _touchMode = TouchMode.None;
+        _g2Transform = false;
+        _g2Axis = 0;
+        _g2Turned = false;
+        _g2Tap = false;
+        Console.WriteLine("触摸手势中断（丢捕获/换设备）");
+        _dirty = true;
+    }
+
+    /// <summary>长按成立（40ms 心跳驱动）：撤掉那一小笔，进"点选 / 框选"。</summary>
+    private void TouchLongPressFire()
+    {
+        if (_touchMode != TouchMode.Write) return;
+        var c = _touch.Views.Count > 0 ? _touch.Views[0] : default;
+        float x = c.Pos.X, y = c.Pos.Y;
+
+        CancelTouchStroke();
+
+        // 先问"手指下面有没有东西"（点选：选中并直接进入拖动）；
+        // 没东西 → 框选（松手出选区）。
+        if (TryBeginSelectionGesture(x, y, shift: false, alt: false))
+        {
+            _touchSelected = Doc.Selected.Count > 0;
+            _touchMode = TouchMode.SelDrag;
+        }
+        else
+        {
+            BeginMarqueeAt(x, y, shift: false, alt: false);
+            _touchMode = TouchMode.Marquee;
+        }
+        _touch.ClearLongPress();
+        _dirty = true;
+    }
+
+    /// <summary>撤掉"刚起头的那一小笔"（不进文档、不留撤销）。</summary>
+    private void CancelTouchStroke()
+    {
+        if (ActiveStroke != null)
+        {
+            Doc.Dirty.Add(ActiveStroke.PaddedBounds);
+            ActiveStroke = null;
+        }
+        ClearRenderTail();
+        ActiveStrokeOnTrail = false;
+        _dwell.Reset();
+        _dwellInk = null;
+        _dismissTapArmed = false;
+        StopDwellTimer();
+        _dirty = true;
+    }
+
+    /// <summary>擦一次：**每个触点各擦一块**（面积决定大小；三指就是三块小橡皮并排，等效大手擦）。</summary>
+    private void TouchEraseSample()
+    {
+        var list = _touch.Views;
+        if (list.Count == 0) return;
+        for (int i = 0; i < list.Count; i++)
+        {
+            float half = _touch.EraseHalfWidth(DpiScale, 14f, 90f);
+            var p = list[i].Pos;
+            Doc.EraseRectAt(p.X, p.Y, half, half * 1.618f);
+        }
+        _dirty = true;
+    }
+
+    /// <summary>双指开始：有选中 → 借"整体拖动"那套（detach + 预览矩阵 + 松手一步撤销）；没选中 → 等方向。</summary>
+    private void BeginTouchTwoFinger()
+    {
+        if (!_touch.TryPair(out var p)) return;
+        _g2StartMid = _g2LastMid = (p.A + p.B) * 0.5f;
+        _g2StartVec = p.B - p.A;
+        _g2Axis = 0;
+        _g2Turned = false;
+        _g2Tap = false;
+        _g2Transform = false;
+
+        if (Doc.Selected.Count == 0) return;
+
+        // 有选中：在**选区中心**起一次"整体拖动"。借现成那套的好处：
+        // 预览走 _selDragMatrix、松手 EndSelDrag 提交（一步撤销）、锁定对象自动摘掉。
+        var aabb = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
+        if (TryBeginSelectionGesture((aabb.MinX + aabb.MaxX) * 0.5f,
+                                     (aabb.MinY + aabb.MaxY) * 0.5f, shift: false, alt: false))
+        {
+            _g2Transform = true;
+            _g2Dist0 = MathF.Max(1f, Vector2.Distance(p.A, p.B));
+            _g2Ang0 = MathF.Atan2(_g2StartVec.Y, _g2StartVec.X);
+            _touchSelected = true;
+            Console.WriteLine("触摸：双指 → 变换选中对象（移动 / 缩放 / 旋转）");
+        }
+    }
+
+    /// <summary>双指移动：有选中 → 变换对象；没选中 → 纵滑漫游 / 横滑翻页（方向锁 + 一次一页）。</summary>
+    private void TouchGestureMove()
+    {
+        if (!_touch.TryPair(out var p)) return;
+        var mid = (p.A + p.B) * 0.5f;
+
+        if (_g2Transform)
+        {
+            // 绕**选区中心**：先平移把中心对到原点，缩放/旋转，再放回去（并叠上中点的位移）
+            var aabb = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
+            var center = new Vector2((aabb.MinX + aabb.MaxX) * 0.5f, (aabb.MinY + aabb.MaxY) * 0.5f);
+            float d1 = Vector2.Distance(p.A, p.B);
+            float scale = Math.Clamp(d1 / _g2Dist0, 0.1f, 10f);
+            float ang = MathF.Atan2((p.B - p.A).Y, (p.B - p.A).X) - _g2Ang0;
+            // 旋转吸附：靠近 0/90/180/270 的 2° 内就吸上去（和鼠标那套同一口味，但更松）
+            const float snap = 2f * MathF.PI / 180f;
+            float q = MathF.Round(ang / (MathF.PI / 2f)) * (MathF.PI / 2f);
+            if (MathF.Abs(ang - q) <= snap) ang = q;
+
+            var move = mid - _g2StartMid;
+            _selDragMatrix = Matrix3x2.CreateTranslation(-center.X, -center.Y)
+                           * Matrix3x2.CreateScale(scale)
+                           * Matrix3x2.CreateRotation(ang)
+                           * Matrix3x2.CreateTranslation(center + move);
+            _selDragMoved = true;
+            _dirty = true;
+            return;
+        }
+
+        float dx = mid.X - _g2LastMid.X, dy = mid.Y - _g2LastMid.Y;
+        _g2LastMid = mid;
+
+        if (_g2Axis == 0)
+        {
+            var total = mid - _g2StartMid;
+            float lockPx = TouchGestures.DirLockLogical * DpiScale;
+            if (total.Length() < lockPx) return;
+            if (MathF.Abs(total.X) >= MathF.Abs(total.Y) * TouchGestures.DirRatio) _g2Axis = 1;
+            else if (MathF.Abs(total.Y) >= MathF.Abs(total.X) * TouchGestures.DirRatio) _g2Axis = 2;
+            else return;                       // 斜着：先不动，等主方向明确
+        }
+
+        if (_g2Axis == 2)
+        {
+            ViewOffsetY += dy;                 // 上下 = 漫游
+            ClampViewOffset();
+            ScrollBarActiveAtMs = NowMs;
+            _dirty = true;
+            return;
+        }
+
+        if (_g2Turned || dx == 0f) return;
+        float totalX = mid.X - _g2StartMid.X;
+        if (MathF.Abs(totalX) < TouchGestures.PageTurnLogical * DpiScale) return;
+        _g2Turned = true;                      // 一次手势只翻一页（抬手再滑才是下一页）
+        bool next = totalX < 0;                // 往左滑 = 下一页
+        if (PptMode)
+        {
+            if (next) PptNextFromUi(); else PptPrevFromUi();
+        }
+        else FlipPage(next);
+        Console.WriteLine($"触摸：双指横滑 → {(next ? "下一页" : "上一页")}");
+    }
+
+    /// <summary>双指手势收尾（最后一根指头抬起时）。</summary>
+    private void TouchGestureReleased()
+    {
+        if (_g2Transform)
+        {
+            if (SelDragging) EndSelDrag();     // 提交变换（一步撤销；没动就不进撤销栈）
+            _g2Transform = false;
+            return;
+        }
+        // 没动过 + 两指几乎同时抬手 = **两指点选**（和长按点选同一条命令）
+        if (_g2Tap && !_g2Turned && _g2Axis == 0 && _touch.Views.Count >= 2)
+        {
+            var mid = (_touch.Views[0].Pos + _touch.Views[1].Pos) * 0.5f;
+            TouchPointSelect(mid.X, mid.Y);
+        }
+        _g2Tap = false;
+    }
+
+    /// <summary>点选：手指下面有东西就选中它（并进入"可拖动"状态），没东西就取消选中。</summary>
+    private void TouchPointSelect(float x, float y)
+    {
+        var hit = Doc.SelectAt(x, y, ClickToleranceLogical * DpiScale, additive: false, subtractive: false);
+        _touchSelected = hit != null && Doc.Selected.Count > 0;
+        if (hit == null) Console.WriteLine("触摸：点选落空 → 取消选中");
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// 40ms 心跳（笔画进行中那颗定时器每次都调）：长按成立就把这一下升级成"选择"。
+    /// 判据全在 <see cref="TouchGestures.Tick"/>（路径 ≤8 逻辑像素 = 和"点一下不留墨"同一个数）。
+    /// </summary>
+    private void TouchTick()
+    {
+        _touch.Tick(NowMs, DpiScale);
+        if (_touch.LongPressFired && _touchMode == TouchMode.Write) TouchLongPressFire();
+    }
+
+    /// <summary>自检用：触摸层这一刻的模式 / 触点表。</summary>
+    internal TouchMode TouchModeForTest => _touchMode;
+    internal int TouchCountForTest => _touch.Count;
+    internal bool TouchSelectedForTest => _touchSelected;
+    internal int _touchDebugAxis => _g2Axis;
+    /// <summary>自检用：直接喂一个触点取判定（合成触摸的 `rcContact` 系统不认，面积那条只能这么测）。</summary>
+    internal TouchVerdict TouchClassifyForTest(uint id, float x, float y, float sizePx)
+        => _touch.Down(id, x, y, sizePx, NowMs, DpiScale);
+    internal void TouchResetForTest() { _touch.Reset(); _touchMode = TouchMode.None; _touchSelected = false; }
 
     /// <summary>把相机滚到"这个对象看得见"。只做纵向——横向没有滚动这回事。</summary>
     private void EnsureVisible(Stroke s)
@@ -4712,6 +5143,10 @@ public partial class InkEngine
 
     private void EndStroke()
     {
+        // 触摸手势的兜底中断（8.4.0）：正常收笔时 `_touchMode` 已经是 None（触摸那条自己收过），
+        // 只有"丢捕获 / 意外路径"会带着没结束的模式走到这里——把开了头的（擦除批次、选中拖动）收干净。
+        TouchAbort();
+
         // 激光笔抬手：这条**开始计时**（停留 2 秒后再整体淡出，见 `LaserTrail.HoldMs`）。
         // 放在最前面：下面那几条分支（截屏 / 图形 / 多笔）都和激光笔无关，不必等它们；
         // 而且**每一条收笔路径都要走到**（正常抬手、丢捕获都走 `EndStroke`）——
@@ -6932,10 +7367,30 @@ public partial class InkEngine
     /// 两者之差 = 输入栈 + 我们自己的消息队列。**这一段里只有队列是我们的责任**，
     /// 而队列拖延的直接原因就是 Present(1) 把线程卡在垂直同步里。
     /// </summary>
+    /// <summary>
+    /// 触摸触点的**接触面积**（矩形长边，物理像素）。拿不到 / 这块屏不报 → 0。
+    /// 手掌擦的分级靠它（见 <see cref="TouchGestures"/> 的自适应基线）。
+    /// </summary>
+    private static float ReadTouchSize(uint id)
+    {
+        // 用**显式缓冲区**（160 字节）而不是 `out POINTER_TOUCH_INFO`：后者走的是
+        // 运行时按托管结构体大小分配的栈槽，合成指针那条路上实测会 AV；
+        // 显式给足缓冲区 + `PtrToStructure` 最稳（这里是纯读，没有写回）。
+        IntPtr buf = Marshal.AllocHGlobal(160);
+        try
+        {
+            if (!Native.GetPointerTouchInfo(id, buf)) return 0f;
+            var ti = Marshal.PtrToStructure<Native.POINTER_TOUCH_INFO>(buf);
+            int w = ti.rcContact.Width, h = ti.rcContact.Height;
+            if (w <= 0 && h <= 0) { w = ti.rcContactRaw.Width; h = ti.rcContactRaw.Height; }
+            return MathF.Max(w, h);
+        }
+        finally { Marshal.FreeHGlobal(buf); }
+    }
+
     private bool ReadPointer(uint id, out float x, out float y, out float pressure,
                              out bool inverted, out uint pointerType)
-    {
-        x = y = 0; pressure = 0.5f; inverted = false; pointerType = 0;
+    {        x = y = 0; pressure = 0.5f; inverted = false; pointerType = 0;
         if (!Native.GetPointerInfo(id, out var pi)) return false;
         _lastInputPerfQpc = pi.PerformanceCount;
         _lastInputMsgQpc = Qpc.Now;
@@ -7148,6 +7603,8 @@ public partial class InkEngine
         // **停顿成型那一路的"选中"也一起归零**（见 `_dwellSelected`）：它比 `_autoSelCollapsed`
         // 多担一件事——放行"笔下面那个框能不能点"，所以更不能跟着上一轮留到下一轮。
         _dwellSelected = false;
+        // 触摸手势选出来的那一路同理（见 `_touchSelected`）。
+        _touchSelected = false;
         if (Doc.Selected.Count == 0) return;
         Doc.Selected.Clear();
         _dirty = true;
@@ -9643,7 +10100,7 @@ public partial class InkEngine
     private bool SelectionInteractiveAt(float canvasX, float canvasY)
         => Doc.Selected.Count > 0
            && (Tool == Tool.Marquee
-               || ((IsShapeTool(Tool) || _dwellSelected)
+               || ((IsShapeTool(Tool) || _dwellSelected || _touchSelected)
                    && AutoSelectionZoneAt(canvasX, canvasY) != AutoSelZone.None));
 
     /// <summary>
@@ -9659,7 +10116,7 @@ public partial class InkEngine
     /// "画了但点不到"或者反过来"点得到但看不见"。具体画整条还是画圆钮，问 `BarDrawnCollapsed`。
     /// </summary>
     internal bool SelectionBarShown
-        => Doc.Selected.Count > 0 && (Tool == Tool.Marquee || IsShapeTool(Tool) || _dwellSelected);
+        => Doc.Selected.Count > 0 && (Tool == Tool.Marquee || IsShapeTool(Tool) || _dwellSelected || _touchSelected);
 
     /// <summary>图形工具下那个自动选中的框：指针落在"家具 / 算动它 / 都不是"哪一档。</summary>
     private enum AutoSelZone

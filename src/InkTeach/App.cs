@@ -519,6 +519,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             HotkeyTest();
         }
+        else if (mode == "--touchtest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            TouchTest();
+        }
         else if (mode == "--savetest")
         {
             _autoExitAt = double.MaxValue;
@@ -21806,8 +21812,7 @@ internal sealed class App : InkEngine.InkEngine
     ///   ④ **第二根手指按下时，正在写的那一笔不能被换掉**，而且第一根手指还能接着写。
     /// </summary>
     private void TouchGuardTest()
-    {
-        Console.WriteLine();
+    {        Console.WriteLine();
         Console.WriteLine("=== 触摸自检（合成触摸注入）===");
         if (!EnsureSyntheticTouch())
         {
@@ -22004,36 +22009,68 @@ internal sealed class App : InkEngine.InkEngine
     private bool EnsureSyntheticTouch()
     {
         if (_syntheticTouch != IntPtr.Zero) return true;
-        // maxCount = 2：触摸**可以同时有两个触点**，这正是"多指守卫"要用的。
+        // 诊断：先退回 2（二分定位"第二根手指收不到"是 maxCount 还是结构体）
         _syntheticTouch = Native.CreateSyntheticPointerDevice(
             Native.PT_TOUCH, 2, Native.POINTER_FEEDBACK_DEFAULT);
         return _syntheticTouch != IntPtr.Zero;
     }
 
     /// <summary>
-    /// 注入合成触摸。`points` 是"这一刻**所有**按在屏上的触点"，下标就是触点序号
-    /// （系统按 pointerId 跟踪，所以每次调用都要把还按着的触点一起带上）。
+    /// 注入合成触摸（**不带面积**）。`points` 是"这一刻**所有**按在屏上的触点"，
+    /// 下标就是触点序号（系统按 pointerId 跟踪，所以每次调用都要把还按着的触点一起带上）。
     /// `contact=false` 表示全部抬起。
-    ///
-    /// 触摸没有压感，所以 penMask / pressure 一律不给——与真实触摸一致。
     /// </summary>
     private void SendTouches(bool contact, params (float x, float y)[] points)
     {
-        var arr = new Native.POINTER_TYPE_INFO[points.Length];
-        for (int i = 0; i < points.Length; i++)
+        var sized = new (float x, float y, float size)[points.Length];
+        for (int i = 0; i < points.Length; i++) sized[i] = (points[i].x, points[i].y, 0f);
+        SendTouchesSized(contact, sized);
+    }
+
+    /// <summary>
+    /// 注入合成触摸（**带接触面积**）：`size` = 接触矩形边长（物理像素）。
+    /// 手掌擦的判据靠它（见 Touch.cs 的自适应基线），所以"手掌"用例必须能造出大面积。
+    ///
+    /// ⚠ 缓冲区**自己按原生步长 144 排**（不是托管结构体的 152）：不这么做第二个触点
+    /// 会被 API 错位读、直接丢失（见 Native.InjectSyntheticPointerInput 的注释）。
+    /// 共用前缀按 `pen` 的字段名填；`rcContact` 在 union + 96 = 结构体偏移 104 上，用指针写。
+    /// </summary>
+    private unsafe void SendTouchesSized(bool contact, params (float x, float y, float size)[] points)
+    {
+        const int nativeStride = 144;
+        int n = Math.Max(1, points.Length);
+        IntPtr buf = Marshal.AllocHGlobal(nativeStride * n + 16);
+        try
         {
-            arr[i].type = Native.PT_TOUCH;
-            arr[i].pen.pointerInfo.pointerType = Native.PT_TOUCH;
-            arr[i].pen.pointerInfo.pointerId = (uint)(i + 1);
-            arr[i].pen.pointerInfo.pointerFlags =
-                Native.POINTER_FLAG_INRANGE | Native.POINTER_FLAG_CONFIDENCE
-                | (contact ? Native.POINTER_FLAG_INCONTACT : 0u)
-                | (i == 0 ? Native.POINTER_FLAG_PRIMARY : 0u);
-            arr[i].pen.pointerInfo.ptPixelLocationX = (int)points[i].x;
-            arr[i].pen.pointerInfo.ptPixelLocationY = (int)points[i].y;
-            arr[i].pen.pointerInfo.hwndTarget = _windows.Count > 0 ? _windows[0].Hwnd : IntPtr.Zero;
+            for (int i = 0; i < points.Length; i++)
+            {
+                var one = new Native.POINTER_TYPE_INFO();
+                one.type = Native.PT_TOUCH;
+                one.pen.pointerInfo.pointerType = Native.PT_TOUCH;
+                one.pen.pointerInfo.pointerId = (uint)(i + 1);
+                one.pen.pointerInfo.pointerFlags =
+                    Native.POINTER_FLAG_INRANGE | Native.POINTER_FLAG_CONFIDENCE
+                    | (contact ? Native.POINTER_FLAG_INCONTACT : 0u)
+                    | (i == 0 ? Native.POINTER_FLAG_PRIMARY : 0u);
+                one.pen.pointerInfo.ptPixelLocationX = (int)points[i].x;
+                one.pen.pointerInfo.ptPixelLocationY = (int)points[i].y;
+                one.pen.pointerInfo.hwndTarget = _windows.Count > 0 ? _windows[0].Hwnd : IntPtr.Zero;
+
+                IntPtr dst = buf + i * nativeStride;
+                Marshal.StructureToPtr(one, dst, false);
+                if (points[i].size > 0f)
+                {
+                    float half = points[i].size * 0.5f;
+                    int* rc = (int*)((byte*)dst + 104);      // rcContact: left/top/right/bottom
+                    rc[0] = (int)(points[i].x - half);
+                    rc[1] = (int)(points[i].y - half);
+                    rc[2] = (int)(points[i].x + half);
+                    rc[3] = (int)(points[i].y + half);
+                }
+            }
+            Native.InjectSyntheticPointerInput(_syntheticTouch, buf, (uint)points.Length);
         }
-        Native.InjectSyntheticPointerInput(_syntheticTouch, arr, (uint)arr.Length);
+        finally { Marshal.FreeHGlobal(buf); }
     }
 
     private bool EnsureSyntheticPen()
@@ -22044,23 +22081,31 @@ internal sealed class App : InkEngine.InkEngine
     }
 
     /// <summary>注入一个合成笔采样点，走的是和真笔同一条 WM_POINTER 路径。</summary>
-    private void SendPenPoint(float x, float y, uint pressure, bool contact, bool first)
+    private unsafe void SendPenPoint(float x, float y, uint pressure, bool contact, bool first)
     {
-        var arr = new Native.POINTER_TYPE_INFO[1];
         uint flags = Native.POINTER_FLAG_INRANGE | Native.POINTER_FLAG_CONFIDENCE;
         if (contact) flags |= Native.POINTER_FLAG_INCONTACT;
         if (first) flags |= Native.POINTER_FLAG_NEW | Native.POINTER_FLAG_PRIMARY | Native.POINTER_FLAG_FIRSTBUTTON;
 
-        arr[0].type = Native.PT_PEN;
-        arr[0].pen.pointerInfo.pointerType = Native.PT_PEN;
-        arr[0].pen.pointerInfo.pointerFlags = flags;
-        arr[0].pen.pointerInfo.ptPixelLocationX = (int)x;
-        arr[0].pen.pointerInfo.ptPixelLocationY = (int)y;
-        arr[0].pen.pointerInfo.hwndTarget = _windows.Count > 0 ? _windows[0].Hwnd : IntPtr.Zero;
-        arr[0].pen.penFlags = 0;
-        arr[0].pen.penMask = Native.PEN_MASK_PRESSURE;
-        arr[0].pen.pressure = pressure;
-        Native.InjectSyntheticPointerInput(_syntheticPen, arr, 1);
+        var one = new Native.POINTER_TYPE_INFO();
+        one.type = Native.PT_PEN;
+        one.pen.pointerInfo.pointerType = Native.PT_PEN;
+        one.pen.pointerInfo.pointerFlags = flags;
+        one.pen.pointerInfo.ptPixelLocationX = (int)x;
+        one.pen.pointerInfo.ptPixelLocationY = (int)y;
+        one.pen.pointerInfo.hwndTarget = _windows.Count > 0 ? _windows[0].Hwnd : IntPtr.Zero;
+        one.pen.penFlags = 0;
+        one.pen.penMask = Native.PEN_MASK_PRESSURE;
+        one.pen.pressure = pressure;
+
+        // 单点：按原生步长 144 排一块缓冲区（理由见 Native.InjectSyntheticPointerInput）
+        IntPtr buf = Marshal.AllocHGlobal(144 + 16);
+        try
+        {
+            Marshal.StructureToPtr(one, buf, false);
+            Native.InjectSyntheticPointerInput(_syntheticPen, buf, 1);
+        }
+        finally { Marshal.FreeHGlobal(buf); }
     }
 
     /// <summary>
@@ -24613,6 +24658,294 @@ internal sealed class App : InkEngine.InkEngine
 
         Console.WriteLine();
         Console.WriteLine(fail == 0 ? $"  PASS: 快捷键全通（{pass} 项）" : $"  FAIL: {fail} 项不对");
+        _quit = true;
+    }
+
+    /// <summary>
+    /// **触摸手势自检**（8.4.0）：合成触摸注入（可带接触面积、可同时 3 点）走真链路。
+    /// 规格见 调研-触摸手势-学校大屏.md；判据是"文档/相机/撤销栈有没有按预期动"，
+    /// 不看像素（触摸没有光标，屏幕上看不出对错）。
+    /// </summary>
+    private void TouchTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 触摸手势自检（合成触摸：单指写 / 双指漫游翻页 / 手掌三指擦 / 长按选 / 选中变换）===");
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"    {name,-30}{(ok ? "PASS" : "FAIL")}  {detail}");
+        }
+
+        if (SkipIfNoSyntheticInput("触摸手势（需要合成触摸/鼠标）")) { _quit = true; return; }
+        if (!EnsureSyntheticTouch())
+        {
+            Console.WriteLine("  SKIP: 拿不到合成触摸设备（CreateSyntheticPointerDevice(PT_TOUCH) 失败）");
+            _quit = true; return;
+        }
+
+        float dpi = DpiScale;
+        float cx = _virtualX + _virtualW * 0.5f, cy = _virtualY + _virtualH * 0.5f;
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Pen;
+        SettleFrames(200);
+
+        void TouchWrite(float x0, float y0, float x1, float y1, float size = 24f)
+        {
+            SendTouchesSized(true, (x0, y0, size));
+            SettleFrames(30);
+            for (int i = 1; i <= 4; i++)
+                SendTouchesSized(true, (x0 + (x1 - x0) * i / 4f, y0 + (y1 - y0) * i / 4f, size));
+            SettleFrames(30);
+            SendTouchesSized(false, (x1, y1, size));
+            SettleFrames(80);
+        }
+
+        // 多指落下**要一个一个来**：系统对"一次注入里出现两个新触点"只认第一个
+        //（实测：同一批塞两个新触点 → 只收到 1 根手指；分两次注入就对了）。
+        // 真实手指也是先后落下的，30ms 间隔仍在"干净开始"的 150ms 窗口里。
+        void Touch2Down(float x1, float y1, float x2, float y2, float size = 24f)
+        {
+            SendTouchesSized(true, (x1, y1, size));
+            SettleFrames(30);
+            SendTouchesSized(true, (x1, y1, size), (x2, y2, size));
+            SettleFrames(30);
+        }
+        void Touch2Move(float x1, float y1, float x2, float y2, float size = 24f)
+            => SendTouchesSized(true, (x1, y1, size), (x2, y2, size));
+        void Touch2Up(float x1, float y1, float x2, float y2, float size = 24f)
+            => SendTouchesSized(false, (x1, y1, size), (x2, y2, size));
+        void Touch3Down(float x1, float y1, float x2, float y2, float x3, float y3, float size = 24f)
+        {
+            SendTouchesSized(true, (x1, y1, size));
+            SettleFrames(30);
+            SendTouchesSized(true, (x1, y1, size), (x2, y2, size));
+            SettleFrames(30);
+            SendTouchesSized(true, (x1, y1, size), (x2, y2, size), (x3, y3, size));
+            SettleFrames(30);
+        }
+
+        // ---- ① 不报面积的屏：单指一律当"写"（不误擦）----
+        {
+            int before = Doc.Strokes.Count;
+            TouchWrite(cx - 120, cy, cx + 120, cy, size: 0f);
+            Check("不报面积：单指 = 写字（不误判成手掌擦）",
+                  Doc.Strokes.Count == before + 1 && Doc.Strokes[^1].Points.Count >= 3,
+                  $"笔画 {before} → {Doc.Strokes.Count}，点数 {Doc.Strokes[^1].Points.Count}");
+        }
+
+        // ---- ② 双指纵滑 = 漫游：相机动、墨迹坐标一个没变 ----
+        {
+            float cam0 = ViewOffsetY;
+            var p0 = Doc.Strokes[^1].Points[0];
+            SendTouchesSized(true, (cx - 260, cy - 200, 24f), (cx - 60, cy - 200, 24f));
+            SettleFrames(40);
+            Console.WriteLine($"      [探针] 两指按下后：模式 = {TouchModeForTest}，触点 = {TouchCountForTest}，相机 = {ViewOffsetY:F0}");
+            SendTouchesSized(true, (cx - 260, cy - 150, 24f), (cx - 60, cy - 150, 24f));
+            SettleFrames(40);
+            Console.WriteLine($"      [探针] 滑了 50px：模式 = {TouchModeForTest}，相机 = {ViewOffsetY:F0}，轴 = {_touchDebugAxis}");
+            SettleFrames(40);
+            SendTouchesSized(true, (cx - 260, cy - 60, 24f), (cx - 60, cy - 60, 24f));
+            SettleFrames(120);
+            SendTouchesSized(false, (cx - 260, cy - 60, 24f), (cx - 60, cy - 60, 24f));
+            SettleFrames(120);
+            var p1 = Doc.Strokes[^1].Points[0];
+            Check("双指纵滑 = 漫游（相机动、墨迹坐标一个没变）",
+                  MathF.Abs(ViewOffsetY - cam0) > 60f && MathF.Abs(p1.X - p0.X) < 0.01f && MathF.Abs(p1.Y - p0.Y) < 0.01f,
+                  $"相机 {cam0:F0} → {ViewOffsetY:F0}；首点 ({p0.X:F0},{p0.Y:F0}) → ({p1.X:F0},{p1.Y:F0})");
+        }
+
+        // ---- ③ 双指横滑 = 翻页（一次手势只翻一页）----
+        {
+            int idx0 = ScreenIndex;
+            float cam0 = ViewOffsetY;
+            Touch2Down(cx - 300, cy - 200, cx - 300, cy - 60);
+            for (int i = 1; i <= 4; i++)
+                Touch2Move(cx - 300 + i * 60, cy - 200, cx - 300 + i * 60, cy - 60);
+            SettleFrames(80);
+            Touch2Move(cx + 200, cy - 200, cx + 200, cy - 60);   // 继续滑：不该翻第二页
+            SettleFrames(80);
+            Touch2Up(cx + 200, cy - 200, cx + 200, cy - 60);
+            SettleFrames(300);
+            Check("双指横滑 = 翻一页（一次手势只翻一页）",
+                  ScreenIndex == idx0 + 1 && MathF.Abs(ViewOffsetY - cam0) > 100f,
+                  $"屏号 {idx0} → {ScreenIndex}（期望 +1），相机 {cam0:F0} → {ViewOffsetY:F0}");
+            // 回第一屏，别把后面的用例带跑
+            ViewOffsetY = 0f;
+            ClampViewOffset();
+            SettleFrames(80);
+        }
+
+        // ---- ④ 异步第二指（>150ms）= 忽略，不抢正在写的那一笔 ----
+        {
+            int before = Doc.Strokes.Count;
+            SendTouchesSized(true, (cx - 300, cy + 80, 24f));
+            SettleFrames(60);
+            SendTouchesSized(true, (cx - 300, cy + 80, 24f), (cx - 100, cy + 80, 200f));   // 手掌晚到
+            SettleFrames(80);
+            SendTouchesSized(true, (cx - 260, cy + 80, 24f), (cx - 100, cy + 80, 200f));
+            SettleFrames(80);
+            SendTouchesSized(false, (cx - 260, cy + 80, 24f), (cx - 100, cy + 80, 200f));
+            SettleFrames(120);
+            Check("写字中途来的手掌 = 忽略（不抢笔、不误擦）",
+                  Doc.Strokes.Count == before + 1 && TouchModeForTest == TouchMode.None,
+                  $"笔画 {before} → {Doc.Strokes.Count}，模式 {TouchModeForTest}");
+        }
+
+        // ---- ⑤ 快速两指 = 手势：刚起头那一小笔被撤掉 ----
+        {
+            int before = Doc.Strokes.Count;
+            int undo0 = Doc.UndoDepth;
+            SendTouchesSized(true, (cx + 260, cy - 180, 24f));
+            SendTouchesSized(true, (cx + 200, cy - 180, 24f), (cx + 400, cy - 180, 24f));   // 150ms 内第二指
+            SettleFrames(40);
+            SendTouchesSized(true, (cx + 200, cy - 120, 24f), (cx + 400, cy - 120, 24f));
+            SettleFrames(60);
+            SendTouchesSized(false, (cx + 200, cy - 120, 24f), (cx + 400, cy - 120, 24f));
+            SettleFrames(120);
+            Check("快速两指 = 手势：刚起头那一小笔被撤掉（0 笔、撤销栈不涨）",
+                  Doc.Strokes.Count == before && Doc.UndoDepth == undo0,
+                  $"笔画 {before} → {Doc.Strokes.Count}，撤销深度 {undo0} → {Doc.UndoDepth}");
+        }
+
+        // ---- ⑥ 手掌判定的分级（自适应基线）----
+        // ⚠ 合成触摸的 `rcContact` 系统不认（注入被忽略）→ 面积分级这一条**直接喂判定**；
+        //   擦除这个"动作"由下面 ⑦ 的三指用例走真注入验。
+        {
+            TouchResetForTest();
+            var vFinger = TouchClassifyForTest(1, cx, cy, 24f);      // 先立基线
+            TouchResetForTest();
+            var vPalm = TouchClassifyForTest(1, cx, cy, 220f);       // 同一块屏上的"手掌"
+            TouchResetForTest();
+            Check("手掌判定：指尖 = 写、大面积 = 擦（自适应基线，免校准）",
+                  vFinger == TouchVerdict.Write && vPalm == TouchVerdict.Erase,
+                  $"指尖 {vFinger}，手掌 {vPalm}");
+        }
+
+        // ---- ⑦ 三指一起落下 = 擦（不依赖面积）----
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            var s = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = 30f * dpi };
+            for (int i = 0; i <= 20; i++) s.AddPoint(cx - 200 + i * 20, cy, 0.9f, i);
+            Doc.AddStroke(s);
+            Doc.InvalidateAll();
+            SettleFrames(150);
+
+            Touch3Down(cx - 300, cy - 10, cx - 180, cy - 10, cx - 60, cy - 10);
+            SendTouchesSized(true, (cx - 60, cy - 10, 24f), (cx + 60, cy - 10, 24f), (cx + 180, cy - 10, 24f));
+            SettleFrames(150);
+            SendTouchesSized(false, (cx - 60, cy - 10, 24f), (cx + 60, cy - 10, 24f), (cx + 180, cy - 10, 24f));
+            SettleFrames(200);
+            Check("三指一起落下 = 擦（包围盒扫过，整条被擦掉）",
+                  Doc.Strokes.Count == 0, $"笔画 {Doc.Strokes.Count}（期望 0）");
+            Doc.Undo();
+            SettleFrames(150);
+        }
+
+        // ---- ⑧ 长按 0.5 秒 = 进入选择（长按在对象上 = 点选它）----
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            var s = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 30f * dpi };
+            for (int i = 0; i <= 20; i++) s.AddPoint(cx - 200 + i * 20, cy, 0.9f, i);
+            Doc.AddStroke(s);
+            Doc.InvalidateAll();
+            SettleFrames(150);
+
+            SendTouchesSized(true, (cx, cy, 24f));
+            SettleFrames(700);                       // 心跳（40ms 一颗）在笔画进行中一直在跑
+            Check("长按 0.5 秒 = 进入选择（对象上 = 点选）",
+                  Doc.Selected.Count == 1 && TouchModeForTest == TouchMode.SelDrag,
+                  $"选中 {Doc.Selected.Count}，模式 {TouchModeForTest}");
+
+            // 选中后：单指拖 = 移动（一步撤销）
+            var before = s.WorldBounds;
+            SendTouchesSized(true, (cx + 60, cy + 40, 24f));
+            SettleFrames(60);
+            SendTouchesSized(true, (cx + 160, cy + 120, 24f));
+            SettleFrames(60);
+            SendTouchesSized(false, (cx + 160, cy + 120, 24f));
+            SettleFrames(200);
+            var after = s.WorldBounds;
+            Check("选中后单指拖 = 移动（位置变了、一步撤销）",
+                  MathF.Abs(after.MinX - before.MinX) > 40f && MathF.Abs(after.MinY - before.MinY) > 20f,
+                  $"({before.MinX:F0},{before.MinY:F0}) → ({after.MinX:F0},{after.MinY:F0})");
+            Doc.Undo();
+            SettleFrames(150);
+            var back = s.WorldBounds;
+            Check("移动 = 一步撤销（撤销回原位）",
+                  MathF.Abs(back.MinX - before.MinX) < 2f && MathF.Abs(back.MinY - before.MinY) < 2f,
+                  $"({back.MinX:F0},{back.MinY:F0}) vs ({before.MinX:F0},{before.MinY:F0})");
+        }
+
+        // ---- ⑨ 选中后：双指 = 缩放（距离比）/ 旋转（夹角差）----
+        {
+            Doc.Selected.Clear();
+            Doc.Selected.Add(Doc.Strokes[^1]);
+            SettleFrames(80);
+            var before = Doc.Strokes[^1].WorldBounds;
+            float w0 = before.MaxX - before.MinX;
+            float cxm = (before.MinX + before.MaxX) * 0.5f, cym = (before.MinY + before.MaxY) * 0.5f;
+
+            // 两指从 100px 张到 200px（放大一倍），同时把夹角转 90°
+            Touch2Down(cxm - 150, cym, cxm + 150, cym);
+            Touch2Move(cxm, cym - 300, cxm, cym + 300);
+            SettleFrames(80);
+            Touch2Up(cxm, cym - 300, cxm, cym + 300);
+            SettleFrames(250);
+            var after = Doc.Strokes[^1].WorldBounds;
+            float w1 = after.MaxX - after.MinX;
+            Check("选中后双指 = 缩放 + 旋转（一步撤销）",
+                  w1 > w0 * 1.4f,
+                  $"宽 {w0:F0} → {w1:F0}（期望明显变宽）");
+            Doc.Undo();
+            SettleFrames(150);
+            var back = Doc.Strokes[^1].WorldBounds;
+            Check("选中变换 = 一步撤销（撤销回原尺寸）",
+                  MathF.Abs((back.MaxX - back.MinX) - w0) < 4f,
+                  $"宽 {back.MaxX - back.MinX:F0} vs {w0:F0}");
+        }
+
+        // ---- ⑩ 漫游开关：单指拖 = 漫游（不落墨）----
+        {
+            SetUiPref("touch.roam", "1");
+            LoadTouchPrefs();
+            int before = Doc.Strokes.Count;
+            float cam0 = ViewOffsetY;
+            SendTouchesSized(true, (cx - 100, cy - 100, 24f));
+            SettleFrames(40);
+            SendTouchesSized(true, (cx - 100, cy - 20, 24f));
+            SettleFrames(60);
+            SendTouchesSized(false, (cx - 100, cy - 20, 24f));
+            SettleFrames(150);
+            Check("漫游开关：单指拖 = 漫游（相机动、不落墨）",
+                  Doc.Strokes.Count == before && MathF.Abs(ViewOffsetY - cam0) > 40f,
+                  $"笔画 {before} → {Doc.Strokes.Count}，相机 {cam0:F0} → {ViewOffsetY:F0}");
+            SetUiPref("touch.roam", "0");
+            LoadTouchPrefs();
+            ViewOffsetY = 0f;
+            ClampViewOffset();
+            SettleFrames(80);
+        }
+
+        // ---- ⑪ 收场干净：全抬起后状态复位，接着单指还能写 ----
+        {
+            TouchWrite(cx - 260, cy + 200, cx - 60, cy + 200);
+            Check("收场干净：全抬起后模式复位，接着单指还能写",
+                  TouchModeForTest == TouchMode.None && TouchCountForTest == 0 && Doc.Strokes.Count > 0,
+                  $"模式 {TouchModeForTest}，触点 {TouchCountForTest}，笔画 {Doc.Strokes.Count}");
+        }
+
+        // 收尾
+        TouchResetForTest();
+        Doc.Clear();
+        Doc.ClearHistory();
+        SettleFrames(150);
+
+        Console.WriteLine();
+        Console.WriteLine(fail == 0 ? $"  PASS: 触摸手势全通（{pass} 项）" : $"  FAIL: {fail} 项不对");
         _quit = true;
     }
 

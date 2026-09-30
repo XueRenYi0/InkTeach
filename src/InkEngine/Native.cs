@@ -239,6 +239,20 @@ internal static class Native
         public int tiltX, tiltY;
     }
 
+    /// <summary>
+    /// 触摸触点信息（Windows 真实定义 136 字节）。**我们要的是 `rcContact`**——
+    /// 触点的接触矩形，手掌/拳头和指尖、笔尖在这里差得很明显（手势层拿它分"写/擦"，
+    /// 见 调研-触摸手势-学校大屏.md §3.2）。
+    /// </summary>
+    public struct POINTER_TOUCH_INFO
+    {
+        public POINTER_INFO pointerInfo;
+        public RECT rcContact;
+        public RECT rcContactRaw;
+        public uint orientation;
+        public uint pressure;
+    }
+
     public delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
     public delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, ref RECT rect, IntPtr data);
 
@@ -465,6 +479,10 @@ internal static class Native
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetPointerPenInfo(uint pointerId, out POINTER_PEN_INFO penInfo);
+
+    /// <summary>触摸触点的详细信息（**接触面积在 `rcContact` 里**），手势层用它分"写/擦"。</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool GetPointerTouchInfo(uint pointerId, IntPtr touchInfo);
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetPointerPenInfoHistory(uint pointerId, ref uint entriesCount, [Out] POINTER_PEN_INFO[] penInfo);
@@ -783,9 +801,14 @@ internal static class Native
 
     /// <summary>
     /// POINTER_TYPE_INFO：真实定义里中间是一个 union，最大成员是
-    /// POINTER_TOUCH_INFO（144 字节），我们只用 pen 分支（120 字节）。
+    /// POINTER_TOUCH_INFO（136 字节），我们只声明 pen 分支（120 字节）。
     /// 差的 24 字节必须显式补出来，否则 API 按 union 的真实大小读写会越界
     /// （第一次写这个探针时就是这么崩的：0xC0000374 堆损坏）。
+    ///
+    /// ⚠ **不许改成 Explicit 叠放**（8.4.0 试过）：布局一换成 Explicit + 两个重叠字段，
+    /// 注入就只进得去**一个**触点（第二根手指的按下收不到，实测 `触点 = 1`）——
+    /// 二分过：与 `maxCount` 无关，就是这一步。要写 `rcContact` 就按偏移用指针写
+    /// （见 `App.SendTouchesSized`，union 起点 = 偏移 8、touch 的 rcContact = union + 96）。
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct POINTER_TYPE_INFO
@@ -798,9 +821,14 @@ internal static class Native
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr CreateSyntheticPointerDevice(uint pointerType, uint maxCount, uint mode);
 
+    /// <summary>
+    /// 注入合成指针。⚠ **必须按 IntPtr 传缓冲区**：原生 `POINTER_TYPE_INFO` 的真实步长
+    /// 是 **144**（union 最大 136 + 8 的头部），而托管结构体为了留 pen 分支的余量是 152——
+    /// 直接传数组的话，**第二个元素会被 API 按 144 读、整体错位 8 字节 → 第二个触点收不到**
+    ///（实测：一次注入两个新触点只有第一个生效）。所以自检那边自己按 144 排好再传进来。
+    /// </summary>
     [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool InjectSyntheticPointerInput(
-        IntPtr device, POINTER_TYPE_INFO[] pointerInfo, uint count);
+    public static extern bool InjectSyntheticPointerInput(IntPtr device, IntPtr pointerInfo, uint count);
 
     // ---- 注册表（只读，用来诊断"系统笔设置"）------------------------------
     //
