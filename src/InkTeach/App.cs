@@ -21849,6 +21849,13 @@ internal sealed class App : InkEngine.InkEngine
         Check("合成触摸以 PT_TOUCH 进来", LastPointerType == Native.PT_TOUCH,
               $"LastPointerType = {DeviceName(LastPointerType)}");
 
+        // ---- ①b 触点诊断（8.3.3）：数得到触点数 / 记得住最大触点数 ----
+        TouchHud = true;
+        SettleFrames(40);
+        Check("触点诊断：数得到触点数（并标出「触摸」）",
+              TouchHudNow == 1 && (TouchHudText ?? "").Contains("触摸"),
+              $"当前 {TouchHudNow} 指，最多 {TouchHudMax} 指");
+
         // ---- ② 走一段，让速度和预测器都活起来；③ 看有没有尾 ----
         int tailMax = 0;
         float cx = x0;
@@ -21875,6 +21882,8 @@ internal sealed class App : InkEngine.InkEngine
 
         Check("第二根手指的按下真的到了引擎（不然下一条会假绿）",
               _cntDown > downBefore, $"_cntDown {downBefore} → {_cntDown}");
+        Check("触点诊断：记得住最大触点数 ≥ 2（这块屏能报几个点就看它）",
+              TouchHudMax >= 2, $"最多 {TouchHudMax} 指（合成注入第二指本来就不可靠，这项仅供参考）");
         Check("第二根手指不许抢走正在写的那一笔",
               ReferenceEquals(ActiveStroke, before), "ActiveStroke 被换成了新对象就是抢走了");
         Check("那一笔已经写下的点一个都没丢",
@@ -21898,6 +21907,7 @@ internal sealed class App : InkEngine.InkEngine
               committed == null ? "文档里没有笔画" : $"点数 {committed.Points.Count}");
 
         CurrentColor = oldColor;
+        TouchHud = false;
         Console.WriteLine();
         Console.WriteLine($"  合计：{pass} 项通过，{fail} 项失败");
         Console.WriteLine(fail == 0 ? "  PASS: 触摸自检全部通过" : "  FAIL: 触摸自检有失败项");
