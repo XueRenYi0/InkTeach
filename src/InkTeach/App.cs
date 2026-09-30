@@ -2025,6 +2025,25 @@ internal sealed class App : InkEngine.InkEngine
         Check("进放映：切到第 1 页（键 = SlideID）", Doc.PageKey == 256, $"页键 {Doc.PageKey}");
         Check("进放映：桌面批注**看不见了**（完全隔离）", Doc.Strokes.Count == 0, $"{Doc.Strokes.Count} 条");
 
+        // ---- ①.5 放映临时全局键 × 穿透：穿透期间让给下层（用户 2026-09-30 定）----
+        //
+        // 用户定的总规则："正常模式我们的键起作用、PPT 的键不起作用；穿透模式反过来。"
+        // 放映时那 9 个键是临时全局热键，穿透开着就该整体注销，把键盘还给 PPT/WPS。
+        {
+            Check("放映中：临时全局键已挂", PptHotkeysOnForTest,
+                  $"挂着 = {PptHotkeysOnForTest}");
+            SetPassThroughFromUi(true);
+            SettleFrames(150);
+            Check("放映中开穿透：临时全局键让给下层（PPT 的 Ctrl+P/E 等恢复可用）",
+                  PassThrough && !PptHotkeysOnForTest,
+                  $"穿透 = {PassThrough}，挂着 = {PptHotkeysOnForTest}");
+            SetPassThroughFromUi(false);
+            SettleFrames(150);
+            Check("关掉穿透（还在放映）：临时全局键收回",
+                  !PassThrough && PptHotkeysOnForTest,
+                  $"穿透 = {PassThrough}，挂着 = {PptHotkeysOnForTest}");
+        }
+
         // ---- ② 每页一套 + 页内滚动 ----
         MakePen(400, 420);
         MakePen(520, 420);

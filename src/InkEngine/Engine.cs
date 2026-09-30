@@ -2168,6 +2168,11 @@ public partial class InkEngine
     // 不看焦点；而且键被我们吞掉、**不会传给 WPS**，所以不会有"我们切了工具、PPT 又翻
     // 一页"的双发副作用（隔壁 InkClass 那种"打架"就是它用全局钩子但不吞键造成的）。
     // 退出放映立刻注销：平时一个键都不多占。
+    //
+    // **例外：穿透开着时整体让路**（用户 2026-09-30 定："穿透模式下，PPT 的键起作用、
+    // 我们的键不起作用"）——穿透 = "这一段键盘归下层程序"，所以这几个键临时注销，
+    // PPT/WPS 自己的 Ctrl+P/E/L/Z、←→ 等恢复可用；退出穿透时若还在放映，立刻收回
+    // （统一走 SyncPptHotkeys，见 SetPassThrough）。
     private const int PptHotkeyBase = 81;          // 一小段专用 id（常规热键是 1..N，别撞）
     private static readonly (uint Mod, uint Vk, KeyAction Act)[] PptHotkeys =
     {
@@ -2185,7 +2190,16 @@ public partial class InkEngine
     };
     private bool _pptHotkeysOn;
 
-    /// <summary>进/出放映批注模式时调它（见 Ppt.EnterPptMode / ExitPptMode）。</summary>
+    /// <summary>现在该不该挂放映临时全局键：放映中 **且不穿透**。
+    /// 穿透 = "这一段键盘归下层程序"（用户 2026-09-30 定："穿透模式下，PPT 的键起作用、
+    /// 我们的键不起作用"），所以穿透期间让路，退出穿透立刻收回。</summary>
+    private bool PptHotkeysWanted => PptMode && !PassThrough;
+
+    /// <summary>按当前状态挂/摘放映临时全局键。进/退放映（Ppt.cs）与开/关穿透
+    /// （SetPassThrough）都调它；`RegisterPptHotkeys` 幂等，重复调不做事。</summary>
+    private void SyncPptHotkeys() => RegisterPptHotkeys(PptHotkeysWanted);
+
+    /// <summary>挂/摘那 9 个放映临时全局键（真正碰系统的那一层）。</summary>
     private void RegisterPptHotkeys(bool on)
     {
         if (_pptHotkeysOn == on || _windows.Count == 0) return;
@@ -2202,9 +2216,12 @@ public partial class InkEngine
             else Native.UnregisterHotKey(h, id);
         }
         _pptHotkeysOn = on;
-        Console.WriteLine(on ? "放映批注模式：工具键（Ctrl+P/I/L/E/Z）已临时升级为全局热键"
-                            : "退出放映：临时全局热键已注销");
+        Console.WriteLine(on ? "放映批注模式：工具键（Ctrl+P/I/L/E/Z）与方向键已临时升级为全局热键"
+                            : "放映临时全局热键已注销（退出放映或开着穿透）");
     }
+
+    /// <summary>自检用：放映临时全局键现在挂着没有（穿透期间会让给下层）。</summary>
+    internal bool PptHotkeysOnForTest => _pptHotkeysOn;
 
     /// <summary>注册顺序 → 动作。按这个顺序 RegisterHotKey，WM_HOTKEY 的 id 就是它。</summary>
     private readonly List<KeyAction> _hotkeyActions = new();
@@ -7626,6 +7643,9 @@ public partial class InkEngine
         if (on && !PassThrough) _boardBeforePassThrough = BoardOn;
 
         PassThrough = on;
+        // 穿透 = "键盘让给下层"：放映临时全局键跟着挂/摘（用户 2026-09-30 定，
+        // 见 PptHotkeys 那段注释）。不在放映时这一句是空操作。
+        SyncPptHotkeys();
         // 穿透打开/关掉时把激光轨迹清掉（原来是把 `Visible` 置假，等价于"立刻全没"）。
         // ⚠ 别只隐藏不清：轨迹会一直留在集合里，`Laser.Visible` 仍为真 →
         //    每一帧都出一帧（白烧 CPU），而且下次一进来它们又冒出来。

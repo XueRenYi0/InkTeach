@@ -269,7 +269,7 @@ public partial class InkEngine
     private void EnterPptMode(in PptSnapshot s)
     {
         PptMode = true;
-        RegisterPptHotkeys(true);      // 放映时工具键临时升级为全局（见 RegisterPptHotkeys）
+        SyncPptHotkeys();              // 放映临时全局键：挂上（穿透开着则不挂，见 Engine.PptHotkeys）
         _pptKey = s.Key ?? "";
         PptSlide = s.Slide;
         PptTotal = s.Total;
@@ -297,7 +297,7 @@ public partial class InkEngine
     private void ExitPptMode()
     {
         PptMode = false;
-        RegisterPptHotkeys(false);     // 退出放映：临时全局热键注销（平时一个键都不多占）
+        SyncPptHotkeys();              // 放映临时全局键：注销（平时一个键都不多占）
         // **把键盘/前台要回来**：放映时前台是 WPS，退出后如果不管，我们的窗口还是非前台，
         // 应用内快捷键（Ctrl+P 等）就一直是死的（用户 2026-09-30 实测："退出放映后 Ctrl+P
         // 也没用了"）。`SetKeyboardMode` 里那句 SetForegroundWindow 正是干这个的，
