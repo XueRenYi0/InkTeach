@@ -4376,8 +4376,10 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private void DrawEraserRectCursor(InkEngine app, Vector2 c)
     {
-        float hw = MathF.Max(1f, app.PixelEraserHalfWidthPx);
-        float hh = MathF.Max(1f, app.PixelEraserHalfHeightPx);
+        // 框 = **真正会被擦掉的那一块**：和 EraseRectAlongPath 读同一份尺寸。
+        // 拖动中跟着移动速度变大（8.3.4 动态橡皮），悬停时是基准（= 按下去第一下的大小）。
+        float hw = MathF.Max(1f, app.PixelEraserCursorHalfWidthPx);
+        float hh = MathF.Max(1f, app.PixelEraserCursorHalfHeightPx);
 
         _ctx.FillRectangle(
             new Vortice.RawRectF(c.X - hw, c.Y - hh, c.X + hw, c.Y + hh),

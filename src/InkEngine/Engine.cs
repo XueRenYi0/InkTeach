@@ -192,6 +192,22 @@ public partial class InkEngine
     private float _eraseDynFactor = 1f;  // 当前尺寸系数（落笔 = 1）
 
     /// <summary>
+    /// 面积擦**正在拖**吗。框只在拖动中跟着速度变；**悬停时显示基准框**——因为落笔第一下
+    /// 用的就是基准（速度还没有），所以"悬停看见的 = 按下去第一下擦掉的"，所见即所得。
+    /// </summary>
+    internal bool PixelEraseDragging;
+
+    /// <summary>
+    /// 落点框 = **真正会被擦掉的那一块**（物理像素半宽/半高）。擦除（`EraseRectAlongPath`）
+    /// 和 Overlay 画的那个框读的是**同一份**——不然就会出现"看见的框"和"擦掉的范围"对不上。
+    /// 拖动中 = 基准 × 速度系数；没在拖 = 基准。
+    /// </summary>
+    internal float PixelEraserCursorHalfWidthPx
+        => PixelEraserHalfWidthPx * (PixelEraseDragging ? _eraseDynFactor : 1f);
+    internal float PixelEraserCursorHalfHeightPx
+        => PixelEraserHalfHeightPx * (PixelEraseDragging ? _eraseDynFactor : 1f);
+
+    /// <summary>
     /// 像素橡皮的落点尺寸（逻辑像素）：**竖着的黄金比例矩形**，高 : 宽 = 1.618。
     ///
     /// 默认宽 93 × 高 150：用户实测的用法是"从上往下抹一段"（一列板书、一个竖排的字），
@@ -2927,12 +2943,13 @@ public partial class InkEngine
             case Tool.PixelEraser:
                 _lastEraseX = x; _lastEraseY = y;
                 ResetDynamicEraser();
+                PixelEraseDragging = true;
                 Doc.BeginEraseRect();
                 EraserTelemetry?.BeginDrag(Tool.PixelEraser, x, y, NowMs);
                 {
                     bool log = EraserTelemetry != null;
                     long t0 = log ? Stopwatch.GetTimestamp() : 0;
-                    int hit = Doc.EraseRectAt(x, y, PixelEraserHalfWidthPx, PixelEraserHalfHeightPx);
+                    int hit = Doc.EraseRectAt(x, y, PixelEraserCursorHalfWidthPx, PixelEraserCursorHalfHeightPx);
                     if (log)
                         EraserTelemetry.Step(hit, Doc.TotalIntervals, Doc.Strokes.Count,
                                              Stopwatch.GetElapsedTime(t0).TotalMilliseconds, x, y, NowMs);
@@ -3803,6 +3820,7 @@ public partial class InkEngine
     private void UpdateDynamicEraser(float x, float y)
     {
         if (!DynamicEraser) { _eraseDynFactor = 1f; return; }
+        if (EraserFactorOverrideForTest > 0f) { _eraseDynFactor = EraserFactorOverrideForTest; return; }
         double now = NowMs;
         float dx = x - _lastEraseX, dy = y - _lastEraseY;
         float dist = MathF.Sqrt(dx * dx + dy * dy);
@@ -3814,6 +3832,9 @@ public partial class InkEngine
             : _eraseSpeedEma + (speed - _eraseSpeedEma) * 0.35f;
         _eraseDynFactor = Math.Clamp(0.6f + _eraseSpeedEma * 0.6f, 0.6f, 2.5f);
     }
+
+    /// <summary>自检用：把尺寸系数钉死在一个值上（验"框和擦严丝合缝"时不受手速影响）。0 = 不覆盖。</summary>
+    internal float EraserFactorOverrideForTest;
 
     /// <summary>自检用：把一个速度（物理像素/毫秒）喂进去，看算出什么尺寸系数（后门关掉时恒 1）。</summary>
     internal float DynamicEraserFactorForTest(float speedPxPerMs)
@@ -3862,12 +3883,11 @@ public partial class InkEngine
     /// </summary>
     private void EraseRectAlongPath(float x, float y)
     {
-        float hw = PixelEraserHalfWidthPx, hh = PixelEraserHalfHeightPx;
         float dx = x - _lastEraseX, dy = y - _lastEraseY;
-        // 动态橡皮：按这一段的"速度"把尺寸放大（落笔第一下用基准，移动中才渐入）
+        // 动态橡皮：这一段的"速度"算出的尺寸 = 框画的那个尺寸（同一份，看见的就是擦的）。
+        // 落笔那一下还没速度 → 系数 1 → 和悬停时看到的框一样大。
         UpdateDynamicEraser(x, y);
-        hw *= _eraseDynFactor;
-        hh *= _eraseDynFactor;
+        float hw = PixelEraserCursorHalfWidthPx, hh = PixelEraserCursorHalfHeightPx;
         float dist = MathF.Sqrt(dx * dx + dy * dy);
         int steps = Math.Clamp((int)(dist / MathF.Max(1f, MathF.Min(hw, hh))), 1, 64);
 
@@ -4882,6 +4902,8 @@ public partial class InkEngine
         ClearRenderTail();
         ActiveStrokeOnTrail = false;
         Doc.EndErase();
+        // 面积擦抬手：框回基准尺寸（悬停时显示的 = 下次按下去第一下擦掉的那一块）。
+        PixelEraseDragging = false;
         if (CaptureActive)
         {
             // 起框那一次松手 → 进调整阶段；调整里拖手柄那几次松手 → 只收手。
@@ -5512,8 +5534,9 @@ public partial class InkEngine
                     return MathF.Max(HighlighterWidthLogical * DpiScale * 0.5f, 2f) + 12f;
                 case ToolCursorShape.Rect:
                     // 矩形：按**半对角线**扩，四个角才不会在快速移动时留残影。
-                    return MathF.Sqrt(PixelEraserHalfWidthPx * PixelEraserHalfWidthPx
-                                    + PixelEraserHalfHeightPx * PixelEraserHalfHeightPx) + 12f;
+                    // 用落点框（拖动中会随速度变大）——按基准算的话，放大的那一圈会留残影。
+                    return MathF.Sqrt(PixelEraserCursorHalfWidthPx * PixelEraserCursorHalfWidthPx
+                                    + PixelEraserCursorHalfHeightPx * PixelEraserCursorHalfHeightPx) + 12f;
                 case ToolCursorShape.Dot:
                     return CursorDotRadius * 1.5f + 10f;
                 default:

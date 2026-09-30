@@ -935,7 +935,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("                     --save 连「保存」一起点，验到落盘为止）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
         Console.WriteLine("  --pixelerasetest    像素橡皮正确性（切成两段 / 框里无墨 / 一步撤销）");
-        Console.WriteLine("  --dynerasertest     动态橡皮（面积擦尺寸随速度：曲线 / 后门 / 快慢扫对比 / 整笔擦不受影响）");
+        Console.WriteLine("  --dynerasertest     动态橡皮（面积擦尺寸随速度：曲线 / 后门 / 框跟速度 / 快慢扫对比 / 严丝合缝 / 整笔擦）");
         Console.WriteLine("  --pixeleraseshow    像素橡皮摆样（擦之前/之后各存一张图，自己抓屏）");
         Console.WriteLine("  --eraserlab [前缀]  橡皮手测台：铺样例 + 记录每条拖拽，给人用鼠标测（不自动退出）");
         Console.WriteLine("  --imagetest         图像对象（上屏 / 复制翻转 / 存档 / 剪贴板）");
@@ -23552,6 +23552,20 @@ internal sealed class App : InkEngine.InkEngine
               MathF.Abs(fFixed - 1f) < 0.001f, $"5.0px/ms → ×{fFixed:F2}");
         DynamicEraserForTest = true;
 
+        // --- ③ 看的框 = 擦的范围（同一份尺寸：拖动中跟速度、悬停回基准）----------
+        DynamicEraserFactorForTest(5f);                 // → ×2.5
+        PixelEraseDragging = true;
+        float growW = PixelEraserCursorHalfWidthPx, growH = PixelEraserCursorHalfHeightPx;
+        bool grows = MathF.Abs(growW - PixelEraserHalfWidthPx * 2.5f) < 0.01f
+                  && MathF.Abs(growH - PixelEraserHalfHeightPx * 2.5f) < 0.01f;
+        PixelEraseDragging = false;
+        bool idleBase = MathF.Abs(PixelEraserCursorHalfWidthPx - PixelEraserHalfWidthPx) < 0.01f
+                     && MathF.Abs(PixelEraserCursorHalfHeightPx - PixelEraserHalfHeightPx) < 0.01f;
+        Check("看的框 = 擦的范围：拖动中跟速度 ×2.5、悬停回基准",
+              grows && idleBase,
+              $"拖动中半宽 {growW:F0}px（基准 {PixelEraserHalfWidthPx:F0}、×2.5 应为 "
+              + $"{PixelEraserHalfWidthPx * 2.5f:F0}），悬停 {PixelEraserCursorHalfWidthPx:F0}px");
+
         // --- ③④⑤ 真机拖动（合成鼠标，走产品的指针路径）------------------------
         float cx = _virtualX + _virtualW * 0.5f;
         float cy = _virtualY + _virtualH * 0.5f;
@@ -23672,6 +23686,48 @@ internal sealed class App : InkEngine.InkEngine
                       $"半径 {r:F0}px：近的（过路径）"
                       + $"{(Doc.Strokes.Contains(near) ? "还在 ✗" : "被擦 ✓")}，"
                       + $"远的（{dFar:F0}px 外）{(Doc.Strokes.Contains(far) ? "没动 ✓" : "**被吃了 ✗**")}");
+
+                // --- ⑥ 严丝合缝：框有多大，墨就擦到哪儿（系数钉成 2.5，不受手速影响）--
+                // 判据用"墨的可见边缘到框边的缝"：0 附近 = 正好触到框；负 = 擦过头了；
+                // 明显正 = 框和擦对不上（"看见没擦到、其实擦掉了"或反过来）。
+                Doc.Clear();
+                Doc.ClearHistory();
+                Tool = Tool.PixelEraser;
+                const float penW2 = 16f;
+                float reach2 = penW2 * 0.5f;              // 半笔宽：墨那条"身体"的半径
+                float fPin = 2.5f;
+                EraserFactorOverrideForTest = fPin;
+                var oneLine = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = penW2 };
+                for (int i = 0; i <= 60; i++) oneLine.AddPoint(cx - 300 + i * 10, cy, 0.9f, i);
+                Doc.AddStroke(oneLine);
+                Doc.InvalidateAll();
+                SettleFrames(350);
+
+                SendMouse((int)cx, (int)(cy - 200), 0);
+                SettleFrames(80);
+                SendMouse((int)cx, (int)(cy - 200), Native.MOUSEEVENTF_LEFTDOWN);
+                SettleFrames(60);
+                SendMouse((int)cx, (int)(cy + 200), 0);   // 扫过这条线（框按 ×2.5 算）
+                SendMouse((int)cx, (int)(cy + 200), Native.MOUSEEVENTF_LEFTUP);
+                SettleFrames(350);
+                EraserFactorOverrideForTest = 0f;
+
+                float halfFrame = PixelEraserHalfWidthPx * fPin;
+                // 左段的右端 = 所有段里**最小**的 MaxX；右段的左端 = 所有段里**最大**的 MinX。
+                float leftEnd2 = float.MaxValue, rightStart2 = float.MinValue;
+                foreach (var s in Doc.Strokes)
+                {
+                    leftEnd2 = MathF.Min(leftEnd2, s.Bounds.MaxX);
+                    rightStart2 = MathF.Max(rightStart2, s.Bounds.MinX);
+                }
+                float gapL = (cx - halfFrame) - (leftEnd2 + reach2);   // 墨够到框边了吗
+                float gapR = (rightStart2 - reach2) - (cx + halfFrame);
+                Check("严丝合缝：框有多大，墨就擦到框边（缝 0~4 像素，不擦过头）",
+                      Doc.Strokes.Count == 2 && !Doc.Strokes.Contains(oneLine)
+                      && gapL >= -1f && gapL <= 4f && gapR >= -1f && gapR <= 4f,
+                      $"框半宽 {halfFrame:F1}px（基准 {PixelEraserHalfWidthPx:F0}×2.5）→ "
+                      + $"左缝 {gapL:F1}px / 右缝 {gapR:F1}px（0 = 正好触到，负 = 擦过头）"
+                      + $"，对象 {Doc.Strokes.Count} 条");
             }
         }
 
