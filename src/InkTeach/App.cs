@@ -24932,9 +24932,9 @@ internal sealed class App : InkEngine.InkEngine
             float cam0 = ViewOffsetY;
             SendTouchesSized(true, (cx - 100, cy - 100, 24f));
             SettleFrames(40);
-            SendTouchesSized(true, (cx - 100, cy - 20, 24f));
+            SendTouchesSized(true, (cx - 100, cy - 180, 24f));
             SettleFrames(60);
-            SendTouchesSized(false, (cx - 100, cy - 20, 24f));
+            SendTouchesSized(false, (cx - 100, cy - 180, 24f));
             SettleFrames(150);
             Check("漫游开关：单指拖 = 漫游（相机动、不落墨）",
                   Doc.Strokes.Count == before && MathF.Abs(ViewOffsetY - cam0) > 40f,

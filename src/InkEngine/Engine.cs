@@ -3680,6 +3680,13 @@ public partial class InkEngine
         if (_sliderDragging) { DragWidthSliderTo(x); return; }
         if (_colorDragging) { DragColorPickerTo(x, y); return; }
 
+        // 选择拖动 / 框选：**按状态路由，不依赖 `_touchMode`**（2026-09-30 修）。
+        // 触摸长按成立之后，模式字段可能被异常路径（丢捕获等）清掉——那时拖动会掉进
+        // 工具分支、被当成"接着写一笔"（实测症状：长按选中了对象，但拖不动）。
+        // 这两条对鼠标那条路是**同一个调用**（原来在 Marquee 分支里），所以重复无害。
+        if (SelDragging) { UpdateSelDrag(x, y); return; }
+        if (MarqueeActive) { ExtendMarqueeTo(x, y); _dirty = true; return; }
+
         var tool = inverted ? Tool.Eraser : Tool;
         // 手测台：数"指针消息"而不是"擦除步"——消息之间的间隔才是跟不跟手。
         if (tool == Tool.Eraser || tool == Tool.PixelEraser) EraserTelemetry?.Move(NowMs);
@@ -4395,8 +4402,11 @@ public partial class InkEngine
     {
         if (_touchMode == TouchMode.None && !_touch.Any) return;
         if (_touchMode == TouchMode.Erase) { Doc.EndErase(); EndStrokeMeasure(); }
-        if (_touchMode == TouchMode.Marquee) MarqueeActive = false;
-        if (_touchMode == TouchMode.SelDrag && SelDragging) EndSelDrag();
+        // ⚠ **选择拖动 / 框选不在这里结束**（2026-09-30 实测）：触摸长按之后，
+        // 系统偶尔会在"按住不动"的某一刻发一次丢捕获，把拖动提前 `EndSelDrag()` 掉——
+        // 症状就是"长按选中了对象，但拖不动"（笔画计数却涨了：那一拖被当成接着写字）。
+        // 留给松手那条路（`EndStroke` 里的 `if (SelDragging) EndSelDrag()`）去收：
+        // 它才是真的抬手时刻，而且对鼠标那条路本来就是同一条。
         _touch.Reset();
         _touchMode = TouchMode.None;
         _g2Transform = false;
@@ -5498,7 +5508,7 @@ public partial class InkEngine
         if (SelDragging) EndSelDrag();
         else if (_sliderDragging) EndWidthSliderDrag();        // 粗细滑条：松手 = 一步撤销
         else if (_colorDragging) EndColorPickerDrag(PointerX, PointerY);   // 取色板：板内应用 / 板外取消
-        else if (Tool == Tool.Marquee) ApplyMarquee();
+        else if (Tool == Tool.Marquee || MarqueeActive) ApplyMarquee();    // MarqueeActive：触摸长按那条路（工具可能还是笔）
         EndStrokeMeasure();      // 兜底：没收过的分支（取消、切换工具等）也把总账结掉
         _drawing = false;
         _dirty = true;
