@@ -37,9 +37,9 @@
 
     <ApplicationIcon>assets\InkTeach.ico</ApplicationIcon>
 
-    <Version>8.3.3</Version>
-    <AssemblyVersion>8.3.3.0</AssemblyVersion>
-    <FileVersion>8.3.3.0</FileVersion>
+    <Version>8.3.4</Version>
+    <AssemblyVersion>8.3.4.0</AssemblyVersion>
+    <FileVersion>8.3.4.0</FileVersion>
     <Product>InkTeach 批注</Product>
     <AssemblyTitle>InkTeach 批注</AssemblyTitle>
     <Description>屏幕批注工具：白板 / PPT 放映批注 / 图形与曲线 / 回放导出</Description>
