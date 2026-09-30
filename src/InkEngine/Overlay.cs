@@ -2384,7 +2384,19 @@ internal sealed class OverlayWindow : IDisposable
 
     private void AddClipped(List<RectF> list, RectF r)
     {
-        var c = ClipToWindow(r);
+        // **像素对齐**（8.4.2 修）：脏区是从画布/逻辑坐标换算过来的，边界常带小数
+        // （DPI 2.0、相机亚像素偏移、奇数尺寸）。小数边界交给 `PushAxisAlignedClip` + `Copy`
+        // 填充时，**最左（最上）那一列像素可能只被裁进去一半——擦不掉**，屏幕上就留下一条
+        // 竖线（旧内容）。用户 2026-09-30 报的两条正是它：
+        //   · "面积橡皮左侧始终跟着一根黑线"——每个脏区矩形各漏一条左边缘；
+        //     整窗重画后只剩一个矩形，所以"大残影带没了、只剩一根"；
+        //   · "悬浮栏收起展开会残留黑竖线"——同一件事（界面那块脏区）。
+        // 往外取整（floor 左/上、ceil 右/下）之后，裁剪框和上屏矩形都落在整像素上。
+        var c = ClipToWindow(new RectF
+        {
+            MinX = MathF.Floor(r.MinX), MinY = MathF.Floor(r.MinY),
+            MaxX = MathF.Ceiling(r.MaxX), MaxY = MathF.Ceiling(r.MaxY),
+        });
         if (!c.IsEmpty) list.Add(c);
     }
 
