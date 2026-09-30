@@ -359,6 +359,12 @@ internal sealed class OverlayWindow : IDisposable
     /// <summary>上一帧图库面板占的矩形（窗口坐标）。面板关掉时要靠它把那张卡片擦掉。</summary>
     private RectF _libraryRectPrev = RectF.Empty;
 
+    /// <summary>上一帧"自绘落点反馈"（橡皮框 / 圆环）占的矩形（窗口坐标）。
+    /// **必须并进脏区**：指针一帧里可能移动超过半径（快擦、面积擦的框还会随速度变大变小），
+    /// 只算当前位置的话，旧框留在原地的那一条就成了"擦不掉的竖线 / 变暗的带子"——
+    /// 用户 2026-09-30 报的"橡皮左侧 / 左上侧靠近墨迹时出现细密竖线、颜色变深"就是它。</summary>
+    private RectF _cursorRectPrev = RectF.Empty;
+
     /// <summary>上一帧"截图取景"开着吗——收场那一帧要整窗重画，把遮罩擦干净（8.3.0）。</summary>
     private bool _captureWasActive;
 
@@ -2115,7 +2121,19 @@ internal sealed class OverlayWindow : IDisposable
             var c = RectF.Empty;
             c.Add(app.PointerX - rad, app.PointerY - rad);
             c.Add(app.PointerX + rad, app.PointerY + rad);
-            r.Add(CanvasRectToWindow(c));
+            var cur = CanvasRectToWindow(c);
+            r.Add(cur);
+            // **上一帧那一份也要并进来**（同图库面板 / PPT 条的做法）：指针一帧里可能移动
+            // 超过半径（快擦；面积擦的框还会随速度变大变小），只算当前位置的话，旧框留在
+            // 原地的那一条就成了"擦不掉的竖线 / 变暗的带子"——正是用户报的那个现象。
+            if (!_cursorRectPrev.IsEmpty) r.Add(_cursorRectPrev);
+            _cursorRectPrev = cur;
+        }
+        else if (!_cursorRectPrev.IsEmpty)
+        {
+            // 落点反馈消失了（换工具 / 指针出界）：最后再擦一次它原来的位置。
+            r.Add(_cursorRectPrev);
+            _cursorRectPrev = RectF.Empty;
         }
 
         if (app.MarqueeActive)
