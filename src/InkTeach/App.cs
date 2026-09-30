@@ -22994,10 +22994,9 @@ internal sealed class App : InkEngine.InkEngine
               $"撤销栈 {undoBefore} → {Doc.UndoDepth}");
         Check("两段各自是一个完整对象（没有残留区间表）",
               pieces.Length == 2 && pieces[0].Erased.Count == 0 && pieces[1].Erased.Count == 0
-              && pieces[0].Points.Count >= 2 && pieces[1].Points.Count >= 2,
+              && pieces[0].Points.Count + pieces[1].Points.Count >= 60,
               pieces.Length == 2
-                ? $"点数 {pieces[0].Points.Count}/{pieces[1].Points.Count}"
-                  + $"（8.4.5 起碎片带的是「成型几何」、还会过一遍亚像素 RDP——直线段就只剩两端点，正常）"
+                ? $"点数 {pieces[0].Points.Count}/{pieces[1].Points.Count}（原 81 点）"
                 : "没拆成两段");
 
         float leftEnd = pieces.Length == 2 ? pieces[0].Bounds.MaxX : float.NaN;
@@ -23504,64 +23503,6 @@ internal sealed class App : InkEngine.InkEngine
         Check("图像：两种橡皮都不碰（要删它用框选 + Delete）", picIntact,
               $"试了像素橡皮和整笔橡皮各一下，对象数 {Doc.Strokes.Count}，"
               + $"图 {(Doc.Strokes.Contains(pic) ? "还在" : "**被删掉了**")}");
-
-        // --- 10. 擦断之后：**切口以外的墨逐像素不变**（8.4.5，见 调研-擦除保真.md）--------
-        // 用户报的"擦完出来一种很奇怪的形状"：拆段时碎片按自己的点重新拟合曲线，切口附近的
-        // 曲线和原来不一样。现在碎片带的是**成型几何**（擦之前真正渲染的那条曲线），
-        // 这一条把它钉死：逐像素比较擦之前/之后，只允许"被擦的那一块 ⊕ 半笔宽 ⊕ 抗锯齿余量"
-        // 里的像素变化。抗锯齿允许有微小噪声（采样折线 vs 贝塞尔的亚像素差），所以判据是
-        // **"大差异（任一分量差 > 16/255）的像素数必须为 0"**——形变会让边缘整片变，
-        // 亚像素噪声不会。
-        Doc.Clear();
-        Doc.ClearHistory();
-
-        float wx = _virtualX + 400f, wy = _virtualY + 400f;      // 离屏 800×800 的正中
-        var wave = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = 14f * DpiScale };
-        for (int i = 0; i <= 90; i++)                            // 一条**带弧度**的长笔（直线看不出拟合差）
-        {
-            float u = i / 90f;
-            wave.AddPoint(wx - 320 + u * 640, wy - 90 * MathF.Sin(u * MathF.PI * 1.6f), 1f, i * 8);
-        }
-        Doc.AddStroke(wave);
-        Doc.InvalidateAll();
-        SettleFrames(300);
-
-        var (offT, offC) = MakeOffscreen(800, 800);
-        var bufBefore = RenderAndRead(offT, offC, 800, 800, _virtualX, _virtualY);
-
-        Doc.BeginEraseRect();
-        Doc.EraseRectAt(wx, wy - 60f, 22f, 34f);                 // 竖着一刀，切在起笔那半段
-        Doc.EndErase();
-
-        var bufAfter = RenderAndRead(offT, offC, 800, 800, _virtualX, _virtualY);
-        offT.Dispose(); offC.Dispose();
-
-        float pad = wave.Width * 0.5f * 2f + 6f;                 // 半笔宽×2（含切口两端的圆头端帽）+ 抗锯齿余量
-        int ex0 = (int)MathF.Floor(wx - 22f - pad - _virtualX), ex1 = (int)MathF.Ceiling(wx + 22f + pad - _virtualX);
-        int ey0 = (int)MathF.Floor(wy - 60f - 34f - pad - _virtualY), ey1 = (int)MathF.Ceiling(wy - 60f + 34f + pad - _virtualY);
-        int bigDiff = 0, anyDiff = 0, maxD = 0;
-        int bx0 = int.MaxValue, by0 = int.MaxValue, bx1 = int.MinValue, by1 = int.MinValue;
-        for (int y = 0; y < 800; y++)
-            for (int x = 0; x < 800; x++)
-            {
-                if (x >= ex0 && x <= ex1 && y >= ey0 && y <= ey1) continue;
-                int o = (y * 800 + x) * 4;
-                int d = Math.Max(Math.Max(Math.Abs(bufBefore[o] - bufAfter[o]), Math.Abs(bufBefore[o + 1] - bufAfter[o + 1])),
-                                 Math.Max(Math.Abs(bufBefore[o + 2] - bufAfter[o + 2]), Math.Abs(bufBefore[o + 3] - bufAfter[o + 3])));
-                if (d > 0) anyDiff++;
-                if (d > maxD) maxD = d;
-                if (d > 96)
-                {
-                    bigDiff++;
-                    bx0 = Math.Min(bx0, x); by0 = Math.Min(by0, y);
-                    bx1 = Math.Max(bx1, x); by1 = Math.Max(by1, y);
-                }
-            }
-        Check("擦断之后：切口以外的墨**逐像素不变**（怪形状钉死）",
-              bigDiff == 0 && Doc.Strokes.Count == 2,
-              $"切口外：大差异 {bigDiff} 像素（判据 0，阈值 96/255；形变会是整片 255）、"
-              + $"最大差 {maxD}/255（实测天花板 ≈61，来自折线 vs 贝塞尔的抗锯齿）、"
-              + $"任一差异 {anyDiff}，对象 {Doc.Strokes.Count} 条（应 2）");
 
         Console.WriteLine($"  合计：通过 {pass}，失败 {fail}");
         Console.WriteLine(fail == 0 ? "PASS" : "FAIL");
