@@ -2347,6 +2347,17 @@ internal sealed class OverlayWindow : IDisposable
             AddClipped(_frameDirty, _contentDirtyNow);
         }
 
+        // 【8.4.1 诊断/保险】面积橡皮的落点框可见时，直接把**整窗**算进脏区。
+        //
+        // 用户 2026-09-30 报的"框左侧一条条细密的黑竖线"在 8.4.0（把框并进"最近三帧"
+        // 那套）之后**仍然存在**，说明问题不在"最近几帧"这个维度上。这一步是**对照实验**：
+        //   · 整窗重画之后竖线没了 → 病灶在**上屏脏区/DWM 那层**（脏区提示与实际改动不一致）；
+        //   · 竖线还在 → 病灶在**分块缓存**里（内容被烤进去了，靠重画整窗也擦不掉）。
+        // 顺带它就是最稳的保险：框每帧都在动，整窗重画虽然贵一点（实测整帧 ~7ms），
+        // 但比"老师看见一屏黑竖线"划算得多。
+        if (app.DrawnCursor == InkEngine.ToolCursorShape.Rect)
+            AddClipped(_frameDirty, full);
+
         // 临时图元：这一帧 + 前两帧（双缓冲里躺着的是两帧前的画面）
         var t = _transientNow;
         for (int i = 0; i < Math.Clamp(TransientHistoryFrames, 0, 2); i++)
