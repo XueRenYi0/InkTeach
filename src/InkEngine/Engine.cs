@@ -175,21 +175,50 @@ public partial class InkEngine
     internal float EraserRadius => EraserRadiusLogical * DpiScale;
     private float _lastEraseX, _lastEraseY;
 
-    // ---- 动态橡皮（8.3.4）------------------------------------------------
+    // ---- 动态橡皮（8.3.4 起；8.3.6 重调参数）--------------------------------
     //
-    // 面积擦的尺寸跟着**移动速度**走：慢 = 基准（滑条值）、快 = 更大（最多 ×2.5）。
-    // 照 Inkeys 的"笔速橡皮"口径起手（他们那条曲线本来就是**给触屏设备**的：
-    // `speed≤20 → max(25, speed×2.33+13.33)`、`speed>20 → min(200, 3.0×speed)`），
-    // 这里换成"×系数"：`factor = clamp(0.6 + 速度(px/ms)×0.6, 0.6, 2.5)`——真机再调这一个常数。
+    // 面积擦的尺寸跟着**移动速度**走：慢 = 基准的 0.7 倍（更精细）、快 = 最多 2.5 倍。
+    // 形状照隔壁 Inkeys「笔速橡皮」定（他们那条本来就是给触屏设备的）：
+    //   他们：`speed≤20 → max(25, speed×2.33+13.33)`、`speed>20 → min(200, 3.0×speed)`
+    //         → 有**下限 25px**（慢到底不再小）、有**上限 200px**、中间一段线性斜坡；
+    //   我们：`factor = clamp(0.7 + (v − 0.35) × 0.75, 0.7, 2.5)`（v 单位物理像素/毫秒）
+    //         → 0.35 以下恒 0.7（**死区**，手抖也不动）、0.35 以上线性涨、2.75 到顶。
+    //
+    // 8.3.4 的两个毛病（用户报"慢速下忽大忽小"）8.3.6 都治了：
+    //   ① 速度原来用"这一次消息的 dist ÷ dt"——慢速时一次只走一两像素、除以很小的 dt，
+    //      估出来的速度天然抖 → 现在**窗口累计**（攒够 6 像素或 30ms 才算一次）；
+    //   ② 平滑原来 α=0.35（≈25ms 时间常数，太灵）→ 现在按**时间常数**平滑（涨 120ms /
+    //      收 350ms + 最少一步 0.02）——这就是 Inkeys 那个"每步只走差距的 1/50、至少 0.1px"
+    //      的同源做法（他们按消息数算、我们按时间算，帧率无关）。
+    //   另加**回差**（0.35 涨 / 0.25 回）：速度在门槛附近晃时尺寸不会来回切。
     //
     // ⚠ **只作用于面积擦**。"整笔擦"的"大小"是**命中半径**（碰到哪条删哪条），
     //   让半径随速度变 = "点到哪条全看手速"，不可预期，所以整笔擦恒定。
     // ✅ **不分设备**：笔 / 鼠标 / 手指走的是同一段擦除代码，所以手指在触摸屏上抹面积擦照样有。
-    // 后门：`--eraserfixed` 关掉动态（不进界面；真到"很多老师觉得别扭"再考虑做滑条档位点）。
+    // 后门：`--eraserfixed` 关掉动态（不进界面）。
     internal bool DynamicEraser = true;
-    private float _eraseSpeedEma;        // 速度的指数移动平均（物理像素/毫秒）
+
+    /// <summary>最慢时的系数下限（基准的 0.7 倍；Inkeys 的对应物是那个 25px 地板）。</summary>
+    internal const float EraserFactorMin = 0.7f;
+    /// <summary>最快时的系数上限（基准的 2.5 倍；Inkeys 的对应物是 200px 封顶）。</summary>
+    internal const float EraserFactorMax = 2.5f;
+    /// <summary>开始涨的门槛（物理像素/毫秒）：这以下 = 下限，"慢慢抹"永远同一尺寸。</summary>
+    internal const float EraserSpeedKnee = 0.35f;
+    /// <summary>回差下沿：掉到这以下才回下限（0.25~0.35 之间保持，防门槛附近来回切）。</summary>
+    internal const float EraserSpeedBack = 0.25f;
+    /// <summary>斜坡斜率：`factor = 下限 + (v − 门槛) × 斜率`。</summary>
+    internal const float EraserSpeedSlope = 0.75f;
+    /// <summary>平滑时间常数（毫秒）：涨得快一点（跟手）、收得慢（不会"忽小"）。</summary>
+    internal const float EraserGrowTauMs = 120f, EraserShrinkTauMs = 350f;
+    /// <summary>每步最少挪动的系数（Inkeys 那 0.1px 保底步长的同源做法，保证收得回来）。</summary>
+    private const float EraserMinStep = 0.02f;
+
+    private float _eraseSpeedEma;        // 窗口平均速度（物理像素/毫秒）
     private double _eraseLastMs;         // 上一次速度采样时刻
+    private double _eraseWinStartMs;     // 当前速度窗口的起点
+    private float _eraseWinDist;         // 当前速度窗口累计的距离
     private float _eraseDynFactor = 1f;  // 当前尺寸系数（落笔 = 1）
+    private float _eraseTarget = 1f;     // 平滑的目标（回差状态也存这儿）
 
     /// <summary>
     /// 面积擦**正在拖**吗。框只在拖动中跟着速度变；**悬停时显示基准框**——因为落笔第一下
@@ -3803,19 +3832,56 @@ public partial class InkEngine
         EndStroke();
     }
 
-    /// <summary>动态橡皮：落笔那一刻把速度与系数归到基准（第一下不放大，移动中才渐入）。</summary>
+    /// <summary>动态橡皮：落笔那一刻把速度与系数归到基准（第一下就是滑条那个大小，移动中才渐入）。</summary>
     private void ResetDynamicEraser()
     {
+        double now = NowMs;
         _eraseSpeedEma = 0f;
         _eraseDynFactor = 1f;
-        _eraseLastMs = NowMs;
+        _eraseTarget = 1f;
+        _eraseWinDist = 0f;
+        _eraseLastMs = now;
+        _eraseWinStartMs = now;
+    }
+
+    /// <summary>
+    /// 给定速度的**稳态**目标系数（自检和文档共用；回差带里取"从慢往上走"那一支）。
+    /// 曲线：`0.35 以下 → 0.7`；以上 `0.7 + (v − 0.35) × 0.75`，夹到 0.7~2.5。
+    /// </summary>
+    internal static float EraserTargetFactorForSpeed(float speedPxPerMs)
+    {
+        if (speedPxPerMs <= EraserSpeedBack) return EraserFactorMin;
+        return Math.Clamp(EraserFactorMin + (speedPxPerMs - EraserSpeedKnee) * EraserSpeedSlope,
+                          EraserFactorMin, EraserFactorMax);
+    }
+
+    /// <summary>
+    /// 平滑一步：朝目标挪（涨/收时间常数不同 + 最少步长），带**回差**——
+    /// 速度落在 [0.25, 0.35] 之间时目标保持不变，速度在门槛附近抖也不会来回切。
+    /// </summary>
+    private void ApplyEraserTarget(double nowMs)
+    {
+        float target;
+        if (_eraseSpeedEma < EraserSpeedBack) target = EraserFactorMin;
+        else if (_eraseSpeedEma > EraserSpeedKnee) target = EraserTargetFactorForSpeed(_eraseSpeedEma);
+        else target = _eraseTarget;                          // 回差带：保持
+
+        _eraseTarget = target;
+        float gap = target - _eraseDynFactor;
+        if (MathF.Abs(gap) < 0.001f) { _eraseDynFactor = target; return; }
+
+        float dt = (float)Math.Max(0.5, nowMs - _eraseLastMs);
+        float tau = target > _eraseDynFactor ? EraserGrowTauMs : EraserShrinkTauMs;
+        float step = gap * (1f - MathF.Exp(-dt / tau));
+        if (MathF.Abs(step) < EraserMinStep)
+            step = MathF.Sign(gap) * MathF.Min(EraserMinStep, MathF.Abs(gap));
+        _eraseDynFactor += step;
     }
 
     /// <summary>
     /// 动态橡皮：喂一个采样点（画布坐标）更新"速度 → 尺寸系数"。
-    /// 曲线：`factor = clamp(0.6 + 速度(物理像素/毫秒) × 0.6, 0.6, 2.5)`——
-    /// 慢（<0.2）≈0.7×、中（1.0）≈1.2×、快（≥3）≈2.4×，真机再调这一个系数。
-    /// 速度走 EMA（0.35）滑动，不然手一抖尺寸就跳。
+    /// 速度用**窗口累计**（攒够 6 像素或 30ms 才算一次）——"这一次消息的 dist÷dt"在慢速时
+    /// 会被很小的 dt 放大抖动，那就是 8.3.4"慢速忽大忽小"的根。目标与平滑见 `ApplyEraserTarget`。
     /// </summary>
     private void UpdateDynamicEraser(float x, float y)
     {
@@ -3823,27 +3889,40 @@ public partial class InkEngine
         if (EraserFactorOverrideForTest > 0f) { _eraseDynFactor = EraserFactorOverrideForTest; return; }
         double now = NowMs;
         float dx = x - _lastEraseX, dy = y - _lastEraseY;
-        float dist = MathF.Sqrt(dx * dx + dy * dy);
-        float dt = (float)Math.Max(0.5, now - _eraseLastMs);   // 夹住：防除 0 / 时间戳抖动
+        _eraseWinDist += MathF.Sqrt(dx * dx + dy * dy);
+        if (_eraseWinDist >= 6f || now - _eraseWinStartMs >= 30.0)
+        {
+            _eraseSpeedEma = (float)(_eraseWinDist / Math.Max(1.0, now - _eraseWinStartMs));
+            _eraseWinDist = 0f;
+            _eraseWinStartMs = now;
+        }
+        ApplyEraserTarget(now);
         _eraseLastMs = now;
-        float speed = dist / dt;                               // 物理像素 / 毫秒
-        _eraseSpeedEma = _eraseSpeedEma <= 0f
-            ? speed
-            : _eraseSpeedEma + (speed - _eraseSpeedEma) * 0.35f;
-        _eraseDynFactor = Math.Clamp(0.6f + _eraseSpeedEma * 0.6f, 0.6f, 2.5f);
     }
 
     /// <summary>自检用：把尺寸系数钉死在一个值上（验"框和擦严丝合缝"时不受手速影响）。0 = 不覆盖。</summary>
     internal float EraserFactorOverrideForTest;
 
-    /// <summary>自检用：把一个速度（物理像素/毫秒）喂进去，看算出什么尺寸系数（后门关掉时恒 1）。</summary>
+    /// <summary>自检用：把一个速度（物理像素/毫秒）喂进去，看算出什么**稳态**系数（后门关掉时恒 1）。</summary>
     internal float DynamicEraserFactorForTest(float speedPxPerMs)
     {
         if (!DynamicEraser) return 1f;
         _eraseSpeedEma = speedPxPerMs;
-        _eraseDynFactor = Math.Clamp(0.6f + _eraseSpeedEma * 0.6f, 0.6f, 2.5f);
+        _eraseTarget = EraserTargetFactorForSpeed(speedPxPerMs);
+        _eraseDynFactor = _eraseTarget;
         return _eraseDynFactor;
     }
+
+    /// <summary>自检用：喂一步"已知速度"（走真实的目标 + 平滑那一段），返回当前系数——慢速抖不抖靠它。</summary>
+    internal float DynamicEraserAdvanceForTest(float speedPxPerMs, double dtMs)
+    {
+        _eraseSpeedEma = speedPxPerMs;
+        ApplyEraserTarget(_eraseLastMs + dtMs);
+        return _eraseDynFactor;
+    }
+
+    /// <summary>自检用：把动态橡皮的状态归零（等价于"刚落笔"）。</summary>
+    internal void ResetDynamicEraserForTest() => ResetDynamicEraser();
 
     /// <summary>自检用：直接开/关动态橡皮（产品里走 `--eraserfixed`）。</summary>
     internal bool DynamicEraserForTest { get => DynamicEraser; set => DynamicEraser = value; }

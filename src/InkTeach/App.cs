@@ -935,7 +935,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("                     --save 连「保存」一起点，验到落盘为止）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
         Console.WriteLine("  --pixelerasetest    像素橡皮正确性（切成两段 / 框里无墨 / 一步撤销）");
-        Console.WriteLine("  --dynerasertest     动态橡皮（面积擦尺寸随速度：曲线 / 后门 / 框跟速度 / 快慢扫对比 / 严丝合缝 / 整笔擦）");
+        Console.WriteLine("  --dynerasertest     动态橡皮（曲线：慢=0.7 死区 / 快封顶 2.5 / 慢速不抖 / 后门 / 框跟速度 / 快慢扫对比 / 严丝合缝 / 整笔擦）");
         Console.WriteLine("  --pixeleraseshow    像素橡皮摆样（擦之前/之后各存一张图，自己抓屏）");
         Console.WriteLine("  --eraserlab [前缀]  橡皮手测台：铺样例 + 记录每条拖拽，给人用鼠标测（不自动退出）");
         Console.WriteLine("  --imagetest         图像对象（上屏 / 复制翻转 / 存档 / 剪贴板）");
@@ -23534,16 +23534,17 @@ internal sealed class App : InkEngine.InkEngine
             Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-38} {detail}");
         }
 
-        // --- ① 曲线 ----------------------------------------------------------
+        // --- ① 曲线（下限 0.7 / 死区 / 斜坡 / 封顶 2.5）------------------------
         bool savedDyn = DynamicEraserForTest;
         DynamicEraserForTest = true;
-        float fSlow = DynamicEraserFactorForTest(0.2f);
-        float fMid = DynamicEraserFactorForTest(1.0f);
-        float fFast = DynamicEraserFactorForTest(5.0f);
-        Check("曲线：慢≈0.72 / 中=1.2 / 快封顶 2.5",
-              MathF.Abs(fSlow - 0.72f) < 0.02f && MathF.Abs(fMid - 1.2f) < 0.02f
-              && MathF.Abs(fFast - 2.5f) < 0.001f,
-              $"0.2px/ms → ×{fSlow:F2}、1.0 → ×{fMid:F2}、5.0 → ×{fFast:F2}");
+        float fDead1 = EraserTargetFactorForSpeed(0.05f);   // 死区里头
+        float fDead2 = EraserTargetFactorForSpeed(0.30f);   // 死区边缘（回差带）
+        float fMid = EraserTargetFactorForSpeed(1.0f);      // 斜坡中段
+        float fFast = EraserTargetFactorForSpeed(5.0f);     // 封顶
+        Check("曲线：慢=下限 0.7（死区）/ 中≈1.19 / 快封顶 2.5",
+              MathF.Abs(fDead1 - 0.7f) < 0.001f && MathF.Abs(fDead2 - 0.7f) < 0.001f
+              && MathF.Abs(fMid - 1.1875f) < 0.02f && MathF.Abs(fFast - 2.5f) < 0.001f,
+              $"0.05 → ×{fDead1:F2}、0.30 → ×{fDead2:F2}、1.0 → ×{fMid:F2}、5.0 → ×{fFast:F2}");
 
         // --- ② 后门：--eraserfixed 关掉动态 → 系数恒 1 -------------------------
         DynamicEraserForTest = false;
@@ -23551,6 +23552,24 @@ internal sealed class App : InkEngine.InkEngine
         Check("后门（--eraserfixed）：多快都恒 ×1.0",
               MathF.Abs(fFixed - 1f) < 0.001f, $"5.0px/ms → ×{fFixed:F2}");
         DynamicEraserForTest = true;
+
+        // --- ②b 慢速不忽大忽小（用户 8.3.6 报的）--------------------------------
+        // 手在慢速段本来就是抖的：速度在 0.05~0.28 px/ms 之间来回（全落在死区/回差带里）。
+        // 合格的样子：系数**单调**朝下限走、绝不回升，而且每步只挪一丁点。
+        ResetDynamicEraserForTest();
+        float prevF = 1f, worstStep = 0f, lastF = 1f;
+        bool rose = false;
+        for (int i = 0; i < 30; i++)
+        {
+            float v = (i % 3 == 0) ? 0.05f : (i % 3 == 1 ? 0.28f : 0.16f);
+            lastF = DynamicEraserAdvanceForTest(v, 8.0);
+            if (lastF > prevF + 0.0005f) rose = true;
+            worstStep = MathF.Max(worstStep, MathF.Abs(lastF - prevF));
+            prevF = lastF;
+        }
+        Check("慢速不忽大忽小：死区里手抖 → 只缓慢降到 0.7、不回升",
+              !rose && MathF.Abs(lastF - EraserFactorMin) < 0.02f && worstStep <= 0.021f,
+              $"30 步后 ×{lastF:F3}（下限 {EraserFactorMin:F2}），单步最大变化 {worstStep:F3}");
 
         // --- ③ 看的框 = 擦的范围（同一份尺寸：拖动中跟速度、悬停回基准）----------
         DynamicEraserFactorForTest(5f);                 // → ×2.5
@@ -23614,11 +23633,13 @@ internal sealed class App : InkEngine.InkEngine
             SettleFrames(80);
             SendMouse((int)cx, (int)sweepTop, Native.MOUSEEVENTF_LEFTDOWN);
             SettleFrames(fast ? 30 : 80);
-            int n = fast ? 2 : 26;
+            int n = fast ? 12 : 26;
             for (int i = 1; i <= n; i++)
             {
                 SendMouse((int)cx, (int)(sweepTop + (sweepBot - sweepTop) * i / n), 0);
-                if (!fast) SettleFrames(50);          // 慢扫：每步等一等，速度才真的低
+                // 慢扫：每步等一等（速度才真的低）。快扫也留 8ms——不是"瞬间一步"而是
+                // "快扫"：新参数按时间常数平滑，尺寸要几帧才长起来（那才是真实手感）。
+                SettleFrames(fast ? 8 : 50);
             }
             SendMouse((int)cx, (int)sweepBot, Native.MOUSEEVENTF_LEFTUP);
             SettleFrames(450);
@@ -23646,7 +23667,7 @@ internal sealed class App : InkEngine.InkEngine
                 Sweep(fast: true);
                 int fastErased = ink0 - Ink();
                 Check("快扫擦掉的明显多于慢扫（速度→尺寸 真的生效）",
-                      fastErased > slowErased * 1.6f,
+                      fastErased > slowErased * 1.35f,
                       $"快扫 {fastErased} vs 慢扫 {slowErased} 像素"
                       + $"（×{fastErased / (float)Math.Max(1, slowErased):F2}）");
 
@@ -23656,7 +23677,7 @@ internal sealed class App : InkEngine.InkEngine
                 DynamicEraserForTest = true;
                 int fixedErased = ink0 - Ink();
                 Check("后门：关掉动态后快扫回到基准档",
-                      fixedErased < fastErased * 0.7f && fixedErased > slowErased * 0.6f,
+                      fixedErased < fastErased * 0.8f && fixedErased > slowErased * 0.6f,
                       $"关掉动态快扫 {fixedErased}（动态快扫 {fastErased}、慢扫 {slowErased}）");
 
                 // --- ⑤ 整笔擦不受速度影响 ------------------------------------
