@@ -3815,13 +3815,17 @@ public partial class InkEngine
         _eraseDynFactor = Math.Clamp(0.6f + _eraseSpeedEma * 0.6f, 0.6f, 2.5f);
     }
 
-    /// <summary>自检用：把一个速度（物理像素/毫秒）喂进去，看算出什么尺寸系数。</summary>
+    /// <summary>自检用：把一个速度（物理像素/毫秒）喂进去，看算出什么尺寸系数（后门关掉时恒 1）。</summary>
     internal float DynamicEraserFactorForTest(float speedPxPerMs)
     {
+        if (!DynamicEraser) return 1f;
         _eraseSpeedEma = speedPxPerMs;
         _eraseDynFactor = Math.Clamp(0.6f + _eraseSpeedEma * 0.6f, 0.6f, 2.5f);
         return _eraseDynFactor;
     }
+
+    /// <summary>自检用：直接开/关动态橡皮（产品里走 `--eraserfixed`）。</summary>
+    internal bool DynamicEraserForTest { get => DynamicEraser; set => DynamicEraser = value; }
 
     /// <summary>
     /// Walks the eraser along the segment the pointer just travelled instead of

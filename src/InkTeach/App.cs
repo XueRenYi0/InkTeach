@@ -353,6 +353,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PixelEraserTest();
         }
+        else if (mode == "--dynerasertest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            DynEraserTest();
+        }
         else if (mode == "--pixeleraseshow")
         {
             _autoExitAt = double.MaxValue;
@@ -929,6 +935,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("                     --save 连「保存」一起点，验到落盘为止）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
         Console.WriteLine("  --pixelerasetest    像素橡皮正确性（切成两段 / 框里无墨 / 一步撤销）");
+        Console.WriteLine("  --dynerasertest     动态橡皮（面积擦尺寸随速度：曲线 / 后门 / 快慢扫对比 / 整笔擦不受影响）");
         Console.WriteLine("  --pixeleraseshow    像素橡皮摆样（擦之前/之后各存一张图，自己抓屏）");
         Console.WriteLine("  --eraserlab [前缀]  橡皮手测台：铺样例 + 记录每条拖拽，给人用鼠标测（不自动退出）");
         Console.WriteLine("  --imagetest         图像对象（上屏 / 复制翻转 / 存档 / 剪贴板）");
@@ -23496,6 +23503,182 @@ internal sealed class App : InkEngine.InkEngine
               $"试了像素橡皮和整笔橡皮各一下，对象数 {Doc.Strokes.Count}，"
               + $"图 {(Doc.Strokes.Contains(pic) ? "还在" : "**被删掉了**")}");
 
+        Console.WriteLine($"  合计：通过 {pass}，失败 {fail}");
+        Console.WriteLine(fail == 0 ? "PASS" : "FAIL");
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 动态橡皮专项自检（--dynerasertest）。
+    ///
+    /// 8.3.4 的行为："**面积擦**的尺寸跟着移动速度走"（照隔壁 Inkeys「笔速橡皮」的口径起手）：
+    ///   ① 曲线：`factor = clamp(0.6 + 速度(px/ms)×0.6, 0.6, 2.5)`——慢≈0.72、中=1.2、快封顶 2.5；
+    ///   ② 后门 `--eraserfixed`（`DynamicEraser=false`）：多快都恒 ×1；
+    ///   ③ 真的用合成鼠标拖一遍（**走产品代码那条路**：指针 → `EraseRectAlongPath`）：
+    ///      快扫擦掉的墨必须明显多于慢扫（放大真的生效，不是只有那个函数对）；
+    ///   ④ 关掉动态后再快扫 → 擦除量回到基准档（不放大）；
+    ///   ⑤ **整笔擦不受影响**：它的"大小"是命中半径（碰到哪条删哪条），快扫也不许把半径
+    ///      外那条吃掉——半径随速度变 = "点到哪条全看手速"，不可预期。
+    ///
+    /// 抓屏看不见我们的墨（锁屏 / 远程 / 被别的窗口盖住）时，③④⑤ 明确跳过，曲线判据照样算数。
+    /// </summary>
+    private void DynEraserTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 动态橡皮自检（面积擦尺寸随速度；整笔擦不受影响）===");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-38} {detail}");
+        }
+
+        // --- ① 曲线 ----------------------------------------------------------
+        bool savedDyn = DynamicEraserForTest;
+        DynamicEraserForTest = true;
+        float fSlow = DynamicEraserFactorForTest(0.2f);
+        float fMid = DynamicEraserFactorForTest(1.0f);
+        float fFast = DynamicEraserFactorForTest(5.0f);
+        Check("曲线：慢≈0.72 / 中=1.2 / 快封顶 2.5",
+              MathF.Abs(fSlow - 0.72f) < 0.02f && MathF.Abs(fMid - 1.2f) < 0.02f
+              && MathF.Abs(fFast - 2.5f) < 0.001f,
+              $"0.2px/ms → ×{fSlow:F2}、1.0 → ×{fMid:F2}、5.0 → ×{fFast:F2}");
+
+        // --- ② 后门：--eraserfixed 关掉动态 → 系数恒 1 -------------------------
+        DynamicEraserForTest = false;
+        float fFixed = DynamicEraserFactorForTest(5.0f);
+        Check("后门（--eraserfixed）：多快都恒 ×1.0",
+              MathF.Abs(fFixed - 1f) < 0.001f, $"5.0px/ms → ×{fFixed:F2}");
+        DynamicEraserForTest = true;
+
+        // --- ③④⑤ 真机拖动（合成鼠标，走产品的指针路径）------------------------
+        float cx = _virtualX + _virtualW * 0.5f;
+        float cy = _virtualY + _virtualH * 0.5f;
+
+        float savedW = PixelEraserWidthLogical;
+        var savedTool = Tool;
+        // 用小块：默认那 93×150 逻辑像素（物理更大）会盖满整张测试图，量不出比例。
+        PixelEraserWidthLogical = 12f;
+        float hh0 = PixelEraserHalfHeightPx;          // 基准半高（物理像素）
+        float spacing = hh0 * 1.6f;                   // 行距
+        const int lines = 10;
+        float blockH = (lines - 1) * spacing;
+        float lineW = spacing * 1.5f;                 // 行够粗 → 竖着连成一片
+        float sweepTop = cy - blockH * 0.5f - hh0 * 6f;
+        float sweepBot = cy + blockH * 0.5f + hh0 * 6f;
+        int boxX = (int)(cx - 170), boxW = 340;
+        int boxY = (int)(cy - blockH * 0.5f - hh0 * 9f);
+        int boxH = (int)(blockH + hh0 * 18f);
+
+        void PaintBlock()
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            for (int k = 0; k < lines; k++)
+            {
+                var s = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = lineW };
+                float y = cy - blockH * 0.5f + k * spacing;
+                for (int i = 0; i <= 40; i++) s.AddPoint(cx - 240 + i * 12, y, 0.9f, i);
+                Doc.AddStroke(s);
+            }
+            Doc.InvalidateAll();
+            SettleFrames(450);
+        }
+
+        // 数墨之前把指针挪出统计框（落点反馈那个矩形也是我们画的，别让它进品红计数）。
+        int Ink()
+        {
+            SendMouse((int)(cx + 320), boxY - 120, 0);
+            SettleFrames(250);
+            return ScreenProbe.CountMagenta(boxX, boxY, boxW, boxH);
+        }
+
+        void Sweep(bool fast)
+        {
+            SendMouse((int)cx, (int)sweepTop, 0);
+            SettleFrames(80);
+            SendMouse((int)cx, (int)sweepTop, Native.MOUSEEVENTF_LEFTDOWN);
+            SettleFrames(fast ? 30 : 80);
+            int n = fast ? 2 : 26;
+            for (int i = 1; i <= n; i++)
+            {
+                SendMouse((int)cx, (int)(sweepTop + (sweepBot - sweepTop) * i / n), 0);
+                if (!fast) SettleFrames(50);          // 慢扫：每步等一等，速度才真的低
+            }
+            SendMouse((int)cx, (int)sweepBot, Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(450);
+        }
+
+        bool canDrag = !SkipIfNoSyntheticInput("合成鼠标拖动那三条");
+        if (canDrag)
+        {
+            Tool = Tool.PixelEraser;
+            PaintBlock();
+            int ink0 = Ink();
+            if (ink0 < 500)
+            {
+                Console.WriteLine($"  环境：抓屏看不到我们的墨（拍到 {ink0} 像素）"
+                                + " → SKIP: ③④⑤ 跳过");
+            }
+            else
+            {
+                Sweep(fast: false);
+                int slowErased = ink0 - Ink();
+                Check("慢扫（基准档）真的擦掉一片", slowErased > 300,
+                      $"擦掉 {slowErased} 像素（先画了 {ink0}）");
+
+                PaintBlock();
+                Sweep(fast: true);
+                int fastErased = ink0 - Ink();
+                Check("快扫擦掉的明显多于慢扫（速度→尺寸 真的生效）",
+                      fastErased > slowErased * 1.6f,
+                      $"快扫 {fastErased} vs 慢扫 {slowErased} 像素"
+                      + $"（×{fastErased / (float)Math.Max(1, slowErased):F2}）");
+
+                PaintBlock();
+                DynamicEraserForTest = false;
+                Sweep(fast: true);
+                DynamicEraserForTest = true;
+                int fixedErased = ink0 - Ink();
+                Check("后门：关掉动态后快扫回到基准档",
+                      fixedErased < fastErased * 0.7f && fixedErased > slowErased * 0.6f,
+                      $"关掉动态快扫 {fixedErased}（动态快扫 {fastErased}、慢扫 {slowErased}）");
+
+                // --- ⑤ 整笔擦不受速度影响 ------------------------------------
+                Doc.Clear();
+                Doc.ClearHistory();
+                Tool = Tool.Eraser;
+                float r = EraserRadius;
+                float dFar = r * 2f + 10f;            // 动态若误伤到这里，×2.5 的半径会够着它
+                var near = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = 8f };
+                for (int i = 0; i <= 40; i++) near.AddPoint(cx - 240 + i * 12, cy, 0.9f, i);
+                var far = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = 8f };
+                for (int i = 0; i <= 40; i++) far.AddPoint(cx - dFar, cy - 150 + i * 7.5f, 0.9f, i);
+                Doc.AddStroke(near);
+                Doc.AddStroke(far);
+                Doc.InvalidateAll();
+                SettleFrames(350);
+
+                SendMouse((int)cx, (int)(cy - 150), 0);
+                SettleFrames(60);
+                SendMouse((int)cx, (int)(cy - 150), Native.MOUSEEVENTF_LEFTDOWN);
+                SendMouse((int)cx, (int)(cy + 150), 0);   // 快扫：一步跨 300 像素
+                SendMouse((int)cx, (int)(cy + 150), Native.MOUSEEVENTF_LEFTUP);
+                SettleFrames(350);
+
+                Check("整笔擦：快扫也不许碰半径外那条（半径不随速度变）",
+                      Doc.Strokes.Contains(far) && !Doc.Strokes.Contains(near),
+                      $"半径 {r:F0}px：近的（过路径）"
+                      + $"{(Doc.Strokes.Contains(near) ? "还在 ✗" : "被擦 ✓")}，"
+                      + $"远的（{dFar:F0}px 外）{(Doc.Strokes.Contains(far) ? "没动 ✓" : "**被吃了 ✗**")}");
+            }
+        }
+
+        PixelEraserWidthLogical = savedW;
+        Tool = savedTool;
+        DynamicEraserForTest = savedDyn;
+        Doc.Clear();
         Console.WriteLine($"  合计：通过 {pass}，失败 {fail}");
         Console.WriteLine(fail == 0 ? "PASS" : "FAIL");
         _quit = true;
