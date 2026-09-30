@@ -11142,14 +11142,18 @@ public partial class InkEngine
     //   · 扇区里选工具 = 和按 Ctrl+P/I/L/E/M **同一条命令**（含"已经是它 → 换色/换档"）；
     //   · 颜色扇区 = "给我这支颜色的笔"（不在笔上就切到笔，走 SwitchTool）。
     //
-    // 扇区顺序（从北起、顺时针）：笔 / 黑 / 红 / 蓝 / 荧光笔 / 橡皮 / 框选 / 激光。
-    // 黑红蓝 = `InkPalette.PenBand` 的前三个（色带本来就是"常用的排前面：黑红蓝绿…"）。
-    // 尺寸与视觉规格对齐（2026-09-30 用户拍板：方案 A、直径 192）：
-    // 盘半径 96、死区 24、锁定 36。按钮环半径 60、按钮半宽 23（见 Overlay）——
-    // 锁定距离 36 ≈ 按钮内沿（60−23=37），"划出去"和"摸到按钮"是同一个动作。
-    private const float RadialRadiusLogical = 96f;
-    private const float RadialDeadZoneLogical = 24f;
-    private const float RadialLockLogical = 36f;
+    // 扇区顺序（从北起、顺时针，**排序 V-a**：上下左右四个正位给前四高频、四角给次频；
+    // 用户 2026-09-30 定）：笔 / 黑 / 红 / 蓝 / 橡皮 / 框选 / 荧光笔 / 激光。
+    // 正位 = 笔·红·橡皮·荧光笔；四角 = 黑·蓝·框选·激光。黑红蓝 = `InkPalette.PenBand`
+    // 的前三个（色带本来就是"常用的排前面：黑红蓝绿…"），且保持顺时针相邻。
+    // 尺寸与视觉规格对齐（2026-09-30 v4 定稿：方案 S「全扇面」、直径 192）：
+    // 盘半径 96、死区 24、锁定 36；环带 40→96、图标 24 居中在 R68（见 Overlay）。
+    // 判位一直是**按角度分 45° 扇区**，扇面化只换画法：死区/锁定/滞回一个字没动。
+    // internal（不是 private）：自检要拿它和 Overlay 的扇面几何对表——
+    // "图标环 ± 图标半径"必须落在（锁定距离, 盘半径）里，改单边忘另一边就会红。
+    internal const float RadialRadiusLogical = 96f;
+    internal const float RadialDeadZoneLogical = 24f;
+    internal const float RadialLockLogical = 36f;
     private const double RadialShowDelayMs = 120;     // 出盘延迟（熟手路：不等盘直接划）
     private const double RadialTimeoutMs = 5000;      // 防呆：按太久没松手就自行取消
 
@@ -11162,9 +11166,9 @@ public partial class InkEngine
     private bool _radialMoved;                        // 离开过锁定距离（中央文案用）
     private uint _radialVk = 0x51;                    // 呼出键的主键（松手轮询按它查）
 
-    /// <summary>扇区名：画盘、日志、自检共用一份（顺序 = 从北顺时针）。</summary>
+    /// <summary>扇区名：画盘、日志、自检共用一份（顺序 = 从北顺时针，V-a）。</summary>
     internal static readonly string[] RadialSectorNames =
-        { "笔", "黑", "红", "蓝", "荧光笔", "橡皮", "框选", "激光" };
+        { "笔", "黑", "红", "蓝", "橡皮", "框选", "荧光笔", "激光" };
 
     /// <summary>中央文案要用的"划过又回中心"判据（盘开着时才有意义）。</summary>
     internal bool RadialMovedForDraw => _radialMoved;
@@ -11225,9 +11229,10 @@ public partial class InkEngine
                 case 1: PickPenColorFromPalette(0); break;
                 case 2: PickPenColorFromPalette(1); break;
                 case 3: PickPenColorFromPalette(2); break;
-                case 4: ToolKeyPress(KeyAction.ToolHighlighter); break;
-                case 5: ToolKeyPress(KeyAction.ToolEraser); break;
-                case 6: ToolKeyPress(KeyAction.ToolMarquee); break;
+                // V-a：南=橡皮、西南=框选、西=荧光笔、西北=激光（2026-09-30 定）
+                case 4: ToolKeyPress(KeyAction.ToolEraser); break;
+                case 5: ToolKeyPress(KeyAction.ToolMarquee); break;
+                case 6: ToolKeyPress(KeyAction.ToolHighlighter); break;
                 case 7: ToolKeyPress(KeyAction.ToolLaser); break;
             }
         }

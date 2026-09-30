@@ -12655,26 +12655,43 @@ internal sealed class App : InkEngine.InkEngine
               && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
               $"色 = {Host.State.PaletteBase}");
 
-        // ---- ⑥ 其余扇区各换一次工具 ----
+        // ---- ⑥ 其余扇区各换一次工具（V-a 排序：南=橡皮、西南=框选、西=荧光笔） ----
         RadialOpenForTest(cx, cy);
-        RadialMoveForTest(cx, cy + 120f);               // 南 = 荧光笔
+        RadialMoveForTest(cx, cy + 120f);               // 南 = 橡皮
         RadialCommitForTest();
-        Check("划向正南 = 荧光笔", Host.State.Tool == Tool.Highlighter, $"工具 = {Host.State.Tool}");
+        Check("划向正南 = 橡皮", Host.State.Tool == Tool.Eraser, $"工具 = {Host.State.Tool}");
 
         RadialOpenForTest(cx, cy);
-        RadialMoveForTest(cx - 85f, cy + 85f);          // 西南 = 橡皮
+        RadialMoveForTest(cx - 85f, cy + 85f);          // 西南 = 框选
         RadialCommitForTest();
-        Check("划向西南 = 橡皮", Host.State.Tool == Tool.Eraser, $"工具 = {Host.State.Tool}");
+        Check("划向西南 = 框选", Host.State.Tool == Tool.Marquee, $"工具 = {Host.State.Tool}");
 
         RadialOpenForTest(cx, cy);
-        RadialMoveForTest(cx - 120f, cy);               // 西 = 框选
+        RadialMoveForTest(cx - 120f, cy);               // 西 = 荧光笔
         RadialCommitForTest();
-        Check("划向正西 = 框选", Host.State.Tool == Tool.Marquee, $"工具 = {Host.State.Tool}");
+        Check("划向正西 = 荧光笔", Host.State.Tool == Tool.Highlighter, $"工具 = {Host.State.Tool}");
 
         RadialOpenForTest(cx, cy);
         RadialMoveForTest(cx - 85f, cy - 85f);          // 西北 = 激光
         RadialCommitForTest();
         Check("划向西北 = 激光", Host.State.Tool == Tool.Laser, $"工具 = {Host.State.Tool}");
+
+        // ---- ⑥.5 排序 V-a 与扇面几何（2026-09-30 v4 定稿） ----
+        // 正位（上下左右）＝前四高频：笔 / 红 / 橡皮 / 荧光笔；四角＝次频。
+        Check("排序 V-a：上下左右＝笔/红/橡皮/荧光笔，四角＝黑/蓝/框选/激光",
+              RadialSectorNames[0] == "笔" && RadialSectorNames[2] == "红"
+              && RadialSectorNames[4] == "橡皮" && RadialSectorNames[6] == "荧光笔"
+              && RadialSectorNames[1] == "黑" && RadialSectorNames[3] == "蓝"
+              && RadialSectorNames[5] == "框选" && RadialSectorNames[7] == "激光",
+              string.Join(" ", RadialSectorNames));
+        // 扇面几何：图标环 68 ± 图标半径 12 要落在（锁定距离, 盘半径）里，也别压到中央读数。
+        Check("扇面几何：图标环 68 与死区/锁定/中央读数不打架",
+              OverlayWindow.RadialIconRingLogical - 12f > RadialLockLogical
+              && OverlayWindow.RadialIconRingLogical + 12f < RadialRadiusLogical
+              && OverlayWindow.RadialIconRingLogical - 12f > OverlayWindow.RadialInnerRadiusLogical
+              && OverlayWindow.RadialInnerRadiusLogical > OverlayWindow.RadialCenterLogical,
+              $"环带 {OverlayWindow.RadialInnerRadiusLogical}→{OverlayWindow.RadialPlateRadiusLogical}，"
+              + $"图标环 {OverlayWindow.RadialIconRingLogical}，锁定 {RadialLockLogical}");
 
         // ---- ⑦ 跨扇区滞回：出界 9° 以内不跳扇区 ----
         RadialOpenForTest(cx, cy);

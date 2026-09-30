@@ -4390,20 +4390,26 @@ internal sealed class OverlayWindow : IDisposable
     // 所以相机一滚它不会漂。配色**用界面推上来的 FloatingTheme**：浅色/深色主题
     // 各一套，和面板/操作条同一个观感（"界面逻辑跟主程序走"那条要求的落点）。
     //
-    // 视觉规格（2026-09-30 用户拍板：方案 A「面板盘」+ 极简标签 + 直径 192；
-    // 见《计划-呼出盘-视觉改版.md》第四节）：
-    //   · 盘半径 96（直径 192）、投影走主题的层叠胀法（`DrawDiscShadow`）；
-    //   · 8 个 46×46、圆角 12 的方块按钮摆在半径 60 的环上（照主条按钮的语言）；
-    //   · 工具选中 = 强调色实心 + 白图标；颜色选中 = 色片 + 一圈强调色描边（不压蓝底）；
-    //   · **没有常显标签**：名字只出现在中央读数；悬停时盘下"浮一行字"（人话提示）。
-    private const float RadialPlateRadiusLogical = 96f;
-    private const float RadialButtonHalfLogical = 23f;
-    private const float RadialRingLogical = 60f;
-    private const float RadialCenterLogical = 34f;
+    // 视觉规格（2026-09-30 v4 定稿：方案 S「全扇面」+ 主条同款图标 + 排序 V-a；
+    // 见《调研-呼出盘-扇面与比例.md》与 design/呼出盘-设计稿v4-定稿方向.html）：
+    //   · 盘半径 96（直径 192）、环带 内 40 → 外 96、缝 2°、投影照旧层叠胀法；
+    //   · 图标 24 居中在 R68（内外各留 16）——输入判据一个没动（死区 24 / 锁定 36）；
+    //   · 工具格：常态 regular、选中 filled 白图标（路径 = 主条同款，见 IconPaths）；
+    //   · 颜色格：`penFilled` 上色（黑/红/蓝）——"这支颜色的笔"；选中保持原色；
+    //   · **没有常显标签**：名字只出现在中央读数；悬停时盘下"浮一行字"。
+    internal const float RadialPlateRadiusLogical = 96f;
+    internal const float RadialInnerRadiusLogical = 40f;
+    internal const float RadialIconRingLogical = 68f;
+    internal const float RadialCenterLogical = 34f;
+    internal const float RadialSeamDeg = 2f;          // 扇格之间的缝（每边 1°）
 
-    /// <summary>第 i 个扇区是不是"颜色"（黑/红/蓝 = 1/2/3）——选中态画法不同。</summary>
+    /// <summary>第 i 个扇区是不是"颜色"（黑/红/蓝 = 1/2/3）——画法/选中态不同。</summary>
     private static readonly bool[] RadialSectorIsColor =
         { false, true, true, true, false, false, false, false };
+
+    // "0 号扇格"的几何缓存（以盘心为原点、北朝上）；dpi 变了才重建。
+    private ID2D1PathGeometry _radialWedgeGeo;
+    private float _radialWedgeDpi = -1f;
 
     private void DrawRadialPalette(InkEngine app)
     {
@@ -4411,8 +4417,8 @@ internal sealed class OverlayWindow : IDisposable
 
         float dpi = Dpi / 96f;
         float R = RadialPlateRadiusLogical * dpi;
-        float ring = RadialRingLogical * dpi;
-        float bh = RadialButtonHalfLogical * dpi;
+        float r0 = RadialInnerRadiusLogical * dpi;
+        float ring = RadialIconRingLogical * dpi;
         float rc = RadialCenterLogical * dpi;
         var c = new Vector2(app.RadialCenterX, app.RadialCenterY);
         var theme = app.FloatingTheme;
@@ -4430,37 +4436,28 @@ internal sealed class OverlayWindow : IDisposable
             _ctx.DrawLine(c, ptr, _scratch, 2.4f * dpi, Gfx.Dotted);
         }
 
-        // 底盘
+        // 底盘 → 八扇格 → 盘边（盘边最后画，压在扇格外沿上，线才利落）
         _ctx.FillEllipse(new Ellipse(c, R, R), Brush(theme.Panel));
+        DrawRadialWedges(c, dpi, r0, R, theme, sel);
         _scratch.Color = theme.PanelBorder;
         _ctx.DrawEllipse(new Ellipse(c, R, R), _scratch, 1f * dpi);
 
-        // 八个方块按钮
+        // 八格图标（主条同款 Fluent 路径；颜色格 = penFilled 上色）
+        float sz = 24f * dpi;
         for (int i = 0; i < 8; i++)
         {
             var bp = OnCircle(c, ring, -90f + 45f * i);
             bool on = i == sel;
-            bool isColor = RadialSectorIsColor[i];
-
-            if (on)
+            if (RadialSectorIsColor[i])
             {
-                _scratch.Color = isColor
-                    ? new Color4(theme.ActiveBg.R, theme.ActiveBg.G, theme.ActiveBg.B, 0.14f)
-                    : theme.ActiveBg;
-                _ctx.FillRoundedRectangle(new RoundedRectangle(
-                    new Vortice.RawRectF(bp.X - bh, bp.Y - bh, bp.X + bh, bp.Y + bh),
-                    12f * dpi, 12f * dpi), _scratch);
+                // **颜色格不转白**：选中也要看得见"这是红/蓝"（红蓝压实心蓝底会发闷）
+                _scratch.Color = InkPalette.PenBand[i - 1].Color;
+                DrawIcon(IconPaths.penFilled, bp.X - sz * 0.5f, bp.Y - sz * 0.5f, sz, _scratch);
             }
-
-            DrawRadialIcon(i, bp, dpi, theme, on);
-
-            if (on && isColor)
+            else
             {
-                _scratch.Color = theme.ActiveBg;
-                _ctx.DrawRoundedRectangle(new RoundedRectangle(
-                    new Vortice.RawRectF(bp.X - 16f * dpi, bp.Y - 16f * dpi,
-                                         bp.X + 16f * dpi, bp.Y + 16f * dpi),
-                    10f * dpi, 10f * dpi), _scratch, 2.5f * dpi);
+                _scratch.Color = on ? theme.ActiveText : theme.Text;
+                DrawIcon(RadialIconFor(i, on), bp.X - sz * 0.5f, bp.Y - sz * 0.5f, sz, _scratch);
             }
         }
 
@@ -4512,9 +4509,9 @@ internal sealed class OverlayWindow : IDisposable
         bool already = i switch
         {
             0 => app.Tool == Tool.Pen,
-            4 => app.Tool == Tool.Highlighter,
-            5 => app.Tool == Tool.Eraser || app.Tool == Tool.PixelEraser,
-            6 => app.Tool == Tool.Marquee,
+            4 => app.Tool == Tool.Eraser || app.Tool == Tool.PixelEraser,
+            5 => app.Tool == Tool.Marquee,
+            6 => app.Tool == Tool.Highlighter,
             7 => app.Tool == Tool.Laser,
             _ => false,
         };
@@ -4524,100 +4521,121 @@ internal sealed class OverlayWindow : IDisposable
             1 => "用黑笔",
             2 => "用红笔",
             3 => "用蓝笔",
-            4 => already ? "已经是荧光笔：换下一色" : "切到荧光笔",
-            5 => already ? "整笔擦 ⇄ 面积擦" : "切到橡皮",
-            6 => already ? "矩形 ⇄ 套索" : "切到框选",
+            4 => already ? "整笔擦 ⇄ 面积擦" : "切到橡皮",
+            5 => already ? "矩形 ⇄ 套索" : "切到框选",
+            6 => already ? "已经是荧光笔：换下一色" : "切到荧光笔",
             _ => already ? "已经是激光笔" : "切到激光笔",
         };
     }
 
     /// <summary>
-    /// 呼出盘里的一个图标：照主条那套线性 24px 画（坐标以按钮中心为原点）。
-    /// 颜色不是图标，是"色片"（和上带色片同款：26 圆角方块 + 顶部高光）。
+    /// 八个扇格：0 号在北（-90°），一格 45°，格与格之间留 <see cref="RadialSeamDeg"/> 的缝。
+    /// 先铺未选中的格、再描格缝、最后把选中格盖上去。
     /// </summary>
-    private void DrawRadialIcon(int i, Vector2 p, float dpi, UiTheme theme, bool selected)
+    private void DrawRadialWedges(Vector2 c, float dpi, float r0, float r1, UiTheme theme, int sel)
     {
-        if (i >= 1 && i <= 3)
+        EnsureRadialWedgeGeo(dpi, r0, r1);
+
+        // 未选中：浅底（深色主题里它就是"比盘底亮一档"的格）
+        for (int i = 0; i < 8; i++)
         {
-            DrawRadialSwatch(i, p, dpi);
-            return;
+            if (i == sel) continue;
+            FillRotatedWedge(c, i, Brush(theme.Hover));
         }
 
-        var ink = selected ? theme.ActiveText : theme.Text;
-        float w = 1.9f * dpi;
-        _scratch.Color = ink;
-        Vector2 V(float x, float y) => p + new Vector2(x * dpi, y * dpi);
-
-        switch (i)
+        // 格缝：8 条边界线（细、淡——把"一格一格"说清楚，别画成切蛋糕）
+        _scratch.Color = new Color4(theme.PanelBorder.R, theme.PanelBorder.G,
+                                    theme.PanelBorder.B, 0.7f);
+        for (int i = 0; i < 8; i++)
         {
-            case 0:   // 笔（主条那支"笔尖"：五段轮廓 + 中缝）
-                _ctx.DrawLine(V(-7.5f, 7.5f), V(-5f, 0.2f), _scratch, w, Gfx.Round);
-                _ctx.DrawLine(V(-5f, 0.2f), V(3.4f, -8.2f), _scratch, w, Gfx.Round);
-                _ctx.DrawLine(V(3.4f, -8.2f), V(8.2f, -3.4f), _scratch, w, Gfx.Round);
-                _ctx.DrawLine(V(8.2f, -3.4f), V(-0.2f, 5f), _scratch, w, Gfx.Round);
-                _ctx.DrawLine(V(-0.2f, 5f), V(-7.5f, 7.5f), _scratch, w, Gfx.Round);
-                _ctx.DrawLine(V(-5f, 0.2f), V(-0.2f, 5f), _scratch, w * 0.8f, Gfx.Round);
-                break;
-
-            case 4:   // 荧光笔：粗斜条 + 亮头
-            {
-                var hl = InkPalette.HighlighterBand[0].Color;
-                _ctx.DrawLine(V(-8.5f, 7.5f), V(3.5f, -4.5f),
-                              Brush(new Color4(hl.R, hl.G, hl.B, 0.95f)), 6.5f * dpi, Gfx.Round);
-                _ctx.DrawLine(V(3.5f, -4.5f), V(8f, -9f),
-                              Brush(new Color4(hl.R, hl.G, hl.B, 0.55f)), 3.6f * dpi, Gfx.Round);
-                break;
-            }
-
-            case 5:   // 橡皮：斜块轮廓 + 中缝
-                _ctx.DrawLine(V(-8.5f, 3.5f), V(0f, -5f), _scratch, w, Gfx.Round);
-                _ctx.DrawLine(V(0f, -5f), V(5f, 0f), _scratch, w, Gfx.Round);
-                _ctx.DrawLine(V(5f, 0f), V(-3.5f, 8.5f), _scratch, w, Gfx.Round);
-                _ctx.DrawLine(V(-3.5f, 8.5f), V(-8.5f, 8.5f), _scratch, w, Gfx.Round);
-                _ctx.DrawLine(V(-8.5f, 8.5f), V(-8.5f, 3.5f), _scratch, w, Gfx.Round);
-                _ctx.DrawLine(V(-5.5f, 0.5f), V(1f, 7f), _scratch, w * 0.8f, Gfx.Round);
-                break;
-
-            case 6:   // 框选：虚线方框 + 四角点
-                _ctx.DrawRectangle(new Vortice.RawRectF(p.X - 8f * dpi, p.Y - 8f * dpi,
-                                                        p.X + 8f * dpi, p.Y + 8f * dpi),
-                                   _scratch, w, Gfx.Dashed);
-                foreach (var (sx, sy) in new[] { (-1f, -1f), (1f, -1f), (-1f, 1f), (1f, 1f) })
-                    _ctx.FillEllipse(new Ellipse(V(sx * 8f, sy * 8f), 1.9f * dpi, 1.9f * dpi), _scratch);
-                break;
-
-            default:  // 7 激光：红点 + 光晕 + 三道光束
-            {
-                var red = new Color4(1f, 0.16f, 0.16f, 0.95f);
-                _ctx.FillEllipse(new Ellipse(V(-3.5f, 3.5f), 3.4f * dpi, 3.4f * dpi), Brush(red));
-                _scratch.Color = new Color4(red.R, red.G, red.B, 0.45f);
-                _ctx.DrawEllipse(new Ellipse(V(-3.5f, 3.5f), 6f * dpi, 6f * dpi), _scratch, 1.4f * dpi);
-                _scratch.Color = new Color4(red.R, red.G, red.B, 0.85f);
-                _ctx.DrawLine(V(1f, -1f), V(8.5f, -8.5f), _scratch, w, Gfx.Round);
-                _ctx.DrawLine(V(1f, -1f), V(-4.5f, -6.5f), _scratch, w * 0.9f, Gfx.Round);
-                _ctx.DrawLine(V(1f, -1f), V(6.5f, 4.5f), _scratch, w * 0.9f, Gfx.Round);
-                break;
-            }
+            float a = -90f + 45f * i - 22.5f;
+            _ctx.DrawLine(OnCircle(c, r0, a), OnCircle(c, r1, a), _scratch, 1f * dpi);
         }
+
+        if (sel < 0) return;
+
+        // 选中格：工具 = 实心强调色；颜色 = 淡强调色（彩笔保持原色，红蓝不压蓝底）
+        var fill = RadialSectorIsColor[sel]
+            ? new Color4(theme.ActiveBg.R, theme.ActiveBg.G, theme.ActiveBg.B, 0.14f)
+            : theme.ActiveBg;
+        FillRotatedWedge(c, sel, Brush(fill));
+        if (RadialSectorIsColor[sel]) StrokeSelectedWedge(c, sel, dpi, r0, r1, theme.ActiveBg);
     }
 
-    /// <summary>颜色扇区的"色片"：26 圆角方块 + 顶部白高光 + 暗描边（和上带色片同款）。</summary>
-    private void DrawRadialSwatch(int i, Vector2 p, float dpi)
+    /// <summary>
+    /// 缓存"0 号扇格"的几何（以盘心为原点、北朝上）：弧用折线逼近
+    /// （每 45° 分 12 段，R96 下最大矢高 ≈0.1px，肉眼看不出是折线）。
+    /// 绘制时按格号旋转 / 平移（见 <see cref="FillRotatedWedge"/>），不必每帧重建。
+    /// </summary>
+    private void EnsureRadialWedgeGeo(float dpi, float r0, float r1)
     {
-        var col = InkPalette.PenBand[i - 1].Color;
-        float r = 13f * dpi;
-        var box = new Vortice.RawRectF(p.X - r, p.Y - r, p.X + r, p.Y + r);
-        var rr = new RoundedRectangle(box, 8f * dpi, 8f * dpi);
+        if (_radialWedgeGeo != null && Math.Abs(_radialWedgeDpi - dpi) < 0.001f) return;
+        _radialWedgeGeo?.Dispose();
+        _radialWedgeDpi = dpi;
 
-        _ctx.FillRoundedRectangle(rr, Brush(col));
-        _ctx.PushAxisAlignedClip(new Vortice.RawRectF(p.X - r - 1f, p.Y - r - 1f, p.X + r + 1f, p.Y),
-                                 AntialiasMode.Aliased);
-        _scratch.Color = new Color4(1f, 1f, 1f, 0.16f);
-        _ctx.FillRoundedRectangle(rr, _scratch);
-        _ctx.PopAxisAlignedClip();
-        _scratch.Color = new Color4(0f, 0f, 0f, 0.28f);
-        _ctx.DrawRoundedRectangle(rr, _scratch, 1f * dpi);
+        float half = 22.5f - RadialSeamDeg * 0.5f;
+        const int seg = 12;
+        var pts = new List<Vector2>(seg * 2 + 2);
+        for (int t = 0; t <= seg; t++) pts.Add(WedgePt(r0, -half + 2f * half * t / seg));
+        for (int t = seg; t >= 0; t--) pts.Add(WedgePt(r1, -half + 2f * half * t / seg));
+
+        var geo = Gfx.D2DFactory.CreatePathGeometry();
+        using (var sink = geo.Open())
+        {
+            sink.BeginFigure(pts[0], FigureBegin.Filled);
+            for (int k = 1; k < pts.Count; k++) sink.AddLine(pts[k]);
+            sink.EndFigure(FigureEnd.Closed);
+            sink.Close();
+        }
+        _radialWedgeGeo = geo;
     }
+
+    /// <summary>扇格坐标：角度从北起顺时针（和引擎的扇区定义同一套）。</summary>
+    private static Vector2 WedgePt(float r, float deg)
+    {
+        float a = (deg - 90f) * MathF.PI / 180f;
+        return new Vector2(r * MathF.Cos(a), r * MathF.Sin(a));
+    }
+
+    /// <summary>把缓存的那一格转到第 i 个位置再填（正数角度 = 屏幕上顺时针）。</summary>
+    private void FillRotatedWedge(Vector2 c, int i, ID2D1SolidColorBrush brush)
+    {
+        var saved = _ctx.Transform;
+        _ctx.Transform = Matrix3x2.CreateRotation(i * MathF.PI / 4f)
+                       * Matrix3x2.CreateTranslation(c) * saved;
+        _ctx.FillGeometry(_radialWedgeGeo, brush);
+        _ctx.Transform = saved;
+    }
+
+    /// <summary>颜色格选中的强调描边：外弧 + 两条半径（内弧不描，中央读数那边干净）。</summary>
+    private void StrokeSelectedWedge(Vector2 c, int i, float dpi, float r0, float r1, Color4 color)
+    {
+        float half = 22.5f - RadialSeamDeg * 0.5f;
+        float mid = -90f + 45f * i;
+        _scratch.Color = color;
+        float w = 1.5f * dpi;
+        for (int t = 0; t < 12; t++)
+        {
+            float a0 = mid - half + 2f * half * t / 12f;
+            float a1 = mid - half + 2f * half * (t + 1) / 12f;
+            _ctx.DrawLine(OnCircle(c, r1 - 1f * dpi, a0), OnCircle(c, r1 - 1f * dpi, a1), _scratch, w);
+        }
+        _ctx.DrawLine(OnCircle(c, r0, mid - half), OnCircle(c, r1, mid - half), _scratch, w);
+        _ctx.DrawLine(OnCircle(c, r0, mid + half), OnCircle(c, r1, mid + half), _scratch, w);
+    }
+
+    /// <summary>
+    /// 呼出盘第 i 格的图标（主条同款 Fluent 路径）：常态 regular、选中 filled。
+    /// 颜色格不走这里——它们是 `penFilled` 上色的"彩笔"，见 <see cref="DrawRadialPalette"/>。
+    /// </summary>
+    private static string RadialIconFor(int i, bool selected) => i switch
+    {
+        0 => selected ? IconPaths.penFilled : IconPaths.pen,
+        4 => selected ? IconPaths.eraserFilled : IconPaths.eraser,
+        5 => selected ? IconPaths.selectFilled : IconPaths.select,
+        6 => selected ? IconPaths.highlighterFilled : IconPaths.highlighter,
+        _ => selected ? IconPaths.laserFilled : IconPaths.laser,   // 7 激光
+    };
 
     private static Vector2 OnCircle(Vector2 c, float r, float deg)
     {
