@@ -37,7 +37,7 @@
 
     <ApplicationIcon>assets\InkTeach.ico</ApplicationIcon>
 
-    <Version>8.5.1</Version>
+    <Version>8.6.0</Version>
     <AssemblyVersion>8.5.1.0</AssemblyVersion>
     <FileVersion>8.5.1.0</FileVersion>
     <Product>InkTeach 批注</Product>

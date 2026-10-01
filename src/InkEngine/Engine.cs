@@ -127,6 +127,30 @@ public partial class InkEngine
 
         AutoSaveNow();
     }
+
+    // ---- 历史清理（墨迹 B）：启动后**首个空闲帧**做一次 ----------------------
+    //
+    // 为什么不在启动那一刻做：老师按下图标到窗口出现之间的时间要尽量短；
+    // 扫我们自己的两个小目录虽然是毫秒级，也不值得占在"开机"那一下。
+    // 为什么挂在 WM_TIMER（250ms 那口钟）上：它本来就在滴答，借一次就够了。
+    private bool _historySwept = true;          // 自检/无窗口模式默认"已扫过" = 永远不扫
+    private double _historySweepAtMs = double.MaxValue;
+
+    /// <summary>自检用：直接按给定保留期扫一次（0 = 永久，一份都不删）。</summary>
+    internal (int Files, int Dirs) SweepHistoryForTest(int days)
+        => days <= 0 ? (0, 0) : InkHistory.Sweep(days);
+
+    private void MaybeSweepHistory()
+    {
+        if (_historySwept || NowMs < _historySweepAtMs) return;
+        _historySwept = true;
+        int days = InkHistory.RetentionDays(GetUiPref("historyDays"));
+        if (days <= 0) return;                  // 永久：一份都不删
+        var (files, dirs) = InkHistory.Sweep(days);
+        if (files > 0 || dirs > 0)
+            Console.WriteLine($"[墨迹] 历史清理（保留 {days} 天）：删了 {files} 个文件、{dirs} 个空目录");
+    }
+
     internal Stroke ActiveStroke;
     internal Tool Tool = Tool.Pen;
     /// <summary>Tool sizes are authored in logical pixels and scaled by the
@@ -428,7 +452,11 @@ public partial class InkEngine
     }
 
     /// <summary>引擎入口：进入截图取景（面板上点模式段走它，见 IEngineCommands.EnterCapture）。</summary>
-    internal void BeginCaptureModeFromUi() => BeginCaptureMode();
+    internal void BeginCaptureModeFromUi()
+    {
+        ExitReplayForEdit("截图");
+        BeginCaptureMode();
+    }
 
     /// <summary>Pen width presets, in logical pixels. Cycled with Ctrl+Alt+W
     /// until there is a proper on-screen control for it.
@@ -1661,6 +1689,12 @@ public partial class InkEngine
 
         string mode = args.Length > 0 ? args[0] : "";
         SelfCheckMode = mode.Length > 0;
+        // 产品模式：启动 1.2 秒后（窗口已经露面）做一次历史清理；自检一律不扫。
+        if (mode.Length == 0)
+        {
+            _historySwept = false;
+            _historySweepAtMs = NowMs + 1200;
+        }
 
         // 用户偏好（深色主题/贴边隐藏/档位/钉住，以及"启动要不要接上上次的板书"）。
         //
@@ -1758,7 +1792,8 @@ public partial class InkEngine
         // 两个开关都是**给真机调手感用的**，不是给用户平时按的：
         //   · `--nopressure` 关掉，用来做"有/无"对照（差异要当场看得出来才算数）；
         //   · `--pressrange min,max[,gamma]` 现调动态范围与曲线，不用重编。
-        PressureWidth.Enabled = !args.Contains("--nopressure");
+        _noPressureArg = args.Contains("--nopressure");
+        PressureWidth.Enabled = !_noPressureArg;
         for (int i = 0; i < args.Length - 1; i++)
         {
             if (args[i] != "--pressrange") continue;
@@ -1774,6 +1809,16 @@ public partial class InkEngine
                     PressureWidth.Gamma = Math.Clamp(pg, 0.1f, 4f);
             }
         }
+
+        // ---- 用户开关：压感粗细（2026-10-01，「更多 → 设置 → 书写」）----------
+        //
+        // 默认**开**；偏好只写"关过"的那一份（`ui.pressure = "0"`）。
+        // **命令行优先**：`--nopressure` 是给"有/无"对照实验用的，它存在时不听偏好——
+        // 否则自检/实验机器上读到的用户偏好会把对照条件悄悄改掉。
+        // 自检模式下 `UiPrefs` 根本没从盘上读（见上面 LoadUiPrefs 那一段），
+        // 所以这里拿到的永远是空 → Enabled 就是命令行/默认值，判据稳定。
+        if (!_noPressureArg && GetUiPref(PressurePrefKey) == "0")
+            PressureWidth.Enabled = false;
 
         // ---- 中心线曲线化（过点 Catmull-Rom ＋ 角点保护）------------------------
         //
@@ -2373,7 +2418,13 @@ public partial class InkEngine
 
         // 记下渲染前的文档版本：**渲染期间界面可能改文档**（"按住清空"就是在界面的
         // Render 回调里够时间的——界面没有别的"每帧回调"可用）。见下面的判断。
-        long docVerBeforeRender = Doc.Version;
+        //
+        // ⚠ 盯的是 **RenderDoc**（平时=真文档；回放中=影子文档）：脏区/增量清单是
+        // 内容层照着渲染的那一份留下的。以前这里只清真文档，结果回放里影子文档的
+        // `Dirty.Full` 永远清不掉——**每条笔迹写完都触发一次全屏整层重铺**（看着闪一下、
+        // 白花一大笔重绘）。2026-10-01 用户报"写完一个字会闪一下"就是这个。
+        var renderDoc = RenderDoc;
+        long docVerBeforeRender = renderDoc.Version;
 
         foreach (var w in _windows)
             w.RenderFrame(this);
@@ -2394,11 +2445,11 @@ public partial class InkEngine
         // 还把墨迹卡住、连常规橡皮都擦不掉"）：清空是在界面的 Render 里触发的，
         // 引擎渲染完无条件 Reset()，于是**文档已经空了、屏幕上那层墨还留着**——
         // 看着像清空失效，而橡皮也擦不掉（文档里已经没有东西可擦了）。
-        if (Doc.Version == docVerBeforeRender)
+        if (renderDoc.Version == docVerBeforeRender)
         {
-            Doc.Dirty.Reset();
-            Doc.AppendedSinceRender.Clear();
-            Doc.StructureChangedSinceRender = false;
+            renderDoc.Dirty.Reset();
+            renderDoc.AppendedSinceRender.Clear();
+            renderDoc.StructureChangedSinceRender = false;
         }
 
         var w0 = _windows[0];
@@ -2727,7 +2778,8 @@ public partial class InkEngine
                 HitTestPoint(lParam, out float hitX, out float hitY);
                 // PPT 条（放映时底部那两条）也算"我的地盘"：**开着穿透时老师照样得能
                 // 点翻页 / 拖进度条**——不然那一下会落到下层 PPT 上，被它当成翻页点击。
-                bool mine = UiContains(hitX, hitY) || PptBarContains(hitX, hitY);
+                bool mine = UiContains(hitX, hitY) || PptBarContains(hitX, hitY)
+                         || ReplayBarContains(hitX, hitY);
                 if (mine) _cntNcHitClient++;
                 return new IntPtr(mine ? Native.HTCLIENT : Native.HTTRANSPARENT);
 
@@ -2822,6 +2874,7 @@ public partial class InkEngine
                 ReassertTopmost();
                 swTop.Stop();
                 _lastTopmostMs = swTop.Elapsed.TotalMilliseconds;
+                MaybeSweepHistory();      // 启动后首个空闲帧做一次历史清理（墨迹 B）
                 return IntPtr.Zero;
 
             case Native.WM_DISPLAYCHANGE:
@@ -2890,6 +2943,7 @@ public partial class InkEngine
     {
         _animating = Laser.Visible || _drawing || SelFlashing
                    || UiIsAnimatingNow || _camAnimating
+                   || _replayPlaying            // 回放播着：持续出帧（暂停即停）
                    || RadialPaletteActive;   // 呼出盘开着要连续出帧（出盘延迟 + 松手轮询）
         return _dirty || _animating;
     }
@@ -2923,6 +2977,40 @@ public partial class InkEngine
         {
             if (LibraryPointerDown(x, y)) { ApplyCursor(); return; }
             CloseLibraryPanel();
+        }
+
+        // 回放（墨迹 C）优先于界面与画布，三种落点：
+        //   · 控制条上 → 归它（播放/暂停、倍速、拖进度、关闭）；
+        //   · 界面上 → **先退出回放**，这一下照常给界面（换工具/开面板 = 老师要接管了）；
+        //   · 画布上 → **暂停/继续，不落墨**（讲课时最顺手的动作，用户已拍板）。
+        if (_replay != null)
+        {
+            if (ReplayBarContains(screenX, screenY))
+            {
+                if (ReplayPointerDown(screenX, screenY))
+                {
+                    _drawing = false;
+                    Native.SetCapture(hWnd);
+                    _replayCapturing = true;
+                    _dirty = true;
+                    ApplyCursor();
+                    return;
+                }
+                return;
+            }
+            // 界面和 PPT 条都算"要接管"：先退出回放，这一下照常往下走
+            //（点 PPT 条 = 翻页/长按菜单/跳页；点界面 = 换工具/开面板）。
+            if (UiContains(screenX, screenY) || PptBarContains(screenX, screenY))
+            {
+                StopReplay("点界面或 PPT 条");
+                // 不 return：这一下照常给下面的界面 / PPT 条处理
+            }
+            else
+            {
+                ReplayTogglePause();
+                _dirty = true;
+                return;
+            }
         }
 
         // 界面优先：点在悬浮条上就是操作界面，不是画一笔。
@@ -3705,6 +3793,14 @@ public partial class InkEngine
         ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布，下游全按画布坐标走
         PointerX = x; PointerY = y; PointerInside = true;
 
+        // 回放：控制条悬停 / 拖进度（屏幕坐标，和条自己的坐标系一致）。
+        // 拖进度时不再往下走——这一串移动归控制条。
+        if (_replay != null)
+        {
+            ReplayPointerMove(screenX, screenY);
+            if (_replayScrubbing) return;
+        }
+
         // 图库面板的悬停（和按下同一条口径：面板是最上面那一层）。
         // 格子亮一下是"这一格点得中"的反馈；整理模式下光标停在红 ✕ 上也是同一套。
         if (LibraryPanelOpen && !_drawing)
@@ -3892,6 +3988,18 @@ public partial class InkEngine
         {
             _pptCapturing = false;
             PptBarPointerUp(bx, by);
+            Native.ReleaseCapture();
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
+        // 回放控制条：这一下按下归它就由它收尾（拖进度条的松手也在这里）。
+        if (_replayCapturing && ReadPointer(id, out float rx, out float ry, out _, out _, out _))
+        {
+            _replayCapturing = false;
+            ReplayPointerUp(rx, ry);
             Native.ReleaseCapture();
             _drawing = false;
             _dirty = true;
@@ -4829,6 +4937,7 @@ public partial class InkEngine
     /// </summary>
     internal bool PasteFromClipboard()
     {
+        ExitReplayForEdit("粘贴");
         if (ClipboardInk.TryGetObjects(out var objs) && objs.Count > 0)
         {
             var vp = ViewportCanvas;
@@ -5496,6 +5605,9 @@ public partial class InkEngine
         // 界面上的按钮不该顶着一个笔尖圈/橡皮圈——那一圈是"落点反馈"，
         // 只对画布有意义。
         if (!_drawing && (_uiHover || PointerOnDrawnChrome())) return CursorKind.Default;
+
+        // 回放中一律箭头：画布那一下只是"暂停/继续"，不该顶着笔尖圈/橡皮圈。
+        if (_replay != null) return CursorKind.Default;
 
         if (PassThrough) return CursorKind.Leave;                 // 谁来接管由系统决定
         if (LastPointerType == Native.PT_TOUCH) return CursorKind.Hidden;
@@ -7932,6 +8044,7 @@ public partial class InkEngine
         SelectMode = SelMode,
         CoordGridDefault = CoordGridDefault,
         DwellShapeOn = DwellShapeEnabled,
+        PressureOn = PressureWidth.Enabled,      // 界面拿它显示「设置 → 书写 → 压感粗细」那个开关
         ScreenIndex = ScreenIndex,
         CanFlipPageUp = CanFlipPageUp,
         IsDrawing = _drawing,
@@ -7940,6 +8053,10 @@ public partial class InkEngine
         StrokeCount = Doc.Strokes.Count,
         UpdateStage = UpdateState,
         UpdateText = UpdateText,
+        InkStatus = InkStatus,                  // 界面「墨迹」页的状态行
+        ReplayActive = ReplayActive,
+        ReplayPlaying = ReplayPlaying,
+        ReplaySpeed = ReplaySpeed,
     };
 
     private void NotifyUiStateChanged()
@@ -7951,6 +8068,7 @@ public partial class InkEngine
 
     internal void SetToolFromUi(Tool tool)
     {
+        ExitReplayForEdit("换工具");
         SwitchTool(tool);
         EraserTelemetry?.Note($"界面换工具 → {ToolName(tool)}", NowMs);
         ApplyCursor();
@@ -8060,6 +8178,38 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
+    /// <summary>
+    /// 「更多 → 设置 → 书写 → 压感粗细」被点了一下（2026-10-01）。
+    /// 语义见 <see cref="IEngineCommands.SetPressure"/>：**渲染期**开关，文档一个字节不动。
+    ///
+    /// ⚠ 必须 `Doc.InvalidateAll()`：笔迹是按块**烘进内容层缓存**的，只标一个脏区的话
+    /// 屏幕上还是旧粗细（"开关点了没反应"最典型的一种）。整层作废最贵也就重铺一屏。
+    /// </summary>
+    internal void SetPressureFromUi(bool on)
+    {
+        if (PressureWidth.Enabled == on) return;
+        PressureWidth.Enabled = on;
+        Doc.InvalidateAll();
+        _dirty = true;
+        Console.WriteLine($"压感粗细：{(on ? "开（按压力改粗细）" : "关（所有笔迹等宽，手写板照样流畅）")}");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>命令行上有没有 `--nopressure`（给对照实验用，它优先于用户偏好）。</summary>
+    private bool _noPressureArg;
+
+    /// <summary>压感粗细的偏好键（只写"关过"的那一份）。</summary>
+    private const string PressurePrefKey = "pressure";
+
+    /// <summary>
+    /// 自检用：把"压感粗细"的偏好**重新应用一次**——模拟"重开软件"里读偏好那一步。
+    /// 自检模式启动时根本不读盘（见 LoadUiPrefs 那段），所以偏好往返必须靠这一条补上。
+    /// </summary>
+    internal void ApplyPressurePrefForTest()
+        => PressureWidth.Enabled = !_noPressureArg && GetUiPref(PressurePrefKey) != "0";
+
+
+
     internal void SetWidthFromUi(float logicalPx)
     {
         // 外层的 0.5～64 只是"别把明显离谱的值放进来"的兜底；**真正的范围按工具算**。
@@ -8115,6 +8265,7 @@ public partial class InkEngine
 
     internal void UndoFromUi()
     {
+        ExitReplayForEdit("撤销");
         Doc.Undo();
         Laser.Clear();
         _dirty = true;
@@ -8123,6 +8274,7 @@ public partial class InkEngine
 
     internal void RedoFromUi()
     {
+        ExitReplayForEdit("重做");
         Doc.Redo();
         _dirty = true;
         NotifyUiStateChanged();
@@ -8130,6 +8282,7 @@ public partial class InkEngine
 
     internal void ClearFromUi()
     {
+        ExitReplayForEdit("清空");
         Doc.Clear();
         Laser.Clear();
         _dirty = true;
@@ -8465,6 +8618,8 @@ public partial class InkEngine
 
     internal void SetPassThroughFromUi(bool on)
     {
+        // 开穿透 = 键盘/点击归下层：回放中开它就点不到控制条了，先收掉回放。
+        if (on) ExitReplayForEdit("开穿透");
         // 界面那格只发"切换"（`!st.PassThrough`），所以这就是"穿透开关"这条路：
         // 退出时恢复进穿透前的板态（用户 2026-09-30 拍板）。
         SetPassThrough(on, restoreBoard: true);
@@ -8523,6 +8678,7 @@ public partial class InkEngine
     /// <summary>界面上的"全选"。<see cref="SelectAll"/> 自己会把工具切成框选，免得用户以为没生效。</summary>
     internal void SelectAllFromUi()
     {
+        ExitReplayForEdit("全选");
         SelectAll();
         _dirty = true;
     }
@@ -8530,6 +8686,7 @@ public partial class InkEngine
     /// <summary>界面上的"上一屏 / 下一屏"（整屏翻页）。</summary>
     internal void FlipPageFromUi(bool down)
     {
+        ExitReplayForEdit("翻页");
         if (!FlipPage(down)) return;
         NotifyUiStateChanged();
     }

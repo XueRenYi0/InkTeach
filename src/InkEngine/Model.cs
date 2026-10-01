@@ -5508,19 +5508,33 @@ internal sealed class Stroke
     /// 于是整套删掉。
     /// </summary>
     private ID2D1PathGeometry BuildCenterline(ID2D1Factory1 factory)
+        => BuildCenterlineCore(factory, float.MaxValue);
+
+    /// <summary>
+    /// 回放用：只画**前 maxParam**（点序号，0..Points.Count-1，可带小数）那一段中心线。
+    /// **不进几何缓存**（每帧都在变，缓存只会不停重建）——调用方画完负责 Dispose。
+    /// </summary>
+    internal ID2D1PathGeometry BuildCenterlinePrefix(ID2D1Factory1 factory, float maxParam)
+        => BuildCenterlineCore(factory, maxParam);
+
+    private ID2D1PathGeometry BuildCenterlineCore(ID2D1Factory1 factory, float maxParam)
     {
         var geo = factory.CreatePathGeometry();
         using var sink = geo.Open();
 
         // 渲染尾（预测段）只加在"没被擦过"的笔迹上：擦除区间的几何要按段重拼，
         // 尾巴挂在哪一段上会变得说不清；而正在写的那一笔本来也不可能被擦。
+        // **回放的前缀也不接尾**：尾是"还没发生的墨"。
         var tail = Erased.Count == 0 ? RenderTail : null;
+        bool clipped = maxParam < Points.Count - 1 - 1e-4f;
 
         // **每条剩下的段一个 figure，但它们在同一条几何里**——这一点是关键：
         // 一次 DrawGeometry 只混合一次，所以半透明荧光笔即使自相重叠也不会变深。
         // 拆成两个对象（两个 DrawGeometry）就会混合两次（实测差 0 → 56）。
-        foreach (var (a, b) in RemainingRuns())
+        foreach (var (a, b0) in RemainingRuns())
         {
+            if (clipped && a >= maxParam - 1e-6f) break;   // 这一段整个在前缀之后：不画
+            float b = clipped ? MathF.Min(b0, maxParam) : b0;
             // 曲线化（`--smooth`）：把这一段 run 的采样点喂给曲线器，输出一串三次贝塞尔。
             // **点还是原来那些点**——曲线严格过每一个采样点，直角由角点保护保住；
             // 不生效时（开关关着 / 段数不够）原样退回下面的折线路径。
@@ -5541,8 +5555,8 @@ internal sealed class Stroke
                 if (MathF.Abs(b - MathF.Round(b)) > 1e-6f) sink.AddLine(PointAtParam(b));
             }
             // 渲染尾接在**同一份几何**的末尾（理由见 Stroke.RenderTail 第 ③ 条）。
-            // 上面的前提（Erased 为空）保证这里只会被加一次。
-            if (tail != null)
+            // 上面的前提（Erased 为空）保证这里只会被加一次；前缀被截断时不接。
+            if (tail != null && !clipped)
                 foreach (var p in tail) sink.AddLine(p);
             sink.EndFigure(FigureEnd.Open);
         }

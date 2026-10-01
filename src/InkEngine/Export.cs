@@ -862,4 +862,68 @@ internal static class ExportFileDialog
         var path = (ofn.lpstrFile ?? "").Trim().TrimEnd('\0');
         return string.IsNullOrEmpty(path) ? null : path;
     }
+
+    // ---- 墨迹文件（.inkb）的保存 / 打开（墨迹 A，2026-10-01）------------------
+    //
+    // 和上面那条走**完全同一套**看门线程 + CBT 居中 + 焦点借用（由调用方包住），
+    // 不重新发明；区别只在过滤器、标题、默认扩展名，以及"另存为"换成"打开"。
+
+    private const string InkFilter = "InkTeach 板书 (*.inkb)\0*.inkb\0\0";
+    private const int OFN_FILEMUSTEXIST = 0x00001000;
+
+    [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool GetOpenFileNameW([In, Out] OpenFileName ofn);
+
+    /// <summary>"保存墨迹"：弹另存为。返回 null = 取消。</summary>
+    public static string AskForInkSave(IntPtr owner, string suggestedName, string initialDir)
+    {
+        StartDialogWatcher();
+        InstallDialogPositionHook();
+        var ofn = new OpenFileName
+        {
+            lStructSize = SizeOfOpenFileName,
+            hwndOwner = owner,
+            lpstrFilter = InkFilter,
+            nFilterIndex = 1,
+            lpstrFile = suggestedName + new string('\0', Math.Max(0, 512 - suggestedName.Length)),
+            nMaxFile = 512,
+            lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
+            lpstrTitle = "保存墨迹",
+            lpstrDefExt = "inkb",
+            Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
+        };
+        bool ok;
+        try { ok = GetSaveFileNameW(ofn); }
+        finally { RemoveDialogPositionHook(); }
+        if (!ok) return null;
+        var path = (ofn.lpstrFile ?? "").Trim().TrimEnd('\0');
+        return string.IsNullOrEmpty(path) ? null : path;
+    }
+
+    /// <summary>"打开墨迹"：弹打开对话框（只认 .inkb，必须已存在）。返回 null = 取消。</summary>
+    public static string AskForInkOpen(IntPtr owner, string initialDir)
+    {
+        StartDialogWatcher();
+        InstallDialogPositionHook();
+        var ofn = new OpenFileName
+        {
+            lStructSize = SizeOfOpenFileName,
+            hwndOwner = owner,
+            lpstrFilter = InkFilter,
+            nFilterIndex = 1,
+            // 缓冲区预分配成 nMaxFile 那么长（同 AskForImage 的理由：字段必须是 string）
+            lpstrFile = new string('\0', 512),
+            nMaxFile = 512,
+            lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
+            lpstrTitle = "打开墨迹",
+            lpstrDefExt = "inkb",
+            Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
+        };
+        bool ok;
+        try { ok = GetOpenFileNameW(ofn); }
+        finally { RemoveDialogPositionHook(); }
+        if (!ok) return null;
+        var path = (ofn.lpstrFile ?? "").Trim().TrimEnd('\0');
+        return string.IsNullOrEmpty(path) ? null : path;
+    }
 }

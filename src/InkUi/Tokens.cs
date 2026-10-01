@@ -169,6 +169,13 @@ internal static class Tokens
     /// <summary>贴边吸附的时长（与展开同一套曲线，保持一致）。</summary>
     public const double SnapMs = 167;
 
+    /// <summary>
+    /// 「更多」面板（屏幕中央那块）的开合时长。打开 167 = 和悬停展开同一套节奏；
+    /// 关闭 120 = 用户已经按了关闭，快一点。
+    /// </summary>
+    public const double MoreOpenMs = 167;
+    public const double MoreCloseMs = 120;
+
     // ---- 颜色 ---------------------------------------------------------------
 
     /// <summary>
@@ -213,6 +220,20 @@ internal static class Tokens
     /// <summary>悬停底：黑 7%（系统 SubtleFill 的量级）。</summary>
     public static readonly Color4 HoverLight = new(0f, 0f, 0f, 0.07f);
     public static readonly Color4 HoverDark = new(1f, 1f, 1f, 0.08f);
+
+    /// <summary>
+    /// 「更多」面板背后的遮罩。浅色 18%：够读出"后面被压住了"，又不把板书糊成一片；
+    /// 深色 42%：深色主题背景本来就暗，轻了读不出"这是模态"。
+    /// 它同时是"点面板外 = 关闭"的那块地（见 FullUi 的「更多」面板一节）。
+    /// </summary>
+    public static readonly Color4 ScrimLight = new(0f, 0f, 0f, 0.18f);
+    public static readonly Color4 ScrimDark = new(0f, 0f, 0f, 0.42f);
+
+    /// <summary>
+    /// 「更多」面板的圆角：18——主条是胶囊（24）、上带是 12，
+    /// 屏幕中央这块大卡片取中间偏大，既不"糊成一块"也不像药丸。
+    /// </summary>
+    public const float MoreRadius = 18f;
 
     /// <summary>
     /// 色带那条**凹槽**：色片躺在里面才像"装在面板上"，直接贴在白底上会显得浮。
@@ -265,26 +286,44 @@ internal static class Tokens
     ///   每一层都比上一层**再大一圈**，所以"离面板越远，能盖住它的层数越少"，
     ///   累计出来的暗度自然一层比一层淡 —— 这就是一条近似的衰减曲线。
     ///   反过来（层越大越靠外、却都一样深）会让阴影越往下越黑，那是错的。
-    /// 台阶会不会看出来：步子 2～6 像素、相邻两步的 α 只差 0.005（约 1 个色阶），
-    /// 200% 缩放下也读不出来。真模糊（D2D 的 GaussianBlur）代价见
-    /// `reports/性能-面板每帧代价.md`：界面是"每帧都画"，所以这一版先不加模糊。
+    ///
+    /// ⚠ 2026-10-01 用户报"菜单栏周围浮着一个半透明、带黑影的袋子"——根因是**层数太少**：
+    ///   每层都是硬边填充，最外那层 3% 不透明度在浅色背景上就是一条看得清的圆角轮廓
+    ///   （≈8 个色阶），看起来像一只"袋子"套在卡片外面。修法：5 层 → 8 层，
+    ///   外层降到 ≤1%（≈2 个色阶，肉眼不可见）、相邻层差 ≤0.3%（半个色阶），
+    ///   把台阶磨平；近卡处也顺势从 18% 收到 13%，本来就不该那么重。
+    ///   真模糊（D2D GaussianBlur）代价见 `reports/性能-面板每帧代价.md`，仍然不加。
+    ///   改这里的胀幅记得同步 `PaintMargin`（外层仍取 16＋8＝24，正好没超）。
     /// </summary>
     public static readonly ShadowLayer[] ShadowLight =
     {
-        new(1f,  0.5f, new(0.09f, 0.10f, 0.13f, 0.050f)),
-        new(3f,  1.5f, new(0.09f, 0.10f, 0.13f, 0.045f)),
-        new(6f,  3.0f, new(0.09f, 0.10f, 0.13f, 0.040f)),
-        new(10f, 5.0f, new(0.09f, 0.10f, 0.13f, 0.035f)),
-        new(16f, 8.0f, new(0.09f, 0.10f, 0.13f, 0.030f)),
+        new(1.0f,  0.5f, new(0.09f, 0.10f, 0.13f, 0.0240f)),
+        new(2.0f,  1.0f, new(0.09f, 0.10f, 0.13f, 0.0230f)),
+        new(3.5f,  1.8f, new(0.09f, 0.10f, 0.13f, 0.0210f)),
+        new(5.5f,  2.7f, new(0.09f, 0.10f, 0.13f, 0.0190f)),
+        new(8.0f,  4.0f, new(0.09f, 0.10f, 0.13f, 0.0165f)),
+        new(11.0f, 5.5f, new(0.09f, 0.10f, 0.13f, 0.0140f)),
+        new(13.5f, 6.7f, new(0.09f, 0.10f, 0.13f, 0.0115f)),
+        new(16.0f, 8.0f, new(0.09f, 0.10f, 0.13f, 0.0090f)),
     };
 
     /// <summary>
-    /// 深色：暗面板和暗背景本来就有明度差，投影给两层就够（照老值）。
+    /// 深色：**和白主题同一套曲线、颜色用纯黑**（深色的卡片大多是深底，黑投影在深色板上
+    /// 本来就不显；真正会看到它的是"深色卡片浮在浅色白板/讲义上"的场合）。
+    /// 老值是两层 10%/6%、只胀 3px——硬边小圈；2026-10-01 第一版修"袋子"时又矫枉过正
+    /// 把胀幅拉到 16px，成了一个大光晕（用户当天就指出来"黑主题还有"）。这一版直接和
+    /// 浅色逐层同参，只是颜色不同：外沿 0.9%（≈2 个色阶，看不出边）。
     /// </summary>
     public static readonly ShadowLayer[] ShadowDark =
     {
-        new(1f, 1f, new(0f, 0f, 0f, 0.10f)),
-        new(3f, 3f, new(0f, 0f, 0f, 0.06f)),
+        new(1.0f,  0.5f, new(0f, 0f, 0f, 0.0240f)),
+        new(2.0f,  1.0f, new(0f, 0f, 0f, 0.0230f)),
+        new(3.5f,  1.8f, new(0f, 0f, 0f, 0.0210f)),
+        new(5.5f,  2.7f, new(0f, 0f, 0f, 0.0190f)),
+        new(8.0f,  4.0f, new(0f, 0f, 0f, 0.0165f)),
+        new(11.0f, 5.5f, new(0f, 0f, 0f, 0.0140f)),
+        new(13.5f, 6.7f, new(0f, 0f, 0f, 0.0115f)),
+        new(16.0f, 8.0f, new(0f, 0f, 0f, 0.0090f)),
     };
 
     /// <summary>

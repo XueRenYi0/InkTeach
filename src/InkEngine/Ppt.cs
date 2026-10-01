@@ -268,6 +268,7 @@ public partial class InkEngine
     /// </summary>
     private void EnterPptMode(in PptSnapshot s)
     {
+        ExitReplayForEdit("进放映");
         PptMode = true;
         SyncPptHotkeys();              // 放映临时全局键：挂上（穿透开着则不挂，见 Engine.PptHotkeys）
         _pptKey = s.Key ?? "";
@@ -328,6 +329,9 @@ public partial class InkEngine
     /// </summary>
     private bool GotoPage(int key)
     {
+        // 任何换页（翻页键 / 点箭头 / 页号面板 / 进退出放映）都先让回放退场：
+        // 回放是"当前这一页的只读重演"，页一换它就失去意义（用户 2026-10-01 拍板）。
+        ExitReplayForEdit("翻页");
         int from = Doc.PageKey;
         if (!Doc.SwitchPage(key)) return false;
 
@@ -575,23 +579,33 @@ public partial class InkEngine
     /// 对齐照样成立，而多出来的那两个字把没说清的地方补齐了：
     /// **所有**（清的是这一份 PPT 的全部，不是当前页）、**自动**（不用手动存）、
     /// **本次**（结束的是这一场放映，不是改 PPT 本身）。
+    /// 2026-10-01 用户提议加上"回放本页墨迹"（放映时手就在条上，不用再去开中央面板），
+    /// 六个字照样齐；分组 = [存/放] | [清空] | [结束]（前两项都不破坏内容）。
     /// </summary>
-    private static readonly string[] PptMenuItems = { "自动保存墨迹", "清空所有墨迹", "结束本次放映" };
+    private static readonly string[] PptMenuItems =
+        { "自动保存墨迹", "回放本页墨迹", "清空所有墨迹", "结束本次放映" };
 
     internal static int PptMenuItemCount => PptMenuItems.Length;
 
-    /// <summary>菜单项之间画分隔线的位置（在第 i 项**之前**画）。三项各成一组的写法。 </summary>
-    internal static bool PptMenuDividerBefore(int i) => i is 1 or 2;
+    /// <summary>菜单项之间画分隔线的位置（在第 i 项**之前**画）。[存/放] | [清空] | [结束]。 </summary>
+    internal static bool PptMenuDividerBefore(int i) => i is 2 or 3;
 
     /// <summary>这一项是危险动作吗（"墨迹清空"）——绘制据此上强调色（等确认时也用它）。</summary>
-    internal static bool PptMenuItemDanger(int i) => i == 1;
+    internal static bool PptMenuItemDanger(int i) => i == 2;
 
     /// <summary>第 i 项这一刻显示的文字（"清空所有墨迹"等确认时变成"再点确认"）。</summary>
     internal string PptMenuItemText(int i)
-        => i == 1 && PptClearConfirm ? "再点确认" : PptMenuItems[i];
+        => i == 2 && PptClearConfirm ? "再点确认" : PptMenuItems[i];
 
-    /// <summary>第 i 项右边的状态文字（只有开关项有）。不是开关项返回 null。</summary>
-    internal string PptMenuItemStatus(int i) => i == 0 ? (PptAutoSaveOn ? "开" : "关") : null;
+    /// <summary>第 i 项右边的状态文字（开关 = 开/关；回放 = N 笔）。其余返回 null。</summary>
+    internal string PptMenuItemStatus(int i)
+        => i == 0 ? (PptAutoSaveOn ? "开" : "关")
+         : i == 1 ? $"{Doc.Strokes.Count} 笔"
+         : null;
+
+    /// <summary>这一项这一刻能不能点。"回放本页墨迹"没笔迹时**置灰**——
+    /// 点是老师最自然的动作，"点了没反应"最伤人（右邻的"0 笔"顺便把原因说清）。</summary>
+    internal bool PptMenuItemEnabled(int i) => i != 1 || Doc.Strokes.Count > 0;
 
     /// <summary>虚拟桌面矩形（物理像素）。</summary>
     private RectF ScreenRectPhysical() => new()
@@ -603,6 +617,24 @@ public partial class InkEngine
     /// <summary>两个矩形相交吗（避让界面用）。</summary>
     private static bool RectsOverlap(in RectF a, in RectF b)
         => a.MinX < b.MaxX && b.MinX < a.MaxX && a.MinY < b.MaxY && b.MinY < a.MaxY;
+
+    /// <summary>
+    /// 界面矩形是不是"**全屏模态**"（盖住屏幕 80% 宽和 80% 高）。
+    ///
+    /// 为什么要有它：`PptBarRect` 第一次定位时会避让工具条（界面和条重叠就把条往上挪），
+    /// 而「更多」面板打开时界面占的是**整块屏幕**——照常避让就会把条顶到屏幕顶部。
+    ///
+    /// 为什么用"矩形大小"而不是问"面板开没开"：引擎不认识界面的内部状态，它只看到
+    /// `QueryBounds`（分层纪律，见 架构-分层与规则.md）。全屏模态在矩形上就是这个特征，
+    /// 从矩形判最解耦。阈值 80% 很宽松：工具条再宽也只是贴底的一条（高度远小于 80%），
+    /// 正常界面不会被误判。
+    /// </summary>
+    internal static bool UiLooksFullscreen(in RectF ui, in RectF screen)
+    {
+        float sw = screen.MaxX - screen.MinX, sh = screen.MaxY - screen.MinY;
+        if (sw <= 0f || sh <= 0f) return false;
+        return (ui.MaxX - ui.MinX) >= sw * 0.8f && (ui.MaxY - ui.MinY) >= sh * 0.8f;
+    }
 
     /// <summary>界面的矩形（物理像素）。界面没挂 / 不可见 / 报错时是空矩形。</summary>
     private RectF UiRectPhysical()
@@ -643,7 +675,12 @@ public partial class InkEngine
         if (first)
         {
             var ui = UiRectPhysical();
-            if (!ui.IsEmpty && RectsOverlap(PptBar.RectAt(p.X, p.Y, dpi), ui))
+            // **全屏模态面板**（「更多」打开时占用 = 整块屏幕）不算"工具条"，不参与避让。
+            // 不判这一条的下场（2026-10-01 `--ppttest` 当场抓到）：面板开着时条第一次定位
+            // 落在左上角 (32,32)——`above = ui.MinY - 8 - 条高` 直接算到屏幕顶上去了，
+            // 而默认位置是左下角。用户实测"先放映、再开面板"看不到这条，因为条在放映
+            // 第一帧就定位完了；真正的危险顺序是"面板先开着、PptMode 才打开"。
+            if (!ui.IsEmpty && !UiLooksFullscreen(ui, screen) && RectsOverlap(PptBar.RectAt(p.X, p.Y, dpi), ui))
             {
                 // 界面（工具条）也在底部那一带：上移到它上面，留 8 不重叠。
                 float above = ui.MinY - 8f * dpi - PptBar.BarH * dpi;
@@ -712,7 +749,8 @@ public partial class InkEngine
                 PptMenuItemRectAt(i, out var item);
                 if (item.Contains(x, y))
                 {
-                    RunPptMenuItem(i);
+                    // 置灰的项：**这一下吃掉，但不执行**（菜单留着，右侧"0 笔"就是原因）
+                    if (PptMenuItemEnabled(i)) RunPptMenuItem(i);
                     _dirty = true;
                     return true;
                 }
@@ -819,7 +857,8 @@ public partial class InkEngine
             for (int i = 0; i < PptMenuItemCount; i++)
             {
                 PptMenuItemRectAt(i, out var item);
-                if (item.Contains(x, y)) { hover = 100 + i; break; }
+                // 置灰的项不给悬停高亮（高亮 = "能点"，点了没反应就更奇怪）
+                if (item.Contains(x, y)) { hover = PptMenuItemEnabled(i) ? 100 + i : -1; break; }
             }
         }
         if (hover < 0 && PptPagePanelOpen)
@@ -1128,6 +1167,7 @@ public partial class InkEngine
     /// 两处**故意不关菜单**：
     ///   · 开关项（墨迹保存）——老师点一下要**看见状态变了**，菜单关了就等于没反馈；
     ///   · "墨迹清空"的第一次点——那一下只是"进入等确认"，菜单得留着他点第二次。
+    /// 其余（回放 / 结束）都是**先收菜单再执行**。
     /// </summary>
     private void RunPptMenuItem(int index)
     {
@@ -1136,7 +1176,13 @@ public partial class InkEngine
             case 0:                                  // 墨迹保存（开关）
                 TogglePptAutoSave();
                 return;                              // 菜单留着，让老师看见"开 → 关"
-            case 1:                                  // 墨迹清空（两段确认）
+            case 1:                                  // 回放本页墨迹（收起菜单，起当前页回放）
+                PptMenuOpen = false;
+                PptClearConfirm = false;             // 菜单关了，"等确认"一起放掉
+                _dirty = true;
+                StartReplay();                       // 与中央面板「墨迹回放」同一个入口
+                return;
+            case 2:                                  // 墨迹清空（两段确认）
                 if (!PptClearConfirm)
                 {
                     PptClearConfirm = true;
@@ -1150,7 +1196,7 @@ public partial class InkEngine
                 PptMenuOpen = false;
                 _dirty = true;
                 return;
-            case 2:                                  // 结束放映
+            case 3:                                  // 结束放映
                 PptMenuOpen = false;
                 PptExitFromUi();
                 return;

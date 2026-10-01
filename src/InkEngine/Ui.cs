@@ -320,6 +320,18 @@ public interface IEngineCommands
     void SetDwellShape(bool on);
 
     /// <summary>
+    /// **压感 → 粗细**的开关（「更多 → 设置 → 书写 → 压感粗细」，2026-10-01 加）。
+    ///
+    /// 默认**开**；关掉 = **整块板上的压感笔迹立刻等宽**（湿墨也一样），
+    /// 手写板的流畅 / 预测 / 采样路径完全不受影响——它只决定"压力参不参与粗细"。
+    ///
+    /// ⚠ 这是一条**渲染期**开关：文档里每个点存的压力值和每条笔迹的 `HasPressure`
+    /// **一个字节都不动**，重新打开就恢复原来的粗细。和 `--nopressure` 是同一条口径
+    /// （那个是给对照实验用的命令行版本，它优先）。
+    /// </summary>
+    void SetPressure(bool on);
+
+    /// <summary>
     /// 「更多」抽屉里"坐标系网格"那一行被点了一下。
     /// **选中了坐标系就改它们，没选中就翻"新画的默认值"**（语义见 Engine.ToggleSelectionGrid）。
     /// 返回改了几个对象（0 = 改的是默认值，界面据此决定要不要把偏好落盘）。
@@ -359,6 +371,34 @@ public interface IEngineCommands
     void Restart();
 
     void Quit();
+
+    /// <summary>
+    /// **保存墨迹到 .inkb**（墨迹 A，2026-10-01）：弹系统"另存为"，写整块白板。
+    ///
+    /// 白板模式有效；**放映中不响应**（`Save(doc)` 只写当前页，手动保存整份 PPT 批注
+    /// 是"批注包"的活，见 计划 6.4.1）。结果写进 <see cref="UiState.InkStatus"/>。
+    /// </summary>
+    void SaveInkFile();
+
+    /// <summary>
+    /// **从 .inkb 打开墨迹**（墨迹 A）：弹系统"打开"，替换当前板书。
+    ///
+    /// 打开前**自动写一份"打开前备份"**（最近 5 份轮转）；失败不动文档、不弹窗，
+    /// 结果写进 <see cref="UiState.InkStatus"/>。放映中不响应。
+    /// </summary>
+    void OpenInkFile();
+
+    /// <summary>
+    /// **开始墨迹回放**（墨迹 C）：按当时的速度重演**当前一屏**的笔迹。
+    ///
+    /// 只读模式：不动文档/撤销栈/选中；相机锁定；点画布暂停/继续（不落墨）、
+    /// 控制条上有播放/暂停、四档倍速、进度、关闭。开始时会顺手关掉穿透。
+    /// 这一屏没有笔迹 / 截图取景中 / 放映中（D 之前）都不响应。
+    /// </summary>
+    void StartReplay();
+
+    /// <summary>停掉回放（退出后一切复原）。</summary>
+    void StopReplay();
 }
 
 /// <summary>课堂常用色。界面直接拿它画色板，保证多套界面配色一致。</summary>
@@ -783,6 +823,11 @@ public readonly struct UiState
     /// <summary>**停顿成型**开着吗（界面用它显示抽屉里那一行的开关）。
     /// 默认开；关掉只是"以后画的那些不参与"，不影响已经变出来的图形。</summary>
     public bool DwellShapeOn { get; init; }
+    /// <summary>
+    /// **压感粗细**开着吗（界面用它显示「设置 → 书写 → 压感粗细」那一行的开关）。
+    /// 默认开；关掉 = 整块板等宽（渲染期语义，文档里的压力数据不动）。
+    /// </summary>
+    public bool PressureOn { get; init; }
     /// <summary>现在在第几屏（1 起）。界面用它显示"第 N 屏"。</summary>
     public int ScreenIndex { get; init; }
     /// <summary>还能不能往上翻（到顶了就不行）。"下一屏"永远可用。</summary>
@@ -806,6 +851,19 @@ public readonly struct UiState
     public UpdateStage UpdateStage { get; init; }
     /// <summary>自动更新的一行状态文字（"未配置更新源" / "检查中…" / "已是最新" / "下载 42%" …）。</summary>
     public string UpdateText { get; init; }
+
+    /// <summary>
+    /// 「墨迹」页的状态行（上次保存/打开的结果；没做过事就是空串）。
+    /// 保存成功 / 打开成功（含是否备份）/ 各种失败都写在这儿——产品里不弹窗。
+    /// </summary>
+    public string InkStatus { get; init; }
+
+    /// <summary>回放中吗（界面用它把「墨迹回放」那一行显示成"停"）。</summary>
+    public bool ReplayActive { get; init; }
+    /// <summary>回放正在播吗（暂停时为 false；界面据此显示 ▶/⏸）。</summary>
+    public bool ReplayPlaying { get; init; }
+    /// <summary>回放倍速（0.5 / 1 / 2 / 4）。</summary>
+    public float ReplaySpeed { get; init; }
 }
 
 /// <summary>

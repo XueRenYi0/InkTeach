@@ -359,6 +359,13 @@ internal static class InkSerializer
     }
 
     /// <summary>
+    /// **只校验、不改文档**：给「打开」用——先把"这份文件能不能读"问清楚，
+    /// 再决定要不要写"打开前备份"、要不要动当前文档。
+    /// 与 <see cref="LoadInto"/> 共用 <see cref="ParseCore"/>，两条路对格式的理解不可能跑偏。
+    /// </summary>
+    internal static void Validate(byte[] data) => ParseCore(data, out _, out _);
+
+    /// <summary>
     /// 把字节解析成"块 ＋ 对象 ＋ id 水位"。**只解析、不碰文档**——
     /// <see cref="LoadInto"/>（整份文档）和 <see cref="LoadStrokes"/>（一页）
     /// 共用这一份，两条路对格式的理解不可能跑偏（那是最难查的一类 bug）。

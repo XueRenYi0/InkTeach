@@ -109,6 +109,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
 
     public void SetCoordGridDefault(bool on) => _engine.SetCoordGridDefaultFromUi(on);
     public void SetDwellShape(bool on) => _engine.SetDwellShapeFromUi(on);
+    public void SetPressure(bool on) => _engine.SetPressureFromUi(on);
     public int ToggleCoordGrid() => _engine.ToggleSelectionGrid();
 
     public void SetBoardPattern(int pattern, float stepLogical)
@@ -122,6 +123,10 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void Paste() => _engine.PasteFromClipboard();
     public void Restart() => _engine.RestartFromUi();
     public void Quit() => _engine.QuitFromUi();
+    public void SaveInkFile() => _engine.SaveInkFileFromUi();
+    public void OpenInkFile() => _engine.OpenInkFileFromUi();
+    public void StartReplay() => _engine.StartReplayFromUi();
+    public void StopReplay() => _engine.StopReplayFromUi();
     public void CheckUpdate() => _engine.CheckUpdateFromUi();
     public void ApplyUpdate() => _engine.ApplyUpdateFromUi();
 

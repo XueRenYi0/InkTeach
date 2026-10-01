@@ -166,12 +166,6 @@ public sealed class FullUi : IOverlayUi
     /// <summary>换挡动画里"从哪一档来"（淡出的那一条线画的是它）。</summary>
     private StrokeDash _dashFadeFrom = StrokeDash.Solid;
 
-    // ---- 「更多」抽屉 ------------------------------------------------------
-    private bool _drawerOpen;
-    private int _drawerHover = -1;
-    private int _profileHover = -1;
-    private int _chipHover = -1;
-
     /// <summary>深色主题：手动开关（用户定的），底色/图标/描边整套换。</summary>
     private bool _dark;
 
@@ -192,47 +186,29 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private bool _peekArmed;
 
-    /// <summary>「更多」抽屉里的行。</summary>
-    private enum Row { DarkTheme, AutoHide, DwellShape, Restart, Quit, CheckUpdate }
+    /// <summary>「更多」面板里的行。**顺序就是布局顺序**（见 <see cref="MoreRowRect"/>）。</summary>
+    private enum Row { DarkTheme, AutoHide, DwellShape, Pressure, Restart, Quit, CheckUpdate }
 
-    private static readonly (Row Kind, string Label, bool Dangerous, bool Gray)[] Rows =
+    /// <summary>
+    /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
+    /// `Hint` 是标签下面那行 11px 小灰字，只有需要解释的行才给。
+    /// </summary>
+    private static readonly (Row Kind, string Label, bool Dangerous, bool Gray, string Hint)[] Rows =
     {
-        (Row.DarkTheme, "深色主题", false, false),
-        (Row.AutoHide, "贴边隐藏", false, false),
+        (Row.DarkTheme, "深色主题", false, false, ""),
+        (Row.AutoHide, "贴边隐藏", false, false, ""),
         // 停顿成型（2026-09-23 第二十批，见 计划-图形工具.md §四十二）：
         // 手写一笔停住 400ms → 把它变成规整图形。**默认开**（用户定的：
         // "因为是停顿变，所以默认开"），所以这一行的开关初始就是「开」。
         // 关掉 = 以后画的那些不再参与；已经变出来的图形不受影响（那是撤销的事）。
-        (Row.DwellShape, "停顿变图形", false, false),
-        (Row.Restart, "重启软件", false, false),
-        (Row.Quit, "退出", true, false),
-        (Row.CheckUpdate, "检查更新", false, false),
+        (Row.DwellShape, "停顿变图形", false, false, ""),
+        // 压感粗细（2026-10-01，批次 0.2）：默认开；关掉 = 整块板等宽，
+        // 手写板的流畅 / 预测不受影响（渲染期开关，文档里的压力数据不动）。
+        (Row.Pressure, "压感粗细", false, false, "关掉后所有笔迹等宽（手写板照样流畅）"),
+        (Row.Restart, "重启软件", false, false, ""),
+        (Row.Quit, "退出", true, false, ""),
+        (Row.CheckUpdate, "检查更新", false, false, ""),
     };
-
-    /// <summary>
-    /// 哪几行后面画分隔线（画的时候跳过的位置）。
-    /// 两刀切出三组：主题/贴边 · 图形 · 系统。
-    ///
-    /// ⚠ **这几个数是行下标，插一行 / 删一行都必须跟着改**——2026-09-24 把「坐标系网格」
-    /// 挪进图形面板（见 <see cref="ShapeIcon"/>(Tool) 那一格）时就踩过一次：
-    /// 那一行删掉之后，"图形"这一组的线会落到「重启软件」后面去（分组看着就错了）。
-    /// 2026-09-27 又删了「白板底纹 / 底纹间距」两行（搬进白板色带，见 <see cref="BoardSegKind"/>），
-    /// 下标从 `1 or 3 or 4` 跟着改成 `1 or 2`。
-    /// </summary>
-    private static bool IsSeparatorAfter(int row) => row is 1 or 2;
-
-    private const float DrawerW = 260f;
-    private const float DrawerRowH = 40f;
-    private const float DrawerPad = 12f;
-    /// <summary>
-    /// 抽屉离面板的空隙。比假面板的 8 大一些（用户要的"再往上一些"）：
-    /// 拉开一点，抽屉和工具条才像两块东西，而不是糊在一起。
-    /// </summary>
-    private const float DrawerGap = 16f;
-    private const float DrawerSepH = 9f;
-    private const float ProfileH = 32f;        // 顶部那排"极简 / 自定义 / 完整"
-    private const float GridChipH = 36f;       // 钉住那一栏里每个工具格
-    private const float GridGap = 6f;
 
     private readonly Dictionary<uint, ID2D1SolidColorBrush> _brushes = new();
     /// <summary>形变期间整片内容淡入用的图层（每帧现建现销，不缓存：理由见 BeginFade）。</summary>
@@ -258,6 +234,7 @@ public sealed class FullUi : IOverlayUi
         _peek = new Anim(1f);
         _rail = new Anim(0f);
         _dashFade = new Anim(1f);      // 1 = 换挡动画已经结束（平时就是新档的样子）
+        _more = new Anim(0f);          // 「更多」面板：0 = 关、1 = 全开（兼作遮罩透明度）
     }
 
     public string Name => "完整界面";
@@ -271,6 +248,7 @@ public sealed class FullUi : IOverlayUi
             if (_peek.Running) return true;
             if (_rail.Running) return true;
             if (_dashFade.Running) return true;      // 换挡那一下要把淡入淡出画完
+            if (_more.Running) return true;          // 「更多」面板开合（遮罩淡入淡出跟着它）
             // 按住清空、或者刚按完那一下的闪光：都要继续给帧，否则进度条不走、
             // 也永远到不了 0.8 秒那个点（"按住不放"这条全靠帧在推进）。
             if (ActionHolding) return true;
@@ -294,6 +272,7 @@ public sealed class FullUi : IOverlayUi
         _peek.Bind(host);
         _rail.Bind(host);
         _dashFade.Bind(host);
+        _more.Bind(host);
         _lastTool = host.State.Tool;
         // **启动即展开**（用户 2026-09-27 定："第一次打开以后，默认就展开"）。
         //
@@ -400,6 +379,8 @@ public sealed class FullUi : IOverlayUi
         _host.SetPref("coordGrid", st.CoordGridDefault ? "1" : null);
         // 停顿成型：**默认开**，所以只写"关了"这一种情况（写成 "0"）。
         _host.SetPref("dwellShape", st.DwellShapeOn ? null : "0");
+        // 压感粗细：**默认开**，同样只写"关了"这一种情况（引擎启动时自己读它）。
+        _host.SetPref("pressure", st.PressureOn ? null : "0");
 
         var off = new List<string>();
         for (int i = 1; i < _pinned.Length; i++) if (!_pinned[i]) off.Add(i.ToString());
@@ -421,6 +402,11 @@ public sealed class FullUi : IOverlayUi
 
     public RectF QueryBounds()
     {
+        // 「更多」面板打开（含开合动画）时：我们占**整块屏幕**——这是全屏模态的根
+        //（命中测试、裁剪、接输入小窗都按这份矩形走，理由见「更多」面板那一节）。
+        // 关掉（动画也跑完）立刻回到主条那一条，一帧都不多占。
+        if (_moreOpen || _more.Running) return _screen;
+
         // 占用矩形必须跟着"实际画出来的东西"走：贴边隐藏时它就只剩露头那一条，
         // 输入小窗也跟着缩——这样指针扫过露头才算"碰到面板"，其余位置照旧穿透/画线。
         var u = UnionRect();
@@ -468,8 +454,19 @@ public sealed class FullUi : IOverlayUi
     /// 露出不到 12 像素就换。换早了不行——球里的色环和笔图标会提前消失，
     /// 那正是用户点过名的"跳"。
     /// </summary>
+    /// <summary>
+    /// 贴边隐藏"这一刻真的在起作用"吗：开关开着，而且面板**够得到屏幕底边**
+    ///（判据和 <see cref="Shift"/> 完全同一份：**只有底边才藏**，左右/上边一律不藏）。
+    ///
+    /// ⚠ 这一条 2026-10-01 补：以前 `PeekTabShown` 只看 `_peek` 收没收，于是把球拖到
+    /// **左/右边缘**（那里 `Shift` 恒为 0、根本藏不动）时，球会被画成那条"露头把手"
+    /// ——一个**纯笔色的实心圆**，而且永远"吸不进去"（用户报的正是这个）。
+    /// </summary>
+    private bool DockHideEngaged =>
+        _hideEnabled && (_screen.MaxY - UnionRect().MaxY) <= Tokens.DockHideDistance;
+
     private bool PeekTabShown =>
-        _hideEnabled && Tokens.DockPeek + (Tokens.Ball - Tokens.DockPeek) * _peek.Value <= 12f;
+        DockHideEngaged && Tokens.DockPeek + (Tokens.Ball - Tokens.DockPeek) * _peek.Value <= 12f;
 
     /// <summary>
     /// 现在是"展开的条"还是"球"。0.5 这条线全工程共用（贴边隐藏要不要收、内容画哪一套）。
@@ -533,7 +530,7 @@ public sealed class FullUi : IOverlayUi
     /// 所以变高是往上/往下长，不会把主条顶走。
     ///
     /// ⚠ **"带子多高"只能问这一处**（2026-09-20 第十六批收的口子）：以前有四处各写一遍
-    /// `Tokens.BandHeight`（判定区 / 夹取 / 总高 / 抽屉定位），而那一格从第十三批起就是多行，
+    /// `Tokens.BandHeight`（判定区 / 夹取 / 总高 / 弹出面板定位），而那一格从第十三批起就是多行，
     /// 于是判定区只盖住**最下面那一行** —— 用户 2026-09-20 报的正是这个：
     /// "**鼠标移动到第一行的任何图形位置，色带会收起来**"（指针一挪到上面那行就被判成
     /// "离开面板"，220 毫秒后带子收回去）。四处都改问这个函数之后，
@@ -547,7 +544,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>
     /// 上带**完全张开**时那一整块占多高（含它与主条之间的缝）——
-    /// 夹取屏幕、抽屉定位、判定区都问它（见 <see cref="BandHeightLogical"/> 那条注释）。
+    /// 夹取屏幕、判定区都问它（见 <see cref="BandHeightLogical"/> 那条注释）。
     /// </summary>
     private float BandBlockFull() => BandGap + BandHeightLogical();
 
@@ -1605,17 +1602,6 @@ public sealed class FullUi : IOverlayUi
             return;
         }
 
-        // 抽屉开着的时候设置条让位（假面板同一条：这两个抢的是同一块地方）。
-        // 少了这一条会有个很别扭的画面：抽屉还开着，指针在主条上一动，
-        // 设置条就从抽屉底下冒出来一截（抽屉离主条只有 16 像素，设置条有 34 高）。
-        if (_drawerOpen)
-        {
-            _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
-            _railHover = false;
-            _rail.To(0f, Tokens.RailMs);
-            return;
-        }
-
         double now = _host.NowMs;
         if (_railHover)
         {
@@ -1915,58 +1901,11 @@ public sealed class FullUi : IOverlayUi
         }
     }
 
-    // ---- 「更多」抽屉 ------------------------------------------------------
-
-    /// <summary>抽屉顶部的档位条（极简 / 自定义 / 完整）。</summary>
-    private RectF ProfileRect(int i)
-    {
-        var d = DrawerRect();
-        float w = (d.MaxX - d.MinX - DrawerPad * 2 - 2 * 8f) / 3f;
-        float x = d.MinX + DrawerPad + i * (w + 8f);
-        return new RectF { MinX = x, MinY = d.MinY + DrawerPad, MaxX = x + w, MaxY = d.MinY + DrawerPad + ProfileH };
-    }
+    // ---- 档位与钉住（「更多」面板「工具条」那一组在用）--------------------
 
     private int ProfileIndex() => (int)_profile;
 
-    /// <summary>"钉住"那一栏：12 个工具格，排 4 列。点一下切换钉住/取消。</summary>
-    private float GridTop() => DrawerRect().MinY + DrawerPad + ProfileH + 12f;
-
-    private RectF ChipRect(int cell)
-    {
-        var d = DrawerRect();
-        int idx = cell - 1;                        // 0..11（0 号收起格不参与钉）
-        float w = (d.MaxX - d.MinX - DrawerPad * 2 - 3 * GridGap) / 4f;
-        int col = idx % 4, row = idx / 4;
-        float x = d.MinX + DrawerPad + col * (w + GridGap);
-        float y = GridTop() + row * (GridChipH + GridGap);
-        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + GridChipH };
-    }
-
-    private int HitChip(float x, float y)
-    {
-        if (!_drawerOpen) return -1;
-        for (int cell = 1; cell < Cells.Length; cell++)
-            if (ChipRect(cell).Contains(x, y)) return cell;
-        return -1;
-    }
-
-    private int HitProfile(float x, float y)
-    {
-        if (!_drawerOpen) return -1;
-        for (int i = 0; i < 3; i++) if (ProfileRect(i).Contains(x, y)) return i;
-        return -1;
-    }
-
-    /// <summary>抽屉的高：档位条 ＋ 钉住那一栏 ＋ 6 行 ＋ 两条分隔 ＋ 上下内边距。算出来的。</summary>
-    private static float DrawerHeight()
-    {
-        float h = DrawerPad * 2f + ProfileH + 12f + 3f * (GridChipH + GridGap) + 10f;
-        h += Rows.Length * DrawerRowH;
-        for (int i = 0; i < Rows.Length; i++) if (IsSeparatorAfter(i)) h += DrawerSepH;
-        return h;
-    }
-
-    /// <summary>主条 ＋ 上带（不含抽屉）。</summary>
+    /// <summary>主条 ＋ 上带。</summary>
     private RectF PanelRect()
     {
         var bar = BarRect();
@@ -1979,61 +1918,8 @@ public sealed class FullUi : IOverlayUi
         };
     }
 
-    /// <summary>
-    /// 抽屉：**右对齐、放在内容那一侧**（和上带同一个方向）。
-    /// 右对齐是因为它是由最右那格「更多」打开的——弹出的东西应该出现在手指附近。
-    /// </summary>
-    private RectF DrawerRect()
-    {
-        float h = DrawerHeight();
-        // 位置以**色带完全展开**时的面板顶为参照，不用"这一刻"的面板顶：
-        // 色带在 6↔34 之间长短变化，抽屉要是跟着它走，鼠标一碰到色带抽屉就往上跳一下
-        // —— 那正是用户说的"色带展开以后有起伏"。
-        var panel = PanelRectFullBand();
-        float maxX = panel.MaxX;
-        float y = BandAbove() ? panel.MinY - DrawerGap - h : panel.MaxY + DrawerGap;
-        return new RectF { MinX = maxX - DrawerW, MinY = y, MaxX = maxX, MaxY = y + h };
-    }
-
-    /// <summary>如果按"色带完全展开"来算，面板会占哪一块（只给抽屉定位用）。</summary>
-    private RectF PanelRectFullBand()
-    {
-        var bar = BarRect();
-        float h = BandBlockFull();
-        return BandAbove()
-            ? new RectF { MinX = bar.MinX, MinY = bar.MinY - h, MaxX = bar.MaxX, MaxY = bar.MaxY }
-            : new RectF { MinX = bar.MinX, MinY = bar.MinY, MaxX = bar.MaxX, MaxY = bar.MaxY + h };
-    }
-
-    private float RowTop(int i)
-    {
-        // 行在**档位条 ＋ 钉住栏**的下面
-        float y = GridTop() + 3f * (GridChipH + GridGap) + 10f;
-        for (int k = 0; k < i; k++)
-        {
-            y += DrawerRowH;
-            if (IsSeparatorAfter(k)) y += DrawerSepH;
-        }
-        return y;
-    }
-
-    private RectF RowRect(int i)
-    {
-        var d = DrawerRect();
-        float y = RowTop(i);
-        return new RectF { MinX = d.MinX + DrawerPad, MinY = y, MaxX = d.MaxX - DrawerPad, MaxY = y + DrawerRowH };
-    }
-
-    /// <summary>开关的矩形（行右侧那个小胶囊）。</summary>
-    private RectF SwitchRect(int i)
-    {
-        var r = RowRect(i);
-        float w = 36f, h = 20f;
-        float cy = (r.MinY + r.MaxY) * 0.5f;
-        return new RectF { MinX = r.MaxX - w, MinY = cy - h * 0.5f, MaxX = r.MaxX, MaxY = cy + h * 0.5f };
-    }
-
-    private bool IsToggleRow(int i) => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.DwellShape;
+    private bool IsToggleRow(int i)
+        => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.DwellShape or Row.Pressure;
 
     /// <summary>
     /// 这一行现在是不是压暗（点了没反应）。
@@ -2060,8 +1946,8 @@ public sealed class FullUi : IOverlayUi
     /// <summary>
     /// 行标签（只有开关那几行有文字，别的行就是表里那个 Label）。
     ///
-    /// 「检查更新」那一行例外：**显示引擎报的当前状态**。文案必须短——抽屉那一行
-    /// 只有一格宽（`RowRect` 减去内边距），长了会被切掉，所以引擎那边给的就是
+    /// 「检查更新」那一行例外：**显示引擎报的当前状态**。文案必须短——那一行
+    /// 只有一格宽（面板里减去开关那一段），长了会被切掉，所以引擎那边给的就是
     /// "检查中…" / "有新版本 8.0.1" / "下载中 42%" 这种短句。
     /// </summary>
     private string RowLabel(int i)
@@ -2071,20 +1957,10 @@ public sealed class FullUi : IOverlayUi
         return st.UpdateStage switch
         {
             UpdateStage.Idle => Rows[i].Label,
-            // 抽屉宽 260 逻辑像素（13 号字能放约 19 个字），下面这些都短：
+            // 面板里那一格约 290 宽（13 号字能放 20 来个字），下面这些都短：
             UpdateStage.NotConfigured => "检查更新（未配置源）",
             _ => string.IsNullOrEmpty(st.UpdateText) ? Rows[i].Label : st.UpdateText,
         };
-    }
-
-    private int HitRow(float x, float y)
-    {
-        if (!_drawerOpen) return -1;
-        var d = DrawerRect();
-        if (!d.Contains(x, y)) return -1;
-        for (int i = 0; i < Rows.Length; i++)
-            if (RowRect(i).Contains(x, y) && !IsGrayRow(i)) return i;
-        return -1;
     }
 
     private void ActivateRow(int i)
@@ -2108,6 +1984,14 @@ public sealed class FullUi : IOverlayUi
             // 配置里没有这一项就是默认开，以后默认值改了老配置不会把新默认顶掉）。
             case Row.DwellShape:
                 _host.Commands.SetDwellShape(!(_host.State.DwellShapeOn));
+                SavePrefs();
+                Invalidate();
+                break;
+
+            // 压感粗细（2026-10-01）：同一条规矩——引擎是权威，界面翻转后落盘。
+            // 关掉是**渲染期**的：整块板立刻等宽，文档里的压力数据不动。
+            case Row.Pressure:
+                _host.Commands.SetPressure(!_host.State.PressureOn);
                 SavePrefs();
                 Invalidate();
                 break;
@@ -2138,7 +2022,6 @@ public sealed class FullUi : IOverlayUi
         _profile = p;
         if (PosOf(CellForTool(_host.State.Tool)) < 0)
             _host.Commands.SetTool(Tool.Pen);
-        _drawerHover = -1;
         _hover = -1;
         _press = -1;
         SavePrefs();
@@ -2148,25 +2031,595 @@ public sealed class FullUi : IOverlayUi
     /// <summary>钉住 / 取消钉住。笔、橡皮、「更多」是安全项（取消了就没法用），不许动。</summary>
     private void TogglePin(int cell)
     {
+        // 下标越界在这里直接挡住：命中编号一旦串段（历史上真发生过一次），
+        // 这里是最后一道防线——界面组件不该因为一个下标把小命丢给引擎的异常阶梯。
+        if (cell <= 0 || cell >= Cells.Length) return;
         if (!CanUnpin(cell)) return;
         _pinned[cell] = !_pinned[cell];
         SetProfile(Profile.Custom);
     }
 
-    // ---- 贴边隐藏 -----------------------------------------------------------
+    // ---- 「更多」面板（屏幕中央；2026-10-01 批次 0.1）----------------------
+    //
+    // 它取代了原来挂在主条上的抽屉（用户 2026-10-01 拍板："更多和主界面分开，
+    // 放在屏幕中央"）。产品里只有一个入口：主条最后一格「…」（见 Activate case 12）。
+    //
+    // 为什么是**全屏模态**（方案 A，见《计划-更多面板与课堂工具.md》3.3）：
+    //   · 面板装的大多是界面自己的偏好（深色/贴边/停顿/档位/钉住/重启/退出），
+    //     放界面层读写最顺；
+    //   · 它打开时本来就该是模态的：点面板外 = 关，而且那一**不落墨**；
+    //   · 不用改引擎结构——打开期间占用矩形报"整块屏幕"，关掉立刻收回主条那一条
+    //     （引擎的命中测试、裁剪、接输入小窗都跟着 QueryBounds 走）。
+    //
+    // ⚠ **绝不能把"主条 ∪ 中央面板"当成一个占用矩形**：引擎的接输入小窗是一个矩形，
+    //   小窗里界面没吃的点击**既不落墨、也不透给下层**（见 Engine.UiInputWndProc），
+    //   两块中间那片空白会把老师的点击整个吃掉。全屏模态从根上绕开了这件事。
+    //
+    // 开合动画：`_more` 的值既是进度也是遮罩透明度；面板本体从 0.97 轻轻放到 1。
+    // **不做透明度图层**（`BeginFade` 那个图层是给色带交叉淡入用的，别抢）。
 
-    /// <summary>整块（主条 ＋ 上带 ＋ 抽屉）**未平移**的矩形。</summary>
-    private RectF UnionRect()
+    private bool _moreOpen;
+    private readonly Anim _more;          // 0 = 关、1 = 全开
+    private MorePage _morePage = MorePage.Settings;
+    private int _moreHover = MoreHitNone;
+    private int _morePress = -1;
+
+    /// <summary>面板三页。默认停在「设置」——「课堂 / 墨迹」两页现在只放占位文案。</summary>
+    private enum MorePage { Classroom = 0, Ink = 1, Settings = 2 }
+
+    // 尺度（逻辑像素）。宽 640：设置页两栏各约 290，标签放得下、触摸点得到；
+    // **高按内容算**（见 MoreHeight），换页不跳。
+    private const float MoreW = 640f;
+    private const float MorePad = 20f;
+    private const float MoreHeaderH = 44f;
+    private const float MoreTabH = 44f;
+    private const float MoreTabGap = 8f;
+    private const float MoreGroupGap = 14f;
+    private const float MoreGroupHeadH = 30f;
+    private const float MoreRowH = 48f;
+    private const float MoreProfileH = 34f;
+    private const float MoreChipH = 40f;
+    private const float MoreChipGap = 8f;
+    private const int MoreChipCols = 6;      // 12 格排两行（比抽屉的 4 列宽，手指好点）
+    private const float MoreSwitchW = 44f;
+    private const float MoreSwitchH = 26f;
+    private const float MoreCloseSize = 44f;
+    private const float MoreColumnGap = 16f;
+    private const float MoreProfileGap = 8f;
+    private const float MoreChipTopGap = 10f;
+    private const float MoreWriteGap = 8f;
+
+    // 命中编号：一整块用**一个整数**编码（页签/档位/宫格/行各自一段），
+    // 悬停、按下、绘制都读同一个号——"画一套、点另一套"在这类面板上最容易出。
+    private const int MoreHitNone = -1;
+    private const int MoreHitInside = 0;      // 面板里的空白：吃掉，但不关面板
+    private const int MoreHitClose = 1;
+    private const int MoreHitTab = 10;        // 10..12
+    private const int MoreHitProfile = 20;    // 20..22
+    private const int MoreHitChip = 30;       // 30+cell（1..12）
+    private const int MoreHitRow = 60;        // 60+行下标
+    private const int MoreHitInk = 70;        // 70+「墨迹」页的动作行下标
+
+    /// <summary>下半区两栏里较高的那一栏（左：外观 2 行 ＋ 书写 2 行；右：系统 3 行）。</summary>
+    private static float MoreLowerH =>
+        MoreGroupHeadH + 2f * MoreRowH + MoreWriteGap + MoreGroupHeadH + 2f * MoreRowH;
+
+    /// <summary>面板高（按内容算，不依赖位置——MoreRect 反过来要用它）。</summary>
+    private static float MoreHeight() => MorePad * 2f
+        + MoreHeaderH + 8f + MoreTabH + MoreGroupGap
+        + MoreGroupHeadH + MoreProfileH + MoreChipTopGap + (2f * MoreChipH + MoreChipGap)
+        + MoreGroupGap + MoreLowerH;
+
+    /// <summary>面板矩形：在主屏工作区正中、夹进屏幕；尺寸跟着 DPI 由引擎缩放。</summary>
+    private RectF MoreRect()
     {
-        var p = PanelRect();
-        if (!_drawerOpen) return p;
-        var d = DrawerRect();
+        float h = MathF.Min(MoreHeight(), MathF.Max(160f, (_work.MaxY - _work.MinY) - 16f));
+        float w = MathF.Min(MoreW, MathF.Max(240f, (_work.MaxX - _work.MinX) - 16f));
+        float cx = (_work.MinX + _work.MaxX) * 0.5f;
+        float cy = (_work.MinY + _work.MaxY) * 0.5f;
+        var r = new RectF
+        {
+            MinX = cx - w * 0.5f, MinY = cy - h * 0.5f,
+            MaxX = cx + w * 0.5f, MaxY = cy + h * 0.5f,
+        };
+
+        // 夹进屏幕（工作区算出来的位置一般在里面；多屏/怪工作区时兜一下，
+        // 保证"面板永远整块在屏幕里"——半个面板在屏幕外是最坏的一种形态）
+        const float m = 8f;
+        if (r.MinX < _screen.MinX + m) { r.MaxX += _screen.MinX + m - r.MinX; r.MinX = _screen.MinX + m; }
+        if (r.MaxX > _screen.MaxX - m) { r.MinX -= r.MaxX - (_screen.MaxX - m); r.MaxX = _screen.MaxX - m; }
+        if (r.MinY < _screen.MinY + m) { r.MaxY += _screen.MinY + m - r.MinY; r.MinY = _screen.MinY + m; }
+        if (r.MaxY > _screen.MaxY - m) { r.MinY -= r.MaxY - (_screen.MaxY - m); r.MaxY = _screen.MaxY - m; }
+        return r;
+    }
+
+    private float MoreContentW() => MoreRect().MaxX - MoreRect().MinX - MorePad * 2f;
+    private float MoreLeftX() => MoreRect().MinX + MorePad;
+
+    private float MoreColumnW() =>
+        MathF.Max(120f, (MoreContentW() - MoreColumnGap) * 0.5f);
+
+    private float MoreRightX() => MoreLeftX() + MoreColumnW() + MoreColumnGap;
+
+    private RectF MoreHeaderRect() => new()
+    {
+        MinX = MoreLeftX(), MinY = MoreRect().MinY + MorePad,
+        MaxX = MoreLeftX() + MoreContentW(), MaxY = MoreRect().MinY + MorePad + MoreHeaderH,
+    };
+
+    private RectF MoreCloseRect() => new()
+    {
+        MinX = MoreHeaderRect().MaxX - MoreCloseSize, MinY = MoreHeaderRect().MinY,
+        MaxX = MoreHeaderRect().MaxX, MaxY = MoreHeaderRect().MinY + MoreCloseSize,
+    };
+
+    private RectF MoreTabRect(int i)
+    {
+        float w = (MoreContentW() - MoreTabGap * 2f) / 3f;
+        float x = MoreLeftX() + i * (w + MoreTabGap);
+        float y = MoreHeaderRect().MaxY + 8f;
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + MoreTabH };
+    }
+
+    private float MoreContentTop() => MoreTabRect(0).MaxY + MoreGroupGap;
+
+    private RectF MoreToolHeadRect() => new()
+    {
+        MinX = MoreLeftX(), MinY = MoreContentTop(),
+        MaxX = MoreLeftX() + MoreContentW(), MaxY = MoreContentTop() + MoreGroupHeadH,
+    };
+
+    private RectF MoreProfileRect(int i)
+    {
+        float w = (MoreContentW() - MoreProfileGap * 2f) / 3f;
+        float x = MoreLeftX() + i * (w + MoreProfileGap);
+        float y = MoreToolHeadRect().MaxY;
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + MoreProfileH };
+    }
+
+    private RectF MoreChipRect(int cell)
+    {
+        int idx = cell - 1;                        // 0..11（0 号收起格不参与钉）
+        float w = (MoreContentW() - (MoreChipCols - 1) * MoreChipGap) / MoreChipCols;
+        int col = idx % MoreChipCols, row = idx / MoreChipCols;
+        float x = MoreLeftX() + col * (w + MoreChipGap);
+        float y = MoreProfileRect(0).MaxY + MoreChipTopGap + row * (MoreChipH + MoreChipGap);
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + MoreChipH };
+    }
+
+    private float MoreToolBottom() => MoreChipRect(Cells.Length - 1).MaxY;
+
+    /// <summary>下半区两栏的顶（工具条组下面留一个组间距）。</summary>
+    private float MoreLowerTop() => MoreToolBottom() + MoreGroupGap;
+
+    private RectF MoreColumnRect(float y, bool left, float h)
+    {
+        float x = left ? MoreLeftX() : MoreRightX();
+        return new RectF { MinX = x, MinY = y, MaxX = x + MoreColumnW(), MaxY = y + h };
+    }
+
+    private RectF MoreLookHeadRect() =>
+        MoreColumnRect(MoreLowerTop(), true, MoreGroupHeadH);
+
+    private RectF MoreWriteHeadRect() =>
+        MoreColumnRect(MoreLowerTop() + MoreGroupHeadH + 2f * MoreRowH + MoreWriteGap, true, MoreGroupHeadH);
+
+    private RectF MoreSystemHeadRect() =>
+        MoreColumnRect(MoreLowerTop(), false, MoreGroupHeadH);
+
+    /// <summary>
+    /// 第 i 行的矩形。行表（<see cref="Rows"/>）的顺序就是这里的语义：
+    /// 0/1 = 外观（左栏）、2/3 = 书写（左栏）、4/5/6 = 系统（右栏）。
+    /// </summary>
+    private RectF MoreRowRect(int i)
+    {
+        bool left = i is 0 or 1 or 2 or 3;
+        float y = i switch
+        {
+            0 => MoreLowerTop() + MoreGroupHeadH,
+            1 => MoreLowerTop() + MoreGroupHeadH + MoreRowH,
+            2 => MoreLowerTop() + MoreGroupHeadH + 2f * MoreRowH + MoreWriteGap + MoreGroupHeadH,
+            3 => MoreLowerTop() + MoreGroupHeadH + 2f * MoreRowH + MoreWriteGap + MoreGroupHeadH + MoreRowH,
+            4 => MoreLowerTop() + MoreGroupHeadH,
+            5 => MoreLowerTop() + MoreGroupHeadH + MoreRowH,
+            _ => MoreLowerTop() + MoreGroupHeadH + 2f * MoreRowH,
+        };
+        return MoreColumnRect(y, left, MoreRowH);
+    }
+
+    private RectF MoreSwitchRect(int i)
+    {
+        var r = MoreRowRect(i);
+        float cy = (r.MinY + r.MaxY) * 0.5f;
         return new RectF
         {
-            MinX = Math.Min(p.MinX, d.MinX), MinY = Math.Min(p.MinY, d.MinY),
-            MaxX = Math.Max(p.MaxX, d.MaxX), MaxY = Math.Max(p.MaxY, d.MaxY),
+            MinX = r.MaxX - MoreSwitchW - 4f, MinY = cy - MoreSwitchH * 0.5f,
+            MaxX = r.MaxX - 4f, MaxY = cy + MoreSwitchH * 0.5f,
         };
     }
+
+    /// <summary>面板里点到了什么：一个整数编码，见 MoreHit* 常量。</summary>
+    private int MoreHitAt(float x, float y)
+    {
+        if (!_moreOpen) return MoreHitNone;
+        if (!MoreRect().Contains(x, y)) return MoreHitNone;
+        if (MoreCloseRect().Contains(x, y)) return MoreHitClose;
+        for (int i = 0; i < 3; i++)
+            if (MoreTabRect(i).Contains(x, y)) return MoreHitTab + i;
+        if (_morePage == MorePage.Ink)
+        {
+            for (int i = 0; i < InkRows.Length; i++)
+                if (MoreInkRowRect(i).Contains(x, y)) return MoreHitInk + i;
+            return MoreHitInside;
+        }
+        if (_morePage != MorePage.Settings) return MoreHitInside;
+        for (int i = 0; i < 3; i++)
+            if (MoreProfileRect(i).Contains(x, y)) return MoreHitProfile + i;
+        for (int cell = 1; cell < Cells.Length; cell++)
+            if (MoreChipRect(cell).Contains(x, y)) return MoreHitChip + cell;
+        for (int i = 0; i < Rows.Length; i++)
+            if (!IsGrayRow(i) && MoreRowRect(i).Contains(x, y)) return MoreHitRow + i;
+        return MoreHitInside;
+    }
+
+    /// <summary>打开面板（入口只有主条「…」那一格）。</summary>
+    private void OpenMore()
+    {
+        _railHover = false;
+        _rail.To(0f, Tokens.RailMs);       // 色带让位（模态期间它不该再冒出来）
+
+        _moreOpen = true;
+        _moreHover = MoreHitNone;
+        _morePress = -1;
+        _more.Jump(0f);
+        _more.To(1f, Tokens.MoreOpenMs);
+        Invalidate();
+    }
+
+    /// <summary>关闭面板。动画期间 QueryBounds 仍报整屏（遮罩要淡出去）。</summary>
+    private void CloseMore()
+    {
+        if (!_moreOpen) return;
+        _moreOpen = false;
+        _moreHover = MoreHitNone;
+        _morePress = -1;
+        _more.To(0f, Tokens.MoreCloseMs);
+        Invalidate();
+    }
+
+    /// <summary>画面板：遮罩（全屏）＋ 卡片 ＋ 按页签切内容。**最后画**，压住一切。</summary>
+    private void DrawMorePanel(ID2D1DeviceContext ctx)
+    {
+        float a = Math.Clamp(_more.Value, 0f, 1f);
+        if (a <= 0.003f) return;
+
+        // 遮罩：整块屏幕（含主条）。它同时是"模态"的可视凭据和"点外面关闭"的那块地。
+        var scrim = _dark ? Tokens.ScrimDark : Tokens.ScrimLight;
+        ctx.FillRectangle(
+            new Vortice.RawRectF(_screen.MinX, _screen.MinY, _screen.MaxX, _screen.MaxY),
+            Brush(ctx, new Color4(scrim.R, scrim.G, scrim.B, QA(scrim.A * a))));
+
+        var r = MoreRect();
+        var saved = ctx.Transform;
+        float k = 0.97f + 0.03f * a;
+        var c = new Vector2((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
+        ctx.Transform = Matrix3x2.CreateTranslation(-c.X, -c.Y)
+                      * Matrix3x2.CreateScale(k, k)
+                      * Matrix3x2.CreateTranslation(c.X, c.Y)
+                      * saved;
+        try { DrawMorePanelCore(ctx); }
+        finally { ctx.Transform = saved; }
+    }
+
+    private void DrawMorePanelCore(ID2D1DeviceContext ctx)
+    {
+        var r = MoreRect();
+        DrawCard(ctx, r, Tokens.MoreRadius);
+
+        // 标题 ＋ 右上角 ✕
+        var head = MoreHeaderRect();
+        _widgets.Text(ctx, "更多",
+                      new RectF { MinX = head.MinX, MinY = head.MinY,
+                                  MaxX = head.MaxX - MoreCloseSize, MaxY = head.MaxY },
+                      15f, Brush(ctx, InkCol), center: false);
+        var close = MoreCloseRect();
+        if (_moreHover == MoreHitClose)
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(close.MinX, close.MinY, close.MaxX, close.MaxY), 10f, 10f),
+                Brush(ctx, HoverCol));
+        _widgets.Text(ctx, "✕", close, 14f, Brush(ctx, MutedCol));
+
+        // 页签
+        for (int i = 0; i < 3; i++)
+        {
+            var t = MoreTabRect(i);
+            bool active = (int)_morePage == i;
+            var rr = new RoundedRectangle(new Vortice.RawRectF(t.MinX, t.MinY, t.MaxX, t.MaxY), 10f, 10f);
+            if (active) ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Accent));
+            else if (_moreHover == MoreHitTab + i) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+            ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : BorderCol), 1f);
+            _widgets.Text(ctx, MorePageName(i), t, 13f, Brush(ctx, active ? Tokens.AccentInk : InkCol));
+        }
+
+        switch (_morePage)
+        {
+            case MorePage.Classroom:
+                DrawMorePlaceholder(ctx, "即将加入：计时器 / 点名 / 随机分组");
+                break;
+            case MorePage.Ink:
+                DrawMoreInkPage(ctx);
+                break;
+            default:
+                DrawMoreSettings(ctx);
+                break;
+        }
+    }
+
+    private void DrawMorePlaceholder(ID2D1DeviceContext ctx, string text)
+    {
+        var r = MoreRect();
+        var box = new RectF
+        {
+            MinX = r.MinX + MorePad, MinY = MoreContentTop(),
+            MaxX = r.MaxX - MorePad, MaxY = r.MaxY - MorePad,
+        };
+        _widgets.Text(ctx, text, box, 14f, Brush(ctx, MutedCol));
+    }
+
+    // ---- 「墨迹」页（保存 / 打开；墨迹 A，2026-10-01）------------------------
+    //
+    // 两条动作行 ＋ 状态区。动作行**不做成开关**（它们是"做事"，不是"设置当前值"），
+    // 所以没有右侧开关；置灰规则见 InkRowEnabled：
+    //   · 放映中两条都置灰（PPT 有自己的存取，见 6.4.1）；
+    //   · 白板空板书时"保存"置灰。
+    // 点置灰的行**仍然会吃到点击**——命令会往状态行写一句"为什么不能"，比"点了没反应"清楚。
+
+    private enum InkRow { Save, Open, Replay, RestoreInk, PptAutoSave, HistoryDays }
+
+    private static readonly (InkRow Kind, string Label, string Hint)[] InkRows =
+    {
+        (InkRow.Save, "保存墨迹…", "存成 .inkb 文件，以后可以再打开"),
+        (InkRow.Open, "打开墨迹…", "替换当前板书；打开前会自动备份旧板书"),
+        (InkRow.Replay, "墨迹回放", "按当时的速度重演这一屏；点画布暂停/继续"),
+        // 下面三条是"墨迹偏好"（墨迹 B）：都只写 `ui.*`，引擎在下次启动/进放映时读。
+        (InkRow.RestoreInk, "自动恢复上次板书", "下次启动时接上这次的板书"),
+        (InkRow.PptAutoSave, "PPT 墨迹默认自动保存", "放映时长按菜单里仍可临时覆盖"),
+        (InkRow.HistoryDays, "历史清理", "超过保留期的 PPT 缓存与打开前备份，下次启动时清掉"),
+    };
+
+    private const float MoreInkRowH = 56f;         // 动作行（保存/打开）
+    private const float MoreInkSetH = 48f;         // 设置行（开关/循环档）
+    private const float MoreInkRowGap = 8f;
+    private const float MoreInkValueW = 104f;      // 设置行右侧留给开关/档位文字的宽度
+
+    private static float MoreInkRowHeight(int i)
+        => InkRows[i].Kind is InkRow.Save or InkRow.Open or InkRow.Replay ? MoreInkRowH : MoreInkSetH;
+
+    private RectF MoreInkRowRect(int i)
+    {
+        float y = MoreContentTop();
+        for (int k = 0; k < i; k++) y += MoreInkRowHeight(k) + MoreInkRowGap;
+        return new RectF
+        {
+            MinX = MoreLeftX(), MinY = y,
+            MaxX = MoreLeftX() + MoreContentW(), MaxY = y + MoreInkRowHeight(i),
+        };
+    }
+
+    /// <summary>设置行的开关矩形（右侧，触摸尺寸同设置页）。</summary>
+    private RectF MoreInkSwitchRect(in RectF r)
+    {
+        float cy = (r.MinY + r.MaxY) * 0.5f;
+        return new RectF
+        {
+            MinX = r.MaxX - MoreSwitchW - 14f, MinY = cy - MoreSwitchH * 0.5f,
+            MaxX = r.MaxX - 14f, MaxY = cy + MoreSwitchH * 0.5f,
+        };
+    }
+
+    /// <summary>循环档那一行右侧的值（"永久 / 90 天 / 30 天 / 7 天"）。</summary>
+    private RectF MoreInkValueRect(in RectF r)
+    {
+        float mid = (r.MinY + r.MaxY) * 0.5f;
+        return new RectF
+        {
+            MinX = r.MaxX - MoreInkValueW - 14f, MinY = r.MinY,
+            MaxX = r.MaxX - 14f, MaxY = mid + 4f,
+        };
+    }
+
+    private bool InkRowEnabled(int i) => InkRows[i].Kind switch
+    {
+        // 放映中动作都置灰（PPT 有自己的存取）；白板空板书时"保存"置灰
+        InkRow.Save => _host != null && !_host.State.PptMode && _host.State.StrokeCount > 0,
+        InkRow.Open => _host != null && !_host.State.PptMode,
+        // 回放：有笔迹可用（**放映中也开放**：回放当前这一页）；回放中也可点（停止）
+        InkRow.Replay => _host != null
+                         && (_host.State.ReplayActive || _host.State.StrokeCount > 0),
+        _ => _host != null,          // 偏好三条任何时候都能改
+    };
+
+    private bool InkToggleOn(int i) => i == (int)InkRow.RestoreInk
+        ? _host.GetPref("restoreInk") == "1"                    // 默认关
+        : _host.GetPref("pptAutoSave") != "0";                  // 默认开
+
+    private static string HistoryDaysName(string pref) => pref switch
+    {
+        "90" => "90 天", "30" => "30 天", "7" => "7 天", _ => "永久",
+    };
+
+    private void DrawMoreInkPage(ID2D1DeviceContext ctx)
+    {
+        for (int i = 0; i < InkRows.Length; i++)
+        {
+            var r = MoreInkRowRect(i);
+            bool action = InkRows[i].Kind is InkRow.Save or InkRow.Open or InkRow.Replay;
+            bool enabled = InkRowEnabled(i);
+            var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 10f, 10f);
+            if (_moreHover == MoreHitInk + i) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+            ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+
+            var ink = enabled ? InkCol : new Color4(InkCol.R, InkCol.G, InkCol.B, 0.35f);
+            float mid = (r.MinY + r.MaxY) * 0.5f;
+            float labelRight = action ? r.MaxX - 14f : r.MaxX - MoreInkValueW - 14f;
+            _widgets.Text(ctx, InkRows[i].Label,
+                          new RectF { MinX = r.MinX + 14f, MinY = r.MinY + 5f, MaxX = labelRight, MaxY = mid + 2f },
+                          action ? 14f : 13f, Brush(ctx, ink), center: false);
+            _widgets.Text(ctx, InkRows[i].Hint,
+                          new RectF { MinX = r.MinX + 14f, MinY = mid + 2f, MaxX = labelRight, MaxY = r.MaxY - 5f },
+                          11f, Brush(ctx, MutedCol), center: false);
+
+            switch (InkRows[i].Kind)
+            {
+                case InkRow.RestoreInk:
+                case InkRow.PptAutoSave:
+                    DrawSwitch(ctx, MoreInkSwitchRect(r), InkToggleOn(i));
+                    break;
+                case InkRow.HistoryDays:
+                    _widgets.Text(ctx, HistoryDaysName(_host.GetPref("historyDays")),
+                                  MoreInkValueRect(r), 13f, Brush(ctx, InkCol));
+                    break;
+            }
+        }
+
+        // 状态区：当前对象数 ＋ 上次动作结果（产品里不弹窗，结果都落在这儿）
+        float y = MoreInkRowRect(InkRows.Length - 1).MaxY + 14f;
+        _widgets.Text(ctx, $"当前板书：{_host.State.StrokeCount} 个对象",
+                      new RectF { MinX = MoreLeftX(), MinY = y, MaxX = MoreLeftX() + MoreContentW(), MaxY = y + 20f },
+                      12f, Brush(ctx, MutedCol), center: false);
+        string status = _host.State.InkStatus;
+        if (!string.IsNullOrEmpty(status))
+            _widgets.Text(ctx, status,
+                          new RectF { MinX = MoreLeftX(), MinY = y + 20f, MaxX = MoreLeftX() + MoreContentW(), MaxY = y + 44f },
+                          12f, Brush(ctx, InkCol), center: false);
+    }
+
+    private void ActivateInkRow(int i)
+    {
+        switch (InkRows[i].Kind)
+        {
+            case InkRow.Save: _host.Commands.SaveInkFile(); break;
+            case InkRow.Open: _host.Commands.OpenInkFile(); break;
+            case InkRow.Replay:
+                if (_host.State.ReplayActive) _host.Commands.StopReplay();
+                else _host.Commands.StartReplay();
+                break;
+            // 三条墨迹偏好：只写 `ui.*`（引擎在下次启动 / 进放映时读），界面立刻回显。
+            // 默认值不写进配置：restoreInk 默认关（只写 "1"）、pptAutoSave 默认开（只写 "0"）、
+            // historyDays 默认永久（写成 null = 删掉这一项）。
+            case InkRow.RestoreInk:
+                _host.SetPref("restoreInk", _host.GetPref("restoreInk") == "1" ? null : "1");
+                break;
+            case InkRow.PptAutoSave:
+                _host.SetPref("pptAutoSave", _host.GetPref("pptAutoSave") == "0" ? null : "0");
+                break;
+            case InkRow.HistoryDays:
+                _host.SetPref("historyDays", _host.GetPref("historyDays") switch
+                {
+                    "90" => "30", "30" => "7", "7" => null, _ => "90",
+                });
+                break;
+        }
+        Invalidate();
+    }
+
+    private void DrawMoreSettings(ID2D1DeviceContext ctx)
+    {
+        // 工具条：档位 ＋ 钉住宫格（原抽屉那一栏，规则一个字没改）
+        DrawMoreGroupHead(ctx, MoreToolHeadRect(), "工具条");
+        for (int i = 0; i < 3; i++)
+        {
+            var s = MoreProfileRect(i);
+            bool active = ProfileIndex() == i;
+            var rr = new RoundedRectangle(new Vortice.RawRectF(s.MinX, s.MinY, s.MaxX, s.MaxY), 8f, 8f);
+            if (active) ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Accent));
+            else if (_moreHover == MoreHitProfile + i) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+            ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : BorderCol), 1f);
+            _widgets.Text(ctx, ProfileName(i), s, 12.5f,
+                          Brush(ctx, active ? Tokens.AccentInk : InkCol));
+        }
+        for (int cell = 1; cell < Cells.Length; cell++)
+        {
+            var c = MoreChipRect(cell);
+            bool pinned = _pinned[cell];
+            bool hover = _moreHover == MoreHitChip + cell;
+            var rr = new RoundedRectangle(new Vortice.RawRectF(c.MinX, c.MinY, c.MaxX, c.MaxY), 8f, 8f);
+            if (pinned)
+            {
+                ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+                ctx.DrawRoundedRectangle(rr, Brush(ctx, Tokens.Accent), 1f);
+            }
+            else if (hover) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+            else ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+
+            var ink = pinned ? InkCol : new Color4(InkCol.R, InkCol.G, InkCol.B, 0.35f);
+            // **和主条同一处判据、同一个画法**（"更多里面有一个设置，那里面的图标也要同步"）——
+            // 不许在这儿另写一份图标名单，见 DrawCellIcon 的说明。
+            DrawCellIcon(ctx, cell, c, 20f, ink, active: false, _host.State);
+            if (!CanUnpin(cell))
+            {
+                // 安全项：右上角一个小点，意思是"这个取消不掉"
+                ctx.FillEllipse(new Ellipse(new Vector2(c.MaxX - 6f, c.MinY + 6f), 2f, 2f),
+                                Brush(ctx, new Color4(InkCol.R, InkCol.G, InkCol.B, 0.45f)));
+            }
+        }
+
+        // 下半区两栏：左（外观 ＋ 书写）右（系统）
+        DrawMoreGroupHead(ctx, MoreLookHeadRect(), "外观");
+        DrawMoreGroupHead(ctx, MoreWriteHeadRect(), "书写");
+        DrawMoreGroupHead(ctx, MoreSystemHeadRect(), "系统");
+        for (int i = 0; i < Rows.Length; i++) DrawMoreRow(ctx, i);
+    }
+
+    private void DrawMoreGroupHead(ID2D1DeviceContext ctx, RectF r, string label)
+        => _widgets.Text(ctx, label, r, 12.5f, Brush(ctx, MutedCol), center: false);
+
+    private void DrawMoreRow(ID2D1DeviceContext ctx, int i)
+    {
+        var r = MoreRowRect(i);
+        bool gray = IsGrayRow(i);
+        if (!gray && _moreHover == MoreHitRow + i)
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 8f, 8f),
+                Brush(ctx, HoverCol));
+
+        Color4 ink = gray ? new Color4(InkCol.R, InkCol.G, InkCol.B, 0.35f)
+                   : Rows[i].Dangerous ? new Color4(0.85f, 0.22f, 0.22f, 1f)
+                   : InkCol;
+        var label = new RectF
+        {
+            MinX = r.MinX + 4f, MinY = r.MinY,
+            MaxX = r.MaxX - (IsToggleRow(i) ? MoreSwitchW + 10f : 4f), MaxY = r.MaxY,
+        };
+        // 有 Hint 的行：标签上面半行、解释下面半行（只有「压感粗细」用得上）。
+        // 没有 Hint 的行还是一行大字居中——不为了一个特例把所有行都改矮。
+        string hint = Rows[i].Hint;
+        if (hint.Length == 0)
+        {
+            _widgets.Text(ctx, RowLabel(i), label, 13f, Brush(ctx, ink), center: false);
+        }
+        else
+        {
+            float mid = (r.MinY + r.MaxY) * 0.5f;
+            _widgets.Text(ctx, RowLabel(i),
+                          new RectF { MinX = label.MinX, MinY = r.MinY + 5f, MaxX = label.MaxX, MaxY = mid + 2f },
+                          13f, Brush(ctx, ink), center: false);
+            _widgets.Text(ctx, hint,
+                          new RectF { MinX = label.MinX, MinY = mid + 2f, MaxX = label.MaxX, MaxY = r.MaxY - 3f },
+                          11f, Brush(ctx, MutedCol), center: false);
+        }
+        if (IsToggleRow(i)) DrawSwitch(ctx, MoreSwitchRect(i), IsOn(i));
+    }
+
+    private static string MorePageName(int i) => i switch
+    {
+        0 => "课堂", 1 => "墨迹", _ => "设置",
+    };
+
+    // ---- 贴边隐藏 -----------------------------------------------------------
+
+    /// <summary>整块（主条 ＋ 上带）**未平移**的矩形。</summary>
+    private RectF UnionRect() => PanelRect();
 
     private static RectF Union(in RectF a, in RectF b) => new()
     {
@@ -2192,6 +2645,9 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private Vector2 Shift()
     {
+        // 面板开着（或开合动画中）一律不平移：模态面板必须纹丝不动，
+        // 而且它此刻占的就是整块屏幕——跟着贴边位移会立刻被夹回，看着会跳。
+        if (_moreOpen || _more.Running) return Vector2.Zero;
         if (!_hideEnabled) return Vector2.Zero;
         float t = 1f - _peek.Value;
         if (t <= 0.001f) return Vector2.Zero;
@@ -2209,7 +2665,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>
     /// 每帧更新"该不该收起来"。写得像个小状态机，因为规则就三条：
-    /// 写字中不许动、指针在里面/正按着/抽屉开着不许收、刚离开要等一会儿（防误触）。
+    /// 写字中不许动、指针在里面/正按着/「更多」面板开着不许收、刚离开要等一会儿（防误触）。
     /// </summary>
     private void UpdatePeek()
     {
@@ -2236,7 +2692,7 @@ public sealed class FullUi : IOverlayUi
             return;
         }
 
-        bool keepOpen = _hoverInside || _press != -1 || _sliderDragging || _drawerOpen;
+        bool keepOpen = _hoverInside || _press != -1 || _sliderDragging || _moreOpen;
         if (keepOpen)
         {
             _leftAtMs = _host.NowMs;
@@ -2272,21 +2728,35 @@ public sealed class FullUi : IOverlayUi
         // （鼠标能张开、笔不能——这类"只在一种设备上坏"的 bug 最难查）。
         _railHover = BandVisible() && RailHoverZone().Contains(p.X, p.Y);
 
+        // 「更多」面板：全屏模态，先于一切其它命中（它盖住整块屏幕）。
+        // 点面板外 = 关闭，而且这一下**不落墨**（消费掉；这也是自检要钉的一条）。
+        if (_moreOpen)
+        {
+            int hit = MoreHitAt(p.X, p.Y);
+            if (hit == MoreHitNone || hit == MoreHitClose) { CloseMore(); return true; }
+            if (hit >= MoreHitTab && hit < MoreHitTab + 3)
+            { _morePage = (MorePage)(hit - MoreHitTab); Invalidate(); return true; }
+            if (hit >= MoreHitProfile && hit < MoreHitProfile + 3)
+            { SetProfile((Profile)(hit - MoreHitProfile)); return true; }
+            // 区间必须**按表的长度收口**：宫格 30+1..30+12、行 60+0..60+5。
+            // 写宽了就会串段——第一版把宫格写成 +32，于是行的 60/61 落进宫格，
+            // TogglePin 拿着越界的下标当场抛异常（自检"点深色主题"就是这么红的）。
+            if (hit >= MoreHitChip && hit <= MoreHitChip + Cells.Length - 1)
+            { TogglePin(hit - MoreHitChip); return true; }
+            // 行/动作按下时**存原始命中码**（两个页面用不同的段），抬起时比对同一个码
+            if (hit >= MoreHitRow && hit <= MoreHitRow + Rows.Length - 1)
+            { _morePress = hit; Invalidate(); return true; }
+            if (hit >= MoreHitInk && hit <= MoreHitInk + InkRows.Length - 1)
+            { _morePress = hit; Invalidate(); return true; }
+            return true;                    // 面板里的空白：吃掉，但不关
+        }
+
         if (_expand.Value < 0.5f)
         {
             if (!BallRect().Contains(p.X, p.Y)) return false;
             _press = -2;                    // 球
             return true;
         }
-
-        // 抽屉优先。它长在面板外面（上方），物理上和主条不重叠，
-        // 但顺序写清楚，省得以后挪位置时踩雷。
-        int row = HitRow(p.X, p.Y);
-        if (row >= 0) { _press = 1000 + row; return true; }
-        int prof = HitProfile(p.X, p.Y);
-        if (prof >= 0) { SetProfile((Profile)prof); return true; }
-        int chip = HitChip(p.X, p.Y);
-        if (chip >= 0) { TogglePin(chip); return true; }
 
         // **滑条要排在工具格前面**：它在面板最下沿，和工具格的矩形是重叠的。
         // 排在后面的话，按最下沿那一条会被当成"点了某个工具"（假面板里 groove 也是先判的）。
@@ -2372,6 +2842,14 @@ public sealed class FullUi : IOverlayUi
         var p = Local(e);
         _railHover = BandVisible() && RailHoverZone().Contains(p.X, p.Y);
 
+        // 「更多」面板开着时，指针只喂给面板：更新悬停、别再碰主条的悬停/拖动状态
+        if (_moreOpen)
+        {
+            int hit = MoreHitAt(p.X, p.Y);
+            if (hit != _moreHover) { _moreHover = hit; Invalidate(); }
+            return true;
+        }
+
         if (_sliderDragging)
         {
             DragSlider(p.X);
@@ -2380,11 +2858,12 @@ public sealed class FullUi : IOverlayUi
 
         if (_press != -1)
         {
-            // **动作按钮和抽屉里的行不参与拖动**。
+            // **动作按钮不参与拖动**。
             //
             // 用户实测报的 bug："按住清空的时候，手一抖就把整个面板拖走了"——
             // 面板一走，按钮就不在指针下面了，看着就是"清空没反应"。
             // 只有点在**主条上**（球或者工具格）才算"抓住面板"。
+            // （「更多」面板的行有它自己的 `_morePress`，走不到这里——它是全屏模态。）
             bool draggable = _press != 2000 && _press < 1000;
             if (draggable && !_dragging && Vector2.Distance(p, _pressPos) > Tokens.DragThreshold)
                 _dragging = true;
@@ -2410,17 +2889,6 @@ public sealed class FullUi : IOverlayUi
             return true;
         }
 
-        int row = HitRow(p.X, p.Y);
-        if (row != _drawerHover)
-        {
-            _drawerHover = row;
-            Invalidate();
-        }
-        int prof = HitProfile(p.X, p.Y);
-        if (prof != _profileHover) { _profileHover = prof; Invalidate(); }
-        int chip = HitChip(p.X, p.Y);
-        if (chip != _chipHover) { _chipHover = chip; Invalidate(); }
-
         int hover = _expand.Value < 0.5f
             ? (BallRect().Contains(p.X, p.Y) ? -2 : -1)
             : HoverAt(p.X, p.Y);
@@ -2429,11 +2897,18 @@ public sealed class FullUi : IOverlayUi
             _hover = hover;
             Invalidate();
         }
-        return hover != -1 || row >= 0;
+        return hover != -1;
     }
 
     public void PointerLeave()
     {
+        // 面板开着时指针只会"离开整块屏幕"（占用 = 全屏）：把面板的悬停/按下也清掉
+        if (_moreOpen)
+        {
+            _moreHover = MoreHitNone;
+            _morePress = -1;
+            Invalidate();
+        }
         if (!_hoverInside) return;
         _hoverInside = false;
         _railHover = false;              // 指针离开面板 = 焦点不在了，设置条该收（走 ExitDelay）
@@ -2464,6 +2939,21 @@ public sealed class FullUi : IOverlayUi
 
     public bool PointerUp(in UiPointerEvent e)
     {
+        // 「更多」面板：按下和抬起落在**同一行**才算一次执行（和抽屉同一套手感）
+        if (_moreOpen)
+        {
+            int hit = MoreHitAt(e.X, e.Y);
+            int pressed = _morePress;
+            _morePress = -1;
+            if (pressed >= MoreHitRow && pressed <= MoreHitRow + Rows.Length - 1 && hit == pressed)
+                ActivateRow(pressed - MoreHitRow);
+            else if (pressed >= MoreHitInk && pressed <= MoreHitInk + InkRows.Length - 1 && hit == pressed)
+                ActivateInkRow(pressed - MoreHitInk);
+            Invalidate();
+            return true;
+        }
+        if (_morePress >= 0) { _morePress = -1; return true; }   // 面板刚关掉的那一下：已消化
+
         if (_sliderDragging)
         {
             _sliderDragging = false;
@@ -2492,7 +2982,6 @@ public sealed class FullUi : IOverlayUi
             Invalidate();
             return true;
         }
-        if (idx >= 1000) { ActivateRow(idx - 1000); return true; }   // 抽屉里的行
         if (idx == -2) { Toggle(); return true; }        // 点球：展开
         if (idx == 0) { Toggle(); return true; }         // 点带子最左那格：收起
         Activate(idx);
@@ -2513,16 +3002,17 @@ public sealed class FullUi : IOverlayUi
         // 系统关掉动画时直接跳终态（教室里老机器上很常见）
         _expand.To(collapse ? 0f : 1f, collapse ? Tokens.CollapseMs : Tokens.ExpandMs);
 
-        // **收起时必须把临时状态清干净**：抽屉、钉住的悬停、按下的格、在拖的滑条。
-        // 不清的话，缩回一个球之后抽屉还挂在那儿（占用矩形也算着它），
-        // 下次展开时那些状态还会自己冒出来。假面板当年就是栽在这条上：
-        // "点更多→点收起→再展开，抽屉自己冒出来"。
+        // **收起时必须把临时状态清干净**：面板、悬停、按下的格、在拖的滑条。
+        // 不清的话，缩回一个球之后那些状态还挂在那儿，下次展开时会自己冒出来
+        //（假面板当年就是栽在这条上："点更多→点收起→再展开，抽屉自己冒出来"）。
         if (collapse)
         {
-            _drawerOpen = false;
-            _drawerHover = -1;
-            _profileHover = -1;
-            _chipHover = -1;
+            // 面板理论上打不开（它要主条展开才有入口），但状态机收口时一并清掉，
+            // 免得以后哪天加了别的入口，缩球时面板还挂在那儿。
+            _moreOpen = false;
+            _more.Jump(0f);
+            _moreHover = MoreHitNone;
+            _morePress = -1;
             _hover = -1;
             _press = -1;
             _dragging = false;
@@ -2652,11 +3142,9 @@ public sealed class FullUi : IOverlayUi
             case 9: cmd.SetTool(Tool.Capture); break;
             case 10: cmd.Undo(); break;
             case 11: cmd.Redo(); break;
-            case 12:                                         // 「更多」：开合抽屉
-                _drawerOpen = !_drawerOpen;
-                _drawerHover = -1;
-                // 抽屉和色带抢同一块地方：开抽屉就把色带收掉（假面板同一条）
-                if (_drawerOpen) { _railHover = false; _rail.To(0f, Tokens.RailMs); }
+            case 12:
+                // 「更多」：打开屏幕中央的面板（2026-10-01 起；抽屉从产品路径退场）
+                OpenMore();
                 break;
         }
         Invalidate();
@@ -2684,6 +3172,10 @@ public sealed class FullUi : IOverlayUi
 
     public void OnStateChanged(in UiState state)
     {
+        // 回放一开始：把「更多」面板收掉。它是**全屏模态**，开着会挡住控制条和画布；
+        // 而引擎那边"点界面 = 先退出回放"——不收掉的话，老师想关面板那一刻回放就没了。
+        if (state.ReplayActive && _moreOpen) CloseMore();
+
         // **工具变了就跟着换上带**（键盘热键是老师更常用的那条路）。
         // 判据是"工具真的换了"，不是"当前带子对不对"：点白板之后带子显示的是板色，
         // 那时工具没变、带子也不该被掰走；而一旦换成别的工具，带子必须跟上，
@@ -2846,9 +3338,11 @@ public sealed class FullUi : IOverlayUi
         // 而现在下沿有**投影 ＋ 描边 ＋ 底沿内阴影**三条，这句话不用它承担了；
         // 留下的坏处更实在——颜色跟着笔走（红笔时它是整块白面板上最响的东西，像根进度条），
         // 而它想表达的"现在拿的是哪支笔"，球里那道色环已经说了、还更准。
-        if (_drawerOpen) DrawDrawer(ctx);
         // 粗细预览**最后画**：它可能伸到面板外面，压在上面的东西得过它一层
         DrawSizePreview(ctx, st);
+        // 「更多」面板**比一切都后**：遮罩要压住主条和粗细预览，面板再压住遮罩。
+        // 它打开时 QueryBounds 已经是整块屏幕，不会被引擎裁掉。
+        if (_moreOpen || _more.Running) DrawMorePanel(ctx);
     }
 
     // ---- 颜色（深色主题只是一整套换过来，形状一个都不动）------------------
@@ -2959,6 +3453,7 @@ public sealed class FullUi : IOverlayUi
     private Color4 PanelFill => _dark ? Tokens.PanelDark : Tokens.PanelLight;
     private Color4 BorderCol => _dark ? Tokens.BorderDark : Tokens.BorderLight;
     private Color4 InkCol => _dark ? Tokens.InkDark : Tokens.InkLight;
+    private Color4 MutedCol => _dark ? Tokens.InkMutedDark : Tokens.InkMutedLight;
     private Color4 HoverCol => _dark ? Tokens.HoverDark : Tokens.HoverLight;
 
     /// <summary>
@@ -3648,95 +4143,14 @@ public sealed class FullUi : IOverlayUi
             && MathF.Abs(c.B - st.BoardColor.B) < 0.02f;
     }
 
-    /// <summary>
-    /// 画「更多」抽屉：左边文字、右边开关；灰项（还没做的功能）压暗并且点不动。
-    /// 危险动作（退出）用红字——不挨着常用动作放，这是设计里定过的规矩。
-    /// </summary>
-    private void DrawDrawer(ID2D1DeviceContext ctx)
-    {
-        var d = DrawerRect();
-        DrawCard(ctx, d, Tokens.BandRadius);
-
-        // 档位条：极简 / 自定义 / 完整
-        for (int i = 0; i < 3; i++)
-        {
-            var r = ProfileRect(i);
-            bool active = ProfileIndex() == i;
-            var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 8f, 8f);
-            if (active) ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Accent));
-            else if (_profileHover == i) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
-            ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : BorderCol), 1f);
-            _widgets.Text(ctx, ProfileName(i), r, 12.5f,
-                          Brush(ctx, active ? Tokens.AccentInk : InkCol));
-        }
-
-        // 钉住那一栏：点一下切换钉住/取消（笔、橡皮、更多是安全项，点不动）
-        for (int cell = 1; cell < Cells.Length; cell++)
-        {
-            var r = ChipRect(cell);
-            bool pinned = _pinned[cell];
-            var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 8f, 8f);
-            if (pinned)
-            {
-                ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
-                ctx.DrawRoundedRectangle(rr, Brush(ctx, Tokens.Accent), 1f);
-            }
-            else
-            {
-                ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
-            }
-            var ink = pinned ? InkCol : new Color4(InkCol.R, InkCol.G, InkCol.B, 0.35f);
-            // **和主条同一处判据、同一个画法**（用户 2026-09-26："更多里面有一个设置，
-            // 那里面的图标也要同步起来"）——只是小一号（18）而且按"未选中"那一档画
-            //（抽屉里的格都不是选中态）。**不许在这儿另写一份图标名单**，见 DrawCellIcon 的说明。
-            DrawCellIcon(ctx, cell, r, 18f, ink, active: false, _host.State);
-            if (!CanUnpin(cell))
-            {
-                // 安全项：右上角一个小点，意思是"这个取消不掉"
-                ctx.FillEllipse(new Ellipse(new Vector2(r.MaxX - 5f, r.MinY + 5f), 2f, 2f),
-                                Brush(ctx, new Color4(InkCol.R, InkCol.G, InkCol.B, 0.45f)));
-            }
-        }
-
-        for (int i = 0; i < Rows.Length; i++)
-        {
-            var r = RowRect(i);
-            bool gray = IsGrayRow(i);
-            bool hover = !gray && _drawerHover == i;
-
-            if (hover)
-            {
-                var hb = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
-                ctx.FillRoundedRectangle(new RoundedRectangle(hb, 8f, 8f), Brush(ctx, HoverCol));
-            }
-
-            Color4 ink = gray ? new Color4(InkCol.R, InkCol.G, InkCol.B, 0.35f)
-                       : Rows[i].Dangerous ? new Color4(0.85f, 0.22f, 0.22f, 1f)
-                       : InkCol;
-            var label = new RectF
-            {
-                MinX = r.MinX + 4, MinY = r.MinY,
-                MaxX = r.MaxX - (IsToggleRow(i) ? 48f : 4f), MaxY = r.MaxY,
-            };
-            _widgets.Text(ctx, RowLabel(i), label, 13f, Brush(ctx, ink), center: false);
-
-            if (IsToggleRow(i)) DrawSwitch(ctx, SwitchRect(i), IsOn(i));
-
-            if (IsSeparatorAfter(i))
-            {
-                float y = r.MaxY + DrawerSepH * 0.5f;
-                ctx.DrawLine(new Vector2(d.MinX + DrawerPad, y),
-                             new Vector2(d.MaxX - DrawerPad, y), Brush(ctx, BorderCol), 1f);
-            }
-        }
-    }
-
     private bool IsOn(int i) => Rows[i].Kind switch
     {
         Row.DarkTheme => _dark,
         // 停顿成型：**默认开**，所以配置里没有这一项时显示的就是"开"
         //（见 LoadPrefs 里那一行：只有读到 "0" 才关）。
         Row.DwellShape => _host == null || _host.State.DwellShapeOn,
+        // 压感粗细：状态在**引擎**（渲染期开关），界面只是显示它
+        Row.Pressure => _host == null || _host.State.PressureOn,
         _ => _hideEnabled,
     };
 
@@ -3822,16 +4236,16 @@ public sealed class FullUi : IOverlayUi
     }
 
     /// <summary>
-    /// **画某一格的图标**——主条（<see cref="DrawCell"/>）和「更多」抽屉（<see cref="DrawDrawer"/>）
+    /// **画某一格的图标**——主条（<see cref="DrawCell"/>）和「更多」面板里那排钉住宫格
     /// **共用这一处**。
     ///
     /// 为什么必须收成一处：用户 2026-09-26 特意提醒"更多里面有一个设置，那里面的图标也要同步起来"。
-    /// 原来两处各写了一遍（抽屉那句只认 `Cells[cell].Icon`），于是白板那一格在带子上是自绘的板、
-    /// 在抽屉里还是 Fluent 那个"窗口布局"；橡皮 / 选择这一轮换了图标之后也会立刻再犯一次。
+    /// 当年两处各写了一遍（弹出面板那句只认 `Cells[cell].Icon`），于是白板那一格在带子上是自绘的板、
+    /// 在面板里还是 Fluent 那个"窗口布局"；橡皮 / 选择这一轮换了图标之后也会立刻再犯一次。
     /// 仓库里"同一个名单写两处、改一处必漏一处"已经栽过好几次（见 架构-分层与规则.md 五-7），
     /// 所以这不是"顺手合并"，是修那个毛病本身。
     ///
-    /// <paramref name="active"/>：这一格亮不亮（抽屉里恒为 false——抽屉里的格都不是选中态）。
+    /// <paramref name="active"/>：这一格亮不亮（面板里恒为 false——那里的格都不是选中态）。
     /// </summary>
     private void DrawCellIcon(ID2D1DeviceContext ctx, int cell, RectF r, float size,
                               in Color4 ink, bool active, in UiState st)
@@ -4090,35 +4504,74 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     internal (float Left, float Right) SliderTrackRangeForTest => SliderTrackRange();
 
-    /// <summary>自检用：抽屉开着没有 / 它的矩形 / 第 i 行的矩形。</summary>
-    internal bool DrawerOpenForTest => _drawerOpen;
-    internal RectF DrawerRectForTest => DrawerRect();
-    internal RectF RowRectForTest(int i) => RowRect(i);
+    /// <summary>自检用：「更多」面板 / 页签 / 行 / 档位 / 钉住宫格的矩形。</summary>
+    internal bool MoreOpenForTest => _moreOpen;
+    internal RectF MoreRectForTest => MoreRect();
+    internal int MorePageForTest => (int)_morePage;
+    internal RectF MoreTabRectForTest(int i) => MoreTabRect(i);
+    internal RectF MoreCloseRectForTest => MoreCloseRect();
+    internal RectF MoreRowRectForTest(int i) => MoreRowRect(i);
+    internal RectF MoreProfileRectForTest(int i) => MoreProfileRect(i);
+    internal RectF MoreChipRectForTest(int cell) => MoreChipRect(cell);
+
+    /// <summary>自检用：行表里有几行（不写死数字——插一行/删一行自检要自己跟上）。</summary>
+    internal int MoreRowCountForTest => Rows.Length;
+
+    /// <summary>自检用：「墨迹」页的动作行（数量 / 矩形 / 按标签找 / 这行动作可用吗）。</summary>
+    internal int MoreInkRowCountForTest => InkRows.Length;
+    internal RectF MoreInkRowRectForTest(int i) => MoreInkRowRect(i);
+    internal bool MoreInkRowEnabledForTest(int i) => InkRowEnabled(i);
+
+    internal RectF MoreInkRowRectByLabelForTest(string labelPart)
+    {
+        for (int i = 0; i < InkRows.Length; i++)
+            if (InkRows[i].Label.Contains(labelPart, StringComparison.Ordinal)) return MoreInkRowRect(i);
+        return RectF.Empty;
+    }
+
+    /// <summary>自检/出图用：打开「更多」面板（产品里只能点主条「…」那一格）。</summary>
+    internal void OpenMoreForTest() { OpenMore(); _more.Jump(1f); }
+
+    /// <summary>自检用：关掉「更多」面板（产品里是点面板外 / 点 ✕）。</summary>
+    internal void CloseMoreForTest() { CloseMore(); _more.Jump(0f); }
+
+    /// <summary>自检/出图用：直接切到「更多」面板的某一页（课堂 / 墨迹 / 设置）。</summary>
+    internal void SetMorePageForTest(int i) { _morePage = (MorePage)Math.Clamp(i, 0, 2); Invalidate(); }
+
+    /// <summary>自检/出图用：直接切深色主题（**不落盘**，只改这一刻的显示）。</summary>
+    internal void SetDarkForTest(bool on)
+    {
+        _dark = on;
+        PushFloatingTheme();     // 浮层（操作条/小面板）也得跟着换——和点那行开关同一条路
+        Invalidate();
+    }
 
     /// <summary>
     /// 自检用：**按行标签**找那一行的矩形（找不到返回空矩形）。
     ///
-    /// 为什么不让自检写行下标：抽屉里的行是会被插来插去的——2026-09-17 插了底纹两行、
-    /// 2026-09-19 把灰着的「学科工具」换成了坐标系 / 数轴 / 坐标系网格三行。
-    /// 每插一次，写死下标的自检就要去改一处引用，而且**改错了是静默的**：
-    /// 点到了别的行，红色的却是那一条断言（"点重启没反应"）。
+    /// 行现在长在「更多」面板里（2026-10-01 起）；这个钩子跟着走，标签表的"唯一一份"不变。
+    ///
+    /// 为什么不让自检写行下标：行是会被插来插去的——2026-09-17 插了底纹两行、
+    /// 2026-09-19 把灰着的「学科工具」换成了坐标系 / 数轴 / 坐标系网格三行，
+    /// 2026-10-01 又整个搬进了中央面板。每插一次，写死下标的自检就要去改一处引用，
+    /// 而且**改错了是静默的**：点到了别的行，红色的却是那一条断言（"点重启没反应"）。
     /// 按标签找，以后插行就不会再碰到自检。
     /// </summary>
     internal RectF RowRectByLabelForTest(string labelPart)
     {
         for (int i = 0; i < Rows.Length; i++)
-            if (Rows[i].Label.Contains(labelPart, StringComparison.Ordinal)) return RowRect(i);
+            if (Rows[i].Label.Contains(labelPart, StringComparison.Ordinal)) return MoreRowRect(i);
         return RectF.Empty;
     }
+
+    /// <summary>自检用：第 i 行的矩形（现在指「更多」面板里的行——产品里行只在这儿）。</summary>
+    internal RectF RowRectForTest(int i) => MoreRowRect(i);
 
     /// <summary>自检用：深色主题与贴边隐藏的开关状态。</summary>
     internal bool DarkForTest => _dark;
     internal bool HideEnabledForTest => _hideEnabled;
 
-    /// <summary>自检/出图用：把抽屉打开（产品里只能点「更多」那一格开）。</summary>
-    internal void OpenDrawerForTest() => _drawerOpen = true;
-
-    /// <summary>自检/出图用：直接切到某一档（产品里在抽屉顶部点）。</summary>
+    /// <summary>自检/出图用：直接切到某一档（产品里在「更多 → 设置 → 工具条」里点）。</summary>
     internal void SetProfileForTest(int i) => SetProfile((Profile)i);
 
     /// <summary>自检/出图用：把色线张开成设置条（产品里是鼠标碰到它）。</summary>
@@ -4179,9 +4632,9 @@ public sealed class FullUi : IOverlayUi
     internal int ProfileForTest => (int)_profile;
     internal bool PinnedForTest(int cell) => _pinned[cell];
 
-    /// <summary>自检用：档位条第 i 段、钉住栏第 cell 格的矩形。</summary>
-    internal RectF ProfileRectForTest(int i) => ProfileRect(i);
-    internal RectF ChipRectForTest(int cell) => ChipRect(cell);
+    /// <summary>自检用：档位条第 i 段、钉住栏第 cell 格的矩形（与产品同一处：更多面板里）。</summary>
+    internal RectF ProfileRectForTest(int i) => MoreProfileRect(i);
+    internal RectF ChipRectForTest(int cell) => MoreChipRect(cell);
 
     /// <summary>自检用：现在算"展开"吗。</summary>
     internal bool ExpandedForTest => Expanded;
