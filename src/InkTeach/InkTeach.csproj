@@ -15,9 +15,9 @@
         会一起传给被引用的 InkEngine / InkUi——它们是库、没有 Main，
         整个构建直接报 CS5001（这个坑实测踩过，所以专门开了这个自定义开关）。
 
-      程序图标 = 界面里**收起态那颗球**（白面 + 当前笔色那圈 + 自绘笔图标）。
-      它不是手画的，是 makeicon 那条命令用界面自己的渲染生成的
-      （保证和屏幕上那颗一模一样），见 App.MakeIcon。
+      程序图标 = **线条型的笔 · 白砖 ＋ 带笔锋的红笔迹**（用户 2026-10-01 第五轮定；
+      设计稿 design/图标-设计稿v5-线条型的笔.png 与 v5b-笔迹四选.png 的 B / ②）。
+      它不是手画的，是 makeicon 那条命令用界面的渲染路径画出来的（画在 AppIconUi 里），见 App.MakeIcon。
 
       版本从 8.0.0 起（用户 2026-09-27 定）。文件属性里那几行都跟着它走。
     -->
@@ -37,9 +37,9 @@
 
     <ApplicationIcon>assets\InkTeach.ico</ApplicationIcon>
 
-    <Version>8.5.0</Version>
-    <AssemblyVersion>8.5.0.0</AssemblyVersion>
-    <FileVersion>8.5.0.0</FileVersion>
+    <Version>8.5.1</Version>
+    <AssemblyVersion>8.5.1.0</AssemblyVersion>
+    <FileVersion>8.5.1.0</FileVersion>
     <Product>InkTeach 批注</Product>
     <AssemblyTitle>InkTeach 批注</AssemblyTitle>
     <Description>屏幕批注工具：白板 / PPT 放映批注 / 图形与曲线 / 回放导出</Description>

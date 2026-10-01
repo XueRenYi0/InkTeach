@@ -289,7 +289,7 @@ internal sealed class App : InkEngine.InkEngine
         }
         else if (mode == "--makeicon")
         {
-            // 生成程序图标（用界面自己的渲染画那颗球），见 MakeIcon。
+            // 生成程序图标（用界面自己的渲染画 <see cref="AppIconUi"/> 那张：白砖＋大笔），见 MakeIcon。
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             MakeIcon(args.Length > 1 ? args[1] : "assets/InkTeach.ico");
@@ -943,7 +943,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("                      粗细真的管用 / 不是笔迹）；顺带出图 reports/laser-trail.png");
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
         Console.WriteLine("  --panelshow <图> [--band] [--mini] [--drawer] [--cell N] [--shape 名字] [--zoom N]   界面出图（离屏）");
-        Console.WriteLine("  --makeicon <图.ico>      用界面自己的渲染生成程序图标（那颗球 + 当前笔色的圈）");
+        Console.WriteLine("  --makeicon <图.ico>      用界面自己的渲染生成程序图标（线条笔＋白砖＋带笔锋的红笔迹）");
         Console.WriteLine("  --captureshow <图>  截图取景框 + 尺寸读数出图（离屏）");
         Console.WriteLine("  --dialogprobe <前缀> [--save]  导出对话框探针（真弹框 + 点它的下拉 + 连拍三张；");
         Console.WriteLine("                     --save 连「保存」一起点，验到落盘为止）");
@@ -12092,42 +12092,29 @@ internal sealed class App : InkEngine.InkEngine
     /// <summary>
     /// `--makeicon &lt;out.ico&gt;`：**用界面自己的渲染**生成程序图标。
     ///
-    /// 图标就是"收起态那颗球"：白面 ＋ **当前笔色那一圈**（`Tokens.BallRing`，0.76R、线宽 2.5）
-    /// ＋ 中间那个自绘笔图标（`Tokens.BallIcon`）。用户 2026-09-27 点的名
-    /// （"用那个菜单收缩起来的那个小圆球，然后用红色那个批注那个圈"——笔色默认是红）。
-    ///
-    /// 为什么不另画一张 SVG / 用画图工具拼：
-    ///   ① 中间那个笔图标是**自绘矢量**（`IconAtlas`），另画一份迟早和界面对不上；
-    ///   ② "和屏幕上那颗一模一样"这件事，只有同一条渲染路径能保证
-    ///      （本仓库反复吃过的教训：同一个东西写两份，早晚不一致）。
-    ///
-    /// 做法：把窗口 DPI **临时放大**再离屏出图。界面是按"逻辑坐标 × DPI/96"画的，
+    /// 2026-10-01 第五轮定：图标 = 设计稿 v5 的 **B 档「Fluent 笔 ＋ 带笔锋的红笔迹」**
+    /// （用户："你笔锋弧线这一版做得挺好的，我想使用这个"；稿子见
+    /// design/图标-设计稿v5-线条型的笔.png 与 v5b-笔迹四选.png，画在 <see cref="AppIconUi"/> 里）。
+    /// 上一版是"实心的大笔 · 白砖"，再上一版是"收起态那颗球"，都留在 git 历史里；这条命令的机制没变：
+    /// 把窗口 DPI **临时放大**再离屏出图 —— 界面是按"逻辑坐标 × DPI/96"画的，
     /// 所以放大 DPI 等于**按矢量重画一张大的**，而不是把 96 的小图拉大（拉大会糊）。
     /// 再把那一张按各档尺寸缩下去、装成一个多尺寸 .ico。
     /// </summary>
     private void MakeIcon(string path)
     {
-        SetUiFactory(() => new InkUi.FullUi());
-        SettleFrames(200);
-        if (CurrentUi is not InkUi.FullUi ui || _windows.Count == 0)
+        SetUi(new AppIconUi());
+        SettleFrames(120);
+        if (CurrentUi is not AppIconUi ui || _windows.Count == 0)
         {
-            Console.WriteLine("  出图标失败：界面没挂上 / 没有窗口");
+            Console.WriteLine("  出图标失败：图标界面没挂上 / 没有窗口");
             _quit = true;
             return;
         }
 
-        // 收起态（那颗球）＋ 不许贴边隐藏把它沉下去（沉下去就只剩 8 像素的一条把手）。
-        ui.SetExpandForTest(0f);
-        ui.ForcePeekForTest(1f);
-        SettleFrames(250);
+        var box = ui.QueryBounds();
+        if (box.IsEmpty) { Console.WriteLine("  出图标失败：占用矩形是空的"); _quit = true; return; }
 
-        var ball = ui.QueryBounds();
-        if (ball.IsEmpty) { Console.WriteLine("  出图标失败：占用矩形是空的"); _quit = true; return; }
-        // 四周留白：投影最外那几层（α 0.03 上下）不值得为它留位置，留 6 就够——
-        // 球在图标里占 48/60 = 80%，和系统自带图标那个比例接近。
-        var box = ball.Inflate(6f);
-
-        // 目标边长 256：临时把窗口 DPI 抬高，让界面按矢量重画到这个尺寸。
+        // 目标边长 256：图标界面是 64 逻辑像素的方框，DPI 抬到 384 正好出 256×256。
         var win = _windows[0];
         uint want = (uint)Math.Clamp(MathF.Round(96f * 256f / (box.MaxX - box.MinX)), 96, 96 * 12);
         uint dpi0 = win.Dpi;
@@ -12142,21 +12129,15 @@ internal sealed class App : InkEngine.InkEngine
         }
         Console.WriteLine($"  渲染尺寸 {bw}×{bh}（为它把窗口 DPI 临时抬到 {want}）");
 
-        // **圆外一律清成完全透明**（用户 2026-09-29 反馈："图标不是正圆、隐约能看见方框"）：
-        // 球底下的投影是一团**方形**柔光，方框那圈像素带一点点黑——实测 256×256 那帧
-        // 最外一圈 1020 个像素里 782 个 α>0、最高 α≈23/255，圆外也有一批 α≈26。
-        // 图标就该是一个干净的圆，所以按量出来的球半径做一次圆形蒙版（边缘 1px 抗锯齿）。
-        int rIcon = IconRadiusPx(px, bw, bh);
-        MaskIconToCircle(px, bw, bh, rIcon);
-        Console.WriteLine($"  圆形蒙版：半径 {rIcon}px（球外面那圈方形投影清成透明）");
-
+        // **不做圆形蒙版**：形状就是白砖自己的圆角，砖外本来就是透明
+        // （旧版那颗球才需要把方形柔光清成圆；这条注释留着，免得下次改回去时忘了）。
         try
         {
             string dir = Path.GetDirectoryName(Path.GetFullPath(path));
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             int[] sizes = { 16, 24, 32, 48, 64, 128, 256 };
             WriteMultiSizeIco(path, px, bw, bh, sizes);
-            // 顺带出一张 PNG 预览：这个圆对不对、圈红不红，**只能看图**（几何自检看不出来）。
+            // 顺带出一张 PNG 预览：笔对不对、红不红、砖的圆角顺不顺，**只能看图**。
             string png = Path.ChangeExtension(path, ".png");
             using (var b = BgraToBitmap(px, bw, bh)) b.Save(png, System.Drawing.Imaging.ImageFormat.Png);
             Console.WriteLine($"  已写出 {path}（{sizes.Length} 档：{string.Join('/', sizes)}）");
@@ -12170,6 +12151,10 @@ internal sealed class App : InkEngine.InkEngine
     /// 量出"球"的半径（像素）：沿中心行/列找 α≥96 的最远点，取两者的较小值。
     /// 为什么要量而不是算：真实半径由界面渲染（含 DPI 缩放与投影）决定，硬算容易差几像素。
     /// 投影的 α 很小（≤30 上下），进不了 96 这道门，所以量到的是球本身。
+    ///
+    /// ⚠ 2026-10-01 起**没有调用**（图标换成了方角的「白砖＋大笔」，不再需要圆形蒙版）。
+    ///   留着是给"以后真要做圆形图标"的那一刻：连同下面那个 <see cref="MaskIconToCircle"/>，
+    ///   两条都在"球"的版本上实测过（踩过的坑写在注释里，比代码值钱）。
     /// </summary>
     private static int IconRadiusPx(byte[] bgra, int w, int h)
     {

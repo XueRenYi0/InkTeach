@@ -96,6 +96,36 @@ internal static partial class Program
             RenderSheet(outDir, "界面-设计稿v9-截屏图标.png", DrawShotIconSheet);
         if (sheet is "all" or "seldrag")
             RenderSheet(outDir, "选中框-移动与旋转-方案.png", DrawSelDragSheet);
+        if (sheet is "all" or "appicon")
+        {
+            RenderSheet(outDir, "图标-设计稿v1-应用图标.png", DrawAppIconSheet);
+            // 顺带把六个候选各出一份多尺寸 ico / 256 png（给快捷方式换图标真机试）
+            WriteAppIconCandidates(outDir);
+        }
+        if (sheet is "all" or "appicon2")
+        {
+            RenderSheet(outDir, "图标-设计稿v2-帅气的笔.png", DrawCoolPenSheet);
+            WritePenCandidates(outDir);
+        }
+        if (sheet is "all" or "appicon3")
+        {
+            RenderSheet(outDir, "图标-设计稿v3-批注的笔.png", DrawInkPenSheet);
+            WriteInkPenCandidates(outDir);
+        }
+        if (sheet is "all" or "appicon4")
+        {
+            RenderSheet(outDir, "图标-设计稿v4-书与笔迹.png", DrawMixSheet);
+            WriteMixCandidates(outDir);
+        }
+        if (sheet is "all" or "appicon5")
+        {
+            RenderSheet(outDir, "图标-设计稿v5-线条型的笔.png", DrawPenLibSheet);
+            WriteLinePenCandidates(outDir);
+        }
+        if (sheet is "all" or "appicon5b")
+        {
+            RenderSheet(outDir, "图标-设计稿v5b-笔迹四选.png", DrawTrailSheet);
+        }
     }
 
     /// <summary>把每个绘制函数画成一张 PNG：高度由绘制函数自己算出来。</summary>

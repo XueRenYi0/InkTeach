@@ -246,11 +246,20 @@ dotnet run --project src/InkTeach -c Release -- --memory reports/inkprobe-memory
 
 **几个已经配好的东西**（免得重复劳动）：
 
-- **图标** = 界面里收起态那颗球（白面 + 当前笔色那圈 + 自绘笔图标）。
-  它不是手画的，是 `--makeicon` 用界面自己的渲染生成的（保证和屏幕上那颗一模一样）：
+- **图标** = **线条型的笔 · 白砖 ＋ 带笔锋的红笔迹**（Fluent 的 Pen 24 regular ＋ 一道"细—粗—细"的红弧）。
+  用户 2026-10-01 定的方向（一路换过三轮）："不要眼镜，就要简单大气的笔"（第一轮）→
+  "我们采用那种 Fluent 风格的线条型图标"（第五轮，说 InkClass 那支实心的"太实心"）→
+  最后从四个候选里选了 **B**（`design/图标-设计稿v5-线条型的笔.png` 的 B、
+  笔迹对比见 `design/图标-设计稿v5b-笔迹四选.png` 的 ②）。
+  它不是手画的，是 `--makeicon` 用界面的渲染路径画出来的
+  （图形画在 `src/InkTeach/AppIconUi.cs`；**笔就是界面里那支** Fluent Pen，走同一条图标渲染路径）：
   ```powershell
   dotnet run --project src/InkTeach -c Release -- --makeicon src\InkTeach\assets\InkTeach.ico
   ```
+  来龙去脉与每一轮的候选见 [调研-图标-应用图标.md](调研-图标-应用图标.md)；
+  参考过的 12 支开源笔在 [design/参考-笔图标/](design/参考-笔图标/)（都是 MIT / ISC / Apache-2.0，可商用）；
+  真实七档实拍 [reports/图标-实拍七档.png](reports/图标-实拍七档.png)
+  （`powershell -File tools/icon-shots.ps1 -Ico … -Out …` 从 ico 里拆帧拼的）。
 - **版本**从 `8.0.0` 起（`InkTeach.csproj` 里的 `<Version>`，publish.ps1 会读它来命名产物）。
 - **双击不弹黑框**：开发时工程是控制台程序（自检的输出要被管道抓住，必须是控制台子系统），
   **发布时**由脚本传 `PublishAsWinExe=true` 切成 GUI 子系统。两条路各管一边，见 csproj 里那段注释。
@@ -591,7 +600,7 @@ pwsh -File tools/bench/Run-PerfSuite.ps1
 | 命令 | 拍什么 |
 |---|---|
 | `--panelshow <图> [--band] [--mini] [--drawer] [--cell N]` | 产品界面：球 / 展开的带子 / 张开的色带（`--band`）/ 极简档（`--mini`）/ 抽屉（`--drawer`）/ 掰到第 N 格（`--cell N`） |
-| `--makeicon <图.ico>` | **程序图标**：用界面自己的渲染画"收起态那颗球"（顺手出一张同名 png 供人眼核对），见上面"发布 / 打包" |
+| `--makeicon <图.ico>` | **程序图标**：用界面自己的渲染画（线条笔＋白砖＋带笔锋的红笔迹；顺手出一张同名 png 供人眼核对），见上面"发布 / 打包" |
 | `--captureshow <图> [--adjust\|--ready]` | **截图取景**（8.3.1：遮罩 + 挖洞 + 取景框 + 读数 + 全屏准线；`--adjust` 出"松开后调整"那一版：8 手柄 + ✓/✕ 按钮；`--ready` 出"刚进屋"那一版：整屏灰 + 顶部提示 + 右上角 ✕），连同框里那几条墨一起画，才看得出有没有圈住东西 |
 | `--selshowcase [图] [--dark] [--ink] [--layer] [--custom] [--dragmid]` | **浮层**（选中框 + 手柄 + 操作条，范围自动取"选中框 ∪ 操作条 ∪ 面板"）：给图就离屏出一张然后退出，**不给图就画好挂着等外部截图**（老用法）。`--dark` 用深色那档出图；`--ink`/`--layer` 把对应面板摆出来；`--custom` 再叠上自定义取色板；`--dragmid` **把粗细滑条按在中间不松手**（给"拖动中显示数值"出对照图）。每次都会顺手打一张**浮层量尺**（三处浮层的尺寸/间距，逻辑像素） |
 | `--dialogprobe <前缀> [--save]` | **导出对话框探针**：真弹一次系统"另存为"，后台线程去点它的"保存类型"下拉，**连拍三张**（150 / 400 / 900 毫秒）+ 选 JPG；`--save` 再点一下"保存"，验到"文件真的落盘"为止（验完自动删掉）。**不进默认套件**：它会真的动鼠标、真弹框 |
