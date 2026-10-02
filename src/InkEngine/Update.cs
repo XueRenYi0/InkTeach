@@ -53,8 +53,10 @@ internal static class UpdateFeed
     private const string RawUrl =
         "https://raw.githubusercontent.com/XueRenYi0/InkTeach/main/update.json";
 
+
+
     /// <summary>
-    /// 更新源候选表（**六条同时问，见 <see cref="FetchBest"/>**）。每项 = (前缀, 上游地址)：
+    /// 更新源候选表（**九条同时问，见 <see cref="FetchBest"/>**）。每项 = (前缀, 上游地址, 直连)：
     /// 前缀非空 = "这台机器连不上 GitHub，借一个国内加速站过去"。
     ///
     /// 为什么需要它们（2026-09-29 实测：教室网络直连 GitHub 21 秒超时）：
@@ -71,14 +73,22 @@ internal static class UpdateFeed
     /// 用户可以用 settings.json 的 `update.url` 换成局域网共享（**非空就只用它**，
     /// 教室环境最稳的一条）。
     /// </summary>
-    public static (string Prefix, string Url)[] Sources =
+    /// 第三项 NoProxy：true = 这条源**直连、不许走系统代理**（国内源和加速站都属这一档；
+    /// 很多机器上留着"给 GitHub 用的"半死代理，走它会一直卡到超时，见 NewHttp 的注释）。
+    public static (string Prefix, string Url, bool NoProxy)[] Sources =
     {
-        ("https://gh-proxy.com/",     RawUrl),
-        ("https://ghfast.top/",       RawUrl),
-        ("https://gh.jasonzeng.dev/", RawUrl),
-        ("https://gh.llkk.cc/",       RawUrl),
-        ("https://ghproxy.net/",      RawUrl),
-        ("",                          RawUrl),   // GitHub 直连（能上的机器走它最省事）
+        ("https://gh-proxy.com/",     RawUrl, true),
+        ("https://ghfast.top/",       RawUrl, true),
+        ("https://gh.jasonzeng.dev/", RawUrl, true),
+        ("https://gh.llkk.cc/",       RawUrl, true),
+        ("https://ghproxy.net/",      RawUrl, true),
+        ("",                          RawUrl, false),   // GitHub 直连（能上的机器走它最省事）
+        // jsDelivr：把 GitHub 仓库里的清单从国内 CDN 取（2026-10-03 实测 4 个域名全通，
+        // 不需要任何国内账号/实名）。缓存最长 12 小时——刚发新版时它可能稍旧，但**有别的源
+        // 先报新版**，它只在"全说已是最新"时提供最快的国内应答；发版时 publish.ps1 会 purge。
+        ("", "https://cdn.jsdelivr.net/gh/XueRenYi0/InkTeach@main/update.json", true),
+        ("", "https://fastly.jsdelivr.net/gh/XueRenYi0/InkTeach@main/update.json", true),
+        ("", "https://gcore.jsdelivr.net/gh/XueRenYi0/InkTeach@main/update.json", true),
     };
 
     /// <summary>
@@ -195,9 +205,16 @@ internal static class UpdateFeed
 
         usedUrl = chosen.Source.Prefix + chosen.Source.Url;
 
-        // ---- 下载候选排序：同版本、已答完的**加速站**按响应快慢在前（33 MB 的大包
-        //      优先走它们；GitHub 直连要走系统代理，往往不如国内镜像），然后是本条源 /
-        //      其它已答完的，最后是没来得及应答的镜像兜底（2026-10-02）---
+        // ---- 下载候选排序（2026-10-03 起"优先国内"）----------------------------------
+        // ① 清单里自带的 `cn`（Gitee 直链）永远排第一；② 国内清单源自己放的包；
+        // ③ 已答完的加速站（按响应快慢）；④ GitHub 直连 / 兜底。失败逐条换。
+        if (!string.IsNullOrWhiteSpace(chosen.Manifest.Cn))
+            AddDownload(downloads, chosen.Manifest.Cn, useProxy: false);
+        foreach (var p in answered)
+            if (CompareVersions(p.Manifest.Version, chosen.Manifest.Version) == 0
+                && !p.Manifest.Url.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase)
+                && !p.Manifest.Url.StartsWith("http://github.com/", StringComparison.OrdinalIgnoreCase))
+                AddDownload(downloads, p.Manifest.Url, useProxy: false);
         foreach (var p in answered)
             if (p.Source.Prefix.Length > 0
                 && CompareVersions(p.Manifest.Version, chosen.Manifest.Version) == 0)
@@ -227,21 +244,21 @@ internal static class UpdateFeed
     /// <summary>一条源的探测结果（并行任务体，2026-10-02）。</summary>
     private sealed class Probe
     {
-        public (string Prefix, string Url) Source;
+        public (string Prefix, string Url, bool NoProxy) Source;
         public Manifest Manifest;
         public string Error;
     }
 
     /// <summary>探测一条源；错误文案带上"直连/走系统代理"，日志一眼能看懂。</summary>
-    private static Probe ProbeSource((string Prefix, string Url) s)
+    private static Probe ProbeSource((string Prefix, string Url, bool NoProxy) s)
     {
-        bool viaMirror = s.Prefix.Length > 0;
-        var m = Fetch(s.Url, out string e, useProxy: !viaMirror);
+        bool noProxy = s.NoProxy || s.Prefix.Length > 0;
+        var m = Fetch(s.Url, out string e, useProxy: !noProxy);
         return new Probe
         {
             Source = s,
             Manifest = m,
-            Error = $"{HostOf(s.Url)}（{(viaMirror ? "直连" : "走系统代理")}）：{e}",
+            Error = $"{HostOf(s.Url)}（{(noProxy ? "直连" : "走系统代理")}）：{e}",
         };
     }
 
@@ -369,6 +386,8 @@ internal static class UpdateFeed
         public string Sha256 = "";
         public string Notes = "";
         public string MinVersion = "";
+        /// <summary>国内直链（Gitee 发行版附件；可空）。App 优先从它下载 zip，失败再退加速站。</summary>
+        public string Cn = "";
     }
 
     // ---- 版本比较 ------------------------------------------------------------
@@ -497,6 +516,7 @@ internal static class UpdateFeed
                 case "sha256": m.Sha256 = value.Trim().ToLowerInvariant(); break;
                 case "notes": m.Notes = value; break;
                 case "minversion": m.MinVersion = value.Trim(); break;
+                case "cn": m.Cn = value.Trim(); break;
             }
             i = v2 + 1;
         }

@@ -41,6 +41,12 @@ $proj = Join-Path $root "src\InkTeach\InkTeach.csproj"
 #       对象存储：   $updateBase = "https://<桶>.oss-cn-….aliyuncs.com"
 $updateBase = "https://github.com/XueRenYi0/InkTeach/releases/latest/download"
 
+# 国内镜像（GitCode：源码随发版推送、zip/Setup 挂发行版附件；2026-10-03 起用）。
+# 配了它：① GitHub 清单里多写一个 "cn"（App 优先从国内下 zip）；② 生成 dist\update-mirror.json 留档。
+# 留空 = 不做国内镜像。
+$mirrorOwnerRepo  = "xzx1xzzx/InkTeach"
+$mirrorReleaseBase = if ($mirrorOwnerRepo) { "https://gitcode.com/$mirrorOwnerRepo/releases/download" } else { "" }
+
 # ---- 版本号从工程里读，不在这里再写一份（写两份迟早对不上）----------------------------
 $ver = (Select-String -Path $proj -Pattern '<Version>([^<]+)</Version>').Matches[0].Groups[1].Value
 if (-not $ver) { throw "没能从 $proj 里读到 <Version>" }
@@ -221,16 +227,34 @@ else {
     # 后者是教室环境最稳的一条路（这台机器实测连不上 github.com，见 README「自动更新」）。
     $url = if ($base -match '^[a-zA-Z][a-zA-Z0-9+.-]*://') { "$base/$name.zip" }
            else { Join-Path $base "$name.zip" }
+    # 国内直链（Gitee 发行版附件）：格式与 GitHub 同款，发布时即可推算，无需先上传。
+    $cn = if ($mirrorReleaseBase) { "$($mirrorReleaseBase.TrimEnd('/'))/v$ver/$name.zip" } else { "" }
     $body = @"
 {
   "version": "$ver",
   "url": "$url",
+  "cn": "$cn",
   "sha256": "$hash",
   "notes": "",
   "minVersion": ""
 }
 "@
     Set-Content -Path $json -Value $body -Encoding UTF8
+    if ($cn) {
+        # 镜像清单留档（App 实际用的是 GitHub 清单里的 "cn" 字段；这份给人核对/兜底用）。
+        $mirrorJson = Join-Path $root "dist\update-mirror.json"
+        $mirrorBody = @"
+{
+  "version": "$ver",
+  "url": "$cn",
+  "sha256": "$hash",
+  "notes": "",
+  "minVersion": ""
+}
+"@
+        Set-Content -Path $mirrorJson -Value $mirrorBody -Encoding UTF8
+        Write-Host "  镜像清单 dist\update-mirror.json（$cn）" -ForegroundColor Green
+    }
     # **再往仓库根目录写一份**：App 的默认更新源取的是
     #   https://raw.githubusercontent.com/<账号>/<仓库>/main/update.json
     # 为什么不用 release 附件当清单：附件走 CDN，刚发新版时"附件已换、取回来还是旧的"
@@ -238,8 +262,13 @@ else {
     # ⚠ 发新版时**这两件事都要做**：把这份 update.json 提交推送，再把 zip 传成 release 附件。
     $rootJson = Join-Path $root "update.json"
     Set-Content -Path $rootJson -Value $body -Encoding UTF8
+    # 让 jsDelivr（国内清单源之一）立刻刷新缓存；失败不影响发布。
+    try { curl.exe -s -o NUL --max-time 20 "https://purge.jsdelivr.net/gh/XueRenYi0/InkTeach@main/update.json" | Out-Null } catch { }
     Write-Host "  自动更新清单 dist\update.json ＋ 仓库根 update.json（sha256 $($hash.Substring(0,12))…）" -ForegroundColor Green
     Write-Host "  ⚠ 发新版：先 git add update.json && git commit && git push（App 从 raw 地址取它），再把 zip 和 setup.exe 一起挂到 release 附件" -ForegroundColor Yellow
+    if ($mirrorReleaseBase) {
+        Write-Host "  ⚠ 国内镜像：跑 tools\gitcode-release.ps1 -Version $ver（推源码/标签、建 GitCode 发行版、传附件）" -ForegroundColor Yellow
+    }
 }
 
 $files = (Get-ChildItem $outDir -Recurse -File)

@@ -373,6 +373,14 @@ dotnet run --project src/InkTeach -c Release -- --memory reports/inkprobe-memory
    （zip 是给自动更新用的；安装包 `Setup.exe` 挂上去是给人手动下载的。
    Release 页面上建议把**安装包写在最前面**——老师要的就是"双击下一步"。）
 
+**国内镜像与国内清单源（2026-10-03 起）**：
+- 源码和发行版镜像：<https://gitcode.com/xzx1xzzx/InkTeach> —— 发版时跑
+  `tools\gitcode-release.ps1 -Version x.y.z`（推源码/标签、建发行版、传 zip/Setup）。
+- 检查更新另有 **3 条 jsDelivr 源**（`cdn / fastly / gcore.jsdelivr.net` 代理 GitHub 仓库里的
+  `update.json`，不需要任何国内账号）；发版时 `publish.ps1` 会自动 purge 刷新缓存。
+- 清单里的 `"cn"` 字段指向 GitCode 直链，App **优先从国内下载 zip**，失败自动换回加速站。
+- （Gitee 那条路暂时搁置：账号被判"RAW 外链滥用"、公开仓库需实名认证。）
+
 **⚠ 版本号只有一处真源：`src/InkTeach/InkTeach.csproj` 的 `<Version>`**（2026-10-02）：
 `publish.ps1` 用它命名 zip / 写清单；App 自报版本读的也是它（信息版本，`+提交号` 会去掉）。
 **别单独钉 `AssemblyVersion` / `FileVersion`**——8.5.1 那次把它们钉在 8.5.1，之后 `<Version>`

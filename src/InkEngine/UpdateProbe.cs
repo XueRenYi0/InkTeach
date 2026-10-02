@@ -81,12 +81,13 @@ internal static class UpdateProbe
         // 直链必须被套上同一个前缀，否则会"查得到新版、下不动包"。
         const string ghZip = "https://github.com/a/b/releases/download/v1/x.zip";
         const string px = "https://gh-proxy.com/";
-        Check("镜像：候选源 >= 5 条且都指向同一份 raw 清单",
-              UpdateFeed.Sources.Length >= 5
-              && UpdateFeed.Sources.All(s => s.Url.Contains("InkTeach/main/update.json")));
-        Check("镜像：至少 3 条带加速前缀，GitHub 直连放最后一条",
+        Check("镜像：候选源 >= 6 条；GitHub 加速批指着同一份 raw 清单，另有 Gitee 国内直连",
+              UpdateFeed.Sources.Length >= 6
+              && UpdateFeed.Sources.Count(s => s.Url.Contains("InkTeach/main/update.json")) >= 6
+              && UpdateFeed.Sources.Any(s => s.Url.Contains("jsdelivr.net") && s.NoProxy));
+        Check("镜像：至少 3 条带加速前缀，且有 GitHub 直连（走后系统代理）",
               UpdateFeed.Sources.Count(s => s.Prefix.Length > 0) >= 3
-              && UpdateFeed.Sources[UpdateFeed.Sources.Length - 1].Prefix.Length == 0);
+              && UpdateFeed.Sources.Any(s => s.Prefix.Length == 0 && !s.NoProxy));
         Check("镜像：GitHub 直链 → 套上前缀", UpdateFeed.RewriteZipUrl(ghZip, px) == px + ghZip);
         Check("镜像：局域网 / Gitee 地址 → 一律不动",
               UpdateFeed.RewriteZipUrl(@"\\server\share\x.zip", px) == @"\\server\share\x.zip"
@@ -215,12 +216,12 @@ internal static class UpdateProbe
         try
         {
             UpdateFeed.Url = "";
-            UpdateFeed.Sources = new[] { (Prefix: "", Url: staleJson) };
+            UpdateFeed.Sources = new[] { (Prefix: "", Url: staleJson, NoProxy: true) };
             var onlyStale = UpdateFeed.FetchBest("8.0.2", out _, out _);
             Check("镜像：所有源都说「已是最新」→ 才报已是最新",
                   onlyStale != null && onlyStale.Version == "8.0.2", onlyStale?.Version ?? "null");
 
-            UpdateFeed.Sources = new[] { (Prefix: "", Url: staleJson), (Prefix: "", Url: freshJson) };
+            UpdateFeed.Sources = new[] { (Prefix: "", Url: staleJson, NoProxy: true), (Prefix: "", Url: freshJson, NoProxy: true) };
             var found = UpdateFeed.FetchBest("8.0.2", out string usedBy, out _, out var dl);
             Check("镜像：第一个源缓存着旧清单时**继续找** → 找到 8.0.3",
                   found != null && found.Version == "8.0.3", usedBy ?? "null");
