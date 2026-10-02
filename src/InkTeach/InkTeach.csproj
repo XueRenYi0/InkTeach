@@ -37,9 +37,13 @@
 
     <ApplicationIcon>assets\InkTeach.ico</ApplicationIcon>
 
-    <Version>8.6.0</Version>
-    <AssemblyVersion>8.5.1.0</AssemblyVersion>
-    <FileVersion>8.5.1.0</FileVersion>
+    <Version>8.6.1</Version>
+    <!--
+      ⚠ **不要再单独钉 `AssemblyVersion` / `FileVersion`**（2026-10-02 踩过）：
+      这两个一旦和上面的 `<Version>` 分家，`UpdateFeed.CurrentVersion`（读程序集版本）
+      就会比真实版本旧——8.6.0 装完仍报"当前 8.5.1"，于是永远提示"有新版本 8.6.0"。
+      SDK 默认让它们跟着 `<Version>` 走，别动就是对的。
+    -->
     <Product>InkTeach 批注</Product>
     <AssemblyTitle>InkTeach 批注</AssemblyTitle>
     <Description>屏幕批注工具：白板 / PPT 放映批注 / 图形与曲线 / 回放导出</Description>

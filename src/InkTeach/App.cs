@@ -1003,7 +1003,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("                      --predictms N / --predictlead N 调地平线与前带量上限");
         Console.WriteLine("  --wetdrytest [--live 20] 湿墨/干墨交接测量（**要真笔**：在中间那条浅灰线间画一笔）");
         Console.WriteLine("  --tailjumptest [--noisy] [--off]  预测尾“突突跳”检测（--off = 关预测做对照）");
-        Console.WriteLine("  --updatetest        自动更新自检（离线：解析 / 版本比较 / sha256 / 换壳脚本语法）");
+        Console.WriteLine("  --updatetest        自动更新自检（离线：解析 / 版本比较 / sha256 / 下载候选 / 换壳脚本沙箱真跑）");
         Console.WriteLine("  --updatecheck [清单地址] [--apply]  自动更新验收（**会真的换壳**：--apply = 查到就装）");
         Console.WriteLine("  --touchguardtest    触摸自检（合成触摸：PT_TOUCH 通路 + 第二根手指不许抢笔）");
         Console.WriteLine("  --gclatencytest     书写期间 GC 低延迟档自检（真进得去 / 无第 2 代回收 / 超时退得回）"

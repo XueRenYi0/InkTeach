@@ -8390,7 +8390,7 @@ public partial class InkEngine
     internal string UpdateText = "未配置更新源";
 
     private float UpdateProgress;                       // 0..1（下载中，只给界面看）
-    private string _updVersion = "", _updNotes = "", _updZipUrl = "", _updSha = "";
+    private string _updVersion = "", _updNotes = "", _updSha = "";
     private volatile bool _updPost;                     // 后台：检查结果放好了
     private volatile bool _updApplyPosted;              // 后台：下载结束了
     private volatile bool _updBusy;                     // 有后台任务在跑（别叠加）
@@ -8405,9 +8405,10 @@ public partial class InkEngine
     /// </summary>
     internal bool AutoCheckOnly;
     private readonly object _updLock = new();
-    private (UpdateFeed.Manifest m, string err) _updResult;
+    private (UpdateFeed.Manifest m, string err, List<(string Url, bool UseProxy)> dl) _updResult;
     private string _updUsedUrl = "";
     private string _updZipPath = "", _updError = "";
+    private List<(string Url, bool UseProxy)> _updDownloads = new();   // 下载候选（快的在前，失败自动换下一条）
     private long _updGot, _updTotal;                    // 下载进度（后台写、主线程读）
 
     /// <summary>「检查更新」被点了一下（见 <see cref="IEngineCommands.CheckUpdate"/>）。</summary>
@@ -8430,15 +8431,15 @@ public partial class InkEngine
         NotifyUiStateChanged();
 
         Console.WriteLine($"自动更新：检查（当前 {UpdateFeed.CurrentVersion}；"
-                          + (UpdateFeed.Url.Length > 0 ? "用户配置源" : $"候选 {UpdateFeed.Sources.Length} 条，按序试")
+                          + (UpdateFeed.Url.Length > 0 ? "用户配置源" : $"候选 {UpdateFeed.Sources.Length} 条，并行试")
                           + (UpdateFeed.Url.Length > 0 ? "" : "；加速站直连、GitHub 那条走系统代理") + "）");
         _updBusy = true;
         var th = new System.Threading.Thread(() =>
         {
-            var m = UpdateFeed.FetchBest(UpdateFeed.CurrentVersion, out string used, out string err);
+            var m = UpdateFeed.FetchBest(UpdateFeed.CurrentVersion, out string used, out string err, out var dl);
             lock (_updLock)
             {
-                _updResult = (m, err);
+                _updResult = (m, err, dl);
                 _updUsedUrl = used;
             }
             _updPost = true;
@@ -8447,29 +8448,44 @@ public partial class InkEngine
         th.Start();
     }
 
-    /// <summary>已经查到新版本了，再点一下：**下载 → 校验 → 换壳重启**。</summary>
+    /// <summary>
+    /// 已经查到新版本了，再点一下：**下载 → 校验 → 换壳重启**。
+    /// 下载按候选列表逐条试（同版本的国内加速站在前）：失败或卡死就换下一条，
+    /// 全部试完还不行才报失败（2026-10-02；以前只试一条，失败要用户重点一次）。
+    /// </summary>
     internal void ApplyUpdateFromUi()
     {
-        if (_updBusy || UpdateState != UpdateStage.Available || _updZipUrl.Length == 0) return;
+        if (_updBusy || UpdateState != UpdateStage.Available || _updDownloads.Count == 0) return;
 
         UpdateState = UpdateStage.Downloading;
         UpdateProgress = 0f;
         UpdateText = "下载中 0%";
         NotifyUiStateChanged();
 
-        string url = _updZipUrl, sha = _updSha, ver = _updVersion;
-        Console.WriteLine($"自动更新：开始下载 {ver} → {url}");
+        string sha = _updSha, ver = _updVersion;
+        var urls = _updDownloads;
+        Console.WriteLine($"自动更新：开始下载 {ver}（{urls.Count} 条候选源，逐条试）");
         _updBusy = true;
         var th = new System.Threading.Thread(() =>
         {
             string dir = UpdateFeed.UpdateDirFor(ver);
             string zip = Path.Combine(dir, $"InkTeach-{UpdateFeed.SafeVer(ver)}-win-x64.zip");
-            bool ok = UpdateFeed.Download(url, zip, sha,
-                (got, total) =>
-                {
-                    System.Threading.Interlocked.Exchange(ref _updGot, got);
-                    System.Threading.Interlocked.Exchange(ref _updTotal, total);
-                }, out string err);
+            bool ok = false;
+            string err = "没有可用的下载地址";
+            foreach (var (url, useProxy) in urls)
+            {
+                System.Threading.Interlocked.Exchange(ref _updGot, 0);
+                System.Threading.Interlocked.Exchange(ref _updTotal, 0);
+                Console.WriteLine($"自动更新：试 {UpdateFeed.HostOf(url)}");
+                ok = UpdateFeed.Download(url, zip, sha,
+                    (got, total) =>
+                    {
+                        System.Threading.Interlocked.Exchange(ref _updGot, got);
+                        System.Threading.Interlocked.Exchange(ref _updTotal, total);
+                    }, out err, useProxy);
+                if (ok) break;
+                Console.WriteLine("自动更新：这条源没成（" + err + "），换下一条");
+            }
             lock (_updLock)
             {
                 _updZipPath = ok ? zip : "";
@@ -8503,7 +8519,8 @@ public partial class InkEngine
             _updBusy = false;
             UpdateFeed.Manifest m;
             string err;
-            lock (_updLock) (m, err) = _updResult;
+            List<(string Url, bool UseProxy)> dl;
+            lock (_updLock) (m, err, dl) = _updResult;
 
             bool needApply = false;
             if (m == null)
@@ -8528,7 +8545,7 @@ public partial class InkEngine
             {
                 _updVersion = m.Version;
                 _updNotes = m.Notes;
-                _updZipUrl = m.Url;
+                _updDownloads = dl ?? new List<(string Url, bool UseProxy)>();
                 _updSha = m.Sha256;
                 UpdateState = UpdateStage.Available;
                 UpdateText = $"有新版本 {m.Version}";

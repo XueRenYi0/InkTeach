@@ -221,9 +221,12 @@ internal static class UpdateProbe
                   onlyStale != null && onlyStale.Version == "8.0.2", onlyStale?.Version ?? "null");
 
             UpdateFeed.Sources = new[] { (Prefix: "", Url: staleJson), (Prefix: "", Url: freshJson) };
-            var found = UpdateFeed.FetchBest("8.0.2", out string usedBy, out _);
+            var found = UpdateFeed.FetchBest("8.0.2", out string usedBy, out _, out var dl);
             Check("镜像：第一个源缓存着旧清单时**继续找** → 找到 8.0.3",
                   found != null && found.Version == "8.0.3", usedBy ?? "null");
+            Check("下载候选：并列第一条就是这条源（下载也走同一批源，失败能换下一条）",
+                  dl != null && dl.Count > 0 && dl[0].Url == "y.zip",
+                  dl == null || dl.Count == 0 ? "空" : dl[0].Url + $"（共 {dl.Count} 条）");
         }
         finally
         {
