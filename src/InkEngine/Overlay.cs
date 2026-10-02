@@ -206,7 +206,7 @@ internal static class Gfx
 /// annotations you see are drawn directly by the GPU into a transparent layer
 /// above the desktop.
 /// </summary>
-internal sealed class OverlayWindow : IDisposable
+internal sealed partial class OverlayWindow : IDisposable
 {
     public static long RebuildCount;
 
@@ -373,6 +373,10 @@ internal sealed class OverlayWindow : IDisposable
     private RectF _pptBarRectPrev = RectF.Empty;
     /// <summary>回放控制条上一帧的矩形（退出回放那一帧要把旧位置擦干净，同 PPT 条）。</summary>
     private RectF _replayBarRectPrev = RectF.Empty;
+    /// <summary>计时卡片上一帧的矩形（停下 / 收起 / 拖动那一帧要把旧位置擦干净）。</summary>
+    private RectF _timerRectPrev = RectF.Empty;
+    /// <summary>点名卡片上一帧的矩形。</summary>
+    private RectF _rollRectPrev = RectF.Empty;
 
     /// <summary>页码那一段文字的格式（13 逻辑像素，见 `PptPageFormat`）。</summary>
     private IDWriteTextFormat _pptPageFmt;
@@ -402,6 +406,15 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private IDWriteTextFormat _readoutFormatSmall;
     private float _readoutFormatSmallPx;
+
+    /// <summary>计时卡片上的数字（19 逻辑像素）与放大态的大字（92 逻辑像素）。</summary>
+    private IDWriteTextFormat _timerValueFormat, _timerBigFormat;
+    private float _timerValueFormatPx, _timerBigFormatPx;
+    /// <summary>点名结果的字号格式（按结果长度自适应，现建现缓存）。</summary>
+    private IDWriteTextFormat _rollResultFormat;
+    private float _rollResultFormatPx;
+    /// <summary>到点闪烁那一拍的颜色（和主题无关：就是"提醒红"）。</summary>
+    private static readonly Color4 TimerFlashCol = new(0.91f, 0.26f, 0.21f, 1f);
 
     /// <summary>
     /// 拖端点时的"临时几何"复用的那条 scratch 笔画（见 <see cref="DrawVertexPreview"/>）。
@@ -2129,6 +2142,12 @@ internal sealed class OverlayWindow : IDisposable
         // 回放控制条：和 PPT 条同一层（屏幕坐标、`Identity` 变换之下），贴屏幕底边居中。
         DrawReplayBar(app);
 
+        // 课堂计时卡片：同一层（屏幕坐标），默认顶部居中；双击放大后是屏幕中央的大字。
+        DrawTimerCard(app);
+
+        // 课堂点名卡片：同一层，默认屏幕中央偏上。
+        DrawRollCard(app);
+
         // 截图整层（8.3.0）：遮罩/冻结帧/取景框/准线/读数/调整手柄。
         // 放在最后 = 盖住上面所有东西（滚动条、PPT 条、HUD）；界面那一块在截图期间
         // 由引擎收起（见 PrepareUi），所以这就是屏幕上看到的全部。
@@ -2303,6 +2322,33 @@ internal sealed class OverlayWindow : IDisposable
             }
             if (!_replayBarRectPrev.IsEmpty) r.Add(_replayBarRectPrev);
             _replayBarRectPrev = cur;
+        }
+
+        // 课堂计时卡片：跑秒 / 到点闪烁 / 拖动都在变，按当前矩形算进脏区；
+        // 停下 / 收起 / 放大还原那一帧旧位置也要擦（同 PPT 条、回放条的套路）。
+        {
+            var cur = RectF.Empty;
+            if (app.TimerCardOpen)
+            {
+                cur = app.TimerCardRect();
+                float pad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
+                r.Add(cur.Inflate(pad));
+            }
+            if (!_timerRectPrev.IsEmpty) r.Add(_timerRectPrev);
+            _timerRectPrev = cur;
+        }
+
+        // 课堂点名卡片：滚动/拖动/开合都在变；关掉那一帧旧位置也要擦（同计时卡）。
+        {
+            var cur = RectF.Empty;
+            if (app.RollCardOpen)
+            {
+                cur = app.RollCardRect();
+                float pad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
+                r.Add(cur.Inflate(pad));
+            }
+            if (!_rollRectPrev.IsEmpty) r.Add(_rollRectPrev);
+            _rollRectPrev = cur;
         }
 
         // 选中高亮画在浮动层上、不进内容层，所以它的区域必须每帧算进脏区。
@@ -4296,6 +4342,58 @@ internal sealed class OverlayWindow : IDisposable
         _scratch.Color = theme.TextMuted;
         _ctx.DrawText("✕", ReadoutFormatSmall(dpi),
                       new Rect(cr.MinX, cr.MinY, cr.MaxX - cr.MinX, cr.MaxY - cr.MinY), _scratch);
+    }
+
+    private ID2D1SolidColorBrush SetBrush(Color4 c)
+    {
+        _scratch.Color = c;
+        return _scratch;
+    }
+
+    private IDWriteTextFormat RollResultFormat(float dpi, float size)
+    {
+        float px = MathF.Max(12f, MathF.Round(size * dpi));
+        if (_rollResultFormat == null || _rollResultFormatPx != px)
+        {
+            _rollResultFormat?.Dispose();
+            _rollResultFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _rollResultFormat.TextAlignment = TextAlignment.Center;
+            _rollResultFormat.ParagraphAlignment = ParagraphAlignment.Center;
+            _rollResultFormatPx = px;
+        }
+        return _rollResultFormat;
+    }
+
+
+    private IDWriteTextFormat TimerValueFormat(float dpi)
+    {
+        float px = MathF.Max(12f, MathF.Round(19f * dpi));
+        if (_timerValueFormat == null || _timerValueFormatPx != px)
+        {
+            _timerValueFormat?.Dispose();
+            _timerValueFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _timerValueFormat.TextAlignment = TextAlignment.Center;
+            _timerValueFormat.ParagraphAlignment = ParagraphAlignment.Center;
+            _timerValueFormatPx = px;
+        }
+        return _timerValueFormat;
+    }
+
+    private IDWriteTextFormat TimerBigFormat(float dpi)
+    {
+        float px = MathF.Max(24f, MathF.Round(92f * dpi));
+        if (_timerBigFormat == null || _timerBigFormatPx != px)
+        {
+            _timerBigFormat?.Dispose();
+            _timerBigFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.Bold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _timerBigFormat.TextAlignment = TextAlignment.Center;
+            _timerBigFormat.ParagraphAlignment = ParagraphAlignment.Center;
+            _timerBigFormatPx = px;
+        }
+        return _timerBigFormat;
     }
 
     private void DrawPptPagePanel(InkEngine app)

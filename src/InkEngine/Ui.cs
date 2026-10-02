@@ -187,6 +187,22 @@ public interface IUiHost
     void SetFloatingTheme(UiTheme theme);
 }
 
+/// <summary>
+/// 课堂计时器的三种模式（「更多 → 课堂」页选，运行卡片画在引擎侧）。
+///
+/// 三个入口各自独立（2026-10-02 用户拍板）：倒计时有预设与 ±1 分步进，
+/// 正计时只有分秒，秒表多两位小数——老师和学生报数时读的是不同的精度。
+/// </summary>
+public enum TimerMode
+{
+    /// <summary>倒计时：到 0 响一声、闪三下，停在 00:00（再点一下从头开始）。</summary>
+    Countdown = 0,
+    /// <summary>正计时：从 0 往上（MM:SS / H:MM:SS）。</summary>
+    CountUp = 1,
+    /// <summary>秒表：从 0 往上，显示到 0.01 秒。</summary>
+    Stopwatch = 2,
+}
+
 /// <summary>界面对引擎的全部操作能力。刻意做窄，防止界面越权。</summary>
 public interface IEngineCommands
 {
@@ -399,6 +415,21 @@ public interface IEngineCommands
 
     /// <summary>停掉回放（退出后一切复原）。</summary>
     void StopReplay();
+
+    /// <summary>
+    /// 打开**计时器窗口**（启动器「课堂 → 计时器」）：1:1 复刻 InkClass 的独立居中窗
+    /// （浅色面板 + 环形进度 + 开始/重置/最小化/全屏/关闭；倒计时可点数字改时长）。
+    /// </summary>
+    void OpenTimerCard();
+
+    /// <summary>
+    /// 打开**点名窗口**（启动器「课堂 → 点名」）：900×500 居中窗，左结果 / 右人数与抽奖；
+    /// 名单读 `%APPDATA%\InkTeach\Names.txt`，抽过的不重复（抽完自动重置）。
+    /// </summary>
+    void OpenRollCard();
+
+    /// <summary>「随机一人」：自动抽 1 人、出结果 1.5 秒后自动关（InkClass 快捷态）。</summary>
+    void OpenRollOne();
 }
 
 /// <summary>课堂常用色。界面直接拿它画色板，保证多套界面配色一致。</summary>
@@ -864,6 +895,32 @@ public readonly struct UiState
     public bool ReplayPlaying { get; init; }
     /// <summary>回放倍速（0.5 / 1 / 2 / 4）。</summary>
     public float ReplaySpeed { get; init; }
+
+    /// <summary>计时器在跑/暂停中；停下后为 false。</summary>
+    public bool TimerActive { get; init; }
+    /// <summary>计时器暂停中（界面据此显示"继续"）。倒计时到点后为 false（继续显示超时）。</summary>
+    public bool TimerPaused { get; init; }
+    /// <summary>倒计时跑到 0 了（继续正计时显示超时 `+00:27`）。</summary>
+    public bool TimerFinished { get; init; }
+    /// <summary>计时器模式。</summary>
+    public TimerMode TimerMode { get; init; }
+    /// <summary>计时器当前值（毫秒）：倒计时 = 剩余，正计时/秒表 = 已过。</summary>
+    public float TimerValueMs { get; init; }
+    /// <summary>计时卡片开着吗（设置态或运行态）。</summary>
+    public bool TimerCardOpen { get; init; }
+    /// <summary>卡片在设置态吗（false = 运行态）。</summary>
+    public bool TimerSettingsOpen { get; init; }
+    /// <summary>大字（双击放大的）形态开着吗。</summary>
+    public bool TimerExpanded { get; init; }
+    /// <summary>点名卡片开着吗；<see cref="RollSettingsOpen"/> = 设置态。</summary>
+    public bool RollCardOpen { get; init; }
+    public bool RollSettingsOpen { get; init; }
+
+    /// <summary>
+    /// 点名名单（`%APPDATA%\InkTeach\Names.txt`，一行一个；空数组 = 没名单、用学号）。
+    /// 每次装载给整份快照——点名全在界面层做，引擎只负责读盘与推送。
+    /// </summary>
+    public string[] Names { get; init; }
 }
 
 /// <summary>

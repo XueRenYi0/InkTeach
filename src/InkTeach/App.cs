@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Numerics;
 using System.Runtime;
 using System.Runtime.InteropServices;
@@ -13,7 +13,7 @@ namespace InkTeach;
 /// 开发期宿主：持有引擎，外加一整套自动化测试/基准工具。
 /// 继承只是为了让这些工具直接读引擎内部状态（产品代码请用组合：new InkEngine()）。
 /// </summary>
-internal sealed class App : InkEngine.InkEngine
+internal sealed partial class App : InkEngine.InkEngine
 {
     private IntPtr _clickTargetHwnd;
     private string _clickLogFile;
@@ -788,6 +788,18 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             ReplayTest();
         }
+        else if (mode == "--timertest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            TimerTest();
+        }
+        else if (mode == "--rolltest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            RollTest();
+        }
         else if (mode == "--replayshow")
         {
             _autoExitAt = double.MaxValue;
@@ -974,7 +986,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --lasertest         激光笔自检（拖尾一直写不缩 / 松手停 2 秒再整体淡出 / 多条并存 /");
         Console.WriteLine("                      粗细真的管用 / 不是笔迹）；顺带出图 reports/laser-trail.png");
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
-        Console.WriteLine("  --panelshow <图> [--band] [--mini] [--more [--page N]] [--cell N] [--shape 名字] [--zoom N]   界面出图（离屏）");
+        Console.WriteLine("  --panelshow <图> [--band] [--mini] [--more [--page N]] [--cell N] [--shape 名字] [--zoom N]   界面出图（离屏；--more --page 0=启动器 1=设置）");
         Console.WriteLine("  --makeicon <图.ico>      用界面自己的渲染生成程序图标（线条笔＋白砖＋带笔锋的红笔迹）");
         Console.WriteLine("  --captureshow <图>  截图取景框 + 尺寸读数出图（离屏）");
         Console.WriteLine("  --dialogprobe <前缀> [--save]  导出对话框探针（真弹框 + 点它的下拉 + 连拍三张；");
@@ -1012,6 +1024,8 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --pressuretest      压感自检（映射函数 / 上屏粗细随压力变 / 无压感与虚线回退 / 开关往返 / 存档往返）");
         Console.WriteLine("  --inkfiletest       墨迹文件自检（保存/打开往返 / 打开前备份与轮转 / 坏文件不动文档 / 放映中置灰）");
         Console.WriteLine("  --replaytest        墨迹回放自检（时间轴 / 前缀 / 暂停 / 倍速 / 只读 / 控制条 / 翻页退出）");
+        Console.WriteLine("  --timertest         课堂计时器自检（功能卡：设置态↔运行态 / ⚙ / ±1分 / 到点超时 / 提示音 / 穿透小窗）");
+        Console.WriteLine("  --rolltest          课堂点名自检（功能卡：设置↔结果 / 滚动定格 / 去重池子 / 名单 / 穿透小窗）");
         Console.WriteLine("  --replayshow <图>   墨迹回放摆样（铺几笔 → 播到一半 → 截控制条那一块）");
         Console.WriteLine("  --ballprobe [前缀]  收起球贴边诊断（左/右/四角 × 显示/隐藏，逐个出图）");
         Console.WriteLine("  --wetinktest        湿墨轨迹实测（只让系统画，数上屏像素：这条通道到底画不画）");
@@ -12659,6 +12673,82 @@ internal sealed class App : InkEngine.InkEngine
             }
             SettleFrames(500);
 
+            // --timerwin [--run|--edit|--min|--full] / --rollwin [--n 3] [--names]：
+            // 课堂窗画在**引擎浮层**里，离屏那条路（只画界面层）拍不到它，
+            // 所以等它真画出来，直接截屏幕上的窗口矩形（1:1）。
+            if (Environment.GetCommandLineArgs().Contains("--timerwin")
+                || Environment.GetCommandLineArgs().Contains("--rollwin"))
+            {
+                var argvW = Environment.GetCommandLineArgs();
+                if (argvW.Contains("--timerwin"))
+                {
+                    OpenTimerCardFromUi();
+                    SettleFrames(200);
+                    var tw = TimerCardRect();
+                    var cin = TimerWin.CardRect(tw, DpiScale, false);
+                    float lu = TimerWin.Layout(cin, DpiScale);
+                    void ClickAxis(in RectF r)
+                    {
+                        TimerPointerDownForTest((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
+                        TimerPointerUpForTest((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
+                    }
+                    if (argvW.Contains("--stopwatch")) { StartTimerFromUi(TimerMode.Stopwatch, 0f); SettleFrames(900); }
+                    else if (argvW.Contains("--run")) StartTimerFromUi(TimerMode.Countdown, 300f);
+                    int tbi = Array.IndexOf(argvW, "--tab");
+                    if (tbi >= 0 && tbi + 1 < argvW.Length && int.TryParse(argvW[tbi + 1], out int tabArg))
+                    {
+                        var tcin = TimerWin.CardRect(TimerCardRect(), DpiScale, false);
+                        float tlu = TimerWin.Layout(tcin, DpiScale);
+                        var tr = TimerWin.TabRect(tcin, tlu, Math.Clamp(tabArg, 0, 2));
+                        TimerPointerDownForTest((tr.MinX + tr.MaxX) * 0.5f, (tr.MinY + tr.MaxY) * 0.5f);
+                        TimerPointerUpForTest((tr.MinX + tr.MaxX) * 0.5f, (tr.MinY + tr.MaxY) * 0.5f);
+                    }
+                    if (argvW.Contains("--full")) ClickAxis(TimerWin.BtnRect(cin, lu, TimerZone.Fullscreen));
+                    else if (argvW.Contains("--edit")) ClickAxis(TimerWin.ValueRect(cin, lu));
+                    else if (argvW.Contains("--min")) ClickAxis(TimerWin.BtnRect(cin, lu, TimerZone.Minimize));
+                }
+                if (argvW.Contains("--rollwin"))
+                {
+                    if (argvW.Contains("--names"))
+                    {
+                        string tmpNames = Path.Combine(Path.GetTempPath(), "inkteach-shot-names.txt");
+                        File.WriteAllLines(tmpNames, new[] { "张伟", "李娜", "王强", "刘洋", "陈晨" });
+                        InkEngine.InkEngine.NamesPathOverride = tmpNames;
+                        ReloadNamesFromUi();
+                    }
+                    OpenRollCardFromUi();
+                    int ri = Array.IndexOf(argvW, "--n");
+                    if (ri >= 0 && ri + 1 < argvW.Length && int.TryParse(argvW[ri + 1], out int nArg) && nArg > 1)
+                    {
+                        var rw = RollCardRect();
+                        float ru = RollUnit();
+                        var pr = RollWin.PlusRect(rw, ru);
+                        for (int k = 1; k < Math.Min(nArg, 60); k++)
+                        {
+                            RollPointerDownForTest((pr.MinX + pr.MaxX) * 0.5f, (pr.MinY + pr.MaxY) * 0.5f);
+                            RollPointerUpForTest((pr.MinX + pr.MaxX) * 0.5f, (pr.MinY + pr.MaxY) * 0.5f);
+                        }
+                    }
+                    StartRollFromUi();
+                    double rt0 = NowMs;
+                    while (RollingNow && NowMs - rt0 < 3000) { DrainMessages(); Thread.Sleep(10); RollTickForTest(); }
+                }
+                SettleFrames(400);
+                if (argvW.Contains("--keepboard")) SetPassThroughFromUi(false);
+                SettleFrames(300);
+                var wr = argvW.Contains("--timerwin") ? TimerCardRect() : RollCardRect();
+                bool okW = ScreenProbe.SaveBmp(path,
+                    (int)MathF.Floor(wr.MinX), (int)MathF.Floor(wr.MinY),
+                    Math.Max(1, (int)MathF.Ceiling(wr.MaxX - wr.MinX)),
+                    Math.Max(1, (int)MathF.Ceiling(wr.MaxY - wr.MinY)));
+                Console.WriteLine(okW
+                    ? $"已出图 {path}（截屏 {wr.MaxX - wr.MinX:F0}×{wr.MaxY - wr.MinY:F0}）"
+                    : "出图失败");
+                ExitCode = okW ? 0 : 1;
+                _quit = true;
+                return;
+            }
+
             // 优先离屏出图（锁屏 / 远程也能出，图里不混桌面）。
             // **范围要连"画到外面那一圈"一起给**（投影，见 IOverlayUi.PaintMargin）：
             // 这一条的边上留白只有 24 **物理**像素，200% 缩放下就是 12 逻辑像素，
@@ -12997,7 +13087,7 @@ internal sealed class App : InkEngine.InkEngine
         if (SkipIfNoSyntheticInput("产品界面自检")) { _quit = true; return; }
 
         int pass = 0, fail = 0;
-        void Check(string name, bool ok, string detail)
+        void Check(string name, bool ok, string detail = "")
         {
             if (ok) pass++; else fail++;
             Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-26} {detail}");
@@ -13272,6 +13362,14 @@ internal sealed class App : InkEngine.InkEngine
                 var m = ui.CellRectForTest(12);
                 ClickPhysical((m.MinX + m.MaxX) * 0.5f * DpiScale,
                               (m.MinY + m.MaxY) * 0.5f * DpiScale);
+                SettleFrames(250);
+            }
+            // 面板现在**默认停在启动器主页**；要碰设置行的用例都先切到设置子页
+            if (ui.MoreOpenForTest && ui.MorePageForTest != 1)
+            {
+                var s = ui.HubBottomRectForTest(0);
+                ClickPhysical((s.MinX + s.MaxX) * 0.5f * DpiScale,
+                              (s.MinY + s.MaxY) * 0.5f * DpiScale);
                 SettleFrames(250);
             }
         }
@@ -13642,6 +13740,81 @@ internal sealed class App : InkEngine.InkEngine
                   $"穿透 = {Host.State.PassThrough}，工具 = {Tool}");
             Check("关掉穿透之后工具格亮回来", ui.CellActiveForTest(3),
                   $"笔格高亮 = {ui.CellActiveForTest(3)}");
+        }
+
+        // ---- ⑥.3c 穿透：色带只收成那条线，不许张开（2026-10-02 用户口径）----
+        //
+        // 用户原话："点击穿透以后，色带是横起来的……不是说我点了个穿透，色带就完全没有了。
+        // 我说的色带消失，就是把它折叠起来，而不是像其他一样，点过来以后还是展开的。"
+        // 所以规则是：进穿透**只把设置条收回那条 6 像素色线**（面板高度不变——贴边隐藏
+        // 露出来的还是它，不会难看），而且穿透期间不许再张开（没有设置可放）。
+        // 以前那个毛病照旧要防：`_bandCell` 还停在上一个工具那格，穿透开着、指针在面板上时
+        // 旧设置条照常张开、色片还能点。
+        // 这里钉五件事：① 点格子进穿透 → 收成线；② 指针在面板上也不许张开；
+        // ③ 退出穿透 → 还能重新张开（功能没被收坏）；④ 穿透里点工具格照样能出来；
+        // ⑤ 全局开关（Ctrl+Alt+T 同一条路）进穿透同样只收成线。
+        {
+            // 起手：笔、色带在笔格并张开（走真实路径：点笔格后指针留在面板上）
+            Host.Commands.SetTool(Tool.Pen);
+            Host.Commands.SetPassThrough(false);
+            SettleFrames(200);
+            var penCellP = ui.CellRectForTest(3);
+            ClickPhysical((penCellP.MinX + penCellP.MaxX) * 0.5f * DpiScale,
+                          (penCellP.MinY + penCellP.MaxY) * 0.5f * DpiScale);
+            SettleFrames(400);
+            Check("（准备）色带在笔格且已经张开",
+                  ui.BandCellForTest == 3 && ui.RailValueForTest > 0.99f,
+                  $"格 {ui.BandCellForTest}，张开度 {ui.RailValueForTest:F2}");
+
+            // ① 点穿透格 → 穿透开、设置条收回那条 6 像素色线（不是消失）
+            var mouseCellP = ui.CellRectForTest(1);
+            ClickPhysical((mouseCellP.MinX + mouseCellP.MaxX) * 0.5f * DpiScale,
+                          (mouseCellP.MinY + mouseCellP.MaxY) * 0.5f * DpiScale);
+            SettleFrames(600);
+            var lineRect = ui.BandRectForTest;
+            Check("点穿透格：色带只收成那条 6 像素线（不是消失）",
+                  Host.State.PassThrough && ui.RailValueForTest < 0.01f
+                  && !lineRect.IsEmpty && lineRect.MaxY - lineRect.MinY is >= 5f and <= 12f,
+                  $"穿透 = {Host.State.PassThrough}，张开度 {ui.RailValueForTest:F2}，"
+                  + $"带高 {(lineRect.IsEmpty ? 0f : lineRect.MaxY - lineRect.MinY):F1}");
+
+            // ② 指针就停在面板上（刚点的穿透格）：旧的悬停意图不许把设置条重新弹开
+            ui.OpenRailForTest();                 // 强行模拟"指针碰到带子区"
+            SettleFrames(300);
+            Check("穿透中：指针在面板上也不张开旧设置条",
+                  ui.RailValueForTest < 0.01f
+                  && (ui.BandRectForTest.MaxY - ui.BandRectForTest.MinY) <= 12f,
+                  $"张开度 {ui.RailValueForTest:F2}");
+
+            // ③ 退出穿透（走命令，和全局 Ctrl+Alt+T 同一条路）→ 悬停还能重新张开
+            Host.Commands.SetPassThrough(false);
+            SettleFrames(200);
+            ui.OpenRailForTest();
+            SettleFrames(300);
+            Check("退出穿透：色带可以重新张开（功能没被收坏）",
+                  !Host.State.PassThrough && ui.RailValueForTest > 0.99f,
+                  $"张开度 {ui.RailValueForTest:F2}");
+
+            // ④ 穿透里点笔格：照样顺手关穿透（没键盘的教室靠它）＋ 带子回到笔格
+            ClickPhysical((mouseCellP.MinX + mouseCellP.MaxX) * 0.5f * DpiScale,
+                          (mouseCellP.MinY + mouseCellP.MaxY) * 0.5f * DpiScale);
+            SettleFrames(400);
+            var penCellP2 = ui.CellRectForTest(3);
+            ClickPhysical((penCellP2.MinX + penCellP2.MaxX) * 0.5f * DpiScale,
+                          (penCellP2.MinY + penCellP2.MaxY) * 0.5f * DpiScale);
+            SettleFrames(500);
+            Check("穿透里点笔格：关穿透、上带跟着回到笔格",
+                  !Host.State.PassThrough && Tool == Tool.Pen && ui.BandCellForTest == 3,
+                  $"穿透 = {Host.State.PassThrough}，工具 = {Tool}，色带格 = {ui.BandCellForTest}");
+
+            // ⑤ 全局开关那条路（不经面板）：同样只收成线
+            Host.Commands.SetPassThrough(true);
+            SettleFrames(500);
+            Check("全局开关进穿透：同样只收成那条线（不是只有点格子才收）",
+                  Host.State.PassThrough && ui.RailValueForTest < 0.01f,
+                  $"张开度 {ui.RailValueForTest:F2}");
+            Host.Commands.SetPassThrough(false);
+            SettleFrames(300);
         }
 
         // ---- ⑥.3b 主条那几格"选中显示选中什么"（2026-09-26）----
@@ -14766,138 +14939,156 @@ internal sealed class App : InkEngine.InkEngine
               !ui.RailOpenForTest && MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandLine) < 1.5f,
               $"设置条高 {ui.BandHeightForTest:F0}（该是色线 {InkUi.Tokens.BandLine:F0}）");
 
-        // 三页签都点得到、切得动（课堂 / 墨迹 / 设置）
+        // ---- 启动器：格子/底栏逐格点得通（"加一格漏一处"用这条兜住）----
         {
-            bool tabsOk = true;
-            for (int i = 0; i < 3; i++)
+            Check("启动器：打开面板默认停在主页", ui.MorePageForTest == 0, $"页 = {ui.MorePageForTest}");
+            bool tilesOk = true;
+            for (int code = 0; code < 6; code++)
             {
-                var t = ui.MoreTabRectForTest(i);
-                ClickPhysical((t.MinX + t.MaxX) * 0.5f * DpiScale,
-                              (t.MinY + t.MaxY) * 0.5f * DpiScale);
-                SettleFrames(150);
-                if (ui.MorePageForTest != i) tabsOk = false;
+                var t = ui.HubTileRectForTest(code);
+                if (t.IsEmpty || t.MinX < moreRect.MinX || t.MaxX > moreRect.MaxX
+                    || t.MinY < moreRect.MinY || t.MaxY > moreRect.MaxY) tilesOk = false;
             }
-            Check("三个页签都能点、切得动", tabsOk, $"最后停在 {ui.MorePageForTest}（设置=2）");
-        }
-
-        // ---- ⑦.05 「墨迹」页：两条动作行都在；空板书点「保存」会被拒并写状态行 ----
-        {
-            var inkTab = ui.MoreTabRectForTest(1);
-            ClickPhysical((inkTab.MinX + inkTab.MaxX) * 0.5f * DpiScale,
-                          (inkTab.MinY + inkTab.MaxY) * 0.5f * DpiScale);
-            SettleFrames(150);
-            Check("墨迹页：切得过去", ui.MorePageForTest == 1, $"页 = {ui.MorePageForTest}");
-
-            bool inkRowsOk = true;
-            for (int i = 0; i < ui.MoreInkRowCountForTest; i++)
+            bool bottomOk = true;
+            for (int i = 0; i < 4; i++)
             {
-                var r = ui.MoreInkRowRectForTest(i);
-                if (r.IsEmpty || r.MinX < moreRect.MinX || r.MaxX > moreRect.MaxX
-                    || r.MinY < moreRect.MinY || r.MaxY > moreRect.MaxY) inkRowsOk = false;
+                var t = ui.HubBottomRectForTest(i);
+                if (t.IsEmpty || t.MaxX > moreRect.MaxX || t.MaxY > moreRect.MaxY) bottomOk = false;
             }
-            Check("墨迹页：六行（三条动作 ＋ 三条偏好）都在面板内",
-                  inkRowsOk && ui.MoreInkRowCountForTest == 6, $"{ui.MoreInkRowCountForTest} 行");
+            Check("启动器：六格（课堂/墨迹）＋ 底栏四格都在面板内", tilesOk && bottomOk,
+                  $"面板 {moreRect.MaxX - moreRect.MinX:F0}×{moreRect.MaxY - moreRect.MinY:F0}");
 
-            // 空板书：保存置灰、打开可用；**点置灰的那一条也会写状态**（不是没反应）
-            Host.Commands.Clear();
-            SettleFrames(200);
-            Check("墨迹页：空板书时「保存」置灰、「打开」仍可用",
-                  !ui.MoreInkRowEnabledForTest(0) && ui.MoreInkRowEnabledForTest(1),
-                  $"保存={ui.MoreInkRowEnabledForTest(0)}，打开={ui.MoreInkRowEnabledForTest(1)}");
+            // 分辨率规范化 B：面板宽 = min(640, 55% 工作宽)
+            float wantW = Math.Clamp((panelWork.MaxX - panelWork.MinX) * 0.55f, 380f, 640f);
+            Check("面板宽：min(640, 55% 工作宽)", moreRect.MaxX - moreRect.MinX <= wantW + 0.5f,
+                  $"宽 {moreRect.MaxX - moreRect.MinX:F0} ≤ {wantW:F0}");
 
-            var saveRow = ui.MoreInkRowRectByLabelForTest("保存墨迹");
-            ClickPhysical((saveRow.MinX + saveRow.MaxX) * 0.5f * DpiScale,
-                          (saveRow.MinY + saveRow.MaxY) * 0.5f * DpiScale);
-            SettleFrames(150);
-            Check("墨迹页：点置灰的「保存」会写状态行",
-                  Host.State.InkStatus.Contains("没有可保存"), $"状态：{Host.State.InkStatus}");
-
-            // 三条墨迹偏好：开关写偏好、循环档换值（都只写 `ui.*`，默认值不落盘）
-            void ClickInkRow(string labelPart)
+            // 「随机一人」格：关面板 ＋ 点名窗自动开抽，出结果 1.5 秒后自动关
+            var oneTile = ui.HubTileRectForTest(2);
+            ClickPhysical((oneTile.MinX + oneTile.MaxX) * 0.5f * DpiScale,
+                          (oneTile.MinY + oneTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("启动器：「随机一人」→ 关面板、点名窗自动开抽",
+                  !ui.MoreOpenForTest && Host.State.RollCardOpen && RollingNow,
+                  $"panel={ui.MoreOpenForTest} card={Host.State.RollCardOpen} rolling={RollingNow}");
             {
-                var r = ui.MoreInkRowRectByLabelForTest(labelPart);
-                ClickPhysical((r.MinX + r.MaxX) * 0.5f * DpiScale,
-                              (r.MinY + r.MaxY) * 0.5f * DpiScale);
-                SettleFrames(150);
+                double t1 = NowMs;
+                while (Host.State.RollCardOpen && NowMs - t1 < 3000)
+                { DrainMessages(); Thread.Sleep(10); RollTickForTest(); }
+                Check("「随机一人」：出结果后自动关窗", !Host.State.RollCardOpen);
             }
 
-            ClickInkRow("自动恢复");
-            Check("墨迹页：「自动恢复上次板书」开 → 写 ui.restoreInk",
-                  Host.GetPref("restoreInk") == "1", $"restoreInk = {Host.GetPref("restoreInk")}");
-            ClickInkRow("自动恢复");
-            Check("墨迹页：「自动恢复」再点 → 删掉那一项（回默认关）",
-                  string.IsNullOrEmpty(Host.GetPref("restoreInk")),
-                  $"restoreInk = \"{Host.GetPref("restoreInk")}\"");
-
-            ClickInkRow("PPT 墨迹默认自动保存");
-            Check("墨迹页：「PPT 默认自动保存」关 → 写 \"0\"",
-                  Host.GetPref("pptAutoSave") == "0", $"pptAutoSave = {Host.GetPref("pptAutoSave")}");
-            ClickInkRow("PPT 墨迹默认自动保存");
-            Check("墨迹页：再点回默认开（删掉那一项）",
-                  string.IsNullOrEmpty(Host.GetPref("pptAutoSave")),
-                  $"pptAutoSave = \"{Host.GetPref("pptAutoSave")}\"");
-
-            ClickInkRow("历史清理"); string hd90 = Host.GetPref("historyDays");
-            ClickInkRow("历史清理"); string hd30 = Host.GetPref("historyDays");
-            ClickInkRow("历史清理"); string hd7 = Host.GetPref("historyDays");
-            ClickInkRow("历史清理"); string hdPermanent = Host.GetPref("historyDays");
-            Check("墨迹页：历史清理循环 永久→90→30→7→永久",
-                  hd90 == "90" && hd30 == "30" && hd7 == "7" && string.IsNullOrEmpty(hdPermanent),
-                  $"90=\"{hd90}\"，30=\"{hd30}\"，7=\"{hd7}\"，最后=\"{hdPermanent}\"（空 = 永久）");
-
-            // 回到设置页，后面的用例都在那一页
-            var setTab = ui.MoreTabRectForTest(2);
-            ClickPhysical((setTab.MinX + setTab.MaxX) * 0.5f * DpiScale,
-                          (setTab.MinY + setTab.MaxY) * 0.5f * DpiScale);
-            SettleFrames(150);
-            Check("墨迹页：切回设置页", ui.MorePageForTest == 2, $"页 = {ui.MorePageForTest}");
-
-            // 「墨迹回放」：切回墨迹页 → 有墨迹才可用 → 点它开始、**面板自动收起**
-            //（全屏模态让位给控制条/画布）→ 停掉 → 重新打开面板给后面的用例。
+            // 「随机一人」会把面板关掉 —— 计时器格之前先把「更多」重新打开
             {
-                var inkTab2 = ui.MoreTabRectForTest(1);
-                ClickPhysical((inkTab2.MinX + inkTab2.MaxX) * 0.5f * DpiScale,
-                              (inkTab2.MinY + inkTab2.MaxY) * 0.5f * DpiScale);
-                SettleFrames(120);
-
-                var mk = new Stroke
-                {
-                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
-                    Color = new Color4(0.11f, 0.12f, 0.15f, 1f), Width = 6f,
-                };
-                mk.AddPoint(200f, 200f, 1f, 0);
-                mk.AddPoint(420f, 280f, 1f, 120);
-                Doc.AddStroke(mk);
-                SettleFrames(150);
-
-                Check("墨迹页：有墨迹时「墨迹回放」可用", ui.MoreInkRowEnabledForTest(2),
-                      $"可用={ui.MoreInkRowEnabledForTest(2)}");
-                ClickInkRow("墨迹回放");
-                SettleFrames(200);
-                Check("点「墨迹回放」：回放开始、面板自动收起",
-                      Host.State.ReplayActive && !ui.MoreOpenForTest,
-                      $"active={Host.State.ReplayActive}，panel={ui.MoreOpenForTest}");
-
-                Host.Commands.StopReplay();
-                SettleFrames(200);
-                Check("停掉回放：界面状态跟着回来", !Host.State.ReplayActive,
-                      $"active={Host.State.ReplayActive}");
-                Host.Commands.Clear();
-                SettleFrames(150);
-
-                // 重新打开面板并回到设置页（后面几段用例都在那一页）
-                var moreAgain = ui.CellRectForTest(12);
-                ClickPhysical((moreAgain.MinX + moreAgain.MaxX) * 0.5f * DpiScale,
-                              (moreAgain.MinY + moreAgain.MaxY) * 0.5f * DpiScale);
+                var again = ui.CellRectForTest(12);
+                ClickPhysical((again.MinX + again.MaxX) * 0.5f * DpiScale,
+                              (again.MinY + again.MaxY) * 0.5f * DpiScale);
                 SettleFrames(250);
-                var setTab2 = ui.MoreTabRectForTest(2);
-                ClickPhysical((setTab2.MinX + setTab2.MaxX) * 0.5f * DpiScale,
-                              (setTab2.MinY + setTab2.MaxY) * 0.5f * DpiScale);
-                SettleFrames(150);
-                Check("面板重新打开并回到设置页",
-                      ui.MoreOpenForTest && ui.MorePageForTest == 2,
-                      $"panel={ui.MoreOpenForTest}，page={ui.MorePageForTest}");
             }
+
+            // 计时器格：点它 = 关面板 ＋ 引擎侧计时窗以**待机态**出现
+            var timTile = ui.HubTileRectForTest(0);
+            ClickPhysical((timTile.MinX + timTile.MaxX) * 0.5f * DpiScale,
+                          (timTile.MinY + timTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("启动器：「计时器」→ 关面板、计时窗开着（待机）",
+                  !ui.MoreOpenForTest && Host.State.TimerCardOpen && !Host.State.TimerSettingsOpen,
+                  $"panel={ui.MoreOpenForTest} card={Host.State.TimerCardOpen}");
+
+            // 计时窗真路：点大圆钮 → 跑；点数字 → 暂停；✕ = 停止并关窗
+            var tcard = TimerCardRect();
+            var tcardIn = TimerWin.CardRect(tcard, DpiScale, false);
+            float tlu = TimerWin.Layout(tcardIn, DpiScale);
+            var tstart = TimerWin.BtnRect(tcardIn, tlu, TimerZone.Start);
+            ClickPhysical((tstart.MinX + tstart.MaxX) * 0.5f, (tstart.MinY + tstart.MaxY) * 0.5f);
+            SettleFrames(250);
+            Check("计时窗：点大圆钮 → 跑起来", Host.State.TimerActive,
+                  $"active={Host.State.TimerActive}");
+            var tval = TimerWin.ValueRect(tcardIn, tlu);
+            ClickPhysical((tval.MinX + tval.MaxX) * 0.5f, (tval.MinY + tval.MaxY) * 0.5f);
+            SettleFrames(150);
+            Check("计时窗：点数字 = 暂停", Host.State.TimerPaused);
+            var tstop = TimerWin.BtnRect(tcardIn, tlu, TimerZone.Close);
+            ClickPhysical((tstop.MinX + tstop.MaxX) * 0.5f, (tstop.MinY + tstop.MaxY) * 0.5f);
+            SettleFrames(150);
+            Check("计时窗：✕ = 停止并关窗",
+                  !Host.State.TimerCardOpen && !Host.State.TimerActive);
+            // 三模式/改时长/到点/最小化/全屏那些细节在 `--timertest` 里逐条验，这里只验"启动器→窗"的真路。
+
+            // 点名格 → 点名窗（待抽态）；抽奖 → 滚动 → 定格；✕ 关窗
+            var moreCellB = ui.CellRectForTest(12);
+            ClickPhysical((moreCellB.MinX + moreCellB.MaxX) * 0.5f * DpiScale,
+                          (moreCellB.MinY + moreCellB.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            var rollTile = ui.HubTileRectForTest(1);
+            ClickPhysical((rollTile.MinX + rollTile.MaxX) * 0.5f * DpiScale,
+                          (rollTile.MinY + rollTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("启动器：「点名」→ 关面板、点名窗开着（待抽）",
+                  !ui.MoreOpenForTest && Host.State.RollCardOpen && Host.State.RollSettingsOpen,
+                  $"card={Host.State.RollCardOpen} set={Host.State.RollSettingsOpen}");
+            var rcard = RollCardRect();
+            var rdraw = RollWin.DrawRect(rcard, DpiScale);
+            ClickPhysical((rdraw.MinX + rdraw.MaxX) * 0.5f, (rdraw.MinY + rdraw.MaxY) * 0.5f);
+            Check("点名窗：抽奖后进入滚动", RollingNow);
+            {
+                double t2 = NowMs;
+                while (RollingNow && NowMs - t2 < 3000)
+                { DrainMessages(); Thread.Sleep(10); RollTickForTest(); }
+            }
+            Check("点名窗：定格出结果", !RollingNow && RollResultNow.Length > 0,
+                  $"结果 {RollResultNow.Length} 条");
+            rcard = RollCardRect();
+            var rclose = RollWin.CloseRect(rcard, DpiScale);
+            ClickPhysical((rclose.MinX + rclose.MaxX) * 0.5f, (rclose.MinY + rclose.MaxY) * 0.5f);
+            SettleFrames(150);
+            Check("点名窗：✕ 关窗", !Host.State.RollCardOpen);
+
+            // 命令格：空板书点「保存」，关面板 ＋ 引擎写"没有可保存"（点置灰也写状态）
+            Host.Commands.Clear();
+            SettleFrames(150);
+            var moreCell3 = ui.CellRectForTest(12);
+            ClickPhysical((moreCell3.MinX + moreCell3.MaxX) * 0.5f * DpiScale,
+                          (moreCell3.MinY + moreCell3.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            var saveTile = ui.HubTileRectForTest(3);
+            ClickPhysical((saveTile.MinX + saveTile.MaxX) * 0.5f * DpiScale,
+                          (saveTile.MinY + saveTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(200);
+            Check("启动器：空板书点「保存墨迹」→ 关面板、引擎写「没有可保存」",
+                  !ui.MoreOpenForTest && Host.State.InkStatus.Contains("没有可保存"),
+                  $"status={Host.State.InkStatus}");
+
+            // 「设置」格 → 设置子页；返回箭头回启动器
+            var moreCellD = ui.CellRectForTest(12);
+            ClickPhysical((moreCellD.MinX + moreCellD.MaxX) * 0.5f * DpiScale,
+                          (moreCellD.MinY + moreCellD.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            var setTile = ui.HubBottomRectForTest(0);
+            Check("启动器：底栏「设置」格命中码 = 150（区间不与格子串段）",
+                  ui.MoreHitForTest((setTile.MinX + setTile.MaxX) * 0.5f, (setTile.MinY + setTile.MaxY) * 0.5f)
+                    == 150,
+                  $"格 ({setTile.MinX:F0},{setTile.MinY:F0})-({setTile.MaxX:F0},{setTile.MaxY:F0})，"
+                  + $"命中 {ui.MoreHitForTest((setTile.MinX + setTile.MaxX) * 0.5f, (setTile.MinY + setTile.MaxY) * 0.5f)}");
+            ClickPhysical((setTile.MinX + setTile.MaxX) * 0.5f * DpiScale,
+                          (setTile.MinY + setTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("启动器：「设置」→ 设置子页", ui.MoreOpenForTest && ui.MorePageForTest == 1,
+                  $"page={ui.MorePageForTest}");
+            var backBtn = ui.MoreBackRectForTest;
+            ClickPhysical((backBtn.MinX + backBtn.MaxX) * 0.5f * DpiScale,
+                          (backBtn.MinY + backBtn.MaxY) * 0.5f * DpiScale);
+            SettleFrames(200);
+            Check("设置子页：返回箭头 → 回启动器", ui.MorePageForTest == 0, $"page={ui.MorePageForTest}");
+
+            // 再回设置子页，供下面几段"行"的用例用；面板换页高度会变，刷新 moreRect
+            var setTile2 = ui.HubBottomRectForTest(0);
+            ClickPhysical((setTile2.MinX + setTile2.MaxX) * 0.5f * DpiScale,
+                          (setTile2.MinY + setTile2.MaxY) * 0.5f * DpiScale);
+            SettleFrames(300);
+            moreRect = ui.MoreRectForTest;
+            Check("（准备）面板停在设置子页", ui.MoreOpenForTest && ui.MorePageForTest == 1,
+                  $"page={ui.MorePageForTest}");
         }
 
         // 六行都在面板里、互不重叠（"加一行漏一处"的老毛病用这条兜住）
@@ -15017,6 +15208,10 @@ internal sealed class App : InkEngine.InkEngine
         ClickPhysical((moreCell2.MinX + moreCell2.MaxX) * 0.5f * DpiScale,
                       (moreCell2.MinY + moreCell2.MaxY) * 0.5f * DpiScale);   // 开面板
         SettleFrames(250);
+        var setTileNav = ui.HubBottomRectForTest(0);
+        ClickPhysical((setTileNav.MinX + setTileNav.MaxX) * 0.5f * DpiScale,
+                      (setTileNav.MinY + setTileNav.MaxY) * 0.5f * DpiScale);   // 启动器 → 设置子页
+        SettleFrames(250);
         var hideRow2 = ui.RowRectForTest(1);
         ClickPhysical((hideRow2.MinX + hideRow2.MaxX) * 0.5f * DpiScale,
                       (hideRow2.MinY + hideRow2.MaxY) * 0.5f * DpiScale);
@@ -15030,6 +15225,10 @@ internal sealed class App : InkEngine.InkEngine
         ClickPhysical((moreCell4.MinX + moreCell4.MaxX) * 0.5f * DpiScale,
                       (moreCell4.MinY + moreCell4.MaxY) * 0.5f * DpiScale);   // 开面板
         SettleFrames(200);
+        var setTile45 = ui.HubBottomRectForTest(0);
+        ClickPhysical((setTile45.MinX + setTile45.MaxX) * 0.5f * DpiScale,
+                      (setTile45.MinY + setTile45.MaxY) * 0.5f * DpiScale);   // 设置子页（档位/宫格在这页）
+        SettleFrames(250);
 
         Check("完整档是 13 格", ui.VisibleCountForTest == 13, $"显示 {ui.VisibleCountForTest} 格");
 
@@ -15090,7 +15289,12 @@ internal sealed class App : InkEngine.InkEngine
         SettleFrames(250);
         Check("切回完整档", ui.VisibleCountForTest == 13, $"显示 {ui.VisibleCountForTest} 格");
 
-        // 取消钉住"图形"（下标 8）：档位自动变成自定义，主条上少一格
+        // 取消钉住"图形"（下标 8）：档位自动变成自定义，主条上少一格。
+        // ⚠ 宫格**只在自定义档显示**（2026-10-02 拍板），所以先切到自定义档再点宫格。
+        var customSeg = ui.ProfileRectForTest(1);
+        ClickPhysical((customSeg.MinX + customSeg.MaxX) * 0.5f * DpiScale,
+                      (customSeg.MinY + customSeg.MaxY) * 0.5f * DpiScale);
+        SettleFrames(250);
         var chip = ui.ChipRectForTest(8);
         ClickPhysical((chip.MinX + chip.MaxX) * 0.5f * DpiScale,
                       (chip.MinY + chip.MaxY) * 0.5f * DpiScale);
@@ -15266,6 +15470,14 @@ internal sealed class App : InkEngine.InkEngine
         ClickPhysical((moreCell6.MinX + moreCell6.MaxX) * 0.5f * DpiScale,
                       (moreCell6.MinY + moreCell6.MaxY) * 0.5f * DpiScale);       // 开面板
         SettleFrames(200);
+        var setTile9 = ui.HubBottomRectForTest(0);
+        ClickPhysical((setTile9.MinX + setTile9.MaxX) * 0.5f * DpiScale,
+                      (setTile9.MinY + setTile9.MaxY) * 0.5f * DpiScale);         // 设置子页
+        SettleFrames(250);
+        var customSeg9 = ui.ProfileRectForTest(1);
+        ClickPhysical((customSeg9.MinX + customSeg9.MaxX) * 0.5f * DpiScale,
+                      (customSeg9.MinY + customSeg9.MaxY) * 0.5f * DpiScale);     // 自定义档（宫格才显示）
+        SettleFrames(250);
         var chip6 = ui.ChipRectForTest(8);
         ClickPhysical((chip6.MinX + chip6.MaxX) * 0.5f * DpiScale,
                       (chip6.MinY + chip6.MaxY) * 0.5f * DpiScale);               // 取消钉住"图形"
@@ -15318,17 +15530,20 @@ internal sealed class App : InkEngine.InkEngine
         // 2026-09-19 把「学科工具」换成坐标系/数轴/网格三行），
         // 写死下标的话每插一次就要改一处引用，而且点错行时红的是那条断言本身
         // （"点重启没反应"）——2026-09-19 就是这么又红了一次。
-        var restartRow = ui.RowRectByLabelForTest("重启软件");
-        Check("自检能按标签找到「重启软件」那一行",
-              restartRow.MaxY > restartRow.MinY, $"行高 {restartRow.MaxY - restartRow.MinY:F0}");
+        // 「重启软件」现在在启动器的底栏（固定四格之一，不再是一行——2026-10-02 改版）
+        ui.SetMorePageForTest(0);       // 测试钩子：退回启动器主页
+        SettleFrames(150);
+        var restartTile = ui.HubBottomRectForTest(2);
+        Check("自检能按格找到「重启软件」（底栏固定位）",
+              restartTile.MaxY > restartTile.MinY, $"格高 {restartTile.MaxY - restartTile.MinY:F0}");
         // 造一个"上次崩溃抢救留下的残留"，并清掉自动存档从零开始：
         // **这一条是故意的**——新语义里光"不写会话暂存"是不够的，残留会被新进程读回去，
         // 那就成了"重启还带出旧板书"。所以必须被删掉。
         File.WriteAllBytes(Recovery.SessionPath, new byte[] { 1, 2, 3, 4 });
         Recovery.DeleteAuto();
 
-        ClickPhysical((restartRow.MinX + restartRow.MaxX) * 0.5f * DpiScale,
-                      (restartRow.MinY + restartRow.MaxY) * 0.5f * DpiScale);
+        ClickPhysical((restartTile.MinX + restartTile.MaxX) * 0.5f * DpiScale,
+                      (restartTile.MinY + restartTile.MaxY) * 0.5f * DpiScale);
         // 新语义（2026-09-22 用户定："重启就相当于电脑重启，墨迹不保存"）：
         // **判据和"界面崩了自己重建"那条路正好相反**——那条要求 SessionPath 存在
         //（见 `--uitest` 里"板书必须读得回来"那一条），因为那是 App 自己决定重启、
@@ -23091,9 +23306,8 @@ internal sealed class App : InkEngine.InkEngine
         _quit = true;
     }
 
-    /// <summary>
     /// `--replaytest`：墨迹回放自检（墨迹 C）。
-    /// 时间轴数学、前缀进度、暂停/倍速、只读不变量、控制条逐热区、点画布、翻页退出、放映中不响应。
+    /// 时间轴 / 前缀进度 / 暂停 / 倍速 / 只读 / 控制条 / 翻页退出 / 放映中当前页。
     /// </summary>
     private void ReplayTest()
     {

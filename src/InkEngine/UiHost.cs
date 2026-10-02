@@ -127,6 +127,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void OpenInkFile() => _engine.OpenInkFileFromUi();
     public void StartReplay() => _engine.StartReplayFromUi();
     public void StopReplay() => _engine.StopReplayFromUi();
+    public void OpenTimerCard() => _engine.OpenTimerCardFromUi();
+    public void OpenRollCard() => _engine.OpenRollCardFromUi();
+    public void OpenRollOne() => _engine.OpenRollOneFromUi();
     public void CheckUpdate() => _engine.CheckUpdateFromUi();
     public void ApplyUpdate() => _engine.ApplyUpdateFromUi();
 

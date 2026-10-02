@@ -55,6 +55,7 @@ internal static class Native
     public const int SW_HIDE = 0;
 
     public static readonly IntPtr HWND_TOPMOST = new(-1);
+    public static readonly IntPtr HWND_NOTOPMOST = new(-2);
 
     // ---- hotkey modifiers ------------------------------------------------
     public const uint MOD_ALT = 0x0001;
@@ -287,6 +288,11 @@ internal static class Native
 
     [DllImport("user32.dll")]
     public static extern bool WaitMessage();
+
+    /// <summary>课堂计时器到点的提示音（uType：0x40 = MB_ICONASTERISK）。
+    /// 用系统自带的那一声，不引音频库（计划 4.1）。返回值失败也无妨。</summary>
+    [DllImport("user32.dll")]
+    public static extern bool MessageBeep(uint uType);
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);

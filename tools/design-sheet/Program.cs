@@ -126,6 +126,10 @@ internal static partial class Program
         {
             RenderSheet(outDir, "图标-设计稿v5b-笔迹四选.png", DrawTrailSheet);
         }
+        if (sheet is "all" or "timerwin")
+            RenderSheet(outDir, "8.6.2-timer-window.png", DrawTimerWindowSheet);
+        if (sheet is "all" or "rollwin")
+            RenderSheet(outDir, "8.6.2-roll-window.png", DrawRollWindowSheet);
     }
 
     /// <summary>把每个绘制函数画成一张 PNG：高度由绘制函数自己算出来。</summary>

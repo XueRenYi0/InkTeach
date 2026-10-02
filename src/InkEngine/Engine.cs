@@ -1708,6 +1708,10 @@ public partial class InkEngine
             foreach (var w in InkSettings.LoadUiPrefs(UiPrefs))
                 Console.WriteLine("settings: " + w);
 
+        // 点名名单（`%APPDATA%\InkTeach\Names.txt`）：产品模式启动读一次；
+        // 自检不读用户的名单（判据要确定），要用就临时设 NamesPathOverride + ReloadNames。
+        if (mode.Length == 0) LoadClassroomPrefs();
+
         // 上次因为界面出问题重启过？把板书读回来（读走就删，只恢复一次）。
         // 自检/基准模式不掺和：那些模式不该被"上次留下的板书"影响判据。
         if (mode.Length == 0) RestoreSessionIfAny();
@@ -2317,6 +2321,8 @@ public partial class InkEngine
             StepCameraAnim();                 // 翻页动画（167ms）
             StepPpt();                        // PPT 放映联动（没变化时只读一个 bool，不碰 COM）
             StepPptBar();                     // 底部那两条的长按判定（只有按住那一会儿有活）
+            StepTimerCard();                  // 课堂计时卡片：推进秒数 / 到点 / 同步接输入小窗
+            StepRollCard();                   // 课堂点名卡片：滚动推进 / 同步接输入小窗
             if (NeedsFrame())
             {
                 // VBlankPaced：先等到合成边界，**再抽一次消息**，然后画、提交。
@@ -2382,6 +2388,8 @@ public partial class InkEngine
         // 两边都是幂等的（TakeDirty 取走就清、SameAs 挡重复）。
         StepPpt();
         StepPptBar();     // 底部那两条的长按判定（理由同上，自检那条路也走它）
+        StepTimerCard();  // 课堂计时卡片同理：自检用"抽消息＋渲染"驱动，不走主循环
+        StepRollCard();   // 课堂点名卡片同理
         PumpRadialPalette();   // 呼出盘同理：自检用"抽消息＋渲染"驱动，不走主循环
 
         // 书写期间的 GC 低延迟档：超时退回。放在这里**和自动存档同一个理由**——
@@ -2712,6 +2720,14 @@ public partial class InkEngine
         if (_pptInputHwnd != IntPtr.Zero && hWnd == _pptInputHwnd)
             return PptInputWndProc(hWnd, msg, wParam, lParam);
 
+        // 课堂计时卡片的"接输入小窗"（同一套方案；卡片和 PPT 条不相邻，所以单开一块）。
+        if (_timerInputHwnd != IntPtr.Zero && hWnd == _timerInputHwnd)
+            return TimerInputWndProc(hWnd, msg, wParam, lParam);
+
+        // 点名卡片的"接输入小窗"（同上）。
+        if (_rollInputHwnd != IntPtr.Zero && hWnd == _rollInputHwnd)
+            return RollInputWndProc(hWnd, msg, wParam, lParam);
+
         // 宿主自己的窗口（开发期的点击目标）先处理。产品界面不会用到这一层。
         if (HandleHostWindowMessage(hWnd, msg, wParam, lParam, out var hostResult))
             return hostResult;
@@ -2779,7 +2795,8 @@ public partial class InkEngine
                 // PPT 条（放映时底部那两条）也算"我的地盘"：**开着穿透时老师照样得能
                 // 点翻页 / 拖进度条**——不然那一下会落到下层 PPT 上，被它当成翻页点击。
                 bool mine = UiContains(hitX, hitY) || PptBarContains(hitX, hitY)
-                         || ReplayBarContains(hitX, hitY);
+                         || ReplayBarContains(hitX, hitY)
+                         || TimerCardContains(hitX, hitY) || RollCardContains(hitX, hitY);
                 if (mine) _cntNcHitClient++;
                 return new IntPtr(mine ? Native.HTCLIENT : Native.HTTRANSPARENT);
 
@@ -2914,6 +2931,12 @@ public partial class InkEngine
         // （见 CenterAndBringUp），关掉之后 ReturnFocusAfterDialog 再把覆盖层拾回来。
         if (ExportDialogOpen) return;
 
+        // **让路一拍**：前台是别的"置顶层"窗口（微信截图、Win+Shift+S 的截图条等）时不抬——
+        // 每秒一次的抬举会把我们重新压到它上面，截图框在屏幕上就永远看不见
+        // （用户 2026-10-03 报"系统截图被批注层盖住"）。等前台回到我们或普通窗口，
+        // 下一拍定时器自然抬回来。
+        if (ShouldYieldTopmost()) return;
+
         foreach (var w in _windows)
             Native.SetWindowPos(w.Hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
@@ -2924,6 +2947,28 @@ public partial class InkEngine
         if (_uiInputShown && _uiInputHwnd != IntPtr.Zero)
             Native.SetWindowPos(_uiInputHwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+    }
+
+    /// <summary>
+    /// 前台是不是"别的置顶层窗口"——是就让路一拍（截图工具/置顶播放器等都是这一层）。
+    /// 普通窗口不用让：我们抬上去本来就不挡它。
+    /// </summary>
+    private bool ShouldYieldTopmost()
+    {
+        var fg = Native.GetForegroundWindow();
+        if (fg == IntPtr.Zero) return false;
+        long ex = Native.GetWindowLongPtr(fg, Native.GWL_EXSTYLE).ToInt64();
+        if ((ex & Native.WS_EX_TOPMOST) == 0) return false;
+        return !IsOwnWindow(fg);
+    }
+
+    /// <summary>这个窗口是不是我们自己创建的（覆盖层 / 各接输入小窗）。</summary>
+    private bool IsOwnWindow(IntPtr h)
+    {
+        if (h == IntPtr.Zero) return false;
+        foreach (var w in _windows) if (w.Hwnd == h) return true;
+        return h == _uiInputHwnd || h == _pptInputHwnd
+            || h == _timerInputHwnd || h == _rollInputHwnd;
     }
 
     /// <summary>
@@ -2944,6 +2989,8 @@ public partial class InkEngine
         _animating = Laser.Visible || _drawing || SelFlashing
                    || UiIsAnimatingNow || _camAnimating
                    || _replayPlaying            // 回放播着：持续出帧（暂停即停）
+                   || TimerWantsFrame            // 计时器跑着/到点闪烁（倒计时 1Hz、秒表连续）
+                   || RollWantsFrame             // 点名滚动（80ms 一跳，定格即停）
                    || RadialPaletteActive;   // 呼出盘开着要连续出帧（出盘延迟 + 松手轮询）
         return _dirty || _animating;
     }
@@ -2998,9 +3045,10 @@ public partial class InkEngine
                 }
                 return;
             }
-            // 界面和 PPT 条都算"要接管"：先退出回放，这一下照常往下走
-            //（点 PPT 条 = 翻页/长按菜单/跳页；点界面 = 换工具/开面板）。
-            if (UiContains(screenX, screenY) || PptBarContains(screenX, screenY))
+            // 界面和 PPT 条、计时卡片都算"要接管"：先退出回放，这一下照常往下走
+            //（点 PPT 条 = 翻页/长按菜单/跳页；点界面 = 换工具/开面板；点卡片 = 暂停/停）。
+            if (UiContains(screenX, screenY) || PptBarContains(screenX, screenY)
+                || TimerCardContains(screenX, screenY) || RollCardContains(screenX, screenY))
             {
                 StopReplay("点界面或 PPT 条");
                 // 不 return：这一下照常给下面的界面 / PPT 条处理
@@ -3041,6 +3089,29 @@ public partial class InkEngine
             _uiHover = true;
             _drawing = false;
             _dirty = true;
+            return;
+        }
+
+        // 课堂计时卡片（引擎侧浮层）：**排在界面之后、PPT 条之前、穿透之前**——
+        // 和 PPT 条同一条规矩：看得见的那一块就是点得到的（穿透/放映下也要能暂停/停）。
+        if (TimerCardPointerDown(screenX, screenY))
+        {
+            _drawing = false;
+            _timerCapturing = true;         // 这一次归它：松手时由它收尾（见 OnPointerUp）
+            Native.SetCapture(hWnd);
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
+        // 课堂点名卡片（引擎侧浮层）：和计时卡同一槽位规则。
+        if (RollCardPointerDown(screenX, screenY))
+        {
+            _drawing = false;
+            _rollCapturing = true;
+            Native.SetCapture(hWnd);
+            _dirty = true;
+            ApplyCursor();
             return;
         }
 
@@ -3843,6 +3914,22 @@ public partial class InkEngine
         }
         if (_uiHover) { _uiHover = false; ApplyCursor(); }
 
+        // 课堂计时卡片：拖动跟手 / 悬停（排在 PPT 条之前、穿透之前——同按下顺序）。
+        if (!_drawing && TimerCardPointerMove(screenX, screenY))
+        {
+            ApplyCursor();
+            _dirty = true;
+            return;
+        }
+
+        // 课堂点名卡片：同上。
+        if (!_drawing && RollCardPointerMove(screenX, screenY))
+        {
+            ApplyCursor();
+            _dirty = true;
+            return;
+        }
+
         // 底部那两条 PPT 控件（放映时才在）：悬停高亮 / 进度条拖动。
         // 排在穿透之前——穿透时它的悬停与拖动照样要跟手。
         if (!_drawing && PptBarPointerMove(screenX, screenY))
@@ -3973,6 +4060,33 @@ public partial class InkEngine
         if (ScrollBarDragging)
         {
             EndScrollBarDrag();
+            Native.ReleaseCapture();
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
+        // 课堂计时卡片：**只要按下归过它，就无条件放开捕获**（哪怕卡片已经被 ✕ 关掉、
+        // 或者 ReadPointer 这一次失败）——漏掉这一句就是"整机鼠标挂在我们窗口上"。
+        if (_timerCapturing)
+        {
+            if (ReadPointer(id, out float tx, out float ty, out _, out _, out _))
+                TimerCardPointerUp(tx, ty);
+            _timerCapturing = false;
+            Native.ReleaseCapture();
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
+        // 课堂点名卡片：同上。
+        if (_rollCapturing)
+        {
+            if (ReadPointer(id, out float rx2, out float ry2, out _, out _, out _))
+                RollCardPointerUp(rx2, ry2);
+            _rollCapturing = false;
             Native.ReleaseCapture();
             _drawing = false;
             _dirty = true;
@@ -4307,6 +4421,8 @@ public partial class InkEngine
         // PPT 条那块小窗同理（它也是我们的窗口）。
         if (_uiInputHwnd != IntPtr.Zero) list.Add(_uiInputHwnd);
         if (_pptInputHwnd != IntPtr.Zero) list.Add(_pptInputHwnd);
+        if (_timerInputHwnd != IntPtr.Zero) list.Add(_timerInputHwnd);
+        if (_rollInputHwnd != IntPtr.Zero) list.Add(_rollInputHwnd);
         return list.ToArray();
     }
 
@@ -5674,7 +5790,9 @@ public partial class InkEngine
             return true;
         // 画布坐标 → 屏幕坐标只差一个垂直滚动量（ScreenToCanvas 就是 `y -= ViewOffsetY`），
         // x 没有滚动、直接用。
-        return PptBarContains(PointerX, PointerY + ViewOffsetY);
+        return PptBarContains(PointerX, PointerY + ViewOffsetY)
+            || TimerCardContains(PointerX, PointerY + ViewOffsetY)
+            || RollCardContains(PointerX, PointerY + ViewOffsetY);
     }
 
     /// <summary>
@@ -7887,6 +8005,18 @@ public partial class InkEngine
             _pptInputHwnd = IntPtr.Zero;
             _pptInputShown = false;
         }
+        if (_timerInputHwnd != IntPtr.Zero)
+        {
+            Native.DestroyWindow(_timerInputHwnd);
+            _timerInputHwnd = IntPtr.Zero;
+            _timerInputShown = false;
+        }
+        if (_rollInputHwnd != IntPtr.Zero)
+        {
+            Native.DestroyWindow(_rollInputHwnd);
+            _rollInputHwnd = IntPtr.Zero;
+            _rollInputShown = false;
+        }
 
         _windows.Clear();
         s_map.Clear();
@@ -8057,6 +8187,18 @@ public partial class InkEngine
         ReplayActive = ReplayActive,
         ReplayPlaying = ReplayPlaying,
         ReplaySpeed = ReplaySpeed,
+        // 「课堂」页：计时器状态 + 点名名单（点名全在界面层做，引擎只读盘/推状态）
+        TimerActive = TimerActive,
+        TimerPaused = TimerPaused,
+        TimerFinished = TimerFinished,
+        TimerMode = TimerKind,
+        TimerValueMs = TimerValueMs,
+        TimerCardOpen = TimerCardOpen,
+        TimerSettingsOpen = TimerSettingsOpen,
+        TimerExpanded = TimerExpanded,
+        RollCardOpen = RollCardOpen,
+        RollSettingsOpen = RollSettingsOpen,
+        Names = Names,
     };
 
     private void NotifyUiStateChanged()
