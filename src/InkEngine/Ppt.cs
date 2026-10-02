@@ -281,13 +281,11 @@ public partial class InkEngine
         LoadPptPages();
         // 位置：进放映时读一次（老师上次拖到哪儿，这次还在那儿——用户 2026-09-26 要的）。
         LoadPptBarPos();
-        // 引导：**每次进放映都提示一遍**（约 1.5 秒）——用户 2026-09-27 定的。
+        // 引导：**每次进放映都提示一遍**（约 1.5 秒）——用户 2026-09-27 定、
+        // 2026-10-02 第五轮改成"点页码：页码跳转菜单"。
         //
-        // 改动前后：原来是"只显示一次"（记进偏好），因为菜单当时有**两个**入口
-        //（点「⋮」+ 长按页码），提示一次就够；现在「⋮」删掉了，**菜单只剩长按**这一条路，
-        // "忘了就永远找不到"。用户的原话是"提示长按的那个信息，每次播放都要提示一次，
-        // 大概一两秒钟吧"——用**每次都提示、但很短**换掉"只提示一次"，比留一个
-        // 谁也注意不到的常驻小点更可靠（那 3 个点他本人都没看见）。
+        // 保留"每次都提示"的理由：菜单虽然改成了点一下就能看见，但老师未必会去点
+        // 那个数字；一行 1.5 秒的小字最省事，也不会挡着讲课（用户要的是"一两秒钟"）。
         _pptHintUntilMs = NowMs + PptHintMs;
         GotoPage(PageKeyOf(s));
         NotifyUiStateChanged();
@@ -312,7 +310,7 @@ public partial class InkEngine
         PptClearConfirm = false;
         _pptHintUntilMs = 0;
         PptBarHover = -1;
-        CancelPptLongPress();
+        CancelPptPress();
 
         SaveAllPptPages();
         PptSlide = 0;
@@ -453,15 +451,15 @@ public partial class InkEngine
     }
 
     // =================================================================================
-    //  底部那两条（PptBar）：翻页 / 页码 / 进度条 / 长按菜单
+    //  底部那一条（PptBar）：翻页 / 页码 / 菜单
     //
     //  用户 2026-09-26 拍板："模仿 Inkeys 显示在外部"（贴在 PPT 页面上、不跟工具条走），
-    //  位置 = 底部左右各一条；带可拖的进度条；**页码那一格长按 600ms 弹菜单**。
+    //  位置 = 默认屏幕左下角、可拖、位置落盘。
     //
     //  手势分工（三条互不抢，判据就是 PptBar.ZoneAt 一人一半的那几块）：
     //    · 箭头：**点一下 = 翻一页**；
-    //    · 进度条：**点 / 拖 = 跳页**（拖动中只预览页码，松手才真跳）；
-    //    · 页码格：**长按 = 菜单**（第一批只有"结束放映"，后期往 PptMenuItems 加行）。
+    //    · 页码格：**点一下 = 菜单**（2026-10-02 第五轮；第一项「指定页码跳转」
+    //      打开页号面板，点哪页跳哪页）、**按下后移动 = 拖条**；没有长按。
     //  几何在 PptBar.cs，绘制在 Overlay.DrawPptBar（浮层，和选中操作条同一套）。
     // =================================================================================
 
@@ -487,15 +485,12 @@ public partial class InkEngine
     /// <summary>菜单开着的（点菜单外 = 先收起、这一下照常往下走）。</summary>
     internal bool PptMenuOpen { get; private set; }
 
-    /// <summary>页号面板开着的（**点页码格**弹出来的那张，见 PptBar.PanelRect）。</summary>
+    /// <summary>页号面板开着的（从菜单第一项「指定页码跳转」进来，见 PptBar.PanelRect）。</summary>
     internal bool PptPagePanelOpen { get; private set; }
 
     /// <summary>悬停的块：100＋i = 菜单第 i 项，200＋i = 面板第 i 格，否则 = <see cref="PptBarZone"/> 的值；
     /// -1 = 没悬停。绘制拿它画高亮（和 `SelBarHover` 同一个套路）。</summary>
     internal int PptBarHover = -1;
-
-    /// <summary>长按进度 0~1（绘制画一条进度线——没有反馈的长按等于没实现）。</summary>
-    internal float PptLongPressProgress { get; private set; }
 
     /// <summary>
     /// 正在拖这条（**按下之后移动够了就算**，不用先长按——用户 2026-09-26 定的
@@ -504,7 +499,9 @@ public partial class InkEngine
     internal bool PptBarDragging { get; private set; }
 
     private float _pptPressX, _pptPressY;       // 按下时的指针位置（判拖动阈值用）
-    private double _pptPressAtMs = -1;          // 长按起点（-1 = 没在长按）
+    /// <summary>页码格被按下、还没决定是"单击"还是"拖动"。
+    /// 2026-10-02 第五轮起**没有长按**了：没动过 = 单击（开菜单）、移动超阈值 = 拖条。</summary>
+    private bool _pptPressed;
     private float _pptGrabDX, _pptGrabDY;       // 拿起那一刻指针相对条左上角的偏移（拖动手感）
 
     /// <summary>这一次按下被条吃掉了（引擎在 <c>OnPointerUp</c> 里据此把收尾交回来）。
@@ -563,7 +560,7 @@ public partial class InkEngine
     /// **每次进放映**都显示，时长见 <see cref="PptHintMs"/>（不再记偏好，见 EnterPptMode）。</summary>
     private double _pptHintUntilMs;
 
-    /// <summary>引导停留时长（毫秒）。1.5 秒：够看清"长按页码可呼出菜单"这一行，
+    /// <summary>引导停留时长（毫秒）。1.5 秒：够看清"点页码：页码跳转菜单"这一行，
     /// 又不至于挡着讲课（用户要的是"一两秒钟"）。</summary>
     private const double PptHintMs = 1500;
 
@@ -579,33 +576,35 @@ public partial class InkEngine
     /// 对齐照样成立，而多出来的那两个字把没说清的地方补齐了：
     /// **所有**（清的是这一份 PPT 的全部，不是当前页）、**自动**（不用手动存）、
     /// **本次**（结束的是这一场放映，不是改 PPT 本身）。
-    /// 2026-10-01 用户提议加上"回放本页墨迹"（放映时手就在条上，不用再去开中央面板），
-    /// 六个字照样齐；分组 = [存/放] | [清空] | [结束]（前两项都不破坏内容）。
+    /// 2026-10-01 用户提议加上"回放本页墨迹"。**2026-10-02 第五轮**：取消长按入口，
+    /// 改成"点页码 = 菜单"，并把原来的页号面板降为第一项"**指定页码跳转**"——
+    /// 这样"跳页"和"退出"一个点击就都看得见，不再依赖隐藏手势。
+    /// 分组 = [跳转] | [存/放] | [清空] | [结束]。
     /// </summary>
     private static readonly string[] PptMenuItems =
-        { "自动保存墨迹", "回放本页墨迹", "清空所有墨迹", "结束本次放映" };
+        { "指定页码跳转", "自动保存墨迹", "回放本页墨迹", "清空所有墨迹", "结束本次放映" };
 
     internal static int PptMenuItemCount => PptMenuItems.Length;
 
-    /// <summary>菜单项之间画分隔线的位置（在第 i 项**之前**画）。[存/放] | [清空] | [结束]。 </summary>
-    internal static bool PptMenuDividerBefore(int i) => i is 2 or 3;
+    /// <summary>菜单项之间画分隔线的位置（在第 i 项**之前**画）。[跳转] | [存/放] | [清空] | [结束]。</summary>
+    internal static bool PptMenuDividerBefore(int i) => i is 1 or 3 or 4;
 
     /// <summary>这一项是危险动作吗（"墨迹清空"）——绘制据此上强调色（等确认时也用它）。</summary>
-    internal static bool PptMenuItemDanger(int i) => i == 2;
+    internal static bool PptMenuItemDanger(int i) => i == 3;
 
     /// <summary>第 i 项这一刻显示的文字（"清空所有墨迹"等确认时变成"再点确认"）。</summary>
     internal string PptMenuItemText(int i)
-        => i == 2 && PptClearConfirm ? "再点确认" : PptMenuItems[i];
+        => i == 3 && PptClearConfirm ? "再点确认" : PptMenuItems[i];
 
     /// <summary>第 i 项右边的状态文字（开关 = 开/关；回放 = N 笔）。其余返回 null。</summary>
     internal string PptMenuItemStatus(int i)
-        => i == 0 ? (PptAutoSaveOn ? "开" : "关")
-         : i == 1 ? $"{Doc.Strokes.Count} 笔"
+        => i == 1 ? (PptAutoSaveOn ? "开" : "关")
+         : i == 2 ? $"{Doc.Strokes.Count} 笔"
          : null;
 
     /// <summary>这一项这一刻能不能点。"回放本页墨迹"没笔迹时**置灰**——
     /// 点是老师最自然的动作，"点了没反应"最伤人（右邻的"0 笔"顺便把原因说清）。</summary>
-    internal bool PptMenuItemEnabled(int i) => i != 1 || Doc.Strokes.Count > 0;
+    internal bool PptMenuItemEnabled(int i) => i != 2 || Doc.Strokes.Count > 0;
 
     /// <summary>虚拟桌面矩形（物理像素）。</summary>
     private RectF ScreenRectPhysical() => new()
@@ -729,12 +728,12 @@ public partial class InkEngine
     /// <summary>
     /// 按下：**返回 true = 这一下归它**（引擎不再当笔画处理）。
     ///
-    /// 判定顺序（四个手势的分工，写死在这里）：
+    /// 判定顺序（三个手势的分工，写死在这里）：
     ///   ① 菜单 → 面板（先问最上面那两个浮层）；
     ///   ② 箭头：**按下即翻页**（最高频操作，不给它延迟）；
-    ///   ③ 页码格：**先只记录，不下结论**——同一个按下可能是"点（弹面板）"、
-    ///      "长按不动（弹菜单）"或"长按后拖（挪位置）"，要等时间和位移才分得出来
-    ///      （见 <see cref="StepPptBar"/> 与 <see cref="PptBarPointerUp"/>）。
+    ///   ③ 页码格：**先只记录，不下结论**——没动过 = 单击（开菜单）、
+    ///      移动超阈值 = 拖条（见 <see cref="PptBarPointerMove"/> 与
+    ///      <see cref="PptBarPointerUp"/>）。**长按自 2026-10-02 第五轮起不是入口了**。
     /// </summary>
     internal bool PptBarPointerDown(float x, float y)
     {
@@ -759,7 +758,6 @@ public partial class InkEngine
             PptClearConfirm = false;               // 菜单关了，"等确认"也一起放掉
             _dirty = true;
             // 点在页码格上 = "再点一次收起"：吃掉它，别再打开（不收就成了点不掉的鬼打墙）
-            // ——「⋮」删掉之后（2026-09-27），这一下对应的就是原来"再点 ⋮"那条路。
             if (PptBar.ZoneAt(PptBarRect(), x, y, DpiScale) == PptBarZone.Page) return true;
         }
 
@@ -799,14 +797,12 @@ public partial class InkEngine
         if (zone == PptBarZone.LeftArrow) { PptPrevFromUi(); return true; }
         if (zone == PptBarZone.RightArrow) { PptNextFromUi(); return true; }
 
-        // 页码格：**先只记录，不下结论**——同一个按下可能是"点一下（弹页号面板）"、
-        // "长按不动（弹菜单）"或"长按后拖（挪位置）"，要等时间和位移才分得出来
-        //（见 StepPptBar 与 PptBarPointerUp）。
-        // ⚠ 「⋮」删掉之后，**菜单只有长按这一条入口**了（用户 2026-09-27 定的取舍，
-        //   用"每次放映都提示 1.5 秒"的引导兜住，见 EnterPptMode）。
+        // 页码格：**先只记录，松手再决定**——没动过 = 单击（开菜单）；
+        // 移动超阈值 = 拖条（见 PptBarPointerMove / PptBarPointerUp）。
+        // 长按（600ms）自 2026-10-02 第五轮起**不再是入口**：点一下就把菜单摊开，
+        // "长按"整段空出来留给"功能提示"的触摸长按。
         _pptPressX = x; _pptPressY = y;
-        _pptPressAtMs = NowMs;                     // 长按计时从这里起
-        PptLongPressProgress = 0f;
+        _pptPressed = true;
         _dirty = true;
         return true;
     }
@@ -816,20 +812,15 @@ public partial class InkEngine
     {
         if (!PptMode) return false;
 
-        // ---- 按下之后移动够了 = **直接拖动**（不用先长按）----
-        // 用户 2026-09-26 定的："点中页码那一块直接拖动就能走"。这正是"点击 vs 拖动"的
-        // 通用语言（Excel 调列宽、网页拖滑块都这么分）：好处是拖动**不用等那 600ms**，
-        // 而长按就回归本职——到点直接弹菜单（见 StepPptBar）。
+        // ---- 按下之后移动够了 = **直接拖动**（不用先长按——用户 2026-09-26 定的
+        // "点中页码那一块直接拖动就能走"）。这正是"点击 vs 拖动"的
+        // 通用语言（Excel 调列宽、网页拖滑块都这么分）：拖动**不用等那 600ms**，
+        // 而单击回归本职——松手弹菜单（2026-10-02 第五轮起，见 PptBarPointerUp）。
         float moved = Math.Abs(x - _pptPressX) + Math.Abs(y - _pptPressY);
-        if (_pptPressAtMs >= 0 && !PptBarDragging && moved > PptBar.DragSlop * DpiScale)
+        if (_pptPressed && !PptBarDragging && moved > PptBar.DragSlop * DpiScale)
         {
-            // **拖起来了就不再是"长按"**：把长按计时器清掉。
-            // 不清的话 600ms 一到 `StepPptBar` 照样弹菜单——用户 2026-09-27 报的就是
-            // "拖动 PPT 页码那块的时候，它好像还会弹出'结束放映'的菜单"。
-            // "拖"和"长按"是互斥的两条路（按下就拖 = 想挪位置；按住不动 = 想弹菜单），
-            // 走得慢、或在拖动路上超过 600ms，都不该再弹。
-            _pptPressAtMs = -1;
-            PptLongPressProgress = 0f;
+            // 拖起来了就不再是"单击"：把按下标记清掉（松手时不会再弹菜单）。
+            _pptPressed = false;
             PptBarDragging = true;
             // 抓起那一刻记下"指针相对条左上角的偏移"：拖动时条才抓在指针原来按的那个点上
             var b0 = PptBarRect();
@@ -881,10 +872,9 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 抬起。松手这一刻才决定"这一个长按"到底是什么：
+    /// 抬起。松手这一刻才决定"这一次按下"到底是什么：
     ///   · 拖过 → **放下**（存位置，重启还在）；
-    ///   · 拿起但没动过 → **弹菜单**；
-    ///   · 没拿起（短按）→ 页码格上就是**弹页号面板**。
+    ///   · 没动过 + 在页码格上 → **弹菜单**（2026-10-02 第五轮；菜单第一项 = 指定页码跳转）。
     /// </summary>
     internal void PptBarPointerUp(float x, float y)
     {
@@ -896,41 +886,40 @@ public partial class InkEngine
             _pptBarX = p.X; _pptBarY = p.Y;
             SavePptBarPos();                       // 记住（下次打开还在）
             PptBarDragging = false;
-            PptLongPressProgress = 0f;
             _dirty = true;
             Console.WriteLine($"[PPT] 条已挪到 ({p.X / DpiScale:F0}, {p.Y / DpiScale:F0}) 逻辑像素");
             return;
         }
 
-        // 短按（没到 600ms 也没拖动）：只有"在页码格上松手"才算数
-        //（箭头在按下那一刻就翻过页了；长按到点已经弹了菜单、_pptPressAtMs 也清了）
-        if (_pptPressAtMs >= 0)
+        // 单击（没拖动过）：只有"在页码格上松手"才算数——**页码格单击 = 开菜单**
+        //（2026-10-02 第五轮；箭头在按下那一刻就翻过页了，走不到这里）。
+        // 页号面板从此是菜单第一项「指定页码跳转」，不再直接挂在单击上。
+        if (_pptPressed)
         {
-            _pptPressAtMs = -1;
-            PptLongPressProgress = 0f;
+            _pptPressed = false;
             if (PptBar.ZoneAt(PptBarRect(), x, y, DpiScale) == PptBarZone.Page)
             {
-                PptPagePanelOpen = true;           // 点页码 = 弹出页号面板（快速跳页）
-                PptMenuOpen = false;
+                PptMenuOpen = true;
+                PptPagePanelOpen = false;
+                PptClearConfirm = false;
                 _dirty = true;
-                Console.WriteLine($"[PPT] 页号面板打开（共 {PptTotal} 页）");
+                Console.WriteLine($"[PPT] 页码菜单打开（共 {PptTotal} 页）");
             }
         }
     }
 
-    private void CancelPptLongPress()
+    /// <summary>取消这一次"按下"（指针丢了 / 退出放映）：按下标记和拖动状态一起清掉。</summary>
+    private void CancelPptPress()
     {
-        if (_pptPressAtMs < 0 && !PptBarDragging && PptLongPressProgress <= 0f) return;
-        _pptPressAtMs = -1;
+        if (!_pptPressed && !PptBarDragging) return;
+        _pptPressed = false;
         PptBarDragging = false;
-        PptLongPressProgress = 0f;
         _dirty = true;
     }
 
     /// <summary>
-    /// 每帧推进长按。到位那一刻**不是弹菜单、而是"拿起"**——
-    /// 菜单还是拖动要看松手时有没有移动过（见 <see cref="PptBarPointerUp"/>）。
-    /// 绘制按 <see cref="PptBarArmed"/> 把条画成"浮起"的样子，告诉老师"可以拖了"。
+    /// 每帧推进（2026-10-02 第五轮起**没有长按**了）：只做两件到点的事——
+    /// 引导卡过期、清空"再点确认"过期。接输入小窗的同步也在这里。
     /// </summary>
     internal void StepPptBar()
     {
@@ -947,28 +936,6 @@ public partial class InkEngine
         if (PptClearConfirm && NowMs - _pptClearConfirmAt > PptConfirmMs)
         {
             PptClearConfirm = false;
-            _dirty = true;
-        }
-
-        if (_pptPressAtMs < 0) return;
-
-        float p = (float)((NowMs - _pptPressAtMs) / PptBar.LongPressMs);
-        if (p >= 1f)
-        {
-            // 到点**直接弹菜单**（不用等松手）：想拖走的老师按下去就拖了（见 PptBarPointerMove），
-            // 根本不会等这 600ms——两者在时间上天然分开，不用再拿"松手时动没动过"去猜。
-            _pptPressAtMs = -1;
-            PptLongPressProgress = 0f;
-            PptMenuOpen = true;
-            PptPagePanelOpen = false;
-            PptClearConfirm = false;
-            _dirty = true;
-            Console.WriteLine("[PPT] 长按菜单打开");
-        }
-        else
-        {
-            // 进度每帧都在变（只有长按那一小会儿）：绘制画它给老师一个"按住有反应"。
-            PptLongPressProgress = p;
             _dirty = true;
         }
     }
@@ -1173,16 +1140,23 @@ public partial class InkEngine
     {
         switch (index)
         {
-            case 0:                                  // 墨迹保存（开关）
+            case 0:                                  // 指定页码跳转（2026-10-02 第五轮）
+                PptMenuOpen = false;
+                PptClearConfirm = false;             // 菜单关了，"等确认"一起放掉
+                PptPagePanelOpen = true;             // 原来的"点页码直接出面板"降到这里
+                _dirty = true;
+                Console.WriteLine($"[PPT] 页号面板打开（共 {PptTotal} 页）");
+                return;
+            case 1:                                  // 墨迹保存（开关）
                 TogglePptAutoSave();
                 return;                              // 菜单留着，让老师看见"开 → 关"
-            case 1:                                  // 回放本页墨迹（收起菜单，起当前页回放）
+            case 2:                                  // 回放本页墨迹（收起菜单，起当前页回放）
                 PptMenuOpen = false;
                 PptClearConfirm = false;             // 菜单关了，"等确认"一起放掉
                 _dirty = true;
                 StartReplay();                       // 与中央面板「墨迹回放」同一个入口
                 return;
-            case 2:                                  // 墨迹清空（两段确认）
+            case 3:                                  // 墨迹清空（两段确认）
                 if (!PptClearConfirm)
                 {
                     PptClearConfirm = true;
@@ -1196,7 +1170,7 @@ public partial class InkEngine
                 PptMenuOpen = false;
                 _dirty = true;
                 return;
-            case 3:                                  // 结束放映
+            case 4:                                  // 结束放映
                 PptMenuOpen = false;
                 PptExitFromUi();
                 return;

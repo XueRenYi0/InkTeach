@@ -1340,6 +1340,11 @@ public partial class InkEngine
     /// `--predictlead N` 调前带量上限。
     /// </summary>
     internal bool PredictEnabled;
+
+    /// <summary>数据来源：`--predict` 命令行开着（对照实验用，优先于 `ui.predict` 偏好）。</summary>
+    private bool _predictArg;
+    /// <summary>墨迹预测的偏好键（默认关，只在开时写 "1"）。</summary>
+    private const string PredictPrefKey = "predict";
     /// <summary>
     /// 正在写的这一笔**已经交给系统合成器画**了吗（<see cref="FeedInkTrail"/> 真的喂了点）。
     /// 喂过就不再加自己的渲染尾——两边一起补会在笔尖前面重复画出一小截。
@@ -1447,6 +1452,9 @@ public partial class InkEngine
     /// 启动时先读用户配置的覆盖项，退出时把改动写回去。
     /// </summary>
     internal KeyMap Keys = KeyMap.Default();
+
+    /// <summary>某个动作当前的键位文本（界面悬停提示用；键位表的唯一起源见 KeyBindings.cs）。</summary>
+    internal string KeyTextFor(KeyAction action) => Keys.KeyText(action);
 
     internal int _virtualX, _virtualY, _virtualW, _virtualH;
 
@@ -1763,7 +1771,12 @@ public partial class InkEngine
         // 关的理由见 PredictEnabled 那段注释：真笔那条 DWM 不画我们的预测点（白喂），
         // 鼠标/触摸那条自绘尾会"一出一进"（末端突突跳），而收益又测不出来。
         // 想要对照就 `--predict`；开了之后 --predictms 调地平线、--predictlead 调前带量。
-        PredictEnabled = args.Contains("--predict");
+        //
+        // 2026-10-02：加进「更多 → 设置 → 书写 → 墨迹预测」开关（默认关，地平线固定 10ms）。
+        // 偏好键 `ui.predict`（只在开时写 "1"）；**命令行 `--predict` 优先**（对照实验用）。
+        _predictArg = args.Contains("--predict");
+        PredictEnabled = _predictArg;
+        if (!_predictArg && GetUiPref(PredictPrefKey) == "1") PredictEnabled = true;
         for (int i = 0; i < args.Length - 1; i++)
             if (args[i] == "--predictms" && double.TryParse(args[i + 1], out double pm))
                 _predictor.HorizonMs = pm;
@@ -2098,7 +2111,9 @@ public partial class InkEngine
             // 调参时"我到底调上了没有"必须一眼看得见：这里印的是**生效值**，不是"可用/不可用"。
             // （2026-09-22 用户碰到的两个坑：--predictms 100 被静默夹到 15；--noinktrail 生效了没有
             //   只能靠猜。这两件事都不该靠猜。）
-            Console.WriteLine($"笔迹预测: {(PredictEnabled ? "开（--predict）" : "关（默认）")}"
+            Console.WriteLine($"笔迹预测: {(PredictEnabled
+                ? (_predictArg ? "开（--predict）" : "开（设置）")
+                : "关（默认）")}"
                               + $"，地平线 {PredictHorizonMs:F0} ms（推荐 8~{InkPredictor.MaxHorizonMs:F0}，硬上限 {InkPredictor.HardMaxHorizonMs:F0}）"
                               + $"，前带量上限 {PredictLeadCap:F0} px");
             Console.WriteLine($"预测尾（鼠标/触摸自画的那一截）：{(OverlayWindow.InkTrailEnabled
@@ -2320,7 +2335,8 @@ public partial class InkEngine
             Laser.Prune(NowMs);
             StepCameraAnim();                 // 翻页动画（167ms）
             StepPpt();                        // PPT 放映联动（没变化时只读一个 bool，不碰 COM）
-            StepPptBar();                     // 底部那两条的长按判定（只有按住那一会儿有活）
+            StepPptBar();                     // 底部那条：引导过期 / "再点确认"过期（没有长按了）
+            StepEngineTooltip();              // 引擎侧悬停提示的 500ms 延迟（到点点亮）
             StepTimerCard();                  // 课堂计时卡片：推进秒数 / 到点 / 同步接输入小窗
             StepRollCard();                   // 课堂点名卡片：滚动推进 / 同步接输入小窗
             if (NeedsFrame())
@@ -2387,7 +2403,7 @@ public partial class InkEngine
         // 的理由）；反过来，空闲无帧时也要能响应翻页，所以 Loop 里那一句不能省。
         // 两边都是幂等的（TakeDirty 取走就清、SameAs 挡重复）。
         StepPpt();
-        StepPptBar();     // 底部那两条的长按判定（理由同上，自检那条路也走它）
+        StepPptBar();     // 底部那条：引导过期 / "再点确认"过期（理由同上，自检那条路也走它）
         StepTimerCard();  // 课堂计时卡片同理：自检用"抽消息＋渲染"驱动，不走主循环
         StepRollCard();   // 课堂点名卡片同理
         PumpRadialPalette();   // 呼出盘同理：自检用"抽消息＋渲染"驱动，不走主循环
@@ -2649,47 +2665,9 @@ public partial class InkEngine
     private string SelectModeTag()
         => Tool == Tool.Marquee ? (SelMode == SelectMode.Lasso ? "·套索" : "·矩形") : "";
 
-    /// <summary>工具名（遥测 / HUD / 日志用）。</summary>
-    private static string ToolName(Tool t) => t switch
-    {
-        Tool.Pen => "笔",
-        Tool.Highlighter => "荧光笔",
-        Tool.Laser => "激光笔",
-        Tool.Eraser => "橡皮擦",
-        Tool.PixelEraser => "像素橡皮",
-        Tool.Capture => "截图",
-        Tool.Marquee => "框选",
-        Tool.Line => "直线",
-        Tool.Rectangle => "矩形",
-        Tool.Ellipse => "椭圆",
-        Tool.Circle => "圆",
-        Tool.Triangle => "三角形",
-        Tool.Parallelogram => "平行四边形",
-        Tool.Arrow => "箭头",
-        // 2026-09-20 补：这六个以前落在 `_ => "?"`，HUD 和橡皮日志里显示成问号
-        //（加图形时最容易漏的一处，因为漏了不报错、只是显示难看）。
-        Tool.Coordinate => "坐标系",
-        Tool.NumberLine => "数轴",
-        Tool.Parabola => "抛物线",
-        Tool.Hyperbola => "双曲线",
-        Tool.Sine => "正弦",
-        Tool.Cosine => "余弦",
-        Tool.Wave => "波浪线",
-        Tool.Tangent => "正切",
-        Tool.Cylinder => "圆柱",
-        Tool.Cone => "圆锥",
-        Tool.Cuboid => "长方体",
-        Tool.Tetrahedron => "四面体",
-        // ⚠ **加图形别忘了这里**（漏了不报错，只是 HUD / 日志里显示成问号）。
-        // 2026-09-22 补上一批漏掉的五个（圆台 / 球 / 棱柱 / 棱锥 / 棱台）＋ 本批的椭圆（带焦点）。
-        Tool.ConeFrustum => "圆台",
-        Tool.Sphere => "球",
-        Tool.Prism => "棱柱",
-        Tool.Pyramid => "棱锥",
-        Tool.Frustum => "棱台",
-        Tool.ConicEllipse => "椭圆（带焦点）",
-        _ => "?",
-    };
+    /// <summary>工具名（遥测 / HUD / 日志用）。名字表在公开的 <see cref="ToolNames"/>——
+    /// 界面层的悬停提示也读同一份（2026-10-02），避免两处各写一份。</summary>
+    private static string ToolName(Tool t) => ToolNames.Of(t);
 
     // =====================================================================
     //  Window procedure
@@ -2823,6 +2801,7 @@ public partial class InkEngine
                 // 指针离开窗口：落点反馈（橡皮圆环、笔尖环）必须跟着消失，
                 // 否则手一移开，屏幕上就留下一个圈。
                 PointerInside = false;
+                ClearEngineTooltip();          // 悬停提示同理：人走了，提示不能留在屏幕上
                 _dirty = true;
                 ApplyCursor();
                 // 注意：**这里不能叫 Ui.PointerLeave()**。覆盖层的"离开"在面板接管输入时
@@ -2832,6 +2811,7 @@ public partial class InkEngine
 
             case Native.WM_MOUSELEAVE:
                 PointerInside = false;
+                ClearEngineTooltip();
                 _dirty = true;
                 ApplyCursor();
                 return IntPtr.Zero;
@@ -2991,7 +2971,8 @@ public partial class InkEngine
                    || _replayPlaying            // 回放播着：持续出帧（暂停即停）
                    || TimerWantsFrame            // 计时器跑着/到点闪烁（倒计时 1Hz、秒表连续）
                    || RollWantsFrame             // 点名滚动（80ms 一跳，定格即停）
-                   || RadialPaletteActive;   // 呼出盘开着要连续出帧（出盘延迟 + 松手轮询）
+                   || RadialPaletteActive        // 呼出盘开着要连续出帧（出盘延迟 + 松手轮询）
+                   || TooltipPending;            // 引擎侧悬停提示还在等 500ms（到点要有人点亮它）
         return _dirty || _animating;
     }
 
@@ -3003,6 +2984,7 @@ public partial class InkEngine
     {
         StampInput();
         _cntDown++;
+        ClearEngineTooltip();            // 按下 = 新动作开始，悬停提示先收
         uint id = (uint)(wParam.ToInt64() & 0xFFFF);
         if (!ReadPointer(id, out float sx, out float sy, out float pressure, out bool inverted, out uint ptype)) return;
         LastPointerType = ptype;
@@ -3070,7 +3052,8 @@ public partial class InkEngine
         //
         // 注：面板在实际产品里由"接输入小窗"（方案 B）接管，走的不是这条路；
         // 这里留着是**兜底**——万一那块小窗没建起来，至少非穿透模式下还能用。
-        if (UiPointerDown(screenX, screenY, pressure, ptype == Native.PT_PEN, inverted))
+        if (UiPointerDown(screenX, screenY, pressure, ptype == Native.PT_PEN, inverted,
+                          ptype == Native.PT_TOUCH, id))
         {
             _drawing = false;
             // 界面也要捕获指针：拖出悬浮条、在按钮上滑开都需要继续收到消息。
@@ -3895,7 +3878,8 @@ public partial class InkEngine
         // 界面捕获了指针（例如按下按钮后滑出去），消息全归界面。
         if (UiCapturing)
         {
-            UiPointerMove(screenX, screenY, pressure, false, inverted);   // 逻辑屏幕坐标
+            ClearEngineTooltip();
+            UiPointerMove(screenX, screenY, pressure, false, inverted, id);   // 逻辑屏幕坐标
             _dirty = true;
             return;
         }
@@ -3906,8 +3890,9 @@ public partial class InkEngine
         // **捕获分支**会转发，而"鼠标停在按钮上"恰恰是没捕获的状态——
         // 于是界面的悬停永远不会亮，而且不报错，只是"感觉不跟手"。
         // 书写中不转发：那一笔已经归画布了，界面这时候不该再动。
-        if (!_drawing && UiPointerMove(screenX, screenY, pressure, ptype == Native.PT_PEN, inverted))
+        if (!_drawing && UiPointerMove(screenX, screenY, pressure, ptype == Native.PT_PEN, inverted, id))
         {
+            ClearEngineTooltip();                 // 指针在界面那条上：引擎侧提示让位
             if (!_uiHover) { _uiHover = true; ApplyCursor(); }
             _dirty = true;
             return;
@@ -3917,6 +3902,7 @@ public partial class InkEngine
         // 课堂计时卡片：拖动跟手 / 悬停（排在 PPT 条之前、穿透之前——同按下顺序）。
         if (!_drawing && TimerCardPointerMove(screenX, screenY))
         {
+            ClearEngineTooltip();
             ApplyCursor();
             _dirty = true;
             return;
@@ -3925,6 +3911,7 @@ public partial class InkEngine
         // 课堂点名卡片：同上。
         if (!_drawing && RollCardPointerMove(screenX, screenY))
         {
+            ClearEngineTooltip();
             ApplyCursor();
             _dirty = true;
             return;
@@ -3934,17 +3921,19 @@ public partial class InkEngine
         // 排在穿透之前——穿透时它的悬停与拖动照样要跟手。
         if (!_drawing && PptBarPointerMove(screenX, screenY))
         {
+            UpdateEngineTooltip();                // 条上的悬停提示（页码/箭头/菜单）
             ApplyCursor();
             _dirty = true;
             return;
         }
 
         // 穿透模式：我们不收输入，也不该动光标（那是下层窗口的事）。
-        if (PassThrough) { _dirty = true; return; }
+        if (PassThrough) { ClearEngineTooltip(); _dirty = true; return; }
 
         // 拖滚动条：和"画一笔"互斥。
         if (ScrollBarDragging)
         {
+            ClearEngineTooltip();
             UpdateScrollBarDrag(screenY);
             ApplyCursor();
             _dirty = true;
@@ -3957,6 +3946,7 @@ public partial class InkEngine
             // 于是悬停光标、滚动条悬停、落点预览都无从谈起。
             UpdateScrollBarHover(screenX, screenY);
             UpdateBarHover(x, y);                  // 操作条九格的 hover 态（画与命中同源）
+            UpdateEngineTooltip();                 // 引擎侧悬停提示（操作条 / PPT 条）
             ApplyCursor();
             if (DrawnCursor != ToolCursorShape.None) _dirty = true;
             return;
@@ -4044,7 +4034,7 @@ public partial class InkEngine
         if (UiCapturing && ReadPointer(id, out float ux, out float uy, out float upressure,
                                        out bool uinverted, out _))
         {
-            UiPointerUp(ux, uy, upressure, false, uinverted);
+            UiPointerUp(ux, uy, upressure, false, uinverted, id);
             // **必须显式放开捕获**：按钮上也走 SetCapture（拖出按钮、在按钮上滑开
             // 都要继续收到消息），而系统**不会**在按键抬起时替我们放开。
             // 忘了这一句的后果不是"按钮卡住"，而是**整台机器的鼠标事件都还挂在
@@ -8175,6 +8165,7 @@ public partial class InkEngine
         CoordGridDefault = CoordGridDefault,
         DwellShapeOn = DwellShapeEnabled,
         PressureOn = PressureWidth.Enabled,      // 界面拿它显示「设置 → 书写 → 压感粗细」那个开关
+        PredictOn = PredictEnabled,              // 界面拿它显示「设置 → 书写 → 墨迹预测」那个开关
         ScreenIndex = ScreenIndex,
         CanFlipPageUp = CanFlipPageUp,
         IsDrawing = _drawing,
@@ -8342,6 +8333,30 @@ public partial class InkEngine
 
     /// <summary>压感粗细的偏好键（只写"关过"的那一份）。</summary>
     private const string PressurePrefKey = "pressure";
+
+    /// <summary>
+    /// 「更多 → 设置 → 书写 → 墨迹预测」被点了一下（2026-10-02）。
+    ///
+    /// 语义：`PredictEnabled` 的**运行时开关**（默认关）。开了之后：
+    ///   · 鼠标 / 触摸那条自绘预测尾重新开始喂点（地平线 10ms，前带量 ≤12px）；
+    ///   · 真笔那条仍然不喂（DWM 不画我们的预测点，喂了也白喂，见 PredictEnabled 注释）。
+    /// 只是"下一帧起要不要预测"，没有缓存要作废；`_dirty` 一下让尾巴立刻换掉。
+    /// </summary>
+    internal void SetPredictFromUi(bool on)
+    {
+        if (PredictEnabled == on) return;
+        PredictEnabled = on;
+        _dirty = true;
+        Console.WriteLine($"墨迹预测：{(on ? $"开（地平线 {PredictHorizonMs:F0}ms）" : "关")}");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 自检用：把"墨迹预测"的偏好**重新应用一次**——模拟"重开软件"里读偏好那一步
+    /// （同 <see cref="ApplyPressurePrefForTest"/>，自检模式启动不读盘）。
+    /// </summary>
+    internal void ApplyPredictPrefForTest()
+        => PredictEnabled = _predictArg || GetUiPref(PredictPrefKey) == "1";
 
     /// <summary>
     /// 自检用：把"压感粗细"的偏好**重新应用一次**——模拟"重开软件"里读偏好那一步。
@@ -8854,29 +8869,35 @@ public partial class InkEngine
     /// 指针按下的第一站：先问界面。返回 true 表示这次输入归界面（比如按到了
     /// 悬浮条上的按钮），引擎不再把它变成笔画。
     /// </summary>
-    private bool UiPointerDown(float x, float y, float pressure, bool fromPen, bool eraserTip)
+    private bool UiPointerDown(float x, float y, float pressure, bool fromPen, bool eraserTip,
+                               bool fromTouch = false, uint pointerId = 0)
     {
         if (!UiVisibleNow) return false;
-        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip);
+        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip,
+                                   fromTouch, pointerId);
         if (!UiGuard("PointerDown", () => Ui.PointerDown(e), false)) return false;
         UiCapturing = true;
         return true;
     }
 
-    private bool UiPointerMove(float x, float y, float pressure, bool fromPen, bool eraserTip)
+    private bool UiPointerMove(float x, float y, float pressure, bool fromPen, bool eraserTip,
+                               uint pointerId = 0)
     {
         if (!UiVisibleNow) return false;
 
         // 只有在界面已经捕获输入或指针落在界面矩形内时才转发，避免没必要的调用。
         if (!UiCapturing && !UiContains(x, y)) return false;
-        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip);
+        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip,
+                                   false, pointerId);
         return UiGuard("PointerMove", () => Ui.PointerMove(e), false);
     }
 
-    private bool UiPointerUp(float x, float y, float pressure, bool fromPen, bool eraserTip)
+    private bool UiPointerUp(float x, float y, float pressure, bool fromPen, bool eraserTip,
+                             uint pointerId = 0)
     {
         if (!UiVisibleNow || !UiCapturing) return false;
-        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip);
+        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip,
+                                   false, pointerId);
         bool consumed = UiGuard("PointerUp", () => Ui.PointerUp(e), false);
         UiCapturing = false;
         return consumed;
@@ -9207,7 +9228,8 @@ public partial class InkEngine
                 LastPointerType = ptype;
                 _uiHover = true;
 
-                if (UiPointerDown(sx, sy, pressure, ptype == Native.PT_PEN, inverted))
+                if (UiPointerDown(sx, sy, pressure, ptype == Native.PT_PEN, inverted,
+                                  ptype == Native.PT_TOUCH, id))
                 {
                     // 界面也要捕获：在按钮上滑开、拖出面板，都要继续收到消息。
                     Native.SetCapture(hWnd);
@@ -9228,7 +9250,7 @@ public partial class InkEngine
                 StampInput(); _cntMove++;
                 LastPointerType = ptype;
                 _uiHover = true;
-                UiPointerMove(sx, sy, pressure, ptype == Native.PT_PEN, inverted);
+                UiPointerMove(sx, sy, pressure, ptype == Native.PT_PEN, inverted, id);
                 _dirty = true;
                 return IntPtr.Zero;
             }
@@ -9240,7 +9262,7 @@ public partial class InkEngine
                                 out bool inverted, out _))
                 {
                     StampInput(); _cntUp++;
-                    UiPointerUp(sx, sy, pressure, false, inverted);
+                    UiPointerUp(sx, sy, pressure, false, inverted, id);
                 }
                 Native.ReleaseCapture();
                 UiCapturing = false;

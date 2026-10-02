@@ -36,10 +36,15 @@ $zip = Join-Path $root "dist\InkTeach-$Version-win-x64.zip"
 $setup = Join-Path $root "dist\InkTeach-Setup-$Version.exe"
 foreach ($f in @($zip, $setup)) { if (-not (Test-Path $f)) { throw "缺文件：$f（先跑 .\publish.ps1）" } }
 
-# ① 源码镜像（输出里把令牌打码）
+# ① 源码镜像（输出里把令牌打码；git 往 stderr 打进度，别被 $ErrorActionPreference=Stop 当成异常）
 Write-Host "  推送源码（main + 标签）到 GitCode…" -ForegroundColor DarkGray
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 $out = & git -C $root push "https://${owner}:${tok}@gitcode.com/$owner/$repo.git" main --tags 2>&1
+$gitExit = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
 $out | Select-Object -Last 2 | ForEach-Object { "    " + ($_.ToString() -replace [regex]::Escape($tok), '***') }
+if ($gitExit -ne 0) { throw "推送 GitCode 失败（git exit=$gitExit）" }
 
 # ② 发行版
 $rel = $null

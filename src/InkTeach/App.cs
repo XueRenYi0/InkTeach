@@ -2002,6 +2002,59 @@ internal sealed partial class App : InkEngine.InkEngine
             }
         }
 
+        // ⑧ **保存图片**（2026-10-02「更多 → 墨迹 → 保存图片」）：整块板书 → 图片。
+        //    判据：写盘成功 / 尺寸 = 整块内容包围盒 / 默认白底 / 笔迹在 /
+        //    **不碰选中与剪贴板** / 空板书拒绝。
+        {
+            string boardPath = Path.Combine(Path.GetTempPath(), "inkteach-iotest-board.jpg");
+            try { File.Delete(boardPath); } catch { }
+
+            // 先把选区清干净：证明保存图片**不依赖、也不改动**选区
+            Doc.Selected.Clear();
+            var boxAll = EditRegion.Of(new[] { pen, hl }).Inflate(4f * DpiScale);
+            int bw = (int)MathF.Ceiling(boxAll.MaxX - boxAll.MinX);
+            int bh = (int)MathF.Ceiling(boxAll.MaxY - boxAll.MinY);
+
+            bool okBoard = SaveBoardImageForTest(boardPath);
+            Check("保存图片：返回成功、文件存在", okBoard && File.Exists(boardPath),
+                  $"返回 {okBoard}，文件在 = {File.Exists(boardPath)}");
+            if (File.Exists(boardPath))
+            {
+                try
+                {
+                    using var bmp = new System.Drawing.Bitmap(boardPath);
+                    Check("保存图片：尺寸 = 整块板书内容",
+                          bmp.Width == bw && bmp.Height == bh,
+                          $"{bmp.Width}×{bmp.Height}，内容 {bw}×{bh}");
+                    var blankPx = bmp.GetPixel(20, 20);
+                    Check("保存图片：默认白底（发微信不露黑）",
+                          blankPx.R > 235 && blankPx.G > 235 && blankPx.B > 235,
+                          $"({blankPx.R},{blankPx.G},{blankPx.B})");
+                    var penPx = bmp.GetPixel(Math.Clamp((int)(700 - boxAll.MinX), 0, bmp.Width - 1),
+                                             Math.Clamp((int)(400 - boxAll.MinY), 0, bmp.Height - 1));
+                    Check("保存图片：笔迹在里面", penPx.G < 110 && penPx.B < 110,
+                          $"({penPx.R},{penPx.G},{penPx.B})");
+                }
+                catch (Exception ex) { Check("保存图片：能被别的解码器读出来", false, ex.Message); }
+                try { File.Delete(boardPath); } catch { }
+            }
+            Check("保存图片：**不碰选中**（之前清空的选区还是空的）",
+                  Doc.Selected.Count == 0, $"选中 {Doc.Selected.Count}");
+            bool clip2 = ClipboardInk.TryGetObjects(out var back2);
+            Check("保存图片：**不动剪贴板**（还是那条标记）",
+                  clip2 && back2 != null && back2.Count == 1, $"读回 {back2?.Count}");
+
+            // 空板书拒绝、不写文件
+            Doc.Clear();
+            string emptyBoard = Path.Combine(Path.GetTempPath(), "inkteach-iotest-board-empty.jpg");
+            try { File.Delete(emptyBoard); } catch { }
+            bool okEmpty = SaveBoardImageForTest(emptyBoard);
+            Check("保存图片：空板书拒绝、不写文件",
+                  !okEmpty && !File.Exists(emptyBoard),
+                  $"返回 {okEmpty}，文件在 = {File.Exists(emptyBoard)}");
+            try { File.Delete(emptyBoard); } catch { }
+        }
+
         Console.WriteLine();
         Console.WriteLine(fail == 0
             ? "  PASS：四种格式都对（PNG 透明底 / JPEG 白底 / PNG 白底 / BMP 白底，逐像素验过），而且没碰剪贴板"
@@ -2143,6 +2196,52 @@ internal sealed partial class App : InkEngine.InkEngine
                   $"穿透 = {PassThrough}，挂着 = {PptHotkeysOnForTest}");
         }
 
+        // ---- ①.6 悬停提示：页码格 / ◀ / 长按菜单（2026-10-02）----
+        {
+            var bar = PptBarRect();
+            float dpi = DpiScale;
+            var page = PptBar.MidCell(bar, dpi);
+            PptBarPointerMove((page.MinX + page.MaxX) * 0.5f, (page.MinY + page.MaxY) * 0.5f);
+            UpdateEngineTooltip();
+            SettleFrames(650);
+            StepEngineTooltip();                  // 自检里没有主循环，手动推一下"到点"
+            Check("悬停页码格 0.5 秒：提示出现（点 = 页码跳转菜单）",
+                  TooltipShown && TooltipTitle == "页码" && TooltipNote.Contains("结束放映"),
+                  $"亮={TooltipShown}，标题={TooltipTitle}，说明={TooltipNote}");
+
+            // ◀ ▶ 按收窄后的清单**不配提示**（箭头一看就懂、按下即翻页）：悬停也不该冒卡
+            var left = new RectF { MinX = bar.MinX, MinY = bar.MinY,
+                                   MaxX = bar.MinX + PptBar.ArrowW * dpi, MaxY = bar.MaxY };
+            PptBarPointerMove((left.MinX + left.MaxX) * 0.5f, (left.MinY + left.MaxY) * 0.5f);
+            UpdateEngineTooltip();
+            SettleFrames(650);
+            StepEngineTooltip();
+            Check("悬停 ◀：**不出提示**（收窄：箭头不要提示）",
+                  !TooltipShown && string.IsNullOrEmpty(TooltipTitle),
+                  $"亮={TooltipShown}，标题={TooltipTitle ?? "（空）"}");
+
+            PptBarPointerMove(bar.MinX + 6f * dpi, bar.MaxY + 160f * dpi);   // 条外面
+            UpdateEngineTooltip();
+            SettleFrames(120);
+            Check("指针移开条：提示立刻收", !TooltipShown, $"亮={TooltipShown}");
+
+            // 菜单五项：逐项核对有说明（悬停码 100+i，和真实悬停同一套编号）
+            bool menuTipsAll = true; string menuTipsMiss = "";
+            for (int i = 0; i < PptMenuItemCount; i++)
+            {
+                PptBarHover = 100 + i;
+                UpdateEngineTooltip();
+                if (string.IsNullOrEmpty(TooltipTitle) || string.IsNullOrEmpty(TooltipNote))
+                { menuTipsAll = false; menuTipsMiss += i + " "; }
+            }
+            Check("菜单五项都有说明（六字标题之外）", menuTipsAll,
+                  menuTipsAll ? $"{PptMenuItemCount} 项" : $"缺：{menuTipsMiss}");
+
+            PptBarHover = -1;
+            ClearEngineTooltip();
+            SettleFrames(120);
+        }
+
         // ---- ② 每页一套 + 页内滚动 ----
         MakePen(400, 420);
         MakePen(520, 420);
@@ -2279,15 +2378,22 @@ internal sealed partial class App : InkEngine.InkEngine
             Check("点右端 ▶：这一下归它、命令给 PPT",
                   ate && fake.NextCalls == nextBefore2 + 1, $"吃掉={ate}，NextCalls={fake.NextCalls}");
 
-            // 点页码格 → 弹页号面板。
-            // 先把页数设成 12（面板铺成 2 行）：3 页时面板只有一行、点"第 5 格"根本不在面板里，
+            // 点页码格 → **弹菜单**（2026-10-02 第五轮；原来直接弹页号面板）。
+            // 先把页数设成 12（页号面板铺成 2 行）：3 页时面板只有一行、点"第 5 格"根本不在面板里，
             // 那样测的是"点面板外"——**用例要挑有代表性的输入**（这坑自检当场踩了一次）。
             fake.Total = 12;
             Step();
             float midX = (bar.MinX + bar.MaxX) * 0.5f, midY = (bar.MinY + bar.MaxY) * 0.5f;
             PptBarPointerDown(midX, midY);
             PptBarPointerUp(midX, midY);
-            Check("点页码：弹出页号面板", PptPagePanelOpen, $"面板={PptPagePanelOpen}");
+            Check("点页码：弹出菜单（长按入口已取消）",
+                  PptMenuOpen && !PptPagePanelOpen, $"菜单={PptMenuOpen}，面板={PptPagePanelOpen}");
+            Check("菜单第一项＝指定页码跳转", PptMenuItemText(0) == "指定页码跳转",
+                  $"第一项={PptMenuItemText(0)}");
+            PptMenuItemRectAt(0, out var miJump);
+            PptBarPointerDown((miJump.MinX + miJump.MaxX) * 0.5f, (miJump.MinY + miJump.MaxY) * 0.5f);
+            Check("点「指定页码跳转」：页号面板打开、菜单收起",
+                  PptPagePanelOpen && !PptMenuOpen, $"面板={PptPagePanelOpen}，菜单={PptMenuOpen}");
             PptPanelRect(out var panel);
             Check("面板长在条的上方、在屏幕里",
                   panel.MaxY <= bar.MinY + 0.5f && panel.MinY >= _virtualY
@@ -2318,8 +2424,11 @@ internal sealed partial class App : InkEngine.InkEngine
             Step();
             bar = PptBarRect();
             midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
-            PptBarPointerDown(midX, midY);
+            PptBarPointerDown(midX, midY);                 // 点页码 → 菜单
             PptBarPointerUp(midX, midY);
+            PptMenuItemRectAt(0, out var miJump75);        // 菜单第一项 → 页号面板
+            PptBarPointerDown((miJump75.MinX + miJump75.MaxX) * 0.5f,
+                              (miJump75.MinY + miJump75.MaxY) * 0.5f);
             Check("（准备）75 页时页号面板已打开", PptPagePanelOpen, $"面板={PptPagePanelOpen}");
             PptPanelRect(out var panel75);
             int cellsBad = 0; string firstBadCell = "（全部命中）";
@@ -2348,10 +2457,15 @@ internal sealed partial class App : InkEngine.InkEngine
             // 用户 2026-09-27 报的"悬停页码不准确"最可能就是这个。
             fake.Total = 400;
             Step();
+            // 先把 75 页那一轮开着的页号面板收掉（不先收，下面"点页码"会被面板吃掉）
+            PptBarPointerDown(_virtualX + 6f, _virtualY + 6f);
             bar = PptBarRect();
             midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
-            PptBarPointerDown(midX, midY);
+            PptBarPointerDown(midX, midY);                 // 点页码 → 菜单
             PptBarPointerUp(midX, midY);
+            PptMenuItemRectAt(0, out var miJump400);       // 菜单第一项 → 页号面板
+            PptBarPointerDown((miJump400.MinX + miJump400.MaxX) * 0.5f,
+                              (miJump400.MinY + miJump400.MaxY) * 0.5f);
             PptPanelRect(out var panelBig);
             Check("大页数（400 页）：面板被夹顶、确实压到条上（构造出了问题现场）",
                   panelBig.MaxY > bar.MinY + 0.5f,
@@ -2380,17 +2494,19 @@ internal sealed partial class App : InkEngine.InkEngine
             fake.Total = 12;
             Step();
 
-            // 长按（不动）→ **到点直接弹菜单**（不用等松手）
+            // 长按（不动）→ **不再弹菜单**（2026-10-02 第五轮：入口改成单击）；
+            // 松手在页码格上 = 一次正常的单击 → 菜单打开。再点一下收起。
             bar = PptBarRect();
             midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
             PptBarPointerDown(midX, midY);
-            SettleFrames(750);                     // 长按阈值 600ms
-            Check("长按 600ms：**到点就弹菜单**（不用等松手）", PptMenuOpen, $"菜单={PptMenuOpen}");
-            PptBarPointerUp(midX, midY);           // 松手不该又弹一次面板
-            Check("松手：不会再弹出页号面板（这一次已经被长按消费掉了）",
-                  !PptPagePanelOpen, $"面板={PptPagePanelOpen}");
-            PptBarPointerDown(_virtualX + 6f, _virtualY + 6f);   // 点别处收起来
-            Check("点别处：菜单收起", !PptMenuOpen, $"菜单={PptMenuOpen}");
+            SettleFrames(750);                     // 过 600ms 也不该有菜单（长按已不是入口）
+            Check("按住 600ms 不动：**不弹菜单**（长按入口已取消）", !PptMenuOpen, $"菜单={PptMenuOpen}");
+            PptBarPointerUp(midX, midY);
+            Check("松手 = 单击：菜单打开（这才是入口）", PptMenuOpen, $"菜单={PptMenuOpen}");
+            PptBarPointerDown(midX, midY);         // 再点页码格 = 收起（不鬼打墙）
+            Check("再点页码格：菜单收起", !PptMenuOpen, $"菜单={PptMenuOpen}");
+            PptBarPointerDown(_virtualX + 6f, _virtualY + 6f);   // 点别处：什么都不发生
+            Check("点别处：菜单仍是收起的", !PptMenuOpen, $"菜单={PptMenuOpen}");
 
             // **按下就移** → 直接拖动（用户 2026-09-26："点中页码那一块直接拖动就能走"）
             bar = PptBarRect();
@@ -2429,21 +2545,20 @@ internal sealed partial class App : InkEngine.InkEngine
                   && bc.MaxX <= _virtualX + screenW && bc.MaxY <= screenBottom,
                   $"条 x {bc.MinX:F0}..{bc.MaxX:F0}，y {bc.MinY:F0}..{bc.MaxY:F0}");
 
-            // ---- **拖起来了就不许再弹长按菜单**（用户 2026-09-27 报的）----
-            // 原话："我在拖动 PPT 页码那块的时候，它好像还会弹出'结束放映'的菜单。"
-            // 病根：进入拖动时没清长按计时器，600ms 一到 `StepPptBar` 照样弹菜单。
-            // 这里复现的就是那条时间线：按下 → 拖起来（计时器该被清）→ 等满 600ms。
+            // ---- **拖起来了，松手就不许弹菜单**（用户 2026-09-27 报过"拖页码时弹菜单"）----
+            // 现在"拖"和"单击"是同一次按下的两条岔路：移动超阈值 → 变拖动、按下标记清掉，
+            // 松手只放条，不会再被当成单击去开菜单。
             bar = PptBarRect();
             gx = (bar.MinX + bar.MaxX) * 0.5f; gy = (bar.MinY + bar.MaxY) * 0.5f;
             PptBarPointerDown(gx, gy);
             PptBarPointerMove(gx + 30f, gy - 12f);        // 慢慢拖起来（过阈值）
-            SettleFrames(750);                            // 过 600ms：这一步以前会弹菜单
-            Check("拖动中过 600ms：**不弹菜单**（拖和长按是互斥的两条路）",
+            SettleFrames(750);                            // 过 600ms：以前这里会弹菜单
+            Check("拖动中（含过 600ms）：**不弹菜单**（拖和单击是两条路）",
                   !PptMenuOpen, $"菜单={PptMenuOpen}，拖动={PptBarDragging}");
             PptBarPointerUp(gx + 30f, gy - 12f);
-            Check("松手：拖动正常结束、条挪过去了",
-                  !PptBarDragging && Math.Abs(PptBarRect().MinX - bar.MinX) > 20f,
-                  $"拖动={PptBarDragging}，x {bar.MinX:F0} → {PptBarRect().MinX:F0}");
+            Check("松手：拖动正常结束、**不弹菜单**",
+                  !PptBarDragging && !PptMenuOpen && Math.Abs(PptBarRect().MinX - bar.MinX) > 20f,
+                  $"拖动={PptBarDragging}，菜单={PptMenuOpen}，x {bar.MinX:F0} → {PptBarRect().MinX:F0}");
 
             // ---- PPT 浮层（条 / 菜单 / 页号面板）上的光标：一律箭头 ----
             // 与图库面板同型的洞（"一块是界面就是界面"，见 Engine.PointerOnDrawnChrome）：
@@ -2466,25 +2581,25 @@ internal sealed partial class App : InkEngine.InkEngine
                 PointerX = keepPx; PointerY = keepPy;
             }
 
-            // ---- 菜单：**只有长按这一条路**（「⋮」2026-09-27 删掉了）；四项逐项点一遍 ----
+            // ---- 菜单：**点页码格开**（2026-10-02 第五轮，长按入口取消）；五项逐项点一遍 ----
             // （"加一项漏一处"是这个仓库的老毛病，见 架构-分层与规则.md 五-7）
             bar = PptBarRect();
             midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
-            Check("菜单就四项、一律六字（存/放/清/退）",
-                  PptMenuItemCount == 4 && PptMenuItemText(0) == "自动保存墨迹"
-                  && PptMenuItemText(1) == "回放本页墨迹" && PptMenuItemText(2) == "清空所有墨迹"
-                  && PptMenuItemText(3) == "结束本次放映",
-                  $"{PptMenuItemText(0)} / {PptMenuItemText(1)} / {PptMenuItemText(2)} / {PptMenuItemText(3)}");
+            Check("菜单五项、一律六字（跳/存/放/清/退）",
+                  PptMenuItemCount == 5 && PptMenuItemText(0) == "指定页码跳转"
+                  && PptMenuItemText(1) == "自动保存墨迹" && PptMenuItemText(2) == "回放本页墨迹"
+                  && PptMenuItemText(3) == "清空所有墨迹" && PptMenuItemText(4) == "结束本次放映",
+                  $"{PptMenuItemText(0)} / {PptMenuItemText(1)} / {PptMenuItemText(2)} / "
+                  + $"{PptMenuItemText(3)} / {PptMenuItemText(4)}");
 
-            // ① 长按页码格 = 开菜单（**现在唯一的入口**，不用瞄小点）
+            // ① 点页码格 = 开菜单（2026-10-02 第五轮：长按入口取消、单击就是唯一入口）
             PptBarPointerDown(midX, midY);
-            SettleFrames(750);
             PptBarPointerUp(midX, midY);
-            Check("长按页码格松手：菜单打开", PptMenuOpen, $"菜单={PptMenuOpen}");
+            Check("点页码格：菜单打开", PptMenuOpen, $"菜单={PptMenuOpen}");
 
             // ①.5 「回放本页墨迹」（2026-10-01 用户提议新增）：有墨迹 → 点了起回放、菜单收起
             Check("（准备）当前页有墨迹可回放", Doc.Strokes.Count > 0, $"{Doc.Strokes.Count} 笔");
-            PptMenuItemRectAt(1, out var miReplay);
+            PptMenuItemRectAt(2, out var miReplay);
             PptBarPointerDown((miReplay.MinX + miReplay.MaxX) * 0.5f, (miReplay.MinY + miReplay.MaxY) * 0.5f);
             Step();
             Check("点「回放本页墨迹」：起回放、菜单收起",
@@ -2495,7 +2610,6 @@ internal sealed partial class App : InkEngine.InkEngine
 
             // 菜单再开一次，给 ② 用
             PptBarPointerDown(midX, midY);
-            SettleFrames(750);
             PptBarPointerUp(midX, midY);
             Check("（准备）菜单重新打开", PptMenuOpen, $"菜单={PptMenuOpen}");
 
@@ -2534,9 +2648,13 @@ internal sealed partial class App : InkEngine.InkEngine
                       $"窗 ({win.MinX:F0},{win.MinY:F0})-({win.MaxX:F0},{win.MaxY:F0})，"
                       + $"条 ({bar.MinX:F0},{bar.MinY:F0})-({bar.MaxX:F0},{bar.MaxY:F0})");
 
-                // 打开页号面板：窗要**变高**把面板也罩住（不然面板看得见、点不动）
+                // 打开页号面板：窗要**变高**把面板也罩住（不然面板看得见、点不动）。
+                // 2026-10-02 第五轮：点页码 = 菜单，面板从第一项进来。
                 PptBarPointerDown((bar.MinX + bar.MaxX) * 0.5f, (bar.MinY + bar.MaxY) * 0.5f);
                 PptBarPointerUp((bar.MinX + bar.MaxX) * 0.5f, (bar.MinY + bar.MaxY) * 0.5f);
+                PptMenuItemRectAt(0, out var miJumpPass);
+                PptBarPointerDown((miJumpPass.MinX + miJumpPass.MaxX) * 0.5f,
+                                  (miJumpPass.MinY + miJumpPass.MaxY) * 0.5f);
                 Check("（准备）页号面板已打开", PptPagePanelOpen, $"面板={PptPagePanelOpen}");
                 Step();
                 PptPanelRect(out var panelNow);
@@ -2554,12 +2672,12 @@ internal sealed partial class App : InkEngine.InkEngine
 
             // 穿透那两条点了一下 ▶（顺手把开着的菜单收起了），这里重新开起来给 ③④ 用
             PptBarPointerDown(midX, midY);
-            SettleFrames(750);
             PptBarPointerUp(midX, midY);
+            Check("（准备）菜单已打开", PptMenuOpen, $"菜单={PptMenuOpen}");
 
-            // ③ 「墨迹保存」（开关）：点一下翻状态、**菜单留着**（要让老师看见"开 → 关"）
+            // ③ 「墨迹保存」（开关，索引 1）：点一下翻状态、**菜单留着**（要让老师看见"开 → 关"）
             bool saveBefore = PptAutoSaveOn;
-            PptMenuItemRectAt(0, out var mi0);
+            PptMenuItemRectAt(1, out var mi0);
             PptBarPointerDown((mi0.MinX + mi0.MaxX) * 0.5f, (mi0.MinY + mi0.MaxY) * 0.5f);
             Check("点「墨迹保存」：状态翻过来、菜单留着",
                   PptAutoSaveOn == !saveBefore && PptMenuOpen,
@@ -2568,21 +2686,21 @@ internal sealed partial class App : InkEngine.InkEngine
                   PptAutoSaveOn || GetUiPref("pptAutoSave") == "0",
                   $"pptAutoSave={GetUiPref("pptAutoSave") ?? "(空 = 开)"}");
 
-            // ④ 「墨迹清空」（两段确认）：**第一下不执行**
+            // ④ 「墨迹清空」（索引 3，两段确认）：**第一下不执行**
             int diskBefore = PptStore.ListPageKeys(fake.Key).Count;
-            PptMenuItemRectAt(2, out var mi1);
+            PptMenuItemRectAt(3, out var mi1);
             PptBarPointerDown((mi1.MinX + mi1.MaxX) * 0.5f, (mi1.MinY + mi1.MaxY) * 0.5f);
             Check("点「墨迹清空」第一下：进入等确认、文字变「再点确认」、**还没清**",
-                  PptClearConfirm && PptMenuOpen && PptMenuItemText(2) == "再点确认"
+                  PptClearConfirm && PptMenuOpen && PptMenuItemText(3) == "再点确认"
                   && PptStore.ListPageKeys(fake.Key).Count == diskBefore,
-                  $"等确认={PptClearConfirm}，文字={PptMenuItemText(2)}，盘上还是 {diskBefore} 页");
+                  $"等确认={PptClearConfirm}，文字={PptMenuItemText(3)}，盘上还是 {diskBefore} 页");
 
             // 把自动保存打开，好验证"清空是连盘一起清的"（关着的话盘上本来就该原样）
-            PptMenuItemRectAt(0, out var mi0b);
+            PptMenuItemRectAt(1, out var mi0b);
             PptBarPointerDown((mi0b.MinX + mi0b.MaxX) * 0.5f, (mi0b.MinY + mi0b.MaxY) * 0.5f);
 
             // 第二下：真清
-            PptMenuItemRectAt(2, out var mi1b);
+            PptMenuItemRectAt(3, out var mi1b);
             PptBarPointerDown((mi1b.MinX + mi1b.MaxX) * 0.5f, (mi1b.MinY + mi1b.MaxY) * 0.5f);
             Step();
             Check("点第二下：清空执行、菜单收起、等确认状态放掉",
@@ -2597,14 +2715,13 @@ internal sealed partial class App : InkEngine.InkEngine
             fake.Showing = true; fake.Slide = 1; fake.SlideId = 256; Step();
             Check("清空后再进放映：**不复活**", Doc.Strokes.Count == 0, $"{Doc.Strokes.Count} 条");
 
-            // ⑥ 引导：**每次进放映都提示一遍**（用户 2026-09-27 定）——
-            //    「⋮」删掉之后菜单只剩长按一条路，"只提示一次"会让老师第二次课就想不起来。
-            //    强断言：先把"已经提示过"这个偏好**写死**（老逻辑下它就不会再出现了），
-            //    再进放映——引导**照样出现**，说明这行偏好已经不再管这事。
+            // ⑥ 引导：**每次进放映都提示一遍**（用户 2026-09-27 定；2026-10-02 第五轮文案改成
+            //    "点页码：页码跳转菜单"）。强断言：先把"已经提示过"这个偏好**写死**
+            //    （老逻辑下它就不会再出现了），再进放映——引导**照样出现**。
             SetUiPref("pptHint", "1");
             fake.Showing = false; Step();
             fake.Showing = true; Step();
-            Check("进放映：冒出一行引导（告诉老师长按能呼出菜单）", PptHintVisible, $"提示={PptHintVisible}");
+            Check("进放映：冒出一行引导（告诉老师点页码出菜单）", PptHintVisible, $"提示={PptHintVisible}");
             SettleFrames(1700);            // 1.5 秒后应该自己消失（不挡讲课）
             Check("1.5 秒后引导自己消失", !PptHintVisible, $"提示={PptHintVisible}");
             fake.Showing = false; Step();
@@ -2616,20 +2733,19 @@ internal sealed partial class App : InkEngine.InkEngine
             bar = PptBarRect();
             midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
             PptBarPointerDown(midX, midY);
-            SettleFrames(750);
             PptBarPointerUp(midX, midY);
 
-            // ⑦.0 清空之后没有墨迹：「回放本页墨迹」**置灰**（右侧 0 笔），点了不动
+            // ⑦.0 清空之后没有墨迹：「回放本页墨迹」（索引 2）**置灰**（右侧 0 笔），点了不动
             Check("（准备）清空后无墨迹：回放项置灰、右侧 0 笔",
-                  !PptMenuItemEnabled(1) && PptMenuItemStatus(1) == "0 笔",
-                  $"enabled={PptMenuItemEnabled(1)}，状态={PptMenuItemStatus(1)}");
-            PptMenuItemRectAt(1, out var miReplay0);
+                  !PptMenuItemEnabled(2) && PptMenuItemStatus(2) == "0 笔",
+                  $"enabled={PptMenuItemEnabled(2)}，状态={PptMenuItemStatus(2)}");
+            PptMenuItemRectAt(2, out var miReplay0);
             PptBarPointerDown((miReplay0.MinX + miReplay0.MaxX) * 0.5f, (miReplay0.MinY + miReplay0.MaxY) * 0.5f);
             Check("清空后点置灰的回放项：菜单留着、没有起回放",
                   PptMenuOpen && !ReplayActive, $"菜单={PptMenuOpen}，回放={ReplayActive}");
 
             int exitBefore = fake.ExitCalls;
-            PptMenuItemRectAt(3, out var mi2);
+            PptMenuItemRectAt(4, out var mi2);            // 结束放映（索引 4）
             PptBarPointerDown((mi2.MinX + mi2.MaxX) * 0.5f, (mi2.MinY + mi2.MaxY) * 0.5f);
             Step();
             Check("点「结束放映」：命令给 PPT、菜单收起",
@@ -2740,18 +2856,20 @@ internal sealed partial class App : InkEngine.InkEngine
 
         if (argv.Contains("--menu"))
         {
-            PptBarPointerDown(midX, midY);
-            SettleFrames(750);              // 长按阈值 600ms
+            PptBarPointerDown(midX, midY);      // 2026-10-02 第五轮：点页码 = 菜单
             PptBarPointerUp(midX, midY);
         }
         else if (argv.Contains("--panel"))
         {
-            PptBarPointerDown(midX, midY);
+            PptBarPointerDown(midX, midY);      // 点页码 → 菜单
             PptBarPointerUp(midX, midY);
+            PptMenuItemRectAt(0, out var miJump);
+            PptBarPointerDown((miJump.MinX + miJump.MaxX) * 0.5f,   // 菜单第一项 → 页号面板
+                              (miJump.MinY + miJump.MaxY) * 0.5f);
         }
         else
         {
-            // 悬停在**页码格**上：它才是条上的主角（点它跳页），顺便把悬停高亮出进图里
+            // 悬停在**页码格**上：它才是条上的主角（点它出菜单），顺便把悬停高亮出进图里
             // ——用户 2026-09-26 指出过"页码那里没有悬停指示"，这条图就是给那件事看的。
             PptBarPointerMove(midX, midY);
         }
@@ -14943,7 +15061,7 @@ internal sealed partial class App : InkEngine.InkEngine
         {
             Check("启动器：打开面板默认停在主页", ui.MorePageForTest == 0, $"页 = {ui.MorePageForTest}");
             bool tilesOk = true;
-            for (int code = 0; code < 6; code++)
+            for (int code = 0; code < 7; code++)
             {
                 var t = ui.HubTileRectForTest(code);
                 if (t.IsEmpty || t.MinX < moreRect.MinX || t.MaxX > moreRect.MaxX
@@ -14955,7 +15073,7 @@ internal sealed partial class App : InkEngine.InkEngine
                 var t = ui.HubBottomRectForTest(i);
                 if (t.IsEmpty || t.MaxX > moreRect.MaxX || t.MaxY > moreRect.MaxY) bottomOk = false;
             }
-            Check("启动器：六格（课堂/墨迹）＋ 底栏四格都在面板内", tilesOk && bottomOk,
+            Check("启动器：七格（课堂 3 ＋ 墨迹 4）＋ 底栏四格都在面板内", tilesOk && bottomOk,
                   $"面板 {moreRect.MaxX - moreRect.MinX:F0}×{moreRect.MaxY - moreRect.MinY:F0}");
 
             // 分辨率规范化 B：面板宽 = min(640, 55% 工作宽)
@@ -15056,6 +15174,19 @@ internal sealed partial class App : InkEngine.InkEngine
                           (saveTile.MinY + saveTile.MaxY) * 0.5f * DpiScale);
             SettleFrames(200);
             Check("启动器：空板书点「保存墨迹」→ 关面板、引擎写「没有可保存」",
+                  !ui.MoreOpenForTest && Host.State.InkStatus.Contains("没有可保存"),
+                  $"status={Host.State.InkStatus}");
+
+            // 「保存图片」（2026-10-02）：空板书同样 → 关面板 + 状态行说清
+            var moreCellImg = ui.CellRectForTest(12);
+            ClickPhysical((moreCellImg.MinX + moreCellImg.MaxX) * 0.5f * DpiScale,
+                          (moreCellImg.MinY + moreCellImg.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            var imgTile = ui.HubTileRectForTest(6);
+            ClickPhysical((imgTile.MinX + imgTile.MaxX) * 0.5f * DpiScale,
+                          (imgTile.MinY + imgTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(200);
+            Check("启动器：空板书点「保存图片」→ 关面板、引擎写「没有可保存」",
                   !ui.MoreOpenForTest && Host.State.InkStatus.Contains("没有可保存"),
                   $"status={Host.State.InkStatus}");
 
@@ -15350,6 +15481,156 @@ internal sealed partial class App : InkEngine.InkEngine
         }
         Check("空闲 0 帧", quiet == 0, $"安静 150 毫秒出了 {quiet} 帧");
 
+        // ---- ⑥.6 悬停提示（Tooltip；2026-10-02）----
+        //
+        // 三条链路：真鼠标停在「笔」上 500ms → 出提示（键位**从键位表查**，界面不写死）；
+        // 移开 → 立刻收；覆盖不变量：每一格、上带每一段/色片/动作都有文案
+        //（"加一段漏一处"是这个仓库的老毛病，用逐个数兜住）。
+        {
+            ui.SetExpandForTest(1f);
+            ui.SetTipEnabledForTest(true);
+            // 先把指针放画布上，清掉上一段留下的悬停
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.3f), 0);
+            SettleFrames(150);
+
+            var penCell3 = ui.CellRectForTest(3);
+            int tpx = (int)((penCell3.MinX + penCell3.MaxX) * 0.5f * DpiScale);
+            int tpy = (int)((penCell3.MinY + penCell3.MaxY) * 0.5f * DpiScale);
+            // 合成鼠标偶尔丢移动（前面那条经验）：挪 1 像素多给几次机会
+            for (int attempt = 0; attempt < 3 && !ui.TipVisibleForTest; attempt++)
+            {
+                SendMouse(tpx, tpy - attempt, 0);
+                SettleFrames(700);            // > 500ms 延迟 + 淡入
+            }
+            Check("停在「笔」上 0.5 秒：悬停提示出现", ui.TipVisibleForTest,
+                  $"可见 = {ui.TipVisibleForTest}");
+            var penTip = ui.TipContentForTest(3);
+            string wantPenKey = Keys.KeyText(KeyAction.ToolPen);
+            Check("提示里的键位来自键位表（界面不写死）",
+                  !string.IsNullOrEmpty(penTip.Key) && penTip.Key == wantPenKey,
+                  $"提示 = {penTip.Key ?? "（空）"}，键位表 = {wantPenKey ?? "（空）"}");
+            var tipRect = ui.TipRectForTest;
+            var barNow = ui.BarRectForTest;
+            Check("提示卡在面板上方、和「笔」那一格横向对得上",
+                  !tipRect.IsEmpty && tipRect.MaxY <= barNow.MinY + 0.5f
+                  && tipRect.MinX < penCell3.MaxX && penCell3.MinX < tipRect.MaxX,
+                  $"卡 {tipRect.MinX:F0}..{tipRect.MaxX:F0} × {tipRect.MinY:F0}..{tipRect.MaxY:F0}，"
+                  + $"笔格 {penCell3.MinX:F0}..{penCell3.MaxX:F0}，主条顶 {barNow.MinY:F0}");
+
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.3f), 0);
+            SettleFrames(150);
+            Check("鼠标移开：提示立刻收", !ui.TipVisibleForTest, $"可见 = {ui.TipVisibleForTest}");
+
+            // --- 收窄后的清单不变量：该有的有、该没有的没有（2026-10-02 第二轮）---
+            // 判据（《调研-悬停提示-Tooltip.md》10.8）：只有"图标-only / 带快捷键 /
+            // 隐藏手势 / 认不出来"才配；色片、文字段、点一下就见结果的一律不配。
+            bool cover = true; string missing = "";
+            void Need(bool ok, string what) { if (!ok) { cover = false; missing += what + " "; } }
+
+            for (int c = 1; c <= 12; c++)                       // 1..12 该有（0 号收起格不配）
+                Need(ui.TipContentForTest(c).Title != null, $"缺格{c}");
+            Need(ui.TipContentForTest(0).Title == null, "收起格不该有");
+            Need(ui.TipContentForTest(-2).Title == null, "球不该有");
+            Need(ui.TipContentForTest(300).Title == null, "滑条不该有（有粗细预览）");
+
+            ui.SelectBandCellForTest(2);
+            int up = ui.BoardSegIndexOfForTest("PageUp");
+            int down = ui.BoardSegIndexOfForTest("PageDown");
+            Need(up >= 0 && down >= 0, "白板翻页段找得到");
+            for (int i = 0; i < ui.BandSegmentCountForTest; i++)
+            {
+                bool should = i == up || i == down;             // 页码 / 板色 / 底纹 / 间距不配
+                Need(should == (ui.TipContentForTest(200 + i).Title != null), $"白板段{i}不符");
+            }
+            Need(ui.TipContentForTest(400).Title != null, "关闭白板应配");
+            ui.SelectBandCellForTest(3);
+            Need(ui.TipContentForTest(500).Title != null, "线型应配");
+            for (int i = 0; i < ui.SwatchCountForTest; i++)
+                Need(ui.TipContentForTest(100 + i).Title == null, $"色片{i}不该有");
+            Host.Commands.SetTool(Tool.Highlighter);
+            ui.SelectBandCellForTest(4);
+            for (int i = 0; i < ui.SwatchCountForTest; i++)
+                Need(ui.TipContentForTest(100 + i).Title == null, $"荧光色{i}不该有");
+            Host.Commands.SetTool(Tool.Eraser);
+            ui.SelectBandCellForTest(6);
+            Need(ui.TipContentForTest(400).Title != null, "清空（按住）应配");
+            for (int i = 0; i < 2; i++)
+                Need(ui.TipContentForTest(200 + i).Title == null, $"橡皮段{i}不该有");
+            Host.Commands.SetTool(Tool.Marquee);
+            ui.SelectBandCellForTest(7);
+            Need(ui.TipContentForTest(400).Title == null, "全选不该有");
+            for (int i = 0; i < 2; i++)
+                Need(ui.TipContentForTest(200 + i).Title == null, $"框选段{i}不该有");
+            Host.Commands.SetTool(Tool.Rectangle);
+            ui.SelectBandCellForTest(8);
+            for (int i = 0; i < ui.BandSegmentCountForTest; i++)
+                Need(ui.TipContentForTest(200 + i).Title != null, $"缺图形段{i}");
+            Host.Commands.SetTool(Tool.Capture);
+            ui.SelectBandCellForTest(9);
+            Need(ui.TipContentForTest(400).Title == null, "粘贴图片不该有");
+            for (int i = 0; i < 2; i++)
+                Need(ui.TipContentForTest(200 + i).Title == null, $"截图段{i}不该有");
+            Host.Commands.SetTool(Tool.Pen);
+            Check("提示范围：该有的都有、该没有的都没有（收窄后的清单）", cover,
+                  cover ? "13 格 + 各格上带逐个数过" : $"不符：{missing}");
+
+            // --- 触摸长按（2026-10-02 第二轮）：主流四步手势 ---
+            //   短按=执行 / 按住不动 0.6 秒=出提示且松手不执行 / 按住后滑走=不弹提示。
+            //   鼠标不参与长按（上面那些悬停用例走的就是鼠标的路）。
+            if (EnsureSyntheticTouch())
+            {
+                var cellP = ui.CellRectForTest(3);
+                float tx = (cellP.MinX + cellP.MaxX) * 0.5f * DpiScale;
+                float ty = (cellP.MinY + cellP.MaxY) * 0.5f * DpiScale;
+
+                // ① 短按：照常换工具
+                Host.Commands.SetTool(Tool.Eraser);
+                SettleFrames(120);
+                SendTouches(true, (tx, ty));   SettleFrames(120);
+                SendTouches(false, (tx, ty));  SettleFrames(250);
+                Check("触摸短按「笔」：照常换工具", Tool == Tool.Pen, $"工具 = {Tool}（期望 Pen）");
+
+                // ② 长按：出提示、松手不执行、提示停留后自动收
+                Host.Commands.SetTool(Tool.Eraser);
+                SettleFrames(120);
+                // 注入的触点是"快照帧"：静止保持要每 100ms 补一帧
+                //（TouchGuardTest 里也是边走边补。真机没这回事，手指按着就一直按着）。
+                for (int i = 0; i < 8 && !ui.TipHoldFiredForTest; i++)
+                {
+                    SendTouches(true, (tx, ty));
+                    SettleFrames(100);
+                }
+                Check("触摸按住不动 0.8 秒：弹出提示",
+                      ui.TipVisibleForTest && ui.TipHoldFiredForTest,
+                      $"可见 = {ui.TipVisibleForTest}，长按已触发 = {ui.TipHoldFiredForTest}");
+                SendTouches(false, (tx, ty));  SettleFrames(200);
+                Check("长按后松手：**不执行**（工具还是橡皮）", Tool == Tool.Eraser,
+                      $"工具 = {Tool}（期望 Eraser）");
+                Check("提示松手后继续停留（2.5 秒）", ui.TipVisibleForTest,
+                      $"可见 = {ui.TipVisibleForTest}");
+                SettleFrames(2700);
+                Check("停留结束：提示自己收掉", !ui.TipVisibleForTest,
+                      $"可见 = {ui.TipVisibleForTest}");
+
+                // ③ 按住后滑走：不弹提示、不执行（走拖动消歧）
+                Host.Commands.SetTool(Tool.Eraser);
+                SettleFrames(120);
+                SendTouches(true, (tx, ty));   SettleFrames(150);
+                SendTouches(true, (tx + 30f * DpiScale, ty));   // 超过拖动阈值
+                SettleFrames(150);
+                SendTouches(false, (tx + 30f * DpiScale, ty));
+                SettleFrames(700);
+                Check("触摸按住后滑走：不弹提示", !ui.TipVisibleForTest,
+                      $"可见 = {ui.TipVisibleForTest}，触发 = {ui.TipHoldFiredForTest}");
+
+                Host.Commands.SetTool(Tool.Pen);   // 收尾
+                SettleFrames(120);
+            }
+
+            ui.SetExpandForTest(0f);       // 恢复收起态，别把后面的拖动用例带偏
+            SettleFrames(150);
+        }
+
         // ---- ⑦ 拖动**不吸附**（用户 2026-09-30："拖到任务栏下面自动靠底边这种不用了"）----
         //
         // 判据：把球拖到离左边 20 逻辑像素（原来的吸附范围 40 以内）松手——
@@ -15494,6 +15775,74 @@ internal sealed partial class App : InkEngine.InkEngine
             Check("点「压感粗细」：引擎状态立刻翻转（默认开 → 关）",
                   !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
         }
+
+        // 「墨迹预测」开关（2026-10-02 新增）：同一条链路——点行 → 引擎状态翻转 → 落盘。
+        // 顺带验「更多」第二批：面板格子的提示文案、设置行悬停出提示、触摸长按不执行。
+        {
+            var predictRow = ui.RowRectByLabelForTest("墨迹预测");
+            Check("「墨迹预测」那一行找得到", predictRow.MaxY > predictRow.MinY,
+                  $"行高 {predictRow.MaxY - predictRow.MinY:F0}");
+            Check("墨迹预测默认是关的", !Host.State.PredictOn, $"PredictOn = {Host.State.PredictOn}");
+
+            // 「更多」第二批：启动器格子 / 底栏的提示文案都在（小字已从画面搬进提示）
+            {
+                bool moreTips = true; string miss = "";
+                for (int code = 0; code <= 6; code++)
+                    if (ui.TipContentForTest(1000 + 140 + code).Title == null) { moreTips = false; miss += $"格{code} "; }
+                for (int i = 0; i < 4; i++)
+                    if (ui.TipContentForTest(1000 + 150 + i).Title == null) { moreTips = false; miss += $"底{i} "; }
+                Check("「更多」启动器格子与底栏都有提示文案", moreTips,
+                      moreTips ? "6 格 + 底栏 4 格" : $"缺：{miss}");
+            }
+
+            // 鼠标悬停设置行 → 出提示（原来行下面那行 11px 小灰字，现在只在这儿）
+            int rhx = (int)((predictRow.MinX + predictRow.MaxX) * 0.5f * DpiScale);
+            int rhy = (int)((predictRow.MinY + predictRow.MaxY) * 0.5f * DpiScale);
+            SendMouse(rhx, rhy, 0); SettleFrames(700);
+            int rhit = ui.MoreHitForTest((predictRow.MinX + predictRow.MaxX) * 0.5f,
+                                         (predictRow.MinY + predictRow.MaxY) * 0.5f);
+            var rtip = ui.TipContentForTest(1000 + rhit);
+            Check("悬停设置行：出提示（小字搬进提示）",
+                  ui.TipVisibleForTest && rtip.Title == "墨迹预测" && rtip.Note.Contains("拖影"),
+                  $"可见={ui.TipVisibleForTest}，标题={rtip.Title}，说明={rtip.Note}");
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.3f), 0);
+            SettleFrames(150);
+            Check("移开：提示收起", !ui.TipVisibleForTest, $"可见={ui.TipVisibleForTest}");
+
+            // 触摸长按设置行 → 出提示、**这一次松手不执行**（开关保持"关"）
+            if (EnsureSyntheticTouch())
+            {
+                for (int i = 0; i < 8 && !ui.TipHoldFiredForTest; i++)
+                {
+                    SendTouches(true, (rhx, rhy));
+                    SettleFrames(100);
+                }
+                Check("长按设置行 0.6 秒：出提示", ui.TipVisibleForTest && ui.TipHoldFiredForTest,
+                      $"可见={ui.TipVisibleForTest}，触发={ui.TipHoldFiredForTest}");
+                SendTouches(false, (rhx, rhy)); SettleFrames(200);
+                Check("长按后松手：这一次**不翻转**开关", !Host.State.PredictOn,
+                      $"PredictOn = {Host.State.PredictOn}");
+            }
+
+            ClickPhysical((predictRow.MinX + predictRow.MaxX) * 0.5f * DpiScale,
+                          (predictRow.MinY + predictRow.MaxY) * 0.5f * DpiScale);
+            SettleFrames(200);
+            Check("点「墨迹预测」：引擎状态立刻翻转（默认关 → 开）",
+                  Host.State.PredictOn, $"PredictOn = {Host.State.PredictOn}");
+        }
+
+        // 「功能提示」开关也过一遍完整链路（2026-10-02 新增；原叫「悬停提示」）：
+        // 点行 → 界面状态翻转 → 落盘
+        {
+            var tipRow = ui.RowRectByLabelForTest("功能提示");
+            Check("「功能提示」那一行找得到", tipRow.MaxY > tipRow.MinY,
+                  $"行高 {tipRow.MaxY - tipRow.MinY:F0}");
+            ClickPhysical((tipRow.MinX + tipRow.MaxX) * 0.5f * DpiScale,
+                          (tipRow.MinY + tipRow.MaxY) * 0.5f * DpiScale);
+            SettleFrames(200);
+            Check("点「功能提示」：开关翻到关", !ui.TipEnabledForTest,
+                  $"开关 = {ui.TipEnabledForTest}");
+        }
         SaveSettingsForTest();
 
         string prefsPath = InkSettings.PathOverride ?? "";
@@ -15501,20 +15850,39 @@ internal sealed partial class App : InkEngine.InkEngine
         Check("改动写进了配置文件",
               prefsText.Contains("\"ui\"") && prefsText.Contains("\"dark\"")
               && prefsText.Contains("\"profile\"") && prefsText.Contains("\"unpinned\"")
-              && prefsText.Contains("\"pressure\""),
+              && prefsText.Contains("\"pressure\"") && prefsText.Contains("\"tooltip\"")
+              && prefsText.Contains("\"predict\""),
               $"{Path.GetFileName(prefsPath)}（{prefsText.Length} 字节）");
 
         // 把内存里那份清掉、从文件重读，再挂一个新界面——这才算"重开软件"那条链子
         ReloadUiPrefsForTest();
         ApplyPressurePrefForTest();       // 压感是引擎状态，要补"启动时应用偏好"那一步
+        ApplyPredictPrefForTest();        // 墨迹预测同理
         SetUiFactory(() => new InkUi.FullUi());
         SettleFrames(300);
         ui = CurrentUi as InkUi.FullUi;
         Check("重开界面读回了偏好",
-              ui != null && ui.DarkForTest && ui.ProfileForTest == 1 && !ui.PinnedForTest(8),
-              $"深色={ui?.DarkForTest}，档位={ui?.ProfileForTest}（1=自定义），图形钉着={ui?.PinnedForTest(8)}");
+              ui != null && ui.DarkForTest && ui.ProfileForTest == 1 && !ui.PinnedForTest(8)
+              && !ui.TipEnabledForTest,
+              $"深色={ui?.DarkForTest}，档位={ui?.ProfileForTest}（1=自定义），图形钉着={ui?.PinnedForTest(8)}，"
+              + $"功能提示={ui?.TipEnabledForTest}");
         Check("压感偏好也读回来了（重启后仍是关）",
               !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
+        Check("墨迹预测偏好也读回来了（重启后仍是开）",
+              Host.State.PredictOn, $"PredictOn = {Host.State.PredictOn}");
+
+        // 关着开关时，"停在笔上 0.7 秒"必须**什么都不出**（开关真的在闸门上，不是装饰）
+        {
+            var penCell4 = ui.CellRectForTest(3);
+            SendMouse((int)((penCell4.MinX + penCell4.MaxX) * 0.5f * DpiScale),
+                      (int)((penCell4.MinY + penCell4.MaxY) * 0.5f * DpiScale), 0);
+            SettleFrames(700);
+            Check("关着开关：同样的悬停不出提示",
+                  !ui.TipVisibleForTest && !ui.TipEnabledForTest,
+                  $"可见 = {ui.TipVisibleForTest}，开关 = {ui.TipEnabledForTest}");
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.4f), 0);
+            SettleFrames(150);
+        }
 
         try { File.Delete(prefsPath); } catch { }        // 临时配置用完就删
 
@@ -17293,6 +17661,42 @@ internal sealed partial class App : InkEngine.InkEngine
                   inView && barsHit,
                   $"条 x {barLeft.MinX:F0}..{barLeft.MaxX:F0}（可见 {vp.MinX:F0}..{vp.MaxX:F0}），"
                   + $"按钮命中 {(barsHit ? "全中" : "有点不中")}");
+        }
+
+        // ⑩.4 悬停提示：选中操作条的每一格（2026-10-02；图标-only 的唯一文字出口）
+        {
+            Tool = Tool.Marquee;                 // 让操作条处于"显示"状态（上面这些用例就是框选在跑）
+            SettleFrames(120);
+            SelBarHover = (int)SelBarButton.Delete;
+            UpdateEngineTooltip();
+            SettleFrames(650);
+            StepEngineTooltip();                  // 自检里没有主循环，手动推一下"到点"
+            var delKeys = Keys.KeyText(KeyAction.DeleteSelected);
+            Check("操作条悬停 0.5 秒：提示出现（删除 + 键位）",
+                  TooltipShown && TooltipTitle == "删除" && TooltipKey == delKeys,
+                  $"亮={TooltipShown}，标题={TooltipTitle}，键={TooltipKey}（期望 {delKeys}）");
+
+            // 覆盖不变量：十格逐个数，一格都不许漏文案
+            bool barTipsAll = true; string barTipsMiss = "";
+            for (int i = 0; i < SelectionHandles.BarButtonCount; i++)
+            {
+                SelBarHover = i;
+                UpdateEngineTooltip();
+                if (string.IsNullOrEmpty(TooltipTitle)) { barTipsAll = false; barTipsMiss += i + " "; }
+            }
+            Check("操作条每一格都有提示文案（逐格数）", barTipsAll,
+                  barTipsAll ? $"{SelectionHandles.BarButtonCount} 格" : $"缺：{barTipsMiss}");
+
+            // 开关真的在闸门上：关掉之后同样的悬停不出提示
+            SetTooltipsFromUi(false);
+            SelBarHover = (int)SelBarButton.Color;
+            UpdateEngineTooltip();
+            SettleFrames(650);
+            StepEngineTooltip();
+            Check("关掉「悬停提示」：引擎侧提示不再出现", !TooltipShown, $"亮={TooltipShown}");
+            SetTooltipsFromUi(true);
+            SelBarHover = -1;
+            UpdateEngineTooltip();
         }
 
         // ⑪ 点选的**手势接线**（引擎那一侧：无选中时点一条、点空白、Shift 加选、收窄成单选）
@@ -23551,7 +23955,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Check("翻页：自动退出回放", !ReplayActive, $"active={ReplayActive}");
         FlipPageFromUi(false);
 
-        // ---- ⑥ PPT 回放（当前页）＋ 与 PPT 条/长按菜单的冲突 ----
+        // ---- ⑥ PPT 回放（当前页）＋ 与 PPT 条/菜单的冲突 ----
         //
         // 用户 2026-10-01 提醒："PPT 条长按菜单里那几项（自动保存 / 清空所有墨迹 /
         // 结束放映）会不会和回放冲突？" 结论与口径：
@@ -23606,7 +24010,7 @@ internal sealed partial class App : InkEngine.InkEngine
                       $"active={ReplayActive}，NextCalls {nextBefore} → {fake.NextCalls}");
             }
 
-            // 再回放，然后**长按页码**：回放先退场，菜单照开（互不打架）
+            // 再回放，然后**点页码**：回放先退场，菜单照开（互不打架）
             fake.Slide = 3; fake.SlideId = 258;
             StepPpt();
             SettleFrames(150);
@@ -23619,14 +24023,14 @@ internal sealed partial class App : InkEngine.InkEngine
                 float mx = (mid.MinX + mid.MaxX) * 0.5f;
                 float my = (mid.MinY + mid.MaxY) * 0.5f;
                 SendMouse((int)mx, (int)my, 0);                           SettleFrames(60);
-                SendMouse((int)mx, (int)my, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(750);
+                SendMouse((int)mx, (int)my, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
                 SendMouse((int)mx, (int)my, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(150);
-                Check("长按页码：回放先退场、菜单照开（不打架）",
+                Check("点页码：回放先退场、菜单照开（不打架）",
                       !ReplayActive && PptMenuOpen,
                       $"active={ReplayActive}，菜单={PptMenuOpen}");
                 // 用户 2026-10-01 提议：菜单里直接给「回放本页墨迹」——
                 // 放映时手就在条上，不用再去开中央面板。点它 = 收菜单 + 起当前页回放。
-                PptMenuItemRectAt(1, out var miReplay);
+                PptMenuItemRectAt(2, out var miReplay);
                 float rix = (miReplay.MinX + miReplay.MaxX) * 0.5f;
                 float riy = (miReplay.MinY + miReplay.MaxY) * 0.5f;
                 SendMouse((int)rix, (int)riy, 0);                           SettleFrames(60);

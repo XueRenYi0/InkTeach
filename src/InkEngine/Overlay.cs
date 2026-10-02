@@ -377,10 +377,15 @@ internal sealed partial class OverlayWindow : IDisposable
     private RectF _timerRectPrev = RectF.Empty;
     /// <summary>点名卡片上一帧的矩形。</summary>
     private RectF _rollRectPrev = RectF.Empty;
+    /// <summary>引擎侧悬停提示上一帧的矩形（换块 / 隐藏那一帧要把旧卡擦干净，同 PPT 条）。</summary>
+    private RectF _tipRectPrev = RectF.Empty;
 
     /// <summary>页码那一段文字的格式（13 逻辑像素，见 `PptPageFormat`）。</summary>
     private IDWriteTextFormat _pptPageFmt;
     private float _pptPageFmtPx;
+    /// <summary>悬停提示的两行格式：第一行 12.5、第二行 11（都左对齐，键位跟名称同一行）。</summary>
+    private IDWriteTextFormat _tipTitleFmt, _tipNoteFmt;
+    private float _tipTitleFmtPx, _tipNoteFmtPx;
 
     // 内容层的改动也要记两帧：后缓冲里躺着的是两帧前的画面。
     private readonly List<RectF> _contentDirtyNow = new();
@@ -2148,6 +2153,10 @@ internal sealed partial class OverlayWindow : IDisposable
         // 课堂点名卡片：同一层，默认屏幕中央偏上。
         DrawRollCard(app);
 
+        // 引擎侧悬停提示（选中操作条 / PPT 条与长按菜单）：画在所有浮层之上、
+        // 截图整层之下——截图时 TooltipShown 本来就是假的（进入截图会清掉）。
+        DrawEngineTooltip(app);
+
         // 截图整层（8.3.0）：遮罩/冻结帧/取景框/准线/读数/调整手柄。
         // 放在最后 = 盖住上面所有东西（滚动条、PPT 条、HUD）；界面那一块在截图期间
         // 由引擎收起（见 PrepareUi），所以这就是屏幕上看到的全部。
@@ -2349,6 +2358,20 @@ internal sealed partial class OverlayWindow : IDisposable
             }
             if (!_rollRectPrev.IsEmpty) r.Add(_rollRectPrev);
             _rollRectPrev = cur;
+        }
+
+        // 引擎侧悬停提示（选中操作条 / PPT 条与长按菜单）：显示、换块、收起都在变，
+        // 按当前矩形算进脏区；**收起那一帧**旧位置也要擦（同图库 / PPT 条的做法）。
+        {
+            var cur = RectF.Empty;
+            if (app.TooltipShown)
+            {
+                cur = TooltipCardRect(app);
+                float tipPad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
+                if (!cur.IsEmpty) r.Add(cur.Inflate(tipPad));
+            }
+            if (!_tipRectPrev.IsEmpty) r.Add(_tipRectPrev);
+            _tipRectPrev = cur;
         }
 
         // 选中高亮画在浮动层上、不进内容层，所以它的区域必须每帧算进脏区。
@@ -4147,19 +4170,6 @@ internal sealed partial class OverlayWindow : IDisposable
         _scratch.Color = theme.TextMuted;
         _ctx.DrawText(pRest, pfmt, new Rect(pX0 + pWCur, mid.MinY, pWRest, mid.MaxY - mid.MinY), _scratch);
 
-        // 长按反馈：页码格下沿一条进度线（没有反馈的长按等于没实现）。
-        // 到点就直接弹菜单了（见 StepPptBar），所以它只在"按住这 600ms"里出现。
-        if (app.PptLongPressProgress > 0f && !app.PptBarDragging && !app.PptMenuOpen && !app.PptPagePanelOpen)
-        {
-            float inset = 10f * dpi;
-            float y = mid.MaxY - 5f * dpi;
-            _scratch.Color = theme.ActiveBg;
-            _ctx.FillRoundedRectangle(new RoundedRectangle(new Vortice.RawRectF(
-                mid.MinX + inset, y,
-                mid.MinX + inset + (mid.MaxX - mid.MinX - inset * 2f) * app.PptLongPressProgress,
-                y + 3f * dpi), 1.5f * dpi, 1.5f * dpi), _scratch);
-        }
-
         if (app.PptHintVisible) DrawPptHint(app);
         if (app.PptPagePanelOpen) DrawPptPagePanel(app);
         if (app.PptMenuOpen) DrawPptMenu(app);
@@ -4576,11 +4586,121 @@ internal sealed partial class OverlayWindow : IDisposable
         };
         DrawPanelCard(app, hint, 8f * dpi);
         _scratch.Color = theme.Text;
-        // 文案里**不能再提「⋮」**（2026-09-27 删掉了）——菜单现在只有长按一条路，
-        // 这句话就是把那条路说清楚。用户的原话："提示'长按可以呼出退出菜单'"。
-        _ctx.DrawText("长按页码可呼出菜单", ReadoutFormatSmall(dpi),
+        // 文案（2026-10-02 第五轮）：入口从"长按"改成"点一下"之后，这句话只说
+        // "点它出来的是页码跳转菜单"——用户拍板的短句，指点性质靠"点页码："三个字。
+        _ctx.DrawText("点页码：页码跳转菜单", ReadoutFormatSmall(dpi),
                       new Rect(hint.MinX, hint.MinY, hint.MaxX - hint.MinX, hint.MaxY - hint.MinY),
                       _scratch);
+    }
+
+    // ---- 引擎侧悬停提示（Tooltip；2026-10-02）--------------------------------
+    //
+    // 状态在 `InkEngine.Tooltip.cs`（谁悬停、500ms 延迟、开关、文案表）；这里只负责
+    // "量文字、摆位置、画卡片、报脏区"。规矩和界面层那一套一致，规格见
+    // 《调研-悬停提示-Tooltip.md》——两套各自实现（两个工程画在不同表面上），
+    // 但延迟、内容格式、外观语言必须一致。
+
+    private IDWriteTextFormat TipTitleFormat(float dpi)
+    {
+        float px = MathF.Max(10f, MathF.Round(12.5f * dpi));
+        if (_tipTitleFmt == null || _tipTitleFmtPx != px)
+        {
+            _tipTitleFmt?.Dispose();
+            _tipTitleFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _tipTitleFmt.TextAlignment = TextAlignment.Leading;
+            _tipTitleFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _tipTitleFmtPx = px;
+        }
+        return _tipTitleFmt;
+    }
+
+    private IDWriteTextFormat TipNoteFormat(float dpi)
+    {
+        float px = MathF.Max(9f, MathF.Round(11f * dpi));
+        if (_tipNoteFmt == null || _tipNoteFmtPx != px)
+        {
+            _tipNoteFmt?.Dispose();
+            _tipNoteFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _tipNoteFmt.TextAlignment = TextAlignment.Leading;
+            _tipNoteFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _tipNoteFmtPx = px;
+        }
+        return _tipNoteFmt;
+    }
+
+    /// <summary>
+    /// 提示卡的矩形（物理像素，和浮层同一套屏幕坐标）：宽度按文字量、横向夹进屏幕，
+    /// 纵向上**优先锚点上方 8 像素**，顶到屏幕上沿就翻到下方。
+    /// 量宽、摆位、绘制、脏区**都读这一份**——各算一遍迟早差几个像素（浮层的老教训）。
+    /// </summary>
+    private RectF TooltipCardRect(InkEngine app)
+    {
+        if (!app.TooltipShown || string.IsNullOrEmpty(app.TooltipTitle)) return RectF.Empty;
+        float dpi = Dpi / 96f;
+        var titleFmt = TipTitleFormat(dpi);
+        var noteFmt = TipNoteFormat(dpi);
+
+        float titleW = MeasureTextWidth(app.TooltipTitle, titleFmt);
+        float keyW = string.IsNullOrEmpty(app.TooltipKey)
+            ? 0f : 12f * dpi + MeasureTextWidth(app.TooltipKey, titleFmt);
+        float noteW = string.IsNullOrEmpty(app.TooltipNote)
+            ? 0f : MeasureTextWidth(app.TooltipNote, noteFmt);
+        float padX = 12f * dpi, padY = 8f * dpi;
+        float w = MathF.Max(titleW + keyW, noteW) + padX * 2f;
+        float h = (string.IsNullOrEmpty(app.TooltipNote) ? 20f : 36f) * dpi + padY * 2f;
+
+        var a = app.TooltipAnchorNow;
+        var scr = app.TipScreenNow;
+        float cx = (a.MinX + a.MaxX) * 0.5f;
+        float x0 = cx - w * 0.5f, x1 = cx + w * 0.5f;
+        float lo = scr.MinX + 4f * dpi, hi = scr.MaxX - 4f * dpi;
+        if (x0 < lo) { x1 += lo - x0; x0 = lo; }
+        if (x1 > hi) { x0 -= x1 - hi; x1 = hi; }
+
+        float gap = 8f * dpi;
+        float top = a.MinY - gap - h;
+        if (top < scr.MinY + 4f * dpi) top = a.MaxY + gap;
+        return new RectF { MinX = x0, MinY = top, MaxX = x1, MaxY = top + h };
+    }
+
+    private void DrawEngineTooltip(InkEngine app)
+    {
+        if (!app.TooltipShown) return;
+        var box = TooltipCardRect(app);
+        if (box.IsEmpty) return;
+
+        float dpi = Dpi / 96f;
+        var theme = app.FloatingTheme;
+        float radius = MathF.Min(8f * dpi, (box.MaxY - box.MinY) * 0.5f);
+        DrawPanelCard(app, box, radius);
+
+        var titleFmt = TipTitleFormat(dpi);
+        var noteFmt = TipNoteFormat(dpi);
+        float padX = 12f * dpi, padY = 8f * dpi, lineH = 20f * dpi;
+        bool hasNote = !string.IsNullOrEmpty(app.TooltipNote);
+
+        float titleW = MeasureTextWidth(app.TooltipTitle, titleFmt);
+        float titleY = hasNote ? box.MinY + padY : (box.MinY + box.MaxY) * 0.5f - lineH * 0.5f;
+        _scratch.Color = theme.Text;
+        _ctx.DrawText(app.TooltipTitle, titleFmt,
+                      new Rect(box.MinX + padX, titleY, MathF.Max(1f, titleW + 4f), lineH), _scratch);
+        if (!string.IsNullOrEmpty(app.TooltipKey))
+        {
+            _scratch.Color = theme.TextMuted;
+            _ctx.DrawText(app.TooltipKey, titleFmt,
+                          new Rect(box.MinX + padX + titleW + 12f * dpi, titleY, Width + 4096f, lineH),
+                          _scratch);
+        }
+        if (hasNote)
+        {
+            _scratch.Color = theme.TextMuted;
+            _ctx.DrawText(app.TooltipNote, noteFmt,
+                          new Rect(box.MinX + padX, box.MinY + padY + lineH,
+                                   box.MaxX - box.MinX - padX * 2f, lineH),
+                          _scratch);
+        }
     }
 
     /// <summary>

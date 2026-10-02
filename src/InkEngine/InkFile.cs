@@ -97,6 +97,18 @@ public partial class InkEngine
     internal void SaveInkFileFromUi() => SaveInkFile(null);
     internal void OpenInkFileFromUi() => OpenInkFile(null);
 
+    /// <summary>「保存图片」入口（更多 → 墨迹 → 保存图片，2026-10-02）。</summary>
+    internal void SaveBoardImageFromUi()
+    {
+        int last = int.TryParse(GetUiPref(BoardImageFormatPref), out int v)
+                   && v >= 1 && v <= ExportFormats.Count ? v : 2;   // 默认第 2 条 = JPEG 白底（好发微信）
+        SaveBoardImage(null, last);
+    }
+
+    /// <summary>自检用：不弹对话框，直接写到指定路径（其余流程一模一样）。</summary>
+    internal bool SaveBoardImageForTest(string path, int filterIndex = 2)
+        => SaveBoardImage(path, filterIndex);
+
     /// <summary>自检用：不弹对话框，直接读写指定路径（其余流程一模一样）。</summary>
     internal bool SaveInkFileForTest(string path) => SaveInkFile(path);
     internal bool OpenInkFileForTest(string path) => OpenInkFile(path);
@@ -191,6 +203,67 @@ public partial class InkEngine
         Doc.InvalidateAll();
         _dirty = true;
         SetInkStatus($"已打开 {Path.GetFileName(path)}（{Doc.Strokes.Count} 个对象；{backupNote}）");
+        return true;
+    }
+
+    /// <summary>「保存图片」上次选的格式（和选中导出的 `ui.exportFormat` 分开记）。</summary>
+    private const string BoardImageFormatPref = "boardImageFormat";
+
+    /// <summary>
+    /// **「保存图片」**（2026-10-02 用户提议）：把**整块板书**（当前页全部对象的
+    /// 内容包围盒）渲染成一张图片——老师要把墨迹发学生 / 发微信，`.inkb` 发不了。
+    ///
+    /// 与选中操作条「导出」的分工（用户点名对照过，两个都保留）：
+    ///   · **导出** = 只导**选中的**、紧凑裁切，默认**透明底** —— 贴课件 / 抠图；
+    ///   · **这里** = **整块板书**，默认 **JPEG 白底**（格式栏里那条"好发微信邮件"）
+    ///     —— 发学生 / 发家长。
+    ///
+    /// 复用现成管线：`EditRegion.Of` 取包围盒（4×DPI 白边、32M 像素上限）→
+    /// `RenderStrokesToBgra` 离屏渲染（图形 / 图片 / 压感都在）→ `AskForImage`
+    /// 系统另存为（四种格式照旧）→ `WriteExport` 写盘。
+    /// **不碰选区、不写剪贴板**（导出只管落盘）。放映中与空板书按 6.4.1b 置灰/拒绝。
+    /// </summary>
+    private bool SaveBoardImage(string path, int filterIndex)
+    {
+        if (PptMode) { SetInkStatus("放映中不存图片（退出放映后再用这里）"); return false; }
+        if (Doc.Strokes.Count == 0) { SetInkStatus("还没有可保存的墨迹"); return false; }
+
+        var box = EditRegion.Of(Doc.Strokes);
+        if (box.IsEmpty) { SetInkStatus("还没有可保存的墨迹"); return false; }
+        box = box.Inflate(4f * DpiScale);
+        int w = Math.Max(1, (int)MathF.Ceiling(box.MaxX - box.MinX));
+        int h = Math.Max(1, (int)MathF.Ceiling(box.MaxY - box.MinY));
+        if ((long)w * h > 32_000_000) { SetInkStatus($"板书太大（{w}×{h}），存不下"); return false; }
+        if (_windows.Count == 0) { SetInkStatus("没有可用窗口，存不了"); return false; }
+
+        if (path == null)
+        {
+            // 自检模式绝不弹系统对话框（模态调用会在自检的消息泵里卡死，见 ExportSelection）。
+            if (!ExportDialogEnabled) { SetInkStatus("自检模式不弹对话框"); return false; }
+            int want = filterIndex >= 1 && filterIndex <= ExportFormats.Count ? filterIndex : 2;
+            string suggested = $"板书-{DateTime.Now:yyyyMMdd-HHmm}" + ExportFormats.ExtensionFor(want);
+            BorrowFocusForDialog();
+            ExportDialogOpen = true;
+            try
+            {
+                path = ExportFileDialog.AskForImage(OwnerHwnd(), suggested, want, out int chosen);
+                if (chosen >= 1) want = chosen;
+            }
+            catch (Exception ex) { SetInkStatus("弹保存对话框失败：" + ex.Message); return false; }
+            finally { ExportDialogOpen = false; ReturnFocusAfterDialog(); }
+            if (path == null) { SetInkStatus("已取消"); return false; }
+            SetUiPref(BoardImageFormatPref, want.ToString());
+            filterIndex = want;
+        }
+
+        var bgra = _windows[0].RenderStrokesToBgra(Doc.Strokes, box, w, h);
+        if (bgra == null) { SetInkStatus("图片渲染失败"); return false; }
+        if (!WriteExport(bgra, w, h, path, filterIndex))
+        {
+            SetInkStatus("保存图片失败（详见控制台）");
+            return false;
+        }
+        SetInkStatus($"已保存图片 {Path.GetFileName(path)}（{w}×{h}）");
         return true;
     }
 }

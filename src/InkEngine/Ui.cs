@@ -173,6 +173,13 @@ public interface IUiHost
     void SetPref(string key, string value);
 
     /// <summary>
+    /// 某个动作**当前生效的键位文本**（如 "Ctrl+P"；没有绑定返回 null）。
+    /// 悬停提示用它——键位的唯一起源是引擎的 <c>KeyBindings</c>，界面不自抄一份：
+    /// 用户改了 `settings.json`（甚至把某个键取消掉）之后，提示跟着变。
+    /// </summary>
+    string KeyText(KeyAction action);
+
+    /// <summary>
     /// 界面把自己的**浮层主题**推给引擎：选中操作条、颜色/粗细/层级面板、导出格式面板、
     /// 旋转读数都用它的颜色与投影画。
     ///
@@ -348,6 +355,24 @@ public interface IEngineCommands
     void SetPressure(bool on);
 
     /// <summary>
+    /// **悬停提示的总开关**（「更多 → 设置 → 外观 → 悬停提示」，2026-10-02 加）。
+    ///
+    /// 默认**开**。界面层的提示由界面自己管（它读同一个偏好），这一条只负责
+    /// **引擎自己画的浮层**（选中操作条、PPT 控件条与长按菜单）。
+    /// 界面在 `LoadPrefs` 和点那一行时各推一次——引擎不读界面偏好（分层纪律）。
+    /// </summary>
+    void SetTooltips(bool on);
+
+    /// <summary>
+    /// **墨迹预测的开关**（「更多 → 设置 → 书写 → 墨迹预测」，2026-10-02 加）。
+    ///
+    /// 默认**关**（2026-09-29 定的）；开着只影响**鼠标/触摸**的自绘预测尾
+    /// （地平线固定 10ms），真笔那条仍然不喂（DWM 不画我们的预测点）。
+    /// 偏好键 `ui.predict`（只在开时写 "1"）；命令行 `--predict` 优先。
+    /// </summary>
+    void SetPredict(bool on);
+
+    /// <summary>
     /// 「更多」抽屉里"坐标系网格"那一行被点了一下。
     /// **选中了坐标系就改它们，没选中就翻"新画的默认值"**（语义见 Engine.ToggleSelectionGrid）。
     /// 返回改了几个对象（0 = 改的是默认值，界面据此决定要不要把偏好落盘）。
@@ -403,6 +428,17 @@ public interface IEngineCommands
     /// 结果写进 <see cref="UiState.InkStatus"/>。放映中不响应。
     /// </summary>
     void OpenInkFile();
+
+    /// <summary>
+    /// **保存图片**（2026-10-02「更多 → 墨迹 → 保存图片」）：把**整块板书**渲染成图片
+    /// 存盘（默认 JPEG 白底，好发微信/邮件），走系统"另存为"（透明 PNG / JPEG 白底 /
+    /// PNG 白底 / BMP 四种照旧）。
+    ///
+    /// 与选中操作条「导出」的分工：导出只导**选中的**、默认透明底（贴课件/抠图）；
+    /// 这里导**整块板书**、默认白底（发学生）。空板书 / 放映中不响应；
+    /// 不碰选区、不写剪贴板。结果写进 <see cref="UiState.InkStatus"/>。
+    /// </summary>
+    void SaveBoardImage();
 
     /// <summary>
     /// **开始墨迹回放**（墨迹 C）：按当时的速度重演**当前一屏**的笔迹。
@@ -859,6 +895,13 @@ public readonly struct UiState
     /// 默认开；关掉 = 整块板等宽（渲染期语义，文档里的压力数据不动）。
     /// </summary>
     public bool PressureOn { get; init; }
+
+    /// <summary>
+    /// **墨迹预测**开着吗（界面用它显示「设置 → 书写 → 墨迹预测」那一行的开关）。
+    /// 默认关（用户 2026-09-29 定；2026-10-02 加设置开关）；开了只影响鼠标/触摸的
+    /// 自绘预测尾，真笔那条不动（见 `PredictEnabled` 的注释）。
+    /// </summary>
+    public bool PredictOn { get; init; }
     /// <summary>现在在第几屏（1 起）。界面用它显示"第 N 屏"。</summary>
     public int ScreenIndex { get; init; }
     /// <summary>还能不能往上翻（到顶了就不行）。"下一屏"永远可用。</summary>
@@ -930,9 +973,12 @@ public readonly struct UiState
 /// </summary>
 public readonly struct UiPointerEvent
 {
-    public UiPointerEvent(float x, float y, float pressure, bool fromPen, bool isEraserTip)
+    public UiPointerEvent(float x, float y, float pressure, bool fromPen, bool isEraserTip,
+                          bool fromTouch = false, uint pointerId = 0)
     {
         X = x; Y = y; Pressure = pressure; FromPen = fromPen; IsEraserTip = isEraserTip;
+        FromTouch = fromTouch;
+        PointerId = pointerId;
     }
 
     public float X { get; }
@@ -940,6 +986,20 @@ public readonly struct UiPointerEvent
     public float Pressure { get; }
     public bool FromPen { get; }
     public bool IsEraserTip { get; }
+
+    /// <summary>
+    /// 这一下是**手指**（PT_TOUCH）。给"触摸长按出提示"用（2026-10-02）——
+    /// 界面据此区分"鼠标按住"（= 拖动）和"手指按住"（= 长按候选）。
+    /// 笔接触不算触摸（笔有自己的 <see cref="FromPen"/>；长按候选 = FromTouch || FromPen）。
+    /// </summary>
+    public bool FromTouch { get; }
+
+    /// <summary>
+    /// 系统给的指针 id（同一根手指/鼠标在整个"按下 → 移动 → 抬起"里不变）。
+    /// 触摸长按期间用它挡掉**别的指针**的移动：引擎会把窗口收到的所有移动都转给界面，
+    /// 停着的鼠标随便动一下就会被当成"手指滑走了"（2026-10-02 自检实测：长按被搅黄）。
+    /// </summary>
+    public uint PointerId { get; }
 }
 
 /// <summary>

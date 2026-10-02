@@ -56,6 +56,22 @@ internal sealed class Widgets
                      brush);
     }
 
+    /// <summary>
+    /// 量一段文字有多宽（逻辑像素）。**量和画用同一个 Format**——悬停提示的卡片
+    /// 要"按文字量宽"（照引擎侧呼出盘提示卡的做法），量盒子和画字不同源就会裁字或留白。
+    /// 量不出来返回 0（调用方退回一个最小宽），绝不因为量个宽度把渲染搞挂。
+    /// </summary>
+    public float Measure(string text, float size)
+    {
+        if (string.IsNullOrEmpty(text)) return 0f;
+        try
+        {
+            using var layout = _host.TextFactory.CreateTextLayout(text, Format(size, false), 4096f, 1024f);
+            return layout.Metrics.Width;
+        }
+        catch { return 0f; }
+    }
+
     // ---- 滑条 ---------------------------------------------------------------
 
     /// <summary>轨道 + 已走过去的那一段 + 滑钮。返回滑钮的圆心（画预览用得上）。</summary>

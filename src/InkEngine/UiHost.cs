@@ -82,6 +82,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public string GetPref(string key) => _engine.GetUiPref(key);
     public void SetPref(string key, string value) => _engine.SetUiPref(key, value);
 
+    /// <summary>某个动作当前的键位文本（悬停提示用；唯一起源见 KeyBindings）。</summary>
+    public string KeyText(KeyAction action) => _engine.KeyTextFor(action);
+
     /// <summary>界面把自己的浮层主题推给引擎（见 IOverlayUi / IUiHost 的说明）。</summary>
     public void SetFloatingTheme(UiTheme theme) => _engine.SetFloatingThemeFromUi(theme);
 
@@ -110,6 +113,8 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetCoordGridDefault(bool on) => _engine.SetCoordGridDefaultFromUi(on);
     public void SetDwellShape(bool on) => _engine.SetDwellShapeFromUi(on);
     public void SetPressure(bool on) => _engine.SetPressureFromUi(on);
+    public void SetPredict(bool on) => _engine.SetPredictFromUi(on);
+    public void SetTooltips(bool on) => _engine.SetTooltipsFromUi(on);
     public int ToggleCoordGrid() => _engine.ToggleSelectionGrid();
 
     public void SetBoardPattern(int pattern, float stepLogical)
@@ -125,6 +130,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void Quit() => _engine.QuitFromUi();
     public void SaveInkFile() => _engine.SaveInkFileFromUi();
     public void OpenInkFile() => _engine.OpenInkFileFromUi();
+    public void SaveBoardImage() => _engine.SaveBoardImageFromUi();
     public void StartReplay() => _engine.StartReplayFromUi();
     public void StopReplay() => _engine.StopReplayFromUi();
     public void OpenTimerCard() => _engine.OpenTimerCardFromUi();

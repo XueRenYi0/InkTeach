@@ -336,6 +336,49 @@ internal static class Tokens
     /// </summary>
     public const float PaintMargin = 24f;
 
+    // ---- 悬停提示（Tooltip；2026-10-02）--------------------------------------
+
+    /// <summary>
+    /// 鼠标在同一块地方停多久才浮出提示。500ms 的出处：WPF
+    /// `ToolTipService.InitialShowDelay` 默认 400ms（微软官方文档，`BetweenShowDelay`
+    /// 默认 100ms），取松一档是给"扫过一排格子"留余量——路过不算数，停住才说明在问它。
+    /// </summary>
+    public const double TipDelayMs = 500;
+
+    /// <summary>提示淡入的时长（和悬停反馈一套节奏，别让它"啪"地跳出来）。</summary>
+    public const double TipFadeMs = 100;
+
+    /// <summary>
+    /// **触摸/笔长按出提示**的阈值（毫秒）。600：和 PPT 长按菜单同一量级，
+    /// 比悬停的 500 稍长一点点——手上"按住不动"比鼠标"停住"更容易误判。
+    /// 主流参照：Windows 官方把 press-and-hold 列为 tooltip 触发方式，Android 长按同理。
+    /// </summary>
+    public const double TipHoldMs = 600;
+
+    /// <summary>
+    /// 触摸长按的提示**松手后再停**多久（毫秒）。2500 照 Android 长按提示的节奏：
+    /// 微软是"松手即消"，但手指按住不动 600ms 再抱着读完太累，停一会儿更好读。
+    /// </summary>
+    public const double TipLingerMs = 2500;
+
+    /// <summary>提示卡和面板之间的缝（淡入时另外上浮 3px，见 FullUi.TipBox）。</summary>
+    public const float TipGap = 8f;
+
+    /// <summary>提示卡的内边距：左右 12、上下 8。</summary>
+    public const float TipPadX = 12f;
+    public const float TipPadY = 8f;
+
+    /// <summary>提示两行字：第一行名称（12.5），第二行说明（11）。</summary>
+    public const float TipTitleSize = 12.5f;
+    public const float TipNoteSize = 11f;
+
+    /// <summary>
+    /// 出提示期间界面要往占用矩形外多画多少（逻辑像素）。提示卡高约 48、
+    /// 离面板 8，再算上投影 16，所以 88 够用（`QueryBounds` 本身不放——
+    /// 那份矩形是命中测试的，放大等于"提示旁边点不动"）。
+    /// </summary>
+    public const float TipPaintMargin = 88f;
+
     // ---- 调色板 -------------------------------------------------------------
 
     /// <summary>

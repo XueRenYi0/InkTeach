@@ -21,10 +21,13 @@ internal enum KeyScope
 }
 
 /// <summary>
-/// 快捷键能触发的动作。**动作是引擎的，不是界面的**：界面将来只是给这些动作
-/// 画按钮、显示键位提示。
+/// 快捷键能触发的动作。**动作是引擎的，不是界面的**：界面给这些动作画按钮、
+/// 显示键位提示（悬停提示用 <see cref="IUiHost.KeyText"/> 查当前键位）。
+///
+/// 2026-10-02 从 internal 改为 public：界面层要按动作名查键位文本画 tooltip，
+/// 键位改了（settings.json）提示要跟着变，所以枚举本身也得给界面看得见。
 /// </summary>
-internal enum KeyAction
+public enum KeyAction
 {
     None = 0,
 
@@ -245,6 +248,19 @@ internal sealed class KeyMap
 
     public Binding Find(KeyScope scope, KeyAction action)
         => Bindings.FirstOrDefault(b => b.Scope == scope && b.Action == action);
+
+    /// <summary>
+    /// 某个动作**当前生效的键位文本**（如 `Ctrl+P`；一个动作挂了多处绑定就用 ` / ` 连起来；
+    /// 没有任何绑定返回 null）。悬停提示用它——键位的唯一起源就是这张表，
+    /// 用户改了 `settings.json` 之后提示跟着变，不会留一份写死的旧键位。
+    /// </summary>
+    public string KeyText(KeyAction action)
+    {
+        var parts = new List<string>();
+        foreach (var b in Bindings)
+            if (b.Action == action && b.Chord.IsValid) parts.Add(b.Chord.ToString());
+        return parts.Count == 0 ? null : string.Join(" / ", parts);
+    }
 
     /// <summary>这个组合在这个作用域里被谁占着（null = 没人占）。</summary>
     public Binding OccupiedBy(KeyScope scope, KeyChord chord, KeyAction except)
