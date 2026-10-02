@@ -36,6 +36,17 @@ $zip = Join-Path $root "dist\InkTeach-$Version-win-x64.zip"
 $setup = Join-Path $root "dist\InkTeach-Setup-$Version.exe"
 foreach ($f in @($zip, $setup)) { if (-not (Test-Path $f)) { throw "缺文件：$f（先跑 .\publish.ps1）" } }
 
+# JSON 一律**先落文件、再按 UTF-8 读**：PowerShell 5.1 的 `curl | ConvertFrom-Json`
+# 管道会把 UTF-8 中文/长 JSON 解错（2026-10-04 发 8.6.4 时真踩过：发行版都建出来了，
+# 解析那一步抛异常，附件没传成）。落文件读回来就稳了。
+$tmpJson = Join-Path $env:TEMP "inkteach-gc-rel-$Version.json"
+function Read-GcJson([string]$file) {
+    if (-not (Test-Path $file)) { return $null }
+    $raw = [System.IO.File]::ReadAllText($file, [System.Text.Encoding]::UTF8)
+    if (-not $raw) { return $null }
+    return ($raw | ConvertFrom-Json)
+}
+
 # ① 源码镜像（输出里把令牌打码；git 往 stderr 打进度，别被 $ErrorActionPreference=Stop 当成异常）
 Write-Host "  推送源码（main + 标签）到 GitCode…" -ForegroundColor DarkGray
 $prevEap = $ErrorActionPreference
@@ -48,13 +59,17 @@ if ($gitExit -ne 0) { throw "推送 GitCode 失败（git exit=$gitExit）" }
 
 # ② 发行版
 $rel = $null
-try { $rel = curl.exe -s --max-time 60 "$api/releases/tags/$tag`?access_token=$tok" | ConvertFrom-Json } catch { }
+try {
+    $null = curl.exe -s --max-time 60 -o $tmpJson "$api/releases/tags/$tag`?access_token=$tok"
+    $rel = Read-GcJson $tmpJson
+} catch { }
 if (-not $rel -or -not $rel.tag_name) {
-    $rel = curl.exe -s --max-time 60 -X POST "$api/releases?access_token=$tok" `
+    $null = curl.exe -s --max-time 60 -o $tmpJson -X POST "$api/releases?access_token=$tok" `
         --data-urlencode "tag_name=$tag" `
         --data-urlencode "name=$tag InkTeach" `
         --data-urlencode "body=$Notes" `
-        --data-urlencode "target_commitish=main" | ConvertFrom-Json
+        --data-urlencode "target_commitish=main"
+    $rel = Read-GcJson $tmpJson
     if (-not $rel -or -not $rel.tag_name) { throw "建 GitCode 发行版失败（$tag）" }
     Write-Host "  已建发行版 $tag" -ForegroundColor Green
 }
@@ -78,7 +93,9 @@ foreach ($f in @($zip, $setup)) {
 }
 
 # ④ 回读
-$rel2 = curl.exe -s --max-time 60 "$api/releases/tags/$tag" | ConvertFrom-Json
+$null = curl.exe -s --max-time 60 -o $tmpJson "$api/releases/tags/$tag"
+$rel2 = Read-GcJson $tmpJson
 Write-Host "  附件直链：" -ForegroundColor DarkGray
 @($rel2.assets | Where-Object { $_.type -eq 'attach' }) | ForEach-Object { "    $($_.browser_download_url)" }
 Write-Host "  完成：https://gitcode.com/$owner/$repo/releases/tag/$tag" -ForegroundColor Green
+Remove-Item $tmpJson -Force -ErrorAction SilentlyContinue
