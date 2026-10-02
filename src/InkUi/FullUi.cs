@@ -2483,7 +2483,7 @@ public sealed class FullUi : IOverlayUi
         {
             ("设置", "参数与偏好", false),
             ("检查更新", "有新版本会提示", false),
-            ("重启软件", "板书会保留", false),
+            ("重启软件", "像电脑重启，板书不保留", false),
             ("退出", "关掉批注", true),
         };
         for (int i = 0; i < 4; i++)
@@ -2613,7 +2613,7 @@ public sealed class FullUi : IOverlayUi
                     _host.Commands.CheckUpdate();
                 Invalidate();
                 break;
-            case 2: _host.Commands.Restart(); break;   // 引擎会先暂存板书再重启
+            case 2: _host.Commands.Restart(); break;   // 像电脑重启：不写会话暂存，板书不接回来（引擎语义见 RestartFromUi）
             case 3: _host.Commands.Quit(); break;
         }
     }
