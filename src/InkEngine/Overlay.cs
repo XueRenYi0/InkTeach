@@ -2784,7 +2784,9 @@ internal sealed partial class OverlayWindow : IDisposable
         //    拖动 / 旋转 / 拖元素中收起来（此刻点不中，而且是最"晃眼"的一圈家具）。
         if (!collapsed)
         {
-            float hs = SelectionHandles.VisualSizeLogical * dpi;
+            // 视觉柄**跟着对象大小缩**（小对象别被手柄盖住），命中半径不缩——
+            // 判据与理由都在 SelectionHandles.VisualHandleSize。
+            float hs = SelectionHandles.VisualHandleSize(frame.CanvasAabb, dpi);
             float radius = hs * 0.28f;
             if (nh > 0)
             {

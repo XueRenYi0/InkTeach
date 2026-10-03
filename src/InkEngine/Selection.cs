@@ -292,6 +292,30 @@ internal static class SelectionHandles
     /// </summary>
     public const float HitRadiusLogical = 14f;
 
+    /// <summary>
+    /// 这一次该把通用手柄画多大（画布单位，含 DPI）。
+    ///
+    /// **大对象拿满 <see cref="VisualSizeLogical"/>；小对象视觉柄跟着缩、命中半径不缩**：
+    ///   · 判据 = 框**短边**的 40%，夹在 [<see cref="VisualSizeLogical"/> 的一半, 满尺寸]；
+    ///     所以短边 < 35 逻辑像素才开始缩，短边 17.5 逻辑像素时到下限 7。
+    ///   · 命中半径**不跟着缩**（还是 <see cref="HitRadiusLogical"/> 28×28）：
+    ///     投影上"看得小了点"只是观感，"点不中"才是事故——命中区大一点永远没错。
+    ///
+    /// 为什么需要它（2026-10-05 用户："8 个点/特殊点有点大；大图形无所谓，
+    /// 图形太小了还这么大不合适"）：14 逻辑的方块在 2 倍屏上是 28 物理像素，
+    /// 小图形（几十像素）四角一放就把内容盖住了。
+    /// 边中点柄更早的让位在 <see cref="ThinEdges"/>（绘制/命中同一把尺子）。
+    /// 参考（思路，不抄）：Figma 在小选区时先去掉边中点、只留四角；白板类工具在
+    /// 对象小于手柄时会把手柄缩一档——共同点是**先保命中、再谈好看**。
+    /// </summary>
+    public static float VisualHandleSize(in RectF box, float dpiScale)
+    {
+        float full = VisualSizeLogical * dpiScale;
+        float min = full * 0.5f;
+        float shortSide = MathF.Min(box.MaxX - box.MinX, box.MaxY - box.MinY);
+        return Math.Clamp(shortSide * 0.4f, min, full);
+    }
+
     /// <summary>旋转手柄离上边的距离（逻辑像素）。</summary>
     public const float RotateOffsetLogical = 30f;
 
