@@ -422,6 +422,12 @@ internal static class ExportFileDialog
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
 
+    [DllImport("user32.dll")]
+    private static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc cb, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -618,6 +624,10 @@ internal static class ExportFileDialog
                 Thread.Sleep(10);
                 IntPtr dlg = FindOurDialog();
                 if (dlg == IntPtr.Zero) continue;
+                // **等它"长好"再碰**：对话框刚 CreateWindow 时可见但空（子控件还没建、
+                // 客户区还没画）。这时 SWP_SHOWWINDOW/激活会把它那张**空白首帧**强行摆到
+                // 屏幕上——用户 2026-10-05 报的"点保存图片先闪一下白屏，然后才出对话框"。
+                if (!DialogReady(dlg)) continue;
                 CenterAndBringUp(dlg);
                 Log($"对话框 {dlg} 已居中并顶到最前（看门线程第 {i + 1} 次尝试）");
                 return;
@@ -626,6 +636,22 @@ internal static class ExportFileDialog
         });
         t.IsBackground = true;
         t.Start();
+    }
+
+    /// <summary>
+    /// 对话框"长好了"吗：可见 **且已经建出子控件**（客户区画得出来了）。
+    ///
+    /// 为什么需要：通用对话框是"先创建空壳、再建控件、再画"的三拍。看门线程 10ms 一轮，
+    /// 很容易在第二拍之前就抓到它——那一刻碰它（尤其 `SWP_SHOWWINDOW` / 激活），
+    /// 就会把它那张空白首帧摆到老师眼前（用户 2026-10-05 报的白屏）。
+    /// 子控件出现 = 客户区马上就有内容，这时再置顶/激活就不会看到空白。
+    /// </summary>
+    private static bool DialogReady(IntPtr hwnd)
+    {
+        if (!IsWindowVisible(hwnd)) return false;
+        bool hasChild = false;
+        EnumChildWindows(hwnd, (h, _) => { hasChild = true; return false; }, IntPtr.Zero);
+        return hasChild;
     }
 
     /// <summary>
@@ -688,7 +714,10 @@ internal static class ExportFileDialog
                 + $"出生看到：{_cbtBirthNote}");
 
             // ① 先只管 z 序：把它提到置顶层，位置先别动。
-            SetWindowPos(hwnd, HwndTopmost, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            //    ⚠ **不带 SWP_SHOWWINDOW**：对话框由系统自己显示；我们提前 Show，
+            //    会在它还没画完时把空白首帧推上屏幕（同 DialogReady 那段注释）。
+            //    只用 NOACTIVATE 调 z 序，它自己的首帧由系统按正常节奏画。
+            SetWindowPos(hwnd, HwndTopmost, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
             // ② 激活（见下面第三段）。
             IntPtr fg = GetForegroundWindow();

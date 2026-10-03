@@ -4979,9 +4979,11 @@ public partial class InkEngine
         {
             long ex = Native.GetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE).ToInt64();
             Native.SetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE, new IntPtr(ex & ~Native.WS_EX_NOACTIVATE));
+            // ⚠ **不要 SWP_FRAMECHANGED**：覆盖层是 DComp 合成的全屏层，强制重算框架
+            // 会在换样式那一帧闪一下白（2026-10-05 用户报"保存图片先闪白屏"的来源之一）。
+            // WS_EX_NOACTIVATE 属激活类样式，去掉它不需要 FRAMECHANGED。
             Native.SetWindowPos(w.Hwnd, IntPtr.Zero, 0, 0, 0, 0,
-                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER
-                | 0x0020 /*SWP_FRAMECHANGED*/);
+                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER);
             Native.SetWindowPos(w.Hwnd, new IntPtr(-2) /*HWND_NOTOPMOST*/, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
         }
@@ -4997,9 +4999,9 @@ public partial class InkEngine
         {
             long ex = Native.GetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE).ToInt64();
             Native.SetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE, new IntPtr(ex | Native.WS_EX_NOACTIVATE));
+            // 同 BorrowFocusForDialog：这里也不带 SWP_FRAMECHANGED（闪白来源）。
             Native.SetWindowPos(w.Hwnd, IntPtr.Zero, 0, 0, 0, 0,
-                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER
-                | Native.SWP_NOACTIVATE | 0x0020 /*SWP_FRAMECHANGED*/);
+                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
             // 把"置顶"装回去（覆盖层平时必须浮在所有程序上面）
             Native.SetWindowPos(w.Hwnd, new IntPtr(-1) /*HWND_TOPMOST*/, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
