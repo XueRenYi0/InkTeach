@@ -6763,6 +6763,8 @@ internal sealed partial class App : InkEngine.InkEngine
               ShapeInclinationActive && ShapeInclinationSnapped
               && Math.Abs(ShapeInclinationDegrees - 45f) < 0.5f,
               $"active={ShapeInclinationActive}，α = {ShapeInclinationDegrees:F1}°，吸住={ShapeInclinationSnapped}");
+        Check("画线中：长度和 α 同源同报（2026-10-05 用户要的「长度」）",
+              Math.Abs(ShapeLength - 500f) < 2f, $"长 {ShapeLength:F1}（期望 500）");
         int drawPixels = ShapeLabelPixels(ShapeInclinationAnchor);
         Check("画线中：α 读数真的上了屏（吸住 → 强调色胶囊）",
               drawPixels > 1200 && drawPixels < 20000,

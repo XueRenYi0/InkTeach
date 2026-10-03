@@ -6786,6 +6786,7 @@ public partial class InkEngine
         // 读数状态从这一刻重新开始：不清的话，上一次画线吸住的那个强调色会漏到
         // 这一次的第一帧（还没收到移动消息，α 也还没算）。
         _shapeInclination = 0f;
+        _shapeLength = 0f;
         _shapeInclinationSnapped = false;
         _shapeAnchor = new Vector2(x, y);
         // 三角形 / 平行四边形是"外框 → 三个顶点"，拖动期每一帧都要拿**按下那一刻**的
@@ -6895,6 +6896,7 @@ public partial class InkEngine
             // 画线过程中也把 α 报给浮动层（用户 2026-09-18 要的：边画边看这条线是多少度）。
             // α 由**权威函数**算，这里只是把它和"吸没吸住"一起存下来，供渲染与脏区用。
             _shapeInclination = SelectionHandles.InclinationDegrees(start, end);
+            _shapeLength = Vector2.Distance(start, end);
             _shapeInclinationSnapped = snapped;
         }
         s.SetEnd(end.X, end.Y);
@@ -6913,6 +6915,10 @@ public partial class InkEngine
     /// <summary>画线中那条线**当前结果**的 α（[0°,180°)）；不在画线时是 0。</summary>
     internal float ShapeInclinationDegrees => _shapeInclination;
 
+    /// <summary>画线中那条线**当前结果**的长度（画布像素）。和 α 同源、同一时刻更新，
+    /// 标签把两个数一起报（2026-10-05 用户："再给直线增加一个长度，和度数是同一个逻辑"）。</summary>
+    internal float ShapeLength => _shapeLength;
+
     /// <summary>画线中的 α 是"吸"出来的吗（特殊角 / Shift 网格）——标签按它变色。</summary>
     internal bool ShapeInclinationSnapped => _shapeInclinationSnapped;
 
@@ -6920,6 +6926,7 @@ public partial class InkEngine
     internal Vector2 ShapeInclinationAnchor => _shapeAnchor;
 
     private float _shapeInclination;
+    private float _shapeLength;
     private bool _shapeInclinationSnapped;
     private Vector2 _shapeAnchor;
     /// <summary>
@@ -10121,7 +10128,8 @@ public partial class InkEngine
             default:
                 _vertexReadout = VertexReadoutKind.Inclination;
                 _vertexReadoutValue = SelectionHandles.InclinationDegrees(c, e);
-                _vertexReadoutSecondary = 0f;
+                // 直线 / 箭头再报一个**长度**（2026-10-05 用户：和 α 同一个逻辑）。
+                _vertexReadoutSecondary = Vector2.Distance(c, e);
                 break;
         }
     }

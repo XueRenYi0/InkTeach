@@ -2431,7 +2431,7 @@ internal sealed partial class OverlayWindow : IDisposable
         if (app.ShapeInclinationActive)
             r.Add(CanvasRectToWindow(InclinationReadoutRect(
                 app.ShapeInclinationAnchor, app.DpiScale,
-                InclinationLabel(app.ShapeInclinationDegrees)).Inflate(3f)));
+                ShapeLineReadout(app)).Inflate(3f)));
 
         // 多笔图形"这一笔吸到了什么"那颗胶囊（现在只有棱柱的「直棱柱」）。
         // **同样必须在"有选中对象"那块之外**：画棱柱的时候一个对象都没选中。
@@ -2799,8 +2799,17 @@ internal sealed partial class OverlayWindow : IDisposable
                     SelHandle.TopLeft, SelHandle.Top, SelHandle.TopRight, SelHandle.Right,
                     SelHandle.BottomRight, SelHandle.Bottom, SelHandle.BottomLeft, SelHandle.Left,
                 };
+                // **和命中判定同一把尺子**（SelectionHandles.ThinEdges，判据只有那一份）：
+                // 对象在某方向比手柄命中直径还窄时，那个方向的边中点柄**画也不画**。
+                // 命中既然已经不收它，画出来就只是"看得见点不到"；而且小对象上八个方块
+                // 会挤成一团（2026-10-05 用户："墨迹特别小的时候这个框会挤在一起"）。
+                var (thinV, thinH) = SelectionHandles.ThinEdges(frame.CanvasAabb, dpi);
                 foreach (var h in all)
+                {
+                    if (thinV && h is SelHandle.Top or SelHandle.Bottom) continue;
+                    if (thinH && h is SelHandle.Left or SelHandle.Right) continue;
                     DrawHandleSquare(SelectionHandles.CanvasPosition(h, frame, dpi), hs, radius, white);
+                }
             }
         }
 
@@ -2900,10 +2909,15 @@ internal sealed partial class OverlayWindow : IDisposable
     {
         if (!app.ShapeInclinationActive) return;
         float dpi = app.DpiScale;
-        string readout = InclinationLabel(app.ShapeInclinationDegrees);
+        string readout = ShapeLineReadout(app);
         DrawReadoutPill(InclinationReadoutRect(app.ShapeInclinationAnchor, dpi, readout),
                         readout, app.ShapeInclinationSnapped);
     }
+
+    /// <summary>画线中的读数文案：**α ＋ 长度**（同一颗胶囊，和 α 同一个"边画边看"逻辑；
+    /// 长度是 2026-10-05 用户要加的）。绘制与脏区必须共用这一份——分开写就会留下擦不掉的边。</summary>
+    private static string ShapeLineReadout(InkEngine app)
+        => $"{InclinationLabel(app.ShapeInclinationDegrees)}  长 {app.ShapeLength:F0}";
 
     /// <summary>
     /// 旋转柄那根连线在**图形这一头**挂哪儿：
@@ -2960,8 +2974,12 @@ internal sealed partial class OverlayWindow : IDisposable
             //（纵向 = 振幅、横向 = 周期），所以两个数都报出来。
             InkEngine.VertexReadoutKind.WavePeriod =>
                 $"T = {app.VertexReadoutValue:F1}  A = {app.VertexReadoutSecondary:F1}",
-            // 直线/箭头：倾斜角 α（[0°,180°)），和旋转读数 Δ 是两个数
-            InkEngine.VertexReadoutKind.Inclination => InclinationLabel(app.VertexReadoutValue),
+            // 直线/箭头：倾斜角 α（[0°,180°)），和旋转读数 Δ 是两个数；
+            // 长度是 2026-10-05 加的第二个数（同 α 一颗胶囊）。
+            InkEngine.VertexReadoutKind.Inclination =>
+                app.VertexReadoutSecondary > 0.01f
+                    ? $"{InclinationLabel(app.VertexReadoutValue)}  长 {app.VertexReadoutSecondary:F0}"
+                    : InclinationLabel(app.VertexReadoutValue),
             // 三角形 / 平行四边形没吸住：这一颗胶囊没有可显示的量——它们要显示的是
             // 内角 / 夹角，那是**另一组**角标（见 DrawAnglePills，第③轮）。
             _ => null,

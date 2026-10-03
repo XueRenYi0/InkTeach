@@ -1521,6 +1521,19 @@ internal static class SelectionHandles
         return new SelectionFrame { Local = r, ToCanvas = Matrix3x2.Identity };
     }
 
+    /// <summary>
+    /// "细长 / 小对象让出边中点柄"的判据——**全工程只有这一份**：命中的两个入口和
+    /// 绘制（Overlay 画那八个通用柄）都问它。分家写就会出现"看得见点不到"、
+    /// "点得到看不见"，或者小对象上八个方块挤成一团（2026-10-05 用户报的）。
+    ///
+    /// 返回 (ThinVertical, ThinHorizontal)：竖向太窄 → 让出"上/下"；横向太窄 → 让出"左/右"。
+    /// </summary>
+    public static (bool ThinVertical, bool ThinHorizontal) ThinEdges(in RectF box, float dpiScale)
+    {
+        float d = HitRadiusLogical * dpiScale * 2f;
+        return ((box.MaxY - box.MinY) < d, (box.MaxX - box.MinX) < d);
+    }
+
     /// <summary>按给定的选区坐标系做手柄命中判定。</summary>
     public static SelHandle HitTest(float canvasX, float canvasY, in SelectionFrame f,
                                     float dpiScale, bool includeEdgeHandles = true)
@@ -1528,11 +1541,9 @@ internal static class SelectionHandles
         float r = HitRadiusLogical * dpiScale;
         var p = new Vector2(canvasX, canvasY);
 
-        // 细长对象让出"边中点"手柄 —— 理由和下面 RectF 版一模一样（两处都要改，
-        // 这不是复制代码，是同一个判据的两个入口；漏改一处就会出现"某条路径点不中/拖不动"）。
-        var box = f.CanvasAabb;
-        bool thinVertical = (box.MaxY - box.MinY) < r * 2f;
-        bool thinHorizontal = (box.MaxX - box.MinX) < r * 2f;
+        // 细长对象让出"边中点"手柄 —— 判据只有 ThinEdges 一份（命中两个入口、
+        // 绘制侧共用它；分家就会出现"点不中/拖不动/画一堆"）。
+        var (thinVertical, thinHorizontal) = ThinEdges(f.CanvasAabb, dpiScale);
 
         // 旋转手柄先测：它在框外，不会和四角重叠，但它离上边中点最近，
         // 先测它能避免两个窄命中区互相抢。
@@ -1588,9 +1599,8 @@ internal static class SelectionHandles
         // **把那个方向的"边中点"手柄让出来**（四角和旋转手柄照旧）。
         // 2026-09-15 由 --seltest 的"复制拖拽"用例暴露：一条 8 逻辑像素宽的横线，
         // 在正中间按下命中的是"上"手柄。
-        float boxW = b.MaxX - b.MinX, boxH = b.MaxY - b.MinY;
-        bool thinVertical = boxH < r * 2f;      // 竖向太窄 → 让出"上/下"
-        bool thinHorizontal = boxW < r * 2f;    // 横向太窄 → 让出"左/右"
+        // 竖向太窄 → 让出"上/下"；横向太窄 → 让出"左/右"（判据见 ThinEdges）。
+        var (thinVertical, thinHorizontal) = ThinEdges(b, dpiScale);
 
         // 旋转手柄先测：它在框外，不会和四角重叠，但它离上边中点的
         // "上"手柄最近，先测它能避免两个窄命中区互相抢。
