@@ -1,5 +1,7 @@
 # InkTeach · Windows 课堂批注
 
+[中文](README.md) | [English](README.en.md)
+
 **一层透明覆盖层：在 PPT / WPS / 任意软件上直接写板书。** 笔迹跟手、支持压感；
 界面是一条可收纳的工具带——笔 / 荧光笔 / 激光笔 / 橡皮 / 选中 / 截图 / 22 种图形 /
 白板 / 计时器 / 点名都在里面。数据全部留在本机，安装不需要管理员权限。
@@ -12,7 +14,7 @@
 **下载**：[GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest)（`InkTeach-Setup-<版本>.exe` 双击下一步，
 或绿色版 `InkTeach-<版本>-win-x64.zip` 解压即用）｜[GitCode 国内镜像](https://gitcode.com/xzx1xzzx/InkTeach/releases)
 
-<p align="center"><img src="design/readme/01-主工具带.png" width="880" alt="主工具带：上方是当前工具的设置条，下方是工具带"></p>
+<p align="center"><img src="design/readme/00-演示.gif" width="800" alt="演示：手写一个圆 → 停顿变图形 → 选中拖动 → 截图取景"></p>
 
 ## 它是什么
 
@@ -35,7 +37,7 @@
 工具带可以拖到任意位置、贴底自动收纳（快出慢隐）；档位有「极简 / 完整」两档，
 右键可以取消 / 恢复钉住；鼠标悬停约 0.5 秒（触摸长按 0.6 秒）会浮出"名称 + 快捷键 + 说明"。
 
-<p align="center"><img src="design/readme/08-图形上带.png" width="880" alt="图形的设置条：22 段，含圆锥曲线与立体图形"></p>
+<p align="center"><img src="design/readme/01-主工具带.png" width="880" alt="主工具带：上方是当前工具的设置条，下方是工具带"></p>
 
 ### 书写
 
@@ -73,6 +75,8 @@
 
 每个"定义元素"（端点、半轴、顶点、焦点、渐近线…）都是可以直接拖的手柄，
 拖的时候有特殊形状吸附（正方形、正圆、姿态角），并实时显示角度 / 半径 / 长度读数。
+
+<p align="center"><img src="design/readme/08-图形上带.png" width="880" alt="图形的设置条：22 段，含圆锥曲线与立体图形"></p>
 
 ### 截图 · 导出 · 剪贴板
 
