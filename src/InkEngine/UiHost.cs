@@ -113,7 +113,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetCoordGridDefault(bool on) => _engine.SetCoordGridDefaultFromUi(on);
     public void SetDwellShape(bool on) => _engine.SetDwellShapeFromUi(on);
     public void SetPressure(bool on) => _engine.SetPressureFromUi(on);
-    public void SetPredict(bool on) => _engine.SetPredictFromUi(on);
+    // [删除 2026-10-05] SetPredict(bool)：随老预测系统移除。
     public void SetTooltips(bool on) => _engine.SetTooltipsFromUi(on);
     public int ToggleCoordGrid() => _engine.ToggleSelectionGrid();
 

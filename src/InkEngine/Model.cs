@@ -883,34 +883,13 @@ internal sealed class Stroke
 
     public ID2D1Geometry Geometry;
 
-    /// <summary>
-    /// **只用于渲染的"预测尾"**（画布坐标）：画这一笔时在末尾接上这几个点，
-    /// 让正在写的那一笔的末端落在"现在"而不是"上一帧"。
-    ///
-    /// 三条纪律，缺一条都会出问题：
-    ///   ① **不进 <see cref="Points"/>**——它是画出来的，不是采到的。所以存档、
-    ///      撤销、命中测试、紧框、空间索引一概看不见它（`--predicttailtest` 有断言）；
-    ///   ② **只在"正在写的那一笔"上设**（由引擎每帧写入，见 `Engine.UpdateRenderTail`），
-    ///      松手那一刻清空，绝不会留在文档里；
-    ///   ③ **接在同一份几何里**（见 <see cref="BuildCenterline"/>）：另起一笔画会在
-    ///      接缝处混合两次，半透明荧光笔会露出重叠的深色斑。
-    ///
-    /// 什么时候有它：鼠标 / 触摸（那条路没有系统湿墨通道），以及真笔但走不了
-    /// 委托墨迹轨迹时（虚线、或者轨迹通道不可用）。真笔交给系统合成器画的时候
-    /// 不需要它，也**不能**有它——两边一起补会在笔尖前面重复画出一小截。
-    /// </summary>
-    internal List<Vector2> RenderTail;
+    // [删除 2026-10-05] `RenderTail`（预测渲染尾）、`PredictedTip`（预测笔尖）、
+    // `_tailStamp/_builtTailStamp`（它们的几何缓存章）与两个 Set 方法：随老预测系统移除。
+    // 原文见 `.revert/2026-10-05-渲染减法/`。
 
     /// <summary>
-    /// 渲染尾的"第几个版本"。几何缓存的键必须带上它：否则尾巴内容变了、
-    /// `Revision` 没变，缓存会把**旧的**几何（可能带尾、也可能没有尾）还回去。
-    /// </summary>
-    private int _tailStamp;
-    private int _builtTailStamp = -1;
-
-    /// <summary>
-    /// 建几何时的"曲线化版本"。和渲染尾同理：开关一拨（`--smooth` 对照实验、
-    /// `--smoothshow` 出图），`Revision` 没变，缓存会把旧折线还回来。
+    /// 建几何时的"曲线化版本"。`--smoothshow` 出图 / 开关一拨时，`Revision` 没变，
+    /// 缓存会把旧折线还回来，所以必须进缓存键。
     /// </summary>
     private int _builtSmoothVer = -1;
     /// <summary>建几何时这一笔是不是"正在写"。和曲线化版本同理，必须进缓存键：
@@ -918,14 +897,10 @@ internal sealed class Stroke
     private bool _builtRawLive;
 
     /// <summary>
-    /// 引擎每帧调用：设这一笔的渲染尾（传 null 或空表 = 这一帧没有尾）。
-    /// 传进来的表由调用方复用，所以每次调用都要当作"内容变了"。
+    /// 建几何时的"墨迹模型版本"（<see cref="InkModel"/>）：模式/参数一拨，
+    /// `Revision` 没变，缓存会把旧几何还回来。
     /// </summary>
-    internal void SetRenderTail(List<Vector2> tail)
-    {
-        RenderTail = (tail != null && tail.Count > 0) ? tail : null;
-        _tailStamp++;
-    }
+    private int _builtInkModelVer = -1;
 
     /// <summary>
     /// 图像对象的像素（只有 <see cref="StrokeKind.Image"/> 有）。
@@ -4424,10 +4399,11 @@ internal sealed class Stroke
 
     public ID2D1Geometry BuildGeometry(ID2D1Factory1 factory)
     {
-        // 缓存键 = 几何版本（Revision）**加上**渲染尾的版本：只比 Revision 的话，
-        // "点数没变、只有尾巴在每帧滑动"这种情况会把上一帧的几何还回去。
-        if (Geometry != null && _builtRevision == Revision && _builtTailStamp == _tailStamp
-            && _builtSmoothVer == StrokeSmoothing.Version && _builtRawLive == RawWhileLive)
+        // 缓存键 = 几何版本（Revision）＋ 曲线化版本 ＋ 活笔/模型版本；
+        // 只比 Revision 的话，开关一拨会把旧几何还回来。
+        if (Geometry != null && _builtRevision == Revision
+            && _builtSmoothVer == StrokeSmoothing.Version && _builtRawLive == RawWhileLive
+            && _builtInkModelVer == StrokeMotion.Version)
             return Geometry;
         if (Points.Count == 0) return null;
 
@@ -4468,9 +4444,9 @@ internal sealed class Stroke
         };
         if (Geometry != null) LiveGeometries++;
         _builtRevision = Revision;
-        _builtTailStamp = _tailStamp;
         _builtSmoothVer = StrokeSmoothing.Version;
         _builtRawLive = RawWhileLive;
+        _builtInkModelVer = StrokeMotion.Version;
         return Geometry;
     }
 
@@ -5522,10 +5498,6 @@ internal sealed class Stroke
         var geo = factory.CreatePathGeometry();
         using var sink = geo.Open();
 
-        // 渲染尾（预测段）只加在"没被擦过"的笔迹上：擦除区间的几何要按段重拼，
-        // 尾巴挂在哪一段上会变得说不清；而正在写的那一笔本来也不可能被擦。
-        // **回放的前缀也不接尾**：尾是"还没发生的墨"。
-        var tail = Erased.Count == 0 ? RenderTail : null;
         bool clipped = maxParam < Points.Count - 1 - 1e-4f;
 
         // **每条剩下的段一个 figure，但它们在同一条几何里**——这一点是关键：
@@ -5535,33 +5507,76 @@ internal sealed class Stroke
         {
             if (clipped && a >= maxParam - 1e-6f) break;   // 这一段整个在前缀之后：不画
             float b = clipped ? MathF.Min(b0, maxParam) : b0;
-            // 曲线化（`--smooth`）：把这一段 run 的采样点喂给曲线器，输出一串三次贝塞尔。
-            // **点还是原来那些点**——曲线严格过每一个采样点，直角由角点保护保住；
-            // 不生效时（开关关着 / 段数不够）原样退回下面的折线路径。
-            bool smoothed = StrokeSmoothing.Enabled && !RawWhileLive && AppendSmoothedRun(sink, a, b);
-            if (!smoothed)
+
+            // **墨迹模型（实验，`--motion`）**：整条用选中的运动模型输出当中心线。
+            // 只对"没被橡皮擦过、也不是回放前缀"的整笔生效；擦除/回放照样走旧路
+            //（擦除区间是按原始点切的，建模点和参数序号对不上——见 StrokeMotion 的注释）。
+            // 上游输出点密度足够（≥180Hz），直接当折线描边即可（弦高误差远小于 1px）。
+            if (!clipped && Erased.Count == 0 && StrokeMotion.Build(this))
             {
-                sink.BeginFigure(PointAtParam(a), FigureBegin.Hollow);
-                for (int i = 1; i < Points.Count; i++)
+                // mean2 的曲线层固定为**过点曲线**（拟合档已随停用清理，2026-10-05）。
+                bool drew = AppendSmoothedModeledRun(sink);
+                if (!drew)
                 {
-                    if (i < a - 1e-6f) continue;
-                    if (i > b + 1e-6f) break;
-                    sink.AddLine(new Vector2(Points[i].X, Points[i].Y));
+                    int mn = StrokeMotion.Count;
+                    var p0 = StrokeMotion.At(0);
+                    sink.BeginFigure(new Vector2(p0.X, p0.Y), FigureBegin.Hollow);
+                    for (int k = 1; k < mn; k++)
+                    {
+                        var p = StrokeMotion.At(k);
+                        sink.AddLine(new Vector2(p.X, p.Y));
+                    }
                 }
-                // 终点只在"切出来的插值点"时才补。**必须是这个条件**：如果这一段的终点正好落在
-                // 某个采样点上，上面的循环已经把它加进去了，再补一次就给几何多出一个零长段——
-                // 没被擦过的笔迹（a=0、b=末尾）必须和"没有区间表"时**逐点一致**，
-                // 否则等于凭空改了笔迹几何。
-                if (MathF.Abs(b - MathF.Round(b)) > 1e-6f) sink.AddLine(PointAtParam(b));
             }
-            // 渲染尾接在**同一份几何**的末尾（理由见 Stroke.RenderTail 第 ③ 条）。
-            // 上面的前提（Erased 为空）保证这里只会被加一次；前缀被截断时不接。
-            if (tail != null && !clipped)
-                foreach (var p in tail) sink.AddLine(p);
+            else
+            {
+                // 曲线化（`--smooth`）：把这一段 run 的采样点喂给曲线器，输出一串三次贝塞尔。
+                // **点还是原来那些点**——曲线严格过每一个采样点，直角由角点保护保住；
+                // 不生效时（开关关着 / 段数不够）原样退回下面的折线路径。
+                bool smoothed = StrokeSmoothing.Enabled && !RawWhileLive && AppendSmoothedRun(sink, a, b);
+                if (!smoothed)
+                {
+                    sink.BeginFigure(PointAtParam(a), FigureBegin.Hollow);
+                    for (int i = 1; i < Points.Count; i++)
+                    {
+                        if (i < a - 1e-6f) continue;
+                        if (i > b + 1e-6f) break;
+                        sink.AddLine(new Vector2(Points[i].X, Points[i].Y));
+                    }
+                    // 终点只在"切出来的插值点"时才补。**必须是这个条件**：如果这一段的终点正好落在
+                    // 某个采样点上，上面的循环已经把它加进去了，再补一次就给几何多出一个零长段——
+                    // 没被擦过的笔迹（a=0、b=末尾）必须和"没有区间表"时**逐点一致**，
+                    // 否则等于凭空改了笔迹几何。
+                    if (MathF.Abs(b - MathF.Round(b)) > 1e-6f) sink.AddLine(PointAtParam(b));
+                }
+            }
             sink.EndFigure(FigureEnd.Open);
         }
         sink.Close();
         return geo;
+    }
+
+    /// <summary>
+    /// mean2：把建模输出喂进过点曲线，直接写成三次贝塞尔。
+    /// 返回 false = 段数不够，调用方退回直线折线。
+    /// </summary>
+    private static bool AppendSmoothedModeledRun(ID2D1GeometrySink sink)
+    {
+        StrokeSmoothing.Begin();
+        int n = StrokeMotion.Count;
+        for (int i = 0; i < n; i++)
+        {
+            var p = StrokeMotion.At(i);
+            StrokeSmoothing.Add(p.X, p.Y, p.Z);
+        }
+        int m = StrokeSmoothing.Finish();
+        if (m <= 0) return false;
+
+        var segs = StrokeSmoothing.Out;
+        sink.BeginFigure(segs[0].P0, FigureBegin.Hollow);
+        for (int k = 0; k < m; k++)
+            sink.AddBezier(new BezierSegment(segs[k].C1, segs[k].C2, segs[k].P1));
+        return true;
     }
 
     /// <summary>

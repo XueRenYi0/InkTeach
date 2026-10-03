@@ -306,12 +306,16 @@ internal sealed partial class OverlayWindow : IDisposable
     private ID2D1InkStyle _inkStyle;
     /// <summary>每次画一条压感笔迹最多铺多少段（**只在曲线化关着时**生效，见 DrawPressureInk）。</summary>
     private const int InkMaxSegments = 120;
+    /// <summary>`--inkmodel` 时压感墨迹的段数上限：建模输出 ≥180Hz、点很密，按 120 抽会把弯拉直。</summary>
+    private const int InkMaxSegmentsModeled = 4096;
     /// <summary>
     /// 段缓冲：**预分配、复用**，不在每帧绘制里 new。
     /// 曲线化打开时会按点数增长（`--smooth`）：折线段少是有意抽稀的，曲线段不能抽——
     /// 一抽就把刚算出来的弯又拉直了。
     /// </summary>
     private InkBezierSegment[] _inkSegs = new InkBezierSegment[InkMaxSegments];
+    /// <summary>`--mean2fit` 用：拟合输入的复用点/压力缓冲（静态数组，不每帧分配）。</summary>
+    // [删除 2026-10-05] `_fitPts/_fitP`（WPF 拟合输入缓冲）：随拟合档清理移除。
     /// <summary>压力的指数平滑系数（0..1，越小越稳）。见 DrawPressureInk。</summary>
     private const float InkPressureEma = 0.35f;
     /// <summary>最小墨迹半径（画布像素）：轻压时也不至于细到画不出来。</summary>
@@ -1854,28 +1858,39 @@ internal sealed partial class OverlayWindow : IDisposable
         if (n < 2) return false;
 
         bool clipped = maxParam < n - 1 - 1e-4f;
+        // 运动模型（实验，`--motion`）：整条用选中的模型输出 + 压力（M2 已按时间加权插值压力）。
+        // 只对"整笔、没被橡皮擦过"生效；回放前缀/擦除过的一律照旧走原始点。
+        bool useModel = !clipped && s.Erased.Count == 0 && StrokeMotion.Build(s);
+        if (useModel) n = StrokeMotion.Count;
         int lastIdx = clipped ? Math.Clamp((int)MathF.Floor(maxParam), 0, n - 1) : n - 1;
         float frac = clipped ? maxParam - lastIdx : 0f;
         bool tailPoint = frac > 1e-4f;
         if (clipped && lastIdx < 1 && !tailPoint) return false;   // 还没长到第二个点
 
-        startRadius = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, pts[0].P));
-        float lastX = pts[0].X, lastY = pts[0].Y, lastR = startRadius;
+        // 源点访问器：原始采样点 / 建模输出（x, y, 压力）二选一。
+        float Px(int i) => useModel ? StrokeMotion.At(i).X : pts[i].X;
+        float Py(int i) => useModel ? StrokeMotion.At(i).Y : pts[i].Y;
+        float Pp(int i) => useModel ? StrokeMotion.At(i).Z : pts[i].P;
 
-        if (StrokeSmoothing.Enabled && !s.RawWhileLive)
+        startRadius = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, Pp(0)));
+        float lastX = Px(0), lastY = Py(0), lastR = startRadius;
+
+        if (useModel || (!useModel && StrokeSmoothing.Enabled && !s.RawWhileLive))
         {
+            // 把源点（原始采样点 / 建模输出）喂进过点曲线：建模输出本来已经去过抖，
+            // 再过一次曲线只是为了消掉"输出点之间的折线"（mean2 的快写折线感）。
             StrokeSmoothing.Begin();
-            for (int i = 0; i <= lastIdx; i++) StrokeSmoothing.Add(pts[i].X, pts[i].Y, pts[i].P);
+            for (int i = 0; i <= lastIdx; i++) StrokeSmoothing.Add(Px(i), Py(i), Pp(i));
             if (tailPoint)
             {
                 int j = lastIdx + 1;
-                StrokeSmoothing.Add(pts[lastIdx].X + (pts[j].X - pts[lastIdx].X) * frac,
-                                    pts[lastIdx].Y + (pts[j].Y - pts[lastIdx].Y) * frac,
-                                    pts[lastIdx].P + (pts[j].P - pts[lastIdx].P) * frac);
+                StrokeSmoothing.Add(Px(lastIdx) + (Px(j) - Px(lastIdx)) * frac,
+                                    Py(lastIdx) + (Py(j) - Py(lastIdx)) * frac,
+                                    Pp(lastIdx) + (Pp(j) - Pp(lastIdx)) * frac);
             }
             int segs = StrokeSmoothing.Finish();
             if (segs <= 0) return false;
-            EnsureInkSegs(segs + (s.RenderTail?.Count ?? 0));
+            EnsureInkSegs(segs);
 
             var cs = StrokeSmoothing.Out;
             float ema = StrokeSmoothing.PressureAt(0);
@@ -1902,17 +1917,20 @@ internal sealed partial class OverlayWindow : IDisposable
         }
         else
         {
-            // 采样步长：保证段数 ≤ InkMaxSegments，且**最后一点一定画到**。
-            int stride = Math.Max(1, (int)MathF.Ceiling((n - 1) / (float)InkMaxSegments));
-            int cap = Math.Min(_inkSegs.Length, InkMaxSegments);
-            float sm = pts[0].P;
-            float sx = pts[0].X, sy = pts[0].Y, sr = startRadius;
+            // 采样步长：保证段数 ≤ 上限，且**最后一点一定画到**。
+            // 建模输出的点已经很密（≥180Hz），上限给大得多——按 120 抽会把刚平滑出来的弯拉直。
+            int maxSegs = useModel ? InkMaxSegmentsModeled : InkMaxSegments;
+            int stride = Math.Max(1, (int)MathF.Ceiling((n - 1) / (float)maxSegs));
+            if (useModel) EnsureInkSegs(Math.Min(n, maxSegs));
+            int cap = Math.Min(_inkSegs.Length, maxSegs);
+            float sm = Pp(0);
+            float sx = Px(0), sy = Py(0), sr = startRadius;
             for (int i = 1; i <= lastIdx && count < cap; i++)
             {
-                sm += (pts[i].P - sm) * InkPressureEma;      // 平滑只作用于压力，不动位置
+                sm += (Pp(i) - sm) * InkPressureEma;      // 平滑只作用于压力，不动位置
                 if (i % stride != 0 && i != lastIdx) continue; // 中间的按步长抽稀（末点必留）
 
-                float ex = pts[i].X, ey = pts[i].Y;
+                float ex = Px(i), ey = Py(i);
                 float er = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, sm));
                 // 直线段写成三次贝塞尔：控制点落在两端之间 → 位置是直线，半径沿途线性插值。
                 //
@@ -1941,9 +1959,9 @@ internal sealed partial class OverlayWindow : IDisposable
             if (tailPoint && count < cap)
             {
                 int j = lastIdx + 1;
-                float ex = pts[lastIdx].X + (pts[j].X - pts[lastIdx].X) * frac;
-                float ey = pts[lastIdx].Y + (pts[j].Y - pts[lastIdx].Y) * frac;
-                sm += ((pts[lastIdx].P + (pts[j].P - pts[lastIdx].P) * frac) - sm) * InkPressureEma;
+                float ex = Px(lastIdx) + (Px(j) - Px(lastIdx)) * frac;
+                float ey = Py(lastIdx) + (Py(j) - Py(lastIdx)) * frac;
+                sm += ((Pp(lastIdx) + (Pp(j) - Pp(lastIdx)) * frac) - sm) * InkPressureEma;
                 float er = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, sm));
                 _inkSegs[count++] = new InkBezierSegment
                 {
@@ -1965,41 +1983,7 @@ internal sealed partial class OverlayWindow : IDisposable
 
         if (count == 0) return false;
 
-        // ---- 渲染尾（预测段）**也要接在这一路** ------------------------------
-        //
-        // ⚠ 两处渲染路必须都带上尾，漏一处就是"鼠标有效果、手写板毫无反应"：
-        //   · 无压感的笔迹 → 上面那条等宽描边（几何出自 BuildCenterline，那里带尾）；
-        //   · **有压感的笔迹 → 就是这里**，ink 对象只按 `s.Points` 建，
-        //     不加这段的话尾被整个丢掉。
-        // 而真笔**必然**报压感，所以这个漏法只在真笔上现形，鼠标和自检都照不出来
-        //（2026-09-22 用户实测：两边的 `[笔画]` 行都报"预测尾=有（最多 100 px）"，
-        //  只有鼠标看得见——出问题的不是预测，是这一条渲染路）。
-        //
-        // 半径沿用最后一段的：尾是"还没发生的墨"，不该自己变粗变细。
-        // **回放前缀不接尾**（clipped）：尾是"猜下一帧会画到哪"给活笔用的。
-        if (!clipped && s.RenderTail != null)
-        {
-            EnsureInkSegs(count + s.RenderTail.Count);
-            float tx = lastX, ty = lastY, tr = lastR;
-            foreach (var tp in s.RenderTail)
-            {
-                if (count >= _inkSegs.Length) break;
-                // 直线段写成三次贝塞尔：控制点落在两端之间 → 位置是直线。
-                _inkSegs[count++] = new InkBezierSegment
-                {
-                    Point1 = new Vortice.Direct2D1.InkPoint
-                    {
-                        X = tx + (tp.X - tx) / 3f, Y = ty + (tp.Y - ty) / 3f, Radius = tr,
-                    },
-                    Point2 = new Vortice.Direct2D1.InkPoint
-                    {
-                        X = tx + (tp.X - tx) * 2f / 3f, Y = ty + (tp.Y - ty) * 2f / 3f, Radius = tr,
-                    },
-                    Point3 = new Vortice.Direct2D1.InkPoint { X = tp.X, Y = tp.Y, Radius = tr },
-                };
-                tx = tp.X; ty = tp.Y;
-            }
-        }
+        // [删除 2026-10-05] 渲染尾（预测段）拼接：随老预测系统移除。
         return true;
     }
 
@@ -2211,11 +2195,8 @@ internal sealed partial class OverlayWindow : IDisposable
 
         if (app.ActiveStroke != null)
         {
-            // 渲染尾（预测段）画在**最后一个真实点的前面**，所以不在 PaddedBounds 里。
-            // 要按引擎报的尾长往外扩：不扩的话，尾巴走过的那几个像素擦不干净（残影）。
-            var ab = app.ActiveStroke.PaddedBounds;
-            if (app.PredictedTailLead > 0f) ab = ab.Inflate(app.PredictedTailLead + 2f);
-            r.Add(CanvasRectToWindow(ab));
+            // [删除 2026-10-05] 渲染尾（预测段）已随老预测系统移除，脏区不必再往外扩。
+            r.Add(CanvasRectToWindow(app.ActiveStroke.PaddedBounds));
         }
 
         // 呼出盘（Ctrl+Q）：固定画在盘心，但轨迹线跟着指针、内容随扇区变——

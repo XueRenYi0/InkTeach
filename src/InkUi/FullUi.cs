@@ -219,7 +219,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按两栏里的布局走**：
     /// 左列 外观（3）＋ 书写（3）；右列 墨迹（3）——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, Tooltip, DwellShape, Pressure, Predict, RestoreInk, PptAutoSave, HistoryDays }
+    private enum Row { DarkTheme, AutoHide, Tooltip, DwellShape, Pressure, RestoreInk, PptAutoSave, HistoryDays }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -242,9 +242,8 @@ public sealed class FullUi : IOverlayUi
         // 压感粗细（2026-10-01，批次 0.2）：默认开；关掉 = 整块板等宽，
         // 手写板的流畅 / 预测不受影响（渲染期开关，文档里的压力数据不动）。
         (Row.Pressure, "压感粗细", false, false, "关掉后所有笔迹等宽（手写板照样流畅）"),
-        // 墨迹预测（2026-10-02 用户提议）：默认关；开了只影响鼠标/触摸的自绘预测尾，
-        // 地平线固定 10ms（不要拖影）。命令行 --predict 优先。
-        (Row.Predict, "墨迹预测", false, false, "开了更跟手一点，可能有轻微拖影"),
+        // [停用 2026-10-05] 墨迹预测（老预测系统，见 `已停用-渲染实验.md`）：
+        // (Row.Predict, "墨迹预测", false, false, "开了更跟手一点，可能有轻微拖影"),
         // 墨迹三条偏好（原本在「墨迹」页，2026-10-02 启动器改版后搬进设置子页）。
         (Row.RestoreInk, "自动恢复上次板书", false, false, "下次启动接上这次的板书"),
         (Row.PptAutoSave, "PPT 墨迹默认自动保存", false, false, "放映时长按菜单仍可临时覆盖"),
@@ -451,8 +450,8 @@ public sealed class FullUi : IOverlayUi
         _host.SetPref("dwellShape", st.DwellShapeOn ? null : "0");
         // 压感粗细：**默认开**，同样只写"关了"这一种情况（引擎启动时自己读它）。
         _host.SetPref("pressure", st.PressureOn ? null : "0");
-        // 墨迹预测：**默认关**，只写"开了"这一种情况（引擎启动时自己读它）。
-        _host.SetPref("predict", st.PredictOn ? "1" : null);
+        // [停用 2026-10-05] 墨迹预测：默认关，只写"开了"这一种情况（引擎启动时自己读它）。
+        // _host.SetPref("predict", st.PredictOn ? "1" : null);
         // 悬停提示：**默认开**，只写"关了"这一种情况。
         _host.SetPref("tooltip", _tipEnabled ? null : "0");
 
@@ -2024,7 +2023,7 @@ public sealed class FullUi : IOverlayUi
 
     private bool IsToggleRow(int i)
         => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.Tooltip or Row.DwellShape
-           or Row.Pressure or Row.Predict or Row.RestoreInk or Row.PptAutoSave;
+           or Row.Pressure or Row.RestoreInk or Row.PptAutoSave;
 
     /// <summary>
     /// 这一行现在是不是压暗（点了没反应）。
@@ -2086,12 +2085,11 @@ public sealed class FullUi : IOverlayUi
                 SavePrefs();
                 break;
 
-            // 墨迹预测（2026-10-02）：同一条规矩——引擎是权威，界面翻转后落盘。
-            // 关掉是**运行时**的：鼠标/触摸的自绘预测尾立刻停（真笔那条本来就不喂）。
-            case Row.Predict:
-                _host.Commands.SetPredict(!_host.State.PredictOn);
-                SavePrefs();
-                break;
+            // [停用 2026-10-05] 墨迹预测（老预测系统）：
+            // case Row.Predict:
+            //     _host.Commands.SetPredict(!_host.State.PredictOn);
+            //     SavePrefs();
+            //     break;
 
             // 墨迹三条偏好（原来在「墨迹」页）：只写 `ui.*`，
             // 默认值不落盘（restoreInk 默认关只写 "1"、pptAutoSave 默认开只写 "0"、
@@ -2166,7 +2164,7 @@ public sealed class FullUi : IOverlayUi
     /// `SetWriteHeadRect` 和 `MoreLowerH` 里，两处各写一遍迟早漏一处）。
     /// </summary>
     private const int LookRowCount = 3;    // 外观：深色主题 / 贴边隐藏 / 悬停提示
-    private const int WriteRowCount = 3;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测
+    private const int WriteRowCount = 2;   // [停用 2026-10-05] 书写：停顿变图形 / 压感粗细（墨迹预测行已停用）
     private const float MoreColumnGap = 16f;
     private const float MoreWriteGap = 8f;
     private const float MoreSwitchW = 44f;
@@ -2383,7 +2381,7 @@ public sealed class FullUi : IOverlayUi
         Row.Tooltip => SetColRow(SetColKind.Look, 2),
         Row.DwellShape => SetColRow(SetColKind.Write, 0),
         Row.Pressure => SetColRow(SetColKind.Write, 1),
-        Row.Predict => SetColRow(SetColKind.Write, 2),
+        // [删除 2026-10-05] Row.Predict => SetColRow(SetColKind.Write, 2),（墨迹预测行）
         Row.RestoreInk => SetColRow(SetColKind.Ink, 0),
         Row.PptAutoSave => SetColRow(SetColKind.Ink, 1),
         _ => SetColRow(SetColKind.Ink, 2),
@@ -4435,8 +4433,8 @@ public sealed class FullUi : IOverlayUi
         Row.DwellShape => _host == null || _host.State.DwellShapeOn,
         // 压感粗细：状态在**引擎**（渲染期开关），界面只是显示它
         Row.Pressure => _host == null || _host.State.PressureOn,
-        // 墨迹预测：同压感，状态在引擎（默认关）
-        Row.Predict => _host == null || _host.State.PredictOn,
+        // [停用 2026-10-05] 墨迹预测：同压感，状态在引擎（默认关）
+        // Row.Predict => _host == null || _host.State.PredictOn,
         // 墨迹两条开关：读偏好（restoreInk 默认关、pptAutoSave 默认开）。
         Row.RestoreInk => _host.GetPref("restoreInk") == "1",
         Row.PptAutoSave => _host.GetPref("pptAutoSave") != "0",

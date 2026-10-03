@@ -1316,48 +1316,14 @@ public partial class InkEngine
     /// 快写时轨迹被静默抽稀（见 Input/PointerInput.cs）。
     /// </summary>
     private readonly PointerSampleBuffer _ptr = new();
-    private readonly InkPredictor _predictor = new();
-    private readonly PredictedPoint[] _predBuf = new PredictedPoint[8];
     private readonly Vector2[] _trailReal = new Vector2[PenSampleBuffer.MaxSamples];
     /// <summary>湿墨**逐点半径**（和 _trailReal 一一对应）：有压感时湿墨也得有粗有细，
     /// 否则抬手那一下粗细会跳（见 <see cref="TrailRadius"/>）。</summary>
     private readonly float[] _trailRadii = new float[PenSampleBuffer.MaxSamples];
-    private readonly Vector2[] _trailPred = new Vector2[8];
-    /// <summary>渲染尾的复用缓冲（画布坐标）。每帧清空重填，不分配。</summary>
-    private readonly List<Vector2> _tailScratch = new(8);
 
-    /// <summary>
-    /// 预测开关。**默认关**（2026-09-29 用户拍板）。
-    ///
-    /// 关它的原因（都是实测的，别再"顺手打开"）：
-    ///   · 真笔那一条：DWM **不把我们喂的预测点画出来**（用 `--predictms 200 --predictlead 400`
-    ///     当探针验过：鼠标那条会窜出去，手写板那条纹丝不动）——所以对笔，它一直是白喂；
-    ///   · 鼠标/触摸那一条：预测段由我们画（见 <see cref="UpdateRenderTail"/>），
-    ///     而输入是突发的，尾巴会**一出一进**，屏幕上是末端"突突突往外跳"（用户原话）；
-    ///   · 收益又測不出来：同一支笔、开与关，"手感分不出来"。
-    ///
-    /// 配置：`--predict` 打开（做对照用）；开了之后 `--predictms N` 调地平线、
-    /// `--predictlead N` 调前带量上限。
-    /// </summary>
-    internal bool PredictEnabled;
-
-    /// <summary>数据来源：`--predict` 命令行开着（对照实验用，优先于 `ui.predict` 偏好）。</summary>
-    private bool _predictArg;
-    /// <summary>墨迹预测的偏好键（默认关，只在开时写 "1"）。</summary>
-    private const string PredictPrefKey = "predict";
-    /// <summary>
-    /// 正在写的这一笔**已经交给系统合成器画**了吗（<see cref="FeedInkTrail"/> 真的喂了点）。
-    /// 喂过就不再加自己的渲染尾——两边一起补会在笔尖前面重复画出一小截。
-    /// </summary>
-    internal bool ActiveStrokeOnTrail;
-    /// <summary>渲染尾相对最后一个真实点的最远距离（画布像素）。脏区要按它往外扩。</summary>
-    internal float PredictedTailLead;
-    /// <summary>自画预测尾的累计统计（诊断用）：算过多少次、一共报过多少个点、最大前带量。</summary>
-    internal int TailComputes, TailPointsTotal;
-    internal float TailLeadMax;
-    /// <summary>这一笔有没有出过预测尾、以及最大前带量（`[笔画]` 那一行要用）。</summary>
-    private bool _strokeHadTail;
-    private float _strokeTailMax;
+    // [删除 2026-10-05] 老预测系统整条链（`_predictor`/`_predBuf`/`_trailPred`/`_tailScratch`、
+    // `PredictEnabled`/`_predictArg`/`PredictPrefKey`、渲染尾与预测尾统计等）：用户决定不接预测。
+    // 算法文件 `Prediction/InkPredictor.cs` 保留；恢复见 `已停用-渲染实验.md` + `.revert/`。
 
     // ---- 书写期间的分配 / GC 仪表（低配机排查用）--------------------------
     //
@@ -1387,10 +1353,6 @@ public partial class InkEngine
         _mGc0 = GC.CollectionCount(0);
         _mGc1 = GC.CollectionCount(1);
         _mGc2 = GC.CollectionCount(2);
-        // 预测那本账也要按笔分开记（真笔的预测在 DWM 那条路上）
-        _mPredCount = PredLeadCount;
-        _mPredSum0 = PredLeadSum;
-        _strokePredMax = 0f;
         _measureDone = false;
     }
 
@@ -1404,22 +1366,12 @@ public partial class InkEngine
         StrokeGc1 = GC.CollectionCount(1) - _mGc1;
         StrokeGc2 = GC.CollectionCount(2) - _mGc2;
 
-        StrokePredCount = PredLeadCount - _mPredCount;
-        StrokePredLeadAvg = StrokePredCount > 0 ? (PredLeadSum - _mPredSum0) / StrokePredCount : 0;
-        StrokePredLeadMax = _strokePredMax;
-
         StrokesMeasured++;
         AllocKbSum += StrokeAllocBytes / 1024.0;
         if (StrokeAllocBytes > AllocBytesMax) AllocBytesMax = StrokeAllocBytes;
         if (StrokeGc2 > 0) StrokesWithGc2++;
     }
 
-    /// <summary>当前这一笔的渲染尾点数（诊断与自检用；0 = 没有尾）。</summary>
-    internal int RenderTailPoints => ActiveStroke?.RenderTail?.Count ?? 0;
-    /// <summary>当前预测地平线（毫秒，8~15）。诊断用。</summary>
-    internal double PredictHorizonMs => _predictor.HorizonMs;
-    /// <summary>前带量的硬上限（像素）。诊断用。</summary>
-    internal float PredictLeadCap => _predictor.MaxDistance;
     /// <summary>本笔有没有压感（设备级判断，不是看数值）。</summary>
     internal bool ActiveStrokeHasPressure;
     /// <summary>上一笔的合并率/预测统计（诊断与自检用）。</summary>
@@ -1429,20 +1381,7 @@ public partial class InkEngine
     internal bool PenSawPressureMask, PenSawTiltMask, PenSawRotationMask;
     /// <summary>累计统计：非笔指针（鼠标 / 触摸）读到多少消息、多少合并采样点。</summary>
     internal int PtrTotalPoints, PtrMessages, PtrSamples, PtrCoalescedExtra;
-    /// <summary>预测把湿墨往前带了多少（像素）——"说不清有没有用"时就看这个数。</summary>
-    internal double PredLeadSum; internal int PredLeadCount; internal float PredLeadMax;
-    /// <summary>
-    /// 这一笔**喂给委托轨迹（DWM）**的预测段：次数 / 平均前带量 / 最大前带量。
-    /// 真笔的预测全在这条路上（由系统合成器画），和"我们自己画的尾"是两回事——
-    /// 报告里必须分开写，否则真笔那几笔会显示成"预测尾=无"，看起来像没预测
-    ///（2026-09-29 用户就是这么被误导的）。
-    /// </summary>
-    internal int StrokePredCount;
-    internal double StrokePredLeadAvg;
-    internal float StrokePredLeadMax;
-    int _mPredCount;
-    double _mPredSum0;
-    float _strokePredMax;
+    // [删除 2026-10-05] 预测前带量 / 喂 DWM 段数统计（老预测系统）。
     internal int _cntDown, _cntMove, _cntUp, _cntCaptureLost;
     internal string _lastStrokeReport;
     private long _hotkeysRegistered;
@@ -1767,26 +1706,10 @@ public partial class InkEngine
         if (args.Contains("--inktrail")) OverlayWindow.InkTrailEnabled = true;
         if (args.Contains("--noinktrail")) OverlayWindow.InkTrailEnabled = false;
 
-        // ---- 笔迹预测（**默认关**，2026-09-29）--------------------------------
-        // 关的理由见 PredictEnabled 那段注释：真笔那条 DWM 不画我们的预测点（白喂），
-        // 鼠标/触摸那条自绘尾会"一出一进"（末端突突跳），而收益又测不出来。
-        // 想要对照就 `--predict`；开了之后 --predictms 调地平线、--predictlead 调前带量。
-        //
-        // 2026-10-02：加进「更多 → 设置 → 书写 → 墨迹预测」开关（默认关，地平线固定 10ms）。
-        // 偏好键 `ui.predict`（只在开时写 "1"）；**命令行 `--predict` 优先**（对照实验用）。
-        _predictArg = args.Contains("--predict");
-        PredictEnabled = _predictArg;
-        if (!_predictArg && GetUiPref(PredictPrefKey) == "1") PredictEnabled = true;
-        for (int i = 0; i < args.Length - 1; i++)
-            if (args[i] == "--predictms" && double.TryParse(args[i + 1], out double pm))
-                _predictor.HorizonMs = pm;
-        // 前带量的硬上限（像素）。默认 12 px 足够快机器；负载大、延迟高时要放宽才看得清效果。
-        // 上界给到 400 而不是 40：这是**真机调手感**的旋钮，"100 到底难不难受"必须能真的调到
-        // 100（夹在 40 的话人会以为功能就这样，见 InkPredictor.HardMaxHorizonMs 那段说明）。
-        for (int i = 0; i < args.Length - 1; i++)
-            if (args[i] == "--predictlead" && float.TryParse(args[i + 1], out float pl))
-                _predictor.MaxDistance = Math.Clamp(pl, 4f, 400f);
-        _predictor.ClampHorizon();
+        // ---- 笔迹预测：**已停用并清理**（2026-10-05）------------------------------
+        // [删除 2026-10-05] `--predict/--predictms/--predictlead`（老预测系统）与
+        // `--predicttip`（预测点并入 mean2）的入口、喂点与渲染尾接线已全部移除；
+        // 算法文件 `Prediction/InkPredictor.cs` 保留。恢复见 `已停用-渲染实验.md` + `.revert/`。
 
         // ---- 书写期间的 GC 低延迟档 -------------------------------------------
         //
@@ -1837,6 +1760,16 @@ public partial class InkEngine
         if (!_noPressureArg && GetUiPref(PressurePrefKey) == "0")
             PressureWidth.Enabled = false;
 
+        // ---- 模拟压力与笔锋：**已全部停用**（2026-10-05，代码保留）----------------
+        // [停用] `--simpressure/--simpressdepth`（Xournal++ 速度压力）、
+        // `--pfpressure/--pfthinning/--pfstreamline`（perfect-freehand 速度压力）、
+        // `--simtaper`（固定两端锥）、`--flicktip`（末尾甩速收尖，入口已删除）。
+        // 恢复方法见 `已停用-渲染实验.md`；停用前完整源码在 `.revert/2026-10-05-渲染减法/`。
+        PressureSim.Enabled = false;
+        PressureSim.UsePf = false;
+        // （这里原来还有各开关的解析与 flicktip 速度门控块；停用与删除的原文见登记文档。）
+        PressureSim.BumpVersion();
+
         // ---- 中心线曲线化（过点 Catmull-Rom ＋ 角点保护）------------------------
         //
         // **默认开**（2026-09-28 用户拍板："默认开也没关系"）：把"逐点直线段"换成
@@ -1846,17 +1779,67 @@ public partial class InkEngine
         //
         //   --nosmooth          退回折线（做"开 / 关"对照用）
         //   --smoothcorner N    角点阈值（度）。默认 35：转得比它急就保留尖角。
-        StrokeSmoothing.SetEnabled(!args.Contains("--nosmooth"));
         for (int i = 0; i < args.Length - 1; i++)
+        {
             if (args[i] == "--smoothcorner" && float.TryParse(args[i + 1], out float sc))
             {
                 StrokeSmoothing.CornerAngleDeg = Math.Clamp(sc, 5f, 90f);
                 StrokeSmoothing.BumpVersion();
             }
-        Console.WriteLine(StrokeSmoothing.Enabled
-            ? $"中心线曲线化: 开（过点曲线 ＋ 角点保护，角点阈值 {StrokeSmoothing.CornerAngleDeg}°；"
-              + "活笔走折线，落笔才换曲线）"
-            : "中心线曲线化: 关（折线；--nosmooth 的效果）");
+            // [停用 2026-10-05] `--smoothmacropx`（宏观角点窗）：当天实测变"脏"，已回退默认 0。
+            // 恢复见 `已停用-渲染实验.md`。
+            // else if (args[i] == "--smoothmacropx" && float.TryParse(args[i + 1], out float mp) && mp >= 0)
+            // {
+            //     StrokeSmoothing.CornerMacroPx = Math.Clamp(mp, 0f, 200f);
+            //     StrokeSmoothing.BumpVersion();
+            // }
+        }
+
+        // ---- 笔迹运动模型（2026-10-03 对照台 → 2026-10-05 收敛）------------------
+        // 保留两个模式：**mean2（默认，M6）** 与 **catmull（M1 老路径，对照/兜底）**。
+        // [停用 2026-10-05] raw / sliding / spring / oneeuro / mean / gauss，
+        // 及 `--nosmooth`、`--inkmodel`、`--inkm*`、`--slidewin`、`--motionwin` 等参数：
+        // 代码保留（StrokeMotion 内对应分支未动），恢复见 `已停用-渲染实验.md`。
+        // 仍然**只做渲染期加工**：存档里的点、命中、撤销、橡皮一概不动。
+        {
+            var motionMode = StrokeMotionMode.Mean2;   // 2026-10-04 默认档（用户定稿）
+            // [停用] if (args.Contains("--nosmooth")) motionMode = StrokeMotionMode.Raw;
+            // [停用] if (args.Contains("--inkmodel")) motionMode = StrokeMotionMode.Spring;
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] != "--motion") continue;
+                motionMode = args[i + 1].ToLowerInvariant() switch
+                {
+                    // [停用] "raw" or "m0" => StrokeMotionMode.Raw,
+                    "catmull" or "m1" => StrokeMotionMode.Catmull,
+                    // [停用] "sliding" or "m2" => StrokeMotionMode.Sliding,
+                    // [停用] "spring" or "m3" => StrokeMotionMode.Spring,
+                    // [停用] "oneeuro" or "m4" => StrokeMotionMode.OneEuro,
+                    // [停用] "mean" or "m5" => StrokeMotionMode.Mean,
+                    "mean2" or "m6" => StrokeMotionMode.Mean2,
+                    // [停用] "gauss" or "m7" => StrokeMotionMode.Gauss,
+                    _ => motionMode,
+                };
+            }
+            // InkModel.ApplyParamsFromArgs(args);      // M3 参数（--inkm*）[停用]
+            StrokeMotion.ApplyParamsFromArgs(args);  // mean2 参数（--mean2win 等）
+            StrokeMotion.SetMode(motionMode);
+            InkModel.SetEnabled(false);              // M3 弹簧 [停用 2026-10-05]
+
+            string modeDesc = StrokeMotion.Mode switch
+            {
+                StrokeMotionMode.Catmull => $"catmull（M1：过点曲线＋角点保护，角点阈值 {StrokeSmoothing.CornerAngleDeg}°；活笔走折线）",
+                _ => $"mean2（M6：距离窗 {StrokeMotion.Mean2WindowPx:F0}px ＋ 过点曲线 ＋ 收笔追赶）",
+            };
+            Console.WriteLine($"笔迹运动模型: {modeDesc}");
+        }
+
+        // ---- D1：亚像素输入（`--himetric`）-------------------------------------
+        InputPrecision.Reset();
+        InputPrecision.UseHimetric = args.Contains("--himetric");
+        Console.WriteLine(InputPrecision.UseHimetric
+            ? "输入精度: himetric 亚像素（D1；拿不到设备矩形时逐点退回整数像素）"
+            : "输入精度: 整数像素（D0；--himetric 打开 D1 对照）");
 
         // ---- 呈现节奏 ---------------------------------------------------------
         // 默认改成"等到合成边界再抽输入、立刻 Present(0)"。实测这一项把
@@ -2111,14 +2094,9 @@ public partial class InkEngine
             // 调参时"我到底调上了没有"必须一眼看得见：这里印的是**生效值**，不是"可用/不可用"。
             // （2026-09-22 用户碰到的两个坑：--predictms 100 被静默夹到 15；--noinktrail 生效了没有
             //   只能靠猜。这两件事都不该靠猜。）
-            Console.WriteLine($"笔迹预测: {(PredictEnabled
-                ? (_predictArg ? "开（--predict）" : "开（设置）")
-                : "关（默认）")}"
-                              + $"，地平线 {PredictHorizonMs:F0} ms（推荐 8~{InkPredictor.MaxHorizonMs:F0}，硬上限 {InkPredictor.HardMaxHorizonMs:F0}）"
-                              + $"，前带量上限 {PredictLeadCap:F0} px");
-            Console.WriteLine($"预测尾（鼠标/触摸自画的那一截）：{(OverlayWindow.InkTrailEnabled
-                ? "真笔那一笔让给系统轨迹，鼠标/触摸仍然画"
-                : "真笔也画（委托轨迹已关）")}");
+            // [停用 2026-10-05] 笔迹预测（含 `--predicttip`）：用户决定"预测不接了"，
+            // 代码保留（PredictEnabled 恒 false），见 `已停用-渲染实验.md`。
+            Console.WriteLine("笔迹预测: 已停用（2026-10-05，代码保留；见 已停用-渲染实验.md）");
             // 书写期间的 GC 低延迟档：低配上"偶发卡一下"的第一嫌疑就是它没生效。
             // 这里印的是**读回来的实际状态**（见 GcLatency.Describe），不是"我们想让它开"。
             Console.WriteLine($"书写期间 GC 低延迟档: {GcLatency.Describe()}"
@@ -2159,6 +2137,8 @@ public partial class InkEngine
             Console.WriteLine($"压感→粗细: {(PressureWidth.Enabled
                 ? $"开（{PressureWidth.Min:F2}~{PressureWidth.Max:F2} 倍，曲线 gamma {PressureWidth.Gamma:F2}）"
                 : "关（--nopressure）")}；变宽通道: {OverlayWindow.InkNote}");
+            // [停用 2026-10-05] 模拟压力 / 笔锋 / 收尖：全部停用（代码与备份见 已停用-渲染实验.md）。
+            Console.WriteLine("无压感笔迹增强: 已停用（模拟压力 / 笔锋 / 收尖）");
             return true;
         }, IntPtr.Zero);
 
@@ -2177,6 +2157,8 @@ public partial class InkEngine
         // 合成/真实点击都会落到那个窗口上，批注一个字都画不出来。
         Native.SetTimer(_windows[0].Hwnd, (IntPtr)1, 250, IntPtr.Zero);
         DpiScale = _windows[0].Dpi / 96f;
+        PressureSim.DpiScale = DpiScale;    // 模拟压力按 72dpi 口径换算距离（见 PressureSim）
+        PressureSim.BumpVersion();
 
         Host?.UpdateScreen(LogicalVirtualScreen);
         Host?.UpdateWorkArea(LogicalPrimaryWorkArea);
@@ -2310,10 +2292,6 @@ public partial class InkEngine
     {
         while (!_quit)
         {
-            // 每帧开头先把渲染尾收掉：指针停住但画面还在刷（动画、界面失效、激光衰减）
-            // 的时候，不收就会一直重画上一帧算出来的那一小截预测墨。
-            // 紧接着的 DrainMessages 会把这一帧真的到过的点算成新的尾。
-            ClearRenderTail();
             DrainMessages();
             PumpUpdate();                 // 自动更新：把后台结果搬过来，该换壳就换壳
             if (_quit) break;
@@ -3339,6 +3317,7 @@ public partial class InkEngine
         if (ptype == Native.PT_PEN && dash == StrokeDash.Solid)
             WindowAt(screenX, screenY)?.BeginInkTrail(
                 tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f);
+        _pen.BeginStroke();   // 缺压回填的基准只活在"一笔"之内（见 PenSampleBuffer.BeginStroke）
         ActiveStroke = new Stroke
         {
             Tool = tool,
@@ -3352,16 +3331,9 @@ public partial class InkEngine
             // 实测的原话是"上面会出残影一直在那闪"。见 Stroke.RawWhileLive。
             RawWhileLive = true,
         };
-        // 起笔：预测器从这一刻开始积累；落笔这条消息里可能已经合并了几个采样点，
-        // 一起收进来（以前只取最新那一个）。
-        _predictor.Reset();
+        // 起笔：落笔这条消息里可能已经合并了几个采样点，一起收进来（以前只取最新那一个）。
         ActiveStrokeHasPressure = false;
         LastCoalescedSamples = LastCoalescedMessages = 0;
-        // 这一笔还没交给系统合成器；渲染尾也先清掉（上一笔可能留了一截）。
-        ActiveStrokeOnTrail = false;
-        _strokeHadTail = false;
-        _strokeTailMax = 0f;
-        ClearRenderTail();
         AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
         // 半径**逐点算**（见 TrailRadius）：有压感的笔，湿墨的粗细必须和干墨一致。
         FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
@@ -3574,9 +3546,6 @@ public partial class InkEngine
         // 为此要切 `EditingMode`，还留下过"两条线""预览残留"一串坑；我们这边
         // 采样和上屏都在引擎手里，所以要收的只有这三处）。
         foreach (var w in _windows) w.EndInkTrail();
-        ActiveStrokeOnTrail = false;
-        ClearRenderTail();
-        _predictor.Reset();
 
         var anchor = _dwell.Anchor;                       // 笔停住的位置
         double stillMs = _dwell.StillMs(NowMs);           // 复位之前先量
@@ -5379,10 +5348,7 @@ public partial class InkEngine
         FlushInkRecord();
         // **抬手就关掉停顿那颗定时器**：它只在"有笔在写"的时候有意义（见 StartDwellTimer）。
         StopDwellTimer();
-        // 收笔：渲染尾立刻作废（它是"正在写"才有的东西）。**必须在提交进文档之前**清——
-        // 不清的话这一条会永远在末尾带着一小截预测出来的墨，存档、导出、下次打开都带着。
-        ClearRenderTail();
-        ActiveStrokeOnTrail = false;
+        // [删除 2026-10-05] 收笔时清"预测尾"：随老预测系统一起移除（渲染尾已不存在）。
         Doc.EndErase();
         // 面积擦抬手：框回基准尺寸（悬停时显示的 = 下次按下去第一下擦掉的那一块）。
         PixelEraseDragging = false;
@@ -5563,13 +5529,7 @@ public partial class InkEngine
                     + $"，设备={PointerTypeName(_activePointerType)}"
                     + $"，压感={(ActiveStrokeHasPressure ? "有" : "无")}"
                     + $"，合并({LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 个采样点)"
-                    // 预测器与预测尾：调参时这两项是**唯一能证明"到底生效没有"的东西**
-                    // （速度低于 MinSpeed 时预测器会主动不出点，光看屏幕分不清是"没生效"还是"没必要"）。
-                    + $"，预测器={_predictor.Count} 点/末速度 {_predictor.Speed:F3} px/ms"
-                    + $"，预测尾={(_strokeHadTail ? $"自绘有（最多 {_strokeTailMax:F1} px）" : "自绘无")}"
-                    + (StrokePredCount > 0
-                        ? $"，喂DWM {StrokePredCount} 段（平均 {StrokePredLeadAvg:F1} / 最大 {StrokePredLeadMax:F1} px）"
-                        : "")
+                    // [删除 2026-10-05] 预测器/预测尾/喂 DWM 段数的日志：随预测系统一起移除。
                     // 分配与 GC：低配机排查"偶发卡顿"的**唯一依据**。
                     // 第 2 代那一位出现在书写期间，就说明这一笔画到一半被全堆回收打断过。
                     + $"，分配 {StrokeAllocBytes / 1024.0:F1} KB/GC {StrokeGc0}/{StrokeGc1}/{StrokeGc2}";
@@ -6829,7 +6789,6 @@ public partial class InkEngine
         // 三角形 / 平行四边形是"外框 → 三个顶点"，拖动期每一帧都要拿**按下那一刻**的
         // 那个角去算外框——它不在控制点表里（控制点已经被推成三个顶点了）。
         _shapeBoxOrigin = new Vector2(x, y);
-        _predictor.Reset();
         ActiveStrokeHasPressure = false;
         LastCoalescedSamples = LastCoalescedMessages = 0;
     }
@@ -7019,7 +6978,6 @@ public partial class InkEngine
                 float cx = s.X, cy = s.Y;
                 ScreenToCanvas(ref cx, ref cy);
                 ActiveStroke.AddPoint(cx, cy, s.Pressure, s.TimeMs);
-                _predictor.Add(s.X, s.Y, s.TimeMs);
                 PenTotalPoints++;
                 if (s.HasPressure) PenPressurePoints++;
             }
@@ -7033,7 +6991,6 @@ public partial class InkEngine
             //   · 荧光笔是一支"平头马克笔"，粗细随压力变会让划出来的带子忽宽忽窄（满压还是 2 倍宽）；
             //   · 激光笔只是指一下，没有"笔迹粗细"这回事。
             if (ActiveStrokeHasPressure && ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
-            UpdateRenderTail();
             return;
         }
 
@@ -7057,81 +7014,19 @@ public partial class InkEngine
                 float cx = s.X, cy = s.Y;
                 ScreenToCanvas(ref cx, ref cy);
                 ActiveStroke.AddPoint(cx, cy, s.Pressure, s.TimeMs);
-                _predictor.Add(s.X, s.Y, s.TimeMs);
                 PtrTotalPoints++;
             }
             // 非笔设备没有 penMask，也就永远不会给这一笔打上 HasPressure——
             // 这正是 WPF / 微软白板里"鼠标画的那条线是等宽"的来源。
-            UpdateRenderTail();
             return;
         }
 
         // ---- 读不到合并点：退回"一个消息一个点"的老路（行为与以前完全一致）------
         ActiveStroke.AddPoint(curCanvasX, curCanvasY, curPressure, NowMs);
-        _predictor.Add(screenX, screenY, NowMs);
-        UpdateRenderTail();
     }
 
-    /// <summary>
-    /// 算出"正在写的那一笔"的**渲染尾**（预测段），写进 <see cref="Stroke.RenderTail"/>。
-    ///
-    /// 为什么要在我们自己画的那一笔上补：委托墨迹轨迹只对真笔开，鼠标 / 触摸没有任何
-    /// 低延时通道——它们的墨完全由我们画，于是墨的末端永远落在上一帧的位置。
-    /// 把预测段接上，末端就回到"现在"（模型见 Prediction/InkPredictor.cs）。
-    ///
-    /// 四条前提，缺一条就不加尾：
-    ///   · 预测开着；
-    ///   · 这一笔**没有**交给系统合成器画（交给它了就不能重复补，见 ActiveStrokeOnTrail）；
-    ///   · 自由笔迹 ＋ 笔 / 荧光笔 ＋ 实线（图形由控制点定义，没有"末端滞后"这回事；
-    ///     虚线接尾会让 dash 图案从接缝处重新开始，看着是断的）；
-    ///   · 预测器真的给出了点（刚起笔、慢写、急转弯时它会主动不给，见 Predict）。
-    ///
-    /// 预测在**屏幕**空间算（和委托轨迹同一条），画的时候换回**画布**空间——
-    /// 滚动之后尾巴才会跟着笔迹走。
-    /// </summary>
-    private void UpdateRenderTail()
-    {
-        var s = ActiveStroke;
-        if (s == null) return;
-
-        bool eligible = PredictEnabled && !ActiveStrokeOnTrail
-            && s.Kind == StrokeKind.Freehand
-            && (s.Tool == Tool.Pen || s.Tool == Tool.Highlighter)
-            && s.Dash == StrokeDash.Solid;
-
-        if (!eligible || s.Points.Count == 0) { ClearRenderTail(); return; }
-
-        int n = _predictor.Predict(_predBuf);
-        if (n == 0) { ClearRenderTail(); return; }
-
-        _tailScratch.Clear();
-        for (int i = 0; i < n; i++)
-        {
-            float cx = _predBuf[i].X, cy = _predBuf[i].Y;
-            ScreenToCanvas(ref cx, ref cy);
-            _tailScratch.Add(new Vector2(cx, cy));
-        }
-        var last = s.Points[^1];
-        PredictedTailLead = Vector2.Distance(new Vector2(last.X, last.Y), _tailScratch[^1]);
-        s.SetRenderTail(_tailScratch);
-        // 统计：这一笔到底有没有尾、最长多长。**必须能打印出来**——不然"手写板上看不出来"
-        // 这种事只能靠猜（2026-09-22 用户实测：鼠标甩得很难受、手写板毫无反应）。
-        _strokeHadTail = true;
-        if (PredictedTailLead > _strokeTailMax) _strokeTailMax = PredictedTailLead;
-        TailComputes++;
-        TailPointsTotal += n;
-        if (PredictedTailLead > TailLeadMax) TailLeadMax = PredictedTailLead;
-    }
-
-    /// <summary>
-    /// 把渲染尾收掉：起笔、收笔、以及"这一帧指针根本没动"的时候都要收。
-    /// 不收的后果是笔停住时笔尖前面一直挂着一小截预测出来的墨。
-    /// </summary>
-    private void ClearRenderTail()
-    {
-        ActiveStroke?.SetRenderTail(null);
-        PredictedTailLead = 0;
-    }
+    // [删除 2026-10-05] 原 `UpdateRenderTail()` / `ClearRenderTail()`（预测渲染尾的写入与收回）
+    // 随老预测系统整条链移除。算法与接线原文见 `.revert/2026-10-05-渲染减法/`。
 
     /// <summary>
     /// 湿墨该用多粗的半径：**和干墨同一个映射**（见 <see cref="PressureWidth"/>）。
@@ -7185,29 +7080,8 @@ public partial class InkEngine
             realCount++;
         }
 
-        int predCount = 0;
-        if (PredictEnabled)
-        {
-            int n = _predictor.Predict(_predBuf);
-            for (int i = 0; i < n && predCount < _trailPred.Length; i++)
-                _trailPred[predCount++] = new Vector2(_predBuf[i].X, _predBuf[i].Y);
-        }
-
-        if (predCount > 0)
-        {
-            float lead = Vector2.Distance(_trailReal[realCount - 1], _trailPred[predCount - 1]);
-            PredLeadSum += lead;
-            PredLeadCount++;
-            if (lead > PredLeadMax) PredLeadMax = lead;
-            if (lead > _strokePredMax) _strokePredMax = lead;      // 这一笔自己的最大值
-        }
-
-        win.AddInkTrailPoints(_trailReal, realCount, _trailPred, predCount, radius, _trailRadii);
-
-        // 系统合成器接手了这一笔的湿墨 → 把我们自己那份"渲染尾"收掉。
-        // 不收就是两边一起补，笔尖前面会出现重复的一小截。
-        ActiveStrokeOnTrail = true;
-        ClearRenderTail();
+        // [删除 2026-10-05] 预测点喂 DWM：随老预测系统移除（实测 DWM 本来就不画我们的预测点）。
+        win.AddInkTrailPoints(_trailReal, realCount, null, 0, radius, _trailRadii);
     }
 
     /// <summary>一个压力值 → 湿墨半径（和干墨同一映射、同一单位）。</summary>
@@ -8014,6 +7888,11 @@ public partial class InkEngine
         Gfx.Shutdown();
         // 手测台：退出时把汇总写出来（逐条数据在每条拖拽结束时就已经落盘了）。
         EraserTelemetry?.Close(Doc, NowMs);
+        // D1 亚像素：退出时给一行统计，确认 `--himetric` 到底有没有真的映射上
+        // （设备不报 himetric / 拿不到设备矩形时会逐点退回整数像素，不能只看横幅）。
+        if (InputPrecision.UseHimetric)
+            Console.WriteLine($"输入精度统计: himetric 映射 {InputPrecision.MappedPoints} 点 / "
+                              + $"退回整数像素 {InputPrecision.FallbackPoints} 点");
         Console.WriteLine("shutdown complete");
     }
 
@@ -8165,7 +8044,7 @@ public partial class InkEngine
         CoordGridDefault = CoordGridDefault,
         DwellShapeOn = DwellShapeEnabled,
         PressureOn = PressureWidth.Enabled,      // 界面拿它显示「设置 → 书写 → 压感粗细」那个开关
-        PredictOn = PredictEnabled,              // 界面拿它显示「设置 → 书写 → 墨迹预测」那个开关
+        // [删除 2026-10-05] PredictOn（墨迹预测）：随老预测系统移除。
         ScreenIndex = ScreenIndex,
         CanFlipPageUp = CanFlipPageUp,
         IsDrawing = _drawing,
@@ -8334,29 +8213,8 @@ public partial class InkEngine
     /// <summary>压感粗细的偏好键（只写"关过"的那一份）。</summary>
     private const string PressurePrefKey = "pressure";
 
-    /// <summary>
-    /// 「更多 → 设置 → 书写 → 墨迹预测」被点了一下（2026-10-02）。
-    ///
-    /// 语义：`PredictEnabled` 的**运行时开关**（默认关）。开了之后：
-    ///   · 鼠标 / 触摸那条自绘预测尾重新开始喂点（地平线 10ms，前带量 ≤12px）；
-    ///   · 真笔那条仍然不喂（DWM 不画我们的预测点，喂了也白喂，见 PredictEnabled 注释）。
-    /// 只是"下一帧起要不要预测"，没有缓存要作废；`_dirty` 一下让尾巴立刻换掉。
-    /// </summary>
-    internal void SetPredictFromUi(bool on)
-    {
-        if (PredictEnabled == on) return;
-        PredictEnabled = on;
-        _dirty = true;
-        Console.WriteLine($"墨迹预测：{(on ? $"开（地平线 {PredictHorizonMs:F0}ms）" : "关")}");
-        NotifyUiStateChanged();
-    }
-
-    /// <summary>
-    /// 自检用：把"墨迹预测"的偏好**重新应用一次**——模拟"重开软件"里读偏好那一步
-    /// （同 <see cref="ApplyPressurePrefForTest"/>，自检模式启动不读盘）。
-    /// </summary>
-    internal void ApplyPredictPrefForTest()
-        => PredictEnabled = _predictArg || GetUiPref(PredictPrefKey) == "1";
+    // [删除 2026-10-05] `SetPredictFromUi` / `ApplyPredictPrefForTest`（墨迹预测开关的入口）：
+    // 随老预测系统移除；恢复见 `已停用-渲染实验.md`。
 
     /// <summary>
     /// 自检用：把"压感粗细"的偏好**重新应用一次**——模拟"重开软件"里读偏好那一步。

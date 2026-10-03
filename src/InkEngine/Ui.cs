@@ -363,14 +363,8 @@ public interface IEngineCommands
     /// </summary>
     void SetTooltips(bool on);
 
-    /// <summary>
-    /// **墨迹预测的开关**（「更多 → 设置 → 书写 → 墨迹预测」，2026-10-02 加）。
-    ///
-    /// 默认**关**（2026-09-29 定的）；开着只影响**鼠标/触摸**的自绘预测尾
-    /// （地平线固定 10ms），真笔那条仍然不喂（DWM 不画我们的预测点）。
-    /// 偏好键 `ui.predict`（只在开时写 "1"）；命令行 `--predict` 优先。
-    /// </summary>
-    void SetPredict(bool on);
+    // [删除 2026-10-05] `SetPredict(bool)`：墨迹预测开关随老预测系统移除。
+    // 恢复见 `已停用-渲染实验.md`。
 
     /// <summary>
     /// 「更多」抽屉里"坐标系网格"那一行被点了一下。
@@ -896,12 +890,7 @@ public readonly struct UiState
     /// </summary>
     public bool PressureOn { get; init; }
 
-    /// <summary>
-    /// **墨迹预测**开着吗（界面用它显示「设置 → 书写 → 墨迹预测」那一行的开关）。
-    /// 默认关（用户 2026-09-29 定；2026-10-02 加设置开关）；开了只影响鼠标/触摸的
-    /// 自绘预测尾，真笔那条不动（见 `PredictEnabled` 的注释）。
-    /// </summary>
-    public bool PredictOn { get; init; }
+    // [删除 2026-10-05] `PredictOn`（墨迹预测开关的状态）：随老预测系统移除。
     /// <summary>现在在第几屏（1 起）。界面用它显示"第 N 屏"。</summary>
     public int ScreenIndex { get; init; }
     /// <summary>还能不能往上翻（到顶了就不行）。"下一屏"永远可用。</summary>

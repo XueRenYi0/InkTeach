@@ -693,18 +693,19 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             TouchGuardTest();
         }
-        else if (mode == "--predicttailtest")
-        {
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            PredictTailTest();
-        }
-        else if (mode == "--predicttest")
-        {
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            PredictorTest();
-        }
+        // [停用 2026-10-05] 预测尾/预测算法自检（老预测系统停用，见 已停用-渲染实验.md）
+        // else if (mode == "--predicttailtest")
+        // {
+        //     _autoExitAt = double.MaxValue;
+        //     _nextLogAt = double.MaxValue;
+        //     PredictTailTest();
+        // }
+        // else if (mode == "--predicttest")
+        // {
+        //     _autoExitAt = double.MaxValue;
+        //     _nextLogAt = double.MaxValue;
+        //     PredictorTest();
+        // }
         else if (mode == "--smoothtest")
         {
             // **纯算法，不建窗口**（和 `--inktest` 同一个口径）：曲线器是离线几何，
@@ -712,6 +713,22 @@ internal sealed partial class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             ExitCode = SmoothProbe.Run();
+            _quit = true;
+        }
+        // [停用 2026-10-05] M3 弹簧专项自检（模式已停用，见 已停用-渲染实验.md）
+        // else if (mode == "--inkmodeltest")
+        // {
+        //     _autoExitAt = double.MaxValue;
+        //     _nextLogAt = double.MaxValue;
+        //     ExitCode = InkModelProbe.Run();
+        //     _quit = true;
+        // }
+        else if (mode == "--motiontest")
+        {
+            // 对照台总自检：M0/M1/M2/M3/M4/M5 同一批语料出表。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ExitCode = MotionProbe.Run();
             _quit = true;
         }
         else if (mode == "--smoothshow")
@@ -758,12 +775,13 @@ internal sealed partial class App : InkEngine.InkEngine
                               + $"，apply={AutoApplyUpdate} ===");
             CheckUpdateFromUi();
         }
-        else if (mode == "--tailjumptest")
-        {
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            TailJumpTest(args.Contains("--noisy"), args.Contains("--off"));
-        }
+        // [停用 2026-10-05] 预测尾"突突跳"检测（老预测系统停用，见 已停用-渲染实验.md）
+        // else if (mode == "--tailjumptest")
+        // {
+        //     _autoExitAt = double.MaxValue;
+        //     _nextLogAt = double.MaxValue;
+        //     TailJumpTest(args.Contains("--noisy"), args.Contains("--off"));
+        // }
         else if (mode == "--pressurediag")
         {
             _autoExitAt = double.MaxValue;
@@ -812,13 +830,14 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             BallProbe(args.Length > 1 ? args[1] : "reports/ball");
         }
-        else if (mode == "--predictdata")
-        {
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            PredictEval.Run(args.Length > 1 ? args[1] : "tmp/datasets");
-            _quit = true;
-        }
+        // [停用 2026-10-05] 真实笔迹数据预测评测（老预测系统停用，见 已停用-渲染实验.md）
+        // else if (mode == "--predictdata")
+        // {
+        //     _autoExitAt = double.MaxValue;
+        //     _nextLogAt = double.MaxValue;
+        //     PredictEval.Run(args.Length > 1 ? args[1] : "tmp/datasets");
+        //     _quit = true;
+        // }
         else if (mode == "--wetinktest")
         {
             _autoExitAt = double.MaxValue;
@@ -1005,16 +1024,17 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --widthtest         笔迹粗细/压力");
         Console.WriteLine("  --ghosttest         残影检测");
         Console.WriteLine("  --trailtest         委托墨迹轨迹对照");
-        Console.WriteLine("  --predicttest       笔迹预测自检（纯算法：直线/加速/急转/断笔/限幅/性能）");
-        Console.WriteLine("  --predicttailtest   预测尾自检（鼠标/触摸：合并点读全 + 尾巴真的上屏）");
         Console.WriteLine("  --smoothtest        中心线曲线化自检（过点 Catmull-Rom：直角不变形 / 圆弧更圆滑 / 形状不跑）");
         Console.WriteLine("  --smoothshow [图]   出图：曲线化开/关对照（同一组样本各存一张 -off / -on，32 位 BMP）");
         Console.WriteLine("  --smoothflashtest [--off]  “画的时候闪不闪”专项检测（合成鼠标画过去，看已经画过的墨还动不动）");
-        Console.WriteLine("  --nosmooth          关掉中心线曲线化（**默认开**；只用于对照。--smoothcorner N 调角点阈值）");
-        Console.WriteLine("  --predict           打开笔迹预测（**默认关**：真笔那条 DWM 不画、鼠标那条会“突突”跳）");
-        Console.WriteLine("                      --predictms N / --predictlead N 调地平线与前带量上限");
+        Console.WriteLine("  --motion <名字>     catmull / mean2（**默认 mean2**=距离窗＋过点曲线＋收笔追赶）");
+        Console.WriteLine("  --motiontest        运动模型自检（baseline / catmull / mean2 同批语料出表）");
+        Console.WriteLine("  --himetric          D1 亚像素输入（用 ptHimetricLocation 映射小数像素；默认关，做 A/B）");
+        Console.WriteLine("  模型调参：--mean2win 画布像素 / --smoothcorner N 角点阈值");
+        Console.WriteLine("  [已停用] 预测、拟合(--mean2fit)、模拟压力(--simpressure/--pfpressure)、笔锋");
+        Console.WriteLine("           (--simtaper/--flicktip)、对照模式(raw/sliding/spring/oneeuro/mean/gauss)等：");
+        Console.WriteLine("           见 已停用-渲染实验.md（代码保留）");
         Console.WriteLine("  --wetdrytest [--live 20] 湿墨/干墨交接测量（**要真笔**：在中间那条浅灰线间画一笔）");
-        Console.WriteLine("  --tailjumptest [--noisy] [--off]  预测尾“突突跳”检测（--off = 关预测做对照）");
         Console.WriteLine("  --updatetest        自动更新自检（离线：解析 / 版本比较 / sha256 / 下载候选 / 换壳脚本沙箱真跑）");
         Console.WriteLine("  --updatecheck [清单地址] [--apply]  自动更新验收（**会真的换壳**：--apply = 查到就装）");
         Console.WriteLine("  --touchguardtest    触摸自检（合成触摸：PT_TOUCH 通路 + 第二根手指不许抢笔）");
@@ -1029,7 +1049,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --replayshow <图>   墨迹回放摆样（铺几笔 → 播到一半 → 截控制条那一块）");
         Console.WriteLine("  --ballprobe [前缀]  收起球贴边诊断（左/右/四角 × 显示/隐藏，逐个出图）");
         Console.WriteLine("  --wetinktest        湿墨轨迹实测（只让系统画，数上屏像素：这条通道到底画不画）");
-        Console.WriteLine("  --predictdata [路径] 真实笔迹数据上的预测评测（UCI Character Trajectories）");
+        // [停用] Console.WriteLine("  --predictdata [路径] 真实笔迹数据上的预测评测（UCI Character Trajectories）");
         Console.WriteLine("  --latbench <csv>    延时实测（分场景 + 分位数 + 稳定性）");
         Console.WriteLine("  --penlive [秒]      真笔延时实测（挂上手写笔写一会儿，出报告）");
         Console.WriteLine("  --longrun [秒]      长时运行内存/CPU");
@@ -15776,8 +15796,10 @@ internal sealed partial class App : InkEngine.InkEngine
                   !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
         }
 
-        // 「墨迹预测」开关（2026-10-02 新增）：同一条链路——点行 → 引擎状态翻转 → 落盘。
-        // 顺带验「更多」第二批：面板格子的提示文案、设置行悬停出提示、触摸长按不执行。
+        // [停用 2026-10-05] 「墨迹预测」开关整块自检（老预测系统停用，见 已停用-渲染实验.md）。
+        // 原来这里顺带验「更多」第二批提示 / 悬停出提示 / 触摸长按不执行——随该行一起停用；
+        // 恢复预测时把下面整块取消注释即可。
+        /*
         {
             var predictRow = ui.RowRectByLabelForTest("墨迹预测");
             Check("「墨迹预测」那一行找得到", predictRow.MaxY > predictRow.MinY,
@@ -15830,6 +15852,7 @@ internal sealed partial class App : InkEngine.InkEngine
             Check("点「墨迹预测」：引擎状态立刻翻转（默认关 → 开）",
                   Host.State.PredictOn, $"PredictOn = {Host.State.PredictOn}");
         }
+        */   // [停用 2026-10-05] 「墨迹预测」自检块结束
 
         // 「功能提示」开关也过一遍完整链路（2026-10-02 新增；原叫「悬停提示」）：
         // 点行 → 界面状态翻转 → 落盘
@@ -15851,13 +15874,14 @@ internal sealed partial class App : InkEngine.InkEngine
               prefsText.Contains("\"ui\"") && prefsText.Contains("\"dark\"")
               && prefsText.Contains("\"profile\"") && prefsText.Contains("\"unpinned\"")
               && prefsText.Contains("\"pressure\"") && prefsText.Contains("\"tooltip\"")
-              && prefsText.Contains("\"predict\""),
+              // [停用] && prefsText.Contains("\"predict\"")
+              ,
               $"{Path.GetFileName(prefsPath)}（{prefsText.Length} 字节）");
 
         // 把内存里那份清掉、从文件重读，再挂一个新界面——这才算"重开软件"那条链子
         ReloadUiPrefsForTest();
         ApplyPressurePrefForTest();       // 压感是引擎状态，要补"启动时应用偏好"那一步
-        ApplyPredictPrefForTest();        // 墨迹预测同理
+        // [停用 2026-10-05] ApplyPredictPrefForTest();   // 墨迹预测（老预测系统停用）
         SetUiFactory(() => new InkUi.FullUi());
         SettleFrames(300);
         ui = CurrentUi as InkUi.FullUi;
@@ -15868,8 +15892,8 @@ internal sealed partial class App : InkEngine.InkEngine
               + $"功能提示={ui?.TipEnabledForTest}");
         Check("压感偏好也读回来了（重启后仍是关）",
               !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
-        Check("墨迹预测偏好也读回来了（重启后仍是开）",
-              Host.State.PredictOn, $"PredictOn = {Host.State.PredictOn}");
+        // [停用 2026-10-05] Check("墨迹预测偏好也读回来了（重启后仍是开）",
+        //     Host.State.PredictOn, $"PredictOn = {Host.State.PredictOn}");
 
         // 关着开关时，"停在笔上 0.7 秒"必须**什么都不出**（开关真的在闸门上，不是装饰）
         {
@@ -19749,6 +19773,8 @@ internal sealed partial class App : InkEngine.InkEngine
     /// 对照组 `--nopredict` 应当明显更稳（这就是这条测试的自证）。
     /// ⚠ 2026-09-29 起预测**默认关**（用户拍板），所以这条测试要显式 `--predict` 才有对照。
     /// </summary>
+    /* [删除 2026-10-05] 预测尾"突突跳"检测 + MaxInkColumn 辅助：随老预测系统移除
+       （原文备份见 `.revert/2026-10-05-渲染减法/`；恢复见 `已停用-渲染实验.md`）。
     private void TailJumpTest(bool noisy = false, bool predictOff = false)
     {
         Console.WriteLine();
@@ -19862,6 +19888,8 @@ internal sealed partial class App : InkEngine.InkEngine
         }
         return -1;
     }
+
+    */
 
     private void CurveShowcase(string path)
     {
@@ -22832,6 +22860,8 @@ internal sealed partial class App : InkEngine.InkEngine
     /// 笔迹预测自检（**纯算法**：不需要真笔、不需要屏幕、不画东西）。
     /// 把 `调研-压感与预测-原理.md` 第三节里那些"别甩墨"的约束逐条变成断言。
     /// </summary>
+    /* [删除 2026-10-05] 预测算法自检 + 预测尾自检：随老预测系统移除
+       （原文备份见 `.revert/2026-10-05-渲染减法/`；恢复见 `已停用-渲染实验.md`）。
     private void PredictorTest()
     {
         Console.WriteLine();
@@ -23228,6 +23258,8 @@ internal sealed partial class App : InkEngine.InkEngine
     ///   ③ 触摸照样有预测尾（触摸没压感 → 走等宽描边那条渲染路，与真笔的 ink 那条不同）；
     ///   ④ **第二根手指按下时，正在写的那一笔不能被换掉**，而且第一根手指还能接着写。
     /// </summary>
+    */
+
     private void TouchGuardTest()
     {
         Console.WriteLine();
@@ -23274,22 +23306,19 @@ internal sealed partial class App : InkEngine.InkEngine
               TouchHudNow == 1 && (TouchHudText ?? "").Contains("触摸"),
               $"当前 {TouchHudNow} 指，最多 {TouchHudMax} 指");
 
-        // ---- ② 走一段，让速度和预测器都活起来；③ 看有没有尾 ----
-        int tailMax = 0;
+        // ---- ② 走一段（预测尾已随老预测系统删除，这里只验点在往里进）----
         float cx = x0;
         for (int i = 1; i <= 14; i++)
         {
             cx = x0 + 14f * i;
             SendTouches(true, (cx, y0));
             SettleFrames(17);
-            if (RenderTailPoints > tailMax) tailMax = RenderTailPoints;
         }
         var live = ActiveStroke;
         Check("触摸这一笔建起来了、点在往里进",
               live != null && live.Points.Count > 5,
               live == null ? "ActiveStroke 为 null" : $"笔画点数 {live.Points.Count}");
-        Check("触摸这一笔照样有预测尾（走等宽描边那条渲染路）", tailMax > 0,
-              $"尾最多 {tailMax} 个点、当前 {RenderTailPoints} 个、前带量 {PredictedTailLead:F1} px");
+        // [删除 2026-10-05] "触摸也有预测尾"检查：随老预测系统移除。
 
         // ---- ④ 第二根手指按下：正在写的那一笔不许被换掉 ----
         var before = ActiveStroke;
@@ -23320,8 +23349,8 @@ internal sealed partial class App : InkEngine.InkEngine
         SendTouches(false, (cx, y0), (x0, y0 + 200f));
         SettleFrames(250);
         var committed = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
-        Check("松手后这一笔进了文档，而且没带渲染尾",
-              committed != null && committed.RenderTail == null,
+        Check("松手后这一笔进了文档",
+              committed != null,
               committed == null ? "文档里没有笔画" : $"点数 {committed.Points.Count}");
 
         CurrentColor = oldColor;
@@ -23565,7 +23594,6 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine($"  压力范围              : {(pMax >= 0 ? $"{pMin:F3} ~ {pMax:F3}" : "（没有点）")}");
         Console.WriteLine($"  设备                  : {DeviceName(LastPointerType)}");
         Console.WriteLine($"  湿墨轨迹              : 开关={(OverlayWindow.InkTrailEnabled ? "开" : "关")}"
-                          + $"，预测={(PredictEnabled ? $"开（{PredictHorizonMs:F0} ms）" : "关")}"
                           + $"，最后一次调用={OverlayWindow.InkTrailDebug}");
 
         bool readAll = strokePoints >= injected * 0.8;
@@ -24373,6 +24401,11 @@ internal sealed partial class App : InkEngine.InkEngine
             Check("映射：gamma 真的起作用（>1 把轻压区间压低）",
                   curved < linear - 1e-4f, $"线性 {linear:F3} → gamma=2 {curved:F3}");
         }
+
+        // [停用/删除 2026-10-05] 这里原来有两块纯函数自检：
+        //   ① 模拟压力（Xournal++ / perfect-freehand）——随功能停用移除；
+        //   ② 末尾甩速收尖（`--flicktip`）——随功能**删除**（用户判定效果不对）。
+        // 代码与备份见 `已停用-渲染实验.md` 与 `.revert/2026-10-05-渲染减法/`。
 
         if (!EnsureSyntheticPen())
         {
@@ -27626,17 +27659,9 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine($"  压感：{PenPressurePoints}/{PenTotalPoints} 个点带有效压感；"
                           + $"设备报 pressure 位={Yes(PenSawPressureMask)}，"
                           + $"倾角位={Yes(PenSawTiltMask)}，旋转位={Yes(PenSawRotationMask)}");
-        Console.WriteLine($"  预测：{(PredictEnabled ? $"开（{PredictHorizonMs:F0} ms）" : "关")}；"
-                          + $"湿墨轨迹：{(OverlayWindow.InkTrailEnabled ? "开" : "关")}"
+        // [删除 2026-10-05] 预测统计：随老预测系统移除。
+        Console.WriteLine($"  湿墨轨迹：{(OverlayWindow.InkTrailEnabled ? "开" : "关")}"
                           + $"（{OverlayWindow.InkTrailNote}）");
-        if (PredictEnabled)
-            Console.WriteLine("  预测尾：鼠标/触摸那条路开着——正在写的那一笔末端会比真实采样点"
-                              + $"超前一点（上限 {PredictLeadCap:F0} px）；嫌超前就 --predictlead 调小");
-        if (PredLeadCount > 0)
-            Console.WriteLine($"  预测实际把墨往前带：平均 {PredLeadSum / PredLeadCount:F2} px，"
-                              + $"最大 {PredLeadMax:F2} px（上限 {PredictLeadCap:F0} px，共 {PredLeadCount} 次）");
-        else if (PredictEnabled)
-            Console.WriteLine("  预测实际把墨往前带：一次都没有触发（速度太低或全是急转/断笔）");
 
         // 书写期间的分配与 GC：低配机排查"偶发卡顿"的依据。
         // 每笔分配越大越容易触发回收；**第 2 代回收出现在书写期间 = 那一下就卡了几十毫秒**。
