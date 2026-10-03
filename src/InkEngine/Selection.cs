@@ -358,15 +358,56 @@ internal static class SelectionHandles
         _ => (0.5f, 0.5f),
     };
 
-    /// <summary>手柄在画布坐标里的位置。</summary>
+    /// <summary>
+    /// 小对象的**最小操作框**（每边至少这么大，逻辑像素；以中心对称撑开）。
+    ///
+    /// 2026-10-05 用户："图形太小了，还用这么大的点不合适 —— 可以上最小框"。
+    /// 把**操作框**撑到最小尺寸以后：手柄画在操作框上，不再压住内容；旋转柄、命中区、
+    /// "框内拖动"判定、缩放换算全都跟着操作框走（都问 <see cref="Position"/> /
+    /// <see cref="InsideUiFrame"/>，不是各算一份）。对象自己的真实包围盒（`frame.Local`）
+    /// **一个像素都不改**——框是操作的代理，不是几何。
+    ///
+    /// 取 28 = 命中直径（2 × <see cref="HitRadiusLogical"/>）：四角的命中圈正好相切，
+    /// 不会互相抢；再小就会"想点左下、命中的是右下"。
+    /// </summary>
+    public const float MinUiFrameLogical = 28f;
+
+    /// <summary>把真实包围盒撑成**操作框**（见 <see cref="MinUiFrameLogical"/>）；够大就原样返回。</summary>
+    public static RectF UiBox(in RectF real, float dpiScale)
+    {
+        if (real.IsEmpty) return real;
+        float half = MinUiFrameLogical * 0.5f * dpiScale;
+        float cx = (real.MinX + real.MaxX) * 0.5f;
+        float cy = (real.MinY + real.MaxY) * 0.5f;
+        float hx = MathF.Max((real.MaxX - real.MinX) * 0.5f, half);
+        float hy = MathF.Max((real.MaxY - real.MinY) * 0.5f, half);
+        return new RectF { MinX = cx - hx, MinY = cy - hy, MaxX = cx + hx, MaxY = cy + hy };
+    }
+
+    /// <summary>
+    /// 手柄在画布坐标里的位置。
+    ///
+    /// ⚠ 框比 <see cref="MinUiFrameLogical"/> 小时，位置按**最小操作框**算（见 <see cref="UiBox"/>）。
+    /// 绘制 / 命中 / 拖动换算三处都只走这一个函数，所以"操作框"天然是同一份判据——
+    /// 谁都不许另算一份（同一个名单写在多处必漏一处，见 架构-分层与规则.md 五-7）。
+    /// </summary>
     public static Vector2 Position(SelHandle h, in RectF b, float dpiScale)
     {
+        var ui = UiBox(b, dpiScale);
         var (u, v) = Uv(h);
-        float x = b.MinX + (b.MaxX - b.MinX) * u;
-        float y = b.MinY + (b.MaxY - b.MinY) * v;
+        float x = ui.MinX + (ui.MaxX - ui.MinX) * u;
+        float y = ui.MinY + (ui.MaxY - ui.MinY) * v;
         if (h == SelHandle.Rotate) y -= RotateOffsetLogical * dpiScale;
         return new Vector2(x, y);
     }
+
+    /// <summary>
+    /// 指针是不是落在**操作框**里（"整体拖动"那一档）。
+    /// 三处入口——光标形状、自动选中框分流、按下分流——共用这一份，分开写必漂。
+    /// 用画布坐标直接判（选中框一律轴对齐、ToCanvas 是单位阵，见 SelectionFrame 的注释）。
+    /// </summary>
+    public static bool InsideUiFrame(in SelectionFrame f, Vector2 canvasPoint, float dpiScale)
+        => UiBox(f.CanvasAabb, dpiScale).Contains(canvasPoint.X, canvasPoint.Y);
 
     /// <summary>手柄在**画布坐标**里的位置。</summary>
     public static Vector2 CanvasPosition(SelHandle h, in SelectionFrame f, float dpiScale)

@@ -2369,7 +2369,8 @@ internal sealed partial class OverlayWindow : IDisposable
             var sb = frame.CanvasAabb;
             float dpi = app.DpiScale;
             float margin = SelectionHandles.VisualSizeLogical * 0.5f * dpi + 6f;
-            var ui = sb.Inflate(margin);
+            // 手柄画在**最小操作框**上（小对象时比真实框大一圈），脏区也按它算。
+            var ui = SelectionHandles.UiBox(sb, dpi).Inflate(margin);
 
             var rot = SelectionHandles.CanvasPosition(SelHandle.Rotate, frame, dpi);
             float grip = SelectionHandles.RotateGripLogical * 0.5f * dpi + 3f;

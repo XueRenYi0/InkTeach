@@ -4755,6 +4755,26 @@ internal sealed partial class App : InkEngine.InkEngine
         Check("极简模式不认边中点",
               SelectionHandles.HitTest(top.X, top.Y, b, dpi, includeEdgeHandles: false) == SelHandle.None, "");
 
+        // ---- 小对象：最小操作框（2026-10-05 用户："太小还用这么大的点不合适"）----
+        //    手柄摆到撑开的最小操作框上；真实包围盒只有 10×8 画布单位。
+        var tiny = new RectF { MinX = 100, MinY = 100, MaxX = 110, MaxY = 108 };
+        var ttl = SelectionHandles.Position(SelHandle.TopLeft, tiny, dpi);
+        var tbr = SelectionHandles.Position(SelHandle.BottomRight, tiny, dpi);
+        float tinySide = SelectionHandles.MinUiFrameLogical * dpi;
+        Check("小对象：手柄撑到最小操作框",
+              MathF.Abs((tbr.X - ttl.X) - tinySide) < 0.01f
+              && MathF.Abs((tbr.Y - ttl.Y) - tinySide) < 0.01f,
+              $"操作框 {tbr.X - ttl.X:F0}×{tbr.Y - ttl.Y:F0}（最小 {tinySide:F0}），真实框 10×8");
+        Check("小对象：真实框外的空白也算拖动区",
+              SelectionHandles.InsideUiFrame(
+                  new SelectionFrame { Local = tiny, ToCanvas = Matrix3x2.Identity },
+                  new Vector2(120f, 104f), dpi),
+              "点 (120,104)：真实框右边界 110 之外、操作框之内");
+        var mTiny = SelectionHandles.DragMatrix(SelHandle.TopLeft, tiny, ttl, ttl, dpi, false, false);
+        Check("小对象：按下不动 = 缩放 1（不会跳）",
+              MathF.Abs(mTiny.M11 - 1f) < 1e-3f && MathF.Abs(mTiny.M22 - 1f) < 1e-3f,
+              $"sx={mTiny.M11:F3} sy={mTiny.M22:F3}");
+
         // ---- 四角拖动：锚点不动，被拖的角跟手 ----
         var br = SelectionHandles.Position(SelHandle.BottomRight, b, dpi);
         // 目标点取在"锚点 → 被拖的角"的延长线上：四角现在是**等比**缩放，

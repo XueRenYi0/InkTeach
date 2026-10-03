@@ -3565,6 +3565,20 @@ public partial class InkEngine
             if (guess.Def.Length >= 2)
                 _dwellLinePin = Vector2.Distance(guess.Def[0], anchor) >= Vector2.Distance(guess.Def[1], anchor)
                               ? guess.Def[0] : guess.Def[1];
+            // 读数在**成型这一刻就位**（用户 2026-10-05 报的两个 bug：
+            //   ① 第一次用时胶囊飞在屏幕左上角——`_shapeAnchor` 还是默认的 (0,0)；
+            //   ② 之后每次都先停在上一条线上——那是上一条留下的锚点，笔一动才跳回来。
+            // 锚点挂在**离笔尖近的那一头**（接下来会跟着笔尖走的那一端），
+            // 和拖动中的算法同一条判据（`_dwellLinePin` 取的就是远的那一头）。
+            if (ActiveStroke.Points.Count >= 2)
+            {
+                var q0 = new Vector2(ActiveStroke.Points[0].X, ActiveStroke.Points[0].Y);
+                var q1 = new Vector2(ActiveStroke.Points[^1].X, ActiveStroke.Points[^1].Y);
+                _shapeInclination = SelectionHandles.InclinationDegrees(q0, q1);
+                _shapeLength = Vector2.Distance(q0, q1);
+                _shapeInclinationSnapped = false;
+                _shapeAnchor = Vector2.Distance(q0, anchor) <= Vector2.Distance(q1, anchor) ? q0 : q1;
+            }
             _dwell.Fire();
             _dirty = true;
             Console.WriteLine($"[停顿成型] 停 {stillMs:F0}ms → {guess.Kind}（{guess.Rule}）"
@@ -5859,10 +5873,8 @@ public partial class InkEngine
         var h = SelectionHandles.HitTest(canvasX, canvasY, Doc.Selected, frame, dpi);
         if (h != SelHandle.None) return HandleCursor(h);
 
-        var lp = frame.ToLocalPoint(new Vector2(canvasX, canvasY));
-        bool inside = lp.X >= frame.Local.MinX && lp.X <= frame.Local.MaxX
-                   && lp.Y >= frame.Local.MinY && lp.Y <= frame.Local.MaxY;
-        return inside ? CursorKind.Move : null;
+        return SelectionHandles.InsideUiFrame(frame, new Vector2(canvasX, canvasY), dpi)
+            ? CursorKind.Move : null;
     }
 
     private static CursorKind HandleCursor(SelHandle h) => h switch
@@ -10336,9 +10348,7 @@ public partial class InkEngine
         //    框里空白处是"拖动"、按在某条墨上是"收窄成只选它"）。
         //    判据就是框选工具下那一条（`frame.ToLocalPoint` 落在 `frame.Local` 里），
         //    不另写一份"离轮廓多远算按上了"。
-        var lp = frame.ToLocalPoint(new Vector2(x, y));
-        if (lp.X >= frame.Local.MinX && lp.X <= frame.Local.MaxX
-            && lp.Y >= frame.Local.MinY && lp.Y <= frame.Local.MaxY)
+        if (SelectionHandles.InsideUiFrame(frame, new Vector2(x, y), dpi))
             return AutoSelZone.Grab;
 
         // ④ 框**外**：不算动它——收起这个框，这一笔照常画。
@@ -10531,10 +10541,10 @@ public partial class InkEngine
                 }
                 else
                 {
-                    // 没点在手柄上：把指针变回框坐标，看是不是落在框里（整体拖动）。
-                    var lp = frame.ToLocalPoint(new Vector2(x, y));
-                    move = lp.X >= frame.Local.MinX && lp.X <= frame.Local.MaxX
-                        && lp.Y >= frame.Local.MinY && lp.Y <= frame.Local.MaxY;
+                    // 没点在手柄上：看指针是不是落在**操作框**里（整体拖动）。
+                    // 小对象那个框撑到最小尺寸（见 SelectionHandles.UiBox），
+                    // "看得见的那一圈"里面都能拖——判据和光标、自动选中框同一份。
+                    move = SelectionHandles.InsideUiFrame(frame, new Vector2(x, y), dpi);
 
                     // 顺手记下"指针底下是哪一条"：松手时若一点没移动，就把多选**收窄成只选它**
                     // （PPT/Figma 的行为）。落在框内空白处 → 记不到东西 → 松手不改选择。

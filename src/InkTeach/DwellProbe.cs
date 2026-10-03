@@ -242,6 +242,22 @@ internal static class DwellProbe
         Drive(app, WobblyLine(300f, 500f, LineLen, 0), 200);
         app.NowMs = t5 + 200 + DwellAssist.HoldMs;
         app.DwellTickForTest();
+        // ★ 成型**当帧**读数就要挂在"这一条"上（用户 2026-10-05 报的两个 bug：
+        //   第一次用时胶囊飞在屏幕左上角；以后每次都先停在上一条线上，笔一动才跳回来）。
+        //   锚点 = 离笔尖近的那一头，所以判"/两个端点里最近的那一个"就行。
+        var g0 = app.ActiveStroke;
+        if (g0 != null && g0.Points.Count >= 2)
+        {
+            var a0 = new Vector2(g0.Points[0].X, g0.Points[0].Y);
+            var a1 = new Vector2(g0.Points[^1].X, g0.Points[^1].Y);
+            float near0 = Vector2.Distance(app.ShapeInclinationAnchor, a0);
+            float near1 = Vector2.Distance(app.ShapeInclinationAnchor, a1);
+            Check("直线成型当帧：读数锚点就在这条线上（不是左上角 / 上一条）",
+                  MathF.Min(near0, near1) < 1f,
+                  $"锚点 ({app.ShapeInclinationAnchor.X:F0},{app.ShapeInclinationAnchor.Y:F0})，"
+                  + $"两端 ({a0.X:F0},{a0.Y:F0})/({a1.X:F0},{a1.Y:F0})");
+        }
+        else Check("直线成型当帧：读数锚点就在这条线上（不是左上角 / 上一条）", false, "没有幽灵");
         // ① 偏 0.5°（±1° 容差内）：吸成正水平；长度读数要跟笔尖实时走（2026-10-05 修）
         float rad = 0.5f * MathF.PI / 180f;
         app.DwellMoveForTest(300f + 200f * MathF.Cos(rad), 500f + 200f * MathF.Sin(rad));
