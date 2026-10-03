@@ -4774,6 +4774,18 @@ internal sealed partial class App : InkEngine.InkEngine
         Check("小对象：按下不动 = 缩放 1（不会跳）",
               MathF.Abs(mTiny.M11 - 1f) < 1e-3f && MathF.Abs(mTiny.M22 - 1f) < 1e-3f,
               $"sx={mTiny.M11:F3} sy={mTiny.M22:F3}");
+        // 缩小：真实框的**对面角**必须钉住 —— 拿操作框的角当缩放中心的话，
+        // 内容会绕着框外一个点漂（用户 2026-10-05："缩到最小以后鼠标乱动，
+        // 它跟着乱移动"）。这条断言在旧实现下会红。
+        var shrinkTo = new Vector2(ttl.X + 6f, ttl.Y + 6f);        // 往里拖一点
+        var mShrink = SelectionHandles.DragMatrix(SelHandle.TopLeft, tiny, ttl, shrinkTo, dpi, false, false);
+        var realBr = new Vector2(tiny.MaxX, tiny.MaxY);
+        var brAfter = Vector2.Transform(realBr, mShrink);
+        Check("小对象缩小：真实框的对面角钉住（不乱漂）",
+              MathF.Abs(brAfter.X - realBr.X) < 0.05f && MathF.Abs(brAfter.Y - realBr.Y) < 0.05f,
+              $"对面角 ({brAfter.X:F1},{brAfter.Y:F1})，原位 ({realBr.X:F1},{realBr.Y:F1})");
+        Check("小对象缩小：内容真的变小了（不是纹丝不动）", mShrink.M11 < 0.95f && mShrink.M11 > 0f,
+              $"sx={mShrink.M11:F3}");
 
         // ---- 四角拖动：锚点不动，被拖的角跟手 ----
         var br = SelectionHandles.Position(SelHandle.BottomRight, b, dpi);

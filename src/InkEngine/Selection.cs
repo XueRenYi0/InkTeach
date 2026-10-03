@@ -385,6 +385,20 @@ internal static class SelectionHandles
     }
 
     /// <summary>
+    /// 手柄在**给定矩形**上的位置（原样算术，不做最小操作框撑开）。
+    /// 只有"要对真实包围盒取位置"的地方才用它——现在只有拖动换算里的**缩放锚点**
+    /// （见 <see cref="DragMatrix"/> 里"两个锚点"那段）。
+    /// </summary>
+    private static Vector2 PositionRaw(SelHandle h, in RectF b, float dpiScale)
+    {
+        var (u, v) = Uv(h);
+        float x = b.MinX + (b.MaxX - b.MinX) * u;
+        float y = b.MinY + (b.MaxY - b.MinY) * v;
+        if (h == SelHandle.Rotate) y -= RotateOffsetLogical * dpiScale;
+        return new Vector2(x, y);
+    }
+
+    /// <summary>
     /// 手柄在画布坐标里的位置。
     ///
     /// ⚠ 框比 <see cref="MinUiFrameLogical"/> 小时，位置按**最小操作框**算（见 <see cref="UiBox"/>）。
@@ -392,14 +406,7 @@ internal static class SelectionHandles
     /// 谁都不许另算一份（同一个名单写在多处必漏一处，见 架构-分层与规则.md 五-7）。
     /// </summary>
     public static Vector2 Position(SelHandle h, in RectF b, float dpiScale)
-    {
-        var ui = UiBox(b, dpiScale);
-        var (u, v) = Uv(h);
-        float x = ui.MinX + (ui.MaxX - ui.MinX) * u;
-        float y = ui.MinY + (ui.MaxY - ui.MinY) * v;
-        if (h == SelHandle.Rotate) y -= RotateOffsetLogical * dpiScale;
-        return new Vector2(x, y);
-    }
+        => PositionRaw(h, UiBox(b, dpiScale), dpiScale);
 
     /// <summary>
     /// 指针是不是落在**操作框**里（"整体拖动"那一档）。
@@ -1329,12 +1336,16 @@ internal static class SelectionHandles
         // **容差外一律不吸**（规格 9.6：长度 ≤ 2 逻辑像素）。
         if (MathF.Abs(w - h) > ShapeSnapLengthToleranceLogical * dpiScale) return false;
 
-        var anchor = Position(Opposite(handle), f.Local, dpiScale);
-        var corner = Position(handle, f.Local, dpiScale);
-        float armX = corner.X - anchor.X, armY = corner.Y - anchor.Y;
+        // 量拖动幅度用**操作框**的角（和 DragMatrix 同一个理由：按下第一帧不跳），
+        // 真正缩放的中心用**真实框**的对面角（小对象不会绕着框外一个点漂）。
+        var box = UiBox(f.Local, dpiScale);
+        var anchorUi = PositionRaw(Opposite(handle), box, dpiScale);
+        var cornerUi = PositionRaw(handle, box, dpiScale);
+        var anchorReal = PositionRaw(Opposite(handle), f.Local, dpiScale);
+        float armX = cornerUi.X - anchorUi.X, armY = cornerUi.Y - anchorUi.Y;
         if (MathF.Abs(armX) < 1e-3f || MathF.Abs(armY) < 1e-3f) return false;
-        float sx = (currentPoint.X - anchor.X) / armX;
-        float sy = (currentPoint.Y - anchor.Y) / armY;
+        float sx = (currentPoint.X - anchorUi.X) / armX;
+        float sy = (currentPoint.Y - anchorUi.Y) / armY;
         // 四角 = 等比（取变化大的那一轴），和 DragMatrix 里那条规则同源——两边都改，
         // 所以这里必须自己再算一遍，不能在 DragMatrix 的结果上打补丁。
         float su = MathF.Max(MathF.Abs(sx), MathF.Abs(sy));
@@ -1345,7 +1356,7 @@ internal static class SelectionHandles
         // 而报"吸住了"却是假的。
         if (MathF.Abs(fx) < MinScale || MathF.Abs(fy) < MinScale) return false;
 
-        localM = Matrix3x2.CreateScale(fx, fy, anchor);
+        localM = Matrix3x2.CreateScale(fx, fy, anchorReal);
         return true;
     }
 
@@ -1821,14 +1832,27 @@ internal static class SelectionHandles
         }
 
         // 缩放 / 拉伸：对面那个手柄是**不动的锚点**。
-        var anchor = Position(Opposite(handle), startBounds, dpiScale);
+        //
+        // ⚠ 这里要区分**两个锚点**（2026-10-05 修"小对象缩到最小以后鼠标乱动、
+        //   它跟着乱移动"）：
+        //   · `anchorUi`（**操作框**的对面角）：只是量"拖了多远"的基准。手柄画在
+        //     操作框上，按下第一帧必须正好 s = 1；拿真实角当基准，小对象一按就跳。
+        //   · `anchorReal`（**真实包围盒**的对面角）：才是缩放中心。内容必须钉在
+        //     它自己的对面角上——这也是 Office / Figma / Excalidraw 的做法
+        //     （Excalidraw：`getResizeAnchor` 取对面边角、`getResizedOrigin` 重算原点，
+        //     锚点全程不动）。拿操作框的角当缩放中心的话，内容会绕着一个**自己外面**
+        //     的点缩放：小对象缩到最小以后继续晃指针，东西就满屏乱走。
+        var box = UiBox(startBounds, dpiScale);
+        var anchorUi = PositionRaw(Opposite(handle), box, dpiScale);
+        var anchorReal = PositionRaw(Opposite(handle), startBounds, dpiScale);
+        var handleUi = PositionRaw(handle, box, dpiScale);
         var (u, v) = Uv(handle);
 
         // 拖动方向上的"起始臂长"。边中点手柄只在单轴上有效。
-        float armX = Position(handle, startBounds, dpiScale).X - anchor.X;
-        float armY = Position(handle, startBounds, dpiScale).Y - anchor.Y;
-        float curX = currentPoint.X - anchor.X;
-        float curY = currentPoint.Y - anchor.Y;
+        float armX = handleUi.X - anchorUi.X;
+        float armY = handleUi.Y - anchorUi.Y;
+        float curX = currentPoint.X - anchorUi.X;
+        float curY = currentPoint.Y - anchorUi.Y;
 
         float sx = MathF.Abs(armX) > 1e-3f ? curX / armX : 1f;
         float sy = MathF.Abs(armY) > 1e-3f ? curY / armY : 1f;
@@ -1857,7 +1881,7 @@ internal static class SelectionHandles
         sx = ClampScale(sx);
         sy = ClampScale(sy);
 
-        return Matrix3x2.CreateScale(sx, sy, anchor);
+        return Matrix3x2.CreateScale(sx, sy, anchorReal);
     }
 
     private static float ClampScale(float s)
