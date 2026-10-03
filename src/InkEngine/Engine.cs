@@ -853,15 +853,11 @@ public partial class InkEngine
     /// 为什么非有不可（和 `DwellAssist.DeadZoneLogical` 同一个道理，但后果更凶）：
     /// 笔尖"静止"按在屏幕上时，驱动仍在上报亚像素抖动。没有死区的话，那段抖动会被当成
     /// "用户在拖"——**直线最惨**：笔尖就停在"跟着笔尖走的那一头"，抖 1 个画布单位就够
-    /// 把线压成零长度，`SnapToAxis` 一看没有方向 → 吸成水平 → **一条很短的小横线**
+    /// 把线压成零长度（`SnapEndPoint` 对零长度原样返回）→ **整条线只剩一个点**
     /// （用户 2026-09-24 报的"竖着画的直线变成很短的一个横直线"；`--dwelltest` H6 钉住：
     /// 修之前那一档漂移 299.51 画布单位，整条 300 的线只剩一个点）。
     /// </summary>
     internal const float DwellDragSlopLogical = 5f;
-
-    /// <summary>停顿成型定型时的**角度吸附容差**（度）：照 InkClass 的 `LineAssistSnapDeg = 4`
-    /// （画坐标轴 / 分割线刚需，见 计划-图形工具.md §42.1）。</summary>
-    internal const float DwellSnapDeg = 4f;
 
     /// <summary>
     /// 操作条那一块现在画成**收起来那一颗圆钮**吗（而不是一整条九格）。
@@ -3649,7 +3645,8 @@ public partial class InkEngine
     ///
     /// **两种图形都吃移动**（用户 2026-09-25 试过 ClassIn 之后定），差别只在"拖的是什么"：
     ///   · **直线**：**离笔尖远的那一头钉住**、拖出去就是**转向 / 伸缩**（照 ClassIn / InkClass 的
-    ///     `LineAssistMove`），并在容差内吸到 0/90 —— 画坐标轴就靠这一下。留着它，是因为
+    ///     `LineAssistMove`），吸附**和画直线同一套**（特殊角软吸附 ±1°、Shift 15° 硬网格、
+    ///     Alt 自由；2026-10-05 统一——原来只吸 0/90、容差 4°）—— 画坐标轴就靠这一下。留着它，是因为
     ///     直线是"顺手一划"，它的另一头正是画完最常要调的（转成水平 / 竖直），
     ///     而在选中态里调要多两步（先点它、再拖手柄）。
     ///   · **其它图形**：**改大小**（用户 2026-09-25 上手 ClassIn 之后逐条定的）——
@@ -3683,11 +3680,20 @@ public partial class InkEngine
         if (s.Kind == StrokeKind.Line)
         {
             if (s.Points.Count < 2) return true;
+            // **和"画直线"同一套吸附**（用户 2026-10-05："停顿变直线那个吸附太大，
+            // 和画直线统一一下"）：软吸附到特殊角 ±1°，Shift = 15° 硬网格、Alt = 自由。
+            // 原来走的是识别器那套"只吸 0/90、容差 4°"（`SnapToAxis`）——两条路各一套、
+            // 容差差 4 倍；长线上一偏就是几十像素。现在**只有 `SnapEndPoint` 这一处权威实现**。
+            bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
+            bool alt = (Native.GetAsyncKeyState(0x12 /* VK_MENU */) & 0x8000) != 0;
             var a = _dwellLinePin;
-            var (_, b, _) = ShapeRecognize.SnapToAxis(a, p, DwellSnapDeg);
+            var b = SelectionHandles.SnapEndPoint(a, p, shift, alt, out bool snapped);
             s.SetPoints(new[] { a, b });
             _shapeInclination = SelectionHandles.InclinationDegrees(a, b);
-            _shapeInclinationSnapped = Vector2.Distance(b, p) > 0.01f;
+            // 长度读数和 α 同源同帧。⚠ 这一位原来没写：幽灵期拖长拖短，标签里的"长"
+            // 一直停在 0/旧值（用户 2026-10-05："拉长变短，那个长度也没变"）。
+            _shapeLength = Vector2.Distance(a, b);
+            _shapeInclinationSnapped = snapped;
             _shapeAnchor = b;
             return true;
         }

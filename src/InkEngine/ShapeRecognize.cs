@@ -203,8 +203,10 @@ internal static class ShapeRecognize
     /// 四个角要顶到框外约 18 px（≈ 对角线的 6%，`--inktest` 里"矩形·圆角/过冲/波浪边"
     /// 三族就是被这个判据挡下来的）。用户的优先级很清楚：**先要"像我画的那个"**，
     /// 想要正的他自己拖一下旋转柄（或者画的时候歪小于 4°）。
-    /// 4° 和"画直线时那个吸附容差"（`Engine.DwellSnapDeg`）是同一个数：都表示
-    /// "小到这个程度，说明他本来就想画正的"。</summary>
+    /// ⚠ 2026-10-05 附注：这个 4° **和"拖方向时的吸附容差"不是一回事**，别拿它去对齐 ——
+    /// "停顿变直线 / 画直线"的吸附已统一为"特殊角 ±1°"（`SelectionHandles.SnapEndPoint`），
+    /// 原来的 `Engine.DwellSnapDeg` 已删。这里是**识别器判"认出来的姿态歪没歪"**的门槛，
+    /// 那个是"用户正拖着、要不要替他吸正"：一个是被动测量、一个是主动辅助，各定各的。</summary>
     internal const float TiltSnapDeg = 4f;
 
     /// <summary>
@@ -949,24 +951,6 @@ internal static class ShapeRecognize
         }
 
         return RecognizeCore(chain, scale, ids);
-    }
-
-    /// <summary>
-    /// **把一条线吸到水平 / 垂直**（定点不动，只动另一头），夹角小于容差才吸。
-    ///
-    /// 为什么识别器里要有它：老师画坐标轴、画分割线，要的就是"正"的
-    /// （InkClass 专门为这件事留了 `LineAssistSnapDeg = 4.0`，注释原话
-    /// "定型时角度吸附：接近水平/垂直吸正（画坐标轴刚需）"）。
-    /// 它是**纯函数**，所以自检可以直接卡边界（3.9° 吸、4.1° 不吸）。
-    /// </summary>
-    internal static (Vector2 a, Vector2 b, float angleDeg) SnapToAxis(
-        Vector2 a, Vector2 b, float tolDeg = 4f)
-    {
-        float dx = MathF.Abs(b.X - a.X), dy = MathF.Abs(b.Y - a.Y);
-        float angle = MathF.Atan2(dy, dx) * 180f / MathF.PI;      // 0~90
-        if (angle < tolDeg) return (a, new Vector2(b.X, a.Y), angle);              // 吸水平
-        if (angle > 90f - tolDeg) return (a, new Vector2(a.X, b.Y), angle);        // 吸垂直
-        return (a, b, angle);
     }
 
     // =====================================================================
