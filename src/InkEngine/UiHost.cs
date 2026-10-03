@@ -91,6 +91,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     // ---- IEngineCommands -------------------------------------------------
 
     public void SetTool(Tool tool) => _engine.SetToolFromUi(tool);
+    public void SetEraserPreferred() => _engine.SetEraserPreferredFromUi();
     public void CycleParabolaAxis() => _engine.CycleParabolaAxis();
     public void CycleLineDash() => _engine.CycleLineDash();
     public void CycleSolidSides() => _engine.CycleSolidSides();

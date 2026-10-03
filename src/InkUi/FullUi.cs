@@ -1711,14 +1711,14 @@ public sealed class FullUi : IOverlayUi
             _railExitAtMs = double.NegativeInfinity;
             if (_rail.Value >= 0.5f) { _railEnterAtMs = double.NegativeInfinity; return; }
             if (double.IsNegativeInfinity(_railEnterAtMs)) _railEnterAtMs = now;
-            else if (now - _railEnterAtMs >= 120) _rail.To(1f, Tokens.RailMs);
+            else if (now - _railEnterAtMs >= Tokens.RailShowDelayMs) _rail.To(1f, Tokens.RailMs);
             return;
         }
 
         _railEnterAtMs = double.NegativeInfinity;
         if (_rail.Value <= 0.001f) { _railExitAtMs = double.NegativeInfinity; return; }
         if (double.IsNegativeInfinity(_railExitAtMs)) _railExitAtMs = now;
-        else if (now - _railExitAtMs >= 220) _rail.To(0f, Tokens.RailMs);
+        else if (now - _railExitAtMs >= Tokens.RailHideDelayMs) _rail.To(0f, Tokens.RailMs);
     }
 
     /// <summary>
@@ -1849,20 +1849,8 @@ public sealed class FullUi : IOverlayUi
         MathF.Abs(a.R - b.R) < 0.02f && MathF.Abs(a.G - b.G) < 0.02f && MathF.Abs(a.B - b.B) < 0.02f;
 
     /// <summary>
-    /// **已经是选择工具了，再点一下 = 换下一个选择方式**（用户 2026-09-27 定的，
-    /// 和笔 / 荧光笔"再点一下换个颜色"是同一条规矩）。
-    ///
-    /// 目前**两档**：矩形框选 ←→ 自由套索。档位点（色带那两段的高亮）就是"现在是哪一档"的指示器。
-    /// ⚠ 这里刻意**不写死"两档"的假设**：按"当前档 → 下一个档"算，
-    ///    以后真加了第三档（例如"只点选不框选"），这里不用改；但**双击全选那条规矩要重看**
-    ///    （见 <see cref="SelectDoubleClickMs"/> 的注释）。
-    /// </summary>
-    private void CycleSelectMode()
-    {
-        var next = _host.State.SelectMode == SelectMode.Lasso ? SelectMode.Rect : SelectMode.Lasso;
-        _host.Commands.SetSelectMode(next);
-        Invalidate();
-    }
+    // [2026-10-05 用户定] `CycleSelectMode`（点选择格/再按 Ctrl+M 切矩形↔套索）已删除：
+    // 爱用矩形的一直用矩形、爱用套索的一直用套索；子类型在面板上带那两段里选（见 Activate case 7）。
 
     /// <summary>
     /// 点了一下虚实线那一格：**三档轮流**（实线 → 虚线 → 点线 → 实线）。
@@ -2829,6 +2817,29 @@ public sealed class FullUi : IOverlayUi
         _peek.To(0f, Tokens.SnapMs);
     }
 
+    /// <summary>
+    /// 贴边隐藏的"指针还在面板上吗"判定（**防抖迟滞**，2026-10-05 修"贴边翻页时闪跳"）：
+    ///
+    ///   · 完全收起时：只认露头那一条（指针扫过"面板本来的位置"不会凭空召唤它）；
+    ///   · 展开/收起/动画期间：判定区取 **目标展开后的完整面板 ∪ 当前可见范围**。
+    ///
+    /// 为什么不能用"当前动画中的矩形"（原来就是）：面板一边长、判定区一边跟着跑，
+    /// 指针会被"甩出"判定区 → 收起 → 露头又回到指针下面 → 再展开……一帧一帧地跳。
+    /// 这和 Windows 任务栏自动隐藏的迟滞是同一个道理：**展开后的地盘先算进来**，
+    /// 隐藏再慢一步（见 Tokens.RailHideDelayMs 与本类的 700ms 防误触）。
+    /// </summary>
+    private bool HoverInsideForPeek(float x, float y)
+    {
+        if (_peek.Value > 0.01f)
+        {
+            var full = UnionRect();
+            float pad = Tokens.RailHoverPad;
+            if (x >= full.MinX - pad && x <= full.MaxX + pad
+                && y >= full.MinY - pad && y <= full.MaxY + pad) return true;
+        }
+        return QueryBounds().Contains(x, y);
+    }
+
     // ---- 输入 ---------------------------------------------------------------
 
     public bool PointerDown(in UiPointerEvent e)
@@ -2845,7 +2856,7 @@ public sealed class FullUi : IOverlayUi
         // 在画布上落笔 → 这里置 true、随后返回 false（这一笔归画布）→ 但 true 留了下来，
         // 而**写字期间引擎不转发 PointerMove**（那一笔已经归画布了），没人去把它改回来 →
         // `UpdatePeek` 一直以为"指针还在面板上" → 把藏好的露头重新拽出来。
-        _hoverInside = QueryBounds().Contains(e.X, e.Y);
+        _hoverInside = HoverInsideForPeek(e.X, e.Y);
         _peekArmed = true;                 // 碰过了 → 之后允许"离开就收"
         _leftAtMs = _host.NowMs;
         _pressPos = p;
@@ -3008,7 +3019,7 @@ public sealed class FullUi : IOverlayUi
         if ((_tipHoldStart > double.NegativeInfinity || _tipHoldFired)
             && e.PointerId != _pressId)
             return true;
-        _hoverInside = QueryBounds().Contains(e.X, e.Y);
+        _hoverInside = HoverInsideForPeek(e.X, e.Y);
         if (_hoverInside) _peekArmed = true;   // 指针进过面板 → 之后允许"离开就收"
         _leftAtMs = _host.NowMs;
         var p = Local(e);
@@ -3290,6 +3301,9 @@ public sealed class FullUi : IOverlayUi
         // **点之前**上带停在哪一格。笔 / 荧光笔那一格要用它判"这一下是切色、还是只是把设置条拿过来"
         //（`_bandCell` 在下面 `HasBand` 那一块里会被改成 idx，改完就问不出"原来在哪"了）。
         int prevBand = _bandCell;
+        // **点之前是不是在穿透**：穿透下点笔 / 荧光笔格 = "我要回来写字"，这一次**不许顺手换色**
+        //（和键盘 Ctrl+P 同一条：穿透先退出、第二步才谈换色。2026-10-05 用户报的 bug）。
+        bool wasPassThrough = st.PassThrough;
 
         // **点了别的格子 = 选择格那次"双击"序列到此为止**。
         // 不这么做的话，"选择格 →（200ms）笔格 →（200ms）选择格"会被算成对选择格的双击，
@@ -3350,27 +3364,23 @@ public sealed class FullUi : IOverlayUi
             //   `SetTool` 是幂等的（工具没变时只做清理），重复调没有副作用。
             case 3:
                 cmd.SetTool(Tool.Pen);
-                if (prevBand == 3) CycleColor();
+                if (prevBand == 3 && !wasPassThrough) CycleColor();
                 break;
             case 4:
                 cmd.SetTool(Tool.Highlighter);
-                if (prevBand == 4) CycleColor();
+                if (prevBand == 4 && !wasPassThrough) CycleColor();
                 break;
             case 5: cmd.SetTool(Tool.Laser); break;
             case 6:
-                // 引擎里"整笔擦/面积擦"是**两个工具**，不是一个工具的两档；
-                // 第一版就点一下换一次（真正的两档要等上带做出来）。
-                cmd.SetTool(st.Tool == Tool.PixelEraser ? Tool.Eraser : Tool.PixelEraser);
+                // [2026-10-05 用户定] 橡皮子类型不再"点一下换一次"：点这一格 = 进橡皮
+                //（上一次用整笔就整笔、用面积就面积）；整笔/面积去上带那两段里选。
+                cmd.SetEraserPreferred();
                 break;
             case 7:
-                // 选择那一格：**已经是它了、再点一下 = 换下一个选择方式**
-                //（矩形框选 ←→ 自由套索），和笔 / 荧光笔换色是同一条规矩。
+                // 选择那一格：**不再"再点一下换档"**（矩形/套索去上带那两段里选，2026-10-05）。
                 //
                 // **双击 = 全选**（500ms 内两击，照 InkClass 那个经典交互）。
-                // 两档时"连点两下 = 转两格 = 回到原档"，所以双击的净效果正好是
-                // "全选、模式没动"——不冲突（三档就不成立了，见 SelectDoubleClickMs 的注释）。
-                // 第二下不靠"再转一格抵掉"，而是**直接把档位写回双击前那一档**：
-                // 这样"从别的工具双击进来"（第一下只切了工具、没转档）也得到同一个结果。
+                // 没有"再点换档"之后，两击的净效果就是"选中工具 + 全选"——比原来更直白。
                 if (_host.NowMs - _lastSelCellClickMs < SelectDoubleClickMs)
                 {
                     _lastSelCellClickMs = double.NegativeInfinity;   // 这一次序列到此为止
@@ -3385,7 +3395,6 @@ public sealed class FullUi : IOverlayUi
                 _lastSelCellClickMs = _host.NowMs;
                 _selModeBeforeDoubleClick = st.SelectMode;           // 记下"双击前"的档
                 cmd.SetTool(Tool.Marquee);
-                if (prevBand == 7) CycleSelectMode();
                 break;
             case 8:
                 // 七种图形之后**不能再"两档对切"**了（以前是直线 ↔ 矩形）。

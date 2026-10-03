@@ -2632,7 +2632,7 @@ public partial class InkEngine
             $"笔画 {Doc.Strokes.Count}      点数 {Doc.TotalPoints}\n" +
             $"选中 {Doc.Selected.Count}      工具 {ToolName(Tool)}{SelectModeTag()}{(PassThrough ? "（穿透中）" : "")}      粗细 {CurrentToolWidthLogical,4:F1}      撤销栈 {Doc.UndoDepth}\n" +
             $"分块 {_tilesUsed}/{_tilesBudget}（可见 {_tilesVisible}，本帧光栅 {_tilesRasterized}）      网格 {Doc.GridCells}\n" +
-            $"Ctrl+Alt：1笔 2荧光 3激光 4橡皮 7像素橡皮 5框选 9矩形/套索 6粗细 Z撤销 C清空\n" +
+            $"Ctrl+Alt：1笔 2荧光 3激光 4橡皮 7像素橡皮 5框选 6粗细 Z撤销 C清空\n" +
             (EraserTelemetry != null
                 ? $"橡皮手测台：记录中 · 已记 {EraserTelemetry.DragCount} 条拖拽（退出时写汇总）\n"
                 : "") +
@@ -8088,6 +8088,17 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
+    /// <summary>面板点橡皮格：切回**上次用的那一种橡皮形态**（整笔/面积），顺手关穿透。
+    /// [2026-10-05 用户定] 橡皮子类型不再由"再点一次"切换，面板这一格固定进橡皮、类型看上带。</summary>
+    internal void SetEraserPreferredFromUi()
+    {
+        ExitReplayForEdit("换工具");
+        SwitchTool(_eraserKind);
+        ApplyCursor();
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
     // ---- 自检钩子（测试要驱动"换工具/操作条按钮/拖动中移动"这些私有路径）----
 
     /// <summary>自检用：执行一个键位动作（换工具、撤销……都从同一个入口进）。</summary>
@@ -11229,23 +11240,20 @@ public partial class InkEngine
 
     private static void CancelPending(KeyGesture g) => g.PendingAt = -1;
 
-    /// <summary>连按要干的事：笔/荧光笔换色，橡皮切整笔↔面积，选中切矩形↔套索。</summary>
+    /// <summary>连按要干的事：**只有笔/荧光笔换色**。
+    /// [2026-10-05 用户定] 橡皮"整笔/面积"、框选"矩形/套索"不再同键切换——爱用哪种就一直用哪种，
+    /// 子类型去面板的上带里选（"再点同一格换档"也随之取消，见 FullUi.Activate）。</summary>
     private void DoToolKeyRepeat(KeyAction a)
     {
         switch (a)
         {
             case KeyAction.ToolPen: CycleBandColor(highlighter: false); break;
             case KeyAction.ToolHighlighter: CycleBandColor(highlighter: true); break;
-            case KeyAction.ToolEraser:
-            case KeyAction.ToolPixelEraser:
-                SwitchTool(Tool == Tool.PixelEraser ? Tool.Eraser : Tool.PixelEraser);
-                Console.WriteLine($"橡皮连按 → {(Tool == Tool.PixelEraser ? "面积擦" : "整笔擦")}");
-                break;
-            case KeyAction.ToolMarquee: ToggleSelectMode(); break;
+            // 橡皮 / 框选：连按不做事（子类型固定，面板上带里选）。
         }
     }
 
-    /// <summary>长按：回第一个颜色 / 第一档。</summary>
+    /// <summary>长按：回第一个颜色（只对笔 / 荧光笔；子类型不再由键盘改）。</summary>
     private void ResetToolToFirst(KeyAction a)
     {
         switch (a)
@@ -11258,15 +11266,7 @@ public partial class InkEngine
                 SetColorFromUi(InkPalette.HighlighterBand[0].Color);
                 Console.WriteLine($"长按 → 荧光笔回到「{InkPalette.HighlighterBand[0].Name}」");
                 break;
-            case KeyAction.ToolEraser:
-            case KeyAction.ToolPixelEraser:
-                SwitchTool(Tool.Eraser);
-                Console.WriteLine("长按 → 橡皮回到「整笔擦」");
-                break;
-            case KeyAction.ToolMarquee:
-                if (SelMode == SelectMode.Lasso) ToggleSelectMode();
-                Console.WriteLine("长按 → 框选回到「矩形框」");
-                break;
+            // [2026-10-05 用户定] 橡皮 / 框选的子类型不再由键盘（长按）改；面板上带里选。
         }
     }
 
@@ -11299,9 +11299,10 @@ public partial class InkEngine
     private Tool _eraserKind = Tool.Eraser;
 
     /// <summary>
-    /// 工具键的**单击**逻辑（2026-09-30 收口：双击/长按那套手势全部取消，只留单击）：
+    /// 工具键的**单击**逻辑（2026-09-30 收口：双击/长按那套手势全部取消，只留单击；
+    /// 2026-10-05 再收：**只有笔/荧光笔"已经是它 → 换色"**，橡皮/框选连按不再换子类型）：
     ///   · 不是这个工具 → 切过去
-    ///   · 已经是它    → 换一个：笔/荧光笔换颜色、橡皮切整笔⇄面积、选择切矩形⇄套索
+    ///   · 已经是它    → 笔/荧光笔换颜色；橡皮/框选什么都不做
     ///
     /// **穿透模式下整个失效**（用户 2026-09-30 拍板："开了穿透以后，笔、橡皮这些快捷键
     /// 应该就没有用了，等退出穿透才有用"）：穿透 = "不能画"，这时换工具/换色都没有着落，

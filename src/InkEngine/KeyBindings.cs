@@ -482,12 +482,13 @@ internal sealed class KeyMap
         //
         // **2026-09-30 收口为"只留单击"**（双击轮换与按住回第一色那两套手势停用，
         // 见 commit addc4ce 与《调研-快捷键-焦点与穿透》）：单击 = 切到它；
-        // **已经是它** → 再按就换色/换档（和点面板那一格一样）。
+        // **已经是它** → 再按只对**笔 / 荧光笔**换色（2026-10-05 用户定：
+        // 橡皮整笔/面积、框选矩形/套索不再同键切换，子类型一律去面板上带里选）。
         m.Add(A, KeyAction.ToolPen, "Ctrl+P", "换成笔（已经是笔→再按换色）");
         m.Add(A, KeyAction.ToolHighlighter, "Ctrl+I", "换成荧光笔（半透明大笔；单击语义同笔）");
         m.Add(A, KeyAction.ToolLaser, "Ctrl+L", "换成激光笔（只留痕迹，不留墨）");
-        m.Add(A, KeyAction.ToolEraser, "Ctrl+E", "换成橡皮擦（碰到哪一条就整条删掉；再按切整笔/面积）");
-        m.Add(A, KeyAction.ToolMarquee, "Ctrl+M", "换成框选（选择/移动/缩放/旋转；再按切矩形/套索）");
+        m.Add(A, KeyAction.ToolEraser, "Ctrl+E", "换成橡皮擦（碰到哪一条就整条删掉；整笔/面积看上带）");
+        m.Add(A, KeyAction.ToolMarquee, "Ctrl+M", "换成框选（选择/移动/缩放/旋转；矩形/套索看上带）");
         // **旧别名取消**（用户 2026-09-30："只保留一套"）：原来的 Ctrl+7（面积擦）、
         // Ctrl+9（切选择方式）删掉——那两件事现在都归"连按同一个工具键"：
         // Ctrl+E 连按切整笔/面积、Ctrl+M 连按切矩形/套索，不再占额外键位。

@@ -13933,7 +13933,9 @@ internal sealed partial class App : InkEngine.InkEngine
                   !Host.State.PassThrough && ui.RailValueForTest > 0.99f,
                   $"张开度 {ui.RailValueForTest:F2}");
 
-            // ④ 穿透里点笔格：照样顺手关穿透（没键盘的教室靠它）＋ 带子回到笔格
+            // ④ 穿透里点笔格：照样顺手关穿透（没键盘的教室靠它）＋ 带子回到笔格，
+            //    而且**这一次不许顺手换色**（2026-10-05 用户报的 bug：穿透中点笔格直接切了颜色）。
+            var colorBeforeP4 = Host.State.PaletteBase;
             ClickPhysical((mouseCellP.MinX + mouseCellP.MaxX) * 0.5f * DpiScale,
                           (mouseCellP.MinY + mouseCellP.MaxY) * 0.5f * DpiScale);
             SettleFrames(400);
@@ -13941,9 +13943,12 @@ internal sealed partial class App : InkEngine.InkEngine
             ClickPhysical((penCellP2.MinX + penCellP2.MaxX) * 0.5f * DpiScale,
                           (penCellP2.MinY + penCellP2.MaxY) * 0.5f * DpiScale);
             SettleFrames(500);
-            Check("穿透里点笔格：关穿透、上带跟着回到笔格",
-                  !Host.State.PassThrough && Tool == Tool.Pen && ui.BandCellForTest == 3,
-                  $"穿透 = {Host.State.PassThrough}，工具 = {Tool}，色带格 = {ui.BandCellForTest}");
+            bool sameColorP4 = MathF.Abs(Host.State.PaletteBase.R - colorBeforeP4.R) < 0.02f
+                            && MathF.Abs(Host.State.PaletteBase.G - colorBeforeP4.G) < 0.02f
+                            && MathF.Abs(Host.State.PaletteBase.B - colorBeforeP4.B) < 0.02f;
+            Check("穿透里点笔格：关穿透、上带回到笔格、**颜色不动**",
+                  !Host.State.PassThrough && Tool == Tool.Pen && ui.BandCellForTest == 3 && sameColorP4,
+                  $"穿透 = {Host.State.PassThrough}，工具 = {Tool}，色带格 = {ui.BandCellForTest}，颜色不动 = {sameColorP4}");
 
             // ⑤ 全局开关那条路（不经面板）：同样只收成线
             Host.Commands.SetPassThrough(true);
@@ -14712,19 +14717,22 @@ internal sealed partial class App : InkEngine.InkEngine
                   Host.State.Tool == Tool.Marquee && Host.State.SelectMode == SelectMode.Rect,
                   $"工具 {Host.State.Tool}，档 {Host.State.SelectMode}（期望 Rect）");
 
-            // 第二下：已经是它了、色带也在这一格 → 换下一档（矩形 → 套索）
+            // [2026-10-05 用户定] 已经是选择工具、再点一下（或按 Ctrl+M）**不再换档**：
+            // 爱用矩形的一直用矩形、爱用套索的一直用套索；子类型去上带那两段里选。
             ClickPhysical(sxSel, sySel);
             SettleFrames(400);
-            Check("已经是选择工具、再点一下：换到下一档（矩形 → 套索）",
-                  Host.State.SelectMode == SelectMode.Lasso,
-                  $"档 {Host.State.SelectMode}（期望 Lasso）");
-
-            // 第三下：再换一次 → 转回矩形（两档循环）
-            ClickPhysical(sxSel, sySel);
-            SettleFrames(400);
-            Check("再点一下：两档循环转回矩形",
+            Check("已经是选择工具、再点一下：**档位不动**（不再矩形↔套索）",
                   Host.State.SelectMode == SelectMode.Rect,
                   $"档 {Host.State.SelectMode}（期望 Rect）");
+
+            // 正路：上带里那一段才是切子类型的地方（用命令通道模拟上带点击，
+            // 上带分段本身的点击自检见下面的 ⑥.13）。
+            Host.Commands.SetSelectMode(SelectMode.Lasso);
+            SettleFrames(200);
+            Check("上带切套索：档位跟着变", Host.State.SelectMode == SelectMode.Lasso,
+                  $"档 {Host.State.SelectMode}（期望 Lasso）");
+            Host.Commands.SetSelectMode(SelectMode.Rect);
+            SettleFrames(200);
 
             // ---- 双击 = 全选 ----
             var modeBeforeDbl = Host.State.SelectMode;
@@ -14736,10 +14744,7 @@ internal sealed partial class App : InkEngine.InkEngine
                   strokeCount > 0 && Doc.Selected.Count == strokeCount,
                   $"选中 {Doc.Selected.Count} / 共 {strokeCount} 条");
 
-            // ⚠ 这一条是"双击和单击换档不打架"的守门人：连点两下必须**回到原档**。
-            // 哪天选择方式加到三档，这条会当场红（那时得重新决定双击还要不要）。
-            Check("双击全选**不动档位**（连点两下正好转两圈回到原档）",
-                  Host.State.SelectMode == modeBeforeDbl,
+            Check("双击全选不动档位", Host.State.SelectMode == modeBeforeDbl,
                   $"档 {modeBeforeDbl} → {Host.State.SelectMode}（期望没变）");
 
             // 边界：**中间点了别的格子，双击序列要断掉**。
@@ -14870,6 +14875,8 @@ internal sealed partial class App : InkEngine.InkEngine
         // 换工具（走引擎那条路，等同按热键）：上带要跟着换成"选择"的设置条
         Host.Commands.SetTool(Tool.Marquee);
         SettleFrames(150);
+        ui.OpenRailForTest();               // 确保上带张开：分段只有张开时才吃得到点击
+        SettleFrames(200);
         var lasso = ui.SegmentRectForTest(1);
         ClickPhysical((lasso.MinX + lasso.MaxX) * 0.5f * DpiScale,
                       (lasso.MinY + lasso.MaxY) * 0.5f * DpiScale);

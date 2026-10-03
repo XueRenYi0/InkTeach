@@ -141,6 +141,19 @@ internal static class Tokens
     /// <summary>色线长成设置条的时长（和悬停展开同一套时长，观感才是一路的）。</summary>
     public const double RailMs = 167;
 
+    /// <summary>
+    /// 「快出慢隐」：碰到色线后**这么快**就张开（快出）；指针离开后**等这么久**才收（慢隐）。
+    ///
+    /// 这是 Windows 任务栏自动隐藏 / 菜单"悬停意图"（hover intent）的同一套老规矩：
+    /// **显示要快**（不然像卡了）、**隐藏要慢**（不然指针在边上动两下就一闪一闪）。
+    /// 2026-10-05 用户报"贴边翻页时上下移动面板一会儿出现一会儿隐藏"——就是隐藏太急
+    ///（原来 220ms）加上判定区跟着动画跑，两件事叠出来的。隐藏延迟给到 450ms，
+    /// 并加了"动画期间判定区取目标展开范围"的迟滞（见 FullUi.HoverInsideForPeek）。
+    /// </summary>
+    public const double RailShowDelayMs = 120;
+    /// <summary>指针离开后延迟这么久才收（防"边上动一下就闪"）。见 <see cref="RailShowDelayMs"/>。</summary>
+    public const double RailHideDelayMs = 450;
+
     /// <summary>鼠标离色线多近就算"碰到了"（上下各让一点，不用精确压在 6 像素上）。</summary>
     public const float RailHoverPad = 10f;
 

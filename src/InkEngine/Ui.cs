@@ -214,6 +214,9 @@ public enum TimerMode
 public interface IEngineCommands
 {
     void SetTool(Tool tool);
+
+    /// <summary>面板点橡皮格：切回上次用的橡皮形态（整笔/面积），顺手关穿透。</summary>
+    void SetEraserPreferred();
     /// <summary>
     /// **换下一档抛物线开口方向**（向上 → 向右 → 向下 → 向左 → 向上）。
     ///
