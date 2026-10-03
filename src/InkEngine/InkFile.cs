@@ -246,7 +246,7 @@ public partial class InkEngine
             ExportDialogOpen = true;
             try
             {
-                path = ExportFileDialog.AskForImage(OwnerHwnd(), suggested, want, out int chosen);
+                path = ExportFileDialog.AskForImage(OwnerHwnd(), suggested, want, "保存板书图片", out int chosen);
                 if (chosen >= 1) want = chosen;
             }
             catch (Exception ex) { SetInkStatus("弹保存对话框失败：" + ex.Message); return false; }

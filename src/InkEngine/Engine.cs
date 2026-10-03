@@ -4879,7 +4879,7 @@ public partial class InkEngine
         int chosen = want;
         BorrowFocusForDialog();                 // 覆盖层平时不抢焦点，弹框前临时放开
         ExportDialogOpen = true;                // 弹框期间不许再抬覆盖层，见 ReassertTopmost
-        try { path = ExportFileDialog.AskForImage(OwnerHwnd(), suggested, want, out chosen); }
+        try { path = ExportFileDialog.AskForImage(OwnerHwnd(), suggested, want, "导出选中的内容", out chosen); }
         catch (Exception ex)
         {
             // **弹框这一步出错绝不允许打死软件**。真踩过：.NET 7 起结构体字段不能用

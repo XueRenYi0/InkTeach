@@ -830,11 +830,13 @@ internal static class ExportFileDialog
     /// <paramref name="filterIndex"/> 回传用户选的是第几条（见 <see cref="ExportFormats"/>，
     /// 1 = PNG 透明底、2 = JPEG 白底、3 = PNG 白底、4 = BMP 白底）。
     ///
-    /// **格式差别就写在文件类型那一行**（用户 2026-09-17 问"要不要让用户知道 png 是透明底、
-    /// jpg 是白底？"）：那是他唯一一定会看的一行，比在别处写提示都管用。
+    /// **<paramref name="title"/> 必须由调用方给**：这里以前写死"导出选中的内容"，
+    /// 于是「更多 → 保存图片」（整块板书）也顶着"导出选中的内容"的标题弹框
+    /// （2026-10-05 用户报"点保存图片怎么先跳出来这个"——功能没错，标题串了门）。
+    /// 两个入口分明：选中导出 = 导出选中的内容；保存图片 = 保存板书图片。
     /// </summary>
     public static string AskForImage(IntPtr owner, string suggestedName, int defaultFilterIndex,
-                                     out int filterIndex)
+                                     string title, out int filterIndex)
     {
         filterIndex = defaultFilterIndex;
         StartDialogWatcher();          // 看门线程：对话框出现后置顶 + 激活 + 防系统再摆
@@ -849,7 +851,7 @@ internal static class ExportFileDialog
             // 缓冲要**预分配成 nMaxFile 那么长**，再把建议的文件名写进开头
             lpstrFile = suggestedName + new string('\0', Math.Max(0, 512 - suggestedName.Length)),
             nMaxFile = 512,
-            lpstrTitle = "导出选中的内容",
+            lpstrTitle = title,
             lpstrDefExt = ExportFormats.ExtensionFor(defaultFilterIndex).TrimStart('.').Split(';')[0],
             Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
         };
