@@ -5304,9 +5304,6 @@ public sealed class FullUi : IOverlayUi
     /// <summary>自检用：现在算"展开"吗。</summary>
     internal bool ExpandedForTest => Expanded;
 
-    /// <summary>自检用：把展开动画一步到位（不等 200 ms）。</summary>
-    internal void SnapForTest() => _expand.Jump(_expand.Value > 0.5f ? 0f : 1f);
-
     /// <summary>自检用：界面看到的屏幕（核对它和 IUiHost.Screen 是不是同一个）。</summary>
     internal RectF ScreenForTest => _screen;
 

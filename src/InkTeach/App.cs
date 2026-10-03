@@ -295,6 +295,14 @@ internal sealed partial class App : InkEngine.InkEngine
                 InkUi.IconAtlas.DevLaserVariant = laserVariant;
             PanelShow(args.Length > 1 ? args[1] : "reports/panel-第一版.png");
         }
+        else if (mode == "--demogif")
+        {
+            // 演示连拍（写字 → 停顿变图形 → 选中拖动 → 截图取景）：帧存成 <目录>\NNNN.bmp，
+            // 之后用 tools\make-demo-gif.ps1 拼成 README 头部那张 GIF。只在开发机上跑。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            DemoGif(args.Length > 1 ? args[1] : "tmp/demo");
+        }
         else if (mode == "--makeicon")
         {
             // 生成程序图标（用界面自己的渲染画 <see cref="AppIconUi"/> 那张：白砖＋大笔），见 MakeIcon。
@@ -1006,6 +1014,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("                      粗细真的管用 / 不是笔迹）；顺带出图 reports/laser-trail.png");
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
         Console.WriteLine("  --panelshow <图> [--band] [--mini] [--more [--page N]] [--cell N] [--shape 名字] [--zoom N]   界面出图（离屏；--more --page 0=启动器 1=设置）");
+        Console.WriteLine("  --demogif <目录>    演示连拍（写字→停顿变图形→选中拖动→截图取景，存 NNNN.bmp 帧）");
         Console.WriteLine("  --makeicon <图.ico>      用界面自己的渲染生成程序图标（线条笔＋白砖＋带笔锋的红笔迹）");
         Console.WriteLine("  --captureshow <图>  截图取景框 + 尺寸读数出图（离屏）");
         Console.WriteLine("  --dialogprobe <前缀> [--save]  导出对话框探针（真弹框 + 点它的下拉 + 连拍三张；");
@@ -4253,15 +4262,129 @@ internal sealed partial class App : InkEngine.InkEngine
         // `--adjust`：出"松开后调整"那一版（8.3.0：8 个手柄 + ✓/✕ 两颗按钮）
         CaptureAdjusting = Environment.GetCommandLineArgs().Contains("--adjust");
         // `--ready`：出"刚进屋"那一版（8.3.1：整屏灰 + 顶部提示 + 右上角「✕ 取消」，还没有框）
-        if (Environment.GetCommandLineArgs().Contains("--ready"))
-            CapMinX = CapMaxX = CapMinY = CapMaxY = cx;
+        bool ready = Environment.GetCommandLineArgs().Contains("--ready");
+        if (ready) CapMinX = CapMaxX = CapMinY = CapMaxY = cx;
 
         // 出图范围 = 框 + 四周一圈（遮罩/准线/读数/按钮都可能有）：整块视口太大，
         // 给"框 + 120 逻辑像素"就够（看图看的是那几个控件的排版）。
         var r = new RectF { MinX = CapMinX, MinY = CapMinY, MaxX = CapMaxX, MaxY = CapMaxY };
-        if (!OffscreenFloatingShot(path, r.Inflate(120f * DpiScale))) Console.WriteLine("出图失败");
+        // ⚠ `--ready` 那两件东西（顶部提示、右上角「✕」）都贴在**屏幕上沿**，
+        //   "点 + 120"根本拍不到（2026-10-03 修：以前只出一块 240×240 的灰）。
+        //   改成**屏幕上沿一条通栏**——两件都在里面。
+        if (ready)
+            r = new RectF
+            {
+                MinX = VirtualScreen.MinX, MinY = VirtualScreen.MinY,
+                MaxX = VirtualScreen.MaxX, MaxY = VirtualScreen.MinY + 360f * DpiScale,
+            };
+        if (!OffscreenFloatingShot(path, ready ? r : r.Inflate(120f * DpiScale))) Console.WriteLine("出图失败");
         CaptureActive = false;
         CaptureAdjusting = false;
+        _quit = true;
+    }
+
+    /// <summary>
+    /// `--demogif &lt;目录&gt;`：录一段**演示连拍**（写字 → 停顿变图形 → 选中拖动 → 截图取景）。
+    ///
+    /// 为什么要有它：README 头部那张动图没法"离屏摆拍"——它要的正是**真实交互过程**
+    /// （合成鼠标走真实输入通路、停顿变形走真实定时器、截图取景走真冻结）。所以这里
+    /// 和自检同一套路：白板打底（不透明，画面里没有桌面杂物）+ 合成输入 + 约 110ms 截一帧。
+    /// 帧存成 `&lt;目录&gt;\0000.bmp…`，之后用 `tools\make-demo-gif.ps1` 拼成 GIF。
+    /// 只在开发机上跑，不进产品、也不进默认自检套件。
+    /// </summary>
+    private void DemoGif(string dir)
+    {
+        SetUiFactory(() => new InkUi.FullUi());
+        Tool = Tool.Pen;
+        BoardOn = true;
+        Host.Commands.SetBoard(true);              // 引擎侧真开板：截屏里是干净白底
+        SettleFrames(700);
+
+        Directory.CreateDirectory(dir);
+        int frame = 0;
+        // 截屏范围（物理像素）：动作区 + 底部工具带（1600×1420）。
+        int fx = _virtualX + 850, fy = _virtualY + 380, fw = 1600, fh = 1420;
+        void Snap() => ScreenProbe.SaveBmp(
+            Path.Combine(dir, frame++.ToString("0000") + ".bmp"), fx, fy, fw, fh);
+
+        // 一边按 `t∈[0,1]` 推进动作，一边约 120ms 截一帧；结束再补一张。
+        void Animate(int ms, Action<float> at)
+        {
+            var sw = Stopwatch.StartNew();
+            // ⚠ 别写 `long.MinValue`：`el - last` 会溢出成负数，条件永远不成立
+            //   （第一版就是这么只拍了 10 张——每个阶段结束一张，中间一张没有）。
+            long last = -10000;
+            for (;;)
+            {
+                long el = sw.ElapsedMilliseconds;
+                at?.Invoke(ms <= 0 ? 1f : Math.Min(1f, el / (float)ms));
+                PumpMessages();
+                StepCameraAnim();
+                RenderAll();
+                if (el - last >= 120) { Snap(); last = el; }
+                if (el >= ms) break;
+                Thread.Sleep(10);
+            }
+            Snap();
+        }
+
+        // ── ① 用笔画一个"手画圆"（带手抖；3.0 秒走完）────────────────────────
+        float cx = _virtualX + 1560, cy = _virtualY + 900, r = 250;
+        const int N = 64;
+        var pts = new Vector2[N + 1];
+        for (int i = 0; i <= N; i++)
+        {
+            float a = -MathF.PI / 2f + i / (float)N * MathF.PI * 2f;
+            float rr = r * (1f + 0.045f * MathF.Sin(i * 1.9f));   // 手抖：别是完美圆
+            pts[i] = new Vector2(cx + rr * MathF.Cos(a), cy + rr * MathF.Sin(a));
+        }
+        SendMouse((int)pts[0].X, (int)pts[0].Y, 0);
+        SettleFrames(150); Snap();
+        SendMouse((int)pts[0].X, (int)pts[0].Y, Native.MOUSEEVENTF_LEFTDOWN);
+        Animate(2800, t => SendMouse((int)pts[Math.Min(N, (int)(t * N))].X,
+                                     (int)pts[Math.Min(N, (int)(t * N))].Y, 0));
+
+        // ── ② 停住不动：400ms 后"停顿变图形"（圆）＋ 松手自动选中 ────────────
+        Animate(950, _ => SendMouse((int)pts[N].X, (int)pts[N].Y, 0));
+        SendMouse((int)pts[N].X, (int)pts[N].Y, Native.MOUSEEVENTF_LEFTUP);
+        Animate(900, _ => { });                    // 定型 + 自动选中（收起成一颗圆钮）
+
+        // 点一下那颗圆钮：把操作条摊开（图里才有完整的十格）。
+        {
+            var dot = SelectionHandles.BarCollapsedRect(
+                SelectionHandles.FrameOf(Doc.Selected).CanvasAabb, DpiScale, ViewportCanvas);
+            float dx = (dot.MinX + dot.MaxX) * 0.5f, dy = (dot.MinY + dot.MaxY) * 0.5f;
+            SendMouse((int)dx, (int)dy, 0);
+            SettleFrames(90); Snap();
+            SendMouse((int)dx, (int)dy, Native.MOUSEEVENTF_LEFTDOWN);
+            SettleFrames(90);
+            SendMouse((int)dx, (int)dy, Native.MOUSEEVENTF_LEFTUP);
+            Animate(650, _ => { });                // 摊开 + 看一眼
+        }
+
+        // ── ③ 按住框内拖动（在框里按下 = 拖整体，一步撤销那种）──────────────
+        SendMouse((int)cx, (int)cy, 0);
+        SettleFrames(140); Snap();
+        SendMouse((int)cx, (int)cy, Native.MOUSEEVENTF_LEFTDOWN);
+        Animate(1100, t => SendMouse((int)(cx + t * 330f), (int)(cy + t * 180f), 0));
+        SendMouse((int)(cx + 330f), (int)(cy + 180f), Native.MOUSEEVENTF_LEFTUP);
+        Animate(700, _ => { });
+
+        // ── ④ 截图取景：整屏压暗 → 拖出取景框 → 进调整态（8 手柄 + ✓/✕）─────
+        CaptureHideInk = false;                    // 连批注一起冻：冻出来的底就是我们的板书
+        BeginCaptureMode();
+        SettleFrames(220); Snap();
+        CapMinX = CapMaxX = cx - 240; CapMinY = CapMaxY = cy - 140;
+        Animate(1000, t =>
+        {
+            CapMaxX = cx - 240 + t * 720f;
+            CapMaxY = cy - 140 + t * 430f;
+        });
+        CaptureAdjusting = true;
+        Animate(1500, _ => { });
+
+        Console.WriteLine($"[演示连拍] {frame} 帧 → {dir}");
+        ExitCode = 0;
         _quit = true;
     }
 
@@ -12205,7 +12328,7 @@ internal sealed partial class App : InkEngine.InkEngine
 
         if (CurrentUi is InkUi.FullUi ui)
         {
-            ui.SnapForTest();                             // 一步展开
+            ui.SetExpandForTest(1f);                     // 展开（显式跳 1；别用会"翻面"的旧 SnapForTest）
             ui.OpenRailForTest();                         // 色带也张开（最贵的一档）
         }
         SettleFrames(300);
@@ -12782,10 +12905,14 @@ internal sealed partial class App : InkEngine.InkEngine
 
         if (CurrentUi is InkUi.FullUi ui)
         {
-            // --ball：**出收起态（那个球）**，不做"一步展开"。
-            // 默认是展开态；收起/贴边这一类毛病只在球上看得见，所以要能单拍它。
+            // --ball：**出收起态（那个球）**——启动默认就是展开态，所以要显式跳 0；
+            // 不传就保持展开（收起/贴边这一类毛病只在球上看得见，所以要能单拍它）。
+            // ⚠ 2026-10-03 修：原来写的是 `if (!wantBall) ui.SnapForTest()`，而那一刻的
+            //   `SnapForTest` 是**跳到另一端**的开关、不是"展开"——启动时本来就展开，
+            //   那一跳反而把默认态收成了球：**不带 --ball 出球、带 --ball 出展开**，
+            //   和注释正好相反（出 README 主图时实测到）。现在显式跳 0 / 跳 1。
             bool wantBall = Environment.GetCommandLineArgs().Contains("--ball");
-            if (!wantBall) ui.SnapForTest();     // 一步展开，不用等 200 毫秒
+            ui.SetExpandForTest(wantBall ? 0f : 1f);
             if (wantHide) ui.ForcePeekForTest(0f);
             // --expand <0..1>：把"球 → 带子"的展开进度钉在中间某一帧（核对动画用）
             {
