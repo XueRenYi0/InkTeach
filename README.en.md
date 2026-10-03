@@ -16,6 +16,7 @@ installer needs no administrator rights.
 **Download**: [GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest)
 (`InkTeach-Setup-<version>.exe` — next-next-done, or the portable
 `InkTeach-<version>-win-x64.zip`) ｜ [GitCode mirror](https://gitcode.com/xzx1xzzx/InkTeach/releases)
+｜ Website: <https://xuerenyi0.github.io/InkTeach/>
 
 <p align="center"><img src="design/readme/00-演示.gif" width="800" alt="Demo: draw a rough circle, hold still, it snaps into a real circle; select and drag it; then screenshot mode"></p>
 
