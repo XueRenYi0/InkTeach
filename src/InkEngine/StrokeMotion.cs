@@ -102,6 +102,17 @@ internal static class StrokeMotion
     public static int Count { get; private set; }
     public static Vector3 At(int i) => _buffer[i];
 
+    /// <summary>
+    /// **渲染层真正要画的点数**：模型输出 ＋（活笔时的）笔尖镜像尾。
+    /// 两条渲染路（等宽描边 <c>Model.AppendSmoothedModeledRun</c>、压感 D2D 墨迹
+    /// <c>Overlay.BuildPressureSegments</c>）都用这一对取点——单源纪律：谁都不许自己漏掉镜像。
+    /// </summary>
+    public static int LiveDrawnCount => Count + TipOverlay.Count;
+
+    /// <summary>取"要画的第 <paramref name="i"/> 点"（镜像点排在模型输出之后）。</summary>
+    public static Vector3 LiveDrawnAt(int i)
+        => i < Count ? _buffer[i] : TipOverlay[i - Count];
+
     /// <summary>M7 的事件（对应 Xournal++ `VelocityEvent`：位置 + 压力 + 速度）。</summary>
     private struct GaussEvent
     {

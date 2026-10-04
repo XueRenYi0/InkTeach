@@ -1860,17 +1860,19 @@ internal sealed partial class OverlayWindow : IDisposable
         bool clipped = maxParam < n - 1 - 1e-4f;
         // 运动模型（实验，`--motion`）：整条用选中的模型输出 + 压力（M2 已按时间加权插值压力）。
         // 只对"整笔、没被橡皮擦过"生效；回放前缀/擦除过的一律照旧走原始点。
+        // ⚠ 口径是 `LiveDrawnCount`：活笔末端那 1~2 个**笔尖镜像点**（A2，跟手用）也在其中——
+        // 真笔走的是这条 D2D 原生墨迹路（`DrawPressureInk`），漏了它 = 真笔上开关看不出差别。
         bool useModel = !clipped && s.Erased.Count == 0 && StrokeMotion.Build(s);
-        if (useModel) n = StrokeMotion.Count;
+        if (useModel) n = StrokeMotion.LiveDrawnCount;
         int lastIdx = clipped ? Math.Clamp((int)MathF.Floor(maxParam), 0, n - 1) : n - 1;
         float frac = clipped ? maxParam - lastIdx : 0f;
         bool tailPoint = frac > 1e-4f;
         if (clipped && lastIdx < 1 && !tailPoint) return false;   // 还没长到第二个点
 
-        // 源点访问器：原始采样点 / 建模输出（x, y, 压力）二选一。
-        float Px(int i) => useModel ? StrokeMotion.At(i).X : pts[i].X;
-        float Py(int i) => useModel ? StrokeMotion.At(i).Y : pts[i].Y;
-        float Pp(int i) => useModel ? StrokeMotion.At(i).Z : pts[i].P;
+        // 源点访问器：原始采样点 / 建模输出（含镜像尾）（x, y, 压力）三选一。
+        float Px(int i) => useModel ? StrokeMotion.LiveDrawnAt(i).X : pts[i].X;
+        float Py(int i) => useModel ? StrokeMotion.LiveDrawnAt(i).Y : pts[i].Y;
+        float Pp(int i) => useModel ? StrokeMotion.LiveDrawnAt(i).Z : pts[i].P;
 
         startRadius = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, Pp(0)));
         float lastX = Px(0), lastY = Py(0), lastR = startRadius;
@@ -2199,7 +2201,7 @@ internal sealed partial class OverlayWindow : IDisposable
             r.Add(CanvasRectToWindow(app.ActiveStroke.PaddedBounds));
         }
 
-        // 呼出盘（Ctrl+Q）：固定画在盘心，但轨迹线跟着指针、内容随扇区变——
+        // 呼出盘（Ctrl+Alt+Shift+Q）：固定画在盘心，但轨迹线跟着指针、内容随扇区变——
         // 脏区按"盘 ＋ 投影 ＋ 盘下那行字 ∪ 当前指针"给（盘一转、线一动，旧像素才擦得掉）。
         if (app.RadialPaletteActive)
         {
@@ -4873,7 +4875,7 @@ internal sealed partial class OverlayWindow : IDisposable
     }
 
     // =====================================================================
-    //  呼出盘（Ctrl+Q）：按住 → 划向扇区 → 松手
+    //  呼出盘（Ctrl+Alt+Shift+Q）：按住 → 划向扇区 → 松手
     // =====================================================================
     //
     // 和落点反馈一样画在**浮动层**、坐标和指针同源（画布坐标 + CanvasToWindow），

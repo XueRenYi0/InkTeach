@@ -5515,21 +5515,19 @@ internal sealed class Stroke
             if (!clipped && Erased.Count == 0 && StrokeMotion.Build(this))
             {
                 // mean2 的曲线层固定为**过点曲线**（拟合档已随停用清理，2026-10-05）。
+                // 点数口径用 `LiveDrawnCount`：活笔末端那 1~2 个**镜像点**（A2）也算在内——
+                // 它们只进渲染几何，不进 `cache.Out`，成稿因此逐点不变。
                 bool drew = AppendSmoothedModeledRun(sink);
                 if (!drew)
                 {
-                    int mn = StrokeMotion.Count;
-                    var p0 = StrokeMotion.At(0);
+                    int mn = StrokeMotion.LiveDrawnCount;
+                    var p0 = StrokeMotion.LiveDrawnAt(0);
                     sink.BeginFigure(new Vector2(p0.X, p0.Y), FigureBegin.Hollow);
                     for (int k = 1; k < mn; k++)
                     {
-                        var p = StrokeMotion.At(k);
+                        var p = StrokeMotion.LiveDrawnAt(k);
                         sink.AddLine(new Vector2(p.X, p.Y));
                     }
-                    // 活笔笔尖镜像（A2）：只进渲染几何、不进 `cache.Out` 的临时延伸。
-                    var tip = StrokeMotion.TipOverlay;
-                    for (int k = 0; k < tip.Count; k++)
-                        sink.AddLine(new Vector2(tip[k].X, tip[k].Y));
                 }
             }
             else
@@ -5569,15 +5567,12 @@ internal sealed class Stroke
     private static bool AppendSmoothedModeledRun(ID2D1GeometrySink sink)
     {
         StrokeSmoothing.Begin();
-        int n = StrokeMotion.Count;
+        int n = StrokeMotion.LiveDrawnCount;
         for (int i = 0; i < n; i++)
         {
-            var p = StrokeMotion.At(i);
+            var p = StrokeMotion.LiveDrawnAt(i);
             StrokeSmoothing.Add(p.X, p.Y, p.Z);
         }
-        var tip = StrokeMotion.TipOverlay;
-        for (int i = 0; i < tip.Count; i++)
-            StrokeSmoothing.Add(tip[i].X, tip[i].Y, tip[i].Z);
         int m = StrokeSmoothing.Finish();
         if (m <= 0) return false;
 
