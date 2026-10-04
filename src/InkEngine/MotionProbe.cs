@@ -10,8 +10,7 @@ namespace InkEngine;
 ///   · 抖动：浅斜率直线 + 高频噪声（先模拟 ptPixelLocation 取整），到"真实直线"的横向 RMS；
 ///   · 直角：慢速 90°，输出到原折线的最大距离（越小说明直角保得越好）；
 ///   · 保真：圆弧到原折线的最大距离（越大说明形状被改得越多）；
-///   · 滞后：活笔（不落笔）时"最后一枚输出点"离"最后一条原始输入"多远——跟手程度
-///     （含默认开启的活笔镜像；关镜像可见距离窗 ~6px 的模型滞后，见下方镜像检查）；
+///   · 滞后：活笔（不落笔）时"最后一枚输出点"离"最后一条原始输入"多远——跟手程度；
 ///   · 端点：落笔后首/末点的位置误差（收笔追赶有效没有）；
 ///   · 性能：2000 点一次建模耗时；输出点数。
 ///
@@ -92,8 +91,7 @@ internal static class MotionProbe
         Console.WriteLine("   · 抖动列越小越好（细笔抖动的直接对手）；M0 是整数采样本身的噪声）。");
         Console.WriteLine("   · 直角列越小越好——M1 的角点保护是 0.5px 量级；弹簧模型（M3）会明显圆角。");
         Console.WriteLine("   · 圆弧偏离是「形状被改了多少」；抖动降得多但偏离暴涨 = 用形状换平滑，要警惕。");
-        Console.WriteLine("   · 滞后列 = 活笔跟手程度：M0/M1 定义上为 0；Mean2 因活笔镜像（默认开）也 ≈0，");
-        Console.WriteLine("     关镜像时的模型滞后（~6px）见下方「活笔笔尖镜像检查」。");
+        Console.WriteLine("   · 滞后列 = 活笔跟手程度（只有平滑算法有；M0/M1 定义上为 0）。");
         Console.WriteLine("   · 折线度 = 圆弧上 6px 弧长内的最大方向变化：越大越「折」，越小越「圆」。");
         Console.WriteLine();
 
@@ -141,128 +139,6 @@ internal static class MotionProbe
             Console.WriteLine($"  {(ok ? "通过" : "失败")}  {mode,-10}  点数 {inc.Count,5}/{full.Count,-5}  "
                               + $"到原折线偏离 {incDev,6:F3}/{fullDev:F3}px");
         }
-
-        // ---- 活笔笔尖镜像（A2）不变量：跟手归零 + 落笔不变形 + 成稿不变 --------------
-        // 三条都量渲染层同一条取点路径（`Model` 已按渲染层口径把镜像接到曲线前）。
-        Console.WriteLine("  活笔笔尖镜像检查（mean2；跟手 / 落笔交接 / 成稿不变）：");
-        int tipFail = 0;
-        {
-            var raw = BuildArc(200f, 300);
-            bool saved = StrokeMotion.Mean2TipOverlay;
-            bool savedPred = StrokeMotion.TipPredict;
-            try
-            {
-                StrokeMotion.Mean2TipOverlay = true;
-                StrokeMotion.TipPredict = false;   // 镜像三条只量镜像：预测有自己的专项
-                StrokeMotion.BumpVersion();
-                var liveOn = Model(StrokeMotionMode.Mean2, raw, committed: false, hasPressure: false, out _);
-                var doneOn = Model(StrokeMotionMode.Mean2, raw, committed: true, hasPressure: false, out _);
-
-                StrokeMotion.Mean2TipOverlay = false;
-                StrokeMotion.BumpVersion();
-                var liveOff = Model(StrokeMotionMode.Mean2, raw, committed: false, hasPressure: false, out _);
-                var doneOff = Model(StrokeMotionMode.Mean2, raw, committed: true, hasPressure: false, out _);
-
-                float tipLag = liveOn.Count > 0 ? Vector2.Distance(liveOn[^1], raw[^1]) : float.NaN;
-                float lagOff = liveOff.Count > 0 ? Vector2.Distance(liveOff[^1], raw[^1]) : float.NaN;
-                // 落笔交接：活笔尾是直线、成稿尾是过点曲线（同过中点＋末点），逐点相同已不可能；
-                // 判区域：双向到折线距离 ≤1px（6px 接缝的曲线/直线差，不可见；几像素的弹跳会超限）。
-                float handoff = MathF.Max(MaxDistanceToPolyline(liveOn, doneOn),
-                                          MaxDistanceToPolyline(doneOn, liveOn));
-                float finalDev = MaxSeqDistance(doneOn, doneOff);
-                // 关镜像必须量得到原来的滞后（>1px），否则这条检查没在测东西。
-                bool ok = float.IsFinite(tipLag) && tipLag <= 0.05f
-                          && float.IsFinite(handoff) && handoff <= 1.0f
-                          && float.IsFinite(finalDev) && finalDev <= 1e-3f
-                          && lagOff > 1f;
-                if (!ok) tipFail++;
-                Console.WriteLine($"  {(ok ? "通过" : "失败")}  开镜像：活笔末端滞后 {tipLag,6:F3}px，落笔交接偏差 {handoff,5:F2}px；"
-                                  + $"关镜像：滞后 {lagOff,6:F2}px；开/关成稿逐点偏差 {finalDev,7:F4}px");
-            }
-            finally
-            {
-                StrokeMotion.Mean2TipOverlay = saved;
-                StrokeMotion.TipPredict = savedPred;
-                StrokeMotion.BumpVersion();
-            }
-        }
-
-        // ---- 活笔预测（L2）不变量：快写前探 + 成稿不变 + 慢写/拐弯不预测 -----------
-        Console.WriteLine("  活笔预测检查（L2；快写前探 / 成稿不变 / 门控）：");
-        int predFail = 0;
-        {
-            bool savedTip = StrokeMotion.TipPredict;
-            bool savedMirror = StrokeMotion.Mean2TipOverlay;
-            try
-            {
-                StrokeMotion.Mean2TipOverlay = true;
-                StrokeMotion.TipPredict = true;
-                StrokeMotion.BumpVersion();
-
-                // (i) 快写前探：1.2px/ms 直线，渲染假设发生在最后采样后 8ms。
-                // 预测（12ms）应把"末端到此刻"误差砍下来，且不超前过头（≤视界＋曲线余量 1px）。
-                var fast = BuildFastLine(speedPxPerMs: 1.2f, count: 60);
-                var dir = new Vector2(1f, 0f);
-                var trueNow = fast[^1] + dir * (1.2f * 8f);
-                var liveOn = Model(StrokeMotionMode.Mean2, fast, committed: false, hasPressure: false, out _);
-                int nPred = StrokeMotion.PredictOverlay.Count;
-                StrokeMotion.TipPredict = false;
-                StrokeMotion.BumpVersion();
-                var liveOff = Model(StrokeMotionMode.Mean2, fast, committed: false, hasPressure: false, out _);
-                float baseErr = liveOff.Count > 0 ? Vector2.Distance(liveOff[^1], trueNow) : float.NaN;
-                float tipErr = liveOn.Count > 0 ? Vector2.Distance(liveOn[^1], trueNow) : float.NaN;
-                float overshoot = liveOn.Count > 0 ? Vector2.Dot(liveOn[^1] - trueNow, dir) : float.NaN;
-                bool okProbe = nPred >= 1 && float.IsFinite(tipErr) && tipErr < baseErr
-                               && float.IsFinite(overshoot) && overshoot <= 1.2f * StrokeMotion.TipPredictMs + 1f;
-                if (!okProbe) predFail++;
-
-                // (ii) 成稿不变：预测开/关，提交后逐点相同。
-                StrokeMotion.TipPredict = true;
-                StrokeMotion.BumpVersion();
-                var doneOn = Model(StrokeMotionMode.Mean2, fast, committed: true, hasPressure: false, out _);
-                StrokeMotion.TipPredict = false;
-                StrokeMotion.BumpVersion();
-                var doneOff = Model(StrokeMotionMode.Mean2, fast, committed: true, hasPressure: false, out _);
-                float finalDev = MaxSeqDistance(doneOn, doneOff);
-                bool okFinal = float.IsFinite(finalDev) && finalDev <= 1e-3f;
-                if (!okFinal) predFail++;
-
-                // (iii) 门控：慢写（0.1px/ms）与尾段急转（90°钩）都不许出预测点。
-                StrokeMotion.TipPredict = true;
-                StrokeMotion.BumpVersion();
-                Model(StrokeMotionMode.Mean2, BuildFastLine(speedPxPerMs: 0.1f, count: 60),
-                      committed: false, hasPressure: false, out _);
-                int nSlow = StrokeMotion.PredictOverlay.Count;
-                Model(StrokeMotionMode.Mean2, BuildHookEnd(), committed: false, hasPressure: false, out _);
-                int nHook = StrokeMotion.PredictOverlay.Count;
-                bool okGate = nSlow == 0 && nHook == 0;
-                if (!okGate) predFail++;
-
-                // (iv) 时标粗糙（鼠标合并点/同批同刻 → 合成时间）：不许"突突突"往外跳。
-                var sameT = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand, Width = 4f };
-                for (int i = 0; i < 20; i++) sameT.AddPoint(100f + i * 9f, 200f, 0.5f, 1000f);
-                sameT.HasPressure = false;
-                sameT.RawWhileLive = true;
-                StrokeMotion.TipPredict = true;
-                StrokeMotion.BumpVersion();
-                StrokeMotion.Build(sameT, StrokeMotionMode.Mean2);
-                int nSame = StrokeMotion.PredictOverlay.Count;
-                bool okSame = nSame == 0;
-                if (!okSame) predFail++;
-
-                Console.WriteLine($"  {(okProbe && okFinal && okGate && okSame ? "通过" : "失败")}  "
-                                  + $"快写前探：预测 {nPred} 点，误差 {baseErr,5:F2}→{tipErr,5:F2}px，"
-                                  + $"超前 {overshoot,5:F2}px；成稿偏差 {finalDev,7:F4}px；"
-                                  + $"慢写/急转/同刻预测点 {nSlow}/{nHook}/{nSame}");
-            }
-            finally
-            {
-                StrokeMotion.Mean2TipOverlay = savedMirror;
-                StrokeMotion.TipPredict = savedTip;
-                StrokeMotion.BumpVersion();
-            }
-        }
-        Console.WriteLine();
 
         // [停用 2026-10-05] sliding 时间戳变体专项（sliding 已停用；代码保留，见 已停用-渲染实验.md）。
         /*
@@ -419,7 +295,7 @@ internal static class MotionProbe
         Console.WriteLine();
 
         // 硬保证：保留的模式都能给出 >=2 个有限点，且没抛异常。
-        hardFail += incFail + tipFail + predFail;
+        hardFail += incFail;
         Console.WriteLine($"  硬检查：{modes.Length} 个模式全部产出有限点——{(hardFail == 0 ? "通过" : $"失败 {hardFail} 个")}");
         Console.WriteLine();
         return hardFail == 0 ? 0 : 1;
@@ -453,31 +329,17 @@ internal static class MotionProbe
 
         if (!StrokeMotion.Build(stroke, mode)) return new List<Vector2>(pts);
 
-        var result = new List<Vector2>(StrokeMotion.LiveDrawnCount);
-        // 口径 = 渲染层：曲线只过模型输出，活笔临时尾（镜像＋预测）画成直线；
-        // 量到的"滞后/交接"才是用户眼睛看到的。
-        bool liveMean2 = mode == StrokeMotionMode.Mean2 && stroke.RawWhileLive;
-        int curveN = liveMean2 ? StrokeMotion.Count : StrokeMotion.LiveDrawnCount;
-        var feed = new List<Vector2>(curveN);
-        for (int i = 0; i < curveN; i++)
+        var result = new List<Vector2>(StrokeMotion.Count);
+        for (int i = 0; i < StrokeMotion.Count; i++)
         {
-            var p = liveMean2 ? StrokeMotion.At(i) : StrokeMotion.LiveDrawnAt(i);
-            feed.Add(new Vector2(p.X, p.Y));
+            var p = StrokeMotion.At(i);
+            result.Add(new Vector2(p.X, p.Y));
             pressures.Add(p.Z);
         }
 
         // mean2：渲染层会在建模输出之上再过一遍曲线；探针这里做同样的加工，
         // 否则"折线度"量的是加工前的原始输出，表上会看不出曲线化的收益。
-        result = PostCurve(mode, feed, pressures);
-        if (liveMean2)
-        {
-            for (int i = StrokeMotion.Count; i < StrokeMotion.LiveDrawnCount; i++)
-            {
-                var p = StrokeMotion.LiveDrawnAt(i);
-                result.Add(new Vector2(p.X, p.Y));
-                pressures.Add(p.Z);
-            }
-        }
+        result = PostCurve(mode, result, pressures);
         return result;
     }
 
@@ -527,25 +389,6 @@ internal static class MotionProbe
         var pts = new List<Vector2>();
         for (float x = 0; x <= armPx; x += step) pts.Add(new Vector2(MathF.Round(x), 0));
         for (float y = step; y <= armPx; y += step) pts.Add(new Vector2(armPx, MathF.Round(y)));
-        return pts;
-    }
-
-    /// <summary>等速直线（预测专项语料；时标按 <see cref="InputHz"/> 配，速度自定）。</summary>
-    private static List<Vector2> BuildFastLine(float speedPxPerMs, int count)
-    {
-        var pts = new List<Vector2>(count);
-        float step = speedPxPerMs * (float)(1000.0 / InputHz);
-        for (int i = 0; i < count; i++) pts.Add(new Vector2(100f + i * step, 200f));
-        return pts;
-    }
-
-    /// <summary>直行后尾段 90° 急转（预测门2语料：最后一刻在拐弯，不许预测）。</summary>
-    private static List<Vector2> BuildHookEnd()
-    {
-        var pts = new List<Vector2>();
-        for (int i = 0; i < 20; i++) pts.Add(new Vector2(100f + i * 8f, 200f));
-        pts.Add(new Vector2(100f + 20 * 8f, 208f));
-        pts.Add(new Vector2(100f + 20 * 8f, 216f));
         return pts;
     }
 
@@ -611,16 +454,6 @@ internal static class MotionProbe
     {
         float worst = 0f;
         foreach (var p in pts) worst = MathF.Max(worst, DistanceToPolyline(p, poly));
-        return worst;
-    }
-
-    /// <summary>两条点串逐点最大偏差（点数不同 = 无穷大，代表"不同形"）。</summary>
-    private static float MaxSeqDistance(List<Vector2> a, List<Vector2> b)
-    {
-        if (a.Count != b.Count || a.Count == 0) return float.MaxValue;
-        float worst = 0f;
-        for (int i = 0; i < a.Count; i++)
-            worst = MathF.Max(worst, Vector2.Distance(a[i], b[i]));
         return worst;
     }
 

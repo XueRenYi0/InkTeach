@@ -1423,59 +1423,9 @@ internal sealed partial class OverlayWindow : IDisposable
     ///     在 2 倍屏上会被放大四次或被推到画布外，本机未能拿到稳定结果。
     /// 等界面真的变得很复杂（大量模糊/阴影）再回来解决，届时要连 4K 一起量。
     /// </summary>
-    // ---- 界面层缓存 -------------------------------------------------------------
-    //
-    // 界面平时是静态的（写字时更是一动不动），却曾经每帧全量重画 13 格＋色带
-    // （`--e2ealloc` 量出 ~30KB 托管/帧，一笔 4MB——写 30 个点要 1.3MB 的根因）。
-    // 改成：脏了才重画进缓存位图，平时只贴一张位图。
-    // 这本就是 `IOverlayUi` 接口文档第 1 条写好的设计（"引擎给界面分配一张位图"），
-    // 之前一直没实现，界面是直画的。
-    //
-    // 脏条件（保守：任何一条命中就重画，漏画比多画严重得多）：
-    //   · 缓存空/尺寸不对/上下文换了；占用矩形（逻辑＋margin）变了；界面对象换了；
-    //   · 界面自己说在动画（IsAnimating：展开/收起/按住进度/提示/悬停意图全在里面）；
-    //   · 本帧有界面输入（Down/Move/Up/Leave 路由里置位）或引擎推了新状态/换了主题；
-    //   · 快照比对兜底（UiState.Matches：上面几条漏网的状态变化也逃不掉它）。
-    private ID2D1Bitmap1 _uiCacheBmp;
-    private int _uiCacheW, _uiCacheH;
-    private ID2D1DeviceContext _uiCacheCtx;
-    private IOverlayUi _uiCacheUi;
-    private RectF _uiCacheBounds;   // 逻辑坐标＋margin（与位图内容对应）
-    private Vortice.RawRectF _uiCacheDst;   // 贴图矩形（窗口坐标，渲染时一次算好）
-    private UiState _uiCacheState;
-    private bool _uiCacheHas;
-
-    /// <summary>
-    /// 界面层缓存画进位图。**必须在帧 BeginDraw 之前调**（见 RenderFrame 里调用处）：
-    /// D2D 的 Begin/EndDraw 不能嵌套，在帧里再开一层绘制会失败。
-    /// 界面隐藏时（占用矩形空）直接跳过。
-    /// </summary>
-    private void UpdateUiCache(InkEngine app)
+    private void DrawUi(InkEngine app)
     {
-        if (_uiLogicalBounds.IsEmpty) return;
         float dpiScale = Dpi / 96f;
-        _ctx.SetDpi(96f, 96f);
-        float pad = app.UiPaintMarginNow;
-        var lb = _uiLogicalBounds;
-        var key = new RectF
-        {
-            MinX = lb.MinX - pad, MinY = lb.MinY - pad,
-            MaxX = lb.MaxX + pad, MaxY = lb.MaxY + pad,
-        };
-        var st = app.SnapshotState();
-        int bw = Math.Max(1, (int)MathF.Ceiling((key.MaxX - key.MinX) * dpiScale));
-        int bh = Math.Max(1, (int)MathF.Ceiling((key.MaxY - key.MinY) * dpiScale));
-        bool dirty = _uiCacheBmp == null || !ReferenceEquals(_uiCacheCtx, _ctx)
-            || bw != _uiCacheW || bh != _uiCacheH
-            || !_uiCacheHas || !_uiCacheBounds.Equals(key) || !ReferenceEquals(_uiCacheUi, app.Ui)
-            || !_uiCacheState.Matches(st)
-            || app.UiIsAnimatingNow || app.UiCacheDirty;
-        if (!dirty) return;
-        EnsureUiCache(bw, bh);
-        var savedTarget = _ctx.Target;
-        _ctx.Target = _uiCacheBmp;
-        _ctx.BeginDraw();
-        // 位图像素 (0,0) 对应逻辑 key.MinX/key.MinY；逻辑坐标原样画。
         // 界面画在自己的绝对逻辑坐标里（和它 Layout 拿到的逻辑屏幕同一套），
         // 引擎负责换算成物理像素：先乘 dpiScale，再减去窗口原点。
         //
@@ -1483,12 +1433,15 @@ internal sealed partial class OverlayWindow : IDisposable
         // 以前这里用的是 CanvasToWindow（含 ViewOffsetY），相机为 0 时看不出
         // 问题，一滚动整个界面就会跟着内容往上跑——正是"坐标换算漏一处"
         // 那一类 bug 的又一例。
+        _ctx.SetDpi(96f, 96f);
         _ctx.Transform = Matrix3x2.CreateScale(dpiScale)
-                       * Matrix3x2.CreateTranslation(-key.MinX * dpiScale, -key.MinY * dpiScale);
+                       * Matrix3x2.CreateTranslation(-OriginX, -OriginY);
         // 裁剪矩形同样用逻辑坐标（会被上面的变换一起作用）。
         // **往外放一圈**：界面会画到占用矩形外面（投影、浮出的预览，见 IOverlayUi.PaintMargin）。
         // 占用矩形本身**不放**——它同时是命中测试与输入小窗的矩形。
-        var clip = new Vortice.RawRectF(key.MinX, key.MinY, key.MaxX, key.MaxY);
+        float pad = app.UiPaintMarginNow;
+        var clip = new Vortice.RawRectF(_uiLogicalBounds.MinX - pad, _uiLogicalBounds.MinY - pad,
+                                        _uiLogicalBounds.MaxX + pad, _uiLogicalBounds.MaxY + pad);
         _ctx.PushAxisAlignedClip(clip, AntialiasMode.Aliased);
         // 防弹入口在引擎那边（`UiRenderNow`）：界面连抛三次就整体停用，笔迹照常。
         // 主题参数给的是"当前浮层主题"（界面推上来的那套）——我们的界面自己带令牌，
@@ -1496,69 +1449,6 @@ internal sealed partial class OverlayWindow : IDisposable
         app.UiRenderNow(_ctx, app.FloatingTheme);
         _ctx.Transform = Matrix3x2.Identity;
         _ctx.PopAxisAlignedClip();
-        var hr = _ctx.EndDraw();
-        _ctx.Target = savedTarget;
-        if (hr.Failure)
-        {
-            LastError = "ui cache EndDraw: " + hr.Description;
-            _uiCacheBmp?.Dispose(); _uiCacheBmp = null;
-            _uiCacheHas = false;
-        }
-        else
-        {
-            _uiCacheBounds = key;
-            _uiCacheState = st;
-            _uiCacheUi = app.Ui;
-            _uiCacheHas = true;
-            // 存下贴图矩形（窗口坐标）：窗口坐标 = 逻辑 × dpiScale − 窗口原点。
-            _uiCacheDst = new Vortice.RawRectF(
-                key.MinX * dpiScale - OriginX, key.MinY * dpiScale - OriginY,
-                key.MaxX * dpiScale - OriginX, key.MaxY * dpiScale - OriginY);
-        }
-    }
-
-    private void DrawUi(InkEngine app)
-    {
-        // 只贴图（绘制在 UpdateUiCache 里，帧 BeginDraw 之前）。
-        if (_uiCacheBmp == null)
-        {
-            // 缓存建不起来：退回直画，保证界面不消失。
-            float dpiScale = Dpi / 96f;
-            _ctx.SetDpi(96f, 96f);
-            _ctx.Transform = Matrix3x2.CreateScale(dpiScale)
-                           * Matrix3x2.CreateTranslation(-OriginX, -OriginY);
-            float pad = app.UiPaintMarginNow;
-            var lb = _uiLogicalBounds;
-            var clip = new Vortice.RawRectF(lb.MinX - pad, lb.MinY - pad,
-                                            lb.MaxX + pad, lb.MaxY + pad);
-            _ctx.PushAxisAlignedClip(clip, AntialiasMode.Aliased);
-            app.UiRenderNow(_ctx, app.FloatingTheme);
-            _ctx.Transform = Matrix3x2.Identity;
-            _ctx.PopAxisAlignedClip();
-            return;
-        }
-
-        // 贴缓存位图。
-        _ctx.Transform = Matrix3x2.Identity;
-        _ctx.PushAxisAlignedClip(_uiCacheDst, AntialiasMode.Aliased);
-        _ctx.DrawBitmap(_uiCacheBmp, _uiCacheDst, 1f, Vortice.Direct2D1.InterpolationMode.Linear, null, null);
-        _ctx.PopAxisAlignedClip();
-        _ctx.Transform = Matrix3x2.Identity;
-    }
-
-    /// <summary>界面缓存位图按需建（尺寸/上下文变了才重建；其余只复用）。</summary>
-    private void EnsureUiCache(int w, int h)
-    {
-        if (_uiCacheBmp != null && ReferenceEquals(_uiCacheCtx, _ctx) && w == _uiCacheW && h == _uiCacheH)
-            return;
-        _uiCacheBmp?.Dispose();
-        _uiCacheBmp = null;
-        var pf = new Vortice.DCommon.PixelFormat(Vortice.DXGI.Format.B8G8R8A8_UNorm,
-                                                 Vortice.DCommon.AlphaMode.Premultiplied);
-        _uiCacheBmp = _ctx.CreateBitmap(new SizeI(w, h), IntPtr.Zero, 0,
-            new BitmapProperties1(pf, 96f, 96f, BitmapOptions.Target));
-        _uiCacheCtx = _ctx;
-        _uiCacheW = w; _uiCacheH = h;
     }
 
     /// <summary>供分辨率实测复用同一套绘制路径。</summary>
@@ -1970,32 +1860,27 @@ internal sealed partial class OverlayWindow : IDisposable
         bool clipped = maxParam < n - 1 - 1e-4f;
         // 运动模型（实验，`--motion`）：整条用选中的模型输出 + 压力（M2 已按时间加权插值压力）。
         // 只对"整笔、没被橡皮擦过"生效；回放前缀/擦除过的一律照旧走原始点。
-        // ⚠ 口径是 `LiveDrawnCount`：活笔末端那 1~2 个**笔尖镜像点**（A2，跟手用）也在其中——
-        // 真笔走的是这条 D2D 原生墨迹路（`DrawPressureInk`），漏了它 = 真笔上开关看不出差别。
         bool useModel = !clipped && s.Erased.Count == 0 && StrokeMotion.Build(s);
-        if (useModel) n = StrokeMotion.LiveDrawnCount;
+        if (useModel) n = StrokeMotion.Count;
         int lastIdx = clipped ? Math.Clamp((int)MathF.Floor(maxParam), 0, n - 1) : n - 1;
         float frac = clipped ? maxParam - lastIdx : 0f;
         bool tailPoint = frac > 1e-4f;
         if (clipped && lastIdx < 1 && !tailPoint) return false;   // 还没长到第二个点
 
-        // 源点访问器：原始采样点 / 建模输出（含镜像尾）（x, y, 压力）三选一。
-        float Px(int i) => useModel ? StrokeMotion.LiveDrawnAt(i).X : pts[i].X;
-        float Py(int i) => useModel ? StrokeMotion.LiveDrawnAt(i).Y : pts[i].Y;
-        float Pp(int i) => useModel ? StrokeMotion.LiveDrawnAt(i).Z : pts[i].P;
+        // 源点访问器：原始采样点 / 建模输出（x, y, 压力）二选一。
+        float Px(int i) => useModel ? StrokeMotion.At(i).X : pts[i].X;
+        float Py(int i) => useModel ? StrokeMotion.At(i).Y : pts[i].Y;
+        float Pp(int i) => useModel ? StrokeMotion.At(i).Z : pts[i].P;
 
         startRadius = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, Pp(0)));
         float lastX = Px(0), lastY = Py(0), lastR = startRadius;
 
         if (useModel || (!useModel && StrokeSmoothing.Enabled && !s.RawWhileLive))
         {
-            // 把源点喂进过点曲线：建模输出本来已经去过抖，
+            // 把源点（原始采样点 / 建模输出）喂进过点曲线：建模输出本来已经去过抖，
             // 再过一次曲线只是为了消掉"输出点之间的折线"（mean2 的快写折线感）。
-            // ⚠ 活笔临时尾（镜像 L1 ＋ 预测 L2）不进曲线：它们带着输入抖动，
-            // 进曲线会让末段随邻居回摆（鼠标稀疏采样下几十像素来回翻）；尾段画直线。
-            int curveEnd = useModel ? StrokeMotion.Count - 1 : lastIdx;
             StrokeSmoothing.Begin();
-            for (int i = 0; i <= curveEnd; i++) StrokeSmoothing.Add(Px(i), Py(i), Pp(i));
+            for (int i = 0; i <= lastIdx; i++) StrokeSmoothing.Add(Px(i), Py(i), Pp(i));
             if (tailPoint)
             {
                 int j = lastIdx + 1;
@@ -2028,32 +1913,6 @@ internal sealed partial class OverlayWindow : IDisposable
                 lastR = r1;
                 lastX = cs[k].P1.X;
                 lastY = cs[k].P1.Y;
-            }
-            // 活笔临时尾画成直线（位置直线、半径沿途线性插值；写法与下面折线分支同式）。
-            if (useModel && lastIdx > curveEnd)
-            {
-                EnsureInkSegs(count + (lastIdx - curveEnd));
-                for (int i = curveEnd + 1; i <= lastIdx; i++)
-                {
-                    ema += (Pp(i) - ema) * InkPressureEma;
-                    float er = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, ema));
-                    float ex = Px(i), ey = Py(i);
-                    _inkSegs[count++] = new InkBezierSegment
-                    {
-                        Point1 = new Vortice.Direct2D1.InkPoint
-                        {
-                            X = lastX + (ex - lastX) / 3f, Y = lastY + (ey - lastY) / 3f,
-                            Radius = lastR + (er - lastR) / 3f,
-                        },
-                        Point2 = new Vortice.Direct2D1.InkPoint
-                        {
-                            X = lastX + (ex - lastX) * 2f / 3f, Y = lastY + (ey - lastY) * 2f / 3f,
-                            Radius = lastR + (er - lastR) * 2f / 3f,
-                        },
-                        Point3 = new Vortice.Direct2D1.InkPoint { X = ex, Y = ey, Radius = er },
-                    };
-                    lastX = ex; lastY = ey; lastR = er;
-                }
             }
         }
         else
@@ -2171,9 +2030,6 @@ internal sealed partial class OverlayWindow : IDisposable
         PrepareHud(app);
         LastHudMs = swHud.Elapsed.TotalMilliseconds;
         LastHudRedrawMs = _hudRedrewThisFrame ? LastHudMs : 0;
-        // 界面层缓存画进位图：同样必须在 BeginDraw 之前（D2D 的 Begin/EndDraw 不能嵌套，
-        // 在帧里再开一层每帧都失败——实测 300 帧全脏就是这么来的）。帧里只贴图。
-        UpdateUiCache(app);
 
         // 动态橡皮：指针停住之后把尺寸**缓释**回去（每帧推一次；续帧由引擎那边的 `_dirty` 保证）。
         app.TickEraserIdleDecay();
@@ -2339,15 +2195,11 @@ internal sealed partial class OverlayWindow : IDisposable
 
         if (app.ActiveStroke != null)
         {
-            // 活笔临时层（镜像尾 L1 ＋ 预测段 L2）可能伸出包围盒：脏区跟着外扩预测上限，
-            // **只影响重画范围**——存档的包围盒一字不动。
-            var ab = app.ActiveStroke.PaddedBounds;
-            if (app.ActiveStroke.RawWhileLive)
-                ab = ab.Inflate(StrokeMotion.TipPredictMaxPx);
-            r.Add(CanvasRectToWindow(ab));
+            // [删除 2026-10-05] 渲染尾（预测段）已随老预测系统移除，脏区不必再往外扩。
+            r.Add(CanvasRectToWindow(app.ActiveStroke.PaddedBounds));
         }
 
-        // 呼出盘（Ctrl+Alt+Shift+Q）：固定画在盘心，但轨迹线跟着指针、内容随扇区变——
+        // 呼出盘（Ctrl+Q）：固定画在盘心，但轨迹线跟着指针、内容随扇区变——
         // 脏区按"盘 ＋ 投影 ＋ 盘下那行字 ∪ 当前指针"给（盘一转、线一动，旧像素才擦得掉）。
         if (app.RadialPaletteActive)
         {
@@ -5021,7 +4873,7 @@ internal sealed partial class OverlayWindow : IDisposable
     }
 
     // =====================================================================
-    //  呼出盘（Ctrl+Alt+Shift+Q）：按住 → 划向扇区 → 松手
+    //  呼出盘（Ctrl+Q）：按住 → 划向扇区 → 松手
     // =====================================================================
     //
     // 和落点反馈一样画在**浮动层**、坐标和指针同源（画布坐标 + CanvasToWindow），

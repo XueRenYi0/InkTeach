@@ -5515,17 +5515,15 @@ internal sealed class Stroke
             if (!clipped && Erased.Count == 0 && StrokeMotion.Build(this))
             {
                 // mean2 的曲线层固定为**过点曲线**（拟合档已随停用清理，2026-10-05）。
-                // 点数口径用 `LiveDrawnCount`：活笔末端那 1~2 个**镜像点**（A2）也算在内——
-                // 它们只进渲染几何，不进 `cache.Out`，成稿因此逐点不变。
                 bool drew = AppendSmoothedModeledRun(sink);
                 if (!drew)
                 {
-                    int mn = StrokeMotion.LiveDrawnCount;
-                    var p0 = StrokeMotion.LiveDrawnAt(0);
+                    int mn = StrokeMotion.Count;
+                    var p0 = StrokeMotion.At(0);
                     sink.BeginFigure(new Vector2(p0.X, p0.Y), FigureBegin.Hollow);
                     for (int k = 1; k < mn; k++)
                     {
-                        var p = StrokeMotion.LiveDrawnAt(k);
+                        var p = StrokeMotion.At(k);
                         sink.AddLine(new Vector2(p.X, p.Y));
                     }
                 }
@@ -5560,9 +5558,6 @@ internal sealed class Stroke
 
     /// <summary>
     /// mean2：把建模输出喂进过点曲线，直接写成三次贝塞尔。
-    /// 活笔临时尾（镜像 L1 ＋ 预测 L2）**画成直线**：它们带着输入抖动，
-    /// 进曲线会让末段随邻居回摆（鼠标稀疏采样下几十像素来回翻）；直线只跟端点走，不回摆。
-    /// 镜像不进模型输出，开关它成稿逐点不变；落笔交接允许尾段 ≤1px 的曲线/直线差。
     /// 返回 false = 段数不够，调用方退回直线折线。
     /// </summary>
     private static bool AppendSmoothedModeledRun(ID2D1GeometrySink sink)
@@ -5581,12 +5576,6 @@ internal sealed class Stroke
         sink.BeginFigure(segs[0].P0, FigureBegin.Hollow);
         for (int k = 0; k < m; k++)
             sink.AddBezier(new BezierSegment(segs[k].C1, segs[k].C2, segs[k].P1));
-        int drawn = StrokeMotion.LiveDrawnCount;
-        for (int i = n; i < drawn; i++)
-        {
-            var p = StrokeMotion.LiveDrawnAt(i);
-            sink.AddLine(new Vector2(p.X, p.Y));
-        }
         return true;
     }
 

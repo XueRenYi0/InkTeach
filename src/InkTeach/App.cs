@@ -739,23 +739,6 @@ internal sealed partial class App : InkEngine.InkEngine
             ExitCode = MotionProbe.Run();
             _quit = true;
         }
-        else if (mode == "--alloctest")
-        {
-            // 写一笔的托管分配分段计量（诊断探针，只出数）。
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            ExitCode = AllocProbe.Run();
-            _quit = true;
-        }
-        else if (mode == "--e2ealloc")
-        {
-            // 端到端分配探针：真消息＋真帧画一笔，读引擎自己的仪表（[笔画] 行）。
-            // 加 `noframe` = 只抽消息不逐帧渲染（最后统一画一次），做消息/渲染二分；
-            // 加 `noui` = 空界面，对照界面渲染的分配。
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            E2eAllocProbeTest(!args.Contains("noframe"), args.Contains("noui"));
-        }
         else if (mode == "--smoothshow")
         {
             _autoExitAt = double.MaxValue;
@@ -1053,12 +1036,9 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --smoothtest        中心线曲线化自检（过点 Catmull-Rom：直角不变形 / 圆弧更圆滑 / 形状不跑）");
         Console.WriteLine("  --smoothshow [图]   出图：曲线化开/关对照（同一组样本各存一张 -off / -on，32 位 BMP）");
         Console.WriteLine("  --smoothflashtest [--off]  “画的时候闪不闪”专项检测（合成鼠标画过去，看已经画过的墨还动不动）");
-        Console.WriteLine("  --motion <名字>     catmull / mean2（**默认 mean2**=距离窗＋过点曲线＋收笔追赶＋活笔镜像＋预测）");
+        Console.WriteLine("  --motion <名字>     catmull / mean2（**默认 mean2**=距离窗＋过点曲线＋收笔追赶）");
         Console.WriteLine("  --motiontest        运动模型自检（baseline / catmull / mean2 同批语料出表）");
-        Console.WriteLine("  --alloctest         写一笔的托管分配分段计量（诊断探针，只出数、不断言）");
-        Console.WriteLine("  --e2ealloc          端到端分配探针：真消息＋真帧画一笔，读引擎仪表（画完撤销，不留墨）");
-        Console.WriteLine("  --mean2notip / --notipredict  关活笔镜像 / 关预测（对照）；--tipredictms N 预测毫秒（默认 12）");
-        Console.WriteLine("  --himetric / --nohimetric  D1 亚像素输入开/关（用 ptHimetricLocation 映射小数像素；默认开）");
+        Console.WriteLine("  --himetric          D1 亚像素输入（用 ptHimetricLocation 映射小数像素；默认关，做 A/B）");
         Console.WriteLine("  模型调参：--mean2win 画布像素 / --smoothcorner N 角点阈值");
         Console.WriteLine("  [已停用] 预测、拟合(--mean2fit)、模拟压力(--simpressure/--pfpressure)、笔锋");
         Console.WriteLine("           (--simtaper/--flicktip)、对照模式(raw/sliding/spring/oneeuro/mean/gauss)等：");
@@ -3532,45 +3512,6 @@ internal sealed partial class App : InkEngine.InkEngine
     /// 参照点：2 屏写满约 400 笔（本机 2880x1800、每行 12 笔、每屏 16 行）；
     /// 20 分钟 × 6 笔/秒 = 7200 笔，大约 18 屏。
     /// </summary>
-    /// <summary>
-    /// 端到端分配探针（`--e2ealloc`）：真消息＋真帧画一笔，读引擎自己的仪表（[笔画] 行）。
-    /// 画完一次撤销，不留墨。鼠标会被借用几秒（与其它合成输入自检相同）。
-    /// </summary>
-    private void E2eAllocProbeTest(bool renderPerMove, bool noUi)
-    {
-        Console.WriteLine();
-        Console.WriteLine($"=== 端到端分配探针：真消息＋{(renderPerMove ? "真帧" : "最后统一画一次")}画一笔（120 moves）{(noUi ? "【空界面】" : "")} ===");
-        if (noUi) SetUiFactory(() => new InkEngine.NullUi());
-        else SetUiFactory(() => new InkUi.FullUi());
-        Tool = Tool.Pen;
-        SettleFrames(300);
-        int before = Doc.Strokes.Count;
-
-        float x0 = _virtualX + _virtualW * 0.30f;
-        float y0 = _virtualY + _virtualH * 0.50f;
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
-
-        SendMouse((int)x0, (int)y0, 0); PumpMessages(); RenderAll();
-        SendMouse((int)x0, (int)y0, Native.MOUSEEVENTF_LEFTDOWN); PumpMessages(); RenderAll();
-        for (int i = 1; i <= 120; i++)
-        {
-            SendMouse((int)(x0 + i * 6), (int)y0, 0);
-            PumpMessages();
-            if (renderPerMove) RenderAll();
-        }
-        SendMouse((int)(x0 + 720), (int)y0, Native.MOUSEEVENTF_LEFTUP); PumpMessages(); RenderAll();
-        SettleFrames(200);
-
-        Console.WriteLine($"  探针复核：本笔分配 {StrokeAllocBytes / 1024.0:F1} KB"
-                          + $"（[笔画] 行印的同一仪表），画前 {before} 笔、画后 {Doc.Strokes.Count} 笔");
-        if (Doc.Strokes.Count > before) UndoFromUi();
-        SettleFrames(200);
-        Console.WriteLine($"  清理后 {Doc.Strokes.Count} 笔（应为 {before}）");
-        _quit = true;
-    }
-
     private void WriteTest(double minutes, double strokesPerSecond)
     {
         int total = (int)Math.Round(minutes * 60 * strokesPerSecond);

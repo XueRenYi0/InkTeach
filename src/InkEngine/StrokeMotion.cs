@@ -82,55 +82,13 @@ internal static class StrokeMotion
     /// <summary>M7 Gauss：收笔二次样条，对应 Xournal++ `stabilizerFinalizeStroke`（默认 true）。</summary>
     public static bool GaussFinalize = true;
     // [删除 2026-10-05] `Mean2CurveKind/Mean2CurveMode/CurveModeled`（曲线档选择）、
-    // `PredictTip`（预测笔尖叠加）：随停用/删除清理；mean2 的曲线层固定为过点曲线。
-    /// <summary>
-    /// mean2 **活笔笔尖镜像**（A2，**默认开**；`--mean2notip` 关）：活笔时把"收笔追赶会补的两步"
-    /// （落后 >1px 先补中点、再补真实末点）**只算进 <see cref="TipOverlay"/>**，交给渲染层接在
-    /// 模型输出后面；**不写进 `cache.Out`**。于是：
-    ///   · 活笔末端就是真实末点（距离窗 ~6px 的固定滞后归零）——跟手；
-    ///   · 落笔时收笔追赶补进模型的是同一段（同序同值）——稳定段逐点相同，
-    ///     尾段 6px 允许 ≤1px 的曲线/直线差（渲染层把镜像尾画成直线，见下）；
-    ///   · 开关它只改活笔几何，**成稿输出逐点不变**（`--motiontest` 有三条断言）。
-    /// 旧版（2026-10-04）是把原始点塞进 `Out` 再回退，默认关且笔尖带噪声；本版改为纯显示层镜像，
-    /// 规格与外部资料对照见《调研-湿墨与临时墨迹.md》第九节。
-    /// </summary>
-    public static bool Mean2TipOverlay = true;
-    /// <summary>活笔笔尖镜像要补的点（0~2 个：中点 + 真实末点）；仅渲染层消费，不进模型输出。
-    /// 渲染层画成直线（曲线只过稳定的模型输出，避免尾段随输入抖动回摆）。</summary>
-    public static readonly List<Vector3> TipOverlay = new();
-    /// <summary>
-    /// 活笔预测（L2，默认关；`--tipredict` 开）：从笔尖沿当前速度外推
-    /// <see cref="TipPredictMs"/> 毫秒，**只算进 <see cref="PredictOverlay"/>**，纯显示层。
-    /// 四道门（规格见《调研-湿墨与临时墨迹.md》第十一节）：
-    /// ①速度 ≥0.5px/ms；②最近两段转角 &lt;15°；③预测段 ≤48 画布像素（≈24 逻辑像素@200%）；
-    /// ④真笔 DWM 轨迹盖住笔尖时跳过（有压感实线笔 ＋ 轨迹开着——系统已画到笔尖，叠预测添乱）。
-    /// 落笔时丢弃（直接收；残留 ≤ 上限，人眼不可见），成稿逐点不变（`--motiontest` 有断言）。
-    /// </summary>
-    public static bool TipPredict = false;
-    /// <summary>预测外推时长（毫秒；`--tipredictms N` 可调；默认值按 penlive P95 定）。</summary>
-    public static float TipPredictMs = 12f;
-    /// <summary>预测段长度上限（画布像素；`--tipredictmax N` 可调）。</summary>
-    public static float TipPredictMaxPx = 48f;
-    /// <summary>预测要补的点（0~1 个）；仅渲染层消费，不进模型输出；排在镜像点之后。</summary>
-    public static readonly List<Vector3> PredictOverlay = new();
+    // `Mean2TipOverlay`（原始点笔尖叠加）、`PredictTip`（预测笔尖叠加）：随停用/删除清理。
+    // mean2 的曲线层固定为过点曲线；恢复见 `已停用-渲染实验.md` + `.revert/`。
 
     // ---- 静态复用输出缓冲 -------------------------------------------------
     private static Vector3[] _buffer = new Vector3[1024];
     public static int Count { get; private set; }
     public static Vector3 At(int i) => _buffer[i];
-
-    /// <summary>
-    /// **渲染层真正要画的点数**：模型输出 ＋（活笔时的）笔尖镜像尾 ＋ 预测段。
-    /// 两条渲染路（等宽描边 <c>Model.AppendSmoothedModeledRun</c>、压感 D2D 墨迹
-    /// <c>Overlay.BuildPressureSegments</c>）都用这一对取点——单源纪律：谁都不许自己漏掉镜像/预测。
-    /// </summary>
-    public static int LiveDrawnCount => Count + TipOverlay.Count + PredictOverlay.Count;
-
-    /// <summary>取"要画的第 <paramref name="i"/> 点"（镜像点、预测点依次排在模型输出之后）。</summary>
-    public static Vector3 LiveDrawnAt(int i)
-        => i < Count ? _buffer[i]
-            : i < Count + TipOverlay.Count ? TipOverlay[i - Count]
-            : PredictOverlay[i - Count - TipOverlay.Count];
 
     /// <summary>M7 的事件（对应 Xournal++ `VelocityEvent`：位置 + 压力 + 速度）。</summary>
     private struct GaussEvent
@@ -169,7 +127,7 @@ internal static class StrokeMotion
         public readonly List<float> Mean2Cum = new();
         public int Mean2Fed;
         public bool Mean2Ended;
-        /// <summary>收笔追赶前的输出点数（记录用；活笔镜像只进 `TipOverlay`，不回写 `Out`）。</summary>
+        /// <summary>没有叠加笔尖之前的输出点数（每帧重算笔尖前先回退到这里，避免重复叠加）。</summary>
         public int Mean2BaseCount;
 
         // M7 Xournal++ VelocityGaussian（新→旧；被权重判据截掉的永久丢弃）
@@ -191,8 +149,6 @@ internal static class StrokeMotion
     public static bool Build(Stroke s, StrokeMotionMode? forceMode = null)
     {
         Count = 0;
-        TipOverlay.Clear();
-        PredictOverlay.Clear();
         var mode = forceMode ?? Mode;
         if (mode is StrokeMotionMode.Raw or StrokeMotionMode.Catmull) return false;
         if (s == null || s.Kind != StrokeKind.Freehand || s.Points.Count < 2) return false;
@@ -431,102 +387,20 @@ internal static class StrokeMotion
         if (pts.Count > 0) cache.LastFedTime = cache.Times[pts.Count - 1];
         cache.Mean2BaseCount = cache.Out.Count;
 
-        // **活笔笔尖镜像（A2，显示层）**：把"收笔追赶会补的那两步"按同一规则算出来，只装进
-        // `TipOverlay` 交给渲染层；**不碰 `cache.Out`**，所以成稿输出逐点不变。
-        if (Mean2TipOverlay && s.RawWhileLive && cache.Out.Count > 0 && pts.Count > 0)
-            AppendCatchUpPoints(cache.Out[^1], LastRaw(s), TipOverlay);
-
-        // **活笔预测（L2，显示层）**：四道门全过才外推一个点进 `PredictOverlay`；
-        // **不碰 `cache.Out`**，落笔即弃，成稿逐点不变。
-        if (TipPredict && s.RawWhileLive && pts.Count >= 2)
-            AppendPredictPoint(s, cache);
-
         // 收笔追赶：抬笔那一下把滞后补回真实末点（半程 + 末点两步，避免硬折）。
         if (!s.RawWhileLive && !cache.Mean2Ended && cache.Out.Count > 0)
         {
-            AppendCatchUpPoints(cache.Out[^1], LastRaw(s), cache.Out);
+            var lastRaw = new Vector3(pts[^1].X, pts[^1].Y, s.HasPressure ? pts[^1].P : 0.5f);
+            var lastOut = cache.Out[^1];
+            if (Vector2.Distance(new Vector2(lastOut.X, lastOut.Y),
+                                 new Vector2(lastRaw.X, lastRaw.Y)) > 1f)
+                cache.Out.Add((lastOut + lastRaw) * 0.5f);
+            cache.Out.Add(lastRaw);
             cache.Mean2Ended = true;
         }
 
+        // [删除 2026-10-05] 活笔笔尖叠加（`--predicttip` / `--mean2tip`）：随停用/删除清理。
         return cache.Out.Count >= 2;
-    }
-
-    /// <summary>真实末点（压力口径与收笔追赶/镜像一致）。</summary>
-    private static Vector3 LastRaw(Stroke s)
-    {
-        var p = s.Points[^1];
-        return new Vector3(p.X, p.Y, s.HasPressure ? p.P : 0.5f);
-    }
-
-    /// <summary>
-    /// 收笔追赶与**活笔笔尖镜像**共用的两步（单源纪律：规则只在这里）：
-    /// 落后 >1px 先补中点（防硬折），再补真实末点。镜像那次写进 <see cref="TipOverlay"/>，
-    /// 收笔那次写进 `cache.Out`——两边同序同值，所以落笔前后逐点相同。
-    /// </summary>
-    private static void AppendCatchUpPoints(Vector3 lastOut, Vector3 lastRaw, List<Vector3> into)
-    {
-        if (Vector2.Distance(new Vector2(lastOut.X, lastOut.Y),
-                             new Vector2(lastRaw.X, lastRaw.Y)) > 1f)
-            into.Add((lastOut + lastRaw) * 0.5f);
-        into.Add(lastRaw);
-    }
-
-    /// <summary>
-    /// 活笔预测 L2（显示层，线性外推 + 四道门；单源纪律：门限只在这里）：
-    /// 用最后两颗原始点的速度外推 <see cref="TipPredictMs"/> 毫秒。
-    /// 压力沿用末点（预测是"还没发生的墨"，不自己变粗）。
-    /// </summary>
-    private static void AppendPredictPoint(Stroke s, MotionCache cache)
-    {
-        // 门4：真笔 DWM 轨迹盖住笔尖时跳过（系统已画到笔尖；虚线笔没有轨迹，照常预测）。
-        if (s.HasPressure && s.Dash == StrokeDash.Solid && OverlayWindow.InkTrailEnabled)
-            return;
-        var pts = s.Points;
-        int m = pts.Count;
-        var p1 = pts[m - 1];
-        var p0 = pts[m - 2];
-        // 合成时间不预测：速度是按弧长编的，用它外推等于猜（见 `EnsureTimes`）。
-        if (cache.UseSyntheticTimes) return;
-        // 速度取"最近约 8ms（最多 4 段）"的窗口平均：鼠标模式时标粗糙（毫秒整数＋合并点，
-        // dt 经常 0~1ms），单段速度会乱跳 → 预测段顶满上限"突突突"往外跳（用户 2026-10-04 实测）。
-        double t1 = cache.Times[m - 1];
-        int j = m - 2;
-        while (j > 0 && (t1 - cache.Times[j]) * 1000.0 < 8.0 && (m - 1 - j) < 4) j--;
-        // ⚠ `cache.Times` 单位是**秒**（`EnsureTimes` 里 `T * 0.001`）——
-        // 这里统一换算成毫秒再算速度，门限（px/ms）与外推（ms）才对得上。
-        double dtMs = (t1 - cache.Times[j]) * 1000.0;
-        if (!(dtMs >= 1.0)) return;   // 窗口不足 1ms：时标太粗，宁可不预测
-        float vx = (p1.X - pts[j].X) / (float)dtMs;
-        float vy = (p1.Y - pts[j].Y) / (float)dtMs;
-        float speed = MathF.Sqrt(vx * vx + vy * vy);
-        // 门1：太慢不预测（慢写/细笔画零影响）。
-        const float MinSpeedPxPerMs = 0.5f;
-        if (speed < MinSpeedPxPerMs) return;
-        // 门2：最近两段转弯太急不预测（防拐弯甩出）；只有两颗点时无从判断，放行。
-        if (pts.Count >= 3)
-        {
-            var q = pts[^3];
-            float ax = p0.X - q.X, ay = p0.Y - q.Y;
-            float bx = p1.X - p0.X, by = p1.Y - p0.Y;
-            float la = MathF.Sqrt(ax * ax + ay * ay);
-            float lb = MathF.Sqrt(bx * bx + by * by);
-            if (la > 1e-6f && lb > 1e-6f)
-            {
-                float cos = Math.Clamp((ax * bx + ay * by) / (la * lb), -1f, 1f);
-                if (MathF.Acos(cos) > 15f * MathF.PI / 180f) return;
-            }
-        }
-        float px = p1.X + vx * TipPredictMs;
-        float py = p1.Y + vy * TipPredictMs;
-        // 门3：预测段钳在上限内（错也错得小）。
-        float dx = px - p1.X, dy = py - p1.Y;
-        float d = MathF.Sqrt(dx * dx + dy * dy);
-        if (d > TipPredictMaxPx && d > 1e-6f)
-        {
-            px = p1.X + dx / d * TipPredictMaxPx;
-            py = p1.Y + dy / d * TipPredictMaxPx;
-        }
-        PredictOverlay.Add(new Vector3(px, py, s.HasPressure ? p1.P : 0.5f));
     }
 
     // ---- M7：Xournal++ VelocityGaussian（速度高斯权重平均 + 收笔二次样条）----
@@ -802,18 +676,10 @@ internal static class StrokeMotion
                 //     Mean2CurveMode = Mean2CurveKind.Smooth; break;
                 // [停用] case "--mean2fittol" when float.TryParse(args[i + 1], out var tol) && tol > 0f:
                 //     WpfInkFit.TolerancePx = Math.Clamp(tol, 0.05f, 5f); break;
-                case "--mean2tip":
-                    Mean2TipOverlay = true; break;
-                case "--mean2notip":
-                    Mean2TipOverlay = false; break;
-                case "--tipredict":
-                    TipPredict = true; break;
-                case "--notipredict":
-                    TipPredict = false; break;
-                case "--tipredictms" when float.TryParse(args[i + 1], out var pm) && pm >= 0f:
-                    TipPredictMs = Math.Clamp(pm, 0f, 50f); break;
-                case "--tipredictmax" when float.TryParse(args[i + 1], out var px) && px > 0f:
-                    TipPredictMaxPx = Math.Clamp(px, 1f, 200f); break;
+                // [停用] case "--mean2tip":
+                //     Mean2TipOverlay = true; break;
+                // [停用] case "--mean2notip":
+                //     Mean2TipOverlay = false; break;
                 // [停用] case "--oneeuro" when TryParsePair(args[i + 1], out var fc, out var beta):
                 //     OneEuroMinCutoff = fc; OneEuroBeta = beta; break;
                 // [停用] case "--oneeurodc" when double.TryParse(args[i + 1], out var dc) && dc > 0:
