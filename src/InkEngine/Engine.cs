@@ -1672,9 +1672,13 @@ public partial class InkEngine
         // 不走这条路）。没装 Office / 没开 PPT 时它什么都不做。
         StartPptLink();
 
+        // --hud：显式打开调试性能面板（默认关，交互里已没有开它的快捷键）。
+        // 测"写一笔的内存/延时"就靠它：面板上并列 提交 / 工作集 / 显存 / 笔画数。
+        // 放成**显式开关**而不是改默认：普通用户不该看到这个黑框。
+        if (args.Contains("--hud")) ShowHud = true;
         // --nohud：关掉调试性能面板。它是给开发看的，每帧要花约 1.9 ms
         // （文字排版 + 进程计数），测底层性能时必须排除掉，否则量到的是
-        // 测量工具本身而不是渲染引擎。
+        // 测量工具本身而不是渲染引擎。**两条同时给时以 --nohud 为准。**
         if (args.Contains("--nohud")) ShowHud = false;
         // 触点诊断（8.3.3）：`--touchhud` 直接开着启动。
         if (args.Contains("--touchhud")) TouchHud = true;

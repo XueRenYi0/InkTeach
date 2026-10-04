@@ -17795,6 +17795,16 @@ internal sealed partial class App : InkEngine.InkEngine
         Check("框住横线 → 只有它", Doc.Selected.Count == 1 && Doc.Selected[0] == a,
               $"选中 {Doc.Selected.Count} 条");
 
+        // ⑤b 斜线外接矩形的空角：框只和包围盒相交、和墨没有交集 → 不许选中
+        //     （2026-10-04 用户实测："框明明和斜线没交集，它却被选中了"）
+        Doc.Selected.Clear();
+        var bboxCorner = RectF.Empty;
+        bboxCorner.Add(x0 + 560f, y0 + 10f);
+        bboxCorner.Add(x0 + 600f, y0 + 50f);
+        Doc.ApplyMarquee(bboxCorner);
+        Check("斜线包围盒的空角 → 不选", !Doc.Selected.Contains(c),
+              $"选中 {Doc.Selected.Count} 条");
+
         // ⑥ 旋转过的对象：框住它的包围盒就该选中
         Doc.Selected.Clear();
         Doc.ApplyMarquee(rot.PaddedBounds.Inflate(6f));

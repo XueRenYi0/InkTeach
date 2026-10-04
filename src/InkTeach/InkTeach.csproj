@@ -26,7 +26,7 @@
 
     <ApplicationIcon>assets\InkTeach.ico</ApplicationIcon>
 
-    <Version>8.8.0</Version>
+    <Version>8.8.0.1</Version>
     <!--
       鈿?**涓嶈鍐嶅崟鐙拤 `AssemblyVersion` / `FileVersion`**锛?026-10-02 韪╄繃锛夛細
       杩欎袱涓竴鏃﹀拰涓婇潰鐨?`<Version>` 鍒嗗锛宍UpdateFeed.CurrentVersion`锛堣绋嬪簭闆嗙増鏈級

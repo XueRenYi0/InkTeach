@@ -7785,21 +7785,134 @@ internal sealed class InkDocument
     /// <summary>
     /// 框选：**框碰到墨就选中那一条**（不是"整条都在框里才选中"）。
     ///
-    /// 判据用 <see cref="Stroke.PaddedBounds"/>（中心线外扩到笔身）：笔身擦到框
-    /// 就算选中。改成"相交"是被用户实测逼出来的——按"整条都在框里"，屏幕上
-    /// 永远选不全：笔迹只要有一头在屏幕外（框拖不到那儿），或者粗笔的笔身压出
-    /// 框外一点点，那条就永远选不上，用户看到的就是"我明明全框住了，却没全选中"。
+    /// 判据分两步：
+    ///   ① 粗筛：<see cref="Stroke.PaddedBounds"/> 和框不相交的直接排除（便宜）；
+    ///   ② 精确：<see cref="InkTouchesRect"/>——真的拿墨（中心线/轮廓按半个笔宽外扩、
+    ///      擦掉的段不算）去和框判交。
     ///
-    /// 代价是：框边碰到一条很长的笔迹会把整条选进来。这和 OneNote 的框选一致，
-    /// 也是老师更需要的那个方向（选多了可以点空白重来，选少了会以为软件坏了）。
-    /// 判据是"穿过框"，和空间索引给候选用的是同一个框，所以不会漏。
+    /// **为什么不能只看 PaddedBounds**（2026-10-04 用户实测报的 bug）：PaddedBounds 是
+    /// 轴对齐**外接矩形**，斜线的外接矩形有两个巨大的空角——框放在空角里、离斜线还远，
+    /// 旧判据照样"相交"、整条被选进来。图形（圆的外接矩形中心是空的）和旋转过的
+    /// 图像同理。所以"碰到就选"必须让墨自己去碰，不能拿外接矩形代替。
+    ///
+    /// 保留"碰到就选"而不是"整条都在框里"：按后者屏幕上永远选不全——笔迹只要有一头
+    /// 在屏幕外（框拖不到那儿），或者粗笔的笔身压出框外一点点，那条就永远选不上，
+    /// 用户看到的就是"我明明全框住了，却没全选中"。这和 OneNote 的框选一致，也是老师
+    /// 更需要的那个方向（选多了可以点空白重来，选少了会以为软件坏了）。
     /// </summary>
     public void ApplyMarquee(RectF r)
     {
         Selected.Clear();
         _grid.Query(r, _queryScratch);
         foreach (var s in _queryScratch)
-            if (s.PaddedBounds.Intersects(r)) Selected.Add(s);
+        {
+            if (!s.PaddedBounds.Intersects(r)) continue;   // ① 粗筛
+            if (!InkTouchesRect(s, r)) continue;           // ② 精确判交
+            Selected.Add(s);
+        }
+    }
+
+    /// <summary>
+    /// 框选的精确判据：**墨真的和框有交集**（见 <see cref="ApplyMarquee"/>）。
+    ///
+    /// 三种对象各走各的真实形状：
+    ///   · 自由笔迹——中心线逐段判交，外扩半个笔宽；擦掉的参数区间不算墨；
+    ///   · 图形——和像素橡皮同一条 <see cref="ShapeTouchesRect"/>（轮廓折线 ＋ 辅助线，
+    ///     网格有意挡在外面）；
+    ///   · 图像——"填满的一块"：四角变换到画布，和框做 OBB 相交（SAT）。
+    ///     只按变换后的外接矩形判，旋转过的图像同样会在空角里被误选。
+    /// </summary>
+    private static bool InkTouchesRect(Stroke s, in RectF rect)
+    {
+        if (s.IsImage) return ImageTouchesRect(s, rect);
+        if (s.Kind != StrokeKind.Freehand) return ShapeTouchesRect(s, rect);
+        return FreehandTouchesRect(s, rect);
+    }
+
+    /// <summary>自由笔迹与框判交：中心线逐段 ＋ 半个笔宽（压感按最粗处），跳过擦掉的区间。</summary>
+    private static bool FreehandTouchesRect(Stroke s, in RectF rect)
+    {
+        int n = s.Points.Count;
+        if (n == 0) return false;
+
+        // 笔身外扩：和 PaddedBounds / HitTestExact 同一口径（最粗处 ＋ 1 像素余量）。
+        var r = rect.Inflate(MathF.Max(1f, s.MaxHalfWidth) + 1f);
+        bool ident = s.Transform.IsIdentity;
+
+        Vector2 P(float t)
+        {
+            var v = s.PointAtParam(t);
+            return ident ? v : Vector2.Transform(v, s.Transform);
+        }
+
+        if (n == 1) return PointInRect(P(0), r);
+
+        // 没有擦除（绝大多数）走直路，不做任何中间表。
+        if (s.Erased.Count == 0)
+        {
+            for (int i = 1; i < n; i++)
+                if (SegmentHitsRect(P(i - 1), P(i), r)) return true;
+            return false;
+        }
+
+        // 擦掉的段不算墨（和点选 HitObjectAt / 套索同一口径）：按剩下的参数区间分段判交。
+        foreach (var (a, b) in s.RemainingRuns())
+        {
+            float lo = MathF.Max(0f, a), hi = MathF.Min(n - 1f, b);
+            if (hi < lo) continue;
+            if (hi - lo < 1e-4f) { if (PointInRect(P(lo), r)) return true; continue; }
+
+            int i0 = Math.Max(0, (int)MathF.Floor(lo));
+            int i1 = Math.Min(n - 1, (int)MathF.Ceiling(hi));
+            for (int i = i0; i < i1; i++)
+            {
+                float sa = MathF.Max(lo, i), sb = MathF.Min(hi, i + 1);
+                if (sb - sa < 1e-5f) continue;
+                if (SegmentHitsRect(P(sa), P(sb), r)) return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>图像（"填满的一块"）与框判交：四角变换到画布后做 OBB 相交。</summary>
+    private static bool ImageTouchesRect(Stroke s, in RectF rect)
+    {
+        var b = s.Bounds;
+        if (b.IsEmpty) return false;
+        return ObbHitsRect(
+            Vector2.Transform(new Vector2(b.MinX, b.MinY), s.Transform),
+            Vector2.Transform(new Vector2(b.MaxX, b.MinY), s.Transform),
+            Vector2.Transform(new Vector2(b.MaxX, b.MaxY), s.Transform),
+            Vector2.Transform(new Vector2(b.MinX, b.MaxY), s.Transform),
+            rect);
+    }
+
+    /// <summary>
+    /// 凸四边形（顶点按序）和轴对齐矩形相交——分离轴定理（SAT）。
+    /// 轴取"矩形的两条轴 ＋ 四边形的两条相邻边法线"；四个轴都分离不了才算相交。
+    /// </summary>
+    private static bool ObbHitsRect(Vector2 q0, Vector2 q1, Vector2 q2, Vector2 q3, in RectF r)
+    {
+        float cx = (r.MinX + r.MaxX) * 0.5f, cy = (r.MinY + r.MaxY) * 0.5f;
+        float hx = (r.MaxX - r.MinX) * 0.5f, hy = (r.MaxY - r.MinY) * 0.5f;
+
+        bool Separated(float ax, float ay)
+        {
+            if (ax * ax + ay * ay < 1e-12f) return false;   // 退化边不构成分离轴
+            float p0 = ax * q0.X + ay * q0.Y;
+            float p1 = ax * q1.X + ay * q1.Y;
+            float p2 = ax * q2.X + ay * q2.Y;
+            float p3 = ax * q3.X + ay * q3.Y;
+            float lo = MathF.Min(MathF.Min(p0, p1), MathF.Min(p2, p3));
+            float hi = MathF.Max(MathF.Max(p0, p1), MathF.Max(p2, p3));
+            float c = ax * cx + ay * cy;
+            float ext = MathF.Abs(ax) * hx + MathF.Abs(ay) * hy;
+            return c + ext < lo - 1e-3f || c - ext > hi + 1e-3f;
+        }
+
+        return !Separated(1f, 0f) && !Separated(0f, 1f)
+            && !Separated(-(q1.Y - q0.Y), q1.X - q0.X)
+            && !Separated(-(q2.Y - q1.Y), q2.X - q1.X);
     }
 
     /// <summary>WPF 的 `_percentIntersectForInk`：代表点落进圈里的比例（百分数）。</summary>
