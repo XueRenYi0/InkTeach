@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InkTeach 课堂批注 · 在 PPT / WPS 上直接写板书的 Windows 覆盖层</title>
+<meta name="description" content="InkTeach（ink teach）是一款 Windows 课堂批注软件：透明覆盖层，直接在任何软件上写板书；色带 6 像素↔34 像素展开、贴边隐藏、全局呼出盘、停顿变图形、22 种图形、PPT 逐页隔离、深色主题。底层走 D3D11/Direct2D 增量渲染（分块缓存 + 脏矩形 + 视口预取），低延迟手写。开源 GPL-3.0，安装不需要管理员权限，不需要安装 .NET。">
+<meta name="keywords" content="InkTeach,ink teach,课堂批注,批注软件,板书软件,Windows批注,PPT批注,WPS批注,白板,手写批注,教学软件,电子白板,呼出盘,色带,Direct2D,分块缓存,脏矩形,增量渲染,低延迟手写">
+<meta name="author" content="XueRenYi0">
+<link rel="canonical" href="https://xuerenyi0.github.io/InkTeach/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="InkTeach 课堂批注 · 在 PPT / WPS 上直接写板书">
+<meta property="og:description" content="透明覆盖层 + 色带式设置条 + 贴边隐藏 + 全局呼出盘 + 停顿变图形 + 22 种图形 + PPT 逐页隔离 + 深色主题。开源免费，Windows 10/11，无需安装 .NET。">
+<meta property="og:image" content="https://xuerenyi0.github.io/InkTeach/img/social-preview.png">
+<link rel="icon" type="image/png" href="img/icon.png">
+<link rel="apple-touch-icon" href="img/icon.png">
+<link rel="stylesheet" href="style.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "InkTeach",
+  "alternateName": ["ink teach", "InkTeach 课堂批注"],
+  "operatingSystem": "Windows 10 / 11 x64",
+  "applicationCategory": "EducationalApplication",
+  "description": "Windows 课堂批注覆盖层：在 PPT / WPS / 任意软件上直接写板书。色带式设置条、贴边隐藏、全局呼出盘、停顿变图形、22 种图形、PPT 逐页隔离、深色主题。",
+  "image": "https://xuerenyi0.github.io/InkTeach/img/icon.png",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
+  "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+  "downloadUrl": "https://gitcode.com/xzx1xzzx/InkTeach/releases/download/latest/InkTeach-Setup.exe",
+  "softwareVersion": "8.8.0.4",
+  "author": { "@type": "Person", "name": "XueRenYi0" },
+  "codeRepository": "https://github.com/XueRenYi0/InkTeach"
+}
+</script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="img/icon.png" alt="" width="24" height="24">InkTeach</a>
+    <nav>
+      <a href="#features">特色</a>
+      <a href="#dark">深色</a>
+      <a href="#shots">界面</a>
+      <a href="#why">技术选择</a>
+      <a href="#tech">底层细节</a>
+      <a href="#perf">性能</a>
+      <a href="#install">下载</a>
+      <a href="https://github.com/XueRenYi0/InkTeach" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <img class="hero-icon" src="img/icon.png" alt="InkTeach 图标" width="84" height="84">
+    <h1>在 PPT 上，直接写板书</h1>
+    <p class="lead">
+      InkTeach 是一层<b>透明批注覆盖层</b>：浮在 PPT / WPS / 任意软件之上。
+      板书写在自己的图层里，底下的 PPT 一点没动；点一下就把鼠标还给 PPT，
+      想写字时再用<b>全局键</b>把人拉回来。
+      数据全在本机，<b>安装不需要管理员权限</b>。
+    </p>
+    <p class="btns">
+      <a class="btn primary" href="https://gitcode.com/xzx1xzzx/InkTeach/releases/download/latest/InkTeach-Setup.exe" target="_blank" rel="noopener">下载安装包（国内直连）</a>
+      <a class="btn" href="https://github.com/XueRenYi0/InkTeach/releases/latest" target="_blank" rel="noopener">GitHub Releases</a>
+      <a class="btn ghost" href="#install">安装说明</a>
+    </p>
+    <p class="note">Windows 10 / 11 · 64 位 · 免装 .NET · 开源 GPL-3.0（可商业授权）</p>
+    <div class="hero-shot"><img src="img/demo.gif" alt="演示：手写一个圆 → 停顿变图形 → 选中拖动 → 截图取景"></div>
+    <p class="caption">手写一个歪圆 → 停住 0.4 秒自动变规整图形 → 选中拖动 → 截图取景</p>
+  </div>
+</section>
+
+<section id="features" class="section alt">
+  <div class="wrap">
+    <h2>特色：这几个地方，市面上的批注软件基本没做</h2>
+    <p class="lead small">不堆功能清单，只讲我们认为真正解决了课堂里某个具体麻烦的地方。</p>
+
+    <div class="feat">
+      <article>
+        <h3><span class="num">01</span>色带：平时 6 像素，用时才长成设置条</h3>
+        <p>工具选中后，头顶那条设置条<b>不是一直摊着的</b>，而是压成 <b>6 像素</b>一条色线；
+        鼠标碰到它，<b>120ms</b> 张开到 <b>34 像素</b>的完整设置条，移开等 <b>450ms</b> 才收——
+        "快出慢隐"，和 Windows 任务栏自动隐藏同一套手感。</p>
+        <p><b>压成线以后仍然可以直接点</b>：12 个色片在 6 像素里照样点得到，不用"先展开再选"。
+        挑颜色是最高频动作，逼人走两步就等于不好用。</p>
+        <div class="shot"><img src="img/bar.png" alt="主工具带与色带式设置条">
+          <div class="cap">下：胶囊工具带 ｜ 上：色带展开后的设置条</div></div>
+        <div class="shot"><img src="img/rail-collapsed.png" alt="色带收起：平时只是工具带上沿的一条 6 像素色线">
+          <div class="cap">收起：平时只是一条 6 像素色线，12 个色片照样点得到</div></div>
+      </article>
+
+      <article>
+        <h3><span class="num">02</span>贴边隐藏：藏起来只剩一条 48 像素把手</h3>
+        <p>把工具带拖到屏幕底边，它缩到<b>只剩一条把手</b>（长 48、厚 8，颜色就是当前笔色）。
+        48 不是随手定的：项目另一条规矩写着"48 是点得到的最小东西，触摸屏上也够"——
+        而<b>藏起来的时候恰恰是最需要一次点中的时候</b>，教室里没键盘，工具找不到是真问题。</p>
+        <p>贴边判定用"离屏幕底 ≤10 像素"，<b>不是</b>离任务栏上沿——所以默认位置不会误触发，
+        要收起来必须<b>明确把面板拖到最底下</b>。</p>
+        <div class="shot"><img src="img/dock-hide.png" alt="贴边隐藏：露着是圆钮，藏到底只剩一条 48×8 的把手"
+          style="width:auto;max-width:100%;display:block;margin:0 auto">
+          <div class="cap">露着是一个圆钮（左）→ 拖到屏幕底边隐藏后，只剩一条 48×8 的把手（右，颜色是当前笔色）</div></div>
+      </article>
+
+      <article>
+        <h3><span class="num">03</span>呼出盘：按住一个全局键，划向扇区，松手切</h3>
+        <p><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Q</kbd>（<b>全局键</b>，任何程序在前台都生效）：
+        按住不放，光标处浮出八扇面，划向要的工具或颜色，<b>松手执行</b>。
+        八扇区 ＝ 笔 / 黑 / 红 / 蓝 / 橡皮 / 框选 / 荧光笔 / 激光。</p>
+        <p>熟手不用等盘：出盘有 120ms 延迟，直接划走盘根本不闪。
+        <b>开着穿透也能按</b>——它是"把笔从下层抢回来"的入口：选一个扇区就退出穿透并切到它；
+        想继续用下面的程序就把鼠标松在盘心（只是取消，穿透不动）。<br>
+        它<b>不新增任何命令</b>：扇区里的动作和工具键走完全同一条路。</p>
+        <div class="shot"><img src="img/radial.png" alt="呼出盘：按住全局键，光标处浮出八扇面">
+          <div class="cap">呼出盘：八扇区 ＝ 笔 / 黑 / 红 / 蓝 / 橡皮 / 框选 / 荧光笔 / 激光</div></div>
+      </article>
+
+      <article>
+        <h3><span class="num">04</span>穿透 + 全局键：能"过手"，也能"抢回来"</h3>
+        <p>点一下「鼠标」那格（或全局 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd>）
+        鼠标就还给下层程序，可以正常去点 PPT。这时候想写字，<b>不用去找工具带</b>——
+        全局键直接把人拉回来：呼出盘换工具、穿透开关退出、退出程序同理。</p>
+        <p>三条全局键统一是 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+… <b>三层修饰</b>，
+        就是为了不和别的软件撞车。</p>
+      </article>
+
+      <article>
+        <h3><span class="num">05</span>停顿成图形：手写一笔，停住 0.4 秒</h3>
+        <p>手写一个歪圆，笔尖停住约 400ms，它变成一个<b>规整的圆</b>；按住还能拖到位再松手。
+        直线、矩形、三角形、平行四边形同理。吸附和"用图形工具画直线"是同一套
+        （特殊角软吸附 ±1°、<kbd>Shift</kbd> 15° 硬网格、<kbd>Alt</kbd> 自由）。</p>
+      </article>
+
+      <article>
+        <h3><span class="num">06</span>22 种图形与学科工具</h3>
+        <p>直线 / 箭头 / 矩形 / 椭圆 / 圆 / 三角形 / 平行四边形 / 坐标系；
+        抛物线 / 双曲线 / 正弦 / 余弦 / 波浪线 / 正切；
+        圆柱 / 圆锥 / 圆台 / 球 / 棱柱 / 棱锥 / 棱台。</p>
+        <p><b>每个定义元素都是可以直接拖的手柄</b>（端点、半轴、顶点、焦点、渐近线…），
+        拖的时候有特殊形状吸附（正方形、正圆、姿态角），并实时显示角度 / 半径 / 长度读数。</p>
+        <div class="shot"><img src="img/shapes.png" alt="图形设置条：22 段">
+          <div class="cap">22 段图形，含圆锥曲线与立体图形</div></div>
+        <div class="shot"><img src="img/shape-icons.png" alt="图形库总览：22 类图形与每一类的变体">
+          <div class="cap">图形库总览：22 类，每一类都有多档变体（实线 / 虚线 / 点线、带网格 / 不带…）</div></div>
+        <div class="shot"><img src="img/shapes-curves.png" alt="学科图形：抛物线、双曲线、正余弦、正切与立体">
+          <div class="cap">学科图形：抛物线四种开口、双曲线、正弦 / 余弦 / 波浪线、正切，以及圆柱 / 圆锥 / 圆台 / 球</div></div>
+      </article>
+
+      <article>
+        <h3><span class="num">07</span>PPT 逐页隔离：翻页只看这一页，每页都记得</h3>
+        <p>进放映自动进入、退出自动回桌面页。<b>每一页的墨迹完全隔离</b>，页内还能滚动、
+        每页记住滚到哪；自动存 / 自动读，支持<b>回放本页墨迹</b>
+        （把这一页的书写过程重放一遍）。</p>
+        <p>连不上 PowerPoint / WPS 时<b>零症状</b>——不联动而已，不报错、不卡、不弹窗。</p>
+      </article>
+
+      <article>
+        <h3><span class="num">08</span>选中 / 截图 / 剪贴板对象</h3>
+        <p>点选 / 框选 / 套索，8 手柄 + 旋转（90° 软吸附）；小对象自动改用"最小操作框"，
+        手柄不压住内容。<b>拖动旋转期间模型一个字不改</b>，预览画在浮动层，松手才提交，一步撤销。</p>
+        <p>截图：冻结整屏 → 拖框 → 松开调整 → <b>原位落</b> + 自动选中 + 进剪贴板。
+        <code>Ctrl</code>+<code>C</code> 在<b>同一次剪贴板会话</b>里同时放对象字节和一张透明 PNG：
+        粘回批注仍是可编辑对象，粘到 Word / PPT / 微信是一张图。</p>
+        <div class="shot"><img src="img/capture.png" alt="截图取景与调整">
+          <div class="cap">截图取景：拖框、8 手柄调整</div></div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="dark" class="section">
+  <div class="wrap">
+    <h2>深色主题</h2>
+    <p class="lead small">不是"把颜色反过来"，是两套<b>分别调过</b>的主题。</p>
+    <div class="darkband">
+      <h3>深浅两套是分别调的</h3>
+      <p class="note">浅色靠"底沿一道暗边"读出厚度，深色靠"顶沿一道高光"读接光——
+      把深色那套直接反相，层次感会整个塌掉。</p>
+      <div class="pair three">
+        <div>
+          <img src="img/more-dark.png" alt="深色主题的「更多」面板">
+          <div class="cap">「更多」面板（深色）</div>
+        </div>
+        <div>
+          <img src="img/timer-dark.png" alt="深色主题的计时窗">
+          <div class="cap">计时窗（深色）· 进度环跟着当前笔色走</div>
+        </div>
+        <div>
+          <img src="img/radial-dark.png" alt="深色主题的呼出盘">
+          <div class="cap">呼出盘（深色）· 按住全局键即出，划向扇区松手切换</div>
+        </div>
+      </div>
+    </div>
+    <div class="feat">
+      <article class="wide">
+        <div class="shot dark"><img src="img/rail-dark.gif" alt="动图：深色主题下，色带收起是一条线，鼠标碰到张开成设置条">
+          <div class="cap">动图：深色主题下，色带收起 ↔ 展开（鼠标碰到才张开）</div></div>
+      </article>
+      <article class="wide">
+        <div class="shot dark"><img src="img/roll-dark.png" alt="深色主题的随机点名窗">
+          <div class="cap">随机点名（深色）：抽中的人是一枚枚名牌，不是一列纯文字</div></div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="shots" class="section alt">
+  <div class="wrap">
+    <h2>浅色界面</h2>
+    <div class="shots two">
+      <figure><img src="img/bar.png" alt="主工具带与当前工具的设置条"><figcaption>工具带 ＋ 设置条（笔：色板 / 线型 / 粗细）</figcaption></figure>
+      <figure><img src="img/selection.png" alt="选中框、操作条与颜色面板"><figcaption>选中框、十格操作条、颜色面板</figcaption></figure>
+      <figure><img src="img/timer.png" alt="课堂计时器"><figcaption>课堂计时器：环形进度、主按钮带文字</figcaption></figure>
+      <figure><img src="img/roll.png" alt="随机点名"><figcaption>随机点名：抽过不重复</figcaption></figure>
+    </div>
+    <p class="note" style="margin-top:16px">
+      课堂窗和工具带是<b>同一套视觉语言</b>（分段控件、方块幽灵钮、带文字的主按钮），
+      深浅两套主题都有。计时器到点时<b>数字和进度环一起变红</b>，投影上远处一眼就看见。
+    </p>
+  </div>
+</section>
+
+<section id="why" class="section">
+  <div class="wrap">
+    <h2>为什么是 Direct2D ＋ .NET 8</h2>
+    <p class="lead small">常被问："批注软件用 D2D，是不是大炮打蚊子？"
+      不是——不是为了画动画选它，而是有三件事<b>只有这一条路能做</b>，而且都不是渲染特效。</p>
+
+    <div class="why">
+      <h4>为什么是 D2D / DirectComposition</h4>
+      <p><b>① 笔迹交给系统合成器画，CPU 只送点。</b>
+        有压感时走 D2D 原生墨迹 <code>ID2D1Ink</code>（逐点半径变宽）；真笔书写那一段的"湿墨"
+        直接委托 Windows 的 Inking 引擎（DwmInk 轨迹）去画，<b>不是我们模拟出来的</b>。
+        这一条的意义不是"我们延迟更低"——延迟谁都能吹——而是<b>湿墨这种效果不需要我们去追</b>：
+        它是系统给的，我们只负责把点按时送到。</p>
+      <p><b>② 三层共用一条管线，各自按脏区增量出帧。</b>
+        板书内容层、覆盖层界面、PPT 联动条是三个独立合成目标。内容层在画布空间<b>分块</b>
+        ＋ 脏矩形增量修补——落笔只重画那一小块；<b>拖动一万条选中的内容时，内容层一帧重画 0 块</b>，
+        预览画在浮动层，松手才落模型。</p>
+      <p><b>③ 界面全部自绘，没有一个第三方 UI 控件。</b>
+        圆角、投影、悬停、色带、分段、名牌全是我们的几何。好处很具体：
+        <b>深色主题、200% DPI、投影仪偏色，都是改 <code>src/InkUi/Tokens.cs</code> 一个文件的事</b>，
+        不用和某个框架的主题系统打架。<br>
+        <b>代价也说实话</b>：自绘没有设计器，靠"单点收口 ＋ 离屏出图"代替——
+        <code>--panelshow</code> 能把任意一格、任意一页面板离屏渲染成图当设计稿看。</p>
+
+      <h4>为什么是 .NET 8（而不是 C++ / WPF / WinUI3）</h4>
+      <table>
+        <tr><th>理由</th><th>具体是什么</th></tr>
+        <tr><td><b>教室机能装</b></td><td>自包含发布，绿色版解压即用：<b>不弹 UAC、不装 .NET、拷 U 盘就能用</b>。学校机器往往锁着安装权限，装不上等于用不了</td></tr>
+        <tr><td><b>不背 UI 框架</b></td><td>我们要的是"一块透明覆盖层 ＋ 逐帧增量出帧"。WPF/WinUI 的合成与主题行为在这里全是负担（WinUI 的 Mica/亚克力在投影仪上掉帧，我们明确不做毛玻璃）</td></tr>
+        <tr><td><b>结构上留了 AOT 的门</b></td><td>"自绘 UI ＋ P/Invoke ＋ Vortice"恰好是<b>少数能走 Native AOT 的 Windows 桌面栈之一</b>——WPF / WinForms / WinUI3 官方就不支持 trimming / AOT。将来 AOT 跑通是结构性优势，不是小优化</td></tr>
+        <tr><td><b>GC 我们自己管</b></td><td>书写期间切 <code>SustainedLowLatency</code>，自检断言<b>一笔全程不发生第 2 代回收</b>——这是靠"能控制 GC 模式"换来的</td></tr>
+      </table>
+    </div>
+
+    <div class="honest">
+      <h4>还没做的，和已知短板（不想吹过头）</h4>
+      <ul>
+        <li><b>Native AOT 还没上</b>：卡口是 <code>PptLink</code> 的 <code>dynamic</code> COM、<code>System.Drawing.Common</code>、Vortice/SharpGen 兼容性，目前发布的是 JIT。</li>
+        <li><b>.NET 8 的安全更新 2026-11-10 到期</b>：在那之前需要完成升 .NET 10。</li>
+        <li><b>内存不便宜</b>：空载提交 93MB（一万笔 392MB）——其中 .NET 运行时＋程序集约 31MB、D3D/D2D 设备与交换链约 42MB、我们自己的代码和数据约 26MB。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="tech" class="section alt">
+  <div class="wrap">
+    <h2>底层细节</h2>
+    <p class="lead small">这一版没加新功能，专门把"脏区 / 相机 / 分块缓存"这条渲染路径，
+      对着 <b>Xournal++</b> 的分块与预取、<b>Rnote</b> 的视口余量、<b>MyPaint</b> 的 tile 分区纪律、
+      <b>Excalidraw</b> 的相机处理、<b>Windows Terminal</b> 的后缓冲不变量逐条过了一遍——
+      能直接对齐上游稳定做法的，就直接对齐，不重新发明。</p>
+    <table>
+      <tr><th>细节</th><th>做法</th></tr>
+      <tr><td><b>画布空间分块缓存</b></td><td>内容层按 <b>256 像素一块</b>烘进缓存（块原点对齐画布像素，拼接无缝）；预算内常驻，超预算按 LRU 淘汰</td></tr>
+      <tr><td><b>脏矩形 + 部分上屏</b></td><td>每帧只提交最少的脏矩形（<code>Present1</code>）；滚动条这类常驻元素的脏区按<b>可见性门控</b>——不可见就不进脏区，否则"滚动条 ∪ 笔迹"的并集会把别的列扫出屏幕</td></tr>
+      <tr><td><b>双缓冲一致性</b></td><td>相机变化（滚动 / 缩放）之后<b>连续两帧整屏重铺</b>，保证两个后缓冲都是新相机——借的是 Windows Terminal 那条"后缓冲不变量"纪律</td></tr>
+      <tr><td><b>视口外预取</b></td><td>视口外一圈的分块在空闲帧提前烘好（每帧限量、有预算，也可关）——滚到新区域没有"补课"卡顿（Xournal++ 预载 / Rnote 视口余量）</td></tr>
+      <tr><td><b>相机取整</b></td><td>相机平移按设备像素取整：静态内容在原位重画，不会再因为亚像素抖动"糊一下"</td></tr>
+      <tr><td><b>拖动零重画</b></td><td>拖动 / 旋转一万条选中内容时，内容层 <b>0 块/帧</b>重画：预览画在浮动层，松手才提交（一步撤销）</td></tr>
+      <tr><td><b>撤销保序</b></td><td>"清空"的撤销是<b>按原位置插回</b>每条墨迹，撤销后文档与清空前逐字节一致，不靠"追加"</td></tr>
+    </table>
+    <p class="note" style="margin-top:16px">每一条都在自检里挂着开关和量化数字
+      （<code>--prefetchtest</code> / <code>--scrollflash</code> / <code>--longrun</code> …），
+      不是"感觉快了"——FAIL 时自检退出码为 1。</p>
+  </div>
+</section>
+
+<section id="perf" class="section">
+  <div class="wrap">
+    <h2>实测数字</h2>
+    <p class="lead small">本机 2 倍屏 / Iris Xe。测试方法、环境与全部数据见仓库文档；
+      每个数字都有断言，FAIL 时自检退出码为 1。</p>
+    <table class="perf">
+      <tr><th>项目</th><th>实测</th></tr>
+      <tr><td>Present 返回 → 屏幕变色</td><td><b>1.0 个刷新周期</b>（未配速 3.5）</td></tr>
+      <tr><td>拖动一万条选中的内容</td><td>内容层 <b>0 块/帧</b>重画；每帧记录 2.7ms</td></tr>
+      <tr><td>空闲帧</td><td><b>0</b>（有东西动才画）</td></tr>
+      <tr><td>冷启动（窗口可见）</td><td><b>267 ms</b>（同机空白 WPF 窗 402 ms）</td></tr>
+      <tr><td>书写期间 GC</td><td><code>SustainedLowLatency</code>，一笔全程保持</td></tr>
+      <tr><td>常驻内存（空载 / 一万笔）</td><td>提交 93MB / 392MB</td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="install" class="section alt">
+  <div class="wrap">
+    <h2>下载与安装</h2>
+    <div class="grid two">
+      <div class="card">
+        <h3>安装包（推荐）</h3>
+        <p>双击 → 下一步 → 完事，<b>不弹 UAC</b>：装到当前用户目录，自动更新也不会要管理员。
+        批量部署可静默安装：<code>InkTeach-Setup-*.exe /VERYSILENT</code>。</p>
+        <p><a class="btn primary" href="https://gitcode.com/xzx1xzzx/InkTeach/releases/download/latest/InkTeach-Setup.exe" target="_blank" rel="noopener">国内下载（免登录直链）</a></p>
+        <p class="note">蓝色按钮是附件直链，点开即下；想挑版本或看更新说明：<a href="https://gitcode.com/xzx1xzzx/InkTeach/releases" target="_blank" rel="noopener">GitCode 发行版</a>。</p>
+      </div>
+      <div class="card">
+        <h3>绿色版</h3>
+        <p>解压 <code>InkTeach-*-win-x64.zip</code>，双击 <code>InkTeach.exe</code> 就能用；
+        拷 U 盘、换机器都不求人。运行时已经打进去，<b>不需要装 .NET</b>。</p>
+        <p><a class="btn" href="https://gitcode.com/xzx1xzzx/InkTeach/releases/download/latest/InkTeach-win-x64.zip" target="_blank" rel="noopener">国内下载（免登录直链）</a></p>
+      </div>
+    </div>
+    <h3 class="h3">几个常用键</h3>
+    <table class="keys">
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> / <kbd>X</kbd></td><td>穿透 / 退出（全局）</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Q</kbd></td><td>呼出盘：按住划向扇区，松手切换（全局；<b>开着穿透也能用</b>，选扇区即退出穿透）</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>P</kbd> / <kbd>I</kbd> / <kbd>L</kbd> / <kbd>E</kbd></td><td>笔 / 荧光笔 / 激光笔 / 橡皮</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>M</kbd> / <kbd>S</kbd></td><td>选中 / 截图</td></tr>
+      <tr><td><kbd>PageUp</kbd> / <kbd>PageDown</kbd></td><td>翻屏（放映时翻 PPT）</td></tr>
+    </table>
+    <p class="note">完整键表与自定义方法见仓库里的《快捷键总表》。</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <h2>开源与许可</h2>
+    <p>InkTeach 以 <b>GPL-3.0</b> 开源：可自由使用、修改、分发（包括商用），衍生产品需按 GPL 开源。
+    需要闭源商用 / 嵌入自有产品，可联系作者谈商业授权。</p>
+    <p>数据全在本机：设置在 <code>%APPDATA%\InkTeach</code>，自动存档在 <code>%LOCALAPPDATA%\InkTeach</code>，
+    点名名单是 <code>%APPDATA%\InkTeach\Names.txt</code>。更新检查只在点它时联网，
+    下载包先校验 sha256 再换壳安装。</p>
+    <p class="btns">
+      <a class="btn" href="https://github.com/XueRenYi0/InkTeach" target="_blank" rel="noopener">GitHub 源码</a>
+      <a class="btn" href="https://gitcode.com/xzx1xzzx/InkTeach" target="_blank" rel="noopener">GitCode 镜像</a>
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>© 2026 XueRenYi0 · InkTeach · <a href="https://github.com/XueRenYi0/InkTeach/releases" target="_blank" rel="noopener">更新日志</a> ·
+    <a href="https://github.com/XueRenYi0/InkTeach/blob/main/README.md" target="_blank" rel="noopener">文档</a></p>
+    <p class="en">InkTeach — a transparent annotation overlay for Windows classrooms. Colour-rail toolbar, dock-away handle, global radial palette, 22 shapes, per-slide PowerPoint isolation, dark theme. Free &amp; open source (GPL-3.0).</p>
+  </div>
+</footer>
+
+</body>
+</html>

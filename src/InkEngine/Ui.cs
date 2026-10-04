@@ -173,6 +173,13 @@ public interface IUiHost
     void SetPref(string key, string value);
 
     /// <summary>
+    /// 某个动作**当前生效的键位文本**（如 "Ctrl+P"；没有绑定返回 null）。
+    /// 悬停提示用它——键位的唯一起源是引擎的 <c>KeyBindings</c>，界面不自抄一份：
+    /// 用户改了 `settings.json`（甚至把某个键取消掉）之后，提示跟着变。
+    /// </summary>
+    string KeyText(KeyAction action);
+
+    /// <summary>
     /// 界面把自己的**浮层主题**推给引擎：选中操作条、颜色/粗细/层级面板、导出格式面板、
     /// 旋转读数都用它的颜色与投影画。
     ///
@@ -187,10 +194,29 @@ public interface IUiHost
     void SetFloatingTheme(UiTheme theme);
 }
 
+/// <summary>
+/// 课堂计时器的三种模式（「更多 → 课堂」页选，运行卡片画在引擎侧）。
+///
+/// 三个入口各自独立（2026-10-02 用户拍板）：倒计时有预设与 ±1 分步进，
+/// 正计时只有分秒，秒表多两位小数——老师和学生报数时读的是不同的精度。
+/// </summary>
+public enum TimerMode
+{
+    /// <summary>倒计时：到 0 响一声、闪三下，停在 00:00（再点一下从头开始）。</summary>
+    Countdown = 0,
+    /// <summary>正计时：从 0 往上（MM:SS / H:MM:SS）。</summary>
+    CountUp = 1,
+    /// <summary>秒表：从 0 往上，显示到 0.01 秒。</summary>
+    Stopwatch = 2,
+}
+
 /// <summary>界面对引擎的全部操作能力。刻意做窄，防止界面越权。</summary>
 public interface IEngineCommands
 {
     void SetTool(Tool tool);
+
+    /// <summary>面板点橡皮格：切回上次用的橡皮形态（整笔/面积），顺手关穿透。</summary>
+    void SetEraserPreferred();
     /// <summary>
     /// **换下一档抛物线开口方向**（向上 → 向右 → 向下 → 向左 → 向上）。
     ///
@@ -320,6 +346,30 @@ public interface IEngineCommands
     void SetDwellShape(bool on);
 
     /// <summary>
+    /// **压感 → 粗细**的开关（「更多 → 设置 → 书写 → 压感粗细」，2026-10-01 加）。
+    ///
+    /// 默认**开**；关掉 = **整块板上的压感笔迹立刻等宽**（湿墨也一样），
+    /// 手写板的流畅 / 预测 / 采样路径完全不受影响——它只决定"压力参不参与粗细"。
+    ///
+    /// ⚠ 这是一条**渲染期**开关：文档里每个点存的压力值和每条笔迹的 `HasPressure`
+    /// **一个字节都不动**，重新打开就恢复原来的粗细。和 `--nopressure` 是同一条口径
+    /// （那个是给对照实验用的命令行版本，它优先）。
+    /// </summary>
+    void SetPressure(bool on);
+
+    /// <summary>
+    /// **悬停提示的总开关**（「更多 → 设置 → 外观 → 悬停提示」，2026-10-02 加）。
+    ///
+    /// 默认**开**。界面层的提示由界面自己管（它读同一个偏好），这一条只负责
+    /// **引擎自己画的浮层**（选中操作条、PPT 控件条与长按菜单）。
+    /// 界面在 `LoadPrefs` 和点那一行时各推一次——引擎不读界面偏好（分层纪律）。
+    /// </summary>
+    void SetTooltips(bool on);
+
+    // [删除 2026-10-05] `SetPredict(bool)`：墨迹预测开关随老预测系统移除。
+    // 恢复见 `已停用-渲染实验.md`。
+
+    /// <summary>
     /// 「更多」抽屉里"坐标系网格"那一行被点了一下。
     /// **选中了坐标系就改它们，没选中就翻"新画的默认值"**（语义见 Engine.ToggleSelectionGrid）。
     /// 返回改了几个对象（0 = 改的是默认值，界面据此决定要不要把偏好落盘）。
@@ -359,6 +409,60 @@ public interface IEngineCommands
     void Restart();
 
     void Quit();
+
+    /// <summary>
+    /// **保存墨迹到 .inkb**（墨迹 A，2026-10-01）：弹系统"另存为"，写整块白板。
+    ///
+    /// 白板模式有效；**放映中不响应**（`Save(doc)` 只写当前页，手动保存整份 PPT 批注
+    /// 是"批注包"的活，见 计划 6.4.1）。结果写进 <see cref="UiState.InkStatus"/>。
+    /// </summary>
+    void SaveInkFile();
+
+    /// <summary>
+    /// **从 .inkb 打开墨迹**（墨迹 A）：弹系统"打开"，替换当前板书。
+    ///
+    /// 打开前**自动写一份"打开前备份"**（最近 5 份轮转）；失败不动文档、不弹窗，
+    /// 结果写进 <see cref="UiState.InkStatus"/>。放映中不响应。
+    /// </summary>
+    void OpenInkFile();
+
+    /// <summary>
+    /// **保存图片**（2026-10-02「更多 → 墨迹 → 保存图片」）：把**整块板书**渲染成图片
+    /// 存盘（默认 JPEG 白底，好发微信/邮件），走系统"另存为"（透明 PNG / JPEG 白底 /
+    /// PNG 白底 / BMP 四种照旧）。
+    ///
+    /// 与选中操作条「导出」的分工：导出只导**选中的**、默认透明底（贴课件/抠图）；
+    /// 这里导**整块板书**、默认白底（发学生）。空板书 / 放映中不响应；
+    /// 不碰选区、不写剪贴板。结果写进 <see cref="UiState.InkStatus"/>。
+    /// </summary>
+    void SaveBoardImage();
+
+    /// <summary>
+    /// **开始墨迹回放**（墨迹 C）：按当时的速度重演**当前一屏**的笔迹。
+    ///
+    /// 只读模式：不动文档/撤销栈/选中；相机锁定；点画布暂停/继续（不落墨）、
+    /// 控制条上有播放/暂停、四档倍速、进度、关闭。开始时会顺手关掉穿透。
+    /// 这一屏没有笔迹 / 截图取景中 / 放映中（D 之前）都不响应。
+    /// </summary>
+    void StartReplay();
+
+    /// <summary>停掉回放（退出后一切复原）。</summary>
+    void StopReplay();
+
+    /// <summary>
+    /// 打开**计时器窗口**（启动器「课堂 → 计时器」）：1:1 复刻 InkClass 的独立居中窗
+    /// （浅色面板 + 环形进度 + 开始/重置/最小化/全屏/关闭；倒计时可点数字改时长）。
+    /// </summary>
+    void OpenTimerCard();
+
+    /// <summary>
+    /// 打开**点名窗口**（启动器「课堂 → 点名」）：900×500 居中窗，左结果 / 右人数与抽奖；
+    /// 名单读 `%APPDATA%\InkTeach\Names.txt`，抽过的不重复（抽完自动重置）。
+    /// </summary>
+    void OpenRollCard();
+
+    /// <summary>「随机一人」：自动抽 1 人、出结果 1.5 秒后自动关（InkClass 快捷态）。</summary>
+    void OpenRollOne();
 }
 
 /// <summary>课堂常用色。界面直接拿它画色板，保证多套界面配色一致。</summary>
@@ -783,6 +887,13 @@ public readonly struct UiState
     /// <summary>**停顿成型**开着吗（界面用它显示抽屉里那一行的开关）。
     /// 默认开；关掉只是"以后画的那些不参与"，不影响已经变出来的图形。</summary>
     public bool DwellShapeOn { get; init; }
+    /// <summary>
+    /// **压感粗细**开着吗（界面用它显示「设置 → 书写 → 压感粗细」那一行的开关）。
+    /// 默认开；关掉 = 整块板等宽（渲染期语义，文档里的压力数据不动）。
+    /// </summary>
+    public bool PressureOn { get; init; }
+
+    // [删除 2026-10-05] `PredictOn`（墨迹预测开关的状态）：随老预测系统移除。
     /// <summary>现在在第几屏（1 起）。界面用它显示"第 N 屏"。</summary>
     public int ScreenIndex { get; init; }
     /// <summary>还能不能往上翻（到顶了就不行）。"下一屏"永远可用。</summary>
@@ -806,6 +917,45 @@ public readonly struct UiState
     public UpdateStage UpdateStage { get; init; }
     /// <summary>自动更新的一行状态文字（"未配置更新源" / "检查中…" / "已是最新" / "下载 42%" …）。</summary>
     public string UpdateText { get; init; }
+
+    /// <summary>
+    /// 「墨迹」页的状态行（上次保存/打开的结果；没做过事就是空串）。
+    /// 保存成功 / 打开成功（含是否备份）/ 各种失败都写在这儿——产品里不弹窗。
+    /// </summary>
+    public string InkStatus { get; init; }
+
+    /// <summary>回放中吗（界面用它把「墨迹回放」那一行显示成"停"）。</summary>
+    public bool ReplayActive { get; init; }
+    /// <summary>回放正在播吗（暂停时为 false；界面据此显示 ▶/⏸）。</summary>
+    public bool ReplayPlaying { get; init; }
+    /// <summary>回放倍速（0.5 / 1 / 2 / 4）。</summary>
+    public float ReplaySpeed { get; init; }
+
+    /// <summary>计时器在跑/暂停中；停下后为 false。</summary>
+    public bool TimerActive { get; init; }
+    /// <summary>计时器暂停中（界面据此显示"继续"）。倒计时到点后为 false（继续显示超时）。</summary>
+    public bool TimerPaused { get; init; }
+    /// <summary>倒计时跑到 0 了（继续正计时显示超时 `+00:27`）。</summary>
+    public bool TimerFinished { get; init; }
+    /// <summary>计时器模式。</summary>
+    public TimerMode TimerMode { get; init; }
+    /// <summary>计时器当前值（毫秒）：倒计时 = 剩余，正计时/秒表 = 已过。</summary>
+    public float TimerValueMs { get; init; }
+    /// <summary>计时卡片开着吗（设置态或运行态）。</summary>
+    public bool TimerCardOpen { get; init; }
+    /// <summary>卡片在设置态吗（false = 运行态）。</summary>
+    public bool TimerSettingsOpen { get; init; }
+    /// <summary>大字（双击放大的）形态开着吗。</summary>
+    public bool TimerExpanded { get; init; }
+    /// <summary>点名卡片开着吗；<see cref="RollSettingsOpen"/> = 设置态。</summary>
+    public bool RollCardOpen { get; init; }
+    public bool RollSettingsOpen { get; init; }
+
+    /// <summary>
+    /// 点名名单（`%APPDATA%\InkTeach\Names.txt`，一行一个；空数组 = 没名单、用学号）。
+    /// 每次装载给整份快照——点名全在界面层做，引擎只负责读盘与推送。
+    /// </summary>
+    public string[] Names { get; init; }
 }
 
 /// <summary>
@@ -815,9 +965,12 @@ public readonly struct UiState
 /// </summary>
 public readonly struct UiPointerEvent
 {
-    public UiPointerEvent(float x, float y, float pressure, bool fromPen, bool isEraserTip)
+    public UiPointerEvent(float x, float y, float pressure, bool fromPen, bool isEraserTip,
+                          bool fromTouch = false, uint pointerId = 0)
     {
         X = x; Y = y; Pressure = pressure; FromPen = fromPen; IsEraserTip = isEraserTip;
+        FromTouch = fromTouch;
+        PointerId = pointerId;
     }
 
     public float X { get; }
@@ -825,6 +978,20 @@ public readonly struct UiPointerEvent
     public float Pressure { get; }
     public bool FromPen { get; }
     public bool IsEraserTip { get; }
+
+    /// <summary>
+    /// 这一下是**手指**（PT_TOUCH）。给"触摸长按出提示"用（2026-10-02）——
+    /// 界面据此区分"鼠标按住"（= 拖动）和"手指按住"（= 长按候选）。
+    /// 笔接触不算触摸（笔有自己的 <see cref="FromPen"/>；长按候选 = FromTouch || FromPen）。
+    /// </summary>
+    public bool FromTouch { get; }
+
+    /// <summary>
+    /// 系统给的指针 id（同一根手指/鼠标在整个"按下 → 移动 → 抬起"里不变）。
+    /// 触摸长按期间用它挡掉**别的指针**的移动：引擎会把窗口收到的所有移动都转给界面，
+    /// 停着的鼠标随便动一下就会被当成"手指滑走了"（2026-10-02 自检实测：长按被搅黄）。
+    /// </summary>
+    public uint PointerId { get; }
 }
 
 /// <summary>

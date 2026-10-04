@@ -244,6 +244,13 @@ internal static class PanelDraw
         /// <summary>没有选项的工具：上带退回成"装饰用色带"，不可点。</summary>
         public bool Decorative;
         /// <summary>
+        /// 这一格**没有可展开的设置**：上带永远保持收起的那条色线，不张成设置条
+        ///（鼠标/穿透那格，2026-10-02 用户口径："点击穿透以后色带是横起来的……
+        ///  不是完全没有了，就是把它折叠起来"）。不是"没有上带"——线在、面板高度也在，
+        /// 贴边隐藏露出来的就是它；只是绝不像别的格子那样张着设置条。
+        /// </summary>
+        public bool NoExpand;
+        /// <summary>
         /// 右端的"动作"按钮：模式是模式，动作是动作 —— 动作点一下就执行，不会保持高亮。
         /// HoldMs > 0 表示"按住才算数"（清空用），否则是普通点击。
         /// </summary>
@@ -301,8 +308,8 @@ internal static class PanelDraw
                 sp.Kind = StripKind.Segments; sp.Labels = new[] { "白板", "绿板", "黑板" };
                 sp.Sel = s.BoardColor;
                 break;
-            default: // 鼠标（穿透）
-                sp.Kind = StripKind.Segments; sp.Labels = new[] { "直接操作", "穿透点击" }; sp.Sel = s.PassThrough ? 1 : 0;
+            case ToolMouse: // 鼠标（穿透）：没有可展开的设置——色带永远保持收起的那条线（2026-10-02 口径）
+                sp.NoExpand = true;
                 break;
         }
         return sp;
@@ -342,7 +349,10 @@ internal static class PanelDraw
         bool slim = s.Slim;
         double bandIdle = slim ? SlimBandIdle : BandIdle;
         double bandOpen = slim ? SlimBandOpen : BandOpen;
-        double bandFull = bandIdle + (bandOpen - bandIdle) * Clamp01(s.Rail);
+        // 鼠标（穿透）那格**永远保持收起的那条色线**、不张开（见 StripSpec.NoExpand）：
+        // 不是"没有上带"——线在、面板高度也在（贴边隐藏露出来的就是它）。
+        double rail = spec.NoExpand ? 0 : Clamp01(s.Rail);
+        double bandFull = bandIdle + (bandOpen - bandIdle) * rail;
         double band = bandFull * Clamp01((e - 0.25) / 0.75);
         // 底带永远占住高度：有滑条时它是滑条，没有时它是一条装饰线。
         // 瘦身档里它不再单独占一行（groove = 0），而是嵌进按钮带下沿。

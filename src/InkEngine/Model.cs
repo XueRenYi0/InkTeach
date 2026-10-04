@@ -883,34 +883,13 @@ internal sealed class Stroke
 
     public ID2D1Geometry Geometry;
 
-    /// <summary>
-    /// **只用于渲染的"预测尾"**（画布坐标）：画这一笔时在末尾接上这几个点，
-    /// 让正在写的那一笔的末端落在"现在"而不是"上一帧"。
-    ///
-    /// 三条纪律，缺一条都会出问题：
-    ///   ① **不进 <see cref="Points"/>**——它是画出来的，不是采到的。所以存档、
-    ///      撤销、命中测试、紧框、空间索引一概看不见它（`--predicttailtest` 有断言）；
-    ///   ② **只在"正在写的那一笔"上设**（由引擎每帧写入，见 `Engine.UpdateRenderTail`），
-    ///      松手那一刻清空，绝不会留在文档里；
-    ///   ③ **接在同一份几何里**（见 <see cref="BuildCenterline"/>）：另起一笔画会在
-    ///      接缝处混合两次，半透明荧光笔会露出重叠的深色斑。
-    ///
-    /// 什么时候有它：鼠标 / 触摸（那条路没有系统湿墨通道），以及真笔但走不了
-    /// 委托墨迹轨迹时（虚线、或者轨迹通道不可用）。真笔交给系统合成器画的时候
-    /// 不需要它，也**不能**有它——两边一起补会在笔尖前面重复画出一小截。
-    /// </summary>
-    internal List<Vector2> RenderTail;
+    // [删除 2026-10-05] `RenderTail`（预测渲染尾）、`PredictedTip`（预测笔尖）、
+    // `_tailStamp/_builtTailStamp`（它们的几何缓存章）与两个 Set 方法：随老预测系统移除。
+    // 原文见 `.revert/2026-10-05-渲染减法/`。
 
     /// <summary>
-    /// 渲染尾的"第几个版本"。几何缓存的键必须带上它：否则尾巴内容变了、
-    /// `Revision` 没变，缓存会把**旧的**几何（可能带尾、也可能没有尾）还回去。
-    /// </summary>
-    private int _tailStamp;
-    private int _builtTailStamp = -1;
-
-    /// <summary>
-    /// 建几何时的"曲线化版本"。和渲染尾同理：开关一拨（`--smooth` 对照实验、
-    /// `--smoothshow` 出图），`Revision` 没变，缓存会把旧折线还回来。
+    /// 建几何时的"曲线化版本"。`--smoothshow` 出图 / 开关一拨时，`Revision` 没变，
+    /// 缓存会把旧折线还回来，所以必须进缓存键。
     /// </summary>
     private int _builtSmoothVer = -1;
     /// <summary>建几何时这一笔是不是"正在写"。和曲线化版本同理，必须进缓存键：
@@ -918,14 +897,10 @@ internal sealed class Stroke
     private bool _builtRawLive;
 
     /// <summary>
-    /// 引擎每帧调用：设这一笔的渲染尾（传 null 或空表 = 这一帧没有尾）。
-    /// 传进来的表由调用方复用，所以每次调用都要当作"内容变了"。
+    /// 建几何时的"墨迹模型版本"（<see cref="InkModel"/>）：模式/参数一拨，
+    /// `Revision` 没变，缓存会把旧几何还回来。
     /// </summary>
-    internal void SetRenderTail(List<Vector2> tail)
-    {
-        RenderTail = (tail != null && tail.Count > 0) ? tail : null;
-        _tailStamp++;
-    }
+    private int _builtInkModelVer = -1;
 
     /// <summary>
     /// 图像对象的像素（只有 <see cref="StrokeKind.Image"/> 有）。
@@ -4424,10 +4399,11 @@ internal sealed class Stroke
 
     public ID2D1Geometry BuildGeometry(ID2D1Factory1 factory)
     {
-        // 缓存键 = 几何版本（Revision）**加上**渲染尾的版本：只比 Revision 的话，
-        // "点数没变、只有尾巴在每帧滑动"这种情况会把上一帧的几何还回去。
-        if (Geometry != null && _builtRevision == Revision && _builtTailStamp == _tailStamp
-            && _builtSmoothVer == StrokeSmoothing.Version && _builtRawLive == RawWhileLive)
+        // 缓存键 = 几何版本（Revision）＋ 曲线化版本 ＋ 活笔/模型版本；
+        // 只比 Revision 的话，开关一拨会把旧几何还回来。
+        if (Geometry != null && _builtRevision == Revision
+            && _builtSmoothVer == StrokeSmoothing.Version && _builtRawLive == RawWhileLive
+            && _builtInkModelVer == StrokeMotion.Version)
             return Geometry;
         if (Points.Count == 0) return null;
 
@@ -4468,9 +4444,9 @@ internal sealed class Stroke
         };
         if (Geometry != null) LiveGeometries++;
         _builtRevision = Revision;
-        _builtTailStamp = _tailStamp;
         _builtSmoothVer = StrokeSmoothing.Version;
         _builtRawLive = RawWhileLive;
+        _builtInkModelVer = StrokeMotion.Version;
         return Geometry;
     }
 
@@ -5508,46 +5484,99 @@ internal sealed class Stroke
     /// 于是整套删掉。
     /// </summary>
     private ID2D1PathGeometry BuildCenterline(ID2D1Factory1 factory)
+        => BuildCenterlineCore(factory, float.MaxValue);
+
+    /// <summary>
+    /// 回放用：只画**前 maxParam**（点序号，0..Points.Count-1，可带小数）那一段中心线。
+    /// **不进几何缓存**（每帧都在变，缓存只会不停重建）——调用方画完负责 Dispose。
+    /// </summary>
+    internal ID2D1PathGeometry BuildCenterlinePrefix(ID2D1Factory1 factory, float maxParam)
+        => BuildCenterlineCore(factory, maxParam);
+
+    private ID2D1PathGeometry BuildCenterlineCore(ID2D1Factory1 factory, float maxParam)
     {
         var geo = factory.CreatePathGeometry();
         using var sink = geo.Open();
 
-        // 渲染尾（预测段）只加在"没被擦过"的笔迹上：擦除区间的几何要按段重拼，
-        // 尾巴挂在哪一段上会变得说不清；而正在写的那一笔本来也不可能被擦。
-        var tail = Erased.Count == 0 ? RenderTail : null;
+        bool clipped = maxParam < Points.Count - 1 - 1e-4f;
 
         // **每条剩下的段一个 figure，但它们在同一条几何里**——这一点是关键：
         // 一次 DrawGeometry 只混合一次，所以半透明荧光笔即使自相重叠也不会变深。
         // 拆成两个对象（两个 DrawGeometry）就会混合两次（实测差 0 → 56）。
-        foreach (var (a, b) in RemainingRuns())
+        foreach (var (a, b0) in RemainingRuns())
         {
-            // 曲线化（`--smooth`）：把这一段 run 的采样点喂给曲线器，输出一串三次贝塞尔。
-            // **点还是原来那些点**——曲线严格过每一个采样点，直角由角点保护保住；
-            // 不生效时（开关关着 / 段数不够）原样退回下面的折线路径。
-            bool smoothed = StrokeSmoothing.Enabled && !RawWhileLive && AppendSmoothedRun(sink, a, b);
-            if (!smoothed)
+            if (clipped && a >= maxParam - 1e-6f) break;   // 这一段整个在前缀之后：不画
+            float b = clipped ? MathF.Min(b0, maxParam) : b0;
+
+            // **墨迹模型（实验，`--motion`）**：整条用选中的运动模型输出当中心线。
+            // 只对"没被橡皮擦过、也不是回放前缀"的整笔生效；擦除/回放照样走旧路
+            //（擦除区间是按原始点切的，建模点和参数序号对不上——见 StrokeMotion 的注释）。
+            // 上游输出点密度足够（≥180Hz），直接当折线描边即可（弦高误差远小于 1px）。
+            if (!clipped && Erased.Count == 0 && StrokeMotion.Build(this))
             {
-                sink.BeginFigure(PointAtParam(a), FigureBegin.Hollow);
-                for (int i = 1; i < Points.Count; i++)
+                // mean2 的曲线层固定为**过点曲线**（拟合档已随停用清理，2026-10-05）。
+                bool drew = AppendSmoothedModeledRun(sink);
+                if (!drew)
                 {
-                    if (i < a - 1e-6f) continue;
-                    if (i > b + 1e-6f) break;
-                    sink.AddLine(new Vector2(Points[i].X, Points[i].Y));
+                    int mn = StrokeMotion.Count;
+                    var p0 = StrokeMotion.At(0);
+                    sink.BeginFigure(new Vector2(p0.X, p0.Y), FigureBegin.Hollow);
+                    for (int k = 1; k < mn; k++)
+                    {
+                        var p = StrokeMotion.At(k);
+                        sink.AddLine(new Vector2(p.X, p.Y));
+                    }
                 }
-                // 终点只在"切出来的插值点"时才补。**必须是这个条件**：如果这一段的终点正好落在
-                // 某个采样点上，上面的循环已经把它加进去了，再补一次就给几何多出一个零长段——
-                // 没被擦过的笔迹（a=0、b=末尾）必须和"没有区间表"时**逐点一致**，
-                // 否则等于凭空改了笔迹几何。
-                if (MathF.Abs(b - MathF.Round(b)) > 1e-6f) sink.AddLine(PointAtParam(b));
             }
-            // 渲染尾接在**同一份几何**的末尾（理由见 Stroke.RenderTail 第 ③ 条）。
-            // 上面的前提（Erased 为空）保证这里只会被加一次。
-            if (tail != null)
-                foreach (var p in tail) sink.AddLine(p);
+            else
+            {
+                // 曲线化（`--smooth`）：把这一段 run 的采样点喂给曲线器，输出一串三次贝塞尔。
+                // **点还是原来那些点**——曲线严格过每一个采样点，直角由角点保护保住；
+                // 不生效时（开关关着 / 段数不够）原样退回下面的折线路径。
+                bool smoothed = StrokeSmoothing.Enabled && !RawWhileLive && AppendSmoothedRun(sink, a, b);
+                if (!smoothed)
+                {
+                    sink.BeginFigure(PointAtParam(a), FigureBegin.Hollow);
+                    for (int i = 1; i < Points.Count; i++)
+                    {
+                        if (i < a - 1e-6f) continue;
+                        if (i > b + 1e-6f) break;
+                        sink.AddLine(new Vector2(Points[i].X, Points[i].Y));
+                    }
+                    // 终点只在"切出来的插值点"时才补。**必须是这个条件**：如果这一段的终点正好落在
+                    // 某个采样点上，上面的循环已经把它加进去了，再补一次就给几何多出一个零长段——
+                    // 没被擦过的笔迹（a=0、b=末尾）必须和"没有区间表"时**逐点一致**，
+                    // 否则等于凭空改了笔迹几何。
+                    if (MathF.Abs(b - MathF.Round(b)) > 1e-6f) sink.AddLine(PointAtParam(b));
+                }
+            }
             sink.EndFigure(FigureEnd.Open);
         }
         sink.Close();
         return geo;
+    }
+
+    /// <summary>
+    /// mean2：把建模输出喂进过点曲线，直接写成三次贝塞尔。
+    /// 返回 false = 段数不够，调用方退回直线折线。
+    /// </summary>
+    private static bool AppendSmoothedModeledRun(ID2D1GeometrySink sink)
+    {
+        StrokeSmoothing.Begin();
+        int n = StrokeMotion.Count;
+        for (int i = 0; i < n; i++)
+        {
+            var p = StrokeMotion.At(i);
+            StrokeSmoothing.Add(p.X, p.Y, p.Z);
+        }
+        int m = StrokeSmoothing.Finish();
+        if (m <= 0) return false;
+
+        var segs = StrokeSmoothing.Out;
+        sink.BeginFigure(segs[0].P0, FigureBegin.Hollow);
+        for (int k = 0; k < m; k++)
+            sink.AddBezier(new BezierSegment(segs[k].C1, segs[k].C2, segs[k].P1));
+        return true;
     }
 
     /// <summary>
@@ -5947,7 +5976,21 @@ internal sealed class ClearAction : EditAction
 {
     public readonly List<Stroke> Removed = new();
     public override int HeldStrokes => Removed.Count;
-    public override void Undo(InkDocument doc) { foreach (var s in Removed) doc.AppendStroke(s); }
+
+    /// <summary>
+    /// 撤销"清空"：**按原位置顺序插回去**（不再是 AppendStroke 堆到最上层）。
+    ///
+    /// 为什么（2026-10-04 对照上游后改）：`AppendStroke` 会把整批放到最上层，
+    /// 如果清空之后又写过新笔画，撤销后旧墨压在它们的上面——半透明叠色和清空前
+    /// 不一样，"撤销 = 回到原样"就不成立了。上游（Rnote 保留 render comp、
+    /// MyPaint 用 COW 快照）都不改 z 序。插中间会让分块走"结构变了、整块重画"，
+    /// 正确，代价有界（只碰这些笔画覆盖的块）。
+    /// </summary>
+    public override void Undo(InkDocument doc)
+    {
+        for (int i = 0; i < Removed.Count; i++) doc.InsertStroke(i, Removed[i]);
+    }
+
     public override void Redo(InkDocument doc) { doc.ClearStrokes(); }
     public override RectF AffectedBefore => EditRegion.Of(Removed);
 }
@@ -7756,21 +7799,134 @@ internal sealed class InkDocument
     /// <summary>
     /// 框选：**框碰到墨就选中那一条**（不是"整条都在框里才选中"）。
     ///
-    /// 判据用 <see cref="Stroke.PaddedBounds"/>（中心线外扩到笔身）：笔身擦到框
-    /// 就算选中。改成"相交"是被用户实测逼出来的——按"整条都在框里"，屏幕上
-    /// 永远选不全：笔迹只要有一头在屏幕外（框拖不到那儿），或者粗笔的笔身压出
-    /// 框外一点点，那条就永远选不上，用户看到的就是"我明明全框住了，却没全选中"。
+    /// 判据分两步：
+    ///   ① 粗筛：<see cref="Stroke.PaddedBounds"/> 和框不相交的直接排除（便宜）；
+    ///   ② 精确：<see cref="InkTouchesRect"/>——真的拿墨（中心线/轮廓按半个笔宽外扩、
+    ///      擦掉的段不算）去和框判交。
     ///
-    /// 代价是：框边碰到一条很长的笔迹会把整条选进来。这和 OneNote 的框选一致，
-    /// 也是老师更需要的那个方向（选多了可以点空白重来，选少了会以为软件坏了）。
-    /// 判据是"穿过框"，和空间索引给候选用的是同一个框，所以不会漏。
+    /// **为什么不能只看 PaddedBounds**（2026-10-04 用户实测报的 bug）：PaddedBounds 是
+    /// 轴对齐**外接矩形**，斜线的外接矩形有两个巨大的空角——框放在空角里、离斜线还远，
+    /// 旧判据照样"相交"、整条被选进来。图形（圆的外接矩形中心是空的）和旋转过的
+    /// 图像同理。所以"碰到就选"必须让墨自己去碰，不能拿外接矩形代替。
+    ///
+    /// 保留"碰到就选"而不是"整条都在框里"：按后者屏幕上永远选不全——笔迹只要有一头
+    /// 在屏幕外（框拖不到那儿），或者粗笔的笔身压出框外一点点，那条就永远选不上，
+    /// 用户看到的就是"我明明全框住了，却没全选中"。这和 OneNote 的框选一致，也是老师
+    /// 更需要的那个方向（选多了可以点空白重来，选少了会以为软件坏了）。
     /// </summary>
     public void ApplyMarquee(RectF r)
     {
         Selected.Clear();
         _grid.Query(r, _queryScratch);
         foreach (var s in _queryScratch)
-            if (s.PaddedBounds.Intersects(r)) Selected.Add(s);
+        {
+            if (!s.PaddedBounds.Intersects(r)) continue;   // ① 粗筛
+            if (!InkTouchesRect(s, r)) continue;           // ② 精确判交
+            Selected.Add(s);
+        }
+    }
+
+    /// <summary>
+    /// 框选的精确判据：**墨真的和框有交集**（见 <see cref="ApplyMarquee"/>）。
+    ///
+    /// 三种对象各走各的真实形状：
+    ///   · 自由笔迹——中心线逐段判交，外扩半个笔宽；擦掉的参数区间不算墨；
+    ///   · 图形——和像素橡皮同一条 <see cref="ShapeTouchesRect"/>（轮廓折线 ＋ 辅助线，
+    ///     网格有意挡在外面）；
+    ///   · 图像——"填满的一块"：四角变换到画布，和框做 OBB 相交（SAT）。
+    ///     只按变换后的外接矩形判，旋转过的图像同样会在空角里被误选。
+    /// </summary>
+    private static bool InkTouchesRect(Stroke s, in RectF rect)
+    {
+        if (s.IsImage) return ImageTouchesRect(s, rect);
+        if (s.Kind != StrokeKind.Freehand) return ShapeTouchesRect(s, rect);
+        return FreehandTouchesRect(s, rect);
+    }
+
+    /// <summary>自由笔迹与框判交：中心线逐段 ＋ 半个笔宽（压感按最粗处），跳过擦掉的区间。</summary>
+    private static bool FreehandTouchesRect(Stroke s, in RectF rect)
+    {
+        int n = s.Points.Count;
+        if (n == 0) return false;
+
+        // 笔身外扩：和 PaddedBounds / HitTestExact 同一口径（最粗处 ＋ 1 像素余量）。
+        var r = rect.Inflate(MathF.Max(1f, s.MaxHalfWidth) + 1f);
+        bool ident = s.Transform.IsIdentity;
+
+        Vector2 P(float t)
+        {
+            var v = s.PointAtParam(t);
+            return ident ? v : Vector2.Transform(v, s.Transform);
+        }
+
+        if (n == 1) return PointInRect(P(0), r);
+
+        // 没有擦除（绝大多数）走直路，不做任何中间表。
+        if (s.Erased.Count == 0)
+        {
+            for (int i = 1; i < n; i++)
+                if (SegmentHitsRect(P(i - 1), P(i), r)) return true;
+            return false;
+        }
+
+        // 擦掉的段不算墨（和点选 HitObjectAt / 套索同一口径）：按剩下的参数区间分段判交。
+        foreach (var (a, b) in s.RemainingRuns())
+        {
+            float lo = MathF.Max(0f, a), hi = MathF.Min(n - 1f, b);
+            if (hi < lo) continue;
+            if (hi - lo < 1e-4f) { if (PointInRect(P(lo), r)) return true; continue; }
+
+            int i0 = Math.Max(0, (int)MathF.Floor(lo));
+            int i1 = Math.Min(n - 1, (int)MathF.Ceiling(hi));
+            for (int i = i0; i < i1; i++)
+            {
+                float sa = MathF.Max(lo, i), sb = MathF.Min(hi, i + 1);
+                if (sb - sa < 1e-5f) continue;
+                if (SegmentHitsRect(P(sa), P(sb), r)) return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>图像（"填满的一块"）与框判交：四角变换到画布后做 OBB 相交。</summary>
+    private static bool ImageTouchesRect(Stroke s, in RectF rect)
+    {
+        var b = s.Bounds;
+        if (b.IsEmpty) return false;
+        return ObbHitsRect(
+            Vector2.Transform(new Vector2(b.MinX, b.MinY), s.Transform),
+            Vector2.Transform(new Vector2(b.MaxX, b.MinY), s.Transform),
+            Vector2.Transform(new Vector2(b.MaxX, b.MaxY), s.Transform),
+            Vector2.Transform(new Vector2(b.MinX, b.MaxY), s.Transform),
+            rect);
+    }
+
+    /// <summary>
+    /// 凸四边形（顶点按序）和轴对齐矩形相交——分离轴定理（SAT）。
+    /// 轴取"矩形的两条轴 ＋ 四边形的两条相邻边法线"；四个轴都分离不了才算相交。
+    /// </summary>
+    private static bool ObbHitsRect(Vector2 q0, Vector2 q1, Vector2 q2, Vector2 q3, in RectF r)
+    {
+        float cx = (r.MinX + r.MaxX) * 0.5f, cy = (r.MinY + r.MaxY) * 0.5f;
+        float hx = (r.MaxX - r.MinX) * 0.5f, hy = (r.MaxY - r.MinY) * 0.5f;
+
+        bool Separated(float ax, float ay)
+        {
+            if (ax * ax + ay * ay < 1e-12f) return false;   // 退化边不构成分离轴
+            float p0 = ax * q0.X + ay * q0.Y;
+            float p1 = ax * q1.X + ay * q1.Y;
+            float p2 = ax * q2.X + ay * q2.Y;
+            float p3 = ax * q3.X + ay * q3.Y;
+            float lo = MathF.Min(MathF.Min(p0, p1), MathF.Min(p2, p3));
+            float hi = MathF.Max(MathF.Max(p0, p1), MathF.Max(p2, p3));
+            float c = ax * cx + ay * cy;
+            float ext = MathF.Abs(ax) * hx + MathF.Abs(ay) * hy;
+            return c + ext < lo - 1e-3f || c - ext > hi + 1e-3f;
+        }
+
+        return !Separated(1f, 0f) && !Separated(0f, 1f)
+            && !Separated(-(q1.Y - q0.Y), q1.X - q0.X)
+            && !Separated(-(q2.Y - q1.Y), q2.X - q1.X);
     }
 
     /// <summary>WPF 的 `_percentIntersectForInk`：代表点落进圈里的比例（百分数）。</summary>

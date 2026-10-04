@@ -120,6 +120,41 @@ internal sealed class CanvasTileCache : IDisposable
     /// <summary>累计淘汰块数。</summary>
     public long EvictedTotal { get; private set; }
 
+    // ---- 视口外一圈的预取（诊断 / 调度）------------------------------------
+    /// <summary>
+    /// 视口外一圈的**预取**（对齐上游：Xournal++ 预载前后页、Rnote 视口 0.4 余量预渲染）。
+    ///
+    /// 为什么需要：新露出来的块现在是**当帧同步光栅**的——密集页快速翻屏时一帧要烘十几块
+    /// （每块可能几百条笔画），弱机上就是一次可见的卡顿。预取把这件事摊到"停手/空闲"的
+    /// 那几拍里：每拍最多烘 <see cref="PrefetchPerFrame"/> 块，等真滚到那里时块已经热了，
+    /// 那一帧只做合成（实测 `--prefetchtest`：再滚一格 `LastPatchCount == 0`）。
+    ///
+    /// 边界：只烘**视口外扩一圈**（含四角），不是全画布；预算里给这圈留了位置（见 BudgetNow）。
+    /// 关掉它（`--noprefetch`）行为回到纯同步光栅。
+    /// </summary>
+    public static bool PrefetchEnabled = true;
+
+    /// <summary>每拍最多烘几块。取 2：一拍最多加约 0.4~2ms，摊在 4ms 的节拍里不显眼。</summary>
+    public static int PrefetchPerFrame = 2;
+
+    /// <summary>上一拍预取了几块 / 累计 / 上一拍耗时 / 环里还差多少。</summary>
+    public int LastPrefetch { get; private set; }
+    public long PrefetchTotal { get; private set; }
+    public double PrefetchMsLastFrame { get; private set; }
+    public bool PrefetchPending { get; private set; }
+
+    /// <summary>本帧可见块的行列数（预算里的"环"按它算）。</summary>
+    private int _visCols, _visRows;
+    /// <summary>视口外一圈的块数（上 + 下 + 左 + 右 + 四角）。</summary>
+    private int RingTiles => PrefetchEnabled ? 2 * _visCols + 2 * _visRows + 4 : 0;
+
+    /// <summary>
+    /// 本帧的常驻预算（块数）：可见 ＋ 回滚余量 ＋ 预取环。
+    /// 预取的块要能在原地等到"被滚到"，所以预算必须把环算进去，否则刚烘好的块会被 Trim 淘汰。
+    /// 手动设了 <see cref="BudgetTiles"/> 时它仍然是**下限**（和原来同一条口径）。
+    /// </summary>
+    public int BudgetNow => Math.Max(BudgetTiles, _visible.Count + ScrollBackMargin + RingTiles);
+
     /// <summary>这一帧可见的块，按"先创建顺序"排列；合成时遍历它。</summary>
     public List<Tile> Visible => _visible;
 
@@ -253,20 +288,83 @@ internal sealed class CanvasTileCache : IDisposable
             }
         }
 
+        // 记录可见块的行列数：预算里的"预取环"按它算（见 BudgetNow / RingTiles）。
+        _visCols = Math.Max(0, x1 - x0 + 1);
+        _visRows = Math.Max(0, y1 - y0 + 1);
+
         Trim();
+    }
+
+    /// <summary>
+    /// 视口外一圈里还有没有"欠着的块"（不存在或脏）。只做扫描，不光栅。
+    /// 引擎用它决定要不要排空闲预取拍。
+    /// </summary>
+    public bool PrefetchNeeded(in RectF visibleCanvas)
+    {
+        if (!PrefetchEnabled || PrefetchPerFrame <= 0 || visibleCanvas.IsEmpty) return false;
+
+        int x0 = FirstIdx(visibleCanvas.MinX), x1 = LastIdx(visibleCanvas.MaxX);
+        int y0 = FirstIdx(visibleCanvas.MinY), y1 = LastIdx(visibleCanvas.MaxY);
+        for (int ty = y0 - 1; ty <= y1 + 1; ty++)
+            for (int tx = x0 - 1; tx <= x1 + 1; tx++)
+            {
+                if (tx >= x0 && tx <= x1 && ty >= y0 && ty <= y1) continue;   // 视口内的归 Sync
+                if (!_tiles.TryGetValue(Key(tx, ty), out var t) || t.Dirty) return true;
+            }
+        return false;
+    }
+
+    /// <summary>
+    /// 预取一拍：只烘**视口外一圈**里欠着的块，最多 <see cref="PrefetchPerFrame"/> 块。
+    /// 不碰可见块、不合成、不上屏（上游的预渲染思路，见 <see cref="PrefetchEnabled"/>）。
+    /// 返回 true = 环里还有活（引擎再排下一拍）。
+    /// </summary>
+    public bool Prefetch(in RectF visibleCanvas, Func<ID2D1Bitmap1, RectF, List<Stroke>, int> paint)
+    {
+        LastPrefetch = 0;
+        PrefetchMsLastFrame = 0;
+        PrefetchPending = false;
+        if (!PrefetchNeeded(visibleCanvas)) return false;
+
+        int x0 = FirstIdx(visibleCanvas.MinX), x1 = LastIdx(visibleCanvas.MaxX);
+        int y0 = FirstIdx(visibleCanvas.MinY), y1 = LastIdx(visibleCanvas.MaxY);
+
+        for (int ty = y0 - 1; ty <= y1 + 1; ty++)
+            for (int tx = x0 - 1; tx <= x1 + 1; tx++)
+            {
+                if (tx >= x0 && tx <= x1 && ty >= y0 && ty <= y1) continue;   // 视口内的归 Sync
+                long k = Key(tx, ty);
+                if (_tiles.TryGetValue(k, out var tile) && !tile.Dirty) continue;
+
+                if (LastPrefetch >= PrefetchPerFrame) { PrefetchPending = true; continue; }
+
+                if (tile == null)
+                {
+                    tile = Create(tx, ty);
+                    _tiles[k] = tile;
+                }
+                var sw = Stopwatch.StartNew();
+                paint(tile.Target, RectOf(tx, ty), null);     // 整块重画；新块/脏块都不会有补画清单
+                sw.Stop();
+                PrefetchMsLastFrame += sw.Elapsed.TotalMilliseconds;
+                tile.Dirty = false;
+                tile.Appended.Clear();
+                tile.LastFrame = _frame;                      // 刚烘的算新，Trim 不会先淘汰它
+                LastPrefetch++;
+                PrefetchTotal++;
+            }
+        return PrefetchPending;
     }
 
     /// <summary>
     /// 淘汰看不见的旧块。
     ///
     /// **绝不淘汰这一帧可见的块**——那是正在显示的东西。按最后使用帧号从旧到新
-    /// 丢，直到回到预算内。
+    /// 丢，直到回到预算内。预算把预取环也算进去了（见 <see cref="BudgetNow"/>）。
     /// </summary>
     private void Trim()
     {
-        int budget = BudgetTiles > 0
-            ? Math.Max(BudgetTiles, _visible.Count + ScrollBackMargin)
-            : _visible.Count + ScrollBackMargin;
+        int budget = BudgetNow;
         if (_tiles.Count <= budget) return;
 
         _trimScratch.Clear();

@@ -422,6 +422,12 @@ internal static class ExportFileDialog
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
 
+    [DllImport("user32.dll")]
+    private static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc cb, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -618,6 +624,10 @@ internal static class ExportFileDialog
                 Thread.Sleep(10);
                 IntPtr dlg = FindOurDialog();
                 if (dlg == IntPtr.Zero) continue;
+                // **等它"长好"再碰**：对话框刚 CreateWindow 时可见但空（子控件还没建、
+                // 客户区还没画）。这时 SWP_SHOWWINDOW/激活会把它那张**空白首帧**强行摆到
+                // 屏幕上——用户 2026-10-05 报的"点保存图片先闪一下白屏，然后才出对话框"。
+                if (!DialogReady(dlg)) continue;
                 CenterAndBringUp(dlg);
                 Log($"对话框 {dlg} 已居中并顶到最前（看门线程第 {i + 1} 次尝试）");
                 return;
@@ -626,6 +636,22 @@ internal static class ExportFileDialog
         });
         t.IsBackground = true;
         t.Start();
+    }
+
+    /// <summary>
+    /// 对话框"长好了"吗：可见 **且已经建出子控件**（客户区画得出来了）。
+    ///
+    /// 为什么需要：通用对话框是"先创建空壳、再建控件、再画"的三拍。看门线程 10ms 一轮，
+    /// 很容易在第二拍之前就抓到它——那一刻碰它（尤其 `SWP_SHOWWINDOW` / 激活），
+    /// 就会把它那张空白首帧摆到老师眼前（用户 2026-10-05 报的白屏）。
+    /// 子控件出现 = 客户区马上就有内容，这时再置顶/激活就不会看到空白。
+    /// </summary>
+    private static bool DialogReady(IntPtr hwnd)
+    {
+        if (!IsWindowVisible(hwnd)) return false;
+        bool hasChild = false;
+        EnumChildWindows(hwnd, (h, _) => { hasChild = true; return false; }, IntPtr.Zero);
+        return hasChild;
     }
 
     /// <summary>
@@ -688,7 +714,10 @@ internal static class ExportFileDialog
                 + $"出生看到：{_cbtBirthNote}");
 
             // ① 先只管 z 序：把它提到置顶层，位置先别动。
-            SetWindowPos(hwnd, HwndTopmost, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            //    ⚠ **不带 SWP_SHOWWINDOW**：对话框由系统自己显示；我们提前 Show，
+            //    会在它还没画完时把空白首帧推上屏幕（同 DialogReady 那段注释）。
+            //    只用 NOACTIVATE 调 z 序，它自己的首帧由系统按正常节奏画。
+            SetWindowPos(hwnd, HwndTopmost, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
             // ② 激活（见下面第三段）。
             IntPtr fg = GetForegroundWindow();
@@ -830,11 +859,13 @@ internal static class ExportFileDialog
     /// <paramref name="filterIndex"/> 回传用户选的是第几条（见 <see cref="ExportFormats"/>，
     /// 1 = PNG 透明底、2 = JPEG 白底、3 = PNG 白底、4 = BMP 白底）。
     ///
-    /// **格式差别就写在文件类型那一行**（用户 2026-09-17 问"要不要让用户知道 png 是透明底、
-    /// jpg 是白底？"）：那是他唯一一定会看的一行，比在别处写提示都管用。
+    /// **<paramref name="title"/> 必须由调用方给**：这里以前写死"导出选中的内容"，
+    /// 于是「更多 → 保存图片」（整块板书）也顶着"导出选中的内容"的标题弹框
+    /// （2026-10-05 用户报"点保存图片怎么先跳出来这个"——功能没错，标题串了门）。
+    /// 两个入口分明：选中导出 = 导出选中的内容；保存图片 = 保存板书图片。
     /// </summary>
     public static string AskForImage(IntPtr owner, string suggestedName, int defaultFilterIndex,
-                                     out int filterIndex)
+                                     string title, out int filterIndex)
     {
         filterIndex = defaultFilterIndex;
         StartDialogWatcher();          // 看门线程：对话框出现后置顶 + 激活 + 防系统再摆
@@ -849,7 +880,7 @@ internal static class ExportFileDialog
             // 缓冲要**预分配成 nMaxFile 那么长**，再把建议的文件名写进开头
             lpstrFile = suggestedName + new string('\0', Math.Max(0, 512 - suggestedName.Length)),
             nMaxFile = 512,
-            lpstrTitle = "导出选中的内容",
+            lpstrTitle = title,
             lpstrDefExt = ExportFormats.ExtensionFor(defaultFilterIndex).TrimStart('.').Split(';')[0],
             Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
         };
@@ -859,6 +890,70 @@ internal static class ExportFileDialog
         finally { RemoveDialogPositionHook(); }
         if (!ok) return null;
         filterIndex = ofn.nFilterIndex;
+        var path = (ofn.lpstrFile ?? "").Trim().TrimEnd('\0');
+        return string.IsNullOrEmpty(path) ? null : path;
+    }
+
+    // ---- 墨迹文件（.inkb）的保存 / 打开（墨迹 A，2026-10-01）------------------
+    //
+    // 和上面那条走**完全同一套**看门线程 + CBT 居中 + 焦点借用（由调用方包住），
+    // 不重新发明；区别只在过滤器、标题、默认扩展名，以及"另存为"换成"打开"。
+
+    private const string InkFilter = "InkTeach 板书 (*.inkb)\0*.inkb\0\0";
+    private const int OFN_FILEMUSTEXIST = 0x00001000;
+
+    [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool GetOpenFileNameW([In, Out] OpenFileName ofn);
+
+    /// <summary>"保存墨迹"：弹另存为。返回 null = 取消。</summary>
+    public static string AskForInkSave(IntPtr owner, string suggestedName, string initialDir)
+    {
+        StartDialogWatcher();
+        InstallDialogPositionHook();
+        var ofn = new OpenFileName
+        {
+            lStructSize = SizeOfOpenFileName,
+            hwndOwner = owner,
+            lpstrFilter = InkFilter,
+            nFilterIndex = 1,
+            lpstrFile = suggestedName + new string('\0', Math.Max(0, 512 - suggestedName.Length)),
+            nMaxFile = 512,
+            lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
+            lpstrTitle = "保存墨迹",
+            lpstrDefExt = "inkb",
+            Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
+        };
+        bool ok;
+        try { ok = GetSaveFileNameW(ofn); }
+        finally { RemoveDialogPositionHook(); }
+        if (!ok) return null;
+        var path = (ofn.lpstrFile ?? "").Trim().TrimEnd('\0');
+        return string.IsNullOrEmpty(path) ? null : path;
+    }
+
+    /// <summary>"打开墨迹"：弹打开对话框（只认 .inkb，必须已存在）。返回 null = 取消。</summary>
+    public static string AskForInkOpen(IntPtr owner, string initialDir)
+    {
+        StartDialogWatcher();
+        InstallDialogPositionHook();
+        var ofn = new OpenFileName
+        {
+            lStructSize = SizeOfOpenFileName,
+            hwndOwner = owner,
+            lpstrFilter = InkFilter,
+            nFilterIndex = 1,
+            // 缓冲区预分配成 nMaxFile 那么长（同 AskForImage 的理由：字段必须是 string）
+            lpstrFile = new string('\0', 512),
+            nMaxFile = 512,
+            lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
+            lpstrTitle = "打开墨迹",
+            lpstrDefExt = "inkb",
+            Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
+        };
+        bool ok;
+        try { ok = GetOpenFileNameW(ofn); }
+        finally { RemoveDialogPositionHook(); }
+        if (!ok) return null;
         var path = (ofn.lpstrFile ?? "").Trim().TrimEnd('\0');
         return string.IsNullOrEmpty(path) ? null : path;
     }

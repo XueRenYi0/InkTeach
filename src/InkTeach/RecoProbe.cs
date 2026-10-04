@@ -559,9 +559,10 @@ internal static class RecoProbe
         var hyper = TwoBranchHyperbola(rnd);
         var hyperChain = ShapeRecognize.RecognizeChain(hyper);
 
-        // ── 吸附边界 ────────────────────────────────────────────────────
-        var snapIn = ShapeRecognize.SnapToAxis(new Vector2(0, 0), SnapEnd(3.9f), 4f);
-        var snapOut = ShapeRecognize.SnapToAxis(new Vector2(0, 0), SnapEnd(4.1f), 4f);
+        // ── 角度吸附边界（2026-10-05 起）────────────────────────────────
+        // 停顿直线的"0/90 ±4°"那一套已并入画直线的 `SelectionHandles.SnapEndPoint`
+        // （特殊角 ±1°），边界在 `--shapetooltest` C 段逐档钉住（0.5° 吸 / 1.1° 不吸），
+        // 这里不再留第二份判据（同一个吸附写两份必漂，见 架构-分层与规则.md 五-7）。
 
         // ── 断言 ────────────────────────────────────────────────────────
         Console.WriteLine();
@@ -628,9 +629,8 @@ internal static class RecoProbe
               hyperChain.IsNothing ? $"未识别：{ShortRule(hyperChain.Rule)}"
                                    : $"认成 {Label(hyperChain.Kind)}");
 
-        // ⑦ 吸附边界：3.9° 吸、4.1° 不吸（画坐标轴刚需）
-        Check("角度吸附边界（±4°）", snapIn.b.Y == 0f && snapOut.b.Y != 0f,
-              $"3.9° → 吸平（y={snapIn.b.Y:F1}）；4.1° → 不动（y={snapOut.b.Y:F1}）");
+        // ⑦ （2026-10-05 移除）角度吸附边界 —— 停顿直线已统一到画直线那套
+        //     （`SelectionHandles.SnapEndPoint`，特殊角 ±1°），边界由 `--shapetooltest` C 段钉。
 
         // ⑧ 斜的形状：姿态角的**方向**没搞反（镜像)。包围盒查不出这个，必须单独卡。
         Check("斜椭圆 / 斜矩形 的姿态方向没镜像", rotChecked > 0 && worstAxisDot >= 0.90f,
@@ -1989,13 +1989,6 @@ internal static class RecoProbe
     // =====================================================================
     //  小工具
     // =====================================================================
-
-    /// <summary>造一条"刚好差一点"的线：给定倾角，返回它的另一个端点（供吸附边界用）。</summary>
-    private static Vector2 SnapEnd(float deg)
-    {
-        float rad = deg * MathF.PI / 180f;
-        return new Vector2(MathF.Cos(rad) * 300f, MathF.Sin(rad) * 300f);
-    }
 
     /// <summary>墨迹的**各向异性** `√(λ1/λ2)`（≥1，越大越"长"）：判断"主轴可不可信"用。</summary>
     private static float Anisotropy(Vector2[] pts)

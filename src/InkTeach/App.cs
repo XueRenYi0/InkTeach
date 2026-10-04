@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Numerics;
 using System.Runtime;
 using System.Runtime.InteropServices;
@@ -13,11 +13,11 @@ namespace InkTeach;
 /// 开发期宿主：持有引擎，外加一整套自动化测试/基准工具。
 /// 继承只是为了让这些工具直接读引擎内部状态（产品代码请用组合：new InkEngine()）。
 /// </summary>
-internal sealed class App : InkEngine.InkEngine
+internal sealed partial class App : InkEngine.InkEngine
 {
     private IntPtr _clickTargetHwnd;
     private string _clickLogFile;
-    private bool _panelShowDrawer;
+    private bool _panelShowMore;
     private bool _panelShowMini;
     private bool _panelShowBand;
     private bool _selfCheckMode;
@@ -103,6 +103,14 @@ internal sealed class App : InkEngine.InkEngine
         // 自动存档同理：自检**绝不能碰用户真正的板书**
         if (_selfCheckMode && Recovery.AutoSavePathOverride == null)
             Recovery.AutoSavePathOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck-autosave.ink");
+        // PPT 批注缓存同理：假源用的键是"假演示文稿"，之前没隔离时历次自检会把它
+        // **永久写进用户真目录**（还会跨次累积、把计数类断言撑坏——2026-10-01 抓到）。
+        // 自检每次启动先清空这份临时缓存；--ppttest 会在运行时再指向自己的目录。
+        if (_selfCheckMode && PptStore.RootOverride == null)
+        {
+            PptStore.RootOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck-ppt");
+            try { if (Directory.Exists(PptStore.RootOverride)) Directory.Delete(PptStore.RootOverride, true); } catch { }
+        }
         // 自检里**不弹"另存为"对话框**：它会阻塞等消息，而自检是自己抽消息推进的，
         // 一弹就卡到超时（`--selftest` 会逐个点操作条上的按钮，点到"导出"就中招）。
         // 导出那条链由 `--iotest` 走"不弹框、直接写指定路径"验，见 ExportSelectionToPathForTest。
@@ -171,6 +179,18 @@ internal sealed class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             PanelTest();
+        }
+        else if (mode == "--radialtest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            RadialTest();
+        }
+        else if (mode == "--radialshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            RadialShow(args.Length > 1 ? args[1] : "reports/radial-palette.bmp");
         }
         else if (mode == "--shapebandtest")
         {
@@ -275,9 +295,17 @@ internal sealed class App : InkEngine.InkEngine
                 InkUi.IconAtlas.DevLaserVariant = laserVariant;
             PanelShow(args.Length > 1 ? args[1] : "reports/panel-第一版.png");
         }
+        else if (mode == "--demogif")
+        {
+            // 演示连拍（写字 → 停顿变图形 → 选中拖动 → 截图取景）：帧存成 <目录>\NNNN.bmp，
+            // 之后用 tools\make-demo-gif.ps1 拼成 README 头部那张 GIF。只在开发机上跑。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            DemoGif(args.Length > 1 ? args[1] : "tmp/demo");
+        }
         else if (mode == "--makeicon")
         {
-            // 生成程序图标（用界面自己的渲染画那颗球），见 MakeIcon。
+            // 生成程序图标（用界面自己的渲染画 <see cref="AppIconUi"/> 那张：白砖＋大笔），见 MakeIcon。
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             MakeIcon(args.Length > 1 ? args[1] : "assets/InkTeach.ico");
@@ -353,6 +381,12 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PixelEraserTest();
         }
+        else if (mode == "--dynerasertest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            DynEraserTest();
+        }
         else if (mode == "--pixeleraseshow")
         {
             _autoExitAt = double.MaxValue;
@@ -408,6 +442,14 @@ internal sealed class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             TileTest();
+        }
+        else if (mode == "--prefetchtest")
+        {
+            // 分块空闲预取自检：滚两格 → 预取把视口外一圈烘好 → 再滚一格不重画；
+            // 自带"关预取就重画"的对照（自证有效）。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PrefetchTest();
         }
         else if (mode == "--widthtest")
         {
@@ -673,18 +715,19 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             TouchGuardTest();
         }
-        else if (mode == "--predicttailtest")
-        {
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            PredictTailTest();
-        }
-        else if (mode == "--predicttest")
-        {
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            PredictorTest();
-        }
+        // [停用 2026-10-05] 预测尾/预测算法自检（老预测系统停用，见 已停用-渲染实验.md）
+        // else if (mode == "--predicttailtest")
+        // {
+        //     _autoExitAt = double.MaxValue;
+        //     _nextLogAt = double.MaxValue;
+        //     PredictTailTest();
+        // }
+        // else if (mode == "--predicttest")
+        // {
+        //     _autoExitAt = double.MaxValue;
+        //     _nextLogAt = double.MaxValue;
+        //     PredictorTest();
+        // }
         else if (mode == "--smoothtest")
         {
             // **纯算法，不建窗口**（和 `--inktest` 同一个口径）：曲线器是离线几何，
@@ -692,6 +735,22 @@ internal sealed class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             ExitCode = SmoothProbe.Run();
+            _quit = true;
+        }
+        // [停用 2026-10-05] M3 弹簧专项自检（模式已停用，见 已停用-渲染实验.md）
+        // else if (mode == "--inkmodeltest")
+        // {
+        //     _autoExitAt = double.MaxValue;
+        //     _nextLogAt = double.MaxValue;
+        //     ExitCode = InkModelProbe.Run();
+        //     _quit = true;
+        // }
+        else if (mode == "--motiontest")
+        {
+            // 对照台总自检：M0/M1/M2/M3/M4/M5 同一批语料出表。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ExitCode = MotionProbe.Run();
             _quit = true;
         }
         else if (mode == "--smoothshow")
@@ -705,6 +764,24 @@ internal sealed class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             SmoothFlashTest(!args.Contains("--off"), args.Contains("--fast"));
+        }
+        else if (mode == "--prevflash")
+        {
+            // 诊断：**"写下一笔时，上一笔闪不闪"**（用户 2026-10-04 报）。
+            // --pen = 走合成笔（PT_PEN + 压感，覆盖 ID2D1Ink 那条真实渲染路）；
+            // --left = 用户的复现场景：横线底纹白板 + 屏幕左侧竖写。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PrevFlashTest(args.Contains("--pen"), args.Contains("--left"),
+                          args.Contains("--ui"), args.Contains("--fast"));
+        }
+        else if (mode == "--scrollflash")
+        {
+            // 诊断：**"滚轮滚动之后一按鼠标就闪/错位"**（用户 2026-10-04 报，
+            // 关键线索：滚动之后、按下才闪，松手就不闪；以前竖写时也遇到过）。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ScrollFlashTest();
         }
         else if (mode == "--wetdrytest")
         {
@@ -738,12 +815,13 @@ internal sealed class App : InkEngine.InkEngine
                               + $"，apply={AutoApplyUpdate} ===");
             CheckUpdateFromUi();
         }
-        else if (mode == "--tailjumptest")
-        {
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            TailJumpTest(args.Contains("--noisy"), args.Contains("--off"));
-        }
+        // [停用 2026-10-05] 预测尾"突突跳"检测（老预测系统停用，见 已停用-渲染实验.md）
+        // else if (mode == "--tailjumptest")
+        // {
+        //     _autoExitAt = double.MaxValue;
+        //     _nextLogAt = double.MaxValue;
+        //     TailJumpTest(args.Contains("--noisy"), args.Contains("--off"));
+        // }
         else if (mode == "--pressurediag")
         {
             _autoExitAt = double.MaxValue;
@@ -756,13 +834,50 @@ internal sealed class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PressureTest();
         }
-        else if (mode == "--predictdata")
+        else if (mode == "--inkfiletest")
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
-            PredictEval.Run(args.Length > 1 ? args[1] : "tmp/datasets");
-            _quit = true;
+            InkFileTest();
         }
+        else if (mode == "--replaytest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ReplayTest();
+        }
+        else if (mode == "--timertest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            TimerTest();
+        }
+        else if (mode == "--rolltest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            RollTest();
+        }
+        else if (mode == "--replayshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ReplayShow(args.Length > 1 ? args[1] : "reports/replay-bar.bmp");
+        }
+        else if (mode == "--ballprobe")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            BallProbe(args.Length > 1 ? args[1] : "reports/ball");
+        }
+        // [停用 2026-10-05] 真实笔迹数据预测评测（老预测系统停用，见 已停用-渲染实验.md）
+        // else if (mode == "--predictdata")
+        // {
+        //     _autoExitAt = double.MaxValue;
+        //     _nextLogAt = double.MaxValue;
+        //     PredictEval.Run(args.Length > 1 ? args[1] : "tmp/datasets");
+        //     _quit = true;
+        // }
         else if (mode == "--wetinktest")
         {
             _autoExitAt = double.MaxValue;
@@ -907,6 +1022,8 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --passtest          穿透真机测试（跨进程点击）");
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
+        Console.WriteLine("  --radialtest        呼出盘自检（Ctrl+Alt+Shift+Q：开 / 划 / 松 / 取消 / 穿透 / 松键轮询）");
+        Console.WriteLine("  --radialshow [图]   呼出盘摆样：定格在屏幕中央出图（默认 reports/radial-palette.bmp）");
         Console.WriteLine("  --shapeiconshow [路径] 出图：图形面板图标的对照表（含每一档的变体）");
         Console.WriteLine("  --toolicons [路径]  出图：白板 / 激光笔的图标候选（未选中 / 选中 / 放大三格）");
         Console.WriteLine("  --penshow [路径] [bars]  出图：上游那批「带笔的」图标；带第 2 个参数就每格加一副「三道杠」");
@@ -928,13 +1045,16 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --lasertest         激光笔自检（拖尾一直写不缩 / 松手停 2 秒再整体淡出 / 多条并存 /");
         Console.WriteLine("                      粗细真的管用 / 不是笔迹）；顺带出图 reports/laser-trail.png");
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
-        Console.WriteLine("  --panelshow <图> [--band] [--mini] [--drawer] [--cell N] [--shape 名字] [--zoom N]   界面出图（离屏）");
-        Console.WriteLine("  --makeicon <图.ico>      用界面自己的渲染生成程序图标（那颗球 + 当前笔色的圈）");
+        Console.WriteLine("  --panelshow <图> [--band] [--mini] [--more [--page N]] [--cell N] [--shape 名字] [--zoom N]   界面出图（离屏；--more --page 0=启动器 1=设置）");
+        Console.WriteLine("  --demogif <目录>    演示连拍（写字→停顿变图形→选中拖动→截图取景，存 NNNN.bmp 帧）");
+        Console.WriteLine("  --makeicon <图.ico>      用界面自己的渲染生成程序图标（线条笔＋白砖＋带笔锋的红笔迹）");
         Console.WriteLine("  --captureshow <图>  截图取景框 + 尺寸读数出图（离屏）");
         Console.WriteLine("  --dialogprobe <前缀> [--save]  导出对话框探针（真弹框 + 点它的下拉 + 连拍三张；");
         Console.WriteLine("                     --save 连「保存」一起点，验到落盘为止）");
         Console.WriteLine("  --erasertest        橡皮擦正确性");
         Console.WriteLine("  --pixelerasetest    像素橡皮正确性（切成两段 / 框里无墨 / 一步撤销）");
+        Console.WriteLine("  --dynerasertest     动态橡皮（曲线：死区到 0.8 / 慢=基准1.0不缩 / 快封顶 2.5；窗口抗抖；慢扫 vs 快扫；框跟速度；严丝合缝）");
+        Console.WriteLine("  --eraserhud         橡皮读数浮层（左下角实时 速度/目标/当前系数/尺寸；调门槛用，不进界面）");
         Console.WriteLine("  --pixeleraseshow    像素橡皮摆样（擦之前/之后各存一张图，自己抓屏）");
         Console.WriteLine("  --eraserlab [前缀]  橡皮手测台：铺样例 + 记录每条拖拽，给人用鼠标测（不自动退出）");
         Console.WriteLine("  --imagetest         图像对象（上屏 / 复制翻转 / 存档 / 剪贴板）");
@@ -944,26 +1064,37 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine("  --cursorshow <笔|荧光笔|激光笔|橡皮|像素橡皮> [宽]  落点摆样");
         Console.WriteLine("  --widthtest         笔迹粗细/压力");
         Console.WriteLine("  --ghosttest         残影检测");
+        Console.WriteLine("  --tiletest          分块缓存自检（边界无缝 / 回程复用 / 内存上界）");
+        Console.WriteLine("  --prefetchtest      分块空闲预取自检（预取命中则再滚一格不重画；含关预取对照）");
+        Console.WriteLine("  --noprefetch        关掉分块空闲预取（对照；默认开）");
         Console.WriteLine("  --trailtest         委托墨迹轨迹对照");
-        Console.WriteLine("  --predicttest       笔迹预测自检（纯算法：直线/加速/急转/断笔/限幅/性能）");
-        Console.WriteLine("  --predicttailtest   预测尾自检（鼠标/触摸：合并点读全 + 尾巴真的上屏）");
         Console.WriteLine("  --smoothtest        中心线曲线化自检（过点 Catmull-Rom：直角不变形 / 圆弧更圆滑 / 形状不跑）");
         Console.WriteLine("  --smoothshow [图]   出图：曲线化开/关对照（同一组样本各存一张 -off / -on，32 位 BMP）");
         Console.WriteLine("  --smoothflashtest [--off]  “画的时候闪不闪”专项检测（合成鼠标画过去，看已经画过的墨还动不动）");
-        Console.WriteLine("  --nosmooth          关掉中心线曲线化（**默认开**；只用于对照。--smoothcorner N 调角点阈值）");
-        Console.WriteLine("  --predict           打开笔迹预测（**默认关**：真笔那条 DWM 不画、鼠标那条会“突突”跳）");
-        Console.WriteLine("                      --predictms N / --predictlead N 调地平线与前带量上限");
+        Console.WriteLine("  --prevflash [--pen] [--left]  “写下一笔时，上一笔闪不闪”专项检测（合成鼠标/合成笔；--left=左侧竖写+横线底纹）");
+        Console.WriteLine("  --motion <名字>     catmull / mean2（**默认 mean2**=距离窗＋过点曲线＋收笔追赶）");
+        Console.WriteLine("  --motiontest        运动模型自检（baseline / catmull / mean2 同批语料出表）");
+        Console.WriteLine("  --himetric          D1 亚像素输入（用 ptHimetricLocation 映射小数像素；默认关，做 A/B）");
+        Console.WriteLine("  模型调参：--mean2win 画布像素 / --smoothcorner N 角点阈值");
+        Console.WriteLine("  [已停用] 预测、拟合(--mean2fit)、模拟压力(--simpressure/--pfpressure)、笔锋");
+        Console.WriteLine("           (--simtaper/--flicktip)、对照模式(raw/sliding/spring/oneeuro/mean/gauss)等：");
+        Console.WriteLine("           见 已停用-渲染实验.md（代码保留）");
         Console.WriteLine("  --wetdrytest [--live 20] 湿墨/干墨交接测量（**要真笔**：在中间那条浅灰线间画一笔）");
-        Console.WriteLine("  --tailjumptest [--noisy] [--off]  预测尾“突突跳”检测（--off = 关预测做对照）");
-        Console.WriteLine("  --updatetest        自动更新自检（离线：解析 / 版本比较 / sha256 / 换壳脚本语法）");
+        Console.WriteLine("  --updatetest        自动更新自检（离线：解析 / 版本比较 / sha256 / 下载候选 / 换壳脚本沙箱真跑）");
         Console.WriteLine("  --updatecheck [清单地址] [--apply]  自动更新验收（**会真的换壳**：--apply = 查到就装）");
         Console.WriteLine("  --touchguardtest    触摸自检（合成触摸：PT_TOUCH 通路 + 第二根手指不许抢笔）");
         Console.WriteLine("  --gclatencytest     书写期间 GC 低延迟档自检（真进得去 / 无第 2 代回收 / 超时退得回）"
                           + "；--nogclatency 对照、--gchold N 调保持毫秒");
         Console.WriteLine("  --pressurediag      压感采集诊断（合成笔注入：合并点、压感有效位、压力分布）");
-        Console.WriteLine("  --pressuretest      压感自检（映射函数 / 上屏粗细随压力变 / 无压感与虚线回退 / 存档往返）");
+        Console.WriteLine("  --pressuretest      压感自检（映射函数 / 上屏粗细随压力变 / 无压感与虚线回退 / 开关往返 / 存档往返）");
+        Console.WriteLine("  --inkfiletest       墨迹文件自检（保存/打开往返 / 打开前备份与轮转 / 坏文件不动文档 / 放映中置灰）");
+        Console.WriteLine("  --replaytest        墨迹回放自检（时间轴 / 前缀 / 暂停 / 倍速 / 只读 / 控制条 / 翻页退出）");
+        Console.WriteLine("  --timertest         课堂计时器自检（功能卡：设置态↔运行态 / ⚙ / ±1分 / 到点超时 / 提示音 / 穿透小窗）");
+        Console.WriteLine("  --rolltest          课堂点名自检（功能卡：设置↔结果 / 滚动定格 / 去重池子 / 名单 / 穿透小窗）");
+        Console.WriteLine("  --replayshow <图>   墨迹回放摆样（铺几笔 → 播到一半 → 截控制条那一块）");
+        Console.WriteLine("  --ballprobe [前缀]  收起球贴边诊断（左/右/四角 × 显示/隐藏，逐个出图）");
         Console.WriteLine("  --wetinktest        湿墨轨迹实测（只让系统画，数上屏像素：这条通道到底画不画）");
-        Console.WriteLine("  --predictdata [路径] 真实笔迹数据上的预测评测（UCI Character Trajectories）");
+        // [停用] Console.WriteLine("  --predictdata [路径] 真实笔迹数据上的预测评测（UCI Character Trajectories）");
         Console.WriteLine("  --latbench <csv>    延时实测（分场景 + 分位数 + 稳定性）");
         Console.WriteLine("  --penlive [秒]      真笔延时实测（挂上手写笔写一会儿，出报告）");
         Console.WriteLine("  --longrun [秒]      长时运行内存/CPU");
@@ -1936,6 +2067,59 @@ internal sealed class App : InkEngine.InkEngine
             }
         }
 
+        // ⑧ **保存图片**（2026-10-02「更多 → 墨迹 → 保存图片」）：整块板书 → 图片。
+        //    判据：写盘成功 / 尺寸 = 整块内容包围盒 / 默认白底 / 笔迹在 /
+        //    **不碰选中与剪贴板** / 空板书拒绝。
+        {
+            string boardPath = Path.Combine(Path.GetTempPath(), "inkteach-iotest-board.jpg");
+            try { File.Delete(boardPath); } catch { }
+
+            // 先把选区清干净：证明保存图片**不依赖、也不改动**选区
+            Doc.Selected.Clear();
+            var boxAll = EditRegion.Of(new[] { pen, hl }).Inflate(4f * DpiScale);
+            int bw = (int)MathF.Ceiling(boxAll.MaxX - boxAll.MinX);
+            int bh = (int)MathF.Ceiling(boxAll.MaxY - boxAll.MinY);
+
+            bool okBoard = SaveBoardImageForTest(boardPath);
+            Check("保存图片：返回成功、文件存在", okBoard && File.Exists(boardPath),
+                  $"返回 {okBoard}，文件在 = {File.Exists(boardPath)}");
+            if (File.Exists(boardPath))
+            {
+                try
+                {
+                    using var bmp = new System.Drawing.Bitmap(boardPath);
+                    Check("保存图片：尺寸 = 整块板书内容",
+                          bmp.Width == bw && bmp.Height == bh,
+                          $"{bmp.Width}×{bmp.Height}，内容 {bw}×{bh}");
+                    var blankPx = bmp.GetPixel(20, 20);
+                    Check("保存图片：默认白底（发微信不露黑）",
+                          blankPx.R > 235 && blankPx.G > 235 && blankPx.B > 235,
+                          $"({blankPx.R},{blankPx.G},{blankPx.B})");
+                    var penPx = bmp.GetPixel(Math.Clamp((int)(700 - boxAll.MinX), 0, bmp.Width - 1),
+                                             Math.Clamp((int)(400 - boxAll.MinY), 0, bmp.Height - 1));
+                    Check("保存图片：笔迹在里面", penPx.G < 110 && penPx.B < 110,
+                          $"({penPx.R},{penPx.G},{penPx.B})");
+                }
+                catch (Exception ex) { Check("保存图片：能被别的解码器读出来", false, ex.Message); }
+                try { File.Delete(boardPath); } catch { }
+            }
+            Check("保存图片：**不碰选中**（之前清空的选区还是空的）",
+                  Doc.Selected.Count == 0, $"选中 {Doc.Selected.Count}");
+            bool clip2 = ClipboardInk.TryGetObjects(out var back2);
+            Check("保存图片：**不动剪贴板**（还是那条标记）",
+                  clip2 && back2 != null && back2.Count == 1, $"读回 {back2?.Count}");
+
+            // 空板书拒绝、不写文件
+            Doc.Clear();
+            string emptyBoard = Path.Combine(Path.GetTempPath(), "inkteach-iotest-board-empty.jpg");
+            try { File.Delete(emptyBoard); } catch { }
+            bool okEmpty = SaveBoardImageForTest(emptyBoard);
+            Check("保存图片：空板书拒绝、不写文件",
+                  !okEmpty && !File.Exists(emptyBoard),
+                  $"返回 {okEmpty}，文件在 = {File.Exists(emptyBoard)}");
+            try { File.Delete(emptyBoard); } catch { }
+        }
+
         Console.WriteLine();
         Console.WriteLine(fail == 0
             ? "  PASS：四种格式都对（PNG 透明底 / JPEG 白底 / PNG 白底 / BMP 白底，逐像素验过），而且没碰剪贴板"
@@ -2022,6 +2206,106 @@ internal sealed class App : InkEngine.InkEngine
         Check("进放映：进入 PPT 模式", PptMode, $"PptMode={PptMode}");
         Check("进放映：切到第 1 页（键 = SlideID）", Doc.PageKey == 256, $"页键 {Doc.PageKey}");
         Check("进放映：桌面批注**看不见了**（完全隔离）", Doc.Strokes.Count == 0, $"{Doc.Strokes.Count} 条");
+
+        // ---- ①.2 危险顺序：**面板先开着，PptMode 才打开**——第一次定位不许被顶走 ----
+        //
+        // 用户 2026-10-01 实测："先开放映、再开「更多」"条不动——那是**安全顺序**：
+        // 条在放映第一帧就定位完了（那时界面只是工具条）。真正的危险顺序是反过来：
+        // 面板开着时 PptMode 才打开（比如 Alt+Tab 回 PPT 按 F5；我们的覆盖层不抢前台，
+        // 键盘还在 PPT 手里）。那时 `PptBarRect` 的"避让工具条"会把条顶到屏幕顶部
+        // （修之前实测落在 (32,32)，默认应是左下角 (32,1672)）。
+        {
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(150);
+            var uiProbe = CurrentUi as InkUi.FullUi;
+            var scr = new RectF { MinX = _virtualX, MinY = _virtualY,
+                                  MaxX = _virtualX + _virtualW, MaxY = _virtualY + _virtualH };
+            float defTop = scr.MaxY - 16f * DpiScale - PptBar.BarH * DpiScale;
+            float defLeft = scr.MinX + 16f * DpiScale;
+
+            var toolbarRect = new RectF { MinX = 600f, MinY = scr.MaxY - 96f,
+                                          MaxX = 1000f, MaxY = scr.MaxY - 32f };
+            Check("判据：全屏模态矩形不参与避让、工具条矩形参与",
+                  UiLooksFullscreen(scr, scr) && !UiLooksFullscreen(toolbarRect, scr),
+                  $"全屏 {UiLooksFullscreen(scr, scr)}，工具条 {UiLooksFullscreen(toolbarRect, scr)}");
+
+            ResetPptBarPosForTest();
+            uiProbe?.OpenMoreForTest();
+            SettleFrames(200);
+            var barProbe = PptBarRect();
+            Check("面板开着时首次定位：PPT 条仍在默认左下角（全屏模态不参与避让）",
+                  MathF.Abs(barProbe.MinX - defLeft) < 1.5f && MathF.Abs(barProbe.MinY - defTop) < 1.5f,
+                  $"条左上 ({barProbe.MinX:F0},{barProbe.MinY:F0})，期望 ({defLeft:F0},{defTop:F0})");
+
+            uiProbe?.CloseMoreForTest();
+            ResetPptBarPosForTest();
+            SettleFrames(150);
+        }
+
+        // ---- ①.5 放映临时全局键 × 穿透：穿透期间让给下层（用户 2026-09-30 定）----
+        //
+        // 用户定的总规则："正常模式我们的键起作用、PPT 的键不起作用；穿透模式反过来。"
+        // 放映时那 8 个键是临时全局热键，穿透开着就该整体注销，把键盘还给 PPT/WPS。
+        {
+            Check("放映中：临时全局键已挂", PptHotkeysOnForTest,
+                  $"挂着 = {PptHotkeysOnForTest}");
+            SetPassThroughFromUi(true);
+            SettleFrames(150);
+            Check("放映中开穿透：临时全局键让给下层（PPT 的 Ctrl+P/E 等恢复可用）",
+                  PassThrough && !PptHotkeysOnForTest,
+                  $"穿透 = {PassThrough}，挂着 = {PptHotkeysOnForTest}");
+            SetPassThroughFromUi(false);
+            SettleFrames(150);
+            Check("关掉穿透（还在放映）：临时全局键收回",
+                  !PassThrough && PptHotkeysOnForTest,
+                  $"穿透 = {PassThrough}，挂着 = {PptHotkeysOnForTest}");
+        }
+
+        // ---- ①.6 悬停提示：页码格 / ◀ / 长按菜单（2026-10-02）----
+        {
+            var bar = PptBarRect();
+            float dpi = DpiScale;
+            var page = PptBar.MidCell(bar, dpi);
+            PptBarPointerMove((page.MinX + page.MaxX) * 0.5f, (page.MinY + page.MaxY) * 0.5f);
+            UpdateEngineTooltip();
+            SettleFrames(650);
+            StepEngineTooltip();                  // 自检里没有主循环，手动推一下"到点"
+            Check("悬停页码格 0.5 秒：提示出现（点 = 页码跳转菜单）",
+                  TooltipShown && TooltipTitle == "页码" && TooltipNote.Contains("结束放映"),
+                  $"亮={TooltipShown}，标题={TooltipTitle}，说明={TooltipNote}");
+
+            // ◀ ▶ 按收窄后的清单**不配提示**（箭头一看就懂、按下即翻页）：悬停也不该冒卡
+            var left = new RectF { MinX = bar.MinX, MinY = bar.MinY,
+                                   MaxX = bar.MinX + PptBar.ArrowW * dpi, MaxY = bar.MaxY };
+            PptBarPointerMove((left.MinX + left.MaxX) * 0.5f, (left.MinY + left.MaxY) * 0.5f);
+            UpdateEngineTooltip();
+            SettleFrames(650);
+            StepEngineTooltip();
+            Check("悬停 ◀：**不出提示**（收窄：箭头不要提示）",
+                  !TooltipShown && string.IsNullOrEmpty(TooltipTitle),
+                  $"亮={TooltipShown}，标题={TooltipTitle ?? "（空）"}");
+
+            PptBarPointerMove(bar.MinX + 6f * dpi, bar.MaxY + 160f * dpi);   // 条外面
+            UpdateEngineTooltip();
+            SettleFrames(120);
+            Check("指针移开条：提示立刻收", !TooltipShown, $"亮={TooltipShown}");
+
+            // 菜单五项：逐项核对有说明（悬停码 100+i，和真实悬停同一套编号）
+            bool menuTipsAll = true; string menuTipsMiss = "";
+            for (int i = 0; i < PptMenuItemCount; i++)
+            {
+                PptBarHover = 100 + i;
+                UpdateEngineTooltip();
+                if (string.IsNullOrEmpty(TooltipTitle) || string.IsNullOrEmpty(TooltipNote))
+                { menuTipsAll = false; menuTipsMiss += i + " "; }
+            }
+            Check("菜单五项都有说明（六字标题之外）", menuTipsAll,
+                  menuTipsAll ? $"{PptMenuItemCount} 项" : $"缺：{menuTipsMiss}");
+
+            PptBarHover = -1;
+            ClearEngineTooltip();
+            SettleFrames(120);
+        }
 
         // ---- ② 每页一套 + 页内滚动 ----
         MakePen(400, 420);
@@ -2159,15 +2443,22 @@ internal sealed class App : InkEngine.InkEngine
             Check("点右端 ▶：这一下归它、命令给 PPT",
                   ate && fake.NextCalls == nextBefore2 + 1, $"吃掉={ate}，NextCalls={fake.NextCalls}");
 
-            // 点页码格 → 弹页号面板。
-            // 先把页数设成 12（面板铺成 2 行）：3 页时面板只有一行、点"第 5 格"根本不在面板里，
+            // 点页码格 → **弹菜单**（2026-10-02 第五轮；原来直接弹页号面板）。
+            // 先把页数设成 12（页号面板铺成 2 行）：3 页时面板只有一行、点"第 5 格"根本不在面板里，
             // 那样测的是"点面板外"——**用例要挑有代表性的输入**（这坑自检当场踩了一次）。
             fake.Total = 12;
             Step();
             float midX = (bar.MinX + bar.MaxX) * 0.5f, midY = (bar.MinY + bar.MaxY) * 0.5f;
             PptBarPointerDown(midX, midY);
             PptBarPointerUp(midX, midY);
-            Check("点页码：弹出页号面板", PptPagePanelOpen, $"面板={PptPagePanelOpen}");
+            Check("点页码：弹出菜单（长按入口已取消）",
+                  PptMenuOpen && !PptPagePanelOpen, $"菜单={PptMenuOpen}，面板={PptPagePanelOpen}");
+            Check("菜单第一项＝指定页码跳转", PptMenuItemText(0) == "指定页码跳转",
+                  $"第一项={PptMenuItemText(0)}");
+            PptMenuItemRectAt(0, out var miJump);
+            PptBarPointerDown((miJump.MinX + miJump.MaxX) * 0.5f, (miJump.MinY + miJump.MaxY) * 0.5f);
+            Check("点「指定页码跳转」：页号面板打开、菜单收起",
+                  PptPagePanelOpen && !PptMenuOpen, $"面板={PptPagePanelOpen}，菜单={PptMenuOpen}");
             PptPanelRect(out var panel);
             Check("面板长在条的上方、在屏幕里",
                   panel.MaxY <= bar.MinY + 0.5f && panel.MinY >= _virtualY
@@ -2198,8 +2489,11 @@ internal sealed class App : InkEngine.InkEngine
             Step();
             bar = PptBarRect();
             midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
-            PptBarPointerDown(midX, midY);
+            PptBarPointerDown(midX, midY);                 // 点页码 → 菜单
             PptBarPointerUp(midX, midY);
+            PptMenuItemRectAt(0, out var miJump75);        // 菜单第一项 → 页号面板
+            PptBarPointerDown((miJump75.MinX + miJump75.MaxX) * 0.5f,
+                              (miJump75.MinY + miJump75.MaxY) * 0.5f);
             Check("（准备）75 页时页号面板已打开", PptPagePanelOpen, $"面板={PptPagePanelOpen}");
             PptPanelRect(out var panel75);
             int cellsBad = 0; string firstBadCell = "（全部命中）";
@@ -2228,10 +2522,15 @@ internal sealed class App : InkEngine.InkEngine
             // 用户 2026-09-27 报的"悬停页码不准确"最可能就是这个。
             fake.Total = 400;
             Step();
+            // 先把 75 页那一轮开着的页号面板收掉（不先收，下面"点页码"会被面板吃掉）
+            PptBarPointerDown(_virtualX + 6f, _virtualY + 6f);
             bar = PptBarRect();
             midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
-            PptBarPointerDown(midX, midY);
+            PptBarPointerDown(midX, midY);                 // 点页码 → 菜单
             PptBarPointerUp(midX, midY);
+            PptMenuItemRectAt(0, out var miJump400);       // 菜单第一项 → 页号面板
+            PptBarPointerDown((miJump400.MinX + miJump400.MaxX) * 0.5f,
+                              (miJump400.MinY + miJump400.MaxY) * 0.5f);
             PptPanelRect(out var panelBig);
             Check("大页数（400 页）：面板被夹顶、确实压到条上（构造出了问题现场）",
                   panelBig.MaxY > bar.MinY + 0.5f,
@@ -2260,17 +2559,19 @@ internal sealed class App : InkEngine.InkEngine
             fake.Total = 12;
             Step();
 
-            // 长按（不动）→ **到点直接弹菜单**（不用等松手）
+            // 长按（不动）→ **不再弹菜单**（2026-10-02 第五轮：入口改成单击）；
+            // 松手在页码格上 = 一次正常的单击 → 菜单打开。再点一下收起。
             bar = PptBarRect();
             midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
             PptBarPointerDown(midX, midY);
-            SettleFrames(750);                     // 长按阈值 600ms
-            Check("长按 600ms：**到点就弹菜单**（不用等松手）", PptMenuOpen, $"菜单={PptMenuOpen}");
-            PptBarPointerUp(midX, midY);           // 松手不该又弹一次面板
-            Check("松手：不会再弹出页号面板（这一次已经被长按消费掉了）",
-                  !PptPagePanelOpen, $"面板={PptPagePanelOpen}");
-            PptBarPointerDown(_virtualX + 6f, _virtualY + 6f);   // 点别处收起来
-            Check("点别处：菜单收起", !PptMenuOpen, $"菜单={PptMenuOpen}");
+            SettleFrames(750);                     // 过 600ms 也不该有菜单（长按已不是入口）
+            Check("按住 600ms 不动：**不弹菜单**（长按入口已取消）", !PptMenuOpen, $"菜单={PptMenuOpen}");
+            PptBarPointerUp(midX, midY);
+            Check("松手 = 单击：菜单打开（这才是入口）", PptMenuOpen, $"菜单={PptMenuOpen}");
+            PptBarPointerDown(midX, midY);         // 再点页码格 = 收起（不鬼打墙）
+            Check("再点页码格：菜单收起", !PptMenuOpen, $"菜单={PptMenuOpen}");
+            PptBarPointerDown(_virtualX + 6f, _virtualY + 6f);   // 点别处：什么都不发生
+            Check("点别处：菜单仍是收起的", !PptMenuOpen, $"菜单={PptMenuOpen}");
 
             // **按下就移** → 直接拖动（用户 2026-09-26："点中页码那一块直接拖动就能走"）
             bar = PptBarRect();
@@ -2309,21 +2610,20 @@ internal sealed class App : InkEngine.InkEngine
                   && bc.MaxX <= _virtualX + screenW && bc.MaxY <= screenBottom,
                   $"条 x {bc.MinX:F0}..{bc.MaxX:F0}，y {bc.MinY:F0}..{bc.MaxY:F0}");
 
-            // ---- **拖起来了就不许再弹长按菜单**（用户 2026-09-27 报的）----
-            // 原话："我在拖动 PPT 页码那块的时候，它好像还会弹出'结束放映'的菜单。"
-            // 病根：进入拖动时没清长按计时器，600ms 一到 `StepPptBar` 照样弹菜单。
-            // 这里复现的就是那条时间线：按下 → 拖起来（计时器该被清）→ 等满 600ms。
+            // ---- **拖起来了，松手就不许弹菜单**（用户 2026-09-27 报过"拖页码时弹菜单"）----
+            // 现在"拖"和"单击"是同一次按下的两条岔路：移动超阈值 → 变拖动、按下标记清掉，
+            // 松手只放条，不会再被当成单击去开菜单。
             bar = PptBarRect();
             gx = (bar.MinX + bar.MaxX) * 0.5f; gy = (bar.MinY + bar.MaxY) * 0.5f;
             PptBarPointerDown(gx, gy);
             PptBarPointerMove(gx + 30f, gy - 12f);        // 慢慢拖起来（过阈值）
-            SettleFrames(750);                            // 过 600ms：这一步以前会弹菜单
-            Check("拖动中过 600ms：**不弹菜单**（拖和长按是互斥的两条路）",
+            SettleFrames(750);                            // 过 600ms：以前这里会弹菜单
+            Check("拖动中（含过 600ms）：**不弹菜单**（拖和单击是两条路）",
                   !PptMenuOpen, $"菜单={PptMenuOpen}，拖动={PptBarDragging}");
             PptBarPointerUp(gx + 30f, gy - 12f);
-            Check("松手：拖动正常结束、条挪过去了",
-                  !PptBarDragging && Math.Abs(PptBarRect().MinX - bar.MinX) > 20f,
-                  $"拖动={PptBarDragging}，x {bar.MinX:F0} → {PptBarRect().MinX:F0}");
+            Check("松手：拖动正常结束、**不弹菜单**",
+                  !PptBarDragging && !PptMenuOpen && Math.Abs(PptBarRect().MinX - bar.MinX) > 20f,
+                  $"拖动={PptBarDragging}，菜单={PptMenuOpen}，x {bar.MinX:F0} → {PptBarRect().MinX:F0}");
 
             // ---- PPT 浮层（条 / 菜单 / 页号面板）上的光标：一律箭头 ----
             // 与图库面板同型的洞（"一块是界面就是界面"，见 Engine.PointerOnDrawnChrome）：
@@ -2346,20 +2646,37 @@ internal sealed class App : InkEngine.InkEngine
                 PointerX = keepPx; PointerY = keepPy;
             }
 
-            // ---- 菜单：**只有长按这一条路**（「⋮」2026-09-27 删掉了）；三项逐项点一遍 ----
+            // ---- 菜单：**点页码格开**（2026-10-02 第五轮，长按入口取消）；五项逐项点一遍 ----
             // （"加一项漏一处"是这个仓库的老毛病，见 架构-分层与规则.md 五-7）
             bar = PptBarRect();
             midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
-            Check("菜单就三项、一律六字（用户重新起名之后正好齐齐的）",
-                  PptMenuItemCount == 3 && PptMenuItemText(0) == "自动保存墨迹"
-                  && PptMenuItemText(1) == "清空所有墨迹" && PptMenuItemText(2) == "结束本次放映",
-                  $"{PptMenuItemText(0)} / {PptMenuItemText(1)} / {PptMenuItemText(2)}");
+            Check("菜单五项、一律六字（跳/存/放/清/退）",
+                  PptMenuItemCount == 5 && PptMenuItemText(0) == "指定页码跳转"
+                  && PptMenuItemText(1) == "自动保存墨迹" && PptMenuItemText(2) == "回放本页墨迹"
+                  && PptMenuItemText(3) == "清空所有墨迹" && PptMenuItemText(4) == "结束本次放映",
+                  $"{PptMenuItemText(0)} / {PptMenuItemText(1)} / {PptMenuItemText(2)} / "
+                  + $"{PptMenuItemText(3)} / {PptMenuItemText(4)}");
 
-            // ① 长按页码格 = 开菜单（**现在唯一的入口**，不用瞄小点）
+            // ① 点页码格 = 开菜单（2026-10-02 第五轮：长按入口取消、单击就是唯一入口）
             PptBarPointerDown(midX, midY);
-            SettleFrames(750);
             PptBarPointerUp(midX, midY);
-            Check("长按页码格松手：菜单打开", PptMenuOpen, $"菜单={PptMenuOpen}");
+            Check("点页码格：菜单打开", PptMenuOpen, $"菜单={PptMenuOpen}");
+
+            // ①.5 「回放本页墨迹」（2026-10-01 用户提议新增）：有墨迹 → 点了起回放、菜单收起
+            Check("（准备）当前页有墨迹可回放", Doc.Strokes.Count > 0, $"{Doc.Strokes.Count} 笔");
+            PptMenuItemRectAt(2, out var miReplay);
+            PptBarPointerDown((miReplay.MinX + miReplay.MaxX) * 0.5f, (miReplay.MinY + miReplay.MaxY) * 0.5f);
+            Step();
+            Check("点「回放本页墨迹」：起回放、菜单收起",
+                  ReplayActive && !PptMenuOpen, $"回放={ReplayActive}，菜单={PptMenuOpen}");
+            StopReplayForTest("自检收尾");
+            Step();
+            Check("（收尾）回放已停", !ReplayActive, $"回放={ReplayActive}");
+
+            // 菜单再开一次，给 ② 用
+            PptBarPointerDown(midX, midY);
+            PptBarPointerUp(midX, midY);
+            Check("（准备）菜单重新打开", PptMenuOpen, $"菜单={PptMenuOpen}");
 
             // ② 菜单开着时**再点页码格 = 收起**（原来这是"再点 ⋮"那条路，不能鬼打墙）
             PptBarPointerDown(midX, midY);
@@ -2396,9 +2713,13 @@ internal sealed class App : InkEngine.InkEngine
                       $"窗 ({win.MinX:F0},{win.MinY:F0})-({win.MaxX:F0},{win.MaxY:F0})，"
                       + $"条 ({bar.MinX:F0},{bar.MinY:F0})-({bar.MaxX:F0},{bar.MaxY:F0})");
 
-                // 打开页号面板：窗要**变高**把面板也罩住（不然面板看得见、点不动）
+                // 打开页号面板：窗要**变高**把面板也罩住（不然面板看得见、点不动）。
+                // 2026-10-02 第五轮：点页码 = 菜单，面板从第一项进来。
                 PptBarPointerDown((bar.MinX + bar.MaxX) * 0.5f, (bar.MinY + bar.MaxY) * 0.5f);
                 PptBarPointerUp((bar.MinX + bar.MaxX) * 0.5f, (bar.MinY + bar.MaxY) * 0.5f);
+                PptMenuItemRectAt(0, out var miJumpPass);
+                PptBarPointerDown((miJumpPass.MinX + miJumpPass.MaxX) * 0.5f,
+                                  (miJumpPass.MinY + miJumpPass.MaxY) * 0.5f);
                 Check("（准备）页号面板已打开", PptPagePanelOpen, $"面板={PptPagePanelOpen}");
                 Step();
                 PptPanelRect(out var panelNow);
@@ -2416,12 +2737,12 @@ internal sealed class App : InkEngine.InkEngine
 
             // 穿透那两条点了一下 ▶（顺手把开着的菜单收起了），这里重新开起来给 ③④ 用
             PptBarPointerDown(midX, midY);
-            SettleFrames(750);
             PptBarPointerUp(midX, midY);
+            Check("（准备）菜单已打开", PptMenuOpen, $"菜单={PptMenuOpen}");
 
-            // ③ 「墨迹保存」（开关）：点一下翻状态、**菜单留着**（要让老师看见"开 → 关"）
+            // ③ 「墨迹保存」（开关，索引 1）：点一下翻状态、**菜单留着**（要让老师看见"开 → 关"）
             bool saveBefore = PptAutoSaveOn;
-            PptMenuItemRectAt(0, out var mi0);
+            PptMenuItemRectAt(1, out var mi0);
             PptBarPointerDown((mi0.MinX + mi0.MaxX) * 0.5f, (mi0.MinY + mi0.MaxY) * 0.5f);
             Check("点「墨迹保存」：状态翻过来、菜单留着",
                   PptAutoSaveOn == !saveBefore && PptMenuOpen,
@@ -2430,21 +2751,21 @@ internal sealed class App : InkEngine.InkEngine
                   PptAutoSaveOn || GetUiPref("pptAutoSave") == "0",
                   $"pptAutoSave={GetUiPref("pptAutoSave") ?? "(空 = 开)"}");
 
-            // ④ 「墨迹清空」（两段确认）：**第一下不执行**
+            // ④ 「墨迹清空」（索引 3，两段确认）：**第一下不执行**
             int diskBefore = PptStore.ListPageKeys(fake.Key).Count;
-            PptMenuItemRectAt(1, out var mi1);
+            PptMenuItemRectAt(3, out var mi1);
             PptBarPointerDown((mi1.MinX + mi1.MaxX) * 0.5f, (mi1.MinY + mi1.MaxY) * 0.5f);
             Check("点「墨迹清空」第一下：进入等确认、文字变「再点确认」、**还没清**",
-                  PptClearConfirm && PptMenuOpen && PptMenuItemText(1) == "再点确认"
+                  PptClearConfirm && PptMenuOpen && PptMenuItemText(3) == "再点确认"
                   && PptStore.ListPageKeys(fake.Key).Count == diskBefore,
-                  $"等确认={PptClearConfirm}，文字={PptMenuItemText(1)}，盘上还是 {diskBefore} 页");
+                  $"等确认={PptClearConfirm}，文字={PptMenuItemText(3)}，盘上还是 {diskBefore} 页");
 
             // 把自动保存打开，好验证"清空是连盘一起清的"（关着的话盘上本来就该原样）
-            PptMenuItemRectAt(0, out var mi0b);
+            PptMenuItemRectAt(1, out var mi0b);
             PptBarPointerDown((mi0b.MinX + mi0b.MaxX) * 0.5f, (mi0b.MinY + mi0b.MaxY) * 0.5f);
 
             // 第二下：真清
-            PptMenuItemRectAt(1, out var mi1b);
+            PptMenuItemRectAt(3, out var mi1b);
             PptBarPointerDown((mi1b.MinX + mi1b.MaxX) * 0.5f, (mi1b.MinY + mi1b.MaxY) * 0.5f);
             Step();
             Check("点第二下：清空执行、菜单收起、等确认状态放掉",
@@ -2459,14 +2780,13 @@ internal sealed class App : InkEngine.InkEngine
             fake.Showing = true; fake.Slide = 1; fake.SlideId = 256; Step();
             Check("清空后再进放映：**不复活**", Doc.Strokes.Count == 0, $"{Doc.Strokes.Count} 条");
 
-            // ⑥ 引导：**每次进放映都提示一遍**（用户 2026-09-27 定）——
-            //    「⋮」删掉之后菜单只剩长按一条路，"只提示一次"会让老师第二次课就想不起来。
-            //    强断言：先把"已经提示过"这个偏好**写死**（老逻辑下它就不会再出现了），
-            //    再进放映——引导**照样出现**，说明这行偏好已经不再管这事。
+            // ⑥ 引导：**每次进放映都提示一遍**（用户 2026-09-27 定；2026-10-02 第五轮文案改成
+            //    "点页码：页码跳转菜单"）。强断言：先把"已经提示过"这个偏好**写死**
+            //    （老逻辑下它就不会再出现了），再进放映——引导**照样出现**。
             SetUiPref("pptHint", "1");
             fake.Showing = false; Step();
             fake.Showing = true; Step();
-            Check("进放映：冒出一行引导（告诉老师长按能呼出菜单）", PptHintVisible, $"提示={PptHintVisible}");
+            Check("进放映：冒出一行引导（告诉老师点页码出菜单）", PptHintVisible, $"提示={PptHintVisible}");
             SettleFrames(1700);            // 1.5 秒后应该自己消失（不挡讲课）
             Check("1.5 秒后引导自己消失", !PptHintVisible, $"提示={PptHintVisible}");
             fake.Showing = false; Step();
@@ -2478,10 +2798,19 @@ internal sealed class App : InkEngine.InkEngine
             bar = PptBarRect();
             midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
             PptBarPointerDown(midX, midY);
-            SettleFrames(750);
             PptBarPointerUp(midX, midY);
+
+            // ⑦.0 清空之后没有墨迹：「回放本页墨迹」（索引 2）**置灰**（右侧 0 笔），点了不动
+            Check("（准备）清空后无墨迹：回放项置灰、右侧 0 笔",
+                  !PptMenuItemEnabled(2) && PptMenuItemStatus(2) == "0 笔",
+                  $"enabled={PptMenuItemEnabled(2)}，状态={PptMenuItemStatus(2)}");
+            PptMenuItemRectAt(2, out var miReplay0);
+            PptBarPointerDown((miReplay0.MinX + miReplay0.MaxX) * 0.5f, (miReplay0.MinY + miReplay0.MaxY) * 0.5f);
+            Check("清空后点置灰的回放项：菜单留着、没有起回放",
+                  PptMenuOpen && !ReplayActive, $"菜单={PptMenuOpen}，回放={ReplayActive}");
+
             int exitBefore = fake.ExitCalls;
-            PptMenuItemRectAt(2, out var mi2);
+            PptMenuItemRectAt(4, out var mi2);            // 结束放映（索引 4）
             PptBarPointerDown((mi2.MinX + mi2.MaxX) * 0.5f, (mi2.MinY + mi2.MaxY) * 0.5f);
             Step();
             Check("点「结束放映」：命令给 PPT、菜单收起",
@@ -2501,7 +2830,7 @@ internal sealed class App : InkEngine.InkEngine
 
         Console.WriteLine();
         Console.WriteLine(fail == 0
-            ? "  PASS：PPT 模式正确（隔离 / 页内滚动 / 清空只清本页 / 退出写盘 / 再进读回 / 按钮走 PPT）"
+            ? $"  PASS：PPT 模式正确（隔离 / 页内滚动 / 清空只清本页 / 退出写盘 / 再进读回 / 按钮走 PPT）——共 {pass} 项"
             : $"  FAIL：{fail} 项不对（{pass} 项通过）");
 
         try { Directory.Delete(PptStore.RootOverride, true); } catch { }
@@ -2515,7 +2844,9 @@ internal sealed class App : InkEngine.InkEngine
 
     /// <summary>
     /// `--pptshow <图>`：**PPT 控件条的摆样**——用假源进入 PPT 模式，把它画出来再截一张。
-    /// 加 `--panel` 出"点页码弹出的页号面板"，加 `--menu` 出"长按弹出的菜单"。
+    /// 加 `--panel` 出"点页码弹出的页号面板"，加 `--menu` 出"长按弹出的菜单"；
+    /// 加 `--ink` 给当前页铺三笔——「回放本页墨迹」那一项才有得看（右邻显示"N 笔"，
+    /// 不加 --ink 出的是置灰的"0 笔"态）。
     ///
     /// 为什么要单开一条：排版好不好看**自检判不了**（几何全对也一样难看），
     /// 所以项目里界面（`--panelshow`）、浮层（`--selshowcase`）、旋转标签
@@ -2525,7 +2856,7 @@ internal sealed class App : InkEngine.InkEngine
     {
         if (path == null)
         {
-            Console.WriteLine("  用法：--pptshow <图.bmp> [--panel] [--menu]");
+            Console.WriteLine("  用法：--pptshow <图.bmp> [--panel] [--menu] [--ink] [--wide] [--pass]");
             _quit = true;
             return;
         }
@@ -2546,24 +2877,64 @@ internal sealed class App : InkEngine.InkEngine
         // ⚠ 必须压在 `StepPpt()` **之后**：进放映那一刻它才被点起来，压早了没用。
         if (!argv.Contains("--hint")) PptHintSuppressForTest();
 
+        // `--ink`：给当前页铺三笔（一长一短一点）——「回放本页墨迹」那一项
+        // 亮不亮、右侧"N 笔"对不对，出图时一眼就能看到。
+        if (argv.Contains("--ink"))
+        {
+            var s1 = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0.90f, 0.20f, 0.20f, 1f), Width = 8f,
+            };
+            for (int k = 0; k <= 4; k++)
+                s1.AddPoint(300f + 320f * k / 4f, 300f + 40f * k, 0.3f + 0.1f * k, k * 200f);
+            Doc.AddStroke(s1);
+            var s2 = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0.13f, 0.45f, 0.90f, 1f), Width = 8f,
+            };
+            for (int k = 0; k <= 4; k++)
+                s2.AddPoint(320f + 280f * k / 4f, 560f - 30f * k, 0.4f + 0.1f * k, 1200f + k * 180f);
+            Doc.AddStroke(s2);
+            var dot = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0.15f, 0.65f, 0.35f, 1f), Width = 8f,
+            };
+            dot.AddPoint(780f, 420f, 0.8f, 2200f);
+            Doc.AddStroke(dot);
+            SettleFrames(120);
+        }
+
+        // `--pass`：诊断用——打开穿透，让"接输入小窗"铺上（代码注释说它是 1/255 的灰、
+        // 肉眼看不见；这个开关就是拿来核对"到底看不看得见"的）。
+        if (argv.Contains("--pass"))
+        {
+            SetPassThroughFromUi(true);
+            SettleFrames(150);
+        }
+
         var bar = PptBarRect();
         float midX = (bar.MinX + bar.MaxX) * 0.5f;
         float midY = (bar.MinY + bar.MaxY) * 0.5f;
 
         if (argv.Contains("--menu"))
         {
-            PptBarPointerDown(midX, midY);
-            SettleFrames(750);              // 长按阈值 600ms
+            PptBarPointerDown(midX, midY);      // 2026-10-02 第五轮：点页码 = 菜单
             PptBarPointerUp(midX, midY);
         }
         else if (argv.Contains("--panel"))
         {
-            PptBarPointerDown(midX, midY);
+            PptBarPointerDown(midX, midY);      // 点页码 → 菜单
             PptBarPointerUp(midX, midY);
+            PptMenuItemRectAt(0, out var miJump);
+            PptBarPointerDown((miJump.MinX + miJump.MaxX) * 0.5f,   // 菜单第一项 → 页号面板
+                              (miJump.MinY + miJump.MaxY) * 0.5f);
         }
         else
         {
-            // 悬停在**页码格**上：它才是条上的主角（点它跳页），顺便把悬停高亮出进图里
+            // 悬停在**页码格**上：它才是条上的主角（点它出菜单），顺便把悬停高亮出进图里
             // ——用户 2026-09-26 指出过"页码那里没有悬停指示"，这条图就是给那件事看的。
             PptBarPointerMove(midX, midY);
         }
@@ -2573,7 +2944,7 @@ internal sealed class App : InkEngine.InkEngine
         var box = PptBarRect();
         if (PptPagePanelOpen) { PptPanelRect(out var p); box.Add(p.MinX, p.MinY); box.Add(p.MaxX, p.MaxY); }
         if (PptMenuOpen || PptHintVisible) { PptMenuRect(out var m); box.Add(m.MinX, m.MinY); box.Add(m.MaxX, m.MaxY); }
-        float pad = 24f;
+        float pad = argv.Contains("--wide") ? 160f : 24f;   // --wide：出图带上一圈周围，查"条外面有什么"
         int sx = (int)Math.Max(_virtualX, box.MinX - pad);
         int sy = (int)Math.Max(_virtualY, box.MinY - pad);
         int sw = (int)Math.Min(_virtualX + _virtualW - sx, box.MaxX - box.MinX + pad * 2);
@@ -3927,15 +4298,129 @@ internal sealed class App : InkEngine.InkEngine
         // `--adjust`：出"松开后调整"那一版（8.3.0：8 个手柄 + ✓/✕ 两颗按钮）
         CaptureAdjusting = Environment.GetCommandLineArgs().Contains("--adjust");
         // `--ready`：出"刚进屋"那一版（8.3.1：整屏灰 + 顶部提示 + 右上角「✕ 取消」，还没有框）
-        if (Environment.GetCommandLineArgs().Contains("--ready"))
-            CapMinX = CapMaxX = CapMinY = CapMaxY = cx;
+        bool ready = Environment.GetCommandLineArgs().Contains("--ready");
+        if (ready) CapMinX = CapMaxX = CapMinY = CapMaxY = cx;
 
         // 出图范围 = 框 + 四周一圈（遮罩/准线/读数/按钮都可能有）：整块视口太大，
         // 给"框 + 120 逻辑像素"就够（看图看的是那几个控件的排版）。
         var r = new RectF { MinX = CapMinX, MinY = CapMinY, MaxX = CapMaxX, MaxY = CapMaxY };
-        if (!OffscreenFloatingShot(path, r.Inflate(120f * DpiScale))) Console.WriteLine("出图失败");
+        // ⚠ `--ready` 那两件东西（顶部提示、右上角「✕」）都贴在**屏幕上沿**，
+        //   "点 + 120"根本拍不到（2026-10-03 修：以前只出一块 240×240 的灰）。
+        //   改成**屏幕上沿一条通栏**——两件都在里面。
+        if (ready)
+            r = new RectF
+            {
+                MinX = VirtualScreen.MinX, MinY = VirtualScreen.MinY,
+                MaxX = VirtualScreen.MaxX, MaxY = VirtualScreen.MinY + 360f * DpiScale,
+            };
+        if (!OffscreenFloatingShot(path, ready ? r : r.Inflate(120f * DpiScale))) Console.WriteLine("出图失败");
         CaptureActive = false;
         CaptureAdjusting = false;
+        _quit = true;
+    }
+
+    /// <summary>
+    /// `--demogif &lt;目录&gt;`：录一段**演示连拍**（写字 → 停顿变图形 → 选中拖动 → 截图取景）。
+    ///
+    /// 为什么要有它：README 头部那张动图没法"离屏摆拍"——它要的正是**真实交互过程**
+    /// （合成鼠标走真实输入通路、停顿变形走真实定时器、截图取景走真冻结）。所以这里
+    /// 和自检同一套路：白板打底（不透明，画面里没有桌面杂物）+ 合成输入 + 约 110ms 截一帧。
+    /// 帧存成 `&lt;目录&gt;\0000.bmp…`，之后用 `tools\make-demo-gif.ps1` 拼成 GIF。
+    /// 只在开发机上跑，不进产品、也不进默认自检套件。
+    /// </summary>
+    private void DemoGif(string dir)
+    {
+        SetUiFactory(() => new InkUi.FullUi());
+        Tool = Tool.Pen;
+        BoardOn = true;
+        Host.Commands.SetBoard(true);              // 引擎侧真开板：截屏里是干净白底
+        SettleFrames(700);
+
+        Directory.CreateDirectory(dir);
+        int frame = 0;
+        // 截屏范围（物理像素）：动作区 + 底部工具带（1600×1420）。
+        int fx = _virtualX + 850, fy = _virtualY + 380, fw = 1600, fh = 1420;
+        void Snap() => ScreenProbe.SaveBmp(
+            Path.Combine(dir, frame++.ToString("0000") + ".bmp"), fx, fy, fw, fh);
+
+        // 一边按 `t∈[0,1]` 推进动作，一边约 120ms 截一帧；结束再补一张。
+        void Animate(int ms, Action<float> at)
+        {
+            var sw = Stopwatch.StartNew();
+            // ⚠ 别写 `long.MinValue`：`el - last` 会溢出成负数，条件永远不成立
+            //   （第一版就是这么只拍了 10 张——每个阶段结束一张，中间一张没有）。
+            long last = -10000;
+            for (;;)
+            {
+                long el = sw.ElapsedMilliseconds;
+                at?.Invoke(ms <= 0 ? 1f : Math.Min(1f, el / (float)ms));
+                PumpMessages();
+                StepCameraAnim();
+                RenderAll();
+                if (el - last >= 120) { Snap(); last = el; }
+                if (el >= ms) break;
+                Thread.Sleep(10);
+            }
+            Snap();
+        }
+
+        // ── ① 用笔画一个"手画圆"（带手抖；3.0 秒走完）────────────────────────
+        float cx = _virtualX + 1560, cy = _virtualY + 900, r = 250;
+        const int N = 64;
+        var pts = new Vector2[N + 1];
+        for (int i = 0; i <= N; i++)
+        {
+            float a = -MathF.PI / 2f + i / (float)N * MathF.PI * 2f;
+            float rr = r * (1f + 0.045f * MathF.Sin(i * 1.9f));   // 手抖：别是完美圆
+            pts[i] = new Vector2(cx + rr * MathF.Cos(a), cy + rr * MathF.Sin(a));
+        }
+        SendMouse((int)pts[0].X, (int)pts[0].Y, 0);
+        SettleFrames(150); Snap();
+        SendMouse((int)pts[0].X, (int)pts[0].Y, Native.MOUSEEVENTF_LEFTDOWN);
+        Animate(2800, t => SendMouse((int)pts[Math.Min(N, (int)(t * N))].X,
+                                     (int)pts[Math.Min(N, (int)(t * N))].Y, 0));
+
+        // ── ② 停住不动：400ms 后"停顿变图形"（圆）＋ 松手自动选中 ────────────
+        Animate(950, _ => SendMouse((int)pts[N].X, (int)pts[N].Y, 0));
+        SendMouse((int)pts[N].X, (int)pts[N].Y, Native.MOUSEEVENTF_LEFTUP);
+        Animate(900, _ => { });                    // 定型 + 自动选中（收起成一颗圆钮）
+
+        // 点一下那颗圆钮：把操作条摊开（图里才有完整的十格）。
+        {
+            var dot = SelectionHandles.BarCollapsedRect(
+                SelectionHandles.FrameOf(Doc.Selected).CanvasAabb, DpiScale, ViewportCanvas);
+            float dx = (dot.MinX + dot.MaxX) * 0.5f, dy = (dot.MinY + dot.MaxY) * 0.5f;
+            SendMouse((int)dx, (int)dy, 0);
+            SettleFrames(90); Snap();
+            SendMouse((int)dx, (int)dy, Native.MOUSEEVENTF_LEFTDOWN);
+            SettleFrames(90);
+            SendMouse((int)dx, (int)dy, Native.MOUSEEVENTF_LEFTUP);
+            Animate(650, _ => { });                // 摊开 + 看一眼
+        }
+
+        // ── ③ 按住框内拖动（在框里按下 = 拖整体，一步撤销那种）──────────────
+        SendMouse((int)cx, (int)cy, 0);
+        SettleFrames(140); Snap();
+        SendMouse((int)cx, (int)cy, Native.MOUSEEVENTF_LEFTDOWN);
+        Animate(1100, t => SendMouse((int)(cx + t * 330f), (int)(cy + t * 180f), 0));
+        SendMouse((int)(cx + 330f), (int)(cy + 180f), Native.MOUSEEVENTF_LEFTUP);
+        Animate(700, _ => { });
+
+        // ── ④ 截图取景：整屏压暗 → 拖出取景框 → 进调整态（8 手柄 + ✓/✕）─────
+        CaptureHideInk = false;                    // 连批注一起冻：冻出来的底就是我们的板书
+        BeginCaptureMode();
+        SettleFrames(220); Snap();
+        CapMinX = CapMaxX = cx - 240; CapMinY = CapMaxY = cy - 140;
+        Animate(1000, t =>
+        {
+            CapMaxX = cx - 240 + t * 720f;
+            CapMaxY = cy - 140 + t * 430f;
+        });
+        CaptureAdjusting = true;
+        Animate(1500, _ => { });
+
+        Console.WriteLine($"[演示连拍] {frame} 帧 → {dir}");
+        ExitCode = 0;
         _quit = true;
     }
 
@@ -4429,6 +4914,38 @@ internal sealed class App : InkEngine.InkEngine
         Check("极简模式不认边中点",
               SelectionHandles.HitTest(top.X, top.Y, b, dpi, includeEdgeHandles: false) == SelHandle.None, "");
 
+        // ---- 小对象：最小操作框（2026-10-05 用户："太小还用这么大的点不合适"）----
+        //    手柄摆到撑开的最小操作框上；真实包围盒只有 10×8 画布单位。
+        var tiny = new RectF { MinX = 100, MinY = 100, MaxX = 110, MaxY = 108 };
+        var ttl = SelectionHandles.Position(SelHandle.TopLeft, tiny, dpi);
+        var tbr = SelectionHandles.Position(SelHandle.BottomRight, tiny, dpi);
+        float tinySide = SelectionHandles.MinUiFrameLogical * dpi;
+        Check("小对象：手柄撑到最小操作框",
+              MathF.Abs((tbr.X - ttl.X) - tinySide) < 0.01f
+              && MathF.Abs((tbr.Y - ttl.Y) - tinySide) < 0.01f,
+              $"操作框 {tbr.X - ttl.X:F0}×{tbr.Y - ttl.Y:F0}（最小 {tinySide:F0}），真实框 10×8");
+        Check("小对象：真实框外的空白也算拖动区",
+              SelectionHandles.InsideUiFrame(
+                  new SelectionFrame { Local = tiny, ToCanvas = Matrix3x2.Identity },
+                  new Vector2(120f, 104f), dpi),
+              "点 (120,104)：真实框右边界 110 之外、操作框之内");
+        var mTiny = SelectionHandles.DragMatrix(SelHandle.TopLeft, tiny, ttl, ttl, dpi, false, false);
+        Check("小对象：按下不动 = 缩放 1（不会跳）",
+              MathF.Abs(mTiny.M11 - 1f) < 1e-3f && MathF.Abs(mTiny.M22 - 1f) < 1e-3f,
+              $"sx={mTiny.M11:F3} sy={mTiny.M22:F3}");
+        // 缩小：真实框的**对面角**必须钉住 —— 拿操作框的角当缩放中心的话，
+        // 内容会绕着框外一个点漂（用户 2026-10-05："缩到最小以后鼠标乱动，
+        // 它跟着乱移动"）。这条断言在旧实现下会红。
+        var shrinkTo = new Vector2(ttl.X + 6f, ttl.Y + 6f);        // 往里拖一点
+        var mShrink = SelectionHandles.DragMatrix(SelHandle.TopLeft, tiny, ttl, shrinkTo, dpi, false, false);
+        var realBr = new Vector2(tiny.MaxX, tiny.MaxY);
+        var brAfter = Vector2.Transform(realBr, mShrink);
+        Check("小对象缩小：真实框的对面角钉住（不乱漂）",
+              MathF.Abs(brAfter.X - realBr.X) < 0.05f && MathF.Abs(brAfter.Y - realBr.Y) < 0.05f,
+              $"对面角 ({brAfter.X:F1},{brAfter.Y:F1})，原位 ({realBr.X:F1},{realBr.Y:F1})");
+        Check("小对象缩小：内容真的变小了（不是纹丝不动）", mShrink.M11 < 0.95f && mShrink.M11 > 0f,
+              $"sx={mShrink.M11:F3}");
+
         // ---- 四角拖动：锚点不动，被拖的角跟手 ----
         var br = SelectionHandles.Position(SelHandle.BottomRight, b, dpi);
         // 目标点取在"锚点 → 被拖的角"的延长线上：四角现在是**等比**缩放，
@@ -4543,7 +5060,7 @@ internal sealed class App : InkEngine.InkEngine
         // （这条仓库里踩过三次）。这里只负责"表里不许出现名单之外的动作"。
         var allowedGlobal = new HashSet<KeyAction>(KeyMap.GlobalAllowedActions);
         var stray = map.For(KeyScope.Global).Select(b => b.Action).Where(a => !allowedGlobal.Contains(a)).ToList();
-        Check("全局里没有那 5 个之外的动作",
+        Check($"全局里没有名单（{allowedGlobal.Count} 个）之外的动作",
               stray.Count == 0,
               stray.Count == 0
                   ? $"全局 {nGlobal} 条，全是：{string.Join(" / ", allowedGlobal.Select(KeyMap.Describe))}"
@@ -4553,19 +5070,23 @@ internal sealed class App : InkEngine.InkEngine
         // 查法是对着"退役的那五个组合"查，不是查动作名——动作枚举里已经没有图形那几个了，
         // 查名字等于什么都没查。
         //
-        // ⚠ `Ctrl+Alt+T` 2026-09-30 起**不再是退役键**：穿透从 `Ctrl+Alt+P` 换成了它
-        //（用户报"P 和笔的 Ctrl+P 撞"，见 KeyBindings.Default 里那段注释）。
-        // 所以这里只查真正空着的四个组合。
-        foreach (var (name, vk) in new[] { ("O", 'O'), ("G", 'G'), ("F", 'F'), ("N", 'N') })
+        // ⚠ `Ctrl+Alt+T` 2026-09-30～10-04 曾借给穿透；2026-10-04 穿透整体抬到
+        // `Ctrl+Alt+Shift+T` 之后它重新空出来，所以这次把五个组合一起放回来查。
+        foreach (var (name, vk) in new[] { ("O", 'O'), ("T", 'T'), ("G", 'G'), ("F", 'F'), ("N", 'N') })
         {
             var c = new KeyChord(KeyChord.ModCtrl | KeyChord.ModAlt, vk);
             Check($"退役的图形键 Ctrl+Alt+{name} 不在任何作用域里",
                   map.Bindings.All(b => !b.Chord.Equals(c)), "");
         }
-        // 顺手钉住"T 现在是穿透、不是退役键"（哪天有人换回去，这里会给出说得清的红）。
-        Check("Ctrl+Alt+T 现在是穿透模式的默认键（不再是退役图形键）",
-              map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+T",
+        // 顺手钉住 2026-10-04 用户定的新形状（哪天有人换回去，这里会给出说得清的红）：
+        // ① 两个老全局键都加上了 Shift；② 呼出盘升到全局、批注内不再留 Ctrl+Q 副本。
+        Check("穿透默认键 = Ctrl+Alt+Shift+T（2026-10-04 起统一加 Shift）",
+              map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+Shift+T",
               map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString());
+        Check("呼出盘已升为全局键 Ctrl+Alt+Shift+Q，批注内不再留副本",
+              map.Find(KeyScope.Global, KeyAction.RadialPalette)?.Chord.ToString() == "Ctrl+Alt+Shift+Q"
+              && map.Find(KeyScope.Annotation, KeyAction.RadialPalette) == null,
+              map.Find(KeyScope.Global, KeyAction.RadialPalette)?.Chord.ToString() ?? "全局里没有");
 
         // ---- 2. 按键解析 ----
         bool ok1 = KeyChord.TryParse("ctrl+alt+p", out var c1, out _);
@@ -4581,10 +5102,10 @@ internal sealed class App : InkEngine.InkEngine
         Check("只有修饰键要报错", !ok5 && err5 != null, err5);
 
         // ---- 3. 冲突检测 ----
-        // 样本用**穿透模式开关**：它是全局里必留的那几条之一（2026-09-29 全局只剩
-        // 穿透/键盘模式/退出，笔和橡皮都降到批注内了——拿 ToolPen 当样本会以
+        // 样本用**穿透模式开关**：它是全局里必留的那几条之一（现在全局只有
+        // 穿透/呼出盘/退出，笔和橡皮都降到批注内了——拿 ToolPen 当样本会以
         // "这个作用域里没有这个动作"直接失败，冲突检测那一条就成了假通过）。
-        KeyChord.TryParse("Ctrl+Alt+X", out var takenChord, out _);     // 被"退出"占着
+        KeyChord.TryParse("Ctrl+Alt+Shift+X", out var takenChord, out _);     // 被"退出"占着
         bool taken = map.TrySet(KeyScope.Global, KeyAction.TogglePassThrough, takenChord, out string errTaken);
         Check("撞了别人的键要拒绝并说清是谁", !taken && errTaken != null
               && errTaken.Contains("退出"), errTaken);
@@ -4601,7 +5122,7 @@ internal sealed class App : InkEngine.InkEngine
 
         map.ResetToDefault(KeyScope.Global, KeyAction.TogglePassThrough);
         Check("能恢复默认键",
-              map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+T",
+              map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+Shift+T",
               map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString());
 
         // ---- 4. 落盘 / 读回 / 坏文件 ----
@@ -4621,7 +5142,7 @@ internal sealed class App : InkEngine.InkEngine
                   warns.Count == 0 ? $"退出键 → {reloaded.Find(KeyScope.Global, KeyAction.Quit).Chord}"
                                    : string.Join("；", warns));
             Check("没改过的项仍是默认值（只写差异）",
-                  reloaded.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+T", "");
+                  reloaded.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+Shift+T", "");
             Check("只写差异：文件里应当只有 1 条", File.ReadAllText(cfg).Split('\n')
                   .Count(l => l.Contains("\"Global.")) == 1, "");
 
@@ -4629,7 +5150,7 @@ internal sealed class App : InkEngine.InkEngine
             var broken = KeyMap.Default();
             var warns2 = InkSettings.Load(broken);
             Check("键名写坏了：报警告 + 用默认值 + 不抛异常",
-                  warns2.Count > 0 && broken.Find(KeyScope.Global, KeyAction.Quit).Chord.ToString() == "Ctrl+Alt+X",
+                  warns2.Count > 0 && broken.Find(KeyScope.Global, KeyAction.Quit).Chord.ToString() == "Ctrl+Alt+Shift+X",
                   warns2.Count > 0 ? warns2[0] : "没有警告（不该）");
 
             File.WriteAllText(cfg, "这不是 JSON，只是一段乱码");
@@ -6437,6 +6958,8 @@ internal sealed class App : InkEngine.InkEngine
               ShapeInclinationActive && ShapeInclinationSnapped
               && Math.Abs(ShapeInclinationDegrees - 45f) < 0.5f,
               $"active={ShapeInclinationActive}，α = {ShapeInclinationDegrees:F1}°，吸住={ShapeInclinationSnapped}");
+        Check("画线中：长度和 α 同源同报（2026-10-05 用户要的「长度」）",
+              Math.Abs(ShapeLength - 500f) < 2f, $"长 {ShapeLength:F1}（期望 500）");
         int drawPixels = ShapeLabelPixels(ShapeInclinationAnchor);
         Check("画线中：α 读数真的上了屏（吸住 → 强调色胶囊）",
               drawPixels > 1200 && drawPixels < 20000,
@@ -11203,8 +11726,10 @@ internal sealed class App : InkEngine.InkEngine
 
     private const ushort VK_CONTROL = 0x11;
     private const ushort VK_MENU = 0x12;        // Alt
+    private const ushort VK_SHIFT = 0x10;
 
-    /// <summary>按一次 Ctrl+Alt+&lt;主键&gt;（全局热键都是这个形状）。返回塞进去的事件数。</summary>
+    /// <summary>按一次 Ctrl+Alt+&lt;主键&gt;（现在只给"退役图形键不响应"那条测试用；
+    /// 2026-10-04 起全局热键都是 `Ctrl+Alt+Shift+…` 的形状）。返回塞进去的事件数。</summary>
     private uint SendCtrlAlt(ushort vk) => SendKeyChord(VK_CONTROL, VK_MENU, vk);
 
     /// <summary>
@@ -11845,7 +12370,7 @@ internal sealed class App : InkEngine.InkEngine
 
         if (CurrentUi is InkUi.FullUi ui)
         {
-            ui.SnapForTest();                             // 一步展开
+            ui.SetExpandForTest(1f);                     // 展开（显式跳 1；别用会"翻面"的旧 SnapForTest）
             ui.OpenRailForTest();                         // 色带也张开（最贵的一档）
         }
         SettleFrames(300);
@@ -12057,42 +12582,29 @@ internal sealed class App : InkEngine.InkEngine
     /// <summary>
     /// `--makeicon &lt;out.ico&gt;`：**用界面自己的渲染**生成程序图标。
     ///
-    /// 图标就是"收起态那颗球"：白面 ＋ **当前笔色那一圈**（`Tokens.BallRing`，0.76R、线宽 2.5）
-    /// ＋ 中间那个自绘笔图标（`Tokens.BallIcon`）。用户 2026-09-27 点的名
-    /// （"用那个菜单收缩起来的那个小圆球，然后用红色那个批注那个圈"——笔色默认是红）。
-    ///
-    /// 为什么不另画一张 SVG / 用画图工具拼：
-    ///   ① 中间那个笔图标是**自绘矢量**（`IconAtlas`），另画一份迟早和界面对不上；
-    ///   ② "和屏幕上那颗一模一样"这件事，只有同一条渲染路径能保证
-    ///      （本仓库反复吃过的教训：同一个东西写两份，早晚不一致）。
-    ///
-    /// 做法：把窗口 DPI **临时放大**再离屏出图。界面是按"逻辑坐标 × DPI/96"画的，
+    /// 2026-10-01 第五轮定：图标 = 设计稿 v5 的 **B 档「Fluent 笔 ＋ 带笔锋的红笔迹」**
+    /// （用户："你笔锋弧线这一版做得挺好的，我想使用这个"；稿子见
+    /// design/图标-设计稿v5-线条型的笔.png 与 v5b-笔迹四选.png，画在 <see cref="AppIconUi"/> 里）。
+    /// 上一版是"实心的大笔 · 白砖"，再上一版是"收起态那颗球"，都留在 git 历史里；这条命令的机制没变：
+    /// 把窗口 DPI **临时放大**再离屏出图 —— 界面是按"逻辑坐标 × DPI/96"画的，
     /// 所以放大 DPI 等于**按矢量重画一张大的**，而不是把 96 的小图拉大（拉大会糊）。
     /// 再把那一张按各档尺寸缩下去、装成一个多尺寸 .ico。
     /// </summary>
     private void MakeIcon(string path)
     {
-        SetUiFactory(() => new InkUi.FullUi());
-        SettleFrames(200);
-        if (CurrentUi is not InkUi.FullUi ui || _windows.Count == 0)
+        SetUi(new AppIconUi());
+        SettleFrames(120);
+        if (CurrentUi is not AppIconUi ui || _windows.Count == 0)
         {
-            Console.WriteLine("  出图标失败：界面没挂上 / 没有窗口");
+            Console.WriteLine("  出图标失败：图标界面没挂上 / 没有窗口");
             _quit = true;
             return;
         }
 
-        // 收起态（那颗球）＋ 不许贴边隐藏把它沉下去（沉下去就只剩 8 像素的一条把手）。
-        ui.SetExpandForTest(0f);
-        ui.ForcePeekForTest(1f);
-        SettleFrames(250);
+        var box = ui.QueryBounds();
+        if (box.IsEmpty) { Console.WriteLine("  出图标失败：占用矩形是空的"); _quit = true; return; }
 
-        var ball = ui.QueryBounds();
-        if (ball.IsEmpty) { Console.WriteLine("  出图标失败：占用矩形是空的"); _quit = true; return; }
-        // 四周留白：投影最外那几层（α 0.03 上下）不值得为它留位置，留 6 就够——
-        // 球在图标里占 48/60 = 80%，和系统自带图标那个比例接近。
-        var box = ball.Inflate(6f);
-
-        // 目标边长 256：临时把窗口 DPI 抬高，让界面按矢量重画到这个尺寸。
+        // 目标边长 256：图标界面是 64 逻辑像素的方框，DPI 抬到 384 正好出 256×256。
         var win = _windows[0];
         uint want = (uint)Math.Clamp(MathF.Round(96f * 256f / (box.MaxX - box.MinX)), 96, 96 * 12);
         uint dpi0 = win.Dpi;
@@ -12107,21 +12619,15 @@ internal sealed class App : InkEngine.InkEngine
         }
         Console.WriteLine($"  渲染尺寸 {bw}×{bh}（为它把窗口 DPI 临时抬到 {want}）");
 
-        // **圆外一律清成完全透明**（用户 2026-09-29 反馈："图标不是正圆、隐约能看见方框"）：
-        // 球底下的投影是一团**方形**柔光，方框那圈像素带一点点黑——实测 256×256 那帧
-        // 最外一圈 1020 个像素里 782 个 α>0、最高 α≈23/255，圆外也有一批 α≈26。
-        // 图标就该是一个干净的圆，所以按量出来的球半径做一次圆形蒙版（边缘 1px 抗锯齿）。
-        int rIcon = IconRadiusPx(px, bw, bh);
-        MaskIconToCircle(px, bw, bh, rIcon);
-        Console.WriteLine($"  圆形蒙版：半径 {rIcon}px（球外面那圈方形投影清成透明）");
-
+        // **不做圆形蒙版**：形状就是白砖自己的圆角，砖外本来就是透明
+        // （旧版那颗球才需要把方形柔光清成圆；这条注释留着，免得下次改回去时忘了）。
         try
         {
             string dir = Path.GetDirectoryName(Path.GetFullPath(path));
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             int[] sizes = { 16, 24, 32, 48, 64, 128, 256 };
             WriteMultiSizeIco(path, px, bw, bh, sizes);
-            // 顺带出一张 PNG 预览：这个圆对不对、圈红不红，**只能看图**（几何自检看不出来）。
+            // 顺带出一张 PNG 预览：笔对不对、红不红、砖的圆角顺不顺，**只能看图**。
             string png = Path.ChangeExtension(path, ".png");
             using (var b = BgraToBitmap(px, bw, bh)) b.Save(png, System.Drawing.Imaging.ImageFormat.Png);
             Console.WriteLine($"  已写出 {path}（{sizes.Length} 档：{string.Join('/', sizes)}）");
@@ -12135,6 +12641,10 @@ internal sealed class App : InkEngine.InkEngine
     /// 量出"球"的半径（像素）：沿中心行/列找 α≥96 的最远点，取两者的较小值。
     /// 为什么要量而不是算：真实半径由界面渲染（含 DPI 缩放与投影）决定，硬算容易差几像素。
     /// 投影的 α 很小（≤30 上下），进不了 96 这道门，所以量到的是球本身。
+    ///
+    /// ⚠ 2026-10-01 起**没有调用**（图标换成了方角的「白砖＋大笔」，不再需要圆形蒙版）。
+    ///   留着是给"以后真要做圆形图标"的那一刻：连同下面那个 <see cref="MaskIconToCircle"/>，
+    ///   两条都在"球"的版本上实测过（踩过的坑写在注释里，比代码值钱）。
     /// </summary>
     private static int IconRadiusPx(byte[] bgra, int w, int h)
     {
@@ -12344,7 +12854,7 @@ internal sealed class App : InkEngine.InkEngine
 
     private void PanelShow(string path)
     {
-        _panelShowDrawer = Environment.GetCommandLineArgs().Contains("--drawer");
+        _panelShowMore = Environment.GetCommandLineArgs().Contains("--more");
         _panelShowMini = Environment.GetCommandLineArgs().Contains("--mini");
         _panelShowBand = Environment.GetCommandLineArgs().Contains("--band");
         SetUiFactory(() => new InkUi.FullUi());
@@ -12437,10 +12947,14 @@ internal sealed class App : InkEngine.InkEngine
 
         if (CurrentUi is InkUi.FullUi ui)
         {
-            // --ball：**出收起态（那个球）**，不做"一步展开"。
-            // 默认是展开态；收起/贴边这一类毛病只在球上看得见，所以要能单拍它。
+            // --ball：**出收起态（那个球）**——启动默认就是展开态，所以要显式跳 0；
+            // 不传就保持展开（收起/贴边这一类毛病只在球上看得见，所以要能单拍它）。
+            // ⚠ 2026-10-03 修：原来写的是 `if (!wantBall) ui.SnapForTest()`，而那一刻的
+            //   `SnapForTest` 是**跳到另一端**的开关、不是"展开"——启动时本来就展开，
+            //   那一跳反而把默认态收成了球：**不带 --ball 出球、带 --ball 出展开**，
+            //   和注释正好相反（出 README 主图时实测到）。现在显式跳 0 / 跳 1。
             bool wantBall = Environment.GetCommandLineArgs().Contains("--ball");
-            if (!wantBall) ui.SnapForTest();     // 一步展开，不用等 200 毫秒
+            ui.SetExpandForTest(wantBall ? 0f : 1f);
             if (wantHide) ui.ForcePeekForTest(0f);
             // --expand <0..1>：把"球 → 带子"的展开进度钉在中间某一帧（核对动画用）
             {
@@ -12486,14 +13000,122 @@ internal sealed class App : InkEngine.InkEngine
                     SettleFrames(120);
                 }
             }
-            if (_panelShowDrawer) ui.OpenDrawerForTest();   // --drawer：连抽屉一起出图
+            // --dark：出图前直接切深色主题（**不落盘**；和点「深色主题」那一行同一条路）
+            if (Environment.GetCommandLineArgs().Contains("--dark")) ui.SetDarkForTest(true);
+            // --more [--page N]：出**中央「更多」面板**（0 课堂 / 1 墨迹 / 2 设置）。
+            // 面板打开时 QueryBounds 是整块屏幕，截图范围在下面单独裁（见 shot 那一段）。
+            if (_panelShowMore)
+            {
+                ui.OpenMoreForTest();
+                var argvMore = Environment.GetCommandLineArgs();
+                int pi2 = Array.IndexOf(argvMore, "--page");
+                if (pi2 >= 0 && pi2 + 1 < argvMore.Length && int.TryParse(argvMore[pi2 + 1], out int pageArg))
+                    ui.SetMorePageForTest(pageArg);
+            }
             SettleFrames(500);
+
+            // --timerwin [--run|--edit|--min|--full] / --rollwin [--n 3] [--names]：
+            // 课堂窗画在**引擎浮层**里，离屏那条路（只画界面层）拍不到它，
+            // 所以等它真画出来，直接截屏幕上的窗口矩形（1:1）。
+            if (Environment.GetCommandLineArgs().Contains("--timerwin")
+                || Environment.GetCommandLineArgs().Contains("--rollwin"))
+            {
+                var argvW = Environment.GetCommandLineArgs();
+                if (argvW.Contains("--timerwin"))
+                {
+                    OpenTimerCardFromUi();
+                    SettleFrames(200);
+                    var tw = TimerCardRect();
+                    var cin = TimerWin.CardRect(tw, DpiScale, false);
+                    float lu = TimerWin.Layout(cin, DpiScale);
+                    void ClickAxis(in RectF r)
+                    {
+                        TimerPointerDownForTest((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
+                        TimerPointerUpForTest((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
+                    }
+                    if (argvW.Contains("--stopwatch")) { StartTimerFromUi(TimerMode.Stopwatch, 0f); SettleFrames(900); }
+                    else if (argvW.Contains("--run")) StartTimerFromUi(TimerMode.Countdown, 300f);
+                    int tbi = Array.IndexOf(argvW, "--tab");
+                    if (tbi >= 0 && tbi + 1 < argvW.Length && int.TryParse(argvW[tbi + 1], out int tabArg))
+                    {
+                        var tcin = TimerWin.CardRect(TimerCardRect(), DpiScale, false);
+                        float tlu = TimerWin.Layout(tcin, DpiScale);
+                        var tr = TimerWin.TabRect(tcin, tlu, Math.Clamp(tabArg, 0, 2));
+                        TimerPointerDownForTest((tr.MinX + tr.MaxX) * 0.5f, (tr.MinY + tr.MaxY) * 0.5f);
+                        TimerPointerUpForTest((tr.MinX + tr.MaxX) * 0.5f, (tr.MinY + tr.MaxY) * 0.5f);
+                    }
+                    if (argvW.Contains("--full")) ClickAxis(TimerWin.BtnRect(cin, lu, TimerZone.Fullscreen));
+                    else if (argvW.Contains("--edit")) ClickAxis(TimerWin.ValueRect(cin, lu));
+                    else if (argvW.Contains("--min")) ClickAxis(TimerWin.BtnRect(cin, lu, TimerZone.Minimize));
+                }
+                if (argvW.Contains("--rollwin"))
+                {
+                    if (argvW.Contains("--names"))
+                    {
+                        string tmpNames = Path.Combine(Path.GetTempPath(), "inkteach-shot-names.txt");
+                        File.WriteAllLines(tmpNames, new[] { "张伟", "李娜", "王强", "刘洋", "陈晨" });
+                        InkEngine.InkEngine.NamesPathOverride = tmpNames;
+                        ReloadNamesFromUi();
+                    }
+                    OpenRollCardFromUi();
+                    int ri = Array.IndexOf(argvW, "--n");
+                    if (ri >= 0 && ri + 1 < argvW.Length && int.TryParse(argvW[ri + 1], out int nArg) && nArg > 1)
+                    {
+                        var rw = RollCardRect();
+                        float ru = RollUnit();
+                        var pr = RollWin.PlusRect(rw, ru);
+                        for (int k = 1; k < Math.Min(nArg, 60); k++)
+                        {
+                            RollPointerDownForTest((pr.MinX + pr.MaxX) * 0.5f, (pr.MinY + pr.MaxY) * 0.5f);
+                            RollPointerUpForTest((pr.MinX + pr.MaxX) * 0.5f, (pr.MinY + pr.MaxY) * 0.5f);
+                        }
+                    }
+                    StartRollFromUi();
+                    double rt0 = NowMs;
+                    while (RollingNow && NowMs - rt0 < 3000) { DrainMessages(); Thread.Sleep(10); RollTickForTest(); }
+                }
+                SettleFrames(400);
+                // --board [--boardblack]：出图前铺一层白板，让背景是干净的。
+                // 课堂窗是**截屏**出来的（离屏那条路只画界面层，拍不到它），不加这层的话
+                // 图里会混着桌面图标和当时的窗口——拿去当宣传图很难看。
+                if (argvW.Contains("--board"))
+                {
+                    Host.Commands.SetBoard(true);
+                    if (argvW.Contains("--boardblack"))
+                        Host.Commands.SetBoardColor(new Color4(0.13f, 0.15f, 0.17f, 1f));
+                    SettleFrames(300);
+                }
+                if (argvW.Contains("--keepboard")) SetPassThroughFromUi(false);
+                SettleFrames(300);
+                var wr = argvW.Contains("--timerwin") ? TimerCardRect() : RollCardRect();
+                bool okW = ScreenProbe.SaveBmp(path,
+                    (int)MathF.Floor(wr.MinX), (int)MathF.Floor(wr.MinY),
+                    Math.Max(1, (int)MathF.Ceiling(wr.MaxX - wr.MinX)),
+                    Math.Max(1, (int)MathF.Ceiling(wr.MaxY - wr.MinY)));
+                Console.WriteLine(okW
+                    ? $"已出图 {path}（截屏 {wr.MaxX - wr.MinX:F0}×{wr.MaxY - wr.MinY:F0}）"
+                    : "出图失败");
+                ExitCode = okW ? 0 : 1;
+                _quit = true;
+                return;
+            }
 
             // 优先离屏出图（锁屏 / 远程也能出，图里不混桌面）。
             // **范围要连"画到外面那一圈"一起给**（投影，见 IOverlayUi.PaintMargin）：
             // 这一条的边上留白只有 24 **物理**像素，200% 缩放下就是 12 逻辑像素，
             // 而投影最远胀出去 16+8 逻辑像素——不给就会被切掉一半，图看着像"没有投影"。
             var b = ui.QueryBounds();
+            // --more：面板打开时占用 = 整块屏幕，照它出图会得到一整屏（20MB 级）。
+            // 设计验收要的是那块卡片 ＋ 周围一圈遮罩，所以裁到"面板 ＋ 64"。
+            if (_panelShowMore)
+            {
+                var mr = ui.MoreRectForTest;
+                b = new RectF
+                {
+                    MinX = mr.MinX - 64f, MinY = mr.MinY - 64f,
+                    MaxX = mr.MaxX + 64f, MaxY = mr.MaxY + 64f,
+                };
+            }
             var shot = new RectF
             {
                 MinX = b.MinX - ui.PaintMargin, MinY = b.MinY - ui.PaintMargin,
@@ -12530,6 +13152,360 @@ internal sealed class App : InkEngine.InkEngine
         _quit = true;
     }
 
+    /// <summary>
+    /// 呼出盘自检（--radialtest）：全走引擎里真在用的那套状态机（开 / 划 / 松 / 取消）。
+    ///
+    /// 不依赖真键盘：按住/松手的"真实键路由"由发布前手测覆盖；这里钉住的是
+    /// 其余全部行为——扇区几何、死区、滞回、和工具键同一条命令、穿透语义、
+    /// 松键轮询、放映临时键表。对照文档见《调研-笔键方案.md》附录 C/D。
+    /// </summary>
+    private void RadialTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 呼出盘自检（Ctrl+Alt+Shift+Q：按住 → 划向扇区 → 松手）===");
+
+        if (SkipIfNoSyntheticInput("呼出盘自检")) { _quit = true; return; }
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-32} {detail}");
+        }
+        static bool SameCol(Color4 a, Color4 b) =>
+            MathF.Abs(a.R - b.R) < 0.02f && MathF.Abs(a.G - b.G) < 0.02f
+            && MathF.Abs(a.B - b.B) < 0.02f;
+
+        SetUiFactory(() => new InkUi.FullUi());
+        PassThrough = false;
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Pen;
+        SettleFrames(300);
+
+        // 自检期间**先按住"测试保持"**：不然一次 Settle 的泵就会把盘当成"已松手"提交掉。
+        // ⑩ 单独把它放开来验轮询。
+        RadialTestHold = true;
+
+        float cx = _virtualX + _virtualW * 0.5f;
+        float cy = _virtualY + _virtualH * 0.5f;
+
+        // ---- ① 打开：盘心 = 按下那一刻的指针 ----
+        RadialOpenForTest(cx, cy);
+        Check("打开：进入呼出盘状态", RadialPaletteActive, $"active = {RadialPaletteActive}");
+        Check("盘心 = 按下那一刻的指针位置",
+              MathF.Abs(RadialCenterX - cx) < 0.5f && MathF.Abs(RadialCenterY - cy) < 0.5f,
+              $"({RadialCenterX:F0},{RadialCenterY:F0}) vs ({cx:F0},{cy:F0})");
+
+        // ---- ② 死区（没移动）松手 = 取消 ----
+        Host.Commands.SetTool(Tool.Pen);
+        Host.Commands.SetColor(InkPalette.PenBand[0].Color);
+        SettleFrames(120);
+        var tool0 = Host.State.Tool;
+        RadialCommitForTest();
+        Check("死区松手 = 取消：工具/颜色都不动",
+              !RadialPaletteActive && Host.State.Tool == tool0,
+              $"active = {RadialPaletteActive}，工具 = {Host.State.Tool}");
+
+        // ---- ③ 划向正东 =「红」：执行后是红笔 ----
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx + 120f, cy);
+        Check("划向正东 = 选中「红」扇区", RadialPaletteSector == 2, $"扇区 {RadialPaletteSector}");
+        RadialCommitForTest();
+        Check("松手执行：切成红笔",
+              !RadialPaletteActive && Host.State.Tool == Tool.Pen
+              && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
+              $"工具 = {Host.State.Tool}，色 = {Host.State.PaletteBase}");
+
+        // ---- ④ 在别的工具上选颜色 = "给我这支颜色的笔"（切回笔） ----
+        Host.Commands.SetTool(Tool.Eraser);
+        SettleFrames(120);
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx + 85f, cy - 85f);          // 东北 = 黑
+        Check("划向东北 = 选中「黑」扇区", RadialPaletteSector == 1, $"扇区 {RadialPaletteSector}");
+        RadialCommitForTest();
+        Check("在橡皮上选颜色：会切回笔并给对应色",
+              Host.State.Tool == Tool.Pen
+              && SameCol(Host.State.PaletteBase, InkPalette.PenBand[0].Color),
+              $"工具 = {Host.State.Tool}，色 = {Host.State.PaletteBase}");
+
+        // ---- ⑤ 工具扇区 = 和按 Ctrl+P 同一条命令（已经是它 → 换色） ----
+        Host.Commands.SetTool(Tool.Pen);
+        Host.Commands.SetColor(InkPalette.PenBand[0].Color);
+        SettleFrames(120);
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx, cy - 120f);               // 北 = 笔
+        Check("划向正北 = 选中「笔」扇区", RadialPaletteSector == 0, $"扇区 {RadialPaletteSector}");
+        RadialCommitForTest();
+        Check("已经是笔时选「笔」= 连按语义（换下一色）",
+              Host.State.Tool == Tool.Pen
+              && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
+              $"色 = {Host.State.PaletteBase}");
+
+        // ---- ⑥ 其余扇区各换一次工具（V-a 排序：南=橡皮、西南=框选、西=荧光笔） ----
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx, cy + 120f);               // 南 = 橡皮
+        RadialCommitForTest();
+        Check("划向正南 = 橡皮", Host.State.Tool == Tool.Eraser, $"工具 = {Host.State.Tool}");
+
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx - 85f, cy + 85f);          // 西南 = 框选
+        RadialCommitForTest();
+        Check("划向西南 = 框选", Host.State.Tool == Tool.Marquee, $"工具 = {Host.State.Tool}");
+
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx - 120f, cy);               // 西 = 荧光笔
+        RadialCommitForTest();
+        Check("划向正西 = 荧光笔", Host.State.Tool == Tool.Highlighter, $"工具 = {Host.State.Tool}");
+
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx - 85f, cy - 85f);          // 西北 = 激光
+        RadialCommitForTest();
+        Check("划向西北 = 激光", Host.State.Tool == Tool.Laser, $"工具 = {Host.State.Tool}");
+
+        // ---- ⑥.5 排序 V-a 与扇面几何（2026-09-30 v4 定稿） ----
+        // 正位（上下左右）＝前四高频：笔 / 红 / 橡皮 / 荧光笔；四角＝次频。
+        Check("排序 V-a：上下左右＝笔/红/橡皮/荧光笔，四角＝黑/蓝/框选/激光",
+              RadialSectorNames[0] == "笔" && RadialSectorNames[2] == "红"
+              && RadialSectorNames[4] == "橡皮" && RadialSectorNames[6] == "荧光笔"
+              && RadialSectorNames[1] == "黑" && RadialSectorNames[3] == "蓝"
+              && RadialSectorNames[5] == "框选" && RadialSectorNames[7] == "激光",
+              string.Join(" ", RadialSectorNames));
+        // 扇面几何：图标环 68 ± 图标半径 12 要落在（锁定距离, 盘半径）里，也别压到中央读数。
+        Check("扇面几何：图标环 68 与死区/锁定/中央读数不打架",
+              OverlayWindow.RadialIconRingLogical - 12f > RadialLockLogical
+              && OverlayWindow.RadialIconRingLogical + 12f < RadialRadiusLogical
+              && OverlayWindow.RadialIconRingLogical - 12f > OverlayWindow.RadialInnerRadiusLogical
+              && OverlayWindow.RadialInnerRadiusLogical > OverlayWindow.RadialCenterLogical,
+              $"环带 {OverlayWindow.RadialInnerRadiusLogical}→{OverlayWindow.RadialPlateRadiusLogical}，"
+              + $"图标环 {OverlayWindow.RadialIconRingLogical}，锁定 {RadialLockLogical}");
+
+        // ---- ⑦ 跨扇区滞回：出界 9° 以内不跳扇区 ----
+        RadialOpenForTest(cx, cy);
+        float rr = 120f;
+        RadialMoveForTest(cx + rr, cy);                 // 正东 = 红
+        float a23 = 23f * MathF.PI / 180f;              // 刚过 22.5° 边界
+        RadialMoveForTest(cx + rr * MathF.Cos(a23), cy + rr * MathF.Sin(a23));
+        Check("越过扇区边界 9° 内：不跳扇区（滞回）", RadialPaletteSector == 2,
+              $"扇区 {RadialPaletteSector}");
+        float a40 = 40f * MathF.PI / 180f;
+        RadialMoveForTest(cx + rr * MathF.Cos(a40), cy + rr * MathF.Sin(a40));
+        Check("出界超过 9°：正常换到下一扇区", RadialPaletteSector == 3,
+              $"扇区 {RadialPaletteSector}");
+        RadialCancelForTest("自检收尾");
+
+        // ---- ⑧ 穿透里照样能呼出：这是"把笔从下层抢回来"的入口（2026-10-04 用户定）----
+        //
+        // 刻意钉住两件不同的事，别混成一件：
+        //   ① **能呼出**：穿透开着时按 Ctrl+Alt+Shift+Q，盘照样出（指针要走
+        //      `GetCursorPos`，因为 WS_EX_TRANSPARENT 下我们收不到鼠标消息）；
+        //   ② **选扇区 = 退出穿透 + 换工具**——工具键本身在穿透下不响应（8.5），
+        //      所以提交时必须先退穿透，否则会"按下去悄无声息"。
+        // 同时保留一条反向守卫：**取消不动穿透**（死区松手 / 划回中心）。
+        Host.Commands.SetPassThrough(true);
+        SettleFrames(150);
+        SendMouse((int)cx, (int)cy, 0);
+        SettleFrames(150);
+        RadialTestHold = true;
+        RadialOpenForTest(cx, cy);
+        Check("穿透开着：呼出盘照样能呼出（2026-10-04 起）", RadialPaletteActive,
+              $"active = {RadialPaletteActive}，穿透 = {PassThrough}");
+        // ⚠ 这里**必须真移鼠标**、不能用 `RadialMoveForTest`：穿透时指针位置每帧从
+        // `GetCursorPos` 刷（我们收不到鼠标消息），直接写 PointerX/Y 会被立刻覆盖掉。
+        // 这也正是这段判据要钉的东西——穿透里扇区方向跟不跟得上系统光标。
+        SendMouse((int)(cx + 85f), (int)(cy - 85f), 0);  // 东北 = 黑（颜色扇区）
+        SettleFrames(150);
+        RadialPumpForTest();
+        Check("穿透里：扇区方向跟得上系统光标（GetCursorPos 那一路）", RadialPaletteSector == 1,
+              $"扇区 {RadialPaletteSector}");
+        RadialCommitForTest();
+        Check("穿透里选扇区：退出穿透 + 换到那支笔",
+              !PassThrough && Host.State.Tool == Tool.Pen
+              && SameCol(Host.State.PaletteBase, InkPalette.PenBand[0].Color),
+              $"穿透 = {PassThrough}，工具 = {Host.State.Tool}，色 = {Host.State.PaletteBase}");
+
+        // 反向守卫：死区松手 = 取消，穿透必须原样留着。
+        Host.Commands.SetPassThrough(true);
+        SettleFrames(150);
+        RadialOpenForTest(cx, cy);
+        RadialCommitForTest();
+        Check("穿透里死区松手：只是取消，穿透不动", PassThrough && !RadialPaletteActive,
+              $"穿透 = {PassThrough}，active = {RadialPaletteActive}");
+        Host.Commands.SetPassThrough(false);
+        SettleFrames(150);
+        RadialTestHold = true;
+
+        // ---- ⑨ 写字中（笔尖在屏上）不响应 ----
+        SendMouse((int)cx, (int)cy, 0);                          SettleFrames(60);
+        SendMouse((int)cx, (int)cy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(120);
+        RadialOpenForTest(cx, cy);
+        Check("落笔中：呼出盘不响应（抬笔后再按）", !RadialPaletteActive, $"active = {RadialPaletteActive}");
+        SendMouse((int)cx, (int)cy, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(200);
+
+        // ---- ⑩ 松键轮询：放映那条路没有 KeyUp，靠每帧 GetAsyncKeyState ----
+        RadialTestHold = false;
+        RadialOpenForTest(cx, cy);
+        Check("按住状态：盘是活的", RadialPaletteActive, $"active = {RadialPaletteActive}");
+        RadialPumpForTest();     // 物理 Q 没按着 → 应当按"已松手"提交（这里没位移 = 取消）
+        Check("轮询发现松手：自动提交（没位移 = 取消）", !RadialPaletteActive,
+              $"active = {RadialPaletteActive}");
+
+        // ---- ⑪ 呼出盘现在是常驻全局键（Ctrl+Alt+Shift+Q），放映临时表里不重复挂 ----
+        // 2026-10-04 用户定：呼出盘从批注内 Ctrl+Q 升级为全局 Ctrl+Alt+Shift+Q。
+        // 这条同时钉住"升上去"和"临时表里那一条删干净"——两件事缺一个都会回到
+        // "一个动作两把全局键"的糊状态。
+        var radialGlobal = Keys.Find(KeyScope.Global, KeyAction.RadialPalette);
+        var radialTemp = PptHotkeyEntryForTest(KeyAction.RadialPalette);
+        Check("呼出盘：全局 Ctrl+Alt+Shift+Q，放映临时表里没有重复",
+              radialGlobal != null && radialGlobal.Chord.ToString() == "Ctrl+Alt+Shift+Q"
+              && radialTemp == null,
+              radialGlobal == null
+                  ? "全局表里没有"
+                  : $"全局 {radialGlobal.Chord}；临时表 {(radialTemp == null ? "没有" : "有")}");
+
+        // ---- ⑫ 真键盘 + 真鼠标：全局热键那条路（RegisterHotKey → WM_HOTKEY → 打开） ----
+        // 前面都是引擎钩子；这一条和 --hotkeytest 同一套方法，走真实输入流。
+        // 呼出盘 2026-10-04 起是全局键：按下由系统送 WM_HOTKEY，松手靠泵轮询物理键
+        //（和放映时的临时全局键同一条路）。
+        if (!SkipIfNoSyntheticInput("呼出盘真键盘"))
+        {
+            Host.Commands.SetTool(Tool.Pen);
+            Host.Commands.SetColor(InkPalette.PenBand[0].Color);
+            SettleFrames(200);
+            SendMouse((int)cx, (int)cy, 0);
+            SettleFrames(150);
+
+            var qDown = new[]
+            {
+                KeyInput(VK_CONTROL, false), KeyInput(VK_MENU, false),
+                KeyInput(VK_SHIFT, false), KeyInput(0x51, false),
+            };
+            Native.SendInput((uint)qDown.Length, qDown, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(250);
+            Check("真键盘：按住 Ctrl+Alt+Shift+Q 能打开呼出盘", RadialPaletteActive,
+                  $"active = {RadialPaletteActive}");
+
+            SendMouse((int)(cx + 120f), (int)cy, 0);      // 正东 = 红
+            SettleFrames(150);
+            var qUp = new[]
+            {
+                KeyInput(0x51, true), KeyInput(VK_SHIFT, true),
+                KeyInput(VK_MENU, true), KeyInput(VK_CONTROL, true),
+            };
+            Native.SendInput((uint)qUp.Length, qUp, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(250);
+            Check("真键盘：松手确认为红笔",
+                  !RadialPaletteActive && Host.State.Tool == Tool.Pen
+                  && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
+                  $"active = {RadialPaletteActive}，色 = {Host.State.PaletteBase}");
+
+            // ---- ⑬ 真键盘：先松修饰键（盘还在）→ 松开 Alt/Shift 后按 Esc 取消 ----
+            // 这条同时钉住两件事：提交只认 Q（松修饰键不提交）；Esc 要在没有修饰键压着时按
+            // （Ctrl+Esc 是系统开始菜单、Alt+Esc 还会切窗口，都收不到——⑫ 那版就是这么
+            // 发现问题的）。
+            SendMouse((int)cx, (int)cy, 0);
+            SettleFrames(120);
+            Native.SendInput((uint)qDown.Length, qDown, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(250);
+            var ctrlUp = new[] { KeyInput(VK_CONTROL, true) };
+            Native.SendInput((uint)ctrlUp.Length, ctrlUp, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(150);
+            Check("真键盘：先松 Ctrl，盘还在（提交只认 Q 松手）", RadialPaletteActive,
+                  $"active = {RadialPaletteActive}");
+            var modsUp = new[] { KeyInput(VK_SHIFT, true), KeyInput(VK_MENU, true) };
+            Native.SendInput((uint)modsUp.Length, modsUp, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(150);
+            SendKeyChord(0x1B);                            // 真按 Esc（此时没有修饰键压着）
+            SettleFrames(200);
+            Check("真键盘：Esc 取消（工具/颜色都不动）",
+                  !RadialPaletteActive && Host.State.Tool == Tool.Pen,
+                  $"active = {RadialPaletteActive}，工具 = {Host.State.Tool}");
+            var qUpOnly = new[] { KeyInput(0x51, true) };
+            Native.SendInput((uint)qUpOnly.Length, qUpOnly, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(150);
+
+            // ---- ⑭ 真键盘 + 穿透：开着穿透按 Ctrl+Alt+Shift+Q 也能调出笔来 ----
+            // 这一条钉的就是用户 2026-10-04 要的那件事：**穿透时也能用全局呼出盘
+            // 把笔快速调出来**（松手 = 退出穿透 + 换工具）。走真实输入流，和 ⑫ 同一条路。
+            Host.Commands.SetPassThrough(true);
+            SettleFrames(300);
+            SendMouse((int)cx, (int)cy, 0);
+            SettleFrames(200);
+            Native.SendInput((uint)qDown.Length, qDown, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(250);
+            Check("真键盘 + 穿透：能呼出盘", RadialPaletteActive,
+                  $"active = {RadialPaletteActive}，穿透 = {PassThrough}");
+            SendMouse((int)(cx + 120f), (int)cy, 0);      // 正东 = 红
+            SettleFrames(200);
+            Native.SendInput((uint)qUp.Length, qUp, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(300);
+            Check("真键盘 + 穿透：松手 = 退出穿透 + 红笔",
+                  !RadialPaletteActive && !PassThrough && Host.State.Tool == Tool.Pen
+                  && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
+                  $"穿透 = {PassThrough}，工具 = {Host.State.Tool}，色 = {Host.State.PaletteBase}");
+            Host.Commands.SetPassThrough(false);
+            SettleFrames(200);
+        }
+
+        // 收尾
+        Host.Commands.SetTool(Tool.Pen);
+        PassThrough = false;
+        Doc.Clear();
+        Doc.ClearHistory();
+        SettleFrames(150);
+
+        Console.WriteLine();
+        Console.WriteLine(fail == 0
+            ? $"  PASS: 呼出盘 {pass} 项全过"
+            : $"  FAIL: {fail} 项不对（{pass} 项通过）");
+        if (fail > 0) ExitCode = 1;
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 呼出盘摆样（--radialshow）：把盘定格在屏幕中央、自己抓屏出图——
+    /// 给"长什么样"留底稿（和 --cursorshow / --pixeleraseshow 同一套做法）。
+    /// 出两张：没划的、划到「红」的。
+    /// </summary>
+    private void RadialShow(string path)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 呼出盘摆样（Ctrl+Alt+Shift+Q）===");
+
+        // --dark：深色那档也出一张（呼出盘跟着 FloatingTheme 走，这里顺手验观感）。
+        // 自检模式用临时配置（`_selfCheckMode`），不会碰用户的 settings.json。
+        if (Environment.GetCommandLineArgs().Contains("--dark")) SetUiPref("dark", "1");
+
+        SetUiFactory(() => new InkUi.FullUi());
+        PassThrough = false;
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Pen;
+        ShowHud = false;
+        RadialTestHold = true;
+
+        float cx = _virtualX + _virtualW * 0.5f;
+        float cy = _virtualY + _virtualH * 0.5f;
+
+        // ① 打开（还没划）
+        RadialOpenForTest(cx, cy);
+        SettleFrames(400);
+        bool ok1 = ScreenProbe.SaveBmp(path, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+
+        // ② 划向「红」（正东）
+        RadialMoveForTest(cx + 120f, cy);
+        SettleFrames(300);
+        string path2 = System.IO.Path.ChangeExtension(path, null) + "-red.bmp";
+        bool ok2 = ScreenProbe.SaveBmp(path2, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+
+        RadialCancelForTest("摆样结束");
+        RadialTestHold = false;
+        Console.WriteLine(ok1 && ok2 ? $"出图：{path} / {path2}" : "抓屏失败（看上一行）");
+        _quit = true;
+    }
+
     private void PanelTest()
     {
         Console.WriteLine();
@@ -12538,7 +13514,7 @@ internal sealed class App : InkEngine.InkEngine
         if (SkipIfNoSyntheticInput("产品界面自检")) { _quit = true; return; }
 
         int pass = 0, fail = 0;
-        void Check(string name, bool ok, string detail)
+        void Check(string name, bool ok, string detail = "")
         {
             if (ok) pass++; else fail++;
             Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-26} {detail}");
@@ -12567,6 +13543,38 @@ internal sealed class App : InkEngine.InkEngine
             ExitCode = 1;
             _quit = true;
             return;
+        }
+
+        // ---- 投影曲线：**没有"袋状"硬边**（用户 2026-10-01 报的"菜单栏周围半透明黑影袋子"）----
+        // 每层都是硬边填充，所以**最外那一层的 α 就是"袋子"的外沿轮廓**。从现象反推的判据：
+        // 层数够多把台阶磨平、最外层淡到看不见、逐层向外只淡不变深。
+        {
+            var sh = FloatingTheme.Shadow;
+            bool mono = true; string note = "";
+            for (int i = 1; i < sh.Length; i++)
+            {
+                if (sh[i].Inflate <= sh[i - 1].Inflate || sh[i].Color.A > sh[i - 1].Color.A + 1e-4f)
+                { mono = false; note = $"第 {i} 层 胀 {sh[i].Inflate:F1} α {sh[i].Color.A:F4}"; break; }
+            }
+            Check("投影：层数 ≥ 8、逐层向外只淡不变深（台阶磨平）",
+                  sh.Length >= 8 && mono, $"{sh.Length} 层；{note}");
+            Check("投影：最外层 α ≤ 0.01（浅底上看不见硬边，没有'袋子'）",
+                  sh.Length > 0 && sh[sh.Length - 1].Color.A <= 0.01f,
+                  $"最外层 α={sh[sh.Length - 1].Color.A:F4}（≈{sh[sh.Length - 1].Color.A * 255f:F1} 个色阶）");
+            Check("投影：最远够得着的一圈 ≤ PaintMargin（不被界面裁剪切掉）",
+                  FloatingTheme.ShadowReachLogical <= InkUi.Tokens.PaintMargin + 0.01f,
+                  $"reach {FloatingTheme.ShadowReachLogical:F0} ≤ margin {InkUi.Tokens.PaintMargin:F0}");
+            var shd = InkUi.Tokens.ShadowDark;
+            bool monoD = shd.Length >= 8;
+            string noteD = $"{shd.Length} 层";
+            for (int i = 1; i < shd.Length; i++)
+            {
+                if (shd[i].Inflate <= shd[i - 1].Inflate || shd[i].Color.A > shd[i - 1].Color.A + 1e-4f)
+                { monoD = false; noteD = $"第 {i} 层 胀 {shd[i].Inflate:F1} α {shd[i].Color.A:F4}"; break; }
+            }
+            Check("投影（深色）：与浅色同一套判据（≥8 层、只淡不变深、外层 ≤0.01）",
+                  monoD && shd[shd.Length - 1].Color.A <= 0.01f,
+                  $"{noteD}，最外层 α={shd[shd.Length - 1].Color.A:F3}");
         }
 
         // ---- ⓪ 贴边隐藏 + **刚启动**：不许一上来就收（用户 2026-09-17）----
@@ -12764,7 +13772,7 @@ internal sealed class App : InkEngine.InkEngine
             SettleFrames(400);
         }
 
-        // 把面板弄到"展开 ＋ 抽屉开着"这个已知状态。
+        // 把面板弄到"展开 ＋ 「更多」面板开着"这个已知状态。
         // 每一步都先问**当前**状态再动手——面板可能正收着、可能刚被换成新实例，
         // 硬按上一次算好的坐标去点，点空了都不知道（这一版用例被坑过一次）。
         void NormalizePanel()
@@ -12776,11 +13784,19 @@ internal sealed class App : InkEngine.InkEngine
                               (b.MinY + b.MaxY) * 0.5f * DpiScale);
                 SettleFrames(300);
             }
-            if (!ui.DrawerOpenForTest)
+            if (!ui.MoreOpenForTest)
             {
                 var m = ui.CellRectForTest(12);
                 ClickPhysical((m.MinX + m.MaxX) * 0.5f * DpiScale,
                               (m.MinY + m.MaxY) * 0.5f * DpiScale);
+                SettleFrames(250);
+            }
+            // 面板现在**默认停在启动器主页**；要碰设置行的用例都先切到设置子页
+            if (ui.MoreOpenForTest && ui.MorePageForTest != 1)
+            {
+                var s = ui.HubBottomRectForTest(0);
+                ClickPhysical((s.MinX + s.MaxX) * 0.5f * DpiScale,
+                              (s.MinY + s.MaxY) * 0.5f * DpiScale);
                 SettleFrames(250);
             }
         }
@@ -13153,6 +14169,86 @@ internal sealed class App : InkEngine.InkEngine
                   $"笔格高亮 = {ui.CellActiveForTest(3)}");
         }
 
+        // ---- ⑥.3c 穿透：色带只收成那条线，不许张开（2026-10-02 用户口径）----
+        //
+        // 用户原话："点击穿透以后，色带是横起来的……不是说我点了个穿透，色带就完全没有了。
+        // 我说的色带消失，就是把它折叠起来，而不是像其他一样，点过来以后还是展开的。"
+        // 所以规则是：进穿透**只把设置条收回那条 6 像素色线**（面板高度不变——贴边隐藏
+        // 露出来的还是它，不会难看），而且穿透期间不许再张开（没有设置可放）。
+        // 以前那个毛病照旧要防：`_bandCell` 还停在上一个工具那格，穿透开着、指针在面板上时
+        // 旧设置条照常张开、色片还能点。
+        // 这里钉五件事：① 点格子进穿透 → 收成线；② 指针在面板上也不许张开；
+        // ③ 退出穿透 → 还能重新张开（功能没被收坏）；④ 穿透里点工具格照样能出来；
+        // ⑤ 全局开关（Ctrl+Alt+Shift+T 同一条路）进穿透同样只收成线。
+        {
+            // 起手：笔、色带在笔格并张开（走真实路径：点笔格后指针留在面板上）
+            Host.Commands.SetTool(Tool.Pen);
+            Host.Commands.SetPassThrough(false);
+            SettleFrames(200);
+            var penCellP = ui.CellRectForTest(3);
+            ClickPhysical((penCellP.MinX + penCellP.MaxX) * 0.5f * DpiScale,
+                          (penCellP.MinY + penCellP.MaxY) * 0.5f * DpiScale);
+            SettleFrames(400);
+            Check("（准备）色带在笔格且已经张开",
+                  ui.BandCellForTest == 3 && ui.RailValueForTest > 0.99f,
+                  $"格 {ui.BandCellForTest}，张开度 {ui.RailValueForTest:F2}");
+
+            // ① 点穿透格 → 穿透开、设置条收回那条 6 像素色线（不是消失）
+            var mouseCellP = ui.CellRectForTest(1);
+            ClickPhysical((mouseCellP.MinX + mouseCellP.MaxX) * 0.5f * DpiScale,
+                          (mouseCellP.MinY + mouseCellP.MaxY) * 0.5f * DpiScale);
+            SettleFrames(600);
+            var lineRect = ui.BandRectForTest;
+            Check("点穿透格：色带只收成那条 6 像素线（不是消失）",
+                  Host.State.PassThrough && ui.RailValueForTest < 0.01f
+                  && !lineRect.IsEmpty && lineRect.MaxY - lineRect.MinY is >= 5f and <= 12f,
+                  $"穿透 = {Host.State.PassThrough}，张开度 {ui.RailValueForTest:F2}，"
+                  + $"带高 {(lineRect.IsEmpty ? 0f : lineRect.MaxY - lineRect.MinY):F1}");
+
+            // ② 指针就停在面板上（刚点的穿透格）：旧的悬停意图不许把设置条重新弹开
+            ui.OpenRailForTest();                 // 强行模拟"指针碰到带子区"
+            SettleFrames(300);
+            Check("穿透中：指针在面板上也不张开旧设置条",
+                  ui.RailValueForTest < 0.01f
+                  && (ui.BandRectForTest.MaxY - ui.BandRectForTest.MinY) <= 12f,
+                  $"张开度 {ui.RailValueForTest:F2}");
+
+            // ③ 退出穿透（走命令，和全局 Ctrl+Alt+Shift+T 同一条路）→ 悬停还能重新张开
+            Host.Commands.SetPassThrough(false);
+            SettleFrames(200);
+            ui.OpenRailForTest();
+            SettleFrames(300);
+            Check("退出穿透：色带可以重新张开（功能没被收坏）",
+                  !Host.State.PassThrough && ui.RailValueForTest > 0.99f,
+                  $"张开度 {ui.RailValueForTest:F2}");
+
+            // ④ 穿透里点笔格：照样顺手关穿透（没键盘的教室靠它）＋ 带子回到笔格，
+            //    而且**这一次不许顺手换色**（2026-10-05 用户报的 bug：穿透中点笔格直接切了颜色）。
+            var colorBeforeP4 = Host.State.PaletteBase;
+            ClickPhysical((mouseCellP.MinX + mouseCellP.MaxX) * 0.5f * DpiScale,
+                          (mouseCellP.MinY + mouseCellP.MaxY) * 0.5f * DpiScale);
+            SettleFrames(400);
+            var penCellP2 = ui.CellRectForTest(3);
+            ClickPhysical((penCellP2.MinX + penCellP2.MaxX) * 0.5f * DpiScale,
+                          (penCellP2.MinY + penCellP2.MaxY) * 0.5f * DpiScale);
+            SettleFrames(500);
+            bool sameColorP4 = MathF.Abs(Host.State.PaletteBase.R - colorBeforeP4.R) < 0.02f
+                            && MathF.Abs(Host.State.PaletteBase.G - colorBeforeP4.G) < 0.02f
+                            && MathF.Abs(Host.State.PaletteBase.B - colorBeforeP4.B) < 0.02f;
+            Check("穿透里点笔格：关穿透、上带回到笔格、**颜色不动**",
+                  !Host.State.PassThrough && Tool == Tool.Pen && ui.BandCellForTest == 3 && sameColorP4,
+                  $"穿透 = {Host.State.PassThrough}，工具 = {Tool}，色带格 = {ui.BandCellForTest}，颜色不动 = {sameColorP4}");
+
+            // ⑤ 全局开关那条路（不经面板）：同样只收成线
+            Host.Commands.SetPassThrough(true);
+            SettleFrames(500);
+            Check("全局开关进穿透：同样只收成那条线（不是只有点格子才收）",
+                  Host.State.PassThrough && ui.RailValueForTest < 0.01f,
+                  $"张开度 {ui.RailValueForTest:F2}");
+            Host.Commands.SetPassThrough(false);
+            SettleFrames(300);
+        }
+
         // ---- ⑥.3b 主条那几格"选中显示选中什么"（2026-09-26）----
         //
         // 用户那天说的那条逻辑：**没选中画一个固定的，选中之后就画"手里到底是什么"**。
@@ -13170,9 +14266,9 @@ internal sealed class App : InkEngine.InkEngine
             // 穿透那一格（2026-09-26 用户："把'穿透'的图标换成鼠标，在'更多'里面也要改"）：
             // 两态都得是**鼠标设备**（MDI 那张：常态描边、选中实心）。原来那个是 Fluent `Cursor`
             // ＝ 一根箭头指针，和"选择"工具那根容易混。
-            // ⚠ "更多里面也要改"这一半**不用另测**：抽屉和主条走的是同一个
+            // ⚠ "更多里面也要改"这一半**不用另测**：面板里的钉住宫格和主条走的是同一个
             // `DrawCellIcon` / `CellIconName`（见那两处的说明），所以这一条断言同时管着两边——
-            // 抽屉要是哪天又自己写一份图标名单，这条就会在出图验收时露馅（抽屉那张图见 --drawer）。
+            // 面板要是哪天又自己写一份图标名单，这条就会在出图验收时露馅（面板那张图见 --panelshow --more）。
             Check("穿透那一格：没选中 → 指针箭头（Tabler 描边版）",
                   ui.CellIconForTest(1) == "cursorArrow",
                   $"画的是 {ui.CellIconForTest(1)}（期望 cursorArrow）");
@@ -13593,9 +14689,9 @@ internal sealed class App : InkEngine.InkEngine
             ClickPhysical((moreMoved.MinX + moreMoved.MaxX) * 0.5f * DpiScale,
                           (moreMoved.MinY + moreMoved.MaxY) * 0.5f * DpiScale);
             SettleFrames(300);
-            Check("「更多」抽屉里已经没有「白板底纹」这一行",
+            Check("「更多」面板里已经没有「白板底纹」这一行",
                   ui.RowRectByLabelForTest("白板底纹").IsEmpty, "按标签找不到 = 已经删干净");
-            Check("「更多」抽屉里已经没有「底纹间距」这一行",
+            Check("「更多」面板里已经没有「底纹间距」这一行",
                   ui.RowRectByLabelForTest("底纹间距").IsEmpty, "按标签找不到 = 已经删干净");
             var moreMoved2 = ui.CellRectForTest(12);
             ClickPhysical((moreMoved2.MinX + moreMoved2.MaxX) * 0.5f * DpiScale,
@@ -13910,19 +15006,22 @@ internal sealed class App : InkEngine.InkEngine
                   Host.State.Tool == Tool.Marquee && Host.State.SelectMode == SelectMode.Rect,
                   $"工具 {Host.State.Tool}，档 {Host.State.SelectMode}（期望 Rect）");
 
-            // 第二下：已经是它了、色带也在这一格 → 换下一档（矩形 → 套索）
+            // [2026-10-05 用户定] 已经是选择工具、再点一下（或按 Ctrl+M）**不再换档**：
+            // 爱用矩形的一直用矩形、爱用套索的一直用套索；子类型去上带那两段里选。
             ClickPhysical(sxSel, sySel);
             SettleFrames(400);
-            Check("已经是选择工具、再点一下：换到下一档（矩形 → 套索）",
-                  Host.State.SelectMode == SelectMode.Lasso,
-                  $"档 {Host.State.SelectMode}（期望 Lasso）");
-
-            // 第三下：再换一次 → 转回矩形（两档循环）
-            ClickPhysical(sxSel, sySel);
-            SettleFrames(400);
-            Check("再点一下：两档循环转回矩形",
+            Check("已经是选择工具、再点一下：**档位不动**（不再矩形↔套索）",
                   Host.State.SelectMode == SelectMode.Rect,
                   $"档 {Host.State.SelectMode}（期望 Rect）");
+
+            // 正路：上带里那一段才是切子类型的地方（用命令通道模拟上带点击，
+            // 上带分段本身的点击自检见下面的 ⑥.13）。
+            Host.Commands.SetSelectMode(SelectMode.Lasso);
+            SettleFrames(200);
+            Check("上带切套索：档位跟着变", Host.State.SelectMode == SelectMode.Lasso,
+                  $"档 {Host.State.SelectMode}（期望 Lasso）");
+            Host.Commands.SetSelectMode(SelectMode.Rect);
+            SettleFrames(200);
 
             // ---- 双击 = 全选 ----
             var modeBeforeDbl = Host.State.SelectMode;
@@ -13934,10 +15033,7 @@ internal sealed class App : InkEngine.InkEngine
                   strokeCount > 0 && Doc.Selected.Count == strokeCount,
                   $"选中 {Doc.Selected.Count} / 共 {strokeCount} 条");
 
-            // ⚠ 这一条是"双击和单击换档不打架"的守门人：连点两下必须**回到原档**。
-            // 哪天选择方式加到三档，这条会当场红（那时得重新决定双击还要不要）。
-            Check("双击全选**不动档位**（连点两下正好转两圈回到原档）",
-                  Host.State.SelectMode == modeBeforeDbl,
+            Check("双击全选不动档位", Host.State.SelectMode == modeBeforeDbl,
                   $"档 {modeBeforeDbl} → {Host.State.SelectMode}（期望没变）");
 
             // 边界：**中间点了别的格子，双击序列要断掉**。
@@ -13979,14 +15075,97 @@ internal sealed class App : InkEngine.InkEngine
                   BoardOn && !Host.State.PassThrough,
                   $"板开 = {BoardOn}，穿透 = {Host.State.PassThrough}");
 
+            // ---- ⑥.7b 退出穿透时的板态恢复（2026-09-30 用户拍板）----
+            // 规格：**开关退出**（面板那一格 / Ctrl+Alt+Shift+T）= "回到之前"，板开就恢复；
+            //       **换工具退出**（Ctrl+P 等）= "我现在就要写"，板保持关，不能突然盖回来。
+            //       （"墨迹不隐藏"是同一批拍板的结果——那一半没有代码改动，无需断言。）
+            Host.Commands.SetBoard(true);
+            SettleFrames(200);
+            Host.Commands.SetPassThrough(true);      // 进穿透：板被自动关，快照"板开"
+            SettleFrames(250);
+            Host.Commands.SetPassThrough(false);     // 开关退出（和面板格、全局热键同一条路）
+            SettleFrames(250);
+            Check("开关退出穿透：白板恢复到进穿透之前（开着）",
+                  BoardOn && !Host.State.PassThrough,
+                  $"板开 = {BoardOn}，穿透 = {Host.State.PassThrough}");
+
+            Host.Commands.SetPassThrough(true);
+            SettleFrames(250);
+            Host.Commands.SetTool(Tool.Pen);         // 换工具退出（和按 Ctrl+P 同一条路）
+            SettleFrames(250);
+            Check("换工具退出穿透：白板保持关（不自动盖回来）",
+                  !BoardOn && !Host.State.PassThrough && Tool == Tool.Pen,
+                  $"板开 = {BoardOn}，穿透 = {Host.State.PassThrough}，工具 = {Tool}");
+
             Host.Commands.SetBoard(false);
+            Host.Commands.SetPassThrough(true);      // 板本来关着：进出穿透不该凭空开板
+            SettleFrames(200);
+            Host.Commands.SetPassThrough(false);
+            SettleFrames(200);
+            Check("板本来关着：进出穿透后仍是关着", !BoardOn,
+                  $"板开 = {BoardOn}，穿透 = {Host.State.PassThrough}");
+
             Host.Commands.SetTool(Tool.Pen);
             SettleFrames(200);
+        }
+
+        // ---- ⑥.7c 穿透模式下工具键一律不响应（2026-09-30 用户拍板）----
+        //
+        // 用户原话："开了穿透模式以后，快捷键还能调颜色，但是这个时候它又不是笔，
+        // 我感觉这个算 bug。开了穿透模式以后，笔、橡皮这些快捷键应该就没有用了，
+        // 等退出穿透模式以后才有用。"
+        // 判据：穿透开着时按 Ctrl+P（走同一个命令入口）——不换色、不切工具、也不顺手退穿透；
+        // 退出穿透后同一个键立刻恢复。**面板上的工具格不在此列**（点了仍会关穿透，照旧）。
+        {
+            bool SameCol(Color4 a, Color4 b) =>
+                MathF.Abs(a.R - b.R) < 0.02f && MathF.Abs(a.G - b.G) < 0.02f
+                && MathF.Abs(a.B - b.B) < 0.02f;
+
+            // ① 是笔：按 Ctrl+P 不许换色
+            Host.Commands.SetBoard(false);
+            Host.Commands.SetTool(Tool.Pen);
+            Host.Commands.SetColor(InkPalette.PenDefault);
+            SettleFrames(200);
+            var color0 = Host.State.PaletteBase;
+            Host.Commands.SetPassThrough(true);
+            SettleFrames(200);
+            RunActionForTest(KeyAction.ToolPen);
+            RunActionForTest(KeyAction.ToolPen);
+            SettleFrames(200);
+            Check("穿透开着：Ctrl+P 不换色（已经是笔也一样）",
+                  Host.State.PassThrough && Tool == Tool.Pen && SameCol(Host.State.PaletteBase, color0),
+                  $"穿透 = {Host.State.PassThrough}，工具 = {Tool}，色 {Host.State.PaletteBase}");
+
+            // ② 不是笔：不许切工具、也不许顺手退穿透
+            Host.Commands.SetPassThrough(false);
+            Host.Commands.SetTool(Tool.Eraser);
+            SettleFrames(200);
+            Host.Commands.SetPassThrough(true);
+            SettleFrames(200);
+            RunActionForTest(KeyAction.ToolPen);
+            SettleFrames(200);
+            Check("穿透开着：Ctrl+P 不切工具、不顺手退穿透",
+                  Host.State.PassThrough && Tool == Tool.Eraser,
+                  $"穿透 = {Host.State.PassThrough}，工具 = {Tool}");
+
+            // ③ 退出穿透：同一个键立刻恢复
+            Host.Commands.SetPassThrough(false);
+            SettleFrames(200);
+            RunActionForTest(KeyAction.ToolPen);
+            SettleFrames(200);
+            Check("退出穿透后：Ctrl+P 恢复（切回笔）",
+                  !Host.State.PassThrough && Tool == Tool.Pen,
+                  $"穿透 = {Host.State.PassThrough}，工具 = {Tool}");
+
+            Host.Commands.SetTool(Tool.Pen);
+            SettleFrames(150);
         }
 
         // 换工具（走引擎那条路，等同按热键）：上带要跟着换成"选择"的设置条
         Host.Commands.SetTool(Tool.Marquee);
         SettleFrames(150);
+        ui.OpenRailForTest();               // 确保上带张开：分段只有张开时才吃得到点击
+        SettleFrames(200);
         var lasso = ui.SegmentRectForTest(1);
         ClickPhysical((lasso.MinX + lasso.MaxX) * 0.5f * DpiScale,
                       (lasso.MinY + lasso.MaxY) * 0.5f * DpiScale);
@@ -14162,34 +15341,220 @@ internal sealed class App : InkEngine.InkEngine
         Host.Commands.SetBoardColor(InkPalette.BoardPresets[0].Color);
         SettleFrames(150);
 
-        // ---- ⑦ 「更多」抽屉：开合、深色主题、贴边隐藏 ----
+        // ---- ⑦ 「更多」面板：开合、页签、深色主题、贴边隐藏 ----
         var moreCell = ui.CellRectForTest(12);
         ClickPhysical((moreCell.MinX + moreCell.MaxX) * 0.5f * DpiScale,
                       (moreCell.MinY + moreCell.MaxY) * 0.5f * DpiScale);
-        SettleFrames(150);
-        var drawer = ui.DrawerRectForTest;
-        Check("点「更多」开出抽屉", ui.DrawerOpenForTest,
-              $"抽屉 ({drawer.MinX:F0},{drawer.MinY:F0})-({drawer.MaxX:F0},{drawer.MaxY:F0})");
-        Check("抽屉在面板上方、且在屏幕内",
-              ui.DrawerOpenForTest && drawer.MaxY <= ui.BarRectForTest.MinY - 2f
-              && drawer.MinY >= _virtualY / DpiScale && drawer.MaxX <= _virtualX / DpiScale + _virtualW / DpiScale,
-              $"抽屉底 {drawer.MinY:F0}+{drawer.MaxY - drawer.MinY:F0}，主条顶 {ui.BarRectForTest.MinY:F0}");
+        SettleFrames(250);
+        var moreRect = ui.MoreRectForTest;
+        Check("点「更多」开出中央面板", ui.MoreOpenForTest,
+              $"面板 ({moreRect.MinX:F0},{moreRect.MinY:F0})-({moreRect.MaxX:F0},{moreRect.MaxY:F0})");
 
-        // 抽屉和设置条**互斥**（2026-09-17）：两者只隔 16 像素，抽屉开着的时候设置条
-        // 要是被指针挤出来，会从抽屉底下冒一截，很难看（假面板里也是这么让位的）。
-        // 顺带守住老规矩：**抽屉的位置不许跟着设置条的高低走**——
-        // 跟着走就是"鼠标一碰色带、抽屉往上跳一下"（用户说的"起伏"）。
-        var lineRect = ui.BandRectForTest;             // 这一刻是那条色线
-        SendMouse((int)((lineRect.MinX + lineRect.MaxX) * 0.5f * DpiScale),
-                  (int)((lineRect.MinY + lineRect.MaxY) * 0.5f * DpiScale), 0);
-        SettleFrames(400);                              // 等过"该张开"的那段时间
-        var drawerAfter = ui.DrawerRectForTest;
-        Check("抽屉开着时设置条让位（不挤出来、也不推抽屉）",
-              !ui.RailOpenForTest
-              && MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandLine) < 1.5f
-              && MathF.Abs(drawerAfter.MinY - drawer.MinY) < 1.5f,
-              $"设置条高 {ui.BandHeightForTest:F0}（该是色线 {InkUi.Tokens.BandLine:F0}），"
-              + $"抽屉底 {drawer.MinY:F0} → {drawerAfter.MinY:F0}");
+        var panelWork = ui.WorkAreaForTest;
+        Check("面板在主屏工作区正中、且在屏幕内",
+              ui.MoreOpenForTest
+              && MathF.Abs((moreRect.MinX + moreRect.MaxX) * 0.5f - (panelWork.MinX + panelWork.MaxX) * 0.5f) < 2f
+              && MathF.Abs((moreRect.MinY + moreRect.MaxY) * 0.5f - (panelWork.MinY + panelWork.MaxY) * 0.5f) < 2f
+              && moreRect.MinX >= _virtualX / DpiScale && moreRect.MaxX <= (_virtualX + _virtualW) / DpiScale,
+              $"中心 ({(moreRect.MinX + moreRect.MaxX) * 0.5f:F0},{(moreRect.MinY + moreRect.MaxY) * 0.5f:F0})，"
+              + $"工作区中心 ({(panelWork.MinX + panelWork.MaxX) * 0.5f:F0},{(panelWork.MinY + panelWork.MaxY) * 0.5f:F0})");
+
+        // 全屏模态的根：打开期间占用 = 整块屏幕（引擎的命中/裁剪/接输入小窗都按它走）
+        var modalBounds = ui.QueryBounds();
+        Check("面板打开时占用整块屏幕（全屏模态）",
+              MathF.Abs(modalBounds.MinX - ui.ScreenForTest.MinX) < 1f
+              && MathF.Abs(modalBounds.MaxX - ui.ScreenForTest.MaxX) < 1f
+              && MathF.Abs(modalBounds.MaxY - ui.ScreenForTest.MaxY) < 1f,
+              $"占用 {modalBounds.MaxX - modalBounds.MinX:F0}×{modalBounds.MaxY - modalBounds.MinY:F0}，"
+              + $"屏幕 {ui.ScreenForTest.MaxX - ui.ScreenForTest.MinX:F0}×{ui.ScreenForTest.MaxY - ui.ScreenForTest.MinY:F0}");
+
+        // 打开面板会把设置条收掉：模态期间它不该再冒出来跟面板抢注意力
+        Check("面板打开时设置条已经收掉",
+              !ui.RailOpenForTest && MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandLine) < 1.5f,
+              $"设置条高 {ui.BandHeightForTest:F0}（该是色线 {InkUi.Tokens.BandLine:F0}）");
+
+        // ---- 启动器：格子/底栏逐格点得通（"加一格漏一处"用这条兜住）----
+        {
+            Check("启动器：打开面板默认停在主页", ui.MorePageForTest == 0, $"页 = {ui.MorePageForTest}");
+            bool tilesOk = true;
+            for (int code = 0; code < 7; code++)
+            {
+                var t = ui.HubTileRectForTest(code);
+                if (t.IsEmpty || t.MinX < moreRect.MinX || t.MaxX > moreRect.MaxX
+                    || t.MinY < moreRect.MinY || t.MaxY > moreRect.MaxY) tilesOk = false;
+            }
+            bool bottomOk = true;
+            for (int i = 0; i < 4; i++)
+            {
+                var t = ui.HubBottomRectForTest(i);
+                if (t.IsEmpty || t.MaxX > moreRect.MaxX || t.MaxY > moreRect.MaxY) bottomOk = false;
+            }
+            Check("启动器：七格（课堂 3 ＋ 墨迹 4）＋ 底栏四格都在面板内", tilesOk && bottomOk,
+                  $"面板 {moreRect.MaxX - moreRect.MinX:F0}×{moreRect.MaxY - moreRect.MinY:F0}");
+
+            // 分辨率规范化 B：面板宽 = min(640, 55% 工作宽)
+            float wantW = Math.Clamp((panelWork.MaxX - panelWork.MinX) * 0.55f, 380f, 640f);
+            Check("面板宽：min(640, 55% 工作宽)", moreRect.MaxX - moreRect.MinX <= wantW + 0.5f,
+                  $"宽 {moreRect.MaxX - moreRect.MinX:F0} ≤ {wantW:F0}");
+
+            // 「随机一人」格：关面板 ＋ 点名窗自动开抽，出结果 1.5 秒后自动关
+            var oneTile = ui.HubTileRectForTest(2);
+            ClickPhysical((oneTile.MinX + oneTile.MaxX) * 0.5f * DpiScale,
+                          (oneTile.MinY + oneTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("启动器：「随机一人」→ 关面板、点名窗自动开抽",
+                  !ui.MoreOpenForTest && Host.State.RollCardOpen && RollingNow,
+                  $"panel={ui.MoreOpenForTest} card={Host.State.RollCardOpen} rolling={RollingNow}");
+            {
+                double t1 = NowMs;
+                while (Host.State.RollCardOpen && NowMs - t1 < 3000)
+                { DrainMessages(); Thread.Sleep(10); RollTickForTest(); }
+                Check("「随机一人」：出结果后自动关窗", !Host.State.RollCardOpen);
+            }
+
+            // 「随机一人」会把面板关掉 —— 计时器格之前先把「更多」重新打开
+            {
+                var again = ui.CellRectForTest(12);
+                ClickPhysical((again.MinX + again.MaxX) * 0.5f * DpiScale,
+                              (again.MinY + again.MaxY) * 0.5f * DpiScale);
+                SettleFrames(250);
+            }
+
+            // 计时器格：点它 = 关面板 ＋ 引擎侧计时窗以**待机态**出现
+            var timTile = ui.HubTileRectForTest(0);
+            ClickPhysical((timTile.MinX + timTile.MaxX) * 0.5f * DpiScale,
+                          (timTile.MinY + timTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("启动器：「计时器」→ 关面板、计时窗开着（待机）",
+                  !ui.MoreOpenForTest && Host.State.TimerCardOpen && !Host.State.TimerSettingsOpen,
+                  $"panel={ui.MoreOpenForTest} card={Host.State.TimerCardOpen}");
+
+            // 计时窗真路：点大圆钮 → 跑；点数字 → 暂停；✕ = 停止并关窗
+            var tcard = TimerCardRect();
+            var tcardIn = TimerWin.CardRect(tcard, DpiScale, false);
+            float tlu = TimerWin.Layout(tcardIn, DpiScale);
+            var tstart = TimerWin.BtnRect(tcardIn, tlu, TimerZone.Start);
+            ClickPhysical((tstart.MinX + tstart.MaxX) * 0.5f, (tstart.MinY + tstart.MaxY) * 0.5f);
+            SettleFrames(250);
+            Check("计时窗：点大圆钮 → 跑起来", Host.State.TimerActive,
+                  $"active={Host.State.TimerActive}");
+            var tval = TimerWin.ValueRect(tcardIn, tlu);
+            ClickPhysical((tval.MinX + tval.MaxX) * 0.5f, (tval.MinY + tval.MaxY) * 0.5f);
+            SettleFrames(150);
+            Check("计时窗：点数字 = 暂停", Host.State.TimerPaused);
+            var tstop = TimerWin.BtnRect(tcardIn, tlu, TimerZone.Close);
+            ClickPhysical((tstop.MinX + tstop.MaxX) * 0.5f, (tstop.MinY + tstop.MaxY) * 0.5f);
+            SettleFrames(150);
+            Check("计时窗：✕ = 停止并关窗",
+                  !Host.State.TimerCardOpen && !Host.State.TimerActive);
+            // 三模式/改时长/到点/最小化/全屏那些细节在 `--timertest` 里逐条验，这里只验"启动器→窗"的真路。
+
+            // 点名格 → 点名窗（待抽态）；抽奖 → 滚动 → 定格；✕ 关窗
+            var moreCellB = ui.CellRectForTest(12);
+            ClickPhysical((moreCellB.MinX + moreCellB.MaxX) * 0.5f * DpiScale,
+                          (moreCellB.MinY + moreCellB.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            var rollTile = ui.HubTileRectForTest(1);
+            ClickPhysical((rollTile.MinX + rollTile.MaxX) * 0.5f * DpiScale,
+                          (rollTile.MinY + rollTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("启动器：「点名」→ 关面板、点名窗开着（待抽）",
+                  !ui.MoreOpenForTest && Host.State.RollCardOpen && Host.State.RollSettingsOpen,
+                  $"card={Host.State.RollCardOpen} set={Host.State.RollSettingsOpen}");
+            var rcard = RollCardRect();
+            var rdraw = RollWin.DrawRect(rcard, DpiScale);
+            ClickPhysical((rdraw.MinX + rdraw.MaxX) * 0.5f, (rdraw.MinY + rdraw.MaxY) * 0.5f);
+            Check("点名窗：抽奖后进入滚动", RollingNow);
+            {
+                double t2 = NowMs;
+                while (RollingNow && NowMs - t2 < 3000)
+                { DrainMessages(); Thread.Sleep(10); RollTickForTest(); }
+            }
+            Check("点名窗：定格出结果", !RollingNow && RollResultNow.Length > 0,
+                  $"结果 {RollResultNow.Length} 条");
+            rcard = RollCardRect();
+            var rclose = RollWin.CloseRect(rcard, DpiScale);
+            ClickPhysical((rclose.MinX + rclose.MaxX) * 0.5f, (rclose.MinY + rclose.MaxY) * 0.5f);
+            SettleFrames(150);
+            Check("点名窗：✕ 关窗", !Host.State.RollCardOpen);
+
+            // 命令格：空板书点「保存」，关面板 ＋ 引擎写"没有可保存"（点置灰也写状态）
+            Host.Commands.Clear();
+            SettleFrames(150);
+            var moreCell3 = ui.CellRectForTest(12);
+            ClickPhysical((moreCell3.MinX + moreCell3.MaxX) * 0.5f * DpiScale,
+                          (moreCell3.MinY + moreCell3.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            var saveTile = ui.HubTileRectForTest(3);
+            ClickPhysical((saveTile.MinX + saveTile.MaxX) * 0.5f * DpiScale,
+                          (saveTile.MinY + saveTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(200);
+            Check("启动器：空板书点「保存墨迹」→ 关面板、引擎写「没有可保存」",
+                  !ui.MoreOpenForTest && Host.State.InkStatus.Contains("没有可保存"),
+                  $"status={Host.State.InkStatus}");
+
+            // 「保存图片」（2026-10-02）：空板书同样 → 关面板 + 状态行说清
+            var moreCellImg = ui.CellRectForTest(12);
+            ClickPhysical((moreCellImg.MinX + moreCellImg.MaxX) * 0.5f * DpiScale,
+                          (moreCellImg.MinY + moreCellImg.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            var imgTile = ui.HubTileRectForTest(6);
+            ClickPhysical((imgTile.MinX + imgTile.MaxX) * 0.5f * DpiScale,
+                          (imgTile.MinY + imgTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(200);
+            Check("启动器：空板书点「保存图片」→ 关面板、引擎写「没有可保存」",
+                  !ui.MoreOpenForTest && Host.State.InkStatus.Contains("没有可保存"),
+                  $"status={Host.State.InkStatus}");
+
+            // 「设置」格 → 设置子页；返回箭头回启动器
+            var moreCellD = ui.CellRectForTest(12);
+            ClickPhysical((moreCellD.MinX + moreCellD.MaxX) * 0.5f * DpiScale,
+                          (moreCellD.MinY + moreCellD.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            var setTile = ui.HubBottomRectForTest(0);
+            Check("启动器：底栏「设置」格命中码 = 150（区间不与格子串段）",
+                  ui.MoreHitForTest((setTile.MinX + setTile.MaxX) * 0.5f, (setTile.MinY + setTile.MaxY) * 0.5f)
+                    == 150,
+                  $"格 ({setTile.MinX:F0},{setTile.MinY:F0})-({setTile.MaxX:F0},{setTile.MaxY:F0})，"
+                  + $"命中 {ui.MoreHitForTest((setTile.MinX + setTile.MaxX) * 0.5f, (setTile.MinY + setTile.MaxY) * 0.5f)}");
+            ClickPhysical((setTile.MinX + setTile.MaxX) * 0.5f * DpiScale,
+                          (setTile.MinY + setTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("启动器：「设置」→ 设置子页", ui.MoreOpenForTest && ui.MorePageForTest == 1,
+                  $"page={ui.MorePageForTest}");
+            var backBtn = ui.MoreBackRectForTest;
+            ClickPhysical((backBtn.MinX + backBtn.MaxX) * 0.5f * DpiScale,
+                          (backBtn.MinY + backBtn.MaxY) * 0.5f * DpiScale);
+            SettleFrames(200);
+            Check("设置子页：返回箭头 → 回启动器", ui.MorePageForTest == 0, $"page={ui.MorePageForTest}");
+
+            // 再回设置子页，供下面几段"行"的用例用；面板换页高度会变，刷新 moreRect
+            var setTile2 = ui.HubBottomRectForTest(0);
+            ClickPhysical((setTile2.MinX + setTile2.MaxX) * 0.5f * DpiScale,
+                          (setTile2.MinY + setTile2.MaxY) * 0.5f * DpiScale);
+            SettleFrames(300);
+            moreRect = ui.MoreRectForTest;
+            Check("（准备）面板停在设置子页", ui.MoreOpenForTest && ui.MorePageForTest == 1,
+                  $"page={ui.MorePageForTest}");
+        }
+
+        // 六行都在面板里、互不重叠（"加一行漏一处"的老毛病用这条兜住）
+        {
+            bool rowsOk = true;
+            var seenRows = new List<RectF>();
+            for (int i = 0; i < ui.MoreRowCountForTest; i++)
+            {
+                var r = ui.MoreRowRectForTest(i);
+                bool inside = !r.IsEmpty && r.MinX >= moreRect.MinX && r.MaxX <= moreRect.MaxX
+                           && r.MinY >= moreRect.MinY && r.MaxY <= moreRect.MaxY;
+                if (!inside) { rowsOk = false; break; }
+                foreach (var s in seenRows)
+                    if (s.MinX < r.MaxX && r.MinX < s.MaxX && s.MinY < r.MaxY && r.MinY < s.MaxY)
+                    { rowsOk = false; break; }
+                seenRows.Add(r);
+            }
+            Check("每一行都在面板内、互不重叠", rowsOk, $"逐行取了 {seenRows.Count} 个矩形");
+        }
 
         var darkRow = ui.RowRectForTest(0);
         ClickPhysical((darkRow.MinX + darkRow.MaxX) * 0.5f * DpiScale,
@@ -14201,11 +15566,27 @@ internal sealed class App : InkEngine.InkEngine
                       (hideRow.MinY + hideRow.MaxY) * 0.5f * DpiScale);
         Check("点「贴边隐藏」打开", ui.HideEnabledForTest, $"开关 = {ui.HideEnabledForTest}");
 
-        // 关掉抽屉（点「更多」再点一下），然后把面板**拖到屏幕最底下**：
+        // ---- ⑦.1 模态的收口：点面板外＝关、这一下**不落墨**；关掉后画布立刻能画 ----
+        int strokesBefore = Doc.Strokes.Count;
+        ClickPhysical(_virtualX + _virtualW * 0.5f, _virtualY + _virtualH * 0.10f);   // 面板上方（面板居中）
+        SettleFrames(400);
+        Check("点面板外＝关闭面板", !ui.MoreOpenForTest, $"面板开着 = {ui.MoreOpenForTest}");
+        Check("关闭那一下不落墨", Doc.Strokes.Count == strokesBefore,
+              $"笔画 {strokesBefore} → {Doc.Strokes.Count}");
+        var afterClose = ui.QueryBounds();
+        Check("关闭后占用复原（不再是整块屏幕）",
+              (afterClose.MaxY - afterClose.MinY) < (panelWork.MaxY - panelWork.MinY) * 0.9f,
+              $"占用 {afterClose.MaxX - afterClose.MinX:F0}×{afterClose.MaxY - afterClose.MinY:F0}");
+
+        ClickPhysical(_virtualX + _virtualW * 0.5f, _virtualY + _virtualH * 0.5f);
+        SettleFrames(200);
+        Check("关闭后第一下照常落笔", Doc.Strokes.Count == strokesBefore + 1,
+              $"笔画 {strokesBefore} → {Doc.Strokes.Count}");
+        Host.Commands.Undo();
+        SettleFrames(200);
+
+        // 然后把面板**拖到屏幕最底下**：
         // 现行规则是"离屏幕底边 ≤10 才藏"（默认位置离屏幕底 52，不再触发隐藏）。
-        ClickPhysical((moreCell.MinX + moreCell.MaxX) * 0.5f * DpiScale,
-                      (moreCell.MinY + moreCell.MaxY) * 0.5f * DpiScale);
-        SettleFrames(150);
         var dragDown = ui.BarRectForTest;
         float ddx = (dragDown.MinX + dragDown.MaxX) * 0.5f * DpiScale;
         float ddy = (dragDown.MinY + dragDown.MaxY) * 0.5f * DpiScale;
@@ -14231,24 +15612,70 @@ internal sealed class App : InkEngine.InkEngine
         Check("碰一下露头就长回来", (back.MaxX - back.MinX) > 100f,
               $"占用 {back.MaxX - back.MinX:F0}×{back.MaxY - back.MinY:F0}");
 
-        // 关掉贴边隐藏，免得影响后面的用例
+        // ---- ⑦.15 球贴左/右边：那里**藏不动**，所以必须还是球（不是纯色把手）----
+        //
+        // 用户 2026-10-01 报的 bug："球吸附到左边或右边会变成一个纯颜色的小圆球、
+        // 还吸不进去"——把手显示的判据以前只看"收没收"，没看"这个位置藏不藏得动"。
+        // 判据：球摆到左边中段、peek 按到 0（模拟"已经收下去"），离屏渲染那块，
+        // 数"卡片浅色像素"（纯色把手是整块笔色，一个浅色像素都没有）。
+        {
+            bool oldExpanded = ui.ExpandedForTest;
+            ui.SetExpandForTest(0f);
+            var scr2 = ui.ScreenForTest;
+            ui.SetAnchorForTest(new System.Numerics.Vector2(
+                scr2.MinX + 2f, (scr2.MinY + scr2.MaxY) * 0.5f));
+            ui.ForcePeekForTest(0f);        // "已经藏下去"：左右边也不该变成把手
+            SettleFrames(250);
+            var ballBox = ui.QueryBounds();
+            var shotBox = new RectF
+            {
+                MinX = ballBox.MinX - 4f, MinY = ballBox.MinY - 4f,
+                MaxX = ballBox.MaxX + 4f, MaxY = ballBox.MaxY + 4f,
+            };
+            var shotPx = _windows.Count > 0
+                ? _windows[0].RenderUiToBgraTransparent(this, 0, shotBox, out int _, out int _)
+                : null;
+            int lightPixels = 0;            // 近白 = 球卡片
+            if (shotPx != null)
+                for (int i = 0; i + 3 < shotPx.Length; i += 4)
+                {
+                    int a8 = shotPx[i + 3], r8 = shotPx[i + 2], g8 = shotPx[i + 1], b8 = shotPx[i];
+                    if (a8 > 200 && r8 > 200 && g8 > 200 && b8 > 200) lightPixels++;
+                }
+            Check("球贴左边：还是球（卡片在），不是纯色把手",
+                  lightPixels > 50, $"浅色像素 {lightPixels}");
+            ui.SetAnchorForTest(null);
+            ui.SetExpandForTest(oldExpanded ? 1f : 0f);
+            ui.ForcePeekForTest(1f);
+            SettleFrames(250);
+        }
+
+        // 关掉贴边隐藏，免得影响后面的用例（点「…」开面板 → 点行 → 点面板外关掉）
         var moreCell2 = ui.CellRectForTest(12);
         ClickPhysical((moreCell2.MinX + moreCell2.MaxX) * 0.5f * DpiScale,
-                      (moreCell2.MinY + moreCell2.MaxY) * 0.5f * DpiScale);
-        SettleFrames(150);
+                      (moreCell2.MinY + moreCell2.MaxY) * 0.5f * DpiScale);   // 开面板
+        SettleFrames(250);
+        var setTileNav = ui.HubBottomRectForTest(0);
+        ClickPhysical((setTileNav.MinX + setTileNav.MaxX) * 0.5f * DpiScale,
+                      (setTileNav.MinY + setTileNav.MaxY) * 0.5f * DpiScale);   // 启动器 → 设置子页
+        SettleFrames(250);
         var hideRow2 = ui.RowRectForTest(1);
         ClickPhysical((hideRow2.MinX + hideRow2.MaxX) * 0.5f * DpiScale,
                       (hideRow2.MinY + hideRow2.MaxY) * 0.5f * DpiScale);
         ClickPhysical((moreCell2.MinX + moreCell2.MaxX) * 0.5f * DpiScale,
-                      (moreCell2.MinY + moreCell2.MaxY) * 0.5f * DpiScale);
+                      (moreCell2.MinY + moreCell2.MaxY) * 0.5f * DpiScale);   // 点外面 = 关
         SettleFrames(250);
         Check("关掉贴边隐藏", !ui.HideEnabledForTest, $"开关 = {ui.HideEnabledForTest}");
 
         // ---- ⑦.5 界面档位与钉住 ----
         var moreCell4 = ui.CellRectForTest(12);
         ClickPhysical((moreCell4.MinX + moreCell4.MaxX) * 0.5f * DpiScale,
-                      (moreCell4.MinY + moreCell4.MaxY) * 0.5f * DpiScale);   // 开抽屉
+                      (moreCell4.MinY + moreCell4.MaxY) * 0.5f * DpiScale);   // 开面板
         SettleFrames(200);
+        var setTile45 = ui.HubBottomRectForTest(0);
+        ClickPhysical((setTile45.MinX + setTile45.MaxX) * 0.5f * DpiScale,
+                      (setTile45.MinY + setTile45.MaxY) * 0.5f * DpiScale);   // 设置子页（档位/宫格在这页）
+        SettleFrames(250);
 
         Check("完整档是 13 格", ui.VisibleCountForTest == 13, $"显示 {ui.VisibleCountForTest} 格");
 
@@ -14309,7 +15736,12 @@ internal sealed class App : InkEngine.InkEngine
         SettleFrames(250);
         Check("切回完整档", ui.VisibleCountForTest == 13, $"显示 {ui.VisibleCountForTest} 格");
 
-        // 取消钉住"图形"（下标 8）：档位自动变成自定义，主条上少一格
+        // 取消钉住"图形"（下标 8）：档位自动变成自定义，主条上少一格。
+        // ⚠ 宫格**只在自定义档显示**（2026-10-02 拍板），所以先切到自定义档再点宫格。
+        var customSeg = ui.ProfileRectForTest(1);
+        ClickPhysical((customSeg.MinX + customSeg.MaxX) * 0.5f * DpiScale,
+                      (customSeg.MinY + customSeg.MaxY) * 0.5f * DpiScale);
+        SettleFrames(250);
         var chip = ui.ChipRectForTest(8);
         ClickPhysical((chip.MinX + chip.MaxX) * 0.5f * DpiScale,
                       (chip.MinY + chip.MaxY) * 0.5f * DpiScale);
@@ -14326,8 +15758,9 @@ internal sealed class App : InkEngine.InkEngine
         Check("安全项（笔）取消不掉", ui.PinnedForTest(3), $"笔钉着 = {ui.PinnedForTest(3)}");
 
         // 钉回去，回到完整档，别把后面的用例带偏
-        // 注意：每次点之前**重新取一次矩形**——切档会让主条宽度变、抽屉跟着挪，
-        // 复用之前算好的坐标就会点空（这一版自检就是这么把自己坑了一次）。
+        // 注意：每次点之前**重新取一次矩形**——切档会让主条宽度变、档位段自己也跟着重排，
+        // 复用之前算好的坐标就会点空（这一版自检当年就是这么把自己坑了一次；
+        // 现在面板是居中的，档位段只跟面板宽度走，但"点之前重取"这条纪律留着）。
         var chipBack = ui.ChipRectForTest(8);
         ClickPhysical((chipBack.MinX + chipBack.MaxX) * 0.5f * DpiScale,
                       (chipBack.MinY + chipBack.MaxY) * 0.5f * DpiScale);
@@ -14338,11 +15771,11 @@ internal sealed class App : InkEngine.InkEngine
         SettleFrames(200);
         var moreCell5 = ui.CellRectForTest(12);
         ClickPhysical((moreCell5.MinX + moreCell5.MaxX) * 0.5f * DpiScale,
-                      (moreCell5.MinY + moreCell5.MaxY) * 0.5f * DpiScale);   // 关抽屉
+                      (moreCell5.MinY + moreCell5.MaxY) * 0.5f * DpiScale);   // 点外面 = 关面板
         SettleFrames(250);
-        Check("收尾：回到完整档、抽屉已关",
-              ui.ProfileForTest == 2 && ui.VisibleCountForTest == 13 && !ui.DrawerOpenForTest,
-              $"档位 = {ui.ProfileForTest}，显示 {ui.VisibleCountForTest} 格，抽屉 = {ui.DrawerOpenForTest}");
+        Check("收尾：回到完整档、面板已关",
+              ui.ProfileForTest == 2 && ui.VisibleCountForTest == 13 && !ui.MoreOpenForTest,
+              $"档位 = {ui.ProfileForTest}，显示 {ui.VisibleCountForTest} 格，面板 = {ui.MoreOpenForTest}");
 
         // ---- ⑥ 收起来，然后空闲必须 0 帧 ----
         var ball2 = ui.CellRectForTest(0);
@@ -14363,6 +15796,156 @@ internal sealed class App : InkEngine.InkEngine
             else Thread.Sleep(2);
         }
         Check("空闲 0 帧", quiet == 0, $"安静 150 毫秒出了 {quiet} 帧");
+
+        // ---- ⑥.6 悬停提示（Tooltip；2026-10-02）----
+        //
+        // 三条链路：真鼠标停在「笔」上 500ms → 出提示（键位**从键位表查**，界面不写死）；
+        // 移开 → 立刻收；覆盖不变量：每一格、上带每一段/色片/动作都有文案
+        //（"加一段漏一处"是这个仓库的老毛病，用逐个数兜住）。
+        {
+            ui.SetExpandForTest(1f);
+            ui.SetTipEnabledForTest(true);
+            // 先把指针放画布上，清掉上一段留下的悬停
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.3f), 0);
+            SettleFrames(150);
+
+            var penCell3 = ui.CellRectForTest(3);
+            int tpx = (int)((penCell3.MinX + penCell3.MaxX) * 0.5f * DpiScale);
+            int tpy = (int)((penCell3.MinY + penCell3.MaxY) * 0.5f * DpiScale);
+            // 合成鼠标偶尔丢移动（前面那条经验）：挪 1 像素多给几次机会
+            for (int attempt = 0; attempt < 3 && !ui.TipVisibleForTest; attempt++)
+            {
+                SendMouse(tpx, tpy - attempt, 0);
+                SettleFrames(700);            // > 500ms 延迟 + 淡入
+            }
+            Check("停在「笔」上 0.5 秒：悬停提示出现", ui.TipVisibleForTest,
+                  $"可见 = {ui.TipVisibleForTest}");
+            var penTip = ui.TipContentForTest(3);
+            string wantPenKey = Keys.KeyText(KeyAction.ToolPen);
+            Check("提示里的键位来自键位表（界面不写死）",
+                  !string.IsNullOrEmpty(penTip.Key) && penTip.Key == wantPenKey,
+                  $"提示 = {penTip.Key ?? "（空）"}，键位表 = {wantPenKey ?? "（空）"}");
+            var tipRect = ui.TipRectForTest;
+            var barNow = ui.BarRectForTest;
+            Check("提示卡在面板上方、和「笔」那一格横向对得上",
+                  !tipRect.IsEmpty && tipRect.MaxY <= barNow.MinY + 0.5f
+                  && tipRect.MinX < penCell3.MaxX && penCell3.MinX < tipRect.MaxX,
+                  $"卡 {tipRect.MinX:F0}..{tipRect.MaxX:F0} × {tipRect.MinY:F0}..{tipRect.MaxY:F0}，"
+                  + $"笔格 {penCell3.MinX:F0}..{penCell3.MaxX:F0}，主条顶 {barNow.MinY:F0}");
+
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.3f), 0);
+            SettleFrames(150);
+            Check("鼠标移开：提示立刻收", !ui.TipVisibleForTest, $"可见 = {ui.TipVisibleForTest}");
+
+            // --- 收窄后的清单不变量：该有的有、该没有的没有（2026-10-02 第二轮）---
+            // 判据（《调研-悬停提示-Tooltip.md》10.8）：只有"图标-only / 带快捷键 /
+            // 隐藏手势 / 认不出来"才配；色片、文字段、点一下就见结果的一律不配。
+            bool cover = true; string missing = "";
+            void Need(bool ok, string what) { if (!ok) { cover = false; missing += what + " "; } }
+
+            for (int c = 1; c <= 12; c++)                       // 1..12 该有（0 号收起格不配）
+                Need(ui.TipContentForTest(c).Title != null, $"缺格{c}");
+            Need(ui.TipContentForTest(0).Title == null, "收起格不该有");
+            Need(ui.TipContentForTest(-2).Title == null, "球不该有");
+            Need(ui.TipContentForTest(300).Title == null, "滑条不该有（有粗细预览）");
+
+            ui.SelectBandCellForTest(2);
+            int up = ui.BoardSegIndexOfForTest("PageUp");
+            int down = ui.BoardSegIndexOfForTest("PageDown");
+            Need(up >= 0 && down >= 0, "白板翻页段找得到");
+            for (int i = 0; i < ui.BandSegmentCountForTest; i++)
+            {
+                bool should = i == up || i == down;             // 页码 / 板色 / 底纹 / 间距不配
+                Need(should == (ui.TipContentForTest(200 + i).Title != null), $"白板段{i}不符");
+            }
+            Need(ui.TipContentForTest(400).Title != null, "关闭白板应配");
+            ui.SelectBandCellForTest(3);
+            Need(ui.TipContentForTest(500).Title != null, "线型应配");
+            for (int i = 0; i < ui.SwatchCountForTest; i++)
+                Need(ui.TipContentForTest(100 + i).Title == null, $"色片{i}不该有");
+            Host.Commands.SetTool(Tool.Highlighter);
+            ui.SelectBandCellForTest(4);
+            for (int i = 0; i < ui.SwatchCountForTest; i++)
+                Need(ui.TipContentForTest(100 + i).Title == null, $"荧光色{i}不该有");
+            Host.Commands.SetTool(Tool.Eraser);
+            ui.SelectBandCellForTest(6);
+            Need(ui.TipContentForTest(400).Title != null, "清空（按住）应配");
+            for (int i = 0; i < 2; i++)
+                Need(ui.TipContentForTest(200 + i).Title == null, $"橡皮段{i}不该有");
+            Host.Commands.SetTool(Tool.Marquee);
+            ui.SelectBandCellForTest(7);
+            Need(ui.TipContentForTest(400).Title == null, "全选不该有");
+            for (int i = 0; i < 2; i++)
+                Need(ui.TipContentForTest(200 + i).Title == null, $"框选段{i}不该有");
+            Host.Commands.SetTool(Tool.Rectangle);
+            ui.SelectBandCellForTest(8);
+            for (int i = 0; i < ui.BandSegmentCountForTest; i++)
+                Need(ui.TipContentForTest(200 + i).Title != null, $"缺图形段{i}");
+            Host.Commands.SetTool(Tool.Capture);
+            ui.SelectBandCellForTest(9);
+            Need(ui.TipContentForTest(400).Title == null, "粘贴图片不该有");
+            for (int i = 0; i < 2; i++)
+                Need(ui.TipContentForTest(200 + i).Title == null, $"截图段{i}不该有");
+            Host.Commands.SetTool(Tool.Pen);
+            Check("提示范围：该有的都有、该没有的都没有（收窄后的清单）", cover,
+                  cover ? "13 格 + 各格上带逐个数过" : $"不符：{missing}");
+
+            // --- 触摸长按（2026-10-02 第二轮）：主流四步手势 ---
+            //   短按=执行 / 按住不动 0.6 秒=出提示且松手不执行 / 按住后滑走=不弹提示。
+            //   鼠标不参与长按（上面那些悬停用例走的就是鼠标的路）。
+            if (EnsureSyntheticTouch())
+            {
+                var cellP = ui.CellRectForTest(3);
+                float tx = (cellP.MinX + cellP.MaxX) * 0.5f * DpiScale;
+                float ty = (cellP.MinY + cellP.MaxY) * 0.5f * DpiScale;
+
+                // ① 短按：照常换工具
+                Host.Commands.SetTool(Tool.Eraser);
+                SettleFrames(120);
+                SendTouches(true, (tx, ty));   SettleFrames(120);
+                SendTouches(false, (tx, ty));  SettleFrames(250);
+                Check("触摸短按「笔」：照常换工具", Tool == Tool.Pen, $"工具 = {Tool}（期望 Pen）");
+
+                // ② 长按：出提示、松手不执行、提示停留后自动收
+                Host.Commands.SetTool(Tool.Eraser);
+                SettleFrames(120);
+                // 注入的触点是"快照帧"：静止保持要每 100ms 补一帧
+                //（TouchGuardTest 里也是边走边补。真机没这回事，手指按着就一直按着）。
+                for (int i = 0; i < 8 && !ui.TipHoldFiredForTest; i++)
+                {
+                    SendTouches(true, (tx, ty));
+                    SettleFrames(100);
+                }
+                Check("触摸按住不动 0.8 秒：弹出提示",
+                      ui.TipVisibleForTest && ui.TipHoldFiredForTest,
+                      $"可见 = {ui.TipVisibleForTest}，长按已触发 = {ui.TipHoldFiredForTest}");
+                SendTouches(false, (tx, ty));  SettleFrames(200);
+                Check("长按后松手：**不执行**（工具还是橡皮）", Tool == Tool.Eraser,
+                      $"工具 = {Tool}（期望 Eraser）");
+                Check("提示松手后继续停留（2.5 秒）", ui.TipVisibleForTest,
+                      $"可见 = {ui.TipVisibleForTest}");
+                SettleFrames(2700);
+                Check("停留结束：提示自己收掉", !ui.TipVisibleForTest,
+                      $"可见 = {ui.TipVisibleForTest}");
+
+                // ③ 按住后滑走：不弹提示、不执行（走拖动消歧）
+                Host.Commands.SetTool(Tool.Eraser);
+                SettleFrames(120);
+                SendTouches(true, (tx, ty));   SettleFrames(150);
+                SendTouches(true, (tx + 30f * DpiScale, ty));   // 超过拖动阈值
+                SettleFrames(150);
+                SendTouches(false, (tx + 30f * DpiScale, ty));
+                SettleFrames(700);
+                Check("触摸按住后滑走：不弹提示", !ui.TipVisibleForTest,
+                      $"可见 = {ui.TipVisibleForTest}，触发 = {ui.TipHoldFiredForTest}");
+
+                Host.Commands.SetTool(Tool.Pen);   // 收尾
+                SettleFrames(120);
+            }
+
+            ui.SetExpandForTest(0f);       // 恢复收起态，别把后面的拖动用例带偏
+            SettleFrames(150);
+        }
 
         // ---- ⑦ 拖动**不吸附**（用户 2026-09-30："拖到任务栏下面自动靠底边这种不用了"）----
         //
@@ -14465,7 +16048,7 @@ internal sealed class App : InkEngine.InkEngine
             SendMouse(homeX, (int)b2y, Native.MOUSEEVENTF_LEFTUP);      SettleFrames(250);
         }
 
-        // ---- ⑧ 抽屉里的「重启软件」：先暂存板书，再拉起新进程（这里只记一笔，不真拉）----
+        // ---- ⑧ 「更多」面板里的「重启软件」：先暂存板书，再拉起新进程（这里只记一笔，不真拉）----
         Recovery.ClearRestartCount();
         try { File.Delete(Recovery.SessionPath); } catch { }
 
@@ -14473,7 +16056,7 @@ internal sealed class App : InkEngine.InkEngine
         // 把状态弄成一组"非默认"：深色开着（前面的用例已经开了）、取消钉住"图形"
         // （档位随之进"自定义"）。自检模式用的是临时配置文件，不碰用户真正的设置。
         //
-        // 注意：上一条用例结束时面板是**收起**的，得先展开再去点抽屉里的东西——
+        // 注意：上一条用例结束时面板是**收起**的，得先展开再去点「更多」面板里的东西——
         // 收起状态下那些格子的坐标算出来是"按球的位置铺开"，点过去全是空的
         // （这一版用例第一次跑就是这么点空的）。
         var ballFirst = ui.QueryBounds();
@@ -14482,29 +16065,144 @@ internal sealed class App : InkEngine.InkEngine
         SettleFrames(300);
         var moreCell6 = ui.CellRectForTest(12);
         ClickPhysical((moreCell6.MinX + moreCell6.MaxX) * 0.5f * DpiScale,
-                      (moreCell6.MinY + moreCell6.MaxY) * 0.5f * DpiScale);       // 开抽屉
+                      (moreCell6.MinY + moreCell6.MaxY) * 0.5f * DpiScale);       // 开面板
         SettleFrames(200);
+        var setTile9 = ui.HubBottomRectForTest(0);
+        ClickPhysical((setTile9.MinX + setTile9.MaxX) * 0.5f * DpiScale,
+                      (setTile9.MinY + setTile9.MaxY) * 0.5f * DpiScale);         // 设置子页
+        SettleFrames(250);
+        var customSeg9 = ui.ProfileRectForTest(1);
+        ClickPhysical((customSeg9.MinX + customSeg9.MaxX) * 0.5f * DpiScale,
+                      (customSeg9.MinY + customSeg9.MaxY) * 0.5f * DpiScale);     // 自定义档（宫格才显示）
+        SettleFrames(250);
         var chip6 = ui.ChipRectForTest(8);
         ClickPhysical((chip6.MinX + chip6.MaxX) * 0.5f * DpiScale,
                       (chip6.MinY + chip6.MaxY) * 0.5f * DpiScale);               // 取消钉住"图形"
         SettleFrames(250);
+
+        // 「压感粗细」也在这里过一遍完整链路：点行 → 引擎状态立刻翻转 → 落盘（批次 0.2）
+        {
+            var pressureRow = ui.RowRectByLabelForTest("压感粗细");
+            Check("「压感粗细」那一行找得到", pressureRow.MaxY > pressureRow.MinY,
+                  $"行高 {pressureRow.MaxY - pressureRow.MinY:F0}");
+            ClickPhysical((pressureRow.MinX + pressureRow.MaxX) * 0.5f * DpiScale,
+                          (pressureRow.MinY + pressureRow.MaxY) * 0.5f * DpiScale);
+            SettleFrames(200);
+            Check("点「压感粗细」：引擎状态立刻翻转（默认开 → 关）",
+                  !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
+        }
+
+        // [停用 2026-10-05] 「墨迹预测」开关整块自检（老预测系统停用，见 已停用-渲染实验.md）。
+        // 原来这里顺带验「更多」第二批提示 / 悬停出提示 / 触摸长按不执行——随该行一起停用；
+        // 恢复预测时把下面整块取消注释即可。
+        /*
+        {
+            var predictRow = ui.RowRectByLabelForTest("墨迹预测");
+            Check("「墨迹预测」那一行找得到", predictRow.MaxY > predictRow.MinY,
+                  $"行高 {predictRow.MaxY - predictRow.MinY:F0}");
+            Check("墨迹预测默认是关的", !Host.State.PredictOn, $"PredictOn = {Host.State.PredictOn}");
+
+            // 「更多」第二批：启动器格子 / 底栏的提示文案都在（小字已从画面搬进提示）
+            {
+                bool moreTips = true; string miss = "";
+                for (int code = 0; code <= 6; code++)
+                    if (ui.TipContentForTest(1000 + 140 + code).Title == null) { moreTips = false; miss += $"格{code} "; }
+                for (int i = 0; i < 4; i++)
+                    if (ui.TipContentForTest(1000 + 150 + i).Title == null) { moreTips = false; miss += $"底{i} "; }
+                Check("「更多」启动器格子与底栏都有提示文案", moreTips,
+                      moreTips ? "6 格 + 底栏 4 格" : $"缺：{miss}");
+            }
+
+            // 鼠标悬停设置行 → 出提示（原来行下面那行 11px 小灰字，现在只在这儿）
+            int rhx = (int)((predictRow.MinX + predictRow.MaxX) * 0.5f * DpiScale);
+            int rhy = (int)((predictRow.MinY + predictRow.MaxY) * 0.5f * DpiScale);
+            SendMouse(rhx, rhy, 0); SettleFrames(700);
+            int rhit = ui.MoreHitForTest((predictRow.MinX + predictRow.MaxX) * 0.5f,
+                                         (predictRow.MinY + predictRow.MaxY) * 0.5f);
+            var rtip = ui.TipContentForTest(1000 + rhit);
+            Check("悬停设置行：出提示（小字搬进提示）",
+                  ui.TipVisibleForTest && rtip.Title == "墨迹预测" && rtip.Note.Contains("拖影"),
+                  $"可见={ui.TipVisibleForTest}，标题={rtip.Title}，说明={rtip.Note}");
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.3f), 0);
+            SettleFrames(150);
+            Check("移开：提示收起", !ui.TipVisibleForTest, $"可见={ui.TipVisibleForTest}");
+
+            // 触摸长按设置行 → 出提示、**这一次松手不执行**（开关保持"关"）
+            if (EnsureSyntheticTouch())
+            {
+                for (int i = 0; i < 8 && !ui.TipHoldFiredForTest; i++)
+                {
+                    SendTouches(true, (rhx, rhy));
+                    SettleFrames(100);
+                }
+                Check("长按设置行 0.6 秒：出提示", ui.TipVisibleForTest && ui.TipHoldFiredForTest,
+                      $"可见={ui.TipVisibleForTest}，触发={ui.TipHoldFiredForTest}");
+                SendTouches(false, (rhx, rhy)); SettleFrames(200);
+                Check("长按后松手：这一次**不翻转**开关", !Host.State.PredictOn,
+                      $"PredictOn = {Host.State.PredictOn}");
+            }
+
+            ClickPhysical((predictRow.MinX + predictRow.MaxX) * 0.5f * DpiScale,
+                          (predictRow.MinY + predictRow.MaxY) * 0.5f * DpiScale);
+            SettleFrames(200);
+            Check("点「墨迹预测」：引擎状态立刻翻转（默认关 → 开）",
+                  Host.State.PredictOn, $"PredictOn = {Host.State.PredictOn}");
+        }
+        */   // [停用 2026-10-05] 「墨迹预测」自检块结束
+
+        // 「功能提示」开关也过一遍完整链路（2026-10-02 新增；原叫「悬停提示」）：
+        // 点行 → 界面状态翻转 → 落盘
+        {
+            var tipRow = ui.RowRectByLabelForTest("功能提示");
+            Check("「功能提示」那一行找得到", tipRow.MaxY > tipRow.MinY,
+                  $"行高 {tipRow.MaxY - tipRow.MinY:F0}");
+            ClickPhysical((tipRow.MinX + tipRow.MaxX) * 0.5f * DpiScale,
+                          (tipRow.MinY + tipRow.MaxY) * 0.5f * DpiScale);
+            SettleFrames(200);
+            Check("点「功能提示」：开关翻到关", !ui.TipEnabledForTest,
+                  $"开关 = {ui.TipEnabledForTest}");
+        }
         SaveSettingsForTest();
 
         string prefsPath = InkSettings.PathOverride ?? "";
         string prefsText = File.Exists(prefsPath) ? File.ReadAllText(prefsPath) : "";
         Check("改动写进了配置文件",
               prefsText.Contains("\"ui\"") && prefsText.Contains("\"dark\"")
-              && prefsText.Contains("\"profile\"") && prefsText.Contains("\"unpinned\""),
+              && prefsText.Contains("\"profile\"") && prefsText.Contains("\"unpinned\"")
+              && prefsText.Contains("\"pressure\"") && prefsText.Contains("\"tooltip\"")
+              // [停用] && prefsText.Contains("\"predict\"")
+              ,
               $"{Path.GetFileName(prefsPath)}（{prefsText.Length} 字节）");
 
         // 把内存里那份清掉、从文件重读，再挂一个新界面——这才算"重开软件"那条链子
         ReloadUiPrefsForTest();
+        ApplyPressurePrefForTest();       // 压感是引擎状态，要补"启动时应用偏好"那一步
+        // [停用 2026-10-05] ApplyPredictPrefForTest();   // 墨迹预测（老预测系统停用）
         SetUiFactory(() => new InkUi.FullUi());
         SettleFrames(300);
         ui = CurrentUi as InkUi.FullUi;
         Check("重开界面读回了偏好",
-              ui != null && ui.DarkForTest && ui.ProfileForTest == 1 && !ui.PinnedForTest(8),
-              $"深色={ui?.DarkForTest}，档位={ui?.ProfileForTest}（1=自定义），图形钉着={ui?.PinnedForTest(8)}");
+              ui != null && ui.DarkForTest && ui.ProfileForTest == 1 && !ui.PinnedForTest(8)
+              && !ui.TipEnabledForTest,
+              $"深色={ui?.DarkForTest}，档位={ui?.ProfileForTest}（1=自定义），图形钉着={ui?.PinnedForTest(8)}，"
+              + $"功能提示={ui?.TipEnabledForTest}");
+        Check("压感偏好也读回来了（重启后仍是关）",
+              !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
+        // [停用 2026-10-05] Check("墨迹预测偏好也读回来了（重启后仍是开）",
+        //     Host.State.PredictOn, $"PredictOn = {Host.State.PredictOn}");
+
+        // 关着开关时，"停在笔上 0.7 秒"必须**什么都不出**（开关真的在闸门上，不是装饰）
+        {
+            var penCell4 = ui.CellRectForTest(3);
+            SendMouse((int)((penCell4.MinX + penCell4.MaxX) * 0.5f * DpiScale),
+                      (int)((penCell4.MinY + penCell4.MaxY) * 0.5f * DpiScale), 0);
+            SettleFrames(700);
+            Check("关着开关：同样的悬停不出提示",
+                  !ui.TipVisibleForTest && !ui.TipEnabledForTest,
+                  $"可见 = {ui.TipVisibleForTest}，开关 = {ui.TipEnabledForTest}");
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.4f), 0);
+            SettleFrames(150);
+        }
 
         try { File.Delete(prefsPath); } catch { }        // 临时配置用完就删
 
@@ -14516,21 +16214,24 @@ internal sealed class App : InkEngine.InkEngine
         Doc.AddStroke(keep2);
 
         NormalizePanel();
-        // **按标签找那一行，不写行下标**：抽屉的行会插来插去（2026-09-17 插了底纹两行、
+        // **按标签找那一行，不写行下标**：行表会插来插去（2026-09-17 插了底纹两行、
         // 2026-09-19 把「学科工具」换成坐标系/数轴/网格三行），
         // 写死下标的话每插一次就要改一处引用，而且点错行时红的是那条断言本身
         // （"点重启没反应"）——2026-09-19 就是这么又红了一次。
-        var restartRow = ui.RowRectByLabelForTest("重启软件");
-        Check("自检能按标签找到「重启软件」那一行",
-              restartRow.MaxY > restartRow.MinY, $"行高 {restartRow.MaxY - restartRow.MinY:F0}");
+        // 「重启软件」现在在启动器的底栏（固定四格之一，不再是一行——2026-10-02 改版）
+        ui.SetMorePageForTest(0);       // 测试钩子：退回启动器主页
+        SettleFrames(150);
+        var restartTile = ui.HubBottomRectForTest(2);
+        Check("自检能按格找到「重启软件」（底栏固定位）",
+              restartTile.MaxY > restartTile.MinY, $"格高 {restartTile.MaxY - restartTile.MinY:F0}");
         // 造一个"上次崩溃抢救留下的残留"，并清掉自动存档从零开始：
         // **这一条是故意的**——新语义里光"不写会话暂存"是不够的，残留会被新进程读回去，
         // 那就成了"重启还带出旧板书"。所以必须被删掉。
         File.WriteAllBytes(Recovery.SessionPath, new byte[] { 1, 2, 3, 4 });
         Recovery.DeleteAuto();
 
-        ClickPhysical((restartRow.MinX + restartRow.MaxX) * 0.5f * DpiScale,
-                      (restartRow.MinY + restartRow.MaxY) * 0.5f * DpiScale);
+        ClickPhysical((restartTile.MinX + restartTile.MaxX) * 0.5f * DpiScale,
+                      (restartTile.MinY + restartTile.MaxY) * 0.5f * DpiScale);
         // 新语义（2026-09-22 用户定："重启就相当于电脑重启，墨迹不保存"）：
         // **判据和"界面崩了自己重建"那条路正好相反**——那条要求 SessionPath 存在
         //（见 `--uitest` 里"板书必须读得回来"那一条），因为那是 App 自己决定重启、
@@ -15397,7 +17098,7 @@ internal sealed class App : InkEngine.InkEngine
         // ④ 「更多」抽屉里**不该再有**「坐标系网格」那一行（按标签找，找不到 = 空矩形）
         {
             var staleRow = ui.RowRectByLabelForTest("坐标系网格");
-            Check("更多抽屉：**没有**「坐标系网格」那一行了（挪走了就删干净）",
+            Check("更多面板：**没有**「坐标系网格」那一行了（挪走了就删干净）",
                   staleRow.MaxY <= staleRow.MinY,
                   $"找到的行高 {staleRow.MaxY - staleRow.MinY:F0}（期望 0）");
         }
@@ -15412,12 +17113,12 @@ internal sealed class App : InkEngine.InkEngine
         //   ② **真按一次**：合成键盘发一个 `Ctrl+Alt+O`，工具**不许**变——
         //      这一层防的是"表里删了、注册那一路还留着"。
         //
-        // ⚠ `Ctrl+Alt+T` 2026-09-30 起**不再是退役键**（穿透从 P 换成了它，见
-        // KeyBindings.Default），所以这里只查真正空着的四个组合。
+        // ⚠ `Ctrl+Alt+T` 2026-09-30～10-04 曾借给穿透；穿透抬到 `Ctrl+Alt+Shift+T` 之后
+        // 五个组合（O/T/G/F/N）全部退役，这里一起查。
         Console.WriteLine("  -- B. 图形一个热键都没有 --");
         var retired = new (string chord, ushort vk)[]
         {
-            ("Ctrl+Alt+O", 'O'), ("Ctrl+Alt+G", 'G'),
+            ("Ctrl+Alt+O", 'O'), ("Ctrl+Alt+T", 'T'), ("Ctrl+Alt+G", 'G'),
             ("Ctrl+Alt+F", 'F'), ("Ctrl+Alt+N", 'N'),
         };
         foreach (var (chord, vk) in retired)
@@ -16130,6 +17831,16 @@ internal sealed class App : InkEngine.InkEngine
         Check("框住横线 → 只有它", Doc.Selected.Count == 1 && Doc.Selected[0] == a,
               $"选中 {Doc.Selected.Count} 条");
 
+        // ⑤b 斜线外接矩形的空角：框只和包围盒相交、和墨没有交集 → 不许选中
+        //     （2026-10-04 用户实测："框明明和斜线没交集，它却被选中了"）
+        Doc.Selected.Clear();
+        var bboxCorner = RectF.Empty;
+        bboxCorner.Add(x0 + 560f, y0 + 10f);
+        bboxCorner.Add(x0 + 600f, y0 + 50f);
+        Doc.ApplyMarquee(bboxCorner);
+        Check("斜线包围盒的空角 → 不选", !Doc.Selected.Contains(c),
+              $"选中 {Doc.Selected.Count} 条");
+
         // ⑥ 旋转过的对象：框住它的包围盒就该选中
         Doc.Selected.Clear();
         Doc.ApplyMarquee(rot.PaddedBounds.Inflate(6f));
@@ -16280,6 +17991,42 @@ internal sealed class App : InkEngine.InkEngine
                   inView && barsHit,
                   $"条 x {barLeft.MinX:F0}..{barLeft.MaxX:F0}（可见 {vp.MinX:F0}..{vp.MaxX:F0}），"
                   + $"按钮命中 {(barsHit ? "全中" : "有点不中")}");
+        }
+
+        // ⑩.4 悬停提示：选中操作条的每一格（2026-10-02；图标-only 的唯一文字出口）
+        {
+            Tool = Tool.Marquee;                 // 让操作条处于"显示"状态（上面这些用例就是框选在跑）
+            SettleFrames(120);
+            SelBarHover = (int)SelBarButton.Delete;
+            UpdateEngineTooltip();
+            SettleFrames(650);
+            StepEngineTooltip();                  // 自检里没有主循环，手动推一下"到点"
+            var delKeys = Keys.KeyText(KeyAction.DeleteSelected);
+            Check("操作条悬停 0.5 秒：提示出现（删除 + 键位）",
+                  TooltipShown && TooltipTitle == "删除" && TooltipKey == delKeys,
+                  $"亮={TooltipShown}，标题={TooltipTitle}，键={TooltipKey}（期望 {delKeys}）");
+
+            // 覆盖不变量：十格逐个数，一格都不许漏文案
+            bool barTipsAll = true; string barTipsMiss = "";
+            for (int i = 0; i < SelectionHandles.BarButtonCount; i++)
+            {
+                SelBarHover = i;
+                UpdateEngineTooltip();
+                if (string.IsNullOrEmpty(TooltipTitle)) { barTipsAll = false; barTipsMiss += i + " "; }
+            }
+            Check("操作条每一格都有提示文案（逐格数）", barTipsAll,
+                  barTipsAll ? $"{SelectionHandles.BarButtonCount} 格" : $"缺：{barTipsMiss}");
+
+            // 开关真的在闸门上：关掉之后同样的悬停不出提示
+            SetTooltipsFromUi(false);
+            SelBarHover = (int)SelBarButton.Color;
+            UpdateEngineTooltip();
+            SettleFrames(650);
+            StepEngineTooltip();
+            Check("关掉「悬停提示」：引擎侧提示不再出现", !TooltipShown, $"亮={TooltipShown}");
+            SetTooltipsFromUi(true);
+            SelBarHover = -1;
+            UpdateEngineTooltip();
         }
 
         // ⑪ 点选的**手势接线**（引擎那一侧：无选中时点一条、点空白、Shift 加选、收窄成单选）
@@ -18100,6 +19847,537 @@ internal sealed class App : InkEngine.InkEngine
     }
 
     /// <summary>
+    /// 滚动比对：两张同尺寸图按"内容整体上移 <paramref name="shift"/> 像素"逐像素对
+    /// （a[y] 应等于 b[y+shift]）。返回不匹配的像素数（亮度差 &gt; 24）。
+    /// 用来找"滚动时某条横带没更新"——那会表现成一整行不匹配。
+    /// </summary>
+    private static int CountShiftMismatch(byte[] a, byte[] b, int w, int h, int shift)
+    {
+        if (shift <= 0 || shift >= h) return int.MaxValue;
+        int bad = 0;
+        for (int y = 0; y + shift < h; y++)
+        {
+            int ra = y * w * 4, rb = (y + shift) * w * 4;
+            for (int x = 0; x < w; x++)
+            {
+                int oa = ra + x * 4, ob = rb + x * 4;
+                int d = Math.Abs(a[oa] - b[ob]) + Math.Abs(a[oa + 1] - b[ob + 1]) + Math.Abs(a[oa + 2] - b[ob + 2]);
+                if (d > 24) bad++;
+            }
+        }
+        return bad;
+    }
+
+    /// <summary>
+    /// `--prevflash`：**"写下一笔时，上一笔闪不闪"**专项检测（用户 2026-10-04 报：
+    /// 正在写下一笔、笔尖滑动时，上一笔某个位置闪一下）。
+    ///
+    /// 和 <see cref="SmoothFlashTest"/> 的区别：那条测的是**同一笔**已经画过去的地方；
+    /// 这一条测的是**已经落定的上一笔**。两条判据：
+    ///   ① **上一笔本身**：以 A 落定后为基准，B 画完后，离 B 整条路径 &gt;40px 的像素必须
+    ///      一个都没变（A 被 B 盖住的那一段允许变）；
+    ///   ② **笔尖后面全都不许动**（更严）：每一步和上一步比，离当前笔尖 &gt;60px 的像素
+    ///      必须冻住——这条连 B 自己画过的部分、以及 A 被盖住的部分都管；
+    ///      抬笔（提交/补画那一帧）也单独拍一张比。
+    /// 两条都过 = 用户看到的那种"上一笔闪"在这个输入路径下不存在。
+    /// </summary>
+    private void PrevFlashTest(bool usePen = false, bool left = false, bool withUi = false, bool fast = false)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"=== 上一笔闪不闪（{(left ? "左侧竖写＋横线底纹" : "写下一笔")}；{(usePen ? "合成笔 PT_PEN" : "合成鼠标")}"
+                          + $"{(withUi ? "＋产品界面" : "")}{(fast ? "，快写" : "")}） ===");
+        if (usePen)
+        {
+            if (!EnsureSyntheticPen())
+            {
+                Console.WriteLine("  SKIP: 拿不到合成笔设备（CreateSyntheticPointerDevice 失败）");
+                _quit = true;
+                return;
+            }
+        }
+        else if (SkipIfNoSyntheticInput("上一笔闪不闪（需要合成鼠标移动光标）")) { _quit = true; return; }
+
+        BoardOn = true;                     // 白底，判据干净
+        if (left)
+        {
+            // 用户报的场景：白板 + **横线底纹**，竖写在**屏幕左侧**。
+            BoardPattern = 2;               // 2 = 横线（1 = 方格，0 = 无）
+            BoardPatternStepLogical = 40f;
+        }
+        if (withUi)
+        {
+            // 产品界面（工具条）：用户就是在这个状态下写的；测试模式默认是空界面。
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(200);
+        }
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Pen;
+        PassThrough = false;
+        Doc.InvalidateAll();
+        SettleFrames(400);
+
+        // 输入注入：鼠标 / 合成笔（压感）各一条路。
+        void Move(float x, float y, float p)
+        {
+            if (usePen) SendPenPoint(x, y, (uint)Math.Clamp(p, 0f, 1024f), contact: true, first: false);
+            else SendMouse((int)x, (int)y, 0);
+        }
+        void Down(float x, float y)
+        {
+            if (usePen) SendPenPoint(x, y, 300, contact: true, first: true);
+            else SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTDOWN);
+        }
+        void Up(float x, float y)
+        {
+            if (usePen) SendPenPoint(x, y, 0, contact: false, first: false);
+            else SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTUP);
+        }
+        void Hover(float x, float y)
+        {
+            if (usePen) SendPenPoint(x, y, 0, contact: false, first: false);
+            else SendMouse((int)x, (int)y, 0);
+        }
+
+        float x0 = left ? _virtualX + 300f : _virtualX + 400f;
+        float y0 = left ? _virtualY + 420f : _virtualY + 720f;
+
+        // ---- 上一笔 A：左侧场景是"一竖"（跨过第一列分块边界 x=256，带小摆动），
+        //      默认场景是一条正弦弧 ----
+        var pathA = new List<Vector2>();
+        for (int i = 0; i <= 40; i++)
+        {
+            float t = i / 40f;
+            pathA.Add(left
+                ? new Vector2(x0 + MathF.Sin(t * 5f) * 36f, y0 + t * 560f)
+                : new Vector2(x0 + t * 520f, y0 - MathF.Sin(t * MathF.PI) * 90f + t * 30f));
+        }
+        Hover(pathA[0].X, pathA[0].Y); SettleFrames(150);
+        Down(pathA[0].X, pathA[0].Y); SettleFrames(80);
+        for (int i = 1; i < pathA.Count; i++)
+        {
+            Move(pathA[i].X, pathA[i].Y, 200f + 600f * MathF.Abs(MathF.Sin(i / 40f * 2f * MathF.PI)));
+            SettleFrames(fast ? 2 : 8);
+        }
+        Up(pathA[^1].X, pathA[^1].Y);
+        SettleFrames(400);
+
+        // 拍基准之前，先把笔**挪出取景带**：真笔/合成笔悬停时会画一圈落点反馈（Ring），
+        // 笔停在 A 尾（抬笔点）上，圆环就在带里——B 一开始圆环被擦掉，会被误判成
+        // "上一笔在闪"（第一次跑就踩到了：固定 31×31 的方块，正是圆环的包围盒）。
+        Hover(_virtualX + 2400f, _virtualY + 1600f);
+        SettleFrames(200);
+
+        // ---- 基准：A 落定之后的整块区域 ----
+        int bandW = left ? 900 : 1040;
+        int bandH = left ? 1250 : 620;
+        int bx = left ? (int)_virtualX : (int)(x0 - 140f);
+        int by = left ? (int)(_virtualY + 140f) : (int)(y0 - 340f);
+        var reference = ScreenProbe.CaptureRegion(bx, by, bandW, bandH);
+        if (reference == null)
+        {
+            Console.WriteLine("  取不到屏（CaptureRegion 失败）——测量无效");
+            _quit = true;
+            return;
+        }
+        Console.WriteLine($"  上一笔 A 已落定；带 {bandW}×{bandH} @ ({bx},{by})");
+        ScreenProbe.SaveBuffer("reports/prevflash-ref.bmp", reference, bandW, bandH);
+
+        // ---- 【关键】两缓冲比对：同一块**静止**内容，强制渲染两帧（连续两次 Present
+        //      会落在两个不同的后缓冲上），两张截图必须逐像素相同。
+        //      不同 = 有一个后缓冲在那个位置是旧的 → 静止时不呈现、一写字/滚动
+        //      （连续出帧）就"新旧交替"——正是用户报的"从某一条线开始闪"。
+        int bufferDiff = 0; string bufferDiffWhere = "";
+        for (int k = 0; k < 3; k++)
+        {
+            _dirty = true; SettleFrames(1);
+            var f0 = ScreenProbe.CaptureRegion(bx, by, bandW, bandH);
+            _dirty = true; SettleFrames(1);
+            var f1 = ScreenProbe.CaptureRegion(bx, by, bandW, bandH);
+            if (f0 == null || f1 == null) continue;
+            var d = DiffFarFromPath(f0, f1, bandW, bandH, bx, by, pathA, pathA.Count, -1f);
+            if (d.count > bufferDiff)
+            {
+                bufferDiff = d.count;
+                bufferDiffWhere = $"({d.minX + bx},{d.minY + by})..({d.maxX + bx},{d.maxY + by})";
+            }
+        }
+        Console.WriteLine($"  两缓冲比对（静止内容，强制出两帧）：差异 {bufferDiff} 像素"
+                          + (bufferDiff > 0 ? $" @ {bufferDiffWhere}" : ""));
+
+        // ---- 下一笔 B：默认从 A 的左上斜穿到右下；左侧场景在 A 左边再竖写一条 ----
+        var pathB = new List<Vector2>();
+        for (int i = 0; i <= 36; i++)
+        {
+            float t = i / 36f;
+            pathB.Add(left
+                ? new Vector2(x0 - 150f + MathF.Sin(t * 4f) * 26f, y0 - 140f + t * 700f)
+                : new Vector2(x0 + 60f + t * 380f, y0 - 270f + t * 540f));
+        }
+        Hover(pathB[0].X, pathB[0].Y); SettleFrames(150);
+        Down(pathB[0].X, pathB[0].Y); SettleFrames(80);
+
+        int worstA = 0, samples = 0;            // 判据①：上一笔（离 B 整条路径远）
+        float worstADist = 0f, worstAX = 0f, worstAY = 0f;
+        int worstAMinX = 0, worstAMinY = 0, worstAMaxX = 0, worstAMaxY = 0;
+        int worstTail = 0;                       // 判据②：离当前笔尖远的任何变化
+        float worstTailDist = 0f, worstTailX = 0f, worstTailY = 0f;
+        byte[] prev = null;
+        for (int i = 1; i < pathB.Count; i++)
+        {
+            Move(pathB[i].X, pathB[i].Y, 200f + 600f * MathF.Abs(MathF.Sin(i / 36f * 2f * MathF.PI)));
+            SettleFrames(fast ? 3 : 12);
+            var cap = ScreenProbe.CaptureRegion(bx, by, bandW, bandH);
+            if (cap == null) continue;
+            samples++;
+
+            var dA = DiffFarFromPath(reference, cap, bandW, bandH, bx, by, pathB, i + 1, 40f);
+            if (dA.count > 0)
+                Console.WriteLine($"    step {i,2}（笔尖 {pathB[i].X:F0},{pathB[i].Y:F0}）：上一笔被改 {dA.count} 像素，"
+                                  + $"范围 ({dA.minX + bx},{dA.minY + by})..({dA.maxX + bx},{dA.maxY + by})");
+            if (dA.count > worstA)
+            {
+                worstA = dA.count; worstADist = dA.maxDist; worstAX = dA.x; worstAY = dA.y;
+                worstAMinX = dA.minX; worstAMinY = dA.minY; worstAMaxX = dA.maxX; worstAMaxY = dA.maxY;
+                ScreenProbe.SaveBuffer("reports/prevflash-worst.bmp", cap, bandW, bandH);
+            }
+
+            if (prev != null)
+            {
+                var dT = DiffFarFromTip(prev, cap, bandW, bandH, bx, by, pathB[i].X, pathB[i].Y, 60f);
+                if (dT.count > worstTail) { worstTail = dT.count; worstTailDist = dT.maxDist; worstTailX = dT.x; worstTailY = dT.y; }
+            }
+            prev = cap;
+        }
+
+        // 抬笔：**提交/补画那一帧**也要算（上一笔闪的一个高发点就是这里）
+        Up(pathB[^1].X, pathB[^1].Y);
+        SettleFrames(400);
+        var capEnd = ScreenProbe.CaptureRegion(bx, by, bandW, bandH);
+        if (capEnd != null)
+        {
+            var dA = DiffFarFromPath(reference, capEnd, bandW, bandH, bx, by, pathB, pathB.Count, 40f);
+            if (dA.count > 0)
+                Console.WriteLine($"    抬笔后：上一笔被改 {dA.count} 像素，"
+                                  + $"范围 ({dA.minX + bx},{dA.minY + by})..({dA.maxX + bx},{dA.maxY + by})");
+            if (dA.count > worstA)
+            {
+                worstA = dA.count; worstADist = dA.maxDist; worstAX = dA.x; worstAY = dA.y;
+                worstAMinX = dA.minX; worstAMinY = dA.minY; worstAMaxX = dA.maxX; worstAMaxY = dA.maxY;
+                ScreenProbe.SaveBuffer("reports/prevflash-worst.bmp", capEnd, bandW, bandH);
+            }
+            if (prev != null)
+            {
+                var dT = DiffFarFromTip(prev, capEnd, bandW, bandH, bx, by, pathB[^1].X, pathB[^1].Y, 60f);
+                if (dT.count > worstTail) { worstTail = dT.count; worstTailDist = dT.maxDist; worstTailX = dT.x; worstTailY = dT.y; }
+            }
+        }
+
+        // B 落定后再做一次两缓冲比对（提交/补画是否只进了其中一个缓冲）。
+        // **先把笔挪出取景带**：笔悬停会画落点圆环，圆环在合成笔抬笔后会"进/出范围"抖动，
+        // 把圆环当噪声误判成"上一笔在闪"（踩过一次：差异恰好是 32×32 的圆环）。
+        {
+            Hover(_virtualX + 2400f, _virtualY + 1600f);
+            SettleFrames(200);
+            int bd2 = 0; string w2 = "";
+            for (int k = 0; k < 3; k++)
+            {
+                _dirty = true; SettleFrames(1);
+                var f0 = ScreenProbe.CaptureRegion(bx, by, bandW, bandH);
+                _dirty = true; SettleFrames(1);
+                var f1 = ScreenProbe.CaptureRegion(bx, by, bandW, bandH);
+                if (f0 == null || f1 == null) continue;
+                var d = DiffFarFromPath(f0, f1, bandW, bandH, bx, by, pathA, pathA.Count, -1f);
+                if (d.count > bd2)
+                {
+                    bd2 = d.count;
+                    w2 = $"({d.minX + bx},{d.minY + by})..({d.maxX + bx},{d.maxY + by})";
+                    Console.WriteLine($"    [bufdiff] 环={DrawnCursor} inside={PointerInside} "
+                                      + $"pt=({PointerX:F0},{PointerY:F0}) type={LastPointerType}");
+                    ScreenProbe.SaveBuffer("reports/prevflash-buf-f0.bmp", f0, bandW, bandH);
+                    ScreenProbe.SaveBuffer("reports/prevflash-buf-f1.bmp", f1, bandW, bandH);
+                }
+            }
+            if (bd2 > 0) Console.WriteLine($"  B 落定后两缓冲比对：差异 {bd2} 像素 @ {w2}");
+            bufferDiff = Math.Max(bufferDiff, bd2);
+        }
+
+        Console.WriteLine($"  B 画了 {samples} 步，抬笔后再拍一张；判据阈值 40px（A）/ 60px（笔尖后）");
+        Console.WriteLine($"  ① 上一笔被改动（离 B 整条路径 >40px）：{worstA} 个像素"
+                          + $"（最远 {worstADist:F0}px @ {worstAX:F0},{worstAY:F0}，"
+                          + $"范围 ({worstAMinX + bx},{worstAMinY + by})..({worstAMaxX + bx},{worstAMaxY + by})）");
+        Console.WriteLine($"  ② 笔尖后面还在动（离笔尖 >60px，含 B 自己画过的）：{worstTail} 个像素"
+                          + $"（最远 {worstTailDist:F0}px @ {worstTailX:F0},{worstTailY:F0}）");
+
+        // ---- 滚动阶段（--left）：内容垫够两屏 → 滚 5 格，按"S 像素整体平移"逐行对；
+        //      再原地连拍两张看有没有像素在闪（用户报的正是"滚动时左侧闪"）----
+        int scrollBad = 0;
+        if (left)
+        {
+            for (int k = 0; k < 6; k++)
+            {
+                var s = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = PenColor, Width = 4f * DpiScale,
+                };
+                float yy = _virtualY + 2200f + k * 260f;
+                for (int j = 0; j < 20; j++)
+                    s.AddPoint(_virtualX + 260f + j * 70f, yy + MathF.Sin(j * 0.7f) * 60f, 0.5f, j * 8f);
+                Doc.AddStroke(s);
+            }
+            _dirty = true;
+            RenderAll();
+            SettleFrames(200);
+
+            Hover(_virtualX + 2400f, _virtualY + 1600f);   // 笔挪出取景区
+            SettleFrames(150);
+
+            const int sw = 1400, sh = 1500;
+            var capBefore = ScreenProbe.CaptureRegion(0, 0, sw, sh);
+            int steps = 0;
+            for (int step = 0; step < 5 && capBefore != null; step++)
+            {
+                float cam0 = ViewOffsetY;
+                Native.PostMessage(_windows[0].Hwnd, 0x020A /*WM_MOUSEWHEEL*/,
+                                   new IntPtr(-120 << 16), IntPtr.Zero);
+                SettleFrames(10);
+                float cam1 = ViewOffsetY;
+                float moved = cam0 - cam1;                   // 内容整体上移这么多
+                int S = (int)MathF.Round(moved);
+                var capAfter = ScreenProbe.CaptureRegion(0, 0, sw, sh);
+                if (capAfter == null) break;
+                if (S <= 0 || MathF.Abs(moved - S) > 0.3f)
+                {
+                    Console.WriteLine($"    滚动第 {step + 1} 格：相机实际平移 {moved:F2}px（到边界/非整），跳过");
+                    capBefore = capAfter;
+                    continue;
+                }
+                steps++;
+                int up = CountShiftMismatch(capAfter, capBefore, sw, sh, S);
+                int down = CountShiftMismatch(capBefore, capAfter, sw, sh, S);
+                int bad = Math.Min(up, down);
+                scrollBad = Math.Max(scrollBad, bad);
+
+                var capAgain = ScreenProbe.CaptureRegion(0, 0, sw, sh);
+                // 原地连拍要把**下一帧真的画出来**（强制出帧），否则两张拍的是同一帧、永远为 0。
+                _dirty = true; SettleFrames(1);
+                var capAgain2 = ScreenProbe.CaptureRegion(0, 0, sw, sh);
+                int flick = (capAgain == null || capAgain2 == null) ? 0
+                    : DiffFarFromTip(capAgain, capAgain2, sw, sh, 0, 0, -1e6f, -1e6f, 0f).count;
+                scrollBad = Math.Max(scrollBad, flick);
+                Console.WriteLine($"    滚动第 {step + 1} 格：平移 {S}px 不匹配 {bad} 像素，原地连拍差异 {flick} 像素"
+                                  + (bad + flick == 0 ? "（干净）" : " ← 就是闪"));
+                capBefore = capAfter;
+            }
+            if (steps > 0)
+                Console.WriteLine($"  ③ 滚动：{steps} 格，最大不匹配/闪动 {scrollBad} 像素");
+        }
+
+        // ② 允许 ≤2 个像素的噪声：**笔迹自身**的起点在头几帧曲线稳定过程中
+        //    可能变一个像素（离笔尖 61px 正好压线抓到过），那不是"上一笔闪"。
+        bool ok = samples >= 8 && worstA == 0 && worstTail <= 2 && scrollBad == 0 && bufferDiff == 0;
+        Console.WriteLine(ok
+            ? "  PASS: 写下一笔时，上一笔 / 笔尖后面都是冻住的"
+            : samples < 8 ? "  FAIL: 没采到几步——测量无效（别当成通过）"
+                          : "  FAIL: 有东西在变——就是用户看到的“闪”");
+        Console.WriteLine();
+        _quit = true;
+    }
+
+    /// <summary>
+    /// `--scrollflash`：复现"**滚轮滚动之后、一按鼠标就闪 / 错位**"（用户 2026-10-04 报，
+    /// 关键线索：滚动之后按下才闪、松手就不闪；"有时候错位、有时候不错位"；
+    /// 之前竖写时也在左侧遇到过）。
+    ///
+    /// 事故链（怀疑）：相机变化只强制了**一帧**整屏重画（`_forceFullFrame` 用完即清）。
+    /// 滚动停下时，两个后缓冲里只有最后画的那个在**新位置**，另一个还停在上一格；
+    /// 这时按下去画，第一帧只重画"笔迹附近的一条"（部分脏区），目标缓冲偏偏是落后
+    /// 一格的旧画面 → 贴上去就是"从某条线隔开、一侧错位"，帧间交替 → 闪；松手后
+    /// 进入空闲不再出帧，screen 停在哪一帧看运气（所以"有时错位有时不错位"）。
+    ///
+    /// **出帧节奏必须和真机一致**：主循环是"有需求才出一帧"（`NeedsFrame()`），
+    /// 而不是 `SettleFrames` 那样一直出——空闲多出的整屏帧会把两个缓冲都修好，
+    /// 所以以前的探针抓不到。本探针全程手动出帧（滚两格 → 停 → 按下 → 移动，
+    /// 每步只 `PumpMessages + RenderAll` 一次），再和"滚完那一帧"比：
+    /// 若某一帧整体错位一个滚动步长（S = 72×DPI），就是复现。
+    /// </summary>
+    private void ScrollFlashTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 滚动后按下就闪/错位 专项检测 ===");
+        if (SkipIfNoSyntheticInput("滚动后按下（需要合成鼠标）")) { _quit = true; return; }
+        InkEngine.OverlayWindow.Trace = true;
+
+        BoardOn = true;
+        BoardPattern = 2;                    // 横线底纹（用户白板那种）
+        BoardPatternStepLogical = 40f;
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Pen;
+        PassThrough = false;
+        Doc.InvalidateAll();
+
+        // 垫内容：相机要滚得动（画布范围要超过一屏）
+        for (int k = 0; k < 6; k++)
+        {
+            var s = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = PenColor, Width = 4f * DpiScale,
+            };
+            float yy = _virtualY + 2200f + k * 260f;
+            for (int j = 0; j < 20; j++)
+                s.AddPoint(_virtualX + 260f + j * 70f, yy + MathF.Sin(j * 0.7f) * 60f, 0.5f, j * 8f);
+            Doc.AddStroke(s);
+        }
+
+        // 每出一帧拍一张，并量"左列（x=100）第一条线 vs 右区（x=700）第一条线"的相位差：
+        // 0 = 对齐；非 0 = 左侧那一列分块错位（用户看到的"从某条线隔开"）。
+        const int w = 1400, h = 1500;
+        var seq = new List<(string Label, byte[] Cap, float Cam)>();
+        void Frame(string label)
+        {
+            PumpMessages();
+            RenderAll();
+            Thread.Sleep(40);
+            seq.Add((label, ScreenProbe.CaptureRegion(0, 0, w, h), ViewOffsetY));
+        }
+
+        Frame("起手1");
+        Frame("起手2");
+
+        float px = _virtualX + 260f, py = _virtualY + 420f;
+        SendMouse((int)px, (int)py, 0);       // 鼠标挪到左侧、悬停
+        Frame("悬停");
+
+        for (int k = 0; k < 2; k++)
+        {
+            Native.PostMessage(_windows[0].Hwnd, 0x020A /*WM_MOUSEWHEEL*/,
+                               new IntPtr(-120 << 16), IntPtr.Zero);
+            Frame($"滚{k + 1}");
+        }
+
+        SendMouse((int)px, (int)py, Native.MOUSEEVENTF_LEFTDOWN);
+        Frame("按下");
+        for (int k = 0; k < 2; k++)
+        {
+            SendMouse((int)px, (int)(py + 40 * (k + 1)), 0);
+            Frame($"移动{k + 1}");
+        }
+        SendMouse((int)px, (int)(py + 120), Native.MOUSEEVENTF_LEFTUP);
+        Frame("抬起");
+
+        // 判定：左列第一条线的中心 − 右区第一条线的中心。
+        int fail = 0;
+        foreach (var (label, cap, cam) in seq)
+        {
+            if (cap == null) continue;
+            int l = FirstLineCenter(cap, w, h, 100);
+            int r = FirstLineCenter(cap, w, h, 700);
+            int off = l - r;
+            bool bad = off != 0;
+            if (bad) fail++;
+            Console.WriteLine($"  {label,-6} 相机 {cam,7:F0}  左线 {l,4} / 右线 {r,4}  左−右 = {off,4}"
+                              + (bad ? "  ← 左列错位（闪）" : ""));
+        }
+        Console.WriteLine(fail > 0
+            ? $"  FAIL: {fail} 帧左列与右区错位——就是用户看到的“从某条线隔开”的闪"
+            : "  PASS: 全程左列与右区对齐");
+        InkEngine.OverlayWindow.Trace = false;
+        Console.WriteLine();
+        _quit = true;
+    }
+
+    /// <summary>竖着扫，返回第一条"灰线"的中心 y（没有就 -1）。截屏是 BGRA。</summary>
+    private static int FirstLineCenter(byte[] cap, int w, int h, int x)
+    {
+        if (cap == null) return -1;
+        int run = -1;
+        for (int y = 0; y < h; y++)
+        {
+            int o = (y * w + x) * 4;
+            bool dark = cap[o] < 225 && cap[o + 1] < 225 && cap[o + 2] < 225;
+            if (dark) { if (run < 0) run = y; }
+            else if (run >= 0) return (run + y - 1) / 2;
+        }
+        return -1;
+    }
+
+    /// <summary>两张同尺寸 BGRA 图的差异像素数（亮度差 &gt; 24）。</summary>
+    private static int DiffCount(byte[] a, byte[] b, int w, int h)
+    {
+        int n = 0;
+        for (int i = 0; i < w * h; i++)
+        {
+            int o = i * 4;
+            int d = Math.Abs(a[o] - b[o]) + Math.Abs(a[o + 1] - b[o + 1]) + Math.Abs(a[o + 2] - b[o + 2]);
+            if (d > 24) n++;
+        }
+        return n;
+    }
+
+    /// <summary>
+    /// 两张同尺寸 BGRA 图的差异，只看**离折线 <paramref name="path"/> 的前
+    /// <paramref name="pathCount"/> 个点 &gt; minDist 的那些像素**。
+    /// 返回（这样的像素数、其中最远那个到路径的距离、坐标）。
+    /// </summary>
+    private static (int count, float maxDist, float x, float y,
+                    int minX, int minY, int maxX, int maxY) DiffFarFromPath(
+        byte[] a, byte[] b, int w, int h, int ox, int oy,
+        List<Vector2> path, int pathCount, float minDist)
+    {
+        int count = 0;
+        float maxDist = 0f, wx = 0f, wy = 0f;
+        int minX = int.MaxValue, minY = int.MaxValue, maxX = int.MinValue, maxY = int.MinValue;
+        for (int j = 0; j < h; j++)
+        {
+            int row = j * w * 4;
+            for (int i = 0; i < w; i++)
+            {
+                int o = row + i * 4;
+                int d = Math.Abs(a[o] - b[o]) + Math.Abs(a[o + 1] - b[o + 1]) + Math.Abs(a[o + 2] - b[o + 2]);
+                if (d <= 24) continue;
+                float px = ox + i, py = oy + j;
+                float dist = DistToPath(path, pathCount, px, py);
+                if (dist <= minDist) continue;      // B 自己画的 / 盖住的，允许变
+                count++;
+                if (i < minX) minX = i;
+                if (i > maxX) maxX = i;
+                if (j < minY) minY = j;
+                if (j > maxY) maxY = j;
+                if (dist > maxDist) { maxDist = dist; wx = px; wy = py; }
+            }
+        }
+        return (count, maxDist, wx, wy, minX, minY, maxX, maxY);
+    }
+
+    /// <summary>点到折线（前 count 个点）的最短距离。</summary>
+    private static float DistToPath(List<Vector2> path, int count, float x, float y)
+    {
+        int n = Math.Min(count, path.Count);
+        if (n <= 0) return float.MaxValue;
+        if (n == 1) return Vector2.Distance(path[0], new Vector2(x, y));
+        float best = float.MaxValue;
+        for (int i = 1; i < n; i++)
+        {
+            float d = DistToSegment(path[i - 1].X, path[i - 1].Y, path[i].X, path[i].Y, x, y);
+            if (d < best) best = d;
+        }
+        return best;
+    }
+
+    private static float DistToSegment(float ax, float ay, float bx, float by, float px, float py)
+    {
+        float vx = bx - ax, vy = by - ay;
+        float wx = px - ax, wy = py - ay;
+        float len2 = vx * vx + vy * vy;
+        float t = len2 <= 1e-6f ? 0f : Math.Clamp((wx * vx + wy * vy) / len2, 0f, 1f);
+        float dx = wx - vx * t, dy = wy - vy * t;
+        return MathF.Sqrt(dx * dx + dy * dy);
+    }
+
+    /// <summary>
     /// `--wetdrytest`：**湿墨（抬笔前）与干墨（抬笔后）接不接得上**（2026-09-28 定的第一条调查）。
     ///
     /// 背景：真笔/合成笔写字时，屏幕上那一笔是 **DWM 委托轨迹**画的；抬笔那一刻换成
@@ -18332,6 +20610,8 @@ internal sealed class App : InkEngine.InkEngine
     /// 对照组 `--nopredict` 应当明显更稳（这就是这条测试的自证）。
     /// ⚠ 2026-09-29 起预测**默认关**（用户拍板），所以这条测试要显式 `--predict` 才有对照。
     /// </summary>
+    /* [删除 2026-10-05] 预测尾"突突跳"检测 + MaxInkColumn 辅助：随老预测系统移除
+       （原文备份见 `.revert/2026-10-05-渲染减法/`；恢复见 `已停用-渲染实验.md`）。
     private void TailJumpTest(bool noisy = false, bool predictOff = false)
     {
         Console.WriteLine();
@@ -18445,6 +20725,8 @@ internal sealed class App : InkEngine.InkEngine
         }
         return -1;
     }
+
+    */
 
     private void CurveShowcase(string path)
     {
@@ -21415,6 +23697,8 @@ internal sealed class App : InkEngine.InkEngine
     /// 笔迹预测自检（**纯算法**：不需要真笔、不需要屏幕、不画东西）。
     /// 把 `调研-压感与预测-原理.md` 第三节里那些"别甩墨"的约束逐条变成断言。
     /// </summary>
+    /* [删除 2026-10-05] 预测算法自检 + 预测尾自检：随老预测系统移除
+       （原文备份见 `.revert/2026-10-05-渲染减法/`；恢复见 `已停用-渲染实验.md`）。
     private void PredictorTest()
     {
         Console.WriteLine();
@@ -21811,6 +24095,8 @@ internal sealed class App : InkEngine.InkEngine
     ///   ③ 触摸照样有预测尾（触摸没压感 → 走等宽描边那条渲染路，与真笔的 ink 那条不同）；
     ///   ④ **第二根手指按下时，正在写的那一笔不能被换掉**，而且第一根手指还能接着写。
     /// </summary>
+    */
+
     private void TouchGuardTest()
     {        Console.WriteLine();
         Console.WriteLine("=== 触摸自检（合成触摸注入）===");
@@ -21844,34 +24130,31 @@ internal sealed class App : InkEngine.InkEngine
         float y0 = _virtualY + _virtualH * 0.45f;
 
         // ---- ① 单指按下，看它是不是以 PT_TOUCH 进来 ----
+        TouchHud = true;                 // 触点诊断先开着（它只跟"开关打开之后"的指针事件）
         SendTouches(true, (x0, y0));
         SettleFrames(30);
         Check("合成触摸以 PT_TOUCH 进来", LastPointerType == Native.PT_TOUCH,
               $"LastPointerType = {DeviceName(LastPointerType)}");
 
-        // ---- ①b 触点诊断（8.3.3）：数得到触点数 / 记得住最大触点数 ----
-        TouchHud = true;
+        // ---- ①b 触点诊断（8.3.3）：数得到触点数 ----
         SettleFrames(40);
         Check("触点诊断：数得到触点数（并标出「触摸」）",
               TouchHudNow == 1 && (TouchHudText ?? "").Contains("触摸"),
               $"当前 {TouchHudNow} 指，最多 {TouchHudMax} 指");
 
-        // ---- ② 走一段，让速度和预测器都活起来；③ 看有没有尾 ----
-        int tailMax = 0;
+        // ---- ② 走一段（预测尾已随老预测系统删除，这里只验点在往里进）----
         float cx = x0;
         for (int i = 1; i <= 14; i++)
         {
             cx = x0 + 14f * i;
             SendTouches(true, (cx, y0));
             SettleFrames(17);
-            if (RenderTailPoints > tailMax) tailMax = RenderTailPoints;
         }
         var live = ActiveStroke;
         Check("触摸这一笔建起来了、点在往里进",
               live != null && live.Points.Count > 5,
               live == null ? "ActiveStroke 为 null" : $"笔画点数 {live.Points.Count}");
-        Check("触摸这一笔照样有预测尾（走等宽描边那条渲染路）", tailMax > 0,
-              $"尾最多 {tailMax} 个点、当前 {RenderTailPoints} 个、前带量 {PredictedTailLead:F1} px");
+        // [删除 2026-10-05] "触摸也有预测尾"检查：随老预测系统移除。
 
         // ---- ④ 第二根手指按下：正在写的那一笔不许被换掉 ----
         var before = ActiveStroke;
@@ -21882,8 +24165,8 @@ internal sealed class App : InkEngine.InkEngine
 
         Check("第二根手指的按下真的到了引擎（不然下一条会假绿）",
               _cntDown > downBefore, $"_cntDown {downBefore} → {_cntDown}");
-        Check("触点诊断：记得住最大触点数 ≥ 2（这块屏能报几个点就看它）",
-              TouchHudMax >= 2, $"最多 {TouchHudMax} 指（合成注入第二指本来就不可靠，这项仅供参考）");
+        // 注：合成注入的第二根手指**不以 WM_POINTERDOWN 到达**（系统把它并成 UPDATE），
+        // 所以"最多几指"这项在注入环境里量不准——真机上才是准的（诊断浮层就是干这个的）。
         Check("第二根手指不许抢走正在写的那一笔",
               ReferenceEquals(ActiveStroke, before), "ActiveStroke 被换成了新对象就是抢走了");
         Check("那一笔已经写下的点一个都没丢",
@@ -21902,8 +24185,8 @@ internal sealed class App : InkEngine.InkEngine
         SendTouches(false, (cx, y0), (x0, y0 + 200f));
         SettleFrames(250);
         var committed = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
-        Check("松手后这一笔进了文档，而且没带渲染尾",
-              committed != null && committed.RenderTail == null,
+        Check("松手后这一笔进了文档",
+              committed != null,
               committed == null ? "文档里没有笔画" : $"点数 {committed.Points.Count}");
 
         CurrentColor = oldColor;
@@ -22010,18 +24293,20 @@ internal sealed class App : InkEngine.InkEngine
 
     // ---- 合成触摸（自检注入用）------------------------------------------
     //
-    // 为什么触摸需要单独一份：**POINTER_TYPE_INFO 的 union 里最大的是
-    // POINTER_TOUCH_INFO（136 字节）**，而我们那个结构体只声明了 pen 分支（120 字节）
-    // 加 24 字节填充，总长 148 —— 够放，而且两个分支的**开头都是同一份 POINTER_INFO**，
+    // 为什么触摸需要单独一份：**POINTER_TYPE_INFO 真实定义里中间是一个 union，
+    // 最大成员是 POINTER_TOUCH_INFO（144 字节）**，而我们那个结构体只声明了 pen 分支
+    // （120 字节）加 24 字节填充 → 152 字节，与真实步长（4 + 4 对齐 + 144）一致；
+    // 而且两个分支的**开头都是同一份 POINTER_INFO**，
     // 所以按 pen 的字段名填、把 type 设成 PT_TOUCH 就能造出一个触摸触点。
     private IntPtr _syntheticTouch;
 
     private bool EnsureSyntheticTouch()
     {
         if (_syntheticTouch != IntPtr.Zero) return true;
-        // 诊断：先退回 2（二分定位"第二根手指收不到"是 maxCount 还是结构体）
+        // maxCount = 10：触摸**可以同时有多个触点**——"第二根手指守卫"、≥3 指擦、
+        // 双指手势的自检都要一次注入 2~5 个触点。
         _syntheticTouch = Native.CreateSyntheticPointerDevice(
-            Native.PT_TOUCH, 2, Native.POINTER_FEEDBACK_DEFAULT);
+            Native.PT_TOUCH, 10, Native.POINTER_FEEDBACK_DEFAULT);
         return _syntheticTouch != IntPtr.Zero;
     }
 
@@ -22038,18 +24323,23 @@ internal sealed class App : InkEngine.InkEngine
     }
 
     /// <summary>
-    /// 注入合成触摸（**带接触面积**）：`size` = 接触矩形边长（物理像素）。
+    /// 注入合成触摸（**可带接触面积**）：`size` = 接触矩形边长（物理像素），0 = 不报面积。
     /// 手掌擦的判据靠它（见 Touch.cs 的自适应基线），所以"手掌"用例必须能造出大面积。
     ///
-    /// ⚠ 缓冲区**自己按原生步长 144 排**（不是托管结构体的 152）：不这么做第二个触点
-    /// 会被 API 错位读、直接丢失（见 Native.InjectSyntheticPointerInput 的注释）。
-    /// 共用前缀按 `pen` 的字段名填；`rcContact` 在 union + 96 = 结构体偏移 104 上，用指针写。
+    /// ⚠ 步长 = **托管结构体大小**（= 原生步长 152，见 Native 的注释）；
+    /// `rcContact` 等偏移**运行时用 `Marshal.OffsetOf` 算**——不写魔法数字。
+    /// （历史坑：漏掉 `touchFlags/touchMask` 时按 144 排、第二个触点整体错位丢失。）
     /// </summary>
     private unsafe void SendTouchesSized(bool contact, params (float x, float y, float size)[] points)
     {
-        const int nativeStride = 144;
+        int stride = Marshal.SizeOf<Native.POINTER_TYPE_INFO>();
+        int unionOff = (int)Marshal.OffsetOf<Native.POINTER_TYPE_INFO>(nameof(Native.POINTER_TYPE_INFO.pen));
+        int maskOff = unionOff + (int)Marshal.OffsetOf<Native.POINTER_TOUCH_INFO>(nameof(Native.POINTER_TOUCH_INFO.touchMask));
+        int rcOff = unionOff + (int)Marshal.OffsetOf<Native.POINTER_TOUCH_INFO>(nameof(Native.POINTER_TOUCH_INFO.rcContact));
+        int rcRawOff = unionOff + (int)Marshal.OffsetOf<Native.POINTER_TOUCH_INFO>(nameof(Native.POINTER_TOUCH_INFO.rcContactRaw));
+
         int n = Math.Max(1, points.Length);
-        IntPtr buf = Marshal.AllocHGlobal(nativeStride * n + 16);
+        IntPtr buf = Marshal.AllocHGlobal(stride * n + 16);
         try
         {
             for (int i = 0; i < points.Length; i++)
@@ -22066,16 +24356,23 @@ internal sealed class App : InkEngine.InkEngine
                 one.pen.pointerInfo.ptPixelLocationY = (int)points[i].y;
                 one.pen.pointerInfo.hwndTarget = _windows.Count > 0 ? _windows[0].Hwnd : IntPtr.Zero;
 
-                IntPtr dst = buf + i * nativeStride;
+                IntPtr dst = buf + i * stride;
                 Marshal.StructureToPtr(one, dst, false);
                 if (points[i].size > 0f)
                 {
+                    // 报面积：touchMask 置位 + rcContact / rcContactRaw 都填矩形。
                     float half = points[i].size * 0.5f;
-                    int* rc = (int*)((byte*)dst + 104);      // rcContact: left/top/right/bottom
-                    rc[0] = (int)(points[i].x - half);
-                    rc[1] = (int)(points[i].y - half);
-                    rc[2] = (int)(points[i].x + half);
-                    rc[3] = (int)(points[i].y + half);
+                    int l = (int)(points[i].x - half), t = (int)(points[i].y - half);
+                    int r = (int)(points[i].x + half), b = (int)(points[i].y + half);
+                    Marshal.WriteInt32(dst + maskOff, (int)Native.TOUCH_MASK_CONTACTAREA);
+                    Marshal.WriteInt32(dst + rcOff + 0, l);
+                    Marshal.WriteInt32(dst + rcOff + 4, t);
+                    Marshal.WriteInt32(dst + rcOff + 8, r);
+                    Marshal.WriteInt32(dst + rcOff + 12, b);
+                    Marshal.WriteInt32(dst + rcRawOff + 0, l);
+                    Marshal.WriteInt32(dst + rcRawOff + 4, t);
+                    Marshal.WriteInt32(dst + rcRawOff + 8, r);
+                    Marshal.WriteInt32(dst + rcRawOff + 12, b);
                 }
             }
             Native.InjectSyntheticPointerInput(_syntheticTouch, buf, (uint)points.Length);
@@ -22108,8 +24405,8 @@ internal sealed class App : InkEngine.InkEngine
         one.pen.penMask = Native.PEN_MASK_PRESSURE;
         one.pen.pressure = pressure;
 
-        // 单点：按原生步长 144 排一块缓冲区（理由见 Native.InjectSyntheticPointerInput）
-        IntPtr buf = Marshal.AllocHGlobal(144 + 16);
+        // 单点：按**托管结构体步长**排（= 原生步长 152；单点其实无所谓，但别再写死旧数字）。
+        IntPtr buf = Marshal.AllocHGlobal(Marshal.SizeOf<Native.POINTER_TYPE_INFO>() + 16);
         try
         {
             Marshal.StructureToPtr(one, buf, false);
@@ -22187,7 +24484,6 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine($"  压力范围              : {(pMax >= 0 ? $"{pMin:F3} ~ {pMax:F3}" : "（没有点）")}");
         Console.WriteLine($"  设备                  : {DeviceName(LastPointerType)}");
         Console.WriteLine($"  湿墨轨迹              : 开关={(OverlayWindow.InkTrailEnabled ? "开" : "关")}"
-                          + $"，预测={(PredictEnabled ? $"开（{PredictHorizonMs:F0} ms）" : "关")}"
                           + $"，最后一次调用={OverlayWindow.InkTrailDebug}");
 
         bool readAll = strokePoints >= injected * 0.8;
@@ -22224,6 +24520,739 @@ internal sealed class App : InkEngine.InkEngine
     ///
     /// 顺带断言"最粗那一处**点得中**"：命中按最粗处算，否则重压的地方看得见、点不着。
     /// </summary>
+    /// <summary>
+    /// `--ballprobe [前缀]`：**收起球贴边诊断**（用户 2026-10-01 报"球贴到左右边会变成
+    /// 一个纯颜色的小圆球、还吸不进去"）。把球摆到左/右/四角，显示态与隐藏态各出一张图，
+    /// 顺便打印每一格的占用矩形与 peek 值——"看得见的"和"算出来的"对不上时一眼就能看见。
+    /// </summary>
+    private void BallProbe(string prefix)
+    {
+        SetUiPref("hide", "1");
+        SetUiFactory(() => new InkUi.FullUi());
+        SettleFrames(300);
+        var ui = CurrentUi as InkUi.FullUi;
+        if (ui == null) { Console.WriteLine("  界面没挂上"); ExitCode = 1; _quit = true; return; }
+
+        ui.SetExpandForTest(0f);            // 收起态（球）
+        var scr = ui.ScreenForTest;
+        const float gap = 2f, ball = 48f;
+        var spots = new (string Name, float X, float Y)[]
+        {
+            ("left-mid",    scr.MinX + gap,               (scr.MinY + scr.MaxY) * 0.5f),
+            ("right-mid",   scr.MaxX - gap - ball,        (scr.MinY + scr.MaxY) * 0.5f),
+            ("bottom-left", scr.MinX + gap,               scr.MaxY - gap - ball),
+            ("bottom-mid",  (scr.MinX + scr.MaxX) * 0.5f - ball * 0.5f, scr.MaxY - gap - ball),
+            ("bottom-right",scr.MaxX - gap - ball,        scr.MaxY - gap - ball),
+            ("left-low",    scr.MinX + gap,               scr.MaxY - 80f),
+        };
+
+        foreach (var (name, x, y) in spots)
+        {
+            foreach (int peek in new[] { 1, 0 })
+            {
+                ui.SetAnchorForTest(new System.Numerics.Vector2(x, y));
+                ui.ForcePeekForTest(peek);
+                SettleFrames(250);
+                var b = ui.QueryBounds();
+                var shot = new RectF
+                {
+                    MinX = b.MinX - 10f, MinY = b.MinY - 10f,
+                    MaxX = b.MaxX + 10f, MaxY = b.MaxY + 10f,
+                };
+                string path = $"{prefix}-{name}-{(peek == 1 ? "show" : "hide")}.bmp";
+                OffscreenShot(path, shot);
+                Console.WriteLine($"  {name,-13} peek={peek} 锚=({x:F0},{y:F0}) "
+                                  + $"占用=({b.MinX:F0},{b.MinY:F0})-({b.MaxX:F0},{b.MaxY:F0}) "
+                                  + $"球高={b.MaxY - b.MinY:F0} {path}");
+            }
+        }
+        _quit = true;
+    }
+
+    /// <summary>
+    /// `--replayshow &lt;图&gt;`：回放控制条的摆样（排版好不好看自检判不了，只能看图）。
+    /// 铺几笔 → 开始回放 → 拖到快一半 → 截控制条那一块（带一点周围）。
+    /// 看图用：按钮间距、倍速高亮、进度滑钮、读数、✕。
+    /// </summary>
+    private void ReplayShow(string path)
+    {
+        SetUiFactory(() => new InkUi.FullUi());
+        Doc.ResetToSinglePage();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        Tool = Tool.Pen;
+        SettleFrames(150);
+
+        void AddInk(float x, float y, float dx, float t0, float t1)
+        {
+            var s = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0.90f, 0.20f, 0.20f, 1f), Width = 8f,
+            };
+            for (int k = 0; k <= 4; k++)
+                s.AddPoint(x + dx * k / 4f, y + k * 8f, 0.3f + 0.15f * k, t0 + (t1 - t0) * k / 4f);
+            Doc.AddStroke(s);
+        }
+        for (int i = 0; i < 6; i++) AddInk(300f + i * 40f, 260f + i * 70f, 420f, i * 700f, i * 700f + 600f);
+        SettleFrames(200);
+
+        if (!StartReplayForTest())
+        {
+            Console.WriteLine("  摆样失败：回放没起来（没有可见笔迹？）");
+            ExitCode = 1; _quit = true; return;
+        }
+        ReplaySeekForTest(ReplayTotalForTest * 0.45f);   // 停在"正在长"那儿
+        ReplaySetSpeedForTest(2f);
+        SettleFrames(300);
+
+        var bar = ReplayBarRectForTest;
+        int sx, sy, sw, sh;
+        if (Environment.GetCommandLineArgs().Contains("--full"))
+        {
+            // 整屏：看"已出完的（烘进内容层）＋ 正在长的那一条（前缀）"对不对
+            sx = _virtualX; sy = _virtualY; sw = _virtualW; sh = _virtualH;
+        }
+        else
+        {
+            int pad = (int)(18 * DpiScale);
+            sx = (int)bar.MinX - pad; sy = (int)bar.MinY - pad;
+            sw = (int)(bar.MaxX - bar.MinX) + pad * 2;
+            sh = (int)(bar.MaxY - bar.MinY) + pad * 2;
+        }
+        bool ok = ScreenProbe.SaveBmp(path, sx, sy, sw, sh);
+        Console.WriteLine(ok ? $"  已保存 {path}（{sw}×{sh}）" : "  截屏失败");
+        StopReplay("摆样收尾");
+        ExitCode = ok ? 0 : 1;
+        _quit = true;
+    }
+
+    /// `--replaytest`：墨迹回放自检（墨迹 C）。
+    /// 时间轴 / 前缀进度 / 暂停 / 倍速 / 只读 / 控制条 / 翻页退出 / 放映中当前页。
+    /// </summary>
+    private void ReplayTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 墨迹回放自检（时间轴 / 暂停 / 倍速 / 只读 / 控制条）===");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-34} {detail}");
+        }
+
+        if (ReplayActive) StopReplay("自检起手");
+        Doc.ResetToSinglePage();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        Doc.InvalidateAll();
+        Tool = Tool.Pen;
+        SettleFrames(150);
+
+        // 三条笔迹：1000ms 长笔 ＋ 停 500ms ＋ 200ms 短笔 ＋ 停 300ms ＋ 单点（120ms）
+        // → 期望总长 2120ms（时间轴口径见计划 6.4.3）
+        void AddInk(float x, float y, float dx, float t0, float t1)
+        {
+            var s = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0.90f, 0.20f, 0.20f, 1f), Width = 8f,
+            };
+            for (int k = 0; k <= 4; k++)
+                s.AddPoint(x + dx * k / 4f, y + k * 6f, 0.3f + 0.15f * k, t0 + (t1 - t0) * k / 4f);
+            Doc.AddStroke(s);
+        }
+        AddInk(300f, 300f, 400f, 0f, 1000f);
+        AddInk(300f, 500f, 400f, 1500f, 1700f);
+        var dot = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(0.13f, 0.45f, 0.90f, 1f), Width = 8f,
+        };
+        dot.AddPoint(520f, 700f, 0.8f, 2000f);
+        Doc.AddStroke(dot);
+        SettleFrames(150);
+        Check("起手：3 条笔迹都在视口里", Doc.Strokes.Count == 3, $"{Doc.Strokes.Count} 条");
+
+        // ---- 时间轴口径（纯函数，先钉死再进会话）----
+        // 写一笔 600ms → 想 5 秒 → 再写一笔 600ms：中间那口"气"压成一个 700ms 节拍；
+        // 第一笔从 0ms 开始（没有前置等待）。
+        {
+            var a = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0f, 0f, 0f, 1f), Width = 6f,
+            };
+            a.AddPoint(0f, 0f, 1f, 0.0);
+            a.AddPoint(100f, 0f, 1f, 600.0);
+            var b = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0f, 0f, 0f, 1f), Width = 6f,
+            };
+            b.AddPoint(0f, 50f, 1f, 5600.0);
+            b.AddPoint(100f, 50f, 1f, 6200.0);
+            var tl = ReplayTimeline.Build(new List<Stroke> { a, b });
+            Check("时间轴：第一笔从 0ms 开始（没有前置等待）",
+                  MathF.Abs(tl.Start[0]) < 0.001f, $"{tl.Start[0]:F0}ms");
+            Check("时间轴：想 5 秒再写 → 间隔压成 700ms 一个节拍",
+                  MathF.Abs(tl.Start[1] - 1300f) < 1f,
+                  $"第二笔起点 {tl.Start[1]:F0}ms（真实 5s，压缩后 600＋700）");
+            Check("时间轴：总长 = 600＋700＋600 = 1900ms",
+                  MathF.Abs(tl.Total - 1900f) < 1f, $"{tl.Total:F0}ms");
+        }
+
+        // ---- ① 时间轴：开始 / 各时刻的"出完条数 + 前缀进度" ----
+        Check("开始回放", StartReplayForTest() && ReplayActive, "");
+        Check("时间轴：总长 = 1000＋500＋200＋300＋120 = 2120ms",
+              MathF.Abs(ReplayTotalForTest - 2120f) < 1f, $"{ReplayTotalForTest:F0} ms");
+        ReplaySeekForTest(500f);
+        Check("t=500：一条都没出完、正在长第 1 条（param≈0.5）",
+              ReplayDoneForTest == 0 && ReplayCurrentIndexForTest == 0
+              && MathF.Abs(ReplayCurrentParamForTest - 0.5f) < 0.02f,
+              $"done={ReplayDoneForTest}，idx={ReplayCurrentIndexForTest}，param={ReplayCurrentParamForTest:F2}");
+        ReplaySeekForTest(1000f);
+        Check("t=1000：第 1 条出完、正在停顿",
+              ReplayDoneForTest == 1 && ReplayCurrentIndexForTest == -1
+              && ReplayScratchCountForTest == 1,
+              $"done={ReplayDoneForTest}，idx={ReplayCurrentIndexForTest}，影子={ReplayScratchCountForTest}");
+        ReplaySeekForTest(1600f);
+        Check("t=1600：第 2 条长了一半",
+              ReplayDoneForTest == 1 && ReplayCurrentIndexForTest == 1
+              && MathF.Abs(ReplayCurrentParamForTest - 0.5f) < 0.02f,
+              $"idx={ReplayCurrentIndexForTest}，param={ReplayCurrentParamForTest:F2}");
+        ReplaySeekForTest(2120f);
+        Check("t=总长：三条全部出完（影子文档 = 3）",
+              ReplayDoneForTest == 3 && ReplayScratchCountForTest == 3,
+              $"done={ReplayDoneForTest}，影子={ReplayScratchCountForTest}");
+        ReplaySeekForTest(400f);
+        Check("往回拖：影子文档回造到 0（不会残留后面的笔迹）",
+              ReplayDoneForTest == 0 && ReplayScratchCountForTest == 0,
+              $"done={ReplayDoneForTest}，影子={ReplayScratchCountForTest}");
+        ReplaySeekForTest(2120f);
+        Check("再往前：又全部出完", ReplayDoneForTest == 3 && ReplayScratchCountForTest == 3, "");
+        // 出完一条必须走**补画快路径**（只往分块里补那一条）；走成"整层重铺"就是
+        // 用户报的"写完一个字闪一下"那个 bug 的根因（影子文档的脏区没被清）。
+        // 判据：先回造到 900ms、稳一帧（脏区清干净），再往前跨过第 1 条的结尾 1000ms。
+        {
+            if (ReplayPlaying) ReplayTogglePauseForTest();   // 先暂停：位置不会被"播着播着"带走
+            ReplaySeekForTest(900f);
+            SettleFrames(200);
+            long appBefore = _windows.Count > 0 ? _windows[0].TotalAppendedTiles : 0;
+            ReplaySeekForTest(1050f);
+            SettleFrames(200);
+            long appAfter = _windows.Count > 0 ? _windows[0].TotalAppendedTiles : 0;
+            Check("出完一条走补画快路径（不是整层重铺——'闪一下'的根因）",
+                  appAfter > appBefore, $"累计补画块数 {appBefore} → {appAfter}");
+            if (!ReplayPlaying) ReplayTogglePauseForTest();  // 恢复播放给下面的倍速用例
+        }
+
+        // 完成那一帧墨不能缺席：**前缀撤掉与"补进分块"必须同一帧**（用户 2026-10-01：
+        // "每写完一笔还是会闪一下"）。必须让"完成"发生在**帧内**（播放跨过结尾），
+        // 用 Seek 测不到——Seek 里补画发生在进入这一帧之前。
+        {
+            int InkPixels()
+            {
+                var px = ScreenProbe.CaptureRegion(280, 270, 440, 80);   // 第 1 条笔迹那一带
+                int n = 0;
+                for (int i = 0; i + 3 < px.Length; i += 4)
+                    if (px[i + 2] > px[i + 1] + 30) n++;
+                return n;
+            }
+            if (ReplayPlaying) ReplayTogglePauseForTest();   // 先冻结在 995ms（差 5ms 完成）
+            ReplaySeekForTest(995f);
+            SettleFrames(150);
+            ReplayTogglePauseForTest();                      // 恢复：让"完成"落在接下来的帧里
+            int minInk = int.MaxValue;
+            for (int f = 0; f < 6; f++)
+            {
+                PumpMessages();
+                RenderAll();
+                minInk = Math.Min(minInk, InkPixels());
+                SettleFrames(20);
+            }
+            Check("完成那一帧墨不缺席（前缀撤掉＋分块补上同一帧）",
+                  minInk > 0, $"连续帧里最少的红像素 = {minInk}");
+            if (!ReplayPlaying) ReplayTogglePauseForTest();   // 恢复播放，给下面的倍速/播完用例
+        }
+
+        // ---- ② 暂停 / 倍速 / 播完自动停 ----
+        Check("倍速公式（纯函数）：2× 走过的是 1× 的两倍",
+              MathF.Abs((ReplayTimeline.PositionAt(100f, 0, 1000, 2f) - 100f)
+                        - 2f * (ReplayTimeline.PositionAt(100f, 0, 1000, 1f) - 100f)) < 1e-3f, "");
+        ReplaySeekForTest(0f);
+        ReplaySetSpeedForTest(1f);
+        SettleFrames(220);
+        float pos1 = ReplayPosForTest;
+        ReplaySeekForTest(0f);
+        ReplaySetSpeedForTest(2f);
+        SettleFrames(220);
+        float pos2 = ReplayPosForTest;
+        Check("倍速：同样播 220ms，2× 走的大约是 1× 的两倍",
+              pos1 > 40f && pos2 > pos1 * 1.3f && pos2 < pos1 * 2.7f,
+              $"1×={pos1:F0}ms，2×={pos2:F0}ms");
+        ReplayTogglePauseForTest();
+        float frozen = ReplayPosForTest;
+        SettleFrames(300);
+        Check("暂停：过 300ms 位置一点不动", !ReplayPlaying && MathF.Abs(ReplayPosForTest - frozen) < 1f,
+              $"{frozen:F0} → {ReplayPosForTest:F0}");
+        ReplayTogglePauseForTest();
+        SettleFrames(180);
+        Check("继续：又开始走了", ReplayPlaying && ReplayPosForTest > frozen + 50f,
+              $"{frozen:F0} → {ReplayPosForTest:F0}");
+        ReplaySeekForTest(ReplayTotalForTest - 80f);
+        SettleFrames(350);
+        Check("播到结尾：自动停住、全部出完",
+              !ReplayPlaying && ReplayDoneForTest == 3
+              && MathF.Abs(ReplayPosForTest - ReplayTotalForTest) < 2f,
+              $"playing={ReplayPlaying}，pos={ReplayPosForTest:F0}/{ReplayTotalForTest:F0}");
+
+        // ---- ③ 只读 ＋ 点画布 = 暂停/继续（不落墨） ----
+        int nStrokes = Doc.Strokes.Count, nUndo = Doc.UndoDepth, nVer = Doc.Version;
+        ReplaySeekForTest(0f);
+        if (!ReplayPlaying) ReplayTogglePauseForTest();
+        float cx = _virtualX + _virtualW * 0.5f;
+        float cyc = _virtualY + _virtualH * 0.4f;      // 画布中部（控制条在底部）
+        SendMouse((int)cx, (int)cyc, 0);                          SettleFrames(60);
+        SendMouse((int)cx, (int)cyc, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+        SendMouse((int)cx, (int)cyc, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(150);
+        Check("点画布：只暂停/继续、不落墨",
+              !ReplayPlaying && !Host.State.IsDrawing && Doc.Strokes.Count == nStrokes,
+              $"playing={ReplayPlaying}，drawing={Host.State.IsDrawing}，笔画={Doc.Strokes.Count}");
+        Check("回放只读：笔画数 / 撤销栈 / 文档版本都不变",
+              Doc.Strokes.Count == nStrokes && Doc.UndoDepth == nUndo && Doc.Version == nVer,
+              $"笔画 {nStrokes}，撤销栈 {nUndo}，版本 {nVer}");
+
+        // ---- ④ 控制条：逐热区 ----
+        var bar = ReplayBarRectForTest;
+        Check("控制条：贴在屏幕**下边**、整条在屏幕里（够得着；本自检没挂界面所以不抬）",
+              bar.MaxY <= _virtualY + _virtualH && bar.MinY > _virtualY + _virtualH * 0.5f
+              && bar.MaxX <= _virtualX + _virtualW && bar.MinX >= _virtualX,
+              $"({bar.MinX:F0},{bar.MinY:F0})-({bar.MaxX:F0},{bar.MaxY:F0})");
+
+        void TapBar(ReplayBarZone zone, float fracX = 0.5f)
+        {
+            var r = ReplayBar.ZoneRect(bar, zone, DpiScale);
+            float x = r.MinX + (r.MaxX - r.MinX) * fracX;
+            float y = (r.MinY + r.MaxY) * 0.5f;
+            Check($"[控制条] 命中判定：{zone} 落在这块里",
+                  ReplayBar.ZoneAt(bar, x, y, DpiScale) == zone,
+                  $"点在 ({x:F0},{y:F0})");
+            ReplayPointerDownForTest(x, y);
+            ReplayPointerUpForTest(x, y);
+            SettleFrames(120);
+        }
+
+        bool wasPlaying = ReplayPlaying;
+        TapBar(ReplayBarZone.PlayPause);
+        Check("控制条：播放/暂停按钮可点", ReplayPlaying != wasPlaying,
+              $"playing={ReplayPlaying}");
+        TapBar(ReplayBarZone.Speed2);
+        Check("控制条：2× 可点", MathF.Abs(ReplaySpeedForTest - 2f) < 0.01f,
+              $"倍速 {ReplaySpeedForTest}");
+        {
+            var track = ReplayBar.ProgressTrack(bar, DpiScale);
+            float x25 = track.MinX + (track.MaxX - track.MinX) * 0.25f;
+            float yMid = (track.MinY + track.MaxY) * 0.5f;
+            ReplayPointerDownForTest(x25, yMid);
+            ReplayPointerUpForTest(x25, yMid);
+            SettleFrames(150);
+            Check("控制条：点进度 25% → 位置≈25%（并暂停）",
+                  MathF.Abs(ReplayPosForTest / ReplayTotalForTest - 0.25f) < 0.03f && !ReplayPlaying,
+                  $"pos={ReplayPosForTest:F0}/{ReplayTotalForTest:F0}");
+        }
+        TapBar(ReplayBarZone.Close);
+        Check("控制条：✕ 关掉回放", !ReplayActive, $"active={ReplayActive}");
+
+        // ---- ⑤ 编辑动作 / 翻页：先退出回放 ----
+        Check("再开始（为翻页用例）", StartReplayForTest() && ReplayActive, "");
+        FlipPageFromUi(true);
+        Check("翻页：自动退出回放", !ReplayActive, $"active={ReplayActive}");
+        FlipPageFromUi(false);
+
+        // ---- ⑥ PPT 回放（当前页）＋ 与 PPT 条/菜单的冲突 ----
+        //
+        // 用户 2026-10-01 提醒："PPT 条长按菜单里那几项（自动保存 / 清空所有墨迹 /
+        // 结束放映）会不会和回放冲突？" 结论与口径：
+        //   · 回放只演**当前这一页**；碰 PPT 条（箭头 / 页码 / 菜单）= 先退出回放再执行；
+        //   · 翻页 / 跳页 / 退出放映（含键盘 ←→）都会经 `GotoPage`/`ExitPptMode` 收掉回放；
+        //   · 菜单里的"清空所有墨迹"因此永远在回放已退场的状态下执行，不会出现
+        //     "清了屏、回放还在演旧墨"；
+        //   · 同日用户又提议菜单里直接加「回放本页墨迹」（放映时手就在条上）——已加，
+        //     这一段最后一小节顺手验"长按 → 点它 → 真的起回放"。
+        {
+            int desktopStrokes = Doc.Strokes.Count;
+            var fake = new PptFakeSource { Showing = true, Slide = 1, SlideId = 256, Total = 3 };
+            AttachPptSource(fake, watch: false);
+            StepPpt();
+            SettleFrames(150);
+            Check("进放映（准备 D）", PptMode && Doc.PageKey == 256, $"页键 {Doc.PageKey}");
+
+            AddInk(300f, 300f, 400f, 0f, 800f);
+            AddInk(300f, 500f, 400f, 1200f, 1800f);
+            SettleFrames(150);
+            Check("开始回放：放映中演**当前页**",
+                  StartReplayForTest() && ReplayActive && ReplayCountForTest == 2,
+                  $"active={ReplayActive}，条数={ReplayCountForTest}");
+            ReplaySeekForTest(ReplayTotalForTest);
+            Check("放映中回放：能 seek 到结尾（两条都出完）",
+                  ReplayDoneForTest == 2 && ReplayScratchCountForTest == 2,
+                  $"done={ReplayDoneForTest}，影子={ReplayScratchCountForTest}");
+
+            // 翻页（假源换了一张）→ 回放自动停
+            fake.Slide = 2; fake.SlideId = 257;
+            StepPpt();
+            SettleFrames(200);
+            Check("放映中翻页：回放自动停", !ReplayActive && Doc.PageKey == 257,
+                  $"active={ReplayActive}，页键 {Doc.PageKey}");
+
+            // 再回放，然后**点 PPT 条的 ▶**：回放先退场，翻页命令照发
+            AddInk(300f, 400f, 400f, 0f, 600f);
+            SettleFrames(120);
+            Check("（准备）第 2 页能起回放", StartReplayForTest(), "");
+            {
+                var pptBar = PptBarRect();
+                float ax = pptBar.MaxX - PptBar.ArrowW * DpiScale * 0.5f;
+                float ay = (pptBar.MinY + pptBar.MaxY) * 0.5f;
+                int nextBefore = fake.NextCalls;
+                SendMouse((int)ax, (int)ay, 0);                          SettleFrames(60);
+                SendMouse((int)ax, (int)ay, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+                SendMouse((int)ax, (int)ay, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(120);
+                StepPpt();
+                SettleFrames(120);
+                Check("点 PPT 条 ▶：先退出回放，翻页命令照发",
+                      !ReplayActive && fake.NextCalls > nextBefore,
+                      $"active={ReplayActive}，NextCalls {nextBefore} → {fake.NextCalls}");
+            }
+
+            // 再回放，然后**点页码**：回放先退场，菜单照开（互不打架）
+            fake.Slide = 3; fake.SlideId = 258;
+            StepPpt();
+            SettleFrames(150);
+            AddInk(300f, 400f, 400f, 0f, 600f);
+            SettleFrames(120);
+            Check("（准备）第 3 页能起回放", StartReplayForTest(), "");
+            {
+                var pptBar2 = PptBarRect();
+                var mid = PptBar.MidCell(pptBar2, DpiScale);
+                float mx = (mid.MinX + mid.MaxX) * 0.5f;
+                float my = (mid.MinY + mid.MaxY) * 0.5f;
+                SendMouse((int)mx, (int)my, 0);                           SettleFrames(60);
+                SendMouse((int)mx, (int)my, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+                SendMouse((int)mx, (int)my, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(150);
+                Check("点页码：回放先退场、菜单照开（不打架）",
+                      !ReplayActive && PptMenuOpen,
+                      $"active={ReplayActive}，菜单={PptMenuOpen}");
+                // 用户 2026-10-01 提议：菜单里直接给「回放本页墨迹」——
+                // 放映时手就在条上，不用再去开中央面板。点它 = 收菜单 + 起当前页回放。
+                PptMenuItemRectAt(2, out var miReplay);
+                float rix = (miReplay.MinX + miReplay.MaxX) * 0.5f;
+                float riy = (miReplay.MinY + miReplay.MaxY) * 0.5f;
+                SendMouse((int)rix, (int)riy, 0);                           SettleFrames(60);
+                SendMouse((int)rix, (int)riy, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
+                SendMouse((int)rix, (int)riy, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(120);
+                Check("点菜单「回放本页墨迹」：起回放、菜单收起",
+                      ReplayActive && !PptMenuOpen,
+                      $"active={ReplayActive}，菜单={PptMenuOpen}");
+                StopReplayForTest("自检收尾");
+                SettleFrames(120);
+                Check("（收尾）回放已停", !ReplayActive, $"active={ReplayActive}");
+            }
+
+            // 退出放映 → 回放自动停；桌面那一页的笔迹原样
+            AddInk(300f, 400f, 400f, 0f, 600f);
+            SettleFrames(120);
+            Check("（准备）退出放映前能起回放", StartReplayForTest(), "");
+            fake.Showing = false;
+            StepPpt();
+            SettleFrames(200);
+            Check("退出放映：回放自动停、回到桌面页",
+                  !ReplayActive && !PptMode && Doc.PageKey == 0,
+                  $"active={ReplayActive}，Ppt={PptMode}，页键 {Doc.PageKey}");
+            Check("退出放映：桌面板书原样（回放没动过真文档）",
+                  Doc.Strokes.Count == desktopStrokes, $"{Doc.Strokes.Count} / {desktopStrokes}");
+        }
+
+        if (ReplayActive) StopReplay("自检收尾");
+        Doc.ResetToSinglePage();
+        Doc.ClearHistory();
+
+        Console.WriteLine();
+        Console.WriteLine($"  合计 {pass + fail} 项：通过 {pass}，失败 {fail}");
+        if (fail > 0) ExitCode = 1;
+        _quit = true;
+    }
+
+    /// <summary>
+    /// `--inkfiletest`：墨迹文件自检（墨迹 A：保存 / 打开 / 打开前备份 / 失败模式）。
+    ///
+    /// 不弹任何对话框：走 <see cref="InkEngine.InkEngine.SaveInkFileForTest"/> /
+    /// <c>OpenInkFileForTest</c> 两条"绕开对话框"的路（其余流程和产品一模一样）。
+    /// </summary>
+    private void InkFileTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 墨迹文件自检（保存 / 打开 / 备份 / 失败模式）===");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-34} {detail}");
+        }
+
+        // 临时目录：文件与备份都不碰用户真货（和 Recovery / PptStore 一个套路）。
+        string temp = Path.Combine(Path.GetTempPath(), "inkteach-inkfiletest");
+        try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch { }
+        Directory.CreateDirectory(temp);
+        string backupDir = Path.Combine(temp, "backup");
+        InkFileStore.BackupDirOverride = backupDir;
+
+        // ---- 签名：往返一致要比"每一条的对象"逐项相同，不是只数条数 ----
+        string Sig(Stroke s)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append((int)s.Kind).Append('|').Append(s.Width.ToString("F3")).Append('|');
+            sb.Append($"{s.Color.R:F2},{s.Color.G:F2},{s.Color.B:F2},{s.Color.A:F2}").Append('|');
+            sb.Append((int)s.Dash).Append('|').Append(s.Locked ? 1 : 0).Append('|')
+              .Append(s.HasPressure ? 1 : 0).Append('|').Append(s.Points.Count).Append('|');
+            foreach (var (a, b) in s.Erased) sb.Append($"{a:F2}-{b:F2},");
+            sb.Append('|').Append(s.Transform.M11.ToString("F3")).Append(',')
+              .Append(s.Transform.M22.ToString("F3")).Append(',')
+              .Append(s.Transform.M31.ToString("F3")).Append(',')
+              .Append(s.Transform.M32.ToString("F3"));
+            if (s.Points.Count > 0)
+            {
+                var p0 = s.Points[0]; var pn = s.Points[^1];
+                sb.Append('|').Append($"{p0.X:F2},{p0.Y:F2},{p0.P:F3};{pn.X:F2},{pn.Y:F2},{pn.P:F3}");
+            }
+            if (s.Image != null)
+            {
+                uint h = 2166136261;
+                foreach (var b in s.Image.Bgra) { h ^= b; h *= 16777619; }
+                sb.Append("|img").Append(s.Image.Width).Append('x').Append(s.Image.Height).Append(':').Append(h);
+            }
+            return sb.ToString();
+        }
+        string DocSig()
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var s in Doc.Strokes) sb.Append(Sig(s)).Append('\n');
+            return sb.ToString();
+        }
+        string SigOfDoc(InkDocument d)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var s in d.Strokes) sb.Append(Sig(s)).Append('\n');
+            return sb.ToString();
+        }
+
+        void BuildDoc()
+        {
+            Doc.ResetToSinglePage();
+            Doc.ClearHistory();
+
+            // ① 有压感的自由笔迹：虚线 + 锁定 + 擦除区间 + 变换（把能存的位都占上）
+            var ink = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0.95f, 0.18f, 0.18f, 1f), Width = 7.5f,
+                HasPressure = true, Dash = StrokeDash.Dashed, Locked = true,
+            };
+            ink.AddPoint(100f, 100f, 0.2f, 0);
+            ink.AddPoint(160f, 130f, 0.6f, 30);
+            ink.AddPoint(220f, 100f, 0.9f, 60);
+            ink.AddPoint(280f, 140f, 1.0f, 90);
+            ink.AddErased(1.2f, 2.4f);
+            ink.Transform = System.Numerics.Matrix3x2.CreateScale(1.25f)
+                          * System.Numerics.Matrix3x2.CreateTranslation(33f, -7f);
+            Doc.AddStroke(ink);
+
+            // ② 图形（矩形）
+            var rect = new Stroke
+            {
+                Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+                Color = new Color4(0.13f, 0.45f, 0.90f, 1f), Width = 3f,
+            };
+            rect.AddPoint(400f, 200f, 1f, 0);
+            rect.AddPoint(520f, 260f, 1f, 10);
+            Doc.AddStroke(rect);
+
+            // ③ 图像对象（2×2 纯色块，够验"像素字节也往返"）
+            var img = new Stroke
+            {
+                Tool = Tool.Capture, Kind = StrokeKind.Image, Width = 1f,
+                Image = ImageData.Adopt(2, 2, new byte[]
+                {
+                    0, 0, 255, 255,   0, 255, 0, 255,
+                    255, 0, 0, 255,   0, 255, 255, 255,
+                }),
+            };
+            img.AddPoint(600f, 300f, 1f, 0);
+            img.AddPoint(610f, 310f, 1f, 1);
+            Doc.AddStroke(img);
+        }
+
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        Doc.InvalidateAll();
+        SettleFrames(120);
+
+        BuildDoc();
+        string sigBefore = DocSig();
+        Check("起手：板书里有各种对象", Doc.Strokes.Count == 3, $"{Doc.Strokes.Count} 条");
+
+        // ---- 保存 → 清空 → 打开：逐项一致 ----
+        string savePath = Path.Combine(temp, "板书-测试.inkb");
+        Check("保存：写盘成功", SaveInkFileForTest(savePath) && File.Exists(savePath), $"状态：{InkStatus}");
+        Check("保存：文件头是 InkTeach 墨迹",
+              File.Exists(savePath) && InkSerializer.LooksLikeInk(File.ReadAllBytes(savePath)), savePath);
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        SettleFrames(80);
+        Check("打开：读回成功", OpenInkFileForTest(savePath), $"状态：{InkStatus}");
+        Check("打开：往返逐项一致（种类/颜色/宽度/压感/擦除/变换/图像哈希）",
+              DocSig() == sigBefore, $"{Doc.Strokes.Count} 条");
+
+        // ---- 打开前备份：改一下再打开，备份里必须是"打开前"那一份 ----
+        var extra = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                                 Color = new Color4(0f, 0f, 0f, 1f), Width = 5f };
+        extra.AddPoint(10f, 10f, 1f, 0);
+        Doc.AddStroke(extra);
+        SettleFrames(80);
+        string sigBeforeOpen2 = DocSig();
+        Check("打开前：备份目录还是空的", InkFileStore.BackupCount() == 0, $"{InkFileStore.BackupCount()} 份");
+        Check("打开：第二次读回成功（会先写备份）", OpenInkFileForTest(savePath), $"状态：{InkStatus}");
+        Check("打开前备份：确实写了一份", InkFileStore.BackupCount() == 1, $"{InkFileStore.BackupCount()} 份");
+        {
+            bool matches = false;
+            var files = Directory.GetFiles(backupDir, "*.inkb");
+            if (files.Length == 1)
+            {
+                var probe = new InkDocument();
+                try { InkSerializer.LoadInto(probe, File.ReadAllBytes(files[0])); matches = SigOfDoc(probe) == sigBeforeOpen2; }
+                catch { }
+            }
+            Check("打开前备份：内容 = 打开前那一份板书（能解析、逐项对）", matches,
+                  "备份文件自己也要解得回来——只断'文件存在'等于没验");
+        }
+
+        // ---- 坏文件 / 版本过新：明确失败、文档一个字节不动 ----
+        BuildDoc();
+        string sigGood = DocSig();
+        string bad = Path.Combine(temp, "坏文件.inkb");
+        File.WriteAllText(bad, "这不是墨迹");
+        Check("坏文件：明确失败", !OpenInkFileForTest(bad), $"状态：{InkStatus}");
+        Check("坏文件：文档一个字节没动", DocSig() == sigGood, $"{Doc.Strokes.Count} 条");
+
+        {
+            var tooNew = File.ReadAllBytes(savePath);
+            BitConverter.GetBytes(InkSerializer.FormatVersion + 1).CopyTo(tooNew, 4);
+            string newer = Path.Combine(temp, "未来版本.inkb");
+            File.WriteAllBytes(newer, tooNew);
+            Check("版本过新：失败且提示升级",
+                  !OpenInkFileForTest(newer) && InkStatus.Contains("升级"), $"状态：{InkStatus}");
+            Check("版本过新：文档一个字节没动", DocSig() == sigGood, $"{Doc.Strokes.Count} 条");
+        }
+
+        // ---- 空板书：保存被拒（不产生空文件） ----
+        Doc.Clear();
+        Doc.ClearHistory();
+        string emptyPath = Path.Combine(temp, "空.inkb");
+        Check("空板书：保存被拒（不产生空文件）",
+              !SaveInkFileForTest(emptyPath) && !File.Exists(emptyPath), $"状态：{InkStatus}");
+
+        // ---- 备份轮转：最多 5 份 ----
+        for (int i = 0; i < 6; i++) InkFileStore.WriteBackup(new byte[] { 1, 2, 3 });
+        Check("备份轮转：最多留 5 份", InkFileStore.BackupCount() == 5, $"{InkFileStore.BackupCount()} 份");
+
+        // ---- 历史清理（墨迹 B）：按保留期清缓存；**永不动当前板书** ----
+        {
+            string pptRoot = Path.Combine(temp, "ppt");
+            PptStore.RootOverride = pptRoot;
+            string cwA = Path.Combine(pptRoot, "课件A");
+            string cwB = Path.Combine(pptRoot, "课件B");
+            Directory.CreateDirectory(cwA);
+            Directory.CreateDirectory(cwB);
+            string oldPptA = Path.Combine(cwA, "00000001.inkb");
+            string newPptA = Path.Combine(cwA, "00000002.inkb");
+            string oldPos = Path.Combine(cwA, "Position");
+            string oldPptB = Path.Combine(cwB, "00000001.inkb");
+            File.WriteAllBytes(oldPptA, new byte[] { 1 });
+            File.WriteAllBytes(newPptA, new byte[] { 2 });
+            File.WriteAllText(oldPos, "3");
+            File.WriteAllBytes(oldPptB, new byte[] { 3 });
+            File.SetLastWriteTimeUtc(oldPptA, DateTime.UtcNow.AddDays(-100));
+            File.SetLastWriteTimeUtc(oldPos, DateTime.UtcNow.AddDays(-100));
+            File.SetLastWriteTimeUtc(oldPptB, DateTime.UtcNow.AddDays(-100));
+
+            // 备份目录重造：一旧一新（前面轮转留下的 5 份清掉，判据才确定）
+            try { Directory.Delete(backupDir, true); } catch { }
+            Directory.CreateDirectory(backupDir);
+            string oldBak = Path.Combine(backupDir, "板书-打开前-20000101-000000000.inkb");
+            string newBak = Path.Combine(backupDir, "板书-打开前-20990101-000000000.inkb");
+            File.WriteAllBytes(oldBak, new byte[] { 1 });
+            File.WriteAllBytes(newBak, new byte[] { 2 });
+            File.SetLastWriteTimeUtc(oldBak, DateTime.UtcNow.AddDays(-100));
+
+            // "当前板书"（自动存档）指到 temp：时间再老也不许被清
+            Recovery.AutoSavePathOverride = Path.Combine(temp, "autosave.ink");
+            File.WriteAllBytes(Recovery.AutoSavePath, new byte[] { 9 });
+            File.SetLastWriteTimeUtc(Recovery.AutoSavePath, DateTime.UtcNow.AddDays(-365));
+
+            var (sf, sd) = SweepHistoryForTest(90);
+            Check("清理：90 天档删旧留新（Ppt ＋ 备份），共删 4 个文件",
+                  sf == 4 && !File.Exists(oldPptA) && File.Exists(newPptA)
+                  && !File.Exists(oldBak) && File.Exists(newBak),
+                  $"删 {sf} 文件 / {sd} 目录");
+            Check("清理：Position（旧）也随课件清掉", !File.Exists(oldPos), oldPos);
+            Check("清理：文件被清光的课件目录一起删掉", !Directory.Exists(cwB), cwB);
+            Check("清理：**当前板书（autosave）永不动**",
+                  File.Exists(Recovery.AutoSavePath) && Recovery.AutoSaveExists, "放了 365 天，仍在");
+            var (pf, pd) = SweepHistoryForTest(0);
+            Check("清理：永久档一份都不删",
+                  pf == 0 && pd == 0 && File.Exists(newPptA) && File.Exists(newBak),
+                  $"删 {pf} 文件 / {pd} 目录");
+
+            Recovery.AutoSavePathOverride = null;
+            PptStore.RootOverride = null;
+        }
+
+        // ---- 放映中：两条都置灰（PPT 有自己的存取） ----
+        BuildDoc();
+        string sigPpt = DocSig();
+        {
+            var fake = new PptFakeSource { Showing = true, Slide = 1, SlideId = 256, Total = 3 };
+            AttachPptSource(fake, watch: false);
+            StepPpt();
+            SettleFrames(150);
+            string pptPath = Path.Combine(temp, "放映中.inkb");
+            Check("放映中：保存被拒", !SaveInkFileForTest(pptPath), $"状态：{InkStatus}");
+            Check("放映中：打开被拒", !OpenInkFileForTest(savePath), $"状态：{InkStatus}");
+            Check("放映中：没有落文件、也没换页",
+                  !File.Exists(pptPath) && Doc.PageKey == 256, $"页键 {Doc.PageKey}");
+            fake.Showing = false;
+            StepPpt();
+            SettleFrames(150);
+            Check("放映中：退出放映后桌面板书原样（那两条真的什么都没做）",
+                  Doc.PageKey == 0 && DocSig() == sigPpt, $"页键 {Doc.PageKey}，{Doc.Strokes.Count} 条");
+        }
+        Doc.ResetToSinglePage();
+        Doc.ClearHistory();
+
+        try { Directory.Delete(temp, true); } catch { }
+        InkFileStore.BackupDirOverride = null;
+
+        Console.WriteLine();
+        Console.WriteLine($"  合计 {pass + fail} 项：通过 {pass}，失败 {fail}");
+        if (fail > 0) ExitCode = 1;
+        _quit = true;
+    }
+
     private void PressureTest()
     {
         Console.WriteLine();
@@ -22262,6 +25291,11 @@ internal sealed class App : InkEngine.InkEngine
             Check("映射：gamma 真的起作用（>1 把轻压区间压低）",
                   curved < linear - 1e-4f, $"线性 {linear:F3} → gamma=2 {curved:F3}");
         }
+
+        // [停用/删除 2026-10-05] 这里原来有两块纯函数自检：
+        //   ① 模拟压力（Xournal++ / perfect-freehand）——随功能停用移除；
+        //   ② 末尾甩速收尖（`--flicktip`）——随功能**删除**（用户判定效果不对）。
+        // 代码与备份见 `已停用-渲染实验.md` 与 `.revert/2026-10-05-渲染减法/`。
 
         if (!EnsureSyntheticPen())
         {
@@ -22414,6 +25448,69 @@ internal sealed class App : InkEngine.InkEngine
                     if (bgra[i + 2] > 170 && bgra[i + 1] < 110 && bgra[i] < 110) offRed++;
             Check("离屏那条路（导出 / 剪贴板那张图）也画得出变宽墨",
                   offRed > 0, $"离屏位图里红像素 {offRed}（位图 {bgra?.Length ?? 0} 字节）");
+        }
+
+        // ================= ②.5 压感开关（2026-10-01，批次 0.2）=================
+        //
+        // 用户开关走的是**渲染期**那条路：关掉 → 整块板立刻等宽、文档一个字节不动；
+        // 打开 → 恢复。这里必须量**屏幕上的墨**（不是量函数），因为它要盯住的
+        // 恰恰是"内容层缓存有没有整层作废"——漏了 InvalidateAll 的话，
+        // 函数全对、屏幕上一动不动还是旧粗细（"点了没反应"最典型的一种）。
+        {
+            int drawsBefore = OverlayWindow.PressureInkDraws;
+            // "文档没动"的不变量：笔画数 / 撤销栈深度 / 压力值 / 压感标记——
+            // **不能用 `Doc.Version`**：它是"渲染作废"的计数，`InvalidateAll()` 会 +1
+            //（开关本来就必须整层作废，所以它变才是对的。第一版拿它当判据，当场红）。
+            int strokesBefore = Doc.Strokes.Count;
+            int undoBefore = Doc.UndoDepth;
+            var fullStroke = Doc.Strokes.FirstOrDefault(
+                s => s.HasPressure && s.Points.Count > 0 && s.Points[^1].P > 0.95f);
+            float pBefore = fullStroke?.Points[^1].P ?? -1f;
+            bool hasPressureBefore = fullStroke?.HasPressure ?? false;
+
+            SetPressureFromUi(false);
+            SettleFrames(300);
+            double aFullOff = Area(yFull), aHeavyOff = Area(yHeavy), aMouseOff = Area(yMouse);
+            Check("开关：关掉后满压那条立刻收成等宽（≈鼠标那条）",
+                  aMouseOff > 0 && aFullOff / aMouseOff >= 0.85 && aFullOff / aMouseOff <= 1.15,
+                  $"满压/鼠标 = {(aMouseOff > 0 ? aFullOff / aMouseOff : 0):F2}（原来是 {rFull:F2}）");
+            Check("开关：关掉后重压 / 满压一样宽",
+                  aHeavyOff > 0 && aFullOff / aHeavyOff >= 0.90 && aFullOff / aHeavyOff <= 1.10,
+                  $"满压/重压 = {(aHeavyOff > 0 ? aFullOff / aHeavyOff : 0):F2}");
+            Check("开关：文档一个字节没动（笔画数 / 撤销栈 / 压力值 / 压感标记）",
+                  Doc.Strokes.Count == strokesBefore && Doc.UndoDepth == undoBefore
+                  && MathF.Abs((fullStroke?.Points[^1].P ?? -1f) - pBefore) < 1e-6f
+                  && (fullStroke?.HasPressure ?? false) == hasPressureBefore,
+                  $"笔画 {strokesBefore} → {Doc.Strokes.Count}，撤销栈 {undoBefore} → {Doc.UndoDepth}，"
+                  + $"末点压力 {pBefore:F3}，HasPressure = {hasPressureBefore}");
+
+            // 关着的时候**新画**一笔：不该再走变宽通道（PressureInkDraws 不涨）
+            float yNew = cy + 240f;
+            int drawsOff0 = OverlayWindow.PressureInkDraws;
+            PenLine(yNew, 1024);
+            Check("开关：关着时新画的压感笔迹也不走变宽通道",
+                  OverlayWindow.PressureInkDraws == drawsOff0,
+                  $"变宽绘制 {drawsOff0} → {OverlayWindow.PressureInkDraws}");
+
+            SetPressureFromUi(true);
+            SettleFrames(300);
+            double aFullOn2 = Area(yFull);
+            Check("开关：打开后恢复变宽（和关之前一样粗）",
+                  aFull > 0 && aFullOn2 / aFull >= 0.90 && aFullOn2 / aFull <= 1.10,
+                  $"满压 {aFull:F0} → {aFullOn2:F0}");
+            Check("开关：打开后新笔画又走回变宽通道（对照上一条）",
+                  OverlayWindow.PressureInkDraws > drawsBefore,
+                  $"变宽绘制 {drawsBefore} → {OverlayWindow.PressureInkDraws}");
+
+            // 偏好应用（模拟"启动时读 ui.pressure"那一步）：写 "0" → 关；删掉 → 回到默认开
+            SetUiPref("pressure", "0");
+            ApplyPressurePrefForTest();
+            Check("偏好：ui.pressure = \"0\" → 应用后是关", !PressureWidth.Enabled,
+                  $"PressureOn = {PressureWidth.Enabled}");
+            SetUiPref("pressure", null);
+            ApplyPressurePrefForTest();
+            Check("偏好：删掉那一项 → 回到默认开（只写关过的那一份）", PressureWidth.Enabled,
+                  $"PressureOn = {PressureWidth.Enabled}");
         }
 
         // ================= ③ 命中与回退：按"这一笔自己的最粗处"算 =================
@@ -22864,6 +25961,107 @@ internal sealed class App : InkEngine.InkEngine
 
     // 分块测试的滚轮构造（和 WheelTest 一致：delta 在高 16 位）
     private static IntPtr Wheel(int delta) => new((long)(ushort)(short)delta << 16);
+
+    /// <summary>
+    /// **空闲预取自检**（2026-10-04，对应上游 Xournal++ 的页面预载 / Rnote 的视口余量预渲染）。
+    ///
+    /// 判据：滚到之前，视口外那一圈已经烘好——所以"再滚一格"这一帧**一块都不用光栅**
+    /// （`LastPatchCount == 0`）。还有关掉预取的对照（同一动作必须重画），
+    /// 自证这条测试有效，不是"永远通过"的摆设。
+    /// </summary>
+    private void PrefetchTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 分块空闲预取自检 ===");
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"    {name,-30}{(ok ? "PASS" : "FAIL")}  {detail}");
+        }
+
+        bool saved = CanvasTileCache.PrefetchEnabled;
+        CanvasTileCache.PrefetchEnabled = true;
+        try
+        {
+            // 垫内容：画布要超过一屏，滚得动；笔迹铺到 y≈3000。
+            Doc.Clear();
+            Doc.ClearHistory();
+            for (int k = 0; k < 8; k++)
+            {
+                var s = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = PenColor, Width = 3f * DpiScale,
+                };
+                float yy = _virtualY + 300f + k * 380f;
+                for (int j = 0; j < 24; j++)
+                    s.AddPoint(_virtualX + 320f + j * 90f, yy + MathF.Sin(j * 0.5f) * 60f, 0.5f, j * 8f);
+                Doc.AddStroke(s);
+            }
+            ViewOffsetY = 0f;
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+            RenderAll();
+            SettleFrames(300);
+
+            var w0 = _windows[0];
+
+            // 滚两格（正常同步光栅），停。
+            for (int k = 0; k < 2; k++) { HandleWheel(Wheel(-120)); RenderAll(); }
+            SettleFrames(120);
+
+            // ① 环里确实有欠着的块（不成立说明测试前提没了，别当成通过）
+            bool needBefore = w0.PrefetchNeeded();
+            Check("滚完停下：视口外一圈有欠着的块", needBefore, $"PrefetchNeeded={needBefore}");
+
+            // ② 跑预取拍直到没有活
+            int steps = 0, prefetched = 0;
+            while (w0.PrefetchNeeded() && steps < 400)
+            {
+                w0.PrefetchStep(this);
+                prefetched += w0.LastPrefetch;
+                steps++;
+            }
+            Check("预取把环烘完（拍数有界）", steps < 400, $"{steps} 拍、共 {prefetched} 块");
+            Check("预取确实烘了块（不是空转）", prefetched > 0, $"{prefetched} 块");
+
+            // ③ 再滚一格：新露出来的那一行应该已经热了，这一帧一块都不用光栅。
+            HandleWheel(Wheel(-120));
+            RenderAll();
+            Check("再滚一格：不需要重新光栅（预取命中）", w0.LastPatchCount == 0,
+                  $"本帧光栅 {w0.LastPatchCount} 块");
+
+            // ④ 对照：关掉预取，继续往下滚——**滚出预取环之后必须重画**（证明这条测试真的在测东西）。
+            CanvasTileCache.PrefetchEnabled = false;
+            int controlRaster = 0;
+            for (int k = 0; k < 8 && controlRaster == 0; k++)
+            {
+                HandleWheel(Wheel(-120));
+                RenderAll();
+                controlRaster += w0.LastPatchCount;
+            }
+            Check("对照（关预取）：滚出预取环后要重画", controlRaster > 0, $"共光栅 {controlRaster} 块");
+
+            // ⑤ 关预取后不再产生空闲拍
+            bool needOff = w0.PrefetchNeeded();
+            Check("关预取后不再产生空闲拍", !needOff, $"PrefetchNeeded={needOff}");
+
+            // ⑥ 预算把环算进去了：常驻 ≤ 预算（否则预取的块会被 Trim 淘汰）
+            Check("常驻块数含预取环后仍不超预算", w0.LastTileCount <= Math.Max(w0.LastTileBudget, 1),
+                  $"{w0.LastTileCount} 块 / 预算 {w0.LastTileBudget}");
+        }
+        finally
+        {
+            CanvasTileCache.PrefetchEnabled = saved;
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        Console.WriteLine();
+        Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：空闲预取把新露出的一行提前烘好、不超预算");
+        Console.WriteLine();
+        _quit = true;
+    }
 
     /// <summary>画一条粗横线并数它的墨像素。横线的**中心线**画在 y 上。</summary>
     private int DrawAndCountHorizontal(float x, float y, float len, float width)
@@ -23541,6 +26739,330 @@ internal sealed class App : InkEngine.InkEngine
               $"试了像素橡皮和整笔橡皮各一下，对象数 {Doc.Strokes.Count}，"
               + $"图 {(Doc.Strokes.Contains(pic) ? "还在" : "**被删掉了**")}");
 
+        Console.WriteLine($"  合计：通过 {pass}，失败 {fail}");
+        Console.WriteLine(fail == 0 ? "PASS" : "FAIL");
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 动态橡皮专项自检（--dynerasertest）。
+    ///
+    /// 8.3.4 的行为："**面积擦**的尺寸跟着移动速度走"（照隔壁 Inkeys「笔速橡皮」的口径起手）：
+    ///   ① 曲线：`factor = clamp(0.6 + 速度(px/ms)×0.6, 0.6, 2.5)`——慢≈0.72、中=1.2、快封顶 2.5；
+    ///   ② 后门 `--eraserfixed`（`DynamicEraser=false`）：多快都恒 ×1；
+    ///   ③ 真的用合成鼠标拖一遍（**走产品代码那条路**：指针 → `EraseRectAlongPath`）：
+    ///      快扫擦掉的墨必须明显多于慢扫（放大真的生效，不是只有那个函数对）；
+    ///   ④ 关掉动态后再快扫 → 擦除量回到基准档（不放大）；
+    ///   ⑤ **整笔擦不受影响**：它的"大小"是命中半径（碰到哪条删哪条），快扫也不许把半径
+    ///      外那条吃掉——半径随速度变 = "点到哪条全看手速"，不可预期。
+    ///
+    /// 抓屏看不见我们的墨（锁屏 / 远程 / 被别的窗口盖住）时，③④⑤ 明确跳过，曲线判据照样算数。
+    /// </summary>
+    private void DynEraserTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 动态橡皮自检（面积擦尺寸随速度；整笔擦不受影响）===");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-38} {detail}");
+        }
+
+        // --- ① 曲线（下限 0.7 / 死区到 0.8 / 斜坡 / 封顶 2.5）--------------------
+        bool savedDyn = DynamicEraserForTest;
+        DynamicEraserForTest = true;
+        float fDead1 = EraserTargetFactorForSpeed(0.05f);   // 死区里头
+        float fDead2 = EraserTargetFactorForSpeed(0.70f);   // 回差带（0.6~0.8）
+        float fMid = EraserTargetFactorForSpeed(1.5f);      // 斜坡中段
+        float fFast = EraserTargetFactorForSpeed(5.0f);     // 封顶
+        Check("曲线：静止/慢=基准 1.0（死区到 0.8）/ 中 1.5→1.7 / 快封顶 2.5",
+              MathF.Abs(fDead1 - 1f) < 0.001f && MathF.Abs(fDead2 - 1f) < 0.001f
+              && MathF.Abs(fMid - 1.7f) < 0.02f && MathF.Abs(fFast - 2.5f) < 0.001f,
+              $"0.05 → ×{fDead1:F2}、0.70 → ×{fDead2:F2}、1.5 → ×{fMid:F2}、5.0 → ×{fFast:F2}");
+
+        // --- ② 后门：--eraserfixed 关掉动态 → 系数恒 1 -------------------------
+        DynamicEraserForTest = false;
+        float fFixed = DynamicEraserFactorForTest(5.0f);
+        Check("后门（--eraserfixed）：多快都恒 ×1.0",
+              MathF.Abs(fFixed - 1f) < 0.001f, $"5.0px/ms → ×{fFixed:F2}");
+        DynamicEraserForTest = true;
+
+        // --- ②b 慢速/常规速度不忽大忽小（用户两轮反馈）---------------------------
+        // 手本来就是抖的：速度在 0.05~0.55 px/ms 之间来回（**全落在死区 0.8 以下**）。
+        // 合格的样子：系数**单调**朝下限走、绝不回升，而且每步只挪一丁点。
+        ResetDynamicEraserForTest();
+        float prevF = 1f, worstStep = 0f, lastF = 1f;
+        bool rose = false;
+        for (int i = 0; i < 40; i++)
+        {
+            float v = (i % 3 == 0) ? 0.05f : (i % 3 == 1 ? 0.55f : 0.30f);
+            lastF = DynamicEraserAdvanceForTest(v, 8.0);
+            if (lastF > prevF + 0.0005f) rose = true;
+            worstStep = MathF.Max(worstStep, MathF.Abs(lastF - prevF));
+            prevF = lastF;
+        }
+        Check("点击后按住不动/慢速：尺寸停在基准 1.0、一点不缩（8.3.8）",
+              !rose && MathF.Abs(lastF - 1f) < 0.001f && worstStep <= 0.001f,
+              $"40 步后 ×{lastF:F3}（基准 1.00），单步最大变化 {worstStep:F3}（按住不动时手指的微抖也算速度，0 变化）");
+
+        // --- ②c 速度窗口：逐次估法很抖，窗口算出来要稳 ---------------------------
+        // 交替喂 (4px, 3ms)=1.33 与 (2px, 9ms)=0.22——真值始终 0.5 px/ms。
+        // 窗口（100ms / 40px 先到先算）出来的速度必须**几乎不动**。
+        ResetDynamicEraserForTest();
+        float wMin = float.MaxValue, wMax = 0f, wLast = 0f;
+        for (int i = 0; i < 90; i++)
+        {
+            bool big = (i % 2 == 0);
+            wLast = DynamicEraserFeedForTest(big ? 4f : 2f, big ? 3.0 : 9.0);
+            if (i >= 24)                                  // 头一个窗口攒满之前不算
+            {
+                wMin = MathF.Min(wMin, wLast);
+                wMax = MathF.Max(wMax, wLast);
+            }
+        }
+        Check("速度窗口：逐次 dist÷dt 在 1.33/0.22 之间跳，窗口稳在真值 0.5",
+              MathF.Abs(wMax - wMin) < 0.05f && MathF.Abs(wLast - 0.5f) < 0.06f,
+              $"窗口速度 {wMin:F3}~{wMax:F3}（真值 0.50）、最后 {wLast:F3}；"
+              + $"逐次估法会跳在 {4f / 3f:F2} 与 {2f / 9f:F2} 之间");
+
+        // --- ②d 真拖那三条的"逻辑版"（不依赖鼠标/抓屏，跑哪儿都验）--------------
+        ResetDynamicEraserForTest();
+        float slowFactor = 1f, fastFactor = 1f;
+        for (int i = 0; i < 40; i++)                       // 慢扫：(20px, 50ms) → 0.4 px/ms，跑 2 秒
+        {
+            float v = DynamicEraserFeedForTest(20f, 50.0);
+            slowFactor = DynamicEraserAdvanceForTest(v, 50.0);
+        }
+        ResetDynamicEraserForTest();
+        for (int i = 0; i < 20; i++)                       // 快扫：(43px, 8ms) → 5.4 px/ms
+        {
+            float v = DynamicEraserFeedForTest(43f, 8.0);
+            fastFactor = DynamicEraserAdvanceForTest(v, 8.0);
+        }
+        Check("慢扫停在 ×1.0（基准）、快扫明显更大（真拖那三条的逻辑版）",
+              MathF.Abs(slowFactor - 1f) < 0.001f && fastFactor > slowFactor * 1.5f,
+              $"慢扫 ×{slowFactor:F3}（应 1.00 = 基准）、快扫 ×{fastFactor:F3}");
+
+        // --- ②e 停住 → 缓释（用户报的"停住不回落、再轻动一下猛变小"）----------------
+        ResetDynamicEraserForTest();
+        PixelEraseDragging = true;                     // 模拟"按住擦"
+        float peak = 1f;
+        for (int i = 0; i < 30; i++)                   // 快扫：(43px, 8ms) → 5.4 px/ms
+        {
+            float v = DynamicEraserFeedForTest(43f, 8.0);
+            peak = DynamicEraserAdvanceForTest(v, 8.0);
+        }
+        float at100 = peak, at600 = peak, decayF = peak;
+        bool decayRose = false;
+        for (int k = 1; k <= 36; k++)                  // 停住 1.8 秒（每次推进 50ms）
+        {
+            float f = DynamicEraserIdleForTest(50f);
+            if (f > decayF + 0.0005f) decayRose = true;   // 空闲里**不许涨**
+            decayF = f;
+            if (k == 2) at100 = f;                     // 100ms：保持期内，该纹丝不动
+            if (k == 12) at600 = f;                    // 600ms：该开始收了
+        }
+        Check("停住：先保持、之后顺着回落、1.8s 回到基准（不回升）",
+              MathF.Abs(at100 - peak) < 0.002f && at600 < peak - 0.1f
+              && !decayRose && MathF.Abs(decayF - 1f) < 0.08f,
+              $"峰值 ×{peak:F2} → 100ms ×{at100:F2}（该不动）、600ms ×{at600:F2}、1.8s ×{decayF:F2}（该 ≈1.00）");
+
+        // 回落途中"轻动一下"：不许向上跳（用户原话："接着鼠标稍微再动一下…"）
+        float before = decayF;
+        float lightV = DynamicEraserFeedForTest(3f, 40.0);   // 轻动：3px / 40ms ≈ 0.075 px/ms
+        float after = DynamicEraserAdvanceForTest(lightV, 40.0);
+        Check("回落途中轻动一下：不许向上跳变",
+              after <= before + 0.002f,
+              $"轻动前 ×{before:F3} → 轻动后 ×{after:F3}");
+        PixelEraseDragging = false;
+
+        // --- ③ 看的框 = 擦的范围（同一份尺寸：拖动中跟速度、悬停回基准）----------
+        DynamicEraserFactorForTest(5f);                 // → ×2.5
+        PixelEraseDragging = true;
+        float growW = PixelEraserCursorHalfWidthPx, growH = PixelEraserCursorHalfHeightPx;
+        bool grows = MathF.Abs(growW - PixelEraserHalfWidthPx * 2.5f) < 0.01f
+                  && MathF.Abs(growH - PixelEraserHalfHeightPx * 2.5f) < 0.01f;
+        PixelEraseDragging = false;
+        bool idleBase = MathF.Abs(PixelEraserCursorHalfWidthPx - PixelEraserHalfWidthPx) < 0.01f
+                     && MathF.Abs(PixelEraserCursorHalfHeightPx - PixelEraserHalfHeightPx) < 0.01f;
+        Check("看的框 = 擦的范围：拖动中跟速度 ×2.5、悬停回基准",
+              grows && idleBase,
+              $"拖动中半宽 {growW:F0}px（基准 {PixelEraserHalfWidthPx:F0}、×2.5 应为 "
+              + $"{PixelEraserHalfWidthPx * 2.5f:F0}），悬停 {PixelEraserCursorHalfWidthPx:F0}px");
+
+        // --- ③④⑤ 真机拖动（合成鼠标，走产品的指针路径）------------------------
+        float cx = _virtualX + _virtualW * 0.5f;
+        float cy = _virtualY + _virtualH * 0.5f;
+
+        float savedW = PixelEraserWidthLogical;
+        var savedTool = Tool;
+        // 用小块：默认那 93×150 逻辑像素（物理更大）会盖满整张测试图，量不出比例。
+        PixelEraserWidthLogical = 12f;
+        float hh0 = PixelEraserHalfHeightPx;          // 基准半高（物理像素）
+        float spacing = hh0 * 1.6f;                   // 行距
+        const int lines = 10;
+        float blockH = (lines - 1) * spacing;
+        float lineW = spacing * 1.5f;                 // 行够粗 → 竖着连成一片
+        float sweepTop = cy - blockH * 0.5f - hh0 * 6f;
+        float sweepBot = cy + blockH * 0.5f + hh0 * 6f;
+        int boxX = (int)(cx - 170), boxW = 340;
+        int boxY = (int)(cy - blockH * 0.5f - hh0 * 9f);
+        int boxH = (int)(blockH + hh0 * 18f);
+
+        void PaintBlock()
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            for (int k = 0; k < lines; k++)
+            {
+                var s = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = lineW };
+                float y = cy - blockH * 0.5f + k * spacing;
+                for (int i = 0; i <= 40; i++) s.AddPoint(cx - 240 + i * 12, y, 0.9f, i);
+                Doc.AddStroke(s);
+            }
+            Doc.InvalidateAll();
+            SettleFrames(450);
+        }
+
+        // 数墨之前把指针挪出统计框（落点反馈那个矩形也是我们画的，别让它进品红计数）。
+        int Ink()
+        {
+            SendMouse((int)(cx + 320), boxY - 120, 0);
+            SettleFrames(250);
+            return ScreenProbe.CountMagenta(boxX, boxY, boxW, boxH);
+        }
+
+        void Sweep(bool fast)
+        {
+            SendMouse((int)cx, (int)sweepTop, 0);
+            SettleFrames(80);
+            SendMouse((int)cx, (int)sweepTop, Native.MOUSEEVENTF_LEFTDOWN);
+            SettleFrames(fast ? 30 : 80);
+            int n = fast ? 12 : 26;
+            for (int i = 1; i <= n; i++)
+            {
+                SendMouse((int)cx, (int)(sweepTop + (sweepBot - sweepTop) * i / n), 0);
+                // 慢扫：每步等一等（速度才真的低）。快扫也留 8ms——不是"瞬间一步"而是
+                // "快扫"：新参数按时间常数平滑，尺寸要几帧才长起来（那才是真实手感）。
+                SettleFrames(fast ? 8 : 50);
+            }
+            SendMouse((int)cx, (int)sweepBot, Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(450);
+        }
+
+        bool canDrag = !SkipIfNoSyntheticInput("合成鼠标拖动那三条");
+        if (canDrag)
+        {
+            Tool = Tool.PixelEraser;
+            PaintBlock();
+            int ink0 = Ink();
+            if (ink0 < 500)
+            {
+                Console.WriteLine($"  环境：抓屏看不到我们的墨（拍到 {ink0} 像素）"
+                                + " → SKIP: ③④⑤ 跳过");
+            }
+            else
+            {
+                Sweep(fast: false);
+                int slowErased = ink0 - Ink();
+                Check("慢扫（基准档）真的擦掉一片", slowErased > 300,
+                      $"擦掉 {slowErased} 像素（先画了 {ink0}）");
+
+                PaintBlock();
+                Sweep(fast: true);
+                int fastErased = ink0 - Ink();
+                Check("快扫擦掉的明显多于慢扫（速度→尺寸 真的生效）",
+                      fastErased > slowErased * 1.2f,
+                      $"快扫 {fastErased} vs 慢扫 {slowErased} 像素"
+                      + $"（×{fastErased / (float)Math.Max(1, slowErased):F2}）");
+
+                PaintBlock();
+                DynamicEraserForTest = false;
+                Sweep(fast: true);
+                DynamicEraserForTest = true;
+                int fixedErased = ink0 - Ink();
+                Check("后门：关掉动态后快扫回到基准档",
+                      fixedErased < fastErased * 0.85f && fixedErased > slowErased * 0.6f,
+                      $"关掉动态快扫 {fixedErased}（动态快扫 {fastErased}、慢扫 {slowErased}）");
+
+                // --- ⑤ 整笔擦不受速度影响 ------------------------------------
+                Doc.Clear();
+                Doc.ClearHistory();
+                Tool = Tool.Eraser;
+                float r = EraserRadius;
+                float dFar = r * 2f + 10f;            // 动态若误伤到这里，×2.5 的半径会够着它
+                var near = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = 8f };
+                for (int i = 0; i <= 40; i++) near.AddPoint(cx - 240 + i * 12, cy, 0.9f, i);
+                var far = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = 8f };
+                for (int i = 0; i <= 40; i++) far.AddPoint(cx - dFar, cy - 150 + i * 7.5f, 0.9f, i);
+                Doc.AddStroke(near);
+                Doc.AddStroke(far);
+                Doc.InvalidateAll();
+                SettleFrames(350);
+
+                SendMouse((int)cx, (int)(cy - 150), 0);
+                SettleFrames(60);
+                SendMouse((int)cx, (int)(cy - 150), Native.MOUSEEVENTF_LEFTDOWN);
+                SendMouse((int)cx, (int)(cy + 150), 0);   // 快扫：一步跨 300 像素
+                SendMouse((int)cx, (int)(cy + 150), Native.MOUSEEVENTF_LEFTUP);
+                SettleFrames(350);
+
+                Check("整笔擦：快扫也不许碰半径外那条（半径不随速度变）",
+                      Doc.Strokes.Contains(far) && !Doc.Strokes.Contains(near),
+                      $"半径 {r:F0}px：近的（过路径）"
+                      + $"{(Doc.Strokes.Contains(near) ? "还在 ✗" : "被擦 ✓")}，"
+                      + $"远的（{dFar:F0}px 外）{(Doc.Strokes.Contains(far) ? "没动 ✓" : "**被吃了 ✗**")}");
+
+                // --- ⑥ 严丝合缝：框有多大，墨就擦到哪儿（系数钉成 2.5，不受手速影响）--
+                // 判据用"墨的可见边缘到框边的缝"：0 附近 = 正好触到框；负 = 擦过头了；
+                // 明显正 = 框和擦对不上（"看见没擦到、其实擦掉了"或反过来）。
+                Doc.Clear();
+                Doc.ClearHistory();
+                Tool = Tool.PixelEraser;
+                const float penW2 = 16f;
+                float reach2 = penW2 * 0.5f;              // 半笔宽：墨那条"身体"的半径
+                float fPin = 2.5f;
+                EraserFactorOverrideForTest = fPin;
+                var oneLine = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = penW2 };
+                for (int i = 0; i <= 60; i++) oneLine.AddPoint(cx - 300 + i * 10, cy, 0.9f, i);
+                Doc.AddStroke(oneLine);
+                Doc.InvalidateAll();
+                SettleFrames(350);
+
+                SendMouse((int)cx, (int)(cy - 200), 0);
+                SettleFrames(80);
+                SendMouse((int)cx, (int)(cy - 200), Native.MOUSEEVENTF_LEFTDOWN);
+                SettleFrames(60);
+                SendMouse((int)cx, (int)(cy + 200), 0);   // 扫过这条线（框按 ×2.5 算）
+                SendMouse((int)cx, (int)(cy + 200), Native.MOUSEEVENTF_LEFTUP);
+                SettleFrames(350);
+                EraserFactorOverrideForTest = 0f;
+
+                float halfFrame = PixelEraserHalfWidthPx * fPin;
+                // 左段的右端 = 所有段里**最小**的 MaxX；右段的左端 = 所有段里**最大**的 MinX。
+                float leftEnd2 = float.MaxValue, rightStart2 = float.MinValue;
+                foreach (var s in Doc.Strokes)
+                {
+                    leftEnd2 = MathF.Min(leftEnd2, s.Bounds.MaxX);
+                    rightStart2 = MathF.Max(rightStart2, s.Bounds.MinX);
+                }
+                float gapL = (cx - halfFrame) - (leftEnd2 + reach2);   // 墨够到框边了吗
+                float gapR = (rightStart2 - reach2) - (cx + halfFrame);
+                Check("严丝合缝：框有多大，墨就擦到框边（缝 0~4 像素，不擦过头）",
+                      Doc.Strokes.Count == 2 && !Doc.Strokes.Contains(oneLine)
+                      && gapL >= -1f && gapL <= 4f && gapR >= -1f && gapR <= 4f,
+                      $"框半宽 {halfFrame:F1}px（基准 {PixelEraserHalfWidthPx:F0}×2.5）→ "
+                      + $"左缝 {gapL:F1}px / 右缝 {gapR:F1}px（0 = 正好触到，负 = 擦过头）"
+                      + $"，对象 {Doc.Strokes.Count} 条");
+            }
+        }
+
+        PixelEraserWidthLogical = savedW;
+        Tool = savedTool;
+        DynamicEraserForTest = savedDyn;
+        Doc.Clear();
         Console.WriteLine($"  合计：通过 {pass}，失败 {fail}");
         Console.WriteLine(fail == 0 ? "PASS" : "FAIL");
         _quit = true;
@@ -25367,7 +28889,7 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine();
         Console.WriteLine("=== 真笔延时实测 ===");
         Console.WriteLine($"  呈现方式：{PresentModeName()}，交换链后缓冲 {OverlayWindow.BufferCount}");
-        Console.WriteLine($"  请用手写笔画线，持续 {seconds:F0} 秒（或按 Ctrl+Alt+X 提前结束）……");
+        Console.WriteLine($"  请用手写笔画线，持续 {seconds:F0} 秒（或按 Ctrl+Alt+Shift+X 提前结束）……");
         Console.WriteLine();
 
         Latency.Scenario = "真笔手写";
@@ -25423,17 +28945,9 @@ internal sealed class App : InkEngine.InkEngine
         Console.WriteLine($"  压感：{PenPressurePoints}/{PenTotalPoints} 个点带有效压感；"
                           + $"设备报 pressure 位={Yes(PenSawPressureMask)}，"
                           + $"倾角位={Yes(PenSawTiltMask)}，旋转位={Yes(PenSawRotationMask)}");
-        Console.WriteLine($"  预测：{(PredictEnabled ? $"开（{PredictHorizonMs:F0} ms）" : "关")}；"
-                          + $"湿墨轨迹：{(OverlayWindow.InkTrailEnabled ? "开" : "关")}"
+        // [删除 2026-10-05] 预测统计：随老预测系统移除。
+        Console.WriteLine($"  湿墨轨迹：{(OverlayWindow.InkTrailEnabled ? "开" : "关")}"
                           + $"（{OverlayWindow.InkTrailNote}）");
-        if (PredictEnabled)
-            Console.WriteLine("  预测尾：鼠标/触摸那条路开着——正在写的那一笔末端会比真实采样点"
-                              + $"超前一点（上限 {PredictLeadCap:F0} px）；嫌超前就 --predictlead 调小");
-        if (PredLeadCount > 0)
-            Console.WriteLine($"  预测实际把墨往前带：平均 {PredLeadSum / PredLeadCount:F2} px，"
-                              + $"最大 {PredLeadMax:F2} px（上限 {PredictLeadCap:F0} px，共 {PredLeadCount} 次）");
-        else if (PredictEnabled)
-            Console.WriteLine("  预测实际把墨往前带：一次都没有触发（速度太低或全是急转/断笔）");
 
         // 书写期间的分配与 GC：低配机排查"偶发卡顿"的依据。
         // 每笔分配越大越容易触发回收；**第 2 代回收出现在书写期间 = 那一下就卡了几十毫秒**。

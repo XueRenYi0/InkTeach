@@ -127,6 +127,30 @@ public partial class InkEngine
 
         AutoSaveNow();
     }
+
+    // ---- 历史清理（墨迹 B）：启动后**首个空闲帧**做一次 ----------------------
+    //
+    // 为什么不在启动那一刻做：老师按下图标到窗口出现之间的时间要尽量短；
+    // 扫我们自己的两个小目录虽然是毫秒级，也不值得占在"开机"那一下。
+    // 为什么挂在 WM_TIMER（250ms 那口钟）上：它本来就在滴答，借一次就够了。
+    private bool _historySwept = true;          // 自检/无窗口模式默认"已扫过" = 永远不扫
+    private double _historySweepAtMs = double.MaxValue;
+
+    /// <summary>自检用：直接按给定保留期扫一次（0 = 永久，一份都不删）。</summary>
+    internal (int Files, int Dirs) SweepHistoryForTest(int days)
+        => days <= 0 ? (0, 0) : InkHistory.Sweep(days);
+
+    private void MaybeSweepHistory()
+    {
+        if (_historySwept || NowMs < _historySweepAtMs) return;
+        _historySwept = true;
+        int days = InkHistory.RetentionDays(GetUiPref("historyDays"));
+        if (days <= 0) return;                  // 永久：一份都不删
+        var (files, dirs) = InkHistory.Sweep(days);
+        if (files > 0 || dirs > 0)
+            Console.WriteLine($"[墨迹] 历史清理（保留 {days} 天）：删了 {files} 个文件、{dirs} 个空目录");
+    }
+
     internal Stroke ActiveStroke;
     internal Tool Tool = Tool.Pen;
     /// <summary>Tool sizes are authored in logical pixels and scaled by the
@@ -175,21 +199,103 @@ public partial class InkEngine
     internal float EraserRadius => EraserRadiusLogical * DpiScale;
     private float _lastEraseX, _lastEraseY;
 
-    // ---- 动态橡皮（8.3.4）------------------------------------------------
+    // ---- 动态橡皮（8.3.4 起；8.3.6 换形状；8.3.7 定窗口与门槛）--------------
     //
-    // 面积擦的尺寸跟着**移动速度**走：慢 = 基准（滑条值）、快 = 更大（最多 ×2.5）。
-    // 照 Inkeys 的"笔速橡皮"口径起手（他们那条曲线本来就是**给触屏设备**的：
-    // `speed≤20 → max(25, speed×2.33+13.33)`、`speed>20 → min(200, 3.0×speed)`），
-    // 这里换成"×系数"：`factor = clamp(0.6 + 速度(px/ms)×0.6, 0.6, 2.5)`——真机再调这一个常数。
+    // 面积擦的尺寸跟着**移动速度**走：**静止/慢 = 你调的那个基准（不缩）**、快 = 最多 2.5 倍。
+    // 形状照隔壁 Inkeys「笔速橡皮」定（他们那条本来就是给触屏设备的）：
+    //   他们：`speed≤20 → max(25, speed×2.33+13.33)`、`speed>20 → min(200, 3.0×speed)`
+    //         → 有**下限 25px**（慢到底不再小）、有**上限 200px**、中间一段线性斜坡；
+    //   我们：`factor = clamp(1.0 + (v − 0.80) × 1.0, 1.0, 2.5)`（v 单位物理像素/毫秒）
+    //         → 0.80 以下恒 **1.0（基准，一点不缩）**、以上线性涨、2.3 到顶。
+    //         **8.3.8**：下限从 0.7 提到 1.0（用户："点击一下不动的时候，橡皮会缩小吗？我调的
+    //         初始值应该就是默认大小，点击以后不缩小"）——按住不动时手指/鼠标的**微小抖动**
+    //         也会被算成"速度"，于是慢慢滑到 0.7 倍。现在**静止/慢速就是基准**，不缩。
+    //
+    // 8.3.4 的两个毛病（用户报"慢速下忽大忽小"）8.3.6 都治了：
+    //   ① 速度原来用"这一次消息的 dist ÷ dt"——慢速时一次只走一两像素、除以很小的 dt，
+    //      估出来的速度天然抖 → 现在**窗口累计**（攒够 6 像素或 30ms 才算一次）；
+    //   ② 平滑原来 α=0.35（≈25ms 时间常数，太灵）→ 现在按**时间常数**平滑（涨 120ms /
+    //      收 450ms + 最少一步 0.01）——这就是 Inkeys 那个"每步只走差距的 1/50、至少 0.1px"
+    //      的同源做法（他们按消息数算、我们按时间算，帧率无关）。
+    //   另加**回差**（0.8 涨 / 0.6 回）：速度在门槛附近晃时尺寸不会来回切。
+    //
+    // **8.3.7（用户报"常规速度下还是忽大忽小"）**：问题不在曲线的数，而是：
+    //   ① 窗口按**像素**攒（"攒够 6px"）——常规速度下几毫秒就攒满，等于没有窗口；
+    //   ② 门槛 0.35 **比常规擦字速度还低**——等于"一擦就变尺寸"。
+    //   现在：窗口**按时间攒满 100ms**、门槛提到 **0.80**（常规速度落在死区里，尺寸纹丝不动）、
+    //   平滑再放慢（涨 220 / 收 450），并加 `--eraserhud` 读数——门槛按真机读数定，不靠猜。
     //
     // ⚠ **只作用于面积擦**。"整笔擦"的"大小"是**命中半径**（碰到哪条删哪条），
     //   让半径随速度变 = "点到哪条全看手速"，不可预期，所以整笔擦恒定。
     // ✅ **不分设备**：笔 / 鼠标 / 手指走的是同一段擦除代码，所以手指在触摸屏上抹面积擦照样有。
-    // 后门：`--eraserfixed` 关掉动态（不进界面；真到"很多老师觉得别扭"再考虑做滑条档位点）。
+    // 后门：`--eraserfixed` 关掉动态（不进界面）。
     internal bool DynamicEraser = true;
-    private float _eraseSpeedEma;        // 速度的指数移动平均（物理像素/毫秒）
+
+    /// <summary>最慢/静止时的系数下限 = **1.0（就是基准）**：你调的那个大小就是默认大小，
+    /// 按住不动、慢慢抹都不缩（8.3.8 从 0.7 提上来；Inkeys 那边是个 25px 地板，但我们的
+    /// 基准是用户自己调的滑条，"静止 = 你调的值"才符合直觉）。</summary>
+    internal const float EraserFactorMin = 1.0f;
+    /// <summary>最快时的系数上限（基准的 2.5 倍；Inkeys 的对应物是 200px 封顶）。</summary>
+    internal const float EraserFactorMax = 2.5f;
+    /// <summary>开始涨的门槛（物理像素/毫秒）——**必须高于"常规抹"的速度**（8.3.7 实测口径：
+    /// 常规擦字 ≈0.4~0.7、刻意快扫 ≥1.5）。门槛以下恒下限 = "常规速度永远同一尺寸"。</summary>
+    internal const float EraserSpeedKnee = 0.8f;
+    /// <summary>回差下沿：掉到这以下才回下限（0.6~0.8 之间保持，防门槛附近来回切）。</summary>
+    internal const float EraserSpeedBack = 0.6f;
+    /// <summary>斜坡斜率：`factor = 下限 + (v − 门槛) × 斜率`（0.8 → 2.3 px/ms 之间涨到顶）。</summary>
+    internal const float EraserSpeedSlope = 1.0f;
+    /// <summary>到顶的速度（px/ms）：`门槛 + (上限 − 下限) ÷ 斜率`。给读数/文档用。</summary>
+    internal static float EraserSpeedTop => EraserSpeedKnee + (EraserFactorMax - EraserFactorMin) / EraserSpeedSlope;
+    /// <summary>平滑时间常数（毫秒）：涨得比收得快一点（跟手），但都远慢于手抖的频率。</summary>
+    internal const float EraserGrowTauMs = 220f, EraserShrinkTauMs = 450f;
+    /// <summary>每步最少挪动的系数（Inkeys 那 0.1px 保底步长的同源做法，保证收得回来）。</summary>
+    private const float EraserMinStep = 0.01f;
+    /// <summary>
+    /// 速度通道（抄 MyPaint 的 **Fine/Gross Speed**：fine 跟手、gross "changes very slowly"）。
+    /// 目标速度取两者的**较大值**：快扫时 fine 立刻起作用；慢下来时 gross 还停在旧速度上，
+    /// **尺寸不会一慢就塌**——这就是"停住再轻动一下突然变小"的一半解法（另一半是下面的缓释）。
+    /// 每个通道"攒够时间或距离就结算一次"。
+    /// </summary>
+    internal const float EraserFineWindowMs = 40f, EraserFineWindowPx = 12f;
+    internal const float EraserGrossWindowMs = 350f, EraserGrossWindowPx = 120f;
+    /// <summary>指针停住之后先**保持**多久才开始缓释（免得扫到一半停一下、尺寸就缩）。</summary>
+    internal const float EraserIdleHoldMs = 150f;
+    /// <summary>"正在减速"时的保持时间（更短 → 提前开始收）。判据 = `fine &lt; gross × 0.7`：
+    /// 两个滤波量的差就是**加速度的符号**，噪声被压了两遍——用户想要"加速度"的稳定代理。</summary>
+    internal const float EraserDecelHoldMs = 60f;
+
+    private float _eraseSpeedEma;        // 当前用的速度 = max(fine, gross)（物理像素/毫秒）
     private double _eraseLastMs;         // 上一次速度采样时刻
+    private float _eraseFine, _eraseGross;                       // 两条速度通道（px/ms）
+    private float _eraseFineDist, _eraseFineMs;                  // fine 窗口累计（40ms / 12px）
+    private float _eraseGrossDist, _eraseGrossMs;                // gross 窗口累计（350ms / 120px）
     private float _eraseDynFactor = 1f;  // 当前尺寸系数（落笔 = 1）
+    private float _eraseTarget = 1f;     // 平滑的目标（回差状态也存这儿）
+    private double _eraseHoldBaseMs;     // 上一次**移动**的时刻（缓释的保持期从这里算）
+    private bool _eraseDecaying;         // 已经进入"停住缓释"阶段（每帧推；一动就退出）
+    private float _eraseTestIdle;        // 自检用：累计的空闲时间
+
+    /// <summary>橡皮诊断浮层（`--eraserhud`）：实时显示 速度 / 目标 / 当前系数 / 尺寸。
+    /// 它是**调参工具**：真机上擦几下，读出"常规速度是多少 px/ms"，门槛就按那个数定。</summary>
+    internal bool EraserHud;
+    internal string EraserHudText = "";
+    private double _eraserHudNextMs;
+
+    /// <summary>
+    /// 面积擦**正在拖**吗。框只在拖动中跟着速度变；**悬停时显示基准框**——因为落笔第一下
+    /// 用的就是基准（速度还没有），所以"悬停看见的 = 按下去第一下擦掉的"，所见即所得。
+    /// </summary>
+    internal bool PixelEraseDragging;
+
+    /// <summary>
+    /// 落点框 = **真正会被擦掉的那一块**（物理像素半宽/半高）。擦除（`EraseRectAlongPath`）
+    /// 和 Overlay 画的那个框读的是**同一份**——不然就会出现"看见的框"和"擦掉的范围"对不上。
+    /// 拖动中 = 基准 × 速度系数；没在拖 = 基准。
+    /// </summary>
+    internal float PixelEraserCursorHalfWidthPx
+        => PixelEraserHalfWidthPx * (PixelEraseDragging ? _eraseDynFactor : 1f);
+    internal float PixelEraserCursorHalfHeightPx
+        => PixelEraserHalfHeightPx * (PixelEraseDragging ? _eraseDynFactor : 1f);
 
     /// <summary>
     /// 像素橡皮的落点尺寸（逻辑像素）：**竖着的黄金比例矩形**，高 : 宽 = 1.618。
@@ -346,7 +452,11 @@ public partial class InkEngine
     }
 
     /// <summary>引擎入口：进入截图取景（面板上点模式段走它，见 IEngineCommands.EnterCapture）。</summary>
-    internal void BeginCaptureModeFromUi() => BeginCaptureMode();
+    internal void BeginCaptureModeFromUi()
+    {
+        ExitReplayForEdit("截图");
+        BeginCaptureMode();
+    }
 
     /// <summary>Pen width presets, in logical pixels. Cycled with Ctrl+Alt+W
     /// until there is a proper on-screen control for it.
@@ -743,15 +853,11 @@ public partial class InkEngine
     /// 为什么非有不可（和 `DwellAssist.DeadZoneLogical` 同一个道理，但后果更凶）：
     /// 笔尖"静止"按在屏幕上时，驱动仍在上报亚像素抖动。没有死区的话，那段抖动会被当成
     /// "用户在拖"——**直线最惨**：笔尖就停在"跟着笔尖走的那一头"，抖 1 个画布单位就够
-    /// 把线压成零长度，`SnapToAxis` 一看没有方向 → 吸成水平 → **一条很短的小横线**
+    /// 把线压成零长度（`SnapEndPoint` 对零长度原样返回）→ **整条线只剩一个点**
     /// （用户 2026-09-24 报的"竖着画的直线变成很短的一个横直线"；`--dwelltest` H6 钉住：
     /// 修之前那一档漂移 299.51 画布单位，整条 300 的线只剩一个点）。
     /// </summary>
     internal const float DwellDragSlopLogical = 5f;
-
-    /// <summary>停顿成型定型时的**角度吸附容差**（度）：照 InkClass 的 `LineAssistSnapDeg = 4`
-    /// （画坐标轴 / 分割线刚需，见 计划-图形工具.md §42.1）。</summary>
-    internal const float DwellSnapDeg = 4f;
 
     /// <summary>
     /// 操作条那一块现在画成**收起来那一颗圆钮**吗（而不是一整条九格）。
@@ -1165,6 +1271,12 @@ public partial class InkEngine
     internal float MqMinX, MqMinY, MqMaxX, MqMaxY;
     internal bool PassThrough;
     /// <summary>
+    /// 进穿透前的白板状态——"穿透开关"退出时按它恢复（见 <see cref="SetPassThrough"/> 的
+    /// `restoreBoard`；用户 2026-09-30 拍板："白板开还是开、关还是关"）。
+    /// 换工具退出穿透**不**恢复（那是"我就要写"，见 SwitchTool 与 SetPassThrough 的注释）。
+    /// </summary>
+    private bool _boardBeforePassThrough;
+    /// <summary>
     /// Windows only honours click-through for a *layered* window, so the
     /// default has to include WS_EX_LAYERED. The other modes are kept as
     /// controls for the automated pass-through test.
@@ -1200,43 +1312,14 @@ public partial class InkEngine
     /// 快写时轨迹被静默抽稀（见 Input/PointerInput.cs）。
     /// </summary>
     private readonly PointerSampleBuffer _ptr = new();
-    private readonly InkPredictor _predictor = new();
-    private readonly PredictedPoint[] _predBuf = new PredictedPoint[8];
     private readonly Vector2[] _trailReal = new Vector2[PenSampleBuffer.MaxSamples];
     /// <summary>湿墨**逐点半径**（和 _trailReal 一一对应）：有压感时湿墨也得有粗有细，
     /// 否则抬手那一下粗细会跳（见 <see cref="TrailRadius"/>）。</summary>
     private readonly float[] _trailRadii = new float[PenSampleBuffer.MaxSamples];
-    private readonly Vector2[] _trailPred = new Vector2[8];
-    /// <summary>渲染尾的复用缓冲（画布坐标）。每帧清空重填，不分配。</summary>
-    private readonly List<Vector2> _tailScratch = new(8);
 
-    /// <summary>
-    /// 预测开关。**默认关**（2026-09-29 用户拍板）。
-    ///
-    /// 关它的原因（都是实测的，别再"顺手打开"）：
-    ///   · 真笔那一条：DWM **不把我们喂的预测点画出来**（用 `--predictms 200 --predictlead 400`
-    ///     当探针验过：鼠标那条会窜出去，手写板那条纹丝不动）——所以对笔，它一直是白喂；
-    ///   · 鼠标/触摸那一条：预测段由我们画（见 <see cref="UpdateRenderTail"/>），
-    ///     而输入是突发的，尾巴会**一出一进**，屏幕上是末端"突突突往外跳"（用户原话）；
-    ///   · 收益又測不出来：同一支笔、开与关，"手感分不出来"。
-    ///
-    /// 配置：`--predict` 打开（做对照用）；开了之后 `--predictms N` 调地平线、
-    /// `--predictlead N` 调前带量上限。
-    /// </summary>
-    internal bool PredictEnabled;
-    /// <summary>
-    /// 正在写的这一笔**已经交给系统合成器画**了吗（<see cref="FeedInkTrail"/> 真的喂了点）。
-    /// 喂过就不再加自己的渲染尾——两边一起补会在笔尖前面重复画出一小截。
-    /// </summary>
-    internal bool ActiveStrokeOnTrail;
-    /// <summary>渲染尾相对最后一个真实点的最远距离（画布像素）。脏区要按它往外扩。</summary>
-    internal float PredictedTailLead;
-    /// <summary>自画预测尾的累计统计（诊断用）：算过多少次、一共报过多少个点、最大前带量。</summary>
-    internal int TailComputes, TailPointsTotal;
-    internal float TailLeadMax;
-    /// <summary>这一笔有没有出过预测尾、以及最大前带量（`[笔画]` 那一行要用）。</summary>
-    private bool _strokeHadTail;
-    private float _strokeTailMax;
+    // [删除 2026-10-05] 老预测系统整条链（`_predictor`/`_predBuf`/`_trailPred`/`_tailScratch`、
+    // `PredictEnabled`/`_predictArg`/`PredictPrefKey`、渲染尾与预测尾统计等）：用户决定不接预测。
+    // 算法文件 `Prediction/InkPredictor.cs` 保留；恢复见 `已停用-渲染实验.md` + `.revert/`。
 
     // ---- 书写期间的分配 / GC 仪表（低配机排查用）--------------------------
     //
@@ -1266,10 +1349,6 @@ public partial class InkEngine
         _mGc0 = GC.CollectionCount(0);
         _mGc1 = GC.CollectionCount(1);
         _mGc2 = GC.CollectionCount(2);
-        // 预测那本账也要按笔分开记（真笔的预测在 DWM 那条路上）
-        _mPredCount = PredLeadCount;
-        _mPredSum0 = PredLeadSum;
-        _strokePredMax = 0f;
         _measureDone = false;
     }
 
@@ -1283,22 +1362,12 @@ public partial class InkEngine
         StrokeGc1 = GC.CollectionCount(1) - _mGc1;
         StrokeGc2 = GC.CollectionCount(2) - _mGc2;
 
-        StrokePredCount = PredLeadCount - _mPredCount;
-        StrokePredLeadAvg = StrokePredCount > 0 ? (PredLeadSum - _mPredSum0) / StrokePredCount : 0;
-        StrokePredLeadMax = _strokePredMax;
-
         StrokesMeasured++;
         AllocKbSum += StrokeAllocBytes / 1024.0;
         if (StrokeAllocBytes > AllocBytesMax) AllocBytesMax = StrokeAllocBytes;
         if (StrokeGc2 > 0) StrokesWithGc2++;
     }
 
-    /// <summary>当前这一笔的渲染尾点数（诊断与自检用；0 = 没有尾）。</summary>
-    internal int RenderTailPoints => ActiveStroke?.RenderTail?.Count ?? 0;
-    /// <summary>当前预测地平线（毫秒，8~15）。诊断用。</summary>
-    internal double PredictHorizonMs => _predictor.HorizonMs;
-    /// <summary>前带量的硬上限（像素）。诊断用。</summary>
-    internal float PredictLeadCap => _predictor.MaxDistance;
     /// <summary>本笔有没有压感（设备级判断，不是看数值）。</summary>
     internal bool ActiveStrokeHasPressure;
     /// <summary>上一笔的合并率/预测统计（诊断与自检用）。</summary>
@@ -1308,20 +1377,7 @@ public partial class InkEngine
     internal bool PenSawPressureMask, PenSawTiltMask, PenSawRotationMask;
     /// <summary>累计统计：非笔指针（鼠标 / 触摸）读到多少消息、多少合并采样点。</summary>
     internal int PtrTotalPoints, PtrMessages, PtrSamples, PtrCoalescedExtra;
-    /// <summary>预测把湿墨往前带了多少（像素）——"说不清有没有用"时就看这个数。</summary>
-    internal double PredLeadSum; internal int PredLeadCount; internal float PredLeadMax;
-    /// <summary>
-    /// 这一笔**喂给委托轨迹（DWM）**的预测段：次数 / 平均前带量 / 最大前带量。
-    /// 真笔的预测全在这条路上（由系统合成器画），和"我们自己画的尾"是两回事——
-    /// 报告里必须分开写，否则真笔那几笔会显示成"预测尾=无"，看起来像没预测
-    ///（2026-09-29 用户就是这么被误导的）。
-    /// </summary>
-    internal int StrokePredCount;
-    internal double StrokePredLeadAvg;
-    internal float StrokePredLeadMax;
-    int _mPredCount;
-    double _mPredSum0;
-    float _strokePredMax;
+    // [删除 2026-10-05] 预测前带量 / 喂 DWM 段数统计（老预测系统）。
     internal int _cntDown, _cntMove, _cntUp, _cntCaptureLost;
     internal string _lastStrokeReport;
     private long _hotkeysRegistered;
@@ -1331,6 +1387,9 @@ public partial class InkEngine
     /// 启动时先读用户配置的覆盖项，退出时把改动写回去。
     /// </summary>
     internal KeyMap Keys = KeyMap.Default();
+
+    /// <summary>某个动作当前的键位文本（界面悬停提示用；键位表的唯一起源见 KeyBindings.cs）。</summary>
+    internal string KeyTextFor(KeyAction action) => Keys.KeyText(action);
 
     internal int _virtualX, _virtualY, _virtualW, _virtualH;
 
@@ -1391,6 +1450,8 @@ public partial class InkEngine
     internal double _lastPresentMs;
     // 分块缓存的状态（面板与自检读数）
     internal int _tilesUsed, _tilesVisible, _tilesBudget, _tilesRasterized;
+    /// <summary>最近一拍预取了几块（HUD 用；见主循环的空闲预取）。</summary>
+    internal int _prefetchLast;
     private double _inputToPresentMs;
     private double _lastInputMs = -1;
 
@@ -1573,6 +1634,12 @@ public partial class InkEngine
 
         string mode = args.Length > 0 ? args[0] : "";
         SelfCheckMode = mode.Length > 0;
+        // 产品模式：启动 1.2 秒后（窗口已经露面）做一次历史清理；自检一律不扫。
+        if (mode.Length == 0)
+        {
+            _historySwept = false;
+            _historySweepAtMs = NowMs + 1200;
+        }
 
         // 用户偏好（深色主题/贴边隐藏/档位/钉住，以及"启动要不要接上上次的板书"）。
         //
@@ -1585,6 +1652,10 @@ public partial class InkEngine
         if (!SelfCheckMode)
             foreach (var w in InkSettings.LoadUiPrefs(UiPrefs))
                 Console.WriteLine("settings: " + w);
+
+        // 点名名单（`%APPDATA%\InkTeach\Names.txt`）：产品模式启动读一次；
+        // 自检不读用户的名单（判据要确定），要用就临时设 NamesPathOverride + ReloadNames。
+        if (mode.Length == 0) LoadClassroomPrefs();
 
         // 上次因为界面出问题重启过？把板书读回来（读走就删，只恢复一次）。
         // 自检/基准模式不掺和：那些模式不该被"上次留下的板书"影响判据。
@@ -1603,14 +1674,27 @@ public partial class InkEngine
         // 不走这条路）。没装 Office / 没开 PPT 时它什么都不做。
         StartPptLink();
 
+        // --hud：显式打开调试性能面板（默认关，交互里已没有开它的快捷键）。
+        // 测"写一笔的内存/延时"就靠它：面板上并列 提交 / 工作集 / 显存 / 笔画数。
+        // 放成**显式开关**而不是改默认：普通用户不该看到这个黑框。
+        if (args.Contains("--hud")) ShowHud = true;
         // --nohud：关掉调试性能面板。它是给开发看的，每帧要花约 1.9 ms
         // （文字排版 + 进程计数），测底层性能时必须排除掉，否则量到的是
-        // 测量工具本身而不是渲染引擎。
+        // 测量工具本身而不是渲染引擎。**两条同时给时以 --nohud 为准。**
         if (args.Contains("--nohud")) ShowHud = false;
-        // 触点诊断（8.3.3）：`--touchhud` 直接开着启动（也可以代码里 TouchHud = true 打开）。
+        // --fullpresent：每次整屏上屏（不走 Present1 脏矩形）。诊断"固定横线闪"用：
+        // 如果加上它就不闪了，说明问题在"部分上屏 + DWM 合成"这条路上（见 Overlay 的说明）。
+        if (args.Contains("--fullpresent")) OverlayWindow.FullPresent = true;
+        // --noprefetch：关掉"视口外一圈"的空闲预取，回到纯同步光栅（对照用）。
+        if (args.Contains("--noprefetch")) CanvasTileCache.PrefetchEnabled = false;
+        // --traceframes：把每帧的脏区/上屏/分块/预取日志打到控制台（OverlayWindow.Trace）。
+        if (args.Contains("--traceframes")) OverlayWindow.Trace = true;
+        // 触点诊断（8.3.3）：`--touchhud` 直接开着启动。
         if (args.Contains("--touchhud")) TouchHud = true;
         // 动态橡皮的后门（8.3.4）：关掉"速度→尺寸"，擦除尺寸恒定（不进界面）。
         if (args.Contains("--eraserfixed")) DynamicEraser = false;
+        // 橡皮诊断读数（8.3.7，调参用）：左下角浮层实时显示 速度 / 目标 / 当前系数 / 尺寸。
+        if (args.Contains("--eraserhud")) { EraserHud = true; RebuildEraserHud(); }
 
         // 对照实验用：--nohist 关掉脏区的多帧回溯，应当立刻出现残影，
         // 用来证明残影测试本身是有效的（而不是永远通过）。
@@ -1631,21 +1715,10 @@ public partial class InkEngine
         if (args.Contains("--inktrail")) OverlayWindow.InkTrailEnabled = true;
         if (args.Contains("--noinktrail")) OverlayWindow.InkTrailEnabled = false;
 
-        // ---- 笔迹预测（**默认关**，2026-09-29）--------------------------------
-        // 关的理由见 PredictEnabled 那段注释：真笔那条 DWM 不画我们的预测点（白喂），
-        // 鼠标/触摸那条自绘尾会"一出一进"（末端突突跳），而收益又测不出来。
-        // 想要对照就 `--predict`；开了之后 --predictms 调地平线、--predictlead 调前带量。
-        PredictEnabled = args.Contains("--predict");
-        for (int i = 0; i < args.Length - 1; i++)
-            if (args[i] == "--predictms" && double.TryParse(args[i + 1], out double pm))
-                _predictor.HorizonMs = pm;
-        // 前带量的硬上限（像素）。默认 12 px 足够快机器；负载大、延迟高时要放宽才看得清效果。
-        // 上界给到 400 而不是 40：这是**真机调手感**的旋钮，"100 到底难不难受"必须能真的调到
-        // 100（夹在 40 的话人会以为功能就这样，见 InkPredictor.HardMaxHorizonMs 那段说明）。
-        for (int i = 0; i < args.Length - 1; i++)
-            if (args[i] == "--predictlead" && float.TryParse(args[i + 1], out float pl))
-                _predictor.MaxDistance = Math.Clamp(pl, 4f, 400f);
-        _predictor.ClampHorizon();
+        // ---- 笔迹预测：**已停用并清理**（2026-10-05）------------------------------
+        // [删除 2026-10-05] `--predict/--predictms/--predictlead`（老预测系统）与
+        // `--predicttip`（预测点并入 mean2）的入口、喂点与渲染尾接线已全部移除；
+        // 算法文件 `Prediction/InkPredictor.cs` 保留。恢复见 `已停用-渲染实验.md` + `.revert/`。
 
         // ---- 书写期间的 GC 低延迟档 -------------------------------------------
         //
@@ -1668,7 +1741,8 @@ public partial class InkEngine
         // 两个开关都是**给真机调手感用的**，不是给用户平时按的：
         //   · `--nopressure` 关掉，用来做"有/无"对照（差异要当场看得出来才算数）；
         //   · `--pressrange min,max[,gamma]` 现调动态范围与曲线，不用重编。
-        PressureWidth.Enabled = !args.Contains("--nopressure");
+        _noPressureArg = args.Contains("--nopressure");
+        PressureWidth.Enabled = !_noPressureArg;
         for (int i = 0; i < args.Length - 1; i++)
         {
             if (args[i] != "--pressrange") continue;
@@ -1685,6 +1759,26 @@ public partial class InkEngine
             }
         }
 
+        // ---- 用户开关：压感粗细（2026-10-01，「更多 → 设置 → 书写」）----------
+        //
+        // 默认**开**；偏好只写"关过"的那一份（`ui.pressure = "0"`）。
+        // **命令行优先**：`--nopressure` 是给"有/无"对照实验用的，它存在时不听偏好——
+        // 否则自检/实验机器上读到的用户偏好会把对照条件悄悄改掉。
+        // 自检模式下 `UiPrefs` 根本没从盘上读（见上面 LoadUiPrefs 那一段），
+        // 所以这里拿到的永远是空 → Enabled 就是命令行/默认值，判据稳定。
+        if (!_noPressureArg && GetUiPref(PressurePrefKey) == "0")
+            PressureWidth.Enabled = false;
+
+        // ---- 模拟压力与笔锋：**已全部停用**（2026-10-05，代码保留）----------------
+        // [停用] `--simpressure/--simpressdepth`（Xournal++ 速度压力）、
+        // `--pfpressure/--pfthinning/--pfstreamline`（perfect-freehand 速度压力）、
+        // `--simtaper`（固定两端锥）、`--flicktip`（末尾甩速收尖，入口已删除）。
+        // 恢复方法见 `已停用-渲染实验.md`；停用前完整源码在 `.revert/2026-10-05-渲染减法/`。
+        PressureSim.Enabled = false;
+        PressureSim.UsePf = false;
+        // （这里原来还有各开关的解析与 flicktip 速度门控块；停用与删除的原文见登记文档。）
+        PressureSim.BumpVersion();
+
         // ---- 中心线曲线化（过点 Catmull-Rom ＋ 角点保护）------------------------
         //
         // **默认开**（2026-09-28 用户拍板："默认开也没关系"）：把"逐点直线段"换成
@@ -1694,17 +1788,67 @@ public partial class InkEngine
         //
         //   --nosmooth          退回折线（做"开 / 关"对照用）
         //   --smoothcorner N    角点阈值（度）。默认 35：转得比它急就保留尖角。
-        StrokeSmoothing.SetEnabled(!args.Contains("--nosmooth"));
         for (int i = 0; i < args.Length - 1; i++)
+        {
             if (args[i] == "--smoothcorner" && float.TryParse(args[i + 1], out float sc))
             {
                 StrokeSmoothing.CornerAngleDeg = Math.Clamp(sc, 5f, 90f);
                 StrokeSmoothing.BumpVersion();
             }
-        Console.WriteLine(StrokeSmoothing.Enabled
-            ? $"中心线曲线化: 开（过点曲线 ＋ 角点保护，角点阈值 {StrokeSmoothing.CornerAngleDeg}°；"
-              + "活笔走折线，落笔才换曲线）"
-            : "中心线曲线化: 关（折线；--nosmooth 的效果）");
+            // [停用 2026-10-05] `--smoothmacropx`（宏观角点窗）：当天实测变"脏"，已回退默认 0。
+            // 恢复见 `已停用-渲染实验.md`。
+            // else if (args[i] == "--smoothmacropx" && float.TryParse(args[i + 1], out float mp) && mp >= 0)
+            // {
+            //     StrokeSmoothing.CornerMacroPx = Math.Clamp(mp, 0f, 200f);
+            //     StrokeSmoothing.BumpVersion();
+            // }
+        }
+
+        // ---- 笔迹运动模型（2026-10-03 对照台 → 2026-10-05 收敛）------------------
+        // 保留两个模式：**mean2（默认，M6）** 与 **catmull（M1 老路径，对照/兜底）**。
+        // [停用 2026-10-05] raw / sliding / spring / oneeuro / mean / gauss，
+        // 及 `--nosmooth`、`--inkmodel`、`--inkm*`、`--slidewin`、`--motionwin` 等参数：
+        // 代码保留（StrokeMotion 内对应分支未动），恢复见 `已停用-渲染实验.md`。
+        // 仍然**只做渲染期加工**：存档里的点、命中、撤销、橡皮一概不动。
+        {
+            var motionMode = StrokeMotionMode.Mean2;   // 2026-10-04 默认档（用户定稿）
+            // [停用] if (args.Contains("--nosmooth")) motionMode = StrokeMotionMode.Raw;
+            // [停用] if (args.Contains("--inkmodel")) motionMode = StrokeMotionMode.Spring;
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] != "--motion") continue;
+                motionMode = args[i + 1].ToLowerInvariant() switch
+                {
+                    // [停用] "raw" or "m0" => StrokeMotionMode.Raw,
+                    "catmull" or "m1" => StrokeMotionMode.Catmull,
+                    // [停用] "sliding" or "m2" => StrokeMotionMode.Sliding,
+                    // [停用] "spring" or "m3" => StrokeMotionMode.Spring,
+                    // [停用] "oneeuro" or "m4" => StrokeMotionMode.OneEuro,
+                    // [停用] "mean" or "m5" => StrokeMotionMode.Mean,
+                    "mean2" or "m6" => StrokeMotionMode.Mean2,
+                    // [停用] "gauss" or "m7" => StrokeMotionMode.Gauss,
+                    _ => motionMode,
+                };
+            }
+            // InkModel.ApplyParamsFromArgs(args);      // M3 参数（--inkm*）[停用]
+            StrokeMotion.ApplyParamsFromArgs(args);  // mean2 参数（--mean2win 等）
+            StrokeMotion.SetMode(motionMode);
+            InkModel.SetEnabled(false);              // M3 弹簧 [停用 2026-10-05]
+
+            string modeDesc = StrokeMotion.Mode switch
+            {
+                StrokeMotionMode.Catmull => $"catmull（M1：过点曲线＋角点保护，角点阈值 {StrokeSmoothing.CornerAngleDeg}°；活笔走折线）",
+                _ => $"mean2（M6：距离窗 {StrokeMotion.Mean2WindowPx:F0}px ＋ 过点曲线 ＋ 收笔追赶）",
+            };
+            Console.WriteLine($"笔迹运动模型: {modeDesc}");
+        }
+
+        // ---- D1：亚像素输入（`--himetric`）-------------------------------------
+        InputPrecision.Reset();
+        InputPrecision.UseHimetric = args.Contains("--himetric");
+        Console.WriteLine(InputPrecision.UseHimetric
+            ? "输入精度: himetric 亚像素（D1；拿不到设备矩形时逐点退回整数像素）"
+            : "输入精度: 整数像素（D0；--himetric 打开 D1 对照）");
 
         // ---- 呈现节奏 ---------------------------------------------------------
         // 默认改成"等到合成边界再抽输入、立刻 Present(0)"。实测这一项把
@@ -1961,12 +2105,9 @@ public partial class InkEngine
             // 调参时"我到底调上了没有"必须一眼看得见：这里印的是**生效值**，不是"可用/不可用"。
             // （2026-09-22 用户碰到的两个坑：--predictms 100 被静默夹到 15；--noinktrail 生效了没有
             //   只能靠猜。这两件事都不该靠猜。）
-            Console.WriteLine($"笔迹预测: {(PredictEnabled ? "开（--predict）" : "关（默认）")}"
-                              + $"，地平线 {PredictHorizonMs:F0} ms（推荐 8~{InkPredictor.MaxHorizonMs:F0}，硬上限 {InkPredictor.HardMaxHorizonMs:F0}）"
-                              + $"，前带量上限 {PredictLeadCap:F0} px");
-            Console.WriteLine($"预测尾（鼠标/触摸自画的那一截）：{(OverlayWindow.InkTrailEnabled
-                ? "真笔那一笔让给系统轨迹，鼠标/触摸仍然画"
-                : "真笔也画（委托轨迹已关）")}");
+            // [停用 2026-10-05] 笔迹预测（含 `--predicttip`）：用户决定"预测不接了"，
+            // 代码保留（PredictEnabled 恒 false），见 `已停用-渲染实验.md`。
+            Console.WriteLine("笔迹预测: 已停用（2026-10-05，代码保留；见 已停用-渲染实验.md）");
             // 书写期间的 GC 低延迟档：低配上"偶发卡一下"的第一嫌疑就是它没生效。
             // 这里印的是**读回来的实际状态**（见 GcLatency.Describe），不是"我们想让它开"。
             Console.WriteLine($"书写期间 GC 低延迟档: {GcLatency.Describe()}"
@@ -2007,6 +2148,8 @@ public partial class InkEngine
             Console.WriteLine($"压感→粗细: {(PressureWidth.Enabled
                 ? $"开（{PressureWidth.Min:F2}~{PressureWidth.Max:F2} 倍，曲线 gamma {PressureWidth.Gamma:F2}）"
                 : "关（--nopressure）")}；变宽通道: {OverlayWindow.InkNote}");
+            // [停用 2026-10-05] 模拟压力 / 笔锋 / 收尖：全部停用（代码与备份见 已停用-渲染实验.md）。
+            Console.WriteLine("无压感笔迹增强: 已停用（模拟压力 / 笔锋 / 收尖）");
             return true;
         }, IntPtr.Zero);
 
@@ -2025,6 +2168,8 @@ public partial class InkEngine
         // 合成/真实点击都会落到那个窗口上，批注一个字都画不出来。
         Native.SetTimer(_windows[0].Hwnd, (IntPtr)1, 250, IntPtr.Zero);
         DpiScale = _windows[0].Dpi / 96f;
+        PressureSim.DpiScale = DpiScale;    // 模拟压力按 72dpi 口径换算距离（见 PressureSim）
+        PressureSim.BumpVersion();
 
         Host?.UpdateScreen(LogicalVirtualScreen);
         Host?.UpdateWorkArea(LogicalPrimaryWorkArea);
@@ -2080,6 +2225,11 @@ public partial class InkEngine
     // 不看焦点；而且键被我们吞掉、**不会传给 WPS**，所以不会有"我们切了工具、PPT 又翻
     // 一页"的双发副作用（隔壁 InkClass 那种"打架"就是它用全局钩子但不吞键造成的）。
     // 退出放映立刻注销：平时一个键都不多占。
+    //
+    // **例外：穿透开着时整体让路**（用户 2026-09-30 定："穿透模式下，PPT 的键起作用、
+    // 我们的键不起作用"）——穿透 = "这一段键盘归下层程序"，所以这几个键临时注销，
+    // PPT/WPS 自己的 Ctrl+P/E/L/Z、←→ 等恢复可用；退出穿透时若还在放映，立刻收回
+    // （统一走 SyncPptHotkeys，见 SetPassThrough）。
     private const int PptHotkeyBase = 81;          // 一小段专用 id（常规热键是 1..N，别撞）
     private static readonly (uint Mod, uint Vk, KeyAction Act)[] PptHotkeys =
     {
@@ -2088,6 +2238,9 @@ public partial class InkEngine
         (Native.MOD_CONTROL, 0x4C /*L*/, KeyAction.ToolLaser),
         (Native.MOD_CONTROL, 0x45 /*E*/, KeyAction.ToolEraser),
         (Native.MOD_CONTROL, 0x5A /*Z*/, KeyAction.Undo),
+        // ⚠ 2026-10-04：呼出盘**不再进这张表**——它已升为常驻全局键 `Ctrl+Alt+Shift+Q`
+        // （见 KeyBindings.Default），放映时前台是 PPT/WPS 也照样生效；临时表里再挂一遍
+        // 就等于"同一个动作两把全局键"，正是这次改键要消掉的东西。
         // 放映时方向键也归我们：**有选中 → 微调；没选中 → ←→ 代 WPS 翻页**
         // （键盘在我们手里，不拦的话 WPS 收不到 ←→，什么都不发生——用户 2026-09-30 实测）。
         (0u, 0x25 /*←*/, KeyAction.PptPrev),
@@ -2097,7 +2250,16 @@ public partial class InkEngine
     };
     private bool _pptHotkeysOn;
 
-    /// <summary>进/出放映批注模式时调它（见 Ppt.EnterPptMode / ExitPptMode）。</summary>
+    /// <summary>现在该不该挂放映临时全局键：放映中 **且不穿透**。
+    /// 穿透 = "这一段键盘归下层程序"（用户 2026-09-30 定："穿透模式下，PPT 的键起作用、
+    /// 我们的键不起作用"），所以穿透期间让路，退出穿透立刻收回。</summary>
+    private bool PptHotkeysWanted => PptMode && !PassThrough;
+
+    /// <summary>按当前状态挂/摘放映临时全局键。进/退放映（Ppt.cs）与开/关穿透
+    /// （SetPassThrough）都调它；`RegisterPptHotkeys` 幂等，重复调不做事。</summary>
+    private void SyncPptHotkeys() => RegisterPptHotkeys(PptHotkeysWanted);
+
+    /// <summary>挂/摘那 8 个放映临时全局键（真正碰系统的那一层）。</summary>
     private void RegisterPptHotkeys(bool on)
     {
         if (_pptHotkeysOn == on || _windows.Count == 0) return;
@@ -2114,9 +2276,12 @@ public partial class InkEngine
             else Native.UnregisterHotKey(h, id);
         }
         _pptHotkeysOn = on;
-        Console.WriteLine(on ? "放映批注模式：工具键（Ctrl+P/I/L/E/Z）已临时升级为全局热键"
-                            : "退出放映：临时全局热键已注销");
+        Console.WriteLine(on ? "放映批注模式：工具键（Ctrl+P/I/L/E/Z）与方向键已临时升级为全局热键"
+                            : "放映临时全局热键已注销（退出放映或开着穿透）");
     }
+
+    /// <summary>自检用：放映临时全局键现在挂着没有（穿透期间会让给下层）。</summary>
+    internal bool PptHotkeysOnForTest => _pptHotkeysOn;
 
     /// <summary>注册顺序 → 动作。按这个顺序 RegisterHotKey，WM_HOTKEY 的 id 就是它。</summary>
     private readonly List<KeyAction> _hotkeyActions = new();
@@ -2137,16 +2302,13 @@ public partial class InkEngine
     {
         while (!_quit)
         {
-            // 每帧开头先把渲染尾收掉：指针停住但画面还在刷（动画、界面失效、激光衰减）
-            // 的时候，不收就会一直重画上一帧算出来的那一小截预测墨。
-            // 紧接着的 DrainMessages 会把这一帧真的到过的点算成新的尾。
-            ClearRenderTail();
             DrainMessages();
             PumpUpdate();                 // 自动更新：把后台结果搬过来，该换壳就换壳
             if (_quit) break;
 
             NowMs = _clock.Elapsed.TotalMilliseconds;
             PumpKeyGestures();            // 工具键的手势：长按判定 + 连按换色的延迟结算
+            PumpRadialPalette();          // 呼出盘：出盘延迟 / 松手轮询 / 超时
 
             if (NowMs >= _autoExitAt) break;
 
@@ -2161,7 +2323,10 @@ public partial class InkEngine
             Laser.Prune(NowMs);
             StepCameraAnim();                 // 翻页动画（167ms）
             StepPpt();                        // PPT 放映联动（没变化时只读一个 bool，不碰 COM）
-            StepPptBar();                     // 底部那两条的长按判定（只有按住那一会儿有活）
+            StepPptBar();                     // 底部那条：引导过期 / "再点确认"过期（没有长按了）
+            StepEngineTooltip();              // 引擎侧悬停提示的 500ms 延迟（到点点亮）
+            StepTimerCard();                  // 课堂计时卡片：推进秒数 / 到点 / 同步接输入小窗
+            StepRollCard();                   // 课堂点名卡片：滚动推进 / 同步接输入小窗
             if (NeedsFrame())
             {
                 // VBlankPaced：先等到合成边界，**再抽一次消息**，然后画、提交。
@@ -2185,12 +2350,39 @@ public partial class InkEngine
                 // 也要再要一帧：这一帧贴出去的是改之前的像素。
                 // 少了后面这半句，清空之后屏幕上那层墨会一直留着——见 RenderAll 里的注释。
                 _dirty = _uiInvalidateSeq != seqBefore || Doc.Version != docVerBefore;
+
+                // 空闲预取：正常帧走完，如果"没在写、没在取景"且视口外一圈还有欠着的块，
+                // 排几拍只烘块、不合成不上屏的空闲拍（上游 Xournal++/Rnote 的预渲染思路）。
+                if (!_quit && !CaptureActive && ActiveStroke == null && AnyPrefetchNeeded())
+                    _prefetchStepsLeft = Math.Max(_prefetchStepsLeft, 64);
+            }
+            else if (_prefetchStepsLeft > 0)
+            {
+                // 空闲预取一拍：只烘"视口外一圈"里欠着的块，不合成、不上屏。
+                // 一拍之后等最多 4ms（有输入立刻醒）：既不打满空闲 CPU，也不拖输入。
+                _prefetchStepsLeft--;
+                bool more = false;
+                foreach (var w in _windows) more |= w.PrefetchStep(this);
+                if (!more) _prefetchStepsLeft = 0;
+                Native.MsgWaitForMultipleObjectsEx(0, IntPtr.Zero, 4, Native.QS_ALLINPUT, 0);
             }
             else
             {
                 Native.WaitMessage();
             }
         }
+    }
+
+    /// <summary>空闲预取的剩余拍数（见主循环；每拍 <see cref="CanvasTileCache.PrefetchPerFrame"/> 块）。</summary>
+    private int _prefetchStepsLeft;
+
+    /// <summary>视口外一圈还有没有欠着的块（任一窗口）。</summary>
+    private bool AnyPrefetchNeeded()
+    {
+        if (!CanvasTileCache.PrefetchEnabled) return false;
+        foreach (var w in _windows)
+            if (w.PrefetchNeeded()) return true;
+        return false;
     }
 
     /// <summary>把消息队列里现有的消息全部处理掉，不阻塞。测试模式复用同一份，
@@ -2226,7 +2418,10 @@ public partial class InkEngine
         // 的理由）；反过来，空闲无帧时也要能响应翻页，所以 Loop 里那一句不能省。
         // 两边都是幂等的（TakeDirty 取走就清、SameAs 挡重复）。
         StepPpt();
-        StepPptBar();     // 底部那两条的长按判定（理由同上，自检那条路也走它）
+        StepPptBar();     // 底部那条：引导过期 / "再点确认"过期（理由同上，自检那条路也走它）
+        StepTimerCard();  // 课堂计时卡片同理：自检用"抽消息＋渲染"驱动，不走主循环
+        StepRollCard();   // 课堂点名卡片同理
+        PumpRadialPalette();   // 呼出盘同理：自检用"抽消息＋渲染"驱动，不走主循环
 
         // 书写期间的 GC 低延迟档：超时退回。放在这里**和自动存档同一个理由**——
         // 挂主循环里的话，自检那条路永远验不到"超时能退回"（见 GcLatency.cs）。
@@ -2254,7 +2449,15 @@ public partial class InkEngine
         swHud.Stop();
 
         // 相机写给各覆盖窗口：渲染的每一处变换都用它（见 OverlayWindow.CanvasToWindow）。
-        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
+        //
+        // ⚠ 渲染用的偏移**取整到整像素**（Excalidraw 的 `snapScrollToDevicePixels` 同款）：
+        // 分块贴图走 NearestNeighbor，真实小数偏移会被驱动吸附，而活笔和命中测试走全精度——
+        // 在"滚到底被 ClampOffset 夹出小数"或"翻页动画的中间帧"上，两者最多差半个像素
+        // （表现是落笔提交瞬间墨可能轻轻跳一下、或缓存内容轻微脉动）。
+        // 取整只作用于渲染层：引擎自己的 `ViewOffsetY` 保持全精度（输入映射/夹紧/可见区计算），
+        // 差值 <1px，命中和观感都对得上。
+        float renderCamY = MathF.Round(ViewOffsetY);
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = renderCamY; }
 
         // 面板的接输入小窗跟着界面这一刻占的地方走（方案 B）。
         // 放在渲染之前：这一帧界面画在哪，输入就该收在哪，两件事同源。
@@ -2262,7 +2465,13 @@ public partial class InkEngine
 
         // 记下渲染前的文档版本：**渲染期间界面可能改文档**（"按住清空"就是在界面的
         // Render 回调里够时间的——界面没有别的"每帧回调"可用）。见下面的判断。
-        long docVerBeforeRender = Doc.Version;
+        //
+        // ⚠ 盯的是 **RenderDoc**（平时=真文档；回放中=影子文档）：脏区/增量清单是
+        // 内容层照着渲染的那一份留下的。以前这里只清真文档，结果回放里影子文档的
+        // `Dirty.Full` 永远清不掉——**每条笔迹写完都触发一次全屏整层重铺**（看着闪一下、
+        // 白花一大笔重绘）。2026-10-01 用户报"写完一个字会闪一下"就是这个。
+        var renderDoc = RenderDoc;
+        long docVerBeforeRender = renderDoc.Version;
 
         foreach (var w in _windows)
             w.RenderFrame(this);
@@ -2283,11 +2492,11 @@ public partial class InkEngine
         // 还把墨迹卡住、连常规橡皮都擦不掉"）：清空是在界面的 Render 里触发的，
         // 引擎渲染完无条件 Reset()，于是**文档已经空了、屏幕上那层墨还留着**——
         // 看着像清空失效，而橡皮也擦不掉（文档里已经没有东西可擦了）。
-        if (Doc.Version == docVerBeforeRender)
+        if (renderDoc.Version == docVerBeforeRender)
         {
-            Doc.Dirty.Reset();
-            Doc.AppendedSinceRender.Clear();
-            Doc.StructureChangedSinceRender = false;
+            renderDoc.Dirty.Reset();
+            renderDoc.AppendedSinceRender.Clear();
+            renderDoc.StructureChangedSinceRender = false;
         }
 
         var w0 = _windows[0];
@@ -2298,6 +2507,7 @@ public partial class InkEngine
         _tilesVisible = w0.LastTileVisible;
         _tilesBudget = w0.LastTileBudget;
         _tilesRasterized = w0.LastPatchCount;
+        _prefetchLast = w0.LastPrefetch;
 
         // How long the newest input took to reach the screen. This is our own
         // contribution; the display pipeline adds up to one more scan-out.
@@ -2438,7 +2648,7 @@ public partial class InkEngine
                      + "试：1 / 2 / 3 根手指各按一下，再用手掌压一下";
     }
 
-    /// <summary>读一个触摸触点的接触尺寸（物理像素）。用显式缓冲区，理由见 Native 那边。</summary>
+    /// <summary>读一个触摸触点的接触尺寸（物理像素）。用显式缓冲区（见 Native 那边的说明）。</summary>
     private static (float w, float h) ReadTouchSizePx(uint id)
     {
         IntPtr buf = System.Runtime.InteropServices.Marshal.AllocHGlobal(160);
@@ -2446,6 +2656,10 @@ public partial class InkEngine
         {
             if (!Native.GetPointerTouchInfo(id, buf)) return (0f, 0f);
             var ti = System.Runtime.InteropServices.Marshal.PtrToStructure<Native.POINTER_TOUCH_INFO>(buf);
+            // ⚠ 设备不上报面积时，rcContact 规范默认是"以指针为中心的 0×0"——
+            // 所以先看 touchMask 说没说它有效（2026-10-05 修：此前结构体漏了
+            // touchFlags/touchMask，整体偏移 8 字节，读到的"面积"其实是坐标）。
+            if ((ti.touchMask & Native.TOUCH_MASK_CONTACTAREA) == 0) return (0f, 0f);
             int w = ti.rcContact.Width, h = ti.rcContact.Height;
             if (w <= 0 && h <= 0) { w = ti.rcContactRaw.Width; h = ti.rcContactRaw.Height; }
             return (w, h);
@@ -2467,8 +2681,8 @@ public partial class InkEngine
             $"共享提交 {_sharedCommitMb,6:F1} MB   显存 {_gpuMb,6:F1} MB   CPU {_cpuPercent,4:F1} %\n" +
             $"笔画 {Doc.Strokes.Count}      点数 {Doc.TotalPoints}\n" +
             $"选中 {Doc.Selected.Count}      工具 {ToolName(Tool)}{SelectModeTag()}{(PassThrough ? "（穿透中）" : "")}      粗细 {CurrentToolWidthLogical,4:F1}      撤销栈 {Doc.UndoDepth}\n" +
-            $"分块 {_tilesUsed}/{_tilesBudget}（可见 {_tilesVisible}，本帧光栅 {_tilesRasterized}）      网格 {Doc.GridCells}\n" +
-            $"Ctrl+Alt：1笔 2荧光 3激光 4橡皮 7像素橡皮 5框选 9矩形/套索 6粗细 Z撤销 C清空\n" +
+            $"分块 {_tilesUsed}/{_tilesBudget}（可见 {_tilesVisible}，本帧光栅 {_tilesRasterized}，预取 {_prefetchLast}）      网格 {Doc.GridCells}\n" +
+            $"Ctrl+Alt：1笔 2荧光 3激光 4橡皮 7像素橡皮 5框选 6粗细 Z撤销 C清空\n" +
             (EraserTelemetry != null
                 ? $"橡皮手测台：记录中 · 已记 {EraserTelemetry.DragCount} 条拖拽（退出时写汇总）\n"
                 : "") +
@@ -2479,47 +2693,9 @@ public partial class InkEngine
     private string SelectModeTag()
         => Tool == Tool.Marquee ? (SelMode == SelectMode.Lasso ? "·套索" : "·矩形") : "";
 
-    /// <summary>工具名（遥测 / HUD / 日志用）。</summary>
-    private static string ToolName(Tool t) => t switch
-    {
-        Tool.Pen => "笔",
-        Tool.Highlighter => "荧光笔",
-        Tool.Laser => "激光笔",
-        Tool.Eraser => "橡皮擦",
-        Tool.PixelEraser => "像素橡皮",
-        Tool.Capture => "截图",
-        Tool.Marquee => "框选",
-        Tool.Line => "直线",
-        Tool.Rectangle => "矩形",
-        Tool.Ellipse => "椭圆",
-        Tool.Circle => "圆",
-        Tool.Triangle => "三角形",
-        Tool.Parallelogram => "平行四边形",
-        Tool.Arrow => "箭头",
-        // 2026-09-20 补：这六个以前落在 `_ => "?"`，HUD 和橡皮日志里显示成问号
-        //（加图形时最容易漏的一处，因为漏了不报错、只是显示难看）。
-        Tool.Coordinate => "坐标系",
-        Tool.NumberLine => "数轴",
-        Tool.Parabola => "抛物线",
-        Tool.Hyperbola => "双曲线",
-        Tool.Sine => "正弦",
-        Tool.Cosine => "余弦",
-        Tool.Wave => "波浪线",
-        Tool.Tangent => "正切",
-        Tool.Cylinder => "圆柱",
-        Tool.Cone => "圆锥",
-        Tool.Cuboid => "长方体",
-        Tool.Tetrahedron => "四面体",
-        // ⚠ **加图形别忘了这里**（漏了不报错，只是 HUD / 日志里显示成问号）。
-        // 2026-09-22 补上一批漏掉的五个（圆台 / 球 / 棱柱 / 棱锥 / 棱台）＋ 本批的椭圆（带焦点）。
-        Tool.ConeFrustum => "圆台",
-        Tool.Sphere => "球",
-        Tool.Prism => "棱柱",
-        Tool.Pyramid => "棱锥",
-        Tool.Frustum => "棱台",
-        Tool.ConicEllipse => "椭圆（带焦点）",
-        _ => "?",
-    };
+    /// <summary>工具名（遥测 / HUD / 日志用）。名字表在公开的 <see cref="ToolNames"/>——
+    /// 界面层的悬停提示也读同一份（2026-10-02），避免两处各写一份。</summary>
+    private static string ToolName(Tool t) => ToolNames.Of(t);
 
     // =====================================================================
     //  Window procedure
@@ -2549,6 +2725,14 @@ public partial class InkEngine
         // 系统跳过命中测试，豁免根本执行不到）。
         if (_pptInputHwnd != IntPtr.Zero && hWnd == _pptInputHwnd)
             return PptInputWndProc(hWnd, msg, wParam, lParam);
+
+        // 课堂计时卡片的"接输入小窗"（同一套方案；卡片和 PPT 条不相邻，所以单开一块）。
+        if (_timerInputHwnd != IntPtr.Zero && hWnd == _timerInputHwnd)
+            return TimerInputWndProc(hWnd, msg, wParam, lParam);
+
+        // 点名卡片的"接输入小窗"（同上）。
+        if (_rollInputHwnd != IntPtr.Zero && hWnd == _rollInputHwnd)
+            return RollInputWndProc(hWnd, msg, wParam, lParam);
 
         // 宿主自己的窗口（开发期的点击目标）先处理。产品界面不会用到这一层。
         if (HandleHostWindowMessage(hWnd, msg, wParam, lParam, out var hostResult))
@@ -2616,7 +2800,9 @@ public partial class InkEngine
                 HitTestPoint(lParam, out float hitX, out float hitY);
                 // PPT 条（放映时底部那两条）也算"我的地盘"：**开着穿透时老师照样得能
                 // 点翻页 / 拖进度条**——不然那一下会落到下层 PPT 上，被它当成翻页点击。
-                bool mine = UiContains(hitX, hitY) || PptBarContains(hitX, hitY);
+                bool mine = UiContains(hitX, hitY) || PptBarContains(hitX, hitY)
+                         || ReplayBarContains(hitX, hitY)
+                         || TimerCardContains(hitX, hitY) || RollCardContains(hitX, hitY);
                 if (mine) _cntNcHitClient++;
                 return new IntPtr(mine ? Native.HTCLIENT : Native.HTTRANSPARENT);
 
@@ -2643,6 +2829,7 @@ public partial class InkEngine
                 // 指针离开窗口：落点反馈（橡皮圆环、笔尖环）必须跟着消失，
                 // 否则手一移开，屏幕上就留下一个圈。
                 PointerInside = false;
+                ClearEngineTooltip();          // 悬停提示同理：人走了，提示不能留在屏幕上
                 _dirty = true;
                 ApplyCursor();
                 // 注意：**这里不能叫 Ui.PointerLeave()**。覆盖层的"离开"在面板接管输入时
@@ -2652,6 +2839,7 @@ public partial class InkEngine
 
             case Native.WM_MOUSELEAVE:
                 PointerInside = false;
+                ClearEngineTooltip();
                 _dirty = true;
                 ApplyCursor();
                 return IntPtr.Zero;
@@ -2711,6 +2899,7 @@ public partial class InkEngine
                 ReassertTopmost();
                 swTop.Stop();
                 _lastTopmostMs = swTop.Elapsed.TotalMilliseconds;
+                MaybeSweepHistory();      // 启动后首个空闲帧做一次历史清理（墨迹 B）
                 return IntPtr.Zero;
 
             case Native.WM_DISPLAYCHANGE:
@@ -2750,6 +2939,12 @@ public partial class InkEngine
         // （见 CenterAndBringUp），关掉之后 ReturnFocusAfterDialog 再把覆盖层拾回来。
         if (ExportDialogOpen) return;
 
+        // **让路一拍**：前台是别的"置顶层"窗口（微信截图、Win+Shift+S 的截图条等）时不抬——
+        // 每秒一次的抬举会把我们重新压到它上面，截图框在屏幕上就永远看不见
+        // （用户 2026-10-03 报"系统截图被批注层盖住"）。等前台回到我们或普通窗口，
+        // 下一拍定时器自然抬回来。
+        if (ShouldYieldTopmost()) return;
+
         foreach (var w in _windows)
             Native.SetWindowPos(w.Hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
@@ -2760,6 +2955,28 @@ public partial class InkEngine
         if (_uiInputShown && _uiInputHwnd != IntPtr.Zero)
             Native.SetWindowPos(_uiInputHwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+    }
+
+    /// <summary>
+    /// 前台是不是"别的置顶层窗口"——是就让路一拍（截图工具/置顶播放器等都是这一层）。
+    /// 普通窗口不用让：我们抬上去本来就不挡它。
+    /// </summary>
+    private bool ShouldYieldTopmost()
+    {
+        var fg = Native.GetForegroundWindow();
+        if (fg == IntPtr.Zero) return false;
+        long ex = Native.GetWindowLongPtr(fg, Native.GWL_EXSTYLE).ToInt64();
+        if ((ex & Native.WS_EX_TOPMOST) == 0) return false;
+        return !IsOwnWindow(fg);
+    }
+
+    /// <summary>这个窗口是不是我们自己创建的（覆盖层 / 各接输入小窗）。</summary>
+    private bool IsOwnWindow(IntPtr h)
+    {
+        if (h == IntPtr.Zero) return false;
+        foreach (var w in _windows) if (w.Hwnd == h) return true;
+        return h == _uiInputHwnd || h == _pptInputHwnd
+            || h == _timerInputHwnd || h == _rollInputHwnd;
     }
 
     /// <summary>
@@ -2778,7 +2995,12 @@ public partial class InkEngine
     internal bool NeedsFrame()
     {
         _animating = Laser.Visible || _drawing || SelFlashing
-                   || UiIsAnimatingNow || _camAnimating;
+                   || UiIsAnimatingNow || _camAnimating
+                   || _replayPlaying            // 回放播着：持续出帧（暂停即停）
+                   || TimerWantsFrame            // 计时器跑着/到点闪烁（倒计时 1Hz、秒表连续）
+                   || RollWantsFrame             // 点名滚动（80ms 一跳，定格即停）
+                   || RadialPaletteActive        // 呼出盘开着要连续出帧（出盘延迟 + 松手轮询）
+                   || TooltipPending;            // 引擎侧悬停提示还在等 500ms（到点要有人点亮它）
         return _dirty || _animating;
     }
 
@@ -2790,10 +3012,15 @@ public partial class InkEngine
     {
         StampInput();
         _cntDown++;
+        ClearEngineTooltip();            // 按下 = 新动作开始，悬停提示先收
         uint id = (uint)(wParam.ToInt64() & 0xFFFF);
         if (!ReadPointer(id, out float sx, out float sy, out float pressure, out bool inverted, out uint ptype)) return;
         LastPointerType = ptype;
         TouchDiagFeed(id, ptype, down: true);
+
+        // **落笔 = 取消呼出盘**：划盘是悬停动作，落笔表示"我要写字了"（设计稿附录 C）。
+        if (RadialPaletteActive) CancelRadialPalette("落笔");
+
         float screenX = sx, screenY = sy;
         float x = sx, y = sy;
         ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布
@@ -2809,6 +3036,41 @@ public partial class InkEngine
             CloseLibraryPanel();
         }
 
+        // 回放（墨迹 C）优先于界面与画布，三种落点：
+        //   · 控制条上 → 归它（播放/暂停、倍速、拖进度、关闭）；
+        //   · 界面上 → **先退出回放**，这一下照常给界面（换工具/开面板 = 老师要接管了）；
+        //   · 画布上 → **暂停/继续，不落墨**（讲课时最顺手的动作，用户已拍板）。
+        if (_replay != null)
+        {
+            if (ReplayBarContains(screenX, screenY))
+            {
+                if (ReplayPointerDown(screenX, screenY))
+                {
+                    _drawing = false;
+                    Native.SetCapture(hWnd);
+                    _replayCapturing = true;
+                    _dirty = true;
+                    ApplyCursor();
+                    return;
+                }
+                return;
+            }
+            // 界面和 PPT 条、计时卡片都算"要接管"：先退出回放，这一下照常往下走
+            //（点 PPT 条 = 翻页/长按菜单/跳页；点界面 = 换工具/开面板；点卡片 = 暂停/停）。
+            if (UiContains(screenX, screenY) || PptBarContains(screenX, screenY)
+                || TimerCardContains(screenX, screenY) || RollCardContains(screenX, screenY))
+            {
+                StopReplay("点界面或 PPT 条");
+                // 不 return：这一下照常给下面的界面 / PPT 条处理
+            }
+            else
+            {
+                ReplayTogglePause();
+                _dirty = true;
+                return;
+            }
+        }
+
         // 界面优先：点在悬浮条上就是操作界面，不是画一笔。
         //
         // 两件容易踩的事：
@@ -2818,7 +3080,8 @@ public partial class InkEngine
         //
         // 注：面板在实际产品里由"接输入小窗"（方案 B）接管，走的不是这条路；
         // 这里留着是**兜底**——万一那块小窗没建起来，至少非穿透模式下还能用。
-        if (UiPointerDown(screenX, screenY, pressure, ptype == Native.PT_PEN, inverted))
+        if (UiPointerDown(screenX, screenY, pressure, ptype == Native.PT_PEN, inverted,
+                          ptype == Native.PT_TOUCH, id))
         {
             _drawing = false;
             // 界面也要捕获指针：拖出悬浮条、在按钮上滑开都需要继续收到消息。
@@ -2837,6 +3100,29 @@ public partial class InkEngine
             _uiHover = true;
             _drawing = false;
             _dirty = true;
+            return;
+        }
+
+        // 课堂计时卡片（引擎侧浮层）：**排在界面之后、PPT 条之前、穿透之前**——
+        // 和 PPT 条同一条规矩：看得见的那一块就是点得到的（穿透/放映下也要能暂停/停）。
+        if (TimerCardPointerDown(screenX, screenY))
+        {
+            _drawing = false;
+            _timerCapturing = true;         // 这一次归它：松手时由它收尾（见 OnPointerUp）
+            Native.SetCapture(hWnd);
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
+        // 课堂点名卡片（引擎侧浮层）：和计时卡同一槽位规则。
+        if (RollCardPointerDown(screenX, screenY))
+        {
+            _drawing = false;
+            _rollCapturing = true;
+            Native.SetCapture(hWnd);
+            _dirty = true;
+            ApplyCursor();
             return;
         }
 
@@ -2944,12 +3230,13 @@ public partial class InkEngine
             case Tool.PixelEraser:
                 _lastEraseX = x; _lastEraseY = y;
                 ResetDynamicEraser();
+                PixelEraseDragging = true;
                 Doc.BeginEraseRect();
                 EraserTelemetry?.BeginDrag(Tool.PixelEraser, x, y, NowMs);
                 {
                     bool log = EraserTelemetry != null;
                     long t0 = log ? Stopwatch.GetTimestamp() : 0;
-                    int hit = Doc.EraseRectAt(x, y, PixelEraserHalfWidthPx, PixelEraserHalfHeightPx);
+                    int hit = Doc.EraseRectAt(x, y, PixelEraserCursorHalfWidthPx, PixelEraserCursorHalfHeightPx);
                     if (log)
                         EraserTelemetry.Step(hit, Doc.TotalIntervals, Doc.Strokes.Count,
                                              Stopwatch.GetElapsedTime(t0).TotalMilliseconds, x, y, NowMs);
@@ -3095,6 +3382,7 @@ public partial class InkEngine
         if (ptype == Native.PT_PEN && dash == StrokeDash.Solid)
             WindowAt(screenX, screenY)?.BeginInkTrail(
                 tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f);
+        _pen.BeginStroke();   // 缺压回填的基准只活在"一笔"之内（见 PenSampleBuffer.BeginStroke）
         ActiveStroke = new Stroke
         {
             Tool = tool,
@@ -3108,16 +3396,9 @@ public partial class InkEngine
             // 实测的原话是"上面会出残影一直在那闪"。见 Stroke.RawWhileLive。
             RawWhileLive = true,
         };
-        // 起笔：预测器从这一刻开始积累；落笔这条消息里可能已经合并了几个采样点，
-        // 一起收进来（以前只取最新那一个）。
-        _predictor.Reset();
+        // 起笔：落笔这条消息里可能已经合并了几个采样点，一起收进来（以前只取最新那一个）。
         ActiveStrokeHasPressure = false;
         LastCoalescedSamples = LastCoalescedMessages = 0;
-        // 这一笔还没交给系统合成器；渲染尾也先清掉（上一笔可能留了一截）。
-        ActiveStrokeOnTrail = false;
-        _strokeHadTail = false;
-        _strokeTailMax = 0f;
-        ClearRenderTail();
         AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
         // 半径**逐点算**（见 TrailRadius）：有压感的笔，湿墨的粗细必须和干墨一致。
         FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
@@ -3335,9 +3616,6 @@ public partial class InkEngine
         // 为此要切 `EditingMode`，还留下过"两条线""预览残留"一串坑；我们这边
         // 采样和上屏都在引擎手里，所以要收的只有这三处）。
         foreach (var w in _windows) w.EndInkTrail();
-        ActiveStrokeOnTrail = false;
-        ClearRenderTail();
-        _predictor.Reset();
 
         var anchor = _dwell.Anchor;                       // 笔停住的位置
         double stillMs = _dwell.StillMs(NowMs);           // 复位之前先量
@@ -3361,6 +3639,20 @@ public partial class InkEngine
             if (guess.Def.Length >= 2)
                 _dwellLinePin = Vector2.Distance(guess.Def[0], anchor) >= Vector2.Distance(guess.Def[1], anchor)
                               ? guess.Def[0] : guess.Def[1];
+            // 读数在**成型这一刻就位**（用户 2026-10-05 报的两个 bug：
+            //   ① 第一次用时胶囊飞在屏幕左上角——`_shapeAnchor` 还是默认的 (0,0)；
+            //   ② 之后每次都先停在上一条线上——那是上一条留下的锚点，笔一动才跳回来。
+            // 锚点挂在**离笔尖近的那一头**（接下来会跟着笔尖走的那一端），
+            // 和拖动中的算法同一条判据（`_dwellLinePin` 取的就是远的那一头）。
+            if (ActiveStroke.Points.Count >= 2)
+            {
+                var q0 = new Vector2(ActiveStroke.Points[0].X, ActiveStroke.Points[0].Y);
+                var q1 = new Vector2(ActiveStroke.Points[^1].X, ActiveStroke.Points[^1].Y);
+                _shapeInclination = SelectionHandles.InclinationDegrees(q0, q1);
+                _shapeLength = Vector2.Distance(q0, q1);
+                _shapeInclinationSnapped = false;
+                _shapeAnchor = Vector2.Distance(q0, anchor) <= Vector2.Distance(q1, anchor) ? q0 : q1;
+            }
             _dwell.Fire();
             _dirty = true;
             Console.WriteLine($"[停顿成型] 停 {stillMs:F0}ms → {guess.Kind}（{guess.Rule}）"
@@ -3441,7 +3733,8 @@ public partial class InkEngine
     ///
     /// **两种图形都吃移动**（用户 2026-09-25 试过 ClassIn 之后定），差别只在"拖的是什么"：
     ///   · **直线**：**离笔尖远的那一头钉住**、拖出去就是**转向 / 伸缩**（照 ClassIn / InkClass 的
-    ///     `LineAssistMove`），并在容差内吸到 0/90 —— 画坐标轴就靠这一下。留着它，是因为
+    ///     `LineAssistMove`），吸附**和画直线同一套**（特殊角软吸附 ±1°、Shift 15° 硬网格、
+    ///     Alt 自由；2026-10-05 统一——原来只吸 0/90、容差 4°）—— 画坐标轴就靠这一下。留着它，是因为
     ///     直线是"顺手一划"，它的另一头正是画完最常要调的（转成水平 / 竖直），
     ///     而在选中态里调要多两步（先点它、再拖手柄）。
     ///   · **其它图形**：**改大小**（用户 2026-09-25 上手 ClassIn 之后逐条定的）——
@@ -3475,11 +3768,20 @@ public partial class InkEngine
         if (s.Kind == StrokeKind.Line)
         {
             if (s.Points.Count < 2) return true;
+            // **和"画直线"同一套吸附**（用户 2026-10-05："停顿变直线那个吸附太大，
+            // 和画直线统一一下"）：软吸附到特殊角 ±1°，Shift = 15° 硬网格、Alt = 自由。
+            // 原来走的是识别器那套"只吸 0/90、容差 4°"（`SnapToAxis`）——两条路各一套、
+            // 容差差 4 倍；长线上一偏就是几十像素。现在**只有 `SnapEndPoint` 这一处权威实现**。
+            bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
+            bool alt = (Native.GetAsyncKeyState(0x12 /* VK_MENU */) & 0x8000) != 0;
             var a = _dwellLinePin;
-            var (_, b, _) = ShapeRecognize.SnapToAxis(a, p, DwellSnapDeg);
+            var b = SelectionHandles.SnapEndPoint(a, p, shift, alt, out bool snapped);
             s.SetPoints(new[] { a, b });
             _shapeInclination = SelectionHandles.InclinationDegrees(a, b);
-            _shapeInclinationSnapped = Vector2.Distance(b, p) > 0.01f;
+            // 长度读数和 α 同源同帧。⚠ 这一位原来没写：幽灵期拖长拖短，标签里的"长"
+            // 一直停在 0/旧值（用户 2026-10-05："拉长变短，那个长度也没变"）。
+            _shapeLength = Vector2.Distance(a, b);
+            _shapeInclinationSnapped = snapped;
             _shapeAnchor = b;
             return true;
         }
@@ -3608,6 +3910,14 @@ public partial class InkEngine
         ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布，下游全按画布坐标走
         PointerX = x; PointerY = y; PointerInside = true;
 
+        // 回放：控制条悬停 / 拖进度（屏幕坐标，和条自己的坐标系一致）。
+        // 拖进度时不再往下走——这一串移动归控制条。
+        if (_replay != null)
+        {
+            ReplayPointerMove(screenX, screenY);
+            if (_replayScrubbing) return;
+        }
+
         // 图库面板的悬停（和按下同一条口径：面板是最上面那一层）。
         // 格子亮一下是"这一格点得中"的反馈；整理模式下光标停在红 ✕ 上也是同一套。
         if (LibraryPanelOpen && !_drawing)
@@ -3631,7 +3941,8 @@ public partial class InkEngine
         // 界面捕获了指针（例如按下按钮后滑出去），消息全归界面。
         if (UiCapturing)
         {
-            UiPointerMove(screenX, screenY, pressure, false, inverted);   // 逻辑屏幕坐标
+            ClearEngineTooltip();
+            UiPointerMove(screenX, screenY, pressure, false, inverted, id);   // 逻辑屏幕坐标
             _dirty = true;
             return;
         }
@@ -3642,29 +3953,50 @@ public partial class InkEngine
         // **捕获分支**会转发，而"鼠标停在按钮上"恰恰是没捕获的状态——
         // 于是界面的悬停永远不会亮，而且不报错，只是"感觉不跟手"。
         // 书写中不转发：那一笔已经归画布了，界面这时候不该再动。
-        if (!_drawing && UiPointerMove(screenX, screenY, pressure, ptype == Native.PT_PEN, inverted))
+        if (!_drawing && UiPointerMove(screenX, screenY, pressure, ptype == Native.PT_PEN, inverted, id))
         {
+            ClearEngineTooltip();                 // 指针在界面那条上：引擎侧提示让位
             if (!_uiHover) { _uiHover = true; ApplyCursor(); }
             _dirty = true;
             return;
         }
         if (_uiHover) { _uiHover = false; ApplyCursor(); }
 
+        // 课堂计时卡片：拖动跟手 / 悬停（排在 PPT 条之前、穿透之前——同按下顺序）。
+        if (!_drawing && TimerCardPointerMove(screenX, screenY))
+        {
+            ClearEngineTooltip();
+            ApplyCursor();
+            _dirty = true;
+            return;
+        }
+
+        // 课堂点名卡片：同上。
+        if (!_drawing && RollCardPointerMove(screenX, screenY))
+        {
+            ClearEngineTooltip();
+            ApplyCursor();
+            _dirty = true;
+            return;
+        }
+
         // 底部那两条 PPT 控件（放映时才在）：悬停高亮 / 进度条拖动。
         // 排在穿透之前——穿透时它的悬停与拖动照样要跟手。
         if (!_drawing && PptBarPointerMove(screenX, screenY))
         {
+            UpdateEngineTooltip();                // 条上的悬停提示（页码/箭头/菜单）
             ApplyCursor();
             _dirty = true;
             return;
         }
 
         // 穿透模式：我们不收输入，也不该动光标（那是下层窗口的事）。
-        if (PassThrough) { _dirty = true; return; }
+        if (PassThrough) { ClearEngineTooltip(); _dirty = true; return; }
 
         // 拖滚动条：和"画一笔"互斥。
         if (ScrollBarDragging)
         {
+            ClearEngineTooltip();
             UpdateScrollBarDrag(screenY);
             ApplyCursor();
             _dirty = true;
@@ -3685,6 +4017,7 @@ public partial class InkEngine
             // 于是悬停光标、滚动条悬停、落点预览都无从谈起。
             UpdateScrollBarHover(screenX, screenY);
             UpdateBarHover(x, y);                  // 操作条九格的 hover 态（画与命中同源）
+            UpdateEngineTooltip();                 // 引擎侧悬停提示（操作条 / PPT 条）
             ApplyCursor();
             if (DrawnCursor != ToolCursorShape.None) _dirty = true;
             return;
@@ -3779,7 +4112,7 @@ public partial class InkEngine
         if (UiCapturing && ReadPointer(id, out float ux, out float uy, out float upressure,
                                        out bool uinverted, out _))
         {
-            UiPointerUp(ux, uy, upressure, false, uinverted);
+            UiPointerUp(ux, uy, upressure, false, uinverted, id);
             // **必须显式放开捕获**：按钮上也走 SetCapture（拖出按钮、在按钮上滑开
             // 都要继续收到消息），而系统**不会**在按键抬起时替我们放开。
             // 忘了这一句的后果不是"按钮卡住"，而是**整台机器的鼠标事件都还挂在
@@ -3802,6 +4135,33 @@ public partial class InkEngine
             return;
         }
 
+        // 课堂计时卡片：**只要按下归过它，就无条件放开捕获**（哪怕卡片已经被 ✕ 关掉、
+        // 或者 ReadPointer 这一次失败）——漏掉这一句就是"整机鼠标挂在我们窗口上"。
+        if (_timerCapturing)
+        {
+            if (ReadPointer(id, out float tx, out float ty, out _, out _, out _))
+                TimerCardPointerUp(tx, ty);
+            _timerCapturing = false;
+            Native.ReleaseCapture();
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
+        // 课堂点名卡片：同上。
+        if (_rollCapturing)
+        {
+            if (ReadPointer(id, out float rx2, out float ry2, out _, out _, out _))
+                RollCardPointerUp(rx2, ry2);
+            _rollCapturing = false;
+            Native.ReleaseCapture();
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
         // PPT 控件条（放映时才在）：**这一次按下是它吃掉的就由它收尾**——
         // 长按（拿起 / 拖走）和短按（弹页号面板）都在这里结束。
         // 必须显式 ReleaseCapture（按下那一刻 SetCapture 过）：忘了这一句，
@@ -3810,6 +4170,18 @@ public partial class InkEngine
         {
             _pptCapturing = false;
             PptBarPointerUp(bx, by);
+            Native.ReleaseCapture();
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
+        // 回放控制条：这一下按下归它就由它收尾（拖进度条的松手也在这里）。
+        if (_replayCapturing && ReadPointer(id, out float rx, out float ry, out _, out _, out _))
+        {
+            _replayCapturing = false;
+            ReplayPointerUp(rx, ry);
             Native.ReleaseCapture();
             _drawing = false;
             _dirty = true;
@@ -3837,42 +4209,215 @@ public partial class InkEngine
         EndStroke();
     }
 
-    /// <summary>动态橡皮：落笔那一刻把速度与系数归到基准（第一下不放大，移动中才渐入）。</summary>
+    /// <summary>动态橡皮：落笔那一刻把速度与系数归到基准（第一下就是滑条那个大小，移动中才渐入）。</summary>
     private void ResetDynamicEraser()
     {
+        double now = NowMs;
         _eraseSpeedEma = 0f;
+        _eraseFine = _eraseGross = 0f;
+        _eraseFineDist = _eraseFineMs = 0f;
+        _eraseGrossDist = _eraseGrossMs = 0f;
         _eraseDynFactor = 1f;
-        _eraseLastMs = NowMs;
+        _eraseTarget = 1f;
+        _eraseHoldBaseMs = now;
+        _eraseDecaying = false;
+        _eraseTestIdle = 0f;
+        _eraseLastMs = now;
+        RebuildEraserHud();
+    }
+
+    /// <summary>
+    /// 给定速度的**稳态**目标系数（自检和文档共用；回差带里取"从慢往上走"那一支）。
+    /// 曲线：`0.8 以下 → 1.0`（基准，不缩）；以上 `1.0 + (v − 0.8) × 1.0`，夹到 1.0~2.5（2.3 到顶）。
+    /// </summary>
+    internal static float EraserTargetFactorForSpeed(float speedPxPerMs)
+    {
+        if (speedPxPerMs <= EraserSpeedBack) return EraserFactorMin;
+        return Math.Clamp(EraserFactorMin + (speedPxPerMs - EraserSpeedKnee) * EraserSpeedSlope,
+                          EraserFactorMin, EraserFactorMax);
+    }
+
+    /// <summary>
+    /// 平滑一步：朝目标挪（涨/收时间常数不同 + 最少步长），带**回差**——
+    /// 速度落在 [0.6, 0.8] 之间时目标保持不变，速度在门槛附近抖也不会来回切。
+    ///
+    /// <paramref name="allowGrow"/> = false 时**只许收、不许涨**（空闲缓释用）：
+    /// 停住不动的时候 gross 通道还没漏空、目标暂时还在高处，不允许它把尺寸**越停越大**。
+    /// </summary>
+    private void ApplyEraserTarget(double nowMs, bool allowGrow = true)
+    {
+        float target;
+        if (_eraseSpeedEma < EraserSpeedBack) target = EraserFactorMin;
+        else if (_eraseSpeedEma > EraserSpeedKnee) target = EraserTargetFactorForSpeed(_eraseSpeedEma);
+        else target = _eraseTarget;                          // 回差带：保持
+
+        if (!allowGrow && target > _eraseDynFactor) target = _eraseDynFactor;   // 空闲：只许收
+        _eraseTarget = target;
+        float gap = target - _eraseDynFactor;
+        if (MathF.Abs(gap) < 0.001f) { _eraseDynFactor = target; return; }
+
+        float dt = (float)Math.Max(0.5, nowMs - _eraseLastMs);
+        float tau = target > _eraseDynFactor ? EraserGrowTauMs : EraserShrinkTauMs;
+        float step = gap * (1f - MathF.Exp(-dt / tau));
+        if (MathF.Abs(step) < EraserMinStep)
+            step = MathF.Sign(gap) * MathF.Min(EraserMinStep, MathF.Abs(gap));
+        _eraseDynFactor += step;
+    }
+
+    /// <summary>
+    /// 速度估计：两条通道各自"按时间/距离攒满一个窗口"再结算，取**较大值**当目标速度。
+    /// · fine（40ms / 12px）：跟手，快扫立刻反映；
+    /// · gross（350ms / 120px）：慢通道——慢下来时它还停在旧速度上，尺寸不会一慢就塌。
+    /// （抄 MyPaint 的 Fine/Gross Speed：fine 跟手、gross "changes very slowly"。）
+    /// </summary>
+    private void FeedEraserSpeed(float dist, float dtMs)
+    {
+        float dt = MathF.Max(0.5f, dtMs);
+
+        _eraseFineDist += dist; _eraseFineMs += dt;
+        if (_eraseFineMs >= EraserFineWindowMs || _eraseFineDist >= EraserFineWindowPx)
+        {
+            _eraseFine = _eraseFineDist / MathF.Max(1f, _eraseFineMs);
+            _eraseFineDist = 0f; _eraseFineMs = 0f;
+        }
+
+        _eraseGrossDist += dist; _eraseGrossMs += dt;
+        if (_eraseGrossMs >= EraserGrossWindowMs || _eraseGrossDist >= EraserGrossWindowPx)
+        {
+            _eraseGross = _eraseGrossDist / MathF.Max(1f, _eraseGrossMs);
+            _eraseGrossDist = 0f; _eraseGrossMs = 0f;
+        }
+
+        _eraseSpeedEma = MathF.Max(_eraseFine, _eraseGross);
     }
 
     /// <summary>
     /// 动态橡皮：喂一个采样点（画布坐标）更新"速度 → 尺寸系数"。
-    /// 曲线：`factor = clamp(0.6 + 速度(物理像素/毫秒) × 0.6, 0.6, 2.5)`——
-    /// 慢（<0.2）≈0.7×、中（1.0）≈1.2×、快（≥3）≈2.4×，真机再调这一个系数。
-    /// 速度走 EMA（0.35）滑动，不然手一抖尺寸就跳。
+    /// 速度走 `FeedEraserSpeed`（按时间窗口）；目标与平滑见 `ApplyEraserTarget`。
     /// </summary>
     private void UpdateDynamicEraser(float x, float y)
     {
         if (!DynamicEraser) { _eraseDynFactor = 1f; return; }
+        if (EraserFactorOverrideForTest > 0f) { _eraseDynFactor = EraserFactorOverrideForTest; return; }
         double now = NowMs;
         float dx = x - _lastEraseX, dy = y - _lastEraseY;
-        float dist = MathF.Sqrt(dx * dx + dy * dy);
-        float dt = (float)Math.Max(0.5, now - _eraseLastMs);   // 夹住：防除 0 / 时间戳抖动
+        float dt = (float)Math.Max(0.5, now - _eraseLastMs);
+        FeedEraserSpeed(MathF.Sqrt(dx * dx + dy * dy), dt);
+        ApplyEraserTarget(now);
         _eraseLastMs = now;
-        float speed = dist / dt;                               // 物理像素 / 毫秒
-        _eraseSpeedEma = _eraseSpeedEma <= 0f
-            ? speed
-            : _eraseSpeedEma + (speed - _eraseSpeedEma) * 0.35f;
-        _eraseDynFactor = Math.Clamp(0.6f + _eraseSpeedEma * 0.6f, 0.6f, 2.5f);
+        _eraseHoldBaseMs = now;          // 有新移动：缓释的保持期重新开始
+        _eraseDecaying = false;
+        _eraseTestIdle = 0f;
+
+        // 诊断浮层：拖动中限频刷新（60ms），让人能看清"我这一下是什么速度"。
+        if (EraserHud && now >= _eraserHudNextMs)
+        {
+            _eraserHudNextMs = now + 60;
+            RebuildEraserHud();
+            _dirty = true;
+        }
     }
 
-    /// <summary>自检用：把一个速度（物理像素/毫秒）喂进去，看算出什么尺寸系数。</summary>
-    internal float DynamicEraserFactorForTest(float speedPxPerMs)
+    /// <summary>
+    /// 每帧推一次：指针**停住**之后把尺寸顺着缓释回去（不再等下一次移动来触发）。
+    ///
+    /// 为什么要这一条：尺寸只在**收到指针消息**时才更新——鼠标停住 = 没有消息 = 尺寸**冻在最大**；
+    /// 再轻轻一动，速度窗口立刻算出很小的速度 → 目标回到下限 → 看起来"突然变小"（用户报的）。
+    /// 现在停住超过 HoldMs 就每帧喂一个"零距离"样本：两条通道随时间自己漏空，目标随之回落到下限，
+    /// 尺寸按"收"的时间常数顺着缩回去——**不需要另写一套衰减逻辑**（和 MyPaint 的"输入滤波"同源：
+    /// 他们的速度输入在停止时自然归零，我们只是把"归零"在空闲时也喂进去）。
+    ///
+    /// "正在减速"（fine 明显小于 gross）= 快扫刚停下 → 用更短的保持时间**提前**开始收；
+    /// 这就是"加速度"以稳定形式入场的位置（两个滤波量的差 = 加速度的符号，噪声被压了两遍）。
+    /// </summary>
+    internal void TickEraserIdleDecay()
     {
-        _eraseSpeedEma = speedPxPerMs;
-        _eraseDynFactor = Math.Clamp(0.6f + _eraseSpeedEma * 0.6f, 0.6f, 2.5f);
+        if (!DynamicEraser || !PixelEraseDragging) return;
+        if (TickEraserIdleDecayCore(NowMs)) _dirty = true;   // 还在缓释 → 保证还有下一帧
+    }
+
+    /// <summary>缓释一步。返回 true = 这一步动过（调用方据此保持刷新）。</summary>
+    private bool TickEraserIdleDecayCore(double nowMs)
+    {
+        if (!_eraseDecaying)
+        {
+            // 保持期：从"上一次移动"开始算，够 HoldMs 才进入缓释（期间尺寸**故意冻住**）。
+            float idle = (float)(nowMs - _eraseHoldBaseMs);
+            if (idle < EraserIdleHoldMs) return false;
+            _eraseDecaying = true;
+            _eraseLastMs = nowMs - 1.0;                 // 缓释的第一步按 1ms 推进
+        }
+        float step = (float)Math.Max(1.0, nowMs - _eraseLastMs);
+        FeedEraserSpeed(0f, step);                      // 零距离样本 → 通道随时间漏空
+        ApplyEraserTarget(nowMs, allowGrow: false);     // 空闲：只许收、不许涨
+        _eraseLastMs = nowMs;
+        return true;
+    }
+
+    /// <summary>自检用：模拟"空闲 dtMs"（保持期累计、之后每步缓释），返回当前系数。</summary>
+    internal float DynamicEraserIdleForTest(float dtMs)
+    {
+        if (!_eraseDecaying)
+        {
+            _eraseTestIdle += dtMs;
+            if (_eraseTestIdle < EraserIdleHoldMs) return _eraseDynFactor;   // 保持期内不动
+            _eraseDecaying = true;
+        }
+        FeedEraserSpeed(0f, dtMs);
+        ApplyEraserTarget(_eraseLastMs + dtMs, allowGrow: false);
+        _eraseLastMs += dtMs;
         return _eraseDynFactor;
     }
+
+    /// <summary>刷新橡皮诊断浮层的文字（速度 / 目标 / 当前系数 / 尺寸 + 曲线参数）。</summary>
+    private void RebuildEraserHud()
+    {
+        if (!EraserHud) return;
+        float f = PixelEraseDragging ? _eraseDynFactor : 1f;
+        EraserHudText = $"速度 {_eraseSpeedEma:F2} px/ms（fine {_eraseFine:F2} / gross {_eraseGross:F2}）　"
+                      + $"目标 ×{_eraseTarget:F2}　当前 ×{f:F2}　"
+                      + $"尺寸 {PixelEraserWidthLogical * f:F0}×{PixelEraserHeightLogical * f:F0} 逻辑像素"
+                      + $"（基准 {PixelEraserWidthLogical:F0}×{PixelEraserHeightLogical:F0}）\n"
+                      + $"曲线：≤{EraserSpeedKnee:F2} 恒 ×{EraserFactorMin:F1}（死区）→ ≥{EraserSpeedTop:F1} 封顶 ×{EraserFactorMax:F1}；"
+                      + $"回差 {EraserSpeedBack:F2}/{EraserSpeedKnee:F2}；"
+                      + $"通道 fine {EraserFineWindowMs:F0}ms / gross {EraserGrossWindowMs:F0}ms；"
+                      + $"停 {EraserIdleHoldMs:F0}ms 后缓释（减速 {EraserDecelHoldMs:F0}ms）；"
+                      + $"平滑 涨 {EraserGrowTauMs:F0} / 收 {EraserShrinkTauMs:F0} ms";
+    }
+
+    /// <summary>自检用：把尺寸系数钉死在一个值上（验"框和擦严丝合缝"时不受手速影响）。0 = 不覆盖。</summary>
+    internal float EraserFactorOverrideForTest;
+
+    /// <summary>自检用：把一个速度（物理像素/毫秒）喂进去，看算出什么**稳态**系数（后门关掉时恒 1）。</summary>
+    internal float DynamicEraserFactorForTest(float speedPxPerMs)
+    {
+        if (!DynamicEraser) return 1f;
+        _eraseSpeedEma = speedPxPerMs;
+        _eraseTarget = EraserTargetFactorForSpeed(speedPxPerMs);
+        _eraseDynFactor = _eraseTarget;
+        return _eraseDynFactor;
+    }
+
+    /// <summary>自检用：喂一步"已知速度"（走真实的目标 + 平滑那一段），返回当前系数——慢速抖不抖靠它。</summary>
+    internal float DynamicEraserAdvanceForTest(float speedPxPerMs, double dtMs)
+    {
+        _eraseSpeedEma = speedPxPerMs;
+        ApplyEraserTarget(_eraseLastMs + dtMs);
+        return _eraseDynFactor;
+    }
+
+    /// <summary>自检用：直接喂"距离 + 时间"给速度窗口，返回窗口速度（px/ms）——验窗口抗不抗抖。</summary>
+    internal float DynamicEraserFeedForTest(float dist, double dtMs)
+    {
+        FeedEraserSpeed(dist, (float)dtMs);
+        return _eraseSpeedEma;
+    }
+
+    /// <summary>自检用：把动态橡皮的状态归零（等价于"刚落笔"）。</summary>
+    internal void ResetDynamicEraserForTest() => ResetDynamicEraser();
+
+    /// <summary>自检用：直接开/关动态橡皮（产品里走 `--eraserfixed`）。</summary>
+    internal bool DynamicEraserForTest { get => DynamicEraser; set => DynamicEraser = value; }
 
     /// <summary>
     /// Walks the eraser along the segment the pointer just travelled instead of
@@ -3909,12 +4454,11 @@ public partial class InkEngine
     /// </summary>
     private void EraseRectAlongPath(float x, float y)
     {
-        float hw = PixelEraserHalfWidthPx, hh = PixelEraserHalfHeightPx;
         float dx = x - _lastEraseX, dy = y - _lastEraseY;
-        // 动态橡皮：按这一段的"速度"把尺寸放大（落笔第一下用基准，移动中才渐入）
+        // 动态橡皮：这一段的"速度"算出的尺寸 = 框画的那个尺寸（同一份，看见的就是擦的）。
+        // 落笔那一下还没速度 → 系数 1 → 和悬停时看到的框一样大。
         UpdateDynamicEraser(x, y);
-        hw *= _eraseDynFactor;
-        hh *= _eraseDynFactor;
+        float hw = PixelEraserCursorHalfWidthPx, hh = PixelEraserCursorHalfHeightPx;
         float dist = MathF.Sqrt(dx * dx + dy * dy);
         int steps = Math.Clamp((int)(dist / MathF.Max(1f, MathF.Min(hw, hh))), 1, 64);
 
@@ -3959,6 +4503,8 @@ public partial class InkEngine
         // PPT 条那块小窗同理（它也是我们的窗口）。
         if (_uiInputHwnd != IntPtr.Zero) list.Add(_uiInputHwnd);
         if (_pptInputHwnd != IntPtr.Zero) list.Add(_pptInputHwnd);
+        if (_timerInputHwnd != IntPtr.Zero) list.Add(_timerInputHwnd);
+        if (_rollInputHwnd != IntPtr.Zero) list.Add(_rollInputHwnd);
         return list.ToArray();
     }
 
@@ -4510,8 +5056,7 @@ public partial class InkEngine
             Doc.Dirty.Add(ActiveStroke.PaddedBounds);
             ActiveStroke = null;
         }
-        ClearRenderTail();
-        ActiveStrokeOnTrail = false;
+        // [随老预测系统删除 2026-10-05] 这里原来是 `ClearRenderTail(); ActiveStrokeOnTrail = false;`
         _dwell.Reset();
         _dwellInk = null;
         _dismissTapArmed = false;
@@ -4846,7 +5391,7 @@ public partial class InkEngine
         int chosen = want;
         BorrowFocusForDialog();                 // 覆盖层平时不抢焦点，弹框前临时放开
         ExportDialogOpen = true;                // 弹框期间不许再抬覆盖层，见 ReassertTopmost
-        try { path = ExportFileDialog.AskForImage(OwnerHwnd(), suggested, want, out chosen); }
+        try { path = ExportFileDialog.AskForImage(OwnerHwnd(), suggested, want, "导出选中的内容", out chosen); }
         catch (Exception ex)
         {
             // **弹框这一步出错绝不允许打死软件**。真踩过：.NET 7 起结构体字段不能用
@@ -4946,9 +5491,11 @@ public partial class InkEngine
         {
             long ex = Native.GetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE).ToInt64();
             Native.SetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE, new IntPtr(ex & ~Native.WS_EX_NOACTIVATE));
+            // ⚠ **不要 SWP_FRAMECHANGED**：覆盖层是 DComp 合成的全屏层，强制重算框架
+            // 会在换样式那一帧闪一下白（2026-10-05 用户报"保存图片先闪白屏"的来源之一）。
+            // WS_EX_NOACTIVATE 属激活类样式，去掉它不需要 FRAMECHANGED。
             Native.SetWindowPos(w.Hwnd, IntPtr.Zero, 0, 0, 0, 0,
-                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER
-                | 0x0020 /*SWP_FRAMECHANGED*/);
+                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER);
             Native.SetWindowPos(w.Hwnd, new IntPtr(-2) /*HWND_NOTOPMOST*/, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
         }
@@ -4964,9 +5511,9 @@ public partial class InkEngine
         {
             long ex = Native.GetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE).ToInt64();
             Native.SetWindowLongPtr(w.Hwnd, Native.GWL_EXSTYLE, new IntPtr(ex | Native.WS_EX_NOACTIVATE));
+            // 同 BorrowFocusForDialog：这里也不带 SWP_FRAMECHANGED（闪白来源）。
             Native.SetWindowPos(w.Hwnd, IntPtr.Zero, 0, 0, 0, 0,
-                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER
-                | Native.SWP_NOACTIVATE | 0x0020 /*SWP_FRAMECHANGED*/);
+                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
             // 把"置顶"装回去（覆盖层平时必须浮在所有程序上面）
             Native.SetWindowPos(w.Hwnd, new IntPtr(-1) /*HWND_TOPMOST*/, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
@@ -4979,6 +5526,7 @@ public partial class InkEngine
     /// </summary>
     internal bool PasteFromClipboard()
     {
+        ExitReplayForEdit("粘贴");
         if (ClipboardInk.TryGetObjects(out var objs) && objs.Count > 0)
         {
             var vp = ViewportCanvas;
@@ -5318,11 +5866,10 @@ public partial class InkEngine
         FlushInkRecord();
         // **抬手就关掉停顿那颗定时器**：它只在"有笔在写"的时候有意义（见 StartDwellTimer）。
         StopDwellTimer();
-        // 收笔：渲染尾立刻作废（它是"正在写"才有的东西）。**必须在提交进文档之前**清——
-        // 不清的话这一条会永远在末尾带着一小截预测出来的墨，存档、导出、下次打开都带着。
-        ClearRenderTail();
-        ActiveStrokeOnTrail = false;
+        // [删除 2026-10-05] 收笔时清"预测尾"：随老预测系统一起移除（渲染尾已不存在）。
         Doc.EndErase();
+        // 面积擦抬手：框回基准尺寸（悬停时显示的 = 下次按下去第一下擦掉的那一块）。
+        PixelEraseDragging = false;
         if (CaptureActive)
         {
             // 起框那一次松手 → 进调整阶段；调整里拖手柄那几次松手 → 只收手。
@@ -5500,13 +6047,7 @@ public partial class InkEngine
                     + $"，设备={PointerTypeName(_activePointerType)}"
                     + $"，压感={(ActiveStrokeHasPressure ? "有" : "无")}"
                     + $"，合并({LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 个采样点)"
-                    // 预测器与预测尾：调参时这两项是**唯一能证明"到底生效没有"的东西**
-                    // （速度低于 MinSpeed 时预测器会主动不出点，光看屏幕分不清是"没生效"还是"没必要"）。
-                    + $"，预测器={_predictor.Count} 点/末速度 {_predictor.Speed:F3} px/ms"
-                    + $"，预测尾={(_strokeHadTail ? $"自绘有（最多 {_strokeTailMax:F1} px）" : "自绘无")}"
-                    + (StrokePredCount > 0
-                        ? $"，喂DWM {StrokePredCount} 段（平均 {StrokePredLeadAvg:F1} / 最大 {StrokePredLeadMax:F1} px）"
-                        : "")
+                    // [删除 2026-10-05] 预测器/预测尾/喂 DWM 段数的日志：随预测系统一起移除。
                     // 分配与 GC：低配机排查"偶发卡顿"的**唯一依据**。
                     // 第 2 代那一位出现在书写期间，就说明这一笔画到一半被全堆回收打断过。
                     + $"，分配 {StrokeAllocBytes / 1024.0:F1} KB/GC {StrokeGc0}/{StrokeGc1}/{StrokeGc2}";
@@ -5649,6 +6190,9 @@ public partial class InkEngine
         // 只对画布有意义。
         if (!_drawing && (_uiHover || PointerOnDrawnChrome())) return CursorKind.Default;
 
+        // 回放中一律箭头：画布那一下只是"暂停/继续"，不该顶着笔尖圈/橡皮圈。
+        if (_replay != null) return CursorKind.Default;
+
         if (PassThrough) return CursorKind.Leave;                 // 谁来接管由系统决定
         if (LastPointerType == Native.PT_TOUCH) return CursorKind.Hidden;
 
@@ -5714,7 +6258,9 @@ public partial class InkEngine
             return true;
         // 画布坐标 → 屏幕坐标只差一个垂直滚动量（ScreenToCanvas 就是 `y -= ViewOffsetY`），
         // x 没有滚动、直接用。
-        return PptBarContains(PointerX, PointerY + ViewOffsetY);
+        return PptBarContains(PointerX, PointerY + ViewOffsetY)
+            || TimerCardContains(PointerX, PointerY + ViewOffsetY)
+            || RollCardContains(PointerX, PointerY + ViewOffsetY);
     }
 
     /// <summary>
@@ -5823,10 +6369,8 @@ public partial class InkEngine
         var h = SelectionHandles.HitTest(canvasX, canvasY, Doc.Selected, frame, dpi);
         if (h != SelHandle.None) return HandleCursor(h);
 
-        var lp = frame.ToLocalPoint(new Vector2(canvasX, canvasY));
-        bool inside = lp.X >= frame.Local.MinX && lp.X <= frame.Local.MaxX
-                   && lp.Y >= frame.Local.MinY && lp.Y <= frame.Local.MaxY;
-        return inside ? CursorKind.Move : null;
+        return SelectionHandles.InsideUiFrame(frame, new Vector2(canvasX, canvasY), dpi)
+            ? CursorKind.Move : null;
     }
 
     private static CursorKind HandleCursor(SelHandle h) => h switch
@@ -5953,8 +6497,9 @@ public partial class InkEngine
                     return MathF.Max(HighlighterWidthLogical * DpiScale * 0.5f, 2f) + 12f;
                 case ToolCursorShape.Rect:
                     // 矩形：按**半对角线**扩，四个角才不会在快速移动时留残影。
-                    return MathF.Sqrt(PixelEraserHalfWidthPx * PixelEraserHalfWidthPx
-                                    + PixelEraserHalfHeightPx * PixelEraserHalfHeightPx) + 12f;
+                    // 用落点框（拖动中会随速度变大）——按基准算的话，放大的那一圈会留残影。
+                    return MathF.Sqrt(PixelEraserCursorHalfWidthPx * PixelEraserCursorHalfWidthPx
+                                    + PixelEraserCursorHalfHeightPx * PixelEraserCursorHalfHeightPx) + 12f;
                 case ToolCursorShape.Dot:
                     return CursorDotRadius * 1.5f + 10f;
                 default:
@@ -6755,12 +7300,12 @@ public partial class InkEngine
         // 读数状态从这一刻重新开始：不清的话，上一次画线吸住的那个强调色会漏到
         // 这一次的第一帧（还没收到移动消息，α 也还没算）。
         _shapeInclination = 0f;
+        _shapeLength = 0f;
         _shapeInclinationSnapped = false;
         _shapeAnchor = new Vector2(x, y);
         // 三角形 / 平行四边形是"外框 → 三个顶点"，拖动期每一帧都要拿**按下那一刻**的
         // 那个角去算外框——它不在控制点表里（控制点已经被推成三个顶点了）。
         _shapeBoxOrigin = new Vector2(x, y);
-        _predictor.Reset();
         ActiveStrokeHasPressure = false;
         LastCoalescedSamples = LastCoalescedMessages = 0;
     }
@@ -6865,6 +7410,7 @@ public partial class InkEngine
             // 画线过程中也把 α 报给浮动层（用户 2026-09-18 要的：边画边看这条线是多少度）。
             // α 由**权威函数**算，这里只是把它和"吸没吸住"一起存下来，供渲染与脏区用。
             _shapeInclination = SelectionHandles.InclinationDegrees(start, end);
+            _shapeLength = Vector2.Distance(start, end);
             _shapeInclinationSnapped = snapped;
         }
         s.SetEnd(end.X, end.Y);
@@ -6883,6 +7429,10 @@ public partial class InkEngine
     /// <summary>画线中那条线**当前结果**的 α（[0°,180°)）；不在画线时是 0。</summary>
     internal float ShapeInclinationDegrees => _shapeInclination;
 
+    /// <summary>画线中那条线**当前结果**的长度（画布像素）。和 α 同源、同一时刻更新，
+    /// 标签把两个数一起报（2026-10-05 用户："再给直线增加一个长度，和度数是同一个逻辑"）。</summary>
+    internal float ShapeLength => _shapeLength;
+
     /// <summary>画线中的 α 是"吸"出来的吗（特殊角 / Shift 网格）——标签按它变色。</summary>
     internal bool ShapeInclinationSnapped => _shapeInclinationSnapped;
 
@@ -6890,6 +7440,7 @@ public partial class InkEngine
     internal Vector2 ShapeInclinationAnchor => _shapeAnchor;
 
     private float _shapeInclination;
+    private float _shapeLength;
     private bool _shapeInclinationSnapped;
     private Vector2 _shapeAnchor;
     /// <summary>
@@ -6950,7 +7501,6 @@ public partial class InkEngine
                 float cx = s.X, cy = s.Y;
                 ScreenToCanvas(ref cx, ref cy);
                 ActiveStroke.AddPoint(cx, cy, s.Pressure, s.TimeMs);
-                _predictor.Add(s.X, s.Y, s.TimeMs);
                 PenTotalPoints++;
                 if (s.HasPressure) PenPressurePoints++;
             }
@@ -6964,7 +7514,6 @@ public partial class InkEngine
             //   · 荧光笔是一支"平头马克笔"，粗细随压力变会让划出来的带子忽宽忽窄（满压还是 2 倍宽）；
             //   · 激光笔只是指一下，没有"笔迹粗细"这回事。
             if (ActiveStrokeHasPressure && ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
-            UpdateRenderTail();
             return;
         }
 
@@ -6988,81 +7537,19 @@ public partial class InkEngine
                 float cx = s.X, cy = s.Y;
                 ScreenToCanvas(ref cx, ref cy);
                 ActiveStroke.AddPoint(cx, cy, s.Pressure, s.TimeMs);
-                _predictor.Add(s.X, s.Y, s.TimeMs);
                 PtrTotalPoints++;
             }
             // 非笔设备没有 penMask，也就永远不会给这一笔打上 HasPressure——
             // 这正是 WPF / 微软白板里"鼠标画的那条线是等宽"的来源。
-            UpdateRenderTail();
             return;
         }
 
         // ---- 读不到合并点：退回"一个消息一个点"的老路（行为与以前完全一致）------
         ActiveStroke.AddPoint(curCanvasX, curCanvasY, curPressure, NowMs);
-        _predictor.Add(screenX, screenY, NowMs);
-        UpdateRenderTail();
     }
 
-    /// <summary>
-    /// 算出"正在写的那一笔"的**渲染尾**（预测段），写进 <see cref="Stroke.RenderTail"/>。
-    ///
-    /// 为什么要在我们自己画的那一笔上补：委托墨迹轨迹只对真笔开，鼠标 / 触摸没有任何
-    /// 低延时通道——它们的墨完全由我们画，于是墨的末端永远落在上一帧的位置。
-    /// 把预测段接上，末端就回到"现在"（模型见 Prediction/InkPredictor.cs）。
-    ///
-    /// 四条前提，缺一条就不加尾：
-    ///   · 预测开着；
-    ///   · 这一笔**没有**交给系统合成器画（交给它了就不能重复补，见 ActiveStrokeOnTrail）；
-    ///   · 自由笔迹 ＋ 笔 / 荧光笔 ＋ 实线（图形由控制点定义，没有"末端滞后"这回事；
-    ///     虚线接尾会让 dash 图案从接缝处重新开始，看着是断的）；
-    ///   · 预测器真的给出了点（刚起笔、慢写、急转弯时它会主动不给，见 Predict）。
-    ///
-    /// 预测在**屏幕**空间算（和委托轨迹同一条），画的时候换回**画布**空间——
-    /// 滚动之后尾巴才会跟着笔迹走。
-    /// </summary>
-    private void UpdateRenderTail()
-    {
-        var s = ActiveStroke;
-        if (s == null) return;
-
-        bool eligible = PredictEnabled && !ActiveStrokeOnTrail
-            && s.Kind == StrokeKind.Freehand
-            && (s.Tool == Tool.Pen || s.Tool == Tool.Highlighter)
-            && s.Dash == StrokeDash.Solid;
-
-        if (!eligible || s.Points.Count == 0) { ClearRenderTail(); return; }
-
-        int n = _predictor.Predict(_predBuf);
-        if (n == 0) { ClearRenderTail(); return; }
-
-        _tailScratch.Clear();
-        for (int i = 0; i < n; i++)
-        {
-            float cx = _predBuf[i].X, cy = _predBuf[i].Y;
-            ScreenToCanvas(ref cx, ref cy);
-            _tailScratch.Add(new Vector2(cx, cy));
-        }
-        var last = s.Points[^1];
-        PredictedTailLead = Vector2.Distance(new Vector2(last.X, last.Y), _tailScratch[^1]);
-        s.SetRenderTail(_tailScratch);
-        // 统计：这一笔到底有没有尾、最长多长。**必须能打印出来**——不然"手写板上看不出来"
-        // 这种事只能靠猜（2026-09-22 用户实测：鼠标甩得很难受、手写板毫无反应）。
-        _strokeHadTail = true;
-        if (PredictedTailLead > _strokeTailMax) _strokeTailMax = PredictedTailLead;
-        TailComputes++;
-        TailPointsTotal += n;
-        if (PredictedTailLead > TailLeadMax) TailLeadMax = PredictedTailLead;
-    }
-
-    /// <summary>
-    /// 把渲染尾收掉：起笔、收笔、以及"这一帧指针根本没动"的时候都要收。
-    /// 不收的后果是笔停住时笔尖前面一直挂着一小截预测出来的墨。
-    /// </summary>
-    private void ClearRenderTail()
-    {
-        ActiveStroke?.SetRenderTail(null);
-        PredictedTailLead = 0;
-    }
+    // [删除 2026-10-05] 原 `UpdateRenderTail()` / `ClearRenderTail()`（预测渲染尾的写入与收回）
+    // 随老预测系统整条链移除。算法与接线原文见 `.revert/2026-10-05-渲染减法/`。
 
     /// <summary>
     /// 湿墨该用多粗的半径：**和干墨同一个映射**（见 <see cref="PressureWidth"/>）。
@@ -7116,29 +7603,8 @@ public partial class InkEngine
             realCount++;
         }
 
-        int predCount = 0;
-        if (PredictEnabled)
-        {
-            int n = _predictor.Predict(_predBuf);
-            for (int i = 0; i < n && predCount < _trailPred.Length; i++)
-                _trailPred[predCount++] = new Vector2(_predBuf[i].X, _predBuf[i].Y);
-        }
-
-        if (predCount > 0)
-        {
-            float lead = Vector2.Distance(_trailReal[realCount - 1], _trailPred[predCount - 1]);
-            PredLeadSum += lead;
-            PredLeadCount++;
-            if (lead > PredLeadMax) PredLeadMax = lead;
-            if (lead > _strokePredMax) _strokePredMax = lead;      // 这一笔自己的最大值
-        }
-
-        win.AddInkTrailPoints(_trailReal, realCount, _trailPred, predCount, radius, _trailRadii);
-
-        // 系统合成器接手了这一笔的湿墨 → 把我们自己那份"渲染尾"收掉。
-        // 不收就是两边一起补，笔尖前面会出现重复的一小截。
-        ActiveStrokeOnTrail = true;
-        ClearRenderTail();
+        // [删除 2026-10-05] 预测点喂 DWM：随老预测系统移除（实测 DWM 本来就不画我们的预测点）。
+        win.AddInkTrailPoints(_trailReal, realCount, null, 0, radius, _trailRadii);
     }
 
     /// <summary>一个压力值 → 湿墨半径（和干墨同一映射、同一单位）。</summary>
@@ -7602,9 +8068,18 @@ public partial class InkEngine
         // 手测台：事件流水。撤销尤其重要——"擦完马上撤销"就是"这一擦不是我想要的"。
         if (EraserTelemetry != null && action != KeyAction.None)
             EraserTelemetry.Note(KeyMap.Describe(action), NowMs);
+
+        // 呼出盘开着时，别的动作先把它收掉（它自己的"再按一次"不算；Esc 在 HandleKeyDown 里单独处理）。
+        if (RadialPaletteActive && action != KeyAction.RadialPalette)
+            CancelRadialPalette("其它动作");
+
         switch (action)
         {
-            case KeyAction.TogglePassThrough: SetPassThrough(!PassThrough); break;
+            // 穿透开关（全局 Ctrl+Alt+Shift+T 这条同一条路）：退出时恢复进穿透前的板态，
+            // 见 SetPassThrough 的 restoreBoard。
+            case KeyAction.TogglePassThrough: SetPassThrough(!PassThrough, restoreBoard: true); break;
+            // 呼出盘：按住才出来的"标迹菜单"（松手确认，见 OpenRadialPalette）。
+            case KeyAction.RadialPalette: OpenRadialPalette(); break;
             // 工具键统一走 ToolKeyPress：**不管是应用内键还是"放映时的临时全局热键"**，
             // 都要有"已经是它 → 换色/换档"这条逻辑（用户 2026-09-30 实测：放映里 Ctrl+P
             // 能切到笔了，但已经是笔时再按不换色——就是因为这条热键路径漏了 ToolKeyPress）。
@@ -7698,6 +8173,9 @@ public partial class InkEngine
     /// </summary>
     private void SwitchTool(Tool t)
     {
+        // 任何换工具（面板格 / 工具键 / 自检）都要先把呼出盘收掉——盘还在、
+        // 工具已经换走，是最容易看出来的状态打架。
+        if (RadialPaletteActive) CancelRadialPalette("换工具");
         // 换到截图工具 = 记下"进截图之前用的工具"（8.3.1：Esc 取消时要回到它）。
         // 只记第一次（进来之后 Tool 已经是 Capture，不会再覆盖）。
         if (t == Tool.Capture && Tool != Tool.Capture) _toolBeforeCapture = Tool;
@@ -7736,6 +8214,8 @@ public partial class InkEngine
         // 穿透开着的时候点击落到下层程序上，画布根本收不到笔——这时"选中了笔"是个假状态：
         // 按钮亮着、写不出字。所以换工具（点面板也好、按热键也好）等于一句"我要开始用了"，
         // 顺手把穿透关掉。反过来，点面板上那个"鼠标"格是明说要穿透，它单独开。
+        // 这条退出**不恢复白板**（restoreBoard: false）：换工具的意思是"我现在就要写"，
+        // 画布要保持眼前所见——突然盖回白板反而是惊吓（和"穿透开关"退出区分，见 SetPassThrough）。
         if (PassThrough) SetPassThrough(false);
 
         // 半路换工具：那条还在写的激光轨迹**当作抬手收尾**（整批开始 2 秒计时）。
@@ -7805,9 +8285,30 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
-    private void SetPassThrough(bool on)
+    /// <summary>
+    /// 开关穿透。
+    ///
+    /// `restoreBoard`：退出穿透时，要不要把**进穿透时被顺手关掉的白板**恢复。
+    ///   · **穿透开关**退出（面板那一格 / 全局 `Ctrl+Alt+Shift+T`）传 true——
+    ///     老师按它的意思是"回到刚才"，所以"板开还是开、关还是关"；
+    ///   · **换工具**退出（`SwitchTool` 里的自动关穿透）传 false——那条路的意思是
+    ///     "我现在就要写"，画布要保持眼前所见（露出来的下层应用），突然盖回白板反而是惊吓；
+    ///     想回板，再点一下白板格就行（用户 2026-09-30 拍板，见《调研-快捷键-焦点与穿透》8.3）。
+    /// </summary>
+    private void SetPassThrough(bool on, bool restoreBoard = false)
     {
+        // 进穿透先记下板态（要被"开关退出"用来恢复）。
+        // 只在"真的从关到开"这一下记——重复调 SetPassThrough(true) 时 BoardOn 已经被关掉了，
+        // 再记一次就会把外面的快照覆盖成 false，退出时反而不恢复。
+        if (on && !PassThrough) _boardBeforePassThrough = BoardOn;
+
+        // 进穿透 = "键盘/指针都给下层"：开着的呼出盘收掉（和 8.5 工具键不响应同一条语义）。
+        if (on && RadialPaletteActive) CancelRadialPalette("进穿透");
+
         PassThrough = on;
+        // 穿透 = "键盘让给下层"：放映临时全局键跟着挂/摘（用户 2026-09-30 定，
+        // 见 PptHotkeys 那段注释）。不在放映时这一句是空操作。
+        SyncPptHotkeys();
         // 穿透打开/关掉时把激光轨迹清掉（原来是把 `Visible` 置假，等价于"立刻全没"）。
         // ⚠ 别只隐藏不清：轨迹会一直留在集合里，`Laser.Visible` 仍为真 →
         //    每一帧都出一帧（白烧 CPU），而且下次一进来它们又冒出来。
@@ -7817,8 +8318,8 @@ public partial class InkEngine
         //   · 开白板 → 关穿透：白板是不透明的一层，穿透是"点击落到下层程序"；
         //     两个一起开着，老师看到的是白板、点到的却是白板下面那个看不见的窗口。
         //   · 开穿透 → 关白板：同上，反过来也一样说不通。
-        // 关掉的那一方**不自动回来**（和"关板不自动开穿透"一致）：老师再点一下就行，
-        // 而"悄悄替你恢复"才是难查的那类行为。
+        // 被关掉的白板**开关退出时恢复**（restoreBoard，用户 2026-09-30 拍板）；
+        // **换工具退出不恢复**——理由见方法头那两行。
         if (on && BoardOn)
         {
             BoardOn = false;
@@ -7831,14 +8332,29 @@ public partial class InkEngine
         //（这一句是 `force`：改样式刚把光标恢复成箭头，而缓存里的值已经不成立了）。
         ApplyCursor(force: true);
 
-        // **穿透关掉 = 回到"能批注"的状态 → 必须把键盘/前台要回来**。
-        // 用户 2026-09-30 复现的真 bug：穿透开开关关几次之后，Ctrl+P 这些应用内快捷键
-        // 就彻底死了——因为穿透期间我们的窗口不是前台（样式里也不让它被激活），
-        // 关掉穿透时只恢复了样式、**没人把前台还给我们**，于是按键全被别的窗口收走。
-        // `SetKeyboardMode` 里那句 SetForegroundWindow 正是干这个的（幂等，重复调没副作用）。
-        // ⚠ 和"退出放映要把前台要回来"是同一类补丁，见 Ppt.ExitPptMode——以后凡是
-        //   "从别的状态切回批注态"的地方都要做这一步。
-        if (!on && _windows.Count > 0) SetKeyboardMode(KeyboardMode);
+        if (!on)
+        {
+            // **恢复板态**（只挂"开关退出"）：进穿透前板是开的、现在被我们一起关着 → 开回来。
+            // 恢复要跟 SetBoardFromUi 一样整层作废（底色是烘进分块缓存的）。
+            if (restoreBoard && _boardBeforePassThrough && !BoardOn)
+            {
+                BoardOn = true;
+                Doc.InvalidateAll();
+                NotifyUiStateChanged();
+                _dirty = true;
+                Console.WriteLine("退出穿透：白板恢复到进穿透之前（开着）");
+            }
+            _boardBeforePassThrough = false;   // 快照只服务相邻这几次穿透，用完即清
+
+            // **穿透关掉 = 回到"能批注"的状态 → 必须把键盘/前台要回来**。
+            // 用户 2026-09-30 复现的真 bug：穿透开开关关几次之后，Ctrl+P 这些应用内快捷键
+            // 就彻底死了——因为穿透期间我们的窗口不是前台（样式里也不让它被激活），
+            // 关掉穿透时只恢复了样式、**没人把前台还给我们**，于是按键全被别的窗口收走。
+            // `SetKeyboardMode` 里那句 SetForegroundWindow 正是干这个的（幂等，重复调没副作用）。
+            // ⚠ 和"退出放映要把前台要回来"是同一类补丁，见 Ppt.ExitPptMode——以后凡是
+            //   "从别的状态切回批注态"的地方都要做这一步。
+            if (_windows.Count > 0) SetKeyboardMode(KeyboardMode);
+        }
 
         Console.WriteLine($"pass-through = {on} (mode {PassMode})");
     }
@@ -7898,6 +8414,18 @@ public partial class InkEngine
             _pptInputHwnd = IntPtr.Zero;
             _pptInputShown = false;
         }
+        if (_timerInputHwnd != IntPtr.Zero)
+        {
+            Native.DestroyWindow(_timerInputHwnd);
+            _timerInputHwnd = IntPtr.Zero;
+            _timerInputShown = false;
+        }
+        if (_rollInputHwnd != IntPtr.Zero)
+        {
+            Native.DestroyWindow(_rollInputHwnd);
+            _rollInputHwnd = IntPtr.Zero;
+            _rollInputShown = false;
+        }
 
         _windows.Clear();
         s_map.Clear();
@@ -7905,6 +8433,11 @@ public partial class InkEngine
         Gfx.Shutdown();
         // 手测台：退出时把汇总写出来（逐条数据在每条拖拽结束时就已经落盘了）。
         EraserTelemetry?.Close(Doc, NowMs);
+        // D1 亚像素：退出时给一行统计，确认 `--himetric` 到底有没有真的映射上
+        // （设备不报 himetric / 拿不到设备矩形时会逐点退回整数像素，不能只看横幅）。
+        if (InputPrecision.UseHimetric)
+            Console.WriteLine($"输入精度统计: himetric 映射 {InputPrecision.MappedPoints} 点 / "
+                              + $"退回整数像素 {InputPrecision.FallbackPoints} 点");
         Console.WriteLine("shutdown complete");
     }
 
@@ -8055,6 +8588,8 @@ public partial class InkEngine
         SelectMode = SelMode,
         CoordGridDefault = CoordGridDefault,
         DwellShapeOn = DwellShapeEnabled,
+        PressureOn = PressureWidth.Enabled,      // 界面拿它显示「设置 → 书写 → 压感粗细」那个开关
+        // [删除 2026-10-05] PredictOn（墨迹预测）：随老预测系统移除。
         ScreenIndex = ScreenIndex,
         CanFlipPageUp = CanFlipPageUp,
         IsDrawing = _drawing,
@@ -8063,6 +8598,22 @@ public partial class InkEngine
         StrokeCount = Doc.Strokes.Count,
         UpdateStage = UpdateState,
         UpdateText = UpdateText,
+        InkStatus = InkStatus,                  // 界面「墨迹」页的状态行
+        ReplayActive = ReplayActive,
+        ReplayPlaying = ReplayPlaying,
+        ReplaySpeed = ReplaySpeed,
+        // 「课堂」页：计时器状态 + 点名名单（点名全在界面层做，引擎只读盘/推状态）
+        TimerActive = TimerActive,
+        TimerPaused = TimerPaused,
+        TimerFinished = TimerFinished,
+        TimerMode = TimerKind,
+        TimerValueMs = TimerValueMs,
+        TimerCardOpen = TimerCardOpen,
+        TimerSettingsOpen = TimerSettingsOpen,
+        TimerExpanded = TimerExpanded,
+        RollCardOpen = RollCardOpen,
+        RollSettingsOpen = RollSettingsOpen,
+        Names = Names,
     };
 
     private void NotifyUiStateChanged()
@@ -8074,8 +8625,20 @@ public partial class InkEngine
 
     internal void SetToolFromUi(Tool tool)
     {
+        ExitReplayForEdit("换工具");
         SwitchTool(tool);
         EraserTelemetry?.Note($"界面换工具 → {ToolName(tool)}", NowMs);
+        ApplyCursor();
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>面板点橡皮格：切回**上次用的那一种橡皮形态**（整笔/面积），顺手关穿透。
+    /// [2026-10-05 用户定] 橡皮子类型不再由"再点一次"切换，面板这一格固定进橡皮、类型看上带。</summary>
+    internal void SetEraserPreferredFromUi()
+    {
+        ExitReplayForEdit("换工具");
+        SwitchTool(_eraserKind);
         ApplyCursor();
         _dirty = true;
         NotifyUiStateChanged();
@@ -8183,6 +8746,41 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
+    /// <summary>
+    /// 「更多 → 设置 → 书写 → 压感粗细」被点了一下（2026-10-01）。
+    /// 语义见 <see cref="IEngineCommands.SetPressure"/>：**渲染期**开关，文档一个字节不动。
+    ///
+    /// ⚠ 必须 `Doc.InvalidateAll()`：笔迹是按块**烘进内容层缓存**的，只标一个脏区的话
+    /// 屏幕上还是旧粗细（"开关点了没反应"最典型的一种）。整层作废最贵也就重铺一屏。
+    /// </summary>
+    internal void SetPressureFromUi(bool on)
+    {
+        if (PressureWidth.Enabled == on) return;
+        PressureWidth.Enabled = on;
+        Doc.InvalidateAll();
+        _dirty = true;
+        Console.WriteLine($"压感粗细：{(on ? "开（按压力改粗细）" : "关（所有笔迹等宽，手写板照样流畅）")}");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>命令行上有没有 `--nopressure`（给对照实验用，它优先于用户偏好）。</summary>
+    private bool _noPressureArg;
+
+    /// <summary>压感粗细的偏好键（只写"关过"的那一份）。</summary>
+    private const string PressurePrefKey = "pressure";
+
+    // [删除 2026-10-05] `SetPredictFromUi` / `ApplyPredictPrefForTest`（墨迹预测开关的入口）：
+    // 随老预测系统移除；恢复见 `已停用-渲染实验.md`。
+
+    /// <summary>
+    /// 自检用：把"压感粗细"的偏好**重新应用一次**——模拟"重开软件"里读偏好那一步。
+    /// 自检模式启动时根本不读盘（见 LoadUiPrefs 那段），所以偏好往返必须靠这一条补上。
+    /// </summary>
+    internal void ApplyPressurePrefForTest()
+        => PressureWidth.Enabled = !_noPressureArg && GetUiPref(PressurePrefKey) != "0";
+
+
+
     internal void SetWidthFromUi(float logicalPx)
     {
         // 外层的 0.5～64 只是"别把明显离谱的值放进来"的兜底；**真正的范围按工具算**。
@@ -8238,6 +8836,7 @@ public partial class InkEngine
 
     internal void UndoFromUi()
     {
+        ExitReplayForEdit("撤销");
         Doc.Undo();
         Laser.Clear();
         _dirty = true;
@@ -8246,6 +8845,7 @@ public partial class InkEngine
 
     internal void RedoFromUi()
     {
+        ExitReplayForEdit("重做");
         Doc.Redo();
         _dirty = true;
         NotifyUiStateChanged();
@@ -8253,6 +8853,7 @@ public partial class InkEngine
 
     internal void ClearFromUi()
     {
+        ExitReplayForEdit("清空");
         Doc.Clear();
         Laser.Clear();
         _dirty = true;
@@ -8360,7 +8961,7 @@ public partial class InkEngine
     internal string UpdateText = "未配置更新源";
 
     private float UpdateProgress;                       // 0..1（下载中，只给界面看）
-    private string _updVersion = "", _updNotes = "", _updZipUrl = "", _updSha = "";
+    private string _updVersion = "", _updNotes = "", _updSha = "";
     private volatile bool _updPost;                     // 后台：检查结果放好了
     private volatile bool _updApplyPosted;              // 后台：下载结束了
     private volatile bool _updBusy;                     // 有后台任务在跑（别叠加）
@@ -8375,9 +8976,10 @@ public partial class InkEngine
     /// </summary>
     internal bool AutoCheckOnly;
     private readonly object _updLock = new();
-    private (UpdateFeed.Manifest m, string err) _updResult;
+    private (UpdateFeed.Manifest m, string err, List<(string Url, bool UseProxy)> dl) _updResult;
     private string _updUsedUrl = "";
     private string _updZipPath = "", _updError = "";
+    private List<(string Url, bool UseProxy)> _updDownloads = new();   // 下载候选（快的在前，失败自动换下一条）
     private long _updGot, _updTotal;                    // 下载进度（后台写、主线程读）
 
     /// <summary>「检查更新」被点了一下（见 <see cref="IEngineCommands.CheckUpdate"/>）。</summary>
@@ -8400,15 +9002,15 @@ public partial class InkEngine
         NotifyUiStateChanged();
 
         Console.WriteLine($"自动更新：检查（当前 {UpdateFeed.CurrentVersion}；"
-                          + (UpdateFeed.Url.Length > 0 ? "用户配置源" : $"候选 {UpdateFeed.Sources.Length} 条，按序试")
+                          + (UpdateFeed.Url.Length > 0 ? "用户配置源" : $"候选 {UpdateFeed.Sources.Length} 条，并行试")
                           + (UpdateFeed.Url.Length > 0 ? "" : "；加速站直连、GitHub 那条走系统代理") + "）");
         _updBusy = true;
         var th = new System.Threading.Thread(() =>
         {
-            var m = UpdateFeed.FetchBest(UpdateFeed.CurrentVersion, out string used, out string err);
+            var m = UpdateFeed.FetchBest(UpdateFeed.CurrentVersion, out string used, out string err, out var dl);
             lock (_updLock)
             {
-                _updResult = (m, err);
+                _updResult = (m, err, dl);
                 _updUsedUrl = used;
             }
             _updPost = true;
@@ -8417,29 +9019,44 @@ public partial class InkEngine
         th.Start();
     }
 
-    /// <summary>已经查到新版本了，再点一下：**下载 → 校验 → 换壳重启**。</summary>
+    /// <summary>
+    /// 已经查到新版本了，再点一下：**下载 → 校验 → 换壳重启**。
+    /// 下载按候选列表逐条试（同版本的国内加速站在前）：失败或卡死就换下一条，
+    /// 全部试完还不行才报失败（2026-10-02；以前只试一条，失败要用户重点一次）。
+    /// </summary>
     internal void ApplyUpdateFromUi()
     {
-        if (_updBusy || UpdateState != UpdateStage.Available || _updZipUrl.Length == 0) return;
+        if (_updBusy || UpdateState != UpdateStage.Available || _updDownloads.Count == 0) return;
 
         UpdateState = UpdateStage.Downloading;
         UpdateProgress = 0f;
         UpdateText = "下载中 0%";
         NotifyUiStateChanged();
 
-        string url = _updZipUrl, sha = _updSha, ver = _updVersion;
-        Console.WriteLine($"自动更新：开始下载 {ver} → {url}");
+        string sha = _updSha, ver = _updVersion;
+        var urls = _updDownloads;
+        Console.WriteLine($"自动更新：开始下载 {ver}（{urls.Count} 条候选源，逐条试）");
         _updBusy = true;
         var th = new System.Threading.Thread(() =>
         {
             string dir = UpdateFeed.UpdateDirFor(ver);
             string zip = Path.Combine(dir, $"InkTeach-{UpdateFeed.SafeVer(ver)}-win-x64.zip");
-            bool ok = UpdateFeed.Download(url, zip, sha,
-                (got, total) =>
-                {
-                    System.Threading.Interlocked.Exchange(ref _updGot, got);
-                    System.Threading.Interlocked.Exchange(ref _updTotal, total);
-                }, out string err);
+            bool ok = false;
+            string err = "没有可用的下载地址";
+            foreach (var (url, useProxy) in urls)
+            {
+                System.Threading.Interlocked.Exchange(ref _updGot, 0);
+                System.Threading.Interlocked.Exchange(ref _updTotal, 0);
+                Console.WriteLine($"自动更新：试 {UpdateFeed.HostOf(url)}");
+                ok = UpdateFeed.Download(url, zip, sha,
+                    (got, total) =>
+                    {
+                        System.Threading.Interlocked.Exchange(ref _updGot, got);
+                        System.Threading.Interlocked.Exchange(ref _updTotal, total);
+                    }, out err, useProxy);
+                if (ok) break;
+                Console.WriteLine("自动更新：这条源没成（" + err + "），换下一条");
+            }
             lock (_updLock)
             {
                 _updZipPath = ok ? zip : "";
@@ -8473,7 +9090,8 @@ public partial class InkEngine
             _updBusy = false;
             UpdateFeed.Manifest m;
             string err;
-            lock (_updLock) (m, err) = _updResult;
+            List<(string Url, bool UseProxy)> dl;
+            lock (_updLock) (m, err, dl) = _updResult;
 
             bool needApply = false;
             if (m == null)
@@ -8498,7 +9116,7 @@ public partial class InkEngine
             {
                 _updVersion = m.Version;
                 _updNotes = m.Notes;
-                _updZipUrl = m.Url;
+                _updDownloads = dl ?? new List<(string Url, bool UseProxy)>();
                 _updSha = m.Sha256;
                 UpdateState = UpdateStage.Available;
                 UpdateText = $"有新版本 {m.Version}";
@@ -8588,7 +9206,11 @@ public partial class InkEngine
 
     internal void SetPassThroughFromUi(bool on)
     {
-        SetPassThrough(on);
+        // 开穿透 = 键盘/点击归下层：回放中开它就点不到控制条了，先收掉回放。
+        if (on) ExitReplayForEdit("开穿透");
+        // 界面那格只发"切换"（`!st.PassThrough`），所以这就是"穿透开关"这条路：
+        // 退出时恢复进穿透前的板态（用户 2026-09-30 拍板）。
+        SetPassThrough(on, restoreBoard: true);
         NotifyUiStateChanged();
     }
 
@@ -8644,6 +9266,7 @@ public partial class InkEngine
     /// <summary>界面上的"全选"。<see cref="SelectAll"/> 自己会把工具切成框选，免得用户以为没生效。</summary>
     internal void SelectAllFromUi()
     {
+        ExitReplayForEdit("全选");
         SelectAll();
         _dirty = true;
     }
@@ -8651,6 +9274,7 @@ public partial class InkEngine
     /// <summary>界面上的"上一屏 / 下一屏"（整屏翻页）。</summary>
     internal void FlipPageFromUi(bool down)
     {
+        ExitReplayForEdit("翻页");
         if (!FlipPage(down)) return;
         NotifyUiStateChanged();
     }
@@ -8659,29 +9283,35 @@ public partial class InkEngine
     /// 指针按下的第一站：先问界面。返回 true 表示这次输入归界面（比如按到了
     /// 悬浮条上的按钮），引擎不再把它变成笔画。
     /// </summary>
-    private bool UiPointerDown(float x, float y, float pressure, bool fromPen, bool eraserTip)
+    private bool UiPointerDown(float x, float y, float pressure, bool fromPen, bool eraserTip,
+                               bool fromTouch = false, uint pointerId = 0)
     {
         if (!UiVisibleNow) return false;
-        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip);
+        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip,
+                                   fromTouch, pointerId);
         if (!UiGuard("PointerDown", () => Ui.PointerDown(e), false)) return false;
         UiCapturing = true;
         return true;
     }
 
-    private bool UiPointerMove(float x, float y, float pressure, bool fromPen, bool eraserTip)
+    private bool UiPointerMove(float x, float y, float pressure, bool fromPen, bool eraserTip,
+                               uint pointerId = 0)
     {
         if (!UiVisibleNow) return false;
 
         // 只有在界面已经捕获输入或指针落在界面矩形内时才转发，避免没必要的调用。
         if (!UiCapturing && !UiContains(x, y)) return false;
-        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip);
+        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip,
+                                   false, pointerId);
         return UiGuard("PointerMove", () => Ui.PointerMove(e), false);
     }
 
-    private bool UiPointerUp(float x, float y, float pressure, bool fromPen, bool eraserTip)
+    private bool UiPointerUp(float x, float y, float pressure, bool fromPen, bool eraserTip,
+                             uint pointerId = 0)
     {
         if (!UiVisibleNow || !UiCapturing) return false;
-        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip);
+        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip,
+                                   false, pointerId);
         bool consumed = UiGuard("PointerUp", () => Ui.PointerUp(e), false);
         UiCapturing = false;
         return consumed;
@@ -9012,7 +9642,8 @@ public partial class InkEngine
                 LastPointerType = ptype;
                 _uiHover = true;
 
-                if (UiPointerDown(sx, sy, pressure, ptype == Native.PT_PEN, inverted))
+                if (UiPointerDown(sx, sy, pressure, ptype == Native.PT_PEN, inverted,
+                                  ptype == Native.PT_TOUCH, id))
                 {
                     // 界面也要捕获：在按钮上滑开、拖出面板，都要继续收到消息。
                     Native.SetCapture(hWnd);
@@ -9033,7 +9664,7 @@ public partial class InkEngine
                 StampInput(); _cntMove++;
                 LastPointerType = ptype;
                 _uiHover = true;
-                UiPointerMove(sx, sy, pressure, ptype == Native.PT_PEN, inverted);
+                UiPointerMove(sx, sy, pressure, ptype == Native.PT_PEN, inverted, id);
                 _dirty = true;
                 return IntPtr.Zero;
             }
@@ -9045,7 +9676,7 @@ public partial class InkEngine
                                 out bool inverted, out _))
                 {
                     StampInput(); _cntUp++;
-                    UiPointerUp(sx, sy, pressure, false, inverted);
+                    UiPointerUp(sx, sy, pressure, false, inverted, id);
                 }
                 Native.ReleaseCapture();
                 UiCapturing = false;
@@ -10033,7 +10664,8 @@ public partial class InkEngine
             default:
                 _vertexReadout = VertexReadoutKind.Inclination;
                 _vertexReadoutValue = SelectionHandles.InclinationDegrees(c, e);
-                _vertexReadoutSecondary = 0f;
+                // 直线 / 箭头再报一个**长度**（2026-10-05 用户：和 α 同一个逻辑）。
+                _vertexReadoutSecondary = Vector2.Distance(c, e);
                 break;
         }
     }
@@ -10234,9 +10866,7 @@ public partial class InkEngine
         //    框里空白处是"拖动"、按在某条墨上是"收窄成只选它"）。
         //    判据就是框选工具下那一条（`frame.ToLocalPoint` 落在 `frame.Local` 里），
         //    不另写一份"离轮廓多远算按上了"。
-        var lp = frame.ToLocalPoint(new Vector2(x, y));
-        if (lp.X >= frame.Local.MinX && lp.X <= frame.Local.MaxX
-            && lp.Y >= frame.Local.MinY && lp.Y <= frame.Local.MaxY)
+        if (SelectionHandles.InsideUiFrame(frame, new Vector2(x, y), dpi))
             return AutoSelZone.Grab;
 
         // ④ 框**外**：不算动它——收起这个框，这一笔照常画。
@@ -10429,10 +11059,10 @@ public partial class InkEngine
                 }
                 else
                 {
-                    // 没点在手柄上：把指针变回框坐标，看是不是落在框里（整体拖动）。
-                    var lp = frame.ToLocalPoint(new Vector2(x, y));
-                    move = lp.X >= frame.Local.MinX && lp.X <= frame.Local.MaxX
-                        && lp.Y >= frame.Local.MinY && lp.Y <= frame.Local.MaxY;
+                    // 没点在手柄上：看指针是不是落在**操作框**里（整体拖动）。
+                    // 小对象那个框撑到最小尺寸（见 SelectionHandles.UiBox），
+                    // "看得见的那一圈"里面都能拖——判据和光标、自动选中框同一份。
+                    move = SelectionHandles.InsideUiFrame(frame, new Vector2(x, y), dpi);
 
                     // 顺手记下"指针底下是哪一条"：松手时若一点没移动，就把多选**收窄成只选它**
                     // （PPT/Figma 的行为）。落在框内空白处 → 记不到东西 → 松手不改选择。
@@ -10962,7 +11592,7 @@ public partial class InkEngine
     /// 开：去掉 WS_EX_NOACTIVATE 并把窗口提到前台，键盘归批注层，编辑类
     ///     快捷键（Ctrl+Z / Ctrl+D / Delete / 方向键…）才有地方落地。
     /// 关：加回 WS_EX_NOACTIVATE，覆盖层回到"永不抢焦点"，键盘还给下层程序
-    ///     ——那时候只有全局热键（Ctrl+Alt+…）可用。
+    ///     ——那时候只有全局热键（Ctrl+Alt+Shift+…）可用。
     ///
     /// 取舍说清楚：开着的时候，放映中的 PPT 收不到键盘。
     /// </summary>
@@ -11154,23 +11784,20 @@ public partial class InkEngine
 
     private static void CancelPending(KeyGesture g) => g.PendingAt = -1;
 
-    /// <summary>连按要干的事：笔/荧光笔换色，橡皮切整笔↔面积，选中切矩形↔套索。</summary>
+    /// <summary>连按要干的事：**只有笔/荧光笔换色**。
+    /// [2026-10-05 用户定] 橡皮"整笔/面积"、框选"矩形/套索"不再同键切换——爱用哪种就一直用哪种，
+    /// 子类型去面板的上带里选（"再点同一格换档"也随之取消，见 FullUi.Activate）。</summary>
     private void DoToolKeyRepeat(KeyAction a)
     {
         switch (a)
         {
             case KeyAction.ToolPen: CycleBandColor(highlighter: false); break;
             case KeyAction.ToolHighlighter: CycleBandColor(highlighter: true); break;
-            case KeyAction.ToolEraser:
-            case KeyAction.ToolPixelEraser:
-                SwitchTool(Tool == Tool.PixelEraser ? Tool.Eraser : Tool.PixelEraser);
-                Console.WriteLine($"橡皮连按 → {(Tool == Tool.PixelEraser ? "面积擦" : "整笔擦")}");
-                break;
-            case KeyAction.ToolMarquee: ToggleSelectMode(); break;
+            // 橡皮 / 框选：连按不做事（子类型固定，面板上带里选）。
         }
     }
 
-    /// <summary>长按：回第一个颜色 / 第一档。</summary>
+    /// <summary>长按：回第一个颜色（只对笔 / 荧光笔；子类型不再由键盘改）。</summary>
     private void ResetToolToFirst(KeyAction a)
     {
         switch (a)
@@ -11183,15 +11810,7 @@ public partial class InkEngine
                 SetColorFromUi(InkPalette.HighlighterBand[0].Color);
                 Console.WriteLine($"长按 → 荧光笔回到「{InkPalette.HighlighterBand[0].Name}」");
                 break;
-            case KeyAction.ToolEraser:
-            case KeyAction.ToolPixelEraser:
-                SwitchTool(Tool.Eraser);
-                Console.WriteLine("长按 → 橡皮回到「整笔擦」");
-                break;
-            case KeyAction.ToolMarquee:
-                if (SelMode == SelectMode.Lasso) ToggleSelectMode();
-                Console.WriteLine("长按 → 框选回到「矩形框」");
-                break;
+            // [2026-10-05 用户定] 橡皮 / 框选的子类型不再由键盘（长按）改；面板上带里选。
         }
     }
 
@@ -11224,17 +11843,321 @@ public partial class InkEngine
     private Tool _eraserKind = Tool.Eraser;
 
     /// <summary>
-    /// 工具键的**单击**逻辑（2026-09-30 收口：双击/长按那套手势全部取消，只留单击）：
+    /// 工具键的**单击**逻辑（2026-09-30 收口：双击/长按那套手势全部取消，只留单击；
+    /// 2026-10-05 再收：**只有笔/荧光笔"已经是它 → 换色"**，橡皮/框选连按不再换子类型）：
     ///   · 不是这个工具 → 切过去
-    ///   · 已经是它    → 换一个：笔/荧光笔换颜色、橡皮切整笔⇄面积、选择切矩形⇄套索
+    ///   · 已经是它    → 笔/荧光笔换颜色；橡皮/框选什么都不做
+    ///
+    /// **穿透模式下整个失效**（用户 2026-09-30 拍板："开了穿透以后，笔、橡皮这些快捷键
+    /// 应该就没有用了，等退出穿透才有用"）：穿透 = "不能画"，这时换工具/换色都没有着落，
+    /// 而且"已经不是笔了、颜色却还在变"正是用户报的那个怪状态。想画画先退出穿透
+    /// （全局 `Ctrl+Alt+Shift+T` / 点穿透格），工具键随即恢复。
+    /// 只挡**键盘**这两条路（应用内键 + 放映临时全局键，都汇到这里）；
+    /// 面板上那一格不在此列——点它仍然"顺手关穿透 + 换工具"（没键盘的教室靠它）。
     /// </summary>
     private void ToolKeyPress(KeyAction a)
     {
+        if (PassThrough)
+        {
+            Console.WriteLine("穿透模式下：工具键不响应（先退出穿透）");
+            return;
+        }
         var target = ToolOf(a);
         // 橡皮：回到"上次用的那一种形态"（整笔/面积），不是永远回整笔擦
         if (target == Tool.Eraser) target = _eraserKind;
         if (Tool != target) { SwitchTool(target); return; }
         DoToolKeyRepeat(a);
+    }
+
+    // =====================================================================
+    //  呼出盘（Ctrl+Alt+Shift+Q）：按住 → 划向扇区 → 松手
+    // =====================================================================
+    //
+    // 来龙去脉：《调研-笔键方案.md》附录 C/D（键盘呼出版；笔身键版留待真机实测硬件）。
+    // 行为一句话：**按住才出来的标迹菜单**——按着不动会看到盘，120ms 内直接划走 =
+    // 盘不闪（熟手路），松手确认、Esc / 落笔 / 松在中心 = 取消。
+    //
+    // 和主程序其它部分的接口，全部照现有语义：
+    //   · **穿透里照样能出盘**（2026-10-04 用户定）：它是"从下层把笔抢回来"的入口，
+    //     选扇区 = 退出穿透 + 换工具/选色（**刻意不同于**工具键 8.5 那条"穿透不响应"）；
+    //   · **2026-10-04 起它是常驻全局键**（`Ctrl+Alt+Shift+Q`）：前台是 PPT/WPS
+    //     也照样出盘，不再需要临时全局键表那一路；
+    //   · 扇区里选工具 = 和按 Ctrl+P/I/L/E/M **同一条命令**（含"已经是它 → 换色/换档"）；
+    //   · 颜色扇区 = "给我这支颜色的笔"（不在笔上就切到笔，走 SwitchTool）。
+    //
+    // 扇区顺序（从北起、顺时针，**排序 V-a**：上下左右四个正位给前四高频、四角给次频；
+    // 用户 2026-09-30 定）：笔 / 黑 / 红 / 蓝 / 橡皮 / 框选 / 荧光笔 / 激光。
+    // 正位 = 笔·红·橡皮·荧光笔；四角 = 黑·蓝·框选·激光。黑红蓝 = `InkPalette.PenBand`
+    // 的前三个（色带本来就是"常用的排前面：黑红蓝绿…"），且保持顺时针相邻。
+    // 尺寸与视觉规格对齐（2026-09-30 v4 定稿：方案 S「全扇面」、直径 192）：
+    // 盘半径 96、死区 24、锁定 36；环带 40→96、图标 24 居中在 R68（见 Overlay）。
+    // 判位一直是**按角度分 45° 扇区**，扇面化只换画法：死区/锁定/滞回一个字没动。
+    // internal（不是 private）：自检要拿它和 Overlay 的扇面几何对表——
+    // "图标环 ± 图标半径"必须落在（锁定距离, 盘半径）里，改单边忘另一边就会红。
+    internal const float RadialRadiusLogical = 96f;
+    internal const float RadialDeadZoneLogical = 24f;
+    internal const float RadialLockLogical = 36f;
+    private const double RadialShowDelayMs = 120;     // 出盘延迟（熟手路：不等盘直接划）
+    private const double RadialTimeoutMs = 5000;      // 防呆：按太久没松手就自行取消
+
+    internal bool RadialPaletteActive { get; private set; }
+    internal bool RadialPaletteVisible { get; private set; }
+    internal int RadialPaletteSector { get; private set; } = -1;
+    internal float RadialCenterX, RadialCenterY;      // 画布坐标（和 PointerX/Y 同源）
+
+    private double _radialOpenedAtMs;
+    private bool _radialMoved;                        // 离开过锁定距离（中央文案用）
+    private uint _radialVk = 0x51;                    // 呼出键的主键（松手轮询按它查）
+
+    /// <summary>扇区名：画盘、日志、自检共用一份（顺序 = 从北顺时针，V-a）。</summary>
+    internal static readonly string[] RadialSectorNames =
+        { "笔", "黑", "红", "蓝", "橡皮", "框选", "荧光笔", "激光" };
+
+    /// <summary>中央文案要用的"划过又回中心"判据（盘开着时才有意义）。</summary>
+    internal bool RadialMovedForDraw => _radialMoved;
+
+    /// <summary>打开呼出盘（按住的那一刻）。条件不满足就静默不动。</summary>
+    /// <remarks>
+    /// **穿透里也能开**（2026-10-04 用户定）：呼出盘升为全局键就是为了"在别的程序
+    /// 前面也能快速把笔调出来"，穿透开着时按它**照常出盘**——选一个扇区就等于
+    /// "我现在就要写"，顺手退出穿透（和点面板工具格同一条路，见 CommitRadialPalette）。
+    /// 这**刻意不同于**工具键 `Ctrl+P/I/L/E/M`：那五个在穿透下不响应（2026-09-30 定的
+    /// "穿透 = 键盘归下层"），呼出盘是"从下层把笔抢回来"的那一个入口，规则不同。
+    ///
+    /// ⚠ 代价：穿透时我们**收不到鼠标移动消息**——`WS_EX_TRANSPARENT` 把覆盖层
+    /// 从系统输入里整个摘掉（见 `_uiInputHwnd` 那段注释）。所以穿透里盘心与方向
+    /// 都得靠系统光标的当前位置（`GetCursorPos`），不能等鼠标消息。
+    /// </remarks>
+    private void OpenRadialPalette()
+    {
+        if (RadialPaletteActive) return;
+        if (CaptureActive) return;
+        if (_drawing)
+        {
+            Console.WriteLine("书写中：呼出盘不响应（抬笔后再按）");
+            return;
+        }
+
+        // 穿透时 PointerX/Y 停在旧位置（收不到移动消息），盘心要用系统光标的当前位置。
+        SyncPointerFromCursor();
+
+        // 记下这次实际绑定的主键（键位可改；松手轮询按它查，写死 Q 会在改键后失灵）。
+        // ⚠ 2026-10-04 起呼出盘是**全局**键（`Ctrl+Alt+Shift+Q`）：作用域必须查 Global，
+        // 查批注内会查不到（用户改键后更是直接失灵）。
+        var binding = Keys.Find(KeyScope.Global, KeyAction.RadialPalette);
+        _radialVk = binding != null && binding.Chord.IsValid ? binding.Chord.Vk : 0x51;
+
+        RadialPaletteActive = true;
+        RadialPaletteVisible = false;          // 120ms 之后（或移动之后）才真正画出来
+        RadialPaletteSector = -1;
+        _radialMoved = false;
+        _radialOpenedAtMs = NowMs;
+        RadialCenterX = PointerX;              // 盘心 = 按下的那一刻指针在哪
+        RadialCenterY = PointerY;
+        _dirty = true;
+        Console.WriteLine(PassThrough
+            ? "呼出盘（穿透中）：按住划向扇区，松手 = 退出穿透 + 切到它（松在中心/划回中心/落笔 = 取消）"
+            : "呼出盘：按住划向扇区，松手确认（松在中心/划回中心/落笔 = 取消）");
+    }
+
+    /// <summary>
+    /// 穿透时把指针位置同步成**系统光标的当前位置**。
+    ///
+    /// 为什么必须有它：穿透给覆盖层加了 `WS_EX_TRANSPARENT`，系统那一层就完全不
+    /// 给它投递鼠标消息（连 WM_NCHITTEST 都不问），`PointerX/Y` 会一直停在最后
+    /// 一次正常模式下的位置。呼出盘靠"盘心 ↔ 指针的位移"选扇区，位置是旧的就等于
+    /// 盘心乱跳、方向失灵。`GetCursorPos` 与焦点无关，穿透期间照常给真位置
+    ///（和 `BeginCaptureMode` 里那句 `GetCursorPos` 同一个理由与写法）。
+    /// </summary>
+    private void SyncPointerFromCursor()
+    {
+        if (!PassThrough) return;             // 正常模式有真鼠标消息，别去抢
+        if (!Native.GetCursorPos(out var p)) return;
+        PointerX = p.X;
+        PointerY = p.Y - ViewOffsetY;         // 屏幕 → 画布（和 BeginCaptureMode 同一句）
+        PointerInside = true;
+    }
+
+    /// <summary>松手 = 确认。没位移/死区 = 取消；有扇区就执行那条命令。</summary>
+    private void CommitRadialPalette()
+    {
+        if (!RadialPaletteActive) return;
+        UpdateRadialSelection();               // 以松手这一刻的指针为准（快划不丢）
+        int sec = RadialPaletteSector;
+
+        RadialPaletteActive = false;
+        RadialPaletteVisible = false;
+        RadialPaletteSector = -1;
+        _dirty = true;
+
+        if (sec < 0)
+        {
+            Console.WriteLine("呼出盘 → 取消");
+        }
+        else
+        {
+            // **穿透中选扇区 = "我现在就要写"：顺手退出穿透**（2026-10-04 用户定）。
+            // 和点面板工具格同一条路（`SwitchTool` 里那句 `if (PassThrough) SetPassThrough(false)`）。
+            // ⚠ 顺序不能反：工具键在穿透下"不响应"（2026-09-30 定的 8.5 那条），
+            // 不先退穿透的话 `ToolKeyPress` 会直接 return，按下去**悄无声息**——
+            // 正是用户报的那个现象。这里先退（板态不恢复：换了工具的意思是"我要在
+            // 眼前这片东西上写"，和 SwitchTool 的选择一致，见 SetPassThrough 的说明）。
+            if (PassThrough) SetPassThrough(false, restoreBoard: false);
+
+            Console.WriteLine($"呼出盘 → {RadialSectorNames[sec]}");
+            switch (sec)
+            {
+                case 0: ToolKeyPress(KeyAction.ToolPen); break;
+                case 1: PickPenColorFromPalette(0); break;
+                case 2: PickPenColorFromPalette(1); break;
+                case 3: PickPenColorFromPalette(2); break;
+                // V-a：南=橡皮、西南=框选、西=荧光笔、西北=激光（2026-09-30 定）
+                case 4: ToolKeyPress(KeyAction.ToolEraser); break;
+                case 5: ToolKeyPress(KeyAction.ToolMarquee); break;
+                case 6: ToolKeyPress(KeyAction.ToolHighlighter); break;
+                case 7: ToolKeyPress(KeyAction.ToolLaser); break;
+            }
+        }
+        ApplyCursor();
+        _dirty = true;
+    }
+
+    /// <summary>颜色扇区 = "给我这支颜色的笔"（不在笔上就切到笔；穿透互斥等照常态）。</summary>
+    private void PickPenColorFromPalette(int bandIndex)
+    {
+        bandIndex = Math.Clamp(bandIndex, 0, InkPalette.PenBand.Length - 1);
+        if (Tool != Tool.Pen) SwitchTool(Tool.Pen);
+        SetColorFromUi(InkPalette.PenBand[bandIndex].Color);
+    }
+
+    private void CancelRadialPalette(string why)
+    {
+        if (!RadialPaletteActive) return;
+        RadialPaletteActive = false;
+        RadialPaletteVisible = false;
+        RadialPaletteSector = -1;
+        _dirty = true;
+        Console.WriteLine($"呼出盘 → 取消（{why}）");
+    }
+
+    /// <summary>
+    /// 每帧一次：出盘延迟、方向重算、松手轮询、超时。
+    ///
+    /// **为什么要有轮询**：全局热键（常驻的 `Ctrl+Alt+Shift+Q` 和放映临时那批）只给
+    /// WM_HOTKEY（按下），没有松手消息；`GetAsyncKeyState` 看的是物理键状态，
+    /// 60fps 下误差 ≤16ms。
+    /// </summary>
+    private void PumpRadialPalette()
+    {
+        if (!RadialPaletteActive) return;
+
+        // 穿透里没有鼠标消息，扇区方向只能每帧问系统要一次（见 SyncPointerFromCursor）。
+        SyncPointerFromCursor();
+
+        if (RadialTestHold)
+        {
+            // 自检/摆样：不轮询、不超时，只把盘按出来（出图与状态断言用）。
+            if (!RadialPaletteVisible) { RadialPaletteVisible = true; _dirty = true; }
+            UpdateRadialSelection();
+            return;
+        }
+
+        if (!RadialPaletteVisible && NowMs - _radialOpenedAtMs >= RadialShowDelayMs)
+        {
+            RadialPaletteVisible = true;
+            _dirty = true;
+        }
+
+        UpdateRadialSelection();
+
+        if ((Native.GetAsyncKeyState((int)_radialVk) & 0x8000) == 0)
+        {
+            CommitRadialPalette();
+            return;
+        }
+        if (NowMs - _radialOpenedAtMs > RadialTimeoutMs)
+            CancelRadialPalette("按太久");
+    }
+
+    /// <summary>按当前指针位置重算扇区（死区 / 锁定距离 / 跨扇区滞回都在这里）。</summary>
+    private void UpdateRadialSelection()
+    {
+        float dpi = DpiScale;
+        float dx = PointerX - RadialCenterX, dy = PointerY - RadialCenterY;
+        float dist = MathF.Sqrt(dx * dx + dy * dy);
+        float dead = RadialDeadZoneLogical * dpi;
+        float lockR = RadialLockLogical * dpi;
+
+        int sec;
+        if (dist < dead)
+        {
+            sec = -1;                                   // 死区：松手 = 取消
+        }
+        else
+        {
+            float deg = MathF.Atan2(dy, dx) * (180f / MathF.PI);
+            if (RadialPaletteSector < 0 && dist < lockR)
+            {
+                sec = -1;                               // 还不够远：先别锁方向
+            }
+            else if (RadialPaletteSector >= 0)
+            {
+                // 滞回：已经选中一个扇区时，出界 9° 以内仍算它（边界抖动不跳扇区）。
+                float delta = Normalize180(deg - (-90f + 45f * RadialPaletteSector));
+                sec = MathF.Abs(delta) <= 22.5f + 9f ? RadialPaletteSector : SectorIndexFromDeg(deg);
+            }
+            else sec = SectorIndexFromDeg(deg);
+        }
+
+        if (dist >= lockR) _radialMoved = true;
+        if (sec != RadialPaletteSector)
+        {
+            RadialPaletteSector = sec;
+            _dirty = true;
+        }
+    }
+
+    /// <summary>指针角度 → 扇区号（0 = 北，顺时针）。北在上：-90° 起、每 45° 一个。</summary>
+    internal static int SectorIndexFromDeg(float deg)
+    {
+        int i = (int)MathF.Round(deg / 45f);
+        return ((i + 2) % 8 + 8) % 8;
+    }
+
+    private static float Normalize180(float deg)
+    {
+        while (deg <= -180f) deg += 360f;
+        while (deg > 180f) deg -= 360f;
+        return deg;
+    }
+
+    // ---- 呼出盘自检钩子（--radialtest / --radialshow）----
+
+    /// <summary>自检/摆样：跳过松手轮询与超时（状态断言与"定格出图"用）。</summary>
+    internal bool RadialTestHold;
+
+    internal void RadialOpenForTest(float canvasX, float canvasY)
+    {
+        PointerX = canvasX; PointerY = canvasY;
+        OpenRadialPalette();
+    }
+
+    internal void RadialMoveForTest(float canvasX, float canvasY)
+    {
+        PointerX = canvasX; PointerY = canvasY;
+        UpdateRadialSelection();
+    }
+
+    internal void RadialPumpForTest() => PumpRadialPalette();
+    internal void RadialCommitForTest() => CommitRadialPalette();
+    internal void RadialCancelForTest(string why) => CancelRadialPalette(why);
+
+    /// <summary>自检：放映临时全局键表里有没有某个动作（以及它的键）。</summary>
+    internal static (uint Mod, uint Vk)? PptHotkeyEntryForTest(KeyAction a)
+    {
+        foreach (var (mod, vk, act) in PptHotkeys)
+            if (act == a) return (mod, vk);
+        return null;
     }
 
     private bool HandleKeyDown(IntPtr wParam, bool isRepeat)
@@ -11248,8 +12171,31 @@ public partial class InkEngine
         if ((Native.GetAsyncKeyState(0x10 /*VK_SHIFT*/) & 0x8000) != 0) mods |= KeyChord.ModShift;
 
         var chord = new KeyChord(mods, (uint)wParam.ToInt32());
+
+        // 呼出盘开着时，Esc = 取消。
+        // ⚠ 这条只在"修饰键已经先松开"之后才真能收到——**Ctrl+Esc 是系统保留的
+        //    "打开开始菜单"**（Alt+Esc 还会切窗口），Windows 不会把它送进窗口
+        //    （真机自检里量到过：按住 Ctrl+Q 时按 Esc，我们一条消息都收不到；现在
+        //    呼出键多了 Alt/Shift，一样要全部松开之后 Esc 才送得到）。
+        //    所以提交只认 Q 松手（见 HandleKeyUp），先松 Ctrl/Alt/Shift 盘还留着，
+        //    这时 Esc 才有效；主取消路径是"松在死区 / 划回中心 / 落笔"。
+        if (RadialPaletteActive && wParam.ToInt32() == 0x1B /*VK_ESCAPE*/)
+        {
+            CancelRadialPalette("Esc");
+            _dirty = true;
+            return true;
+        }
+
         var hit = Keys.For(KeyScope.Annotation).FirstOrDefault(b => b.Chord.Equals(chord));
         if (hit == null) return false;
+
+        // 呼出盘和工具键一样"只看第一次按下"（按住不放的自动重复不再重开）。
+        if (hit.Action == KeyAction.RadialPalette)
+        {
+            if (!isRepeat) RunAction(hit.Action);
+            _dirty = true;
+            return true;
+        }
 
         if (IsToolKey(hit.Action))
         {
@@ -11267,6 +12213,17 @@ public partial class InkEngine
     /// <summary>松键：只服务工具键的手势（长按/双击判定），其余键不看松键。</summary>
     private bool HandleKeyUp(IntPtr wParam)
     {
+        // 呼出盘：**Q 松手 = 确认；只认主键，不认修饰键**。
+        // 为什么：① 用户经常先松 Ctrl/Alt/Shift 再松 Q，按和弦查会漏；
+        // ② 先松修饰键之后盘还留着，这时按 Esc 才是"真能送到我们手里"的取消
+        //   （Ctrl+Esc 被系统的开始菜单占了，见 HandleKeyDown 那段）。
+        if (RadialPaletteActive && wParam.ToInt32() == _radialVk)
+        {
+            CommitRadialPalette();
+            _dirty = true;
+            return true;
+        }
+
         uint mods = 0;
         if ((Native.GetAsyncKeyState(0x11 /*VK_CONTROL*/) & 0x8000) != 0) mods |= KeyChord.ModCtrl;
         if ((Native.GetAsyncKeyState(0x12 /*VK_MENU*/) & 0x8000) != 0) mods |= KeyChord.ModAlt;

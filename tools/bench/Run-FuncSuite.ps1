@@ -50,6 +50,7 @@ $cases = @(
     @{ f = '输入路径';   n = 'appendtest';   a = @('--appendtest');      t = 150; d = '同一笔续写（追加路径）' }
     @{ f = '橡皮擦';     n = 'erasertest';   a = @('--erasertest');      t = 150; d = '稀疏采样快划不遗漏、整段只算一步撤销' }
     @{ f = '橡皮擦';     n = 'pixelerasetest'; a = @('--pixelerasetest'); t = 150; d = '像素橡皮：切段 / 框里无墨 / 图形按轮廓判 / 一步撤销 / 上屏' }
+    @{ f = '橡皮擦';     n = 'dynerasertest'; a = @('--dynerasertest'); t = 180; d = '动态橡皮：速度→尺寸曲线 / 后门恒 1 / 快慢扫对比 / 整笔擦不受影响' }
     @{ f = '光标';       n = 'cursortest';   a = @('--cursortest');      t = 180; d = '每种工具 × 设备的落点反馈与系统光标' }
     @{ f = '渲染与缓存'; n = 'tiletest';     a = @('--tiletest');        t = 180; d = '分块缓存：接缝、跨块笔画、滚动复用、内存上界' }
     @{ f = '渲染与缓存'; n = 'selftest';     a = @('--selftest', '8');   t = 180; d = '渲染验证 + 一万笔基准' }

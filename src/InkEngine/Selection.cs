@@ -292,6 +292,30 @@ internal static class SelectionHandles
     /// </summary>
     public const float HitRadiusLogical = 14f;
 
+    /// <summary>
+    /// 这一次该把通用手柄画多大（画布单位，含 DPI）。
+    ///
+    /// **大对象拿满 <see cref="VisualSizeLogical"/>；小对象视觉柄跟着缩、命中半径不缩**：
+    ///   · 判据 = 框**短边**的 40%，夹在 [<see cref="VisualSizeLogical"/> 的一半, 满尺寸]；
+    ///     所以短边 < 35 逻辑像素才开始缩，短边 17.5 逻辑像素时到下限 7。
+    ///   · 命中半径**不跟着缩**（还是 <see cref="HitRadiusLogical"/> 28×28）：
+    ///     投影上"看得小了点"只是观感，"点不中"才是事故——命中区大一点永远没错。
+    ///
+    /// 为什么需要它（2026-10-05 用户："8 个点/特殊点有点大；大图形无所谓，
+    /// 图形太小了还这么大不合适"）：14 逻辑的方块在 2 倍屏上是 28 物理像素，
+    /// 小图形（几十像素）四角一放就把内容盖住了。
+    /// 边中点柄更早的让位在 <see cref="ThinEdges"/>（绘制/命中同一把尺子）。
+    /// 参考（思路，不抄）：Figma 在小选区时先去掉边中点、只留四角；白板类工具在
+    /// 对象小于手柄时会把手柄缩一档——共同点是**先保命中、再谈好看**。
+    /// </summary>
+    public static float VisualHandleSize(in RectF box, float dpiScale)
+    {
+        float full = VisualSizeLogical * dpiScale;
+        float min = full * 0.5f;
+        float shortSide = MathF.Min(box.MaxX - box.MinX, box.MaxY - box.MinY);
+        return Math.Clamp(shortSide * 0.4f, min, full);
+    }
+
     /// <summary>旋转手柄离上边的距离（逻辑像素）。</summary>
     public const float RotateOffsetLogical = 30f;
 
@@ -334,8 +358,38 @@ internal static class SelectionHandles
         _ => (0.5f, 0.5f),
     };
 
-    /// <summary>手柄在画布坐标里的位置。</summary>
-    public static Vector2 Position(SelHandle h, in RectF b, float dpiScale)
+    /// <summary>
+    /// 小对象的**最小操作框**（每边至少这么大，逻辑像素；以中心对称撑开）。
+    ///
+    /// 2026-10-05 用户："图形太小了，还用这么大的点不合适 —— 可以上最小框"。
+    /// 把**操作框**撑到最小尺寸以后：手柄画在操作框上，不再压住内容；旋转柄、命中区、
+    /// "框内拖动"判定、缩放换算全都跟着操作框走（都问 <see cref="Position"/> /
+    /// <see cref="InsideUiFrame"/>，不是各算一份）。对象自己的真实包围盒（`frame.Local`）
+    /// **一个像素都不改**——框是操作的代理，不是几何。
+    ///
+    /// 取 28 = 命中直径（2 × <see cref="HitRadiusLogical"/>）：四角的命中圈正好相切，
+    /// 不会互相抢；再小就会"想点左下、命中的是右下"。
+    /// </summary>
+    public const float MinUiFrameLogical = 28f;
+
+    /// <summary>把真实包围盒撑成**操作框**（见 <see cref="MinUiFrameLogical"/>）；够大就原样返回。</summary>
+    public static RectF UiBox(in RectF real, float dpiScale)
+    {
+        if (real.IsEmpty) return real;
+        float half = MinUiFrameLogical * 0.5f * dpiScale;
+        float cx = (real.MinX + real.MaxX) * 0.5f;
+        float cy = (real.MinY + real.MaxY) * 0.5f;
+        float hx = MathF.Max((real.MaxX - real.MinX) * 0.5f, half);
+        float hy = MathF.Max((real.MaxY - real.MinY) * 0.5f, half);
+        return new RectF { MinX = cx - hx, MinY = cy - hy, MaxX = cx + hx, MaxY = cy + hy };
+    }
+
+    /// <summary>
+    /// 手柄在**给定矩形**上的位置（原样算术，不做最小操作框撑开）。
+    /// 只有"要对真实包围盒取位置"的地方才用它——现在只有拖动换算里的**缩放锚点**
+    /// （见 <see cref="DragMatrix"/> 里"两个锚点"那段）。
+    /// </summary>
+    private static Vector2 PositionRaw(SelHandle h, in RectF b, float dpiScale)
     {
         var (u, v) = Uv(h);
         float x = b.MinX + (b.MaxX - b.MinX) * u;
@@ -343,6 +397,24 @@ internal static class SelectionHandles
         if (h == SelHandle.Rotate) y -= RotateOffsetLogical * dpiScale;
         return new Vector2(x, y);
     }
+
+    /// <summary>
+    /// 手柄在画布坐标里的位置。
+    ///
+    /// ⚠ 框比 <see cref="MinUiFrameLogical"/> 小时，位置按**最小操作框**算（见 <see cref="UiBox"/>）。
+    /// 绘制 / 命中 / 拖动换算三处都只走这一个函数，所以"操作框"天然是同一份判据——
+    /// 谁都不许另算一份（同一个名单写在多处必漏一处，见 架构-分层与规则.md 五-7）。
+    /// </summary>
+    public static Vector2 Position(SelHandle h, in RectF b, float dpiScale)
+        => PositionRaw(h, UiBox(b, dpiScale), dpiScale);
+
+    /// <summary>
+    /// 指针是不是落在**操作框**里（"整体拖动"那一档）。
+    /// 三处入口——光标形状、自动选中框分流、按下分流——共用这一份，分开写必漂。
+    /// 用画布坐标直接判（选中框一律轴对齐、ToCanvas 是单位阵，见 SelectionFrame 的注释）。
+    /// </summary>
+    public static bool InsideUiFrame(in SelectionFrame f, Vector2 canvasPoint, float dpiScale)
+        => UiBox(f.CanvasAabb, dpiScale).Contains(canvasPoint.X, canvasPoint.Y);
 
     /// <summary>手柄在**画布坐标**里的位置。</summary>
     public static Vector2 CanvasPosition(SelHandle h, in SelectionFrame f, float dpiScale)
@@ -1264,12 +1336,16 @@ internal static class SelectionHandles
         // **容差外一律不吸**（规格 9.6：长度 ≤ 2 逻辑像素）。
         if (MathF.Abs(w - h) > ShapeSnapLengthToleranceLogical * dpiScale) return false;
 
-        var anchor = Position(Opposite(handle), f.Local, dpiScale);
-        var corner = Position(handle, f.Local, dpiScale);
-        float armX = corner.X - anchor.X, armY = corner.Y - anchor.Y;
+        // 量拖动幅度用**操作框**的角（和 DragMatrix 同一个理由：按下第一帧不跳），
+        // 真正缩放的中心用**真实框**的对面角（小对象不会绕着框外一个点漂）。
+        var box = UiBox(f.Local, dpiScale);
+        var anchorUi = PositionRaw(Opposite(handle), box, dpiScale);
+        var cornerUi = PositionRaw(handle, box, dpiScale);
+        var anchorReal = PositionRaw(Opposite(handle), f.Local, dpiScale);
+        float armX = cornerUi.X - anchorUi.X, armY = cornerUi.Y - anchorUi.Y;
         if (MathF.Abs(armX) < 1e-3f || MathF.Abs(armY) < 1e-3f) return false;
-        float sx = (currentPoint.X - anchor.X) / armX;
-        float sy = (currentPoint.Y - anchor.Y) / armY;
+        float sx = (currentPoint.X - anchorUi.X) / armX;
+        float sy = (currentPoint.Y - anchorUi.Y) / armY;
         // 四角 = 等比（取变化大的那一轴），和 DragMatrix 里那条规则同源——两边都改，
         // 所以这里必须自己再算一遍，不能在 DragMatrix 的结果上打补丁。
         float su = MathF.Max(MathF.Abs(sx), MathF.Abs(sy));
@@ -1280,7 +1356,7 @@ internal static class SelectionHandles
         // 而报"吸住了"却是假的。
         if (MathF.Abs(fx) < MinScale || MathF.Abs(fy) < MinScale) return false;
 
-        localM = Matrix3x2.CreateScale(fx, fy, anchor);
+        localM = Matrix3x2.CreateScale(fx, fy, anchorReal);
         return true;
     }
 
@@ -1521,6 +1597,19 @@ internal static class SelectionHandles
         return new SelectionFrame { Local = r, ToCanvas = Matrix3x2.Identity };
     }
 
+    /// <summary>
+    /// "细长 / 小对象让出边中点柄"的判据——**全工程只有这一份**：命中的两个入口和
+    /// 绘制（Overlay 画那八个通用柄）都问它。分家写就会出现"看得见点不到"、
+    /// "点得到看不见"，或者小对象上八个方块挤成一团（2026-10-05 用户报的）。
+    ///
+    /// 返回 (ThinVertical, ThinHorizontal)：竖向太窄 → 让出"上/下"；横向太窄 → 让出"左/右"。
+    /// </summary>
+    public static (bool ThinVertical, bool ThinHorizontal) ThinEdges(in RectF box, float dpiScale)
+    {
+        float d = HitRadiusLogical * dpiScale * 2f;
+        return ((box.MaxY - box.MinY) < d, (box.MaxX - box.MinX) < d);
+    }
+
     /// <summary>按给定的选区坐标系做手柄命中判定。</summary>
     public static SelHandle HitTest(float canvasX, float canvasY, in SelectionFrame f,
                                     float dpiScale, bool includeEdgeHandles = true)
@@ -1528,11 +1617,9 @@ internal static class SelectionHandles
         float r = HitRadiusLogical * dpiScale;
         var p = new Vector2(canvasX, canvasY);
 
-        // 细长对象让出"边中点"手柄 —— 理由和下面 RectF 版一模一样（两处都要改，
-        // 这不是复制代码，是同一个判据的两个入口；漏改一处就会出现"某条路径点不中/拖不动"）。
-        var box = f.CanvasAabb;
-        bool thinVertical = (box.MaxY - box.MinY) < r * 2f;
-        bool thinHorizontal = (box.MaxX - box.MinX) < r * 2f;
+        // 细长对象让出"边中点"手柄 —— 判据只有 ThinEdges 一份（命中两个入口、
+        // 绘制侧共用它；分家就会出现"点不中/拖不动/画一堆"）。
+        var (thinVertical, thinHorizontal) = ThinEdges(f.CanvasAabb, dpiScale);
 
         // 旋转手柄先测：它在框外，不会和四角重叠，但它离上边中点最近，
         // 先测它能避免两个窄命中区互相抢。
@@ -1588,9 +1675,8 @@ internal static class SelectionHandles
         // **把那个方向的"边中点"手柄让出来**（四角和旋转手柄照旧）。
         // 2026-09-15 由 --seltest 的"复制拖拽"用例暴露：一条 8 逻辑像素宽的横线，
         // 在正中间按下命中的是"上"手柄。
-        float boxW = b.MaxX - b.MinX, boxH = b.MaxY - b.MinY;
-        bool thinVertical = boxH < r * 2f;      // 竖向太窄 → 让出"上/下"
-        bool thinHorizontal = boxW < r * 2f;    // 横向太窄 → 让出"左/右"
+        // 竖向太窄 → 让出"上/下"；横向太窄 → 让出"左/右"（判据见 ThinEdges）。
+        var (thinVertical, thinHorizontal) = ThinEdges(b, dpiScale);
 
         // 旋转手柄先测：它在框外，不会和四角重叠，但它离上边中点的
         // "上"手柄最近，先测它能避免两个窄命中区互相抢。
@@ -1746,14 +1832,27 @@ internal static class SelectionHandles
         }
 
         // 缩放 / 拉伸：对面那个手柄是**不动的锚点**。
-        var anchor = Position(Opposite(handle), startBounds, dpiScale);
+        //
+        // ⚠ 这里要区分**两个锚点**（2026-10-05 修"小对象缩到最小以后鼠标乱动、
+        //   它跟着乱移动"）：
+        //   · `anchorUi`（**操作框**的对面角）：只是量"拖了多远"的基准。手柄画在
+        //     操作框上，按下第一帧必须正好 s = 1；拿真实角当基准，小对象一按就跳。
+        //   · `anchorReal`（**真实包围盒**的对面角）：才是缩放中心。内容必须钉在
+        //     它自己的对面角上——这也是 Office / Figma / Excalidraw 的做法
+        //     （Excalidraw：`getResizeAnchor` 取对面边角、`getResizedOrigin` 重算原点，
+        //     锚点全程不动）。拿操作框的角当缩放中心的话，内容会绕着一个**自己外面**
+        //     的点缩放：小对象缩到最小以后继续晃指针，东西就满屏乱走。
+        var box = UiBox(startBounds, dpiScale);
+        var anchorUi = PositionRaw(Opposite(handle), box, dpiScale);
+        var anchorReal = PositionRaw(Opposite(handle), startBounds, dpiScale);
+        var handleUi = PositionRaw(handle, box, dpiScale);
         var (u, v) = Uv(handle);
 
         // 拖动方向上的"起始臂长"。边中点手柄只在单轴上有效。
-        float armX = Position(handle, startBounds, dpiScale).X - anchor.X;
-        float armY = Position(handle, startBounds, dpiScale).Y - anchor.Y;
-        float curX = currentPoint.X - anchor.X;
-        float curY = currentPoint.Y - anchor.Y;
+        float armX = handleUi.X - anchorUi.X;
+        float armY = handleUi.Y - anchorUi.Y;
+        float curX = currentPoint.X - anchorUi.X;
+        float curY = currentPoint.Y - anchorUi.Y;
 
         float sx = MathF.Abs(armX) > 1e-3f ? curX / armX : 1f;
         float sy = MathF.Abs(armY) > 1e-3f ? curY / armY : 1f;
@@ -1782,7 +1881,7 @@ internal static class SelectionHandles
         sx = ClampScale(sx);
         sy = ClampScale(sy);
 
-        return Matrix3x2.CreateScale(sx, sy, anchor);
+        return Matrix3x2.CreateScale(sx, sy, anchorReal);
     }
 
     private static float ClampScale(float s)

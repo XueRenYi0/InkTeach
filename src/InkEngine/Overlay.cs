@@ -206,7 +206,7 @@ internal static class Gfx
 /// annotations you see are drawn directly by the GPU into a transparent layer
 /// above the desktop.
 /// </summary>
-internal sealed class OverlayWindow : IDisposable
+internal sealed partial class OverlayWindow : IDisposable
 {
     public static long RebuildCount;
 
@@ -277,6 +277,7 @@ internal sealed class OverlayWindow : IDisposable
 
     private IDXGISwapChain1 _swapChain;
     private IDXGISwapChain2 _swapChain2;
+    private IDXGISwapChain3 _swapChain3;      // 诊断：读"当前后缓冲号"（见 Trace）
     private IntPtr _latencyWait = IntPtr.Zero;
 
     /// <summary>
@@ -306,12 +307,16 @@ internal sealed class OverlayWindow : IDisposable
     private ID2D1InkStyle _inkStyle;
     /// <summary>每次画一条压感笔迹最多铺多少段（**只在曲线化关着时**生效，见 DrawPressureInk）。</summary>
     private const int InkMaxSegments = 120;
+    /// <summary>`--inkmodel` 时压感墨迹的段数上限：建模输出 ≥180Hz、点很密，按 120 抽会把弯拉直。</summary>
+    private const int InkMaxSegmentsModeled = 4096;
     /// <summary>
     /// 段缓冲：**预分配、复用**，不在每帧绘制里 new。
     /// 曲线化打开时会按点数增长（`--smooth`）：折线段少是有意抽稀的，曲线段不能抽——
     /// 一抽就把刚算出来的弯又拉直了。
     /// </summary>
     private InkBezierSegment[] _inkSegs = new InkBezierSegment[InkMaxSegments];
+    /// <summary>`--mean2fit` 用：拟合输入的复用点/压力缓冲（静态数组，不每帧分配）。</summary>
+    // [删除 2026-10-05] `_fitPts/_fitP`（WPF 拟合输入缓冲）：随拟合档清理移除。
     /// <summary>压力的指数平滑系数（0..1，越小越稳）。见 DrawPressureInk。</summary>
     private const float InkPressureEma = 0.35f;
     /// <summary>最小墨迹半径（画布像素）：轻压时也不至于细到画不出来。</summary>
@@ -359,23 +364,60 @@ internal sealed class OverlayWindow : IDisposable
     /// <summary>上一帧图库面板占的矩形（窗口坐标）。面板关掉时要靠它把那张卡片擦掉。</summary>
     private RectF _libraryRectPrev = RectF.Empty;
 
+    /// <summary>上一帧"自绘落点反馈"（橡皮框 / 圆环）占的矩形（窗口坐标）。
+    /// **必须并进脏区**：指针一帧里可能移动超过半径（快擦、面积擦的框还会随速度变大变小），
+    /// 只算当前位置的话，旧框留在原地的那一条就成了"擦不掉的竖线 / 变暗的带子"——
+    /// 用户 2026-09-30 报的"橡皮左侧 / 左上侧靠近墨迹时出现细密竖线、颜色变深"就是它。</summary>
+    private RectF _cursorRectPrev = RectF.Empty;
+
+    /// <summary>
+    /// 右缘滚动条那一条。**单独成一块脏区**，不并进静止图元的联合包围盒
+    /// （理由见 <c>ComputeTransientBounds</c> 末尾：并进去会把"笔迹左边"排到脏区外）。
+    /// </summary>
+    private RectF _scrollbarRect = RectF.Empty;
+
+    /// <summary>上一帧的滚动条矩形：淡出结束那一帧还要把它擦掉（同 _cursorRectPrev 的做法）。</summary>
+    private RectF _scrollbarRectPrev = RectF.Empty;
+
     /// <summary>上一帧"截图取景"开着吗——收场那一帧要整窗重画，把遮罩擦干净（8.3.0）。</summary>
     private bool _captureWasActive;
 
     /// <summary>PPT 控件条上一帧的矩形（退出放映 / 拖动那一帧要靠它把旧位置擦干净，
     /// 同 `_libraryRectPrev` 的做法）。</summary>
     private RectF _pptBarRectPrev = RectF.Empty;
+    /// <summary>回放控制条上一帧的矩形（退出回放那一帧要把旧位置擦干净，同 PPT 条）。</summary>
+    private RectF _replayBarRectPrev = RectF.Empty;
+    /// <summary>计时卡片上一帧的矩形（停下 / 收起 / 拖动那一帧要把旧位置擦干净）。</summary>
+    private RectF _timerRectPrev = RectF.Empty;
+    /// <summary>点名卡片上一帧的矩形。</summary>
+    private RectF _rollRectPrev = RectF.Empty;
+    /// <summary>引擎侧悬停提示上一帧的矩形（换块 / 隐藏那一帧要把旧卡擦干净，同 PPT 条）。</summary>
+    private RectF _tipRectPrev = RectF.Empty;
 
     /// <summary>页码那一段文字的格式（13 逻辑像素，见 `PptPageFormat`）。</summary>
     private IDWriteTextFormat _pptPageFmt;
     private float _pptPageFmtPx;
+    /// <summary>悬停提示的两行格式：第一行 12.5、第二行 11（都左对齐，键位跟名称同一行）。</summary>
+    private IDWriteTextFormat _tipTitleFmt, _tipNoteFmt;
+    private float _tipTitleFmtPx, _tipNoteFmtPx;
 
     // 内容层的改动也要记两帧：后缓冲里躺着的是两帧前的画面。
     private readonly List<RectF> _contentDirtyNow = new();
     private readonly List<RectF> _contentDirtyPrev = new();
 
     /// <summary>整块后缓冲内容无效（首帧、重建、尺寸变化）时必须全屏重绘一次。</summary>
-    private bool _forceFullFrame = true;
+    /// <summary>
+    /// "接下来还要整屏重画几帧"。
+    ///
+    /// **为什么是 2 而不是 1**（2026-10-04 修"滚完轮一按就闪/错位、只在左侧"）：
+    /// 画面在两个后缓冲之间交替，一次整屏重画只更新**其中一个**。如果只强制一帧，
+    /// 另一个缓冲会停在变化前（旧相机位置 / 旧底色 / 旧文档）的画面。平时这个旧画面
+    /// 靠"变化的像素要在随后两帧都重画"的脏区历史兜住，但**相机变化没有这份两帧历史**，
+    /// 于是滚动停下后第一帧如果只重画局部（笔迹 + 滚动条并成的包围盒），旧缓冲里
+    /// 没被覆盖的那一块就会露出来——就是用户看到的"从某条线隔开、一侧错位/闪"。
+    /// 强制**连续两帧**整屏，保证两个缓冲都更新到新状态。
+    /// </summary>
+    private int _fullFramesLeft = 2;
 
     /// <summary>
     /// 旋转度数标签用的文字格式。**按 DPI 生成**：绘制时的变换只有平移，
@@ -394,6 +436,15 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private IDWriteTextFormat _readoutFormatSmall;
     private float _readoutFormatSmallPx;
+
+    /// <summary>计时卡片上的数字（19 逻辑像素）与放大态的大字（92 逻辑像素）。</summary>
+    private IDWriteTextFormat _timerValueFormat, _timerBigFormat;
+    private float _timerValueFormatPx, _timerBigFormatPx;
+    /// <summary>点名结果的字号格式（按结果长度自适应，现建现缓存）。</summary>
+    private IDWriteTextFormat _rollResultFormat;
+    private float _rollResultFormatPx;
+    /// <summary>到点闪烁那一拍的颜色（和主题无关：就是"提醒红"）。</summary>
+    private static readonly Color4 TimerFlashCol = new(0.91f, 0.26f, 0.21f, 1f);
 
     /// <summary>
     /// 拖端点时的"临时几何"复用的那条 scratch 笔画（见 <see cref="DrawVertexPreview"/>）。
@@ -510,12 +561,33 @@ internal sealed class OverlayWindow : IDisposable
     public static int BufferCount = 2;
 
     /// <summary>
+    /// 诊断开关（`--fullpresent`，2026-10-04 加）：**每次都用整屏 Present，
+    /// 不走 `Present1` 的脏矩形**。
+    ///
+    /// 用来分辨用户报的"屏幕上固定一条横线、滚动/书写时从那里闪"：那一类更像是
+    /// 脏矩形部分上屏和 DWM/MPO（硬件平面）合成的相互作用，而不是我们墨迹层的
+    /// 脏区漏画（`--prevflash` 已排除后者）。关掉脏矩形上屏如果闪就没了，
+    /// 就说明该在"部分上屏"这条路上做产品级兜底。
+    /// </summary>
+    public static bool FullPresent;
+
+    /// <summary>
     /// 每帧在渲染之前先 DwmFlush，等到合成边界再抽输入、提交。
     /// 见 Native.DwmFlush 的说明，以及 README 里延时那一节。
     /// </summary>
     public static bool VBlankPaced;
 
+    /// <summary>
+    /// 诊断开关（`--scrollflash` 等探针用）：把每一帧的脏区/上屏/后缓冲号打到控制台。
+    /// 用来追"滚完按下时左列错位"这类只发生在特定帧的问题（2026-10-04）。
+    /// </summary>
+    public static bool Trace;
+
     public int LastDrawnStrokes;
+    /// <summary>上一拍预取了几块 / 耗时 / 预算口径（诊断与 HUD）。</summary>
+    public int LastPrefetch;
+    public double LastPrefetchMs;
+    public bool LastPrefetchPending;
     /// <summary>常驻分块数 / 这一帧可见块数 / 分块预算（诊断用）。</summary>
     public int LastTileCount, LastTileVisible, LastTileBudget;
     public string LastError;
@@ -694,6 +766,7 @@ internal sealed class OverlayWindow : IDisposable
         };
 
         _swapChain = Gfx.Factory.CreateSwapChainForComposition(Gfx.Device, desc, null);
+        try { _swapChain3 = _swapChain.QueryInterfaceOrNull<IDXGISwapChain3>(); } catch { _swapChain3 = null; }
 
         if (LatencyWaitEnabled)
         {
@@ -937,14 +1010,16 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private void SyncTiles(InkEngine app)
     {
-        var doc = app.Doc;
+        // 回放期间内容层渲染的是**影子文档**（已出完的笔画；见 InkEngine.RenderDoc）——
+        // 这样分块缓存、多窗口、DPI、板色全部白拿，只有"正在长的那一条"走浮动层。
+        var doc = app.RenderDoc;
 
         if (_tilesVersion != doc.Version)
         {
             if (doc.Dirty.Full)
             {
                 _tiles.MarkAllDirty();
-                _forceFullFrame = true;
+                _fullFramesLeft = 2;
             }
             else if (doc.StructureChangedSinceRender)
             {
@@ -971,7 +1046,7 @@ internal sealed class OverlayWindow : IDisposable
         if (ViewOffsetY != _lastCamY)
         {
             _lastCamY = ViewOffsetY;
-            _forceFullFrame = true;
+            _fullFramesLeft = 2;      // 相机变了：两个缓冲都要重画到新位置（见字段说明）
         }
 
         // 底色是**画进分块里**的（透明批注 = 擦成全透明，白板 = 铺底色），
@@ -981,10 +1056,14 @@ internal sealed class OverlayWindow : IDisposable
             _lastBoardOn = app.BoardOn;
             _lastBoardColor = app.BoardColor;
             _tiles.MarkAllDirty();
-            _forceFullFrame = true;
+            _fullFramesLeft = 2;
         }
 
         _tiles.Sync(VisibleCanvasRect, RasterizeTile);
+
+        if (Trace && (_tiles.RasterizedLastFrame > 0 || _tiles.AppendedLastFrame > 0))
+            Console.WriteLine($"    [tiles] raster={_tiles.RasterizedLastFrame} append={_tiles.AppendedLastFrame} "
+                              + $"camY={ViewOffsetY:F0}");
 
         RebuildCount += _tiles.RasterizedLastFrame;
         LastRebuildMs = _tiles.RasterMsLastFrame;
@@ -995,9 +1074,27 @@ internal sealed class OverlayWindow : IDisposable
         LastDrawnStrokes = _tiles.StrokesLastFrame;
         LastTileCount = _tiles.Count;
         LastTileVisible = _tiles.VisibleCount;
-        LastTileBudget = _tiles.BudgetTiles > 0
-            ? Math.Max(_tiles.BudgetTiles, _tiles.VisibleCount + CanvasTileCache.ScrollBackMargin)
-            : _tiles.VisibleCount + CanvasTileCache.ScrollBackMargin;
+        LastTileBudget = _tiles.BudgetNow;      // 可见 + 回滚余量 + 预取环（见 CanvasTileCache.BudgetNow）
+    }
+
+    /// <summary>视口外一圈还有没有欠着的块（引擎据此排空闲预取拍）。</summary>
+    public bool PrefetchNeeded() => _tiles.PrefetchNeeded(VisibleCanvasRect);
+
+    /// <summary>
+    /// 空闲预取一拍：只烘"视口外一圈"里欠着的块，**不合成、不上屏**（上游 Xournal++/Rnote 的
+    /// 预渲染思路）。返回 true = 环里还有活，引擎再排下一拍。
+    /// </summary>
+    public bool PrefetchStep(InkEngine app)
+    {
+        _app = app;
+        bool more = _tiles.Prefetch(VisibleCanvasRect, RasterizeTile);
+        LastPrefetch = _tiles.LastPrefetch;
+        LastPrefetchMs = _tiles.PrefetchMsLastFrame;
+        LastPrefetchPending = more;
+        if (Trace && _tiles.LastPrefetch > 0)
+            Console.WriteLine($"    [prefetch] {_tiles.LastPrefetch} 块 {_tiles.PrefetchMsLastFrame:F2}ms "
+                              + $"pending={more} camY={ViewOffsetY:F0}");
+        return more;
     }
 
     /// <summary>
@@ -1013,7 +1110,7 @@ internal sealed class OverlayWindow : IDisposable
     private int RasterizeTile(ID2D1Bitmap1 target, RectF canvas, List<Stroke> onlyThese)
     {
         var app = _app;
-        var doc = app.Doc;
+        var doc = app.RenderDoc;      // 回放期间是影子文档（见 SyncTiles 的说明）
 
         _ctx.Target = target;
         _ctx.BeginDraw();
@@ -1362,6 +1459,19 @@ internal sealed class OverlayWindow : IDisposable
         _uiLayoutScreen = RectF.Empty;
         _uiLayoutDpi = -1f;
         _uiLayoutBounds = RectF.Empty;
+    }
+
+    /// <summary>
+    /// 把内容层**整层作废**（回放切换"影子文档 / 真文档"、往回拖进度时用）。
+    ///
+    /// 为什么不能只靠 `doc.Version`：两份文档的版本号可能撞上，SyncTiles 里
+    /// `_tilesVersion != doc.Version` 一比就"看起来没变"，屏幕上是上一份文档的像素。
+    /// </summary>
+    internal void ForceContentRebuild()
+    {
+        _tilesVersion = -1;
+        _fullFramesLeft = 2;
+        _tiles.MarkAllDirty();
     }
 
     /// <summary>
@@ -1796,9 +1906,15 @@ internal sealed class OverlayWindow : IDisposable
     ///   · **曲线化开着**（`--smooth`）→ <see cref="StrokeSmoothing"/> 的过点贝塞尔；
     ///     段数按点数走，**不再按 120 抽稀**（抽稀会把刚算出来的弯又拉直）；
     ///   · **关着**（默认）→ 原来的"按步长抽稀到 ≤120 段 ＋ 控制点落在直线上"，行为一字不改。
+    ///
+    /// <paramref name="maxParam"/> 是**回放前缀**用的点序号上限（可带小数；整笔传 MaxValue）：
+    /// 只喂到那一处，必要时在末尾补一个插值点——这样回放里"正在长"的压感笔迹
+    /// 仍然走 D2D 原生变宽，而不是先等宽、写完突然变粗。前缀**不接渲染尾**。
+    ///
     /// 返回 false = 没有段，调用方直接不画。
     /// </summary>
-    private bool BuildPressureSegments(Stroke s, out float startRadius, out int count)
+    private bool BuildPressureSegments(Stroke s, out float startRadius, out int count,
+                                       float maxParam = float.MaxValue)
     {
         var pts = s.Points;
         int n = pts.Count;
@@ -1806,16 +1922,40 @@ internal sealed class OverlayWindow : IDisposable
         startRadius = 0f;
         if (n < 2) return false;
 
-        startRadius = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, pts[0].P));
-        float lastX = pts[0].X, lastY = pts[0].Y, lastR = startRadius;
+        bool clipped = maxParam < n - 1 - 1e-4f;
+        // 运动模型（实验，`--motion`）：整条用选中的模型输出 + 压力（M2 已按时间加权插值压力）。
+        // 只对"整笔、没被橡皮擦过"生效；回放前缀/擦除过的一律照旧走原始点。
+        bool useModel = !clipped && s.Erased.Count == 0 && StrokeMotion.Build(s);
+        if (useModel) n = StrokeMotion.Count;
+        int lastIdx = clipped ? Math.Clamp((int)MathF.Floor(maxParam), 0, n - 1) : n - 1;
+        float frac = clipped ? maxParam - lastIdx : 0f;
+        bool tailPoint = frac > 1e-4f;
+        if (clipped && lastIdx < 1 && !tailPoint) return false;   // 还没长到第二个点
 
-        if (StrokeSmoothing.Enabled && !s.RawWhileLive)
+        // 源点访问器：原始采样点 / 建模输出（x, y, 压力）二选一。
+        float Px(int i) => useModel ? StrokeMotion.At(i).X : pts[i].X;
+        float Py(int i) => useModel ? StrokeMotion.At(i).Y : pts[i].Y;
+        float Pp(int i) => useModel ? StrokeMotion.At(i).Z : pts[i].P;
+
+        startRadius = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, Pp(0)));
+        float lastX = Px(0), lastY = Py(0), lastR = startRadius;
+
+        if (useModel || (!useModel && StrokeSmoothing.Enabled && !s.RawWhileLive))
         {
+            // 把源点（原始采样点 / 建模输出）喂进过点曲线：建模输出本来已经去过抖，
+            // 再过一次曲线只是为了消掉"输出点之间的折线"（mean2 的快写折线感）。
             StrokeSmoothing.Begin();
-            for (int i = 0; i < n; i++) StrokeSmoothing.Add(pts[i].X, pts[i].Y, pts[i].P);
+            for (int i = 0; i <= lastIdx; i++) StrokeSmoothing.Add(Px(i), Py(i), Pp(i));
+            if (tailPoint)
+            {
+                int j = lastIdx + 1;
+                StrokeSmoothing.Add(Px(lastIdx) + (Px(j) - Px(lastIdx)) * frac,
+                                    Py(lastIdx) + (Py(j) - Py(lastIdx)) * frac,
+                                    Pp(lastIdx) + (Pp(j) - Pp(lastIdx)) * frac);
+            }
             int segs = StrokeSmoothing.Finish();
             if (segs <= 0) return false;
-            EnsureInkSegs(segs + (s.RenderTail?.Count ?? 0));
+            EnsureInkSegs(segs);
 
             var cs = StrokeSmoothing.Out;
             float ema = StrokeSmoothing.PressureAt(0);
@@ -1842,17 +1982,20 @@ internal sealed class OverlayWindow : IDisposable
         }
         else
         {
-            // 采样步长：保证段数 ≤ InkMaxSegments，且**最后一点一定画到**。
-            int stride = Math.Max(1, (int)MathF.Ceiling((n - 1) / (float)InkMaxSegments));
-            int cap = Math.Min(_inkSegs.Length, InkMaxSegments);
-            float sm = pts[0].P;
-            float sx = pts[0].X, sy = pts[0].Y, sr = startRadius;
-            for (int i = 1; i < n && count < cap; i++)
+            // 采样步长：保证段数 ≤ 上限，且**最后一点一定画到**。
+            // 建模输出的点已经很密（≥180Hz），上限给大得多——按 120 抽会把刚平滑出来的弯拉直。
+            int maxSegs = useModel ? InkMaxSegmentsModeled : InkMaxSegments;
+            int stride = Math.Max(1, (int)MathF.Ceiling((n - 1) / (float)maxSegs));
+            if (useModel) EnsureInkSegs(Math.Min(n, maxSegs));
+            int cap = Math.Min(_inkSegs.Length, maxSegs);
+            float sm = Pp(0);
+            float sx = Px(0), sy = Py(0), sr = startRadius;
+            for (int i = 1; i <= lastIdx && count < cap; i++)
             {
-                sm += (pts[i].P - sm) * InkPressureEma;      // 平滑只作用于压力，不动位置
-                if (i % stride != 0 && i != n - 1) continue; // 中间的按步长抽稀（末点必留）
+                sm += (Pp(i) - sm) * InkPressureEma;      // 平滑只作用于压力，不动位置
+                if (i % stride != 0 && i != lastIdx) continue; // 中间的按步长抽稀（末点必留）
 
-                float ex = pts[i].X, ey = pts[i].Y;
+                float ex = Px(i), ey = Py(i);
                 float er = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, sm));
                 // 直线段写成三次贝塞尔：控制点落在两端之间 → 位置是直线，半径沿途线性插值。
                 //
@@ -1876,44 +2019,36 @@ internal sealed class OverlayWindow : IDisposable
                 sx = ex; sy = ey; sr = er;
                 lastX = sx; lastY = sy; lastR = sr;
             }
-        }
-
-        if (count == 0) return false;
-
-        // ---- 渲染尾（预测段）**也要接在这一路** ------------------------------
-        //
-        // ⚠ 两处渲染路必须都带上尾，漏一处就是"鼠标有效果、手写板毫无反应"：
-        //   · 无压感的笔迹 → 上面那条等宽描边（几何出自 BuildCenterline，那里带尾）；
-        //   · **有压感的笔迹 → 就是这里**，ink 对象只按 `s.Points` 建，
-        //     不加这段的话尾被整个丢掉。
-        // 而真笔**必然**报压感，所以这个漏法只在真笔上现形，鼠标和自检都照不出来
-        //（2026-09-22 用户实测：两边的 `[笔画]` 行都报"预测尾=有（最多 100 px）"，
-        //  只有鼠标看得见——出问题的不是预测，是这一条渲染路）。
-        //
-        // 半径沿用最后一段的：尾是"还没发生的墨"，不该自己变粗变细。
-        if (s.RenderTail != null)
-        {
-            EnsureInkSegs(count + s.RenderTail.Count);
-            float tx = lastX, ty = lastY, tr = lastR;
-            foreach (var tp in s.RenderTail)
+            // 前缀落在两个采样点之间：补一个插值终点（位置/压力都线性插），
+            // 不然回放的笔尖会"一格一格跳"。
+            if (tailPoint && count < cap)
             {
-                if (count >= _inkSegs.Length) break;
-                // 直线段写成三次贝塞尔：控制点落在两端之间 → 位置是直线。
+                int j = lastIdx + 1;
+                float ex = Px(lastIdx) + (Px(j) - Px(lastIdx)) * frac;
+                float ey = Py(lastIdx) + (Py(j) - Py(lastIdx)) * frac;
+                sm += ((Pp(lastIdx) + (Pp(j) - Pp(lastIdx)) * frac) - sm) * InkPressureEma;
+                float er = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, sm));
                 _inkSegs[count++] = new InkBezierSegment
                 {
                     Point1 = new Vortice.Direct2D1.InkPoint
                     {
-                        X = tx + (tp.X - tx) / 3f, Y = ty + (tp.Y - ty) / 3f, Radius = tr,
+                        X = sx + (ex - sx) / 3f, Y = sy + (ey - sy) / 3f,
+                        Radius = sr + (er - sr) / 3f,
                     },
                     Point2 = new Vortice.Direct2D1.InkPoint
                     {
-                        X = tx + (tp.X - tx) * 2f / 3f, Y = ty + (tp.Y - ty) * 2f / 3f, Radius = tr,
+                        X = sx + (ex - sx) * 2f / 3f, Y = sy + (ey - sy) * 2f / 3f,
+                        Radius = sr + (er - sr) * 2f / 3f,
                     },
-                    Point3 = new Vortice.Direct2D1.InkPoint { X = tp.X, Y = tp.Y, Radius = tr },
+                    Point3 = new Vortice.Direct2D1.InkPoint { X = ex, Y = ey, Radius = er },
                 };
-                tx = tp.X; ty = tp.Y;
+                lastX = ex; lastY = ey; lastR = er;
             }
         }
+
+        if (count == 0) return false;
+
+        // [删除 2026-10-05] 渲染尾（预测段）拼接：随老预测系统移除。
         return true;
     }
 
@@ -1932,6 +2067,14 @@ internal sealed class OverlayWindow : IDisposable
     {
         _app = app;
         s_frameNo++;
+
+        // 回放：推进"现在演到哪"必须**排在 SyncTiles 之前**。
+        //
+        // 为什么（用户 2026-10-01 报"每写完一笔还是会闪一下"的根因）：一条笔迹
+        // 出完那一帧要做两件事——把前缀撤掉、把这条墨补进内容层分块。两件事必须
+        // **同一帧**完成：TickReplay 排在 SyncTiles 后面时，这一帧分块里还没有这条墨，
+        // 而前缀已经不再画——屏幕上整整缺一帧（就是那个"闪一下"）。
+        app.TickReplay();
 
         // 双曲线三步式的第一步：**只画渐近线、先不画曲线**（见 _auxOnlyStroke 那段说明）。
         // 每帧在这里设一次——**只有真机渲染这条路会设**，导出/出图那条路不设，
@@ -1952,6 +2095,9 @@ internal sealed class OverlayWindow : IDisposable
         PrepareHud(app);
         LastHudMs = swHud.Elapsed.TotalMilliseconds;
         LastHudRedrawMs = _hudRedrewThisFrame ? LastHudMs : 0;
+
+        // 动态橡皮：指针停住之后把尺寸**缓释**回去（每帧推一次；续帧由引擎那边的 `_dirty` 保证）。
+        app.TickEraserIdleDecay();
 
         _transientNow = ComputeTransientBounds(app);
         UpdateFrameDirty(app, uiVisible);
@@ -2012,6 +2158,9 @@ internal sealed class OverlayWindow : IDisposable
             // 正在写的那一笔几何每帧都在变，用实现缓存只会不停重建，反而更慢
             DrawStroke(app.ActiveStroke);
 
+            // 回放：正在"长"的那一条（前缀几何；已经出完的都在内容层里了）
+            if (app.ReplayActive) DrawReplayCurrent(app);
+
             DrawDragPreview(app);
             DrawVertexPreview(app);
             DrawSelection(app);
@@ -2020,6 +2169,7 @@ internal sealed class OverlayWindow : IDisposable
             // 画线中的 α 读数画在浮动层最上面（它贴着正在拖的那一端，压住什么都不碍事）。
             DrawShapeInclination(app);
             DrawLaser(app);
+            DrawRadialPalette(app);   // 呼出盘压着墨和激光；落点反馈（下面那一句）在它上面
             DrawToolCursor(app);
             DrawMarquee(app);
 
@@ -2033,6 +2183,8 @@ internal sealed class OverlayWindow : IDisposable
             LastHudMs += swBlit.Elapsed.TotalMilliseconds;
         }
 
+        if (app.EraserHud) DrawEraserHud(app);   // 橡皮读数（8.3.7，默认关；调参用）
+
         // 滚动条（样式 B：一根细线）。画在浮动层，不进内容层。
         DrawScrollBar(app);
 
@@ -2040,6 +2192,19 @@ internal sealed class OverlayWindow : IDisposable
         // 它们的矩形是**屏幕坐标**（贴屏幕底边、只跟屏幕走），画在上面的画布变换里
         // 会被相机整体平移——相机一滚，条就跟着跑偏（和 HUD、滚动条同一批，同一理由）。
         DrawPptBar(app);
+
+        // 回放控制条：和 PPT 条同一层（屏幕坐标、`Identity` 变换之下），贴屏幕底边居中。
+        DrawReplayBar(app);
+
+        // 课堂计时卡片：同一层（屏幕坐标），默认顶部居中；双击放大后是屏幕中央的大字。
+        DrawTimerCard(app);
+
+        // 课堂点名卡片：同一层，默认屏幕中央偏上。
+        DrawRollCard(app);
+
+        // 引擎侧悬停提示（选中操作条 / PPT 条与长按菜单）：画在所有浮层之上、
+        // 截图整层之下——截图时 TooltipShown 本来就是假的（进入截图会清掉）。
+        DrawEngineTooltip(app);
 
         // 截图整层（8.3.0）：遮罩/冻结帧/取景框/准线/读数/调整手柄。
         // 放在最后 = 盖住上面所有东西（滚动条、PPT 条、HUD）；界面那一块在截图期间
@@ -2079,13 +2244,37 @@ internal sealed class OverlayWindow : IDisposable
     {
         var r = RectF.Empty;
 
+        // 自绘的落点反馈（橡皮方框 / 圆环 / 圆盘）：每帧都重画，而且**一帧可能移动超过半径**
+        //（快擦；面积擦的框还会随速度变大变小）。所以它必须走这条"最近三帧"的集合，
+        // 不能只算当帧或"当帧＋上一帧"——双缓冲里躺着的是**两帧前**的画面（见下面
+        // `_transientHistory` 那条注释）。用户 2026-09-30 报的"面积橡皮左侧出现一条条
+        // 细密的竖线、颜色像变深了"就是这个：旧框只有一帧的覆盖，第三帧那一条擦不掉。
+        if (app.DrawnCursor != InkEngine.ToolCursorShape.None)
+        {
+            float rad = app.DrawnCursorRadius;
+            var c = RectF.Empty;
+            c.Add(app.PointerX - rad, app.PointerY - rad);
+            c.Add(app.PointerX + rad, app.PointerY + rad);
+            r.Add(CanvasRectToWindow(c));
+        }
+
         if (app.ActiveStroke != null)
         {
-            // 渲染尾（预测段）画在**最后一个真实点的前面**，所以不在 PaddedBounds 里。
-            // 要按引擎报的尾长往外扩：不扩的话，尾巴走过的那几个像素擦不干净（残影）。
-            var ab = app.ActiveStroke.PaddedBounds;
-            if (app.PredictedTailLead > 0f) ab = ab.Inflate(app.PredictedTailLead + 2f);
-            r.Add(CanvasRectToWindow(ab));
+            // [删除 2026-10-05] 渲染尾（预测段）已随老预测系统移除，脏区不必再往外扩。
+            r.Add(CanvasRectToWindow(app.ActiveStroke.PaddedBounds));
+        }
+
+        // 呼出盘（Ctrl+Q）：固定画在盘心，但轨迹线跟着指针、内容随扇区变——
+        // 脏区按"盘 ＋ 投影 ＋ 盘下那行字 ∪ 当前指针"给（盘一转、线一动，旧像素才擦得掉）。
+        if (app.RadialPaletteActive)
+        {
+            float rad = (96f + app.FloatingTheme.ShadowReachLogical + 4f) * app.DpiScale;
+            var box = RectF.Empty;
+            box.Add(app.RadialCenterX - rad, app.RadialCenterY - rad);
+            box.Add(app.RadialCenterX + rad, app.RadialCenterY + rad);
+            box.Add(app.RadialCenterX, app.RadialCenterY + rad + 56f * app.DpiScale);  // 悬停字条
+            box.Add(app.PointerX, app.PointerY);
+            r.Add(CanvasRectToWindow(box));
         }
 
         var laser = app.Laser;
@@ -2113,7 +2302,19 @@ internal sealed class OverlayWindow : IDisposable
             var c = RectF.Empty;
             c.Add(app.PointerX - rad, app.PointerY - rad);
             c.Add(app.PointerX + rad, app.PointerY + rad);
-            r.Add(CanvasRectToWindow(c));
+            var cur = CanvasRectToWindow(c);
+            r.Add(cur);
+            // **上一帧那一份也要并进来**（同图库面板 / PPT 条的做法）：指针一帧里可能移动
+            // 超过半径（快擦；面积擦的框还会随速度变大变小），只算当前位置的话，旧框留在
+            // 原地的那一条就成了"擦不掉的竖线 / 变暗的带子"——正是用户报的那个现象。
+            if (!_cursorRectPrev.IsEmpty) r.Add(_cursorRectPrev);
+            _cursorRectPrev = cur;
+        }
+        else if (!_cursorRectPrev.IsEmpty)
+        {
+            // 落点反馈消失了（换工具 / 指针出界）：最后再擦一次它原来的位置。
+            r.Add(_cursorRectPrev);
+            _cursorRectPrev = RectF.Empty;
         }
 
         if (app.MarqueeActive)
@@ -2158,6 +2359,67 @@ internal sealed class OverlayWindow : IDisposable
             _pptBarRectPrev = cur;
         }
 
+        // 回放：控制条（悬停/拖动/数值都在变）＋ 正在长的那一条的前缀——都每帧在变，
+        // 必须按当前矩形算进脏区；退出回放那一帧旧位置也要擦（同 PPT 条、图库面板的套路）。
+        {
+            var cur = RectF.Empty;
+            if (app.ReplayActive)
+            {
+                cur = app.ReplayBarRect();
+                float pad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
+                r.Add(cur.Inflate(pad));
+                int idx = app.ReplayCurrentIndexNow;
+                if (idx >= 0 && idx < app.ReplayStrokesNow.Count)
+                {
+                    var b = app.ReplayStrokesNow[idx].PaddedBounds.Inflate(4f * Dpi / 96f);
+                    r.Add(CanvasRectToWindow(b));
+                }
+            }
+            if (!_replayBarRectPrev.IsEmpty) r.Add(_replayBarRectPrev);
+            _replayBarRectPrev = cur;
+        }
+
+        // 课堂计时卡片：跑秒 / 到点闪烁 / 拖动都在变，按当前矩形算进脏区；
+        // 停下 / 收起 / 放大还原那一帧旧位置也要擦（同 PPT 条、回放条的套路）。
+        {
+            var cur = RectF.Empty;
+            if (app.TimerCardOpen)
+            {
+                cur = app.TimerCardRect();
+                float pad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
+                r.Add(cur.Inflate(pad));
+            }
+            if (!_timerRectPrev.IsEmpty) r.Add(_timerRectPrev);
+            _timerRectPrev = cur;
+        }
+
+        // 课堂点名卡片：滚动/拖动/开合都在变；关掉那一帧旧位置也要擦（同计时卡）。
+        {
+            var cur = RectF.Empty;
+            if (app.RollCardOpen)
+            {
+                cur = app.RollCardRect();
+                float pad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
+                r.Add(cur.Inflate(pad));
+            }
+            if (!_rollRectPrev.IsEmpty) r.Add(_rollRectPrev);
+            _rollRectPrev = cur;
+        }
+
+        // 引擎侧悬停提示（选中操作条 / PPT 条与长按菜单）：显示、换块、收起都在变，
+        // 按当前矩形算进脏区；**收起那一帧**旧位置也要擦（同图库 / PPT 条的做法）。
+        {
+            var cur = RectF.Empty;
+            if (app.TooltipShown)
+            {
+                cur = TooltipCardRect(app);
+                float tipPad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
+                if (!cur.IsEmpty) r.Add(cur.Inflate(tipPad));
+            }
+            if (!_tipRectPrev.IsEmpty) r.Add(_tipRectPrev);
+            _tipRectPrev = cur;
+        }
+
         // 选中高亮画在浮动层上、不进内容层，所以它的区域必须每帧算进脏区。
         //
         // 注意**不能只算对象自己的包围盒**：选中框这一套 UI 比对象大——
@@ -2172,7 +2434,8 @@ internal sealed class OverlayWindow : IDisposable
             var sb = frame.CanvasAabb;
             float dpi = app.DpiScale;
             float margin = SelectionHandles.VisualSizeLogical * 0.5f * dpi + 6f;
-            var ui = sb.Inflate(margin);
+            // 手柄画在**最小操作框**上（小对象时比真实框大一圈），脏区也按它算。
+            var ui = SelectionHandles.UiBox(sb, dpi).Inflate(margin);
 
             var rot = SelectionHandles.CanvasPosition(SelHandle.Rotate, frame, dpi);
             float grip = SelectionHandles.RotateGripLogical * 0.5f * dpi + 3f;
@@ -2234,7 +2497,7 @@ internal sealed class OverlayWindow : IDisposable
         if (app.ShapeInclinationActive)
             r.Add(CanvasRectToWindow(InclinationReadoutRect(
                 app.ShapeInclinationAnchor, app.DpiScale,
-                InclinationLabel(app.ShapeInclinationDegrees)).Inflate(3f)));
+                ShapeLineReadout(app)).Inflate(3f)));
 
         // 多笔图形"这一笔吸到了什么"那颗胶囊（现在只有棱柱的「直棱柱」）。
         // **同样必须在"有选中对象"那块之外**：画棱柱的时候一个对象都没选中。
@@ -2261,15 +2524,37 @@ internal sealed class OverlayWindow : IDisposable
             if (!h.IsEmpty) r.Add(h);
         }
 
-        // 滚动条画在右边缘，而且要每帧淡出，所以必须算进脏区，
-        // 否则它消失之后会在屏幕上留一条擦不掉的线。
-        r.Add(new RectF
+        if (app.EraserHud)
         {
-            MinX = OriginX + Width - 30f * app.DpiScale,
-            MinY = OriginY,
-            MaxX = OriginX + Width,
-            MaxY = OriginY + Height,
-        });
+            // 橡皮读数（8.3.7）：同一角落，每帧都要进脏区（数字一直在变）。
+            var h = EraserHudRect(app);
+            if (!h.IsEmpty) r.Add(h);
+        }
+
+        // 滚动条画在右边缘，而且要淡出，所以画的那些帧必须算进脏区，
+        // 否则它消失之后会在屏幕上留一条擦不掉的线。
+        //
+        // ⚠ **两条纪律**：
+        //   ① 它是**单独一块**，不能并进 `r`（静止图元的联合包围盒）——它整屏高，
+        //      只要当前有一笔在屏幕左半边，联合包围盒就会变成"从笔迹到屏幕右缘"，
+        //      把"笔迹左边"整块排除在脏区外。2026-10-04 用户报的"滚完轮一按就闪/错位、
+        //      只在左侧"就是它兜出来的（配合相机变化只重画一帧）。分开之后互不拖累。
+        //   ② **只在它真的会画出来的时候才占脏区**（悬停/拖动/淡出窗口内）。不画就不占，
+        //      这样"这一帧什么都要不重画"时 `_frameDirty` 才是真的空、才能走整屏兜底
+        //      （对齐 Windows Terminal：没有失效就不 BeginPaint）。
+        //      淡出结束那一帧旧位置还要多擦一次，所以 UpdateFrameDirty 里会连上一帧的矩形一起加。
+        bool sbShown = TryScrollBar(app, out _)
+                       && (app.ScrollBarHover || app.ScrollBarDragging
+                           || (app.NowMs - app.ScrollBarActiveAtMs) / 1000.0 <= 3.5);
+        _scrollbarRect = sbShown
+            ? new RectF
+              {
+                  MinX = OriginX + Width - 30f * app.DpiScale,
+                  MinY = OriginY,
+                  MaxX = OriginX + Width,
+                  MaxY = OriginY + Height,
+              }
+            : RectF.Empty;
 
         return r;
     }
@@ -2285,19 +2570,22 @@ internal sealed class OverlayWindow : IDisposable
             MaxX = OriginX + Width, MaxY = OriginY + Height,
         };
 
-        var doc = app.Doc;
+        // 脏区也看 **RenderDoc**（回放中是影子文档——它才是内容层这一帧画的东西）。
+        // 只看真文档的话，回放里"刚出完的那一条"不会进上屏脏区，贴出来的是上一帧。
+        var doc = app.RenderDoc;
         _contentDirtyNow.Clear();
         if (doc.Dirty.Full)
             _contentDirtyNow.Add(full);
         else
             foreach (var raw in doc.Dirty.Rects) _contentDirtyNow.Add(CanvasRectToWindow(raw));
 
-        if (_forceFullFrame)
+        if (_fullFramesLeft > 0)
         {
-            // 首帧 / 内容层整层重建 / 尺寸变化：整块后缓冲都不可信。
+            // 首帧 / 相机变了 / 整层重建 / 换底色：**连续两帧**整屏重画——两个后缓冲
+            // 都要更新到新状态（见 _fullFramesLeft 的说明；只给一帧就是"滚完按下闪"的根因）。
             _frameDirty.Add(full);
             _contentDirtyPrev.Clear();
-            _forceFullFrame = false;
+            _fullFramesLeft--;
         }
         else
         {
@@ -2306,11 +2594,24 @@ internal sealed class OverlayWindow : IDisposable
             AddClipped(_frameDirty, _contentDirtyNow);
         }
 
+        // 【8.4.3】8.4.1 那记"面积橡皮框可见时整窗重画"已经**撤掉**：
+        // 它是排查期间的保险/对照实验，真正的根因是下面 `AddClipped` 里的**像素对齐**
+        // （小数边界会让每个脏区矩形的左边缘漏一列像素）。用户 8.4.2 实测确认干净之后，
+        // 就没有必要为它付"每帧整窗重画"的钱了（弱机上那是 20~40ms/帧的顿感）。
+        // 万一以后再看到那种"跟着框走的竖线"，先回来看 `AddClipped`：那里是唯一一处
+        // 决定"哪些像素会被擦到"的地方。
+
         // 临时图元：这一帧 + 前两帧（双缓冲里躺着的是两帧前的画面）
         var t = _transientNow;
         for (int i = 0; i < Math.Clamp(TransientHistoryFrames, 0, 2); i++)
             t.Add(_transientHistory[i]);
         if (!t.IsEmpty) AddClipped(_frameDirty, t);
+
+        // 右缘滚动条那一条：**单独加**，不参与上面那个联合包围盒（理由见 ComputeTransientBounds）。
+        // 上一帧那一份也要加：它可能是"淡出结束、这一帧不再画"的第一帧，少加一帧就留下一条残影。
+        if (!_scrollbarRect.IsEmpty) AddClipped(_frameDirty, _scrollbarRect);
+        if (!_scrollbarRectPrev.IsEmpty) AddClipped(_frameDirty, _scrollbarRectPrev);
+        _scrollbarRectPrev = _scrollbarRect;
 
         // 界面每帧都会重新贴到后缓冲上，所以它那块区域每帧都得算进上屏的脏区，
         // 否则双缓冲一交换，界面就会闪一下或干脆不见了。
@@ -2323,6 +2624,15 @@ internal sealed class OverlayWindow : IDisposable
         // 兜底：真要是一个矩形都没有，就整屏来一次，避免出现没擦干净的画面
         if (_frameDirty.Count == 0) _frameDirty.Add(full);
 
+        if (Trace)
+        {
+            string R(RectF r) => r.IsEmpty ? "-" : $"({r.MinX:F0},{r.MinY:F0})..({r.MaxX:F0},{r.MaxY:F0})";
+            string RL(List<RectF> l) => l.Count == 0 ? "-" : string.Join(",", l.ConvertAll(x => R(x)));
+            Console.WriteLine($"    [dirtysrc] now={RL(_contentDirtyNow)} prev={RL(_contentDirtyPrev)} "
+                              + $"trans={R(_transientNow)} h0={R(_transientHistory[0])} h1={R(_transientHistory[1])} "
+                              + $"ui={R(_uiBounds)} uiprev={R(_uiBoundsPrev)} cursor={R(_cursorRectPrev)} uiVis={uiVisible}");
+        }
+
         _transientHistory[1] = _transientHistory[0];
         _transientHistory[0] = _transientNow;
 
@@ -2332,7 +2642,19 @@ internal sealed class OverlayWindow : IDisposable
 
     private void AddClipped(List<RectF> list, RectF r)
     {
-        var c = ClipToWindow(r);
+        // **像素对齐**（8.4.2 修）：脏区是从画布/逻辑坐标换算过来的，边界常带小数
+        // （DPI 2.0、相机亚像素偏移、奇数尺寸）。小数边界交给 `PushAxisAlignedClip` + `Copy`
+        // 填充时，**最左（最上）那一列像素可能只被裁进去一半——擦不掉**，屏幕上就留下一条
+        // 竖线（旧内容）。用户 2026-09-30 报的两条正是它：
+        //   · "面积橡皮左侧始终跟着一根黑线"——每个脏区矩形各漏一条左边缘；
+        //     整窗重画后只剩一个矩形，所以"大残影带没了、只剩一根"；
+        //   · "悬浮栏收起展开会残留黑竖线"——同一件事（界面那块脏区）。
+        // 往外取整（floor 左/上、ceil 右/下）之后，裁剪框和上屏矩形都落在整像素上。
+        var c = ClipToWindow(new RectF
+        {
+            MinX = MathF.Floor(r.MinX), MinY = MathF.Floor(r.MinY),
+            MaxX = MathF.Ceiling(r.MaxX), MaxY = MathF.Ceiling(r.MaxY),
+        });
         if (!c.IsEmpty) list.Add(c);
     }
 
@@ -2559,7 +2881,9 @@ internal sealed class OverlayWindow : IDisposable
         //    拖动 / 旋转 / 拖元素中收起来（此刻点不中，而且是最"晃眼"的一圈家具）。
         if (!collapsed)
         {
-            float hs = SelectionHandles.VisualSizeLogical * dpi;
+            // 视觉柄**跟着对象大小缩**（小对象别被手柄盖住），命中半径不缩——
+            // 判据与理由都在 SelectionHandles.VisualHandleSize。
+            float hs = SelectionHandles.VisualHandleSize(frame.CanvasAabb, dpi);
             float radius = hs * 0.28f;
             if (nh > 0)
             {
@@ -2574,8 +2898,17 @@ internal sealed class OverlayWindow : IDisposable
                     SelHandle.TopLeft, SelHandle.Top, SelHandle.TopRight, SelHandle.Right,
                     SelHandle.BottomRight, SelHandle.Bottom, SelHandle.BottomLeft, SelHandle.Left,
                 };
+                // **和命中判定同一把尺子**（SelectionHandles.ThinEdges，判据只有那一份）：
+                // 对象在某方向比手柄命中直径还窄时，那个方向的边中点柄**画也不画**。
+                // 命中既然已经不收它，画出来就只是"看得见点不到"；而且小对象上八个方块
+                // 会挤成一团（2026-10-05 用户："墨迹特别小的时候这个框会挤在一起"）。
+                var (thinV, thinH) = SelectionHandles.ThinEdges(frame.CanvasAabb, dpi);
                 foreach (var h in all)
+                {
+                    if (thinV && h is SelHandle.Top or SelHandle.Bottom) continue;
+                    if (thinH && h is SelHandle.Left or SelHandle.Right) continue;
                     DrawHandleSquare(SelectionHandles.CanvasPosition(h, frame, dpi), hs, radius, white);
+                }
             }
         }
 
@@ -2675,10 +3008,15 @@ internal sealed class OverlayWindow : IDisposable
     {
         if (!app.ShapeInclinationActive) return;
         float dpi = app.DpiScale;
-        string readout = InclinationLabel(app.ShapeInclinationDegrees);
+        string readout = ShapeLineReadout(app);
         DrawReadoutPill(InclinationReadoutRect(app.ShapeInclinationAnchor, dpi, readout),
                         readout, app.ShapeInclinationSnapped);
     }
+
+    /// <summary>画线中的读数文案：**α ＋ 长度**（同一颗胶囊，和 α 同一个"边画边看"逻辑；
+    /// 长度是 2026-10-05 用户要加的）。绘制与脏区必须共用这一份——分开写就会留下擦不掉的边。</summary>
+    private static string ShapeLineReadout(InkEngine app)
+        => $"{InclinationLabel(app.ShapeInclinationDegrees)}  长 {app.ShapeLength:F0}";
 
     /// <summary>
     /// 旋转柄那根连线在**图形这一头**挂哪儿：
@@ -2735,8 +3073,12 @@ internal sealed class OverlayWindow : IDisposable
             //（纵向 = 振幅、横向 = 周期），所以两个数都报出来。
             InkEngine.VertexReadoutKind.WavePeriod =>
                 $"T = {app.VertexReadoutValue:F1}  A = {app.VertexReadoutSecondary:F1}",
-            // 直线/箭头：倾斜角 α（[0°,180°)），和旋转读数 Δ 是两个数
-            InkEngine.VertexReadoutKind.Inclination => InclinationLabel(app.VertexReadoutValue),
+            // 直线/箭头：倾斜角 α（[0°,180°)），和旋转读数 Δ 是两个数；
+            // 长度是 2026-10-05 加的第二个数（同 α 一颗胶囊）。
+            InkEngine.VertexReadoutKind.Inclination =>
+                app.VertexReadoutSecondary > 0.01f
+                    ? $"{InclinationLabel(app.VertexReadoutValue)}  长 {app.VertexReadoutSecondary:F0}"
+                    : InclinationLabel(app.VertexReadoutValue),
             // 三角形 / 平行四边形没吸住：这一颗胶囊没有可显示的量——它们要显示的是
             // 内角 / 夹角，那是**另一组**角标（见 DrawAnglePills，第③轮）。
             _ => null,
@@ -3926,19 +4268,6 @@ internal sealed class OverlayWindow : IDisposable
         _scratch.Color = theme.TextMuted;
         _ctx.DrawText(pRest, pfmt, new Rect(pX0 + pWCur, mid.MinY, pWRest, mid.MaxY - mid.MinY), _scratch);
 
-        // 长按反馈：页码格下沿一条进度线（没有反馈的长按等于没实现）。
-        // 到点就直接弹菜单了（见 StepPptBar），所以它只在"按住这 600ms"里出现。
-        if (app.PptLongPressProgress > 0f && !app.PptBarDragging && !app.PptMenuOpen && !app.PptPagePanelOpen)
-        {
-            float inset = 10f * dpi;
-            float y = mid.MaxY - 5f * dpi;
-            _scratch.Color = theme.ActiveBg;
-            _ctx.FillRoundedRectangle(new RoundedRectangle(new Vortice.RawRectF(
-                mid.MinX + inset, y,
-                mid.MinX + inset + (mid.MaxX - mid.MinX - inset * 2f) * app.PptLongPressProgress,
-                y + 3f * dpi), 1.5f * dpi, 1.5f * dpi), _scratch);
-        }
-
         if (app.PptHintVisible) DrawPptHint(app);
         if (app.PptPagePanelOpen) DrawPptPagePanel(app);
         if (app.PptMenuOpen) DrawPptMenu(app);
@@ -3952,6 +4281,229 @@ internal sealed class OverlayWindow : IDisposable
     /// 而条本身就是引擎画的（见 PptBar）；交给界面会多一条"位置同步"的缝。
     /// 画法照抄现成的图库面板（同一套 DrawPanelCard + 悬停高亮）。
     /// </summary>
+    // ---- 回放（墨迹 C）-------------------------------------------------------
+
+    /// <summary>
+    /// 回放中"正在长"的那一条。**已经出完的都在内容层（影子文档）里**，
+    /// 这里只画前缀：自由笔迹 → 中心线前缀（压感仍走 D2D 变宽）；图形/图片 → 到点整条出现。
+    /// </summary>
+    private void DrawReplayCurrent(InkEngine app)
+    {
+        int idx = app.ReplayCurrentIndexNow;
+        if (idx < 0 || idx >= app.ReplayStrokesNow.Count) return;
+        var s = app.ReplayStrokesNow[idx];
+        float param = app.ReplayCurrentParamNow;
+
+        if (s.Kind != StrokeKind.Freehand || s.IsImage)
+        {
+            DrawStroke(s);                      // 图形 / 图片：整条出现（硬拆成逐点反而怪）
+            return;
+        }
+        if (s.Points.Count == 0) return;
+        if (s.IsSinglePoint)
+        {
+            float rad = s.HasPressure && PressureWidth.Enabled
+                ? PressureWidth.HalfWidth(s.Width, s.Points[0].P)
+                : s.Width * 0.5f;
+            _ctx.FillEllipse(new Ellipse(new Vector2(s.Points[0].X, s.Points[0].Y),
+                                         MathF.Max(1f, rad), MathF.Max(1f, rad)),
+                             Brush(s.Color));
+            return;
+        }
+
+        float pointParam = param * (s.Points.Count - 1);
+        if (pointParam <= 0.02f) return;        // 刚起步：还没有可画的段
+        if (s.HasPressure && s.Dash == StrokeDash.Solid && s.Erased.Count == 0
+            && DrawReplayPressurePrefix(s, pointParam))
+            return;
+
+        var geo = s.BuildCenterlinePrefix(Gfx.D2DFactory, pointParam);
+        if (geo == null) return;
+        try
+        {
+            _ctx.DrawGeometry(geo, Brush(s.Color), MathF.Max(1f, s.Width), Gfx.StyleFor(s.Dash));
+        }
+        finally { geo.Dispose(); }
+    }
+
+    /// <summary>压感前缀：同 <see cref="DrawPressureInk"/> 那条路，只是只喂到前缀。</summary>
+    private bool DrawReplayPressurePrefix(Stroke s, float pointParam)
+    {
+        if (_ctx2 == null || _inkStyle == null || !InkAvailable || !PressureWidth.Enabled) return false;
+        if (!BuildPressureSegments(s, out float startRadius, out int nSeg, pointParam)) return false;
+        try
+        {
+            var ink = _ctx2.CreateInk(new Vortice.Direct2D1.InkPoint
+            {
+                X = s.Points[0].X, Y = s.Points[0].Y, Radius = startRadius,
+            });
+            try
+            {
+                ink.AddSegments(_inkSegs, (uint)nSeg);
+                _ctx2.DrawInk(ink, Brush(s.Color), _inkStyle);
+            }
+            finally { ink.Dispose(); }
+            return true;
+        }
+        catch { InkAvailable = false; return false; }
+    }
+
+    /// <summary>
+    /// 回放控制条。和 PPT 条同一层、同一套画法（`DrawPanelCard` ＋ 主题色），
+    /// 内容是播放器那一套：播放/暂停、四档倍速、进度、读数、关闭。
+    /// </summary>
+    private void DrawReplayBar(InkEngine app)
+    {
+        if (!app.ReplayActive) return;
+        float dpi = Dpi / 96f;
+        var theme = app.FloatingTheme;
+        var bar = app.ReplayBarRect();
+        float radius = MathF.Min(theme.CornerRadius * dpi, (bar.MaxY - bar.MinY) * 0.5f);
+        DrawPanelCard(app, bar, radius);
+
+        bool Hot(ReplayBarZone z) => app.ReplayHoverZone == z;
+        void FillZone(in RectF r, Color4 color)
+        {
+            _scratch.Color = color;
+            float rad = 6f * dpi;
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(r.MinX, r.MinY + 3f * dpi, r.MaxX, r.MaxY - 3f * dpi), rad, rad), _scratch);
+        }
+
+        // 播放 / 暂停
+        var pr = ReplayBar.ZoneRect(bar, ReplayBarZone.PlayPause, dpi);
+        if (Hot(ReplayBarZone.PlayPause)) FillZone(pr, theme.Hover);
+        _scratch.Color = theme.Text;
+        var pc = new Vector2((pr.MinX + pr.MaxX) * 0.5f, (pr.MinY + pr.MaxY) * 0.5f);
+        if (app.ReplayPlaying)
+        {
+            float w = 4f * dpi, h = 15f * dpi, gap = 5f * dpi;
+            _ctx.FillRectangle(new Vortice.RawRectF(pc.X - gap * 0.5f - w, pc.Y - h * 0.5f,
+                                                    pc.X - gap * 0.5f, pc.Y + h * 0.5f), _scratch);
+            _ctx.FillRectangle(new Vortice.RawRectF(pc.X + gap * 0.5f, pc.Y - h * 0.5f,
+                                                    pc.X + gap * 0.5f + w, pc.Y + h * 0.5f), _scratch);
+        }
+        else
+        {
+            float h = 15f * dpi, w = 13f * dpi;
+            using var path = Gfx.D2DFactory.CreatePathGeometry();
+            using (var sink = path.Open())
+            {
+                sink.BeginFigure(new Vector2(pc.X - w * 0.45f, pc.Y - h * 0.5f), FigureBegin.Filled);
+                sink.AddLine(new Vector2(pc.X - w * 0.45f, pc.Y + h * 0.5f));
+                sink.AddLine(new Vector2(pc.X + w * 0.55f, pc.Y));
+                sink.EndFigure(FigureEnd.Closed);
+                sink.Close();
+            }
+            _ctx.FillGeometry(path, _scratch);
+        }
+
+        // 四档倍速
+        for (int i = 0; i < 4; i++)
+        {
+            var zone = (ReplayBarZone)(ReplayBarZone.SpeedHalf + i);
+            var zr = ReplayBar.ZoneRect(bar, zone, dpi);
+            float speed = ReplayBar.SpeedOfZone(zone);
+            bool on = MathF.Abs(speed - app.ReplaySpeed) < 0.01f;
+            var rr = new RoundedRectangle(new Vortice.RawRectF(zr.MinX, zr.MinY + 5f * dpi,
+                                                              zr.MaxX, zr.MaxY - 5f * dpi), 6f * dpi, 6f * dpi);
+            if (on) { _scratch.Color = theme.ActiveBg; _ctx.FillRoundedRectangle(rr, _scratch); }
+            else if (Hot(zone)) { _scratch.Color = theme.Hover; _ctx.FillRoundedRectangle(rr, _scratch); }
+            _scratch.Color = on ? theme.ActiveText : theme.TextMuted;
+            _ctx.DrawText(ReplayBar.SpeedName(speed), ReadoutFormatSmall(dpi),
+                          new Rect(zr.MinX, zr.MinY, zr.MaxX - zr.MinX, zr.MaxY - zr.MinY), _scratch);
+        }
+
+        // 进度：轨道 ＋ 已播 ＋ 滑钮
+        var track = ReplayBar.ProgressTrack(bar, dpi);
+        float totalMs = MathF.Max(1f, app.ReplayTotalMsNow);
+        float frac = Math.Clamp(app.ReplayPosMsNow / totalMs, 0f, 1f);
+        float cy = (track.MinY + track.MaxY) * 0.5f;
+        float knobR = 5f * dpi;
+        float x0 = track.MinX + knobR, x1 = track.MaxX - knobR;
+        float kx = x0 + (x1 - x0) * frac;
+        if (Hot(ReplayBarZone.Progress))
+        {
+            _scratch.Color = theme.Hover;
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(track.MinX, cy - 6f * dpi, track.MaxX, cy + 6f * dpi),
+                6f * dpi, 6f * dpi), _scratch);
+        }
+        _scratch.Color = theme.TextMuted;
+        _ctx.DrawLine(new Vector2(x0, cy), new Vector2(x1, cy), _scratch, 3f * dpi);
+        _scratch.Color = theme.ActiveBg;
+        _ctx.DrawLine(new Vector2(x0, cy), new Vector2(kx, cy), _scratch, 3f * dpi);
+        _scratch.Color = theme.Text;
+        _ctx.FillEllipse(new Ellipse(new Vector2(kx, cy), knobR, knobR), _scratch);
+
+        // 读数（进度区右侧、关闭键左侧）
+        float timeL = track.MaxX + 6f * dpi;
+        float timeR = bar.MaxX - (ReplayBar.Pad + ReplayBar.CloseW + ReplayBar.Gap) * dpi;
+        _scratch.Color = theme.TextMuted;
+        _ctx.DrawText($"{ReplayBar.TimeText(app.ReplayPosMsNow)} / {ReplayBar.TimeText(totalMs)}",
+                      ReadoutFormatSmall(dpi),
+                      new Rect(timeL, bar.MinY, MathF.Max(1f, timeR - timeL), bar.MaxY - bar.MinY), _scratch);
+
+        // 关闭
+        var cr = ReplayBar.ZoneRect(bar, ReplayBarZone.Close, dpi);
+        if (Hot(ReplayBarZone.Close)) FillZone(cr, theme.Hover);
+        _scratch.Color = theme.TextMuted;
+        _ctx.DrawText("✕", ReadoutFormatSmall(dpi),
+                      new Rect(cr.MinX, cr.MinY, cr.MaxX - cr.MinX, cr.MaxY - cr.MinY), _scratch);
+    }
+
+    private ID2D1SolidColorBrush SetBrush(Color4 c)
+    {
+        _scratch.Color = c;
+        return _scratch;
+    }
+
+    private IDWriteTextFormat RollResultFormat(float dpi, float size)
+    {
+        float px = MathF.Max(12f, MathF.Round(size * dpi));
+        if (_rollResultFormat == null || _rollResultFormatPx != px)
+        {
+            _rollResultFormat?.Dispose();
+            _rollResultFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _rollResultFormat.TextAlignment = TextAlignment.Center;
+            _rollResultFormat.ParagraphAlignment = ParagraphAlignment.Center;
+            _rollResultFormatPx = px;
+        }
+        return _rollResultFormat;
+    }
+
+
+    private IDWriteTextFormat TimerValueFormat(float dpi)
+    {
+        float px = MathF.Max(12f, MathF.Round(19f * dpi));
+        if (_timerValueFormat == null || _timerValueFormatPx != px)
+        {
+            _timerValueFormat?.Dispose();
+            _timerValueFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _timerValueFormat.TextAlignment = TextAlignment.Center;
+            _timerValueFormat.ParagraphAlignment = ParagraphAlignment.Center;
+            _timerValueFormatPx = px;
+        }
+        return _timerValueFormat;
+    }
+
+    private IDWriteTextFormat TimerBigFormat(float dpi)
+    {
+        float px = MathF.Max(24f, MathF.Round(92f * dpi));
+        if (_timerBigFormat == null || _timerBigFormatPx != px)
+        {
+            _timerBigFormat?.Dispose();
+            _timerBigFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.Bold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _timerBigFormat.TextAlignment = TextAlignment.Center;
+            _timerBigFormat.ParagraphAlignment = ParagraphAlignment.Center;
+            _timerBigFormatPx = px;
+        }
+        return _timerBigFormat;
+    }
+
     private void DrawPptPagePanel(InkEngine app)
     {
         float dpi = Dpi / 96f;
@@ -4079,7 +4631,8 @@ internal sealed class OverlayWindow : IDisposable
 
             bool danger = InkEngine.PptMenuItemDanger(i);
             bool waiting = danger && app.PptClearConfirm;       // 正在等确认：整行上强调底
-            if (app.PptBarHover == 100 + i || waiting)
+            bool enabled = app.PptMenuItemEnabled(i);           // 置灰项：不亮、不高亮、点了不动
+            if (enabled && (app.PptBarHover == 100 + i || waiting))
             {
                 float inset = 3f * dpi;
                 var bg = new Vortice.RawRectF(item.MinX + inset, item.MinY + inset,
@@ -4093,17 +4646,17 @@ internal sealed class OverlayWindow : IDisposable
             // 就是"四字对齐"；用整行居中排的话，字数一变（"再点确认"）就会左右晃。
             string label = app.PptMenuItemText(i);
             float lw = MeasureTextWidth(label, fmt);
-            _scratch.Color = waiting ? theme.ActiveText : theme.Text;
+            _scratch.Color = waiting ? theme.ActiveText : enabled ? theme.Text : theme.TextMuted;
             _ctx.DrawText(label, fmt,
                           new Rect(item.MinX + padX, item.MinY, lw, item.MaxY - item.MinY),
                           _scratch);
 
-            // 右边的状态（只有开关项有）
+            // 右边的状态（开关 = 开/关；回放 = N 笔）
             string st = app.PptMenuItemStatus(i);
             if (st != null)
             {
                 float sw = MeasureTextWidth(st, fmt);
-                _scratch.Color = app.PptAutoSaveOn ? theme.ActiveBg : theme.TextMuted;
+                _scratch.Color = i == 0 && app.PptAutoSaveOn ? theme.ActiveBg : theme.TextMuted;
                 _ctx.DrawText(st, fmt,
                               new Rect(item.MaxX - padX - sw, item.MinY, sw, item.MaxY - item.MinY),
                               _scratch);
@@ -4131,11 +4684,121 @@ internal sealed class OverlayWindow : IDisposable
         };
         DrawPanelCard(app, hint, 8f * dpi);
         _scratch.Color = theme.Text;
-        // 文案里**不能再提「⋮」**（2026-09-27 删掉了）——菜单现在只有长按一条路，
-        // 这句话就是把那条路说清楚。用户的原话："提示'长按可以呼出退出菜单'"。
-        _ctx.DrawText("长按页码可呼出菜单", ReadoutFormatSmall(dpi),
+        // 文案（2026-10-02 第五轮）：入口从"长按"改成"点一下"之后，这句话只说
+        // "点它出来的是页码跳转菜单"——用户拍板的短句，指点性质靠"点页码："三个字。
+        _ctx.DrawText("点页码：页码跳转菜单", ReadoutFormatSmall(dpi),
                       new Rect(hint.MinX, hint.MinY, hint.MaxX - hint.MinX, hint.MaxY - hint.MinY),
                       _scratch);
+    }
+
+    // ---- 引擎侧悬停提示（Tooltip；2026-10-02）--------------------------------
+    //
+    // 状态在 `InkEngine.Tooltip.cs`（谁悬停、500ms 延迟、开关、文案表）；这里只负责
+    // "量文字、摆位置、画卡片、报脏区"。规矩和界面层那一套一致，规格见
+    // 《调研-悬停提示-Tooltip.md》——两套各自实现（两个工程画在不同表面上），
+    // 但延迟、内容格式、外观语言必须一致。
+
+    private IDWriteTextFormat TipTitleFormat(float dpi)
+    {
+        float px = MathF.Max(10f, MathF.Round(12.5f * dpi));
+        if (_tipTitleFmt == null || _tipTitleFmtPx != px)
+        {
+            _tipTitleFmt?.Dispose();
+            _tipTitleFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _tipTitleFmt.TextAlignment = TextAlignment.Leading;
+            _tipTitleFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _tipTitleFmtPx = px;
+        }
+        return _tipTitleFmt;
+    }
+
+    private IDWriteTextFormat TipNoteFormat(float dpi)
+    {
+        float px = MathF.Max(9f, MathF.Round(11f * dpi));
+        if (_tipNoteFmt == null || _tipNoteFmtPx != px)
+        {
+            _tipNoteFmt?.Dispose();
+            _tipNoteFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _tipNoteFmt.TextAlignment = TextAlignment.Leading;
+            _tipNoteFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _tipNoteFmtPx = px;
+        }
+        return _tipNoteFmt;
+    }
+
+    /// <summary>
+    /// 提示卡的矩形（物理像素，和浮层同一套屏幕坐标）：宽度按文字量、横向夹进屏幕，
+    /// 纵向上**优先锚点上方 8 像素**，顶到屏幕上沿就翻到下方。
+    /// 量宽、摆位、绘制、脏区**都读这一份**——各算一遍迟早差几个像素（浮层的老教训）。
+    /// </summary>
+    private RectF TooltipCardRect(InkEngine app)
+    {
+        if (!app.TooltipShown || string.IsNullOrEmpty(app.TooltipTitle)) return RectF.Empty;
+        float dpi = Dpi / 96f;
+        var titleFmt = TipTitleFormat(dpi);
+        var noteFmt = TipNoteFormat(dpi);
+
+        float titleW = MeasureTextWidth(app.TooltipTitle, titleFmt);
+        float keyW = string.IsNullOrEmpty(app.TooltipKey)
+            ? 0f : 12f * dpi + MeasureTextWidth(app.TooltipKey, titleFmt);
+        float noteW = string.IsNullOrEmpty(app.TooltipNote)
+            ? 0f : MeasureTextWidth(app.TooltipNote, noteFmt);
+        float padX = 12f * dpi, padY = 8f * dpi;
+        float w = MathF.Max(titleW + keyW, noteW) + padX * 2f;
+        float h = (string.IsNullOrEmpty(app.TooltipNote) ? 20f : 36f) * dpi + padY * 2f;
+
+        var a = app.TooltipAnchorNow;
+        var scr = app.TipScreenNow;
+        float cx = (a.MinX + a.MaxX) * 0.5f;
+        float x0 = cx - w * 0.5f, x1 = cx + w * 0.5f;
+        float lo = scr.MinX + 4f * dpi, hi = scr.MaxX - 4f * dpi;
+        if (x0 < lo) { x1 += lo - x0; x0 = lo; }
+        if (x1 > hi) { x0 -= x1 - hi; x1 = hi; }
+
+        float gap = 8f * dpi;
+        float top = a.MinY - gap - h;
+        if (top < scr.MinY + 4f * dpi) top = a.MaxY + gap;
+        return new RectF { MinX = x0, MinY = top, MaxX = x1, MaxY = top + h };
+    }
+
+    private void DrawEngineTooltip(InkEngine app)
+    {
+        if (!app.TooltipShown) return;
+        var box = TooltipCardRect(app);
+        if (box.IsEmpty) return;
+
+        float dpi = Dpi / 96f;
+        var theme = app.FloatingTheme;
+        float radius = MathF.Min(8f * dpi, (box.MaxY - box.MinY) * 0.5f);
+        DrawPanelCard(app, box, radius);
+
+        var titleFmt = TipTitleFormat(dpi);
+        var noteFmt = TipNoteFormat(dpi);
+        float padX = 12f * dpi, padY = 8f * dpi, lineH = 20f * dpi;
+        bool hasNote = !string.IsNullOrEmpty(app.TooltipNote);
+
+        float titleW = MeasureTextWidth(app.TooltipTitle, titleFmt);
+        float titleY = hasNote ? box.MinY + padY : (box.MinY + box.MaxY) * 0.5f - lineH * 0.5f;
+        _scratch.Color = theme.Text;
+        _ctx.DrawText(app.TooltipTitle, titleFmt,
+                      new Rect(box.MinX + padX, titleY, MathF.Max(1f, titleW + 4f), lineH), _scratch);
+        if (!string.IsNullOrEmpty(app.TooltipKey))
+        {
+            _scratch.Color = theme.TextMuted;
+            _ctx.DrawText(app.TooltipKey, titleFmt,
+                          new Rect(box.MinX + padX + titleW + 12f * dpi, titleY, Width + 4096f, lineH),
+                          _scratch);
+        }
+        if (hasNote)
+        {
+            _scratch.Color = theme.TextMuted;
+            _ctx.DrawText(app.TooltipNote, noteFmt,
+                          new Rect(box.MinX + padX, box.MinY + padY + lineH,
+                                   box.MaxX - box.MinX - padX * 2f, lineH),
+                          _scratch);
+        }
     }
 
     /// <summary>
@@ -4305,6 +4968,303 @@ internal sealed class OverlayWindow : IDisposable
         return geo;
     }
 
+    // =====================================================================
+    //  呼出盘（Ctrl+Q）：按住 → 划向扇区 → 松手
+    // =====================================================================
+    //
+    // 和落点反馈一样画在**浮动层**、坐标和指针同源（画布坐标 + CanvasToWindow），
+    // 所以相机一滚它不会漂。配色**用界面推上来的 FloatingTheme**：浅色/深色主题
+    // 各一套，和面板/操作条同一个观感（"界面逻辑跟主程序走"那条要求的落点）。
+    //
+    // 视觉规格（2026-09-30 v4 定稿：方案 S「全扇面」+ 主条同款图标 + 排序 V-a；
+    // 见《调研-呼出盘-扇面与比例.md》与 design/呼出盘-设计稿v4-定稿方向.html）：
+    //   · 盘半径 96（直径 192）、环带 内 40 → 外 96、缝 2°、投影照旧层叠胀法；
+    //   · 图标 24 居中在 R68（内外各留 16）——输入判据一个没动（死区 24 / 锁定 36）；
+    //   · 工具格：常态 regular、选中 filled 白图标（路径 = 主条同款，见 IconPaths）；
+    //   · 颜色格：`penFilled` 上色（黑/红/蓝）——"这支颜色的笔"；选中保持原色；
+    //   · **没有常显标签**：名字只出现在中央读数；悬停时盘下"浮一行字"。
+    internal const float RadialPlateRadiusLogical = 96f;
+    internal const float RadialInnerRadiusLogical = 40f;
+    internal const float RadialIconRingLogical = 68f;
+    internal const float RadialCenterLogical = 34f;
+    internal const float RadialSeamDeg = 2f;          // 扇格之间的缝（每边 1°）
+
+    /// <summary>第 i 个扇区是不是"颜色"（黑/红/蓝 = 1/2/3）——画法/选中态不同。</summary>
+    private static readonly bool[] RadialSectorIsColor =
+        { false, true, true, true, false, false, false, false };
+
+    // "0 号扇格"的几何缓存（以盘心为原点、北朝上）；dpi 变了才重建。
+    private ID2D1PathGeometry _radialWedgeGeo;
+    private float _radialWedgeDpi = -1f;
+
+    private void DrawRadialPalette(InkEngine app)
+    {
+        if (!app.RadialPaletteActive || !app.RadialPaletteVisible) return;
+
+        float dpi = Dpi / 96f;
+        float R = RadialPlateRadiusLogical * dpi;
+        float r0 = RadialInnerRadiusLogical * dpi;
+        float ring = RadialIconRingLogical * dpi;
+        float rc = RadialCenterLogical * dpi;
+        var c = new Vector2(app.RadialCenterX, app.RadialCenterY);
+        var theme = app.FloatingTheme;
+        int sel = app.RadialPaletteSector;
+
+        // 投影：照面板那套"层叠胀法"（由大到小叠、贴着形状最暗）
+        DrawDiscShadow(app, c, R);
+
+        // 指针 → 盘心：点线（让"我在划"这件事有个因果）
+        var ptr = new Vector2(app.PointerX, app.PointerY);
+        if (Vector2.Distance(c, ptr) > 8f * dpi)
+        {
+            _scratch.Color = new Color4(theme.TextMuted.R, theme.TextMuted.G,
+                                        theme.TextMuted.B, 0.55f);
+            _ctx.DrawLine(c, ptr, _scratch, 2.4f * dpi, Gfx.Dotted);
+        }
+
+        // 底盘 → 八扇格 → 盘边（盘边最后画，压在扇格外沿上，线才利落）
+        _ctx.FillEllipse(new Ellipse(c, R, R), Brush(theme.Panel));
+        DrawRadialWedges(c, dpi, r0, R, theme, sel);
+        _scratch.Color = theme.PanelBorder;
+        _ctx.DrawEllipse(new Ellipse(c, R, R), _scratch, 1f * dpi);
+
+        // 八格图标（主条同款 Fluent 路径；颜色格 = penFilled 上色）
+        float sz = 24f * dpi;
+        for (int i = 0; i < 8; i++)
+        {
+            var bp = OnCircle(c, ring, -90f + 45f * i);
+            bool on = i == sel;
+            if (RadialSectorIsColor[i])
+            {
+                // **颜色格不转白**：选中也要看得见"这是红/蓝"（红蓝压实心蓝底会发闷）
+                _scratch.Color = InkPalette.PenBand[i - 1].Color;
+                DrawIcon(IconPaths.penFilled, bp.X - sz * 0.5f, bp.Y - sz * 0.5f, sz, _scratch);
+            }
+            else
+            {
+                _scratch.Color = on ? theme.ActiveText : theme.Text;
+                DrawIcon(RadialIconFor(i, on), bp.X - sz * 0.5f, bp.Y - sz * 0.5f, sz, _scratch);
+            }
+        }
+
+        // 中央读数（这是唯一常显的文字）
+        _ctx.FillEllipse(new Ellipse(c, rc, rc), Brush(theme.Panel));
+        _scratch.Color = theme.PanelBorder;
+        _ctx.DrawEllipse(new Ellipse(c, rc, rc), _scratch, 1f * dpi);
+        string centerText = sel >= 0 ? InkEngine.RadialSectorNames[sel]
+                                     : (app.RadialMovedForDraw ? "取消" : "工具");
+        _scratch.Color = sel >= 0 ? theme.Text : theme.TextMuted;
+        _ctx.DrawText(centerText, RadialCenterFormat(dpi),
+                      new Rect(c.X - rc, c.Y - rc * 0.8f, rc * 2f, rc * 1.6f), _scratch);
+
+        // 悬停时"浮一行字"：盘外下方的小白条，给一句人话
+        if (sel >= 0)
+        {
+            string hint = RadialHintFor(app, sel);
+            var fmt = RadialHintFormat(dpi);
+            float tw = MeasureTextWidth(hint, fmt) + 30f * dpi;
+            float hh = 26f * dpi;
+            float top = c.Y + R + 12f * dpi;
+            DrawPanelCard(app, new RectF
+            {
+                MinX = c.X - tw * 0.5f, MinY = top,
+                MaxX = c.X + tw * 0.5f, MaxY = top + hh,
+            }, hh * 0.5f);
+            _scratch.Color = theme.Text;
+            _ctx.DrawText(hint, fmt, new Rect(c.X - tw * 0.5f, top, tw, hh), _scratch);
+        }
+    }
+
+    /// <summary>圆盘投影：照面板的"层叠胀法"（主题推上来几层就画几层，由大到小）。</summary>
+    private void DrawDiscShadow(InkEngine app, Vector2 c, float R)
+    {
+        var th = app.FloatingTheme;
+        float dpi = Dpi / 96f;
+        for (int i = th.Shadow.Length - 1; i >= 0; i--)
+        {
+            var layer = th.Shadow[i];
+            _scratch.Color = layer.Color;
+            float r2 = R + layer.Inflate * dpi;
+            _ctx.FillEllipse(new Ellipse(new Vector2(c.X, c.Y + layer.Dy * dpi), r2, r2), _scratch);
+        }
+    }
+
+    /// <summary>悬停那一行字：一句人话（"已经是笔：换下一色"这种）。</summary>
+    private static string RadialHintFor(InkEngine app, int i)
+    {
+        bool already = i switch
+        {
+            0 => app.Tool == Tool.Pen,
+            4 => app.Tool == Tool.Eraser || app.Tool == Tool.PixelEraser,
+            5 => app.Tool == Tool.Marquee,
+            6 => app.Tool == Tool.Highlighter,
+            7 => app.Tool == Tool.Laser,
+            _ => false,
+        };
+        return i switch
+        {
+            0 => already ? "已经是笔：换下一色" : "切到笔",
+            1 => "用黑笔",
+            2 => "用红笔",
+            3 => "用蓝笔",
+            4 => already ? "整笔擦 ⇄ 面积擦" : "切到橡皮",
+            5 => already ? "矩形 ⇄ 套索" : "切到框选",
+            6 => already ? "已经是荧光笔：换下一色" : "切到荧光笔",
+            _ => already ? "已经是激光笔" : "切到激光笔",
+        };
+    }
+
+    /// <summary>
+    /// 八个扇格：0 号在北（-90°），一格 45°，格与格之间留 <see cref="RadialSeamDeg"/> 的缝。
+    /// 先铺未选中的格、再描格缝、最后把选中格盖上去。
+    /// </summary>
+    private void DrawRadialWedges(Vector2 c, float dpi, float r0, float r1, UiTheme theme, int sel)
+    {
+        EnsureRadialWedgeGeo(dpi, r0, r1);
+
+        // 未选中：浅底（深色主题里它就是"比盘底亮一档"的格）
+        for (int i = 0; i < 8; i++)
+        {
+            if (i == sel) continue;
+            FillRotatedWedge(c, i, Brush(theme.Hover));
+        }
+
+        // 格缝：8 条边界线（细、淡——把"一格一格"说清楚，别画成切蛋糕）
+        _scratch.Color = new Color4(theme.PanelBorder.R, theme.PanelBorder.G,
+                                    theme.PanelBorder.B, 0.7f);
+        for (int i = 0; i < 8; i++)
+        {
+            float a = -90f + 45f * i - 22.5f;
+            _ctx.DrawLine(OnCircle(c, r0, a), OnCircle(c, r1, a), _scratch, 1f * dpi);
+        }
+
+        if (sel < 0) return;
+
+        // 选中格：工具 = 实心强调色；颜色 = 淡强调色（彩笔保持原色，红蓝不压蓝底）
+        var fill = RadialSectorIsColor[sel]
+            ? new Color4(theme.ActiveBg.R, theme.ActiveBg.G, theme.ActiveBg.B, 0.14f)
+            : theme.ActiveBg;
+        FillRotatedWedge(c, sel, Brush(fill));
+        if (RadialSectorIsColor[sel]) StrokeSelectedWedge(c, sel, dpi, r0, r1, theme.ActiveBg);
+    }
+
+    /// <summary>
+    /// 缓存"0 号扇格"的几何（以盘心为原点、北朝上）：弧用折线逼近
+    /// （每 45° 分 12 段，R96 下最大矢高 ≈0.1px，肉眼看不出是折线）。
+    /// 绘制时按格号旋转 / 平移（见 <see cref="FillRotatedWedge"/>），不必每帧重建。
+    /// </summary>
+    private void EnsureRadialWedgeGeo(float dpi, float r0, float r1)
+    {
+        if (_radialWedgeGeo != null && Math.Abs(_radialWedgeDpi - dpi) < 0.001f) return;
+        _radialWedgeGeo?.Dispose();
+        _radialWedgeDpi = dpi;
+
+        float half = 22.5f - RadialSeamDeg * 0.5f;
+        const int seg = 12;
+        var pts = new List<Vector2>(seg * 2 + 2);
+        for (int t = 0; t <= seg; t++) pts.Add(WedgePt(r0, -half + 2f * half * t / seg));
+        for (int t = seg; t >= 0; t--) pts.Add(WedgePt(r1, -half + 2f * half * t / seg));
+
+        var geo = Gfx.D2DFactory.CreatePathGeometry();
+        using (var sink = geo.Open())
+        {
+            sink.BeginFigure(pts[0], FigureBegin.Filled);
+            for (int k = 1; k < pts.Count; k++) sink.AddLine(pts[k]);
+            sink.EndFigure(FigureEnd.Closed);
+            sink.Close();
+        }
+        _radialWedgeGeo = geo;
+    }
+
+    /// <summary>扇格坐标：角度从北起顺时针（和引擎的扇区定义同一套）。</summary>
+    private static Vector2 WedgePt(float r, float deg)
+    {
+        float a = (deg - 90f) * MathF.PI / 180f;
+        return new Vector2(r * MathF.Cos(a), r * MathF.Sin(a));
+    }
+
+    /// <summary>把缓存的那一格转到第 i 个位置再填（正数角度 = 屏幕上顺时针）。</summary>
+    private void FillRotatedWedge(Vector2 c, int i, ID2D1SolidColorBrush brush)
+    {
+        var saved = _ctx.Transform;
+        _ctx.Transform = Matrix3x2.CreateRotation(i * MathF.PI / 4f)
+                       * Matrix3x2.CreateTranslation(c) * saved;
+        _ctx.FillGeometry(_radialWedgeGeo, brush);
+        _ctx.Transform = saved;
+    }
+
+    /// <summary>颜色格选中的强调描边：外弧 + 两条半径（内弧不描，中央读数那边干净）。</summary>
+    private void StrokeSelectedWedge(Vector2 c, int i, float dpi, float r0, float r1, Color4 color)
+    {
+        float half = 22.5f - RadialSeamDeg * 0.5f;
+        float mid = -90f + 45f * i;
+        _scratch.Color = color;
+        float w = 1.5f * dpi;
+        for (int t = 0; t < 12; t++)
+        {
+            float a0 = mid - half + 2f * half * t / 12f;
+            float a1 = mid - half + 2f * half * (t + 1) / 12f;
+            _ctx.DrawLine(OnCircle(c, r1 - 1f * dpi, a0), OnCircle(c, r1 - 1f * dpi, a1), _scratch, w);
+        }
+        _ctx.DrawLine(OnCircle(c, r0, mid - half), OnCircle(c, r1, mid - half), _scratch, w);
+        _ctx.DrawLine(OnCircle(c, r0, mid + half), OnCircle(c, r1, mid + half), _scratch, w);
+    }
+
+    /// <summary>
+    /// 呼出盘第 i 格的图标（主条同款 Fluent 路径）：常态 regular、选中 filled。
+    /// 颜色格不走这里——它们是 `penFilled` 上色的"彩笔"，见 <see cref="DrawRadialPalette"/>。
+    /// </summary>
+    private static string RadialIconFor(int i, bool selected) => i switch
+    {
+        0 => selected ? IconPaths.penFilled : IconPaths.pen,
+        4 => selected ? IconPaths.eraserFilled : IconPaths.eraser,
+        5 => selected ? IconPaths.selectFilled : IconPaths.select,
+        6 => selected ? IconPaths.highlighterFilled : IconPaths.highlighter,
+        _ => selected ? IconPaths.laserFilled : IconPaths.laser,   // 7 激光
+    };
+
+    private static Vector2 OnCircle(Vector2 c, float r, float deg)
+    {
+        float a = deg * MathF.PI / 180f;
+        return new Vector2(c.X + r * MathF.Cos(a), c.Y + r * MathF.Sin(a));
+    }
+
+    private IDWriteTextFormat _radialHintFmt;
+    private float _radialHintPx;
+    private IDWriteTextFormat _radialCenterFmt;
+    private float _radialCenterPx;
+
+    /// <summary>悬停那一行字的格式（12px，塞在盘下的小白条里）。</summary>
+    private IDWriteTextFormat RadialHintFormat(float dpi)
+    {
+        float px = MathF.Max(10f, MathF.Round(12f * dpi));
+        if (_radialHintFmt == null || _radialHintPx != px)
+        {
+            _radialHintFmt?.Dispose();
+            _radialHintFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _radialHintFmt.TextAlignment = TextAlignment.Center;
+            _radialHintFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _radialHintPx = px;
+        }
+        return _radialHintFmt;
+    }
+
+    private IDWriteTextFormat RadialCenterFormat(float dpi)
+    {
+        float px = MathF.Max(12f, MathF.Round(17f * dpi));
+        if (_radialCenterFmt == null || _radialCenterPx != px)
+        {
+            _radialCenterFmt?.Dispose();
+            _radialCenterFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.Bold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _radialCenterFmt.TextAlignment = TextAlignment.Center;
+            _radialCenterFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _radialCenterPx = px;
+        }
+        return _radialCenterFmt;
+    }
+
     /// <summary>
     /// 落点反馈：自己画在浮动层上的"指针"。
     ///
@@ -4376,8 +5336,10 @@ internal sealed class OverlayWindow : IDisposable
     /// </summary>
     private void DrawEraserRectCursor(InkEngine app, Vector2 c)
     {
-        float hw = MathF.Max(1f, app.PixelEraserHalfWidthPx);
-        float hh = MathF.Max(1f, app.PixelEraserHalfHeightPx);
+        // 框 = **真正会被擦掉的那一块**：和 EraseRectAlongPath 读同一份尺寸。
+        // 拖动中跟着移动速度变大（8.3.4 动态橡皮），悬停时是基准（= 按下去第一下的大小）。
+        float hw = MathF.Max(1f, app.PixelEraserCursorHalfWidthPx);
+        float hh = MathF.Max(1f, app.PixelEraserCursorHalfHeightPx);
 
         _ctx.FillRectangle(
             new Vortice.RawRectF(c.X - hw, c.Y - hh, c.X + hw, c.Y + hh),
@@ -4872,9 +5834,12 @@ internal sealed class OverlayWindow : IDisposable
                         Vortice.Direct2D1.InterpolationMode.NearestNeighbor, null, null);
     }
 
-    // ---- 触点诊断浮层（8.3.3）------------------------------------------
+    // ---- 触点诊断浮层（8.3.3，默认关）------------------------------------
 
-    /// <summary>触点诊断浮层的**屏幕坐标**矩形（脏区用；绘制那一份是它的窗口局部版）。</summary>
+    private const float TouchHudWidthLogical = 470f;
+    private const float TouchHudHeightLogical = 86f;
+
+    /// <summary>触点诊断浮层的**屏幕坐标**矩形（脏区用；绘制那份是它的窗口局部版）。</summary>
     private RectF TouchHudRect(InkEngine app)
     {
         float s = Dpi / 96f;
@@ -4887,9 +5852,6 @@ internal sealed class OverlayWindow : IDisposable
             MaxX = OriginX + m + w, MaxY = OriginY + Height - m,
         };
     }
-
-    private const float TouchHudWidthLogical = 470f;
-    private const float TouchHudHeightLogical = 86f;
 
     private IDWriteTextFormat _touchHudFmt;
     private IDWriteTextFormat TouchHudFormat()
@@ -4911,13 +5873,65 @@ internal sealed class OverlayWindow : IDisposable
         float w = TouchHudWidthLogical * s, h = TouchHudHeightLogical * s;
         if (Width <= 0 || Height <= 0) return;
 
-        // 画在**窗口局部**坐标（Origin 那块只用在脏区上，和性能面板同一个套路）。
+        // 画在**窗口局部**坐标（Origin 那一份只用在脏区上，和性能面板同一个套路）。
         var box = new Vortice.RawRectF(m, Height - m - h, m + w, Height - m);
         _scratch.Color = new Color4(0.10f, 0.11f, 0.14f, 0.80f);
         _ctx.FillRoundedRectangle(new RoundedRectangle(box, 8f * s, 8f * s), _scratch);
         _ctx.DrawRoundedRectangle(new RoundedRectangle(box, 8f * s, 8f * s),
                                   Brush(new Color4(1f, 1f, 1f, 0.25f)), 1f * s);
         _ctx.DrawText(app.TouchHudText ?? "", TouchHudFormat(),
+                      new Rect(box.Left + 10f * s, box.Top + 6f * s,
+                               box.Right - box.Left - 20f * s, box.Bottom - box.Top - 12f * s),
+                      Brush(new Color4(1f, 1f, 1f, 0.95f)));
+    }
+
+    // ---- 橡皮读数浮层（8.3.7，默认关；调参用）--------------------------------
+
+    private const float EraserHudWidthLogical = 760f;
+    private const float EraserHudHeightLogical = 62f;
+
+    /// <summary>橡皮读数浮层的**屏幕坐标**矩形（脏区用）。放在左下角（触点浮层开着就让到它上面）。</summary>
+    private RectF EraserHudRect(InkEngine app)
+    {
+        float s = Dpi / 96f;
+        float m = HudMarginLogical * s;
+        float w = EraserHudWidthLogical * s, h = EraserHudHeightLogical * s;
+        if (Width <= 0 || Height <= 0) return RectF.Empty;
+        float bottom = Height - m - (app.TouchHud ? (TouchHudHeightLogical + 8f) * s : 0f);
+        return new RectF
+        {
+            MinX = OriginX + m, MinY = OriginY + bottom - h,
+            MaxX = OriginX + m + w, MaxY = OriginY + bottom,
+        };
+    }
+
+    private IDWriteTextFormat _eraserHudFmt;
+    private IDWriteTextFormat EraserHudFormat()
+    {
+        if (_eraserHudFmt != null) return _eraserHudFmt;
+        _eraserHudFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 13.5f * (Dpi / 96f), "zh-CN");
+        _eraserHudFmt.TextAlignment = TextAlignment.Leading;
+        _eraserHudFmt.ParagraphAlignment = ParagraphAlignment.Near;
+        _eraserHudFmt.WordWrapping = WordWrapping.NoWrap;
+        return _eraserHudFmt;
+    }
+
+    private void DrawEraserHud(InkEngine app)
+    {
+        if (!app.EraserHud) return;
+        float s = Dpi / 96f;
+        float m = HudMarginLogical * s;
+        float w = EraserHudWidthLogical * s, h = EraserHudHeightLogical * s;
+        if (Width <= 0 || Height <= 0) return;
+
+        float bottom = Height - m - (app.TouchHud ? (TouchHudHeightLogical + 8f) * s : 0f);
+        var box = new Vortice.RawRectF(m, bottom - h, m + w, bottom);
+        _scratch.Color = new Color4(0.10f, 0.11f, 0.14f, 0.80f);
+        _ctx.FillRoundedRectangle(new RoundedRectangle(box, 8f * s, 8f * s), _scratch);
+        _ctx.DrawRoundedRectangle(new RoundedRectangle(box, 8f * s, 8f * s),
+                                  Brush(new Color4(1f, 1f, 1f, 0.25f)), 1f * s);
+        _ctx.DrawText(app.EraserHudText ?? "", EraserHudFormat(),
                       new Rect(box.Left + 10f * s, box.Top + 6f * s,
                                box.Right - box.Left - 20f * s, box.Bottom - box.Top - 12f * s),
                       Brush(new Color4(1f, 1f, 1f, 0.95f)));
@@ -4943,6 +5957,26 @@ internal sealed class OverlayWindow : IDisposable
             ? area / (Width * (double)Height) * 100.0
             : 100.0;
 
+        if (Trace)
+        {
+            int buf = -1;
+            try { if (_swapChain3 != null) buf = (int)_swapChain3.CurrentBackBufferIndex; } catch { }
+            var b = RectF.Empty;
+            foreach (var r in _frameDirty) { b.Add(r.MinX, r.MinY); b.Add(r.MaxX, r.MaxY); }
+            int l0 = int.MaxValue, t0 = int.MaxValue, r0 = int.MinValue, bo0 = int.MinValue;
+            foreach (var r in _presentRects)
+            {
+                if (r.Left < l0) l0 = r.Left;
+                if (r.Top < t0) t0 = r.Top;
+                if (r.Right > r0) r0 = r.Right;
+                if (r.Bottom > bo0) bo0 = r.Bottom;
+            }
+            Console.WriteLine($"    [present] rects={_presentRects.Count} area={LastPresentAreaPercent:F0}% "
+                              + (l0 <= r0 ? $"rectsBox=({l0},{t0})..({r0},{bo0}) " : "")
+                              + $"dirtyBox=({b.MinX:F0},{b.MinY:F0})..({b.MaxX:F0},{b.MaxY:F0}) "
+                              + $"camY={ViewOffsetY:F0} backBuf={buf}");
+        }
+
         var sw = Stopwatch.StartNew();
         SharpGen.Runtime.Result hr;
 
@@ -4955,8 +5989,9 @@ internal sealed class OverlayWindow : IDisposable
         LastPresentStartQpc = Qpc.Now;
 
         // 脏区太少或太大都不划算：太大不如直接整屏上屏，太少说明这一帧
-        // 没什么变化（例如只等垂直同步）。
-        if (_presentRects.Count == 0 || _presentRects.Count > 16 || LastPresentAreaPercent > 80.0)
+        // 没什么变化（例如只等垂直同步）。--fullpresent = 永远整屏上屏（诊断）。
+        if (FullPresent
+            || _presentRects.Count == 0 || _presentRects.Count > 16 || LastPresentAreaPercent > 80.0)
         {
             hr = _swapChain.Present(useWaitable ? 0u : 1u, PresentFlags.None);
             LastPresentAreaPercent = 100.0;
@@ -4971,7 +6006,14 @@ internal sealed class OverlayWindow : IDisposable
         sw.Stop();
         LastPresentEndQpc = Qpc.Now;
         LastPresentMs = sw.Elapsed.TotalMilliseconds;
-        if (hr.Failure) LastError = "Present: " + hr.Description;
+        if (hr.Failure)
+        {
+            LastError = "Present: " + hr.Description;
+            // 失败 = 这一帧没翻上去，双缓冲"另一块是上一帧"的前提可能不再成立。
+            // 下一帧强制连续两帧整屏，把状态重新对齐
+            //（对齐 Windows Terminal 的规矩：失效被消费后提交失败 → 下一帧全量重来）。
+            _fullFramesLeft = 2;
+        }
 
     }
 

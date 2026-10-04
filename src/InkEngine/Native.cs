@@ -55,6 +55,7 @@ internal static class Native
     public const int SW_HIDE = 0;
 
     public static readonly IntPtr HWND_TOPMOST = new(-1);
+    public static readonly IntPtr HWND_NOTOPMOST = new(-2);
 
     // ---- hotkey modifiers ------------------------------------------------
     public const uint MOD_ALT = 0x0001;
@@ -240,12 +241,21 @@ internal static class Native
     }
 
     /// <summary>
-    /// 触摸触点信息（Windows 真实定义 136 字节）。**接触面积 = `rcContact`**——
-    /// 触点诊断（`--touchhud`）靠它量屏；**手势层不用它**（"什么时候擦"由三指回答）。
+    /// 触摸触点信息（Windows 真实定义 **144 字节**）。**接触面积 = `rcContact`**——
+    /// 触点诊断（`--touchhud`）靠它量屏；**手势层目前不用它**（"什么时候擦"由三指回答），
+    /// P1 的"手掌/大面积擦"会按 `touchMask` 判有效后再用。
+    ///
+    /// ⚠ 2026-10-05 修：此前这里漏了 `touchFlags` / `touchMask` 两个字段，
+    /// 后面所有字段**整体偏移 8 字节**（`rcContact` 读到的是 touchFlags/touchMask），
+    /// `--touchhud` 的"接触面积"读数一直是错的。
+    /// 读面积前必须看 `touchMask & TOUCH_MASK_CONTACTAREA`；设备不上报时
+    /// `rcContact` 规范默认是 0×0 的矩形（以指针位置为中心）。
     /// </summary>
     public struct POINTER_TOUCH_INFO
     {
         public POINTER_INFO pointerInfo;
+        public uint touchFlags;
+        public uint touchMask;
         public RECT rcContact;
         public RECT rcContactRaw;
         public uint orientation;
@@ -287,6 +297,11 @@ internal static class Native
 
     [DllImport("user32.dll")]
     public static extern bool WaitMessage();
+
+    /// <summary>课堂计时器到点的提示音（uType：0x40 = MB_ICONASTERISK）。
+    /// 用系统自带的那一声，不引音频库（计划 4.1）。返回值失败也无妨。</summary>
+    [DllImport("user32.dll")]
+    public static extern bool MessageBeep(uint uType);
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -481,7 +496,7 @@ internal static class Native
 
     /// <summary>
     /// 触摸触点的详细信息（**接触面积在 `rcContact` 里**）。触点诊断（8.3.3）用它量
-    /// "这块屏报不报面积"；**手势层不用它**（"什么时候擦"由三指回答，"擦多大"由动态橡皮回答）。
+    /// "这块屏报不报面积"；**手势层目前不用它**（P1 手掌擦会按 `touchMask` 判有效后使用）。
     /// </summary>
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetPointerTouchInfo(uint pointerId, IntPtr touchInfo);
@@ -798,19 +813,23 @@ internal static class Native
     public const uint PEN_MASK_TILT_X = 0x00000004;
     public const uint PEN_MASK_TILT_Y = 0x00000008;
 
+    /// <summary>touchMask：`rcContact`（接触区）有效。</summary>
+    public const uint TOUCH_MASK_CONTACTAREA = 0x00000001;
+
     /// <summary>POINTER_FEEDBACK_DEFAULT。合成设备必须给一个反馈模式。</summary>
     public const uint POINTER_FEEDBACK_DEFAULT = 1;
 
     /// <summary>
     /// POINTER_TYPE_INFO：真实定义里中间是一个 union，最大成员是
-    /// POINTER_TOUCH_INFO（136 字节），我们只声明 pen 分支（120 字节）。
-    /// 差的 24 字节必须显式补出来，否则 API 按 union 的真实大小读写会越界
-    /// （第一次写这个探针时就是这么崩的：0xC0000374 堆损坏）。
+    /// **POINTER_TOUCH_INFO（144 字节）**，我们只声明了 pen 分支（120 字节）
+    /// 加 24 字节填充 → **托管大小 = 原生步长 = 152**（4 + 4 对齐 + 144）。
+    /// 两个分支的**开头都是同一份 POINTER_INFO**，所以按 pen 的字段名填、
+    /// 把 type 设成 PT_TOUCH 就能造出一个触摸触点；要写 `rcContact` 就按
+    /// `Marshal.OffsetOf` 算出的偏移写（**别写魔法数字**——2026-10-05 之前
+    /// 误按 144 排缓冲区，第二个触点整体错位、直接丢失）。
     ///
     /// ⚠ **不许改成 Explicit 叠放**（8.4.0 试过）：布局一换成 Explicit + 两个重叠字段，
-    /// 注入就只进得去**一个**触点（第二根手指的按下收不到，实测 `触点 = 1`）——
-    /// 二分过：与 `maxCount` 无关，就是这一步。要写 `rcContact` 就按偏移用指针写
-    /// （见 `App.SendTouchesSized`，union 起点 = 偏移 8、touch 的 rcContact = union + 96）。
+    /// 注入就只进得去**一个**触点（第二根手指的按下收不到，实测 `触点 = 1`）。
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct POINTER_TYPE_INFO
@@ -824,10 +843,10 @@ internal static class Native
     public static extern IntPtr CreateSyntheticPointerDevice(uint pointerType, uint maxCount, uint mode);
 
     /// <summary>
-    /// 注入合成指针。⚠ **必须按 IntPtr 传缓冲区**：原生 `POINTER_TYPE_INFO` 的真实步长
-    /// 是 **144**（union 最大 136 + 8 的头部），而托管结构体为了留 pen 分支的余量是 152——
-    /// 直接传数组的话，**第二个元素会被 API 按 144 读、整体错位 8 字节 → 第二个触点收不到**
-    ///（实测：一次注入两个新触点只有第一个生效）。所以自检那边自己按 144 排好再传进来。
+    /// 注入合成指针。⚠ 缓冲区必须按**托管结构体的步长**排
+    /// （`Marshal.SizeOf&lt;POINTER_TYPE_INFO&gt;()`，实测 = 原生步长 **152**）；
+    /// 步长写错（曾在 8.4.0 误按 144）会让第二个元素整体错位 8 字节 →
+    /// **第二个触点收不到**（"一次注入两个新触点只有第一个生效"的根因）。
     /// </summary>
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool InjectSyntheticPointerInput(IntPtr device, IntPtr pointerInfo, uint count);
@@ -915,6 +934,15 @@ internal static class Native
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetPointerDevices(ref uint deviceCount, [Out] POINTER_DEVICE_INFO[] devices);
+
+    /// <summary>
+    /// D1（亚像素输入）用：拿某台指针设备的两个矩形——`pointerDeviceRect` 是设备坐标系
+    /// （himetric，0.01mm），`displayRect` 是它在屏幕/虚拟桌面上的像素范围。
+    /// 两者做线性映射就能把 `ptHimetricLocation` 还原成**小数像素**（精度约 0.04px，
+    /// 而 `ptPixelLocation` 是整数像素）。
+    /// </summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool GetPointerDeviceRects(IntPtr device, out RECT pointerDeviceRect, out RECT displayRect);
 
     // POINTER_DEVICE_TYPE：设备的"出身"。**这块板子/这支笔的笔尖是不是就在屏幕上**，
     // 就靠它区分（见 Engine.PenDeviceOnScreen）：

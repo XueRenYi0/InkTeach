@@ -235,19 +235,50 @@ internal static class DwellProbe
               small == null ? $"文档里没多东西（条数 {nBeforeSmall} → {app.Doc.Strokes.Count}——墨被丢了）"
                             : $"留下 {KindName(small)}（期望：手绘笔迹、不转换）");
 
-        // ── I. 直线 armed 后拖端点 = 转向 / 伸缩，且吸到水平 ±4° ──────────
+        // ── I. 直线 armed 后拖端点 = 转向 / 伸缩；吸附**和画直线同一套**（特殊角 ±1°）──
+        //    （2026-10-05 用户："停顿变直线那个吸附太大了，和画直线统一一下"——
+        //      原来走 `SnapToAxis`：只吸 0/90、容差 4°。）
         double t5 = app.NowMs = 40000;
         Drive(app, WobblyLine(300f, 500f, LineLen, 0), 200);
         app.NowMs = t5 + 200 + DwellAssist.HoldMs;
         app.DwellTickForTest();
-        // 往"接近水平偏 3°"的方向拖（起点钉住）：应当被吸成正水平
-        float rad = 3f * MathF.PI / 180f;
+        // ★ 成型**当帧**读数就要挂在"这一条"上（用户 2026-10-05 报的两个 bug：
+        //   第一次用时胶囊飞在屏幕左上角；以后每次都先停在上一条线上，笔一动才跳回来）。
+        //   锚点 = 离笔尖近的那一头，所以判"/两个端点里最近的那一个"就行。
+        var g0 = app.ActiveStroke;
+        if (g0 != null && g0.Points.Count >= 2)
+        {
+            var a0 = new Vector2(g0.Points[0].X, g0.Points[0].Y);
+            var a1 = new Vector2(g0.Points[^1].X, g0.Points[^1].Y);
+            float near0 = Vector2.Distance(app.ShapeInclinationAnchor, a0);
+            float near1 = Vector2.Distance(app.ShapeInclinationAnchor, a1);
+            Check("直线成型当帧：读数锚点就在这条线上（不是左上角 / 上一条）",
+                  MathF.Min(near0, near1) < 1f,
+                  $"锚点 ({app.ShapeInclinationAnchor.X:F0},{app.ShapeInclinationAnchor.Y:F0})，"
+                  + $"两端 ({a0.X:F0},{a0.Y:F0})/({a1.X:F0},{a1.Y:F0})");
+        }
+        else Check("直线成型当帧：读数锚点就在这条线上（不是左上角 / 上一条）", false, "没有幽灵");
+        // ① 偏 0.5°（±1° 容差内）：吸成正水平；长度读数要跟笔尖实时走（2026-10-05 修）
+        float rad = 0.5f * MathF.PI / 180f;
         app.DwellMoveForTest(300f + 200f * MathF.Cos(rad), 500f + 200f * MathF.Sin(rad));
         var ghost = app.ActiveStroke;
         bool flat = ghost != null && ghost.Points.Count >= 2
                     && MathF.Abs(ghost.Points[^1].Y - ghost.Points[0].Y) < 0.01f;
-        Check("直线拖端点：转向 + 吸水平", flat,
+        Check("直线拖端点：转向 + 吸水平（±1° 内）", flat,
               ghost == null ? "没有幽灵" : $"终点 y 偏移 {MathF.Abs(ghost.Points[^1].Y - ghost.Points[0].Y):F2}");
+        Check("直线拖端点：长度读数与 α 同源、幽灵期实时",
+              ghost != null && MathF.Abs(app.ShapeLength - 200f) < 0.5f,
+              ghost == null ? "没有幽灵" : $"读数 {app.ShapeLength:F1}（期望 200 = 指针到钉住那头的距离）");
+        // ② 偏 3°（旧 4° 容差会吸、现在不吸）：**如实保留** —— 长线上 3° 的偏差太大
+        //    （用户 2026-10-05 的原始理由），统一到 ±1° 之后就不该再替他吸。
+        float rad3 = 3f * MathF.PI / 180f;
+        app.DwellMoveForTest(300f + 200f * MathF.Cos(rad3), 500f + 200f * MathF.Sin(rad3));
+        var ghost3 = app.ActiveStroke;
+        bool kept = ghost3 != null && ghost3.Points.Count >= 2
+                    && MathF.Abs(MathF.Abs(ghost3.Points[^1].Y - ghost3.Points[0].Y) - 200f * MathF.Sin(rad3)) < 0.5f;
+        Check("直线拖端点：偏 3° 不再吸（旧 4° 会吸，统一到 ±1° 后如实保留）", kept,
+              ghost3 == null ? "没有幽灵"
+                             : $"终点 y 偏移 {MathF.Abs(ghost3.Points[^1].Y - ghost3.Points[0].Y):F2}（期望 {200f * MathF.Sin(rad3):F2}）");
         app.DwellEndForTest();
 
         // ── J. **取消选中那一击不留墨**（用户 2026-09-23 要的）─────────────
@@ -377,7 +408,7 @@ internal static class DwellProbe
         // 真因：直线那一支把 `Points[0]` 当支点，而 `TryLine` 给的端点是
         // **拟合方向的投影极值**（哪一头落到 `Points[0]` 是不定的）——
         // 笔尖正好停在那头上时，"停手"期间那点亚像素抖动（`±1` 画布单位）就够
-        // 把它压成零长度，`SnapToAxis` 一看没有方向 → 吸成水平 → 一条很短的小横线。
+        // 把它压成零长度 → **一条很短的小横线**（当年的吸轴实现还会顺手把它"扶正"成水平）。
         // 除直线外，其它图形当时也在"跟着手抖改大小/转角"（只是幅度小、不易察觉）。
         //
         // 断言落在**定义元素逐点不变**上：对哪个 Kind 都成立，不含任何实现假设。

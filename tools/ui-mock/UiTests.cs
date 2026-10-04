@@ -408,15 +408,37 @@ internal static class UiTests
             return null;
         });
 
-        Check("每一格工具都有自己的上带（不会漏配）", () =>
+        Check("上带：除鼠标（穿透）外，每一格工具都有自己的上带（不会漏配）", () =>
         {
             foreach (int tool in PanelDraw.VisibleTools(new PanelState()))
             {
                 var sp = PanelDraw.SpecOf(new PanelState { Tool = tool });
+                // **鼠标（穿透）是唯一的例外**：没有可展开的设置，色带永远保持收起的线
+                //（2026-10-02 用户口径：点是把它"折叠起来"，不是完全没有了）。
+                if (tool == PanelDraw.ToolMouse)
+                {
+                    if (!sp.NoExpand) return "鼠标（穿透）格应该 NoExpand = true（只收成线、不张开）";
+                    continue;
+                }
+                if (sp.NoExpand) return $"工具{tool}（{PanelDraw.Tools[tool].Name}）不该是 NoExpand";
                 if (sp.Kind == PanelDraw.StripKind.None) return $"工具{tool}（{PanelDraw.Tools[tool].Name}）没有上带";
                 if (sp.Kind == PanelDraw.StripKind.Segments && sp.Labels.Length == 0) return $"工具{tool}：分段控件没有标签";
                 if (!sp.HasSlider && sp.Kind == PanelDraw.StripKind.Colors && !sp.Decorative)
                     return $"工具{tool}：有色片却没有滑条（下带会变成装饰线，是有意的吗？）";
+            }
+            return null;
+        });
+
+        Check("上带：穿透那格开与关都只保持那条线（线还在，但不张开）", () =>
+        {
+            foreach (bool pass in new[] { false, true })
+            {
+                var st = new PanelState { Tool = PanelDraw.ToolMouse, PassThrough = pass, E = 1, Rail = 1 };
+                var sp = PanelDraw.SpecOf(st);
+                if (!sp.NoExpand) return $"穿透={pass}：不是 NoExpand";
+                var lay = PanelDraw.Compute(st);
+                if (lay.Band <= 0 || lay.Band > 12)
+                    return $"穿透={pass}：带高 {lay.Band:F1}（期望那条 6 像素线：不是 0、也不是张开）";
             }
             return null;
         });

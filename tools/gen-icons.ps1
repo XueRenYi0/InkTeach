@@ -1,4 +1,4 @@
-<#
+﻿<#
 从微软官方图标库抓取操作条要用的图标，生成 src/InkEngine/Icons.Paths.cs。
 
 用法：
@@ -50,6 +50,23 @@ $icons = [ordered]@{
     # 图库（用户 2026-09-22 要的"图像收藏"）：操作条上那颗「存入图库」＋ 图形面板最后
     # 那一段「图库」。用书架那个 Library（参考实现 InkClass 的图形面板也是用这张）。
     'library'    = @('Library')                       # 图库（我的图形）
+    # 呼出盘 v4（2026-09-30）：工具格改用**主条同一套 Fluent 图标**——数据同源、逐点一致。
+    # 引擎不能引 InkUi（分层规矩：引擎看不见界面），所以在这张表里再来一份。
+    'pen'         = @('Pen')                          # 笔（呼出盘北格）
+    'highlighter' = @('Highlight')                    # 荧光笔
+    'laser'       = @('Flash')                        # 激光笔：主条一直用 Fluent Flash（闪电）
+    'eraser'      = @('Eraser')                       # 橡皮
+    'select'      = @('Select Object')                # 框选：四角括号 + 断续边
+}
+
+# 激活态用的 filled 变体（和主条同规矩：常态 regular、选中 filled）。
+# 呼出盘用：工具格选中 = filled 白图标；颜色格 = 常态就用 penFilled 上色。
+$filledIcons = [ordered]@{
+    'penFilled'         = @('Pen')
+    'highlighterFilled' = @('Highlight')
+    'laserFilled'       = @('Flash')
+    'eraserFilled'      = @('Eraser')
+    'selectFilled'      = @('Select Object')
 }
 
 function Get-UpstreamFile([string]$folder, [string]$fileName) {
@@ -75,7 +92,8 @@ $sb = [System.Text.StringBuilder]::new()
 [void]$sb.AppendLine('// 由 tools/gen-icons.ps1 从微软官方图标库生成，请勿手改。')
 [void]$sb.AppendLine('// 来源：https://github.com/microsoft/fluentui-system-icons （MIT License，')
 [void]$sb.AppendLine('// Copyright (c) 2020 Microsoft Corporation）')
-[void]$sb.AppendLine('// 采用各图标的 24×24 regular 变体，viewBox 都是 0 0 24 24。')
+[void]$sb.AppendLine('// 采用各图标的 24×24 regular 变体（呼出盘那几个工具图另有 filled 版：常态 regular、选中 filled），')
+[void]$sb.AppendLine('// viewBox 都是 0 0 24 24。')
 [void]$sb.AppendLine('// 许可证全文见 src/InkEngine/THIRD-PARTY-NOTICES.md。')
 [void]$sb.AppendLine('// </auto-generated>')
 [void]$sb.AppendLine()
@@ -90,21 +108,29 @@ $sb = [System.Text.StringBuilder]::new()
 
 $summary = @()
 $used = @{}
-foreach ($key in $icons.Keys) {
+# 合并两张表：regular（$icons）＋ filled（$filledIcons）。每项带自己的变体名，
+# 文件按 `ic_fluent_<slug>_24_<variant>.svg` 取。
+$entries = [ordered]@{}
+foreach ($k in $icons.Keys)       { $entries[$k] = @{ Cands = $icons[$k];       Variant = 'regular' } }
+foreach ($k in $filledIcons.Keys) { $entries[$k] = @{ Cands = $filledIcons[$k]; Variant = 'filled'  } }
+
+foreach ($key in $entries.Keys) {
+    $cands = $entries[$key].Cands
+    $variant = $entries[$key].Variant
     $found = $null; $foundName = $null
-    foreach ($folder in $icons[$key]) {
+    foreach ($folder in $cands) {
         $slug = ($folder -replace ' ', '_').ToLowerInvariant()
-        $fileName = "ic_fluent_${slug}_24_regular.svg"
+        $fileName = "ic_fluent_${slug}_24_${variant}.svg"
         $svg = Get-UpstreamFile $folder $fileName
         if ($svg) { $found = $svg; $foundName = $folder; break }
     }
-    if (-not $found) { throw "$key 的所有候选名都下载失败：$($icons[$key] -join ', ')" }
+    if (-not $found) { throw "$key 的所有候选名都下载失败：$($cands -join ', ')" }
 
     $m = [regex]::Matches($found, 'd="([^"]+)"')
     if ($m.Count -eq 0) { throw "$foundName 里没有找到路径数据" }
     $d = ($m | ForEach-Object { $_.Groups[1].Value }) -join ' '
 
-    [void]$sb.AppendLine("    /// <summary>Fluent: $foundName (24 regular)</summary>")
+    [void]$sb.AppendLine("    /// <summary>Fluent: $foundName (24 $variant)</summary>")
     [void]$sb.AppendLine("    public const string $key =")
     [void]$sb.AppendLine('        "' + $d + '";')
     [void]$sb.AppendLine()
