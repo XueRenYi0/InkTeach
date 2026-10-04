@@ -97,14 +97,14 @@ internal static class StrokeMotion
     /// <summary>活笔笔尖镜像要补的点（0~2 个：中点 + 真实末点）；仅渲染层消费，不进模型输出。</summary>
     public static readonly List<Vector3> TipOverlay = new();
     /// <summary>
-    /// 活笔预测（L2，**默认开**；`--notipredict` 关）：从笔尖沿当前速度外推
+    /// 活笔预测（L2，默认关；`--tipredict` 开）：从笔尖沿当前速度外推
     /// <see cref="TipPredictMs"/> 毫秒，**只算进 <see cref="PredictOverlay"/>**，纯显示层。
     /// 四道门（规格见《调研-湿墨与临时墨迹.md》第十一节）：
     /// ①速度 ≥0.5px/ms；②最近两段转角 &lt;15°；③预测段 ≤48 画布像素（≈24 逻辑像素@200%）；
     /// ④真笔 DWM 轨迹盖住笔尖时跳过（有压感实线笔 ＋ 轨迹开着——系统已画到笔尖，叠预测添乱）。
     /// 落笔时丢弃（直接收；残留 ≤ 上限，人眼不可见），成稿逐点不变（`--motiontest` 有断言）。
     /// </summary>
-    public static bool TipPredict = true;
+    public static bool TipPredict = false;
     /// <summary>预测外推时长（毫秒；`--tipredictms N` 可调；默认值按 penlive P95 定）。</summary>
     public static float TipPredictMs = 12f;
     /// <summary>预测段长度上限（画布像素；`--tipredictmax N` 可调）。</summary>
