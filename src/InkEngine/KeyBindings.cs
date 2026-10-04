@@ -6,13 +6,13 @@ namespace InkEngine;
 /// 键位的作用域。**这是整套快捷键设计的地基**，也是当年计划里第 6 个要拍板的问题。
 ///
 ///   · <see cref="Global"/>：进程级热键（`RegisterHotKey`），**任何程序在前台都生效**。
-///     只放"切换类"动作：开关批注、换工具、穿透、清空、退出。
+///     只放"切换类"动作：穿透、呼出盘、退出（2026-10-04 起统一 `Ctrl+Alt+Shift+…`）。
 ///     绝不能全局注册 Ctrl+C / Ctrl+V / Ctrl+Z——那会把所有程序的复制粘贴撤销
 ///     全抢走，是流氓软件的行为（Windows 上也只有极少数软件敢这么干）。
 ///   · <see cref="Annotation"/>：批注层拿到键盘时才生效（"批注键盘模式"）。
 ///     编辑类动作都在这里：撤销 / 重做 / 全选 / 复制 / 删除 / 方向键微调。
 ///
-/// 一个动作可以同时挂两档（撤销既有全局 Ctrl+Alt+Z，也有批注内的 Ctrl+Z）。
+/// 一个动作可以同时挂两档（现在没有这样的动作；将来要加"全局也生效"的键时才用得上）。
 /// </summary>
 internal enum KeyScope
 {
@@ -31,14 +31,16 @@ public enum KeyAction
 {
     None = 0,
 
-    // —— 全局（切换类）—— 2026-09-19 起**只有 5 个动作配全局键**（见 KeyMap.GlobalAllowed）
+    // —— 全局（切换类）—— 2026-10-04 起实际配全局键的是 **穿透 / 呼出盘 / 退出**
+    //（名单的权威在 KeyMap.GlobalAllowed；这里的枚举分组只是历史沿革，别拿它当现役表）
     TogglePassThrough,
     ToolPen,
     ToolEraser,
     ToggleKeyboardMode,
     Quit,
 
-    // —— 以下动作**都挂在应用内**（批注键盘模式打开时生效）——
+    // —— 以下动作**都挂在应用内**（批注键盘模式打开时生效）；
+    // 唯一的例外是 RadialPalette（2026-10-04 起升为全局键，见它的注释）——
     ToolHighlighter,
     ToolLaser,
     ToolPixelEraser,
@@ -47,9 +49,12 @@ public enum KeyAction
     ToolCapture,
     ToolMarquee,
 
-    /// <summary>呼出盘（Ctrl+Q）：按住 → 划向扇区 → 松手。
+    /// <summary>呼出盘（Ctrl+Alt+Shift+Q）：按住 → 划向扇区 → 松手。
     /// 八扇区 = 笔 / 黑 / 红 / 蓝 / 荧光笔 / 橡皮 / 框选 / 激光（见 Engine 的呼出盘那段）。
-    /// **批注内作用域**（和工具键同一档）；放映时进"临时全局键"表，穿透下不响应。</summary>
+    /// **全局作用域**（2026-10-04 用户定：从批注内 `Ctrl+Q` 升级上来，和另外两条全局键同形）。
+    /// **穿透里照样能呼出**（和工具键那五个刻意不同）：它是"从下层把笔抢回来"的入口，
+    /// 选扇区 = 退出穿透 + 换工具/选色。⚠ 全局热键只送按下、没有松手消息，
+    /// 松手靠 PumpRadialPalette 每帧轮询（见那里）。</summary>
     RadialPalette,
     // 图形工具（直线 / 矩形 / 椭圆 / 圆 / 三角形 / 平行四边形 / 箭头 / 坐标系）
     // **刻意一个键都没有**（用户 2026-09-19 定："图形不需要加快捷键，通通取消掉"）。
@@ -385,8 +390,8 @@ internal sealed class KeyMap
     /// 默认键位表。
     ///
     /// **两条作用域的边界（2026-09-19 收窄过一次）**：
-    ///   · **全局**（`Ctrl+Alt+…`）只放"最最最常用"的 5 条——换笔、换橡皮、穿透、
-    ///     键盘模式、退出。理由：全局热键是**抢别的程序的键**（注册多了还会撞车、
+    ///   · **全局**（现在是 `Ctrl+Alt+Shift+…`）只放"最最最常用"的少数几条——穿透、
+    ///     退出、呼出盘。理由：全局热键是**抢别的程序的键**（注册多了还会撞车、
     ///     被微信/QQ 占掉，见《快捷键总表》第五节），老师上课时真正闭着眼睛要按的
     ///     就那么几个；
     ///   · **应用内**（批注键盘模式打开时生效，默认开）放其余全部：工具、图形、粗细、
@@ -396,18 +401,22 @@ internal sealed class KeyMap
     /// **应用内快捷键全部失效**，降级等于把唯一的回头路锁死。
     ///
     /// 判据写在这里的用途是"下次加键时有根尺子"，不是装饰：`--keytest` 会断言
-    /// **全局里不许出现这 2 个之外的动作**。
+    /// **全局里不许出现名单之外的动作**。
     /// </summary>
     /// <remarks>
     /// 2026-09-29 又砍了一次（用户定）：**只留穿透 + 退出**（当时键盘模式还在）。
-    /// 2026-09-30：**键盘模式那条也暂时撤了**（用户："暂时没需求 + 防误触，默认就行"），
-    /// 所以现在实际注册的全局热键只有 **穿透 + 退出 2 条**。
+    /// 2026-09-30：**键盘模式那条也暂时撤了**（用户："暂时没需求 + 防误触，默认就行"）。
+    /// 2026-10-04（用户定）：**全局键统一加 `Shift`**（`Ctrl+Alt+Shift+…`，避免和别的
+    /// 软件抢 `Ctrl+Alt+T` / `Ctrl+Alt+X` 这类常见组合），呼出盘也从批注内 `Ctrl+Q`
+    /// **升级成全局 `Ctrl+Alt+Shift+Q`**——所以现在实际注册的全局热键是 **3 条**：
+    /// 穿透、退出、呼出盘。
     /// `ToggleKeyboardMode` **仍留在白名单里**：它只是没有绑键（见 Default() 里那段注释），
-    /// 将来要做「更多」抽屉里的「键盘穿透」开关、或者把 Ctrl+Alt+K 加回来，都还合法。
+    /// 将来要做「更多」抽屉里的「键盘穿透」开关、或者把 `Ctrl+Alt+Shift+K` 加回来，都还合法。
     /// </remarks>
     private static readonly KeyAction[] GlobalAllowed =
     {
-        KeyAction.TogglePassThrough, KeyAction.ToggleKeyboardMode, KeyAction.Quit,
+        KeyAction.TogglePassThrough, KeyAction.ToggleKeyboardMode, KeyAction.RadialPalette,
+        KeyAction.Quit,
     };
 
     /// <summary>自检用：全局作用域允许出现哪些动作（见上面的说明）。</summary>
@@ -418,12 +427,12 @@ internal sealed class KeyMap
         var m = new KeyMap();
         const KeyScope G = KeyScope.Global, A = KeyScope.Annotation;
 
-        // ---- 全局：最最常用的 5 条（见 GlobalAllowed 的说明）----
-        // ⚠ 2026-09-30：穿透从 `Ctrl+Alt+P` 换成 **`Ctrl+Alt+T`**——用户报"P 容易和笔的
-        // `Ctrl+P` 撞"（同一个 P，一个是全局一个是批注内，肌肉记忆上确实容易串）。
-        // 选 T 的理由：T = "透"的拼音首字母、不撞任何常用组合（Ctrl+P 打印、Ctrl+T 新建标签页
-        // 都是**不带 Alt** 的，加了 Alt 就没冲突），也和工具那五个键（P/I/L/E/M）错开。
-        m.Add(G, KeyAction.TogglePassThrough, "Ctrl+Alt+T", "全屏批注：能画 / 不能画（穿透给下层）");
+        // ---- 全局：最最常用的 3 条（见 GlobalAllowed 的说明）----
+        // ⚠ 2026-10-04（用户定）：**三条全局键统一加 `Shift`**——`Ctrl+Alt+T` / `Ctrl+Alt+X`
+        // 这类两修饰键组合在别的软件里也常被占/容易误触，`Ctrl+Alt+Shift+…` 是三层修饰，
+        // 几乎不撞车。历史：穿透 2026-09-30 从 `Ctrl+Alt+P` 换成 `Ctrl+Alt+T`（用户报
+        // "P 容易和笔的 `Ctrl+P` 撞"）；这次再整体抬一层，形状不变、只是多按一个 Shift。
+        m.Add(G, KeyAction.TogglePassThrough, "Ctrl+Alt+Shift+T", "全屏批注：能画 / 不能画（穿透给下层）");
         // **键盘模式（键盘归批注层）这条全局键 2026-09-30 暂时取消**（用户："我暂时没有
         // 需求，可不可以取消这个快捷键，防止误触，然后你留好注释，默认就行"）。
         //
@@ -435,8 +444,19 @@ internal sealed class KeyMap
         //     Ctrl+Alt+P，课堂上容易碰）。
         //   · **以后要恢复**：把下面这行加回来即可；做抽屉开关的话见 README 的"8.1.3 清单"
         //     （命令通道 + Row + 勾选渲染 + 白名单，四件一起做才动它）。
-        // m.Add(G, KeyAction.ToggleKeyboardMode, "Ctrl+Alt+K", "键盘归批注层（编辑与工具快捷键生效）");
-        m.Add(G, KeyAction.Quit, "Ctrl+Alt+X", "退出");
+        // m.Add(G, KeyAction.ToggleKeyboardMode, "Ctrl+Alt+Shift+K", "键盘归批注层（编辑与工具快捷键生效）");
+        m.Add(G, KeyAction.Quit, "Ctrl+Alt+Shift+X", "退出");
+        // 呼出盘（用户 2026-09-30 定 `Ctrl+Q`、2026-10-04 升级为全局 `Ctrl+Alt+Shift+Q`）：
+        // 按住 → 光标处出八扇区 → 划向扇区 → 松手。扇区 = 笔 / 黑 / 红 / 蓝 / 荧光笔 /
+        // 橡皮 / 框选 / 激光（黑红蓝 = 色带前三）。用户原话："把轮盘的 Ctrl+Q 也变成
+        // 全局快捷键，即变成 Ctrl+Alt+Shift+Q，这样好一些"。
+        // 设计稿、理论、和其它快捷键的对应关系见《调研-笔键方案.md》附录 C/D；
+        // 行为要点：**穿透里照样能呼出**（选扇区 = 退出穿透 + 换工具，与工具键那条
+        // "穿透下不响应"刻意相反——它是把笔从下层抢回来的入口）、前台是 PPT/WPS 也照样出盘、
+        // 扇区里全是现有命令（工具 = 按 Ctrl+P/I/L/E/M 同一条路，颜色 = "给我这支颜色的笔"）。
+        // ⚠ 全局热键只送按下（WM_HOTKEY）、没有松手消息，松手靠 PumpRadialPalette 轮询。
+        m.Add(G, KeyAction.RadialPalette, "Ctrl+Alt+Shift+Q",
+              "呼出盘：按住 → 划向扇区 → 松手（笔/黑/红/蓝/荧光笔/橡皮/框选/激光）");
 
         // ---- 应用内：原有那一批（编辑类 + 翻页 + 微调）----
         m.Add(A, KeyAction.Undo, "Ctrl+Z", "撤销一步");
@@ -493,12 +513,9 @@ internal sealed class KeyMap
         // Ctrl+9（切选择方式）删掉——那两件事现在都归"连按同一个工具键"：
         // Ctrl+E 连按切整笔/面积、Ctrl+M 连按切矩形/套索，不再占额外键位。
         m.Add(A, KeyAction.ToolCapture, "Ctrl+S", "截图：拖一个框，抓到的图放到左上角、自动选中并进剪贴板");
-        // 呼出盘（用户 2026-09-30 定「Ctrl+Q」）：按住 → 光标处出八扇区 → 划向扇区 → 松手。
-        // 扇区 = 笔 / 黑 / 红 / 蓝 / 荧光笔 / 橡皮 / 框选 / 激光（黑红蓝 = 色带前三）。
-        // 设计稿、理论、和其它快捷键的对应关系见《调研-笔键方案.md》附录 C/D；
-        // 行为要点：穿透下不响应（和工具键 8.5 同一条）、放映时随"临时全局键"表走、
-        // 扇区里全是现有命令（工具=按 Ctrl+P/I/L/E/M 同一条路，颜色="给我这支颜色的笔"）。
-        m.Add(A, KeyAction.RadialPalette, "Ctrl+Q", "呼出盘：按住 → 划向扇区 → 松手（笔/黑/红/蓝/荧光笔/橡皮/框选/激光）");
+        // ⚠ 呼出盘 2026-10-04 从这一档**升到全局**（`Ctrl+Alt+Shift+Q`，见上面全局那一段）：
+        // 它现在是全局键，这里不再留批注内的 `Ctrl+Q` 副本（留了就会一个动作两把键、
+        // 又回到"冲突"的老问题）。
         m.Add(A, KeyAction.CycleWidth, "Ctrl+6", "切成当前工具的下一档粗细");
         m.Add(A, KeyAction.SplitErased, "Ctrl+8", "把选中的、被擦断的笔迹拆成独立对象（只服务老存档）");
         m.Add(A, KeyAction.Clear, "Ctrl+Shift+C", "清空整页（可撤销）");

@@ -1,9 +1,11 @@
 
+using System;
+using System.Collections.Generic;
 using Vortice.Mathematics;
 
 namespace InkEngine;
 
-/// <summary>计时窗口上点到了哪一块（2026-10-02 起改为 InkClass 式独立窗口）。</summary>
+/// <summary>计时窗口上点到了哪一块（2026-10-05 重设计：独立窗口 + 本项目自己的版式）。</summary>
 internal enum TimerZone
 {
     None = 0,
@@ -63,9 +65,29 @@ internal static class WinScale
 }
 
 /// <summary>
-/// 计时窗几何（1:1 复刻 InkClass CountdownTimerWindow）：
-/// 设计稿 1100×700，卡片内缩 60；改时长态、最小化 320×150、全屏。
+/// 计时窗几何（**2026-10-05 重设计**，理由见下面那段"为什么重画"）。
+///
+/// 设计稿 1100×700、卡片内缩 60（卡片 980×580）；改时长态、最小化 320×150、全屏。
 /// 全部乘 u（= DpiScale × 适配缩放）得到物理像素。
+///
+/// ## 为什么重画（这一段是这次改动的全部理由，别删）
+///
+/// 原来的版式是**照着 InkClass 的 CountdownTimerWindow 1:1 复刻**的：顶部三个
+/// 药丸页签居中、下面一个大圆环、底部一排**圆形**按钮（蓝色开始 / 白色重置 /
+/// 白色收起 / 白色全屏 / **红色圆形关闭**）、浅蓝面板 + 蓝描边。功能是对的，
+/// 但那套版式本身是别人的识别特征——别人一眼就认得出"这是照着谁做的"。
+///
+/// 这一版换成**本项目自己的语言**（和主工具带 /「更多」面板同一套）：
+///   · 卡片：InkUi.Tokens 那套面板底 + 1px 描边 + 18 圆角 + 八层投影，**并且支持深色**；
+///   · 模式选择：左边**贴边**的分段控件（凹槽 + 选中药丸），和工具带上
+///     「整笔 ⇄ 面积」那一档同源，不再是居中的三个独立药丸；
+///   · 窗口钮（收起 / 全屏 / 关闭）搬到**右上角**，方块幽灵钮，不再是底部一排圆钮；
+///   · 主按钮**带文字**（开始 / 暂停 / 重置）——投影上远处要能读出来，光靠图标不够；
+///   · 到点时数字与环一起变红（原来只有一个红色小药丸，隔远看不见）。
+///
+/// ⚠ **对外的方法名一个都没改**（`CardRect` / `TabRect` / `BtnRect` / `ValueRect` /
+/// `StepRect` / `OkRect` / `ZoneAt` …）：自检与出图都按名字调它们。改版式不该顺手
+/// 改 API——那会让"界面变了"和"自检失灵"两件事混在一起分不清。
 /// </summary>
 internal static class TimerWin
 {
@@ -73,6 +95,24 @@ internal static class TimerWin
     public const float MinDW = 320f, MinDH = 150f;
     private const float CardDW = DW - Inset * 2f;   // 980
     private const float CardDH = DH - Inset * 2f;   // 580
+
+    // ---- 版式常量（相对卡片左上角；数字后面那行是"凭什么这么定"）--------------
+    /// <summary>卡片内边距 32：和主工具带那套"4 的倍数"节奏一致。</summary>
+    public const float Pad = 32f;
+    /// <summary>顶栏（分段 + 窗口钮）那一行。</summary>
+    private const float TopY = 28f, TopH = 40f;
+    private const float SegW = 108f, SegH = 30f, SegGap = 4f;
+    /// <summary>窗口钮 34 方块、间隔 10。</summary>
+    private const float WinD = 34f, WinGap = 10f;
+    private const float RingY = 300f, RingR0 = 168f, RingTh0 = 10f;
+    /// <summary>环下面那行说明（预计几点到 / 时间到）。**故意不再套药丸**：
+    /// 药丸是 InkClass 的签名形状，去掉以后这一行才像本项目的东西。</summary>
+    private const float CapY = 484f, CapH = 30f, CapW = 360f;
+    private const float BarY = 506f, BarH = 52f;
+    private const float StartW = 176f, ResetW = 108f, BarGap = 16f;
+    private const float StepW = 100f, StepH = 40f, StepGapX = 12f;
+    private const float StepColW = 212f, StepColGap = 32f;
+    private const float OkW = 148f, OkH = 48f;
 
     public static float Unit(in RectF screen, float dpi) => WinScale.Unit(screen, dpi, DW, DH);
 
@@ -107,66 +147,117 @@ internal static class TimerWin
         MinX = cx - d * 0.5f, MinY = cy - d * 0.5f, MaxX = cx + d * 0.5f, MaxY = cy + d * 0.5f,
     };
 
-    // ---- 常规态（含改时长态）-------------------------------------------------
+    // ---- 顶栏 ---------------------------------------------------------------
 
+    /// <summary>三段模式控件：贴左边，不再居中（居中那三个药丸是原来最像"照搬"的地方）。</summary>
     public static RectF TabRect(in RectF card, float u, int i)
     {
-        float w = 96f * u, h = 30f * u, gap = 12f * u;
-        float total = w * 3 + gap * 2;
-        float x = CX(card) - total * 0.5f + i * (w + gap);
-        float y = card.MinY + 20f * u;
-        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+        float x = card.MinX + (Pad + i * (SegW + SegGap)) * u;
+        float y = card.MinY + (TopY + (TopH - SegH) * 0.5f) * u;
+        return new RectF { MinX = x, MinY = y, MaxX = x + SegW * u, MaxY = y + SegH * u };
     }
 
-    public static float RingCY(in RectF card, float u) => card.MinY + 260f * u;
-    public static float RingR(float u) => 165f * u;
-    public static float RingTh(float u) => 13f * u;
+    /// <summary>分段控件外面那道**凹槽**（三段整体内缩 4）——和工具带上那档同一套画法。</summary>
+    public static RectF SegTroughRect(in RectF card, float u)
+    {
+        var a = TabRect(card, u, 0);
+        var b = TabRect(card, u, 2);
+        return new RectF { MinX = a.MinX - 4f * u, MinY = card.MinY + TopY * u,
+                           MaxX = b.MaxX + 4f * u, MaxY = card.MinY + (TopY + TopH) * u };
+    }
+
+    // ---- 主区（环 + 数字 + 说明）---------------------------------------------
+
+    public static float RingCY(in RectF card, float u) => card.MinY + RingY * u;
+    public static float RingR(float u) => RingR0 * u;
+    public static float RingTh(float u) => RingTh0 * u;
 
     /// <summary>环+大字所在区域（“点数字/环”热区）。</summary>
     public static RectF ValueRect(in RectF card, float u)
     {
-        float c = CX(card), cy = RingCY(card, u), r = RingR(u) + 28f * u;
+        float c = CX(card), cy = RingCY(card, u), r = RingR(u) + 26f * u;
         return new RectF { MinX = c - r, MinY = cy - r, MaxX = c + r, MaxY = cy + r };
     }
 
-    /// <summary>改时长态的数字行热区。</summary>
-    public static RectF EditValueRect(in RectF card, float u)
-        => new() { MinX = CX(card) - 320f * u, MinY = card.MinY + 230f * u,
-                   MaxX = CX(card) + 320f * u, MaxY = card.MinY + 340f * u };
-
-    /// <summary>± 步进钮：unit 0 时 / 1 分 / 2 秒；pair 0=上(+5/+1) 1=下(-1/-5)；row 0/1。</summary>
-    public static RectF StepRect(in RectF card, float u, int unit, int pair, int row)
-    {
-        float w = 46f * u, h = 26f * u;
-        float x = CX(card) + (unit - 1) * 140f * u - w * 0.5f;
-        float y = pair == 0 ? card.MinY + (150f + row * 36f) * u
-                            : card.MinY + (368f + row * 36f) * u;
-        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
-    }
-
-    public static RectF OkRect(in RectF card, float u) => Circle(CX(card) + 210f * u, card.MinY + 400f * u, 40f * u);
-
+    /// <summary>环下面那行说明（预计到点时刻 / 时间到）。名字沿用旧的 <c>PillRect</c>，
+    /// 但**画法已经改成纯文字**，不再有药丸底。</summary>
     public static RectF PillRect(in RectF card, float u)
-    {
-        float w = 210f * u, h = 30f * u;
-        return new RectF { MinX = CX(card) - w * 0.5f, MinY = card.MinY + 433f * u,
-                           MaxX = CX(card) + w * 0.5f, MaxY = card.MinY + 463f * u };
-    }
+        => new() { MinX = CX(card) - CapW * u * 0.5f, MinY = card.MinY + CapY * u,
+                   MaxX = CX(card) + CapW * u * 0.5f, MaxY = card.MinY + (CapY + CapH) * u };
+
+    // ---- 底部主按钮（带文字）-------------------------------------------------
 
     public static RectF BtnRect(in RectF card, float u, TimerZone which)
     {
-        float cy = card.MinY + 515f * u;
-        float c = CX(card);
-        return which switch
+        switch (which)
         {
-            TimerZone.Start => Circle(c - 46f * u, cy, 58f * u),
-            TimerZone.Reset => Circle(c + 46f * u, cy, 58f * u),
-            TimerZone.Minimize => Circle(card.MaxX - 152f * u, cy, 44f * u),
-            TimerZone.Fullscreen => Circle(card.MaxX - 98f * u, cy, 44f * u),
-            TimerZone.Close => Circle(card.MaxX - 44f * u, cy, 44f * u),
-            _ => new RectF(),
-        };
+            case TimerZone.Start:
+            {
+                float total = (StartW + BarGap + ResetW) * u;
+                float x = CX(card) - total * 0.5f;
+                float y = card.MinY + BarY * u;
+                return new RectF { MinX = x, MinY = y, MaxX = x + StartW * u, MaxY = y + BarH * u };
+            }
+            case TimerZone.Reset:
+            {
+                float x = CX(card) + BarGap * u + (StartW - ResetW) * u * 0.5f;
+                float y = card.MinY + BarY * u;
+                return new RectF { MinX = x, MinY = y, MaxX = x + ResetW * u, MaxY = y + BarH * u };
+            }
+            case TimerZone.Minimize:
+            case TimerZone.Fullscreen:
+            case TimerZone.Close:
+            {
+                // 右上角三个方块钮，从右往左排：关闭 / 全屏 / 收起。
+                float d = WinD * u;
+                float y = card.MinY + (TopY + (TopH - WinD) * 0.5f) * u;
+                float cx = card.MaxX - Pad * u - d * 0.5f;
+                int back = which == TimerZone.Close ? 0 : which == TimerZone.Fullscreen ? 1 : 2;
+                cx -= back * (WinD + WinGap) * u;
+                return new RectF { MinX = cx - d * 0.5f, MinY = y, MaxX = cx + d * 0.5f, MaxY = y + d };
+            }
+            default: return new RectF();
+        }
     }
+
+    // ---- 改时长态 -----------------------------------------------------------
+
+    /// <summary>改时长态的大数字（`HH:MM:SS`）。</summary>
+    public static RectF EditValueRect(in RectF card, float u)
+        => new() { MinX = CX(card) - 320f * u, MinY = card.MinY + 150f * u,
+                   MaxX = CX(card) + 320f * u, MaxY = card.MinY + 270f * u };
+
+    /// <summary>单位标题（时 / 分 / 秒）那一行。</summary>
+    public static RectF StepLabelRect(in RectF card, float u, int unit)
+    {
+        float colW = StepColW * u;
+        float total = (colW * 3f + StepColGap * 2f * u);
+        float x = CX(card) - total * 0.5f + unit * (colW + StepColGap * u);
+        return new RectF { MinX = x, MinY = card.MinY + 292f * u, MaxX = x + colW, MaxY = card.MinY + 318f * u };
+    }
+
+    /// <summary>
+    /// ± 步进钮：unit 0 时 / 1 分 / 2 秒；pair 0=加（+5 / +1）1=减（−5 / −1）；row 0/1。
+    ///
+    /// 版式是**三列 2×2 的小格**（每列一个单位，标题在上面）——原来是把 18 个钮
+    /// 撒在数字上下两片，投影上根本分不清哪个是哪个单位的。
+    ///
+    /// ⚠ `row` 是**列**（左右），`pair` 是**行**（上下）。这两个别搞反：搞反了排出来
+    /// 是斜着的一串阶梯，看着像坏掉而不是像设计（第一版就踩了这个，看图才看出来）。
+    /// </summary>
+    public static RectF StepRect(in RectF card, float u, int unit, int pair, int row)
+    {
+        var lab = StepLabelRect(card, u, unit);
+        float w = StepW * u, h = StepH * u;
+        float x = lab.MinX + row * (StepW + StepGapX) * u;
+        float y = card.MinY + (pair == 0 ? 330f : 378f) * u;
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    /// <summary>改时长态的「确定」——整宽药丸，不是原来那个孤零零的小圆 ✓。</summary>
+    public static RectF OkRect(in RectF card, float u)
+        => new() { MinX = CX(card) - OkW * u * 0.5f, MinY = card.MinY + 500f * u,
+                   MaxX = CX(card) + OkW * u * 0.5f, MaxY = card.MinY + (500f + OkH) * u };
 
     // ---- 最小化态 ------------------------------------------------------------
 
@@ -187,15 +278,20 @@ internal static class TimerWin
         if (!card.Contains(x, y)) return TimerZone.None;
         for (int i = 0; i < 3; i++)
             if (TabRect(card, u, i).Contains(x, y)) return TimerZone.Tab0 + i;
+
         if (edit && countdown)
         {
+            // 改时长态：**底排那组按钮这时不画也不响应**（否则「确定」和「开始」抢同一块，
+            // 会出现"点确定却把计时开了"）。顶栏的三个窗口钮照常可用。
             if (OkRect(card, u).Contains(x, y)) return TimerZone.Ok;
             if (EditValueRect(card, u).Contains(x, y)) return TimerZone.Value;
+            if (BtnRect(card, u, TimerZone.Close).Contains(x, y)) return TimerZone.Close;
+            if (BtnRect(card, u, TimerZone.Minimize).Contains(x, y)) return TimerZone.Minimize;
+            if (BtnRect(card, u, TimerZone.Fullscreen).Contains(x, y)) return TimerZone.Fullscreen;
+            return TimerZone.Body;
         }
-        else if (ValueRect(card, u).Contains(x, y))
-        {
-            return TimerZone.Value;
-        }
+
+        if (ValueRect(card, u).Contains(x, y)) return TimerZone.Value;
         if (BtnRect(card, u, TimerZone.Start).Contains(x, y)) return TimerZone.Start;
         if (BtnRect(card, u, TimerZone.Reset).Contains(x, y)) return TimerZone.Reset;
         if (BtnRect(card, u, TimerZone.Minimize).Contains(x, y)) return TimerZone.Minimize;
@@ -234,14 +330,34 @@ internal static class TimerWin
         TimerMode.CountUp => "正计时",
         _ => "秒表",
     };
+
+    /// <summary>单位标题（时 / 分 / 秒）。</summary>
+    public static string UnitName(int unit) => unit switch { 0 => "时", 1 => "分", _ => "秒" };
 }
 
 /// <summary>
-/// 点名窗几何（1:1 复刻 InkClass RandWindow）：设计稿 900×500，左 1.8 : 右 1。
+/// 点名窗几何（**2026-10-05 重设计**，理由同 <see cref="TimerWin"/> 的说明）。
+///
+/// 设计稿 900×500。原来的版式是照 InkClass 的 RandWindow 1:1 复刻：左边一列大字
+/// 名字、右边一竖排控件（− 5 ＋ 在最上、抽奖按钮在中下）。这一版换成上下四段：
+/// **结果区（名字卡片按名换行排布）／控制行（人数步进 + 抽奖）／信息行（不重复池）／
+/// 底行（名单 + 学号范围）**，并且名字不再是一列纯文字，而是**一个个圆角名牌**——
+/// 投影上最后要看的是"抽到了谁"，名牌比一列文字醒目得多。
 /// </summary>
 internal static class RollWin
 {
     public const float DW = 900f, DH = 500f;
+
+    /// <summary>内边距 32，与计时窗同一套节奏（两个窗看起来才像一家人）。</summary>
+    public const float Pad = 32f;
+
+    private const float TopY = 24f;                       // 顶栏：只有右上角一个 ✕
+    private const float CloseD = 34f;
+    private const float AreaY = 92f, AreaH = 216f;        // 名牌区
+    private const float CtrlY = 332f, CtrlH = 48f;        // 控制行
+    private const float InfoY = 396f, InfoH = 26f;        // 不重复池那一行
+    private const float BotH = 44f;                       // 底行（名单 / 学号范围）
+    private const float StepD = 48f, CountW = 88f, DrawW = 220f;
 
     public static float Unit(in RectF screen, float dpi) => WinScale.Unit(screen, dpi, DW, DH);
 
@@ -251,89 +367,209 @@ internal static class RollWin
         return WinScale.PlaceCentered(screen, DW * u, DH * u, cx, cy, dpi);
     }
 
-    public static float LeftW(in RectF card) => (card.MaxX - card.MinX) * (1.8f / 2.8f);
-    public static float LCX(in RectF card) => card.MinX + LeftW(card) * 0.5f;
-    public static float RCX(in RectF card) => card.MinX + LeftW(card)
-                                            + (card.MaxX - card.MinX - LeftW(card)) * 0.5f;
+    // ---- 名牌区 -------------------------------------------------------------
 
     public static RectF ResultsRect(in RectF card, float u) => new()
     {
-        MinX = card.MinX + 20f * u, MinY = card.MinY + 30f * u,
-        MaxX = card.MinX + LeftW(card) - 20f * u, MaxY = card.MaxY - 80f * u,
+        MinX = card.MinX + Pad * u, MinY = card.MinY + AreaY * u,
+        MaxX = card.MaxX - Pad * u, MaxY = card.MinY + (AreaY + AreaH) * u,
     };
 
-    /// <summary>结果排布：≤5 一列 / 6–10 两列 / &gt;10 三列（照抄 InkClass）。</summary>
-    public static int Cols(int n) => n <= 5 ? 1 : n <= 10 ? 2 : 3;
-
-    public static RectF ColRect(in RectF card, float u, int cols, int i)
+    /// <summary>
+    /// 把一批名字排成**一行行圆角名牌**（左对齐、按名换行）。
+    ///
+    /// 字号是**试出来的**：从 26 一档一档往下试，取第一个"全部装得下"的档位。
+    /// 为什么不用固定字号——名单 5 个人和 60 个人都得在**同一块**区域里排完，
+    /// 固定字号要么空一大片、要么溢出（60 人 × 22px 至少要 8 行，216 高放不下）。
+    ///
+    /// 宽度按字符估：CJK 一个字约 1 em，拉丁/数字约 0.55 em。名字表来自
+    /// <c>Names.txt</c>，绝大多数是中文，这个精度足够；宁可略估宽一点，
+    /// 也不要把名牌挤出区域。
+    /// </summary>
+    public static List<(RectF R, string Name)> Chips(in RectF area, IReadOnlyList<string> names, float u)
     {
-        var area = ResultsRect(card, u);
-        float w = (area.MaxX - area.MinX) / cols;
-        return new RectF { MinX = area.MinX + i * w, MinY = area.MinY,
-                           MaxX = area.MinX + (i + 1) * w, MaxY = area.MaxY };
+        var outp = new List<(RectF, string)>();
+        if (names == null || names.Count == 0) return outp;
+        float gap = 10f * u;
+        float aw = area.MaxX - area.MinX, ah = area.MaxY - area.MinY;
+
+        foreach (float sizeLog in new[] { 26f, 22f, 19f, 16f, 14f, 12f, 11f })
+        {
+            float size = sizeLog * u;
+            float ch = size + 16f * u;
+            float x = area.MinX, y = area.MinY;
+            int fit = 0;
+            bool fits = true;
+            foreach (var n in names)
+            {
+                float cw = ChipWidth(n, size) + 26f * u;
+                if (x > area.MinX && x + cw > area.MaxX) { x = area.MinX; y += ch + gap; }
+                if (y + ch > area.MaxY) { fits = false; break; }
+                x += cw + gap;
+                fit++;
+            }
+            if (!fits) continue;
+            if (fit < names.Count) continue;      // 名字放不下（理论上不会，兜底）
+
+            x = area.MinX; y = area.MinY;
+            foreach (var n in names)
+            {
+                float cw = ChipWidth(n, size) + 26f * u;
+                if (x > area.MinX && x + cw > area.MaxX) { x = area.MinX; y += ch + gap; }
+                outp.Add((new RectF { MinX = x, MinY = y, MaxX = x + cw, MaxY = y + ch }, n));
+                x += cw + gap;
+            }
+            // **整块名牌在结果区里垂直居中**：5 个人和 40 个人看起来都像"摆在那儿"，
+            // 而不是"从顶上往下堆"——后者在只有几个名字时会显得头重脚轻。
+            CenterVertically(outp, area);
+            return outp;
+        }
+
+        // 极端兜底：全部按最小档平铺，超出区域的部分**不画**（宁可少几个，也不能压到控件上）。
+        float s0 = 11f * u, ch0 = s0 + 16f * u;
+        float x0 = area.MinX, y0 = area.MinY;
+        foreach (var n in names)
+        {
+            float cw = ChipWidth(n, s0) + 26f * u;
+            if (x0 > area.MinX && x0 + cw > area.MaxX) { x0 = area.MinX; y0 += ch0 + gap; }
+            if (y0 + ch0 > area.MaxY) break;
+            outp.Add((new RectF { MinX = x0, MinY = y0, MaxX = x0 + cw, MaxY = y0 + ch0 }, n));
+            x0 += cw + gap;
+        }
+        CenterVertically(outp, area);
+        return outp;
     }
 
-    private static RectF Circle(float cx, float cy, float d) => new()
+    /// <summary>把整块名牌在结果区里垂直居中（原地改 List 里的矩形）。</summary>
+    private static void CenterVertically(List<(RectF R, string Name)> chips, in RectF area)
     {
-        MinX = cx - d * 0.5f, MinY = cy - d * 0.5f, MaxX = cx + d * 0.5f, MaxY = cy + d * 0.5f,
-    };
+        if (chips.Count == 0) return;
+        float top = chips[0].R.MinY, bottom = chips[0].R.MaxY;
+        foreach (var c in chips)
+        {
+            top = MathF.Min(top, c.R.MinY);
+            bottom = MathF.Max(bottom, c.R.MaxY);
+        }
+        float dy = (area.MinY + area.MaxY - (top + bottom)) * 0.5f;
+        if (MathF.Abs(dy) < 0.5f) return;
+        for (int i = 0; i < chips.Count; i++)
+        {
+            var r = chips[i].R;
+            chips[i] = (new RectF { MinX = r.MinX, MinY = r.MinY + dy,
+                                     MaxX = r.MaxX, MaxY = r.MaxY + dy }, chips[i].Name);
+        }
+    }
 
-    public static RectF MinusRect(in RectF card, float u) => Circle(RCX(card) - 92f * u, card.MinY + 108f * u, 64f * u);
-    public static RectF PlusRect(in RectF card, float u) => Circle(RCX(card) + 92f * u, card.MinY + 108f * u, 64f * u);
-
-    public static RectF CountRect(in RectF card, float u) => new()
+    /// <summary>名牌宽度（不含两侧留白）：CJK 约 1 em，其余约 0.55 em。</summary>
+    public static float ChipWidth(string name, float size)
     {
-        MinX = RCX(card) - 44f * u, MinY = card.MinY + 78f * u,
-        MaxX = RCX(card) + 44f * u, MaxY = card.MinY + 142f * u,
-    };
+        float w = 0f;
+        foreach (char c in name) w += c >= 0x2E80 ? size : size * 0.55f;
+        return w;
+    }
 
-    public static RectF DrawRect(in RectF card, float u) => new()
+    /// <summary>名牌里的字号（和 <see cref="Chips"/> 同一套试档逻辑，抽出来给绘制用）。</summary>
+    public static float ChipFontSize(in RectF area, int n, float u)
     {
-        MinX = RCX(card) - 100f * u, MinY = card.MinY + 190f * u,
-        MaxX = RCX(card) + 100f * u, MaxY = card.MinY + 254f * u,
-    };
+        float gap = 10f * u;
+        float aw = area.MaxX - area.MinX, ah = area.MaxY - area.MinY;
+        foreach (float s in new[] { 26f, 22f, 19f, 16f, 14f, 12f, 11f })
+        {
+            float size = s * u, ch = size + 16f * u;
+            // 用最坏情况估：每个名字都按最长算，宁可字号小一档也不溢出。
+            float cw = 4f * size + 26f * u;                    // 四字名字：最常见
+            int perRow = Math.Max(1, (int)((aw + gap) / (cw + gap)));
+            int rows = (n + perRow - 1) / perRow;
+            if (rows * (ch + gap) - gap <= ah) return size;
+        }
+        return 11f * u;
+    }
 
-    public static RectF PoolTextRect(in RectF card, float u) => new()
+    // ---- 控制行（人数步进 + 抽奖）-------------------------------------------
+
+    private static RectF At(in RectF card, float u, float xLog, float yLog, float wLog, float hLog)
+        => new() { MinX = card.MinX + xLog * u, MinY = card.MinY + yLog * u,
+                   MaxX = card.MinX + (xLog + wLog) * u, MaxY = card.MinY + (yLog + hLog) * u };
+
+    public static RectF MinusRect(in RectF card, float u) => At(card, u, Pad, CtrlY, StepD, StepD);
+    public static RectF CountRect(in RectF card, float u) => At(card, u, Pad + StepD + 12f, CtrlY, CountW, StepD);
+    public static RectF PlusRect(in RectF card, float u)
+        => At(card, u, Pad + StepD + 12f + CountW + 12f, CtrlY, StepD, StepD);
+
+    public static RectF DrawRect(in RectF card, float u)
     {
-        MinX = card.MinX + LeftW(card) + 16f * u, MinY = card.MinY + 268f * u,
-        MaxX = RCX(card) + 30f * u, MaxY = card.MinY + 294f * u,
-    };
+        float w = DrawW * u;
+        float x = card.MaxX - Pad * u - w;
+        float y = card.MinY + (CtrlY + (CtrlH - StepD) * 0.5f) * u;
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + StepD * u };
+    }
 
-    public static RectF PoolResetRect(in RectF card, float u) => new()
+    // ---- 信息行（不重复池）---------------------------------------------------
+
+    public static RectF PoolTextRect(in RectF card, float u) => At(card, u, Pad, InfoY, 480f, InfoH);
+
+    public static RectF PoolResetRect(in RectF card, float u)
     {
-        MinX = RCX(card) + 70f * u, MinY = card.MinY + 264f * u,
-        MaxX = card.MaxX - 16f * u, MaxY = card.MinY + 296f * u,
-    };
+        float w = 96f * u;
+        return new RectF { MinX = card.MaxX - Pad * u - w, MinY = card.MinY + InfoY * u,
+                           MaxX = card.MaxX - Pad * u, MaxY = card.MinY + (InfoY + InfoH) * u };
+    }
 
-    public static RectF NamesRect(in RectF card, float u) => new()
-    {
-        MinX = card.MinX + LeftW(card) + 12f * u, MinY = card.MaxY - 60f * u,
-        MaxX = card.MinX + LeftW(card) + 202f * u, MaxY = card.MaxY - 20f * u,
-    };
-
-    public static RectF ReloadRect(in RectF card, float u)
-        => Circle(NamesRect(card, u).MaxX + 22f * u, card.MaxY - 40f * u, 32f * u);
+    // ---- 顶栏 / 底行 ---------------------------------------------------------
 
     public static RectF CloseRect(in RectF card, float u)
-        => Circle(card.MaxX - 32f * u, card.MaxY - 40f * u, 40f * u);
+    {
+        float d = CloseD * u;
+        return new RectF { MinX = card.MaxX - Pad * u - d, MinY = card.MinY + TopY * u,
+                           MaxX = card.MaxX - Pad * u, MaxY = card.MinY + TopY * u + d };
+    }
 
-    public static RectF NumMinusRect(in RectF card, float u)
-        => Circle(RCX(card) - 96f * u, card.MinY + 334f * u, 28f * u);
+    private static float BotY(in RectF card, float u) => card.MaxY - Pad * u - BotH * u;
+
+    public static RectF NamesRect(in RectF card, float u) => At(card, u, Pad, DH - Pad - BotH, 244f, BotH);
+
+    public static RectF ReloadRect(in RectF card, float u)
+    {
+        float d = 36f * u;
+        var n = NamesRect(card, u);
+        float x = n.MaxX + 12f * u;
+        float y = n.MinY + (BotH * u - d) * 0.5f;
+        return new RectF { MinX = x, MinY = y, MaxX = x + d, MaxY = y + d };
+    }
+
+    // ---- 无名单时的学号范围 ---------------------------------------------------
+
+    private const float NumD = 34f;
 
     public static RectF NumPlusRect(in RectF card, float u)
-        => Circle(RCX(card) + 96f * u, card.MinY + 334f * u, 28f * u);
-
-    public static RectF NumTextRect(in RectF card, float u) => new()
     {
-        MinX = RCX(card) - 70f * u, MinY = card.MinY + 318f * u,
-        MaxX = RCX(card) + 70f * u, MaxY = card.MinY + 350f * u,
-    };
+        float d = NumD * u;
+        return new RectF { MinX = card.MaxX - Pad * u - d, MinY = BotY(card, u) + (BotH * u - d) * 0.5f,
+                           MaxX = card.MaxX - Pad * u, MaxY = BotY(card, u) + (BotH * u - d) * 0.5f + d };
+    }
 
-    public static RectF NumLabelRect(in RectF card, float u) => new()
+    public static RectF NumMinusRect(in RectF card, float u)
     {
-        MinX = RCX(card) - 100f * u, MinY = card.MinY + 296f * u,
-        MaxX = RCX(card) + 100f * u, MaxY = card.MinY + 316f * u,
-    };
+        var p = NumPlusRect(card, u);
+        float w = p.MaxX - p.MinX;
+        return new RectF { MinX = p.MinX - 12f * u - w, MinY = p.MinY, MaxX = p.MinX - 12f * u, MaxY = p.MaxY };
+    }
+
+    public static RectF NumTextRect(in RectF card, float u)
+    {
+        var m = NumMinusRect(card, u);
+        float w = 130f * u;
+        return new RectF { MinX = m.MinX - 14f * u - w, MinY = BotY(card, u),
+                           MaxX = m.MinX - 14f * u, MaxY = BotY(card, u) + BotH * u };
+    }
+
+    public static RectF NumLabelRect(in RectF card, float u)
+    {
+        var t = NumTextRect(card, u);
+        return new RectF { MinX = t.MinX, MinY = t.MinY - 26f * u, MaxX = t.MaxX, MaxY = t.MinY - 4f * u };
+    }
+
+    // ---- 命中 ---------------------------------------------------------------
 
     public static RollZone ZoneAt(in RectF card, float u, float x, float y)
     {
@@ -345,7 +581,6 @@ internal static class RollWin
         if (NumPlusRect(card, u).Contains(x, y)) return RollZone.NumPlus;
         if (DrawRect(card, u).Contains(x, y)) return RollZone.Draw;
         if (PoolResetRect(card, u).Contains(x, y)) return RollZone.PoolReset;
-
         if (ReloadRect(card, u).Contains(x, y)) return RollZone.Reload;
         return RollZone.Body;
     }

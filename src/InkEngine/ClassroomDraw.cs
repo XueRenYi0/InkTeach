@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
-using System.Text;
+using Vortice;
 using Vortice.Direct2D1;
 using Vortice.DirectWrite;
 using Vortice.Mathematics;
@@ -9,33 +9,138 @@ using Vortice.Mathematics;
 namespace InkEngine;
 
 /// <summary>
-/// 课堂窗（计时/点名）的绘制：1:1 复刻 InkClass 的浅色面板版式
-/// （CountdownTimerWindow / RandWindow，GPL-3.0）。
-/// 与 Overlay.cs 同属 OverlayWindow（partial）；配色原值：
-/// 面板 #F0F3F9、描边 #0066BF、关闭 #E32A34、次级白钮 #FBFBFD、
-/// 药丸 #E8EAF0、数字待机 #5B5D5F、灰罩 #BFBFBF。
+/// 课堂窗（计时 / 点名）的绘制。**2026-10-05 重设计**：原来是 InkClass
+/// CountdownTimerWindow / RandWindow 的 1:1 复刻（浅蓝面板 + 蓝描边 + 一排圆形
+/// 按钮 + 红色圆钮关闭），那套版式本身就是别人的识别特征。现在改成和主工具带 /
+/// 「更多」面板同一套语言，并且**支持深色主题**（原来只有浅色一档）。
+///
+/// 颜色的**唯一来源是界面推上来的 <see cref="UiTheme"/>**（`InkUi.Tokens` 那套），
+/// 引擎自己不再存一份写死的浅色值——多存一份就等于多一处会漂移的真相。
+/// 与 Overlay.cs 同属 OverlayWindow（partial）。
 /// </summary>
 internal sealed partial class OverlayWindow
 {
-    // ── InkClass 课堂窗配色（源码原值） ────────────────────────────────
-    static readonly Color4 WinPanel = new(0xF0 / 255f, 0xF3 / 255f, 0xF9 / 255f, 1f);
-    static readonly Color4 WinBorder = new(0x00 / 255f, 0x66 / 255f, 0xBF / 255f, 1f);
-    static readonly Color4 WinAccent = new(0x00 / 255f, 0x66 / 255f, 0xBF / 255f, 1f);
-    static readonly Color4 WinDanger = new(0xE3 / 255f, 0x2A / 255f, 0x34 / 255f, 1f);
-    static readonly Color4 WinLightBtn = new(0xFB / 255f, 0xFB / 255f, 0xFD / 255f, 1f);
-    static readonly Color4 WinDisableBg = new(0xF3 / 255f, 0xF5 / 255f, 0xF9 / 255f, 1f);
-    static readonly Color4 WinDisableInk = new(0x9D / 255f, 0x9D / 255f, 0x9E / 255f, 1f);
-    static readonly Color4 WinPillBg = new(0xE8 / 255f, 0xEA / 255f, 0xF0 / 255f, 1f);
-    static readonly Color4 WinDigitIdle = new(0x5B / 255f, 0x5D / 255f, 0x5F / 255f, 1f);
-    static readonly Color4 WinCover = new(0xBF / 255f, 0xBF / 255f, 0xBF / 255f, 1f);
-    static readonly Color4 WinMuted = new(0x7C / 255f, 0x82 / 255f, 0x8C / 255f, 1f);
-    static readonly Color4 WinInk = new(0x1A / 255f, 0x1D / 255f, 0x22 / 255f, 1f);
-    static readonly Color4 WinTrack = new(0xDF / 255f, 0xE4 / 255f, 0xEC / 255f, 1f);
-    static readonly Color4 WinLine = new(0xD8 / 255f, 0xDD / 255f, 0xE6 / 255f, 1f);
-    static readonly Color4 WinWhite = new(1f, 1f, 1f, 1f);
-    static readonly Color4 WinShadow = new(0f, 0f, 0f, 0.16f);
+    /// <summary>课堂窗这一笔要的颜色，全部由 <see cref="UiTheme"/> 现场算出来。</summary>
+    private readonly record struct WinPal(
+        Color4 Panel, Color4 Border, Color4 Ink, Color4 Muted, Color4 Soft,
+        Color4 Accent, Color4 AccentInk, Color4 Track, Color4 Danger, Color4 DangerSoft,
+        Color4 RingArc, float Corner);
+
+    /// <summary>
+    /// 按当前主题取色。两个"自己决定的"值在这里说明理由：
+    ///
+    /// · **RingArc（环的进度色）＝ 当前笔色**——这是本项目自己的一个想法：课堂窗
+    ///   跟着你手里的笔走。⚠ 但**笔色可能是白**（黑板上写白字），白环画在浅色面板上
+    ///   等于没有，所以要过一道**对比度闸**：用 WCAG 的相对亮度对比度，
+    ///   **低于 3:1 就退回强调色**。
+    ///   为什么用对比度而不是"亮度差"：亮度差是拿绝对值比，红笔配深色面板的差只有
+    ///   0.17（看着明明很清楚），第一版就误判成"太暗"把红环换成了蓝环，看图才发现。
+    ///   这条闸不能省——"跟着笔色走"好看，"看不见时间"是事故。
+    /// · **Danger 不跟主题走**：红是"到点 / 关闭"的固定语义，两套主题里取同一个值，
+    ///   免得深浅两档的"红"不是同一个红。
+    /// </summary>
+    private static WinPal PalFor(UiTheme t, Color4 penColor)
+    {
+        var danger = new Color4(0.86f, 0.22f, 0.25f, 1f);
+        var accent = t.ActiveBg;
+        var arc = Contrast(penColor, t.Panel) >= 3.0f ? penColor : accent;
+        return new WinPal(
+            Panel: t.Panel, Border: t.PanelBorder, Ink: t.Text, Muted: t.TextMuted,
+            Soft: t.Hover, Accent: accent, AccentInk: t.ActiveText, Track: t.Hover,
+            Danger: danger, DangerSoft: new Color4(danger.R, danger.G, danger.B, 0.12f),
+            RingArc: arc, Corner: t.CornerRadius);
+    }
+
+    /// <summary>WCAG 相对亮度对比度（1:1 ～ 21:1）；alpha 一律当不透明看。</summary>
+    private static float Contrast(Color4 a, Color4 b)
+    {
+        float la = RelLum(a), lb = RelLum(b);
+        return (MathF.Max(la, lb) + 0.05f) / (MathF.Min(la, lb) + 0.05f);
+    }
+
+    private static float RelLum(Color4 c)
+        => 0.2126f * Lin(c.R) + 0.7152f * Lin(c.G) + 0.0722f * Lin(c.B);
+
+    private static float Lin(float v)
+        => v <= 0.04045f ? v / 12.92f : MathF.Pow((v + 0.055f) / 1.055f, 2.4f);
+
+    /// <summary>主题给的投影层（绘制入口缓存一次，别每帧现算）。</summary>
+    private UiShadowLayer[] _winShadow = Array.Empty<UiShadowLayer>();
 
     private readonly Dictionary<(int Px, bool Bold), IDWriteTextFormat> _winFormats = new();
+
+    // =====================================================================
+    //  通用小工具（卡片 / 按钮 / 名牌 / 环）
+    // =====================================================================
+
+    /// <summary>
+    /// 卡片：面板底 + 1px 描边 + 圆角，下面垫主题给的投影层
+    /// （<c>UiTheme.Shadow</c>，和「更多」面板同一个来源）。
+    /// </summary>
+    private void WinCard(in RectF r, float u, in WinPal p)
+    {
+        float rad = p.Corner * u;
+        foreach (var s in _winShadow)
+        {
+            _scratch.Color = s.Color;
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new RawRectF(r.MinX - s.Inflate * u, r.MinY + s.Dy * u - s.Inflate * u,
+                             r.MaxX + s.Inflate * u, r.MaxY + s.Dy * u + s.Inflate * u), rad, rad), _scratch);
+        }
+        _scratch.Color = p.Panel;
+        var box = new RoundedRectangle(new RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), rad, rad);
+        _ctx.FillRoundedRectangle(box, _scratch);
+        _scratch.Color = p.Border;
+        _ctx.DrawRoundedRectangle(box, _scratch, MathF.Max(1f, u));
+    }
+
+    /// <summary>圆角方钮（幽灵底）。窗口钮、步进钮、名片底都用它。</summary>
+    private void WinGhostBtn(in RectF r, float u, in WinPal p, float radius = 10f)
+    {
+        float rad = MathF.Min(radius * u, (r.MaxY - r.MinY) * 0.5f);
+        _scratch.Color = p.Soft;
+        _ctx.FillRoundedRectangle(new RoundedRectangle(
+            new RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), rad, rad), _scratch);
+    }
+
+    /// <summary>药丸主按钮（图标 + 文字）。计时窗的开始/暂停/重置、点名的抽奖都用它。</summary>
+    private void WinPillBtn(in RectF r, float u, in WinPal p, string glyph, string label,
+                             Color4 fill, Color4 ink)
+    {
+        float rad = (r.MaxY - r.MinY) * 0.5f;
+        _scratch.Color = fill;
+        _ctx.FillRoundedRectangle(new RoundedRectangle(
+            new RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), rad, rad), _scratch);
+        float cx = MidX(r), cy = MidY(r);
+        if (glyph != null && label != null)
+        {
+            WinGlyph(glyph, cx - 34f * u, cy, 18f * u, ink, u);
+            WinText(label, new RectF { MinX = cx - 34f * u, MinY = r.MinY, MaxX = r.MaxX, MaxY = r.MaxY },
+                    17f * u, ink, true);
+        }
+        else if (glyph != null) WinGlyph(glyph, cx, cy, 18f * u, ink, u);
+        else if (label != null) WinText(label, r, 17f * u, ink, true);
+    }
+
+    /// <summary>一个名字名牌。抽中的名字用强调色底。</summary>
+    private void WinChip(in RectF r, float size, string name, in WinPal p)
+    {
+        float rad = (r.MaxY - r.MinY) * 0.5f;
+        _scratch.Color = p.Accent;
+        _ctx.FillRoundedRectangle(new RoundedRectangle(
+            new RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), rad, rad), _scratch);
+        WinText(name, r, size, p.AccentInk, true);
+    }
+
+    /// <summary>一行"图标 + 文字"（环下面那行说明用）。</summary>
+    private void WinIconText(string glyph, in RectF r, float u, string text, Color4 ink)
+    {
+        float w = (text.Length * 13f + 30f) * u;
+        float x = MidX(r) - w * 0.5f;
+        WinGlyph(glyph, x + 8f * u, MidY(r), 14f * u, ink, u);
+        WinText(text, new RectF { MinX = x + 20f * u, MinY = r.MinY, MaxX = x + w, MaxY = r.MaxY },
+                14f * u, ink, false);
+    }
 
     // =====================================================================
     //  计时窗
@@ -44,111 +149,134 @@ internal sealed partial class OverlayWindow
     private void DrawTimerCard(InkEngine app)
     {
         if (!app.TimerCardOpen) return;
+        var pal = PalFor(app.FloatingTheme, app.CurrentColor);
+        _winShadow = app.FloatingTheme.Shadow ?? Array.Empty<UiShadowLayer>();
+
         float dpi = Dpi / 96f;
         var win = app.TimerCardRect();
         float u = app.TimerUnit();
 
-        // 最小化：320×150，只剩剩余时间 + 底部拖动条（比 InkClass 的 400×250 更紧凑，用户 2026-10-03 定）
+        // 最小化：320×150，只剩剩余时间 + 底部拖动条（用户 2026-10-03 定）
         if (app.TimerMinimized)
         {
-            WinCardRect(win, dpi, 10f * dpi);
+            WinCard(win, dpi, pal);
             WinText(app.TimerDisplayText(),
                     new RectF { MinX = win.MinX + 6f * dpi, MinY = win.MinY + 14f * dpi,
                                 MaxX = win.MaxX - 6f * dpi, MaxY = win.MaxY - 44f * dpi },
-                    52f * dpi, WinInk, true);
+                    52f * dpi, pal.Ink, true);
             var pill = TimerWin.MinimalPillRect(win, dpi);
-            _scratch.Color = new Color4(0.53f, 0.53f, 0.53f, 1f);
+            _scratch.Color = pal.Muted;
             float pr = (pill.MaxY - pill.MinY) * 0.5f;
             _ctx.FillRoundedRectangle(new RoundedRectangle(
-                new Vortice.RawRectF(pill.MinX, pill.MinY, pill.MaxX, pill.MaxY), pr, pr), _scratch);
+                new RawRectF(pill.MinX, pill.MinY, pill.MaxX, pill.MaxY), pr, pr), _scratch);
             return;
         }
 
         var card = TimerWin.CardRect(win, u, false, app.TimerExpanded);
         float lu = TimerWin.Layout(card, u);
-        WinCardRect(card, lu, app.TimerExpanded ? 0f : 10f * lu);
+        WinCard(card, lu, pal);
 
-        // 三模式页签
+        // ---- 顶栏：左边分段（凹槽 + 选中药丸）----
+        var trough = TimerWin.SegTroughRect(card, lu);
+        float trr = (trough.MaxY - trough.MinY) * 0.5f;
+        _scratch.Color = pal.Soft;
+        _ctx.FillRoundedRectangle(new RoundedRectangle(
+            new RawRectF(trough.MinX, trough.MinY, trough.MaxX, trough.MaxY), trr, trr), _scratch);
         for (int i = 0; i < 3; i++)
         {
             var r = TimerWin.TabRect(card, lu, i);
             bool on = (int)app.TimerKind == i;
-            float rr = (r.MaxY - r.MinY) * 0.5f;
-            var box = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), rr, rr);
             if (on)
             {
-                _scratch.Color = WinAccent;
-                _ctx.FillRoundedRectangle(box, _scratch);
+                float rr = (r.MaxY - r.MinY) * 0.5f;
+                _scratch.Color = pal.Accent;
+                _ctx.FillRoundedRectangle(new RoundedRectangle(
+                    new RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), rr, rr), _scratch);
             }
-            else
-            {
-                _scratch.Color = new Color4(1f, 1f, 1f, 0.62f);
-                _ctx.FillRoundedRectangle(box, _scratch);
-                _scratch.Color = WinLine;
-                _ctx.DrawRoundedRectangle(box, _scratch, 1f * lu);
-            }
-            WinText(TimerWin.ModeName((TimerMode)i), r, 14f * lu, on ? WinWhite : WinDigitIdle, on);
+            WinText(TimerWin.ModeName((TimerMode)i), r, 14f * lu, on ? pal.AccentInk : pal.Muted, on);
             // 页签小圆点：该模式在跑（亮）/ 暂停（灰）——切走也继续跑（用户 2026-10-03 定）
             if (app.TimerTabRunning(i) || app.TimerTabPaused(i))
             {
                 bool runDot = app.TimerTabRunning(i);
                 _scratch.Color = runDot
-                    ? (on ? WinWhite : WinAccent)
-                    : (on ? new Color4(1f, 1f, 1f, 0.65f) : WinMuted);
-                _ctx.FillEllipse(new Ellipse(new Vector2(r.MaxX - 11f * lu, r.MinY + 11f * lu), 3.5f * lu, 3.5f * lu), _scratch);
+                    ? (on ? pal.AccentInk : pal.Accent)
+                    : (on ? pal.AccentInk : pal.Muted);
+                _ctx.FillEllipse(new Ellipse(new Vector2(r.MaxX - 10f * lu, r.MinY + 10f * lu),
+                                             3.5f * lu, 3.5f * lu), _scratch);
             }
         }
 
+        // ---- 顶栏：右上角三个窗口钮（收起 / 全屏 / 关闭）----
+        foreach (var (zone, glyph) in new[]
+        {
+            (TimerZone.Minimize, "chevdown"), (TimerZone.Fullscreen, "max"), (TimerZone.Close, "close"),
+        })
+        {
+            var r = TimerWin.BtnRect(card, lu, zone);
+            WinGhostBtn(r, lu, pal, 8f);
+            if (zone == TimerZone.Close)
+            {
+                // 关闭钮只加一层很淡的红底 + 红字：认得出来，又不会在投影上砸出一个红疙瘩。
+                _scratch.Color = pal.DangerSoft;
+                float rr = 8f * lu;
+                _ctx.FillRoundedRectangle(new RoundedRectangle(
+                    new RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), rr, rr), _scratch);
+                WinGlyph(glyph, MidX(r), MidY(r), 15f * lu, pal.Danger, lu);
+            }
+            else WinGlyph(glyph, MidX(r), MidY(r), 15f * lu, pal.Muted, lu);
+        }
+
+        bool finished = app.TimerFinished;
+        var bigInk = finished ? pal.Danger : pal.Ink;
+
         if (app.TimerSettingsOpen)
         {
-            // 改时长态：时/分/秒各自 ±5 / ±1 + ✓
+            // 改时长态：三列（时 / 分 / 秒），每列 2×2 的 ±5 / ±1，最后一条整宽「确定」。
             for (int unit = 0; unit < 3; unit++)
+            {
+                WinText(TimerWin.UnitName(unit), TimerWin.StepLabelRect(card, lu, unit),
+                        14f * lu, pal.Muted, false);
                 for (int pair = 0; pair < 2; pair++)
                     for (int row = 0; row < 2; row++)
                     {
                         var r = TimerWin.StepRect(card, lu, unit, pair, row);
-                        float rr = 6f * lu;
-                        var box = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), rr, rr);
-                        _scratch.Color = WinWhite;
-                        _ctx.FillRoundedRectangle(box, _scratch);
-                        _scratch.Color = WinLine;
-                        _ctx.DrawRoundedRectangle(box, _scratch, 1f * lu);
+                        WinGhostBtn(r, lu, pal, 8f);
                         string label = (pair == 0 ? "+" : "−") + (row == 0 ? "5" : "1");
-                        WinText(label, r, 12.5f * lu, WinInk, true);
+                        WinText(label, r, 15f * lu, pal.Ink, true);
                     }
+            }
             WinText($"{app.TimerSetH:00}:{app.TimerSetM:00}:{app.TimerSetS:00}",
-                    TimerWin.EditValueRect(card, lu), 66f * lu, WinInk, true);
-            var ok = TimerWin.OkRect(card, lu);
-            WinBtn(MidX(ok), MidY(ok), Wid(ok), WinAccent, WinWhite, "check", lu);
+                    TimerWin.EditValueRect(card, lu), 72f * lu, bigInk, true);
+            WinPillBtn(TimerWin.OkRect(card, lu), lu, pal, "check", "确定", pal.Accent, pal.AccentInk);
         }
         else
         {
             // 环 + 压在上面的大字
-            WinRing(TimerWin.CX(card), TimerWin.RingCY(card, lu), TimerWin.RingR(lu), TimerWin.RingTh(lu),
-                    app.TimerRingFraction());
-            WinText(app.TimerDisplayText(), TimerWin.ValueRect(card, lu), 66f * lu, WinInk, true);
+            WinRing(TimerWin.CX(card), TimerWin.RingCY(card, lu), TimerWin.RingR(lu),
+                    TimerWin.RingTh(lu), app.TimerRingFraction(),
+                    finished ? pal.Danger : pal.RingArc, pal.Track);
+            WinText(app.TimerDisplayText(), TimerWin.ValueRect(card, lu), 76f * lu, bigInk, true);
 
-            // 药丸：跑着=预计结束时刻；到点=红「时间到」
-            if (app.TimerKind == TimerMode.Countdown && app.TimerActive && !app.TimerFinished)
-                WinPill(TimerWin.PillRect(card, lu), app.TimerEndText(), lu, WinPillBg, WinInk, "clock");
-            else if (app.TimerKind == TimerMode.Countdown && app.TimerFinished)
-                WinPill(TimerWin.PillRect(card, lu), "时间到", lu, WinDanger, WinWhite, null);
+            // 环下面一行**纯文字**（原来是个灰药丸——那是 InkClass 的签名形状）
+            if (app.TimerKind == TimerMode.Countdown && app.TimerActive && !finished)
+                WinIconText("clock", TimerWin.PillRect(card, lu), lu, app.TimerEndText(), pal.Muted);
+            else if (app.TimerKind == TimerMode.Countdown && finished)
+                WinText("时间到", TimerWin.PillRect(card, lu), 17f * lu, pal.Danger, true);
+            else if (app.TimerKind == TimerMode.Stopwatch)
+                WinText("秒表", TimerWin.PillRect(card, lu), 15f * lu, pal.Muted, false);
+            else if (app.TimerKind == TimerMode.CountUp && app.TimerActive)
+                WinIconText("clock", TimerWin.PillRect(card, lu), lu, "正在计时", pal.Muted);
+
+            // ---- 底排：开始 / 暂停 ＋ 重置（带文字，投影上远处也读得出来）----
+            bool running = app.TimerActive && !app.TimerPaused && !finished;
+            WinPillBtn(TimerWin.BtnRect(card, lu, TimerZone.Start), lu, pal,
+                       running ? "pause" : "play",
+                       running ? "暂停" : finished ? "再来一次" : app.TimerActive ? "继续" : "开始",
+                       pal.Accent, pal.AccentInk);
+            bool resetOn = app.TimerActive || finished;
+            WinPillBtn(TimerWin.BtnRect(card, lu, TimerZone.Reset), lu, pal, "sync", "重置",
+                       pal.Soft, resetOn ? pal.Ink : pal.Muted);
         }
-
-        // 底部：开始/暂停、重置、最小化、全屏、关闭
-        bool running = app.TimerActive && !app.TimerPaused && !app.TimerFinished;
-        var startR = TimerWin.BtnRect(card, lu, TimerZone.Start);
-        WinBtn(MidX(startR), MidY(startR), Wid(startR), WinAccent, WinWhite, running ? "pause" : "play", lu);
-        var resetR = TimerWin.BtnRect(card, lu, TimerZone.Reset);
-        bool resetOn = app.TimerActive || app.TimerFinished;
-        WinBtn(MidX(resetR), MidY(resetR), Wid(resetR), resetOn ? WinLightBtn : WinDisableBg,
-               resetOn ? WinInk : WinDisableInk, "sync", lu);
-        var minR = TimerWin.BtnRect(card, lu, TimerZone.Minimize);
-        WinBtn(MidX(minR), MidY(minR), Wid(minR), WinLightBtn, WinInk, "chevdown", lu);
-        var fsR = TimerWin.BtnRect(card, lu, TimerZone.Fullscreen);
-        WinBtn(MidX(fsR), MidY(fsR), Wid(fsR), WinLightBtn, WinInk, "max", lu);
-        var closeR = TimerWin.BtnRect(card, lu, TimerZone.Close);
-        WinBtn(MidX(closeR), MidY(closeR), Wid(closeR), WinDanger, WinWhite, "close", lu);
     }
 
     // =====================================================================
@@ -158,99 +286,85 @@ internal sealed partial class OverlayWindow
     private void DrawRollCard(InkEngine app)
     {
         if (!app.RollCardOpen) return;
+        var pal = PalFor(app.FloatingTheme, app.CurrentColor);
+        _winShadow = app.FloatingTheme.Shadow ?? Array.Empty<UiShadowLayer>();
+
         var card = app.RollCardRect();
         float u = app.RollUnit();
-        WinCardRect(card, u, 10f * u);
+        WinCard(card, u, pal);
 
         bool rolling = app.RollingNow;
 
-        // 左栏：滚动预览 / 结果（1/2/3 列） / 待抽
+        // ---- 顶栏：右上角一个 ✕ ----
+        var close = RollWin.CloseRect(card, u);
+        WinGhostBtn(close, u, pal, 8f);
+        WinGlyph("close", MidX(close), MidY(close), 15f * u, pal.Muted, u);
+
+        // ---- 名牌区 ----
+        var area = RollWin.ResultsRect(card, u);
         if (rolling)
         {
-            var area = RollWin.ResultsRect(card, u);
-            WinText(app.RollFaceNow, area, MathF.Min(64f * u, (area.MaxY - area.MinY) * 0.38f), WinInk, true);
+            // 滚动中：正在滚的那个名字**单独放大**、在结果区里居中——最后一眼要看的就是它。
+            float fs = MathF.Min(76f * u, (area.MaxY - area.MinY) * 0.52f);
+            float h = fs + 30f * u;
+            var box = new RectF { MinX = area.MinX, MinY = (area.MinY + area.MaxY - h) * 0.5f,
+                                  MaxX = area.MaxX, MaxY = (area.MinY + area.MaxY - h) * 0.5f + h };
+            WinText(app.RollFaceNow, box, fs, pal.Accent, true);
         }
         else if (app.RollResultNow.Length > 0)
         {
-            var res = app.RollResultNow;
-            int n = res.Length;
-            int cols = RollWin.Cols(n);
-            int rows = (n + cols - 1) / cols;
-            var area = RollWin.ResultsRect(card, u);
-            float px = MathF.Min(70f * u, (area.MaxY - area.MinY) / (rows * 1.45f));
-            for (int ci = 0; ci < cols; ci++)
-            {
-                int from = ci * n / cols;
-                int to = (ci + 1) * n / cols;
-                if (to <= from) continue;
-                var sb = new StringBuilder();
-                for (int i = from; i < to; i++)
-                {
-                    if (sb.Length > 0) sb.Append('\n');
-                    sb.Append(res[i]);
-                }
-                WinText(sb.ToString(), RollWin.ColRect(card, u, cols, ci), px, WinInk, true);
-            }
+            var chips = RollWin.Chips(area, app.RollResultNow, u);
+            float fs = RollWin.ChipFontSize(area, app.RollResultNow.Length, u);
+            foreach (var c in chips) WinChip(c.R, fs, c.Name, pal);
         }
         else
         {
-            WinText("点「抽奖」开始", RollWin.ResultsRect(card, u), 22f * u, WinMuted, false);
+            WinText("按「抽奖」开始", area, 20f * u, pal.Muted, false);
         }
 
-        // 右栏：人数 [-  3  +]
+        // ---- 控制行：人数步进（左）＋ 抽奖（右）----
         var minus = RollWin.MinusRect(card, u);
-        WinBtn(MidX(minus), MidY(minus), Wid(minus),
-               rolling ? WinDisableBg : WinLightBtn, rolling ? WinDisableInk : WinInk, "minus", u);
+        WinGhostBtn(minus, u, pal, 10f);
+        WinGlyph("minus", MidX(minus), MidY(minus), 16f * u, rolling ? pal.Muted : pal.Ink, u);
         var plus = RollWin.PlusRect(card, u);
-        WinBtn(MidX(plus), MidY(plus), Wid(plus),
-               rolling ? WinDisableBg : WinLightBtn, rolling ? WinDisableInk : WinInk, "plus", u);
-        WinText(app.RollCountNow.ToString(), RollWin.CountRect(card, u), 44f * u,
-                rolling ? WinDisableInk : WinInk, true);
+        WinGhostBtn(plus, u, pal, 10f);
+        WinGlyph("plus", MidX(plus), MidY(plus), 16f * u, rolling ? pal.Muted : pal.Ink, u);
+        WinText(app.RollCountNow.ToString(), RollWin.CountRect(card, u), 34f * u,
+                rolling ? pal.Muted : pal.Ink, true);
 
-        // 抽奖大按钮（滚动时灰罩，InkClass 同款）
-        var dr = RollWin.DrawRect(card, u);
-        var drr = new RoundedRectangle(new Vortice.RawRectF(dr.MinX, dr.MinY, dr.MaxX, dr.MaxY), 10f * u, 10f * u);
-        _scratch.Color = rolling ? WinCover : WinAccent;
-        _ctx.FillRoundedRectangle(drr, _scratch);
-        float bx = MidX(dr);
-        WinGlyph("person", bx - 42f * u, MidY(dr), 20f * u, WinWhite, u);
-        WinText("抽奖", new RectF { MinX = bx - 10f * u, MinY = dr.MinY, MaxX = dr.MaxX - 14f * u, MaxY = dr.MaxY },
-                28f * u, WinWhite, true);
+        WinPillBtn(RollWin.DrawRect(card, u), u, pal, rolling ? null : "person",
+                   rolling ? "滚动中…" : "抽奖",
+                   rolling ? pal.Soft : pal.Accent, rolling ? pal.Muted : pal.AccentInk);
 
-        // 不重复池：已抽 / 总数 + 重置
+        // ---- 信息行：不重复池 ----
         WinText($"不重复池：{app.RollDrawnNow} / {app.RollTotalNow}",
-                RollWin.PoolTextRect(card, u), 12f * u, WinMuted, false);
-        WinText("重置", RollWin.PoolResetRect(card, u), 12f * u, WinAccent, true);
+                RollWin.PoolTextRect(card, u), 14f * u, pal.Muted, false);
+        WinText("重置", RollWin.PoolResetRect(card, u), 14f * u, pal.Accent, true);
 
-        // 无名单：学号范围 1–N 可调（有名单则显示名单人数，加减不生效）
-        if (app.RollHasNames)
-        {
-            WinText($"名单 {app.Names.Length} 人", RollWin.NumTextRect(card, u), 14f * u, WinMuted, false);
-        }
-        else
-        {
-            WinText("学号范围", RollWin.NumLabelRect(card, u), 11f * u, WinMuted, false);
-            WinText($"1 – {app.RollMaxNumNow}", RollWin.NumTextRect(card, u), 16f * u, WinInk, true);
-            var nm = RollWin.NumMinusRect(card, u);
-            WinBtn(MidX(nm), MidY(nm), Wid(nm), WinLightBtn, WinInk, "minus", u);
-            var np = RollWin.NumPlusRect(card, u);
-            WinBtn(MidX(np), MidY(np), Wid(np), WinLightBtn, WinInk, "plus", u);
-        }
-
-        // 底部：名单药丸 + 重读 + 关闭
+        // ---- 底行：名单 / 学号范围 ----
         var names = RollWin.NamesRect(card, u);
         float nr = (names.MaxY - names.MinY) * 0.5f;
-        var nbox = new RoundedRectangle(new Vortice.RawRectF(names.MinX, names.MinY, names.MaxX, names.MaxY), nr, nr);
-        _scratch.Color = WinLightBtn;
-        _ctx.FillRoundedRectangle(nbox, _scratch);
-        _scratch.Color = WinLine;
-        _ctx.DrawRoundedRectangle(nbox, _scratch, 1f * u);
-        string nt = app.RollHasNames ? $"名单：{app.Names.Length} 人" : "未导入名单";
-        WinText(nt, names, 14f * u, WinInk, false);
+        _scratch.Color = pal.Soft;
+        _ctx.FillRoundedRectangle(new RoundedRectangle(
+            new RawRectF(names.MinX, names.MinY, names.MaxX, names.MaxY), nr, nr), _scratch);
+        WinText(app.RollHasNames ? $"名单：{app.Names.Length} 人" : "未导入名单",
+                names, 14f * u, pal.Ink, false);
         var rel = RollWin.ReloadRect(card, u);
-        WinBtn(MidX(rel), MidY(rel), Wid(rel), WinLightBtn, WinInk, "sync", u);
-        var cl = RollWin.CloseRect(card, u);
-        WinBtn(MidX(cl), MidY(cl), Wid(cl), WinDanger, WinWhite, "close", u);
+        WinGhostBtn(rel, u, pal, 8f);
+        WinGlyph("sync", MidX(rel), MidY(rel), 15f * u, pal.Muted, u);
+
+        if (!app.RollHasNames)
+        {
+            // 没有名单文件时，底行右侧给"学号范围 1–N"（有名单则加减本来也不生效，不画）
+            WinText("学号范围", RollWin.NumLabelRect(card, u), 12f * u, pal.Muted, false);
+            WinText($"1 – {app.RollMaxNumNow}", RollWin.NumTextRect(card, u), 20f * u, pal.Ink, true);
+            var nm = RollWin.NumMinusRect(card, u);
+            WinGhostBtn(nm, u, pal, 8f);
+            WinGlyph("minus", MidX(nm), MidY(nm), 13f * u, pal.Ink, u);
+            var np = RollWin.NumPlusRect(card, u);
+            WinGhostBtn(np, u, pal, 8f);
+            WinGlyph("plus", MidX(np), MidY(np), 13f * u, pal.Ink, u);
+        }
     }
 
     // =====================================================================
@@ -259,7 +373,6 @@ internal sealed partial class OverlayWindow
 
     private static float MidX(in RectF r) => (r.MinX + r.MaxX) * 0.5f;
     private static float MidY(in RectF r) => (r.MinY + r.MaxY) * 0.5f;
-    private static float Wid(in RectF r) => r.MaxX - r.MinX;
 
     private IDWriteTextFormat WinFmt(float px, bool bold = false)
     {
@@ -283,50 +396,12 @@ internal sealed partial class OverlayWindow
         _ctx.DrawText(s, WinFmt(px, bold), new Rect(r.MinX, r.MinY, r.MaxX - r.MinX, r.MaxY - r.MinY), _scratch);
     }
 
-    /// <summary>浅色卡片：投影 + #F0F3F9 底 + 1px #0066BF 描边 + 圆角。</summary>
-    private void WinCardRect(in RectF r, float u, float radius)
-    {
-        _scratch.Color = WinShadow;
-        _ctx.FillRoundedRectangle(new RoundedRectangle(
-            new Vortice.RawRectF(r.MinX, r.MinY + 6f * u, r.MaxX, r.MaxY + 6f * u), radius, radius), _scratch);
-        _scratch.Color = WinPanel;
-        var box = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), radius, radius);
-        _ctx.FillRoundedRectangle(box, _scratch);
-        _scratch.Color = WinBorder;
-        _ctx.DrawRoundedRectangle(box, _scratch, 1f * u);
-    }
-
-    private void WinBtn(float cx, float cy, float d, Color4 fill, Color4 ink, string glyph, float u)
-    {
-        _scratch.Color = new Color4(0f, 0f, 0f, 0.10f);
-        _ctx.FillEllipse(new Ellipse(new Vector2(cx, cy + 1.5f * u), d * 0.5f, d * 0.5f), _scratch);
-        _scratch.Color = fill;
-        _ctx.FillEllipse(new Ellipse(new Vector2(cx, cy), d * 0.5f, d * 0.5f), _scratch);
-        WinGlyph(glyph, cx, cy, d * 0.52f, ink, u);
-    }
-
-    private void WinPill(in RectF r, string text, float u, Color4 fill, Color4 ink, string icon)
-    {
-        float rr = (r.MaxY - r.MinY) * 0.5f;
-        _scratch.Color = fill;
-        _ctx.FillRoundedRectangle(new RoundedRectangle(
-            new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), rr, rr), _scratch);
-        float tx = r.MinX + 6f * u;
-        if (icon != null)
-        {
-            WinGlyph(icon, r.MinX + 22f * u, MidY(r), 16f * u, ink, u);
-            tx = r.MinX + 34f * u;
-        }
-        WinText(text, new RectF { MinX = tx, MinY = r.MinY, MaxX = r.MaxX - 6f * u, MaxY = r.MaxY },
-                14f * u, ink, true);
-    }
-
     /// <summary>环形进度：底环 + 从 12 点顺时针的进度弧（用短线段拼，D2D DrawArc 签名不稳）。</summary>
-    private void WinRing(float cx, float cy, float r, float th, float frac)
+    private void WinRing(float cx, float cy, float r, float th, float frac, Color4 arc, Color4 track)
     {
-        _ctx.DrawEllipse(new Ellipse(new Vector2(cx, cy), r, r), SetBrush(WinTrack), th);
+        _ctx.DrawEllipse(new Ellipse(new Vector2(cx, cy), r, r), SetBrush(track), th);
         if (frac <= 0.001f) return;
-        WinArc(cx, cy, r, 0f, 360f * Math.Min(frac, 1f), th, WinAccent);
+        WinArc(cx, cy, r, 0f, 360f * Math.Min(frac, 1f), th, arc);
     }
 
     private void WinArc(float cx, float cy, float r, float a0, float a1, float th, Color4 col)
@@ -376,9 +451,9 @@ internal sealed partial class OverlayWindow
             {
                 float w = s * 0.24f, h = s * 0.92f, gap = s * 0.26f, rr = w * 0.5f;
                 _ctx.FillRoundedRectangle(new RoundedRectangle(
-                    new Vortice.RawRectF(cx - gap - w, cy - h * 0.5f, cx - gap, cy + h * 0.5f), rr, rr), _scratch);
+                    new RawRectF(cx - gap - w, cy - h * 0.5f, cx - gap, cy + h * 0.5f), rr, rr), _scratch);
                 _ctx.FillRoundedRectangle(new RoundedRectangle(
-                    new Vortice.RawRectF(cx + gap, cy - h * 0.5f, cx + gap + w, cy + h * 0.5f), rr, rr), _scratch);
+                    new RawRectF(cx + gap, cy - h * 0.5f, cx + gap + w, cy + h * 0.5f), rr, rr), _scratch);
                 break;
             }
             case "plus":
@@ -422,13 +497,20 @@ internal sealed partial class OverlayWindow
                 break;
             }
             case "close":
-                _ctx.DrawLine(new Vector2(cx - s * 0.34f, cy - s * 0.34f), new Vector2(cx + s * 0.34f, cy + s * 0.34f), _scratch, th);
-                _ctx.DrawLine(new Vector2(cx + s * 0.34f, cy - s * 0.34f), new Vector2(cx - s * 0.34f, cy + s * 0.34f), _scratch, th);
+            {
+                float e = s * 0.32f;
+                _ctx.DrawLine(new Vector2(cx - e, cy - e), new Vector2(cx + e, cy + e), _scratch, th);
+                _ctx.DrawLine(new Vector2(cx - e, cy + e), new Vector2(cx + e, cy - e), _scratch, th);
                 break;
+            }
             case "check":
-                _ctx.DrawLine(new Vector2(cx - s * 0.38f, cy + s * 0.04f), new Vector2(cx - s * 0.10f, cy + s * 0.32f), _scratch, th);
-                _ctx.DrawLine(new Vector2(cx - s * 0.10f, cy + s * 0.32f), new Vector2(cx + s * 0.42f, cy - s * 0.30f), _scratch, th);
+            {
+                _ctx.DrawLine(new Vector2(cx - s * 0.36f, cy + s * 0.02f),
+                              new Vector2(cx - s * 0.10f, cy + s * 0.28f), _scratch, th);
+                _ctx.DrawLine(new Vector2(cx - s * 0.10f, cy + s * 0.28f),
+                              new Vector2(cx + s * 0.38f, cy - s * 0.28f), _scratch, th);
                 break;
+            }
         }
     }
 }

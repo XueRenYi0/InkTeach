@@ -2225,10 +2225,9 @@ public partial class InkEngine
         (Native.MOD_CONTROL, 0x4C /*L*/, KeyAction.ToolLaser),
         (Native.MOD_CONTROL, 0x45 /*E*/, KeyAction.ToolEraser),
         (Native.MOD_CONTROL, 0x5A /*Z*/, KeyAction.Undo),
-        // 呼出盘也进这张表（用户 2026-09-30 定 "Ctrl+Q"）：放映时前台是 PPT/WPS，
-        // 应用内收不到键盘；挂成临时全局键之后，按住/划/松手两条路都归我们。
-        // ⚠ WM_HOTKEY 只有按下、没有松手——松手靠 PumpRadialPalette 每帧轮询（见那里）。
-        (Native.MOD_CONTROL, 0x51 /*Q*/, KeyAction.RadialPalette),
+        // ⚠ 2026-10-04：呼出盘**不再进这张表**——它已升为常驻全局键 `Ctrl+Alt+Shift+Q`
+        // （见 KeyBindings.Default），放映时前台是 PPT/WPS 也照样生效；临时表里再挂一遍
+        // 就等于"同一个动作两把全局键"，正是这次改键要消掉的东西。
         // 放映时方向键也归我们：**有选中 → 微调；没选中 → ←→ 代 WPS 翻页**
         // （键盘在我们手里，不拦的话 WPS 收不到 ←→，什么都不发生——用户 2026-09-30 实测）。
         (0u, 0x25 /*←*/, KeyAction.PptPrev),
@@ -2247,7 +2246,7 @@ public partial class InkEngine
     /// （SetPassThrough）都调它；`RegisterPptHotkeys` 幂等，重复调不做事。</summary>
     private void SyncPptHotkeys() => RegisterPptHotkeys(PptHotkeysWanted);
 
-    /// <summary>挂/摘那 9 个放映临时全局键（真正碰系统的那一层）。</summary>
+    /// <summary>挂/摘那 8 个放映临时全局键（真正碰系统的那一层）。</summary>
     private void RegisterPptHotkeys(bool on)
     {
         if (_pptHotkeysOn == on || _windows.Count == 0) return;
@@ -2264,7 +2263,7 @@ public partial class InkEngine
             else Native.UnregisterHotKey(h, id);
         }
         _pptHotkeysOn = on;
-        Console.WriteLine(on ? "放映批注模式：工具键（Ctrl+P/I/L/E/Z/Q）与方向键已临时升级为全局热键"
+        Console.WriteLine(on ? "放映批注模式：工具键（Ctrl+P/I/L/E/Z）与方向键已临时升级为全局热键"
                             : "放映临时全局热键已注销（退出放映或开着穿透）");
     }
 
@@ -7561,7 +7560,7 @@ public partial class InkEngine
 
         switch (action)
         {
-            // 穿透开关（全局 Ctrl+Alt+T 这条同一条路）：退出时恢复进穿透前的板态，
+            // 穿透开关（全局 Ctrl+Alt+Shift+T 这条同一条路）：退出时恢复进穿透前的板态，
             // 见 SetPassThrough 的 restoreBoard。
             case KeyAction.TogglePassThrough: SetPassThrough(!PassThrough, restoreBoard: true); break;
             // 呼出盘：按住才出来的"标迹菜单"（松手确认，见 OpenRadialPalette）。
@@ -7773,7 +7772,7 @@ public partial class InkEngine
     /// 开关穿透。
     ///
     /// `restoreBoard`：退出穿透时，要不要把**进穿透时被顺手关掉的白板**恢复。
-    ///   · **穿透开关**退出（面板那一格 / 全局 `Ctrl+Alt+T`）传 true——
+    ///   · **穿透开关**退出（面板那一格 / 全局 `Ctrl+Alt+Shift+T`）传 true——
     ///     老师按它的意思是"回到刚才"，所以"板开还是开、关还是关"；
     ///   · **换工具**退出（`SwitchTool` 里的自动关穿透）传 false——那条路的意思是
     ///     "我现在就要写"，画布要保持眼前所见（露出来的下层应用），突然盖回白板反而是惊吓；
@@ -11076,7 +11075,7 @@ public partial class InkEngine
     /// 开：去掉 WS_EX_NOACTIVATE 并把窗口提到前台，键盘归批注层，编辑类
     ///     快捷键（Ctrl+Z / Ctrl+D / Delete / 方向键…）才有地方落地。
     /// 关：加回 WS_EX_NOACTIVATE，覆盖层回到"永不抢焦点"，键盘还给下层程序
-    ///     ——那时候只有全局热键（Ctrl+Alt+…）可用。
+    ///     ——那时候只有全局热键（Ctrl+Alt+Shift+…）可用。
     ///
     /// 取舍说清楚：开着的时候，放映中的 PPT 收不到键盘。
     /// </summary>
@@ -11335,7 +11334,7 @@ public partial class InkEngine
     /// **穿透模式下整个失效**（用户 2026-09-30 拍板："开了穿透以后，笔、橡皮这些快捷键
     /// 应该就没有用了，等退出穿透才有用"）：穿透 = "不能画"，这时换工具/换色都没有着落，
     /// 而且"已经不是笔了、颜色却还在变"正是用户报的那个怪状态。想画画先退出穿透
-    /// （全局 `Ctrl+Alt+T` / 点穿透格），工具键随即恢复。
+    /// （全局 `Ctrl+Alt+Shift+T` / 点穿透格），工具键随即恢复。
     /// 只挡**键盘**这两条路（应用内键 + 放映临时全局键，都汇到这里）；
     /// 面板上那一格不在此列——点它仍然"顺手关穿透 + 换工具"（没键盘的教室靠它）。
     /// </summary>
@@ -11354,7 +11353,7 @@ public partial class InkEngine
     }
 
     // =====================================================================
-    //  呼出盘（Ctrl+Q）：按住 → 划向扇区 → 松手
+    //  呼出盘（Ctrl+Alt+Shift+Q）：按住 → 划向扇区 → 松手
     // =====================================================================
     //
     // 来龙去脉：《调研-笔键方案.md》附录 C/D（键盘呼出版；笔身键版留待真机实测硬件）。
@@ -11362,8 +11361,10 @@ public partial class InkEngine
     // 盘不闪（熟手路），松手确认、Esc / 落笔 / 松在中心 = 取消。
     //
     // 和主程序其它部分的接口，全部照现有语义：
-    //   · 穿透下不响应（和工具键 8.5 同一条："穿透 = 用下面那个软件"）；
-    //   · 放映时它进 "临时全局键" 那张表（前台是 PPT/WPS，应用内收不到键盘）；
+    //   · **穿透里照样能出盘**（2026-10-04 用户定）：它是"从下层把笔抢回来"的入口，
+    //     选扇区 = 退出穿透 + 换工具/选色（**刻意不同于**工具键 8.5 那条"穿透不响应"）；
+    //   · **2026-10-04 起它是常驻全局键**（`Ctrl+Alt+Shift+Q`）：前台是 PPT/WPS
+    //     也照样出盘，不再需要临时全局键表那一路；
     //   · 扇区里选工具 = 和按 Ctrl+P/I/L/E/M **同一条命令**（含"已经是它 → 换色/换档"）；
     //   · 颜色扇区 = "给我这支颜色的笔"（不在笔上就切到笔，走 SwitchTool）。
     //
@@ -11399,14 +11400,20 @@ public partial class InkEngine
     internal bool RadialMovedForDraw => _radialMoved;
 
     /// <summary>打开呼出盘（按住的那一刻）。条件不满足就静默不动。</summary>
+    /// <remarks>
+    /// **穿透里也能开**（2026-10-04 用户定）：呼出盘升为全局键就是为了"在别的程序
+    /// 前面也能快速把笔调出来"，穿透开着时按它**照常出盘**——选一个扇区就等于
+    /// "我现在就要写"，顺手退出穿透（和点面板工具格同一条路，见 CommitRadialPalette）。
+    /// 这**刻意不同于**工具键 `Ctrl+P/I/L/E/M`：那五个在穿透下不响应（2026-09-30 定的
+    /// "穿透 = 键盘归下层"），呼出盘是"从下层把笔抢回来"的那一个入口，规则不同。
+    ///
+    /// ⚠ 代价：穿透时我们**收不到鼠标移动消息**——`WS_EX_TRANSPARENT` 把覆盖层
+    /// 从系统输入里整个摘掉（见 `_uiInputHwnd` 那段注释）。所以穿透里盘心与方向
+    /// 都得靠系统光标的当前位置（`GetCursorPos`），不能等鼠标消息。
+    /// </remarks>
     private void OpenRadialPalette()
     {
         if (RadialPaletteActive) return;
-        if (PassThrough)
-        {
-            Console.WriteLine("穿透模式下：呼出盘不响应（先退出穿透）");
-            return;
-        }
         if (CaptureActive) return;
         if (_drawing)
         {
@@ -11414,8 +11421,13 @@ public partial class InkEngine
             return;
         }
 
+        // 穿透时 PointerX/Y 停在旧位置（收不到移动消息），盘心要用系统光标的当前位置。
+        SyncPointerFromCursor();
+
         // 记下这次实际绑定的主键（键位可改；松手轮询按它查，写死 Q 会在改键后失灵）。
-        var binding = Keys.Find(KeyScope.Annotation, KeyAction.RadialPalette);
+        // ⚠ 2026-10-04 起呼出盘是**全局**键（`Ctrl+Alt+Shift+Q`）：作用域必须查 Global，
+        // 查批注内会查不到（用户改键后更是直接失灵）。
+        var binding = Keys.Find(KeyScope.Global, KeyAction.RadialPalette);
         _radialVk = binding != null && binding.Chord.IsValid ? binding.Chord.Vk : 0x51;
 
         RadialPaletteActive = true;
@@ -11426,7 +11438,27 @@ public partial class InkEngine
         RadialCenterX = PointerX;              // 盘心 = 按下的那一刻指针在哪
         RadialCenterY = PointerY;
         _dirty = true;
-        Console.WriteLine("呼出盘：按住划向扇区，松手确认（松在中心/划回中心/落笔 = 取消）");
+        Console.WriteLine(PassThrough
+            ? "呼出盘（穿透中）：按住划向扇区，松手 = 退出穿透 + 切到它（松在中心/划回中心/落笔 = 取消）"
+            : "呼出盘：按住划向扇区，松手确认（松在中心/划回中心/落笔 = 取消）");
+    }
+
+    /// <summary>
+    /// 穿透时把指针位置同步成**系统光标的当前位置**。
+    ///
+    /// 为什么必须有它：穿透给覆盖层加了 `WS_EX_TRANSPARENT`，系统那一层就完全不
+    /// 给它投递鼠标消息（连 WM_NCHITTEST 都不问），`PointerX/Y` 会一直停在最后
+    /// 一次正常模式下的位置。呼出盘靠"盘心 ↔ 指针的位移"选扇区，位置是旧的就等于
+    /// 盘心乱跳、方向失灵。`GetCursorPos` 与焦点无关，穿透期间照常给真位置
+    ///（和 `BeginCaptureMode` 里那句 `GetCursorPos` 同一个理由与写法）。
+    /// </summary>
+    private void SyncPointerFromCursor()
+    {
+        if (!PassThrough) return;             // 正常模式有真鼠标消息，别去抢
+        if (!Native.GetCursorPos(out var p)) return;
+        PointerX = p.X;
+        PointerY = p.Y - ViewOffsetY;         // 屏幕 → 画布（和 BeginCaptureMode 同一句）
+        PointerInside = true;
     }
 
     /// <summary>松手 = 确认。没位移/死区 = 取消；有扇区就执行那条命令。</summary>
@@ -11447,6 +11479,14 @@ public partial class InkEngine
         }
         else
         {
+            // **穿透中选扇区 = "我现在就要写"：顺手退出穿透**（2026-10-04 用户定）。
+            // 和点面板工具格同一条路（`SwitchTool` 里那句 `if (PassThrough) SetPassThrough(false)`）。
+            // ⚠ 顺序不能反：工具键在穿透下"不响应"（2026-09-30 定的 8.5 那条），
+            // 不先退穿透的话 `ToolKeyPress` 会直接 return，按下去**悄无声息**——
+            // 正是用户报的那个现象。这里先退（板态不恢复：换了工具的意思是"我要在
+            // 眼前这片东西上写"，和 SwitchTool 的选择一致，见 SetPassThrough 的说明）。
+            if (PassThrough) SetPassThrough(false, restoreBoard: false);
+
             Console.WriteLine($"呼出盘 → {RadialSectorNames[sec]}");
             switch (sec)
             {
@@ -11486,13 +11526,16 @@ public partial class InkEngine
     /// <summary>
     /// 每帧一次：出盘延迟、方向重算、松手轮询、超时。
     ///
-    /// **为什么要有轮询**：放映里的临时全局键只给 WM_HOTKEY（按下），没有松手消息；
-    /// 应用内那条一旦中途丢了焦点也收不到 KeyUp。`GetAsyncKeyState` 看的是物理键状态，
-    /// 两条路都能兜住（60fps 下误差 ≤16ms）。
+    /// **为什么要有轮询**：全局热键（常驻的 `Ctrl+Alt+Shift+Q` 和放映临时那批）只给
+    /// WM_HOTKEY（按下），没有松手消息；`GetAsyncKeyState` 看的是物理键状态，
+    /// 60fps 下误差 ≤16ms。
     /// </summary>
     private void PumpRadialPalette()
     {
         if (!RadialPaletteActive) return;
+
+        // 穿透里没有鼠标消息，扇区方向只能每帧问系统要一次（见 SyncPointerFromCursor）。
+        SyncPointerFromCursor();
 
         if (RadialTestHold)
         {
@@ -11613,11 +11656,12 @@ public partial class InkEngine
         var chord = new KeyChord(mods, (uint)wParam.ToInt32());
 
         // 呼出盘开着时，Esc = 取消。
-        // ⚠ 这条只在"Ctrl 已经先松开"之后才真能收到——**Ctrl+Esc 是系统保留的
-        //    "打开开始菜单"**，Windows 不会把它送进窗口（真机自检里量到过：
-        //    按住 Ctrl+Q 时按 Esc，我们一条消息都收不到）。所以提交只认 Q 松手
-        //    （见 HandleKeyUp），先松 Ctrl 盘还留着，这时 Esc 才有效；
-        //    主取消路径是"松在死区 / 划回中心 / 落笔"。
+        // ⚠ 这条只在"修饰键已经先松开"之后才真能收到——**Ctrl+Esc 是系统保留的
+        //    "打开开始菜单"**（Alt+Esc 还会切窗口），Windows 不会把它送进窗口
+        //    （真机自检里量到过：按住 Ctrl+Q 时按 Esc，我们一条消息都收不到；现在
+        //    呼出键多了 Alt/Shift，一样要全部松开之后 Esc 才送得到）。
+        //    所以提交只认 Q 松手（见 HandleKeyUp），先松 Ctrl/Alt/Shift 盘还留着，
+        //    这时 Esc 才有效；主取消路径是"松在死区 / 划回中心 / 落笔"。
         if (RadialPaletteActive && wParam.ToInt32() == 0x1B /*VK_ESCAPE*/)
         {
             CancelRadialPalette("Esc");
@@ -11652,9 +11696,9 @@ public partial class InkEngine
     /// <summary>松键：只服务工具键的手势（长按/双击判定），其余键不看松键。</summary>
     private bool HandleKeyUp(IntPtr wParam)
     {
-        // 呼出盘：**Q 松手 = 确认；只认主键，不认 Ctrl**。
-        // 为什么不认 Ctrl：① 用户经常先松 Ctrl 再松 Q，按和弦查会漏；
-        // ② 先松 Ctrl 之后盘还留着，这时按 Esc 才是"真能送到我们手里"的取消
+        // 呼出盘：**Q 松手 = 确认；只认主键，不认修饰键**。
+        // 为什么：① 用户经常先松 Ctrl/Alt/Shift 再松 Q，按和弦查会漏；
+        // ② 先松修饰键之后盘还留着，这时按 Esc 才是"真能送到我们手里"的取消
         //   （Ctrl+Esc 被系统的开始菜单占了，见 HandleKeyDown 那段）。
         if (RadialPaletteActive && wParam.ToInt32() == _radialVk)
         {

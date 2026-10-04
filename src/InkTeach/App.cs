@@ -990,7 +990,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --passtest          穿透真机测试（跨进程点击）");
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
-        Console.WriteLine("  --radialtest        呼出盘自检（Ctrl+Q：开 / 划 / 松 / 取消 / 穿透 / 松键轮询）");
+        Console.WriteLine("  --radialtest        呼出盘自检（Ctrl+Alt+Shift+Q：开 / 划 / 松 / 取消 / 穿透 / 松键轮询）");
         Console.WriteLine("  --radialshow [图]   呼出盘摆样：定格在屏幕中央出图（默认 reports/radial-palette.bmp）");
         Console.WriteLine("  --shapeiconshow [路径] 出图：图形面板图标的对照表（含每一档的变体）");
         Console.WriteLine("  --toolicons [路径]  出图：白板 / 激光笔的图标候选（未选中 / 选中 / 放大三格）");
@@ -2209,7 +2209,7 @@ internal sealed partial class App : InkEngine.InkEngine
         // ---- ①.5 放映临时全局键 × 穿透：穿透期间让给下层（用户 2026-09-30 定）----
         //
         // 用户定的总规则："正常模式我们的键起作用、PPT 的键不起作用；穿透模式反过来。"
-        // 放映时那 9 个键是临时全局热键，穿透开着就该整体注销，把键盘还给 PPT/WPS。
+        // 放映时那 8 个键是临时全局热键，穿透开着就该整体注销，把键盘还给 PPT/WPS。
         {
             Check("放映中：临时全局键已挂", PptHotkeysOnForTest,
                   $"挂着 = {PptHotkeysOnForTest}");
@@ -5024,7 +5024,7 @@ internal sealed partial class App : InkEngine.InkEngine
         // （这条仓库里踩过三次）。这里只负责"表里不许出现名单之外的动作"。
         var allowedGlobal = new HashSet<KeyAction>(KeyMap.GlobalAllowedActions);
         var stray = map.For(KeyScope.Global).Select(b => b.Action).Where(a => !allowedGlobal.Contains(a)).ToList();
-        Check("全局里没有那 5 个之外的动作",
+        Check($"全局里没有名单（{allowedGlobal.Count} 个）之外的动作",
               stray.Count == 0,
               stray.Count == 0
                   ? $"全局 {nGlobal} 条，全是：{string.Join(" / ", allowedGlobal.Select(KeyMap.Describe))}"
@@ -5034,19 +5034,23 @@ internal sealed partial class App : InkEngine.InkEngine
         // 查法是对着"退役的那五个组合"查，不是查动作名——动作枚举里已经没有图形那几个了，
         // 查名字等于什么都没查。
         //
-        // ⚠ `Ctrl+Alt+T` 2026-09-30 起**不再是退役键**：穿透从 `Ctrl+Alt+P` 换成了它
-        //（用户报"P 和笔的 Ctrl+P 撞"，见 KeyBindings.Default 里那段注释）。
-        // 所以这里只查真正空着的四个组合。
-        foreach (var (name, vk) in new[] { ("O", 'O'), ("G", 'G'), ("F", 'F'), ("N", 'N') })
+        // ⚠ `Ctrl+Alt+T` 2026-09-30～10-04 曾借给穿透；2026-10-04 穿透整体抬到
+        // `Ctrl+Alt+Shift+T` 之后它重新空出来，所以这次把五个组合一起放回来查。
+        foreach (var (name, vk) in new[] { ("O", 'O'), ("T", 'T'), ("G", 'G'), ("F", 'F'), ("N", 'N') })
         {
             var c = new KeyChord(KeyChord.ModCtrl | KeyChord.ModAlt, vk);
             Check($"退役的图形键 Ctrl+Alt+{name} 不在任何作用域里",
                   map.Bindings.All(b => !b.Chord.Equals(c)), "");
         }
-        // 顺手钉住"T 现在是穿透、不是退役键"（哪天有人换回去，这里会给出说得清的红）。
-        Check("Ctrl+Alt+T 现在是穿透模式的默认键（不再是退役图形键）",
-              map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+T",
+        // 顺手钉住 2026-10-04 用户定的新形状（哪天有人换回去，这里会给出说得清的红）：
+        // ① 两个老全局键都加上了 Shift；② 呼出盘升到全局、批注内不再留 Ctrl+Q 副本。
+        Check("穿透默认键 = Ctrl+Alt+Shift+T（2026-10-04 起统一加 Shift）",
+              map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+Shift+T",
               map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString());
+        Check("呼出盘已升为全局键 Ctrl+Alt+Shift+Q，批注内不再留副本",
+              map.Find(KeyScope.Global, KeyAction.RadialPalette)?.Chord.ToString() == "Ctrl+Alt+Shift+Q"
+              && map.Find(KeyScope.Annotation, KeyAction.RadialPalette) == null,
+              map.Find(KeyScope.Global, KeyAction.RadialPalette)?.Chord.ToString() ?? "全局里没有");
 
         // ---- 2. 按键解析 ----
         bool ok1 = KeyChord.TryParse("ctrl+alt+p", out var c1, out _);
@@ -5062,10 +5066,10 @@ internal sealed partial class App : InkEngine.InkEngine
         Check("只有修饰键要报错", !ok5 && err5 != null, err5);
 
         // ---- 3. 冲突检测 ----
-        // 样本用**穿透模式开关**：它是全局里必留的那几条之一（2026-09-29 全局只剩
-        // 穿透/键盘模式/退出，笔和橡皮都降到批注内了——拿 ToolPen 当样本会以
+        // 样本用**穿透模式开关**：它是全局里必留的那几条之一（现在全局只有
+        // 穿透/呼出盘/退出，笔和橡皮都降到批注内了——拿 ToolPen 当样本会以
         // "这个作用域里没有这个动作"直接失败，冲突检测那一条就成了假通过）。
-        KeyChord.TryParse("Ctrl+Alt+X", out var takenChord, out _);     // 被"退出"占着
+        KeyChord.TryParse("Ctrl+Alt+Shift+X", out var takenChord, out _);     // 被"退出"占着
         bool taken = map.TrySet(KeyScope.Global, KeyAction.TogglePassThrough, takenChord, out string errTaken);
         Check("撞了别人的键要拒绝并说清是谁", !taken && errTaken != null
               && errTaken.Contains("退出"), errTaken);
@@ -5082,7 +5086,7 @@ internal sealed partial class App : InkEngine.InkEngine
 
         map.ResetToDefault(KeyScope.Global, KeyAction.TogglePassThrough);
         Check("能恢复默认键",
-              map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+T",
+              map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+Shift+T",
               map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString());
 
         // ---- 4. 落盘 / 读回 / 坏文件 ----
@@ -5102,7 +5106,7 @@ internal sealed partial class App : InkEngine.InkEngine
                   warns.Count == 0 ? $"退出键 → {reloaded.Find(KeyScope.Global, KeyAction.Quit).Chord}"
                                    : string.Join("；", warns));
             Check("没改过的项仍是默认值（只写差异）",
-                  reloaded.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+T", "");
+                  reloaded.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+Shift+T", "");
             Check("只写差异：文件里应当只有 1 条", File.ReadAllText(cfg).Split('\n')
                   .Count(l => l.Contains("\"Global.")) == 1, "");
 
@@ -5110,7 +5114,7 @@ internal sealed partial class App : InkEngine.InkEngine
             var broken = KeyMap.Default();
             var warns2 = InkSettings.Load(broken);
             Check("键名写坏了：报警告 + 用默认值 + 不抛异常",
-                  warns2.Count > 0 && broken.Find(KeyScope.Global, KeyAction.Quit).Chord.ToString() == "Ctrl+Alt+X",
+                  warns2.Count > 0 && broken.Find(KeyScope.Global, KeyAction.Quit).Chord.ToString() == "Ctrl+Alt+Shift+X",
                   warns2.Count > 0 ? warns2[0] : "没有警告（不该）");
 
             File.WriteAllText(cfg, "这不是 JSON，只是一段乱码");
@@ -11686,8 +11690,10 @@ internal sealed partial class App : InkEngine.InkEngine
 
     private const ushort VK_CONTROL = 0x11;
     private const ushort VK_MENU = 0x12;        // Alt
+    private const ushort VK_SHIFT = 0x10;
 
-    /// <summary>按一次 Ctrl+Alt+&lt;主键&gt;（全局热键都是这个形状）。返回塞进去的事件数。</summary>
+    /// <summary>按一次 Ctrl+Alt+&lt;主键&gt;（现在只给"退役图形键不响应"那条测试用；
+    /// 2026-10-04 起全局热键都是 `Ctrl+Alt+Shift+…` 的形状）。返回塞进去的事件数。</summary>
     private uint SendCtrlAlt(ushort vk) => SendKeyChord(VK_CONTROL, VK_MENU, vk);
 
     /// <summary>
@@ -13033,6 +13039,16 @@ internal sealed partial class App : InkEngine.InkEngine
                     while (RollingNow && NowMs - rt0 < 3000) { DrainMessages(); Thread.Sleep(10); RollTickForTest(); }
                 }
                 SettleFrames(400);
+                // --board [--boardblack]：出图前铺一层白板，让背景是干净的。
+                // 课堂窗是**截屏**出来的（离屏那条路只画界面层，拍不到它），不加这层的话
+                // 图里会混着桌面图标和当时的窗口——拿去当宣传图很难看。
+                if (argvW.Contains("--board"))
+                {
+                    Host.Commands.SetBoard(true);
+                    if (argvW.Contains("--boardblack"))
+                        Host.Commands.SetBoardColor(new Color4(0.13f, 0.15f, 0.17f, 1f));
+                    SettleFrames(300);
+                }
                 if (argvW.Contains("--keepboard")) SetPassThroughFromUi(false);
                 SettleFrames(300);
                 var wr = argvW.Contains("--timerwin") ? TimerCardRect() : RollCardRect();
@@ -13110,7 +13126,7 @@ internal sealed partial class App : InkEngine.InkEngine
     private void RadialTest()
     {
         Console.WriteLine();
-        Console.WriteLine("=== 呼出盘自检（Ctrl+Q：按住 → 划向扇区 → 松手）===");
+        Console.WriteLine("=== 呼出盘自检（Ctrl+Alt+Shift+Q：按住 → 划向扇区 → 松手）===");
 
         if (SkipIfNoSyntheticInput("呼出盘自检")) { _quit = true; return; }
 
@@ -13242,13 +13258,46 @@ internal sealed partial class App : InkEngine.InkEngine
               $"扇区 {RadialPaletteSector}");
         RadialCancelForTest("自检收尾");
 
-        // ---- ⑧ 穿透下不响应（和工具键 8.5 同一条语义） ----
+        // ---- ⑧ 穿透里照样能呼出：这是"把笔从下层抢回来"的入口（2026-10-04 用户定）----
+        //
+        // 刻意钉住两件不同的事，别混成一件：
+        //   ① **能呼出**：穿透开着时按 Ctrl+Alt+Shift+Q，盘照样出（指针要走
+        //      `GetCursorPos`，因为 WS_EX_TRANSPARENT 下我们收不到鼠标消息）；
+        //   ② **选扇区 = 退出穿透 + 换工具**——工具键本身在穿透下不响应（8.5），
+        //      所以提交时必须先退穿透，否则会"按下去悄无声息"。
+        // 同时保留一条反向守卫：**取消不动穿透**（死区松手 / 划回中心）。
+        Host.Commands.SetPassThrough(true);
+        SettleFrames(150);
+        SendMouse((int)cx, (int)cy, 0);
+        SettleFrames(150);
+        RadialTestHold = true;
+        RadialOpenForTest(cx, cy);
+        Check("穿透开着：呼出盘照样能呼出（2026-10-04 起）", RadialPaletteActive,
+              $"active = {RadialPaletteActive}，穿透 = {PassThrough}");
+        // ⚠ 这里**必须真移鼠标**、不能用 `RadialMoveForTest`：穿透时指针位置每帧从
+        // `GetCursorPos` 刷（我们收不到鼠标消息），直接写 PointerX/Y 会被立刻覆盖掉。
+        // 这也正是这段判据要钉的东西——穿透里扇区方向跟不跟得上系统光标。
+        SendMouse((int)(cx + 85f), (int)(cy - 85f), 0);  // 东北 = 黑（颜色扇区）
+        SettleFrames(150);
+        RadialPumpForTest();
+        Check("穿透里：扇区方向跟得上系统光标（GetCursorPos 那一路）", RadialPaletteSector == 1,
+              $"扇区 {RadialPaletteSector}");
+        RadialCommitForTest();
+        Check("穿透里选扇区：退出穿透 + 换到那支笔",
+              !PassThrough && Host.State.Tool == Tool.Pen
+              && SameCol(Host.State.PaletteBase, InkPalette.PenBand[0].Color),
+              $"穿透 = {PassThrough}，工具 = {Host.State.Tool}，色 = {Host.State.PaletteBase}");
+
+        // 反向守卫：死区松手 = 取消，穿透必须原样留着。
         Host.Commands.SetPassThrough(true);
         SettleFrames(150);
         RadialOpenForTest(cx, cy);
-        Check("穿透开着：呼出盘不响应", !RadialPaletteActive, $"active = {RadialPaletteActive}");
+        RadialCommitForTest();
+        Check("穿透里死区松手：只是取消，穿透不动", PassThrough && !RadialPaletteActive,
+              $"穿透 = {PassThrough}，active = {RadialPaletteActive}");
         Host.Commands.SetPassThrough(false);
         SettleFrames(150);
+        RadialTestHold = true;
 
         // ---- ⑨ 写字中（笔尖在屏上）不响应 ----
         SendMouse((int)cx, (int)cy, 0);                          SettleFrames(60);
@@ -13265,14 +13314,23 @@ internal sealed partial class App : InkEngine.InkEngine
         Check("轮询发现松手：自动提交（没位移 = 取消）", !RadialPaletteActive,
               $"active = {RadialPaletteActive}");
 
-        // ---- ⑪ 放映临时全局键表里有它（Ctrl+Q） ----
-        var entry = PptHotkeyEntryForTest(KeyAction.RadialPalette);
-        Check("放映临时全局键表：包含呼出盘，且是 Ctrl+Q",
-              entry.HasValue && entry.Value.Mod == Native.MOD_CONTROL && entry.Value.Vk == 0x51,
-              entry.HasValue ? $"mod=0x{entry.Value.Mod:X} vk=0x{entry.Value.Vk:X}" : "表里没有");
+        // ---- ⑪ 呼出盘现在是常驻全局键（Ctrl+Alt+Shift+Q），放映临时表里不重复挂 ----
+        // 2026-10-04 用户定：呼出盘从批注内 Ctrl+Q 升级为全局 Ctrl+Alt+Shift+Q。
+        // 这条同时钉住"升上去"和"临时表里那一条删干净"——两件事缺一个都会回到
+        // "一个动作两把全局键"的糊状态。
+        var radialGlobal = Keys.Find(KeyScope.Global, KeyAction.RadialPalette);
+        var radialTemp = PptHotkeyEntryForTest(KeyAction.RadialPalette);
+        Check("呼出盘：全局 Ctrl+Alt+Shift+Q，放映临时表里没有重复",
+              radialGlobal != null && radialGlobal.Chord.ToString() == "Ctrl+Alt+Shift+Q"
+              && radialTemp == null,
+              radialGlobal == null
+                  ? "全局表里没有"
+                  : $"全局 {radialGlobal.Chord}；临时表 {(radialTemp == null ? "没有" : "有")}");
 
-        // ---- ⑫ 真键盘 + 真鼠标：应用内那条路（窗口消息 → 键盘模式 → 打开/松手提交） ----
+        // ---- ⑫ 真键盘 + 真鼠标：全局热键那条路（RegisterHotKey → WM_HOTKEY → 打开） ----
         // 前面都是引擎钩子；这一条和 --hotkeytest 同一套方法，走真实输入流。
+        // 呼出盘 2026-10-04 起是全局键：按下由系统送 WM_HOTKEY，松手靠泵轮询物理键
+        //（和放映时的临时全局键同一条路）。
         if (!SkipIfNoSyntheticInput("呼出盘真键盘"))
         {
             Host.Commands.SetTool(Tool.Pen);
@@ -13281,15 +13339,23 @@ internal sealed partial class App : InkEngine.InkEngine
             SendMouse((int)cx, (int)cy, 0);
             SettleFrames(150);
 
-            var qDown = new[] { KeyInput(VK_CONTROL, false), KeyInput(0x51, false) };
+            var qDown = new[]
+            {
+                KeyInput(VK_CONTROL, false), KeyInput(VK_MENU, false),
+                KeyInput(VK_SHIFT, false), KeyInput(0x51, false),
+            };
             Native.SendInput((uint)qDown.Length, qDown, Marshal.SizeOf<Native.INPUT_KBD>());
             SettleFrames(250);
-            Check("真键盘：按住 Ctrl+Q 能打开呼出盘", RadialPaletteActive,
+            Check("真键盘：按住 Ctrl+Alt+Shift+Q 能打开呼出盘", RadialPaletteActive,
                   $"active = {RadialPaletteActive}");
 
             SendMouse((int)(cx + 120f), (int)cy, 0);      // 正东 = 红
             SettleFrames(150);
-            var qUp = new[] { KeyInput(0x51, true), KeyInput(VK_CONTROL, true) };
+            var qUp = new[]
+            {
+                KeyInput(0x51, true), KeyInput(VK_SHIFT, true),
+                KeyInput(VK_MENU, true), KeyInput(VK_CONTROL, true),
+            };
             Native.SendInput((uint)qUp.Length, qUp, Marshal.SizeOf<Native.INPUT_KBD>());
             SettleFrames(250);
             Check("真键盘：松手确认为红笔",
@@ -13297,9 +13363,10 @@ internal sealed partial class App : InkEngine.InkEngine
                   && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
                   $"active = {RadialPaletteActive}，色 = {Host.State.PaletteBase}");
 
-            // ---- ⑬ 真键盘：先松 Ctrl（盘还在）→ 按 Esc 取消 ----
-            // 这条同时钉住两件事：提交只认 Q（松 Ctrl 不提交）；Esc 要在没有 Ctrl 压着时按
-            // （Ctrl+Esc 是系统开始菜单，收不到——⑫ 那版就是这么发现问题的）。
+            // ---- ⑬ 真键盘：先松修饰键（盘还在）→ 松开 Alt/Shift 后按 Esc 取消 ----
+            // 这条同时钉住两件事：提交只认 Q（松修饰键不提交）；Esc 要在没有修饰键压着时按
+            // （Ctrl+Esc 是系统开始菜单、Alt+Esc 还会切窗口，都收不到——⑫ 那版就是这么
+            // 发现问题的）。
             SendMouse((int)cx, (int)cy, 0);
             SettleFrames(120);
             Native.SendInput((uint)qDown.Length, qDown, Marshal.SizeOf<Native.INPUT_KBD>());
@@ -13309,7 +13376,10 @@ internal sealed partial class App : InkEngine.InkEngine
             SettleFrames(150);
             Check("真键盘：先松 Ctrl，盘还在（提交只认 Q 松手）", RadialPaletteActive,
                   $"active = {RadialPaletteActive}");
-            SendKeyChord(0x1B);                            // 真按 Esc（此时没有 Ctrl 压着）
+            var modsUp = new[] { KeyInput(VK_SHIFT, true), KeyInput(VK_MENU, true) };
+            Native.SendInput((uint)modsUp.Length, modsUp, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(150);
+            SendKeyChord(0x1B);                            // 真按 Esc（此时没有修饰键压着）
             SettleFrames(200);
             Check("真键盘：Esc 取消（工具/颜色都不动）",
                   !RadialPaletteActive && Host.State.Tool == Tool.Pen,
@@ -13317,6 +13387,28 @@ internal sealed partial class App : InkEngine.InkEngine
             var qUpOnly = new[] { KeyInput(0x51, true) };
             Native.SendInput((uint)qUpOnly.Length, qUpOnly, Marshal.SizeOf<Native.INPUT_KBD>());
             SettleFrames(150);
+
+            // ---- ⑭ 真键盘 + 穿透：开着穿透按 Ctrl+Alt+Shift+Q 也能调出笔来 ----
+            // 这一条钉的就是用户 2026-10-04 要的那件事：**穿透时也能用全局呼出盘
+            // 把笔快速调出来**（松手 = 退出穿透 + 换工具）。走真实输入流，和 ⑫ 同一条路。
+            Host.Commands.SetPassThrough(true);
+            SettleFrames(300);
+            SendMouse((int)cx, (int)cy, 0);
+            SettleFrames(200);
+            Native.SendInput((uint)qDown.Length, qDown, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(250);
+            Check("真键盘 + 穿透：能呼出盘", RadialPaletteActive,
+                  $"active = {RadialPaletteActive}，穿透 = {PassThrough}");
+            SendMouse((int)(cx + 120f), (int)cy, 0);      // 正东 = 红
+            SettleFrames(200);
+            Native.SendInput((uint)qUp.Length, qUp, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(300);
+            Check("真键盘 + 穿透：松手 = 退出穿透 + 红笔",
+                  !RadialPaletteActive && !PassThrough && Host.State.Tool == Tool.Pen
+                  && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
+                  $"穿透 = {PassThrough}，工具 = {Host.State.Tool}，色 = {Host.State.PaletteBase}");
+            Host.Commands.SetPassThrough(false);
+            SettleFrames(200);
         }
 
         // 收尾
@@ -13342,7 +13434,7 @@ internal sealed partial class App : InkEngine.InkEngine
     private void RadialShow(string path)
     {
         Console.WriteLine();
-        Console.WriteLine("=== 呼出盘摆样（Ctrl+Q）===");
+        Console.WriteLine("=== 呼出盘摆样（Ctrl+Alt+Shift+Q）===");
 
         // --dark：深色那档也出一张（呼出盘跟着 FloatingTheme 走，这里顺手验观感）。
         // 自检模式用临时配置（`_selfCheckMode`），不会碰用户的 settings.json。
@@ -14051,7 +14143,7 @@ internal sealed partial class App : InkEngine.InkEngine
         // 旧设置条照常张开、色片还能点。
         // 这里钉五件事：① 点格子进穿透 → 收成线；② 指针在面板上也不许张开；
         // ③ 退出穿透 → 还能重新张开（功能没被收坏）；④ 穿透里点工具格照样能出来；
-        // ⑤ 全局开关（Ctrl+Alt+T 同一条路）进穿透同样只收成线。
+        // ⑤ 全局开关（Ctrl+Alt+Shift+T 同一条路）进穿透同样只收成线。
         {
             // 起手：笔、色带在笔格并张开（走真实路径：点笔格后指针留在面板上）
             Host.Commands.SetTool(Tool.Pen);
@@ -14085,7 +14177,7 @@ internal sealed partial class App : InkEngine.InkEngine
                   && (ui.BandRectForTest.MaxY - ui.BandRectForTest.MinY) <= 12f,
                   $"张开度 {ui.RailValueForTest:F2}");
 
-            // ③ 退出穿透（走命令，和全局 Ctrl+Alt+T 同一条路）→ 悬停还能重新张开
+            // ③ 退出穿透（走命令，和全局 Ctrl+Alt+Shift+T 同一条路）→ 悬停还能重新张开
             Host.Commands.SetPassThrough(false);
             SettleFrames(200);
             ui.OpenRailForTest();
@@ -14948,7 +15040,7 @@ internal sealed partial class App : InkEngine.InkEngine
                   $"板开 = {BoardOn}，穿透 = {Host.State.PassThrough}");
 
             // ---- ⑥.7b 退出穿透时的板态恢复（2026-09-30 用户拍板）----
-            // 规格：**开关退出**（面板那一格 / Ctrl+Alt+T）= "回到之前"，板开就恢复；
+            // 规格：**开关退出**（面板那一格 / Ctrl+Alt+Shift+T）= "回到之前"，板开就恢复；
             //       **换工具退出**（Ctrl+P 等）= "我现在就要写"，板保持关，不能突然盖回来。
             //       （"墨迹不隐藏"是同一批拍板的结果——那一半没有代码改动，无需断言。）
             Host.Commands.SetBoard(true);
@@ -16985,12 +17077,12 @@ internal sealed partial class App : InkEngine.InkEngine
         //   ② **真按一次**：合成键盘发一个 `Ctrl+Alt+O`，工具**不许**变——
         //      这一层防的是"表里删了、注册那一路还留着"。
         //
-        // ⚠ `Ctrl+Alt+T` 2026-09-30 起**不再是退役键**（穿透从 P 换成了它，见
-        // KeyBindings.Default），所以这里只查真正空着的四个组合。
+        // ⚠ `Ctrl+Alt+T` 2026-09-30～10-04 曾借给穿透；穿透抬到 `Ctrl+Alt+Shift+T` 之后
+        // 五个组合（O/T/G/F/N）全部退役，这里一起查。
         Console.WriteLine("  -- B. 图形一个热键都没有 --");
         var retired = new (string chord, ushort vk)[]
         {
-            ("Ctrl+Alt+O", 'O'), ("Ctrl+Alt+G", 'G'),
+            ("Ctrl+Alt+O", 'O'), ("Ctrl+Alt+T", 'T'), ("Ctrl+Alt+G", 'G'),
             ("Ctrl+Alt+F", 'F'), ("Ctrl+Alt+N", 'N'),
         };
         foreach (var (chord, vk) in retired)
@@ -27771,7 +27863,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine();
         Console.WriteLine("=== 真笔延时实测 ===");
         Console.WriteLine($"  呈现方式：{PresentModeName()}，交换链后缓冲 {OverlayWindow.BufferCount}");
-        Console.WriteLine($"  请用手写笔画线，持续 {seconds:F0} 秒（或按 Ctrl+Alt+X 提前结束）……");
+        Console.WriteLine($"  请用手写笔画线，持续 {seconds:F0} 秒（或按 Ctrl+Alt+Shift+X 提前结束）……");
         Console.WriteLine();
 
         Latency.Scenario = "真笔手写";

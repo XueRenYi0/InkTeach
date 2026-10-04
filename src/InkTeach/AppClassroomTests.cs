@@ -418,14 +418,21 @@ internal sealed partial class App
         ClickRect(RollWin.PoolResetRect(card, u));
         Check("池重置：回满 60、已抽归零", RollPoolNow == 60 && RollDrawnNow == 0, $"池 {RollPoolNow}");
 
-        // ⑥ 三列排布：一次 12 人
+        // ⑥ 名牌排布：一次 12 人。
+        // 2026-10-05 重设计：结果不再是"1/2/3 列纯文字"（那是照搬的版式），
+        // 而是**圆角名牌按名换行**——所以这条判据换成"每个名字都排得进去、且不越出结果区"。
         for (int i = 0; i < 10; i++) ClickRect(RollWin.PlusRect(card, u));
         Check("人数：拉到 12", RollCountNow == 12, $"{RollCountNow}");
         ClickRect(RollWin.DrawRect(card, u));
         RunRollToEnd();
-        Check("12 人：结果 12 条、不重复、按三列排布",
-              RollResultNow.Length == 12 && RollResultNow.Distinct().Count() == 12 && RollWin.Cols(12) == 3,
-              $"结果 {RollResultNow.Length} 条 / {RollWin.Cols(12)} 列");
+        var area12 = RollWin.ResultsRect(card, u);
+        var chips12 = RollWin.Chips(area12, RollResultNow, u);
+        bool chipsFit = chips12.Count == 12
+            && chips12.All(c => c.R.MinX >= area12.MinX - 0.5f && c.R.MaxX <= area12.MaxX + 0.5f
+                             && c.R.MinY >= area12.MinY - 0.5f && c.R.MaxY <= area12.MaxY + 0.5f);
+        Check("12 人：结果 12 条、不重复、名牌全部排在结果区内",
+              RollResultNow.Length == 12 && RollResultNow.Distinct().Count() == 12 && chipsFit,
+              $"结果 {RollResultNow.Length} 条 / 排出 {chips12.Count} 个名牌");
 
         // ⑥.5 学号范围可调（无名单）：1–N
         {
