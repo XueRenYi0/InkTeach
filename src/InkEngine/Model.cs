@@ -5526,6 +5526,10 @@ internal sealed class Stroke
                         var p = StrokeMotion.At(k);
                         sink.AddLine(new Vector2(p.X, p.Y));
                     }
+                    // 活笔笔尖镜像（A2）：只进渲染几何、不进 `cache.Out` 的临时延伸。
+                    var tip = StrokeMotion.TipOverlay;
+                    for (int k = 0; k < tip.Count; k++)
+                        sink.AddLine(new Vector2(tip[k].X, tip[k].Y));
                 }
             }
             else
@@ -5558,6 +5562,8 @@ internal sealed class Stroke
 
     /// <summary>
     /// mean2：把建模输出喂进过点曲线，直接写成三次贝塞尔。
+    /// 活笔时再接上**笔尖镜像**（A2，`StrokeMotion.TipOverlay`）——与收笔追赶同序同值，
+    /// 保证活笔末帧＝成稿首帧；镜像不进模型输出，开关它成稿逐点不变。
     /// 返回 false = 段数不够，调用方退回直线折线。
     /// </summary>
     private static bool AppendSmoothedModeledRun(ID2D1GeometrySink sink)
@@ -5569,6 +5575,9 @@ internal sealed class Stroke
             var p = StrokeMotion.At(i);
             StrokeSmoothing.Add(p.X, p.Y, p.Z);
         }
+        var tip = StrokeMotion.TipOverlay;
+        for (int i = 0; i < tip.Count; i++)
+            StrokeSmoothing.Add(tip[i].X, tip[i].Y, tip[i].Z);
         int m = StrokeSmoothing.Finish();
         if (m <= 0) return false;
 

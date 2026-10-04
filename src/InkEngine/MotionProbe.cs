@@ -10,7 +10,8 @@ namespace InkEngine;
 ///   · 抖动：浅斜率直线 + 高频噪声（先模拟 ptPixelLocation 取整），到"真实直线"的横向 RMS；
 ///   · 直角：慢速 90°，输出到原折线的最大距离（越小说明直角保得越好）；
 ///   · 保真：圆弧到原折线的最大距离（越大说明形状被改得越多）；
-///   · 滞后：活笔（不落笔）时"最后一枚输出点"离"最后一条原始输入"多远——跟手程度；
+///   · 滞后：活笔（不落笔）时"最后一枚输出点"离"最后一条原始输入"多远——跟手程度
+///     （含默认开启的活笔镜像；关镜像可见距离窗 ~6px 的模型滞后，见下方镜像检查）；
 ///   · 端点：落笔后首/末点的位置误差（收笔追赶有效没有）；
 ///   · 性能：2000 点一次建模耗时；输出点数。
 ///
@@ -91,7 +92,8 @@ internal static class MotionProbe
         Console.WriteLine("   · 抖动列越小越好（细笔抖动的直接对手）；M0 是整数采样本身的噪声）。");
         Console.WriteLine("   · 直角列越小越好——M1 的角点保护是 0.5px 量级；弹簧模型（M3）会明显圆角。");
         Console.WriteLine("   · 圆弧偏离是「形状被改了多少」；抖动降得多但偏离暴涨 = 用形状换平滑，要警惕。");
-        Console.WriteLine("   · 滞后列 = 活笔跟手程度（只有平滑算法有；M0/M1 定义上为 0）。");
+        Console.WriteLine("   · 滞后列 = 活笔跟手程度：M0/M1 定义上为 0；Mean2 因活笔镜像（默认开）也 ≈0，");
+        Console.WriteLine("     关镜像时的模型滞后（~6px）见下方「活笔笔尖镜像检查」。");
         Console.WriteLine("   · 折线度 = 圆弧上 6px 弧长内的最大方向变化：越大越「折」，越小越「圆」。");
         Console.WriteLine();
 
@@ -139,6 +141,46 @@ internal static class MotionProbe
             Console.WriteLine($"  {(ok ? "通过" : "失败")}  {mode,-10}  点数 {inc.Count,5}/{full.Count,-5}  "
                               + $"到原折线偏离 {incDev,6:F3}/{fullDev:F3}px");
         }
+
+        // ---- 活笔笔尖镜像（A2）不变量：跟手归零 + 落笔不变形 + 成稿不变 --------------
+        // 三条都量渲染层同一条取点路径（`Model` 已按渲染层口径把镜像接到曲线前）。
+        Console.WriteLine("  活笔笔尖镜像检查（mean2；跟手 / 落笔交接 / 成稿不变）：");
+        int tipFail = 0;
+        {
+            var raw = BuildArc(200f, 300);
+            bool saved = StrokeMotion.Mean2TipOverlay;
+            try
+            {
+                StrokeMotion.Mean2TipOverlay = true;
+                StrokeMotion.BumpVersion();
+                var liveOn = Model(StrokeMotionMode.Mean2, raw, committed: false, hasPressure: false, out _);
+                var doneOn = Model(StrokeMotionMode.Mean2, raw, committed: true, hasPressure: false, out _);
+
+                StrokeMotion.Mean2TipOverlay = false;
+                StrokeMotion.BumpVersion();
+                var liveOff = Model(StrokeMotionMode.Mean2, raw, committed: false, hasPressure: false, out _);
+                var doneOff = Model(StrokeMotionMode.Mean2, raw, committed: true, hasPressure: false, out _);
+
+                float tipLag = liveOn.Count > 0 ? Vector2.Distance(liveOn[^1], raw[^1]) : float.NaN;
+                float lagOff = liveOff.Count > 0 ? Vector2.Distance(liveOff[^1], raw[^1]) : float.NaN;
+                float handoff = MaxSeqDistance(liveOn, doneOn);
+                float finalDev = MaxSeqDistance(doneOn, doneOff);
+                // 关镜像必须量得到原来的滞后（>1px），否则这条检查没在测东西。
+                bool ok = float.IsFinite(tipLag) && tipLag <= 0.05f
+                          && float.IsFinite(handoff) && handoff <= 1e-3f
+                          && float.IsFinite(finalDev) && finalDev <= 1e-3f
+                          && lagOff > 1f;
+                if (!ok) tipFail++;
+                Console.WriteLine($"  {(ok ? "通过" : "失败")}  开镜像：活笔末端滞后 {tipLag,6:F3}px，落笔首帧偏差 {handoff,7:F4}px；"
+                                  + $"关镜像：滞后 {lagOff,6:F2}px；开/关成稿逐点偏差 {finalDev,7:F4}px");
+            }
+            finally
+            {
+                StrokeMotion.Mean2TipOverlay = saved;
+                StrokeMotion.BumpVersion();
+            }
+        }
+        Console.WriteLine();
 
         // [停用 2026-10-05] sliding 时间戳变体专项（sliding 已停用；代码保留，见 已停用-渲染实验.md）。
         /*
@@ -295,7 +337,7 @@ internal static class MotionProbe
         Console.WriteLine();
 
         // 硬保证：保留的模式都能给出 >=2 个有限点，且没抛异常。
-        hardFail += incFail;
+        hardFail += incFail + tipFail;
         Console.WriteLine($"  硬检查：{modes.Length} 个模式全部产出有限点——{(hardFail == 0 ? "通过" : $"失败 {hardFail} 个")}");
         Console.WriteLine();
         return hardFail == 0 ? 0 : 1;
@@ -335,6 +377,14 @@ internal static class MotionProbe
             var p = StrokeMotion.At(i);
             result.Add(new Vector2(p.X, p.Y));
             pressures.Add(p.Z);
+        }
+        // 活笔镜像（A2）：渲染层会把 `TipOverlay` 接在模型输出后一起过曲线；探针同口径取点，
+        // 否则"滞后"列量的是用户看不到的模型末端（关镜像时才该看到 ~6px）。
+        if (stroke.RawWhileLive)
+        {
+            var tip = StrokeMotion.TipOverlay;
+            for (int i = 0; i < tip.Count; i++)
+                result.Add(new Vector2(tip[i].X, tip[i].Y));
         }
 
         // mean2：渲染层会在建模输出之上再过一遍曲线；探针这里做同样的加工，
@@ -454,6 +504,16 @@ internal static class MotionProbe
     {
         float worst = 0f;
         foreach (var p in pts) worst = MathF.Max(worst, DistanceToPolyline(p, poly));
+        return worst;
+    }
+
+    /// <summary>两条点串逐点最大偏差（点数不同 = 无穷大，代表"不同形"）。</summary>
+    private static float MaxSeqDistance(List<Vector2> a, List<Vector2> b)
+    {
+        if (a.Count != b.Count || a.Count == 0) return float.MaxValue;
+        float worst = 0f;
+        for (int i = 0; i < a.Count; i++)
+            worst = MathF.Max(worst, Vector2.Distance(a[i], b[i]));
         return worst;
     }
 

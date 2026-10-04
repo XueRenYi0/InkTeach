@@ -82,8 +82,20 @@ internal static class StrokeMotion
     /// <summary>M7 Gauss：收笔二次样条，对应 Xournal++ `stabilizerFinalizeStroke`（默认 true）。</summary>
     public static bool GaussFinalize = true;
     // [删除 2026-10-05] `Mean2CurveKind/Mean2CurveMode/CurveModeled`（曲线档选择）、
-    // `Mean2TipOverlay`（原始点笔尖叠加）、`PredictTip`（预测笔尖叠加）：随停用/删除清理。
-    // mean2 的曲线层固定为过点曲线；恢复见 `已停用-渲染实验.md` + `.revert/`。
+    // `PredictTip`（预测笔尖叠加）：随停用/删除清理；mean2 的曲线层固定为过点曲线。
+    /// <summary>
+    /// mean2 **活笔笔尖镜像**（A2，**默认开**；`--mean2notip` 关）：活笔时把"收笔追赶会补的两步"
+    /// （落后 >1px 先补中点、再补真实末点）**只算进 <see cref="TipOverlay"/>**，交给渲染层接在
+    /// 模型输出后面；**不写进 `cache.Out`**。于是：
+    ///   · 活笔末端就是真实末点（距离窗 ~6px 的固定滞后归零）——跟手；
+    ///   · 落笔时收笔追赶补进模型的是同一段（同序同值）——落笔首帧与活笔末帧逐点相同；
+    ///   · 开关它只改活笔几何，**成稿输出逐点不变**（`--motiontest` 有三条断言）。
+    /// 旧版（2026-10-04）是把原始点塞进 `Out` 再回退，默认关且笔尖带噪声；本版改为纯显示层镜像，
+    /// 规格与外部资料对照见《调研-湿墨与临时墨迹.md》第九节。
+    /// </summary>
+    public static bool Mean2TipOverlay = true;
+    /// <summary>活笔笔尖镜像要补的点（0~2 个：中点 + 真实末点）；仅渲染层消费，不进模型输出。</summary>
+    public static readonly List<Vector3> TipOverlay = new();
 
     // ---- 静态复用输出缓冲 -------------------------------------------------
     private static Vector3[] _buffer = new Vector3[1024];
@@ -127,7 +139,7 @@ internal static class StrokeMotion
         public readonly List<float> Mean2Cum = new();
         public int Mean2Fed;
         public bool Mean2Ended;
-        /// <summary>没有叠加笔尖之前的输出点数（每帧重算笔尖前先回退到这里，避免重复叠加）。</summary>
+        /// <summary>收笔追赶前的输出点数（记录用；活笔镜像只进 `TipOverlay`，不回写 `Out`）。</summary>
         public int Mean2BaseCount;
 
         // M7 Xournal++ VelocityGaussian（新→旧；被权重判据截掉的永久丢弃）
@@ -149,6 +161,7 @@ internal static class StrokeMotion
     public static bool Build(Stroke s, StrokeMotionMode? forceMode = null)
     {
         Count = 0;
+        TipOverlay.Clear();
         var mode = forceMode ?? Mode;
         if (mode is StrokeMotionMode.Raw or StrokeMotionMode.Catmull) return false;
         if (s == null || s.Kind != StrokeKind.Freehand || s.Points.Count < 2) return false;
@@ -387,20 +400,39 @@ internal static class StrokeMotion
         if (pts.Count > 0) cache.LastFedTime = cache.Times[pts.Count - 1];
         cache.Mean2BaseCount = cache.Out.Count;
 
+        // **活笔笔尖镜像（A2，显示层）**：把"收笔追赶会补的那两步"按同一规则算出来，只装进
+        // `TipOverlay` 交给渲染层；**不碰 `cache.Out`**，所以成稿输出逐点不变。
+        if (Mean2TipOverlay && s.RawWhileLive && cache.Out.Count > 0 && pts.Count > 0)
+            AppendCatchUpPoints(cache.Out[^1], LastRaw(s), TipOverlay);
+
         // 收笔追赶：抬笔那一下把滞后补回真实末点（半程 + 末点两步，避免硬折）。
         if (!s.RawWhileLive && !cache.Mean2Ended && cache.Out.Count > 0)
         {
-            var lastRaw = new Vector3(pts[^1].X, pts[^1].Y, s.HasPressure ? pts[^1].P : 0.5f);
-            var lastOut = cache.Out[^1];
-            if (Vector2.Distance(new Vector2(lastOut.X, lastOut.Y),
-                                 new Vector2(lastRaw.X, lastRaw.Y)) > 1f)
-                cache.Out.Add((lastOut + lastRaw) * 0.5f);
-            cache.Out.Add(lastRaw);
+            AppendCatchUpPoints(cache.Out[^1], LastRaw(s), cache.Out);
             cache.Mean2Ended = true;
         }
 
-        // [删除 2026-10-05] 活笔笔尖叠加（`--predicttip` / `--mean2tip`）：随停用/删除清理。
         return cache.Out.Count >= 2;
+    }
+
+    /// <summary>真实末点（压力口径与收笔追赶/镜像一致）。</summary>
+    private static Vector3 LastRaw(Stroke s)
+    {
+        var p = s.Points[^1];
+        return new Vector3(p.X, p.Y, s.HasPressure ? p.P : 0.5f);
+    }
+
+    /// <summary>
+    /// 收笔追赶与**活笔笔尖镜像**共用的两步（单源纪律：规则只在这里）：
+    /// 落后 >1px 先补中点（防硬折），再补真实末点。镜像那次写进 <see cref="TipOverlay"/>，
+    /// 收笔那次写进 `cache.Out`——两边同序同值，所以落笔前后逐点相同。
+    /// </summary>
+    private static void AppendCatchUpPoints(Vector3 lastOut, Vector3 lastRaw, List<Vector3> into)
+    {
+        if (Vector2.Distance(new Vector2(lastOut.X, lastOut.Y),
+                             new Vector2(lastRaw.X, lastRaw.Y)) > 1f)
+            into.Add((lastOut + lastRaw) * 0.5f);
+        into.Add(lastRaw);
     }
 
     // ---- M7：Xournal++ VelocityGaussian（速度高斯权重平均 + 收笔二次样条）----
@@ -676,10 +708,10 @@ internal static class StrokeMotion
                 //     Mean2CurveMode = Mean2CurveKind.Smooth; break;
                 // [停用] case "--mean2fittol" when float.TryParse(args[i + 1], out var tol) && tol > 0f:
                 //     WpfInkFit.TolerancePx = Math.Clamp(tol, 0.05f, 5f); break;
-                // [停用] case "--mean2tip":
-                //     Mean2TipOverlay = true; break;
-                // [停用] case "--mean2notip":
-                //     Mean2TipOverlay = false; break;
+                case "--mean2tip":
+                    Mean2TipOverlay = true; break;
+                case "--mean2notip":
+                    Mean2TipOverlay = false; break;
                 // [停用] case "--oneeuro" when TryParsePair(args[i + 1], out var fc, out var beta):
                 //     OneEuroMinCutoff = fc; OneEuroBeta = beta; break;
                 // [停用] case "--oneeurodc" when double.TryParse(args[i + 1], out var dc) && dc > 0:

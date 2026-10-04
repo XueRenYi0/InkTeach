@@ -1825,7 +1825,9 @@ public partial class InkEngine
             string modeDesc = StrokeMotion.Mode switch
             {
                 StrokeMotionMode.Catmull => $"catmull（M1：过点曲线＋角点保护，角点阈值 {StrokeSmoothing.CornerAngleDeg}°；活笔走折线）",
-                _ => $"mean2（M6：距离窗 {StrokeMotion.Mean2WindowPx:F0}px ＋ 过点曲线 ＋ 收笔追赶）",
+                _ => "mean2（M6：距离窗 " + $"{StrokeMotion.Mean2WindowPx:F0}"
+                     + "px ＋ 过点曲线 ＋ 收笔追赶"
+                     + (StrokeMotion.Mean2TipOverlay ? " ＋ 活笔镜像跟手" : "（活笔镜像关）") + "）",
             };
             Console.WriteLine($"笔迹运动模型: {modeDesc}");
         }
