@@ -36,6 +36,10 @@ $zip = Join-Path $root "dist\InkTeach-$Version-win-x64.zip"
 $setup = Join-Path $root "dist\InkTeach-Setup-$Version.exe"
 foreach ($f in @($zip, $setup)) { if (-not (Test-Path $f)) { throw "缺文件：$f（先跑 .\publish.ps1）" } }
 
+# 固定名副本（官网"永不失效"的免登录直链用，见 publish.ps1 同名区块）：有就一起传。
+$stableZip = Join-Path $root "dist\InkTeach-win-x64.zip"
+$stableSetup = Join-Path $root "dist\InkTeach-Setup.exe"
+
 # JSON 一律**先落文件、再按 UTF-8 读**：PowerShell 5.1 的 `curl | ConvertFrom-Json`
 # 管道会把 UTF-8 中文/长 JSON 解错（2026-10-04 发 8.6.4 时真踩过：发行版都建出来了，
 # 解析那一步抛异常，附件没传成）。落文件读回来就稳了。
@@ -77,9 +81,11 @@ else {
     Write-Host "  发行版 $tag 已存在" -ForegroundColor DarkGray
 }
 
-# ③ 附件：同名已在就跳过，缺的先取 upload_url 再 PUT
+# ③ 附件：同名已在就跳过，缺的先取 upload_url 再 PUT（含固定名副本，有就传）
 $existing = @($rel.assets | Where-Object { $_.type -eq 'attach' } | ForEach-Object { $_.name })
-foreach ($f in @($zip, $setup)) {
+$uploads = @($zip, $setup) + @($stableZip, $stableSetup) |
+           Where-Object { Test-Path $_ } | Select-Object -Unique
+foreach ($f in $uploads) {
     $leaf = Split-Path $f -Leaf
     if ($existing -contains $leaf) { Write-Host "  附件已在：$leaf" -ForegroundColor DarkGray; continue }
     $up = curl.exe -s --max-time 60 "$api/releases/$tag/upload_url?access_token=$tok&file_name=$leaf" | ConvertFrom-Json

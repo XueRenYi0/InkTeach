@@ -205,6 +205,22 @@ if ($NoSetup) {
     }
 }
 
+# ---- 固定名副本（官网"永不失效"的免登录直链用）--------------------------------------
+#
+#  官网按钮用的是 **固定文件名** 的直链，这样每次发版网页不用改：
+#    https://gitcode.com/xzx1xzzx/InkTeach/releases/download/latest/InkTeach-Setup.exe
+#    https://gitcode.com/xzx1xzzx/InkTeach/releases/download/latest/InkTeach-win-x64.zip
+#  （`latest` 是 GitCode/GitHub 都支持的"最新发行版"别名；实测匿名 GET 可下、不要登录。）
+#  上传发行版附件时把这两个固定名文件也带上：
+#    · GitCode：tools\gitcode-release.ps1 已自动带上；
+#    · GitHub：`gh release upload <tag> dist\InkTeach-Setup.exe dist\InkTeach-win-x64.zip`
+$stableZip = Join-Path $root "dist\InkTeach-win-x64.zip"
+$stableSetup = Join-Path $root "dist\InkTeach-Setup.exe"
+if (Test-Path $zip)   { Copy-Item $zip   $stableZip   -Force }
+if (Test-Path $setup) { Copy-Item $setup $stableSetup -Force }
+if (Test-Path $stableZip)   { Write-Host "  固定名副本 dist\InkTeach-win-x64.zip（官网直链用）" -ForegroundColor DarkGray }
+if (Test-Path $stableSetup) { Write-Host "  固定名副本 dist\InkTeach-Setup.exe（官网直链用）" -ForegroundColor DarkGray }
+
 # ---- update.json（自动更新的清单；配了更新源才生成）--------------------------------------
 #
 # 这一份要**和 zip 一起挂到 GitHub Release 的附件里**。App 端只认一个恒定地址：
