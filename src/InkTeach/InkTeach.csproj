@@ -2,14 +2,25 @@
 
   <PropertyGroup>
     <!--
-      **OutputType 榛樿鏄?Exe锛堟帶鍒跺彴绋嬪簭锛夆€斺€旇繖鏄晠鎰忕殑**锛氳繖涓粨搴撶殑骞叉椿鏂瑰紡灏辨槸
-      "璺戜竴鏉¤嚜妫€銆佺湅瀹冪殑杈撳嚭"锛岃€岃緭鍑鸿琚閬撴姄浣忓氨蹇呴』鏄帶鍒跺彴瀛愮郴缁?      锛圙UI 瀛愮郴缁熻繘绋嬫嬁涓嶅埌鐖惰繘绋嬬殑绠￠亾锛氬疄娴嬫敼鎴?WinExe 涔嬪悗锛?      鑷鐨勮緭鍑鸿绠￠亾鎶撳埌鐨勬槸绌虹殑锛夈€?
-      鍙戝竷缁欑敤鎴锋椂鍒囧埌 GUI 瀛愮郴缁燂紙閭ｆ牱鍙屽嚮鍚姩涓嶄細寮归粦妗嗭級锛屾牴鐩綍 publish.ps1 浼氫紶
-      `PublishAsWinExe=true` 杩囨潵銆備袱鏉¤矾鍚勭涓€杈广€?      锛堝彂甯冪増浠庣粓绔窇鏃讹紝Main 閲岄偅鍙?AttachConsole 浼氳鏃ュ織鐓ф棫鎵撳埌閭ｄ釜缁堢涓娿€傦級
+      **OutputType 默认是 Exe（控制台子系统）——这是故意的**：这个仓库的干活方式就是
+      "跑一条自检、看它的输出"，而输出要被管道抓住就必须是控制台子系统
+      （GUI 子系统进程拿不到父进程的管道：实测改成 WinExe 之后，
+      自检的输出被管道抓到的却是空的那一份）。
 
-      鈿?鍒敼鎴?鍛戒护琛岀洿鎺ヤ紶 OutputType=WinExe"锛氶偅鏄?MSBuild 鐨?*鍏ㄥ眬灞炴€?*锛?        浼氫竴璧蜂紶缁欒寮曠敤鐨?InkEngine / InkUi鈥斺€斿畠浠槸搴撱€佹病鏈?Main锛?        鏁翠釜鏋勫缓鐩存帴鎶?CS5001锛堣繖涓潙瀹炴祴韪╄繃锛屾墍浠ヤ笓闂ㄥ紑浜嗚繖涓嚜瀹氫箟寮€鍏筹級銆?
-      绋嬪簭鍥炬爣 = **绾挎潯鍨嬬殑绗?路 鐧界爾 锛?甯︾瑪閿嬬殑绾㈢瑪杩?*锛堢敤鎴?2026-10-01 绗簲杞畾锛?      璁捐绋?design/鍥炬爣-璁捐绋縱5-绾挎潯鍨嬬殑绗?png 涓?v5b-绗旇抗鍥涢€?png 鐨?B / 鈶★級銆?      瀹冧笉鏄墜鐢荤殑锛屾槸 makeicon 閭ｆ潯鍛戒护鐢ㄧ晫闈㈢殑娓叉煋璺緞鐢诲嚭鏉ョ殑锛堢敾鍦?AppIconUi 閲岋級锛岃 App.MakeIcon銆?
-      鐗堟湰浠?8.0.0 璧凤紙鐢ㄦ埛 2026-09-27 瀹氾級銆傛枃浠跺睘鎬ч噷閭ｅ嚑琛岄兘璺熺潃瀹冭蛋銆?    -->
+      发布给用户时切到 GUI 子系统（那样双击启动不会弹黑框），根目录 publish.ps1 会传
+      `PublishAsWinExe=true` 过来。两条路各管一截。
+      （发布版从终端跑时，Main 里那句 AttachConsole 会让日志照旧打到那个终端上。）
+
+      ⚠ **别改成"命令行直接传 OutputType=WinExe"**：那是 MSBuild 的**全局属性**，
+      会一起传给被引用的 InkEngine / InkUi——它们是库、没有 Main，
+      整个构建直接报 CS5001（这个坑实测踩过，所以专门开了这个自定义开关）。
+
+      程序图标 = **线条型的笔 · 白纸（带笔锋的红色笔迹）**（用户 2026-10-01 第五轮定的；
+      设计稿 design/图标-设计稿v5-线条型的笔.png 与 v5b-笔迹四选.png 的 B / ②）。
+      它不是手绘的，是 makeicon 那条命令用界面的渲染路径画出来的（画在 AppIconUi 里），见 App.MakeIcon。
+
+      版本从 8.0.0 起（用户 2026-09-27 定）。文件属性里那几行都跟着它走。
+    -->
     <OutputType Condition="'$(PublishAsWinExe)' == 'true'">WinExe</OutputType>
     <OutputType Condition="'$(PublishAsWinExe)' != 'true'">Exe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
@@ -26,14 +37,16 @@
 
     <ApplicationIcon>assets\InkTeach.ico</ApplicationIcon>
 
-    <Version>8.8.0.3</Version>
+    <Version>8.8.0.4</Version>
     <!--
-      鈿?**涓嶈鍐嶅崟鐙拤 `AssemblyVersion` / `FileVersion`**锛?026-10-02 韪╄繃锛夛細
-      杩欎袱涓竴鏃﹀拰涓婇潰鐨?`<Version>` 鍒嗗锛宍UpdateFeed.CurrentVersion`锛堣绋嬪簭闆嗙増鏈級
-      灏变細姣旂湡瀹炵増鏈棫鈥斺€?.6.0 瑁呭畬浠嶆姤"褰撳墠 8.5.1"锛屼簬鏄案杩滄彁绀?鏈夋柊鐗堟湰 8.6.0"銆?      SDK 榛樿璁╁畠浠窡鐫€ `<Version>` 璧帮紝鍒姩灏辨槸瀵圭殑銆?    -->
-    <Product>InkTeach 鎵规敞</Product>
-    <AssemblyTitle>InkTeach 鎵规敞</AssemblyTitle>
-    <Description>灞忓箷鎵规敞宸ュ叿锛氱櫧鏉?/ PPT 鏀炬槧鎵规敞 / 鍥惧舰涓庢洸绾?/ 鍥炴斁瀵煎嚭</Description>
+      ⚠ **不要再单独钉 `AssemblyVersion` / `FileVersion`**（2026-10-02 踩过）：
+      这两个一旦和上面的 `<Version>` 分家，`UpdateFeed.CurrentVersion`（读程序集版本）
+      就会比真实版本旧——8.6.0 装完仍报"当前 8.5.1"，于是永远提示"有新版本 8.6.0"。
+      SDK 默认让它们跟着 `<Version>` 走，别动就是对的。
+    -->
+    <Product>InkTeach 批注</Product>
+    <AssemblyTitle>InkTeach 批注</AssemblyTitle>
+    <Description>屏幕批注工具：白板 / PPT 放映批注 / 图形与曲线 / 回放导出</Description>
   </PropertyGroup>
 
   <ItemGroup>
@@ -41,11 +54,10 @@
     <ProjectReference Include="..\InkUi\InkUi.csproj" />
   </ItemGroup>
 
-  <!-- 寮曟搸搴撻噷鐨?Vortice 绫诲瀷浼氬嚭鐜板湪鍏紑绛惧悕閲岋紝杩欓噷闇€瑕佽兘寮曠敤鍒?-->
+  <!-- 引擎库里的 Vortice 类型会出现在公开签名里，这里需要能引用到 -->
   <ItemGroup>
     <PackageReference Include="Vortice.Direct2D1" Version="3.8.3" />
     <PackageReference Include="Vortice.Mathematics" Version="2.1.1" />
   </ItemGroup>
 
 </Project>
-

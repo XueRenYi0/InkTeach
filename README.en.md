@@ -63,6 +63,8 @@ Sectors = pen / black / red / blue / eraser / select / highlighter / laser.
   just cancel and stay passed through.
 - It adds no new commands at all: every sector runs the exact same code path as the tool keys.
 
+<p align="center"><img src="design/readme/17-呼出盘-深色.png" width="300" alt="Radial palette: hold the global key and eight sectors appear at the cursor (dark theme)"></p>
+
 ### ④ Pass-through, and global keys to come back
 
 Click the "mouse" cell (or press `Ctrl+Alt+Shift+T`) and the mouse goes to the app underneath, so
@@ -89,6 +91,10 @@ with shape snapping while dragging (square, circle, orientation) and live angle 
 readouts.
 
 <p align="center"><img src="design/readme/08-图形上带.png" width="880" alt="Shape rail: 22 entries, conics and solids included"></p>
+
+<p align="center"><img src="design/readme/18-图形库.png" width="720" alt="Shape library overview: 22 categories, each with several variants (solid / dashed / dotted, grid / no grid…)"></p>
+
+<p align="center"><img src="design/readme/19-学科图形.png" width="880" alt="Subject shapes: parabolas in four orientations, hyperbolas, sine / cosine / wave, tangent, plus cylinder / cone / frustum / sphere"></p>
 
 ### ⑦ Per-slide isolation in PowerPoint
 

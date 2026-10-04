@@ -116,6 +116,7 @@ footer .en { color: #8a939d; }
 .darkband h3 { color: #f2f4f7; margin: 0 0 4px; font-size: 18px; }
 .darkband .note { color: #98a1ad; }
 .darkband .pair { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 16px; }
+.darkband .pair.three { grid-template-columns: repeat(3, 1fr); }
 .darkband .pair img { width: 100%; border-radius: 10px; display: block; }
 .darkband .cap { text-align: center; color: #98a1ad; font-size: 12.5px; margin-top: 8px; }
 
