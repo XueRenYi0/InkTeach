@@ -2654,6 +2654,10 @@ public partial class InkEngine
         {
             if (!Native.GetPointerTouchInfo(id, buf)) return (0f, 0f);
             var ti = System.Runtime.InteropServices.Marshal.PtrToStructure<Native.POINTER_TOUCH_INFO>(buf);
+            // ⚠ 设备不上报面积时，rcContact 规范默认是"以指针为中心的 0×0"——
+            // 所以先看 touchMask 说没说它有效（2026-10-05 修：此前结构体漏了
+            // touchFlags/touchMask，整体偏移 8 字节，读到的"面积"其实是坐标）。
+            if ((ti.touchMask & Native.TOUCH_MASK_CONTACTAREA) == 0) return (0f, 0f);
             int w = ti.rcContact.Width, h = ti.rcContact.Height;
             if (w <= 0 && h <= 0) { w = ti.rcContactRaw.Width; h = ti.rcContactRaw.Height; }
             return (w, h);

@@ -241,12 +241,20 @@ internal static class Native
     }
 
     /// <summary>
-    /// 触摸触点信息（Windows 真实定义 136 字节）。**接触面积 = `rcContact`**——
+    /// 触摸触点信息（Windows 真实定义 **144 字节**）。**接触面积 = `rcContact`**——
     /// 触点诊断（8.3.3）靠它量屏（见 Engine 的触点诊断那一段）。
+    ///
+    /// ⚠ 2026-10-05 修：此前这里漏了 `touchFlags` / `touchMask` 两个字段，
+    /// 后面所有字段**整体偏移 8 字节**（`rcContact` 读到的是 touchFlags/touchMask），
+    /// `--touchhud` 的"接触面积"读数一直是错的。
+    /// 读面积前必须看 `touchMask & TOUCH_MASK_CONTACTAREA`；设备不上报时
+    /// `rcContact` 规范默认是 0×0 的矩形（以指针位置为中心）。
     /// </summary>
     public struct POINTER_TOUCH_INFO
     {
         public POINTER_INFO pointerInfo;
+        public uint touchFlags;
+        public uint touchMask;
         public RECT rcContact;
         public RECT rcContactRaw;
         public uint orientation;
@@ -803,6 +811,9 @@ internal static class Native
     public const uint PEN_MASK_ROTATION = 0x00000002;
     public const uint PEN_MASK_TILT_X = 0x00000004;
     public const uint PEN_MASK_TILT_Y = 0x00000008;
+
+    /// <summary>touchMask：`rcContact`（接触区）有效。</summary>
+    public const uint TOUCH_MASK_CONTACTAREA = 0x00000001;
 
     /// <summary>POINTER_FEEDBACK_DEFAULT。合成设备必须给一个反馈模式。</summary>
     public const uint POINTER_FEEDBACK_DEFAULT = 1;

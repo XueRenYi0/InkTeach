@@ -24288,9 +24288,10 @@ internal sealed partial class App : InkEngine.InkEngine
 
     // ---- 合成触摸（自检注入用）------------------------------------------
     //
-    // 为什么触摸需要单独一份：**POINTER_TYPE_INFO 的 union 里最大的是
-    // POINTER_TOUCH_INFO（136 字节）**，而我们那个结构体只声明了 pen 分支（120 字节）
-    // 加 24 字节填充，总长 148 —— 够放，而且两个分支的**开头都是同一份 POINTER_INFO**，
+    // 为什么触摸需要单独一份：**POINTER_TYPE_INFO 真实定义里中间是一个 union，
+    // 最大成员是 POINTER_TOUCH_INFO（144 字节）**，而我们那个结构体只声明了 pen 分支
+    // （120 字节）加 24 字节填充 → 152 字节，与真实步长（4 + 4 对齐 + 144）一致；
+    // 而且两个分支的**开头都是同一份 POINTER_INFO**，
     // 所以按 pen 的字段名填、把 type 设成 PT_TOUCH 就能造出一个触摸触点。
     private IntPtr _syntheticTouch;
 
