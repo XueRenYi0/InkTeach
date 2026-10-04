@@ -1036,9 +1036,10 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --smoothtest        中心线曲线化自检（过点 Catmull-Rom：直角不变形 / 圆弧更圆滑 / 形状不跑）");
         Console.WriteLine("  --smoothshow [图]   出图：曲线化开/关对照（同一组样本各存一张 -off / -on，32 位 BMP）");
         Console.WriteLine("  --smoothflashtest [--off]  “画的时候闪不闪”专项检测（合成鼠标画过去，看已经画过的墨还动不动）");
-        Console.WriteLine("  --motion <名字>     catmull / mean2（**默认 mean2**=距离窗＋过点曲线＋收笔追赶）");
+        Console.WriteLine("  --motion <名字>     catmull / mean2（**默认 mean2**=距离窗＋过点曲线＋收笔追赶＋活笔镜像＋预测）");
         Console.WriteLine("  --motiontest        运动模型自检（baseline / catmull / mean2 同批语料出表）");
-        Console.WriteLine("  --himetric          D1 亚像素输入（用 ptHimetricLocation 映射小数像素；默认关，做 A/B）");
+        Console.WriteLine("  --mean2notip / --notipredict  关活笔镜像 / 关预测（对照）；--tipredictms N 预测毫秒（默认 12）");
+        Console.WriteLine("  --himetric / --nohimetric  D1 亚像素输入开/关（用 ptHimetricLocation 映射小数像素；默认开）");
         Console.WriteLine("  模型调参：--mean2win 画布像素 / --smoothcorner N 角点阈值");
         Console.WriteLine("  [已停用] 预测、拟合(--mean2fit)、模拟压力(--simpressure/--pfpressure)、笔锋");
         Console.WriteLine("           (--simtaper/--flicktip)、对照模式(raw/sliding/spring/oneeuro/mean/gauss)等：");

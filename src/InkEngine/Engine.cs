@@ -1827,17 +1827,20 @@ public partial class InkEngine
                 StrokeMotionMode.Catmull => $"catmull（M1：过点曲线＋角点保护，角点阈值 {StrokeSmoothing.CornerAngleDeg}°；活笔走折线）",
                 _ => "mean2（M6：距离窗 " + $"{StrokeMotion.Mean2WindowPx:F0}"
                      + "px ＋ 过点曲线 ＋ 收笔追赶"
-                     + (StrokeMotion.Mean2TipOverlay ? " ＋ 活笔镜像跟手" : "（活笔镜像关）") + "）",
+                     + (StrokeMotion.Mean2TipOverlay ? " ＋ 活笔镜像跟手" : "（活笔镜像关）")
+                     + (StrokeMotion.TipPredict ? $" ＋ 预测{StrokeMotion.TipPredictMs:F0}ms" : "（预测关）") + "）",
             };
             Console.WriteLine($"笔迹运动模型: {modeDesc}");
         }
 
-        // ---- D1：亚像素输入（`--himetric`）-------------------------------------
+        // ---- D1：亚像素输入（默认开；`--nohimetric` 回整数）-------------------------
+        // 2026-10-04 体验轮打开：笔的硬件分辨率远高于整数像素，取整的 ±0.5px 噪声
+        // 在细笔上肉眼可见；D1 拿不到设备矩形时逐点退回整数像素（行为与 D0 一致）。
         InputPrecision.Reset();
-        InputPrecision.UseHimetric = args.Contains("--himetric");
+        InputPrecision.UseHimetric = !args.Contains("--nohimetric");
         Console.WriteLine(InputPrecision.UseHimetric
-            ? "输入精度: himetric 亚像素（D1；拿不到设备矩形时逐点退回整数像素）"
-            : "输入精度: 整数像素（D0；--himetric 打开 D1 对照）");
+            ? "输入精度: himetric 亚像素（D1 默认开；拿不到设备矩形时逐点退回整数像素）"
+            : "输入精度: 整数像素（D0；--nohimetric）");
 
         // ---- 呈现节奏 ---------------------------------------------------------
         // 默认改成"等到合成边界再抽输入、立刻 Present(0)"。实测这一项把

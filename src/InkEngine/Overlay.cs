@@ -2197,8 +2197,12 @@ internal sealed partial class OverlayWindow : IDisposable
 
         if (app.ActiveStroke != null)
         {
-            // [删除 2026-10-05] 渲染尾（预测段）已随老预测系统移除，脏区不必再往外扩。
-            r.Add(CanvasRectToWindow(app.ActiveStroke.PaddedBounds));
+            // 活笔临时层（镜像尾 L1 ＋ 预测段 L2）可能伸出包围盒：脏区跟着外扩预测上限，
+            // **只影响重画范围**——存档的包围盒一字不动。
+            var ab = app.ActiveStroke.PaddedBounds;
+            if (app.ActiveStroke.RawWhileLive)
+                ab = ab.Inflate(StrokeMotion.TipPredictMaxPx);
+            r.Add(CanvasRectToWindow(ab));
         }
 
         // 呼出盘（Ctrl+Alt+Shift+Q）：固定画在盘心，但轨迹线跟着指针、内容随扇区变——
