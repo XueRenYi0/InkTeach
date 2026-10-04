@@ -4916,12 +4916,16 @@ public partial class InkEngine
                 GcLatency.Enter();
                 BeginStrokeMeasure();
                 Doc.BeginEraseRect();
-                TouchEraseSample();
-                Console.WriteLine("触摸：手掌 / 三指 → 擦除");
+                // **手掌按下先不擦**（移动才擦）：手掌落在屏上不动是"手托着"，不该直接把下面
+                // 的板书擦掉；三指擦照旧按下即擦（那是主动动作）。见 TouchGestures 的注释。
+                if (!_touch.LastDownWasPalm) TouchEraseSample();
+                Console.WriteLine(_touch.LastDownWasPalm ? "触摸：手掌 → 擦除（移动才擦）" : "触摸：三指 → 擦除");
                 return true;
 
             case TouchVerdict.Gesture2:
                 stealPointer = true;
+                // 从"擦"切到手势：先把这一轮擦除收账（不然 BeginEraseRect 一直挂着）。
+                if (_touchMode == TouchMode.Erase) { Doc.EndErase(); EndStrokeMeasure(); }
                 CancelTouchStroke();
                 _touchMode = TouchMode.Gesture2;
                 _drawing = true;
@@ -5125,7 +5129,7 @@ public partial class InkEngine
         _dirty = true;
     }
 
-    /// <summary>擦一次：**每个触点各擦一块**（面积决定大小；三指就是三块小橡皮并排，等效大手擦）。</summary>
+    /// <summary>擦一次：**每个触点各擦一块**（尺寸见下；三指 = 三块小橡皮并排，等效大手擦）。</summary>
     private void TouchEraseSample()
     {
         var list = _touch.Views;
@@ -5133,6 +5137,9 @@ public partial class InkEngine
         for (int i = 0; i < list.Count; i++)
         {
             float half = _touch.EraseHalfWidth(DpiScale, 14f, 90f);
+            // 报面积时：**手掌按真实尺寸来**（地板 = 固定值、天花板 = 90 逻辑像素）；
+            // 三指的细手指尺寸小，夹完仍是固定值，不受影响。
+            if (list[i].Size > 0f) half = Math.Clamp(list[i].Size * 0.5f, half, 90f * DpiScale);
             var p = list[i].Pos;
             Doc.EraseRectAt(p.X, p.Y, half, half * 1.618f);
         }

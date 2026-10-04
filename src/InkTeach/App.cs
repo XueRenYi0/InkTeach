@@ -28562,6 +28562,46 @@ internal sealed partial class App : InkEngine.InkEngine
                   $"opened={opened}，active={RadialPaletteActive}，色=({CurrentColor.R:F2},{CurrentColor.G:F2},{CurrentColor.B:F2})");
         }
 
+        // ---- ⑮ 手掌（大面积）= 擦：**相对基线**判定；按住不动不擦、移动才擦 ----
+        {
+            TouchResetForTest();
+            RadialCancelForTest("用例起手");
+            Doc.Clear();
+            Doc.ClearHistory();
+            var target = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = 30f * dpi };
+            for (int i = 0; i <= 20; i++) target.AddPoint(cx - 200 + i * 20, cy, 0.9f, i);
+            Doc.AddStroke(target);
+            Doc.InvalidateAll();
+            SettleFrames(150);
+            // 先喂一根"正常手指"（size 24）建立手指基线——放远处，别碰目标线
+            TouchWrite(cx - 260, cy - 420, cx - 160, cy - 420, size: 24f);
+            int before = Doc.Strokes.Count;                 // = 2（目标线 + 刚才那笔）
+            // 手掌（size 240 > 基线 24 × 3）按在目标线上：**原地按住 → 不该擦**
+            SendTouchesSized(true, (cx - 200, cy, 240f));
+            SettleFrames(120);
+            bool inErase = TouchModeForTest == TouchMode.Erase;
+            int afterHold = Doc.Strokes.Count;
+            // 沿目标线移动 → 才擦
+            SendTouchesSized(true, (cx - 100, cy, 240f));
+            SettleFrames(50);
+            SendTouchesSized(true, (cx, cy, 240f));
+            SettleFrames(50);
+            SendTouchesSized(true, (cx + 100, cy, 240f));
+            SettleFrames(50);
+            SendTouchesSized(true, (cx + 200, cy, 240f));
+            SettleFrames(50);
+            SendTouchesSized(false, (cx + 200, cy, 240f));
+            SettleFrames(150);
+            Check("手掌（大面积）= 擦：相对基线判定；按住不动不擦、移动才擦",
+                  inErase && afterHold == before && !Doc.Strokes.Contains(target) && Doc.Strokes.Count == before - 1,
+                  $"模式 {inErase}，按住后 {before}→{afterHold}，最终笔画 {Doc.Strokes.Count}（期望 {before - 1}）");
+            SetUiPref("touch.palm", "0");
+            LoadTouchPrefs();
+            SetUiPref("touch.palm", null);
+            LoadTouchPrefs();
+            TouchResetForTest();
+        }
+
         // 收尾
         TouchResetForTest();
         Doc.Clear();
