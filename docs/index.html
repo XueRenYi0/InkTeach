@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>InkTeach 课堂批注 · 在 PPT / WPS 上直接写板书的 Windows 覆盖层</title>
-<meta name="description" content="InkTeach（ink teach）是一款 Windows 课堂批注软件：透明覆盖层，直接在任何软件上写板书；色带 6 像素↔34 像素展开、贴边隐藏、全局呼出盘、停顿变图形、22 种图形、PPT 逐页隔离、深色主题。开源 GPL-3.0，安装不需要管理员权限，不需要安装 .NET。">
-<meta name="keywords" content="InkTeach,ink teach,课堂批注,批注软件,板书软件,Windows批注,PPT批注,WPS批注,白板,手写批注,教学软件,电子白板,呼出盘,色带">
+<meta name="description" content="InkTeach（ink teach）是一款 Windows 课堂批注软件：透明覆盖层，直接在任何软件上写板书；色带 6 像素↔34 像素展开、贴边隐藏、全局呼出盘、停顿变图形、22 种图形、PPT 逐页隔离、深色主题。底层走 D3D11/Direct2D 增量渲染（分块缓存 + 脏矩形 + 视口预取），低延迟手写。开源 GPL-3.0，安装不需要管理员权限，不需要安装 .NET。">
+<meta name="keywords" content="InkTeach,ink teach,课堂批注,批注软件,板书软件,Windows批注,PPT批注,WPS批注,白板,手写批注,教学软件,电子白板,呼出盘,色带,Direct2D,分块缓存,脏矩形,增量渲染,低延迟手写">
 <meta name="author" content="XueRenYi0">
 <link rel="canonical" href="https://xuerenyi0.github.io/InkTeach/">
 <meta property="og:type" content="website">
@@ -26,7 +26,7 @@
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
   "license": "https://www.gnu.org/licenses/gpl-3.0.html",
   "downloadUrl": "https://gitcode.com/xzx1xzzx/InkTeach/releases/download/latest/InkTeach-Setup.exe",
-  "softwareVersion": "8.8.0",
+  "softwareVersion": "8.8.0.3",
   "author": { "@type": "Person", "name": "XueRenYi0" },
   "codeRepository": "https://github.com/XueRenYi0/InkTeach"
 }
@@ -42,6 +42,7 @@
       <a href="#dark">深色</a>
       <a href="#shots">界面</a>
       <a href="#why">技术选择</a>
+      <a href="#tech">底层细节</a>
       <a href="#perf">性能</a>
       <a href="#install">下载</a>
       <a href="https://github.com/XueRenYi0/InkTeach" target="_blank" rel="noopener">GitHub</a>
@@ -84,6 +85,8 @@
         挑颜色是最高频动作，逼人走两步就等于不好用。</p>
         <div class="shot"><img src="img/bar.png" alt="主工具带与色带式设置条">
           <div class="cap">下：胶囊工具带 ｜ 上：色带展开后的设置条</div></div>
+        <div class="shot"><img src="img/rail-collapsed.png" alt="色带收起：平时只是工具带上沿的一条 6 像素色线">
+          <div class="cap">收起：平时只是一条 6 像素色线，12 个色片照样点得到</div></div>
       </article>
 
       <article>
@@ -93,6 +96,9 @@
         而<b>藏起来的时候恰恰是最需要一次点中的时候</b>，教室里没键盘，工具找不到是真问题。</p>
         <p>贴边判定用"离屏幕底 ≤10 像素"，<b>不是</b>离任务栏上沿——所以默认位置不会误触发，
         要收起来必须<b>明确把面板拖到最底下</b>。</p>
+        <div class="shot"><img src="img/dock-hide.png" alt="贴边隐藏：露着是圆钮，藏到底只剩一条 48×8 的把手"
+          style="width:auto;max-width:100%;display:block;margin:0 auto">
+          <div class="cap">露着是一个圆钮（左）→ 拖到屏幕底边隐藏后，只剩一条 48×8 的把手（右，颜色是当前笔色）</div></div>
       </article>
 
       <article>
@@ -176,6 +182,10 @@
     </div>
     <div class="feat">
       <article class="wide">
+        <div class="shot dark"><img src="img/rail-dark.gif" alt="动图：深色主题下，色带收起是一条线，鼠标碰到张开成设置条">
+          <div class="cap">动图：深色主题下，色带收起 ↔ 展开（鼠标碰到才张开）</div></div>
+      </article>
+      <article class="wide">
         <div class="shot dark"><img src="img/roll-dark.png" alt="深色主题的随机点名窗">
           <div class="cap">随机点名（深色）：抽中的人是一枚枚名牌，不是一列纯文字</div></div>
       </article>
@@ -244,7 +254,30 @@
   </div>
 </section>
 
-<section id="perf" class="section alt">
+<section id="tech" class="section alt">
+  <div class="wrap">
+    <h2>底层细节</h2>
+    <p class="lead small">这一版没加新功能，专门把"脏区 / 相机 / 分块缓存"这条渲染路径，
+      对着 <b>Xournal++</b> 的分块与预取、<b>Rnote</b> 的视口余量、<b>MyPaint</b> 的 tile 分区纪律、
+      <b>Excalidraw</b> 的相机处理、<b>Windows Terminal</b> 的后缓冲不变量逐条过了一遍——
+      能直接对齐上游稳定做法的，就直接对齐，不重新发明。</p>
+    <table>
+      <tr><th>细节</th><th>做法</th></tr>
+      <tr><td><b>画布空间分块缓存</b></td><td>内容层按 <b>256 像素一块</b>烘进缓存（块原点对齐画布像素，拼接无缝）；预算内常驻，超预算按 LRU 淘汰</td></tr>
+      <tr><td><b>脏矩形 + 部分上屏</b></td><td>每帧只提交最少的脏矩形（<code>Present1</code>）；滚动条这类常驻元素的脏区按<b>可见性门控</b>——不可见就不进脏区，否则"滚动条 ∪ 笔迹"的并集会把别的列扫出屏幕</td></tr>
+      <tr><td><b>双缓冲一致性</b></td><td>相机变化（滚动 / 缩放）之后<b>连续两帧整屏重铺</b>，保证两个后缓冲都是新相机——借的是 Windows Terminal 那条"后缓冲不变量"纪律</td></tr>
+      <tr><td><b>视口外预取</b></td><td>视口外一圈的分块在空闲帧提前烘好（每帧限量、有预算，也可关）——滚到新区域没有"补课"卡顿（Xournal++ 预载 / Rnote 视口余量）</td></tr>
+      <tr><td><b>相机取整</b></td><td>相机平移按设备像素取整：静态内容在原位重画，不会再因为亚像素抖动"糊一下"</td></tr>
+      <tr><td><b>拖动零重画</b></td><td>拖动 / 旋转一万条选中内容时，内容层 <b>0 块/帧</b>重画：预览画在浮动层，松手才提交（一步撤销）</td></tr>
+      <tr><td><b>撤销保序</b></td><td>"清空"的撤销是<b>按原位置插回</b>每条墨迹，撤销后文档与清空前逐字节一致，不靠"追加"</td></tr>
+    </table>
+    <p class="note" style="margin-top:16px">每一条都在自检里挂着开关和量化数字
+      （<code>--prefetchtest</code> / <code>--scrollflash</code> / <code>--longrun</code> …），
+      不是"感觉快了"——FAIL 时自检退出码为 1。</p>
+  </div>
+</section>
+
+<section id="perf" class="section">
   <div class="wrap">
     <h2>实测数字</h2>
     <p class="lead small">本机 2 倍屏 / Iris Xe。测试方法、环境与全部数据见仓库文档；
@@ -261,7 +294,7 @@
   </div>
 </section>
 
-<section id="install" class="section">
+<section id="install" class="section alt">
   <div class="wrap">
     <h2>下载与安装</h2>
     <div class="grid two">
@@ -291,7 +324,7 @@
   </div>
 </section>
 
-<section class="section alt">
+<section class="section">
   <div class="wrap">
     <h2>开源与许可</h2>
     <p>InkTeach 以 <b>GPL-3.0</b> 开源：可自由使用、修改、分发（包括商用），衍生产品需按 GPL 开源。

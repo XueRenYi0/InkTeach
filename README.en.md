@@ -35,6 +35,10 @@ taskbar auto-hide.
 6-pixel strip, because picking a colour is the highest-frequency action and forcing a two-step
 interaction is the same as saying it's not good enough.
 
+<p align="center"><img src="design/readme/01-主工具带.png" width="880" alt="Toolbar: the settings rail expanded above the capsule bar"></p>
+
+<p align="center"><img src="design/readme/14-色带收起.png" width="880" alt="Rail collapsed: day-to-day it is just a 6-pixel colour line"></p>
+
 ### ② Dock it away and only a 48-pixel handle is left
 
 Drag the bar to the bottom edge and it shrinks to a **handle** — 48 long, 8 thick, tinted with your
@@ -44,6 +48,8 @@ need one clean hit*, because a classroom often has no keyboard at all.
 
 Docking triggers only when you are within **10 px of the screen bottom** (not of the taskbar), so the
 default position never hides by accident. Hiding has to be a deliberate drag.
+
+<p align="center"><img src="design/readme/15-贴边隐藏.png" width="300" alt="Dock-away: shown as a round knob (left), hidden at the bottom edge it becomes a 48×8 handle (right)"></p>
 
 ### ③ The radial palette — hold a global key, flick, release
 
@@ -97,6 +103,8 @@ The dark theme covers the toolbar, floating panels, tooltips, the PowerPoint str
 windows. The two themes were graded **separately**: the light one reads thickness from a dark bottom
 edge, the dark one from a light top sheen. Simply inverting the light values collapses the sense of
 depth.
+
+<p align="center"><img src="design/readme/16-色带展开-深色.gif" width="880" alt="Animation: in the dark theme the rail goes from a thin line to the full settings rail"></p>
 
 <p align="center"><img src="design/readme/05-深色主题.png" width="880" alt="Dark theme toolbar"></p>
 
@@ -224,6 +232,23 @@ is concrete: **dark theme, 200% DPI and projector colour shifts are all changes 
 
 **The cost, stated plainly**: with no visual designer, we substitute "single source of truth plus
 offscreen rendering" — `--panelshow` renders any cell or panel offscreen as a design proof.
+
+### Rendering-pipeline details (added in this round)
+
+This round adds no features; it re-walks the dirty-rect / camera / tile-cache path against mature
+upstreams — **Xournal++'s tiles and preload, Rnote's viewport margin, MyPaint's tile discipline,
+Excalidraw's camera handling, Windows Terminal's back-buffer invariant**. Where their stable
+approach fits, we align with it instead of reinventing it:
+
+| Detail | What we do |
+|---|---|
+| **Canvas-space tile cache** | The content layer is baked into **256 px tiles** (origins aligned to canvas pixels, seamless); tiles stay inside a budget and are LRU-evicted beyond it |
+| **Dirty rects + partial present** | Each frame submits the minimal set of dirty rectangles (`Present1`); dirty rects of persistent UI such as the scrollbar are **gated by visibility** — an invisible scrollbar contributes nothing, otherwise "scrollbar ∪ ink" would push a neighbouring column off screen |
+| **Two-frame back-buffer consistency** | After a camera change (scroll / zoom) the next **two frames repaint the full screen**, so both back buffers hold the new camera — borrowed from Windows Terminal's back-buffer discipline |
+| **Off-viewport prefetch** | A ring of tiles outside the viewport is baked during idle frames (rate-limited, budgeted, and can be turned off) — scrolling into a new area never has to "catch up" (Xournal++ preload / Rnote viewport margin) |
+| **Camera rounding** | Camera translation is rounded to device pixels, so static content repainted in place cannot smear from sub-pixel jitter |
+| **Zero-repaint dragging** | Dragging / rotating a 10,000-object selection repaints **0 content tiles per frame**: the preview lives on the floating layer and lands on release (one undo step) |
+| **Order-preserving undo** | Undoing a "clear" **inserts each stroke back at its original index**, so the document is byte-for-byte what it was before the clear |
 
 ### Why .NET 8 (instead of C++, WPF or WinUI3)
 
