@@ -3154,6 +3154,31 @@ public partial class InkEngine
             return;
         }
 
+        // 触摸手势层（8.4.0）：**触摸的按下必须先喂触点表，再做"同一时刻只跟一条指针"的守卫**。
+        //
+        // ⚠ 次序就是这里最要命（2026-10-05 实测根因）：第一根手指落下的瞬间 `_drawing`
+        // 就成 true 了，守卫放在前面的话**第二根手指永远进不了触点表**——
+        // 合成注入探针当时读出来是"两指按下后：触点 = 1、模式 = Write"，双指手势永远起不来。
+        // 触点表只负责"记下这一刻有几根手指"；抢不抢笔由 TouchVerdict 回答：
+        //   · Gesture2 / Erase / Roam → 吃掉，并接管 activePointer（成为手势主人）；
+        //   · Ignore（写字中途蹭到的手指）→ 吃掉，但**不许抢** activePointer
+        //     （抢了第一根手指的移动就会被 `id != _activePointer` 挡掉、正在写的字当场断线）；
+        //   · Write → 不消费，继续走下面原来的写字守卫与起笔。
+        //
+        // 只有"当前在写的也是触摸"（或没有指针在写）时才喂：笔 / 鼠标在写的时候，
+        // 触摸照旧走守卫忽略，不搅局、也不在表里留残留。
+        if (ptype == Native.PT_TOUCH && (!_drawing || _activePointerType == Native.PT_TOUCH)
+            && TouchDownDispatch(hWnd, id, x, y, ReadTouchSize(id), out bool touchSteal))
+        {
+            if (touchSteal)
+            {
+                _activePointer = id;
+                _activePointerType = ptype;
+                PointerX = x; PointerY = y; PointerInside = true;
+            }
+            return;
+        }
+
         // **同一时刻只跟一条指针**——这是 OnPointerMove/OnPointerUp 里那句
         // `id != _activePointer` 的另一半。已经有指针在手（正在写、正在拖滚动条）时，
         // 后来的按下直接忽略。
@@ -3178,17 +3203,8 @@ public partial class InkEngine
             return;
         }
 
-        // 触摸手势层（8.4.0）：**定角色**（写字 / 擦 / 双指 / 漫游 / 忽略）。
-        // 位置在"界面 / 图库 / 滚动条"之后、"起笔"之前——面板和滚动条上的触摸不参与手势。
         if (ptype == Native.PT_TOUCH)
         {
-            if (TouchDownDispatch(hWnd, id, x, y, ReadTouchSize(id)))
-            {
-                _activePointer = id;
-                _activePointerType = ptype;
-                PointerX = x; PointerY = y; PointerInside = true;
-                return;
-            }
             _touchMode = TouchMode.Write;      // 单指写字：长按由心跳判（见 TouchTick）
             StartDwellTimer();
         }
@@ -4847,6 +4863,7 @@ public partial class InkEngine
     private bool _g2Tap;              // 两指点按候选（松手时结算）
     private float _g2Dist0, _g2Ang0;  // 变换用：起始两指距离 / 夹角
     private Vector2 _roamLast;        // 单指漫游：上一帧位置
+    private uint _roamId;             // 单指漫游：认哪一根手指（其它触点的移动不许开船）
 
     /// <summary>从设置里读触摸手势的旋钮（启动时一次）。</summary>
     internal void LoadTouchPrefs()
@@ -4872,8 +4889,10 @@ public partial class InkEngine
     /// 触摸触点落下。返回 true = 这一下**已经被触摸层接掉**（调用方直接 return）；
     /// 返回 false = 按普通写字那条路走（单指小面积）。
     /// </summary>
-    private bool TouchDownDispatch(IntPtr hWnd, uint id, float x, float y, float sizePx)
+    private bool TouchDownDispatch(IntPtr hWnd, uint id, float x, float y, float sizePx,
+                                   out bool stealPointer)
     {
+        stealPointer = false;
         var v = _touch.Down(id, x, y, sizePx, NowMs, DpiScale);
         switch (v)
         {
@@ -4881,6 +4900,7 @@ public partial class InkEngine
                 return true;                       // 吃掉：不抢正在写的那一笔、也不落墨
 
             case TouchVerdict.Erase:
+                stealPointer = true;
                 CancelTouchStroke();
                 _touchMode = TouchMode.Erase;
                 _drawing = true;
@@ -4893,6 +4913,7 @@ public partial class InkEngine
                 return true;
 
             case TouchVerdict.Gesture2:
+                stealPointer = true;
                 CancelTouchStroke();
                 _touchMode = TouchMode.Gesture2;
                 _drawing = true;
@@ -4901,10 +4922,12 @@ public partial class InkEngine
                 return true;
 
             case TouchVerdict.Roam:
+                stealPointer = true;
                 CancelTouchStroke();
                 _touchMode = TouchMode.Roam;
                 _drawing = true;
                 Native.SetCapture(hWnd);
+                _roamId = id;
                 _roamLast = new Vector2(x, y);
                 Console.WriteLine("触摸：单指漫游");
                 return true;
@@ -4944,6 +4967,10 @@ public partial class InkEngine
 
             case TouchMode.Roam:
             {
+                // 只认**开始漫游的那根手指**：屏幕上报来的其它触点（残点 / 掌根 / 误触）
+                // 的移动不许开船——合成注入里实测到"残留触点在 (1440,1200) 反复发移动，
+                // 把相机拽得乱跳"；真机上同理（多报的触点不该影响漫游）。
+                if (id != _roamId) return true;
                 var p = new Vector2(x, y);
                 ViewOffsetY += p.Y - _roamLast.Y;   // 1:1 跟手（画布单位 = 物理像素）
                 _roamLast = p;
@@ -4959,7 +4986,9 @@ public partial class InkEngine
     /// <summary>触摸触点抬起（按当前模式收尾）。返回 true = 调用方直接 return（写字那条除外）。</summary>
     private bool TouchUpDispatch(uint id)
     {
-        if (_touchMode == TouchMode.None) return false;
+        // 表里的触点**永远要清**（哪怕这一刻没有手势在跑）：上面"先喂表"那条路
+        // 可能把一根手指留在表里，漏清会让下一轮的"干净开始"计数错乱。
+        if (_touchMode == TouchMode.None) { _touch.Up(id); return false; }
         bool normalStroke = _touchMode == TouchMode.Write;
 
         // 两指点按要在"减掉这一根之前"判（判据要求两个触点都还在）

@@ -28268,19 +28268,21 @@ internal sealed partial class App : InkEngine.InkEngine
         }
 
         // ---- ② 双指纵滑 = 漫游：相机动、墨迹坐标一个没变 ----
+        // 方向：**手指往上滑**（内容上移、相机偏移变负）——从顶往下滑会被正确夹住，
+        // 那是产品行为而不是 bug（旧用例方向反了，2026-10-05 修）。
         {
             float cam0 = ViewOffsetY;
             var p0 = Doc.Strokes[^1].Points[0];
-            SendTouchesSized(true, (cx - 260, cy - 200, 24f), (cx - 60, cy - 200, 24f));
+            SendTouchesSized(true, (cx - 260, cy - 60, 24f), (cx - 60, cy - 60, 24f));
             SettleFrames(40);
             Console.WriteLine($"      [探针] 两指按下后：模式 = {TouchModeForTest}，触点 = {TouchCountForTest}，相机 = {ViewOffsetY:F0}");
-            SendTouchesSized(true, (cx - 260, cy - 150, 24f), (cx - 60, cy - 150, 24f));
+            SendTouchesSized(true, (cx - 260, cy - 110, 24f), (cx - 60, cy - 110, 24f));
             SettleFrames(40);
             Console.WriteLine($"      [探针] 滑了 50px：模式 = {TouchModeForTest}，相机 = {ViewOffsetY:F0}，轴 = {_touchDebugAxis}");
             SettleFrames(40);
-            SendTouchesSized(true, (cx - 260, cy - 60, 24f), (cx - 60, cy - 60, 24f));
+            SendTouchesSized(true, (cx - 260, cy - 200, 24f), (cx - 60, cy - 200, 24f));
             SettleFrames(120);
-            SendTouchesSized(false, (cx - 260, cy - 60, 24f), (cx - 60, cy - 60, 24f));
+            SendTouchesSized(false, (cx - 260, cy - 200, 24f), (cx - 60, cy - 200, 24f));
             SettleFrames(120);
             var p1 = Doc.Strokes[^1].Points[0];
             Check("双指纵滑 = 漫游（相机动、墨迹坐标一个没变）",
@@ -28292,13 +28294,14 @@ internal sealed partial class App : InkEngine.InkEngine
         {
             int idx0 = ScreenIndex;
             float cam0 = ViewOffsetY;
-            Touch2Down(cx - 300, cy - 200, cx - 300, cy - 60);
+            // 方向：**往左滑 = 下一页**（和产品一致；旧用例向右滑，翻的是上一页）。
+            Touch2Down(cx + 300, cy - 200, cx + 300, cy - 60);
             for (int i = 1; i <= 4; i++)
-                Touch2Move(cx - 300 + i * 60, cy - 200, cx - 300 + i * 60, cy - 60);
+                Touch2Move(cx + 300 - i * 60, cy - 200, cx + 300 - i * 60, cy - 60);
             SettleFrames(80);
-            Touch2Move(cx + 200, cy - 200, cx + 200, cy - 60);   // 继续滑：不该翻第二页
+            Touch2Move(cx - 200, cy - 200, cx - 200, cy - 60);   // 继续滑：不该翻第二页
             SettleFrames(80);
-            Touch2Up(cx + 200, cy - 200, cx + 200, cy - 60);
+            Touch2Up(cx - 200, cy - 200, cx - 200, cy - 60);
             SettleFrames(300);
             Check("双指横滑 = 翻一页（一次手势只翻一页）",
                   ScreenIndex == idx0 + 1 && MathF.Abs(ViewOffsetY - cam0) > 100f,
@@ -28313,7 +28316,7 @@ internal sealed partial class App : InkEngine.InkEngine
         {
             int before = Doc.Strokes.Count;
             SendTouchesSized(true, (cx - 300, cy + 80, 24f));
-            SettleFrames(60);
+            SettleFrames(250);              // 真等过 150ms 的"干净开始"窗口（SettleFrames 的单位是**毫秒**）
             SendTouchesSized(true, (cx - 300, cy + 80, 24f), (cx - 100, cy + 80, 200f));   // 手掌晚到
             SettleFrames(80);
             SendTouchesSized(true, (cx - 260, cy + 80, 24f), (cx - 100, cy + 80, 200f));
@@ -28330,7 +28333,7 @@ internal sealed partial class App : InkEngine.InkEngine
             int before = Doc.Strokes.Count;
             int undo0 = Doc.UndoDepth;
             SendTouchesSized(true, (cx + 260, cy - 180, 24f));
-            SendTouchesSized(true, (cx + 200, cy - 180, 24f), (cx + 400, cy - 180, 24f));   // 150ms 内第二指
+            SendTouchesSized(true, (cx + 260, cy - 180, 24f), (cx + 400, cy - 180, 24f));   // 150ms 内第二指（第一指原地不动）
             SettleFrames(40);
             SendTouchesSized(true, (cx + 200, cy - 120, 24f), (cx + 400, cy - 120, 24f));
             SettleFrames(60);
@@ -28393,7 +28396,10 @@ internal sealed partial class App : InkEngine.InkEngine
             SettleFrames(150);
 
             SendTouchesSized(true, (cx, cy, 24f));
-            SettleFrames(700);                       // 心跳（40ms 一颗）在笔画进行中一直在跑
+            // 长按要按住 500ms；**合成触点久不"喂"会被系统自动抬起**（实测 ~0.5s），
+            // 一抬手就把 SelDrag 清回 None（后面的拖动当场变成写字）。
+            // 所以按住期间每 100ms 原地补一针（0 位移，不影响"从头到尾没画出去"那条判据）。
+            for (int k = 0; k < 8; k++) { SettleFrames(100); SendTouchesSized(true, (cx, cy, 24f)); }
             Check("长按 0.5 秒 = 进入选择（对象上 = 点选）",
                   Doc.Selected.Count == 1 && TouchModeForTest == TouchMode.SelDrag,
                   $"选中 {Doc.Selected.Count}，模式 {TouchModeForTest}，"
@@ -28435,10 +28441,13 @@ internal sealed partial class App : InkEngine.InkEngine
             Touch2Up(cxm, cym - 300, cxm, cym + 300);
             SettleFrames(250);
             var after = Doc.Strokes[^1].WorldBounds;
-            float w1 = after.MaxX - after.MinX;
+            float h1 = after.MaxY - after.MinY;
+            // 原始笔画是**零高度的横线**（点都在同一条 y 上）：转 90° 之后"长边"竖过来，
+            // 所以量**纵向**长度（≈ 2 倍原横长 = 缩放×2 + 旋转 90° 一起验到）。
+            // （旧断言量宽度：横线转 90° 后宽度 = 原高度 = 0，永远红——2026-10-05 修。）
             Check("选中后双指 = 缩放 + 旋转（一步撤销）",
-                  w1 > w0 * 1.4f,
-                  $"宽 {w0:F0} → {w1:F0}（期望明显变宽）");
+                  h1 > w0 * 1.4f,
+                  $"纵向 {before.MaxY - before.MinY:F0} → {h1:F0}（原横长 {w0:F0}，期望 > {w0 * 1.4f:F0}）");
             Doc.Undo();
             SettleFrames(150);
             var back = Doc.Strokes[^1].WorldBounds;
