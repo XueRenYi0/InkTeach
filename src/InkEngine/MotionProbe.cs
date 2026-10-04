@@ -235,10 +235,22 @@ internal static class MotionProbe
                 bool okGate = nSlow == 0 && nHook == 0;
                 if (!okGate) predFail++;
 
-                Console.WriteLine($"  {(okProbe && okFinal && okGate ? "通过" : "失败")}  "
+                // (iv) 时标粗糙（鼠标合并点/同批同刻 → 合成时间）：不许"突突突"往外跳。
+                var sameT = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand, Width = 4f };
+                for (int i = 0; i < 20; i++) sameT.AddPoint(100f + i * 9f, 200f, 0.5f, 1000f);
+                sameT.HasPressure = false;
+                sameT.RawWhileLive = true;
+                StrokeMotion.TipPredict = true;
+                StrokeMotion.BumpVersion();
+                StrokeMotion.Build(sameT, StrokeMotionMode.Mean2);
+                int nSame = StrokeMotion.PredictOverlay.Count;
+                bool okSame = nSame == 0;
+                if (!okSame) predFail++;
+
+                Console.WriteLine($"  {(okProbe && okFinal && okGate && okSame ? "通过" : "失败")}  "
                                   + $"快写前探：预测 {nPred} 点，误差 {baseErr,5:F2}→{tipErr,5:F2}px，"
                                   + $"超前 {overshoot,5:F2}px；成稿偏差 {finalDev,7:F4}px；"
-                                  + $"慢写/急转预测点 {nSlow}/{nHook}");
+                                  + $"慢写/急转/同刻预测点 {nSlow}/{nHook}/{nSame}");
             }
             finally
             {

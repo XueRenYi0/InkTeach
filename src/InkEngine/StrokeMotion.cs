@@ -480,14 +480,22 @@ internal static class StrokeMotion
         if (s.HasPressure && s.Dash == StrokeDash.Solid && OverlayWindow.InkTrailEnabled)
             return;
         var pts = s.Points;
-        var p1 = pts[^1];
-        var p0 = pts[^2];
-        // ⚠ `cache.Times` 单位是**秒**（`EnsureTimes` 里 `T * 0.001`；合成时间也是秒）——
+        int m = pts.Count;
+        var p1 = pts[m - 1];
+        var p0 = pts[m - 2];
+        // 合成时间不预测：速度是按弧长编的，用它外推等于猜（见 `EnsureTimes`）。
+        if (cache.UseSyntheticTimes) return;
+        // 速度取"最近约 8ms（最多 4 段）"的窗口平均：鼠标模式时标粗糙（毫秒整数＋合并点，
+        // dt 经常 0~1ms），单段速度会乱跳 → 预测段顶满上限"突突突"往外跳（用户 2026-10-04 实测）。
+        double t1 = cache.Times[m - 1];
+        int j = m - 2;
+        while (j > 0 && (t1 - cache.Times[j]) * 1000.0 < 8.0 && (m - 1 - j) < 4) j--;
+        // ⚠ `cache.Times` 单位是**秒**（`EnsureTimes` 里 `T * 0.001`）——
         // 这里统一换算成毫秒再算速度，门限（px/ms）与外推（ms）才对得上。
-        double dtMs = (cache.Times[pts.Count - 1] - cache.Times[pts.Count - 2]) * 1000.0;
-        if (!(dtMs > 0)) return;   // 时标倒流/同刻：宁可不预测，不猜
-        float vx = (p1.X - p0.X) / (float)dtMs;
-        float vy = (p1.Y - p0.Y) / (float)dtMs;
+        double dtMs = (t1 - cache.Times[j]) * 1000.0;
+        if (!(dtMs >= 1.0)) return;   // 窗口不足 1ms：时标太粗，宁可不预测
+        float vx = (p1.X - pts[j].X) / (float)dtMs;
+        float vy = (p1.Y - pts[j].Y) / (float)dtMs;
         float speed = MathF.Sqrt(vx * vx + vy * vy);
         // 门1：太慢不预测（慢写/细笔画零影响）。
         const float MinSpeedPxPerMs = 0.5f;
