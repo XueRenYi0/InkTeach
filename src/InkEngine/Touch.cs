@@ -50,7 +50,8 @@ internal enum TouchVerdict
 internal sealed class TouchGestures
 {
     // ---- 旋钮 ----
-    /// <summary>手势总闸（"只写字"档 = false）。</summary>
+    /// <summary>手势**总开关**（"保险丝"；关掉只剩单指书写）。界面在「设置 → 书写 → 触摸手势」，
+    /// 命令行后门 `--notouch`。默认为开；每条判定都各自读它——见 <see cref="Down"/> / <see cref="Tick"/> 等。</summary>
     public bool Enabled = true;
     /// <summary>单指拖动档（手指只用来移动画布；给只报一个触点的屏用）。</summary>
     public bool SingleFingerRoam = false;
@@ -150,13 +151,13 @@ internal sealed class TouchGestures
         bool clean = inWindow && (_c.Count == 1 || !_c[0].Moved);
         if (!clean) return _c.Count == 1 ? SingleVerdict() : TouchVerdict.Ignore;
 
-        if (_c.Count >= 3) return TouchVerdict.Erase;      // ≥3 指一起落下 = 擦（不依赖面积）
+        if (_c.Count >= 3) return Enabled ? TouchVerdict.Erase : TouchVerdict.Ignore;
         if (_c.Count == 2) return Enabled ? TouchVerdict.Gesture2 : TouchVerdict.Ignore;
         return SingleVerdict();
     }
 
     private TouchVerdict SingleVerdict()
-        => SingleFingerRoam ? TouchVerdict.Roam : TouchVerdict.Write;
+        => (Enabled && SingleFingerRoam) ? TouchVerdict.Roam : TouchVerdict.Write;
 
     /// <summary>触点移动：更新路径 / 位置。</summary>
     public void Move(uint id, float x, float y, float dpi)
@@ -178,6 +179,7 @@ internal sealed class TouchGestures
     /// </summary>
     public void Tick(double nowMs, float dpi)
     {
+        if (!Enabled) return;                    // 总开关关掉：只剩单指书写，长按也不判
         if (_c.Count != 1) return;
         var c = _c[0];
         if (c.Moved || !LongPressSelect) return;
@@ -192,7 +194,7 @@ internal sealed class TouchGestures
     public bool TwoFingerTap(double nowMs, float dpi, out Vector2 mid)
     {
         mid = default;
-        if (!TwoFingerTapSelect || _c.Count != 2) return false;
+        if (!Enabled || !TwoFingerTapSelect || _c.Count != 2) return false;
         if (_c[0].Moved || _c[1].Moved) return false;
         if (_c[0].Path > TapSlopLogical * dpi || _c[1].Path > TapSlopLogical * dpi) return false;
         if (nowMs - _c[0].DownMs > 300 || nowMs - _c[1].DownMs > 300) return false;

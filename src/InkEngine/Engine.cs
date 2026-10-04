@@ -1925,6 +1925,9 @@ public partial class InkEngine
         if (GetUiPref("selMode") == "lasso") SelMode = SelectMode.Lasso;
         // 触摸手势的旋钮（8.4.0）：双指总闸 / 手掌擦 / 三指擦 / 长按选择 / 两指点选 / 单指漫游。
         LoadTouchPrefs();
+        // --notouch：触摸手势总开关**临时关掉**（保险丝 / A-B 对照；不写偏好）。
+        // 优先于设置：命令行给的这一份盖过 "touch.gestures"。
+        if (args.Contains("--notouch")) _touch.Enabled = false;
 
         // **上一次是自动更新装上来的吗**：换壳脚本会在更新目录里留一个 done.txt。
         // 看到它 = 本次启动就是"更新完的第一次启动"，在界面上明说一句
@@ -8618,6 +8621,7 @@ public partial class InkEngine
         CoordGridDefault = CoordGridDefault,
         DwellShapeOn = DwellShapeEnabled,
         PressureOn = PressureWidth.Enabled,      // 界面拿它显示「设置 → 书写 → 压感粗细」那个开关
+        TouchGesturesOn = _touch.Enabled,        // 「设置 → 书写 → 触摸手势」总开关（默认开）
         // [删除 2026-10-05] PredictOn（墨迹预测）：随老预测系统移除。
         ScreenIndex = ScreenIndex,
         CanFlipPageUp = CanFlipPageUp,
@@ -8789,6 +8793,20 @@ public partial class InkEngine
         Doc.InvalidateAll();
         _dirty = true;
         Console.WriteLine($"压感粗细：{(on ? "开（按压力改粗细）" : "关（所有笔迹等宽，手写板照样流畅）")}");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 触摸手势**总开关**（「更多 → 设置 → 书写 → 触摸手势」，2026-10-05 加）。
+    /// 关掉 = 只剩单指书写：双指手势 / ≥3 指擦 / 长按选择 / 两指点选 / 单指漫游全部停用
+    /// （闸门在 `TouchGestures.Enabled` 的每条判定里）。正在跑的手势就地中断。
+    /// </summary>
+    internal void SetTouchGesturesFromUi(bool on)
+    {
+        if (_touch.Enabled == on) return;
+        _touch.Enabled = on;
+        if (!on) TouchAbort();
+        Console.WriteLine($"触摸手势：{(on ? "开（单指写 / 双指手势 / 三指擦 / 长按选择）" : "关（只剩单指书写）")}");
         NotifyUiStateChanged();
     }
 

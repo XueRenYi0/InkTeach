@@ -219,7 +219,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按两栏里的布局走**：
     /// 左列 外观（3）＋ 书写（3）；右列 墨迹（3）——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, Tooltip, DwellShape, Pressure, RestoreInk, PptAutoSave, HistoryDays }
+    private enum Row { DarkTheme, AutoHide, Tooltip, DwellShape, Pressure, RestoreInk, PptAutoSave, HistoryDays, TouchGestures }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -248,6 +248,10 @@ public sealed class FullUi : IOverlayUi
         (Row.RestoreInk, "自动恢复上次板书", false, false, "下次启动接上这次的板书"),
         (Row.PptAutoSave, "PPT 墨迹默认自动保存", false, false, "放映时长按菜单仍可临时覆盖"),
         (Row.HistoryDays, "历史清理", false, false, "过期 PPT 缓存与备份，启动时清掉"),
+        // 触摸手势**总开关**（2026-10-05，用户点名要的"保险丝"）：关掉只剩单指书写——
+        // 双指手势 / 三指擦 / 长按选择 / 单指漫游全部停用（闸门在 TouchGestures.Enabled，
+        // 见那里每条判定）。**默认开**；学校大屏万一遇到手势 bug，老师在这里一键退回。
+        (Row.TouchGestures, "触摸手势", false, false, "关掉只剩单指书写（双指 / 三指 / 长按全停用）"),
     };
 
     private readonly Dictionary<uint, ID2D1SolidColorBrush> _brushes = new();
@@ -450,6 +454,8 @@ public sealed class FullUi : IOverlayUi
         _host.SetPref("dwellShape", st.DwellShapeOn ? null : "0");
         // 压感粗细：**默认开**，同样只写"关了"这一种情况（引擎启动时自己读它）。
         _host.SetPref("pressure", st.PressureOn ? null : "0");
+        // 触摸手势总开关：**默认开**，同样只写"关了"这一种情况。
+        _host.SetPref("touch.gestures", st.TouchGesturesOn ? null : "0");
         // [停用 2026-10-05] 墨迹预测：默认关，只写"开了"这一种情况（引擎启动时自己读它）。
         // _host.SetPref("predict", st.PredictOn ? "1" : null);
         // 悬停提示：**默认开**，只写"关了"这一种情况。
@@ -2011,7 +2017,7 @@ public sealed class FullUi : IOverlayUi
 
     private bool IsToggleRow(int i)
         => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.Tooltip or Row.DwellShape
-           or Row.Pressure or Row.RestoreInk or Row.PptAutoSave;
+           or Row.Pressure or Row.RestoreInk or Row.PptAutoSave or Row.TouchGestures;
 
     /// <summary>
     /// 这一行现在是不是压暗（点了没反应）。
@@ -2070,6 +2076,13 @@ public sealed class FullUi : IOverlayUi
             // 关掉是**渲染期**的：整块板立刻等宽，文档里的压力数据不动。
             case Row.Pressure:
                 _host.Commands.SetPressure(!_host.State.PressureOn);
+                SavePrefs();
+                break;
+
+            // 触摸手势总开关（2026-10-05）：关掉只剩单指书写（双指/三指/长按/漫游全停用）。
+            // 引擎是权威（渲染/手势都在它那边），界面翻转后落盘到 "touch.gestures"。
+            case Row.TouchGestures:
+                _host.Commands.SetTouchGestures(!_host.State.TouchGesturesOn);
                 SavePrefs();
                 break;
 
@@ -2152,7 +2165,7 @@ public sealed class FullUi : IOverlayUi
     /// `SetWriteHeadRect` 和 `MoreLowerH` 里，两处各写一遍迟早漏一处）。
     /// </summary>
     private const int LookRowCount = 3;    // 外观：深色主题 / 贴边隐藏 / 悬停提示
-    private const int WriteRowCount = 2;   // [停用 2026-10-05] 书写：停顿变图形 / 压感粗细（墨迹预测行已停用）
+    private const int WriteRowCount = 3;   // 书写：停顿变图形 / 压感粗细 / 触摸手势总开关（墨迹预测行已停用）
     private const float MoreColumnGap = 16f;
     private const float MoreWriteGap = 8f;
     private const float MoreSwitchW = 44f;
@@ -2369,6 +2382,7 @@ public sealed class FullUi : IOverlayUi
         Row.Tooltip => SetColRow(SetColKind.Look, 2),
         Row.DwellShape => SetColRow(SetColKind.Write, 0),
         Row.Pressure => SetColRow(SetColKind.Write, 1),
+        Row.TouchGestures => SetColRow(SetColKind.Write, 2),
         // [删除 2026-10-05] Row.Predict => SetColRow(SetColKind.Write, 2),（墨迹预测行）
         Row.RestoreInk => SetColRow(SetColKind.Ink, 0),
         Row.PptAutoSave => SetColRow(SetColKind.Ink, 1),
@@ -4442,6 +4456,8 @@ public sealed class FullUi : IOverlayUi
         Row.DwellShape => _host == null || _host.State.DwellShapeOn,
         // 压感粗细：状态在**引擎**（渲染期开关），界面只是显示它
         Row.Pressure => _host == null || _host.State.PressureOn,
+        // 触摸手势总开关：状态也在引擎（默认开），界面只是显示它
+        Row.TouchGestures => _host == null || _host.State.TouchGesturesOn,
         // [停用 2026-10-05] 墨迹预测：同压感，状态在引擎（默认关）
         // Row.Predict => _host == null || _host.State.PredictOn,
         // 墨迹两条开关：读偏好（restoreInk 默认关、pptAutoSave 默认开）。

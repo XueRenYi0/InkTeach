@@ -366,6 +366,16 @@ public interface IEngineCommands
     /// </summary>
     void SetTooltips(bool on);
 
+    /// <summary>
+    /// **触摸手势总开关**（「更多 → 设置 → 书写 → 触摸手势」，2026-10-05 加，用户点名要的"保险丝"）。
+    ///
+    /// 默认**开**；关掉 = **只剩单指书写**——双指手势（漫游/翻页/选中变换）、
+    /// ≥3 指擦、长按选择、两指点选、单指漫游全部停用（闸门在 `TouchGestures.Enabled`，
+    /// 每条判定各自读它）。正在跑的手势就地中断，当前这一笔照常收尾。
+    /// 学校大屏万一遇到手势 bug，老师一键退回"纯单指 + 菜单"。
+    /// </summary>
+    void SetTouchGestures(bool on);
+
     // [删除 2026-10-05] `SetPredict(bool)`：墨迹预测开关随老预测系统移除。
     // 恢复见 `已停用-渲染实验.md`。
 
@@ -892,6 +902,11 @@ public readonly struct UiState
     /// 默认开；关掉 = 整块板等宽（渲染期语义，文档里的压力数据不动）。
     /// </summary>
     public bool PressureOn { get; init; }
+    /// <summary>
+    /// **触摸手势总开关**开着吗（界面用它显示「设置 → 书写 → 触摸手势」那一行的开关）。
+    /// 默认开；关掉 = 只剩单指书写（双指 / 三指 / 长按 / 漫游全部停用）。
+    /// </summary>
+    public bool TouchGesturesOn { get; init; }
 
     // [删除 2026-10-05] `PredictOn`（墨迹预测开关的状态）：随老预测系统移除。
     /// <summary>现在在第几屏（1 起）。界面用它显示"第 N 屏"。</summary>

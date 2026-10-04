@@ -1083,6 +1083,9 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --updatetest        自动更新自检（离线：解析 / 版本比较 / sha256 / 下载候选 / 换壳脚本沙箱真跑）");
         Console.WriteLine("  --updatecheck [清单地址] [--apply]  自动更新验收（**会真的换壳**：--apply = 查到就装）");
         Console.WriteLine("  --touchguardtest    触摸自检（合成触摸：PT_TOUCH 通路 + 第二根手指不许抢笔）");
+        Console.WriteLine("  --touchtest         触摸手势自检（单指写 / 双指漫游翻页 / 三指擦 / 长按选 / 选中变换 / 总开关）");
+        Console.WriteLine("  --notouch           触摸手势总开关**临时关掉**（保险丝 / A-B 对照；不写偏好）");
+        Console.WriteLine("  --touchhud          触点诊断浮层（触点数 / 接触面积 / 最近的输入设备）");
         Console.WriteLine("  --gclatencytest     书写期间 GC 低延迟档自检（真进得去 / 无第 2 代回收 / 超时退得回）"
                           + "；--nogclatency 对照、--gchold N 调保持毫秒");
         Console.WriteLine("  --pressurediag      压感采集诊断（合成笔注入：合并点、压感有效位、压力分布）");
@@ -28484,6 +28487,31 @@ internal sealed partial class App : InkEngine.InkEngine
             Check("收场干净：全抬起后模式复位，接着单指还能写",
                   TouchModeForTest == TouchMode.None && TouchCountForTest == 0 && Doc.Strokes.Count > 0,
                   $"模式 {TouchModeForTest}，触点 {TouchCountForTest}，笔画 {Doc.Strokes.Count}");
+        }
+
+        // ---- ⑫ 总开关关掉：只剩单指书写（用户 2026-10-05 要的"保险丝"）----
+        {
+            SetUiPref("touch.gestures", "0");
+            LoadTouchPrefs();
+            TouchResetForTest();
+            int before = Doc.Strokes.Count;
+            // 双指一起落：不许进手势（也不许擦）——第一根手指仍照常写，第二根被忽略
+            SendTouchesSized(true, (cx - 120, cy + 240, 24f), (cx + 120, cy + 240, 24f));
+            SettleFrames(120);
+            bool modeOK = TouchModeForTest == TouchMode.Write;   // 还在"单指写"，不是 Gesture2 / Erase
+            string modeAtTwin = TouchModeForTest.ToString();     // 提示文案用按下那一刻的读数
+            SendTouchesSized(true, (cx - 120, cy + 280, 24f), (cx + 120, cy + 280, 24f));
+            SettleFrames(80);
+            SendTouchesSized(false, (cx - 120, cy + 280, 24f), (cx + 120, cy + 280, 24f));
+            SettleFrames(150);
+            int mid = Doc.Strokes.Count;                          // 只多了第一根手指写的那一笔
+            TouchWrite(cx - 200, cy + 320, cx - 60, cy + 320);    // 单指照样写
+            Check("总开关关掉：双指不进手势、单指照样写（保险丝）",
+                  modeOK && mid == before + 1 && Doc.Strokes.Count == mid + 1,
+                  $"双指时模式 {modeAtTwin}（应 Write——还在写），笔画 {before} → {mid} → {Doc.Strokes.Count}");
+            SetUiPref("touch.gestures", "1");
+            LoadTouchPrefs();
+            TouchResetForTest();
         }
 
         // 收尾
