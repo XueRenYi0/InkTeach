@@ -5976,7 +5976,21 @@ internal sealed class ClearAction : EditAction
 {
     public readonly List<Stroke> Removed = new();
     public override int HeldStrokes => Removed.Count;
-    public override void Undo(InkDocument doc) { foreach (var s in Removed) doc.AppendStroke(s); }
+
+    /// <summary>
+    /// 撤销"清空"：**按原位置顺序插回去**（不再是 AppendStroke 堆到最上层）。
+    ///
+    /// 为什么（2026-10-04 对照上游后改）：`AppendStroke` 会把整批放到最上层，
+    /// 如果清空之后又写过新笔画，撤销后旧墨压在它们的上面——半透明叠色和清空前
+    /// 不一样，"撤销 = 回到原样"就不成立了。上游（Rnote 保留 render comp、
+    /// MyPaint 用 COW 快照）都不改 z 序。插中间会让分块走"结构变了、整块重画"，
+    /// 正确，代价有界（只碰这些笔画覆盖的块）。
+    /// </summary>
+    public override void Undo(InkDocument doc)
+    {
+        for (int i = 0; i < Removed.Count; i++) doc.InsertStroke(i, Removed[i]);
+    }
+
     public override void Redo(InkDocument doc) { doc.ClearStrokes(); }
     public override RectF AffectedBefore => EditRegion.Of(Removed);
 }

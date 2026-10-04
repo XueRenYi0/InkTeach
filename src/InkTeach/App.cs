@@ -443,6 +443,14 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             TileTest();
         }
+        else if (mode == "--prefetchtest")
+        {
+            // 分块空闲预取自检：滚两格 → 预取把视口外一圈烘好 → 再滚一格不重画；
+            // 自带"关预取就重画"的对照（自证有效）。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PrefetchTest();
+        }
         else if (mode == "--widthtest")
         {
             _autoExitAt = double.MaxValue;
@@ -1050,6 +1058,9 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --cursorshow <笔|荧光笔|激光笔|橡皮|像素橡皮> [宽]  落点摆样");
         Console.WriteLine("  --widthtest         笔迹粗细/压力");
         Console.WriteLine("  --ghosttest         残影检测");
+        Console.WriteLine("  --tiletest          分块缓存自检（边界无缝 / 回程复用 / 内存上界）");
+        Console.WriteLine("  --prefetchtest      分块空闲预取自检（预取命中则再滚一格不重画；含关预取对照）");
+        Console.WriteLine("  --noprefetch        关掉分块空闲预取（对照；默认开）");
         Console.WriteLine("  --trailtest         委托墨迹轨迹对照");
         Console.WriteLine("  --smoothtest        中心线曲线化自检（过点 Catmull-Rom：直角不变形 / 圆弧更圆滑 / 形状不跑）");
         Console.WriteLine("  --smoothshow [图]   出图：曲线化开/关对照（同一组样本各存一张 -off / -on，32 位 BMP）");
@@ -25891,6 +25902,107 @@ internal sealed partial class App : InkEngine.InkEngine
 
     // 分块测试的滚轮构造（和 WheelTest 一致：delta 在高 16 位）
     private static IntPtr Wheel(int delta) => new((long)(ushort)(short)delta << 16);
+
+    /// <summary>
+    /// **空闲预取自检**（2026-10-04，对应上游 Xournal++ 的页面预载 / Rnote 的视口余量预渲染）。
+    ///
+    /// 判据：滚到之前，视口外那一圈已经烘好——所以"再滚一格"这一帧**一块都不用光栅**
+    /// （`LastPatchCount == 0`）。还有关掉预取的对照（同一动作必须重画），
+    /// 自证这条测试有效，不是"永远通过"的摆设。
+    /// </summary>
+    private void PrefetchTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 分块空闲预取自检 ===");
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"    {name,-30}{(ok ? "PASS" : "FAIL")}  {detail}");
+        }
+
+        bool saved = CanvasTileCache.PrefetchEnabled;
+        CanvasTileCache.PrefetchEnabled = true;
+        try
+        {
+            // 垫内容：画布要超过一屏，滚得动；笔迹铺到 y≈3000。
+            Doc.Clear();
+            Doc.ClearHistory();
+            for (int k = 0; k < 8; k++)
+            {
+                var s = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = PenColor, Width = 3f * DpiScale,
+                };
+                float yy = _virtualY + 300f + k * 380f;
+                for (int j = 0; j < 24; j++)
+                    s.AddPoint(_virtualX + 320f + j * 90f, yy + MathF.Sin(j * 0.5f) * 60f, 0.5f, j * 8f);
+                Doc.AddStroke(s);
+            }
+            ViewOffsetY = 0f;
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+            RenderAll();
+            SettleFrames(300);
+
+            var w0 = _windows[0];
+
+            // 滚两格（正常同步光栅），停。
+            for (int k = 0; k < 2; k++) { HandleWheel(Wheel(-120)); RenderAll(); }
+            SettleFrames(120);
+
+            // ① 环里确实有欠着的块（不成立说明测试前提没了，别当成通过）
+            bool needBefore = w0.PrefetchNeeded();
+            Check("滚完停下：视口外一圈有欠着的块", needBefore, $"PrefetchNeeded={needBefore}");
+
+            // ② 跑预取拍直到没有活
+            int steps = 0, prefetched = 0;
+            while (w0.PrefetchNeeded() && steps < 400)
+            {
+                w0.PrefetchStep(this);
+                prefetched += w0.LastPrefetch;
+                steps++;
+            }
+            Check("预取把环烘完（拍数有界）", steps < 400, $"{steps} 拍、共 {prefetched} 块");
+            Check("预取确实烘了块（不是空转）", prefetched > 0, $"{prefetched} 块");
+
+            // ③ 再滚一格：新露出来的那一行应该已经热了，这一帧一块都不用光栅。
+            HandleWheel(Wheel(-120));
+            RenderAll();
+            Check("再滚一格：不需要重新光栅（预取命中）", w0.LastPatchCount == 0,
+                  $"本帧光栅 {w0.LastPatchCount} 块");
+
+            // ④ 对照：关掉预取，继续往下滚——**滚出预取环之后必须重画**（证明这条测试真的在测东西）。
+            CanvasTileCache.PrefetchEnabled = false;
+            int controlRaster = 0;
+            for (int k = 0; k < 8 && controlRaster == 0; k++)
+            {
+                HandleWheel(Wheel(-120));
+                RenderAll();
+                controlRaster += w0.LastPatchCount;
+            }
+            Check("对照（关预取）：滚出预取环后要重画", controlRaster > 0, $"共光栅 {controlRaster} 块");
+
+            // ⑤ 关预取后不再产生空闲拍
+            bool needOff = w0.PrefetchNeeded();
+            Check("关预取后不再产生空闲拍", !needOff, $"PrefetchNeeded={needOff}");
+
+            // ⑥ 预算把环算进去了：常驻 ≤ 预算（否则预取的块会被 Trim 淘汰）
+            Check("常驻块数含预取环后仍不超预算", w0.LastTileCount <= Math.Max(w0.LastTileBudget, 1),
+                  $"{w0.LastTileCount} 块 / 预算 {w0.LastTileBudget}");
+        }
+        finally
+        {
+            CanvasTileCache.PrefetchEnabled = saved;
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        Console.WriteLine();
+        Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：空闲预取把新露出的一行提前烘好、不超预算");
+        Console.WriteLine();
+        _quit = true;
+    }
 
     /// <summary>画一条粗横线并数它的墨像素。横线的**中心线**画在 y 上。</summary>
     private int DrawAndCountHorizontal(float x, float y, float len, float width)

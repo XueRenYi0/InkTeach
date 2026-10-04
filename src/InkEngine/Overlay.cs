@@ -376,6 +376,9 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private RectF _scrollbarRect = RectF.Empty;
 
+    /// <summary>上一帧的滚动条矩形：淡出结束那一帧还要把它擦掉（同 _cursorRectPrev 的做法）。</summary>
+    private RectF _scrollbarRectPrev = RectF.Empty;
+
     /// <summary>上一帧"截图取景"开着吗——收场那一帧要整窗重画，把遮罩擦干净（8.3.0）。</summary>
     private bool _captureWasActive;
 
@@ -581,6 +584,10 @@ internal sealed partial class OverlayWindow : IDisposable
     public static bool Trace;
 
     public int LastDrawnStrokes;
+    /// <summary>上一拍预取了几块 / 耗时 / 预算口径（诊断与 HUD）。</summary>
+    public int LastPrefetch;
+    public double LastPrefetchMs;
+    public bool LastPrefetchPending;
     /// <summary>常驻分块数 / 这一帧可见块数 / 分块预算（诊断用）。</summary>
     public int LastTileCount, LastTileVisible, LastTileBudget;
     public string LastError;
@@ -1067,9 +1074,27 @@ internal sealed partial class OverlayWindow : IDisposable
         LastDrawnStrokes = _tiles.StrokesLastFrame;
         LastTileCount = _tiles.Count;
         LastTileVisible = _tiles.VisibleCount;
-        LastTileBudget = _tiles.BudgetTiles > 0
-            ? Math.Max(_tiles.BudgetTiles, _tiles.VisibleCount + CanvasTileCache.ScrollBackMargin)
-            : _tiles.VisibleCount + CanvasTileCache.ScrollBackMargin;
+        LastTileBudget = _tiles.BudgetNow;      // 可见 + 回滚余量 + 预取环（见 CanvasTileCache.BudgetNow）
+    }
+
+    /// <summary>视口外一圈还有没有欠着的块（引擎据此排空闲预取拍）。</summary>
+    public bool PrefetchNeeded() => _tiles.PrefetchNeeded(VisibleCanvasRect);
+
+    /// <summary>
+    /// 空闲预取一拍：只烘"视口外一圈"里欠着的块，**不合成、不上屏**（上游 Xournal++/Rnote 的
+    /// 预渲染思路）。返回 true = 环里还有活，引擎再排下一拍。
+    /// </summary>
+    public bool PrefetchStep(InkEngine app)
+    {
+        _app = app;
+        bool more = _tiles.Prefetch(VisibleCanvasRect, RasterizeTile);
+        LastPrefetch = _tiles.LastPrefetch;
+        LastPrefetchMs = _tiles.PrefetchMsLastFrame;
+        LastPrefetchPending = more;
+        if (Trace && _tiles.LastPrefetch > 0)
+            Console.WriteLine($"    [prefetch] {_tiles.LastPrefetch} 块 {_tiles.PrefetchMsLastFrame:F2}ms "
+                              + $"pending={more} camY={ViewOffsetY:F0}");
+        return more;
     }
 
     /// <summary>
@@ -2506,21 +2531,30 @@ internal sealed partial class OverlayWindow : IDisposable
             if (!h.IsEmpty) r.Add(h);
         }
 
-        // 滚动条画在右边缘，而且要每帧淡出，所以必须算进脏区，
+        // 滚动条画在右边缘，而且要淡出，所以画的那些帧必须算进脏区，
         // 否则它消失之后会在屏幕上留一条擦不掉的线。
         //
-        // ⚠ **它是**单独**一块，不能并进 `r`（静止图元的联合包围盒）**：
-        // 它整屏高，只要当前有一笔在屏幕左半边，联合包围盒就会变成"从笔迹到屏幕右缘"，
-        // 把"笔迹左边"整块排除在脏区外。2026-10-04 用户报的"滚完轮一按就闪/错位、
-        // 只在左侧"就是它兜出来的（配合相机变化只重画一帧）。分开之后两边互不拖累：
-        // 笔迹的脏区就是笔迹，滚动条就是右缘那一条。
-        _scrollbarRect = new RectF
-        {
-            MinX = OriginX + Width - 30f * app.DpiScale,
-            MinY = OriginY,
-            MaxX = OriginX + Width,
-            MaxY = OriginY + Height,
-        };
+        // ⚠ **两条纪律**：
+        //   ① 它是**单独一块**，不能并进 `r`（静止图元的联合包围盒）——它整屏高，
+        //      只要当前有一笔在屏幕左半边，联合包围盒就会变成"从笔迹到屏幕右缘"，
+        //      把"笔迹左边"整块排除在脏区外。2026-10-04 用户报的"滚完轮一按就闪/错位、
+        //      只在左侧"就是它兜出来的（配合相机变化只重画一帧）。分开之后互不拖累。
+        //   ② **只在它真的会画出来的时候才占脏区**（悬停/拖动/淡出窗口内）。不画就不占，
+        //      这样"这一帧什么都要不重画"时 `_frameDirty` 才是真的空、才能走整屏兜底
+        //      （对齐 Windows Terminal：没有失效就不 BeginPaint）。
+        //      淡出结束那一帧旧位置还要多擦一次，所以 UpdateFrameDirty 里会连上一帧的矩形一起加。
+        bool sbShown = TryScrollBar(app, out _)
+                       && (app.ScrollBarHover || app.ScrollBarDragging
+                           || (app.NowMs - app.ScrollBarActiveAtMs) / 1000.0 <= 3.5);
+        _scrollbarRect = sbShown
+            ? new RectF
+              {
+                  MinX = OriginX + Width - 30f * app.DpiScale,
+                  MinY = OriginY,
+                  MaxX = OriginX + Width,
+                  MaxY = OriginY + Height,
+              }
+            : RectF.Empty;
 
         return r;
     }
@@ -2573,9 +2607,11 @@ internal sealed partial class OverlayWindow : IDisposable
             t.Add(_transientHistory[i]);
         if (!t.IsEmpty) AddClipped(_frameDirty, t);
 
-        // 右缘滚动条那一条：**单独加**，它不参与上面那个联合包围盒
-        // （否则"笔迹 + 整屏高的滚动条"会把笔迹左边整块排除在脏区外）。
+        // 右缘滚动条那一条：**单独加**，不参与上面那个联合包围盒（理由见 ComputeTransientBounds）。
+        // 上一帧那一份也要加：它可能是"淡出结束、这一帧不再画"的第一帧，少加一帧就留下一条残影。
         if (!_scrollbarRect.IsEmpty) AddClipped(_frameDirty, _scrollbarRect);
+        if (!_scrollbarRectPrev.IsEmpty) AddClipped(_frameDirty, _scrollbarRectPrev);
+        _scrollbarRectPrev = _scrollbarRect;
 
         // 界面每帧都会重新贴到后缓冲上，所以它那块区域每帧都得算进上屏的脏区，
         // 否则双缓冲一交换，界面就会闪一下或干脆不见了。
@@ -5970,7 +6006,14 @@ internal sealed partial class OverlayWindow : IDisposable
         sw.Stop();
         LastPresentEndQpc = Qpc.Now;
         LastPresentMs = sw.Elapsed.TotalMilliseconds;
-        if (hr.Failure) LastError = "Present: " + hr.Description;
+        if (hr.Failure)
+        {
+            LastError = "Present: " + hr.Description;
+            // 失败 = 这一帧没翻上去，双缓冲"另一块是上一帧"的前提可能不再成立。
+            // 下一帧强制连续两帧整屏，把状态重新对齐
+            //（对齐 Windows Terminal 的规矩：失效被消费后提交失败 → 下一帧全量重来）。
+            _fullFramesLeft = 2;
+        }
 
     }
 

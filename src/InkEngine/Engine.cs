@@ -1450,6 +1450,8 @@ public partial class InkEngine
     internal double _lastPresentMs;
     // 分块缓存的状态（面板与自检读数）
     internal int _tilesUsed, _tilesVisible, _tilesBudget, _tilesRasterized;
+    /// <summary>最近一拍预取了几块（HUD 用；见主循环的空闲预取）。</summary>
+    internal int _prefetchLast;
     private double _inputToPresentMs;
     private double _lastInputMs = -1;
 
@@ -1683,6 +1685,10 @@ public partial class InkEngine
         // --fullpresent：每次整屏上屏（不走 Present1 脏矩形）。诊断"固定横线闪"用：
         // 如果加上它就不闪了，说明问题在"部分上屏 + DWM 合成"这条路上（见 Overlay 的说明）。
         if (args.Contains("--fullpresent")) OverlayWindow.FullPresent = true;
+        // --noprefetch：关掉"视口外一圈"的空闲预取，回到纯同步光栅（对照用）。
+        if (args.Contains("--noprefetch")) CanvasTileCache.PrefetchEnabled = false;
+        // --traceframes：把每帧的脏区/上屏/分块/预取日志打到控制台（OverlayWindow.Trace）。
+        if (args.Contains("--traceframes")) OverlayWindow.Trace = true;
         // 触点诊断（8.3.3）：`--touchhud` 直接开着启动。
         if (args.Contains("--touchhud")) TouchHud = true;
         // 动态橡皮的后门（8.3.4）：关掉"速度→尺寸"，擦除尺寸恒定（不进界面）。
@@ -2342,12 +2348,39 @@ public partial class InkEngine
                 // 也要再要一帧：这一帧贴出去的是改之前的像素。
                 // 少了后面这半句，清空之后屏幕上那层墨会一直留着——见 RenderAll 里的注释。
                 _dirty = _uiInvalidateSeq != seqBefore || Doc.Version != docVerBefore;
+
+                // 空闲预取：正常帧走完，如果"没在写、没在取景"且视口外一圈还有欠着的块，
+                // 排几拍只烘块、不合成不上屏的空闲拍（上游 Xournal++/Rnote 的预渲染思路）。
+                if (!_quit && !CaptureActive && ActiveStroke == null && AnyPrefetchNeeded())
+                    _prefetchStepsLeft = Math.Max(_prefetchStepsLeft, 64);
+            }
+            else if (_prefetchStepsLeft > 0)
+            {
+                // 空闲预取一拍：只烘"视口外一圈"里欠着的块，不合成、不上屏。
+                // 一拍之后等最多 4ms（有输入立刻醒）：既不打满空闲 CPU，也不拖输入。
+                _prefetchStepsLeft--;
+                bool more = false;
+                foreach (var w in _windows) more |= w.PrefetchStep(this);
+                if (!more) _prefetchStepsLeft = 0;
+                Native.MsgWaitForMultipleObjectsEx(0, IntPtr.Zero, 4, Native.QS_ALLINPUT, 0);
             }
             else
             {
                 Native.WaitMessage();
             }
         }
+    }
+
+    /// <summary>空闲预取的剩余拍数（见主循环；每拍 <see cref="CanvasTileCache.PrefetchPerFrame"/> 块）。</summary>
+    private int _prefetchStepsLeft;
+
+    /// <summary>视口外一圈还有没有欠着的块（任一窗口）。</summary>
+    private bool AnyPrefetchNeeded()
+    {
+        if (!CanvasTileCache.PrefetchEnabled) return false;
+        foreach (var w in _windows)
+            if (w.PrefetchNeeded()) return true;
+        return false;
     }
 
     /// <summary>把消息队列里现有的消息全部处理掉，不阻塞。测试模式复用同一份，
@@ -2414,7 +2447,15 @@ public partial class InkEngine
         swHud.Stop();
 
         // 相机写给各覆盖窗口：渲染的每一处变换都用它（见 OverlayWindow.CanvasToWindow）。
-        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
+        //
+        // ⚠ 渲染用的偏移**取整到整像素**（Excalidraw 的 `snapScrollToDevicePixels` 同款）：
+        // 分块贴图走 NearestNeighbor，真实小数偏移会被驱动吸附，而活笔和命中测试走全精度——
+        // 在"滚到底被 ClampOffset 夹出小数"或"翻页动画的中间帧"上，两者最多差半个像素
+        // （表现是落笔提交瞬间墨可能轻轻跳一下、或缓存内容轻微脉动）。
+        // 取整只作用于渲染层：引擎自己的 `ViewOffsetY` 保持全精度（输入映射/夹紧/可见区计算），
+        // 差值 <1px，命中和观感都对得上。
+        float renderCamY = MathF.Round(ViewOffsetY);
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = renderCamY; }
 
         // 面板的接输入小窗跟着界面这一刻占的地方走（方案 B）。
         // 放在渲染之前：这一帧界面画在哪，输入就该收在哪，两件事同源。
@@ -2464,6 +2505,7 @@ public partial class InkEngine
         _tilesVisible = w0.LastTileVisible;
         _tilesBudget = w0.LastTileBudget;
         _tilesRasterized = w0.LastPatchCount;
+        _prefetchLast = w0.LastPrefetch;
 
         // How long the newest input took to reach the screen. This is our own
         // contribution; the display pipeline adds up to one more scan-out.
@@ -2633,7 +2675,7 @@ public partial class InkEngine
             $"共享提交 {_sharedCommitMb,6:F1} MB   显存 {_gpuMb,6:F1} MB   CPU {_cpuPercent,4:F1} %\n" +
             $"笔画 {Doc.Strokes.Count}      点数 {Doc.TotalPoints}\n" +
             $"选中 {Doc.Selected.Count}      工具 {ToolName(Tool)}{SelectModeTag()}{(PassThrough ? "（穿透中）" : "")}      粗细 {CurrentToolWidthLogical,4:F1}      撤销栈 {Doc.UndoDepth}\n" +
-            $"分块 {_tilesUsed}/{_tilesBudget}（可见 {_tilesVisible}，本帧光栅 {_tilesRasterized}）      网格 {Doc.GridCells}\n" +
+            $"分块 {_tilesUsed}/{_tilesBudget}（可见 {_tilesVisible}，本帧光栅 {_tilesRasterized}，预取 {_prefetchLast}）      网格 {Doc.GridCells}\n" +
             $"Ctrl+Alt：1笔 2荧光 3激光 4橡皮 7像素橡皮 5框选 6粗细 Z撤销 C清空\n" +
             (EraserTelemetry != null
                 ? $"橡皮手测台：记录中 · 已记 {EraserTelemetry.DragCount} 条拖拽（退出时写汇总）\n"
