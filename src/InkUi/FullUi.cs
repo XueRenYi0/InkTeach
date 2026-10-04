@@ -211,6 +211,9 @@ public sealed class FullUi : IOverlayUi
     private double _railExitAtMs = double.NegativeInfinity;
     private bool _hoverInside;             // 指针在"看得见的那一块"里
     private double _leftAtMs = double.NegativeInfinity;
+    /// <summary>触摸/笔唤出贴边面板后的"停留截止"：松手后别 0.7s 就收（手指还要再点工具）。
+    /// 只对"按在面板上"的那一次触摸生效；鼠标那套不变。</summary>
+    private double _peekHoldUntilMs = double.NegativeInfinity;
     /// <summary>
     /// "可以开始自动收起来了"的开关：指针碰过面板一次之后才置真。
     /// 没碰过之前一律保持完整显示——启动时不许一上来就收成屏幕底边那条露头（见 UpdatePeek）。
@@ -2820,7 +2823,8 @@ public sealed class FullUi : IOverlayUi
             return;
         }
 
-        bool keepOpen = _hoverInside || _press != -1 || _sliderDragging || _moreOpen;
+        bool keepOpen = _hoverInside || _press != -1 || _sliderDragging || _moreOpen
+                        || _host.NowMs < _peekHoldUntilMs;
         if (keepOpen)
         {
             _leftAtMs = _host.NowMs;
@@ -2882,6 +2886,10 @@ public sealed class FullUi : IOverlayUi
         // （鼠标能张开、笔不能——这类"只在一种设备上坏"的 bug 最难查）。
         _railHover = !_host.State.PassThrough && BandVisible() && RailHoverZone().Contains(p.X, p.Y);
         bool touchLike = e.FromTouch || e.FromPen;   // 手指/笔接触（鼠标不参与长按）
+
+        // 贴边隐藏的**触屏节奏**（2026-10-05）：手指/笔把面板按出来后，给一段"够得着"的
+        // 停留时间（松手后别 0.7s 就收——手指还得再点一下工具；2500ms 是"看一眼点得中"的量级）。
+        if (touchLike && _hoverInside) _peekHoldUntilMs = _host.NowMs + 2500;
 
         // 「更多」面板：全屏模态，先于一切其它命中（它盖住整块屏幕）。
         // 点面板外 = 关闭，而且这一下**不落墨**（消费掉；这也是自检要钉的一条）。

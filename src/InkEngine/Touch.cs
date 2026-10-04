@@ -12,6 +12,7 @@ internal enum TouchMode
     Marquee = 4,    // 长按成立后的框选
     SelDrag = 5,    // 长按 / 两指点选之后的"移动选中对象"
     Roam = 6,       // 单指漫游（给只报一个触点的屏）
+    Radial = 7,     // 两指长按 / 轻点呼出的轮盘（方向由触点平均位喂，松手确认）
 }
 
 /// <summary>触点落下那一刻的判定（"干净开始"的 150ms 窗口里定角色）。</summary>
@@ -59,6 +60,8 @@ internal sealed class TouchGestures
     public bool LongPressSelect = true;
     /// <summary>两指轻点 = 点选（默认开，不提供关）。</summary>
     public bool TwoFingerTapSelect = true;
+    /// <summary>两指长按 = 呼出盘（2026-10-05；默认开，不提供关——轮盘的触摸入口）。</summary>
+    public bool TwoFingerHold = true;
 
     // ---- 已废弃（面积链删掉后不再使用；留着只为上层编译过渡，下一批清掉）----
     public bool PalmErase = false;
@@ -69,6 +72,7 @@ internal sealed class TouchGestures
     public const double CleanMs = 150;          // "一起落下"的时间窗
     public const float CleanMoveLogical = 10f;  // 还没真画出去（逻辑像素）
     public const double LongPressMs = 500;      // > 停顿成型的 400ms
+    public const double TwoFingerHoldMs = 500;  // 两指长按 = 呼出盘（和单指长按同一个时长，触点数天然分开）
     public const float TapSlopLogical = 8f;     // 和 DwellTapLeaveNoInk 同一个数
     public const float DirLockLogical = 15f;    // 两指方向锁
     public const float DirRatio = 1.5f;         // 主方向要占 1.5 倍
@@ -109,12 +113,14 @@ internal sealed class TouchGestures
     public int MaxSeen { get; private set; }      // 这块屏最多同时报过几个触点（诊断用）
     public bool SawArea { get; private set; }     // 这块屏报过非零面积吗（**只给诊断**）
     public bool LongPressFired { get; private set; }
-    public void ClearLongPress() => LongPressFired = false;
+    public bool TwoFingerHoldFired { get; private set; }
+    public void ClearLongPress() { LongPressFired = false; TwoFingerHoldFired = false; }
 
     public void Reset()
     {
         _c.Clear();
         LongPressFired = false;
+        TwoFingerHoldFired = false;
         _gestureStartMs = 0;
     }
 
@@ -180,6 +186,20 @@ internal sealed class TouchGestures
     public void Tick(double nowMs, float dpi)
     {
         if (!Enabled) return;                    // 总开关关掉：只剩单指书写，长按也不判
+
+        // **两指长按 = 呼出盘**（2026-10-05）：两根手指都"从头到尾没动"才算。
+        // 和单指长按各判各的（触点数不同，天然分开）；判据复用 TapSlop（和"点一下不留墨"同一个数）。
+        if (_c.Count == 2)
+        {
+            if (!TwoFingerHold || TwoFingerHoldFired) return;
+            if (_c[0].Moved || _c[1].Moved) return;
+            if (_c[0].Path > TapSlopLogical * dpi || _c[1].Path > TapSlopLogical * dpi) return;
+            if (nowMs - _c[0].DownMs < TwoFingerHoldMs || nowMs - _c[1].DownMs < TwoFingerHoldMs) return;
+            TwoFingerHoldFired = true;
+            Console.WriteLine("触摸：两指长按成立 → 呼出盘");
+            return;
+        }
+
         if (_c.Count != 1) return;
         var c = _c[0];
         if (c.Moved || !LongPressSelect) return;

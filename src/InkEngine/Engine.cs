@@ -3021,12 +3021,15 @@ public partial class InkEngine
         LastPointerType = ptype;
         TouchDiagFeed(id, ptype, down: true);
 
-        // **落笔 = 取消呼出盘**：划盘是悬停动作，落笔表示"我要写字了"（设计稿附录 C）。
-        if (RadialPaletteActive) CancelRadialPalette("落笔");
-
         float screenX = sx, screenY = sy;
         float x = sx, y = sy;
         ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布
+
+        // 呼出盘开着时的落点：**点在盘面里 = 点选扇区并确认**（触屏"两指轻点呼出"靠它；
+        // 鼠标/笔同样可用）；点在盘外 = 取消，这一下**继续走原路**（该写字写字）。
+        // （旧行为是"任何落笔一律取消"——现在多出"盘上点选"这一条；设计稿附录 C 的
+        //   "落笔表示我要写字了"仍然成立：点盘外还是取消。）
+        if (RadialPaletteActive && RadialPaletteTryPointerDown(x, y)) return;
 
         // 图库面板排在界面之前：它从工具条上沿**往上长**，两块本来不重叠，
         // 但顺序写清楚——面板是自己的浮层，先问它。
@@ -4867,6 +4870,8 @@ public partial class InkEngine
     private float _g2Dist0, _g2Ang0;  // 变换用：起始两指距离 / 夹角
     private Vector2 _roamLast;        // 单指漫游：上一帧位置
     private uint _roamId;             // 单指漫游：认哪一根手指（其它触点的移动不许开船）
+    private bool _radialTouchMode;    // 轮盘这次是触屏呼出的（松手改成触点驱动；没划动=留在盘上）
+    private bool _radialSticky;       // 触屏轮盘：没划动松手后留在盘上等点选（5s 超时）
 
     /// <summary>从设置里读触摸手势的旋钮（启动时一次）。</summary>
     internal void LoadTouchPrefs()
@@ -4921,6 +4926,9 @@ public partial class InkEngine
                 _touchMode = TouchMode.Gesture2;
                 _drawing = true;
                 Native.SetCapture(hWnd);
+                // **两指手势也要起 40ms 心跳**：`TouchGestures.Tick` 里的"两指长按=呼出盘"
+                // 要靠它（写字那颗定时器只在单指写字的路上启动；漏了这里=长按永远不判）。
+                StartDwellTimer();
                 BeginTouchTwoFinger();
                 return true;
 
@@ -4968,6 +4976,20 @@ public partial class InkEngine
                 UpdateSelDrag(x, y);
                 return true;
 
+            case TouchMode.Radial:
+            {
+                // 轮盘开着：方向 = **当前触点的平均位**（一根手指先抬也不断；确认在松手那一刻）。
+                var views = _touch.Views;
+                if (views.Count == 0) return true;
+                float mx = 0, my = 0;
+                foreach (var v in views) { mx += v.Pos.X; my += v.Pos.Y; }
+                PointerX = mx / views.Count;
+                PointerY = my / views.Count;
+                UpdateRadialSelection();
+                _dirty = true;
+                return true;
+            }
+
             case TouchMode.Roam:
             {
                 // 只认**开始漫游的那根手指**：屏幕上报来的其它触点（残点 / 掌根 / 误触）
@@ -5009,6 +5031,11 @@ public partial class InkEngine
                 TouchGestureReleased();
                 break;
 
+            case TouchMode.Radial:
+                // 最后一根手指抬起 = 确认；没划动就松手 → "留在盘上等点选"（见 CommitRadialPalette）。
+                if (_touch.Count <= 1) CommitRadialPalette();
+                break;
+
             case TouchMode.Marquee:
                 ApplyMarquee();                 // 松手出选区
                 _touchSelected = Doc.Selected.Count > 0;
@@ -5040,6 +5067,8 @@ public partial class InkEngine
     {
         if (_touchMode == TouchMode.None && !_touch.Any) return;
         if (_touchMode == TouchMode.Erase) { Doc.EndErase(); EndStrokeMeasure(); }
+        // 触屏呼出的轮盘：手势中断 = 盘也收掉（别留一个没人管的盘在屏幕上）。
+        if (RadialPaletteActive && _radialTouchMode) CancelRadialPalette("手势中断");
         // ⚠ **选择拖动 / 框选不在这里结束**（2026-09-30 实测）：触摸长按之后，
         // 系统偶尔会在"按住不动"的某一刻发一次丢捕获，把拖动提前 `EndSelDrag()` 掉——
         // 症状就是"长按选中了对象，但拖不动"（笔画计数却涨了：那一拖被当成接着写字）。
@@ -5204,28 +5233,25 @@ public partial class InkEngine
     /// <summary>双指手势收尾（最后一根指头抬起时）。</summary>
     private void TouchGestureReleased()
     {
+        // **两指轻点优先于"变换提交"**：点按没有位移，不该走变换那条路。
+        // （2026-10-05 实测：画布上有选中对象时，轻点会被 `_g2Transform` 分支吃掉——
+        //   老顺序把 transform 放在前面，轻点永远轮不到。）
+        if (_g2Tap && !_g2Turned && _g2Axis == 0 && _touch.Views.Count >= 2)
+        {
+            if (SelDragging) EndSelDrag();     // 万一 transform 那条已经起了拖动（零位移=不进撤销栈）
+            _g2Transform = false;
+            var mid = (_touch.Views[0].Pos + _touch.Views[1].Pos) * 0.5f;
+            OpenRadialPaletteFromTouch(mid.X, mid.Y, sticky: true);
+            _g2Tap = false;
+            return;
+        }
         if (_g2Transform)
         {
             if (SelDragging) EndSelDrag();     // 提交变换（一步撤销；没动就不进撤销栈）
             _g2Transform = false;
             return;
         }
-        // 没动过 + 两指几乎同时抬手 = **两指点选**（和长按点选同一条命令）
-        if (_g2Tap && !_g2Turned && _g2Axis == 0 && _touch.Views.Count >= 2)
-        {
-            var mid = (_touch.Views[0].Pos + _touch.Views[1].Pos) * 0.5f;
-            TouchPointSelect(mid.X, mid.Y);
-        }
         _g2Tap = false;
-    }
-
-    /// <summary>点选：手指下面有东西就选中它（并进入"可拖动"状态），没东西就取消选中。</summary>
-    private void TouchPointSelect(float x, float y)
-    {
-        var hit = Doc.SelectAt(x, y, ClickToleranceLogical * DpiScale, additive: false, subtractive: false);
-        _touchSelected = hit != null && Doc.Selected.Count > 0;
-        if (hit == null) Console.WriteLine("触摸：点选落空 → 取消选中");
-        _dirty = true;
     }
 
     /// <summary>
@@ -5236,6 +5262,19 @@ public partial class InkEngine
     {
         _touch.Tick(NowMs, DpiScale);
         if (_touch.LongPressFired && _touchMode == TouchMode.Write) TouchLongPressFire();
+
+        // 两指长按成立 → 呼出盘（触屏入口）。进 Radial 模式后：方向由触点平均位喂（TouchMoveDispatch），
+        // 松手在 TouchUpDispatch 里确认；没划动就松手 = 留在盘上等点选（见 CommitRadialPalette）。
+        if (_touch.TwoFingerHoldFired && _touchMode == TouchMode.Gesture2)
+        {
+            _touch.ClearLongPress();
+            if (_touch.TryPair(out var pair))
+            {
+                _touchMode = TouchMode.Radial;
+                OpenRadialPaletteFromTouch((pair.A.X + pair.B.X) * 0.5f,
+                                           (pair.A.Y + pair.B.Y) * 0.5f, sticky: false);
+            }
+        }
     }
 
     /// <summary>自检用：触摸层这一刻的模式 / 触点表。</summary>
@@ -11998,6 +12037,8 @@ public partial class InkEngine
         RadialPaletteVisible = false;          // 120ms 之后（或移动之后）才真正画出来
         RadialPaletteSector = -1;
         _radialMoved = false;
+        _radialTouchMode = false;              // 键盘/鼠标那套：松手轮询按键
+        _radialSticky = false;
         _radialOpenedAtMs = NowMs;
         RadialCenterX = PointerX;              // 盘心 = 按下的那一刻指针在哪
         RadialCenterY = PointerY;
@@ -12005,6 +12046,59 @@ public partial class InkEngine
         Console.WriteLine(PassThrough
             ? "呼出盘（穿透中）：按住划向扇区，松手 = 退出穿透 + 切到它（松在中心/划回中心/落笔 = 取消）"
             : "呼出盘：按住划向扇区，松手确认（松在中心/划回中心/落笔 = 取消）");
+    }
+
+    /// <summary>
+    /// **触屏版呼出盘**（2026-10-05）：两指长按（划动松手确认）或两指轻点（留在盘上点选）。
+    ///
+    /// 与键盘版的差别就两条：
+    ///   ① 松手不是"轮询按键"，而是**由触点驱动**——两根手指的平均位就是方向（TouchMoveDispatch
+    ///      的 `TouchMode.Radial` 分支在喂），最后一根抬起时确认（TouchUpDispatch）；
+    ///   ② **没划动就松手 = 留在盘上等点选**（`_radialSticky`，5s 超时；点扇区/点盘外见
+    ///      <see cref="RadialPaletteTryPointerDown"/>）——键盘那套的"松在中心=取消"不变。
+    /// </summary>
+    private void OpenRadialPaletteFromTouch(float x, float y, bool sticky)
+    {
+        if (RadialPaletteActive) return;
+        if (CaptureActive) return;
+
+        RadialPaletteActive = true;
+        RadialPaletteVisible = false;
+        RadialPaletteSector = -1;
+        _radialMoved = false;
+        _radialTouchMode = true;
+        _radialSticky = sticky;
+        _radialOpenedAtMs = NowMs;
+        RadialCenterX = x;
+        RadialCenterY = y;
+        PointerX = x;
+        PointerY = y;
+        _dirty = true;
+        Console.WriteLine(sticky
+            ? "呼出盘（触屏·轻点）：点扇区确认，点盘外/中心取消（5s 超时）"
+            : "呼出盘（触屏·长按）：划向扇区松手确认；没划动=留在盘上等点选");
+    }
+
+    /// <summary>
+    /// 呼出盘开着时的一次落点：**命中盘面 = 点选扇区并确认**（触屏"轻点呼出"靠它；
+    /// 鼠标/笔同样可用）；点在盘外 = 取消并返回 false（这一下继续走原路，该写字写字）。
+    /// </summary>
+    private bool RadialPaletteTryPointerDown(float x, float y)
+    {
+        if (!RadialPaletteActive) return false;
+        if (!RadialPaletteVisible) { CancelRadialPalette("未出盘就落笔"); return false; }
+        float dx = x - RadialCenterX, dy = y - RadialCenterY;
+        float r = RadialRadiusLogical * DpiScale;
+        if (dx * dx + dy * dy > r * r) { CancelRadialPalette("点盘外"); return false; }
+
+        // 点选是一次"有意的方向输入"：把 `_radialMoved` 置上——点中心按下去 = 取消
+        //（而不是被 Commit 里的"没划动就留盘"分支当成又一次静置）。
+        _radialMoved = true;
+        PointerX = x;
+        PointerY = y;
+        UpdateRadialSelection();
+        CommitRadialPalette();
+        return true;
     }
 
     /// <summary>
@@ -12025,16 +12119,27 @@ public partial class InkEngine
         PointerInside = true;
     }
 
-    /// <summary>松手 = 确认。没位移/死区 = 取消；有扇区就执行那条命令。</summary>
+    /// <summary>松手 = 确认。没位移/死区 = 取消（触屏没划动则留盘等点选）；有扇区就执行那条命令。</summary>
     private void CommitRadialPalette()
     {
         if (!RadialPaletteActive) return;
         UpdateRadialSelection();               // 以松手这一刻的指针为准（快划不丢）
         int sec = RadialPaletteSector;
 
+        // 触屏版：**没划动就松手 = 留在盘上等点选**（Blender marking menu 的那半套；
+        // 5s 超时；点扇区/点中心、点盘外都走 RadialPaletteTryPointerDown）。
+        if (sec < 0 && _radialTouchMode && !_radialMoved)
+        {
+            _radialSticky = true;
+            Console.WriteLine("呼出盘：没划动 → 留在盘上等点选（5s）");
+            return;
+        }
+
         RadialPaletteActive = false;
         RadialPaletteVisible = false;
         RadialPaletteSector = -1;
+        _radialTouchMode = false;
+        _radialSticky = false;
         _dirty = true;
 
         if (sec < 0)
@@ -12083,6 +12188,8 @@ public partial class InkEngine
         RadialPaletteActive = false;
         RadialPaletteVisible = false;
         RadialPaletteSector = -1;
+        _radialTouchMode = false;
+        _radialSticky = false;
         _dirty = true;
         Console.WriteLine($"呼出盘 → 取消（{why}）");
     }
@@ -12117,7 +12224,8 @@ public partial class InkEngine
 
         UpdateRadialSelection();
 
-        if ((Native.GetAsyncKeyState((int)_radialVk) & 0x8000) == 0)
+        // 触屏版（长按呼出）：松手不是按键，而是触点（TouchUpDispatch 里最后一根抬起时确认）。
+        if (!_radialTouchMode && (Native.GetAsyncKeyState((int)_radialVk) & 0x8000) == 0)
         {
             CommitRadialPalette();
             return;

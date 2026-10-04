@@ -28514,6 +28514,54 @@ internal sealed partial class App : InkEngine.InkEngine
             TouchResetForTest();
         }
 
+        // ---- ⑬ 两指长按 = 呼出盘；划向右松手 = 红笔 ----
+        {
+            static bool SameC(Color4 a, Color4 b) =>
+                MathF.Abs(a.R - b.R) < 0.02f && MathF.Abs(a.G - b.G) < 0.02f && MathF.Abs(a.B - b.B) < 0.02f;
+            TouchResetForTest();
+            RadialCancelForTest("用例起手");
+            Tool = Tool.Pen;
+            var red = InkPalette.PenBand[1].Color;
+            float by = cy + 420;                        // 挑一块空处（别和上面的用例重叠）
+            SendTouchesSized(true, (cx - 60, by, 24f), (cx + 60, by, 24f));
+            // 长按要 500ms；合成触点久不喂会被系统自动抬起——每 100ms 原地补一针。
+            for (int k = 0; k < 8; k++) { SettleFrames(100); SendTouchesSized(true, (cx - 60, by, 24f), (cx + 60, by, 24f)); }
+            bool opened = RadialPaletteActive;
+            // 划向右（正东 = 红）：两指一起右移两段，再松开
+            SendTouchesSized(true, (cx + 60, by, 24f), (cx + 180, by, 24f));
+            SettleFrames(60);
+            SendTouchesSized(true, (cx + 180, by, 24f), (cx + 300, by, 24f));
+            SettleFrames(60);
+            SendTouchesSized(false, (cx + 180, by, 24f), (cx + 300, by, 24f));
+            SettleFrames(150);
+            Check("两指长按 = 呼出盘；划向右松手 = 红笔",
+                  opened && !RadialPaletteActive && Tool == Tool.Pen && SameC(CurrentColor, red),
+                  $"opened={opened}，active={RadialPaletteActive}，色=({CurrentColor.R:F2},{CurrentColor.G:F2},{CurrentColor.B:F2})");
+        }
+
+        // ---- ⑭ 两指轻点 = 呼出盘（留在盘上）；点东南扇区 = 蓝笔并关闭 ----
+        {
+            static bool SameC(Color4 a, Color4 b) =>
+                MathF.Abs(a.R - b.R) < 0.02f && MathF.Abs(a.G - b.G) < 0.02f && MathF.Abs(a.B - b.B) < 0.02f;
+            TouchResetForTest();
+            RadialCancelForTest("用例起手");
+            Tool = Tool.Pen;
+            var blue = InkPalette.PenBand[2].Color;
+            float by = cy + 420;
+            SendTouchesSized(true, (cx - 60, by, 24f), (cx + 60, by, 24f));
+            SettleFrames(60);
+            SendTouchesSized(false, (cx - 60, by, 24f), (cx + 60, by, 24f));
+            SettleFrames(150);
+            bool opened = RadialPaletteActive;           // 轻点 = 留在盘上等点选
+            SettleFrames(150);                           // 出盘延迟 120ms 之后再点
+            // 点"东南"扇区（蓝）：径向距离要大于死区、小于半径（96 逻辑 × 2 倍屏 = 192 物理）
+            SendTouches(true, (cx + 130, by + 130));
+            SettleFrames(120);
+            Check("两指轻点 = 呼出盘；点扇区 = 应用并关闭",
+                  opened && !RadialPaletteActive && Tool == Tool.Pen && SameC(CurrentColor, blue),
+                  $"opened={opened}，active={RadialPaletteActive}，色=({CurrentColor.R:F2},{CurrentColor.G:F2},{CurrentColor.B:F2})");
+        }
+
         // 收尾
         TouchResetForTest();
         Doc.Clear();
