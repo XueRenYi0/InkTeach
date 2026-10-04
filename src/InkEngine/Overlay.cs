@@ -2170,6 +2170,8 @@ internal sealed partial class OverlayWindow : IDisposable
             DrawShapeInclination(app);
             DrawLaser(app);
             DrawRadialPalette(app);   // 呼出盘压着墨和激光；落点反馈（下面那一句）在它上面
+            app.BuildTouchEraseFeedback();
+            DrawTouchEraseFeedback(app);   // 触摸擦除反馈（触摸没有悬停光标，就在触点上画）
             DrawToolCursor(app);
             DrawMarquee(app);
 
@@ -5338,9 +5340,13 @@ internal sealed partial class OverlayWindow : IDisposable
     {
         // 框 = **真正会被擦掉的那一块**：和 EraseRectAlongPath 读同一份尺寸。
         // 拖动中跟着移动速度变大（8.3.4 动态橡皮），悬停时是基准（= 按下去第一下的大小）。
-        float hw = MathF.Max(1f, app.PixelEraserCursorHalfWidthPx);
-        float hh = MathF.Max(1f, app.PixelEraserCursorHalfHeightPx);
+        DrawEraserBoxAt(c, MathF.Max(1f, app.PixelEraserCursorHalfWidthPx),
+                           MathF.Max(1f, app.PixelEraserCursorHalfHeightPx));
+    }
 
+    /// <summary>画一块"面积橡皮"的落点框（鼠标/笔的光标与触摸反馈共用同一份画法）。</summary>
+    private void DrawEraserBoxAt(Vector2 c, float hw, float hh)
+    {
         _ctx.FillRectangle(
             new Vortice.RawRectF(c.X - hw, c.Y - hh, c.X + hw, c.Y + hh),
             // 填充色：**0.12 → 0.22**（用户 2026-09-17："面积橡皮擦太透明了"）。
@@ -5361,6 +5367,20 @@ internal sealed partial class OverlayWindow : IDisposable
         _scratch.Color = new Color4(0.22f, 0.28f, 0.38f, 0.85f);
         _ctx.DrawLine(new Vector2(c.X - tick, c.Y), new Vector2(c.X + tick, c.Y), _scratch, 1.8f);
         _ctx.DrawLine(new Vector2(c.X, c.Y - tick), new Vector2(c.X, c.Y + tick), _scratch, 1.8f);
+    }
+
+    /// <summary>
+    /// **触摸擦除的视觉反馈**（2026-10-05 用户实测："三指/手指橡皮能擦，但看不见橡皮"）：
+    /// 触摸没有悬停光标，所以擦的时候把"会擦掉的那一块 / 那一圈"直接画在触点位置上。
+    /// 数据由 <see cref="InkEngine.BuildTouchEraseFeedback"/> 每帧组装（尺寸和真正擦除的同一份）。
+    /// </summary>
+    private void DrawTouchEraseFeedback(InkEngine app)
+    {
+        foreach (var b in app.TouchEraseBoxesDraw)
+            DrawEraserBoxAt(b.C, MathF.Max(1f, b.HW), MathF.Max(1f, b.HH));
+        foreach (var r in app.TouchEraseRingsDraw)
+            DrawRingCursor(r.C, MathF.Max(1f, r.R), MathF.Max(1f, r.R),
+                           new Color4(0.35f, 0.55f, 0.95f, 0.10f));
     }
 
     private void DrawRingCursor(Vector2 c, float truthR, float outerR, Color4 fill)

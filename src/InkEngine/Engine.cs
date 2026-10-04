@@ -5129,6 +5129,48 @@ public partial class InkEngine
         _dirty = true;
     }
 
+    /// <summary>触摸擦除的视觉反馈（触摸没有悬停光标，擦的时候要让人看见"会擦掉哪一块"）。
+    /// 每帧由 Overlay 调 <see cref="BuildTouchEraseFeedback"/> 填充；坐标 = 画布。</summary>
+    internal readonly List<(Vector2 C, float HW, float HH)> TouchEraseBoxesDraw = new();
+    internal readonly List<(Vector2 C, float R)> TouchEraseRingsDraw = new();
+
+    /// <summary>组装"触摸擦除反馈"（每帧一次；没有内容就清空）。</summary>
+    internal void BuildTouchEraseFeedback()
+    {
+        TouchEraseBoxesDraw.Clear();
+        TouchEraseRingsDraw.Clear();
+
+        // ① 三指 / 手掌擦会话：每个触点画**真正会擦掉的那块**（和 TouchEraseSample 同一份尺寸，
+        //    所以"看见的 = 擦掉的"）。
+        if (_touchMode == TouchMode.Erase)
+        {
+            foreach (var v in _touch.Views)
+            {
+                float half = _touch.EraseHalfWidth(DpiScale, 14f, 90f);
+                if (v.Size > 0f) half = Math.Clamp(v.Size * 0.5f, half, 90f * DpiScale);
+                TouchEraseBoxesDraw.Add((v.Pos, half, half * 1.618f));
+            }
+            return;
+        }
+
+        // ② 橡皮工具正被**触摸**按着：按工具的语义画（整笔擦=圆环、面积擦=矩形）。
+        //    笔 / 鼠标那条路有自己的光标（Overlay.DrawToolCursor），这里只管触摸。
+        if (_drawing && _activePointerType == Native.PT_TOUCH && _touch.Views.Count > 0)
+        {
+            var tool = EffectiveTool;
+            if (tool == Tool.Eraser)
+            {
+                float r = EraserRadius;
+                foreach (var v in _touch.Views) TouchEraseRingsDraw.Add((v.Pos, r));
+            }
+            else if (tool == Tool.PixelEraser)
+            {
+                float hw = PixelEraserCursorHalfWidthPx, hh = PixelEraserCursorHalfHeightPx;
+                foreach (var v in _touch.Views) TouchEraseBoxesDraw.Add((v.Pos, hw, hh));
+            }
+        }
+    }
+
     /// <summary>擦一次：**每个触点各擦一块**（尺寸见下；三指 = 三块小橡皮并排，等效大手擦）。</summary>
     private void TouchEraseSample()
     {

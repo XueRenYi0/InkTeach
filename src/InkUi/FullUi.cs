@@ -204,6 +204,10 @@ public sealed class FullUi : IOverlayUi
     private bool _hideEnabled;
     private readonly Anim _peek;           // 0 = 只剩露头，1 = 完全显示
     private readonly Anim _rail;           // 0 = 平时那条 6 像素色线，1 = 完整设置条
+    /// <summary>色带常开（「设置 → 外观 → 色带常开」，2026-10-05）：一直摊着，不参与悬停收放。</summary>
+    private bool _railPinned;
+    /// <summary>触摸把设置条"带出来"后的保持截止（触摸没有悬停，不能靠指针位置维持展开）。</summary>
+    private double _railTouchHoldUntilMs = double.NegativeInfinity;
     private bool _railHover;
 
     /// <summary>悬停意图的两个时刻：进热区 120ms 才展开、离开 220ms 才收回——路过不算数。</summary>
@@ -222,7 +226,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按两栏里的布局走**：
     /// 左列 外观（3）＋ 书写（3）；右列 墨迹（3）——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, Tooltip, DwellShape, Pressure, RestoreInk, PptAutoSave, HistoryDays, TouchGestures }
+    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, DwellShape, Pressure, RestoreInk, PptAutoSave, HistoryDays, TouchGestures }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -232,6 +236,9 @@ public sealed class FullUi : IOverlayUi
     {
         (Row.DarkTheme, "深色主题", false, false, ""),
         (Row.AutoHide, "贴边隐藏", false, false, ""),
+        // 色带常开（2026-10-05 用户实测点名）：设置条一直摊着。触摸屏上那条 6 像素的色线很难点中，
+        // 触摸点工具格也会自动带出来（自适应，见 UpdateRail 的 _railTouchHoldUntilMs）。
+        (Row.RailPin, "色带常开", false, false, "设置条一直摊开（触摸屏不用去碰那条色线）"),
         // 悬停提示（2026-10-02）：鼠标停住半秒、手指长按，浮出"名称 + 快捷键 + 说明"。
         // 默认开；触屏没有悬停，所以长按是它在触摸上的等价物（见 Tooltip 那一节）。
         // **范围是收窄过的**：只给图标-only / 带快捷键 / 隐藏手势，别的（色带、文字段、
@@ -392,6 +399,8 @@ public sealed class FullUi : IOverlayUi
     {
         _dark = _host.GetPref("dark") == "1";
         _hideEnabled = _host.GetPref("hide") == "1";
+        // 色带常开（2026-10-05）：设置条一直摊着——触摸屏上不用去碰那条 6 像素的色线。
+        _railPinned = _host.GetPref("railPin") == "1";
         // 悬停提示：**默认开**，只写"关过的"那一份（和 dwellShape / pressure 同一条规矩）。
         // 引擎自己画的浮层（操作条 / PPT 条）读不到界面偏好，这里推一次开关过去。
         _tipEnabled = _host.GetPref("tooltip") != "0";
@@ -467,6 +476,8 @@ public sealed class FullUi : IOverlayUi
         var off = new List<string>();
         for (int i = 1; i < _pinned.Length; i++) if (!_pinned[i]) off.Add(i.ToString());
         _host.SetPref("unpinned", off.Count == 0 ? null : string.Join(",", off));
+        // 色带常开：默认关，只写"开了"这一种情况。
+        _host.SetPref("railPin", _railPinned ? "1" : null);
     }
 
     // ---- 布局 ---------------------------------------------------------------
@@ -1714,7 +1725,26 @@ public sealed class FullUi : IOverlayUi
             return;
         }
 
+        // 色带常开（2026-10-05 用户点名的开关）：一直摊着，不参与悬停那套收放。
+        if (_railPinned)
+        {
+            _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
+            _rail.To(1f, Tokens.RailMs);
+            return;
+        }
+
         double now = _host.NowMs;
+
+        // 触摸没有悬停：手指点在**面板任意处**（点工具格也算）就把设置条张开，并保持一段
+        // （松手后 2.5s 内不收）——不然触摸用户只能去点那条 6 像素的色线，很难点中
+        // （2026-10-05 用户实测："点击图标色带不会展开，必须点色带位置"，触摸屏上太麻烦）。
+        if (now < _railTouchHoldUntilMs)
+        {
+            _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
+            _rail.To(1f, Tokens.RailMs);
+            return;
+        }
+
         if (_railHover)
         {
             _railExitAtMs = double.NegativeInfinity;
@@ -2019,7 +2049,7 @@ public sealed class FullUi : IOverlayUi
     }
 
     private bool IsToggleRow(int i)
-        => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.Tooltip or Row.DwellShape
+        => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.Tooltip or Row.DwellShape
            or Row.Pressure or Row.RestoreInk or Row.PptAutoSave or Row.TouchGestures;
 
     /// <summary>
@@ -2056,6 +2086,13 @@ public sealed class FullUi : IOverlayUi
             case Row.AutoHide:
                 _hideEnabled = !_hideEnabled;
                 _peek.Jump(1f);          // 刚打开时先给个完整的，别一开就缩起来
+                SavePrefs();
+                break;
+
+            // 色带常开（2026-10-05）：打开时立刻把它摊开；关掉后交回悬停那套（触摸仍有自适应）。
+            case Row.RailPin:
+                _railPinned = !_railPinned;
+                if (_railPinned) _rail.To(1f, Tokens.RailMs);
                 SavePrefs();
                 break;
 
@@ -2167,7 +2204,7 @@ public sealed class FullUi : IOverlayUi
     /// 2026-10-02 加「悬停提示」那一行时就是这么改的（原来这两个数写死在
     /// `SetWriteHeadRect` 和 `MoreLowerH` 里，两处各写一遍迟早漏一处）。
     /// </summary>
-    private const int LookRowCount = 3;    // 外观：深色主题 / 贴边隐藏 / 悬停提示
+    private const int LookRowCount = 4;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 悬停提示
     private const int WriteRowCount = 3;   // 书写：停顿变图形 / 压感粗细 / 触摸手势总开关（墨迹预测行已停用）
     private const float MoreColumnGap = 16f;
     private const float MoreWriteGap = 8f;
@@ -2382,7 +2419,8 @@ public sealed class FullUi : IOverlayUi
     {
         Row.DarkTheme => SetColRow(SetColKind.Look, 0),
         Row.AutoHide => SetColRow(SetColKind.Look, 1),
-        Row.Tooltip => SetColRow(SetColKind.Look, 2),
+        Row.RailPin => SetColRow(SetColKind.Look, 2),
+        Row.Tooltip => SetColRow(SetColKind.Look, 3),
         Row.DwellShape => SetColRow(SetColKind.Write, 0),
         Row.Pressure => SetColRow(SetColKind.Write, 1),
         Row.TouchGestures => SetColRow(SetColKind.Write, 2),
@@ -2889,7 +2927,12 @@ public sealed class FullUi : IOverlayUi
 
         // 贴边隐藏的**触屏节奏**（2026-10-05）：手指/笔把面板按出来后，给一段"够得着"的
         // 停留时间（松手后别 0.7s 就收——手指还得再点一下工具；2500ms 是"看一眼点得中"的量级）。
-        if (touchLike && _hoverInside) _peekHoldUntilMs = _host.NowMs + 2500;
+        // 顺手把**设置条**也带出来：触摸没有悬停，点工具格 = 想看这个工具的设置条。
+        if (touchLike && _hoverInside)
+        {
+            _peekHoldUntilMs = _host.NowMs + 2500;
+            _railTouchHoldUntilMs = _host.NowMs + 2500;
+        }
 
         // 「更多」面板：全屏模态，先于一切其它命中（它盖住整块屏幕）。
         // 点面板外 = 关闭，而且这一下**不落墨**（消费掉；这也是自检要钉的一条）。
@@ -4457,6 +4500,8 @@ public sealed class FullUi : IOverlayUi
     private bool IsOn(int i) => Rows[i].Kind switch
     {
         Row.DarkTheme => _dark,
+        // 色带常开（2026-10-05）：同贴边隐藏，界面自己的偏好。
+        Row.RailPin => _railPinned,
         // 悬停提示（界面自己的偏好，默认开；详见字段区那一段）
         Row.Tooltip => _tipEnabled,
         // 停顿成型：**默认开**，所以配置里没有这一项时显示的就是"开"
