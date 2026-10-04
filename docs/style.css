@@ -28,13 +28,15 @@ a { color: inherit; }
 }
 .topbar .wrap { display: flex; align-items: center; justify-content: space-between; height: 56px; }
 .brand { font-weight: 800; font-size: 20px; text-decoration: none; letter-spacing: .2px; }
-.brand::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-  background: var(--red); margin-right: 8px; vertical-align: 2px; }
+.brand img { width: 24px; height: 24px; border-radius: 7px; vertical-align: -5px; margin-right: 8px;
+  box-shadow: 0 1px 3px rgba(31,35,40,.18); }
 .topbar nav a { margin-left: 18px; text-decoration: none; color: var(--gray); font-size: 14px; }
 .topbar nav a:hover { color: var(--ink); }
 
 /* 首屏 */
 .hero { padding: 56px 0 24px; text-align: center; }
+.hero-icon { display: block; width: 84px; height: 84px; margin: 0 auto 16px; border-radius: 19px;
+  box-shadow: 0 12px 30px rgba(31,35,40,.14); }
 .hero h1 { font-size: 42px; margin: 0 0 14px; letter-spacing: 1px; }
 .hero .lead { font-size: 17px; color: var(--gray); max-width: 760px; margin: 0 auto 22px; }
 .hero .lead b { color: var(--ink); }
