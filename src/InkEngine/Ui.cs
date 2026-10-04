@@ -956,6 +956,52 @@ public readonly struct UiState
     /// 每次装载给整份快照——点名全在界面层做，引擎只负责读盘与推送。
     /// </summary>
     public string[] Names { get; init; }
+
+    /// <summary>
+    /// 界面层缓存的"上次画的是哪个状态"比对（单源纪律：UiState 增减字段只改这里）。
+    /// 全值类型＋字符串值比对，零分配；Names 数组按引用＋内容比（原地改名单也逃不掉）。
+    /// </summary>
+    public bool Matches(in UiState o)
+    {
+        if (Tool != o.Tool || PptMode != o.PptMode) return false;
+        if (!C4(Color, o.Color) || !C4(PaletteBase, o.PaletteBase)) return false;
+        if (Width != o.Width || PenWidth != o.PenWidth || HighlighterWidth != o.HighlighterWidth
+            || LaserWidth != o.LaserWidth) return false;
+        if (!C4(HighlighterColor, o.HighlighterColor)) return false;
+        if (Dash != o.Dash || ParabolaAxis != o.ParabolaAxis || LineDash != o.LineDash) return false;
+        if (PrismSides != o.PrismSides || PyramidSides != o.PyramidSides || FrustumSides != o.FrustumSides
+            || SolidMinSides != o.SolidMinSides || SolidMaxSides != o.SolidMaxSides) return false;
+        if (HyperbolaAsymptotes != o.HyperbolaAsymptotes
+            || EllipseFocusTriangle != o.EllipseFocusTriangle) return false;
+        if (PassThrough != o.PassThrough || Board != o.Board) return false;
+        if (!C4(BoardColor, o.BoardColor)) return false;
+        if (BoardPattern != o.BoardPattern || BoardPatternStep != o.BoardPatternStep
+            || BoardOpacity != o.BoardOpacity) return false;
+        if (CaptureHideInk != o.CaptureHideInk || SelectMode != o.SelectMode
+            || CoordGridDefault != o.CoordGridDefault || DwellShapeOn != o.DwellShapeOn
+            || PressureOn != o.PressureOn) return false;
+        if (ScreenIndex != o.ScreenIndex || CanFlipPageUp != o.CanFlipPageUp) return false;
+        if (IsDrawing != o.IsDrawing || UndoDepth != o.UndoDepth || RedoDepth != o.RedoDepth
+            || StrokeCount != o.StrokeCount) return false;
+        if (UpdateStage != o.UpdateStage || UpdateText != o.UpdateText || InkStatus != o.InkStatus)
+            return false;
+        if (ReplayActive != o.ReplayActive || ReplayPlaying != o.ReplayPlaying
+            || ReplaySpeed != o.ReplaySpeed) return false;
+        if (TimerActive != o.TimerActive || TimerPaused != o.TimerPaused
+            || TimerFinished != o.TimerFinished || TimerMode != o.TimerMode
+            || TimerValueMs != o.TimerValueMs) return false;
+        if (TimerCardOpen != o.TimerCardOpen || TimerSettingsOpen != o.TimerSettingsOpen
+            || TimerExpanded != o.TimerExpanded) return false;
+        if (RollCardOpen != o.RollCardOpen || RollSettingsOpen != o.RollSettingsOpen) return false;
+        if (ReferenceEquals(Names, o.Names)) return true;
+        if (Names == null || o.Names == null || Names.Length != o.Names.Length) return false;
+        for (int i = 0; i < Names.Length; i++)
+            if (Names[i] != o.Names[i]) return false;
+        return true;
+    }
+
+    private static bool C4(Color4 a, Color4 b)
+        => a.R == b.R && a.G == b.G && a.B == b.B && a.A == b.A;
 }
 
 /// <summary>

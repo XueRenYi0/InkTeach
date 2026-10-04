@@ -1411,6 +1411,13 @@ public partial class InkEngine
     internal UiHost Host;
     internal IOverlayUi Ui;
     internal bool UiInvalidatePending;
+    /// <summary>
+    /// 界面层缓存脏位（`Overlay` 的界面位图缓存用；与 `UiInvalidatePending` 的区别：
+    /// 这一位还覆盖"主题换了"这种不在界面声明范围内、也不在状态快照里的变化）。
+    /// 置位点：界面输入路由（Down/Move/Up/Leave）、状态推送、主题推送；
+    /// `RenderAll` 每帧贴完清零（多窗口共用一位，清零只放在全部 Present 之后）。
+    /// </summary>
+    internal bool UiCacheDirty;
     internal Color4 CurrentColor = InkPalette.PenDefault;
     internal Color4 HighlighterCurrent = InkPalette.HighlighterDefault;
     internal bool UiCapturing;
@@ -2432,6 +2439,8 @@ public partial class InkEngine
             w.RenderFrame(this);
         foreach (var w in _windows)
             w.Present();
+        // 界面层缓存脏位在这里清（全部窗口贴完之后；Overlay 只读不写，多窗口不丢帧）。
+        UiCacheDirty = false;
 
         if (LatencyRecording) RecordLatencySample();
 
@@ -8105,6 +8114,7 @@ public partial class InkEngine
     private void NotifyUiStateChanged()
     {
         if (Ui == null) return;
+        UiCacheDirty = true;   // 状态推送 → 界面层缓存重画（开关/页码/计时文字可能变了）
         var snapshot = SnapshotState();
         UiGuard("OnStateChanged", () => Ui.OnStateChanged(snapshot));
     }
@@ -8363,6 +8373,7 @@ public partial class InkEngine
     internal void SetFloatingThemeFromUi(UiTheme theme)
     {
         FloatingTheme = theme;
+        UiCacheDirty = true;   // 主题不在状态快照里，单独置位
         _dirty = true;
     }
 
@@ -8775,6 +8786,7 @@ public partial class InkEngine
         if (!UiVisibleNow) return false;
         var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip,
                                    fromTouch, pointerId);
+        UiCacheDirty = true;   // 界面输入 → 界面层缓存重画（悬停/按下态可能变了）
         if (!UiGuard("PointerDown", () => Ui.PointerDown(e), false)) return false;
         UiCapturing = true;
         return true;
@@ -8789,6 +8801,7 @@ public partial class InkEngine
         if (!UiCapturing && !UiContains(x, y)) return false;
         var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip,
                                    false, pointerId);
+        UiCacheDirty = true;   // 界面输入 → 界面层缓存重画
         return UiGuard("PointerMove", () => Ui.PointerMove(e), false);
     }
 
@@ -8798,6 +8811,7 @@ public partial class InkEngine
         if (!UiVisibleNow || !UiCapturing) return false;
         var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip,
                                    false, pointerId);
+        UiCacheDirty = true;   // 界面输入 → 界面层缓存重画
         bool consumed = UiGuard("PointerUp", () => Ui.PointerUp(e), false);
         UiCapturing = false;
         return consumed;
@@ -9115,6 +9129,7 @@ public partial class InkEngine
             case Native.WM_POINTERLEAVE:
                 _uiHover = false; _dirty = true; ApplyCursor();
                 // 界面那条"人走了"由这里发：方案 B 下，指针离开面板＝离开这块接输入小窗。
+                UiCacheDirty = true;   // 悬停态可能清掉 → 界面层缓存重画
                 UiGuard("PointerLeave", () => Ui.PointerLeave());
                 return IntPtr.Zero;
 
