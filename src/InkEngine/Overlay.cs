@@ -277,6 +277,7 @@ internal sealed partial class OverlayWindow : IDisposable
 
     private IDXGISwapChain1 _swapChain;
     private IDXGISwapChain2 _swapChain2;
+    private IDXGISwapChain3 _swapChain3;      // 诊断：读"当前后缓冲号"（见 Trace）
     private IntPtr _latencyWait = IntPtr.Zero;
 
     /// <summary>
@@ -369,6 +370,12 @@ internal sealed partial class OverlayWindow : IDisposable
     /// 用户 2026-09-30 报的"橡皮左侧 / 左上侧靠近墨迹时出现细密竖线、颜色变深"就是它。</summary>
     private RectF _cursorRectPrev = RectF.Empty;
 
+    /// <summary>
+    /// 右缘滚动条那一条。**单独成一块脏区**，不并进静止图元的联合包围盒
+    /// （理由见 <c>ComputeTransientBounds</c> 末尾：并进去会把"笔迹左边"排到脏区外）。
+    /// </summary>
+    private RectF _scrollbarRect = RectF.Empty;
+
     /// <summary>上一帧"截图取景"开着吗——收场那一帧要整窗重画，把遮罩擦干净（8.3.0）。</summary>
     private bool _captureWasActive;
 
@@ -396,7 +403,18 @@ internal sealed partial class OverlayWindow : IDisposable
     private readonly List<RectF> _contentDirtyPrev = new();
 
     /// <summary>整块后缓冲内容无效（首帧、重建、尺寸变化）时必须全屏重绘一次。</summary>
-    private bool _forceFullFrame = true;
+    /// <summary>
+    /// "接下来还要整屏重画几帧"。
+    ///
+    /// **为什么是 2 而不是 1**（2026-10-04 修"滚完轮一按就闪/错位、只在左侧"）：
+    /// 画面在两个后缓冲之间交替，一次整屏重画只更新**其中一个**。如果只强制一帧，
+    /// 另一个缓冲会停在变化前（旧相机位置 / 旧底色 / 旧文档）的画面。平时这个旧画面
+    /// 靠"变化的像素要在随后两帧都重画"的脏区历史兜住，但**相机变化没有这份两帧历史**，
+    /// 于是滚动停下后第一帧如果只重画局部（笔迹 + 滚动条并成的包围盒），旧缓冲里
+    /// 没被覆盖的那一块就会露出来——就是用户看到的"从某条线隔开、一侧错位/闪"。
+    /// 强制**连续两帧**整屏，保证两个缓冲都更新到新状态。
+    /// </summary>
+    private int _fullFramesLeft = 2;
 
     /// <summary>
     /// 旋转度数标签用的文字格式。**按 DPI 生成**：绘制时的变换只有平移，
@@ -540,10 +558,27 @@ internal sealed partial class OverlayWindow : IDisposable
     public static int BufferCount = 2;
 
     /// <summary>
+    /// 诊断开关（`--fullpresent`，2026-10-04 加）：**每次都用整屏 Present，
+    /// 不走 `Present1` 的脏矩形**。
+    ///
+    /// 用来分辨用户报的"屏幕上固定一条横线、滚动/书写时从那里闪"：那一类更像是
+    /// 脏矩形部分上屏和 DWM/MPO（硬件平面）合成的相互作用，而不是我们墨迹层的
+    /// 脏区漏画（`--prevflash` 已排除后者）。关掉脏矩形上屏如果闪就没了，
+    /// 就说明该在"部分上屏"这条路上做产品级兜底。
+    /// </summary>
+    public static bool FullPresent;
+
+    /// <summary>
     /// 每帧在渲染之前先 DwmFlush，等到合成边界再抽输入、提交。
     /// 见 Native.DwmFlush 的说明，以及 README 里延时那一节。
     /// </summary>
     public static bool VBlankPaced;
+
+    /// <summary>
+    /// 诊断开关（`--scrollflash` 等探针用）：把每一帧的脏区/上屏/后缓冲号打到控制台。
+    /// 用来追"滚完按下时左列错位"这类只发生在特定帧的问题（2026-10-04）。
+    /// </summary>
+    public static bool Trace;
 
     public int LastDrawnStrokes;
     /// <summary>常驻分块数 / 这一帧可见块数 / 分块预算（诊断用）。</summary>
@@ -724,6 +759,7 @@ internal sealed partial class OverlayWindow : IDisposable
         };
 
         _swapChain = Gfx.Factory.CreateSwapChainForComposition(Gfx.Device, desc, null);
+        try { _swapChain3 = _swapChain.QueryInterfaceOrNull<IDXGISwapChain3>(); } catch { _swapChain3 = null; }
 
         if (LatencyWaitEnabled)
         {
@@ -976,7 +1012,7 @@ internal sealed partial class OverlayWindow : IDisposable
             if (doc.Dirty.Full)
             {
                 _tiles.MarkAllDirty();
-                _forceFullFrame = true;
+                _fullFramesLeft = 2;
             }
             else if (doc.StructureChangedSinceRender)
             {
@@ -1003,7 +1039,7 @@ internal sealed partial class OverlayWindow : IDisposable
         if (ViewOffsetY != _lastCamY)
         {
             _lastCamY = ViewOffsetY;
-            _forceFullFrame = true;
+            _fullFramesLeft = 2;      // 相机变了：两个缓冲都要重画到新位置（见字段说明）
         }
 
         // 底色是**画进分块里**的（透明批注 = 擦成全透明，白板 = 铺底色），
@@ -1013,10 +1049,14 @@ internal sealed partial class OverlayWindow : IDisposable
             _lastBoardOn = app.BoardOn;
             _lastBoardColor = app.BoardColor;
             _tiles.MarkAllDirty();
-            _forceFullFrame = true;
+            _fullFramesLeft = 2;
         }
 
         _tiles.Sync(VisibleCanvasRect, RasterizeTile);
+
+        if (Trace && (_tiles.RasterizedLastFrame > 0 || _tiles.AppendedLastFrame > 0))
+            Console.WriteLine($"    [tiles] raster={_tiles.RasterizedLastFrame} append={_tiles.AppendedLastFrame} "
+                              + $"camY={ViewOffsetY:F0}");
 
         RebuildCount += _tiles.RasterizedLastFrame;
         LastRebuildMs = _tiles.RasterMsLastFrame;
@@ -1405,7 +1445,7 @@ internal sealed partial class OverlayWindow : IDisposable
     internal void ForceContentRebuild()
     {
         _tilesVersion = -1;
-        _forceFullFrame = true;
+        _fullFramesLeft = 2;
         _tiles.MarkAllDirty();
     }
 
@@ -2468,13 +2508,19 @@ internal sealed partial class OverlayWindow : IDisposable
 
         // 滚动条画在右边缘，而且要每帧淡出，所以必须算进脏区，
         // 否则它消失之后会在屏幕上留一条擦不掉的线。
-        r.Add(new RectF
+        //
+        // ⚠ **它是**单独**一块，不能并进 `r`（静止图元的联合包围盒）**：
+        // 它整屏高，只要当前有一笔在屏幕左半边，联合包围盒就会变成"从笔迹到屏幕右缘"，
+        // 把"笔迹左边"整块排除在脏区外。2026-10-04 用户报的"滚完轮一按就闪/错位、
+        // 只在左侧"就是它兜出来的（配合相机变化只重画一帧）。分开之后两边互不拖累：
+        // 笔迹的脏区就是笔迹，滚动条就是右缘那一条。
+        _scrollbarRect = new RectF
         {
             MinX = OriginX + Width - 30f * app.DpiScale,
             MinY = OriginY,
             MaxX = OriginX + Width,
             MaxY = OriginY + Height,
-        });
+        };
 
         return r;
     }
@@ -2499,12 +2545,13 @@ internal sealed partial class OverlayWindow : IDisposable
         else
             foreach (var raw in doc.Dirty.Rects) _contentDirtyNow.Add(CanvasRectToWindow(raw));
 
-        if (_forceFullFrame)
+        if (_fullFramesLeft > 0)
         {
-            // 首帧 / 内容层整层重建 / 尺寸变化：整块后缓冲都不可信。
+            // 首帧 / 相机变了 / 整层重建 / 换底色：**连续两帧**整屏重画——两个后缓冲
+            // 都要更新到新状态（见 _fullFramesLeft 的说明；只给一帧就是"滚完按下闪"的根因）。
             _frameDirty.Add(full);
             _contentDirtyPrev.Clear();
-            _forceFullFrame = false;
+            _fullFramesLeft--;
         }
         else
         {
@@ -2526,6 +2573,10 @@ internal sealed partial class OverlayWindow : IDisposable
             t.Add(_transientHistory[i]);
         if (!t.IsEmpty) AddClipped(_frameDirty, t);
 
+        // 右缘滚动条那一条：**单独加**，它不参与上面那个联合包围盒
+        // （否则"笔迹 + 整屏高的滚动条"会把笔迹左边整块排除在脏区外）。
+        if (!_scrollbarRect.IsEmpty) AddClipped(_frameDirty, _scrollbarRect);
+
         // 界面每帧都会重新贴到后缓冲上，所以它那块区域每帧都得算进上屏的脏区，
         // 否则双缓冲一交换，界面就会闪一下或干脆不见了。
         // 界面这一帧和上一帧占的地方都要算进来：界面可能是刚刚消失的
@@ -2536,6 +2587,15 @@ internal sealed partial class OverlayWindow : IDisposable
 
         // 兜底：真要是一个矩形都没有，就整屏来一次，避免出现没擦干净的画面
         if (_frameDirty.Count == 0) _frameDirty.Add(full);
+
+        if (Trace)
+        {
+            string R(RectF r) => r.IsEmpty ? "-" : $"({r.MinX:F0},{r.MinY:F0})..({r.MaxX:F0},{r.MaxY:F0})";
+            string RL(List<RectF> l) => l.Count == 0 ? "-" : string.Join(",", l.ConvertAll(x => R(x)));
+            Console.WriteLine($"    [dirtysrc] now={RL(_contentDirtyNow)} prev={RL(_contentDirtyPrev)} "
+                              + $"trans={R(_transientNow)} h0={R(_transientHistory[0])} h1={R(_transientHistory[1])} "
+                              + $"ui={R(_uiBounds)} uiprev={R(_uiBoundsPrev)} cursor={R(_cursorRectPrev)} uiVis={uiVisible}");
+        }
 
         _transientHistory[1] = _transientHistory[0];
         _transientHistory[0] = _transientNow;
@@ -5861,6 +5921,26 @@ internal sealed partial class OverlayWindow : IDisposable
             ? area / (Width * (double)Height) * 100.0
             : 100.0;
 
+        if (Trace)
+        {
+            int buf = -1;
+            try { if (_swapChain3 != null) buf = (int)_swapChain3.CurrentBackBufferIndex; } catch { }
+            var b = RectF.Empty;
+            foreach (var r in _frameDirty) { b.Add(r.MinX, r.MinY); b.Add(r.MaxX, r.MaxY); }
+            int l0 = int.MaxValue, t0 = int.MaxValue, r0 = int.MinValue, bo0 = int.MinValue;
+            foreach (var r in _presentRects)
+            {
+                if (r.Left < l0) l0 = r.Left;
+                if (r.Top < t0) t0 = r.Top;
+                if (r.Right > r0) r0 = r.Right;
+                if (r.Bottom > bo0) bo0 = r.Bottom;
+            }
+            Console.WriteLine($"    [present] rects={_presentRects.Count} area={LastPresentAreaPercent:F0}% "
+                              + (l0 <= r0 ? $"rectsBox=({l0},{t0})..({r0},{bo0}) " : "")
+                              + $"dirtyBox=({b.MinX:F0},{b.MinY:F0})..({b.MaxX:F0},{b.MaxY:F0}) "
+                              + $"camY={ViewOffsetY:F0} backBuf={buf}");
+        }
+
         var sw = Stopwatch.StartNew();
         SharpGen.Runtime.Result hr;
 
@@ -5873,8 +5953,9 @@ internal sealed partial class OverlayWindow : IDisposable
         LastPresentStartQpc = Qpc.Now;
 
         // 脏区太少或太大都不划算：太大不如直接整屏上屏，太少说明这一帧
-        // 没什么变化（例如只等垂直同步）。
-        if (_presentRects.Count == 0 || _presentRects.Count > 16 || LastPresentAreaPercent > 80.0)
+        // 没什么变化（例如只等垂直同步）。--fullpresent = 永远整屏上屏（诊断）。
+        if (FullPresent
+            || _presentRects.Count == 0 || _presentRects.Count > 16 || LastPresentAreaPercent > 80.0)
         {
             hr = _swapChain.Present(useWaitable ? 0u : 1u, PresentFlags.None);
             LastPresentAreaPercent = 100.0;

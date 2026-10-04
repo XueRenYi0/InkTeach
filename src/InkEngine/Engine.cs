@@ -1680,6 +1680,9 @@ public partial class InkEngine
         // （文字排版 + 进程计数），测底层性能时必须排除掉，否则量到的是
         // 测量工具本身而不是渲染引擎。**两条同时给时以 --nohud 为准。**
         if (args.Contains("--nohud")) ShowHud = false;
+        // --fullpresent：每次整屏上屏（不走 Present1 脏矩形）。诊断"固定横线闪"用：
+        // 如果加上它就不闪了，说明问题在"部分上屏 + DWM 合成"这条路上（见 Overlay 的说明）。
+        if (args.Contains("--fullpresent")) OverlayWindow.FullPresent = true;
         // 触点诊断（8.3.3）：`--touchhud` 直接开着启动。
         if (args.Contains("--touchhud")) TouchHud = true;
         // 动态橡皮的后门（8.3.4）：关掉"速度→尺寸"，擦除尺寸恒定（不进界面）。

@@ -751,6 +751,24 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             SmoothFlashTest(!args.Contains("--off"), args.Contains("--fast"));
         }
+        else if (mode == "--prevflash")
+        {
+            // 诊断：**"写下一笔时，上一笔闪不闪"**（用户 2026-10-04 报）。
+            // --pen = 走合成笔（PT_PEN + 压感，覆盖 ID2D1Ink 那条真实渲染路）；
+            // --left = 用户的复现场景：横线底纹白板 + 屏幕左侧竖写。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PrevFlashTest(args.Contains("--pen"), args.Contains("--left"),
+                          args.Contains("--ui"), args.Contains("--fast"));
+        }
+        else if (mode == "--scrollflash")
+        {
+            // 诊断：**"滚轮滚动之后一按鼠标就闪/错位"**（用户 2026-10-04 报，
+            // 关键线索：滚动之后、按下才闪，松手就不闪；以前竖写时也遇到过）。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ScrollFlashTest();
+        }
         else if (mode == "--wetdrytest")
         {
             _autoExitAt = double.MaxValue;
@@ -1036,6 +1054,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --smoothtest        中心线曲线化自检（过点 Catmull-Rom：直角不变形 / 圆弧更圆滑 / 形状不跑）");
         Console.WriteLine("  --smoothshow [图]   出图：曲线化开/关对照（同一组样本各存一张 -off / -on，32 位 BMP）");
         Console.WriteLine("  --smoothflashtest [--off]  “画的时候闪不闪”专项检测（合成鼠标画过去，看已经画过的墨还动不动）");
+        Console.WriteLine("  --prevflash [--pen] [--left]  “写下一笔时，上一笔闪不闪”专项检测（合成鼠标/合成笔；--left=左侧竖写+横线底纹）");
         Console.WriteLine("  --motion <名字>     catmull / mean2（**默认 mean2**=距离窗＋过点曲线＋收笔追赶）");
         Console.WriteLine("  --motiontest        运动模型自检（baseline / catmull / mean2 同批语料出表）");
         Console.WriteLine("  --himetric          D1 亚像素输入（用 ptHimetricLocation 映射小数像素；默认关，做 A/B）");
@@ -19808,6 +19827,537 @@ internal sealed partial class App : InkEngine.InkEngine
             }
         }
         return (count, maxDist, wx, wy);
+    }
+
+    /// <summary>
+    /// 滚动比对：两张同尺寸图按"内容整体上移 <paramref name="shift"/> 像素"逐像素对
+    /// （a[y] 应等于 b[y+shift]）。返回不匹配的像素数（亮度差 &gt; 24）。
+    /// 用来找"滚动时某条横带没更新"——那会表现成一整行不匹配。
+    /// </summary>
+    private static int CountShiftMismatch(byte[] a, byte[] b, int w, int h, int shift)
+    {
+        if (shift <= 0 || shift >= h) return int.MaxValue;
+        int bad = 0;
+        for (int y = 0; y + shift < h; y++)
+        {
+            int ra = y * w * 4, rb = (y + shift) * w * 4;
+            for (int x = 0; x < w; x++)
+            {
+                int oa = ra + x * 4, ob = rb + x * 4;
+                int d = Math.Abs(a[oa] - b[ob]) + Math.Abs(a[oa + 1] - b[ob + 1]) + Math.Abs(a[oa + 2] - b[ob + 2]);
+                if (d > 24) bad++;
+            }
+        }
+        return bad;
+    }
+
+    /// <summary>
+    /// `--prevflash`：**"写下一笔时，上一笔闪不闪"**专项检测（用户 2026-10-04 报：
+    /// 正在写下一笔、笔尖滑动时，上一笔某个位置闪一下）。
+    ///
+    /// 和 <see cref="SmoothFlashTest"/> 的区别：那条测的是**同一笔**已经画过去的地方；
+    /// 这一条测的是**已经落定的上一笔**。两条判据：
+    ///   ① **上一笔本身**：以 A 落定后为基准，B 画完后，离 B 整条路径 &gt;40px 的像素必须
+    ///      一个都没变（A 被 B 盖住的那一段允许变）；
+    ///   ② **笔尖后面全都不许动**（更严）：每一步和上一步比，离当前笔尖 &gt;60px 的像素
+    ///      必须冻住——这条连 B 自己画过的部分、以及 A 被盖住的部分都管；
+    ///      抬笔（提交/补画那一帧）也单独拍一张比。
+    /// 两条都过 = 用户看到的那种"上一笔闪"在这个输入路径下不存在。
+    /// </summary>
+    private void PrevFlashTest(bool usePen = false, bool left = false, bool withUi = false, bool fast = false)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"=== 上一笔闪不闪（{(left ? "左侧竖写＋横线底纹" : "写下一笔")}；{(usePen ? "合成笔 PT_PEN" : "合成鼠标")}"
+                          + $"{(withUi ? "＋产品界面" : "")}{(fast ? "，快写" : "")}） ===");
+        if (usePen)
+        {
+            if (!EnsureSyntheticPen())
+            {
+                Console.WriteLine("  SKIP: 拿不到合成笔设备（CreateSyntheticPointerDevice 失败）");
+                _quit = true;
+                return;
+            }
+        }
+        else if (SkipIfNoSyntheticInput("上一笔闪不闪（需要合成鼠标移动光标）")) { _quit = true; return; }
+
+        BoardOn = true;                     // 白底，判据干净
+        if (left)
+        {
+            // 用户报的场景：白板 + **横线底纹**，竖写在**屏幕左侧**。
+            BoardPattern = 2;               // 2 = 横线（1 = 方格，0 = 无）
+            BoardPatternStepLogical = 40f;
+        }
+        if (withUi)
+        {
+            // 产品界面（工具条）：用户就是在这个状态下写的；测试模式默认是空界面。
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(200);
+        }
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Pen;
+        PassThrough = false;
+        Doc.InvalidateAll();
+        SettleFrames(400);
+
+        // 输入注入：鼠标 / 合成笔（压感）各一条路。
+        void Move(float x, float y, float p)
+        {
+            if (usePen) SendPenPoint(x, y, (uint)Math.Clamp(p, 0f, 1024f), contact: true, first: false);
+            else SendMouse((int)x, (int)y, 0);
+        }
+        void Down(float x, float y)
+        {
+            if (usePen) SendPenPoint(x, y, 300, contact: true, first: true);
+            else SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTDOWN);
+        }
+        void Up(float x, float y)
+        {
+            if (usePen) SendPenPoint(x, y, 0, contact: false, first: false);
+            else SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTUP);
+        }
+        void Hover(float x, float y)
+        {
+            if (usePen) SendPenPoint(x, y, 0, contact: false, first: false);
+            else SendMouse((int)x, (int)y, 0);
+        }
+
+        float x0 = left ? _virtualX + 300f : _virtualX + 400f;
+        float y0 = left ? _virtualY + 420f : _virtualY + 720f;
+
+        // ---- 上一笔 A：左侧场景是"一竖"（跨过第一列分块边界 x=256，带小摆动），
+        //      默认场景是一条正弦弧 ----
+        var pathA = new List<Vector2>();
+        for (int i = 0; i <= 40; i++)
+        {
+            float t = i / 40f;
+            pathA.Add(left
+                ? new Vector2(x0 + MathF.Sin(t * 5f) * 36f, y0 + t * 560f)
+                : new Vector2(x0 + t * 520f, y0 - MathF.Sin(t * MathF.PI) * 90f + t * 30f));
+        }
+        Hover(pathA[0].X, pathA[0].Y); SettleFrames(150);
+        Down(pathA[0].X, pathA[0].Y); SettleFrames(80);
+        for (int i = 1; i < pathA.Count; i++)
+        {
+            Move(pathA[i].X, pathA[i].Y, 200f + 600f * MathF.Abs(MathF.Sin(i / 40f * 2f * MathF.PI)));
+            SettleFrames(fast ? 2 : 8);
+        }
+        Up(pathA[^1].X, pathA[^1].Y);
+        SettleFrames(400);
+
+        // 拍基准之前，先把笔**挪出取景带**：真笔/合成笔悬停时会画一圈落点反馈（Ring），
+        // 笔停在 A 尾（抬笔点）上，圆环就在带里——B 一开始圆环被擦掉，会被误判成
+        // "上一笔在闪"（第一次跑就踩到了：固定 31×31 的方块，正是圆环的包围盒）。
+        Hover(_virtualX + 2400f, _virtualY + 1600f);
+        SettleFrames(200);
+
+        // ---- 基准：A 落定之后的整块区域 ----
+        int bandW = left ? 900 : 1040;
+        int bandH = left ? 1250 : 620;
+        int bx = left ? (int)_virtualX : (int)(x0 - 140f);
+        int by = left ? (int)(_virtualY + 140f) : (int)(y0 - 340f);
+        var reference = ScreenProbe.CaptureRegion(bx, by, bandW, bandH);
+        if (reference == null)
+        {
+            Console.WriteLine("  取不到屏（CaptureRegion 失败）——测量无效");
+            _quit = true;
+            return;
+        }
+        Console.WriteLine($"  上一笔 A 已落定；带 {bandW}×{bandH} @ ({bx},{by})");
+        ScreenProbe.SaveBuffer("reports/prevflash-ref.bmp", reference, bandW, bandH);
+
+        // ---- 【关键】两缓冲比对：同一块**静止**内容，强制渲染两帧（连续两次 Present
+        //      会落在两个不同的后缓冲上），两张截图必须逐像素相同。
+        //      不同 = 有一个后缓冲在那个位置是旧的 → 静止时不呈现、一写字/滚动
+        //      （连续出帧）就"新旧交替"——正是用户报的"从某一条线开始闪"。
+        int bufferDiff = 0; string bufferDiffWhere = "";
+        for (int k = 0; k < 3; k++)
+        {
+            _dirty = true; SettleFrames(1);
+            var f0 = ScreenProbe.CaptureRegion(bx, by, bandW, bandH);
+            _dirty = true; SettleFrames(1);
+            var f1 = ScreenProbe.CaptureRegion(bx, by, bandW, bandH);
+            if (f0 == null || f1 == null) continue;
+            var d = DiffFarFromPath(f0, f1, bandW, bandH, bx, by, pathA, pathA.Count, -1f);
+            if (d.count > bufferDiff)
+            {
+                bufferDiff = d.count;
+                bufferDiffWhere = $"({d.minX + bx},{d.minY + by})..({d.maxX + bx},{d.maxY + by})";
+            }
+        }
+        Console.WriteLine($"  两缓冲比对（静止内容，强制出两帧）：差异 {bufferDiff} 像素"
+                          + (bufferDiff > 0 ? $" @ {bufferDiffWhere}" : ""));
+
+        // ---- 下一笔 B：默认从 A 的左上斜穿到右下；左侧场景在 A 左边再竖写一条 ----
+        var pathB = new List<Vector2>();
+        for (int i = 0; i <= 36; i++)
+        {
+            float t = i / 36f;
+            pathB.Add(left
+                ? new Vector2(x0 - 150f + MathF.Sin(t * 4f) * 26f, y0 - 140f + t * 700f)
+                : new Vector2(x0 + 60f + t * 380f, y0 - 270f + t * 540f));
+        }
+        Hover(pathB[0].X, pathB[0].Y); SettleFrames(150);
+        Down(pathB[0].X, pathB[0].Y); SettleFrames(80);
+
+        int worstA = 0, samples = 0;            // 判据①：上一笔（离 B 整条路径远）
+        float worstADist = 0f, worstAX = 0f, worstAY = 0f;
+        int worstAMinX = 0, worstAMinY = 0, worstAMaxX = 0, worstAMaxY = 0;
+        int worstTail = 0;                       // 判据②：离当前笔尖远的任何变化
+        float worstTailDist = 0f, worstTailX = 0f, worstTailY = 0f;
+        byte[] prev = null;
+        for (int i = 1; i < pathB.Count; i++)
+        {
+            Move(pathB[i].X, pathB[i].Y, 200f + 600f * MathF.Abs(MathF.Sin(i / 36f * 2f * MathF.PI)));
+            SettleFrames(fast ? 3 : 12);
+            var cap = ScreenProbe.CaptureRegion(bx, by, bandW, bandH);
+            if (cap == null) continue;
+            samples++;
+
+            var dA = DiffFarFromPath(reference, cap, bandW, bandH, bx, by, pathB, i + 1, 40f);
+            if (dA.count > 0)
+                Console.WriteLine($"    step {i,2}（笔尖 {pathB[i].X:F0},{pathB[i].Y:F0}）：上一笔被改 {dA.count} 像素，"
+                                  + $"范围 ({dA.minX + bx},{dA.minY + by})..({dA.maxX + bx},{dA.maxY + by})");
+            if (dA.count > worstA)
+            {
+                worstA = dA.count; worstADist = dA.maxDist; worstAX = dA.x; worstAY = dA.y;
+                worstAMinX = dA.minX; worstAMinY = dA.minY; worstAMaxX = dA.maxX; worstAMaxY = dA.maxY;
+                ScreenProbe.SaveBuffer("reports/prevflash-worst.bmp", cap, bandW, bandH);
+            }
+
+            if (prev != null)
+            {
+                var dT = DiffFarFromTip(prev, cap, bandW, bandH, bx, by, pathB[i].X, pathB[i].Y, 60f);
+                if (dT.count > worstTail) { worstTail = dT.count; worstTailDist = dT.maxDist; worstTailX = dT.x; worstTailY = dT.y; }
+            }
+            prev = cap;
+        }
+
+        // 抬笔：**提交/补画那一帧**也要算（上一笔闪的一个高发点就是这里）
+        Up(pathB[^1].X, pathB[^1].Y);
+        SettleFrames(400);
+        var capEnd = ScreenProbe.CaptureRegion(bx, by, bandW, bandH);
+        if (capEnd != null)
+        {
+            var dA = DiffFarFromPath(reference, capEnd, bandW, bandH, bx, by, pathB, pathB.Count, 40f);
+            if (dA.count > 0)
+                Console.WriteLine($"    抬笔后：上一笔被改 {dA.count} 像素，"
+                                  + $"范围 ({dA.minX + bx},{dA.minY + by})..({dA.maxX + bx},{dA.maxY + by})");
+            if (dA.count > worstA)
+            {
+                worstA = dA.count; worstADist = dA.maxDist; worstAX = dA.x; worstAY = dA.y;
+                worstAMinX = dA.minX; worstAMinY = dA.minY; worstAMaxX = dA.maxX; worstAMaxY = dA.maxY;
+                ScreenProbe.SaveBuffer("reports/prevflash-worst.bmp", capEnd, bandW, bandH);
+            }
+            if (prev != null)
+            {
+                var dT = DiffFarFromTip(prev, capEnd, bandW, bandH, bx, by, pathB[^1].X, pathB[^1].Y, 60f);
+                if (dT.count > worstTail) { worstTail = dT.count; worstTailDist = dT.maxDist; worstTailX = dT.x; worstTailY = dT.y; }
+            }
+        }
+
+        // B 落定后再做一次两缓冲比对（提交/补画是否只进了其中一个缓冲）。
+        // **先把笔挪出取景带**：笔悬停会画落点圆环，圆环在合成笔抬笔后会"进/出范围"抖动，
+        // 把圆环当噪声误判成"上一笔在闪"（踩过一次：差异恰好是 32×32 的圆环）。
+        {
+            Hover(_virtualX + 2400f, _virtualY + 1600f);
+            SettleFrames(200);
+            int bd2 = 0; string w2 = "";
+            for (int k = 0; k < 3; k++)
+            {
+                _dirty = true; SettleFrames(1);
+                var f0 = ScreenProbe.CaptureRegion(bx, by, bandW, bandH);
+                _dirty = true; SettleFrames(1);
+                var f1 = ScreenProbe.CaptureRegion(bx, by, bandW, bandH);
+                if (f0 == null || f1 == null) continue;
+                var d = DiffFarFromPath(f0, f1, bandW, bandH, bx, by, pathA, pathA.Count, -1f);
+                if (d.count > bd2)
+                {
+                    bd2 = d.count;
+                    w2 = $"({d.minX + bx},{d.minY + by})..({d.maxX + bx},{d.maxY + by})";
+                    Console.WriteLine($"    [bufdiff] 环={DrawnCursor} inside={PointerInside} "
+                                      + $"pt=({PointerX:F0},{PointerY:F0}) type={LastPointerType}");
+                    ScreenProbe.SaveBuffer("reports/prevflash-buf-f0.bmp", f0, bandW, bandH);
+                    ScreenProbe.SaveBuffer("reports/prevflash-buf-f1.bmp", f1, bandW, bandH);
+                }
+            }
+            if (bd2 > 0) Console.WriteLine($"  B 落定后两缓冲比对：差异 {bd2} 像素 @ {w2}");
+            bufferDiff = Math.Max(bufferDiff, bd2);
+        }
+
+        Console.WriteLine($"  B 画了 {samples} 步，抬笔后再拍一张；判据阈值 40px（A）/ 60px（笔尖后）");
+        Console.WriteLine($"  ① 上一笔被改动（离 B 整条路径 >40px）：{worstA} 个像素"
+                          + $"（最远 {worstADist:F0}px @ {worstAX:F0},{worstAY:F0}，"
+                          + $"范围 ({worstAMinX + bx},{worstAMinY + by})..({worstAMaxX + bx},{worstAMaxY + by})）");
+        Console.WriteLine($"  ② 笔尖后面还在动（离笔尖 >60px，含 B 自己画过的）：{worstTail} 个像素"
+                          + $"（最远 {worstTailDist:F0}px @ {worstTailX:F0},{worstTailY:F0}）");
+
+        // ---- 滚动阶段（--left）：内容垫够两屏 → 滚 5 格，按"S 像素整体平移"逐行对；
+        //      再原地连拍两张看有没有像素在闪（用户报的正是"滚动时左侧闪"）----
+        int scrollBad = 0;
+        if (left)
+        {
+            for (int k = 0; k < 6; k++)
+            {
+                var s = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = PenColor, Width = 4f * DpiScale,
+                };
+                float yy = _virtualY + 2200f + k * 260f;
+                for (int j = 0; j < 20; j++)
+                    s.AddPoint(_virtualX + 260f + j * 70f, yy + MathF.Sin(j * 0.7f) * 60f, 0.5f, j * 8f);
+                Doc.AddStroke(s);
+            }
+            _dirty = true;
+            RenderAll();
+            SettleFrames(200);
+
+            Hover(_virtualX + 2400f, _virtualY + 1600f);   // 笔挪出取景区
+            SettleFrames(150);
+
+            const int sw = 1400, sh = 1500;
+            var capBefore = ScreenProbe.CaptureRegion(0, 0, sw, sh);
+            int steps = 0;
+            for (int step = 0; step < 5 && capBefore != null; step++)
+            {
+                float cam0 = ViewOffsetY;
+                Native.PostMessage(_windows[0].Hwnd, 0x020A /*WM_MOUSEWHEEL*/,
+                                   new IntPtr(-120 << 16), IntPtr.Zero);
+                SettleFrames(10);
+                float cam1 = ViewOffsetY;
+                float moved = cam0 - cam1;                   // 内容整体上移这么多
+                int S = (int)MathF.Round(moved);
+                var capAfter = ScreenProbe.CaptureRegion(0, 0, sw, sh);
+                if (capAfter == null) break;
+                if (S <= 0 || MathF.Abs(moved - S) > 0.3f)
+                {
+                    Console.WriteLine($"    滚动第 {step + 1} 格：相机实际平移 {moved:F2}px（到边界/非整），跳过");
+                    capBefore = capAfter;
+                    continue;
+                }
+                steps++;
+                int up = CountShiftMismatch(capAfter, capBefore, sw, sh, S);
+                int down = CountShiftMismatch(capBefore, capAfter, sw, sh, S);
+                int bad = Math.Min(up, down);
+                scrollBad = Math.Max(scrollBad, bad);
+
+                var capAgain = ScreenProbe.CaptureRegion(0, 0, sw, sh);
+                // 原地连拍要把**下一帧真的画出来**（强制出帧），否则两张拍的是同一帧、永远为 0。
+                _dirty = true; SettleFrames(1);
+                var capAgain2 = ScreenProbe.CaptureRegion(0, 0, sw, sh);
+                int flick = (capAgain == null || capAgain2 == null) ? 0
+                    : DiffFarFromTip(capAgain, capAgain2, sw, sh, 0, 0, -1e6f, -1e6f, 0f).count;
+                scrollBad = Math.Max(scrollBad, flick);
+                Console.WriteLine($"    滚动第 {step + 1} 格：平移 {S}px 不匹配 {bad} 像素，原地连拍差异 {flick} 像素"
+                                  + (bad + flick == 0 ? "（干净）" : " ← 就是闪"));
+                capBefore = capAfter;
+            }
+            if (steps > 0)
+                Console.WriteLine($"  ③ 滚动：{steps} 格，最大不匹配/闪动 {scrollBad} 像素");
+        }
+
+        // ② 允许 ≤2 个像素的噪声：**笔迹自身**的起点在头几帧曲线稳定过程中
+        //    可能变一个像素（离笔尖 61px 正好压线抓到过），那不是"上一笔闪"。
+        bool ok = samples >= 8 && worstA == 0 && worstTail <= 2 && scrollBad == 0 && bufferDiff == 0;
+        Console.WriteLine(ok
+            ? "  PASS: 写下一笔时，上一笔 / 笔尖后面都是冻住的"
+            : samples < 8 ? "  FAIL: 没采到几步——测量无效（别当成通过）"
+                          : "  FAIL: 有东西在变——就是用户看到的“闪”");
+        Console.WriteLine();
+        _quit = true;
+    }
+
+    /// <summary>
+    /// `--scrollflash`：复现"**滚轮滚动之后、一按鼠标就闪 / 错位**"（用户 2026-10-04 报，
+    /// 关键线索：滚动之后按下才闪、松手就不闪；"有时候错位、有时候不错位"；
+    /// 之前竖写时也在左侧遇到过）。
+    ///
+    /// 事故链（怀疑）：相机变化只强制了**一帧**整屏重画（`_forceFullFrame` 用完即清）。
+    /// 滚动停下时，两个后缓冲里只有最后画的那个在**新位置**，另一个还停在上一格；
+    /// 这时按下去画，第一帧只重画"笔迹附近的一条"（部分脏区），目标缓冲偏偏是落后
+    /// 一格的旧画面 → 贴上去就是"从某条线隔开、一侧错位"，帧间交替 → 闪；松手后
+    /// 进入空闲不再出帧，screen 停在哪一帧看运气（所以"有时错位有时不错位"）。
+    ///
+    /// **出帧节奏必须和真机一致**：主循环是"有需求才出一帧"（`NeedsFrame()`），
+    /// 而不是 `SettleFrames` 那样一直出——空闲多出的整屏帧会把两个缓冲都修好，
+    /// 所以以前的探针抓不到。本探针全程手动出帧（滚两格 → 停 → 按下 → 移动，
+    /// 每步只 `PumpMessages + RenderAll` 一次），再和"滚完那一帧"比：
+    /// 若某一帧整体错位一个滚动步长（S = 72×DPI），就是复现。
+    /// </summary>
+    private void ScrollFlashTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 滚动后按下就闪/错位 专项检测 ===");
+        if (SkipIfNoSyntheticInput("滚动后按下（需要合成鼠标）")) { _quit = true; return; }
+        InkEngine.OverlayWindow.Trace = true;
+
+        BoardOn = true;
+        BoardPattern = 2;                    // 横线底纹（用户白板那种）
+        BoardPatternStepLogical = 40f;
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Pen;
+        PassThrough = false;
+        Doc.InvalidateAll();
+
+        // 垫内容：相机要滚得动（画布范围要超过一屏）
+        for (int k = 0; k < 6; k++)
+        {
+            var s = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = PenColor, Width = 4f * DpiScale,
+            };
+            float yy = _virtualY + 2200f + k * 260f;
+            for (int j = 0; j < 20; j++)
+                s.AddPoint(_virtualX + 260f + j * 70f, yy + MathF.Sin(j * 0.7f) * 60f, 0.5f, j * 8f);
+            Doc.AddStroke(s);
+        }
+
+        // 每出一帧拍一张，并量"左列（x=100）第一条线 vs 右区（x=700）第一条线"的相位差：
+        // 0 = 对齐；非 0 = 左侧那一列分块错位（用户看到的"从某条线隔开"）。
+        const int w = 1400, h = 1500;
+        var seq = new List<(string Label, byte[] Cap, float Cam)>();
+        void Frame(string label)
+        {
+            PumpMessages();
+            RenderAll();
+            Thread.Sleep(40);
+            seq.Add((label, ScreenProbe.CaptureRegion(0, 0, w, h), ViewOffsetY));
+        }
+
+        Frame("起手1");
+        Frame("起手2");
+
+        float px = _virtualX + 260f, py = _virtualY + 420f;
+        SendMouse((int)px, (int)py, 0);       // 鼠标挪到左侧、悬停
+        Frame("悬停");
+
+        for (int k = 0; k < 2; k++)
+        {
+            Native.PostMessage(_windows[0].Hwnd, 0x020A /*WM_MOUSEWHEEL*/,
+                               new IntPtr(-120 << 16), IntPtr.Zero);
+            Frame($"滚{k + 1}");
+        }
+
+        SendMouse((int)px, (int)py, Native.MOUSEEVENTF_LEFTDOWN);
+        Frame("按下");
+        for (int k = 0; k < 2; k++)
+        {
+            SendMouse((int)px, (int)(py + 40 * (k + 1)), 0);
+            Frame($"移动{k + 1}");
+        }
+        SendMouse((int)px, (int)(py + 120), Native.MOUSEEVENTF_LEFTUP);
+        Frame("抬起");
+
+        // 判定：左列第一条线的中心 − 右区第一条线的中心。
+        int fail = 0;
+        foreach (var (label, cap, cam) in seq)
+        {
+            if (cap == null) continue;
+            int l = FirstLineCenter(cap, w, h, 100);
+            int r = FirstLineCenter(cap, w, h, 700);
+            int off = l - r;
+            bool bad = off != 0;
+            if (bad) fail++;
+            Console.WriteLine($"  {label,-6} 相机 {cam,7:F0}  左线 {l,4} / 右线 {r,4}  左−右 = {off,4}"
+                              + (bad ? "  ← 左列错位（闪）" : ""));
+        }
+        Console.WriteLine(fail > 0
+            ? $"  FAIL: {fail} 帧左列与右区错位——就是用户看到的“从某条线隔开”的闪"
+            : "  PASS: 全程左列与右区对齐");
+        InkEngine.OverlayWindow.Trace = false;
+        Console.WriteLine();
+        _quit = true;
+    }
+
+    /// <summary>竖着扫，返回第一条"灰线"的中心 y（没有就 -1）。截屏是 BGRA。</summary>
+    private static int FirstLineCenter(byte[] cap, int w, int h, int x)
+    {
+        if (cap == null) return -1;
+        int run = -1;
+        for (int y = 0; y < h; y++)
+        {
+            int o = (y * w + x) * 4;
+            bool dark = cap[o] < 225 && cap[o + 1] < 225 && cap[o + 2] < 225;
+            if (dark) { if (run < 0) run = y; }
+            else if (run >= 0) return (run + y - 1) / 2;
+        }
+        return -1;
+    }
+
+    /// <summary>两张同尺寸 BGRA 图的差异像素数（亮度差 &gt; 24）。</summary>
+    private static int DiffCount(byte[] a, byte[] b, int w, int h)
+    {
+        int n = 0;
+        for (int i = 0; i < w * h; i++)
+        {
+            int o = i * 4;
+            int d = Math.Abs(a[o] - b[o]) + Math.Abs(a[o + 1] - b[o + 1]) + Math.Abs(a[o + 2] - b[o + 2]);
+            if (d > 24) n++;
+        }
+        return n;
+    }
+
+    /// <summary>
+    /// 两张同尺寸 BGRA 图的差异，只看**离折线 <paramref name="path"/> 的前
+    /// <paramref name="pathCount"/> 个点 &gt; minDist 的那些像素**。
+    /// 返回（这样的像素数、其中最远那个到路径的距离、坐标）。
+    /// </summary>
+    private static (int count, float maxDist, float x, float y,
+                    int minX, int minY, int maxX, int maxY) DiffFarFromPath(
+        byte[] a, byte[] b, int w, int h, int ox, int oy,
+        List<Vector2> path, int pathCount, float minDist)
+    {
+        int count = 0;
+        float maxDist = 0f, wx = 0f, wy = 0f;
+        int minX = int.MaxValue, minY = int.MaxValue, maxX = int.MinValue, maxY = int.MinValue;
+        for (int j = 0; j < h; j++)
+        {
+            int row = j * w * 4;
+            for (int i = 0; i < w; i++)
+            {
+                int o = row + i * 4;
+                int d = Math.Abs(a[o] - b[o]) + Math.Abs(a[o + 1] - b[o + 1]) + Math.Abs(a[o + 2] - b[o + 2]);
+                if (d <= 24) continue;
+                float px = ox + i, py = oy + j;
+                float dist = DistToPath(path, pathCount, px, py);
+                if (dist <= minDist) continue;      // B 自己画的 / 盖住的，允许变
+                count++;
+                if (i < minX) minX = i;
+                if (i > maxX) maxX = i;
+                if (j < minY) minY = j;
+                if (j > maxY) maxY = j;
+                if (dist > maxDist) { maxDist = dist; wx = px; wy = py; }
+            }
+        }
+        return (count, maxDist, wx, wy, minX, minY, maxX, maxY);
+    }
+
+    /// <summary>点到折线（前 count 个点）的最短距离。</summary>
+    private static float DistToPath(List<Vector2> path, int count, float x, float y)
+    {
+        int n = Math.Min(count, path.Count);
+        if (n <= 0) return float.MaxValue;
+        if (n == 1) return Vector2.Distance(path[0], new Vector2(x, y));
+        float best = float.MaxValue;
+        for (int i = 1; i < n; i++)
+        {
+            float d = DistToSegment(path[i - 1].X, path[i - 1].Y, path[i].X, path[i].Y, x, y);
+            if (d < best) best = d;
+        }
+        return best;
+    }
+
+    private static float DistToSegment(float ax, float ay, float bx, float by, float px, float py)
+    {
+        float vx = bx - ax, vy = by - ay;
+        float wx = px - ax, wy = py - ay;
+        float len2 = vx * vx + vy * vy;
+        float t = len2 <= 1e-6f ? 0f : Math.Clamp((wx * vx + wy * vy) / len2, 0f, 1f);
+        float dx = wx - vx * t, dy = wy - vy * t;
+        return MathF.Sqrt(dx * dx + dy * dy);
     }
 
     /// <summary>
