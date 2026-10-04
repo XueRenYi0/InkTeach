@@ -1879,10 +1879,13 @@ internal sealed partial class OverlayWindow : IDisposable
 
         if (useModel || (!useModel && StrokeSmoothing.Enabled && !s.RawWhileLive))
         {
-            // 把源点（原始采样点 / 建模输出）喂进过点曲线：建模输出本来已经去过抖，
+            // 把源点喂进过点曲线：建模输出本来已经去过抖，
             // 再过一次曲线只是为了消掉"输出点之间的折线"（mean2 的快写折线感）。
+            // ⚠ 活笔临时尾（镜像 L1 ＋ 预测 L2）不进曲线：它们带着输入抖动，
+            // 进曲线会让末段随邻居回摆（鼠标稀疏采样下几十像素来回翻）；尾段画直线。
+            int curveEnd = useModel ? StrokeMotion.Count - 1 : lastIdx;
             StrokeSmoothing.Begin();
-            for (int i = 0; i <= lastIdx; i++) StrokeSmoothing.Add(Px(i), Py(i), Pp(i));
+            for (int i = 0; i <= curveEnd; i++) StrokeSmoothing.Add(Px(i), Py(i), Pp(i));
             if (tailPoint)
             {
                 int j = lastIdx + 1;
@@ -1915,6 +1918,32 @@ internal sealed partial class OverlayWindow : IDisposable
                 lastR = r1;
                 lastX = cs[k].P1.X;
                 lastY = cs[k].P1.Y;
+            }
+            // 活笔临时尾画成直线（位置直线、半径沿途线性插值；写法与下面折线分支同式）。
+            if (useModel && lastIdx > curveEnd)
+            {
+                EnsureInkSegs(count + (lastIdx - curveEnd));
+                for (int i = curveEnd + 1; i <= lastIdx; i++)
+                {
+                    ema += (Pp(i) - ema) * InkPressureEma;
+                    float er = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, ema));
+                    float ex = Px(i), ey = Py(i);
+                    _inkSegs[count++] = new InkBezierSegment
+                    {
+                        Point1 = new Vortice.Direct2D1.InkPoint
+                        {
+                            X = lastX + (ex - lastX) / 3f, Y = lastY + (ey - lastY) / 3f,
+                            Radius = lastR + (er - lastR) / 3f,
+                        },
+                        Point2 = new Vortice.Direct2D1.InkPoint
+                        {
+                            X = lastX + (ex - lastX) * 2f / 3f, Y = lastY + (ey - lastY) * 2f / 3f,
+                            Radius = lastR + (er - lastR) * 2f / 3f,
+                        },
+                        Point3 = new Vortice.Direct2D1.InkPoint { X = ex, Y = ey, Radius = er },
+                    };
+                    lastX = ex; lastY = ey; lastR = er;
+                }
             }
         }
         else

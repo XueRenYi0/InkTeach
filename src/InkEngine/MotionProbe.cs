@@ -165,15 +165,18 @@ internal static class MotionProbe
 
                 float tipLag = liveOn.Count > 0 ? Vector2.Distance(liveOn[^1], raw[^1]) : float.NaN;
                 float lagOff = liveOff.Count > 0 ? Vector2.Distance(liveOff[^1], raw[^1]) : float.NaN;
-                float handoff = MaxSeqDistance(liveOn, doneOn);
+                // 落笔交接：活笔尾是直线、成稿尾是过点曲线（同过中点＋末点），逐点相同已不可能；
+                // 判区域：双向到折线距离 ≤1px（6px 接缝的曲线/直线差，不可见；几像素的弹跳会超限）。
+                float handoff = MathF.Max(MaxDistanceToPolyline(liveOn, doneOn),
+                                          MaxDistanceToPolyline(doneOn, liveOn));
                 float finalDev = MaxSeqDistance(doneOn, doneOff);
                 // 关镜像必须量得到原来的滞后（>1px），否则这条检查没在测东西。
                 bool ok = float.IsFinite(tipLag) && tipLag <= 0.05f
-                          && float.IsFinite(handoff) && handoff <= 1e-3f
+                          && float.IsFinite(handoff) && handoff <= 1.0f
                           && float.IsFinite(finalDev) && finalDev <= 1e-3f
                           && lagOff > 1f;
                 if (!ok) tipFail++;
-                Console.WriteLine($"  {(ok ? "通过" : "失败")}  开镜像：活笔末端滞后 {tipLag,6:F3}px，落笔首帧偏差 {handoff,7:F4}px；"
+                Console.WriteLine($"  {(ok ? "通过" : "失败")}  开镜像：活笔末端滞后 {tipLag,6:F3}px，落笔交接偏差 {handoff,5:F2}px；"
                                   + $"关镜像：滞后 {lagOff,6:F2}px；开/关成稿逐点偏差 {finalDev,7:F4}px");
             }
             finally
@@ -451,18 +454,30 @@ internal static class MotionProbe
         if (!StrokeMotion.Build(stroke, mode)) return new List<Vector2>(pts);
 
         var result = new List<Vector2>(StrokeMotion.LiveDrawnCount);
-        for (int i = 0; i < StrokeMotion.LiveDrawnCount; i++)
+        // 口径 = 渲染层：曲线只过模型输出，活笔临时尾（镜像＋预测）画成直线；
+        // 量到的"滞后/交接"才是用户眼睛看到的。
+        bool liveMean2 = mode == StrokeMotionMode.Mean2 && stroke.RawWhileLive;
+        int curveN = liveMean2 ? StrokeMotion.Count : StrokeMotion.LiveDrawnCount;
+        var feed = new List<Vector2>(curveN);
+        for (int i = 0; i < curveN; i++)
         {
-            var p = StrokeMotion.LiveDrawnAt(i);
-            result.Add(new Vector2(p.X, p.Y));
+            var p = liveMean2 ? StrokeMotion.At(i) : StrokeMotion.LiveDrawnAt(i);
+            feed.Add(new Vector2(p.X, p.Y));
             pressures.Add(p.Z);
         }
-        // 口径 = 渲染层（`LiveDrawnCount/LiveDrawnAt`：模型输出 ＋ 镜像尾 ＋ 预测段）；
-        // 量到的"滞后"才是用户眼睛看到的。
 
         // mean2：渲染层会在建模输出之上再过一遍曲线；探针这里做同样的加工，
         // 否则"折线度"量的是加工前的原始输出，表上会看不出曲线化的收益。
-        result = PostCurve(mode, result, pressures);
+        result = PostCurve(mode, feed, pressures);
+        if (liveMean2)
+        {
+            for (int i = StrokeMotion.Count; i < StrokeMotion.LiveDrawnCount; i++)
+            {
+                var p = StrokeMotion.LiveDrawnAt(i);
+                result.Add(new Vector2(p.X, p.Y));
+                pressures.Add(p.Z);
+            }
+        }
         return result;
     }
 

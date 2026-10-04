@@ -5560,17 +5560,18 @@ internal sealed class Stroke
 
     /// <summary>
     /// mean2：把建模输出喂进过点曲线，直接写成三次贝塞尔。
-    /// 活笔时再接上**笔尖镜像**（A2，`StrokeMotion.TipOverlay`）——与收笔追赶同序同值，
-    /// 保证活笔末帧＝成稿首帧；镜像不进模型输出，开关它成稿逐点不变。
+    /// 活笔临时尾（镜像 L1 ＋ 预测 L2）**画成直线**：它们带着输入抖动，
+    /// 进曲线会让末段随邻居回摆（鼠标稀疏采样下几十像素来回翻）；直线只跟端点走，不回摆。
+    /// 镜像不进模型输出，开关它成稿逐点不变；落笔交接允许尾段 ≤1px 的曲线/直线差。
     /// 返回 false = 段数不够，调用方退回直线折线。
     /// </summary>
     private static bool AppendSmoothedModeledRun(ID2D1GeometrySink sink)
     {
         StrokeSmoothing.Begin();
-        int n = StrokeMotion.LiveDrawnCount;
+        int n = StrokeMotion.Count;
         for (int i = 0; i < n; i++)
         {
-            var p = StrokeMotion.LiveDrawnAt(i);
+            var p = StrokeMotion.At(i);
             StrokeSmoothing.Add(p.X, p.Y, p.Z);
         }
         int m = StrokeSmoothing.Finish();
@@ -5580,6 +5581,12 @@ internal sealed class Stroke
         sink.BeginFigure(segs[0].P0, FigureBegin.Hollow);
         for (int k = 0; k < m; k++)
             sink.AddBezier(new BezierSegment(segs[k].C1, segs[k].C2, segs[k].P1));
+        int drawn = StrokeMotion.LiveDrawnCount;
+        for (int i = n; i < drawn; i++)
+        {
+            var p = StrokeMotion.LiveDrawnAt(i);
+            sink.AddLine(new Vector2(p.X, p.Y));
+        }
         return true;
     }
 
