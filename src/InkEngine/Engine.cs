@@ -5089,9 +5089,17 @@ public partial class InkEngine
         switch (_touchMode)
         {
             case TouchMode.Erase:
-                Doc.EndErase();                 // 一次擦除 = 一步撤销
-                EndStrokeMeasure();
-                PixelEraseDragging = false;     // 面积擦回基准（和鼠标抬手同一句，动态大小别残留）
+                // **最后一根"真在表里"的手指抬起才收账**：三指擦中途松 1~2 根手指，会话要继续擦
+                //（2026-10-05 真机反馈："三指会变大，但剩一根手指接着擦时就不变了"——
+                //  以前每抬一根就 EndErase + 关动态：尺寸冻在基准、批次也碎成一步一次撤销）。
+                // `Contains` 用来挡"幽灵 up"（合成注入会补发已抬起触点的 up；真机丢 up 后同理）：
+                // 只有当前还在表里的那次抬起才算数，收账因此**恰好一次**。
+                if (_touch.Contains(id) && _touch.Count <= 1)
+                {
+                    Doc.EndErase();             // 一次擦除 = 一步撤销
+                    EndStrokeMeasure();
+                    PixelEraseDragging = false; // 面积擦回基准（动态大小别残留）
+                }
                 break;
 
             case TouchMode.Gesture2:

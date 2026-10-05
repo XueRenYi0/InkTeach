@@ -28841,14 +28841,31 @@ internal sealed partial class App : InkEngine.InkEngine
             SettleFrames(50);
             bool pixelDragging = PixelEraseDragging;
             float duringW = PixelEraserCursorHalfWidthPx;
-            SendTouchesSized(false, (cx + 180, cy - 200, 24f), (cx + 220, cy - 200, 24f), (cx + 260, cy - 200, 24f));
+            Check("三指擦（面积橡皮）= 动态大小（快扫变大）",
+                  pixelDragging && duringW > baseW * 1.25f,
+                  $"基准 {baseW:F0} → 拖动中 {duringW:F0}（×{duringW / baseW:F2}），拖动中标志 = {pixelDragging}");
+
+            // **只抬前两根手指**（合成注入按数组序给 id 1..n；抬 1、2 → 剩 3 号还按着）。
+            // 会话不能断、动态不能关、尺寸不能冻回基准
+            //（2026-10-05 真机反馈："三指会变大，但剩一根手指接着擦时就不变了"）
+            SendTouchesSized(false, (cx + 220, cy - 200, 24f), (cx + 260, cy - 200, 24f));
+            SettleFrames(60);
+            bool stillErase = TouchModeForTest == TouchMode.Erase;
+            bool stillDyn = PixelEraseDragging;
+            float oneFingerW = PixelEraserCursorHalfWidthPx;
+            Check("三指擦中途剩一根手指按着：会话不断、动态大小还在（不再冻住）",
+                  stillErase && stillDyn && oneFingerW > baseW * 1.2f,
+                  $"模式 = {(stillErase ? "Erase" : "变了")}，动态标志 = {stillDyn}，"
+                  + $"剩一指时尺寸 {oneFingerW:F0}（基准 {baseW:F0}，应还在放大档）");
+
+            // 全抬起：动态归位（尺寸回基准）
+            SendTouchesSized(false, (cx + 260, cy - 200, 24f), (cx + 260, cy - 200, 24f), (cx + 260, cy - 200, 24f));
             SettleFrames(200);
             bool goneDyn = !PixelEraseDragging;
             float afterW = PixelEraserCursorHalfWidthPx;
-            Check("三指擦（面积橡皮）= 动态大小（快扫变大、松手回基准）",
-                  pixelDragging && duringW > baseW * 1.25f && goneDyn && MathF.Abs(afterW - baseW) < 0.5f,
-                  $"基准 {baseW:F0} → 拖动中 {duringW:F0}（×{duringW / baseW:F2}），松手后 {afterW:F0}，"
-                  + $"拖动中标志 {pixelDragging} → {PixelEraseDragging}");
+            Check("三指擦全抬起：动态归位（尺寸回基准）",
+                  goneDyn && MathF.Abs(afterW - baseW) < 0.5f,
+                  $"松手后 {afterW:F0}（基准 {baseW:F0}），拖动中标志 {pixelDragging} → {PixelEraseDragging}");
             DynamicEraserForTest = savedDyn;
             EraserKindForTest = Tool.Eraser;
             TouchResetForTest();

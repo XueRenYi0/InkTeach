@@ -434,16 +434,11 @@ public sealed class FullUi : IOverlayUi
         // 所以这里读的是"关过的"那一份：只有明确写着 "0" 才关，没有这一项就是开。
         _host.Commands.SetDwellShape(_host.GetPref("dwellShape") != "0");
 
-        // **分辨率规范化 A**（2026-10-02 拍板）：没显式选过档位时，按逻辑屏宽自动定一次
-        //（<1300 → 极简；≥1300 → 完整）。老师自己改过（配置里有 "profile"）就永远听老师的。
-        // ⚠ 阈值定在 1300：1366/1440 这些常见的教室屏保持"完整"（不吃掉肌肉记忆），
-        //    1280/1024 的老机器自动落到极简（那里完整条要占 45%+ 屏宽）。
-        if (_host.GetPref("profile") == null)
-        {
-            var wa = _host.WorkArea;
-            float workW = (wa.MaxX > wa.MinX ? wa.MaxX - wa.MinX : _screen.MaxX - _screen.MinX);
-            if (workW > 0 && workW < 1300f) _profile = Profile.Mini;
-        }
+        // **默认档位 = 完整**（用户 2026-10-05 定："刚开始的新软件要完整的图标那种"）。
+        // 以前这里在没有"profile"偏好时按逻辑屏宽自动落极简（<1300 → 极简）——在 200% 缩放的
+        // 高分屏上第一眼就少一半图标（"像缺了图"）。现在**第一眼永远是完整档**；
+        // 想要极简的老师在「更多 → 档位」切一次（SavePrefs 会写 "profile"），以后永远听他的。
+        // （上面读 "profile" 那一段已经把 mini / custom 读回来了；没有这一项就是完整。）
         // 课堂工具（计时/点名的预设与偏好）在引擎侧，界面不再存副本——见 Classroom.cs。
     }
 

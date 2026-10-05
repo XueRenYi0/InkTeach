@@ -121,6 +121,13 @@ internal sealed class TouchGestures
 
     public int Count => _c.Count;
     public bool Any => _c.Count > 0;
+    /// <summary>这个触点还在表里吗？（"幽灵 up"——合成注入补发 / 系统丢 up 后补发——
+    /// 靠它和"最后一次真抬手"区分开，见 Engine.TouchUpDispatch 的 Erase 分支。）</summary>
+    public bool Contains(uint id)
+    {
+        foreach (var k in _c) if (k.Id == id) return true;
+        return false;
+    }
     public int MaxSeen { get; private set; }      // 这块屏最多同时报过几个触点（诊断用）
     public bool SawArea { get; private set; }     // 这块屏报过非零面积吗（**只给诊断**）
     public bool LongPressFired { get; private set; }
