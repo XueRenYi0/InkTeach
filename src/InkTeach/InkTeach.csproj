@@ -37,7 +37,7 @@
 
     <ApplicationIcon>assets\InkTeach.ico</ApplicationIcon>
 
-    <Version>8.8.0.5</Version>
+    <Version>8.9.0</Version>
     <!--
       ⚠ **不要再单独钉 `AssemblyVersion` / `FileVersion`**（2026-10-02 踩过）：
       这两个一旦和上面的 `<Version>` 分家，`UpdateFeed.CurrentVersion`（读程序集版本）
