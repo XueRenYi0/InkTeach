@@ -13,13 +13,16 @@
 #  用法：
 #    .\publish.ps1                 # 默认：目录版（推荐，启动快、杀软误报少）
 #    .\publish.ps1 -SingleFile     # 单文件版（就一个 exe，方便拷，启动稍慢）
+#    .\publish.ps1 -Aot            # NativeAOT 原生版（启动快约 100ms、体积约 11MB、
+#                                  #   内存略低；需要 VS Build Tools 的 C++ 工作负载）
 #    .\publish.ps1 -NoZip          # 不压 zip
 # =====================================================================================
 [CmdletBinding()]
 param(
     [switch]$SingleFile,
     [switch]$NoZip,
-    [switch]$NoSetup
+    [switch]$NoSetup,
+    [switch]$Aot
 )
 
 $ErrorActionPreference = "Stop"
@@ -101,6 +104,20 @@ $pubArgs = @(
     "--nologo", "-v", "q"
 )
 if ($SingleFile) { $pubArgs += @("-p:PublishSingleFile=true", "-p:EnableCompressionInSingleFile=true") }
+
+# NativeAOT：需要 VS Build Tools 的 C++ 工作负载（MSVC 链接器）。先做一次友好检查，
+# 免得报一行看不懂的 ILC 错误。装法与实测数据见 调研-启动内存与WPF对比.md 第九节。
+if ($Aot) {
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    $vcPath = if (Test-Path $vswhere) {
+        & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    } else { "" }
+    if (-not $vcPath) {
+        throw "AOT 发布需要 VS 2022 Build Tools 的 C++ 工作负载（MSVC 链接器 + Windows SDK）。装法见 调研-启动内存与WPF对比.md 第九节。"
+    }
+    Write-Host "  AOT：使用 VC 工具链 $vcPath" -ForegroundColor Cyan
+    $pubArgs += @("-p:PublishAot=true")
+}
 
 & dotnet @pubArgs
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish 失败（退出码 $LASTEXITCODE）" }

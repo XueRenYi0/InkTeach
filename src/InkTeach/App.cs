@@ -1040,6 +1040,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --pagetest          整屏翻页自检（一屏 = 一页：页高 = 视口高、只动相机、到顶就停）");
         Console.WriteLine("  --ppttest           PPT 模式自检（假页码源：隔离 / 页内滚动 / 清空只清本页 / 退出写盘 / 再进读回）");
         Console.WriteLine("  --pptprobe [秒]     PPT 连接探针（真机跑：打开 PPT 按 F5，看连不连得上）");
+        Console.WriteLine("                     加 --pptcmd 会实际按 Next/Prev/GotoSlide 验证命令；--pptdebug 打 ROT 细节");
         Console.WriteLine("  --iotest [路径]     导出自检（选中 → PNG 透明底 / JPEG 白底；给路径就保留文件）");
         Console.WriteLine("  --patterntest       白板底纹自检（方格/横线/间距 + 数屏幕上的线 + 重铺代价）");
         Console.WriteLine("  --lasertest         激光笔自检（拖尾一直写不缩 / 松手停 2 秒再整体淡出 / 多条并存 /");
@@ -2979,6 +2980,11 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  WPS 演示也一样试一次（这条探针就是用来分清哪家的 Office 能连上的）。");
         Console.WriteLine();
 
+        // `--pptcmd`：连接上之后真的按一下 Next / Prev / GotoSlide，看页码跟不跟着动
+        //（这条路径走的是 IDispatch::Invoke，和只读属性不是同一条调用）。
+        bool cmdTest = Array.Exists(Environment.GetCommandLineArgs(), a => a == "--pptcmd");
+        bool cmdDone = !cmdTest;
+
         var src = new PptComSource();
         int connectedSamples = 0, showingSamples = 0;
         double t0 = NowMs;
@@ -2991,10 +2997,60 @@ internal sealed partial class App : InkEngine.InkEngine
             string line = $"  连上={s.Connected}  放映中={s.Showing}  第 {s.Slide}/{s.Total} 页  "
                         + $"SlideID={s.SlideId}  标识={s.Key}";
             if (line != lastLine) { Console.WriteLine(line); lastLine = line; }
+
+            if (!cmdDone && s.Showing && NowMs - t0 > 1500)
+            {
+                // 命令后 PowerPoint 会忙一下，属性可能短暂读失败——轮询重试到恢复为止。
+                PptSnapshot WaitShow(int ms)
+                {
+                    var end = NowMs + ms; var last = default(PptSnapshot);
+                    while (NowMs < end) { last = src.Poll(); if (last.Showing) return last; SettleFrames(100); }
+                    return last;
+                }
+                PptSnapshot WaitSlide(int want, int ms)
+                {
+                    var end = NowMs + ms; var last = default(PptSnapshot);
+                    while (NowMs < end) { last = src.Poll(); if (last.Showing && last.Slide == want) return last; SettleFrames(100); }
+                    return last;
+                }
+
+                int before = s.Slide;
+
+                // ① GotoSlide：动画页也不影响，立刻能验。
+                src.GotoSlide(before + 1);
+                var sG1 = WaitSlide(before + 1, 2500);
+                src.GotoSlide(before);
+                var sG0 = WaitSlide(before, 2500);
+                bool okGoto = sG1.Showing && sG1.Slide == before + 1 && sG0.Showing && sG0.Slide == before;
+
+                // ② Next：**动画页上要按好几下才翻页**（每一下是一个动画步），
+                //    循环到页码变化为止，不是"按一下就必须翻"。
+                int nextPresses = 0;
+                var sNext = sG0;
+                while (nextPresses < 6 && (!sNext.Showing || sNext.Slide <= before))
+                { src.Next(); nextPresses++; sNext = WaitShow(1200); }
+                bool okNext = sNext.Showing && sNext.Slide > before;
+
+                // ③ Prev：同样循环回到原页；最后 Goto 对齐，防停在动画中间。
+                int prevPresses = 0;
+                var sPrev = sNext;
+                while (prevPresses < 8 && (!sPrev.Showing || sPrev.Slide > before))
+                { src.Prev(); prevPresses++; sPrev = WaitShow(1200); }
+                src.GotoSlide(before); WaitShow(1500);
+                bool okPrev = sPrev.Showing && sPrev.Slide <= before;
+
+                Console.WriteLine($"  命令自检: Goto {before}->{before + 1}->{before} {(okGoto ? "PASS" : "FAIL")}; "
+                                + $"Next x{nextPresses}->{sNext.Slide} {(okNext ? "PASS" : "FAIL")}; "
+                                + $"Prev x{prevPresses}->{sPrev.Slide} {(okPrev ? "PASS" : "FAIL")}");
+                cmdDone = true;
+            }
+
             SettleFrames(200);
         }
 
         Console.WriteLine();
+        if (cmdTest && !cmdDone)
+            Console.WriteLine("  命令自检：没跑（探针期间没读到放映状态）");
         Console.WriteLine(showingSamples > 0
             ? $"  PASS：读到过放映状态（{showingSamples} 次采样在放映中）——连接层在这台机器上可用"
             : connectedSamples > 0

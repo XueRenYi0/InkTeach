@@ -253,18 +253,22 @@ $p = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "Name='Ink
 | 启动阶段 0（运行时） | 29.7 MB | 28.3 MB | **12.1 MB** |
 | 一万笔提交 | 391.4 MB | — | **387.9 MB** |
 | 冷启动（到 overlay 就绪，中位） | 752 ms | 747 ms | **642 ms** |
-| 发布产物 | 74 MB 目录 | — | **12.9 MB 单文件** |
+| 发布产物 | 74 MB 目录 | — | **11.1 MB 单文件**（重写 PPT 联动后） |
 | selftest / keytest / appendtest / iotest / wetinktest | — | 全过 | **全过**（JPEG 导出逐像素验过） |
 
 **结论**：
 
 1. AOT 的收益比原估的 15~30MB 小（空闲只省约 4MB，GPU/驱动占大头），但
    **启动快约 100ms、发布体积 74MB→13MB** 是实打实的；
-2. 唯一的功能阻碍是 **PPT/WPS 联动**（`dynamic` + `Type.InvokeMember`）。AOT 版
-   必须把它改写成 AOT 安全的 IDispatch late-binding（ComWrappers / 函数指针
-   vtable），或让 AOT 版把 PPT 联动降级；
-3. 建议：AOT 先作为**发布选项**保留（普通 JIT 版继续发），等 PptLink 改造完
-   再决定默认发哪个。
+2. **PPT 联动已解决（2026-10-05 晚）**：`PptLink.cs` 的 COM 源重写为
+   `PptComLate.cs`（裸 vtable 函数指针 + IDispatch 迟绑定，零 dynamic / 零内置 COM /
+   零反射，AOT 分析器零 IL 警告）。踩坑记录：`IMoniker` 继承的是 `IPersistStream`，
+   `GetDisplayName` 在 **vtable 第 20 槽**（不是 12/13）；裸调用前必须自己
+   `CoInitializeEx`。**PowerPoint 真机验证**：连接/页码/SlideID 正常，`--pptprobe
+   --pptcmd` 的 `Goto/Next/Prev` 命令自检 JIT 与 AOT 全部 PASS（动画页上"按一下
+   Next 未必翻页"是 PowerPoint 正常行为）。
+3. 建议：AOT 先作为**发布选项**保留（`publish.ps1 -Aot`）；**WPS 演示**那条链
+   还需真机复测一次。
 
 **全量功能套件（39 项）对照**：JIT 版 29 PASS / 0 FAIL / 9 DATA / 1 SKIP；
 AOT 版 28 PASS / 1 FAIL / 9 DATA / 1 SKIP。唯一差异 `passtest` 经查**不是 AOT 问题**：

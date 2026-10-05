@@ -1733,6 +1733,10 @@ public partial class InkEngine
         OverlayWindow.SystemWetPreferred = args.Contains("--syswet");
         if (args.Contains("--ownwet")) OverlayWindow.SystemWetPreferred = false;
 
+        // PPT 连接诊断（--pptdebug）：把 ROT 扫描每一步打出来（排查用，平时关）。
+        PptComSource.Debug = args.Contains("--pptdebug");
+        ComLate.Debug = PptComSource.Debug;
+
         // ---- 笔迹预测：**已停用并清理**（2026-10-05）------------------------------
         // [删除 2026-10-05] `--predict/--predictms/--predictlead`（老预测系统）与
         // `--predicttip`（预测点并入 mean2）的入口、喂点与渲染尾接线已全部移除；
