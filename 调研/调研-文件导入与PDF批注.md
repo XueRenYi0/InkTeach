@@ -54,7 +54,7 @@ PDF 我们**只需要渲染**（把页画成位图），不需要编辑原文件
 | 接入方式 | Win32 直连 API：`PdfCreateRenderer(IDXGIDevice*)` → `IPdfRendererNative::RenderPageToDeviceContext(ID2D1DeviceContext*, page, params)`，**直接画进我们已有的 D2D 设备上下文**；也可走 WinRT 投影（`PdfDocument.LoadFromFileAsync`） | 原生 C API：把页渲染到 BGRA 缓冲，再走我们现成的 `ImageData.Adopt` 路线 |
 | 版本红线 | Windows 8.1+（桌面应用**官方支持**） | 无系统版本要求（Win7+ 也能跑） |
 | 能力 | 渲染、指定尺寸；密码 PDF 支持；**不做文字提取** | 渲染（可控到"瓦片/矩阵"）、文字提取、书签、表单——以后要"选中文字/搜索"也得靠它 |
-| 风险 | 文档注明"为 DirectX/XAML 设计"；从 C# 桌面直连要自己写 COM 接口 + 加载 `PdfDocument/PdfPage`（WinRT 激活）——**要 spike 验证**；若走 WinRT 投影则 TFM 要升到 `net8.0-windows10.0.19041.0`，会抬高最低系统版本 | 绑定库的维护活跃度参差（`PDFiumSharp` / `Docnet.Core`），要挑一个；原生库更新要自己跟 |
+| 风险 | 文档注明"为 DirectX/XAML 设计"；从 C# 桌面直连要自己写 COM 接口 + 加载 `PdfDocument/PdfPage`（WinRT 激活）——**要 spike 验证**；若走 WinRT 投影则 TFM 要升到 `net10.0-windows10.0.19041.0`，会抬高最低系统版本 | 绑定库的维护活跃度参差（`PDFiumSharp` / `Docnet.Core`），要挑一个；原生库更新要自己跟 |
 
 **建议**：先花半天写一个 spike（`--pdfspike <文件>`，只出三张页图）验证
 "Windows.Data.Pdf 直连 D2D"能不能通；通 → 用它（零依赖、画质与硬件加速都最好）；
@@ -517,10 +517,10 @@ PDF 我们**只需要渲染**（把页画成位图），不需要编辑原文件
 ## 十二、来源
 
 **本仓库**
-- [计划-白板与PPT-页逻辑.md](计划-白板与PPT-页逻辑.md) 4.4（页的所有者是我们）、4.5（两套页空间）、阶段 3（冻结截图块）
-- [计划-底层性能与功能.md](计划-底层性能与功能.md) 二十九节（相机 + 分块 + Xournal++ 页级释放）
+- [计划-白板与PPT-页逻辑.md](../计划-白板与PPT-页逻辑.md) 4.4（页的所有者是我们）、4.5（两套页空间）、阶段 3（冻结截图块）
+- [计划-底层性能与功能.md](../计划-底层性能与功能.md) 二十九节（相机 + 分块 + Xournal++ 页级释放）
 - [调研-白板翻页.md](调研-白板翻页.md)（整屏翻页的三条入口与取舍）
-- [对标-微软墨迹栈与我们的架构.md](对标-微软墨迹栈与我们的架构.md)（矢量 vs 位图那条边）
+- [对标-微软墨迹栈与我们的架构.md](../对标-微软墨迹栈与我们的架构.md)（矢量 vs 位图那条边）
 - 代码：`Ppt.cs`（按页存档）、`PptLink.cs`（COM 读放映状态）、`ImageData.cs`（位图与内存统计）、`Export.cs`（导出与文件对话框）、`Model.cs`（`PageSlot`）
 
 **外部**

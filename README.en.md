@@ -211,7 +211,7 @@ is drawn on the floating layer and committed on release as a single undo step.
 
 ---
 
-## Why Direct2D and .NET 8
+## Why Direct2D and .NET 10
 
 A common question: "isn't Direct2D overkill for an annotation app?"
 It isn't. We didn't pick it to draw animations — we picked it because three things **only this path
@@ -256,21 +256,24 @@ approach fits, we align with it instead of reinventing it:
 | **Zero-repaint dragging** | Dragging / rotating a 10,000-object selection repaints **0 content tiles per frame**: the preview lives on the floating layer and lands on release (one undo step) |
 | **Order-preserving undo** | Undoing a "clear" **inserts each stroke back at its original index**, so the document is byte-for-byte what it was before the clear |
 
-### Why .NET 8 (instead of C++, WPF or WinUI3)
+### Why .NET 10 (instead of C++, WPF or WinUI3)
 
 | Reason | What it actually means |
 |---|---|
-| **It has to install on school machines** | Self-contained: unzip and run. **No UAC, no .NET install, works from a USB stick.** School PCs often lock down installation — if it can't install, it can't be used |
+| **It has to install on school machines** | Self-contained: unzip and run. **No UAC, no .NET install, works from a USB stick** (NativeAOT by default since v8.9.0: ~11MB single exe, <5MB zip). School PCs often lock down installation — if it can't install, it can't be used |
 | **No UI framework baggage** | What we need is "a transparent overlay with per-frame incremental redraw". WPF/WinUI composition and theming are pure overhead here (WinUI's Mica/acrylic drops frames on projectors, and we deliberately do no blur) |
-| **The stack leaves the AOT door open** | "Custom-drawn UI + P/Invoke + Vortice" is one of the **few Windows desktop stacks that can go Native AOT** — WPF, WinForms and WinUI3 officially don't support trimming/AOT. If AOT lands later it is a structural win, not a micro-optimisation |
+| **AOT has landed and is the default** | "Custom-drawn UI + P/Invoke + Vortice" is one of the **few Windows desktop stacks that can go Native AOT** — WPF, WinForms and WinUI3 officially don't support trimming/AOT. Since v8.9.0 we ship AOT by default: cold start 747→642ms, package shrunk from a 74MB folder to an 11.1MB single exe (the JIT self-contained build stays available via `publish.ps1 -Jit`) |
 | **We control the GC** | Writing switches to `SustainedLowLatency`, and a self-test asserts **no second-generation collection happens during a whole stroke** — something you only get if you can drive GC modes yourself |
 
-**Not done yet, and known weak spots** (no overclaiming):
-- **Native AOT isn't enabled** (blockers: `dynamic` COM in `PptLink`, `System.Drawing.Common`,
-  Vortice/SharpGen compatibility); we ship JIT for now.
-- **.NET 8 security updates end 2026-11-10**; moving to .NET 10 has to happen before that.
-- **Memory isn't cheap**: 93MB committed when idle (392MB with 10,000 strokes) — about 31MB is the
-  .NET runtime plus assemblies, ~42MB D3D/D2D devices and swap chains, ~26MB our own code and data.
+**Known weak spots** (no overclaiming):
+- ~~Native AOT~~: **landed and default** since v8.9.0 (the `dynamic` COM in `PptLink` was
+  rewritten to raw vtables + IDispatch; Vortice 3.8.3 is itself annotated AOT-compatible).
+  The JIT self-contained build stays available via `publish.ps1 -Jit`;
+- ~~.NET 10 upgrade~~: **done** (.NET 8 security updates ended 2026-11-10; v8.9.0 ships
+  .NET 10, supported to 2028-11);
+- **Memory isn't cheap**: 92.6MB committed when idle (88.4MB on the AOT build; ~388MB with
+  10,000 strokes) — about 28MB is the .NET runtime plus assemblies (~12MB under AOT), ~42MB
+  D3D/D2D devices and swap chains, the rest our own code and data.
 
 ### Measured numbers (2× display / Iris Xe; method and environment in the docs below)
 
@@ -366,7 +369,7 @@ InkTeach   host: CLI / self-test / benchmarks (double-click InkTeach.exe when pu
 | [架构-分层与规则.md](架构-分层与规则.md) | Layering, single-source discipline, self-test rules (Chinese) |
 | [延时-实测与优化.md](延时-实测与优化.md) | Per-scenario end-to-end latency measurements (Chinese) |
 | [性能-内存与卡顿实测.md](性能-内存与卡顿实测.md) | Memory accounting and hitch attribution (Chinese) |
-| [调研-启动内存与WPF对比.md](调研-启动内存与WPF对比.md) | Startup memory baseline and the Native AOT evaluation (Chinese) |
+| [调研-启动内存与WPF对比.md](调研/调研-启动内存与WPF对比.md) | Startup memory baseline and the Native AOT evaluation (Chinese) |
 | [对标-微软墨迹栈与我们的架构.md](对标-微软墨迹栈与我们的架构.md) | Capability comparison against WPF / UWP Ink (Chinese) |
 
 ## Licence
