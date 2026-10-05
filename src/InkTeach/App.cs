@@ -3197,6 +3197,23 @@ internal sealed partial class App : InkEngine.InkEngine
         HandleWheel(Wheel(120));                       // 滚回去
         SettleFrames(120);
 
+        // ---- ⑥.5 ←→：**没选中时也是翻页**（2026-10-05 用户定）----
+        // 有选中 → 微调（那一半在 --seltest 里验）；这里只钉"空选区 = 上一屏 / 下一屏"。
+        {
+            Doc.Selected.Clear();
+            SettleFrames(80);
+            float cam0 = ViewOffsetY;
+            RunActionForTest(KeyAction.NudgeRight);
+            SettleFrames(420);                         // 等完 167ms 缓动
+            Check("空选区按 → = 下一屏（和 PageDown 同一条路）",
+                  Math.Abs(ViewOffsetY - (cam0 - pageH)) < 1.5f,
+                  $"相机 {cam0:F0} → {ViewOffsetY:F0}（应走 {-pageH:F0}）");
+            RunActionForTest(KeyAction.NudgeLeft);
+            SettleFrames(420);
+            Check("空选区按 ← = 上一屏", Math.Abs(ViewOffsetY - cam0) < 1.5f,
+                  $"相机 {ViewOffsetY:F0}");
+        }
+
         // ---- ⑦ 翻完屏幕上真的换了内容（屏幕取点）----
         // 先放一笔**第 1 屏**的洋红墨：它必须看得见——既当判据，也当"取屏可用"的探针。
         Doc.Clear();
@@ -5114,6 +5131,25 @@ internal sealed partial class App : InkEngine.InkEngine
                     || b.Action == KeyAction.SelectAll || b.Action == KeyAction.DeleteSelected
                     || b.Action == KeyAction.NudgeLeft), "");
 
+        // ---- 1.5 2026-10-05 新增键位：白板开关 / 选中缩放 / 重做别名 ----
+        bool eqOk = KeyChord.TryParse("Ctrl+=", out var eqKey, out _);
+        bool mnOk = KeyChord.TryParse("Ctrl+-", out var mnKey, out _);
+        Check("解析 `Ctrl+=` / `Ctrl+-` 并原样打印",
+              eqOk && eqKey.ToString() == "Ctrl+=" && mnOk && mnKey.ToString() == "Ctrl+-",
+              $"Ctrl+= → {eqKey}，Ctrl+- → {mnKey}");
+        {
+            var anno = KeyScope.Annotation;
+            string ChordOf(KeyAction a) => map.Find(anno, a)?.Chord.ToString() ?? "×";
+            bool newKeys = ChordOf(KeyAction.ToggleBoard) == "Ctrl+B"
+                        && ChordOf(KeyAction.ScaleUp) == "Ctrl+="
+                        && ChordOf(KeyAction.ScaleDown) == "Ctrl+-"
+                        && (map.KeyText(KeyAction.Redo) ?? "").Contains("Ctrl+Shift+Z");
+            Check("新键位：Ctrl+B 白板 / Ctrl+= 放大 / Ctrl+- 缩小 / Ctrl+Shift+Z 重做别名",
+                  newKeys,
+                  $"白板 {ChordOf(KeyAction.ToggleBoard)}，缩放 {ChordOf(KeyAction.ScaleUp)} / {ChordOf(KeyAction.ScaleDown)}，"
+                  + $"重做 {map.KeyText(KeyAction.Redo)}");
+        }
+
         // **全局只留最最常用的那几个**（用户 2026-09-19："除了最最最常用的功能需要全局热键以外，
         // 其他的通通换成应用内快捷键就行了"）。判据取自 `KeyBindings.GlobalAllowed`
         // ——那份名单是**产品的规则**，不是自检自己写的一份：两边各写一份早晚会分叉
@@ -5285,6 +5321,32 @@ internal sealed partial class App : InkEngine.InkEngine
         SettleFrames(150);
         Check("这一步能撤销回来", Doc.Strokes.Count == 3, $"撤销后 {Doc.Strokes.Count} 笔");
         if (!wasKeyboardMode) SetKeyboardMode(false);
+
+        // ---- 8. 白板开关 Ctrl+B：和点白板格同一条命令（含"开板顺手退穿透"）----
+        {
+            bool passWas = PassThrough;
+            if (passWas) SetPassThroughFromUi(false);
+            if (BoardOn) Host.Commands.SetBoard(false);
+            SettleFrames(100);
+            RunActionForTest(KeyAction.ToggleBoard);
+            SettleFrames(100);
+            bool opened = BoardOn;
+            RunActionForTest(KeyAction.ToggleBoard);
+            SettleFrames(100);
+            Check("Ctrl+B：按一下开板、再按关板", opened && !BoardOn,
+                  $"开 = {opened}，再按后 = {BoardOn}");
+
+            if (BoardOn) Host.Commands.SetBoard(false);
+            SetPassThroughFromUi(true);
+            SettleFrames(100);
+            RunActionForTest(KeyAction.ToggleBoard);
+            SettleFrames(100);
+            Check("Ctrl+B：穿透里按 = 开板 + 顺手退穿透", BoardOn && !PassThrough,
+                  $"板 = {BoardOn}，穿透 = {PassThrough}");
+            if (BoardOn) Host.Commands.SetBoard(false);
+            if (passWas) SetPassThroughFromUi(true);
+            SettleFrames(100);
+        }
 
         Console.WriteLine();
         Console.WriteLine("  当前键位表：");
@@ -18932,6 +18994,82 @@ internal sealed partial class App : InkEngine.InkEngine
             Doc.ClearHistory();
         }
 
+        // ---- ⑩ 键盘微调 / 缩放（2026-10-05）：连续动作合并成一步撤销 ----
+        //
+        // 用户报过的那条"移歪了想撤销、要按十几次 Ctrl+Z"在这里收口：
+        // 方向键 / `Ctrl+=` / `Ctrl+-` 连续触发 → 撤销栈只多 1 条；停手或做别的事才另起一条。
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            var mk = Line(x0, y0, 200f, 0f, 6f * DpiScale);
+            Doc.AddStroke(mk);
+            Doc.SelectOnly(new[] { mk });
+            SettleFrames(120);
+
+            // ① 连按 5 下微调 → 位置右移 5px，撤销栈只多 1 条
+            float b0 = mk.PaddedBounds.MinX;
+            int dNudge = Doc.UndoDepth;
+            for (int i = 0; i < 5; i++) RunActionForTest(KeyAction.NudgeRight);
+            SettleFrames(120);
+            Check("连按 5 下微调：位置真的右移 5px、撤销只多 1 条",
+                  Math.Abs(mk.PaddedBounds.MinX - (b0 + 5f)) < 0.05f && Doc.UndoDepth == dNudge + 1,
+                  $"左缘 {b0:F1} → {mk.PaddedBounds.MinX:F1}，撤销 {dNudge} → {Doc.UndoDepth}");
+
+            // ② 中途做别的动作 = 封口 → 下一次微调另起一条
+            RunActionForTest(KeyAction.ToggleHud);
+            RunActionForTest(KeyAction.ToggleHud);
+            RunActionForTest(KeyAction.NudgeRight);
+            SettleFrames(120);
+            Check("中间做了别的动作：微调另起一条撤销", Doc.UndoDepth == dNudge + 2,
+                  $"撤销 {Doc.UndoDepth}（应 {dNudge + 2}）");
+
+            RunActionForTest(KeyAction.Undo);
+            RunActionForTest(KeyAction.Undo);
+            SettleFrames(120);
+            Check("两次撤销 → 位置完全回到原处（两条记录各撤一步）",
+                  Math.Abs(mk.PaddedBounds.MinX - b0) < 0.05f,
+                  $"左缘 {mk.PaddedBounds.MinX:F1}（应 {b0:F1}）");
+
+            // ③ 键盘缩放：选区中心为锚、连按合并（放大一段 / 缩小一段各一条撤销）
+            Doc.ClearHistory();
+            Doc.SelectOnly(new[] { mk });
+            SettleFrames(80);
+            float cx0 = (mk.PaddedBounds.MinX + mk.PaddedBounds.MaxX) * 0.5f;
+            float cy0 = (mk.PaddedBounds.MinY + mk.PaddedBounds.MaxY) * 0.5f;
+            int dScale = Doc.UndoDepth;
+            RunActionForTest(KeyAction.ScaleUp);
+            RunActionForTest(KeyAction.ScaleUp);
+            SettleFrames(80);
+            float sc = mk.Transform.M11;
+            float cx1 = (mk.PaddedBounds.MinX + mk.PaddedBounds.MaxX) * 0.5f;
+            float cy1 = (mk.PaddedBounds.MinY + mk.PaddedBounds.MaxY) * 0.5f;
+            Check("连按两下 Ctrl+=：缩放 ×1.21、中心不动、撤销只多 1 条",
+                  Math.Abs(sc - 1.21f) < 0.015f
+                  && Math.Abs(cx1 - cx0) < 0.6f && Math.Abs(cy1 - cy0) < 0.6f
+                  && Doc.UndoDepth == dScale + 1,
+                  $"M11={sc:F3}，中心 ({cx0:F1},{cy0:F1}) → ({cx1:F1},{cy1:F1})，撤销 +{Doc.UndoDepth - dScale}");
+
+            RunActionForTest(KeyAction.ToggleHud);   // 封口 → 缩小另起一条
+            RunActionForTest(KeyAction.ToggleHud);
+            RunActionForTest(KeyAction.ScaleDown);
+            RunActionForTest(KeyAction.ScaleDown);
+            SettleFrames(80);
+            Check("封口后连按两下 Ctrl+-：回到 ×1.0", Math.Abs(mk.Transform.M11 - 1f) < 0.02f,
+                  $"M11={mk.Transform.M11:F3}");
+
+            RunActionForTest(KeyAction.Undo);
+            SettleFrames(80);
+            Check("撤销缩小那段 → 回到 ×1.21（会话各撤各的）",
+                  Math.Abs(mk.Transform.M11 - 1.21f) < 0.02f, $"M11={mk.Transform.M11:F3}");
+            RunActionForTest(KeyAction.Undo);
+            SettleFrames(80);
+            Check("再撤销放大那段 → 回到 ×1.0", Math.Abs(mk.Transform.M11 - 1f) < 0.001f,
+                  $"M11={mk.Transform.M11:F3}");
+
+            Doc.Clear();
+            Doc.ClearHistory();
+        }
+
         Console.WriteLine();
         Console.WriteLine($"  合计 {pass + fail} 项：通过 {pass}，失败 {fail}");
         Console.WriteLine();
@@ -28267,6 +28405,28 @@ internal sealed partial class App : InkEngine.InkEngine
         Check("回到批注态：焦点要得回来", FgOurs(),
               $"前台 = {(FgOurs() ? "批注窗口" : "别的窗口")}");
         Check("焦点恢复后：真按 Ctrl+P 立刻能用", RealPenKeyWorks("焦点恢复后"), $"工具 = {Tool}");
+
+        // ---- ⑥ 真按 Ctrl+=：OEM 等号键 + 选中缩放（2026-10-05 新增）----
+        // 为什么单列一条：`=` 是 **OEM 键**，合成键盘上和字母键不是一条路——键盘布局、
+        // 修饰键状态读法、键名解析都可能在这里翻车，值得让真键盘走一遍。
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            var kz = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 6f * DpiScale };
+            kz.AddPoint(_virtualX + 400f, _virtualY + 400f, 1f, NowMs);
+            kz.AddPoint(_virtualX + 600f, _virtualY + 400f, 1f, NowMs + 8);
+            Doc.AddStroke(kz);
+            Doc.SelectOnly(new[] { kz });
+            SettleFrames(150);
+            RealChord(ctrl: true, 0xBB);               // 真按 Ctrl+=
+            float scaled = kz.Transform.M11;
+            Check("真按 Ctrl+=：选中对象真的放大 1.1×",
+                  Math.Abs(scaled - 1.1f) < 0.02f, $"M11 = {scaled:F3}");
+            RunActionForTest(KeyAction.Undo);         // 连按合并那条在 --seltest 验
+            SettleFrames(120);
+            Check("真按 Ctrl+= 后可一步撤销", Math.Abs(kz.Transform.M11 - 1f) < 0.001f,
+                  $"M11 = {kz.Transform.M11:F3}");
+        }
 
         // 收尾：模式还原、画布清干净
         Host.Commands.SetCaptureHideInk(true);

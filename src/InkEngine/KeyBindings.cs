@@ -66,6 +66,8 @@ public enum KeyAction
     SelectShape,
     Undo,
     Clear,
+    /// <summary>白板开关（Ctrl+B）：和点面板白板格同一条命令（`SetBoardFromUi`），开会顺手退穿透。</summary>
+    ToggleBoard,
     ToggleHud,
     CycleWidth,
 
@@ -87,6 +89,10 @@ public enum KeyAction
     NudgeUpFar,
     NudgeRightFar,
     NudgeDownFar,
+    /// <summary>选中对象放大 / 缩小（Ctrl+= / Ctrl+-）：以选区框中心为锚（和双指捏合同一路），
+    /// 连续按合并成一步撤销（见 Engine 的"连续微调会话"）。</summary>
+    ScaleUp,
+    ScaleDown,
     /// <summary>白板整屏翻页：相机上移一屏（到顶就不动）。</summary>
     FlipPageUp,
     /// <summary>白板整屏翻页：相机下移一屏（下面永远还有一屏空白）。</summary>
@@ -200,6 +206,10 @@ internal readonly struct KeyChord : IEquatable<KeyChord>
             case "end": vk = 0x23; return true;
             case "pageup": case "pgup": vk = 0x21; return true;
             case "pagedown": case "pgdn": vk = 0x22; return true;
+            // 缩放键（2026-10-05）：主键是 OEM 的等号 / 减号，虚拟键码固定（0xBB / 0xBD）。
+            // 名字给几种写法，settings.json 手写时不至于踩空。
+            case "=": case "equal": case "plus": vk = 0xBB; return true;
+            case "-": case "minus": vk = 0xBD; return true;
         }
         return false;
     }
@@ -214,7 +224,8 @@ internal readonly struct KeyChord : IEquatable<KeyChord>
             0x2E => "Delete", 0x1B => "Esc", 0x25 => "Left", 0x26 => "Up",
             0x27 => "Right", 0x28 => "Down", 0x20 => "Space", 0x0D => "Enter",
             0x09 => "Tab", 0x08 => "Backspace", 0x24 => "Home", 0x23 => "End",
-            0x21 => "PageUp", 0x22 => "PageDown", _ => "VK" + vk.ToString("X2"),
+            0x21 => "PageUp", 0x22 => "PageDown", 0xBB => "=", 0xBD => "-",
+            _ => "VK" + vk.ToString("X2"),
         };
     }
 }
@@ -358,6 +369,7 @@ internal sealed class KeyMap
         KeyAction.ToggleHud => "性能面板开关",
         KeyAction.CycleWidth => "切换当前工具粗细",
         KeyAction.ToggleKeyboardMode => "批注键盘模式开关",
+        KeyAction.ToggleBoard => "白板开关",
         KeyAction.Quit => "退出",
         KeyAction.SelectAll => "全选",
         KeyAction.Duplicate => "复制一份",
@@ -372,6 +384,8 @@ internal sealed class KeyMap
         KeyAction.NudgeUpFar => "上移 10",
         KeyAction.NudgeRightFar => "右移 10",
         KeyAction.NudgeDownFar => "下移 10",
+        KeyAction.ScaleUp => "放大选中",
+        KeyAction.ScaleDown => "缩小选中",
         KeyAction.FlipPageUp => "上一屏",
         KeyAction.FlipPageDown => "下一屏",
         _ => a.ToString(),
@@ -461,6 +475,9 @@ internal sealed class KeyMap
         // ---- 应用内：原有那一批（编辑类 + 翻页 + 微调）----
         m.Add(A, KeyAction.Undo, "Ctrl+Z", "撤销一步");
         m.Add(A, KeyAction.Redo, "Ctrl+Y", "重做");
+        // 重做别名（2026-10-05 用户定）：很多软件里 `Ctrl+Shift+Z` 也是重做，零风险加一条；
+        // 和 `Ctrl+Y` **同一条动作**（`KeyText` 会自动拼成 "Ctrl+Y / Ctrl+Shift+Z" 给提示用）。
+        m.Add(A, KeyAction.Redo, "Ctrl+Shift+Z", "重做（别名）");
         m.Add(A, KeyAction.Copy, "Ctrl+C", "复制选中对象（粘回来仍是可编辑对象，同时给外部程序一张图）");
         m.Add(A, KeyAction.SelectAll, "Ctrl+A", "全选");
         m.Add(A, KeyAction.Duplicate, "Ctrl+D", "复制一份");
@@ -475,6 +492,11 @@ internal sealed class KeyMap
         m.Add(A, KeyAction.NudgeUpFar, "Shift+Up", "上移 10 像素");
         m.Add(A, KeyAction.NudgeRightFar, "Shift+Right", "右移 10 像素");
         m.Add(A, KeyAction.NudgeDownFar, "Shift+Down", "下移 10 像素");
+        // 选中对象的键盘缩放（2026-10-05 用户定）：以**选区框中心**为锚（和双指捏合同一个取点），
+        // 一下 10%；连续按合并成一步撤销（见 Engine 的"连续微调会话"）。
+        // 主键是 OEM 的 `=` / `-`：解析器认识 `Ctrl+=` / `Ctrl+-` 这种写法（KeyChord.TryParseVk）。
+        m.Add(A, KeyAction.ScaleUp, "Ctrl+=", "选中对象放大 10%（以选区中心为锚）");
+        m.Add(A, KeyAction.ScaleDown, "Ctrl+-", "选中对象缩小 10%（以选区中心为锚）");
 
         // 白板翻页。**故意只放批注内**：注册成全局热键会把 PPT / PDF / 浏览器
         // 的 PageUp / PageDown 全抢走——那正是"绝不能全局注册编辑类键"的同一条理由。
@@ -519,6 +541,9 @@ internal sealed class KeyMap
         m.Add(A, KeyAction.CycleWidth, "Ctrl+6", "切成当前工具的下一档粗细");
         m.Add(A, KeyAction.SplitErased, "Ctrl+8", "把选中的、被擦断的笔迹拆成独立对象（只服务老存档）");
         m.Add(A, KeyAction.Clear, "Ctrl+Shift+C", "清空整页（可撤销）");
+        // 白板开关（2026-10-05 用户定）：和点面板白板格同一条命令（`SetBoardFromUi`，
+        // 开板会顺手退穿透）；**只在批注内**——放映时白板归 PptBar 那套，不抢全局键。
+        m.Add(A, KeyAction.ToggleBoard, "Ctrl+B", "开/关白板（和点白板格同一条命令）");
         return m;
     }
 

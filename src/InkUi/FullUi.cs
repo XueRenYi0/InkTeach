@@ -4887,7 +4887,7 @@ public sealed class FullUi : IOverlayUi
             {
                 // 0 号收起格、球（-2）：自解释，不配（收窄）
                 1 => (c.Tip, Key(KeyAction.TogglePassThrough), "打开后点击落到底下的程序"),
-                2 => (c.Tip, "", $"{Key(KeyAction.FlipPageUp)} / {Key(KeyAction.FlipPageDown)} 翻屏"),
+                2 => (c.Tip, Key(KeyAction.ToggleBoard), $"{Key(KeyAction.FlipPageUp)} / {Key(KeyAction.FlipPageDown)} 翻屏"),
                 3 => (c.Tip, Key(KeyAction.ToolPen), "已经是笔 → 再按换颜色"),
                 4 => (c.Tip, Key(KeyAction.ToolHighlighter), ""),
                 5 => (c.Tip, Key(KeyAction.ToolLaser), ""),
@@ -4910,7 +4910,7 @@ public sealed class FullUi : IOverlayUi
         {
             BandAction.Clear => ("清空整页", Key(KeyAction.Clear), "按住 0.8 秒才清，可撤销"),
             // 全选 / 粘贴图片：段上已经写了字、点一下就知道，不配（收窄）
-            BandAction.CloseBoard => ("关闭白板", "", "只关白板，墨迹留着"),
+            BandAction.CloseBoard => ("关闭白板", Key(KeyAction.ToggleBoard), "只关白板，墨迹留着"),
             _ => default,
         };
 

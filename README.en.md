@@ -312,12 +312,14 @@ anything.
 |---|---|
 | Global | `Ctrl+Alt+Shift+T` pass-through ｜ `Ctrl+Alt+Shift+X` quit ｜ `Ctrl+Alt+Shift+Q` radial palette (hold & flick; **works in pass-through too** — picking a sector exits it) |
 | In-app | `Ctrl+P` pen ｜ `Ctrl+I` highlighter ｜ `Ctrl+L` laser ｜ `Ctrl+E` eraser ｜ `Ctrl+M` select ｜ `Ctrl+S` screenshot |
-| Editing | `Ctrl+Z / Y` undo / redo ｜ `Ctrl+A` select all ｜ `Ctrl+C / V` copy / paste ｜ `Delete` ｜ `Esc` ｜ arrows nudge (`Shift` ×10) |
-| Other | `Ctrl+6` width ｜ `Ctrl+Shift+C` clear ｜ `PageUp / PageDown` page |
+| Editing | `Ctrl+Z / Y` (also `Ctrl+Shift+Z`) undo / redo ｜ `Ctrl+A` select all ｜ `Ctrl+C / V` copy / paste ｜ `Delete` ｜ `Esc` ｜ arrows nudge (`Shift` ×10; **with nothing selected, `←→` flip pages and `↑↓` scroll**) ｜ `Ctrl+= / Ctrl+-` scale selection (a burst merges into one undo step) |
+| Other | `Ctrl+6` width ｜ `Ctrl+B` toggle board ｜ `Ctrl+Shift+C` clear ｜ `PageUp / PageDown` page |
 
-Pressing the same tool key again cycles it (pen/highlighter change colour, eraser toggles
-whole-stroke/area, select toggles rectangle/lasso). During a slideshow the tool keys are
-temporarily promoted to global hotkeys; `←→` pages and `↑↓` scroll the canvas.
+Pressing the same tool key again only changes colour for pen/highlighter; eraser (whole-stroke/area)
+and select (rectangle/lasso) subtypes are picked from the panel band. During a slideshow the tool
+keys are temporarily promoted to global hotkeys; `←→` pages and `↑↓` scroll the canvas
+(the wheel keeps scrolling within the current slide). Continuous nudging / scaling merges into a
+single undo step.
 Full table, change log and measured conflicts: [快捷键总表.md](快捷键总表.md) (Chinese).
 
 ## Build & self-test

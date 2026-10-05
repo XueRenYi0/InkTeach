@@ -2335,6 +2335,7 @@ public partial class InkEngine
             NowMs = _clock.Elapsed.TotalMilliseconds;
             PumpKeyGestures();            // 工具键的手势：长按判定 + 连按换色的延迟结算
             PumpRadialPalette();          // 呼出盘：出盘延迟 / 松手轮询 / 超时
+            StepMicroAdjust();            // 连续微调会话：停手 400ms 就"封口"（下一次另起一条撤销）
 
             if (NowMs >= _autoExitAt) break;
 
@@ -8318,6 +8319,10 @@ public partial class InkEngine
         if (RadialPaletteActive && action != KeyAction.RadialPalette)
             CancelRadialPalette("其它动作");
 
+        // 连续微调会话：除了微调/缩放本身，其它任何动作都表示"这次手停了"——先封口，
+        // 免得下一次微调把增量叠到一条已经翻篇的动作上（停手超时由 StepMicroAdjust 收）。
+        if (_microAdjust != null && !IsMicroAdjustAction(action)) _microAdjust = null;
+
         switch (action)
         {
             // 穿透开关（全局 Ctrl+Alt+Shift+T 这条同一条路）：退出时恢复进穿透前的板态，
@@ -8350,6 +8355,7 @@ public partial class InkEngine
             case KeyAction.Redo: Doc.Redo(); break;
             case KeyAction.Copy: CopySelectionToClipboard(); break;
             case KeyAction.Clear: Doc.Clear(); Laser.Clear(); break;
+            case KeyAction.ToggleBoard: SetBoardFromUi(!BoardOn); break;
             case KeyAction.ToggleHud: ShowHud = !ShowHud; break;
             case KeyAction.CycleWidth: CycleWidth(); break;
             case KeyAction.ToggleKeyboardMode: SetKeyboardMode(!KeyboardMode); break;
@@ -8360,13 +8366,24 @@ public partial class InkEngine
             case KeyAction.DeleteSelected: Doc.DeleteSelected(); break;
             case KeyAction.CancelSelection: Doc.Selected.Clear(); break;
             case KeyAction.Paste: PasteFromClipboard(); break;
-            case KeyAction.NudgeLeft: Nudge(-1f, 0f); break;
+            // 有选中 = 左/右移 1；**没选中：←→ 也是翻页**（2026-10-05 用户定：
+            // 四个方向键的语法统一——有选中就微调，没选中就 ←→ 翻页、↑↓ 滚画布）。
+            // 放映里没选中时同样走 ←→（代 PPT 翻页），和放映临时全局键那条路一致。
+            case KeyAction.NudgeLeft:
+                if (Doc.Selected.Count > 0) Nudge(-1f, 0f);
+                else if (PptMode) PptPrevFromUi();
+                else FlipPageFromUi(false);
+                break;
             // ↑↓：**有选中 → 微调；没选中 → 上下滚画布**（用户 2026-09-30 定："任何情况下
             // 都能上下滑动画布"，一格 = 屏幕高的 1/10，照 ClassIn 的手感）。
             case KeyAction.NudgeUp:
                 if (Doc.Selected.Count > 0) Nudge(0f, -1f); else ScrollCanvasBy(+ScrollStepLogical);
                 break;
-            case KeyAction.NudgeRight: Nudge(1f, 0f); break;
+            case KeyAction.NudgeRight:
+                if (Doc.Selected.Count > 0) Nudge(1f, 0f);
+                else if (PptMode) PptNextFromUi();
+                else FlipPageFromUi(true);
+                break;
             case KeyAction.NudgeDown:
                 if (Doc.Selected.Count > 0) Nudge(0f, 1f); else ScrollCanvasBy(-ScrollStepLogical);
                 break;
@@ -8374,6 +8391,8 @@ public partial class InkEngine
             case KeyAction.NudgeUpFar: Nudge(0f, -10f); break;
             case KeyAction.NudgeRightFar: Nudge(10f, 0f); break;
             case KeyAction.NudgeDownFar: Nudge(0f, 10f); break;
+            case KeyAction.ScaleUp: ScaleSelection(1.1f); break;
+            case KeyAction.ScaleDown: ScaleSelection(1f / 1.1f); break;
             case KeyAction.FlipPageUp: FlipPageFromUi(false); break;
             case KeyAction.FlipPageDown: FlipPageFromUi(true); break;
             // 放映时 ←→（临时全局热键送进来的）：**有选中 → 微调；没选中 → 代 WPS/PPT 翻页**。
@@ -8394,15 +8413,81 @@ public partial class InkEngine
         }
     }
 
-    /// <summary>
-    /// 方向键微调。**已知待改**：按住方向键会重复触发，每次都是一条撤销记录；
-    /// 要接"连续微调合并成一步"，得等编辑命令支持合并。
-    /// </summary>
-    private void Nudge(float dx, float dy)
+    // ---- 连续微调会话（2026-10-05）-----------------------------------------
+    //
+    // 问题：方向键按住会自动重复（Windows 连发 KEYDOWN），旧实现每一下都是一条
+    // `ApplyTransform` → 撤销栈里瞬间十几条，"移歪了想撤销要按十几次 Ctrl+Z"。
+    // 修法：微调 / 缩放**共用一条动作**，后续增量叠上去；松开或停 400ms 就"封口"，
+    // 下一次微调另开一条。中途被别的动作改过（鼠标拖动、撤销、清空……）也认得出来——
+    // `TryAppendDelta` 拿文档版本号当闸（见 Model.TransformObjectsAction）。
+    private TransformObjectsAction _microAdjust;
+    private double _microAdjustLastMs = double.NegativeInfinity;
+    private const double MicroAdjustMergeMs = 400;
+
+    private static bool IsMicroAdjustAction(KeyAction a) => a is
+        KeyAction.NudgeLeft or KeyAction.NudgeUp or KeyAction.NudgeRight or KeyAction.NudgeDown or
+        KeyAction.NudgeLeftFar or KeyAction.NudgeUpFar or KeyAction.NudgeRightFar or KeyAction.NudgeDownFar or
+        KeyAction.ScaleUp or KeyAction.ScaleDown;
+
+    /// <summary>微调或缩放应用一步；和上一步还能接上（同一批对象、中间没别的改动）就合并。</summary>
+    private void MicroAdjust(in Matrix3x2 delta)
     {
-        Doc.ApplyTransform(Matrix3x2.CreateTranslation(dx, dy));
+        if (Doc.Selected.Count == 0) return;
+        if (_microAdjust != null && _microAdjust.SameTargets(Doc.Selected)
+            && _microAdjust.TryAppendDelta(Doc, delta))
+        {
+            _microAdjustLastMs = NowMs;
+            _dirty = true;
+            return;
+        }
+        var act = new TransformObjectsAction(Doc.Selected, delta);
+        act.Redo(Doc);
+        Doc.CommitInteractive(act);
+        _microAdjust = act;
+        _microAdjustLastMs = NowMs;
         _dirty = true;
     }
+
+    /// <summary>主循环每帧叫：停手超过 400ms → 会话封口（下一次微调另起一条撤销记录）。</summary>
+    private void StepMicroAdjust()
+    {
+        if (_microAdjust != null && NowMs - _microAdjustLastMs > MicroAdjustMergeMs)
+            _microAdjust = null;
+    }
+
+    /// <summary>
+    /// 选中对象的键盘缩放（`Ctrl+=` / `Ctrl+-`）：以**选区框中心**为锚（和双指捏合同一个
+    /// 取点，见 TouchGestureMoved 那一段），一步 10%。走 <see cref="MicroAdjust"/>，
+    /// 所以连按五下 = 一条撤销。
+    /// </summary>
+    private void ScaleSelection(float factor)
+    {
+        if (Doc.Selected.Count == 0)
+        {
+            Console.WriteLine("缩放选中：现在没有选中对象（先框选）");
+            return;
+        }
+        var aabb = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
+        float cx = (aabb.MinX + aabb.MaxX) * 0.5f;
+        float cy = (aabb.MinY + aabb.MaxY) * 0.5f;
+        // 防退化：缩到只剩几像素就别再缩了（倒不是矩阵会坏，是屏幕上等于消失了）。
+        float maxSide = MathF.Max(aabb.MaxX - aabb.MinX, aabb.MaxY - aabb.MinY);
+        if (factor < 1f && maxSide * factor < 4f)
+        {
+            Console.WriteLine("缩放选中：已经缩到最小（再缩就没有了）");
+            return;
+        }
+        MicroAdjust(Matrix3x2.CreateTranslation(-cx, -cy)
+                  * Matrix3x2.CreateScale(factor)
+                  * Matrix3x2.CreateTranslation(cx, cy));
+    }
+
+    /// <summary>
+    /// 方向键微调。**连续按（含按住自动重复）合并成一步撤销**（2026-10-05）：
+    /// 每一步都走 <see cref="MicroAdjust"/>，同一次"手不停"只留一条撤销记录，
+    /// 停手 400ms 或中途做了别的事才封口。
+    /// </summary>
+    private void Nudge(float dx, float dy) => MicroAdjust(Matrix3x2.CreateTranslation(dx, dy));
 
     /// <summary>
     /// 切换**当前工具**的粗细。以前这里写死改笔宽，于是"选了荧光笔按切粗细没反应"

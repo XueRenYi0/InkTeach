@@ -6212,8 +6212,12 @@ internal sealed class ReorderStrokesAction : EditAction
 internal sealed class TransformObjectsAction : EditAction
 {
     private readonly Stroke[] _targets;
-    private readonly Matrix3x2 _delta;
+    /// <summary>累计增量。2026-10-05 起**可变**：连续微调会话把新一步叠上去（见 TryAppendDelta），
+    /// 于是"按住方向键 / 连按缩放"只留一条撤销记录。</summary>
+    private Matrix3x2 _delta;
     private readonly RectF _before;
+    /// <summary>最近一次落到文档上的版本号（见 TryAppendDelta）。</summary>
+    private int _lastVersion;
 
     public TransformObjectsAction(IReadOnlyList<Stroke> targets, Matrix3x2 delta)
     {
@@ -6226,7 +6230,11 @@ internal sealed class TransformObjectsAction : EditAction
     public override RectF AffectedBefore => _before;
     public override RectF AffectedAfter => EditRegion.Of(_targets);
 
-    public override void Redo(InkDocument doc) => Shift(doc, _delta);
+    public override void Redo(InkDocument doc)
+    {
+        Shift(doc, _delta);
+        _lastVersion = doc.Version;
+    }
 
     public override void Undo(InkDocument doc)
     {
@@ -6239,6 +6247,36 @@ internal sealed class TransformObjectsAction : EditAction
     {
         foreach (var s in _targets) doc.ApplyTransformCore(s, m);
         doc.Version++;
+    }
+
+    /// <summary>会话里的目标还是不是这一批（顺序不论；按引用比）。</summary>
+    internal bool SameTargets(IReadOnlyList<Stroke> list)
+    {
+        if (list.Count != _targets.Length) return false;
+        foreach (var t in _targets)
+        {
+            bool hit = false;
+            for (int i = 0; i < list.Count; i++)
+                if (ReferenceEquals(list[i], t)) { hit = true; break; }
+            if (!hit) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// **连续微调会话**：把新一步的增量叠在已有动作后面（不新开撤销记录）。
+    /// 返回 false = 这中间文档被别的动作改过（版本号对不上），调用方应当另开一条——
+    /// 否则"撤销这一条"会把中间那些改动一起算进去，数学上就不对了。
+    /// </summary>
+    internal bool TryAppendDelta(InkDocument doc, in Matrix3x2 m)
+    {
+        if (doc.Version != _lastVersion) return false;
+        Shift(doc, m);
+        _delta = _delta * m;              // 行向量约定：先老增量、后新增量
+        _lastVersion = doc.Version;
+        // 这条动作**没有**走 Commit（不是新记录），脏区得自己加；口径和 Commit 一致。
+        doc.Dirty.Add(AffectedUnion);
+        return true;
     }
 }
 
