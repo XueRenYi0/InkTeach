@@ -1,4 +1,4 @@
-# 端到端验证"滚动会不会把已经写好的墨弄丢"——**走真实用户路径**：
+﻿# 端到端验证"滚动会不会把已经写好的墨弄丢"——**走真实用户路径**：
 # 合成鼠标画一笔 → 真滚轮事件滚几格 → 从屏幕像素上看墨还在不在、跟在哪儿。
 #
 # 为什么要从外面量：程序自己的自检里，有的直接给相机赋值、有的走滚轮，两条
@@ -159,7 +159,7 @@ $vh = [ScrollInk.Win32]::GetSystemMetrics(79)
 
 $OutDir = Join-Path $AppRoot $OutDir
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$exe = Join-Path $AppRoot 'src\InkTeach\bin\Release\net8.0-windows\InkTeach.exe'
+$exe = Join-Path $AppRoot 'src\InkTeach\bin\Release\net10.0-windows\InkTeach.exe'
 
 $winX = $vx + 400; $winY = $vy + 100; $winW = 1200; $winH = 1500
 $shot = Join-Path $OutDir 'region.bmp'

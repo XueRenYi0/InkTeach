@@ -1,4 +1,4 @@
-# End-to-end check of the InkClass global-hotkey layer.
+﻿# End-to-end check of the InkClass global-hotkey layer.
 # Everything is judged from the app's own log, so no screenshots are needed.
 
 param(

@@ -516,6 +516,14 @@ internal sealed partial class OverlayWindow : IDisposable
     public static bool InkTrailEnabled;
 
     /// <summary>
+    /// `--syswet`：真笔写实线笔时，**湿墨只让系统轨迹画**（我们不再自绘当前笔画），
+    /// 抬笔后由干墨接管。默认关 = 保持"两条都画"的老行为，方便 A/B 与回退。
+    /// ⚠ 2026-10-05 本机真笔实测：系统轨迹不渲染（COM 成功但无可见墨），
+    /// 所以本机**勿启用**；保留它用于换机器/换平板的验证。见 `延时-实测与优化.md` §八。
+    /// </summary>
+    public static bool SystemWetPreferred;
+
+    /// <summary>
     /// "按住不动 = 右键"这条**系统手势**在本窗口内关掉了吗（见
     /// <see cref="Native.DisableSystemPressAndHold"/>）。
     ///
@@ -600,24 +608,36 @@ internal sealed partial class OverlayWindow : IDisposable
     private bool _trailActive;
     private uint _trailGeneration;
     private float _trailRadius = 2f;
+    /// <summary>这一条轨迹成功喂进去的点数（`--syswet` 抑制判据 + `--wetinktest` 判据都要用）。</summary>
+    private int _trailPointsFed;
+    /// <summary>收笔后"等这一帧 Present 完再撤轨迹"的挂起标记（防"轨迹先没、干墨未上屏"闪一帧）。</summary>
+    private bool _trailEndPending;
+    /// <summary>进程级累计喂点（`--wetinktest` 判"系统轨迹到底喂没喂进去"）。</summary>
+    public static long InkTrailPointsFed;
 
     /// <summary>
     /// 开始一条委托墨迹轨迹。此后系统合成器会自己把笔尖后面的这一小段
     /// 画出来，节奏跟着显示器刷新走，不受我们这一帧有没有画完影响。
-    /// 我们照旧画自己的笔画；等应用追上来了再把预测段收掉。
+    /// 默认**我们照旧画自己的笔画**（两条都在，取并集）；`--syswet` 时自绘湿墨
+    /// 让位给系统轨迹（见 <see cref="SystemWetPreferred"/>）。
+    /// 返回值 = 这条轨迹是否真的起来了（`--syswet` 靠它决定敢不敢不画）。
     /// </summary>
-    public void BeginInkTrail(Color4 color, float radius)
+    public bool BeginInkTrail(Color4 color, float radius)
     {
-        if (_inkTrail == null || !InkTrailEnabled) return;
+        if (_inkTrail == null || !InkTrailEnabled) return false;
+        // 上一条轨迹还挂起没撤（收笔后等 Present）→ 先撤，别叠上新轨迹。
+        if (_trailEndPending) EndInkTrailNow();
         try
         {
             _trailRadius = MathF.Max(0.5f, radius);
             _inkTrail.StartNewTrail(color);
             _trailActive = true;
             _trailGeneration = 0;
+            _trailPointsFed = 0;
             InkTrailDebug = $"StartNewTrail ok, color=({color.R:F2},{color.G:F2},{color.B:F2},{color.A:F2})";
         }
         catch (Exception ex) { _trailActive = false; _inkTrail = null; InkTrailDebug = "StartNewTrail 异常: " + ex.Message; }
+        return _trailActive;
     }
 
     /// <summary>把一个采样点交给系统合成器（屏幕坐标，内部换算到交换链坐标）。</summary>
@@ -633,6 +653,8 @@ internal sealed partial class OverlayWindow : IDisposable
                 Radius = MathF.Max(0.5f, radius),
             };
             _trailGeneration = _inkTrail.AddTrailPoints(new[] { p }, 1);
+            _trailPointsFed += 1;
+            InkTrailPointsFed += 1;
             InkTrailDebug = $"AddTrailPoints ok gen={_trailGeneration} at({p.X:F0},{p.Y:F0}) r={p.Radius:F1}";
         }
         catch (Exception ex) { _trailActive = false; InkTrailDebug = "AddTrailPoints 异常: " + ex.Message; }
@@ -682,6 +704,8 @@ internal sealed partial class OverlayWindow : IDisposable
 
             _trailGeneration = _inkTrail.AddTrailPointsWithPrediction(
                 realPts, (uint)realCount, predPts, (uint)predPts.Length);
+            _trailPointsFed += realCount;
+            InkTrailPointsFed += realCount;
             InkTrailDebug = $"AddTrailPointsWithPrediction 真实 {realCount} + 预测 {predPts.Length}，gen={_trailGeneration}";
         }
         catch (Exception ex)
@@ -697,14 +721,35 @@ internal sealed partial class OverlayWindow : IDisposable
                     Radius = MathF.Max(0.5f, radius),
                 };
                 _trailGeneration = _inkTrail.AddTrailPoints(new[] { p }, 1);
+                _trailPointsFed += 1;
+                InkTrailPointsFed += 1;
             }
             catch { _trailActive = false; }
         }
     }
 
-    /// <summary>收笔：把预测出来的那一段抹掉，交回给我们自己的笔画。</summary>
-    public void EndInkTrail()
+    /// <summary>这条轨迹现在真的在画：活跃且至少成功喂进去过一个点。</summary>
+    public bool TrailDrawing => _trailActive && _trailPointsFed > 0;
+
+    /// <summary>收笔的轨迹撤除还挂着（等下一帧 Present 后执行）——主循环用它兜底要一帧。</summary>
+    public bool TrailEndPending => _trailEndPending;
+
+    /// <summary>收笔：立即撤轨迹（自检/清理路径用；正常收笔走 <see cref="EndInkTrailDeferred"/>）。</summary>
+    public void EndInkTrail() => EndInkTrailNow();
+
+    /// <summary>
+    /// 收笔（**延后到这一帧 Present 之后**再撤）：`--syswet` 下湿墨只有系统轨迹这一份，
+    /// 必须先让"干墨那一帧"提交出去再撤，否则会出现"整笔消失一帧再出现"的闪。
+    /// </summary>
+    public void EndInkTrailDeferred()
     {
+        if (!_trailActive) return;
+        _trailEndPending = true;
+    }
+
+    private void EndInkTrailNow()
+    {
+        _trailEndPending = false;
         if (!_trailActive || _inkTrail == null) { _trailActive = false; return; }
         _trailActive = false;
         try { if (_trailGeneration != 0) _inkTrail.RemoveTrailPoints(_trailGeneration); }
@@ -1683,7 +1728,9 @@ internal sealed partial class OverlayWindow : IDisposable
                 DrawDragPreview(app);
                 // **正在书写的那一笔**（画线中的实时几何）也不在 Doc 里，得单独补——
                 // 不然"画线过程中的 α 读数"这张图拍出来只有一颗标签、没有线。
-                if (app.ActiveStroke != null && !app.SuppressActiveStroke) DrawStroke(app.ActiveStroke);
+                if (app.ActiveStroke != null && !app.SuppressActiveStroke
+                    && !(TrailDrawing && app.IsSystemWetStroke(app.ActiveStroke)))
+                    DrawStroke(app.ActiveStroke);
                 DrawSelection(app);
                 // **图库面板**同理（2026-09-22 加）：它是浮动层上的东西，不补画的话
                 // "面板长什么样"这张图永远拍不到（这条路是给自检/出图用的，
@@ -2156,7 +2203,10 @@ internal sealed partial class OverlayWindow : IDisposable
 
             // 调试用：--trailonly 时不画自己那一笔，用来验证委托墨迹轨迹
             // 是不是真的由系统合成器画出来了。
-            if (app.ActiveStroke != null && !app.SuppressActiveStroke)
+            // `--syswet`：这一笔的湿墨由系统轨迹画（且它真的在画）→ 我们不自绘，
+            // 否则两条叠在一起，系统轨迹的低延迟优势根本看不见。
+            if (app.ActiveStroke != null && !app.SuppressActiveStroke
+                && !(TrailDrawing && app.IsSystemWetStroke(app.ActiveStroke)))
             // 正在写的那一笔几何每帧都在变，用实现缓存只会不停重建，反而更慢
             DrawStroke(app.ActiveStroke);
 
@@ -6056,6 +6106,8 @@ internal sealed partial class OverlayWindow : IDisposable
         sw.Stop();
         LastPresentEndQpc = Qpc.Now;
         LastPresentMs = sw.Elapsed.TotalMilliseconds;
+        // `--syswet` 收笔挂起的轨迹撤除：干墨这一帧已经提交，现在撤不会露出空档。
+        if (_trailEndPending) EndInkTrailNow();
         if (hr.Failure)
         {
             LastError = "Present: " + hr.Description;

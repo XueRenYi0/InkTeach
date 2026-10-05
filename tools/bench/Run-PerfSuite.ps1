@@ -1,4 +1,4 @@
-# 性能测试套件：只回答一个问题——"多快、多省、稳不稳"。
+﻿# 性能测试套件：只回答一个问题——"多快、多省、稳不稳"。
 #
 # 这里**不判红绿**：基准数字本身没有对错，要拿两次跑的结果比，或者看趋势。
 # 功能对不对那是 Run-FuncSuite.ps1 的事，两套分开跑，别把"跑完了"当成"功能好"。
@@ -15,12 +15,12 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$exe = Join-Path $AppRoot 'src\InkTeach\bin\Release\net8.0-windows\InkTeach.exe'
+$exe = Join-Path $AppRoot 'src\InkTeach\bin\Release\net10.0-windows\InkTeach.exe'
 if (-not (Test-Path $exe)) { throw "找不到可执行文件：$exe（先 dotnet build src/InkTeach -c Release）" }
 
 $OutDir = Join-Path $AppRoot $OutDir
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$OutDirRel = [IO.Path]::GetRelativePath($AppRoot, $OutDir) -replace '\\', '/'
+$OutDirRel = $OutDir.Substring($AppRoot.Length).TrimStart('\','/') -replace '\\', '/'
 
 # 名字 / 参数 / 超时秒 / 看什么
 $cases = @(

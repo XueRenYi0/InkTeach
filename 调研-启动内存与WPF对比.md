@@ -228,3 +228,46 @@ $p = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "Name='Ink
 
 1. `InvariantGlobalization=true` 开不开（便宜的小优化，要过一遍自检；等下次动手时一起）。
 2. 以后**评价口径固定**：一律报"提交 / 专用工作集"，不拿"工作集"单列比（会被系统回收骗）。
+
+---
+
+## 九、2026-10-05 实测更新：Native AOT 已跑通（结论大改）
+
+> 本节推翻 §三 的"Vortice 可能挡住 AOT"顾虑。工具链：VS 2022 Build Tools 的
+> VCTools 工作负载（MSVC 14.44 + Win11 SDK 26100）+ .NET 10 SDK。
+
+**关键发现**：`Vortice.* 3.8.3` 已经**不再是 `[ComImport]` 内置 COM 路线**——
+二进制里 `ComImport=0`、改用函数指针 vtable（`Vtbl`×64），并带 `IsAotCompatible`
+程序集标注。NativeAOT 的 IL3052（内置 COM 不支持）**不再出现**。
+
+**探针实测**（`tools/aot-probe/`：D3D11+D2D+ID2D1DeviceContext2+InkStyle+DWrite+DComp+
+委托墨迹接口+离屏绘制+System.Drawing JPEG）：**全绿**，原生 exe 仅 2.4MB。
+
+**InkTeach 本体 AOT 发布**（`dotnet publish -r win-x64 -p:PublishAot=true`）：发布成功；
+警告全部集中在 `PptLink.cs` 的 `dynamic`（IL3050×80 / IL2026×49）与
+`SharpGen.Runtime` 的裁剪警告（IL2104，运行时无影响）。
+
+| 指标 | .NET 8 JIT | .NET 10 JIT | .NET 10 AOT |
+|---|---|---|---|
+| 空闲提交 | 93.2 MB | 92.6 MB | **88.4 MB** |
+| 启动阶段 0（运行时） | 29.7 MB | 28.3 MB | **12.1 MB** |
+| 一万笔提交 | 391.4 MB | — | **387.9 MB** |
+| 冷启动（到 overlay 就绪，中位） | 752 ms | 747 ms | **642 ms** |
+| 发布产物 | 74 MB 目录 | — | **12.9 MB 单文件** |
+| selftest / keytest / appendtest / iotest / wetinktest | — | 全过 | **全过**（JPEG 导出逐像素验过） |
+
+**结论**：
+
+1. AOT 的收益比原估的 15~30MB 小（空闲只省约 4MB，GPU/驱动占大头），但
+   **启动快约 100ms、发布体积 74MB→13MB** 是实打实的；
+2. 唯一的功能阻碍是 **PPT/WPS 联动**（`dynamic` + `Type.InvokeMember`）。AOT 版
+   必须把它改写成 AOT 安全的 IDispatch late-binding（ComWrappers / 函数指针
+   vtable），或让 AOT 版把 PPT 联动降级；
+3. 建议：AOT 先作为**发布选项**保留（普通 JIT 版继续发），等 PptLink 改造完
+   再决定默认发哪个。
+
+**全量功能套件（39 项）对照**：JIT 版 29 PASS / 0 FAIL / 9 DATA / 1 SKIP；
+AOT 版 28 PASS / 1 FAIL / 9 DATA / 1 SKIP。唯一差异 `passtest` 经查**不是 AOT 问题**：
+该用例的点击目标窗口放在屏幕 (330,280)，而被 OpenCode 会话窗口盖住时合成点击
+到不了目标；JIT 版在同一时点复跑同样失败（早先套件通过时那个位置是空的）。
+AOT 的功能面与 JIT 一致。

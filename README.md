@@ -297,7 +297,7 @@ PPT 联动需要机器上装有 PowerPoint 或 WPS；没装也能正常批注，
 ## 从源码构建与自检
 
 ```powershell
-# 交互模式（需要 .NET 8 SDK）
+# 交互模式（需要 .NET 10 SDK）
 dotnet run --project src/InkTeach -c Release
 
 # 键位自检（含"文档与键位表是否一致"）

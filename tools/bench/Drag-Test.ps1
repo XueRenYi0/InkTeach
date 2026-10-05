@@ -1,4 +1,4 @@
-# Sends one synthetic stroke to whatever window is under the given point and
+﻿# Sends one synthetic stroke to whatever window is under the given point and
 # reports whether the target process actually did anything about it.
 
 param(

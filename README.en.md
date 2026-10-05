@@ -320,7 +320,7 @@ Full table, change log and measured conflicts: [快捷键总表.md](快捷键总
 ## Build & self-test
 
 ```powershell
-# interactive (requires .NET 8 SDK)
+# interactive (requires .NET 10 SDK)
 dotnet run --project src/InkTeach -c Release
 
 # key bindings (also checks docs match the code)

@@ -1,4 +1,4 @@
-# Drives an app with a fixed synthetic drawing gesture and reports what it cost.
+﻿# Drives an app with a fixed synthetic drawing gesture and reports what it cost.
 #
 # Everything measured here is observable from outside the process, so the same
 # numbers are meaningful for an app we can instrument and one we cannot.
@@ -278,7 +278,7 @@ Write-Host $memText
 if ($ShotPath) {
     $abs = [IO.Path]::GetFullPath($ShotPath)
     New-Item -ItemType Directory -Force -Path (Split-Path $abs) | Out-Null
-    & "D:\文件集中\code\批注\src\InkTeach\bin\Release\net8.0-windows\InkTeach.exe" --screenshot $abs | Out-Null
+    & "D:\文件集中\code\批注\src\InkTeach\bin\Release\net10.0-windows\InkTeach.exe" --screenshot $abs | Out-Null
     Write-Host ("  截图存证：$abs")
 }
 

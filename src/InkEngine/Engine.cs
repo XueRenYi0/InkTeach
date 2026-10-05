@@ -152,6 +152,15 @@ public partial class InkEngine
     }
 
     internal Stroke ActiveStroke;
+
+    /// <summary>
+    /// `--syswet`：这一笔的湿墨由系统轨迹负责（渲染时不再自绘当前笔画）。
+    /// 用**引用相等**认笔画，收笔/换笔都不会串。
+    /// </summary>
+    private Stroke _systemWetStroke;
+
+    /// <summary>Overlay 渲染判据：这一笔是不是"由系统轨迹画湿墨"。</summary>
+    internal bool IsSystemWetStroke(Stroke s) => s != null && ReferenceEquals(s, _systemWetStroke);
     internal Tool Tool = Tool.Pen;
     /// <summary>Tool sizes are authored in logical pixels and scaled by the
     /// monitor DPI at use. Without this everything looks half-size on a 150%
@@ -1715,6 +1724,15 @@ public partial class InkEngine
         if (args.Contains("--inktrail")) OverlayWindow.InkTrailEnabled = true;
         if (args.Contains("--noinktrail")) OverlayWindow.InkTrailEnabled = false;
 
+        // `--syswet`：真笔 + 实线笔时，**湿墨只让系统轨迹画**（我们不再自绘当前笔画）。
+        // ⚠ 2026-10-05 真笔实测（判据修好后）：**本机的委托轨迹不渲染**——COM 调用全部
+        //    成功、点也喂进去了，但写字期间屏幕上没有任何新增墨（用户亲眼确认：
+        //    "写的时候看不见墨迹，抬笔才会出现"）。所以 `--syswet` 在本机只会让湿墨消失，
+        //    **默认关、勿启用**；保留它用于换机器/换平板的验证。见 `延时-实测与优化.md` §八。
+        // `--ownwet` 强制回老路（A/B 用）。
+        OverlayWindow.SystemWetPreferred = args.Contains("--syswet");
+        if (args.Contains("--ownwet")) OverlayWindow.SystemWetPreferred = false;
+
         // ---- 笔迹预测：**已停用并清理**（2026-10-05）------------------------------
         // [删除 2026-10-05] `--predict/--predictms/--predictlead`（老预测系统）与
         // `--predicttip`（预测点并入 mean2）的入口、喂点与渲染尾接线已全部移除；
@@ -2105,6 +2123,7 @@ public partial class InkEngine
             Console.WriteLine($"overlay on monitor {hMon}: {r.Width}x{r.Height} at ({r.Left},{r.Top}) dpi={w.Dpi}");
             Console.WriteLine($"委托墨迹轨迹(InkTrail): {(OverlayWindow.InkTrailEnabled ? "开" : "关")}"
                               + $"（接口{OverlayWindow.InkTrailNote}）");
+            Console.WriteLine($"湿墨呈现: {(OverlayWindow.SystemWetPreferred ? "系统轨迹独占（--syswet）" : "自己画（系统轨迹照喂）")}");
             // 调参时"我到底调上了没有"必须一眼看得见：这里印的是**生效值**，不是"可用/不可用"。
             // （2026-09-22 用户碰到的两个坑：--predictms 100 被静默夹到 15；--noinktrail 生效了没有
             //   只能靠猜。这两件事都不该靠猜。）
@@ -3004,7 +3023,8 @@ public partial class InkEngine
                    || RollWantsFrame             // 点名滚动（80ms 一跳，定格即停）
                    || RadialPaletteActive        // 呼出盘开着要连续出帧（出盘延迟 + 松手轮询）
                    || TooltipPending;            // 引擎侧悬停提示还在等 500ms（到点要有人点亮它）
-        return _dirty || _animating;
+        return _dirty || _animating
+               || _windows.Exists(w => w.TrailEndPending);   // --syswet：收笔撤轨迹必须有一帧兜底
     }
 
     // =====================================================================
@@ -3407,9 +3427,10 @@ public partial class InkEngine
         // **虚线笔迹不起委托墨迹**：那条轨迹由系统合成器画，画不出我们的线型
         // （它只会画一条实线），一笔写完就会"实线突然变虚线"闪一下。
         // 退回落自己画反而是对的——自己画的湿墨本来就是虚线，前后一致。
+        bool trailStarted = false;
         if (ptype == Native.PT_PEN && dash == StrokeDash.Solid)
-            WindowAt(screenX, screenY)?.BeginInkTrail(
-                tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f);
+            trailStarted = WindowAt(screenX, screenY)?.BeginInkTrail(
+                tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f) ?? false;
         _pen.BeginStroke();   // 缺压回填的基准只活在"一笔"之内（见 PenSampleBuffer.BeginStroke）
         ActiveStroke = new Stroke
         {
@@ -3424,6 +3445,10 @@ public partial class InkEngine
             // 实测的原话是"上面会出残影一直在那闪"。见 Stroke.RawWhileLive。
             RawWhileLive = true,
         };
+        // `--syswet`：真笔 + 实线笔，且轨迹真的起来了 → 湿墨交给系统（我们不再自绘）。
+        // 荧光笔/激光笔不在此列——系统轨迹画不出它们的观感；`--ownwet` 可强制回老路。
+        _systemWetStroke = (trailStarted && OverlayWindow.SystemWetPreferred && tool == Tool.Pen)
+            ? ActiveStroke : null;
         // 起笔：落笔这条消息里可能已经合并了几个采样点，一起收进来（以前只取最新那一个）。
         ActiveStrokeHasPressure = false;
         LastCoalescedSamples = LastCoalescedMessages = 0;
@@ -6059,7 +6084,14 @@ public partial class InkEngine
         Laser.Release(NowMs);
 
         if (ScrollBarDragging) EndScrollBarDrag();
-        foreach (var w in _windows) w.EndInkTrail();
+        // `--syswet`：湿墨只有系统轨迹这一份，撤除要等干墨那一帧 Present 之后
+        //（否则"轨迹先没了、干墨还没上屏"会闪一帧）；其余路径照旧立即撤。
+        bool sysWetEnding = _systemWetStroke != null;
+        foreach (var w in _windows)
+        {
+            if (sysWetEnding) w.EndInkTrailDeferred(); else w.EndInkTrail();
+        }
+        _systemWetStroke = null;
         // **录墨迹**（用户 2026-09-26 提"我手画多少条双曲线给你，你按这些来定制判据"）：
         // 把这一笔的**原始采样点**追加到录制文件。放在最前面 —— 此时 `ActiveStroke`
         // 要么还是原始墨、要么是停顿成型换掉的那个对象（所以真正要用的点见 `_recordPts`）。

@@ -1097,6 +1097,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --replayshow <图>   墨迹回放摆样（铺几笔 → 播到一半 → 截控制条那一块）");
         Console.WriteLine("  --ballprobe [前缀]  收起球贴边诊断（左/右/四角 × 显示/隐藏，逐个出图）");
         Console.WriteLine("  --wetinktest        湿墨轨迹实测（只让系统画，数上屏像素：这条通道到底画不画）");
+        Console.WriteLine("  --syswet            真笔 + 实线笔：湿墨只让系统轨迹画（⚠ 本机实测系统轨迹不渲染，仅留作换机验证）");
         // [停用] Console.WriteLine("  --predictdata [路径] 真实笔迹数据上的预测评测（UCI Character Trajectories）");
         Console.WriteLine("  --latbench <csv>    延时实测（分场景 + 分位数 + 稳定性）");
         Console.WriteLine("  --penlive [秒]      真笔延时实测（挂上手写笔写一会儿，出报告）");
@@ -25731,8 +25732,11 @@ internal sealed partial class App : InkEngine.InkEngine
         float cx = _virtualX + _virtualW * 0.5f;
         float cy = _virtualY + _virtualH * 0.5f;
         int boxX = (int)(cx - 700), boxY = (int)(cy - 350);
-        int maxBand = 0, maxFull = 0, samples = 0;
+        int maxBand = 0, maxBandDown = 0, maxFull = 0, samples = 0, downSamples = 0;
+        int maxRise = 0, bandAtDown = 0;
+        bool wasDown = false;
         int beforePoints = PenTotalPoints;
+        long fedBefore = OverlayWindow.InkTrailPointsFed;
 
         double t0 = NowMs;
         double nextSampleAt = t0;
@@ -25750,6 +25754,19 @@ internal sealed partial class App : InkEngine.InkEngine
                 samples++;
                 int band = ScreenProbe.CountRed(boxX, boxY, 1400, 700);
                 if (band > maxBand) maxBand = band;
+                // 判据用"按下期间像素**增量**"而不是绝对值：抬笔后的干墨、屏幕下面的桌面
+                // 内容都会进绝对值，只有"按下这一下让墨水变多"才证明系统轨迹真的在画
+                //（2026-10-05 两次踩坑后改成这样）。
+                bool down = _drawing;
+                if (down && !wasDown) bandAtDown = band;
+                if (down)
+                {
+                    downSamples++;
+                    if (band > maxBandDown) maxBandDown = band;
+                    int rise = band - bandAtDown;
+                    if (rise > maxRise) maxRise = rise;
+                }
+                wasDown = down;
                 if (++tick % 10 == 0)              // 全屏每秒一次，排除"画在别处"
                 {
                     int full = ScreenProbe.CountRed(_virtualX, _virtualY, _virtualW, _virtualH);
@@ -25760,14 +25777,22 @@ internal sealed partial class App : InkEngine.InkEngine
 
         SuppressActiveStroke = false;
         int penSamples = PenTotalPoints - beforePoints;
+        long fed = OverlayWindow.InkTrailPointsFed - fedBefore;
         Console.WriteLine();
         Console.WriteLine($"  这 {seconds:F0} 秒里收到真笔采样点：{penSamples}（0 说明没写进来）");
-        Console.WriteLine($"  屏幕中央区域的最大墨色像素：{maxBand}（共采 {samples} 次）");
+        Console.WriteLine($"  按下期间墨色像素**增量**    ：{maxRise}（判定用；采了 {downSamples} 次）");
+        Console.WriteLine($"  按下期间绝对值 / 全程最大  ：{maxBandDown} / {maxBand}（含抬笔后的干墨，仅参考）");
+        Console.WriteLine($"  喂进系统轨迹的点数        ：{fed}");
         Console.WriteLine($"  全屏的最大墨色像素        ：{maxFull}");
         Console.WriteLine($"  轨迹调试                  ：{OverlayWindow.InkTrailDebug}");
-        Console.WriteLine(maxBand > 200
-            ? "  PASS: 真笔下系统确实在画委托轨迹 —— 预测有可见通道"
-            : "  FAIL: 真笔下系统也没画（这一轮屏幕上不该有别的墨）—— 委托轨迹这台机器上不生效");
+        bool pass = penSamples > 0 && fed > 0 && maxRise > 200;
+        string why = penSamples == 0 ? "没收到真笔采样（鼠标/兼容模式）"
+                   : fed == 0 ? "轨迹一个点都没喂进系统"
+                   : maxRise <= 200 ? "按下期间屏幕上的墨没有增多 —— 系统轨迹没画"
+                   : "系统轨迹正常";
+        Console.WriteLine(pass
+            ? "  PASS: 真笔下系统确实在画委托轨迹"
+            : $"  FAIL: {why} —— 委托轨迹这台机器/这个设备上不生效");
         SettleFrames(120);
         _quit = true;
     }

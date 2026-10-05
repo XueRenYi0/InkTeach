@@ -1,4 +1,4 @@
-# 功能测试套件：只回答一个问题——"这个功能好不好、有没有 bug"。
+﻿# 功能测试套件：只回答一个问题——"这个功能好不好、有没有 bug"。
 #
 # 和性能测试（Run-PerfSuite.ps1）**分开**：
 #   · 这里每个用例都要给出红绿（PASS / FAIL），没有结论的用例会被点出来；
@@ -17,11 +17,12 @@
 param(
     [string]$OutDir = 'reports/func',
     [string]$AppRoot = 'D:\文件集中\code\批注',
+    [string]$Exe = '',
     [string[]]$Only = @()
 )
 
 $ErrorActionPreference = 'Continue'
-$exe = Join-Path $AppRoot 'src\InkTeach\bin\Release\net8.0-windows\InkTeach.exe'
+$exe = if ($Exe) { $Exe } else { Join-Path $AppRoot 'src\InkTeach\bin\Release\net10.0-windows\InkTeach.exe' }
 if (-not (Test-Path $exe)) { throw "找不到可执行文件：$exe（先 dotnet build src/InkTeach -c Release）" }
 
 $OutDir = Join-Path $AppRoot $OutDir
