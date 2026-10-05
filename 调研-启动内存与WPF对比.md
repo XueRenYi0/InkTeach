@@ -267,8 +267,9 @@ $p = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "Name='Ink
    `CoInitializeEx`。**PowerPoint 真机验证**：连接/页码/SlideID 正常，`--pptprobe
    --pptcmd` 的 `Goto/Next/Prev` 命令自检 JIT 与 AOT 全部 PASS（动画页上"按一下
    Next 未必翻页"是 PowerPoint 正常行为）。
-3. 建议：AOT 先作为**发布选项**保留（`publish.ps1 -Aot`）；**WPS 演示**那条链
-   还需真机复测一次。
+3. **发布口径（2026-10-05 用户拍板）**：以后**默认发 AOT**（`publish.ps1` 不带参数
+   即为 AOT），JIT 作为**附带选项**（`publish.ps1 -Jit`）。WPS 演示真机复测：
+   连接 / 页码 / SlideID + `Goto/Next/Prev` 命令自检 PASS（AOT 版）。
 
 **全量功能套件（39 项）对照**：JIT 版 29 PASS / 0 FAIL / 9 DATA / 1 SKIP；
 AOT 版 28 PASS / 1 FAIL / 9 DATA / 1 SKIP。唯一差异 `passtest` 经查**不是 AOT 问题**：

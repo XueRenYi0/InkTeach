@@ -10,11 +10,11 @@
 #  等要发给不认识的老师、需要开始菜单入口和卸载时，再考虑 Inno Setup 那类安装包
 #  （见 README 里"发布"那一节）。
 #
-#  用法：
-#    .\publish.ps1                 # 默认：目录版（推荐，启动快、杀软误报少）
-#    .\publish.ps1 -SingleFile     # 单文件版（就一个 exe，方便拷，启动稍慢）
-#    .\publish.ps1 -Aot            # NativeAOT 原生版（启动快约 100ms、体积约 11MB、
-#                                  #   内存略低；需要 VS Build Tools 的 C++ 工作负载）
+#  用法（2026-10-05 起：**默认 AOT 原生版**；JIT 是附带选项）：
+#    .\publish.ps1                 # 默认：NativeAOT 原生版（启动快约 100ms、约 11MB 单 exe、
+#                                  #   免装 .NET；需要 VS Build Tools 的 C++ 工作负载）
+#    .\publish.ps1 -Jit            # 附带：JIT/自包含版（保稳选项；产物大、启动稍慢）
+#    .\publish.ps1 -SingleFile     # JIT 单文件版（AOT 产物本身就是单文件，会被忽略）
 #    .\publish.ps1 -NoZip          # 不压 zip
 # =====================================================================================
 [CmdletBinding()]
@@ -22,8 +22,11 @@ param(
     [switch]$SingleFile,
     [switch]$NoZip,
     [switch]$NoSetup,
+    [switch]$Jit,
     [switch]$Aot
 )
+if ($Jit -and $Aot) { throw "-Jit 和 -Aot 只能选一个（默认就是 AOT）" }
+$useAot = -not $Jit
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
@@ -54,7 +57,7 @@ $mirrorReleaseBase = if ($mirrorOwnerRepo) { "https://gitcode.com/$mirrorOwnerRe
 $ver = (Select-String -Path $proj -Pattern '<Version>([^<]+)</Version>').Matches[0].Groups[1].Value
 if (-not $ver) { throw "没能从 $proj 里读到 <Version>" }
 
-$name = "InkTeach-$ver-win-x64"
+$name = "InkTeach-$ver-win-x64" + $(if ($Jit) { "-jit" } else { "" })
 $outDir = Join-Path $root "dist\$name"
 Write-Host "发布 $name" -ForegroundColor Cyan
 
@@ -103,11 +106,15 @@ $pubArgs = @(
     "-o", $outDir,
     "--nologo", "-v", "q"
 )
-if ($SingleFile) { $pubArgs += @("-p:PublishSingleFile=true", "-p:EnableCompressionInSingleFile=true") }
+if ($SingleFile) {
+    if ($useAot) { Write-Host "  （AOT 产物本身就是单文件，-SingleFile 忽略）" -ForegroundColor DarkGray }
+    else { $pubArgs += @("-p:PublishSingleFile=true", "-p:EnableCompressionInSingleFile=true") }
+}
 
-# NativeAOT：需要 VS Build Tools 的 C++ 工作负载（MSVC 链接器）。先做一次友好检查，
-# 免得报一行看不懂的 ILC 错误。装法与实测数据见 调研-启动内存与WPF对比.md 第九节。
-if ($Aot) {
+# NativeAOT（2026-10-05 起**默认**）：需要 VS Build Tools 的 C++ 工作负载（MSVC 链接器）。
+# 先做一次友好检查，免得报一行看不懂的 ILC 错误。装法与实测数据见
+# 调研-启动内存与WPF对比.md 第九节。
+if ($useAot) {
     $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
     $vcPath = if (Test-Path $vswhere) {
         & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -117,6 +124,8 @@ if ($Aot) {
     }
     Write-Host "  AOT：使用 VC 工具链 $vcPath" -ForegroundColor Cyan
     $pubArgs += @("-p:PublishAot=true")
+} else {
+    Write-Host "  JIT 版（-Jit）：自包含发布（附带选项）" -ForegroundColor DarkGray
 }
 
 & dotnet @pubArgs
