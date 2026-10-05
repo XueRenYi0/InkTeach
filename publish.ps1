@@ -160,7 +160,7 @@ Get-ChildItem $outDir -Filter *.pdb -ErrorAction SilentlyContinue | Remove-Item 
 $readme = @"
 InkTeach $ver（win-x64）
 
-怎么用：双击 InkTeach.exe（装了安装包的话，桌面/开始菜单的快捷方式就是它）。
+怎么用：双击**和「使用说明」文件夹并排的 InkTeach.exe**（装了安装包的话，桌面/开始菜单的快捷方式就是它）。
 它是一层透明的批注覆盖层，屏幕底部中间那条就是工具条。
 
 三个最常用的：
@@ -196,7 +196,11 @@ InkTeach $ver（win-x64）
 PPT 批注：需要这台机器装了 PowerPoint 或 WPS，放映时工具条会跟着翻页。
 （没装也能正常批注，只是不联动。）
 "@
-Set-Content -Path (Join-Path $outDir "使用说明.txt") -Value $readme -Encoding UTF8
+# 使用说明放进子文件夹：绿色版解压后**根目录只有一个 InkTeach.exe**——
+# 不用在文档堆里找哪个才是能运行的软件（用户 2026-10-05 反馈）。
+$docDir = Join-Path $outDir "使用说明"
+New-Item -ItemType Directory -Path $docDir -Force | Out-Null
+Set-Content -Path (Join-Path $docDir "使用说明.txt") -Value $readme -Encoding UTF8
 
 # ---- 压 zip ---------------------------------------------------------------------------
 $zip = Join-Path $root "dist\$name.zip"
