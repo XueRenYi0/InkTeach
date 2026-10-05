@@ -781,6 +781,11 @@ internal sealed partial class OverlayWindow : IDisposable
         Dpi = Native.GetDpiForWindow(Hwnd);
         if (Dpi == 0) Dpi = 96;
 
+        // 真实刷新率：120Hz 屏上延时报告要折合真实周期（拿不到退回 60Hz）。
+        // 窗口创建时读一次；改了显示模式重启软件即可（运行中改的极少）。
+        int refreshHz = Native.GetCurrentRefreshHz();
+        RefreshPeriodMs = refreshHz >= 30 ? 1000.0 / refreshHz : 1000.0 / 60.0;
+
         try
         {
             CreateDeviceResources();

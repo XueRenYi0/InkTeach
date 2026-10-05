@@ -29146,7 +29146,7 @@ internal sealed partial class App : InkEngine.InkEngine
         LatencyRecording = false;
         Console.WriteLine($"    采到 {Latency.Count} 条样本，渲染 {frames} 帧 / {wall / 1000.0:F1} 秒"
                           + $" = {frames * 1000.0 / wall:F1} fps（笔画数 {Doc.Strokes.Count}）");
-        Console.Write(Latency.Report());
+        Console.Write(Latency.Report(spikeThresholdMs: 2 * (_windows.Count > 0 ? _windows[0].RefreshPeriodMs : 1000.0 / 60.0)));
         Latency.WriteCsv(csvPath, tag);
     }
 
@@ -29442,7 +29442,7 @@ internal sealed partial class App : InkEngine.InkEngine
                 ? "  压感可用：这台机器/这支笔确实在报压力"
                 : "  压感不可用：设备没报 pressure 位（先查驱动的 Windows Ink 开关）");
 
-        Console.Write(Latency.Report());
+        Console.Write(Latency.Report(spikeThresholdMs: 2 * (_windows.Count > 0 ? _windows[0].RefreshPeriodMs : 1000.0 / 60.0)));
         string csv = "reports/latency-live.csv";
         Latency.WriteCsv(csv, "real-pen");
         Console.WriteLine($"CSV 已写入 {csv}");

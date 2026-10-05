@@ -148,7 +148,7 @@ public sealed class LatencyRecorder
         return sb.ToString();
     }
 
-    public string Report(bool includeDisplay = true)
+    public string Report(bool includeDisplay = true, double spikeThresholdMs = 33.4)
     {
         if (_samples.Count == 0) return $"[{Scenario}] 没有采到样本。";
         var sb = new StringBuilder();
@@ -170,7 +170,7 @@ public sealed class LatencyRecorder
                 e2e.Add(s.InputToMsgMs + s.MsgToPresentMs + s.PresentBlockMs + s.PresentToDisplayMs);
         if (e2e.Count > 0)
             sb.AppendLine($"    端到端（硬件时标 → 上屏）：{new Dist(e2e)}");
-        sb.Append(StabilityReport());
+        sb.Append(StabilityReport(spikeThresholdMs));
         return sb.ToString();
     }
 

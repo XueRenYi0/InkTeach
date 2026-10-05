@@ -146,6 +146,38 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern int GetSystemMetricsForDpi(int nIndex, uint dpi);
 
+    /// <summary>当前显示模式的刷新率（Hz，取不到返回 0）。
+    /// 用途：120Hz 屏上延时报告里的"折合几个刷新周期"要用真实周期，不能写死 60Hz。</summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool EnumDisplaySettingsW(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
+
+    public static int GetCurrentRefreshHz()
+    {
+        try
+        {
+            var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
+            if (EnumDisplaySettingsW(null, -1 /*ENUM_CURRENT_SETTINGS*/, ref dm))
+                return dm.dmDisplayFrequency;
+        }
+        catch { }
+        return 0;
+    }
+
+    /// <summary>EnumDisplaySettings 用的 DEVMODE（只关心尺寸/位深/刷新率这些字段）。</summary>
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct DEVMODE
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+        public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+        public int dmFields;
+        public int dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+        public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+        public short dmLogPixels;
+        public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+        public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+    }
+
     [DllImport("gdi32.dll")]
     public static extern IntPtr CreateBitmap(int width, int height, uint planes, uint bitCount, IntPtr bits);
 
