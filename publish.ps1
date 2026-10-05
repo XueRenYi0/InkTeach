@@ -128,8 +128,15 @@ if ($useAot) {
     Write-Host "  JIT 版（-Jit）：自包含发布（附带选项）" -ForegroundColor DarkGray
 }
 
+# PowerShell 5.1 会把原生程序写到 stderr 的**警告**当成错误（$ErrorActionPreference=Stop
+# 下直接抛 NativeCommandError）——AOT 发布必带一条 SharpGen 的 IL2104 警告，必须放行；
+# 真正的失败仍然用退出码判。
+$eap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 & dotnet @pubArgs
-if ($LASTEXITCODE -ne 0) { throw "dotnet publish 失败（退出码 $LASTEXITCODE）" }
+$code = $LASTEXITCODE
+$ErrorActionPreference = $eap
+if ($code -ne 0) { throw "dotnet publish 失败（退出码 $code）" }
 
 # ---- 检查：发布出来那个 exe 真的是**GUI 子系统**吗（"不弹黑框"就靠它）----------------
 #   PE 头里 Subsystem 字段：2 = GUI、3 = 控制台。它在 e_lfanew + 0x5C 处（2 字节）。
@@ -144,6 +151,10 @@ try {
 } finally { $fs.Dispose() }
 if ($subsystem -ne 2) { throw "发布出来的 exe 子系统是 $subsystem（期望 2 = GUI），双击会弹黑框" }
 Write-Host "  exe 子系统 = GUI（双击不弹黑框）" -ForegroundColor Green
+
+# NativeAOT 的**原生 .pdb**（约 41MB）不受 DebugType=None 控制、总是会生成。
+# 它是调试符号，发布包里不要（老流程根本没有）：删掉，需要调试时用 bin 下的那份。
+Get-ChildItem $outDir -Filter *.pdb -ErrorAction SilentlyContinue | Remove-Item -Force
 
 # ---- 随手塞一份"怎么用"，省得拷过去之后没人知道怎么退出 ------------------------------
 $readme = @"
