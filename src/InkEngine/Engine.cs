@@ -4871,6 +4871,12 @@ public partial class InkEngine
     private Vector2 _g2LastVec;       // 变换用：上一帧的两指向量（旋转按帧累积，走原逻辑）
     private float _g2AccumDeg;        // 变换用：本次手势累计转过的角度（逆时针为正，同原逻辑）
 
+    /// <summary>一根手指按下那一刻的选区快照。这一下可能在图形工具下被"点框外 = 收起选区"
+    /// 清掉（见 <see cref="ClearSelectionForNewContext"/>）；但它若紧接着升级成双指手势，
+    /// 那个"点框外"其实没发生——手势起手时把选区救回来
+    ///（2026-10-05 真机反馈："选中以后，双指放在别处转圈怎么没反应"）。</summary>
+    private readonly List<Stroke> _touchSelSnapshot = new();
+
     /// <summary>双指上下滑的滚动系数：换算成逻辑像素后走**和鼠标滚轮/上下键同一个**
     /// `ScrollCanvasBy`。2026-10-05 真机反馈"1:1 滑得不够" → 暂定 2 倍；
     /// 觉得快了/还慢，只调这一个数。</summary>
@@ -4909,6 +4915,19 @@ public partial class InkEngine
     {
         stealPointer = false;
         var v = _touch.Down(id, x, y, sizePx, NowMs, DpiScale);
+        if (v == TouchVerdict.Write)
+        {
+            // 单指这一下会走"普通写字那条路"（可能被它清掉选区）——先记快照，
+            // 手势升级时若发现选区没了就靠它救回来（见 BeginTouchTwoFinger）。
+            _touchSelSnapshot.Clear();
+            if (Doc.Selected.Count > 0) _touchSelSnapshot.AddRange(Doc.Selected);
+        }
+        else if (v != TouchVerdict.Ignore)
+        {
+            // 手势要接管：第一根手指可能已经起了别的头（框选工具下那个还没拖的框，
+            // 以及图形工具下"按框外顺手收起选区"）——只能撤，不能 apply。
+            CancelTouchPressMarquee();
+        }
         switch (v)
         {
             case TouchVerdict.Ignore:
@@ -4916,6 +4935,10 @@ public partial class InkEngine
 
             case TouchVerdict.Erase:
                 stealPointer = true;
+                // 可能是"两指变换进行中，第三根手指落下来变成擦"：先把变换收账
+                //（一点没动就不进撤销栈），不然 SelDragging 会一直挂着（松手后全变成拖动）。
+                if (SelDragging) EndSelDrag();
+                _g2Transform = false;
                 CancelTouchStroke();
                 _touchMode = TouchMode.Erase;
                 _drawing = true;
@@ -4959,6 +4982,16 @@ public partial class InkEngine
             default:
                 return false;                      // Write：走原来的写字那条路
         }
+    }
+
+    /// <summary>撤掉第一根手指在框选工具下起的那一个"还没拖的框"（手势接管时用；不能 apply）。
+    /// 不撤的话：旋转/擦除期间框还画在屏幕上，手势结束后它也不走（"松手了框还在"）。</summary>
+    private void CancelTouchPressMarquee()
+    {
+        if (!MarqueeActive) return;
+        MarqueeActive = false;
+        LassoPath.Clear();
+        _dirty = true;
     }
 
     /// <summary>触摸触点移动（按当前模式路由）。返回 true = 已经处理完（调用方直接 return）。</summary>
@@ -5064,6 +5097,7 @@ public partial class InkEngine
 
         _touchMode = TouchMode.None;
         _touch.Reset();
+        _touchSelSnapshot.Clear();
         _g2Transform = false;
         _g2Axis = 0;
         _g2Turned = false;
@@ -5086,6 +5120,7 @@ public partial class InkEngine
         // 留给松手那条路（`EndStroke` 里的 `if (SelDragging) EndSelDrag()`）去收：
         // 它才是真的抬手时刻，而且对鼠标那条路本来就是同一条。
         _touch.Reset();
+        _touchSelSnapshot.Clear();
         _touchMode = TouchMode.None;
         _g2Transform = false;
         _g2Axis = 0;
@@ -5145,20 +5180,29 @@ public partial class InkEngine
     /// <summary>擦除会话里的活触点（画落点反馈用；每次现取，不缓存——避免"出现不消失"）。</summary>
     internal IReadOnlyList<TouchGestures.ContactView> TouchViewsLive => _touch.Views;
 
-    /// <summary>擦一下：**每个触点各擦一下，用的就是鼠标那把橡皮**（2026-10-05 用户口径：
-    /// 不要自编尺寸/行为，直接对接）。整笔擦 = `EraseAt(x, y, EraserRadius)`（碰到就整条删），
-    /// 面积擦 = `EraseRectAt(x, y, 落点框半宽/半高)`——和鼠标按下那一份尺寸完全一致。</summary>
-    private void TouchEraseSample()
+    /// <summary>擦除手势的落点：**所有触点的中心**（没有触点返回 false）。擦除、落点反馈、
+    /// 脏区三处共用这一个点，保证"看见的 = 擦掉的"永远是同一个位置。</summary>
+    internal bool TouchEraseCenter(out Vector2 c)
     {
         var list = _touch.Views;
-        if (list.Count == 0) return;
-        bool pixel = _eraserKind == Tool.PixelEraser;
-        for (int i = 0; i < list.Count; i++)
-        {
-            var p = list[i].Pos;
-            if (pixel) Doc.EraseRectAt(p.X, p.Y, PixelEraserCursorHalfWidthPx, PixelEraserCursorHalfHeightPx);
-            else Doc.EraseAt(p.X, p.Y, EraserRadius);
-        }
+        if (list.Count == 0) { c = default; return false; }
+        float sx = 0f, sy = 0f;
+        for (int i = 0; i < list.Count; i++) { sx += list[i].Pos.X; sy += list[i].Pos.Y; }
+        c = new Vector2(sx / list.Count, sy / list.Count);
+        return true;
+    }
+
+    /// <summary>擦一下：**整个手势只用一个"鼠标橡皮"**，落点 = 所有触点的中心
+    ///（2026-10-05 真机反馈："三个指头出来三个橡皮擦"——一只手应该是一个橡皮，和鼠标同源）。
+    /// 整笔擦 = `EraseAt(中心, EraserRadius)`（碰到就整条删）；
+    /// 面积擦 = `EraseRectAt(中心, 鼠标落点框半宽/半高)`——尺寸和鼠标按下那一份完全一致。</summary>
+    private void TouchEraseSample()
+    {
+        if (!TouchEraseCenter(out var c)) return;
+        if (_eraserKind == Tool.PixelEraser)
+            Doc.EraseRectAt(c.X, c.Y, PixelEraserCursorHalfWidthPx, PixelEraserCursorHalfHeightPx);
+        else
+            Doc.EraseAt(c.X, c.Y, EraserRadius);
         _dirty = true;
     }
 
@@ -5172,6 +5216,21 @@ public partial class InkEngine
         _g2Turned = false;
         _g2Tap = false;
         _g2Transform = false;
+
+        // 第一根手指按下时可能把选区清掉了（图形工具"点框外 = 收起"，见 ClearSelectionForNewContext）
+        // ——这一下紧接着升级成双指手势，说明那个"点框外"根本没发生。把选区救回来，
+        // 手势照常变换（2026-10-05 真机反馈："选中以后双指放别处转圈怎么没反应"）。
+        if (Doc.Selected.Count == 0 && _touchSelSnapshot.Count > 0)
+        {
+            foreach (var st in _touchSelSnapshot)
+                if (Doc.Strokes.Contains(st)) Doc.Selected.Add(st);
+            if (Doc.Selected.Count > 0)
+            {
+                _touchSelected = true;
+                _dirty = true;
+            }
+        }
+        _touchSelSnapshot.Clear();
 
         if (Doc.Selected.Count == 0) return;
 
@@ -5306,6 +5365,10 @@ public partial class InkEngine
             _touch.ClearLongPress();
             if (_touch.TryPair(out var pair))
             {
+                // 有选中时这两指可能已经把变换起头了（SelDragging）——呼出盘之前先收账
+                //（一点没动就不进撤销栈），不然盘一开这个拖动会一直挂着。
+                if (SelDragging) EndSelDrag();
+                _g2Transform = false;
                 _touchMode = TouchMode.Radial;
                 OpenRadialPaletteFromTouch((pair.A.X + pair.B.X) * 0.5f,
                                            (pair.A.Y + pair.B.Y) * 0.5f, sticky: false);

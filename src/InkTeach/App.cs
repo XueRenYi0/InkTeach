@@ -28367,7 +28367,7 @@ internal sealed partial class App : InkEngine.InkEngine
                   $"1 指 {v1}，2 指 {v2b}，3 指 {v3c}");
         }
 
-        // ---- ⑦ 三指一起落下 = 擦（不依赖面积；用的是鼠标那把橡皮：整笔擦）----
+        // ---- ⑦ 三指一起落下 = 擦（不依赖面积；鼠标那把橡皮：整笔擦；落点 = 三指中心）----
         {
             EraserKindForTest = Tool.Eraser;     // 固定种类，免得受本机偏好影响
             Doc.Clear();
@@ -28637,6 +28637,87 @@ internal sealed partial class App : InkEngine.InkEngine
             Check("触摸 + 橡皮工具：落点反馈 = 鼠标同款（按着出现、松手消失）",
                   !hover && ring && gone && rect && gone2,
                   $"悬停有落点 = {hover}，整笔擦圆环 = {ring}，面积擦矩形 = {rect}，松手后无 = {gone}/{gone2}");
+        }
+
+        // ---- ⑰ 选中后：双指放在**别处**也能变换（真机反馈的场景）----
+        {
+            // 场景 1：走真机的路子——长按选中，再在白板空处放两指转 90°
+            TouchResetForTest();
+            Doc.Clear();
+            Doc.ClearHistory();
+            var s2 = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 30f * dpi };
+            for (int i = 0; i <= 20; i++) s2.AddPoint(cx - 200 + i * 20, cy, 0.9f, i);
+            Doc.AddStroke(s2);
+            Doc.InvalidateAll();
+            Tool = Tool.Pen;
+            SettleFrames(150);
+
+            SendTouchesSized(true, (cx, cy, 24f));
+            for (int k = 0; k < 8; k++) { SettleFrames(100); SendTouchesSized(true, (cx, cy, 24f)); }
+            SendTouchesSized(false, (cx, cy, 24f));
+            SettleFrames(150);
+            bool selOK = Doc.Selected.Count == 1;
+
+            float w2 = s2.WorldBounds.MaxX - s2.WorldBounds.MinX;
+            float fx = cx + 320, fy = cy + 300;
+            // 竖着的两指（间隔 200）转到水平（间隔 300）：逆时针 90°、放大 1.5 倍
+            Touch2Down(fx, fy - 100, fx, fy + 100);
+            Touch2Move(fx - 150, fy, fx + 150, fy);
+            SettleFrames(80);
+            bool rot2 = SelRotating;
+            float deg2 = SelRotationDegrees;
+            Touch2Up(fx - 150, fy, fx + 150, fy);
+            SettleFrames(250);
+            var after2 = s2.WorldBounds;
+            Check("选中后双指放在别处 = 缩放 + 旋转（真机路径：长按选中）",
+                  selOK && rot2 && deg2 > 82f && deg2 < 98f
+                  && (after2.MaxY - after2.MinY) > w2 * 1.2f,
+                  $"选中 = {selOK}，旋转中 = {rot2}，读数 {deg2:F0}°，纵向 {(after2.MaxY - after2.MinY):F0}（原横长 {w2:F0}）");
+
+            // 场景 2：图形工具下按在框外会先"收起选区"（原逻辑）——双指手势要把它救回来
+            var s3 = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 30f * dpi };
+            for (int i = 0; i <= 20; i++) s3.AddPoint(cx - 200 + i * 20, cy, 0.9f, i);
+            Doc.AddStroke(s3);
+            Doc.InvalidateAll();
+            Doc.Selected.Clear();
+            Doc.Selected.Add(s3);
+            Tool = Tool.Line;
+            SettleFrames(100);
+            float w3 = s3.WorldBounds.MaxX - s3.WorldBounds.MinX;
+            Touch2Down(fx, fy - 100, fx, fy + 100);
+            Touch2Move(fx - 150, fy, fx + 150, fy);
+            SettleFrames(80);
+            bool rot3 = SelRotating;
+            Touch2Up(fx - 150, fy, fx + 150, fy);
+            SettleFrames(250);
+            var after3 = s3.WorldBounds;
+            Check("图形工具下按下把选区清了 → 双指手势仍能变换（选区救回）",
+                  rot3 && (after3.MaxY - after3.MinY) > w3 * 1.2f,
+                  $"旋转中 = {rot3}，纵向 {(after3.MaxY - after3.MinY):F0}（原横长 {w3:F0}）");
+
+            // 场景 3：框选工具下双指放别处——第一根手指起的框要被手势撤掉，不能留着
+            var s4 = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 30f * dpi };
+            for (int i = 0; i <= 20; i++) s4.AddPoint(cx - 200 + i * 20, cy, 0.9f, i);
+            Doc.AddStroke(s4);
+            Doc.InvalidateAll();
+            Doc.Selected.Clear();
+            Doc.Selected.Add(s4);
+            Tool = Tool.Marquee;
+            SettleFrames(100);
+            float w4 = s4.WorldBounds.MaxX - s4.WorldBounds.MinX;
+            Touch2Down(fx, fy - 100, fx, fy + 100);
+            Touch2Move(fx - 150, fy, fx + 150, fy);
+            SettleFrames(80);
+            bool rot4 = SelRotating;
+            bool mq = MarqueeActive;             // 手势期间不该还挂着框
+            Touch2Up(fx - 150, fy, fx + 150, fy);
+            SettleFrames(250);
+            var after4 = s4.WorldBounds;
+            Check("框选工具下双指放别处 = 变换（误起的框被撤掉）",
+                  rot4 && !mq && (after4.MaxY - after4.MinY) > w4 * 1.2f,
+                  $"旋转中 = {rot4}，框还在 = {mq}，纵向 {(after4.MaxY - after4.MinY):F0}（原横长 {w4:F0}）");
+            Tool = Tool.Pen;
+            TouchResetForTest();
         }
 
         // 收尾

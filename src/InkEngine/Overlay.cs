@@ -2320,27 +2320,21 @@ internal sealed partial class OverlayWindow : IDisposable
             _cursorRectPrev = RectF.Empty;
         }
 
-        // 多指擦会话（三指 / 手掌）的落点反馈：每个活触点一个"鼠标同款"落点，每帧重画、
-        // 一帧里触点可能移动很远——脏区照上面 DrawnCursor 同一套账：当帧触点的包围盒 ∪
-        // 上一帧那一份；结束那一帧把最后的位置再擦一次（不然旧圆环/方框就"留在屏幕上"）。
-        if (app.TouchEraseSessionActive)
+        // 多指擦会话（三指 / 手掌）的落点反馈：落点 = 所有触点的中心，一个"鼠标同款"落点，
+        // 每帧重画、一帧里可能移动很远——脏区照上面 DrawnCursor 同一套账：当帧 ∪ 上一帧；
+        // 结束那一帧把最后的位置再擦一次（不然旧的圆环/方框就"留在屏幕上"）。
+        if (app.TouchEraseSessionActive && app.TouchEraseCenter(out var ec))
         {
             float pad = app.TouchEraseSessionPixel
                 ? MathF.Max(app.PixelEraserCursorHalfWidthPx, app.PixelEraserCursorHalfHeightPx) + 8f
                 : app.EraserRadius * 1.35f + 10f;
             var box = RectF.Empty;
-            foreach (var v in app.TouchViewsLive)
-            {
-                box.Add(v.Pos.X - pad, v.Pos.Y - pad);
-                box.Add(v.Pos.X + pad, v.Pos.Y + pad);
-            }
-            if (!box.IsEmpty)
-            {
-                var cur = CanvasRectToWindow(box);
-                r.Add(cur);
-                if (!_touchEraseRectPrev.IsEmpty) r.Add(_touchEraseRectPrev);
-                _touchEraseRectPrev = cur;
-            }
+            box.Add(ec.X - pad, ec.Y - pad);
+            box.Add(ec.X + pad, ec.Y + pad);
+            var cur = CanvasRectToWindow(box);
+            r.Add(cur);
+            if (!_touchEraseRectPrev.IsEmpty) r.Add(_touchEraseRectPrev);
+            _touchEraseRectPrev = cur;
         }
         else if (!_touchEraseRectPrev.IsEmpty)
         {
@@ -5400,25 +5394,22 @@ internal sealed partial class OverlayWindow : IDisposable
 
     /// <summary>
     /// **多指擦会话的落点反馈**（三指 / 手掌；2026-10-05 实测："能擦，但看不见橡皮"）：
-    /// 每个活触点上画一个**和鼠标橡皮一模一样的落点**——形状、尺寸、颜色全走鼠标那份
+    /// 落点 = **所有触点的中心**（一只手 = 一个橡皮，和鼠标同源；不再每个触点画一个，
+    /// 真机反馈"三个指头出来三个橡皮擦"）；形状、尺寸、颜色全走鼠标那份
     /// （整笔擦 = 圆环、面积擦 = 矩形），真正擦的尺寸和它同一份，所以"看见的 = 擦掉的"。
     /// 单指按着橡皮工具走 `DrawToolCursor`（引擎把 DrawnCursor 打开了），不在这一条里。
     /// 数据现取现画、模式一落就不画——没有缓存，不会"出现不消失"。
     /// </summary>
     private void DrawTouchEraseFeedback(InkEngine app)
     {
-        if (!app.TouchEraseSessionActive) return;
-        bool pixel = app.TouchEraseSessionPixel;
-        foreach (var v in app.TouchViewsLive)
+        if (!app.TouchEraseSessionActive || !app.TouchEraseCenter(out var c)) return;
+        if (app.TouchEraseSessionPixel)
+            DrawEraserBoxAt(c, MathF.Max(1f, app.PixelEraserCursorHalfWidthPx),
+                               MathF.Max(1f, app.PixelEraserCursorHalfHeightPx));
+        else
         {
-            if (pixel)
-                DrawEraserBoxAt(v.Pos, MathF.Max(1f, app.PixelEraserCursorHalfWidthPx),
-                                       MathF.Max(1f, app.PixelEraserCursorHalfHeightPx));
-            else
-            {
-                float r = MathF.Max(1f, app.EraserRadius);
-                DrawRingCursor(v.Pos, r, r, new Color4(0.35f, 0.55f, 0.95f, 0.10f));
-            }
+            float r = MathF.Max(1f, app.EraserRadius);
+            DrawRingCursor(c, r, r, new Color4(0.35f, 0.55f, 0.95f, 0.10f));
         }
     }
 
