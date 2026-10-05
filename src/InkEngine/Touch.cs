@@ -265,11 +265,4 @@ internal sealed class TouchGestures
         if (r.IsEmpty) return r;
         return r.Inflate(inflate);
     }
-
-    /// <summary>
-    /// 三指擦的橡皮半宽（**固定尺寸**）：动态橡皮（P1，按速度定大小）上线前先给一个够用的固定值，
-    /// 夹在调用方给的上下限里（面积不参与）。
-    /// </summary>
-    public float EraseHalfWidth(float dpi, float minLogical, float maxLogical)
-        => Math.Clamp(20f * dpi, minLogical * dpi, maxLogical * dpi);
 }

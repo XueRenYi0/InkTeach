@@ -28367,8 +28367,9 @@ internal sealed partial class App : InkEngine.InkEngine
                   $"1 指 {v1}，2 指 {v2b}，3 指 {v3c}");
         }
 
-        // ---- ⑦ 三指一起落下 = 擦（不依赖面积）----
+        // ---- ⑦ 三指一起落下 = 擦（不依赖面积；用的是鼠标那把橡皮：整笔擦）----
         {
+            EraserKindForTest = Tool.Eraser;     // 固定种类，免得受本机偏好影响
             Doc.Clear();
             Doc.ClearHistory();
             var s = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = 30f * dpi };
@@ -28428,7 +28429,7 @@ internal sealed partial class App : InkEngine.InkEngine
                   $"({back.MinX:F0},{back.MinY:F0}) vs ({before.MinX:F0},{before.MinY:F0})");
         }
 
-        // ---- ⑨ 选中后：双指 = 缩放（距离比）/ 旋转（夹角差）----
+        // ---- ⑨ 选中后：双指 = 缩放 + 旋转（**不含平移**；旋转接原逻辑、带度数）----
         {
             Doc.Selected.Clear();
             Doc.Selected.Add(Doc.Strokes[^1]);
@@ -28437,20 +28438,26 @@ internal sealed partial class App : InkEngine.InkEngine
             float w0 = before.MaxX - before.MinX;
             float cxm = (before.MinX + before.MaxX) * 0.5f, cym = (before.MinY + before.MaxY) * 0.5f;
 
-            // 两指从 100px 张到 200px（放大一倍），同时把夹角转 90°
+            // 两指从 300px 宽张到 600px（放大一倍），同时把夹角转 90°；
+            // 两指中点**故意整体右移 100px**——移动已经和缩放/旋转分开，中点移动不该带走对象。
             Touch2Down(cxm - 150, cym, cxm + 150, cym);
-            Touch2Move(cxm, cym - 300, cxm, cym + 300);
+            Touch2Move(cxm + 100, cym - 300, cxm + 100, cym + 300);
             SettleFrames(80);
-            Touch2Up(cxm, cym - 300, cxm, cym + 300);
+            float degDuring = SelRotationDegrees;
+            bool rotating = SelRotating;
+            Touch2Up(cxm + 100, cym - 300, cxm + 100, cym + 300);
             SettleFrames(250);
             var after = Doc.Strokes[^1].WorldBounds;
             float h1 = after.MaxY - after.MinY;
+            float cx1 = (after.MinX + after.MaxX) * 0.5f, cy1 = (after.MinY + after.MaxY) * 0.5f;
             // 原始笔画是**零高度的横线**（点都在同一条 y 上）：转 90° 之后"长边"竖过来，
             // 所以量**纵向**长度（≈ 2 倍原横长 = 缩放×2 + 旋转 90° 一起验到）。
-            // （旧断言量宽度：横线转 90° 后宽度 = 原高度 = 0，永远红——2026-10-05 修。）
-            Check("选中后双指 = 缩放 + 旋转（一步撤销）",
-                  h1 > w0 * 1.4f,
-                  $"纵向 {before.MaxY - before.MinY:F0} → {h1:F0}（原横长 {w0:F0}，期望 > {w0 * 1.4f:F0}）");
+            // 顺时针 90°（屏幕上右→下）= 原逻辑的 -90°（逆时针为正）——度数胶囊就地读一次。
+            Check("选中后双指 = 缩放 + 旋转、不平移（度数胶囊在）",
+                  h1 > w0 * 1.4f && MathF.Abs(cx1 - cxm) < 6f && MathF.Abs(cy1 - cym) < 6f
+                  && rotating && MathF.Abs(degDuring) > 80f && MathF.Abs(degDuring) < 100f,
+                  $"纵向 {before.MaxY - before.MinY:F0} → {h1:F0}，中心 ({cxm:F0},{cym:F0}) → ({cx1:F0},{cy1:F0})，"
+                  + $"旋转中 = {rotating}，读数 {degDuring:F0}°");
             Doc.Undo();
             SettleFrames(150);
             var back = Doc.Strokes[^1].WorldBounds;
@@ -28565,6 +28572,7 @@ internal sealed partial class App : InkEngine.InkEngine
         // ---- ⑮ 手掌（大面积）= 擦：**相对基线**判定；按住不动不擦、移动才擦 ----
         {
             TouchResetForTest();
+            EraserKindForTest = Tool.Eraser;     // 同 ⑦：固定成整笔擦
             RadialCancelForTest("用例起手");
             Doc.Clear();
             Doc.ClearHistory();
@@ -28600,6 +28608,35 @@ internal sealed partial class App : InkEngine.InkEngine
             SetUiPref("touch.palm", null);
             LoadTouchPrefs();
             TouchResetForTest();
+        }
+
+        // ---- ⑯ 触摸 + 橡皮工具：落点反馈 = 鼠标同款（按着出现、松手消失）----
+        {
+            TouchResetForTest();
+            Tool = Tool.Eraser;                  // 整笔擦 → 圆环
+            SettleFrames(60);
+            bool hover = DrawnCursor != ToolCursorShape.None;     // 触摸悬停不该有落点（会留在屏上）
+            SendTouchesSized(true, (cx - 320, cy + 360, 24f));
+            SettleFrames(60);
+            bool ring = DrawnCursor == ToolCursorShape.Ring;
+            SendTouchesSized(false, (cx - 320, cy + 360, 24f));
+            SettleFrames(80);
+            bool gone = DrawnCursor == ToolCursorShape.None;
+
+            Tool = Tool.PixelEraser;             // 面积擦 → 同款矩形
+            SettleFrames(60);
+            SendTouchesSized(true, (cx - 320, cy + 360, 24f));
+            SettleFrames(60);
+            bool rect = DrawnCursor == ToolCursorShape.Rect;
+            SendTouchesSized(false, (cx - 320, cy + 360, 24f));
+            SettleFrames(80);
+            bool gone2 = DrawnCursor == ToolCursorShape.None;
+            Tool = Tool.Pen;
+            TouchResetForTest();
+
+            Check("触摸 + 橡皮工具：落点反馈 = 鼠标同款（按着出现、松手消失）",
+                  !hover && ring && gone && rect && gone2,
+                  $"悬停有落点 = {hover}，整笔擦圆环 = {ring}，面积擦矩形 = {rect}，松手后无 = {gone}/{gone2}");
         }
 
         // 收尾

@@ -4867,7 +4867,14 @@ public partial class InkEngine
     private bool _g2Turned;           // 这一次手势已经翻过页（一次手势只翻一页）
     private bool _g2Transform;        // 有选中：这一次双指是在变换对象
     private bool _g2Tap;              // 两指点按候选（松手时结算）
-    private float _g2Dist0, _g2Ang0;  // 变换用：起始两指距离 / 夹角
+    private float _g2Dist0;           // 变换用：起始两指距离
+    private Vector2 _g2LastVec;       // 变换用：上一帧的两指向量（旋转按帧累积，走原逻辑）
+    private float _g2AccumDeg;        // 变换用：本次手势累计转过的角度（逆时针为正，同原逻辑）
+
+    /// <summary>双指上下滑的滚动系数：换算成逻辑像素后走**和鼠标滚轮/上下键同一个**
+    /// `ScrollCanvasBy`。2026-10-05 真机反馈"1:1 滑得不够" → 暂定 2 倍；
+    /// 觉得快了/还慢，只调这一个数。</summary>
+    private const float TouchScrollGain = 2f;
     private Vector2 _roamLast;        // 单指漫游：上一帧位置
     private uint _roamId;             // 单指漫游：认哪一根手指（其它触点的移动不许开船）
     private bool _radialTouchMode;    // 轮盘这次是触屏呼出的（松手改成触点驱动；没划动=留在盘上）
@@ -4915,7 +4922,9 @@ public partial class InkEngine
                 Native.SetCapture(hWnd);
                 GcLatency.Enter();
                 BeginStrokeMeasure();
-                Doc.BeginEraseRect();
+                // **跟鼠标同一条路**（2026-10-05 用户口径）：批次按当前那把橡皮开
+                //（整笔擦 = BeginErase、面积擦 = BeginEraseRect），下面的 TouchEraseSample 同源。
+                if (_eraserKind == Tool.PixelEraser) Doc.BeginEraseRect(); else Doc.BeginErase();
                 // **手掌按下先不擦**（移动才擦）：手掌落在屏上不动是"手托着"，不该直接把下面
                 // 的板书擦掉；三指擦照旧按下即擦（那是主动动作）。见 TouchGestures 的注释。
                 if (!_touch.LastDownWasPalm) TouchEraseSample();
@@ -5001,11 +5010,9 @@ public partial class InkEngine
                 // 把相机拽得乱跳"；真机上同理（多报的触点不该影响漫游）。
                 if (id != _roamId) return true;
                 var p = new Vector2(x, y);
-                ViewOffsetY += p.Y - _roamLast.Y;   // 1:1 跟手（画布单位 = 物理像素）
+                float dy = p.Y - _roamLast.Y;
                 _roamLast = p;
-                ClampViewOffset();
-                ScrollBarActiveAtMs = NowMs;
-                _dirty = true;
+                ScrollCanvasBy(dy / DpiScale);      // 和滚轮/上下键同一个函数（1:1 逻辑像素）
                 return true;
             }
         }
@@ -5129,61 +5136,28 @@ public partial class InkEngine
         _dirty = true;
     }
 
-    /// <summary>触摸擦除的视觉反馈（触摸没有悬停光标，擦的时候要让人看见"会擦掉哪一块"）。
-    /// 每帧由 Overlay 调 <see cref="BuildTouchEraseFeedback"/> 填充；坐标 = 画布。</summary>
-    internal readonly List<(Vector2 C, float HW, float HH)> TouchEraseBoxesDraw = new();
-    internal readonly List<(Vector2 C, float R)> TouchEraseRingsDraw = new();
+    /// <summary>三指 / 手掌擦会话正在跑（Overlay 的落点反馈与脏区都读它）。</summary>
+    internal bool TouchEraseSessionActive => _touchMode == TouchMode.Erase;
 
-    /// <summary>组装"触摸擦除反馈"（每帧一次；没有内容就清空）。</summary>
-    internal void BuildTouchEraseFeedback()
-    {
-        TouchEraseBoxesDraw.Clear();
-        TouchEraseRingsDraw.Clear();
+    /// <summary>这次擦除会话用的是不是面积擦（跟随用户当前那把橡皮，和鼠标同源）。</summary>
+    internal bool TouchEraseSessionPixel => _eraserKind == Tool.PixelEraser;
 
-        // ① 三指 / 手掌擦会话：每个触点画**真正会擦掉的那块**（和 TouchEraseSample 同一份尺寸，
-        //    所以"看见的 = 擦掉的"）。
-        if (_touchMode == TouchMode.Erase)
-        {
-            foreach (var v in _touch.Views)
-            {
-                float half = _touch.EraseHalfWidth(DpiScale, 14f, 90f);
-                if (v.Size > 0f) half = Math.Clamp(v.Size * 0.5f, half, 90f * DpiScale);
-                TouchEraseBoxesDraw.Add((v.Pos, half, half * 1.618f));
-            }
-            return;
-        }
+    /// <summary>擦除会话里的活触点（画落点反馈用；每次现取，不缓存——避免"出现不消失"）。</summary>
+    internal IReadOnlyList<TouchGestures.ContactView> TouchViewsLive => _touch.Views;
 
-        // ② 橡皮工具正被**触摸**按着：按工具的语义画（整笔擦=圆环、面积擦=矩形）。
-        //    笔 / 鼠标那条路有自己的光标（Overlay.DrawToolCursor），这里只管触摸。
-        if (_drawing && _activePointerType == Native.PT_TOUCH && _touch.Views.Count > 0)
-        {
-            var tool = EffectiveTool;
-            if (tool == Tool.Eraser)
-            {
-                float r = EraserRadius;
-                foreach (var v in _touch.Views) TouchEraseRingsDraw.Add((v.Pos, r));
-            }
-            else if (tool == Tool.PixelEraser)
-            {
-                float hw = PixelEraserCursorHalfWidthPx, hh = PixelEraserCursorHalfHeightPx;
-                foreach (var v in _touch.Views) TouchEraseBoxesDraw.Add((v.Pos, hw, hh));
-            }
-        }
-    }
-
-    /// <summary>擦一次：**每个触点各擦一块**（尺寸见下；三指 = 三块小橡皮并排，等效大手擦）。</summary>
+    /// <summary>擦一下：**每个触点各擦一下，用的就是鼠标那把橡皮**（2026-10-05 用户口径：
+    /// 不要自编尺寸/行为，直接对接）。整笔擦 = `EraseAt(x, y, EraserRadius)`（碰到就整条删），
+    /// 面积擦 = `EraseRectAt(x, y, 落点框半宽/半高)`——和鼠标按下那一份尺寸完全一致。</summary>
     private void TouchEraseSample()
     {
         var list = _touch.Views;
         if (list.Count == 0) return;
+        bool pixel = _eraserKind == Tool.PixelEraser;
         for (int i = 0; i < list.Count; i++)
         {
-            float half = _touch.EraseHalfWidth(DpiScale, 14f, 90f);
-            // 报面积时：**手掌按真实尺寸来**（地板 = 固定值、天花板 = 90 逻辑像素）；
-            // 三指的细手指尺寸小，夹完仍是固定值，不受影响。
-            if (list[i].Size > 0f) half = Math.Clamp(list[i].Size * 0.5f, half, 90f * DpiScale);
             var p = list[i].Pos;
-            Doc.EraseRectAt(p.X, p.Y, half, half * 1.618f);
+            if (pixel) Doc.EraseRectAt(p.X, p.Y, PixelEraserCursorHalfWidthPx, PixelEraserCursorHalfHeightPx);
+            else Doc.EraseAt(p.X, p.Y, EraserRadius);
         }
         _dirty = true;
     }
@@ -5209,9 +5183,14 @@ public partial class InkEngine
         {
             _g2Transform = true;
             _g2Dist0 = MathF.Max(1f, Vector2.Distance(p.A, p.B));
-            _g2Ang0 = MathF.Atan2(_g2StartVec.Y, _g2StartVec.X);
+            _g2LastVec = _g2StartVec;
+            _g2AccumDeg = 0f;
+            // 旋转读数走**原来的那套**（SelRotation* 由 Overlay 画度数胶囊，和鼠标拖旋转柄同一份）。
+            SelRotationSnapped = false;
+            SelRotationReadsPose = false;
+            SelRotationReadsInclination = false;
             _touchSelected = true;
-            Console.WriteLine("触摸：双指 → 变换选中对象（移动 / 缩放 / 旋转）");
+            Console.WriteLine("触摸：双指 → 变换选中对象（缩放 / 旋转；移动用单指拖）");
         }
     }
 
@@ -5223,22 +5202,31 @@ public partial class InkEngine
 
         if (_g2Transform)
         {
-            // 绕**选区中心**：先平移把中心对到原点，缩放/旋转，再放回去（并叠上中点的位移）
+            // 绕**选区中心**：先平移把中心对到原点，缩放/旋转，再放回去。
+            // 2026-10-05 用户口径：**移动和缩放/旋转分开**——双指只管缩放+旋转（绕中心、
+            // 不带平移，少一个互相打架的自由度），移动走单指拖（和鼠标同一条路）。
             var aabb = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
             var center = new Vector2((aabb.MinX + aabb.MaxX) * 0.5f, (aabb.MinY + aabb.MaxY) * 0.5f);
             float d1 = Vector2.Distance(p.A, p.B);
             float scale = Math.Clamp(d1 / _g2Dist0, 0.1f, 10f);
-            float ang = MathF.Atan2((p.B - p.A).Y, (p.B - p.A).X) - _g2Ang0;
-            // 旋转吸附：靠近 0/90/180/270 的 2° 内就吸上去（和鼠标那套同一口味，但更松）
-            const float snap = 2f * MathF.PI / 180f;
-            float q = MathF.Round(ang / (MathF.PI / 2f)) * (MathF.PI / 2f);
-            if (MathF.Abs(ang - q) <= snap) ang = q;
 
-            var move = mid - _g2StartMid;
+            // 旋转对接原逻辑：每帧一小步累积（RotationStepDegrees，逆时针为正、不设上限），
+            // 吸附走原来的软吸附（90° 整数倍 3° 内），矩阵交给 RotateMatrix（全工程唯一换算处）。
+            var vec = p.B - p.A;
+            _g2AccumDeg += SelectionHandles.RotationStepDegrees(Vector2.Zero, _g2LastVec, vec);
+            _g2LastVec = vec;
+            float deg = SelectionHandles.SnapRotationDegrees(_g2AccumDeg, gridSnap: false, noSnap: false,
+                                                             out bool snapped);
+            if (snapped) _g2AccumDeg = deg;    // 修正累积：标签上的数 = 屏幕上转到的角
+
             _selDragMatrix = Matrix3x2.CreateTranslation(-center.X, -center.Y)
                            * Matrix3x2.CreateScale(scale)
-                           * Matrix3x2.CreateRotation(ang)
-                           * Matrix3x2.CreateTranslation(center + move);
+                           * SelectionHandles.RotateMatrix(deg, Vector2.Zero)
+                           * Matrix3x2.CreateTranslation(center);
+            // 度数胶囊：和鼠标拖旋转柄共用同一套显示状态（Overlay 照旧画）。
+            SelRotating = true;
+            SelRotationDegrees = deg;
+            SelRotationSnapped = snapped;
             _selDragMoved = true;
             _dirty = true;
             return;
@@ -5259,10 +5247,9 @@ public partial class InkEngine
 
         if (_g2Axis == 2)
         {
-            ViewOffsetY += dy;                 // 上下 = 漫游
-            ClampViewOffset();
-            ScrollBarActiveAtMs = NowMs;
-            _dirty = true;
+            // 上下 = 漫游：走**鼠标滚轮/上下键同一个** ScrollCanvasBy（不再自己写相机数学）。
+            // 系数见 TouchScrollGain（真机反馈 1:1 不够，暂定 2 倍）。
+            ScrollCanvasBy(dy * TouchScrollGain / DpiScale);
             return;
         }
 
@@ -6552,8 +6539,17 @@ public partial class InkEngine
             // CaptureFrameHidden = "正在抓屏的那一瞬"：取景框和**落点光标**都不画。
             // 光标是琥珀色的，留着它就会被"直接截取"拍进图里（自检抓到过：图片最外一圈
             // 多出 15 个琥珀像素——拖框正好收在角上，光标就压在那一角）。
-            if (PassThrough || !PointerInside || LastPointerType == Native.PT_TOUCH
-                || CaptureFrameHidden)
+            //
+            // 触摸默认不画（手指没有悬停，画了会留在屏幕上）——**但橡皮例外**：
+            // 手指按着擦的时候没有落点反馈就是"看不见橡皮擦"（2026-10-05 用户实测），
+            // 所以擦除进行中把鼠标那套落点原样搬过来（形状/尺寸/颜色走同一份代码），
+            // 松手（_drawing 落）立刻消失。多指擦会话（TouchMode.Erase）走会话专用反馈，
+            // 不在这一条里（它按每个触点画，脏区由 ComputeTransientBounds 管）。
+            bool touchEraserCursor = LastPointerType == Native.PT_TOUCH
+                                     && _drawing && _touchMode == TouchMode.Write
+                                     && (EffectiveTool == Tool.Eraser || EffectiveTool == Tool.PixelEraser);
+            if (PassThrough || !PointerInside || CaptureFrameHidden
+                || (LastPointerType == Native.PT_TOUCH && !touchEraserCursor))
                 return ToolCursorShape.None;
 
             // 指针停在界面块上（接输入小窗 / 图库面板）：这一圈落点反馈该消失。
@@ -11976,6 +11972,9 @@ public partial class InkEngine
 
     /// <summary>上次用的橡皮形态（整笔擦 / 面积擦）——按 Ctrl+E 时切回它，见 SetUiPref("eraserKind")。</summary>
     private Tool _eraserKind = Tool.Eraser;
+
+    /// <summary>自检用：设置"记住的橡皮种类"（三指 / 手掌擦跟随它，和鼠标同源）。</summary>
+    internal Tool EraserKindForTest { get => _eraserKind; set => _eraserKind = value; }
 
     /// <summary>
     /// 工具键的**单击**逻辑（2026-09-30 收口：双击/长按那套手势全部取消，只留单击；

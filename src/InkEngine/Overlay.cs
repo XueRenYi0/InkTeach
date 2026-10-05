@@ -369,6 +369,8 @@ internal sealed partial class OverlayWindow : IDisposable
     /// 只算当前位置的话，旧框留在原地的那一条就成了"擦不掉的竖线 / 变暗的带子"——
     /// 用户 2026-09-30 报的"橡皮左侧 / 左上侧靠近墨迹时出现细密竖线、颜色变深"就是它。</summary>
     private RectF _cursorRectPrev = RectF.Empty;
+    /// <summary>上一帧多指擦会话的落点反馈包围盒：结束那一帧再擦一次旧位置（"不消失"就出在这）。</summary>
+    private RectF _touchEraseRectPrev = RectF.Empty;
 
     /// <summary>
     /// 右缘滚动条那一条。**单独成一块脏区**，不并进静止图元的联合包围盒
@@ -2170,8 +2172,7 @@ internal sealed partial class OverlayWindow : IDisposable
             DrawShapeInclination(app);
             DrawLaser(app);
             DrawRadialPalette(app);   // 呼出盘压着墨和激光；落点反馈（下面那一句）在它上面
-            app.BuildTouchEraseFeedback();
-            DrawTouchEraseFeedback(app);   // 触摸擦除反馈（触摸没有悬停光标，就在触点上画）
+            DrawTouchEraseFeedback(app);   // 多指擦会话的落点（单指橡皮走 DrawToolCursor 那条）
             DrawToolCursor(app);
             DrawMarquee(app);
 
@@ -2317,6 +2318,34 @@ internal sealed partial class OverlayWindow : IDisposable
             // 落点反馈消失了（换工具 / 指针出界）：最后再擦一次它原来的位置。
             r.Add(_cursorRectPrev);
             _cursorRectPrev = RectF.Empty;
+        }
+
+        // 多指擦会话（三指 / 手掌）的落点反馈：每个活触点一个"鼠标同款"落点，每帧重画、
+        // 一帧里触点可能移动很远——脏区照上面 DrawnCursor 同一套账：当帧触点的包围盒 ∪
+        // 上一帧那一份；结束那一帧把最后的位置再擦一次（不然旧圆环/方框就"留在屏幕上"）。
+        if (app.TouchEraseSessionActive)
+        {
+            float pad = app.TouchEraseSessionPixel
+                ? MathF.Max(app.PixelEraserCursorHalfWidthPx, app.PixelEraserCursorHalfHeightPx) + 8f
+                : app.EraserRadius * 1.35f + 10f;
+            var box = RectF.Empty;
+            foreach (var v in app.TouchViewsLive)
+            {
+                box.Add(v.Pos.X - pad, v.Pos.Y - pad);
+                box.Add(v.Pos.X + pad, v.Pos.Y + pad);
+            }
+            if (!box.IsEmpty)
+            {
+                var cur = CanvasRectToWindow(box);
+                r.Add(cur);
+                if (!_touchEraseRectPrev.IsEmpty) r.Add(_touchEraseRectPrev);
+                _touchEraseRectPrev = cur;
+            }
+        }
+        else if (!_touchEraseRectPrev.IsEmpty)
+        {
+            r.Add(_touchEraseRectPrev);
+            _touchEraseRectPrev = RectF.Empty;
         }
 
         if (app.MarqueeActive)
@@ -5370,17 +5399,27 @@ internal sealed partial class OverlayWindow : IDisposable
     }
 
     /// <summary>
-    /// **触摸擦除的视觉反馈**（2026-10-05 用户实测："三指/手指橡皮能擦，但看不见橡皮"）：
-    /// 触摸没有悬停光标，所以擦的时候把"会擦掉的那一块 / 那一圈"直接画在触点位置上。
-    /// 数据由 <see cref="InkEngine.BuildTouchEraseFeedback"/> 每帧组装（尺寸和真正擦除的同一份）。
+    /// **多指擦会话的落点反馈**（三指 / 手掌；2026-10-05 实测："能擦，但看不见橡皮"）：
+    /// 每个活触点上画一个**和鼠标橡皮一模一样的落点**——形状、尺寸、颜色全走鼠标那份
+    /// （整笔擦 = 圆环、面积擦 = 矩形），真正擦的尺寸和它同一份，所以"看见的 = 擦掉的"。
+    /// 单指按着橡皮工具走 `DrawToolCursor`（引擎把 DrawnCursor 打开了），不在这一条里。
+    /// 数据现取现画、模式一落就不画——没有缓存，不会"出现不消失"。
     /// </summary>
     private void DrawTouchEraseFeedback(InkEngine app)
     {
-        foreach (var b in app.TouchEraseBoxesDraw)
-            DrawEraserBoxAt(b.C, MathF.Max(1f, b.HW), MathF.Max(1f, b.HH));
-        foreach (var r in app.TouchEraseRingsDraw)
-            DrawRingCursor(r.C, MathF.Max(1f, r.R), MathF.Max(1f, r.R),
-                           new Color4(0.35f, 0.55f, 0.95f, 0.10f));
+        if (!app.TouchEraseSessionActive) return;
+        bool pixel = app.TouchEraseSessionPixel;
+        foreach (var v in app.TouchViewsLive)
+        {
+            if (pixel)
+                DrawEraserBoxAt(v.Pos, MathF.Max(1f, app.PixelEraserCursorHalfWidthPx),
+                                       MathF.Max(1f, app.PixelEraserCursorHalfHeightPx));
+            else
+            {
+                float r = MathF.Max(1f, app.EraserRadius);
+                DrawRingCursor(v.Pos, r, r, new Color4(0.35f, 0.55f, 0.95f, 0.10f));
+            }
+        }
     }
 
     private void DrawRingCursor(Vector2 c, float truthR, float outerR, Color4 fill)
