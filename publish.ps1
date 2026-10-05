@@ -29,6 +29,15 @@ if ($Jit -and $Aot) { throw "-Jit 和 -Aot 只能选一个（默认就是 AOT）
 $useAot = -not $Jit
 
 $ErrorActionPreference = "Stop"
+
+# 便携版 .NET 10 SDK：如果没在 PATH 里（本机全局是 9.x），垫到最前面——
+# 否则 `dotnet publish` 会报 NETSDK1045（当前 SDK 不支持 net10.0）。
+$sdkDir = Join-Path $env:USERPROFILE ".dotnet10"
+if (Test-Path (Join-Path $sdkDir "dotnet.exe")) {
+    $env:PATH = "$sdkDir;$env:PATH"
+    if (-not $env:DOTNET_ROOT) { $env:DOTNET_ROOT = $sdkDir }
+}
+
 $root = $PSScriptRoot
 $proj = Join-Path $root "src\InkTeach\InkTeach.csproj"
 
