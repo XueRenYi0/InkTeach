@@ -28476,6 +28476,7 @@ internal sealed partial class App : InkEngine.InkEngine
             SettleFrames(40);
             SendTouchesSized(true, (cx - 100, cy - 180, 24f));
             SettleFrames(60);
+            Console.WriteLine($"      [探针] 漫游拖后：模式 = {TouchModeForTest}，相机 = {ViewOffsetY:F0}，拖动中 = {SelDragging}");
             SendTouchesSized(false, (cx - 100, cy - 180, 24f));
             SettleFrames(150);
             Check("漫游开关：单指拖 = 漫游（相机动、不落墨）",
@@ -28717,6 +28718,56 @@ internal sealed partial class App : InkEngine.InkEngine
                   rot4 && !mq && (after4.MaxY - after4.MinY) > w4 * 1.2f,
                   $"旋转中 = {rot4}，框还在 = {mq}，纵向 {(after4.MaxY - after4.MinY):F0}（原横长 {w4:F0}）");
             Tool = Tool.Pen;
+            TouchResetForTest();
+        }
+
+        // ---- ⑱ 长按选中后：再按住选中的东西拖 = 移动；按框外拖 = 照常写字 ----
+        {
+            TouchResetForTest();
+            Doc.Clear();
+            Doc.ClearHistory();
+            var s5 = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 30f * dpi };
+            for (int i = 0; i <= 20; i++) s5.AddPoint(cx - 200 + i * 20, cy, 0.9f, i);
+            Doc.AddStroke(s5);
+            Doc.InvalidateAll();
+            Tool = Tool.Pen;
+            SettleFrames(150);
+
+            // 长按选中（点选）
+            SendTouchesSized(true, (cx, cy, 24f));
+            for (int k = 0; k < 8; k++) { SettleFrames(100); SendTouchesSized(true, (cx, cy, 24f)); }
+            SendTouchesSized(false, (cx, cy, 24f));
+            SettleFrames(150);
+            bool selOK2 = Doc.Selected.Count == 1;
+
+            // **抬手之后再按住**选中的东西拖 = 移动（不是再画一笔）
+            var b5 = s5.WorldBounds;
+            int strokes0 = Doc.Strokes.Count;
+            SendTouchesSized(true, (cx + 40, cy, 24f));      // 按在框内
+            SettleFrames(60);
+            SendTouchesSized(true, (cx + 140, cy + 80, 24f));
+            SettleFrames(60);
+            SendTouchesSized(false, (cx + 140, cy + 80, 24f));
+            SettleFrames(200);
+            var a5 = s5.WorldBounds;
+            Check("长按选中后，再按住选中的东西拖 = 移动（不再落墨、状态不残留）",
+                  selOK2 && Doc.Strokes.Count == strokes0 && !SelDragging
+                  && MathF.Abs(a5.MinX - b5.MinX) > 60f && MathF.Abs(a5.MinY - b5.MinY) > 40f,
+                  $"选中 = {selOK2}，笔画 {strokes0} → {Doc.Strokes.Count}，拖动中 = {SelDragging}，"
+                  + $"位置 ({b5.MinX:F0},{b5.MinY:F0}) → ({a5.MinX:F0},{a5.MinY:F0})");
+
+            // 按框外拖 = 照常写字（画笔没有"卡住"）
+            int strokes1 = Doc.Strokes.Count;
+            SendTouchesSized(true, (cx - 350, cy + 380, 24f));
+            SettleFrames(60);
+            SendTouchesSized(true, (cx - 250, cy + 420, 24f));
+            SettleFrames(60);
+            SendTouchesSized(false, (cx - 250, cy + 420, 24f));
+            SettleFrames(200);
+            bool cleared = Doc.Selected.Count == 0;
+            Check("按框外拖 = 照常写字（选区收起、画笔不卡）",
+                  Doc.Strokes.Count == strokes1 + 1 && cleared,
+                  $"笔画 {strokes1} → {Doc.Strokes.Count}，选区已收 = {cleared}");
             TouchResetForTest();
         }
 

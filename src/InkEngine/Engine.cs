@@ -3342,12 +3342,14 @@ public partial class InkEngine
                     break;
                 }
 
-                // **停顿成型刚变出来的那个框**：工具还是笔，但这一下同样要先问"是不是在动它"。
-                // 用户 2026-09-23 定的口径和图形工具下**完全一样**：点框里 → 拖动 / 拉手柄；
-                // 点框外 → 收起这个框、**这一笔照常画**（只是"只不过点了一下"的话不留墨）。
+                // **笔下面那个看得见的选中框**（停顿成型 / 触摸长按选出来的）：这一下同样要
+                // 先问"是不是在动它"。用户 2026-09-23 定的口径和图形工具下**完全一样**：
+                // 点框里 → 拖动 / 拉手柄；点框外 → 收起这个框、**这一笔照常画**
+                //（只是"只不过点了一下"的话不留墨）。
                 //
-                // 判据是 `_dwellSelected`（只有停顿变出来的选中框才为真）——所以笔下面
-                // 不会凭空多出交互：框选 / 图形工具画完那些选中，在笔下面仍然是"接着画"。
+                // 2026-10-05 真机反馈："长按选中以后不能移动操作"——判据从只认 `_dwellSelected`
+                // 扩到**也认 `_touchSelected`**：触摸长按选出来的框，在笔下面同样是
+                // "按住框里拖 = 移动、按框外 = 收起并照常写"（和框选 / 图形工具下同一套行为）。
                 if (TryDwellSelectionPress(x, y)) { _dirty = true; return; }
 
                 BeginFreehandStrokeAt(id, ptype, x, y, screenX, screenY, pressure);
@@ -3357,8 +3359,12 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 笔下面那一下：**如果"停顿变出来的选中框"还在，先问它是不是在动它**
+    /// 笔下面那一下：**如果那个"看得见的选中框"还在，先问它是不是在动它**
     ///（返回 true = 这一下被选择手势吃掉了，调用方直接收工）。
+    ///
+    /// 判据认两种框：`_dwellSelected`（停顿成型）和 `_touchSelected`（触摸长按选中）。
+    /// 2026-10-05 真机反馈："长按选中以后不能移动操作"——触摸选出来的框以前在笔下面
+    /// 不拦，按上去就变成接着写一笔；现在和框选 / 图形工具下同一条行为。
     ///
     /// ⚠ **只有这一处实现**：`OnPointerDown` 和 `--dwelltest` 都问它。
     /// 判据写两份的话，自检验的其实是"自检自己那一份"，等于没验
@@ -3366,7 +3372,7 @@ public partial class InkEngine
     /// </summary>
     private bool TryDwellSelectionPress(float x, float y)
     {
-        if (!_dwellSelected || Doc.Selected.Count == 0) return false;
+        if ((!_dwellSelected && !_touchSelected) || Doc.Selected.Count == 0) return false;
         bool shiftKey = (Native.GetAsyncKeyState(0x10 /*VK_SHIFT*/) & 0x8000) != 0;
         bool altKey = (Native.GetAsyncKeyState(0x12 /*VK_MENU*/) & 0x8000) != 0;
         if (AutoSelectionPress(x, y, shiftKey, altKey)) return true;
