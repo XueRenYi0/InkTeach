@@ -24135,7 +24135,9 @@ internal sealed partial class App : InkEngine.InkEngine
         // ---- ① 单指按下，看它是不是以 PT_TOUCH 进来 ----
         TouchHud = true;                 // 触点诊断先开着（它只跟"开关打开之后"的指针事件）
         SendTouches(true, (x0, y0));
-        SettleFrames(30);
+        // 合成注入是**异步**的：负载重时可能晚几十毫秒才到（2026-10-05 连跑偶发过：
+        // 30ms 读取时还没到、下一项多等 40ms 就读到了）。多等一会儿，别冤枉它。
+        SettleFrames(120);
         Check("合成触摸以 PT_TOUCH 进来", LastPointerType == Native.PT_TOUCH,
               $"LastPointerType = {DeviceName(LastPointerType)}");
 
