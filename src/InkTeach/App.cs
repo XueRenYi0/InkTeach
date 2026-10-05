@@ -28391,6 +28391,7 @@ internal sealed partial class App : InkEngine.InkEngine
 
         // ---- ⑧ 长按 0.5 秒 = 进入选择（长按在对象上 = 点选它）----
         {
+            TouchResetForTest();
             Doc.Clear();
             Doc.ClearHistory();
             var s = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 30f * dpi };
@@ -28429,7 +28430,7 @@ internal sealed partial class App : InkEngine.InkEngine
                   $"({back.MinX:F0},{back.MinY:F0}) vs ({before.MinX:F0},{before.MinY:F0})");
         }
 
-        // ---- ⑨ 选中后：双指 = 缩放 + 旋转（**不含平移**；旋转接原逻辑、带度数）----
+        // ---- ⑨ 选中后：双指 = **只缩放**（不含平移、不含旋转；旋转走拖手柄，见 ⑲）----
         {
             Doc.Selected.Clear();
             Doc.Selected.Add(Doc.Strokes[^1]);
@@ -28438,26 +28439,23 @@ internal sealed partial class App : InkEngine.InkEngine
             float w0 = before.MaxX - before.MinX;
             float cxm = (before.MinX + before.MaxX) * 0.5f, cym = (before.MinY + before.MaxY) * 0.5f;
 
-            // 两指从 300px 宽张到 600px（放大一倍），同时把夹角转 90°；
-            // 两指中点**故意整体右移 100px**——移动已经和缩放/旋转分开，中点移动不该带走对象。
-            Touch2Down(cxm - 150, cym, cxm + 150, cym);
-            Touch2Move(cxm + 100, cym - 300, cxm + 100, cym + 300);
+            // 两指从 200px 宽张到 400px（放大一倍）；两指中点**故意整体右移 100px**——
+            // 平移已经和缩放分开，中点移动不该带走对象。**旋转已不在双指里**（走旋转手柄）。
+            Touch2Down(cxm - 100, cym, cxm + 100, cym);
+            Touch2Move(cxm - 100, cym, cxm + 300, cym);
             SettleFrames(80);
-            float degDuring = SelRotationDegrees;
-            bool rotating = SelRotating;
-            Touch2Up(cxm + 100, cym - 300, cxm + 100, cym + 300);
+            bool rotating = SelRotating;                 // 双指不该产生度数胶囊
+            Touch2Up(cxm - 100, cym, cxm + 300, cym);
             SettleFrames(250);
             var after = Doc.Strokes[^1].WorldBounds;
+            float w1 = after.MaxX - after.MinX;
             float h1 = after.MaxY - after.MinY;
             float cx1 = (after.MinX + after.MaxX) * 0.5f, cy1 = (after.MinY + after.MaxY) * 0.5f;
-            // 原始笔画是**零高度的横线**（点都在同一条 y 上）：转 90° 之后"长边"竖过来，
-            // 所以量**纵向**长度（≈ 2 倍原横长 = 缩放×2 + 旋转 90° 一起验到）。
-            // 顺时针 90°（屏幕上右→下）= 原逻辑的 -90°（逆时针为正）——度数胶囊就地读一次。
-            Check("选中后双指 = 缩放 + 旋转、不平移（度数胶囊在）",
-                  h1 > w0 * 1.4f && MathF.Abs(cx1 - cxm) < 6f && MathF.Abs(cy1 - cym) < 6f
-                  && rotating && MathF.Abs(degDuring) > 80f && MathF.Abs(degDuring) < 100f,
-                  $"纵向 {before.MaxY - before.MinY:F0} → {h1:F0}，中心 ({cxm:F0},{cym:F0}) → ({cx1:F0},{cy1:F0})，"
-                  + $"旋转中 = {rotating}，读数 {degDuring:F0}°");
+            // 原始笔画是**零高度的横线**：只放大不变向 → 宽度翻倍、高度仍然约 0。
+            Check("选中后双指 = 只缩放（不旋转、不平移、无度数胶囊）",
+                  w1 > w0 * 1.6f && h1 < w0 * 0.2f && !rotating
+                  && MathF.Abs(cx1 - cxm) < 6f && MathF.Abs(cy1 - cym) < 6f,
+                  $"宽 {w0:F0} → {w1:F0}，高 {h1:F0}，中心 ({cxm:F0},{cym:F0}) → ({cx1:F0},{cy1:F0})，旋转中 = {rotating}");
             Doc.Undo();
             SettleFrames(150);
             var back = Doc.Strokes[^1].WorldBounds;
@@ -28470,14 +28468,18 @@ internal sealed partial class App : InkEngine.InkEngine
         {
             SetUiPref("touch.roam", "1");
             LoadTouchPrefs();
+            TouchResetForTest();                     // 清掉上一用例可能残留的合成触点
             int before = Doc.Strokes.Count;
             float cam0 = ViewOffsetY;
             SendTouchesSized(true, (cx - 100, cy - 100, 24f));
             SettleFrames(40);
+            // 两段：合成注入偶尔把"第一针移动"当成新 down（重锚），第二针就能正常滚
             SendTouchesSized(true, (cx - 100, cy - 180, 24f));
+            SettleFrames(40);
+            SendTouchesSized(true, (cx - 100, cy - 260, 24f));
             SettleFrames(60);
             Console.WriteLine($"      [探针] 漫游拖后：模式 = {TouchModeForTest}，相机 = {ViewOffsetY:F0}，拖动中 = {SelDragging}");
-            SendTouchesSized(false, (cx - 100, cy - 180, 24f));
+            SendTouchesSized(false, (cx - 100, cy - 260, 24f));
             SettleFrames(150);
             Check("漫游开关：单指拖 = 漫游（相机动、不落墨）",
                   Doc.Strokes.Count == before && MathF.Abs(ViewOffsetY - cam0) > 40f,
@@ -28661,19 +28663,21 @@ internal sealed partial class App : InkEngine.InkEngine
 
             float w2 = s2.WorldBounds.MaxX - s2.WorldBounds.MinX;
             float fx = cx + 320, fy = cy + 300;
-            // 竖着的两指（间隔 200）转到水平（间隔 300）：逆时针 90°、放大 1.5 倍
+            // 双指放在别处：间隔 200 张开到 300（放大 1.5 倍）——只缩放，不旋转
             Touch2Down(fx, fy - 100, fx, fy + 100);
             Touch2Move(fx - 150, fy, fx + 150, fy);
             SettleFrames(80);
-            bool rot2 = SelRotating;
-            float deg2 = SelRotationDegrees;
+            bool rot2 = SelRotating;                     // 双指不该产生旋转
             Touch2Up(fx - 150, fy, fx + 150, fy);
             SettleFrames(250);
             var after2 = s2.WorldBounds;
-            Check("选中后双指放在别处 = 缩放 + 旋转（真机路径：长按选中）",
-                  selOK && rot2 && deg2 > 82f && deg2 < 98f
-                  && (after2.MaxY - after2.MinY) > w2 * 1.2f,
-                  $"选中 = {selOK}，旋转中 = {rot2}，读数 {deg2:F0}°，纵向 {(after2.MaxY - after2.MinY):F0}（原横长 {w2:F0}）");
+            float w2a = after2.MaxX - after2.MinX;
+            float c2x = (after2.MinX + after2.MaxX) * 0.5f, c2y = (after2.MinY + after2.MaxY) * 0.5f;
+            Check("选中后双指放在别处 = 缩放（真机路径：长按选中；不旋转）",
+                  selOK && !rot2 && w2a > w2 * 1.3f
+                  && MathF.Abs(c2x - cx) < 6f && MathF.Abs(c2y - cy) < 6f,
+                  $"选中 = {selOK}，旋转中 = {rot2}，宽 {w2:F0} → {w2a:F0}，"
+                  + $"中心 ({cx:F0},{cy:F0}) → ({c2x:F0},{c2y:F0})");
 
             // 场景 2：图形工具下按在框外会先"收起选区"（原逻辑）——双指手势要把它救回来
             var s3 = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 30f * dpi };
@@ -28692,9 +28696,10 @@ internal sealed partial class App : InkEngine.InkEngine
             Touch2Up(fx - 150, fy, fx + 150, fy);
             SettleFrames(250);
             var after3 = s3.WorldBounds;
+            float w3a = after3.MaxX - after3.MinX;
             Check("图形工具下按下把选区清了 → 双指手势仍能变换（选区救回）",
-                  rot3 && (after3.MaxY - after3.MinY) > w3 * 1.2f,
-                  $"旋转中 = {rot3}，纵向 {(after3.MaxY - after3.MinY):F0}（原横长 {w3:F0}）");
+                  !rot3 && w3a > w3 * 1.3f,
+                  $"旋转中 = {rot3}（应 False），宽 {w3:F0} → {w3a:F0}");
 
             // 场景 3：框选工具下双指放别处——第一根手指起的框要被手势撤掉，不能留着
             var s4 = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 30f * dpi };
@@ -28714,9 +28719,10 @@ internal sealed partial class App : InkEngine.InkEngine
             Touch2Up(fx - 150, fy, fx + 150, fy);
             SettleFrames(250);
             var after4 = s4.WorldBounds;
-            Check("框选工具下双指放别处 = 变换（误起的框被撤掉）",
-                  rot4 && !mq && (after4.MaxY - after4.MinY) > w4 * 1.2f,
-                  $"旋转中 = {rot4}，框还在 = {mq}，纵向 {(after4.MaxY - after4.MinY):F0}（原横长 {w4:F0}）");
+            float w4a = after4.MaxX - after4.MinX;
+            Check("框选工具下双指放别处 = 缩放（误起的框被撤掉）",
+                  !rot4 && !mq && w4a > w4 * 1.3f,
+                  $"旋转中 = {rot4}（应 False），框还在 = {mq}，宽 {w4:F0} → {w4a:F0}");
             Tool = Tool.Pen;
             TouchResetForTest();
         }
@@ -28768,6 +28774,83 @@ internal sealed partial class App : InkEngine.InkEngine
             Check("按框外拖 = 照常写字（选区收起、画笔不卡）",
                   Doc.Strokes.Count == strokes1 + 1 && cleared,
                   $"笔画 {strokes1} → {Doc.Strokes.Count}，选区已收 = {cleared}");
+            TouchResetForTest();
+        }
+
+        // ---- ⑲ 选中后：拖**旋转手柄** = 旋转（触摸走鼠标同一条路，带度数胶囊）----
+        {
+            TouchResetForTest();
+            Doc.Clear();
+            Doc.ClearHistory();
+            var s6 = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 30f * dpi };
+            for (int i = 0; i <= 20; i++) s6.AddPoint(cx - 200 + i * 20, cy, 0.9f, i);
+            Doc.AddStroke(s6);
+            Doc.InvalidateAll();
+            Tool = Tool.Pen;
+            SettleFrames(150);
+
+            // 长按选中（点选）
+            SendTouchesSized(true, (cx, cy, 24f));
+            for (int k = 0; k < 8; k++) { SettleFrames(100); SendTouchesSized(true, (cx, cy, 24f)); }
+            SendTouchesSized(false, (cx, cy, 24f));
+            SettleFrames(150);
+            bool sel6 = Doc.Selected.Count == 1;
+            float w6 = s6.WorldBounds.MaxX - s6.WorldBounds.MinX;
+
+            // 旋转手柄的位置：和服务端**同一份算法**（画与命中同源，见 SelectionHandles.CanvasPosition）
+            var frame6 = SelectionHandles.FrameOf(Doc.Selected);
+            var handle6 = SelectionHandles.CanvasPosition(SelHandle.Rotate, frame6, dpi);
+            float radius6 = Vector2.Distance(handle6, new Vector2(cx, cy));
+            // 绕选区中心把"正上方"转到"正左方" = 逆时针 90°
+            SendTouchesSized(true, (handle6.X, handle6.Y, 24f));
+            SettleFrames(60);
+            SendTouchesSized(true, (cx - radius6, cy, 24f));
+            SettleFrames(80);
+            bool rot6 = SelRotating;
+            float deg6 = SelRotationDegrees;
+            SendTouchesSized(false, (cx - radius6, cy, 24f));
+            SettleFrames(250);
+            var after6 = s6.WorldBounds;
+            Check("拖旋转手柄 = 旋转（触摸同鼠标一条路，带度数）",
+                  sel6 && rot6 && MathF.Abs(deg6) > 60f
+                  && (after6.MaxY - after6.MinY) > w6 * 0.5f,
+                  $"选中 = {sel6}，旋转中 = {rot6}，读数 {deg6:F0}°，"
+                  + $"纵向 {(after6.MaxY - after6.MinY):F0}（原横长 {w6:F0}）");
+            Doc.Undo();
+            SettleFrames(150);
+            TouchResetForTest();
+        }
+
+        // ---- ⑳ 三指擦 + 面积橡皮 = 动态大小（快扫变大、松手回基准）----
+        {
+            TouchResetForTest();
+            Doc.Selected.Clear();
+            EraserKindForTest = Tool.PixelEraser;
+            bool savedDyn = DynamicEraserForTest;
+            DynamicEraserForTest = true;
+            float baseW = PixelEraserHalfWidthPx;
+            // 三指落下 → 擦会话（面积擦），落点在 cx-380 一带
+            Touch3Down(cx - 420, cy - 200, cx - 380, cy - 200, cx - 340, cy - 200);
+            SettleFrames(30);
+            // 连续三段快扫（每段质心 200px / 50ms ≈ 4px/ms）：系数一路涨（生长时间常数 220ms）
+            SendTouchesSized(true, (cx - 220, cy - 200, 24f), (cx - 180, cy - 200, 24f), (cx - 140, cy - 200, 24f));
+            SettleFrames(50);
+            SendTouchesSized(true, (cx - 20, cy - 200, 24f), (cx + 20, cy - 200, 24f), (cx + 60, cy - 200, 24f));
+            SettleFrames(50);
+            SendTouchesSized(true, (cx + 180, cy - 200, 24f), (cx + 220, cy - 200, 24f), (cx + 260, cy - 200, 24f));
+            SettleFrames(50);
+            bool pixelDragging = PixelEraseDragging;
+            float duringW = PixelEraserCursorHalfWidthPx;
+            SendTouchesSized(false, (cx + 180, cy - 200, 24f), (cx + 220, cy - 200, 24f), (cx + 260, cy - 200, 24f));
+            SettleFrames(200);
+            bool goneDyn = !PixelEraseDragging;
+            float afterW = PixelEraserCursorHalfWidthPx;
+            Check("三指擦（面积橡皮）= 动态大小（快扫变大、松手回基准）",
+                  pixelDragging && duringW > baseW * 1.25f && goneDyn && MathF.Abs(afterW - baseW) < 0.5f,
+                  $"基准 {baseW:F0} → 拖动中 {duringW:F0}（×{duringW / baseW:F2}），松手后 {afterW:F0}，"
+                  + $"拖动中标志 {pixelDragging} → {PixelEraseDragging}");
+            DynamicEraserForTest = savedDyn;
+            EraserKindForTest = Tool.Eraser;
             TouchResetForTest();
         }
 

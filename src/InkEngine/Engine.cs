@@ -4868,14 +4868,12 @@ public partial class InkEngine
     /// <summary>触摸选出来的选中：**临时**的（框和操作条要显示，但工具不换）——和 `_dwellSelected` 同一路。</summary>
     private bool _touchSelected;
 
-    private Vector2 _g2StartMid, _g2LastMid, _g2StartVec;   // 双指：起点中点 / 上一帧中点 / 起始向量
+    private Vector2 _g2StartMid, _g2LastMid;   // 双指：起点中点 / 上一帧中点
     private int _g2Axis;              // 0 未定 / 1 横（翻页）/ 2 纵（漫游）
     private bool _g2Turned;           // 这一次手势已经翻过页（一次手势只翻一页）
     private bool _g2Transform;        // 有选中：这一次双指是在变换对象
     private bool _g2Tap;              // 两指点按候选（松手时结算）
-    private float _g2Dist0;           // 变换用：起始两指距离
-    private Vector2 _g2LastVec;       // 变换用：上一帧的两指向量（旋转按帧累积，走原逻辑）
-    private float _g2AccumDeg;        // 变换用：本次手势累计转过的角度（逆时针为正，同原逻辑）
+    private float _g2Dist0;           // 变换用：起始两指距离（双指只做缩放，绕选区中心）
 
     /// <summary>一根手指按下那一刻的选区快照。这一下可能在图形工具下被"点框外 = 收起选区"
     /// 清掉（见 <see cref="ClearSelectionForNewContext"/>）；但它若紧接着升级成双指手势，
@@ -4889,6 +4887,10 @@ public partial class InkEngine
     private const float TouchScrollGain = 2f;
     private Vector2 _roamLast;        // 单指漫游：上一帧位置
     private uint _roamId;             // 单指漫游：认哪一根手指（其它触点的移动不许开船）
+    /// <summary>长按起头的那根手指（框选 / 拖动选中）：**只有它**能画框 / 拖东西。
+    /// 别的触点（掌根、幽灵触点、第二根手指）的移动一律不许劫持——真机上"拖着拖着
+    /// 东西突然飞到掌根底下"就是这里漏判（2026-10-05，和 `_roamId` 同一条纪律）。</summary>
+    private uint _selTouchId;
     private bool _radialTouchMode;    // 轮盘这次是触屏呼出的（松手改成触点驱动；没划动=留在盘上）
     private bool _radialSticky;       // 触屏轮盘：没划动松手后留在盘上等点选（5s 超时）
 
@@ -4953,7 +4955,19 @@ public partial class InkEngine
                 BeginStrokeMeasure();
                 // **跟鼠标同一条路**（2026-10-05 用户口径）：批次按当前那把橡皮开
                 //（整笔擦 = BeginErase、面积擦 = BeginEraseRect），下面的 TouchEraseSample 同源。
-                if (_eraserKind == Tool.PixelEraser) Doc.BeginEraseRect(); else Doc.BeginErase();
+                // 先 EndErase 兜底：如果第一根手指是**橡皮工具**按下来的（那一路自己开了批次），
+                // 这里先把它收账，免得批次被顶掉（没有批在开时 EndErase 是空操作）。
+                Doc.EndErase();
+                if (_eraserKind == Tool.PixelEraser)
+                {
+                    Doc.BeginEraseRect();
+                    // **动态橡皮**：和鼠标按下同一套（Reset → 移动中放大）。
+                    // 真机反馈"三指橡皮没有动态大小"就是这里没接上（PixelEraseDragging 一直是 false）。
+                    ResetDynamicEraser();
+                    PixelEraseDragging = true;
+                    if (TouchEraseCenter(out var c0)) { _lastEraseX = c0.X; _lastEraseY = c0.Y; }
+                }
+                else Doc.BeginErase();
                 // **手掌按下先不擦**（移动才擦）：手掌落在屏上不动是"手托着"，不该直接把下面
                 // 的板书擦掉；三指擦照旧按下即擦（那是主动动作）。见 TouchGestures 的注释。
                 if (!_touch.LastDownWasPalm) TouchEraseSample();
@@ -4963,7 +4977,7 @@ public partial class InkEngine
             case TouchVerdict.Gesture2:
                 stealPointer = true;
                 // 从"擦"切到手势：先把这一轮擦除收账（不然 BeginEraseRect 一直挂着）。
-                if (_touchMode == TouchMode.Erase) { Doc.EndErase(); EndStrokeMeasure(); }
+                if (_touchMode == TouchMode.Erase) { Doc.EndErase(); EndStrokeMeasure(); PixelEraseDragging = false; }
                 CancelTouchStroke();
                 _touchMode = TouchMode.Gesture2;
                 _drawing = true;
@@ -5020,11 +5034,13 @@ public partial class InkEngine
                 return true;
 
             case TouchMode.Marquee:
+                if (id != _selTouchId) return true;   // 只有"长按起头那根手指"能画框（掌根/别的触点不算）
                 ExtendMarqueeTo(x, y);
                 _dirty = true;
                 return true;
 
             case TouchMode.SelDrag:
+                if (id != _selTouchId) return true;   // 同理：别的触点不许把选中的东西拽走
                 UpdateSelDrag(x, y);
                 return true;
 
@@ -5075,6 +5091,7 @@ public partial class InkEngine
             case TouchMode.Erase:
                 Doc.EndErase();                 // 一次擦除 = 一步撤销
                 EndStrokeMeasure();
+                PixelEraseDragging = false;     // 面积擦回基准（和鼠标抬手同一句，动态大小别残留）
                 break;
 
             case TouchMode.Gesture2:
@@ -5087,13 +5104,20 @@ public partial class InkEngine
                 break;
 
             case TouchMode.Marquee:
-                ApplyMarquee();                 // 松手出选区
-                _touchSelected = Doc.Selected.Count > 0;
+                // 只有"起头那根手指"抬手才结算；别的触点抬手不结算（框还在画）
+                if (id == _selTouchId)
+                {
+                    ApplyMarquee();             // 松手出选区
+                    _touchSelected = Doc.Selected.Count > 0;
+                }
                 break;
 
             case TouchMode.SelDrag:
-                EndSelDrag();                   // 提交（一步撤销；一点没动就不进撤销栈）
-                _touchSelected = Doc.Selected.Count > 0;
+                if (id == _selTouchId)          // 同上：别的触点抬手不许把拖动提前提交掉
+                {
+                    EndSelDrag();               // 提交（一步撤销；一点没动就不进撤销栈）
+                    _touchSelected = Doc.Selected.Count > 0;
+                }
                 break;
         }
 
@@ -5117,7 +5141,7 @@ public partial class InkEngine
     private void TouchAbort()
     {
         if (_touchMode == TouchMode.None && !_touch.Any) return;
-        if (_touchMode == TouchMode.Erase) { Doc.EndErase(); EndStrokeMeasure(); }
+        if (_touchMode == TouchMode.Erase) { Doc.EndErase(); EndStrokeMeasure(); PixelEraseDragging = false; }
         // 触屏呼出的轮盘：手势中断 = 盘也收掉（别留一个没人管的盘在屏幕上）。
         if (RadialPaletteActive && _radialTouchMode) CancelRadialPalette("手势中断");
         // ⚠ **选择拖动 / 框选不在这里结束**（2026-09-30 实测）：触摸长按之后，
@@ -5142,6 +5166,7 @@ public partial class InkEngine
         if (_touchMode != TouchMode.Write) return;
         var c = _touch.Views.Count > 0 ? _touch.Views[0] : default;
         float x = c.Pos.X, y = c.Pos.Y;
+        _selTouchId = c.Id;              // 这一根是"框选 / 拖动"的起头手指（见 _selTouchId）
 
         CancelTouchStroke();
 
@@ -5201,14 +5226,22 @@ public partial class InkEngine
     /// <summary>擦一下：**整个手势只用一个"鼠标橡皮"**，落点 = 所有触点的中心
     ///（2026-10-05 真机反馈："三个指头出来三个橡皮擦"——一只手应该是一个橡皮，和鼠标同源）。
     /// 整笔擦 = `EraseAt(中心, EraserRadius)`（碰到就整条删）；
-    /// 面积擦 = `EraseRectAt(中心, 鼠标落点框半宽/半高)`——尺寸和鼠标按下那一份完全一致。</summary>
+    /// 面积擦 = `EraseRectAt(中心, 鼠标落点框半宽/半高)`——尺寸和鼠标按下那一份完全一致，
+    /// 而且**动态橡皮照旧**：喂速度 → 快扫变大（和鼠标 `EraseRectAlongPath` 同一套）。</summary>
     private void TouchEraseSample()
     {
         if (!TouchEraseCenter(out var c)) return;
         if (_eraserKind == Tool.PixelEraser)
+        {
+            UpdateDynamicEraser(c.X, c.Y);       // 动态橡皮：开关关掉时它自己把系数归 1
+            _lastEraseX = c.X; _lastEraseY = c.Y;
             Doc.EraseRectAt(c.X, c.Y, PixelEraserCursorHalfWidthPx, PixelEraserCursorHalfHeightPx);
+        }
         else
+        {
+            _lastEraseX = c.X; _lastEraseY = c.Y;
             Doc.EraseAt(c.X, c.Y, EraserRadius);
+        }
         _dirty = true;
     }
 
@@ -5217,7 +5250,6 @@ public partial class InkEngine
     {
         if (!_touch.TryPair(out var p)) return;
         _g2StartMid = _g2LastMid = (p.A + p.B) * 0.5f;
-        _g2StartVec = p.B - p.A;
         _g2Axis = 0;
         _g2Turned = false;
         _g2Tap = false;
@@ -5248,14 +5280,12 @@ public partial class InkEngine
         {
             _g2Transform = true;
             _g2Dist0 = MathF.Max(1f, Vector2.Distance(p.A, p.B));
-            _g2LastVec = _g2StartVec;
-            _g2AccumDeg = 0f;
-            // 旋转读数走**原来的那套**（SelRotation* 由 Overlay 画度数胶囊，和鼠标拖旋转柄同一份）。
+            // 旋转读数归位：旋转已经只走"拖旋转手柄"那条路，双指不再产生度数。
             SelRotationSnapped = false;
             SelRotationReadsPose = false;
             SelRotationReadsInclination = false;
             _touchSelected = true;
-            Console.WriteLine("触摸：双指 → 变换选中对象（缩放 / 旋转；移动用单指拖）");
+            Console.WriteLine("触摸：双指 → 缩放选中对象（旋转用旋转手柄、移动用单指拖）");
         }
     }
 
@@ -5267,31 +5297,17 @@ public partial class InkEngine
 
         if (_g2Transform)
         {
-            // 绕**选区中心**：先平移把中心对到原点，缩放/旋转，再放回去。
-            // 2026-10-05 用户口径：**移动和缩放/旋转分开**——双指只管缩放+旋转（绕中心、
-            // 不带平移，少一个互相打架的自由度），移动走单指拖（和鼠标同一条路）。
+            // 绕**选区中心**缩放（不带平移、不带旋转）。
+            // 2026-10-05 用户口径（第二轮定稿）：双指**只管缩放**；移动走单指拖、
+            // 旋转走**拖旋转手柄**——三条路各管一件事，互相不打架（和鼠标那边一一对应）。
             var aabb = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
             var center = new Vector2((aabb.MinX + aabb.MaxX) * 0.5f, (aabb.MinY + aabb.MaxY) * 0.5f);
             float d1 = Vector2.Distance(p.A, p.B);
             float scale = Math.Clamp(d1 / _g2Dist0, 0.1f, 10f);
 
-            // 旋转对接原逻辑：每帧一小步累积（RotationStepDegrees，逆时针为正、不设上限），
-            // 吸附走原来的软吸附（90° 整数倍 3° 内），矩阵交给 RotateMatrix（全工程唯一换算处）。
-            var vec = p.B - p.A;
-            _g2AccumDeg += SelectionHandles.RotationStepDegrees(Vector2.Zero, _g2LastVec, vec);
-            _g2LastVec = vec;
-            float deg = SelectionHandles.SnapRotationDegrees(_g2AccumDeg, gridSnap: false, noSnap: false,
-                                                             out bool snapped);
-            if (snapped) _g2AccumDeg = deg;    // 修正累积：标签上的数 = 屏幕上转到的角
-
             _selDragMatrix = Matrix3x2.CreateTranslation(-center.X, -center.Y)
                            * Matrix3x2.CreateScale(scale)
-                           * SelectionHandles.RotateMatrix(deg, Vector2.Zero)
                            * Matrix3x2.CreateTranslation(center);
-            // 度数胶囊：和鼠标拖旋转柄共用同一套显示状态（Overlay 照旧画）。
-            SelRotating = true;
-            SelRotationDegrees = deg;
-            SelRotationSnapped = snapped;
             _selDragMoved = true;
             _dirty = true;
             return;
