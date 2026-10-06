@@ -870,6 +870,21 @@ internal sealed class Stroke
     /// </summary>
     internal bool RawWhileLive;
 
+    /// <summary>
+    /// 诊断（`--geomtrace`）：这一笔的几何**最后走了哪条路**，只打印一次。
+    ///
+    /// 立它是因为"快速画圆变折线"排查了两轮都靠读代码猜路径，结果两次猜错
+    /// （改了两个开关，用户实测都没反应）。**路径必须由程序自己报**，不能靠读。
+    /// 一个字符就够定性：
+    ///   `A-模型+曲线` / `A-模型+折线` / `A-原始+曲线` / `A-原始+折线`
+    ///   `B-模型+曲线` / `B-模型+折线` / `B-原始+曲线` / `B-原始+折线`
+    /// （A = 等宽描边通道 `BuildCenterlineCore`；B = 压感墨迹通道 `BuildPressureSegments`）
+    /// </summary>
+    internal bool GeomTraced;
+    /// <summary>诊断：活笔那一次的几何路径是否已打印（与 <see cref="GeomTraced"/> 分开——
+    /// 一笔会有"正在写"和"落笔之后"两次几何，我们要看的是**落笔之后**那次）。</summary>
+    internal bool GeomTracedLive;
+
 
     /// <summary>
     /// **锁定**（2026-09-16 加，用户定的语义是"能选中、但拖不动"）：
@@ -5518,6 +5533,7 @@ internal sealed class Stroke
                 // `--nosmooth` 时连模型输出也不上曲线——这样它才是一个真正的
                 // "折线对照组"（否则模型路径照样出曲线，开关等于没有）。
                 bool drew = StrokeSmoothing.Enabled && AppendSmoothedModeledRun(sink);
+                GeomTrace(this, "A", "模型", drew);
                 if (!drew)
                 {
                     int mn = StrokeMotion.Count;
@@ -5536,6 +5552,8 @@ internal sealed class Stroke
                 // **点还是原来那些点**——曲线严格过每一个采样点，直角由角点保护保住；
                 // 不生效时（开关关着 / 段数不够）原样退回下面的折线路径。
                 bool smoothed = StrokeSmoothing.Enabled && !RawWhileLive && AppendSmoothedRun(sink, a, b);
+                GeomTrace(this, "A", "原始", smoothed,
+                          $"clipped={clipped} erased={Erased.Count} model={StrokeMotion.Build(this)} live={RawWhileLive} enabled={StrokeSmoothing.Enabled}");
                 if (!smoothed)
                 {
                     sink.BeginFigure(PointAtParam(a), FigureBegin.Hollow);
@@ -5557,6 +5575,55 @@ internal sealed class Stroke
         sink.Close();
         return geo;
     }
+
+    /// <summary>
+    /// `--geomtrace` 诊断：把"这一笔的几何走了哪条路"打一行出来（每笔一次）。
+    /// 关掉时零开销（一个 bool 判断）。
+    /// </summary>
+    internal static void GeomTrace(Stroke s, string channel, string srcKind, bool curved, string why = "")
+    {
+        if (!global::InkEngine.InkEngine.GeomTraceOn) return;
+        // **一笔会建两次几何**：正在写的时候一次（RawWhileLive=true）、落笔之后一次。
+        // 两次都要各打一行——只看第一次会把"落笔后"那条路漏掉（第一版就是这么漏的：
+        // 一个 GeomTraced 标志把第二次挡在门外，结果通篇都是"活笔"那一次）。
+        string stage;
+        if (s.RawWhileLive)
+        {
+            if (s.GeomTracedLive) return;
+            s.GeomTracedLive = true;
+            stage = "活笔";
+        }
+        else
+        {
+            if (s.GeomTraced) return;
+            s.GeomTraced = true;
+            stage = "落笔后";
+        }
+        float span = 0f;
+        for (int i = 1; i < s.Points.Count; i++)
+            span += Vector2.Distance(new Vector2(s.Points[i - 1].X, s.Points[i - 1].Y),
+                                     new Vector2(s.Points[i].X, s.Points[i].Y));
+        float spacing = s.Points.Count > 1 ? span / (s.Points.Count - 1) : 0f;
+        string line = $"  [几何路径] {stage} {channel}-{srcKind}+{(curved ? "曲线" : "折线")}"
+                      + $" | 点 {s.Points.Count} 均距 {spacing:F1}px 总长 {span:F0}px"
+                      + $" | 压感={s.HasPressure} 活笔={s.RawWhileLive} 曲线开关={StrokeSmoothing.Enabled}"
+                      + (why.Length > 0 ? " | " + why : "");
+        Console.WriteLine(line);
+        // 同时落一份文件：真机上只要把文件发过来，不用截控制台。
+        try
+        {
+            if (s_traceWriter == null)
+            {
+                string p = Path.Combine(Path.GetTempPath(), "inkteach-geomtrace.txt");
+                s_traceWriter = new StreamWriter(p, append: false) { AutoFlush = true };
+                Console.WriteLine($"  [几何路径] 轨迹文件：{p}");
+            }
+            s_traceWriter.WriteLine(line);
+        }
+        catch { }
+    }
+
+    private static StreamWriter s_traceWriter;
 
     /// <summary>
     /// mean2：把建模输出喂进过点曲线，直接写成三次贝塞尔。

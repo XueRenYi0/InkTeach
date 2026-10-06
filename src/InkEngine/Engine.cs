@@ -1869,6 +1869,8 @@ public partial class InkEngine
                     StrokeSmoothing.BumpVersion();
                 }
             }
+            // 几何路径诊断（`--geomtrace`）：每一笔报一次走了哪条岔路
+            if (args.Contains("--geomtrace")) GeomTraceOn = true;
             StrokeMotion.SetMode(motionMode);
             InkModel.SetEnabled(false);              // M3 弹簧 [停用 2026-10-05]
 
@@ -2092,6 +2094,16 @@ public partial class InkEngine
     /// 产品界面只会拿到 -1；测试模式由 InkTeach 覆写。
     /// </summary>
     protected virtual int RunModeDispatch(string mode, string[] args) => -1;
+
+    /// <summary>
+    /// `--geomtrace`（2026-10-06 排查"快速画圆变折线"时加）。
+    ///
+    /// 打开后，每一笔的几何**走哪条路**会打一行：通道（A 等宽描边 / B 压感墨迹）+
+    /// 数据源（模型输出 / 原始采样点）+ 曲线还是折线，外加点数、平均点距、压感有无、
+    /// 活笔标志、曲线开关。排查"到底哪条岔路没接上曲线"靠读代码猜不够——
+    /// 这个开关让程序自己报（前两轮就是靠读代码猜，两次都猜错了）。
+    /// </summary>
+    internal static bool GeomTraceOn;
 
     /// <summary>
     /// 收尾时给进程的退出码。默认 0；自检发现有 FAIL 时置 1，

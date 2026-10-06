@@ -1996,7 +1996,10 @@ internal sealed partial class OverlayWindow : IDisposable
 
         // `--nosmooth`（StrokeSmoothing.Enabled=false）时整体退回折线：
         // 模型量出来的点再密，也不上曲线。这样"开/关"才是一个有效对照。
-        if (StrokeSmoothing.Enabled && (useModel || (!useModel && !s.RawWhileLive)))
+        bool curveBranch = StrokeSmoothing.Enabled && (useModel || (!useModel && !s.RawWhileLive));
+        Stroke.GeomTrace(s, "B", useModel ? "模型" : "原始", curveBranch,
+                         $"clipped={clipped} erased={s.Erased.Count} model={useModel} live={s.RawWhileLive} enabled={StrokeSmoothing.Enabled}");
+        if (curveBranch)
         {
             // 把源点（原始采样点 / 建模输出）喂进过点曲线：建模输出本来已经去过抖，
             // 再过一次曲线只是为了消掉"输出点之间的折线"（mean2 的快写折线感）。
