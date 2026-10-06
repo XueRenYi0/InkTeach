@@ -1882,7 +1882,17 @@ public partial class InkEngine
             }
             if (args.Contains("--cornerdump")) StrokeSmoothing.DumpTurns = true;
             if (args.Contains("--notrend")) StrokeSmoothing.CornerUseTrend = false;
-            if (args.Contains("--rawprobe")) RawProbeEnabled = true;
+            // 原始输入默认**开**（2026-10-07 用户定："开不开 ink 要有一样的手写体验"）。
+            // `--norawinput` 关掉做对照；`--rawprobe` 单独打开"只数条数"的诊断。
+            RawInputCapture = !args.Contains("--norawinput");
+            RawProbeEnabled = RawInputCapture || args.Contains("--rawprobe");
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--rawmindist" && float.TryParse(args[i + 1], out float rmd))
+                    RawMinDistPx = Math.Clamp(rmd, 0f, 50f);
+                if (args[i] == "--rawmax" && int.TryParse(args[i + 1], out int rmx))
+                    RawMaxPerStroke = Math.Clamp(rmx, 0, 100000);
+            }
             StrokeMotion.SetMode(motionMode);
             InkModel.SetEnabled(false);              // M3 弹簧 [停用 2026-10-05]
 
@@ -2134,6 +2144,48 @@ public partial class InkEngine
 
     /// <summary>本笔期间收到的原始输入条数。</summary>
     private int _rawReportsThisStroke;
+
+    /// <summary>
+    /// `--rawinput`：把原始输入（Raw Input）**补充**成这一笔的采样点。
+    ///
+    /// 为什么需要（用户 2026-10-07 真机实测）：
+    ///   关掉 Windows Ink 时手写板走鼠标通道，Windows 的鼠标消息管线**会合并**，
+    ///   而且合并掉的点在 `GetPointerInfoHistory` 里**拿不回来**（实测 1:1）。
+    ///   同一台机器同一笔：指针消息只给 60~79 Hz，而**原始输入有 154~194 Hz** ——
+    ///   也就是说六成的输入被白扔了。
+    ///
+    /// 设计（**只增不改**，产品路径一个字不动）：
+    ///   · 指针消息仍是**唯一的主路径**：路由 / 命中 / 穿透 / 多窗口全归它；
+    ///   · 原始输入只在**正在写一笔**时，往这一笔上**追加采样点**；
+    ///   · 鼠标原始报是**相对位移**，所以用"**指针消息当绝对锚点 + raw 报累加填缝**"：
+    ///     每个指针消息把锚点设成它的绝对位置、累计清零 → **误差被夹在一条消息之内，不漂**；
+    ///   · 零位移的报要丢掉（原始输入在不动时也按轮询率发空报）。
+    /// </summary>
+    internal static bool RawInputCapture;
+
+    /// <summary>
+    /// raw 补点的**最小距离**（画布像素）。低于它的报直接丢掉。
+    ///
+    /// 为什么必须有：鼠标的原始报可以到 1000Hz（游戏鼠标），快速移动时相邻报只差不到
+    /// 1 像素——**往笔迹里塞零长段**。而几何那边明确讲过零长段会多出一个退化段
+    /// （见 `BuildCenterlineCore` 里"再补一次就给几何多出一个零长段"那段注释）。
+    /// 3px 这个数远细于观感所需（12px 笔宽下，点距 4px 时弦高误差只剩 0.04px），
+    /// 同时把"每秒最多塞多少个点"限制在 速度/3 以内。
+    /// </summary>
+    internal static float RawMinDistPx = 3f;
+
+    /// <summary>raw 补点的**每笔上限**（第二道保险，防病态设备）。</summary>
+    internal static int RawMaxPerStroke = 3000;
+
+    /// <summary>`--rawinput` 期间从原始输入补进来的点数（诊断）。</summary>
+    private int _rawPointsAdded;
+
+    /// <summary>最近一次指针消息给的**绝对屏幕坐标**（raw 填缝的锚点）。</summary>
+    private float _rawAnchorX, _rawAnchorY;
+    /// <summary>自锚点以来 raw 报累计的位移。</summary>
+    private int _rawAccumX, _rawAccumY;
+    /// <summary>锚点是否有效（没锚点就不敢用 raw 填缝）。</summary>
+    private bool _rawAnchorValid;
 
     /// <summary>
     /// 收尾时给进程的退出码。默认 0；自检发现有 FAIL 时置 1，
@@ -2951,8 +3003,8 @@ public partial class InkEngine
                 OnPointerUp(hWnd, wParam);
                 return IntPtr.Zero;
 
-            case Native.WM_INPUT:                     // `--rawprobe`：只数数，不参与落笔
-                _rawReportsThisStroke++;
+            case Native.WM_INPUT:                     // `--rawprobe` 只数数；`--rawinput` 顺带补采样点
+                HandleRawInput(lParam);
                 return IntPtr.Zero;
 
             case Native.WM_POINTERCAPTURECHANGED:
@@ -3519,6 +3571,8 @@ public partial class InkEngine
         ActiveStrokeHasPressure = false;
         LastCoalescedSamples = LastCoalescedMessages = 0;
         _rawReportsThisStroke = 0;      // `--rawprobe`：原始输入计数每笔归零
+        _rawPointsAdded = 0;            // `--rawinput`：补进来的点数每笔归零
+        _rawAnchorValid = false;        // 锚点由这一笔的第一条指针消息建立
         AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
         // 半径**逐点算**（见 TrailRadius）：有压感的笔，湿墨的粗细必须和干墨一致。
         FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
@@ -6365,6 +6419,9 @@ public partial class InkEngine
                     + (RawProbeEnabled
                         ? $"，[原始输入 {_rawReportsThisStroke} 条 → {(_rawReportsThisStroke * 1000.0 / Math.Max(1, strokeMs)):F0} Hz]"
                         : "")
+                    + (RawInputCapture
+                        ? $"，[raw 补点 +{_rawPointsAdded}]"
+                        : "")
                     // [删除 2026-10-05] 预测器/预测尾/喂 DWM 段数的日志：随预测系统一起移除。
                     // 分配与 GC：低配机排查"偶发卡顿"的**唯一依据**。
                     // 第 2 代那一位出现在书写期间，就说明这一笔画到一半被全堆回收打断过。
@@ -7813,6 +7870,11 @@ public partial class InkEngine
     {
         if (ActiveStroke == null) return;
 
+        // `--rawinput`：这一条指针消息给出的是**绝对位置** → 把它设成锚点、累计清零。
+        // 这是"误差不漂"的关键：raw 报的位移只在两条指针消息之间累加，
+        // 每来一条指针消息就重新对准一次真值。
+        ResetRawAnchor(screenX, screenY);
+
         if (ptype == Native.PT_PEN && _pen.Read(id, NowMs, _lastInputMsgQpc) > 0)
         {
             LastCoalescedMessages++;
@@ -7875,7 +7937,74 @@ public partial class InkEngine
         ActiveStroke.AddPoint(curCanvasX, curCanvasY, curPressure, NowMs);
     }
 
-    // [删除 2026-10-05] 原 `UpdateRenderTail()` / `ClearRenderTail()`（预测渲染尾的写入与收回）
+    /// <summary>
+    /// 处理一条原始输入（`--rawprobe` / `--rawinput`）。
+    ///
+    /// `--rawprobe`：只数条数（用来量"设备到底报了多少"，见 `[笔画]` 那一栏）。
+    /// `--rawinput`：在"正在写一笔"时，把 raw 的相对位移换算成绝对位置**补成采样点**。
+    ///
+    /// 门槛卡得很保守——只要有一条不满足就**只计数、不加点**，绝不影响既有行为：
+    ///   · 必须是鼠标类型的报（笔的原始报是 digitizer 类、厂商私有格式，不走这里）；
+    ///   · 必须正在写一笔，且这一笔是**自由笔迹**（图形/橡皮/框选/截图/激光都不碰）；
+    ///   · 必须有**有效的绝对锚点**（没锚点就没法把相对位移变绝对——宁可不加也不猜）。
+    /// </summary>
+    private void HandleRawInput(IntPtr lParam)
+    {
+        _rawReportsThisStroke++;
+        if (!RawInputCapture || ActiveStroke == null) return;
+
+        uint size = (uint)Marshal.SizeOf<Native.RAWINPUT>();
+        uint header = (uint)Marshal.SizeOf<Native.RAWINPUTHEADER>();
+        if (Native.GetRawInputData(lParam, Native.RID_INPUT, out var ri, ref size, header) == uint.MaxValue)
+            return;
+        if (ri.header.dwType != Native.RIM_TYPEMOUSE) return;
+
+        // 绝对坐标的报（远程桌面 / 少数设备）：这里不做换算——那条路上我们本来就有绝对位置，
+        // 用相对位移那条设计更稳；遇到就跳过，宁可少几个点。
+        if ((ri.mouse.usFlags & Native.MOUSE_MOVE_ABSOLUTE) != 0) return;
+
+        int dx = ri.mouse.lLastX, dy = ri.mouse.lLastY;
+        if (dx == 0 && dy == 0) return;              // 不动时也会发空报，丢掉
+
+        // 只有"自由笔迹 + 手写工具"才补点：和 OnPointerMove 那条分流保持同一张口径
+        if (ActiveStroke.Kind != StrokeKind.Freehand) return;
+        var tool = ActiveStroke.Tool;
+        if (tool != Tool.Pen && tool != Tool.Highlighter) return;
+        if (SelDragging || _dwell.State == DwellState.Armed) return;
+        if (!_rawAnchorValid) return;
+
+        _rawAccumX += dx;
+        _rawAccumY += dy;
+        float sx = _rawAnchorX + _rawAccumX, sy = _rawAnchorY + _rawAccumY;
+
+        float cx = sx, cy = sy;
+        ScreenToCanvas(ref cx, ref cy);
+
+        // ① 每笔上限（第二道保险）
+        if (_rawPointsAdded >= RawMaxPerStroke) return;
+
+        // ② 最小距离：把零长段挡在门外。鼠标 raw 可以到 1000Hz，不移开的话
+        //    相邻两点差不到 1 像素——几何那边明确讲过零长段会多出退化段。
+        if (ActiveStroke.Points.Count > 0)
+        {
+            var last = ActiveStroke.Points[^1];
+            float ddx = cx - last.X, ddy = cy - last.Y;
+            if (ddx * ddx + ddy * ddy < RawMinDistPx * RawMinDistPx) return;
+        }
+
+        // 压力沿用"这一笔到目前为止的值"：鼠标模式下本来就没有压力，
+        // 传 0.5 与既有路径一致（见 AppendStrokeSamples 的注释）。
+        ActiveStroke.AddPoint(cx, cy, 0.5f, NowMs);
+        _rawPointsAdded++;
+    }
+
+    private void ResetRawAnchor(float screenX, float screenY)
+    {
+        _rawAnchorX = screenX; _rawAnchorY = screenY;
+        _rawAccumX = _rawAccumY = 0;
+        _rawAnchorValid = true;
+    }
+
     // 随老预测系统整条链移除。算法与接线原文见 `.revert/2026-10-05-渲染减法/`。
 
     /// <summary>

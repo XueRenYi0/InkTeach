@@ -20026,6 +20026,27 @@ internal sealed partial class App : InkEngine.InkEngine
         }
         Add(jitterEllipse, ox + 1300f, oy + 760f);
 
+        // ⑪ **点密度对照**（用户 2026-10-07 问"raw input 值不值"）：
+        //    同一个椭圆、同一条弧长路径，按两种点距各画一条：
+        //      · 左边 13 点 = 关 ink 时的真实点距（~68Hz × 2900px/s ≈ 43px 一点）
+        //      · 右边 33 点 = 接上 raw input 之后的点距（~170Hz ≈ 17px 一点）
+        //    左边是"我们现在能拿到的"，右边是"raw input 能拿到的"。
+        //    两条都过同一套曲线代码，差别**只在采样密度**——所以这张图直接回答
+        //    "多出来的那 60% 输入到底买到了什么"。
+        void DensePair(float dx, int n, bool dots)
+        {
+            var pts = new List<Vector2>();
+            const float a2 = 120f, b2 = 88f;
+            for (int i = 0; i <= n; i++)
+            {
+                float ang = MathF.PI * 1.9f * i / n - MathF.PI * 0.95f;
+                pts.Add(new Vector2(MathF.Cos(ang) * a2, -MathF.Sin(ang) * b2));
+            }
+            Add(pts, dx, oy + 1180f, dots);
+        }
+        DensePair(ox + 260f, 13, dots: true);    // 现在（关 ink 的真实密度）
+        DensePair(ox + 760f, 33, dots: true);    // raw input 之后
+
         string dir = Path.GetDirectoryName(Path.GetFullPath(path));
         string name = Path.GetFileNameWithoutExtension(path);
         string ext = Path.GetExtension(path);

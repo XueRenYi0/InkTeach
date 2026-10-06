@@ -539,6 +539,53 @@ internal static class Native
     public static extern bool RegisterRawInputDevices(
         [In] RAWINPUTDEVICE[] pRawInputDevices, uint uiNumDevices, uint cbSize);
 
+    /// <summary>原始输入的读取命令（GetRawInputData 的 uiCommand）。</summary>
+    public const uint RID_INPUT = 0x10000003;
+    /// <summary>RAWINPUTHEADER.dwType：鼠标。</summary>
+    public const uint RIM_TYPEMOUSE = 0;
+    /// <summary>RAWMOUSE.usFlags：坐标是**绝对**的（少数设备/远程桌面会这么报）。</summary>
+    public const ushort MOUSE_MOVE_ABSOLUTE = 0x01;
+    /// <summary>RAWMOUSE.usFlags：这一报里没有位移信息（只有按键）。</summary>
+    public const ushort MOUSE_MOVE_NOCOALESCE = 0x08;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RAWINPUTHEADER
+    {
+        public uint dwType;
+        public uint dwSize;
+        public IntPtr hDevice;
+        public IntPtr wParam;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RAWMOUSE
+    {
+        public ushort usFlags;
+        public ushort usButtonFlags;
+        public ushort usButtonData;
+        public uint ulRawButtons;
+        /// <summary>相对位移（`MOUSE_MOVE_ABSOLUTE` 时是绝对坐标）。</summary>
+        public int lLastX;
+        public int lLastY;
+        public uint ulExtraInformation;
+    }
+
+    /// <summary>
+    /// RAWINPUT 是个联合体（mouse / keyboard / hid）。鼠标那一支是**结构体里最大的一档**
+    /// （键盘更小、hid 需要先把头读出来才知道长度），所以按鼠标读是安全的：
+    /// 我们只处理 `dwType == RIM_TYPEMOUSE` 的报，别的类型直接跳过。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RAWINPUT
+    {
+        public RAWINPUTHEADER header;
+        public RAWMOUSE mouse;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern uint GetRawInputData(
+        IntPtr hRawInput, uint uiCommand, out RAWINPUT pData, ref uint pcbSize, uint cbSizeHeader);
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetPointerInfo(uint pointerId, out POINTER_INFO pointerInfo);
 
