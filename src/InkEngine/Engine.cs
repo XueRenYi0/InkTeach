@@ -1882,6 +1882,7 @@ public partial class InkEngine
             }
             if (args.Contains("--cornerdump")) StrokeSmoothing.DumpTurns = true;
             if (args.Contains("--notrend")) StrokeSmoothing.CornerUseTrend = false;
+            if (args.Contains("--rawprobe")) RawProbeEnabled = true;
             StrokeMotion.SetMode(motionMode);
             InkModel.SetEnabled(false);              // M3 弹簧 [停用 2026-10-05]
 
@@ -2115,6 +2116,24 @@ public partial class InkEngine
     /// 这个开关让程序自己报（前两轮就是靠读代码猜，两次都猜错了）。
     /// </summary>
     internal static bool GeomTraceOn;
+
+    /// <summary>
+    /// `--rawprobe`（2026-10-07）：注册原始输入、数"设备到底报了多少条"。
+    ///
+    /// 用户的疑问是"手写板标称 300Hz，为什么关掉 ink 只有 65Hz"。
+    /// 硬件上报率 ≠ 能到应用手里的条数——中间隔着 Windows 的输入管线
+    /// （鼠标消息会被合并）。**Raw Input（WM_INPUT）是绕过合并的官方通道**，
+    /// 它给出的数才回答得了"是我们收得少，还是系统本来就没给"。
+    ///
+    /// 只数数，不参与落笔（产品路径一个字不改）。
+    /// </summary>
+    internal static bool RawProbeEnabled;
+
+    /// <summary>原始输入注册是否成功（诊断）。</summary>
+    internal static bool RawProbeOk;
+
+    /// <summary>本笔期间收到的原始输入条数。</summary>
+    private int _rawReportsThisStroke;
 
     /// <summary>
     /// 收尾时给进程的退出码。默认 0；自检发现有 FAIL 时置 1，
@@ -2932,6 +2951,10 @@ public partial class InkEngine
                 OnPointerUp(hWnd, wParam);
                 return IntPtr.Zero;
 
+            case Native.WM_INPUT:                     // `--rawprobe`：只数数，不参与落笔
+                _rawReportsThisStroke++;
+                return IntPtr.Zero;
+
             case Native.WM_POINTERCAPTURECHANGED:
                 _cntCaptureLost++;
                 EndStroke();
@@ -3495,6 +3518,7 @@ public partial class InkEngine
         // 起笔：落笔这条消息里可能已经合并了几个采样点，一起收进来（以前只取最新那一个）。
         ActiveStrokeHasPressure = false;
         LastCoalescedSamples = LastCoalescedMessages = 0;
+        _rawReportsThisStroke = 0;      // `--rawprobe`：原始输入计数每笔归零
         AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
         // 半径**逐点算**（见 TrailRadius）：有压感的笔，湿墨的粗细必须和干墨一致。
         FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
@@ -6338,6 +6362,9 @@ public partial class InkEngine
                     + $"，设备={PointerTypeName(_activePointerType)}"
                     + $"，压感={(ActiveStrokeHasPressure ? "有" : "无")}"
                     + $"，合并 {merge}（{LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 点）"
+                    + (RawProbeEnabled
+                        ? $"，[原始输入 {_rawReportsThisStroke} 条 → {(_rawReportsThisStroke * 1000.0 / Math.Max(1, strokeMs)):F0} Hz]"
+                        : "")
                     // [删除 2026-10-05] 预测器/预测尾/喂 DWM 段数的日志：随预测系统一起移除。
                     // 分配与 GC：低配机排查"偶发卡顿"的**唯一依据**。
                     // 第 2 代那一位出现在书写期间，就说明这一笔画到一半被全堆回收打断过。

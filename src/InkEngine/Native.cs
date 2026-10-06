@@ -517,6 +517,28 @@ internal static class Native
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool EnableMouseInPointer(bool enable);
 
+    // ---- 原始输入（Raw Input）：`--rawprobe` 用来数"设备到底报了多少条" ----------
+    //
+    // 和鼠标消息的区别：WM_MOUSEMOVE / WM_POINTERUPDATE 走的是 Windows 的**合并管线**
+    // （来不及投递的移动会被并进一条），而 **WM_INPUT 是每一条 HID 报逐一投递的**。
+    // 所以"原始输入条数"才是"设备交给系统的原始条数"，用它才能判断
+    // "关 ink 时收得少"到底怪我们、怪系统、还是怪驱动。
+    public const uint WM_INPUT = 0x00FF;
+    public const uint RIDEV_INPUTSINK = 0x00000100;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RAWINPUTDEVICE
+    {
+        public ushort usUsagePage;
+        public ushort usUsage;
+        public uint dwFlags;
+        public IntPtr hwndTarget;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool RegisterRawInputDevices(
+        [In] RAWINPUTDEVICE[] pRawInputDevices, uint uiNumDevices, uint cbSize);
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetPointerInfo(uint pointerId, out POINTER_INFO pointerInfo);
 
