@@ -2441,6 +2441,12 @@ public partial class InkEngine
             PumpUpdate();                 // 自动更新：把后台结果搬过来，该换壳就换壳
             if (_quit) break;
 
+            // 原始输入的**注销兜底**：只要没在写一笔就注销掉。
+            // 放在主循环里而不是逐个抬笔分支上——抬笔路径有十几条（正常抬手、丢捕获、
+            // 截图、图形工具、多笔式…），漏一条就会退回"空闲也收鼠标空报"，
+            // 表现就是空闲 46fps 空转、单核 26%（实测）。
+            if (_rawRegistered && ActiveStroke == null) SetRawCapture(false);
+
             NowMs = _clock.Elapsed.TotalMilliseconds;
             PumpKeyGestures();            // 工具键的手势：长按判定 + 连按换色的延迟结算
             PumpRadialPalette();          // 呼出盘：出盘延迟 / 松手轮询 / 超时
@@ -3573,6 +3579,7 @@ public partial class InkEngine
         _rawReportsThisStroke = 0;      // `--rawprobe`：原始输入计数每笔归零
         _rawPointsAdded = 0;            // `--rawinput`：补进来的点数每笔归零
         _rawAnchorValid = false;        // 锚点由这一笔的第一条指针消息建立
+        SetRawCapture(true);            // 原始输入：**只在这一笔期间收**（空闲必须关）
         AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
         // 半径**逐点算**（见 TrailRadius）：有压感的笔，湿墨的粗细必须和干墨一致。
         FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
@@ -8004,6 +8011,21 @@ public partial class InkEngine
         _rawAccumX = _rawAccumY = 0;
         _rawAnchorValid = true;
     }
+
+    /// <summary>
+    /// 按笔开关原始输入（**空闲时必须关**，见 <see cref="OverlayWindow.SetRawInput"/> 那段注释：
+    /// 不关的话空闲会持续收到鼠标轮询空报，主循环被顶成 46fps 空转、单核 26%）。
+    /// </summary>
+    private void SetRawCapture(bool on)
+    {
+        if (!RawProbeEnabled && !RawInputCapture) return;
+        if (on == _rawRegistered) return;
+        if (_windows.Count == 0) return;
+        _rawRegistered = on && _windows[0].SetRawInput(true);
+        if (!on) _windows[0].SetRawInput(false);
+    }
+
+    private bool _rawRegistered;
 
     // 随老预测系统整条链移除。算法与接线原文见 `.revert/2026-10-05-渲染减法/`。
 

@@ -315,7 +315,7 @@ public sealed class FullUi : IOverlayUi
             if (BandVisible()
                 && ((_railHover && _rail.Value < 0.5f) || (!_railHover && _rail.Value > 0f)))
                 return true;
-            if (_hideEnabled && !_hoverInside && _peek.Value > 0f) return true;
+            if (_hideEnabled && _peekPendingCollapse && _peek.Value > 0f) return true;
             // 悬停提示：还在等 500ms 延迟、或淡入没走完，都要继续给帧——
             // 不给帧的话"到点了"没人去画它。显示完之后它是静态的，不再烧帧。
             if (TipWanted && (!_tipShown || _tipFade.Running)) return true;
@@ -2831,9 +2831,25 @@ public sealed class FullUi : IOverlayUi
     /// 每帧更新"该不该收起来"。写得像个小状态机，因为规则就三条：
     /// 写字中不许动、指针在里面/正按着/「更多」面板开着不许收、刚离开要等一会儿（防误触）。
     /// </summary>
+    /// <summary>
+    /// 贴边隐藏："真的在等收合"才继续要帧。
+    ///
+    /// ⚠ **为什么不能直接用 `! _hoverInside && _peek.Value > 0`**（2026-10-07 修）：
+    /// 那条在"**面板根本不会收**"的时候也成立，于是**永远要帧**——
+    /// 最典型的一种：开了贴边隐藏但指针**还没碰过面板**（`_peekArmed == false`，
+    /// 见 `UpdatePeek` 开头，此时面板按设计保持全开、`_peek.Value == 1`）。
+    /// 实测后果：**待机 45.5 fps 持续渲染、单核 4~5%，永不停止**——
+    /// 关掉这个开关或删掉设置就是 0 fps。笔记本上就是一直耗电、一直发热。
+    ///
+    /// 现在只有"armed 之后、且当前不处于 keepOpen、且没在写字"才算"在等收合"：
+    /// 三种情况都会收敛到 0 —— 收（`_peek.Value → 0`）、或 keepOpen（`_peekPendingCollapse`
+    /// 立刻变假）、或没 arm（同样为假）。
+    /// </summary>
+    private bool _peekPendingCollapse;
+
     private void UpdatePeek()
     {
-        if (!_hideEnabled) { _peek.To(1f, 0); return; }
+        if (!_hideEnabled) { _peek.To(1f, 0); _peekPendingCollapse = false; return; }
 
         // **启动之后先不藏**（用户 2026-09-17："在贴边隐藏的情况下，刚启动软件的时候不要隐藏"）。
         //
@@ -2841,7 +2857,7 @@ public sealed class FullUi : IOverlayUi
         // 一开机面板立刻收成屏幕底边那条 8 像素的露头（而且露头正好压在任务栏上），
         // 老师根本找不到它。现在改成：**先露着**，等指针碰过面板一次（`_peekArmed`）
         // 才允许"离开就收"——那时候他已经知道东西在哪儿了。
-        if (!_peekArmed) { _peek.To(1f, 0); return; }
+        if (!_peekArmed) { _peek.To(1f, 0); _peekPendingCollapse = false; return; }
 
         // **写字中：什么都不做**（原样返回），不是"强制展开"。
         //
@@ -2853,11 +2869,13 @@ public sealed class FullUi : IOverlayUi
         {
             // 写字这段时间不算"离开"，写完还要等满 700 毫秒才允许收（防误触那条规则照旧）。
             _leftAtMs = _host.NowMs;
+            _peekPendingCollapse = false;
             return;
         }
 
         bool keepOpen = _hoverInside || _press != -1 || _sliderDragging || _moreOpen
                         || _host.NowMs < _peekHoldUntilMs;
+        _peekPendingCollapse = !keepOpen && _peek.Value > 0f;   // 只有这一档才需要继续要帧
         if (keepOpen)
         {
             _leftAtMs = _host.NowMs;

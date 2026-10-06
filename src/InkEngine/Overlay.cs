@@ -780,30 +780,8 @@ internal sealed partial class OverlayWindow : IDisposable
 
         Dpi = Native.GetDpiForWindow(Hwnd);
         if (Dpi == 0) Dpi = 96;
-
-        // `--rawprobe`：注册**原始输入**（Raw Input）来数"设备到底报了多少条"。
-        //
-        // 为什么需要它：用户的手写板标称 300Hz，但关掉 Windows Ink、走鼠标那条路时，
-        // 我们实际只收到 ~65Hz。而开着 Ink 走笔那条路时有 ~165Hz（系统还会合并 2.6:1）。
-        // 硬件 300Hz 是**笔自己的上报率**，不等于"能到应用手里的条数"——
-        // 中间隔着 Windows 的输入管线。Raw Input（WM_INPUT）是**绕过鼠标消息合并**的
-        // 官方通道，所以它给出的是"设备交给系统的原始条数"。
-        //
-        // 它只数数、不参与落笔（产品路径一个字不改），用来回答：
-        //   关 ink 时到底是我们收得少，还是系统/驱动本来就没给那么多。
-        if (global::InkEngine.InkEngine.RawProbeEnabled)
-            global::InkEngine.InkEngine.RawProbeOk = Native.RegisterRawInputDevices(new[]
-            {
-                new Native.RAWINPUTDEVICE
-                {
-                    usUsagePage = 0x01,      // Generic Desktop
-                    usUsage = 0x02,          // Mouse（手写板在鼠标模式下也报这个）
-                    dwFlags = Native.RIDEV_INPUTSINK,   // 不在前台也收，方便边画边看
-                    hwndTarget = Hwnd,
-                },
-            }, 1, (uint)System.Runtime.InteropServices.Marshal.SizeOf<Native.RAWINPUTDEVICE>());
-
-        // 真实刷新率：120Hz 屏上延时报告要折合真实周期（拿不到退回 60Hz）。        // 窗口创建时读一次；改了显示模式重启软件即可（运行中改的极少）。
+        // 真实刷新率：120Hz 屏上延时报告要折合真实周期（拿不到退回 60Hz）。
+        // 窗口创建时读一次；改了显示模式重启软件即可（运行中改的极少）。
         int refreshHz = Native.GetCurrentRefreshHz();
         RefreshPeriodMs = refreshHz >= 30 ? 1000.0 / refreshHz : 1000.0 / 60.0;
 
@@ -820,6 +798,30 @@ internal sealed partial class OverlayWindow : IDisposable
             Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
 
         return null;
+    }
+
+    /// <summary>
+    /// 按需注册 / 注销**原始输入**（`--rawinput` / `--rawprobe`）。
+    ///
+    /// ⚠ **只能在"正在写一笔"期间注册，抬笔必须注销**——这条是踩出来的：
+    /// `RIDEV_INPUTSINK` 会让窗口在**空闲时也持续收到鼠标的轮询空报**
+    /// （鼠标不动时硬件照样按轮询率发"零位移"的报，每秒上百条）。
+    /// 消息一多，主循环就被顶成"每帧都渲染"：实测**空闲 46 fps、单核 26%**
+    /// （用 `--norawinput` 对照是 0 fps / 0.4%）。教室机/笔记本上这就是风扇狂转。
+    /// 所以按笔注册、抬笔注销，空闲时一条都不收。
+    /// </summary>
+    public bool SetRawInput(bool on)
+    {
+        if (Hwnd == IntPtr.Zero) return false;
+        var dev = new Native.RAWINPUTDEVICE
+        {
+            usUsagePage = 0x01,        // Generic Desktop
+            usUsage = 0x02,            // Mouse（手写板在鼠标模式下也报这个）
+            dwFlags = on ? Native.RIDEV_INPUTSINK : Native.RIDEV_REMOVE,
+            hwndTarget = on ? Hwnd : IntPtr.Zero,
+        };
+        return Native.RegisterRawInputDevices(new[] { dev }, 1,
+            (uint)System.Runtime.InteropServices.Marshal.SizeOf<Native.RAWINPUTDEVICE>());
     }
 
     private void CreateDeviceResources()

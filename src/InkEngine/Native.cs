@@ -541,6 +541,8 @@ internal static class Native
 
     /// <summary>原始输入的读取命令（GetRawInputData 的 uiCommand）。</summary>
     public const uint RID_INPUT = 0x10000003;
+    /// <summary>RAWINPUTDEVICE.dwFlags：注销该设备的原始输入。</summary>
+    public const uint RIDEV_REMOVE = 0x00000001;
     /// <summary>RAWINPUTHEADER.dwType：鼠标。</summary>
     public const uint RIM_TYPEMOUSE = 0;
     /// <summary>RAWMOUSE.usFlags：坐标是**绝对**的（少数设备/远程桌面会这么报）。</summary>
