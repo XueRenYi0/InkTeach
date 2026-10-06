@@ -1880,6 +1880,8 @@ public partial class InkEngine
                     StrokeSmoothing.BumpVersion();
                 }
             }
+            if (args.Contains("--cornerdump")) StrokeSmoothing.DumpTurns = true;
+            if (args.Contains("--notrend")) StrokeSmoothing.CornerUseTrend = false;
             StrokeMotion.SetMode(motionMode);
             InkModel.SetEnabled(false);              // M3 弹簧 [停用 2026-10-05]
 
@@ -6314,8 +6316,14 @@ public partial class InkEngine
                 // **先结账再打印**：这一段（含 AddStroke 的快照/缓存收拾）才是分配最集中的地方，
                 // 晚一步收仪表，印出来的就是上一笔的数字。
                 EndStrokeMeasure();
+                // 这一笔的**历时 + 有效输入频率**（2026-10-07 加）：
+                // "收到 12 个点"本身说明不了任何事——12 个点摊在 0.1 秒上是 120Hz（正常），
+                // 摊在 0.8 秒上就只有 15Hz（异常）。排查"点是不是被稀疏了"必须先有这个分母。
+                double strokeMs = NowMs - (ActiveStroke.Points.Count > 0 ? ActiveStroke.Points[0].T : NowMs);
+                double inHz = strokeMs > 1 ? LastCoalescedMessages * 1000.0 / strokeMs : 0;
                 _lastStrokeReport =
                     $"采集到 {ActiveStroke.Points.Count} 个点"
+                    + $"，历时 {strokeMs:F0} ms → 有效输入 {inHz:F0} Hz"
                     + $"，收到 按下{_cntDown} 移动{_cntMove} 抬起{_cntUp} 丢失捕获{_cntCaptureLost}"
                     + $"，设备={PointerTypeName(_activePointerType)}"
                     + $"，压感={(ActiveStrokeHasPressure ? "有" : "无")}"

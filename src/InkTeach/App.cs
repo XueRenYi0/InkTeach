@@ -19949,6 +19949,48 @@ internal sealed partial class App : InkEngine.InkEngine
         }
         Add(realcase, ox + 420f, oy + 760f);
 
+        // ⑨ **真机复现·椭圆**（用户 2026-10-07 第二轮数据）：他的形状不是圆，是
+        //    周长 515~564px 的**椭圆**（≈200×150），10~14 个点、点距 40~60px。
+        //
+        //    为什么必须单列：椭圆上**转角是变化的**——端部曲率半径 = b²/a ≈ 56px、
+        //    侧面 = a²/b ≈ 133px，所以端部每顶点转角 ≈48°、侧面只有 ≈20°，
+        //    中间连续过渡。任何"相邻差"式的判据如果容差取小了，端部照样被切成角
+        //    ——第一版连续性容差 12° 就是这么栽的（圆的转角处处相等，能过；
+        //    椭圆过不了）。
+        var ellipse = new List<Vector2>();
+        {
+            const float a = 100f, b = 75f;       // ≈ 周长 553px，和用户实测一致
+            const int n = 12;                    // 12 个点
+            // 按**弧长均匀**取样：等弧长行走（手画时点的分布接近这个，
+            // 不是按参数角均匀——按角均匀会让端部点变稀，测不出真实分布）
+            float perimeter = 0f;
+            for (int k = 0; k < 720; k++)
+            {
+                float t0 = k * MathF.PI / 360f, t1 = (k + 1) * MathF.PI / 360f;
+                float s0 = MathF.Sqrt(a * a * MathF.Sin(t0) * MathF.Sin(t0) + b * b * MathF.Cos(t0) * MathF.Cos(t0));
+                float s1 = MathF.Sqrt(a * a * MathF.Sin(t1) * MathF.Sin(t1) + b * b * MathF.Cos(t1) * MathF.Cos(t1));
+                perimeter += (s0 + s1) * 0.5f * (MathF.PI / 360f);
+            }
+            float step = perimeter / n;
+            ellipse.Add(new Vector2(a, 0f));
+            float theta = 0f;
+            for (int i = 1; i <= n; i++)
+            {
+                float acc = 0f;
+                while (acc < step && theta < MathF.PI * 2f)
+                {
+                    float s = MathF.Sqrt(a * a * MathF.Sin(theta) * MathF.Sin(theta)
+                                       + b * b * MathF.Cos(theta) * MathF.Cos(theta));
+                    float d = 0.0005f;
+                    acc += s * d;
+                    theta += d;
+                }
+                float ang = theta - MathF.PI * 0.5f;   // 让起笔落在端部
+                ellipse.Add(new Vector2(MathF.Cos(ang) * a, -MathF.Sin(ang) * b));
+            }
+        }
+        Add(ellipse, ox + 800f, oy + 760f);
+
         string dir = Path.GetDirectoryName(Path.GetFullPath(path));
         string name = Path.GetFileNameWithoutExtension(path);
         string ext = Path.GetExtension(path);

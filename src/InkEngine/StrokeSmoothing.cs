@@ -68,6 +68,35 @@ internal static class StrokeSmoothing
     public static float CornerSmoothDeg = 12f;
 
     /// <summary>
+    /// **拐点判据用"偏离局部趋势"**（2026-10-07 第三版，默认开；`--notrend` 关掉做对照）。
+    ///
+    /// 前两版都不对，记在这里免得再走回去：
+    ///   · 第一版：**固定的绝对阈值**（转角 ≥35° 就算角）。圆上每顶点转角 = 360°/段数，
+    ///     与半径无关 → 11 点绕一圈就是 36° → 每个点判成角 → 多边形。
+    ///   · 第二版：**"和相邻点差 ≤容差 就算光滑"**。这条**根上就是错的**：
+    ///     锯齿的转角是 +127 −127 +127…，相邻差 0° → 被判成"光滑" → **角点保护失效**。
+    ///
+    /// 第三版：比的是**带符号转角**与**局部趋势**（窗口内符号转角的均值）之差。
+    ///   圆   +36 +36 +36        → 趋势 +36   → 偏离 0    → 光滑 ✅
+    ///   椭圆 +20…+47…+20        → 趋势 ~+33  → 偏离 ~14  → 光滑 ✅
+    ///   锯齿 +127 −127 +127     → 趋势 ~0    → 偏离 127  → 角   ✅
+    ///   直角 0 0 +90 0 0        → 趋势 ~0    → 偏离 90   → 角   ✅
+    ///
+    /// **关键是符号**：锯齿的正负交替在取绝对值之后会被抹平，"处处相等"就分不出来了。
+    /// 而"偏离趋势"这个口径对**稀采样**天然免疫——圆弧的转角是连续变化的，
+    /// 再怎么稀也只是趋势的一部分，不会偏离自己。
+    /// </summary>
+    public static bool CornerUseTrend = true;
+
+    /// <summary>算局部趋势时往两边各看几个点（不含自己）。</summary>
+    public static int CornerTrendWindow = 3;
+
+    /// <summary>诊断（`--cornerdump`）：把抽稀之后每个顶点的转角序列打出来。
+    /// 定参数必须看这个序列——"多松算松"这种事不能靠算，要看真笔画的分布。</summary>
+    public static bool DumpTurns;
+    private static int _dumpCount;
+
+    /// <summary>
     /// **窗口判据的臂长上限**（画布像素；`--smoothcornerpx N` 调，`0` = 关闭本护栏）。
     ///
     /// 立这条是因为下面这条判据的**前提是"点密"**，而它的窗口却按**点数**算：
@@ -248,19 +277,33 @@ internal static class StrokeSmoothing
                 wMacro = Math.Clamp((int)MathF.Round(CornerMacroPx / spacing), 1, 16);
         }
 
+        // 诊断：抽稀之后的**转角序列**（定"多松算松"必须看这个分布，不能靠算）
+        if (DumpTurns && _dumpCount < 14 && _m >= 6)
+        {
+            _dumpCount++;
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"  [转角序列] {_m} 点，每顶点转角(度)：");
+            for (int i = 1; i < _m - 1; i++) sb.Append(TurnAtSafe(i).ToString("F0")).Append(' ');
+            // 相邻差的最大值：连续性判据的容差必须大于它，否则光滑椭圆端部照样被切
+            float maxStep = 0f;
+            for (int i = 2; i < _m - 1; i++)
+                maxStep = MathF.Max(maxStep, MathF.Abs(TurnAtSafe(i) - TurnAtSafe(i - 1)));
+            sb.Append($" | 相邻最大差 {maxStep:F0}° | 阈值 {CornerAngleDeg:F0}° / 连续性容差 {CornerSmoothDeg:F0}°");
+            Console.WriteLine(sb.ToString());
+        }
+
         for (int i = 1; i < _m - 1; i++)
         {
-            // ⓪ **连续性**：转角与左右邻点差不多 → 是光滑弯曲的一部分，绝不是角。
-            // 这条必须在①②之前——它们的绝对阈值分不开"稀采样下的圆弧"和"尖角"。
-            if (CornerSmoothDeg > 0f)
+            // ⓪ **必须偏离局部趋势**（第三版，2026-10-07）：
+            //    比较的是**带符号**转角与"这一段路整体在往哪边弯"之差。
+            //    · 圆/椭圆：处处同号、幅值连续 → 偏离小 → 不是角（点稀也不会被切）
+            //    · 直角：  0 0 +90 0 0      → 趋势 ~0  → 偏离 90 → 角
+            //    · 锯齿：  +127 −127 +127   → 趋势 ~0  → 偏离 127 → 角
+            //    前两版（固定阈值 / 相邻差）都栽在"只看幅值、不看符号"上。
+            if (CornerUseTrend)
             {
-                float t0 = TurnAtSafe(i);
-                if (t0 > 0f)
-                {
-                    float tp = TurnAtSafe(i - 1), tn = TurnAtSafe(i + 1);
-                    if (MathF.Abs(t0 - tp) <= CornerSmoothDeg
-                        && MathF.Abs(t0 - tn) <= CornerSmoothDeg) continue;
-                }
+                float st = SignedTurnAt(i);
+                if (st != 0f && MathF.Abs(st - LocalTurnTrend(i)) < CornerAngleDeg) continue;
             }
 
             // ① 局部转角
@@ -304,6 +347,39 @@ internal static class StrokeSmoothing
     {
         if (i < 1 || i > _m - 2) return 0f;
         return TurnAt(i - 1, i, i + 1);
+    }
+
+    /// <summary>
+    /// **带符号**的转角（度）：左转为正、右转为负。越界或臂太短返回 0。
+    ///
+    /// 为什么必须要符号（2026-10-07 第三版）：锯齿的转角是 +127 −127 +127…
+    /// ——**幅值处处相等**。凡是用绝对值做的判据（"和邻点差多少""是不是超过阈值"）
+    /// 都会被它骗过去（差异 0、处处相等），把它当成光滑曲线。
+    /// 只有带符号 + 与局部趋势比较，才能同时满足"圆弧不许被切"和"锯齿不许被磨平"。
+    /// </summary>
+    private static float SignedTurnAt(int i)
+    {
+        if (i < 1 || i > _m - 2) return 0f;
+        Vector2 v1 = _p[i] - _p[i - 1];
+        Vector2 v2 = _p[i + 1] - _p[i];
+        if (v1.Length() < MinArmPx || v2.Length() < MinArmPx) return 0f;
+        float cross = v1.X * v2.Y - v1.Y * v2.X;
+        float dot = Vector2.Dot(v1, v2);
+        return MathF.Atan2(cross, dot) * (180f / MathF.PI);
+    }
+
+    /// <summary>窗口内带符号转角的均值（不含自己）= "这一段路整体在往哪边弯多少"。</summary>
+    private static float LocalTurnTrend(int i)
+    {
+        float sum = 0f;
+        int n = 0;
+        for (int j = i - CornerTrendWindow; j <= i + CornerTrendWindow; j++)
+        {
+            if (j == i || j < 1 || j > _m - 2) continue;
+            sum += SignedTurnAt(j);
+            n++;
+        }
+        return n > 0 ? sum / n : 0f;
     }
 
     /// <summary>在 <paramref name="i"/> 处的局部转角（度）；臂太短返回 0（不算角）。</summary>
