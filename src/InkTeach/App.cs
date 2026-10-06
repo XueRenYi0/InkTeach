@@ -19875,12 +19875,28 @@ internal sealed partial class App : InkEngine.InkEngine
         for (int i = 0; i <= 12; i++) zig.Add(new Vector2(i * 55f, (i % 2 == 0) ? 0f : 110f));
         Add(zig, ox + 1860f, oy + 100f);
 
-        // ⑤ 慢画直角：90° 摊在三小段上（每段只有 30°，比角点阈值小）——只有窗口判据兜得住
-        var slow = new List<Vector2> { new(0f, 0f), new(120f, 0f) };
-        for (int k = 1; k <= 3; k++)
+        // ⑤ 慢画直角：90° 摊在 5 小段上、**每段只有 20°**（比角点阈值 35° 小）——
+        //    只有 ±2 点窗口判据兜得住；局部判据看到每段 20° 是判不出来的。
+        //
+        //    ⚠ 2026-10-06 修正：原来这条用的是 **120px 一段**（"90° 摊在三小段上"）。
+        //    那个点距对应的速度是 130Hz × 120px ≈ 15600px/s，是"飞笔"不是"慢画"；
+        //    而且"90° 摊在 3 个 120px 点上"与"半径 ~229px 的圆弧"在数学上无法区分
+        //    （只有 4 个点），逼着窗口判据去误伤圆弧——正是"快速画圆变折线"的根因。
+        //    改成 11px 一段（真·慢画的采样密度）之后，它才真的在测它声称要测的东西。
+        var slow = new List<Vector2>();
         {
-            var d = new Vector2(MathF.Cos(k * MathF.PI / 6f), MathF.Sin(k * MathF.PI / 6f));
-            slow.Add(slow[^1] + d * 120f);
+            const float stepPx = 11f;            // 点距（慢画：11px/点）
+            int nPer = 6;                        // 先直走 6 段
+            float ang5 = 0f;
+            var p = new Vector2(0f, 0f);
+            for (int i = 0; i < nPer; i++) { slow.Add(p); p += new Vector2(MathF.Cos(ang5), MathF.Sin(ang5)) * stepPx; }
+            for (int i = 0; i < 5; i++)          // 转 5 段 × 20° = 100°
+            {
+                ang5 += 20f * MathF.PI / 180f;
+                slow.Add(p); p += new Vector2(MathF.Cos(ang5), MathF.Sin(ang5)) * stepPx;
+            }
+            for (int i = 0; i < nPer; i++) { slow.Add(p); p += new Vector2(MathF.Cos(ang5), MathF.Sin(ang5)) * stepPx; }
+            slow.Add(p);
         }
         Add(slow, ox + 760f, oy + 520f);
 
@@ -19894,6 +19910,21 @@ internal sealed partial class App : InkEngine.InkEngine
             dense.Add(new Vector2(MathF.Cos(a) * 280f, -MathF.Sin(a) * 280f));
         }
         Add(dense, ox + 1560f, oy + 700f, dots: false);
+
+        // ⑦ **稀疏快弧**（用户 2026-10-06 报的那个）：半径 150、每 22.5° 一个点
+        //（弦长 = 2×150×sin(11.25°) ≈ 58.5px 一段）。这是"快速画圆 / 手写板关掉
+        //  Windows Ink"的采样密度。
+        //
+        // 为什么单列这一条：窗口判据量到的转角 ≈ 2×(点距/半径)，
+        // 这里 = 2×58.5/150 = 44.7° > 阈值 35° → **每个点都被判成角点** →
+        // 半圆退化成 8 边形。修前修后一眼能看出来（对照用 `--smoothcornerpx 0`）。
+        var sparse = new List<Vector2>();
+        for (int i = 0; i <= 8; i++)
+        {
+            float a = MathF.PI * i / 8f;
+            sparse.Add(new Vector2(MathF.Cos(a) * 150f, -MathF.Sin(a) * 150f));
+        }
+        Add(sparse, ox + 1120f, oy + 380f);
 
         string dir = Path.GetDirectoryName(Path.GetFullPath(path));
         string name = Path.GetFileNameWithoutExtension(path);

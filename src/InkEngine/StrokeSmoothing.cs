@@ -47,6 +47,30 @@ internal static class StrokeSmoothing
     public static int CornerWindow = 2;
 
     /// <summary>
+    /// **窗口判据的臂长上限**（画布像素；`--smoothcornerpx N` 调，`0` = 关闭本护栏）。
+    ///
+    /// 立这条是因为下面这条判据的**前提是"点密"**，而它的窗口却按**点数**算：
+    ///
+    ///   窗口转角 = ±<see cref="CornerWindow"/> 个点夹出来的两段弦的夹角。
+    ///   圆弧上这个角 ≈ **2 × (点距 / 半径)** ——
+    ///   所以**点距越大，量出来的转角越大**。点距超过 0.305×半径时它就超过 35°，
+    ///   于是**正常圆弧的每个点都被判成角点**，切线处处切断 → 整条笔迹退化成折线。
+    ///
+    /// 这正是"快速画圆变折线"的成因：Windows Ink 关掉 / 快速挥笔 → 采样点稀 → 中招。
+    /// （作者已在 `CornerMacroPx` 那条注释里记录过同一失效模式，但那条只覆盖
+    ///   新加的宏观窗；基础这条 ±点数窗口一直没设上限。）
+    ///
+    /// 为什么"上限"就是对的修法：这条判据存在的理由是"**慢画**时一个直角被摊到
+    /// 四五个点上，只看相邻两点每段只有十几度、判不出来"——那是点密的场景。
+    /// 点稀的时候，相邻两点本身就是长臂（每段转角就很大），角点由局部判据①直接
+    /// 得出，根本不需要②式的外推；此时再拿 ±2 点去跨一段长弧，只会把圆弧误判成角。
+    ///
+    /// 默认 24px：点距 ≤12px 时窗口判据照常生效（保持"慢画直角"的行为不变），
+    /// 点距更大时让位给局部判据。
+    /// </summary>
+    public static float CornerWindowMaxPx = 24f;
+
+    /// <summary>
     /// **像素宏观窗**（2026-10-04 追加；`--smoothmacropx N` 调，**默认 0 = 关**）。
     ///
     /// ⚠ 默认关的原因（实测踩过）：24px 臂在**小半径笔画**上会超过角点阈值（半径 20px 时
@@ -230,6 +254,12 @@ internal static class StrokeSmoothing
             Vector2 vb = _p[b] - _p[i];
             float la = va.Length(), lb = vb.Length();
             if (la < MinArmPx || lb < MinArmPx) continue;
+            // [护栏] 臂太长 = 点太稀：这条判据是给"点密、直角被摊开"用的（见
+            // CornerWindowMaxPx 的说明）。点稀时相邻两点本身就是长臂，角点由 ①
+            // 直接判出；再用 ±2 点跨一段长弧去量，会把正常圆弧的累计转角量成
+            // 超阈值 → 每个点都判角 → 整条退化成折线（快速画圆就是这个）。
+            if (CornerWindowMaxPx > 0f && (la > CornerWindowMaxPx || lb > CornerWindowMaxPx))
+                continue;
             float cos = Vector2.Dot(va, vb) / (la * lb);
             if (cos <= cosThr) _corner[i] = true;
         }

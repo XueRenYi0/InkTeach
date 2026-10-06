@@ -1834,7 +1834,13 @@ public partial class InkEngine
         // 仍然**只做渲染期加工**：存档里的点、命中、撤销、橡皮一概不动。
         {
             var motionMode = StrokeMotionMode.Mean2;   // 2026-10-04 默认档（用户定稿）
-            // [停用] if (args.Contains("--nosmooth")) motionMode = StrokeMotionMode.Raw;
+            // **过点曲线化总开关**（`--smooth` / `--nosmooth`）：2026-10-06 接回来的。
+            // 它之前被注释掉、而 `StrokeMotion.SetMode` 又把它按模式强制关掉，
+            // 结果是"文档说默认开、`--nosmooth` 是对照开关"，实际**永远关着**：
+            // `--nosmooth` 没有任何效果，`--smoothshow` 出的 off/on 两张图逐像素相同
+            // （实测：不同点数 = 0）。现在它只管它该管的——曲线化开不开。
+            if (args.Contains("--nosmooth")) StrokeSmoothing.SetEnabled(false);
+            if (args.Contains("--smooth")) StrokeSmoothing.SetEnabled(true);
             // [停用] if (args.Contains("--inkmodel")) motionMode = StrokeMotionMode.Spring;
             for (int i = 0; i < args.Length - 1; i++)
             {
@@ -1854,6 +1860,15 @@ public partial class InkEngine
             }
             // InkModel.ApplyParamsFromArgs(args);      // M3 参数（--inkm*）[停用]
             StrokeMotion.ApplyParamsFromArgs(args);  // mean2 参数（--mean2win 等）
+            // 窗口判据的臂长上限：`--smoothcornerpx N`（0 = 关护栏，用于做"修前/修后"对照）
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--smoothcornerpx" && float.TryParse(args[i + 1], out float scp))
+                {
+                    StrokeSmoothing.CornerWindowMaxPx = Math.Clamp(scp, 0f, 400f);
+                    StrokeSmoothing.BumpVersion();
+                }
+            }
             StrokeMotion.SetMode(motionMode);
             InkModel.SetEnabled(false);              // M3 弹簧 [停用 2026-10-05]
 

@@ -52,10 +52,20 @@ internal static class StrokeMotion
             Mode = mode;
             Version++;
         }
-        // M1 的旧开关跟着模式走：非 catmull 模式一律关掉过点曲线（mean2 自己有曲线层），
-        // 避免两条曲线叠加。注意这里**不能提前 return**——默认档就是 mean2，
-        // 启动时本来就要把 StrokeSmoothing 关掉。
-        StrokeSmoothing.SetEnabled(mode == StrokeMotionMode.Catmull);
+        // [2026-10-06 修正] 这里原来有一句
+        //     StrokeSmoothing.SetEnabled(mode == StrokeMotionMode.Catmull);
+        // 理由写的是"避免两条曲线叠加"。但它有两个问题：
+        //
+        //  ① **和文档矛盾**：StrokeSmoothing 的文件头与 Engine.Run 的注释都写着
+        //     "默认开（2026-09-28 用户拍板：默认开也没关系）"；这一句让默认档
+        //     （mean2）下 Enabled 恒为 false，等于把"默认开"变成"永远关"。
+        //  ② **它管的那条路根本没有"第二条曲线"**：Enabled 只被
+        //     `BuildCenterlineCore` / `BuildPressureSegments` 的**非模型路径**读
+        //     （被橡皮擦过的笔、回放前缀、建模失败的笔）。那条路没有模型输出，
+        //     也就无所谓叠加——把它关掉的结果是**这些笔直接退化成折线**。
+        //
+        // 所以：Enabled 现在只由 `--nosmooth` / `--smooth` 控制（见 Engine.Run），
+        // 不再跟着运动模式走。
     }
 
     public static void BumpVersion() => Version++;

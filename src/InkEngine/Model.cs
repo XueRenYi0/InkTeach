@@ -5515,7 +5515,9 @@ internal sealed class Stroke
             if (!clipped && Erased.Count == 0 && StrokeMotion.Build(this))
             {
                 // mean2 的曲线层固定为**过点曲线**（拟合档已随停用清理，2026-10-05）。
-                bool drew = AppendSmoothedModeledRun(sink);
+                // `--nosmooth` 时连模型输出也不上曲线——这样它才是一个真正的
+                // "折线对照组"（否则模型路径照样出曲线，开关等于没有）。
+                bool drew = StrokeSmoothing.Enabled && AppendSmoothedModeledRun(sink);
                 if (!drew)
                 {
                     int mn = StrokeMotion.Count;

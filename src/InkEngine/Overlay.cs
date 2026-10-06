@@ -1994,7 +1994,9 @@ internal sealed partial class OverlayWindow : IDisposable
         startRadius = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, Pp(0)));
         float lastX = Px(0), lastY = Py(0), lastR = startRadius;
 
-        if (useModel || (!useModel && StrokeSmoothing.Enabled && !s.RawWhileLive))
+        // `--nosmooth`（StrokeSmoothing.Enabled=false）时整体退回折线：
+        // 模型量出来的点再密，也不上曲线。这样"开/关"才是一个有效对照。
+        if (StrokeSmoothing.Enabled && (useModel || (!useModel && !s.RawWhileLive)))
         {
             // 把源点（原始采样点 / 建模输出）喂进过点曲线：建模输出本来已经去过抖，
             // 再过一次曲线只是为了消掉"输出点之间的折线"（mean2 的快写折线感）。
