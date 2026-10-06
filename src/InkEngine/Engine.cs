@@ -6316,18 +6316,28 @@ public partial class InkEngine
                 // **先结账再打印**：这一段（含 AddStroke 的快照/缓存收拾）才是分配最集中的地方，
                 // 晚一步收仪表，印出来的就是上一笔的数字。
                 EndStrokeMeasure();
-                // 这一笔的**历时 + 有效输入频率**（2026-10-07 加）：
+                // 这一笔的**历时 + 真实采样率**（2026-10-07 加，10-07 晚修正口径）：
                 // "收到 12 个点"本身说明不了任何事——12 个点摊在 0.1 秒上是 120Hz（正常），
                 // 摊在 0.8 秒上就只有 15Hz（异常）。排查"点是不是被稀疏了"必须先有这个分母。
+                //
+                // ⚠ **口径必须是"采样点/秒"，不是"消息/秒"**：开 Windows Ink 时系统会把
+                //   2~3 个硬件采样合并进一条消息（真机实测 12 条消息 → 31 个采样点），
+                //   拿消息数当频率会**把笔的采样率报低一半以上**（第一版就是这么写的）。
+                //   同时把合并比打出来——它本身就说明"这一路到底有没有合并可恢复"。
                 double strokeMs = NowMs - (ActiveStroke.Points.Count > 0 ? ActiveStroke.Points[0].T : NowMs);
-                double inHz = strokeMs > 1 ? LastCoalescedMessages * 1000.0 / strokeMs : 0;
+                double sampleHz = strokeMs > 1 ? LastCoalescedSamples * 1000.0 / strokeMs : 0;
+                double msgHz = strokeMs > 1 ? LastCoalescedMessages * 1000.0 / strokeMs : 0;
+                string merge = LastCoalescedMessages > 0
+                    ? (LastCoalescedMessages == LastCoalescedSamples ? "1:1（系统没合并）"
+                       : $"{(double)LastCoalescedSamples / LastCoalescedMessages:F1}:1（合并历史已恢复）")
+                    : "无";
                 _lastStrokeReport =
                     $"采集到 {ActiveStroke.Points.Count} 个点"
-                    + $"，历时 {strokeMs:F0} ms → 有效输入 {inHz:F0} Hz"
+                    + $"，历时 {strokeMs:F0} ms → 采样 {sampleHz:F0} Hz（消息 {msgHz:F0} Hz）"
                     + $"，收到 按下{_cntDown} 移动{_cntMove} 抬起{_cntUp} 丢失捕获{_cntCaptureLost}"
                     + $"，设备={PointerTypeName(_activePointerType)}"
                     + $"，压感={(ActiveStrokeHasPressure ? "有" : "无")}"
-                    + $"，合并({LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 个采样点)"
+                    + $"，合并 {merge}（{LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 点）"
                     // [删除 2026-10-05] 预测器/预测尾/喂 DWM 段数的日志：随预测系统一起移除。
                     // 分配与 GC：低配机排查"偶发卡顿"的**唯一依据**。
                     // 第 2 代那一位出现在书写期间，就说明这一笔画到一半被全堆回收打断过。
