@@ -880,10 +880,16 @@ internal sealed class Stroke
     ///   `B-模型+曲线` / `B-模型+折线` / `B-原始+曲线` / `B-原始+折线`
     /// （A = 等宽描边通道 `BuildCenterlineCore`；B = 压感墨迹通道 `BuildPressureSegments`）
     /// </summary>
-    internal bool GeomTraced;
-    /// <summary>诊断：活笔那一次的几何路径是否已打印（与 <see cref="GeomTraced"/> 分开——
-    /// 一笔会有"正在写"和"落笔之后"两次几何，我们要看的是**落笔之后**那次）。</summary>
-    internal bool GeomTracedLive;
+    /// <summary>
+    /// 诊断（`--geomtrace`）：已打印过的 (阶段 × 通道) 组合，位掩码。
+    ///
+    /// 必须是**按组合**去重，不能用单个标志：一笔有两条上屏通道，而
+    /// `DrawStrokeCore` 总是**先**建通道 A 的几何、再试通道 B——单个标志会被
+    /// 通道 A 先占掉，于是通道 B 那行永远打不出来（第二版就是这么漏的：
+    /// 用户真机跑出来的 22 行全是 A，B 一条都没有，等于没看到真正上屏的那条）。
+    ///   位0 = 活笔×A，位1 = 活笔×B，位2 = 落笔后×A，位3 = 落笔后×B
+    /// </summary>
+    internal int GeomTraceMask;
 
 
     /// <summary>
@@ -5584,21 +5590,12 @@ internal sealed class Stroke
     {
         if (!global::InkEngine.InkEngine.GeomTraceOn) return;
         // **一笔会建两次几何**：正在写的时候一次（RawWhileLive=true）、落笔之后一次。
-        // 两次都要各打一行——只看第一次会把"落笔后"那条路漏掉（第一版就是这么漏的：
-        // 一个 GeomTraced 标志把第二次挡在门外，结果通篇都是"活笔"那一次）。
-        string stage;
-        if (s.RawWhileLive)
-        {
-            if (s.GeomTracedLive) return;
-            s.GeomTracedLive = true;
-            stage = "活笔";
-        }
-        else
-        {
-            if (s.GeomTraced) return;
-            s.GeomTraced = true;
-            stage = "落笔后";
-        }
+        // 而且**两条上屏通道可能都建**（A 总是先建、B 随后试），所以按
+        // (阶段 × 通道) 去重，四个组合各打一行。少一个组合就少一条线索。
+        int bit = (s.RawWhileLive ? 0 : 2) + (channel == "B" ? 1 : 0);
+        if ((s.GeomTraceMask & (1 << bit)) != 0) return;
+        s.GeomTraceMask |= 1 << bit;
+        string stage = s.RawWhileLive ? "活笔" : "落笔后";
         float span = 0f;
         for (int i = 1; i < s.Points.Count; i++)
             span += Vector2.Distance(new Vector2(s.Points[i - 1].X, s.Points[i - 1].Y),

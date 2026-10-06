@@ -19926,6 +19926,29 @@ internal sealed partial class App : InkEngine.InkEngine
         }
         Add(sparse, ox + 1120f, oy + 380f);
 
+        // ⑧ **真机复现**（用户 2026-10-07 的实测数据）：「ink 关、快速画圆」那一档
+        //（`压感=False 活笔=False 点 11 均距 38.9px 总长 389px`）。
+        //
+        // 关键算术：**圆上每个顶点的转角 = 360°/段数**，与半径无关。
+        //   11 点 → 10 段 → **36°/顶点**，刚好越过 35° 阈值；
+        //   ink 开的 36 点 → 35 段 → 10.3°/顶点，差得远。
+        // 所以这一条要复现的是"**局部判据①在稀采样下把光滑圆弧判成角点**"，
+        // 和用例⑦（那条是窗口判据③越界）是**两个不同的毛病**。
+        var realcase = new List<Vector2>();
+        {
+            const int nSeg = 10;                 // 11 个点 = 10 段
+            float R = 389f / (2f * MathF.PI);    // 总长 389px → 半径 ≈ 61.9px
+            // **必须绕成接近闭合的一圈**：11 点绕 355° → 每段 35.5°，刚好越过
+            // 35° 阈值（局部判据①）。绕得少一点（比如半圈）每段只有 17°，
+            // 复现不出来——第一版就是这么做的，出图是光滑的，白测一轮。
+            for (int i = 0; i <= nSeg; i++)
+            {
+                float a = 355f * MathF.PI / 180f * i / nSeg - 355f * MathF.PI / 180f * 0.5f;
+                realcase.Add(new Vector2(MathF.Cos(a) * R, -MathF.Sin(a) * R));
+            }
+        }
+        Add(realcase, ox + 420f, oy + 760f);
+
         string dir = Path.GetDirectoryName(Path.GetFullPath(path));
         string name = Path.GetFileNameWithoutExtension(path);
         string ext = Path.GetExtension(path);

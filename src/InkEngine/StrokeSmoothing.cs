@@ -47,6 +47,27 @@ internal static class StrokeSmoothing
     public static int CornerWindow = 2;
 
     /// <summary>
+    /// **转角连续性**判据（2026-10-07 加）：一个点的转角如果和**左右邻点差不多**，
+    /// 那它是"光滑弯曲"的一部分，**不是角**。`--smoothcornerdeg N` 调，0 = 关（做对照）。
+    ///
+    /// 为什么非加不可（用户真机复现）：判据①②用的都是**固定的绝对阈值**（35°），
+    /// 而**圆上每个顶点的转角 = 360°/段数**——与半径无关。于是：
+    ///
+    ///   11 点绕一圈 → 每段 35.5° → **超过 35°** → 每个点都判成角 → 切线处处切断 → 多边形
+    ///   36 点绕一圈 → 每段 10.3° → 远低于阈值 → 正常
+    ///
+    /// 这正是"Windows Ink 关掉（点稀）快速画圆变折线、开着（点密）就圆"的全部原因。
+    /// 固定阈值在这里**天生分不开**"光滑圆弧"和"尖角"——稀采样下两者的单段转角一样大。
+    ///
+    /// 能分开的是**连续性**：圆弧上相邻几段的转角几乎相等，尖角处则突变。
+    /// 实测：圆（36/36/36）差 0 → 不判角；直角（0/90/0）差 90 → 判角；锯齿同理。
+    ///
+    /// 代价（已量化，可以接受）：像用例⑤那种"90° 均匀摊在 5 段上、每段 20°"的输入
+    /// 不再判成角——但那本来就与圆弧在局部无法区分，实测判据开/关**逐像素差 0**。
+    /// </summary>
+    public static float CornerSmoothDeg = 12f;
+
+    /// <summary>
     /// **窗口判据的臂长上限**（画布像素；`--smoothcornerpx N` 调，`0` = 关闭本护栏）。
     ///
     /// 立这条是因为下面这条判据的**前提是"点密"**，而它的窗口却按**点数**算：
@@ -229,6 +250,19 @@ internal static class StrokeSmoothing
 
         for (int i = 1; i < _m - 1; i++)
         {
+            // ⓪ **连续性**：转角与左右邻点差不多 → 是光滑弯曲的一部分，绝不是角。
+            // 这条必须在①②之前——它们的绝对阈值分不开"稀采样下的圆弧"和"尖角"。
+            if (CornerSmoothDeg > 0f)
+            {
+                float t0 = TurnAtSafe(i);
+                if (t0 > 0f)
+                {
+                    float tp = TurnAtSafe(i - 1), tn = TurnAtSafe(i + 1);
+                    if (MathF.Abs(t0 - tp) <= CornerSmoothDeg
+                        && MathF.Abs(t0 - tn) <= CornerSmoothDeg) continue;
+                }
+            }
+
             // ① 局部转角
             if (TurnAt(i - 1, i, i + 1) >= CornerAngleDeg) { _corner[i] = true; continue; }
 
@@ -263,6 +297,13 @@ internal static class StrokeSmoothing
             float cos = Vector2.Dot(va, vb) / (la * lb);
             if (cos <= cosThr) _corner[i] = true;
         }
+    }
+
+    /// <summary>在 <paramref name="i"/> 处的局部转角（度）；越界或臂太短返回 0。</summary>
+    private static float TurnAtSafe(int i)
+    {
+        if (i < 1 || i > _m - 2) return 0f;
+        return TurnAt(i - 1, i, i + 1);
     }
 
     /// <summary>在 <paramref name="i"/> 处的局部转角（度）；臂太短返回 0（不算角）。</summary>

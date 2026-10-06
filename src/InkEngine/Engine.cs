@@ -1871,6 +1871,15 @@ public partial class InkEngine
             }
             // 几何路径诊断（`--geomtrace`）：每一笔报一次走了哪条岔路
             if (args.Contains("--geomtrace")) GeomTraceOn = true;
+            // 转角连续性阈值（`--smoothcornerdeg N`，0 = 关，做"修前/修后"对照）
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--smoothcornerdeg" && float.TryParse(args[i + 1], out float scd))
+                {
+                    StrokeSmoothing.CornerSmoothDeg = Math.Clamp(scd, 0f, 90f);
+                    StrokeSmoothing.BumpVersion();
+                }
+            }
             StrokeMotion.SetMode(motionMode);
             InkModel.SetEnabled(false);              // M3 弹簧 [停用 2026-10-05]
 
