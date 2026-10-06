@@ -19991,6 +19991,41 @@ internal sealed partial class App : InkEngine.InkEngine
         }
         Add(ellipse, ox + 800f, oy + 760f);
 
+        // ⑩ **真机复现·不均匀点距**（用户 2026-10-07 第三轮数据）：
+        //    他实测的顶点转角序列是 `51 18 17 24 30 31 37 22 41 35 27` /
+        //    `37 42 35 70 27 13 23 69 60 16` —— **同一个光滑形状上，转角在 13°~70° 之间跳**。
+        //
+        //    为什么：转角 ≈ **点距 / 局部曲率半径**。手快速画时点距不均匀
+        //    （60Hz 采样 + 手抖），于是转角也跟着跳。**这不代表形状有角。**
+        //    任何"转角 ≥ 固定绝对值就算角"的判据都会被它骗到 —— 这就是前几版反复栽的地方。
+        //
+        //    这条用例就是用"椭圆 + 均匀弧长点 + 沿路径抖动 ±50% 点距"复现那个分布。
+        var jitterEllipse = new List<Vector2>();
+        {
+            const float a = 110f, b = 78f;
+            const int n = 12;
+            var rnd = new Random(20261007);
+            float theta = 0f;
+            jitterEllipse.Add(new Vector2(a, 0f));
+            for (int i = 1; i <= n; i++)
+            {
+                // 基准步长按周长均分，再乘 0.5~1.6 的抖动（复现 60Hz 快速手画的点距分布）
+                float baseStep = 553f / n;
+                float step = (float)(baseStep * (0.5 + rnd.NextDouble() * 1.1));
+                float acc = 0f;
+                while (acc < step && theta < MathF.PI * 2f)
+                {
+                    float s = MathF.Sqrt(a * a * MathF.Sin(theta) * MathF.Sin(theta)
+                                       + b * b * MathF.Cos(theta) * MathF.Cos(theta));
+                    acc += s * 0.0005f;
+                    theta += 0.0005f;
+                }
+                float ang = theta - MathF.PI * 0.5f;
+                jitterEllipse.Add(new Vector2(MathF.Cos(ang) * a, -MathF.Sin(ang) * b));
+            }
+        }
+        Add(jitterEllipse, ox + 1300f, oy + 760f);
+
         string dir = Path.GetDirectoryName(Path.GetFullPath(path));
         string name = Path.GetFileNameWithoutExtension(path);
         string ext = Path.GetExtension(path);

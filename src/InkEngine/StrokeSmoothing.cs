@@ -40,8 +40,25 @@ internal static class StrokeSmoothing
     /// </summary>
     public static bool Enabled = true;
 
-    /// <summary>转角 ≥ 它 → 角点（切线切断，直角/尖角保住）。`--smoothcorner N` 调。</summary>
-    public static float CornerAngleDeg = 35f;
+    /// <summary>
+    /// 转角 ≥ 它 → 角点（切线切断，直角/尖角保住）。`--smoothcorner N` 调。
+    ///
+    /// ⚠ **2026-10-07 从 35° 提到 80°**，依据是用户的真机转角序列（`--cornerdump`）。
+    ///
+    /// 为什么 35° 是错的：转角 ≈ **点距 / 局部曲率半径**。手快速画时点距本来就不均匀
+    /// （60Hz 采样 + 手抖），于是**同一个光滑形状**量出来的顶点转角可以在 13°~70°
+    /// 之间跳。实测两条平滑笔画的序列：
+    ///     `51 18 17 24 30 31 37 22 41 35 27`（11 个顶点）
+    ///     `37 42 35 70 27 13 23 69 60 16`（10 个顶点）
+    /// 序列里的 70° 不是角，只是"那一段点距大、半径小"。固定阈值 35° 会把它们当角切掉。
+    ///
+    /// 80° 这个数从数据来：**用户的平滑笔画实测最大 70°**（留 10° 余量），
+    /// 而真正的直角是 90°、锯齿是 127° —— 中间这一段是空的，阈值放这里最稳。
+    ///
+    /// 与 <see cref="CornerUseTrend"/> 是**与**关系：既要转角大，又要偏离局部趋势，
+    /// 两个都满足才切。这样"不均匀采样造成的孤立大转角"不会单独触发。
+    /// </summary>
+    public static float CornerAngleDeg = 80f;
 
     /// <summary>角点判定往两边各看几个点。2 是为了兜"慢画时一个直角被摊到四五个点上"。</summary>
     public static int CornerWindow = 2;
