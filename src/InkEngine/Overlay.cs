@@ -407,6 +407,11 @@ internal sealed partial class OverlayWindow : IDisposable
     private readonly List<RectF> _contentDirtyNow = new();
     private readonly List<RectF> _contentDirtyPrev = new();
 
+    // 文档页层（图片/PDF）的脏区同理：页生成/回收既要标块脏，也要进"上屏脏区"，
+    // 而且同样要记两帧（两个后缓冲都要覆盖到）。**窗口坐标**。
+    private readonly List<RectF> _pageDirtyNow = new();
+    private readonly List<RectF> _pageDirtyPrev = new();
+
     /// <summary>整块后缓冲内容无效（首帧、重建、尺寸变化）时必须全屏重绘一次。</summary>
     /// <summary>
     /// "接下来还要整屏重画几帧"。
@@ -1073,6 +1078,96 @@ internal sealed partial class OverlayWindow : IDisposable
     // ------------------------------------------------------------------
 
     /// <summary>
+    /// 文档页层：与这块画布相交的那些页。
+    ///   · 已生成 → 画位图（顺带把 CPU 那半份放掉：页图不存档、不导出，重生成就是了）；
+    ///   · 没生成 → 浅灰占位；失败 → 浅红占位；
+    ///   · 一律描一条很淡的边（页缝的语言，和白板页界线同一族）。
+    /// 页图**不参与笔迹的任何东西**（选中 / 橡皮 / 存档 / 导出 / 回放），这里只是"画出来"；
+    /// 笔迹画在它上面（<see cref="RasterizeTile"/> 里这一句排在 QueryGrid 之前）。
+    /// </summary>
+    private void DrawDocPages(InkEngine app, in RectF canvas)
+    {
+        var pages = app.DocView;
+        if (!pages.IsOpen) return;
+
+        ID2D1SolidColorBrush placeholder = null, failed = null, border = null;
+        int i = pages.FirstAtOrAfter(canvas.MinY);
+        for (; i < pages.Count; i++)
+        {
+            var p = pages.At(i);
+            if (p.Rect.MinY > canvas.MaxY) break;
+            if (!p.Rect.Intersects(canvas)) continue;
+
+            if (p.Image != null)
+            {
+                var bmp = p.Image.GetBitmap(_ctx);
+                if (bmp != null)
+                {
+                    _ctx.DrawBitmap(bmp,
+                        new Vortice.RawRectF(p.Rect.MinX, p.Rect.MinY, p.Rect.MaxX, p.Rect.MaxY),
+                        1f, Vortice.Direct2D1.InterpolationMode.Linear, null, null);
+                    p.Image.DropCpuBytes();
+                }
+                else
+                {
+                    placeholder ??= Brush(new Color4(0.94f, 0.94f, 0.94f, 1f));
+                    _ctx.FillRectangle(new Vortice.RawRectF(p.Rect.MinX, p.Rect.MinY, p.Rect.MaxX, p.Rect.MaxY),
+                                       placeholder);
+                }
+            }
+            else if (p.Failed)
+            {
+                failed ??= Brush(new Color4(0.99f, 0.90f, 0.90f, 1f));
+                _ctx.FillRectangle(new Vortice.RawRectF(p.Rect.MinX, p.Rect.MinY, p.Rect.MaxX, p.Rect.MaxY), failed);
+            }
+            else
+            {
+                placeholder ??= Brush(new Color4(0.94f, 0.94f, 0.94f, 1f));
+                _ctx.FillRectangle(new Vortice.RawRectF(p.Rect.MinX, p.Rect.MinY, p.Rect.MaxX, p.Rect.MaxY),
+                                   placeholder);
+            }
+
+            border ??= Brush(new Color4(0f, 0f, 0f, 0.22f));
+            _ctx.DrawRectangle(new Vortice.RawRectF(p.Rect.MinX, p.Rect.MinY, p.Rect.MaxX, p.Rect.MaxY),
+                               border, 1f);
+        }
+    }
+
+    /// <summary>
+    /// 文档页层同步（每帧渲染前调一次）：
+    ///   ① 按视口窗口生成/回收页位图（生成预算 = **一帧一页**——笔优先，10-03 文档 7.5）；
+    ///   ② 页层报的脏区 → 分块脏（下次光栅）+ 上屏脏（Present1 的矩形）。
+    /// "整层变了"（打开/关闭文档）走 MarkAllDirty + 两帧整屏——和换底色同一套。
+    ///
+    /// **这一步与笔迹完全无关**：页位图生成不碰 `Doc`，`Doc` 的变化也不碰这里；
+    /// 两边各走各的版本号，靠"脏区"在分块缓存里会合。
+    /// </summary>
+    private void SyncDocPages(InkEngine app)
+    {
+        _pageDirtyNow.Clear();
+
+        var pages = app.DocView;
+        if (pages.IsOpen)
+            pages.SyncWindow(VisibleCanvasRect.MinY, VisibleCanvasRect.MaxY, 1, 1f);
+
+        if (pages.FullDirty)
+        {
+            pages.FullDirty = false;
+            _tiles.MarkAllDirty();
+            _fullFramesLeft = 2;
+        }
+        if (pages.DirtyRects.Count > 0)
+        {
+            foreach (var r in pages.DirtyRects)
+            {
+                _tiles.MarkDirty(r);
+                _pageDirtyNow.Add(CanvasRectToWindow(r));
+            }
+            pages.DirtyRects.Clear();
+        }
+    }
+
+    /// <summary>
     /// 把文档的最新状态同步进分块缓存，并把"这一帧要看的新块"光栅化出来。
     ///
     /// 三步，顺序固定：
@@ -1088,6 +1183,10 @@ internal sealed partial class OverlayWindow : IDisposable
         // 回放期间内容层渲染的是**影子文档**（已出完的笔画；见 InkEngine.RenderDoc）——
         // 这样分块缓存、多窗口、DPI、板色全部白拿，只有"正在长的那一条"走浮动层。
         var doc = app.RenderDoc;
+
+        // 文档页层（图片 / PDF）先同步：按视口窗口生成/回收页位图，
+        // 并把它报的脏区转成"分块脏 + 上屏脏"。页位图先就位，这一帧的光栅化才画得出来。
+        SyncDocPages(app);
 
         if (_tilesVersion != doc.Version)
         {
@@ -1229,6 +1328,10 @@ internal sealed partial class OverlayWindow : IDisposable
             DrawBoardPattern(app, canvas);
             DrawPageLines(app, canvas);
         }
+
+        // 文档页层：**在底纹之上、笔迹之下**。页图是内容层的一部分，
+        // 所以它跟着分块缓存走——滚动、写字都不重画它。
+        DrawDocPages(app, canvas);
 
         // 空间索引按**带笔宽外扩**的框返回候选，所以跨在块边界上的粗笔画
         // 两边都会被画到，不会出现"贴边被削掉一半"的缺口。
@@ -2171,6 +2274,8 @@ internal sealed partial class OverlayWindow : IDisposable
         // Direct2D into an error state.
         if (!app.NoContentCache)
             SyncTiles(app);
+        else
+            SyncDocPages(app);      // 调试路径不碰分块，但文档页层照样要生成/回收/报脏
 
         // 性能面板先画进自己的缓存位图（必须在绑后缓冲、BeginDraw 之前做）。
         var swHud = Stopwatch.StartNew();
@@ -2219,6 +2324,7 @@ internal sealed partial class OverlayWindow : IDisposable
                     MaxX = c.MaxX + OriginX - ViewOffsetX,
                     MaxY = c.MaxY + OriginY - ViewOffsetY,
                 };
+                DrawDocPages(app, cv);     // 调试路径：文档页层也要画（否则白屏看不到文档）
                 foreach (var s in app.Doc.Strokes)
                 {
                     if (!s.PaddedBounds.Intersects(cv)) continue;
@@ -2700,6 +2806,9 @@ internal sealed partial class OverlayWindow : IDisposable
             // 这一帧和上一帧的内容改动都要重画（后缓冲里是两帧前的画面）
             AddClipped(_frameDirty, _contentDirtyPrev);
             AddClipped(_frameDirty, _contentDirtyNow);
+            // 文档页层同理：页生成/回收要覆盖这一帧和上一帧两处
+            AddClipped(_frameDirty, _pageDirtyPrev);
+            AddClipped(_frameDirty, _pageDirtyNow);
         }
 
         // 【8.4.3】8.4.1 那记"面积橡皮框可见时整窗重画"已经**撤掉**：
@@ -2746,6 +2855,10 @@ internal sealed partial class OverlayWindow : IDisposable
 
         _contentDirtyPrev.Clear();
         _contentDirtyPrev.AddRange(_contentDirtyNow);
+
+        // 文档页层同一套：这一帧的留给下一帧当"上一帧"
+        _pageDirtyPrev.Clear();
+        _pageDirtyPrev.AddRange(_pageDirtyNow);
     }
 
     private void AddClipped(List<RectF> list, RectF r)

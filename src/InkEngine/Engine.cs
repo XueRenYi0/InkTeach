@@ -1135,6 +1135,8 @@ public partial class InkEngine
         {
             var vp = ViewportCanvas;
             var r = Doc.Extent(vp);
+            // 文档页层也要算进画布范围，否则相机到最后一页之前就被夹住（滚不下去）。
+            if (DocView.IsOpen) r.Add(DocView.Extent());
             r.Add(new RectF
             {
                 MinX = vp.MinX, MinY = vp.MaxY,

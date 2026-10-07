@@ -187,6 +187,75 @@ internal sealed partial class App
         Check("失败的重试次数不再增长", genCalls == 2, $"genCalls={genCalls}（1 坏 + 1 好）");
 
         // ------------------------------------------------------------------
+        Console.WriteLine("  -- A7 上屏：页真的画出来 / 失败占位 / 滚走再回来 --");
+        // ------------------------------------------------------------------
+        // ⚠ 探针读的是**屏幕合成结果**：必须开白板（不透明底），否则透明处会把桌面读进来。
+        BoardOn = true;
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+
+        byte cb = 40, cg = 80, cr = 230;               // BGRA：橙红
+        float halfW = _virtualW * 0.5f;                // 页水平居中（和 DocPages 的规矩一致）
+        DocView.Close();
+        DocView.Generator = sp =>
+            sp.Source.EndsWith("bad.png") ? null
+            : FakeDocPageBgra(sp.OutW, sp.OutH, cb, cg, cr);
+        // 三页都在第一屏内/缘，采样点全部落在屏上：
+        //   p1  y 100..800   → 采样 (1000,300)
+        //   p2  y 848..1548  → 采样 (1000,900)
+        //   bad y 1596..2196 → 屏上只露 1596..1680 → 采样 (1000,1620) 小方块
+        DocView.Open(new List<DocPages.Spec>
+        {
+            DocSpec(600, 700, "p1.png"),
+            DocSpec(600, 700, "p2.png"),
+            DocSpec(600, 600, "bad.png", 1),
+        }, "上屏测试", halfW, 100f, 48f);
+
+        SettleFrames(300);      // 每帧最多生成 1 页：300ms 里有几十帧，3 页绰绰有余
+        int onP1 = ScreenProbe.CountNear(1000, 300, 100, 100, cr, cg, cb, 10);
+        Check("第 1 页画上屏", onP1 > 9000, $"{onP1}/10000 像素");
+        int onP2 = ScreenProbe.CountNear(1000, 900, 100, 100, cr, cg, cb, 10);
+        Check("第 2 页画上屏", onP2 > 9000, $"{onP2}/10000 像素");
+        // 失败页（bad.png）→ 浅红占位 (252,230,230)
+        int onBad = ScreenProbe.CountNear(1000, 1620, 40, 40, 252, 230, 230, 8);
+        Check("失败页是浅红占位", onBad > 1400, $"{onBad}/1600 像素");
+
+        // 滚下去：第 2 页到视口顶仍在（屏幕 y = 画布 y + ViewOffsetY）
+        ViewOffsetY = -1000f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
+        SettleFrames(200);
+        int onP2b = ScreenProbe.CountNear(1000, 100, 100, 100, cr, cg, cb, 10);
+        Check("滚动后第 2 页跟着走", onP2b > 9000, $"{onP2b}/10000 像素");
+        int onBad2 = ScreenProbe.CountNear(1000, 700, 60, 60, 252, 230, 230, 8);
+        Check("滚动后失败占位也还在", onBad2 > 3000, $"{onBad2}/3600 像素");
+
+        // 滚得远远的：页全回收、那一片屏幕上再也不该有页色
+        ViewOffsetY = -20000f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
+        SettleFrames(200);
+        Check("滚远：页全回收", DocView.ResidentPages == 0, $"驻留={DocView.ResidentPages}");
+        int stale = ScreenProbe.CountNear(1000, 300, 100, 100, cr, cg, cb, 30);
+        Check("滚远：屏幕上没有残留页", stale == 0, $"{stale} 像素（应为 0）");
+
+        // 滚回来：页重生、重新上屏
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        SettleFrames(300);
+        int back = ScreenProbe.CountNear(1000, 300, 100, 100, cr, cg, cb, 10);
+        Check("滚回来：页重生上屏", back > 9000, $"{back}/10000 像素");
+
+        // 收拾现场
+        DocView.Close();
+        BoardOn = false;
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+        SettleFrames(120);
+
+        // ------------------------------------------------------------------
         Console.WriteLine("  -- A6 关闭：全放、回到空 --");
         // ------------------------------------------------------------------
         DocView.Close();
