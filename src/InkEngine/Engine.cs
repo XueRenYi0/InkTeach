@@ -58,7 +58,7 @@ public partial class InkEngine
     /// </summary>
     private static bool IsSwitchNotMode(string a) => a switch
     {
-        "--norawinput" or "--nowintab" or "--nopressure" or "--rawprobe" or "--notrend"
+        "--norawinput" or "--wintab" or "--nowintab" or "--nopressure" or "--rawprobe" or "--notrend"
             or "--himetric" or "--notouch" or "--syswet" or "--ownwet" or "--strokefile"
             or "--recink" or "--recinkp"
             or "--nosmooth" or "--printersafe" => true,
@@ -863,8 +863,30 @@ public partial class InkEngine
     //
     // 默认 **0 = 完全不动**（一个字节不改）。等用户试出合适的档再考虑设默认。
 
-    /// <summary>`--wintab`：**强制**启用（默认就是启用，这个开关的意义是"不许自动退"）。</summary>
+    /// <summary>`--wintab`：启用并**强制**（不许"自动退"）。</summary>
     internal bool WintabForced;
+
+    /// <summary>Wintab 的用户偏好键（**没有界面**，只由命令行写）。</summary>
+    private const string WintabPrefKey = "wintab";
+
+    /// <summary>命令行要求的偏好值（"1"/"0"/空=没要求）。**推迟到 Loop() 才写盘**，
+    /// 理由见上面那段注释（构造函数里 SelfCheckMode 还不可信）。</summary>
+    private string _pendingWintabPref = "";
+
+    /// <summary>`--wintab` / `--nowintab` 会把它记到设置里 —— 用户敲一次就够，不用每次带开关。</summary>
+    private void WriteWintabPref(string v)
+    {
+        try
+        {
+            SetUiPref(WintabPrefKey, v);
+            // **立刻落盘**（不只是标脏）：这是用户明确表达的意愿，
+            // 万一程序之后崩了/被强杀也不该丢 —— 而且"记住了"这件事必须当场可验证。
+            FlushSettings();
+            Console.WriteLine($"  [wintab] 已记住：{(v == "1" ? "以后默认启用" : "以后默认关闭")}"
+                              + $"（设置里的 {WintabPrefKey}，没有界面）");
+        }
+        catch (Exception ex) { Console.WriteLine($"  [wintab] 记偏好失败（不影响使用）：{ex.Message}"); }
+    }
 
     /// <summary>`--clean N`：入笔前对位置与压力做 N 点滑动平均（0/1 = 关）。</summary>
     internal static int CleanWindow;
@@ -1930,6 +1952,25 @@ public partial class InkEngine
         if (!_noRawInputArg && GetUiPref(FineStrokePrefKey) == "0")
             RawInputCapture = false;
 
+        // ---- Wintab（2026-10-07 用户拍板：**默认关**）------------------------
+        // ⚠ **只在这一处决定**。之前我在两个地方各写了一半（这里读偏好、下面参数块里
+        // 又无条件 `WintabEnabled = false`），后写的把先写的**整个盖掉** ——
+        // "记住"那条链子当场失效。**同一件事写在两处 = 一定出错**，今天已经栽过一次了。
+        //
+        // 优先级：命令行（`--wintab` / `--nowintab`，顺手把偏好写下来）＞ 偏好 ＞ 默认（关）。
+        // **没有界面** —— 它是内部机制，不是给用户调的偏好。
+        {
+            bool wantOn = GetUiPref(WintabPrefKey) == "1";
+            if (args.Contains("--nowintab")) { wantOn = false; _pendingWintabPref = "0"; }
+            else if (args.Contains("--wintab")) { wantOn = true; _pendingWintabPref = "1"; }
+            WintabEnabled = wantOn;
+            WintabForced = wantOn;
+            // ⚠ **偏好不能在这里写盘**：构造函数跑在 `RunModeDispatch` 之前，
+            // 那时 `SelfCheckMode` 还是"见非空参数就真"的老判据（`--wintab` 没登记过，
+            // 会被当成 mode）→ `FlushSettings()` 一看是自检模式就**直接返回，什么都不写**。
+            // 所以只记下"待写"，等 `Loop()` 里判定完了再写（和那行诊断同一个道理）。
+        }
+
         // ---- 模拟压力与笔锋：**已全部停用**（2026-10-05，代码保留）----------------
         // [停用] `--simpressure/--simpressdepth`（Xournal++ 速度压力）、
         // `--pfpressure/--pfthinning/--pfstreamline`（perfect-freehand 速度压力）、
@@ -2029,8 +2070,16 @@ public partial class InkEngine
             // Wintab 默认**开**（2026-10-07）：关 ink 时笔被当鼠标报、那条路上没有压力，
             // Wintab 是驱动自己的通道，能补回压力（实测 0~16383，比 Windows Ink 的 1024 细 16 倍）。
             // `--nowintab` 关掉做对照。**只在有厂商驱动的板子上有效**，没有就自动不启用。
-            WintabEnabled = !args.Contains("--nowintab");
-            WintabForced = args.Contains("--wintab");   // 强制：不许"自动退"
+            // Wintab **默认关**（2026-10-07 用户定的）。
+            //
+            // 沿革：先默认开（想让"关 ink 也有压感"），后来用户实测"关 ink 快速画圆时很脏"
+            // —— Wintab 只借压力、不借坐标，所以形状没问题，**脏在"宽度一跳一跳"**。
+            // 权衡之后用户拍板：**默认关，不留界面，以后有需要再开**。
+            // 这符合这个项目一贯的规矩：**保守优先**。
+            //
+            // 要开的话：`--wintab`（**会记住**，见下面 WriteUiPref —— 不用每次敲）。
+            // ⚠ Wintab 的开关**在上面那一处统一决定**（别在这里再写一遍 ——
+            // 之前就是两处各写一半，"记住"那条链子当场被盖掉）。
             // `--clean N`：入笔前对位置与压力做 N 点滑动平均（0 = 关闭，默认）。
             // 见 AddPointCleaned 那段注释：治"细毛刺"和"压力台阶"，滞后比加大距离窗小得多。
             for (int i = 0; i < args.Length - 1; i++)
@@ -2901,11 +2950,11 @@ public partial class InkEngine
             Console.WriteLine("输入路径: 开 ink → Windows Ink 笔（压力 1024 级）"
                               + "；关 ink → "
                               + (WintabEnabled ? "Wintab 给压力（16383 级）＋ raw 补点"
-                                               : "只有 raw 补点（`--nowintab` 关掉了 Wintab，没有压力）")
+                                               : "只有 raw 补点（Wintab 默认关；想开用 --wintab，会记住）")
                               + "；Wintab: "
                               + (WintabEnabled
-                                  ? "尚未打开（为不影响开 ink，改成第一笔「关 ink」时才开）"
-                                  : "已关"));
+                                  ? "待开（为不影响开 ink，改成第一笔「关 ink」时才开）"
+                                  : "未启用"));
             return true;
         }, IntPtr.Zero);
 
@@ -3069,6 +3118,13 @@ public partial class InkEngine
         {
             _selfCheckLogged = true;
             Console.WriteLine($"  [mode] 自检：{_modeName}（设置/存档/PPT 缓存都走临时路径）");
+        }
+        // 命令行要求的 Wintab 偏好，**到这里才写盘**：此刻 `RunModeDispatch` 已经判完
+        // （兜底分支会把开关的 SelfCheckMode 清掉），所以开关敲一次是真的记得住。
+        if (_pendingWintabPref.Length > 0 && !SelfCheckMode)
+        {
+            WriteWintabPref(_pendingWintabPref);
+            _pendingWintabPref = "";
         }
 
         while (!_quit)
@@ -9022,7 +9078,9 @@ public partial class InkEngine
     // 详见 `Input/WintabInput.cs`（那里也记着三个从同行资料里查来的坑）。
 
     /// <summary>Wintab 是否启用（默认开，`--nowintab` 关）。</summary>
-    internal bool WintabEnabled = true;
+    /// <summary>Wintab 是否启用。**字段默认 false** —— 与"默认关"保持一致：
+    /// 万一上面那段决定没跑到，宁可不开（保守优先），也不要悄悄开着。</summary>
+    internal bool WintabEnabled;
 
     private readonly WintabInput _wintab = new();
 
