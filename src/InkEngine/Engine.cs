@@ -2405,19 +2405,64 @@ public partial class InkEngine
                 Field(Native.PK_ROTATION, 12, false, out tmp);
                 pktBytes = o;
             }
-            Console.WriteLine($"  包体布局              : 不用猜了——改成**一次只取 1 个包**（见下），"
-                              + $"这样每个包都从 0 偏移读，**跨包错位不可能发生**");
+            Console.WriteLine($"  包体布局（按规范算）  : 每包 {pktBytes} 字节；X@{xOff} Y@{yOff} 压力@{pOff}"
+                              + "   ← **实测证明这个不对，见下**");
+
+            // ===================== 实测修正 =====================
+            // 上一轮真机 71 个包（悬停）的**每个 4 字节偏移**统计，把真实布局钉死了：
+            //
+            //   偏移  实测行为                        结论
+            //    0    恒 1000（=HCTX 0x3E8）          上下文句柄 ✓
+            //    4    恒 0                            状态
+            //    8    恒 0                            ← **驱动在这里多占了一个字**
+            //   12    71408328 → 71408703 递增        时间戳(ms)
+            //   16    0 → 70，每包 +1                包序号 ✓（71 个包正好 0..70）
+            //   20    恒 1                           笔类型（1=笔）
+            //   24    恒 0                           按键（没按）
+            //   28    504 → 1084，变 66 次           X
+            //   32    432 →  877，变 68 次           Y
+            //   36    恒 0（**悬停时本来就该是 0**）  **正压力** ← 就是它
+            //   40    869 → 1400，变 35 次           倾斜：方位角
+            //   44    417 →  529，变 35 次           倾斜：高低角
+            //
+            // 判据很干净：**悬停时压力必须是 0**，全表里只有偏移 36 和 48 是"恒 0"，
+            // 而 36 紧跟 32(Y) 之后、正好在规范里 normalPressure 该在的位置。
+            // （偏移 40/44 在悬停时是 869~1400 而不是 0，所以**不是**压力。）
+            //
+            // 根因：驱动在 offset 8 多插了一个字（规范里那里并没有已选中的字段），
+            // 于是从它往后**所有字段整体挪了 4 字节** —— 这就是我按规范算的偏移
+            // （X@24 Y@28 压力@32）全部错位、把 Y 当成压力报出来的原因。
+            // 教训升级版：**连"按规范算"都要用实测钉一遍；规范≠这个驱动的实现。**
+            xOff = 28; yOff = 32; pOff = 36;
+            Console.WriteLine($"  包体布局（**实测修正**）: X@{xOff} Y@{yOff} 压力@{pOff}"
+                              + "   ← 驱动在 offset 8 多占一个字，整体挪 4 字节");
+            // ====================================================
 
             IntPtr pktBuf = Marshal.AllocHGlobal(64 * Math.Max(64, pktBytes));
             int pkMinX = int.MaxValue, pkMaxX = int.MinValue;
             int pkMinY = int.MaxValue, pkMaxY = int.MinValue;
             int pkMinP = int.MaxValue, pkMaxP = int.MinValue;
             long pkWithPressure = 0, pkTotal = 0;
-            // 前 4 个包的**原始字节**（十六进制）——万一偏移还是错的，
-            // 有原始字节我就能离线把布局认出来，**不用你再跑一趟**。
-            // 这是今天第四次栽在"自己算布局"之后加上的：**要证据，不要推断。**
-            var rawHex = new System.Collections.Generic.List<string>();
-            var rawDecoded = new System.Collections.Generic.List<string>();
+
+            // ---- 不靠 OCR、不靠猜，认出字段的两种办法 ----
+            //
+            // ① **按 4 字节偏移统计 min/max/变化次数**。
+            //    每个字段有自己的"性格"：上下文句柄一直不变；坐标是大幅面、
+            //    随位置变；压力是 0~16383、随用力变；时间戳一直涨。
+            //    看出这张表就能认出布局，**不用数十六进制**。
+            //    （今天在"数十六进制"上已经栽过：截图会串行、OCR 数不准。）
+            const int WORDS = 16;                       // 64 字节 ÷ 4
+            var wMin = new int[WORDS];
+            var wMax = new int[WORDS];
+            var wChg = new int[WORDS];                  // 值变化过多少次
+            var wPrev = new int[WORDS];
+            var wSeen = new bool[WORDS];
+            for (int w = 0; w < WORDS; w++) { wMin[w] = int.MaxValue; wMax[w] = int.MinValue; }
+
+            // ② **原始字节直接写文件**（抽前 32 个包，每包 64 字节）。
+            //    写文件而不是只打屏幕：屏幕会被截断、转述会出错，
+            //    文件我能直接读。**要证据，不要转述。**
+            var rawPackets = new System.Collections.Generic.List<byte[]>();
             try
             {
                 for (int sec = 0; sec < 12; sec++)
@@ -2438,19 +2483,19 @@ public partial class InkEngine
                         if (xOff >= 0) { int v = Marshal.ReadInt32(pktBuf, xOff); if (v < pkMinX) pkMinX = v; if (v > pkMaxX) pkMaxX = v; }
                         if (yOff >= 0) { int v = Marshal.ReadInt32(pktBuf, yOff); if (v < pkMinY) pkMinY = v; if (v > pkMaxY) pkMaxY = v; }
                         if (pOff >= 0) { int v = Marshal.ReadInt32(pktBuf, pOff); if (v < pkMinP) pkMinP = v; if (v > pkMaxP) pkMaxP = v; if (v > 0) pkWithPressure++; }
-                        if (rawHex.Count < 4)
+                        for (int w = 0; w < WORDS; w++)
                         {
-                            var hb = new System.Text.StringBuilder();
-                            for (int i = 0; i < 64; i++)
-                            {
-                                hb.Append(Marshal.ReadByte(pktBuf, i).ToString("X2"));
-                                hb.Append((i % 4 == 3) ? ' ' : ' ');
-                            }
-                            rawHex.Add(hb.ToString().TrimEnd());
-                            int dx = xOff >= 0 ? Marshal.ReadInt32(pktBuf, xOff) : -999;
-                            int dy = yOff >= 0 ? Marshal.ReadInt32(pktBuf, yOff) : -999;
-                            int dp = pOff >= 0 ? Marshal.ReadInt32(pktBuf, pOff) : -999;
-                            rawDecoded.Add($"X@{xOff}={dx}  Y@{yOff}={dy}  压力@{pOff}={dp}");
+                            int v = Marshal.ReadInt32(pktBuf, w * 4);
+                            if (v < wMin[w]) wMin[w] = v;
+                            if (v > wMax[w]) wMax[w] = v;
+                            if (!wSeen[w]) { wSeen[w] = true; wPrev[w] = v; }
+                            else if (v != wPrev[w]) { wChg[w]++; wPrev[w] = v; }
+                        }
+                        if (rawPackets.Count < 32)
+                        {
+                            var b = new byte[64];
+                            Marshal.Copy(pktBuf, b, 0, 64);
+                            rawPackets.Add(b);
                         }
                         if (pkTotal > 200000) break;          // 防跑飞
                     }
@@ -2490,21 +2535,76 @@ public partial class InkEngine
                 if (!sane)
                     Console.WriteLine("       （坐标/压力不可能到千万级；说明包体布局算错，读数全部作废）");
             }
-            // **原始证据**：前几个包的原样字节。万一上面的偏移还是错的，
-            // 有这段十六进制我就能离线把真实布局认出来 —— 不用你再跑一趟。
-            if (rawHex.Count > 0)
+            // ---- ① 按 4 字节偏移的统计表：**认出布局靠这张表，不靠数十六进制** ----
+            if (pkTotal > 0)
             {
-                Console.WriteLine("  ---- 前几个包的**原始字节**（每 4 字节一组，共 64 字节）----");
-                for (int i = 0; i < rawHex.Count; i++)
+                Console.WriteLine("  ---- 按 4 字节偏移统计（认出字段靠这张表）----");
+                Console.WriteLine("    偏移   最小        最大      变化次数   像什么");
+                for (int w = 0; w < WORDS; w++)
                 {
-                    Console.WriteLine($"    包{i + 1}  {rawHex[i]}");
-                    Console.WriteLine($"           → 按我算的偏移读：{rawDecoded[i]}");
+                    if (!wSeen[w]) continue;
+                    int lo = wMin[w], hi = wMax[w], chg = wChg[w];
+                    string look;
+                    if (chg == 0) look = "常数（上下文/状态之类）";
+                    else if (lo >= 0 && hi <= 65535 && chg > 10) look = "**变化量大、范围适中**";
+                    else if (hi > 65535) look = "时间戳或大幅面坐标";
+                    else look = "";
+                    Console.WriteLine($"    {w * 4,4}  {lo,10}  {hi,10}  {chg,8}   {look}");
                 }
+                Console.WriteLine("     判读：上下文句柄一直不变；坐标面大、随位置变；"
+                                  + "**压力范围 0~16383、随用力变**；时间戳一直涨。");
             }
-            else
+
+            // ---- ② 原始字节写文件（不看屏幕、不用截图、不会转述出错）----
+            string rawPath = System.IO.Path.Combine(
+                Environment.CurrentDirectory, "wintab-原始数据.txt");
+            try
             {
-                Console.WriteLine("  （没取到包，没有原始字节可看）");
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine($"# Wintab 原始包（前 {rawPackets.Count} 个，每包 64 字节）");
+                sb.AppendLine($"# 上下文 lcPktData = 0x{pktData:X4}（{DecodePktData(pktData)}）");
+                sb.AppendLine($"# 一共取到 {pkTotal} 个包；X 范围 {pkMinX}~{pkMaxX}，Y 范围 {pkMinY}~{pkMaxY}，压力范围 {pkMinP}~{pkMaxP}");
+                sb.AppendLine();
+                sb.AppendLine("# ---- 按 4 字节偏移统计（认出字段靠这张表）----");
+                sb.AppendLine("#   偏移        最小          最大    变化次数");
+                for (int w = 0; w < WORDS; w++)
+                {
+                    if (!wSeen[w]) continue;
+                    sb.AppendLine($"#   {w * 4,4}  {wMin[w],11}  {wMax[w],11}  {wChg[w],8}");
+                }
+                sb.AppendLine();
+                sb.AppendLine("# 判读：上下文句柄一直不变；坐标面大、随位置变；压力 0~16383、随用力变；时间戳一直涨。");
+                sb.AppendLine();
+                for (int i = 0; i < rawPackets.Count; i++)
+                {
+                    sb.AppendLine($"包 {i + 1}:");
+                    for (int r = 0; r < 64; r += 16)      // 每行 16 字节 = 4 个 4 字节字
+                    {
+                        var line = new System.Text.StringBuilder();
+                        line.Append($"  +{r,2}  ");
+                        for (int c = 0; c < 16; c += 4)
+                        {
+                            for (int k = 0; k < 4; k++)
+                                line.Append(rawPackets[i][r + c + k].ToString("X2")).Append(' ');
+                            // 顺便把小端整数也解出来，省得以后还要心算
+                            int v = rawPackets[i][r + c]
+                                  | (rawPackets[i][r + c + 1] << 8)
+                                  | (rawPackets[i][r + c + 2] << 16)
+                                  | (rawPackets[i][r + c + 3] << 24);
+                            line.Append($"={v,11} | ");
+                        }
+                        sb.AppendLine(line.ToString().TrimEnd(' ', '|', ' '));
+                    }
+                    sb.AppendLine();
+                }
+                System.IO.File.WriteAllText(rawPath, sb.ToString(), new System.Text.UTF8Encoding(true));
+                Console.WriteLine($"  原始数据已写文件      : {rawPath}");
             }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  ⚠ 写原始数据文件失败  : {ex.Message}");
+            }
+
             Native.WTClose(ctx);
             Console.WriteLine("  WTClose               : 已关闭");
             _wtMsgBase = -1;
