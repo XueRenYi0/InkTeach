@@ -1035,6 +1035,14 @@ internal sealed partial class App : InkEngine.InkEngine
             Recovery.AutoSavePathOverride = null;
             PptStore.RootOverride = null;
             ExportDialogEnabled = true;
+
+            // `--doc <文件>`：到这儿窗口/视口都就绪了，真正打开它
+            // （失败只提示——规矩三：失败当没有，不影响启动）
+            if (_startupDocPath != null)
+            {
+                var err = OpenDocuments(new[] { _startupDocPath });
+                if (err != null) Console.WriteLine($"[文档] 打开失败：{err}");
+            }
             return -1;
         }
 

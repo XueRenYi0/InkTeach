@@ -810,6 +810,9 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
 
+    [DllImport("user32.dll")]
+    public static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
+
     /// <summary>`MONITOR_DEFAULTTONEAREST`：窗口不在任何显示器上时给最近的那块。</summary>
     public const uint MONITOR_DEFAULTTONEAREST = 2;
 

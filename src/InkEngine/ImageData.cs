@@ -42,6 +42,12 @@ internal sealed class ImageData
     /// <summary>D2D 位图缓存。设备相关，跟几何缓存同一个道理（见 Stroke.Geometry）。</summary>
     private ID2D1Bitmap _bitmap;
 
+    /// <summary>
+    /// 这份数据**现在还算在账上**吗（见 <see cref="Release"/> / <see cref="GetBitmap"/>）。
+    /// 防两个方向的双重记账：Release 重复调用、Release 之后位图又重建。
+    /// </summary>
+    private bool _accounted;
+
     /// <summary>当前存活的位图字节数（诊断用，和 Stroke.LiveGeometries 同一路）。</summary>
     public static long LiveBytes;
     public static int LiveImages;
@@ -64,6 +70,7 @@ internal sealed class ImageData
             Width = width,
             Height = height,
             Bgra = bgra,
+            _accounted = true,
         };
         LiveBytes += img.ByteSize;
         LiveImages++;
@@ -131,15 +138,36 @@ internal sealed class ImageData
         {
             handle.Free();
         }
+        // Release 之后又重建（设备丢失那条路）：账要加回来，别只减不加。
+        if (_bitmap != null && !_accounted)
+        {
+            _accounted = true;
+            LiveBytes += ByteSize;
+            LiveImages++;
+        }
         return _bitmap;
     }
 
+    /// <summary>
+    /// 放掉位图（删对象 / 清空 / 换页装填 / 关文档时调）。
+    /// **记账也在这里减**（2026-10-07 修：以前只有加没有减，"关闭文档回基线"
+    /// 这条判据根本量不出来）；重复调用由 <see cref="_accounted"/> 挡住，
+    /// 之后若 <see cref="GetBitmap"/> 又把它建回来，账会加回去。
+    /// </summary>
     public void Release()
     {
         if (_bitmap != null)
         {
             _bitmap.Dispose();
             _bitmap = null;
+        }
+        if (_accounted)
+        {
+            _accounted = false;
+            LiveBytes -= ByteSize;
+            if (LiveBytes < 0) LiveBytes = 0;
+            LiveImages--;
+            if (LiveImages < 0) LiveImages = 0;
         }
     }
 

@@ -263,6 +263,209 @@ internal sealed partial class App
               && DocView.ResidentBytes == 0, $"Count={DocView.Count} 驻留={DocView.ResidentPages}");
         Check("关闭后 Generator 留着但没用（零开销）", DocView.Generator != null, "ok");
 
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- B1 图片：EXIF 方向映射（直接验映射表，不依赖 EXIF 往返） --");
+        // ------------------------------------------------------------------
+        // 造一张 100×50 的"左红右蓝"旗子：好认旋转方向。
+        System.Drawing.Bitmap MakeFlag()
+        {
+            var b = new System.Drawing.Bitmap(100, 50, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using var g = System.Drawing.Graphics.FromImage(b);
+            g.Clear(System.Drawing.Color.Blue);
+            g.FillRectangle(System.Drawing.Brushes.Red, 0, 0, 50, 50);
+            return b;
+        }
+        bool IsRed(System.Drawing.Bitmap b, int x, int y)
+        {
+            var c = b.GetPixel(x, y);
+            return c.R > 200 && c.G < 60 && c.B < 60;
+        }
+
+        using (var b6 = MakeFlag())
+        {
+            DocImageSource.ApplyOrientation(b6, 6);      // 90° 顺时针：左红 → 上红
+            Check("EXIF 6 = 90°CW（左红→上红）", b6.Width == 50 && b6.Height == 100 && IsRed(b6, 25, 5),
+                  $"{b6.Width}x{b6.Height} 顶部={(IsRed(b6, 25, 5) ? "红" : "蓝")}");
+        }
+        using (var b3 = MakeFlag())
+        {
+            DocImageSource.ApplyOrientation(b3, 3);      // 180°：左红 → 右红
+            Check("EXIF 3 = 180°（左红→右红）", IsRed(b3, 90, 25) && !IsRed(b3, 10, 25),
+                  $"右={(IsRed(b3, 90, 25) ? "红" : "蓝")} 左={(IsRed(b3, 10, 25) ? "红" : "蓝")}");
+        }
+        using (var b8 = MakeFlag())
+        {
+            DocImageSource.ApplyOrientation(b8, 8);      // 270°CW = 90°CCW：左红 → 下红
+            Check("EXIF 8 = 270°CW（左红→下红）", IsRed(b8, 25, 95),
+                  $"底部={(IsRed(b8, 25, 95) ? "红" : "蓝")}");
+        }
+        using (var b1 = MakeFlag())
+        {
+            DocImageSource.ApplyOrientation(b1, 1);
+            Check("EXIF 1 = 不动", IsRed(b1, 10, 25) && b1.Width == 100, $"{b1.Width}x{b1.Height}");
+        }
+
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- B2 布局：fit width / 不超 2×放大 / 长图切片算术 --");
+        // ------------------------------------------------------------------
+        var s1 = DocImageSource.PlanSpecs("x.png", 800, 600, 1000f, 700f);
+        Check("普通图：一页、撑宽", s1.Count == 1 && s1[0].OutW == 1000 && s1[0].OutH == 750,
+              $"{s1.Count} 页 {s1[0].OutW}x{s1[0].OutH}（应 1000x750）");
+
+        var s2 = DocImageSource.PlanSpecs("x.png", 200, 100, 1000f, 700f);
+        Check("小图：最多放大 2×（不无限撑）", s2.Count == 1 && s2[0].OutW == 400 && s2[0].OutH == 200,
+              $"{s2[0].OutW}x{s2[0].OutH}（应 400x200）");
+
+        var s3 = DocImageSource.PlanSpecs("x.png", 300, 2800, 1000f, 700f);
+        bool s3ok = s3.Count == 8;
+        float expectY = 0f;
+        foreach (var sp in s3)
+        {
+            if (Math.Abs(sp.SrcY - expectY) > 0.01f || Math.Abs(sp.SrcH - 350f) > 0.01f) s3ok = false;
+            if (sp.OutH != 700 || sp.OutW != 600) s3ok = false;
+            expectY += sp.SrcH;
+        }
+        Check("长图：8 片、首尾相接不重不漏", s3ok && Math.Abs(expectY - 2800f) < 0.01f,
+              $"{s3.Count} 片，末尾到 {expectY:F0}（应 2800）");
+
+        var s4 = DocImageSource.PlanSpecs("x.png", 300, 2900, 1000f, 700f);
+        Check("长图：最后一片是短的", s4.Count == 9 && s4[^1].OutH == 200,
+              $"{s4.Count} 片，末片 {s4[^1].OutH}px（应 200）");
+
+        var s5 = DocImageSource.PlanSpecs("x.png", 300, 1401, 1000f, 700f);
+        Check(">2 屏就切片（1401 → 并薄片后 4 片）", s5.Count == 4 && s5[^1].OutH == 702,
+              $"{s5.Count} 片，末片 {s5[^1].OutH}px（应 702，2px 薄片已并进前一片）");
+
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- B3 真解码：颜色 / 白底合成 / 切片内容 --");
+        // ------------------------------------------------------------------
+        string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inkteach-doctest-images");
+        Directory.CreateDirectory(dir);
+
+        string pFlag = System.IO.Path.Combine(dir, "flag.png");
+        using (var b = new System.Drawing.Bitmap(800, 600, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+        {
+            using var g = System.Drawing.Graphics.FromImage(b);
+            g.Clear(System.Drawing.Color.Blue);
+            g.FillRectangle(System.Drawing.Brushes.Red, 0, 0, 400, 600);
+            b.Save(pFlag, System.Drawing.Imaging.ImageFormat.Png);
+        }
+        var f1 = DocImageSource.PlanSpecs(pFlag, 800, 600, 1000f, 700f)[0];
+        var px1 = DocImageSource.RenderSpec(f1);
+        bool pxl = px1 != null && px1[(375 * 1000 + 100) * 4 + 2] > 200 && px1[(375 * 1000 + 100) * 4 + 0] < 60;
+        bool pxr = px1 != null && px1[(375 * 1000 + 900) * 4 + 0] > 200 && px1[(375 * 1000 + 900) * 4 + 2] < 60;
+        Check("解码+缩放：左红右蓝", pxl && pxr, $"左={(pxl ? "红" : "?")} 右={(pxr ? "蓝" : "?")}");
+
+        string pClear = System.IO.Path.Combine(dir, "clear.png");
+        using (var b = new System.Drawing.Bitmap(400, 300, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+        {
+            using var g = System.Drawing.Graphics.FromImage(b);
+            g.Clear(System.Drawing.Color.Transparent);
+            b.Save(pClear, System.Drawing.Imaging.ImageFormat.Png);
+        }
+        var f2 = DocImageSource.PlanSpecs(pClear, 400, 300, 1000f, 700f)[0];
+        var px2 = DocImageSource.RenderSpec(f2);
+        bool white = px2 != null;
+        if (white)
+            for (int c = 0; c < 3; c++)
+                if (px2[((150 * f2.OutW + 200) * 4) + c] < 240) white = false;
+        Check("透明 PNG：合成到白底（不透桌面）", white, white ? "中心 RGB=(255,255,255)" : "中心不是白的");
+
+        string pLong = System.IO.Path.Combine(dir, "long.png");
+        var band = new[]
+        {
+            System.Drawing.Color.FromArgb(255, 0, 0), System.Drawing.Color.FromArgb(0, 255, 0),
+            System.Drawing.Color.FromArgb(0, 0, 255), System.Drawing.Color.FromArgb(255, 255, 0),
+            System.Drawing.Color.FromArgb(255, 0, 255), System.Drawing.Color.FromArgb(0, 255, 255),
+            System.Drawing.Color.FromArgb(128, 128, 128), System.Drawing.Color.FromArgb(255, 128, 0),
+        };
+        using (var b = new System.Drawing.Bitmap(300, 2800, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+        {
+            using var g = System.Drawing.Graphics.FromImage(b);
+            for (int i = 0; i < 8; i++)
+                using (var br = new System.Drawing.SolidBrush(band[i]))
+                    g.FillRectangle(br, 0, i * 350, 300, 350);
+            b.Save(pLong, System.Drawing.Imaging.ImageFormat.Png);
+        }
+        var f3 = DocImageSource.PlanSpecs(pLong, 300, 2800, 1000f, 700f);
+        var px3 = DocImageSource.RenderSpec(f3[3]);      // 第 4 片 = 第 4 条色带（黄）
+        bool bandOK = px3 != null && px3[(350 * f3[3].OutW + 300) * 4 + 1] > 200
+                   && px3[(350 * f3[3].OutW + 300) * 4 + 2] > 200
+                   && px3[(350 * f3[3].OutW + 300) * 4 + 0] < 60;
+        Check("切片内容对位（第 4 片 = 黄带）", bandOK, bandOK ? "BGR=(0,255,255)" : "颜色不对");
+
+        // EXIF 文件往返：GDI+ 不一定保留（保留不了就只标注，不判红）
+        string pExif = System.IO.Path.Combine(dir, "exif.jpg");
+        try
+        {
+            using var b = new System.Drawing.Bitmap(300, 200, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var g = System.Drawing.Graphics.FromImage(b))
+            {
+                g.Clear(System.Drawing.Color.Blue);
+                g.FillRectangle(System.Drawing.Brushes.Red, 0, 0, 150, 200);
+            }
+            var item = (System.Drawing.Imaging.PropertyItem)
+                System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+                    typeof(System.Drawing.Imaging.PropertyItem));
+            item.Id = 0x0112; item.Type = 3; item.Len = 2; item.Value = new byte[] { 6, 0 };
+            b.SetPropertyItem(item);
+            b.Save(pExif, System.Drawing.Imaging.ImageFormat.Jpeg);
+        }
+        catch { }
+        if (System.IO.File.Exists(pExif) && DocImageSource.TryReadInfo(pExif, out int ew, out int eh))
+        {
+            if (ew == 200 && eh == 300)
+            {
+                var f4 = DocImageSource.PlanSpecs(pExif, ew, eh, 1000f, 700f)[0];
+                var px4 = DocImageSource.RenderSpec(f4);
+                bool rotated = px4 != null && px4[(10 * f4.OutW + f4.OutW / 2) * 4 + 2] > 180;
+                Check("EXIF 文件：尺寸交换 + 渲染已转正", rotated,
+                      rotated ? "顶部=红（已转正）" : "顶部不是红的");
+            }
+            else
+            {
+                Console.WriteLine($"      （GDI+ 没保留 EXIF：读到 {ew}x{eh}；这条留待真机手机照片验）");
+            }
+        }
+
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- B4 端到端：OpenDocuments → 生成 → 关闭回收 --");
+        // ------------------------------------------------------------------
+        int imgBefore = ImageData.LiveImages;
+        long bytesBefore = ImageData.LiveBytes;
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+
+        var errA = OpenDocuments(new[] { pLong });
+        int expectPages = DocImageSource.PlanSpecs(pLong, 300, 2800, _virtualW, _virtualH).Count;
+        Check("打开长图不报错", errA == null, errA ?? "ok");
+        Check($"页数 = 按本机屏切片的 {expectPages} 片", DocView.Count == expectPages, $"Count={DocView.Count}");
+        Check("标题 = 文件名", DocView.Title == "long.png", DocView.Title);
+        Check("状态行报页数", InkStatus.Contains($"{expectPages} 页"), InkStatus);
+
+        SettleFrames(300);
+        Check("推进视口后页位图真的生成了", DocView.ResidentPages >= 1, $"驻留={DocView.ResidentPages}");
+        Check("页位图记进了 ImageData 账", ImageData.LiveImages > imgBefore,
+              $"LiveImages {imgBefore} → {ImageData.LiveImages}");
+
+        var errB = OpenDocuments(new[] { System.IO.Path.Combine(dir, "no-such-file.png"), pFlag });
+        Check("坏文件跳过、好文件照开", errB == null && DocView.Count == 1, errB ?? $"Count={DocView.Count}");
+
+        var errC = OpenDocuments(new[] { System.IO.Path.Combine(dir, "no-such-file.png") });
+        Check("全读不了 ⇒ 一句提示、状态不动", errC != null && DocView.Count == 1, errC ?? "(没报错)");
+
+        var errD = OpenDocuments(new[] { "a.pdf", pFlag });
+        Check("图片和 PDF 混选 ⇒ 提示重选", errD != null, errD ?? "(没报错)");
+
+        CloseDocument();
+        Check("关闭后页位图全放（回基线）",
+              DocView.Count == 0 && ImageData.LiveImages == imgBefore && ImageData.LiveBytes == bytesBefore,
+              $"LiveImages {imgBefore} ⇐ {ImageData.LiveImages}");
+
+        try { Directory.Delete(dir, true); } catch { }
+
         Console.WriteLine();
         Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：文档页底层 {pass} 项通过 / {fail} 项失败");
         Console.WriteLine($"合计：通过 {pass} 项，失败 {fail} 项");
