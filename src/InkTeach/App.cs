@@ -597,6 +597,15 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             KeyTest();
         }
+        else if (mode == "--wintabprobe")
+        {
+            // 探 Wintab（数位板驱动的原生 API）这条路通不通。
+            // 只读、不改产品行为；见 Engine.WintabProbe 的说明。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ExitCode = WintabProbe();
+            _quit = true;
+        }
         else if (mode == "--rotateshow")
         {
             _autoExitAt = double.MaxValue;

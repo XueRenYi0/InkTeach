@@ -588,6 +588,41 @@ internal static class Native
     public static extern uint GetRawInputData(
         IntPtr hRawInput, uint uiCommand, out RAWINPUT pData, ref uint pcbSize, uint cbSizeHeader);
 
+    // ---- Wintab（数位板驱动的原生 API）---------------------------------------
+    // 只给 `--wintabprobe` 用，**产品路径不依赖它**。
+    //
+    // 为什么值得探：关掉 Windows Ink 之后，压力会整个消失（设备退化成鼠标，
+    // WM_POINTER 报 PT_MOUSE、Raw Input 也读不到厂商私有的笔集合）。
+    // 而 Wintab 是**驱动自己的 API、绕开 Windows 整条输入栈**，
+    // 所以它是"关 ink 还想有压力"的唯一一条路（Wacom 官方也推荐用 Wintab）。
+    //
+    // ⚠ 不是所有板子都有：需要驱动带 wintab32.dll。
+    //   有厂商驱动的（Wacom/绘王/高漫/XP-Pen…）通常有；
+    //   **Windows 原生笔（Surface / N-trig / MPP）从 SP5 起就没有了**。
+    public const uint WTI_INTERFACE = 1;
+    public const uint WTI_DEFCONTEXT = 3;
+    public const uint IFC_VERSION = 2;
+    public const uint IFC_NDEVICES = 4;
+    /// <summary>Wintab 的包消息默认基址（LOGCONTEXT.lcMsgBase 的默认值）。</summary>
+    public const int WT_DEFBASE = 0x7FF0;
+
+    /// <summary>LOGCONTEXT（Wintab 上下文）的大小：**实测 172 字节**（不是规范上常说的 160！）。
+    /// 这里**不按字段声明结构体**，而是用一块 256 字节的裸缓冲 + 按偏移读写——
+    /// 结构体的对齐/打包一旦猜错，`WTInfo` 会写坏内存（实测返回 172 &gt; 160，
+    /// 照 160 声明就等于让驱动往栈上多写 12 字节）。裸缓冲只要求"够大"。
+    /// 用到的偏移：lcMsgBase=52。</summary>
+    public const int LOGCONTEXT_BYTES = 256;
+    public const int LC_MSGBASE_OFFSET = 52;
+
+    [DllImport("wintab32.dll", EntryPoint = "WTInfoA", CharSet = CharSet.Ansi, SetLastError = true)]
+    public static extern uint WTInfo(uint wCategory, uint nIndex, IntPtr lpOutput);
+
+    [DllImport("wintab32.dll", EntryPoint = "WTOpenA", CharSet = CharSet.Ansi, SetLastError = true)]
+    public static extern IntPtr WTOpen(IntPtr hWnd, IntPtr lpLogCtx, bool fEnable);
+
+    [DllImport("wintab32.dll", SetLastError = true)]
+    public static extern bool WTClose(IntPtr hCtx);
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetPointerInfo(uint pointerId, out POINTER_INFO pointerInfo);
 
@@ -613,6 +648,12 @@ internal static class Native
     // ---- kernel32 --------------------------------------------------------
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr LoadLibrary(string lpFileName);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
+    public static extern IntPtr GetProcAddress(IntPtr hModule, string lpProcName);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern IntPtr GetModuleHandle(string moduleName);
 
     [DllImport("kernel32.dll")]

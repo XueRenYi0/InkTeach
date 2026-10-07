@@ -2197,6 +2197,99 @@ public partial class InkEngine
     /// <summary>主屏像素尺寸（绝对原始报的归一化基准）。</summary>
     private float _primaryW = 1920f, _primaryH = 1080f;
 
+    /// <summary>`--wintabprobe`：收到的 Wintab 包条数（只数消息，不解析包体）。</summary>
+    internal int WintabPackets;
+    private int _wtMsgBase = -1;
+
+    /// <summary>
+    /// `--wintabprobe`：探 Wintab 这条路通不通。
+    ///
+    /// 只回答三个问题，全是"能不能用"、不是"好不好用"：
+    ///   ① `wintab32.dll` 在不在、导出函数找不找得到；
+    ///   ② `WTInfo` 报什么（接口版本、设备数）；
+    ///   ③ **`WTOpen` 能不能打开上下文** —— 打不开后面一切免谈；
+    ///   ④ 打开之后**真的收得到包吗**（数 Wintab 消息范围内的消息条数）。
+    ///
+    /// 只读、不改产品行为；失败就说明这台机器/这块板子没有这条路。
+    /// </summary>
+    internal int WintabProbe()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== Wintab 探针（只读，不改任何产品行为）===");
+
+        IntPtr hmod = Native.LoadLibrary("wintab32.dll");
+        if (hmod == IntPtr.Zero)
+        {
+            Console.WriteLine("  wintab32.dll          : 载入失败 → 这台机器没有这条路");
+            Console.WriteLine($"                          （err={Marshal.GetLastWin32Error()}）");
+            return 1;
+        }
+        Console.WriteLine("  wintab32.dll          : 载入成功");
+
+        IntPtr pInfo = Native.GetProcAddress(hmod, "WTInfoA");
+        IntPtr pOpen = Native.GetProcAddress(hmod, "WTOpenA");
+        IntPtr pClose = Native.GetProcAddress(hmod, "WTClose");
+        Console.WriteLine($"  WTInfoA / WTOpenA     : {(pInfo != IntPtr.Zero ? "找到" : "缺")} / {(pOpen != IntPtr.Zero ? "找到" : "缺")}");
+        if (pInfo == IntPtr.Zero || pOpen == IntPtr.Zero) return 1;
+
+        // ① 接口版本（WTInfo(WTI_INTERFACE, IFC_VERSION, &ver)，返回 16 位）
+        IntPtr buf = Marshal.AllocHGlobal(1024);
+        try
+        {
+            for (int i = 0; i < 1024; i++) Marshal.WriteByte(buf, i, 0);
+            uint got = Native.WTInfo(Native.WTI_INTERFACE, Native.IFC_VERSION, buf);
+            ushort ver = (ushort)Marshal.ReadInt16(buf);
+            Console.WriteLine($"  接口版本              : 0x{ver:X4}（WTInfo 返回 {got} 字节）"
+                              + (ver == 0 ? "  → 驱动可能没在响应" : ""));
+
+            for (int i = 0; i < 1024; i++) Marshal.WriteByte(buf, i, 0);
+            Native.WTInfo(Native.WTI_INTERFACE, Native.IFC_NDEVICES, buf);
+            uint devs = (uint)Marshal.ReadInt32(buf);
+            Console.WriteLine($"  设备数                : {devs}");
+
+            // ② 取默认上下文，看它的 lcMsgBase（包消息从哪儿开始）
+            for (int i = 0; i < 1024; i++) Marshal.WriteByte(buf, i, 0);
+            uint ctxBytes = Native.WTInfo(Native.WTI_DEFCONTEXT, 0, buf);
+            int msgBase = Marshal.ReadInt32(buf, Native.LC_MSGBASE_OFFSET);
+            Console.WriteLine($"  默认上下文            : WTInfo 返回 {ctxBytes} 字节，lcMsgBase=0x{msgBase:X4}");
+            if (msgBase <= 0) msgBase = Native.WT_DEFBASE;
+
+            // ③ WTOpen：真正的门槛
+            IntPtr hwnd = _windows.Count > 0 ? _windows[0].Hwnd : IntPtr.Zero;
+            IntPtr ctx = Native.WTOpen(hwnd, buf, true);
+            if (ctx == IntPtr.Zero)
+            {
+                Console.WriteLine($"  WTOpen                : **失败**（err={Marshal.GetLastWin32Error()}）"
+                                  + " → 这条路对这台机器不存在");
+                return 1;
+            }
+            Console.WriteLine($"  WTOpen                : **成功**（ctx=0x{ctx.ToInt64():X}）");
+
+            // ④ 数包：Wintab 的包消息落在 [lcMsgBase, lcMsgBase+?)，只数条数、不解析
+            _wtMsgBase = msgBase;
+            WintabPackets = 0;
+            int before = 0;
+            Console.WriteLine();
+            Console.WriteLine("  ▶ 请用手写笔在板子上**来回移动 8 秒**（不用按笔尖，悬停即可）…");
+            for (int sec = 0; sec < 8; sec++)
+            {
+                Thread.Sleep(1000);
+                DrainMessages();
+                Console.Write($"\r    第 {sec + 1}/8 秒，已收到 Wintab 包 {WintabPackets} 条   ");
+                before = WintabPackets;
+            }
+            Console.WriteLine();
+            Console.WriteLine($"  收到 Wintab 包        : **{WintabPackets} 条**"
+                              + (WintabPackets > 0 ? " → 这条路通了（驱动真的在发包）"
+                                                   : " → 打开成功但收不到包（驱动不响应 / 笔不在范围内）"));
+            Native.WTClose(ctx);
+            Console.WriteLine("  WTClose               : 已关闭");
+            _wtMsgBase = -1;
+            return WintabPackets > 0 ? 0 : 1;
+        }
+        finally { Marshal.FreeHGlobal(buf); }
+    }
+
     /// <summary>上一条绝对原始报的原始值（取差值用，见 HandleRawInput）。</summary>
     private int _rawAbsX, _rawAbsY;
     private bool _rawAbsValid;
@@ -2878,6 +2971,14 @@ public partial class InkEngine
 
     private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
+        // `--wintabprobe`：Wintab 的包消息落在 [lcMsgBase, lcMsgBase+64) 这一段。
+        // **只数条数、不解析包体**——探针只需要回答"驱动到底发不发包"。
+        if (_wtMsgBase > 0 && msg >= (uint)_wtMsgBase && msg < (uint)_wtMsgBase + 64)
+        {
+            WintabPackets++;
+            return IntPtr.Zero;
+        }
+
         // **系统来问"要不要那条长按手势"**：一律回"不要"。
         //
         // 这是关掉"按住不动 = 右键"的**主路**（另两条在 Native.DisableSystemPressAndHold 里）：
@@ -3045,7 +3146,6 @@ public partial class InkEngine
             case Native.WM_INPUT:                     // `--rawprobe` 只数数；`--rawinput` 顺带补采样点
                 HandleRawInput(lParam);
                 return IntPtr.Zero;
-
             case Native.WM_POINTERCAPTURECHANGED:
                 _cntCaptureLost++;
                 EndStroke();
