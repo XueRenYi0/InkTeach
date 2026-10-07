@@ -357,6 +357,9 @@ public interface IEngineCommands
     /// </summary>
     void SetPressure(bool on);
 
+    /// <summary>「设置 → 书写 → 精细笔迹」：原始输入补点总开关（2026-10-07 加）。</summary>
+    void SetFineStroke(bool on);
+
     /// <summary>
     /// **悬停提示的总开关**（「更多 → 设置 → 外观 → 悬停提示」，2026-10-02 加）。
     ///
@@ -902,6 +905,9 @@ public readonly struct UiState
     /// 默认开；关掉 = 整块板等宽（渲染期语义，文档里的压力数据不动）。
     /// </summary>
     public bool PressureOn { get; init; }
+
+    /// <summary>「精细笔迹」（原始输入补点）总开关的状态（默认开）。</summary>
+    public bool FineStrokeOn { get; init; }
     /// <summary>
     /// **触摸手势总开关**开着吗（界面用它显示「设置 → 书写 → 触摸手势」那一行的开关）。
     /// 默认开；关掉 = 只剩单指书写（双指 / 三指 / 长按 / 漫游全部停用）。

@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime;
 using System.Runtime.InteropServices;
@@ -16223,6 +16223,20 @@ internal sealed partial class App : InkEngine.InkEngine
                   !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
         }
 
+        // 「精细笔迹」（2026-10-07）：同一条链路过一遍 —— 点行 → 引擎状态翻转 → 落盘。
+        // 它管的是"原始输入补点"那个开关（低配机的性能保险丝）。
+        {
+            var fineRow = ui.RowRectByLabelForTest("精细笔迹");
+            Check("「精细笔迹」那一行找得到", fineRow.MaxY > fineRow.MinY,
+                  $"行高 {fineRow.MaxY - fineRow.MinY:F0}");
+            Check("精细笔迹默认是开的", Host.State.FineStrokeOn, $"FineStrokeOn = {Host.State.FineStrokeOn}");
+            ClickPhysical((fineRow.MinX + fineRow.MaxX) * 0.5f * DpiScale,
+                          (fineRow.MinY + fineRow.MaxY) * 0.5f * DpiScale);
+            SettleFrames(200);
+            Check("点「精细笔迹」：引擎状态立刻翻转（默认开 → 关）",
+                  !Host.State.FineStrokeOn, $"FineStrokeOn = {Host.State.FineStrokeOn}");
+        }
+
         // [停用 2026-10-05] 「墨迹预测」开关整块自检（老预测系统停用，见 已停用-渲染实验.md）。
         // 原来这里顺带验「更多」第二批提示 / 悬停出提示 / 触摸长按不执行——随该行一起停用；
         // 恢复预测时把下面整块取消注释即可。
@@ -16300,7 +16314,8 @@ internal sealed partial class App : InkEngine.InkEngine
         Check("改动写进了配置文件",
               prefsText.Contains("\"ui\"") && prefsText.Contains("\"dark\"")
               && prefsText.Contains("\"profile\"") && prefsText.Contains("\"unpinned\"")
-              && prefsText.Contains("\"pressure\"") && prefsText.Contains("\"tooltip\"")
+              && prefsText.Contains("\"pressure\"") && prefsText.Contains("\"finestroke\"")
+              && prefsText.Contains("\"tooltip\"")
               // [停用] && prefsText.Contains("\"predict\"")
               ,
               $"{Path.GetFileName(prefsPath)}（{prefsText.Length} 字节）");
@@ -16308,6 +16323,7 @@ internal sealed partial class App : InkEngine.InkEngine
         // 把内存里那份清掉、从文件重读，再挂一个新界面——这才算"重开软件"那条链子
         ReloadUiPrefsForTest();
         ApplyPressurePrefForTest();       // 压感是引擎状态，要补"启动时应用偏好"那一步
+        ApplyFineStrokePrefForTest();     // 精细笔迹同理（原始输入补点）
         // [停用 2026-10-05] ApplyPredictPrefForTest();   // 墨迹预测（老预测系统停用）
         SetUiFactory(() => new InkUi.FullUi());
         SettleFrames(300);
@@ -16319,6 +16335,8 @@ internal sealed partial class App : InkEngine.InkEngine
               + $"功能提示={ui?.TipEnabledForTest}");
         Check("压感偏好也读回来了（重启后仍是关）",
               !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
+        Check("精细笔迹偏好也读回来了（重启后仍是关）",
+              !Host.State.FineStrokeOn, $"FineStrokeOn = {Host.State.FineStrokeOn}");
         // [停用 2026-10-05] Check("墨迹预测偏好也读回来了（重启后仍是开）",
         //     Host.State.PredictOn, $"PredictOn = {Host.State.PredictOn}");
 

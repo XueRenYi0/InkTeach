@@ -114,6 +114,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetCoordGridDefault(bool on) => _engine.SetCoordGridDefaultFromUi(on);
     public void SetDwellShape(bool on) => _engine.SetDwellShapeFromUi(on);
     public void SetPressure(bool on) => _engine.SetPressureFromUi(on);
+    public void SetFineStroke(bool on) => _engine.SetFineStrokeFromUi(on);
     /// <summary>触摸手势总开关（默认开；关掉只剩单指书写）。</summary>
     public void SetTouchGestures(bool on) => _engine.SetTouchGesturesFromUi(on);
     // [删除 2026-10-05] SetPredict(bool)：随老预测系统移除。

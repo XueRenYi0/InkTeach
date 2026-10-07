@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 using InkEngine;
 using Vortice.Direct2D1;
 using Vortice.Mathematics;
@@ -226,7 +226,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按两栏里的布局走**：
     /// 左列 外观（3）＋ 书写（3）；右列 墨迹（3）——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, DwellShape, Pressure, RestoreInk, PptAutoSave, HistoryDays, TouchGestures }
+    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, DwellShape, Pressure, FineStroke, RestoreInk, PptAutoSave, HistoryDays, TouchGestures }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -252,6 +252,11 @@ public sealed class FullUi : IOverlayUi
         // 压感粗细（2026-10-01，批次 0.2）：默认开；关掉 = 整块板等宽，
         // 手写板的流畅 / 预测不受影响（渲染期开关，文档里的压力数据不动）。
         (Row.Pressure, "压感粗细", false, false, "关掉后所有笔迹等宽（手写板照样流畅）"),
+        // 精细笔迹（2026-10-07）：管的是「原始输入补点」。
+        // 系统会把来不及投递的移动合并成一条消息，只取最新那一个等于把采样率砍半
+        // （真机实测：指针消息 61Hz，设备实际报了 190Hz）。这一行就是"要不要把中间点捞回来"。
+        // **默认开**（用户定的：开不开 ink 要有一样的手写体验）；低配机怕性能不够可以一键关。
+        (Row.FineStroke, "精细笔迹", false, false, "关掉后写快时线条略粗糙（省一点性能，低配机可关）"),
         // [停用 2026-10-05] 墨迹预测（老预测系统，见 `已停用-渲染实验.md`）：
         // (Row.Predict, "墨迹预测", false, false, "开了更跟手一点，可能有轻微拖影"),
         // 墨迹三条偏好（原本在「墨迹」页，2026-10-02 启动器改版后搬进设置子页）。
@@ -461,6 +466,8 @@ public sealed class FullUi : IOverlayUi
         _host.SetPref("dwellShape", st.DwellShapeOn ? null : "0");
         // 压感粗细：**默认开**，同样只写"关了"这一种情况（引擎启动时自己读它）。
         _host.SetPref("pressure", st.PressureOn ? null : "0");
+        // 精细笔迹：**默认开**，同样只写"关了"这一种情况（引擎启动时自己读它）。
+        _host.SetPref("finestroke", st.FineStrokeOn ? null : "0");
         // 触摸手势总开关：**默认开**，同样只写"关了"这一种情况。
         _host.SetPref("touch.gestures", st.TouchGesturesOn ? null : "0");
         // [停用 2026-10-05] 墨迹预测：默认关，只写"开了"这一种情况（引擎启动时自己读它）。
@@ -2114,6 +2121,12 @@ public sealed class FullUi : IOverlayUi
                 SavePrefs();
                 break;
 
+            // 精细笔迹（2026-10-07）：原始输入补点的总开关。引擎是权威，界面翻转后落盘。
+            case Row.FineStroke:
+                _host.Commands.SetFineStroke(!_host.State.FineStrokeOn);
+                SavePrefs();
+                break;
+
             // 触摸手势总开关（2026-10-05）：关掉只剩单指书写（双指/三指/长按/漫游全停用）。
             // 引擎是权威（渲染/手势都在它那边），界面翻转后落盘到 "touch.gestures"。
             case Row.TouchGestures:
@@ -2200,7 +2213,7 @@ public sealed class FullUi : IOverlayUi
     /// `SetWriteHeadRect` 和 `MoreLowerH` 里，两处各写一遍迟早漏一处）。
     /// </summary>
     private const int LookRowCount = 4;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 悬停提示
-    private const int WriteRowCount = 3;   // 书写：停顿变图形 / 压感粗细 / 触摸手势总开关（墨迹预测行已停用）
+    private const int WriteRowCount = 4;   // 书写：停顿变图形 / 压感粗细 / 精细笔迹 / 触摸手势总开关（墨迹预测行已停用）
     private const float MoreColumnGap = 16f;
     private const float MoreWriteGap = 8f;
     private const float MoreSwitchW = 44f;
@@ -2418,7 +2431,8 @@ public sealed class FullUi : IOverlayUi
         Row.Tooltip => SetColRow(SetColKind.Look, 3),
         Row.DwellShape => SetColRow(SetColKind.Write, 0),
         Row.Pressure => SetColRow(SetColKind.Write, 1),
-        Row.TouchGestures => SetColRow(SetColKind.Write, 2),
+        Row.FineStroke => SetColRow(SetColKind.Write, 2),
+        Row.TouchGestures => SetColRow(SetColKind.Write, 3),
         // [删除 2026-10-05] Row.Predict => SetColRow(SetColKind.Write, 2),（墨迹预测行）
         Row.RestoreInk => SetColRow(SetColKind.Ink, 0),
         Row.PptAutoSave => SetColRow(SetColKind.Ink, 1),
@@ -4522,6 +4536,8 @@ public sealed class FullUi : IOverlayUi
         Row.DwellShape => _host == null || _host.State.DwellShapeOn,
         // 压感粗细：状态在**引擎**（渲染期开关），界面只是显示它
         Row.Pressure => _host == null || _host.State.PressureOn,
+        // 精细笔迹：状态也在引擎（默认开），界面只是显示它
+        Row.FineStroke => _host == null || _host.State.FineStrokeOn,
         // 触摸手势总开关：状态也在引擎（默认开），界面只是显示它
         Row.TouchGestures => _host == null || _host.State.TouchGesturesOn,
         // [停用 2026-10-05] 墨迹预测：同压感，状态在引擎（默认关）

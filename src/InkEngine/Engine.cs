@@ -1794,6 +1794,17 @@ public partial class InkEngine
         if (!_noPressureArg && GetUiPref(PressurePrefKey) == "0")
             PressureWidth.Enabled = false;
 
+        // ---- 用户开关：精细笔迹（2026-10-07，「更多 → 设置 → 书写」）----------
+        //
+        // 这一行管的是「**原始输入补点**」：系统会把来不及投递的移动合并成一条消息，
+        // 只取最新那一个等于把采样率砍半（真机实测：指针消息 61Hz，而设备实际报了 190Hz）。
+        // 补点就是按原始报率把中间点捞回来。
+        //
+        // 同压感那一条的规矩：**默认开**、偏好只写"关过"的那一份（`ui.finestroke = "0"`）、
+        // **命令行优先**（`--norawinput` 存在时不听偏好，否则对照实验会被用户偏好悄悄改掉）。
+        if (!_noRawInputArg && GetUiPref(FineStrokePrefKey) == "0")
+            RawInputCapture = false;
+
         // ---- 模拟压力与笔锋：**已全部停用**（2026-10-05，代码保留）----------------
         // [停用] `--simpressure/--simpressdepth`（Xournal++ 速度压力）、
         // `--pfpressure/--pfthinning/--pfstreamline`（perfect-freehand 速度压力）、
@@ -1887,7 +1898,8 @@ public partial class InkEngine
             if (args.Contains("--notrend")) StrokeSmoothing.CornerUseTrend = false;
             // 原始输入默认**开**（2026-10-07 用户定："开不开 ink 要有一样的手写体验"）。
             // `--norawinput` 关掉做对照；`--rawprobe` 单独打开"只数条数"的诊断。
-            RawInputCapture = !args.Contains("--norawinput");
+            _noRawInputArg = args.Contains("--norawinput");
+            RawInputCapture = !_noRawInputArg;
             RawProbeEnabled = RawInputCapture || args.Contains("--rawprobe");
             // Wintab 默认**开**（2026-10-07）：关 ink 时笔被当鼠标报、那条路上没有压力，
             // Wintab 是驱动自己的通道，能补回压力（实测 0~16383，比 Windows Ink 的 1024 细 16 倍）。
@@ -9878,6 +9890,7 @@ public partial class InkEngine
         CoordGridDefault = CoordGridDefault,
         DwellShapeOn = DwellShapeEnabled,
         PressureOn = PressureWidth.Enabled,      // 界面拿它显示「设置 → 书写 → 压感粗细」那个开关
+        FineStrokeOn = RawInputCapture,          // 「设置 → 书写 → 精细笔迹」（原始输入补点）总开关
         TouchGesturesOn = _touch.Enabled,        // 「设置 → 书写 → 触摸手势」总开关（默认开）
         // [删除 2026-10-05] PredictOn（墨迹预测）：随老预测系统移除。
         ScreenIndex = ScreenIndex,
@@ -10072,6 +10085,33 @@ public partial class InkEngine
 
     /// <summary>压感粗细的偏好键（只写"关过"的那一份）。</summary>
     private const string PressurePrefKey = "pressure";
+
+    /// <summary>精简笔迹（原始输入补点）的偏好键（同样只写"关过"的那一份）。</summary>
+    private const string FineStrokePrefKey = "finestroke";
+
+    /// <summary>命令行上有没有 `--norawinput`（给对照实验用，它优先于用户偏好）。</summary>
+    private bool _noRawInputArg;
+
+    /// <summary>
+    /// 「更多 → 设置 → 书写 → 精细笔迹」被点了一下（2026-10-07）。
+    ///
+    /// 关掉 = 不再按原始报率补中间点：**省一点性能**（低配机可关），
+    /// 代价是写快时线条的细节少一些。**只影响以后写的**，已经画好的一个字节不动。
+    /// 正在写的那一笔会**立刻注销**原始输入（见 <see cref="SetRawCapture"/>：
+    /// 空闲时必须注销，否则会退回"空闲也收鼠标空报"那个 46fps 的老问题）。
+    /// </summary>
+    internal void SetFineStrokeFromUi(bool on)
+    {
+        if (RawInputCapture == on) return;
+        RawInputCapture = on;
+        if (!on) SetRawCapture(false);
+        Console.WriteLine($"精细笔迹：{(on ? "开（按设备的原始报率补中间点）" : "关（不再补点，省一点性能）")}");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>启动时应用"精细笔迹"偏好（自检要单独调一次，理由同压感）。</summary>
+    internal void ApplyFineStrokePrefForTest()
+        => RawInputCapture = !_noRawInputArg && GetUiPref(FineStrokePrefKey) != "0";
 
     // [删除 2026-10-05] `SetPredictFromUi` / `ApplyPredictPrefForTest`（墨迹预测开关的入口）：
     // 随老预测系统移除；恢复见 `已停用-渲染实验.md`。
