@@ -2348,9 +2348,21 @@ public partial class InkEngine
                 if (gotAxis == 0) continue;
                 var ax = Marshal.PtrToStructure<Native.AXIS>(buf);
                 if (ax.axMax == 0 && ax.axMin == 0 && ax.axUnits == 0) continue;
-                string guess = "";
-                if (ax.axMin == 0 && ax.axMax > 0 && ax.axMax <= 8192) guess = "  ← 像**压力**";
-                else if (ax.axMax > 8192) guess = "  ← 像坐标轴（X/Y）";
+                // 索引名**按 wintab.h 的标准顺序推测**（12=X 13=Y 14=Z 15=正压力 16=切向压力 17=倾斜），
+                // 并用实测值互相印证：12/13 是 50800/31750（典型幅面）、5=400（正是 lcPktRate）、
+                // 6=0x15F7（正是默认 lcPktData）——这些"意外对上"说明索引没认错。
+                // **但 15 和 16 都是 0..16383，光看量程分不出谁是压力**（倾斜也可能是这个量程），
+                // 所以下面标的是"推测"，真正的判据是**实压下读包**（见"包体实测"）。
+                string guess = idx switch
+                {
+                    12 => "  ← 推测 X 轴幅面",
+                    13 => "  ← 推测 Y 轴幅面",
+                    14 => "  ← 推测 Z 悬停高度（0~1024 很合理）",
+                    15 => "  ← 推测 **正压力**（待实压确认）",
+                    16 => "  ← 推测 切向压力（量程与 15 相同）",
+                    17 => "  ← 推测 倾斜方位角（0.1° 为单位）",
+                    _ => "  ← 非轴属性（按 AXIS 读会得到 min=值 max=0 这种样子，不用管）",
+                };
                 Console.WriteLine($"    [{idx,2}] min={ax.axMin,12} max={ax.axMax,12} units={ax.axUnits,-6} res={ax.axResolution}{guess}");
             }
 
@@ -2401,7 +2413,11 @@ public partial class InkEngine
             int pkMinY = int.MaxValue, pkMaxY = int.MinValue;
             int pkMinP = int.MaxValue, pkMaxP = int.MinValue;
             long pkWithPressure = 0, pkTotal = 0;
-            var pkMaxSample = 8;
+            // 前 4 个包的**原始字节**（十六进制）——万一偏移还是错的，
+            // 有原始字节我就能离线把布局认出来，**不用你再跑一趟**。
+            // 这是今天第四次栽在"自己算布局"之后加上的：**要证据，不要推断。**
+            var rawHex = new System.Collections.Generic.List<string>();
+            var rawDecoded = new System.Collections.Generic.List<string>();
             try
             {
                 for (int sec = 0; sec < 12; sec++)
@@ -2422,6 +2438,20 @@ public partial class InkEngine
                         if (xOff >= 0) { int v = Marshal.ReadInt32(pktBuf, xOff); if (v < pkMinX) pkMinX = v; if (v > pkMaxX) pkMaxX = v; }
                         if (yOff >= 0) { int v = Marshal.ReadInt32(pktBuf, yOff); if (v < pkMinY) pkMinY = v; if (v > pkMaxY) pkMaxY = v; }
                         if (pOff >= 0) { int v = Marshal.ReadInt32(pktBuf, pOff); if (v < pkMinP) pkMinP = v; if (v > pkMaxP) pkMaxP = v; if (v > 0) pkWithPressure++; }
+                        if (rawHex.Count < 4)
+                        {
+                            var hb = new System.Text.StringBuilder();
+                            for (int i = 0; i < 64; i++)
+                            {
+                                hb.Append(Marshal.ReadByte(pktBuf, i).ToString("X2"));
+                                hb.Append((i % 4 == 3) ? ' ' : ' ');
+                            }
+                            rawHex.Add(hb.ToString().TrimEnd());
+                            int dx = xOff >= 0 ? Marshal.ReadInt32(pktBuf, xOff) : -999;
+                            int dy = yOff >= 0 ? Marshal.ReadInt32(pktBuf, yOff) : -999;
+                            int dp = pOff >= 0 ? Marshal.ReadInt32(pktBuf, pOff) : -999;
+                            rawDecoded.Add($"X@{xOff}={dx}  Y@{yOff}={dy}  压力@{pOff}={dp}");
+                        }
                         if (pkTotal > 200000) break;          // 防跑飞
                     }
                     Console.Write($"\r    第 {sec + 1,2}/12 秒，已取 {pkTotal} 包，压力 {pkMinP}~{pkMaxP}   ");
@@ -2460,7 +2490,21 @@ public partial class InkEngine
                 if (!sane)
                     Console.WriteLine("       （坐标/压力不可能到千万级；说明包体布局算错，读数全部作废）");
             }
-            _ = pkMaxSample;
+            // **原始证据**：前几个包的原样字节。万一上面的偏移还是错的，
+            // 有这段十六进制我就能离线把真实布局认出来 —— 不用你再跑一趟。
+            if (rawHex.Count > 0)
+            {
+                Console.WriteLine("  ---- 前几个包的**原始字节**（每 4 字节一组，共 64 字节）----");
+                for (int i = 0; i < rawHex.Count; i++)
+                {
+                    Console.WriteLine($"    包{i + 1}  {rawHex[i]}");
+                    Console.WriteLine($"           → 按我算的偏移读：{rawDecoded[i]}");
+                }
+            }
+            else
+            {
+                Console.WriteLine("  （没取到包，没有原始字节可看）");
+            }
             Native.WTClose(ctx);
             Console.WriteLine("  WTClose               : 已关闭");
             _wtMsgBase = -1;
