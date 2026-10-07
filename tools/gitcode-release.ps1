@@ -1,5 +1,5 @@
 ﻿<#
-  把一次发布同步到 GitCode 国内镜像仓库（xzx1xzzx/InkTeach）。
+  把一次发布同步到 GitCode 国内镜像仓库（XueRenYI0/InkTeach）。
 
   前置：
     · %USERPROFILE%\.gitcode-token 里放着 GitCode 私人令牌（勾了仓库/项目权限）
@@ -21,7 +21,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$owner = 'xzx1xzzx'
+$owner = 'XueRenYI0'
 $repo = 'InkTeach'
 $tag = "v$Version"
 $api = "https://api.gitcode.com/api/v5/repos/$owner/$repo"

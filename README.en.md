@@ -12,7 +12,7 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 [![Downloads](https://img.shields.io/github/downloads/XueRenYi0/InkTeach/total)](https://github.com/XueRenYi0/InkTeach/releases)
 
 **Download**: [GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest) (`InkTeach-Setup-<ver>.exe`, or the portable `InkTeach-<ver>-win-x64.zip`)
-｜[GitCode mirror (China)](https://gitcode.com/xzx1xzzx/InkTeach/releases)
+｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
 **Requirements**: Windows 10 / 11 x64, **no .NET install needed** (self-contained).

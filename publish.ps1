@@ -59,7 +59,7 @@ $updateBase = "https://github.com/XueRenYi0/InkTeach/releases/latest/download"
 # 国内镜像（GitCode：源码随发版推送、zip/Setup 挂发行版附件；2026-10-03 起用）。
 # 配了它：① GitHub 清单里多写一个 "cn"（App 优先从国内下 zip）；② 生成 dist\update-mirror.json 留档。
 # 留空 = 不做国内镜像。
-$mirrorOwnerRepo  = "xzx1xzzx/InkTeach"
+$mirrorOwnerRepo  = "XueRenYI0/InkTeach"
 $mirrorReleaseBase = if ($mirrorOwnerRepo) { "https://gitcode.com/$mirrorOwnerRepo/releases/download" } else { "" }
 
 # ---- 版本号从工程里读，不在这里再写一份（写两份迟早对不上）----------------------------
@@ -261,8 +261,8 @@ if ($NoSetup) {
 # ---- 固定名副本（官网"永不失效"的免登录直链用）--------------------------------------
 #
 #  官网按钮用的是 **固定文件名** 的直链，这样每次发版网页不用改：
-#    https://gitcode.com/xzx1xzzx/InkTeach/releases/download/latest/InkTeach-Setup.exe
-#    https://gitcode.com/xzx1xzzx/InkTeach/releases/download/latest/InkTeach-win-x64.zip
+#    https://gitcode.com/XueRenYI0/InkTeach/releases/download/latest/InkTeach-Setup.exe
+#    https://gitcode.com/XueRenYI0/InkTeach/releases/download/latest/InkTeach-win-x64.zip
 #  （`latest` 是 GitCode/GitHub 都支持的"最新发行版"别名；实测匿名 GET 可下、不要登录。）
 #  上传发行版附件时把这两个固定名文件也带上：
 #    · GitCode：tools\gitcode-release.ps1 已自动带上；

@@ -12,7 +12,7 @@
 [![Downloads](https://img.shields.io/github/downloads/XueRenYi0/InkTeach/total)](https://github.com/XueRenYi0/InkTeach/releases)
 
 **下载**：[GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest)（`InkTeach-Setup-<版本>.exe` 双击下一步，
-或绿色版 `InkTeach-<版本>-win-x64.zip` 解压即用）｜[GitCode 国内镜像](https://gitcode.com/xzx1xzzx/InkTeach/releases)
+或绿色版 `InkTeach-<版本>-win-x64.zip` 解压即用）｜[GitCode 国内镜像](https://gitcode.com/XueRenYI0/InkTeach/releases)
 ｜**官网**：<https://xuerenyi0.github.io/InkTeach/>
 
 <p align="center"><img src="design/readme/00-演示.gif" width="800" alt="演示：手写一个圆 → 停顿变图形 → 选中拖动 → 截图取景"></p>
