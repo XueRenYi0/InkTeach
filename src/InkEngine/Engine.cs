@@ -842,6 +842,44 @@ public partial class InkEngine
     /// 用来事后算"平板 ↔ 屏幕"的映射 —— 要做"整笔走 Wintab"就不能猜这个关系。</summary>
     internal int WtLastTabletX, WtLastTabletY, WtLastRawPressure;
 
+    // ===================== `--clean N`：入笔前的净化 =====================
+    //
+    // **为什么要有它（2026-10-07，用户录了真机笔迹之后）**：
+    // 把用户真实写的 22 笔录下来量，发现两件事：
+    //   ① **位置有毛刺**：抖动 RMS 3.7px、峰值偏离 31.7px、方向反转 12~23 次/笔
+    //      —— 而点距只有 4~10px，所以是"每 4 个点就来回拐一下"的那种细毛刺。
+    //      app 原来的距离窗（12px ≈ 3 个点）对它**不够**：3 点平均只把 ±2px 压到 ±1.2px。
+    //   ② **压力是台阶**：28 个点里压力只变 8 次 → 宽度一跳一跳。
+    //
+    // 加大 `--mean2win` 也能压毛刺，但那是**距离窗**：窗口越大滞后越大（≈窗一半），
+    // 换来的跟手变差很明显。而这两种毛病都是"短程"的 —— 用**固定点数的滑动平均**
+    // 更划算：同样压噪声，滞后只有 N/2 个**点**（≈ 十几毫秒）。
+    //
+    // 默认 **0 = 完全不动**（一个字节不改）。等用户试出合适的档再考虑设默认。
+
+    /// <summary>`--clean N`：入笔前对位置与压力做 N 点滑动平均（0/1 = 关）。</summary>
+    internal static int CleanWindow;
+
+    private readonly System.Collections.Generic.List<(float X, float Y, float P)> _cleanBuf = new();
+
+    /// <summary>
+    /// 加一个点，必要时先净化。
+    /// ⚠ 滞后 = 窗口内的点数（最多 N 个点）。N 别开太大：写到 5 就有点"笔尖拖着一截"了。
+    /// </summary>
+    private void AddPointCleaned(float x, float y, float p, double t)
+    {
+        if (ActiveStroke == null) return;
+        if (CleanWindow <= 1) { ActiveStroke.AddPoint(x, y, p, t); return; }
+
+        _cleanBuf.Add((x, y, p));
+        if (_cleanBuf.Count > CleanWindow) _cleanBuf.RemoveAt(0);
+        float ax = 0f, ay = 0f, ap = 0f;
+        for (int i = 0; i < _cleanBuf.Count; i++)
+        { ax += _cleanBuf[i].X; ay += _cleanBuf[i].Y; ap += _cleanBuf[i].P; }
+        int n = _cleanBuf.Count;
+        ActiveStroke.AddPoint(ax / n, ay / n, ap / n, t);
+    }
+
     /// <summary>记下"当时的 Wintab 读数"，供 `--recinkp` 录进文件（不参与绘制）。</summary>
     private void NoteWintabSample()
     {
@@ -1952,6 +1990,11 @@ public partial class InkEngine
             // Wintab 是驱动自己的通道，能补回压力（实测 0~16383，比 Windows Ink 的 1024 细 16 倍）。
             // `--nowintab` 关掉做对照。**只在有厂商驱动的板子上有效**，没有就自动不启用。
             WintabEnabled = !args.Contains("--nowintab");
+            // `--clean N`：入笔前对位置与压力做 N 点滑动平均（0 = 关闭，默认）。
+            // 见 AddPointCleaned 那段注释：治"细毛刺"和"压力台阶"，滞后比加大距离窗小得多。
+            for (int i = 0; i < args.Length - 1; i++)
+                if (args[i] == "--clean" && int.TryParse(args[i + 1], out int cw))
+                    CleanWindow = Math.Clamp(cw, 0, 15);
             // `--strokefile`：把每一笔的 [笔画] 报告**追加到文件**（默认关，零开销）。
             // 给"调手感"用：那一行里的"压力 a~b/上限"是唯一依据，
             // 而截图/转述都会丢信息（今天因此栽过三次）。
@@ -4129,6 +4172,7 @@ public partial class InkEngine
         WtPolledPackets = WtPressurePoints = WtBadPackets = 0;
         WtRawPMin = int.MaxValue; WtRawPMax = int.MinValue;
         _wtPendingPoints = 0;
+        _cleanBuf.Clear();
         _wintabPacketsSeen = _wintab.PacketsRead;
         _wintabBadSeen = _wintab.BadPackets;
         LastCoalescedSamples = LastCoalescedMessages = 0;
@@ -8554,7 +8598,10 @@ public partial class InkEngine
                 var s = _pen[i];
                 float cx = s.X, cy = s.Y;
                 ScreenToCanvas(ref cx, ref cy);
-                ActiveStroke.AddPoint(cx, cy, s.Pressure, s.TimeMs);
+                // ⚠ **真笔这条也要净化**（2026-10-07）：用户报的是"开不开 ink 都脏"，
+                // 而开 ink 走的就是这一条。板子报的位置毛刺是**同一个来源**，
+                // 不会因为走了 Windows Ink 就自己变干净。
+                AddPointCleaned(cx, cy, s.Pressure, s.TimeMs);
                 PenTotalPoints++;
                 if (s.HasPressure) PenPressurePoints++;
             }
@@ -8658,7 +8705,7 @@ public partial class InkEngine
                 float pp = wp < 0f ? s.Pressure
                          : (nPtr <= 1 ? wp
                                       : wpPrev + (wp - wpPrev) * (i / (float)(nPtr - 1)));
-                ActiveStroke.AddPoint(cx, cy, pp, s.TimeMs);
+                AddPointCleaned(cx, cy, pp, s.TimeMs);
                 PtrTotalPoints++;
             }
             // 非笔设备没有 penMask，也就永远不会给这一笔打上 HasPressure——
@@ -8692,7 +8739,7 @@ public partial class InkEngine
             }
         }
         if (fbWp >= 0f && !WtSeenPressure) _wtPendingPoints++;
-        ActiveStroke.AddPoint(curCanvasX, curCanvasY, fbWp >= 0f ? fbWp : curPressure, NowMs);
+        AddPointCleaned(curCanvasX, curCanvasY, fbWp >= 0f ? fbWp : curPressure, NowMs);
     }
 
     /// <summary>
@@ -8815,7 +8862,7 @@ public partial class InkEngine
         else rawP = 0.5f;
         // 起笔那几个（还没拿到真实压力时的）点记下来，等第一包压力到了回填。
         if (!WtSeenPressure && _wintab.IsOpen) _wtPendingPoints++;
-        ActiveStroke.AddPoint(cx, cy, rawP, NowMs);
+        AddPointCleaned(cx, cy, rawP, NowMs);
         _rawPointsAdded++;
         // **补压的账要把 raw 补的点也算进来**：不然 `补压N点` 只数指针消息那条路，
         // 而 raw 补的点常常占一半以上（用户真机实测 139 点里 raw 补了 88 个）——
@@ -8904,6 +8951,7 @@ public partial class InkEngine
             s.MarkPressureEdited();        // 告诉渲染"这一笔变了"（只改压力，不碰包围盒）
         }
         _wtPendingPoints = 0;
+        _cleanBuf.Clear();
     }
 
     /// <summary>这一笔压力**原始值**的区间（0..驱动上限）。**只报 0..1 看不出力度用到了量程的哪一段**——
