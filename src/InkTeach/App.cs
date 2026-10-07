@@ -988,6 +988,13 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             DocumentTest();
         }
+        else if (mode == "--pdfprobe")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            int pn = args.Length > 2 && int.TryParse(args[2], out var ptmp) ? ptmp : 3;
+            PdfProbe(args.Length > 1 ? args[1] : null, pn);
+        }
         else if (mode == "--iotest")
         {
             _autoExitAt = double.MaxValue;

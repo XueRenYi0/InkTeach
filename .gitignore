@@ -30,3 +30,6 @@ reports/stress-*/
 reports/ui-audit/
 reports/backdrop-probe/
 reports/_*
+
+# PDF 渲染用的原生库（PDFium，7.15MB）：**不进 git**，跑 tools\fetch-pdfium.ps1 取回
+vendor/

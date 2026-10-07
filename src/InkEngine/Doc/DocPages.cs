@@ -63,8 +63,14 @@ internal sealed class DocPages
     /// <summary>
     /// 页位图生成器（宿主注入：图片 = GDI+ 解码＋裁切＋缩放；PDF = PDFium 渲进缓冲）。
     /// 返回 BGRA（OutW×OutH×4，长度不够算失败）；失败返回 null。
+    /// **worker 模式下它跑在后台线程**（见 <see cref="UseWorker"/>）。
     /// </summary>
     public Func<Spec, byte[]> Generator;
+
+    /// <summary>
+    /// worker 渲完一页时回调（**在后台线程上**）：宿主用它叫醒主循环（见 InkEngine.WakeForDocPage）。
+    /// </summary>
+    public Action OnResultReady;
 
     /// <summary>显示名（文件名；状态行与自检用）。</summary>
     public string Title = "";
@@ -127,11 +133,16 @@ internal sealed class DocPages
         }
         FullDirty = true;
         Version++;
+        StartWorker();      // UseWorker 时把后台渲染线程拉起来（不调用 = 零开销）
     }
 
-    /// <summary>关掉文档：位图全放、配方清空。墨迹**不动**（那是 `Doc` 的事）。</summary>
+    /// <summary>
+    /// 关掉文档：**先停后台线程**（等它把在途那一页渲完——PDF 文档要等它放手了才能关，
+    /// 否则原生代码会踩到已释放的文档），再放位图、清配方。墨迹**不动**（那是 `Doc` 的事）。
+    /// </summary>
     public void Close()
     {
+        StopWorker();
         foreach (var p in _pages)
         {
             if (p.Image != null) { p.Image.Release(); p.Image = null; }
@@ -146,6 +157,108 @@ internal sealed class DocPages
     }
 
     // ======================================================================
+    //  后台渲染线程（worker）
+    // ======================================================================
+
+    /// <summary>
+    /// 页位图是否交给**后台线程**渲染（产品 = true；自检里要"确定性的一拍一页"时置 false）。
+    /// 置了之后由 <see cref="Open"/> 拉起线程、<see cref="Close"/> 停掉。
+    /// </summary>
+    public bool UseWorker;
+
+    private Thread _worker;
+    private readonly AutoResetEvent _wake = new(false);
+    private readonly object _gate = new();
+    private readonly List<Page> _want = new();     // 渲染线程填、worker 取（离视口近的在前）
+    private Page _inFlight;                        // worker 正在渲的页
+    private Page _readyPage;                       // 渲完、等渲染线程采纳
+    private ImageData _readyImage;
+    private volatile bool _stop;
+
+    private void StartWorker()
+    {
+        if (!UseWorker || _worker != null) return;
+        _stop = false;
+        _worker = new Thread(WorkerLoop)
+        {
+            IsBackground = true,
+            Name = "InkTeach-DocPageRender",
+            Priority = ThreadPriority.BelowNormal,     // 绝不给书写路径添堵
+        };
+        _worker.Start();
+        Console.WriteLine("[文档] 页渲染线程已启动（后台）");
+    }
+
+    /// <summary>停线程：等在途那一页渲完（最多 5 秒）——PDF 文档随后才能安全释放。</summary>
+    private void StopWorker()
+    {
+        var w = _worker;
+        if (w == null) return;
+        _stop = true;
+        _wake.Set();
+        try { w.Join(5000); } catch { }
+        _worker = null;
+        lock (_gate)
+        {
+            _want.Clear();
+            _inFlight = null;
+            _readyPage = null;
+            _readyImage?.Release();      // 没被采纳的结果：账要还回去
+            _readyImage = null;
+        }
+        Console.WriteLine("[文档] 页渲染线程已停止");
+    }
+
+    private void WorkerLoop()
+    {
+        while (!_stop)
+        {
+            Page job = null;
+            lock (_gate)
+            {
+                if (_want.Count > 0 && _inFlight == null)
+                {
+                    job = _want[0];
+                    _want.RemoveAt(0);
+                    _inFlight = job;
+                }
+            }
+            if (job == null)
+            {
+                _wake.WaitOne(50);       // 没活干就睡（有活立即醒；50ms 只是兜底轮询）
+                continue;
+            }
+
+            byte[] bgra = null;
+            try { bgra = Generator?.Invoke(job.Spec); }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"    [文档] 生成失败（{job.Spec}）：{ex.Message}");
+            }
+            if (_stop)
+            {
+                lock (_gate) { _inFlight = null; }
+                break;                    // 关文档了：结果直接丢（文档随后才释放）
+            }
+
+            ImageData img = null;
+            if (bgra != null && bgra.Length >= (long)job.Spec.OutW * job.Spec.OutH * 4)
+                img = ImageData.Adopt(job.Spec.OutW, job.Spec.OutH, bgra, false);
+
+            lock (_gate)
+            {
+                _inFlight = null;
+                _readyImage?.Release();   // 上一个结果还没被取走 → 丢掉（不排长队、不堆内存）
+                _readyPage = job;
+                _readyImage = img;        // null = 这页失败（渲染线程会给它画浅红占位）
+            }
+
+            // 叫醒主循环：空闲时引擎不渲染，没人叫就"页渲好了但屏幕上一直空着"。
+            try { OnResultReady?.Invoke(); } catch { }
+        }
+    }
+
+    // ======================================================================
     //  视口窗口：生成与回收
     // ======================================================================
 
@@ -153,10 +266,15 @@ internal sealed class DocPages
 
     /// <summary>
     /// 视口窗口同步（每帧渲染前调一次，或空闲预取时调）：
-    ///   · 窗口 = 视口上下各外扩 <paramref name="marginScreens"/> 屏；
-    ///   · 窗口内的页：没生成的**生成**（每拍最多 <paramref name="maxGenerate"/> 页）；
+    ///   · **先取后台线程渲染好的结果**（worker 模式）——没结果就画占位，绝不在这里等；
+    ///   · 窗口内的页：没生成的**生成/排队**（worker 模式交给后台线程；直通模式当场渲，
+    ///     每拍最多 <paramref name="maxGenerate"/> 页）；
     ///   · 窗口外的页：**立即回收**（GPU＋CPU 一起放）。
-    /// 返回这一拍真的生成了几页。
+    /// 返回这一拍真拿到几页（worker：采纳数；直通：生成数）。
+    ///
+    /// ⚠ **为什么要有 worker**（2026-10-07 真机数据说话）：扫描型 PDF 一页要 **270~900ms**
+    /// （122MB / 663 页那份实测）。同步在渲染线程做就是"滚到那页整机卡住半秒"——
+    /// 这与书写路径共用一条线程，绝不能这么干。10-03 文档 7.5 定的就是"页渲染在后台线程"。
     /// </summary>
     public int SyncWindow(float viewTop, float viewBottom, int maxGenerate = 1, float marginScreens = 1f)
     {
@@ -165,6 +283,43 @@ internal sealed class DocPages
         float h = MathF.Max(1f, viewBottom - viewTop);
         float m = h * MathF.Max(0f, marginScreens);
         float top = viewTop - m, bottom = viewBottom + m;
+
+        // ① 后台结果先到先采纳（worker 模式）
+        int adopted = 0;
+        if (_worker != null)
+        {
+            Page rp; ImageData ri;
+            lock (_gate)
+            {
+                rp = _readyPage; ri = _readyImage;
+                _readyPage = null; _readyImage = null;
+            }
+            if (rp != null)
+            {
+                if (rp.Image == null && !rp.Failed)
+                {
+                    if (ri != null)
+                    {
+                        rp.Image = ri;
+                        adopted = 1;
+                        GenerateCount++;
+                        ResidentPages++;
+                        ResidentBytes += (long)rp.Spec.OutW * rp.Spec.OutH * 4;
+                    }
+                    else
+                    {
+                        rp.Failed = true;          // 后台也失败 → 浅红占位
+                        FailCount++;
+                    }
+                    DirtyRects.Add(rp.Rect);
+                    Version++;
+                }
+                else
+                {
+                    ri?.Release();                 // 页已经不要了（回收过 / 已有图）→ 丢掉结果
+                }
+            }
+        }
 
         // 页顶边有序 ⇒ 页底边也有序（下一块的顶边 = 上一块的底边 + 缝），
         // 所以"第一块可能相交的"[1] 可以二分：第一个底边 >= top 的页。
@@ -175,17 +330,19 @@ internal sealed class DocPages
             if (_pages[mid].Rect.MaxY < top) lo = mid + 1; else hi = mid;
         }
 
-        // ① 窗口上方：全放
+        // ② 窗口上方：全放
         for (int k = 0; k < lo; k++) ReleasePage(_pages[k]);
 
-        // ② 窗口内：生成（预算内）
+        // ③ 窗口内：直通模式当场生成（预算内）；worker 模式只记"想要什么"
         int made = 0;
         int k2 = lo;
         for (; k2 < _pages.Count && _pages[k2].Rect.MinY <= bottom; k2++)
         {
             var p = _pages[k2];
             if (p.Image != null || p.Failed) continue;
+            if (_worker != null) continue;                       // 交给下面的"想要清单"
             if (made >= maxGenerate || Generator == null) continue;
+
             byte[] bgra;
             try { bgra = Generator(p.Spec); }
             catch (Exception ex)
@@ -211,10 +368,34 @@ internal sealed class DocPages
             Version++;
         }
 
-        // ③ 窗口下方：全放
+        // ④ 窗口下方：全放
+        int end = k2;
         for (; k2 < _pages.Count; k2++) ReleasePage(_pages[k2]);
 
-        return made;
+        // ⑤ worker 模式：重建"想要清单"（视口中心近的排前面）并叫醒后台线程
+        if (_worker != null)
+        {
+            lock (_gate)
+            {
+                _want.Clear();
+                for (int k = lo; k < end; k++)
+                {
+                    var p = _pages[k];
+                    if (p.Image != null || p.Failed || ReferenceEquals(p, _inFlight)) continue;
+                    _want.Add(p);
+                }
+                float center = (viewTop + viewBottom) * 0.5f;
+                _want.Sort((a, b) =>
+                {
+                    float da = MathF.Abs((a.Rect.MinY + a.Rect.MaxY) * 0.5f - center);
+                    float db = MathF.Abs((b.Rect.MinY + b.Rect.MaxY) * 0.5f - center);
+                    return da.CompareTo(db);
+                });
+            }
+            _wake.Set();
+        }
+
+        return _worker != null ? adopted : made;
     }
 
     private void ReleasePage(Page p)

@@ -60,4 +60,15 @@
     <PackageReference Include="Vortice.Mathematics" Version="2.1.1" />
   </ItemGroup>
 
+  <!--
+    PDFium 原生库（PDF 渲染）：**不进 git**（7.15MB 二进制），在 `vendor\pdfium-win-x64\bin\`
+    —— 跑 `tools/fetch-pdfium.ps1` 取回。它在就拷到输出目录（开发/自检直接用）；
+    不在也能编译（PDF 那条路会提示"缺 pdfium.dll"，其它功能一切照旧）。
+    发布包由根目录 publish.ps1 负责把它放进 dist（那里缺了会直接报错，避免漏带）。
+  -->
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\vendor\pdfium-win-x64\bin\pdfium.dll')">
+    <None Include="$(MSBuildThisFileDirectory)..\..\vendor\pdfium-win-x64\bin\pdfium.dll"
+          Link="pdfium.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

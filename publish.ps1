@@ -165,6 +165,17 @@ Write-Host "  exe 子系统 = GUI（双击不弹黑框）" -ForegroundColor Gree
 # 它是调试符号，发布包里不要（老流程根本没有）：删掉，需要调试时用 bin 下的那份。
 Get-ChildItem $outDir -Filter *.pdb -ErrorAction SilentlyContinue | Remove-Item -Force
 
+# ---- PDFium（PDF 渲染的原生库）：必须随包走，缺了就报错（2026-10-07 加）------------------
+#   名字固定叫 pdfium.dll、和 exe 同目录（DllImport("pdfium") 的默认查找就在那儿）。
+#   取法：tools\fetch-pdfium.ps1（不进 git 的 7.15MB 二进制）。
+$pdfiumSrc = Join-Path $root "vendor\pdfium-win-x64\bin\pdfium.dll"
+if (-not (Test-Path $pdfiumSrc)) {
+    throw ("缺少 PDFium 原生库（PDF 批注要用）：`n  $pdfiumSrc`n" +
+           "先跑：.\tools\fetch-pdfium.ps1   （从 bblanchon/pdfium-binaries 取，约 3.7MB 下载）")
+}
+Copy-Item $pdfiumSrc (Join-Path $outDir "pdfium.dll") -Force
+Write-Host "  pdfium.dll 已放进发布包（$([Math]::Round((Get-Item $pdfiumSrc).Length / 1MB, 2)) MB）" -ForegroundColor Green
+
 # ---- 随手塞一份"怎么用"，省得拷过去之后没人知道怎么退出 ------------------------------
 $readme = @"
 InkTeach $ver（win-x64）

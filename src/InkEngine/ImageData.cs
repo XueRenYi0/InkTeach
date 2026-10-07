@@ -72,8 +72,10 @@ internal sealed class ImageData
             Bgra = bgra,
             _accounted = true,
         };
-        LiveBytes += img.ByteSize;
-        LiveImages++;
+        // 记账用原子操作：文档页是**后台线程**渲染的，Adopt 可能在非主线程调
+        // （渲染线程同款计数也在跑），普通 ++/-- 会丢增量。
+        Interlocked.Add(ref LiveBytes, img.ByteSize);
+        Interlocked.Increment(ref LiveImages);
         return img;
     }
 
@@ -142,8 +144,8 @@ internal sealed class ImageData
         if (_bitmap != null && !_accounted)
         {
             _accounted = true;
-            LiveBytes += ByteSize;
-            LiveImages++;
+            Interlocked.Add(ref LiveBytes, ByteSize);
+            Interlocked.Increment(ref LiveImages);
         }
         return _bitmap;
     }
@@ -164,9 +166,9 @@ internal sealed class ImageData
         if (_accounted)
         {
             _accounted = false;
-            LiveBytes -= ByteSize;
+            Interlocked.Add(ref LiveBytes, -ByteSize);
             if (LiveBytes < 0) LiveBytes = 0;
-            LiveImages--;
+            Interlocked.Decrement(ref LiveImages);
             if (LiveImages < 0) LiveImages = 0;
         }
     }

@@ -59,6 +59,10 @@ internal sealed partial class App
             Console.WriteLine($"    {name,-30}{(ok ? "PASS" : "FAIL")}  {detail}");
         }
 
+        // 前面几组验"模型 + 同步生成"，判据要确定性：关掉后台线程（D 组专门验它）
+        DocPageWorker = false;
+        DocView.UseWorker = false;
+
         // 干净起点
         DocView.Close();
         DocView.Generator = sp => FakeDocPageBgra(sp.OutW, sp.OutH, 60, 180, 220);
@@ -453,6 +457,16 @@ internal sealed partial class App
         var errB = OpenDocuments(new[] { System.IO.Path.Combine(dir, "no-such-file.png"), pFlag });
         Check("坏文件跳过、好文件照开", errB == null && DocView.Count == 1, errB ?? $"Count={DocView.Count}");
 
+        // 文件不锁：打开状态下还能对那张图做**独占打开**（GDI+ "new Bitmap(路径) 锁文件"那条坑的回归判据）
+        bool fileFree = true;
+        try
+        {
+            using var exclusive = new System.IO.FileStream(pFlag, System.IO.FileMode.Open,
+                System.IO.FileAccess.ReadWrite, System.IO.FileShare.None);
+        }
+        catch { fileFree = false; }
+        Check("打开文档不锁住图片文件", fileFree, fileFree ? "文件还归老师（可改可删）" : "被锁住了 ✗");
+
         var errC = OpenDocuments(new[] { System.IO.Path.Combine(dir, "no-such-file.png") });
         Check("全读不了 ⇒ 一句提示、状态不动", errC != null && DocView.Count == 1, errC ?? "(没报错)");
 
@@ -466,10 +480,230 @@ internal sealed partial class App
 
         try { Directory.Delete(dir, true); } catch { }
 
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- C1 PDFium：加载 / 打开 / 页尺寸 / 渲染 --");
+        // ------------------------------------------------------------------
+        string pdfDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inkteach-doctest-pdf");
+        Directory.CreateDirectory(pdfDir);
+        string pPdf = System.IO.Path.Combine(pdfDir, "三色三页.pdf");
+        WriteTestPdf(pPdf);
+
+        bool pdfOk = Pdfium.EnsureLoaded(out string pdfErr);
+        Check("pdfium.dll 能加载", pdfOk,
+              pdfOk ? "ok" : pdfErr + "（跑 tools\\fetch-pdfium.ps1 取回）");
+        if (pdfOk)
+        {
+            bool opened = Pdfium.Open(pPdf, out var pdfDoc, out string openErr);
+            Check("打开 3 页 PDF", opened && pdfDoc.PageCount == 3,
+                  opened ? $"PageCount={pdfDoc.PageCount}" : openErr);
+            if (opened)
+            {
+                var (pw0, ph0) = pdfDoc.Size(0);
+                Check("页尺寸 = A4（595×842pt）",
+                      Math.Abs(pw0 - 595f) < 1f && Math.Abs(ph0 - 842f) < 1f,
+                      $"{pw0:F0}x{ph0:F0}pt");
+
+                int rw = (int)MathF.Round(_virtualW);
+                int rh = (int)MathF.Round(_virtualW * ph0 / pw0);
+                var swR = Stopwatch.StartNew();
+                var pxR = pdfDoc.RenderPage(0, rw, rh);
+                swR.Stop();
+                bool red = pxR != null;
+                if (red)
+                {
+                    int o = (rh / 2) * rw * 4 + (rw / 2) * 4;
+                    red = pxR[o + 2] > 180 && pxR[o + 0] < 80 && pxR[o + 1] < 80;
+                }
+                Check("渲染第 1 页：整页红", red,
+                      red ? $"{rw}x{rh}，{swR.Elapsed.TotalMilliseconds:F0} ms" : "中心不是红的");
+
+                var pxG = pdfDoc.RenderPage(1, rw, rh);
+                bool green = pxG != null;
+                if (green) green = pxG[((rh / 2) * rw + (rw / 2)) * 4 + 1] > 180 && pxG[((rh / 2) * rw + (rw / 2)) * 4 + 2] < 80;
+                Check("渲染第 2 页：整页绿", green, green ? "ok" : "中心不是绿的");
+                pdfDoc.Dispose();
+            }
+        }
+
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- C2 PDF 端到端：打开 → fit width 铺页 → 上屏 → 关闭 --");
+        // ------------------------------------------------------------------
+        if (pdfOk)
+        {
+            int imgBefore2 = ImageData.LiveImages;
+            Doc.Clear();
+            Doc.ClearHistory();
+            ViewOffsetY = 0f;
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+
+            var errPdf = OpenDocuments(new[] { pPdf });
+            Check("打开 PDF：不报错、3 页", errPdf == null && DocView.Count == 3,
+                  errPdf ?? $"Count={DocView.Count}");
+            Check("标题 = 文件名", DocView.Title == "三色三页.pdf", DocView.Title);
+            int expectW = (int)MathF.Round(_virtualW);
+            Check("每页宽度 = 屏宽（fit width）", DocView.At(0).Spec.OutW == expectW,
+                  $"{DocView.At(0).Spec.OutW}（应 {expectW}）");
+
+            SettleFrames(400);
+            Check("页位图生成并上屏（账在涨）",
+                  DocView.ResidentPages >= 1 && ImageData.LiveImages > imgBefore2,
+                  $"驻留={DocView.ResidentPages} LiveImages {imgBefore2}→{ImageData.LiveImages}");
+
+            var rb = DocView.At(0).Rect;
+            int hitRed = ScreenProbe.CountNear((int)rb.MinX + 200, (int)rb.MinY + 200, 50, 50, 255, 0, 0, 24);
+            Check("屏幕上第 1 页是红的", hitRed > 2000, $"{hitRed}/2500 像素");
+
+            CloseDocument();
+            Check("关闭后回到基线、PDF 已释放",
+                  DocView.Count == 0 && ImageData.LiveImages == imgBefore2,
+                  $"LiveImages {imgBefore2} ⇐ {ImageData.LiveImages}");
+
+            var errPdf2 = OpenDocuments(new[] { pPdf });
+            Check("关闭后能重新打开（显式释放干净）", errPdf2 == null && DocView.Count == 3,
+                  errPdf2 ?? "ok");
+            CloseDocument();
+
+            string pBad = System.IO.Path.Combine(pdfDir, "坏文件.pdf");
+            System.IO.File.WriteAllText(pBad, "this is not a pdf at all");
+            var errBad = OpenDocuments(new[] { pBad });
+            Check("非 PDF 文件：一句提示、状态不动", errBad != null && DocView.Count == 0,
+                  errBad ?? "(没报错)");
+        }
+
+        try { Directory.Delete(pdfDir, true); } catch { }
+
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- D 后台渲染线程：一拍不卡 / 陆续到货 / 在途关档不崩 --");
+        // ------------------------------------------------------------------
+        // 真机数据（122MB 扫描型 PDF）：一页要 270~900ms。这条线程就是为那种页存在的。
+        int dBaseImages = ImageData.LiveImages;
+        DocView.UseWorker = true;
+        DocView.Generator = sp =>
+        {
+            Thread.Sleep(60);              // 装成"扫描型 PDF 一页 60ms"
+            return FakeDocPageBgra(sp.OutW, sp.OutH, 30, 30, 30);
+        };
+        var dSpecs = new List<DocPages.Spec>();
+        for (int i = 0; i < 6; i++) dSpecs.Add(DocSpec(600, 900, "slow.png", i));
+        DocView.Open(dSpecs, "后台测试", 1260f, 0f, 48f);
+
+        var swD = Stopwatch.StartNew();
+        DocView.SyncWindow(0f, 1680f, 1, 1f);           // 一拍：只排队，不等渲染
+        swD.Stop();
+        Check("一拍不阻塞（< 30ms）", swD.Elapsed.TotalMilliseconds < 30,
+              $"{swD.Elapsed.TotalMilliseconds:F1} ms（渲染在后台线程）");
+        Check("第一拍还没成品（正在后台渲）", DocView.ResidentPages == 0, $"驻留={DocView.ResidentPages}");
+
+        var swWait = Stopwatch.StartNew();
+        while (swWait.Elapsed.TotalSeconds < 3 && DocView.ResidentPages < 3)
+        {
+            Thread.Sleep(20);
+            DocView.SyncWindow(0f, 1680f, 1, 1f);
+        }
+        Check("后台陆续到货（≥3 页）", DocView.ResidentPages >= 3,
+              $"驻留={DocView.ResidentPages}，等了 {swWait.Elapsed.TotalMilliseconds:F0} ms");
+
+        // 在途渲染时关档：Close 会等它收手（PDF 文档随后才能安全释放），不崩、也清干净
+        Thread.Sleep(5);
+        DocView.SyncWindow(0f, 1680f, 1, 1f);           // 保证有活在途
+        var swClose = Stopwatch.StartNew();
+        DocView.Close();
+        swClose.Stop();
+        Check("在途关档：不崩、清干净", DocView.Count == 0 && DocView.ResidentPages == 0
+              && ImageData.LiveImages == dBaseImages,
+              $"驻留={DocView.ResidentPages} LiveImages={ImageData.LiveImages}（基 {dBaseImages}），" +
+              $"关档用时 {swClose.Elapsed.TotalMilliseconds:F0} ms");
+
+        DocView.UseWorker = false;
+        DocView.Generator = null;
+
         Console.WriteLine();
         Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：文档页底层 {pass} 项通过 / {fail} 项失败");
         Console.WriteLine($"合计：通过 {pass} 项，失败 {fail} 项");
 
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 合成一份**最小三页 PDF**（红/绿/蓝满页、不用字体、不用压缩）：自检不依赖外部素材，
+    /// 改颜色/页数一眼能改。手写 PDF 的老规矩——xref 偏移在循环里现算，不会写歪。
+    /// </summary>
+    private static string WriteTestPdf(string path)
+    {
+        static string StreamObj(string content) => $"<< /Length {content.Length} >>\nstream\n{content}\nendstream";
+        var objs = new List<string>
+        {
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 6 0 R >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 7 0 R >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 8 0 R >>",
+            StreamObj("1 0 0 rg 0 0 595 842 re f"),
+            StreamObj("0 1 0 rg 0 0 595 842 re f"),
+            StreamObj("0 0 1 rg 0 0 595 842 re f"),
+        };
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("%PDF-1.4\n");
+        var offsets = new int[objs.Count];
+        for (int i = 0; i < objs.Count; i++)
+        {
+            offsets[i] = sb.Length;                 // ASCII ⇒ 字符数就是字节数
+            sb.Append($"{i + 1} 0 obj\n{objs[i]}\nendobj\n");
+        }
+        int xref = sb.Length;
+        sb.Append($"xref\n0 {objs.Count + 1}\n0000000000 65535 f \n");
+        foreach (var o in offsets) sb.Append($"{o:D10} 00000 n \n");
+        sb.Append($"trailer\n<< /Size {objs.Count + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n");
+        System.IO.File.WriteAllText(path, sb.ToString(), System.Text.Encoding.ASCII);
+        return path;
+    }
+
+    /// <summary>
+    /// `--pdfprobe <文件.pdf> [页数]`：把前几页按屏宽渲成 PNG 放到
+    /// `%TEMP%\inkteach-pdfprobe\`，打出尺寸与每页耗时。
+    /// （照 Wintab 探针的先例：先能看见真东西、拿到真数字，再谈接界面。）
+    /// </summary>
+    private void PdfProbe(string path, int pages)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== PDF 探针（--pdfprobe）===");
+        if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
+        {
+            Console.WriteLine($"  FAIL：给的路径读不了：{path ?? "(没给)"}");
+            Console.WriteLine("  用法：--pdfprobe <文件.pdf> [页数=3]");
+            _quit = true;
+            return;
+        }
+        if (!Pdfium.EnsureLoaded(out var loadErr)) { Console.WriteLine("  FAIL：" + loadErr); _quit = true; return; }
+        if (!Pdfium.Open(path, out var doc, out var err)) { Console.WriteLine("  FAIL：" + err); _quit = true; return; }
+
+        Console.WriteLine($"  文件：{path}");
+        Console.WriteLine($"  页数：{doc.PageCount}");
+        string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inkteach-pdfprobe");
+        Directory.CreateDirectory(dir);
+
+        int n = Math.Clamp(pages, 1, doc.PageCount);
+        double sum = 0;
+        for (int i = 0; i < n; i++)
+        {
+            var (pw, ph) = doc.Size(i);
+            float scale = _virtualW / pw;
+            int w = Math.Max(1, (int)MathF.Round(pw * scale));
+            int h = Math.Max(1, (int)MathF.Round(ph * scale));
+            var sw = Stopwatch.StartNew();
+            var px = doc.RenderPage(i, w, h);
+            sw.Stop();
+            sum += sw.Elapsed.TotalMilliseconds;
+            if (px == null) { Console.WriteLine($"  第 {i + 1} 页：渲染失败"); continue; }
+            string outPng = System.IO.Path.Combine(dir, $"P{i + 1}.png");
+            using (var b = BgraToBitmap(px, w, h))
+                b.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            Console.WriteLine($"  第 {i + 1} 页：{pw:F0}x{ph:F0}pt → {w}x{h}px  {sw.Elapsed.TotalMilliseconds:F0} ms  → {outPng}");
+        }
+        Console.WriteLine($"  平均 {sum / n:F0} ms/页（含渲染进缓冲）");
+        Console.WriteLine($"  PASS：PDFium 出图成功（{n} 页）");
+        doc.Dispose();
         _quit = true;
     }
 }

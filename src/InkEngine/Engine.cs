@@ -49,6 +49,36 @@ public partial class InkEngine
     /// </summary>
     internal readonly DocPages DocView = new();
 
+    /// <summary>主循环线程 id（后台线程叫醒用；<see cref="Loop"/> 第一句填）。</summary>
+    private volatile uint _mainThreadId;
+
+    /// <summary>后台渲完一页的"叫醒"标记（渲染线程写、主循环读）。</summary>
+    private volatile bool _docPageReady;
+
+    /// <summary>
+    /// 后台线程（文档页渲染）渲完一页 → 置标记 + 一条线程消息，把主循环从 `WaitMessage()`
+    /// 里踢醒。**必须叫醒**：空闲时引擎不给帧，不叫就是"页渲好了、屏幕上还空着"。
+    /// （和 PPT 轮询线程唤醒主循环同一套做法，见 PptWatcher。）
+    /// </summary>
+    private void WakeForDocPage()
+    {
+        _docPageReady = true;
+        try
+        {
+            if (_mainThreadId != 0)
+                Native.PostThreadMessage(_mainThreadId, PptWatcher.WakeMessage, IntPtr.Zero, IntPtr.Zero);
+        }
+        catch { }
+    }
+
+    /// <summary>主循环每拍：后台来的页到了就置脏，下一拍走渲染（在 SyncDocPages 里采纳）。</summary>
+    private void StepDocPageReady()
+    {
+        if (!_docPageReady) return;
+        _docPageReady = false;
+        _dirty = true;
+    }
+
     /// <summary>
     /// 界面自己的偏好（深色主题、贴边隐藏、档位、钉住）。引擎**只存不解释**：
     /// 它不知道"极简档"是什么，界面说存什么就存什么。落盘在 settings.json 的 `ui` 段。
@@ -3115,6 +3145,9 @@ public partial class InkEngine
 
     internal void Loop()
     {
+        // 主循环线程 id：后台线程（文档页渲染 / PPT 轮询）用它 PostThreadMessage 叫醒我们。
+        _mainThreadId = Native.GetCurrentThreadId();
+
         // **自检模式那行诊断**（2026-10-07）：打在这里，而不是构造函数里。
         //
         // 构造函数跑在 `RunModeDispatch` **之前**，那时还不知道 `args[0]` 到底算不算 mode ——
@@ -3174,6 +3207,7 @@ public partial class InkEngine
             Laser.Prune(NowMs);
             StepCameraAnim();                 // 翻页动画（167ms）
             StepPpt();                        // PPT 放映联动（没变化时只读一个 bool，不碰 COM）
+            StepDocPageReady();               // 文档页后台渲染完一页：置脏（这一拍会采纳它）
             StepPptBar();                     // 底部那条：引导过期 / "再点确认"过期（没有长按了）
             StepEngineTooltip();              // 引擎侧悬停提示的 500ms 延迟（到点点亮）
             StepTimerCard();                  // 课堂计时卡片：推进秒数 / 到点 / 同步接输入小窗

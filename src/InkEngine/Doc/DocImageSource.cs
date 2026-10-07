@@ -52,17 +52,64 @@ internal static class DocImageSource
     // ======================================================================
 
     /// <summary>
+    /// 一张已解码的图 + **它的源流**。两个必须同生共死（查过同行经验，两个坑我们都堵）：
+    ///   · `new Bitmap(path)` 会**锁住文件直到 Bitmap 释放**（MSDN 明说）——老师想换图/删图就动不了；
+    ///   · `Image.FromStream(fs)` 又要求**流在 Bitmap 活着的全程都开着**（GDI+ 延迟解码、随时回读源流）。
+    /// 所以：用 `FileShare.ReadWrite|Delete` 把字节复制进 MemoryStream（文件句柄立刻还回去），
+    /// Bitmap 拿这个内存流解码，**流陪着它、一起缓存、一起释放**。
+    /// </summary>
+    private sealed class LoadedImage : IDisposable
+    {
+        public Bitmap Bitmap;
+        public MemoryStream Stream;
+
+        public void Dispose()
+        {
+            Bitmap?.Dispose();
+            Bitmap = null;
+            Stream?.Dispose();
+            Stream = null;
+        }
+    }
+
+    private static LoadedImage LoadSafe(string path)
+    {
+        var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                                FileShare.ReadWrite | FileShare.Delete);
+        try
+        {
+            var ms = new MemoryStream((int)Math.Min(fs.Length, int.MaxValue));
+            fs.CopyTo(ms);
+            ms.Position = 0;
+            try
+            {
+                var bmp = new Bitmap(ms);
+                return new LoadedImage { Bitmap = bmp, Stream = ms };
+            }
+            catch
+            {
+                ms.Dispose();
+                throw;
+            }
+        }
+        finally
+        {
+            fs.Dispose();
+        }
+    }
+
+    /// <summary>
     /// 读尺寸与 EXIF 方向，返回**转正之后**的宽高（方向 5~8 会交换宽高）。
-    /// 走 GDI+ 的"读头"路径（不解像素），文件损坏 / 格式不认返回 false。
+    /// 文件损坏 / 格式不认返回 false。
     /// </summary>
     public static bool TryReadInfo(string path, out int w, out int h)
     {
         w = h = 0;
         try
         {
-            using var img = new Bitmap(path);
-            int o = ReadOrientation(img);
-            w = img.Width; h = img.Height;
+            using var img = LoadSafe(path);
+            int o = ReadOrientation(img.Bitmap);
+            w = img.Bitmap.Width; h = img.Bitmap.Height;
             if (o >= 5 && o <= 8) (w, h) = (h, w);
             return w > 0 && h > 0;
         }
@@ -176,20 +223,20 @@ internal static class DocImageSource
     /// </summary>
     public static byte[] RenderSpec(DocPages.Spec spec)
     {
-        var bmp = GetImage(spec.Source);
-        if (bmp == null) return null;
+        var img = GetImage(spec.Source);
+        if (img == null) return null;
         try
         {
-            return RenderRegion(bmp, spec.SrcX, spec.SrcY, spec.SrcW, spec.SrcH, spec.OutW, spec.OutH);
+            return RenderRegion(img.Bitmap, spec.SrcX, spec.SrcY, spec.SrcW, spec.SrcH, spec.OutW, spec.OutH);
         }
         finally
         {
             // 缓存持有它 → 不放；超大图（没进缓存）→ 这次用完就放
-            if (!ReferenceEquals(bmp, _cache)) bmp.Dispose();
+            if (!ReferenceEquals(img, _cache)) img.Dispose();
         }
     }
 
-    private static Bitmap _cache;
+    private static LoadedImage _cache;
     private static string _cacheKey;
 
     /// <summary>关文档时清掉解码缓存（"用完释放"）。</summary>
@@ -201,7 +248,7 @@ internal static class DocImageSource
     }
 
     /// <summary>取解码结果（带 EXIF 转正）。命中缓存直接给；没命中就解一张，小的留下。</summary>
-    private static Bitmap GetImage(string path)
+    private static LoadedImage GetImage(string path)
     {
         string key = path;
         try { key += "|" + System.IO.File.GetLastWriteTimeUtc(path).Ticks; } catch { }
@@ -213,25 +260,25 @@ internal static class DocImageSource
             _cacheKey = null;
         }
 
-        Bitmap bmp = null;
+        LoadedImage img = null;
         try
         {
-            bmp = new Bitmap(path);
-            ApplyOrientation(bmp, ReadOrientation(bmp));
+            img = LoadSafe(path);
+            ApplyOrientation(img.Bitmap, ReadOrientation(img.Bitmap));
         }
         catch (Exception ex)
         {
-            bmp?.Dispose();
+            img?.Dispose();
             Console.WriteLine($"    [文档] 解码失败：{path}：{ex.Message}");
             return null;
         }
 
-        if ((long)bmp.Width * bmp.Height <= MaxCachePixels)
+        if ((long)img.Bitmap.Width * img.Bitmap.Height <= MaxCachePixels)
         {
-            _cache = bmp;
+            _cache = img;
             _cacheKey = key;
         }
-        return bmp;
+        return img;
     }
 
     /// <summary>裁一块源区域、缩放、白底合成 → BGRA（预乘不必：alpha 全 255）。</summary>

@@ -13,6 +13,15 @@ namespace InkEngine;
 /// </summary>
 public partial class InkEngine
 {
+    /// <summary>当前打开的 PDF（渲染要用它；换文档/关文档时释放）。图片文档时是 null。</summary>
+    private PdfiumDoc _pdfDoc;
+
+    /// <summary>
+    /// 文档页是否交给**后台线程**渲染（产品 = true）。自检里要"确定性的一拍一页"时关掉它
+    /// （关掉就回到"同步当场渲"，判据稳定、不掺时序）。
+    /// </summary>
+    internal bool DocPageWorker = true;
+
     /// <summary>
     /// 打开文档。返回 null = 成功；否则是给用户看的一句失败原因。
     /// 分工：都是图片 → 一叠图页；就一份 PDF → PDF 文档；混选/多份 PDF → 提示重选。
@@ -52,15 +61,60 @@ public partial class InkEngine
         }
         if (specs.Count == 0 || ok == 0) return "这些图片都读不了（格式不支持或文件损坏）";
 
+        _pdfDoc?.Dispose();       // 换文档：上一份 PDF 放掉（图片文档不用它）
+        _pdfDoc = null;
+
         string title = files.Count == 1 ? System.IO.Path.GetFileName(files[0]) : $"{ok} 张图片";
         StartDocView(specs, title);
         if (bad > 0) Console.WriteLine($"    [文档] 有 {bad} 个文件读不了，已跳过");
         return null;
     }
 
-    /// <summary>PDF（S5 接 PDFium）。</summary>
+    /// <summary>
+    /// 打开一份 PDF：每页按**屏宽**（fit width，用户 2026-10-07 定）排页，纵向一叠。
+    /// 页位图惰性生成——打开只做"页数 + 每页尺寸"（读头，很快）。
+    /// </summary>
     internal string OpenPdfDocument(string path)
-        => "PDF 支持还没接上（下一步 S5）";
+    {
+        if (!Pdfium.Open(path, out var doc, out string err)) return err;
+
+        var specs = new List<DocPages.Spec>();
+        try
+        {
+            for (int i = 0; i < doc.PageCount; i++)
+            {
+                var (pw, ph) = doc.Size(i);
+                float scale = _virtualW / pw;                     // fit width（矢量页不存在"放大糊"）
+                long px = (long)(pw * scale) * (long)(ph * scale);
+                if (px > Pdfium.MaxPagePixels)                    // 极端长页/超大幅面：按像素预算缩
+                {
+                    scale *= MathF.Sqrt((float)Pdfium.MaxPagePixels / px);
+                    Console.WriteLine($"    [文档] 第 {i + 1} 页很大，已缩到约 {Pdfium.MaxPagePixels / 1_000_000}MP");
+                }
+                int outW = Math.Max(1, (int)MathF.Round(pw * scale));
+                int outH = Math.Max(1, (int)MathF.Round(ph * scale));
+                specs.Add(new DocPages.Spec
+                {
+                    Kind = 1,
+                    Source = path,
+                    SourceIndex = i,
+                    SrcX = 0f, SrcY = 0f, SrcW = pw, SrcH = ph,
+                    OutW = outW, OutH = outH,
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            doc.Dispose();
+            return "读取 PDF 页面尺寸失败：" + ex.Message;
+        }
+
+        _pdfDoc?.Dispose();
+        _pdfDoc = doc;
+
+        StartDocView(specs, System.IO.Path.GetFileName(path));
+        return null;
+    }
 
     /// <summary>
     /// 排好页、装好生成器、锚在当前视口顶——打开之后**立刻能看到第一页**，
@@ -69,6 +123,8 @@ public partial class InkEngine
     private void StartDocView(List<DocPages.Spec> specs, string title)
     {
         DocView.Generator = DocRenderSpec;
+        DocView.UseWorker = DocPageWorker;      // 后台渲染（产品默认开；见那行注释）
+        DocView.OnResultReady = WakeForDocPage; // 后台渲完一页叫醒主循环（不叫就不上屏）
         var vp = ViewportCanvas;
         float gap = 24f * DpiScale;                       // 页缝 = 24 逻辑像素（和白板页界线同语言）
         float anchorTop = vp.MinY + 16f * DpiScale;       // 离视口顶留一点边
@@ -78,19 +134,26 @@ public partial class InkEngine
         Console.WriteLine($"[文档] 已打开 {title}：{DocView.Count} 页（页图惰性生成）");
     }
 
-    /// <summary>页生成的分派：图片走 GDI+；PDF 走 PDFium（S5）。</summary>
+    /// <summary>页生成的分派：图片走 GDI+（解码+裁切+缩放），PDF 走 PDFium（渲染进缓冲）。</summary>
     private byte[] DocRenderSpec(DocPages.Spec spec)
-        => spec.Kind == 0 ? DocImageSource.RenderSpec(spec) : null;
+        => spec.Kind switch
+        {
+            0 => DocImageSource.RenderSpec(spec),
+            1 => _pdfDoc?.RenderPage(spec.SourceIndex, spec.OutW, spec.OutH),
+            _ => null,
+        };
 
-    /// <summary>关掉文档：页位图全放、解码缓存也清（"用完释放"，10-03 文档 7.4）。</summary>
+    /// <summary>关掉文档：页位图全放、解码缓存清、PDF 文档关（"用完释放"，10-03 文档 7.4）。</summary>
     internal void CloseDocument()
     {
-        if (!DocView.IsOpen) return;
+        if (!DocView.IsOpen && _pdfDoc == null) return;
         string title = DocView.Title;
         DocView.Close();
         DocImageSource.TrimCache();
+        _pdfDoc?.Dispose();
+        _pdfDoc = null;
         SetInkStatus($"已关闭文档：{title}");
-        Console.WriteLine($"[文档] 已关闭：{title}（页位图与解码缓存已释放）");
+        Console.WriteLine($"[文档] 已关闭：{title}（页位图 / 解码缓存 / PDF 文档都已释放）");
     }
 
     /// <summary>
