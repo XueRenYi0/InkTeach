@@ -586,12 +586,17 @@ internal sealed partial class App
             if (Doc.PageKey != 0) Doc.SwitchPage(0);
             Doc.Clear();
             Doc.ClearHistory();
+            if (BoardOn) SetBoardFromUi(false);          // 干净起点：板关（好验"打开自动开纸底"）
+            ViewOffsetY = 0f;
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
 
             var errOpen = OpenDocuments(new[] { pPdf2 });
             int docSlot = DocStore.SlotOf(DocStore.KeyOf(new[] { pPdf2 }));
             Check("打开后：条活跃 + 进了文档页空间",
                   errOpen == null && PageBarActive && Doc.PageKey == docSlot,
                   errOpen ?? $"slot={Doc.PageKey}（应 {docSlot}）");
+
+            Check("打开后：自动开纸底（板底默认白）", BoardOn, $"BoardOn={BoardOn}");
 
             Check("条上页码 1/3", BarPageNow == 1 && BarTotal == 3, $"{BarPageNow}/{BarTotal}");
 
@@ -630,6 +635,35 @@ internal sealed partial class App
                   errRe == null && Doc.Strokes.Count == 1 && Doc.PageKey == docSlot,
                   errRe ?? $"{Doc.Strokes.Count} 个对象 slot={Doc.PageKey}");
 
+            // ⭐ 纸底：页缝里要是白的（不再透出桌面）；关掉纸底作对照
+            var pg1 = DocView.At(0); var pg2 = DocView.At(1);
+            float gapMid = (pg1.Rect.MaxY + pg2.Rect.MinY) * 0.5f;   // 第 1/2 页之间那条缝的中心（画布 y）
+            ViewOffsetY = -gapMid + 840f;                            // 把它对到屏幕 y≈840
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
+            SettleFrames(350);
+            int sx = (int)pg1.Rect.MinX + 600;                       // 缝横贯整幅页宽，x 取页内任意
+            int sy = 840 - 8;                                        // 采样块 16 高，落在缝（48 高）里
+            int br = (int)MathF.Round(BoardColor.R * 255);
+            int bg2 = (int)MathF.Round(BoardColor.G * 255);
+            int bb = (int)MathF.Round(BoardColor.B * 255);
+            int gapWhite = ScreenProbe.CountNear(sx, sy, 100, 16, br, bg2, bb, 3);
+            Check($"页缝里是纸底色 rgb({br},{bg2},{bb})（纸底生效）", gapWhite > 1580, $"{gapWhite}/1600");
+
+            // 对照：把板色临时换成**绿色**——缝里立刻变绿，就证明"缝里就是板底"。
+            // （比"关掉板底看桌面"稳：桌面是什么颜色我们控制不了，套件环境里就被坑过一次 ✗）
+            var savedBoardColor = BoardColor;
+            SetBoardColorFromUi(new Color4(0f, 0.8f, 0f, 1f));
+            SettleFrames(300);
+            int gapGreen = ScreenProbe.CountNear(sx, sy, 100, 16, 0, 204, 0, 3);
+            Check("换绿板色：缝里立刻变绿（证明缝里就是板底）", gapGreen > 1580, $"{gapGreen}/1600");
+            SetBoardColorFromUi(savedBoardColor);
+            SettleFrames(300);
+            SetBoardFromUi(true);
+            SettleFrames(300);
+            ViewOffsetY = 0f;
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+            SettleFrames(200);
+
             ClearDocMarks();
             Check("清空文档墨迹：内存与盘都空了",
                   Doc.Strokes.Count == 0 && DocStore.Load(DocStoreKey) == null, "ok");
@@ -658,6 +692,7 @@ internal sealed partial class App
             Check("退出穿透：页重新上屏", redBack > 4000, $"{redBack}/6400 像素");
 
             CloseDocument();
+            Check("关文档：纸底恢复原板态（原来关着 → 现在也关着）", !BoardOn, $"BoardOn={BoardOn}");
             if (Doc.PageKey != 0) Doc.SwitchPage(0);
             Doc.Clear();
             Doc.ClearHistory();

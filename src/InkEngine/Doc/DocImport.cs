@@ -322,6 +322,13 @@ public partial class InkEngine
     }
 
     /// <summary>
+    /// 打开文档前板底是不是开着的（关文档时按它恢复）。
+    /// 打开文档会自动开纸底（默认白），但那张纸是"文档的纸"——文档关了纸也收，
+    /// 老师原来什么样就什么样（同"进穿透关板、退出恢复"的语义）。
+    /// </summary>
+    private bool _boardWasOnBeforeDoc = true;
+
+    /// <summary>
     /// 排好页、进文档页空间、读回批注。
     ///
     /// **页锚在固定画布位置**（2026-10-07 定）：横向 = 主屏中心、纵向 = 画布 y=0 起。
@@ -334,6 +341,12 @@ public partial class InkEngine
         DocView.Generator = DocRenderSpec;
         DocView.UseWorker = DocPageWorker;      // 后台渲染（产品默认开；见那行注释）
         DocView.OnResultReady = WakeForDocPage; // 后台渲完一页叫醒主循环（不叫就不上屏）
+
+        // **文档的"纸底"**：打开文档时确保板底开着（默认白）——
+        //   ① 页缝 / 页边有纸感（不再透出桌面）；② 将来"自适应撑满"、页不满屏时四周也是纸。
+        // 关文档时恢复老师原来的板态（见 CloseDocument）。
+        _boardWasOnBeforeDoc = BoardOn;
+        if (!BoardOn) SetBoardFromUi(true);
 
         // 先进页空间（切槽 + 相机就位），再排页——页的锚点是固定的，不依赖当时视口。
         DocStoreKey = storeKey;
@@ -381,6 +394,17 @@ public partial class InkEngine
         _pdfDoc = null;
 
         LeaveDocPageSpace();                // 回桌面（含相机位置恢复）
+
+        // **纸底随文档一起收**：打开文档时自动开的那个白板，关文档时恢复原样
+        //（老师本来就开着 → 不动；本来就关着 → 收掉，别把"文档的纸"留在桌面上）。
+        if (!_boardWasOnBeforeDoc)
+        {
+            if (BoardOn) SetBoardFromUi(false);
+            // 别让之后"退出穿透"再把这张纸变回来（它是文档的纸，文档没了）
+            _boardBeforePassThrough = false;
+        }
+        _boardWasOnBeforeDoc = true;
+
         DocStoreKey = "";
 
         SetInkStatus($"已关闭文档：{title}");
