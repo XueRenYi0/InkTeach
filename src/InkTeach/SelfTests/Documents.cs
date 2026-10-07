@@ -625,6 +625,53 @@ internal sealed partial class App
     }
 
     /// <summary>
+    /// `--docstates <文件>`：把"文档 × 白板 × 穿透"的状态组合逐一摆出来 + 抓屏。
+    /// 给"文档到底归谁管"这件事**提供事实而不是猜**（2026-10-07 用户实测反馈后加的探针）。
+    /// 出图在 `%TEMP%\inkteach-docstates\`（BMP，物理像素）。
+    /// </summary>
+    private void DocStatesProbe(string path)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 文档状态探针（--docstates）===");
+        if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
+        {
+            Console.WriteLine($"  FAIL：给的路径读不了：{path ?? "(没给)"}");
+            _quit = true;
+            return;
+        }
+        string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inkteach-docstates");
+        Directory.CreateDirectory(dir);
+
+        void Shot(string name)
+        {
+            SettleFrames(300);
+            string p = System.IO.Path.Combine(dir, name + ".bmp");
+            bool ok = ScreenProbe.SaveBmp(p, 0, 0, _virtualW, _virtualH);
+            Console.WriteLine($"  {name,-14} 板={BoardOn,-5} 穿透={PassThrough,-5} " +
+                              $"文档={DocView.IsOpen}({DocView.Count}页/驻留{DocView.ResidentPages}) " +
+                              $"{(ok ? "已存图" : "存图失败")}");
+        }
+
+        // 干净起点：穿透关、板关
+        if (PassThrough) SetPassThroughFromUi(false);
+        if (BoardOn) SetBoardFromUi(false);
+
+        var err = OpenDocuments(new[] { path });
+        if (err != null) { Console.WriteLine("  FAIL：" + err); _quit = true; return; }
+
+        Shot("1-打开文档");
+        SetBoardFromUi(true);       Shot("2-开白板");
+        SetPassThroughFromUi(true); Shot("3-开穿透");
+        SetPassThroughFromUi(false); Shot("4-关穿透");
+        SetBoardFromUi(false);      Shot("5-关白板");
+        SetBoardFromUi(true);       Shot("6-再开白板");
+        CloseDocument();            Shot("7-关闭文档");
+
+        Console.WriteLine("  PASS：状态探针跑完，图在 " + dir);
+        _quit = true;
+    }
+
+    /// <summary>
     /// 合成一份**最小三页 PDF**（红/绿/蓝满页、不用字体、不用压缩）：自检不依赖外部素材，
     /// 改颜色/页数一眼能改。手写 PDF 的老规矩——xref 偏移在循环里现算，不会写歪。
     /// </summary>
