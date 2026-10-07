@@ -12,9 +12,16 @@
 $ErrorActionPreference = 'Stop'
 
 $sdkDir = Join-Path $env:USERPROFILE '.dotnet10'
+if (-not (Test-Path (Join-Path $sdkDir 'dotnet.exe'))) {
+    # 2026-10-07：这台机器 SDK 在 %LOCALAPPDATA%\Microsoft\dotnet（没有 .dotnet10 那份）
+    $sdkDir = Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet'
+}
 if (Test-Path (Join-Path $sdkDir 'dotnet.exe')) {
     $env:PATH = "$sdkDir;$env:PATH"
     if (-not $env:DOTNET_ROOT) { $env:DOTNET_ROOT = $sdkDir }
+}
+if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+    throw '找不到 dotnet（试过 %USERPROFILE%\.dotnet10 和 %LOCALAPPDATA%\Microsoft\dotnet）。'
 }
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path

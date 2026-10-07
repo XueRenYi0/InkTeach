@@ -150,6 +150,53 @@ Apache-2.0 与本项目的 GPL-3.0 兼容；分发时须保留上述声明与文
 
 ---
 
+## PDFium（PDF 渲染引擎，**随发布包分发原生库**）
+
+- **文件**：`pdfium.dll`（发布包内与 `InkTeach.exe` 同目录；**不进 git**——
+  由 `tools\fetch-pdfium.ps1` 从 bblanchon/pdfium-binaries 取回，版本 **PDFium 157.0.8086.0**）。
+  接入代码：`src/InkEngine/Doc/Pdfium.cs`（只写了 11 个函数的 P/Invoke 绑定，
+  **没有引入任何托管包装库**）
+- **来源**：https://pdfium.googlesource.com/pdfium/（PDFium 本体）
+  ＋ https://github.com/bblanchon/pdfium-binaries（chromium/8086 预编译二进制）
+- **内容**：PDF 解析与页面栅格化。渲染**直接写进我们自己的 BGRA 缓冲**
+  （`FPDFBitmap_CreateEx` 包我们分配的数组），出门就是 `ImageData` 要的格式
+- **许可证**：PDFium 本体 **BSD-3-Clause**（Copyright 2014 The PDFium Authors，正文见下）；
+  随包的第三方组件（freetype / harfbuzz / icu / libjpeg-turbo / libpng / libopenjpeg /
+  lcms / zlib / abseil / simdutf / fast_float / dragonbox / agg23 / llvm-libc 等）
+  许可证五花八门但**全是宽松型**（BSD / MIT / zlib / IJG / Apache-2.0 / Boost）。
+  **这些许可的完整文本随二进制一起分发**（发布包内 `pdfium-licenses\` 目录，
+  由 publish.ps1 从 `vendor\pdfium-win-x64\licenses\` 拷入；BSD-3 正文如下）。
+
+```
+Copyright 2014 The PDFium Authors
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+   * Neither the name of Google Inc. nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+---
+
 ## 本项目自身的许可证
 
 **GPL-3.0**（见仓库根目录的 `LICENSE`）。作者选它，是打算用

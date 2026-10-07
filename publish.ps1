@@ -32,10 +32,20 @@ $ErrorActionPreference = "Stop"
 
 # 便携版 .NET 10 SDK：如果没在 PATH 里（本机全局是 9.x），垫到最前面——
 # 否则 `dotnet publish` 会报 NETSDK1045（当前 SDK 不支持 net10.0）。
+#
+# 两处候选（2026-10-07 发布演练抓到：这台机器只有后者，而 PATH 里本来没有 dotnet，
+# 于是 `& dotnet` 抛"找不到命令"、$LASTEXITCODE 又没被置错 → 一路走到读 PE 头才报
+# 一个看不懂的错。"找不到 dotnet"必须在**调用之前**就明确报出来）：
 $sdkDir = Join-Path $env:USERPROFILE ".dotnet10"
+if (-not (Test-Path (Join-Path $sdkDir "dotnet.exe"))) {
+    $sdkDir = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet"
+}
 if (Test-Path (Join-Path $sdkDir "dotnet.exe")) {
     $env:PATH = "$sdkDir;$env:PATH"
     if (-not $env:DOTNET_ROOT) { $env:DOTNET_ROOT = $sdkDir }
+}
+if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+    throw "找不到 dotnet（试过 %USERPROFILE%\.dotnet10 和 %LOCALAPPDATA%\Microsoft\dotnet）。装 .NET 10 SDK 或把它的目录垫进 PATH。"
 }
 
 $root = $PSScriptRoot
@@ -168,13 +178,25 @@ Get-ChildItem $outDir -Filter *.pdb -ErrorAction SilentlyContinue | Remove-Item 
 # ---- PDFium（PDF 渲染的原生库）：必须随包走，缺了就报错（2026-10-07 加）------------------
 #   名字固定叫 pdfium.dll、和 exe 同目录（DllImport("pdfium") 的默认查找就在那儿）。
 #   取法：tools\fetch-pdfium.ps1（不进 git 的 7.15MB 二进制）。
+#   许可证合规：**随包带上它的 licenses\ 全套文本**（BSD-3 + freetype/icu/... 各自许可），
+#   放进 `pdfium-licenses\` 子目录——署名的正文在 src\InkEngine\THIRD-PARTY-NOTICES.md。
 $pdfiumSrc = Join-Path $root "vendor\pdfium-win-x64\bin\pdfium.dll"
 if (-not (Test-Path $pdfiumSrc)) {
     throw ("缺少 PDFium 原生库（PDF 批注要用）：`n  $pdfiumSrc`n" +
            "先跑：.\tools\fetch-pdfium.ps1   （从 bblanchon/pdfium-binaries 取，约 3.7MB 下载）")
 }
 Copy-Item $pdfiumSrc (Join-Path $outDir "pdfium.dll") -Force
-Write-Host "  pdfium.dll 已放进发布包（$([Math]::Round((Get-Item $pdfiumSrc).Length / 1MB, 2)) MB）" -ForegroundColor Green
+$licSrc = Join-Path $root "vendor\pdfium-win-x64\licenses"
+$licDst = Join-Path $outDir "pdfium-licenses"
+if (Test-Path $licSrc) {
+    New-Item -ItemType Directory -Path $licDst -Force | Out-Null
+    Copy-Item (Join-Path $licSrc "*") $licDst -Force
+    $licRoot = Join-Path $root "vendor\pdfium-win-x64\LICENSE"
+    if (Test-Path $licRoot) { Copy-Item $licRoot (Join-Path $licDst "pdfium-binaries-MIT.txt") -Force }
+    $verFile = Join-Path $root "vendor\pdfium-win-x64\VERSION"
+    if (Test-Path $verFile) { Copy-Item $verFile (Join-Path $licDst "pdfium-VERSION.txt") -Force }
+}
+Write-Host "  pdfium.dll 已放进发布包（$([Math]::Round((Get-Item $pdfiumSrc).Length / 1MB, 2)) MB）+ pdfium-licenses\" -ForegroundColor Green
 
 # ---- 随手塞一份"怎么用"，省得拷过去之后没人知道怎么退出 ------------------------------
 $readme = @"
@@ -187,6 +209,12 @@ InkTeach $ver（win-x64）
   · 写一笔       —— 直接画（默认就是画笔）
   · 让它"过手"   —— 点工具条上的「鼠标（穿透）」，鼠标就还给下面的 PPT / 软件
   · 退出         —— 点工具条的「更多」（最右那格）→「退出」
+
+打开图片 / PDF 批注（2026-10-07 新）：
+  · 「更多」→「墨迹」组 →「打开文档…」：图片**可以多选**（一次铺一叠）、PDF 一次一份；
+  · 打开后纵向铺成一叠页：滚轮细滚着看，PageUp / PageDown 按页翻；
+  · 批注照旧写在页面上（笔 / 荧光笔 / 橡皮 / 撤销……全都能用）；
+  · 「关闭文档」把页收起来（批注留在画布上）；想换一份，直接再「打开文档…」即可。
 
 新版本：点「更多」→「检查更新」（会在后台查，按提示点第二下才开始下载，
 下载完校验完自己换壳重启；也会自动从国内加速站取，连不上 GitHub 也能用）。
@@ -212,6 +240,9 @@ InkTeach $ver（win-x64）
   （原生翻页、Ctrl+P/E/L/Z 恢复），退出穿透立刻收回。
 
 系统要求：Windows 10 / 11，64 位。**不需要装 .NET**（运行时已经打进来了）。
+
+⚠ 这个目录里**两个文件都要在**：`InkTeach.exe` ＋ `pdfium.dll`（PDF 渲染库）。
+   只拷 exe 也能跑，但"打开文档"里的 PDF 会提示缺库；图片批注不受影响。
 
 数据在哪：设置和自动存档都在 %LOCALAPPDATA%\InkTeach\ 与 %APPDATA%\InkTeach\，
 删掉这个软件目录本身不影响它们（想彻底清干净就把这两个目录也删了）。
