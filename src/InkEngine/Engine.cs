@@ -8471,7 +8471,7 @@ public partial class InkEngine
             if (WtSeenPressure) wp = _wtStrokePressure;
             if (wp >= 0f)
             {
-                WtPressurePoints++;
+                WtPressurePoints += _ptr.Count;      // **数点，不是数调用**
                 ActiveStrokeHasPressure = true;
                 // 和真笔那条路同一条规矩（见上面 PT_PEN 分支）：**压感只作用于「笔」这一支**。
                 if (ActiveStrokeHasPressure && ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
@@ -8507,7 +8507,7 @@ public partial class InkEngine
             if (WtSeenPressure)
             {
                 fbWp = _wtStrokePressure;
-                WtPressurePoints++;
+                WtPressurePoints += 1;
                 ActiveStrokeHasPressure = true;
                 if (ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
             }
@@ -8606,9 +8606,17 @@ public partial class InkEngine
             if (ddx * ddx + ddy * ddy < RawMinDistPx * RawMinDistPx) { _rawSkipNear++; return; }
         }
 
-        // 压力沿用"这一笔到目前为止的值"：鼠标模式下本来就没有压力，
-        // 传 0.5 与既有路径一致（见 AppendStrokeSamples 的注释）。
-        ActiveStroke.AddPoint(cx, cy, 0.5f, NowMs);
+        // 压力沿用"这一笔到目前为止的值"（光标**原本就没有压力**时才用 0.5 这个中点）。
+        //
+        // ⚠ **2026-10-07 修**：这里原来写死 `0.5f`，注释却说"沿用到目前为止的值"——注释是对的，
+        // 代码是错的。以前无所谓（鼠标那条路本来全笔都是 0.5，怎么传都一样），
+        // 但接了 Wintab 之后后果很明显：`[raw 补点 +214]` 这些点全被拉到 0.5，
+        // 而指针消息来的点拿的是真实压力 → **同一笔里一半真实、一半中点，粗细一跳一跳**。
+        //
+        // **只在 Wintab 真的在补压时才改**（`WtSeenPressure`）：没开 Wintab、
+        // 或者开 ink 走真笔那条路时，这里依旧是 0.5，老行为逐字不变。
+        float rawP = WtSeenPressure ? _wtStrokePressure : 0.5f;
+        ActiveStroke.AddPoint(cx, cy, rawP, NowMs);
         _rawPointsAdded++;
     }
 
