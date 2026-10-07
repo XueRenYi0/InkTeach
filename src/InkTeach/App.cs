@@ -988,6 +988,22 @@ internal sealed partial class App : InkEngine.InkEngine
         else
         {
             // 没有测试模式：交回引擎跑正常消息循环。
+            //
+            // ⚠ **但要把"自检那套隔离"撤掉**（2026-10-07 修）。
+            // 上面一进来就 `_selfCheckMode = mode.Length > 0`，于是**任何一个非空的第一参数**
+            // （包括 `--nowintab` / `--clean 3` / `--recink …` 这些**开关**）
+            // 都会进"半个自检状态"：换临时设置、换存档路径、关掉导出对话框 ——
+            // **而用户完全看不出来**（他只会觉得"怎么和平时不一样"）。
+            //
+            // 判据改成结构性的：**只有当某个 mode 分支真的认领了它，才算自检模式**。
+            // 走到这个兜底分支 = 没人认领 = 当成正常启动。
+            // （以前靠一张"这些开关不是 mode"的清单来挡 —— 那种清单一定会漏，今天漏了三次。）
+            _selfCheckMode = false;
+            SelfCheckMode = false;                 // 引擎那一份也撤掉，免得日志里谎报"自检"
+            InkSettings.PathOverride = null;
+            Recovery.AutoSavePathOverride = null;
+            PptStore.RootOverride = null;
+            ExportDialogEnabled = true;
             return -1;
         }
 

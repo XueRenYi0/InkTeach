@@ -67,6 +67,12 @@ public partial class InkEngine
 
     internal bool SelfCheckMode;
 
+    /// <summary>启动时拿到的那个参数（`args[0]`）。只给"自检模式"那行诊断用。</summary>
+    private string _modeName = "";
+
+    /// <summary>那行诊断只打一次。</summary>
+    private bool _selfCheckLogged;
+
     // ---- 自动存档（崩溃恢复）------------------------------------------------
     //
     // 产品里**没有"保存"这个动作**，所以按"持久画布"来做：每 15 秒（板书变了才写）
@@ -1729,11 +1735,11 @@ public partial class InkEngine
         //   真敲错了 mode 名的行为不变，仍旧进自检模式。）
         if (IsSwitchNotMode(mode)) mode = "";
         SelfCheckMode = mode.Length > 0;
-        // **状态直说**：自检模式会换掉设置/存档/PPT 缓存路径 —— 肉眼完全看不出来。
-        // 打一行出来，免得"敲了个开关、结果进了半个自检状态"这种事再发生
-        // （2026-10-07 真踩过：`InkTeach.exe --nowintab` 被当成 mode）。
-        if (SelfCheckMode)
-            Console.WriteLine($"  [模式] 自检：{mode}（设置/存档/PPT 缓存都走临时路径）");
+        _modeName = mode;
+        // 这一行**不在这里打** —— 见下面 update 里那句注释。
+        // （这里打的话，`--clean 3` 这种"开关写在第一个位置"会被误报成自检模式，
+        //   而界面那一层要等到 `RunModeDispatch` 才知道它到底算不算 mode。
+        //   2026-10-07 这个误报让我白查了好几轮，所以挪到判定之后。）
         // 产品模式：启动 1.2 秒后（窗口已经露面）做一次历史清理；自检一律不扫。
         if (mode.Length == 0)
         {
@@ -3008,6 +3014,21 @@ public partial class InkEngine
 
     internal void Loop()
     {
+        // **自检模式那行诊断**（2026-10-07）：打在这里，而不是构造函数里。
+        //
+        // 构造函数跑在 `RunModeDispatch` **之前**，那时还不知道 `args[0]` 到底算不算 mode ——
+        // 提前打会把 `--clean 3` 这种"开关写在第一个位置"误报成自检模式（我今天就被自己的
+        // 日志骗过一轮）。而 `Loop()` 是 `RunModeDispatch` 判完之后所有模式必经的第一站：
+        // 兜底分支已经把这个标记清干净了，所以这里打出来的一定是对的。
+        //
+        // `[mode]` 是**给脚本认的 ASCII 标记**：中文那串重定向到文件时会被编码搞乱，
+        // 靠字形判"是不是自检模式"判不准。
+        if (SelfCheckMode && !_selfCheckLogged)
+        {
+            _selfCheckLogged = true;
+            Console.WriteLine($"  [mode] 自检：{_modeName}（设置/存档/PPT 缓存都走临时路径）");
+        }
+
         while (!_quit)
         {
             DrainMessages();
