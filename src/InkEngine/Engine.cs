@@ -8487,8 +8487,19 @@ public partial class InkEngine
             //      → 所以**只认 > 0**，并且沿用现成的「缺压回填」口径
             //      （见 `Input/PenInput.cs` 的 `_lastValidPressure`）：
             //      这一笔只要见过一次真实压力，后面偶尔缺一下就沿用上一个值，而不是掉回中点。
+            // 给这一批点的压力：
+            //   WtSeenPressure  → 已经拿到真实压力，用它
+            //   Wintab 开着但第一包还没到 → **用 0 兜底，不能用 0.5**
+            //   Wintab 没开 → -1（走老行为 `s.Pressure`，逐字不变）
+            //
+            // ⚠ **为什么第一包没到要用 0 而不是 0.5**（2026-10-07 用户真机反馈"第一个点老会有点粗"）：
+            //   0.5 映射出来是**中等**粗细（≈1.05× 名义宽），而起笔压力**物理上就是接近 0**
+            //   （用户真机实测最小值 457/16383 ≈ 3% → ≈0.15× 宽）。
+            //   于是每一笔开头都会鼓出一个粗点、后面才随压感变细。
+            //   **兜底值要贴合物理事实**，不是取个"中间值"最保险 —— 中间值在这里恰恰是错的。
             float wp = -1f;
-            if (_wintab.IsOpen)
+            bool wpIsReal = false;
+            if (_wintab.IsOpen && PressureWidth.Enabled)
             {
                 bool gotWt = _wintab.Poll();
                 WtPolledPackets += _wintab.PacketsRead - _wintabPacketsSeen;
@@ -8501,9 +8512,12 @@ public partial class InkEngine
                     if (_wintab.RawPressure < WtRawPMin) WtRawPMin = _wintab.RawPressure;
                     if (_wintab.RawPressure > WtRawPMax) WtRawPMax = _wintab.RawPressure;
                 }
+                // 注意：这里的 0 只是"给点用的值"，**不改变 HasPressure** ——
+                // 真鼠标（不产生 Wintab 包）仍然不会被当成有压感，老行为不受影响。
+                wp = WtSeenPressure ? _wtStrokePressure : 0f;
+                wpIsReal = WtSeenPressure;
             }
-            if (WtSeenPressure) wp = _wtStrokePressure;
-            if (wp >= 0f)
+            if (wpIsReal)
             {
                 WtPressurePoints += _ptr.Count;      // **数点，不是数调用**
                 ActiveStrokeHasPressure = true;
@@ -8528,7 +8542,7 @@ public partial class InkEngine
         // 但**同样补 Wintab 压力**——不然这一笔会"前半段有压力、后半段突然掉回 0.5"，
         // 在笔画中间留下一个粗细跳变。只在非笔（关 ink）那条路上补，开 ink 的路一个字不动。
         float fbWp = -1f;
-        if (ptype != Native.PT_PEN && _wintab.IsOpen)
+        if (ptype != Native.PT_PEN && _wintab.IsOpen && PressureWidth.Enabled)
         {
             if (_wintab.Poll() && _wintab.Pressure01 > 0f)
             {
@@ -8540,9 +8554,11 @@ public partial class InkEngine
             WtPolledPackets += _wintab.PacketsRead - _wintabPacketsSeen;
             _wintabPacketsSeen = _wintab.PacketsRead;
             WtBadPackets += _wintab.BadPackets - _wintabBadSeen; _wintabBadSeen = _wintab.BadPackets;
+            // 同上：还没拿到第一包时用 **0** 兜底（起笔压力物理上接近 0），
+            // 不能用 0.5 —— 那会让每一笔开头鼓出一个中粗的点。
+            fbWp = WtSeenPressure ? _wtStrokePressure : 0f;
             if (WtSeenPressure)
             {
-                fbWp = _wtStrokePressure;
                 WtPressurePoints += 1;
                 ActiveStrokeHasPressure = true;
                 if (ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
@@ -8651,7 +8667,9 @@ public partial class InkEngine
         //
         // **只在 Wintab 真的在补压时才改**（`WtSeenPressure`）：没开 Wintab、
         // 或者开 ink 走真笔那条路时，这里依旧是 0.5，老行为逐字不变。
-        float rawP = WtSeenPressure ? _wtStrokePressure : 0.5f;
+        // 同样：Wintab 开着但还没拿到压力 → 用 0 兜底（起笔物理上就是轻的）。
+        // 真鼠标时 HasPressure 始终为假，这个值根本不参与渲染，所以老行为不受影响。
+        float rawP = WtSeenPressure ? _wtStrokePressure : (_wintab.IsOpen ? 0f : 0.5f);
         ActiveStroke.AddPoint(cx, cy, rawP, NowMs);
         _rawPointsAdded++;
         // **补压的账要把 raw 补的点也算进来**：不然 `补压N点` 只数指针消息那条路，
@@ -8716,7 +8734,11 @@ public partial class InkEngine
     /// <summary>起笔时开 Wintab（**只开一次**；打不开就当这台机器没有，安静退回）。</summary>
     private void EnsureWintab()
     {
-        if (!WintabEnabled || _wintabTried || _windows.Count == 0) return;
+        // 压感关着（界面「设置 → 书写 → 压感粗细」那个开关）就不必开 ——
+        // 压力值反正没人用。**"一键关掉压感"要把这一路的工作也停掉**，
+        // 不然低配机上等于白干。关的时候 `_wintabTried` 保持 false，
+        // 用户再打开压感时下一笔就会自动开起来。
+        if (!WintabEnabled || !PressureWidth.Enabled || _wintabTried || _windows.Count == 0) return;
         _wintabTried = true;
         try
         {
