@@ -398,6 +398,19 @@ internal sealed class DocPages
         return _worker != null ? adopted : made;
     }
 
+    /// <summary>把已生成的页位图**全放掉**（"让开"用：穿透时页不画、也不占内存）。不标脏——
+    /// 整层作废由调用方负责（穿透状态翻转时 MarkAllDirty）。</summary>
+    public void ReleaseAll()
+    {
+        foreach (var p in _pages) ReleasePage(p);
+    }
+
+    /// <summary>"让开"用：把后台线程的"想要"清单清掉（别再白渲——页都收起来了）。</summary>
+    public void StopWanting()
+    {
+        lock (_gate) _want.Clear();
+    }
+
     private void ReleasePage(Page p)
     {
         if (p.Image == null) return;

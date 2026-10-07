@@ -732,7 +732,7 @@ public partial class InkEngine
     /// "看得见的一块"和"点得到的一块"必须是同一个）。PPT 放映和文档模式共用这一条。</summary>
     internal bool PptBarContains(float x, float y)
     {
-        if (!PageBarActive) return false;
+        if (!PageBarVisible) return false;
         if (PptBarRect().Contains(x, y)) return true;
         if (PptMenuOpen) { PptMenuRect(out var menu); if (menu.Contains(x, y)) return true; }
         if (PptPagePanelOpen) { PptPanelRect(out var panel); if (panel.Contains(x, y)) return true; }
@@ -751,7 +751,7 @@ public partial class InkEngine
     /// </summary>
     internal bool PptBarPointerDown(float x, float y)
     {
-        if (!PageBarActive) return false;
+        if (!PageBarVisible) return false;
 
         // 菜单开着：命中就执行并吃掉；没命中就收起来，**这一下照常往下走**
         //（和颜色/层级面板"点外面先收起来再照常"是同一条口径）。
@@ -823,7 +823,7 @@ public partial class InkEngine
     /// <summary>移动：返回 true = 这一下归它（拖动中 / 悬停在条上）。</summary>
     internal bool PptBarPointerMove(float x, float y)
     {
-        if (!PageBarActive) return false;
+        if (!PageBarVisible) return false;
 
         // ---- 按下之后移动够了 = **直接拖动**（不用先长按——用户 2026-09-26 定的
         // "点中页码那一块直接拖动就能走"）。这正是"点击 vs 拖动"的
@@ -891,7 +891,7 @@ public partial class InkEngine
     /// </summary>
     internal void PptBarPointerUp(float x, float y)
     {
-        if (!PageBarActive) return;
+        if (!PageBarVisible) return;
 
         if (PptBarDragging)
         {
@@ -937,10 +937,10 @@ public partial class InkEngine
     internal void StepPptBar()
     {
         // 穿透那块"接输入小窗"每帧对一次（该显示时铺上、不该显示时收掉）。
-        // 放在 `!PageBarActive` 早退**之前**：退出放映也要能看到"该收了"。
+        // 放在 `!PageBarVisible` 早退**之前**：退出放映也要能看到"该收了"。
         SyncPptInputWindow();
 
-        if (!PageBarActive) return;
+        if (!PageBarVisible) return;
 
         // 引导到点就擦掉（它只显示那么一两秒）
         if (_pptHintUntilMs > 0 && NowMs >= _pptHintUntilMs) { _pptHintUntilMs = 0; _dirty = true; }

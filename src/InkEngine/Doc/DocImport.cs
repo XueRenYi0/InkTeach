@@ -33,6 +33,13 @@ public partial class InkEngine
     /// <summary>底部页码条现在活跃吗（PPT 放映中 / 打开了文档）。条的所有交互（命中/悬停/菜单/面板）都看它。</summary>
     internal bool PageBarActive => PptMode || DocView.IsOpen;
 
+    /// <summary>
+    /// 条现在**看得见 / 点得到**吗。与 <see cref="PageBarActive"/> 的差别 = 穿透：
+    ///   · 文档模式：穿透 = 全让开（S2，用户 2026-10-07 定）→ 条跟着收 ✗；
+    ///   · PPT 模式：穿透时条**保留**（它管的是下层放映的东西，还有用 ✓，有接输入小窗撑着）。
+    /// </summary>
+    internal bool PageBarVisible => PageBarActive && (PptMode || !PassThrough);
+
     /// <summary>条上的"第几页"（1 起）。文档模式 = 视口中心所在的页（没页时给 1）。</summary>
     internal int BarPageNow
     {

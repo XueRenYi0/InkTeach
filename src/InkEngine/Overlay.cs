@@ -1089,6 +1089,7 @@ internal sealed partial class OverlayWindow : IDisposable
     {
         var pages = app.DocView;
         if (!pages.IsOpen) return;
+        if (app.PassThrough) return;      // 穿透 = 全让开（S2）：页不画（位图也在 SyncDocPages 里放了）
 
         ID2D1SolidColorBrush placeholder = null, failed = null, border = null;
         int i = pages.FirstAtOrAfter(canvas.MinY);
@@ -1147,8 +1148,22 @@ internal sealed partial class OverlayWindow : IDisposable
         _pageDirtyNow.Clear();
 
         var pages = app.DocView;
+
+        // 穿透 = **全让开**（S2，用户 2026-10-07 定）：页不画、不生成、位图全放（省内存）。
+        // 状态翻转那一帧要"整层作废"——分块里烘着页像素，不重铺的话穿透了屏幕还留着卷子。
+        bool hidden = app.PassThrough;
+        if (hidden != _docHidden)
+        {
+            _docHidden = hidden;
+            _tiles.MarkAllDirty();
+            _fullFramesLeft = 2;
+        }
+
         if (pages.IsOpen)
-            pages.SyncWindow(VisibleCanvasRect.MinY, VisibleCanvasRect.MaxY, 1, 1f);
+        {
+            if (hidden) { pages.ReleaseAll(); pages.StopWanting(); }
+            else pages.SyncWindow(VisibleCanvasRect.MinY, VisibleCanvasRect.MaxY, 1, 1f);
+        }
 
         if (pages.FullDirty)
         {
@@ -1166,6 +1181,9 @@ internal sealed partial class OverlayWindow : IDisposable
             pages.DirtyRects.Clear();
         }
     }
+
+    /// <summary>穿透是否正在把文档页层藏着（上一帧的值；状态翻转要整层重铺）。</summary>
+    private bool _docHidden;
 
     /// <summary>
     /// 把文档的最新状态同步进分块缓存，并把"这一帧要看的新块"光栅化出来。
@@ -2559,7 +2577,7 @@ internal sealed partial class OverlayWindow : IDisposable
         // 那份矩形同样并进来（同图库面板、界面 `_uiBoundsPrev` 的做法）。
         {
             var cur = RectF.Empty;
-            if (app.PageBarActive)
+            if (app.PageBarVisible)
             {
                 cur = app.PptBarRect();
                 if (app.PptPagePanelOpen) { app.PptPanelRect(out var pp); cur.Add(pp.MinX, pp.MinY); cur.Add(pp.MaxX, pp.MaxY); }
@@ -4435,7 +4453,7 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawPptBar(InkEngine app)
     {
-        if (!app.PageBarActive) return;      // PPT 放映 / 文档模式共用这一条（2026-10-07）
+        if (!app.PageBarVisible) return;     // PPT 放映 / 文档共用；文档+穿透时收走（S2 全让开）
         float dpi = Dpi / 96f;
         var theme = app.FloatingTheme;
         var bar = app.PptBarRect();

@@ -634,6 +634,29 @@ internal sealed partial class App
             Check("清空文档墨迹：内存与盘都空了",
                   Doc.Strokes.Count == 0 && DocStore.Load(DocStoreKey) == null, "ok");
 
+            // ⭐ 穿透 = 全让开（S2，用户 2026-10-07 定）：页收、条收；退出自动回来
+            var barRect = PptBarRect();
+            float bcx = (barRect.MinX + barRect.MaxX) * 0.5f;
+            float bcy = (barRect.MinY + barRect.MaxY) * 0.5f;
+            int rb0 = DocView.At(0) != null ? (int)DocView.At(0).Rect.MinX : 0;
+            int ry0 = DocView.At(0) != null ? (int)DocView.At(0).Rect.MinY : 0;
+
+            SetPassThroughFromUi(true);
+            SettleFrames(260);
+            Check("穿透：页位图全放 + 条可见性关闭",
+                  DocView.ResidentPages == 0 && !PageBarVisible && !PptBarContains(bcx, bcy),
+                  $"驻留={DocView.ResidentPages} 条可见={PageBarVisible} 条命中={PptBarContains(bcx, bcy)}");
+            int redPass = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 255, 0, 0, 40);
+            Check("穿透：屏幕上页也收走（让开）", redPass < 50, $"{redPass} 红像素（应≈0）");
+
+            SetPassThroughFromUi(false);
+            SettleFrames(400);
+            Check("退出穿透：页回来 + 条回来",
+                  DocView.ResidentPages >= 1 && PageBarVisible,
+                  $"驻留={DocView.ResidentPages} 条可见={PageBarVisible}");
+            int redBack = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 255, 0, 0, 40);
+            Check("退出穿透：页重新上屏", redBack > 4000, $"{redBack}/6400 像素");
+
             CloseDocument();
             if (Doc.PageKey != 0) Doc.SwitchPage(0);
             Doc.Clear();
