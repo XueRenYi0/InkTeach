@@ -451,6 +451,19 @@ public interface IEngineCommands
     void SaveBoardImage();
 
     /// <summary>
+    /// **打开文档**（图片可多选 / PDF 一份；2026-10-07）：把文件铺成"一叠页"——
+    /// 纵向排、可按页翻，笔迹照旧写在上面（页图不进笔迹：不存档、不导出、不回放）。
+    /// 弹系统多选对话框；结果写进 <see cref="UiState.InkStatus"/>；放映中不响应。
+    /// </summary>
+    void OpenDocument();
+
+    /// <summary>
+    /// **关闭文档**：页位图 / 解码缓存 / PDF 文档全放（**批注留在画布上**，不跟着走）。
+    /// 当前没有文档时只回一句提示。
+    /// </summary>
+    void CloseDocument();
+
+    /// <summary>
     /// **开始墨迹回放**（墨迹 C）：按当时的速度重演**当前一屏**的笔迹。
     ///
     /// 只读模式：不动文档/撤销栈/选中；相机锁定；点画布暂停/继续（不落墨）、
@@ -792,6 +805,10 @@ public readonly struct UiState
     /// 无关状态变化拽回去）。
     /// </summary>
     public bool PptMode { get; init; }
+    /// <summary>**当前有没有打开文档**（图片/PDF 页层，2026-10-07）。"关闭文档"那格按它亮/灰。</summary>
+    public bool DocOpen { get; init; }
+    /// <summary>文档描述（"椭圆错题.pdf · 2 页"；没文档时空串）。提示行用。</summary>
+    public string DocInfo { get; init; }
     /// <summary>当前工具实际用的颜色（荧光笔是半透明的）。</summary>
     public Color4 Color { get; init; }
     /// <summary>

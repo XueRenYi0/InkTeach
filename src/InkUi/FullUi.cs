@@ -2339,11 +2339,11 @@ public sealed class FullUi : IOverlayUi
     private int HubCount(int section) => HubCounts[Math.Clamp(section, 0, HubCounts.Length - 1)];
 
     /// <summary>
-    /// 每个分组的格子数：课堂 3 个（计时 / 点名 / 随机一人）；墨迹 **4 个**
-    /// （保存墨迹 / 打开墨迹 / 墨迹回放 / **保存图片**，2026-10-02 加）。
+    /// 每个分组的格子数：课堂 3 个（计时 / 点名 / 随机一人）；墨迹 **6 个**
+    /// （保存墨迹 / 打开墨迹 / 墨迹回放 / 保存图片 / **打开文档 / 关闭文档**，2026-10-07 加后两个）。
     /// 格子编号（`HubTileCode`）从这里算出来，**不写死 3**——加格子不会再串段。
     /// </summary>
-    private static readonly int[] HubCounts = { 3, 4 };
+    private static readonly int[] HubCounts = { 3, 6 };
 
     /// <summary>第 section 组的组头矩形。</summary>
     private RectF HubHeadRect(int section)
@@ -2634,6 +2634,12 @@ public sealed class FullUi : IOverlayUi
         4 => ("打开墨迹", "打开一份 .inkb，替换当前板书（先备份）", _host != null && !_host.State.PptMode, false),
         5 => ("墨迹回放", "把这一屏的板书重演一遍（只读，不动板书）", _host != null && (_host.State.ReplayActive || _host.State.StrokeCount > 0), false),
         6 => ("保存图片", "把整块板书存成图片（png / jpg，好发微信）", _host != null && !_host.State.PptMode && _host.State.StrokeCount > 0, false),
+        7 => ("打开文档", "图片可多选、PDF 一次一份；铺成一叠页，翻页批注", _host != null && !_host.State.PptMode, false),
+        8 => ("关闭文档",
+              _host != null && _host.State.DocOpen
+                  ? $"关掉《{_host.State.DocInfo}》；批注留在画布上"
+                  : "关掉当前文档；批注留在画布上",
+              _host != null && _host.State.DocOpen, false),
         _ => ("", "", false, false),
     };
 
@@ -2792,6 +2798,14 @@ public sealed class FullUi : IOverlayUi
             case 6:                                   // 保存图片（2026-10-02）
                 CloseMore();
                 _host.Commands.SaveBoardImage();
+                break;
+            case 7:                                   // 打开文档（2026-10-07）
+                CloseMore();
+                _host.Commands.OpenDocument();
+                break;
+            case 8:                                   // 关闭文档
+                CloseMore();
+                _host.Commands.CloseDocument();
                 break;
         }
         Invalidate();

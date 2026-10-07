@@ -135,6 +135,8 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SaveInkFile() => _engine.SaveInkFileFromUi();
     public void OpenInkFile() => _engine.OpenInkFileFromUi();
     public void SaveBoardImage() => _engine.SaveBoardImageFromUi();
+    public void OpenDocument() => _engine.OpenDocumentFromUi();
+    public void CloseDocument() => _engine.CloseDocumentFromUi();
     public void StartReplay() => _engine.StartReplayFromUi();
     public void StopReplay() => _engine.StopReplayFromUi();
     public void OpenTimerCard() => _engine.OpenTimerCardFromUi();

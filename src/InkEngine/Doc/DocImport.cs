@@ -17,6 +17,36 @@ public partial class InkEngine
     private PdfiumDoc _pdfDoc;
 
     /// <summary>
+    /// 「打开文档…」（更多 → 墨迹）：多选对话框 → 图片铺页 / PDF 渲染。
+    /// 与「打开墨迹」同一套对话框纪律：看门线程、焦点借用、自检不弹框。
+    /// </summary>
+    internal void OpenDocumentFromUi()
+    {
+        if (PptMode) { SetInkStatus("放映中不开文档（先退出放映）"); return; }
+        if (!ExportDialogEnabled) { SetInkStatus("自检模式不弹对话框"); return; }
+
+        string dir = GetUiPref("docDir");
+        BorrowFocusForDialog();
+        ExportDialogOpen = true;
+        string[] files;
+        try { files = ExportFileDialog.AskForOpenDocuments(OwnerHwnd(), dir); }
+        catch (Exception ex) { SetInkStatus("弹打开对话框失败：" + ex.Message); return; }
+        finally { ExportDialogOpen = false; ReturnFocusAfterDialog(); }
+        if (files == null || files.Length == 0) { SetInkStatus("已取消"); return; }
+        SetUiPref("docDir", System.IO.Path.GetDirectoryName(files[0]) ?? "");
+
+        var err = OpenDocuments(files);
+        if (err != null) SetInkStatus("打开文档失败：" + err);
+    }
+
+    /// <summary>「关闭文档」：页位图 / 解码缓存 / PDF 全放；**批注留在画布上**。</summary>
+    internal void CloseDocumentFromUi()
+    {
+        if (!DocView.IsOpen && _pdfDoc == null) { SetInkStatus("当前没有打开的文档"); return; }
+        CloseDocument();
+    }
+
+    /// <summary>
     /// 文档页是否交给**后台线程**渲染（产品 = true）。自检里要"确定性的一拍一页"时关掉它
     /// （关掉就回到"同步当场渲"，判据稳定、不掺时序）。
     /// </summary>

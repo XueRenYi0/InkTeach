@@ -7863,7 +7863,36 @@ public partial class InkEngine
     /// </summary>
     internal bool FlipPage(bool down)
     {
-        float want = ClampOffset(down ? ViewOffsetY - _virtualH : ViewOffsetY + _virtualH);
+        float want;
+        if (DocView.IsOpen)
+        {
+            // 文档模式：翻页 = **跳到上/下一页的页顶**（"一页一翻"，10-03 文档定的交互）。
+            // 相机只有一个数：把目标页顶摆到视口顶 → ViewOffsetY = _virtualY - 页顶。
+            var vp = ViewportCanvas;
+            int cur = DocView.CurrentIndex(vp.MinY, vp.MaxY);
+            if (cur < 0) cur = DocView.IndexAt(vp.MinY + 1f);      // 正好停在页缝里：按顶边算
+            int target;
+            if (cur < 0)
+            {
+                target = 0;
+            }
+            else if (down)
+            {
+                target = cur + 1;                                   // 往下：直接下一页页顶
+            }
+            else
+            {
+                // 往上：先回本页页顶；已经在页顶（差不到 1/10 屏）才去上一页
+                float intoPage = vp.MinY - DocView.TopOf(cur);
+                target = intoPage > _virtualH * 0.12f ? cur : cur - 1;
+            }
+            target = Math.Clamp(target, 0, DocView.Count - 1);
+            want = ClampOffset(_virtualY - DocView.TopOf(target));
+        }
+        else
+        {
+            want = ClampOffset(down ? ViewOffsetY - _virtualH : ViewOffsetY + _virtualH);
+        }
         if (Math.Abs(want - ViewOffsetY) < 1f) return false;
 
         if (!ClientAreaAnimationOn)
@@ -10345,6 +10374,8 @@ public partial class InkEngine
         UpdateStage = UpdateState,
         UpdateText = UpdateText,
         InkStatus = InkStatus,                  // 界面「墨迹」页的状态行
+        DocOpen = DocView.IsOpen,
+        DocInfo = DocView.IsOpen ? $"{DocView.Title} · {DocView.Count} 页" : "",
         ReplayActive = ReplayActive,
         ReplayPlaying = ReplayPlaying,
         ReplaySpeed = ReplaySpeed,
