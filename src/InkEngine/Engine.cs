@@ -1389,6 +1389,9 @@ public partial class InkEngine
     // [删除 2026-10-05] 预测前带量 / 喂 DWM 段数统计（老预测系统）。
     internal int _cntDown, _cntMove, _cntUp, _cntCaptureLost;
     internal string _lastStrokeReport;
+
+    /// <summary>`--strokefile` 的落盘路径（**空串 = 不写**；这项目没开 nullable，不用 `?`）。</summary>
+    private string _strokeFilePath = "";
     private long _hotkeysRegistered;
 
     /// <summary>
@@ -1890,6 +1893,18 @@ public partial class InkEngine
             // Wintab 是驱动自己的通道，能补回压力（实测 0~16383，比 Windows Ink 的 1024 细 16 倍）。
             // `--nowintab` 关掉做对照。**只在有厂商驱动的板子上有效**，没有就自动不启用。
             WintabEnabled = !args.Contains("--nowintab");
+            // `--strokefile`：把每一笔的 [笔画] 报告**追加到文件**（默认关，零开销）。
+            // 给"调手感"用：那一行里的"压力 a~b/上限"是唯一依据，
+            // 而截图/转述都会丢信息（今天因此栽过三次）。
+            // 不给路径就用工作目录下的 `笔画日志.txt`。
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i] != "--strokefile") continue;
+                string p = (i + 1 < args.Length && !args[i + 1].StartsWith("--")) ? args[i + 1] : "";
+                _strokeFilePath = p.Length > 0 ? p : System.IO.Path.Combine(
+                    Environment.CurrentDirectory, "笔画日志.txt");
+                Console.WriteLine($"  笔画日志 → {_strokeFilePath}");
+            }
             for (int i = 0; i < args.Length - 1; i++)
             {
                 if (args[i] == "--rawmindist" && float.TryParse(args[i + 1], out float rmd))
@@ -6943,6 +6958,20 @@ public partial class InkEngine
                     // 第 2 代那一位出现在书写期间，就说明这一笔画到一半被全堆回收打断过。
                     + $"，分配 {StrokeAllocBytes / 1024.0:F1} KB/GC {StrokeGc0}/{StrokeGc1}/{StrokeGc2}";
                 Console.WriteLine("[笔画] " + _lastStrokeReport);
+                // `--strokefile`：把这一行**追加到文件**。
+                // 为什么要有它：这一行的数字（尤其"压力 a~b/上限"）是调手感参数的**唯一依据**，
+                // 而截图会折行、会被笔迹挡住、会转述错——**今天已经因此栽了三次**。
+                // 默认关（不写文件、零开销），要诊断时才开。
+                if (_strokeFilePath.Length > 0)
+                {
+                    try
+                    {
+                        System.IO.File.AppendAllText(_strokeFilePath,
+                            $"[{DateTime.Now:HH:mm:ss}] {_lastStrokeReport}{Environment.NewLine}",
+                            new System.Text.UTF8Encoding(true));
+                    }
+                    catch (Exception ex) { Console.WriteLine($"  ⚠ 写笔画日志失败：{ex.Message}"); }
+                }
                 if (StrokeGc2 > 0)
                     Console.WriteLine($"  ⚠ 这一笔期间发生了 {StrokeGc2} 次第 2 代 GC"
                                       + "（低配机上这就是一次可见的卡顿，值得查是哪里在分配）");
