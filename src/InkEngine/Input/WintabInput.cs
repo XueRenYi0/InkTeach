@@ -74,6 +74,10 @@ internal sealed class WintabInput
     /// <summary>本次轮询取到的压力（0..1）；**-1 = 这一次没有有效压力**。</summary>
     public float Pressure01 { get; private set; } = -1f;
 
+    /// <summary>本次轮询取到的**原始**压力值（0..<see cref="MaxPressure"/>）。
+    /// 报日志用——只报 0..1 看不出"力度用到了量程的哪一段"。</summary>
+    public int RawPressure { get; private set; }
+
     /// <summary>笔尖是否按下（`pkButtons` 的最低位）。</summary>
     public bool PenDown { get; private set; }
 
@@ -221,6 +225,7 @@ internal sealed class WintabInput
             }
 
             Pressure01 = p / (float)MaxPressure;
+            RawPressure = p;
             int btn = Marshal.ReadInt32(_buf, _offBtn);
             PenDown = (btn & 0x01) != 0;
             any = true;

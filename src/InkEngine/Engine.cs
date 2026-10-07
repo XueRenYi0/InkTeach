@@ -4053,6 +4053,7 @@ public partial class InkEngine
         // 那个 89 是前几笔攒下来的，害我一开始以为压力补上了、其实是后面每一笔都没开上下文。
         // **日志数字必须是"这一笔"的**，不然它就不是证据。差值基线也一起归零。
         WtPolledPackets = WtPressurePoints = WtBadPackets = 0;
+        WtRawPMin = int.MaxValue; WtRawPMax = int.MinValue;
         _wintabPacketsSeen = _wintab.PacketsRead;
         _wintabBadSeen = _wintab.BadPackets;
         LastCoalescedSamples = LastCoalescedMessages = 0;
@@ -6916,7 +6917,9 @@ public partial class InkEngine
                     + $"，压感={(ActiveStrokeHasPressure ? "有" : "无")}"
                     + (WintabEnabled
                         ? (_wintab.IsOpen
-                            ? $"，[wintab 包{WtPolledPackets} 补压{WtPressurePoints}点 {_wintab.LayoutText}"
+                            ? $"，[wintab 包{WtPolledPackets} 补压{WtPressurePoints}/{ActiveStroke.Points.Count}点"
+                              + (WtRawPMax >= 0 ? $" 压力{WtRawPMin}~{WtRawPMax}/{_wintab.MaxPressure}" : " **一笔都没拿到压力**")
+                              + $" {_wintab.LayoutText}"
                               + (WtBadPackets > 0 ? $" **越界{WtBadPackets}**" : "")
                               + "]"
                             // **这一栏是特意加的**（2026-10-07 真机 bug 的教训）：
@@ -8466,6 +8469,8 @@ public partial class InkEngine
                 {
                     _wtStrokePressure = _wintab.Pressure01;
                     WtSeenPressure = true;
+                    if (_wintab.RawPressure < WtRawPMin) WtRawPMin = _wintab.RawPressure;
+                    if (_wintab.RawPressure > WtRawPMax) WtRawPMax = _wintab.RawPressure;
                 }
             }
             if (WtSeenPressure) wp = _wtStrokePressure;
@@ -8500,6 +8505,8 @@ public partial class InkEngine
             {
                 _wtStrokePressure = _wintab.Pressure01;
                 WtSeenPressure = true;
+                if (_wintab.RawPressure < WtRawPMin) WtRawPMin = _wintab.RawPressure;
+                if (_wintab.RawPressure > WtRawPMax) WtRawPMax = _wintab.RawPressure;
             }
             WtPolledPackets += _wintab.PacketsRead - _wintabPacketsSeen;
             _wintabPacketsSeen = _wintab.PacketsRead;
@@ -8618,6 +8625,10 @@ public partial class InkEngine
         float rawP = WtSeenPressure ? _wtStrokePressure : 0.5f;
         ActiveStroke.AddPoint(cx, cy, rawP, NowMs);
         _rawPointsAdded++;
+        // **补压的账要把 raw 补的点也算进来**：不然 `补压N点` 只数指针消息那条路，
+        // 而 raw 补的点常常占一半以上（用户真机实测 139 点里 raw 补了 88 个）——
+        // 那行日志就会低报一半，**也就证明不了修复到底生效没有**。
+        if (WtSeenPressure) WtPressurePoints++;
     }
 
     private void ResetRawAnchor(float screenX, float screenY)
@@ -8665,6 +8676,10 @@ public partial class InkEngine
 
     /// <summary>这一笔有没有见过**真实**压力（> 0；悬停那个 0 不算）。</summary>
     internal bool WtSeenPressure;
+
+    /// <summary>这一笔压力**原始值**的区间（0..驱动上限）。**只报 0..1 看不出力度用到了量程的哪一段**——
+    /// 用户"轻碰就满宽"或"压到底也不够粗"这类手感问题，全靠这两个数定位。</summary>
+    internal int WtRawPMin = int.MaxValue, WtRawPMax = int.MinValue;
 
     /// <summary>打过一次就记住"这台机器没有 Wintab"，不再反复试（免得每笔都白跑一次）。</summary>
     private bool _wintabTried;
