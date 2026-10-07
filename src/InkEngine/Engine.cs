@@ -863,8 +863,39 @@ public partial class InkEngine
     //
     // 默认 **0 = 完全不动**（一个字节不改）。等用户试出合适的档再考虑设默认。
 
+    /// <summary>`--wintab`：**强制**启用（默认就是启用，这个开关的意义是"不许自动退"）。</summary>
+    internal bool WintabForced;
+
     /// <summary>`--clean N`：入笔前对位置与压力做 N 点滑动平均（0/1 = 关）。</summary>
     internal static int CleanWindow;
+
+    /// <summary>连续多少笔（关 ink 那种非笔笔）没从 Wintab 拿到压力。</summary>
+    private int _wtDryStrokes;
+
+    /// <summary>
+    /// **自动退**（2026-10-07 用户提出"要不要默认关掉"之后加的保险）。
+    ///
+    /// 想清楚的事：我们**只从 Wintab 借"压力"这一样**，坐标永远走原来的路 ——
+    /// 所以最坏情况只是"压力不对"，而压力还有区间断言兜着。真正的问题是
+    /// **在别人的机器上**（教室那台）我们看不见：
+    ///   · 驱动是别家的 / 是坏的 → 拿不到压力
+    ///   · 某些板子（Avalonia 的 PR 里点名 Huion）**开了 Wintab 会把 WM_POINTER 顶掉**
+    /// 所以与其"默认关"（那就连你都享受不到），不如**默认开＋自己退**：
+    /// 连着几笔一笔压力都拿不到 → 说明这台机器上它没用 → 关掉，本次会话不再开。
+    /// 想要它留着用 `--wintab` 强制。
+    /// </summary>
+    private void WintabSelfCheckAfterStroke(uint ptype)
+    {
+        if (!_wintab.IsOpen || WintabForced) return;
+        if (ptype == Native.PT_PEN) return;          // 开 ink 的笔本来就不用它，不算数
+        if (WtPressurePoints > 0) { _wtDryStrokes = 0; return; }
+        if (++_wtDryStrokes < 3) return;
+        _wintab.Close();
+        WintabEnabled = false;
+        Console.WriteLine("  [wintab] 连续 3 笔一笔压力都没拿到 → 本次会话不再启用"
+                          + "（这台机器上它没用；想强制留着用 `--wintab`）");
+    }
+
 
     private readonly System.Collections.Generic.List<(float X, float Y, float P)> _cleanBuf = new();
 
@@ -1999,6 +2030,7 @@ public partial class InkEngine
             // Wintab 是驱动自己的通道，能补回压力（实测 0~16383，比 Windows Ink 的 1024 细 16 倍）。
             // `--nowintab` 关掉做对照。**只在有厂商驱动的板子上有效**，没有就自动不启用。
             WintabEnabled = !args.Contains("--nowintab");
+            WintabForced = args.Contains("--wintab");   // 强制：不许"自动退"
             // `--clean N`：入笔前对位置与压力做 N 点滑动平均（0 = 关闭，默认）。
             // 见 AddPointCleaned 那段注释：治"细毛刺"和"压力台阶"，滞后比加大距离窗小得多。
             for (int i = 0; i < args.Length - 1; i++)
@@ -7156,6 +7188,7 @@ public partial class InkEngine
                     // 第 2 代那一位出现在书写期间，就说明这一笔画到一半被全堆回收打断过。
                     + $"，分配 {StrokeAllocBytes / 1024.0:F1} KB/GC {StrokeGc0}/{StrokeGc1}/{StrokeGc2}";
                 Console.WriteLine("[笔画] " + _lastStrokeReport);
+                WintabSelfCheckAfterStroke(_activePointerType);
                 // `--strokefile`：把这一行**追加到文件**。
                 // 为什么要有它：这一行的数字（尤其"压力 a~b/上限"）是调手感参数的**唯一依据**，
                 // 而截图会折行、会被笔迹挡住、会转述错——**今天已经因此栽了三次**。
