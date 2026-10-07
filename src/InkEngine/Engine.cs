@@ -2338,6 +2338,23 @@ public partial class InkEngine
             WtProximity = 0;
             Array.Clear(WtByType);
             Console.WriteLine();
+            Console.WriteLine("  ---- 设备属性（WTInfo 枚举，**不问布局、直接问驱动**）----");
+            // 索引含义我不猜（今天猜布局栽了三次）：**把 1..32 全枚举出来看值**，
+            // 靠"值的量级"认出哪个是 X/Y（大范围）、哪个是正压力（0..1023 或 0..8191）。
+            for (uint idx = 1; idx <= 32; idx++)
+            {
+                for (int i = 0; i < 64; i++) Marshal.WriteByte(buf, i, 0);
+                uint gotAxis = Native.WTInfo(Native.WTI_DEVICES, idx, buf);
+                if (gotAxis == 0) continue;
+                var ax = Marshal.PtrToStructure<Native.AXIS>(buf);
+                if (ax.axMax == 0 && ax.axMin == 0 && ax.axUnits == 0) continue;
+                string guess = "";
+                if (ax.axMin == 0 && ax.axMax > 0 && ax.axMax <= 8192) guess = "  ← 像**压力**";
+                else if (ax.axMax > 8192) guess = "  ← 像坐标轴（X/Y）";
+                Console.WriteLine($"    [{idx,2}] min={ax.axMin,12} max={ax.axMax,12} units={ax.axUnits,-6} res={ax.axResolution}{guess}");
+            }
+
+            Console.WriteLine();
             Console.WriteLine("  ▶ 请用手写笔在板子上**来回划 12 秒**（悬停即可，不必压笔尖）…");
             Console.WriteLine("     ⚠ 一定要真的动笔——不动的话驱动不会发 WT_PACKET，测不出结果。");
 
@@ -2376,7 +2393,8 @@ public partial class InkEngine
                 Field(Native.PK_ROTATION, 12, false, out tmp);
                 pktBytes = o;
             }
-            Console.WriteLine($"  包体布局              : 每包 {pktBytes} 字节；X@{xOff} Y@{yOff} 压力@{pOff}");
+            Console.WriteLine($"  包体布局              : 不用猜了——改成**一次只取 1 个包**（见下），"
+                              + $"这样每个包都从 0 偏移读，**跨包错位不可能发生**");
 
             IntPtr pktBuf = Marshal.AllocHGlobal(64 * Math.Max(64, pktBytes));
             int pkMinX = int.MaxValue, pkMaxX = int.MinValue;
@@ -2391,17 +2409,20 @@ public partial class InkEngine
                     Thread.Sleep(1000);
                     DrainMessages();
                     // 每秒把攒下的包全取出来，统计 X/Y/压力的范围
+                    //
+                    // ⚠ **一次只取 1 个包**（cMaxPackets=1）：这样每个包都写进 buf 的 0 偏移，
+                    // **跨包错位不可能发生**。上一版按"自算的包长 48"一次取 64 个、
+                    // 按 48 步长跳——如果真实包长不是 48，从第 2 个包起就全错位，
+                    // 结果 X/Y/压力都读出 7000 万级（第 1 个包其实是对的）。
+                    // 教训：**不要再自己算包长**；能一次一个就别批量。
                     int nPk;
-                    while ((nPk = Native.WTPacketsGet(ctx, 64, pktBuf)) > 0)
+                    while ((nPk = Native.WTPacketsGet(ctx, 1, pktBuf)) > 0)
                     {
-                        for (int k = 0; k < nPk; k++)
-                        {
-                            int b = k * pktBytes;
-                            pkTotal++;
-                            if (xOff >= 0) { int v = Marshal.ReadInt32(pktBuf, b + xOff); if (v < pkMinX) pkMinX = v; if (v > pkMaxX) pkMaxX = v; }
-                            if (yOff >= 0) { int v = Marshal.ReadInt32(pktBuf, b + yOff); if (v < pkMinY) pkMinY = v; if (v > pkMaxY) pkMaxY = v; }
-                            if (pOff >= 0) { int v = Marshal.ReadInt32(pktBuf, b + pOff); if (v < pkMinP) pkMinP = v; if (v > pkMaxP) pkMaxP = v; if (v > 0) pkWithPressure++; }
-                        }
+                        pkTotal++;
+                        if (xOff >= 0) { int v = Marshal.ReadInt32(pktBuf, xOff); if (v < pkMinX) pkMinX = v; if (v > pkMaxX) pkMaxX = v; }
+                        if (yOff >= 0) { int v = Marshal.ReadInt32(pktBuf, yOff); if (v < pkMinY) pkMinY = v; if (v > pkMaxY) pkMaxY = v; }
+                        if (pOff >= 0) { int v = Marshal.ReadInt32(pktBuf, pOff); if (v < pkMinP) pkMinP = v; if (v > pkMaxP) pkMaxP = v; if (v > 0) pkWithPressure++; }
+                        if (pkTotal > 200000) break;          // 防跑飞
                     }
                     Console.Write($"\r    第 {sec + 1,2}/12 秒，已取 {pkTotal} 包，压力 {pkMinP}~{pkMaxP}   ");
                 }

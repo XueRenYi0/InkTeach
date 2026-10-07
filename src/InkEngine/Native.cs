@@ -601,10 +601,22 @@ internal static class Native
     //   **Windows 原生笔（Surface / N-trig / MPP）从 SP5 起就没有了**。
     public const uint WTI_INTERFACE = 1;
     public const uint WTI_DEFCONTEXT = 3;
+    /// <summary>设备属性；`nIndex` 从 1 开始（**索引含义我不猜**，探针直接枚举出来看值）。</summary>
+    public const uint WTI_DEVICES = 100;
     public const uint IFC_VERSION = 2;
     public const uint IFC_NDEVICES = 4;
     /// <summary>Wintab 的包消息默认基址（LOGCONTEXT.lcMsgBase 的默认值）。</summary>
     public const int WT_DEFBASE = 0x7FF0;
+
+    /// <summary>AXIS：WTInfo 查"某个轴/属性的范围"时填的结构（16 字节）。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct AXIS
+    {
+        public int axMin;
+        public int axMax;
+        public uint axUnits;
+        public int axResolution;
+    }
 
     /// <summary>LOGCONTEXT（Wintab 上下文）的大小：**实测 172 字节**（不是规范上常说的 160！）。
     /// 这里**不按字段声明结构体**，而是用一块 256 字节的裸缓冲 + 按偏移读写——
