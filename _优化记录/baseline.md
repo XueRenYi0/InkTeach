@@ -1,4 +1,4 @@
-# InkTeach 优化 · 环境与自检基线
+﻿# InkTeach 优化 · 环境与自检基线
 
 日期：2026-10-06　　仓库：`C:\Users\LHL-XZX\Desktop\软件\InkTeach`
 上游：<https://github.com/XueRenYi0/InkTeach>（v8.9.2，GPL-3.0）
@@ -68,6 +68,21 @@ else { 'DATA' }                          # 跑完了但没判据
 已封装成仓库外的 `run-selftest.ps1`（放外面是为了让仓库保持 pristine，方便与 upstream 对比）。
 
 ## 三、基线自检结果（`pristine` = 未改动的原始代码）
+
+> ## ⚠ 规矩：**全套自检只在发布前跑一次**
+>
+> 用户 2026-10-07 定。理由：39 个用例背靠背、其中几个是**故意的重负载基准**
+> （`--selftest 8` 一万笔、`--writetest` 板书长跑、`--duptest` 指数复制…），
+> 整整 **7 分钟满速跑**，风扇会响、机器一直满载。
+>
+> **平时改完只想验一小块，用 `-Only`**（几秒就完）：
+> ```powershell
+> .\run-selftest.ps1 -Only widthtest,inputtest   # 只跑这两条
+> .\run-selftest.ps1 -Only 橡皮,框选              # 按分组名也行
+> ```
+>
+> **跑的过程中按任意键 = 取消**（会连正在跑的那条 InkTeach 子进程一起杀掉；
+> 不杀掉的话它会锁住 DLL，下一次编译会失败——踩过）。
 
 ```
 pwsh -File tools/bench/Run-FuncSuite.ps1 -AppRoot <repo> -OutDir reports/func-baseline-pwsh

@@ -739,6 +739,9 @@ internal static class Native
     public const int SM_YVIRTUALSCREEN = 77;
     public const int SM_CXVIRTUALSCREEN = 78;
     public const int SM_CYVIRTUALSCREEN = 79;
+    /// <summary>主屏尺寸（绝对原始报的归一化基准，见 Engine.HandleRawInput）。</summary>
+    public const int SM_CXSCREEN = 0;
+    public const int SM_CYSCREEN = 1;
 
     /// <summary>SM_DIGITIZER：系统有没有数字化器（触摸 / 笔）。返回值按位解释。</summary>
     public const int SM_DIGITIZER = 94;

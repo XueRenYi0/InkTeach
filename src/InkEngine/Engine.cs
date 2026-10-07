@@ -1923,7 +1923,14 @@ public partial class InkEngine
         _virtualW = Native.GetSystemMetrics(Native.SM_CXVIRTUALSCREEN);
         _virtualH = Native.GetSystemMetrics(Native.SM_CYVIRTUALSCREEN);
 
-        Console.WriteLine($"virtual desktop: {_virtualW}x{_virtualH} at ({_virtualX},{_virtualY})");
+        // 主屏尺寸：`--rawinput` 里换算"绝对原始报"的归一化基准（0..65535 → 主屏像素）。
+        _primaryW = Native.GetSystemMetrics(Native.SM_CXSCREEN);
+        _primaryH = Native.GetSystemMetrics(Native.SM_CYSCREEN);
+        if (_primaryW <= 0) _primaryW = _virtualW;
+        if (_primaryH <= 0) _primaryH = _virtualH;
+
+        Console.WriteLine($"virtual desktop: {_virtualW}x{_virtualH} at ({_virtualX},{_virtualY})"
+                          + $"；主屏 {_primaryW}x{_primaryH}");
 
         if (!CreateOverlays())
             return 3;
@@ -2180,10 +2187,36 @@ public partial class InkEngine
     /// <summary>`--rawinput` 期间从原始输入补进来的点数（诊断）。</summary>
     private int _rawPointsAdded;
 
+    // ---- 原始输入"被哪道门挡住的"分项计数（诊断，2026-10-07 加）------------
+    // 起因：用户真机实测 `[原始输入 42 条 → 160 Hz]` 但 `[raw 补点 +0]` ——
+    // 抓得到却一条没补。光看总数定位不了是哪道门挡的，所以每个 return 前记一笔。
+    private int _rawSkipNoStroke, _rawSkipApi, _rawSkipType, _rawSkipAbs;
+    private int _rawSkipZero, _rawSkipKind, _rawSkipGate, _rawSkipAnchor;
+    private int _rawSkipCap, _rawSkipNear, _rawSkipNoInter;
+
+    /// <summary>主屏像素尺寸（绝对原始报的归一化基准）。</summary>
+    private float _primaryW = 1920f, _primaryH = 1080f;
+
+    /// <summary>上一条绝对原始报的原始值（取差值用，见 HandleRawInput）。</summary>
+    private int _rawAbsX, _rawAbsY;
+    private bool _rawAbsValid;
+
+    // ---- "到底有没有中间点可捞"的自适应判据（2026-10-07 加）------------------
+    // 为什么需要：**1:1 的设备上原始报和指针消息是同一批位置**（本机合成输入实测
+    // 61 报 / 61 消息），补进去的全是**重复点**（零长段）——纯噪声，不是信息。
+    // 只有像用户手写板那样"指针消息被系统合并"（实测 13 条消息 / 42 条原始报 = 2.3:1）
+    // 才有中间点可捞。
+    // 所以：**只有当原始报条数明显多于指针消息条数时才补点**。
+    // 好处是 1:1 的设备上这个功能等于不存在（零风险），有合并的设备上自动生效。
+    private int _rawSinceLastPtr;      // 自上一条指针消息以来收到的原始报数
+    private int _rawTotalSincePtr;     // 累计的原始报数
+    private int _ptrMsgsThisStroke;    // 累计的指针消息数
+    private bool _rawHasIntermediates; // 判定：有中间点可捞
+
     /// <summary>最近一次指针消息给的**绝对屏幕坐标**（raw 填缝的锚点）。</summary>
     private float _rawAnchorX, _rawAnchorY;
     /// <summary>自锚点以来 raw 报累计的位移。</summary>
-    private int _rawAccumX, _rawAccumY;
+    private float _rawAccumX, _rawAccumY;
     /// <summary>锚点是否有效（没锚点就不敢用 raw 填缝）。</summary>
     private bool _rawAnchorValid;
 
@@ -3578,6 +3611,12 @@ public partial class InkEngine
         LastCoalescedSamples = LastCoalescedMessages = 0;
         _rawReportsThisStroke = 0;      // `--rawprobe`：原始输入计数每笔归零
         _rawPointsAdded = 0;            // `--rawinput`：补进来的点数每笔归零
+        _rawSkipNoStroke = _rawSkipApi = _rawSkipType = _rawSkipAbs = 0;
+        _rawSkipZero = _rawSkipKind = _rawSkipGate = _rawSkipAnchor = 0;
+        _rawSkipCap = _rawSkipNear = _rawSkipNoInter = 0;
+        _rawAbsValid = false;           // 绝对报的"上一条"每笔作废（差值不能跨笔累加）
+        _rawSinceLastPtr = _rawTotalSincePtr = _ptrMsgsThisStroke = 0;
+        _rawHasIntermediates = false;   // 判据要攒几条才有结论
         _rawAnchorValid = false;        // 锚点由这一笔的第一条指针消息建立
         SetRawCapture(true);            // 原始输入：**只在这一笔期间收**（空闲必须关）
         AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
@@ -6428,6 +6467,10 @@ public partial class InkEngine
                         : "")
                     + (RawInputCapture
                         ? $"，[raw 补点 +{_rawPointsAdded}]"
+                          + (RawProbeEnabled
+                             ? $"[挡：无笔{_rawSkipNoStroke} API{_rawSkipApi} 类型{_rawSkipType} 绝对{_rawSkipAbs} 零移{_rawSkipZero}"
+                               + $" 非手写{_rawSkipKind} 门{_rawSkipGate} 无锚{_rawSkipAnchor} 无中间点{_rawSkipNoInter} 上限{_rawSkipCap} 太近{_rawSkipNear}]"
+                             : "")
                         : "")
                     // [删除 2026-10-05] 预测器/预测尾/喂 DWM 段数的日志：随预测系统一起移除。
                     // 分配与 GC：低配机排查"偶发卡顿"的**唯一依据**。
@@ -7882,6 +7925,14 @@ public partial class InkEngine
         // 每来一条指针消息就重新对准一次真值。
         ResetRawAnchor(screenX, screenY);
 
+        // 顺便结算"有没有中间点可捞"：把这一段的原始报数并进累计，再看比值。
+        // 阈值 1.3 是留了余量的——1:1 设备的实测比值就是 1.0，有合并的实测 2.3~4。
+        _ptrMsgsThisStroke++;
+        _rawTotalSincePtr += _rawSinceLastPtr;
+        _rawSinceLastPtr = 0;
+        if (_ptrMsgsThisStroke >= 3)
+            _rawHasIntermediates = _rawTotalSincePtr >= _ptrMsgsThisStroke * 1.3;
+
         if (ptype == Native.PT_PEN && _pen.Read(id, NowMs, _lastInputMsgQpc) > 0)
         {
             LastCoalescedMessages++;
@@ -7958,37 +8009,73 @@ public partial class InkEngine
     private void HandleRawInput(IntPtr lParam)
     {
         _rawReportsThisStroke++;
-        if (!RawInputCapture || ActiveStroke == null) return;
+        _rawSinceLastPtr++;
+        if (!RawInputCapture || ActiveStroke == null) { _rawSkipNoStroke++; return; }
 
         uint size = (uint)Marshal.SizeOf<Native.RAWINPUT>();
         uint header = (uint)Marshal.SizeOf<Native.RAWINPUTHEADER>();
         if (Native.GetRawInputData(lParam, Native.RID_INPUT, out var ri, ref size, header) == uint.MaxValue)
-            return;
-        if (ri.header.dwType != Native.RIM_TYPEMOUSE) return;
-
-        // 绝对坐标的报（远程桌面 / 少数设备）：这里不做换算——那条路上我们本来就有绝对位置，
-        // 用相对位移那条设计更稳；遇到就跳过，宁可少几个点。
-        if ((ri.mouse.usFlags & Native.MOUSE_MOVE_ABSOLUTE) != 0) return;
+        { _rawSkipApi++; return; }
+        if (ri.header.dwType != Native.RIM_TYPEMOUSE) { _rawSkipType++; return; }
 
         int dx = ri.mouse.lLastX, dy = ri.mouse.lLastY;
-        if (dx == 0 && dy == 0) return;              // 不动时也会发空报，丢掉
 
         // 只有"自由笔迹 + 手写工具"才补点：和 OnPointerMove 那条分流保持同一张口径
-        if (ActiveStroke.Kind != StrokeKind.Freehand) return;
+        if (ActiveStroke.Kind != StrokeKind.Freehand) { _rawSkipKind++; return; }
         var tool = ActiveStroke.Tool;
-        if (tool != Tool.Pen && tool != Tool.Highlighter) return;
-        if (SelDragging || _dwell.State == DwellState.Armed) return;
-        if (!_rawAnchorValid) return;
+        if (tool != Tool.Pen && tool != Tool.Highlighter) { _rawSkipKind++; return; }
+        if (SelDragging || _dwell.State == DwellState.Armed) { _rawSkipGate++; return; }
+        // **只有"确实有中间点可捞"才补**（见 _rawHasIntermediates 那段注释）：
+        // 1:1 的设备上补进去的全是重复点（零长段），纯噪声。
+        if (!_rawHasIntermediates) { _rawSkipNoInter++; return; }
+        // 两种报都**必须先有绝对锚点**（来自指针消息）才敢用——没锚点就没法判断
+        // "这一报是真的在附近，还是换算错了"，宁可不加也不猜。
+        if (!_rawAnchorValid) { _rawSkipAnchor++; return; }
 
-        _rawAccumX += dx;
-        _rawAccumY += dy;
-        float sx = _rawAnchorX + _rawAccumX, sy = _rawAnchorY + _rawAccumY;
+        float sx, sy;
+        bool isAbs = (ri.mouse.usFlags & Native.MOUSE_MOVE_ABSOLUTE) != 0;
+        if (isAbs)
+        {
+            // **绝对报**（2026-10-07 补，实测手写板在鼠标模式上报的就是这种，
+            // 连 SendInput 注入的也是——原来那句"遇到绝对就跳过"把**每一条**都跳掉了）。
+            //
+            // ⚠ **绝对报也要取"差值"再累加，不能拿绝对值当位置直接用**——第一版就是直接
+            // 用，结果被测出来：绝对值的归一化映射有微小偏差 → 补进去的点有偏移 →
+            // **细线的抗锯齿被摊开、覆盖率掉到阈值以下**（`--widthtest` 最细那档
+            // 从合格掉到 0.69）。而且本机合成输入是 1:1（原始报和指针消息是同一批位置），
+            // 直接当位置用等于**往笔迹里塞噪声**。
+            //
+            // 取差值就对了：
+            //   · 1:1 时差值 = 指针消息那条位移 → 累加出来正好是指针点 → 被最小距离过滤掉 → 零噪声；
+            //   · 有合并时（真机 2.3:1）差值 = 沿路径的中间位移 → 累加出来是真正的插值点。
+            // 而且它**每次指针消息都被重新对准**（锚点），映射偏一点也不漂。
+            if (!_rawAbsValid) { _rawAbsX = dx; _rawAbsY = dy; _rawAbsValid = true; _rawSkipAbs++; return; }
+            float pw = _primaryW / 65535f, ph = _primaryH / 65535f;
+            float mx = (dx - _rawAbsX) * pw;
+            float my = (dy - _rawAbsY) * ph;
+            _rawAbsX = dx; _rawAbsY = dy;
+            // 多屏/虚拟桌面时归一化基准不是主屏，差值会被放大或缩小——用一个宽松但有效的
+            // 上限挡掉病态值（正常的报单步位移不会超过半个屏）。
+            if (MathF.Abs(mx) > _primaryW * 0.5f || MathF.Abs(my) > _primaryH * 0.5f) { _rawSkipAbs++; return; }
+            _rawAccumX += mx;
+            _rawAccumY += my;
+            sx = _rawAnchorX + _rawAccumX;
+            sy = _rawAnchorY + _rawAccumY;
+        }
+        else
+        {
+            if (dx == 0 && dy == 0) { _rawSkipZero++; return; }   // 不动时也会发空报，丢掉
+            _rawAccumX += dx;
+            _rawAccumY += dy;
+            sx = _rawAnchorX + _rawAccumX;
+            sy = _rawAnchorY + _rawAccumY;
+        }
 
         float cx = sx, cy = sy;
         ScreenToCanvas(ref cx, ref cy);
 
         // ① 每笔上限（第二道保险）
-        if (_rawPointsAdded >= RawMaxPerStroke) return;
+        if (_rawPointsAdded >= RawMaxPerStroke) { _rawSkipCap++; return; }
 
         // ② 最小距离：把零长段挡在门外。鼠标 raw 可以到 1000Hz，不移开的话
         //    相邻两点差不到 1 像素——几何那边明确讲过零长段会多出退化段。
@@ -7996,7 +8083,7 @@ public partial class InkEngine
         {
             var last = ActiveStroke.Points[^1];
             float ddx = cx - last.X, ddy = cy - last.Y;
-            if (ddx * ddx + ddy * ddy < RawMinDistPx * RawMinDistPx) return;
+            if (ddx * ddx + ddy * ddy < RawMinDistPx * RawMinDistPx) { _rawSkipNear++; return; }
         }
 
         // 压力沿用"这一笔到目前为止的值"：鼠标模式下本来就没有压力，
