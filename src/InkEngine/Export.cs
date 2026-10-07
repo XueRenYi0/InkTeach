@@ -842,6 +842,8 @@ internal static class ExportFileDialog
     private const int OFN_PATHMUSTEXIST = 0x00000800;
     private const int OFN_EXPLORER = 0x00080000;
     private const int OFN_ENABLEHOOK = 0x00000020;
+    /// <summary>多选（"打开文档…"用；单选对话框不带它）。</summary>
+    private const int OFN_ALLOWMULTISELECT = 0x00000200;
 
   /// <summary>
     /// `OPENFILENAMEW` 的字节数（Windows 自己也是按这个长度校验的）。
@@ -902,6 +904,19 @@ internal static class ExportFileDialog
     private const string InkFilter = "InkTeach 板书 (*.inkb)\0*.inkb\0\0";
     private const int OFN_FILEMUSTEXIST = 0x00001000;
 
+    /// <summary>
+    /// "打开文档…"的过滤器。四种：
+    /// ① 图片+PDF 混合（默认——老师不用先想"我这是啥"，图片多选、PDF 也行）；
+    /// ② 只要图片；③ 只要 PDF；④ 所有文件（老师自己改过扩展名时兜底）。
+    /// 说明：**PDF 与图片的"分工"不在对话框里做**——对话框只负责把路径拿回来，
+    /// 谁负责什么由调用方按扩展名决定（见 DocPages）。
+    /// </summary>
+    private const string DocumentFilter =
+        "图片与 PDF\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.pdf\0" +
+        "图片 (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff\0" +
+        "PDF 文档 (*.pdf)\0*.pdf\0" +
+        "所有文件 (*.*)\0*.*\0\0";
+
     [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool GetOpenFileNameW([In, Out] OpenFileName ofn);
 
@@ -956,5 +971,74 @@ internal static class ExportFileDialog
         if (!ok) return null;
         var path = (ofn.lpstrFile ?? "").Trim().TrimEnd('\0');
         return string.IsNullOrEmpty(path) ? null : path;
+    }
+
+    // ---- "打开文档…"（图片批量 / PDF；2026-10-07，图片与 PDF 导入第一步）------------
+
+    /// <summary>
+    /// 弹"打开文档"。**图片可多选**（一次铺一叠页）；PDF 也走这个框，
+    /// 混选时由调用方按扩展名分工（PDF 一次只认第一份，规则在 DocPages 里）。
+    ///
+    /// 看门线程 / CBT 居中 / 焦点借用与上面三条**完全同一套**，不重新发明；
+    /// 区别只有：过滤器、标题、多选标志、以及缓冲区要开得足够大。
+    ///
+    /// 返回 null = 用户取消（或一个都没选中）。返回的每条都是**完整路径字符串**。
+    /// </summary>
+    public static string[] AskForOpenDocuments(IntPtr owner, string initialDir)
+    {
+        StartDialogWatcher();
+        InstallDialogPositionHook();
+        // 多选时缓冲区形状是 "目录\0名字1\0名字2\0…\0\0"；
+        // 32K 字符够选几千个文件，也远超 MAX_PATH×N。
+        const int cap = 32768;
+        var ofn = new OpenFileName
+        {
+            lStructSize = SizeOfOpenFileName,
+            hwndOwner = owner,
+            lpstrFilter = DocumentFilter,
+            nFilterIndex = 1,
+            // 字段只能是 string（见 OpenFileName 里的说明）：预分配一整条空缓冲
+            lpstrFile = new string('\0', cap),
+            nMaxFile = cap,
+            lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
+            lpstrTitle = "打开文档（图片可多选）",
+            lpstrDefExt = "pdf",
+            Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_ALLOWMULTISELECT,
+        };
+        bool ok;
+        try { ok = GetOpenFileNameW(ofn); }
+        finally { RemoveDialogPositionHook(); }
+        if (!ok) return null;
+        var files = ParseMultiSelection(ofn.lpstrFile);
+        return files == null || files.Length == 0 ? null : files;
+    }
+
+    /// <summary>
+    /// 解析打开对话框的返回缓冲区。两种形状（Win32 的老规矩）：
+    ///   · **单选**（只选了一个文件）：整条就是一份完整路径；
+    ///   · **多选**：第一段是目录，后面每一段是一个文件名——都得自己拼回去。
+    ///
+    /// **单独拆出来是为了能直接自检**：这里有三个经典坑——末尾的空段（双 \0）、
+    /// 单选/多选两种形状、目录拼接——不单独测就会在"选了一个"和"选了三个"之间翻车，
+    /// 而且要弹真对话框才能复现（自检里弹不了框）。
+    /// </summary>
+    internal static string[] ParseMultiSelection(string buf)
+    {
+        if (string.IsNullOrEmpty(buf)) return null;
+        var parts = new List<string>();
+        foreach (var seg in buf.Split('\0'))
+            if (seg.Length > 0) parts.Add(seg.Trim());
+        if (parts.Count == 0) return null;
+        if (parts.Count == 1) return new[] { parts[0] };
+
+        var dir = parts[0];
+        var list = new List<string>(parts.Count - 1);
+        for (int i = 1; i < parts.Count; i++)
+        {
+            var name = parts[i];
+            // 防御：万一系统给的就是完整路径（某些 shell 扩展会这么干），别再拼一次目录
+            list.Add(System.IO.Path.IsPathRooted(name) ? name : System.IO.Path.Combine(dir, name));
+        }
+        return list.ToArray();
     }
 }

@@ -43,6 +43,13 @@ public partial class InkEngine
     internal readonly LaserTrail Laser = new();
 
     /// <summary>
+    /// 文档页底层（图片 / PDF 导入后"一叠页"的那一层）。**不是笔迹**：
+    /// 不参与存档、导出、回放、撤销（见 <see cref="DocPages"/> 的说明）。
+    /// 没打开文档时它是空的——不调用 = 零开销。
+    /// </summary>
+    internal readonly DocPages DocView = new();
+
+    /// <summary>
     /// 界面自己的偏好（深色主题、贴边隐藏、档位、钉住）。引擎**只存不解释**：
     /// 它不知道"极简档"是什么，界面说存什么就存什么。落盘在 settings.json 的 `ui` 段。
     /// </summary>
@@ -61,6 +68,7 @@ public partial class InkEngine
         "--norawinput" or "--wintab" or "--nowintab" or "--nopressure" or "--rawprobe" or "--notrend"
             or "--himetric" or "--notouch" or "--syswet" or "--ownwet" or "--strokefile"
             or "--recink" or "--recinkp"
+            or "--doc"
             or "--nosmooth" or "--printersafe" => true,
         _ => false,
     };

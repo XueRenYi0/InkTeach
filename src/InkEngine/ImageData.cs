@@ -143,4 +143,10 @@ internal sealed class ImageData
         }
     }
 
+    /// <summary>
+    /// 文档页专用：上传 GPU 之后把 CPU 那半份放掉（页图不存档、不导出，重生成就是了）。
+    /// 位图本身留着；配合 <see cref="Release"/> 就是"整个对象可以扔了"。
+    /// </summary>
+    public void DropCpuBytes() => Bgra = null;
+
 }

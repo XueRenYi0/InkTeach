@@ -22,6 +22,13 @@ internal sealed partial class App : InkEngine.InkEngine
     private bool _panelShowBand;
     private bool _selfCheckMode;
 
+    /// <summary>
+    /// `--doc <文件>`：启动后打开这份文档（图片 / PDF）。null = 没给。
+    /// 解析在 <see cref="PrepareHostStartup"/>；真正的"打开"在窗口建好之后的正常启动分支里做
+    /// （S4/S6 接线——现在先只记住并校验）。
+    /// </summary>
+    private string _startupDocPath;
+
     /// <summary>密集模式：所有笔画写在一小块区域里（量"同一页很多墨迹"）。</summary>
     private bool DenseWrite;
 
@@ -59,6 +66,24 @@ internal sealed partial class App : InkEngine.InkEngine
                 {
                     InkRecordWithPressure = true;
                     Console.WriteLine("           （--recinkp：多录 压力/来源/当时平板坐标）");
+                }
+            }
+
+        // **打开文档**（`--doc <文件>`）：图片 / PDF。实测与开发期直达用。
+        // 只是"记住路径"：真正打开在窗口建好之后（文档模式要有覆盖层才能画页）。
+        // 文件不存在 → 只提示、当没给（绝不因此影响启动——规矩三：失败当没有）。
+        for (int i = 0; i + 1 < args.Length; i++)
+            if (args[i] == "--doc")
+            {
+                var p = System.IO.Path.GetFullPath(args[i + 1]);
+                if (System.IO.File.Exists(p))
+                {
+                    _startupDocPath = p;
+                    Console.WriteLine($"[文档] 启动后打开：{p}");
+                }
+                else
+                {
+                    Console.WriteLine($"[文档] 找不到文件，已忽略：{p}");
                 }
             }
 
@@ -956,6 +981,12 @@ internal sealed partial class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             PageTest();
+        }
+        else if (mode == "--doctest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            DocumentTest();
         }
         else if (mode == "--iotest")
         {
