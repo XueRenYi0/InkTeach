@@ -3208,6 +3208,7 @@ public partial class InkEngine
             StepCameraAnim();                 // 翻页动画（167ms）
             StepPpt();                        // PPT 放映联动（没变化时只读一个 bool，不碰 COM）
             StepDocPageReady();               // 文档页后台渲染完一页：置脏（这一拍会采纳它）
+            StepDocAutoSave();                // 文档批注的节流保存（自动保存开着才写）
             StepPptBar();                     // 底部那条：引导过期 / "再点确认"过期（没有长按了）
             StepEngineTooltip();              // 引擎侧悬停提示的 500ms 延迟（到点点亮）
             StepTimerCard();                  // 课堂计时卡片：推进秒数 / 到点 / 同步接输入小窗

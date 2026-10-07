@@ -592,9 +592,23 @@ public partial class InkEngine
     /// <summary>这一项是危险动作吗（"墨迹清空"）——绘制据此上强调色（等确认时也用它）。</summary>
     internal static bool PptMenuItemDanger(int i) => i == 3;
 
-    /// <summary>第 i 项这一刻显示的文字（"清空所有墨迹"等确认时变成"再点确认"）。</summary>
+    /// <summary>第 i 项这一刻显示的文字（"清空"等确认时变成"再点确认"）。文档模式另有文案。</summary>
     internal string PptMenuItemText(int i)
-        => i == 3 && PptClearConfirm ? "再点确认" : PptMenuItems[i];
+    {
+        if (!PptMode && DocView.IsOpen)
+        {
+            return i switch
+            {
+                0 => "指定页码跳转",
+                1 => "自动保存墨迹",
+                2 => "回放这一屏墨迹",
+                3 => PptClearConfirm ? "再点确认" : "清空文档墨迹",
+                4 => "关闭文档",
+                _ => "",
+            };
+        }
+        return i == 3 && PptClearConfirm ? "再点确认" : PptMenuItems[i];
+    }
 
     /// <summary>第 i 项右边的状态文字（开关 = 开/关；回放 = N 笔）。其余返回 null。</summary>
     internal string PptMenuItemStatus(int i)
@@ -705,7 +719,7 @@ public partial class InkEngine
 
     /// <summary>页号面板矩形（点页码弹出来的那张）。</summary>
     internal void PptPanelRect(out RectF rect)
-        => rect = PptBar.PanelRect(PptBarRect(), Math.Max(1, PptTotal), DpiScale, ScreenRectPhysical());
+        => rect = PptBar.PanelRect(PptBarRect(), Math.Max(1, BarTotal), DpiScale, ScreenRectPhysical());
 
     /// <summary>面板里第 <paramref name="index"/> 个格子的矩形（index 从 0 起 = 第 1 页）。</summary>
     internal void PptPanelCellRectAt(int index, out RectF rect)
@@ -714,11 +728,11 @@ public partial class InkEngine
         rect = PptBar.CellRect(panel, index, DpiScale);
     }
 
-    /// <summary>这一块归不归 PPT 条（**穿透豁免**与命中都要用同一份判据——
-    /// "看得见的一块"和"点得到的一块"必须是同一个）。</summary>
+    /// <summary>这一块归不归底部条（**穿透豁免**与命中都要用同一份判据——
+    /// "看得见的一块"和"点得到的一块"必须是同一个）。PPT 放映和文档模式共用这一条。</summary>
     internal bool PptBarContains(float x, float y)
     {
-        if (!PptMode) return false;
+        if (!PageBarActive) return false;
         if (PptBarRect().Contains(x, y)) return true;
         if (PptMenuOpen) { PptMenuRect(out var menu); if (menu.Contains(x, y)) return true; }
         if (PptPagePanelOpen) { PptPanelRect(out var panel); if (panel.Contains(x, y)) return true; }
@@ -737,7 +751,7 @@ public partial class InkEngine
     /// </summary>
     internal bool PptBarPointerDown(float x, float y)
     {
-        if (!PptMode) return false;
+        if (!PageBarActive) return false;
 
         // 菜单开着：命中就执行并吃掉；没命中就收起来，**这一下照常往下走**
         //（和颜色/层级面板"点外面先收起来再照常"是同一条口径）。
@@ -767,16 +781,15 @@ public partial class InkEngine
             PptPanelRect(out var panel);
             if (panel.Contains(x, y))
             {
-                int total = Math.Max(1, PptTotal);
+                int total = Math.Max(1, BarTotal);
                 for (int i = 0; i < total; i++)
                 {
                     PptPanelCellRectAt(i, out var cell);
                     if (!cell.Contains(x, y)) continue;
                     int page = i + 1;
-                    if (page != PptSlide) PostPptCommand(3, page);   // 3 = 跳到第 n 页
+                    if (page != BarPageNow) BarGoto(page);   // 文档：跳页顶；PPT：命令它跳页
                     PptPagePanelOpen = false;
                     _dirty = true;
-                    Console.WriteLine($"[PPT] 跳到第 {page} 页");
                     return true;
                 }
                 return true;                       // 面板里的空白：吃掉，别穿透到画布
@@ -794,8 +807,8 @@ public partial class InkEngine
         var zone = PptBar.ZoneAt(bar, x, y, DpiScale);
         if (zone == PptBarZone.None) return false;
 
-        if (zone == PptBarZone.LeftArrow) { PptPrevFromUi(); return true; }
-        if (zone == PptBarZone.RightArrow) { PptNextFromUi(); return true; }
+        if (zone == PptBarZone.LeftArrow) { BarPrev(); return true; }
+        if (zone == PptBarZone.RightArrow) { BarNext(); return true; }
 
         // 页码格：**先只记录，松手再决定**——没动过 = 单击（开菜单）；
         // 移动超阈值 = 拖条（见 PptBarPointerMove / PptBarPointerUp）。
@@ -810,7 +823,7 @@ public partial class InkEngine
     /// <summary>移动：返回 true = 这一下归它（拖动中 / 悬停在条上）。</summary>
     internal bool PptBarPointerMove(float x, float y)
     {
-        if (!PptMode) return false;
+        if (!PageBarActive) return false;
 
         // ---- 按下之后移动够了 = **直接拖动**（不用先长按——用户 2026-09-26 定的
         // "点中页码那一块直接拖动就能走"）。这正是"点击 vs 拖动"的
@@ -854,7 +867,7 @@ public partial class InkEngine
         }
         if (hover < 0 && PptPagePanelOpen)
         {
-            int total = Math.Max(1, PptTotal);
+            int total = Math.Max(1, BarTotal);
             for (int i = 0; i < total; i++)
             {
                 PptPanelCellRectAt(i, out var cell);
@@ -878,7 +891,7 @@ public partial class InkEngine
     /// </summary>
     internal void PptBarPointerUp(float x, float y)
     {
-        if (!PptMode) return;
+        if (!PageBarActive) return;
 
         if (PptBarDragging)
         {
@@ -903,7 +916,7 @@ public partial class InkEngine
                 PptPagePanelOpen = false;
                 PptClearConfirm = false;
                 _dirty = true;
-                Console.WriteLine($"[PPT] 页码菜单打开（共 {PptTotal} 页）");
+                Console.WriteLine($"[{(PptMode ? "PPT" : "文档")}] 页码菜单打开（共 {BarTotal} 页）");
             }
         }
     }
@@ -924,10 +937,10 @@ public partial class InkEngine
     internal void StepPptBar()
     {
         // 穿透那块"接输入小窗"每帧对一次（该显示时铺上、不该显示时收掉）。
-        // 放在 `!PptMode` 早退**之前**：退出放映也要能看到"该收了"。
+        // 放在 `!PageBarActive` 早退**之前**：退出放映也要能看到"该收了"。
         SyncPptInputWindow();
 
-        if (!PptMode) return;
+        if (!PageBarActive) return;
 
         // 引导到点就擦掉（它只显示那么一两秒）
         if (_pptHintUntilMs > 0 && NowMs >= _pptHintUntilMs) { _pptHintUntilMs = 0; _dirty = true; }
@@ -1138,6 +1151,9 @@ public partial class InkEngine
     /// </summary>
     private void RunPptMenuItem(int index)
     {
+        // 文档模式：同一套菜单壳，五项按文档的语义执行（见 RunDocBarMenuItem）。
+        if (!PptMode && DocView.IsOpen) { RunDocBarMenuItem(index); return; }
+
         switch (index)
         {
             case 0:                                  // 指定页码跳转（2026-10-02 第五轮）
@@ -1177,13 +1193,60 @@ public partial class InkEngine
         }
     }
 
-    /// <summary>「墨迹保存」开关：翻了就存偏好（**开是默认值，所以"开"就不记**——配置里只留和默认不一样的）。</summary>
+    /// <summary>「墨迹保存」开关：翻了就存偏好（**开是默认值，所以"开"就不记**——配置里只留和默认不一样的）。
+    /// PPT 和文档**共用一个开关**：老师心里"自动保存"就是一件事。</summary>
     private void TogglePptAutoSave()
     {
         PptAutoSaveOn = !PptAutoSaveOn;
         SetUiPref(PptAutoSavePref, PptAutoSaveOn ? null : "0");
         _dirty = true;
-        Console.WriteLine($"[PPT] 自动保存墨迹 → {(PptAutoSaveOn ? "开" : "关")}");
+        Console.WriteLine($"[{(PptMode ? "PPT" : "文档")}] 自动保存墨迹 → {(PptAutoSaveOn ? "开" : "关")}");
+    }
+
+    /// <summary>
+    /// 文档模式的菜单五项（*同一套壳、换名换动作*，2026-10-07 用户定；见 计划-文档模式-状态模型.md §2）：
+    ///   0 指定页码跳转 / 1 自动保存墨迹 / 2 回放这一屏墨迹 / 3 清空文档墨迹（两段确认）/ 4 关闭文档。
+    /// 两处**故意不关菜单**的理由同 PPT 版（开关要看状态变化；清空要等第二次点）。
+    /// </summary>
+    private void RunDocBarMenuItem(int index)
+    {
+        switch (index)
+        {
+            case 0:
+                PptMenuOpen = false;
+                PptClearConfirm = false;
+                PptPagePanelOpen = true;
+                _dirty = true;
+                Console.WriteLine($"[文档] 页号面板打开（共 {DocView.Count} 页）");
+                return;
+            case 1:
+                TogglePptAutoSave();
+                return;                              // 菜单留着，让老师看见"开 → 关"
+            case 2:
+                PptMenuOpen = false;
+                PptClearConfirm = false;
+                _dirty = true;
+                StartReplay();                       // 与中央面板「墨迹回放」同一个入口
+                return;
+            case 3:
+                if (!PptClearConfirm)
+                {
+                    PptClearConfirm = true;
+                    _pptClearConfirmAt = NowMs;
+                    _dirty = true;
+                    Console.WriteLine("[文档] 再点一次「再点确认」才真的清空");
+                    return;                          // 菜单留着
+                }
+                PptClearConfirm = false;
+                ClearDocMarks();
+                PptMenuOpen = false;
+                _dirty = true;
+                return;
+            case 4:
+                PptMenuOpen = false;
+                CloseDocumentFromUi();
+                return;
+        }
     }
 
     /// <summary>

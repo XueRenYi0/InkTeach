@@ -2554,17 +2554,17 @@ internal sealed partial class OverlayWindow : IDisposable
             r.Add(CanvasRectToWindow(app.LibraryPanelRectNow()).Inflate(4f * Dpi / 96f));
         if (!_libraryRectPrev.IsEmpty) r.Add(_libraryRectPrev);
 
-        // PPT 控件条（含它上面的页号面板 / 长按菜单）：悬停、拖动、长按进度每帧都在变，
-        // 必须按当前矩形算进脏区；**退出放映那一帧**旧位置也要擦掉，所以上一帧那份矩形
-        // 同样并进来（同图库面板、界面 `_uiBoundsPrev` 的做法）。
+        // 底部页码条（含它上面的页号面板 / 菜单）：悬停、拖动每帧都在变，
+        // 必须按当前矩形算进脏区；**退出放映/关文档那一帧**旧位置也要擦掉，所以上一帧
+        // 那份矩形同样并进来（同图库面板、界面 `_uiBoundsPrev` 的做法）。
         {
             var cur = RectF.Empty;
-            if (app.PptMode)
+            if (app.PageBarActive)
             {
                 cur = app.PptBarRect();
                 if (app.PptPagePanelOpen) { app.PptPanelRect(out var pp); cur.Add(pp.MinX, pp.MinY); cur.Add(pp.MaxX, pp.MaxY); }
                 // 菜单和首次引导都长在条的上方（引导还比菜单窄一点，用同一个矩形兜住就够）
-                if (app.PptHintVisible || app.PptMenuOpen)
+                if ((app.PptMode && app.PptHintVisible) || app.PptMenuOpen)
                 { app.PptMenuRect(out var pm); cur.Add(pm.MinX, pm.MinY); cur.Add(pm.MaxX, pm.MaxY); }
                 float barPad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
                 r.Add(cur.Inflate(barPad));
@@ -4435,7 +4435,7 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawPptBar(InkEngine app)
     {
-        if (!app.PptMode) return;
+        if (!app.PageBarActive) return;      // PPT 放映 / 文档模式共用这一条（2026-10-07）
         float dpi = Dpi / 96f;
         var theme = app.FloatingTheme;
         var bar = app.PptBarRect();
@@ -4479,8 +4479,8 @@ internal sealed partial class OverlayWindow : IDisposable
         // 传 `Dpi`（200% 屏上是 192）会把字号放大 192 倍、字被排到矩形外，看起来就是"字没画出来"。
         var mid = PptBar.MidCell(bar, dpi);
         var pfmt = PptPageFormat(dpi);
-        string pCur = app.PptSlide.ToString();
-        string pRest = $" / {app.PptTotal}";
+        string pCur = app.BarPageNow.ToString();
+        string pRest = $" / {app.BarTotal}";
         float pWCur = MeasureTextWidth(pCur, pfmt);
         float pWRest = MeasureTextWidth(pRest, pfmt);
         float pX0 = (mid.MinX + mid.MaxX) * 0.5f - (pWCur + pWRest) * 0.5f;
@@ -4489,7 +4489,7 @@ internal sealed partial class OverlayWindow : IDisposable
         _scratch.Color = theme.TextMuted;
         _ctx.DrawText(pRest, pfmt, new Rect(pX0 + pWCur, mid.MinY, pWRest, mid.MaxY - mid.MinY), _scratch);
 
-        if (app.PptHintVisible) DrawPptHint(app);
+        if (app.PptMode && app.PptHintVisible) DrawPptHint(app);
         if (app.PptPagePanelOpen) DrawPptPagePanel(app);
         if (app.PptMenuOpen) DrawPptMenu(app);
     }
@@ -4732,13 +4732,13 @@ internal sealed partial class OverlayWindow : IDisposable
         app.PptPanelRect(out var panel);
         DrawPanelCard(app, panel, theme.CornerRadius * dpi);
 
-        int total = Math.Max(1, app.PptTotal);
+        int total = Math.Max(1, app.BarTotal);
         var fmt = ReadoutFormatSmall(dpi);
         for (int i = 0; i < total; i++)
         {
             app.PptPanelCellRectAt(i, out var cell);
             int page = i + 1;
-            bool cur = page == app.PptSlide;             // 当前页：实心强调底
+            bool cur = page == app.BarPageNow;           // 当前页：实心强调底
             bool hot = app.PptBarHover == 200 + i;
 
             if (cur || hot)

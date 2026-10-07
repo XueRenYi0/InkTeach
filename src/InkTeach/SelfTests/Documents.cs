@@ -573,6 +573,75 @@ internal sealed partial class App
         try { Directory.Delete(pdfDir, true); } catch { }
 
         // ------------------------------------------------------------------
+        Console.WriteLine("  -- C3 页码条 + 文档批注独立页空间 + 自动保存/读回 --");
+        // ------------------------------------------------------------------
+        if (pdfOk)
+        {
+            string pdfDir2 = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inkteach-doctest-pdf2");
+            Directory.CreateDirectory(pdfDir2);
+            string pPdf2 = System.IO.Path.Combine(pdfDir2, "状态测试.pdf");
+            WriteTestPdf(pPdf2);
+
+            DocView.Close();
+            if (Doc.PageKey != 0) Doc.SwitchPage(0);
+            Doc.Clear();
+            Doc.ClearHistory();
+
+            var errOpen = OpenDocuments(new[] { pPdf2 });
+            int docSlot = DocStore.SlotOf(DocStore.KeyOf(new[] { pPdf2 }));
+            Check("打开后：条活跃 + 进了文档页空间",
+                  errOpen == null && PageBarActive && Doc.PageKey == docSlot,
+                  errOpen ?? $"slot={Doc.PageKey}（应 {docSlot}）");
+
+            Check("条上页码 1/3", BarPageNow == 1 && BarTotal == 3, $"{BarPageNow}/{BarTotal}");
+
+            BarNext();
+            SettleFrames(260);
+            Check("下一页：视口到第 2 页顶 + 页码跟着变",
+                  Math.Abs(ViewOffsetY + DocView.TopOf(1)) < 2f && BarPageNow == 2,
+                  $"camY={ViewOffsetY:F0}（应 {-DocView.TopOf(1):F0}）页码={BarPageNow}");
+
+            BarGoto(3);
+            SettleFrames(260);
+            Check("跳页（面板同一入口）：到第 3 页", BarPageNow == 3, $"{BarPageNow}");
+            BarGoto(1);
+            SettleFrames(260);
+
+            // ★ 文档批注独立：写一笔进当前槽（= 文档槽），桌面板书一个字不动
+            var mark = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                                    Color = new Color4(1f, 0f, 0f, 1f), Width = 6f };
+            mark.AddPoint(100f, 100f, 1f, 0);
+            mark.AddPoint(300f, 200f, 1f, 0);
+            Doc.AddStroke(mark);
+            Check("文档槽里有了 1 笔（桌面槽不受影响）", Doc.Strokes.Count == 1, $"{Doc.Strokes.Count}");
+
+            // 动作同菜单第 2 项（自动保存开关默认开）+ 节流走一拍
+            SetAutoSaveIntervalForTest(1);
+            StepDocAutoSave();
+            Check("自动保存：盘上有了这份文档的批注", DocStore.Load(DocStoreKey) != null, DocStoreKey);
+
+            CloseDocument();
+            SetAutoSaveIntervalForTest(15000);
+            Check("关闭：回桌面页空间 + 条收走", !PageBarActive && Doc.PageKey == 0, $"slot={Doc.PageKey}");
+            Check("关闭：桌面板书没被污染", Doc.Strokes.Count == 0, $"{Doc.Strokes.Count} 个对象");
+
+            var errRe = OpenDocuments(new[] { pPdf2 });
+            Check("重开同一份：批注读回、槽还原",
+                  errRe == null && Doc.Strokes.Count == 1 && Doc.PageKey == docSlot,
+                  errRe ?? $"{Doc.Strokes.Count} 个对象 slot={Doc.PageKey}");
+
+            ClearDocMarks();
+            Check("清空文档墨迹：内存与盘都空了",
+                  Doc.Strokes.Count == 0 && DocStore.Load(DocStoreKey) == null, "ok");
+
+            CloseDocument();
+            if (Doc.PageKey != 0) Doc.SwitchPage(0);
+            Doc.Clear();
+            Doc.ClearHistory();
+            try { Directory.Delete(pdfDir2, true); } catch { }
+        }
+
+        // ------------------------------------------------------------------
         Console.WriteLine("  -- D 后台渲染线程：一拍不卡 / 陆续到货 / 在途关档不崩 --");
         // ------------------------------------------------------------------
         // 真机数据（122MB 扫描型 PDF）：一页要 270~900ms。这条线程就是为那种页存在的。

@@ -17,6 +17,174 @@ public partial class InkEngine
     private PdfiumDoc _pdfDoc;
 
     /// <summary>
+    /// 当前文档的落盘键（<see cref="DocStore.KeyOf"/>；空 = 没文档）。
+    /// 文档批注的"自动保存/读回"都认它。
+    /// </summary>
+    internal string DocStoreKey = "";
+
+    /// <summary>文档批注节流保存的下一次时刻 / 上次存过的版本（"没变就不写"）。</summary>
+    private double _nextDocAutoSaveAtMs;
+    private long _docSavedVersion = -1;
+
+    // ======================================================================
+    //  底部页码条（"像打开 PPT 一样"——2026-10-07 用户定，见 计划-文档模式-状态模型.md）
+    // ======================================================================
+
+    /// <summary>底部页码条现在活跃吗（PPT 放映中 / 打开了文档）。条的所有交互（命中/悬停/菜单/面板）都看它。</summary>
+    internal bool PageBarActive => PptMode || DocView.IsOpen;
+
+    /// <summary>条上的"第几页"（1 起）。文档模式 = 视口中心所在的页（没页时给 1）。</summary>
+    internal int BarPageNow
+    {
+        get
+        {
+            if (!PptMode && DocView.IsOpen)
+            {
+                var vp = ViewportCanvas;
+                int i = DocView.CurrentIndex(vp.MinY, vp.MaxY);
+                if (i < 0) i = DocView.FirstAtOrAfter(vp.MinY);
+                if (i >= DocView.Count) i = DocView.Count - 1;
+                return 1 + Math.Max(0, i);
+            }
+            return PptSlide;
+        }
+    }
+
+    /// <summary>条上的"共几页"。</summary>
+    internal int BarTotal => !PptMode && DocView.IsOpen ? DocView.Count : PptTotal;
+
+    /// <summary>翻上/下一页（箭头）。文档模式 = 跳页顶（连续滚仍用滚轮）。</summary>
+    internal void BarPrev()
+    {
+        if (!PptMode && DocView.IsOpen) FlipPage(false);
+        else PptPrevFromUi();
+    }
+
+    internal void BarNext()
+    {
+        if (!PptMode && DocView.IsOpen) FlipPage(true);
+        else PptNextFromUi();
+    }
+
+    /// <summary>跳到第 <paramref name="page"/> 页（1 起；页号面板用）。文档模式 = 页顶对齐视口顶。</summary>
+    internal void BarGoto(int page)
+    {
+        if (!PptMode && DocView.IsOpen)
+        {
+            int idx = Math.Clamp(page - 1, 0, Math.Max(0, DocView.Count - 1));
+            float want = ClampOffset(_virtualY - DocView.TopOf(idx));
+            if (Math.Abs(want - ViewOffsetY) >= 1f)
+            {
+                if (!ClientAreaAnimationOn) { ViewOffsetY = want; _dirty = true; }
+                else
+                {
+                    _camFrom = ViewOffsetY; _camTo = want; _camStartMs = NowMs; _camAnimating = true;
+                    _dirty = true;
+                }
+            }
+            Console.WriteLine($"[文档] 跳到第 {idx + 1} 页");
+            return;
+        }
+        PostPptCommand(3, page);                    // 3 = 跳到第 n 页
+        Console.WriteLine($"[PPT] 跳到第 {page} 页");
+    }
+
+    // ======================================================================
+    //  文档页空间（墨迹和桌面板书 / PPT 批注互不污染；相机各自记忆）
+    // ======================================================================
+
+    /// <summary>
+    /// 进文档页空间：记住当前（桌面）槽的相机位置 → 切到文档槽 → 恢复文档槽的位置。
+    /// 每槽一个相机位置是 PPT 模式早就用的机制（<c>_pageScroll</c>，见 Ppt.GotoPage）。
+    /// </summary>
+    private void EnterDocPageSpace(string storeKey)
+    {
+        _pageScroll[Doc.PageKey] = ViewOffsetY;
+        if (Doc.SwitchPage(DocStore.SlotOf(storeKey)))
+        {
+            ViewOffsetY = _pageScroll.TryGetValue(Doc.PageKey, out var v) ? v : 0f;
+            ClampViewOffset();
+            _camAnimating = false;
+            Doc.InvalidateAll();        // 内容全换：分块缓存整层作废（同 GotoPage）
+        }
+    }
+
+    /// <summary>回桌面页空间（关文档时）。</summary>
+    private void LeaveDocPageSpace()
+    {
+        _pageScroll[Doc.PageKey] = ViewOffsetY;
+        if (Doc.SwitchPage(0))
+        {
+            ViewOffsetY = _pageScroll.TryGetValue(0, out var v) ? v : 0f;
+            ClampViewOffset();
+            _camAnimating = false;
+            Doc.InvalidateAll();
+        }
+    }
+
+    /// <summary>读回这份文档的批注（自动保存关着就不读，同 PPT 的语义）。读坏了当没有。</summary>
+    private void LoadDocInk(string storeKey)
+    {
+        if (storeKey.Length == 0) return;
+        if (!PptAutoSaveOn)
+        {
+            Console.WriteLine("[文档] 自动保存关着：这次不读盘上的批注（盘上原样留着）");
+            return;
+        }
+        try
+        {
+            var blob = DocStore.Load(storeKey);
+            if (blob == null) return;
+            var strokes = InkSerializer.LoadStrokes(blob, out int maxId);
+            Doc.LoadPageContent(Doc.PageKey, strokes, maxId);
+            Console.WriteLine($"[文档] 读回批注 {strokes.Count} 个对象");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("[文档] 读批注失败（当作没有）：" + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 写文档批注（自动保存开着才写；**空文档不留空文件**——把已有文件删掉就完了，同 PPT 的规矩）。
+    /// 关闭文档、节流（<see cref="StepDocAutoSave"/>）都走这里。
+    /// </summary>
+    internal void SaveDocInk()
+    {
+        if (DocStoreKey.Length == 0) return;
+        if (!PptAutoSaveOn) return;
+        try
+        {
+            var strokes = Doc.Strokes;
+            if (strokes.Count > 0) DocStore.Save(DocStoreKey, InkSerializer.SaveStrokes(strokes));
+            else DocStore.Delete(DocStoreKey);
+            _docSavedVersion = Doc.Version;
+        }
+        catch (Exception ex) { Console.WriteLine("[文档] 批注写盘失败：" + ex.Message); }
+    }
+
+    /// <summary>节流自动保存（主循环每拍调）：文档开着 + 自动保存开 + 真的变了 + 到间隔。</summary>
+    internal void StepDocAutoSave()
+    {
+        if (DocStoreKey.Length == 0 || !PptAutoSaveOn) return;
+        if (NowMs < _nextDocAutoSaveAtMs) return;
+        _nextDocAutoSaveAtMs = NowMs + _autoSaveEveryMs;
+        if (Doc.Version == _docSavedVersion) return;
+        SaveDocInk();
+    }
+
+    /// <summary>「清空文档墨迹」（菜单第 4 项）：清当前槽 + **连盘一起删**（同 PPT 的理由）。</summary>
+    internal void ClearDocMarks()
+    {
+        int n = Doc.Strokes.Count;
+        Doc.Clear();
+        if (DocStoreKey.Length > 0) DocStore.Delete(DocStoreKey);
+        _docSavedVersion = Doc.Version;
+        SetInkStatus($"已清空文档墨迹（{n} 个对象）");
+        Console.WriteLine($"[文档] 清空文档墨迹：{n} 个对象（连盘）");
+    }
+
+    /// <summary>
     /// 「打开文档…」（更多 → 墨迹）：多选对话框 → 图片铺页 / PDF 渲染。
     /// 与「打开墨迹」同一套对话框纪律：看门线程、焦点借用、自检不弹框。
     /// </summary>
@@ -95,7 +263,7 @@ public partial class InkEngine
         _pdfDoc = null;
 
         string title = files.Count == 1 ? System.IO.Path.GetFileName(files[0]) : $"{ok} 张图片";
-        StartDocView(specs, title);
+        StartDocView(specs, title, DocStore.KeyOf(files));
         if (bad > 0) Console.WriteLine($"    [文档] 有 {bad} 个文件读不了，已跳过");
         return null;
     }
@@ -142,27 +310,43 @@ public partial class InkEngine
         _pdfDoc?.Dispose();
         _pdfDoc = doc;
 
-        StartDocView(specs, System.IO.Path.GetFileName(path));
+        StartDocView(specs, System.IO.Path.GetFileName(path), DocStore.KeyOf(new[] { path }));
         return null;
     }
 
     /// <summary>
-    /// 排好页、装好生成器、锚在当前视口顶——打开之后**立刻能看到第一页**，
-    /// 相机的"文档范围"由 <see cref="CanvasExtent"/> 并入页层保证（否则滚不到最后一页）。
+    /// 排好页、进文档页空间、读回批注。
+    ///
+    /// **页锚在固定画布位置**（2026-10-07 定）：横向 = 主屏中心、纵向 = 画布 y=0 起。
+    /// 为什么必须固定：批注是按画布坐标存的，页一挪位置批注就对不上了 ✗——
+    /// 而"关掉再打开、切走再回来"都要能对上（自动保存/读回的前提）。
+    /// 相机：进空间时恢复"上次在这份文档里滚到哪"（没有就停在页顶 = y 0）。
     /// </summary>
-    private void StartDocView(List<DocPages.Spec> specs, string title)
+    private void StartDocView(List<DocPages.Spec> specs, string title, string storeKey)
     {
         DocView.Generator = DocRenderSpec;
         DocView.UseWorker = DocPageWorker;      // 后台渲染（产品默认开；见那行注释）
         DocView.OnResultReady = WakeForDocPage; // 后台渲完一页叫醒主循环（不叫就不上屏）
-        var vp = ViewportCanvas;
+
+        // 先进页空间（切槽 + 相机就位），再排页——页的锚点是固定的，不依赖当时视口。
+        DocStoreKey = storeKey;
+        EnterDocPageSpace(storeKey);
+
         float gap = 24f * DpiScale;                       // 页缝 = 24 逻辑像素（和白板页界线同语言）
-        float anchorTop = vp.MinY + 16f * DpiScale;       // 离视口顶留一点边
-        DocView.Open(specs, title, CenterXOfCursorMonitor(), anchorTop, gap);
+        DocView.Open(specs, title, PrimaryScreenCenterX(), 0f, gap);
+        LoadDocInk(storeKey);
         ClampViewOffset();
+        _docSavedVersion = Doc.Version;
         SetInkStatus($"文档：{title}（{DocView.Count} 页）");
         Console.WriteLine($"[文档] 已打开 {title}：{DocView.Count} 页（页图惰性生成）");
     }
+
+    /// <summary>
+    /// 页往哪块屏上铺：**主屏的横向中心**。固定值（不是"光标所在屏"）——
+    /// 锚点必须跨会话稳定，否则批注对不上（见 StartDocView 的说明）。
+    /// </summary>
+    private static float PrimaryScreenCenterX()
+        => Native.GetSystemMetrics(0 /*SM_CXSCREEN*/) * 0.5f;
 
     /// <summary>页生成的分派：图片走 GDI+（解码+裁切+缩放），PDF 走 PDFium（渲染进缓冲）。</summary>
     private byte[] DocRenderSpec(DocPages.Spec spec)
@@ -173,36 +357,26 @@ public partial class InkEngine
             _ => null,
         };
 
-    /// <summary>关掉文档：页位图全放、解码缓存清、PDF 文档关（"用完释放"，10-03 文档 7.4）。</summary>
+    /// <summary>
+    /// 关掉文档：**先存批注**（自动保存开着才写）→ 释放页位图 / 解码缓存 / PDF 文档
+    /// （"用完释放"，10-03 文档 7.4）→ 切回桌面页空间（相机回到老师原来的位置）。
+    /// </summary>
     internal void CloseDocument()
     {
         if (!DocView.IsOpen && _pdfDoc == null) return;
         string title = DocView.Title;
+
+        SaveDocInk();                       // 关闭时兜底存一次（节流之外的那一下）
+
         DocView.Close();
         DocImageSource.TrimCache();
         _pdfDoc?.Dispose();
         _pdfDoc = null;
-        SetInkStatus($"已关闭文档：{title}");
-        Console.WriteLine($"[文档] 已关闭：{title}（页位图 / 解码缓存 / PDF 文档都已释放）");
-    }
 
-    /// <summary>
-    /// 页往哪块屏上铺：**光标所在那块显示器**的横向中心。
-    /// 单屏就是屏幕中心；教室里笔电 + 投影时，文档会铺在老师正在操作的那块屏上。
-    /// </summary>
-    private float CenterXOfCursorMonitor()
-    {
-        try
-        {
-            if (Native.GetCursorPos(out var pt))
-            {
-                var mon = Native.MonitorFromPoint(pt, Native.MONITOR_DEFAULTTONEAREST);
-                var mi = new Native.MONITORINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<Native.MONITORINFO>() };
-                if (Native.GetMonitorInfo(mon, ref mi))
-                    return (mi.rcWork.Left + mi.rcWork.Right) * 0.5f;
-            }
-        }
-        catch { }
-        return _virtualX + _virtualW * 0.5f;
+        LeaveDocPageSpace();                // 回桌面（含相机位置恢复）
+        DocStoreKey = "";
+
+        SetInkStatus($"已关闭文档：{title}");
+        Console.WriteLine($"[文档] 已关闭：{title}（批注已存；页位图 / 解码缓存 / PDF 文档都已释放）");
     }
 }

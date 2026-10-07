@@ -141,6 +141,12 @@ internal sealed partial class App : InkEngine.InkEngine
             PptStore.RootOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck-ppt");
             try { if (Directory.Exists(PptStore.RootOverride)) Directory.Delete(PptStore.RootOverride, true); } catch { }
         }
+        // 文档批注缓存同理：自检每次启动先清空这份临时缓存（和 PptStore 一样，别碰用户真目录）
+        if (_selfCheckMode && DocStore.RootOverride == null)
+        {
+            DocStore.RootOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck-doc");
+            try { if (Directory.Exists(DocStore.RootOverride)) Directory.Delete(DocStore.RootOverride, true); } catch { }
+        }
         // 自检里**不弹"另存为"对话框**：它会阻塞等消息，而自检是自己抽消息推进的，
         // 一弹就卡到超时（`--selftest` 会逐个点操作条上的按钮，点到"导出"就中招）。
         // 导出那条链由 `--iotest` 走"不弹框、直接写指定路径"验，见 ExportSelectionToPathForTest。
@@ -1047,6 +1053,7 @@ internal sealed partial class App : InkEngine.InkEngine
             InkSettings.PathOverride = null;
             Recovery.AutoSavePathOverride = null;
             PptStore.RootOverride = null;
+            DocStore.RootOverride = null;
             ExportDialogEnabled = true;
 
             // `--doc <文件>`：到这儿窗口/视口都就绪了，真正打开它
