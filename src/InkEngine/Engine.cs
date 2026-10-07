@@ -50,6 +50,20 @@ public partial class InkEngine
     private bool _uiPrefsDirty;
 
     /// <summary>自检/基准模式：**不读也不写**用户配置（判据要确定，更不能改用户的设置）。</summary>
+    /// <summary>
+    /// 这个参数**是开关、不是自检 mode** 吗？是的话不该把程序带进自检模式。
+    ///
+    /// 只列"用户可能会单独敲、而且确实不是 mode"的那些。
+    /// 真敲错 mode 名（比如 `--inputtset`）仍按老规矩进自检模式 —— 那正是自检模式存在的意义。
+    /// </summary>
+    private static bool IsSwitchNotMode(string a) => a switch
+    {
+        "--norawinput" or "--nowintab" or "--nopressure" or "--rawprobe" or "--notrend"
+            or "--himetric" or "--notouch" or "--syswet" or "--ownwet" or "--strokefile"
+            or "--nosmooth" or "--printersafe" => true,
+        _ => false,
+    };
+
     internal bool SelfCheckMode;
 
     // ---- 自动存档（崩溃恢复）------------------------------------------------
@@ -1645,7 +1659,20 @@ public partial class InkEngine
             return 2;
 
         string mode = args.Length > 0 ? args[0] : "";
+        // ⚠ **命令行开关不能写在第一个位置**这个坑（2026-10-07 修）：
+        // 上面这行会让 `InkTeach.exe --nowintab` 把**开关**当成"自检 mode"，
+        // 于是 `SelfCheckMode = true` —— 换临时设置路径、关掉导出对话框…
+        // 用户想对照一下手感，结果程序进了半个自检状态，**而且他看不出来**。
+        // 这里把"不是 mode 的开关"排除掉：单独敲一个开关时，走的还是正常模式。
+        // （判据是正向的"已知开关"清单 —— 只列**不是 mode 的那些**；
+        //   真敲错了 mode 名的行为不变，仍旧进自检模式。）
+        if (IsSwitchNotMode(mode)) mode = "";
         SelfCheckMode = mode.Length > 0;
+        // **状态直说**：自检模式会换掉设置/存档/PPT 缓存路径 —— 肉眼完全看不出来。
+        // 打一行出来，免得"敲了个开关、结果进了半个自检状态"这种事再发生
+        // （2026-10-07 真踩过：`InkTeach.exe --nowintab` 被当成 mode）。
+        if (SelfCheckMode)
+            Console.WriteLine($"  [模式] 自检：{mode}（设置/存档/PPT 缓存都走临时路径）");
         // 产品模式：启动 1.2 秒后（窗口已经露面）做一次历史清理；自检一律不扫。
         if (mode.Length == 0)
         {
@@ -6943,17 +6970,15 @@ public partial class InkEngine
                     + $"，收到 按下{_cntDown} 移动{_cntMove} 抬起{_cntUp} 丢失捕获{_cntCaptureLost}"
                     + $"，设备={PointerTypeName(_activePointerType)}"
                     + $"，压感={(ActiveStrokeHasPressure ? "有" : "无")}"
-                    + (WintabEnabled
-                        ? (_wintab.IsOpen
-                            ? $"，[wintab 包{WtPolledPackets} 补压{WtPressurePoints}/{ActiveStroke.Points.Count}点"
-                              + (WtRawPMax >= 0 ? $" 压力{WtRawPMin}~{WtRawPMax}/{_wintab.MaxPressure}" : " **一笔都没拿到压力**")
-                              + $" {_wintab.LayoutText}"
-                              + (WtBadPackets > 0 ? $" **越界{WtBadPackets}**" : "")
-                              + "]"
-                            // **这一栏是特意加的**（2026-10-07 真机 bug 的教训）：
-                            // 当时上下文被关掉又不再打开，日志里只有"补压89点"这种累计值，
-                            // 看着像成功了，害我白查一轮。**状态要直说，别让人去推断。**
-                            : "，[wintab **未开**（这一笔没有压力）]")
+                    // 只在**真的开着**时才报这一栏。
+                    // 没装厂商驱动（没有 Wintab）的机器上，启动时已经打过一行
+                    // 「[wintab] 未启用：…」，再每一笔都报"未开"就是噪音了。
+                    + (_wintab.IsOpen
+                        ? $"，[wintab 包{WtPolledPackets} 补压{WtPressurePoints}/{ActiveStroke.Points.Count}点"
+                          + (WtRawPMax >= 0 ? $" 压力{WtRawPMin}~{WtRawPMax}/{_wintab.MaxPressure}" : " **一笔都没拿到压力**")
+                          + $" {_wintab.LayoutText}"
+                          + (WtBadPackets > 0 ? $" **越界{WtBadPackets}**" : "")
+                          + "]"
                         : "")
                     + $"，合并 {merge}（{LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 点）"
                     + (RawProbeEnabled
