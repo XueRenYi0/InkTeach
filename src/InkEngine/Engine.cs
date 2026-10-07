@@ -4186,12 +4186,16 @@ public partial class InkEngine
         _rawHasIntermediates = false;   // 判据要攒几条才有结论
         _rawAnchorValid = false;        // 锚点由这一笔的第一条指针消息建立
         SetRawCapture(true);            // 原始输入：**只在这一笔期间收**（空闲必须关）
-        // Wintab：这一笔要用压力的话，先把上次空闲期间排队的过期包倒掉，再开起来。
-        if (WintabEnabled)
-        {
-            EnsureWintab();
-            if (_wintab.IsOpen) _wintab.Flush();
-        }
+        // ⚠ Wintab **不在这里开**（2026-10-07 用户提问后改的）：
+        //
+        // 原来在起笔时无条件 `EnsureWintab()`，虽然说好了"只在非笔路径上用"，
+        // 但**上下文已经开着** —— 万一驱动因为"有 Wintab 客户端"而改变笔的上报方式
+        // （Wintab 是单一提供者，历史上就有"哪个 API 拿到数据"的取舍），
+        // 那就连累了**开 ink** 那条路 —— 而那条路本该跟 Wintab 一点关系都没有。
+        //
+        // 现在改成**真正需要时才开**（见 AppendStrokeSamples 的非笔分支）：
+        // 开 ink 的笔（PT_PEN）**一辈子都不会打开 Wintab 上下文**，
+        // 这条隔离就成了结构上的事实，而不是"我审过一遍"。
         AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
         // 半径**逐点算**（见 TrailRadius）：有压感的笔，湿墨的粗细必须和干墨一致。
         FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
@@ -8659,6 +8663,13 @@ public partial class InkEngine
             float wp = -1f;
             bool wpIsReal = false;
             float wpPrev = 0f;      // 本批的**插值起点**（上一批用的那个压力值）
+            // Wintab **只在真的走到这条非笔路径时**才开（见 BeginStroke 里那段注释）：
+            // 开 ink 的笔全程不会碰到它，隔离是结构性的。
+            if (WintabEnabled && !_wintab.IsOpen && !_wintabTried)
+            {
+                EnsureWintab();
+                if (_wintab.IsOpen) _wintab.Flush();   // 倒掉空闲期间排队的过期包
+            }
             if (_wintab.IsOpen && PressureWidth.Enabled)
             {
                 float before = _wtStrokePressure;     // 上一批用的压力
