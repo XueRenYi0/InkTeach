@@ -140,6 +140,17 @@ internal sealed partial class App : InkEngine.InkEngine
         if (mode == "--selftest")
         {
             double seconds = args.Length > 1 && double.TryParse(args[1], out var s) ? s : 12;
+            // 基准的两个开关（2026-10-07）：`--benchpressure` 让笔画带压感，
+            // `--benchpts N` 指定每笔点数——老基准每笔只 19.5 点，比真实写法轻近 9 倍，
+            // 不问这两个问题，"一万笔吃多少"答不准。
+            _benchPressure = args.Contains("--benchpressure");
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--benchpts" && int.TryParse(args[i + 1], out int bp))
+                    _benchPts = Math.Clamp(bp, 2, 4000);
+                if (args[i] == "--benchspread" && int.TryParse(args[i + 1], out int bs))
+                    _benchSpread = Math.Clamp(bs, 1, 60);
+            }
             _autoExitAt = NowMs + seconds * 1000;
             _nextLogAt = NowMs;
             SelfTest(seconds);
@@ -11082,10 +11093,14 @@ internal sealed partial class App : InkEngine.InkEngine
                 Tool = Tool.Pen,
                 Color = PenColor,
                 Width = 2.5f + (float)rnd.NextDouble() * 4f,
+                HasPressure = _benchPressure,   // 默认 false = 老行为；开了才走变宽那条渲染路
             };
             float x = _virtualX + (float)rnd.NextDouble() * _virtualW;
             float y = _virtualY + (float)rnd.NextDouble() * _virtualH;
-            int pts = 8 + rnd.Next(24);
+            // ⚠ `rnd.Next(24)` 无论开不开都要调 —— 不然随机数序列会错位，
+            // 默认那一路的基线就不一样了（老基准的数字就没法跟以前比）。
+            int ptsRand = 8 + rnd.Next(24);
+            int pts = _benchPts > 0 ? _benchPts : ptsRand;
             float ang = (float)(rnd.NextDouble() * Math.PI * 2);
             for (int j = 0; j < pts; j++)
             {
@@ -11095,7 +11110,17 @@ internal sealed partial class App : InkEngine.InkEngine
                 y += MathF.Sin(ang) * d;
                 x = Math.Clamp(x, _virtualX + 1, _virtualX + _virtualW - 1);
                 y = Math.Clamp(y, _virtualY + 1, _virtualY + _virtualH - 1);
-                s.AddPoint(x, y, (float)rnd.NextDouble(), NowMs);
+                // 压感模式下给一条**像真写字**的压力起伏（起笔轻、中段重、收笔轻），
+                // 而不是纯随机 —— 纯随机会让每一笔的宽度乱跳，和真实几何差得远。
+                float pv;
+                if (_benchPressure)
+                {
+                    float u = pts <= 1 ? 0.5f : j / (float)(pts - 1);
+                    pv = Math.Clamp(0.12f + 0.85f * MathF.Sin(u * MathF.PI)
+                                    + (float)rnd.NextDouble() * 0.06f, 0.02f, 1f);
+                }
+                else pv = (float)rnd.NextDouble();
+                s.AddPoint(x, y, pv, NowMs);
             }
             Doc.AppendStroke(s);
         }
@@ -11110,6 +11135,26 @@ internal sealed partial class App : InkEngine.InkEngine
     /// 往下写十几屏，每屏只有那么多字。两者的差别对分块缓存是决定性的：
     /// 前者的重建代价随总量涨，后者不该涨。
     /// </summary>
+    /// <summary>`--benchpressure`：基准里的笔画**带压感**（走 ID2D1Ink 那条变宽渲染路）。
+    ///
+    /// 为什么要有它（2026-10-07）：原来的基准笔画**没设 `HasPressure`**，
+    /// 于是"压感开/关"对它毫无影响 —— 拿它做压感的 A/B 是**假的**（我做过一次，
+    /// 两边数字一模一样、连点数都相同，才发现这点）。
+    /// 默认关 = 老行为逐字不变（连随机数消耗顺序都保持，见下面 pts 那段）。</summary>
+    private bool _benchPressure;
+
+    /// <summary>`--benchpts N`：基准里每笔几个点（0 = 老行为：随机 8~31）。
+    ///
+    /// 为什么要有它：老的"一万笔"每笔平均 19.5 个点，
+    /// 而**用户真机写字是 139~211 个点**（raw 补点之后）—— 老基准比真实用法轻了近 9 倍。
+    /// 要答"一万笔到底吃多少"，得按真实点密度量。</summary>
+    private int _benchPts;
+
+    /// <summary>`--benchspread N`：一万笔**分散到 N 屏**（0 = 老行为：全挤在一屏）。
+    /// 真实板书是一节课往下写十几屏，每屏只有那么多字；全挤一屏是最极端的形状，
+    /// 量出来的重铺代价会大得多，拿它当"一节课的消耗"会吓人。</summary>
+    private int _benchSpread;
+
     private void GenerateStrokesSpread(int strokeCount, int screens)
     {
         var rnd = new Random(20260913);
@@ -11123,10 +11168,14 @@ internal sealed partial class App : InkEngine.InkEngine
                 Color = PenColor,
                 Kind = StrokeKind.Freehand,
                 Width = 2.5f + (float)rnd.NextDouble() * 4f,
+                HasPressure = _benchPressure,   // 默认 false = 老行为；开了才走变宽那条渲染路
             };
             float x = _virtualX + (float)rnd.NextDouble() * _virtualW;
             float y = _virtualY + (float)rnd.NextDouble() * spanH;
-            int pts = 8 + rnd.Next(24);
+            // ⚠ `rnd.Next(24)` 无论开不开都要调 —— 不然随机数序列会错位，
+            // 默认那一路的基线就不一样了（老基准的数字就没法跟以前比）。
+            int ptsRand = 8 + rnd.Next(24);
+            int pts = _benchPts > 0 ? _benchPts : ptsRand;
             float ang = (float)(rnd.NextDouble() * Math.PI * 2);
             for (int j = 0; j < pts; j++)
             {
@@ -11134,7 +11183,17 @@ internal sealed partial class App : InkEngine.InkEngine
                 float d = 5f + (float)rnd.NextDouble() * 9f;
                 x = Math.Clamp(x + MathF.Cos(ang) * d, _virtualX + 1, _virtualX + _virtualW - 1);
                 y = Math.Clamp(y + MathF.Sin(ang) * d, _virtualY + 1, _virtualY + spanH - 1);
-                s.AddPoint(x, y, (float)rnd.NextDouble(), NowMs);
+                // 压感模式下给一条**像真写字**的压力起伏（起笔轻、中段重、收笔轻），
+                // 而不是纯随机 —— 纯随机会让每一笔的宽度乱跳，和真实几何差得远。
+                float pv;
+                if (_benchPressure)
+                {
+                    float u = pts <= 1 ? 0.5f : j / (float)(pts - 1);
+                    pv = Math.Clamp(0.12f + 0.85f * MathF.Sin(u * MathF.PI)
+                                    + (float)rnd.NextDouble() * 0.06f, 0.02f, 1f);
+                }
+                else pv = (float)rnd.NextDouble();
+                s.AddPoint(x, y, pv, NowMs);
             }
             Doc.AppendStroke(s);
         }
@@ -11144,10 +11203,16 @@ internal sealed partial class App : InkEngine.InkEngine
     private void Benchmark(int strokeCount)
     {
         Console.WriteLine();
-        Console.WriteLine($"=== benchmark: {strokeCount} strokes ===");
+        Console.WriteLine($"=== benchmark: {strokeCount} strokes"
+                          + (_benchSpread > 0 ? $" spread over {_benchSpread} screens" : " on one screen")
+                          + (_benchPressure ? " (with pressure)" : "")
+                          + (_benchPts > 0 ? $" ({_benchPts} pts/stroke)" : "") + " ===");
 
         var gen = Stopwatch.StartNew();
-        GenerateStrokes(strokeCount);
+        // 默认那一屏是**最极端的形状**（一万笔全挤在一屏）；真实板书是一节课分散十几屏。
+        // `--benchspread N` 走分散版，量的才是"低配机上一节课"那个形状。
+        if (_benchSpread > 0) GenerateStrokesSpread(strokeCount, _benchSpread);
+        else GenerateStrokes(strokeCount);
         gen.Stop();
 
         var buildSw = Stopwatch.StartNew();
