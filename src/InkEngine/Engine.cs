@@ -2900,10 +2900,12 @@ public partial class InkEngine
             // 表现就是空闲 46fps 空转、单核 26%（实测）。
             if (_rawRegistered && ActiveStroke == null) SetRawCapture(false);
 
-            // Wintab 同理：**只在写一笔期间开着**（空闲时关掉，别让驱动白排队）。
-            // 用的是轮询而不是包消息（见 WintabInput 类注释第 2 条），
-            // 所以它不会像 Raw Input 那样在空闲时把主循环顶起来；关掉只是省掉一次驱动往返。
-            if (_wintab.IsOpen && ActiveStroke == null) _wintab.Close();
+            // ⚠ Wintab **不在这里关**（2026-10-07 真机抓到的 bug）：
+            // 原来这里写了 `if (_wintab.IsOpen && ActiveStroke == null) _wintab.Close();`，
+            // 配上 EnsureWintab 里的 `_wintabTried` 一打过就不再打开 → **只有第一笔有压力**，
+            // 后面每一笔都是"上下文已关、又不重开"。用户真机日志的 `压感=无` 就是它。
+            // 现在改成**开一次就留着**：它用的是轮询（没有包消息），空闲时我们一次都不去取，
+            // 所以留着不产生唤醒；起笔时先 Flush 倒掉积压，也不会吃到过期样本。
 
             NowMs = _clock.Elapsed.TotalMilliseconds;
             PumpKeyGestures();            // 工具键的手势：长按判定 + 连按换色的延迟结算
@@ -4046,6 +4048,13 @@ public partial class InkEngine
         ActiveStrokeHasPressure = false;
         _wtStrokePressure = -1f;     // Wintab 的缺压回填基准**每笔归零**（新一笔不继承上一笔的力度）
         WtSeenPressure = false;
+        // ⚠ 三个计数**必须每笔归零**（2026-10-07 真机抓到的第二个 bug）：
+        // 原来它们一直累加，于是日志里会出现"压感=无 但 补压89点"这种**自相矛盾**的行——
+        // 那个 89 是前几笔攒下来的，害我一开始以为压力补上了、其实是后面每一笔都没开上下文。
+        // **日志数字必须是"这一笔"的**，不然它就不是证据。差值基线也一起归零。
+        WtPolledPackets = WtPressurePoints = WtBadPackets = 0;
+        _wintabPacketsSeen = _wintab.PacketsRead;
+        _wintabBadSeen = _wintab.BadPackets;
         LastCoalescedSamples = LastCoalescedMessages = 0;
         _rawReportsThisStroke = 0;      // `--rawprobe`：原始输入计数每笔归零
         _rawPointsAdded = 0;            // `--rawinput`：补进来的点数每笔归零
@@ -6906,9 +6915,14 @@ public partial class InkEngine
                     + $"，设备={PointerTypeName(_activePointerType)}"
                     + $"，压感={(ActiveStrokeHasPressure ? "有" : "无")}"
                     + (WintabEnabled
-                        ? $"，[wintab 包{WtPolledPackets} 补压{WtPressurePoints}点 {_wintab.LayoutText}"
-                          + (WtBadPackets > 0 ? $" **越界{WtBadPackets}**" : "")
-                          + "]"
+                        ? (_wintab.IsOpen
+                            ? $"，[wintab 包{WtPolledPackets} 补压{WtPressurePoints}点 {_wintab.LayoutText}"
+                              + (WtBadPackets > 0 ? $" **越界{WtBadPackets}**" : "")
+                              + "]"
+                            // **这一栏是特意加的**（2026-10-07 真机 bug 的教训）：
+                            // 当时上下文被关掉又不再打开，日志里只有"补压89点"这种累计值，
+                            // 看着像成功了，害我白查一轮。**状态要直说，别让人去推断。**
+                            : "，[wintab **未开**（这一笔没有压力）]")
                         : "")
                     + $"，合并 {merge}（{LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 点）"
                     + (RawProbeEnabled
@@ -8447,7 +8461,7 @@ public partial class InkEngine
                 bool gotWt = _wintab.Poll();
                 WtPolledPackets += _wintab.PacketsRead - _wintabPacketsSeen;
                 _wintabPacketsSeen = _wintab.PacketsRead;
-                if (_wintab.BadPackets > 0) WtBadPackets = _wintab.BadPackets;
+                WtBadPackets += _wintab.BadPackets - _wintabBadSeen; _wintabBadSeen = _wintab.BadPackets;
                 if (gotWt && _wintab.Pressure01 > 0f)
                 {
                     _wtStrokePressure = _wintab.Pressure01;
@@ -8489,7 +8503,7 @@ public partial class InkEngine
             }
             WtPolledPackets += _wintab.PacketsRead - _wintabPacketsSeen;
             _wintabPacketsSeen = _wintab.PacketsRead;
-            if (_wintab.BadPackets > 0) WtBadPackets = _wintab.BadPackets;
+            WtBadPackets += _wintab.BadPackets - _wintabBadSeen; _wintabBadSeen = _wintab.BadPackets;
             if (WtSeenPressure)
             {
                 fbWp = _wtStrokePressure;
@@ -8635,7 +8649,7 @@ public partial class InkEngine
     /// 注意**和探针那个 <see cref="WintabPackets"/> 不是一回事**：那个数的是"包消息"条数
     /// （`--wintabprobe` 用），这里数的是轮询取回来的包（产品路径用）。</summary>
     internal int WtPolledPackets, WtBadPackets, WtPressurePoints;
-    private int _wintabPacketsSeen;
+    private int _wintabPacketsSeen, _wintabBadSeen;
 
     /// <summary>这一笔的"缺压回填"基准（同 `Input/PenInput.cs` 的口径）：
     /// 见过一次真实压力之后，偶尔缺一下就沿用上一个值，而不是掉回中点让笔画中间凹一下。</summary>
