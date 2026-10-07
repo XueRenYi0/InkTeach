@@ -6964,12 +6964,36 @@ public partial class InkEngine
                     ? (LastCoalescedMessages == LastCoalescedSamples ? "1:1（系统没合并）"
                        : $"{(double)LastCoalescedSamples / LastCoalescedMessages:F1}:1（合并历史已恢复）")
                     : "无";
+                // **这一笔真正写进点里的压力区间**（2026-10-07 加）。
+                //
+                // 为什么必须有它：那天我连着犯两次同类的错 ——
+                //   ① 兜底值取 0.5 → 开头鼓粗点
+                //   ② raw 补点写成 0 → 开 ink 时整条线全是细口子（用户："笔记很脏"）
+                // 两次都**只有一个数字能看出来**：点的压力最小值/最大值。
+                // 光看 `[wintab …]` 那栏是不够的 —— 那是"采到的压力"，不是"写进点里的"。
+                // **采到了**和**用上了**是两件事，中间任何一段出错它都看不见。
+                float ptMinP = 0f, ptMaxP = 0f;
+                if (ActiveStroke.Points.Count > 0)
+                {
+                    ptMinP = float.MaxValue; ptMaxP = float.MinValue;
+                    foreach (var q in ActiveStroke.Points)
+                    {
+                        if (q.P < ptMinP) ptMinP = q.P;
+                        if (q.P > ptMaxP) ptMaxP = q.P;
+                    }
+                }
                 _lastStrokeReport =
                     $"采集到 {ActiveStroke.Points.Count} 个点"
                     + $"，历时 {strokeMs:F0} ms → 采样 {sampleHz:F0} Hz（消息 {msgHz:F0} Hz）"
                     + $"，收到 按下{_cntDown} 移动{_cntMove} 抬起{_cntUp} 丢失捕获{_cntCaptureLost}"
                     + $"，设备={PointerTypeName(_activePointerType)}"
                     + $"，压感={(ActiveStrokeHasPressure ? "有" : "无")}"
+                    // 真正落到点里的压力区间。**有压感但 min 是 0** 就说明有路把点写成了 0
+                    // （2026-10-07 那个"笔记很脏"的 bug 正是这样：raw 补的点全被写成 0）。
+                    + (ActiveStroke.Points.Count > 0
+                        ? $"，点压力 {ptMinP:F2}~{ptMaxP:F2}"
+                          + (ActiveStrokeHasPressure && ptMinP <= 0.001f ? " **有0！疑似有路把它写成0**" : "")
+                        : "")
                     // 只在**真的开着**时才报这一栏。
                     // 没装厂商驱动（没有 Wintab）的机器上，启动时已经打过一行
                     // 「[wintab] 未启用：…」，再每一笔都报"未开"就是噪音了。
@@ -8537,8 +8561,12 @@ public partial class InkEngine
             //   **兜底值要贴合物理事实**，不是取个"中间值"最保险 —— 中间值在这里恰恰是错的。
             float wp = -1f;
             bool wpIsReal = false;
+            float wpPrev = 0f;      // 本批的**插值起点**（上一批用的那个压力值）
             if (_wintab.IsOpen && PressureWidth.Enabled)
             {
+                float before = _wtStrokePressure;     // 上一批用的压力
+                bool wasReal = WtSeenPressure;
+
                 bool gotWt = _wintab.Poll();
                 WtPolledPackets += _wintab.PacketsRead - _wintabPacketsSeen;
                 _wintabPacketsSeen = _wintab.PacketsRead;
@@ -8550,6 +8578,10 @@ public partial class InkEngine
                 // 真鼠标（不产生 Wintab 包）仍然不会被当成有压感，老行为不受影响。
                 wp = WtSeenPressure ? _wtStrokePressure : 0f;
                 wpIsReal = WtSeenPressure;
+                // 插值起点 = 本批**之前**那个压力值。
+                // 第一批真实压力**不插值**（起点就用本批的值）—— 和"回填"保持一致，
+                // 否则会把刚回填好的开头又拉回兜底的 0，白填。
+                wpPrev = wasReal ? before : wp;
             }
             if (wpIsReal)
             {
@@ -8559,13 +8591,23 @@ public partial class InkEngine
                 if (ActiveStrokeHasPressure && ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
             }
 
+            // ⚠ **压力必须在这批点之间插值**（2026-10-07 用户真机反馈"笔记很脏"）：
+            // `Poll()` 一次把队里的包全取完、**只留最后一个压力值**，
+            // 而 192Hz 的包对上 60~80Hz 的指针消息 → 每 2~3 个点共用同一个值 →
+            // **宽度成了台阶**，写出来毛糙。
+            // 插值是有依据的、不是凑的：这一批点的**时间**正好从"上一条消息"跨到"这一条消息"，
+            // 而 `wpPrev`/`wp` 就是这两个时刻的压力 —— 起点终点都对得上。
             if (!wpIsReal) _wtPendingPoints += _ptr.Count;   // 这些点等真实压力来了要回填
-            for (int i = 0; i < _ptr.Count; i++)
+            int nPtr = _ptr.Count;
+            for (int i = 0; i < nPtr; i++)
             {
                 var s = _ptr[i];
                 float cx = s.X, cy = s.Y;
                 ScreenToCanvas(ref cx, ref cy);
-                ActiveStroke.AddPoint(cx, cy, wp >= 0f ? wp : s.Pressure, s.TimeMs);
+                float pp = wp < 0f ? s.Pressure
+                         : (nPtr <= 1 ? wp
+                                      : wpPrev + (wp - wpPrev) * (i / (float)(nPtr - 1)));
+                ActiveStroke.AddPoint(cx, cy, pp, s.TimeMs);
                 PtrTotalPoints++;
             }
             // 非笔设备没有 penMask，也就永远不会给这一笔打上 HasPressure——
@@ -8699,9 +8741,25 @@ public partial class InkEngine
         //
         // **只在 Wintab 真的在补压时才改**（`WtSeenPressure`）：没开 Wintab、
         // 或者开 ink 走真笔那条路时，这里依旧是 0.5，老行为逐字不变。
-        // 同样：Wintab 开着但还没拿到压力 → 用 0 兜底（起笔物理上就是轻的）。
-        // 真鼠标时 HasPressure 始终为假，这个值根本不参与渲染，所以老行为不受影响。
-        float rawP = WtSeenPressure ? _wtStrokePressure : (_wintab.IsOpen ? 0f : 0.5f);
+        // 压力沿用"这一笔到目前为止的值"——**这就是注释一直说的事**，
+        // 代码原来写死 0.5、我上一版又写死 0，两次都是"拿一个常数去代表一件有状态的事"。
+        //
+        // ⚠ **2026-10-07 修（用户报"开不开 ink 笔记都很脏"）**：
+        // 上一版写成 `_wintab.IsOpen ? 0f : 0.5f`，后果是——
+        // **开 ink 时走真笔那条路，`WtSeenPressure` 永远是 false（只在非笔路径上置位），
+        // 而 `_wintab.IsOpen` 是 true → 每一个 raw 补进来的点压力都被写成 0**
+        // → 有压感的笔画里 0 映射成 **0.10 倍宽** → 整条线上全是细口子 = 看起来"脏"。
+        // 而且它跟"压力从哪儿来"无关，所以**开 ink / 关 ink 都脏** —— 正是用户看到的。
+        //
+        // 正确做法：**沿用这一笔最后一个点的压力**。三种情况同时成立：
+        //   · 开 ink：最后一个点的压力就是真笔的真实压力 → raw 点无缝接上 ✓
+        //   · 关 ink：Wintab 压力到了就用 Wintab，没到就跟着邻居（起笔那几个点是 0，回头被回填）✓
+        //   · 真鼠标：`HasPressure` 始终为假，这个值根本不参与渲染 → 老行为不受影响 ✓
+        float rawP;
+        if (WtSeenPressure) rawP = _wtStrokePressure;
+        else if (ActiveStroke.Points.Count > 0) rawP = ActiveStroke.Points[^1].P;
+        else rawP = 0.5f;
+        // 起笔那几个（还没拿到真实压力时的）点记下来，等第一包压力到了回填。
         if (!WtSeenPressure && _wintab.IsOpen) _wtPendingPoints++;
         ActiveStroke.AddPoint(cx, cy, rawP, NowMs);
         _rawPointsAdded++;
