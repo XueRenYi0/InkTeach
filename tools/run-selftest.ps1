@@ -30,8 +30,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$Repo = Join-Path $PSScriptRoot 'InkTeach'
-if (-not (Test-Path $Repo)) { $Repo = $PSScriptRoot }          # 也支持放在仓库内的副本
+# 仓库探测：按可能性依次找（脚本可能被放在不同位置）
+$Repo = Join-Path $PSScriptRoot 'InkTeach'                     # 桌面\软件\run-selftest.ps1
+if (-not (Test-Path (Join-Path $Repo 'src\InkTeach\InkTeach.csproj'))) {
+    $Repo = Split-Path $PSScriptRoot -Parent                    # <仓库>\tools\run-selftest.ps1  ← 2026-10-07 搬进 tools\ 后要这一条
+}
+if (-not (Test-Path (Join-Path $Repo 'src\InkTeach\InkTeach.csproj'))) {
+    $Repo = $PSScriptRoot                                       # 直接放在仓库根
+}
 if (-not (Test-Path (Join-Path $Repo 'src\InkTeach\InkTeach.csproj'))) {
     throw "找不到仓库：$Repo"
 }
