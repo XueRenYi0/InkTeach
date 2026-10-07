@@ -666,6 +666,12 @@ internal static class Native
     [DllImport("wintab32.dll", EntryPoint = "WTOpenA", CharSet = CharSet.Ansi, SetLastError = true)]
     public static extern IntPtr WTOpen(IntPtr hWnd, IntPtr lpLogCtx, bool fEnable);
 
+    /// <summary>启用/停用上下文。**`WTOpen(..., fEnable:true)` 在某些驱动上会破坏进程堆**
+    /// （见 <see cref="WintabInput"/> 里那段注释）——所以标准做法是：
+    /// 先用 `fEnable:false` 打开、再单独 `WTEnable(true)`。</summary>
+    [DllImport("wintab32.dll", EntryPoint = "WTEnable", SetLastError = true)]
+    public static extern bool WTEnable(IntPtr hCtx, bool fEnable);
+
     [DllImport("wintab32.dll", SetLastError = true)]
     public static extern bool WTClose(IntPtr hCtx);
 

@@ -1886,6 +1886,10 @@ public partial class InkEngine
             // `--norawinput` 关掉做对照；`--rawprobe` 单独打开"只数条数"的诊断。
             RawInputCapture = !args.Contains("--norawinput");
             RawProbeEnabled = RawInputCapture || args.Contains("--rawprobe");
+            // Wintab 默认**开**（2026-10-07）：关 ink 时笔被当鼠标报、那条路上没有压力，
+            // Wintab 是驱动自己的通道，能补回压力（实测 0~16383，比 Windows Ink 的 1024 细 16 倍）。
+            // `--nowintab` 关掉做对照。**只在有厂商驱动的板子上有效**，没有就自动不启用。
+            WintabEnabled = !args.Contains("--nowintab");
             for (int i = 0; i < args.Length - 1; i++)
             {
                 if (args[i] == "--rawmindist" && float.TryParse(args[i + 1], out float rmd))
@@ -2895,6 +2899,11 @@ public partial class InkEngine
             // 截图、图形工具、多笔式…），漏一条就会退回"空闲也收鼠标空报"，
             // 表现就是空闲 46fps 空转、单核 26%（实测）。
             if (_rawRegistered && ActiveStroke == null) SetRawCapture(false);
+
+            // Wintab 同理：**只在写一笔期间开着**（空闲时关掉，别让驱动白排队）。
+            // 用的是轮询而不是包消息（见 WintabInput 类注释第 2 条），
+            // 所以它不会像 Raw Input 那样在空闲时把主循环顶起来；关掉只是省掉一次驱动往返。
+            if (_wintab.IsOpen && ActiveStroke == null) _wintab.Close();
 
             NowMs = _clock.Elapsed.TotalMilliseconds;
             PumpKeyGestures();            // 工具键的手势：长按判定 + 连按换色的延迟结算
@@ -4035,6 +4044,8 @@ public partial class InkEngine
             ? ActiveStroke : null;
         // 起笔：落笔这条消息里可能已经合并了几个采样点，一起收进来（以前只取最新那一个）。
         ActiveStrokeHasPressure = false;
+        _wtStrokePressure = -1f;     // Wintab 的缺压回填基准**每笔归零**（新一笔不继承上一笔的力度）
+        WtSeenPressure = false;
         LastCoalescedSamples = LastCoalescedMessages = 0;
         _rawReportsThisStroke = 0;      // `--rawprobe`：原始输入计数每笔归零
         _rawPointsAdded = 0;            // `--rawinput`：补进来的点数每笔归零
@@ -4046,6 +4057,12 @@ public partial class InkEngine
         _rawHasIntermediates = false;   // 判据要攒几条才有结论
         _rawAnchorValid = false;        // 锚点由这一笔的第一条指针消息建立
         SetRawCapture(true);            // 原始输入：**只在这一笔期间收**（空闲必须关）
+        // Wintab：这一笔要用压力的话，先把上次空闲期间排队的过期包倒掉，再开起来。
+        if (WintabEnabled)
+        {
+            EnsureWintab();
+            if (_wintab.IsOpen) _wintab.Flush();
+        }
         AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
         // 半径**逐点算**（见 TrailRadius）：有压感的笔，湿墨的粗细必须和干墨一致。
         FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
@@ -6888,6 +6905,11 @@ public partial class InkEngine
                     + $"，收到 按下{_cntDown} 移动{_cntMove} 抬起{_cntUp} 丢失捕获{_cntCaptureLost}"
                     + $"，设备={PointerTypeName(_activePointerType)}"
                     + $"，压感={(ActiveStrokeHasPressure ? "有" : "无")}"
+                    + (WintabEnabled
+                        ? $"，[wintab 包{WtPolledPackets} 补压{WtPressurePoints}点 {_wintab.LayoutText}"
+                          + (WtBadPackets > 0 ? $" **越界{WtBadPackets}**" : "")
+                          + "]"
+                        : "")
                     + $"，合并 {merge}（{LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 点）"
                     + (RawProbeEnabled
                         ? $"，[原始输入 {_rawReportsThisStroke} 条 → {(_rawReportsThisStroke * 1000.0 / Math.Max(1, strokeMs)):F0} Hz]"
@@ -8405,12 +8427,48 @@ public partial class InkEngine
             // HistoryCount 是"系统本来说有几条消息"，减掉我们真的收下的那几条，
             // 就是被合并掉的中间点（合并率就是它除以 HistoryCount）。
             PtrCoalescedExtra += Math.Max(0, _ptr.HistoryCount - 1);
+
+            // ---- Wintab：给这条"被当成鼠标的笔"补上真实压力 ----------------------
+            //
+            // 为什么只在这条路上补：真笔（PT_PEN，即开着 ink）本来就有压力，
+            // 而且那条路更细的只有 Windows Ink 的 1024 级——不用换。**缺压力的恰恰是这一条**。
+            //
+            // ⚠ **两个"不能补"的情况**（都是想清楚才写的，不是试出来的）：
+            //   ① **真鼠标**：不产生 Wintab 包 → 取不到值 → 老行为逐字不变（鼠标画的仍旧等宽）。
+            //   ② **笔只是悬停在板上**：悬停压力**本来就该是 0**（Wacom 官方口径：
+            //      "区间最小值表示静止/未按下"）。要是把 0 当有效压力补进去，
+            //      用户"笔搁在板上、手上用鼠标画"时，鼠标线条会莫名其妙变细。
+            //      → 所以**只认 > 0**，并且沿用现成的「缺压回填」口径
+            //      （见 `Input/PenInput.cs` 的 `_lastValidPressure`）：
+            //      这一笔只要见过一次真实压力，后面偶尔缺一下就沿用上一个值，而不是掉回中点。
+            float wp = -1f;
+            if (_wintab.IsOpen)
+            {
+                bool gotWt = _wintab.Poll();
+                WtPolledPackets += _wintab.PacketsRead - _wintabPacketsSeen;
+                _wintabPacketsSeen = _wintab.PacketsRead;
+                if (_wintab.BadPackets > 0) WtBadPackets = _wintab.BadPackets;
+                if (gotWt && _wintab.Pressure01 > 0f)
+                {
+                    _wtStrokePressure = _wintab.Pressure01;
+                    WtSeenPressure = true;
+                }
+            }
+            if (WtSeenPressure) wp = _wtStrokePressure;
+            if (wp >= 0f)
+            {
+                WtPressurePoints++;
+                ActiveStrokeHasPressure = true;
+                // 和真笔那条路同一条规矩（见上面 PT_PEN 分支）：**压感只作用于「笔」这一支**。
+                if (ActiveStrokeHasPressure && ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
+            }
+
             for (int i = 0; i < _ptr.Count; i++)
             {
                 var s = _ptr[i];
                 float cx = s.X, cy = s.Y;
                 ScreenToCanvas(ref cx, ref cy);
-                ActiveStroke.AddPoint(cx, cy, s.Pressure, s.TimeMs);
+                ActiveStroke.AddPoint(cx, cy, wp >= 0f ? wp : s.Pressure, s.TimeMs);
                 PtrTotalPoints++;
             }
             // 非笔设备没有 penMask，也就永远不会给这一笔打上 HasPressure——
@@ -8419,7 +8477,28 @@ public partial class InkEngine
         }
 
         // ---- 读不到合并点：退回"一个消息一个点"的老路（行为与以前完全一致）------
-        ActiveStroke.AddPoint(curCanvasX, curCanvasY, curPressure, NowMs);
+        // 但**同样补 Wintab 压力**——不然这一笔会"前半段有压力、后半段突然掉回 0.5"，
+        // 在笔画中间留下一个粗细跳变。只在非笔（关 ink）那条路上补，开 ink 的路一个字不动。
+        float fbWp = -1f;
+        if (ptype != Native.PT_PEN && _wintab.IsOpen)
+        {
+            if (_wintab.Poll() && _wintab.Pressure01 > 0f)
+            {
+                _wtStrokePressure = _wintab.Pressure01;
+                WtSeenPressure = true;
+            }
+            WtPolledPackets += _wintab.PacketsRead - _wintabPacketsSeen;
+            _wintabPacketsSeen = _wintab.PacketsRead;
+            if (_wintab.BadPackets > 0) WtBadPackets = _wintab.BadPackets;
+            if (WtSeenPressure)
+            {
+                fbWp = _wtStrokePressure;
+                WtPressurePoints++;
+                ActiveStrokeHasPressure = true;
+                if (ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
+            }
+        }
+        ActiveStroke.AddPoint(curCanvasX, curCanvasY, fbWp >= 0f ? fbWp : curPressure, NowMs);
     }
 
     /// <summary>
@@ -8540,6 +8619,52 @@ public partial class InkEngine
     }
 
     private bool _rawRegistered;
+
+    // ===================== Wintab（`--nowintab` 关掉） =====================
+    //
+    // 第一阶段：**只借"压力"，不借坐标**。坐标仍旧走既有的指针/鼠标路（含 Raw Input 补点），
+    // 所以几何一个字都没动 —— 万一 Wintab 有问题，症状只会是"压力不对"，不会把笔画画歪。
+    // 详见 `Input/WintabInput.cs`（那里也记着三个从同行资料里查来的坑）。
+
+    /// <summary>Wintab 是否启用（默认开，`--nowintab` 关）。</summary>
+    internal bool WintabEnabled = true;
+
+    private readonly WintabInput _wintab = new();
+
+    /// <summary>Wintab 累计取到的包数 / 越界包数 / 真的补上压力的点数（`[笔画]` 里报出来）。
+    /// 注意**和探针那个 <see cref="WintabPackets"/> 不是一回事**：那个数的是"包消息"条数
+    /// （`--wintabprobe` 用），这里数的是轮询取回来的包（产品路径用）。</summary>
+    internal int WtPolledPackets, WtBadPackets, WtPressurePoints;
+    private int _wintabPacketsSeen;
+
+    /// <summary>这一笔的"缺压回填"基准（同 `Input/PenInput.cs` 的口径）：
+    /// 见过一次真实压力之后，偶尔缺一下就沿用上一个值，而不是掉回中点让笔画中间凹一下。</summary>
+    private float _wtStrokePressure = -1f;
+
+    /// <summary>这一笔有没有见过**真实**压力（> 0；悬停那个 0 不算）。</summary>
+    internal bool WtSeenPressure;
+
+    /// <summary>打过一次就记住"这台机器没有 Wintab"，不再反复试（免得每笔都白跑一次）。</summary>
+    private bool _wintabTried;
+
+    /// <summary>起笔时开 Wintab（**只开一次**；打不开就当这台机器没有，安静退回）。</summary>
+    private void EnsureWintab()
+    {
+        if (!WintabEnabled || _wintabTried || _windows.Count == 0) return;
+        _wintabTried = true;
+        try
+        {
+            if (_wintab.Open(_windows[0].Hwnd))
+                Console.WriteLine($"  [wintab] {_wintab.Note}");
+            else
+                Console.WriteLine($"  [wintab] 未启用：{_wintab.Note}（关 ink 时就没有压力，行为与以前一致）");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  [wintab] 异常，已忽略：{ex.Message}");
+            _wintab.Close();
+        }
+    }
 
     // 随老预测系统整条链移除。算法与接线原文见 `.revert/2026-10-05-渲染减法/`。
 
