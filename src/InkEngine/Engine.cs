@@ -60,6 +60,7 @@ public partial class InkEngine
     {
         "--norawinput" or "--nowintab" or "--nopressure" or "--rawprobe" or "--notrend"
             or "--himetric" or "--notouch" or "--syswet" or "--ownwet" or "--strokefile"
+            or "--recink" or "--recinkp"
             or "--nosmooth" or "--printersafe" => true,
         _ => false,
     };
@@ -829,6 +830,25 @@ public partial class InkEngine
     /// ⚠ 一笔里**没停顿**（没触发识别）时，用收笔那一刻的 `ActiveStroke` 兜底（点数够才算）。
     /// </summary>
     internal static string InkRecordPath;
+
+    /// <summary>`--recinkp`：录墨迹时**多录压力和来源**（见 `FlushInkRecord` 那段注释）。
+    /// 不加这个开关时，录制格式与以前逐字一致（`--inkfile` 那个读取器不受影响）。</summary>
+    internal static bool InkRecordWithPressure;
+
+    /// <summary>这一笔里哪些点是 **raw 补点**加的（下标）。只录来源时才记。</summary>
+    private readonly System.Collections.Generic.List<int> _rawAddedIdx = new();
+
+    /// <summary>最近一次 Wintab 读到的平板坐标与原始压力（`--recinkp` 录进文件，**不参与绘制**）。
+    /// 用来事后算"平板 ↔ 屏幕"的映射 —— 要做"整笔走 Wintab"就不能猜这个关系。</summary>
+    internal int WtLastTabletX, WtLastTabletY, WtLastRawPressure;
+
+    /// <summary>记下"当时的 Wintab 读数"，供 `--recinkp` 录进文件（不参与绘制）。</summary>
+    private void NoteWintabSample()
+    {
+        WtLastTabletX = _wintab.LatestX;
+        WtLastTabletY = _wintab.LatestY;
+        WtLastRawPressure = _wintab.RawPressure;
+    }
 
     /// <summary>录制缓冲：**识别器这一笔看到的那串点**（`TickDwellShape` 每次攒一份）。
     /// 只存引用、不复制 —— 没开录制时一个字节都不花。</summary>
@@ -4296,6 +4316,36 @@ public partial class InkEngine
     private void FlushInkRecord()
     {
         if (InkRecordPath == null) return;
+
+        // `--recinkp`：除了坐标，**再录压力和"这个点是从哪条路来的"**。
+        //
+        // 为什么需要（2026-10-07）：用户报"笔记很脏"，而日志里的数字全都对得上 ——
+        // 光看数字已经查不下去了，必须看到**真实的点**：
+        // 到底是压力写错了、还是补点把位置补歪了、还是别的。
+        // 来源那一列是关键：`1` = raw 补点，`0` = 指针消息，一眼就能分辨。
+        if (InkRecordWithPressure && ActiveStroke != null && ActiveStroke.Points.Count >= 2)
+        {
+            try
+            {
+                using var wp = new StreamWriter(InkRecordPath, append: true);
+                _recordSeq++;
+                wp.WriteLine($"--- stroke {_recordSeq}  t={NowMs:F0}  hp={(ActiveStroke.HasPressure ? 1 : 0)}"
+                             + $"  pts={ActiveStroke.Points.Count}");
+                var rawSet = new System.Collections.Generic.HashSet<int>(_rawAddedIdx);
+                for (int i = 0; i < ActiveStroke.Points.Count; i++)
+                {
+                    var q = ActiveStroke.Points[i];
+                    // 最后三列是**当时的 Wintab 读数**（平板坐标 + 压力）。
+                    // 它们不参与绘制，只用来事后算出"平板坐标 ↔ 屏幕坐标"的映射 ——
+                    // 要做"整笔都走 Wintab"就必须有它，而且**不能猜**。
+                    wp.WriteLine($"{q.X:F2},{q.Y:F2},{q.P:F4},{q.T:F1},{(rawSet.Contains(i) ? 1 : 0)}"
+                                 + $",{WtLastTabletX},{WtLastTabletY},{WtLastRawPressure}");
+                }
+            }
+            catch (Exception ex) { Console.WriteLine($"[录墨迹] 写失败：{ex.Message}"); }
+            return;
+        }
+
         // 优先用"识别器看到的那串点"；这一笔没停顿（没触发识别）就用收笔时的手绘点兜底。
         // ⚠ 兜底要**点数够**才算：停顿成型后 `ActiveStroke` 已经被换成图形对象（只剩两三个
         //   定义点），那种不能当墨迹录进去（否则我会拿一堆"两根点"当样本 ✗）。
@@ -8573,6 +8623,7 @@ public partial class InkEngine
                 WtBadPackets += _wintab.BadPackets - _wintabBadSeen; _wintabBadSeen = _wintab.BadPackets;
                 if (gotWt && _wintab.Pressure01 > 0f)
                     AcceptWintabPressure(_wintab.RawPressure, _wintab.Pressure01);
+                if (gotWt) NoteWintabSample();
 
                 // 注意：这里的 0 只是"给点用的值"，**不改变 HasPressure** ——
                 // 真鼠标（不产生 Wintab 包）仍然不会被当成有压感，老行为不受影响。
@@ -8621,8 +8672,11 @@ public partial class InkEngine
         float fbWp = -1f;
         if (ptype != Native.PT_PEN && _wintab.IsOpen && PressureWidth.Enabled)
         {
-            if (_wintab.Poll() && _wintab.Pressure01 > 0f)
-                AcceptWintabPressure(_wintab.RawPressure, _wintab.Pressure01);
+            if (_wintab.Poll())
+            {
+                NoteWintabSample();
+                if (_wintab.Pressure01 > 0f) AcceptWintabPressure(_wintab.RawPressure, _wintab.Pressure01);
+            }
 
             WtPolledPackets += _wintab.PacketsRead - _wintabPacketsSeen;
             _wintabPacketsSeen = _wintab.PacketsRead;

@@ -63,6 +63,8 @@ internal sealed class WintabInput
     private const int SpecSerialOffset = 12;
 
     // 字段偏移：先用规范值，开起来之后马上用"包序号每包 +1"这条铁律钉正。
+    private int _offX = 24;
+    private int _offY = 28;
     private int _offBtn = 20;
     private int _offP = 32;
     private int _layoutShift;
@@ -77,6 +79,13 @@ internal sealed class WintabInput
     /// <summary>本次轮询取到的**原始**压力值（0..<see cref="MaxPressure"/>）。
     /// 报日志用——只报 0..1 看不出"力度用到了量程的哪一段"。</summary>
     public int RawPressure { get; private set; }
+
+    /// <summary>本次轮询取到的**平板坐标**（还没映射到屏幕）。
+    /// 2026-10-07 加：要做"整笔都走 Wintab"就得知道平板坐标↔屏幕坐标的映射关系，
+    /// 而这个关系**不能猜**（今天已经因为猜布局栽过好几次）——
+    /// 所以先把两个坐标同时录下来，用实测数据把映射算出来。</summary>
+    public int LatestX { get; private set; }
+    public int LatestY { get; private set; }
 
     /// <summary>笔尖是否按下（`pkButtons` 的最低位）。</summary>
     public bool PenDown { get; private set; }
@@ -226,6 +235,8 @@ internal sealed class WintabInput
 
             Pressure01 = p / (float)MaxPressure;
             RawPressure = p;
+            LatestX = Marshal.ReadInt32(_buf, _offX);
+            LatestY = Marshal.ReadInt32(_buf, _offY);
             int btn = Marshal.ReadInt32(_buf, _offBtn);
             PenDown = (btn & 0x01) != 0;
             any = true;
@@ -273,6 +284,8 @@ internal sealed class WintabInput
             if (shift < -8 || shift > 16) continue;
             _layoutShift = shift;
             _offBtn = 20 + shift;
+            _offX = 24 + shift;
+            _offY = 28 + shift;
             _offP = 32 + shift;
             if (_offP < 0 || _offP + 4 > BufBytes) continue;
             _layoutPinned = true;

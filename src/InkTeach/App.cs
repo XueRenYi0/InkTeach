@@ -55,6 +55,11 @@ internal sealed partial class App : InkEngine.InkEngine
             {
                 InkRecordPath = System.IO.Path.GetFullPath(args[i + 1]);
                 Console.WriteLine($"[录墨迹] 每一笔都会追加写进：{InkRecordPath}");
+                if (args.Contains("--recinkp"))
+                {
+                    InkRecordWithPressure = true;
+                    Console.WriteLine("           （--recinkp：多录 压力/来源/当时平板坐标）");
+                }
             }
 
         // A separate process that just sits there waiting to be clicked. The
