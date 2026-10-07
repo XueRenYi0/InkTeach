@@ -862,6 +862,9 @@ public partial class InkEngine
 
     private readonly System.Collections.Generic.List<(float X, float Y, float P)> _cleanBuf = new();
 
+    /// <summary>把这一批的压力样本摊到点上用的暂存（免分配）。</summary>
+    private readonly float[] _sampleScratch = new float[64];
+
     /// <summary>
     /// 加一个点，必要时先净化。
     /// ⚠ 滞后 = 窗口内的点数（最多 N 个点）。N 别开太大：写到 5 就有点"笔尖拖着一截"了。
@@ -7071,6 +7074,7 @@ public partial class InkEngine
                 // 光看 `[wintab …]` 那栏是不够的 —— 那是"采到的压力"，不是"写进点里的"。
                 // **采到了**和**用上了**是两件事，中间任何一段出错它都看不见。
                 float ptMinP = 0f, ptMaxP = 0f;
+                int ptSteps = 0;                       // 压力"跳变"次数（相邻点压力不同的次数）
                 if (ActiveStroke.Points.Count > 0)
                 {
                     ptMinP = float.MaxValue; ptMaxP = float.MinValue;
@@ -7079,6 +7083,8 @@ public partial class InkEngine
                         if (q.P < ptMinP) ptMinP = q.P;
                         if (q.P > ptMaxP) ptMaxP = q.P;
                     }
+                    for (int i = 1; i < ActiveStroke.Points.Count; i++)
+                        if (MathF.Abs(ActiveStroke.Points[i].P - ActiveStroke.Points[i - 1].P) > 0.0005f) ptSteps++;
                 }
                 _lastStrokeReport =
                     $"采集到 {ActiveStroke.Points.Count} 个点"
@@ -7089,7 +7095,7 @@ public partial class InkEngine
                     // 真正落到点里的压力区间。**有压感但 min 是 0** 就说明有路把点写成了 0
                     // （2026-10-07 那个"笔记很脏"的 bug 正是这样：raw 补的点全被写成 0）。
                     + (ActiveStroke.Points.Count > 0
-                        ? $"，点压力 {ptMinP:F2}~{ptMaxP:F2}"
+                        ? $"，点压力 {ptMinP:F2}~{ptMaxP:F2}（跳变 {ptSteps}/{ActiveStroke.Points.Count} 点）"
                           + (ActiveStrokeHasPressure && ptMinP <= 0.001f ? " **有0！疑似有路把它写成0**" : "")
                         : "")
                     // 只在**真的开着**时才报这一栏。
@@ -8700,12 +8706,26 @@ public partial class InkEngine
                 if (ActiveStrokeHasPressure && ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
             }
 
-            // ⚠ **压力必须在这批点之间插值**（2026-10-07 用户真机反馈"笔记很脏"）：
-            // `Poll()` 一次把队里的包全取完、**只留最后一个压力值**，
-            // 而 192Hz 的包对上 60~80Hz 的指针消息 → 每 2~3 个点共用同一个值 →
-            // **宽度成了台阶**，写出来毛糙。
-            // 插值是有依据的、不是凑的：这一批点的**时间**正好从"上一条消息"跨到"这一条消息"，
-            // 而 `wpPrev`/`wp` 就是这两个时刻的压力 —— 起点终点都对得上。
+            // ⚠ **压力要按"点在这批里的位置"摊开**（2026-10-07，用户一句话钉死了病因）：
+            // "关了 wintab 开 ink 就正常、开了 wintab 关 ink 就很脏"
+            //  → 位置两条路是**同一份**（我们只借压力），差别**只在压力分辨率**：
+            //     开 ink 那条路是**逐点自带压力**（驱动给的合并点里每点都有），
+            //     我这条原来只取"这一批最后一个包"的压力、套给这批所有点 → **宽度是台阶**。
+            // 而设备的包率（192Hz）比消息率（60~80Hz）高得多 —— **一批点本来对应着好几个包**，
+            // 那些包的压力以前被我扔了。现在 `Samples` 把它们都带出来，按位置摊到点上。
+            int nSample = _wintab.IsOpen ? _wintab.Samples.Count : 0;
+            if (nSample > 0)
+            {
+                // 前向填充：样本里的 0（悬停/未按下）沿用上一个有效值
+                // —— 同 `Input/PenInput.cs` 的「缺压回填」口径。
+                float carry = _wtStrokePressure > 0f ? _wtStrokePressure : 0f;
+                for (int j = 0; j < nSample && j < _sampleScratch.Length; j++)
+                {
+                    float v = _wintab.Samples[j];
+                    if (v > 0f) carry = v;
+                    _sampleScratch[j] = carry;
+                }
+            }
             if (!wpIsReal) _wtPendingPoints += _ptr.Count;   // 这些点等真实压力来了要回填
             int nPtr = _ptr.Count;
             for (int i = 0; i < nPtr; i++)
@@ -8713,9 +8733,11 @@ public partial class InkEngine
                 var s = _ptr[i];
                 float cx = s.X, cy = s.Y;
                 ScreenToCanvas(ref cx, ref cy);
-                float pp = wp < 0f ? s.Pressure
-                         : (nPtr <= 1 ? wp
-                                      : wpPrev + (wp - wpPrev) * (i / (float)(nPtr - 1)));
+                float pp;
+                if (wp < 0f) pp = s.Pressure;                     // Wintab 没开 → 老行为逐字不变
+                else if (nSample <= 0) pp = wp;                   // 这次没取到包 → 沿用上一个
+                else pp = _sampleScratch[nPtr <= 1 ? nSample - 1
+                                                   : (int)MathF.Round(i * (nSample - 1) / (float)(nPtr - 1))];
                 AddPointCleaned(cx, cy, pp, s.TimeMs);
                 PtrTotalPoints++;
             }

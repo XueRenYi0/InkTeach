@@ -216,6 +216,7 @@ internal sealed class WintabInput
         if (_ctx == IntPtr.Zero) return false;
 
         bool any = false;
+        _samples.Clear();
         int n;
         while ((n = Native.WTPacketsGet(_ctx, 1, _buf)) > 0)
         {
@@ -239,10 +240,31 @@ internal sealed class WintabInput
             LatestY = Marshal.ReadInt32(_buf, _offY);
             int btn = Marshal.ReadInt32(_buf, _offBtn);
             PenDown = (btn & 0x01) != 0;
+            // **每个包的压力都留下**（见 Samples 那段注释）——
+            // 以前只留最后一个，等于把这一批里其余的压力全扔了。
+            if (_samples.Count < MaxSamples) _samples.Add(p / (float)MaxPressure);
             any = true;
         }
         return any;
     }
+
+    /// <summary>一次轮询最多留几个压力样本（够这一批点用就行）。</summary>
+    private const int MaxSamples = 64;
+    private readonly System.Collections.Generic.List<float> _samples = new();
+
+    /// <summary>
+    /// **这次轮询取到的全部压力值**（按时间序，0..1）。空表示这次没取到。
+    ///
+    /// 为什么要有它（2026-10-07，用户一句"关了 wintab 开 ink 就正常、开了 wintab 关 ink 就很脏"
+    /// 把病因钉死了）：一条输入消息里常常合并了 1~5 个点，而设备的包率（192Hz）
+    /// 比消息率（60~80Hz）高得多 —— 一批点对应着**好几个包**。
+    /// 以前只取最后一个包的压力、套给这一批所有点 → **宽度是台阶**（真机录音实测：
+    /// 28 个点里压力只变 12 次），而开 ink 那条路是**逐点自带压力**的，所以那边平滑。
+    /// **两条路的差别只在压力分辨率** —— 位置是同一份（我们只借压力）。
+    ///
+    /// 现在把整批样本交给调用方，由它按"点在这批里的位置"摊开 —— 这才用上了本该有的分辨率。
+    /// </summary>
+    public System.Collections.Generic.IReadOnlyList<float> Samples => _samples;
 
     /// <summary>自校准用的样本（最多留几个包就够认出包序号）。</summary>
     private readonly int[][] _calibSamples = new int[6][];
