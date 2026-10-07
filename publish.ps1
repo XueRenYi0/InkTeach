@@ -23,7 +23,11 @@ param(
     [switch]$NoZip,
     [switch]$NoSetup,
     [switch]$Jit,
-    [switch]$Aot
+    [switch]$Aot,
+    # 演练专用（2026-10-07 加）：**不写仓库根 update.json、不刷 jsDelivr**。
+    # 为什么要有它：线上更新清单就是仓库根那份（App 从 raw.githubusercontent 取），
+    # 演练时写进去 = 把"还没发布的 zip 的 sha256"广播给所有用户（下载校验必失败）。
+    [switch]$NoManifest
 )
 if ($Jit -and $Aot) { throw "-Jit 和 -Aot 只能选一个（默认就是 AOT）" }
 $useAot = -not $Jit
@@ -373,12 +377,17 @@ else {
     # 为什么不用 release 附件当清单：附件走 CDN，刚发新版时"附件已换、取回来还是旧的"
     #（2026-09-29 实测），而更新检查最需要立刻看到新版。zip 仍旧放 release 附件。
     # ⚠ 发新版时**这两件事都要做**：把这份 update.json 提交推送，再把 zip 传成 release 附件。
-    $rootJson = Join-Path $root "update.json"
-    Set-Content -Path $rootJson -Value $body -Encoding UTF8
-    # 让 jsDelivr（国内清单源之一）立刻刷新缓存；失败不影响发布。
-    try { curl.exe -s -o NUL --max-time 20 "https://purge.jsdelivr.net/gh/XueRenYi0/InkTeach@main/update.json" | Out-Null } catch { }
-    Write-Host "  自动更新清单 dist\update.json ＋ 仓库根 update.json（sha256 $($hash.Substring(0,12))…）" -ForegroundColor Green
-    Write-Host "  ⚠ 发新版：先 git add update.json && git commit && git push（App 从 raw 地址取它），再把 zip 和 setup.exe 一起挂到 release 附件" -ForegroundColor Yellow
+    # ⚠ **演练请加 -NoManifest**（否则这份线上清单会被写成"还没发布的 zip"的哈希）。
+    if ($NoManifest) {
+        Write-Host "  （-NoManifest：只写 dist\update.json，仓库根那份不动——演练用）" -ForegroundColor DarkGray
+    } else {
+        $rootJson = Join-Path $root "update.json"
+        Set-Content -Path $rootJson -Value $body -Encoding UTF8
+        # 让 jsDelivr（国内清单源之一）立刻刷新缓存；失败不影响发布。
+        try { curl.exe -s -o NUL --max-time 20 "https://purge.jsdelivr.net/gh/XueRenYi0/InkTeach@main/update.json" | Out-Null } catch { }
+        Write-Host "  自动更新清单 dist\update.json ＋ 仓库根 update.json（sha256 $($hash.Substring(0,12))…）" -ForegroundColor Green
+        Write-Host "  ⚠ 发新版：先 git add update.json && git commit && git push（App 从 raw 地址取它），再把 zip 和 setup.exe 一起挂到 release 附件" -ForegroundColor Yellow
+    }
     if ($mirrorReleaseBase) {
         Write-Host "  ⚠ 国内镜像：跑 tools\gitcode-release.ps1 -Version $ver（推源码/标签、建 GitCode 发行版、传附件）" -ForegroundColor Yellow
     }
