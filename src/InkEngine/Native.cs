@@ -612,7 +612,41 @@ internal static class Native
     /// 照 160 声明就等于让驱动往栈上多写 12 字节）。裸缓冲只要求"够大"。
     /// 用到的偏移：lcMsgBase=52。</summary>
     public const int LOGCONTEXT_BYTES = 256;
+    // LOGCONTEXT 里各字段的偏移（按 wintab.h 的声明顺序算，全部 4 字节对齐）
+    public const int LC_OPTIONS_OFFSET = 40;
     public const int LC_MSGBASE_OFFSET = 52;
+    public const int LC_PKTRATE_OFFSET = 60;
+    public const int LC_PKTDATA_OFFSET = 64;
+    public const int LC_PKTMODE_OFFSET = 68;
+    public const int LC_MOVEMASK_OFFSET = 72;
+    public const int LC_BTNDNMASK_OFFSET = 76;
+    public const int LC_BTNUPMASK_OFFSET = 80;
+
+    /// <summary>lcOptions 的位。**`CXO_MESSAGES` 不设 → 驱动根本不投递包消息**
+    /// （第一版探针就是漏了这一步，结果"上下文打开成功但收不到包"）。</summary>
+    public const uint CXO_SYSTEM = 0x0001;
+    public const uint CXO_PEN = 0x0002;
+    public const uint CXO_MESSAGES = 0x0004;
+    public const uint CXO_CSRMESSAGES = 0x0008;
+    public const uint CXO_MARGIN = 0x8000;
+
+    /// <summary>lcPktData 的位（包里带哪些字段）。</summary>
+    public const int PK_CONTEXT = 0x0001;
+    public const int PK_STATUS = 0x0002;
+    public const int PK_TIME = 0x0004;
+    /// <summary>PK_CHANGED（包里带"哪些字段变了"的掩码）。</summary>
+    public const int PK_CHANGED = 0x0008;
+    public const int PK_SERIAL_NUMBER = 0x0010;
+    public const int PK_CURSOR = 0x0020;
+    public const int PK_BUTTONS = 0x0040;
+    public const int PK_X = 0x0080;
+    public const int PK_Y = 0x0100;
+    public const int PK_Z = 0x0200;
+    /// <summary>正压力——关掉 ink 之后我们最想要的就是它。</summary>
+    public const int PK_NORMAL_PRESSURE = 0x0400;
+    public const int PK_TANGENT_PRESSURE = 0x0800;
+    public const int PK_ORIENTATION = 0x1000;
+    public const int PK_ROTATION = 0x2000;
 
     [DllImport("wintab32.dll", EntryPoint = "WTInfoA", CharSet = CharSet.Ansi, SetLastError = true)]
     public static extern uint WTInfo(uint wCategory, uint nIndex, IntPtr lpOutput);
@@ -622,6 +656,12 @@ internal static class Native
 
     [DllImport("wintab32.dll", SetLastError = true)]
     public static extern bool WTClose(IntPtr hCtx);
+
+    /// <summary>一次取最多 cMaxPackets 个包到 lpPkt（返回实际取到几个）。
+    /// 包体长度/布局由 lcPktData 决定，调用方自己按位算字段偏移——
+    /// 不按结构体声明读，避免打包/对齐猜错。</summary>
+    [DllImport("wintab32.dll", SetLastError = true)]
+    public static extern int WTPacketsGet(IntPtr hCtx, int cMaxPackets, IntPtr lpPkt);
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetPointerInfo(uint pointerId, out POINTER_INFO pointerInfo);

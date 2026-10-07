@@ -2199,7 +2199,47 @@ public partial class InkEngine
 
     /// <summary>`--wintabprobe`：收到的 Wintab 包条数（只数消息，不解析包体）。</summary>
     internal int WintabPackets;
+    /// <summary>`--wintabprobe`：收到的 WT_PROXIMITY 条数（"笔在板子上"的通知）。</summary>
+    internal int WtProximity;
+    /// <summary>`--wintabprobe`：按消息类型分项计数（基址 + 偏移），用来分开
+    /// **WT_PACKET（真数据）** 和 **WT_CTXUPDATE（驱动每秒一次的状态通知）**——
+    /// 只数总数会把后者当成包，读出来的"包率"是假的。</summary>
+    internal readonly int[] WtByType = new int[64];
     private int _wtMsgBase = -1;
+
+    /// <summary>Wintab 消息基址 + 偏移 → 名字。</summary>
+    private static string WtMsgName(int off) => off switch
+    {
+        0 => "WT_PACKET(真数据)",
+        1 => "WT_CTXOPEN",
+        2 => "WT_CTXCLOSE",
+        3 => "WT_CTXUPDATE(状态通知)",
+        4 => "WT_CTXOVERLAP",
+        5 => "WT_PROXIMITY",
+        6 => "WT_INFOCHANGE",
+        _ => "?",
+    };
+
+    /// <summary>把 lcPktData 的位翻译成人话（探针输出用）。</summary>
+    private static string DecodePktData(int v)
+    {
+        var s = new System.Text.StringBuilder("含：");
+        void Add(int bit, string name) { if ((v & bit) != 0) s.Append(name).Append(' '); }
+        Add(Native.PK_X, "X");
+        Add(Native.PK_Y, "Y");
+        Add(Native.PK_Z, "Z");
+        Add(Native.PK_NORMAL_PRESSURE, "正压力");
+        Add(Native.PK_TANGENT_PRESSURE, "切向压力");
+        Add(Native.PK_ORIENTATION, "倾斜");
+        Add(Native.PK_ROTATION, "旋转");
+        Add(Native.PK_BUTTONS, "按键");
+        Add(Native.PK_CURSOR, "笔类型");
+        Add(Native.PK_TIME, "时间戳");
+        Add(Native.PK_STATUS, "状态");
+        Add(Native.PK_CONTEXT, "上下文");
+        Add(Native.PK_SERIAL_NUMBER, "序列号");
+        return s.ToString();
+    }
 
     /// <summary>
     /// `--wintabprobe`：探 Wintab 这条路通不通。
@@ -2251,8 +2291,32 @@ public partial class InkEngine
             for (int i = 0; i < 1024; i++) Marshal.WriteByte(buf, i, 0);
             uint ctxBytes = Native.WTInfo(Native.WTI_DEFCONTEXT, 0, buf);
             int msgBase = Marshal.ReadInt32(buf, Native.LC_MSGBASE_OFFSET);
-            Console.WriteLine($"  默认上下文            : WTInfo 返回 {ctxBytes} 字节，lcMsgBase=0x{msgBase:X4}");
+            int opts = Marshal.ReadInt32(buf, Native.LC_OPTIONS_OFFSET);
+            int pktData = Marshal.ReadInt32(buf, Native.LC_PKTDATA_OFFSET);
+            int pktRate = Marshal.ReadInt32(buf, Native.LC_PKTRATE_OFFSET);
+            Console.WriteLine($"  默认上下文            : WTInfo 返回 {ctxBytes} 字节，lcMsgBase=0x{msgBase:X4}，lcPktRate={pktRate}");
+            string msgFlag = (opts & Native.CXO_MESSAGES) != 0
+                ? "有 CXO_MESSAGES"
+                : "**没有 CXO_MESSAGES**（不设它驱动不投包）";
+            string sysFlag = (opts & Native.CXO_SYSTEM) != 0 ? " +CXO_SYSTEM" : "";
+            string penFlag = (opts & Native.CXO_PEN) != 0 ? " +CXO_PEN" : "";
+            Console.WriteLine($"    默认 lcOptions       : 0x{opts:X4}  {msgFlag}{sysFlag}{penFlag}");
+            Console.WriteLine($"    默认 lcPktData       : 0x{pktData:X4}  " + DecodePktData(pktData));
             if (msgBase <= 0) msgBase = Native.WT_DEFBASE;
+
+            // **补齐 Wintab 的标准初始化**（第一版漏了这步 → 上下文开得起来但收不到包）：
+            //   lcOptions |= CXO_MESSAGES          → 让驱动投递 WT_PACKET
+            //   lcPktData |= X/Y/压力/按键/…        → 包里带我们需要的字段
+            //   lcMoveMask/lcBtnDnMask/lcBtnUpMask = lcPktData  → 移动和按键都发
+            int want = Native.PK_X | Native.PK_Y | Native.PK_NORMAL_PRESSURE
+                     | Native.PK_BUTTONS | Native.PK_CURSOR | Native.PK_TIME | Native.PK_STATUS;
+            Marshal.WriteInt32(buf, Native.LC_OPTIONS_OFFSET, opts | (int)Native.CXO_MESSAGES);
+            Marshal.WriteInt32(buf, Native.LC_PKTDATA_OFFSET, pktData | want);
+            Marshal.WriteInt32(buf, Native.LC_MOVEMASK_OFFSET, pktData | want);
+            Marshal.WriteInt32(buf, Native.LC_BTNDNMASK_OFFSET, pktData | want);
+            Marshal.WriteInt32(buf, Native.LC_BTNUPMASK_OFFSET, pktData | want);
+            Console.WriteLine($"    配置后 lcOptions     : 0x{(opts | (int)Native.CXO_MESSAGES):X4}（已补 CXO_MESSAGES）");
+            Console.WriteLine($"    配置后 lcPktData     : 0x{(pktData | want):X4}  {DecodePktData(pktData | want)}");
 
             // ③ WTOpen：真正的门槛
             IntPtr hwnd = _windows.Count > 0 ? _windows[0].Hwnd : IntPtr.Zero;
@@ -2265,23 +2329,117 @@ public partial class InkEngine
             }
             Console.WriteLine($"  WTOpen                : **成功**（ctx=0x{ctx.ToInt64():X}）");
 
-            // ④ 数包：Wintab 的包消息落在 [lcMsgBase, lcMsgBase+?)，只数条数、不解析
+            // ④ 数包：Wintab 的包消息落在 [lcMsgBase, lcMsgBase+64)，只数条数、不解析
+            //    还**分别数** WT_PACKET(基址+0) 和 WT_PROXIMITY(基址+5)：
+            //      · 只有 PROXIMITY 没有 PACKET → 驱动知道笔在附近但没给数据
+            //      · 两个都有 → 真通了
             _wtMsgBase = msgBase;
             WintabPackets = 0;
-            int before = 0;
+            WtProximity = 0;
+            Array.Clear(WtByType);
             Console.WriteLine();
-            Console.WriteLine("  ▶ 请用手写笔在板子上**来回移动 8 秒**（不用按笔尖，悬停即可）…");
-            for (int sec = 0; sec < 8; sec++)
+            Console.WriteLine("  ▶ 请用手写笔在板子上**来回划 12 秒**（悬停即可，不必压笔尖）…");
+            Console.WriteLine("     ⚠ 一定要真的动笔——不动的话驱动不会发 WT_PACKET，测不出结果。");
+
+            // 按 **wintab.h 的固定字段顺序** 累加偏移和长度。
+            //
+            // ⚠ **所有被 lcPktData 选中的字段都要计入长度**，包括我们不读的那些
+            //（ORIENTATION / ROTATION / CHANGED / TANGENT_PRESSURE）——
+            // 第一版只累加了"要读的字段"，算出 36 字节，而真实包是 **48 字节**
+            //（lcPktData=0x15F7 里含 ORIENTATION，12 字节）→ 跨包读取全部错位 →
+            // X/Y/压力读出 **6973 万** 这种鬼数。**这是今天第三次栽在"自己算布局"上**
+            //（前两次：LOGCONTEXT 实测 172 而不是 160；这次 36 而不是 48）。
+            // 所以下面除了算对，还加了一道**合理性断言**（见输出里的"是否可信"）。
+            int xOff = -1, yOff = -1, pOff = -1, pktBytes = 0;
             {
-                Thread.Sleep(1000);
-                DrainMessages();
-                Console.Write($"\r    第 {sec + 1}/8 秒，已收到 Wintab 包 {WintabPackets} 条   ");
-                before = WintabPackets;
+                int o = 0, tmp;
+                void Field(int bit, int size, bool want, out int off)
+                {
+                    off = -1;
+                    if ((pktData & bit) == 0) return;
+                    if (want) off = o;
+                    o += size;
+                }
+                Field(Native.PK_CONTEXT, 4, false, out tmp);
+                Field(Native.PK_STATUS, 4, false, out tmp);
+                Field(Native.PK_TIME, 4, false, out tmp);
+                Field(Native.PK_CHANGED, 4, false, out tmp);
+                Field(Native.PK_SERIAL_NUMBER, 4, false, out tmp);
+                Field(Native.PK_CURSOR, 4, false, out tmp);
+                Field(Native.PK_BUTTONS, 4, false, out tmp);
+                Field(Native.PK_X, 4, true, out xOff);
+                Field(Native.PK_Y, 4, true, out yOff);
+                Field(Native.PK_Z, 4, false, out tmp);
+                Field(Native.PK_NORMAL_PRESSURE, 4, true, out pOff);
+                Field(Native.PK_TANGENT_PRESSURE, 4, false, out tmp);
+                Field(Native.PK_ORIENTATION, 12, false, out tmp);   // ← 漏了它就是那个 bug
+                Field(Native.PK_ROTATION, 12, false, out tmp);
+                pktBytes = o;
             }
+            Console.WriteLine($"  包体布局              : 每包 {pktBytes} 字节；X@{xOff} Y@{yOff} 压力@{pOff}");
+
+            IntPtr pktBuf = Marshal.AllocHGlobal(64 * Math.Max(64, pktBytes));
+            int pkMinX = int.MaxValue, pkMaxX = int.MinValue;
+            int pkMinY = int.MaxValue, pkMaxY = int.MinValue;
+            int pkMinP = int.MaxValue, pkMaxP = int.MinValue;
+            long pkWithPressure = 0, pkTotal = 0;
+            var pkMaxSample = 8;
+            try
+            {
+                for (int sec = 0; sec < 12; sec++)
+                {
+                    Thread.Sleep(1000);
+                    DrainMessages();
+                    // 每秒把攒下的包全取出来，统计 X/Y/压力的范围
+                    int nPk;
+                    while ((nPk = Native.WTPacketsGet(ctx, 64, pktBuf)) > 0)
+                    {
+                        for (int k = 0; k < nPk; k++)
+                        {
+                            int b = k * pktBytes;
+                            pkTotal++;
+                            if (xOff >= 0) { int v = Marshal.ReadInt32(pktBuf, b + xOff); if (v < pkMinX) pkMinX = v; if (v > pkMaxX) pkMaxX = v; }
+                            if (yOff >= 0) { int v = Marshal.ReadInt32(pktBuf, b + yOff); if (v < pkMinY) pkMinY = v; if (v > pkMaxY) pkMaxY = v; }
+                            if (pOff >= 0) { int v = Marshal.ReadInt32(pktBuf, b + pOff); if (v < pkMinP) pkMinP = v; if (v > pkMaxP) pkMaxP = v; if (v > 0) pkWithPressure++; }
+                        }
+                    }
+                    Console.Write($"\r    第 {sec + 1,2}/12 秒，已取 {pkTotal} 包，压力 {pkMinP}~{pkMaxP}   ");
+                }
+            }
+            finally { Marshal.FreeHGlobal(pktBuf); }
             Console.WriteLine();
-            Console.WriteLine($"  收到 Wintab 包        : **{WintabPackets} 条**"
-                              + (WintabPackets > 0 ? " → 这条路通了（驱动真的在发包）"
-                                                   : " → 打开成功但收不到包（驱动不响应 / 笔不在范围内）"));
+            int pk = WtByType[0];
+            string pktVerdict = pk > 0
+                ? $" → 这条路通了（12 秒约 {pk / 12.0:F0} Hz）"
+                : " → 收不到真包（驱动没给数据 / 笔不在范围内 / 没真的动笔）";
+            Console.WriteLine($"  WT_PACKET（真包）     : **{pk} 条**{pktVerdict}");
+            Console.WriteLine("  按类型分项：");
+            for (int off = 0; off <= 8; off++)
+                if (WtByType[off] > 0)
+                    Console.WriteLine($"    {WtMsgName(off),-24}: {WtByType[off]}");
+            Console.WriteLine("  ---- 包体实测（关键数字）----");
+            Console.WriteLine($"    取到包数            : {pkTotal}（其中压力>0 的 {pkWithPressure} 条）");
+            if (pkTotal == 0)
+            {
+                Console.WriteLine("    **没有数据**        : 一条包都没取到，下面的范围无意义"
+                                  + "（驱动没发 / 笔不在范围 / 没真的动笔）");
+            }
+            else
+            {
+                Console.WriteLine($"    X 范围              : {pkMinX} ~ {pkMaxX}");
+                Console.WriteLine($"    Y 范围              : {pkMinY} ~ {pkMaxY}");
+                Console.WriteLine($"    **压力范围**        : {pkMinP} ~ {pkMaxP}"
+                                  + (pkMaxP > 1024 ? "  ← **超过 1024！比 Windows Ink 那条路更细**" : ""));
+                // **合理性断言**：数位板坐标和压力不可能到千万级。
+                // 超了就是偏移/长度算错，**这些数一个都不能信**——
+                // 今天已经在这栽过一次（漏算 ORIENTATION → 包长算成 36 而不是 48 → 跨包错位 → 读出 6973 万）。
+                bool sane = pkMaxX < 10_000_000 && pkMaxY < 10_000_000 && pkMaxP < 10_000_000
+                            && pkMinX >= 0 && pkMinY >= 0 && pkMinP >= 0;
+                Console.WriteLine($"    这些数可信吗        : {(sane ? "**是**（在合理量级内）" : "**否 —— 偏移/长度算错了，别信**")}");
+                if (!sane)
+                    Console.WriteLine("       （坐标/压力不可能到千万级；说明包体布局算错，读数全部作废）");
+            }
+            _ = pkMaxSample;
             Native.WTClose(ctx);
             Console.WriteLine("  WTClose               : 已关闭");
             _wtMsgBase = -1;
@@ -2973,9 +3131,13 @@ public partial class InkEngine
     {
         // `--wintabprobe`：Wintab 的包消息落在 [lcMsgBase, lcMsgBase+64) 这一段。
         // **只数条数、不解析包体**——探针只需要回答"驱动到底发不发包"。
+        // 顺带把 WT_PROXIMITY（基址+5）单独数一下："笔在附近"和"真有数据"是两件事。
         if (_wtMsgBase > 0 && msg >= (uint)_wtMsgBase && msg < (uint)_wtMsgBase + 64)
         {
+            int off = (int)(msg - (uint)_wtMsgBase);
+            WtByType[off]++;
             WintabPackets++;
+            if (off == 5) WtProximity++;
             return IntPtr.Zero;
         }
 
