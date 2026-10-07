@@ -2864,6 +2864,16 @@ public partial class InkEngine
                 : "关（--nopressure）")}；变宽通道: {OverlayWindow.InkNote}");
             // [停用 2026-10-05] 模拟压力 / 笔锋 / 收尖：全部停用（代码与备份见 已停用-渲染实验.md）。
             Console.WriteLine("无压感笔迹增强: 已停用（模拟压力 / 笔锋 / 收尖）");
+            // **输入路径总览**（2026-10-07 用户要求）：一次说清这台机器上会走哪几条路。
+            // 每条笔的 `[笔画]` 行也会用大白话报"这一笔实际走了哪条"（见 DescribeInputPath）。
+            Console.WriteLine("输入路径: 开 ink → Windows Ink 笔（压力 1024 级）"
+                              + "；关 ink → "
+                              + (WintabEnabled ? "Wintab 给压力（16383 级）＋ raw 补点"
+                                               : "只有 raw 补点（`--nowintab` 关掉了 Wintab，没有压力）")
+                              + "；Wintab: "
+                              + (WintabEnabled
+                                  ? "尚未打开（为不影响开 ink，改成第一笔「关 ink」时才开）"
+                                  : "已关"));
             return true;
         }, IntPtr.Zero);
 
@@ -7108,7 +7118,8 @@ public partial class InkEngine
                         if (MathF.Abs(ActiveStroke.Points[i].P - ActiveStroke.Points[i - 1].P) > 0.0005f) ptSteps++;
                 }
                 _lastStrokeReport =
-                    $"采集到 {ActiveStroke.Points.Count} 个点"
+                    $"路径={DescribeInputPath(_activePointerType)}"
+                    + $"　采集到 {ActiveStroke.Points.Count} 个点"
                     + $"，历时 {strokeMs:F0} ms → 采样 {sampleHz:F0} Hz（消息 {msgHz:F0} Hz）"
                     + $"，收到 按下{_cntDown} 移动{_cntMove} 抬起{_cntUp} 丢失捕获{_cntCaptureLost}"
                     + $"，设备={PointerTypeName(_activePointerType)}"
@@ -8597,6 +8608,31 @@ public partial class InkEngine
     ///
     /// 坐标：笔画存**画布**坐标；预测器喂**屏幕**坐标（湿墨轨迹也是屏幕空间）。
     /// </summary>
+    /// <summary>
+    /// **这一笔走的是哪条路** —— 用大白话写出来。
+    ///
+    /// 为什么要有它（2026-10-07 用户的原话）："**我怎么知道什么时候是走了 ink？什么时候走了
+    /// 那个 wintab？什么时候又是鼠标模式补点？**"
+    ///
+    /// 以前这些信息散在三处（`设备=鼠标` / `[wintab …]` / `[raw 补点 +N]`），
+    /// 得自己对读才知道 —— **那就等于没告诉用户**。这里合成一句人话，一眼看明白。
+    /// </summary>
+    private string DescribeInputPath(uint ptype)
+    {
+        if (ptype == Native.PT_PEN)
+            return "开 ink（Windows Ink 笔）→ 压力 1024 级";
+        if (ptype == Native.PT_TOUCH)
+            return "触摸";
+        bool wt = WtPressurePoints > 0;
+        bool raw = _rawPointsAdded > 0;
+        if (wt && raw) return "关 ink → Wintab 给压力 ＋ raw 补点";
+        if (wt) return "关 ink → Wintab 给压力（这轮补点没出力）";
+        if (raw) return "关 ink → 只有 raw 补点（**没有 Wintab**，所以没有压力）";
+        return _wintab.IsOpen
+            ? "关 ink → 鼠标（Wintab 开着，但这一笔没拿到压力）"
+            : "鼠标（Wintab 未启用）";
+    }
+
     private void AppendStrokeSamples(uint id, uint ptype, float curCanvasX, float curCanvasY,
                                      float screenX, float screenY, float curPressure)
     {
