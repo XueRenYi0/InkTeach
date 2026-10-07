@@ -2052,7 +2052,28 @@ public sealed class FullUi : IOverlayUi
 
     private bool IsToggleRow(int i)
         => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.Tooltip or Row.DwellShape
-           or Row.Pressure or Row.RestoreInk or Row.PptAutoSave or Row.TouchGestures;
+           or Row.Pressure or Row.FineStroke or Row.RestoreInk or Row.PptAutoSave or Row.TouchGestures;
+
+    /// <summary>
+    /// **自检用**：这一行到底有没有画开关。
+    ///
+    /// 为什么专门开一个出口：2026-10-07 加「精细笔迹」那一行时，
+    /// 我把行、位置、状态、点击、落盘全接好了，**唯独漏了把它加进 <see cref="IsToggleRow"/>**
+    /// —— 于是**标签画出来了、开关没画**，用户看到的是"这一行怎么没有开关"。
+    ///
+    /// 而当时的自检只做"点一下 → 状态翻转"，**点击判定看的是整行矩形**，
+    /// 所以开关画没画它都能过 —— **测试没盖住真正错的地方**。
+    /// 现在把"有没有开关"变成一条可断言的事实：以后加开关行漏掉这一处，自检就会红。
+    /// </summary>
+    internal bool IsToggleRowForTest(int i) => IsToggleRow(i);
+
+    /// <summary>自检用：按标签问"这一行有没有开关"（找不到标签返回 false）。</summary>
+    internal bool IsToggleRowByLabelForTest(string label)
+    {
+        for (int i = 0; i < Rows.Length; i++)
+            if (Rows[i].Label == label) return IsToggleRow(i);
+        return false;
+    }
 
     /// <summary>
     /// 这一行现在是不是压暗（点了没反应）。

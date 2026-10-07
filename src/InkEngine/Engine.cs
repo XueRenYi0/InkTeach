@@ -4081,6 +4081,7 @@ public partial class InkEngine
         // **日志数字必须是"这一笔"的**，不然它就不是证据。差值基线也一起归零。
         WtPolledPackets = WtPressurePoints = WtBadPackets = 0;
         WtRawPMin = int.MaxValue; WtRawPMax = int.MinValue;
+        _wtPendingPoints = 0;
         _wintabPacketsSeen = _wintab.PacketsRead;
         _wintabBadSeen = _wintab.BadPackets;
         LastCoalescedSamples = LastCoalescedMessages = 0;
@@ -8518,12 +8519,8 @@ public partial class InkEngine
                 _wintabPacketsSeen = _wintab.PacketsRead;
                 WtBadPackets += _wintab.BadPackets - _wintabBadSeen; _wintabBadSeen = _wintab.BadPackets;
                 if (gotWt && _wintab.Pressure01 > 0f)
-                {
-                    _wtStrokePressure = _wintab.Pressure01;
-                    WtSeenPressure = true;
-                    if (_wintab.RawPressure < WtRawPMin) WtRawPMin = _wintab.RawPressure;
-                    if (_wintab.RawPressure > WtRawPMax) WtRawPMax = _wintab.RawPressure;
-                }
+                    AcceptWintabPressure(_wintab.RawPressure, _wintab.Pressure01);
+
                 // 注意：这里的 0 只是"给点用的值"，**不改变 HasPressure** ——
                 // 真鼠标（不产生 Wintab 包）仍然不会被当成有压感，老行为不受影响。
                 wp = WtSeenPressure ? _wtStrokePressure : 0f;
@@ -8537,6 +8534,7 @@ public partial class InkEngine
                 if (ActiveStrokeHasPressure && ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
             }
 
+            if (!wpIsReal) _wtPendingPoints += _ptr.Count;   // 这些点等真实压力来了要回填
             for (int i = 0; i < _ptr.Count; i++)
             {
                 var s = _ptr[i];
@@ -8557,12 +8555,8 @@ public partial class InkEngine
         if (ptype != Native.PT_PEN && _wintab.IsOpen && PressureWidth.Enabled)
         {
             if (_wintab.Poll() && _wintab.Pressure01 > 0f)
-            {
-                _wtStrokePressure = _wintab.Pressure01;
-                WtSeenPressure = true;
-                if (_wintab.RawPressure < WtRawPMin) WtRawPMin = _wintab.RawPressure;
-                if (_wintab.RawPressure > WtRawPMax) WtRawPMax = _wintab.RawPressure;
-            }
+                AcceptWintabPressure(_wintab.RawPressure, _wintab.Pressure01);
+
             WtPolledPackets += _wintab.PacketsRead - _wintabPacketsSeen;
             _wintabPacketsSeen = _wintab.PacketsRead;
             WtBadPackets += _wintab.BadPackets - _wintabBadSeen; _wintabBadSeen = _wintab.BadPackets;
@@ -8576,6 +8570,7 @@ public partial class InkEngine
                 if (ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
             }
         }
+        if (fbWp >= 0f && !WtSeenPressure) _wtPendingPoints++;
         ActiveStroke.AddPoint(curCanvasX, curCanvasY, fbWp >= 0f ? fbWp : curPressure, NowMs);
     }
 
@@ -8682,6 +8677,7 @@ public partial class InkEngine
         // 同样：Wintab 开着但还没拿到压力 → 用 0 兜底（起笔物理上就是轻的）。
         // 真鼠标时 HasPressure 始终为假，这个值根本不参与渲染，所以老行为不受影响。
         float rawP = WtSeenPressure ? _wtStrokePressure : (_wintab.IsOpen ? 0f : 0.5f);
+        if (!WtSeenPressure && _wintab.IsOpen) _wtPendingPoints++;
         ActiveStroke.AddPoint(cx, cy, rawP, NowMs);
         _rawPointsAdded++;
         // **补压的账要把 raw 补的点也算进来**：不然 `补压N点` 只数指针消息那条路，
@@ -8735,6 +8731,43 @@ public partial class InkEngine
 
     /// <summary>这一笔有没有见过**真实**压力（> 0；悬停那个 0 不算）。</summary>
     internal bool WtSeenPressure;
+
+    /// <summary>开头还有几个点拿的是"兜底值"（等第一包真实压力到了要把它们改回来）。
+    /// 见 <see cref="AcceptWintabPressure"/> 那段注释。</summary>
+    private int _wtPendingPoints;
+
+    /// <summary>
+    /// 接受一个**真实**压力值。**第一次接受时回填开头那几个点。**
+    ///
+    /// 为什么必须回填（2026-10-07 用户真机两轮反馈）：
+    /// 起笔那 1~3 个点是在 Wintab 第一包到达**之前**加进笔画的，只能拿兜底值：
+    ///   · 兜底 0.5 → 开头鼓一个**粗点**（第一版，"第一个点老会有点粗"）
+    ///   · 兜底 0   → 开头一段**细线**（第二版，"有的墨迹开头细细的"）
+    /// **两种都是猜的，都不对 —— 因为那一刻我们根本还不知道压力是多少。**
+    /// 正确做法：等第一包真实压力到了，**把那几个点的压力改成真实值** —— 不再猜。
+    /// （代价是 O(几个点) 的赋值，可以忽略。）
+    /// </summary>
+    private void AcceptWintabPressure(int raw, float p01)
+    {
+        _wtStrokePressure = p01;
+        WtSeenPressure = true;
+        if (raw < WtRawPMin) WtRawPMin = raw;
+        if (raw > WtRawPMax) WtRawPMax = raw;
+
+        var s = ActiveStroke;
+        if (_wtPendingPoints > 0 && s != null)
+        {
+            int cnt = Math.Min(_wtPendingPoints, s.Points.Count);
+            for (int i = 0; i < cnt; i++)
+            {
+                var q = s.Points[i];
+                q.P = p01;                 // X/Y 不动，**只改压力**
+                s.Points[i] = q;
+            }
+            s.MarkPressureEdited();        // 告诉渲染"这一笔变了"（只改压力，不碰包围盒）
+        }
+        _wtPendingPoints = 0;
+    }
 
     /// <summary>这一笔压力**原始值**的区间（0..驱动上限）。**只报 0..1 看不出力度用到了量程的哪一段**——
     /// 用户"轻碰就满宽"或"压到底也不够粗"这类手感问题，全靠这两个数定位。</summary>

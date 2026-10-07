@@ -2970,6 +2970,18 @@ internal sealed class Stroke
     /// geometry is only trusted while it matches, which is what makes "add a
     /// point, redraw" work while a stroke is still being drawn.</summary>
     public int Revision { get; private set; }
+
+    /// <summary>
+    /// **只改了点上的压力**（X/Y 一个都没动）之后调用，让渲染知道这一笔变了。
+    ///
+    /// 为什么要专门开一个出口：压力是**被烘进缓存**的（和粗细同一条规矩，
+    /// 见 `SetPressureFromUi` 那段注释——不标脏的话屏幕上还是旧形状）。
+    /// 这里只动 `Revision`、**不碰 `Bounds`**：点没挪窝，包围盒不用重算。
+    ///
+    /// 用在哪：Wintab 起笔回填（`Engine.AcceptWintabPressure`）——
+    /// 第一包真实压力到了之后，要把开头那几个"兜底值"的点改回来。
+    /// </summary>
+    public void MarkPressureEdited() => Revision++;
     private int _builtRevision = -1;
 
     /// <summary>

@@ -16229,6 +16229,13 @@ internal sealed partial class App : InkEngine.InkEngine
             var fineRow = ui.RowRectByLabelForTest("精细笔迹");
             Check("「精细笔迹」那一行找得到", fineRow.MaxY > fineRow.MinY,
                   $"行高 {fineRow.MaxY - fineRow.MinY:F0}");
+            // **这一条是关键**（2026-10-07 真机抓到的）：光有行不够，**开关得真的画出来**。
+            // 当时我把行/位置/状态/点击/落盘全接好了，只漏了把它加进 IsToggleRow，
+            // 于是标签画了、开关没画；而"点一下状态翻转"那条判据看的是整行矩形，
+            // **开关没画也照样通过** —— 测试没盖住真正错的地方。
+            Check("「精细笔迹」是**开关行**（有开关，不是空白行）",
+                  ui.IsToggleRowByLabelForTest("精细笔迹"),
+                  "IsToggleRow = " + ui.IsToggleRowByLabelForTest("精细笔迹"));
             Check("精细笔迹默认是开的", Host.State.FineStrokeOn, $"FineStrokeOn = {Host.State.FineStrokeOn}");
             ClickPhysical((fineRow.MinX + fineRow.MaxX) * 0.5f * DpiScale,
                           (fineRow.MinY + fineRow.MaxY) * 0.5f * DpiScale);
