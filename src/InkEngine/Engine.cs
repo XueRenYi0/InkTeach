@@ -1036,6 +1036,11 @@ public partial class InkEngine
             return;
         }
 
+        // 非压感路（关 ink 的鼠标路 / 触摸）：整数坐标 + 点粗，尾巴**方向噪声**更大——
+        // 用更重的速度平滑 + 更保守的推进，压住"左右甩"（用户 2026-10-08：关 ink 5 号有点甩）。
+        _predictor.VelocitySmoothing = ActiveStroke.HasPressure ? 0.4f : 0.6f;
+        _predictor.Damping = ActiveStroke.HasPressure ? 0.8f : 0.7f;
+
         var pred = new PredictedPoint[6];
         int n = _predictor.Predict(pred);
         if (n > 0)
