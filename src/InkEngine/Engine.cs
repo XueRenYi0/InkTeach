@@ -7275,7 +7275,11 @@ public partial class InkEngine
                         : "")
                     + $"，合并 {merge}（{LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 点）"
                     + (RawProbeEnabled
-                        ? $"，[原始输入 {_rawReportsThisStroke} 条 → {(_rawReportsThisStroke * 1000.0 / Math.Max(1, strokeMs)):F0} Hz]"
+                        // 时长≈0 的空笔（退出收尾结算）不报频率：`条数 / 1ms` 会印出
+                        // "14000 Hz" 这种假数（2026-10-08 用户两份数据结尾都有）。
+                        ? $"，[原始输入 {_rawReportsThisStroke} 条 → " + (strokeMs > 1
+                            ? $"{_rawReportsThisStroke * 1000.0 / strokeMs:F0} Hz]"
+                            : "—（时长≈0）]")
                         : "")
                     + (RawInputCapture
                         ? $"，[raw 补点 +{_rawPointsAdded}]"

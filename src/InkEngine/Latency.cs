@@ -188,8 +188,20 @@ public sealed class LatencyRecorder
                           + $"{s.PresentBlockMs:F3},{s.PresentToDisplayMs:F3},{s.TotalMs:F3},"
                           + $"{(s.HasDisplay ? 1 : 0)},{s.PointsInFrame},{s.PresentCount}");
         }
-        if (exists) File.AppendAllText(path, sb.ToString(), new UTF8Encoding(false));
-        else File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
+        // 目录不存在就先建（2026-10-08：`--penlive` 收尾写 reports\latency-live.csv 时，
+        // 目录不存在会直接 FATAL 崩掉——用户两份真机数据都崩在这个收尾上）。
+        // 写入失败也不许崩：探针用完即弃，数据在终端里已经打全了。
+        try
+        {
+            var dir = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            if (exists) File.AppendAllText(path, sb.ToString(), new UTF8Encoding(false));
+            else File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  （写 CSV 失败，不影响本次结果：{ex.Message}）");
+        }
     }
 }
 
