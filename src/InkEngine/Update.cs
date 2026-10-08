@@ -56,7 +56,7 @@ internal static class UpdateFeed
 
 
     /// <summary>
-    /// 更新源候选表（**九条同时问，见 <see cref="FetchBest"/>**）。每项 = (前缀, 上游地址, 直连)：
+    /// 更新源候选表（**十条同时问，见 <see cref="FetchBest"/>**）。每项 = (前缀, 上游地址, 直连)：
     /// 前缀非空 = "这台机器连不上 GitHub，借一个国内加速站过去"。
     ///
     /// 为什么需要它们（2026-09-29 实测：教室网络直连 GitHub 21 秒超时）：
@@ -82,6 +82,12 @@ internal static class UpdateFeed
         ("https://gh.jasonzeng.dev/", RawUrl, true),
         ("https://gh.llkk.cc/",       RawUrl, true),
         ("https://ghproxy.net/",      RawUrl, true),
+        // GitCode（2026-10-08 加）：**API v5 直出 raw 文件**——网页那些 /raw/... 路径
+        // 全被 SPA/人机验证拦着，只有这条 API 直出（实测 0.2s、免登录、返回真 JSON）。
+        // 用户另一台机"不开代理死活检查失败、开了才能更新"，就缺它这一类源：
+        // GitHub 被墙、加速站/jsDelivr 也不通时，全靠它兜底。zip 下载那边清单的
+        // `cn`（GitCode 发行版直链）本来就在；这条补的是**清单本身**的国内直连。
+        ("", "https://gitcode.com/api/v5/repos/XueRenYI0/InkTeach/raw/update.json?ref=main", true),
         ("",                          RawUrl, false),   // GitHub 直连（能上的机器走它最省事）
         // jsDelivr：把 GitHub 仓库里的清单从国内 CDN 取（2026-10-03 实测 4 个域名全通，
         // 不需要任何国内账号/实名）。缓存最长 12 小时——刚发新版时它可能稍旧，但**有别的源
@@ -146,6 +152,11 @@ internal static class UpdateFeed
             if (one != null)
             {
                 usedUrl = Url;
+                // 2026-10-08：**清单自带的"国内直连（cn）"也要排进来，而且排最前**——
+                // 否则自配源只试清单的 url（通常 GitHub 直链、走系统代理），没代理的
+                // 机器就"查得到新版、装不上包"（用户另一台机的现象）。cn 是直连。
+                if (!string.IsNullOrWhiteSpace(one.Cn))
+                    AddDownload(downloads, one.Cn, useProxy: false);
                 AddDownload(downloads, one.Url, useProxy: true);
             }
             return one;

@@ -75,16 +75,42 @@ internal static class UpdateProbe
         var f3 = UpdateFeed.Fetch(Path.Combine(dir, "不存在.json"), out string e3);
         Check("取清单：不存在的文件 → 失败且给出原因", f3 == null && !string.IsNullOrEmpty(e3), e3 ?? "");
 
+        // ---- ③c 自配源 + 清单带 cn：zip 候选要把"国内直连"排最前（2026-10-08）------
+        // 背景：用户另一台机"不开代理更新失败、开了代理才行"。自配源原来只把清单的
+        // `url`（GitHub 直链、走系统代理）当下载候选，**漏了清单里的 `cn` 国内直链**——
+        // 于是"查得到新版、装不上包"。这条盯住它。
+        string cnManifest = Path.Combine(dir, "update-cn.json");
+        File.WriteAllText(cnManifest, """
+            { "version": "7.6.6", "url": "https://github.com/a/b/releases/download/v7.6.6/x.zip",
+              "sha256": "00", "cn": "https://gitcode.com/a/b/releases/download/v7.6.6/x.zip" }
+            """);
+        string oldUrlOverride = UpdateFeed.Url;
+        try
+        {
+            UpdateFeed.Url = cnManifest;
+            var mCn = UpdateFeed.FetchBest("7.6.5", out _, out string eCn, out var dlCn);
+            Check("自配源：清单里的 cn 排最前（直连），GitHub 直链随后（走系统代理）",
+                  mCn != null && dlCn.Count >= 2
+                  && dlCn[0].Url == "https://gitcode.com/a/b/releases/download/v7.6.6/x.zip"
+                  && !dlCn[0].UseProxy
+                  && dlCn.Any(d => d.Url.EndsWith("github.com/a/b/releases/download/v7.6.6/x.zip")
+                                && d.UseProxy),
+                  eCn ?? $"{dlCn.Count} 条候选");
+        }
+        finally { UpdateFeed.Url = oldUrlOverride; }
+
         // ---- ③b 镜像加速站：候选表 + zip 地址前缀重写 ---------------------------
         // 背景：教室机连不上 GitHub（实测 21 秒超时），所以候选表前面是国内加速站。
         // 这里盯住两件"错了就装不上"的事：①候选表结构没被改坏；②清单里的 GitHub
         // 直链必须被套上同一个前缀，否则会"查得到新版、下不动包"。
         const string ghZip = "https://github.com/a/b/releases/download/v1/x.zip";
         const string px = "https://gh-proxy.com/";
-        Check("镜像：候选源 >= 6 条；GitHub 加速批指着同一份 raw 清单，另有 Gitee 国内直连",
+        Check("镜像：候选源 >= 6 条；GitHub 加速批指着同一份 raw 清单，另有 GitCode 国内直连",
               UpdateFeed.Sources.Length >= 6
               && UpdateFeed.Sources.Count(s => s.Url.Contains("InkTeach/main/update.json")) >= 6
               && UpdateFeed.Sources.Any(s => s.Url.Contains("jsdelivr.net") && s.NoProxy));
+        Check("镜像：GitCode 国内直连清单源（API v5 raw）在，且直连",
+              UpdateFeed.Sources.Any(s => s.Url.Contains("gitcode.com/api/v5") && s.NoProxy));
         Check("镜像：至少 3 条带加速前缀，且有 GitHub 直连（走后系统代理）",
               UpdateFeed.Sources.Count(s => s.Prefix.Length > 0) >= 3
               && UpdateFeed.Sources.Any(s => s.Prefix.Length == 0 && !s.NoProxy));
