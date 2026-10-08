@@ -568,19 +568,31 @@ internal sealed partial class App
             System.IO.Path.Combine(tmp, name + ".bmp"), ShotX, ShotY, ShotW, ShotH);
         string Count() => ActiveStroke == null ? "-" : ActiveStroke.Points.Count.ToString();
 
-        // ① 轻点：按住 8 帧再抬
-        Console.WriteLine("  ① 轻点 P=0.15（按住 8 帧）");
-        SendPenPoint(x0, y0, 150, contact: true, first: true);
-        for (int f = 0; f < 8; f++)
+        // ① 轻点：**接触尖峰（0.5×2 点）→ 轻压稳定（0.04×30 点）**，每帧塞 4 点（像真笔的高采样）。
+        //    这条对齐用户实况（"开 ink + 轻轻点 = 先冒个圆、再变尖笔锋"）。
+        Console.WriteLine("  ① 轻点：尖峰 0.5×2 → 0.04×30（每帧 4 点）");
         {
-            SendPenPoint(x0, y0, 150, contact: true, first: false);
-            SettleFrames(1);
-            Console.WriteLine($"    帧{f}: 活笔点数={Count()}");
+            bool firstPt = true;
+            void Burst(uint p, int n)
+            {
+                for (int k = 0; k < n; k++)
+                {
+                    SendPenPoint(x0, y0, p, contact: true, first: firstPt);
+                    firstPt = false;
+                    if (k % 4 == 3) SettleFrames(1);
+                }
+                SettleFrames(1);
+            }
+            Burst(500, 2);
+            Burst(40, 10);
+            Shot("tapdot-1a-spike-then-light");
+            Burst(40, 20);
+            Console.WriteLine($"    活笔点数={Count()}");
+            Shot("tapdot-1b-light-full");
+            SendPenPoint(x0, y0, 0, contact: false, first: false);
+            SettleFrames(40);
+            Shot("tapdot-1-light-done");
         }
-        Shot("tapdot-1-light-hold");
-        SendPenPoint(x0, y0, 0, contact: false, first: false);
-        SettleFrames(40);
-        Shot("tapdot-1-light-done");
 
         // ② 重点：按住 8 帧再抬
         Console.WriteLine("  ② 重点 P=0.60（按住 8 帧）");
