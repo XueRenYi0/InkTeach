@@ -1880,6 +1880,9 @@ internal sealed partial class OverlayWindow : IDisposable
                 if (app.ActiveStroke != null && !app.SuppressActiveStroke
                     && !(TrailDrawing && app.IsSystemWetStroke(app.ActiveStroke)))
                     DrawStroke(app.ActiveStroke);
+                if (app.PredictTailActive && !app.ActiveStroke.HiddenForPairing
+                    && !(TrailDrawing && app.IsSystemWetStroke(app.ActiveStroke)))
+                    DrawPredictTail(app.ActiveStroke.Color, app.PredictTailWidth);
                 DrawSelection(app);
                 // **图库面板**同理（2026-09-22 加）：它是浮动层上的东西，不补画的话
                 // "面板长什么样"这张图永远拍不到（这条路是给自检/出图用的，
@@ -1980,6 +1983,29 @@ internal sealed partial class OverlayWindow : IDisposable
         _ctx.Transform = s.Transform * (extra ?? Matrix3x2.Identity) * canvasToWindow;
         DrawStrokeCore(s);
         _ctx.Transform = canvasToWindow;
+    }
+
+    /// <summary>
+    /// B4 预测尾（`--predict2`）：**只画显示的"影子"**——独立的一小段几何、每帧重建，
+    /// 不进文档/存档/命中/撤销（它连 Stroke 都不是）。起点锚在"正在显示的平滑输出末点"上
+    /// （见 Engine.UpdatePredictTail），接头处连续；长度由引擎侧限速平滑——
+    /// 旧系统"突突跳"的正身（甩出去/缩回来）就是被这个限速和"断笔后缓慢回收"治的。
+    /// </summary>
+    private void DrawPredictTail(Color4 color, float width)
+    {
+        var eng = _app;
+        if (eng == null) return;
+        var pts = eng.PredictTailPoints;
+        if (pts.Count < 2) return;
+        using var geo = Gfx.D2DFactory.CreatePathGeometry();
+        using (var sink = geo.Open())
+        {
+            sink.BeginFigure(pts[0], FigureBegin.Hollow);
+            for (int i = 1; i < pts.Count; i++) sink.AddLine(pts[i]);
+            sink.EndFigure(FigureEnd.Open);
+            sink.Close();               // ⚠ 必须显式 Close：Dispose 不保证把几何封口（不封 = 空几何）
+        }
+        _ctx.DrawGeometry(geo, Brush(color), MathF.Max(1f, width), Gfx.StyleFor(StrokeDash.Solid));
     }
 
     private void DrawStrokeCore(Stroke s, Matrix3x2? extra = null)
@@ -2366,6 +2392,9 @@ internal sealed partial class OverlayWindow : IDisposable
                 && !(TrailDrawing && app.IsSystemWetStroke(app.ActiveStroke)))
             // 正在写的那一笔几何每帧都在变，用实现缓存只会不停重建，反而更慢
             DrawStroke(app.ActiveStroke);
+            if (app.PredictTailActive && !app.ActiveStroke.HiddenForPairing
+                && !(TrailDrawing && app.IsSystemWetStroke(app.ActiveStroke)))
+                DrawPredictTail(app.ActiveStroke.Color, app.PredictTailWidth);
 
             // 回放：正在"长"的那一条（前缀几何；已经出完的都在内容层里了）
             if (app.ReplayActive) DrawReplayCurrent(app);
@@ -2470,8 +2499,16 @@ internal sealed partial class OverlayWindow : IDisposable
 
         if (app.ActiveStroke != null)
         {
-            // [删除 2026-10-05] 渲染尾（预测段）已随老预测系统移除，脏区不必再往外扩。
             r.Add(CanvasRectToWindow(app.ActiveStroke.PaddedBounds));
+            // B4（2026-10-08）：预测尾又回来了——它**伸在笔尖前面**，必须算进脏区，
+            // 否则被裁剪（那正是"尾巴在画、屏幕上看不见"的根因）。
+            if (app.PredictTailActive)
+            {
+                var tb = RectF.Empty;
+                foreach (var p in app.PredictTailPoints) tb.Add(p.X, p.Y);
+                if (!tb.IsEmpty)
+                    r.Add(CanvasRectToWindow(tb.Inflate(MathF.Max(2f, app.PredictTailWidth))));
+            }
         }
 
         // 呼出盘（Ctrl+Q）：固定画在盘心，但轨迹线跟着指针、内容随扇区变——

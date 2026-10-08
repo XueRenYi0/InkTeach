@@ -101,7 +101,8 @@ public partial class InkEngine
             or "--doc"
             or "--nosmooth" or "--printersafe"
             or "--mean2gauss" or "--mean2guniform" or "--mean2gsigma" or "--mean2gfast"
-            or "--mean2glo" or "--mean2ghi" or "--mean2gtip" => true,
+            or "--mean2glo" or "--mean2ghi" or "--mean2gtip"
+            or "--predict2" or "--pred2ms" => true,
         _ => false,
     };
 
@@ -971,6 +972,9 @@ public partial class InkEngine
     private void AddPointCleaned(float x, float y, float p, double t)
     {
         if (ActiveStroke == null) return;
+        // B4：喂预测器。**统一用处理时刻 NowMs**——同一笔里混用"硬件时标 / 消息时标"
+        // （笔消息 vs raw 补点的来源不同）会把速度算乱，v0 先用一把单调时钟保稳。
+        if (PredictTailEnabled) _predictor.Add(x, y, NowMs);
         if (CleanWindow <= 1) { ActiveStroke.AddPoint(x, y, p, t); return; }
 
         _cleanBuf.Add((x, y, p));
@@ -980,6 +984,90 @@ public partial class InkEngine
         { ax += _cleanBuf[i].X; ay += _cleanBuf[i].Y; ap += _cleanBuf[i].P; }
         int n = _cleanBuf.Count;
         ActiveStroke.AddPoint(ax / n, ay / n, ap / n, t);
+    }
+
+    // ---- B4：有纪律的预测尾（2026-10-08 重启）--------------------------------
+    // 旧账（"乱跳"的正身，写在 App.TailJumpTest 的注释里）：鼠标/兼容模式输入是突发的——
+    // 来一阵 → 尾巴甩出去；间隔一超 20ms → 速度清零 → 尾巴整个消失。修法 = 长度限速平滑。
+    // 纪律：只画显示（独立几何，不进文档/存档/命中）、每帧重建、慢写/反向/断笔由
+    // InkPredictor 内建把关；开关 `--predict2`（默认关）。
+    internal static bool PredictTailEnabled;
+    private readonly InkPredictor _predictor = new();
+    private float _tailFactor;                            // 显示尾长系数 0..1（限速平滑）
+    private readonly List<Vector2> _tailOffsets = new();  // 预测偏移（相对原始末点，画布坐标）
+    private readonly List<Vector2> _tailCanvas = new();   // 供 Overlay：锚点 + 预测点（画布坐标）
+    private float _tailWidth = 3f;
+
+    /// <summary>Overlay 每帧读：预测尾现在该不该画（点数 ≥2 才画）。</summary>
+    internal bool PredictTailActive =>
+        PredictTailEnabled && ActiveStroke != null && _tailCanvas.Count >= 2;
+    internal IReadOnlyList<Vector2> PredictTailPoints => _tailCanvas;
+    internal float PredictTailWidth => _tailWidth;
+    /// <summary>诊断（`--tailjumptest` 用）：喂点数 / 尾点数 / 当前长度系数。</summary>
+    internal string PredictTailDebug => $"feed={_predictor.Count} canvas={_tailCanvas.Count} factor={_tailFactor:F2}";
+
+    private void ResetPredictTail()
+    {
+        _predictor.Reset();
+        _tailFactor = 0f;
+        _tailOffsets.Clear();
+        _tailCanvas.Clear();
+    }
+
+    /// <summary>
+    /// 每帧一次（渲染前）：算出这一帧要画多长的预测尾。
+    /// **长度限速**是重点：伸展 ~0.34/帧、回收 ~0.16/帧（90Hz 下 ≈30ms / 60ms 的量级）——
+    /// 看得见的效果是"墨慢慢跟上去 / 慢慢收回来"，而不是旧系统那种一出一进的"突突跳"。
+    /// （internal：自检的 `SettleFrames` 帧驱动器也要调它——它不走主循环。）
+    /// </summary>
+    internal void UpdatePredictTail()
+    {
+        _tailCanvas.Clear();
+        if (!PredictTailEnabled || ActiveStroke == null || ActiveStroke.Points.Count < 2)
+        {
+            _tailFactor = 0f;
+            _tailOffsets.Clear();
+            return;
+        }
+
+        var pred = new PredictedPoint[6];
+        int n = _predictor.Predict(pred);
+        if (n > 0)
+        {
+            var raw = ActiveStroke.Points[^1];
+            _tailOffsets.Clear();
+            for (int i = 0; i < n; i++)
+                _tailOffsets.Add(new Vector2(pred[i].X - raw.X, pred[i].Y - raw.Y));
+        }
+
+        float target = _tailOffsets.Count > 0 ? 1f : 0f;
+        float rate = target > _tailFactor ? 0.34f : 0.16f;
+        _tailFactor += Math.Clamp(target - _tailFactor, -rate, rate);
+        if (_tailFactor < 0.015f) _tailFactor = 0f;
+        if (_tailFactor <= 0f) return;
+
+        // 锚点优先用"正在显示的平滑输出末点"（接头处连续，不会和笔身错开）；
+        // 建模不成功（catmull/raw）时退回原始末点。
+        Vector2 anchor;
+        if (StrokeMotion.Build(ActiveStroke) && StrokeMotion.Count > 0)
+        {
+            var m = StrokeMotion.At(StrokeMotion.Count - 1);
+            anchor = new Vector2(m.X, m.Y);
+        }
+        else
+        {
+            var r = ActiveStroke.Points[^1];
+            anchor = new Vector2(r.X, r.Y);
+        }
+
+        _tailCanvas.Add(anchor);
+        for (int i = 0; i < _tailOffsets.Count; i++)
+            _tailCanvas.Add(anchor + _tailOffsets[i] * _tailFactor);
+
+        // 尾宽：有压感取末点直径（和 D2D 描边口径一致），否则用笔宽。
+        _tailWidth = ActiveStroke.HasPressure
+            ? MathF.Max(1f, PressureWidth.HalfWidth(ActiveStroke.Width, ActiveStroke.Points[^1].P) * 2f)
+            : MathF.Max(1f, ActiveStroke.Width);
     }
 
     /// <summary>记下"当时的 Wintab 读数"，供 `--recinkp` 录进文件（不参与绘制）。</summary>
@@ -2063,6 +2151,11 @@ public partial class InkEngine
             // （实测：不同点数 = 0）。现在它只管它该管的——曲线化开不开。
             if (args.Contains("--nosmooth")) StrokeSmoothing.SetEnabled(false);
             if (args.Contains("--smooth")) StrokeSmoothing.SetEnabled(true);
+            // B4：自绘预测尾（`--predict2`；`--pred2ms N` 地平线，收进 8~200ms）
+            if (args.Contains("--predict2")) PredictTailEnabled = true;
+            for (int i = 0; i < args.Length - 1; i++)
+                if (args[i] == "--pred2ms" && float.TryParse(args[i + 1], out float p2ms))
+                    _predictor.HorizonMs = Math.Clamp(p2ms, InkPredictor.MinHorizonMs, InkPredictor.HardMaxHorizonMs);
             // [停用] if (args.Contains("--inkmodel")) motionMode = StrokeMotionMode.Spring;
             for (int i = 0; i < args.Length - 1; i++)
             {
@@ -2951,7 +3044,9 @@ public partial class InkEngine
             //   只能靠猜。这两件事都不该靠猜。）
             // [停用 2026-10-05] 笔迹预测（含 `--predicttip`）：用户决定"预测不接了"，
             // 代码保留（PredictEnabled 恒 false），见 `已停用-渲染实验.md`。
-            Console.WriteLine("笔迹预测: 已停用（2026-10-05，代码保留；见 已停用-渲染实验.md）");
+            Console.WriteLine(PredictTailEnabled
+                ? $"笔迹预测: B4 自绘尾（--predict2；地平线 {_predictor.HorizonMs:F0} ms）"
+                : "笔迹预测: 关（B4 自绘尾，--predict2；旧系统 2026-10-05 停用）");
             // 书写期间的 GC 低延迟档：低配上"偶发卡一下"的第一嫌疑就是它没生效。
             // 这里印的是**读回来的实际状态**（见 GcLatency.Describe），不是"我们想让它开"。
             Console.WriteLine($"书写期间 GC 低延迟档: {GcLatency.Describe()}"
@@ -3235,6 +3330,7 @@ public partial class InkEngine
                     DrainMessages();
                     _dirty = true;
                 }
+                UpdatePredictTail();   // B4：预测尾（每帧重建；`--predict2`，默认关）
                 // 渲染期间界面可能又提出"我还要一帧"（在 Render 里调 InvalidateUi）。
                 // 用序号认出来，别让这一句 _dirty = false 把它抹掉——
                 // 抹掉的表现就是"动画或一次性外观变化卡在第一帧"。
@@ -4320,6 +4416,7 @@ public partial class InkEngine
             trailStarted = WindowAt(screenX, screenY)?.BeginInkTrail(
                 tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f) ?? false;
         _pen.BeginStroke();   // 缺压回填的基准只活在"一笔"之内（见 PenSampleBuffer.BeginStroke）
+        ResetPredictTail();   // B4：新的一笔，预测器从零开始
         ActiveStroke = new Stroke
         {
             Tool = tool,
@@ -8568,6 +8665,7 @@ public partial class InkEngine
     private void BeginShapeAt(Tool tool, float x, float y)
     {
         var kind = KindOfShapeTool(tool);
+        ResetPredictTail();   // B4：图形工具不预测，但把上一笔的尾巴清掉
         ActiveStroke = new Stroke
         {
             Tool = tool,

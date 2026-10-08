@@ -57,8 +57,11 @@ internal sealed class InkPredictor
     public float VelocitySmoothing { get; set; } = 0f;
     /// <summary>预测段相对最后一点的最大位移（px）。</summary>
     public float MaxDistance { get; set; } = 12f;
-    /// <summary>相邻采样间隔超过这个值就当断笔。</summary>
-    public double MaxGapMs { get; set; } = 20.0;
+    /// <summary>相邻采样间隔超过这个值就当断笔。
+    /// [2026-10-08 重启改] 20 → **40**：手写板走兼容鼠标路时输入是突发的，实测报点间隔
+    /// 常态到 ~30ms（Chromium 的 20 是按他自己的流定的）；40ms 以内继续预测，超过才断笔
+    /// ——超过的那一下由显示层的"长度限速"收尾（不会一出一进地弹）。</summary>
+    public double MaxGapMs { get; set; } = 40.0;
     /// <summary>一次最多给出几个预测点（按采样间隔铺满地平线）。</summary>
     public int MaxPoints { get; set; } = 4;
 

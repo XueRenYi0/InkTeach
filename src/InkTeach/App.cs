@@ -871,13 +871,13 @@ internal sealed partial class App : InkEngine.InkEngine
                               + $"，apply={AutoApplyUpdate} ===");
             CheckUpdateFromUi();
         }
-        // [停用 2026-10-05] 预测尾"突突跳"检测（老预测系统停用，见 已停用-渲染实验.md）
-        // else if (mode == "--tailjumptest")
-        // {
-        //     _autoExitAt = double.MaxValue;
-        //     _nextLogAt = double.MaxValue;
-        //     TailJumpTest(args.Contains("--noisy"), args.Contains("--off"));
-        // }
+        else if (mode == "--tailjumptest")
+        {
+            // [重启 2026-10-08] B4 预测尾"突突跳"检测（老系统 2026-10-05 停用；见 已停用-渲染实验.md）
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            TailJumpTest(args.Contains("--noisy"), args.Contains("--off"));
+        }
         else if (mode == "--pressurediag")
         {
             _autoExitAt = double.MaxValue;
@@ -4050,6 +4050,7 @@ internal sealed partial class App : InkEngine.InkEngine
         {
             PumpMessages();
             StepCameraAnim();          // 主循环每帧做的那一件事，自检也得做（否则相机永远停在起点）
+            UpdatePredictTail();       // B4：预测尾的每帧更新（主循环里挂了同一句；自检不走主循环）
             RenderAll();
         }
     }
@@ -5475,15 +5476,16 @@ internal sealed partial class App : InkEngine.InkEngine
     /// 对照组 `--nopredict` 应当明显更稳（这就是这条测试的自证）。
     /// ⚠ 2026-09-29 起预测**默认关**（用户拍板），所以这条测试要显式 `--predict` 才有对照。
     /// </summary>
-    /* [删除 2026-10-05] 预测尾"突突跳"检测 + MaxInkColumn 辅助：随老预测系统移除
-       （原文备份见 `.revert/2026-10-05-渲染减法/`；恢复见 `已停用-渲染实验.md`）。
+    // [重启 2026-10-08] B4 预测尾"突突跳"检测（老系统 2026-10-05 停用，本次接回新尾）：
+    // 新尾的纪律（长度限速 + 断笔后缓慢回收）就是对着下面这段"机理"修的。
     private void TailJumpTest(bool noisy = false, bool predictOff = false)
     {
         Console.WriteLine();
         Console.WriteLine("=== 预测尾“突突跳”检测（合成鼠标，突发节奏）===");
         // 测试自己摆状态（不依赖启动默认值）：默认测"开预测"，`--off` 测对照
-        PredictEnabled = !predictOff;
-        Console.WriteLine($"  预测={(PredictEnabled ? "开" : "关（对照）")}；节奏={(noisy ? "忽大忽小 + 间隔不齐（像真鼠标）" : "固定步长 + 每 4 点一停")}");
+        bool predOn = !predictOff;
+        global::InkEngine.InkEngine.PredictTailEnabled = predOn;
+        Console.WriteLine($"  预测={(predOn ? "开" : "关（对照）")}；节奏={(noisy ? "忽大忽小 + 间隔不齐（像真鼠标）" : "固定步长 + 每 4 点一停")}");
 
         if (SkipIfNoSyntheticInput("预测尾跳跃检测（需要合成鼠标）")) { _quit = true; return; }
 
@@ -5498,7 +5500,7 @@ internal sealed partial class App : InkEngine.InkEngine
 
         float y0 = _virtualY + _virtualH * 0.5f;
         float x0 = _virtualX + 400f;
-        const int N = 90;
+        const int N = 60;
 
         // 先把这一步的"步长 + 间隔"定下来（确定性）：忽大忽小的步长是**鼠标加速**的样子，
         // 不齐的间隔是**报点节奏**的样子，两者一起才逼得出"尾巴一出一进"。
@@ -5508,7 +5510,7 @@ internal sealed partial class App : InkEngine.InkEngine
         float total = 0f;
         for (int i = 0; i < N; i++)
         {
-            steps[i] = noisy ? 2f + (float)rnd.NextDouble() * 32f : 14f;
+            steps[i] = noisy ? 2f + (float)rnd.NextDouble() * 32f : 30f;
             gaps[i] = noisy ? 6 + rnd.Next(36) : (i % 4 == 3 ? 60 : 8);
             total += steps[i];
         }
@@ -5523,9 +5525,11 @@ internal sealed partial class App : InkEngine.InkEngine
         SettleFrames(60);
 
         var tip = new List<(double t, float x)>();
+        var sentAt = new List<(double t, float x)>();   // 每个采样时刻"最后报的坐标"（算前沿-报点差）
         int sent = 0;
         float cx = x0;
         double nextMove = NowMs;
+        int tailFrames = 0;                      // 诊断：预测尾处于激活状态的帧数
         while (!_quit && sent < N)
         {
             if (NowMs >= nextMove)
@@ -5535,11 +5539,15 @@ internal sealed partial class App : InkEngine.InkEngine
                 SendMouse((int)cx, (int)y0, 0);
                 nextMove = NowMs + gaps[sent - 1];
             }
-            SettleFrames(16);                    // 一次采样 = 一帧
+            SettleFrames(1);                     // 一拍 ≈ 一帧：保证"报点间隔"真的落在
+                                                 // MaxGapMs(40ms) 以内——不然预测器每拍都被
+                                                 // 断笔重置，尾巴永远长不出来，测试什么都测不到
+            if (PredictTailActive) tailFrames++;
             if (ScreenProbe.CaptureRegionInto(buf, bandX, bandY, bandW, bandH))
             {
                 int col = MaxInkColumn(buf, bandW, bandH, minRun: 5);
                 tip.Add((NowMs, col >= 0 ? bandX + col : float.NaN));
+                sentAt.Add((NowMs, cx));
             }
         }
         SendMouse((int)cx, (int)y0, Native.MOUSEEVENTF_LEFTUP);
@@ -5563,10 +5571,25 @@ internal sealed partial class App : InkEngine.InkEngine
                           + $"最后笔尖 x={lastTip:F0}（落后 {lastSent - lastTip:F0}px）");
         Console.WriteLine($"  往前跳：最大 {maxFwd:F0}px/帧");
         Console.WriteLine($"  往后退：{backCount} 次，最大 {maxBack:F0}px  ← “突突”的正身");
-        bool ok = backCount <= 2 && maxFwd <= 30f;
+        // [B4 新判据] 墨前沿 − 最后报点：量"尾有没有真的伸出去"（恒定的一截在差分里看不见）。
+        double leadSum = 0; int leadN = 0; float leadMax = float.MinValue;
+        for (int i = 0; i < tip.Count && i < sentAt.Count; i++)
+        {
+            if (float.IsNaN(tip[i].x)) continue;
+            float lead = tip[i].x - sentAt[i].x;
+            leadSum += lead; leadN++;
+            if (lead > leadMax) leadMax = lead;
+        }
+        if (leadN > 0)
+            Console.WriteLine($"  墨前沿−报点：平均 {leadSum / leadN:F1}px / 最大 {leadMax:F1}px"
+                              + "（开预测应明显偏正；它就是‘尾’在屏幕上的样子）");
+        Console.WriteLine($"  预测尾：{tailFrames}/{tip.Count} 帧处于激活状态");
+        // B4 重启后的判据：`backCount`（回缩次数）才是"突突跳"的正身（必须 ~0）；
+        // `maxFwd` 的上限 = 合成步长 30 + 预测尾上限 12（MaxDistance），共 42。
+        bool ok = backCount <= 2 && maxFwd <= 42f;
         Console.WriteLine(ok
             ? "  PASS: 笔尖轨迹是稳的（没有反复回缩）"
-            : $"  FAIL: 笔尖在往回缩（{backCount} 次）——尾巴在一出一进地弹");
+            : $"  FAIL: 笔尖轨迹不稳（回缩 {backCount} 次 / 单帧最大 {maxFwd:F0}px）");
         Console.WriteLine();
         _quit = true;
     }
@@ -5590,8 +5613,6 @@ internal sealed partial class App : InkEngine.InkEngine
         }
         return -1;
     }
-
-    */
 
     private void CurveShowcase(string path)
     {
