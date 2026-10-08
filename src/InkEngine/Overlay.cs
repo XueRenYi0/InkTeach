@@ -2050,7 +2050,7 @@ internal sealed partial class OverlayWindow : IDisposable
             //     **线型（实线/虚线/点线）就在这一步按 <see cref="StrokeDash"/> 选描边样式** ——
             //     全引擎只此一处，任何"能画出图形的路径"（内容层、浮动预览、导出、自检出图）
             //     都经过 DrawStroke，所以线型自动都生效，不用逐处补。
-            if (s.IsSinglePoint) _ctx.FillGeometry(geo, Brush(s.Color));
+            if (s.RendersAsDot) _ctx.FillGeometry(geo, Brush(s.Color));
             else if (!DrawPressureInk(s))
                 _ctx.DrawGeometry(geo, Brush(s.Color), MathF.Max(1f, s.Width), Gfx.StyleFor(s.Dash));
         }
@@ -4583,13 +4583,11 @@ internal sealed partial class OverlayWindow : IDisposable
             return;
         }
         if (s.Points.Count == 0) return;
-        if (s.IsSinglePoint)
+        if (s.RendersAsDot)
         {
-            float rad = s.HasPressure && PressureWidth.Enabled
-                ? PressureWidth.HalfWidth(s.Width, s.Points[0].P)
-                : s.Width * 0.5f;
+            float rad = s.DotRadius();
             _ctx.FillEllipse(new Ellipse(new Vector2(s.Points[0].X, s.Points[0].Y),
-                                         MathF.Max(1f, rad), MathF.Max(1f, rad)),
+                                         rad, rad),
                              Brush(s.Color));
             return;
         }

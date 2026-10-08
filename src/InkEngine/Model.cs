@@ -3876,6 +3876,45 @@ internal sealed class Stroke
     /// </summary>
     public bool IsSinglePoint => Kind == StrokeKind.Freehand && Points.Count == 1;
 
+    /// <summary>微移笔画（总路径 ≤ <see cref="TinyDotPx"/>）也算"点"。
+    /// 2026-10-08（用户 B 案）：轻点时笔尖总会动 1~3px，按普通笔迹描就会描出小折钩、
+    /// 形状各异的痕迹；这里统一当"点"画。半径取**整笔最大压力**（起手那几点压力最低，
+    /// 取最大才符合"按多重、点多圆"），再压 <see cref="DotFactorCap"/> 上限。
+    /// **live 与落地走同一判据** → 松手不再变形、点完起写不再换个样子。</summary>
+    public bool RendersAsDot => IsSinglePoint
+        || (Kind == StrokeKind.Freehand && Points.Count > 1 && PathLengthUpTo(TinyDotPx) <= TinyDotPx);
+
+    /// <summary>"微移算点"的路径上限（画布像素）。</summary>
+    public const float TinyDotPx = 4f;
+
+    /// <summary>圆点宽度的上限（倍）：0.8 = 不再拱成大圆，但仍保留"压力越大点越大"到近满压。</summary>
+    public const float DotFactorCap = 0.8f;
+
+    /// <summary>圆点半径（"点/微移笔画"共用；渲染与回放都调它，保证一处口径）。</summary>
+    public float DotRadius()
+    {
+        if (HasPressure && PressureWidth.Enabled)
+        {
+            float p = 0f;
+            foreach (var q in Points) if (q.P > p) p = q.P;
+            return MathF.Max(1f, Width * 0.5f * MathF.Min(PressureWidth.Factor(p), DotFactorCap));
+        }
+        return MathF.Max(1f, Width * 0.5f);      // 无压感（鼠标/触摸）：档位宽度的一半
+    }
+
+    /// <summary>从首点起的累计路径长度；一超过 <paramref name="limit"/> 提前返回（长笔不白算）。</summary>
+    private float PathLengthUpTo(float limit)
+    {
+        float len = 0f;
+        for (int i = 1; i < Points.Count; i++)
+        {
+            len += Vector2.Distance(new Vector2(Points[i - 1].X, Points[i - 1].Y),
+                                    new Vector2(Points[i].X, Points[i].Y));
+            if (len > limit) return len;
+        }
+        return len;
+    }
+
     /// <summary>
     /// 套索判据用的**代表点集**（画布坐标），追加到 <paramref name="dst"/>。
     ///
@@ -4477,8 +4516,8 @@ internal sealed class Stroke
             StrokeKind.Frustum => BuildPrism(factory, hidden: false),
             StrokeKind.Image => BuildImageRect(factory),
             // 自由笔迹：只给**中心线**，描边（宽度、端帽、拐角）交给 D2D。
-            // 单点例外——那是一个圆点，几何直接建成圆（渲染那边会填充它）。
-            _ => Points.Count == 1 ? BuildDot(factory) : BuildCenterline(factory),
+            // 单点与"微移笔画"例外——那是一个圆点，几何直接建成圆（渲染那边会填充它）。
+            _ => RendersAsDot ? BuildDot(factory) : BuildCenterline(factory),
         };
         if (Geometry != null) LiveGeometries++;
         _builtRevision = Revision;
@@ -5702,9 +5741,7 @@ internal sealed class Stroke
     /// </summary>
     private ID2D1Geometry BuildDot(ID2D1Factory1 factory)
     {
-        float rad = MathF.Max(1f, HasPressure && PressureWidth.Enabled
-            ? PressureWidth.HalfWidth(Width, Points[0].P)
-            : Width * 0.5f);
+        float rad = DotRadius();
         return factory.CreateEllipseGeometry(
             new Ellipse(new Vector2(Points[0].X, Points[0].Y), rad, rad));
     }
