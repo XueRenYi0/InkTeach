@@ -993,7 +993,8 @@ public partial class InkEngine
     // InkPredictor 内建把关；开关 `--predict2`（默认关）。
     internal static bool PredictTailEnabled;
     private readonly InkPredictor _predictor = new();
-    private float _tailFactor;                            // 显示尾长系数 0..1（限速平滑）
+    private float _tailLen;                               // 显示尾长（画布像素，限速平滑）
+    private float _tailWidthState;                        // 尾宽平滑状态（0=未定）
     private readonly List<Vector2> _tailOffsets = new();  // 预测偏移（相对原始末点，画布坐标）
     private readonly List<Vector2> _tailCanvas = new();   // 供 Overlay：锚点 + 预测点（画布坐标）
     private float _tailWidth = 3f;
@@ -1003,21 +1004,26 @@ public partial class InkEngine
         PredictTailEnabled && ActiveStroke != null && _tailCanvas.Count >= 2;
     internal IReadOnlyList<Vector2> PredictTailPoints => _tailCanvas;
     internal float PredictTailWidth => _tailWidth;
-    /// <summary>诊断（`--tailjumptest` 用）：喂点数 / 尾点数 / 当前长度系数。</summary>
-    internal string PredictTailDebug => $"feed={_predictor.Count} canvas={_tailCanvas.Count} factor={_tailFactor:F2}";
+    /// <summary>诊断（`--tailjumptest` 用）：喂点数 / 尾点数 / 当前尾长。</summary>
+    internal string PredictTailDebug => $"feed={_predictor.Count} canvas={_tailCanvas.Count} len={_tailLen:F1}";
 
     private void ResetPredictTail()
     {
         _predictor.Reset();
-        _tailFactor = 0f;
+        // v0：速度估计加一层平滑（0.4）——批量投递/压力变化会让差分速度有帧间尖峰，
+        // 尖峰直接乘进尾巴长度就是"笔头跳跃"（4 号粗细下特别显眼的那种）。
+        _predictor.VelocitySmoothing = 0.4f;
+        _tailLen = 0f;
+        _tailWidthState = 0f;
         _tailOffsets.Clear();
         _tailCanvas.Clear();
     }
 
     /// <summary>
     /// 每帧一次（渲染前）：算出这一帧要画多长的预测尾。
-    /// **长度限速**是重点：伸展 ~0.34/帧、回收 ~0.16/帧（90Hz 下 ≈30ms / 60ms 的量级）——
-    /// 看得见的效果是"墨慢慢跟上去 / 慢慢收回来"，而不是旧系统那种一出一进的"突突跳"。
+    /// **长度限速在"像素"上做**（治"跳跃的笔头"）：速度估计的帧间尖峰（批量投递、
+    /// 压力变化）不再直接乘进偏移——尾巴长度按 伸展 ~2.2px/帧、回收 ~1.2px/帧
+    /// （90Hz 下 ≈200/110 px/s）逼近目标，方向照旧。看得见的效果是"墨顺滑地跟上去/收回来"。
     /// （internal：自检的 `SettleFrames` 帧驱动器也要调它——它不走主循环。）
     /// </summary>
     internal void UpdatePredictTail()
@@ -1025,7 +1031,7 @@ public partial class InkEngine
         _tailCanvas.Clear();
         if (!PredictTailEnabled || ActiveStroke == null || ActiveStroke.Points.Count < 2)
         {
-            _tailFactor = 0f;
+            _tailLen = 0f;
             _tailOffsets.Clear();
             return;
         }
@@ -1040,11 +1046,17 @@ public partial class InkEngine
                 _tailOffsets.Add(new Vector2(pred[i].X - raw.X, pred[i].Y - raw.Y));
         }
 
-        float target = _tailOffsets.Count > 0 ? 1f : 0f;
-        float rate = target > _tailFactor ? 0.34f : 0.16f;
-        _tailFactor += Math.Clamp(target - _tailFactor, -rate, rate);
-        if (_tailFactor < 0.015f) _tailFactor = 0f;
-        if (_tailFactor <= 0f) return;
+        // ---- 长度限速（在"像素"上做，治"跳跃的笔头"）----
+        float tipLenRaw = 0f;
+        if (n > 0 && _tailOffsets.Count > 0)
+        {
+            var o = _tailOffsets[^1];
+            tipLenRaw = MathF.Sqrt(o.X * o.X + o.Y * o.Y);
+        }
+        float rate = tipLenRaw > _tailLen ? 2.2f : 1.2f;
+        _tailLen += Math.Clamp(tipLenRaw - _tailLen, -rate, rate);
+        if (_tailLen < 0.4f) _tailLen = 0f;
+        if (_tailLen <= 0f || _tailOffsets.Count == 0) return;
 
         // 锚点优先用"正在显示的平滑输出末点"（接头处连续，不会和笔身错开）；
         // 建模不成功（catmull/raw）时退回原始末点。
@@ -1060,14 +1072,20 @@ public partial class InkEngine
             anchor = new Vector2(r.X, r.Y);
         }
 
+        var tipOff = _tailOffsets[^1];
+        float tipOffLen = MathF.Max(1e-3f, MathF.Sqrt(tipOff.X * tipOff.X + tipOff.Y * tipOff.Y));
+        float scale = _tailLen / tipOffLen;
         _tailCanvas.Add(anchor);
         for (int i = 0; i < _tailOffsets.Count; i++)
-            _tailCanvas.Add(anchor + _tailOffsets[i] * _tailFactor);
+            _tailCanvas.Add(anchor + _tailOffsets[i] * scale);
 
-        // 尾宽：有压感取末点直径（和 D2D 描边口径一致），否则用笔宽。
-        _tailWidth = ActiveStroke.HasPressure
+        // 尾宽：有压感取末点直径（和 D2D 描边口径一致），否则用笔宽；宽度也做一阶平滑，
+        // 防"忽粗忽细"在接头处闪（"笔头跳跃"反馈的另一半）。
+        float wTarget = ActiveStroke.HasPressure
             ? MathF.Max(1f, PressureWidth.HalfWidth(ActiveStroke.Width, ActiveStroke.Points[^1].P) * 2f)
             : MathF.Max(1f, ActiveStroke.Width);
+        _tailWidthState = _tailWidthState <= 0f ? wTarget : _tailWidthState + (wTarget - _tailWidthState) * 0.3f;
+        _tailWidth = _tailWidthState;
     }
 
     /// <summary>记下"当时的 Wintab 读数"，供 `--recinkp` 录进文件（不参与绘制）。</summary>
