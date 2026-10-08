@@ -1184,6 +1184,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --motiontest        运动模型自检（baseline / catmull / mean2 同批语料出表）");
         Console.WriteLine("  --himetric / --nohimetric  亚像素输入（默认开；--nohimetric 退回 D0 对照）");
         Console.WriteLine("  模型调参：--mean2win 画布像素 / --smoothcorner N 角点阈值");
+        Console.WriteLine("  预测尾：--nopredict2 关（默认开）/ --pred2ms N 地平线(ms) / --turndeg N 急转丢速阈值(度，默认60，180=老行为)");
         Console.WriteLine("  [已停用] 预测、拟合(--mean2fit)、模拟压力(--simpressure/--pfpressure)、笔锋");
         Console.WriteLine("           (--simtaper/--flicktip)、对照模式(raw/sliding/spring/oneeuro/mean/gauss)等：");
         Console.WriteLine("           见 已停用-渲染实验.md（代码保留）");
@@ -5493,6 +5494,49 @@ internal sealed partial class App : InkEngine.InkEngine
         bool predOn = !predictOff;
         global::InkEngine.InkEngine.PredictTailEnabled = predOn;
         Console.WriteLine($"  预测={(predOn ? "开" : "关（对照）")}；节奏={(noisy ? "忽大忽小 + 间隔不齐（像真鼠标）" : "固定步长 + 每 4 点一停")}");
+
+        // ── B4.2（2026-10-08 真机反馈）：**急转**时不许留"旧方向"的尾（**纯引擎，不走屏幕/合成鼠标**，
+        //    所以放在 SkipIfNoSyntheticInput 之前——鼠标忙的时候这项也照样能跑）───────────
+        //   用户（学校大屏 + 手写板）："写快的时候急转/急拐弯，偶尔会跳一下"。
+        //   机理：旧门槛只挡"完全反向"（>90°），60~90° 的急转不挡 → 尾巴沿旧方向多伸一截，
+        //   再按慢速率缩回 = 那一"跳"。修法：门槛收紧（`--turndeg`，默认 60°）+ 失效快收。
+        //   快写向右 → 急转 75° → 两帧内"沿旧方向伸出"要 ≤4px。
+        if (predOn)
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            float bx = 400f, by = 300f;
+            DwellBeginForTest(bx, by);
+            double t0 = NowMs;
+            for (int i = 1; i <= 20; i++)          // 快写：4ms 一点、每点 12px（=3px/ms，正高速）
+            {
+                NowMs = t0 + i * 4;
+                DwellMoveForTest(bx + i * 12f, by);
+            }
+            UpdatePredictTail(); UpdatePredictTail(); UpdatePredictTail();
+            bool hadTail = PredictTailActive;
+            float rad = 75f * MathF.PI / 180f;     // 急转 75°：向下
+            for (int k = 1; k <= 2; k++)
+            {
+                NowMs = t0 + (20 + k) * 4;
+                DwellMoveForTest(bx + 240f + 12f * k * MathF.Cos(rad),
+                                       by + 12f * k * MathF.Sin(rad));
+            }
+            UpdatePredictTail(); UpdatePredictTail();
+            float lastX = bx + 240f + 24f * MathF.Cos(rad);
+            float lead = float.MinValue;
+            foreach (var pt in PredictTailPoints) lead = MathF.Max(lead, pt.X - lastX);
+            if (lead == float.MinValue) lead = 0f; // 尾收干净了：更谈不上"旧方向残留"
+            bool turnOk = hadTail && lead <= 4f;
+            Console.WriteLine($"  急转 75°：转前尾={(hadTail ? "有" : "无")}；"
+                              + $"转后沿旧方向最远伸出 {lead:F1}px（要求 ≤4）");
+            Console.WriteLine(turnOk
+                ? "  PASS: 急转处没有'旧方向'的尾残留"
+                : $"  FAIL: 急转处残留旧方向的尾 {lead:F1}px（或转前尾就没长出来）");
+            DwellEndForTest();
+            Doc.Clear();
+            Doc.ClearHistory();
+        }
 
         if (SkipIfNoSyntheticInput("预测尾跳跃检测（需要合成鼠标）")) { _quit = true; return; }
 

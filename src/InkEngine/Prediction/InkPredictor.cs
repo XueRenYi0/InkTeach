@@ -25,7 +25,7 @@ internal struct PredictedPoint
 ///   · 整体阻尼 Damping（默认 0.7）：宁可少补，不要冲过头
 ///   · 加速度单独衰减 AccelDamping（默认 0.4）后再限幅——差分出来的项噪声最大
 ///   · 慢速不预测（速度 < MinSpeed）：慢写时预测没有收益，只有抖动
-///   · 反向/急转检测：新点与当前速度反向时丢掉速度与加速度
+///   · 反向/急转检测：夹角 >90° 一律丢；**急转**（夹角超过 `SharpTurnCos`，默认 60°）也丢
 ///   · 断笔重置：相邻采样间隔 > MaxGapMs（20 ms，Chromium 的 kMaxTimeDelta）
 ///   · 总位移上限 MaxDistance：兜底，防止极端速度下的长尾
 ///
@@ -55,6 +55,17 @@ internal sealed class InkPredictor
     /// 这里的取值是用真实数据扫出来的，见 测试-压感与预测.md。
     /// </summary>
     public float VelocitySmoothing { get; set; } = 0f;
+    /// <summary>
+    /// 急转丢速阈值（cos 值，默认 0.5 = 夹角 60°）：新样本方向与**上一次速度**的夹角
+    /// 超过它 → 丢掉速度与加速度（拐弯处宁可这一帧不预测，也不沿旧方向甩出去一截）。
+    ///
+    /// **完全反向（>90°）不受这个值影响，一律丢**；180°（cos = −1）= 退回"只挡反向"的老行为
+    /// （A/B 对照用）。由引擎按命令行 `--turndeg` 每帧同步进来。
+    ///
+    /// 2026-10-08：学校机反馈"写快时急转偶尔跳一下"——旧实现只挡反向，60~90° 的急转漏网，
+    /// 尾巴会沿旧方向多伸一截、再按慢速率缩回，看上去就是"跳"。
+    /// </summary>
+    public float SharpTurnCos { get; set; } = 0.5f;
     /// <summary>预测段相对最后一点的最大位移（px）。</summary>
     public float MaxDistance { get; set; } = 12f;
     /// <summary>相邻采样间隔超过这个值就当断笔。
@@ -139,13 +150,21 @@ internal sealed class InkPredictor
             _vy = rawVy;
         }
 
-        // 反向/急转：速度与上一次方向相反 → 丢掉速度和加速度，
-        // 宁可这一帧不预测，也不要在拐弯处甩出去一截。
-        if (_hasPrevVelocity && (rawVx * _px + rawVy * _py) < 0f)
+        // 反向/急转：新方向与上一次速度**完全反向**（>90°）一律丢；
+        // **急转**（夹角 > SharpTurnCos 阈值，默认 60°）也丢——宁可这一帧不预测，
+        // 也不要在拐弯处甩出去一截（2026-10-08 学校机："写快时急转偶尔跳一下"，
+        // 旧实现只挡反向，60~90° 的急转漏网、尾巴沿旧方向多伸一截再慢慢缩）。
+        if (_hasPrevVelocity)
         {
-            _vx = _vy = 0f;
-            _ax = _ay = 0f;
-            return;
+            float dot = rawVx * _px + rawVy * _py;
+            float mags = MathF.Sqrt(rawVx * rawVx + rawVy * rawVy)
+                       * MathF.Sqrt(_px * _px + _py * _py);
+            if (dot < 0f || dot < SharpTurnCos * mags)
+            {
+                _vx = _vy = 0f;
+                _ax = _ay = 0f;
+                return;
+            }
         }
 
         if (_hasPrevVelocity && _count >= 3)

@@ -258,6 +258,15 @@ internal static class DwellProbe
                   + $"两端 ({a0.X:F0},{a0.Y:F0})/({a1.X:F0},{a1.Y:F0})");
         }
         else Check("直线成型当帧：读数锚点就在这条线上（不是左上角 / 上一条）", false, "没有幽灵");
+        // ★ B4.1（2026-10-08 真机）：**换笔必须复位预测尾**。识别把"活笔"从手绘换成图形后，
+        //   预测器要是还留着旧笔迹的末点/速度，`UpdatePredictTail` 就会从图形末端画出一条
+        //   指向旧原点的长尾（用户真机："拖端点飘出另外一条线段、慢慢长回原点、松手消失"）。
+        //   先拖到**远处**制造大错位（真机就是这么拖的），再断言尾部不许存在。
+        app.DwellMoveForTest(900f, 900f);
+        app.UpdatePredictTail();
+        Check("停顿成型拖端点：不画预测尾（换笔必须复位预测器）",
+              !app.PredictTailActive,
+              app.PredictTailActive ? $"尾还活着：{app.PredictTailDebug}" : "尾=无");
         // ① 偏 0.5°（±1° 容差内）：吸成正水平；长度读数要跟笔尖实时走（2026-10-05 修）
         float rad = 0.5f * MathF.PI / 180f;
         app.DwellMoveForTest(300f + 200f * MathF.Cos(rad), 500f + 200f * MathF.Sin(rad));

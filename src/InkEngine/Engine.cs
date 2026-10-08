@@ -992,6 +992,9 @@ public partial class InkEngine
     // 纪律：只画显示（独立几何，不进文档/存档/命中）、每帧重建、慢写/反向/断笔由
     // InkPredictor 内建把关；开关 `--predict2`（默认关）。
     internal static bool PredictTailEnabled;
+    /// <summary>急转丢速阈值（cos；默认 cos60°）。命令行 `--turndeg N`（度）改；
+    /// 180 = 只挡"完全反向"的老行为（A/B 对照）。见 InkPredictor.SharpTurnCos。</summary>
+    internal static float PredictSharpTurnCos = 0.5f;
     private readonly InkPredictor _predictor = new();
     private float _tailLen;                               // 显示尾长（画布像素，限速平滑）
     private float _tailWidthState;                        // 尾宽平滑状态（0=未定）
@@ -1040,6 +1043,7 @@ public partial class InkEngine
         // 用更重的速度平滑 + 更保守的推进，压住"左右甩"（用户 2026-10-08：关 ink 5 号有点甩）。
         _predictor.VelocitySmoothing = ActiveStroke.HasPressure ? 0.4f : 0.6f;
         _predictor.Damping = ActiveStroke.HasPressure ? 0.8f : 0.7f;
+        _predictor.SharpTurnCos = PredictSharpTurnCos;   // B4.2：急转丢速阈值（`--turndeg`）
 
         var pred = new PredictedPoint[6];
         int n = _predictor.Predict(pred);
@@ -1052,13 +1056,21 @@ public partial class InkEngine
         }
 
         // ---- 长度限速（在"像素"上做，治"跳跃的笔头"）----
+        // 速率按**时间**定义（px/ms）：60Hz 学校屏与 90Hz 本机观感不漂移（帧数不同、时间相同）。
+        // 三段分开：正常伸出平滑 / 正常回缩短 / **预测失效时快收**——后者治
+        // "急转处旧方向的尾留在屏幕上慢慢缩"（用户 2026-10-08 学校机："写快时急转偶尔跳一下"）。
+        float frameMs = _windows.Count > 0 && _windows[0].RefreshPeriodMs > 1.0
+            ? (float)_windows[0].RefreshPeriodMs
+            : 1000f / 90f;
         float tipLenRaw = 0f;
         if (n > 0 && _tailOffsets.Count > 0)
         {
             var o = _tailOffsets[^1];
             tipLenRaw = MathF.Sqrt(o.X * o.X + o.Y * o.Y);
         }
-        float rate = tipLenRaw > _tailLen ? 2.2f : 1.2f;
+        float rate = n <= 0
+            ? 0.72f * frameMs                                          // 失效：快收（≈8px/帧@90Hz）
+            : (tipLenRaw > _tailLen ? 0.20f : 0.11f) * frameMs;        // 正常：伸 2.2 / 缩 1.2（@90Hz）
         _tailLen += Math.Clamp(tipLenRaw - _tailLen, -rate, rate);
         if (_tailLen < 0.4f) _tailLen = 0f;
         if (_tailLen <= 0f || _tailOffsets.Count == 0) return;
@@ -2187,6 +2199,10 @@ public partial class InkEngine
             for (int i = 0; i < args.Length - 1; i++)
                 if (args[i] == "--pred2ms" && float.TryParse(args[i + 1], out float p2ms))
                     _predictor.HorizonMs = Math.Clamp(p2ms, InkPredictor.MinHorizonMs, InkPredictor.HardMaxHorizonMs);
+            // B4.2：急转丢速阈值（度）。默认 60°；180 = 老行为（只挡完全反向）对照。
+            for (int i = 0; i < args.Length - 1; i++)
+                if (args[i] == "--turndeg" && float.TryParse(args[i + 1], out float td))
+                    PredictSharpTurnCos = MathF.Cos(Math.Clamp(td, 0f, 180f) * MathF.PI / 180f);
             // [停用] if (args.Contains("--inkmodel")) motionMode = StrokeMotionMode.Spring;
             for (int i = 0; i < args.Length - 1; i++)
             {
@@ -3076,7 +3092,8 @@ public partial class InkEngine
             // [停用 2026-10-05] 笔迹预测（含 `--predicttip`）：用户决定"预测不接了"，
             // 代码保留（PredictEnabled 恒 false），见 `已停用-渲染实验.md`。
             Console.WriteLine(PredictTailEnabled
-                ? $"笔迹预测: 开（B4 自绘尾；地平线 {_predictor.HorizonMs:F0} ms；--nopredict2 关）"
+                ? $"笔迹预测: 开（B4 自绘尾；地平线 {_predictor.HorizonMs:F0} ms；"
+                  + $"急转门槛 {MathF.Acos(Math.Clamp(PredictSharpTurnCos, -1f, 1f)) * 180f / MathF.PI:F0}°；--nopredict2 关）"
                 : "笔迹预测: 关（--nopredict2；加 --predict2 可再开）");
             // 书写期间的 GC 低延迟档：低配上"偶发卡一下"的第一嫌疑就是它没生效。
             // 这里印的是**读回来的实际状态**（见 GcLatency.Describe），不是"我们想让它开"。
@@ -4740,6 +4757,12 @@ public partial class InkEngine
     /// </summary>
     private void ArmDwellShape(Stroke ink, in ShapeGuess guess)
     {
+        // B4.1（2026-10-08 真机）：**换笔必须复位预测尾**——下面会把 ActiveStroke 从
+        // 手绘笔迹换成图形，但 `_predictor` 还留着旧笔迹的末点/速度；不复位的话，
+        // 下一帧 `UpdatePredictTail` 会把"预测点 − 图形末点"当尾巴偏移，从图形末端
+        // 画出一条指向旧原点的长尾（用户真机："拖端点会飘出另外一条线段，慢慢长回
+        // 变直线时的原始位置点、松手消失"）。原理与清单见 调研-预测尾-原理与注意点.md §二。
+        ResetPredictTail();
         var shape = DwellAssist.BuildShapeStroke(guess, ink);
 
         // 停手 = 这一笔不再长了：把"正在写"的三条通道全收掉。
