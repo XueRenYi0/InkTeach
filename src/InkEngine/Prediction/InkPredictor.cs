@@ -110,11 +110,18 @@ internal sealed class InkPredictor
     /// <summary>当前累积的采样点数（诊断用）。</summary>
     public int Count => _count;
 
+    /// <summary>
+    /// 诊断计数（`--pdmetrics` 用）：急转门（60~90°档）与反向门（>90°档）各自触发了几次。
+    /// 每次 `Reset()`（= 一笔开始 / 换笔）清零。
+    /// </summary>
+    public int GateFires, ReversalFires;
+
     public void Reset()
     {
         _count = 0;
         _vx = _vy = _px = _py = _ax = _ay = 0f;
         _hasPrevVelocity = false;
+        GateFires = 0; ReversalFires = 0;
     }
 
     /// <summary>喂一个采样点（屏幕坐标 + 它自己的时间）。</summary>
@@ -161,6 +168,7 @@ internal sealed class InkPredictor
                        * MathF.Sqrt(_px * _px + _py * _py);
             if (dot < 0f || dot < SharpTurnCos * mags)
             {
+                if (dot < 0f) ReversalFires++; else GateFires++;
                 _vx = _vy = 0f;
                 _ax = _ay = 0f;
                 return;

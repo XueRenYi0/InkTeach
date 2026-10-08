@@ -69,6 +69,22 @@ internal sealed partial class App : InkEngine.InkEngine
                 }
             }
 
+        // **输入黑匣子**（`--reclive <文件>`）：逐条记录喂进引擎的输入（起笔/采样/收笔 + 引擎时标）。
+        // 配合 `--replayinput` 离线 1:1 复现——"偶尔跳一下"这类说不清的问题靠它留证据。
+        for (int i = 0; i + 1 < args.Length; i++)
+            if (args[i] == "--reclive")
+            {
+                var bb = System.IO.Path.GetFullPath(args[i + 1]);
+                // ⚠ 表头在**参数解析前**生成，别读引擎的静态值（那时还是默认）——按 args 自己算：
+                bool pred = !args.Contains("--nopredict2");
+                float turn = 60f;
+                for (int k = 0; k + 1 < args.Length; k++)
+                    if (args[k] == "--turndeg" && float.TryParse(args[k + 1], out var td)) turn = td;
+                InputBlackBox.Open(bb,
+                    $"version {UpdateFeed.CurrentVersion} turndeg {(int)MathF.Round(turn)} pred {(pred ? 1 : 0)}");
+                Console.WriteLine($"[黑匣子] 输入日志：{bb}");
+            }
+
         // **打开文档**（`--doc <文件>`）：图片 / PDF。实测与开发期直达用。
         // 只是"记住路径"：真正打开在窗口建好之后（文档模式要有覆盖层才能画页）。
         // 文件不存在 → 只提示、当没给（绝不因此影响启动——规矩三：失败当没有）。
@@ -809,6 +825,23 @@ internal sealed partial class App : InkEngine.InkEngine
             ExitCode = MotionProbe.Run();
             _quit = true;
         }
+        else if (mode == "--pdmetrics")
+        {
+            // 大数据管线第二环：真实语料（SCUT 中文 / UCI）离线评测预测器——
+            // 供给率 / 吃到率 / 角度误差 / 门触发（见 PdMetricsProbe 的口径注释）。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ExitCode = PdMetricsProbe.Run(args);
+            _quit = true;
+        }
+        else if (mode == "--replayinput")
+        {
+            // 黑匣子回放：把 `--reclive` 记录的真实输入 1:1 喂回引擎，算出预测尾的指标。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ExitCode = InputReplayProbe.Run(this, args);
+            _quit = true;
+        }
         else if (mode == "--smoothshow")
         {
             _autoExitAt = double.MaxValue;
@@ -1182,6 +1215,9 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --prevflash [--pen] [--left]  “写下一笔时，上一笔闪不闪”专项检测（合成鼠标/合成笔；--left=左侧竖写+横线底纹）");
         Console.WriteLine("  --motion <名字>     catmull / mean2（**默认 mean2**=距离窗＋过点曲线＋收笔追赶）");
         Console.WriteLine("  --motiontest        运动模型自检（baseline / catmull / mean2 同批语料出表）");
+        Console.WriteLine("  --pdmetrics <语料> [--dt 15] [--limit N] [--sweep]  预测器离线评测（SCUT/UCI：供给/吃到/角度误差/门触发）");
+        Console.WriteLine("  --reclive <文件>     输入黑匣子：记录喂进引擎的输入（配 --replayinput 离线复现）");
+        Console.WriteLine("  --replayinput <文件> [--frame 10]  黑匣子回放：供给率/帧间墨尖位移/方向翻转/门触发（诊断）");
         Console.WriteLine("  --himetric / --nohimetric  亚像素输入（默认开；--nohimetric 退回 D0 对照）");
         Console.WriteLine("  模型调参：--mean2win 画布像素 / --smoothcorner N 角点阈值");
         Console.WriteLine("  预测尾：--nopredict2 关（默认开）/ --pred2ms N 地平线(ms) / --turndeg N 急转丢速阈值(度，默认60，180=老行为)");

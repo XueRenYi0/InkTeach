@@ -97,7 +97,7 @@ public partial class InkEngine
     {
         "--norawinput" or "--wintab" or "--nowintab" or "--nopressure" or "--rawprobe" or "--notrend"
             or "--himetric" or "--nohimetric" or "--notouch" or "--syswet" or "--ownwet" or "--strokefile"
-            or "--recink" or "--recinkp"
+            or "--recink" or "--recinkp" or "--reclive"
             or "--doc"
             or "--nosmooth" or "--printersafe"
             or "--mean2gauss" or "--mean2guniform" or "--mean2gsigma" or "--mean2gfast"
@@ -972,6 +972,7 @@ public partial class InkEngine
     private void AddPointCleaned(float x, float y, float p, double t)
     {
         if (ActiveStroke == null) return;
+        InputBlackBox.Sample(NowMs, x, y, p);   // 黑匣子：记录喂进预测器的原始点（回放靠它 1:1 复现）
         // B4：喂预测器。**统一用处理时刻 NowMs**——同一笔里混用"硬件时标 / 消息时标"
         // （笔消息 vs raw 补点的来源不同）会把速度算乱，v0 先用一把单调时钟保稳。
         if (PredictTailEnabled) _predictor.Add(x, y, NowMs);
@@ -4465,6 +4466,7 @@ public partial class InkEngine
                 tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f) ?? false;
         _pen.BeginStroke();   // 缺压回填的基准只活在"一笔"之内（见 PenSampleBuffer.BeginStroke）
         ResetPredictTail();   // B4：新的一笔，预测器从零开始
+        InputBlackBox.Begin(NowMs, x, y, pressure, ptype);   // 黑匣子：起笔（回放用）
         ActiveStroke = new Stroke
         {
             Tool = tool,
@@ -5041,6 +5043,23 @@ public partial class InkEngine
 
     /// <summary>自检用：抬手（走真入口 <see cref="EndStroke"/>）。</summary>
     internal void DwellEndForTest() => EndStroke();
+
+    // ---- 黑匣子（`--reclive` / `--replayinput`）用的薄钩子 -------------------------
+    // 回放的原则和 DwellProbe 一样：**走真入口、推时钟**——起笔/采样/收笔都进真函数，
+    // 这样净化、建模、预测器全部按当时的同一套代码复现。
+
+    /// <summary>黑匣子回放：起笔（含 ptype / 压力）。</summary>
+    internal void ReplayBeginForTest(float x, float y, float p, uint ptype)
+        => BeginFreehandStrokeAt(0, ptype, x, y, x, y, p);
+
+    /// <summary>黑匣子回放：喂一个采样点（和 `AddPointCleaned` 同入口、同时钟口径[NowMs]）。</summary>
+    internal void ReplaySampleForTest(float x, float y, float p) => AddPointCleaned(x, y, p, NowMs);
+
+    /// <summary>黑匣子回放：收笔。</summary>
+    internal void ReplayEndForTest() => EndStroke();
+
+    /// <summary>预测器门触发计数（黑匣子回放报告用；每笔 Reset 清零，调用方自行累计）。</summary>
+    internal (int gates, int reversals) PredictGateCounters => (_predictor.GateFires, _predictor.ReversalFires);
 
     /// <summary>自检用：状态机在哪一档。</summary>
     internal DwellState DwellStateForTest => _dwell.State;
@@ -7174,6 +7193,7 @@ public partial class InkEngine
 
     private void EndStroke()
     {
+        InputBlackBox.End(NowMs);   // 黑匣子：收笔（含"每笔收到即落盘"）
         // 触摸手势的兜底中断（8.4.0）：正常收笔时 `_touchMode` 已经是 None（触摸那条自己收过），
         // 只有"丢捕获 / 意外路径"会带着没结束的模式走到这里——把开了头的（擦除批次、选中拖动）收干净。
         TouchAbort();
