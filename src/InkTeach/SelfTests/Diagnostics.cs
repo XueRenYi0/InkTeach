@@ -533,6 +533,131 @@ internal sealed partial class App
     }
 
     /// <summary>
+    /// `--tapdotprobe`：**"点一下冒圆"复现器**（2026-10-08 用户报："起笔先出一个圆、
+    /// 续笔后变尖笔锋；轻轻点一下也会出"）。合成笔注入三段，全部走真笔同一条 WM_POINTER 路：
+    ///   ① 轻点（P≈0.15）按住 8 帧 → 抬；② 重点（P≈0.6）同上；③ 点住停 4 帧再横写 8 点（P 渐升）。
+    /// 每帧打印 `ActiveStroke` 点数（判断"按住不动时点进不进笔画"——机理的关键），四处存图。
+    /// 对照：裸跑 vs `--predict2`（跑两次看有没有尾的份）。
+    /// </summary>
+    private void TapDotProbe()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 点一下圆头探测（合成笔；预测="
+                          + (global::InkEngine.InkEngine.PredictTailEnabled ? "开" : "关") + "）===");
+        if (!EnsureSyntheticPen())
+        {
+            Console.WriteLine("  SKIP: 拿不到合成笔设备（CreateSyntheticPointerDevice 失败）");
+            _quit = true; return;
+        }
+
+        BoardOn = true;
+        Doc.Clear();
+        Doc.ClearHistory();
+        PassThrough = false;
+        Tool = Tool.Pen;
+        SetColorFromUi(new Color4(1f, 0f, 0f, 1f));    // 用户图里的红色
+        Doc.InvalidateAll();
+        SettleFrames(200);
+
+        string tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "opencode");
+        Directory.CreateDirectory(tmp);
+        float x0 = _virtualX + 400f, y0 = _virtualY + 300f;
+        int ShotX = (int)(x0 - 70), ShotY = (int)(y0 - 80);
+        int ShotW = 700, ShotH = 180;
+        void Shot(string name) => ScreenProbe.SaveBmp(
+            System.IO.Path.Combine(tmp, name + ".bmp"), ShotX, ShotY, ShotW, ShotH);
+        string Count() => ActiveStroke == null ? "-" : ActiveStroke.Points.Count.ToString();
+
+        // ① 轻点：按住 8 帧再抬
+        Console.WriteLine("  ① 轻点 P=0.15（按住 8 帧）");
+        SendPenPoint(x0, y0, 150, contact: true, first: true);
+        for (int f = 0; f < 8; f++)
+        {
+            SendPenPoint(x0, y0, 150, contact: true, first: false);
+            SettleFrames(1);
+            Console.WriteLine($"    帧{f}: 活笔点数={Count()}");
+        }
+        Shot("tapdot-1-light-hold");
+        SendPenPoint(x0, y0, 0, contact: false, first: false);
+        SettleFrames(40);
+        Shot("tapdot-1-light-done");
+
+        // ② 重点：按住 8 帧再抬
+        Console.WriteLine("  ② 重点 P=0.60（按住 8 帧）");
+        float x1 = x0 + 200f;
+        SendPenPoint(x1, y0, 600, contact: true, first: true);
+        for (int f = 0; f < 8; f++)
+        {
+            SendPenPoint(x1, y0, 600, contact: true, first: false);
+            SettleFrames(1);
+            Console.WriteLine($"    帧{f}: 活笔点数={Count()}");
+        }
+        Shot("tapdot-2-heavy-hold");
+        SendPenPoint(x1, y0, 0, contact: false, first: false);
+        SettleFrames(40);
+        Shot("tapdot-2-heavy-done");
+
+        // ③ 点住停 4 帧，再沿小弧走 8 点（压力 0.15→0.3）——对齐用户图里的"圆点＋弧"
+        Console.WriteLine("  ③ 点住停 4 帧 → 小弧 8 点（P 0.15→0.3）");
+        float x2 = x0 + 400f;
+        SendPenPoint(x2, y0, 150, contact: true, first: true);
+        for (int f = 0; f < 4; f++)
+        {
+            SendPenPoint(x2, y0, 150, contact: true, first: false);
+            SettleFrames(1);
+            Console.WriteLine($"    停{f}: 活笔点数={Count()}");
+        }
+        Shot("tapdot-3-before-write");
+        for (int i = 1; i <= 8; i++)
+        {
+            float ang = i / 8f * 1.6f;              // ≈92°的小弧
+            float ax = x2 + MathF.Sin(ang) * 40f;
+            float ay = y0 + (1f - MathF.Cos(ang)) * 40f;
+            uint p = (uint)(150 + (300 - 150) * i / 8f);
+            SendPenPoint(ax, ay, p, contact: true, first: false);
+            SettleFrames(1);
+            Console.WriteLine($"    弧{i}: 活笔点数={Count()}");
+            if (i == 2) Shot("tapdot-3-write-2");
+            if (i == 5) Shot("tapdot-3-write-5");
+        }
+        float axEnd = x2 + MathF.Sin(1.6f) * 40f;
+        float ayEnd = y0 + (1f - MathF.Cos(1.6f)) * 40f;
+        SendPenPoint(axEnd, ayEnd, 0, contact: false, first: false);
+        SettleFrames(40);
+        Shot("tapdot-3-done");
+
+        // ④ 轻压小圈（P≈0.08、半径 28px、16 点）——检验"轻压=发丝线 → 圆被打碎"
+        Console.WriteLine("  ④ 轻压小圈（P≈0.08）");
+        float cx4 = x0 + 560f, cy4 = y0 + 20f;
+        for (int i = 0; i <= 16; i++)
+        {
+            float ang = i / 16f * MathF.PI * 2f;
+            SendPenPoint(cx4 + MathF.Cos(ang) * 28f, cy4 + MathF.Sin(ang) * 28f,
+                         82, contact: true, first: i == 0);
+            SettleFrames(1);
+            if (i == 8) Shot("tapdot-4-circle-mid");
+        }
+        SendPenPoint(cx4 + 28f, cy4, 0, contact: false, first: false);
+        SettleFrames(40);
+        Shot("tapdot-4-circle-done");
+
+        // ⑤ 压力掉坑：一条直线 0.4 → 0.03 → 0.35（检验"看不见的段 = 假断笔"）
+        Console.WriteLine("  ⑤ 压力掉坑直线（0.4→0.03→0.35）");
+        float x5 = x0 + 120f, y5 = y0 + 60f;
+        for (int i = 0; i <= 14; i++)
+        {
+            uint p = i < 3 ? 400u : (i < 9 ? 30u : 350u);
+            SendPenPoint(x5 + i * 14f, y5, p, contact: true, first: i == 0);
+            SettleFrames(1);
+        }
+        SendPenPoint(x5 + 14 * 14f, y5, 0, contact: false, first: false);
+        SettleFrames(40);
+        Shot("tapdot-5-dip-done");
+        Console.WriteLine($"  存图目录: {tmp}");
+        _quit = true;
+    }
+
+    /// <summary>
     /// 压感自检（2026-09-20 加：用户有了手写笔之后要"和人家一样、手感正常"）。
     ///
     /// 四层判据，缺一层都可能"看着绿其实没做"：

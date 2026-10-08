@@ -878,6 +878,13 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             TailJumpTest(args.Contains("--noisy"), args.Contains("--off"));
         }
+        else if (mode == "--tapdotprobe")
+        {
+            // [2026-10-08] "起笔冒圆"复现器（合成笔）：见 TapDotProbe。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            TapDotProbe();
+        }
         else if (mode == "--pressurediag")
         {
             _autoExitAt = double.MaxValue;
