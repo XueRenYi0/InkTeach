@@ -1175,7 +1175,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --prevflash [--pen] [--left]  “写下一笔时，上一笔闪不闪”专项检测（合成鼠标/合成笔；--left=左侧竖写+横线底纹）");
         Console.WriteLine("  --motion <名字>     catmull / mean2（**默认 mean2**=距离窗＋过点曲线＋收笔追赶）");
         Console.WriteLine("  --motiontest        运动模型自检（baseline / catmull / mean2 同批语料出表）");
-        Console.WriteLine("  --himetric          D1 亚像素输入（用 ptHimetricLocation 映射小数像素；默认关，做 A/B）");
+        Console.WriteLine("  --himetric / --nohimetric  亚像素输入（默认开；--nohimetric 退回 D0 对照）");
         Console.WriteLine("  模型调参：--mean2win 画布像素 / --smoothcorner N 角点阈值");
         Console.WriteLine("  [已停用] 预测、拟合(--mean2fit)、模拟压力(--simpressure/--pfpressure)、笔锋");
         Console.WriteLine("           (--simtaper/--flicktip)、对照模式(raw/sliding/spring/oneeuro/mean/gauss)等：");

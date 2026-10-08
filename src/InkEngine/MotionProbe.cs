@@ -103,9 +103,9 @@ internal static class MotionProbe
             float savedTip = StrokeMotion.Mean2TipBlendMax;
             var variants = new (string name, bool on, float slow, float fast, float tip)[]
             {
-                ("mean2 均匀（现状）", false, 4f, 1.5f, 0f),
+                ("mean2 均匀（旧默认）", false, 4f, 1.5f, 0f),
                 ("gauss σ4.0→1.5", true, 4.0f, 1.5f, 0f),
-                ("gauss σ3.0→1.2（你选的）", true, 3.0f, 1.2f, 0f),
+                ("gauss σ3.0→1.2（现默认）", true, 3.0f, 1.2f, 0f),
                 ("gauss σ2.4→0.9（再跟一点）", true, 2.4f, 0.9f, 0f),
                 ("gauss σ2.0→0.8（更跟）", true, 2.0f, 0.8f, 0f),
                 ("gauss σ2.4→0.9＋tip0.35", true, 2.4f, 0.9f, 0.35f),

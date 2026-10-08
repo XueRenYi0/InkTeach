@@ -91,12 +91,13 @@ internal static class StrokeMotion
     // 用户硬要求：**正常书写速度下墨不许落在笔尖后面（不许有可见的"固定距离"）**，
     // 同时慢写/细字保留去抖。均匀窗的滞后恒为窗长一半（12px 窗 ≈ 6px）；把窗内权重
     // 改成"到笔尖的路径距离做高斯"后，质心滞后 ≈ 0.8σ（同样平滑跨度下约为均匀窗一半），
-    // σ 再随速度收缩，快写进一步贴笔。**默认关**：不开时走原路径，逐点一致。
-    public static bool Mean2Gauss;
-    /// <summary>慢速 σ（画布像素）；默认 4 ≈ 原 12px 窗的"3σ 全跨度"。</summary>
-    public static float Mean2SigmaSlow = 4f;
+    // σ 再随速度收缩，快写进一步贴笔。**默认开**（2026-10-08 真机验收：亚像素 + σ3.0→1.2）；
+    // 退回旧行为用 `--mean2guniform`（均匀窗），或 `--mean2gsigma/--mean2gfast` 调 σ。
+    public static bool Mean2Gauss = true;
+    /// <summary>慢速 σ（画布像素）。默认 3.0（2026-10-08 用户真机验收"跟手且不抖"）。</summary>
+    public static float Mean2SigmaSlow = 3f;
     /// <summary>快速 σ（画布像素）。</summary>
-    public static float Mean2SigmaFast = 1.5f;
+    public static float Mean2SigmaFast = 1.2f;
     /// <summary>速度分界（px/ms）：≤ Slow 用 σSlow；≥ Fast 用 σFast；中间线性。</summary>
     public static float Mean2SpeedSlow = 0.4f;
     public static float Mean2SpeedFast = 1.6f;

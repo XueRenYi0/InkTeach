@@ -96,10 +96,12 @@ public partial class InkEngine
     private static bool IsSwitchNotMode(string a) => a switch
     {
         "--norawinput" or "--wintab" or "--nowintab" or "--nopressure" or "--rawprobe" or "--notrend"
-            or "--himetric" or "--notouch" or "--syswet" or "--ownwet" or "--strokefile"
+            or "--himetric" or "--nohimetric" or "--notouch" or "--syswet" or "--ownwet" or "--strokefile"
             or "--recink" or "--recinkp"
             or "--doc"
-            or "--nosmooth" or "--printersafe" => true,
+            or "--nosmooth" or "--printersafe"
+            or "--mean2gauss" or "--mean2guniform" or "--mean2gsigma" or "--mean2gfast"
+            or "--mean2glo" or "--mean2ghi" or "--mean2gtip" => true,
         _ => false,
     };
 
@@ -2160,12 +2162,14 @@ public partial class InkEngine
             Console.WriteLine($"笔迹运动模型: {modeDesc}");
         }
 
-        // ---- D1：亚像素输入（`--himetric`）-------------------------------------
+        // ---- D1：亚像素输入（默认开；`--nohimetric` 退回 D0 对照）--------------
+        // 2026-10-08：真机验收（用户手写板 himetric 映射 682/851 点、0 退回）→ 默认开。
+        // 拿不到 himetric 的设备（多数鼠标/触摸）逐点自动退回整数像素，行为与 D0 一致。
         InputPrecision.Reset();
-        InputPrecision.UseHimetric = args.Contains("--himetric");
+        InputPrecision.UseHimetric = !args.Contains("--nohimetric");
         Console.WriteLine(InputPrecision.UseHimetric
-            ? "输入精度: himetric 亚像素（D1；拿不到设备矩形时逐点退回整数像素）"
-            : "输入精度: 整数像素（D0；--himetric 打开 D1 对照）");
+            ? "输入精度: himetric 亚像素（默认；逐点拿不到时自动退回整数像素；--nohimetric 对照）"
+            : "输入精度: 整数像素（D0；--nohimetric 对照档）");
 
         // ---- 呈现节奏 ---------------------------------------------------------
         // 默认改成"等到合成边界再抽输入、立刻 Present(0)"。实测这一项把
