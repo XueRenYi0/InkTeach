@@ -86,6 +86,62 @@ internal static class MotionProbe
                               + $"{lag,8:F2}  {endErr,12:F3}  {arcModeled.Count,8}  {sw.Elapsed.TotalMilliseconds,10:F1}");
         }
 
+        // ---- M6g 变体：高斯权 + 速度自适应 σ（2026-10-08，用户"要跟笔"专项）----
+        // 同一批语料；另加一条"快弧"（点距 ≈12px ≈ 1.6px/ms）量高速时的滞后。
+        Console.WriteLine();
+        Console.WriteLine("  mean2 权重变体（高斯权=越靠笔尖权越大；σ 随速度 σSlow→σFast；滞后=墨-笔尖距离）：");
+        Console.WriteLine("  变体                      抖动RMS(px)  折线度(°)  直角偏离(px)  圆弧偏离(px)  滞后慢(px)  滞后快(px)  末点误差(px)");
+        Console.WriteLine("  ------------------------  -----------  ---------  ------------  ------------  ----------  ----------  ------------");
+        {
+            var noisyC = BuildNoisyLine(0.013f, 100f, 400, 0.5f, seed: 7);
+            var cornerC = BuildCorner(400f);
+            var arcC = BuildArc(400f, 800);
+            var arcFastC = BuildArc(280f, 110);          // 点距 ≈12px → ≈1.6 px/ms（"快速"区）
+            bool savedG = StrokeMotion.Mean2Gauss;
+            float savedSlow = StrokeMotion.Mean2SigmaSlow, savedFast = StrokeMotion.Mean2SigmaFast;
+            float savedTip = StrokeMotion.Mean2TipBlendMax;
+            var variants = new (string name, bool on, float slow, float fast, float tip)[]
+            {
+                ("mean2 均匀（现状）", false, 4f, 1.5f, 0f),
+                ("gauss σ4.0→1.5", true, 4.0f, 1.5f, 0f),
+                ("gauss σ3.0→1.2", true, 3.0f, 1.2f, 0f),
+                ("gauss σ4.5→2.0", true, 4.5f, 2.0f, 0f),
+                ("gauss σ3.0→1.2＋tip0.35", true, 3.0f, 1.2f, 0.35f),
+            };
+            try
+            {
+                foreach (var (name, on, slow, fast, tip) in variants)
+                {
+                    StrokeMotion.Mean2Gauss = on;
+                    StrokeMotion.Mean2SigmaSlow = slow;
+                    StrokeMotion.Mean2SigmaFast = fast;
+                    StrokeMotion.Mean2TipBlendMax = tip;
+                    StrokeMotion.BumpVersion();
+
+                    float jitV = LateralRoughness(Model(StrokeMotionMode.Mean2, noisyC, true, false, out _), 0.013f, 100f);
+                    var cornerV = Model(StrokeMotionMode.Mean2, cornerC, true, false, out _);
+                    float corV = MaxDistanceToPolyline(cornerV, cornerC);
+                    var arcV = Model(StrokeMotionMode.Mean2, arcC, true, false, out _);
+                    float arcD = MaxDistanceToPolyline(arcV, arcC);
+                    float facV = MaxTurnOverWindow(arcV, 6f);
+                    var liveSlow = Model(StrokeMotionMode.Mean2, arcC, false, false, out _);
+                    float lagSlow = liveSlow.Count > 0 ? Vector2.Distance(liveSlow[^1], arcC[^1]) : float.NaN;
+                    var liveFast = Model(StrokeMotionMode.Mean2, arcFastC, false, false, out _);
+                    float lagFast = liveFast.Count > 0 ? Vector2.Distance(liveFast[^1], arcFastC[^1]) : float.NaN;
+                    float endV = arcV.Count > 0 ? Vector2.Distance(arcV[^1], arcC[^1]) : float.NaN;
+                    Console.WriteLine($"  {name,-24}  {jitV,11:F3}  {facV,9:F2}  {corV,12:F2}  {arcD,12:F3}  {lagSlow,10:F2}  {lagFast,10:F2}  {endV,12:F3}");
+                }
+            }
+            finally
+            {
+                StrokeMotion.Mean2Gauss = savedG;
+                StrokeMotion.Mean2SigmaSlow = savedSlow;
+                StrokeMotion.Mean2SigmaFast = savedFast;
+                StrokeMotion.Mean2TipBlendMax = savedTip;
+                StrokeMotion.BumpVersion();
+            }
+        }
+
         Console.WriteLine();
         Console.WriteLine("  怎么读这张表：");
         Console.WriteLine("   · 抖动列越小越好（细笔抖动的直接对手）；M0 是整数采样本身的噪声）。");

@@ -87,6 +87,21 @@ internal static class StrokeMotion
     /// 默认 12 画布像素（200% 屏上约 6 逻辑像素）——比 20 更跟手，慢写仍有足够多的点可平均。
     /// </summary>
     public static float Mean2WindowPx = 12f;
+    // ---- M6g（2026-10-08 新增）：高斯权 + 速度自适应 σ ------------------------
+    // 用户硬要求：**正常书写速度下墨不许落在笔尖后面（不许有可见的"固定距离"）**，
+    // 同时慢写/细字保留去抖。均匀窗的滞后恒为窗长一半（12px 窗 ≈ 6px）；把窗内权重
+    // 改成"到笔尖的路径距离做高斯"后，质心滞后 ≈ 0.8σ（同样平滑跨度下约为均匀窗一半），
+    // σ 再随速度收缩，快写进一步贴笔。**默认关**：不开时走原路径，逐点一致。
+    public static bool Mean2Gauss;
+    /// <summary>慢速 σ（画布像素）；默认 4 ≈ 原 12px 窗的"3σ 全跨度"。</summary>
+    public static float Mean2SigmaSlow = 4f;
+    /// <summary>快速 σ（画布像素）。</summary>
+    public static float Mean2SigmaFast = 1.5f;
+    /// <summary>速度分界（px/ms）：≤ Slow 用 σSlow；≥ Fast 用 σFast；中间线性。</summary>
+    public static float Mean2SpeedSlow = 0.4f;
+    public static float Mean2SpeedFast = 1.6f;
+    /// <summary>笔尖混合上限（0~0.6）：out=(1−λ)·高斯均+λ·原始末点；λ 随速度升到它。默认 0=不混。</summary>
+    public static float Mean2TipBlendMax;
     /// <summary>M7 Gauss：Xournal++ `stabilizerSigma` 默认 0.5（行为口径，见 StrokeStabilizer.cpp）。</summary>
     public static double GaussSigma = 0.5;
     /// <summary>M7 Gauss：收笔二次样条，对应 Xournal++ `stabilizerFinalizeStroke`（默认 true）。</summary>
@@ -139,6 +154,10 @@ internal static class StrokeMotion
         public bool Mean2Ended;
         /// <summary>没有叠加笔尖之前的输出点数（每帧重算笔尖前先回退到这里，避免重复叠加）。</summary>
         public int Mean2BaseCount;
+        // M6g（2026-10-08）：窗内每点的时标（秒）+ σ/λ 的一阶平滑状态（与 Mean2Points 同步增删）。
+        public readonly List<double> Mean2Times = new();
+        public float Mean2SigmaState;
+        public float Mean2BlendState = -1f;
 
         // M7 Xournal++ VelocityGaussian（新→旧；被权重判据截掉的永久丢弃）
         public readonly List<GaussEvent> GaussBuf = new();
@@ -182,6 +201,9 @@ internal static class StrokeMotion
             cache.Mean2Fed = 0;
             cache.Mean2Ended = false;
             cache.Mean2BaseCount = 0;
+            cache.Mean2Times.Clear();
+            cache.Mean2SigmaState = 0f;
+            cache.Mean2BlendState = -1f;
             cache.GaussBuf.Clear();
             cache.GaussFed = 0;
             cache.GaussFinalized = false;
@@ -367,6 +389,8 @@ internal static class StrokeMotion
     private static bool BuildMean2(Stroke s, MotionCache cache)
     {
         var pts = s.Points;
+        // M6g：高斯权的权尾在 3σ 处已 <0.01；窗裁到 max(原窗, 3σSlow+1) 就够。
+        float trimPx = Mean2Gauss ? MathF.Max(Mean2WindowPx, 3f * Mean2SigmaSlow + 1f) : Mean2WindowPx;
         for (int i = cache.Mean2Fed; i < pts.Count; i++)
         {
             var p = new Vector3(pts[i].X, pts[i].Y, s.HasPressure ? pts[i].P : 0.5f);
@@ -377,21 +401,30 @@ internal static class StrokeMotion
                     new Vector2(p.X, p.Y));
             cache.Mean2Points.Add(p);
             cache.Mean2Cum.Add((cache.Mean2Cum.Count == 0 ? 0f : cache.Mean2Cum[^1]) + d);
+            cache.Mean2Times.Add(cache.Times != null && i < cache.Times.Length ? cache.Times[i] : 0.0);
 
             // 从窗口头部裁掉超出距离的点（至少留最后一个）。
             float tail = cache.Mean2Cum[^1];
             int keep = 0;
-            while (keep + 1 < cache.Mean2Cum.Count && tail - cache.Mean2Cum[keep] > Mean2WindowPx)
+            while (keep + 1 < cache.Mean2Cum.Count && tail - cache.Mean2Cum[keep] > trimPx)
                 keep++;
             if (keep > 0)
             {
                 cache.Mean2Points.RemoveRange(0, keep);
                 cache.Mean2Cum.RemoveRange(0, keep);
+                cache.Mean2Times.RemoveRange(0, keep);
             }
 
-            Vector3 sum = Vector3.Zero;
-            foreach (var v in cache.Mean2Points) sum += v;
-            cache.Out.Add(sum / cache.Mean2Points.Count);
+            if (!Mean2Gauss)
+            {
+                Vector3 sum = Vector3.Zero;
+                foreach (var v in cache.Mean2Points) sum += v;
+                cache.Out.Add(sum / cache.Mean2Points.Count);
+            }
+            else
+            {
+                cache.Out.Add(Mean2GaussWeighted(cache));
+            }
         }
         cache.Mean2Fed = pts.Count;
         if (pts.Count > 0) cache.LastFedTime = cache.Times[pts.Count - 1];
@@ -411,6 +444,77 @@ internal static class StrokeMotion
 
         // [删除 2026-10-05] 活笔笔尖叠加（`--predicttip` / `--mean2tip`）：随停用/删除清理。
         return cache.Out.Count >= 2;
+    }
+
+    /// <summary>
+    /// M6g：窗内"高斯权 + 速度自适应 σ + 可选笔尖混合"的平均（2026-10-08）。
+    ///   · 权 w = exp(−(d/σ)²/2)，d = 沿路径到笔尖的距离（笔尖 = 0）——越靠笔尖权越大，
+    ///     质心滞后 ≈ 0.8σ；同样 σ 下的"平滑跨度"仍有 2.5σ 量级；
+    ///   · σ 按最近一段的实测速度在 [σFast..σSlow] 线性取值，并对 σ 与 λ 做一阶平滑
+    ///     （0.25/点），防输出"忽松忽紧"地脉动；
+    ///   · 可选 λ（默认 0）：out = (1−λ)·高斯均 + λ·原始末点，λ 随速度升到 TipBlendMax。
+    /// d 用**路径距离**（不是欧氏），所以和均匀窗一样"贴着路径走"——圆弧不切角、形状不丢。
+    /// </summary>
+    private static Vector3 Mean2GaussWeighted(MotionCache cache)
+    {
+        var pts = cache.Mean2Points;
+        var cum = cache.Mean2Cum;
+        var times = cache.Mean2Times;
+        int n = pts.Count;
+        if (n == 1) return pts[0];
+
+        // ---- 速度：最近 ~6 点的路径速度（px/ms）→ σ、λ 的目标值 ----
+        float v = float.NaN;
+        if (times.Count == n)
+        {
+            int j = Math.Max(0, n - 6);
+            double dtMs = (times[^1] - times[j]) * 1000.0;
+            if (dtMs > 0.05) v = (float)((cum[^1] - cum[j]) / dtMs);
+        }
+        float blendT = 0f;
+        float sigmaTarget;
+        if (float.IsFinite(v) && v > 0f)
+        {
+            float t = Math.Clamp((v - Mean2SpeedSlow) / MathF.Max(1e-3f, Mean2SpeedFast - Mean2SpeedSlow), 0f, 1f);
+            sigmaTarget = Mean2SigmaSlow + (Mean2SigmaFast - Mean2SigmaSlow) * t;
+            blendT = t;
+        }
+        else
+        {
+            sigmaTarget = Mean2SigmaSlow;   // 没时标/静止：按慢速（最稳）
+        }
+        cache.Mean2SigmaState = cache.Mean2SigmaState <= 0f
+            ? sigmaTarget
+            : cache.Mean2SigmaState + (sigmaTarget - cache.Mean2SigmaState) * 0.25f;
+        float sigma = MathF.Max(0.1f, cache.Mean2SigmaState);
+
+        float lambdaTarget = Mean2TipBlendMax <= 0f ? 0f : Mean2TipBlendMax * blendT;
+        cache.Mean2BlendState = cache.Mean2BlendState < 0f
+            ? lambdaTarget
+            : cache.Mean2BlendState + (lambdaTarget - cache.Mean2BlendState) * 0.25f;
+        float lambda = Math.Clamp(cache.Mean2BlendState, 0f, 0.6f);
+
+        // ---- 高斯权平均 ----
+        float dTip = cum[^1];
+        double sw = 0, sx = 0, sy = 0, sz = 0;
+        for (int k = 0; k < n; k++)
+        {
+            float d = dTip - cum[k];
+            double w = Math.Exp(-(d / sigma) * (d / sigma) * 0.5);
+            if (w < 0.01) continue;         // 权重已可忽略（列表按时间递增，d 递减）
+            var p = pts[k];
+            sw += w; sx += p.X * w; sy += p.Y * w; sz += p.Z * w;
+        }
+        if (sw <= 1e-9) return pts[^1];
+        var avg = new Vector3((float)(sx / sw), (float)(sy / sw), (float)(sz / sw));
+
+        // ---- 可选：向原始末点混一点（λ 随速度）----
+        if (lambda > 0f)
+        {
+            var tip = pts[^1];
+            return avg + (tip - avg) * lambda;
+        }
+        return avg;
     }
 
     // ---- M7：Xournal++ VelocityGaussian（速度高斯权重平均 + 收笔二次样条）----
@@ -678,6 +782,19 @@ internal static class StrokeMotion
                 //     MeanWindow = Math.Clamp(w, 2, 64); break;
                 case "--mean2win" when float.TryParse(args[i + 1], out var m2) && m2 >= 2f:
                     Mean2WindowPx = Math.Clamp(m2, 2f, 200f); break;
+                // ---- M6g（2026-10-08）：高斯权 + 速度自适应 ----
+                case "--mean2gauss": Mean2Gauss = true; break;
+                case "--mean2guniform": Mean2Gauss = false; break;
+                case "--mean2gsigma" when float.TryParse(args[i + 1], out var gs0) && gs0 > 0f:
+                    Mean2SigmaSlow = Math.Clamp(gs0, 0.5f, 20f); break;
+                case "--mean2gfast" when float.TryParse(args[i + 1], out var gf0) && gf0 > 0f:
+                    Mean2SigmaFast = Math.Clamp(gf0, 0.3f, 20f); break;
+                case "--mean2glo" when float.TryParse(args[i + 1], out var gl0) && gl0 >= 0f:
+                    Mean2SpeedSlow = Math.Clamp(gl0, 0f, 10f); break;
+                case "--mean2ghi" when float.TryParse(args[i + 1], out var gh0) && gh0 > 0f:
+                    Mean2SpeedFast = Math.Clamp(gh0, 0.05f, 20f); break;
+                case "--mean2gtip" when float.TryParse(args[i + 1], out var gt0) && gt0 >= 0f:
+                    Mean2TipBlendMax = Math.Clamp(gt0, 0f, 0.6f); break;
                 // [停用] case "--mean2nocurve":
                 //     Mean2CurveMode = Mean2CurveKind.None; break;
                 // [停用] case "--mean2fit":
