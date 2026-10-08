@@ -1061,10 +1061,12 @@ public partial class InkEngine
         // 锚点优先用"正在显示的平滑输出末点"（接头处连续，不会和笔身错开）；
         // 建模不成功（catmull/raw）时退回原始末点。
         Vector2 anchor;
+        float anchorP = -1f;
         if (StrokeMotion.Build(ActiveStroke) && StrokeMotion.Count > 0)
         {
             var m = StrokeMotion.At(StrokeMotion.Count - 1);
             anchor = new Vector2(m.X, m.Y);
+            anchorP = m.Z;
         }
         else
         {
@@ -1072,20 +1074,25 @@ public partial class InkEngine
             anchor = new Vector2(r.X, r.Y);
         }
 
+        // 尾宽：**与笔身末点同一来源**——压感取"建模输出末点"的压力，而不是原始末点
+        //（原始压力可能是起笔那一下的尖峰，会让尾巴比笔身胖出一圈，看起来就是"笔头冒个圆"；
+        // 2026-10-08 用户报的"起笔先出个圆"就是它＋短尾的观感）。宽度再做一阶平滑防闪。
+        float pForWidth = anchorP >= 0f ? anchorP : ActiveStroke.Points[^1].P;
+        float wTarget = ActiveStroke.HasPressure
+            ? MathF.Max(1f, PressureWidth.HalfWidth(ActiveStroke.Width, pForWidth) * 2f)
+            : MathF.Max(1f, ActiveStroke.Width);
+        _tailWidthState = _tailWidthState <= 0f ? wTarget : _tailWidthState + (wTarget - _tailWidthState) * 0.3f;
+        _tailWidth = _tailWidthState;
+
+        // 太短的尾不画：圆端帽下"又短又粗"的一截看起来就是个圆点/圆头（同一条反馈）。
+        if (_tailLen < 2f) return;
+
         var tipOff = _tailOffsets[^1];
         float tipOffLen = MathF.Max(1e-3f, MathF.Sqrt(tipOff.X * tipOff.X + tipOff.Y * tipOff.Y));
         float scale = _tailLen / tipOffLen;
         _tailCanvas.Add(anchor);
         for (int i = 0; i < _tailOffsets.Count; i++)
             _tailCanvas.Add(anchor + _tailOffsets[i] * scale);
-
-        // 尾宽：有压感取末点直径（和 D2D 描边口径一致），否则用笔宽；宽度也做一阶平滑，
-        // 防"忽粗忽细"在接头处闪（"笔头跳跃"反馈的另一半）。
-        float wTarget = ActiveStroke.HasPressure
-            ? MathF.Max(1f, PressureWidth.HalfWidth(ActiveStroke.Width, ActiveStroke.Points[^1].P) * 2f)
-            : MathF.Max(1f, ActiveStroke.Width);
-        _tailWidthState = _tailWidthState <= 0f ? wTarget : _tailWidthState + (wTarget - _tailWidthState) * 0.3f;
-        _tailWidth = _tailWidthState;
     }
 
     /// <summary>记下"当时的 Wintab 读数"，供 `--recinkp` 录进文件（不参与绘制）。</summary>
