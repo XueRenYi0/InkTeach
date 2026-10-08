@@ -102,7 +102,7 @@ public partial class InkEngine
             or "--nosmooth" or "--printersafe"
             or "--mean2gauss" or "--mean2guniform" or "--mean2gsigma" or "--mean2gfast"
             or "--mean2glo" or "--mean2ghi" or "--mean2gtip"
-            or "--predict2" or "--pred2ms" => true,
+            or "--predict2" or "--nopredict2" or "--pred2ms" => true,
         _ => false,
     };
 
@@ -2181,8 +2181,9 @@ public partial class InkEngine
             // （实测：不同点数 = 0）。现在它只管它该管的——曲线化开不开。
             if (args.Contains("--nosmooth")) StrokeSmoothing.SetEnabled(false);
             if (args.Contains("--smooth")) StrokeSmoothing.SetEnabled(true);
-            // B4：自绘预测尾（`--predict2`；`--pred2ms N` 地平线，收进 8~200ms）
-            if (args.Contains("--predict2")) PredictTailEnabled = true;
+            // B4：自绘预测尾（2026-10-08 用户 90Hz 真机验收 → **默认开**；`--nopredict2` 关；
+            // `--pred2ms N` 地平线，收进 8~200ms）
+            PredictTailEnabled = !args.Contains("--nopredict2");
             for (int i = 0; i < args.Length - 1; i++)
                 if (args[i] == "--pred2ms" && float.TryParse(args[i + 1], out float p2ms))
                     _predictor.HorizonMs = Math.Clamp(p2ms, InkPredictor.MinHorizonMs, InkPredictor.HardMaxHorizonMs);
@@ -3075,8 +3076,8 @@ public partial class InkEngine
             // [停用 2026-10-05] 笔迹预测（含 `--predicttip`）：用户决定"预测不接了"，
             // 代码保留（PredictEnabled 恒 false），见 `已停用-渲染实验.md`。
             Console.WriteLine(PredictTailEnabled
-                ? $"笔迹预测: B4 自绘尾（--predict2；地平线 {_predictor.HorizonMs:F0} ms）"
-                : "笔迹预测: 关（B4 自绘尾，--predict2；旧系统 2026-10-05 停用）");
+                ? $"笔迹预测: 开（B4 自绘尾；地平线 {_predictor.HorizonMs:F0} ms；--nopredict2 关）"
+                : "笔迹预测: 关（--nopredict2；加 --predict2 可再开）");
             // 书写期间的 GC 低延迟档：低配上"偶发卡一下"的第一嫌疑就是它没生效。
             // 这里印的是**读回来的实际状态**（见 GcLatency.Describe），不是"我们想让它开"。
             Console.WriteLine($"书写期间 GC 低延迟档: {GcLatency.Describe()}"
