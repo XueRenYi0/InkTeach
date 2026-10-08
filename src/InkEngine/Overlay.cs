@@ -318,7 +318,11 @@ internal sealed partial class OverlayWindow : IDisposable
     /// <summary>`--mean2fit` 用：拟合输入的复用点/压力缓冲（静态数组，不每帧分配）。</summary>
     // [删除 2026-10-05] `_fitPts/_fitP`（WPF 拟合输入缓冲）：随拟合档清理移除。
     /// <summary>压力的指数平滑系数（0..1，越小越稳）。见 DrawPressureInk。</summary>
-    private const float InkPressureEma = 0.35f;
+    private const float InkPressureEma = 0.35f;      // 上升（加压）方向的平滑
+    /// <summary>下降（减压）方向的平滑——**比上升慢**（2026-10-08）：
+    /// 真实笔"按住的点"压力爬到 ~0.3、一开写压力掉回 0.03，等速平滑会让宽度瞬间塌成发丝线
+    /// （"圆消失变尖笔锋"）。降慢一点，让宽度有个缓冲，不跟着压力跳。</summary>
+    private const float InkPressureEmaDown = 0.14f;
     /// <summary>最小墨迹半径（画布像素）：轻压时也不至于细到画不出来。</summary>
     private const float InkMinRadius = 0.4f;
     private ID2D1Bitmap1 _backBuffer;
@@ -2190,7 +2194,8 @@ internal sealed partial class OverlayWindow : IDisposable
             float ema = StrokeSmoothing.PressureAt(0);
             for (int k = 0; k < segs; k++)
             {
-                ema += (StrokeSmoothing.PressureAt(k + 1) - ema) * InkPressureEma;
+                float pk2 = StrokeSmoothing.PressureAt(k + 1);
+                ema += (pk2 - ema) * (pk2 > ema ? InkPressureEma : InkPressureEmaDown);
                 float r1 = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, ema));
                 _inkSegs[count++] = new InkBezierSegment
                 {
@@ -2221,7 +2226,8 @@ internal sealed partial class OverlayWindow : IDisposable
             float sx = Px(0), sy = Py(0), sr = startRadius;
             for (int i = 1; i <= lastIdx && count < cap; i++)
             {
-                sm += (Pp(i) - sm) * InkPressureEma;      // 平滑只作用于压力，不动位置
+                float pi2 = Pp(i);
+                sm += (pi2 - sm) * (pi2 > sm ? InkPressureEma : InkPressureEmaDown);   // 平滑只作用于压力，不动位置
                 if (i % stride != 0 && i != lastIdx) continue; // 中间的按步长抽稀（末点必留）
 
                 float ex = Px(i), ey = Py(i);
@@ -2255,7 +2261,8 @@ internal sealed partial class OverlayWindow : IDisposable
                 int j = lastIdx + 1;
                 float ex = Px(lastIdx) + (Px(j) - Px(lastIdx)) * frac;
                 float ey = Py(lastIdx) + (Py(j) - Py(lastIdx)) * frac;
-                sm += ((Pp(lastIdx) + (Pp(j) - Pp(lastIdx)) * frac) - sm) * InkPressureEma;
+                float piTail = Pp(lastIdx) + (Pp(j) - Pp(lastIdx)) * frac;
+                sm += (piTail - sm) * (piTail > sm ? InkPressureEma : InkPressureEmaDown);
                 float er = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, sm));
                 _inkSegs[count++] = new InkBezierSegment
                 {

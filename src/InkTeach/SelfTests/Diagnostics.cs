@@ -665,6 +665,33 @@ internal sealed partial class App
         SendPenPoint(x5 + 14 * 14f, y5, 0, contact: false, first: false);
         SettleFrames(40);
         Shot("tapdot-5-dip-done");
+        // ⑥ 用户实测形态（2026-10-08 样本）：点住 40 点（P 0.04→0.33）→ 起写掉坑（P→0.03）
+        //    → 弧上回升到 0.30。这就是"先出个圆、一开写变尖尖笔锋"的实况复现。
+        Console.WriteLine("  ⑥ 实况复现：点住 0.04→0.33 → 起写掉到 0.03 → 弧上回升");
+        float x6 = x0 + 120f, y6 = y0 - 40f;
+        for (int k = 0; k < 40; k++)
+        {
+            uint p6 = (uint)(41 + (338 - 41) * k / 39f);          // 0.040→0.330
+            SendPenPoint(x6, y6, p6, contact: true, first: k == 0);
+            if (k % 4 == 3) SettleFrames(1);
+        }
+        SettleFrames(1);
+        Shot("tapdot-6a-dwell");
+        for (int i = 1; i <= 16; i++)
+        {
+            float ang = i / 16f * 1.8f;
+            float ax6 = x6 + MathF.Sin(ang) * 45f;
+            float ay6 = y6 + (1f - MathF.Cos(ang)) * 45f;
+            uint p6 = i <= 4 ? 31u : (uint)(31 + (307 - 31) * (i - 4) / 12f);   // 0.03 → 0.30
+            SendPenPoint(ax6, ay6, p6, contact: true, first: false);
+            SettleFrames(1);
+            if (i == 3) Shot("tapdot-6b-dip");
+            if (i == 8) Shot("tapdot-6c-mid");
+        }
+        SendPenPoint(x6 + MathF.Sin(1.8f) * 45f, y6 + (1f - MathF.Cos(1.8f)) * 45f, 0, contact: false, first: false);
+        SettleFrames(40);
+        Shot("tapdot-6d-done");
+
         Console.WriteLine($"  存图目录: {tmp}");
         _quit = true;
     }
