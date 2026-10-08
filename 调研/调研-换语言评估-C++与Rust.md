@@ -391,3 +391,46 @@ DIB 直接当 PixmapMut 零拷贝、只更新脏区）。本机 i5-12500H / Iris
   <https://dl.acm.org/doi/epdf/10.1145/3136014.3136031>
 - Rust GUI 内存实例（egui/wgpu 135MB → 软渲染 Slint 30MB，栈决定而非语言）：
   <https://trystan-sarrade.com/article/rust-gui-135mb-to-30mb-egui-to-slint/>
+
+
+---
+
+## 八、复查（2026-10-08，v8.11.0 之后）
+
+> 用户重新问："既然没有使用墨迹托管，要不要换 Rust / 换掉 D2D（轻量或更好）？"
+> 结论：**不换** —— 而且理由比 10-05 那轮更硬（一半收益已被我们自己吃掉）。
+
+**先修一个前提**："没有使用墨迹托管"要拆开看——
+- **没在用**的：让系统画湿墨的那条"委托墨迹轨迹"（它在用户手写板上本来就不渲染，这个"失"已经先发生了，见 `延时-实测与优化.md`）；
+- **仍在重度依赖**的：**DirectComposition**——"Present → 上屏 1 个刷新周期"、四层合成、脏区上屏，全建在它上面；以及 **`ID2D1Ink` 变宽墨迹**（22 种图形与笔迹的 AA 描边也是它）。
+  D2D/DComp 不是"托管墨迹"，是**低延迟呈现 + 变宽墨迹的底座**。
+
+**变化项 1：旧文档的两件"待办"我们已自己做完**
+- .NET 10 ✓（8.10/8.11 都是 net10.0）；**Native AOT ✓ 已上线**（v8.11.0 的 exe ≈11.4MB，六项关键自检在 AOT 产物上全绿）。
+- ⇒ "换 Rust 能省的 .NET 运行时 25~30MB"，**AOT 已经帮我们拿到了**；再换语言 = 全量重写换 ≈0 新收益。
+
+**变化项 2：Rust 的 Windows 图形生态在 2026-08 变好了**（windows-rs 月报）
+- 新增 **`windows-canvas`**：微软首方、安全封装的 D2D/D3D11/DXGI/DWrite/WIC 绘制库（GPU/WARP、交换链、几何、文字、效果、Composition 接入）；
+- 新增 **`windows-composition`**：安全 Composition API。
+- ⇒ "Rust 重写"从"**生态薄、慎选**"升级为"**可行、但收益不变**"——可行的是路线（Rust+D2D+DComp 1:1 照搬），不变的是账。真要重评，仍看 §五 的四个触发条件（目前都不成立）。
+
+**渲染后端 2026-10 快照**
+
+| 候选 | 状态 | 对我们要害 |
+|---|---|---|
+| **D2D + DComp（现状）** | 微软首方、在用 | —（1 帧上屏就是它给的） |
+| Skia（Ganesh → Graphite） | Graphite 在 Chrome 仍处迁移期（Mac 已默认、Windows 走 Dawn D3D11/12 中）；SkiaSharp 的 Graphite 仍在 backlog；Windows 文本仍借 DWrite | 不更轻、要重建湿墨/变宽/合成、画质无增益 |
+| Vello GPU / Vello CPU | **仍 alpha**（0.10.0，2026-08；GPU 端要 compute shader；CPU 端刚起步） | 课堂产品不赌 alpha；变宽墨迹要自己做展开 |
+| tiny-skia / Skia CPU 软渲 + 多层窗口 | 唯一"内存降很多"路线（旧 POC：系统净省 ~50MB） | 丢掉 DComp 低延迟通道（命根子）；全功能回归巨贵；目标机 CPU 最弱；旧 POC 的"端到端延迟"至今没在真机验过 |
+| wgpu 自绘 | — | 比 D2D 更重（旧结论） |
+
+**结论**
+1. **不换 Rust**：收益已被 AOT 吃掉，剩下全是成本；外部证据也在（§七 JetBrains"重写普遍超期"）。
+2. **不换 D2D**：它是 Windows 上"轻量 + 更快 + 首方"的交点；两个别处没有的东西（`ID2D1Ink` 变宽墨迹、DComp 1 帧上屏）都长在它上面。
+3. **唯一会推翻上面的新条件** = 真要上 **macOS / 跨平台**：那时 Rust + wgpu/vello 值得重开一轮选型；Windows-only 就地不动。
+4. 真正待做（不变）：**4GB 目标机真机测量** → 必要时"空闲后重建图形设备"回收驱动池（§4.3）。
+
+**§八 新增来源**
+- windows-rs 2026-08 月报（`windows-canvas` / `windows-composition` / Reactor）：<https://github.com/microsoft/windows-rs/issues/4867>
+- Vello 0.10.0 与 alpha 自述：<https://lib.rs/crates/vello>、<https://github.com/linebender/vello>
+- Skia Graphite 迁移状态与 SkiaSharp 支持进度：<https://chromium.bartleyeditions.com/skia-graphite>、<https://github.com/mono/SkiaSharp/issues/3962>
