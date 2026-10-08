@@ -809,3 +809,13 @@ internal static class UpdateFeed
         }
     }
 }
+
+/// <summary>
+/// 产品信息（给界面工程 `InkUi` 用——它拿不到 `UpdateFeed` 的 internal 身份）。
+/// 版本号 = 程序集的 `&lt;Version&gt;`（唯一版本源，见 csproj）。界面「更多」面板显示（2026-10-08 用户提）。
+/// </summary>
+public static class ProductInfo
+{
+    /// <summary>版本号，例如 "8.11.1"。</summary>
+    public static string Version => UpdateFeed.CurrentVersion;
+}

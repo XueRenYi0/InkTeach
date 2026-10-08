@@ -2650,7 +2650,7 @@ public sealed class FullUi : IOverlayUi
     private static readonly (string Label, string Hint, bool Danger)[] MoreBottomTiles =
     {
         ("设置", "外观 / 书写 / 墨迹 / 工具条，都在里面", false),
-        ("检查更新", "有新版本会提示，也可以直接应用更新", false),
+        ("检查更新", $"当前 v{ProductInfo.Version}；有新版本会提示，也可以直接应用更新", false),
         ("重启软件", "像电脑重启：不恢复本次板书（自动存档还在）", false),
         ("退出", "关掉批注（会先把键位落盘）", true),
     };
@@ -2684,13 +2684,12 @@ public sealed class FullUi : IOverlayUi
         }
 
         // 状态行：命令反馈（保存/打开/更新）——产品里不弹窗，结果都落在这儿。
-        // 没有要说的就**空着**（2026-10-02 第二批：原来那句固定的"低频功能都收在这儿……"
-        // 撤掉了，面板更清爽；信息都在提示里）。
+        // 没有要说的就显示**版本号**（用户 2026-10-08："软件里最好能看到版本号"）。
         var st = _host.State;
         string status = !string.IsNullOrEmpty(_hubHint) ? _hubHint
                       : !string.IsNullOrEmpty(st.InkStatus) ? st.InkStatus
                       : st.UpdateStage != UpdateStage.Idle && !string.IsNullOrEmpty(st.UpdateText) ? st.UpdateText
-                      : "";
+                      : $"v{ProductInfo.Version}";
         var sr = HubStatusRect();
         if (status.Length != 0)
             _widgets.Text(ctx, status, sr, 11.5f, Brush(ctx, MutedCol), center: false);

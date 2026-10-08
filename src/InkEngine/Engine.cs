@@ -996,6 +996,8 @@ public partial class InkEngine
     /// <summary>急转丢速阈值（cos；默认 cos60°）。命令行 `--turndeg N`（度）改；
     /// 180 = 只挡"完全反向"的老行为（A/B 对照）。见 InkPredictor.SharpTurnCos。</summary>
     internal static float PredictSharpTurnCos = 0.5f;
+
+    // 版本号显示见 Update.cs 末尾的 `ProductInfo`（界面工程用；它拿不到内部的 UpdateFeed）。
     private readonly InkPredictor _predictor = new();
     private float _tailLen;                               // 显示尾长（画布像素，限速平滑）
     private float _tailWidthState;                        // 尾宽平滑状态（0=未定）
