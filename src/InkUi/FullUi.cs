@@ -226,7 +226,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按两栏里的布局走**：
     /// 左列 外观（3）＋ 书写（3）；右列 墨迹（3）——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, DwellShape, Pressure, FineStroke, RestoreInk, PptAutoSave, HistoryDays, TouchGestures }
+    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, DwellShape, Pressure, FineStroke, Predict, RestoreInk, PptAutoSave, HistoryDays, TouchGestures }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -257,8 +257,9 @@ public sealed class FullUi : IOverlayUi
         // （真机实测：指针消息 61Hz，设备实际报了 190Hz）。这一行就是"要不要把中间点捞回来"。
         // **默认开**（用户定的：开不开 ink 要有一样的手写体验）；低配机怕性能不够可以一键关。
         (Row.FineStroke, "精细笔迹", false, false, "关掉后写快时线条略粗糙（省一点性能，低配机可关）"),
-        // [停用 2026-10-05] 墨迹预测（老预测系统，见 `已停用-渲染实验.md`）：
-        // (Row.Predict, "墨迹预测", false, false, "开了更跟手一点，可能有轻微拖影"),
+        // 墨迹预测（2026-10-12 回归：B4 自绘预测尾；**默认开**，2026-10-08 用户真机验收）。
+        // 关掉 = 不再画预测尾（笔尾更老实；低配 / 老机可关）。链路：行表 → ActivateRow → IsOn → SavePrefs。
+        (Row.Predict, "墨迹预测", false, false, "开了更跟手一点；关掉笔尾更稳当（低配 / 老机可关）"),
         // 墨迹三条偏好（原本在「墨迹」页，2026-10-02 启动器改版后搬进设置子页）。
         (Row.RestoreInk, "自动恢复上次板书", false, false, "下次启动接上这次的板书"),
         (Row.PptAutoSave, "PPT 墨迹默认自动保存", false, false, "放映时长按菜单仍可临时覆盖"),
@@ -470,8 +471,8 @@ public sealed class FullUi : IOverlayUi
         _host.SetPref("finestroke", st.FineStrokeOn ? null : "0");
         // 触摸手势总开关：**默认开**，同样只写"关了"这一种情况。
         _host.SetPref("touch.gestures", st.TouchGesturesOn ? null : "0");
-        // [停用 2026-10-05] 墨迹预测：默认关，只写"开了"这一种情况（引擎启动时自己读它）。
-        // _host.SetPref("predict", st.PredictOn ? "1" : null);
+        // 墨迹预测：**默认开**，同样只写"关了"这一种情况（引擎启动时自己读它）。
+        _host.SetPref("predict2", st.PredictTailOn ? null : "0");
         // 悬停提示：**默认开**，只写"关了"这一种情况。
         _host.SetPref("tooltip", _tipEnabled ? null : "0");
 
@@ -2052,7 +2053,7 @@ public sealed class FullUi : IOverlayUi
 
     private bool IsToggleRow(int i)
         => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.Tooltip or Row.DwellShape
-           or Row.Pressure or Row.FineStroke or Row.RestoreInk or Row.PptAutoSave or Row.TouchGestures;
+           or Row.Pressure or Row.FineStroke or Row.Predict or Row.RestoreInk or Row.PptAutoSave or Row.TouchGestures;
 
     /// <summary>
     /// **自检用**：这一行到底有没有画开关。
@@ -2155,11 +2156,11 @@ public sealed class FullUi : IOverlayUi
                 SavePrefs();
                 break;
 
-            // [停用 2026-10-05] 墨迹预测（老预测系统）：
-            // case Row.Predict:
-            //     _host.Commands.SetPredict(!_host.State.PredictOn);
-            //     SavePrefs();
-            //     break;
+            // 墨迹预测（2026-10-12 加，B4 自绘预测尾；默认开）：引擎是权威，界面翻转后落盘 "predict2"。
+            case Row.Predict:
+                _host.Commands.SetPredict(!_host.State.PredictTailOn);
+                SavePrefs();
+                break;
 
             // 墨迹三条偏好（原来在「墨迹」页）：只写 `ui.*`，
             // 默认值不落盘（restoreInk 默认关只写 "1"、pptAutoSave 默认开只写 "0"、
@@ -2234,7 +2235,7 @@ public sealed class FullUi : IOverlayUi
     /// `SetWriteHeadRect` 和 `MoreLowerH` 里，两处各写一遍迟早漏一处）。
     /// </summary>
     private const int LookRowCount = 4;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 悬停提示
-    private const int WriteRowCount = 4;   // 书写：停顿变图形 / 压感粗细 / 精细笔迹 / 触摸手势总开关（墨迹预测行已停用）
+    private const int WriteRowCount = 5;   // 书写：停顿变图形 / 压感粗细 / 精细笔迹 / 墨迹预测 / 触摸手势总开关
     private const float MoreColumnGap = 16f;
     private const float MoreWriteGap = 8f;
     private const float MoreSwitchW = 44f;
@@ -2453,8 +2454,8 @@ public sealed class FullUi : IOverlayUi
         Row.DwellShape => SetColRow(SetColKind.Write, 0),
         Row.Pressure => SetColRow(SetColKind.Write, 1),
         Row.FineStroke => SetColRow(SetColKind.Write, 2),
-        Row.TouchGestures => SetColRow(SetColKind.Write, 3),
-        // [删除 2026-10-05] Row.Predict => SetColRow(SetColKind.Write, 2),（墨迹预测行）
+        Row.Predict => SetColRow(SetColKind.Write, 3),
+        Row.TouchGestures => SetColRow(SetColKind.Write, 4),
         Row.RestoreInk => SetColRow(SetColKind.Ink, 0),
         Row.PptAutoSave => SetColRow(SetColKind.Ink, 1),
         _ => SetColRow(SetColKind.Ink, 2),
@@ -4574,8 +4575,8 @@ public sealed class FullUi : IOverlayUi
         Row.FineStroke => _host == null || _host.State.FineStrokeOn,
         // 触摸手势总开关：状态也在引擎（默认开），界面只是显示它
         Row.TouchGestures => _host == null || _host.State.TouchGesturesOn,
-        // [停用 2026-10-05] 墨迹预测：同压感，状态在引擎（默认关）
-        // Row.Predict => _host == null || _host.State.PredictOn,
+        // 墨迹预测：同样在引擎（默认开），界面只是显示它
+        Row.Predict => _host == null || _host.State.PredictTailOn,
         // 墨迹两条开关：读偏好（restoreInk 默认关、pptAutoSave 默认开）。
         Row.RestoreInk => _host.GetPref("restoreInk") == "1",
         Row.PptAutoSave => _host.GetPref("pptAutoSave") != "0",

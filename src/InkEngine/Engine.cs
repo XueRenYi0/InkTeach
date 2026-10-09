@@ -991,7 +991,7 @@ public partial class InkEngine
     // 旧账（"乱跳"的正身，写在 App.TailJumpTest 的注释里）：鼠标/兼容模式输入是突发的——
     // 来一阵 → 尾巴甩出去；间隔一超 20ms → 速度清零 → 尾巴整个消失。修法 = 长度限速平滑。
     // 纪律：只画显示（独立几何，不进文档/存档/命中）、每帧重建、慢写/反向/断笔由
-    // InkPredictor 内建把关；开关 `--predict2`（默认关）。
+    // InkPredictor 内建把关；开关：设置「墨迹预测」行 / `--nopredict2`（默认开）。
     internal static bool PredictTailEnabled;
     /// <summary>急转丢速阈值（cos；默认 cos60°）。命令行 `--turndeg N`（度）改；
     /// 180 = 只挡"完全反向"的老行为（A/B 对照）。见 InkPredictor.SharpTurnCos。</summary>
@@ -2196,9 +2196,13 @@ public partial class InkEngine
             // （实测：不同点数 = 0）。现在它只管它该管的——曲线化开不开。
             if (args.Contains("--nosmooth")) StrokeSmoothing.SetEnabled(false);
             if (args.Contains("--smooth")) StrokeSmoothing.SetEnabled(true);
-            // B4：自绘预测尾（2026-10-08 用户 90Hz 真机验收 → **默认开**；`--nopredict2` 关；
-            // `--pred2ms N` 地平线，收进 8~200ms）
-            PredictTailEnabled = !args.Contains("--nopredict2");
+            // B4：自绘预测尾（2026-10-08 用户 90Hz 真机验收 → **默认开**；2026-10-12 起
+            // 在设置页有「墨迹预测」开关，偏好落盘 `ui.predict2`；`--nopredict2` 关、
+            // `--predict2` 强开，两者都给对照实验用、优先于偏好）
+            _noPredictArg = args.Contains("--nopredict2");
+            _forcePredictArg = args.Contains("--predict2");
+            ApplyPredictTailSetting();
+            // `--pred2ms N` 地平线（收进 8~200ms，默认 10）
             for (int i = 0; i < args.Length - 1; i++)
                 if (args[i] == "--pred2ms" && float.TryParse(args[i + 1], out float p2ms))
                     _predictor.HorizonMs = Math.Clamp(p2ms, InkPredictor.MinHorizonMs, InkPredictor.HardMaxHorizonMs);
@@ -3096,8 +3100,9 @@ public partial class InkEngine
             // 代码保留（PredictEnabled 恒 false），见 `已停用-渲染实验.md`。
             Console.WriteLine(PredictTailEnabled
                 ? $"笔迹预测: 开（B4 自绘尾；地平线 {_predictor.HorizonMs:F0} ms；"
-                  + $"急转门槛 {MathF.Acos(Math.Clamp(PredictSharpTurnCos, -1f, 1f)) * 180f / MathF.PI:F0}°；--nopredict2 关）"
-                : "笔迹预测: 关（--nopredict2；加 --predict2 可再开）");
+                  + $"急转门槛 {MathF.Acos(Math.Clamp(PredictSharpTurnCos, -1f, 1f)) * 180f / MathF.PI:F0}°；"
+                  + "设置「墨迹预测」可关 / --nopredict2）"
+                : "笔迹预测: 关（设置 → 书写 → 墨迹预测；--predict2 可再开）");
             // 书写期间的 GC 低延迟档：低配上"偶发卡一下"的第一嫌疑就是它没生效。
             // 这里印的是**读回来的实际状态**（见 GcLatency.Describe），不是"我们想让它开"。
             Console.WriteLine($"书写期间 GC 低延迟档: {GcLatency.Describe()}"
@@ -10551,6 +10556,7 @@ public partial class InkEngine
         DwellShapeOn = DwellShapeEnabled,
         PressureOn = PressureWidth.Enabled,      // 界面拿它显示「设置 → 书写 → 压感粗细」那个开关
         FineStrokeOn = RawInputCapture,          // 「设置 → 书写 → 精细笔迹」（原始输入补点）总开关
+        PredictTailOn = PredictTailEnabled,      // 「设置 → 书写 → 墨迹预测」（B4 自绘预测尾）总开关（默认开）
         TouchGesturesOn = _touch.Enabled,        // 「设置 → 书写 → 触摸手势」总开关（默认开）
         // [删除 2026-10-05] PredictOn（墨迹预测）：随老预测系统移除。
         ScreenIndex = ScreenIndex,
@@ -10751,6 +10757,12 @@ public partial class InkEngine
     /// <summary>精简笔迹（原始输入补点）的偏好键（同样只写"关过"的那一份）。</summary>
     private const string FineStrokePrefKey = "finestroke";
 
+    /// <summary>「墨迹预测」（B4 自绘预测尾）的偏好键（默认开，只写"关过"的那一份）。</summary>
+    private const string PredictPrefKey = "predict2";
+
+    /// <summary>命令行上有没有 `--nopredict2` / `--predict2`（对照实验用，优先于用户偏好）。</summary>
+    private bool _noPredictArg, _forcePredictArg;
+
     /// <summary>命令行上有没有 `--norawinput`（给对照实验用，它优先于用户偏好）。</summary>
     private bool _noRawInputArg;
 
@@ -10775,8 +10787,27 @@ public partial class InkEngine
     internal void ApplyFineStrokePrefForTest()
         => RawInputCapture = !_noRawInputArg && GetUiPref(FineStrokePrefKey) != "0";
 
-    // [删除 2026-10-05] `SetPredictFromUi` / `ApplyPredictPrefForTest`（墨迹预测开关的入口）：
-    // 随老预测系统移除；恢复见 `已停用-渲染实验.md`。
+    /// <summary>
+    /// 「更多 → 设置 → 书写 → 墨迹预测」被点了一下（2026-10-12）——**B4 自绘预测尾的总开关**。
+    ///
+    /// 关掉 = 不再画预测尾（笔迹末端更老实）；开/关都顺手复位预测器（关→立刻撤尾；
+    /// 开→从干净状态起步，等下一笔重新喂点）。只影响以后画的，已落笔的墨一个字节不动。
+    /// </summary>
+    internal void SetPredictFromUi(bool on)
+    {
+        if (PredictTailEnabled == on) return;
+        PredictTailEnabled = on;
+        ResetPredictTail();
+        Console.WriteLine($"墨迹预测：{(on ? "开（自绘预测尾）" : "关（不画预测尾）")}");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>启动时应用"墨迹预测"偏好（自检要单独调一次，理由同压感 / 精细笔迹）。</summary>
+    internal void ApplyPredictPrefForTest() => ApplyPredictTailSetting();
+
+    /// <summary>默认开；命令行为对照实验优先（`--nopredict2` 关 / `--predict2` 开），否则听偏好。</summary>
+    private void ApplyPredictTailSetting()
+        => PredictTailEnabled = !_noPredictArg && (_forcePredictArg || GetUiPref(PredictPrefKey) != "0");
 
     /// <summary>
     /// 自检用：把"压感粗细"的偏好**重新应用一次**——模拟"重开软件"里读偏好那一步。
