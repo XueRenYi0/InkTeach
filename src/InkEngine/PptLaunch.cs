@@ -5,8 +5,13 @@
 //    · Office：`POWERPNT.EXE /S "文件"` 官方命令行 → 直接进全屏放映（冷启动 / 已开着
 //      两种情形都实测过，编辑窗全程不出现）；
 //    · WPS   ：没有放映命令行（`wpp.exe /S` 无效、右键也没有"放映"动词）；官方 COM
-//      自动化 `KWPP.Application` → `Presentations.Open(路径, 只读, 不新建, **不带窗口**)`
-//      → `SlideShowSettings.Run()` → 直接进放映，连编辑界面都不创建（实测过）；
+//      自动化 `KWPP.Application` → `Presentations.Open(路径, 只读, 不新建, 带窗口)`
+//      → `SlideShowSettings.Run()` → 直接进放映。
+//      ⚠ **必须有窗打开**（2026-10-09 真机教训）：无窗（WithWindow=false）虽然也能
+//      直接进放映、连编辑界面都不建，但 WPS 的自动化会变成"前台被抢一次就永久读空"的
+//      豆腐渣——从穿透切回批注（我们抢回键盘）一次，放映还在、控制条却再也不回来，
+//      且本进程内怎么重连都救不回（详见 PptComSource.TryReconnect）。有窗打开则全程稳；
+//      代价是加载的 1~2 秒里能看见 WPS 编辑窗（大课件更久一点）——**稳优先**；
 //    · 选哪家 = 看 .pptx 的**默认关联**（和老师平时双击一致）。不按"速度/省资源"排名：
 //      渲染本来就在 Office/WPS 里跑，我们两条路都只是"喊一嗓子"的成本；
 //    · 两家都不是 / 启动失败 → 退回"普通打开 + 提示按 F5"，绝不挡路（规矩三：失败当没有）。
@@ -130,12 +135,19 @@ internal static class PptLaunch
         return null;
     }
 
-    // ⚠ COM 引用**故意不释放**：WPS 的"无窗文稿"没有窗口兜底——这边若把应用/文稿的
-    // 引用全放掉，WPS 可能判定"没人要了"，把文稿甚至正在放的放映一起收掉。留到本进程
-    // 结束（=下课关软件）由系统统一释放；不写盘、不留设置。换第二份 PPT 时旧的也不放
-    // （一次课多留一两个引用，可忽略）。
+    // ⚠ COM 引用策略（2026-10-09 修订）：启动时照旧先抱住 app/文稿（已验证的行为），
+    // 但**连接自愈时先放掉**——实测"前台被抢一次"后新连接全被读空，直到这几个引用
+    // 被放掉才恢复（详情见 PptComSource.TryHealConnection）；而"放掉会收掉放映"的
+    // 担心已被证伪（验证工具/脚本进程整体退出后，放映照常继续）。
     private static IntPtr _wpsApp;
     private static IntPtr _wpsPres;
+
+    /// <summary>放掉启动时留着的 WPS 引用（连接自愈前调用，见 PptComSource.TryHealConnection）。</summary>
+    internal static void ReleaseHeldRefs()
+    {
+        if (_wpsApp != IntPtr.Zero) { ComLate.Release(_wpsApp); _wpsApp = IntPtr.Zero; }
+        if (_wpsPres != IntPtr.Zero) { ComLate.Release(_wpsPres); _wpsPres = IntPtr.Zero; }
+    }
 
     private static bool TryRunWps(string file)
     {
@@ -146,7 +158,7 @@ internal static class PptLaunch
             var presentations = ComLate.GetObject(app, "Presentations");
             if (presentations == IntPtr.Zero) { ComLate.Release(app); return false; }
 
-            var pres = ComLate.OpenPresentation(presentations, file, readOnly: true, untitled: false, withWindow: false);
+            var pres = ComLate.OpenPresentation(presentations, file, readOnly: true, untitled: false, withWindow: true);
             ComLate.Release(presentations);
             if (pres == IntPtr.Zero) { ComLate.Release(app); return false; }
 

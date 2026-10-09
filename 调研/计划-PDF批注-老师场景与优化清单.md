@@ -354,7 +354,7 @@
 |---|---|
 | Office：`POWERPNT.EXE /S "文件"` | ✓ 直接进全屏放映（`screenClass`）；**冷启动实测 3 秒时已是全屏放映、编辑窗全程未出现**；**PowerPoint 已开着时再发 `/S` 也直接进放映**（编辑窗留着、放映盖上来） |
 | WPS：`wpp.exe /S "文件"` | ✗ 无效（只开编辑界面）；WPS 右键菜单也**没有"放映"动词**（只有 编辑/新建/打开/打印） |
-| WPS：COM `KWPP.Application` → `Presentations.Open(路径, 只读, 不新建, **不带窗口**)` → `SlideShowSettings.Run()` | ✓ **直接进放映**（主窗口变 "WPS Presentation Slide Show"）；**"无窗打开"变体已实测：连编辑界面都不创建**（Run 前屏幕上没有任何 WPS 窗口、全程无闪）——WPS 这条的正式入口 |
+| WPS：COM `KWPP.Application` → `Presentations.Open(路径, 只读, 不新建, **带窗口**)` → `SlideShowSettings.Run()` | ✓ **直接进放映**（主窗口变 "WPS Presentation Slide Show"）。⚠ **"不带窗口"的变体已废弃**（2026-10-09 真机教训）：无窗文稿在前台被抢一次（从穿透切回批注）后，连 `ActivePresentation` 都**永久读空**、放映还在而控制条再也不回来；**有窗打开则全程稳**（加载的 1~2 秒里可能看见 WPS 编辑窗，实测小文件基本看不到） |
 | 端到端：对着上面起的 WPS 放映跑 `--pptprobe 20 --pptdebug` | ✓ **PASS：92/92 次采样在放映中，连接层在这台机器上可用**（自动接管成功；WPS 还以 PowerPoint 的 CLSID 兼容注册了一份 ROT 条目，现挑实例逻辑不受影响） |
 | 用户真机（2026-10-09，临时工具） | ✓ **两条路都"点完即全屏放映"**；**Esc 退出后桌面干净**（不留编辑窗）——预期体验达成 ✓ |
 
@@ -372,9 +372,9 @@
 
 **落地要点（将来做时）**：
 1. 「打开文档…」的过滤器（`Export.cs` → `DocumentFilter`）加 `.ppt/.pptx/.ppsx` → 分流：图片/PDF 照走**自绘页模式**（`DocImport.OpenDocuments`），PPT 走**"启动外部播放 + 放映联动"**（新小模块，建议 `PptLaunch.cs`）；
-2. 启动方式（按实测定）：**WPS → COM `KWPP.Application` + 无窗打开（WithWindow=false）+ `Run()`**（连编辑界面都不闪；复用 AOT 安全的 `PptComLate.cs` 内核，补两件：`CLSIDFromProgID`+`CoCreateInstance` 建实例、Invoke 支持 1 个 BSTR 参数的 `Open` 调用）；**Office → `POWERPNT.EXE /S "文件"`**（零 COM，最稳；冷启动也不闪编辑窗）。启动前借一次前台（见上"前台/上线细节"）；选哪家 = 看 `.pptx` 默认关联（`WPP.*` → WPS；`PowerPoint.Show.*` → Office）；两家都没装 → 提示"这台机器没装 PowerPoint/WPS"；
+2. 启动方式（按实测定）：**WPS → COM `KWPP.Application` + 带窗口打开（WithWindow=true）+ `Run()`**（⚠ 别用无窗——会被前台切换弄坏，见上表注；复用 AOT 安全的 `PptComLate.cs` 内核，补两件：`CLSIDFromProgID`+`CoCreateInstance` 建实例、Invoke 支持 1 个 BSTR 参数的 `Open` 调用）；**Office → `POWERPNT.EXE /S "文件"`**（零 COM，最稳）。启动前借一次前台（见上"前台/上线细节"）；选哪家 = 看 `.pptx` 默认关联（`WPP.*` → WPS；`PowerPoint.Show.*` → Office）；两家都没装 → 提示"这台机器没装 PowerPoint/WPS"；
 3. COM / 启动失败兜底：改为"普通打开 + 提醒按 F5"（一键）；默认关联不是 Office/WPS 的机器 → 照旧"老师自己开、我们只批注"✓；
 4. 启动完成后现有放映联动**自动接管**（底部条 / 按页墨迹 / 翻页 / 临时全局热键）——**零新逻辑**（端到端已实测 ✓）；每页墨迹的身份键仍是**真实文件路径**（COM `Open` 打开的就是原文件，没有副本问题）；
 5. 注意：没真正进放映前**不进** PptMode；启动后的前台/焦点照现状处理（现有 PPT 模式已在应对"前台是 WPS/PPT"）；结束放映仍由老师 `Esc`（我们不夺控制）。
 
-**状态（2026-10-09 深夜）**：**已接入**（用户"可以接入了"拍板；本地提交，未推，等界面级验收）——① 「打开文档…」过滤器加 `.pptx/.ppt/.ppsx` + 分流（`DocImport.OpenDocuments`：PPT 不铺页，走直映）；② 启动器 `PptLaunch.cs`（WPS=ComLate 无窗 COM / Office=`/S` / 兜底=普通打开+提示）；③ 借前台 + 8 秒"上线保障"（`Ppt.cs` 的 `PptFrontGuardTick`）；④ 自检 E 组 5 条（doctest **109/0**）+ paneltest **260/0** + `--doc` 端到端联调 `[PPT直映] → [PPT] 进入放映` 全通 ✓
+**状态（2026-10-09 深夜）**：**已接入**（用户"可以接入了"拍板；本地提交，未推，等界面级验收）——① 「打开文档…」过滤器加 `.pptx/.ppt/.ppsx` + 分流（`DocImport.OpenDocuments`：PPT 不铺页，走直映）；② 启动器 `PptLaunch.cs`（WPS=ComLate 有窗 COM / Office=`/S` / 兜底=普通打开+提示）；③ 借前台 + 8 秒"上线保障"（`Ppt.cs` 的 `PptFrontGuardTick`）；④ 自检 E 组 5 条（doctest **109/0**）+ paneltest **260/0** + `--doc` 端到端联调 `[PPT直映] → [PPT] 进入放映` 全通 ✓；⑤ **深夜·二修补**：控制条断线修复（WPS 改有窗打开 + 断线自愈/宽限；回归 doctest 109/0 / ppttest 99 / paneltest 260/0 全绿）✓

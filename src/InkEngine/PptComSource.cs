@@ -9,6 +9,13 @@
 //
 //  行为契约与原版一致：进程名探测 → ROT 扫描挑实例 → 读放映状态；
 //  任何调用失败一律静默（没装 Office 的机器上零症状）。
+//
+//  2026-10-09 真机实测（WPS 放映）：根因在"WPS **无窗**打开"（WithWindow=false）——
+//  无窗文稿遇前台切换（如从穿透切回批注）后，连 `ActivePresentation` 都读成空、
+//  且本进程内重连也救不回（验证工具/脚本进程退出才恢复）。**根治 = 启动改用有窗
+//  打开**（见 PptLaunch）。这里留两层兜底防再犯：①ROT 同优先级优先 WPS 本体
+//  （WPS 会把自己的自动化同时注册成 KWPP 与 PowerPoint 兼容两个条目，见 PreferTie）；
+//  ②读到空但放映窗还在时自动重连（TryReconnect，平时不该触发）。
 // =====================================================================================
 
 using System.Diagnostics;
@@ -21,6 +28,7 @@ internal sealed class PptComSource : IPptSource
     private IntPtr _app;                      // IDispatch*（Application），引用归我们
     private string _appProgId = "";           // 记一下是哪家的（PowerPoint / WPS）
     private long _nextProcessProbeMs;         // 下一次允许"枚举全机进程"的时刻
+    private long _nextHealMs;                 // 下一次允许"连接自愈重连"的时刻（见 TryHealConnection）
 
     /// <summary>`--pptdebug`：把 ROT 扫描每一步打出来（排查连接问题用，平时关）。</summary>
     internal static bool Debug;
@@ -62,10 +70,17 @@ internal sealed class PptComSource : IPptSource
         try
         {
             var app = EnsureApp();
+            if (app == IntPtr.Zero && TryReconnect()) app = _app;   // ROT 全读空：直接重建连接
             if (app == IntPtr.Zero) return default;
             D("Poll: Application 已连接");
 
             var pres = ComLate.GetObject(app, "ActivePresentation");
+            if (pres == IntPtr.Zero && TryReconnect())
+            {
+                // WPS 兼容连接的"前台一抢就永久读空"：重连一次就好了（见 TryReconnect）。
+                app = _app;
+                pres = ComLate.GetObject(app, "ActivePresentation");
+            }
             if (pres == IntPtr.Zero) return default;
             D("Poll: ActivePresentation 拿到了");
             try
@@ -195,6 +210,73 @@ internal sealed class PptComSource : IPptSource
         return _app;
     }
 
+    // =====================================================================
+    //  连接自愈（2026-10-09 真机实测所加，见文件头）
+    //
+    //  症状：WPS 无窗放映期间前台被抢走一次（如从穿透切回批注），老连接上
+    //  `ActivePresentation` 永久读空——放映还在、条却不回来；且此时**新连接也被
+    //  读空**，直到把启动时抱着的 WPS 引用放掉才恢复（实测）。
+    //
+    //  所以重连做三件事：①放掉 PptLaunch 抱着的引用；②扔了旧连接；
+    //  ③按 KWPP 优先重建（按"进程在跑"过滤，不给纯 Office 机器白拉 WPS）。
+    //  只在"放映窗还在屏幕上"时做（真没在放就别白建对象），1 秒最多一次；
+    //  **每次尝试都会重来**（就算失败也允许下一次再试——断线期恰恰要反复敲）。
+    // =====================================================================
+    private bool TryReconnect()
+    {
+        long now = Environment.TickCount64;
+        if (now < _nextHealMs) return false;
+        _nextHealMs = now + 1000;
+
+        if (PptLaunch.FindShowWindow(out _) == IntPtr.Zero) return false;   // 放映窗都不在 = 真没在放
+        D("连接失效但放映窗还在：重连");
+
+        PptLaunch.ReleaseHeldRefs();
+        ComLate.Release(_app);
+        _app = IntPtr.Zero;
+        _appProgId = "";
+
+        if (ProcRunning("wpp") && TryAttach("KWPP.Application")) return true;
+        if (ProcRunning("POWERPNT") && TryAttach("PowerPoint.Application")) return true;
+        return false;
+    }
+
+    /// <summary>重连一家：建对象 + 试读 ActivePresentation；读得到才认（引用留在 `_app`）。</summary>
+    private bool TryAttach(string progId)
+    {
+        if (!ComLate.CreateFromProgId(progId, out var a) || a == IntPtr.Zero) return false;
+        var chk = ComLate.GetObject(a, "ActivePresentation");
+        if (chk != IntPtr.Zero)
+        {
+            ComLate.Release(chk);
+            _app = a;
+            _appProgId = progId;
+            D($"重连成功：{progId}");
+            return true;
+        }
+        ComLate.Release(a);
+        return false;
+    }
+
+    private static bool ProcRunning(string name)
+    {
+        try { return Process.GetProcessesByName(name).Length > 0; }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// ROT 同优先级的 tie-break：**优先 WPS 本体（KWPP/WPP）**——别选
+    /// PowerPoint 兼容劫持那个，它在前台被抢一次后会永久读空（见文件头）。
+    /// </summary>
+    private static bool PreferTie(string newPid, string curPid)
+    {
+        if (string.IsNullOrEmpty(newPid) || string.IsNullOrEmpty(curPid)) return false;
+        static bool IsWpsNative(string p) =>
+            p.StartsWith("KWPP", StringComparison.OrdinalIgnoreCase)
+            || p.StartsWith("WPP", StringComparison.OrdinalIgnoreCase);
+        return IsWpsNative(newPid) && !IsWpsNative(curPid);
+    }
+
     // -------------------------------------------------------------------------------
     //  ROT 扫描（和原版同一套优先级：ActivePresentation=1 ＜ 有 SlideShowWindow=2
     //  ＜ 放映窗口是前台=3）。所有接口指针手工 Release。
@@ -256,7 +338,7 @@ internal sealed class PptComSource : IPptSource
 
                         int priority = PriorityOf(app);
                         D($"    优先级={priority}");
-                        if (priority > bestPriority)
+                        if (priority > bestPriority || (priority == bestPriority && PreferTie(pid, progId)))
                         {
                             if (best != IntPtr.Zero) ComLate.Release(best);
                             best = app;

@@ -237,6 +237,13 @@ public partial class InkEngine
     private double _pptFrontGuardNextMs;
     private int _pptFrontGuardPulls;
 
+    // "读数断了"的自愈宽限（2026-10-09）：WPS 无窗放映在前台被抢一次后，老连接会
+    // 有一段读空期（放映还在放）。一断就收 = 老师看着条突然没了；这里给 10 秒：
+    // 期间 PptComSource.TryHealConnection 一直重试，恢复 = 什么都没发生；
+    // 放映窗真没了（按了 Esc）= 0.4 秒内正常收场。
+    private double _pptExitGraceUntilMs;
+    private double _pptExitGraceNextCheckMs;
+
     private void StartPptFrontGuard()
     {
         _pptFrontGuardUntilMs = NowMs + 8000;
@@ -265,12 +272,46 @@ public partial class InkEngine
     }
 
     /// <summary>
+    /// 自愈宽限的每帧结算（见 `_pptExitGraceUntilMs` 的注释）：
+    /// 读数恢复 → 取消（什么都没发生过）；放映窗没了 → 立即正常收场；
+    /// 窗还在但 10 秒都没自愈回来 → 兜底收场。窗口扫描 400ms 才做一次。
+    /// </summary>
+    private void PptExitGraceTick()
+    {
+        var s = _pptWatcher != null ? _pptWatcher.Snapshot() : _pptSource?.Poll() ?? default;
+        if (s.Showing && s.Total > 0)
+        {
+            _pptExitGraceUntilMs = 0;
+            Console.WriteLine("[PPT] 读数恢复（自愈成功），继续放映");
+            return;
+        }
+
+        if (NowMs >= _pptExitGraceNextCheckMs)
+        {
+            _pptExitGraceNextCheckMs = NowMs + 400;
+            if (PptLaunch.FindShowWindow(out _) == IntPtr.Zero)
+            {
+                _pptExitGraceUntilMs = 0;
+                if (PptMode) ExitPptMode();      // 放映窗都没了：真结束
+                return;
+            }
+        }
+
+        if (NowMs >= _pptExitGraceUntilMs)
+        {
+            _pptExitGraceUntilMs = 0;
+            if (PptMode) ExitPptMode();          // 窗还在但一直自愈不回来：兜底收场
+        }
+    }
+
+    /// <summary>
     /// 状态机走一步。主循环每帧调一次（没变化时只读一个 bool，**不碰 COM**）。
     /// 自检也调它——"测量用的循环和真正的循环必须同源"（这个项目栽过）。
     /// </summary>
     internal void StepPpt()
     {
         if (_pptFrontGuardUntilMs != 0) PptFrontGuardTick();
+        if (_pptExitGraceUntilMs != 0) PptExitGraceTick();
         if (_pptSource == null) return;
         if (_pptWatcher != null && !_pptWatcher.TakeDirty()) return;
 
@@ -321,7 +362,19 @@ public partial class InkEngine
         }
         else if (PptMode)
         {
-            ExitPptMode();
+            // 放映窗**还在屏幕上** = 可能是 WPS 断线那毛病 → 给自愈宽限（见字段注释）；
+            // 窗都没了 = 真结束（按了 Esc 等）→ 立即收，一秒都不多留。
+            if (PptLaunch.FindShowWindow(out _) == IntPtr.Zero)
+            {
+                ExitPptMode();
+                return;
+            }
+            if (_pptExitGraceUntilMs == 0)
+            {
+                _pptExitGraceUntilMs = NowMs + 10000;
+                _pptExitGraceNextCheckMs = NowMs + 400;
+                Console.WriteLine("[PPT] 读数断了：给 10 秒自愈宽限（放映窗还在就继续等）");
+            }
         }
     }
 

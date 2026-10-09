@@ -290,7 +290,7 @@ internal static unsafe class ComLate
 
     /// <summary>
     /// 调 `Presentations.Open(File, ReadOnly, Untitled, WithWindow)`——4 个参数全给
-    /// （WithWindow=否 就是"无窗打开"：开完连编辑界面都不创建，WPS 直映要的正是这个）。
+    /// （WithWindow 现固定给"是"：WPS 的"无窗打开"会被前台切换弄坏，见 PptLaunch 头注释）。
     ///
     /// ⚠ IDispatch 的参数按**倒序**排进 rgvarg（第 4 个参数排最前），别排反。
     /// 成功返回文稿的 IDispatch*（**引用归调用者**，须 Release）；失败返回 0。
