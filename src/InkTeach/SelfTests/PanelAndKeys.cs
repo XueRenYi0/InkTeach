@@ -955,38 +955,36 @@ internal sealed partial class App
             Host.Commands.SetPassThrough(false);                          SettleFrames(300);
         }
 
-        // ---- ⑥.3g 文档模式：点"白板"格 = 白板升起/落下（乙·透明纸，2026-10-09）----
-        // 引擎侧全链路（页让位/条收起/不露底/墨与图像留着/落下回来）在 --doctest 里钉；
-        // 这里只钉 UI 这一格的动作：文档开着时它管"升起/落下"，不再是"开板/关板"。
+        // ---- ⑥.3g "两张纸"（2026-10-09）：文档开着时白板格 = 开板/关板，板盖在文档上面 ----
+        // 引擎侧全链路（文档自带纸 / 板色不干涉 / 开板盖住 / 关板回来 / 墨留着）在 --doctest 里钉；
+        // 这里只钉 UI：文档开着时格子亮灭跟的是**白板开关**（纸不借板开关，不再常亮）。
         {
             // 开一个假文档（直接用页层；不走"打开文档"对话框）
             DocView.UseWorker = false;
             DocView.Generator = sp => FakeDocPageBgra(sp.OutW, sp.OutH, 60, 180, 220);
             var docSpecsG = new List<DocPages.Spec> { DocSpec(600, 900, "UI假页.png") };
             DocView.Open(docSpecsG, "UI 假文档", 1200f, 0f, 24f);
-            SettleFrames(200);
-            Check("（准备）假文档开着（DocOpen 状态可见）", Host.State.DocOpen,
-                  $"DocOpen={Host.State.DocOpen}");
-            Check("文档开着、白板没升起：白板格**不亮**（纸底 ≠ 白板升起）",
-                  !ui.CellActiveForTest(2), $"格亮={ui.CellActiveForTest(2)}");
+            SettleFrames(400);
+            Check("（准备）假文档开着：页在、白板格**不亮**（纸≠板）",
+                  Host.State.DocOpen && !Host.State.Board && DocView.ResidentPages >= 1
+                  && !ui.CellActiveForTest(2),
+                  $"DocOpen={Host.State.DocOpen} 板开={Host.State.Board} 驻留={DocView.ResidentPages} 格亮={ui.CellActiveForTest(2)}");
 
             var boardCellG = ui.CellRectForTest(2);
             int bgx = (int)((boardCellG.MinX + boardCellG.MaxX) * 0.5f * DpiScale);
             int bgy = (int)((boardCellG.MinY + boardCellG.MaxY) * 0.5f * DpiScale);
-            bool up0 = Host.State.BoardOverDoc;
             ClickPhysical(bgx, bgy);
-            SettleFrames(250);
-            Check("文档模式点白板格：白板升起（盖住文档、格亮）",
-                  !up0 && Host.State.BoardOverDoc && ui.CellActiveForTest(2),
-                  $"升前={up0}、升后={Host.State.BoardOverDoc}、格亮={ui.CellActiveForTest(2)}");
+            SettleFrames(400);
+            Check("点白板格：开板、盖住文档（页让位、格亮）",
+                  Host.State.Board && DocView.ResidentPages == 0 && ui.CellActiveForTest(2),
+                  $"板开={Host.State.Board} 驻留={DocView.ResidentPages} 格亮={ui.CellActiveForTest(2)}");
 
             ClickPhysical(bgx, bgy);
-            SettleFrames(250);
-            Check("再点一下：白板落下（PDF 回来、格灭）",
-                  !Host.State.BoardOverDoc && !ui.CellActiveForTest(2),
-                  $"升起={Host.State.BoardOverDoc}、格亮={ui.CellActiveForTest(2)}");
+            SettleFrames(400);
+            Check("再点一下：关板、文档回来（页回来、格灭）",
+                  !Host.State.Board && DocView.ResidentPages >= 1 && !ui.CellActiveForTest(2),
+                  $"板开={Host.State.Board} 驻留={DocView.ResidentPages} 格亮={ui.CellActiveForTest(2)}");
 
-            Host.Commands.SetBoardOverDoc(false);      // 兜底：确保状态清零再收文档
             DocView.Close();
             SettleFrames(250);
         }

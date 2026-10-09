@@ -3595,17 +3595,10 @@ public sealed class FullUi : IOverlayUi
             // ② 那条判据必须带 `prevBand == 2`：老师从图形面板点回白板那一格，
             // 意思是"把板拿回来用"，那时候不该顺手把它关掉（同笔 / 荧光笔 / 图形那几格）。
             case 2:
-                // 文档开着（纸底自动开着）：这一格 = 白板"升起 / 落下"（乙·透明纸，
-                // 2026-10-08 拍板、2026-10-09 实现）——**升起才会盖住 PDF**：
-                //   ① 没升起 → 升起（顺手把设置条拿过来）
-                //   ② 已升起、色带也在这一格 → 落下（PDF 原样回来，覆盖期间写的墨留在页上）
-                //   ③ 已升起、色带在别处 → 只把色带拿过来
-                if (st.DocOpen)
-                {
-                    if (!st.BoardOverDoc) cmd.SetBoardOverDoc(true);
-                    else if (prevBand == 2) cmd.SetBoardOverDoc(false);
-                    break;
-                }
+                // "两张纸"模型（2026-10-09 用户定）：白板画在文档上面。文档开着时这一格就是
+                // **开板/关板**——开板＝白板盖住 PDF（页图/条让位），关板＝回到文档。
+                // 打开文档的那一下会把白板自动收掉（先让你看见文档，见 DocImport.StartDocView），
+                // 所以刚开完文档这里必然是"灭"的，点一下才把白板铺上来。
                 if (!st.Board) cmd.SetBoard(true);             // ① 开板
                 else if (prevBand == 2) cmd.SetBoard(false);   // ③ 关板
                 break;                                         // ② 只把色带拿过来，板不动
@@ -4886,10 +4879,7 @@ public sealed class FullUi : IOverlayUi
     private bool IsActive(int i, in UiState st)
     {
         if (i == 1) return st.PassThrough;
-        // 白板格：**文档开着时亮 = 白板"升起"（盖住 PDF）**，不是"纸底开着"。
-        // 纸底是开文档自动铺的（那是文档的"纸"）——拿它当高亮会让格子从打开文档起一直亮着，
-        // 看着像"白板一直开着"（2026-10-09 用户报的）。没有文档时保持原意：板开着就亮。
-        if (i == 2) return st.DocOpen ? (st.BoardOverDoc && !st.PassThrough) : st.Board;
+        if (i == 2) return st.Board;
         if (st.PassThrough) return false;
         return i switch
         {

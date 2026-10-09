@@ -34,12 +34,12 @@ public partial class InkEngine
     internal bool PageBarActive => PptMode || DocView.IsOpen;
 
     /// <summary>
-    /// 条现在**看得见 / 点得到**吗。与 <see cref="PageBarActive"/> 的差别 = 穿透 / 白板盖文档：
+    /// 条现在**看得见 / 点得到**吗。与 <see cref="PageBarActive"/> 的差别 = 穿透 / 白板盖住：
     ///   · 文档模式：穿透 = 全让开（S2，用户 2026-10-07 定）→ 条跟着收 ✗；
-    ///     **白板"升起"盖文档（乙）时同一条口径**——页都让位了，条也收（2026-10-09）；
+    ///     **白板铺上来盖住文档时**同样收（页都在白板底下了，条没用；2026-10-09"两张纸"）；
     ///   · PPT 模式：穿透时条**保留**（它管的是下层放映的东西，还有用 ✓，有接输入小窗撑着）。
     /// </summary>
-    internal bool PageBarVisible => PageBarActive && (PptMode || (!PassThrough && !BoardOverDoc));
+    internal bool PageBarVisible => PageBarActive && (PptMode || (!PassThrough && !BoardOn));
 
     /// <summary>条上的"第几页"（1 起）。文档模式 = 视口中心所在的页（没页时给 1）。</summary>
     internal int BarPageNow
@@ -323,13 +323,6 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 打开文档前板底是不是开着的（关文档时按它恢复）。
-    /// 打开文档会自动开纸底（默认白），但那张纸是"文档的纸"——文档关了纸也收，
-    /// 老师原来什么样就什么样（同"进穿透关板、退出恢复"的语义）。
-    /// </summary>
-    private bool _boardWasOnBeforeDoc = true;
-
-    /// <summary>
     /// 排好页、进文档页空间、读回批注。
     ///
     /// **页锚在固定画布位置**（2026-10-07 定）：横向 = 主屏中心、纵向 = 画布 y=0 起。
@@ -343,13 +336,13 @@ public partial class InkEngine
         DocView.UseWorker = DocPageWorker;      // 后台渲染（产品默认开；见那行注释）
         DocView.OnResultReady = WakeForDocPage; // 后台渲完一页叫醒主循环（不叫就不上屏）
 
-        // **文档的"纸底"**：打开文档时确保板底开着（默认白）——
-        //   ① 页缝 / 页边有纸感（不再透出桌面）；② 将来"自适应撑满"、页不满屏时四周也是纸。
-        // 关文档时恢复老师原来的板态（见 CloseDocument）。
-        // ⚠ "白板盖文档"（乙）的**升起状态**与纸底正交：新文档一律从"落下"起步（2026-10-09）。
-        BoardOverDoc = false;
-        _boardWasOnBeforeDoc = BoardOn;
-        if (!BoardOn) SetBoardFromUi(true);
+        // **文档的"纸"**（2026-10-09"两张纸"模型）：文档开着时自动铺一层白底
+        //（Overlay.BoardBrush 里按 DocView.IsOpen 现判，不需要开关）——
+        //   ① 页缝 / 页边有纸感（不再透出桌面）；② 页不满屏时四周也是纸。
+        // ⚠ **和白板无关**：纸不是白板，改板色/关白板都动不了它；关文档它自己收。
+        // ⚠ 但"白板"是**另一张纸、盖在文档上面**——打开文档先把白板收掉，
+        //    不然新打开的文档会被盖在白板底下看不见（用户要的是"先看见文档"）。
+        if (BoardOn) SetBoardFromUi(false);
 
         // 先进页空间（切槽 + 相机就位），再排页——页的锚点是固定的，不依赖当时视口。
         DocStoreKey = storeKey;
@@ -398,19 +391,9 @@ public partial class InkEngine
 
         LeaveDocPageSpace();                // 回桌面（含相机位置恢复）
 
-        // **纸底随文档一起收**：打开文档时自动开的那个白板，关文档时恢复原样
-        //（老师本来就开着 → 不动；本来就关着 → 收掉，别把"文档的纸"留在桌面上）。
-        // ⚠ 先把"白板盖文档"的升起状态清掉再收——不然 SetBoardFromUi(false) 会被
-        //    "先落下"那条分支拦一道（2026-10-09）。
-        BoardOverDoc = false;
-        if (!_boardWasOnBeforeDoc)
-        {
-            if (BoardOn) SetBoardFromUi(false);
-            // 别让之后"退出穿透"再把这张纸变回来（它是文档的纸，文档没了）
-            _boardBeforePassThrough = false;
-        }
-        _boardWasOnBeforeDoc = true;
-
+        // **纸随文档一起收**：文档的"纸"是按 DocView.IsOpen 现判的，关文档自然就收了。
+        // 白板是**另一张纸**：文档的开关不动它——打开时替你把它收过一次（好让你看见文档），
+        // 这里不回补（想要白板再点一下那一格就行）。
         DocStoreKey = "";
 
         SetInkStatus($"已关闭文档：{title}");

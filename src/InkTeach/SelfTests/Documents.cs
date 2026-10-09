@@ -193,8 +193,10 @@ internal sealed partial class App
         // ------------------------------------------------------------------
         Console.WriteLine("  -- A7 上屏：页真的画出来 / 失败占位 / 滚走再回来 --");
         // ------------------------------------------------------------------
-        // ⚠ 探针读的是**屏幕合成结果**：必须开白板（不透明底），否则透明处会把桌面读进来。
-        BoardOn = true;
+        // ⚠ 探针读的是**屏幕合成结果**。老版这里靠"开白板当不透明底"——
+        //    "两张纸"模型下白板一开就盖住文档了 ✗；现在**文档自带纸**（白底），
+        //    页外面不是桌面而是纸，白板关着照样能稳探（这是新模型顺手带来的好处）。
+        if (BoardOn) SetBoardFromUi(false);
         Doc.Clear();
         Doc.ClearHistory();
         ViewOffsetY = 0f;
@@ -586,7 +588,7 @@ internal sealed partial class App
             if (Doc.PageKey != 0) Doc.SwitchPage(0);
             Doc.Clear();
             Doc.ClearHistory();
-            if (BoardOn) SetBoardFromUi(false);          // 干净起点：板关（好验"打开自动开纸底"）
+            if (BoardOn) SetBoardFromUi(false);          // 干净起点：板关（好验"开文档不碰白板"）
             ViewOffsetY = 0f;
             foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
 
@@ -596,7 +598,7 @@ internal sealed partial class App
                   errOpen == null && PageBarActive && Doc.PageKey == docSlot,
                   errOpen ?? $"slot={Doc.PageKey}（应 {docSlot}）");
 
-            Check("打开后：自动开纸底（板底默认白）", BoardOn, $"BoardOn={BoardOn}");
+            Check("打开后：白板**没被碰**（纸由文档自带，与板无关）", !BoardOn, $"BoardOn={BoardOn}");
 
             Check("条上页码 1/3", BarPageNow == 1 && BarTotal == 3, $"{BarPageNow}/{BarTotal}");
 
@@ -635,7 +637,8 @@ internal sealed partial class App
                   errRe == null && Doc.Strokes.Count == 1 && Doc.PageKey == docSlot,
                   errRe ?? $"{Doc.Strokes.Count} 个对象 slot={Doc.PageKey}");
 
-            // ⭐ 纸底：页缝里要是白的（不再透出桌面）；关掉纸底作对照
+            // ⭐ "两张纸"模型（2026-10-09 用户定）：**文档自带一张纸**（白底，独立于白板）——
+            //   页缝/页边不露桌面；白板是**另一张盖在上面的纸**（开板=页让位、板色盖满）。
             var pg1 = DocView.At(0); var pg2 = DocView.At(1);
             float gapMid = (pg1.Rect.MaxY + pg2.Rect.MinY) * 0.5f;   // 第 1/2 页之间那条缝的中心（画布 y）
             ViewOffsetY = -gapMid + 840f;                            // 把它对到屏幕 y≈840
@@ -643,22 +646,42 @@ internal sealed partial class App
             SettleFrames(350);
             int sx = (int)pg1.Rect.MinX + 600;                       // 缝横贯整幅页宽，x 取页内任意
             int sy = 840 - 8;                                        // 采样块 16 高，落在缝（48 高）里
-            int br = (int)MathF.Round(BoardColor.R * 255);
-            int bg2 = (int)MathF.Round(BoardColor.G * 255);
-            int bb = (int)MathF.Round(BoardColor.B * 255);
-            int gapWhite = ScreenProbe.CountNear(sx, sy, 100, 16, br, bg2, bb, 3);
-            Check($"页缝里是纸底色 rgb({br},{bg2},{bb})（纸底生效）", gapWhite > 1580, $"{gapWhite}/1600");
+            int pr = (int)MathF.Round(DocPaperColor.R * 255);
+            int pgc = (int)MathF.Round(DocPaperColor.G * 255);
+            int pbc = (int)MathF.Round(DocPaperColor.B * 255);
+            int gapWhite = ScreenProbe.CountNear(sx, sy, 100, 16, pr, pgc, pbc, 3);
+            Check($"文档开着、白板关着：页缝里是**文档的纸** rgb({pr},{pgc},{pbc})", gapWhite > 1580, $"{gapWhite}/1600");
 
-            // 对照：把板色临时换成**绿色**——缝里立刻变绿，就证明"缝里就是板底"。
-            // （比"关掉板底看桌面"稳：桌面是什么颜色我们控制不了，套件环境里就被坑过一次 ✗）
+            // 对照：把**板色**临时换成绿色——纸**不受影响**（纸是文档的、不是板）。
+            // 这条把"两张纸互不干涉"钉死：旧版纸底借的是板开关，换个板色纸就跟着变 ✗。
             var savedBoardColor = BoardColor;
             SetBoardColorFromUi(new Color4(0f, 0.8f, 0f, 1f));
             SettleFrames(300);
-            int gapGreen = ScreenProbe.CountNear(sx, sy, 100, 16, 0, 204, 0, 3);
-            Check("换绿板色：缝里立刻变绿（证明缝里就是板底）", gapGreen > 1580, $"{gapGreen}/1600");
-            SetBoardColorFromUi(savedBoardColor);
-            SettleFrames(300);
+            int gapWhite2 = ScreenProbe.CountNear(sx, sy, 100, 16, pr, pgc, pbc, 3);
+            int gapGreen2 = ScreenProbe.CountNear(sx, sy, 100, 16, 0, 204, 0, 3);
+            Check("换绿板色：纸**不变**（纸与板互不干涉）", gapWhite2 > 1580 && gapGreen2 < 40,
+                  $"纸白 {gapWhite2}/1600、绿 {gapGreen2}（应≈0）");
+
+            // 白板铺上来（"上面那张纸"）：页让位、条收起、板色盖满；关板回到文档。
             SetBoardFromUi(true);
+            SettleFrames(420);
+            Check("开白板（文档开着）：盖住文档（页位图让位 + 条收起）",
+                  BoardOn && DocView.ResidentPages == 0 && !PageBarVisible,
+                  $"板开={BoardOn} 驻留={DocView.ResidentPages} 条可见={PageBarVisible}");
+            int pagePx = (int)pg1.Rect.MinX + 40;
+            int pagePy = 840 - 470;                                  // 屏幕上页 0 的可见段里
+            int pageRedBoardOn = ScreenProbe.CountNear(pagePx, pagePy, 80, 80, 255, 0, 0, 40);
+            int boardGreenOn = ScreenProbe.CountNear(pagePx, pagePy, 80, 80, 0, 204, 0, 6);
+            Check("开白板：页区整块是板色（不漏页面、不漏桌面；当前板色绿）",
+                  pageRedBoardOn < 60 && boardGreenOn > 5000,
+                  $"页红残留 {pageRedBoardOn}、板绿 {boardGreenOn}/6400");
+            SetBoardFromUi(false);
+            SettleFrames(420);
+            int pageRedBack2 = ScreenProbe.CountNear(pagePx, pagePy, 80, 80, 255, 0, 0, 40);
+            Check("关白板：文档回来（页/条回来 + 页重新上屏）",
+                  !BoardOn && DocView.ResidentPages >= 1 && PageBarVisible && pageRedBack2 > 5000,
+                  $"板开={BoardOn} 驻留={DocView.ResidentPages} 条可见={PageBarVisible} 页红={pageRedBack2}");
+            SetBoardColorFromUi(savedBoardColor);
             SettleFrames(300);
             ViewOffsetY = 0f;
             foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
@@ -691,14 +714,9 @@ internal sealed partial class App
             int redBack = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 255, 0, 0, 40);
             Check("退出穿透：页重新上屏", redBack > 4000, $"{redBack}/6400 像素");
 
-            // ⭐ 白板盖文档（乙·"透明纸"；2026-10-08 拍板、2026-10-09 实现＋同日修订语义）：
-            //   升起 → 页图/页码条让位、白板实底盖住（**不露桌面**）；
-            //   **墨与图像都留在白板上**（用户用法："截图 PDF 里的题 → 摆到白板上"，
+            // ⭐ 白板盖住文档时：**墨与截图都留在白板上**（用户用法："截图 PDF 里的题 → 摆到白板上"，
             //   那些截图/批注就是要摆在白板上的内容，所以不隐）。
-            //   落下 → PDF 原样回来（位置一个像素不动，页位图按需重生成）。
             {
-                // 页 1 是纯红（WriteTestPdf 的 "1 0 0 rg"）——拿"页色"当"页在不在"的探针。
-                int pageRedBefore = ScreenProbe.CountNear(rb0 + 40, ry0 + 40, 80, 80, 255, 0, 0, 40);
                 var coverMark = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,
                                              Color = new Color4(0f, 0f, 0f, 1f), Width = 10f };
                 coverMark.AddPoint(rb0 + 240f, ry0 + 240f, 1f, 0);
@@ -707,33 +725,20 @@ internal sealed partial class App
                 SettleFrames(300);
                 int inkBefore = ScreenProbe.CountNear(rb0 + 270, ry0 + 260, 100, 80, 0, 0, 0, 40);
 
-                SetBoardOverDocFromUi(true);
+                SetBoardFromUi(true);
                 SettleFrames(420);
-                Check("白板升起：页位图让位 + 条收起 + 状态置位",
-                      BoardOverDoc && DocView.ResidentPages == 0 && !PageBarVisible,
-                      $"升起={BoardOverDoc} 驻留={DocView.ResidentPages} 条可见={PageBarVisible}");
-                int pageRedCovered = ScreenProbe.CountNear(rb0 + 40, ry0 + 40, 80, 80, 255, 0, 0, 40);
-                int brW = (int)MathF.Round(BoardColor.R * 255);
-                int bgW = (int)MathF.Round(BoardColor.G * 255);
-                int bbW = (int)MathF.Round(BoardColor.B * 255);
-                int boardCover = ScreenProbe.CountNear(rb0 + 40, ry0 + 40, 80, 80, brW, bgW, bbW, 6);
-                Check("白板升起：页区整块是板底（不漏页面、不漏桌面）",
-                      pageRedCovered < 60 && boardCover > 5000,
-                      $"页色残留 {pageRedCovered}、板色 {boardCover}/6400（升前页色 {pageRedBefore}）");
-                int inkCovered = ScreenProbe.CountNear(rb0 + 270, ry0 + 260, 100, 80, 0, 0, 0, 40);
-                Check("白板升起：墨留在白板上（截图/批注是白板的内容，不隐）",
-                      inkCovered > 100, $"{inkCovered} 黑像素（升前 {inkBefore}）");
-
-                SetBoardOverDocFromUi(false);
+                int inkOnBoard = ScreenProbe.CountNear(rb0 + 270, ry0 + 260, 100, 80, 0, 0, 0, 40);
+                Check("白板盖住文档：墨/截图留在白板上（不隐）",
+                      BoardOn && inkBefore > 100 && inkOnBoard > 100,
+                      $"板开={BoardOn}，黑像素（盖前/盖后）={inkBefore}/{inkOnBoard}");
+                SetBoardFromUi(false);
                 SettleFrames(420);
-                int pageRedAfter = ScreenProbe.CountNear(rb0 + 40, ry0 + 40, 80, 80, 255, 0, 0, 40);
-                Check("白板落下：页/条回来 + 状态清零（PDF 位置不动）",
-                      !BoardOverDoc && DocView.ResidentPages >= 1 && PageBarVisible && pageRedAfter > 5000,
-                      $"升起={BoardOverDoc} 驻留={DocView.ResidentPages} 条可见={PageBarVisible} 页红={pageRedAfter}");
+                int inkBack = ScreenProbe.CountNear(rb0 + 270, ry0 + 260, 100, 80, 0, 0, 0, 40);
+                Check("关白板：墨还在（回到文档上面）", !BoardOn && inkBack > 100, $"黑像素={inkBack}");
             }
 
             CloseDocument();
-            Check("关文档：纸底恢复原板态（原来关着 → 现在也关着）", !BoardOn, $"BoardOn={BoardOn}");
+            Check("关文档：白板状态不受影响（文档只收自己那张纸）", !BoardOn, $"BoardOn={BoardOn}");
             if (Doc.PageKey != 0) Doc.SwitchPage(0);
             Doc.Clear();
             Doc.ClearHistory();

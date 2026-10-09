@@ -337,6 +337,8 @@ internal sealed partial class OverlayWindow : IDisposable
     private float _lastCamY = float.NaN;
     private bool _lastBoardOn;
     private Color4 _lastBoardColor = new(0f, 0f, 0f, -1f);
+    /// <summary>上一帧"文档垫白"在不在（进/出会整层重铺，和板色同一套）。</summary>
+    private bool _lastPaper;
     /// <summary>当前帧的引擎引用：光栅化分块时要用文档和底色。</summary>
     private InkEngine _app;
 
@@ -1045,8 +1047,11 @@ internal sealed partial class OverlayWindow : IDisposable
     }
 
     /// <summary>
-    /// 取当前该用的底色画刷。透明批注时就是全透明（等于把这一块擦干净），
-    /// 白板时是（可调透明度的）板色。底色变了才重建画刷，正常每帧不分配。
+    /// 取当前该用的底色画刷。**三层**（2026-10-09"两张纸"模型）：
+    ///   · 白板开着 → 板色（可调不透明度）——白板画在文档**上面**（页图会让位，见 SyncDocPages）；
+    ///   · 白板关着、文档开着、不在穿透 → **文档的"纸"**（白底：页缝/页边不露桌面）；
+    ///   · 其余（透明批注）→ 全透明。
+    /// 底色变了才重建画刷，正常每帧不分配。
     /// </summary>
     private ID2D1SolidColorBrush BoardBrush(InkEngine app)
     {
@@ -1055,7 +1060,7 @@ internal sealed partial class OverlayWindow : IDisposable
         var want = app.BoardOn
             ? new Color4(app.BoardColor.R, app.BoardColor.G, app.BoardColor.B,
                          app.BoardColor.A * app.BoardOpacity)
-            : Transparent;
+            : (app.DocView.IsOpen && !app.PassThrough ? app.DocPaperColor : Transparent);
         if (want.R != _boardBrushColor.R || want.G != _boardBrushColor.G
             || want.B != _boardBrushColor.B || want.A != _boardBrushColor.A)
         {
@@ -1094,7 +1099,7 @@ internal sealed partial class OverlayWindow : IDisposable
         var pages = app.DocView;
         if (!pages.IsOpen) return;
         if (app.PassThrough) return;      // 穿透 = 全让开（S2）：页不画（位图也在 SyncDocPages 里放了）
-        if (app.BoardOverDoc) return;     // 白板"升起"盖文档（乙）：页让位，白板实底盖住写字
+        if (app.BoardOn) return;          // 白板（"另一张纸"）铺在上面：页让位，板色盖满
 
         ID2D1SolidColorBrush placeholder = null, failed = null, border = null;
         int i = pages.FirstAtOrAfter(canvas.MinY);
@@ -1155,9 +1160,9 @@ internal sealed partial class OverlayWindow : IDisposable
         var pages = app.DocView;
 
         // 穿透 = **全让开**（S2，用户 2026-10-07 定）：页不画、不生成、位图全放（省内存）。
-        // **白板"升起"盖文档（乙，2026-10-09）走同一条链**：页让位、位图全放。
+        // **白板铺上来（"两张纸"的上面那张）也走同一条链**：页让位、位图全放。
         // 状态翻转那一帧要"整层作废"——分块里烘着页像素，不重铺的话穿透了屏幕还留着卷子。
-        bool hidden = app.PassThrough || app.BoardOverDoc;
+        bool hidden = app.PassThrough || app.BoardOn;
         if (hidden != _docHidden)
         {
             _docHidden = hidden;
@@ -1247,12 +1252,15 @@ internal sealed partial class OverlayWindow : IDisposable
             _fullFramesLeft = 2;      // 相机变了：两个缓冲都要重画到新位置（见字段说明）
         }
 
-        // 底色是**画进分块里**的（透明批注 = 擦成全透明，白板 = 铺底色），
-        // 所以换底色等于所有块都过期。
-        if (app.BoardOn != _lastBoardOn || !app.BoardColor.Equals(_lastBoardColor))
+        // 底色是**画进分块里**的（透明批注 = 擦成全透明；白板 = 板色；文档开着 = 文档垫白），
+        // 所以换底色（含"文档开/关""穿透"导致的垫白进出）等于所有块都过期。
+        bool paperNow = !app.BoardOn && app.DocView.IsOpen && !app.PassThrough;
+        if (app.BoardOn != _lastBoardOn || !app.BoardColor.Equals(_lastBoardColor)
+            || paperNow != _lastPaper)
         {
             _lastBoardOn = app.BoardOn;
             _lastBoardColor = app.BoardColor;
+            _lastPaper = paperNow;
             _tiles.MarkAllDirty();
             _fullFramesLeft = 2;
         }

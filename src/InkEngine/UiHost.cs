@@ -106,7 +106,6 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void Clear() => _engine.ClearFromUi();
     public void SetPassThrough(bool on) => _engine.SetPassThroughFromUi(on);
     public void SetBoard(bool on) => _engine.SetBoardFromUi(on);
-    public void SetBoardOverDoc(bool up) => _engine.SetBoardOverDocFromUi(up);
     public void SetBoardColor(Color4 color) => _engine.SetBoardColorFromUi(color);
     public void SetSelectMode(SelectMode mode) => _engine.SetSelectModeFromUi(mode);
     public void SelectAll() => _engine.SelectAllFromUi();
