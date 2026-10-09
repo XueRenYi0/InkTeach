@@ -152,6 +152,27 @@ internal sealed class TouchGestures
     }
 
     /// <summary>
+    /// 指定两根触点的数据（**双指手势"钉 id"用**，2026-10-09）。
+    ///
+    /// 为什么需要：`TryPair()` 取的是"表里前两个"——表里混进第三触点（掌根）或
+    /// 手指抬-落被重报、追加到表尾之后，"前两个"就会换人：中点在两对触点之间来回跳，
+    /// 真机表现就是**双指上下滑"嘟嘟地上下抖"**。钉住 id 后，手掌/杂触点一律不参与。
+    /// </summary>
+    public bool TryPair(uint idA, uint idB, out PairView pair)
+    {
+        pair = default;
+        Contact a = null, b = null;
+        foreach (var k in _c)
+        {
+            if (k.Id == idA) a = k;
+            else if (k.Id == idB) b = k;
+        }
+        if (a == null || b == null) return false;
+        pair = new PairView(a.Id, a.Pos, b.Id, b.Pos);
+        return true;
+    }
+
+    /// <summary>
     /// 触点落下 → 定角色（"干净开始"规则）。`sizePx` 只用来给诊断记数，**不参与判定**。
     /// </summary>
     public TouchVerdict Down(uint id, float x, float y, float sizePx, double nowMs, float dpi)

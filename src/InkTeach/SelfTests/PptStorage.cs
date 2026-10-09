@@ -711,7 +711,8 @@ internal sealed partial class App
                   && panel.MaxX <= _virtualX + screenW,
                   $"面板 y {panel.MinY:F0}..{panel.MaxY:F0}，条顶 {bar.MinY:F0}");
 
-            // 点面板里第 5 格 → 跳到第 5 页、面板收起
+            // 点面板里第 5 格 → 跳到第 5 页、**面板保持打开**（2026-10-09 用户定：
+            // "点错了可以继续点，只有点其他地方才消失"）。
             int gotoBefore = fake.GotoCalls;
             PptPanelCellRectAt(4, out var cell5);
             Check("第 5 格落在面板里（页数够、格子才排得下）",
@@ -720,9 +721,22 @@ internal sealed partial class App
             bool ateCell = PptBarPointerDown((cell5.MinX + cell5.MaxX) * 0.5f,
                                              (cell5.MinY + cell5.MaxY) * 0.5f);
             Step();
-            Check("点面板第 5 格：跳页命令给 PPT、面板收起",
-                  ateCell && fake.GotoCalls == gotoBefore + 1 && fake.GotoTarget == 5 && !PptPagePanelOpen,
+            Check("点面板第 5 格：跳页命令给 PPT、**面板保持打开**",
+                  ateCell && fake.GotoCalls == gotoBefore + 1 && fake.GotoTarget == 5 && PptPagePanelOpen,
                   $"GotoCalls={fake.GotoCalls}，跳到第 {fake.GotoTarget} 页，面板={PptPagePanelOpen}");
+
+            // 接着点第 3 格（用户要的"点错了接着点"）：再跳一次、面板仍开着
+            PptPanelCellRectAt(2, out var cell3);
+            bool ateCell2 = PptBarPointerDown((cell3.MinX + cell3.MaxX) * 0.5f,
+                                              (cell3.MinY + cell3.MaxY) * 0.5f);
+            Step();
+            Check("再点第 3 格：继续跳页、面板还开着",
+                  ateCell2 && fake.GotoCalls == gotoBefore + 2 && fake.GotoTarget == 3 && PptPagePanelOpen,
+                  $"GotoCalls={fake.GotoCalls}，跳到第 {fake.GotoTarget} 页，面板={PptPagePanelOpen}");
+
+            // 点别处：面板收起（这才是收起的路径；下面几段要重新走"点页码 → 菜单"入口）
+            PptBarPointerDown(_virtualX + 6f, _virtualY + 6f);
+            Check("点别处：面板收起", !PptPagePanelOpen, $"面板={PptPagePanelOpen}");
 
             // ---- 页号面板：**每一个格子的悬停都要准**（用户 2026-09-27 报的）----
             // 原话："PPT 的悬停页码好像不是那么准确……后面的页码还落在外面。"

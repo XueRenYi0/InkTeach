@@ -1344,6 +1344,10 @@ internal sealed partial class App : InkEngine.InkEngine
     /// </summary>
     private void ScrollShowcase()
     {
+        // 滚动条在 2026-10-09 已停用（见 Engine.ScrollBarEnabled）；这个对照模式
+        // 临时把它打开——出图看的是"当年长什么样"，不是产品行为。
+        ScrollBarEnabled = true;
+        Console.WriteLine("（注：滚动条已在产品里停用；--scrollshow 为对照出图临时打开）");
         Doc.Clear();
         Doc.ClearHistory();
 

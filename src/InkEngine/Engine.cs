@@ -1268,6 +1268,19 @@ public partial class InkEngine
     /// <summary>指针正停在滚动条上：滑块加粗、不淡出。拖动中也算（滑块不能半路淡掉）。</summary>
     internal bool ScrollBarHover;
     internal bool ScrollBarDragging;
+
+    /// <summary>
+    /// 滚动条总开关。**2026-10-09 用户拍板：停用。**
+    /// 理由（用户归纳）：PDF / PPT / 桌面批注都用不到它；白板本来就看得到"第几屏"；
+    /// 右缘 16px 抓取带会吃掉"写到边缘"的起笔（笔也一样）；触摸拖它还有过
+    /// "幽灵手指"卡死后续输入的 bug（见 OnPointerUp 里的防御注释）。
+    /// 代码 / 几何 / 自检全部保留，只是不画、不接管；
+    /// `--scrollshow` 对照模式会临时打开它（见 App.ScrollShowcase）。
+    /// </summary>
+    internal static bool ScrollBarEnabled = false;
+
+    /// <summary>Overlay（别处类型）绘制用：静态字段在那里名字不好写，给它一个实例读法。</summary>
+    internal bool ScrollBarVisible => ScrollBarEnabled;
     /// <summary>按下时指针相对滑块顶边的偏移，拖动中保持它不变，滑块才不"跳"。</summary>
     private float _scrollGrabDy;
     private OverlayWindow _scrollWindow;
@@ -4137,6 +4150,17 @@ public partial class InkEngine
             }
         }
 
+        // 页号面板（PPT / 文档）开着时：点"别的地方"就收起来——
+        // 2026-10-09 用户定："跳完不消失、可以接着点；点其他位置才消失"。
+        // 面板/条自己的命中不在这里处理（那是 PptBarPointerDown 的活：格子里跳页、
+        // 里面空白吃掉、条上再点页码格 = 收起）。这里只兜"连 PptBar 都没走到"的落点——
+        // 最典型的是**点界面（工具条）**：它在 PptBar 之前就把按下吃掉了。
+        if (PptPagePanelOpen && !PptBarContains(screenX, screenY))
+        {
+            PptPagePanelOpen = false;
+            _dirty = true;
+        }
+
         // 界面优先：点在悬浮条上就是操作界面，不是画一笔。
         //
         // 两件容易踩的事：
@@ -4259,8 +4283,9 @@ public partial class InkEngine
         _activePointerType = ptype;
         PointerX = x; PointerY = y; PointerInside = true;
 
-        // 滚动条次之：它只占右边缘一条窄带，但"拖滑块"比"在那儿画一笔"更特殊。
-        if (TryBeginScrollBarDrag(screenX, screenY))
+        // 滚动条次之（**2026-10-09 起停用**，见 ScrollBarEnabled）：它只占右边缘一条窄带，
+        // "拖滑块"比"在那儿画一笔"更特殊——代价是右缘 16px 会吃掉"写到边缘"的起笔。
+        if (ScrollBarEnabled && TryBeginScrollBarDrag(screenX, screenY))
         {
             _drawing = true;
             Native.SetCapture(hWnd);
@@ -5307,6 +5332,10 @@ public partial class InkEngine
 
         if (ScrollBarDragging)
         {
+            // 防御（2026-10-09）：这条路径在"触摸拖滚动条"时**必须先清触摸触点表**——
+            // 真机 bug 的根因就是它：拖完抬手漏清 → 表里留下"幽灵手指" → 之后写字、
+            // 再拖滚动条全被那张表吃掉（直到重启）。滚动条同日已停用，这句留着防复活。
+            if (_activePointerType == Native.PT_TOUCH) _touch.Up(id);
             EndScrollBarDrag();
             Native.ReleaseCapture();
             _drawing = false;
@@ -6022,6 +6051,7 @@ public partial class InkEngine
 
     private Vector2 _g2StartMid, _g2LastMid;   // 双指：起点中点 / 上一帧中点
     private int _g2Axis;              // 0 未定 / 1 横（翻页）/ 2 纵（漫游）
+    private uint _g2IdA, _g2IdB;      // 钉住的两根手指（2026-10-09：手掌/杂触点不参与；0 = 未钉）
     private bool _g2Turned;           // 这一次手势已经翻过页（一次手势只翻一页）
     private bool _g2Transform;        // 有选中：这一次双指是在变换对象
     private bool _g2Tap;              // 两指点按候选（松手时结算）
@@ -6292,6 +6322,7 @@ public partial class InkEngine
         _g2Axis = 0;
         _g2Turned = false;
         _g2Tap = false;
+        _g2IdA = _g2IdB = 0;               // 手势收场：钉子放掉（下一轮重新钉）
         StopDwellTimer();
         _dirty = true;
         return !normalStroke;                   // 写字那条：清完触点后照常走 EndStroke
@@ -6316,6 +6347,7 @@ public partial class InkEngine
         _g2Axis = 0;
         _g2Turned = false;
         _g2Tap = false;
+        _g2IdA = _g2IdB = 0;               // 手势中断：钉子一并放掉
         Console.WriteLine("触摸手势中断（丢捕获/换设备）");
         _dirty = true;
     }
@@ -6409,6 +6441,17 @@ public partial class InkEngine
     private void BeginTouchTwoFinger()
     {
         if (!_touch.TryPair(out var p)) return;
+
+        // ⚠ 2026-10-09（真机"双指上下滑嘟嘟抖"的根修）：**把这两根手指的 id 钉住**，
+        // 这一轮手势全程只认它们（TouchGestureMove 用 id 版 TryPair）。
+        // 之前的读法"表里前两个"会被两类事搅乱——① 掌根/杂触点混进表；
+        // ② 手指抬-落一下被重报、追加到表尾——"前两个"换人，中点来回跳。
+        // 重入保护：钉子还活着就不重置（手指 blip 重落会再走到这里，不能把
+        // _g2StartMid / 轴锁 重新洗一遍）。
+        if (_g2IdA != 0 && _touch.Contains(_g2IdA) && _touch.Contains(_g2IdB)) return;
+        _g2IdA = p.IdA;
+        _g2IdB = p.IdB;
+
         _g2StartMid = _g2LastMid = (p.A + p.B) * 0.5f;
         _g2Axis = 0;
         _g2Turned = false;
@@ -6452,7 +6495,8 @@ public partial class InkEngine
     /// <summary>双指移动：有选中 → 变换对象；没选中 → 纵滑漫游 / 横滑翻页（方向锁 + 一次一页）。</summary>
     private void TouchGestureMove()
     {
-        if (!_touch.TryPair(out var p)) return;
+        // **只认钉住的那两根**（2026-10-09）：手掌、杂触点在表里也当没看见。
+        if (!_touch.TryPair(_g2IdA, _g2IdB, out var p)) return;
         var mid = (p.A + p.B) * 0.5f;
 
         if (_g2Transform)
@@ -6545,7 +6589,11 @@ public partial class InkEngine
         if (_touch.TwoFingerHoldFired && _touchMode == TouchMode.Gesture2)
         {
             _touch.ClearLongPress();
-            if (_touch.TryPair(out var pair))
+            // 呼出盘的位置用**钉住的那两根**（2026-10-09）；钉子不在时退回"表里前两个"。
+            TouchGestures.PairView pair = default;
+            bool pairOk = _g2IdA != 0 ? _touch.TryPair(_g2IdA, _g2IdB, out pair)
+                                      : _touch.TryPair(out pair);
+            if (pairOk)
             {
                 // 有选中时这两指可能已经把变换起头了（SelDragging）——呼出盘之前先收账
                 //（一点没动就不进撤销栈），不然盘一开这个拖动会一直挂着。
@@ -8210,6 +8258,12 @@ public partial class InkEngine
     /// <summary>指针是否停在滚动条上。停在上面就不该淡出，所以每次移动和每次心跳都要问。</summary>
     internal void UpdateScrollBarHover(float screenX, float screenY)
     {
+        if (!ScrollBarEnabled)
+        {
+            // 停用后把残留的悬停状态清干净（光标 / 绘制都读它）。
+            if (ScrollBarHover) { ScrollBarHover = false; _dirty = true; }
+            return;
+        }
         bool hover = false;
         if (!PassThrough && !ScrollBarDragging)
         {

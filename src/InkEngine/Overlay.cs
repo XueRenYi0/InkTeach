@@ -4344,6 +4344,7 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawScrollBar(InkEngine app)
     {
+        if (!app.ScrollBarVisible) return;               // 2026-10-09 起停用（见 Engine.ScrollBarEnabled）
         if (!TryScrollBar(app, out var sb)) return;      // 画布只有一屏：没有滚动条
 
         // 悬停/拖动中：不淡出，而且加粗——"这根线能拖"靠它自己说，

@@ -748,6 +748,8 @@ public partial class InkEngine
     ///   ③ 页码格：**先只记录，不下结论**——没动过 = 单击（开菜单）、
     ///      移动超阈值 = 拖条（见 <see cref="PptBarPointerMove"/> 与
     ///      <see cref="PptBarPointerUp"/>）。**长按自 2026-10-02 第五轮起不是入口了**。
+    ///   ④ 面板里的格子：跳页、**面板保持打开**（2026-10-09 用户定："继续点下一格；
+    ///      点其他位置才消失"）；面板外的任何落点都会把它收掉。
     /// </summary>
     internal bool PptBarPointerDown(float x, float y)
     {
@@ -788,7 +790,9 @@ public partial class InkEngine
                     if (!cell.Contains(x, y)) continue;
                     int page = i + 1;
                     if (page != BarPageNow) BarGoto(page);   // 文档：跳页顶；PPT：命令它跳页
-                    PptPagePanelOpen = false;
+                    // **跳完不关面板**（2026-10-09 用户定）：点错了可以接着点下一格；
+                    // 高亮每帧读 BarPageNow、自己会跟过去。只有点"别的地方"才收——
+                    // 见下面"面板外"分支，以及 Engine.OnPointerDown 开头那段（兜界面）。
                     _dirty = true;
                     return true;
                 }
