@@ -3062,8 +3062,16 @@ internal sealed partial class App
             // **等到"完全张开"（≥0.99），不是"过 0.5 就当开"**（2026-10-09）：
             // 动画中途（比如 0.63）时带子矮一截——后面量的是"完全张开"的 layout，
             // 采样抓在半路就会误报"第 4 行出了带子"。合成鼠标偶尔丢移动，给三次机会。
+            //
+            // ⚠ **写字后必须先"离开"再回来**（2026-10-09 色带硬规则）：拖着画完一笔，
+            // 指针停在画布上——判定区从没见过"指针在后"的那一帧；直接跳回条上会被
+            // "离开一次"规则一直挡着（2026-10-09 实测：rail=0.00，点击落空、报"拖动太短"）。
+            // 真实笔的悬停是连续的、从画布到条上会先经过区外；合成输入是一跳——所以
+            // 这里替它走真实路径：先回画布正中（区外）再回条上。
             for (int attempt = 0; attempt < 3 && ui.RailValueForTest < 0.99f; attempt++)
             {
+                SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.5f), 0);
+                SettleFrames(150);
                 SendMouse(px, py - attempt, 0);
                 SettleFrames(700);
             }
@@ -3496,7 +3504,15 @@ internal sealed partial class App
         //（第一版就是这么漏的，用户一眼就看见了）。
         Vector2 AsymSample(Stroke s)
         {
+            // 自检台守护（2026-10-09 收编）：合成输入丢一下 = 对象没画出来（s == null）或
+            // 画成了别的图形、连轮廓都还没有——以前这里直接 NRE，把整个应用带崩
+            //（屏幕上弹"启动失败"，看着像产品坏了，其实只是自检自己没判空）。
+            // 现在返回 NaN → 后面 InkAt(NaN) = -1 → 断言照常判红，不再崩。
+            if (s == null || s.Kind != StrokeKind.Hyperbola)
+                return new Vector2(float.NaN, float.NaN);
             var outline = s.ShapeOutline();
+            if (outline == null || outline.Count == 0)
+                return new Vector2(float.NaN, float.NaN);
             for (int side = -1; side <= 1; side += 2)
             {
                 var (from, to) = s.HyperbolaAsymptoteLocal(side);
@@ -3720,7 +3736,8 @@ internal sealed partial class App
         {
             Doc.Clear();
             Doc.ClearHistory();
-            float ax0 = _virtualX + 700f, ay0 = _virtualY + 1500f, abw = 700f, abh = 500f;
+            float ax0 = _virtualX + _virtualW * 0.28f, ay0 = _virtualY + _virtualH * 0.18f;
+            float abw = _virtualW * 0.28f, abh = _virtualH * 0.30f;
             SendMouse((int)ax0, (int)ay0, 0);                              SettleFrames(60);
             SendMouse((int)ax0, (int)ay0, Native.MOUSEEVENTF_LEFTDOWN);    SettleFrames(60);
             for (int i = 1; i <= 4; i++)
@@ -4087,6 +4104,15 @@ internal sealed partial class App
               $"下层窗口收到 {CountClicks(log) - clicks0} 次点击（应为 0）");
         Check("穿透·点面板不落墨", Doc.Strokes.Count == strokes0,
               $"笔画 {strokes0} → {Doc.Strokes.Count}");
+
+        // ---- ⑥.5 重新武装（2026-10-09 收编老红）----
+        // ⑥ 那一下点面板会真的走一遍命令：`UiProbe.PointerDown` 左半边 = `SetTool(Eraser)`。
+        // 而**换工具会按设计退出穿透**（见 SwitchTool / SetPassThrough）——所以不重装的话，
+        // 到 ⑦⑧ 时状态已经是"不穿透 + 橡皮"，⑧ 测的东西名不副实：那一下会用橡皮把 ⑤
+        // 画的点擦掉（笔画 1 → 0），下层也当然收不到点击。这条老红从 2026-10-08 起就在
+        // （一直红得"有理"——它根本没在测穿透）。⑦⑧ 前把场景重新武装回"穿透 + 笔"。
+        SetPass(true);
+        Tool = Tool.Pen;
 
         // ---- ⑦ 穿透：面板是界面的地盘，"看见但不吃"也不许漏给下层 ----
         // （面板要放行某个位置，得它自己别把那一块算进 QueryBounds；
@@ -4810,15 +4836,20 @@ internal sealed partial class App
             SettleFrames(150);
 
             int before = CountClicks(log);
-            SendMouse(tx, ty, 0);
-            SettleFrames(80);
-            SendMouse(tx, ty, Native.MOUSEEVENTF_LEFTDOWN);
-            SettleFrames(60);
-            SendMouse(tx, ty, Native.MOUSEEVENTF_LEFTUP);
-            SettleFrames(400);
-            int after = CountClicks(log);
-
-            bool reached = after > before;
+            bool reached = false;
+            // 合成点击偶尔会丢一下（机器忙的时候；2026-10-09 全套里实测到：LayeredTransparent
+            // 那一档报"没收到"、单独复跑又全过）——**期望"收到"的那一档**给三次机会。
+            // 期望"不收到"的档只点一次：真漏了就是 FAIL，多点是掩盖问题。
+            for (int attempt = 0; attempt < (expectReach ? 3 : 1) && !reached; attempt++)
+            {
+                SendMouse(tx, ty, 0);
+                SettleFrames(80);
+                SendMouse(tx, ty, Native.MOUSEEVENTF_LEFTDOWN);
+                SettleFrames(60);
+                SendMouse(tx, ty, Native.MOUSEEVENTF_LEFTUP);
+                SettleFrames(300 + attempt * 150);   // 忙的时候多等一会儿
+                reached = CountClicks(log) > before;
+            }
             bool good = reached == expectReach;
             if (!good) failures++;
             Console.WriteLine($"  {name,-26} 下层窗口收到点击: {(reached ? "是" : "否"),-2}"

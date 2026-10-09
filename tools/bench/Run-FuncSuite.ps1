@@ -86,7 +86,13 @@ foreach ($c in $cases) {
     Write-Host ("=== {0} === {1}" -f $c.n, $c.d)
 
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $p = Start-Process -FilePath $exe -ArgumentList $c.a -PassThru -WindowStyle Hidden -WorkingDirectory $AppRoot `
+    # ⚠ **passtest 单独用 Normal 启动**（2026-10-09 收编实测）：它是全套里唯一"验证窗真的把
+    #   点击让给下层"的用例（Layered+Transparent 那一档）；用 `-WindowStyle Hidden` 或
+    #   Minimized 启动时，系统的窗口显示状态会跟着进程走，这一档**必红**——同一份产物
+    #   Normal 下必绿、单独复跑与真机也都绿（不是产品问题，是启动方式把测试前提改了）。
+    #   其余用例保持 Hidden（屏幕干净）。
+    $winStyle = if ($c.n -eq 'passtest') { 'Normal' } else { 'Hidden' }
+    $p = Start-Process -FilePath $exe -ArgumentList $c.a -PassThru -WindowStyle $winStyle -WorkingDirectory $AppRoot `
                        -RedirectStandardOutput $out -RedirectStandardError $err
     $exited = $p.WaitForExit($c.t * 1000)
     if (-not $exited) {
