@@ -234,10 +234,11 @@ public partial class InkEngine
     /// 整笔橡皮的落点半径（逻辑像素）的档位。**以前它根本没有档位**——
     /// 界面上给橡皮画了粗细滑条，可引擎里 `SetWidthFromUi` 把它归到"其它"那一支，
     /// 结果改的是**笔宽**：老师拖橡皮的滑条，笔迹粗细悄悄变了、橡皮一点没变。
-    /// 现在四种工具各记各的，橡皮也有自己的三档。
+    /// 现在四种工具各记各的。**2026-10-09 晚用户定：固定五档、滑动吸附在档上**
+    /// （不像笔那样铺开很多档——橡皮就 5 个大小，拖到哪都落在最近的档）。
     /// </summary>
-    internal static readonly float[] EraserRadiusPresets = { 12f, 22f, 34f };
-    internal int EraserRadiusIndex = 1;
+    internal static readonly float[] EraserRadiusPresets = { 12f, 17f, 22f, 28f, 34f };
+    internal int EraserRadiusIndex = 2;
     /// <summary>两种橡皮各自的可调范围（逻辑像素）。界面滑条的范围要和这里一致。</summary>
     internal const float EraserRadiusMin = 8f, EraserRadiusMax = 48f;
     internal const float PixelEraserMinWidth = 30f, PixelEraserMaxWidth = 160f;
@@ -376,8 +377,10 @@ public partial class InkEngine
     /// </summary>
     internal const float GoldenRatio = 1.618f;
     internal float PixelEraserWidthLogical = 93f;
-    internal static readonly float[] PixelEraserWidthPresets = { 46f, 93f, 150f };
-    internal int PixelEraserWidthIndex = 1;
+    /// <summary>面积橡皮五档（2026-10-09 晚用户定：固定 5 档、滑动吸附；
+    /// 就是之前待办里那组 46/70/93/122/150）。默认 93（下标 2）。</summary>
+    internal static readonly float[] PixelEraserWidthPresets = { 46f, 70f, 93f, 122f, 150f };
+    internal int PixelEraserWidthIndex = 2;
     internal float PixelEraserHeightLogical => PixelEraserWidthLogical * GoldenRatio;
     internal float PixelEraserHalfWidthPx => PixelEraserWidthLogical * 0.5f * DpiScale;
     internal float PixelEraserHalfHeightPx => PixelEraserHeightLogical * 0.5f * DpiScale;
@@ -533,32 +536,39 @@ public partial class InkEngine
     /// until there is a proper on-screen control for it.
     /// 最细档 2026-09-27 从 1.5 降到 **1**（用户："画笔的最小笔宽设成 1 可以吗？"——
     /// 1.5 写细字、画坐标轴刻度时还是偏粗）。
-    /// **2026-10-09 细分化**（用户："常用 3 号或 4 号；3~10 档（或 1~10 档）切换更细一点，
-    /// 不多不少、粗细合适"）：1/3/6/10/16/24 → **1/2/3/4/6/8/10/16/24**（9 档）。
-    /// 相邻档都肉眼分得出（1.25~2 倍），没有 4/5/6 这种挤一堆的。默认档仍是 3（下标 2）。
+    /// **2026-10-09 晚间再改**（用户："把 1 号到 10 号这个范围拿出来，间距宽成两倍
+    /// （比如 1 号和 2 号中间再加一档）；超过 20 号以后保持 20 或 40 即可"）：
+    /// **1/1.5/2/2.5/3/3.5/4/5/6/7/8/9/10/20/40**（15 档）——
+    /// 1~10 段插满中点（常用的地方更细），10 以上只留 20 / 40 两个粗档。
+    /// 默认档仍是 3（数值 3，现下标 4）。滑条拖动**吸附到最近档**（不再有中间值、也不画点）。
     /// 界面那份对应表在 `FullUi.PenWidthGrades`，靠 --paneltest 逐项比对卡住。</summary>
-    internal static readonly float[] WidthPresets = { 1f, 2f, 3f, 4f, 6f, 8f, 10f, 16f, 24f };
-    /// <summary>老档位表（2026-09-27 ~ 2026-10-09）：只为**迁移老配置**而留。
+    internal static readonly float[] WidthPresets = { 1f, 1.5f, 2f, 2.5f, 3f, 3.5f, 4f, 5f, 6f, 7f, 8f, 9f, 10f, 20f, 40f };
+    /// <summary>上一代档位表（2026-10-09 白天，9 档）：只为**迁移老配置**而留。
+    /// 老配置 `w2.pen` 存的是那张表的"第几档"——直接按新表读会错位，
+    /// 先过这张表取回数值、再吸附进新表（16 / 24 不在新表，吸附到最近的 20）。</summary>
+    internal static readonly float[] Legacy9WidthPresets = { 1f, 2f, 3f, 4f, 6f, 8f, 10f, 16f, 24f };
+    /// <summary>更老的一代（2026-09-27 ~ 2026-10-09 白天前，6 档）：迁移 `w.pen` 用。
     /// 老配置 `w.pen` 存的是"第几档"，直接按新表读会把 6 读成 2——先过这张表取回数值，
     /// 再吸附回新表（老表每个值都在新表里，吸附无损）。</summary>
     internal static readonly float[] LegacyWidthPresets = { 1f, 3f, 6f, 10f, 16f, 24f };
-    internal int WidthPresetIndex = 2;            // = 3f（默认粗细）
+    internal int WidthPresetIndex = 4;            // = 3f（默认粗细）
 
     /// <summary>
     /// 每种工具各自的粗细档位。**笔和荧光笔的档位不是一回事**：荧光笔是"涂一大条"，
     /// 1 像素这种档位对它没意义；激光更小。共用一张表的结果就是
     /// "选了荧光笔按 Ctrl+Alt+6 没反应"（它改的是笔宽）——实测就是这个 bug。
     /// </summary>
-    internal static readonly float[] HighlighterWidthPresets = { 8f, 18f, 32f };
+    /// <summary>荧光笔档位。2026-10-09 晚同笔一起"间距宽成两倍"：8/18/32 → **8/13/18/25/32**（5 档）。
+    /// 默认档仍是 18（现下标 2）。</summary>
+    internal static readonly float[] HighlighterWidthPresets = { 8f, 13f, 18f, 25f, 32f };
     /// <summary>
-    /// 激光的四档。沿革：4/8/14（初版）→ 8/14/22（2026-09-27 白天"默认档粗一点"）
-    /// → **4/8/14/22**（2026-09-27 晚：用户说"最小笔宽是 8，我感觉有点宽了"）。
-    /// 补一档更细的 4 回来，**默认档仍是 8**（`LaserWidthIndex = 1`）——
-    /// "想要更细"和"默认别太细"这两条要求这样同时满足。
+    /// 激光的档位。沿革：4/8/14（初版）→ 8/14/22（2026-09-27 白天"默认档粗一点"）
+    /// → 4/8/14/22（2026-09-27 晚）→ **4/6/8/11/14/18/22**（2026-10-09 晚同笔一起
+    /// "间距宽成两倍"）。**默认档仍是 8**（现下标 2）。
     /// </summary>
-    internal static readonly float[] LaserWidthPresets = { 4f, 8f, 14f, 22f };
-    internal int HighlighterWidthIndex = 1;
-    internal int LaserWidthIndex = 1;
+    internal static readonly float[] LaserWidthPresets = { 4f, 6f, 8f, 11f, 14f, 18f, 22f };
+    internal int HighlighterWidthIndex = 2;
+    internal int LaserWidthIndex = 2;
 
     /// <summary>当前工具的粗细（逻辑像素）。落点反馈、界面状态都读它。</summary>
     internal float CurrentToolWidthLogical => Tool switch
@@ -2143,15 +2153,13 @@ public partial class InkEngine
         if (!_noPressureArg && GetUiPref(PressurePrefKey) == "0")
             PressureWidth.Enabled = false;
 
-        // ---- 用户开关：精细笔迹（2026-10-07，「更多 → 设置 → 书写」）----------
+        // ---- 精细笔迹（2026-10-07 加开关；**2026-10-09 晚用户定：开关撤掉、常开**）------
         //
-        // 这一行管的是「**原始输入补点**」：系统会把来不及投递的移动合并成一条消息，
+        // 它管的是「**原始输入补点**」：系统会把来不及投递的移动合并成一条消息，
         // 只取最新那一个等于把采样率砍半（真机实测：指针消息 61Hz，而设备实际报了 190Hz）。
-        // 补点就是按原始报率把中间点捞回来。
-        //
-        // 同压感那一条的规矩：**默认开**、偏好只写"关过"的那一份（`ui.finestroke = "0"`）、
-        // **命令行优先**（`--norawinput` 存在时不听偏好，否则对照实验会被用户偏好悄悄改掉）。
-        if (!_noRawInputArg && GetUiPref(FineStrokePrefKey) == "0")
+        // 补点就是按原始报率把中间点捞回来。用户真机用了一整天："比较稳定了"——
+        // 不再给用户关的开关（设置页那一行已撤）。只剩开发对照：`--norawinput` 仍可关。
+        if (_noRawInputArg)
             RawInputCapture = false;
 
         // ---- Wintab（2026-10-07 用户拍板：**默认关**）------------------------
@@ -2402,36 +2410,38 @@ public partial class InkEngine
             HighlighterCurrent = InkPalette.ToHighlighter(InkPalette.HighlighterBand[hlIdx].Color);
             _hlColorIdx = hlIdx;
         }
-        // **粗细档**（每个工具分开记，用户 2026-09-30 定）：存的是"第几档"，
-        // 读回来时把档位和对应的逻辑宽度一起恢复（见 CycleWidth 里的写入）。
-        // 笔的档位表 2026-10-09 换过：新格式写 `w2.pen`；`w.pen` 是老格式（老表下标）——
-        // 过 `LegacyWidthPresets` 取回数值再吸附回新表，老的"我设过 6px"不会被读成 2px。
-        if (int.TryParse(GetUiPref("w2.pen"), out int wPen2) && wPen2 >= 0 && wPen2 < WidthPresets.Length)
-        { WidthPresetIndex = wPen2; PenWidthLogical = WidthPresets[wPen2]; }
-        else if (int.TryParse(GetUiPref("w.pen"), out int wPenOld) && wPenOld >= 0 && wPenOld < LegacyWidthPresets.Length)
-        {
-            float legacyVal = LegacyWidthPresets[wPenOld];
-            int ni = Array.IndexOf(WidthPresets, legacyVal);
-            WidthPresetIndex = ni >= 0 ? ni : WidthPresetIndex;
-            PenWidthLogical = WidthPresets[WidthPresetIndex];
-        }
-        if (int.TryParse(GetUiPref("w.hl"), out int wHl) && wHl >= 0 && wHl < HighlighterWidthPresets.Length)
-        { HighlighterWidthIndex = wHl; HighlighterWidthLogical = HighlighterWidthPresets[wHl]; }
-        if (int.TryParse(GetUiPref("w.laser"), out int wLaser) && wLaser >= 0 && wLaser < LaserWidthPresets.Length)
-        { LaserWidthIndex = wLaser; LaserWidthLogical = LaserWidthPresets[wLaser]; }
-        if (int.TryParse(GetUiPref("w.pixel"), out int wPixel) && wPixel >= 0 && wPixel < PixelEraserWidthPresets.Length)
-        { PixelEraserWidthIndex = wPixel; PixelEraserWidthLogical = PixelEraserWidthPresets[wPixel]; }
+        // **粗细档**（每个工具分开记，用户 2026-09-30 定）：存的是"第几档"。
+        // **2026-10-09 晚档表全换代**（每张表都在常用段加密一倍）：老下标按新表读会错位，
+        // 所以键名升级一代（笔 `w3.pen`、其余 `w2.*`）。读不到就按"老下标 → 老表取值 →
+        // **吸附**进新表"迁移（老值都在新表附近，无损或只挪半格）。
+        if (int.TryParse(GetUiPref("w3.pen"), out int wPen3) && wPen3 >= 0 && wPen3 < WidthPresets.Length)
+        { WidthPresetIndex = wPen3; PenWidthLogical = WidthPresets[wPen3]; }
+        else if (MigrateWidthPref("w2.pen", Legacy9WidthPresets, WidthPresets, ref WidthPresetIndex, ref PenWidthLogical)) { }
+        else if (MigrateWidthPref("w.pen", LegacyWidthPresets, WidthPresets, ref WidthPresetIndex, ref PenWidthLogical)) { }
+        if (int.TryParse(GetUiPref("w2.hl"), out int wHl2) && wHl2 >= 0 && wHl2 < HighlighterWidthPresets.Length)
+        { HighlighterWidthIndex = wHl2; HighlighterWidthLogical = HighlighterWidthPresets[wHl2]; }
+        else if (MigrateWidthPref("w.hl", new[] { 8f, 18f, 32f }, HighlighterWidthPresets, ref HighlighterWidthIndex, ref HighlighterWidthLogical)) { }
+        if (int.TryParse(GetUiPref("w2.laser"), out int wLaser2) && wLaser2 >= 0 && wLaser2 < LaserWidthPresets.Length)
+        { LaserWidthIndex = wLaser2; LaserWidthLogical = LaserWidthPresets[wLaser2]; }
+        else if (MigrateWidthPref("w.laser", new[] { 4f, 8f, 14f, 22f }, LaserWidthPresets, ref LaserWidthIndex, ref LaserWidthLogical)) { }
+        if (int.TryParse(GetUiPref("w2.pixel"), out int wPixel2) && wPixel2 >= 0 && wPixel2 < PixelEraserWidthPresets.Length)
+        { PixelEraserWidthIndex = wPixel2; PixelEraserWidthLogical = PixelEraserWidthPresets[wPixel2]; }
+        else if (MigrateWidthPref("w.pixel", new[] { 46f, 93f, 150f }, PixelEraserWidthPresets, ref PixelEraserWidthIndex, ref PixelEraserWidthLogical)) { }
         // 上次用的橡皮形态（整笔擦 / 面积擦）
         if (GetUiPref("eraserKind") == "pixel") _eraserKind = Tool.PixelEraser;
         // 上次用的线型（实线 / 虚线 / 点线）
         if (int.TryParse(GetUiPref("lineDash"), out int dash) && dash >= 0 && dash <= 2)
             LineDash = (StrokeDash)dash;
-        // **粗细的"数值"版**：界面拖滑条设的是任意值（不一定落在档位上），
-        // 所以除了上面那四行"档位"之外再记一份具体数值，谁后写谁生效。
-        if (float.TryParse(GetUiPref("wv.pen"), out float vPen)) PenWidthLogical = vPen;
-        if (float.TryParse(GetUiPref("wv.hl"), out float vHl)) HighlighterWidthLogical = vHl;
-        if (float.TryParse(GetUiPref("wv.laser"), out float vLaser)) LaserWidthLogical = vLaser;
-        if (float.TryParse(GetUiPref("wv.pixel"), out float vPixel)) PixelEraserWidthLogical = vPixel;
+        // **粗细的"数值"版**：滑条拖动现在**吸附在档上**，所以这份数值正常就等于某档；
+        // 早期版本存过任意值（如 2.37）——读回来时吸附到最近的档，界面不会显示一个"不存在"的档。
+        if (float.TryParse(GetUiPref("wv.pen"), out float vPen))
+        { PenWidthLogical = Nearest(WidthPresets, vPen); WidthPresetIndex = NearestIndex(WidthPresets, PenWidthLogical); }
+        if (float.TryParse(GetUiPref("wv.hl"), out float vHl))
+        { HighlighterWidthLogical = Nearest(HighlighterWidthPresets, vHl); HighlighterWidthIndex = NearestIndex(HighlighterWidthPresets, HighlighterWidthLogical); }
+        if (float.TryParse(GetUiPref("wv.laser"), out float vLaser))
+        { LaserWidthLogical = Nearest(LaserWidthPresets, vLaser); LaserWidthIndex = NearestIndex(LaserWidthPresets, LaserWidthLogical); }
+        if (float.TryParse(GetUiPref("wv.pixel"), out float vPixel))
+        { PixelEraserWidthLogical = Nearest(PixelEraserWidthPresets, vPixel); PixelEraserWidthIndex = NearestIndex(PixelEraserWidthPresets, PixelEraserWidthLogical); }
         // 上次用的选择方式（矩形 / 套索）
         if (GetUiPref("selMode") == "lasso") SelMode = SelectMode.Lasso;
         // 触摸手势的旋钮（8.4.0）：双指总闸 / 手掌擦 / 三指擦 / 长按选择 / 两指点选 / 单指漫游。
@@ -6100,10 +6110,12 @@ public partial class InkEngine
     private bool _radialTouchMode;    // 轮盘这次是触屏呼出的（松手改成触点驱动；没划动=留在盘上）
     private bool _radialSticky;       // 触屏轮盘：没划动松手后留在盘上等点选（5s 超时）
 
-    /// <summary>从设置里读触摸手势的旋钮（启动时一次）。</summary>
+    /// <summary>读触摸手势的旋钮（启动时一次）。**总开关 2026-10-09 晚已撤**
+    /// （用户真机试稳："开关拿掉，默认开"）；只剩 `--notouch` 这个开发对照（见参数块），
+    /// 这里恒开。</summary>
     internal void LoadTouchPrefs()
     {
-        _touch.Enabled = GetUiPref("touch.gestures") != "0";
+        _touch.Enabled = true;
         _touch.PalmErase = GetUiPref("touch.palm") != "0";
         _touch.ThreeFingerErase = GetUiPref("touch.three") != "0";
         _touch.LongPressSelect = GetUiPref("touch.longpress") != "0";
@@ -10330,13 +10342,14 @@ public partial class InkEngine
         Console.WriteLine($"{Tool} 粗细 -> {CurrentToolWidthLogical} 逻辑像素"
                         + $"（本机实际 {CurrentToolWidthLogical * DpiScale:F0} 物理像素）");
         EraserTelemetry?.Note($"{ToolName(Tool)}粗细 → {CurrentToolWidthLogical:F0} 逻辑像素", NowMs);
-        // **记住粗细档**（用户 2026-09-30 定：笔 / 荧光笔 / 激光笔 / 面积擦 分开记）
-        // 笔同时写一份"数值"（`wv.pen`）：档位表以后再变，数值那份照旧能读回来。
-        SetUiPref("w2.pen", WidthPresetIndex.ToString());
+        // **记住粗细档**（用户 2026-09-30 定：笔 / 荧光笔 / 激光笔 / 面积擦 分开记）。
+        // 2026-10-09 晚键名再升一代（`w3.pen` / `w2.*`）——新表的"第几档"与老键的语义不同，
+        // 混读会错位；老键只当迁移来源。笔同时写一份"数值"（`wv.pen`）。
+        SetUiPref("w3.pen", WidthPresetIndex.ToString());
         SetUiPref("wv.pen", PenWidthLogical.ToString("0.##"));
-        SetUiPref("w.hl", HighlighterWidthIndex.ToString());
-        SetUiPref("w.laser", LaserWidthIndex.ToString());
-        SetUiPref("w.pixel", PixelEraserWidthIndex.ToString());
+        SetUiPref("w2.hl", HighlighterWidthIndex.ToString());
+        SetUiPref("w2.laser", LaserWidthIndex.ToString());
+        SetUiPref("w2.pixel", PixelEraserWidthIndex.ToString());
         NotifyUiStateChanged();
     }
 
@@ -10872,9 +10885,10 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
-    /// <summary>启动时应用"精细笔迹"偏好（自检要单独调一次，理由同压感）。</summary>
+    /// <summary>启动时应用"精细笔迹"（自检要单独调一次，理由同压感）。
+    /// 开关已撤（常开）——这里只是重新断言"常开"，仍只有 `--norawinput` 能关。</summary>
     internal void ApplyFineStrokePrefForTest()
-        => RawInputCapture = !_noRawInputArg && GetUiPref(FineStrokePrefKey) != "0";
+        => RawInputCapture = !_noRawInputArg;
 
     /// <summary>
     /// 「更多 → 设置 → 书写 → 墨迹预测」被点了一下（2026-10-09）——**B4 自绘预测尾的总开关**。
@@ -10908,6 +10922,12 @@ public partial class InkEngine
 
 
 
+    /// <summary>
+    /// 滑条/点档传进来的目标粗细（逻辑像素）。**2026-10-09 晚起：一律吸附到"最近的一档"**——
+    /// 滑条拖动不再产生中间值（1 号和 2 号之间没有 1.3 这种），拿到的就是档表里的数。
+    /// 档表见 WidthPresets / HighlighterWidthPresets / LaserWidthPresets /
+    /// EraserRadiusPresets / PixelEraserWidthPresets。
+    /// </summary>
     internal void SetWidthFromUi(float logicalPx)
     {
         // 外层的 0.5～64 只是"别把明显离谱的值放进来"的兜底；**真正的范围按工具算**。
@@ -10920,45 +10940,82 @@ public partial class InkEngine
         switch (Tool)
         {
             case Tool.Highlighter:
-                HighlighterWidthLogical = v;
-                SetUiPref("wv.hl", v.ToString("0.##"));
-                int hi = Array.IndexOf(HighlighterWidthPresets, v);
-                if (hi >= 0) HighlighterWidthIndex = hi;
+            {
+                int i = NearestIndex(HighlighterWidthPresets, v);
+                HighlighterWidthIndex = i;
+                HighlighterWidthLogical = HighlighterWidthPresets[i];
+                SetUiPref("w2.hl", i.ToString());
+                SetUiPref("wv.hl", HighlighterWidthLogical.ToString("0.##"));
                 break;
+            }
 
             case Tool.Laser:
-                LaserWidthLogical = v;
-                SetUiPref("wv.laser", v.ToString("0.##"));
-                int li = Array.IndexOf(LaserWidthPresets, v);
-                if (li >= 0) LaserWidthIndex = li;
+            {
+                int i = NearestIndex(LaserWidthPresets, v);
+                LaserWidthIndex = i;
+                LaserWidthLogical = LaserWidthPresets[i];
+                SetUiPref("w2.laser", i.ToString());
+                SetUiPref("wv.laser", LaserWidthLogical.ToString("0.##"));
                 break;
+            }
 
             case Tool.PixelEraser:
+            {
                 // 像素橡皮改的是**那一块橡皮的横边**（高 = 横边 × 黄金比）。
-                // 它的范围比笔宽大得多（一块橡皮 30～160 逻辑像素），
-                // 所以这里单独夹一次，不跟笔共用那个 64 的上限。
-                PixelEraserWidthLogical = Math.Clamp(v, PixelEraserMinWidth, PixelEraserMaxWidth);
+                float cv = Math.Clamp(v, PixelEraserMinWidth, PixelEraserMaxWidth);
+                int i = NearestIndex(PixelEraserWidthPresets, cv);
+                PixelEraserWidthIndex = i;
+                PixelEraserWidthLogical = PixelEraserWidthPresets[i];
+                SetUiPref("w2.pixel", i.ToString());
                 SetUiPref("wv.pixel", PixelEraserWidthLogical.ToString("0.##"));
-                int pi = Array.IndexOf(PixelEraserWidthPresets, PixelEraserWidthLogical);
-                if (pi >= 0) PixelEraserWidthIndex = pi;
                 break;
+            }
 
             case Tool.Eraser:
-                // 整笔橡皮改的是**落点半径**（碰到哪儿就删哪一条）
-                EraserRadiusLogical = Math.Clamp(v, EraserRadiusMin, EraserRadiusMax);
-                int ei = Array.IndexOf(EraserRadiusPresets, EraserRadiusLogical);
-                if (ei >= 0) EraserRadiusIndex = ei;
+            {
+                // 整笔橡皮改的是**落点半径**（碰到哪儿就删哪一条）；固定 5 档、吸附。
+                float cv = Math.Clamp(v, EraserRadiusMin, EraserRadiusMax);
+                int i = NearestIndex(EraserRadiusPresets, cv);
+                EraserRadiusIndex = i;
+                EraserRadiusLogical = EraserRadiusPresets[i];
                 break;
+            }
 
             default:
-                PenWidthLogical = v;
-                SetUiPref("wv.pen", v.ToString("0.##"));
-                int idx = Array.IndexOf(WidthPresets, v);
-                if (idx >= 0) WidthPresetIndex = idx;
+            {
+                int i = NearestIndex(WidthPresets, v);
+                WidthPresetIndex = i;
+                PenWidthLogical = WidthPresets[i];
+                SetUiPref("w3.pen", i.ToString());
+                SetUiPref("wv.pen", PenWidthLogical.ToString("0.##"));
                 break;
+            }
         }
         _dirty = true;
         NotifyUiStateChanged();
+    }
+
+    /// <summary>离 v 最近的那个档值（档表都非空）。</summary>
+    private static float Nearest(float[] table, float v)
+    {
+        float best = table[0], bestD = float.MaxValue;
+        foreach (var x in table)
+        {
+            float d = MathF.Abs(x - v);
+            if (d < bestD) { bestD = d; best = x; }
+        }
+        return best;
+    }
+
+    private static int NearestIndex(float[] table, float v) => Array.IndexOf(table, Nearest(table, v));
+
+    /// <summary>迁移老配置的一个档位下标：老表取值 → 吸附进新表（见 LoadUiPrefs 的调用处）。</summary>
+    private bool MigrateWidthPref(string key, float[] oldTable, float[] newTable, ref int index, ref float value)
+    {
+        if (!int.TryParse(GetUiPref(key), out int oldIdx) || oldIdx < 0 || oldIdx >= oldTable.Length) return false;
+        value = Nearest(newTable, oldTable[oldIdx]);
+        index = NearestIndex(newTable, value);
+        return true;
     }
 
     internal void UndoFromUi()

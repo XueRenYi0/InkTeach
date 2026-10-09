@@ -926,14 +926,16 @@ internal sealed partial class App
             // 面板滑条改的是**选中对象**；"改当前工具 + 落盘"仍走主条滑条那条
             // `SetWidthFromUi`——这里直接用那条真实入口点一下，确认引擎值和偏好都落上
             // （8.0.8/8.0.9 加的 wv.pen）。
+            // **2026-10-09 晚起：滑条值吸附到最近一档**——11.5 离 10 最近（10 与 20 之间），
+            // 吸附到 **10**；wv.pen 记的也是吸附后的值（界面不会出现"不存在的档"）。
             {
                 float oldPen = PenWidthLogical;
                 SetWidthFromUi(11.5f);
-                bool engineValue = MathF.Abs(PenWidthLogical - 11.5f) < 0.01f;
-                bool prefSaved = GetUiPref("wv.pen") == "11.5";
-                Check("工具粗细：SetWidthFromUi 改引擎值 + 写 wv.pen（能落盘）",
+                bool engineValue = MathF.Abs(PenWidthLogical - 10f) < 0.01f;
+                bool prefSaved = GetUiPref("wv.pen") == "10";
+                Check("工具粗细：SetWidthFromUi 吸附到最近档 + 写 wv.pen（能落盘）",
                       engineValue && prefSaved,
-                      $"笔宽 {PenWidthLogical:F1}，wv.pen={GetUiPref("wv.pen") ?? "(空)"}");
+                      $"笔宽 {PenWidthLogical:F1}（应吸附到 10），wv.pen={GetUiPref("wv.pen") ?? "(空)"}");
                 SetWidthFromUi(oldPen);                    // 还原
             }
 

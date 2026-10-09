@@ -319,10 +319,10 @@ internal sealed partial class App
                   $"模式 {TouchModeForTest}，触点 {TouchCountForTest}，笔画 {Doc.Strokes.Count}");
         }
 
-        // ---- ⑫ 总开关关掉：只剩单指书写（用户 2026-10-05 要的"保险丝"）----
+        // ---- ⑫ 总开关关掉：只剩单指书写（内核开关还在；设置里那一行 2026-10-09 晚已撤，
+        //          这里直接调内核开关验行为）----
         {
-            SetUiPref("touch.gestures", "0");
-            LoadTouchPrefs();
+            SetTouchGesturesFromUi(false);
             TouchResetForTest();
             int before = Doc.Strokes.Count;
             // 双指一起落：不许进手势（也不许擦）——第一根手指仍照常写，第二根被忽略
@@ -339,8 +339,7 @@ internal sealed partial class App
             Check("总开关关掉：双指不进手势、单指照样写（保险丝）",
                   modeOK && mid == before + 1 && Doc.Strokes.Count == mid + 1,
                   $"双指时模式 {modeAtTwin}（应 Write——还在写），笔画 {before} → {mid} → {Doc.Strokes.Count}");
-            SetUiPref("touch.gestures", "1");
-            LoadTouchPrefs();
+            SetTouchGesturesFromUi(true);
             TouchResetForTest();
         }
 

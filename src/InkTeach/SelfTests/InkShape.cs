@@ -589,44 +589,45 @@ internal sealed partial class App
         Console.WriteLine("  ---------|----------|----------|----------|--------");
 
         Doc.Clear();
-        int i = 0;
-        foreach (float wLogical in WidthPresets)
+        // **两列排版**（2026-10-09 晚档表加密到 15 档）：一列竖排 15 条会画到屏幕外
+        // （840 逻辑高放不下 15×150），后面几条"实测 0"——分成两列 8+7 排。
+        int perCol = (WidthPresets.Length + 1) / 2;
+        float len = 640f;                                  // 每条的水平跨度
+        for (int i = 0; i < WidthPresets.Length; i++)
         {
-            float wPhys = wLogical * DpiScale;
-            float y = _virtualY + 140 + i * 150;
-            float x0 = _virtualX + 200;
-            float x1 = _virtualX + 1600;
+            float wPhysical = WidthPresets[i] * DpiScale;
+            float y = _virtualY + 140 + (i % perCol) * 150;
+            float x0 = _virtualX + 200 + (i / perCol) * 730;
 
-            var s = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = wPhys };
+            var s = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = wPhysical };
             for (int k = 0; k <= 120; k++)
             {
                 float t = k / 120f;
-                s.AddPoint(x0 + (x1 - x0) * t, y + MathF.Sin(t * 9f) * 40f, 1f, NowMs);
+                s.AddPoint(x0 + len * t, y + MathF.Sin(t * 9f) * 40f, 1f, NowMs);
             }
             Doc.AddStroke(s);
-            i++;
         }
         Doc.InvalidateAll();
         SettleFrames(700);
 
-        i = 0;
         int bad = 0;
-        foreach (float wLogical in WidthPresets)
+        for (int i = 0; i < WidthPresets.Length; i++)
         {
+            float wLogical = WidthPresets[i];
             float wPhys = wLogical * DpiScale;
-            float y = _virtualY + 140 + i * 150;
-            // The wavy path is ~1480 px of x plus the wiggle.
-            float pathLen = 1560f;
+            float y = _virtualY + 140 + (i % perCol) * 150;
+            float x0 = _virtualX + 200 + (i / perCol) * 730;
+            // 波浪路径的弧长 ≈ 水平跨度 + 摆动增量（经验值，与旧版 1560/1400 同比例）。
+            float pathLen = len + 70f;
             // 墨是"中心线 + 等宽描边"：宽度就是名义笔宽（压感不再影响粗细）。
             float expected = pathLen * wPhys;
-            int actual = ScreenProbe.CountMagenta((int)(_virtualX + 190), (int)(y - 90), 1430, 180);
+            int actual = ScreenProbe.CountMagenta((int)(x0 - 10), (int)(y - 90), (int)(len + 20), 180);
             Console.WriteLine($"  {wLogical,8:F1} | {wPhys,8:F0} | {expected,8:F0} | {actual,8} | {(actual / expected):F2}");
             // 判据：填充带子的墨量要落在理论值的合理区间里。明显偏小 = 自交处
             // 被挖空了（洞），明显偏大 = 重复填充。这条以前只有数字没有结论，
             // 于是"填充出洞"这种事必须靠人看图，现在它自己会红。
             float ratio = actual / expected;
             if (ratio < 0.75f || ratio > 1.15f) bad++;
-            i++;
         }
 
         Console.WriteLine();

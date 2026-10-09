@@ -236,7 +236,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按三列里的布局走**：
     /// 外观（4）/ 书写（5）/ 墨迹（3）三列并排——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, DwellShape, Pressure, FineStroke, Predict, RestoreInk, PptAutoSave, HistoryDays, TouchGestures }
+    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, DwellShape, Pressure, Predict, RestoreInk, PptAutoSave, HistoryDays }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -262,11 +262,6 @@ public sealed class FullUi : IOverlayUi
         // 压感粗细（2026-10-01，批次 0.2）：默认开；关掉 = 整块板等宽，
         // 手写板的流畅 / 预测不受影响（渲染期开关，文档里的压力数据不动）。
         (Row.Pressure, "压感粗细", false, false, "关掉后所有笔迹等宽（手写板照样流畅）"),
-        // 精细笔迹（2026-10-07）：管的是「原始输入补点」。
-        // 系统会把来不及投递的移动合并成一条消息，只取最新那一个等于把采样率砍半
-        // （真机实测：指针消息 61Hz，设备实际报了 190Hz）。这一行就是"要不要把中间点捞回来"。
-        // **默认开**（用户定的：开不开 ink 要有一样的手写体验）；低配机怕性能不够可以一键关。
-        (Row.FineStroke, "精细笔迹", false, false, "关掉后写快时线条略粗糙（省一点性能，低配机可关）"),
         // 墨迹预测（2026-10-09 回归：B4 自绘预测尾；**默认关**——用户 2026-10-09 二轮定：
         // "以后新装默认不开，等测试完善了再开"）。开了 = 更跟手一点；关着 = 笔尾更老实。
         // 链路：行表 → ActivateRow → IsOn → SavePrefs。
@@ -275,10 +270,9 @@ public sealed class FullUi : IOverlayUi
         (Row.RestoreInk, "自动恢复上次板书", false, false, "下次启动接上这次的板书"),
         (Row.PptAutoSave, "PPT 墨迹自动保存", false, false, "放映时长按菜单仍可临时覆盖"),
         (Row.HistoryDays, "历史清理", false, false, "过期 PPT 缓存与备份，启动时清掉"),
-        // 触摸手势**总开关**（2026-10-05，用户点名要的"保险丝"）：关掉只剩单指书写——
-        // 双指手势 / 三指擦 / 长按选择 / 单指漫游全部停用（闸门在 TouchGestures.Enabled，
-        // 见那里每条判定）。**默认开**；学校大屏万一遇到手势 bug，老师在这里一键退回。
-        (Row.TouchGestures, "触摸手势", false, false, "关掉只剩单指书写（双指 / 三指 / 长按全停用）"),
+        // ⚠ 「精细笔迹」「触摸手势」两个开关 2026-10-09 晚**已撤**（用户真机试稳：
+        //   "开关拿掉，默认开"）——两条行为都常开了，只剩开发对照参数
+        //   （--norawinput / --notouch），不再占用设置页。
     };
 
     private readonly Dictionary<uint, ID2D1SolidColorBrush> _brushes = new();
@@ -478,10 +472,7 @@ public sealed class FullUi : IOverlayUi
         _host.SetPref("dwellShape", st.DwellShapeOn ? null : "0");
         // 压感粗细：**默认开**，同样只写"关了"这一种情况（引擎启动时自己读它）。
         _host.SetPref("pressure", st.PressureOn ? null : "0");
-        // 精细笔迹：**默认开**，同样只写"关了"这一种情况（引擎启动时自己读它）。
-        _host.SetPref("finestroke", st.FineStrokeOn ? null : "0");
-        // 触摸手势总开关：**默认开**，同样只写"关了"这一种情况。
-        _host.SetPref("touch.gestures", st.TouchGesturesOn ? null : "0");
+        // （精细笔迹 / 触摸手势的偏好写入 2026-10-09 晚随开关一起撤——两项都常开，没有可写的状态。）
         // 墨迹预测：**默认关**（2026-10-09 用户定：等测试完善了再默认开），只写"开了"这一种情况。
         _host.SetPref("predict2", st.PredictTailOn ? "1" : null);
         // 悬停提示：**默认开**，只写"关了"这一种情况。
@@ -1317,37 +1308,37 @@ public sealed class FullUi : IOverlayUi
         return false;
     }
 
-    /// <summary>这个工具的粗细范围。**界面管范围，引擎管钳位**——引擎那边是 0.5～64。</summary>
+    /// <summary>这个工具的粗细范围。**界面管范围，引擎管钳位**。
+    ///
+    /// **2026-10-09 晚起：范围 = 该工具档表的首尾**（滑条两端正好是最细/最粗那一档——
+    /// 拖动吸附之后，范围外到不了、也不该到）。两张数字要对上引擎的档表，
+    /// 靠 --paneltest 卡住（见 WidthGrades）。
+    /// </summary>
     private (float Min, float Max) WidthRange(Tool tool) => tool switch
     {
-        // 两边的数字要和引擎里各工具的档位对得上（引擎那边是
-        // HighlighterWidthPresets 8/18/32、LaserWidthPresets **4/8/14/22**、
-        // WidthPresets 1/2/3/4/6/8/10/16/24（2026-10-09 细分过）、EraserRadiusPresets 12/22/34、
-        // PixelEraserWidthPresets 46/93/150）。
-        // 界面拿不到引擎的 internal 常量（那是**故意**的：界面只认公开契约），
-        // 所以两边各留一份数字，靠自检卡住：--paneltest 会把滑条拖到两端，
-        // 断言引擎里那个值真的走到了范围的端点；档位表也逐项比对（见 WidthGrades）。
-        Tool.Highlighter => (8f, 64f),
-        Tool.Laser => (4f, 24f),           // 左端 ＝ 最细那一档 4（2026-09-27 晚补的；默认档是 8）
-        Tool.Eraser => (8f, 48f),          // 整笔橡皮改的是**落点半径**
-        Tool.PixelEraser => (30f, 160f),   // 面积橡皮改的是**那一块的横边**（高 = 横边 × 1.618）
-        _ => (1f, 40f),                    // 画笔：左端 = 1（2026-09-27 从 1.5 降下来）
+        Tool.Highlighter => (8f, 32f),     // = HighlighterWidthGrades 首尾
+        Tool.Laser => (4f, 22f),           // = LaserWidthGrades 首尾
+        Tool.Eraser => (12f, 34f),         // 整笔橡皮的**落点半径** = EraserWidthGrades 首尾
+        Tool.PixelEraser => (46f, 150f),   // 面积橡皮的**横边**（高 = 横边 × 1.618）＝ 首尾
+        _ => (1f, 40f),                    // 画笔 = PenWidthGrades 首尾
     };
 
     /// <summary>
-    /// 各工具的**粗细档位**（逻辑像素）——滑条上那些可点的小点就是它：
-    /// 点中一档 = 精确落到那一档（见 <see cref="HitWidthGrade"/>），拖动照旧连续。
+    /// 各工具的**粗细档位**（逻辑像素）。**2026-10-09 晚用户改法**：
+    /// 滑条上**不再画点**；拖动**吸附到最近一档**（拿到手的一定是表里的数）。
     ///
     /// 和引擎里那五张表各留一份，靠 --paneltest 逐项比对卡住（同 WidthRange 的老规矩）；
     /// 界面只认公开契约、拿不到引擎 internal 是故意的。
-    /// 2026-10-09 笔的档位细分（用户："常用 3 号或 4 号；3~10 之间切换更细一点，不多不少"）：
-    /// 1/3/6/10/16/24 → 1/2/3/4/6/8/10/16/24（其余四张表这次不动）。
+    /// 新表（常用段加密一倍 + 粗端封顶）：
+    ///   笔 1/1.5/2/2.5/3/3.5/4/5/6/7/8/9/10/20/40（15 档）；
+    ///   荧光笔 8/13/18/25/32；激光 4/6/8/11/14/18/22；
+    ///   整笔橡皮 12/17/22/28/34（固定 5 档）；面积橡皮 46/70/93/122/150（固定 5 档）。
     /// </summary>
-    private static readonly float[] PenWidthGrades = { 1f, 2f, 3f, 4f, 6f, 8f, 10f, 16f, 24f };
-    private static readonly float[] HighlighterWidthGrades = { 8f, 18f, 32f };
-    private static readonly float[] LaserWidthGrades = { 4f, 8f, 14f, 22f };
-    private static readonly float[] EraserWidthGrades = { 12f, 22f, 34f };
-    private static readonly float[] PixelEraserWidthGrades = { 46f, 93f, 150f };
+    private static readonly float[] PenWidthGrades = { 1f, 1.5f, 2f, 2.5f, 3f, 3.5f, 4f, 5f, 6f, 7f, 8f, 9f, 10f, 20f, 40f };
+    private static readonly float[] HighlighterWidthGrades = { 8f, 13f, 18f, 25f, 32f };
+    private static readonly float[] LaserWidthGrades = { 4f, 6f, 8f, 11f, 14f, 18f, 22f };
+    private static readonly float[] EraserWidthGrades = { 12f, 17f, 22f, 28f, 34f };
+    private static readonly float[] PixelEraserWidthGrades = { 46f, 70f, 93f, 122f, 150f };
 
     private float[] WidthGrades(Tool tool) => tool switch
     {
@@ -1357,26 +1348,6 @@ public sealed class FullUi : IOverlayUi
         Tool.PixelEraser => PixelEraserWidthGrades,
         _ => PenWidthGrades,
     };
-
-    /// <summary>滑条"档位点"的命中：落在某档 ±6 逻辑像素内 → 返回那一档的值；
-    /// 别处返回 null（照旧连续跳）。白板那一格是板面不透明度，没有档位。</summary>
-    private float? HitWidthGrade(float x)
-    {
-        if (_bandCell == 2 || !BandHasSlider) return null;
-        var (min, max) = WidthRange(_host.State.Tool);
-        if (max <= min) return null;
-        var (left, right) = SliderTrackRange();
-        if (right <= left) return null;
-        float bestD = float.MaxValue, bestV = 0f;
-        foreach (float g in WidthGrades(_host.State.Tool))
-        {
-            if (g < min - 0.01f || g > max + 0.01f) continue;
-            float px = left + (right - left) * ((g - min) / (max - min));
-            float d = MathF.Abs(x - px);
-            if (d < bestD) { bestD = d; bestV = g; }
-        }
-        return bestD <= 6f ? bestV : null;
-    }
 
     private float SliderT(in UiState st)
     {
@@ -1593,8 +1564,14 @@ public sealed class FullUi : IOverlayUi
     // 不这么做画出去的部分会被裁掉。面板尺寸、布局一个像素都不用改，
     // 而且它只在"拖滑条 / 指针停在滑条上"时出现，平时那份矩形一点都不变。
 
+    // **橡皮不给预览**（2026-10-09 晚用户："橡皮擦滑动的时候会显示'几百乘几百'的预览，
+    // 那个是不是也不需要"）——橡皮的块头由落点自己说话，滑条上不再弹尺寸气泡；
+    // 笔 / 荧光笔 / 激光 / 白板（板色片）照旧。
     private bool SizePreviewVisible =>
-        BandOpen() && BandHasSlider && (_sliderDragging || _hover == 300);
+        BandOpen() && BandHasSlider
+        && (_bandCell == 2 || _host == null
+            || _host.State.Tool is not (Tool.Eraser or Tool.PixelEraser))
+        && (_sliderDragging || _hover == 300);
 
     /// <summary>真实落点的宽高（逻辑像素）。**和引擎里那套落点同源**（都读 st.Width）。</summary>
     private (float W, float H) TrueSize(in UiState st)
@@ -2149,7 +2126,7 @@ public sealed class FullUi : IOverlayUi
 
     private bool IsToggleRow(int i)
         => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.Tooltip or Row.DwellShape
-           or Row.Pressure or Row.FineStroke or Row.Predict or Row.RestoreInk or Row.PptAutoSave or Row.TouchGestures;
+           or Row.Pressure or Row.Predict or Row.RestoreInk or Row.PptAutoSave;
 
     /// <summary>
     /// **自检用**：这一行到底有没有画开关。
@@ -2239,19 +2216,6 @@ public sealed class FullUi : IOverlayUi
                 SavePrefs();
                 break;
 
-            // 精细笔迹（2026-10-07）：原始输入补点的总开关。引擎是权威，界面翻转后落盘。
-            case Row.FineStroke:
-                _host.Commands.SetFineStroke(!_host.State.FineStrokeOn);
-                SavePrefs();
-                break;
-
-            // 触摸手势总开关（2026-10-05）：关掉只剩单指书写（双指/三指/长按/漫游全停用）。
-            // 引擎是权威（渲染/手势都在它那边），界面翻转后落盘到 "touch.gestures"。
-            case Row.TouchGestures:
-                _host.Commands.SetTouchGestures(!_host.State.TouchGesturesOn);
-                SavePrefs();
-                break;
-
             // 墨迹预测（2026-10-09 加，B4 自绘预测尾；默认关——2026-10-09 用户定）：
             // 引擎是权威，界面翻转后落盘 "predict2"。
             case Row.Predict:
@@ -2334,7 +2298,7 @@ public sealed class FullUi : IOverlayUi
     /// 用户说"设置现在太长了"。原来左列堆 9 行（组头 26 + 9×48 + 8 ≈ 476），三列后最高 5 行。
     /// </summary>
     private const int LookRowCount = 4;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 悬停提示
-    private const int WriteRowCount = 5;   // 书写：停顿变图形 / 压感粗细 / 精细笔迹 / 墨迹预测 / 触摸手势总开关
+    private const int WriteRowCount = 3;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测（精细笔迹、触摸手势 2026-10-09 撤开关、改常开）
     private const int InkRowCount = 3;     // 墨迹：自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理
     private const float MoreColumnGap = 16f;
     private const float MoreSwitchW = 44f;
@@ -2557,9 +2521,7 @@ public sealed class FullUi : IOverlayUi
         Row.Tooltip => SetColRow(SetColKind.Look, 3),
         Row.DwellShape => SetColRow(SetColKind.Write, 0),
         Row.Pressure => SetColRow(SetColKind.Write, 1),
-        Row.FineStroke => SetColRow(SetColKind.Write, 2),
-        Row.Predict => SetColRow(SetColKind.Write, 3),
-        Row.TouchGestures => SetColRow(SetColKind.Write, 4),
+        Row.Predict => SetColRow(SetColKind.Write, 2),
         Row.RestoreInk => SetColRow(SetColKind.Ink, 0),
         Row.PptAutoSave => SetColRow(SetColKind.Ink, 1),
         _ => SetColRow(SetColKind.Ink, 2),
@@ -3203,9 +3165,7 @@ public sealed class FullUi : IOverlayUi
         if (BandOpen() && BandHasSlider && Widgets.SliderHit(SliderRect()).Contains(p.X, p.Y))
         {
             _sliderDragging = true;
-            float? grade = HitWidthGrade(p.X);
-            if (grade is float gv) _host.Commands.SetWidth(gv);   // 点在档位点上：精确到那一档
-            else DragSlider(p.X);                                  // 别处：照旧连续（可接着拖）
+            DragSlider(p.X);       // 按下即跳到该位置（引擎吸附到最近一档），可接着拖
             return true;
         }
 
@@ -4176,23 +4136,8 @@ public sealed class FullUi : IOverlayUi
                                      h * 0.5f, h * 0.5f),
                 Brush(ctx, new Color4(ink.R, ink.G, ink.B, _sliderDragging ? 0.85f : 0.55f)));
 
-        // 档位点（2026-10-09）：滑条上可点的"档"——点它就精确到那一档（见 HitWidthGrade），
-        // 拖动仍连续。白板那一格滑的是板面不透明度，没有档位、不画。
-        if (_bandCell != 2)
-        {
-            var (gmin, gmax) = WidthRange(st.Tool);
-            if (gmax > gmin)
-            {
-                var pipBrush = Brush(ctx, _dark ? new Color4(0.78f, 0.80f, 0.84f, 0.55f)
-                                                : new Color4(0.30f, 0.32f, 0.36f, 0.55f));
-                foreach (float g in WidthGrades(st.Tool))
-                {
-                    if (g < gmin - 0.01f || g > gmax + 0.01f) continue;
-                    float px = left + (right - left) * ((g - gmin) / (gmax - gmin));
-                    ctx.FillEllipse(new Ellipse(new Vector2(px, cy), 1.7f, 1.7f), pipBrush);
-                }
-            }
-        }
+        // （档位点 2026-10-09 白天加、当晚撤：用户"不大好看，直接滑动取大小"——
+        //   现在拖动吸附到最近一档，滑条上不再画小点。）
 
         ctx.FillEllipse(new Ellipse(new Vector2(kx, cy), 7f, 7f), Brush(ctx, Tokens.AccentInk));
         ctx.DrawEllipse(new Ellipse(new Vector2(kx, cy), 7f, 7f),
@@ -4725,10 +4670,6 @@ public sealed class FullUi : IOverlayUi
         Row.DwellShape => _host == null || _host.State.DwellShapeOn,
         // 压感粗细：状态在**引擎**（渲染期开关），界面只是显示它
         Row.Pressure => _host == null || _host.State.PressureOn,
-        // 精细笔迹：状态也在引擎（默认开），界面只是显示它
-        Row.FineStroke => _host == null || _host.State.FineStrokeOn,
-        // 触摸手势总开关：状态也在引擎（默认开），界面只是显示它
-        Row.TouchGestures => _host == null || _host.State.TouchGesturesOn,
         // 墨迹预测：同样在引擎（默认开），界面只是显示它
         Row.Predict => _host == null || _host.State.PredictTailOn,
         // 墨迹两条开关：读偏好（restoreInk 默认关、pptAutoSave 默认开）。

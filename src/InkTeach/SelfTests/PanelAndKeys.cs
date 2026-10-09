@@ -592,9 +592,9 @@ internal sealed partial class App
         Check("拖滑条改粗细", Host.State.Width > widthBefore + 5f,
               $"粗细 {widthBefore:F1} → {Host.State.Width:F1}");
 
-        // 档位点（2026-10-09 用户："点击到档位、滑动连续"）：
+        // 档位（2026-10-09 晚用户改法："不要点、直接滑动取大小"）：
         // ① 界面那份档位表和引擎那张表逐项对得上（两边各留一份的老规矩，靠自检卡）
-        // ② 点中「4」那一档的小点 → 宽度精确 = 4（不是"差不多"）
+        // ② 拖到某一档的位置 → 宽度**精确吸附到那一档**（不再有中间值）
         {
             var gradesUi = ui.WidthGradesForTest(Tool.Pen);
             bool sameGrades = true; string gradesDetail = "";
@@ -617,12 +617,21 @@ internal sealed partial class App
             Check("界面档位表 == 引擎档位表（五种宽度滑条）", sameGrades,
                   gradesDetail.Length > 0 ? gradesDetail : $"笔 {string.Join("/", gradesUi)}");
 
-            float pipX4 = ui.WidthGradeXForTest(4f);
-            SendMouse((int)(pipX4 * DpiScale), (int)sliderY, 0);                          SettleFrames(60);
-            SendMouse((int)(pipX4 * DpiScale), (int)sliderY, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
-            SendMouse((int)(pipX4 * DpiScale), (int)sliderY, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(120);
-            Check("点滑条上的档位点：精确落到那一档（4 逻辑像素）",
-                  MathF.Abs(Host.State.Width - 4f) < 0.01f, $"粗细 = {Host.State.Width:F2}");
+            float pipX5 = ui.WidthGradeXForTest(5f);
+            SendMouse((int)(pipX5 * DpiScale), (int)sliderY, 0);                          SettleFrames(60);
+            SendMouse((int)(pipX5 * DpiScale), (int)sliderY, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+            SendMouse((int)(pipX5 * DpiScale), (int)sliderY, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(120);
+            Check("拖到某一档的位置：宽度精确吸附到那一档（5 逻辑像素）",
+                  MathF.Abs(Host.State.Width - 5f) < 0.01f, $"粗细 = {Host.State.Width:F2}");
+
+            // 档与档之间随便拖 → 也只会落在档上（不存在 4.3 这种中间值）
+            float midGradeX = (ui.WidthGradeXForTest(4f) + ui.WidthGradeXForTest(5f)) * 0.5f;
+            SendMouse((int)(midGradeX * DpiScale), (int)sliderY, 0);                          SettleFrames(60);
+            SendMouse((int)(midGradeX * DpiScale), (int)sliderY, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+            SendMouse((int)(midGradeX * DpiScale), (int)sliderY, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(120);
+            Check("拖到两档中间：吸附到其中一档（没有 4.3 这种值）",
+                  Array.IndexOf(WidthPresets, Host.State.Width) >= 0,
+                  $"粗细 = {Host.State.Width:F2}（在档表里 = {Array.IndexOf(WidthPresets, Host.State.Width) >= 0}）");
         }
 
         // ---- ⑥.2 滑条**按工具路由**：橡皮终于能调大小了 ----
@@ -644,7 +653,7 @@ internal sealed partial class App
             var slE = ui.SliderRectForTest;
             float slEy = (slE.MinY + slE.MaxY) * 0.5f * DpiScale;
 
-            var (emin, emax) = (8f, 48f);              // 界面那边 WidthRange(Tool.Eraser)
+            var (emin, emax) = (12f, 34f);             // 界面那边 WidthRange(Tool.Eraser)（= 档表首尾）
             var (trackL, trackR) = ui.SliderTrackRangeForTest;
             SendMouse((int)(trackL * DpiScale), (int)slEy, 0);                          SettleFrames(60);
             SendMouse((int)(trackL * DpiScale), (int)slEy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(50);
@@ -665,11 +674,31 @@ internal sealed partial class App
                   MathF.Abs(EraserRadiusLogical - emin) < 1.5f,
                   $"橡皮半径 {EraserRadiusLogical:F1}（应到 {emin}）");
 
+            // **橡皮不再弹尺寸预览**（2026-10-09 晚用户点名：滑动时那个"几百乘几百"不需要）。
+            // 拖完指针还停在滑条上——预览矩形也应是空的（和上一版"预览必须在"相反，故意的）。
+            {
+                var pv0 = ui.SizePreviewRectForTest;
+                Check("橡皮滑条不再弹尺寸预览（2026-10-09 晚用户点名）",
+                      pv0.MaxX - pv0.MinX < 0.5f && pv0.MaxY - pv0.MinY < 0.5f,
+                      $"预览矩形 {pv0.MaxX - pv0.MinX:F0}×{pv0.MaxY - pv0.MinY:F0}（应为 0×0）");
+            }
+
             // **真实大小预览**（用户 2026-09-17："那个点和实际大小是不是应该一样大，
-            // 但是太大了装不下，我又不希望改动界面"）。
+            // 但是太大了装不下，我又不希望改动界面"）——改到**笔**上验（橡皮已无预览）。
             // 验的是"预览整个落在 QueryBounds() 里"——引擎按那份矩形裁剪界面，
             // 只要不包含它，画出去的部分就会被裁掉（这才是"预览看不见"的真因）。
-            // 拖完滑条指针还停在滑条上 → 预览应该在。
+            Host.Commands.SetTool(Tool.Pen);
+            SettleFrames(200);
+            {
+                var slPen = ui.SliderRectForTest;
+                float slPeny = (slPen.MinY + slPen.MaxY) * 0.5f * DpiScale;
+                var (ql, qr) = ui.SliderTrackRangeForTest;
+                float midPen = ql + (qr - ql) * 0.5f;
+                SendMouse((int)(qr * DpiScale), (int)slPeny, 0);                          SettleFrames(60);
+                SendMouse((int)(qr * DpiScale), (int)slPeny, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(50);
+                SendMouse((int)(midPen * DpiScale), (int)slPeny, 0);                       SettleFrames(120);
+                SendMouse((int)(midPen * DpiScale), (int)slPeny, Native.MOUSEEVENTF_LEFTUP); SettleFrames(150);
+            }
             var pv = ui.SizePreviewRectForTest;
             var qb = ui.QueryBounds();
             Check("粗细预览画在面板外、且算进可见范围（不会被裁掉）",
@@ -680,7 +709,7 @@ internal sealed partial class App
                   + $"（{pv.MinX:F0}..{pv.MaxX:F0} × {pv.MinY:F0}..{pv.MaxY:F0}），"
                   + $"可见范围 {qb.MaxX - qb.MinX:F0}×{qb.MaxY - qb.MinY:F0}");
 
-            // 面积橡皮同理，而且它的范围比笔宽大得多（30～160）
+            // 面积橡皮同理（2026-10-09 晚起固定 5 档、最粗 150；拖动吸附）
             Host.Commands.SetTool(Tool.PixelEraser);
             SettleFrames(200);
             float penW1 = PenWidthLogical;
@@ -691,9 +720,9 @@ internal sealed partial class App
             SendMouse((int)(pr * DpiScale), (int)slPy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(50);
             SendMouse((int)(pr * DpiScale), (int)slPy, 0);                          SettleFrames(120);
             SendMouse((int)(pr * DpiScale), (int)slPy, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(150);
-            Check("面积橡皮的滑条能放到 160（比笔宽的上限 40 大）",
-                  MathF.Abs(PixelEraserWidthLogical - 160f) < 2f,
-                  $"面积橡皮宽 {PixelEraserWidthLogical:F1}（应到 160）");
+            Check("面积橡皮的滑条拖到最右 = 最粗一档（150，比笔宽上限 40 大）",
+                  MathF.Abs(PixelEraserWidthLogical - 150f) < 2f,
+                  $"面积橡皮宽 {PixelEraserWidthLogical:F1}（应到 150）");
             Check("拖面积橡皮的滑条**不动笔宽**",
                   MathF.Abs(PenWidthLogical - penW1) < 0.01f,
                   $"笔宽 {penW1:F2} → {PenWidthLogical:F2}");
@@ -2837,25 +2866,18 @@ internal sealed partial class App
                   !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
         }
 
-        // 「精细笔迹」（2026-10-07）：同一条链路过一遍 —— 点行 → 引擎状态翻转 → 落盘。
-        // 它管的是"原始输入补点"那个开关（低配机的性能保险丝）。
+        // 「精细笔迹」「触摸手势」两行 **2026-10-09 晚已撤**（用户真机试稳："开关拿掉，默认开"）。
+        // 这里反过来钉住"两行都不在了 + 行为常开"，别再被无意加回来。
         {
-            var fineRow = ui.RowRectByLabelForTest("精细笔迹");
-            Check("「精细笔迹」那一行找得到", fineRow.MaxY > fineRow.MinY,
-                  $"行高 {fineRow.MaxY - fineRow.MinY:F0}");
-            // **这一条是关键**（2026-10-07 真机抓到的）：光有行不够，**开关得真的画出来**。
-            // 当时我把行/位置/状态/点击/落盘全接好了，只漏了把它加进 IsToggleRow，
-            // 于是标签画了、开关没画；而"点一下状态翻转"那条判据看的是整行矩形，
-            // **开关没画也照样通过** —— 测试没盖住真正错的地方。
-            Check("「精细笔迹」是**开关行**（有开关，不是空白行）",
-                  ui.IsToggleRowByLabelForTest("精细笔迹"),
-                  "IsToggleRow = " + ui.IsToggleRowByLabelForTest("精细笔迹"));
-            Check("精细笔迹默认是开的", Host.State.FineStrokeOn, $"FineStrokeOn = {Host.State.FineStrokeOn}");
-            ClickPhysical((fineRow.MinX + fineRow.MaxX) * 0.5f * DpiScale,
-                          (fineRow.MinY + fineRow.MaxY) * 0.5f * DpiScale);
-            SettleFrames(200);
-            Check("点「精细笔迹」：引擎状态立刻翻转（默认开 → 关）",
-                  !Host.State.FineStrokeOn, $"FineStrokeOn = {Host.State.FineStrokeOn}");
+            Check("「精细笔迹」行已撤（改常开，不再占设置页）",
+                  ui.RowRectByLabelForTest("精细笔迹").IsEmpty
+                  && !ui.IsToggleRowByLabelForTest("精细笔迹")
+                  && Host.State.FineStrokeOn,
+                  $"行空 = {ui.RowRectByLabelForTest("精细笔迹").IsEmpty}，FineStrokeOn = {Host.State.FineStrokeOn}");
+            Check("「触摸手势」行已撤（改常开，不再占设置页）",
+                  ui.RowRectByLabelForTest("触摸手势").IsEmpty
+                  && !ui.IsToggleRowByLabelForTest("触摸手势"),
+                  $"行空 = {ui.RowRectByLabelForTest("触摸手势").IsEmpty}");
         }
 
         // 「墨迹预测」（2026-10-09 回归：B4 自绘预测尾，**默认关**——用户二轮定：
@@ -2927,7 +2949,7 @@ internal sealed partial class App
         Check("改动写进了配置文件",
               prefsText.Contains("\"ui\"") && prefsText.Contains("\"dark\"")
               && prefsText.Contains("\"profile\"") && prefsText.Contains("\"unpinned\"")
-              && prefsText.Contains("\"pressure\"") && prefsText.Contains("\"finestroke\"")
+              && prefsText.Contains("\"pressure\"")
               && prefsText.Contains("\"predict2\"")
               && prefsText.Contains("\"tooltip\"")
               ,
@@ -2948,8 +2970,8 @@ internal sealed partial class App
               + $"功能提示={ui?.TipEnabledForTest}");
         Check("压感偏好也读回来了（重启后仍是关）",
               !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
-        Check("精细笔迹偏好也读回来了（重启后仍是关）",
-              !Host.State.FineStrokeOn, $"FineStrokeOn = {Host.State.FineStrokeOn}");
+        Check("精细笔迹：开关撤掉后重启仍是开（常开）",
+              Host.State.FineStrokeOn, $"FineStrokeOn = {Host.State.FineStrokeOn}");
         Check("墨迹预测偏好也读回来了（重启后仍是开）",
               Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
 
