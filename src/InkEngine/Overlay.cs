@@ -1099,7 +1099,9 @@ internal sealed partial class OverlayWindow : IDisposable
         var pages = app.DocView;
         if (!pages.IsOpen) return;
         if (app.PassThrough) return;      // 穿透 = 全让开（S2）：页不画（位图也在 SyncDocPages 里放了）
-        if (app.BoardOn) return;          // 白板（"另一张纸"）铺在上面：页让位，板色盖满
+        // 白板"不透明"盖上来（"另一张纸"）：页让位、板色盖满。
+        // ⚠ 板**半透明**时不藏页——要"透过上面那张纸看到 PDF"（2026-10-09 用户问；见 RasterizeTile）。
+        if (app.BoardOn && app.BoardOpacity >= 0.999f) return;
 
         ID2D1SolidColorBrush placeholder = null, failed = null, border = null;
         int i = pages.FirstAtOrAfter(canvas.MinY);
@@ -1160,9 +1162,11 @@ internal sealed partial class OverlayWindow : IDisposable
         var pages = app.DocView;
 
         // 穿透 = **全让开**（S2，用户 2026-10-07 定）：页不画、不生成、位图全放（省内存）。
-        // **白板铺上来（"两张纸"的上面那张）也走同一条链**：页让位、位图全放。
+        // **白板且不透明**也走同一条链（"两张纸"上面那张盖住：页让位、位图全放）。
+        // ⚠ 板**半透明**时不藏：要透过它看 PDF——这时页位图保持驻留
+        //    （内存只在"文档开着＋板半透明"的组合下多花；不透明/无板时照旧省）。
         // 状态翻转那一帧要"整层作废"——分块里烘着页像素，不重铺的话穿透了屏幕还留着卷子。
-        bool hidden = app.PassThrough || app.BoardOn;
+        bool hidden = app.PassThrough || (app.BoardOn && app.BoardOpacity >= 0.999f);
         if (hidden != _docHidden)
         {
             _docHidden = hidden;
@@ -1346,16 +1350,24 @@ internal sealed partial class OverlayWindow : IDisposable
         // "画布 → 块内"，直接给块内坐标会被再减一次块原点，整块擦到画面外去，
         // 结果就是"内容确实重画了，但旧墨没被擦掉"——擦除后屏幕上留着鬼影。
         // （实测踩过：橡皮擦掉了数据，屏幕上三条线还在。）
+        //
+        // "两张纸"的底（2026-10-09）：**半透明白板盖文档**时，底要先铺"文档的纸"、
+        // 页图再画、最后才把板色（带透明度）盖上去——透出来的是 **PDF**，不是桌面。
+        bool boardOverDocTranslucent =
+            app.BoardOn && app.DocView.IsOpen && app.BoardOpacity < 0.999f;
+
         var clearRect = new Vortice.RawRectF(
             canvas.MinX, canvas.MinY, canvas.MaxX, canvas.MaxY);
         _ctx.PrimitiveBlend = PrimitiveBlend.Copy;
-        _ctx.FillRectangle(clearRect, BoardBrush(app));
+        _ctx.FillRectangle(clearRect,
+            boardOverDocTranslucent ? Brush(app.DocPaperColor) : BoardBrush(app));
         _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
 
         // 白板模式：先画**底纹**（方格/横线），再画"页界线"（一屏一页）。
         // 两个都是**画布内容**——固定在图上的位置、不随相机动，
         // 所以一起烘进分块缓存：滚动、翻页、写字都不额外花钱。
-        if (app.BoardOn)
+        // （半透明盖文档时，它们属于"上面那张纸"，挪到板色盖完之后再画。）
+        if (app.BoardOn && !boardOverDocTranslucent)
         {
             DrawBoardPattern(app, canvas);
             DrawPageLines(app, canvas);
@@ -1364,6 +1376,14 @@ internal sealed partial class OverlayWindow : IDisposable
         // 文档页层：**在底纹之上、笔迹之下**。页图是内容层的一部分，
         // 所以它跟着分块缓存走——滚动、写字都不重画它。
         DrawDocPages(app, canvas);
+
+        // 半透明盖文档：**板色（带透明度）盖在页图上**——"透过上面那张纸看到下面那张"。
+        if (boardOverDocTranslucent)
+        {
+            _ctx.FillRectangle(clearRect, BoardBrush(app));
+            DrawBoardPattern(app, canvas);
+            DrawPageLines(app, canvas);
+        }
 
         // 空间索引按**带笔宽外扩**的框返回候选，所以跨在块边界上的粗笔画
         // 两边都会被画到，不会出现"贴边被削掉一半"的缺口。
@@ -2367,8 +2387,12 @@ internal sealed partial class OverlayWindow : IDisposable
             _ctx.PushAxisAlignedClip(box, AntialiasMode.Aliased);
 
             // Clear() 不受裁剪影响，所以用 Copy 混合的填充来"擦"这一块。
+            // （半透明白板盖文档时垫"文档的纸"，页图随后画、板色再盖——见 RasterizeTile 的同款注释。）
+            bool boardOverDocTranslucentDbg =
+                app.BoardOn && app.DocView.IsOpen && app.BoardOpacity < 0.999f;
             _ctx.PrimitiveBlend = PrimitiveBlend.Copy;
-            _ctx.FillRectangle(box, BoardBrush(app));
+            _ctx.FillRectangle(box, boardOverDocTranslucentDbg
+                ? Brush(app.DocPaperColor) : BoardBrush(app));
             _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
 
             if (app.NoContentCache)
@@ -2386,6 +2410,8 @@ internal sealed partial class OverlayWindow : IDisposable
                     MaxY = c.MaxY + OriginY - ViewOffsetY,
                 };
                 DrawDocPages(app, cv);     // 调试路径：文档页层也要画（否则白屏看不到文档）
+                if (boardOverDocTranslucentDbg)
+                    _ctx.FillRectangle(box, BoardBrush(app));   // 半透明板色盖在页上
                 foreach (var s in app.Doc.Strokes)
                 {
                     if (!s.PaddedBounds.Intersects(cv)) continue;

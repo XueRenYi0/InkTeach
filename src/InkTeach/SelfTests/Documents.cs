@@ -737,6 +737,29 @@ internal sealed partial class App
                 Check("关白板：墨还在（回到文档上面）", !BoardOn && inkBack > 100, $"黑像素={inkBack}");
             }
 
+            // ⭐ 半透明白板盖文档：透出来的是 **PDF**（"透过上面那张纸看到下面那张"），
+            //   而不是桌面（2026-10-09 用户问）。板不透明时照旧"页让位、省内存"。
+            {
+                SetBoardFromUi(true);
+                SetBoardOpacityFromUi(0.5f);
+                SettleFrames(420);
+                Check("半透明板：页位图**不再放掉**（要透过它看 PDF）",
+                      BoardOn && DocView.ResidentPages >= 1,
+                      $"驻留={DocView.ResidentPages}（应 ≥1）");
+                // 板色（≈252,252,250）×0.5 盖在红页（255,0,0）上 → ≈ (253,126,125) 的粉
+                int blend = ScreenProbe.CountNear(rb0 + 40, ry0 + 40, 80, 80, 253, 126, 125, 36);
+                int purePage = ScreenProbe.CountNear(rb0 + 40, ry0 + 40, 80, 80, 255, 0, 0, 30);
+                Check("半透明板：页区是**板色与页色的混合**（透过纸看到 PDF、不是桌面）",
+                      blend > 5000 && purePage < 80,
+                      $"混合 {blend}/6400、纯页色 {purePage}（应≈0）");
+                SetBoardOpacityFromUi(1f);
+                SettleFrames(300);
+                SetBoardFromUi(false);
+                SettleFrames(300);
+                Check("板回到不透明/关掉：页照旧在", !BoardOn && DocView.ResidentPages >= 1,
+                      $"板开={BoardOn} 驻留={DocView.ResidentPages}");
+            }
+
             CloseDocument();
             Check("关文档：白板状态不受影响（文档只收自己那张纸）", !BoardOn, $"BoardOn={BoardOn}");
             if (Doc.PageKey != 0) Doc.SwitchPage(0);
