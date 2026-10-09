@@ -589,11 +589,25 @@ internal sealed partial class App
         // ② 点中「4」那一档的小点 → 宽度精确 = 4（不是"差不多"）
         {
             var gradesUi = ui.WidthGradesForTest(Tool.Pen);
-            bool sameGrades = gradesUi.Length == WidthPresets.Length;
-            for (int gi = 0; gi < gradesUi.Length && sameGrades; gi++)
-                sameGrades = MathF.Abs(gradesUi[gi] - WidthPresets[gi]) < 0.01f;
-            Check("界面档位表 == 引擎档位表（笔）", sameGrades,
-                  $"界面 {string.Join("/", gradesUi)} vs 引擎 {string.Join("/", WidthPresets)}");
+            bool sameGrades = true; string gradesDetail = "";
+            void GradesMatch(string name, float[] uiArr, float[] engArr)
+            {
+                bool ok = uiArr.Length == engArr.Length;
+                for (int gi = 0; gi < uiArr.Length && ok; gi++)
+                    ok = MathF.Abs(uiArr[gi] - engArr[gi]) < 0.01f;
+                if (!ok)
+                {
+                    sameGrades = false;
+                    gradesDetail += $"{name} 界面[{string.Join("/", uiArr)}] vs 引擎[{string.Join("/", engArr)}]；";
+                }
+            }
+            GradesMatch("笔", gradesUi, WidthPresets);
+            GradesMatch("荧光笔", ui.WidthGradesForTest(Tool.Highlighter), HighlighterWidthPresets);
+            GradesMatch("激光", ui.WidthGradesForTest(Tool.Laser), LaserWidthPresets);
+            GradesMatch("整笔橡皮", ui.WidthGradesForTest(Tool.Eraser), EraserRadiusPresets);
+            GradesMatch("面积橡皮", ui.WidthGradesForTest(Tool.PixelEraser), PixelEraserWidthPresets);
+            Check("界面档位表 == 引擎档位表（五种宽度滑条）", sameGrades,
+                  gradesDetail.Length > 0 ? gradesDetail : $"笔 {string.Join("/", gradesUi)}");
 
             float pipX4 = ui.WidthGradeXForTest(4f);
             SendMouse((int)(pipX4 * DpiScale), (int)sliderY, 0);                          SettleFrames(60);

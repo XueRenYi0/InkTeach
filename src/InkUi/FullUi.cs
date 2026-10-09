@@ -273,7 +273,7 @@ public sealed class FullUi : IOverlayUi
         (Row.Predict, "墨迹预测", false, false, "开了更跟手一点；默认关着，笔尾更稳当（等更完善再默认开）"),
         // 墨迹三条偏好（原本在「墨迹」页，2026-10-02 启动器改版后搬进设置子页）。
         (Row.RestoreInk, "自动恢复上次板书", false, false, "下次启动接上这次的板书"),
-        (Row.PptAutoSave, "PPT 墨迹默认自动保存", false, false, "放映时长按菜单仍可临时覆盖"),
+        (Row.PptAutoSave, "PPT 墨迹自动保存", false, false, "放映时长按菜单仍可临时覆盖"),
         (Row.HistoryDays, "历史清理", false, false, "过期 PPT 缓存与备份，启动时清掉"),
         // 触摸手势**总开关**（2026-10-05，用户点名要的"保险丝"）：关掉只剩单指书写——
         // 双指手势 / 三指擦 / 长按选择 / 单指漫游全部停用（闸门在 TouchGestures.Enabled，
