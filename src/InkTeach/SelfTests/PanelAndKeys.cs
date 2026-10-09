@@ -886,6 +886,67 @@ internal sealed partial class App
             SettleFrames(1300);
         }
 
+        // ---- ⑥.3f 方案 A（2026-10-09）：点开快路——明确点击立即响应，不等悬停/余温 ----
+        // 出处：调研-色带-全盘复查与优化.md（业界"点开设置"是通例；我们原来只有悬停一条路，
+        // 写字刚完还要过"余温+离开一次"，最快 ~0.84s 才等到自动开）。
+        {
+            var bandA = ui.BandRectForTest;
+            int bxA = (int)((bandA.MinX + bandA.MaxX) * 0.5f * DpiScale);
+            int byA = (int)((bandA.MinY + bandA.MaxY) * 0.5f * DpiScale);
+
+            // ① 收起的色线点一下 → 立即开始张开（不等悬停那 240ms）
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.68f), 0);
+            SettleFrames(1300);
+            bool closedA = ui.RailValueForTest < 0.02f;
+            SendMouse(bxA, byA, 0);                                       SettleFrames(30);
+            SendMouse(bxA, byA, Native.MOUSEEVENTF_LEFTDOWN);             SettleFrames(110);
+            Check("点收起色线：立即张开（不等悬停的 240ms）",
+                  closedA && ui.RailValueForTest > 0.2f,
+                  $"点前收干净 = {closedA}，按下 110ms 后张开度 = {ui.RailValueForTest:F2}");
+            SendMouse(bxA, byA, Native.MOUSEEVENTF_LEFTUP);               SettleFrames(400);
+            Check("点开之后照常完全张开", ui.RailValueForTest > 0.99f,
+                  $"张开度 = {ui.RailValueForTest:F2}");
+
+            // ② 写字余温内点色线：仍然立即张开（明确动作优先于"余温 + 离开一次"）
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.68f), 0);
+            SettleFrames(1300);
+            int sxF = (int)(_virtualX + _virtualW * 0.45f), syF = (int)(_virtualY + _virtualH * 0.45f);
+            SendMouse(sxF, syF, 0);                                       SettleFrames(40);
+            SendMouse(sxF, syF, Native.MOUSEEVENTF_LEFTDOWN);             SettleFrames(40);
+            SendMouse(sxF + 90, syF, 0);                                  SettleFrames(40);
+            SendMouse(sxF + 90, syF, Native.MOUSEEVENTF_LEFTUP);          SettleFrames(80);   // 抬手 → 余温 600ms 内
+            SendMouse(bxA, byA, 0);                                       SettleFrames(30);
+            SendMouse(bxA, byA, Native.MOUSEEVENTF_LEFTDOWN);             SettleFrames(110);
+            Check("写字余温内点色线：照样立即张开（点击优先于余温/离开一次）",
+                  ui.RailValueForTest > 0.2f, $"按下 110ms 后张开度 = {ui.RailValueForTest:F2}");
+            SendMouse(bxA, byA, Native.MOUSEEVENTF_LEFTUP);               SettleFrames(400);
+            Host.Commands.Undo();                                         SettleFrames(100);  // 那一笔撤掉
+
+            // ③ 点工具格：那格的设置条立即张开（修掉"倒计时被重置"）
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.68f), 0);
+            SettleFrames(1300);
+            var cell3 = ui.CellRectForTest(3);                             // 笔
+            int cx3 = (int)((cell3.MinX + cell3.MaxX) * 0.5f * DpiScale);
+            int cy3 = (int)((cell3.MinY + cell3.MaxY) * 0.5f * DpiScale);
+            SendMouse(cx3, cy3, 0);                                       SettleFrames(30);
+            SendMouse(cx3, cy3, Native.MOUSEEVENTF_LEFTDOWN);             SettleFrames(50);
+            SendMouse(cx3, cy3, Native.MOUSEEVENTF_LEFTUP);               SettleFrames(120);
+            Check("点工具格：设置条立即张开（起来即见，不用再等一轮）",
+                  ui.RailValueForTest > 0.2f,
+                  $"抬起 120ms 后张开度 = {ui.RailValueForTest:F2}");
+
+            // ④ 穿透里点色线：**不**张开（维持色线，口径同 UpdateRail）
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.68f), 0);
+            SettleFrames(1300);
+            Host.Commands.SetPassThrough(true);                           SettleFrames(400);
+            SendMouse(bxA, byA, 0);                                       SettleFrames(30);
+            SendMouse(bxA, byA, Native.MOUSEEVENTF_LEFTDOWN);             SettleFrames(60);
+            SendMouse(bxA, byA, Native.MOUSEEVENTF_LEFTUP);               SettleFrames(300);
+            Check("穿透里点色线：不张开（还是那条色线）",
+                  ui.RailValueForTest < 0.05f, $"张开度 = {ui.RailValueForTest:F2}");
+            Host.Commands.SetPassThrough(false);                          SettleFrames(300);
+        }
+
         // ---- ⑥.3b 主条那几格"选中显示选中什么"（2026-09-26）----
         //
         // 用户那天说的那条逻辑：**没选中画一个固定的，选中之后就画"手里到底是什么"**。

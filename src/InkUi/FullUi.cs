@@ -3218,6 +3218,29 @@ public sealed class FullUi : IOverlayUi
             if (sg >= 0) { ActivateSegment(sg); return true; }
         }
 
+        // 收起的色线：**点一下就张开**（2026-10-09 方案 A①，见 调研-色带-全盘复查与优化.md）。
+        // 明确动作立即响应——跳过悬停延迟、写字余温、"离开一次"这三道门槛；
+        // 悬停那条路保持"慢一步"的沉稳（240ms + 余温，一个字不动）。
+        // 穿透里除外（口径同 UpdateRail："永远保持收起的那条色线"）。
+        // ⚠ 命中用**当前那条色线的矩形**（收起态 = 10px），不能用 RailZone（那是"张开后全高"，
+        //    图形格能到 ~110px——会把面板正上方画布上的落笔也吃掉）。上下各放宽 10px 好点。
+        if (!BandOpen() && !_host.State.PassThrough && BandVisible())
+        {
+            var bandNow = BandRect();
+            var bandHit = new RectF
+            {
+                MinX = bandNow.MinX, MinY = bandNow.MinY - Tokens.RailHoverPad,
+                MaxX = bandNow.MaxX, MaxY = bandNow.MaxY + Tokens.RailHoverPad,
+            };
+            if (bandHit.Contains(p.X, p.Y))
+            {
+                _railRequireLeave = false;  // 明确点击 = 老师主动"回来"了，不再要求先离开一次
+                _railEnterAtMs = double.NegativeInfinity;
+                _rail.To(1f, Tokens.RailMs);
+                return true;
+            }
+        }
+
         return false;                       // 带子/上带里的空白（两端内边距）：不吃，引擎按"地盘"吞掉
     }
 
@@ -3540,9 +3563,15 @@ public sealed class FullUi : IOverlayUi
             // 2026-09-17 用户定了新的语义：**张不张开只看焦点在不在面板上**
             // （见 RailHoverZone）。于是"再点一次收起"这一支必须删掉——
             // 指针还停在面板上，收下去会立刻又张开，是两个规则打架。
-            // 指针一离开面板它自己就收（走 220 毫秒的退出延迟），不用老师再点一次。
+            // 指针一离开面板它自己就收（走 800 毫秒的退出延迟），不用老师再点一次。
+            //
+            // 2026-10-09 方案 A②：点工具格 = **那格的设置条立即张开**（明确动作立即响应，
+            // 见 调研-色带-全盘复查与优化.md）。旧代码这里把 `_railEnterAtMs` 重置成 -∞，
+            // 注释写"不用再等开门那 120 毫秒"，实际效果却是**倒计时从头再来**——
+            // 快速点格反而比只悬停更晚亮，与注释意图相反。
             _bandCell = idx;
-            _railEnterAtMs = double.NegativeInfinity;   // 已经在面板上了，不用再等开门那 120 毫秒
+            _railEnterAtMs = double.NegativeInfinity;
+            _rail.To(1f, Tokens.RailMs);
         }
 
         switch (idx)
