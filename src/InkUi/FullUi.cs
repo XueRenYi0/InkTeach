@@ -234,8 +234,8 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private bool _peekArmed;
 
-    /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按两栏里的布局走**：
-    /// 左列 外观（3）＋ 书写（3）；右列 墨迹（3）——见 <see cref="MoreRowRect"/>。</summary>
+    /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按三列里的布局走**：
+    /// 外观（4）/ 书写（5）/ 墨迹（3）三列并排——见 <see cref="MoreRowRect"/>。</summary>
     private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, DwellShape, Pressure, FineStroke, Predict, RestoreInk, PptAutoSave, HistoryDays, TouchGestures }
 
     /// <summary>
@@ -267,9 +267,10 @@ public sealed class FullUi : IOverlayUi
         // （真机实测：指针消息 61Hz，设备实际报了 190Hz）。这一行就是"要不要把中间点捞回来"。
         // **默认开**（用户定的：开不开 ink 要有一样的手写体验）；低配机怕性能不够可以一键关。
         (Row.FineStroke, "精细笔迹", false, false, "关掉后写快时线条略粗糙（省一点性能，低配机可关）"),
-        // 墨迹预测（2026-10-09 回归：B4 自绘预测尾；**默认开**，2026-10-08 用户真机验收）。
-        // 关掉 = 不再画预测尾（笔尾更老实；低配 / 老机可关）。链路：行表 → ActivateRow → IsOn → SavePrefs。
-        (Row.Predict, "墨迹预测", false, false, "开了更跟手一点；关掉笔尾更稳当（低配 / 老机可关）"),
+        // 墨迹预测（2026-10-09 回归：B4 自绘预测尾；**默认关**——用户 2026-10-09 二轮定：
+        // "以后新装默认不开，等测试完善了再开"）。开了 = 更跟手一点；关着 = 笔尾更老实。
+        // 链路：行表 → ActivateRow → IsOn → SavePrefs。
+        (Row.Predict, "墨迹预测", false, false, "开了更跟手一点；默认关着，笔尾更稳当（等更完善再默认开）"),
         // 墨迹三条偏好（原本在「墨迹」页，2026-10-02 启动器改版后搬进设置子页）。
         (Row.RestoreInk, "自动恢复上次板书", false, false, "下次启动接上这次的板书"),
         (Row.PptAutoSave, "PPT 墨迹默认自动保存", false, false, "放映时长按菜单仍可临时覆盖"),
@@ -481,8 +482,8 @@ public sealed class FullUi : IOverlayUi
         _host.SetPref("finestroke", st.FineStrokeOn ? null : "0");
         // 触摸手势总开关：**默认开**，同样只写"关了"这一种情况。
         _host.SetPref("touch.gestures", st.TouchGesturesOn ? null : "0");
-        // 墨迹预测：**默认开**，同样只写"关了"这一种情况（引擎启动时自己读它）。
-        _host.SetPref("predict2", st.PredictTailOn ? null : "0");
+        // 墨迹预测：**默认关**（2026-10-09 用户定：等测试完善了再默认开），只写"开了"这一种情况。
+        _host.SetPref("predict2", st.PredictTailOn ? "1" : null);
         // 悬停提示：**默认开**，只写"关了"这一种情况。
         _host.SetPref("tooltip", _tipEnabled ? null : "0");
 
@@ -1321,17 +1322,61 @@ public sealed class FullUi : IOverlayUi
     {
         // 两边的数字要和引擎里各工具的档位对得上（引擎那边是
         // HighlighterWidthPresets 8/18/32、LaserWidthPresets **4/8/14/22**、
-        // WidthPresets **1**/3/6/10/16/24、EraserRadiusPresets 12/22/34、
+        // WidthPresets 1/2/3/4/6/8/10/16/24（2026-10-09 细分过）、EraserRadiusPresets 12/22/34、
         // PixelEraserWidthPresets 46/93/150）。
         // 界面拿不到引擎的 internal 常量（那是**故意**的：界面只认公开契约），
         // 所以两边各留一份数字，靠自检卡住：--paneltest 会把滑条拖到两端，
-        // 断言引擎里那个值真的走到了范围的端点。
+        // 断言引擎里那个值真的走到了范围的端点；档位表也逐项比对（见 WidthGrades）。
         Tool.Highlighter => (8f, 64f),
         Tool.Laser => (4f, 24f),           // 左端 ＝ 最细那一档 4（2026-09-27 晚补的；默认档是 8）
         Tool.Eraser => (8f, 48f),          // 整笔橡皮改的是**落点半径**
         Tool.PixelEraser => (30f, 160f),   // 面积橡皮改的是**那一块的横边**（高 = 横边 × 1.618）
         _ => (1f, 40f),                    // 画笔：左端 = 1（2026-09-27 从 1.5 降下来）
     };
+
+    /// <summary>
+    /// 各工具的**粗细档位**（逻辑像素）——滑条上那些可点的小点就是它：
+    /// 点中一档 = 精确落到那一档（见 <see cref="HitWidthGrade"/>），拖动照旧连续。
+    ///
+    /// 和引擎里那五张表各留一份，靠 --paneltest 逐项比对卡住（同 WidthRange 的老规矩）；
+    /// 界面只认公开契约、拿不到引擎 internal 是故意的。
+    /// 2026-10-09 笔的档位细分（用户："常用 3 号或 4 号；3~10 之间切换更细一点，不多不少"）：
+    /// 1/3/6/10/16/24 → 1/2/3/4/6/8/10/16/24（其余四张表这次不动）。
+    /// </summary>
+    private static readonly float[] PenWidthGrades = { 1f, 2f, 3f, 4f, 6f, 8f, 10f, 16f, 24f };
+    private static readonly float[] HighlighterWidthGrades = { 8f, 18f, 32f };
+    private static readonly float[] LaserWidthGrades = { 4f, 8f, 14f, 22f };
+    private static readonly float[] EraserWidthGrades = { 12f, 22f, 34f };
+    private static readonly float[] PixelEraserWidthGrades = { 46f, 93f, 150f };
+
+    private float[] WidthGrades(Tool tool) => tool switch
+    {
+        Tool.Highlighter => HighlighterWidthGrades,
+        Tool.Laser => LaserWidthGrades,
+        Tool.Eraser => EraserWidthGrades,
+        Tool.PixelEraser => PixelEraserWidthGrades,
+        _ => PenWidthGrades,
+    };
+
+    /// <summary>滑条"档位点"的命中：落在某档 ±6 逻辑像素内 → 返回那一档的值；
+    /// 别处返回 null（照旧连续跳）。白板那一格是板面不透明度，没有档位。</summary>
+    private float? HitWidthGrade(float x)
+    {
+        if (_bandCell == 2 || !BandHasSlider) return null;
+        var (min, max) = WidthRange(_host.State.Tool);
+        if (max <= min) return null;
+        var (left, right) = SliderTrackRange();
+        if (right <= left) return null;
+        float bestD = float.MaxValue, bestV = 0f;
+        foreach (float g in WidthGrades(_host.State.Tool))
+        {
+            if (g < min - 0.01f || g > max + 0.01f) continue;
+            float px = left + (right - left) * ((g - min) / (max - min));
+            float d = MathF.Abs(x - px);
+            if (d < bestD) { bestD = d; bestV = g; }
+        }
+        return bestD <= 6f ? bestV : null;
+    }
 
     private float SliderT(in UiState st)
     {
@@ -2207,7 +2252,8 @@ public sealed class FullUi : IOverlayUi
                 SavePrefs();
                 break;
 
-            // 墨迹预测（2026-10-09 加，B4 自绘预测尾；默认开）：引擎是权威，界面翻转后落盘 "predict2"。
+            // 墨迹预测（2026-10-09 加，B4 自绘预测尾；默认关——2026-10-09 用户定）：
+            // 引擎是权威，界面翻转后落盘 "predict2"。
             case Row.Predict:
                 _host.Commands.SetPredict(!_host.State.PredictTailOn);
                 SavePrefs();
@@ -2281,14 +2327,16 @@ public sealed class FullUi : IOverlayUi
     private const int MoreChipCols = 6;
     private const float MoreRowH = 48f;
     /// <summary>
-    /// 设置页左列两组各几行。**加行时三处一起改**：这里的数字、`Rows` 表、`MoreRowRect`。
+    /// 设置页三列各几行。**加行时三处一起改**：这里的数字、`Rows` 表、`MoreRowRect`。
     /// 2026-10-02 加「悬停提示」那一行时就是这么改的（原来这两个数写死在
     /// `SetWriteHeadRect` 和 `MoreLowerH` 里，两处各写一遍迟早漏一处）。
+    /// 2026-10-09：两列（左列堆"外观＋书写"）→ **三列并排**（外观 / 书写 / 墨迹 各一列）——
+    /// 用户说"设置现在太长了"。原来左列堆 9 行（组头 26 + 9×48 + 8 ≈ 476），三列后最高 5 行。
     /// </summary>
     private const int LookRowCount = 4;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 悬停提示
     private const int WriteRowCount = 5;   // 书写：停顿变图形 / 压感粗细 / 精细笔迹 / 墨迹预测 / 触摸手势总开关
+    private const int InkRowCount = 3;     // 墨迹：自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理
     private const float MoreColumnGap = 16f;
-    private const float MoreWriteGap = 8f;
     private const float MoreSwitchW = 44f;
     private const float MoreSwitchH = 26f;
     private const float MoreCloseSize = 44f;
@@ -2321,16 +2369,16 @@ public sealed class FullUi : IOverlayUi
            + (MoreGroupHeadH + MoreTile + MoreGroupGap) * 2
            + MoreStatusH + 8 + MoreTile;
 
-    /// <summary>设置子页高：工具条组 ＋ 下半两栏（左 外观＋书写；右 墨迹）。</summary>
+    /// <summary>设置子页高：工具条组 ＋ 下半三栏（外观 / 书写 / 墨迹 并排）。</summary>
     private float MoreSettingsH()
         => MorePad * 2 + MoreHeaderH + 8
            + MoreGroupHeadH + MoreProfileH + MoreChipTopGap
            + (ChipsShown ? 2 * MoreChipH + MoreChipGap : 42f)
            + MoreGroupGap + MoreLowerH;
 
+    /// <summary>下半区高度 = 最高那一列（三列并排，三个组头都在同一行）。</summary>
     private static float MoreLowerH
-        => MoreGroupHeadH + LookRowCount * MoreRowH + MoreWriteGap
-           + MoreGroupHeadH + WriteRowCount * MoreRowH;
+        => MoreGroupHeadH + MathF.Max(LookRowCount, MathF.Max(WriteRowCount, InkRowCount)) * MoreRowH;
 
     /// <summary>钉住宫格**只在自定义档**显示（用户 2026-10-02："老是占地方"）。</summary>
     private bool ChipsShown => _profile == Profile.Custom;
@@ -2468,33 +2516,26 @@ public sealed class FullUi : IOverlayUi
         => MoreProfileRect(0).MaxY + MoreChipTopGap
            + (ChipsShown ? 2 * MoreChipH + MoreChipGap : 42f) + MoreGroupGap;
 
-    private float SetColW() => MathF.Max(120f, (MoreContentW() - MoreColumnGap) * 0.5f);
-    private float SetRightX() => MoreLeftX() + SetColW() + MoreColumnGap;
+    /// <summary>三列并排时每列的宽（内容宽减两道列距，再三等分）。</summary>
+    private float SetColW() => MathF.Max(110f, (MoreContentW() - MoreColumnGap * 2f) / 3f);
+    private float SetColX(SetColKind col) => MoreLeftX() + (int)col * (SetColW() + MoreColumnGap);
 
-    private RectF SetLookHeadRect() => new()
+    private RectF SetColHeadRect(SetColKind col) => new()
     {
-        MinX = MoreLeftX(), MinY = SetLowerTop(),
-        MaxX = MoreLeftX() + SetColW(), MaxY = SetLowerTop() + MoreGroupHeadH,
+        MinX = SetColX(col), MinY = SetLowerTop(),
+        MaxX = SetColX(col) + SetColW(), MaxY = SetLowerTop() + MoreGroupHeadH,
     };
-
-    private RectF SetWriteHeadRect()
-    {
-        float y = SetLookHeadRect().MaxY + LookRowCount * MoreRowH + MoreWriteGap;
-        return new RectF { MinX = MoreLeftX(), MinY = y, MaxX = MoreLeftX() + SetColW(), MaxY = y + MoreGroupHeadH };
-    }
-
-    private RectF SetInkHeadRect() => new()
-    {
-        MinX = SetRightX(), MinY = SetLowerTop(),
-        MaxX = SetRightX() + SetColW(), MaxY = SetLowerTop() + MoreGroupHeadH,
-    };
+    private RectF SetLookHeadRect() => SetColHeadRect(SetColKind.Look);
+    private RectF SetWriteHeadRect() => SetColHeadRect(SetColKind.Write);
+    private RectF SetInkHeadRect() => SetColHeadRect(SetColKind.Ink);
 
     /// <summary>
-    /// Rows 在设置页两栏里的位置：左列 外观（3）＋ 书写（2）；右列 墨迹（3）。
+    /// Rows 在设置页三列里的位置：外观（4）/ 书写（5）/ 墨迹（3）**并排**。
     ///
     /// 2026-10-02 加「悬停提示」那一行时，行数**从常量来**（`LookRowCount` /
     /// `WriteRowCount`），不再在 `SetWriteHeadRect` 里写死 `2 * MoreRowH`——
     /// 加行忘改一处，后面的组头就会压到上一行上（仓库在抽屉时代踩过"写死下标"的坑）。
+    /// 2026-10-09：三列并排——行高不再叠两组，只看最高的那一列（`InkRowCount` 也入常量）。
     /// </summary>
     private RectF MoreRowRect(int i) => Rows[i].Kind switch
     {
@@ -2512,18 +2553,13 @@ public sealed class FullUi : IOverlayUi
         _ => SetColRow(SetColKind.Ink, 2),
     };
 
-    /// <summary>设置页左列的三段：外观 / 书写 / 右列墨迹。</summary>
-    private enum SetColKind { Look, Write, Ink }
+    /// <summary>设置页下半的三列：外观 / 书写 / 墨迹（并排；序号 = 列序，`SetColX` 用它）。</summary>
+    private enum SetColKind { Look = 0, Write = 1, Ink = 2 }
 
     private RectF SetColRow(SetColKind col, int idx)
     {
-        float x = col == SetColKind.Ink ? SetRightX() : MoreLeftX();
-        float headBottom = col switch
-        {
-            SetColKind.Look => SetLookHeadRect().MaxY,
-            SetColKind.Write => SetWriteHeadRect().MaxY,
-            _ => SetInkHeadRect().MaxY,
-        };
+        float headBottom = SetColHeadRect(col).MaxY;   // 三列组头同高 → 行起点也一样
+        float x = SetColX(col);
         float y = headBottom + idx * MoreRowH;
         return new RectF { MinX = x, MinY = y, MaxX = x + SetColW(), MaxY = y + MoreRowH };
     }
@@ -3155,7 +3191,9 @@ public sealed class FullUi : IOverlayUi
         if (BandOpen() && BandHasSlider && Widgets.SliderHit(SliderRect()).Contains(p.X, p.Y))
         {
             _sliderDragging = true;
-            DragSlider(p.X);
+            float? grade = HitWidthGrade(p.X);
+            if (grade is float gv) _host.Commands.SetWidth(gv);   // 点在档位点上：精确到那一档
+            else DragSlider(p.X);                                  // 别处：照旧连续（可接着拖）
             return true;
         }
 
@@ -4092,6 +4130,24 @@ public sealed class FullUi : IOverlayUi
                 new RoundedRectangle(new Vortice.RawRectF(left, cy - h * 0.5f, kx, cy + h * 0.5f),
                                      h * 0.5f, h * 0.5f),
                 Brush(ctx, new Color4(ink.R, ink.G, ink.B, _sliderDragging ? 0.85f : 0.55f)));
+
+        // 档位点（2026-10-09）：滑条上可点的"档"——点它就精确到那一档（见 HitWidthGrade），
+        // 拖动仍连续。白板那一格滑的是板面不透明度，没有档位、不画。
+        if (_bandCell != 2)
+        {
+            var (gmin, gmax) = WidthRange(st.Tool);
+            if (gmax > gmin)
+            {
+                var pipBrush = Brush(ctx, _dark ? new Color4(0.78f, 0.80f, 0.84f, 0.55f)
+                                                : new Color4(0.30f, 0.32f, 0.36f, 0.55f));
+                foreach (float g in WidthGrades(st.Tool))
+                {
+                    if (g < gmin - 0.01f || g > gmax + 0.01f) continue;
+                    float px = left + (right - left) * ((g - gmin) / (gmax - gmin));
+                    ctx.FillEllipse(new Ellipse(new Vector2(px, cy), 1.7f, 1.7f), pipBrush);
+                }
+            }
+        }
 
         ctx.FillEllipse(new Ellipse(new Vector2(kx, cy), 7f, 7f), Brush(ctx, Tokens.AccentInk));
         ctx.DrawEllipse(new Ellipse(new Vector2(kx, cy), 7f, 7f),
@@ -5303,6 +5359,17 @@ public sealed class FullUi : IOverlayUi
     /// "这个工具的粗细真的走到了范围的端点"，所以必须拿到和绘制同一份的两个端点。
     /// </summary>
     internal (float Left, float Right) SliderTrackRangeForTest => SliderTrackRange();
+
+    /// <summary>自检用：某工具的粗细档位表（和引擎那张表逐项比对，见 --paneltest ⑥.1）。</summary>
+    internal float[] WidthGradesForTest(Tool tool) => WidthGrades(tool);
+
+    /// <summary>自检用：某个档位值在滑条上的 x（逻辑坐标）——照着它点 = 点中那个档位点。</summary>
+    internal float WidthGradeXForTest(float grade)
+    {
+        var (min, max) = WidthRange(_host.State.Tool);
+        var (left, right) = SliderTrackRange();
+        return left + (right - left) * ((grade - min) / (max - min));
+    }
 
     /// <summary>自检用：「更多」面板 / 启动器格子 / 底栏 / 设置行 / 档位 / 钉住宫格的矩形。</summary>
     internal bool MoreOpenForTest => _moreOpen;

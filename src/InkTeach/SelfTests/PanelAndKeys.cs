@@ -584,6 +584,25 @@ internal sealed partial class App
         Check("拖滑条改粗细", Host.State.Width > widthBefore + 5f,
               $"粗细 {widthBefore:F1} → {Host.State.Width:F1}");
 
+        // 档位点（2026-10-09 用户："点击到档位、滑动连续"）：
+        // ① 界面那份档位表和引擎那张表逐项对得上（两边各留一份的老规矩，靠自检卡）
+        // ② 点中「4」那一档的小点 → 宽度精确 = 4（不是"差不多"）
+        {
+            var gradesUi = ui.WidthGradesForTest(Tool.Pen);
+            bool sameGrades = gradesUi.Length == WidthPresets.Length;
+            for (int gi = 0; gi < gradesUi.Length && sameGrades; gi++)
+                sameGrades = MathF.Abs(gradesUi[gi] - WidthPresets[gi]) < 0.01f;
+            Check("界面档位表 == 引擎档位表（笔）", sameGrades,
+                  $"界面 {string.Join("/", gradesUi)} vs 引擎 {string.Join("/", WidthPresets)}");
+
+            float pipX4 = ui.WidthGradeXForTest(4f);
+            SendMouse((int)(pipX4 * DpiScale), (int)sliderY, 0);                          SettleFrames(60);
+            SendMouse((int)(pipX4 * DpiScale), (int)sliderY, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+            SendMouse((int)(pipX4 * DpiScale), (int)sliderY, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(120);
+            Check("点滑条上的档位点：精确落到那一档（4 逻辑像素）",
+                  MathF.Abs(Host.State.Width - 4f) < 0.01f, $"粗细 = {Host.State.Width:F2}");
+        }
+
         // ---- ⑥.2 滑条**按工具路由**：橡皮终于能调大小了 ----
         //
         // 这一条是被用户点出来的："橡皮擦现在没有调节大小功能"。
@@ -2722,7 +2741,8 @@ internal sealed partial class App
                   !Host.State.FineStrokeOn, $"FineStrokeOn = {Host.State.FineStrokeOn}");
         }
 
-        // 「墨迹预测」（2026-10-09 回归：B4 自绘预测尾，**默认开**）：点行 → 引擎状态翻转 → 落盘。
+        // 「墨迹预测」（2026-10-09 回归：B4 自绘预测尾，**默认关**——用户二轮定：
+        // "以后新装默认不开，等测试完善了再开"）：点行 → 引擎状态翻转 → 落盘。
         // （原 2026-10-05 停用块里顺带的「启动器/底栏提示文案」那段仍留停用——它跟本行无关，
         //   需要时从 git 历史恢复；这里只验"墨迹预测"行自己的链路。）
         {
@@ -2732,7 +2752,7 @@ internal sealed partial class App
             Check("「墨迹预测」是**开关行**（有开关，不是空白行）",
                   ui.IsToggleRowByLabelForTest("墨迹预测"),
                   "IsToggleRow = " + ui.IsToggleRowByLabelForTest("墨迹预测"));
-            Check("墨迹预测默认是开的（B4 自绘预测尾）", Host.State.PredictTailOn,
+            Check("墨迹预测默认是关的（B4 待完善，2026-10-09 用户定）", !Host.State.PredictTailOn,
                   $"PredictTailOn = {Host.State.PredictTailOn}");
 
             // 鼠标悬停设置行 → 出提示（小字搬进提示）
@@ -2749,7 +2769,7 @@ internal sealed partial class App
             SettleFrames(150);
             Check("移开：提示收起", !ui.TipVisibleForTest, $"可见={ui.TipVisibleForTest}");
 
-            // 触摸长按设置行 → 出提示、**这一次松手不执行**（开关保持"开"）
+            // 触摸长按设置行 → 出提示、**这一次松手不执行**（开关保持"关"）
             if (EnsureSyntheticTouch())
             {
                 for (int i = 0; i < 8 && !ui.TipHoldFiredForTest; i++)
@@ -2760,15 +2780,15 @@ internal sealed partial class App
                 Check("长按设置行 0.6 秒：出提示", ui.TipVisibleForTest && ui.TipHoldFiredForTest,
                       $"可见={ui.TipVisibleForTest}，触发={ui.TipHoldFiredForTest}");
                 SendTouches(false, (rhx, rhy)); SettleFrames(200);
-                Check("长按后松手：这一次**不翻转**开关", Host.State.PredictTailOn,
+                Check("长按后松手：这一次**不翻转**开关", !Host.State.PredictTailOn,
                       $"PredictTailOn = {Host.State.PredictTailOn}");
             }
 
             ClickPhysical((predictRow.MinX + predictRow.MaxX) * 0.5f * DpiScale,
                           (predictRow.MinY + predictRow.MaxY) * 0.5f * DpiScale);
             SettleFrames(200);
-            Check("点「墨迹预测」：引擎状态立刻翻转（默认开 → 关）",
-                  !Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
+            Check("点「墨迹预测」：引擎状态立刻翻转（默认关 → 开）",
+                  Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
         }
 
         // 「功能提示」开关也过一遍完整链路（2026-10-02 新增；原叫「悬停提示」）：
@@ -2813,8 +2833,8 @@ internal sealed partial class App
               !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
         Check("精细笔迹偏好也读回来了（重启后仍是关）",
               !Host.State.FineStrokeOn, $"FineStrokeOn = {Host.State.FineStrokeOn}");
-        Check("墨迹预测偏好也读回来了（重启后仍是关）",
-              !Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
+        Check("墨迹预测偏好也读回来了（重启后仍是开）",
+              Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
 
         // 关着开关时，"停在笔上 0.7 秒"必须**什么都不出**（开关真的在闸门上，不是装饰）
         {

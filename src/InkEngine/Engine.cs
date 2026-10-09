@@ -532,9 +532,17 @@ public partial class InkEngine
     /// <summary>Pen width presets, in logical pixels. Cycled with Ctrl+Alt+W
     /// until there is a proper on-screen control for it.
     /// 最细档 2026-09-27 从 1.5 降到 **1**（用户："画笔的最小笔宽设成 1 可以吗？"——
-    /// 1.5 写细字、画坐标轴刻度时还是偏粗）。</summary>
-    internal static readonly float[] WidthPresets = { 1f, 3f, 6f, 10f, 16f, 24f };
-    internal int WidthPresetIndex = 1;
+    /// 1.5 写细字、画坐标轴刻度时还是偏粗）。
+    /// **2026-10-09 细分化**（用户："常用 3 号或 4 号；3~10 档（或 1~10 档）切换更细一点，
+    /// 不多不少、粗细合适"）：1/3/6/10/16/24 → **1/2/3/4/6/8/10/16/24**（9 档）。
+    /// 相邻档都肉眼分得出（1.25~2 倍），没有 4/5/6 这种挤一堆的。默认档仍是 3（下标 2）。
+    /// 界面那份对应表在 `FullUi.PenWidthGrades`，靠 --paneltest 逐项比对卡住。</summary>
+    internal static readonly float[] WidthPresets = { 1f, 2f, 3f, 4f, 6f, 8f, 10f, 16f, 24f };
+    /// <summary>老档位表（2026-09-27 ~ 2026-10-09）：只为**迁移老配置**而留。
+    /// 老配置 `w.pen` 存的是"第几档"，直接按新表读会把 6 读成 2——先过这张表取回数值，
+    /// 再吸附回新表（老表每个值都在新表里，吸附无损）。</summary>
+    internal static readonly float[] LegacyWidthPresets = { 1f, 3f, 6f, 10f, 16f, 24f };
+    internal int WidthPresetIndex = 2;            // = 3f（默认粗细）
 
     /// <summary>
     /// 每种工具各自的粗细档位。**笔和荧光笔的档位不是一回事**：荧光笔是"涂一大条"，
@@ -991,7 +999,7 @@ public partial class InkEngine
     // 旧账（"乱跳"的正身，写在 App.TailJumpTest 的注释里）：鼠标/兼容模式输入是突发的——
     // 来一阵 → 尾巴甩出去；间隔一超 20ms → 速度清零 → 尾巴整个消失。修法 = 长度限速平滑。
     // 纪律：只画显示（独立几何，不进文档/存档/命中）、每帧重建、慢写/反向/断笔由
-    // InkPredictor 内建把关；开关：设置「墨迹预测」行 / `--nopredict2`（默认开）。
+    // InkPredictor 内建把关；开关：设置「墨迹预测」行 / `--nopredict2`（默认关，2026-10-09 用户定）。
     internal static bool PredictTailEnabled;
     /// <summary>急转丢速阈值（cos；默认 cos60°）。命令行 `--turndeg N`（度）改；
     /// 180 = 只挡"完全反向"的老行为（A/B 对照）。见 InkPredictor.SharpTurnCos。</summary>
@@ -2209,9 +2217,9 @@ public partial class InkEngine
             // （实测：不同点数 = 0）。现在它只管它该管的——曲线化开不开。
             if (args.Contains("--nosmooth")) StrokeSmoothing.SetEnabled(false);
             if (args.Contains("--smooth")) StrokeSmoothing.SetEnabled(true);
-            // B4：自绘预测尾（2026-10-08 用户 90Hz 真机验收 → **默认开**；2026-10-09 起
-            // 在设置页有「墨迹预测」开关，偏好落盘 `ui.predict2`；`--nopredict2` 关、
-            // `--predict2` 强开，两者都给对照实验用、优先于偏好）
+            // B4：自绘预测尾（2026-10-08 用户 90Hz 真机验收 → 当时设默认开；2026-10-09 用户改口径：
+            // **新装默认关**，等测试完善了再默认开）。设置页「墨迹预测」开关，偏好落盘 `ui.predict2`；
+            // `--nopredict2` 关、`--predict2` 强开，两者都给对照实验用、优先于偏好。
             _noPredictArg = args.Contains("--nopredict2");
             _forcePredictArg = args.Contains("--predict2");
             ApplyPredictTailSetting();
@@ -2390,8 +2398,17 @@ public partial class InkEngine
         }
         // **粗细档**（每个工具分开记，用户 2026-09-30 定）：存的是"第几档"，
         // 读回来时把档位和对应的逻辑宽度一起恢复（见 CycleWidth 里的写入）。
-        if (int.TryParse(GetUiPref("w.pen"), out int wPen) && wPen >= 0 && wPen < WidthPresets.Length)
-        { WidthPresetIndex = wPen; PenWidthLogical = WidthPresets[wPen]; }
+        // 笔的档位表 2026-10-09 换过：新格式写 `w2.pen`；`w.pen` 是老格式（老表下标）——
+        // 过 `LegacyWidthPresets` 取回数值再吸附回新表，老的"我设过 6px"不会被读成 2px。
+        if (int.TryParse(GetUiPref("w2.pen"), out int wPen2) && wPen2 >= 0 && wPen2 < WidthPresets.Length)
+        { WidthPresetIndex = wPen2; PenWidthLogical = WidthPresets[wPen2]; }
+        else if (int.TryParse(GetUiPref("w.pen"), out int wPenOld) && wPenOld >= 0 && wPenOld < LegacyWidthPresets.Length)
+        {
+            float legacyVal = LegacyWidthPresets[wPenOld];
+            int ni = Array.IndexOf(WidthPresets, legacyVal);
+            WidthPresetIndex = ni >= 0 ? ni : WidthPresetIndex;
+            PenWidthLogical = WidthPresets[WidthPresetIndex];
+        }
         if (int.TryParse(GetUiPref("w.hl"), out int wHl) && wHl >= 0 && wHl < HighlighterWidthPresets.Length)
         { HighlighterWidthIndex = wHl; HighlighterWidthLogical = HighlighterWidthPresets[wHl]; }
         if (int.TryParse(GetUiPref("w.laser"), out int wLaser) && wLaser >= 0 && wLaser < LaserWidthPresets.Length)
@@ -10308,7 +10325,9 @@ public partial class InkEngine
                         + $"（本机实际 {CurrentToolWidthLogical * DpiScale:F0} 物理像素）");
         EraserTelemetry?.Note($"{ToolName(Tool)}粗细 → {CurrentToolWidthLogical:F0} 逻辑像素", NowMs);
         // **记住粗细档**（用户 2026-09-30 定：笔 / 荧光笔 / 激光笔 / 面积擦 分开记）
-        SetUiPref("w.pen", WidthPresetIndex.ToString());
+        // 笔同时写一份"数值"（`wv.pen`）：档位表以后再变，数值那份照旧能读回来。
+        SetUiPref("w2.pen", WidthPresetIndex.ToString());
+        SetUiPref("wv.pen", PenWidthLogical.ToString("0.##"));
         SetUiPref("w.hl", HighlighterWidthIndex.ToString());
         SetUiPref("w.laser", LaserWidthIndex.ToString());
         SetUiPref("w.pixel", PixelEraserWidthIndex.ToString());
@@ -10620,7 +10639,7 @@ public partial class InkEngine
         DwellShapeOn = DwellShapeEnabled,
         PressureOn = PressureWidth.Enabled,      // 界面拿它显示「设置 → 书写 → 压感粗细」那个开关
         FineStrokeOn = RawInputCapture,          // 「设置 → 书写 → 精细笔迹」（原始输入补点）总开关
-        PredictTailOn = PredictTailEnabled,      // 「设置 → 书写 → 墨迹预测」（B4 自绘预测尾）总开关（默认开）
+        PredictTailOn = PredictTailEnabled,      // 「设置 → 书写 → 墨迹预测」（B4 自绘预测尾）总开关（默认关）
         TouchGesturesOn = _touch.Enabled,        // 「设置 → 书写 → 触摸手势」总开关（默认开）
         // [删除 2026-10-05] PredictOn（墨迹预测）：随老预测系统移除。
         ScreenIndex = ScreenIndex,
@@ -10821,7 +10840,7 @@ public partial class InkEngine
     /// <summary>精简笔迹（原始输入补点）的偏好键（同样只写"关过"的那一份）。</summary>
     private const string FineStrokePrefKey = "finestroke";
 
-    /// <summary>「墨迹预测」（B4 自绘预测尾）的偏好键（默认开，只写"关过"的那一份）。</summary>
+    /// <summary>「墨迹预测」（B4 自绘预测尾）的偏好键（默认关，只写"开过"的那一份）。</summary>
     private const string PredictPrefKey = "predict2";
 
     /// <summary>命令行上有没有 `--nopredict2` / `--predict2`（对照实验用，优先于用户偏好）。</summary>
@@ -10869,9 +10888,10 @@ public partial class InkEngine
     /// <summary>启动时应用"墨迹预测"偏好（自检要单独调一次，理由同压感 / 精细笔迹）。</summary>
     internal void ApplyPredictPrefForTest() => ApplyPredictTailSetting();
 
-    /// <summary>默认开；命令行为对照实验优先（`--nopredict2` 关 / `--predict2` 开），否则听偏好。</summary>
+    /// <summary>默认**关**（2026-10-09 用户定：等测试完善了再默认开）；命令行为对照实验优先
+    /// （`--nopredict2` 关 / `--predict2` 开），否则听偏好（偏好写过 "1" 才开）。</summary>
     private void ApplyPredictTailSetting()
-        => PredictTailEnabled = !_noPredictArg && (_forcePredictArg || GetUiPref(PredictPrefKey) != "0");
+        => PredictTailEnabled = !_noPredictArg && (_forcePredictArg || GetUiPref(PredictPrefKey) == "1");
 
     /// <summary>
     /// 自检用：把"压感粗细"的偏好**重新应用一次**——模拟"重开软件"里读偏好那一步。
