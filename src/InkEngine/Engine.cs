@@ -6052,6 +6052,7 @@ public partial class InkEngine
     private Vector2 _g2StartMid, _g2LastMid;   // 双指：起点中点 / 上一帧中点
     private int _g2Axis;              // 0 未定 / 1 横（翻页）/ 2 纵（漫游）
     private uint _g2IdA, _g2IdB;      // 钉住的两根手指（2026-10-09：手掌/杂触点不参与；0 = 未钉）
+    private float _g2ScrollSm;        // 双指漫游的滚动量平滑（压"两指事件交错"的半格锯齿）
     private bool _g2Turned;           // 这一次手势已经翻过页（一次手势只翻一页）
     private bool _g2Transform;        // 有选中：这一次双指是在变换对象
     private bool _g2Tap;              // 两指点按候选（松手时结算）
@@ -6323,6 +6324,7 @@ public partial class InkEngine
         _g2Turned = false;
         _g2Tap = false;
         _g2IdA = _g2IdB = 0;               // 手势收场：钉子放掉（下一轮重新钉）
+        _g2ScrollSm = 0f;
         StopDwellTimer();
         _dirty = true;
         return !normalStroke;                   // 写字那条：清完触点后照常走 EndStroke
@@ -6348,6 +6350,7 @@ public partial class InkEngine
         _g2Turned = false;
         _g2Tap = false;
         _g2IdA = _g2IdB = 0;               // 手势中断：钉子一并放掉
+        _g2ScrollSm = 0f;
         Console.WriteLine("触摸手势中断（丢捕获/换设备）");
         _dirty = true;
     }
@@ -6451,6 +6454,7 @@ public partial class InkEngine
         if (_g2IdA != 0 && _touch.Contains(_g2IdA) && _touch.Contains(_g2IdB)) return;
         _g2IdA = p.IdA;
         _g2IdB = p.IdB;
+        _g2ScrollSm = 0f;
 
         _g2StartMid = _g2LastMid = (p.A + p.B) * 0.5f;
         _g2Axis = 0;
@@ -6534,7 +6538,13 @@ public partial class InkEngine
         {
             // 上下 = 漫游：走**鼠标滚轮/上下键同一个** ScrollCanvasBy（不再自己写相机数学）。
             // 系数见 TouchScrollGain（真机反馈 1:1 不够，暂定 2 倍）。
-            ScrollCanvasBy(dy * TouchScrollGain / DpiScale);
+            // **2026-10-09 二轮双保险**（用户复测仍报"抖得厉害"）：
+            //   ① 两指的事件交错到达时，中点会呈"半格锯齿"——轻 EMA 抹平；
+            //   ② 单事件异常大跳（丢帧重放 / 掌缘蹭入）限幅，别让画面猛跳。
+            _g2ScrollSm += (dy - _g2ScrollSm) * 0.55f;
+            float lim = 90f * DpiScale;
+            float use = Math.Clamp(_g2ScrollSm, -lim, lim);
+            ScrollCanvasBy(use * TouchScrollGain / DpiScale);
             return;
         }
 

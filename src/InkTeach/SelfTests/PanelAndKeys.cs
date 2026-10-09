@@ -796,6 +796,63 @@ internal sealed partial class App
             Check("写完挪开：色带慢隐（不再一点就收）", !ui.RailOpenForTest, $"张开 = {ui.RailOpenForTest}");
         }
 
+        // ---- ⑥.3e 硬规则（2026-10-09 二轮）：收起时必须是色带；抬手后要"离开一次"才许变卡片 ----
+        // 用户二轮反馈："色带收起来以后，在附近写字，偶尔还是会退化成卡片"。
+        // 根因：落笔那一瞬间它可能正张到一半——旧的"冻结"只是不再改目标，**进行中的张开
+        // 动画会自己走完**。现在：落笔时没收干净的一律拉回色线；整笔冻结；抬手后进"余温"
+        // （600ms 内不许开始张开），且必须先让指针离开判定区一次、再停回来才重开。
+        {
+            // 先收干净（挪到画布中下 + 等慢隐走完）
+            int cxE = (int)(_virtualX + _virtualW * 0.45f);
+            int cyE = (int)(_virtualY + _virtualH * 0.45f);
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.68f), 0);
+            SettleFrames(1300);
+            bool closedE = ui.RailValueForTest < 0.02f;
+
+            var barE = ui.BarRectForTest;
+            int gx = (int)((barE.MinX + barE.MaxX) * 0.5f * DpiScale);
+            int gy = (int)((barE.MinY + barE.MaxY) * 0.5f * DpiScale);
+
+            // 悬停 300ms：它已经"开始张、还没张完"（240ms 延迟 + 230ms 动画的半路）
+            SendMouse(gx, gy, 0);
+            SettleFrames(300);
+
+            // 移到画布落笔写——半开状态必须被**收回色线**，整笔保持色线
+            SendMouse(cxE, cyE, 0);
+            SendMouse(cxE, cyE, Native.MOUSEEVENTF_LEFTDOWN);
+            SettleFrames(60);
+            SendMouse(cxE + 120, cyE, 0);
+            SettleFrames(500);
+            Check("落笔时没收干净的色带：整笔被收回色线（半路也不许变卡片）",
+                  closedE && ui.RailValueForTest < 0.05f,
+                  $"写前收干净 = {closedE}，写中张开度 = {ui.RailValueForTest:F2}");
+
+            // 按住挪到面板上、就在那里抬手——"写完笔还停在色带附近"
+            SendMouse(gx, gy, 0);
+            SettleFrames(120);
+            SendMouse(gx, gy, Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(120);
+            // 抬手后在原地轻动一下（让悬停值是"新鲜"的）：仍不许弹
+            SendMouse(gx - 1, gy, 0);
+            SettleFrames(1100);
+            Check("抬手后笔还停在面板上：仍不弹（要等'离开一次'）",
+                  ui.RailValueForTest < 0.05f, $"张开度 = {ui.RailValueForTest:F2}");
+            Host.Commands.Undo();                      // 这一笔撤掉，别影响后面的笔画计数
+            SettleFrames(150);
+
+            // 离开一次 → 再停回来：这次按正常节奏张开
+            SendMouse(cxE, cyE, 0);
+            SettleFrames(150);
+            SendMouse(gx, gy, 0);
+            SettleFrames(900);
+            Check("离开一次再停回来：色带恢复张开", ui.RailValueForTest > 0.99f,
+                  $"张开度 = {ui.RailValueForTest:F2}");
+
+            // 收尾：挪开 + 等它慢隐收干净（给下一段一个清爽的状态）
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.68f), 0);
+            SettleFrames(1300);
+        }
+
         // ---- ⑥.3b 主条那几格"选中显示选中什么"（2026-09-26）----
         //
         // 用户那天说的那条逻辑：**没选中画一个固定的，选中之后就画"手里到底是什么"**。

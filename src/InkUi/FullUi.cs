@@ -213,6 +213,16 @@ public sealed class FullUi : IOverlayUi
     /// <summary>悬停意图的两个时刻：进热区 120ms 才展开、离开 220ms 才收回——路过不算数。</summary>
     private double _railEnterAtMs = double.NegativeInfinity;
     private double _railExitAtMs = double.NegativeInfinity;
+    /// <summary>写字与色带的边界（2026-10-09 二轮硬规则）：上一帧是否在写字（边沿检测）。</summary>
+    private bool _railWasDrawing;
+    /// <summary>最近一笔的抬手时刻："余温"用它（抬手后 <see cref="Tokens.RailRestMs"/> 内不许开始张开）。</summary>
+    private double _railStrokeEndMs = double.NegativeInfinity;
+    /// <summary>写字后**必须让指针离开判定区一次**、再停回来，才允许张开（防"写完还在附近就弹卡片"）。</summary>
+    private bool _railRequireLeave;
+    /// <summary>最近一次"指针位置"更新的时刻（PointerMove/PointerDown 里刷）——
+    /// 判定"指针真的离开过"要用它：**没有新位置就别当作离开**（落笔期间引擎不转发悬停，
+    /// railHover 会是旧值；拿旧值清 requireLeave 会让规则形同虚设）。</summary>
+    private double _railHoverStamp = double.NegativeInfinity;
     private bool _hoverInside;             // 指针在"看得见的那一块"里
     private double _leftAtMs = double.NegativeInfinity;
     /// <summary>触摸/笔唤出贴边面板后的"停留截止"：松手后别 0.7s 就收（手指还要再点工具）。
@@ -1706,13 +1716,26 @@ public sealed class FullUi : IOverlayUi
             return;
         }
 
-        // 正在写 / 触摸手势进行中：**色带完全冻结**（2026-10-09 用户定："写字写到附近
-        // 该保持不动"）。不张开、不收合、两个计时器一起失效——写完抬手后下面那套照常接管。
-        // 以前"写着写着变成花格子 / 一会儿一跳"的机理：落笔后引擎不再转发悬停
-        //（OnPointerMove 的 !_drawing 闸），railHover 定格在落笔前的值——
-        // 若它已攒了张开意图，整笔期间 UpdateRail 还在每帧执行、照样把它张开；
-        // 反之落笔点不在面板上时，收合计时器又会写到一半把它收掉。
-        if (_host.State.IsDrawing)
+        // ---- 写字与色带的边界（2026-10-09 二轮定稿，用户原话：
+        //      "只要收起来，它就一定是色带，不能是那种格子状的；只有退出来以后才能变成卡片"）----
+        // 三条硬规则：
+        //   ① 落笔那一刻：**没收干净的一律收回色线**——包括"正在张开的半路"
+        //      （只冻结不拉回的话，张开动画会自己走完，写着写着就变成卡片了——这正是
+        //       用户二轮里说的"偶尔还是会退化成卡片"）。已经完全展开（≥0.999）的保持不动。
+        //   ② 整笔期间：冻结（不张不收）。
+        //   ③ 抬手之后：进"余温"，且**必须让指针离开判定区一次**，再停回来（并距抬手 >
+        //      RailRestMs），才允许重新张开——写字间歇的停顿不再把卡片弹出来。
+        bool drawingNow = _host.State.IsDrawing;
+        double now = _host.NowMs;
+        if (drawingNow && !_railWasDrawing)
+        {
+            _railRequireLeave = true;
+            _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
+            if (_rail.Value < 0.999f) _rail.To(0f, Tokens.RailMs);
+        }
+        if (!drawingNow && _railWasDrawing) _railStrokeEndMs = now;
+        _railWasDrawing = drawingNow;
+        if (drawingNow)
         {
             _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
             return;
@@ -1748,8 +1771,6 @@ public sealed class FullUi : IOverlayUi
             return;
         }
 
-        double now = _host.NowMs;
-
         // 触摸没有悬停：手指点在**面板任意处**（点工具格也算）就把设置条张开，并保持一段
         // （松手后 2.5s 内不收）——不然触摸用户只能去点那条色线（10 像素），很难点中
         // （2026-10-05 用户实测："点击图标色带不会展开，必须点色带位置"，触摸屏上太麻烦）。
@@ -1762,6 +1783,12 @@ public sealed class FullUi : IOverlayUi
 
         if (_railHover)
         {
+            // 写字余温 + "离开一次"硬规则（见上面 ③）：抬手后马上停回来也不弹。
+            if (_railRequireLeave || now - _railStrokeEndMs < Tokens.RailRestMs)
+            {
+                _railEnterAtMs = double.NegativeInfinity;
+                return;
+            }
             _railExitAtMs = double.NegativeInfinity;
             // **正在收时指针回来：立刻反着张开**（2026-10-09 沉稳档的对偶）。
             // 以前要等它收到 0.5 以下才肯重开（收尾 + 240ms 延迟 + 230ms 动画，最坏 ~0.7s）——
@@ -1778,6 +1805,9 @@ public sealed class FullUi : IOverlayUi
             return;
         }
 
+        // 指针离开判定区——**只有"新的位置更新"才算数**（见 _railHoverStamp 注释）；
+        // 这条同时兑现写字后的"离开一次"。
+        if (!_railHover && _railHoverStamp > _railStrokeEndMs) _railRequireLeave = false;
         _railEnterAtMs = double.NegativeInfinity;
         if (_rail.Value <= 0.001f) { _railExitAtMs = double.NegativeInfinity; return; }
         if (double.IsNegativeInfinity(_railExitAtMs)) _railExitAtMs = now;
@@ -3006,6 +3036,7 @@ public sealed class FullUi : IOverlayUi
         // 只在 PointerMove 里更新 _railHover 的话，老师用笔点面板时设置条根本不会张开
         // （鼠标能张开、笔不能——这类"只在一种设备上坏"的 bug 最难查）。
         _railHover = !_host.State.PassThrough && BandVisible() && RailHoverZone().Contains(p.X, p.Y);
+        _railHoverStamp = _host.NowMs;    // 位置更新打时间戳（写字后"离开一次"的判据用）
         bool touchLike = e.FromTouch || e.FromPen;   // 手指/笔接触（鼠标不参与长按）
 
         // 贴边隐藏的**触屏节奏**（2026-10-05）：手指/笔把面板按出来后，给一段"够得着"的
@@ -3172,6 +3203,7 @@ public sealed class FullUi : IOverlayUi
         _leftAtMs = _host.NowMs;
         var p = Local(e);
         _railHover = !_host.State.PassThrough && BandVisible() && RailHoverZone().Contains(p.X, p.Y);
+        _railHoverStamp = _host.NowMs;    // 位置更新打时间戳（写字后"离开一次"的判据用）
 
         // 「更多」面板开着时，指针只喂给面板：更新悬停、别再碰主条的悬停/拖动状态
         if (_moreOpen)

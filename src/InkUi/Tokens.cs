@@ -160,6 +160,12 @@ internal static class Tokens
     /// <summary>指针离开后延迟这么久才收（防"边上动一下就闪"）。见 <see cref="RailShowDelayMs"/>。</summary>
     public const double RailHideDelayMs = 800;
 
+    /// <summary>
+    /// 写字"余温"（2026-10-09 二轮）：一笔抬手后这么久内**不许开始张开**。
+    /// 写字间歇的停顿不该把卡片弹出来——停笔超过它、并且指针停稳，才算"要用了"。
+    /// </summary>
+    public const double RailRestMs = 600;
+
     /// <summary>鼠标离色线多近就算"碰到了"（上下各让一点，不用精确压在 10 像素的线上）。</summary>
     public const float RailHoverPad = 10f;
 
