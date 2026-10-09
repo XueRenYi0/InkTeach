@@ -691,6 +691,47 @@ internal sealed partial class App
             int redBack = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 255, 0, 0, 40);
             Check("退出穿透：页重新上屏", redBack > 4000, $"{redBack}/6400 像素");
 
+            // ⭐ 白板盖文档（乙·"透明纸"；2026-10-08 拍板、2026-10-09 实现＋同日修订语义）：
+            //   升起 → 页图/页码条让位、白板实底盖住（**不露桌面**）；
+            //   **墨与图像都留在白板上**（用户用法："截图 PDF 里的题 → 摆到白板上"，
+            //   那些截图/批注就是要摆在白板上的内容，所以不隐）。
+            //   落下 → PDF 原样回来（位置一个像素不动，页位图按需重生成）。
+            {
+                // 页 1 是纯红（WriteTestPdf 的 "1 0 0 rg"）——拿"页色"当"页在不在"的探针。
+                int pageRedBefore = ScreenProbe.CountNear(rb0 + 40, ry0 + 40, 80, 80, 255, 0, 0, 40);
+                var coverMark = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                                             Color = new Color4(0f, 0f, 0f, 1f), Width = 10f };
+                coverMark.AddPoint(rb0 + 240f, ry0 + 240f, 1f, 0);
+                coverMark.AddPoint(rb0 + 360f, ry0 + 320f, 1f, 0);
+                Doc.AddStroke(coverMark);
+                SettleFrames(300);
+                int inkBefore = ScreenProbe.CountNear(rb0 + 270, ry0 + 260, 100, 80, 0, 0, 0, 40);
+
+                SetBoardOverDocFromUi(true);
+                SettleFrames(420);
+                Check("白板升起：页位图让位 + 条收起 + 状态置位",
+                      BoardOverDoc && DocView.ResidentPages == 0 && !PageBarVisible,
+                      $"升起={BoardOverDoc} 驻留={DocView.ResidentPages} 条可见={PageBarVisible}");
+                int pageRedCovered = ScreenProbe.CountNear(rb0 + 40, ry0 + 40, 80, 80, 255, 0, 0, 40);
+                int brW = (int)MathF.Round(BoardColor.R * 255);
+                int bgW = (int)MathF.Round(BoardColor.G * 255);
+                int bbW = (int)MathF.Round(BoardColor.B * 255);
+                int boardCover = ScreenProbe.CountNear(rb0 + 40, ry0 + 40, 80, 80, brW, bgW, bbW, 6);
+                Check("白板升起：页区整块是板底（不漏页面、不漏桌面）",
+                      pageRedCovered < 60 && boardCover > 5000,
+                      $"页色残留 {pageRedCovered}、板色 {boardCover}/6400（升前页色 {pageRedBefore}）");
+                int inkCovered = ScreenProbe.CountNear(rb0 + 270, ry0 + 260, 100, 80, 0, 0, 0, 40);
+                Check("白板升起：墨留在白板上（截图/批注是白板的内容，不隐）",
+                      inkCovered > 100, $"{inkCovered} 黑像素（升前 {inkBefore}）");
+
+                SetBoardOverDocFromUi(false);
+                SettleFrames(420);
+                int pageRedAfter = ScreenProbe.CountNear(rb0 + 40, ry0 + 40, 80, 80, 255, 0, 0, 40);
+                Check("白板落下：页/条回来 + 状态清零（PDF 位置不动）",
+                      !BoardOverDoc && DocView.ResidentPages >= 1 && PageBarVisible && pageRedAfter > 5000,
+                      $"升起={BoardOverDoc} 驻留={DocView.ResidentPages} 条可见={PageBarVisible} 页红={pageRedAfter}");
+            }
+
             CloseDocument();
             Check("关文档：纸底恢复原板态（原来关着 → 现在也关着）", !BoardOn, $"BoardOn={BoardOn}");
             if (Doc.PageKey != 0) Doc.SwitchPage(0);

@@ -470,9 +470,16 @@ internal sealed partial class App
         // 旧的那套"点一次钉住、再点同一个工具收起"已经删掉了——两套规则会打架：
         // 指针还停在面板上，收下去会立刻又张开。
         var penCellAgain = ui.CellRectForTest(3);
-        ClickPhysical((penCellAgain.MinX + penCellAgain.MaxX) * 0.5f * DpiScale,
-                      (penCellAgain.MinY + penCellAgain.MaxY) * 0.5f * DpiScale);
-        SettleFrames(560);                              // 240ms 张开延迟 + 230ms 动画，留足
+        int penCx = (int)((penCellAgain.MinX + penCellAgain.MaxX) * 0.5f * DpiScale);
+        int penCy = (int)((penCellAgain.MinY + penCellAgain.MaxY) * 0.5f * DpiScale);
+        // 合成鼠标**偶尔会丢一次移动/点击**（同一份代码一次红一次绿，自检里见过多次）——
+        // 和下面"挪回主条"那条同一个口径：每次把坐标挪 1 像素再发，最多给三次机会。
+        //（2026-10-09 收编：这条以前是裸的，套件里偶发红过。）
+        for (int attempt = 0; attempt < 4 && !(ui.RailHoverForTest && ui.RailOpenForTest); attempt++)
+        {
+            ClickPhysical(penCx, penCy - attempt);
+            SettleFrames(560);                          // 240ms 张开延迟 + 230ms 动画，留足
+        }
         Check("焦点在面板上：设置条张开",
               ui.RailHoverForTest && ui.RailOpenForTest
               && MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandHeight) < 1.5f,
@@ -492,8 +499,9 @@ internal sealed partial class App
         int hoverPx = (int)((barHover.MinX + barHover.MaxX) * 0.5f * DpiScale);
         int hoverPy = (int)((barHover.MinY + barHover.MaxY) * 0.5f * DpiScale);
         // 合成鼠标**偶尔会丢一次移动**（自检里见过：同一份代码，一次跑红一次跑绿）——
-        // 每次把坐标挪 1 像素再发，保证真的产生一次 WM_MOUSEMOVE，最多给三次机会。
-        for (int attempt = 0; attempt < 3 && !ui.RailOpenForTest; attempt++)
+        // 每次把坐标挪 1 像素再发，保证真的产生一次 WM_MOUSEMOVE，最多给四次机会。
+        // （hover 也要一起判：丢一次移动时"没开"，重试才有意义；2026-10-09 收编。）
+        for (int attempt = 0; attempt < 4 && !(ui.RailOpenForTest && ui.RailHoverForTest); attempt++)
         {
             SendMouse(hoverPx, hoverPy - attempt, 0);
             SettleFrames(560);
@@ -945,6 +953,38 @@ internal sealed partial class App
             Check("穿透里点色线：不张开（还是那条色线）",
                   ui.RailValueForTest < 0.05f, $"张开度 = {ui.RailValueForTest:F2}");
             Host.Commands.SetPassThrough(false);                          SettleFrames(300);
+        }
+
+        // ---- ⑥.3g 文档模式：点"白板"格 = 白板升起/落下（乙·透明纸，2026-10-09）----
+        // 引擎侧全链路（页让位/条收起/不露底/墨与图像留着/落下回来）在 --doctest 里钉；
+        // 这里只钉 UI 这一格的动作：文档开着时它管"升起/落下"，不再是"开板/关板"。
+        {
+            // 开一个假文档（直接用页层；不走"打开文档"对话框）
+            DocView.UseWorker = false;
+            DocView.Generator = sp => FakeDocPageBgra(sp.OutW, sp.OutH, 60, 180, 220);
+            var docSpecsG = new List<DocPages.Spec> { DocSpec(600, 900, "UI假页.png") };
+            DocView.Open(docSpecsG, "UI 假文档", 1200f, 0f, 24f);
+            SettleFrames(200);
+            Check("（准备）假文档开着（DocOpen 状态可见）", Host.State.DocOpen,
+                  $"DocOpen={Host.State.DocOpen}");
+
+            var boardCellG = ui.CellRectForTest(2);
+            int bgx = (int)((boardCellG.MinX + boardCellG.MaxX) * 0.5f * DpiScale);
+            int bgy = (int)((boardCellG.MinY + boardCellG.MaxY) * 0.5f * DpiScale);
+            bool up0 = Host.State.BoardOverDoc;
+            ClickPhysical(bgx, bgy);
+            SettleFrames(250);
+            Check("文档模式点白板格：白板升起（盖住文档）", !up0 && Host.State.BoardOverDoc,
+                  $"升前={up0}、升后={Host.State.BoardOverDoc}");
+
+            ClickPhysical(bgx, bgy);
+            SettleFrames(250);
+            Check("再点一下：白板落下（PDF 回来）", !Host.State.BoardOverDoc,
+                  $"升起={Host.State.BoardOverDoc}");
+
+            Host.Commands.SetBoardOverDoc(false);      // 兜底：确保状态清零再收文档
+            DocView.Close();
+            SettleFrames(250);
         }
 
         // ---- ⑥.3b 主条那几格"选中显示选中什么"（2026-09-26）----

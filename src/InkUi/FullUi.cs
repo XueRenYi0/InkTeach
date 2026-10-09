@@ -3595,6 +3595,17 @@ public sealed class FullUi : IOverlayUi
             // ② 那条判据必须带 `prevBand == 2`：老师从图形面板点回白板那一格，
             // 意思是"把板拿回来用"，那时候不该顺手把它关掉（同笔 / 荧光笔 / 图形那几格）。
             case 2:
+                // 文档开着（纸底自动开着）：这一格 = 白板"升起 / 落下"（乙·透明纸，
+                // 2026-10-08 拍板、2026-10-09 实现）——**升起才会盖住 PDF**：
+                //   ① 没升起 → 升起（顺手把设置条拿过来）
+                //   ② 已升起、色带也在这一格 → 落下（PDF 原样回来，覆盖期间写的墨留在页上）
+                //   ③ 已升起、色带在别处 → 只把色带拿过来
+                if (st.DocOpen)
+                {
+                    if (!st.BoardOverDoc) cmd.SetBoardOverDoc(true);
+                    else if (prevBand == 2) cmd.SetBoardOverDoc(false);
+                    break;
+                }
                 if (!st.Board) cmd.SetBoard(true);             // ① 开板
                 else if (prevBand == 2) cmd.SetBoard(false);   // ③ 关板
                 break;                                         // ② 只把色带拿过来，板不动

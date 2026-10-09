@@ -285,6 +285,14 @@ public interface IEngineCommands
     /// </summary>
     void SetBoard(bool on);
 
+    /// <summary>
+    /// **白板"升起 / 落下"盖文档**（乙·透明纸，2026-10-08 拍板）：
+    /// 升起 = 页图/页码条让位、白板实底盖住（不露桌面）、已有的墨隐起来（干净白面），
+    /// 这时写的字照旧进文档空间（落下后留在页上）；落下 = PDF 原样回来。
+    /// 入口：**文档开着时**点"白板"格 / Ctrl+B；没文档时调用无效果。
+    /// </summary>
+    void SetBoardOverDoc(bool up);
+
     /// <summary>白板的底色（白/绿/黑）。换底色会整层重画，和开关同理。</summary>
     void SetBoardColor(Color4 color);
 
@@ -900,6 +908,12 @@ public readonly struct UiState
     public bool PassThrough { get; init; }
     /// <summary>是否处于白板模式（画布有不透明底色）。</summary>
     public bool Board { get; init; }
+
+    /// <summary>
+    /// 白板"升起"盖文档（乙·透明纸）：true = 页图/页码条让位、白板盖住 PDF 写字；
+    /// 入口 = 文档开着时的白板格 / Ctrl+B（见 <see cref="IEngineCommands.SetBoardOverDoc"/>）。
+    /// </summary>
+    public bool BoardOverDoc { get; init; }
     /// <summary>白板底色（界面用它高亮"现在是哪种板"）。</summary>
     public Color4 BoardColor { get; init; }
     /// <summary>白板底纹：0 = 无，1 = 方格，2 = 横线（界面用它高亮当前那一档）。</summary>

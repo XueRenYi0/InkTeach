@@ -1094,6 +1094,7 @@ internal sealed partial class OverlayWindow : IDisposable
         var pages = app.DocView;
         if (!pages.IsOpen) return;
         if (app.PassThrough) return;      // 穿透 = 全让开（S2）：页不画（位图也在 SyncDocPages 里放了）
+        if (app.BoardOverDoc) return;     // 白板"升起"盖文档（乙）：页让位，白板实底盖住写字
 
         ID2D1SolidColorBrush placeholder = null, failed = null, border = null;
         int i = pages.FirstAtOrAfter(canvas.MinY);
@@ -1154,8 +1155,9 @@ internal sealed partial class OverlayWindow : IDisposable
         var pages = app.DocView;
 
         // 穿透 = **全让开**（S2，用户 2026-10-07 定）：页不画、不生成、位图全放（省内存）。
+        // **白板"升起"盖文档（乙，2026-10-09）走同一条链**：页让位、位图全放。
         // 状态翻转那一帧要"整层作废"——分块里烘着页像素，不重铺的话穿透了屏幕还留着卷子。
-        bool hidden = app.PassThrough;
+        bool hidden = app.PassThrough || app.BoardOverDoc;
         if (hidden != _docHidden)
         {
             _docHidden = hidden;

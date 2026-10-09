@@ -6,7 +6,9 @@
 ;   1. PrivilegesRequired=lowest → **每用户安装**（默认装到
 ;      %LOCALAPPDATA%\Programs\InkTeach）。三个理由：
 ;        ① 教室机器多半没有管理员权限，装"只给当前用户"不用输密码；
-;        ② 不弹 UAC：双击 → 下一步 → 完事（用户 2026-09-29 要的"简单点操作"）；
+;        ② 不弹 UAC：双击 → 直接装完（用户 2026-09-29 要的"简单点操作"；
+;           2026-10-09 再简化：**五页全关**——欢迎/目录/任务/就绪/完成都不出现，
+;           桌面图标不再问、直接建，装完自动把软件拉起来。老师只需要"双击一次"）；
 ;        ③ **最关键**：App 的"下载 → 换壳 → 重启"更新需要能写自己的目录。
 ;           装到 Program Files 就得每次更新弹 UAC（或者干脆失败）。
 ;
@@ -52,6 +54,13 @@ AppUpdatesURL={#AppUrl}
 DefaultDirName={localappdata}\Programs\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
+; 2026-10-09 用户："安装还要点好几次，有点烦" → **整套向导页全关**：
+; 双击 = 直接开始装（只剩一张进度页），装完自动打开软件。
+; 桌面图标不再问（原来是个 checkedonce 任务页），直接建——教室机器上没人会拒绝它。
+DisableWelcomePage=yes
+DisableDirPage=yes
+DisableReadyPage=yes
+DisableFinishedPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -77,15 +86,13 @@ VersionInfoProductVersion={#AppVersion}
 Name: "chinese"; MessagesFile: "ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
-[Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkedonce
-
 [Files]
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Comment: "屏幕批注 / 白板工具"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Comment: "屏幕批注 / 白板工具"; Tasks: desktopicon
+; 桌面图标：**无条件建**（原来挂在 Tasks 上，为了让"零点击安装"成立，任务页整个不要了）
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Comment: "屏幕批注 / 白板工具"
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

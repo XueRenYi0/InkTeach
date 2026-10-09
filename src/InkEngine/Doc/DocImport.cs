@@ -34,11 +34,12 @@ public partial class InkEngine
     internal bool PageBarActive => PptMode || DocView.IsOpen;
 
     /// <summary>
-    /// 条现在**看得见 / 点得到**吗。与 <see cref="PageBarActive"/> 的差别 = 穿透：
+    /// 条现在**看得见 / 点得到**吗。与 <see cref="PageBarActive"/> 的差别 = 穿透 / 白板盖文档：
     ///   · 文档模式：穿透 = 全让开（S2，用户 2026-10-07 定）→ 条跟着收 ✗；
+    ///     **白板"升起"盖文档（乙）时同一条口径**——页都让位了，条也收（2026-10-09）；
     ///   · PPT 模式：穿透时条**保留**（它管的是下层放映的东西，还有用 ✓，有接输入小窗撑着）。
     /// </summary>
-    internal bool PageBarVisible => PageBarActive && (PptMode || !PassThrough);
+    internal bool PageBarVisible => PageBarActive && (PptMode || (!PassThrough && !BoardOverDoc));
 
     /// <summary>条上的"第几页"（1 起）。文档模式 = 视口中心所在的页（没页时给 1）。</summary>
     internal int BarPageNow
@@ -345,6 +346,8 @@ public partial class InkEngine
         // **文档的"纸底"**：打开文档时确保板底开着（默认白）——
         //   ① 页缝 / 页边有纸感（不再透出桌面）；② 将来"自适应撑满"、页不满屏时四周也是纸。
         // 关文档时恢复老师原来的板态（见 CloseDocument）。
+        // ⚠ "白板盖文档"（乙）的**升起状态**与纸底正交：新文档一律从"落下"起步（2026-10-09）。
+        BoardOverDoc = false;
         _boardWasOnBeforeDoc = BoardOn;
         if (!BoardOn) SetBoardFromUi(true);
 
@@ -397,6 +400,9 @@ public partial class InkEngine
 
         // **纸底随文档一起收**：打开文档时自动开的那个白板，关文档时恢复原样
         //（老师本来就开着 → 不动；本来就关着 → 收掉，别把"文档的纸"留在桌面上）。
+        // ⚠ 先把"白板盖文档"的升起状态清掉再收——不然 SetBoardFromUi(false) 会被
+        //    "先落下"那条分支拦一道（2026-10-09）。
+        BoardOverDoc = false;
         if (!_boardWasOnBeforeDoc)
         {
             if (BoardOn) SetBoardFromUi(false);

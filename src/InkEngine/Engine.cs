@@ -1786,6 +1786,17 @@ public partial class InkEngine
     /// 关掉就是原本的"透明批注"——直接写在别人的 PPT、网页上面。
     /// </summary>
     internal bool BoardOn;
+    /// <summary>
+    /// 白板**"升起"盖文档**（乙·透明纸；2026-10-08 用户拍板 / 2026-10-09 实现，2026-10-09 晚修订）。
+    /// 文档开着时，白板格 / Ctrl+B 控制的是它：升起 → 页图/页码条让位、白板实底盖住（不露桌面）；
+    /// 落下 → PDF 原样回来（**位置一个像素不动**，页位图按需重生成）。
+    ///
+    /// ⚠ **墨和图像都留在白板上**（不隐）——用户的实际用法是：
+    /// "截图 PDF 里的题 → 放到白板上"；截出来的图和写过的墨就是要摆在白板上的内容。
+    /// （早先计划里写的"页图与已有文档墨迹一起隐（干净白面）"按这条修订作废。）
+    /// 与 <see cref="BoardOn"/> 正交：板底（文档的"纸"）始终开着，这个只决定"盖不盖"。
+    /// </summary>
+    internal bool BoardOverDoc;
     internal Color4 BoardColor = new(0.99f, 0.99f, 0.98f, 1f);
     internal double _lastRebuildMs;
     internal double _lastRecordMs;
@@ -10072,7 +10083,11 @@ public partial class InkEngine
             case KeyAction.Redo: Doc.Redo(); break;
             case KeyAction.Copy: CopySelectionToClipboard(); break;
             case KeyAction.Clear: Doc.Clear(); Laser.Clear(); break;
-            case KeyAction.ToggleBoard: SetBoardFromUi(!BoardOn); break;
+            // 文档开着：白板格变成"升起/落下"（乙·透明纸，2026-10-09）——盖住 PDF 写字要用它
+            case KeyAction.ToggleBoard:
+                if (DocView.IsOpen) SetBoardOverDocFromUi(!BoardOverDoc);
+                else SetBoardFromUi(!BoardOn);
+                break;
             case KeyAction.ToggleHud: ShowHud = !ShowHud; break;
             case KeyAction.CycleWidth: CycleWidth(); break;
             case KeyAction.ToggleKeyboardMode: SetKeyboardMode(!KeyboardMode); break;
@@ -10629,6 +10644,7 @@ public partial class InkEngine
         Dash = PenDash,
         PassThrough = PassThrough,
         Board = BoardOn,
+        BoardOverDoc = BoardOverDoc,             // 「白板盖文档」升起状态（文档模式：白板格/条上 ✕ 的语义看它）
         BoardColor = BoardColor,
         BoardPattern = BoardPattern,
         BoardPatternStep = BoardPatternStepLogical,
@@ -11340,10 +11356,34 @@ public partial class InkEngine
     /// </summary>
     internal void SetBoardFromUi(bool on)
     {
+        // 文档开着、白板还"升"在上面时："关板"这一下先解读成**落下**（揭示 PDF），
+        // 别把文档的纸底收掉、露出桌面（2026-10-09 乙·透明纸）。真要关纸底：落下后再关一次。
+        if (!on && DocView.IsOpen && BoardOverDoc) { SetBoardOverDocFromUi(false); return; }
         if (BoardOn == on) return;
         BoardOn = on;
         // 开白板就顺手关掉穿透（另一边在 SetPassThrough 里，两个方向都挡，理由见那儿）
         if (on) SetPassThrough(false);
+        Doc.InvalidateAll();
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 白板**"升起 / 落下"盖文档**（乙·透明纸）。**只有文档开着才有意义**：
+    ///   升起 → 页图/页码条让位（Overlay 的 hidden 条件读它）、白板实底盖住（补开板底，不露桌面）；
+    ///          **墨和图像都留在白板上**（不隐——"截出来的题目要摆到白板上"就是靠它们）。
+    ///   落下 → 文档原样回来（页位图按需重生成）。
+    /// 入口：文档开着时点"白板"格 / Ctrl+B；落下后"关板"那条（✕ / SetBoardFromUi(false)）才收纸底。
+    /// </summary>
+    internal void SetBoardOverDocFromUi(bool up)
+    {
+        if (up == BoardOverDoc) return;
+        if (up && !DocView.IsOpen) return;                 // 没文档不谈"盖"
+        if (up && !BoardOn) SetBoardFromUi(true);          // 白板页本身要实底：板底被关过就补开
+        BoardOverDoc = up;
+        Console.WriteLine(up
+            ? "[文档] 白板升起：页图/页码条让位、白板盖住文档（墨与截图都留在上面）"
+            : "[文档] 白板落下：PDF 原样回来（位置不动）");
         Doc.InvalidateAll();
         _dirty = true;
         NotifyUiStateChanged();
