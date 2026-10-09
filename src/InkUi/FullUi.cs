@@ -2363,10 +2363,15 @@ public sealed class FullUi : IOverlayUi
 
     private float MoreTargetH() => _morePage == MorePage.Home ? MoreHomeH() : MoreSettingsH();
 
-    /// <summary>启动器高：两组（课堂/墨迹）各一行 tile ＋ 状态行 ＋ 底栏一行。</summary>
+    /// <summary>启动器高：两组（课堂/墨迹）各若干行 tile ＋ 状态行 ＋ 底栏一行。
+    /// ⚠ 每组的行数要用 <see cref="HubRows"/>（宽度决定）真实算——旧式子按
+    /// `(头高+格高+组距)` 估的、漏了每行的**格距**（MoreTileGap），面板比内容矮
+    /// 2×格距，底行正好贴死在面板底边（2026-10-09 用户报"最下面一行贴着底边、
+    /// 下边框被切"，出图量出下边距=0）。</summary>
     private float MoreHomeH()
         => MorePad * 2 + MoreHeaderH + 8
-           + (MoreGroupHeadH + MoreTile + MoreGroupGap) * 2
+           + MoreGroupHeadH + HubRows(0) * (MoreTile + MoreTileGap) + MoreGroupGap
+           + MoreGroupHeadH + HubRows(1) * (MoreTile + MoreTileGap) + MoreGroupGap
            + MoreStatusH + 8 + MoreTile;
 
     /// <summary>设置子页高：工具条组 ＋ 下半三栏（外观 / 书写 / 墨迹 并排）。</summary>
@@ -2473,8 +2478,15 @@ public sealed class FullUi : IOverlayUi
         return code + index;
     }
 
+    /// <summary>当前工作区宽度下能排几列格子。**只用工作区/面板宽算**，不经过
+    /// `MoreRect()`——那里有开合动画中的高度值，布局计算（MoreHomeH→HubRows）碰它
+    /// 会递归。式子与 MoreRect 的实际宽度同源：min(MoreWidth, max(240, 工作宽-16))。 </summary>
     private int TileCols()
-        => Math.Clamp((int)((MoreContentW() + MoreTileGap) / (MoreTile + MoreTileGap)), 3, 6);
+    {
+        float w = MathF.Min(MoreWidth(), MathF.Max(240f, (_work.MaxX - _work.MinX) - 16f));
+        float contentW = w - MorePad * 2f;
+        return Math.Clamp((int)((contentW + MoreTileGap) / (MoreTile + MoreTileGap)), 3, 6);
+    }
 
     private RectF HubStatusRect() => new()
     {
