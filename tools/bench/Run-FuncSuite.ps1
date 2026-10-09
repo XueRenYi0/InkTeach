@@ -105,11 +105,16 @@ foreach ($c in $cases) {
     #           一直没被算进 FAIL**——shapebandtest 的 4 个既有红因此被全套当绿放行过。
     #   PASS  = 有 PASS 或"通过"
     #   DATA  = 跑完了但没判据（功能用例里出现就是"这条没在验东西"，要修）
+    # ⚠ **行首不能起 `-or`**（2026-10-09 当场踩过）：PowerShell 的续行只认"运算符留在
+    # 上一行的行尾"；写成行首 -or 会让**整个脚本解析失败**（上一条"让既有红显性上报"
+    # 的补丁因此没能生效，自检直接挂）。所以判定式拆成"每条以 -or 结尾"的样子。
+    $failHit = $text -match '\bFAIL\b' -or
+               $text -match 'FATAL' -or
+               $text -match '失败\s*[1-9]' -or
+               $text -match '[1-9]\d*\s*项失败'
     $verdict = if (-not $exited) { 'TIMEOUT' }
                elseif ($text -match 'SKIP:') { 'SKIP' }
-               elseif ($text -match '\bFAIL\b' -or $text -match 'FATAL'
-                       -or $text -match '失败\s*[1-9]'
-                       -or $text -match '[1-9]\d*\s*项失败') { 'FAIL' }
+               elseif ($failHit) { 'FAIL' }
                elseif ($text -match '\bPASS\b' -or $text -match '通过') { 'PASS' }
                else { 'DATA' }
 
