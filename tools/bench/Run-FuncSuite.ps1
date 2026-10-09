@@ -100,12 +100,16 @@ foreach ($c in $cases) {
     # 判定规则：光看"失败"两个字会误判（自检里本来就写着"0 项失败"），
     # 所以必须看**数字**和独立的标记。
     #   SKIP  = 环境不适用（例如合成输入被别的程序占着）——不算失败，但要看得见
-    #   FAIL  = 独立的 FAIL 字样 / FATAL / "失败 N"（N 不为 0）
+    #   FAIL  = 独立的 FAIL 字样 / FATAL / "失败 N" / **"N 项失败"（收尾统计）**
+    #           ⚠ 2026-10-09 补：以前只认"失败 N"（数字在后），**收尾行"140 项通过, 4 项失败"
+    #           一直没被算进 FAIL**——shapebandtest 的 4 个既有红因此被全套当绿放行过。
     #   PASS  = 有 PASS 或"通过"
     #   DATA  = 跑完了但没判据（功能用例里出现就是"这条没在验东西"，要修）
     $verdict = if (-not $exited) { 'TIMEOUT' }
                elseif ($text -match 'SKIP:') { 'SKIP' }
-               elseif ($text -match '\bFAIL\b' -or $text -match 'FATAL' -or $text -match '失败\s*[1-9]') { 'FAIL' }
+               elseif ($text -match '\bFAIL\b' -or $text -match 'FATAL'
+                       -or $text -match '失败\s*[1-9]'
+                       -or $text -match '[1-9]\d*\s*项失败') { 'FAIL' }
                elseif ($text -match '\bPASS\b' -or $text -match '通过') { 'PASS' }
                else { 'DATA' }
 

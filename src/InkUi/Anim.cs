@@ -54,6 +54,9 @@ internal sealed class Anim
 
     public bool Running => _host != null && _host.NowMs < _startMs + _durationMs;
 
+    /// <summary>当前动画的目标值（没在跑就等于 <see cref="Value"/>；调用方用它判断"正在朝哪去"）。</summary>
+    public float Target => _to;
+
     /// <summary>动画到某个值。时长 0 = 直接跳（系统关掉动画时走这条）。</summary>
     public void To(float target, double durationMs)
     {

@@ -132,14 +132,16 @@ internal static class Tokens
     public const float BandRadius = 12f;
 
     /// <summary>
-    /// 平时那条**色线**：6 像素。数字照抄假面板（`BandIdle = 6 / BandOpen = 34`）。
-    /// 它不只是装饰——12 段色片压成一条线以后**仍然可以直接点**，
+    /// 平时那条**色线**：**10 像素**（2026-10-09 用户从 6 调上来：大屏上"从上往下看
+    /// 好像看不大见"；顺带触摸也更好点中）。它是纯颜色的一条，展开成 34 高的设置条。
+    /// 它不只是装饰——色片压成一条线以后**仍然可以直接点**，
     /// 不用先"展开再选"（用户明确说喜欢这个）。
     /// </summary>
-    public const float BandLine = 6f;
+    public const float BandLine = 10f;
 
-    /// <summary>色线长成设置条的时长（和悬停展开同一套时长，观感才是一路的）。</summary>
-    public const double RailMs = 167;
+    /// <summary>色线长成设置条的时长（和悬停展开同一套时长，观感才是一路的）。
+    /// 2026-10-09：167 → **230**——用户要"沉稳"：少一点"一会儿一跳"的急促感。</summary>
+    public const double RailMs = 230;
 
     /// <summary>
     /// 「快出慢隐」：碰到色线后**这么快**就张开（快出）；指针离开后**等这么久**才收（慢隐）。
@@ -149,12 +151,16 @@ internal static class Tokens
     /// 2026-10-05 用户报"贴边翻页时上下移动面板一会儿出现一会儿隐藏"——就是隐藏太急
     ///（原来 220ms）加上判定区跟着动画跑，两件事叠出来的。隐藏延迟给到 450ms，
     /// 并加了"动画期间判定区取目标展开范围"的迟滞（见 FullUi.HoverInsideForPeek）。
+    /// **2026-10-09（沉稳档）**：120 → **240ms**、450 → **800ms**——用户原话
+    /// "展开合并太活了……年纪大的教师会觉得一会儿一跳；要沉稳的感觉"。
+    /// 240ms 意味着"要真的停一下"才算张开意图：写字/划过去不再擦边就弹。
+    /// 写字期间另有**整体冻结**（见 FullUi.UpdateRail 开头）。
     /// </summary>
-    public const double RailShowDelayMs = 120;
+    public const double RailShowDelayMs = 240;
     /// <summary>指针离开后延迟这么久才收（防"边上动一下就闪"）。见 <see cref="RailShowDelayMs"/>。</summary>
-    public const double RailHideDelayMs = 450;
+    public const double RailHideDelayMs = 800;
 
-    /// <summary>鼠标离色线多近就算"碰到了"（上下各让一点，不用精确压在 6 像素上）。</summary>
+    /// <summary>鼠标离色线多近就算"碰到了"（上下各让一点，不用精确压在 10 像素的线上）。</summary>
     public const float RailHoverPad = 10f;
 
     /// <summary>色片：26 的方块，缝 6。缝是必须的——挨在一起会糊成一条彩带。</summary>

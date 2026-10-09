@@ -179,7 +179,7 @@ public sealed class FullUi : IOverlayUi
     private bool _lastPpt;
 
     /// <summary>上一次看到的穿透状态。用它认**进穿透的那一刻**（边沿）——
-    /// 进穿透时把上带收回那条 6 像素色线，穿透期间不许再张，见 <see cref="OnStateChanged"/>。</summary>
+    /// 进穿透时把上带收回那条 10 像素色线，穿透期间不许再张，见 <see cref="OnStateChanged"/>。</summary>
     private bool _lastPass;
 
     private bool _sliderDragging;
@@ -203,7 +203,7 @@ public sealed class FullUi : IOverlayUi
     /// <summary>贴边隐藏：默认关（用户定的）。开了以后贴边时只露 8 像素的头。</summary>
     private bool _hideEnabled;
     private readonly Anim _peek;           // 0 = 只剩露头，1 = 完全显示
-    private readonly Anim _rail;           // 0 = 平时那条 6 像素色线，1 = 完整设置条
+    private readonly Anim _rail;           // 0 = 平时那条 10 像素色线，1 = 完整设置条
     /// <summary>色带常开（「设置 → 外观 → 色带常开」，2026-10-05）：一直摊着，不参与悬停收放。</summary>
     private bool _railPinned;
     /// <summary>触摸把设置条"带出来"后的保持截止（触摸没有悬停，不能靠指针位置维持展开）。</summary>
@@ -236,7 +236,7 @@ public sealed class FullUi : IOverlayUi
     {
         (Row.DarkTheme, "深色主题", false, false, ""),
         (Row.AutoHide, "贴边隐藏", false, false, ""),
-        // 色带常开（2026-10-05 用户实测点名）：设置条一直摊着。触摸屏上那条 6 像素的色线很难点中，
+        // 色带常开（2026-10-05 用户实测点名）：设置条一直摊着。触摸屏上那条 10 像素的色线很难点中，
         // 触摸点工具格也会自动带出来（自适应，见 UpdateRail 的 _railTouchHoldUntilMs）。
         (Row.RailPin, "色带常开", false, false, "设置条一直摊开（触摸屏不用去碰那条色线）"),
         // 悬停提示（2026-10-02）：鼠标停住半秒、手指长按，浮出"名称 + 快捷键 + 说明"。
@@ -405,7 +405,7 @@ public sealed class FullUi : IOverlayUi
     {
         _dark = _host.GetPref("dark") == "1";
         _hideEnabled = _host.GetPref("hide") == "1";
-        // 色带常开（2026-10-05）：设置条一直摊着——触摸屏上不用去碰那条 6 像素的色线。
+        // 色带常开（2026-10-05）：设置条一直摊着——触摸屏上不用去碰那条 10 像素的色线。
         _railPinned = _host.GetPref("railPin") == "1";
         // 悬停提示：**默认开**，只写"关过的"那一份（和 dwellShape / pressure 同一条规矩）。
         // 引擎自己画的浮层（操作条 / PPT 条）读不到界面偏好，这里推一次开关过去。
@@ -620,7 +620,7 @@ public sealed class FullUi : IOverlayUi
     private const float BandGap = 0f;
     private float BandProgress() => _expand.Value;
 
-    /// <summary>上带这一刻的高度：平时 6 像素的色线，碰到了长成 34 像素的设置条。</summary>
+    /// <summary>上带这一刻的高度：平时 10 像素的色线，碰到了长成 34 像素的设置条。</summary>
     private float BandHeightFull() =>
         Tokens.BandLine + (BandHeightLogical() - Tokens.BandLine) * _rail.Value;
 
@@ -664,7 +664,7 @@ public sealed class FullUi : IOverlayUi
     /// 上带这一刻是不是**张开成了设置条**：张开完成、而且不在穿透里。
     ///
     /// 穿透里永远不成立（2026-10-02 用户口径）：点穿透后色带只是**收回平时那条
-    /// 6 像素色线**，不是消失——面板高度不变、贴边隐藏露出来的还是它；
+    /// 10 像素色线**，不是消失——面板高度不变、贴边隐藏露出来的还是它；
     /// 但绝不像别的格子那样张着设置条（穿透没有设置可放）。
     /// 绘制那几处也跟着它让路：折叠动画进行到一半时旧内容就已经点不到了。
     /// </summary>
@@ -1706,7 +1706,19 @@ public sealed class FullUi : IOverlayUi
             return;
         }
 
-        // 穿透：上带**永远保持收起的那条 6 像素色线**，不许张成设置条
+        // 正在写 / 触摸手势进行中：**色带完全冻结**（2026-10-09 用户定："写字写到附近
+        // 该保持不动"）。不张开、不收合、两个计时器一起失效——写完抬手后下面那套照常接管。
+        // 以前"写着写着变成花格子 / 一会儿一跳"的机理：落笔后引擎不再转发悬停
+        //（OnPointerMove 的 !_drawing 闸），railHover 定格在落笔前的值——
+        // 若它已攒了张开意图，整笔期间 UpdateRail 还在每帧执行、照样把它张开；
+        // 反之落笔点不在面板上时，收合计时器又会写到一半把它收掉。
+        if (_host.State.IsDrawing)
+        {
+            _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
+            return;
+        }
+
+        // 穿透：上带**永远保持收起的那条色线**，不许张成设置条
         //（2026-10-02 用户口径：点穿透只是把它"收起来"，不是整条消失——面板高度不变，
         //  贴边隐藏露出来的还是它；但也不再像别的格子那样张着设置条）。
         // 进穿透那一下已经在 OnStateChanged 里启动折叠动画；这里兜住"之后又被谁强行张开"
@@ -1739,7 +1751,7 @@ public sealed class FullUi : IOverlayUi
         double now = _host.NowMs;
 
         // 触摸没有悬停：手指点在**面板任意处**（点工具格也算）就把设置条张开，并保持一段
-        // （松手后 2.5s 内不收）——不然触摸用户只能去点那条 6 像素的色线，很难点中
+        // （松手后 2.5s 内不收）——不然触摸用户只能去点那条色线（10 像素），很难点中
         // （2026-10-05 用户实测："点击图标色带不会展开，必须点色带位置"，触摸屏上太麻烦）。
         if (now < _railTouchHoldUntilMs)
         {
@@ -1751,6 +1763,15 @@ public sealed class FullUi : IOverlayUi
         if (_railHover)
         {
             _railExitAtMs = double.NegativeInfinity;
+            // **正在收时指针回来：立刻反着张开**（2026-10-09 沉稳档的对偶）。
+            // 以前要等它收到 0.5 以下才肯重开（收尾 + 240ms 延迟 + 230ms 动画，最坏 ~0.7s）——
+            // 手感是"我都把指针放回去了它还在收"；自检采样也会抓在动画中间（layout 判据全乱）。
+            if (_rail.Running && _rail.Target < 0.5f)
+            {
+                _rail.To(1f, Tokens.RailMs);
+                _railEnterAtMs = double.NegativeInfinity;
+                return;
+            }
             if (_rail.Value >= 0.5f) { _railEnterAtMs = double.NegativeInfinity; return; }
             if (double.IsNegativeInfinity(_railEnterAtMs)) _railEnterAtMs = now;
             else if (now - _railEnterAtMs >= Tokens.RailShowDelayMs) _rail.To(1f, Tokens.RailMs);
@@ -3579,7 +3600,7 @@ public sealed class FullUi : IOverlayUi
             if (HasBand(cell)) _bandCell = cell;
         }
 
-        // ---- 穿透开的那一刻：上带收回那条 6 像素色线（2026-10-02 用户口径）----
+        // ---- 穿透开的那一刻：上带收回那条 10 像素色线（2026-10-02 用户口径）----
         //
         // 用户原话（第二次澄清）："点击穿透以后，色带是横起来的（收起来）。不是说我点了个
         // 穿透，色带就完全没有了。我说的色带消失，就是把它折叠起来，而不是像其他一样，
@@ -3596,7 +3617,7 @@ public sealed class FullUi : IOverlayUi
             {
                 _railHover = false;
                 _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
-                _rail.To(0f, Tokens.RailMs);     // 设置条 → 那条 6 像素色线
+                _rail.To(0f, Tokens.RailMs);     // 设置条 → 那条 10 像素色线
                 Invalidate();
             }
         }
@@ -3956,7 +3977,7 @@ public sealed class FullUi : IOverlayUi
     /// <summary>画上带的内容。每一项都对应引擎里真实存在的能力，摆不出来的就不摆。</summary>
     private void DrawBand(ID2D1DeviceContext ctx, in UiState st)
     {
-        // 平时就是一条 **6 像素的色线，整条用当前笔色**（照假面板：不分段、没有文字），
+        // 平时就是一条 **10 像素的色线，整条用当前笔色**（照假面板：不分段、没有文字），
         // 碰到才长成完整的设置条。中间那一段是"线淡出、控件淡入"的过渡
         // ——假面板的公式：t = (带高 - 12) / 14，0 = 还是一条线，1 = 完全是控件。
         float t = Math.Clamp((BandHeightFull() - 12f) / 14f, 0f, 1f);
@@ -5104,7 +5125,7 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     internal RectF CellRectForTest(int cell) => CellRect(PosOf(cell));
 
-    /// <summary>自检用：上带这一刻的矩形（没长出来就是空；穿透里是那条 6 像素色线，不为空）。</summary>
+    /// <summary>自检用：上带这一刻的矩形（没长出来就是空；穿透里是那条 10 像素色线，不为空）。</summary>
     internal RectF BandRectForTest => BandVisible() ? BandRect() : RectF.Empty;
 
     /// <summary>自检用：设置条张开到什么程度（0 = 平时那条色线，1 = 完整设置条）。

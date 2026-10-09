@@ -190,13 +190,14 @@ internal sealed partial class App
         {
             var cell = ui.CellRectForTest(8);
             ClickPhys((cell.MinX + cell.MaxX) * 0.5f * DpiScale, (cell.MinY + cell.MaxY) * 0.5f * DpiScale);
-            // 上带只在指针停在面板上时张开：合成鼠标偶尔丢移动，给三次机会（同 ShapeBandTest）。
-            for (int attempt = 0; attempt < 3 && !ui.RailOpenForTest; attempt++)
+            // 上带只在指针停在面板上时张开：**等它完全张开（≥0.99）再采样**——
+            // 动画中途采样会把"还在长"的 layout 当成终态（2026-10-09 调慢节奏后踩过）。
+            for (int attempt = 0; attempt < 3 && ui.RailValueForTest < 0.99f; attempt++)
             {
                 var bar = ui.BarRectForTest;
                 SendMouse((int)((bar.MinX + bar.MaxX) * 0.5f * DpiScale),
                           (int)((bar.MinY + bar.MaxY) * 0.5f * DpiScale) - attempt, 0);
-                SettleFrames(350);
+                SettleFrames(700);
             }
             int segCount = ui.BandSegmentCountForTest;
             Check("B：图形那一格多了最后一段（工具段 ＋ 图库）",

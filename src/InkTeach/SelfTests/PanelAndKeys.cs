@@ -465,13 +465,14 @@ internal sealed partial class App
         // ---- ⑥ 上带：色片 / 滑条 / 分段（都走命令通道）----
         //
         // **张不张开只看焦点在不在面板上**（2026-09-17 用户定的新语义）：
-        //   指针落在面板（主条 ∪ 设置条）上 → 张开；离开 → 220 毫秒后收成一条 6 像素色线。
+        //   指针落在面板（主条 ∪ 设置条）上 → 240ms 后张开（2026-10-09 沉稳档，原 120）；
+        //   离开 → 800ms 后收成一条 10 像素色线（原 450 / 6 像素）。
         // 旧的那套"点一次钉住、再点同一个工具收起"已经删掉了——两套规则会打架：
         // 指针还停在面板上，收下去会立刻又张开。
         var penCellAgain = ui.CellRectForTest(3);
         ClickPhysical((penCellAgain.MinX + penCellAgain.MaxX) * 0.5f * DpiScale,
                       (penCellAgain.MinY + penCellAgain.MaxY) * 0.5f * DpiScale);
-        SettleFrames(300);
+        SettleFrames(560);                              // 240ms 张开延迟 + 230ms 动画，留足
         Check("焦点在面板上：设置条张开",
               ui.RailHoverForTest && ui.RailOpenForTest
               && MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandHeight) < 1.5f,
@@ -479,7 +480,7 @@ internal sealed partial class App
 
         // 指针移到画布上（离开面板）→ 收成一条色线
         SendMouse((int)(_virtualX + _virtualW * 0.6f), (int)(_virtualY + _virtualH * 0.3f), 0);
-        SettleFrames(700);                              // 220ms 退出延迟 + 167ms 动画，留足
+        SettleFrames(1200);                             // 800ms 慢隐 + 230ms 动画，留足
         Check("指针离开面板：收成一条色线",
               !ui.RailOpenForTest
               && MathF.Abs(ui.BandHeightForTest - InkUi.Tokens.BandLine) < 1.5f,
@@ -495,7 +496,7 @@ internal sealed partial class App
         for (int attempt = 0; attempt < 3 && !ui.RailOpenForTest; attempt++)
         {
             SendMouse(hoverPx, hoverPy - attempt, 0);
-            SettleFrames(350);
+            SettleFrames(560);
         }
         var hb = ui.QueryBounds();
         Console.WriteLine($"    [诊断] 指针物理 ({hoverPx},{hoverPy})，主条 {barHover.MinX:F0}..{barHover.MaxX:F0}"
@@ -598,7 +599,7 @@ internal sealed partial class App
             var barE = ui.BarRectForTest;
             SendMouse((int)((barE.MinX + barE.MaxX) * 0.5f * DpiScale),
                       (int)((barE.MinY + barE.MaxY) * 0.5f * DpiScale), 0);
-            SettleFrames(400);
+            SettleFrames(560);
             var slE = ui.SliderRectForTest;
             float slEy = (slE.MinY + slE.MaxY) * 0.5f * DpiScale;
 
@@ -698,18 +699,18 @@ internal sealed partial class App
             var penCellP = ui.CellRectForTest(3);
             ClickPhysical((penCellP.MinX + penCellP.MaxX) * 0.5f * DpiScale,
                           (penCellP.MinY + penCellP.MaxY) * 0.5f * DpiScale);
-            SettleFrames(400);
+            SettleFrames(560);
             Check("（准备）色带在笔格且已经张开",
                   ui.BandCellForTest == 3 && ui.RailValueForTest > 0.99f,
                   $"格 {ui.BandCellForTest}，张开度 {ui.RailValueForTest:F2}");
 
-            // ① 点穿透格 → 穿透开、设置条收回那条 6 像素色线（不是消失）
+            // 点穿透格 → 穿透开、设置条收回那条 10 像素色线（不是消失）
             var mouseCellP = ui.CellRectForTest(1);
             ClickPhysical((mouseCellP.MinX + mouseCellP.MaxX) * 0.5f * DpiScale,
                           (mouseCellP.MinY + mouseCellP.MaxY) * 0.5f * DpiScale);
             SettleFrames(600);
             var lineRect = ui.BandRectForTest;
-            Check("点穿透格：色带只收成那条 6 像素线（不是消失）",
+            Check("点穿透格：色带只收成那条 10 像素线（不是消失）",
                   Host.State.PassThrough && ui.RailValueForTest < 0.01f
                   && !lineRect.IsEmpty && lineRect.MaxY - lineRect.MinY is >= 5f and <= 12f,
                   $"穿透 = {Host.State.PassThrough}，张开度 {ui.RailValueForTest:F2}，"
@@ -757,6 +758,42 @@ internal sealed partial class App
                   $"张开度 {ui.RailValueForTest:F2}");
             Host.Commands.SetPassThrough(false);
             SettleFrames(300);
+        }
+
+        // ---- ⑥.3d 写字期间：色带**冻结**（2026-10-09 用户："写到附近该保持不动"）----
+        // 旧行为：落笔后引擎不再转发悬停（OnPointerMove 的 !_drawing 闸），railHover 定格在
+        // 落笔前的值——若色带已张开、而落笔点不在面板上（hover=false），450ms 后**写到
+        // 一半就开始收**；反之攒着的张开意图也会在整笔期间被每帧执行。现在：整笔不动。
+        {
+            // 先把色带张开（指针停到主条上，等新的 240ms 延迟 + 230ms 动画全部走完）
+            var barF = ui.BarRectForTest;
+            int fx = (int)((barF.MinX + barF.MaxX) * 0.5f * DpiScale);
+            int fy = (int)((barF.MinY + barF.MaxY) * 0.5f * DpiScale);
+            SendMouse(fx, fy, 0);
+            SettleFrames(560);
+            bool openBefore = ui.RailOpenForTest;
+
+            // 落笔写一条（按住不松）、指针留在画布上，边写边小幅挪动（防"停顿变图形"）
+            int cxF = (int)(_virtualX + _virtualW * 0.45f);
+            int cyF = (int)(_virtualY + _virtualH * 0.5f);
+            SendMouse(cxF, cyF, 0);
+            SendMouse(cxF, cyF, Native.MOUSEEVENTF_LEFTDOWN);
+            SettleFrames(60);
+            for (int i = 1; i <= 6; i++) { SendMouse(cxF + i * 40, cyF, 0); SettleFrames(30); }
+            for (int k = 0; k < 18; k++) { SendMouse(cxF + 240 + (k % 2), cyF, 0); SettleFrames(50); }
+            Check("写字期间：色带保持不动（写到一半不许自己收）",
+                  openBefore && ui.RailOpenForTest,
+                  $"落笔前张开 = {openBefore}，写中张开 = {ui.RailOpenForTest}");
+
+            SendMouse(cxF + 240, cyF, Native.MOUSEEVENTF_LEFTUP);
+            SettleFrames(150);
+            Host.Commands.Undo();                      // 这一笔撤掉，别影响后面的笔画计数
+            SettleFrames(150);
+
+            // 指针挪开：按新的"慢隐"（800ms 延迟 + 230ms 动画）慢慢收
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.62f), 0);
+            SettleFrames(1300);
+            Check("写完挪开：色带慢隐（不再一点就收）", !ui.RailOpenForTest, $"张开 = {ui.RailOpenForTest}");
         }
 
         // ---- ⑥.3b 主条那几格"选中显示选中什么"（2026-09-26）----
@@ -2931,10 +2968,13 @@ internal sealed partial class App
             var bar = ui.BarRectForTest;
             int px = (int)((bar.MinX + bar.MaxX) * 0.5f * DpiScale);
             int py = (int)((bar.MinY + bar.MaxY) * 0.5f * DpiScale);
-            for (int attempt = 0; attempt < 3 && !ui.RailOpenForTest; attempt++)
+            // **等到"完全张开"（≥0.99），不是"过 0.5 就当开"**（2026-10-09）：
+            // 动画中途（比如 0.63）时带子矮一截——后面量的是"完全张开"的 layout，
+            // 采样抓在半路就会误报"第 4 行出了带子"。合成鼠标偶尔丢移动，给三次机会。
+            for (int attempt = 0; attempt < 3 && ui.RailValueForTest < 0.99f; attempt++)
             {
                 SendMouse(px, py - attempt, 0);
-                SettleFrames(350);
+                SettleFrames(700);
             }
         }
 
@@ -3031,7 +3071,9 @@ internal sealed partial class App
                   ? "各行 y " + string.Join(" / ", Enumerable.Range(0, wantRowLens.Length)
                         .Select(r => $"{rowTop[r]:F0}..{rowBottom[r]:F0}"))
                     + $"，带子 y {bandRect.MinY:F0}..{bandRect.MaxY:F0}"
-                  : rowNote);
+                  : rowNote + $"[诊断] 带子 y {bandRect.MinY:F0}..{bandRect.MaxY:F0}，"
+                    + $"行4 {rowTop[^1]:F0}..{rowBottom[^1]:F0}，rail={ui.RailValueForTest:F2}，"
+                    + $"画中={Host.State.IsDrawing}，现在带子 y {ui.BandRectForTest.MinY:F0}..{ui.BandRectForTest.MaxY:F0}");
 
         // == 指针停在**任何一行**上，带子都得留得住（不许收） ==
         //
@@ -3042,7 +3084,8 @@ internal sealed partial class App
         //
         // 所以判据要**逐行**来，而且要看**两件事**：判定为悬停（`RailHoverForTest`）
         // 和真的没收（`RailOpenForTest`）—— 只看前者的话，"判定区对了但动画被别处打断"
-        // 会溜过去。等 400 毫秒是故意的：退出判定要 220 毫秒才动，等短了测不出来。
+        // 会溜过去。停 400 毫秒是故意的：慢隐要 800ms 才动，等短了测的就是"它没来得及收"，
+        // 那正是这条要钉的"留得住"。
         {
             string badRow = "";
             for (int r = 0; r < wantRowLens.Length && badRow.Length == 0; r++)
@@ -3055,7 +3098,9 @@ internal sealed partial class App
                 SendMouse(cx, cy, 0);
                 SettleFrames(400);
                 if (!ui.RailHoverForTest || !ui.RailOpenForTest)
-                    badRow = $"第 {r + 1} 行（y {cy}）：悬停={ui.RailHoverForTest}，张开={ui.RailOpenForTest}";
+                    badRow = $"第 {r + 1} 行（y {cy}）：悬停={ui.RailHoverForTest}，张开={ui.RailOpenForTest}"
+                           + $"[诊断] rail={ui.RailValueForTest:F2}，画中={Host.State.IsDrawing}，"
+                           + $"带子现在 y {ui.BandRectForTest.MinY:F0}..{ui.BandRectForTest.MaxY:F0}";
             }
             Check($"{wantRowLens.Length} 行的**每一行**都留得住带子（指针停上去不许收）",
                   badRow.Length == 0,
