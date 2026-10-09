@@ -2690,6 +2690,14 @@ internal sealed partial class App
                     SendTouches(true, (tx, ty));
                     SettleFrames(100);
                 }
+                // 长按成立那一帧提示才开始淡入——再补几拍等"可见"也上来
+                //（2026-10-09 晚真遇到过"已触发=True、可见=False"的时序抖动一次；
+                //  判据不变，手保持按着多等几帧，同时防注入触点快照过期）。
+                for (int i = 0; i < 6 && !ui.TipVisibleForTest; i++)
+                {
+                    SendTouches(true, (tx, ty));
+                    SettleFrames(100);
+                }
                 Check("触摸按住不动 0.8 秒：弹出提示",
                       ui.TipVisibleForTest && ui.TipHoldFiredForTest,
                       $"可见 = {ui.TipVisibleForTest}，长按已触发 = {ui.TipHoldFiredForTest}");
