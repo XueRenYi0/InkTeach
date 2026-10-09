@@ -4886,7 +4886,10 @@ public sealed class FullUi : IOverlayUi
     private bool IsActive(int i, in UiState st)
     {
         if (i == 1) return st.PassThrough;
-        if (i == 2) return st.Board;
+        // 白板格：**文档开着时亮 = 白板"升起"（盖住 PDF）**，不是"纸底开着"。
+        // 纸底是开文档自动铺的（那是文档的"纸"）——拿它当高亮会让格子从打开文档起一直亮着，
+        // 看着像"白板一直开着"（2026-10-09 用户报的）。没有文档时保持原意：板开着就亮。
+        if (i == 2) return st.DocOpen ? (st.BoardOverDoc && !st.PassThrough) : st.Board;
         if (st.PassThrough) return false;
         return i switch
         {

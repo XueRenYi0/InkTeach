@@ -967,6 +967,8 @@ internal sealed partial class App
             SettleFrames(200);
             Check("（准备）假文档开着（DocOpen 状态可见）", Host.State.DocOpen,
                   $"DocOpen={Host.State.DocOpen}");
+            Check("文档开着、白板没升起：白板格**不亮**（纸底 ≠ 白板升起）",
+                  !ui.CellActiveForTest(2), $"格亮={ui.CellActiveForTest(2)}");
 
             var boardCellG = ui.CellRectForTest(2);
             int bgx = (int)((boardCellG.MinX + boardCellG.MaxX) * 0.5f * DpiScale);
@@ -974,13 +976,15 @@ internal sealed partial class App
             bool up0 = Host.State.BoardOverDoc;
             ClickPhysical(bgx, bgy);
             SettleFrames(250);
-            Check("文档模式点白板格：白板升起（盖住文档）", !up0 && Host.State.BoardOverDoc,
-                  $"升前={up0}、升后={Host.State.BoardOverDoc}");
+            Check("文档模式点白板格：白板升起（盖住文档、格亮）",
+                  !up0 && Host.State.BoardOverDoc && ui.CellActiveForTest(2),
+                  $"升前={up0}、升后={Host.State.BoardOverDoc}、格亮={ui.CellActiveForTest(2)}");
 
             ClickPhysical(bgx, bgy);
             SettleFrames(250);
-            Check("再点一下：白板落下（PDF 回来）", !Host.State.BoardOverDoc,
-                  $"升起={Host.State.BoardOverDoc}");
+            Check("再点一下：白板落下（PDF 回来、格灭）",
+                  !Host.State.BoardOverDoc && !ui.CellActiveForTest(2),
+                  $"升起={Host.State.BoardOverDoc}、格亮={ui.CellActiveForTest(2)}");
 
             Host.Commands.SetBoardOverDoc(false);      // 兜底：确保状态清零再收文档
             DocView.Close();
