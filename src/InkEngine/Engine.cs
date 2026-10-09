@@ -2196,7 +2196,7 @@ public partial class InkEngine
             // （实测：不同点数 = 0）。现在它只管它该管的——曲线化开不开。
             if (args.Contains("--nosmooth")) StrokeSmoothing.SetEnabled(false);
             if (args.Contains("--smooth")) StrokeSmoothing.SetEnabled(true);
-            // B4：自绘预测尾（2026-10-08 用户 90Hz 真机验收 → **默认开**；2026-10-12 起
+            // B4：自绘预测尾（2026-10-08 用户 90Hz 真机验收 → **默认开**；2026-10-09 起
             // 在设置页有「墨迹预测」开关，偏好落盘 `ui.predict2`；`--nopredict2` 关、
             // `--predict2` 强开，两者都给对照实验用、优先于偏好）
             _noPredictArg = args.Contains("--nopredict2");
@@ -10788,7 +10788,7 @@ public partial class InkEngine
         => RawInputCapture = !_noRawInputArg && GetUiPref(FineStrokePrefKey) != "0";
 
     /// <summary>
-    /// 「更多 → 设置 → 书写 → 墨迹预测」被点了一下（2026-10-12）——**B4 自绘预测尾的总开关**。
+    /// 「更多 → 设置 → 书写 → 墨迹预测」被点了一下（2026-10-09）——**B4 自绘预测尾的总开关**。
     ///
     /// 关掉 = 不再画预测尾（笔迹末端更老实）；开/关都顺手复位预测器（关→立刻撤尾；
     /// 开→从干净状态起步，等下一笔重新喂点）。只影响以后画的，已落笔的墨一个字节不动。

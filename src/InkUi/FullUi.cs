@@ -257,7 +257,7 @@ public sealed class FullUi : IOverlayUi
         // （真机实测：指针消息 61Hz，设备实际报了 190Hz）。这一行就是"要不要把中间点捞回来"。
         // **默认开**（用户定的：开不开 ink 要有一样的手写体验）；低配机怕性能不够可以一键关。
         (Row.FineStroke, "精细笔迹", false, false, "关掉后写快时线条略粗糙（省一点性能，低配机可关）"),
-        // 墨迹预测（2026-10-12 回归：B4 自绘预测尾；**默认开**，2026-10-08 用户真机验收）。
+        // 墨迹预测（2026-10-09 回归：B4 自绘预测尾；**默认开**，2026-10-08 用户真机验收）。
         // 关掉 = 不再画预测尾（笔尾更老实；低配 / 老机可关）。链路：行表 → ActivateRow → IsOn → SavePrefs。
         (Row.Predict, "墨迹预测", false, false, "开了更跟手一点；关掉笔尾更稳当（低配 / 老机可关）"),
         // 墨迹三条偏好（原本在「墨迹」页，2026-10-02 启动器改版后搬进设置子页）。
@@ -2156,7 +2156,7 @@ public sealed class FullUi : IOverlayUi
                 SavePrefs();
                 break;
 
-            // 墨迹预测（2026-10-12 加，B4 自绘预测尾；默认开）：引擎是权威，界面翻转后落盘 "predict2"。
+            // 墨迹预测（2026-10-09 加，B4 自绘预测尾；默认开）：引擎是权威，界面翻转后落盘 "predict2"。
             case Row.Predict:
                 _host.Commands.SetPredict(!_host.State.PredictTailOn);
                 SavePrefs();

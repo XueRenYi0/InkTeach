@@ -360,7 +360,7 @@ public interface IEngineCommands
     /// <summary>「设置 → 书写 → 精细笔迹」：原始输入补点总开关（2026-10-07 加）。</summary>
     void SetFineStroke(bool on);
 
-    /// <summary>「设置 → 书写 → 墨迹预测」：B4 自绘预测尾总开关（2026-10-12 加；默认开）。</summary>
+    /// <summary>「设置 → 书写 → 墨迹预测」：B4 自绘预测尾总开关（2026-10-09 加；默认开）。</summary>
     void SetPredict(bool on);
 
     /// <summary>

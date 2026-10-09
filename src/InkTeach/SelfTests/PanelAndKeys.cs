@@ -2079,7 +2079,7 @@ internal sealed partial class App
         // ---- ⑦.1 模态的收口：点面板外＝关、这一下**不落墨**；关掉后画布立刻能画 ----
         int strokesBefore = Doc.Strokes.Count;
         // 点位**自适应**：贴着面板上边缘之外 12px（逻辑像素）。
-        // 写死"屏幕高度 10%"会被长高的面板吞掉——2026-10-12 加「墨迹预测」行时命中过一次：
+        // 写死"屏幕高度 10%"会被长高的面板吞掉——2026-10-09 加「墨迹预测」行时命中过一次：
         // 面板顶从 ~89px 升到 ~42-65px，84px 那个固定点落进了面板里，后面三连败全是它的连锁。
         var outPanel = ui.MoreRectForTest;
         float outClickY = MathF.Max(_virtualY + 8f, (outPanel.MinY - 12f) * (float)DpiScale);
@@ -2628,7 +2628,7 @@ internal sealed partial class App
                   !Host.State.FineStrokeOn, $"FineStrokeOn = {Host.State.FineStrokeOn}");
         }
 
-        // 「墨迹预测」（2026-10-12 回归：B4 自绘预测尾，**默认开**）：点行 → 引擎状态翻转 → 落盘。
+        // 「墨迹预测」（2026-10-09 回归：B4 自绘预测尾，**默认开**）：点行 → 引擎状态翻转 → 落盘。
         // （原 2026-10-05 停用块里顺带的「启动器/底栏提示文案」那段仍留停用——它跟本行无关，
         //   需要时从 git 历史恢复；这里只验"墨迹预测"行自己的链路。）
         {
