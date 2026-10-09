@@ -202,12 +202,75 @@ public partial class InkEngine
 
     internal void StopPptWatch() => _pptWatcher?.Stop();
 
+    // =================================================================================
+    //  PPT 直映（2026-10-09）：「打开文档…」里选了 PPT → 借一次前台 → 让系统里现成的
+    //  Office/WPS 直接进放映 → 还回去。放映起来之后由上面那套现成的 Watcher 接管。
+    // =================================================================================
+
+    /// <summary>
+    /// 借前台（和弹对话框同一套手法，见 Engine.BorrowFocusForDialog）→
+    /// <see cref="PptLaunch.Run"/> 按默认关联把放映放起来 → 还回去；再开 8 秒
+    /// "上线保障"（放映窗若没盖到最前，借前台提一把，见 <see cref="PptFrontGuardTick"/>）。
+    ///
+    /// 成功/兜底的话都由状态栏说清（<see cref="PptLaunch.Run"/> 的返回值）；
+    /// 返回 null 让 UI 原样收下——**不要再被当成"打开失败"套一层前缀**。
+    /// </summary>
+    internal string LaunchPptShow(string file)
+    {
+        string msg;
+        BorrowFocusForDialog();
+        try { msg = PptLaunch.Run(file); }
+        finally { ReturnFocusAfterDialog(); }
+        SetInkStatus(msg);
+        StartPptFrontGuard();
+        Console.WriteLine($"[PPT直映] {msg}");
+        return null;
+    }
+
+    // ---- "上线保障"：启动放映后的 8 秒里，放映窗起来了却没在前台 → 提一把 ----
+    //
+    // 为什么需要：系统的"前台规则"只对前台进程启动的窗口放行自动上前；从 COM 叫起的
+    // 进程外放映（WPS）不保证吃到这条规则（后台脚本启动实测会被防抢焦拦下，见计划
+    // 文档 §十二）。提法 = 先"借前台"（让我们有资格），再把放映窗设到前台；
+    // 最多提 3 次，提不上就放弃——老师点一下任务栏也能看，别抢交互。
+    private double _pptFrontGuardUntilMs;
+    private double _pptFrontGuardNextMs;
+    private int _pptFrontGuardPulls;
+
+    private void StartPptFrontGuard()
+    {
+        _pptFrontGuardUntilMs = NowMs + 8000;
+        _pptFrontGuardNextMs = NowMs + 600;
+        _pptFrontGuardPulls = 0;
+    }
+
+    private void PptFrontGuardTick()
+    {
+        if (_pptFrontGuardUntilMs == 0) return;
+        double now = NowMs;
+        if (now > _pptFrontGuardUntilMs || _pptFrontGuardPulls >= 3) { _pptFrontGuardUntilMs = 0; return; }
+        if (now < _pptFrontGuardNextMs) return;
+        _pptFrontGuardNextMs = now + 500;
+
+        var show = PptLaunch.FindShowWindow(out uint showPid);
+        if (show == IntPtr.Zero) return;                       // 放映窗还没起，继续等
+        uint dummy;
+        var fg = Native.GetForegroundWindow();
+        if (Native.GetWindowThreadProcessId(fg, out dummy) == showPid) { _pptFrontGuardUntilMs = 0; return; }
+        if (_focusBorrowed) return;                            // 正有位对话框借着前台，别叠
+        _pptFrontGuardPulls++;
+        BorrowFocusForDialog();
+        PptLaunch.TrySetForeground(show);
+        ReturnFocusAfterDialog();
+    }
+
     /// <summary>
     /// 状态机走一步。主循环每帧调一次（没变化时只读一个 bool，**不碰 COM**）。
     /// 自检也调它——"测量用的循环和真正的循环必须同源"（这个项目栽过）。
     /// </summary>
     internal void StepPpt()
     {
+        if (_pptFrontGuardUntilMs != 0) PptFrontGuardTick();
         if (_pptSource == null) return;
         if (_pptWatcher != null && !_pptWatcher.TakeDirty()) return;
 

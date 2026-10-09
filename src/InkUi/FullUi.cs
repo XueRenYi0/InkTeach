@@ -2722,7 +2722,7 @@ public sealed class FullUi : IOverlayUi
         4 => ("打开墨迹", "打开一份 .inkb，替换当前板书（先备份）", _host != null && !_host.State.PptMode, false),
         5 => ("墨迹回放", "把这一屏的板书重演一遍（只读，不动板书）", _host != null && (_host.State.ReplayActive || _host.State.StrokeCount > 0), false),
         6 => ("保存图片", "把整块板书存成图片（png / jpg，好发微信）", _host != null && !_host.State.PptMode && _host.State.StrokeCount > 0, false),
-        7 => ("打开文档", "图片可多选、PDF 一次一份；铺成一叠页，翻页批注", _host != null && !_host.State.PptMode, false),
+        7 => ("打开文档", "图片/PDF 铺成页批注；PPT 走 Office/WPS 直接进放映", _host != null && !_host.State.PptMode, false),
         8 => ("关闭文档",
               _host != null && _host.State.DocOpen
                   ? $"关掉《{_host.State.DocInfo}》；批注留在画布上"

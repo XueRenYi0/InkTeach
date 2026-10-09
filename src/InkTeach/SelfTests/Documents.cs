@@ -813,6 +813,26 @@ internal sealed partial class App
         DocView.UseWorker = false;
         DocView.Generator = null;
 
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- E PPT 直映：扩展名 / 默认关联路由 / 过滤器（纯函数，不启动任何程序）--");
+        // ------------------------------------------------------------------
+        Check("PPT 扩展名识别", PptLaunch.IsPpt("a.pptx") && PptLaunch.IsPpt("B.PPT") && PptLaunch.IsPpt("c.ppsx")
+              && !PptLaunch.IsPpt("d.pdf") && !PptLaunch.IsPpt("e.png") && !PptLaunch.IsPpt("f.docx"),
+              "pptx / ppt / ppsx 认；pdf / png / docx 不认");
+        Check("路由：WPS 家族 → WPS", PptLaunch.RouteFor("WPP.PPTX.6") == PptRoute.Wps
+              && PptLaunch.RouteFor("Kwpp.Application") == PptRoute.Wps
+              && PptLaunch.RouteFor("Kingsoft.Presentation") == PptRoute.Wps,
+              "WPP.* / KWPP.* / Kingsoft.* 都算 WPS");
+        Check("路由：Office → /S", PptLaunch.RouteFor("PowerPoint.Show.12") == PptRoute.Office,
+              "PowerPoint.* 走官方命令行直映");
+        Check("路由：其它 → 兜底", PptLaunch.RouteFor("Acme.Player") == PptRoute.None
+              && PptLaunch.RouteFor("") == PptRoute.None && PptLaunch.RouteFor(null) == PptRoute.None,
+              "不认识的播放器 → 普通打开 + 提示，不硬闯");
+        Check("过滤器含 PPT（和识别同一份口径）",
+              ExportFileDialog.DocumentFilter.Contains(PptLaunch.FilterSpec)
+              && ExportFileDialog.DocumentFilter.Contains("*.pdf"),
+              "混合过滤器里有 pptx;ppt;ppsx 和 pdf");
+
         Console.WriteLine();
         Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：文档页底层 {pass} 项通过 / {fail} 项失败");
         Console.WriteLine($"合计：通过 {pass} 项，失败 {fail} 项");

@@ -806,6 +806,16 @@ internal static class Native
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern int GetClassNameW(IntPtr hWnd, System.Text.StringBuilder s, int n);
 
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowTextW(IntPtr hWnd, System.Text.StringBuilder s, int n);
+
+    /// <summary>AttachThreadInput：借前台窗口线程的输入队列（"把放映窗提到最前"用，见 PptLaunch）。</summary>
+    [DllImport("user32.dll")]
+    public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
     // 注：`MONITORINFO` / `GetMonitorInfo` 上面已经有了（多屏那块用的），这里不再重复定义。
     [DllImport("user32.dll")]
     public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
@@ -1112,6 +1122,53 @@ internal static class Native
                 return false;
             }
             value = BitConverter.ToUInt32(buf, 0);
+            return true;
+        }
+        finally { RegCloseKey(hk); }
+    }
+
+    public static readonly IntPtr HKEY_CLASSES_ROOT = new IntPtr(unchecked((int)0x80000000));
+    public static readonly IntPtr HKEY_LOCAL_MACHINE = new IntPtr(unchecked((int)0x80000002));
+    public const uint REG_SZ = 1;
+    public const uint REG_EXPAND_SZ = 2;
+
+    /// <summary>
+    /// 读一个注册表字符串（REG_SZ / REG_EXPAND_SZ）。valueName 传 null = 读默认值。
+    /// 读不到返回 false，原因放 err（和 <see cref="ReadDword"/> 一个规矩：不猜）。
+    /// </summary>
+    public static bool ReadString(IntPtr root, string subKey, string valueName, out string value, out string err)
+    {
+        value = null;
+        err = null;
+        if (RegOpenKeyExW(root, subKey, 0, KEY_READ, out IntPtr hk) != ERROR_SUCCESS)
+        {
+            err = "键不存在";
+            return false;
+        }
+        try
+        {
+            uint type = 0, cb = 0;
+            int rc = RegQueryValueExW(hk, valueName, IntPtr.Zero, out type, null, ref cb);
+            if (rc != ERROR_SUCCESS)
+            {
+                err = rc == ERROR_FILE_NOT_FOUND ? "值不存在" : $"读失败 rc={rc}";
+                return false;
+            }
+            if (type != REG_SZ && type != REG_EXPAND_SZ)
+            {
+                err = $"类型不是字符串（{type}）";
+                return false;
+            }
+            var buf = new byte[cb + 2];          // 多给两字节，防 cb 没带结束符
+            rc = RegQueryValueExW(hk, valueName, IntPtr.Zero, out type, buf, ref cb);
+            if (rc != ERROR_SUCCESS)
+            {
+                err = $"读失败 rc={rc}";
+                return false;
+            }
+            int n = (int)cb;
+            if (n >= 2 && buf[n - 1] == 0 && buf[n - 2] == 0) n -= 2;   // 去掉结尾的 \0\0
+            value = System.Text.Encoding.Unicode.GetString(buf, 0, System.Math.Max(0, n));
             return true;
         }
         finally { RegCloseKey(hk); }

@@ -193,7 +193,7 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 「打开文档…」（更多 → 墨迹）：多选对话框 → 图片铺页 / PDF 渲染。
+    /// 「打开文档…」（更多 → 墨迹）：多选对话框 → 图片铺页 / PDF 渲染 / PPT 直映（调 Office/WPS 放）。
     /// 与「打开墨迹」同一套对话框纪律：看门线程、焦点借用、自检不弹框。
     /// </summary>
     internal void OpenDocumentFromUi()
@@ -230,7 +230,7 @@ public partial class InkEngine
 
     /// <summary>
     /// 打开文档。返回 null = 成功；否则是给用户看的一句失败原因。
-    /// 分工：都是图片 → 一叠图页；就一份 PDF → PDF 文档；混选/多份 PDF → 提示重选。
+    /// 分工：都是图片 → 一叠图页；就一份 PDF → PDF 文档；就一份 PPT → 直映（调 Office/WPS 放）；混选 → 提示重选。
     /// </summary>
     internal string OpenDocuments(IReadOnlyList<string> paths)
     {
@@ -238,17 +238,28 @@ public partial class InkEngine
 
         var images = new List<string>();
         var pdfs = new List<string>();
+        var ppts = new List<string>();
         foreach (var p in paths)
         {
             if (DocImageSource.IsImage(p)) images.Add(p);
             else if (string.Equals(System.IO.Path.GetExtension(p), ".pdf", StringComparison.OrdinalIgnoreCase))
                 pdfs.Add(p);
+            else if (PptLaunch.IsPpt(p)) ppts.Add(p);
+        }
+
+        // PPT 走"直映"：不铺页、不进文档层——交给系统里现成的 Office/WPS 放起来
+        // （放映检测 / 批注联动由现成的 Ppt.cs 接管，见 LaunchPptShow）。
+        if (ppts.Count > 0)
+        {
+            if (images.Count > 0 || pdfs.Count > 0) return "PPT 和图片/PDF 不能一起选（一次选一种）";
+            if (ppts.Count > 1) return $"PPT 一次放一个（这次选了 {ppts.Count} 个）";
+            return LaunchPptShow(ppts[0]);
         }
 
         if (pdfs.Count == 0 && images.Count > 0) return OpenImageDocument(images);
         if (images.Count == 0 && pdfs.Count == 1) return OpenPdfDocument(pdfs[0]);
         if (pdfs.Count > 0) return "PDF 一次打开一份（图片可以多选）";
-        return "没有能打开的文件（支持图片和 PDF）";
+        return "没有能打开的文件（支持图片、PDF 和 PPT）";
     }
 
     /// <summary>

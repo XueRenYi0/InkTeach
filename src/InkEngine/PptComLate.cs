@@ -248,4 +248,72 @@ internal static unsafe class ComLate
         if (hr != 0) return false;
         return true;
     }
+
+    // ---- 建实例 + 带 BSTR 的多参调用（2026-10-09，PPT 直映用）------------------------
+    //
+    // 原来的用法是"ROT 里找个已经开着的 PPT 连上去读状态"；直映要反过来：
+    // **从零把 WPS 的自动化服务器叫起来**（CoCreateInstance）再下命令。
+
+    [DllImport("ole32.dll", CharSet = CharSet.Unicode)]
+    private static extern int CLSIDFromProgID(string progId, out Guid clsid);
+
+    [DllImport("ole32.dll")]
+    private static extern int CoCreateInstance(ref Guid rclsid, IntPtr pUnkOuter, uint dwClsContext, ref Guid riid, out IntPtr ppv);
+
+    private const uint CLSCTX_LOCAL_SERVER = 4;
+
+    /// <summary>按 ProgId 起一个**进程外**自动化实例，直接要 IDispatch。失败一律静默返回 false。</summary>
+    public static bool CreateFromProgId(string progId, out IntPtr disp)
+    {
+        disp = IntPtr.Zero;
+        EnsureCom();
+        if (CLSIDFromProgID(progId, out var clsid) != 0)
+        {
+            D($"CLSIDFromProgID(\"{progId}\") 失败");
+            return false;
+        }
+        var iid = IID_IDispatch;
+        int hr = CoCreateInstance(ref clsid, IntPtr.Zero, CLSCTX_LOCAL_SERVER, ref iid, out var p);
+        D($"CoCreateInstance(\"{progId}\") hr=0x{hr:X8}");
+        if (hr != 0) return false;
+        disp = p;
+        return true;
+    }
+
+    private static Variant BoolVar(bool b)
+    {
+        Variant v = default;
+        v.vt = VT_BOOL;
+        v.bVal = b ? (short)-1 : (short)0;
+        return v;
+    }
+
+    /// <summary>
+    /// 调 `Presentations.Open(File, ReadOnly, Untitled, WithWindow)`——4 个参数全给
+    /// （WithWindow=否 就是"无窗打开"：开完连编辑界面都不创建，WPS 直映要的正是这个）。
+    ///
+    /// ⚠ IDispatch 的参数按**倒序**排进 rgvarg（第 4 个参数排最前），别排反。
+    /// 成功返回文稿的 IDispatch*（**引用归调用者**，须 Release）；失败返回 0。
+    /// </summary>
+    public static IntPtr OpenPresentation(IntPtr presentations, string file, bool readOnly, bool untitled, bool withWindow)
+    {
+        if (presentations == IntPtr.Zero || GetId(presentations, "Open", out int id) != 0) return IntPtr.Zero;
+        IntPtr bstr = Marshal.StringToBSTR(file);
+        try
+        {
+            Variant* args = stackalloc Variant[4];
+            args[0] = BoolVar(withWindow);          // 第 4 个参数
+            args[1] = BoolVar(untitled);            // 第 3 个
+            args[2] = BoolVar(readOnly);            // 第 2 个
+            args[3] = default;
+            args[3].vt = VT_BSTR;                   // 第 1 个
+            args[3].ptr = bstr;
+            int hr = Invoke(presentations, id, DISPATCH_METHOD, (IntPtr)args, 4, out var v);
+            D($"Open(\"{System.IO.Path.GetFileName(file)}\") hr=0x{hr:X8} vt={v.vt}");
+            if (hr == 0 && (v.vt == VT_DISPATCH || v.vt == VT_UNKNOWN)) return v.ptr;   // 所有权转移
+            Clear(ref v);
+            return IntPtr.Zero;
+        }
+        finally { Marshal.FreeBSTR(bstr); }
+    }
 }

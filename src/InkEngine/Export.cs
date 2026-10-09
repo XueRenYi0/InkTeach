@@ -905,16 +905,17 @@ internal static class ExportFileDialog
     private const int OFN_FILEMUSTEXIST = 0x00001000;
 
     /// <summary>
-    /// "打开文档…"的过滤器。四种：
-    /// ① 图片+PDF 混合（默认——老师不用先想"我这是啥"，图片多选、PDF 也行）；
-    /// ② 只要图片；③ 只要 PDF；④ 所有文件（老师自己改过扩展名时兜底）。
-    /// 说明：**PDF 与图片的"分工"不在对话框里做**——对话框只负责把路径拿回来，
-    /// 谁负责什么由调用方按扩展名决定（见 DocPages）。
+    /// "打开文档…"的过滤器。五种：
+    /// ① 图片+PDF+PPT 混合（默认——老师不用先想"我这是啥"；图片可多选）；
+    /// ② 只要图片；③ 只要 PDF；④ 只要 PPT；⑤ 所有文件（老师自己改过扩展名时兜底）。
+    /// 说明：**"分工"不在对话框里做**——对话框只负责把路径拿回来，
+    /// 谁负责什么由调用方按扩展名决定（图片/PDF 见 DocPages，PPT 见 PptLaunch）。
     /// </summary>
-    private const string DocumentFilter =
-        "图片与 PDF\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.pdf\0" +
+    internal const string DocumentFilter =
+        "图片、PDF 与 PPT\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.pdf;" + PptLaunch.FilterSpec + "\0" +
         "图片 (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff\0" +
         "PDF 文档 (*.pdf)\0*.pdf\0" +
+        "PPT 演示文稿 (" + PptLaunch.FilterSpec + ")\0" + PptLaunch.FilterSpec + "\0" +
         "所有文件 (*.*)\0*.*\0\0";
 
     [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -1001,7 +1002,7 @@ internal static class ExportFileDialog
             lpstrFile = new string('\0', cap),
             nMaxFile = cap,
             lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
-            lpstrTitle = "打开文档（图片可多选）",
+            lpstrTitle = "打开文档（图片可多选；PPT 直接放映）",
             lpstrDefExt = "pdf",
             Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_ALLOWMULTISELECT,
         };
