@@ -236,7 +236,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按三列里的布局走**：
     /// 外观（4）/ 书写（5）/ 墨迹（3）三列并排——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, DwellShape, Pressure, Predict, RestoreInk, PptAutoSave, HistoryDays }
+    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, UiSize, DwellShape, Pressure, Predict, RestoreInk, PptAutoSave, HistoryDays }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -254,6 +254,10 @@ public sealed class FullUi : IOverlayUi
         // **范围是收窄过的**：只给图标-only / 带快捷键 / 隐藏手势，别的（色带、文字段、
         // 点一下就见结果的）都不配——判据见《调研-悬停提示-Tooltip.md》10.8。
         (Row.Tooltip, "功能提示", false, false, "鼠标 / 笔悬停、手指长按，显示名称与快捷键"),
+        // 界面缩放（2026-10-10 用户拍板"做 A：档位式全局缩放"）：五档 0.8/0.9/1/1.15/1.3，
+        // 点一下换一档、到顶回头。**缩的是界面自己**（工具带 / 色带 / 抽屉 / 设置页 / 图库面板）；
+        // 笔宽、画布内容这些"纸上的尺"不跟着动。
+        (Row.UiSize, "界面大小", false, false, "工具带和面板的大小；点一下换一档（0.8～1.3，五档）"),
         // 停顿成型（2026-09-23 第二十批，见 计划-图形工具.md §四十二）：
         // 手写一笔停住 400ms → 把它变成规整图形。**默认开**（用户定的：
         // "因为是停顿变，所以默认开"），所以这一行的开关初始就是「开」。
@@ -2202,6 +2206,16 @@ public sealed class FullUi : IOverlayUi
                 SavePrefs();
                 break;
 
+            // 界面大小（2026-10-10）：五档循环、到顶回头。引擎立刻生效（重排 + 重画），
+            // 界面落盘 "uiscale"——**标准档不写项**（只写和默认不一样的，老规矩）。
+            case Row.UiSize:
+            {
+                float next = UiScalePresets.Next(_host.UiScale);
+                _host.SetPref("uiscale", UiScalePresets.StoreValue(next));
+                _host.Commands.SetUiScale(next);
+                break;
+            }
+
             // 停顿成型：翻转开关 → 推给引擎 → 落盘（**只写"关过的"那一份**：
             // 配置里没有这一项就是默认开，以后默认值改了老配置不会把新默认顶掉）。
             case Row.DwellShape:
@@ -2297,7 +2311,7 @@ public sealed class FullUi : IOverlayUi
     /// 2026-10-09：两列（左列堆"外观＋书写"）→ **三列并排**（外观 / 书写 / 墨迹 各一列）——
     /// 用户说"设置现在太长了"。原来左列堆 9 行（组头 26 + 9×48 + 8 ≈ 476），三列后最高 5 行。
     /// </summary>
-    private const int LookRowCount = 4;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 悬停提示
+    private const int LookRowCount = 5;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 悬停提示 / 界面大小
     private const int WriteRowCount = 3;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测（精细笔迹、触摸手势 2026-10-09 撤开关、改常开）
     private const int InkRowCount = 3;     // 墨迹：自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理
     private const float MoreColumnGap = 16f;
@@ -2519,6 +2533,7 @@ public sealed class FullUi : IOverlayUi
         Row.AutoHide => SetColRow(SetColKind.Look, 1),
         Row.RailPin => SetColRow(SetColKind.Look, 2),
         Row.Tooltip => SetColRow(SetColKind.Look, 3),
+        Row.UiSize => SetColRow(SetColKind.Look, 4),
         Row.DwellShape => SetColRow(SetColKind.Write, 0),
         Row.Pressure => SetColRow(SetColKind.Write, 1),
         Row.Predict => SetColRow(SetColKind.Write, 2),
@@ -2827,7 +2842,8 @@ public sealed class FullUi : IOverlayUi
         var label = new RectF
         {
             MinX = r.MinX + 4f, MinY = r.MinY,
-            MaxX = r.MaxX - (IsToggleRow(i) ? MoreSwitchW + 10f : Rows[i].Kind == Row.HistoryDays ? 72f : 4f),
+            MaxX = r.MaxX - (IsToggleRow(i) ? MoreSwitchW + 10f
+                             : Rows[i].Kind is Row.HistoryDays or Row.UiSize ? 72f : 4f),
             MaxY = r.MaxY,
         };
         // 2026-10-02 第二批：行下那行 11px 小灰字（Hint）**不再画**——搬进悬停/长按提示；
@@ -2836,6 +2852,10 @@ public sealed class FullUi : IOverlayUi
         if (IsToggleRow(i)) DrawSwitch(ctx, MoreSwitchRect(i), IsOn(i));
         else if (Rows[i].Kind == Row.HistoryDays)
             _widgets.Text(ctx, HistoryDaysName(_host.GetPref("historyDays")),
+                          new RectF { MinX = r.MaxX - 72f, MinY = r.MinY, MaxX = r.MaxX - 4f, MaxY = r.MaxY },
+                          12.5f, Brush(ctx, InkCol));
+        else if (Rows[i].Kind == Row.UiSize)
+            _widgets.Text(ctx, UiScalePresets.Name(_host.UiScale),
                           new RectF { MinX = r.MaxX - 72f, MinY = r.MinY, MaxX = r.MaxX - 4f, MaxY = r.MaxY },
                           12.5f, Brush(ctx, InkCol));
     }

@@ -61,6 +61,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
 
     public float DpiScale => _dpiScale;
 
+    /// <summary>当前界面缩放档（见 <see cref="UiScalePresets"/>；设置页显示用）。</summary>
+    public float UiScale => _engine.UiScale;
+
     /// <summary>
     /// true 表示这是"换回同一个界面"，不是首次接入。界面据此决定要不要
     /// 重新采纳引擎给的屏幕尺寸——重新采纳会把界面摆到按另一套坐标算的位置上。
@@ -91,6 +94,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     // ---- IEngineCommands -------------------------------------------------
 
     public void SetTool(Tool tool) => _engine.SetToolFromUi(tool);
+    public void SetUiScale(float scale) => _engine.SetUiScaleFromUi(scale);
     public void SetEraserPreferred() => _engine.SetEraserPreferredFromUi();
     public void CycleParabolaAxis() => _engine.CycleParabolaAxis();
     public void CycleLineDash() => _engine.CycleLineDash();

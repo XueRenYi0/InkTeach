@@ -1638,7 +1638,7 @@ internal sealed partial class OverlayWindow : IDisposable
             return false;
         }
 
-        float dpiScale = Dpi / 96f;
+        float k = Dpi / 96f * app.UiScale;   // 物理 = 界面逻辑 × k（DPI × 界面缩放）
 
         // 界面看到的"屏幕"是**整块虚拟桌面**，和 `IUiHost.Screen` 是同一个东西。
         //
@@ -1649,15 +1649,15 @@ internal sealed partial class OverlayWindow : IDisposable
         //
         // 注：这里的逻辑尺寸仍用全局 DpiScale（第一块屏）。副屏 DPI 不同的完整支持
         // 是二期（难点 4），届时改成按窗口取。
-        var uiScreen = app.LogicalVirtualScreen;
+        var uiScreen = app.UiLogicalScreen;   // 已除以 UiScale（界面放大后，它能摆的地方变小）
 
         // 界面只在布局会变的时候调（尺寸/DPI 变化）。正常每帧都走缓存。
-        if (_uiLayoutBounds.IsEmpty || _uiLayoutDpi != dpiScale
+        if (_uiLayoutBounds.IsEmpty || _uiLayoutDpi != k
             || !_uiLayoutScreen.Equals(uiScreen))
         {
-            _uiLayoutBounds = app.UiLayoutNow(uiScreen, dpiScale);
+            _uiLayoutBounds = app.UiLayoutNow(uiScreen, k);
         _uiLayoutScreen = uiScreen;
-        _uiLayoutDpi = dpiScale;
+        _uiLayoutDpi = k;
         }
 
         // 占用矩形每帧都问一次：悬浮条被拖动、展开调色板、折叠收起、暂时消失，
@@ -1667,13 +1667,13 @@ internal sealed partial class OverlayWindow : IDisposable
         // 物理像素的占用矩形。**连"画到外面那一圈"一起算**（投影，见 IOverlayUi.PaintMargin）：
         // 不算进去的话，面板一移动（拖动/展开/收起），旧投影就擦不掉——脏区里没有它，
         // 屏幕上会留下一条越来越脏的印子。命中测试用的是上面那份**没放大的**逻辑矩形。
-        float paintPad = app.UiPaintMarginNow * dpiScale;
+        float paintPad = app.UiPaintMarginNow * k;
         _uiBounds = live.IsEmpty ? RectF.Empty : new RectF
         {
-            MinX = live.MinX * dpiScale - paintPad,
-            MinY = live.MinY * dpiScale - paintPad,
-            MaxX = live.MaxX * dpiScale + paintPad,
-            MaxY = live.MaxY * dpiScale + paintPad,
+            MinX = live.MinX * k - paintPad,
+            MinY = live.MinY * k - paintPad,
+            MaxX = live.MaxX * k + paintPad,
+            MaxY = live.MaxY * k + paintPad,
         };
 
         return !live.IsEmpty;
@@ -1725,16 +1725,16 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawUi(InkEngine app)
     {
-        float dpiScale = Dpi / 96f;
+        float k = Dpi / 96f * app.UiScale;
         // 界面画在自己的绝对逻辑坐标里（和它 Layout 拿到的逻辑屏幕同一套），
-        // 引擎负责换算成物理像素：先乘 dpiScale，再减去窗口原点。
+        // 引擎负责换算成物理像素：先乘 k（DPI × 界面缩放），再减去窗口原点。
         //
         // **这里绝对不能带相机**：界面是贴在屏幕上的工具条，画布滚它不动。
         // 以前这里用的是 CanvasToWindow（含 ViewOffsetY），相机为 0 时看不出
         // 问题，一滚动整个界面就会跟着内容往上跑——正是"坐标换算漏一处"
         // 那一类 bug 的又一例。
         _ctx.SetDpi(96f, 96f);
-        _ctx.Transform = Matrix3x2.CreateScale(dpiScale)
+        _ctx.Transform = Matrix3x2.CreateScale(k)
                        * Matrix3x2.CreateTranslation(-OriginX, -OriginY);
         // 裁剪矩形同样用逻辑坐标（会被上面的变换一起作用）。
         // **往外放一圈**：界面会画到占用矩形外面（投影、浮出的预览，见 IOverlayUi.PaintMargin）。
@@ -1870,11 +1870,14 @@ internal sealed partial class OverlayWindow : IDisposable
         _app = app;                 // 画的过程中有几处要读"当前窗口"的状态
 
         float dpi = dpiScale;
+        // 界面的离屏出图必须和 DrawUi 用同一个乘数（DPI × 界面缩放）；
+        // 浮动层那条不乘（画布坐标本来就是物理像素，见下面 unit 一段）。
+        float uiK = dpi * app.UiScale;
         // **两条路的单位不一样**（这一条踩过）：界面画在自己的**逻辑**坐标里，要乘 DPI 换成
         // 物理像素；画布坐标**本身就是物理像素**（上下文 DPI 固定 96，`CanvasToWindow`
         // 也不带缩放），所以 1 个单位就是 1 个位图像素。第一版给浮动层也乘了 DPI，
         // 位图开成两倍大、内容却按 1:1 画，整个画面被推到左边去了。
-        float unit = floatingCanvasSpace ? 1f : dpi;
+        float unit = floatingCanvasSpace ? 1f : uiK;
         w = (int)MathF.Ceiling((bounds.MaxX - bounds.MinX) * unit) + padPx * 2;
         h = (int)MathF.Ceiling((bounds.MaxY - bounds.MinY) * unit) + padPx * 2;
         if (w <= 0 || h <= 0 || w > 8000 || h > 8000) return null;
@@ -1932,10 +1935,10 @@ internal sealed partial class OverlayWindow : IDisposable
             }
             else
             {
-                // 和 DrawUi 同一套坐标：先乘 DPI，再把界面左上角挪到留白处
-                _ctx.Transform = Matrix3x2.CreateScale(dpi)
-                               * Matrix3x2.CreateTranslation(-bounds.MinX * dpi + padPx,
-                                                             -bounds.MinY * dpi + padPx);
+                // 和 DrawUi 同一套坐标：先乘 DPI×界面缩放，再把界面左上角挪到留白处
+                _ctx.Transform = Matrix3x2.CreateScale(uiK)
+                               * Matrix3x2.CreateTranslation(-bounds.MinX * uiK + padPx,
+                                                             -bounds.MinY * uiK + padPx);
                 app.UiRenderNow(_ctx, app.FloatingTheme);
             }
             _ctx.Transform = Matrix3x2.Identity;
@@ -3659,7 +3662,7 @@ internal sealed partial class OverlayWindow : IDisposable
     private void DrawLibraryPanel(InkEngine app)
     {
         if (!app.LibraryPanelOpen) return;
-        float dpi = Dpi / 96f;
+        float dpi = Dpi / 96f * app.UiScale;   // 图库面板跟着界面缩放（挂在工具条上，一家子）
         var theme = app.FloatingTheme;
         var panel = app.LibraryPanelRectNow();
         int n = app.LibraryEntries.Count;

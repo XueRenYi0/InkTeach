@@ -119,8 +119,15 @@ public interface IUiHost
     /// </summary>
     RectF WorkArea { get; }
 
-    /// <summary>DPI 缩放（逻辑像素 → 物理像素）。</summary>
+    /// <summary>DPI 缩放（纯 DPI；界面逻辑单位→物理像素还要叠 UiScale，见 <see cref="UiScale"/>）。</summary>
     float DpiScale { get; }
+
+    /// <summary>
+    /// 当前**界面缩放档**（见 <see cref="UiScalePresets"/>；1 = 标准）。
+    /// 设置页那一行显示/循环用它——命令行 `--uiscale` 只覆盖本次运行时也能显示对。
+    /// 注意：界面自己的坐标仍然是"界面逻辑像素"，引擎在换算物理像素时会把这个乘数一起带上。
+    /// </summary>
+    float UiScale { get; }
 
     /// <summary>
     /// true 表示这是"换回同一个界面"，不是首次接入。界面据此决定要不要重新
@@ -214,6 +221,12 @@ public enum TimerMode
 public interface IEngineCommands
 {
     void SetTool(Tool tool);
+
+    /// <summary>
+    /// 换一档**界面缩放**（工具条 / 色带 / 抽屉 / 设置页的整体大小；档表见 `UiScalePresets`）。
+    /// 立刻生效；"该存哪一项"由界面负责（见 FullUi.ActivateRow 的 "uiscale"）。
+    /// </summary>
+    void SetUiScale(float scale);
 
     /// <summary>面板点橡皮格：切回上次用的橡皮形态（整笔/面积），顺手关穿透。</summary>
     void SetEraserPreferred();

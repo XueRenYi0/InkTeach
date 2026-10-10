@@ -228,6 +228,10 @@ public partial class InkEngine
     /// monitor DPI at use. Without this everything looks half-size on a 150%
     /// display, which is exactly how a 18px eraser turns into an unusable dot.</summary>
     internal float DpiScale = 1f;
+    /// <summary>界面缩放档（见 <see cref="UiScalePresets"/>；1 = 标准）。物理 = 逻辑 × DpiScale × UiScale。</summary>
+    internal float UiScale = 1f;
+    /// <summary>界面：一个逻辑单位 = 多少物理像素。**界面相关的换算一律用它**，别再用裸 DpiScale。</summary>
+    internal float UiUnit => DpiScale * UiScale;
 
     internal float EraserRadiusLogical = 22f;
     /// <summary>
@@ -2444,6 +2448,16 @@ public partial class InkEngine
         { LaserWidthLogical = Nearest(LaserWidthPresets, vLaser); LaserWidthIndex = NearestIndex(LaserWidthPresets, LaserWidthLogical); }
         if (float.TryParse(GetUiPref("wv.pixel"), out float vPixel))
         { PixelEraserWidthLogical = Nearest(PixelEraserWidthPresets, vPixel); PixelEraserWidthIndex = NearestIndex(PixelEraserWidthPresets, PixelEraserWidthLogical); }
+        // **界面缩放**（2026-10-10，档表见 UiScalePresets）：配置里存数值（"1.3"），读回先吸附。
+        // `--uiscale` 只覆盖**本次运行**、不落盘——自检出图与换机对照用。
+        if (float.TryParse(GetUiPref("uiscale"), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out float usPref))
+            UiScale = UiScalePresets.Snap(usPref);
+        for (int i = 0; i < args.Length - 1; i++)
+            if (args[i] == "--uiscale" && float.TryParse(args[i + 1],
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out float usArg))
+                UiScale = UiScalePresets.Snap(usArg);
         // 上次用的选择方式（矩形 / 套索）
         if (GetUiPref("selMode") == "lasso") SelMode = SelectMode.Lasso;
         // 触摸手势的旋钮（8.4.0）：双指总闸 / 手掌擦 / 三指擦 / 长按选择 / 两指点选 / 单指漫游。
@@ -3224,9 +3238,10 @@ public partial class InkEngine
         PressureSim.DpiScale = DpiScale;    // 模拟压力按 72dpi 口径换算距离（见 PressureSim）
         PressureSim.BumpVersion();
 
-        Host?.UpdateScreen(LogicalVirtualScreen);
-        Host?.UpdateWorkArea(LogicalPrimaryWorkArea);
-        Console.WriteLine($"DPI 缩放 {DpiScale:F2}（逻辑 {_windows[0].Width / DpiScale:F0}x{_windows[0].Height / DpiScale:F0}）");
+        Host?.UpdateScreen(UiLogicalScreen);
+        Host?.UpdateWorkArea(UiLogicalWorkArea);
+        Console.WriteLine($"DPI 缩放 {DpiScale:F2}（逻辑 {_windows[0].Width / DpiScale:F0}x{_windows[0].Height / DpiScale:F0}），"
+                          + $"界面缩放 {UiScale:F2}（{UiScalePresets.Name(UiScale)}）");
 
         // 把键盘模式落到窗口样式上。字段默认是开的，但样式要等窗口建好才能改——
         // 不调这一句，默认值和实际样式就对不上（得按一次 Ctrl+Alt+K 才生效）。
@@ -5162,7 +5177,7 @@ public partial class InkEngine
         // 格子亮一下是"这一格点得中"的反馈；整理模式下光标停在红 ✕ 上也是同一套。
         if (LibraryPanelOpen && !_drawing)
         {
-            float dpi = DpiScale;
+            float dpi = UiUnit;   // 图库面板跟着界面缩放走（它挂在工具条上，一家子）
             var panel = LibraryPanelRectNow();
             bool inside = LibraryLayout.Contains(panel, x, y);
             int hov = inside ? LibraryLayout.CellAt(panel, dpi, LibraryEntries.Count, x, y) : -1;
@@ -7140,8 +7155,8 @@ public partial class InkEngine
     /// <summary>图库面板这一刻的矩形（**画布坐标**）。绘制、命中、脏区都问它。</summary>
     internal RectF LibraryPanelRectNow()
     {
-        float dpi = DpiScale;
-        var ui = UiQueryBoundsNow();                 // 界面那套是**逻辑**像素，要自己乘回 dpi
+        float dpi = UiUnit;
+        var ui = UiQueryBoundsNow();                 // 界面那套是**逻辑**像素，要乘回物理（DPI × 界面缩放）
         var screen = LogicalVirtualScreen;           // 逻辑虚拟桌面
         float uiTop = ui.IsEmpty
             ? screen.MinY + 80f
@@ -7153,7 +7168,7 @@ public partial class InkEngine
     /// <summary>图库面板上的按下。返回 true = 这一下归面板（不再往下走到画布）。</summary>
     private bool LibraryPointerDown(float x, float y)
     {
-        float dpi = DpiScale;
+        float dpi = UiUnit;
         var panel = LibraryPanelRectNow();
         if (!LibraryLayout.Contains(panel, x, y)) return false;    // 面板外：交给调用方收面板
 
@@ -10536,8 +10551,8 @@ public partial class InkEngine
         foreach (var w in _windows) w.InvalidateUiLayout();
         _uiFaults = 0;
         _uiHover = false;
-        // 界面看到的屏幕坐标是逻辑像素：它按自己的逻辑尺寸布局，引擎负责按 DPI 放大。
-        Host = new UiHost(this, LogicalVirtualScreen, DpiScale, keepScreen);
+        // 界面看到的屏幕坐标是逻辑像素：它按自己的逻辑尺寸布局，引擎负责按 DPI×界面缩放 放大。
+        Host = new UiHost(this, UiLogicalScreen, DpiScale, keepScreen);
         Ui.Attach(Host);
         InvalidateUi();
         NotifyUiStateChanged();
@@ -10563,6 +10578,49 @@ public partial class InkEngine
         MaxX = (_virtualX + _virtualW) / DpiScale,
         MaxY = (_virtualY + _virtualH) / DpiScale,
     };
+
+    /// <summary>
+    /// 界面自己的**逻辑屏幕**：逻辑桌面再除以 UiScale。
+    /// 界面放大后 1 个"界面逻辑单位"占更多物理像素，它能摆的地方自然变小——
+    /// 这是"只乘一个 UiScale"之外必须同时做的一件事，不然 1.3 倍下工具条会被推到屏幕外。
+    /// </summary>
+    public RectF UiLogicalScreen => new()
+    {
+        MinX = LogicalVirtualScreen.MinX / UiScale,
+        MinY = LogicalVirtualScreen.MinY / UiScale,
+        MaxX = LogicalVirtualScreen.MaxX / UiScale,
+        MaxY = LogicalVirtualScreen.MaxY / UiScale,
+    };
+
+    /// <summary>主屏工作区的"界面逻辑"版（口径同 <see cref="UiLogicalScreen"/>）。</summary>
+    internal RectF UiLogicalWorkArea
+    {
+        get
+        {
+            var w = LogicalPrimaryWorkArea;
+            return new RectF
+            {
+                MinX = w.MinX / UiScale, MinY = w.MinY / UiScale,
+                MaxX = w.MaxX / UiScale, MaxY = w.MaxY / UiScale,
+            };
+        }
+    }
+
+    /// <summary>
+    /// 设置页「界面大小」换档（吸附后立刻生效；落盘由界面负责，见 FullUi.ActivateRow）。
+    /// 界面尺寸体系一变：各窗口的布局缓存作废、宿主拿新的"逻辑屏幕"重算、整帧重画。
+    /// </summary>
+    internal void SetUiScaleFromUi(float scale)
+    {
+        scale = UiScalePresets.Snap(scale);
+        if (MathF.Abs(scale - UiScale) < 0.001f) return;
+        UiScale = scale;
+        foreach (var w in _windows) w.InvalidateUiLayout();
+        Host?.UpdateScreen(UiLogicalScreen);
+        Host?.UpdateWorkArea(UiLogicalWorkArea);
+        InvalidateUi();
+        _dirty = true;
+    }
 
     /// <summary>
     /// **主屏的工作区**（物理像素）：屏幕减掉任务栏之后剩下的那块矩形。
@@ -11473,7 +11531,7 @@ public partial class InkEngine
                                bool fromTouch = false, uint pointerId = 0)
     {
         if (!UiVisibleNow) return false;
-        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip,
+        var e = new UiPointerEvent(x / UiUnit, y / UiUnit, pressure, fromPen, eraserTip,
                                    fromTouch, pointerId);
         if (!UiGuard("PointerDown", () => Ui.PointerDown(e), false)) return false;
         UiCapturing = true;
@@ -11487,7 +11545,7 @@ public partial class InkEngine
 
         // 只有在界面已经捕获输入或指针落在界面矩形内时才转发，避免没必要的调用。
         if (!UiCapturing && !UiContains(x, y)) return false;
-        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip,
+        var e = new UiPointerEvent(x / UiUnit, y / UiUnit, pressure, fromPen, eraserTip,
                                    false, pointerId);
         return UiGuard("PointerMove", () => Ui.PointerMove(e), false);
     }
@@ -11496,7 +11554,7 @@ public partial class InkEngine
                              uint pointerId = 0)
     {
         if (!UiVisibleNow || !UiCapturing) return false;
-        var e = new UiPointerEvent(x / DpiScale, y / DpiScale, pressure, fromPen, eraserTip,
+        var e = new UiPointerEvent(x / UiUnit, y / UiUnit, pressure, fromPen, eraserTip,
                                    false, pointerId);
         bool consumed = UiGuard("PointerUp", () => Ui.PointerUp(e), false);
         UiCapturing = false;
@@ -11505,7 +11563,7 @@ public partial class InkEngine
 
     private bool UiContains(float x, float y)
     {
-        x /= DpiScale; y /= DpiScale;   // 物理 → 逻辑
+        x /= UiUnit; y /= UiUnit;   // 物理 → 界面逻辑（DPI × 界面缩放）
         foreach (var w in _windows)
             if (w.UiBoundsLogicalContains(x, y)) return true;
         return false;
@@ -11733,8 +11791,8 @@ public partial class InkEngine
         // 逻辑 → 物理只在这里做一次（界面的坐标系永远只有逻辑那一套）。
         var phys = new RectF
         {
-            MinX = logical.MinX * DpiScale, MinY = logical.MinY * DpiScale,
-            MaxX = logical.MaxX * DpiScale, MaxY = logical.MaxY * DpiScale,
+            MinX = logical.MinX * UiUnit, MinY = logical.MinY * UiUnit,
+            MaxX = logical.MaxX * UiUnit, MaxY = logical.MaxY * UiUnit,
         };
 
         if (_uiInputShown && phys.Equals(_uiInputRect)) return;
