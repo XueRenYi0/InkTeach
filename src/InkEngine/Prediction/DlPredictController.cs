@@ -43,6 +43,7 @@ internal sealed class DlPredictController
     private readonly List<(float X, float Y, float P, double T, bool HasP)> _pending = new();
     private double _lastAssignedMs = double.NaN;
     private double _lastBatchNowMs = double.NaN;
+    private bool _lastHasP = true;             // 最近提交点是否有压感（无压感路 γ 收紧）
     private readonly float[] _rRing = new float[16];
     private int _rCount, _rPos;
     private float _rAdapt = RetimeMs;          // 板上自适应节距（单点流 → 相邻点距；批流 → 批距/批大小）
@@ -60,6 +61,11 @@ internal sealed class DlPredictController
     public float Gamma { get; set; } = 0.9f;
     /// <summary>光子滞后（ms；引擎每帧同步 = 帧周期，对齐产品"Present→上屏 1 帧"）。</summary>
     public float PhotonMs { get; set; } = 1000f / 90f;
+    /// <summary>事件门控（引擎侧开启）：最近一步转角速率过大 → 本帧不画尾（对标 B4 急转丢速）。
+    /// 探针对拍保持 false（验证纯管线）。</summary>
+    public bool EventGate;
+    /// <summary>无压感/鼠标路的 γ 缩放（引擎侧 0.85——整数坐标+低报点噪声大；探针对拍保持 1.0）。</summary>
+    public float NoPressureGammaScale = 1.0f;
 
     public bool Ready => _filled >= _hist;
     public int FeedCount => _filled;
@@ -210,6 +216,7 @@ internal sealed class DlPredictController
         _prev2X = _lastX; _prev2Y = _lastY; _prev2T = _lastT;
         _havePrev2 = true;
         _lastX = x; _lastY = y; _lastT = t;
+        _lastHasP = hasP;
     }
 
     private bool _havePrev2;
@@ -231,6 +238,14 @@ internal sealed class DlPredictController
     {
         CommitPending();
         if (!Ready || _hist > 20) return 0;
+
+        // 事件门控（对标 B4 急转丢速）：最近一步转角速率过急 → 本帧不画尾（下一帧自动恢复）。
+        if (EventGate)
+        {
+            float tr = _ring[(_filled - 1) * _inDim + 7];
+            if (tr > 1.2f) return 0;           // ≈69°/步
+        }
+
         Span<float> x = stackalloc float[20 * 8];
         int need = _hist * _inDim;
         // 环形此刻按"最旧→最新"连续排列（满环时上面做过搬移）
@@ -239,6 +254,7 @@ internal sealed class DlPredictController
         Span<float> lv = stackalloc float[20 * 2];
         _model.Predict(x.Slice(0, need), mu.Slice(0, _model.Horizons.Length * 2), lv, out _);
 
+        float gammaEff = Gamma * (_lastHasP ? 1f : NoPressureGammaScale);
         float tUse = Math.Min(PhotonMs, _model.Horizons[^1]);
         if (tUse <= 0.5f) return 0;
         int n = Math.Min(outPts.Length, 3);
@@ -248,8 +264,8 @@ internal sealed class DlPredictController
             InterpMu(mu, tj, out float mx, out float my);
             outPts[j - 1] = new PredictedPoint
             {
-                X = _lastX + Gamma * mx * _s,
-                Y = _lastY + Gamma * my * _s,
+                X = _lastX + gammaEff * mx * _s,
+                Y = _lastY + gammaEff * my * _s,
                 TimeMs = _lastT + tj,
             };
         }

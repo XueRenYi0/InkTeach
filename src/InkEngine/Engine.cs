@@ -1069,7 +1069,12 @@ public partial class InkEngine
                 ? InkDlPredictor.LoadEmbedded()
                 : InkDlPredictor.Load(System.IO.Path.Combine(_predict3WeightsDir, "weights.bin"),
                                       System.IO.Path.Combine(_predict3WeightsDir, "weights.meta.json"));
-            var c = new DlPredictController(model) { Gamma = _predict3Gamma };
+            var c = new DlPredictController(model)
+            {
+                Gamma = _predict3Gamma,
+                EventGate = true,                 // 急转帧不画尾（对标 B4 纪律）
+                NoPressureGammaScale = 0.85f,     // 鼠标/无压感路更保守
+            };
             string src = _predict3WeightsDir == null ? "嵌入资源" : _predict3WeightsDir;
             Console.WriteLine($"  [predict3] DL 预测载入 {src}（γ={_predict3Gamma:F2}，{model.Horizons.Length} 视界）");
             return c;
