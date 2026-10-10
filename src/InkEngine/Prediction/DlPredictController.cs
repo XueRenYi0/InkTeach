@@ -239,11 +239,15 @@ internal sealed class DlPredictController
         CommitPending();
         if (!Ready || _hist > 20) return 0;
 
-        // 事件门控（对标 B4 急转丢速）：最近一步转角速率过急 → 本帧不画尾（下一帧自动恢复）。
+        // 事件门控（对标 B4 急转丢速，两级软化）：
+        //   tr > 2.2 rad/步 → 本帧不画（极端急转，硬收）
+        //   tr > 1.2        → 输出缩到 45%（软收；避免"硬跳帧"造成的闪烁感）
+        float gateScale = 1f;
         if (EventGate)
         {
             float tr = _ring[(_filled - 1) * _inDim + 7];
-            if (tr > 1.2f) return 0;           // ≈69°/步
+            if (tr > 2.2f) return 0;
+            if (tr > 1.2f) gateScale = 0.45f;
         }
 
         Span<float> x = stackalloc float[20 * 8];
@@ -254,7 +258,7 @@ internal sealed class DlPredictController
         Span<float> lv = stackalloc float[20 * 2];
         _model.Predict(x.Slice(0, need), mu.Slice(0, _model.Horizons.Length * 2), lv, out _);
 
-        float gammaEff = Gamma * (_lastHasP ? 1f : NoPressureGammaScale);
+        float gammaEff = Gamma * (_lastHasP ? 1f : NoPressureGammaScale) * gateScale;
         float tUse = Math.Min(PhotonMs, _model.Horizons[^1]);
         if (tUse <= 0.5f) return 0;
         int n = Math.Min(outPts.Length, 3);
