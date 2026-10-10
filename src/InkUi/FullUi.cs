@@ -272,7 +272,10 @@ public sealed class FullUi : IOverlayUi
         (Row.Predict, "墨迹预测", false, false, "开了更跟手一点；默认关着，笔尾更稳当（等更完善再默认开）"),
         // 墨迹三条偏好（原本在「墨迹」页，2026-10-02 启动器改版后搬进设置子页）。
         (Row.RestoreInk, "自动恢复上次板书", false, false, "下次启动接上这次的板书"),
-        (Row.PptAutoSave, "PPT 墨迹自动保存", false, false, "放映时长按菜单仍可临时覆盖"),
+        // ⚠ 名称 2026-10-10 改：这个开关**不只管 PPT**——文档（PDF/图片）批注的按页
+        //   自动保存 / 装载也走它（DocImport 三处判 PptAutoSaveOn）。叫"课件"最贴：
+        //   PPT 和文档都是老师的课件（"文档"在我们界面语汇里专指 PDF/图片那类）。
+        (Row.PptAutoSave, "课件墨迹自动保存", false, false, "PPT 放映 / 文档打开时，批注按页自动保存、下次自动装载"),
         (Row.HistoryDays, "历史清理", false, false, "过期 PPT 缓存与备份，启动时清掉"),
         // ⚠ 「精细笔迹」「触摸手势」两个开关 2026-10-09 晚**已撤**（用户真机试稳：
         //   "开关拿掉，默认开"）——两条行为都常开了，只剩开发对照参数
@@ -2861,12 +2864,14 @@ public sealed class FullUi : IOverlayUi
         };
         // 2026-10-02 第二批：行下那行 11px 小灰字（Hint）**不再画**——搬进悬停/长按提示；
         // 行上只留标签，整行一条线，清爽。Hint 仍是提示的文案来源（Rows 表那一份）。
-        _widgets.Text(ctx, Rows[i].Label, label, 13f, Brush(ctx, ink), center: false);
+        // **垂直居中**（TextLeftMiddle）：右侧开关是居中的，标签贴顶就会差半行
+        //（用户 2026-10-10 报的"不在一条线上"）。
+        _widgets.TextLeftMiddle(ctx, Rows[i].Label, label, 13f, Brush(ctx, ink));
         if (IsToggleRow(i)) DrawSwitch(ctx, MoreSwitchRect(i), IsOn(i));
         else if (value != null)
-            _widgets.Text(ctx, value,
+            _widgets.TextLeftMiddle(ctx, value,
                           new RectF { MinX = r.MaxX - 4f - valueW, MinY = r.MinY, MaxX = r.MaxX - 4f, MaxY = r.MaxY },
-                          12.5f, Brush(ctx, InkCol), center: false);
+                          12.5f, Brush(ctx, InkCol));
     }
 
     // ---- 执行 ----------------------------------------------------------------

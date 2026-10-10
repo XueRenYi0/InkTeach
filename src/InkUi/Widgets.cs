@@ -72,6 +72,37 @@ internal sealed class Widgets
         catch { return 0f; }
     }
 
+    /// <summary>
+    /// 左对齐 ＋ **垂直居中**。
+    ///
+    /// DWrite 的默认段落对齐是"顶部"（`ParagraphAlignment.Near`），照原样画会贴行的上沿；
+    /// 设置页那些行是"左边标签 ＋ 右边开关"，而开关是垂直居中的——标签贴顶就和开关
+    /// 差了半行（用户 2026-10-10 报的"标签和开关不在一条线上"就是这个）。
+    /// 行高按字号实测一次、缓存住（同一字号的行高恒定）。
+    /// </summary>
+    public void TextLeftMiddle(ID2D1DeviceContext ctx, string text, RectF box, float size, ID2D1Brush brush)
+    {
+        float h = LineHeight(size);
+        float y = box.MinY + MathF.Max(0f, ((box.MaxY - box.MinY) - h) * 0.5f);
+        ctx.DrawText(text, Format(size, false),
+                     new Rect(box.MinX, y, box.MaxX - box.MinX, h), brush);
+    }
+
+    private readonly Dictionary<float, float> _lineHeights = new();
+
+    private float LineHeight(float size)
+    {
+        if (_lineHeights.TryGetValue(size, out float h)) return h;
+        try
+        {
+            using var layout = _host.TextFactory.CreateTextLayout("汉", Format(size, false), 4096f, 4096f);
+            h = layout.Metrics.Height;
+        }
+        catch { h = size * 1.4f; }
+        _lineHeights[size] = h;
+        return h;
+    }
+
     // ---- 滑条 ---------------------------------------------------------------
 
     /// <summary>轨道 + 已走过去的那一段 + 滑钮。返回滑钮的圆心（画预览用得上）。</summary>
