@@ -518,11 +518,14 @@ internal sealed partial class OverlayWindow : IDisposable
     public static int PressureInkDraws;
 
     /// <summary>
-    /// 是否启用委托墨迹轨迹。**默认关闭**：我们的接口调用全部返回成功，
-    /// 但在本机（合成鼠标输入）看不到任何渲染结果，很可能是系统只对
-    /// 真实手写笔输入启用这条通道。没有笔设备就无法验证，而一个验证不了的
-    /// 绘制通道有可能在真笔上留下重影，所以先关着，等有压感笔时再打开验证。
-    /// 用 --inktrail 打开。
+    /// 是否启用委托墨迹轨迹（只对 `PT_PEN` 喂点）。开关策略在 `Engine`：
+    /// 有笔数字化器时默认开，`--inktrail` / `--noinktrail` 可强制。
+    ///
+    /// ⚠ 2026-10-05 真笔实测定案：**本机的系统不渲染这条轨迹**——COM 调用全部成功、
+    /// 点也喂了进去（1522/1522），屏幕上没有任何新增墨（判据＝按下期间像素增量；
+    /// 用户目视确认"写的时候看不见墨迹，抬笔才会出现"）。所以它在本机**空转但不致害**
+    /// （湿墨实况＝自绘，合成边界配速 1.0 帧上屏），保留作换机器/换平板的验证通道；
+    /// `--syswet`（只让系统画）本机勿用。见 `延时-实测与优化.md` §八。
     /// </summary>
     public static bool InkTrailEnabled;
 
@@ -878,9 +881,11 @@ internal sealed partial class OverlayWindow : IDisposable
         _target.SetRoot(_visual).CheckError();
         _dcomp.Commit().CheckError();
 
-        // 微软的"委托墨迹轨迹"：把正在写的那一笔交给系统合成器去画，
+        // 微软的"委托墨迹轨迹"：本意是把正在写的那一笔交给系统合成器去画，
         // 应用自己的延迟就不再影响笔尖跟手程度。这一项要单独探测，
         // 因为它是较新的接口，老系统上没有。
+        // ⚠ 2026-10-05 真笔实测：本机系统不渲染它（调用全成功、屏幕无墨）——
+        // 保留探测与喂点作换机器验证；见 InkTrailEnabled 的注释。
         if (InkTrailNote == "未尝试")
         {
             try

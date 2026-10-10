@@ -14,7 +14,8 @@ namespace InkEngine;
 ///   MsgToPresent    我们处理这条消息 + 画一帧的耗时。归我们的渲染代码。
 ///   PresentBlock    Present 内部阻塞的时间（等垂直同步）。归呈现方式的选择。
 ///   PresentToDisplay Present 返回 → DXGI 报告这一帧上屏。归 DWM 合成 + 扫描输出，
-///                   除非换成委托墨迹轨迹，否则应用改不了它。
+///                   应用改不了它。（原设想：委托墨迹轨迹可让湿墨绕开这一段；
+///                   2026-10-05 实测本机系统不渲染它——本机仍按"改不了"理解。）
 ///
 /// 最后一段来自 IDXGISwapChain::GetFrameStatistics().SyncQPCTime。窗口化的
 /// 合成交换链上这个值**是"最近一次真正上屏的帧"的时刻**，不一定正好是我们
