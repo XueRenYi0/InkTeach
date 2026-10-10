@@ -117,8 +117,9 @@ M1（catmull）仍是默认档。
    - 活笔时把最后一个原始点接到输出末尾（补距离窗的固定滞后）；**只影响"正在写"的观感**，
      落笔后的成稿由收笔追赶负责，不受它影响；
    - 默认关的原因：原始点会在笔尖带回采样噪声；想换快写跟手再单独开。
-3. **预测尾**（既有开关）：`--motion mean2 --predict --predictms 8 --predictlead 8`
-   - 只对"我们自己画湿墨"的路径生效（鼠标/触摸）；真笔的湿墨由 DWM 委托轨迹画，跳过预测尾。
+3. **预测尾**（既有开关；**已于 2026-10-05 整体撤除**）：`--motion mean2 --predict --predictms 8 --predictlead 8`
+   - 只对"我们自己画湿墨"的路径生效（鼠标/触摸）；真笔当年按"由 DWM 委托轨迹画、跳过预测尾"
+     处理（⚠ 后经实测本机系统不渲染；且预测尾已撤除，见《已停用-渲染实验.md》）。
 
 回退后的验收（2026-10-04）：
 - `--smoothtest` 12/12；
@@ -228,7 +229,7 @@ WM_POINTER 整数像素采样；渲染期加工能做的已做完。再想突破
 dotnet run --project src/InkTeach -c Release -- --motion mean2                    # 对照
 dotnet run --project src/InkTeach -c Release -- --motion mean2 --predicttip       # 开预测笔尖
 
-# 真笔（委托轨迹开着时湿墨由系统画，我们的预测不上屏，所以必须关轨迹才看得见）
+# 真笔（⚠ 历史项：预测已整体撤除；当年要 --noinktrail 才看得见我们自己的尾）
 dotnet run --project src/InkTeach -c Release -- --motion mean2 --noinktrail                 # 对照
 dotnet run --project src/InkTeach -c Release -- --motion mean2 --noinktrail --predicttip    # 开
 
