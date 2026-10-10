@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- P0 探针：用金标向量（golden.bin）验证 InkDlPredictor 的 C# 前向与 PyTorch 一致。
+       直接源码级包含预测器（不引用 InkEngine 工程，保持独立、零依赖）。 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>dl-probe</AssemblyName>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\InkEngine\Prediction\InkDlPredictor.cs" Link="InkDlPredictor.cs" />
+  </ItemGroup>
+
+</Project>
