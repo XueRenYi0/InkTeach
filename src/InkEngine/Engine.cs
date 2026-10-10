@@ -1143,9 +1143,26 @@ public partial class InkEngine
             var o = _tailOffsets[^1];
             tipLenRaw = MathF.Sqrt(o.X * o.X + o.Y * o.Y);
         }
+        // 2026-10-12：**DL 档的速度自适应限速**——快写时收放都要更快。
+        // 离线对照（_ml-predict 总表 §八）：固定限速在快直线上吃掉 ~17px 滞后（13→30），
+        // 自适应收回 ~80%（30→16.6）且乱甩仍跟得住。B4 档保持原常数（它当时是按原始
+        // 突发输入调的，不动）。
+        float extRate = 0.20f, retRate = 0.11f, fastRate = 0.72f;
+        if (Predict3Forced && _dlPredictor != null && ActiveStroke.Points.Count >= 2)
+        {
+            var pa = ActiveStroke.Points[^2];
+            var pb = ActiveStroke.Points[^1];
+            double dtP = Math.Max(1e-3, pb.T - pa.T);
+            float dxp = pb.X - pa.X, dyp = pb.Y - pa.Y;
+            float vPxPerMs = (float)(Math.Sqrt(dxp * dxp + dyp * dyp) / dtP);
+            float f = Math.Clamp(vPxPerMs, 1f, 4f);
+            extRate = Math.Min(0.20f * f, 1.0f);
+            retRate = Math.Min(0.11f * f, 0.8f);
+            fastRate = Math.Min(0.72f * f, 3.0f);
+        }
         float rate = n <= 0
-            ? 0.72f * frameMs                                          // 失效：快收（≈8px/帧@90Hz）
-            : (tipLenRaw > _tailLen ? 0.20f : 0.11f) * frameMs;        // 正常：伸 2.2 / 缩 1.2（@90Hz）
+            ? fastRate * frameMs                                       // 失效：快收（≈8px/帧@90Hz）
+            : (tipLenRaw > _tailLen ? extRate : retRate) * frameMs;    // 正常：伸 2.2 / 缩 1.2（@90Hz）
         _tailLen += Math.Clamp(tipLenRaw - _tailLen, -rate, rate);
         if (_tailLen < 0.4f) _tailLen = 0f;
         if (_tailLen <= 0f || _tailOffsets.Count == 0) return;
