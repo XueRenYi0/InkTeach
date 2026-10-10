@@ -1,6 +1,7 @@
 # 输入栈盘点与"切换到 RTS（RealTimeStylus）"可行性
 
 日期：2026-10-10　　任务：用户问"我们现在的输入处理，以及更换的 RTS 的可行性"——**只调研，不写码**。
+（同日追加：§七 核对传闻"微软建议实时批注用 RTS"。）
 
 > **口径**：按墨迹语境，RTS = **RealTimeStylus**（Windows 7 / Tablet PC 时代的实时笔输入栈；
 > WPF `InkCanvas` 的 `StylusPlugIn` 底层就是它）。若你听到的是别的意思，见文末「附录：RTS 的其它含义」。
@@ -138,7 +139,55 @@
 
 ---
 
-## 七、出处（供核对）
+## 七、传闻核对："微软不建议用指针路写实时批注、建议用 RTS"？
+
+> 2026-10-10 追加。这个"听说"**一半是真的，但语境是 WPF**——拆开看。
+
+### 7.1 它的出处（为什么会有这个说法）
+
+- **WPF 的触摸/笔底层默认就是 RTS**（`PenImc` → RealTimeStylus → `wisptis` 共享内存）。
+  WPF 当年用它的原因（源码笔记口径）：一是 XP 时代的触摸支持，二是 **`InkCanvas` 需要高性能笔迹**。
+- WPF 后来给了"改用 Pointer 消息"的开关（`Switch.System.Windows.Input.Stylus.EnablePointerSupport=true`），
+  而中文 WPF 圈最常被引用的结论是：**"这个特性不支持实时的笔迹——因为笔迹需要运行在 UI 线程，
+  会导致比较差的性能。"**（林德熙）
+- 于是"**在 WPF 里写实时批注，别开 Pointer 开关，走 StylusPlugIn（RTS 那套）**"——**这层意思是对的**：
+  WPF 高速书写的正统做法是在**触摸线程**拿点（`StylusPlugIn.OnStylusMove`），而不是在主线程等路由事件
+  （UI 线程一忙就拖笔）。注意：在 WPF 里用 `InkCanvas`/触笔插件，**就等于在用 RTS**——微软把它包好了，
+  这不是"建议你手接 RTS COM"。
+- 网上流传的延时对比（林德熙 WPF Demo，触摸场景）：`WM_Touch` **12ms** / `WM_Pointer` **6ms** /
+  **RealTimeStylus ≈4.6ms**——"RTS 最快"的说法就是从这类测试来的。作者自己也强调：
+  "**快和慢是相对的**……受第三方干扰和主线程忙碌影响"，且那是**触摸**场景的 Demo 数据。
+
+### 7.2 正解（这句话不能推广到我们）
+
+1. **微软面向开发者的正规建议不是"手接 RTS"，而是"用平台的低延迟墨水通道"**：
+   实时墨迹不能靠"在 UI 线程逐帧自己画"——WPF 世界的通道就是 **RTS 底**（StylusPlugIn + DynamicRenderer，
+   触笔线程 + 动态渲染线程）；UWP/WinUI 世界的通道是 **InkPresenter** 的低延迟管线。
+2. **桌面自绘墨迹（我们这个形态）的正规通道＝委托墨迹轨迹（`DelegatedInkTrailVisual`）**：
+   由**系统合成器替应用画正在写的这一笔**（应用忙也照样出墨、不必每帧自绘）——和 RTS 的 DynamicRenderer
+   **是同一个思想**（湿墨不走应用 UI 线程），只是换成合成层实现、面向所有桌面应用。**我们用的正是这条。**
+   所以"微软的建议"拆到底**我们一条没违**：输入不在 UI 线程排队（消息环轻 + Raw Input 补点）；
+   湿墨不自己逐帧画（DWM 代画）。
+3. **"RTS 快 1.4ms"的账在我们链上早就被绕掉了**：
+   - 它快在"点从 wisptis 到应用少一段消息路径 + 不在繁忙主线程排队"；
+   - 我们：消息排队段实测 **0.05ms**；湿墨段已交 DWM（免主线程）；端到端 26ms 里 **16.7ms 是刷新地板**；
+   - 而换 RTS 要拆掉：`WM_POINTER`/`WM_TOUCH` 全断供（触摸手势/光标/悬停/穿透重做）、多实例互斥、
+     COM/AOT 成本（§四、§五已列全）。
+4. **"WPF 的 Pointer 开关不支持实时笔迹"≠"WM_POINTER 写不了低延迟墨迹"**：
+   那说的是 **WPF 没给 Pointer 栈做等价的动态渲染实现**（它的湿墨通道只建在 WISP/RTS 上）。
+   对不用 WPF 框架、自己控合成与消息环的应用，指针消息 + 委托墨迹就是微软给的自绘墨迹正道——
+   UWP/WinUI 的墨迹入口（InkPresenter）同样不是"UI 线程逐帧自绘"。
+
+### 7.3 一句话口径
+
+> "微软建议实时批注别在 UI 线程硬画、要用专用低延迟墨水通道"——**对，我们用的就是这代 Windows
+> 给桌面应用的那条通道（DWM 委托墨迹）**；
+> "所以要手接 RTS"——**不对**，那是 WPF 框架内部（InkCanvas/StylusPlugIn）的老实现；
+> 对我们这种非 WPF 覆盖层，换它反而要放弃整条 `WM_POINTER` 输入栈——结论维持：**不换**。
+
+---
+
+## 八、出处（供核对）
 
 - Learn：`RealTimeStylus class` / `IRealTimeStylus (rtscom.h)` / `Working with the RealTimeStylus Class` /
   `Plug-ins and the RealTimeStylus Class` / `StylusPlugIn Class` / `DynamicRenderer Class` /
@@ -151,6 +200,14 @@
 - SDL issue #11479（"Seems like a mess… no reason to touch those"）
 - Wacom 开发者文档（Windows Ink 家族里把 RTS 与 WPF/Microsoft.Ink 并列）、
   helpdeskgeek/wisptis 说明（wisptis 在 Win10/11 仍常驻、用途与吐槽）
+- 林德熙（lindexi）：《win10 支持默认把触摸提升 Pointer 消息》（**"这个特性不支持实时的笔迹……
+  笔迹需要运行在 UI 线程"**）、《WPF 从零自己实现从 RealTimeStylus 获取触摸信息》（RTS 数据通路、
+  与 WM_POINTER/WM_TOUCH 互斥、多实例互斥、延时 Demo：WM_Touch 12ms / WM_Pointer 6ms / RTS 4.6ms）、
+  《WPF 底层 从手指触摸屏幕到笔迹在屏幕显示中间的步骤》（高速书写推荐 StylusPlugIn＝触摸线程取点）
+- dotnet/wpf #3379、#5939（`EnablePointerSupport` 与 PressAndHold 冲突；官方/"Windows 的限制"口径）
+- Learn：`Architecture of the StylusInput APIs`、`Dynamic-Renderer Plug-ins`、`Inking Controls (InkCanvas/InkPresenter)`；
+  WinRT `DelegatedInkTrailVisual` + MSEdge Explainers《Web Ink Enhancement: Delegated Ink Trail》
+  （系统合成器代画湿墨、绕开应用 UI 线程的同一思想）
 - 本地实测与盘点：`延时-实测与优化.md`、`对标-微软墨迹栈与我们的架构.md`（§十"接没接 RTS"）、
   `优化记录/修复记录-Wintab压力-接入.md`、`Input/PenInput.cs`、`Engine.cs`
 
