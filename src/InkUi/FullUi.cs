@@ -2839,25 +2839,34 @@ public sealed class FullUi : IOverlayUi
                 Brush(ctx, HoverCol));
 
         Color4 ink = Rows[i].Dangerous ? new Color4(0.85f, 0.22f, 0.22f, 1f) : InkCol;
+
+        // 右侧的"值"（历史清理 / 界面大小）：**和标签同一行**、按实测宽度贴右。
+        // ⚠ 画它必须 `center: false`——Widgets.Text 的居中参数是**两轴都居中**，
+        //   值垂直也居中、而标签是顶部对齐，看起来就像"掉到第二行"
+        //   （用户 2026-10-10 指出，顺手把"历史清理"的"永久"也归位）。
+        string value = Rows[i].Kind switch
+        {
+            Row.HistoryDays => HistoryDaysName(_host.GetPref("historyDays")),
+            Row.UiSize => UiScalePresets.Name(_host.UiScale),
+            _ => null,
+        };
+        float valueW = value != null ? _widgets.Measure(value, 12.5f) : 0f;
+
         var label = new RectF
         {
             MinX = r.MinX + 4f, MinY = r.MinY,
             MaxX = r.MaxX - (IsToggleRow(i) ? MoreSwitchW + 10f
-                             : Rows[i].Kind is Row.HistoryDays or Row.UiSize ? 72f : 4f),
+                             : value != null ? valueW + 10f : 4f),
             MaxY = r.MaxY,
         };
         // 2026-10-02 第二批：行下那行 11px 小灰字（Hint）**不再画**——搬进悬停/长按提示；
         // 行上只留标签，整行一条线，清爽。Hint 仍是提示的文案来源（Rows 表那一份）。
         _widgets.Text(ctx, Rows[i].Label, label, 13f, Brush(ctx, ink), center: false);
         if (IsToggleRow(i)) DrawSwitch(ctx, MoreSwitchRect(i), IsOn(i));
-        else if (Rows[i].Kind == Row.HistoryDays)
-            _widgets.Text(ctx, HistoryDaysName(_host.GetPref("historyDays")),
-                          new RectF { MinX = r.MaxX - 72f, MinY = r.MinY, MaxX = r.MaxX - 4f, MaxY = r.MaxY },
-                          12.5f, Brush(ctx, InkCol));
-        else if (Rows[i].Kind == Row.UiSize)
-            _widgets.Text(ctx, UiScalePresets.Name(_host.UiScale),
-                          new RectF { MinX = r.MaxX - 72f, MinY = r.MinY, MaxX = r.MaxX - 4f, MaxY = r.MaxY },
-                          12.5f, Brush(ctx, InkCol));
+        else if (value != null)
+            _widgets.Text(ctx, value,
+                          new RectF { MinX = r.MaxX - 4f - valueW, MinY = r.MinY, MaxX = r.MaxX - 4f, MaxY = r.MaxY },
+                          12.5f, Brush(ctx, InkCol), center: false);
     }
 
     // ---- 执行 ----------------------------------------------------------------
