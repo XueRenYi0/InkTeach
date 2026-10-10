@@ -998,6 +998,11 @@ public partial class InkEngine
         // B4：喂预测器。**统一用处理时刻 NowMs**——同一笔里混用"硬件时标 / 消息时标"
         // （笔消息 vs raw 补点的来源不同）会把速度算乱，v0 先用一把单调时钟保稳。
         if (PredictTailEnabled) _predictor.Add(x, y, NowMs);
+        if (PredictTailEnabled && Predict3Forced)
+        {
+            _dlPredictor ??= TryCreateDlPredictor();
+            _dlPredictor?.Add(x, y, p, NowMs, ActiveStroke.HasPressure);
+        }
         if (CleanWindow <= 1) { ActiveStroke.AddPoint(x, y, p, t); return; }
 
         _cleanBuf.Add((x, y, p));
@@ -1021,6 +1026,12 @@ public partial class InkEngine
 
     // 版本号显示见 Update.cs 末尾的 `ProductInfo`（界面工程用；它拿不到内部的 UpdateFeed）。
     private readonly InkPredictor _predictor = new();
+    // P1（2026-10-11）`--predict3`：DL 预测（v4 的 C# 前向，P0 对拍 maxΔ=7e-6）。
+    // 默认关；载入失败/运行异常一律退回 B4（规矩三）。γ 默认 0.9（保守）。
+    private DlPredictController _dlPredictor;
+    internal static bool Predict3Forced;
+    private float _predict3Gamma = 0.9f;
+    private string _predict3WeightsDir;
     private float _tailLen;                               // 显示尾长（画布像素，限速平滑）
     private float _tailWidthState;                        // 尾宽平滑状态（0=未定）
     private readonly List<Vector2> _tailOffsets = new();  // 预测偏移（相对原始末点，画布坐标）
@@ -1038,6 +1049,7 @@ public partial class InkEngine
     private void ResetPredictTail()
     {
         _predictor.Reset();
+        _dlPredictor?.Reset();
         // v0：速度估计加一层平滑（0.4）——批量投递/压力变化会让差分速度有帧间尖峰，
         // 尖峰直接乘进尾巴长度就是"笔头跳跃"（4 号粗细下特别显眼的那种）。
         _predictor.VelocitySmoothing = 0.4f;
@@ -1045,6 +1057,29 @@ public partial class InkEngine
         _tailWidthState = 0f;
         _tailOffsets.Clear();
         _tailCanvas.Clear();
+    }
+
+    /// <summary>`--predict3`：载入 DL 权重（默认 `AppContext.BaseDirectory\dlv4\`；
+    /// `--predict3weights <目录>` 可改）。失败当没有：报一行、退回 B4，本会话不再尝试。</summary>
+    private DlPredictController TryCreateDlPredictor()
+    {
+        try
+        {
+            InkDlPredictor model = _predict3WeightsDir == null
+                ? InkDlPredictor.LoadEmbedded()
+                : InkDlPredictor.Load(System.IO.Path.Combine(_predict3WeightsDir, "weights.bin"),
+                                      System.IO.Path.Combine(_predict3WeightsDir, "weights.meta.json"));
+            var c = new DlPredictController(model) { Gamma = _predict3Gamma };
+            string src = _predict3WeightsDir == null ? "嵌入资源" : _predict3WeightsDir;
+            Console.WriteLine($"  [predict3] DL 预测载入 {src}（γ={_predict3Gamma:F2}，{model.Horizons.Length} 视界）");
+            return c;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  [predict3] DL 载入失败 → 退回 B4：{ex.Message}");
+            Predict3Forced = false;
+            return null;
+        }
     }
 
     /// <summary>
@@ -1064,6 +1099,10 @@ public partial class InkEngine
             return;
         }
 
+        float frameMs = _windows.Count > 0 && _windows[0].RefreshPeriodMs > 1.0
+            ? (float)_windows[0].RefreshPeriodMs
+            : 1000f / 90f;
+
         // 非压感路（关 ink 的鼠标路 / 触摸）：整数坐标 + 点粗，尾巴**方向噪声**更大——
         // 用更重的速度平滑 + 更保守的推进，压住"左右甩"（用户 2026-10-08：关 ink 5 号有点甩）。
         _predictor.VelocitySmoothing = ActiveStroke.HasPressure ? 0.4f : 0.6f;
@@ -1071,7 +1110,16 @@ public partial class InkEngine
         _predictor.SharpTurnCos = PredictSharpTurnCos;   // B4.2：急转丢速阈值（`--turndeg`）
 
         var pred = new PredictedPoint[6];
-        int n = _predictor.Predict(pred);
+        int n;
+        if (Predict3Forced && _dlPredictor != null)
+        {
+            _dlPredictor.PhotonMs = frameMs;      // 光子 = 1 帧（对齐离线台口径）
+            n = _dlPredictor.PredictPoints(pred);
+        }
+        else
+        {
+            n = _predictor.Predict(pred);
+        }
         if (n > 0)
         {
             var raw = ActiveStroke.Points[^1];
@@ -1084,9 +1132,6 @@ public partial class InkEngine
         // 速率按**时间**定义（px/ms）：60Hz 学校屏与 90Hz 本机观感不漂移（帧数不同、时间相同）。
         // 三段分开：正常伸出平滑 / 正常回缩短 / **预测失效时快收**——后者治
         // "急转处旧方向的尾留在屏幕上慢慢缩"（用户 2026-10-08 学校机："写快时急转偶尔跳一下"）。
-        float frameMs = _windows.Count > 0 && _windows[0].RefreshPeriodMs > 1.0
-            ? (float)_windows[0].RefreshPeriodMs
-            : 1000f / 90f;
         float tipLenRaw = 0f;
         if (n > 0 && _tailOffsets.Count > 0)
         {
@@ -2242,6 +2287,14 @@ public partial class InkEngine
             // `--nopredict2` 关、`--predict2` 强开，两者都给对照实验用、优先于偏好。
             _noPredictArg = args.Contains("--nopredict2");
             _forcePredictArg = args.Contains("--predict2");
+            Predict3Forced = args.Contains("--predict3");
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--predict3g" && float.TryParse(args[i + 1], out float g3))
+                    _predict3Gamma = Math.Clamp(g3, 0.5f, 1.2f);
+                if (args[i] == "--predict3weights")
+                    _predict3WeightsDir = args[i + 1];
+            }
             ApplyPredictTailSetting();
             // `--pred2ms N` 地平线（收进 8~200ms，默认 10）
             for (int i = 0; i < args.Length - 1; i++)
@@ -10971,7 +11024,8 @@ public partial class InkEngine
     /// <summary>默认**关**（2026-10-09 用户定：等测试完善了再默认开）；命令行为对照实验优先
     /// （`--nopredict2` 关 / `--predict2` 开），否则听偏好（偏好写过 "1" 才开）。</summary>
     private void ApplyPredictTailSetting()
-        => PredictTailEnabled = !_noPredictArg && (_forcePredictArg || GetUiPref(PredictPrefKey) == "1");
+        => PredictTailEnabled = !_noPredictArg
+           && (_forcePredictArg || Predict3Forced || GetUiPref(PredictPrefKey) == "1");
 
     /// <summary>
     /// 自检用：把"压感粗细"的偏好**重新应用一次**——模拟"重开软件"里读偏好那一步。

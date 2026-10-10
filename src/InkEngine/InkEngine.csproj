@@ -36,4 +36,10 @@
     <PackageReference Include="Vortice.Mathematics" Version="2.1.1" />
   </ItemGroup>
 
+  <!-- P1：DL 预测权重（predict3 旗标用；嵌入程序集，随 exe 分发，共 ~140KB） -->
+  <ItemGroup>
+    <EmbeddedResource Include="Prediction\dlv4\weights.bin" LogicalName="dlv4.weights.bin" />
+    <EmbeddedResource Include="Prediction\dlv4\weights.meta.json" LogicalName="dlv4.weights.meta.json" />
+  </ItemGroup>
+
 </Project>

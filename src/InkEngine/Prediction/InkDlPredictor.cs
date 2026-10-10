@@ -40,8 +40,25 @@ internal sealed class InkDlPredictor
 
     /// <summary>从导出目录加载（weights.bin + weights.meta.json）。</summary>
     public static InkDlPredictor Load(string weightsBinPath, string metaJsonPath)
+        => From(File.ReadAllBytes(weightsBinPath), File.ReadAllText(metaJsonPath));
+
+    /// <summary>从程序集嵌入资源加载（产品路径；资源名 dlv4.weights.bin / dlv4.weights.meta.json）。</summary>
+    public static InkDlPredictor LoadEmbedded()
     {
-        var doc = JsonDocument.Parse(File.ReadAllText(metaJsonPath));
+        var asm = typeof(InkDlPredictor).Assembly;
+        using var ws = asm.GetManifestResourceStream("dlv4.weights.bin")
+            ?? throw new InvalidOperationException("嵌入资源缺失：dlv4.weights.bin");
+        using var ms = new MemoryStream();
+        ws.CopyTo(ms);
+        using var js = asm.GetManifestResourceStream("dlv4.weights.meta.json")
+            ?? throw new InvalidOperationException("嵌入资源缺失：dlv4.weights.meta.json");
+        using var sr = new StreamReader(js);
+        return From(ms.ToArray(), sr.ReadToEnd());
+    }
+
+    private static InkDlPredictor From(byte[] bytes, string metaJson)
+    {
+        var doc = JsonDocument.Parse(metaJson);
         var root = doc.RootElement;
         var p = new InkDlPredictor
         {
@@ -54,7 +71,6 @@ internal sealed class InkDlPredictor
         p.Horizons = hz.ToArray();
         int H = p.Hidden;
 
-        var bytes = File.ReadAllBytes(weightsBinPath);
         var map = new Dictionary<string, (int off, int count)>();
         foreach (var w in root.GetProperty("weights").EnumerateArray())
         {
