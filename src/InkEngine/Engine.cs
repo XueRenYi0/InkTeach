@@ -1120,6 +1120,8 @@ public partial class InkEngine
         {
             _dlPredictor.PhotonMs = frameMs;      // 光子 = 1 帧（对齐离线台口径）
             n = _dlPredictor.PredictPoints(pred);
+            if (n == 0 && !_dlPredictor.Ready)
+                n = _predictor.Predict(pred);     // 第9轮：起笔预热段（DL 没料）→ B4 兜底
         }
         else
         {
