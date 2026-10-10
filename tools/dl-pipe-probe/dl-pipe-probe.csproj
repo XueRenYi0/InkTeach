@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- P1 对拍探针：把 retimed reclive 的 S 点按"引擎同规则"喂 DlPredictController，
+       输出逐样本的显示点 CSV，供 _ml-predict/code/pipe_ref.py 对照（特征管线+重定标+前向）。 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>dl-pipe-probe</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\InkEngine\Prediction\InkDlPredictor.cs" Link="InkDlPredictor.cs" />
+    <Compile Include="..\..\src\InkEngine\Prediction\DlPredictController.cs" Link="DlPredictController.cs" />
+  </ItemGroup>
+
+</Project>

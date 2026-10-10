@@ -42,6 +42,10 @@ internal sealed class DlPredictController
     // ---- 重定标状态 ----
     private readonly List<(float X, float Y, float P, double T, bool HasP)> _pending = new();
     private double _lastAssignedMs = double.NaN;
+    private double _lastBatchNowMs = double.NaN;
+    private readonly float[] _rRing = new float[16];
+    private int _rCount, _rPos;
+    private float _rAdapt = RetimeMs;          // 板上自适应节距（单点流 → 相邻点距；批流 → 批距/批大小）
     private bool _havePrev;
     private float _lastX, _lastY;
     private double _lastT;
@@ -76,6 +80,9 @@ internal sealed class DlPredictController
         _s = 2.0f;
         _fScale = 0.5f;
         _lastAssignedMs = double.NaN;
+        _lastBatchNowMs = double.NaN;
+        _rCount = _rPos = 0;
+        _rAdapt = RetimeMs;
         _havePrev = false;
         _havePrev2 = false;
     }
@@ -86,26 +93,48 @@ internal sealed class DlPredictController
         _pending.Add((x, y, p, nowMs, hasPressure));
     }
 
-    /// <summary>把当前批提交进特征环（前向填充 + 定标，与 retime_reclive.py 同规则）。</summary>
+    /// <summary>
+    /// 把当前批提交进特征环。**后向锚定**：批内末点 = 到达时刻（单点流 = 原时标透传），
+    /// 向前按自适应节距 r̂ 展开（r̂ = 最近批距/批大小的滚动中位，clamp 2~8ms）。
+    /// 等效"还原批内物理节奏"；批过密时按最小推进兜底。
+    /// </summary>
     private void CommitPending()
     {
         if (_pending.Count == 0) return;
         int k = _pending.Count;
-        double lastNow = _pending[k - 1].T;
-        double prev = double.IsNaN(_lastAssignedMs) ? lastNow - k * RetimeMs : _lastAssignedMs;
-        double scale = 1.0;
-        if (!double.IsNaN(_lastAssignedMs))
+        double T = _pending[k - 1].T;
+
+        // r̂ 更新：批距 / 批大小
+        if (!double.IsNaN(_lastBatchNowMs))
         {
-            double gap = Math.Max(0.0, lastNow - prev);
-            scale = Math.Clamp(gap / (k * RetimeMs), 0.25, 1.0);
+            double gap = T - _lastBatchNowMs;
+            if (gap > 0.5 && gap < 200)
+            {
+                float cand = (float)(gap / k);
+                if (cand >= 2.0f && cand <= 8.0f)
+                {
+                    _rRing[_rPos] = cand;
+                    _rPos = (_rPos + 1) % _rRing.Length;
+                    if (_rCount < _rRing.Length) _rCount++;
+                    _rAdapt = RollingMedian(_rRing, _rCount);
+                }
+            }
         }
+        _lastBatchNowMs = T;
+
+        double prevOut = _lastAssignedMs;
+        double t = 0;
         for (int m = 0; m < k; m++)
         {
             var pt = _pending[m];
-            double t = prev + (m + 1) * RetimeMs * scale;
+            double desired = T - (k - 1 - m) * _rAdapt;
+            if (double.IsNaN(prevOut)) t = desired;
+            else if (T > prevOut + 0.3) t = Math.Max(prevOut + 0.3, desired);
+            else t = prevOut + 0.3 * (m + 1);       // 时间没走：给最小推进
             PushStep(pt.X, pt.Y, pt.P, t, pt.HasP);
+            prevOut = t;
         }
-        _lastAssignedMs = prev + k * RetimeMs * scale;
+        _lastAssignedMs = t;
         _pending.Clear();
     }
 
