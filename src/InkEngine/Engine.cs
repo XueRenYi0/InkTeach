@@ -1032,6 +1032,10 @@ public partial class InkEngine
     internal static bool Predict3Forced;
     private float _predict3Gamma = 0.9f;
     private string _predict3WeightsDir;
+    // 委托墨迹活跃时的预测缩放（2026-10-12 委托接入后）：湿墨已把"墨跟笔"做掉，
+    // 预测应退场——默认缩到 0.35（留一丝对冲收笔交接）；`--wetpred 0` 全关 / `1` 回旧行为。
+    private bool _trailActiveThisStroke;
+    private float _wetPredScale = 0.35f;
     private float _tailLen;                               // 显示尾长（画布像素，限速平滑）
     private float _tailWidthState;                        // 尾宽平滑状态（0=未定）
     private readonly List<Vector2> _tailOffsets = new();  // 预测偏移（相对原始末点，画布坐标）
@@ -1050,6 +1054,7 @@ public partial class InkEngine
     {
         _predictor.Reset();
         _dlPredictor?.Reset();
+        _trailActiveThisStroke = false;
         // v0：速度估计加一层平滑（0.4）——批量投递/压力变化会让差分速度有帧间尖峰，
         // 尖峰直接乘进尾巴长度就是"笔头跳跃"（4 号粗细下特别显眼的那种）。
         _predictor.VelocitySmoothing = 0.4f;
@@ -1133,6 +1138,10 @@ public partial class InkEngine
             _tailOffsets.Clear();
             for (int i = 0; i < n; i++)
                 _tailOffsets.Add(new Vector2(pred[i].X - raw.X, pred[i].Y - raw.Y));
+            // 2026-10-12：本笔有系统委托轨迹（湿墨在画）→ 预测退场（×_wetPredScale）。
+            if (_trailActiveThisStroke && _wetPredScale < 0.999f)
+                for (int i = 0; i < _tailOffsets.Count; i++)
+                    _tailOffsets[i] = _tailOffsets[i] * _wetPredScale;
         }
 
         // ---- 长度限速（在"像素"上做，治"跳跃的笔头"）----
@@ -2325,6 +2334,8 @@ public partial class InkEngine
                     _predict3Gamma = Math.Clamp(g3, 0.5f, 1.2f);
                 if (args[i] == "--predict3weights")
                     _predict3WeightsDir = args[i + 1];
+                if (args[i] == "--wetpred" && float.TryParse(args[i + 1], out float wp))
+                    _wetPredScale = Math.Clamp(wp, 0f, 1f);
             }
             ApplyPredictTailSetting();
             // `--pred2ms N` 地平线（收进 8~200ms，默认 10）
@@ -4635,6 +4646,7 @@ public partial class InkEngine
                 tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f) ?? false;
         _pen.BeginStroke();   // 缺压回填的基准只活在"一笔"之内（见 PenSampleBuffer.BeginStroke）
         ResetPredictTail();   // B4：新的一笔，预测器从零开始
+        _trailActiveThisStroke = trailStarted;   // 委托墨迹：本笔有系统湿墨 → 预测退场×scale
         InputBlackBox.Begin(NowMs, x, y, pressure, ptype);   // 黑匣子：起笔（回放用）
         ActiveStroke = new Stroke
         {
