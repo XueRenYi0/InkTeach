@@ -294,7 +294,12 @@ internal sealed partial class OverlayWindow : IDisposable
     public static bool LatencyWaitEnabled = false;
     private IDCompositionDevice _dcomp;
     private IDCompositionTarget _target;
+    /// <summary>根视觉：纯容器（交换链挂在子视觉里，墨迹才有地方叠上去）。</summary>
     private IDCompositionVisual _visual;
+    /// <summary>交换链内容视觉（每帧画的内容都在这）。2026-10-10 试验C 从"根视觉直接装内容"改成子视觉。</summary>
+    private IDCompositionVisual _swapVisual;
+    /// <summary>委托墨迹轨迹视觉（内容＝_inkTrail，叠在交换链之上）。2026-10-10 试验C 新增。</summary>
+    private IDCompositionVisual _inkVisual;
     private IDCompositionInkTrailDevice _inkTrailDevice;
     private IDCompositionDelegatedInkTrail _inkTrail;
     private ID2D1DeviceContext _ctx;
@@ -626,8 +631,28 @@ internal sealed partial class OverlayWindow : IDisposable
     private int _trailPointsFed;
     /// <summary>收笔后"等这一帧 Present 完再撤轨迹"的挂起标记（防"轨迹先没、干墨未上屏"闪一帧）。</summary>
     private bool _trailEndPending;
+    /// <summary>
+    /// 本帧**我们自绘**把"正在写的这一笔"画上了屏（Present 后据此把轨迹里同样这段删掉，
+    /// 见 <see cref="TrimInkTrailAsDrawn"/>）。`--syswet` / 自检抑制自绘时为 false——
+    /// 那时湿墨只有轨迹这一份，删了就没了。
+    /// </summary>
+    private bool _drewWetStrokeThisFrame;
+    /// <summary>轨迹点已经"结账"到哪一代（每起一笔归零）。</summary>
+    private uint _trailTrimmedGeneration;
+    /// <summary>这一条轨迹已经"结账"删掉的点数（诊断用）。</summary>
+    private int _trailPointsRemoved;
+    /// <summary>这个窗口探过轨迹接口没有。**按窗口**——多屏时每个窗口各要一条轨迹（2026-10-11 修）。</summary>
+    private bool _trailProbed;
     /// <summary>进程级累计喂点（`--wetinktest` 判"系统轨迹到底喂没喂进去"）。</summary>
     public static long InkTrailPointsFed;
+    /// <summary>进程级累计"结账"删掉的点数（诊断用：默认模式下应约等于喂点数减去在场点数）。</summary>
+    public static long InkTrailPointsRemoved;
+    /// <summary>
+    /// 试验D（2026-10-11）：**每帧 DComp 提交一次**。Chromium 每帧都 Commit，
+    /// 我们只在建窗口时提交过那一次——"闪一下就没"的嫌疑之一就是它。
+    /// （`--trailcommit` 开；A/B 用。）
+    /// </summary>
+    public static bool TrailCommitEveryFrame;
 
     /// <summary>
     /// 开始一条委托墨迹轨迹。此后系统合成器会自己把笔尖后面的这一小段
@@ -648,6 +673,8 @@ internal sealed partial class OverlayWindow : IDisposable
             _trailActive = true;
             _trailGeneration = 0;
             _trailPointsFed = 0;
+            _trailPointsRemoved = 0;
+            _trailTrimmedGeneration = 0;
             InkTrailDebug = $"StartNewTrail ok, color=({color.R:F2},{color.G:F2},{color.B:F2},{color.A:F2})";
         }
         catch (Exception ex) { _trailActive = false; _inkTrail = null; InkTrailDebug = "StartNewTrail 异常: " + ex.Message; }
@@ -768,6 +795,38 @@ internal sealed partial class OverlayWindow : IDisposable
         _trailActive = false;
         try { if (_trailGeneration != 0) _inkTrail.RemoveTrailPoints(_trailGeneration); }
         catch { }
+        // 收笔撤轨迹同样算"结账"（诊断口径：喂 = 结账 + 在场）。
+        int outstanding = _trailPointsFed - _trailPointsRemoved;
+        if (outstanding > 0) { InkTrailPointsRemoved += outstanding; _trailPointsRemoved = _trailPointsFed; }
+    }
+
+    /// <summary>
+    /// 轨迹"结账"：我们**自己已经把这一笔画上了屏**，就把轨迹里同样这一段删掉
+    /// （Chromium 的每帧协议：用 RemoveTrailPoints 把"已上屏的点"清出轨迹）。
+    ///
+    /// 为什么必须删（2026-10-11 真笔实测）：系统的委托轨迹**单条上限 128 个点**
+    /// （Chromium `kMaximumNumberOfDelegatedInkPoints = 128`，注释写明"和 OS 合成器
+    /// 内部行为一致"）。只喂不删 → 写长笔画超过 128 点后旧点被系统擦掉，症状就是
+    /// "先出墨、中途开始变透明、抬笔才补全"。删到"本帧喂到的最后一代"之后，
+    /// 轨迹里永远只剩**还没上屏的那一小截**（这正是这条通道的设计用途）。
+    /// ⚠ 只在自绘过时调用；`--syswet` / 抑制自绘时不能删（那时湿墨只有轨迹这一份）。
+    /// </summary>
+    private void TrimInkTrailAsDrawn()
+    {
+        if (!_trailActive || _inkTrail == null) return;
+        if (_trailGeneration == 0 || _trailGeneration == _trailTrimmedGeneration) return;
+        try
+        {
+            _inkTrail.RemoveTrailPoints(_trailGeneration);
+            _trailTrimmedGeneration = _trailGeneration;
+            int outstanding = _trailPointsFed - _trailPointsRemoved;
+            if (outstanding > 0)
+            {
+                InkTrailPointsRemoved += outstanding;
+                _trailPointsRemoved = _trailPointsFed;
+            }
+        }
+        catch { _trailActive = false; }   // 删点失败按"这条轨迹废了"处理（和喂点失败一致）
     }
 
     private static readonly Color4 Transparent = new(0f, 0f, 0f, 0f);
@@ -876,8 +935,12 @@ internal sealed partial class OverlayWindow : IDisposable
         using var dxgiDevice = Gfx.Device.QueryInterface<IDXGIDevice>();
         _dcomp = DComp.DCompositionCreateDevice<IDCompositionDevice>(dxgiDevice);
         _dcomp.CreateTargetForHwnd(Hwnd, true, out _target).CheckError();
+        // 根视觉**不装内容**，交换链放在子视觉里 —— 这样后面墨迹轨迹的视觉才能叠在它上面
+        // （同一层里靠后的视觉盖住靠前的）。2026-10-10 试验C 按 Chromium 的结构改。
         _visual = _dcomp.CreateVisual();
-        _visual.SetContent(_swapChain).CheckError();
+        _swapVisual = _dcomp.CreateVisual();
+        _swapVisual.SetContent(_swapChain).CheckError();
+        _visual.AddVisual(_swapVisual, true, null).CheckError();
         _target.SetRoot(_visual).CheckError();
         _dcomp.Commit().CheckError();
 
@@ -886,8 +949,12 @@ internal sealed partial class OverlayWindow : IDisposable
         // 因为它是较新的接口，老系统上没有。
         // ⚠ 2026-10-05 真笔实测：本机系统不渲染它（调用全成功、屏幕无墨）——
         // 保留探测与喂点作换机器验证；见 InkTrailEnabled 的注释。
-        if (InkTrailNote == "未尝试")
+        // 2026-10-10 试验C：照 Chromium 的接法补上"挂视觉树"这一步 → **系统真的画了**（wetinktest PASS）。
+        // 2026-10-11：改"按窗口探测"——以前用静态 `InkTrailNote == "未尝试"` 当门槛，
+        // 多屏时第二个窗口整个跳过 → 副屏永远没有轨迹。
+        if (!_trailProbed)
         {
+            _trailProbed = true;
             try
             {
                 _inkTrailDevice = _dcomp.QueryInterfaceOrNull<IDCompositionInkTrailDevice>();
@@ -896,6 +963,25 @@ internal sealed partial class OverlayWindow : IDisposable
                     _inkTrail = _inkTrailDevice.CreateDelegatedInkTrailForSwapChain(_swapChain);
                     InkTrailAvailable = _inkTrail != null;
                     InkTrailNote = InkTrailAvailable ? "可用" : "接口可用但创建轨迹失败";
+                    if (InkTrailAvailable)
+                    {
+                        // ★ 关键一步（Chromium 的 InkTrail 就是这么挂的，我们以前漏了）：
+                        //   轨迹对象必须**作为视觉内容放进视觉树**、叠在交换链上面，系统才会画。
+                        //   只创建不挂树 → 调用全成功、gen 递增，但屏幕上永远没有墨。
+                        try
+                        {
+                            _inkVisual = _dcomp.CreateVisual();
+                            _inkVisual.SetContent(_inkTrail).CheckError();
+                            _visual.AddVisual(_inkVisual, true, null).CheckError();
+                            _dcomp.Commit().CheckError();
+                            InkTrailNote += "（已挂视觉树）";
+                        }
+                        catch (Exception layEx)
+                        {
+                            InkTrailAvailable = false;
+                            InkTrailNote += "（挂视觉树失败: " + layEx.Message + "）";
+                        }
+                    }
                 }
                 else
                 {
@@ -2441,8 +2527,13 @@ internal sealed partial class OverlayWindow : IDisposable
             // 否则两条叠在一起，系统轨迹的低延迟优势根本看不见。
             if (app.ActiveStroke != null && !app.SuppressActiveStroke
                 && !(TrailDrawing && app.IsSystemWetStroke(app.ActiveStroke)))
-            // 正在写的那一笔几何每帧都在变，用实现缓存只会不停重建，反而更慢
-            DrawStroke(app.ActiveStroke);
+            {
+                // 正在写的那一笔几何每帧都在变，用实现缓存只会不停重建，反而更慢
+                DrawStroke(app.ActiveStroke);
+                // 这一笔**我们自己画上屏了** → Present 之后把轨迹里同样这一段删掉
+                //（不删的后果见 TrimInkTrailAsDrawn 的注释；2026-10-11 真笔实测教训）。
+                _drewWetStrokeThisFrame = true;
+            }
             if (app.PredictTailActive && !app.ActiveStroke.HiddenForPairing
                 && !(TrailDrawing && app.IsSystemWetStroke(app.ActiveStroke)))
                 DrawPredictTail(app.ActiveStroke.Color, app.PredictTailWidth);
@@ -6331,6 +6422,12 @@ internal sealed partial class OverlayWindow : IDisposable
         var sw = Stopwatch.StartNew();
         SharpGen.Runtime.Result hr;
 
+        // 试验D（2026-10-11，A/B）：每帧 DComp 提交（Chromium 的做法；我们以前只提交过一次）。
+        if (TrailCommitEveryFrame && _inkTrail != null)
+        {
+            try { _dcomp.Commit(); } catch { }
+        }
+
         // 用等待对象先"排队"：它发信号时才是提交下一帧的正确时机。
         // 这样 Present 用 syncInterval=0 立即返回，不必让驱动在垂直同步里忙等。
         bool useWaitable = _latencyWait != IntPtr.Zero;
@@ -6359,6 +6456,10 @@ internal sealed partial class OverlayWindow : IDisposable
         LastPresentMs = sw.Elapsed.TotalMilliseconds;
         // `--syswet` 收笔挂起的轨迹撤除：干墨这一帧已经提交，现在撤不会露出空档。
         if (_trailEndPending) EndInkTrailNow();
+        // 轨迹"结账"（2026-10-11）：这一笔我们自己已经画上屏了，把轨迹里同样这一段删掉。
+        // ⚠ 只删"自绘过"的情况；`--syswet` / 抑制自绘时不删（那时湿墨只有轨迹这一份）。
+        if (!hr.Failure && _drewWetStrokeThisFrame) TrimInkTrailAsDrawn();
+        _drewWetStrokeThisFrame = false;
         if (hr.Failure)
         {
             LastError = "Present: " + hr.Description;
@@ -6388,6 +6489,8 @@ internal sealed partial class OverlayWindow : IDisposable
         _backBuffer?.Dispose();
         _inkStyle?.Dispose();          // 墨迹笔尖样式（压感变宽那条路）
         _ctx?.Dispose();
+        _inkVisual?.Dispose();
+        _swapVisual?.Dispose();
         _visual?.Dispose();
         _target?.Dispose();
         _dcomp?.Dispose();

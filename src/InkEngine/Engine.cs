@@ -1739,6 +1739,10 @@ public partial class InkEngine
     /// 否则抬手那一下粗细会跳（见 <see cref="TrailRadius"/>）。</summary>
     private readonly float[] _trailRadii = new float[PenSampleBuffer.MaxSamples];
 
+    // [试验E，2026-10-11 试过、已撤] 往系统轨迹的 predicted 数组喂"再走一步"的预测点
+    //（`--trailpredict`）：鼠标/触摸快速书写时**甩尾明显**（用户真机拍板），整条撤掉。
+    // 结论：这条通道的预测点不能用来顶采样间隙——屏幕上的"尾巴"一甩比采样旧一点更难看。
+
     // [删除 2026-10-05] 老预测系统整条链（`_predictor`/`_predBuf`/`_trailPred`/`_tailScratch`、
     // `PredictEnabled`/`_predictArg`/`PredictPrefKey`、渲染尾与预测尾统计等）：用户决定不接预测。
     // 算法文件 `Prediction/InkPredictor.cs` 保留；恢复见 `已停用-渲染实验.md` + `.revert/`。
@@ -2143,23 +2147,26 @@ public partial class InkEngine
         // 对照实验用：--nohist 关掉脏区的多帧回溯，应当立刻出现残影，
         // 用来证明残影测试本身是有效的（而不是永远通过）。
         if (args.Contains("--nohist")) OverlayWindow.TransientHistoryFrames = 0;
-        // ---- 委托墨迹轨迹（只对真笔喂点；本机不渲染，见下）--------------------
+        // ---- 委托墨迹轨迹（笔 / 鼠标 / 触摸都喂）-------------------------------
         //
-        // 默认策略（2026-09-13 初定，10-05 实测定案后保持）：**系统里真有笔设备就默认开**，
-        // 没有就关。喂点只对 PT_PEN，鼠标路径完全不受影响（实测合成鼠标下它也不画）。
-        //
-        // ⚠ 2026-10-05 真笔实测：**本机的系统不渲染这条轨迹**——COM 调用全部成功、
-        // 点也喂进去了（1522/1522），写字期间屏幕上没有任何新增墨（用户目视确认：
-        // "写的时候看不见墨迹，抬笔才会出现"）。所以它在本机**空转但不致害**：
-        // 湿墨实况＝我们自绘（合成边界配速，上屏 1.0 帧；120Hz 实测上屏段 ~10ms）。
-        // 默认开保留的意义：换机器/换平板时若系统会画，它就是白赚的低延迟通道。
-        // 见 `延时-实测与优化.md` §八。
-        bool penDevicePresent =
-            (Native.GetSystemMetrics(Native.SM_DIGITIZER)
-             & (Native.NID_INTEGRATED_PEN | Native.NID_EXTERNAL_PEN)) != 0;
-        OverlayWindow.InkTrailEnabled = penDevicePresent && !args.Contains("--noinktrail");
+        // 2026-10-11 起**默认总是开**（除非 `--noinktrail`）：本机它已经真的在画了
+        //（以前不画的根因有两处：轨迹对象没挂进视觉树、每帧没把"已上屏的点"结账删掉；
+        //  见 Overlay.cs 的 TrimInkTrailAsDrawn / 试验C）。
+        // 以前的门槛是"系统里有笔设备才开"——现在鼠标/触摸也喂点，那个门槛没意义了
+        //（手写板关 ink 时就是 PT_MOUSE；触摸屏只有 PT_TOUCH）。
+        // 实测（2026-10-11，逐帧采样）：鼠标**也画**（拖动中峰值 163 像素的"尾巴"）；
+        // 先前"0 像素"是采样太稀漏掉了它（尾巴只存活到我们下一次上屏）。
+        // 笔/鼠标/触摸都喂（每消息几次 COM 调用，代价可忽略）。
+        OverlayWindow.InkTrailEnabled = !args.Contains("--noinktrail");
         if (args.Contains("--inktrail")) OverlayWindow.InkTrailEnabled = true;
         if (args.Contains("--noinktrail")) OverlayWindow.InkTrailEnabled = false;
+
+        // `--trailonly`（手动诊断，2026-10-11）：**我们自己不画"正在写的这一笔"**——
+        // 于是按住期间屏幕上出现的任何墨就只能是系统轨迹画的。笔/鼠标/触摸都能用，
+        // 用来手动回答"系统到底给哪种输入画这条轨迹"（配合 `[笔画]` 行的 `[轨迹 喂N 结账M]`）。
+        if (args.Contains("--trailonly")) SuppressActiveStroke = true;
+        // `--trailcommit`（A/B，2026-10-11 试验D）：每帧提交一次 DComp（Chromium 的做法）。
+        if (args.Contains("--trailcommit")) OverlayWindow.TrailCommitEveryFrame = true;
 
         // `--syswet`：真笔 + 实线笔时，**湿墨只让系统轨迹画**（我们不再自绘当前笔画）。
         // ⚠ 2026-10-05 真笔实测（判据修好后）：**本机的委托轨迹不渲染**——COM 调用全部
@@ -4613,14 +4620,17 @@ public partial class InkEngine
                                                  : PenWidthLogical) * DpiScale;
         // 这一笔的线型：**只有笔吃那个开关**（见 PenDash），别的工具一律实线。
         var dash = tool == Tool.Pen ? PenDash : StrokeDash.Solid;
-        // 只对真笔（PT_PEN）起轨迹：这条通道是给"笔尖跟手"用的，
-        // 鼠标/触摸走它没有意义，而且会平白多一条系统画出来的线。
-        //
         // **虚线笔迹不起委托墨迹**：那条轨迹由系统合成器画，画不出我们的线型
         // （它只会画一条实线），一笔写完就会"实线突然变虚线"闪一下。
         // 退回落自己画反而是对的——自己画的湿墨本来就是虚线，前后一致。
+        //
+        // 2026-10-11：**不再只对真笔开**——笔/鼠标/触摸都喂。来由：真笔那条通道调通后
+        // （挂视觉树 + 结账），用户实测"鼠标模式（手写板关 ink）不跟手"——因为鼠标路径
+        // 一个点都没喂过。逐帧采样**实测**：鼠标**也画**（拖动中量到过 163 像素的尾巴）。
+        // ⚠ 这条通道画的是"还没上屏的那一小段"——我们自己的帧一提交就把它消化掉，
+        //   所以肉眼看常是"闪一下"（`--trailonly` 下尤其明显），那是结构性表现，不是 bug。
         bool trailStarted = false;
-        if (ptype == Native.PT_PEN && dash == StrokeDash.Solid)
+        if (dash == StrokeDash.Solid)
             trailStarted = WindowAt(screenX, screenY)?.BeginInkTrail(
                 tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f) ?? false;
         _pen.BeginStroke();   // 缺压回填的基准只活在"一笔"之内（见 PenSampleBuffer.BeginStroke）
@@ -4641,7 +4651,9 @@ public partial class InkEngine
         };
         // `--syswet`：真笔 + 实线笔，且轨迹真的起来了 → 湿墨交给系统（我们不再自绘）。
         // 荧光笔/激光笔不在此列——系统轨迹画不出它们的观感；`--ownwet` 可强制回老路。
-        _systemWetStroke = (trailStarted && OverlayWindow.SystemWetPreferred && tool == Tool.Pen)
+        // ⚠ 仍然**只给真笔**：鼠标/触摸的轨迹系统认不认还没结论，不能让"我们不自绘"去赌。
+        _systemWetStroke = (trailStarted && OverlayWindow.SystemWetPreferred && tool == Tool.Pen
+                            && ptype == Native.PT_PEN)
             ? ActiveStroke : null;
         // 起笔：落笔这条消息里可能已经合并了几个采样点，一起收进来（以前只取最新那一个）。
         ActiveStrokeHasPressure = false;
@@ -4657,6 +4669,9 @@ public partial class InkEngine
         _cleanBuf.Clear();
         _wintabPacketsSeen = _wintab.PacketsRead;
         _wintabBadSeen = _wintab.BadPackets;
+        // 委托轨迹：这一笔的喂点/结账差值基线（`[笔画]` 里报"这一笔"的数）。
+        _trailFedSeen = OverlayWindow.InkTrailPointsFed;
+        _trailRemovedSeen = OverlayWindow.InkTrailPointsRemoved;
         LastCoalescedSamples = LastCoalescedMessages = 0;
         _rawReportsThisStroke = 0;      // `--rawprobe`：原始输入计数每笔归零
         _rawPointsAdded = 0;            // `--rawinput`：补进来的点数每笔归零
@@ -7648,6 +7663,14 @@ public partial class InkEngine
                           + "]"
                         : "")
                     + $"，合并 {merge}（{LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 点）"
+                    // 委托轨迹（2026-10-11）：**喂进去 ≠ 留在系统里**——默认模式下我们自己
+                    // 画到哪就把轨迹结账到哪，所以"结账"应当≈"喂"；只喂不结账（结账远小于喂）
+                    // 就是"长笔画中途变透明"的那种病。`--trailonly` 下我们自己不画、也就不结账
+                    //（那正是"湿墨只剩系统轨迹"的诊断模式，结账 0 是预期）。
+                    + (OverlayWindow.InkTrailEnabled
+                        ? $"，[轨迹 喂{OverlayWindow.InkTrailPointsFed - _trailFedSeen}"
+                          + $" 结账{OverlayWindow.InkTrailPointsRemoved - _trailRemovedSeen}]"
+                        : "")
                     + (RawProbeEnabled
                         // 时长≈0 的空笔（退出收尾结算）不报频率：`条数 / 1ms` 会印出
                         // "14000 Hz" 这种假数（2026-10-08 用户两份数据结尾都有）。
@@ -9549,6 +9572,9 @@ public partial class InkEngine
     internal int WtPolledPackets, WtBadPackets, WtPressurePoints;
     private int _wintabPacketsSeen, _wintabBadSeen;
 
+    /// <summary>上一笔结束时进程级轨迹喂点/结账数（`[笔画]` 里报"这一笔"的差值）。</summary>
+    private long _trailFedSeen, _trailRemovedSeen;
+
     /// <summary>这一笔的"缺压回填"基准（同 `Input/PenInput.cs` 的口径）：
     /// 见过一次真实压力之后，偶尔缺一下就沿用上一个值，而不是掉回中点让笔画中间凹一下。</summary>
     private float _wtStrokePressure = -1f;
@@ -9656,18 +9682,32 @@ public partial class InkEngine
     /// </summary>
     private void FeedInkTrail(uint ptype, float radius, float screenX, float screenY)
     {
-        if (ptype != Native.PT_PEN || !OverlayWindow.InkTrailEnabled) return;
+        if (!OverlayWindow.InkTrailEnabled) return;
         var win = WindowAt(screenX, screenY);
         if (win == null) return;
 
+        // 采样缓冲**按输入类型选**：笔在 `_pen`、鼠标/触摸在 `_ptr`（两边都是屏幕像素）。
+        // ⚠ 以前这里写死读 `_pen`——放开鼠标/触摸之后，那样会把**上一条笔消息的旧点**
+        // 再喂一遍，轨迹会画在错误的位置/时间段上。
         int realCount = 0;
-        if (_pen.Count > 0)
+        if (ptype == Native.PT_PEN)
         {
             for (int i = 0; i < _pen.Count && realCount < _trailReal.Length; i++)
             {
                 _trailReal[realCount] = new Vector2(_pen[i].X, _pen[i].Y);
                 // 逐点半径 = 这一点的压力走**和干墨同一个映射**（见 PressureWidth）。
                 _trailRadii[realCount] = PressureRadiusOf(_pen[i].Pressure);
+                realCount++;
+            }
+        }
+        else
+        {
+            for (int i = 0; i < _ptr.Count && realCount < _trailReal.Length; i++)
+            {
+                _trailReal[realCount] = new Vector2(_ptr[i].X, _ptr[i].Y);
+                // 非笔没有真实压力（`PointerSample` 恒 0.5 占位）→ 半径就是当前笔宽的一半，
+                // 和干墨一致（`radius` 由调用方给，见 TrailRadius）。
+                _trailRadii[realCount] = radius;
                 realCount++;
             }
         }
@@ -9678,7 +9718,8 @@ public partial class InkEngine
             realCount++;
         }
 
-        // [删除 2026-10-05] 预测点喂 DWM：随老预测系统移除（实测 DWM 本来就不画我们的预测点）。
+        // [试验E，2026-10-11 试过、已撤] 曾在这里把"再走一步"的预测点喂进 predicted 数组
+        //（`--trailpredict`）：鼠标/触摸快速书写时甩尾明显（用户真机拍板），整条撤掉。
         win.AddInkTrailPoints(_trailReal, realCount, null, 0, radius, _trailRadii);
     }
 

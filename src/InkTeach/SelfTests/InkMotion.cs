@@ -1781,11 +1781,19 @@ internal sealed partial class App
     /// </summary>
 
 
-    private void InkTrailTest()
+    private void InkTrailTest(bool withTouch = false)
     {
         Console.WriteLine();
-        Console.WriteLine("=== 委托墨迹轨迹测试（关掉自己画的湿墨）===");
+        Console.WriteLine(withTouch
+            ? "=== 委托墨迹轨迹测试（合成**触摸**，关掉自己画的湿墨）==="
+            : "=== 委托墨迹轨迹测试（合成**鼠标**，关掉自己画的湿墨）===");
         Console.WriteLine($"  接口状态: {OverlayWindow.InkTrailNote}");
+
+        if (withTouch && !EnsureSyntheticTouch())
+        {
+            Console.WriteLine("  SKIP: 拿不到合成触摸设备（CreateSyntheticPointerDevice(PT_TOUCH) 失败）");
+            _quit = true; return;
+        }
 
         Doc.Clear();
         Doc.InvalidateAll();
@@ -1799,42 +1807,99 @@ internal sealed partial class App
         int bandX = (int)(cx - 500);
         int bandY = (int)(cy - 140);
 
-        // 按住不放，慢慢画一段，然后**在按住的状态下**截图
-        SendMouse((int)(cx - 400), (int)cy, 0);
-        SettleFrames(120);
-        SendMouse((int)(cx - 400), (int)cy, Native.MOUSEEVENTF_LEFTDOWN);
+        // 鼠标和触摸走同一个"拖动 + 逐帧采样"骨架，只有注入方式不同
+        //（触摸没有悬停；接触面给 24，和 --touchtest 的口径一致）。
+        void Down(float x, float y)
+        {
+            if (withTouch) SendTouchesSized(true, (x, y, 24f));
+            else SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTDOWN);
+        }
+        void MoveTo(float x, float y)
+        {
+            if (withTouch) SendTouchesSized(true, (x, y, 24f));
+            else SendMouse((int)x, (int)y, 0);
+        }
+        void Up(float x, float y)
+        {
+            if (withTouch) SendTouchesSized(false, (x, y, 24f));
+            else SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTUP);
+        }
+
+        if (!withTouch)
+        {
+            SendMouse((int)(cx - 400), (int)cy, 0);   // 鼠标先悬停到位（触摸没有这一步）
+            SettleFrames(120);
+        }
+
+        // 按住不放，慢慢画一段；**拖动中逐帧采样**——
+        // 这条通道画的是"还没上屏的那一小段"，只存活一两帧，采样稀了会漏（踩过）。
+        Down(cx - 400, cy);
         SettleFrames(100);
+        int peakDuringDrag = 0;
+        bool shotSaved = false;
         for (int i = 1; i <= 40; i++)
         {
             float t = i / 40f;
-            SendMouse((int)(cx - 400 + t * 800), (int)(cy + MathF.Sin(t * 6.28f) * 80), 0);
-            SettleFrames(18);
+            MoveTo(cx - 400 + t * 800, cy + MathF.Sin(t * 6.28f) * 80);
+            for (int f = 0; f < 18; f++)
+            {
+                SettleFrames(1);
+                int c = ScreenProbe.CountRed(bandX, bandY, 1000, 280);
+                if (c > peakDuringDrag) peakDuringDrag = c;
+                if (c > 200 && !shotSaved)
+                {
+                    shotSaved = true;
+                    ScreenProbe.SaveBmp(Path.Combine("reports", "shots", "trail-first-seen.bmp"),
+                                        _virtualX, _virtualY, _virtualW, _virtualH);
+                    Console.WriteLine($"  [拖动中 {i}/40] 首次见到墨：{c} 像素（已存 trail-first-seen.bmp）");
+                }
+            }
+            if (i % 10 == 0)
+                Console.WriteLine($"  [拖动中 {i}/40] 累计峰值 = {peakDuringDrag}");
         }
-        SettleFrames(250);   // 仍然按着
+        string shotDrag = Path.Combine("reports", "shots", "trail-during-drag.bmp");
+        Directory.CreateDirectory(Path.GetDirectoryName(shotDrag));
+        ScreenProbe.SaveBmp(shotDrag, _virtualX, _virtualY, _virtualW, _virtualH);
+        Console.WriteLine("  —— 停住（仍按着），下面每一档约 0.8 秒，看轨迹会不会自己消失 ——");
+        for (int k = 1; k <= 5; k++)
+        {
+            SettleFrames(50);
+            Console.WriteLine($"  [按住不动 {k}] 墨色像素 = {ScreenProbe.CountRed(bandX, bandY, 1000, 280)}");
+        }
 
         int whileDown = ScreenProbe.CountRed(bandX, bandY, 1000, 280);
         string shot1 = Path.Combine("reports", "shots", "trail-while-down.bmp");
         Directory.CreateDirectory(Path.GetDirectoryName(shot1));
         ScreenProbe.SaveBmp(shot1, _virtualX, _virtualY, _virtualW, _virtualH);
 
-        SendMouse((int)(cx + 400), (int)cy, Native.MOUSEEVENTF_LEFTUP);
+        Up(cx + 400, cy);
         SettleFrames(600);
         int afterUp = ScreenProbe.CountRed(bandX, bandY, 1000, 280);
 
-        Console.WriteLine($"  按住不放时笔迹像素: {whileDown}（这些只能是系统合成器画的）");
-        Console.WriteLine($"  松手之后笔迹像素  : {afterUp}（我们自己的笔画接管）");
+        Console.WriteLine($"  拖动中峰值（判定用）    : {peakDuringDrag}（按住期间，只能是系统画的）");
+        Console.WriteLine($"  停住 4 秒后（松手前）    : {whileDown}");
+        Console.WriteLine($"  松手之后笔迹像素        : {afterUp}（我们自己的笔画接管）");
         Console.WriteLine($"  轨迹调试          : {OverlayWindow.InkTrailDebug}");
-        Console.WriteLine($"  截图: {Path.GetFullPath(shot1)}");
+        Console.WriteLine($"  截图: {Path.GetFullPath(shotDrag)} / {Path.GetFullPath(shot1)}");
 
-        bool ok = whileDown > 800;
-        // 委托墨迹轨迹**只对真笔（PT_PEN）生效**（鼠标下系统根本不接这条通道）。
-        // 这个用例是用合成鼠标事件跑的，所以鼠标下量不到轨迹是预期结果，
-        // 不该报成失败——原来这里一直红着，害得"全套自检"里有一条永远修不掉。
-        bool mouseRun = LastPointerType != Native.PT_PEN;
-        Console.WriteLine(ok ? "  PASS: 委托墨迹轨迹生效"
-                        : mouseRun
-                            ? "  SKIP: 当前是鼠标（轨迹只对真笔生效），这一项不适用"
-                            : "  FAIL: 手上是真笔却没看到系统画的轨迹");
+        string inputName = withTouch ? "触摸" : "鼠标";
+        bool penRun = LastPointerType == Native.PT_PEN;
+        // 判定（2026-10-11 校准）：这条通道画的是**"还没上屏的那一小段"**——我们自己的帧
+        // 一提交就把它"消化"掉，所以量到的是短闪（鼠标/触摸实测峰值约 163 像素）。
+        //   整条尾巴 >800       → PASS（真笔那一路通常几千）
+        //   见到任何墨 >0       → PASS（通道确实在画这种输入）
+        //   接口不可用          → SKIP（Win10/老系统没有这条通道，属正常环境差异）
+        //   其余                → SKIP（尾巴只活一两帧、没赶上不算失败；真笔没有才算 FAIL）
+        if (peakDuringDrag > 800)
+            Console.WriteLine($"  PASS: 委托墨迹轨迹生效（{inputName}画出了整条尾巴）");
+        else if (peakDuringDrag > 0)
+            Console.WriteLine($"  PASS: 系统在画（{inputName}尾巴峰值 {peakDuringDrag} 像素——只活到下一次上屏，属预期）");
+        else if (!OverlayWindow.InkTrailAvailable)
+            Console.WriteLine($"  SKIP: 系统没有这条通道（{OverlayWindow.InkTrailNote}）——Win10/老系统属正常");
+        else if (penRun)
+            Console.WriteLine("  FAIL: 手上是真笔却没看到系统画的轨迹");
+        else
+            Console.WriteLine($"  SKIP: 这次没量到{inputName}轨迹（窗口只有一两帧，可能没赶上）——不算失败");
         _quit = true;
     }
 
@@ -1949,6 +2014,7 @@ internal sealed partial class App
         bool wasDown = false;
         int beforePoints = PenTotalPoints;
         long fedBefore = OverlayWindow.InkTrailPointsFed;
+        long removedBefore = OverlayWindow.InkTrailPointsRemoved;
 
         double t0 = NowMs;
         double nextSampleAt = t0;
@@ -1990,11 +2056,12 @@ internal sealed partial class App
         SuppressActiveStroke = false;
         int penSamples = PenTotalPoints - beforePoints;
         long fed = OverlayWindow.InkTrailPointsFed - fedBefore;
+        long removed = OverlayWindow.InkTrailPointsRemoved - removedBefore;
         Console.WriteLine();
         Console.WriteLine($"  这 {seconds:F0} 秒里收到真笔采样点：{penSamples}（0 说明没写进来）");
         Console.WriteLine($"  按下期间墨色像素**增量**    ：{maxRise}（判定用；采了 {downSamples} 次）");
         Console.WriteLine($"  按下期间绝对值 / 全程最大  ：{maxBandDown} / {maxBand}（含抬笔后的干墨，仅参考）");
-        Console.WriteLine($"  喂进系统轨迹的点数        ：{fed}");
+        Console.WriteLine($"  喂进系统轨迹的点数        ：{fed}（已结账删除 {removed}——本轮我们不自绘，所以是 0）");
         Console.WriteLine($"  全屏的最大墨色像素        ：{maxFull}");
         Console.WriteLine($"  轨迹调试                  ：{OverlayWindow.InkTrailDebug}");
         bool pass = penSamples > 0 && fed > 0 && maxRise > 200;

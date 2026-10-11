@@ -532,7 +532,7 @@ internal sealed partial class App : InkEngine.InkEngine
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
-            InkTrailTest();
+            InkTrailTest(args.Contains("--touch"));   // `--trailtest --touch` = 合成触摸对照
         }
         else if (mode == "--longrun")
         {
@@ -1208,7 +1208,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --tiletest          分块缓存自检（边界无缝 / 回程复用 / 内存上界）");
         Console.WriteLine("  --prefetchtest      分块空闲预取自检（预取命中则再滚一格不重画；含关预取对照）");
         Console.WriteLine("  --noprefetch        关掉分块空闲预取（对照；默认开）");
-        Console.WriteLine("  --trailtest         委托墨迹轨迹对照");
+        Console.WriteLine("  --trailtest [--touch]  委托墨迹轨迹对照（默认合成鼠标；--touch = 合成触摸）");
         Console.WriteLine("  --uiscale <0.8|0.9|1|1.15|1.3>  界面缩放档（工具带/色带/抽屉/设置页；只覆盖本次运行，不落盘）");
         Console.WriteLine("  --smoothtest        中心线曲线化自检（过点 Catmull-Rom：直角不变形 / 圆弧更圆滑 / 形状不跑）");
         Console.WriteLine("  --smoothshow [图]   出图：曲线化开/关对照（同一组样本各存一张 -off / -on，32 位 BMP）");
@@ -1243,7 +1243,8 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --replayshow <图>   墨迹回放摆样（铺几笔 → 播到一半 → 截控制条那一块）");
         Console.WriteLine("  --ballprobe [前缀]  收起球贴边诊断（左/右/四角 × 显示/隐藏，逐个出图）");
         Console.WriteLine("  --wetinktest        湿墨轨迹实测（只让系统画，数上屏像素：这条通道到底画不画）");
-        Console.WriteLine("  --syswet            真笔 + 实线笔：湿墨只让系统轨迹画（⚠ 本机实测系统轨迹不渲染，仅留作换机验证）");
+        Console.WriteLine("  --syswet            真笔 + 实线笔：湿墨只让系统轨迹画（诊断；⚠ 单条轨迹系统上限 128 点，长笔画会回滚）");
+        Console.WriteLine("  --trailonly         自己那一笔不画（湿墨只剩系统轨迹）——手动验证系统到底给哪种输入画");
         // [停用] Console.WriteLine("  --predictdata [路径] 真实笔迹数据上的预测评测（UCI Character Trajectories）");
         Console.WriteLine("  --latbench <csv>    延时实测（分场景 + 分位数 + 稳定性）");
         Console.WriteLine("  --penlive [秒]      真笔延时实测（挂上手写笔写一会儿，出报告）");
