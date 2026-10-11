@@ -16,6 +16,9 @@
 #    .\publish.ps1 -Jit            # 附带：JIT/自包含版（保稳选项；产物大、启动稍慢）
 #    .\publish.ps1 -SingleFile     # JIT 单文件版（AOT 产物本身就是单文件，会被忽略）
 #    .\publish.ps1 -NoZip          # 不压 zip
+#
+#  发版前置检查（2026-10-12 新规矩）：运行时自动做"代码 vs 文档对账"（tools\doc-audit.ps1），
+#  清单落 dist\doc-audit-v<ver>.md，发布前逐项核对；-StrictDocs 在"代码有改动但文档零更新"时直接停。
 # =====================================================================================
 [CmdletBinding()]
 param(
@@ -27,7 +30,10 @@ param(
     # 演练专用（2026-10-07 加）：**不写仓库根 update.json、不刷 jsDelivr**。
     # 为什么要有它：线上更新清单就是仓库根那份（App 从 raw.githubusercontent 取），
     # 演练时写进去 = 把"还没发布的 zip 的 sha256"广播给所有用户（下载校验必失败）。
-    [switch]$NoManifest
+    [switch]$NoManifest,
+    # 发版前置检查（2026-10-12 新规矩）：代码 vs 文档对账。
+    # 默认跑一次并生成 dist\doc-audit-v<ver>.md；-StrictDocs 时"代码有改动但文档零更新"直接停。
+    [switch]$StrictDocs
 )
 if ($Jit -and $Aot) { throw "-Jit 和 -Aot 只能选一个（默认就是 AOT）" }
 $useAot = -not $Jit
@@ -83,6 +89,23 @@ if (-not $ver) { throw "没能从 $proj 里读到 <Version>" }
 $name = "InkTeach-$ver-win-x64" + $(if ($Jit) { "-jit" } else { "" })
 $outDir = Join-Path $root "dist\$name"
 Write-Host "发布 $name" -ForegroundColor Cyan
+
+# ---- 发版前置检查（2026-10-12 新规矩）：代码 vs 文档对账 ---------------------------------
+#  "上一版 tag → 现在"改了什么代码、动了哪些文档；清单落 dist\doc-audit-v<ver>.md。
+#  发布前**打开清单逐项核对**（规矩全文见 调研\优化记录\发版历史.md 顶部）。
+#  -StrictDocs：区间内"代码有改动但文档零更新"时直接停（防漏更）。
+$audit = Join-Path $root "tools\doc-audit.ps1"
+if (Test-Path $audit) {
+    Write-Host "发版前置检查：代码/文档对账…" -ForegroundColor Cyan
+    & $audit -Out (Join-Path $root "dist\doc-audit-v$ver.md") -Strict:$StrictDocs
+    $auditCode = $LASTEXITCODE
+    Write-Host "  对账清单已生成：dist\doc-audit-v$ver.md —— 发布前逐项核对（尤其 src/ 改动对应的文档）" -ForegroundColor Yellow
+    if ($auditCode -ne 0) {
+        throw "对账未通过（-StrictDocs：代码有改动但文档零更新）。先补文档；确属无需更新时去掉 -StrictDocs 再发。"
+    }
+} else {
+    Write-Host "  （未找到 tools\doc-audit.ps1：跳过对账；旧检出上属正常）" -ForegroundColor DarkGray
+}
 
 # ---- 图标必须先在（它是 --makeicon 生成的，跟着仓库走）--------------------------------
 $ico = Join-Path $root "src\InkTeach\assets\InkTeach.ico"
