@@ -1,0 +1,389 @@
+// CoreInkProbe —— 决定性实验：NativeAOT 应用能不能接"系统墨迹引擎"（CoreInkPresenterHost）
+//
+// 步骤：
+//   1. Win32 全屏透明风格的窗口（WS_EX_NOREDIRECTIONBITMAP + TOPMOST + TOOLWINDOW + NOACTIVATE）
+//   2. 用 Windows.UI.Composition 建合成树，手动 COM 调 ICompositorDesktopInterop
+//      （GUID 29E691FA-4567-4DCA-B319-D0F207EB6807，vtable 槽位 3）挂到 HWND —— AOT 下不能用 ComImport
+//   3. new CoreInkPresenterHost() 拿 InkPresenter，设为 RootVisual，输入设备 Pen|Mouse
+//   4. 消息循环 10 秒，等待（外部注入的）鼠标/笔输入产出笔迹
+//
+// 成功标准：StrokesCollected 收到笔画（并且屏幕上能看到墨迹像素）。
+
+using System.Runtime.InteropServices;
+using Windows.System;
+using Windows.UI.Composition;
+using Windows.UI.Composition.Desktop;
+using Windows.UI.Core;
+using Windows.UI.Input.Inking;
+using Windows.UI.Input.Inking.Core;
+using WinRT;
+
+namespace CoreInkProbe;
+
+internal static unsafe class Program
+{
+    private static nint _hwnd;
+    private static int _strokeCount;
+    private static string _log = "";
+
+    private static void Log(string line)
+    {
+        Console.WriteLine(line);
+        _log += line + Environment.NewLine;
+    }
+
+    [STAThread]
+    private static int Main()
+    {
+        try
+        {
+            return Run();
+        }
+        catch (Exception ex)
+        {
+            Log("EXCEPTION: " + ex);
+            try
+            {
+                File.WriteAllText(Path.Combine(Path.GetTempPath(), "coreink-probe.log"), _log + ex);
+            }
+            catch
+            {
+                // 忽略。
+            }
+
+            return 1;
+        }
+    }
+
+    private static int Run()
+    {
+        SetProcessDpiAwarenessContext(-4);
+        GetWorkArea(out var work);
+        Log($"workarea {work.Left},{work.Top} {work.Right - work.Left}x{work.Bottom - work.Top}");
+
+        if (!CreateAppWindow(work))
+        {
+            Log("window creation failed");
+            return 2;
+        }
+
+        Log("window ok 0x" + _hwnd.ToString("X"));
+
+        // 与隔壁探针同构：专用线程上建 DispatcherQueue，合成器与宿主都在该线程装配
+        var dqc = DispatcherQueueController.CreateOnDedicatedThread();
+        Log("DispatcherQueueController(dedicated) ok=" + (dqc is not null));
+
+        // 全流程在合成线程上装配（合成树 + 系统墨迹引擎）
+        bool inkReady = false;
+        void SetupInk()
+        {
+            var compositor = new Compositor();
+            Log("compositor ok");
+
+            // 2) 手动 COM：ICompositorDesktopInterop -> CreateDesktopWindowTarget
+            var target = CreateDesktopWindowTarget(compositor, _hwnd, true);
+            Log("desktop window target ok=" + (target is not null));
+
+            var root = compositor.CreateContainerVisual();
+            target!.Root = root;
+
+            // 3) 系统墨迹引擎
+            var host = new CoreInkPresenterHost();
+            var presenter = host.InkPresenter;
+            presenter.InputDeviceTypes = CoreInputDeviceTypes.Pen | CoreInputDeviceTypes.Mouse;
+
+            var attrs = presenter.CopyDefaultDrawingAttributes();
+            attrs.Color = Windows.UI.Color.FromArgb(255, 230, 30, 90);
+            try
+            {
+                attrs.ModelerAttributes.PredictionTime = TimeSpan.FromMilliseconds(15);
+                Log("PredictionTime=15ms ok");
+            }
+            catch (Exception ex)
+            {
+                Log("PredictionTime set failed: " + ex.Message);
+            }
+
+            presenter.UpdateDefaultDrawingAttributes(attrs);
+
+            presenter.StrokesCollected += (_, args) =>
+            {
+                _strokeCount += args.Strokes.Count;
+                Log("StrokesCollected! total=" + _strokeCount);
+            };
+
+            var inkVisual = compositor.CreateContainerVisual();
+            root.Children.InsertAtTop(inkVisual);
+            host.RootVisual = inkVisual;
+
+            try
+            {
+                presenter.IsInputEnabled = true;
+                Log("IsInputEnabled=" + presenter.IsInputEnabled);
+            }
+            catch (Exception ex)
+            {
+                Log("IsInputEnabled set failed: " + ex.Message);
+            }
+
+            inkReady = true;
+        }
+
+        if (dqc is not null)
+        {
+            using var done = new ManualResetEventSlim(false);
+            dqc.DispatcherQueue.TryEnqueue(() =>
+            {
+                try
+                {
+                    SetupInk();
+                }
+                catch (Exception ex)
+                {
+                    Log("setup on dedicated thread failed: " + ex);
+                }
+                finally
+                {
+                    done.Set();
+                }
+            });
+            done.Wait(6000);
+        }
+        else
+        {
+            try
+            {
+                SetupInk();
+            }
+            catch (Exception ex)
+            {
+                Log("setup failed: " + ex);
+            }
+        }
+
+        Log("ink host ready=" + inkReady + "; waiting 10s for input...");
+
+        SetForegroundWindow(_hwnd);
+        Log("SetForegroundWindow done");
+
+        // 4) 消息循环 10 秒
+        long end = Environment.TickCount64 + 10000;
+        while (Environment.TickCount64 < end)
+        {
+            while (PeekMessageW(out var msg, 0, 0, 0, 1))
+            {
+                TranslateMessage(ref msg);
+                DispatchMessageW(ref msg);
+            }
+
+            Thread.Sleep(10);
+        }
+
+        Log("RESULT strokes=" + _strokeCount + " wndMsgs pointer=" + _msgPointer + " mouse=" + _msgMouse);
+        try
+        {
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "coreink-probe.log"), _log);
+        }
+        catch
+        {
+            // 忽略。
+        }
+
+        return _strokeCount > 0 ? 0 : 3;
+    }
+
+    private static DesktopWindowTarget? CreateDesktopWindowTarget(Compositor compositor, nint hwnd, bool topmost)
+    {
+        var iid = new Guid("29E691FA-4567-4DCA-B319-D0F207EB6807");
+        nint abi = MarshalInspectable<Compositor>.FromManaged(compositor);
+        nint interop = QueryInterface(abi, in iid);
+        Log("ICompositorDesktopInterop QI ok 0x" + interop.ToString("X"));
+
+        nint targetPtr = 0;
+        var create = (delegate* unmanaged[Stdcall]<nint, nint, int, nint*, int>)(*(nint*)(*(nint*)interop + 3 * 8));
+        int hr = create(interop, hwnd, topmost ? 1 : 0, &targetPtr);
+        Log($"CreateDesktopWindowTarget hr=0x{hr:X8} ptr=0x{targetPtr:X}");
+        if (hr < 0 || targetPtr == 0)
+        {
+            throw new COMException("CreateDesktopWindowTarget failed", hr);
+        }
+
+        return MarshalInspectable<DesktopWindowTarget>.FromAbi(targetPtr);
+    }
+
+    private static nint QueryInterface(nint pUnk, in Guid iid)
+    {
+        var qi = (delegate* unmanaged[Stdcall]<nint, Guid*, nint*, int>)(*(nint*)(*(nint*)pUnk));
+        nint result = 0;
+        var g = iid;
+        int hr = qi(pUnk, &g, &result);
+        if (hr < 0 || result == 0)
+        {
+            throw new COMException("QueryInterface failed", hr);
+        }
+
+        return result;
+    }
+
+    // ---------------- Win32 ----------------
+
+    private static bool CreateAppWindow(RECT work)
+    {
+        var hInstance = GetModuleHandleW(null);
+        var className = "CoreInkProbeWnd";
+        var classNamePtr = Marshal.StringToHGlobalUni(className);
+
+        var wc = new WNDCLASSEXW
+        {
+            cbSize = (uint)sizeof(WNDCLASSEXW),
+            lpfnWndProc = (nint)(delegate* unmanaged[Stdcall]<nint, uint, nint, nint, nint>)&WndProc,
+            hInstance = hInstance,
+            hCursor = LoadCursorW(0, 32512),
+            lpszClassName = classNamePtr,
+        };
+        if (RegisterClassExW(ref wc) == 0)
+        {
+            return false;
+        }
+
+        long exStyle = 0x00200000 /*NOREDIRECTIONBITMAP*/ | 0x8 /*TOPMOST*/ | 0x80 /*TOOLWINDOW*/ | 0x08000000 /*NOACTIVATE*/;
+        _hwnd = CreateWindowExW(
+            exStyle,
+            className,
+            "CoreInkProbe",
+            0x80000000 /*POPUP*/ | 0x10000000 /*VISIBLE*/,
+            work.Left,
+            work.Top,
+            work.Right - work.Left,
+            work.Bottom - work.Top,
+            0,
+            0,
+            hInstance,
+            0);
+        return _hwnd != 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvStdcall) })]
+    private static nint WndProc(nint hwnd, uint message, nint wParam, nint lParam)
+    {
+        switch (message)
+        {
+            case 0x0245: // WM_POINTERUPDATE
+            case 0x0246: // WM_POINTERDOWN
+            case 0x0247: // WM_POINTERUP
+                _msgPointer++;
+                return 0;
+
+            case 0x0200: // WM_MOUSEMOVE
+            case 0x0201: // WM_LBUTTONDOWN
+                _msgMouse++;
+                return 0;
+
+            case 0x0084: // WM_NCHITTEST
+                return 1; // HTCLIENT
+        }
+
+        return DefWindowProcW(hwnd, message, wParam, lParam);
+    }
+
+    private static int _msgPointer;
+    private static int _msgMouse;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MSG
+    {
+        public nint hwnd;
+        public uint message;
+        public nuint wParam;
+        public nint lParam;
+        public uint time;
+        public POINT pt;
+        public uint lPrivate;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WNDCLASSEXW
+    {
+        public uint cbSize;
+        public uint style;
+        public nint lpfnWndProc;
+        public int cbClsExtra;
+        public int cbWndExtra;
+        public nint hInstance;
+        public nint hIcon;
+        public nint hCursor;
+        public nint hbrBackground;
+        public nint lpszMenuName;
+        public nint lpszClassName;
+        public nint hIconSm;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(nint hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetProcessDpiAwarenessContext(nint value);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DispatcherQueueOptions
+    {
+        public uint Size;
+        public uint ThreadType;
+        public uint ApartmentType;
+    }
+
+    [DllImport("CoreMessaging.dll")]
+    private static extern int CreateDispatcherQueueController(DispatcherQueueOptions options, out nint controller);
+
+    [DllImport("user32.dll")]
+    private static extern bool SystemParametersInfoW(uint action, uint param, ref RECT data, uint winIni);
+
+    private static void GetWorkArea(out RECT rect)
+    {
+        rect = default;
+        SystemParametersInfoW(0x0030, 0, ref rect, 0);
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint GetModuleHandleW(string? moduleName);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern ushort RegisterClassExW(ref WNDCLASSEXW wndClass);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint CreateWindowExW(long exStyle, string className, string windowName, long style, int x, int y, int width, int height, nint parent, nint menu, nint instance, nint param);
+
+    [DllImport("user32.dll")]
+    private static extern nint LoadCursorW(nint instance, int cursor);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint DefWindowProcW(nint hwnd, uint message, nint wParam, nint lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnableMouseInPointer(bool enable);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool PeekMessageW(out MSG msg, nint hwnd, uint min, uint max, uint remove);
+
+    [DllImport("user32.dll")]
+    private static extern bool TranslateMessage(ref MSG msg);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint DispatchMessageW(ref MSG msg);
+}
