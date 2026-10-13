@@ -5769,6 +5769,11 @@ internal sealed partial class OverlayWindow : IDisposable
             DrawEraserRectCursor(app, c);
             return;
         }
+        if (shape == InkEngine.ToolCursorShape.FramePen)
+        {
+            DrawFramePen(app, c);
+            return;
+        }
 
         // 问 EffectiveTool（不是 Tool）：**笔倒过来拿（笔尾橡皮）时，这一圈就是橡皮的圈**
         // ——半径按橡皮、颜色按橡皮。引擎那边（DrawnCursor / CursorOuterRadius）也是问它，
@@ -5783,6 +5788,61 @@ internal sealed partial class OverlayWindow : IDisposable
             ? new Color4(0.35f, 0.55f, 0.95f, 0.10f)      // 橡皮：淡蓝，"要擦掉这一块"
             : new Color4(0.35f, 0.55f, 0.95f, 0.06f);     // 笔尖：更淡，不挡视线
         DrawRingCursor(c, truth, outer, fill);
+    }
+
+    // ---- 应用帧笔画笔（--framepen，2026-10-13 试作；⚠ 真机已否决，见下）--------
+
+    /// <summary>帧笔缓存位图（同一张染色位图；颜色/尺寸变了才重建）。</summary>
+    private ID2D1Bitmap _framePenBmp;
+    private uint _framePenRgb;
+    private int _framePenN;
+    private int _framePenHotX, _framePenHotY;
+
+    /// <summary>
+    /// 应用帧画笔（`--framepen`）：把"染色笔"的**同一张位图**画在浮动层
+    /// （画布坐标、与墨同帧）——与系统光标通道的染色笔形成对照。
+    /// 像素与 HCURSOR 版**完全同源**（Cursors.TintedPenPixels），
+    /// 热点 = 位图左上 = 笔尖，所以从指针点向右下铺。
+    ///
+    /// ⚠ 真机已否决（2026-10-13，"迟缓好严重"）：位置读 PointerX/Y，而输入是
+    /// "帧边界才抽一次"（采样被量化到 60Hz）、画完还要等下一个刷新边界上屏——
+    /// 结构性 2~4 帧差（60Hz 下 33~66ms），修不了。留档对照用；
+    /// 正式一律走系统光标通道（`--selfpen` 染色笔）。
+    /// </summary>
+    private void DrawFramePen(InkEngine app, Vector2 c)
+    {
+        var pen = app.CurrentColor;
+        int n = app.CursorSizePx;
+        uint rgb = Cursors.RgbKey(pen);
+        if (_framePenBmp == null || _framePenRgb != rgb || _framePenN != n)
+        {
+            _framePenBmp?.Dispose();
+            _framePenBmp = null;
+            var px = Cursors.TintedPenPixels(pen, n, out int hotX, out int hotY);
+            if (px != null)
+            {
+                var props = new BitmapProperties1(
+                    new Vortice.DCommon.PixelFormat(Format.B8G8R8A8_UNorm,
+                                                    Vortice.DCommon.AlphaMode.Premultiplied),
+                    96f, 96f, BitmapOptions.None);
+                var handle = GCHandle.Alloc(px, GCHandleType.Pinned);
+                try
+                {
+                    _framePenBmp = _ctx.CreateBitmap(
+                        new SizeI(n, n), handle.AddrOfPinnedObject(), (uint)(n * 4), props);
+                    _framePenHotX = hotX;
+                    _framePenHotY = hotY;
+                }
+                catch { _framePenBmp = null; }
+                finally { handle.Free(); }
+            }
+            _framePenRgb = rgb;
+            _framePenN = n;
+        }
+        if (_framePenBmp == null) return;
+        float ox = c.X - _framePenHotX, oy = c.Y - _framePenHotY;
+        _ctx.DrawBitmap(_framePenBmp, new Vortice.RawRectF(ox, oy, ox + n, oy + n), 1f,
+                        Vortice.Direct2D1.InterpolationMode.Linear, null, null);
     }
 
     /// <summary>
@@ -6543,6 +6603,7 @@ internal sealed partial class OverlayWindow : IDisposable
         _hudBmpTex?.Dispose();
         _pickSvBmp?.Dispose();           // 自定义取色板的缓存位图（8.2.0）
         _pickHueBmp?.Dispose();
+        _framePenBmp?.Dispose();         // 应用帧笔画笔的缓存位图（--framepen 试作）
         _frozenBmp?.Dispose();           // 截图的冻结帧位图（8.3.0）
         _tiles?.Dispose();
         _backBuffer?.Dispose();

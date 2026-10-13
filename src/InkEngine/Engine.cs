@@ -102,7 +102,13 @@ public partial class InkEngine
             or "--nosmooth" or "--printersafe"
             or "--mean2gauss" or "--mean2guniform" or "--mean2gsigma" or "--mean2gfast"
             or "--mean2glo" or "--mean2ghi" or "--mean2gtip"
-            or "--predict2" or "--nopredict2" or "--pred2ms" => true,
+            or "--predict2" or "--nopredict2" or "--pred2ms"
+            // 2026-10-13 补登记：湿墨后端 / 轨迹 / 自定义干燥 / 面板 / 染色笔这批新开关。
+            // 缺了它们，敲在第一位会被当"自检 mode"→ 构造期不读设置盘、HUD 被关
+            //（兜底分支只撤隔离，救不回"没读设置"——换机测试的命令正好全踩在这上面）。
+            or "--syswethost" or "--nosyswethost" or "--inktrail" or "--noinktrail"
+            or "--trailonly" or "--trailcommit" or "--nocustomdrying" or "--hud"
+            or "--selfpen" or "--framepen" => true,
         _ => false,
     };
 
@@ -1850,6 +1856,27 @@ public partial class InkEngine
     internal Color4 HighlighterCurrent = InkPalette.HighlighterDefault;
     internal bool UiCapturing;
 
+    /// <summary>
+    /// 自绘染色笔（`--selfpen`，2026-10-13 试作）：笔工具在鼠标/手写板下，
+    /// 用自绘的"淡彩当前色"斜笔代替系统 IDC_PEN（形状读系统位图、颜色跟笔色，
+    /// 见 Cursors.TintedPen）。**纯外观开关**：走的还是系统光标通道，
+    /// 延迟与系统笔同级——不是"应用帧画"那条慢路。
+    /// </summary>
+    internal static bool SelfPenCursorEnabled;
+
+    /// <summary>
+    /// 应用帧笔画笔（`--framepen`，2026-10-13 试作）：染色笔的**同一张位图**改由
+    /// 应用帧画（浮动层、与墨同帧）。和 `--selfpen` 组合就是"A/B 对照"：
+    /// 同一支笔，一个走系统光标通道（快）、一个走应用帧（慢约 1~2 帧）。
+    ///
+    /// ⚠ **真机已否决（2026-10-13，用户原话"迟缓好严重"）——结构性，救不了**：
+    /// 系统光标由合成器直管（跟输入 125~240Hz 走、≈0~1 帧）；应用帧光标要过
+    /// "帧边界才抽消息（采样量化到 60Hz）→ 绘制 → Present → 下一个刷新边界"
+    /// （实感 2~4 帧）。写字的指示物差这一档就是"拖在手上后面"。
+    /// **留档对照用，不要开、不要推荐**——光标一律走系统通道（原版或 `--selfpen`）。
+    /// </summary>
+    internal static bool FramePenEnabled;
+
     /// <summary>自检用：系统问了我们几次命中测试、其中几次回答"这块是我的"。</summary>
     internal int _cntNcHitTest, _cntNcHitClient;
 
@@ -2217,6 +2244,15 @@ public partial class InkEngine
         // R1（2026-10-13）：自定义干燥（系统只画湿墨、干墨自绘；`--customdry` 探针钉死的接法）。
         // 默认开，`--nocustomdrying` 关（A/B 对照用）；失败自动回退 ClearStrokes 交接。
         SystemWetHost.CustomDryingWanted = !args.Contains("--nocustomdrying");
+
+        // `--selfpen`（2026-10-13 试作）：自绘"淡彩当前色"斜笔光标（见 Cursors.TintedPen）。
+        // "全自绘 + 染色笔"手感试装：配 `--noinktrail --nosyswethost` 一起敲。
+        SelfPenCursorEnabled = args.Contains("--selfpen");
+
+        // `--framepen`（2026-10-13 试作）：应用帧笔画笔——和 `--selfpen` 同一张位图，
+        // 但改由应用帧绘制（浮动层，与墨同帧）。对照"系统光标通道 vs 应用帧"用。
+        // ⚠ 真机已否决（"迟缓好严重"，结构性救不了）：留档对照，别推荐（见 FramePenEnabled）。
+        FramePenEnabled = args.Contains("--framepen");
 
         // PPT 连接诊断（--pptdebug）：把 ROT 扫描每一步打出来（排查用，平时关）。
         PptComSource.Debug = args.Contains("--pptdebug");
@@ -8087,6 +8123,14 @@ public partial class InkEngine
         Disc,
         /// <summary>实心点：激光笔。激光表达的是"我说的是这里"，不是"多宽"。</summary>
         Dot,
+        /// <summary>
+        /// 帧笔（`--framepen`，2026-10-13 试作）：把染色笔的**同一张位图**改由
+        /// 应用帧绘制（画在浮动层）——"系统光标通道 vs 应用帧"两种画法的活体对照。
+        /// 外观与 HCURSOR 染色笔完全一致（同一份像素生成）；代价是跟应用帧同拍
+        /// （慢约 1~2 帧），这正是要体验的差异。
+        /// ⚠ 真机已否决（2026-10-13 "迟缓好严重"，结构性救不了）：见 FramePenEnabled，留档勿用。
+        /// </summary>
+        FramePen,
     }
 
     private IntPtr _cursorApplied;
@@ -8206,7 +8250,10 @@ public partial class InkEngine
         // （手写板写字时尤其需要，见 PenDeviceOnScreen 的注释）。
         // 用的是**系统那支 IDC_PEN**（自绘彩笔版试过、被用户否掉，见 CursorKind.Pen 的注释）。
         // 只有"笔尖就压在屏幕上"的触屏笔才藏起来（笔尖即落点，环由自绘表达）。
-        Tool.Pen => PenShowsCursor ? CursorKind.Pen : CursorKind.Hidden,
+        Tool.Pen => !PenShowsCursor ? CursorKind.Hidden
+                  : FramePenTakesOver ? CursorKind.Hidden
+                  : SelfPenCursorEnabled ? CursorKind.SelfPen
+                  : CursorKind.Pen,
         Tool.Highlighter => CursorKind.Hidden,      // 落点由自绘的宽度圆盘表达
         Tool.Laser => CursorKind.Hidden,            // 落点由自绘的实心点表达
         // 落点由自绘圆环 / 矩形表达；开了 EraserKeepsSystemCursor 就两个都显示（A/B 用）。
@@ -8223,6 +8270,29 @@ public partial class InkEngine
         Tool.ConicEllipse => CursorKind.Cross,
         _ => CursorKind.Default,
     };
+
+    /// <summary>
+    /// 应用帧笔画笔此刻是否接管（`--framepen`）：接管时 HCURSOR 藏起来，
+    /// 由 Overlay 在浮动层画**同一张位图**（见 Overlay.DrawFramePen）。
+    ///
+    /// **这是唯一判据**——ToolCursorKind（藏 HCURSOR）、DrawnCursor（交形状）、
+    /// 绘制三处共用，防止"一个显示一个藏"变成双光标或没光标。
+    /// 过滤条件与 DrawnCursor 的全局过滤保持一致（穿透 / 指针出界 / 截图瞬间 /
+    /// 压在界面之上都不接管）；触摸没有悬停、触屏笔落屏维持"笔尖即落点"。
+    /// </summary>
+    internal bool FramePenTakesOver
+    {
+        get
+        {
+            if (!FramePenEnabled) return false;
+            if (PassThrough || !PointerInside || CaptureFrameHidden) return false;
+            if (LastPointerType == Native.PT_TOUCH) return false;
+            if (_uiHover || PointerOnDrawnChrome()) return false;
+            if (EffectiveTool != Tool.Pen || !PenShowsCursor) return false;
+            // 像素读不出来（极端）→ 不接管，留给系统笔（否则光标会消失）
+            return Cursors.PenPixelsReadable(CurrentColor, CursorSizePx);
+        }
+    }
 
     /// <summary>
     /// 截图模式下的系统光标（8.3.1）：
@@ -8340,7 +8410,10 @@ public partial class InkEngine
             _cursorApplied = IntPtr.Zero;
             return;
         }
-        var h = Cursors.HandleFor(kind, CursorSizePx);
+        // 染色笔要**当前笔色**参与生成（缓存按 颜色+尺寸 走 → 换色自动换新句柄）
+        var h = kind == CursorKind.SelfPen
+            ? Cursors.TintedPen(CurrentColor, CursorSizePx)
+            : Cursors.HandleFor(kind, CursorSizePx);
         if (h == IntPtr.Zero) return;
         if (!force && h == _cursorApplied) return;
         Native.SetCursor(h);
@@ -8407,6 +8480,8 @@ public partial class InkEngine
                 // 8.3.0 那个 24×24 角括号被用户点名"比较难用"，整批退场。
                 return ToolCursorShape.None;
                 case Tool.Pen:
+                    // `--framepen`：应用帧笔画笔接管（同一张染色位图，见 Overlay.DrawFramePen）
+                    if (FramePenTakesOver) return ToolCursorShape.FramePen;
                     // 已经在显示斜笔（鼠标 / 手写板，自绘彩笔）：落点由它一路表达，
                     // **不再叠自绘环**——"笔上再套一个圈"就是这段开头说的那种叠影。
                     if (PenShowsCursor) return ToolCursorShape.None;
@@ -8428,6 +8503,9 @@ public partial class InkEngine
         {
             switch (DrawnCursor)
             {
+                case ToolCursorShape.FramePen:
+                    // 位图从指针（左上=热点）向右下铺 n×n → 最远角 ≈ n×1.41，留 1.5n 稳。
+                    return CursorSizePx * 1.5f + 4f;
                 case ToolCursorShape.Ring:
                     return CursorOuterRadius * 1.35f + 10f;
                 case ToolCursorShape.Disc:
