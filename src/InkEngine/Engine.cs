@@ -1857,9 +1857,10 @@ public partial class InkEngine
     internal bool UiCapturing;
 
     /// <summary>
-    /// 自绘染色笔（`--selfpen`，2026-10-13 试作）：笔工具在鼠标/手写板下，
-    /// 用自绘的"淡彩当前色"斜笔代替系统 IDC_PEN（形状读系统位图、颜色跟笔色，
-    /// 见 Cursors.TintedPen）。**纯外观开关**：走的还是系统光标通道，
+    /// 自绘染色笔（`--selfpen`，2026-10-13）：笔工具在鼠标/手写板下，
+    /// 用自绘的斜笔代替系统 IDC_PEN——**形状/笔身 = 系统位图原样，只有笔帽
+    /// 染当前色**（三版口径：用户"只用系统的笔、只在笔帽增加颜色"，
+    /// 见 Cursors.TintPen）。**纯外观开关**：走的还是系统光标通道，
     /// 延迟与系统笔同级——不是"应用帧画"那条慢路。
     /// </summary>
     internal static bool SelfPenCursorEnabled;
@@ -2245,7 +2246,7 @@ public partial class InkEngine
         // 默认开，`--nocustomdrying` 关（A/B 对照用）；失败自动回退 ClearStrokes 交接。
         SystemWetHost.CustomDryingWanted = !args.Contains("--nocustomdrying");
 
-        // `--selfpen`（2026-10-13 试作）：自绘"淡彩当前色"斜笔光标（见 Cursors.TintedPen）。
+        // `--selfpen`（2026-10-13）：自绘斜笔光标——笔身原样、笔帽当前色（见 Cursors.TintPen）。
         // "全自绘 + 染色笔"手感试装：配 `--noinktrail --nosyswethost` 一起敲。
         SelfPenCursorEnabled = args.Contains("--selfpen");
 

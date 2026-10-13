@@ -31,14 +31,15 @@ internal enum CursorKind
     /// 判定"填充颜色有点难看，原来那支就挺好"，**已整批撤回**——想要"看得见真实粗细"
     /// 的人可以切到落点环那条路（见 Engine.PenShowsCursor），不在这支笔上做。
     ///
-    /// 2026-10-13 二试（`--selfpen`）：换成"淡淡的当前色"路线——形状**原样读系统
-    /// 位图**（不再手画），只把配色染淡（见 SelfPen / TintedPen）。
+    /// 2026-10-13 二试（`--selfpen`）：**形状与笔身原样读系统位图**（不再手画），
+    /// 只把**笔帽**染成当前色（见 SelfPen / TintPen）。
     /// </summary>
     Pen,
 
     /// <summary>
-    /// 自绘·染色笔（2026-10-13 试作，`--selfpen`）：形状 = 系统斜笔的位图原样，
-    /// 颜色 = 当前笔色的"淡彩"（白描边保留）。**走系统光标通道**
+    /// 自绘·染色笔（2026-10-13，`--selfpen`）：形状 = 系统斜笔的位图原样，
+    /// **笔身一个像素不改**，只有**笔帽**（笔轴最后一段）的浅色芯染成当前笔色
+    /// （深轮廓 / 环扣描边保留，见 TintPen 三版）。**走系统光标通道**
     /// （SetCursor 自定义位图），延迟与系统笔同级——纯外观升级。
     /// </summary>
     SelfPen,
@@ -163,8 +164,8 @@ internal static class Cursors
         => TintedPenPixels(pen, sizePx, out _, out _) != null;
 
     /// <summary>
-    /// 自绘染色笔（HCURSOR 版）：形状 = 系统 IDC_PEN 位图原样，配色见 TintPen
-    /// （笔身淡彩 + 笔尾色块 + 深色外轮廓）。
+    /// 自绘染色笔（HCURSOR 版）：形状 = 系统 IDC_PEN 位图原样，
+    /// 配色见 TintPen 三版（**笔身原样 + 笔帽当前色**）。
     ///
     /// 任何一步失败都回退**系统原笔**，并把失败记进缓存（同色不再重复尝试）——
     /// 试作功能，绝不为了颜色把光标弄丢。
@@ -264,13 +265,17 @@ internal static class Cursors
     }
 
     /// <summary>
-    /// 染色（二版，2026-10-13）三件事：
-    ///   ① 笔身——按灰度映射：暗部（原黑轮廓）→ **淡彩**、亮部（白芯）→ 白；
-    ///   ② 笔尾——沿笔轴最后一段（rel ≥ 0.70）**整段填当前色**（"笔尾的色块"，
-    ///      用户点名要的：一眼认出当前笔色）；阈值与浓淡全是常量，看效果再调；
-    ///   ③ 外轮廓——笔体外侧描一圈**深色**：浅底白板和深底 PPT 都有可见边界，
-    ///      解决"白边（白芯）与浅底重合"。深色同旋转光标家族的 dark。
-    /// 读出的是**非预乘** BGRA，写回**预乘**（Create / CreateBitmap 的约定）。
+    /// 染色（三版，2026-10-13 晚）：**只动笔帽，笔身原样**——用户点名"不管哪种，
+    /// 都统一用系统笔的样式，然后在笔帽增加同色"（系统通道 / 应用帧共用这一份像素）。
+    ///   ① 笔身（rel &lt; 0.70）——颜色**原样保留**（系统笔的深轮廓 + 白芯一个像素不改；
+    ///      只做"直通 → 预乘"的格式归一，见下）；
+    ///   ② 笔帽（笔轴最后一段，rel ≥ 0.70）——**浅色芯**换成当前色（0.88 实色，
+    ///      和上一版"笔尾色块"同口径）；深色像素（轮廓 / 尾巴那个环扣的描边）
+    ///      原样保留——浅底靠深轮廓勾边、深底靠彩块，两头都看得见；
+    ///   ③ 不再另加外轮廓（二版那条是为"淡彩笔身"补的；现在笔身就是原版，自带轮廓）。
+    /// 读出的是**直通（非预乘）** BGRA（探针实测：边缘是"颜色恒定、alpha 渐隐"的
+    /// 直通结构，如 (18,20,38,a=18)），写回**预乘**（Create / CreateBitmap 的约定）
+    /// ——所以**每个不透明像素都必须写**："原样" = 颜色不变，格式仍要归一。
     /// </summary>
     private static void TintPen(byte[] px, int n, Color4 pen)
     {
@@ -280,8 +285,7 @@ internal static class Cursors
             for (int x = 0; x < n; x++)
                 if (px[(y * n + x) * 4 + 3] > 8) sMax = Math.Max(sMax, x + y);
 
-        // 淡彩（笔身）= 当前色与白各半；实色（笔尾）= 当前色留大头
-        float hR = pen.R * 0.5f + 0.5f, hG = pen.G * 0.5f + 0.5f, hB = pen.B * 0.5f + 0.5f;
+        // 笔帽实色 = 当前色留大头
         float cR = pen.R * 0.88f + 0.12f, cG = pen.G * 0.88f + 0.12f, cB = pen.B * 0.88f + 0.12f;
 
         for (int y = 0; y < n; y++)
@@ -291,56 +295,21 @@ internal static class Cursors
                 int i = (y * n + x) * 4;
                 byte b = px[i], g = px[i + 1], r = px[i + 2], a = px[i + 3];
                 if (a == 0) continue;
-                float af = a / 255f;
 
                 float rr, gg, bb;
-                if ((x + y) / (float)sMax >= 0.70f)
+                float lum = (r * 0.299f + g * 0.587f + b * 0.114f) / 255f;   // 0 = 黑，1 = 白
+                if ((x + y) / (float)sMax >= 0.70f && lum >= 0.45f)
                 {
-                    rr = cR; gg = cG; bb = cB;              // ② 笔尾：整段填当前色
+                    rr = cR; gg = cG; bb = cB;              // ② 笔帽浅色芯 → 当前色
                 }
                 else
                 {
-                    float lum = (r * 0.299f + g * 0.587f + b * 0.114f) / 255f;   // 0 = 黑，1 = 白
-                    rr = hR + (1f - hR) * lum;              // ① 暗 → 淡彩、亮 → 白
-                    gg = hG + (1f - hG) * lum;
-                    bb = hB + (1f - hB) * lum;
+                    rr = r / 255f; gg = g / 255f; bb = b / 255f;   // ① 笔身 / 深色 → 原样
                 }
+                float af = a / 255f;                        // 直通 → 预乘
                 px[i]     = (byte)Math.Clamp(bb * af * 255f + 0.5f, 0f, 255f);
                 px[i + 1] = (byte)Math.Clamp(gg * af * 255f + 0.5f, 0f, 255f);
                 px[i + 2] = (byte)Math.Clamp(rr * af * 255f + 0.5f, 0f, 255f);
-            }
-        }
-
-        // ③ 外轮廓：先在 mask 上判定（避免边写边判"传染"），再落深色
-        var mask = new byte[n * n];
-        for (int k = 0; k < n * n; k++) mask[k] = px[k * 4 + 3];
-        int rad = Math.Max(1, n / 32);
-        float oR = 0.13f, oG = 0.15f, oB = 0.18f;       // 近黑深灰（同旋转光标家族）
-        for (int y = 0; y < n; y++)
-        {
-            for (int x = 0; x < n; x++)
-            {
-                int k = y * n + x;
-                if (mask[k] != 0) continue;
-                bool near = false;
-                for (int dy = -rad; dy <= rad && !near; dy++)
-                {
-                    int ny = y + dy;
-                    if (ny < 0 || ny >= n) continue;
-                    for (int dx = -rad; dx <= rad && !near; dx++)
-                    {
-                        int nx = x + dx;
-                        if (nx < 0 || nx >= n) continue;
-                        if (dx * dx + dy * dy > rad * rad) continue;
-                        if (mask[ny * n + nx] > 8) near = true;
-                    }
-                }
-                if (!near) continue;
-                int i = k * 4;
-                px[i]     = (byte)(oB * 255f + 0.5f);   // alpha=255 → 预乘 = 原值
-                px[i + 1] = (byte)(oG * 255f + 0.5f);
-                px[i + 2] = (byte)(oR * 255f + 0.5f);
-                px[i + 3] = 255;
             }
         }
     }
@@ -376,7 +345,7 @@ internal static class Cursors
         CursorKind.ResizeNWSE => "IDC_SIZENWSE 对角拉伸",
         CursorKind.ResizeNESW => "IDC_SIZENESW 对角拉伸",
         CursorKind.Rotate => "自绘·旋转（圆弧箭头）",
-        CursorKind.SelfPen => "自绘·染色笔（淡彩当前色）",
+        CursorKind.SelfPen => "自绘·染色笔（笔身原样·笔帽当前色）",
         CursorKind.Hidden => "不显示指针",
         CursorKind.Leave => "不插手（交给下层窗口）",
         _ => "IDC_ARROW 箭头",
