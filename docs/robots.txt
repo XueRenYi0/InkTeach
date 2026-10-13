@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://xuerenyi0.github.io/InkTeach/sitemap.xml

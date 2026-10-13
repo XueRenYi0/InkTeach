@@ -1,0 +1,23 @@
+virtual desktop: 2880x1800 at (0,0)
+overlay on monitor 65537: 2880x1800 at (0,0) dpi=192
+DPI 缩放 2.00（逻辑 1440x900）
+registered 14/14 global hotkeys
+
+InkProbe 批注原型已启动。全局快捷键（Ctrl+Alt+...）：
+  P 穿透模式开关      1 笔        2 荧光笔     3 激光笔
+  4 橡皮擦            5 框选      Z 撤销       C 清空
+  I 性能面板          B 性能基准  M 内存探测   Y 切换穿透实现
+  X 退出
+
+[   0.2s] fps=   0.0 record=  9.11ms present=  0.77ms rebuild=   4.61ms ws= 120.8MB
+[   1.4s] fps=   4.0 record=  1.23ms present=  0.19ms rebuild=   4.61ms ws= 101.7MB
+[   2.4s] fps=   4.0 record=  0.70ms present=  0.21ms rebuild=   4.61ms ws= 101.8MB
+[   3.7s] fps=   4.0 record=  0.78ms present=  0.18ms rebuild=   4.61ms ws= 102.0MB
+[   4.9s] fps=   4.0 record=  1.91ms present=  0.55ms rebuild=   4.61ms ws= 102.4MB
+[   6.2s] fps=   4.0 record=  1.10ms present=  0.23ms rebuild=   4.61ms ws= 102.5MB
+[   7.2s] fps=   4.0 record=  1.56ms present=  0.35ms rebuild=   4.61ms ws= 102.7MB
+[   8.4s] fps=   4.0 record=  0.79ms present=  0.39ms rebuild=   4.61ms ws= 103.8MB
+[   9.4s] fps=   4.0 record=  0.81ms present=  0.27ms rebuild=   4.61ms ws= 103.8MB
+[  10.7s] fps=   4.0 record=  1.66ms present=  0.26ms rebuild=   4.61ms ws= 103.9MB
+[  11.7s] fps=   4.0 record=  1.06ms present=  0.22ms rebuild=   4.61ms ws= 103.9MB
+[  12.9s] fps=   4.0 record=  0.81ms present=  0.23ms rebuild=   4.61ms ws= 104.2MB

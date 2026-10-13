@@ -1,0 +1,16 @@
+# 统一按 LF 存盘。
+#
+# 为什么立这一条：仓库里的文本文件原本 CRLF / LF 混着，**同一个文件里都混**
+# （提交里的 Engine.cs 有 2475 行 CRLF + 2696 行 LF）。编辑器一重写整个文件，
+# 改动量就从几百行涨到上万行——2026-09-18 那次 `git diff` 显示 1.7 万行，
+# 而真实内容只有 2536 行，全是行尾差异。立了这条以后，进出仓库一律 LF。
+* text=auto eol=lf
+
+# 二进制别当文本处理（以免被"规范化"坏掉）
+*.bmp binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.dll binary
+*.pdb binary

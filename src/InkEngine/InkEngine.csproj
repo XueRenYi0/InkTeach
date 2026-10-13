@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    批注引擎：与界面完全无关的核心资产。
+
+    这个项目里不允许出现任何具体的界面代码（按钮、面板、配色方案）。
+    界面通过 IOverlayUi 接口接入，见 Ui.cs。
+
+    引擎只依赖图形与系统 API，不依赖任何上层应用。
+  -->
+  <PropertyGroup>
+    <!-- 2026-10-12：TFM 带上 Windows SDK 版本——系统托管湿墨要用 Windows.UI.Composition /
+         Windows.UI.Input.Inking.Core 这些 WinRT 投影（Input/SystemWetHost.cs）。
+         探针工程（InkBystanderTest）同款 TFM 写法，投影随 Windows SDK Ref 包自动带上。 -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>InkEngine</AssemblyName>
+    <RootNamespace>InkEngine</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <!-- 让测试/基准程序可以直接访问引擎内部状态（只在开发期使用，
+       产品代码只走公开的 IOverlayUi / InkEngine 接口）。 -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>InkTeach</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Drawing.Common" Version="8.0.10" />
+    <PackageReference Include="Vortice.Direct2D1" Version="3.8.3" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
+    <PackageReference Include="Vortice.DirectComposition" Version="3.8.3" />
+    <PackageReference Include="Vortice.Mathematics" Version="2.1.1" />
+  </ItemGroup>
+
+  <!-- P1：DL 预测权重（predict3 旗标用；嵌入程序集，随 exe 分发，共 ~140KB） -->
+  <ItemGroup>
+    <EmbeddedResource Include="Prediction\dlv4\weights.bin" LogicalName="dlv4.weights.bin" />
+    <EmbeddedResource Include="Prediction\dlv4\weights.meta.json" LogicalName="dlv4.weights.meta.json" />
+  </ItemGroup>
+
+</Project>

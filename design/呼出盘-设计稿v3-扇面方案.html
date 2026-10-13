@@ -1,0 +1,154 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>呼出盘 v3 · 扇面方案（对比图）</title>
+<style>
+  text{font-family:'Segoe UI','Microsoft YaHei',system-ui,sans-serif}
+  .t{font-size:22px;font-weight:700;fill:#1f2937}
+  .s{font-size:12.5px;fill:#667085}
+  .ct{font-size:15px;font-weight:700;fill:#1f2937;text-anchor:middle}
+  .note{font-size:12.5px;fill:#667085}
+  .dim{font-size:14px;fill:#667085}
+  .center{font-size:34px;font-weight:700;fill:#1f2937;text-anchor:middle;dominant-baseline:central}
+  .foot{font-size:13.5px;fill:#475467}
+</style></head>
+<body style="margin:0;background:#eef0f3">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1320 920" width="100%" style="display:block">
+  <defs>
+    <g id="ic-pen" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M-7.5 7.5 L-5 .2 L3.4 -8.2 L8.2 -3.4 L-.2 5 Z"/>
+      <path d="M-5 .2 L-.2 5" stroke-width="1.5"/>
+    </g>
+    <g id="ic-hl">
+      <path d="M-8.5 7.5 L3.5 -4.5" stroke="#f0bd3a" stroke-width="6.5" stroke-linecap="round" fill="none"/>
+      <path d="M3.5 -4.5 L8 -9" stroke="#f0bd3a" stroke-opacity=".55" stroke-width="3.6" stroke-linecap="round" fill="none"/>
+    </g>
+    <g id="ic-eraser" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M-8.5 3.5 L0 -5 L5 0 L-3.5 8.5 L-8.5 8.5 Z"/>
+      <path d="M-5.5 .5 L1 7" stroke-width="1.5"/>
+    </g>
+    <g id="ic-marquee">
+      <rect x="-8" y="-8" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-dasharray="4 3"/>
+      <g fill="currentColor"><circle cx="-8" cy="-8" r="1.9"/><circle cx="8" cy="-8" r="1.9"/><circle cx="-8" cy="8" r="1.9"/><circle cx="8" cy="8" r="1.9"/></g>
+    </g>
+    <g id="ic-laser">
+      <circle cx="-3.5" cy="3.5" r="3.4" fill="#e5484d"/>
+      <circle cx="-3.5" cy="3.5" r="6" fill="none" stroke="#e5484d" stroke-opacity=".45" stroke-width="1.4"/>
+      <g stroke="#e5484d" stroke-width="1.9" stroke-linecap="round" fill="none">
+        <path d="M1 -1 L8.5 -8.5"/><path d="M1 -1 L-4.5 -6.5" stroke-width="1.7"/><path d="M1 -1 L6.5 4.5" stroke-width="1.7"/>
+      </g>
+    </g>
+    <g id="swatch-template"/>
+  </defs>
+
+  <rect x="0" y="0" width="1320" height="920" fill="#eef0f3"/>
+  <text x="32" y="40" class="t">呼出盘（Ctrl+Q）· v3 扇面方案 · 对比图</text>
+  <text x="32" y="66" class="s">2026-09-30 · 尺寸为逻辑像素，本图按 2× 绘制 · 只改画法，判位/死区/锁定/滞回一个都不动</text>
+
+  <!-- ================= 卡片 1：现行 方案A 面板盘 ================= -->
+  <rect x="16" y="96" width="416" height="584" rx="14" fill="#ffffff" stroke="#dde2e8"/>
+  <text x="224" y="140" class="ct">① 现行 · 方案 A 面板盘</text>
+  <text x="224" y="162" class="s" text-anchor="middle">46×46 圆角方块 + 矩形焦点</text>
+
+  <g transform="translate(224 430)">
+    <ellipse cx="0" cy="6" rx="200" ry="200" fill="#1f2937" opacity=".05"/>
+    <ellipse cx="0" cy="3" rx="197" ry="197" fill="#1f2937" opacity=".07"/>
+    <circle cx="0" cy="0" r="192" fill="#ffffff" stroke="#dde2e8" stroke-width="2"/>
+    <!-- 8 个按钮：未选 = 无底、只画图标；选中红 = 色片 + 强调描边（现行） -->
+    <g transform="translate(0 -120) scale(2)"><use href="#ic-pen" color="#1f2937"/></g>
+    <rect x="58.85" y="-111.15" width="52" height="52" rx="16" fill="#111111"/>
+    <rect x="62.85" y="-107.15" width="44" height="14" rx="7" fill="#ffffff" opacity=".16"/>
+    <rect x="318.85" y="34.85" width="52" height="52" rx="16" fill="#2e6be6"/>
+    <rect x="322.85" y="38.85" width="44" height="14" rx="7" fill="#ffffff" opacity=".16"/>
+    <rect x="-60" y="-60" width="120" height="120" rx="28" fill="#e5484d"/>
+    <rect x="-52" y="-52" width="104" height="28" rx="14" fill="#ffffff" opacity=".16"/>
+    <rect x="-72" y="-72" width="144" height="144" rx="32" fill="none" stroke="#0067c0" stroke-width="5"/>
+    <g transform="translate(0 120) scale(2)"><use href="#ic-hl"/></g>
+    <g transform="translate(-84.85 84.85) scale(2)"><use href="#ic-eraser" color="#1f2937"/></g>
+    <g transform="translate(-120 0) scale(2)"><use href="#ic-marquee" color="#1f2937"/></g>
+    <g transform="translate(-84.85 -84.85) scale(2)"><use href="#ic-laser"/></g>
+    <circle cx="0" cy="0" r="68" fill="#ffffff" stroke="#dde2e8" stroke-width="2"/>
+    <text x="0" y="2" class="center">红</text>
+  </g>
+  <text x="224" y="654" class="note" text-anchor="middle">按钮环 R60 · 相邻按钮间距 45.9 ＜ 按钮宽 46（几乎相碰）</text>
+
+  <!-- ================= 卡片 2：方案 S 全扇面 ================= -->
+  <rect x="452" y="96" width="416" height="584" rx="14" fill="#ffffff" stroke="#dde2e8"/>
+  <text x="660" y="140" class="ct">② 方案 S · 全扇面（8×45°）</text>
+  <text x="660" y="162" class="s" text-anchor="middle">环带 40→96 · 图标环 R68 · 选中 = 扇面实心</text>
+
+  <g transform="translate(660 430)">
+    <ellipse cx="0" cy="6" rx="200" ry="200" fill="#1f2937" opacity=".05"/>
+    <ellipse cx="0" cy="3" rx="197" ry="197" fill="#1f2937" opacity=".07"/>
+    <circle cx="0" cy="0" r="192" fill="#ffffff" stroke="#dde2e8" stroke-width="2"/>
+    <g fill="#f4f6f9" stroke="#e4e9ef" stroke-width="1.5">
+      <path d="M-29.32 -74.43 L-70.37 -178.64 A192 192 0 0 1 70.37 -178.64 L29.32 -74.43 A80 80 0 0 0 -29.32 -74.43 Z"/>
+      <path d="M31.9 -73.36 L76.56 -176.08 A192 192 0 0 1 176.08 -76.56 L73.36 -31.9 A80 80 0 0 0 31.9 -73.36 Z"/>
+      <path d="M74.43 -29.32 L178.64 -70.37 A192 192 0 0 1 178.64 70.37 L74.43 29.32 A80 80 0 0 0 74.43 -29.32 Z"/>
+      <path d="M73.36 31.9 L176.08 76.56 A192 192 0 0 1 76.56 176.08 L31.9 73.36 A80 80 0 0 0 73.36 31.9 Z"/>
+      <path d="M29.32 74.43 L70.37 178.64 A192 192 0 0 1 -70.37 178.64 L-29.32 74.43 A80 80 0 0 0 29.32 74.43 Z"/>
+    </g>
+    <!-- 选中：橡皮（西南 225°）→ 实心强调色 + 白图标 -->
+    <path d="M-31.9 73.36 L-76.56 176.08 A192 192 0 0 1 -176.08 76.56 L-73.36 31.9 A80 80 0 0 0 -31.9 73.36 Z" fill="#0067c0"/>
+    <g fill="#f4f6f9" stroke="#e4e9ef" stroke-width="1.5">
+      <path d="M-74.43 29.32 L-178.64 70.37 A192 192 0 0 1 -178.64 -70.37 L-74.43 -29.32 A80 80 0 0 0 -74.43 29.32 Z"/>
+      <path d="M-73.36 -31.9 L-176.08 -76.56 A192 192 0 0 1 -76.56 -176.08 L-31.9 -73.36 A80 80 0 0 0 -73.36 -31.9 Z"/>
+    </g>
+    <!-- 图标：R68（本图 136），24px（本图 48） -->
+    <g transform="translate(0 -136) scale(2)"><use href="#ic-pen" color="#1f2937"/></g>
+    <rect x="70.17" y="-122.17" width="52" height="52" rx="16" fill="#111111"/>
+    <rect x="74.17" y="-118.17" width="44" height="14" rx="7" fill="#ffffff" opacity=".16"/>
+    <rect x="110" y="-26" width="52" height="52" rx="16" fill="#e5484d"/>
+    <rect x="114" y="-22" width="44" height="14" rx="7" fill="#ffffff" opacity=".16"/>
+    <rect x="70.17" y="70.17" width="52" height="52" rx="16" fill="#2e6be6"/>
+    <rect x="74.17" y="74.17" width="44" height="14" rx="7" fill="#ffffff" opacity=".16"/>
+    <g transform="translate(0 136) scale(2)"><use href="#ic-hl"/></g>
+    <g transform="translate(-96.17 96.17) scale(2)"><use href="#ic-eraser" color="#ffffff"/></g>
+    <g transform="translate(-136 0) scale(2)"><use href="#ic-marquee" color="#1f2937"/></g>
+    <g transform="translate(-96.17 -96.17) scale(2)"><use href="#ic-laser"/></g>
+    <!-- 尺寸标注 -->
+    <g stroke="#98a2b3" stroke-width="1.4" stroke-dasharray="4 4" fill="none">
+      <path d="M0 0 L73.5 -177.4"/>
+    </g>
+    <text x="84" y="-160" class="dim" transform="rotate(-67.5 84 -160)">R 96</text>
+    <text x="72" y="-14" class="dim">R 40</text>
+    <text x="106" y="-52" class="dim">图标环 R68</text>
+    <g stroke="#98a2b3" stroke-width="1.2" fill="none"><path d="M0 0 L96.2 -96.2" stroke-dasharray="3 4"/></g>
+    <path d="M0 -136 L104 -172" stroke="#98a2b3" stroke-width="1.2" fill="none"/>
+    <text x="108" y="-174" class="dim">图标 24</text>
+    <circle cx="0" cy="0" r="68" fill="#ffffff" stroke="#dde2e8" stroke-width="2"/>
+    <text x="0" y="2" class="center">橡皮</text>
+  </g>
+  <text x="660" y="654" class="note" text-anchor="middle">扇格深 56 = 图标 24 的 2.3 倍，内外各留 16 · 缝 2°≈2.4px</text>
+
+  <!-- ================= 卡片 3：方案 H 混合 ================= -->
+  <rect x="888" y="96" width="416" height="584" rx="14" fill="#ffffff" stroke="#dde2e8"/>
+  <text x="1096" y="140" class="ct">③ 方案 H · 混合（扇面焦点）</text>
+  <text x="1096" y="162" class="s" text-anchor="middle">按钮与图标全不动 · 只把矩形焦点换成扇面</text>
+
+  <g transform="translate(1096 430)">
+    <ellipse cx="0" cy="6" rx="200" ry="200" fill="#1f2937" opacity=".05"/>
+    <ellipse cx="0" cy="3" rx="197" ry="197" fill="#1f2937" opacity=".07"/>
+    <circle cx="0" cy="0" r="192" fill="#ffffff" stroke="#dde2e8" stroke-width="2"/>
+    <!-- 选中扇面：红（东 90°） -->
+    <path d="M53.89 -21.45 L172.82 -68.77 A186 186 0 0 1 172.82 68.77 L53.89 21.45 A58 58 0 0 0 53.89 -21.45 Z" fill="#0067c0" opacity=".14"/>
+    <g transform="translate(0 -120) scale(2)"><use href="#ic-pen" color="#1f2937"/></g>
+    <rect x="58.85" y="-111.15" width="52" height="52" rx="16" fill="#111111"/>
+    <rect x="62.85" y="-107.15" width="44" height="14" rx="7" fill="#ffffff" opacity=".16"/>
+    <rect x="94" y="-26" width="52" height="52" rx="16" fill="#e5484d"/>
+    <rect x="98" y="-22" width="44" height="14" rx="7" fill="#ffffff" opacity=".16"/>
+    <rect x="110" y="-26" width="52" height="52" rx="16" fill="none" stroke="#0067c0" stroke-width="5"/>
+    <rect x="58.85" y="58.85" width="52" height="52" rx="16" fill="#2e6be6"/>
+    <rect x="62.85" y="62.85" width="44" height="14" rx="7" fill="#ffffff" opacity=".16"/>
+    <g transform="translate(0 120) scale(2)"><use href="#ic-hl"/></g>
+    <g transform="translate(-84.85 84.85) scale(2)"><use href="#ic-eraser" color="#1f2937"/></g>
+    <g transform="translate(-120 0) scale(2)"><use href="#ic-marquee" color="#1f2937"/></g>
+    <g transform="translate(-84.85 -84.85) scale(2)"><use href="#ic-laser"/></g>
+    <circle cx="0" cy="0" r="68" fill="#ffffff" stroke="#dde2e8" stroke-width="2"/>
+    <text x="0" y="2" class="center">红</text>
+  </g>
+  <text x="1096" y="654" class="note" text-anchor="middle">焦点扇面 29→93；颜色仍走「色片 + 强调描边」，不压蓝底</text>
+
+  <!-- ================= 页脚 ================= -->
+  <text x="32" y="722" class="foot">扇区顺序（北起顺时针）：笔 → 黑 → 红 → 蓝 → 荧光笔 → 橡皮 → 框选 → 激光</text>
+  <text x="32" y="750" class="foot">输入完全不变：死区 24 · 锁定 36 · 45°/格 · 跨扇滞回 9°（扇面只是画法）</text>
+  <text x="32" y="778" class="foot">全扇面关键尺寸：环带 40→96（深 56） · 图标 24 居中在 R68（内外各留 16） · 缝 2° ≈ 2.4px · 中央读数 R34</text>
+</svg>
+</body></html>
