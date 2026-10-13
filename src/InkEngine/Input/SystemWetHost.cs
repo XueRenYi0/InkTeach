@@ -14,7 +14,10 @@
 //      实测交换链内容整屏上屏（800×600 纯红 480000 像素全在）——"两层共存"成立。
 //   ② CoreWetStrokeUpdateSource 的事件**在墨迹后台线程**即时到达（0~16ms），
 //      逐点带 x/y/pressure/Timestamp；Timestamp 是 **µs 口径**（与 QPC 同源）。
-//      转发到 UI 线程一律走 PostMessage（合成 WM_POINTER*），引擎原路不动。
+//      转发到 UI 线程**不能用 PostMessage(WM_POINTER*)**——系统按真实指针状态派发、
+//      拒收应用合成投递（实测 err 1002）。实际接法：动作队列 + 自定义线程消息唤醒
+//      （PostThreadMessage/WakeMessage），由主循环直接调引擎的
+//      OnPointerDown/Move/Up（**函数级**合成指针，入口原路不动，见 HostPointFeed）。
 //   ③ GetPointerInfo(e.PointerId) 在事件里拿得到设备类型（笔/触摸）；
 //      InkUnprocessedInput 与"受理为墨"互斥（画墨时 0 点），**不用**。
 //   ④ Disposition=Canceled 只取消当前那一段，系统会**立刻重开一笔**继续受理
