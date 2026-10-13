@@ -97,12 +97,14 @@ public partial class InkEngine
     {
         "--norawinput" or "--wintab" or "--nowintab" or "--nopressure" or "--rawprobe" or "--notrend"
             or "--himetric" or "--nohimetric" or "--notouch" or "--syswet" or "--ownwet" or "--strokefile"
+            or "--inktrail" or "--noinktrail" or "--trailonly" or "--trailcommit"
+            or "--hud" or "--nohud" or "--fullpresent"
             or "--recink" or "--recinkp" or "--reclive"
             or "--doc"
             or "--nosmooth" or "--printersafe"
             or "--mean2gauss" or "--mean2guniform" or "--mean2gsigma" or "--mean2gfast"
             or "--mean2glo" or "--mean2ghi" or "--mean2gtip"
-            or "--predict2" or "--nopredict2" or "--pred2ms" => true,
+            or "--predict2" or "--nopredict2" or "--pred2ms" or "--nofastwet" => true,
         _ => false,
     };
 
@@ -220,9 +222,12 @@ public partial class InkEngine
     /// 用**引用相等**认笔画，收笔/换笔都不会串。
     /// </summary>
     private Stroke _systemWetStroke;
+    /// <summary>应用侧 DComp 湿墨替身当前负责显示的笔画。</summary>
+    private Stroke _fastWetStroke;
 
     /// <summary>Overlay 渲染判据：这一笔是不是"由系统轨迹画湿墨"。</summary>
     internal bool IsSystemWetStroke(Stroke s) => s != null && ReferenceEquals(s, _systemWetStroke);
+    internal bool IsFastWetStroke(Stroke s) => s != null && ReferenceEquals(s, _fastWetStroke);
     internal Tool Tool = Tool.Pen;
     /// <summary>Tool sizes are authored in logical pixels and scaled by the
     /// monitor DPI at use. Without this everything looks half-size on a 150%
@@ -2185,6 +2190,7 @@ public partial class InkEngine
         // `--ownwet` 强制回老路（A/B 用）。
         OverlayWindow.SystemWetPreferred = args.Contains("--syswet");
         if (args.Contains("--ownwet")) OverlayWindow.SystemWetPreferred = false;
+        OverlayWindow.FastWetFallbackEnabled = !args.Contains("--nofastwet");
 
         // PPT 连接诊断（--pptdebug）：把 ROT 扫描每一步打出来（排查用，平时关）。
         PptComSource.Debug = args.Contains("--pptdebug");
@@ -3249,6 +3255,7 @@ public partial class InkEngine
             Console.WriteLine($"overlay on monitor {hMon}: {r.Width}x{r.Height} at ({r.Left},{r.Top}) dpi={w.Dpi}");
             Console.WriteLine($"委托墨迹轨迹(InkTrail): {(OverlayWindow.InkTrailEnabled ? "开" : "关")}"
                               + $"（接口{OverlayWindow.InkTrailNote}）");
+            Console.WriteLine($"应用侧湿墨替身(FastWet): {(w.FastWetReady ? "可用（系统轨迹失效时自动接管）" : "不可用（回退主交换链自绘）")}");
             Console.WriteLine($"湿墨呈现: {(OverlayWindow.SystemWetPreferred ? "系统轨迹独占（--syswet）" : "自己画（系统轨迹照喂）")}");
             // 调参时"我到底调上了没有"必须一眼看得见：这里印的是**生效值**，不是"可用/不可用"。
             // （2026-09-22 用户碰到的两个坑：--predictms 100 被静默夹到 15；--noinktrail 生效了没有
@@ -4640,9 +4647,10 @@ public partial class InkEngine
         // 一个点都没喂过。逐帧采样**实测**：鼠标**也画**（拖动中量到过 163 像素的尾巴）。
         // ⚠ 这条通道画的是"还没上屏的那一小段"——我们自己的帧一提交就把它消化掉，
         //   所以肉眼看常是"闪一下"（`--trailonly` 下尤其明显），那是结构性表现，不是 bug。
+        var wetWin = WindowAt(screenX, screenY);
         bool trailStarted = false;
         if (dash == StrokeDash.Solid)
-            trailStarted = WindowAt(screenX, screenY)?.BeginInkTrail(
+            trailStarted = wetWin?.BeginInkTrail(
                 tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f) ?? false;
         _pen.BeginStroke();   // 缺压回填的基准只活在"一笔"之内（见 PenSampleBuffer.BeginStroke）
         ResetPredictTail();   // B4：新的一笔，预测器从零开始
@@ -4661,12 +4669,23 @@ public partial class InkEngine
             // 实测的原话是"上面会出残影一直在那闪"。见 Stroke.RawWhileLive。
             RawWhileLive = true,
         };
+        // Win11 的系统轨迹可用时保持原协议；系统轨迹不可用时启用同一窗口内的
+        // 独立 DComp 湿墨层。它只接管显示，不接管输入，也不改变文档提交。
+        bool fastWetStarted = false;
+        // 只给真正的笔启用替身；激光笔有自己的 LaserTrail，不能混进 FastWet。
+        if (!trailStarted && tool == Tool.Pen && dash == StrokeDash.Solid)
+        {
+            fastWetStarted = wetWin?.BeginFastWet(
+                tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
+                trailW * 0.5f) ?? false;
+        }
         // `--syswet`：真笔 + 实线笔，且轨迹真的起来了 → 湿墨交给系统（我们不再自绘）。
         // 荧光笔/激光笔不在此列——系统轨迹画不出它们的观感；`--ownwet` 可强制回老路。
         // ⚠ 仍然**只给真笔**：鼠标/触摸的轨迹系统认不认还没结论，不能让"我们不自绘"去赌。
         _systemWetStroke = (trailStarted && OverlayWindow.SystemWetPreferred && tool == Tool.Pen
                             && ptype == Native.PT_PEN)
             ? ActiveStroke : null;
+        _fastWetStroke = fastWetStarted ? ActiveStroke : null;
         // 起笔：落笔这条消息里可能已经合并了几个采样点，一起收进来（以前只取最新那一个）。
         ActiveStrokeHasPressure = false;
         _wtStrokePressure = -1f;     // Wintab 的缺压回填基准**每笔归零**（新一笔不继承上一笔的力度）
@@ -4708,6 +4727,18 @@ public partial class InkEngine
         AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
         // 半径**逐点算**（见 TrailRadius）：有压感的笔，湿墨的粗细必须和干墨一致。
         FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
+        // 委托轨迹可能在创建成功后、第一次真正喂点时才失败。不能让这一笔从此
+        // 没有湿墨：同一笔立即切到应用侧 DComp 湿墨层，并把已经收到的点一次补画。
+        if (!fastWetStarted && trailStarted && wetWin != null && wetWin.InkTrailRuntimeFailed)
+        {
+            _systemWetStroke = null;
+            fastWetStarted = wetWin.BeginFastWet(
+                tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
+                trailW * 0.5f);
+            _fastWetStroke = fastWetStarted ? ActiveStroke : null;
+        }
+        if (fastWetStarted)
+            wetWin?.UpdateFastWet(ActiveStroke);
 
         // **停顿成型跟着这一笔开始计时**（见 计划-图形工具.md §四十二）。
         // 激光笔不参与：它只是"指一下"，本来就不留墨，把它变出一个图形来没有意义。
@@ -4754,6 +4785,18 @@ public partial class InkEngine
         // 只取最新那一个等于把笔的采样率砍半（见 Input/PenInput.cs）。
         AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
         FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
+        var wetWin = WindowAt(screenX, screenY);
+        if (wetWin != null && wetWin.InkTrailRuntimeFailed && !IsFastWetStroke(ActiveStroke))
+        {
+            // Native delegated trail can fail after a successful start. Switch the
+            // same active stroke to the application surface without changing input
+            // ownership or document semantics.
+            _systemWetStroke = null;
+            if (wetWin.BeginFastWet(ActiveStroke.Color, TrailRadius()))
+                _fastWetStroke = ActiveStroke;
+        }
+        if (IsFastWetStroke(ActiveStroke))
+            wetWin?.UpdateFastWet(ActiveStroke);
         // 停顿跟踪：**死区内的抖动不算"动过"**（见 DwellAssist.DeadZoneLogical）——
         // 少了它，笔尖静止时那点亚像素抖动会把计时一直刷新，
         // "停 600ms"永远攒不满，整条功能看着像没生效。
@@ -4957,7 +5000,13 @@ public partial class InkEngine
         // 不收的话屏幕上会同时留着一条手绘的歪线和一条规整图形（InkClass 那边
         // 为此要切 `EditingMode`，还留下过"两条线""预览残留"一串坑；我们这边
         // 采样和上屏都在引擎手里，所以要收的只有这三处）。
-        foreach (var w in _windows) w.EndInkTrail();
+        foreach (var w in _windows)
+        {
+            w.EndInkTrail();
+            w.EndFastWet();
+        }
+        _systemWetStroke = null;
+        _fastWetStroke = null;
 
         var anchor = _dwell.Anchor;                       // 笔停住的位置
         double stillMs = _dwell.StillMs(NowMs);           // 复位之前先量
@@ -7429,11 +7478,14 @@ public partial class InkEngine
         // `--syswet`：湿墨只有系统轨迹这一份，撤除要等干墨那一帧 Present 之后
         //（否则"轨迹先没了、干墨还没上屏"会闪一帧）；其余路径照旧立即撤。
         bool sysWetEnding = _systemWetStroke != null;
+        bool fastWetEnding = _fastWetStroke != null;
         foreach (var w in _windows)
         {
             if (sysWetEnding) w.EndInkTrailDeferred(); else w.EndInkTrail();
+            if (fastWetEnding) w.EndFastWetDeferred();
         }
         _systemWetStroke = null;
+        _fastWetStroke = null;
         // **录墨迹**（用户 2026-09-26 提"我手画多少条双曲线给你，你按这些来定制判据"）：
         // 把这一笔的**原始采样点**追加到录制文件。放在最前面 —— 此时 `ActiveStroke`
         // 要么还是原始墨、要么是停顿成型换掉的那个对象（所以真正要用的点见 `_recordPts`）。

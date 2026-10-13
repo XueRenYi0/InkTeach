@@ -293,6 +293,7 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     public static bool LatencyWaitEnabled = false;
     private IDCompositionDevice _dcomp;
+    private IDCompositionDevice2 _dcomp2;
     private IDCompositionTarget _target;
     /// <summary>根视觉：纯容器（交换链挂在子视觉里，墨迹才有地方叠上去）。</summary>
     private IDCompositionVisual _visual;
@@ -300,8 +301,19 @@ internal sealed partial class OverlayWindow : IDisposable
     private IDCompositionVisual _swapVisual;
     /// <summary>委托墨迹轨迹视觉（内容＝_inkTrail，叠在交换链之上）。2026-10-10 试验C 新增。</summary>
     private IDCompositionVisual _inkVisual;
+    private IDCompositionVisual _fastWetVisual;
+    private IDCompositionSurface _fastWetSurface;
+    private bool _fastWetReady;
+    private int _fastWetLastPointCount;
+    private float _fastWetLastCamX = float.NaN;
+    private float _fastWetLastCamY = float.NaN;
+    private RectF _fastWetLastBounds = RectF.Empty;
+    private Color4 _fastWetColor;
+    private bool _fastWetDrawing;
+    public bool FastWetReady => _fastWetReady;
     private IDCompositionInkTrailDevice _inkTrailDevice;
     private IDCompositionDelegatedInkTrail _inkTrail;
+    private bool _inkTrailRuntimeFailed;
     private ID2D1DeviceContext _ctx;
     /// <summary>
     /// D2D 1.3 的设备上下文 2：**原生墨迹**（ID2D1Ink）唯一能创建的地方
@@ -543,6 +555,12 @@ internal sealed partial class OverlayWindow : IDisposable
     public static bool SystemWetPreferred;
 
     /// <summary>
+    /// 系统委托轨迹不可用时，是否启用应用侧 DirectComposition 湿墨层。
+    /// 这是“委托轨迹替身”，不是预测：只画已经收到的真实点，不进文档、不改输入模型。
+    /// </summary>
+    public static bool FastWetFallbackEnabled = true;
+
+    /// <summary>
     /// "按住不动 = 右键"这条**系统手势**在本窗口内关掉了吗（见
     /// <see cref="Native.DisableSystemPressAndHold"/>）。
     ///
@@ -663,6 +681,7 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     public bool BeginInkTrail(Color4 color, float radius)
     {
+        _inkTrailRuntimeFailed = false;
         if (_inkTrail == null || !InkTrailEnabled) return false;
         // 上一条轨迹还挂起没撤（收笔后等 Present）→ 先撤，别叠上新轨迹。
         if (_trailEndPending) EndInkTrailNow();
@@ -677,9 +696,222 @@ internal sealed partial class OverlayWindow : IDisposable
             _trailTrimmedGeneration = 0;
             InkTrailDebug = $"StartNewTrail ok, color=({color.R:F2},{color.G:F2},{color.B:F2},{color.A:F2})";
         }
-        catch (Exception ex) { _trailActive = false; _inkTrail = null; InkTrailDebug = "StartNewTrail 异常: " + ex.Message; }
+        catch (Exception ex)
+        {
+            _trailActive = false;
+            _inkTrail = null;
+            _inkTrailRuntimeFailed = true;
+            InkTrailDebug = "StartNewTrail 异常: " + ex.Message;
+        }
         return _trailActive;
     }
+
+    /// <summary>委托轨迹本笔运行时失败；Engine 据此切换应用侧湿墨。</summary>
+    public bool InkTrailRuntimeFailed => _inkTrailRuntimeFailed;
+
+    /// <summary>
+    /// 启动一条应用侧湿墨。它使用独立 DirectComposition surface，避开完整内容交换链的
+    /// 分块/界面重绘；输入点仍由 Engine 的现有 WM_POINTER 管线提供。
+    /// </summary>
+    public bool BeginFastWet(Color4 color, float radius)
+    {
+        if (!_fastWetReady) TryCreateFastWetResources(force: true);
+        if (!FastWetFallbackEnabled || _fastWetSurface == null || !_fastWetReady) return false;
+        try
+        {
+            if (_fastWetEndPending) EndFastWetNow();
+            if (!_fastWetLastBounds.IsEmpty) ClearFastWetBounds(_fastWetLastBounds);
+            _fastWetColor = color;
+            _fastWetLastPointCount = 0;
+            _fastWetLastCamX = ViewOffsetX;
+            _fastWetLastCamY = ViewOffsetY;
+            _fastWetLastBounds = RectF.Empty;
+            _fastWetDrawing = true;
+            _fastWetEndPending = false;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            InkTrailDebug = "FastWet 启动失败: " + ex.Message;
+            return false;
+        }
+    }
+
+    /// <summary>清空应用侧湿墨视觉，并提交一次 DComp。</summary>
+    public void EndFastWet()
+    {
+        EndFastWetNow();
+    }
+
+    private void EndFastWetNow()
+    {
+        if (!_fastWetReady)
+        {
+            _fastWetDrawing = false;
+            _fastWetEndPending = false;
+            return;
+        }
+        try
+        {
+            if (!_fastWetLastBounds.IsEmpty) ClearFastWetBounds(_fastWetLastBounds);
+            _dcomp2.Commit().CheckError();
+        }
+        catch { _fastWetReady = false; _fastWetDrawing = false; _fastWetEndPending = false; }
+        _fastWetLastPointCount = 0;
+        _fastWetLastCamX = float.NaN;
+        _fastWetLastCamY = float.NaN;
+        _fastWetLastBounds = RectF.Empty;
+        _fastWetDrawing = false;
+        _fastWetEndPending = false;
+    }
+
+    private bool _fastWetEndPending;
+
+    public bool FastWetEndPending => _fastWetEndPending;
+
+    public void EndFastWetDeferred()
+    {
+        if (_fastWetDrawing) _fastWetEndPending = true;
+    }
+
+    /// <summary>
+    /// 把活动笔的**真实已收到点**画到独立湿墨 surface。只重画本笔包围盒，
+    /// 不触碰主交换链；因此 Win10 没有系统轨迹时也有一条低开销的“委托式”湿墨路径。
+    /// </summary>
+    public bool UpdateFastWet(Stroke stroke)
+    {
+        if (!_fastWetReady || stroke == null || stroke.Points.Count < 1) return false;
+        bool cameraChanged = _fastWetLastPointCount > 0
+                          && (ViewOffsetX != _fastWetLastCamX || ViewOffsetY != _fastWetLastCamY);
+        if (cameraChanged && !_fastWetLastBounds.IsEmpty)
+        {
+            // A camera move invalidates the previous screen-space image. Clear it
+            // before drawing the stroke at the new transform.
+            ClearFastWetBounds(_fastWetLastBounds);
+            _fastWetLastBounds = RectF.Empty;
+        }
+        int start = cameraChanged ? 0 : Math.Max(0, _fastWetLastPointCount - 1);
+        var segmentBounds = RectF.Empty;
+        for (int i = start; i < stroke.Points.Count; i++)
+            segmentBounds.Add(stroke.Points[i].X, stroke.Points[i].Y);
+        if (segmentBounds.IsEmpty) return false;
+        float pad = MathF.Max(2f, stroke.Width * 0.75f + 2f);
+        var clip = CanvasRectToWindow(segmentBounds.Inflate(pad));
+        // CanvasRectToWindow 返回的是本窗口局部坐标；FastWet surface 也是局部坐标。
+        clip.MinX = MathF.Max(0, clip.MinX);
+        clip.MinY = MathF.Max(0, clip.MinY);
+        clip.MaxX = MathF.Min(Width, clip.MaxX);
+        clip.MaxY = MathF.Min(Height, clip.MaxY);
+        if (clip.MaxX <= clip.MinX || clip.MaxY <= clip.MinY) return false;
+
+        try
+        {
+            // Surface 内容不是保留式的，更新矩形内必须完整覆盖；按本笔新旧包围盒并集清除后重画。
+            var rect = new Vortice.RawRect(
+                Math.Max(0, (int)MathF.Floor(clip.MinX)),
+                Math.Max(0, (int)MathF.Floor(clip.MinY)),
+                Math.Min(Width, (int)MathF.Ceiling(clip.MaxX)),
+                Math.Min(Height, (int)MathF.Ceiling(clip.MaxY)));
+            if (rect.Right <= rect.Left || rect.Bottom <= rect.Top) return false;
+
+            var ctx = _fastWetSurface.BeginDraw<ID2D1DeviceContext>(rect, out var offset);
+            using var brush = ctx.CreateSolidColorBrush(_fastWetColor, null);
+            try
+            {
+                // BeginDraw exposes a temporary target for the update rectangle. Map
+                // surface-space coordinates into that target: returned offset minus
+                // requested rectangle origin (the offset is not the rectangle origin).
+                ctx.Transform = Matrix3x2.CreateTranslation(
+                    -OriginX + ViewOffsetX + offset.X - rect.Left,
+                    -OriginY + ViewOffsetY + offset.Y - rect.Top);
+                ctx.Clear(Transparent);
+                DrawFastWetStroke(ctx, brush, stroke, start, cameraChanged);
+                ctx.Transform = Matrix3x2.Identity;
+            }
+            finally
+            {
+                _fastWetSurface.EndDraw().CheckError();
+                ctx.Dispose();
+            }
+            _dcomp2.Commit().CheckError();
+            _fastWetLastPointCount = stroke.Points.Count;
+            _fastWetLastCamX = ViewOffsetX;
+            _fastWetLastCamY = ViewOffsetY;
+            if (_fastWetLastBounds.IsEmpty) _fastWetLastBounds = clip;
+            else _fastWetLastBounds.Add(clip);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            InkTrailDebug = "FastWet 更新失败: " + ex.Message;
+            _fastWetReady = false;
+            _fastWetDrawing = false;
+            _fastWetEndPending = false;
+            return false;
+        }
+    }
+
+    /// <summary>应用侧湿墨不依赖系统轨迹；它只重画当前活动笔画的真实点。</summary>
+    private void DrawFastWetStroke(ID2D1DeviceContext ctx, ID2D1SolidColorBrush brush,
+                                   Stroke stroke, int start, bool fullRedraw)
+    {
+        var pts = stroke.Points;
+        if (pts.Count == 0) return;
+
+        float WidthAt(float p)
+            => stroke.HasPressure && PressureWidth.Enabled
+                ? MathF.Max(1f, PressureWidth.HalfWidth(stroke.Width, p) * 2f)
+                : MathF.Max(1f, stroke.Width);
+
+        if (fullRedraw && pts.Count == 1)
+        {
+            var p = new Vector2(pts[0].X, pts[0].Y);
+            float r = WidthAt(pts[0].P) * 0.5f;
+            ctx.FillEllipse(new Ellipse(p, r, r), brush);
+            return;
+        }
+
+        int firstSegment = Math.Max(1, start);
+        for (int i = firstSegment; i < pts.Count; i++)
+        {
+            var a = new Vector2(pts[i - 1].X, pts[i - 1].Y);
+            var b = new Vector2(pts[i].X, pts[i].Y);
+            float width = WidthAt((pts[i - 1].P + pts[i].P) * 0.5f);
+            ctx.DrawLine(a, b, brush, width, Gfx.Round);
+        }
+
+        // Round caps keep the real-point wet layer visually continuous at both ends.
+        var last = new Vector2(pts[^1].X, pts[^1].Y);
+        float r1 = WidthAt(pts[^1].P) * 0.5f;
+        if (fullRedraw)
+        {
+            var first = new Vector2(pts[0].X, pts[0].Y);
+            float r0 = WidthAt(pts[0].P) * 0.5f;
+            ctx.FillEllipse(new Ellipse(first, r0, r0), brush);
+        }
+        ctx.FillEllipse(new Ellipse(last, r1, r1), brush);
+    }
+
+    private void ClearFastWetBounds(RectF bounds)
+    {
+        if (_fastWetSurface == null) return;
+        int l = Math.Max(0, (int)MathF.Floor(bounds.MinX));
+        int t = Math.Max(0, (int)MathF.Floor(bounds.MinY));
+        int r = Math.Min(Width, (int)MathF.Ceiling(bounds.MaxX));
+        int b = Math.Min(Height, (int)MathF.Ceiling(bounds.MaxY));
+        if (r <= l || b <= t) return;
+        var rect = new Vortice.RawRect(l, t, r, b);
+        var ctx = _fastWetSurface.BeginDraw<ID2D1DeviceContext>(rect, out _);
+        try { ctx.Clear(Transparent); }
+        finally
+        {
+            _fastWetSurface.EndDraw().CheckError();
+            ctx.Dispose();
+        }
+    }
+
+    /// <summary>系统委托轨迹不可用时的应用侧湿墨是否已有可见真实点。</summary>
+    public bool FastWetDrawing => _fastWetReady && _fastWetDrawing && _fastWetLastPointCount > 0;
 
     /// <summary>把一个采样点交给系统合成器（屏幕坐标，内部换算到交换链坐标）。</summary>
     public void AddInkTrailPoint(float screenX, float screenY, float radius)
@@ -698,7 +930,14 @@ internal sealed partial class OverlayWindow : IDisposable
             InkTrailPointsFed += 1;
             InkTrailDebug = $"AddTrailPoints ok gen={_trailGeneration} at({p.X:F0},{p.Y:F0}) r={p.Radius:F1}";
         }
-        catch (Exception ex) { _trailActive = false; InkTrailDebug = "AddTrailPoints 异常: " + ex.Message; }
+        catch (Exception ex)
+        {
+            _trailActive = false;
+            _inkTrail = null;
+            _inkTrailRuntimeFailed = true;
+            InkTrailNote = "运行时单点失败 → 使用应用侧湿墨替身";
+            InkTrailDebug = "AddTrailPoints 异常: " + ex.Message;
+        }
     }
 
     /// <summary>
@@ -765,7 +1004,13 @@ internal sealed partial class OverlayWindow : IDisposable
                 _trailPointsFed += 1;
                 InkTrailPointsFed += 1;
             }
-            catch { _trailActive = false; }
+            catch
+            {
+                _trailActive = false;
+                _inkTrail = null;
+                _inkTrailRuntimeFailed = true;
+                InkTrailNote = "运行时喂点失败 → 使用应用侧湿墨替身";
+            }
         }
     }
 
@@ -932,8 +1177,20 @@ internal sealed partial class OverlayWindow : IDisposable
         }
         Mem.Stage($"4. 创建交换链之后（{Width}x{Height}）");
 
-        using var dxgiDevice = Gfx.Device.QueryInterface<IDXGIDevice>();
-        _dcomp = DComp.DCompositionCreateDevice<IDCompositionDevice>(dxgiDevice);
+        // Create one IDCompositionDevice2 from the D2D device, then obtain the
+        // v1 face from the same COM object. Surface content and the existing
+        // visual tree must belong to one composition device.
+        try
+        {
+            _dcomp = DComp.DCompositionCreateDevice2<IDCompositionDevice>(Gfx.D2DDevice);
+            _dcomp2 = _dcomp.QueryInterfaceOrNull<IDCompositionDevice2>();
+        }
+        catch
+        {
+            _dcomp2 = null;
+            _dcomp = DComp.DCompositionCreateDevice<IDCompositionDevice>(
+                Gfx.Device.QueryInterface<IDXGIDevice>());
+        }
         _dcomp.CreateTargetForHwnd(Hwnd, true, out _target).CheckError();
         // 根视觉**不装内容**，交换链放在子视觉里 —— 这样后面墨迹轨迹的视觉才能叠在它上面
         // （同一层里靠后的视觉盖住靠前的）。2026-10-10 试验C 按 Chromium 的结构改。
@@ -1056,7 +1313,38 @@ internal sealed partial class OverlayWindow : IDisposable
         _scratch = _ctx.CreateSolidColorBrush(new Color4(1f, 1f, 1f, 1f), null);
         _transparentBrush = _ctx.CreateSolidColorBrush(new Color4(0f, 0f, 0f, 0f), null);
         _boardBrush = _ctx.CreateSolidColorBrush(Transparent, null);
+        // Do not allocate a full-screen fallback surface on a machine where the
+        // native delegated trail is already available. It is created lazily only
+        // when the native route is absent or fails.
+        if (_inkTrail == null || !InkTrailEnabled) TryCreateFastWetResources();
         Mem.Stage("6. 创建离屏内容层之后");
+    }
+
+    private void TryCreateFastWetResources(bool force = false)
+    {
+        _fastWetReady = false;
+        if (!FastWetFallbackEnabled || _dcomp2 == null || _ctx == null) return;
+        if (!force && _inkTrail != null && InkTrailEnabled) return;
+        try
+        {
+            // VirtualSurface allocates tiles only where ink is actually written; a
+            // full-screen 4K surface would otherwise reserve another large buffer per monitor.
+            _fastWetSurface = _dcomp2.CreateVirtualSurface((uint)Width, (uint)Height,
+                Format.B8G8R8A8_UNorm, Vortice.DXGI.AlphaMode.Premultiplied);
+            _fastWetVisual = _dcomp.CreateVisual();
+            _fastWetVisual.SetContent(_fastWetSurface).CheckError();
+            _visual.AddVisual(_fastWetVisual, true, null).CheckError();
+            _dcomp2.Commit().CheckError();
+            _fastWetReady = true;
+            InkTrailNote += "；应用侧湿墨层可用";
+        }
+        catch (Exception ex)
+        {
+            _fastWetReady = false;
+        _fastWetSurface?.Dispose(); _fastWetSurface = null;
+        _fastWetVisual?.Dispose(); _fastWetVisual = null;
+            InkTrailNote += "；应用侧湿墨层不可用: " + ex.Message;
+        }
     }
 
     /// <summary>
@@ -6456,6 +6744,8 @@ internal sealed partial class OverlayWindow : IDisposable
         LastPresentMs = sw.Elapsed.TotalMilliseconds;
         // `--syswet` 收笔挂起的轨迹撤除：干墨这一帧已经提交，现在撤不会露出空档。
         if (_trailEndPending) EndInkTrailNow();
+        // 应用侧湿墨替身也必须等主交换链把干墨提交后再清空，避免收笔时出现空白帧。
+        if (!hr.Failure && _fastWetEndPending) EndFastWetNow();
         // 轨迹"结账"（2026-10-11）：这一笔我们自己已经画上屏了，把轨迹里同样这一段删掉。
         // ⚠ 只删"自绘过"的情况；`--syswet` / 抑制自绘时不删（那时湿墨只有轨迹这一份）。
         if (!hr.Failure && _drewWetStrokeThisFrame) TrimInkTrailAsDrawn();
@@ -6490,10 +6780,13 @@ internal sealed partial class OverlayWindow : IDisposable
         _inkStyle?.Dispose();          // 墨迹笔尖样式（压感变宽那条路）
         _ctx?.Dispose();
         _inkVisual?.Dispose();
+        _fastWetSurface?.Dispose();
+        _fastWetVisual?.Dispose();
         _swapVisual?.Dispose();
         _visual?.Dispose();
         _target?.Dispose();
         _dcomp?.Dispose();
+        _dcomp2?.Dispose();
         _swapChain?.Dispose();
         _swapChain2?.Dispose();
         if (_latencyWait != IntPtr.Zero) { Native.CloseHandle(_latencyWait); _latencyWait = IntPtr.Zero; }
