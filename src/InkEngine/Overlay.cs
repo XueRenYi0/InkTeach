@@ -5790,7 +5790,7 @@ internal sealed partial class OverlayWindow : IDisposable
         DrawRingCursor(c, truth, outer, fill);
     }
 
-    // ---- 应用帧笔画笔（--framepen，2026-10-13 试作；⚠ 真机已否决，见下）--------
+    // ---- 应用帧笔画笔（--framepen，2026-10-13；手感"很到位"、糊已修）----------
 
     /// <summary>帧笔缓存位图（同一张染色位图；颜色/尺寸变了才重建）。</summary>
     private ID2D1Bitmap _framePenBmp;
@@ -5804,15 +5804,16 @@ internal sealed partial class OverlayWindow : IDisposable
     /// 像素与 HCURSOR 版**完全同源**（Cursors.TintedPenPixels），
     /// 热点 = 位图左上 = 笔尖，所以从指针点向右下铺。
     ///
-    /// ⚠ 真机已否决（2026-10-13，"迟缓好严重"）：位置读 PointerX/Y，而输入是
-    /// "帧边界才抽一次"（采样被量化到 60Hz）、画完还要等下一个刷新边界上屏——
-    /// 结构性 2~4 帧差（60Hz 下 33~66ms），修不了。留档对照用；
-    /// 正式一律走系统光标通道（`--selfpen` 染色笔）。
+    /// ⚠ 真机复测更正（2026-10-13 晚）：原判"迟缓好严重"系**误报**——实际手感
+    /// "很到位"（笔尖与墨头逐帧贴合）；真实问题只有**画质发糊**。
+    /// **糊的根因**：PointerX/Y 是 himetric 亚像素（带小数）、相机平移也可能带
+    /// 小数，按小数坐标 + linear 采样画 = 笔缘整体被抹虚。**已修**：折算到窗口
+    /// 空间把矩形左上吸到整数像素再画（实现见下），1:1 时采样退化为恒等。
     /// </summary>
     private void DrawFramePen(InkEngine app, Vector2 c)
     {
         var pen = app.CurrentColor;
-        int n = app.CursorSizePx;
+        int n = app.CursorSizePx;                       // 画多大（设备像素；上下文 DPI 固定 96）
         uint rgb = Cursors.RgbKey(pen);
         if (_framePenBmp == null || _framePenRgb != rgb || _framePenN != n)
         {
@@ -5821,6 +5822,9 @@ internal sealed partial class OverlayWindow : IDisposable
             var px = Cursors.TintedPenPixels(pen, n, out int hotX, out int hotY);
             if (px != null)
             {
+                // 源位图是**系统位图的原生尺寸**（本机 32），未必等于 CursorSizePx——
+                // 必须按缓冲真实边长建位图（按 n 建会越界读：高 DPI 机器上会炸）。
+                int nBuf = Math.Max(1, (int)MathF.Round(MathF.Sqrt(px.Length / 4f)));
                 var props = new BitmapProperties1(
                     new Vortice.DCommon.PixelFormat(Format.B8G8R8A8_UNorm,
                                                     Vortice.DCommon.AlphaMode.Premultiplied),
@@ -5829,9 +5833,10 @@ internal sealed partial class OverlayWindow : IDisposable
                 try
                 {
                     _framePenBmp = _ctx.CreateBitmap(
-                        new SizeI(n, n), handle.AddrOfPinnedObject(), (uint)(n * 4), props);
-                    _framePenHotX = hotX;
-                    _framePenHotY = hotY;
+                        new SizeI(nBuf, nBuf), handle.AddrOfPinnedObject(), (uint)(nBuf * 4), props);
+                    // 热点按"源 → 画"等比换算（1:1 时就是原值）
+                    _framePenHotX = (int)MathF.Round(hotX * (float)n / nBuf);
+                    _framePenHotY = (int)MathF.Round(hotY * (float)n / nBuf);
                 }
                 catch { _framePenBmp = null; }
                 finally { handle.Free(); }
@@ -5840,7 +5845,15 @@ internal sealed partial class OverlayWindow : IDisposable
             _framePenN = n;
         }
         if (_framePenBmp == null) return;
-        float ox = c.X - _framePenHotX, oy = c.Y - _framePenHotY;
+
+        // —— 像素对齐（2026-10-13 修"很糊"）——
+        // 位置源是 himetric 亚像素、相机平移也可能带小数：直接按小数坐标画，
+        // 采样插值会把笔缘整体抹虚（真机"比较很糊"）。系统光标是像素对齐的，这里照做：
+        // 画布→窗口是纯平移（CanvasToWindow），把"矩形左上角在窗口里的位置"吸到
+        // 整数像素后折回画布空间——变换后正好落整数网格，1:1 采样退化为恒等，不糊。
+        var t = CanvasToWindow.Translation;
+        float ox = MathF.Round(c.X + t.X - _framePenHotX) - t.X;
+        float oy = MathF.Round(c.Y + t.Y - _framePenHotY) - t.Y;
         _ctx.DrawBitmap(_framePenBmp, new Vortice.RawRectF(ox, oy, ox + n, oy + n), 1f,
                         Vortice.Direct2D1.InterpolationMode.Linear, null, null);
     }
