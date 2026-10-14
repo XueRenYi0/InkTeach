@@ -1271,6 +1271,8 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --himetric / --nohimetric  亚像素输入（默认开；--nohimetric 退回 D0 对照）");
         Console.WriteLine("  模型调参：--mean2win 画布像素 / --smoothcorner N 角点阈值");
         Console.WriteLine("  预测尾：--nopredict2 关（默认开）/ --pred2ms N 地平线(ms) / --turndeg N 急转丢速阈值(度，默认60，180=老行为)");
+        Console.WriteLine("        --predengine b4|v6|google  预测算法（默认 v6；b4 已退役仅对照。本会话有效、不落盘；要记住走设置「预测算法」那一行）");
+        Console.WriteLine("        --predlatency N  预测时长 ms（三引擎统一，本会话对照用、不落盘；设置「预测时长」那行 10/15/25 落盘）");
         Console.WriteLine("  [已停用] 预测、拟合(--mean2fit)、模拟压力(--simpressure/--pfpressure)、笔锋");
         Console.WriteLine("           (--simtaper/--flicktip)、对照模式(raw/sliding/spring/oneeuro/mean/gauss)等：");
         Console.WriteLine("           见 已停用-渲染实验.md（代码保留）");
@@ -5585,8 +5587,8 @@ internal sealed partial class App : InkEngine.InkEngine
     /// 判据是**笔尖的逐帧轨迹**（品红墨的最右列）：
     ///   · `往前跳的最大幅度`：一帧里笔尖突然前进多少；
     ///   · `往后退的次数 / 最大后退`：尾巴消失时笔尖会**缩回去**——这就是"突突"的正身。
-    /// 对照组 `--nopredict` 应当明显更稳（这就是这条测试的自证）。
-    /// ⚠ 2026-09-29 起预测**默认关**（用户拍板），所以这条测试要显式 `--predict` 才有对照。
+    /// 对照组 `--off` 应当明显更稳（这就是这条测试的自证）。
+    /// 测试**自己摆状态**（不依赖启动默认值）：默认测"开预测"，`--off` 测对照。
     /// </summary>
     // [重启 2026-10-08] B4 预测尾"突突跳"检测（老系统 2026-10-05 停用，本次接回新尾）：
     // 新尾的纪律（长度限速 + 断笔后缓慢回收）就是对着下面这段"机理"修的。

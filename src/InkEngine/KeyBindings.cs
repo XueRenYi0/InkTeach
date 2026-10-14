@@ -73,6 +73,9 @@ public enum KeyAction
     /// 原路径 / +系统委托轨迹 / +应用湿墨层 / 全开。**全局键**——试档位时前台可能是
     /// PPT / 视频，也要能切。</summary>
     CycleWetMode,
+    /// <summary>预测算法循环（v6 ⇄ Google，2026-10-14 新增；B4 当晚退役、不在循环里）。
+    /// **全局键**——试手感时前台可能是 PPT / 视频，也要能切（同 CycleWetMode 的理由）。</summary>
+    CyclePredictEngine,
     CycleWidth,
 
     // —— 批注内（编辑类）——
@@ -372,6 +375,7 @@ internal sealed class KeyMap
         KeyAction.Clear => "清除全部墨迹",
         KeyAction.ToggleHud => "性能面板开关",
         KeyAction.CycleWetMode => "湿墨档位切换",
+        KeyAction.CyclePredictEngine => "预测算法切换",
         KeyAction.CycleWidth => "切换当前工具粗细",
         KeyAction.ToggleKeyboardMode => "批注键盘模式开关",
         KeyAction.ToggleBoard => "白板开关",
@@ -439,6 +443,9 @@ internal sealed class KeyMap
         // 湿墨档位（2026-10-13）：试档位时前台可能是别的程序，必须是全局键。
         // 用 `Ctrl+Alt+Shift+W`——三层修饰，和现有三条（T/X/Q）不撞，也不占单层组合。
         KeyAction.CycleWetMode,
+        // 预测算法（2026-10-14）：试手感时前台可能是别的程序，必须是全局键。
+        // `Ctrl+Alt+Shift+P`——和 W 同一族形状（P = Predict），四级键里唯一好记的落点。
+        KeyAction.CyclePredictEngine,
     };
 
     /// <summary>自检用：全局作用域允许出现哪些动作（见上面的说明）。</summary>
@@ -483,6 +490,10 @@ internal sealed class KeyMap
         // **只加不减**：任何一档主交换链自绘都照旧，关档（回到 0）与改动前逐字一致。
         m.Add(G, KeyAction.CycleWetMode, "Ctrl+Alt+Shift+W",
               "湿墨档位 0→1→2→3 循环（原路径 / +系统轨迹 / +应用湿墨层 / 全开）");
+        // 预测算法循环（2026-10-14）：v6 ⇄ Google（经典 B4 当晚退役，只留命令行对照）。
+        // 和「湿墨档位」同一条形状（全局键 + 循环 + 落盘），试手感时不用停笔去开设置页。
+        m.Add(G, KeyAction.CyclePredictEngine, "Ctrl+Alt+Shift+P",
+              "预测算法切换（改进版 v6 / Google 移植）");
 
         // ---- 应用内：原有那一批（编辑类 + 翻页 + 微调）----
         m.Add(A, KeyAction.Undo, "Ctrl+Z", "撤销一步");

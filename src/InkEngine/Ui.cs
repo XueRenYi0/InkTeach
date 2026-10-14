@@ -374,8 +374,25 @@ public interface IEngineCommands
     /// <summary>「设置 → 书写 → 精细笔迹」：原始输入补点总开关（2026-10-07 加）。</summary>
     void SetFineStroke(bool on);
 
-    /// <summary>「设置 → 书写 → 墨迹预测」：B4 自绘预测尾总开关（2026-10-09 加；默认开）。</summary>
+    /// <summary>「设置 → 书写 → 墨迹预测」：自绘预测尾总开关（2026-10-09 加；**默认开**，2026-10-14 测试版起）。</summary>
     void SetPredict(bool on);
+
+    /// <summary>
+    /// 「设置 → 书写 → 预测算法」（2026-10-14 加）：定到某一档（0..2）。
+    /// 0 = 经典 B4（**已退役**，仅命令行对照）/ 1 = 改进版 v6（**默认**）/
+    /// 2 = Google ink-stroke-modeler（置信度）。**只决定"打开时用哪种"**，
+    /// 不动「墨迹预测」总开关。引擎是权威：它立刻复位预测器、落盘（"predictengine"）、
+    /// 打日志；界面只显示 <see cref="UiState.PredictEngine"/>。和设置行 / `Ctrl+Alt+Shift+P` 同源。
+    /// </summary>
+    void SetPredictEngine(int engine);
+
+    /// <summary>
+    /// 「设置 → 书写 → 预测时长」（2026-10-14 加）：0 = 自动（各引擎默认）/ 10 / 15 / 25（ms）。
+    /// **三引擎统一**：不管当前是哪个算法，改成多少就补多少毫秒。引擎是权威：立刻生效、
+    /// 落盘（"predictms"，0 = 删项）、打日志；界面只显示 <see cref="UiState.PredictHorizonMs"/>。
+    /// 和设置行 / `--predlatency` 同源（后者会话级、不落盘）。
+    /// </summary>
+    void SetPredictHorizon(int ms);
 
     /// <summary>
     /// 「设置 → 墨迹 → 湿墨档位」（2026-10-13 加）：定到某一档（0..3）。
@@ -962,6 +979,18 @@ public readonly struct UiState
     public bool FineStrokeOn { get; init; }
     /// <summary>「墨迹预测」（B4 自绘预测尾）总开关的状态（默认开）。</summary>
     public bool PredictTailOn { get; init; }
+    /// <summary>
+    /// **预测算法档**（「设置 → 书写 → 预测算法」，2026-10-14 加）：
+    /// 0 = 经典 B4（已退役）/ 1 = 改进版 v6（默认）/ 2 = Google 移植。界面拿它显示当前档；
+    /// 切换命令见 <see cref="IEngineCommands.SetPredictEngine"/>。
+    /// </summary>
+    public int PredictEngine { get; init; }
+    /// <summary>
+    /// **预测时长档**（「设置 → 书写 → 预测时长」，2026-10-14 加）：0 = 自动（各引擎默认）/
+    /// 10 / 15 / 25（ms，三引擎统一）。界面拿它显示当前档；
+    /// 切换命令见 <see cref="IEngineCommands.SetPredictHorizon"/>。
+    /// </summary>
+    public int PredictHorizonMs { get; init; }
     /// <summary>
     /// **湿墨档位**（「设置 → 墨迹 → 湿墨档位」，2026-10-13 加）：
     /// 0 = 原路径（默认）/ 1 = +系统委托轨迹 / 2 = +应用湿墨层 / 3 = 全开。

@@ -2928,8 +2928,8 @@ internal sealed partial class App
                   $"行空 = {ui.RowRectByLabelForTest("触摸手势").IsEmpty}");
         }
 
-        // 「墨迹预测」（2026-10-09 回归：B4 自绘预测尾，**默认关**——用户二轮定：
-        // "以后新装默认不开，等测试完善了再开"）：点行 → 引擎状态翻转 → 落盘。
+        // 「墨迹预测」（2026-10-09 回归；**2026-10-14 发布测试版起默认开**——三档算法收口，
+        // 用户开箱直接体验/切换）：点行 → 引擎状态翻转 → 落盘（关过才写 "0"）。
         // （原 2026-10-05 停用块里顺带的「启动器/底栏提示文案」那段仍留停用——它跟本行无关，
         //   需要时从 git 历史恢复；这里只验"墨迹预测"行自己的链路。）
         {
@@ -2939,7 +2939,7 @@ internal sealed partial class App
             Check("「墨迹预测」是**开关行**（有开关，不是空白行）",
                   ui.IsToggleRowByLabelForTest("墨迹预测"),
                   "IsToggleRow = " + ui.IsToggleRowByLabelForTest("墨迹预测"));
-            Check("墨迹预测默认是关的（B4 待完善，2026-10-09 用户定）", !Host.State.PredictTailOn,
+            Check("墨迹预测默认是开的（2026-10-14 发布测试版起）", Host.State.PredictTailOn,
                   $"PredictTailOn = {Host.State.PredictTailOn}");
 
             // 鼠标悬停设置行 → 出提示（小字搬进提示）
@@ -2964,18 +2964,91 @@ internal sealed partial class App
                     SendTouches(true, (rhx, rhy));
                     SettleFrames(100);
                 }
+                // 长按成立那一帧提示才开始淡入——再补几拍等"可见"也上来。**和工具格那一块
+                // （`53e3058` 加的）同一条等待余量**：2026-10-14 在这条副本上也遇到一次
+                // "已触发 True、可见 False"的时序抖动，判据不变、手保持按着多等几帧。
+                for (int i = 0; i < 6 && !ui.TipVisibleForTest; i++)
+                {
+                    SendTouches(true, (rhx, rhy));
+                    SettleFrames(100);
+                }
                 Check("长按设置行 0.6 秒：出提示", ui.TipVisibleForTest && ui.TipHoldFiredForTest,
                       $"可见={ui.TipVisibleForTest}，触发={ui.TipHoldFiredForTest}");
                 SendTouches(false, (rhx, rhy)); SettleFrames(200);
-                Check("长按后松手：这一次**不翻转**开关", !Host.State.PredictTailOn,
+                Check("长按后松手：这一次**不翻转**开关", Host.State.PredictTailOn,
                       $"PredictTailOn = {Host.State.PredictTailOn}");
             }
 
             ClickPhysical((predictRow.MinX + predictRow.MaxX) * 0.5f * DpiScale,
                           (predictRow.MinY + predictRow.MaxY) * 0.5f * DpiScale);
             SettleFrames(200);
-            Check("点「墨迹预测」：引擎状态立刻翻转（默认关 → 开）",
-                  Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
+            Check("点「墨迹预测」：引擎状态立刻翻转（默认开 → 关）",
+                  !Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
+        }
+
+        // 「预测算法」（2026-10-14 加；当天晚些 B4 退役）：点一下切 v6 ⇄ Google
+        // （和「湿墨档位」同一个手感；引擎是权威、界面只显示）。
+        // 这里验行存在 + 不是开关行 + 点击真能循环。
+        {
+            var engineRow = ui.RowRectByLabelForTest("预测算法");
+            Check("「预测算法」那一行找得到", engineRow.MaxY > engineRow.MinY,
+                  $"行高 {engineRow.MaxY - engineRow.MinY:F0}");
+            Check("「预测算法」是**换档行**（不是开关行；右侧显示当前档）",
+                  !ui.IsToggleRowByLabelForTest("预测算法"),
+                  "IsToggleRow = " + ui.IsToggleRowByLabelForTest("预测算法"));
+            Check("预测算法默认是改进版 v6（1；经典 B4 已退役）", Host.State.PredictEngine == 1,
+                  $"PredictEngine = {Host.State.PredictEngine}");
+
+            void ClickEngineRow() =>
+                ClickPhysical((engineRow.MinX + engineRow.MaxX) * 0.5f * DpiScale,
+                              (engineRow.MinY + engineRow.MaxY) * 0.5f * DpiScale);
+
+            ClickEngineRow(); SettleFrames(200);
+            Check("点「预测算法」：v6 → Google", Host.State.PredictEngine == 2,
+                  $"PredictEngine = {Host.State.PredictEngine}");
+            Check("切到 Google 后：时长读取走 Google 引擎（生效 21.3）",
+                  Math.Abs(PredictHorizonForTest - 21.3) < 1e-6,
+                  $"生效值 = {PredictHorizonForTest:F1}");
+            ClickEngineRow(); SettleFrames(200);
+            Check("再点：Google → v6 回头（两档循环）", Host.State.PredictEngine == 1,
+                  $"PredictEngine = {Host.State.PredictEngine}");
+            Check("切回 v6 后：时长读取走回 v6 引擎", Math.Abs(PredictHorizonForTest - 21.3) < 1e-6,
+                  $"生效值 = {PredictHorizonForTest:F1}");
+        }
+
+        // 「预测时长」（2026-10-14 加）：自动(0) → 10 → 15 → 25 → 自动；
+        // 三引擎统一生效（此时算法档是 v6（默认），直接查 v6 的地平线）。
+        {
+            var hzRow = ui.RowRectByLabelForTest("预测时长");
+            Check("「预测时长」那一行找得到", hzRow.MaxY > hzRow.MinY,
+                  $"行高 {hzRow.MaxY - hzRow.MinY:F0}");
+            Check("「预测时长」是**换档行**（不是开关行；右侧显示当前档）",
+                  !ui.IsToggleRowByLabelForTest("预测时长"),
+                  "IsToggleRow = " + ui.IsToggleRowByLabelForTest("预测时长"));
+            Check("预测时长默认是自动（0）", Host.State.PredictHorizonMs == 0,
+                  $"PredictHorizonMs = {Host.State.PredictHorizonMs}");
+
+            void ClickHzRow() =>
+                ClickPhysical((hzRow.MinX + hzRow.MaxX) * 0.5f * DpiScale,
+                              (hzRow.MinY + hzRow.MaxY) * 0.5f * DpiScale);
+
+            ClickHzRow(); SettleFrames(200);
+            Check("点「预测时长」：自动 → 10 ms", Host.State.PredictHorizonMs == 10,
+                  $"PredictHorizonMs = {Host.State.PredictHorizonMs}");
+            Check("10 ms 落到引擎（v6 地平线 = 10）", Math.Abs(PredictHorizonForTest - 10.0) < 1e-9,
+                  $"生效值 = {PredictHorizonForTest:F1}");
+            ClickHzRow(); SettleFrames(200);
+            Check("再点：10 → 15 ms", Host.State.PredictHorizonMs == 15,
+                  $"PredictHorizonMs = {Host.State.PredictHorizonMs}");
+            Check("15 ms 落到引擎", Math.Abs(PredictHorizonForTest - 15.0) < 1e-9,
+                  $"生效值 = {PredictHorizonForTest:F1}");
+            ClickHzRow(); SettleFrames(200);
+            Check("再点：15 → 25 ms", Host.State.PredictHorizonMs == 25,
+                  $"PredictHorizonMs = {Host.State.PredictHorizonMs}");
+            ClickHzRow(); SettleFrames(200);
+            Check("再点：25 → 自动（回 v6 默认 21.3）",
+                  Host.State.PredictHorizonMs == 0 && Math.Abs(PredictHorizonForTest - 21.3) < 1e-6,
+                  $"PredictHorizonMs = {Host.State.PredictHorizonMs}，生效值 = {PredictHorizonForTest:F1}");
         }
 
         // 「功能提示」开关也过一遍完整链路（2026-10-02 新增；原叫「悬停提示」）：
@@ -3020,8 +3093,8 @@ internal sealed partial class App
               !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
         Check("精细笔迹：开关撤掉后重启仍是开（常开）",
               Host.State.FineStrokeOn, $"FineStrokeOn = {Host.State.FineStrokeOn}");
-        Check("墨迹预测偏好也读回来了（重启后仍是开）",
-              Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
+        Check("墨迹预测偏好也读回来了（重启后仍是关——测试里点成了关）",
+              !Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
 
         // 关着开关时，"停在笔上 0.7 秒"必须**什么都不出**（开关真的在闸门上，不是装饰）
         {

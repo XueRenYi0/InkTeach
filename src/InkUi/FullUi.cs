@@ -236,7 +236,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按三列里的布局走**：
     /// 外观（4）/ 书写（5）/ 墨迹（3）三列并排——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, UiSize, DwellShape, Pressure, Predict, WetMode, RestoreInk, PptAutoSave, HistoryDays }
+    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, UiSize, DwellShape, Pressure, Predict, PredictEngine, PredictHorizon, WetMode, RestoreInk, PptAutoSave, HistoryDays }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -266,10 +266,23 @@ public sealed class FullUi : IOverlayUi
         // 压感粗细（2026-10-01，批次 0.2）：默认开；关掉 = 整块板等宽，
         // 手写板的流畅 / 预测不受影响（渲染期开关，文档里的压力数据不动）。
         (Row.Pressure, "压感粗细", false, false, "关掉后所有笔迹等宽（手写板照样流畅）"),
-        // 墨迹预测（2026-10-09 回归：B4 自绘预测尾；**默认关**——用户 2026-10-09 二轮定：
-        // "以后新装默认不开，等测试完善了再开"）。开了 = 更跟手一点；关着 = 笔尾更老实。
-        // 链路：行表 → ActivateRow → IsOn → SavePrefs。
-        (Row.Predict, "墨迹预测", false, false, "开了更跟手一点；默认关着，笔尾更稳当（等更完善再默认开）"),
+        // 墨迹预测（2026-10-09 回归；**2026-10-14 发布测试版起默认开**——三档算法收口，
+        // 用户开箱就能体验/切换；想关：设置里点掉这一行 / `--nopredict2`）。
+        // 链路：行表 → ActivateRow → IsOn → SavePrefs（"关过"才写 "0"）。
+        (Row.Predict, "墨迹预测", false, false, "让墨尾更跟手一点（默认开）；关了笔尾更稳当，可在「预测算法」那两行间切换手感"),
+        // 预测算法（2026-10-14 加；当晚 B4 退役）：**点一下切换 v6 ⇄ Google**。
+        // 经典 B4（阻尼 + 限幅）不再进循环，只留 `--predengine b4` 对照口。
+        (Row.PredictEngine, "预测算法", false, false,
+         "点一下切换：改进版 v6（默认，极限最坏 6px，跨设备稳）/ Google 移植"
+         + "（置信度派，最跟手；真机排查后已修接入与单位）。先打开上一行「墨迹预测」"),
+        // 预测时长（2026-10-14 加）：把"往前补多少毫秒"摆上手——三个引擎统一生效
+        // （B4 地平线 / v6 延迟绑定 / Google 预测时长，同一件事三种叫法）。
+        // **点一下换一档**：自动（各自默认）→ 10 → 15 → 25 → 自动；引擎是权威、界面只显示。
+        // 怎么定：对着屏幕刷新率——60Hz 屏试 15~25、120Hz 屏试 10~15（微软的规则：
+        // 预测 = 本机实测端到端延迟；推导见 `调研-预测算法三档-手感对照与参数表.md` §八）。
+        (Row.PredictHorizon, "预测时长", false, false,
+         "点一下换一档：自动 / 10 / 15 / 25 ms——预测往前补多长，三引擎统一生效。"
+         + "60Hz 屏试 15~25、120Hz 屏试 10~15；先打开上面「墨迹预测」"),
         // 湿墨档位（2026-10-13 加，用户点名要"在设置里能看到到了哪一档"）：
         // **点一下换一档**（和「界面大小」同一个手感，到顶回头），右侧显示当前档。
         // 判据/落盘都在引擎（见 Engine.SetWetModeFromUi）；界面只显示 Host.State.WetMode。
@@ -490,8 +503,8 @@ public sealed class FullUi : IOverlayUi
         // 压感粗细：**默认开**，同样只写"关了"这一种情况（引擎启动时自己读它）。
         _host.SetPref("pressure", st.PressureOn ? null : "0");
         // （精细笔迹 / 触摸手势的偏好写入 2026-10-09 晚随开关一起撤——两项都常开，没有可写的状态。）
-        // 墨迹预测：**默认关**（2026-10-09 用户定：等测试完善了再默认开），只写"开了"这一种情况。
-        _host.SetPref("predict2", st.PredictTailOn ? "1" : null);
+        // 墨迹预测：**默认开**（2026-10-14 测试版起），只写"关过"的那一种情况。
+        _host.SetPref("predict2", st.PredictTailOn ? null : "0");
         // 悬停提示：**默认开**，只写"关了"这一种情况。
         _host.SetPref("tooltip", _tipEnabled ? null : "0");
 
@@ -2261,11 +2274,25 @@ public sealed class FullUi : IOverlayUi
                 _host.Commands.SetWetMode((_host.State.WetMode + 1) & 3);
                 break;
 
-            // 墨迹预测（2026-10-09 加，B4 自绘预测尾；默认关——2026-10-09 用户定）：
-            // 引擎是权威，界面翻转后落盘 "predict2"。
+            // 墨迹预测（2026-10-09 加；2026-10-14 测试版起默认开）：
+            // 引擎是权威，界面翻转后落盘 "predict2"（关过才写 "0"）。
             case Row.Predict:
                 _host.Commands.SetPredict(!_host.State.PredictTailOn);
                 SavePrefs();
+                break;
+
+            // 预测算法（2026-10-14 加；当天晚些 B4 退役 → 循环变为 v6 ⇄ Google）：
+            // 引擎是权威：它复位预测器 + 落盘（"predictengine"），界面下一帧从
+            // `Host.State.PredictEngine` 读回来显示——界面**自己不记档**（避免两份状态）。
+            case Row.PredictEngine:
+                _host.Commands.SetPredictEngine(_host.State.PredictEngine == 1 ? 2 : 1);
+                break;
+
+            // 预测时长（2026-10-14 加）：点一下换一档：自动(0) → 10 → 15 → 25 → 自动。
+            // 引擎是权威：立刻落到三个引擎 + 落盘（"predictms"，自动 = 删项），
+            // 界面下一帧从 `Host.State.PredictHorizonMs` 读回来显示。
+            case Row.PredictHorizon:
+                _host.Commands.SetPredictHorizon(PredictHorizonNext(_host.State.PredictHorizonMs));
                 break;
 
             // 墨迹三条偏好（原来在「墨迹」页）：只写 `ui.*`，
@@ -2343,7 +2370,7 @@ public sealed class FullUi : IOverlayUi
     /// 用户说"设置现在太长了"。原来左列堆 9 行（组头 26 + 9×48 + 8 ≈ 476），三列后最高 5 行。
     /// </summary>
     private const int LookRowCount = 5;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 悬停提示 / 界面大小
-    private const int WriteRowCount = 3;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测（精细笔迹、触摸手势 2026-10-09 撤开关、改常开）
+    private const int WriteRowCount = 5;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测 / 预测算法 / 预测时长（精细笔迹、触摸手势 2026-10-09 撤开关、改常开）
     private const int InkRowCount = 4;     // 墨迹：湿墨档位 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理
     private const float MoreColumnGap = 16f;
     private const float MoreSwitchW = 44f;
@@ -2569,6 +2596,8 @@ public sealed class FullUi : IOverlayUi
         Row.DwellShape => SetColRow(SetColKind.Write, 0),
         Row.Pressure => SetColRow(SetColKind.Write, 1),
         Row.Predict => SetColRow(SetColKind.Write, 2),
+        Row.PredictEngine => SetColRow(SetColKind.Write, 3),   // 2026-10-14 加：紧挨「墨迹预测」（先开总开关、再挑算法）
+        Row.PredictHorizon => SetColRow(SetColKind.Write, 4),  // 2026-10-14 加：紧跟「预测算法」（再调补多长）
         Row.WetMode => SetColRow(SetColKind.Ink, 0),      // 2026-10-13 加：墨迹列第一行（最好找）
         Row.RestoreInk => SetColRow(SetColKind.Ink, 1),
         Row.PptAutoSave => SetColRow(SetColKind.Ink, 2),
@@ -2612,6 +2641,23 @@ public sealed class FullUi : IOverlayUi
         3 => "3 全开",
         _ => "0 原路径",
     };
+
+    /// <summary>
+    /// 「预测算法」那一行右侧的值（短名；三档的完整解释在悬停提示里）。
+    /// 和「湿墨档位」同一条规矩：窄列用短名，全名在提示里。
+    /// </summary>
+    private static string PredictEngineShortName(int e) => e switch
+    {
+        1 => "改进版 v6",
+        2 => "Google",
+        _ => "经典 B4",
+    };
+
+    /// <summary>「预测时长」那一行右侧的值（自动 / 10 / 15 / 25 ms）。</summary>
+    private static string PredictHorizonShortName(int ms) => ms <= 0 ? "自动" : $"{ms} ms";
+
+    /// <summary>「预测时长」点一下的下一档：自动 → 10 → 15 → 25 → 自动。</summary>
+    private static int PredictHorizonNext(int ms) => ms switch { <= 0 => 10, 10 => 15, 15 => 25, _ => 0 };
 
     // ---- 命中 ----------------------------------------------------------------
 
@@ -2899,6 +2945,8 @@ public sealed class FullUi : IOverlayUi
             Row.HistoryDays => HistoryDaysName(_host.GetPref("historyDays")),
             Row.UiSize => UiScalePresets.Name(_host.UiScale),
             Row.WetMode => WetModeShortName(_host.State.WetMode),
+            Row.PredictEngine => PredictEngineShortName(_host.State.PredictEngine),
+            Row.PredictHorizon => PredictHorizonShortName(_host.State.PredictHorizonMs),
             _ => null,
         };
         float valueW = value != null ? _widgets.Measure(value, 12.5f) : 0f;
