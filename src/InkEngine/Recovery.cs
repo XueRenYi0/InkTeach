@@ -47,20 +47,24 @@ internal static class Recovery
 
     public static bool AutoSaveExists => File.Exists(AutoSavePath);
 
-    /// <summary>自动存档写盘。写不进去只提示，不影响使用（顶多这次崩溃丢东西）。</summary>
+    /// <summary>自动存档写盘（**同步**：写完才返回）。写不进去只提示，不影响使用。
+    /// 2026-10-15：写盘统一走 `BackgroundSaver` 的阻塞模式（与周期写同队列、保顺序）。</summary>
     public static void SaveAuto(byte[] blob)
     {
+        if (blob == null || blob.Length == 0) return;
         try
         {
-            var dir = System.IO.Path.GetDirectoryName(AutoSavePath);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            // 先写临时文件再换名：**不能直接覆盖**——写一半断电会留下一个坏文件，
-            // 下次打开时"恢复"出一堆垃圾（比没有自动存档更糟）。
-            string tmp = AutoSavePath + ".tmp";
-            File.WriteAllBytes(tmp, blob);
-            File.Move(tmp, AutoSavePath, overwrite: true);
+            BackgroundSaver.WriteBlocking("自动存档", AutoSavePath, blob);
         }
         catch (Exception ex) { Console.WriteLine("自动存档失败：" + ex.Message); }
+    }
+
+    /// <summary>自动存档**后台写**（2026-10-15 加；周期存档走这条，别占主线程）。
+    /// 退出/重启那两处仍用同步的 <see cref="SaveAuto"/>（必须落完才算数）。</summary>
+    public static void SaveAutoDeferred(byte[] blob)
+    {
+        if (blob == null || blob.Length == 0) return;
+        BackgroundSaver.Post("自动存档", AutoSavePath, blob);
     }
 
     /// <summary>读自动存档。**读走不删**：它就是"上次的板书"，下次打开还要用。</summary>

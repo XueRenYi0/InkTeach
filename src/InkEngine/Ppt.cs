@@ -59,15 +59,21 @@ internal static class PptStore
     private static string FileOf(string key, int pageKey)
         => Path.Combine(DirOf(key), pageKey.ToString("D8", CultureInfo.InvariantCulture) + ".inkb");
 
-    /// <summary>写一页。**先写 .tmp 再换名**——写一半断电不能留下一个坏文件（同 Recovery）。</summary>
+    /// <summary>写一页（同步：排入统一写盘队列并等它落完——顺序与"周期后台写"有保证）。
+    /// 先写 .tmp 再换名：写一半断电不能留下一个坏文件（同 Recovery）。</summary>
     public static void SavePage(string key, int pageKey, byte[] blob)
     {
-        var path = FileOf(key, pageKey);
-        var dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        string tmp = path + ".tmp";
-        File.WriteAllBytes(tmp, blob);
-        File.Move(tmp, path, overwrite: true);
+        if (blob == null || blob.Length == 0) { DeletePage(key, pageKey); return; }
+        BackgroundSaver.WriteBlocking("PPT 批注", FileOf(key, pageKey), blob);
+    }
+
+    /// <summary>后台写一页（2026-10-15 加；PPT 模式下"周期自动保存"那条路用——
+    /// 慢盘/杀软扫描下的一次落盘顿挫就此消掉）。翻页 / 退出放映 / 关软件仍走同步
+    /// <see cref="SavePage"/>——那几处必须"当场落完才算数"。</summary>
+    public static void SavePageDeferred(string key, int pageKey, byte[] blob)
+    {
+        if (blob == null || blob.Length == 0) return;
+        BackgroundSaver.Post("PPT 批注", FileOf(key, pageKey), blob);
     }
 
     /// <summary>读一页。读不出来返回 null（当作"这一页还没有批注"）。</summary>
@@ -125,14 +131,11 @@ internal static class PptStore
         catch { return 0; }
     }
 
-    /// <summary>删掉某一页的文件（那一页被清空了；没有就算）。</summary>
+    /// <summary>删掉某一页的文件（那一页被清空了；没有就算）。走统一写盘队列
+    /// （阻塞模式）——保证不会出现"删完之后，在途的旧快照又把它写回来"。</summary>
     public static void DeletePage(string key, int pageKey)
     {
-        try
-        {
-            var path = FileOf(key, pageKey);
-            if (File.Exists(path)) File.Delete(path);
-        }
+        try { BackgroundSaver.WriteBlocking("PPT 批注", FileOf(key, pageKey), null); }
         catch { }
     }
 
@@ -489,10 +492,11 @@ public partial class InkEngine
         if (loaded > 0) Console.WriteLine($"[PPT] 读回 {loaded} 页批注");
     }
 
-    /// <summary>把当前这一页写盘（键 0 是桌面页，不归它管）。</summary>
-    private void SaveCurrentPptPage() => SavePageToDisk(Doc.PageKey);
+    /// <summary>把当前这一页写盘（键 0 是桌面页，不归它管）。
+    /// `deferred`（2026-10-15）= 后台写（"周期自动保存"那条路用）。</summary>
+    private void SaveCurrentPptPage(bool deferred = false) => SavePageToDisk(Doc.PageKey, deferred);
 
-    private void SavePageToDisk(int key)
+    private void SavePageToDisk(int key, bool deferred = false)
     {
         if (key == 0 || _pptKey.Length == 0) return;
         if (!PptAutoSaveOn) return;              // 关着就一个字都不写（"不碰盘"的语义在这里兑现）
@@ -503,7 +507,12 @@ public partial class InkEngine
             // 空页**不写空文件**：把已有文件删掉就完了（同 InkClass 的 `length > 8` 那个判断）。
             // 不这么写的话，"清空"之后再退出放映会在盘上留一串 0 字节文件——下次读回来还是空的，
             // 但目录里一堆空文件很难看，也让"盘上还剩几页"这个诊断失去意义。
-            if (strokes.Count > 0) PptStore.SavePage(_pptKey, key, InkSerializer.SaveStrokes(strokes));
+            if (strokes.Count > 0)
+            {
+                var blob = InkSerializer.SaveStrokes(strokes);
+                if (deferred) PptStore.SavePageDeferred(_pptKey, key, blob);
+                else PptStore.SavePage(_pptKey, key, blob);
+            }
             else PptStore.DeletePage(_pptKey, key);
         }
         catch (Exception ex) { Console.WriteLine("PPT 批注写盘失败：" + ex.Message); }

@@ -177,8 +177,8 @@ public partial class InkEngine
     /// <summary>最后一次抬笔的时刻（"手停了没有"的判据）。</summary>
     private double _lastStrokeEndMs = double.NegativeInfinity;
 
-    /// <summary>自检用：立刻写一份板书历史（不看间隔与指纹）。</summary>
-    internal bool SnapshotBoardHistoryForTest() => WriteBoardHistory(Doc.StrokesOf(0));
+    /// <summary>自检用：立刻写一份板书历史（不看间隔与指纹；同步落盘——测试要立刻数文件）。</summary>
+    internal bool SnapshotBoardHistoryForTest() => WriteBoardHistory(Doc.StrokesOf(0), sync: true);
 
     /// <summary>
     /// 每帧过一趟：**手停下来之后**（抬笔 ≥1.5 秒、且距上次 ≥10 秒）、而且板书画布真的变了
@@ -199,7 +199,7 @@ public partial class InkEngine
         var board = Doc.StrokesOf(0);
         long fp = BoardFingerprint(board);
         if (fp == _historyFingerprint) return;
-        if (WriteBoardHistory(board)) _historyFingerprint = fp;
+        if (WriteBoardHistory(board, sync: false)) _historyFingerprint = fp;
     }
 
     /// <summary>
@@ -218,8 +218,9 @@ public partial class InkEngine
     /// 把 0 号页（桌面板书）写成一份历史快照。
     /// **图片一律不要**：截图那种对象整条跳过（用户 2026-10-14 定）。
     /// 空板书且这一轮还没写过 → 不留空文件（免得开一下软件就多一份空的）。
+    /// `sync`（2026-10-15）：周期快照走**后台写**（false）；退出前那份必须落完（true）。
     /// </summary>
-    private bool WriteBoardHistory(List<Stroke> board)
+    private bool WriteBoardHistory(List<Stroke> board, bool sync)
     {
         var list = new List<Stroke>();
         if (board != null)
@@ -229,7 +230,8 @@ public partial class InkEngine
         if (list.Count == 0 && !BoardHistory.HasSession) return false;
         try
         {
-            string path = BoardHistory.Save(InkSerializer.SaveStrokes(list));
+            var blob = InkSerializer.SaveStrokes(list);
+            string path = sync ? BoardHistory.Save(blob) : BoardHistory.SaveDeferred(blob);
             if (path == null) return false;
             if (!_historyLogged && list.Count > 0)
             {
@@ -258,6 +260,15 @@ public partial class InkEngine
     {
         if (!RestoreInkOnStartup) return;
         if (NowMs < _nextAutoSaveAtMs) return;
+
+        // 2026-10-15（低配机"书写偶尔迟缓"）：**只挑书写间隙写**——到点时手还在写、
+        // 或刚停笔（<1.5s）就先不写（不重置间隔，下一帧继续判，手一停就会补上）。
+        // 在写的过程中序列化整份板书 = 一次可感知的顿挫；这是"随板书大小线性变长"的
+        // 少数几处主线程工作之一。序列化仍要碰 Doc（只能主线程），**写盘走后台上**
+        //（见 AutoSaveDeferred / BackgroundSaver）。
+        if (_drawing || ActiveStroke != null) return;
+        if (NowMs - _lastStrokeEndMs < HistoryIdleMs) return;
+
         _nextAutoSaveAtMs = NowMs + _autoSaveEveryMs;
         if (Doc.Version == _autoSavedVersion) return;
 
@@ -266,15 +277,26 @@ public partial class InkEngine
         // 把某一页 PPT 的内容写进去就串了（那是另一条路的数据）。
         // PPT 页本来就有自己的落盘通道（翻页时、退出时各一次），这里补上"放映中途"
         // 那一段（老师在一页上写很久、还没翻页就崩了，内容不至于丢）。
+        // 2026-10-15：这条也改成**后台写**（同上，只挑书写间隙）。
         if (PptMode)
         {
-            SaveCurrentPptPage();
+            SaveCurrentPptPage(deferred: true);
             _autoSavedVersion = Doc.Version;
             AutoSaveCount++;
             return;
         }
 
-        AutoSaveNow();
+        AutoSaveDeferred();
+    }
+
+    /// <summary>周期自动存档（2026-10-15 加）：序列化在主线程（碰 Doc），**写盘走后台上**。
+    /// 退出 / 重启那两处仍走同步的 <see cref="AutoSaveNow"/>（必须落完才算数）。</summary>
+    private void AutoSaveDeferred()
+    {
+        try { Recovery.SaveAutoDeferred(InkSerializer.Save(Doc)); }
+        catch (Exception ex) { Console.WriteLine("自动存档失败：" + ex.Message); }
+        _autoSavedVersion = Doc.Version;
+        AutoSaveCount++;
     }
 
     // ---- 历史清理（墨迹 B）：启动后**首个空闲帧**做一次 ----------------------
@@ -10838,9 +10860,14 @@ public partial class InkEngine
         // 退出前补一次自动存档（下一次打开接上）。自检模式不动用户的存档。
         if (Doc.Version != _autoSavedVersion) AutoSaveNow();
 
+        // 在途的周期写盘（板书历史 / 自动存档 / PPT 批注）先全部等落完——**顺序不能反**：
+        // 反了的话，"后到的旧内容"会把下面这份退出快照盖掉。
+        BackgroundSaver.Flush(5000);
+
         // 板书历史：退出前再补一份（**不受"自动恢复"偏好影响**）。这一份是"关软件那一刻"
         // 的板书画布——上面那条"停顿才写"只保证阶段性留存，最后这一段靠它兜底。
-        WriteBoardHistory(Doc.StrokesOf(0));
+        // 退出这份走**同步**（落完才算数）。
+        WriteBoardHistory(Doc.StrokesOf(0), sync: true);
         BoardHistory.CloseSession();      // 下一次运行另起一份快照
 
         if (_uiInputHwnd != IntPtr.Zero)

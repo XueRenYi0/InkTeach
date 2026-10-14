@@ -34,10 +34,19 @@ internal static class BoardHistory
     /// </summary>
     public static long MaxBytes = 1024L * 1024 * 1024;
 
-    private static string _sessionPath;      // 这一轮快照的文件（懒建）
+    private static volatile string _sessionPath;   // 这一轮快照的文件（懒建；volatile：后台线程也会读）
 
     /// <summary>这一轮已经写过快照吗（退出时判断"空板书要不要留一份空的"）。</summary>
     public static bool HasSession => _sessionPath != null;
+
+    /// <summary>懒建这一轮的文件名（主线程建；失败抛异常由调用方接）。</summary>
+    private static string EnsureSessionPath()
+    {
+        Directory.CreateDirectory(Dir);
+        _sessionPath ??= Path.Combine(Dir,
+            FilePrefix + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".inkb");
+        return _sessionPath;
+    }
 
     /// <summary>现在有几份（界面置灰 / 自检用）。</summary>
     public static int Count
@@ -50,23 +59,41 @@ internal static class BoardHistory
     }
 
     /// <summary>
-    /// 写一次快照：**同一个运行周期覆盖同一个文件**（文件名 = 首次写盘那一刻的时间）。
-    /// 写完顺手轮转（总量超上限就从最老的删）。返回落盘路径；失败返回 null。
+    /// 写一次快照（**同步**：写完才返回）。同一个运行周期覆盖同一个文件
+    /// （文件名 = 首次写盘那一刻的时间）。写成功后轮转（总量超上限就从最老的删）。
+    /// 2026-10-15：写盘统一走 `BackgroundSaver` 的阻塞模式——和"周期写"排同一条队列，
+    /// 保证顺序（旧内容不会盖掉后写的新内容）。返回落盘路径；失败返回 null。
     /// </summary>
     public static string Save(byte[] blob)
     {
         if (blob == null || blob.Length == 0) return null;
         try
         {
-            Directory.CreateDirectory(Dir);
-            _sessionPath ??= Path.Combine(Dir,
-                FilePrefix + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".inkb");
-            // 先写临时文件再换名：写一半断电不会留下坏快照（同 Recovery.SaveAuto 的做法）。
-            string tmp = _sessionPath + ".tmp";
-            File.WriteAllBytes(tmp, blob);
-            File.Move(tmp, _sessionPath, overwrite: true);
+            string path = EnsureSessionPath();
+            if (!BackgroundSaver.WriteBlocking("板书历史", path, blob)) return null;
             Enforce();
-            return _sessionPath;
+            return path;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("板书历史写盘失败：" + ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 后台写一份快照（2026-10-15 加；**周期快照走这条**）：不阻塞主线程——
+    /// 慢盘/杀软扫描下的一次落盘顿挫就此消掉。写成功后由后台线程顺手轮转（Enforce）。
+    /// 返回落盘路径（**排队成功即返回**，不代表已写完）；失败（目录建不出来）返回 null。
+    /// </summary>
+    public static string SaveDeferred(byte[] blob)
+    {
+        if (blob == null || blob.Length == 0) return null;
+        try
+        {
+            string path = EnsureSessionPath();
+            BackgroundSaver.Post("板书历史", path, blob, Enforce);
+            return path;
         }
         catch (Exception ex)
         {
