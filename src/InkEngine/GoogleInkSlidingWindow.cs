@@ -15,7 +15,7 @@
 //  已知差异：
 //    ① 只搬输入建模这一片（不含笔刷/网格/渲染/序列化）；
 //    ② ToolType/StrokeUnitLength 只作为结构字段保留，本引擎固定 Stylus/无值；
-//    ③ predicted_inputs 支持但本引擎暂不喂（预测归现有 InkPredictor / DWM 轨迹）。
+//    ③ predicted_inputs 支持但本引擎暂不喂（预测归现有 InkPredictorV6 / DWM 轨迹）。
 // =====================================================================================
 
 namespace InkEngine;

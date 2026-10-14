@@ -65,11 +65,12 @@ internal static class PdMetricsProbe
 
     private static void RunConfig(List<List<Pt>> samples, float dt, float turndeg)
     {
-        var p = new InkPredictor
+        // 2026-10-15 收口：评测对象 = 唯一预测器 v6（B4 退役）。
+        // turndeg 映射到 v6 的 SharpTurnCos（软收缩的起始转角）；Damping/VelocitySmoothing
+        // 沿用 v6 自身默认（B4 时代的运行时覆盖不再模拟）。
+        var p = new InkPredictorV6
         {
-            HorizonMs = Math.Clamp(dt, InkPredictor.MinHorizonMs, InkPredictor.HardMaxHorizonMs),
-            Damping = 0.8f,
-            VelocitySmoothing = 0.4f,      // 笔路口径（关 ink 鼠标路是 0.6；数据集按笔看）
+            HorizonMs = Math.Clamp(dt, InkPredictorV6.MinHorizonMs, InkPredictorV6.HardMaxHorizonMs),
             SharpTurnCos = (float)Math.Cos(Math.Max(0.0, Math.Min(180.0, turndeg)) * Math.PI / 180.0),
         };
         var predBuf = new PredictedPoint[6];

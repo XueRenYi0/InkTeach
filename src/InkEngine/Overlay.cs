@@ -989,7 +989,7 @@ internal sealed partial class OverlayWindow : IDisposable
     /// <summary>
     /// 把一批真实点 + 一批**预测点**交给系统合成器（都用屏幕坐标）。
     ///
-    /// 预测点是"这一帧之后笔尖大概在哪"（见 Prediction/InkPredictor.cs）。系统会把轨迹画到
+    /// 预测点是"这一帧之后笔尖大概在哪"（见 Prediction/InkPredictorV6.cs）。系统会把轨迹画到
     /// 预测点上；下一条消息来了、真实点补上，预测段自然被覆盖——所以这条通道**猜错了也只是
     /// 屏幕上短暂的一小截**，不会进文档。微软自己笔迹"跟手"的关键就在这个带预测的重载上，
     /// 而绑定我们本来就有（Vortice.DirectComposition 3.8.3）。

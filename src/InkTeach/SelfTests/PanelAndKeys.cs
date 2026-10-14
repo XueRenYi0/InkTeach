@@ -2986,38 +2986,17 @@ internal sealed partial class App
                   !Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
         }
 
-        // 「预测算法」（2026-10-14 加；当天晚些 B4 退役）：点一下切 v6 ⇄ Google
-        // （和「湿墨档位」同一个手感；引擎是权威、界面只显示）。
-        // 这里验行存在 + 不是开关行 + 点击真能循环。
+        // 「预测算法」（2026-10-14 加；2026-10-15 收口随 B4/Google 退役一起撤除）：
+        // 只验"行已不在设置页"（和「精细笔迹」「触摸手势」撤开关时同一条判据）。
         {
             var engineRow = ui.RowRectByLabelForTest("预测算法");
-            Check("「预测算法」那一行找得到", engineRow.MaxY > engineRow.MinY,
-                  $"行高 {engineRow.MaxY - engineRow.MinY:F0}");
-            Check("「预测算法」是**换档行**（不是开关行；右侧显示当前档）",
-                  !ui.IsToggleRowByLabelForTest("预测算法"),
-                  "IsToggleRow = " + ui.IsToggleRowByLabelForTest("预测算法"));
-            Check("预测算法默认是改进版 v6（1；经典 B4 已退役）", Host.State.PredictEngine == 1,
-                  $"PredictEngine = {Host.State.PredictEngine}");
-
-            void ClickEngineRow() =>
-                ClickPhysical((engineRow.MinX + engineRow.MaxX) * 0.5f * DpiScale,
-                              (engineRow.MinY + engineRow.MaxY) * 0.5f * DpiScale);
-
-            ClickEngineRow(); SettleFrames(200);
-            Check("点「预测算法」：v6 → Google", Host.State.PredictEngine == 2,
-                  $"PredictEngine = {Host.State.PredictEngine}");
-            Check("切到 Google 后：时长读取走 Google 引擎（生效 21.3）",
-                  Math.Abs(PredictHorizonForTest - 21.3) < 1e-6,
-                  $"生效值 = {PredictHorizonForTest:F1}");
-            ClickEngineRow(); SettleFrames(200);
-            Check("再点：Google → v6 回头（两档循环）", Host.State.PredictEngine == 1,
-                  $"PredictEngine = {Host.State.PredictEngine}");
-            Check("切回 v6 后：时长读取走回 v6 引擎", Math.Abs(PredictHorizonForTest - 21.3) < 1e-6,
-                  $"生效值 = {PredictHorizonForTest:F1}");
+            Check("「预测算法」行已撤（收口：只剩 v6，没有可切的了）",
+                  engineRow.IsEmpty && !ui.IsToggleRowByLabelForTest("预测算法"),
+                  $"行空 = {engineRow.IsEmpty}");
         }
 
-        // 「预测时长」（2026-10-14 加）：自动(0) → 10 → 15 → 25 → 自动；
-        // 三引擎统一生效（此时算法档是 v6（默认），直接查 v6 的地平线）。
+        // 「预测时长」（2026-10-14 加；2026-10-15 收口后只作用于 v6）：
+        // 自动(0) → 10 → 15 → 25 → 自动。
         {
             var hzRow = ui.RowRectByLabelForTest("预测时长");
             Check("「预测时长」那一行找得到", hzRow.MaxY > hzRow.MinY,
@@ -4660,6 +4639,13 @@ internal sealed partial class App
         Check("穿透默认键 = Ctrl+Alt+Shift+T（2026-10-04 起统一加 Shift）",
               map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString() == "Ctrl+Alt+Shift+T",
               map.Find(KeyScope.Global, KeyAction.TogglePassThrough).Chord.ToString());
+        // 预测算法切换 `Ctrl+Alt+Shift+P`：2026-10-14 加、2026-10-15 随预测收口撤除
+        // （只剩 v6 一份，没有可切的了）——对着组合查，别再回来。
+        {
+            var cP = new KeyChord(KeyChord.ModCtrl | KeyChord.ModAlt | KeyChord.ModShift, 'P');
+            Check("已撤的预测算法键 Ctrl+Alt+Shift+P 不在任何作用域里",
+                  map.Bindings.All(b => !b.Chord.Equals(cP)), "");
+        }
         Check("呼出盘已升为全局键 Ctrl+Alt+Shift+Q，批注内不再留副本",
               map.Find(KeyScope.Global, KeyAction.RadialPalette)?.Chord.ToString() == "Ctrl+Alt+Shift+Q"
               && map.Find(KeyScope.Annotation, KeyAction.RadialPalette) == null,

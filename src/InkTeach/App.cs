@@ -77,11 +77,8 @@ internal sealed partial class App : InkEngine.InkEngine
                 var bb = System.IO.Path.GetFullPath(args[i + 1]);
                 // ⚠ 表头在**参数解析前**生成，别读引擎的静态值（那时还是默认）——按 args 自己算：
                 bool pred = !args.Contains("--nopredict2");
-                float turn = 60f;
-                for (int k = 0; k + 1 < args.Length; k++)
-                    if (args[k] == "--turndeg" && float.TryParse(args[k + 1], out var td)) turn = td;
                 InputBlackBox.Open(bb,
-                    $"version {UpdateFeed.CurrentVersion} turndeg {(int)MathF.Round(turn)} pred {(pred ? 1 : 0)}");
+                    $"version {UpdateFeed.CurrentVersion} pred {(pred ? 1 : 0)}");
                 Console.WriteLine($"[黑匣子] 输入日志：{bb}");
             }
 
@@ -1270,9 +1267,8 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --replayinput <文件> [--frame 10]  黑匣子回放：供给率/帧间墨尖位移/方向翻转/门触发（诊断）");
         Console.WriteLine("  --himetric / --nohimetric  亚像素输入（默认开；--nohimetric 退回 D0 对照）");
         Console.WriteLine("  模型调参：--mean2win 画布像素 / --smoothcorner N 角点阈值");
-        Console.WriteLine("  预测尾：--nopredict2 关（默认开）/ --pred2ms N 地平线(ms) / --turndeg N 急转丢速阈值(度，默认60，180=老行为)");
-        Console.WriteLine("        --predengine b4|v6|google  预测算法（默认 v6；b4 已退役仅对照。本会话有效、不落盘；要记住走设置「预测算法」那一行）");
-        Console.WriteLine("        --predlatency N  预测时长 ms（三引擎统一，本会话对照用、不落盘；设置「预测时长」那行 10/15/25 落盘）");
+        Console.WriteLine("  预测尾：--nopredict2 关（默认开；唯一算法 = 改进版 v6，--predict2 可再开）");
+        Console.WriteLine("        --predlatency N  预测时长 ms（本会话对照用、不落盘；设置「预测时长」那行 10/15/25 落盘）");
         Console.WriteLine("  [已停用] 预测、拟合(--mean2fit)、模拟压力(--simpressure/--pfpressure)、笔锋");
         Console.WriteLine("           (--simtaper/--flicktip)、对照模式(raw/sliding/spring/oneeuro/mean/gauss)等：");
         Console.WriteLine("           见 已停用-渲染实验.md（代码保留）");

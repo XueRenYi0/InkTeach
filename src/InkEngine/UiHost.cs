@@ -119,11 +119,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetDwellShape(bool on) => _engine.SetDwellShapeFromUi(on);
     public void SetPressure(bool on) => _engine.SetPressureFromUi(on);
     public void SetFineStroke(bool on) => _engine.SetFineStrokeFromUi(on);
-    /// <summary>「设置 → 书写 → 墨迹预测」：B4 自绘预测尾总开关（默认开）。</summary>
+    /// <summary>「设置 → 书写 → 墨迹预测」：自绘预测尾总开关（默认开）。</summary>
     public void SetPredict(bool on) => _engine.SetPredictFromUi(on);
-    /// <summary>「设置 → 书写 → 预测算法」：0..2（引擎落盘并立刻生效）。</summary>
-    public void SetPredictEngine(int engine) => _engine.SetPredictEngineFromUi(engine);
-    /// <summary>「设置 → 书写 → 预测时长」：0 自动 / 10 / 15 / 25 ms（三引擎统一；引擎落盘并立刻生效）。</summary>
+    /// <summary>「设置 → 书写 → 预测时长」：0 自动 / 10 / 15 / 25 ms（v6；引擎落盘并立刻生效）。</summary>
     public void SetPredictHorizon(int ms) => _engine.SetPredictHorizonFromUi(ms);
     /// <summary>「设置 → 墨迹 → 湿墨档位」：0..3（引擎落盘并立刻生效）。</summary>
     public void SetWetMode(int mode) => _engine.SetWetModeFromUi(mode);

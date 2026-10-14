@@ -36,10 +36,8 @@
     <PackageReference Include="Vortice.Mathematics" Version="2.1.1" />
   </ItemGroup>
 
-  <!-- P1：DL 预测权重（predict3 旗标用；嵌入程序集，随 exe 分发，共 ~140KB） -->
-  <ItemGroup>
-    <EmbeddedResource Include="Prediction\dlv4\weights.bin" LogicalName="dlv4.weights.bin" />
-    <EmbeddedResource Include="Prediction\dlv4\weights.meta.json" LogicalName="dlv4.weights.meta.json" />
-  </ItemGroup>
+  <!-- P1：DL 预测权重（predict3 旗标用；嵌入程序集，随 exe 分发，共 ~140KB）
+       [2026-10-15 收口] DL 已退役、不再进编译——嵌入资源这两行随之删除；
+       权重与代码备份在 `.revert/2026-10-15-预测收口/`，说明 `调研/已停用-预测算法收口.md`。 -->
 
 </Project>

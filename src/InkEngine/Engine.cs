@@ -104,7 +104,7 @@ public partial class InkEngine
             or "--nosmooth" or "--printersafe"
             or "--mean2gauss" or "--mean2guniform" or "--mean2gsigma" or "--mean2gfast"
             or "--mean2glo" or "--mean2ghi" or "--mean2gtip"
-            or "--predict2" or "--nopredict2" or "--pred2ms" or "--predengine" or "--predlatency" or "--nofastwet" => true,
+            or "--predict2" or "--nopredict2" or "--predlatency" or "--nofastwet" => true,
         _ => false,
     };
 
@@ -1169,24 +1169,10 @@ public partial class InkEngine
     {
         if (ActiveStroke == null) return;
         InputBlackBox.Sample(NowMs, x, y, p);   // 黑匣子：记录喂进预测器的原始点（回放靠它 1:1 复现）
-        // B4：喂预测器。**统一用处理时刻 NowMs**——同一笔里混用"硬件时标 / 消息时标"
+        // 喂预测器。**统一用处理时刻 NowMs**——同一笔里混用"硬件时标 / 消息时标"
         // （笔消息 vs raw 补点的来源不同）会把速度算乱，v0 先用一把单调时钟保稳。
-        // 2026-10-14：按 `PredictEngine` 喂当前档（只喂在用的一份——换档时 ResetPredictTail
-        // 会三份一起复位，下一笔各自从零起步；省得三份状态各自演化、出现"换回来还是旧速度"）。
-        if (PredictTailEnabled)
-        {
-            switch (PredictEngine)
-            {
-                case 1: _predictorV6.Add(x, y, NowMs); break;
-                case 2: _googlePredictor.Add(x, y, NowMs); break;
-                default: _predictor.Add(x, y, NowMs); break;
-            }
-        }
-        if (PredictTailEnabled && Predict3Forced)
-        {
-            _dlPredictor ??= TryCreateDlPredictor();
-            _dlPredictor?.Add(x, y, p, NowMs, ActiveStroke.HasPressure);
-        }
+        // 2026-10-15 收口：只剩改进版 v6（B4/Google/DL 已退役，见 `调研/已停用-预测算法收口.md`）。
+        if (PredictTailEnabled) _predictorV6.Add(x, y, NowMs);
         if (CleanWindow <= 1) { ActiveStroke.AddPoint(x, y, p, t); return; }
 
         _cleanBuf.Add((x, y, p));
@@ -1198,49 +1184,28 @@ public partial class InkEngine
         ActiveStroke.AddPoint(ax / n, ay / n, ap / n, t);
     }
 
-    // ---- B4：有纪律的预测尾（2026-10-08 重启）--------------------------------
+    // ---- 自绘预测尾（2026-10-15 收口：只剩改进版 v6）------------------------
     // 旧账（"乱跳"的正身，写在 App.TailJumpTest 的注释里）：鼠标/兼容模式输入是突发的——
     // 来一阵 → 尾巴甩出去；间隔一超 20ms → 速度清零 → 尾巴整个消失。修法 = 长度限速平滑。
     // 纪律：只画显示（独立几何，不进文档/存档/命中）、每帧重建、慢写/反向/断笔由
-    // InkPredictor 内建把关；开关：设置「墨迹预测」行 / `--nopredict2`（**默认开**——
-    // 2026-10-14 发布测试版起：三档算法收口，默认开才能让用户直接体验/切换）。
+    // InkPredictorV6 内建把关；开关：设置「墨迹预测」行 / `--nopredict2`（**默认开**）。
+    // 2026-10-15 用户真机终测拍板：**只留改进版 v6**；经典 B4 / Google 移植 / DL 全部退役、
+    // 不再进编译（9.0.8 起）。备份 `.revert/2026-10-15-预测收口/`、说明
+    // `调研/已停用-预测算法收口.md`。
     internal static bool PredictTailEnabled;
-    /// <summary>急转丢速阈值（cos；默认 cos60°）。命令行 `--turndeg N`（度）改；
-    /// 180 = 只挡"完全反向"的老行为（A/B 对照）。见 InkPredictor.SharpTurnCos。</summary>
-    internal static float PredictSharpTurnCos = 0.5f;
-    /// <summary>预测算法档：0 = 经典 B4（已退役，仅命令行对照）/ 1 = 改进版 v6（默认）/ 2 = Google 移植。
-    /// 切换入口：设置页「书写 → 预测算法」/ 全局键 Ctrl+Alt+Shift+P / 命令行 `--predengine`。</summary>
-    internal static int PredictEngine;
 
     // 版本号显示见 Update.cs 末尾的 `ProductInfo`（界面工程用；它拿不到内部的 UpdateFeed）。
-    private readonly InkPredictor _predictor = new();
-    // 2026-10-14：预测算法第二 / 第三份实现（设置页「预测算法」，真机手感对照用）。
-    //   0 = 经典 B4（_predictor；**已退役**，仅 `--predengine b4` 对照）/
-    //   1 = 改进版 v6（_predictorV6；**默认**，用户 2026-10-14 定"比老版更好、一点都不甩"）/
-    //   2 = Google（_googlePredictor）。
-    // 三份接口一致（Add / Predict / Reset）；喂点、复位、取点都按 `PredictEngine` 这一把闸走。
-    // 来源与参数表见 `调研/调研-预测算法三档-手感对照与参数表.md`。
+    // 唯一预测器（用户 2026-10-14 真机验收："使用效果很好，一点都不甩"）。
+    // 参数表/对照见 `调研/调研-预测算法三档-手感对照与参数表.md`。
     private readonly InkPredictorV6 _predictorV6 = new();
-    private readonly InkPredict.Google.GoogleInkPredictor _googlePredictor = new();
-    // 预测时长档（2026-10-14 加，设置页「预测时长」/ `--predlatency N`）：
-    //   0 = 自动（各引擎自己的默认：B4 10ms / v6 与 Google 21.3ms）；
-    //   10 / 15 / 25 = 三引擎统一覆盖（现场把刻度盘对准屏幕刷新率用）。
-    // `_b4HorizonDefault` 在构造里抓（会把 `--pred2ms` 算进去——那是 B4 专用对照；
-    // 档位 > `--pred2ms`，但"自动"回退回去的是 `--pred2ms` 的值）。
-    private double _b4HorizonDefault = 10.0;
+    // 预测时长档（设置页「预测时长」/ `--predlatency N`）：
+    //   0 = 自动（v6 自己的默认 21.3ms）；10 / 15 / 25 = 覆盖
+    //   （现场把刻度盘对准屏幕刷新率用，落盘 `ui.predictms`）。
     private double _predV6DefaultLatency = 21.3;
-    private double _googleDefaultInterval = 21.3;
     /// <summary>预测时长档（ms；0 = 自动）。见 <see cref="SetPredictHorizon"/>。</summary>
     internal static int PredictHorizonMs;
-    // 预测点暂存（复用；**不是每帧 new**——Google 一次最多可给 20+ 个点，B4/v6 只给 ≤6 个）。
+    // 预测点暂存（复用；**不是每帧 new**——v6 一次最多给 ≤6 个点，缓冲给足 64）。
     private readonly PredictedPoint[] _predBuf = new PredictedPoint[64];
-    private readonly InkPredict.Google.PredictedPoint[] _googlePredBuf = new InkPredict.Google.PredictedPoint[64];
-    // P1（2026-10-11）`--predict3`：DL 预测（v4 的 C# 前向，P0 对拍 maxΔ=7e-6）。
-    // 默认关；载入失败/运行异常一律退回 B4（规矩三）。γ 默认 0.9（保守）。
-    private DlPredictController _dlPredictor;
-    internal static bool Predict3Forced;
-    private float _predict3Gamma = 0.9f;
-    private string _predict3WeightsDir;
     // 委托墨迹活跃时的预测缩放（2026-10-12 委托接入后）：湿墨已把"墨跟笔"做掉，
     // 预测应退场——默认缩到 0.35（留一丝对冲收笔交接）；`--wetpred 0` 全关 / `1` 回旧行为。
     private bool _trailActiveThisStroke;
@@ -1256,63 +1221,18 @@ public partial class InkEngine
         PredictTailEnabled && ActiveStroke != null && _tailCanvas.Count >= 2;
     internal IReadOnlyList<Vector2> PredictTailPoints => _tailCanvas;
     internal float PredictTailWidth => _tailWidth;
-    /// <summary>诊断（`--tailjumptest` 用）：算法档 / 喂点数 / 尾点数 / 当前尾长。</summary>
-    internal string PredictTailDebug
-    {
-        get
-        {
-            int feed = PredictEngine switch
-            {
-                1 => _predictorV6.Count,          // v6 同 B4：最近轨迹里的样本数
-                2 => _googlePredictor.DebugN,     // Google：最近一次置信度算出的点数
-                _ => _predictor.Count,
-            };
-            return $"engine={PredictEngine} feed={feed} canvas={_tailCanvas.Count} len={_tailLen:F1}";
-        }
-    }
+    /// <summary>诊断（`--tailjumptest` / 黑匣子回放用）：喂点数 / 尾点数 / 当前尾长。</summary>
+    internal string PredictTailDebug =>
+        $"feed={_predictorV6.Count} canvas={_tailCanvas.Count} len={_tailLen:F1}";
 
     private void ResetPredictTail()
     {
-        _predictor.Reset();
         _predictorV6.Reset();
-        _googlePredictor.Reset();
-        _dlPredictor?.Reset();
         _trailActiveThisStroke = false;
-        // v0：速度估计加一层平滑（0.4）——批量投递/压力变化会让差分速度有帧间尖峰，
-        // 尖峰直接乘进尾巴长度就是"笔头跳跃"（4 号粗细下特别显眼的那种）。
-        _predictor.VelocitySmoothing = 0.4f;
         _tailLen = 0f;
         _tailWidthState = 0f;
         _tailOffsets.Clear();
         _tailCanvas.Clear();
-    }
-
-    /// <summary>`--predict3`：载入 DL 权重（默认 `AppContext.BaseDirectory\dlv4\`；
-    /// `--predict3weights <目录>` 可改）。失败当没有：报一行、退回 B4，本会话不再尝试。</summary>
-    private DlPredictController TryCreateDlPredictor()
-    {
-        try
-        {
-            InkDlPredictor model = _predict3WeightsDir == null
-                ? InkDlPredictor.LoadEmbedded()
-                : InkDlPredictor.Load(System.IO.Path.Combine(_predict3WeightsDir, "weights.bin"),
-                                      System.IO.Path.Combine(_predict3WeightsDir, "weights.meta.json"));
-            var c = new DlPredictController(model)
-            {
-                Gamma = _predict3Gamma,
-                EventGate = true,                 // 急转帧不画尾（对标 B4 纪律）
-                NoPressureGammaScale = 0.85f,     // 鼠标/无压感路更保守
-            };
-            string src = _predict3WeightsDir == null ? "嵌入资源" : _predict3WeightsDir;
-            Console.WriteLine($"  [predict3] DL 预测载入 {src}（γ={_predict3Gamma:F2}，{model.Horizons.Length} 视界）");
-            return c;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"  [predict3] DL 载入失败 → 退回 B4：{ex.Message}");
-            Predict3Forced = false;
-            return null;
-        }
     }
 
     /// <summary>
@@ -1336,54 +1256,8 @@ public partial class InkEngine
             ? (float)_windows[0].RefreshPeriodMs
             : 1000f / 90f;
 
-        // 非压感路（关 ink 的鼠标路 / 触摸）：整数坐标 + 点粗，尾巴**方向噪声**更大——
-        // 用更重的速度平滑 + 更保守的推进，压住"左右甩"（用户 2026-10-08：关 ink 5 号有点甩）。
-        _predictor.VelocitySmoothing = ActiveStroke.HasPressure ? 0.4f : 0.6f;
-        _predictor.Damping = ActiveStroke.HasPressure ? 0.8f : 0.7f;
-        _predictor.SharpTurnCos = PredictSharpTurnCos;   // B4.2：急转丢速阈值（`--turndeg`）
-
-        var pred = _predBuf;                      // 复用缓冲（64；Google 一次可给 20+ 点）
-        int n;
-        if (Predict3Forced && _dlPredictor != null)
-        {
-            _dlPredictor.PhotonMs = frameMs;      // 光子 = 1 帧（对齐离线台口径）
-            n = _dlPredictor.PredictPoints(pred);
-            if (n == 0 && !_dlPredictor.Ready)
-                n = _predictor.Predict(pred);     // 第9轮：起笔预热段（DL 没料）→ B4 兜底
-        }
-        else if (PredictEngine == 2)
-        {
-            // Google：点数由它自己的置信度决定（最多 20+）。
-            // 2026-10-14 接入层修复：**丢掉"追赶段"**（DebugConnector 个点）——那一段是
-            // 从它内部"滞后的弹簧笔尖"出发、追向卡尔曼估计的；而上游里屏幕上的墨=模型器
-            // 输出（同一个滞后笔尖），首尾天然相接。我们 App 画的是**原始点**，追赶段相对
-            // 真实末点会画出一条"往后的钩子"（实测 1px/ms 时 −13.4px，2px/ms 时 −26.7px，
-            // 减速停笔时整条都在后面）——"尾巴跑到后面/方向反了"的主因。
-            // 估计点≈真实末点（实测 0.00px），只画追赶段之后的前推段即可（修复后投影偏移
-            // 实测 +3.6~+24.5px，全为正）。排查记录见
-            // `调研/调研-预测算法三档-手感对照与参数表.md` §九。
-            n = _googlePredictor.Predict(_googlePredBuf);
-            int skip = _googlePredictor.DebugConnector;
-            if (skip >= n) n = 0;                    // 这一帧没有前推段 → 不画（让尾部快收）
-            else
-            {
-                n -= skip;
-                for (int i = 0; i < n; i++)
-                {
-                    pred[i].X = _googlePredBuf[skip + i].X;
-                    pred[i].Y = _googlePredBuf[skip + i].Y;
-                    pred[i].TimeMs = _googlePredBuf[skip + i].TimeMs;
-                }
-            }
-        }
-        else if (PredictEngine == 1)
-        {
-            n = _predictorV6.Predict(pred);
-        }
-        else
-        {
-            n = _predictor.Predict(pred);
-        }
+        var pred = _predBuf;                      // 复用缓冲
+        int n = _predictorV6.Predict(pred);       // 唯一预测器（2026-10-15 收口）
         if (n > 0)
         {
             var raw = ActiveStroke.Points[^1];
@@ -1411,18 +1285,6 @@ public partial class InkEngine
         // 自适应收回 ~80%（30→16.6）且乱甩仍跟得住。B4 档保持原常数（它当时是按原始
         // 突发输入调的，不动）。
         float extRate = 0.20f, retRate = 0.11f, fastRate = 0.72f;
-        if (Predict3Forced && _dlPredictor != null && ActiveStroke.Points.Count >= 2)
-        {
-            var pa = ActiveStroke.Points[^2];
-            var pb = ActiveStroke.Points[^1];
-            double dtP = Math.Max(1e-3, pb.T - pa.T);
-            float dxp = pb.X - pa.X, dyp = pb.Y - pa.Y;
-            float vPxPerMs = (float)(Math.Sqrt(dxp * dxp + dyp * dyp) / dtP);
-            float f = Math.Clamp(vPxPerMs, 1f, 4f);
-            extRate = Math.Min(0.20f * f, 1.0f);
-            retRate = Math.Min(0.11f * f, 0.8f);
-            fastRate = Math.Min(0.72f * f, 3.0f);
-        }
         float rate = n <= 0
             ? fastRate * frameMs                                       // 失效：快收（≈8px/帧@90Hz）
             : (tipLenRaw > _tailLen ? extRate : retRate) * frameMs;    // 正常：伸 2.2 / 缩 1.2（@90Hz）
@@ -1986,7 +1848,7 @@ public partial class InkEngine
     private uint _activePointer;
     private uint _activePointerType;
 
-    // ---- 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictor.cs）----
+    // ---- 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorV6.cs）----
     //  这两件事共用同一条时间轴：采样点自带硬件时标，压感保真靠它，外推预测也靠它。
     private readonly PenSampleBuffer _pen = new();
     /// <summary>
@@ -2006,7 +1868,8 @@ public partial class InkEngine
 
     // [删除 2026-10-05] 老预测系统整条链（`_predictor`/`_predBuf`/`_trailPred`/`_tailScratch`、
     // `PredictEnabled`/`_predictArg`/`PredictPrefKey`、渲染尾与预测尾统计等）：用户决定不接预测。
-    // 算法文件 `Prediction/InkPredictor.cs` 保留；恢复见 `已停用-渲染实验.md` + `.revert/`。
+    // [2026-10-15 收口] 预测三档（经典 B4 / Google / DL）退役、不进编译；唯一实现 = v6
+    // （备份 `.revert/2026-10-15-预测收口/`，说明 `调研/已停用-预测算法收口.md`）。
 
     // ---- 书写期间的分配 / GC 仪表（低配机排查用）--------------------------
     //
@@ -2458,10 +2321,11 @@ public partial class InkEngine
         PptComSource.Debug = args.Contains("--pptdebug");
         ComLate.Debug = PptComSource.Debug;
 
-        // ---- 笔迹预测：**已停用并清理**（2026-10-05）------------------------------
+        // ---- 笔迹预测：三档收口（2026-10-15）----------------------------------------
         // [删除 2026-10-05] `--predict/--predictms/--predictlead`（老预测系统）与
-        // `--predicttip`（预测点并入 mean2）的入口、喂点与渲染尾接线已全部移除；
-        // 算法文件 `Prediction/InkPredictor.cs` 保留。恢复见 `已停用-渲染实验.md` + `.revert/`。
+        // `--predicttip`（预测点并入 mean2）的入口、喂点与渲染尾接线已全部移除。
+        // [2026-10-15] 经典 B4 / Google / DL（`--predict3`）退役、不进编译；唯一实现 = v6。
+        // 备份 `.revert/2026-10-15-预测收口/`，说明 `调研/已停用-预测算法收口.md`。
 
         // ---- 书写期间的 GC 低延迟档 -------------------------------------------
         //
@@ -2590,64 +2454,26 @@ public partial class InkEngine
             // （实测：不同点数 = 0）。现在它只管它该管的——曲线化开不开。
             if (args.Contains("--nosmooth")) StrokeSmoothing.SetEnabled(false);
             if (args.Contains("--smooth")) StrokeSmoothing.SetEnabled(true);
-            // B4：自绘预测尾（2026-10-08 用户 90Hz 真机验收 → 当时设默认开；2026-10-09 改默认关；
-            // **2026-10-14 发布测试版起又改默认开**——三档算法收口、要让用户开箱就体验/切换。
+            // 自绘预测尾（2026-10-08 用户 90Hz 真机验收 → 2026-10-09 改默认关 →
+            // **2026-10-14 发布测试版起又改默认开**）。2026-10-15 收口：只剩改进版 v6
+            //（B4/Google/DL 退役、不进编译，见 `调研/已停用-预测算法收口.md`）。
             // 设置页「墨迹预测」开关，偏好落盘 `ui.predict2`（默认开，只写"关过"的那一份）；
             // `--nopredict2` 关、`--predict2` 强开，两者都给对照实验用、优先于偏好。
             _noPredictArg = args.Contains("--nopredict2");
             _forcePredictArg = args.Contains("--predict2");
-            Predict3Forced = args.Contains("--predict3");
-            // 预测算法（2026-10-14 加）：先读设置里记着的，再看 `--predengine` b4 / v6 / google。
-            // **默认 = 改进版 v6**；经典 B4 已被用户退役（2026-10-14）——旧偏好里的 0
-            // 自动迁到 v6，B4 只留 `--predengine b4` 这个对照口（会话级、不落盘）。
-            // 命令行**本会话有效、不落盘**——跑一次实验不该把用户选好的档改掉
-            //（要"记住"就在设置页点那一行，那里落盘）。
-            int pePref = int.TryParse(GetUiPref(PredictEnginePrefKey), out int peRaw) ? peRaw : -1;
-            if (pePref == 0)
-            {
-                pePref = 1;
-                Console.WriteLine("  [预测] 经典 B4 已退役：旧偏好 predictengine=0 → 改进版 v6");
-            }
-            PredictEngine = pePref < 0 ? 1 : Math.Clamp(pePref, 0, 2);
             for (int i = 0; i < args.Length - 1; i++)
-                if (args[i] == "--predengine")
-                    PredictEngine = args[i + 1].ToLowerInvariant() switch
-                    {
-                        "b4" or "0" => 0,
-                        "v6" or "1" => 1,
-                        "google" or "g" or "2" => 2,
-                        _ => PredictEngine,
-                    };
-            for (int i = 0; i < args.Length - 1; i++)
-            {
-                if (args[i] == "--predict3g" && float.TryParse(args[i + 1], out float g3))
-                    _predict3Gamma = Math.Clamp(g3, 0.5f, 1.2f);
-                if (args[i] == "--predict3weights")
-                    _predict3WeightsDir = args[i + 1];
                 if (args[i] == "--wetpred" && float.TryParse(args[i + 1], out float wp))
                     _wetPredScale = Math.Clamp(wp, 0f, 1f);
-            }
             ApplyPredictTailSetting();
-            // `--pred2ms N` 地平线（收进 8~200ms，默认 10）
-            for (int i = 0; i < args.Length - 1; i++)
-                if (args[i] == "--pred2ms" && float.TryParse(args[i + 1], out float p2ms))
-                    _predictor.HorizonMs = Math.Clamp(p2ms, InkPredictor.MinHorizonMs, InkPredictor.HardMaxHorizonMs);
-            // 预测时长档（2026-10-14 加，设置页「预测时长」/ `--predlatency N`）：偏好在前、
-            // 命令行在后（口径与「预测算法」一致：命令行是会话级对照、不落盘）。
-            // 顺序：先记下各引擎的"回归默认值"，再把档位统一应用上去（0 = 自动 = 各自默认）。
+            // 预测时长档（设置页「预测时长」/ `--predlatency N`）：偏好在前、命令行在后
+            //（命令行是会话级对照、不落盘）。0 = 自动 = v6 自己的默认（21.3ms）。
             _predV6DefaultLatency = _predictorV6.LatencyMs;
-            _googleDefaultInterval = _googlePredictor.PredictionIntervalMs;
             PredictHorizonMs = int.TryParse(GetUiPref(PredictHorizonPrefKey), out int phPref) && phPref >= 8
                 ? Math.Clamp(phPref, 8, 200) : 0;
             for (int i = 0; i < args.Length - 1; i++)
                 if (args[i] == "--predlatency" && int.TryParse(args[i + 1], out int pl))
                     PredictHorizonMs = Math.Clamp(pl, 8, 200);
-            _b4HorizonDefault = _predictor.HorizonMs;     // 自动档回归值（含 --pred2ms）
             ApplyPredictHorizon();
-            // B4.2：急转丢速阈值（度）。默认 60°；180 = 老行为（只挡完全反向）对照。
-            for (int i = 0; i < args.Length - 1; i++)
-                if (args[i] == "--turndeg" && float.TryParse(args[i + 1], out float td))
-                    PredictSharpTurnCos = MathF.Cos(Math.Clamp(td, 0f, 180f) * MathF.PI / 180f);
             // [停用] if (args.Contains("--inkmodel")) motionMode = StrokeMotionMode.Spring;
             for (int i = 0; i < args.Length - 1; i++)
             {
@@ -3558,18 +3384,9 @@ public partial class InkEngine
             // 调参时"我到底调上了没有"必须一眼看得见：这里印的是**生效值**，不是"可用/不可用"。
             // （2026-09-22 用户碰到的两个坑：--predictms 100 被静默夹到 15；--noinktrail 生效了没有
             //   只能靠猜。这两件事都不该靠猜。）
-            // [停用 2026-10-05] 笔迹预测（含 `--predicttip`）：用户决定"预测不接了"，
-            // 代码保留（PredictEnabled 恒 false），见 `已停用-渲染实验.md`。
-            // 2026-10-14：预测也三档（经典/v6/Google）——"我到底调上了没有"同样要一眼看得见。
+            // 2026-10-15 收口：只剩改进版 v6——算法行不再需要"三档"口径。
             Console.WriteLine(PredictTailEnabled
-                ? $"笔迹预测: 开（自绘尾；算法 {PredictEngine} = {PredictEngineName(PredictEngine)}；"
-                  + (PredictEngine switch
-                     {
-                         1 => $"地平线 {_predictorV6.HorizonMs:F0} ms；",
-                         2 => $"预测时长 {_googlePredictor.PredictionIntervalMs:F1} ms；",
-                         _ => $"地平线 {_predictor.HorizonMs:F0} ms；急转门槛 "
-                              + $"{MathF.Acos(Math.Clamp(PredictSharpTurnCos, -1f, 1f)) * 180f / MathF.PI:F0}°；",
-                     })
+                ? $"笔迹预测: 开（自绘尾；改进版 v6；地平线 {_predictorV6.HorizonMs:F0} ms；"
                   + "设置「墨迹预测」可关 / --nopredict2）"
                 : "笔迹预测: 关（设置 → 书写 → 墨迹预测；--predict2 可再开）");
             // 书写期间的 GC 低延迟档：低配上"偶发卡一下"的第一嫌疑就是它没生效。
@@ -5336,7 +5153,7 @@ public partial class InkEngine
     private void ArmDwellShape(Stroke ink, in ShapeGuess guess)
     {
         // B4.1（2026-10-08 真机）：**换笔必须复位预测尾**——下面会把 ActiveStroke 从
-        // 手绘笔迹换成图形，但 `_predictor` 还留着旧笔迹的末点/速度；不复位的话，
+        // 手绘笔迹换成图形，但 `_predictorV6` 还留着旧笔迹的末点/速度；不复位的话，
         // 下一帧 `UpdatePredictTail` 会把"预测点 − 图形末点"当尾巴偏移，从图形末端
         // 画出一条指向旧原点的长尾（用户真机："拖端点会飘出另外一条线段，慢慢长回
         // 变直线时的原始位置点、松手消失"）。原理与清单见 调研-预测尾-原理与注意点.md §二。
@@ -5642,7 +5459,7 @@ public partial class InkEngine
     internal void ReplayEndForTest() => EndStroke();
 
     /// <summary>预测器门触发计数（黑匣子回放报告用；每笔 Reset 清零，调用方自行累计）。</summary>
-    internal (int gates, int reversals) PredictGateCounters => (_predictor.GateFires, _predictor.ReversalFires);
+    internal (int gates, int reversals) PredictGateCounters => (_predictorV6.GateFires, _predictorV6.ReversalFires);
 
     /// <summary>自检用：状态机在哪一档。</summary>
     internal DwellState DwellStateForTest => _dwell.State;
@@ -10643,7 +10460,6 @@ public partial class InkEngine
             case KeyAction.ToggleBoard: SetBoardFromUi(!BoardOn); break;
             case KeyAction.ToggleHud: ShowHud = !ShowHud; break;
             case KeyAction.CycleWetMode: CycleWetMode(); break;
-            case KeyAction.CyclePredictEngine: CyclePredictEngine(); break;
             case KeyAction.CycleWidth: CycleWidth(); break;
             case KeyAction.ToggleKeyboardMode: SetKeyboardMode(!KeyboardMode); break;
             case KeyAction.Quit: _quit = true; break;
@@ -11259,7 +11075,6 @@ public partial class InkEngine
         PressureOn = PressureWidth.Enabled,      // 界面拿它显示「设置 → 书写 → 压感粗细」那个开关
         FineStrokeOn = RawInputCapture,          // 「设置 → 书写 → 精细笔迹」（原始输入补点）总开关
         PredictTailOn = PredictTailEnabled,      // 「设置 → 书写 → 墨迹预测」（自绘预测尾）总开关（默认开，2026-10-14 测试版起）
-        PredictEngine = PredictEngine,           // 「设置 → 书写 → 预测算法」（0 经典 / 1 改进版 v6 / 2 Google）
         PredictHorizonMs = PredictHorizonMs,     // 「设置 → 书写 → 预测时长」（0 自动 / 10 / 15 / 25 ms）
         WetMode = WetMode,                       // 「设置 → 墨迹 → 湿墨档位」（0..3；界面显示当前档）
         HistoryCount = BoardHistory.Count,       // 「更多 → 墨迹 → 历史板书」那一格的亮/灰
@@ -11466,9 +11281,6 @@ public partial class InkEngine
     /// <summary>「墨迹预测」（自绘预测尾）的偏好键（**默认开**，只写"关过"的那一份）。</summary>
     private const string PredictPrefKey = "predict2";
 
-    /// <summary>预测算法的偏好键（默认 0 经典，只写"换过"的那一份）。</summary>
-    private const string PredictEnginePrefKey = "predictengine";
-
     /// <summary>预测时长的偏好键（默认 0 = 自动不写，只写"设过"的档）。</summary>
     private const string PredictHorizonPrefKey = "predictms";
 
@@ -11518,73 +11330,24 @@ public partial class InkEngine
     /// <summary>启动时应用"墨迹预测"偏好（自检要单独调一次，理由同压感 / 精细笔迹）。</summary>
     internal void ApplyPredictPrefForTest() => ApplyPredictTailSetting();
 
-    // ---- 预测算法三档（2026-10-14 加：Google 移植 / 改进版 v6 进真机对照）--------
-    //
-    // 三个入口是**同一件事**（和湿墨档位同一套纪律）：
-    //   · 设置页「书写 → 预测算法」那一行（`SetPredictEngineFromUi`，落盘）；
-    //   · 全局键 `Ctrl+Alt+Shift+P` 循环（`CyclePredictEngine`，落盘）；
-    //   · 命令行 `--predengine b4|v6|google`（**本会话有效、不落盘**——对照实验入口）。
-    // 引擎是权威：切档立刻生效（复位三份预测器）、打一行说明；界面只显示 `UiState.PredictEngine`。
-
-    /// <summary>档位的显示名（日志 / 设置行悬停提示用）。</summary>
-    internal static string PredictEngineName(int e) => e switch
-    {
-        1 => "改进版 v6（限幅 + 方向自适应）",
-        2 => "Google ink-stroke-modeler（置信度）",
-        _ => "经典 B4（已退役，仅 --predengine b4 对照）",
-    };
-
-    /// <summary>热键/设置行：切下一档（v6 ⇄ Google；B4 退役后不在循环里，
-    /// 当前若是 0（仅命令行可达）→ 切回 v6）。</summary>
-    internal void CyclePredictEngine() => SetPredictEngine(PredictEngine == 1 ? 2 : 1, "Ctrl+Alt+Shift+P");
-
-    /// <summary>界面点「设置 → 书写 → 预测算法」：直接定到某一档（0..2）。</summary>
-    internal void SetPredictEngineFromUi(int e) => SetPredictEngine(e, "设置 → 书写 → 预测算法");
-
-    /// <summary>
-    /// 定档（**引擎是权威**）：立刻复位三份预测器（换档不回喂旧状态——不然换回来
-    /// 还是上一笔的速度）、落盘、打一行。默认 = 1（改进版 v6）；0（经典 B4）已退役、
-    /// 只能从命令行进来做对照。
-    /// ⚠ 换档**不动** `PredictTailEnabled`（总开关在上一行）：档位只决定"打开时用哪种"。
-    /// </summary>
-    private void SetPredictEngine(int e, string from)
-    {
-        PredictEngine = Math.Clamp(e, 0, 2);
-        ResetPredictTail();
-        if (!SelfCheckMode)
-        {
-            try
-            {
-                SetUiPref(PredictEnginePrefKey, PredictEngine.ToString());
-                FlushSettings();     // 立刻落盘：用户是"按了一下"，不能丢
-            }
-            catch (Exception ex) { Console.WriteLine($"  [预测] 记算法失败（本次仍生效）：{ex.Message}"); }
-        }
-        Console.WriteLine($"[预测] 算法 {PredictEngine}：{PredictEngineName(PredictEngine)}（{from}）"
-                          + (PredictTailEnabled ? "" : "。注意「墨迹预测」当前是关的，打开这一项才看得见"));
-        NotifyUiStateChanged();
-    }
-
     // ---- 预测时长档（2026-10-14 加：把"补多少毫秒"摆到设置页，真机对着屏幕调）----
     //
-    // 为什么统一：三个引擎的叫法不同（B4 = `HorizonMs` / v6 = `LatencyMs` / Google =
-    // `PredictionIntervalMs`），语义是同一件事——"往前补多长"。微软的规则是
-    // 「预测 = 本机实测端到端延迟」（60Hz≈17~21ms / 120Hz≈10~12ms，见延时实测文档），
-    // 这一行就是把那个刻度盘交到用户手里。
-    // 三个入口：设置页「书写 → 预测时长」（自动→10→15→25 循环，落盘）/
-    //           `--predlatency N`（本会话对照、不落盘）/ "自动"= 各引擎出厂默认。
+    // 为什么要有它：微软的规则是「预测 = 本机实测端到端延迟」
+    //（60Hz≈17~21ms / 120Hz≈10~12ms，见延时实测文档），这一行就是把那个刻度盘交到用户手里。
+    // 2026-10-15 收口后只作用于 v6（`SetMeasuredLatency`：地平线与自适应限幅一起走）。
+    // 两个入口：设置页「书写 → 预测时长」（自动→10→15→25 循环，落盘）/
+    //           `--predlatency N`（本会话对照、不落盘）/ "自动" = v6 出厂默认。
 
     /// <summary>时长的显示名（日志 / 设置行用）。</summary>
-    internal static string PredictHorizonName(int ms) => ms <= 0 ? "自动（各引擎默认）" : $"{ms} ms";
+    internal static string PredictHorizonName(int ms) => ms <= 0 ? "自动（v6 默认）" : $"{ms} ms";
 
     /// <summary>界面点「设置 → 书写 → 预测时长」：0 = 自动 / 10 / 15 / 25（点一下换一档）。</summary>
     internal void SetPredictHorizonFromUi(int ms) => SetPredictHorizon(ms, "设置 → 书写 → 预测时长");
 
     /// <summary>
-    /// 定档（**引擎是权威**）：立刻应用到三个引擎、落盘、打一行。
-    /// 0 = 自动（回到各引擎自己的默认：B4 10ms、v6 与 Google 21.3ms；B4 的 `--pred2ms`
-    /// 也算"自动"的一部分）；10/15/25 = 三引擎统一覆盖。
-    /// ⚠ 不动「墨迹预测」总开关与「预测算法」档——三者各管各的。
+    /// 定档（**引擎是权威**）：立刻应用到 v6、落盘、打一行。
+    /// 0 = 自动（回到 v6 自己的默认 21.3ms）；10/15/25 = 覆盖。
+    /// ⚠ 不动「墨迹预测」总开关（那是另一行）。
     /// </summary>
     private void SetPredictHorizon(int ms, string from)
     {
@@ -11604,30 +11367,21 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
-    /// <summary>把 `PredictHorizonMs` 落到三个引擎上（0 = 各自默认）。</summary>
+    /// <summary>把 `PredictHorizonMs` 落到 v6 上（0 = 回归出厂默认）。</summary>
     private void ApplyPredictHorizon()
     {
         int v = PredictHorizonMs;
-        _predictor.HorizonMs = v > 0
-            ? Math.Clamp(v, InkPredictor.MinHorizonMs, InkPredictor.HardMaxHorizonMs)
-            : _b4HorizonDefault;
         _predictorV6.SetMeasuredLatency(v > 0 ? v : _predV6DefaultLatency);
-        _googlePredictor.PredictionIntervalMs = v > 0 ? v : _googleDefaultInterval;
     }
 
-    /// <summary>自检用：当前**实际生效**的预测时长（按当前算法档读对应引擎）。</summary>
-    internal double PredictHorizonForTest => PredictEngine switch
-    {
-        1 => _predictorV6.HorizonMs,
-        2 => _googlePredictor.PredictionIntervalMs,
-        _ => _predictor.HorizonMs,
-    };
+    /// <summary>自检用：当前**实际生效**的预测时长（v6 唯一预测器）。</summary>
+    internal double PredictHorizonForTest => _predictorV6.HorizonMs;
 
     /// <summary>**默认开**（2026-10-14 发布测试版起；2026-10-09 曾定默认关）；命令行为对照实验优先
     /// （`--nopredict2` 关 / `--predict2` 开），否则听偏好（偏好写过 "0" 才关）。</summary>
     private void ApplyPredictTailSetting()
         => PredictTailEnabled = !_noPredictArg
-           && (_forcePredictArg || Predict3Forced || GetUiPref(PredictPrefKey) != "0");
+           && (_forcePredictArg || GetUiPref(PredictPrefKey) != "0");
 
     /// <summary>
     /// 自检用：把"压感粗细"的偏好**重新应用一次**——模拟"重开软件"里读偏好那一步。
