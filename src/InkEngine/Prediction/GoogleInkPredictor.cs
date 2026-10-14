@@ -22,8 +22,7 @@
 //  计时单位：毫秒（对外）／秒（内部）；长度单位：屏幕像素
 //
 //  ==== 本仓修改（2026-10-14，真机排查后的修复；与包内原件及 Python 参考实现的差异）====
-//  排查背景：真机上"预测尾跑到后面/方向反了"。对照上游 + 复现（见
-//  `调研/调研-预测算法三档-手感对照与参数表.md` §九），修四处：
+//  第一波（白天，真机"预测尾跑到后面/方向反了"）——见 `调研/调研-预测算法三档-...md` §九：
 //   ① γV 旅行速度单位：原来拿 px/s 比 px/ms 阈值（0.015/0.075）→ 慢速档恒 1、从未生效。
 //      改为按 px/ms 计算后再比（与阈值字段的注释语义一致）。
 //   ② WobbleSmoother 速度门限同病（0.02/0.03 对 px/s）→ 抖动平滑事实上关闭。改按 px/ms。
@@ -32,6 +31,17 @@
 //      （实测 0.14~0.52px）正中间 → 前推段在"5 点/0 点"间闪烁（400 帧里 69 帧归零）。
 //      校准到 1.0px（=2σ）后归零消失、前推点数下限 2。扫描数据见 §九。
 //   另：`_lastIn*` 改存平滑后的位置（上游存的是 corrected_position，不是原始输入）。
+//
+//  第二波（当晚，与官方 C++ 逐点对拍）——见 §九的 9.7：
+//   ⑤ PositionModeler 推进方式（官方 UpdateAlongLinearPath）：锚点在**上一平滑点 → 本点**
+//      之间按 (1..n)/n 线性插值、每步 dt = 总时长/n。原来锚点恒为当前点、固定 1/rate 步长
+//      连推 n 步 → 等效把 5ms 输入按 8.3ms 推进，弹簧轨迹被扭（对拍差 ~20px）。
+//   ⑥ MinOutputRate 240 → **180**（官方测试/示例的参考值；预测点密度、前推段时长随它变）。
+//   ⑦ WobbleSmoother 算法体换官方忠实实现（窗口内**按前段时长加权**的平均位置；旧版是
+//      "最近两点中点"的简化版）。阈值语义保持本仓的 px/ms。
+//   ⑧ 澄清：另一份排查报告里说的"`MaxTailLength=12` 安全阀把预测点投影到圆上"——本版
+//      **没有**这个安全阀（预测点直接写坐标，不塌缩）；那是别的修改版引入的，不是这里。
+//
 //  ⚠ `--predengine google` 的"接入层修复"（丢掉追赶段）在 Engine.UpdatePredictTail，
 //    不在本文件——那是"上游笔尖 vs 我们的原始笔尖"的时间线问题，属接入不属算法。
 // ============================================================================
@@ -245,11 +255,16 @@ namespace InkPredict.Google
     // ========================================================================
     internal sealed class WobbleSmoother
     {
-        private const int Cap = 64;
+        private const int Cap = 128;
         private readonly double[] _px = new double[Cap];
         private readonly double[] _py = new double[Cap];
+        private readonly double[] _wpx = new double[Cap];   // 位置 × 前段时长（官方 weighted_position）
+        private readonly double[] _wpy = new double[Cap];
+        private readonly double[] _dist = new double[Cap];  // 与前一点的距离（官方 distance）
+        private readonly double[] _dur = new double[Cap];   // 前段时长（秒）
         private readonly double[] _pt = new double[Cap];
         private int _head, _count;
+        private double _sumWx, _sumWy, _sumDist, _sumDur;
 
         public bool Enabled;
         public double TimeoutSec;
@@ -262,37 +277,68 @@ namespace InkPredict.Google
             SpeedFloor = speedFloor; SpeedCeiling = speedCeiling;
         }
 
-        public void Reset() { _head = 0; _count = 0; }
+        public void Reset()
+        {
+            _head = 0; _count = 0;
+            _sumWx = _sumWy = _sumDist = _sumDur = 0;
+        }
 
+        /// <summary>
+        /// 官方 WobbleSmoother::Update 的忠实实现（2026-10-14 第二波换，本仓修改⑦）：
+        /// 窗口内**按前段时长加权的平均位置**，再按平均速度在"均值 ↔ 原始点"之间插值——
+        /// 慢 → 用均值（平滑抖动）；快 → 用原始点（不加滞后）。旧版是"最近两点的中点"简化版。
+        /// 生命周期对齐官方：Reset 后**第一个点当即时锚**（返回原始值、不进统计，
+        /// 对应官方 Reset(pos0,t0)），之后每个点按官方公式统计。阈值保持本仓 px/ms 语义。
+        /// </summary>
         public void Update(double x, double y, double t, out double ox, out double oy)
         {
             if (!Enabled) { ox = x; oy = y; return; }
 
-            _px[_head] = x; _py[_head] = y; _pt[_head] = t;
-            _head = (_head + 1) % Cap;
-            if (_count < Cap) _count++;
+            if (_count == 0)
+            {
+                // 官方 Reset(pos0,t0)：起点只存不统计（weighted/distance/duration 全 0）。
+                _px[0] = x; _py[0] = y; _wpx[0] = _wpy[0] = _dist[0] = _dur[0] = 0; _pt[0] = t;
+                _head = 0; _count = 1;
+                ox = x; oy = y;
+                return;
+            }
 
-            while (_count > 1 && (t - _pt[(_head - _count + Cap) % Cap]) > TimeoutSec)
-                _count--;
+            // 保险：按时间剪枝后几乎不会满；真满了丢最旧（官方式"先减后加"）。
+            if (_count == Cap)
+            {
+                _sumWx -= _wpx[_head]; _sumWy -= _wpy[_head];
+                _sumDist -= _dist[_head]; _sumDur -= _dur[_head];
+                _head = (_head + 1) % Cap; _count--;
+            }
 
-            if (_count < 2) { ox = x; oy = y; return; }
+            int tail = (_head + _count) % Cap;
+            int prev = (_head + _count - 1) % Cap;
+            double delta = t - _pt[prev];
+            double ddx = x - _px[prev], ddy = y - _py[prev];
+            _px[tail] = x; _py[tail] = y;
+            _wpx[tail] = x * delta; _wpy[tail] = y * delta;
+            _dist[tail] = Math.Sqrt(ddx * ddx + ddy * ddy);
+            _dur[tail] = delta; _pt[tail] = t;
+            _sumWx += _wpx[tail]; _sumWy += _wpy[tail];
+            _sumDist += _dist[tail]; _sumDur += _dur[tail];
+            _count++;
 
-            int i0 = (_head - _count + Cap) % Cap;
-            int i1 = (_head - 1 + Cap) % Cap;
-            int i2 = (_head - 2 + Cap) % Cap;
-            double dt = Math.Max(_pt[i1] - _pt[i0], 1e-9);
-            double dx = _px[i1] - _px[i0], dy = _py[i1] - _py[i0];
-            double speed = Math.Sqrt(dx * dx + dy * dy) / dt;   // px/s
+            // 官方剪枝：while (front.time < time - timeout) 弹队首（至少留最新那个）。
+            while (_count > 1 && _pt[_head] < t - TimeoutSec)
+            {
+                _sumWx -= _wpx[_head]; _sumWy -= _wpy[_head];
+                _sumDist -= _dist[_head]; _sumDur -= _dur[_head];
+                _head = (_head + 1) % Cap; _count--;
+            }
 
-            // 2026-10-14 修单位：SpeedFloor/SpeedCeiling 的语义是 px/ms（0.02/0.03），
-            // 原来直接拿 px/s 比 px/ms 阈值——除"几乎完全静止"外 amount 恒 0，
-            // 抖动平滑等于没开。这里换成 px/ms 再比（快于上界仍是"不平滑"，符合设计）。
-            double speedMs = speed / 1000.0;
-            double amount = 1.0 - Num.Normalize01(SpeedFloor, SpeedCeiling, speedMs);
-            double rx = 0.5 * (_px[i1] + _px[i2]);
-            double ry = 0.5 * (_py[i1] + _py[i2]);
-            ox = rx * amount + x * (1.0 - amount);
-            oy = ry * amount + y * (1.0 - amount);
+            if (_sumDur <= 0) { ox = x; oy = y; return; }   // 同刻多点（批内时间相同）时退回原始值
+            double avgX = _sumWx / _sumDur, avgY = _sumWy / _sumDur;
+            double avgSpeedPxPerSec = _sumDist / _sumDur;
+            // 阈值语义：px/ms（本仓 0.02/0.03），换算后再 Normalize01。
+            double speedMs = avgSpeedPxPerSec / 1000.0;
+            double amt = Num.Normalize01(SpeedFloor, SpeedCeiling, speedMs);
+            ox = avgX + (x - avgX) * amt;
+            oy = avgY + (y - avgY) * amt;
         }
     }
 
@@ -323,7 +369,7 @@ namespace InkPredict.Google
 
     // ========================================================================
     //  5. 主类：完整管线
-    //     输入 → 抖动平滑 → 位置模型（按 240Hz 上采样推进）→ 卡尔曼预测
+    //     输入 → 抖动平滑 → 位置模型（按 MinOutputRate 上采样推进；默认 180Hz）→ 卡尔曼预测
     //     预测 = 追赶段（连到估计位置）+ 前推段（三次多项式，点数由置信度决定）
     // ========================================================================
     public sealed class GoogleInkPredictor
@@ -340,8 +386,9 @@ namespace InkPredict.Google
 
         /// <summary>期望预测时长（毫秒）= 预测尾的长度上限。建议 = 本机实测端到端延迟。</summary>
         public double PredictionIntervalMs = 21.3;
-        /// <summary>输出采样率（Hz）。</summary>
-        public double MinOutputRate = 240.0;
+        /// <summary>输出采样率（Hz）。官方测试/示例的参考值 = **180**（2026-10-14 第二波对齐，
+        /// 本仓修改⑥；原来是 240——预测点密度与前推段时长都会跟着它变）。</summary>
+        public double MinOutputRate = 180.0;
         /// <summary>追赶段速度下限（像素/毫秒），避免除零。</summary>
         public double MinCatchupVelocity = 1e-3;
 
@@ -459,13 +506,24 @@ namespace InkPredict.Google
             }
 
             double dtIn = Math.Max(t - _lastInT, 1e-6);      // 毫秒
-            double sampleDtSec = 1.0 / MinOutputRate;
 
             if (EnablePositionModeler)
             {
-                int n = Math.Max((int)Math.Ceiling(dtIn / 1000.0 / sampleDtSec), 1);
-                if (n > 240) n = 240;                        // 断档保护
-                for (int i = 0; i < n; i++) _pm.Step(sx, sy, sampleDtSec);
+                // 官方 NumberOfStepsBetweenInputs：n = ceil(Δ秒 × min_output_rate)（同一个式子）。
+                int n = Math.Max((int)Math.Ceiling(dtIn / 1000.0 * MinOutputRate), 1);
+                if (n > 240) n = 240;                        // 断档保护（官方靠 max_outputs_per_call 报错；我们夹住）
+                double stepSec = dtIn / 1000.0 / n;          // 官方：每步 dt = 总时长 / n
+                // 官方 UpdateAlongLinearPath（2026-10-14 第二波修，本仓修改⑤）：锚点在
+                // **上一平滑点 → 本点**之间按 (1..n)/n 线性插值推进。原来锚点恒为当前点、
+                // 按固定 1/rate 步长连推 n 步——等效把 5ms 输入按 8.3ms 推进，弹簧轨迹被扭，
+                // 与官方 C++ 逐点对拍差 ~20px（官方源码见 position_modeler.h）。
+                for (int i = 1; i <= n; i++)
+                {
+                    double k = (double)i / n;
+                    double ax = _lastInX + (sx - _lastInX) * k;
+                    double ay = _lastInY + (sy - _lastInY) * k;
+                    _pm.Step(ax, ay, stepSec);
+                }
             }
 
             _xp.Update(sx); _yp.Update(sy);
