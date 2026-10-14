@@ -777,6 +777,12 @@ internal sealed partial class OverlayWindow : IDisposable
     /// <summary>
     /// 把活动笔的**真实已收到点**画到独立湿墨 surface。只重画本笔包围盒，
     /// 不触碰主交换链；因此 Win10 没有系统轨迹时也有一条低开销的“委托式”湿墨路径。
+    ///
+    /// 更新矩形语义（2026-10-13 修，真机“密集断墨”的根因）：`BeginDraw` 拿到的
+    /// 临时表面**不含旧内容**（MSDN：应用必须把更新矩形内每一个像素都重画），
+    /// 所以不能“擦掉整块、只画新增的那一段”——写得慢/字密时，矩形里更早的那截
+    /// 湿墨会被擦掉又没重画，屏幕上就在笔尖后面出现高频断口。
+    /// 现在每次更新都在矩形内按“**整笔 ∩ 矩形**”重画：哪一段伸进矩形就画哪一段。
     /// </summary>
     public bool UpdateFastWet(Stroke stroke)
     {
@@ -790,12 +796,17 @@ internal sealed partial class OverlayWindow : IDisposable
             ClearFastWetBounds(_fastWetLastBounds);
             _fastWetLastBounds = RectF.Empty;
         }
+
+        // 本次要重画的画布矩形：相机变了/第一帧 → 整条；否则 → 新点加上一个旧点
+        //（新墨只可能出现在这里）。矩形**以外**的表面内容是保留的，不去碰。
         int start = cameraChanged ? 0 : Math.Max(0, _fastWetLastPointCount - 1);
         var segmentBounds = RectF.Empty;
         for (int i = start; i < stroke.Points.Count; i++)
             segmentBounds.Add(stroke.Points[i].X, stroke.Points[i].Y);
         if (segmentBounds.IsEmpty) return false;
-        float pad = MathF.Max(2f, stroke.Width * 0.75f + 2f);
+        // 留白按**最粗处**算（压力满压时半宽 = 标称宽）：早先按 0.75× 标称留白，
+        // 重压写的粗边会被更新矩形的边界裁掉——那是另一种“断墨”。
+        float pad = stroke.MaxHalfWidth + 2f;
         var clip = CanvasRectToWindow(segmentBounds.Inflate(pad));
         // CanvasRectToWindow 返回的是本窗口局部坐标；FastWet surface 也是局部坐标。
         clip.MinX = MathF.Max(0, clip.MinX);
@@ -806,7 +817,6 @@ internal sealed partial class OverlayWindow : IDisposable
 
         try
         {
-            // Surface 内容不是保留式的，更新矩形内必须完整覆盖；按本笔新旧包围盒并集清除后重画。
             var rect = new Vortice.RawRect(
                 Math.Max(0, (int)MathF.Floor(clip.MinX)),
                 Math.Max(0, (int)MathF.Floor(clip.MinY)),
@@ -816,6 +826,7 @@ internal sealed partial class OverlayWindow : IDisposable
 
             var ctx = _fastWetSurface.BeginDraw<ID2D1DeviceContext>(rect, out var offset);
             using var brush = ctx.CreateSolidColorBrush(_fastWetColor, null);
+            using var clear = ctx.CreateSolidColorBrush(Transparent, null);
             try
             {
                 // BeginDraw exposes a temporary target for the update rectangle. Map
@@ -824,8 +835,25 @@ internal sealed partial class OverlayWindow : IDisposable
                 ctx.Transform = Matrix3x2.CreateTranslation(
                     -OriginX + ViewOffsetX + offset.X - rect.Left,
                     -OriginY + ViewOffsetY + offset.Y - rect.Top);
-                ctx.Clear(Transparent);
-                DrawFastWetStroke(ctx, brush, stroke, start, cameraChanged);
+
+                // 更新矩形在**画布坐标**里的那一块（裁剪会随上面的变换映射回目标矩形）。
+                var clipCanvas = new RectF
+                {
+                    MinX = rect.Left + OriginX - ViewOffsetX,
+                    MinY = rect.Top + OriginY - ViewOffsetY,
+                    MaxX = rect.Right + OriginX - ViewOffsetX,
+                    MaxY = rect.Bottom + OriginY - ViewOffsetY,
+                };
+                var clipRaw = new Vortice.RawRectF(clipCanvas.MinX, clipCanvas.MinY,
+                                                   clipCanvas.MaxX, clipCanvas.MaxY);
+                ctx.PushAxisAlignedClip(clipRaw, AntialiasMode.Aliased);
+                // `Clear()` 不受裁剪影响（会把整个目标清掉），所以用 Copy 混合的
+                // 填充来“擦”——和主渲染那条路同一个手法（见 RasterizeTile 的注释）。
+                ctx.PrimitiveBlend = PrimitiveBlend.Copy;
+                ctx.FillRectangle(clipRaw, clear);
+                ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
+                DrawFastWetStroke(ctx, brush, stroke, clipCanvas);
+                ctx.PopAxisAlignedClip();
                 ctx.Transform = Matrix3x2.Identity;
             }
             finally
@@ -851,9 +879,16 @@ internal sealed partial class OverlayWindow : IDisposable
         }
     }
 
-    /// <summary>应用侧湿墨不依赖系统轨迹；它只重画当前活动笔画的真实点。</summary>
+    /// <summary>
+    /// 在**本次更新矩形内**重画湿墨：把整条笔迹里**伸进矩形**的段和圆头端点全部画一遍。
+    ///
+    /// 为什么不是“只画新增的段”（2026-10-13 踩过）：DComp 的更新矩形不保留旧内容，
+    /// 矩形里任何没被重画的旧墨都会被擦掉。只有“矩形 → 完整内容”这一条纯函数，
+    /// 才能保证矩形边界两侧接得上（密集书写/折返时的断墨就是从那里来的）。
+    /// 越界部分由调用方推的裁剪矩形裁掉；粗筛留白用整笔最粗的半宽。
+    /// </summary>
     private void DrawFastWetStroke(ID2D1DeviceContext ctx, ID2D1SolidColorBrush brush,
-                                   Stroke stroke, int start, bool fullRedraw)
+                                   Stroke stroke, in RectF clipCanvas)
     {
         var pts = stroke.Points;
         if (pts.Count == 0) return;
@@ -863,34 +898,45 @@ internal sealed partial class OverlayWindow : IDisposable
                 ? MathF.Max(1f, PressureWidth.HalfWidth(stroke.Width, p) * 2f)
                 : MathF.Max(1f, stroke.Width);
 
-        if (fullRedraw && pts.Count == 1)
+        if (pts.Count == 1)
         {
             var p = new Vector2(pts[0].X, pts[0].Y);
             float r = WidthAt(pts[0].P) * 0.5f;
-            ctx.FillEllipse(new Ellipse(p, r, r), brush);
+            if (CircleHits(p, r, clipCanvas)) ctx.FillEllipse(new Ellipse(p, r, r), brush);
             return;
         }
 
-        int firstSegment = Math.Max(1, start);
-        for (int i = firstSegment; i < pts.Count; i++)
+        float hitPad = stroke.MaxHalfWidth + 1f;   // 任何一段的墨都不会伸得比它更远
+        for (int i = 1; i < pts.Count; i++)
         {
-            var a = new Vector2(pts[i - 1].X, pts[i - 1].Y);
-            var b = new Vector2(pts[i].X, pts[i].Y);
+            float ax = pts[i - 1].X, ay = pts[i - 1].Y;
+            float bx = pts[i].X, by = pts[i].Y;
+            var seg = new RectF
+            {
+                MinX = MathF.Min(ax, bx) - hitPad,
+                MinY = MathF.Min(ay, by) - hitPad,
+                MaxX = MathF.Max(ax, bx) + hitPad,
+                MaxY = MathF.Max(ay, by) + hitPad,
+            };
+            if (!seg.Intersects(clipCanvas)) continue;
             float width = WidthAt((pts[i - 1].P + pts[i].P) * 0.5f);
-            ctx.DrawLine(a, b, brush, width, Gfx.Round);
+            ctx.DrawLine(new Vector2(ax, ay), new Vector2(bx, by), brush, width, Gfx.Round);
         }
 
-        // Round caps keep the real-point wet layer visually continuous at both ends.
-        var last = new Vector2(pts[^1].X, pts[^1].Y);
-        float r1 = WidthAt(pts[^1].P) * 0.5f;
-        if (fullRedraw)
-        {
-            var first = new Vector2(pts[0].X, pts[0].Y);
-            float r0 = WidthAt(pts[0].P) * 0.5f;
-            ctx.FillEllipse(new Ellipse(first, r0, r0), brush);
-        }
-        ctx.FillEllipse(new Ellipse(last, r1, r1), brush);
+        // 两端的圆头按**端点压力**补（段描边用的是中点压力的宽度，端头半径会差一点）；
+        // 只有落在矩形里的那个端点才要补——另一个在矩形外，之前已经画对了。
+        var p0 = new Vector2(pts[0].X, pts[0].Y);
+        float r0 = WidthAt(pts[0].P) * 0.5f;
+        if (CircleHits(p0, r0, clipCanvas)) ctx.FillEllipse(new Ellipse(p0, r0, r0), brush);
+        var pn = new Vector2(pts[^1].X, pts[^1].Y);
+        float rn = WidthAt(pts[^1].P) * 0.5f;
+        if (CircleHits(pn, rn, clipCanvas)) ctx.FillEllipse(new Ellipse(pn, rn, rn), brush);
     }
+
+    /// <summary>圆（圆心 + 半径）和矩形有没有交叠——湿墨粗筛用。</summary>
+    private static bool CircleHits(Vector2 c, float r, in RectF box)
+        => c.X + r >= box.MinX && c.X - r <= box.MaxX
+        && c.Y + r >= box.MinY && c.Y - r <= box.MaxY;
 
     private void ClearFastWetBounds(RectF bounds)
     {
@@ -1192,12 +1238,22 @@ internal sealed partial class OverlayWindow : IDisposable
                 Gfx.Device.QueryInterface<IDXGIDevice>());
         }
         _dcomp.CreateTargetForHwnd(Hwnd, true, out _target).CheckError();
-        // 根视觉**不装内容**，交换链放在子视觉里 —— 这样后面墨迹轨迹的视觉才能叠在它上面
-        // （同一层里靠后的视觉盖住靠前的）。2026-10-10 试验C 按 Chromium 的结构改。
+        // 根视觉**不装内容**，交换链放在子视觉里 —— 这样湿墨才有地方叠在它上面。
+        // 2026-10-10 试验C 按 Chromium 的结构改；2026-10-13 修正层序（见下一条注释）。
+        //
+        // ⚠ `AddVisual` 的 insertAbove 语义**和直觉相反**（MSDN 原文：referenceVisual 为
+        //   NULL 时，"If insertAbove is TRUE, the new child visual is above no sibling,
+        //   therefore it is rendered below all of its siblings"）：
+        //   · insertAbove:false ＋ 参照 null → 加到**所有兄弟之上**；
+        //   · insertAbove:true  ＋ 参照 null → 加到**所有兄弟之下**。
+        //   湿墨视觉（系统轨迹 / FastWet 替身）必须叠在交换链**上面**——以前这里用了
+        //   true（=压在最下面），开着不透明白板时按住书写屏幕上一个湿墨像素都没有
+        //   （2026-10-13 实测：白板 + 系统轨迹 0 像素、白板 + FastWet 0 像素，桌面都正常），
+        //   因为白板的底色把下面的一切都盖住了；松手干墨进文档后才重新可见。
         _visual = _dcomp.CreateVisual();
         _swapVisual = _dcomp.CreateVisual();
         _swapVisual.SetContent(_swapChain).CheckError();
-        _visual.AddVisual(_swapVisual, true, null).CheckError();
+        _visual.AddVisual(_swapVisual, false, null).CheckError();
         _target.SetRoot(_visual).CheckError();
         _dcomp.Commit().CheckError();
 
@@ -1229,7 +1285,9 @@ internal sealed partial class OverlayWindow : IDisposable
                         {
                             _inkVisual = _dcomp.CreateVisual();
                             _inkVisual.SetContent(_inkTrail).CheckError();
-                            _visual.AddVisual(_inkVisual, true, null).CheckError();
+                            // insertAbove:false + 参照 null = 加到所有兄弟**之上**
+                            //（语义说明见 CreateDeviceResources 里 AddVisual 那一段）。
+                            _visual.AddVisual(_inkVisual, false, null).CheckError();
                             _dcomp.Commit().CheckError();
                             InkTrailNote += "（已挂视觉树）";
                         }
@@ -1333,7 +1391,9 @@ internal sealed partial class OverlayWindow : IDisposable
                 Format.B8G8R8A8_UNorm, Vortice.DXGI.AlphaMode.Premultiplied);
             _fastWetVisual = _dcomp.CreateVisual();
             _fastWetVisual.SetContent(_fastWetSurface).CheckError();
-            _visual.AddVisual(_fastWetVisual, true, null).CheckError();
+            // insertAbove:false + 参照 null = 加到所有兄弟**之上**（湿墨必须浮在
+            // 交换链上面；语义说明见 CreateDeviceResources 里 AddVisual 那一段）。
+            _visual.AddVisual(_fastWetVisual, false, null).CheckError();
             _dcomp2.Commit().CheckError();
             _fastWetReady = true;
             InkTrailNote += "；应用侧湿墨层可用";

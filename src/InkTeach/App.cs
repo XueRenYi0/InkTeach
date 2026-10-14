@@ -163,6 +163,13 @@ internal sealed partial class App : InkEngine.InkEngine
             DocStore.RootOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck-doc");
             try { if (Directory.Exists(DocStore.RootOverride)) Directory.Delete(DocStore.RootOverride, true); } catch { }
         }
+        // 板书历史（0 号页快照）同理：自检绝不写用户的历史目录。
+        if (_selfCheckMode && BoardHistory.DirOverride == null)
+        {
+            BoardHistory.DirOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck-history");
+            try { if (Directory.Exists(BoardHistory.DirOverride)) Directory.Delete(BoardHistory.DirOverride, true); } catch { }
+            BoardHistory.CloseSession();
+        }
         // 自检里**不弹"另存为"对话框**：它会阻塞等消息，而自检是自己抽消息推进的，
         // 一弹就卡到超时（`--selftest` 会逐个点操作条上的按钮，点到"导出"就中招）。
         // 导出那条链由 `--iotest` 走"不弹框、直接写指定路径"验，见 ExportSelectionToPathForTest。
@@ -533,6 +540,48 @@ internal sealed partial class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             InkTrailTest(args.Contains("--touch"));   // `--trailtest --touch` = 合成触摸对照
+        }
+        else if (mode == "--fastwettest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            // 应用侧湿墨（FastWet）屏幕自检：关掉系统轨迹，查"慢写断口"和"白板隐身"。
+            // `--fastwettest --board` = 不透明白底下的那条（2026-10-13 的回归就出在这）。
+            FastWetTest();
+        }
+        else if (mode == "--historytest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            // 板书历史自检：快照只含笔迹（截图不进）/ 总量轮转 / 从历史找回 / 清除可撤销。
+            BoardHistoryTest();
+        }
+        else if (mode == "--lagtest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            // 湿墨延时对照：主绘 / FastWet / 系统轨迹 / 产品组合四档，量墨尖落后与跳变响应。
+            WetLagTest();
+        }
+        else if (mode == "--camlag")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            // 手机 120Hz 录像对照：同一套匀速拖动跑各湿墨档，屏上有档位横条 + 50px 刻度尺，
+            // 拍下来量"系统光标尖 ↔ 墨尖"的距离（÷ 速度 = 毫秒）。
+            string which = args.Length > 1 && !args[1].StartsWith("--") ? args[1] : "all";
+            int camSpeed = 1200, camSweeps = 4;
+            double camLive = 0;
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i] == "--speed" && i + 1 < args.Length && int.TryParse(args[i + 1], out var vSpeed))
+                    camSpeed = Math.Clamp(vSpeed, 100, 6000);
+                if (args[i] == "--sweeps" && i + 1 < args.Length && int.TryParse(args[i + 1], out var vSweeps))
+                    camSweeps = Math.Clamp(vSweeps, 1, 20);
+                if (args[i] == "--live" && i + 1 < args.Length && double.TryParse(args[i + 1], out var vLive))
+                    camLive = Math.Clamp(vLive, 3, 600);
+            }
+            CamLagTest(which, camSpeed, camSweeps, camLive);
         }
         else if (mode == "--longrun")
         {
@@ -1178,7 +1227,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --conicshow [路径]  出图：双曲线两档（有/无渐近线）+ 椭圆两档（有/无焦点三角形）");
         Console.WriteLine("                      （第三行顺带出**旋转体那一族**：圆柱 / 圆锥 / 圆台 / 球）");
         Console.WriteLine("  --pagetest          整屏翻页自检（一屏 = 一页：页高 = 视口高、只动相机、到顶就停）");
-        Console.WriteLine("  --ppttest           PPT 模式自检（假页码源：隔离 / 页内滚动 / 清空只清本页 / 退出写盘 / 再进读回）");
+        Console.WriteLine("  --ppttest           PPT 模式自检（假页码源：隔离 / 页内滚动 / 清除全部墨迹=所有页且可撤销 / 退出写盘 / 再进读回）");
         Console.WriteLine("  --pptprobe [秒]     PPT 连接探针（真机跑：打开 PPT 按 F5，看连不连得上）");
         Console.WriteLine("                     加 --pptcmd 会实际按 Next/Prev/GotoSlide 验证命令；--pptdebug 打 ROT 细节");
         Console.WriteLine("  --iotest [路径]     导出自检（选中 → PNG 透明底 / JPEG 白底；给路径就保留文件）");
@@ -1237,12 +1286,25 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --pressurediag      压感采集诊断（合成笔注入：合并点、压感有效位、压力分布）");
         Console.WriteLine("  --pressuretest      压感自检（映射函数 / 上屏粗细随压力变 / 无压感与虚线回退 / 开关往返 / 存档往返）");
         Console.WriteLine("  --inkfiletest       墨迹文件自检（保存/打开往返 / 打开前备份与轮转 / 坏文件不动文档 / 放映中置灰）");
+        Console.WriteLine("  --historytest       板书历史自检（快照只含笔迹、不含截图 / 总量轮转 / 从历史找回 / 清除可撤销）");
         Console.WriteLine("  --replaytest        墨迹回放自检（时间轴 / 前缀 / 暂停 / 倍速 / 只读 / 控制条 / 翻页退出）");
         Console.WriteLine("  --timertest         课堂计时器自检（功能卡：设置态↔运行态 / ⚙ / ±1分 / 到点超时 / 提示音 / 穿透小窗）");
         Console.WriteLine("  --rolltest          课堂点名自检（功能卡：设置↔结果 / 滚动定格 / 去重池子 / 名单 / 穿透小窗）");
         Console.WriteLine("  --replayshow <图>   墨迹回放摆样（铺几笔 → 播到一半 → 截控制条那一块）");
         Console.WriteLine("  --ballprobe [前缀]  收起球贴边诊断（左/右/四角 × 显示/隐藏，逐个出图）");
+        Console.WriteLine("  --fastwettest       应用侧湿墨（FastWet）自检：关掉系统轨迹，查慢写断口；");
+        Console.WriteLine("                      `--fastwettest --board` 再查不透明白板下湿墨可不可见");
+        Console.WriteLine("  --lagtest           湿墨延时对照（合成鼠标：主绘 / FastWet / 系统轨迹 / 产品组合，");
+        Console.WriteLine("                      量\"墨尖落后指针\"多少 px 与跳变响应 ms；轨迹档还能看出它到底画没画）");
+        Console.WriteLine("  --camlag [all|1..4] [--speed N] [--sweeps N] [--live N]   手机 120Hz 录像对照：");
+        Console.WriteLine("                      同一套匀速拖动逐档跑（1 主绘 2 FastWet 3 系统轨迹 4 产品组合），");
+        Console.WriteLine("                      屏上有档位横条 + 每 50 物理像素的刻度尺；拍下来量\"光标尖↔墨尖\"");
+        Console.WriteLine("                      的距离 ÷ 速度 = 毫秒。--live N = 换成你自己用笔写 N 秒。");
         Console.WriteLine("  --wetinktest        湿墨轨迹实测（只让系统画，数上屏像素：这条通道到底画不画）");
+        Console.WriteLine("  --wetmode <0..3>    湿墨档位（记住到设置；运行时 Ctrl+Alt+Shift+W 循环切换）：");
+        Console.WriteLine("                      0=原路径（默认：不喂轨迹、不建湿墨层）1=+系统委托轨迹");
+        Console.WriteLine("                      2=+应用湿墨层（FastWet）3=全开（轨迹优先、FastWet 兜底）");
+        Console.WriteLine("                      也可以点：「更多 → 设置 → 墨迹 → 湿墨档位」（点一下换一档）");
         Console.WriteLine("  --syswet            真笔 + 实线笔：湿墨只让系统轨迹画（诊断；⚠ 单条轨迹系统上限 128 点，长笔画会回滚）");
         Console.WriteLine("  --trailonly         自己那一笔不画（湿墨只剩系统轨迹）——手动验证系统到底给哪种输入画");
         // [停用] Console.WriteLine("  --predictdata [路径] 真实笔迹数据上的预测评测（UCI Character Trajectories）");

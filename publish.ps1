@@ -33,7 +33,16 @@ param(
     [switch]$NoManifest,
     # 发版前置检查（2026-10-12 新规矩）：代码 vs 文档对账。
     # 默认跑一次并生成 dist\doc-audit-v<ver>.md；-StrictDocs 时"代码有改动但文档零更新"直接停。
-    [switch]$StrictDocs
+    [switch]$StrictDocs,
+    # 测试版命名（2026-10-14 用户定："以后像这种测试的，就弄成测试版，不要写 9.0.6，
+    # 写'测试一''测试二'这样的"）。
+    #   用法： .\publish.ps1 -Label 测试一
+    # 传了它 = **测试版**：目录 / zip / 安装包统统用这个标签，而且
+    #   · **不写"固定名副本"**（InkTeach-win-x64.zip / InkTeach-Setup.exe 是官网直链用的），
+    #   · **不碰更新清单**（update.json / update-mirror.json / 仓库根那份），
+    #   · 默认不装"安装包"（测试包发 zip 就够了，要就再加 -NoSetup:$false 那种没用——直接别传 NoSetup）。
+    # 版本号仍是 csproj 里那个（自动更新要比它），**只是包名换了**。
+    [string]$Label = ""
 )
 if ($Jit -and $Aot) { throw "-Jit 和 -Aot 只能选一个（默认就是 AOT）" }
 $useAot = -not $Jit
@@ -86,7 +95,15 @@ $mirrorReleaseBase = if ($mirrorOwnerRepo) { "https://gitcode.com/$mirrorOwnerRe
 $ver = (Select-String -Path $proj -Pattern '<Version>([^<]+)</Version>').Matches[0].Groups[1].Value
 if (-not $ver) { throw "没能从 $proj 里读到 <Version>" }
 
-$name = "InkTeach-$ver-win-x64" + $(if ($Jit) { "-jit" } else { "" })
+# 测试版标签（见 -Label 的说明）：包名用它，清单/固定名副本一律不碰。
+$isTest = $Label.Length -gt 0
+if ($isTest -and $Label -match '[\\/:*?"<>|]') { throw "-Label 里不能有文件名非法字符：$Label" }
+$pkgTag = if ($isTest) { $Label } else { $ver }
+if ($isTest) {
+    Write-Host "测试版：包名用“$Label”，不写固定名副本、不碰更新清单" -ForegroundColor Yellow
+    $NoSetup = $true          # 测试包发 zip；安装包是正式发布的事
+}
+$name = "InkTeach-$pkgTag-win-x64" + $(if ($Jit) { "-jit" } else { "" })
 $outDir = Join-Path $root "dist\$name"
 Write-Host "发布 $name" -ForegroundColor Cyan
 
@@ -97,9 +114,9 @@ Write-Host "发布 $name" -ForegroundColor Cyan
 $audit = Join-Path $root "tools\doc-audit.ps1"
 if (Test-Path $audit) {
     Write-Host "发版前置检查：代码/文档对账…" -ForegroundColor Cyan
-    & $audit -Out (Join-Path $root "dist\doc-audit-v$ver.md") -Strict:$StrictDocs
+    & $audit -Out (Join-Path $root "dist\doc-audit-$pkgTag.md") -Strict:$StrictDocs
     $auditCode = $LASTEXITCODE
-    Write-Host "  对账清单已生成：dist\doc-audit-v$ver.md —— 发布前逐项核对（尤其 src/ 改动对应的文档）" -ForegroundColor Yellow
+    Write-Host "  对账清单已生成：dist\doc-audit-$pkgTag.md —— 发布前逐项核对（尤其 src/ 改动对应的文档）" -ForegroundColor Yellow
     if ($auditCode -ne 0) {
         throw "对账未通过（-StrictDocs：代码有改动但文档零更新）。先补文档；确属无需更新时去掉 -StrictDocs 再发。"
     }
@@ -227,7 +244,7 @@ Write-Host "  pdfium.dll 已放进发布包（$([Math]::Round((Get-Item $pdfiumS
 
 # ---- 随手塞一份"怎么用"，省得拷过去之后没人知道怎么退出 ------------------------------
 $readme = @"
-InkTeach $ver（win-x64）
+InkTeach $pkgTag（win-x64$(if ($isTest) { "，测试版；内部版本号 $ver" } else { "" })）
 
 怎么用：双击**和「使用说明」文件夹并排的 InkTeach.exe**（装了安装包的话，桌面/开始菜单的快捷方式就是它）。
 它是一层透明的批注覆盖层，屏幕底部中间那条就是工具条。
@@ -314,9 +331,9 @@ if (-not $NoZip) {
 #  为什么是"每用户安装"（PrivilegesRequired=lowest）：不弹 UAC，而且 App 能写自己的
 #  目录 → "下载 → 换壳 → 重启"的自动更新在安装版上**照样能用**（装到 Program Files
 #  就得每次更新弹 UAC）。细节见 installer\InkTeach.iss 的注释。
-$setup = Join-Path $root "dist\InkTeach-Setup-$ver.exe"
+$setup = Join-Path $root "dist\InkTeach-Setup-$pkgTag.exe"
 if ($NoSetup) {
-    Write-Host "  （-NoSetup：跳过安装包）" -ForegroundColor DarkGray
+    Write-Host $(if ($isTest) { "  （测试版：跳过安装包）" } else { "  （-NoSetup：跳过安装包）" }) -ForegroundColor DarkGray
 } else {
     $iscc = @(
         (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'),
@@ -344,10 +361,16 @@ if ($NoSetup) {
 #    · GitHub：`gh release upload <tag> dist\InkTeach-Setup.exe dist\InkTeach-win-x64.zip`
 $stableZip = Join-Path $root "dist\InkTeach-win-x64.zip"
 $stableSetup = Join-Path $root "dist\InkTeach-Setup.exe"
-if (Test-Path $zip)   { Copy-Item $zip   $stableZip   -Force }
-if (Test-Path $setup) { Copy-Item $setup $stableSetup -Force }
-if (Test-Path $stableZip)   { Write-Host "  固定名副本 dist\InkTeach-win-x64.zip（官网直链用）" -ForegroundColor DarkGray }
-if (Test-Path $stableSetup) { Write-Host "  固定名副本 dist\InkTeach-Setup.exe（官网直链用）" -ForegroundColor DarkGray }
+if ($isTest) {
+    Write-Host "  （测试版：不写固定名副本）" -ForegroundColor DarkGray
+} else {
+    if (Test-Path $zip)   { Copy-Item $zip   $stableZip   -Force }
+    if (Test-Path $setup) { Copy-Item $setup $stableSetup -Force }
+}
+if (-not $isTest) {
+    if (Test-Path $stableZip)   { Write-Host "  固定名副本 dist\InkTeach-win-x64.zip（官网直链用）" -ForegroundColor DarkGray }
+    if (Test-Path $stableSetup) { Write-Host "  固定名副本 dist\InkTeach-Setup.exe（官网直链用）" -ForegroundColor DarkGray }
+}
 
 # ---- update.json（自动更新的清单；配了更新源才生成）--------------------------------------
 #
@@ -358,7 +381,11 @@ if (Test-Path $stableSetup) { Write-Host "  固定名副本 dist\InkTeach-Setup.
 #
 # 没配就**不发**（并把上一次留下的删掉）——"没配更新源"在 App 里是正常状态。
 $json = Join-Path $root "dist\update.json"
-if (-not $updateBase) {
+if ($isTest) {
+    # 测试版**绝不碰更新清单**：线上清单是给所有用户看的，测试包的哈希写进去会广播错。
+    Write-Host "  （测试版：跳过 update.json / 仓库根清单）" -ForegroundColor DarkGray
+}
+elseif (-not $updateBase) {
     if (Test-Path $json) { Remove-Item $json -Force }
     $why = if ($NoZip) { "用了 -NoZip，没有 zip 可算 sha256" } else { "没配更新源" }
     Write-Host "  （$why：跳过 update.json；配法见 README「自动更新」）" -ForegroundColor DarkGray

@@ -6116,6 +6116,43 @@ internal sealed class ClearAction : EditAction
 }
 
 /// <summary>
+/// 「清除全部墨迹」在**分页文档**（PPT）里的那一步：把除 0 号页（桌面/板书）以外的
+/// **所有页**一次清掉，**一步撤销**能整份回来。
+///
+/// 为什么单独一个动作：撤销栈本来就是**按页**的（每个页槽一份 `Undo`），
+/// 而"一份演示文稿的所有页"跨多个页槽——只能自己记住每一页的原内容，
+/// 撤销时逐页装回去（走动 <see cref="InkDocument.LoadPageContent"/>）。
+///
+/// 用户 2026-10-14 定的口径：橡皮带那个「清除全部墨迹」按钮和翻页条菜单里那一项
+/// 是**同一个动作**，都要可撤销（清一节课的批注不能是不可逆的破坏）。
+/// </summary>
+internal sealed class ClearSlidesAction : EditAction
+{
+    /// <summary>页号 → 被清掉的（原顺序）对象表。</summary>
+    public readonly Dictionary<int, List<Stroke>> Removed = new();
+
+    public override int HeldStrokes
+    {
+        get { int n = 0; foreach (var l in Removed.Values) n += l.Count; return n; }
+    }
+
+    /// <summary>脏区自己管：走的是"每一页"，逐页由 LoadPageContent / InvalidateAll 负责。</summary>
+    public override bool SelfManagesDirty => true;
+
+    public override void Undo(InkDocument doc)
+    {
+        foreach (var kv in Removed) doc.LoadPageContent(kv.Key, kv.Value, 0);
+        doc.InvalidateAll();
+    }
+
+    public override void Redo(InkDocument doc)
+    {
+        foreach (var key in Removed.Keys) doc.LoadPageContent(key, new List<Stroke>(), 0);
+        doc.InvalidateAll();
+    }
+}
+
+/// <summary>
 /// 对一组对象施加同一个变换。移动 / 缩放 / 旋转 / 镜像**都是它**，不是四套代码。
 ///
 /// 只改矩阵、不碰几何，所以：
@@ -7289,6 +7326,34 @@ internal sealed class InkDocument
         act.Removed.AddRange(Strokes);
         ClearStrokes();
         Commit(act);
+    }
+
+    /// <summary>
+    /// 「清除全部墨迹」（PPT）：清掉**除 0 号页（桌面/板书）以外**的所有页。
+    /// **一步撤销**能整份回来（见 <see cref="ClearSlidesAction"/>，2026-10-14 用户定）。
+    /// 返回（清掉的页数、清掉的对象数）；(0, 0) = 本来就没有。
+    /// </summary>
+    internal (int Pages, int Strokes) ClearAllSlides()
+    {
+        var act = new ClearSlidesAction();
+        int strokes = 0;
+        foreach (int key in PageKeys())
+        {
+            if (key == 0) continue;
+            var list = StrokesOf(key);
+            if (list == null || list.Count == 0) continue;
+            act.Removed[key] = new List<Stroke>(list);
+            strokes += list.Count;
+        }
+        if (act.Removed.Count == 0) return (0, 0);
+
+        // 逐页清空：走 LoadPageContent（它会 Release 旧几何、清空间索引、当前页标脏）。
+        foreach (var key in act.Removed.Keys) LoadPageContent(key, new List<Stroke>(), 0);
+        Commit(act);
+        Dirty.MarkFull();
+        StructureChangedSinceRender = true;
+        Version++;
+        return (act.Removed.Count, strokes);
     }
 
     public int EraseAt(float x, float y, float radius)

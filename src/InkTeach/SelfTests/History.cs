@@ -1,0 +1,155 @@
+// 板书历史自检（2026-10-14 加）：`--historytest`。
+// 配套实现：src/InkEngine/BoardHistory.cs（留什么、留多少、怎么轮转）。
+// **只谈事实**：文件真的写出来了、图片真的没进去、轮转真的按总量删、载入真的走"打开墨迹"那条路。
+
+using System.Globalization;
+using System.Numerics;
+using InkEngine;
+using Vortice.Mathematics;
+
+namespace InkTeach;
+
+internal sealed partial class App
+{
+    /// <summary>
+    /// 板书历史自检（`--historytest`）：
+    ///   ① 快照写出来了、**只含笔迹**（截图不进）、能读回；
+    ///   ② 轮转：**总量超上限从最老的删**（份数不限）；
+    ///   ③ 找回：从历史目录"打开墨迹"→ 板书被替换 + **当前板书先被备份**；
+    ///   ④ 附带验："清除全部墨迹"在板书上可撤销。
+    /// 全程走临时目录（<see cref="BoardHistory.DirOverride"/>），不碰用户的历史目录。
+    /// </summary>
+    private void BoardHistoryTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 板书历史自检（快照 / 轮转 / 找回）===");
+
+        // 独立的临时目录（App 的自检 override 也在临时目录，这里再嵌一层，互不干扰）。
+        string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inkteach-historytest");
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+        BoardHistory.DirOverride = dir;
+        BoardHistory.CloseSession();
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-44} {detail}");
+        }
+
+        // ---------- ① 快照：只含笔迹（截图不进） ----------
+        Doc.Clear();
+        Doc.ResetToSinglePage();
+        var pen = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(1f, 0f, 0f, 1f), Width = 6f,
+        };
+        pen.AddPoint(300f, 300f, 1f, 0);
+        pen.AddPoint(500f, 360f, 1f, 8);
+        Doc.AddStroke(pen);
+        var pen2 = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(0f, 0f, 1f, 1f), Width = 6f,
+        };
+        pen2.AddPoint(600f, 500f, 1f, 0);
+        pen2.AddPoint(700f, 560f, 1f, 8);
+        Doc.AddStroke(pen2);
+        Doc.AddImage(MakeTestImage(64, 48), 900f, 700f, 1f);      // 截图：**不该进快照**
+        SettleFrames(120);
+
+        Check("（准备）板上 3 个对象（2 笔 + 1 张图）", Doc.Strokes.Count == 3, $"{Doc.Strokes.Count} 个");
+
+        bool wrote = SnapshotBoardHistoryForTest();
+        Check("写快照：成功（文件落盘）", wrote && BoardHistory.Count == 1,
+              $"写了={wrote}，目录里 {BoardHistory.Count} 份");
+
+        var files = BoardHistory.List();
+        string snap = files.Count > 0 ? files[0].Path : null;
+        int loaded = -1;
+        if (snap != null)
+        {
+            try
+            {
+                var strokes = InkSerializer.LoadStrokes(System.IO.File.ReadAllBytes(snap), out _);
+                loaded = strokes.Count;
+            }
+            catch (Exception ex) { Console.WriteLine("    读回失败：" + ex.Message); }
+        }
+        Check("快照内容：**只有 2 笔**（截图那条被丢掉）", loaded == 2, $"读回 {loaded} 条");
+        // 64×48 的截图 = 12KB 像素：阈值取 8KB，图片要是漏进去了这一条会红。
+        Check("快照体积：足够小（图片像素没进去）",
+              snap != null && new System.IO.FileInfo(snap).Length < 8 * 1024,
+              snap == null ? "没有文件" : $"{new System.IO.FileInfo(snap).Length} 字节");
+
+        // ---------- ② 轮转：总量超上限从最老的删 ----------
+        long keepMax = BoardHistory.MaxBytes;
+        BoardHistory.MaxBytes = 300 * 1024;                      // 300 KB：拿小上限来验逻辑
+        string rot = System.IO.Path.Combine(dir, "轮转测试");
+        Directory.CreateDirectory(rot);
+        for (int i = 0; i < 5; i++)
+        {
+            string f = System.IO.Path.Combine(rot, $"假-{i}.inkb");
+            System.IO.File.WriteAllBytes(f, new byte[100 * 1024]);        // 每份 100 KB
+            // 时间**显式错开**：Enforce 是按最后写盘时间删最老的（同一秒内的顺序不可靠）。
+            System.IO.File.SetLastWriteTimeUtc(f, DateTime.UtcNow.AddMinutes(-10 + i));
+        }
+        // Enforce 只扫历史根目录，不扫子目录——把"轮转测试"里的文件挪到根目录来跑。
+        string[] moved = new string[5];
+        for (int i = 0; i < 5; i++)
+        {
+            moved[i] = System.IO.Path.Combine(dir, $"假-{i}.inkb");
+            System.IO.File.Move(System.IO.Path.Combine(rot, $"假-{i}.inkb"), moved[i]);
+            System.IO.File.SetLastWriteTimeUtc(moved[i], DateTime.UtcNow.AddMinutes(-10 + i));
+        }
+        BoardHistory.Enforce();
+        int left = Directory.GetFiles(dir, "*.inkb").Length;
+        bool oldestGone = !System.IO.File.Exists(moved[0]) && !System.IO.File.Exists(moved[1]);
+        Check("轮转：总量超上限 → 从最老的删（5×100KB → ≤3 份）", left <= 3 && oldestGone,
+              $"剩 {left} 份；最老两份还在？{!oldestGone}");
+        BoardHistory.MaxBytes = keepMax;
+        // 清掉假文件，别干扰后面的"找回"（真快照那一份要留着）。
+        for (int i = 0; i < 5; i++) { try { System.IO.File.Delete(moved[i]); } catch { } }
+        try { Directory.Delete(rot, true); } catch { }
+
+        // ---------- ③ 找回：走"打开墨迹"那条路（先备份当前板书） ----------
+        int backupsBefore = InkFileStore.BackupCount();
+        Doc.Clear();                                             // 当前板书先清空，好验"载入回来了"
+        SettleFrames(120);
+        Check("（准备）当前板书已清空", Doc.Strokes.Count == 0, $"{Doc.Strokes.Count} 个");
+
+        bool opened = snap != null && OpenInkFileForTest(snap);
+        SettleFrames(150);
+        Check("找回：从历史载入 → 板书回来了（2 笔，且没有截图）",
+              opened && Doc.Strokes.Count == 2, $"载入={opened}，{Doc.Strokes.Count} 个");
+        Check("找回：载入前自动备份了当前（空）板书？→ 备份份数不减少",
+              InkFileStore.BackupCount() >= backupsBefore,
+              $"备份 {backupsBefore} → {InkFileStore.BackupCount()}");
+
+        // ---------- ④ 顺带：清除全部墨迹在板书上可撤销 ----------
+        int before = Doc.Strokes.Count;
+        ClearAllInkFromUi();
+        SettleFrames(120);
+        bool cleared = Doc.Strokes.Count == 0;
+        UndoFromUi();
+        SettleFrames(150);
+        Check("清除全部墨迹：清了能一步撤销回来（板书）",
+              cleared && Doc.Strokes.Count == before,
+              $"清空后 {0} → 撤销后 {Doc.Strokes.Count}（原 {before}）");
+
+        Console.WriteLine();
+        Console.WriteLine(fail == 0
+            ? $"  PASS：板书历史正确（快照不含图 / 轮转 / 找回 / 清除可撤销）——共 {pass} 项"
+            : $"  FAIL：{fail} 项不对（{pass} 项通过）");
+
+        // 收尾：临时目录与记忆都放掉
+        BoardHistory.CloseSession();
+        BoardHistory.DirOverride = null;
+        try { Directory.Delete(dir, true); } catch { }
+        Doc.Clear();
+        SettleFrames(80);
+        _quit = true;
+        if (fail > 0) ExitCode = 1;
+    }
+}

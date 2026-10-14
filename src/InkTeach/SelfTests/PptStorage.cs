@@ -371,7 +371,9 @@ internal sealed partial class App
     ///   ① 进放映 = 切到 PPT 页，桌面批注**看不见**（完全隔离）；
     ///   ② 每页一套内容：翻页看不到别页、翻回来原样；
     ///   ③ **页内照样能滚动**，而且每页记住自己滚到哪（用户要的"我依然支持向下滚动"）；
-    ///   ④ 清空只清本页（InkClass 的语义）；撤销栈也是每页一套；
+    ///   ④ **清除全部墨迹 = 清掉所有页**（2026-10-14 用户定的统一口径；
+    ///      InkClass 那套"只清本页"已废——橡皮自己就能擦本页），
+    ///      而且**一步撤销**能整份回来（跨页撤销动作）；撤销栈本身仍是每页一套；
     ///   ⑤ 翻页时**先存上一页**（防一节课中途崩了丢东西）；
     ///   ⑥ 退出放映 = 逐页写盘 + 回桌面页（桌面批注原样回来）；
     ///   ⑦ 再进放映 = 从盘里读回（模拟"关软件再打开、下一节课接着讲"）；
@@ -578,29 +580,39 @@ internal sealed partial class App
         Check("页面条数字（界面显示 n/N 用）",
               PptSlide == 1 && PptTotal == 3, $"{PptSlide}/{PptTotal}");
 
-        // ---- ④ 清空只清本页 ----
-        ClearFromUi();
+        // ---- ④ 清除全部墨迹 = 清掉**所有页** + 一步撤销（2026-10-14 用户定的统一口径）----
+        ClearAllInkFromUi();
         SettleFrames(150);
-        Check("清空：只清第 1 页", Doc.Strokes.Count == 0, $"{Doc.Strokes.Count} 条");
+        Check("清除全部墨迹：本页清了", Doc.Strokes.Count == 0, $"{Doc.Strokes.Count} 条");
+
+        // **一步撤销**：整份回来（跨页撤销动作，见 ClearSlidesAction）——此刻还在第 1 页
+        UndoFromUi();
+        SettleFrames(150);
+        Check("一步撤销：本页（第 1 页）那 2 笔回来了", Doc.Strokes.Count == 2, $"{Doc.Strokes.Count} 条");
         fake.Slide = 2; fake.SlideId = 257;
         Step();
-        Check("清空：第 2 页那 1 笔**还在**", Doc.Strokes.Count == 1, $"{Doc.Strokes.Count} 条");
+        Check("一步撤销：**第 2 页那 1 笔也回来了**（跨页）", Doc.Strokes.Count == 1, $"{Doc.Strokes.Count} 条");
 
-        // ---- 撤销栈每页一套（参考 InkClass 的 TimeMachineHistories[页]）----
+        // ---- 撤销栈仍按页（参考 InkClass 的 TimeMachineHistories[页]）----
+        // 现在在第 2 页：写一笔 → 撤销 → 重做，动的都是这一页自己的栈。
+        MakePen(660, 560);
+        Check("第 2 页写一笔（共 2 笔）", Doc.Strokes.Count == 2, $"{Doc.Strokes.Count} 条");
         UndoFromUi();
         SettleFrames(100);
-        Check("撤销：第 2 页撤得掉自己那笔", Doc.Strokes.Count == 0, $"{Doc.Strokes.Count} 条");
+        Check("撤销：撤掉的是**这一页刚写的那笔**", Doc.Strokes.Count == 1, $"{Doc.Strokes.Count} 条");
         RedoFromUi();
         SettleFrames(100);
-        Check("重做：又回来了", Doc.Strokes.Count == 1, $"{Doc.Strokes.Count} 条");
+        Check("重做：又回来了", Doc.Strokes.Count == 2, $"{Doc.Strokes.Count} 条");
+        UndoFromUi();
+        SettleFrames(100);
+        Check("（准备）第 2 页回到 1 笔（后面写盘那几条按 1 笔算）",
+              Doc.Strokes.Count == 1, $"{Doc.Strokes.Count} 条");
 
-        // 回到第 1 页补 2 笔（给"退出放映写盘"准备内容）
+        // 回到第 1 页：那 2 笔是"清除全部墨迹 → 一步撤销"恢复回来的
         fake.Slide = 1; fake.SlideId = 256;
         Step();
-        MakePen(700, 460);
-        MakePen(760, 500);
         int page1Count = Doc.Strokes.Count;
-        Check("第 1 页补到 2 笔（清空后重写）", page1Count == 2, $"{page1Count} 条");
+        Check("回到第 1 页：2 笔都在（撤销恢复的）", page1Count == 2, $"{page1Count} 条");
 
         // ---- ⑥ 退出放映：写盘 + 回桌面 ----
         fake.Showing = false;
@@ -913,7 +925,7 @@ internal sealed partial class App
             Check("菜单五项、一律六字（跳/存/放/清/退）",
                   PptMenuItemCount == 5 && PptMenuItemText(0) == "指定页码跳转"
                   && PptMenuItemText(1) == "自动保存墨迹" && PptMenuItemText(2) == "回放本页墨迹"
-                  && PptMenuItemText(3) == "清空所有墨迹" && PptMenuItemText(4) == "结束本次放映",
+                  && PptMenuItemText(3) == "清除全部墨迹" && PptMenuItemText(4) == "结束本次放映",
                   $"{PptMenuItemText(0)} / {PptMenuItemText(1)} / {PptMenuItemText(2)} / "
                   + $"{PptMenuItemText(3)} / {PptMenuItemText(4)}");
 
@@ -1090,7 +1102,7 @@ internal sealed partial class App
 
         Console.WriteLine();
         Console.WriteLine(fail == 0
-            ? $"  PASS：PPT 模式正确（隔离 / 页内滚动 / 清空只清本页 / 退出写盘 / 再进读回 / 按钮走 PPT）——共 {pass} 项"
+            ? $"  PASS：PPT 模式正确（隔离 / 页内滚动 / 清除全部墨迹=所有页且可撤销 / 退出写盘 / 再进读回 / 按钮走 PPT）——共 {pass} 项"
             : $"  FAIL：{fail} 项不对（{pass} 项通过）");
 
         try { Directory.Delete(PptStore.RootOverride, true); } catch { }

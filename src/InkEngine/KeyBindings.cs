@@ -69,6 +69,10 @@ public enum KeyAction
     /// <summary>白板开关（Ctrl+B）：和点面板白板格同一条命令（`SetBoardFromUi`），开会顺手退穿透。</summary>
     ToggleBoard,
     ToggleHud,
+    /// <summary>湿墨档位循环（0→1→2→3→0，2026-10-13 新增，用户要求"档位式切换"）：
+    /// 原路径 / +系统委托轨迹 / +应用湿墨层 / 全开。**全局键**——试档位时前台可能是
+    /// PPT / 视频，也要能切。</summary>
+    CycleWetMode,
     CycleWidth,
 
     // —— 批注内（编辑类）——
@@ -365,8 +369,9 @@ internal sealed class KeyMap
         KeyAction.Undo => "撤销",
         KeyAction.Redo => "重做",
         KeyAction.Copy => "复制选中",
-        KeyAction.Clear => "清空",
+        KeyAction.Clear => "清除全部墨迹",
         KeyAction.ToggleHud => "性能面板开关",
+        KeyAction.CycleWetMode => "湿墨档位切换",
         KeyAction.CycleWidth => "切换当前工具粗细",
         KeyAction.ToggleKeyboardMode => "批注键盘模式开关",
         KeyAction.ToggleBoard => "白板开关",
@@ -431,6 +436,9 @@ internal sealed class KeyMap
     {
         KeyAction.TogglePassThrough, KeyAction.ToggleKeyboardMode, KeyAction.RadialPalette,
         KeyAction.Quit,
+        // 湿墨档位（2026-10-13）：试档位时前台可能是别的程序，必须是全局键。
+        // 用 `Ctrl+Alt+Shift+W`——三层修饰，和现有三条（T/X/Q）不撞，也不占单层组合。
+        KeyAction.CycleWetMode,
     };
 
     /// <summary>自检用：全局作用域允许出现哪些动作（见上面的说明）。</summary>
@@ -471,6 +479,10 @@ internal sealed class KeyMap
         // ⚠ 全局热键只送按下（WM_HOTKEY）、没有松手消息，松手靠 PumpRadialPalette 轮询。
         m.Add(G, KeyAction.RadialPalette, "Ctrl+Alt+Shift+Q",
               "呼出盘：按住 → 划向扇区 → 松手（笔/黑/红/蓝/荧光笔/橡皮/框选/激光）");
+        // 湿墨档位循环（2026-10-13）：0 原路径 → 1 系统委托轨迹 → 2 应用湿墨层 → 3 全开。
+        // **只加不减**：任何一档主交换链自绘都照旧，关档（回到 0）与改动前逐字一致。
+        m.Add(G, KeyAction.CycleWetMode, "Ctrl+Alt+Shift+W",
+              "湿墨档位 0→1→2→3 循环（原路径 / +系统轨迹 / +应用湿墨层 / 全开）");
 
         // ---- 应用内：原有那一批（编辑类 + 翻页 + 微调）----
         m.Add(A, KeyAction.Undo, "Ctrl+Z", "撤销一步");

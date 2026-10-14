@@ -154,14 +154,22 @@ public partial class InkEngine
     }
 
     /// <summary>菜单每一项的说明（六字标题之外，把"到底动了什么"说清）。</summary>
-    private static (string Title, string Note) PptMenuTip(int i) => i switch
+    private (string Title, string Note) PptMenuTip(int i)
     {
-        0 => ("指定页码跳转", "打开页号格子，点哪一页跳哪一页"),
-        1 => ("自动保存墨迹", "这次放映翻页 / 退出时自动存到本机"),
-        2 => ("回放本页墨迹", "把这一页的板书重演一遍"),
-        3 => ("清空所有墨迹", "这份 PPT 的全部页面，点两次才清"),
-        _ => ("结束本次放映", "退出放映，PPT 本身不动"),
-    };
+        // 第 4 项（清除全部墨迹）的说明要**按模式说**：PPT 是整副演示，文档是整份文档
+        //（2026-10-14 改名时一起修的；别的几项文案本来就通用）。
+        if (i == 3)
+            return PptMode
+                ? ("清除全部墨迹", "这份演示文稿的全部页面，点两次才清（可撤销）")
+                : ("清除全部墨迹", "整份文档的全部页面，点两次才清（可撤销）");
+        return i switch
+        {
+            0 => ("指定页码跳转", "打开页号格子，点哪一页跳哪一页"),
+            1 => ("自动保存墨迹", "这次放映翻页 / 退出时自动存到本机"),
+            2 => ("回放本页墨迹", "把这一页的板书重演一遍"),
+            _ => ("结束本次放映", "退出放映，PPT 本身不动"),
+        };
+    }
 
     /// <summary>选中操作条每一格的说明（图标-only，这里是唯一的文字出口）。</summary>
     private (string Title, string Key, string Note) BarButtonTip(SelBarButton b) => b switch

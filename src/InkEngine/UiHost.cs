@@ -107,7 +107,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetDash(StrokeDash dash) => _engine.SetDashFromUi(dash);
     public void Undo() => _engine.UndoFromUi();
     public void Redo() => _engine.RedoFromUi();
-    public void Clear() => _engine.ClearFromUi();
+    public void Clear() => _engine.ClearAllInkFromUi();
     public void SetPassThrough(bool on) => _engine.SetPassThroughFromUi(on);
     public void SetBoard(bool on) => _engine.SetBoardFromUi(on);
     public void SetBoardColor(Color4 color) => _engine.SetBoardColorFromUi(color);
@@ -121,6 +121,8 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetFineStroke(bool on) => _engine.SetFineStrokeFromUi(on);
     /// <summary>「设置 → 书写 → 墨迹预测」：B4 自绘预测尾总开关（默认开）。</summary>
     public void SetPredict(bool on) => _engine.SetPredictFromUi(on);
+    /// <summary>「设置 → 墨迹 → 湿墨档位」：0..3（引擎落盘并立刻生效）。</summary>
+    public void SetWetMode(int mode) => _engine.SetWetModeFromUi(mode);
     /// <summary>触摸手势总开关（默认开；关掉只剩单指书写）。</summary>
     public void SetTouchGestures(bool on) => _engine.SetTouchGesturesFromUi(on);
     public void SetTooltips(bool on) => _engine.SetTooltipsFromUi(on);
@@ -139,6 +141,8 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void Quit() => _engine.QuitFromUi();
     public void SaveInkFile() => _engine.SaveInkFileFromUi();
     public void OpenInkFile() => _engine.OpenInkFileFromUi();
+    /// <summary>「历史板书」：起始目录落在历史目录里的"打开墨迹"。</summary>
+    public void OpenInkHistory() => _engine.OpenInkHistoryFromUi();
     public void SaveBoardImage() => _engine.SaveBoardImageFromUi();
     public void OpenDocument() => _engine.OpenDocumentFromUi();
     public void CloseDocument() => _engine.CloseDocumentFromUi();
@@ -172,7 +176,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
         if (p == null) return;
         _pending = null;
 
-        if (p.Clear) _engine.ClearFromUi();
+        if (p.Clear) _engine.ClearAllInkFromUi();
         if (p.Quit) _engine.QuitFromUi();
     }
 }

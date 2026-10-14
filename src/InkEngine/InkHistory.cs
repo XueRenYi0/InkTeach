@@ -75,6 +75,23 @@ internal static class InkHistory
         }
         catch (Exception ex) { Console.WriteLine("历史清理（备份）失败：" + ex.Message); }
 
+        // ---- 板书历史（2026-10-14 加）----
+        // 它自己另有一条**总量 1 GB 的轮转**（见 BoardHistory.Enforce）；这里叠加的是
+        // 用户选的"保留多少天"——两个上限取更严的那个。扫描范围仍然只有我们自己的目录。
+        try
+        {
+            if (Directory.Exists(BoardHistory.Dir))
+            {
+                foreach (var f in Directory.GetFiles(BoardHistory.Dir, "*.inkb"))
+                {
+                    if (File.GetLastWriteTimeUtc(f) >= cutoff) continue;
+                    File.Delete(f);
+                    files++;
+                }
+            }
+        }
+        catch (Exception ex) { Console.WriteLine("历史清理（板书历史）失败：" + ex.Message); }
+
         return (files, dirs);
     }
 }

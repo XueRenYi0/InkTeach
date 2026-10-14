@@ -413,7 +413,7 @@ internal sealed partial class App
                 Doc.AddStroke(st);
             }
             SettleFrames(250);
-            ClearFromUi();
+            ClearAllInkFromUi();
             SettleFrames(400);
 
             Check("清空之后：**还停在第 3 屏**，相机一动不动",

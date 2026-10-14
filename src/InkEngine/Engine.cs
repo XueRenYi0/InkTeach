@@ -161,6 +161,91 @@ public partial class InkEngine
         AutoSaveCount++;
     }
 
+    // ---- 板书历史（0 号页的快照；见 BoardHistory，2026-10-14 加）----------------
+    //
+    // 和"自动存档"的分工：自动存档只有**一份**、而且**受"自动恢复上次板书"偏好管辖**
+    //（默认关着 = 连写都不写）；板书历史**不看那个偏好**——它是"老师回头能找回自己写过的东西"，
+    // 留存是留存、显示是显示（默认都不显示）。上限与轮转在 BoardHistory 里。
+    /// <summary>最小间隔：两次快照至少隔这么久（停顿门槛之外的兜底，防"写两笔停一下"频繁写盘）。</summary>
+    private const double HistoryMinGapMs = 10000;
+    /// <summary>抬笔后至少静止这么久才允许写快照（写字期间一次都不碰盘）。</summary>
+    private const double HistoryIdleMs = 1500;
+
+    private double _nextHistoryAtMs = HistoryMinGapMs;
+    private long _historyFingerprint = -1;
+    private bool _historyLogged;
+    /// <summary>最后一次抬笔的时刻（"手停了没有"的判据）。</summary>
+    private double _lastStrokeEndMs = double.NegativeInfinity;
+
+    /// <summary>自检用：立刻写一份板书历史（不看间隔与指纹）。</summary>
+    internal bool SnapshotBoardHistoryForTest() => WriteBoardHistory(Doc.StrokesOf(0));
+
+    /// <summary>
+    /// 每帧过一趟：**手停下来之后**（抬笔 ≥1.5 秒、且距上次 ≥10 秒）、而且板书画布真的变了
+    /// （按指纹判）才写一份。挂在 RenderAll 里（和自动存档同一处），自检那条路也照样验得到。
+    ///
+    /// ⚠ **为什么不"每 15 秒无条件写"**（用户 2026-10-14 提的卡顿风险，实测口径）：
+    /// 一份快照 ≈ 0.1~3 MB（不含图片），序列化 + 落盘在 UI 线程上约 5~20ms——
+    /// 正好吃掉一帧（16ms 预算）。落在写字中间就是一次可见的卡顿。
+    /// 所以：**写字期间一次都不写**；停手说话的那一下才写（那时掉一帧没人看得出来）。
+    /// 崩溃前"一直没停过手"的那一小段靠退出/重启时那一份兜底。
+    /// </summary>
+    private void MaybeHistorySnapshot()
+    {
+        if (NowMs < _nextHistoryAtMs) return;
+        if (_drawing || ActiveStroke != null) return;
+        if (NowMs - _lastStrokeEndMs < HistoryIdleMs) return;
+        _nextHistoryAtMs = NowMs + HistoryMinGapMs;
+        var board = Doc.StrokesOf(0);
+        long fp = BoardFingerprint(board);
+        if (fp == _historyFingerprint) return;
+        if (WriteBoardHistory(board)) _historyFingerprint = fp;
+    }
+
+    /// <summary>
+    /// 板上内容的指纹（条数 + 总点数）。只用来判"值不值得再写一份"，不追求精确——
+    /// 增删一笔、擦掉一段都会变；真判错了最多多写一次（覆盖写，代价有界）。
+    /// </summary>
+    private static long BoardFingerprint(List<Stroke> board)
+    {
+        if (board == null || board.Count == 0) return 0;
+        long fp = board.Count;
+        foreach (var s in board) fp = fp * 131 + s.Points.Count;
+        return fp;
+    }
+
+    /// <summary>
+    /// 把 0 号页（桌面板书）写成一份历史快照。
+    /// **图片一律不要**：截图那种对象整条跳过（用户 2026-10-14 定）。
+    /// 空板书且这一轮还没写过 → 不留空文件（免得开一下软件就多一份空的）。
+    /// </summary>
+    private bool WriteBoardHistory(List<Stroke> board)
+    {
+        var list = new List<Stroke>();
+        if (board != null)
+            foreach (var s in board)
+                if (!s.IsImage) list.Add(s);
+
+        if (list.Count == 0 && !BoardHistory.HasSession) return false;
+        try
+        {
+            string path = BoardHistory.Save(InkSerializer.SaveStrokes(list));
+            if (path == null) return false;
+            if (!_historyLogged && list.Count > 0)
+            {
+                _historyLogged = true;
+                Console.WriteLine($"[板书历史] 开始在后台留快照（{list.Count} 个对象；"
+                                  + "「更多 → 墨迹 → 历史板书」可找回）");
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("板书历史失败：" + ex.Message);
+            return false;
+        }
+    }
+
     /// <summary>
     /// 到了间隔、而且板书真的变了，就写一次。
     /// 判据用文档版本号（`Doc.Version`）——它在每次增删改时都会加一，
@@ -224,6 +309,20 @@ public partial class InkEngine
     private Stroke _systemWetStroke;
     /// <summary>应用侧 DComp 湿墨替身当前负责显示的笔画。</summary>
     private Stroke _fastWetStroke;
+
+    /// <summary>
+    /// 应用侧湿墨层"这一帧还没提交"的挂起标记（2026-10-14 加）。
+    ///
+    /// 为什么改成挂起式：原来**每收到一条输入消息**就做一整轮 GPU 往返
+    /// （BeginDraw → 擦 → 画 → EndDraw → Commit）。真笔一条消息常带一串合并点，
+    /// 写得越快这种往返越多，**把整个消息循环都拖慢**——用户手机 120Hz 逐帧录像实测：
+    /// "应用湿墨层"那一档反而最不跟手（离笔最远）。现在挂起、由渲染循环在
+    /// **每帧画主帧之前**提交一次（见 RenderAll 里那一段）：成本降到 1/N，
+    /// 而且仍然比本帧 Present 早提交——它原来的那点优势保住。
+    /// </summary>
+    private bool _fastWetPending;
+    /// <summary>挂起时用的最后屏幕位置（决定更新哪一个窗口的湿墨层）。</summary>
+    private float _fastWetScreenX, _fastWetScreenY;
 
     /// <summary>Overlay 渲染判据：这一笔是不是"由系统轨迹画湿墨"。</summary>
     internal bool IsSystemWetStroke(Stroke s) => s != null && ReferenceEquals(s, _systemWetStroke);
@@ -954,6 +1053,76 @@ public partial class InkEngine
                               + $"（设置里的 {WintabPrefKey}，没有界面）");
         }
         catch (Exception ex) { Console.WriteLine($"  [wintab] 记偏好失败（不影响使用）：{ex.Message}"); }
+    }
+
+    // ---- 湿墨档位（2026-10-13 新增：用户要求"档位式切换"，带走上机体验）----------------
+    //
+    // 档位是**在原来的路径之上叠加**，不是替换：
+    //   0 = 原路径：不喂系统轨迹、不建应用湿墨层——湿墨只有主交换链自绘（**默认**，
+    //       保证"关档 = 和以前逐字一样"）；
+    //   1 = + 系统委托轨迹（IDCompositionDelegatedInkTrail：只补"还没上屏的那一小截"）；
+    //   2 = + 应用湿墨层（FastWet：应用侧独立 DComp 虚表画整笔，自绘照旧兜底）；
+    //   3 = 1 + 2（轨迹优先，启动失败/运行时失败由 FastWet 接管）。
+    // 三个档位里**主交换链自绘都照旧**（档位只加不减），所以任何一档都不会比原路径更差。
+    //
+    // 切换方式：`--wetmode N`（记住到设置里）或运行时 **Ctrl+Alt+Shift+W** 循环。
+    internal static int WetMode;
+
+    /// <summary>湿墨档位的用户偏好键（和 wintab 一样：命令行/热键写，没有界面）。</summary>
+    private const string WetModePrefKey = "wetmode";
+
+    /// <summary>命令行要求的档位（推迟到 Loop() 才写盘，理由同 wintab）。</summary>
+    private string _pendingWetModePref = "";
+
+    internal static string WetModeName(int m) => m switch
+    {
+        1 => "系统委托轨迹",
+        2 => "应用湿墨层（FastWet）",
+        3 => "轨迹 + 兜底",
+        _ => "原路径（不加湿墨层）",
+    };
+
+    /// <summary>把当前档位落到两个开关上，并把"被关掉那条通道"的在场湿墨收掉。</summary>
+    private void ApplyWetMode()
+    {
+        bool trail = WetMode is 1 or 3;
+        bool layer = WetMode is 2 or 3;
+        OverlayWindow.InkTrailEnabled = trail;
+        OverlayWindow.FastWetFallbackEnabled = layer;
+        foreach (var w in _windows)
+        {
+            if (!trail) w.EndInkTrail();
+            if (!layer) w.EndFastWet();
+        }
+        _dirty = true;
+    }
+
+    /// <summary>热键：切下一档（0→1→2→3→0）。</summary>
+    internal void CycleWetMode() => SetWetMode(WetMode == 3 ? 0 : WetMode + 1, "Ctrl+Alt+Shift+W");
+
+    /// <summary>界面点「设置 → 墨迹 → 湿墨档位」：直接定到某一档（0..3）。</summary>
+    internal void SetWetModeFromUi(int mode) => SetWetMode(mode, "设置 → 墨迹 → 湿墨档位");
+
+    /// <summary>
+    /// 定档（**引擎是权威**）：立刻生效、立刻落盘、打一行说明。
+    /// 两个入口都走这里：全局热键 <see cref="CycleWetMode"/> 和设置页那一行
+    /// （`IEngineCommands.SetWetMode`）——"同一件事只写一份"，界面不自己记档。
+    /// </summary>
+    private void SetWetMode(int mode, string from)
+    {
+        WetMode = Math.Clamp(mode, 0, 3);
+        ApplyWetMode();
+        if (!SelfCheckMode)
+        {
+            try
+            {
+                SetUiPref(WetModePrefKey, WetMode.ToString());
+                FlushSettings();     // 立刻落盘：用户是"按了一下"，不能丢
+            }
+            catch (Exception ex) { Console.WriteLine($"  [湿墨] 记档位失败（本次仍生效）：{ex.Message}"); }
+        }
+        Console.WriteLine($"[湿墨] 档位 {WetMode}：{WetModeName(WetMode)}（{from}；主交换链自绘始终照旧兜底）");
+        _dirty = true;
     }
 
     /// <summary>`--clean N`：入笔前对位置与压力做 N 点滑动平均（0/1 = 关）。</summary>
@@ -2171,7 +2340,21 @@ public partial class InkEngine
         // 实测（2026-10-11，逐帧采样）：鼠标**也画**（拖动中峰值 163 像素的"尾巴"）；
         // 先前"0 像素"是采样太稀漏掉了它（尾巴只存活到我们下一次上屏）。
         // 笔/鼠标/触摸都喂（每消息几次 COM 调用，代价可忽略）。
-        OverlayWindow.InkTrailEnabled = !args.Contains("--noinktrail");
+        // ---- 湿墨档位（0..3）---------------------------------------------------
+        // 顺序：**先读设置里记着的档**（没有 = 0 原路径），再看 `--wetmode N`
+        //（覆盖 + 记住），最后让老的开发/诊断开关覆盖（`--inktrail` / `--noinktrail`
+        // 的判据逐字不变，自检与对照全照旧）。
+        WetMode = int.TryParse(GetUiPref(WetModePrefKey), out int wmPref) ? Math.Clamp(wmPref, 0, 3) : 0;
+        for (int i = 0; i < args.Length - 1; i++)
+            if (args[i] == "--wetmode" && int.TryParse(args[i + 1], out int wmArg))
+            {
+                WetMode = Math.Clamp(wmArg, 0, 3);
+                // ⚠ 这里**不能**用 `SelfCheckMode` 把关：这一步跑在 RunModeDispatch 之前，
+                // 那个标志还不可信（和 wintab 偏好同一个坑，见下面 _pendingWintabPref 的注释）。
+                // 写不写盘交给 Loop() 开头那一段判（那时标志已经定下来了）。
+                _pendingWetModePref = WetMode.ToString();
+            }
+        ApplyWetMode();   // 此时窗口还没建（_windows 为空），这一下只落两个静态开关。
         if (args.Contains("--inktrail")) OverlayWindow.InkTrailEnabled = true;
         if (args.Contains("--noinktrail")) OverlayWindow.InkTrailEnabled = false;
 
@@ -2190,7 +2373,8 @@ public partial class InkEngine
         // `--ownwet` 强制回老路（A/B 用）。
         OverlayWindow.SystemWetPreferred = args.Contains("--syswet");
         if (args.Contains("--ownwet")) OverlayWindow.SystemWetPreferred = false;
-        OverlayWindow.FastWetFallbackEnabled = !args.Contains("--nofastwet");
+        // 只负责"关"（档位已经在上面落过；这里再写 `!Contains` 会把档位 0/1 的应用湿墨层打开）。
+        if (args.Contains("--nofastwet")) OverlayWindow.FastWetFallbackEnabled = false;
 
         // PPT 连接诊断（--pptdebug）：把 ROT 扫描每一步打出来（排查用，平时关）。
         PptComSource.Debug = args.Contains("--pptdebug");
@@ -3253,6 +3437,8 @@ public partial class InkEngine
             s_map[w.Hwnd] = w;
             _windows.Add(w);
             Console.WriteLine($"overlay on monitor {hMon}: {r.Width}x{r.Height} at ({r.Left},{r.Top}) dpi={w.Dpi}");
+            Console.WriteLine($"湿墨档位: {WetMode} {WetModeName(WetMode)}"
+                              + "（设置里记着；Ctrl+Alt+Shift+W 循环切换，--wetmode 0..3 指定）");
             Console.WriteLine($"委托墨迹轨迹(InkTrail): {(OverlayWindow.InkTrailEnabled ? "开" : "关")}"
                               + $"（接口{OverlayWindow.InkTrailNote}）");
             Console.WriteLine($"应用侧湿墨替身(FastWet): {(w.FastWetReady ? "可用（系统轨迹失效时自动接管）" : "不可用（回退主交换链自绘）")}");
@@ -3494,6 +3680,19 @@ public partial class InkEngine
             WriteWintabPref(_pendingWintabPref);
             _pendingWintabPref = "";
         }
+        // 命令行要求的湿墨档位，同样**到这里才写盘**（理由同 wintab）。
+        if (_pendingWetModePref.Length > 0 && !SelfCheckMode)
+        {
+            try
+            {
+                SetUiPref(WetModePrefKey, _pendingWetModePref);
+                FlushSettings();
+                Console.WriteLine($"  [湿墨] 已记住档位 {_pendingWetModePref}：{WetModeName(WetMode)}"
+                                  + "（下次启动照这个档跑；Ctrl+Alt+Shift+W 可随时切）");
+            }
+            catch (Exception ex) { Console.WriteLine($"  [湿墨] 记档位失败（不影响使用）：{ex.Message}"); }
+            _pendingWetModePref = "";
+        }
 
         while (!_quit)
         {
@@ -3624,6 +3823,8 @@ public partial class InkEngine
         // 自检就永远验不到它（第一版就是这么漏的：改了板书也不写）。
         // 自检模式走临时路径（Recovery.AutoSavePathOverride），不会碰用户的板书。
         MaybeAutoSave();
+        // 板书历史（0 号页快照）：只在**手停下来**之后写（见 MaybeHistorySnapshot 的注释）。
+        MaybeHistorySnapshot();
 
         // PPT 状态机。**为什么两处都调**（这里 + 主循环 Loop 里）：主循环那条路
         // 只在"真有帧"时才走到，而自检是用"抽消息＋渲染"驱动的（同 MaybeAutoSave
@@ -3670,6 +3871,20 @@ public partial class InkEngine
         // 差值 <1px，命中和观感都对得上。
         float renderCamY = MathF.Round(ViewOffsetY);
         foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = renderCamY; }
+
+        // 应用侧湿墨层（FastWet）：**每帧最多提交一次**，把这一帧收到的点一次画完。
+        // 位置有两处讲究：
+        //   · 放在相机写进窗口**之后**——它的变换用 ViewOffset，必须和主帧同一份；
+        //   · 放在画主帧**之前**——先于本帧 Present 提交，保住"比主帧早"的那点优势，
+        //     同时免掉"每条输入消息一轮 BeginDraw/EndDraw/Commit"的开销
+        //     （2026-10-14 用户手机 120Hz 实测：那种写法反而最不跟手）。
+        if (_fastWetPending)
+        {
+            _fastWetPending = false;
+            var fw = WindowAt(_fastWetScreenX, _fastWetScreenY);
+            if (fw != null && IsFastWetStroke(ActiveStroke))
+                fw.UpdateFastWet(ActiveStroke);
+        }
 
         // 面板的接输入小窗跟着界面这一刻占的地方走（方案 B）。
         // 放在渲染之前：这一帧界面画在哪，输入就该收在哪，两件事同源。
@@ -3894,10 +4109,11 @@ public partial class InkEngine
             $"笔画 {Doc.Strokes.Count}      点数 {Doc.TotalPoints}\n" +
             $"选中 {Doc.Selected.Count}      工具 {ToolName(Tool)}{SelectModeTag()}{(PassThrough ? "（穿透中）" : "")}      粗细 {CurrentToolWidthLogical,4:F1}      撤销栈 {Doc.UndoDepth}\n" +
             $"分块 {_tilesUsed}/{_tilesBudget}（可见 {_tilesVisible}，本帧光栅 {_tilesRasterized}，预取 {_prefetchLast}）      网格 {Doc.GridCells}\n" +
-            $"Ctrl+Alt：1笔 2荧光 3激光 4橡皮 7像素橡皮 5框选 6粗细 Z撤销 C清空\n" +
+            $"Ctrl+Alt：1笔 2荧光 3激光 4橡皮 7像素橡皮 5框选 6粗细 Z撤销 C清除全部\n" +
             (EraserTelemetry != null
                 ? $"橡皮手测台：记录中 · 已记 {EraserTelemetry.DragCount} 条拖拽（退出时写汇总）\n"
                 : "") +
+            $"湿墨档位 {WetMode} {WetModeName(WetMode)}（Ctrl+Alt+Shift+W 切下一档）\n" +
             $"其它 Ctrl+Alt：I面板 P穿透 K键盘 Y穿透方式 X退出";
     }
 
@@ -4229,7 +4445,8 @@ public partial class InkEngine
                    || RadialPaletteActive        // 呼出盘开着要连续出帧（出盘延迟 + 松手轮询）
                    || TooltipPending;            // 引擎侧悬停提示还在等 500ms（到点要有人点亮它）
         return _dirty || _animating
-               || _windows.Exists(w => w.TrailEndPending);   // --syswet：收笔撤轨迹必须有一帧兜底
+               || _windows.Exists(w => w.TrailEndPending)     // --syswet：收笔撤轨迹必须有一帧兜底
+               || _windows.Exists(w => w.FastWetEndPending);  // 应用侧湿墨收笔的撤除同样要一帧兜底
     }
 
     // =====================================================================
@@ -4738,7 +4955,12 @@ public partial class InkEngine
             _fastWetStroke = fastWetStarted ? ActiveStroke : null;
         }
         if (fastWetStarted)
+        {
+            // 起笔这一下**立刻**画一次（让第一点就可见；每笔只有这一次同步提交），
+            // 之后都走"每帧最多一次"的挂起路线（见 _fastWetPending 的注释）。
             wetWin?.UpdateFastWet(ActiveStroke);
+            _fastWetPending = false;
+        }
 
         // **停顿成型跟着这一笔开始计时**（见 计划-图形工具.md §四十二）。
         // 激光笔不参与：它只是"指一下"，本来就不留墨，把它变出一个图形来没有意义。
@@ -4796,7 +5018,13 @@ public partial class InkEngine
                 _fastWetStroke = ActiveStroke;
         }
         if (IsFastWetStroke(ActiveStroke))
-            wetWin?.UpdateFastWet(ActiveStroke);
+        {
+            // ⚠ 不在这里做 GPU 工作（见 _fastWetPending 的注释）：只挂起，
+            // 真正提交由这一帧画主帧之前那一次完成——每帧最多一轮。
+            _fastWetPending = true;
+            _fastWetScreenX = screenX;
+            _fastWetScreenY = screenY;
+        }
         // 停顿跟踪：**死区内的抖动不算"动过"**（见 DwellAssist.DeadZoneLogical）——
         // 少了它，笔尖静止时那点亚像素抖动会把计时一直刷新，
         // "停 600ms"永远攒不满，整条功能看着像没生效。
@@ -5007,6 +5235,7 @@ public partial class InkEngine
         }
         _systemWetStroke = null;
         _fastWetStroke = null;
+        _fastWetPending = false;      // 这一笔不再长：挂起的更新作废（见 _fastWetPending 注释）
 
         var anchor = _dwell.Anchor;                       // 笔停住的位置
         double stillMs = _dwell.StillMs(NowMs);           // 复位之前先量
@@ -7464,6 +7693,7 @@ public partial class InkEngine
     private void EndStroke()
     {
         InputBlackBox.End(NowMs);   // 黑匣子：收笔（含"每笔收到即落盘"）
+        _lastStrokeEndMs = NowMs;   // 板书历史："手停了没有"的判据（见 MaybeHistorySnapshot）
         // 触摸手势的兜底中断（8.4.0）：正常收笔时 `_touchMode` 已经是 None（触摸那条自己收过），
         // 只有"丢捕获 / 意外路径"会带着没结束的模式走到这里——把开了头的（擦除批次、选中拖动）收干净。
         TouchAbort();
@@ -7486,6 +7716,7 @@ public partial class InkEngine
         }
         _systemWetStroke = null;
         _fastWetStroke = null;
+        _fastWetPending = false;     // 收笔：挂起的湿墨更新作废（免得下一帧拿旧位置找窗口）
         // **录墨迹**（用户 2026-09-26 提"我手画多少条双曲线给你，你按这些来定制判据"）：
         // 把这一笔的**原始采样点**追加到录制文件。放在最前面 —— 此时 `ActiveStroke`
         // 要么还是原始墨、要么是停顿成型换掉的那个对象（所以真正要用的点见 `_recordPts`）。
@@ -10288,9 +10519,11 @@ public partial class InkEngine
             case KeyAction.Undo: Doc.Undo(); Laser.Clear(); break;
             case KeyAction.Redo: Doc.Redo(); break;
             case KeyAction.Copy: CopySelectionToClipboard(); break;
-            case KeyAction.Clear: Doc.Clear(); Laser.Clear(); break;
+            // 键盘这一条和橡皮带那个按钮是**同一个动作**（清除全部墨迹；2026-10-14 统一）。
+            case KeyAction.Clear: ClearAllInkFromUi(); break;
             case KeyAction.ToggleBoard: SetBoardFromUi(!BoardOn); break;
             case KeyAction.ToggleHud: ShowHud = !ShowHud; break;
+            case KeyAction.CycleWetMode: CycleWetMode(); break;
             case KeyAction.CycleWidth: CycleWidth(); break;
             case KeyAction.ToggleKeyboardMode: SetKeyboardMode(!KeyboardMode); break;
             case KeyAction.Quit: _quit = true; break;
@@ -10669,6 +10902,11 @@ public partial class InkEngine
         // 退出前补一次自动存档（下一次打开接上）。自检模式不动用户的存档。
         if (Doc.Version != _autoSavedVersion) AutoSaveNow();
 
+        // 板书历史：退出前再补一份（**不受"自动恢复"偏好影响**）。这一份是"关软件那一刻"
+        // 的板书画布——上面那条"停顿才写"只保证阶段性留存，最后这一段靠它兜底。
+        WriteBoardHistory(Doc.StrokesOf(0));
+        BoardHistory.CloseSession();      // 下一次运行另起一份快照
+
         if (_uiInputHwnd != IntPtr.Zero)
         {
             Native.DestroyWindow(_uiInputHwnd);
@@ -10901,6 +11139,8 @@ public partial class InkEngine
         PressureOn = PressureWidth.Enabled,      // 界面拿它显示「设置 → 书写 → 压感粗细」那个开关
         FineStrokeOn = RawInputCapture,          // 「设置 → 书写 → 精细笔迹」（原始输入补点）总开关
         PredictTailOn = PredictTailEnabled,      // 「设置 → 书写 → 墨迹预测」（B4 自绘预测尾）总开关（默认关）
+        WetMode = WetMode,                       // 「设置 → 墨迹 → 湿墨档位」（0..3；界面显示当前档）
+        HistoryCount = BoardHistory.Count,       // 「更多 → 墨迹 → 历史板书」那一格的亮/灰
         TouchGesturesOn = _touch.Enabled,        // 「设置 → 书写 → 触摸手势」总开关（默认开）
         // [删除 2026-10-05] PredictOn（墨迹预测）：随老预测系统移除。
         ScreenIndex = ScreenIndex,
@@ -11278,10 +11518,33 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
-    internal void ClearFromUi()
+    /// <summary>
+    /// **「清除全部墨迹」**（2026-10-14 用户定：一个动作、三个场景、一个名字）：
+    ///   · **PPT**：这份演示文稿**所有页**的批注（含盘上缓存；不动桌面板书、不动"播到第几页"）；
+    ///   · **文档（PDF/图片）**：这份文档**所有页**的批注（含盘上缓存；不动桌面板书）；
+    ///   · **白板 / 桌面批注**：整张画布（含翻过的屏）。
+    /// 三个场景都**可撤销**（一步回到清空前）；两个入口调它：
+    /// 橡皮带那个按住 0.8 秒的按钮（`IEngineCommands.Clear`）和翻页条菜单那一项。
+    /// </summary>
+    internal void ClearAllInkFromUi()
     {
-        ExitReplayForEdit("清空");
-        Doc.Clear();
+        ExitReplayForEdit("清除全部墨迹");
+        if (PptMode)
+        {
+            ClearAllPptMarks();          // 所有页 + 连盘删；可撤销（见 ClearSlidesAction）
+        }
+        else if (DocView.IsOpen)
+        {
+            ClearDocMarks();             // 整份文档 + 连盘删；Doc.Clear() 本来就可撤销
+        }
+        else
+        {
+            int n = Doc.Strokes.Count;
+            Doc.Clear();
+            Console.WriteLine(n > 0
+                ? $"[板书] 已清除全部墨迹（{n} 个对象；可撤销）"
+                : "[板书] 清除全部墨迹：本来就没有墨迹");
+        }
         Laser.Clear();
         _dirty = true;
         NotifyUiStateChanged();

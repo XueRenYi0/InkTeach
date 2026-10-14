@@ -97,6 +97,21 @@ public partial class InkEngine
     internal void SaveInkFileFromUi() => SaveInkFile(null);
     internal void OpenInkFileFromUi() => OpenInkFile(null);
 
+    /// <summary>
+    /// 「历史板书」（更多 → 墨迹，2026-10-14）：打开"打开墨迹"那条路，起始目录 = 板书历史目录。
+    /// 复用整条老路（先备份当前板书 → 校验 → 替换），所以从历史里载入一次
+    /// **不会丢当前这一份**（它先进"打开前备份"）。
+    /// </summary>
+    internal void OpenInkHistoryFromUi()
+    {
+        if (BoardHistory.Count == 0)
+        {
+            SetInkStatus("还没有历史板书（写过字之后停手一会儿就会自动留一份）");
+            return;
+        }
+        OpenInkFile(null, BoardHistory.Dir);
+    }
+
     /// <summary>「保存图片」入口（更多 → 墨迹 → 保存图片，2026-10-02）。</summary>
     internal void SaveBoardImageFromUi()
     {
@@ -151,7 +166,10 @@ public partial class InkEngine
         catch (Exception ex) { SetInkStatus("保存失败：" + ex.Message); return false; }
     }
 
-    private bool OpenInkFile(string path)
+    /// <param name="startDir">对话框的起始目录；null = 上一次用过的目录（"打开墨迹"那条路）。
+    /// 传了它（历史板书那条路）**不覆盖**用户的 "inkDir" 偏好——老师下次点"打开墨迹"
+    /// 还是从自己上次的目录开始。</param>
+    private bool OpenInkFile(string path, string startDir = null)
     {
         if (PptMode)
         {
@@ -162,14 +180,14 @@ public partial class InkEngine
         if (path == null)
         {
             if (!ExportDialogEnabled) { SetInkStatus("自检模式不弹对话框"); return false; }
-            string dir = GetUiPref("inkDir");
+            string dir = startDir ?? GetUiPref("inkDir");
             BorrowFocusForDialog();
             ExportDialogOpen = true;
             try { path = ExportFileDialog.AskForInkOpen(OwnerHwnd(), dir); }
             catch (Exception ex) { SetInkStatus("弹打开对话框失败：" + ex.Message); return false; }
             finally { ExportDialogOpen = false; ReturnFocusAfterDialog(); }
             if (path == null) { SetInkStatus("已取消"); return false; }
-            SetUiPref("inkDir", Path.GetDirectoryName(path) ?? "");
+            if (startDir == null) SetUiPref("inkDir", Path.GetDirectoryName(path) ?? "");
         }
 
         byte[] bytes;

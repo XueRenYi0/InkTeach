@@ -378,6 +378,14 @@ public interface IEngineCommands
     void SetPredict(bool on);
 
     /// <summary>
+    /// 「设置 → 墨迹 → 湿墨档位」（2026-10-13 加）：定到某一档（0..3）。
+    /// 0 = 原路径（默认，什么都不加）/ 1 = +系统委托轨迹 / 2 = +应用湿墨层（FastWet）/
+    /// 3 = 全开（轨迹优先、FastWet 兜底）。**只加不减**：任何一档主交换链自绘都照旧。
+    /// 引擎是权威：它落盘（设置里的 "wetmode"）、打日志，界面只显示 <see cref="UiState.WetMode"/>。
+    /// </summary>
+    void SetWetMode(int mode);
+
+    /// <summary>
     /// **悬停提示的总开关**（「更多 → 设置 → 外观 → 悬停提示」，2026-10-02 加）。
     ///
     /// 默认**开**。界面层的提示由界面自己管（它读同一个偏好），这一条只负责
@@ -455,6 +463,16 @@ public interface IEngineCommands
     /// 结果写进 <see cref="UiState.InkStatus"/>。放映中不响应。
     /// </summary>
     void OpenInkFile();
+
+    /// <summary>
+    /// **历史板书**（2026-10-14，用户定）：打开"打开墨迹"那条路的对话框，
+    /// **起始目录 = 板书历史目录**（`%LOCALAPPDATA%\InkTeach\History\`）。
+    ///
+    /// 板书历史是引擎自动留的 0 号页（桌面/白板批注）快照：停手 ≥1.5 秒 + 退出时各留一份，
+    /// **不含图片**，总量 1 GB 轮转。从历史里载入和普通"打开墨迹"走同一条路
+    /// （先备份当前板书 → 校验 → 替换），所以载入一次不会丢当前这一份。
+    /// </summary>
+    void OpenInkHistory();
 
     /// <summary>
     /// **保存图片**（2026-10-02「更多 → 墨迹 → 保存图片」）：把**整块板书**渲染成图片
@@ -944,6 +962,18 @@ public readonly struct UiState
     public bool FineStrokeOn { get; init; }
     /// <summary>「墨迹预测」（B4 自绘预测尾）总开关的状态（默认开）。</summary>
     public bool PredictTailOn { get; init; }
+    /// <summary>
+    /// **湿墨档位**（「设置 → 墨迹 → 湿墨档位」，2026-10-13 加）：
+    /// 0 = 原路径（默认）/ 1 = +系统委托轨迹 / 2 = +应用湿墨层 / 3 = 全开。
+    /// 界面拿它显示当前档；档位之间的**切换命令**见 <see cref="IEngineCommands.SetWetMode"/>。
+    /// </summary>
+    public int WetMode { get; init; }
+
+    /// <summary>
+    /// **板书历史有几份**（「更多 → 墨迹 → 历史板书」那一格据此亮 / 灰；2026-10-14 加）。
+    /// 只有份数，不列文件名——界面不需要知道目录在哪（那是引擎的事）。
+    /// </summary>
+    public int HistoryCount { get; init; }
     /// <summary>
     /// **触摸手势总开关**开着吗（界面用它显示「设置 → 书写 → 触摸手势」那一行的开关）。
     /// 默认开；关掉 = 只剩单指书写（双指 / 三指 / 长按 / 漫游全部停用）。

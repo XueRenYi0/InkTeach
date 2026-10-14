@@ -236,7 +236,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按三列里的布局走**：
     /// 外观（4）/ 书写（5）/ 墨迹（3）三列并排——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, UiSize, DwellShape, Pressure, Predict, RestoreInk, PptAutoSave, HistoryDays }
+    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, UiSize, DwellShape, Pressure, Predict, WetMode, RestoreInk, PptAutoSave, HistoryDays }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -270,13 +270,23 @@ public sealed class FullUi : IOverlayUi
         // "以后新装默认不开，等测试完善了再开"）。开了 = 更跟手一点；关着 = 笔尾更老实。
         // 链路：行表 → ActivateRow → IsOn → SavePrefs。
         (Row.Predict, "墨迹预测", false, false, "开了更跟手一点；默认关着，笔尾更稳当（等更完善再默认开）"),
+        // 湿墨档位（2026-10-13 加，用户点名要"在设置里能看到到了哪一档"）：
+        // **点一下换一档**（和「界面大小」同一个手感，到顶回头），右侧显示当前档。
+        // 判据/落盘都在引擎（见 Engine.SetWetModeFromUi）；界面只显示 Host.State.WetMode。
+        // 四档：0 原路径（默认，什么都不加）/ 1 +系统委托轨迹 / 2 +应用湿墨层 / 3 全开。
+        (Row.WetMode, "湿墨档位", false, false,
+         "点一下换一档：0 原路径（默认）/ 1 +系统委托轨迹（推荐）/ 2 实验：应用湿墨层 / "
+         + "3 +轨迹与兜底。只加不减，关回 0 与原来完全一样；"
+         + "手机录像实测：系统轨迹最跟手（Win11 才有），应用湿墨层与原路径基本相当"),
         // 墨迹三条偏好（原本在「墨迹」页，2026-10-02 启动器改版后搬进设置子页）。
         (Row.RestoreInk, "自动恢复上次板书", false, false, "下次启动接上这次的板书"),
         // ⚠ 名称 2026-10-10 改：这个开关**不只管 PPT**——文档（PDF/图片）批注的按页
         //   自动保存 / 装载也走它（DocImport 三处判 PptAutoSaveOn）。叫"课件"最贴：
         //   PPT 和文档都是老师的课件（"文档"在我们界面语汇里专指 PDF/图片那类）。
         (Row.PptAutoSave, "课件墨迹自动保存", false, false, "PPT 放映 / 文档打开时，批注按页自动保存、下次自动装载"),
-        (Row.HistoryDays, "历史清理", false, false, "过期 PPT 缓存与备份，启动时清掉"),
+        (Row.HistoryDays, "历史清理", false, false, "过期 PPT 缓存 / 打开前备份 / 历史板书，启动时清掉"),
+        // 板书历史本身没有开关（默认留、默认不显示）；上限是"总量 1 GB、份数不限"，
+        // 见 BoardHistory。老师想清空就删 `%LOCALAPPDATA%\InkTeach\History`，或把这一行设成 7 天。
         // ⚠ 「精细笔迹」「触摸手势」两个开关 2026-10-09 晚**已撤**（用户真机试稳：
         //   "开关拿掉，默认开"）——两条行为都常开了，只剩开发对照参数
         //   （--norawinput / --notouch），不再占用设置页。
@@ -1441,8 +1451,18 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private const float ActionWNarrow = 46f;
 
-    private static float ActionWidthOf(BandAction a) =>
-        a == BandAction.CloseBoard ? ActionWNarrow : ActionW;
+    /// <summary>
+    /// 「清除全部墨迹」那一档的宽（**六个字** + 图标；2026-10-14 从"清空"改名后加的）。
+    /// 宽一点不会挤坏带子：段和滑条是按剩余宽度等比缩的（见 SegmentRect）。
+    /// </summary>
+    private const float ActionWClear = 128f;
+
+    private static float ActionWidthOf(BandAction a) => a switch
+    {
+        BandAction.CloseBoard => ActionWNarrow,
+        BandAction.Clear => ActionWClear,
+        _ => ActionW,
+    };
 
     private const double ClearHoldMs = 800;
 
@@ -1549,7 +1569,8 @@ public sealed class FullUi : IOverlayUi
         var iconBox = new RectF { MinX = r.MinX + 6f, MinY = r.MinY, MaxX = r.MinX + 28f, MaxY = r.MaxY };
         IconAtlas.DrawCentered(ctx, paste ? "image" : clear ? "broom" : "selectAll", iconBox, 16f, Brush(ctx, ink));
         var labelBox = new RectF { MinX = r.MinX + 28f, MinY = r.MinY, MaxX = r.MaxX - 6f, MaxY = r.MaxY };
-        _widgets.Text(ctx, paste ? "粘贴图片" : clear ? "清空" : "全选", labelBox, 12.5f, Brush(ctx, InkCol));
+        _widgets.Text(ctx, paste ? "粘贴图片" : clear ? "清除全部墨迹" : "全选",
+                      labelBox, 12.5f, Brush(ctx, InkCol));
 
         if (_host != null && _host.NowMs < _actionFlashUntil)
             ctx.DrawRoundedRectangle(rr, Brush(ctx, Tokens.Accent), 2f);
@@ -2233,6 +2254,13 @@ public sealed class FullUi : IOverlayUi
                 SavePrefs();
                 break;
 
+            // 湿墨档位（2026-10-13 加）：点一下换一档（0→1→2→3→0）。
+            // 引擎是权威：它立刻生效 + 落盘（设置里的 "wetmode"），界面下一帧从
+            // `Host.State.WetMode` 读回来显示——界面**自己不记档**（避免两份状态）。
+            case Row.WetMode:
+                _host.Commands.SetWetMode((_host.State.WetMode + 1) & 3);
+                break;
+
             // 墨迹预测（2026-10-09 加，B4 自绘预测尾；默认关——2026-10-09 用户定）：
             // 引擎是权威，界面翻转后落盘 "predict2"。
             case Row.Predict:
@@ -2316,7 +2344,7 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private const int LookRowCount = 5;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 悬停提示 / 界面大小
     private const int WriteRowCount = 3;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测（精细笔迹、触摸手势 2026-10-09 撤开关、改常开）
-    private const int InkRowCount = 3;     // 墨迹：自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理
+    private const int InkRowCount = 4;     // 墨迹：湿墨档位 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理
     private const float MoreColumnGap = 16f;
     private const float MoreSwitchW = 44f;
     private const float MoreSwitchH = 26f;
@@ -2425,11 +2453,12 @@ public sealed class FullUi : IOverlayUi
     private int HubCount(int section) => HubCounts[Math.Clamp(section, 0, HubCounts.Length - 1)];
 
     /// <summary>
-    /// 每个分组的格子数：课堂 3 个（计时 / 点名 / 随机一人）；墨迹 **6 个**
-    /// （保存墨迹 / 打开墨迹 / 墨迹回放 / 保存图片 / **打开文档 / 关闭文档**，2026-10-07 加后两个）。
+    /// 每个分组的格子数：课堂 3 个（计时 / 点名 / 随机一人）；墨迹 **7 个**
+    /// （保存墨迹 / 打开墨迹 / 墨迹回放 / 保存图片 / 打开文档 / 关闭文档 /
+    /// **历史板书**，最后一个是 2026-10-14 加的：找回以前写过又清掉/关掉的板书）。
     /// 格子编号（`HubTileCode`）从这里算出来，**不写死 3**——加格子不会再串段。
     /// </summary>
-    private static readonly int[] HubCounts = { 3, 6 };
+    private static readonly int[] HubCounts = { 3, 7 };
 
     /// <summary>第 section 组的组头矩形。</summary>
     private RectF HubHeadRect(int section)
@@ -2540,9 +2569,11 @@ public sealed class FullUi : IOverlayUi
         Row.DwellShape => SetColRow(SetColKind.Write, 0),
         Row.Pressure => SetColRow(SetColKind.Write, 1),
         Row.Predict => SetColRow(SetColKind.Write, 2),
-        Row.RestoreInk => SetColRow(SetColKind.Ink, 0),
-        Row.PptAutoSave => SetColRow(SetColKind.Ink, 1),
-        _ => SetColRow(SetColKind.Ink, 2),
+        Row.WetMode => SetColRow(SetColKind.Ink, 0),      // 2026-10-13 加：墨迹列第一行（最好找）
+        Row.RestoreInk => SetColRow(SetColKind.Ink, 1),
+        Row.PptAutoSave => SetColRow(SetColKind.Ink, 2),
+        Row.HistoryDays => SetColRow(SetColKind.Ink, 3),
+        _ => SetColRow(SetColKind.Ink, 3),
     };
 
     /// <summary>设置页下半的三列：外观 / 书写 / 墨迹（并排；序号 = 列序，`SetColX` 用它）。</summary>
@@ -2568,6 +2599,18 @@ public sealed class FullUi : IOverlayUi
     private string HistoryDaysName(string pref) => pref switch
     {
         "90" => "90 天", "30" => "30 天", "7" => "7 天", _ => "永久",
+    };
+
+    /// <summary>
+    /// 「湿墨档位」那一行右侧的值（短名；四档的完整解释在悬停提示里）。
+    /// 和引擎的 `WetModeName` **刻意不同**：这里要塞进窄窄的一列，用短名。
+    /// </summary>
+    private static string WetModeShortName(int m) => m switch
+    {
+        1 => "1 系统轨迹",
+        2 => "2 应用湿墨层",
+        3 => "3 全开",
+        _ => "0 原路径",
     };
 
     // ---- 命中 ----------------------------------------------------------------
@@ -2720,6 +2763,10 @@ public sealed class FullUi : IOverlayUi
                   ? $"关掉《{_host.State.DocInfo}》；批注留在画布上"
                   : "关掉当前文档；批注留在画布上",
               _host != null && _host.State.DocOpen, false),
+        // 历史板书（2026-10-14 加）：引擎自动留的板书画布快照（不含截图），这里是找回入口。
+        9 => ("历史板书",
+              "找回以前写在板书 / 桌面上的墨迹（自动留存，停手时写；不含截图）",
+              _host != null && !_host.State.PptMode && _host.State.HistoryCount > 0, false),
         _ => ("", "", false, false),
     };
 
@@ -2851,6 +2898,7 @@ public sealed class FullUi : IOverlayUi
         {
             Row.HistoryDays => HistoryDaysName(_host.GetPref("historyDays")),
             Row.UiSize => UiScalePresets.Name(_host.UiScale),
+            Row.WetMode => WetModeShortName(_host.State.WetMode),
             _ => null,
         };
         float valueW = value != null ? _widgets.Measure(value, 12.5f) : 0f;
@@ -2897,6 +2945,10 @@ public sealed class FullUi : IOverlayUi
             case 7:                                   // 打开文档（2026-10-07）
                 CloseMore();
                 _host.Commands.OpenDocument();
+                break;
+            case 9:                                   // 历史板书（2026-10-14）
+                CloseMore();
+                _host.Commands.OpenInkHistory();
                 break;
             case 8:                                   // 关闭文档
                 CloseMore();
@@ -5106,7 +5158,9 @@ public sealed class FullUi : IOverlayUi
 
         if (id == 400) return CurAction switch
         {
-            BandAction.Clear => ("清空整页", Key(KeyAction.Clear), "按住 0.8 秒才清，可撤销"),
+            // 清除全部墨迹（2026-10-14 统一命名）：和翻页条菜单那一项是同一个动作。
+            BandAction.Clear => ("清除全部墨迹", Key(KeyAction.Clear),
+                                 "按住 0.8 秒；整份文档 / 演示文稿 / 整张板书的全部批注，可撤销"),
             // 全选 / 粘贴图片：段上已经写了字、点一下就知道，不配（收窄）
             BandAction.CloseBoard => ("关闭白板", Key(KeyAction.ToggleBoard), "只关白板，墨迹留着"),
             _ => default,

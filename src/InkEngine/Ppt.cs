@@ -696,9 +696,11 @@ public partial class InkEngine
     /// 改成"点页码 = 菜单"，并把原来的页号面板降为第一项"**指定页码跳转**"——
     /// 这样"跳页"和"退出"一个点击就都看得见，不再依赖隐藏手势。
     /// 分组 = [跳转] | [存/放] | [清空] | [结束]。
+    /// **2026-10-14**：第 4 项由"清空所有墨迹"改名成"**清除全部墨迹**"（依旧六字，对齐不变）——
+    /// 和橡皮带那个按钮、文档模式那一项统一成一个名字、一个动作（见 ClearAllPptMarks）。
     /// </summary>
     private static readonly string[] PptMenuItems =
-        { "指定页码跳转", "自动保存墨迹", "回放本页墨迹", "清空所有墨迹", "结束本次放映" };
+        { "指定页码跳转", "自动保存墨迹", "回放本页墨迹", "清除全部墨迹", "结束本次放映" };
 
     internal static int PptMenuItemCount => PptMenuItems.Length;
 
@@ -718,7 +720,7 @@ public partial class InkEngine
                 0 => "指定页码跳转",
                 1 => "自动保存墨迹",
                 2 => "回放这一屏墨迹",
-                3 => PptClearConfirm ? "再点确认" : "清空文档墨迹",
+                3 => PptClearConfirm ? "再点确认" : "清除全部墨迹",
                 4 => "关闭文档",
                 _ => "",
             };
@@ -1382,19 +1384,15 @@ public partial class InkEngine
     private void ClearAllPptMarks()
     {
         if (_pptKey.Length == 0) return;
-        int pages = 0;
-        foreach (int key in Doc.PageKeys())
-        {
-            if (key == 0) continue;
-            // 走 Doc 的正式入口：它会 Release 掉旧的几何缓存、清空间索引、并把当前页标脏
-            //（"把字典一丢了事"会漏掉这些，表现是"清了、但屏幕上还留着一屏墨"）。
-            Doc.LoadPageContent(key, new List<Stroke>(), 0);
-            pages++;
-        }
+        // 2026-10-14：改成**一步撤销**的跨页清空（见 ClearSlidesAction）——
+        // 用户定的口径是"清除全部墨迹在哪儿点都得能撤销"。
+        var (pages, strokes) = Doc.ClearAllSlides();
         PptStore.DeleteAll(_pptKey);
         Doc.InvalidateAll();
         _dirty = true;
-        Console.WriteLine($"[PPT] 已清空这份演示文稿的批注（{pages} 页，含盘上的文件）");
+        Console.WriteLine(pages == 0
+            ? "[PPT] 清除全部墨迹：本来就没有批注（盘上缓存已清）"
+            : $"[PPT] 已清除全部墨迹（{pages} 页 / {strokes} 个对象，含盘上的文件；可撤销）");
     }
 
     // ---- 位置的持久化 ---------------------------------------------------------
