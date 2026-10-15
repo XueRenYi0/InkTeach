@@ -236,7 +236,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按三列里的布局走**：
     /// 外观（4）/ 书写（5）/ 墨迹（3）三列并排——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, UiSize, DwellShape, Pressure, Predict, PredictHorizon, WetMode, RestoreInk, PptAutoSave, HistoryDays }
+    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, UiSize, DwellShape, Pressure, Predict, PredictHorizon, WetMode, RestoreInk, PptAutoSave, HistoryDays, WetBackend }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -294,6 +294,14 @@ public sealed class FullUi : IOverlayUi
         (Row.HistoryDays, "历史清理", false, false, "过期 PPT 缓存 / 打开前备份 / 历史板书，启动时清掉"),
         // 板书历史本身没有开关（默认留、默认不显示）；上限是"总量 1 GB、份数不限"，
         // 见 BoardHistory。老师想清空就删 `%LOCALAPPDATA%\InkTeach\History`，或把这一行设成 7 天。
+        // 湿墨后端（2026-10-13 加，2026-10-15 合并入）：系统湿墨来源四选一——
+        // 自动 / 自绘 / 委托轨迹 / 系统托管。**重启生效**：后端在窗口创建时定型
+        //（托管要换合成根、轨迹要挂视觉树，运行期换不了）。
+        // 选"自动"= 删项不落盘（老规矩），行为 = 现状（轨迹可用走轨迹，否则托管）。
+        // 命令行开关仍然优先（--syswethost / --noinktrail 等，见 Engine 后端解析段）。
+        // ⚠ 与上面「湿墨档位」并存：档位管"轨迹 / 应用湿墨层"的加减、本行管"托管"开关与
+        //   总基调；两者重叠处以后落地的档位为准——"合一成一套选择器"待拍板。
+        (Row.WetBackend, "湿墨后端", false, false, "系统湿墨来源：自动 / 自绘 / 委托轨迹 / 系统托管；点一下换一档，重启生效"),
         // ⚠ 「精细笔迹」「触摸手势」两个开关 2026-10-09 晚**已撤**（用户真机试稳：
         //   "开关拿掉，默认开"）——两条行为都常开了，只剩开发对照参数
         //   （--norawinput / --notouch），不再占用设置页。
@@ -2298,6 +2306,15 @@ public sealed class FullUi : IOverlayUi
                     "90" => "30", "30" => "7", "7" => null, _ => "90",
                 });
                 break;
+            // 湿墨后端（2026-10-13）：自动 → 自绘 → 委托轨迹 → 系统托管 → 自动（循环）。
+            // 只写 `ui.wetBackend`（"自动"=删项不落盘）；**重启生效**，引擎在启动时读
+            // （见 Engine 后端解析段——命令行开关优先于设置）。
+            case Row.WetBackend:
+                _host.SetPref("wetBackend", _host.GetPref("wetBackend") switch
+                {
+                    null => "self", "self" => "trail", "trail" => "host", _ => null,
+                });
+                break;
         }
         Invalidate();
     }
@@ -2359,7 +2376,7 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private const int LookRowCount = 5;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 悬停提示 / 界面大小
     private const int WriteRowCount = 4;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测 / 预测时长（精细笔迹、触摸手势 2026-10-09 撤开关、改常开）
-    private const int InkRowCount = 4;     // 墨迹：湿墨档位 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理
+    private const int InkRowCount = 5;     // 墨迹：湿墨档位 / 湿墨后端 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理
     private const float MoreColumnGap = 16f;
     private const float MoreSwitchW = 44f;
     private const float MoreSwitchH = 26f;
@@ -2586,10 +2603,11 @@ public sealed class FullUi : IOverlayUi
         Row.Predict => SetColRow(SetColKind.Write, 2),
         Row.PredictHorizon => SetColRow(SetColKind.Write, 3),  // 2026-10-14 加：紧跟「墨迹预测」（再调补多长）
         Row.WetMode => SetColRow(SetColKind.Ink, 0),      // 2026-10-13 加：墨迹列第一行（最好找）
-        Row.RestoreInk => SetColRow(SetColKind.Ink, 1),
-        Row.PptAutoSave => SetColRow(SetColKind.Ink, 2),
-        Row.HistoryDays => SetColRow(SetColKind.Ink, 3),
-        _ => SetColRow(SetColKind.Ink, 3),
+        Row.WetBackend => SetColRow(SetColKind.Ink, 1),   // 2026-10-13 加（2026-10-15 合并入）：湿墨后端
+        Row.RestoreInk => SetColRow(SetColKind.Ink, 2),
+        Row.PptAutoSave => SetColRow(SetColKind.Ink, 3),
+        Row.HistoryDays => SetColRow(SetColKind.Ink, 4),
+        _ => SetColRow(SetColKind.Ink, 4),
     };
 
     /// <summary>设置页下半的三列：外观 / 书写 / 墨迹（并排；序号 = 列序，`SetColX` 用它）。</summary>
@@ -2629,12 +2647,17 @@ public sealed class FullUi : IOverlayUi
         _ => "0 原路径",
     };
 
+    /// <summary>湿墨后端那一行右侧的值（null = 自动，默认、不落盘）。</summary>
+    private static string WetBackendName(string pref) => pref switch
+    {
+        "self" => "自绘", "trail" => "委托轨迹", "host" => "系统托管", _ => "自动",
+    };
+
     /// <summary>「预测时长」那一行右侧的值（自动 / 10 / 15 / 25 ms）。</summary>
     private static string PredictHorizonShortName(int ms) => ms <= 0 ? "自动" : $"{ms} ms";
 
     /// <summary>「预测时长」点一下的下一档：自动 → 10 → 15 → 25 → 自动。</summary>
     private static int PredictHorizonNext(int ms) => ms switch { <= 0 => 10, 10 => 15, 15 => 25, _ => 0 };
-
     // ---- 命中 ----------------------------------------------------------------
 
     private int MoreHitAt(float x, float y)
@@ -2921,6 +2944,7 @@ public sealed class FullUi : IOverlayUi
             Row.HistoryDays => HistoryDaysName(_host.GetPref("historyDays")),
             Row.UiSize => UiScalePresets.Name(_host.UiScale),
             Row.WetMode => WetModeShortName(_host.State.WetMode),
+            Row.WetBackend => WetBackendName(_host.GetPref("wetBackend")),
             Row.PredictHorizon => PredictHorizonShortName(_host.State.PredictHorizonMs),
             _ => null,
         };

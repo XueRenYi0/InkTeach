@@ -1,4 +1,4 @@
-// 本文件由 App.cs 拆出（2026-10-07）：InkMotion 这一组。
+﻿// 本文件由 App.cs 拆出（2026-10-07）：InkMotion 这一组。
 // **纯搬家，逻辑一字未改** —— 靠 partial class 共享 App 的私有成员。
 // 拆开的目的：产品代码与自检代码互不干扰，人和 AI 读代码时不必互相穿插。
 
@@ -2736,6 +2736,599 @@ internal sealed partial class App
         for (int i = 0; i < a.Length; i++) a[i] = xs[i];
         Array.Sort(a);
         return a[Math.Clamp((int)Math.Ceiling(q * a.Length) - 1, 0, a.Length - 1)];
+    }
+
+    /// `--syswethosttest`：**系统托管湿墨的两个用户 bug 复现 + 回归**（2026-10-12 真笔实测）：
+    ///   ① 连画两笔：**第 2 笔起笔后第 1 笔不许掉墨**（截图像素验证第 1 笔区域）——
+    ///      用户原话"每次起新笔，前一笔的黑墨就没了"；
+    ///   ② 同笔双画：同一区域**只允许一种笔色像素**（笔色设红，数红/黑/杂色）——
+    ///      用户原话"写一笔时同时看到黑+红两种颜色画同一笔"。
+    ///
+    /// 数据源用**真笔口径**，两段都跑：
+    ///   A. 合成笔 → 系统墨迹管线 → 旁听点 → 引擎（真笔的整条链，系统层会真画）；
+    ///   B. 旁听点直喂（<see cref="HostPointFeed"/>，就是墨迹后台线程那套接口）——
+    ///      合成笔不被系统认时也能验"掉墨"这一条。
+    /// 自检自己验"这一笔确实是旁听喂的"（<c>HostFedStrokeActive</c>），
+    /// 不是旁听喂的会在结果里明说（那就没测到真笔分支）。
+    /// </summary>
+    private void SysWetHostTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 系统托管湿墨：连写两笔不掉墨 + 同笔单色（--syswethosttest）===");
+        if (_windows.Count == 0 || _windows[0].SysWetHost == null)
+        {
+            Console.WriteLine("  SKIP: 本窗口没建系统托管湿墨宿主（用 --syswethost 启动再跑）");
+            _quit = true; return;
+        }
+        Console.WriteLine($"  湿墨后端   : {DescribeWetBackend(_windows[0])}");
+        string colorSyncNote = InkEngine.SystemWetHost.ColorSyncNote;
+        Console.WriteLine($"  系统层颜色 : {colorSyncNote}");
+
+        Doc.Clear();
+        Doc.InvalidateAll();
+        Tool = Tool.Pen;
+
+        PenWidthLogical = 8f;
+        BoardOn = true;
+        SetColorFromUi(new Color4(1f, 0f, 0f, 1f));   // 红：和系统默认黑区分开
+        SyncSystemWetAppearance();
+        SettleFrames(120);
+
+        bool passKeep = true, passSingle = true, passCommit = true, sawHostFed = false;
+
+        // ── A. 合成笔整链路（系统管线 → 旁听 → 引擎；系统层真的会画）──────────────
+        if (!EnsureSyntheticPen())
+        {
+            Console.WriteLine("  A 段 SKIP: 拿不到合成笔设备（CreateSyntheticPointerDevice 失败）");
+        }
+        else
+        {
+            Console.WriteLine("  A 段：合成笔两笔（真笔整链路）");
+            float x0 = _virtualX + 350f, y1 = _virtualY + 300f, y2 = _virtualY + 560f;
+            int r1x = (int)(x0 - 30), r1y = (int)(y1 - 60), bw = 700, bh = 120;
+
+            PenWavyLine(x0, y1, 24, 400, first: true);
+            SettleFrames(60);
+            int strokes1 = Doc.Strokes.Count;
+            var ink1 = ScreenProbe.CaptureRegion(r1x, r1y, bw, bh);
+            var c1 = InkPixels(ink1);
+            Console.WriteLine($"    第 1 笔后：Doc={strokes1} 笔，第 1 笔区域 墨={c1.Ink}（红{c1.Red} 黑{c1.Dark} 杂{c1.Other}）");
+            ScreenProbe.SaveBmp(Path.Combine("reports", "shots", "syswethost-A1-stroke1.bmp"), r1x, r1y, bw, bh);
+
+            // 第 2 笔**写到一半**就取样：① 第 1 笔区域还在不在 ② 第 2 笔区域单不单色
+            PenWavyLine(x0, y2, 24, 400, first: true, stopAfterSteps: 12);
+            sawHostFed |= HostFedStrokeActive;
+            int r2x = (int)(x0 - 30), r2y = (int)(y2 - 60);
+            var c1mid = InkPixels(ScreenProbe.CaptureRegion(r1x, r1y, bw, bh));
+            // 第 2 笔只取**左半区**：笔尖（光标）此刻在右半，别把落点圈算进颜色里
+            var c2mid = InkPixels(ScreenProbe.CaptureRegion(r2x, r2y, bw / 2, bh));
+            ScreenProbe.SaveBmp(Path.Combine("reports", "shots", "syswethost-A2-mid.bmp"), r1x, r1y, bw, bh * 2 + 100);
+            bool keepMid = c1mid.Ink >= c1.Ink - 20;
+            bool singleMid = c2mid.Dark + c2mid.Other <= Math.Max(20, c2mid.Red / 20);
+            Console.WriteLine($"    第 2 笔起笔中：第 1 笔区域 墨={c1mid.Ink}（掉墨判定 {(keepMid ? "✓" : "✗")}，基准 {c1.Ink}）");
+            Console.WriteLine($"                  第 2 笔区域 墨={c2mid.Ink}（红{c2mid.Red} 黑{c2mid.Dark} 杂{c2mid.Other}，单色判定 {(singleMid ? "✓" : "✗")}）");
+            passKeep &= keepMid;
+            passSingle &= singleMid;
+
+            PenWavyLine(x0, y2, 24, 400, first: false, resumeAfterSteps: 12);
+            SettleFrames(80);
+            var c1end = InkPixels(ScreenProbe.CaptureRegion(r1x, r1y, bw, bh));
+            var c2end = InkPixels(ScreenProbe.CaptureRegion(r2x, r2y, bw, bh));
+            ScreenProbe.SaveBmp(Path.Combine("reports", "shots", "syswethost-A3-done.bmp"), r1x, r1y, bw, bh * 2 + 100);
+            bool keepEnd = c1end.Ink >= c1.Ink - 20;
+            bool singleEnd = c2end.Dark + c2end.Other <= Math.Max(20, c2end.Red / 20);
+            int strokes2 = Doc.Strokes.Count;
+            Console.WriteLine($"    第 2 笔抬笔后：Doc={strokes2} 笔（应 2），第 1 笔区域 墨={c1end.Ink}（{(keepEnd ? "✓" : "✗")}）");
+            Console.WriteLine($"                  第 2 笔区域 墨={c2end.Ink}（红{c2end.Red} 黑{c2end.Dark} 杂{c2end.Other}，单色 {(singleEnd ? "✓" : "✗")}）");
+            passKeep &= keepEnd;
+            passSingle &= singleEnd;
+            passCommit &= strokes2 == 2;
+        }
+
+        // ── B. 旁听点直喂（真笔口径数据源本身；掉墨回归不依赖系统认不认合成笔）──────
+        Console.WriteLine("  B 段：旁听点直喂两笔（HostPointFeed，真笔口径数据源）");
+        Doc.Clear();
+        Doc.InvalidateAll();
+        SettleFrames(60);
+        {
+            float x0 = _virtualX + 350f, y1 = _virtualY + 300f, y2 = _virtualY + 560f;
+            int r1x = (int)(x0 - 30), r1y = (int)(y1 - 60), bw = 700, bh = 120;
+
+            HostFeedWavyLine(x0, y1, 20);
+            SettleFrames(60);
+            int strokes1 = Doc.Strokes.Count;
+            var c1 = InkPixels(ScreenProbe.CaptureRegion(r1x, r1y, bw, bh));
+            Console.WriteLine($"    第 1 笔后：Doc={strokes1} 笔，第 1 笔区域 墨={c1.Ink}（红{c1.Red} 黑{c1.Dark} 杂{c1.Other}）");
+
+            HostFeedWavyLine(x0, y2, 20);
+            int r2x = (int)(x0 - 30), r2y = (int)(y2 - 60);
+            SettleFrames(80);
+            var c1end = InkPixels(ScreenProbe.CaptureRegion(r1x, r1y, bw, bh));
+            var c2end = InkPixels(ScreenProbe.CaptureRegion(r2x, r2y, bw, bh));
+            int strokes2 = Doc.Strokes.Count;
+            bool keep = c1end.Ink >= c1.Ink - 20;
+            bool single = c2end.Dark + c2end.Other <= Math.Max(20, c2end.Red / 20);
+            Console.WriteLine($"    第 2 笔后：Doc={strokes2} 笔（应 2），第 1 笔区域 墨={c1end.Ink}（基准 {c1.Ink}，{(keep ? "✓" : "✗")}）");
+            Console.WriteLine($"              第 2 笔区域 墨={c2end.Ink}（红{c2end.Red} 黑{c2end.Dark} 杂{c2end.Other}，单色 {(single ? "✓" : "✗")}）");
+            passKeep &= keep;
+            passSingle &= single;
+            passCommit &= strokes2 == 2 && strokes1 == 1;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"  旁听喂（真笔分支数据源）: {(sawHostFed ? "✓ A 段走到了旁听分支" : "⚠ A 段没走旁听分支（合成笔没进系统墨迹管线），B 段仍是旁听口径")}");
+        Console.WriteLine(passKeep
+            ? "  PASS: 连写两笔，第 1 笔的墨在第 2 笔起笔后一直都在（截图像素）"
+            : "  FAIL: 第 2 笔起笔后第 1 笔掉墨（截图像素掉了 20 以上）——交接/清理时机有问题");
+        Console.WriteLine(passSingle
+            ? "  PASS: 同一区域只有一种笔色像素（没有同笔双画/系统层颜色错）"
+            : "  FAIL: 同一区域出现两种颜色的墨（黑/杂色像素超标）——同笔双画或系统层颜色没同步");
+        Console.WriteLine(passCommit
+            ? "  PASS: 两笔都进了文档"
+            : "  FAIL: 有笔没进文档（整笔丢了）");
+        ExitCode = passKeep && passSingle && passCommit ? 0 : 1;
+        _quit = true;
+    }
+
+    /// <summary>截图像素分类：红墨 / 黑墨 / 杂色墨 / 背景（判据见各字段注释）。</summary>
+    private static (int Ink, int Red, int Dark, int Other) InkPixels(byte[] bgra)
+    {
+        int red = 0, dark = 0, other = 0;
+        for (int i = 0; i + 3 < bgra.Length; i += 4)
+        {
+            int b = bgra[i], g = bgra[i + 1], r = bgra[i + 2];
+            int luma = (114 * b + 587 * g + 299 * r) / 1000;
+            if (luma >= 215) continue;                       // 白板背景（含浅抗锯齿）
+            if (r > 110 && r > g + 55 && r > b + 55) red++;   // 红墨（含抗锯齿过渡）
+            else if (r < 95 && g < 95 && b < 95) dark++;      // 黑墨（系统默认属性那种）
+            else other++;                                     // 别的颜色的墨
+        }
+        return (red + dark + other, red, dark, other);
+    }
+
+    /// <summary>合成笔画一条波浪线（真笔同一条 WM_POINTER / 系统墨迹链路）。</summary>
+    private void PenWavyLine(float x0, float y, int steps, uint pressure, bool first,
+                             int stopAfterSteps = -1, int resumeAfterSteps = -1)
+    {
+        bool firstPt = first;
+        int begin = resumeAfterSteps >= 0 ? resumeAfterSteps : 0;
+        int end = stopAfterSteps >= 0 ? stopAfterSteps : steps;
+        for (int i = begin; i <= end; i++)
+        {
+            float t = i / (float)steps;
+            SendPenPoint(x0 + t * 600f, y + MathF.Sin(t * 6.28f) * 34f,
+                         pressure, contact: true, first: firstPt);
+            firstPt = false;
+            SettleFrames(4);
+        }
+        if (stopAfterSteps >= 0) return;                     // 中途取样段：笔还按着，不抬
+        SendPenPoint(x0 + 600f, y, 0, contact: false, first: false);
+        SettleFrames(30);
+    }
+
+    /// <summary>
+    /// **旁听点直喂**一条波浪线：完全按墨迹后台线程那套接口
+    /// （<c>BeginGesture → PostAction(点批) → 消息泵派发</c>），就是真笔的数据源本身。
+    /// 模式给 Ink（系统画湿墨）——测的是"交接/掉墨"那条链。
+    /// </summary>
+    private void HostFeedWavyLine(float x0, float y, int steps)
+    {
+        uint pid = 0x4242;
+        IntPtr hwnd = _windows[0].Hwnd;
+        var gen = HostPointFeed.BeginGesture(pid, Native.PT_PEN, false, HostStrokeMode.Ink);
+        for (int i = 0; i <= steps; i++)
+        {
+            float t = i / (float)steps;
+            var batch = new[]
+            {
+                new PenSample
+                {
+                    X = x0 + t * 600f,
+                    Y = y + MathF.Sin(t * 6.28f) * 34f,
+                    Pressure = 0.5f, HasPressure = true, InContact = true,
+                    TimeMs = NowMs,
+                },
+            };
+            int kind = i == 0 ? HostPointFeed.KindDown
+                     : i == steps ? HostPointFeed.KindUp
+                     : HostPointFeed.KindMove;
+            HostPointFeed.PostAction(hwnd, pid, kind, batch, batch.Length, gen);
+            SettleFrames(4);
+        }
+        SettleFrames(30);
+    }
+
+    // =====================================================================
+    //  荧光笔"两层墨"取证（--highlightertest，2026-10-12 真笔实测第 3 个 bug）
+    // =====================================================================
+
+    /// <summary>
+    /// `--highlightertest`：**荧光笔"两层墨"逐帧像素取证 + 半透明一致性**。
+    ///
+    /// 荧光笔是**半透明**墨（`InkPalette.ToHighlighter`，α=0.32）——一层的像素值算得出来、
+    /// 两层叠加当场变深，所以"到底画了几层"能用截图**量化**，不靠肉眼。判据（逐像素、
+    /// 对**画之前的底图**做差，底纹/格线不影响）：
+    ///   <c>ae = (底.B − 图.B) / (底.B − 墨.B)</c> ≈ 这一像素上叠了几层 × 每层 α；
+    ///   一层 = 0.10~0.45（α=0.32）、同色双层 = 0.45~0.75（1−0.68²≈0.54）、
+    ///   强黄/系统不透明基色 ≈ 1.0（荧光黄基色 B=38）、黄系以外的深色 = 外来色
+    ///   （系统默认黑那类"一笔两种颜色"）。
+    ///
+    /// 2026-10-13 起荧光笔的湿墨归**系统画**（`DecideHostStroke` → Ink）：半透明一致靠
+    /// **墨迹层整层 α 合成**（见 Input/SystemWetHost.cs 文件头⑤），湿墨期的像素值
+    /// 必须和我们干墨的一层**同一个数**（实测 182 对 182）。
+    ///
+    /// 段落（区域互不相交、先拍底图再画）：
+    ///   A. 合成笔整链路（系统墨迹管线 → 旁听 → 引擎，**湿墨=系统画**）：一笔 + 连画两笔，
+    ///      逐帧取证 **湿墨期 / 收笔后 30ms / 120ms / 420ms / 第 2 笔进行中** 各多少层——
+    ///      "系统湿层多画一层"只在湿墨期露头，"干墨没清干净"要收笔后才现形，分开量才分得出；
+    ///   B. 旁听直喂（<see cref="HostPointFeed"/>，mode=Self = 自绘湿墨）：我们自己那条路的
+    ///      **单层基准**（也是"半透明一致性"的对比基准）；
+    ///   C. 校准：同一条线**画两遍**（故意叠两层）——取证口径先自己证明验得出双层，
+    ///      否则"全一层"的结论可能是量不出来；
+    ///   D. 叠加一致性（**压在中灰实线上**）：灰线上叠一层荧光，湿墨期（系统画）/
+    ///      收笔后（我们干墨）/ 自绘三条路的交叉色都要落在"一层荧光"的理论值上——
+    ///      白底上 α 铺色与乘性同值（那里的 Δ 是硬判定），深色底才分得出系统那层的
+    ///      合成语义（2026-10-13 定 α 铺色那条：IsHighlighter 的乘性会和干墨分家，
+    ///      两条模型都算出来对照，见 D 段注释）。
+    ///
+    /// 顺带验两个嫌疑：委托轨迹还在不在喂（嫌疑 D，宿主窗口应为 0）、掉墨（连画回归）。
+    /// </summary>
+    private void HighlighterLayerTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 荧光笔两层墨取证 + 半透明一致性（--highlightertest）===");
+        if (_windows.Count == 0 || _windows[0].SysWetHost == null)
+        {
+            Console.WriteLine("  SKIP: 本窗口没建系统托管湿墨宿主（用 --syswethost 启动再跑）");
+            _quit = true; return;
+        }
+        Console.WriteLine($"  湿墨后端   : {DescribeWetBackend(_windows[0])}");
+        Console.WriteLine($"  湿墨归属   : {DescribeToolWetOwners(true, false)}");
+
+        Doc.Clear();
+        Doc.InvalidateAll();
+        Tool = Tool.Highlighter;
+        HighlighterWidthIndex = 4;
+        HighlighterWidthLogical = HighlighterWidthPresets[4];   // 32 逻辑像素：核心区大、抗锯齿占比小
+        SetColorFromUi(InkPalette.HighlighterBand[0].Color);    // 荧光黄（内部走 ToHighlighter，α=0.32）
+        SyncSystemWetAppearance();
+        BoardOn = true;
+        SettleFrames(120);
+        float inkA = HighlighterCurrent.A;
+        int inkBByte = (int)Math.Clamp(HighlighterCurrent.B * 255f + 0.5f, 0f, 255f);
+        int inkRByte = (int)Math.Clamp(HighlighterCurrent.R * 255f + 0.5f, 0f, 255f);
+        int inkGByte = (int)Math.Clamp(HighlighterCurrent.G * 255f + 0.5f, 0f, 255f);
+        Console.WriteLine($"  荧光笔色   : α={inkA:F2} 墨B={inkBByte}，系统层={InkEngine.SystemWetHost.ColorSyncNote}");
+
+        // 四条互不相交的水平直线（水平线不自交——曲线自交处天然叠两层，会把判据搅糊）。
+        float x0 = _virtualX + 350f, x1 = x0 + 700f;
+        float y1 = _virtualY + 280f, y2 = _virtualY + 520f, y3 = _virtualY + 760f, y4 = _virtualY + 960f;
+        int rx = (int)(x0 - 40), rw = 780, rh = 130;
+        (int X, int Y) R1 = (rx, (int)(y1 - 65));
+        (int X, int Y) R2 = (rx, (int)(y2 - 65));
+        (int X, int Y) R3 = (rx, (int)(y3 - 65));
+        (int X, int Y) R4 = (rx, (int)(y4 - 65));
+
+        // ⚠ 收笔后的截图**宽度收窄 120px**：荧光笔的落点圆盘（直径=笔宽的自绘反馈盘，
+        //    还带层叠投影，半径约 50px）收笔后停在笔尖上（线的右端 x0+700 处），
+        //    压着线尾天然叠一层——那是反馈、不是墨，算进"几层墨"里会把判定搅浑
+        //    （实测 B 段残余的"双层"像素包围盒就贴在 x=690~699 这条边上）。
+        //    收窄后圆盘整块落在取样框外。
+        const int cwAfter = 660;
+        byte[] Cap((int X, int Y) r, int w = -1)
+            => ScreenProbe.CaptureRegion(r.X, r.Y, w > 0 ? w : rw, rh);
+        // 底图：画之前各拍一张（格线/底纹逐像素做差抵掉）。
+        var bg1 = Cap(R1); var bg2 = Cap(R2); var bg3 = Cap(R3); var bg4 = Cap(R4);
+
+        long fedBefore = OverlayWindow.InkTrailPointsFed;
+        bool sawHostFed = false;
+
+        // ── A. 合成笔整链路（系统管线 → 旁听 → 引擎；系统层真的会画）──────────
+        Console.WriteLine("  A 段：合成笔整链路（一笔 + 连画两笔）");
+        var aMid1 = HlZero; var aT30 = HlZero; var aT120 = HlZero; var aT420 = HlZero;
+        var aMid2 = HlZero; var a2Done = HlZero; var a1After2 = HlZero;
+        if (!EnsureSyntheticPen())
+        {
+            Console.WriteLine("    A 段 SKIP: 拿不到合成笔设备（CreateSyntheticPointerDevice 失败）");
+        }
+        else
+        {
+            // 第 1 笔：写到 16/24 点时（笔尖在右段）取**左段**看湿墨期有几层
+            PenStraightLine(x0, x1, y1, 24, first: true, stopAfterSteps: 16);
+            sawHostFed |= HostFedStrokeActive;
+            aMid1 = HlStat(bg1, Cap(R1, 430), inkBByte, 430);
+            Console.WriteLine("    第1笔湿墨期 左段 : " + HlText(aMid1) + HlDblBox(aMid1));
+            ScreenProbe.SaveBmp(Path.Combine("reports", "shots", "highlighter-A1-mid.bmp"), R1.X, R1.Y, rw, rh);
+
+            PenStraightLine(x0, x1, y1, 24, first: false, resumeAfterSteps: 16);
+            aT30 = HlStat(bg1, Cap(R1, cwAfter), inkBByte, cwAfter);
+            SettleFrames(90);
+            aT120 = HlStat(bg1, Cap(R1, cwAfter), inkBByte, cwAfter);
+            SettleFrames(300);
+            aT420 = HlStat(bg1, Cap(R1, cwAfter), inkBByte, cwAfter);
+            Console.WriteLine("    第1笔收笔后 t=30ms : " + HlText(aT30) + HlDblBox(aT30));
+            Console.WriteLine("    第1笔收笔后 t=120ms: " + HlText(aT120) + HlDblBox(aT120));
+            Console.WriteLine("    第1笔收笔后 t=420ms: " + HlText(aT420) + HlDblBox(aT420));
+            ScreenProbe.SaveBmp(Path.Combine("reports", "shots", "highlighter-A2-done.bmp"), R1.X, R1.Y, rw, rh);
+
+            // 第 2 笔：湿墨期看第 1 笔区域有没有跟着变深（迟到残留叠上来）
+            PenStraightLine(x0, x1, y2, 24, first: true, stopAfterSteps: 16);
+            aMid2 = HlStat(bg2, Cap(R2, 430), inkBByte, 430);
+            a1After2 = HlStat(bg1, Cap(R1, cwAfter), inkBByte, cwAfter);
+            Console.WriteLine("    第2笔湿墨期 左段 : " + HlText(aMid2));
+            Console.WriteLine("    第2笔湿墨期 第1笔区: " + HlText(a1After2) + "（不许比 t=420ms 更深）");
+            PenStraightLine(x0, x1, y2, 24, first: false, resumeAfterSteps: 16);
+            SettleFrames(120);
+            var a2T120 = HlStat(bg2, Cap(R2, cwAfter), inkBByte, cwAfter);
+            Console.WriteLine("    第2笔收笔后 t=120ms: " + HlText(a2T120) + "（还在延迟亮层窗口里，参考）");
+            SettleFrames(320);
+            a2Done = HlStat(bg2, Cap(R2, cwAfter), inkBByte, cwAfter);
+            a1After2 = HlStat(bg1, Cap(R1, cwAfter), inkBByte, cwAfter);
+            Console.WriteLine("    第2笔收笔后 t≈450ms: " + HlText(a2Done) + HlDblBox(a2Done) + "（亮层后，判定用）");
+            Console.WriteLine("    第2笔收笔后 t≈450ms 第1笔区: " + HlText(a1After2));
+            ScreenProbe.SaveBmp(Path.Combine("reports", "shots", "highlighter-A3-two.bmp"),
+                                R1.X, R1.Y, rw, (int)(y2 - y1) + rh);
+        }
+
+        // ── B. 旁听直喂（Self = 自绘湿墨；系统墨迹管线没参与）──────────────────
+        Console.WriteLine("  B 段：旁听点直喂一笔（HostPointFeed，mode=Self）");
+        HostFeedLine(x0, x1, y3, 20, HostStrokeMode.Self, 0x4243);
+        var bDone = HlStat(bg3, Cap(R3, cwAfter), inkBByte, cwAfter);
+        Console.WriteLine("    收笔后（单层基准）: " + HlText(bDone) + HlDblBox(bDone));
+        ScreenProbe.SaveBmp(Path.Combine("reports", "shots", "highlighter-B-single.bmp"), R3.X, R3.Y, rw, rh);
+
+        // ── C. 校准：同一条线画两遍（故意两层）——口径要验得出双层才算数──────
+        Console.WriteLine("  C 段：校准（同位两笔，故意叠两层）");
+        HostFeedLine(x0, x1, y4, 20, HostStrokeMode.Self, 0x4244);
+        HostFeedLine(x0, x1, y4, 20, HostStrokeMode.Self, 0x4245);
+        var cDone = HlStat(bg4, Cap(R4, cwAfter), inkBByte, cwAfter);
+        Console.WriteLine("    同位两笔后        : " + HlText(cDone) + HlDblBox(cDone));
+        ScreenProbe.SaveBmp(Path.Combine("reports", "shots", "highlighter-C-double.bmp"), R4.X, R4.Y, rw, rh);
+
+        // ── D. 叠加一致性：中灰实线上叠一层荧光（自绘 / 系统湿墨 / 干墨 三条路）──
+        //     湿墨是系统画的：它那层怎么和底合成只有压着内容才量得出。两种模型
+        //     （白底上两者同值，深色底才分得开）：
+        //       α 铺色  = 底×(1−α) + 色×α        （我们干墨/自绘的公式；系统那层
+        //                                          不设 IsHighlighter + 整层 α 时同它，
+        //                                          实测 Δ=(0,1,0)）
+        //       乘性    = 底×(1−α + α·色/255)    （系统 IsHighlighter 的经典荧光语义，
+        //                                          对照实验实测 Δ乘≤6，和干墨 Δ=(41,28,0)）
+        //     2026-10-13 定：走 α 铺色那条（半透明一致性是验收核心，见文件头⑤）。
+        Console.WriteLine("  D 段：叠加一致性（中灰实线上叠一层荧光）");
+        float x0b = _virtualX + 1150f, x1b = x0b + 600f;
+        const int crossW = 260, crossH = 12;   // 线中段 ±6px：灰线（20px）内、荧光（32px）内
+        (int R, int G, int B, int N) Cross(float y)
+            => MeanBand(ScreenProbe.CaptureRegion((int)(x0b + 60), (int)(y - crossH / 2), crossW, crossH));
+        void PutGreyLine(float y)
+        {
+            var s = new Stroke { Tool = Tool.Pen, Color = new Color4(0.5f, 0.5f, 0.5f, 1f), Width = 20f * DpiScale };
+            for (int i = 0; i <= 16; i++) s.AddPoint(x0b + (x1b - x0b) * i / 16f, y, 0.5f, i);
+            Doc.AddStroke(s);
+            Doc.InvalidateAll();
+            SettleFrames(120);
+        }
+        PutGreyLine(y1);
+        var under = Cross(y1);
+        (int R, int G, int B) expA = (
+            (int)Math.Round(under.R * (1 - inkA) + inkRByte * inkA),
+            (int)Math.Round(under.G * (1 - inkA) + inkGByte * inkA),
+            (int)Math.Round(under.B * (1 - inkA) + inkBByte * inkA));
+        (int R, int G, int B) expM = (
+            (int)Math.Round(under.R * (1 - inkA + inkA * inkRByte / 255f)),
+            (int)Math.Round(under.G * (1 - inkA + inkA * inkGByte / 255f)),
+            (int)Math.Round(under.B * (1 - inkA + inkA * inkBByte / 255f)));
+        Console.WriteLine($"    灰线底色 ({under.R},{under.G},{under.B}) → 一层荧光理论值"
+                          + $" α铺色({expA.R},{expA.G},{expA.B}) / 乘性({expM.R},{expM.G},{expM.B})");
+
+        // D1 自绘（mode=Self）的交叉色
+        HostFeedLine(x0b, x1b, y1, 16, HostStrokeMode.Self, 0x4250);
+        var dSelf = Cross(y1);
+        Console.WriteLine($"    D1 自绘交叉色    : ({dSelf.R},{dSelf.G},{dSelf.B})"
+                          + $" Δα=({dSelf.R - expA.R:+0;-0},{dSelf.G - expA.G:+0;-0},{dSelf.B - expA.B:+0;-0})");
+
+        // D2 系统画（合成笔整链路）：湿墨期取样 + 收笔后（干墨）取样
+        (int R, int G, int B, int N) dWet = (0, 0, 0, 0), dDry = (0, 0, 0, 0);
+        bool dSynth = false;
+        PutGreyLine(y2);
+        if (!EnsureSyntheticPen())
+        {
+            Console.WriteLine("    D2 SKIP: 拿不到合成笔设备（湿墨期交叉色没量到）");
+        }
+        else
+        {
+            dSynth = true;
+            PenStraightLine(x0b, x1b, y2, 16, first: true, stopAfterSteps: 12);
+            dWet = Cross(y2);
+            PenStraightLine(x0b, x1b, y2, 16, first: false, resumeAfterSteps: 12);
+            SettleFrames(420);
+            dDry = Cross(y2);
+            Console.WriteLine($"    D2 系统湿墨交叉色: ({dWet.R},{dWet.G},{dWet.B})"
+                              + $" Δα=({dWet.R - expA.R:+0;-0},{dWet.G - expA.G:+0;-0},{dWet.B - expA.B:+0;-0})"
+                              + $" Δ乘=({dWet.R - expM.R:+0;-0},{dWet.G - expM.G:+0;-0},{dWet.B - expM.B:+0;-0})（湿墨期取样）");
+            Console.WriteLine($"    D2 交接后干墨色  : ({dDry.R},{dDry.G},{dDry.B})"
+                              + $" Δα=({dDry.R - expA.R:+0;-0},{dDry.G - expA.G:+0;-0},{dDry.B - expA.B:+0;-0})（收笔后取样）");
+            ScreenProbe.SaveBmp(Path.Combine("reports", "shots", "highlighter-D-cross.bmp"),
+                                (int)x0b, (int)(y1 - 60), 700, (int)(y2 - y1) + 120);
+        }
+
+        long fed = OverlayWindow.InkTrailPointsFed - fedBefore;
+        int strokes = Doc.Strokes.Count;
+        Console.WriteLine();
+        Console.WriteLine($"  委托轨迹喂点增量 : {fed}（宿主窗口轨迹通道整关，应 0）");
+        Console.WriteLine($"  文档笔数         : {strokes}（A2 + B1 + C2 + D 黑2荧2 = 9）");
+        Console.WriteLine($"  旁听喂（真笔数据源）: {(sawHostFed ? "✓ A 段走到了旁听分支" : "⚠ A 段没走旁听分支")}");
+
+        // 判定：双层像素占比（双层 + 强黄）在**生产笔**里必须是噪声级；
+        // 校准段必须**大头**是双层——否则这个口径根本量不出双层，全一层的结论不作数。
+        const double noisy = 0.02;
+        static bool LayerOk(in HlStatT s)
+            => s.Yellow > 500 && (s.Dbl + s.Deep) <= Math.Max(20, s.Yellow * noisy);
+        bool passWet = LayerOk(aMid1) && LayerOk(aMid2);
+        bool passDry = LayerOk(aT420) && LayerOk(a2Done) && LayerOk(bDone);
+        // 收笔后不许再变深（迟到入库那类"过一会儿多一层"）
+        bool passNoLate = (aT120.Dbl + aT120.Deep) <= Math.Max(20, aT420.Yellow * noisy)
+                       && (a1After2.Dbl + a1After2.Deep) <= Math.Max(20, aT420.Yellow * noisy);
+        bool passKeep = a1After2.Yellow + a1After2.One >= (aT420.Yellow + aT420.One) - 30;
+        bool passCalib = cDone.Yellow > 500 && (cDone.Dbl + cDone.Deep) * 3 >= cDone.Yellow;
+        bool passTrail = fed == 0;
+        bool passCommit = strokes == 9;
+        // ★ 半透明一致性（2026-10-13 验收核心）：湿墨期是**系统画**的那一层，
+        //   它的色值必须和我们干墨的一层同一个数（白板上量最深 B 通道）。
+        bool passColor = Math.Abs(aMid1.MinB - bDone.MinB) <= 6
+                      && Math.Abs(aT420.MinB - bDone.MinB) <= 6
+                      && Math.Abs(aMid2.MinB - bDone.MinB) <= 6;
+        // ★ 叠加一致性：灰线上的交叉色必须是"一层荧光"的可预测值——
+        //   自绘/干墨 = α 铺色模型；系统湿墨 = α 铺色或乘性模型（白底两者同值，
+        //   passColor 已硬判；深色底按系统 IsHighlighter 的乘性语义，见 D 段注释）。
+        //   出界 = 双层、或系统那层按不透明基色画（上一轮的老 bug 那种）。
+        static bool CrossOk((int R, int G, int B, int N) c, (int R, int G, int B) e)
+            => Math.Abs(c.R - e.R) <= 8 && Math.Abs(c.G - e.G) <= 8 && Math.Abs(c.B - e.B) <= 8;
+        bool wetModelA = CrossOk(dWet, expA), wetModelM = CrossOk(dWet, expM);
+        bool passCross = CrossOk(dSelf, expA)
+                      && (!dSynth || (CrossOk(dDry, expA) && (wetModelA || wetModelM)));
+
+        Console.WriteLine();
+        Console.WriteLine(passWet
+            ? "  PASS: 湿墨期只有一层（系统画的那一层没有和自绘叠着）"
+            : "  FAIL: 湿墨期出现双层/强黄像素——系统湿层和自绘同时在画，或系统层颜色/α没套对");
+        Console.WriteLine(passDry
+            ? "  PASS: 收笔后只剩一层干墨"
+            : "  FAIL: 收笔后仍有双层/强黄像素——干墨叠层或系统那份没清干净");
+        Console.WriteLine(passNoLate
+            ? "  PASS: 收笔后 120ms/420ms 不再变深（没有迟到入库的残影）"
+            : "  FAIL: 收笔后过一会儿多出一层——迟到入库/补枪没逮住");
+        Console.WriteLine(passKeep
+            ? "  PASS: 第 2 笔全程第 1 笔的墨都在（不掉墨回归）"
+            : "  FAIL: 连画两笔第 1 笔掉墨");
+        Console.WriteLine(passCalib
+            ? "  PASS: 校准段（同位两笔）被量成双层——取证口径有效"
+            : "  FAIL: 校准段都没量出双层，这个口径不作数");
+        Console.WriteLine(passColor
+            ? $"  PASS: 半透明一致：湿墨期（系统画）最深B={aMid1.MinB}/{aMid2.MinB}，"
+              + $"干墨最深B={aT420.MinB}（自绘基准 {bDone.MinB}），Δ≤6"
+            : $"  FAIL: 湿墨期与干墨色值对不上（系统画 {aMid1.MinB}/{aMid2.MinB} vs 干墨 {aT420.MinB}"
+              + $"，基准 {bDone.MinB}）——整层 α/基色没套对");
+        Console.WriteLine(passCross
+            ? "  PASS: 叠加一致：灰线上一层荧光——自绘/干墨=α铺色值，系统湿墨=一层可预测值（"
+              + (wetModelA ? "α铺色" : "乘性") + "），白底两者 Δ=0"
+            : $"  FAIL: 交叉色不是'一层荧光'：自绘({dSelf.R},{dSelf.G},{dSelf.B})"
+              + (dSynth ? $" 系统湿墨({dWet.R},{dWet.G},{dWet.B}) 干墨({dDry.R},{dDry.G},{dDry.B})" : "")
+              + $" vs α铺色({expA.R},{expA.G},{expA.B})/乘性({expM.R},{expM.G},{expM.B})"
+              + "——双层、或系统那层按不透明基色画");
+        Console.WriteLine(passTrail
+            ? "  PASS: 委托轨迹一个点都没喂（没有第三层）"
+            : $"  FAIL: 委托轨迹还在被喂 {fed} 点——荧光笔可能三层墨");
+        Console.WriteLine(passCommit
+            ? "  PASS: 9 笔都进了文档"
+            : $"  FAIL: 文档笔数 {strokes} ≠ 9（有笔丢了/重复了）");
+        ExitCode = passWet && passDry && passNoLate && passKeep && passCalib
+                && passColor && passCross && passTrail && passCommit ? 0 : 1;
+        _quit = true;
+    }
+
+    /// <summary>荧光笔像素分层统计（判据见 <see cref="HighlighterLayerTest"/> 注释）。</summary>
+    private struct HlStatT
+    {
+        public int Yellow, One, Dbl, Deep, Foreign, MinB;
+        /// <summary>双层/强黄像素的包围盒（区域内相对坐标；用它分辨"整条叠"还是"局部叠"）。</summary>
+        public int DblX0, DblY0, DblX1, DblY1;
+    }
+
+    private static HlStatT HlZero => default;
+
+    private static HlStatT HlStat(byte[] bg, byte[] fg, int inkBByte, int w)
+    {
+        var s = new HlStatT { MinB = 255, DblX0 = int.MaxValue, DblY0 = int.MaxValue, DblX1 = -1, DblY1 = -1 };
+        int n = Math.Min(bg.Length, fg.Length);
+        for (int i = 0; i + 3 < n; i += 4)
+        {
+            int db = bg[i] - fg[i];                 // B 通道变深量（黄墨在浅底上是变深）
+            if (db <= 6) continue;
+            int r = fg[i + 2], g = fg[i + 1], b = fg[i];
+            bool isYellow = r >= 190 && r >= g - 12 && g > b + 8;
+            if (!isYellow) { s.Foreign++; continue; }   // 黑/杂色：系统默认属性那类"一笔两色"
+            s.Yellow++;
+            double ae = db / Math.Max(1.0, bg[i] - inkBByte);   // ≈ 叠了几层 × 每层 α
+            if (ae <= 0.45) s.One++;
+            else if (ae <= 0.75) s.Dbl++;                       // 同色叠深（1−0.68²≈0.54）
+            else s.Deep++;                                      // 强黄：系统 multiply 混合 ≈ 1.0
+            if (b < s.MinB) s.MinB = b;
+            if (ae > 0.45)
+            {
+                int px = (i / 4) % w, py = (i / 4) / w;
+                if (px < s.DblX0) s.DblX0 = px;
+                if (py < s.DblY0) s.DblY0 = py;
+                if (px > s.DblX1) s.DblX1 = px;
+                if (py > s.DblY1) s.DblY1 = py;
+            }
+        }
+        return s;
+    }
+
+    private static string HlText(in HlStatT s)
+        => $"黄墨={s.Yellow}（一层 {s.One}、双层 {s.Dbl}、强黄 {s.Deep}、外来 {s.Foreign}、最深B={s.MinB}）"
+           + (s.Yellow > 0 ? $"，非一层占比 {(s.Dbl + s.Deep) * 100.0 / s.Yellow:F1}%" : "");
+
+    /// <summary>双层/强黄像素的包围盒（"整条都叠"还是"只在某个角落叠"，一眼分得出）。</summary>
+    private static string HlDblBox(in HlStatT s)
+        => s.DblX1 < 0 ? "，双层无" : $"，双层包围盒=({s.DblX0},{s.DblY0})-({s.DblX1},{s.DblY1})";
+
+    /// <summary>小框内像素的**平均色**（叠加一致性用：交叉区"这一层铺出来的颜色"）。</summary>
+    private static (int R, int G, int B, int N) MeanBand(byte[] bgra)
+    {
+        long sr = 0, sg = 0, sb = 0;
+        int n = 0;
+        for (int i = 0; i + 3 < bgra.Length; i += 4)
+        {
+            sb += bgra[i]; sg += bgra[i + 1]; sr += bgra[i + 2]; n++;
+        }
+        return n == 0 ? (0, 0, 0, 0) : ((int)(sr / n), (int)(sg / n), (int)(sb / n), n);
+    }
+
+    /// <summary>合成笔画一条**水平直线**（取证用：曲线自交处天然叠两层，会把判据搅糊）。</summary>
+    private void PenStraightLine(float x0, float x1, float y, int steps, bool first,
+                                 int stopAfterSteps = -1, int resumeAfterSteps = -1)
+    {
+        bool firstPt = first;
+        int begin = resumeAfterSteps >= 0 ? resumeAfterSteps : 0;
+        int end = stopAfterSteps >= 0 ? stopAfterSteps : steps;
+        for (int i = begin; i <= end; i++)
+        {
+            float t = i / (float)steps;
+            SendPenPoint(x0 + (x1 - x0) * t, y, 400, contact: true, first: firstPt);
+            firstPt = false;
+            SettleFrames(4);
+        }
+        if (stopAfterSteps >= 0) return;                     // 中途取样段：笔还按着，不抬
+        SendPenPoint(x1, y, 0, contact: false, first: false);
+        SettleFrames(30);
+    }
+
+    /// <summary>旁听点直喂一条水平直线（mode=Self 即荧光笔的生产模式）。</summary>
+    private void HostFeedLine(float x0, float x1, float y, int steps, HostStrokeMode mode, uint pid)
+    {
+        IntPtr hwnd = _windows[0].Hwnd;
+        var gen = HostPointFeed.BeginGesture(pid, Native.PT_PEN, false, mode);
+        for (int i = 0; i <= steps; i++)
+        {
+            float t = i / (float)steps;
+            var batch = new[]
+            {
+                new PenSample
+                {
+                    X = x0 + (x1 - x0) * t,
+                    Y = y,
+                    Pressure = 0.5f, HasPressure = true, InContact = true,
+                    TimeMs = NowMs,
+                },
+            };
+            int kind = i == 0 ? HostPointFeed.KindDown
+                     : i == steps ? HostPointFeed.KindUp
+                     : HostPointFeed.KindMove;
+            HostPointFeed.PostAction(hwnd, pid, kind, batch, batch.Length, gen);
+            SettleFrames(4);
+        }
+        SettleFrames(30);
     }
 
 }

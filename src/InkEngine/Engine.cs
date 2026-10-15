@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using Vortice.Direct2D1;
@@ -104,7 +104,12 @@ public partial class InkEngine
             or "--nosmooth" or "--printersafe"
             or "--mean2gauss" or "--mean2guniform" or "--mean2gsigma" or "--mean2gfast"
             or "--mean2glo" or "--mean2ghi" or "--mean2gtip"
-            or "--predict2" or "--nopredict2" or "--predlatency" or "--nofastwet" => true,
+            or "--predict2" or "--nopredict2" or "--predlatency" or "--nofastwet" or "--pred2ms"
+            // 2026-10-13 补登记（两线合并）：托管 / 自定义干燥 / 染色笔 / 湿墨档位这批新开关——
+            // 缺了它们，敲在第一位会被当"自检 mode"→ 构造期不读设置盘、HUD 被关
+            //（兜底分支只撤隔离，救不回"没读设置"——换机测试的命令正好全踩在这上面）。
+            or "--syswethost" or "--nosyswethost" or "--nocustomdrying"
+            or "--wetmode" or "--selfpen" or "--framepen" => true,
         _ => false,
     };
 
@@ -345,6 +350,12 @@ public partial class InkEngine
     private bool _fastWetPending;
     /// <summary>挂起时用的最后屏幕位置（决定更新哪一个窗口的湿墨层）。</summary>
     private float _fastWetScreenX, _fastWetScreenY;
+
+    /// <summary>
+    /// 这一笔是不是"系统托管湿墨"旁听喂进来的（合成指针 id，见 Input/SystemWetHost.cs）。
+    /// 是的话 raw 补点整笔停用（防双重计数）。
+    /// </summary>
+    private bool _hostFedStroke;
 
     /// <summary>Overlay 渲染判据：这一笔是不是"由系统轨迹画湿墨"。</summary>
     internal bool IsSystemWetStroke(Stroke s) => s != null && ReferenceEquals(s, _systemWetStroke);
@@ -1990,6 +2001,28 @@ public partial class InkEngine
     internal Color4 HighlighterCurrent = InkPalette.HighlighterDefault;
     internal bool UiCapturing;
 
+    /// <summary>
+    /// 自绘染色笔（`--selfpen`，2026-10-13）：笔工具在鼠标/手写板下，
+    /// 用自绘的斜笔代替系统 IDC_PEN——**形状/笔身 = 系统位图原样，只有笔帽
+    /// 染当前色**（三版口径：用户"只用系统的笔、只在笔帽增加颜色"，
+    /// 见 Cursors.TintPen）。**纯外观开关**：走的还是系统光标通道，
+    /// 延迟与系统笔同级——不是"应用帧画"那条慢路。
+    /// </summary>
+    internal static bool SelfPenCursorEnabled;
+
+    /// <summary>
+    /// 应用帧笔画笔（`--framepen`，2026-10-13 试作）：染色笔的**同一张位图**改由
+    /// 应用帧画（浮动层、与墨同帧）。和 `--selfpen` 组合就是"A/B 对照"：
+    /// 同一支笔，一个走系统光标通道（快）、一个走应用帧（慢约 1~2 帧）。
+    ///
+    /// ⚠ **真机复测更正（2026-10-13 晚）**：原判"迟缓好严重"是**误报**——实际手感
+    /// "很到位"（笔尖与墨头逐帧贴合）。真实问题只有**画质发糊**（himetric 亚像素
+    /// 位置 + linear 采样），**已修**（DrawFramePen：窗口空间像素对齐）。
+    /// 理论延迟账不变（帧管线 vs 系统光标直管），但用户口径：**与墨同拍**的收益更大。
+    /// 与 `--selfpen` 是同一张位图，两者只差"谁画、几时上屏"。
+    /// </summary>
+    internal static bool FramePenEnabled;
+
     /// <summary>自检用：系统问了我们几次命中测试、其中几次回答"这块是我的"。</summary>
     internal int _cntNcHitTest, _cntNcHitClient;
 
@@ -2303,10 +2336,28 @@ public partial class InkEngine
         // 实测（2026-10-11，逐帧采样）：鼠标**也画**（拖动中峰值 163 像素的"尾巴"）；
         // 先前"0 像素"是采样太稀漏掉了它（尾巴只存活到我们下一次上屏）。
         // 笔/鼠标/触摸都喂（每消息几次 COM 调用，代价可忽略）。
-        // ---- 湿墨档位（0..3）---------------------------------------------------
+        //
+        // 2026-10-13（opt 线）：先应用**设置页的后端偏好**（「墨迹 → 湿墨后端」，重启生效）——
+        //   自动=现状逻辑（轨迹可用走轨迹，否则托管）/ 自绘=两条都关 /
+        //   委托轨迹=开轨迹关托管 / 系统托管=强制托管（含自定义干燥）。
+        // 命令行开关在其后覆盖（A/B 与排障全靠它，不能让设置把它顶掉）。
+        // 自检模式 UiPrefs 不读盘 → backend=null → 自动档，判据确定（见 LoadUiPrefs 那段）。
+        {
+            string backend = GetUiPref("wetBackend");
+            bool hostOn = true, hostPrefer = false;
+            if (backend == "self" || backend == "trail") hostOn = false;
+            if (backend == "host") hostPrefer = true;
+            OverlayWindow.InkTrailEnabled = backend != "self";
+            OverlayWindow.SystemWetHostEnabled = hostOn;
+            OverlayWindow.SystemWetHostPrefer = hostPrefer;
+        }
+        // ---- 湿墨档位（0..3）（main 线）-----------------------------------------
         // 顺序：**先读设置里记着的档**（没有 = 0 原路径），再看 `--wetmode N`
         //（覆盖 + 记住），最后让老的开发/诊断开关覆盖（`--inktrail` / `--noinktrail`
         // 的判据逐字不变，自检与对照全照旧）。
+        // ⚠ 2026-10-15 两线合并：档位与上面「湿墨后端」**并存**——档位管"轨迹 / 应用湿墨层"
+        //   的加减（只加不减），后端管"托管"的开关与总基调；两者对 InkTrailEnabled 重叠处
+        //   **后落地的档位为准**。"合一成一套选择器"待拍板（见合并说明）。
         WetMode = int.TryParse(GetUiPref(WetModePrefKey), out int wmPref) ? Math.Clamp(wmPref, 0, 3) : 0;
         for (int i = 0; i < args.Length - 1; i++)
             if (args[i] == "--wetmode" && int.TryParse(args[i + 1], out int wmArg))
@@ -2338,6 +2389,36 @@ public partial class InkEngine
         if (args.Contains("--ownwet")) OverlayWindow.SystemWetPreferred = false;
         // 只负责"关"（档位已经在上面落过；这里再写 `!Contains` 会把档位 0/1 的应用湿墨层打开）。
         if (args.Contains("--nofastwet")) OverlayWindow.FastWetFallbackEnabled = false;
+
+        // ---- 系统托管湿墨（CoreInkPresenterHost + 旁听，2026-10-12）--------------
+        //
+        // 湿墨后端的优先级：委托墨迹轨迹 → **系统托管湿墨** → 自绘湿墨（见 Overlay.CreateDeviceResources）。
+        // 委托轨迹不可用的环境（Win10 1709+ 等）自动落到第二档；本机轨迹可用时**默认行为不变**。
+        // 开关策略：**基础值来自设置页「湿墨后端」**（上面那段已应用；默认自动=开）；
+        // `--nosyswethost` 关；`--syswethost` **强制启用**（越过轨迹那一档——换机测试新后端就靠它）。
+        // ⚠ 基础值已由上面的「设置页后端偏好」设过（见湿墨后端那一段）；这里只做命令行覆盖。
+        if (args.Contains("--nosyswethost"))
+        {
+            OverlayWindow.SystemWetHostEnabled = false;
+            OverlayWindow.SystemWetHostPrefer = false;
+        }
+        if (args.Contains("--syswethost"))
+        {
+            OverlayWindow.SystemWetHostEnabled = true;
+            OverlayWindow.SystemWetHostPrefer = true;
+        }
+        // R1（2026-10-13）：自定义干燥（系统只画湿墨、干墨自绘；`--customdry` 探针钉死的接法）。
+        // 默认开，`--nocustomdrying` 关（A/B 对照用）；失败自动回退 ClearStrokes 交接。
+        SystemWetHost.CustomDryingWanted = !args.Contains("--nocustomdrying");
+
+        // `--selfpen`（2026-10-13）：自绘斜笔光标——笔身原样、笔帽当前色（见 Cursors.TintPen）。
+        // "全自绘 + 染色笔"手感试装：配 `--noinktrail --nosyswethost` 一起敲。
+        SelfPenCursorEnabled = args.Contains("--selfpen");
+
+        // `--framepen`（2026-10-13 试作）：应用帧笔画笔——和 `--selfpen` 同一张位图，
+        // 但改由应用帧绘制（浮动层，与墨同帧）。对照"系统光标通道 vs 应用帧"用。
+        // ⚠ 复测更正（2026-10-13 晚）：手感"很到位"（"迟缓"系误报）；糊已修（像素对齐，见 DrawFramePen）。
+        FramePenEnabled = args.Contains("--framepen");
 
         // PPT 连接诊断（--pptdebug）：把 ROT 扫描每一步打出来（排查用，平时关）。
         PptComSource.Debug = args.Contains("--pptdebug");
@@ -3396,6 +3477,7 @@ public partial class InkEngine
             }
             s_map[w.Hwnd] = w;
             _windows.Add(w);
+            w.SysWetHost?.Attach(this);   // 系统托管湿墨：回调接到引擎上（输入随后统一开）
             Console.WriteLine($"overlay on monitor {hMon}: {r.Width}x{r.Height} at ({r.Left},{r.Top}) dpi={w.Dpi}");
             Console.WriteLine($"湿墨档位: {WetMode} {WetModeName(WetMode)}"
                               + "（设置里记着；Ctrl+Alt+Shift+W 循环切换，--wetmode 0..3 指定）");
@@ -3403,6 +3485,18 @@ public partial class InkEngine
                               + $"（接口{OverlayWindow.InkTrailNote}）");
             Console.WriteLine($"应用侧湿墨替身(FastWet): {(w.FastWetReady ? "可用（系统轨迹失效时自动接管）" : "不可用（回退主交换链自绘）")}");
             Console.WriteLine($"湿墨呈现: {(OverlayWindow.SystemWetPreferred ? "系统轨迹独占（--syswet）" : "自己画（系统轨迹照喂）")}");
+            // 系统托管湿墨（2026-10-12）：后端第二档。开 = 本窗口的湿墨由系统墨迹线程画、
+            // 我们旁听喂模型（接法见 Input/SystemWetHost.cs）。
+            Console.WriteLine($"系统托管湿墨(SystemWetHost): {(w.SysWetHost != null ? "开" : "关")}"
+                              + $"（{SystemWetHost.Note}）");
+            // 当前**湿墨后端**与**系统层颜色同步**（用户 2026-10-12 要的"横幅一眼确认"）：
+            // 三种后端（系统托管 / 委托轨迹 / 自绘）任何时刻只有一个在画湿墨。
+            SyncSystemWetAppearance();   // 先同步一次，横幅才报得出"已同步 …"而不是"未同步"
+            Console.WriteLine($"当前湿墨后端: {DescribeWetBackend(w)}；系统层颜色同步: {SystemWetHost.ColorSyncNote}"
+                              + $"；自定义干燥: {SystemWetHost.CustomDryingNote}");
+            // 各工具的湿墨走谁（2026-10-13 用户要"一眼确认"）：笔=系统画、荧光笔=系统画、
+            // 触摸看手势开关、虚线笔=自绘。
+            Console.WriteLine(DescribeToolWetOwners(w.SysWetHost != null, !_touch.Enabled));
             // 调参时"我到底调上了没有"必须一眼看得见：这里印的是**生效值**，不是"可用/不可用"。
             // （2026-09-22 用户碰到的两个坑：--predictms 100 被静默夹到 15；--noinktrail 生效了没有
             //   只能靠猜。这两件事都不该靠猜。）
@@ -3492,6 +3586,8 @@ public partial class InkEngine
         // 把键盘模式落到窗口样式上。字段默认是开的，但样式要等窗口建好才能改——
         // 不调这一句，默认值和实际样式就对不上（得按一次 Ctrl+Alt+K 才生效）。
         SetKeyboardMode(KeyboardMode);
+        // 系统托管湿墨：宿主受理输入的开/关在这里落一次（工具/穿透变了会再调）。
+        UpdateHostInputEnabled();
         return ok;
     }
 
@@ -3764,6 +3860,9 @@ public partial class InkEngine
             // PPT 轮询线程的唤醒消息：**不派发**（它没有对应的窗口）——
             // 主循环紧接着的 StepPpt() 会把新快照处理掉。
             if (msg.message == PptWatcher.WakeMessage) continue;
+            // 系统托管湿墨的转发唤醒（Input/SystemWetHost.cs）：同样不派发，
+            // 把队列里的（按/动/抬）动作直接交给原有指针路由。
+            if (msg.message == HostPointFeed.WakeMessage) { DispatchHostPointer(); continue; }
             Native.TranslateMessage(ref msg);
             Native.DispatchMessage(ref msg);
         }
@@ -4404,12 +4503,189 @@ public partial class InkEngine
                    || TooltipPending;            // 引擎侧悬停提示还在等 500ms（到点要有人点亮它）
         return _dirty || _animating
                || _windows.Exists(w => w.TrailEndPending)     // --syswet：收笔撤轨迹必须有一帧兜底
-               || _windows.Exists(w => w.FastWetEndPending);  // 应用侧湿墨收笔的撤除同样要一帧兜底
+               || _windows.Exists(w => w.FastWetEndPending)   // 应用侧湿墨收笔的撤除同样要一帧兜底
+               || _windows.Exists(w => w.HostHandoffPending)  // 系统托管湿墨：干墨交接要有一帧兜底
+               || _windows.Exists(w => w.HostClearPending);   // 同上：交接补枪要连着几帧（逮迟到入库那份）
     }
 
     // =====================================================================
     //  Pointer input
     // =====================================================================
+
+    /// <summary>
+    /// 系统托管湿墨：这一下落点归谁（**只读判据**——它在墨迹后台线程上被问，见
+    /// Input/SystemWetHost.cs）。判定链与 <see cref="OnPointerDown"/> 的命中优先级链同源：
+    /// 呼出盘 4239 / 界面与 PPT 条 4307 / 选中框 13190 那一条，谁吃这一下就归谁。
+    ///
+    /// 三种结果（见 <see cref="HostStrokeMode"/>）：
+    ///   · Ui   —— 点在界面上：系统那份湿墨藏起来，整条手势转发给原有 UI 路由；
+    ///   · Ink  —— 实线笔 / 荧光笔：**系统画湿墨**（低延迟），我们不自绘，收笔重叠交接
+    ///             （荧光笔靠预补偿色对上我们的半透明观感，见 Input/SystemWetHost.cs 文件头⑤）；
+    ///   · Self —— 虚线笔：系统只会画实线（一笔写完"实线变虚线"），
+    ///             系统那份藏起来，湿墨照旧自绘。
+    /// </summary>
+    internal HostStrokeMode DecideHostStroke(float screenX, float screenY)
+    {
+        // 穿透开着 = "这一下归下层"；宿主输入本该关着（见 UpdateHostInputEnabled），
+        // 这里兜底当 UI（不落墨）。
+        if (PassThrough || RadialPaletteActive || LibraryPanelOpen || _replay != null
+            || CaptureActive || LibraryInsertArmed
+            || UiContains(screenX, screenY) || PptBarContains(screenX, screenY)
+            || TimerCardContains(screenX, screenY) || RollCardContains(screenX, screenY)
+            || ReplayBarContains(screenX, screenY))
+            return HostStrokeMode.Ui;
+
+        // 选中手柄 / 操作条 / 框内拖动（AutoSelectionZoneAt：与光标、按下同一条判据，
+        // 见它的注释"只有这一份判据"）。
+        float x = screenX, y = screenY;
+        ScreenToCanvas(ref x, ref y);
+        if (Doc.Selected.Count > 0 && AutoSelectionZoneAt(x, y) != AutoSelZone.None)
+            return HostStrokeMode.Ui;
+
+        // 实线笔 + 荧光笔交给系统画湿墨（2026-10-13 荧光笔接入：预补偿色对上半透明观感，
+        // 见 Input/SystemWetHost.cs 文件头⑤）；虚线笔系统只会画实线（一笔写完
+        // "实线变虚线"），激光的观感它也画不出来——和 BeginFreehandStrokeAt 里
+        // `--syswet` 的口径一致。触摸只有"手势关掉"时才进宿主，那之后就剩单指书写，
+        // 判定和笔同一条（见 UpdateHostInputEnabled / 文件头⑥）。
+        if (Tool == Tool.Highlighter) return HostStrokeMode.Ink;
+        if (Tool == Tool.Pen && PenDash == StrokeDash.Solid) return HostStrokeMode.Ink;
+        return HostStrokeMode.Self;
+    }
+
+    /// <summary>当前工具的墨是不是半透明（荧光笔）：系统那份的交接清法按它分。</summary>
+    internal bool HostStrokeTranslucent => Tool == Tool.Highlighter;
+
+    /// <summary>
+    /// 开/关宿主受理的输入：**只给"会变成一笔实线墨"的自由笔**（实线笔/荧光笔）、非穿透。
+    /// 橡皮/框选/图形/激光/截图一律关——那些工具全走原来的 WM_POINTER 路（鼠标本来就不进宿主，
+    /// `InputDeviceTypes` 不含 Mouse，见 SystemWetHost.SetInputEnabled）。
+    ///
+    /// **虚线笔也关**（R2，2026-10-13）：Self 模式下系统墨迹层本来就要藏起来、湿墨反正
+    /// 自己画，走宿主只多一圈"事件→队列→唤醒→派发"的跳数（优化方案 §1.2 账本：
+    /// 只慢不快）。关掉后这笔回到纯 WM_POINTER 自绘（= GitHub 版 v9.0.6 已验证的老路）。
+    /// `DecideHostStroke` 的 Self 分支保留——兜底"一笔写到一半改虚线/改工具"的切换。
+    ///
+    /// **触摸只在"触摸手势总开关关掉"时才给宿主**（2026-10-13，方案 b）：
+    /// 宿主收下触摸后 WM_POINTER 被吞、多指状态在旁听/未受理输入里都拿不到
+    ///（实测见 Input/SystemWetHost.cs 文件头⑥），双指漫游/三指擦/长按选会整个断。
+    /// 手势开（默认）→ 触摸留在 WM_POINTER 自绘那条路，手势一条不掉；
+    /// 手势关（`--notouch` / 设置）→ 触摸只剩单指书写，正好"会变成一笔墨"→ 交给系统画。
+    /// </summary>
+    private void UpdateHostInputEnabled()
+    {
+        HostPointFeed.MainThreadId = Native.GetCurrentThreadId();   // 转发唤醒的收件人（本线程）
+        HostPointFeed.Drain = DispatchHostPointer;                  // 动作队列的派发回调（UI 线程）
+        bool solidInk = (Tool == Tool.Pen && PenDash == StrokeDash.Solid) || Tool == Tool.Highlighter;
+        bool on = !PassThrough && solidInk;
+        bool touch = on && !_touch.Enabled;
+        foreach (var w in _windows) w.SysWetHost?.SetInputEnabled(on, touch);
+        SyncSystemWetAppearance();
+    }
+
+    /// <summary>
+    /// 把当前工具的颜色 / 线宽 / 压感口径同步给系统墨迹层（每个建了宿主的窗口）。
+    /// 换工具、换色、换宽都要调——不同步的话系统拿它自己的默认属性画湿墨
+    /// （默认黑、2 DIP），一笔两种颜色（2026-10-12 真笔 bug A/B）。
+    /// 同步结果记在 <see cref="SystemWetHost.ColorSyncNote"/>，启动横幅与 [笔画] 都会报。
+    /// </summary>
+    internal void SyncSystemWetAppearance()
+    {
+        bool hl = Tool == Tool.Highlighter;
+        var c = hl ? HighlighterCurrent : CurrentColor;
+        float widthDip = hl ? HighlighterWidthLogical
+                       : Tool == Tool.Laser ? LaserWidthLogical
+                       : PenWidthLogical;
+        var v = new Vector4(c.R, c.G, c.B, c.A);
+        foreach (var w in _windows) w.SysWetHost?.SyncDrawingAttributes(v, widthDip, hl);
+    }
+
+    /// <summary>
+    /// 系统托管湿墨：把后台线程排进来的转发动作派给原有指针路由（合成指针）。
+    ///
+    /// 为什么不是 PostMessage(WM_POINTER*)：那类消息由系统按指针状态派发、不接受应用
+    /// 合成投递（实测 PostMessage 直接失败，2026-10-12）。所以后台线程只排"动作"
+    /// （见 HostPointFeed.PostAction），由这里在 UI 线程上调 OnPointerDown/Move/Up ——
+    /// 界面、选中、工具、停顿成型那条链一个字不动（和 PptWatcher 的线程唤醒同一个套路）。
+    /// </summary>
+    private void DispatchHostPointer()
+    {
+        // 线程守卫（2026-10-12）：派发**只能在主循环线程跑**——DispatcherQueue 的回调
+        // 可能落在别的线程上，那上面跑 OnPointerDown 就是跨线程改引擎状态
+        //（笔画丢失/串笔一类"偶发"的根源）。不在本线程就改投唤醒消息，由主循环代派。
+        uint tid = Native.GetCurrentThreadId();
+        if (HostPointFeed.MainThreadId != 0 && tid != HostPointFeed.MainThreadId)
+        {
+            Native.PostThreadMessage(HostPointFeed.MainThreadId, HostPointFeed.WakeMessage, IntPtr.Zero, IntPtr.Zero);
+            return;
+        }
+        if (!_hostDispatchThreadLogged)
+        {
+            _hostDispatchThreadLogged = true;
+            Console.WriteLine($"[旁听] 派发线程 tid={tid}（主循环 tid={HostPointFeed.MainThreadId}）"
+                              + (tid == HostPointFeed.MainThreadId ? "✓ 同线程" : " **不同线程（已改投唤醒消息）**"));
+        }
+            while (HostPointFeed.TryDequeueAction(out var a))
+            {
+                HostPointFeed.BeginMessage(a.Id, a.Gen, a.Batch);
+                switch (a.Kind)
+                {
+                    case HostPointFeed.KindDown:
+                        OnPointerDown(a.Hwnd, (IntPtr)a.Id);
+                        break;
+                    case HostPointFeed.KindMove:
+                        OnPointerMove(a.Hwnd, (IntPtr)a.Id);
+                        break;
+                    default:
+                        OnPointerUp(a.Hwnd, (IntPtr)a.Id);
+                        // 抬笔处理完 = 干墨已进文档（或本来就没什么）→ 交接可以走了；会话状态收掉。
+                        foreach (var w in _windows) w.SysWetHost?.NoteUpProcessed();
+                        HostPointFeed.MarkUpProcessed(a.Id, a.Gen);
+                        break;
+                }
+                // R0：这条动作的点批缓冲用完归还（BeginMessage 已拷进每指针的稳定缓冲，
+                // 之后没人再碰它——墨迹线程下一刻租到的是别的缓冲）。
+                HostPointFeed.ReturnBuf(a.Batch.Buf);
+            }
+            // R0：清唤醒挂起标志（和队列判空同一把锁；派发期间新到的货在这里补投，不丢唤醒）。
+            HostPointFeed.NoteDrained();
+        }
+
+    private bool _hostDispatchThreadLogged;
+
+    /// <summary>这个窗口的湿墨现在归谁画（横幅/日志用）。三者任何时刻只有一个在画。</summary>
+    internal static string DescribeWetBackend(OverlayWindow w)
+    {
+        if (w.SysWetHost != null) return "系统托管（CoreInkPresenterHost＋旁听喂模型）";
+        if (OverlayWindow.InkTrailAvailable && OverlayWindow.InkTrailEnabled)
+            return OverlayWindow.SystemWetPreferred ? "委托轨迹独占（--syswet）" : "自绘（委托轨迹并行喂）";
+        return "自绘";
+    }
+
+    /// <summary>
+    /// 横幅/日志用（2026-10-13 用户要"一眼确认"）：**各工具的湿墨走谁**。
+    /// 适配原则：会变成一笔墨的交给系统（笔、荧光笔、手势关时的触摸单指书写）；
+    /// 判定/特效/界面留给自己（虚线笔、以及激光/橡皮/框选/图形这些本来就不产湿墨的）。
+    /// </summary>
+    internal static string DescribeToolWetOwners(bool hostOn, bool touchHosted)
+    {
+        if (!hostOn)
+            return "湿墨归属: 全自绘（笔/荧光/触摸；激光、橡皮、框选、图形不走湿墨）"
+                 + "——本窗口没建系统托管宿主（Win11 有委托轨迹时优先轨迹，--syswethost 强制托管）";
+        return "湿墨归属(系统托管): 笔=系统画 · 荧光笔=系统画(整层α半透明，与干墨同观感) · 虚线笔=自绘"
+             + (touchHosted ? " · 触摸=系统画(手势关·仅单指书写)" : " · 触摸=自绘(手势开·保多指手势)")
+             + " · 激光/橡皮/框选/图形=不走湿墨(自管)";
+    }
+
+    /// <summary>[笔画] 日志里的湿墨后端短名。</summary>
+    internal string WetBackendShort =>
+        _windows.Exists(w => w.SysWetHost != null) ? "系统托管"
+        : OverlayWindow.InkTrailAvailable && OverlayWindow.InkTrailEnabled ? "委托轨迹" : "自绘";
+
+    /// <summary>自检用：当前这一笔是不是旁听喂进来的（真笔口径数据源，见 Input/SystemWetHost.cs）。</summary>
+    internal bool HostFedStrokeActive => _hostFedStroke;
+
+    /// <summary>自检用：当前这一笔的湿墨是不是"系统在画"（自绘抑制的判据之一）。</summary>
+    internal bool HostWetStrokeActive => _systemWetStroke != null;
 
     private void OnPointerDown(IntPtr hWnd, IntPtr wParam)
     {
@@ -4824,7 +5100,11 @@ public partial class InkEngine
         //   所以肉眼看常是"闪一下"（`--trailonly` 下尤其明显），那是结构性表现，不是 bug。
         var wetWin = WindowAt(screenX, screenY);
         bool trailStarted = false;
-        if (dash == StrokeDash.Solid)
+        // 2026-10-12（用户真笔 bug D：双后端残留）：**旁听喂进来的一笔不喂委托轨迹**——
+        // 湿墨期谁在画必须唯一：系统托管那条路里轨迹通道整个关着（窗口建宿主时 _inkTrail=null），
+        // 这里再挡一道，防止将来"宿主 + 轨迹"同窗并存时两层湿墨叠着画。
+        _hostFedStroke = HostPointFeed.IsHostId(id);
+        if (dash == StrokeDash.Solid && !_hostFedStroke)
             trailStarted = wetWin?.BeginInkTrail(
                 tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f) ?? false;
         _pen.BeginStroke();   // 缺压回填的基准只活在"一笔"之内（见 PenSampleBuffer.BeginStroke）
@@ -4848,7 +5128,8 @@ public partial class InkEngine
         // 独立 DComp 湿墨层。它只接管显示，不接管输入，也不改变文档提交。
         bool fastWetStarted = false;
         // 只给真正的笔启用替身；激光笔有自己的 LaserTrail，不能混进 FastWet。
-        if (!trailStarted && tool == Tool.Pen && dash == StrokeDash.Solid)
+        // ⚠ 旁听喂进来的一笔（系统托管在画湿墨）也不喂 FastWet——湿墨期谁在画必须唯一（2026-10-15 两线合并）。
+        if (!trailStarted && !_hostFedStroke && tool == Tool.Pen && dash == StrokeDash.Solid)
         {
             fastWetStarted = wetWin?.BeginFastWet(
                 tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
@@ -4857,9 +5138,23 @@ public partial class InkEngine
         // `--syswet`：真笔 + 实线笔，且轨迹真的起来了 → 湿墨交给系统（我们不再自绘）。
         // 荧光笔/激光笔不在此列——系统轨迹画不出它们的观感；`--ownwet` 可强制回老路。
         // ⚠ 仍然**只给真笔**：鼠标/触摸的轨迹系统认不认还没结论，不能让"我们不自绘"去赌。
-        _systemWetStroke = (trailStarted && OverlayWindow.SystemWetPreferred && tool == Tool.Pen
-                            && ptype == Native.PT_PEN)
-            ? ActiveStroke : null;
+        //
+        // 2026-10-12 系统托管湿墨：这一笔是旁听喂进来的（合成 id）、且判定为"系统画湿墨"
+        //（实线笔，见 DecideHostStroke）→ 同样置 _systemWetStroke，自绘/预测尾一起抑制；
+        // 收笔走重叠交接（干墨上屏后清系统那份，见 SystemWetHost.AfterPresent）。
+        bool hostWet = HostPointFeed.IsInkWet(id);
+        _systemWetStroke = hostWet ? ActiveStroke
+            : (trailStarted && OverlayWindow.SystemWetPreferred && tool == Tool.Pen
+               && ptype == Native.PT_PEN)
+              ? ActiveStroke : null;
+        if (hostWet)
+        {
+            // ⚠ **每个窗口都置位**（2026-10-12）：原来只置 WindowAt 那一个，
+            // 坐标/多屏一偏就置到别的窗口上，该抑制自绘的那个窗口照样自绘——
+            // 和系统那条湿墨**同笔双画**（用户真笔"黑+红"的另一半根因）。
+            // 清的时候（EndStroke）本来就是全窗口清，这里对称地全窗口置。
+            foreach (var w in _windows) w.HostWetDrawing = true;
+        }
         _fastWetStroke = fastWetStarted ? ActiveStroke : null;
         // 起笔：落笔这条消息里可能已经合并了几个采样点，一起收进来（以前只取最新那一个）。
         ActiveStrokeHasPressure = false;
@@ -4888,7 +5183,9 @@ public partial class InkEngine
         _rawSinceLastPtr = _rawTotalSincePtr = _ptrMsgsThisStroke = 0;
         _rawHasIntermediates = false;   // 判据要攒几条才有结论
         _rawAnchorValid = false;        // 锚点由这一笔的第一条指针消息建立
-        SetRawCapture(true);            // 原始输入：**只在这一笔期间收**（空闲必须关）
+        // 系统托管湿墨喂进来的一笔：raw 补点**整个停用**（点是旁听给的，再补就是双重计数，
+        // 2026-10-12 定；鼠标那一笔不走旁听，照旧）。注册也一并省掉。
+        if (!_hostFedStroke) SetRawCapture(true);   // 原始输入：**只在这一笔期间收**（空闲必须关）
         // ⚠ Wintab **不在这里开**（2026-10-07 用户提问后改的）：
         //
         // 原来在起笔时无条件 `EnsureWintab()`，虽然说好了"只在非笔路径上用"，
@@ -5190,6 +5487,12 @@ public partial class InkEngine
         {
             w.EndInkTrail();
             w.EndFastWet();
+            // 2026-10-12（用户真笔"黑+红同笔双画"）：系统托管湿墨下，这一笔原本是"系统画"；
+            // 换成幽灵图形后 `IsSystemWetStroke` 认不出新对象、自绘抑制失效——**系统那条
+            // 湿墨和幽灵图形两条一起画**。所以这里把这一笔降级成"自绘"：系统那份藏起来、
+            // 收尾按 Self 清掉（见 SystemWetHost.DowngradeToSelf），自绘抑制一并撤。
+            w.SysWetHost?.DowngradeToSelf();
+            w.HostWetDrawing = false;
         }
         _systemWetStroke = null;
         _fastWetStroke = null;
@@ -6484,6 +6787,8 @@ public partial class InkEngine
             "2" => 2f,      // 灵敏
             _ => 3f,        // 标准
         };
+        // 手势开关变了要重套宿主输入（触摸的湿墨走谁跟着它走，见 UpdateHostInputEnabled）。
+        UpdateHostInputEnabled();
     }
 
     /// <summary>这块屏"报不报多个触点 / 报不报面积"——只给设置页和日志用，不影响判定。</summary>
@@ -7666,15 +7971,18 @@ public partial class InkEngine
         // `--syswet`：湿墨只有系统轨迹这一份，撤除要等干墨那一帧 Present 之后
         //（否则"轨迹先没了、干墨还没上屏"会闪一帧）；其余路径照旧立即撤。
         bool sysWetEnding = _systemWetStroke != null;
+        bool hostFedEnding = _hostFedStroke;   // [笔画] 报告用（下面两个字段都要复位）
         bool fastWetEnding = _fastWetStroke != null;
         foreach (var w in _windows)
         {
             if (sysWetEnding) w.EndInkTrailDeferred(); else w.EndInkTrail();
             if (fastWetEnding) w.EndFastWetDeferred();
+            w.HostWetDrawing = false;   // 系统托管湿墨：这一笔收了，自绘抑制跟着撤
         }
         _systemWetStroke = null;
         _fastWetStroke = null;
         _fastWetPending = false;     // 收笔：挂起的湿墨更新作废（免得下一帧拿旧位置找窗口）
+        _hostFedStroke = false;
         // **录墨迹**（用户 2026-09-26 提"我手画多少条双曲线给你，你按这些来定制判据"）：
         // 把这一笔的**原始采样点**追加到录制文件。放在最前面 —— 此时 `ActiveStroke`
         // 要么还是原始墨、要么是停顿成型换掉的那个对象（所以真正要用的点见 `_recordPts`）。
@@ -7916,6 +8224,11 @@ public partial class InkEngine
                           + "]"
                         : "")
                     + $"，合并 {merge}（{LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 点）"
+                    // 湿墨后端 + 数据源 + 系统层颜色同步（2026-10-12 用户要"日志里能确认"）：
+                    // 一笔走了哪条湿墨路、是不是旁听喂的、系统层颜色对不对，一行看全。
+                    + $"，湿墨={WetBackendShort}{(hostFedEnding ? "·旁听喂" : "")}"
+                      + (sysWetEnding ? "·系统画" : "·自绘")
+                    + $"，系统层颜色={SystemWetHost.ColorSyncNote}"
                     // 委托轨迹（2026-10-11）：**喂进去 ≠ 留在系统里**——默认模式下我们自己
                     // 画到哪就把轨迹结账到哪，所以"结账"应当≈"喂"；只喂不结账（结账远小于喂）
                     // 就是"长笔画中途变透明"的那种病。`--trailonly` 下我们自己不画、也就不结账
@@ -8064,6 +8377,14 @@ public partial class InkEngine
         Disc,
         /// <summary>实心点：激光笔。激光表达的是"我说的是这里"，不是"多宽"。</summary>
         Dot,
+        /// <summary>
+        /// 帧笔（`--framepen`，2026-10-13 试作）：把染色笔的**同一张位图**改由
+        /// 应用帧绘制（画在浮动层）——"系统光标通道 vs 应用帧"两种画法的活体对照。
+        /// 外观与 HCURSOR 染色笔完全一致（同一份像素生成）；代价是跟应用帧同拍
+        /// （慢约 1~2 帧），这正是要体验的差异。
+        /// ⚠ 复测更正（2026-10-13 晚）：手感"很到位"（前判"迟缓"系误报）；糊已修（像素对齐）。
+        /// </summary>
+        FramePen,
     }
 
     private IntPtr _cursorApplied;
@@ -8183,7 +8504,10 @@ public partial class InkEngine
         // （手写板写字时尤其需要，见 PenDeviceOnScreen 的注释）。
         // 用的是**系统那支 IDC_PEN**（自绘彩笔版试过、被用户否掉，见 CursorKind.Pen 的注释）。
         // 只有"笔尖就压在屏幕上"的触屏笔才藏起来（笔尖即落点，环由自绘表达）。
-        Tool.Pen => PenShowsCursor ? CursorKind.Pen : CursorKind.Hidden,
+        Tool.Pen => !PenShowsCursor ? CursorKind.Hidden
+                  : FramePenTakesOver ? CursorKind.Hidden
+                  : SelfPenCursorEnabled ? CursorKind.SelfPen
+                  : CursorKind.Pen,
         Tool.Highlighter => CursorKind.Hidden,      // 落点由自绘的宽度圆盘表达
         Tool.Laser => CursorKind.Hidden,            // 落点由自绘的实心点表达
         // 落点由自绘圆环 / 矩形表达；开了 EraserKeepsSystemCursor 就两个都显示（A/B 用）。
@@ -8200,6 +8524,29 @@ public partial class InkEngine
         Tool.ConicEllipse => CursorKind.Cross,
         _ => CursorKind.Default,
     };
+
+    /// <summary>
+    /// 应用帧笔画笔此刻是否接管（`--framepen`）：接管时 HCURSOR 藏起来，
+    /// 由 Overlay 在浮动层画**同一张位图**（见 Overlay.DrawFramePen）。
+    ///
+    /// **这是唯一判据**——ToolCursorKind（藏 HCURSOR）、DrawnCursor（交形状）、
+    /// 绘制三处共用，防止"一个显示一个藏"变成双光标或没光标。
+    /// 过滤条件与 DrawnCursor 的全局过滤保持一致（穿透 / 指针出界 / 截图瞬间 /
+    /// 压在界面之上都不接管）；触摸没有悬停、触屏笔落屏维持"笔尖即落点"。
+    /// </summary>
+    internal bool FramePenTakesOver
+    {
+        get
+        {
+            if (!FramePenEnabled) return false;
+            if (PassThrough || !PointerInside || CaptureFrameHidden) return false;
+            if (LastPointerType == Native.PT_TOUCH) return false;
+            if (_uiHover || PointerOnDrawnChrome()) return false;
+            if (EffectiveTool != Tool.Pen || !PenShowsCursor) return false;
+            // 像素读不出来（极端）→ 不接管，留给系统笔（否则光标会消失）
+            return Cursors.PenPixelsReadable(CurrentColor, CursorSizePx);
+        }
+    }
 
     /// <summary>
     /// 截图模式下的系统光标（8.3.1）：
@@ -8317,7 +8664,10 @@ public partial class InkEngine
             _cursorApplied = IntPtr.Zero;
             return;
         }
-        var h = Cursors.HandleFor(kind, CursorSizePx);
+        // 染色笔要**当前笔色**参与生成（缓存按 颜色+尺寸 走 → 换色自动换新句柄）
+        var h = kind == CursorKind.SelfPen
+            ? Cursors.TintedPen(CurrentColor, CursorSizePx)
+            : Cursors.HandleFor(kind, CursorSizePx);
         if (h == IntPtr.Zero) return;
         if (!force && h == _cursorApplied) return;
         Native.SetCursor(h);
@@ -8384,6 +8734,8 @@ public partial class InkEngine
                 // 8.3.0 那个 24×24 角括号被用户点名"比较难用"，整批退场。
                 return ToolCursorShape.None;
                 case Tool.Pen:
+                    // `--framepen`：应用帧笔画笔接管（同一张染色位图，见 Overlay.DrawFramePen）
+                    if (FramePenTakesOver) return ToolCursorShape.FramePen;
                     // 已经在显示斜笔（鼠标 / 手写板，自绘彩笔）：落点由它一路表达，
                     // **不再叠自绘环**——"笔上再套一个圈"就是这段开头说的那种叠影。
                     if (PenShowsCursor) return ToolCursorShape.None;
@@ -8405,6 +8757,9 @@ public partial class InkEngine
         {
             switch (DrawnCursor)
             {
+                case ToolCursorShape.FramePen:
+                    // 位图从指针（左上=热点）向右下铺 n×n → 最远角 ≈ n×1.41，留 1.5n 稳。
+                    return CursorSizePx * 1.5f + 4f;
                 case ToolCursorShape.Ring:
                     return CursorOuterRadius * 1.35f + 10f;
                 case ToolCursorShape.Disc:
@@ -9462,6 +9817,46 @@ public partial class InkEngine
     {
         if (ActiveStroke == null) return;
 
+        // 系统托管湿墨喂进来的一笔（2026-10-12）：**数据源换成旁听点批**（一条合成消息一批），
+        // 净化/去抖/停顿成型照旧走 AddPointCleaned 同一个入口；GetPointerPenInfoHistory
+        // 与 raw 补点在这条路上整个停用（防双重计数）。
+        // R0（2026-10-13）：点批是池化复用缓冲 + 有效长度，按下标遍历（不再 foreach/Array.Exists）。
+        if (HostPointFeed.TryGetCurrent(id, out var hostBuf, out var hostCount))
+        {
+            ResetRawAnchor(screenX, screenY);
+            _ptrMsgsThisStroke++;
+            LastCoalescedMessages++;
+            LastCoalescedSamples += hostCount;
+            if (ptype == Native.PT_PEN)
+            {
+                PenMessages++;
+                PenSamples += hostCount;
+            }
+            else
+            {
+                PtrMessages++;
+                PtrSamples += hostCount;
+            }
+            bool anyPressure = false;
+            for (int i = 0; i < hostCount; i++)
+            {
+                var s = hostBuf[i];
+                float cx = s.X, cy = s.Y;
+                ScreenToCanvas(ref cx, ref cy);
+                AddPointCleaned(cx, cy, s.Pressure, s.TimeMs);
+                if (ptype == Native.PT_PEN)
+                {
+                    PenTotalPoints++;
+                    if (s.HasPressure) { PenPressurePoints++; anyPressure = true; }
+                }
+                else PtrTotalPoints++;
+            }
+            ActiveStrokeHasPressure |= ptype == Native.PT_PEN && anyPressure;
+            // 压感只作用于「笔」这一支（和下面 PT_PEN 分支同一条规矩）。
+            if (ActiveStrokeHasPressure && ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
+            return;
+        }
+
         // `--rawinput`：这一条指针消息给出的是**绝对位置** → 把它设成锚点、累计清零。
         // 这是"误差不漂"的关键：raw 报的位移只在两条指针消息之间累加，
         // 每来一条指针消息就重新对准一次真值。
@@ -9671,6 +10066,8 @@ public partial class InkEngine
     {
         _rawReportsThisStroke++;
         _rawSinceLastPtr++;
+        // 系统托管湿墨喂的这一笔：raw 补点整个停用（点是旁听给的，再补就是双重计数）。
+        if (_hostFedStroke) { _rawSkipGate++; return; }
         if (!RawInputCapture || ActiveStroke == null) { _rawSkipNoStroke++; return; }
 
         uint size = (uint)Marshal.SizeOf<Native.RAWINPUT>();
@@ -10383,6 +10780,16 @@ public partial class InkEngine
     private bool ReadPointer(uint id, out float x, out float y, out float pressure,
                              out bool inverted, out uint pointerType)
     {        x = y = 0; pressure = 0.5f; inverted = false; pointerType = 0;
+        // 系统托管湿墨转发的合成指针（2026-10-12）：点从旁听批里来。真实指针的
+        // WM_POINTER 被宿主吞了，这里必须先认合成 id，否则这条路永远读不到东西。
+        if (HostPointFeed.TryReadCurrent(id, out x, out y, out pressure, out inverted, out pointerType))
+        {
+            _lastInputPerfQpc = Qpc.Now;
+            _lastInputMsgQpc = Qpc.Now;
+            _framePoints++;
+            LastPointerInverted = inverted;
+            return true;
+        }
         if (!Native.GetPointerInfo(id, out var pi)) return false;
         _lastInputPerfQpc = pi.PerformanceCount;
         _lastInputMsgQpc = Qpc.Now;
@@ -10679,6 +11086,9 @@ public partial class InkEngine
         // ⚠ `Release` 自己会判"有没有正在写的"：没有就直接返回，所以这里可以无脑调，
         //   不会把上一批还在淡的激光给"续命"（见 `LaserTrail.Release`）。
         Laser.Release(NowMs);
+        // 系统托管湿墨（2026-10-12）：只有自由笔工具（笔/荧光笔）让宿主受理输入，
+        // 其余工具关掉、全走原 WM_POINTER 路（见 UpdateHostInputEnabled）。
+        UpdateHostInputEnabled();
     }
 
     /// <summary>收起选区（换工具、以及"与选中无关的新操作"走这里）。</summary>
@@ -10740,6 +11150,7 @@ public partial class InkEngine
         SetUiPref("w2.hl", HighlighterWidthIndex.ToString());
         SetUiPref("w2.laser", LaserWidthIndex.ToString());
         SetUiPref("w2.pixel", PixelEraserWidthIndex.ToString());
+        SyncSystemWetAppearance();   // 系统托管湿墨：系统层线宽跟着变（2026-10-12）
         NotifyUiStateChanged();
     }
 
@@ -10764,6 +11175,9 @@ public partial class InkEngine
         if (on && RadialPaletteActive) CancelRadialPalette("进穿透");
 
         PassThrough = on;
+        // 系统托管湿墨（2026-10-12）：穿透开着 = 笔归下层程序，宿主受理跟着关/开
+        //（不然笔一落还是被宿主吃掉，穿透就假了）。
+        UpdateHostInputEnabled();
         // 穿透 = "键盘让给下层"：放映临时全局键跟着挂/摘（用户 2026-09-30 定，
         // 见 PptHotkeys 那段注释）。不在放映时这一句是空操作。
         SyncPptHotkeys();
@@ -11193,6 +11607,7 @@ public partial class InkEngine
                 SetUiPref(Tool == Tool.Highlighter ? "hlColor" : "penColor", i.ToString());
                 break;
             }
+        SyncSystemWetAppearance();   // 系统托管湿墨：系统层颜色跟着变（2026-10-12）
         _dirty = true;
         NotifyUiStateChanged();
     }
@@ -11293,6 +11708,10 @@ public partial class InkEngine
         _touch.Enabled = on;
         if (!on) TouchAbort();
         Console.WriteLine($"触摸手势：{(on ? "开（单指写 / 双指手势 / 三指擦 / 长按选择）" : "关（只剩单指书写）")}");
+        // 手势开关还决定**触摸的湿墨走谁**（见 UpdateHostInputEnabled）：开=触摸自绘
+        //（多指手势要 WM_POINTER）、关=触摸进系统托管。换开关必须重套宿主输入。
+        UpdateHostInputEnabled();
+        Console.WriteLine(DescribeToolWetOwners(_windows.Exists(w => w.SysWetHost != null), !_touch.Enabled));
         NotifyUiStateChanged();
     }
 
@@ -11488,6 +11907,7 @@ public partial class InkEngine
                 break;
             }
         }
+        SyncSystemWetAppearance();   // 系统托管湿墨：系统层线宽跟着变（2026-10-12）
         _dirty = true;
         NotifyUiStateChanged();
     }
@@ -15076,3 +15496,4 @@ public partial class InkEngine
         _dirty = true;
         return IntPtr.Zero;
     }}
+

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Vortice.Mathematics;
 
 namespace InkEngine;
 
@@ -29,8 +30,19 @@ internal enum CursorKind
     /// 2026-09-27 晚试过一版"自绘彩笔"（笔身填墨色、笔杆跟笔宽），用户看过真机后
     /// 判定"填充颜色有点难看，原来那支就挺好"，**已整批撤回**——想要"看得见真实粗细"
     /// 的人可以切到落点环那条路（见 Engine.PenShowsCursor），不在这支笔上做。
+    ///
+    /// 2026-10-13 二试（`--selfpen`）：**形状与笔身原样读系统位图**（不再手画），
+    /// 只把**笔帽**染成当前色（见 SelfPen / TintPen）。
     /// </summary>
     Pen,
+
+    /// <summary>
+    /// 自绘·染色笔（2026-10-13，`--selfpen`）：形状 = 系统斜笔的位图原样，
+    /// **笔身一个像素不改**，只有**笔帽**（笔轴最后一段）的浅色芯染成当前笔色
+    /// （深轮廓 / 环扣描边保留，见 TintPen 三版）。**走系统光标通道**
+    /// （SetCursor 自定义位图），延迟与系统笔同级——纯外观升级。
+    /// </summary>
+    SelfPen,
 
     /// <summary>整体移动（选中框内部）。</summary>
     Move,
@@ -90,6 +102,14 @@ internal static class Cursors
     private static readonly Dictionary<int, IntPtr> s_rotate = new();
     private static IntPtr s_hidden;
 
+    /// <summary>染色笔缓存（key = 色 RGB + 尺寸）。**句柄 Zero = 该色读位图失败，
+    /// 直接走系统笔**——也缓存，免得每帧重试失败路径。</summary>
+    private static readonly Dictionary<(uint Rgb, int Size), IntPtr> s_selfPen = new();
+
+    /// <summary>染色**像素**缓存（HCURSOR 与"应用帧笔画"共用）：(色, 尺寸) → (像素, 热点)。
+    /// Px = null 表示读失败（标记住，不每帧重试）。</summary>
+    private static readonly Dictionary<(uint Rgb, int Size), (byte[] Px, int HotX, int HotY)> s_selfPenPx = new();
+
     /// <summary>系统光标句柄（进程内共享，取到就缓存）。</summary>
     public static IntPtr System(int idc)
     {
@@ -119,6 +139,181 @@ internal static class Cursors
         return h;
     }
 
+    // ---- 自绘染色笔（--selfpen，2026-10-13 试作）--------------------------------
+
+    /// <summary>
+    /// 染色笔的**像素生成**（HCURSOR 版与"应用帧笔画"共用同一份）：
+    /// 读系统 IDC_PEN 位图 → 染色（见 TintPen）→ 预乘 BGRA。
+    /// 结果按 (颜色, 尺寸) 缓存（含失败标记）；失败返回 null，调用方回退系统笔。
+    /// </summary>
+    public static byte[] TintedPenPixels(Color4 pen, int sizePx, out int hotX, out int hotY)
+    {
+        var key = (RgbKey(pen), sizePx);
+        if (!s_selfPenPx.TryGetValue(key, out var e))
+        {
+            e = TryBuildPen(pen);
+            s_selfPenPx[key] = e;
+        }
+        hotX = e.HotX;
+        hotY = e.HotY;
+        return e.Px;
+    }
+
+    /// <summary>像素能不能生成（给"帧笔接管"的判据用——读不出来就不接管，免得光标消失）。</summary>
+    public static bool PenPixelsReadable(Color4 pen, int sizePx)
+        => TintedPenPixels(pen, sizePx, out _, out _) != null;
+
+    /// <summary>
+    /// 自绘染色笔（HCURSOR 版）：形状 = 系统 IDC_PEN 位图原样，
+    /// 配色见 TintPen 三版（**笔身原样 + 笔帽当前色**）。
+    ///
+    /// 任何一步失败都回退**系统原笔**，并把失败记进缓存（同色不再重复尝试）——
+    /// 试作功能，绝不为了颜色把光标弄丢。
+    /// </summary>
+    public static IntPtr TintedPen(Color4 pen, int sizePx)
+    {
+        var cacheKey = (RgbKey(pen), sizePx);
+        if (s_selfPen.TryGetValue(cacheKey, out var cached))
+            return cached != IntPtr.Zero ? cached : System(Native.IDC_PEN);
+
+        IntPtr made = IntPtr.Zero;
+        try
+        {
+            var px = TintedPenPixels(pen, sizePx, out int hotX, out int hotY);
+            if (px != null)
+            {
+                int n = (int)Math.Sqrt(px.Length / 4);      // 正方形约定（见 TryBuildPen）
+                made = Create(px, n, hotX, hotY);
+            }
+        }
+        catch { /* 回退系统笔 */ }
+
+        // 失败也记缓存（Zero 作标记）：避免每帧重试失败路径。
+        // ⚠ 只销毁"我们自绘的"（非 Zero）——系统句柄不能碰（见 DisposeAll）。
+        s_selfPen[cacheKey] = made;
+        return made != IntPtr.Zero ? made : System(Native.IDC_PEN);
+    }
+
+    /// <summary>颜色 → RGB 缓存键（忽略 alpha；帧笔那边也用它做位图缓存键）。</summary>
+    public static uint RgbKey(Color4 pen)
+        => ((uint)Math.Clamp((int)(pen.R * 255f + 0.5f), 0, 255) << 16)
+         | ((uint)Math.Clamp((int)(pen.G * 255f + 0.5f), 0, 255) << 8)
+         | (uint)Math.Clamp((int)(pen.B * 255f + 0.5f), 0, 255);
+
+    /// <summary>读系统斜笔位图并染色。失败 (null, 0, 0)。</summary>
+    private static (byte[] Px, int HotX, int HotY) TryBuildPen(Color4 pen)
+    {
+        try
+        {
+            IntPtr src = System(Native.IDC_PEN);
+            if (src == IntPtr.Zero || !Native.GetIconInfo(src, out var ii)) return (null, 0, 0);
+            try
+            {
+                var bm = new Native.BITMAP();
+                if (ii.hbmColor == IntPtr.Zero
+                    || Native.GetObjectBitmap(ii.hbmColor, Marshal.SizeOf<Native.BITMAP>(), ref bm) <= 0
+                    || bm.bmWidth <= 0 || bm.bmWidth != bm.bmHeight) return (null, 0, 0);
+
+                int n = bm.bmWidth;
+                var bmi = new Native.BITMAPINFO
+                {
+                    bmiHeader = new Native.BITMAPINFOHEADER
+                    {
+                        biSize = Marshal.SizeOf<Native.BITMAPINFOHEADER>(),
+                        biWidth = n,
+                        biHeight = -n,          // 负 = 自上而下，和 Create 的填法一致
+                        biPlanes = 1,
+                        biBitCount = 32,
+                        biCompression = (int)Native.BI_RGB,
+                    },
+                };
+                var px = new byte[n * n * 4];
+                IntPtr dc = Native.GetDC(IntPtr.Zero);
+                int lines;
+                try
+                {
+                    lines = Native.GetDIBits(dc, ii.hbmColor, 0, (uint)n, px, ref bmi,
+                                             Native.DIB_RGB_COLORS);
+                }
+                finally { if (dc != IntPtr.Zero) Native.ReleaseDC(IntPtr.Zero, dc); }
+                if (lines <= 0 || !HasAlphaSemantics(px)) return (null, 0, 0);
+
+                TintPen(px, n, pen);
+                return (px, ii.xHotspot, ii.yHotspot);
+            }
+            finally
+            {
+                // GetIconInfo 给的是位图**副本**，不删就是 GDI 泄漏（同 HotspotOf 的提醒）
+                if (ii.hbmColor != IntPtr.Zero) Native.DeleteObject(ii.hbmColor);
+                if (ii.hbmMask != IntPtr.Zero) Native.DeleteObject(ii.hbmMask);
+            }
+        }
+        catch { return (null, 0, 0); }
+    }
+
+    /// <summary>位图里有没有 alpha 语义（透明/半透明像素占到一定比例）。没有就认不出"笔的形状"，放弃染色。</summary>
+    private static bool HasAlphaSemantics(byte[] px)
+    {
+        int n = px.Length / 4, zero = 0, semi = 0;
+        for (int i = 3; i < px.Length; i += 4)
+        {
+            byte a = px[i];
+            if (a == 0) zero++;
+            else if (a < 255) semi++;
+        }
+        return zero > n / 20 || semi > n / 50;   // ≥5% 全透明 或 ≥2% 半透明
+    }
+
+    /// <summary>
+    /// 染色（三版，2026-10-13 晚）：**只动笔帽，笔身原样**——用户点名"不管哪种，
+    /// 都统一用系统笔的样式，然后在笔帽增加同色"（系统通道 / 应用帧共用这一份像素）。
+    ///   ① 笔身（rel &lt; 0.70）——颜色**原样保留**（系统笔的深轮廓 + 白芯一个像素不改；
+    ///      只做"直通 → 预乘"的格式归一，见下）；
+    ///   ② 笔帽（笔轴最后一段，rel ≥ 0.70）——**浅色芯**换成当前色（0.88 实色，
+    ///      和上一版"笔尾色块"同口径）；深色像素（轮廓 / 尾巴那个环扣的描边）
+    ///      原样保留——浅底靠深轮廓勾边、深底靠彩块，两头都看得见；
+    ///   ③ 不再另加外轮廓（二版那条是为"淡彩笔身"补的；现在笔身就是原版，自带轮廓）。
+    /// 读出的是**直通（非预乘）** BGRA（探针实测：边缘是"颜色恒定、alpha 渐隐"的
+    /// 直通结构，如 (18,20,38,a=18)），写回**预乘**（Create / CreateBitmap 的约定）
+    /// ——所以**每个不透明像素都必须写**："原样" = 颜色不变，格式仍要归一。
+    /// </summary>
+    private static void TintPen(byte[] px, int n, Color4 pen)
+    {
+        // sMax = 可见像素的 max(x+y)：笔体沿对角线的末端（热点 (0,0) = 笔尖）
+        int sMax = 1;
+        for (int y = 0; y < n; y++)
+            for (int x = 0; x < n; x++)
+                if (px[(y * n + x) * 4 + 3] > 8) sMax = Math.Max(sMax, x + y);
+
+        // 笔帽实色 = 当前色留大头
+        float cR = pen.R * 0.88f + 0.12f, cG = pen.G * 0.88f + 0.12f, cB = pen.B * 0.88f + 0.12f;
+
+        for (int y = 0; y < n; y++)
+        {
+            for (int x = 0; x < n; x++)
+            {
+                int i = (y * n + x) * 4;
+                byte b = px[i], g = px[i + 1], r = px[i + 2], a = px[i + 3];
+                if (a == 0) continue;
+
+                float rr, gg, bb;
+                float lum = (r * 0.299f + g * 0.587f + b * 0.114f) / 255f;   // 0 = 黑，1 = 白
+                if ((x + y) / (float)sMax >= 0.70f && lum >= 0.45f)
+                {
+                    rr = cR; gg = cG; bb = cB;              // ② 笔帽浅色芯 → 当前色
+                }
+                else
+                {
+                    rr = r / 255f; gg = g / 255f; bb = b / 255f;   // ① 笔身 / 深色 → 原样
+                }
+                float af = a / 255f;                        // 直通 → 预乘
+                px[i]     = (byte)Math.Clamp(bb * af * 255f + 0.5f, 0f, 255f);
+                px[i + 1] = (byte)Math.Clamp(gg * af * 255f + 0.5f, 0f, 255f);
+                px[i + 2] = (byte)Math.Clamp(rr * af * 255f + 0.5f, 0f, 255f);
+            }
+        }
+    }
+
     /// <summary>
     /// 光标工厂总入口。能用系统现成的就用系统现成的（它们自动跟随用户的
     /// "指针大小 / 颜色 / 指针方案"辅助设置）；系统没有的才自绘（见类注释）。
@@ -133,6 +328,8 @@ internal static class Cursors
         CursorKind.ResizeNWSE => System(Native.IDC_SIZENWSE),
         CursorKind.ResizeNESW => System(Native.IDC_SIZENESW),
         CursorKind.Rotate => Rotate(sizePx),
+        // SelfPen 正常走 TintedPen（要当前笔色，见 Engine.ApplyCursor）；这里兜底系统笔。
+        CursorKind.SelfPen => System(Native.IDC_PEN),
         CursorKind.Hidden => Hidden(),
         _ => System(Native.IDC_ARROW),
     };
@@ -148,6 +345,7 @@ internal static class Cursors
         CursorKind.ResizeNWSE => "IDC_SIZENWSE 对角拉伸",
         CursorKind.ResizeNESW => "IDC_SIZENESW 对角拉伸",
         CursorKind.Rotate => "自绘·旋转（圆弧箭头）",
+        CursorKind.SelfPen => "自绘·染色笔（笔身原样·笔帽当前色）",
         CursorKind.Hidden => "不显示指针",
         CursorKind.Leave => "不插手（交给下层窗口）",
         _ => "IDC_ARROW 箭头",
@@ -158,6 +356,9 @@ internal static class Cursors
     {
         foreach (var h in s_rotate.Values) if (h != IntPtr.Zero) Native.DestroyCursor(h);
         s_rotate.Clear();
+        // 染色笔：**只销毁我们自绘的**（缓存里的 Zero = 该色走系统笔，系统句柄不能碰）。
+        foreach (var h in s_selfPen.Values) if (h != IntPtr.Zero) Native.DestroyCursor(h);
+        s_selfPen.Clear();
         if (s_hidden != IntPtr.Zero) { Native.DestroyCursor(s_hidden); s_hidden = IntPtr.Zero; }
     }
 

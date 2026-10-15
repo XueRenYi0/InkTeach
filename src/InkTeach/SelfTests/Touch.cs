@@ -3,6 +3,7 @@
 // 拆开的目的：产品代码与自检代码互不干扰，人和 AI 读代码时不必互相穿插。
 
 using System.Diagnostics;
+using System.IO;
 using System.Numerics;
 using System.Runtime;
 using System.Runtime.InteropServices;
@@ -1209,6 +1210,178 @@ internal sealed partial class App
         Console.WriteLine();
         Console.WriteLine($"  合计：{pass} 项通过，{fail} 项失败");
         Console.WriteLine(fail == 0 ? "  PASS: 触摸自检全部通过" : "  FAIL: 触摸自检有失败项");
+        Doc.Clear();
+        Doc.ClearHistory();
+        Doc.InvalidateAll();
+        SettleFrames(120);
+        _quit = true;
+    }
+
+    /// <summary>
+    /// `--touchhosttest`：**触摸 × 系统托管湿墨**（合成触摸注入，2026-10-13）。
+    ///
+    /// 适配原则是"会变成一笔墨的交给系统"，但**多指手势必须先保住**：实测（合成两指）
+    /// 宿主收下触摸后 WM_POINTER 被吞、第二指在旁听湿墨事件和 InkUnprocessedInput 里
+    /// **都看不见**（见 Input/SystemWetHost.cs 文件头⑥）——所以走方案 b：
+    ///   A. 手势开（默认）→ 触摸**不进宿主**：单指书写走自绘、第二指的按下到得了引擎、
+    ///      双指纵滑还是漫游（手势一条不掉）；顺带数一遍"宿主受理了几个触摸湿墨/未受理事件"
+    ///      当证据；
+    ///   B. 手势关（`--notouch` 那条偏好）→ 触摸**进宿主**：单指书写系统画（旁听喂模型）、
+    ///      连写两笔不掉墨/同笔单色，湿墨宽度与干墨一致（触摸不吃压感，等宽）。
+    /// </summary>
+    private void TouchHostTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 触摸 × 系统托管湿墨（--touchhosttest）===");
+        if (_windows.Count == 0 || _windows[0].SysWetHost == null)
+        {
+            Console.WriteLine("  SKIP: 本窗口没建系统托管湿墨宿主（用 --syswethost 启动再跑）");
+            _quit = true; return;
+        }
+        if (!EnsureSyntheticTouch())
+        {
+            Console.WriteLine("  SKIP: 拿不到合成触摸设备（CreateSyntheticPointerDevice(PT_TOUCH) 失败）");
+            _quit = true; return;
+        }
+        Console.WriteLine($"  湿墨后端   : {DescribeWetBackend(_windows[0])}");
+        Console.WriteLine($"  湿墨归属   : {DescribeToolWetOwners(true, false)}");
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-42} {detail}");
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        Doc.InvalidateAll();
+        Tool = Tool.Pen;
+        PenWidthLogical = 12f;
+        SetColorFromUi(new Color4(1f, 0f, 0f, 1f));   // 红：和系统默认黑区分开
+        BoardOn = true;
+        TouchResetForTest();
+        SettleFrames(150);
+        float x0 = _virtualX + 300f;
+
+        // ── A. 手势开（默认）：触摸不进宿主——自绘 + 多指手势一条不掉 ─────────
+        Console.WriteLine("  A 段：手势开（默认）→ 触摸不进宿主");
+        SetTouchGesturesFromUi(true);
+        SettleFrames(80);
+        int wetTouch0 = InkEngine.SystemWetHost.WetStartsTouch;
+        int unproc0 = InkEngine.SystemWetHost.UnprocDown + InkEngine.SystemWetHost.UnprocMove
+                    + InkEngine.SystemWetHost.UnprocUp;
+
+        // ① 单指写一笔：走 WM_POINTER 自绘（不是旁听喂）
+        float yA = _virtualY + 300f;
+        int strokes0 = Doc.Strokes.Count;
+        SendTouchesSized(true, (x0, yA, 24f));
+        SettleFrames(30);
+        for (int i = 1; i <= 12; i++) { SendTouchesSized(true, (x0 + 40f * i, yA, 24f)); SettleFrames(17); }
+        bool hostFedA = HostFedStrokeActive;
+        SendTouchesSized(false, (x0 + 480f, yA, 24f));
+        SettleFrames(250);
+        Check("手势开：单指书写走自绘（不进宿主）",
+              !hostFedA && Doc.Strokes.Count == strokes0 + 1,
+              $"旁听喂={hostFedA}，笔画 {strokes0} → {Doc.Strokes.Count}");
+
+        // ② 双指：第二指按下到得了引擎 + 双指纵滑 = 漫游（手势保住）
+        int downBefore = _cntDown;
+        float cam0 = ViewOffsetY;
+        float yB = _virtualY + 560f;
+        SendTouchesSized(true, (x0, yB, 24f));
+        SettleFrames(30);
+        SendTouchesSized(true, (x0, yB, 24f), (x0 + 300f, yB, 24f));
+        SettleFrames(40);
+        bool secondDown = _cntDown >= downBefore + 2;
+        string modeAt2 = TouchModeForTest.ToString();
+        SendTouchesSized(true, (x0, yB - 70f, 24f), (x0 + 300f, yB - 70f, 24f));
+        SettleFrames(40);
+        SendTouchesSized(true, (x0, yB - 160f, 24f), (x0 + 300f, yB - 160f, 24f));
+        SettleFrames(120);
+        SendTouchesSized(false, (x0, yB - 160f, 24f), (x0 + 300f, yB - 160f, 24f));
+        SettleFrames(150);
+        Check("手势开：双指纵滑 = 漫游（手势保住）",
+              secondDown && MathF.Abs(ViewOffsetY - cam0) > 60f,
+              $"第二指按下={secondDown}（_cntDown {downBefore} → {_cntDown}），按下时模式={modeAt2}，"
+              + $"相机 {cam0:F0} → {ViewOffsetY:F0}");
+        ViewOffsetY = 0f;
+        ClampViewOffset();
+        SettleFrames(80);
+
+        // ③ 证据：宿主一个触摸湿墨都没受理（触摸全留在 WM_POINTER 路）
+        int unproc1 = InkEngine.SystemWetHost.UnprocDown + InkEngine.SystemWetHost.UnprocMove
+                    + InkEngine.SystemWetHost.UnprocUp;
+        Check("手势开：宿主受理的触摸湿墨 = 0（证据）",
+              InkEngine.SystemWetHost.WetStartsTouch == wetTouch0,
+              $"触摸湿墨起笔 {wetTouch0} → {InkEngine.SystemWetHost.WetStartsTouch}"
+              + $"，未受理事件 {unproc0} → {unproc1}（都该不涨）");
+
+        // ── B. 手势关（--notouch 口径）：触摸进宿主——单指书写系统画 ─────────
+        Console.WriteLine("  B 段：手势关（--notouch 口径）→ 触摸进宿主（系统画）");
+        SetTouchGesturesFromUi(false);
+        SettleFrames(80);
+        Console.WriteLine($"        系统层颜色: {InkEngine.SystemWetHost.ColorSyncNote}");
+        int wetTouchB0 = InkEngine.SystemWetHost.WetStartsTouch;
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        Doc.InvalidateAll();
+        SettleFrames(120);
+        float yC = _virtualY + 300f;
+        int rx = (int)(x0 - 20), rw = 300, rh = 120;    // 左段取样框（笔尖在右段）
+
+        // ① 第 1 笔：湿墨期取左段（系统画）→ 抬笔后取同段（我们干墨）→ 宽度一致性
+        SendTouchesSized(true, (x0, yC, 24f));
+        SettleFrames(30);
+        for (int i = 1; i <= 12; i++) { SendTouchesSized(true, (x0 + 40f * i, yC, 24f)); SettleFrames(17); }
+        bool hostFedB = HostFedStrokeActive;
+        var wetPix = InkPixels(ScreenProbe.CaptureRegion(rx, (int)(yC - rh / 2), rw, rh));
+        ScreenProbe.SaveBmp(Path.Combine("reports", "shots", "touchhost-B1-wet.bmp"), rx, (int)(yC - rh / 2), rw, rh);
+        SendTouchesSized(false, (x0 + 480f, yC, 24f));
+        SettleFrames(300);
+        var dryPix = InkPixels(ScreenProbe.CaptureRegion(rx, (int)(yC - rh / 2), rw, rh));
+        double wRatio = dryPix.Ink > 0 ? wetPix.Ink * 1.0 / dryPix.Ink : 0;
+        Check("手势关：单指书写进宿主（旁听喂、系统画）",
+              hostFedB && Doc.Strokes.Count == 1,
+              $"旁听喂={hostFedB}，笔画 {Doc.Strokes.Count}");
+        Check("手势关：触摸湿墨宽度与干墨一致（等宽、不吃压感）",
+              wetPix.Ink > 500 && wRatio > 0.6 && wRatio < 1.7,
+              $"湿墨像素 {wetPix.Ink} / 干墨像素 {dryPix.Ink} = {wRatio:F2}（1.0=完全一致）");
+
+        // ② 第 2 笔：连写不掉墨 + 同笔单色
+        float yD = _virtualY + 560f;
+        var c1 = InkPixels(ScreenProbe.CaptureRegion(rx, (int)(yC - rh / 2), rw, rh));
+        SendTouchesSized(true, (x0, yD, 24f));
+        SettleFrames(30);
+        for (int i = 1; i <= 8; i++) { SendTouchesSized(true, (x0 + 40f * i, yD, 24f)); SettleFrames(17); }
+        var c1mid = InkPixels(ScreenProbe.CaptureRegion(rx, (int)(yC - rh / 2), rw, rh));
+        SendTouchesSized(false, (x0 + 320f, yD, 24f));
+        SettleFrames(300);
+        var c2end = InkPixels(ScreenProbe.CaptureRegion(rx, (int)(yD - rh / 2), rw, rh));
+        bool keep = c1mid.Ink >= c1.Ink - 20;
+        bool single = c2end.Dark + c2end.Other <= Math.Max(20, c2end.Red / 20);
+        Check("手势关：连写两笔不掉墨、同笔单色",
+              keep && single && Doc.Strokes.Count == 2,
+              $"第1笔区 {c1.Ink} → {c1mid.Ink}（{(keep ? "在" : "掉")}），"
+              + $"第2笔区 红{c2end.Red} 黑{c2end.Dark} 杂{c2end.Other}，笔画 {Doc.Strokes.Count}（应 2）");
+
+        // ③ 证据：这两笔确实走了触摸湿墨管线（按指针种类分开记的起笔数）
+        Check("手势关：触摸湿墨起笔 +2（证据）",
+              InkEngine.SystemWetHost.WetStartsTouch == wetTouchB0 + 2,
+              $"触摸湿墨起笔 {wetTouchB0} → {InkEngine.SystemWetHost.WetStartsTouch}");
+
+        // 收场：手势开关复位（它还决定触摸的湿墨归属）
+        SetTouchGesturesFromUi(true);
+        TouchResetForTest();
+        Console.WriteLine();
+        Console.WriteLine($"  合计：{pass} 项通过，{fail} 项失败");
+        Console.WriteLine(fail == 0
+            ? "  PASS: 触摸托管适配全部通过（手势开=自绘保手势 / 手势关=系统画）"
+            : "  FAIL: 触摸托管适配有失败项");
+        Console.WriteLine("  注：触摸的接触面积（rcContact）合成注入与部分真屏都报 0，"
+                          + "手掌擦靠'相对基线'判定受影响——本轮如实记录、不处理。");
+        ExitCode = fail == 0 ? 0 : 1;
         Doc.Clear();
         Doc.ClearHistory();
         Doc.InvalidateAll();

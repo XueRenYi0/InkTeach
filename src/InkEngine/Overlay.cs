@@ -314,6 +314,18 @@ internal sealed partial class OverlayWindow : IDisposable
     private IDCompositionInkTrailDevice _inkTrailDevice;
     private IDCompositionDelegatedInkTrail _inkTrail;
     private bool _inkTrailRuntimeFailed;
+    /// <summary>
+    /// 系统托管湿墨宿主（后端第二档，见 Input/SystemWetHost.cs）。非空 = 本窗口走它，
+    /// 合成根是 DesktopWindowTarget、交换链挂在它的视觉树里；轨迹通道整窗让位（`_inkTrail` 置空）。
+    /// </summary>
+    internal SystemWetHost SysWetHost;
+    /// <summary>系统正在为"当前这一笔"画湿墨（渲染抑制判据：和 <see cref="TrailDrawing"/> 同一槽位）。</summary>
+    public bool HostWetDrawing;
+    /// <summary>系统那份干墨还等着"干墨上屏后"清除（主循环要为此兜一帧，见 NeedsFrame）。</summary>
+    public bool HostHandoffPending => SysWetHost != null && SysWetHost.HandoffPending;
+    /// <summary>交接清屏的"补枪"没放完（主循环要连着兜几帧，见 Engine.NeedsFrame）。</summary>
+    public bool HostClearPending => SysWetHost != null
+        && (SysWetHost.ClearRetries > 0 || SysWetHost.ShowAfterClearPending);
     private ID2D1DeviceContext _ctx;
     /// <summary>
     /// D2D 1.3 的设备上下文 2：**原生墨迹**（ID2D1Ink）唯一能创建的地方
@@ -559,6 +571,20 @@ internal sealed partial class OverlayWindow : IDisposable
     /// 这是“委托轨迹替身”，不是预测：只画已经收到的真实点，不进文档、不改输入模型。
     /// </summary>
     public static bool FastWetFallbackEnabled = true;
+
+    /// <summary>
+    /// 是否启用**系统托管湿墨**后端（CoreInkPresenterHost + 旁听，2026-10-12 加）。
+    ///
+    /// 湿墨后端的优先级：**委托墨迹轨迹 → 系统托管湿墨 → 自绘湿墨**。
+    /// 委托轨迹不可用的环境（Win10 等）自动落到第二档；本机轨迹可用时默认行为不变。
+    /// 开关策略对齐 <see cref="InkTrailEnabled"/>：默认开、`--nosyswethost` 关；
+    /// `--syswethost` **强制启用**（哪怕轨迹可用——测试新后端用）。
+    /// 探测/接法见 Input/SystemWetHost.cs 文件头。
+    /// </summary>
+    public static bool SystemWetHostEnabled;
+
+    /// <summary>`--syswethost`：强制走系统托管湿墨（越过委托轨迹那一档）。</summary>
+    public static bool SystemWetHostPrefer;
 
     /// <summary>
     /// "按住不动 = 右键"这条**系统手势**在本窗口内关掉了吗（见
@@ -1237,25 +1263,6 @@ internal sealed partial class OverlayWindow : IDisposable
             _dcomp = DComp.DCompositionCreateDevice<IDCompositionDevice>(
                 Gfx.Device.QueryInterface<IDXGIDevice>());
         }
-        _dcomp.CreateTargetForHwnd(Hwnd, true, out _target).CheckError();
-        // 根视觉**不装内容**，交换链放在子视觉里 —— 这样湿墨才有地方叠在它上面。
-        // 2026-10-10 试验C 按 Chromium 的结构改；2026-10-13 修正层序（见下一条注释）。
-        //
-        // ⚠ `AddVisual` 的 insertAbove 语义**和直觉相反**（MSDN 原文：referenceVisual 为
-        //   NULL 时，"If insertAbove is TRUE, the new child visual is above no sibling,
-        //   therefore it is rendered below all of its siblings"）：
-        //   · insertAbove:false ＋ 参照 null → 加到**所有兄弟之上**；
-        //   · insertAbove:true  ＋ 参照 null → 加到**所有兄弟之下**。
-        //   湿墨视觉（系统轨迹 / FastWet 替身）必须叠在交换链**上面**——以前这里用了
-        //   true（=压在最下面），开着不透明白板时按住书写屏幕上一个湿墨像素都没有
-        //   （2026-10-13 实测：白板 + 系统轨迹 0 像素、白板 + FastWet 0 像素，桌面都正常），
-        //   因为白板的底色把下面的一切都盖住了；松手干墨进文档后才重新可见。
-        _visual = _dcomp.CreateVisual();
-        _swapVisual = _dcomp.CreateVisual();
-        _swapVisual.SetContent(_swapChain).CheckError();
-        _visual.AddVisual(_swapVisual, false, null).CheckError();
-        _target.SetRoot(_visual).CheckError();
-        _dcomp.Commit().CheckError();
 
         // 微软的"委托墨迹轨迹"：本意是把正在写的那一笔交给系统合成器去画，
         // 应用自己的延迟就不再影响笔尖跟手程度。这一项要单独探测，
@@ -1265,6 +1272,8 @@ internal sealed partial class OverlayWindow : IDisposable
         // 2026-10-10 试验C：照 Chromium 的接法补上"挂视觉树"这一步 → **系统真的画了**（wetinktest PASS）。
         // 2026-10-11：改"按窗口探测"——以前用静态 `InkTrailNote == "未尝试"` 当门槛，
         // 多屏时第二个窗口整个跳过 → 副屏永远没有轨迹。
+        // 2026-10-12：探测**提前到选后端之前**——"这台机器有没有轨迹"决定本窗口走
+        // 委托轨迹还是系统托管湿墨（见下面的后端优先级）。挂视觉树挪到后端选定之后。
         if (!_trailProbed)
         {
             _trailProbed = true;
@@ -1276,27 +1285,7 @@ internal sealed partial class OverlayWindow : IDisposable
                     _inkTrail = _inkTrailDevice.CreateDelegatedInkTrailForSwapChain(_swapChain);
                     InkTrailAvailable = _inkTrail != null;
                     InkTrailNote = InkTrailAvailable ? "可用" : "接口可用但创建轨迹失败";
-                    if (InkTrailAvailable)
-                    {
-                        // ★ 关键一步（Chromium 的 InkTrail 就是这么挂的，我们以前漏了）：
-                        //   轨迹对象必须**作为视觉内容放进视觉树**、叠在交换链上面，系统才会画。
-                        //   只创建不挂树 → 调用全成功、gen 递增，但屏幕上永远没有墨。
-                        try
-                        {
-                            _inkVisual = _dcomp.CreateVisual();
-                            _inkVisual.SetContent(_inkTrail).CheckError();
-                            // insertAbove:false + 参照 null = 加到所有兄弟**之上**
-                            //（语义说明见 CreateDeviceResources 里 AddVisual 那一段）。
-                            _visual.AddVisual(_inkVisual, false, null).CheckError();
-                            _dcomp.Commit().CheckError();
-                            InkTrailNote += "（已挂视觉树）";
-                        }
-                        catch (Exception layEx)
-                        {
-                            InkTrailAvailable = false;
-                            InkTrailNote += "（挂视觉树失败: " + layEx.Message + "）";
-                        }
-                    }
+                    // （轨迹挂视觉树收编到下面"非宿主分支"——宿主模式下不能挂，见后端优先级注释）
                 }
                 else
                 {
@@ -1308,6 +1297,70 @@ internal sealed partial class OverlayWindow : IDisposable
             {
                 InkTrailAvailable = false;
                 InkTrailNote = "探测异常: " + ex.Message;
+            }
+        }
+
+        // ---- 湿墨后端优先级（2026-10-12）：委托轨迹 → 系统托管湿墨 → 自绘 ----
+        //
+        // 第二档（系统托管湿墨）的合成根是 DesktopWindowTarget，交换链挂进它的视觉树
+        // （一个 HWND 只有一个合成根，见 Input/SystemWetHost.cs 文件头①）——
+        // 所以两档**按窗口二选一**，不是叠着用。探测失败安静退回自绘那一档。
+        bool hostWanted = SystemWetHostEnabled && (SystemWetHostPrefer || !InkTrailAvailable);
+        if (hostWanted)
+        {
+            string hostErr = SystemWetHost.Create(this, _swapChain, out SysWetHost);
+            if (SysWetHost == null)
+            {
+                Console.WriteLine($"系统托管湿墨: 建不起来（{hostErr}），本窗口退回自绘湿墨");
+            }
+            else
+            {
+                _inkTrail = null;      // 本窗口不走轨迹通道（喂点自动空转）
+                InkTrailNote += "（本窗口走系统托管湿墨）";
+            }
+        }
+
+        if (SysWetHost == null)
+        {
+            // 第一/第三档：合成根还是我们自己的 DComp 目标（原有接法一字不动）。
+            _dcomp.CreateTargetForHwnd(Hwnd, true, out _target).CheckError();
+            // 根视觉**不装内容**，交换链放在子视觉里 —— 这样湿墨（轨迹 / 应用湿墨层）才有地方
+            // 叠在它上面。2026-10-10 试验C 按 Chromium 的结构改；2026-10-13 修正层序：
+            // ⚠ `AddVisual` 的 insertAbove 语义**和直觉相反**（MSDN 原文：referenceVisual 为
+            //   NULL 时，"If insertAbove is TRUE, the new child visual is above no sibling,
+            //   therefore it is rendered below all of its siblings"）：
+            //   · insertAbove:false ＋ 参照 null → 加到**所有兄弟之上**；
+            //   · insertAbove:true  ＋ 参照 null → 加到**所有兄弟之下**。
+            //   湿墨视觉必须叠在交换链**上面**——用 true（=压在最下面）时开着不透明白板
+            //   按住书写屏幕上一个湿墨像素都没有（2026-10-13 实测：白板 + 系统轨迹 0 像素、
+            //   白板 + FastWet 0 像素，桌面都正常），因为白板底色把下面的一切盖住了。
+            _visual = _dcomp.CreateVisual();
+            _swapVisual = _dcomp.CreateVisual();
+            _swapVisual.SetContent(_swapChain).CheckError();
+            _visual.AddVisual(_swapVisual, false, null).CheckError();
+            _target.SetRoot(_visual).CheckError();
+            _dcomp.Commit().CheckError();
+
+            if (_inkTrail != null && InkTrailAvailable)
+            {
+                // ★ 关键一步（Chromium 的 InkTrail 就是这么挂的，我们以前漏了）：
+                //   轨迹对象必须**作为视觉内容放进视觉树**、叠在交换链上面，系统才会画。
+                //   只创建不挂树 → 调用全成功、gen 递增，但屏幕上永远没有墨。
+                try
+                {
+                    _inkVisual = _dcomp.CreateVisual();
+                    _inkVisual.SetContent(_inkTrail).CheckError();
+                    // insertAbove:false + 参照 null = 加到所有兄弟**之上**（语义说明见上面修正注释）。
+                    _visual.AddVisual(_inkVisual, false, null).CheckError();
+                    _dcomp.Commit().CheckError();
+                    InkTrailNote += "（已挂视觉树）";
+                }
+                catch (Exception layEx)
+                {
+                    InkTrailAvailable = false;
+                    _inkTrail = null;
+                    InkTrailNote += "（挂视觉树失败: " + layEx.Message + "）";
+                }
             }
         }
         Mem.Stage("5. 接入 DirectComposition 之后");
@@ -1381,7 +1434,8 @@ internal sealed partial class OverlayWindow : IDisposable
     private void TryCreateFastWetResources(bool force = false)
     {
         _fastWetReady = false;
-        if (!FastWetFallbackEnabled || _dcomp2 == null || _ctx == null) return;
+        // ⚠ 宿主模式没有自绘视觉树（_visual == null）——应用侧湿墨层不适用（2026-10-15 两线合并）。
+        if (!FastWetFallbackEnabled || _dcomp2 == null || _ctx == null || _visual == null) return;
         if (!force && _inkTrail != null && InkTrailEnabled) return;
         try
         {
@@ -2873,8 +2927,10 @@ internal sealed partial class OverlayWindow : IDisposable
             // 是不是真的由系统合成器画出来了。
             // `--syswet`：这一笔的湿墨由系统轨迹画（且它真的在画）→ 我们不自绘，
             // 否则两条叠在一起，系统轨迹的低延迟优势根本看不见。
+            // 2026-10-12：系统托管湿墨（HostWetDrawing）同理——系统在画就不自绘，
+            // 预测尾也不画（系统自带预测）。两个后端互斥，判据并排放。
             if (app.ActiveStroke != null && !app.SuppressActiveStroke
-                && !(TrailDrawing && app.IsSystemWetStroke(app.ActiveStroke)))
+                && !((TrailDrawing || HostWetDrawing) && app.IsSystemWetStroke(app.ActiveStroke)))
             {
                 // 正在写的那一笔几何每帧都在变，用实现缓存只会不停重建，反而更慢
                 DrawStroke(app.ActiveStroke);
@@ -2883,7 +2939,7 @@ internal sealed partial class OverlayWindow : IDisposable
                 _drewWetStrokeThisFrame = true;
             }
             if (app.PredictTailActive && !app.ActiveStroke.HiddenForPairing
-                && !(TrailDrawing && app.IsSystemWetStroke(app.ActiveStroke)))
+                && !((TrailDrawing || HostWetDrawing) && app.IsSystemWetStroke(app.ActiveStroke)))
                 DrawPredictTail(app.ActiveStroke.Color, app.PredictTailWidth);
 
             // 回放：正在"长"的那一条（前缀几何；已经出完的都在内容层里了）
@@ -6061,6 +6117,11 @@ internal sealed partial class OverlayWindow : IDisposable
             DrawEraserRectCursor(app, c);
             return;
         }
+        if (shape == InkEngine.ToolCursorShape.FramePen)
+        {
+            DrawFramePen(app, c);
+            return;
+        }
 
         // 问 EffectiveTool（不是 Tool）：**笔倒过来拿（笔尾橡皮）时，这一圈就是橡皮的圈**
         // ——半径按橡皮、颜色按橡皮。引擎那边（DrawnCursor / CursorOuterRadius）也是问它，
@@ -6075,6 +6136,74 @@ internal sealed partial class OverlayWindow : IDisposable
             ? new Color4(0.35f, 0.55f, 0.95f, 0.10f)      // 橡皮：淡蓝，"要擦掉这一块"
             : new Color4(0.35f, 0.55f, 0.95f, 0.06f);     // 笔尖：更淡，不挡视线
         DrawRingCursor(c, truth, outer, fill);
+    }
+
+    // ---- 应用帧笔画笔（--framepen，2026-10-13；手感"很到位"、糊已修）----------
+
+    /// <summary>帧笔缓存位图（同一张染色位图；颜色/尺寸变了才重建）。</summary>
+    private ID2D1Bitmap _framePenBmp;
+    private uint _framePenRgb;
+    private int _framePenN;
+    private int _framePenHotX, _framePenHotY;
+
+    /// <summary>
+    /// 应用帧画笔（`--framepen`）：把"染色笔"的**同一张位图**画在浮动层
+    /// （画布坐标、与墨同帧）——与系统光标通道的染色笔形成对照。
+    /// 像素与 HCURSOR 版**完全同源**（Cursors.TintedPenPixels），
+    /// 热点 = 位图左上 = 笔尖，所以从指针点向右下铺。
+    ///
+    /// ⚠ 真机复测更正（2026-10-13 晚）：原判"迟缓好严重"系**误报**——实际手感
+    /// "很到位"（笔尖与墨头逐帧贴合）；真实问题只有**画质发糊**。
+    /// **糊的根因**：PointerX/Y 是 himetric 亚像素（带小数）、相机平移也可能带
+    /// 小数，按小数坐标 + linear 采样画 = 笔缘整体被抹虚。**已修**：折算到窗口
+    /// 空间把矩形左上吸到整数像素再画（实现见下），1:1 时采样退化为恒等。
+    /// </summary>
+    private void DrawFramePen(InkEngine app, Vector2 c)
+    {
+        var pen = app.CurrentColor;
+        int n = app.CursorSizePx;                       // 画多大（设备像素；上下文 DPI 固定 96）
+        uint rgb = Cursors.RgbKey(pen);
+        if (_framePenBmp == null || _framePenRgb != rgb || _framePenN != n)
+        {
+            _framePenBmp?.Dispose();
+            _framePenBmp = null;
+            var px = Cursors.TintedPenPixels(pen, n, out int hotX, out int hotY);
+            if (px != null)
+            {
+                // 源位图是**系统位图的原生尺寸**（本机 32），未必等于 CursorSizePx——
+                // 必须按缓冲真实边长建位图（按 n 建会越界读：高 DPI 机器上会炸）。
+                int nBuf = Math.Max(1, (int)MathF.Round(MathF.Sqrt(px.Length / 4f)));
+                var props = new BitmapProperties1(
+                    new Vortice.DCommon.PixelFormat(Format.B8G8R8A8_UNorm,
+                                                    Vortice.DCommon.AlphaMode.Premultiplied),
+                    96f, 96f, BitmapOptions.None);
+                var handle = GCHandle.Alloc(px, GCHandleType.Pinned);
+                try
+                {
+                    _framePenBmp = _ctx.CreateBitmap(
+                        new SizeI(nBuf, nBuf), handle.AddrOfPinnedObject(), (uint)(nBuf * 4), props);
+                    // 热点按"源 → 画"等比换算（1:1 时就是原值）
+                    _framePenHotX = (int)MathF.Round(hotX * (float)n / nBuf);
+                    _framePenHotY = (int)MathF.Round(hotY * (float)n / nBuf);
+                }
+                catch { _framePenBmp = null; }
+                finally { handle.Free(); }
+            }
+            _framePenRgb = rgb;
+            _framePenN = n;
+        }
+        if (_framePenBmp == null) return;
+
+        // —— 像素对齐（2026-10-13 修"很糊"）——
+        // 位置源是 himetric 亚像素、相机平移也可能带小数：直接按小数坐标画，
+        // 采样插值会把笔缘整体抹虚（真机"比较很糊"）。系统光标是像素对齐的，这里照做：
+        // 画布→窗口是纯平移（CanvasToWindow），把"矩形左上角在窗口里的位置"吸到
+        // 整数像素后折回画布空间——变换后正好落整数网格，1:1 采样退化为恒等，不糊。
+        var t = CanvasToWindow.Translation;
+        float ox = MathF.Round(c.X + t.X - _framePenHotX) - t.X;
+        float oy = MathF.Round(c.Y + t.Y - _framePenHotY) - t.Y;
+        _ctx.DrawBitmap(_framePenBmp, new Vortice.RawRectF(ox, oy, ox + n, oy + n), 1f,
+                        Vortice.Direct2D1.InterpolationMode.Linear, null, null);
     }
 
     /// <summary>
@@ -6810,6 +6939,9 @@ internal sealed partial class OverlayWindow : IDisposable
         // ⚠ 只删"自绘过"的情况；`--syswet` / 抑制自绘时不删（那时湿墨只有轨迹这一份）。
         if (!hr.Failure && _drewWetStrokeThisFrame) TrimInkTrailAsDrawn();
         _drewWetStrokeThisFrame = false;
+        // 系统托管湿墨的干墨交接（2026-10-12）：干墨这一帧已经上屏，现在清系统那一份不闪
+        //（"同帧 Clear 必掉一帧空白"是 InkBystanderTest T6 实测；必须重叠交接）。
+        SysWetHost?.AfterPresent();
         if (hr.Failure)
         {
             LastError = "Present: " + hr.Description;
@@ -6834,11 +6966,13 @@ internal sealed partial class OverlayWindow : IDisposable
         _hudBmpTex?.Dispose();
         _pickSvBmp?.Dispose();           // 自定义取色板的缓存位图（8.2.0）
         _pickHueBmp?.Dispose();
+        _framePenBmp?.Dispose();         // 应用帧笔画笔的缓存位图（--framepen 试作）
         _frozenBmp?.Dispose();           // 截图的冻结帧位图（8.3.0）
         _tiles?.Dispose();
         _backBuffer?.Dispose();
         _inkStyle?.Dispose();          // 墨迹笔尖样式（压感变宽那条路）
         _ctx?.Dispose();
+        SysWetHost?.Dispose();         // 系统托管湿墨宿主（合成目标/墨迹层随窗口一起走）
         _inkVisual?.Dispose();
         _fastWetSurface?.Dispose();
         _fastWetVisual?.Dispose();

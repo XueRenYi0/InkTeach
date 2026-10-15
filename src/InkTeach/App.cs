@@ -833,6 +833,13 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             TouchGuardTest();
         }
+        else if (mode == "--touchhosttest")
+        {
+            // 触摸 × 系统托管湿墨（2026-10-13）：手势开=触摸自绘保多指、手势关=触摸系统画。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            TouchHostTest();
+        }
         // [停用 2026-10-05] 预测尾/预测算法自检（老预测系统停用，见 已停用-渲染实验.md）
         // else if (mode == "--predicttailtest")
         // {
@@ -969,6 +976,20 @@ internal sealed partial class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             PressureDiagTest();
+        }
+        else if (mode == "--syswethosttest")
+        {
+            // 系统托管湿墨回归（2026-10-12 用户真笔 bug）：连写两笔不掉墨 + 同笔单色。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SysWetHostTest();
+        }
+        else if (mode == "--highlightertest")
+        {
+            // 荧光笔"两层墨"逐帧像素取证（2026-10-12 用户真笔第 3 个 bug）。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            HighlighterLayerTest();
         }
         else if (mode == "--pressuretest")
         {
@@ -1276,6 +1297,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --updatetest        自动更新自检（离线：解析 / 版本比较 / sha256 / 下载候选 / 换壳脚本沙箱真跑）");
         Console.WriteLine("  --updatecheck [清单地址] [--apply]  自动更新验收（**会真的换壳**：--apply = 查到就装）");
         Console.WriteLine("  --touchguardtest    触摸自检（合成触摸：PT_TOUCH 通路 + 第二根手指不许抢笔）");
+        Console.WriteLine("  --touchhosttest     触摸 × 系统托管湿墨（手势开=触摸自绘保多指 / 手势关=触摸系统画）");
         Console.WriteLine("  --touchtest         触摸手势自检（单指写 / 双指漫游翻页 / 三指擦 / 长按选 / 选中变换 / 总开关）");
         Console.WriteLine("  --notouch           触摸手势总开关**临时关掉**（保险丝 / A-B 对照；不写偏好）");
         Console.WriteLine("  --touchhud          触点诊断浮层（触点数 / 接触面积 / 最近的输入设备）");
@@ -1304,6 +1326,10 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("                      2=+应用湿墨层（FastWet）3=全开（轨迹优先、FastWet 兜底）");
         Console.WriteLine("                      也可以点：「更多 → 设置 → 墨迹 → 湿墨档位」（点一下换一档）");
         Console.WriteLine("  --syswet            真笔 + 实线笔：湿墨只让系统轨迹画（诊断；⚠ 单条轨迹系统上限 128 点，长笔画会回滚）");
+        Console.WriteLine("  --syswethost        强制走**系统托管湿墨**（CoreInkPresenterHost + 旁听喂模型；Win10 1709+，委托轨迹不可用时自动启用）");
+        Console.WriteLine("  --nosyswethost      关掉系统托管湿墨后端（湿墨退回自绘那条兜底路）");
+        Console.WriteLine("  --syswethosttest    系统托管湿墨回归：连写两笔不掉墨 + 同笔单色（配合 --syswethost 用）");
+        Console.WriteLine("  --highlightertest   荧光笔两层墨取证：湿墨期/收笔后逐帧像素分层（配合 --syswethost 用）");
         Console.WriteLine("  --trailonly         自己那一笔不画（湿墨只剩系统轨迹）——手动验证系统到底给哪种输入画");
         // [停用] Console.WriteLine("  --predictdata [路径] 真实笔迹数据上的预测评测（UCI Character Trajectories）");
         Console.WriteLine("  --latbench <csv>    延时实测（分场景 + 分位数 + 稳定性）");

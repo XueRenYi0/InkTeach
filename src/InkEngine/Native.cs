@@ -140,6 +140,28 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern bool DestroyCursor(IntPtr hCursor);
 
+    /// <summary>GDI 位图描述。读光标位图的宽高用（自绘染色笔要按原尺寸重建）。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAP
+    {
+        public int bmType;
+        public int bmWidth;
+        public int bmHeight;
+        public int bmWidthBytes;
+        public ushort bmPlanes;
+        public ushort bmBitsPixel;
+        public IntPtr bmBits;
+    }
+
+    /// <summary>读 GDI 对象描述（这里是光标位图，拿宽高）。</summary>
+    [DllImport("gdi32.dll", EntryPoint = "GetObjectW")]
+    public static extern int GetObjectBitmap(IntPtr h, int cb, ref BITMAP pv);
+
+    /// <summary>从位图读像素（自绘染色笔用：把系统斜笔的位图读出来再染色）。</summary>
+    [DllImport("gdi32.dll")]
+    public static extern int GetDIBits(IntPtr hdc, IntPtr hbm, uint start, uint lines,
+        byte[] bits, ref BITMAPINFO bmi, uint usage);
+
     [DllImport("user32.dll")]
     public static extern bool TrackMouseEvent(ref TRACKMOUSEEVENT tme);
 

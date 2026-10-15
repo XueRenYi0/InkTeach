@@ -9,7 +9,10 @@
     引擎只依赖图形与系统 API，不依赖任何上层应用。
   -->
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- 2026-10-12：TFM 带上 Windows SDK 版本——系统托管湿墨要用 Windows.UI.Composition /
+         Windows.UI.Input.Inking.Core 这些 WinRT 投影（Input/SystemWetHost.cs）。
+         探针工程（InkBystanderTest）同款 TFM 写法，投影随 Windows SDK Ref 包自动带上。 -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
