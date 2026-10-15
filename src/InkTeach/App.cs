@@ -538,14 +538,6 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             InkTrailTest(args.Contains("--touch"));   // `--trailtest --touch` = 合成触摸对照
         }
-        else if (mode == "--fastwettest")
-        {
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            // 应用侧湿墨（FastWet）屏幕自检：关掉系统轨迹，查"慢写断口"和"白板隐身"。
-            // `--fastwettest --board` = 不透明白底下的那条（2026-10-13 的回归就出在这）。
-            FastWetTest();
-        }
         else if (mode == "--historytest")
         {
             _autoExitAt = double.MaxValue;
@@ -557,7 +549,7 @@ internal sealed partial class App : InkEngine.InkEngine
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
-            // 湿墨延时对照：主绘 / FastWet / 系统轨迹 / 产品组合四档，量墨尖落后与跳变响应。
+            // 湿墨延时对照：主绘 / 系统轨迹 / 产品组合三档，量墨尖落后与跳变响应。
             WetLagTest();
         }
         else if (mode == "--camlag")
@@ -1296,18 +1288,15 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --rolltest          课堂点名自检（功能卡：设置↔结果 / 滚动定格 / 去重池子 / 名单 / 穿透小窗）");
         Console.WriteLine("  --replayshow <图>   墨迹回放摆样（铺几笔 → 播到一半 → 截控制条那一块）");
         Console.WriteLine("  --ballprobe [前缀]  收起球贴边诊断（左/右/四角 × 显示/隐藏，逐个出图）");
-        Console.WriteLine("  --fastwettest       应用侧湿墨（FastWet）自检：关掉系统轨迹，查慢写断口；");
-        Console.WriteLine("                      `--fastwettest --board` 再查不透明白板下湿墨可不可见");
-        Console.WriteLine("  --lagtest           湿墨延时对照（合成鼠标：主绘 / FastWet / 系统轨迹 / 产品组合，");
+        Console.WriteLine("  --lagtest           湿墨延时对照（合成鼠标：主绘 / 系统轨迹 / 产品组合，");
         Console.WriteLine("                      量\"墨尖落后指针\"多少 px 与跳变响应 ms；轨迹档还能看出它到底画没画）");
-        Console.WriteLine("  --camlag [all|1..4] [--speed N] [--sweeps N] [--live N]   手机 120Hz 录像对照：");
-        Console.WriteLine("                      同一套匀速拖动逐档跑（1 主绘 2 FastWet 3 系统轨迹 4 产品组合），");
+        Console.WriteLine("  --camlag [all|1..3] [--speed N] [--sweeps N] [--live N]   手机 120Hz 录像对照：");
+        Console.WriteLine("                      同一套匀速拖动逐档跑（1 主绘 2 系统轨迹 3 产品组合），");
         Console.WriteLine("                      屏上有档位横条 + 每 50 物理像素的刻度尺；拍下来量\"光标尖↔墨尖\"");
         Console.WriteLine("                      的距离 ÷ 速度 = 毫秒。--live N = 换成你自己用笔写 N 秒。");
         Console.WriteLine("  --wetinktest        湿墨轨迹实测（只让系统画，数上屏像素：这条通道到底画不画）");
-        Console.WriteLine("  --wetmode <0..3>    湿墨档位（记住到设置；运行时 Ctrl+Alt+Shift+W 循环切换）：");
-        Console.WriteLine("                      0=原路径（默认：不喂轨迹、不建湿墨层）1=+系统委托轨迹");
-        Console.WriteLine("                      2=+应用湿墨层（FastWet）3=全开（轨迹优先、FastWet 兜底）");
+        Console.WriteLine("  --wetmode <0..1>    湿墨档位（记住到设置；运行时 Ctrl+Alt+Shift+W 循环切换）：");
+        Console.WriteLine("                      0=原路径（默认：不喂轨迹）1=+系统委托轨迹（有就用、没有退回自绘）");
         Console.WriteLine("                      也可以点：「更多 → 设置 → 墨迹 → 湿墨档位」（点一下换一档）");
         Console.WriteLine("  --syswet            真笔 + 实线笔：湿墨只让系统轨迹画（诊断；⚠ 单条轨迹系统上限 128 点，长笔画会回滚）");
         Console.WriteLine("  --trailonly         自己那一笔不画（湿墨只剩系统轨迹）——手动验证系统到底给哪种输入画");

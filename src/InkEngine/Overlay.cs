@@ -301,16 +301,6 @@ internal sealed partial class OverlayWindow : IDisposable
     private IDCompositionVisual _swapVisual;
     /// <summary>委托墨迹轨迹视觉（内容＝_inkTrail，叠在交换链之上）。2026-10-10 试验C 新增。</summary>
     private IDCompositionVisual _inkVisual;
-    private IDCompositionVisual _fastWetVisual;
-    private IDCompositionSurface _fastWetSurface;
-    private bool _fastWetReady;
-    private int _fastWetLastPointCount;
-    private float _fastWetLastCamX = float.NaN;
-    private float _fastWetLastCamY = float.NaN;
-    private RectF _fastWetLastBounds = RectF.Empty;
-    private Color4 _fastWetColor;
-    private bool _fastWetDrawing;
-    public bool FastWetReady => _fastWetReady;
     private IDCompositionInkTrailDevice _inkTrailDevice;
     private IDCompositionDelegatedInkTrail _inkTrail;
     private bool _inkTrailRuntimeFailed;
@@ -555,12 +545,6 @@ internal sealed partial class OverlayWindow : IDisposable
     public static bool SystemWetPreferred;
 
     /// <summary>
-    /// 系统委托轨迹不可用时，是否启用应用侧 DirectComposition 湿墨层。
-    /// 这是“委托轨迹替身”，不是预测：只画已经收到的真实点，不进文档、不改输入模型。
-    /// </summary>
-    public static bool FastWetFallbackEnabled = true;
-
-    /// <summary>
     /// "按住不动 = 右键"这条**系统手势**在本窗口内关掉了吗（见
     /// <see cref="Native.DisableSystemPressAndHold"/>）。
     ///
@@ -708,256 +692,6 @@ internal sealed partial class OverlayWindow : IDisposable
 
     /// <summary>委托轨迹本笔运行时失败；Engine 据此切换应用侧湿墨。</summary>
     public bool InkTrailRuntimeFailed => _inkTrailRuntimeFailed;
-
-    /// <summary>
-    /// 启动一条应用侧湿墨。它使用独立 DirectComposition surface，避开完整内容交换链的
-    /// 分块/界面重绘；输入点仍由 Engine 的现有 WM_POINTER 管线提供。
-    /// </summary>
-    public bool BeginFastWet(Color4 color, float radius)
-    {
-        if (!_fastWetReady) TryCreateFastWetResources(force: true);
-        if (!FastWetFallbackEnabled || _fastWetSurface == null || !_fastWetReady) return false;
-        try
-        {
-            if (_fastWetEndPending) EndFastWetNow();
-            if (!_fastWetLastBounds.IsEmpty) ClearFastWetBounds(_fastWetLastBounds);
-            _fastWetColor = color;
-            _fastWetLastPointCount = 0;
-            _fastWetLastCamX = ViewOffsetX;
-            _fastWetLastCamY = ViewOffsetY;
-            _fastWetLastBounds = RectF.Empty;
-            _fastWetDrawing = true;
-            _fastWetEndPending = false;
-            return true;
-        }
-        catch (Exception ex)
-        {
-            InkTrailDebug = "FastWet 启动失败: " + ex.Message;
-            return false;
-        }
-    }
-
-    /// <summary>清空应用侧湿墨视觉，并提交一次 DComp。</summary>
-    public void EndFastWet()
-    {
-        EndFastWetNow();
-    }
-
-    private void EndFastWetNow()
-    {
-        if (!_fastWetReady)
-        {
-            _fastWetDrawing = false;
-            _fastWetEndPending = false;
-            return;
-        }
-        try
-        {
-            if (!_fastWetLastBounds.IsEmpty) ClearFastWetBounds(_fastWetLastBounds);
-            _dcomp2.Commit().CheckError();
-        }
-        catch { _fastWetReady = false; _fastWetDrawing = false; _fastWetEndPending = false; }
-        _fastWetLastPointCount = 0;
-        _fastWetLastCamX = float.NaN;
-        _fastWetLastCamY = float.NaN;
-        _fastWetLastBounds = RectF.Empty;
-        _fastWetDrawing = false;
-        _fastWetEndPending = false;
-    }
-
-    private bool _fastWetEndPending;
-
-    public bool FastWetEndPending => _fastWetEndPending;
-
-    public void EndFastWetDeferred()
-    {
-        if (_fastWetDrawing) _fastWetEndPending = true;
-    }
-
-    /// <summary>
-    /// 把活动笔的**真实已收到点**画到独立湿墨 surface。只重画本笔包围盒，
-    /// 不触碰主交换链；因此 Win10 没有系统轨迹时也有一条低开销的“委托式”湿墨路径。
-    ///
-    /// 更新矩形语义（2026-10-13 修，真机“密集断墨”的根因）：`BeginDraw` 拿到的
-    /// 临时表面**不含旧内容**（MSDN：应用必须把更新矩形内每一个像素都重画），
-    /// 所以不能“擦掉整块、只画新增的那一段”——写得慢/字密时，矩形里更早的那截
-    /// 湿墨会被擦掉又没重画，屏幕上就在笔尖后面出现高频断口。
-    /// 现在每次更新都在矩形内按“**整笔 ∩ 矩形**”重画：哪一段伸进矩形就画哪一段。
-    /// </summary>
-    public bool UpdateFastWet(Stroke stroke)
-    {
-        if (!_fastWetReady || stroke == null || stroke.Points.Count < 1) return false;
-        bool cameraChanged = _fastWetLastPointCount > 0
-                          && (ViewOffsetX != _fastWetLastCamX || ViewOffsetY != _fastWetLastCamY);
-        if (cameraChanged && !_fastWetLastBounds.IsEmpty)
-        {
-            // A camera move invalidates the previous screen-space image. Clear it
-            // before drawing the stroke at the new transform.
-            ClearFastWetBounds(_fastWetLastBounds);
-            _fastWetLastBounds = RectF.Empty;
-        }
-
-        // 本次要重画的画布矩形：相机变了/第一帧 → 整条；否则 → 新点加上一个旧点
-        //（新墨只可能出现在这里）。矩形**以外**的表面内容是保留的，不去碰。
-        int start = cameraChanged ? 0 : Math.Max(0, _fastWetLastPointCount - 1);
-        var segmentBounds = RectF.Empty;
-        for (int i = start; i < stroke.Points.Count; i++)
-            segmentBounds.Add(stroke.Points[i].X, stroke.Points[i].Y);
-        if (segmentBounds.IsEmpty) return false;
-        // 留白按**最粗处**算（压力满压时半宽 = 标称宽）：早先按 0.75× 标称留白，
-        // 重压写的粗边会被更新矩形的边界裁掉——那是另一种“断墨”。
-        float pad = stroke.MaxHalfWidth + 2f;
-        var clip = CanvasRectToWindow(segmentBounds.Inflate(pad));
-        // CanvasRectToWindow 返回的是本窗口局部坐标；FastWet surface 也是局部坐标。
-        clip.MinX = MathF.Max(0, clip.MinX);
-        clip.MinY = MathF.Max(0, clip.MinY);
-        clip.MaxX = MathF.Min(Width, clip.MaxX);
-        clip.MaxY = MathF.Min(Height, clip.MaxY);
-        if (clip.MaxX <= clip.MinX || clip.MaxY <= clip.MinY) return false;
-
-        try
-        {
-            var rect = new Vortice.RawRect(
-                Math.Max(0, (int)MathF.Floor(clip.MinX)),
-                Math.Max(0, (int)MathF.Floor(clip.MinY)),
-                Math.Min(Width, (int)MathF.Ceiling(clip.MaxX)),
-                Math.Min(Height, (int)MathF.Ceiling(clip.MaxY)));
-            if (rect.Right <= rect.Left || rect.Bottom <= rect.Top) return false;
-
-            var ctx = _fastWetSurface.BeginDraw<ID2D1DeviceContext>(rect, out var offset);
-            using var brush = ctx.CreateSolidColorBrush(_fastWetColor, null);
-            using var clear = ctx.CreateSolidColorBrush(Transparent, null);
-            try
-            {
-                // BeginDraw exposes a temporary target for the update rectangle. Map
-                // surface-space coordinates into that target: returned offset minus
-                // requested rectangle origin (the offset is not the rectangle origin).
-                ctx.Transform = Matrix3x2.CreateTranslation(
-                    -OriginX + ViewOffsetX + offset.X - rect.Left,
-                    -OriginY + ViewOffsetY + offset.Y - rect.Top);
-
-                // 更新矩形在**画布坐标**里的那一块（裁剪会随上面的变换映射回目标矩形）。
-                var clipCanvas = new RectF
-                {
-                    MinX = rect.Left + OriginX - ViewOffsetX,
-                    MinY = rect.Top + OriginY - ViewOffsetY,
-                    MaxX = rect.Right + OriginX - ViewOffsetX,
-                    MaxY = rect.Bottom + OriginY - ViewOffsetY,
-                };
-                var clipRaw = new Vortice.RawRectF(clipCanvas.MinX, clipCanvas.MinY,
-                                                   clipCanvas.MaxX, clipCanvas.MaxY);
-                ctx.PushAxisAlignedClip(clipRaw, AntialiasMode.Aliased);
-                // `Clear()` 不受裁剪影响（会把整个目标清掉），所以用 Copy 混合的
-                // 填充来“擦”——和主渲染那条路同一个手法（见 RasterizeTile 的注释）。
-                ctx.PrimitiveBlend = PrimitiveBlend.Copy;
-                ctx.FillRectangle(clipRaw, clear);
-                ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
-                DrawFastWetStroke(ctx, brush, stroke, clipCanvas);
-                ctx.PopAxisAlignedClip();
-                ctx.Transform = Matrix3x2.Identity;
-            }
-            finally
-            {
-                _fastWetSurface.EndDraw().CheckError();
-                ctx.Dispose();
-            }
-            _dcomp2.Commit().CheckError();
-            _fastWetLastPointCount = stroke.Points.Count;
-            _fastWetLastCamX = ViewOffsetX;
-            _fastWetLastCamY = ViewOffsetY;
-            if (_fastWetLastBounds.IsEmpty) _fastWetLastBounds = clip;
-            else _fastWetLastBounds.Add(clip);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            InkTrailDebug = "FastWet 更新失败: " + ex.Message;
-            _fastWetReady = false;
-            _fastWetDrawing = false;
-            _fastWetEndPending = false;
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// 在**本次更新矩形内**重画湿墨：把整条笔迹里**伸进矩形**的段和圆头端点全部画一遍。
-    ///
-    /// 为什么不是“只画新增的段”（2026-10-13 踩过）：DComp 的更新矩形不保留旧内容，
-    /// 矩形里任何没被重画的旧墨都会被擦掉。只有“矩形 → 完整内容”这一条纯函数，
-    /// 才能保证矩形边界两侧接得上（密集书写/折返时的断墨就是从那里来的）。
-    /// 越界部分由调用方推的裁剪矩形裁掉；粗筛留白用整笔最粗的半宽。
-    /// </summary>
-    private void DrawFastWetStroke(ID2D1DeviceContext ctx, ID2D1SolidColorBrush brush,
-                                   Stroke stroke, in RectF clipCanvas)
-    {
-        var pts = stroke.Points;
-        if (pts.Count == 0) return;
-
-        float WidthAt(float p)
-            => stroke.HasPressure && PressureWidth.Enabled
-                ? MathF.Max(1f, PressureWidth.HalfWidth(stroke.Width, p) * 2f)
-                : MathF.Max(1f, stroke.Width);
-
-        if (pts.Count == 1)
-        {
-            var p = new Vector2(pts[0].X, pts[0].Y);
-            float r = WidthAt(pts[0].P) * 0.5f;
-            if (CircleHits(p, r, clipCanvas)) ctx.FillEllipse(new Ellipse(p, r, r), brush);
-            return;
-        }
-
-        float hitPad = stroke.MaxHalfWidth + 1f;   // 任何一段的墨都不会伸得比它更远
-        for (int i = 1; i < pts.Count; i++)
-        {
-            float ax = pts[i - 1].X, ay = pts[i - 1].Y;
-            float bx = pts[i].X, by = pts[i].Y;
-            var seg = new RectF
-            {
-                MinX = MathF.Min(ax, bx) - hitPad,
-                MinY = MathF.Min(ay, by) - hitPad,
-                MaxX = MathF.Max(ax, bx) + hitPad,
-                MaxY = MathF.Max(ay, by) + hitPad,
-            };
-            if (!seg.Intersects(clipCanvas)) continue;
-            float width = WidthAt((pts[i - 1].P + pts[i].P) * 0.5f);
-            ctx.DrawLine(new Vector2(ax, ay), new Vector2(bx, by), brush, width, Gfx.Round);
-        }
-
-        // 两端的圆头按**端点压力**补（段描边用的是中点压力的宽度，端头半径会差一点）；
-        // 只有落在矩形里的那个端点才要补——另一个在矩形外，之前已经画对了。
-        var p0 = new Vector2(pts[0].X, pts[0].Y);
-        float r0 = WidthAt(pts[0].P) * 0.5f;
-        if (CircleHits(p0, r0, clipCanvas)) ctx.FillEllipse(new Ellipse(p0, r0, r0), brush);
-        var pn = new Vector2(pts[^1].X, pts[^1].Y);
-        float rn = WidthAt(pts[^1].P) * 0.5f;
-        if (CircleHits(pn, rn, clipCanvas)) ctx.FillEllipse(new Ellipse(pn, rn, rn), brush);
-    }
-
-    /// <summary>圆（圆心 + 半径）和矩形有没有交叠——湿墨粗筛用。</summary>
-    private static bool CircleHits(Vector2 c, float r, in RectF box)
-        => c.X + r >= box.MinX && c.X - r <= box.MaxX
-        && c.Y + r >= box.MinY && c.Y - r <= box.MaxY;
-
-    private void ClearFastWetBounds(RectF bounds)
-    {
-        if (_fastWetSurface == null) return;
-        int l = Math.Max(0, (int)MathF.Floor(bounds.MinX));
-        int t = Math.Max(0, (int)MathF.Floor(bounds.MinY));
-        int r = Math.Min(Width, (int)MathF.Ceiling(bounds.MaxX));
-        int b = Math.Min(Height, (int)MathF.Ceiling(bounds.MaxY));
-        if (r <= l || b <= t) return;
-        var rect = new Vortice.RawRect(l, t, r, b);
-        var ctx = _fastWetSurface.BeginDraw<ID2D1DeviceContext>(rect, out _);
-        try { ctx.Clear(Transparent); }
-        finally
-        {
-            _fastWetSurface.EndDraw().CheckError();
-            ctx.Dispose();
-        }
-    }
-
-    /// <summary>系统委托轨迹不可用时的应用侧湿墨是否已有可见真实点。</summary>
-    public bool FastWetDrawing => _fastWetReady && _fastWetDrawing && _fastWetLastPointCount > 0;
 
     /// <summary>把一个采样点交给系统合成器（屏幕坐标，内部换算到交换链坐标）。</summary>
     public void AddInkTrailPoint(float screenX, float screenY, float radius)
@@ -1246,9 +980,9 @@ internal sealed partial class OverlayWindow : IDisposable
         //   therefore it is rendered below all of its siblings"）：
         //   · insertAbove:false ＋ 参照 null → 加到**所有兄弟之上**；
         //   · insertAbove:true  ＋ 参照 null → 加到**所有兄弟之下**。
-        //   湿墨视觉（系统轨迹 / FastWet 替身）必须叠在交换链**上面**——以前这里用了
+        //   湿墨视觉（系统轨迹）必须叠在交换链**上面**——以前这里用了
         //   true（=压在最下面），开着不透明白板时按住书写屏幕上一个湿墨像素都没有
-        //   （2026-10-13 实测：白板 + 系统轨迹 0 像素、白板 + FastWet 0 像素，桌面都正常），
+        //   （2026-10-13 实测：白板 + 系统轨迹 0 像素，桌面正常），
         //   因为白板的底色把下面的一切都盖住了；松手干墨进文档后才重新可见。
         _visual = _dcomp.CreateVisual();
         _swapVisual = _dcomp.CreateVisual();
@@ -1371,40 +1105,7 @@ internal sealed partial class OverlayWindow : IDisposable
         _scratch = _ctx.CreateSolidColorBrush(new Color4(1f, 1f, 1f, 1f), null);
         _transparentBrush = _ctx.CreateSolidColorBrush(new Color4(0f, 0f, 0f, 0f), null);
         _boardBrush = _ctx.CreateSolidColorBrush(Transparent, null);
-        // Do not allocate a full-screen fallback surface on a machine where the
-        // native delegated trail is already available. It is created lazily only
-        // when the native route is absent or fails.
-        if (_inkTrail == null || !InkTrailEnabled) TryCreateFastWetResources();
         Mem.Stage("6. 创建离屏内容层之后");
-    }
-
-    private void TryCreateFastWetResources(bool force = false)
-    {
-        _fastWetReady = false;
-        if (!FastWetFallbackEnabled || _dcomp2 == null || _ctx == null) return;
-        if (!force && _inkTrail != null && InkTrailEnabled) return;
-        try
-        {
-            // VirtualSurface allocates tiles only where ink is actually written; a
-            // full-screen 4K surface would otherwise reserve another large buffer per monitor.
-            _fastWetSurface = _dcomp2.CreateVirtualSurface((uint)Width, (uint)Height,
-                Format.B8G8R8A8_UNorm, Vortice.DXGI.AlphaMode.Premultiplied);
-            _fastWetVisual = _dcomp.CreateVisual();
-            _fastWetVisual.SetContent(_fastWetSurface).CheckError();
-            // insertAbove:false + 参照 null = 加到所有兄弟**之上**（湿墨必须浮在
-            // 交换链上面；语义说明见 CreateDeviceResources 里 AddVisual 那一段）。
-            _visual.AddVisual(_fastWetVisual, false, null).CheckError();
-            _dcomp2.Commit().CheckError();
-            _fastWetReady = true;
-            InkTrailNote += "；应用侧湿墨层可用";
-        }
-        catch (Exception ex)
-        {
-            _fastWetReady = false;
-        _fastWetSurface?.Dispose(); _fastWetSurface = null;
-        _fastWetVisual?.Dispose(); _fastWetVisual = null;
-            InkTrailNote += "；应用侧湿墨层不可用: " + ex.Message;
-        }
     }
 
     /// <summary>
@@ -6804,8 +6505,6 @@ internal sealed partial class OverlayWindow : IDisposable
         LastPresentMs = sw.Elapsed.TotalMilliseconds;
         // `--syswet` 收笔挂起的轨迹撤除：干墨这一帧已经提交，现在撤不会露出空档。
         if (_trailEndPending) EndInkTrailNow();
-        // 应用侧湿墨替身也必须等主交换链把干墨提交后再清空，避免收笔时出现空白帧。
-        if (!hr.Failure && _fastWetEndPending) EndFastWetNow();
         // 轨迹"结账"（2026-10-11）：这一笔我们自己已经画上屏了，把轨迹里同样这一段删掉。
         // ⚠ 只删"自绘过"的情况；`--syswet` / 抑制自绘时不删（那时湿墨只有轨迹这一份）。
         if (!hr.Failure && _drewWetStrokeThisFrame) TrimInkTrailAsDrawn();
@@ -6840,8 +6539,6 @@ internal sealed partial class OverlayWindow : IDisposable
         _inkStyle?.Dispose();          // 墨迹笔尖样式（压感变宽那条路）
         _ctx?.Dispose();
         _inkVisual?.Dispose();
-        _fastWetSurface?.Dispose();
-        _fastWetVisual?.Dispose();
         _swapVisual?.Dispose();
         _visual?.Dispose();
         _target?.Dispose();

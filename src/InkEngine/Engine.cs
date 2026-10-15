@@ -104,7 +104,7 @@ public partial class InkEngine
             or "--nosmooth" or "--printersafe"
             or "--mean2gauss" or "--mean2guniform" or "--mean2gsigma" or "--mean2gfast"
             or "--mean2glo" or "--mean2ghi" or "--mean2gtip"
-            or "--predict2" or "--nopredict2" or "--nofastwet" => true,
+            or "--predict2" or "--nopredict2" => true,
         _ => false,
     };
 
@@ -329,26 +329,8 @@ public partial class InkEngine
     /// 用**引用相等**认笔画，收笔/换笔都不会串。
     /// </summary>
     private Stroke _systemWetStroke;
-    /// <summary>应用侧 DComp 湿墨替身当前负责显示的笔画。</summary>
-    private Stroke _fastWetStroke;
-
-    /// <summary>
-    /// 应用侧湿墨层"这一帧还没提交"的挂起标记（2026-10-14 加）。
-    ///
-    /// 为什么改成挂起式：原来**每收到一条输入消息**就做一整轮 GPU 往返
-    /// （BeginDraw → 擦 → 画 → EndDraw → Commit）。真笔一条消息常带一串合并点，
-    /// 写得越快这种往返越多，**把整个消息循环都拖慢**——用户手机 120Hz 逐帧录像实测：
-    /// "应用湿墨层"那一档反而最不跟手（离笔最远）。现在挂起、由渲染循环在
-    /// **每帧画主帧之前**提交一次（见 RenderAll 里那一段）：成本降到 1/N，
-    /// 而且仍然比本帧 Present 早提交——它原来的那点优势保住。
-    /// </summary>
-    private bool _fastWetPending;
-    /// <summary>挂起时用的最后屏幕位置（决定更新哪一个窗口的湿墨层）。</summary>
-    private float _fastWetScreenX, _fastWetScreenY;
-
     /// <summary>Overlay 渲染判据：这一笔是不是"由系统轨迹画湿墨"。</summary>
     internal bool IsSystemWetStroke(Stroke s) => s != null && ReferenceEquals(s, _systemWetStroke);
-    internal bool IsFastWetStroke(Stroke s) => s != null && ReferenceEquals(s, _fastWetStroke);
     internal Tool Tool = Tool.Pen;
     /// <summary>Tool sizes are authored in logical pixels and scaled by the
     /// monitor DPI at use. Without this everything looks half-size on a 150%
@@ -666,13 +648,19 @@ public partial class InkEngine
     /// until there is a proper on-screen control for it.
     /// 最细档 2026-09-27 从 1.5 降到 **1**（用户："画笔的最小笔宽设成 1 可以吗？"——
     /// 1.5 写细字、画坐标轴刻度时还是偏粗）。
-    /// **2026-10-09 晚间再改**（用户："把 1 号到 10 号这个范围拿出来，间距宽成两倍
-    /// （比如 1 号和 2 号中间再加一档）；超过 20 号以后保持 20 或 40 即可"）：
-    /// **1/1.5/2/2.5/3/3.5/4/5/6/7/8/9/10/20/40**（15 档）——
-    /// 1~10 段插满中点（常用的地方更细），10 以上只留 20 / 40 两个粗档。
-    /// 默认档仍是 3（数值 3，现下标 4）。滑条拖动**吸附到最近档**（不再有中间值、也不画点）。
+    /// **2026-10-15 用户定：画笔 = 1~20 整整 20 档**（原话"1~20 这 20 个档位就可以了"）——
+    /// 每档差 1 个逻辑像素；原 1.5/2.5/3.5 中点档与 40 超粗档一并撤掉。
+    /// 默认档仍是 3（现下标 2）。滑条拖动**吸附到最近档**（不再有中间值、也不画点）。
     /// 界面那份对应表在 `FullUi.PenWidthGrades`，靠 --paneltest 逐项比对卡住。</summary>
-    internal static readonly float[] WidthPresets = { 1f, 1.5f, 2f, 2.5f, 3f, 3.5f, 4f, 5f, 6f, 7f, 8f, 9f, 10f, 20f, 40f };
+    internal static readonly float[] WidthPresets =
+    {
+        1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f, 9f, 10f,
+        11f, 12f, 13f, 14f, 15f, 16f, 17f, 18f, 19f, 20f,
+    };
+    /// <summary>上一代档表（2026-10-09 晚 ~ 2026-10-15，15 档）：只为**迁移老配置**而留。
+    /// 老配置 `w3.pen` 存的是那张表的"第几档"——直接按新表读会错位，先过这张表取回
+    /// 数值、再吸附进新表（1.5/2.5/3.5 吸附到相邻整数档；40 吸附到 20）。</summary>
+    internal static readonly float[] Legacy15WidthPresets = { 1f, 1.5f, 2f, 2.5f, 3f, 3.5f, 4f, 5f, 6f, 7f, 8f, 9f, 10f, 20f, 40f };
     /// <summary>上一代档位表（2026-10-09 白天，9 档）：只为**迁移老配置**而留。
     /// 老配置 `w2.pen` 存的是那张表的"第几档"——直接按新表读会错位，
     /// 先过这张表取回数值、再吸附进新表（16 / 24 不在新表，吸附到最近的 20）。</summary>
@@ -681,7 +669,7 @@ public partial class InkEngine
     /// 老配置 `w.pen` 存的是"第几档"，直接按新表读会把 6 读成 2——先过这张表取回数值，
     /// 再吸附回新表（老表每个值都在新表里，吸附无损）。</summary>
     internal static readonly float[] LegacyWidthPresets = { 1f, 3f, 6f, 10f, 16f, 24f };
-    internal int WidthPresetIndex = 4;            // = 3f（默认粗细）
+    internal int WidthPresetIndex = 2;            // = 3f（默认粗细；新 20 档表的下标）
 
     /// <summary>
     /// 每种工具各自的粗细档位。**笔和荧光笔的档位不是一回事**：荧光笔是"涂一大条"，
@@ -1077,15 +1065,16 @@ public partial class InkEngine
         catch (Exception ex) { Console.WriteLine($"  [wintab] 记偏好失败（不影响使用）：{ex.Message}"); }
     }
 
-    // ---- 湿墨档位（2026-10-13 新增：用户要求"档位式切换"，带走上机体验）----------------
+    // ---- 湿墨档位（2026-10-13 新增；2026-10-15 精简为两档：应用湿墨层撤除）------------
     //
     // 档位是**在原来的路径之上叠加**，不是替换：
-    //   0 = 原路径：不喂系统轨迹、不建应用湿墨层——湿墨只有主交换链自绘（**默认**，
-    //       保证"关档 = 和以前逐字一样"）；
-    //   1 = + 系统委托轨迹（IDCompositionDelegatedInkTrail：只补"还没上屏的那一小截"）；
-    //   2 = + 应用湿墨层（FastWet：应用侧独立 DComp 虚表画整笔，自绘照旧兜底）；
-    //   3 = 1 + 2（轨迹优先，启动失败/运行时失败由 FastWet 接管）。
-    // 三个档位里**主交换链自绘都照旧**（档位只加不减），所以任何一档都不会比原路径更差。
+    //   0 = 原路径：不喂系统轨迹——湿墨只有主交换链自绘（**默认**，保证"关档 = 和以前逐字一样"）；
+    //   1 = + 系统委托轨迹（IDCompositionDelegatedInkTrail 只补"还没上屏的那一小截"）：
+    //       **有就用、没有就自动退回软件自绘**（Win10 没有这条通道；Win11 21H2~23H2 有系统已知的
+    //       顶三分之一屏闪烁，不放心就留在 0）。
+    // 两档里**主交换链自绘都照旧**（档位只加不减），所以任何一档都不会比原路径更差。
+    // （2026-10-15 用户定：删掉原档 2「应用湿墨层（FastWet）」——真机看有锯齿、松手才平滑，
+    //   也感觉不到优势；原档 3「全开」随 FastWet 一起消失，语义并入 1。）
     //
     // 切换方式：`--wetmode N`（记住到设置里）或运行时 **Ctrl+Alt+Shift+W** 循环。
     internal static int WetMode;
@@ -1098,31 +1087,24 @@ public partial class InkEngine
 
     internal static string WetModeName(int m) => m switch
     {
-        1 => "系统委托轨迹",
-        2 => "应用湿墨层（FastWet）",
-        3 => "轨迹 + 兜底",
-        _ => "原路径（不加湿墨层）",
+        1 => "系统委托轨迹（有就用、没有退回自绘）",
+        _ => "原路径（不喂系统轨迹）",
     };
 
-    /// <summary>把当前档位落到两个开关上，并把"被关掉那条通道"的在场湿墨收掉。</summary>
+    /// <summary>把当前档位落到系统轨迹开关上，并把"被关掉那条通道"的在场湿墨收掉。</summary>
     private void ApplyWetMode()
     {
-        bool trail = WetMode is 1 or 3;
-        bool layer = WetMode is 2 or 3;
+        bool trail = WetMode == 1;
         OverlayWindow.InkTrailEnabled = trail;
-        OverlayWindow.FastWetFallbackEnabled = layer;
         foreach (var w in _windows)
-        {
             if (!trail) w.EndInkTrail();
-            if (!layer) w.EndFastWet();
-        }
         _dirty = true;
     }
 
-    /// <summary>热键：切下一档（0→1→2→3→0）。</summary>
-    internal void CycleWetMode() => SetWetMode(WetMode == 3 ? 0 : WetMode + 1, "Ctrl+Alt+Shift+W");
+    /// <summary>热键：切下一档（0→1→0；2026-10-15 只剩两档）。</summary>
+    internal void CycleWetMode() => SetWetMode(WetMode == 1 ? 0 : 1, "Ctrl+Alt+Shift+W");
 
-    /// <summary>界面点「设置 → 墨迹 → 湿墨档位」：直接定到某一档（0..3）。</summary>
+    /// <summary>界面点「设置 → 墨迹 → 湿墨档位」：直接定到某一档（0..1）。</summary>
     internal void SetWetModeFromUi(int mode) => SetWetMode(mode, "设置 → 墨迹 → 湿墨档位");
 
     /// <summary>
@@ -1132,7 +1114,7 @@ public partial class InkEngine
     /// </summary>
     private void SetWetMode(int mode, string from)
     {
-        WetMode = Math.Clamp(mode, 0, 3);
+        WetMode = Math.Clamp(mode, 0, 1);   // 旧档 2/3（应用湿墨层/全开）并入 1
         ApplyWetMode();
         if (!SelfCheckMode)
         {
@@ -2297,15 +2279,15 @@ public partial class InkEngine
         // 实测（2026-10-11，逐帧采样）：鼠标**也画**（拖动中峰值 163 像素的"尾巴"）；
         // 先前"0 像素"是采样太稀漏掉了它（尾巴只存活到我们下一次上屏）。
         // 笔/鼠标/触摸都喂（每消息几次 COM 调用，代价可忽略）。
-        // ---- 湿墨档位（0..3）---------------------------------------------------
+        // ---- 湿墨档位（0..1）---------------------------------------------------
         // 顺序：**先读设置里记着的档**（没有 = 0 原路径），再看 `--wetmode N`
         //（覆盖 + 记住），最后让老的开发/诊断开关覆盖（`--inktrail` / `--noinktrail`
         // 的判据逐字不变，自检与对照全照旧）。
-        WetMode = int.TryParse(GetUiPref(WetModePrefKey), out int wmPref) ? Math.Clamp(wmPref, 0, 3) : 0;
+        WetMode = int.TryParse(GetUiPref(WetModePrefKey), out int wmPref) ? Math.Clamp(wmPref, 0, 1) : 0;
         for (int i = 0; i < args.Length - 1; i++)
             if (args[i] == "--wetmode" && int.TryParse(args[i + 1], out int wmArg))
             {
-                WetMode = Math.Clamp(wmArg, 0, 3);
+                WetMode = Math.Clamp(wmArg, 0, 1);
                 // ⚠ 这里**不能**用 `SelfCheckMode` 把关：这一步跑在 RunModeDispatch 之前，
                 // 那个标志还不可信（和 wintab 偏好同一个坑，见下面 _pendingWintabPref 的注释）。
                 // 写不写盘交给 Loop() 开头那一段判（那时标志已经定下来了）。
@@ -2330,8 +2312,6 @@ public partial class InkEngine
         // `--ownwet` 强制回老路（A/B 用）。
         OverlayWindow.SystemWetPreferred = args.Contains("--syswet");
         if (args.Contains("--ownwet")) OverlayWindow.SystemWetPreferred = false;
-        // 只负责"关"（档位已经在上面落过；这里再写 `!Contains` 会把档位 0/1 的应用湿墨层打开）。
-        if (args.Contains("--nofastwet")) OverlayWindow.FastWetFallbackEnabled = false;
 
         // PPT 连接诊断（--pptdebug）：把 ROT 扫描每一步打出来（排查用，平时关）。
         PptComSource.Debug = args.Contains("--pptdebug");
@@ -2648,11 +2628,12 @@ public partial class InkEngine
             _hlColorIdx = hlIdx;
         }
         // **粗细档**（每个工具分开记，用户 2026-09-30 定）：存的是"第几档"。
-        // **2026-10-09 晚档表全换代**（每张表都在常用段加密一倍）：老下标按新表读会错位，
-        // 所以键名升级一代（笔 `w3.pen`、其余 `w2.*`）。读不到就按"老下标 → 老表取值 →
-        // **吸附**进新表"迁移（老值都在新表附近，无损或只挪半格）。
-        if (int.TryParse(GetUiPref("w3.pen"), out int wPen3) && wPen3 >= 0 && wPen3 < WidthPresets.Length)
-        { WidthPresetIndex = wPen3; PenWidthLogical = WidthPresets[wPen3]; }
+        // **2026-10-15 笔档表换代（15 → 20 档）**：老下标按新表读会错位，所以笔的键名
+        // 再升一代（`w4.pen`；荧光笔/激光/橡皮的表没动，仍 `w2.*`）。读不到就按
+        // "老下标 → 老表取值 → **吸附**进新表"迁移（1.5/2.5/3.5 挪半格、40 → 20）。
+        if (int.TryParse(GetUiPref("w4.pen"), out int wPen4) && wPen4 >= 0 && wPen4 < WidthPresets.Length)
+        { WidthPresetIndex = wPen4; PenWidthLogical = WidthPresets[wPen4]; }
+        else if (MigrateWidthPref("w3.pen", Legacy15WidthPresets, WidthPresets, ref WidthPresetIndex, ref PenWidthLogical)) { }
         else if (MigrateWidthPref("w2.pen", Legacy9WidthPresets, WidthPresets, ref WidthPresetIndex, ref PenWidthLogical)) { }
         else if (MigrateWidthPref("w.pen", LegacyWidthPresets, WidthPresets, ref WidthPresetIndex, ref PenWidthLogical)) { }
         if (int.TryParse(GetUiPref("w2.hl"), out int wHl2) && wHl2 >= 0 && wHl2 < HighlighterWidthPresets.Length)
@@ -3384,10 +3365,9 @@ public partial class InkEngine
             _windows.Add(w);
             Console.WriteLine($"overlay on monitor {hMon}: {r.Width}x{r.Height} at ({r.Left},{r.Top}) dpi={w.Dpi}");
             Console.WriteLine($"湿墨档位: {WetMode} {WetModeName(WetMode)}"
-                              + "（设置里记着；Ctrl+Alt+Shift+W 循环切换，--wetmode 0..3 指定）");
+                              + "（设置里记着；Ctrl+Alt+Shift+W 循环切换，--wetmode 0..1 指定）");
             Console.WriteLine($"委托墨迹轨迹(InkTrail): {(OverlayWindow.InkTrailEnabled ? "开" : "关")}"
                               + $"（接口{OverlayWindow.InkTrailNote}）");
-            Console.WriteLine($"应用侧湿墨替身(FastWet): {(w.FastWetReady ? "可用（系统轨迹失效时自动接管）" : "不可用（回退主交换链自绘）")}");
             Console.WriteLine($"湿墨呈现: {(OverlayWindow.SystemWetPreferred ? "系统轨迹独占（--syswet）" : "自己画（系统轨迹照喂）")}");
             // 调参时"我到底调上了没有"必须一眼看得见：这里印的是**生效值**，不是"可用/不可用"。
             // （2026-09-22 用户碰到的两个坑：--predictms 100 被静默夹到 15；--noinktrail 生效了没有
@@ -3816,20 +3796,6 @@ public partial class InkEngine
         // 差值 <1px，命中和观感都对得上。
         float renderCamY = MathF.Round(ViewOffsetY);
         foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = renderCamY; }
-
-        // 应用侧湿墨层（FastWet）：**每帧最多提交一次**，把这一帧收到的点一次画完。
-        // 位置有两处讲究：
-        //   · 放在相机写进窗口**之后**——它的变换用 ViewOffset，必须和主帧同一份；
-        //   · 放在画主帧**之前**——先于本帧 Present 提交，保住"比主帧早"的那点优势，
-        //     同时免掉"每条输入消息一轮 BeginDraw/EndDraw/Commit"的开销
-        //     （2026-10-14 用户手机 120Hz 实测：那种写法反而最不跟手）。
-        if (_fastWetPending)
-        {
-            _fastWetPending = false;
-            var fw = WindowAt(_fastWetScreenX, _fastWetScreenY);
-            if (fw != null && IsFastWetStroke(ActiveStroke))
-                fw.UpdateFastWet(ActiveStroke);
-        }
 
         // 面板的接输入小窗跟着界面这一刻占的地方走（方案 B）。
         // 放在渲染之前：这一帧界面画在哪，输入就该收在哪，两件事同源。
@@ -4390,8 +4356,7 @@ public partial class InkEngine
                    || RadialPaletteActive        // 呼出盘开着要连续出帧（出盘延迟 + 松手轮询）
                    || TooltipPending;            // 引擎侧悬停提示还在等 500ms（到点要有人点亮它）
         return _dirty || _animating
-               || _windows.Exists(w => w.TrailEndPending)     // --syswet：收笔撤轨迹必须有一帧兜底
-               || _windows.Exists(w => w.FastWetEndPending);  // 应用侧湿墨收笔的撤除同样要一帧兜底
+               || _windows.Exists(w => w.TrailEndPending);  // --syswet：收笔撤轨迹必须有一帧兜底
     }
 
     // =====================================================================
@@ -4831,23 +4796,12 @@ public partial class InkEngine
             // 实测的原话是"上面会出残影一直在那闪"。见 Stroke.RawWhileLive。
             RawWhileLive = true,
         };
-        // Win11 的系统轨迹可用时保持原协议；系统轨迹不可用时启用同一窗口内的
-        // 独立 DComp 湿墨层。它只接管显示，不接管输入，也不改变文档提交。
-        bool fastWetStarted = false;
-        // 只给真正的笔启用替身；激光笔有自己的 LaserTrail，不能混进 FastWet。
-        if (!trailStarted && tool == Tool.Pen && dash == StrokeDash.Solid)
-        {
-            fastWetStarted = wetWin?.BeginFastWet(
-                tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
-                trailW * 0.5f) ?? false;
-        }
         // `--syswet`：真笔 + 实线笔，且轨迹真的起来了 → 湿墨交给系统（我们不再自绘）。
         // 荧光笔/激光笔不在此列——系统轨迹画不出它们的观感；`--ownwet` 可强制回老路。
         // ⚠ 仍然**只给真笔**：鼠标/触摸的轨迹系统认不认还没结论，不能让"我们不自绘"去赌。
         _systemWetStroke = (trailStarted && OverlayWindow.SystemWetPreferred && tool == Tool.Pen
                             && ptype == Native.PT_PEN)
             ? ActiveStroke : null;
-        _fastWetStroke = fastWetStarted ? ActiveStroke : null;
         // 起笔：落笔这条消息里可能已经合并了几个采样点，一起收进来（以前只取最新那一个）。
         ActiveStrokeHasPressure = false;
         _wtStrokePressure = -1f;     // Wintab 的缺压回填基准**每笔归零**（新一笔不继承上一笔的力度）
@@ -4889,23 +4843,10 @@ public partial class InkEngine
         AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
         // 半径**逐点算**（见 TrailRadius）：有压感的笔，湿墨的粗细必须和干墨一致。
         FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
-        // 委托轨迹可能在创建成功后、第一次真正喂点时才失败。不能让这一笔从此
-        // 没有湿墨：同一笔立即切到应用侧 DComp 湿墨层，并把已经收到的点一次补画。
-        if (!fastWetStarted && trailStarted && wetWin != null && wetWin.InkTrailRuntimeFailed)
-        {
+        // 委托轨迹可能在创建成功后、第一次真正喂点时才失败。失败就不再让位
+        //（`--syswet` 只该在"系统真的在画"时生效；不给位的话我们自己接着画）。
+        if (trailStarted && wetWin != null && wetWin.InkTrailRuntimeFailed)
             _systemWetStroke = null;
-            fastWetStarted = wetWin.BeginFastWet(
-                tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
-                trailW * 0.5f);
-            _fastWetStroke = fastWetStarted ? ActiveStroke : null;
-        }
-        if (fastWetStarted)
-        {
-            // 起笔这一下**立刻**画一次（让第一点就可见；每笔只有这一次同步提交），
-            // 之后都走"每帧最多一次"的挂起路线（见 _fastWetPending 的注释）。
-            wetWin?.UpdateFastWet(ActiveStroke);
-            _fastWetPending = false;
-        }
 
         // **停顿成型跟着这一笔开始计时**（见 计划-图形工具.md §四十二）。
         // 激光笔不参与：它只是"指一下"，本来就不留墨，把它变出一个图形来没有意义。
@@ -4952,24 +4893,6 @@ public partial class InkEngine
         // 只取最新那一个等于把笔的采样率砍半（见 Input/PenInput.cs）。
         AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
         FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
-        var wetWin = WindowAt(screenX, screenY);
-        if (wetWin != null && wetWin.InkTrailRuntimeFailed && !IsFastWetStroke(ActiveStroke))
-        {
-            // Native delegated trail can fail after a successful start. Switch the
-            // same active stroke to the application surface without changing input
-            // ownership or document semantics.
-            _systemWetStroke = null;
-            if (wetWin.BeginFastWet(ActiveStroke.Color, TrailRadius()))
-                _fastWetStroke = ActiveStroke;
-        }
-        if (IsFastWetStroke(ActiveStroke))
-        {
-            // ⚠ 不在这里做 GPU 工作（见 _fastWetPending 的注释）：只挂起，
-            // 真正提交由这一帧画主帧之前那一次完成——每帧最多一轮。
-            _fastWetPending = true;
-            _fastWetScreenX = screenX;
-            _fastWetScreenY = screenY;
-        }
         // 停顿跟踪：**死区内的抖动不算"动过"**（见 DwellAssist.DeadZoneLogical）——
         // 少了它，笔尖静止时那点亚像素抖动会把计时一直刷新，
         // "停 600ms"永远攒不满，整条功能看着像没生效。
@@ -5174,13 +5097,8 @@ public partial class InkEngine
         // 为此要切 `EditingMode`，还留下过"两条线""预览残留"一串坑；我们这边
         // 采样和上屏都在引擎手里，所以要收的只有这三处）。
         foreach (var w in _windows)
-        {
             w.EndInkTrail();
-            w.EndFastWet();
-        }
         _systemWetStroke = null;
-        _fastWetStroke = null;
-        _fastWetPending = false;      // 这一笔不再长：挂起的更新作废（见 _fastWetPending 注释）
 
         var anchor = _dwell.Anchor;                       // 笔停住的位置
         double stillMs = _dwell.StillMs(NowMs);           // 复位之前先量
@@ -7653,15 +7571,9 @@ public partial class InkEngine
         // `--syswet`：湿墨只有系统轨迹这一份，撤除要等干墨那一帧 Present 之后
         //（否则"轨迹先没了、干墨还没上屏"会闪一帧）；其余路径照旧立即撤。
         bool sysWetEnding = _systemWetStroke != null;
-        bool fastWetEnding = _fastWetStroke != null;
         foreach (var w in _windows)
-        {
             if (sysWetEnding) w.EndInkTrailDeferred(); else w.EndInkTrail();
-            if (fastWetEnding) w.EndFastWetDeferred();
-        }
         _systemWetStroke = null;
-        _fastWetStroke = null;
-        _fastWetPending = false;     // 收笔：挂起的湿墨更新作废（免得下一帧拿旧位置找窗口）
         // **录墨迹**（用户 2026-09-26 提"我手画多少条双曲线给你，你按这些来定制判据"）：
         // 把这一笔的**原始采样点**追加到录制文件。放在最前面 —— 此时 `ActiveStroke`
         // 要么还是原始墨、要么是停顿成型换掉的那个对象（所以真正要用的点见 `_recordPts`）。
@@ -10720,9 +10632,9 @@ public partial class InkEngine
                         + $"（本机实际 {CurrentToolWidthLogical * DpiScale:F0} 物理像素）");
         EraserTelemetry?.Note($"{ToolName(Tool)}粗细 → {CurrentToolWidthLogical:F0} 逻辑像素", NowMs);
         // **记住粗细档**（用户 2026-09-30 定：笔 / 荧光笔 / 激光笔 / 面积擦 分开记）。
-        // 2026-10-09 晚键名再升一代（`w3.pen` / `w2.*`）——新表的"第几档"与老键的语义不同，
+        // 2026-10-15 笔键名升到 `w4.pen`（20 档新表）——表的"第几档"语义随换代，
         // 混读会错位；老键只当迁移来源。笔同时写一份"数值"（`wv.pen`）。
-        SetUiPref("w3.pen", WidthPresetIndex.ToString());
+        SetUiPref("w4.pen", WidthPresetIndex.ToString());
         SetUiPref("wv.pen", PenWidthLogical.ToString("0.##"));
         SetUiPref("w2.hl", HighlighterWidthIndex.ToString());
         SetUiPref("w2.laser", LaserWidthIndex.ToString());
@@ -11419,7 +11331,7 @@ public partial class InkEngine
                 int i = NearestIndex(WidthPresets, v);
                 WidthPresetIndex = i;
                 PenWidthLogical = WidthPresets[i];
-                SetUiPref("w3.pen", i.ToString());
+                SetUiPref("w4.pen", i.ToString());
                 SetUiPref("wv.pen", PenWidthLogical.ToString("0.##"));
                 break;
             }

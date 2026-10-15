@@ -2875,8 +2875,8 @@ internal sealed partial class App
         }
 
         // 「湿墨档位」那一行（2026-10-13 加，用户点名"设置里要能看到到了哪一档"）：
-        // 点一下换一档（0→1→2→3→0）→ 引擎立刻生效（静态开关跟着变）→ 界面下一帧读回来显示。
-        // 自检模式下引擎**不落盘**（临时设置路径那条规矩），这里只验"点了真的换档"。
+        // 点一下换一档（**2026-10-15 起两档：0 ⇄ 1**）→ 引擎立刻生效（静态开关跟着变）→
+        // 界面下一帧读回来显示。自检模式下引擎**不落盘**（临时设置路径那条规矩）。
         {
             var wetRow = ui.RowRectByLabelForTest("湿墨档位");
             Check("「湿墨档位」那一行找得到", wetRow.MaxY > wetRow.MinY,
@@ -2895,23 +2895,13 @@ internal sealed partial class App
             Check("换档落到引擎：系统委托轨迹那一档跟着开",
                   OverlayWindow.InkTrailEnabled, "InkTrailEnabled = " + OverlayWindow.InkTrailEnabled);
 
-            // 再点两下到 3（全开）、第三下回到 0——顺带验"到顶回头"这一圈。
+            // 再点一下回到 0（2026-10-15：只剩两档——应用湿墨层撤除后"到顶回头"就是 1→0）。
             ClickPhysical((wetRow.MinX + wetRow.MaxX) * 0.5f * DpiScale,
                           (wetRow.MinY + wetRow.MaxY) * 0.5f * DpiScale);
             SettleFrames(150);
-            ClickPhysical((wetRow.MinX + wetRow.MaxX) * 0.5f * DpiScale,
-                          (wetRow.MinY + wetRow.MaxY) * 0.5f * DpiScale);
-            SettleFrames(150);
-            Check("连点到 3 全开（应用湿墨层也开）",
-                  Host.State.WetMode == 3 && OverlayWindow.FastWetFallbackEnabled,
-                  $"WetMode = {Host.State.WetMode}，FastWet = {OverlayWindow.FastWetFallbackEnabled}");
-            ClickPhysical((wetRow.MinX + wetRow.MaxX) * 0.5f * DpiScale,
-                          (wetRow.MinY + wetRow.MaxY) * 0.5f * DpiScale);
-            SettleFrames(150);
-            Check("再点一下回到 0（到顶回头，两个通道都关回去）",
-                  Host.State.WetMode == 0 && !OverlayWindow.InkTrailEnabled && !OverlayWindow.FastWetFallbackEnabled,
-                  $"WetMode = {Host.State.WetMode}，轨迹 = {OverlayWindow.InkTrailEnabled}，"
-                  + $"湿墨层 = {OverlayWindow.FastWetFallbackEnabled}");
+            Check("再点一下回到 0（两档循环，轨迹关回去）",
+                  Host.State.WetMode == 0 && !OverlayWindow.InkTrailEnabled,
+                  $"WetMode = {Host.State.WetMode}，轨迹 = {OverlayWindow.InkTrailEnabled}");
         }
 
         // 「精细笔迹」「触摸手势」两行 **2026-10-09 晚已撤**（用户真机试稳："开关拿掉，默认开"）。

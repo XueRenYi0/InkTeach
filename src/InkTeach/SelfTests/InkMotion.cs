@@ -2082,147 +2082,6 @@ internal sealed partial class App
         _quit = true;
     }
 
-    /// <summary>
-    /// 应用侧湿墨（FastWet）屏幕自检：**把系统委托轨迹关掉**，屏幕上按住期间
-    /// 出现的墨就只能是 FastWet 画的。查两件真机上踩过的回归：
-    ///   ① 慢写断墨：DComp 的更新矩形**不保留旧内容**，早先"擦整块、只画新增段"的
-    ///      实现会把笔尖后面已经画好的那一截擦掉——步长 3~16px 时表现为"很密集的
-    ///      断墨"（2026-10-13 用户报的就是它）；
-    ///   ② 白板隐身：湿墨视觉早先加在交换链**下层**，开了不透明白板就一个湿墨像素
-    ///      都看不见（2026-10-13 实测：桌面正常、白板 0 像素）。
-    ///      `--fastwettest --board` 专跑这一条。
-    /// </summary>
-    private void FastWetTest()
-    {
-        Console.WriteLine();
-        Console.WriteLine("=== 应用侧湿墨（FastWet）自检：关掉系统委托轨迹 ===");
-        // 本测试期间系统轨迹不画（屏幕上留的墨只能是 FastWet）。
-        OverlayWindow.InkTrailEnabled = false;
-        OverlayWindow.FastWetFallbackEnabled = true;
-
-        Doc.Clear();
-        Doc.InvalidateAll();
-        Tool = Tool.Pen;
-        SuppressActiveStroke = true;     // 主交换链不画"正在写的那一笔"，判据才干净
-        SettleFrames(200);
-
-        Console.WriteLine($"  白板  : {(BoardOn ? "开（不透明白底——湿墨必须浮在它上面）" : "关（桌面透出来）")}");
-
-        // **品红**墨：桌面背景里几乎不会出现这个颜色（红/蓝/黑都常见），
-        // 判据用的是"数品红像素"，不会把桌面上的红字、红图标算成我们的墨。
-        CurrentColor = new Color4(1f, 0f, 1f, 1f);
-
-        float cx = _virtualX + _virtualW * 0.5f;
-        float cy = _virtualY + _virtualH * 0.5f;
-        float x0 = cx - 300f;
-        const int stepPx = 8;            // 8px 一步：正是旧实现出"密集断口"的步长区间
-        const int steps = 60;            // 480px 长的一条
-
-        SendMouse((int)x0, (int)cy, 0);
-        SettleFrames(120);
-        SendMouse((int)x0, (int)cy, Native.MOUSEEVENTF_LEFTDOWN);
-        SettleFrames(30);
-
-        int peak = 0;
-        for (int i = 1; i <= steps; i++)
-        {
-            SendMouse((int)(x0 + i * stepPx), (int)cy, 0);
-            SettleFrames(2);
-            int n = ScreenProbe.CountMagenta((int)x0 - 24, (int)cy - 24, steps * stepPx + 48, 48);
-            if (n > peak) peak = n;
-        }
-        SettleFrames(10);
-
-        int tipX = (int)(x0 + steps * stepPx);
-        // 笔尖后 10px 那一条（旧实现的"最新断口"就在这里）：整段重画后应当有墨。
-        int holeInk = ScreenProbe.CountMagenta(tipX - 11, (int)cy - 14, 6, 28);
-
-        // 逐列分析已经画过的那一段（笔尖后面 10~130px）：旧实现会把这一段刷成一节一节的
-        // 虚线（每个更新矩形擦掉它左边几像素的旧墨、又只重画新增段）——"空列"就是断口的量度。
-        int gapCols = CountEmptyColumnsInk(tipX - 130, (int)cy - 14, 120, 28, out int medCol);
-
-        // ---- 折返 + 交叉（同一笔里继续画）：从横线末端一大跳回到左上方、再竖直向下穿过横线。
-        //      旧实现里这一跳的更新矩形会横跨"横线的一大段"，擦掉之后只重画最后两段
-        //      —— 横线中段整段被擦空（真机上就是"写着写着墨断了"最凶的一种形态）。
-        //      `SendMouse` 一发就是一跳，恰好落在"一个更新矩形跨过已有墨"的场景上。
-        int crossX = tipX - 200;
-        SendMouse(crossX, (int)cy - 80, 0);
-        SettleFrames(4);
-        for (int i = 1; i <= 20; i++)          // 竖线向下 8px/步，穿过横线
-        {
-            SendMouse(crossX, (int)cy - 80 + i * 8, 0);
-            SettleFrames(2);
-        }
-        SettleFrames(10);
-
-        // 折返那一大跳之后，横线中段（crossX+16 .. tipX-16）在旧实现里会被整段擦掉。
-        int jumpW = Math.Max(8, tipX - 16 - (crossX + 16));
-        int jumpGapCols = CountEmptyColumnsInk(crossX + 16, (int)cy - 14, jumpW, 28, out int medCol2);
-        // 竖线穿过横线的交叉点两侧（旧实现每侧缺 ~3.5px）。
-        int crossGapCols = CountEmptyColumnsInk(crossX - 14, (int)cy - 14, 28, 28, out int medCol3);
-
-        string shot = Path.Combine("reports", "shots",
-            BoardOn ? "fastwet-board.bmp" : "fastwet-desktop.bmp");
-        ScreenProbe.SaveBmp(shot, (int)x0 - 40, (int)cy - 120, steps * stepPx + 80, 240);
-
-        SendMouse(crossX, (int)(cy + 80), Native.MOUSEEVENTF_LEFTUP);
-        SettleFrames(200);
-        int afterUp = ScreenProbe.CountMagenta((int)x0 - 24, (int)cy - 24, steps * stepPx + 48, 48);
-
-        Console.WriteLine($"  拖动中墨色像素（全程峰值）   : {peak}（>0 = FastWet 在画）");
-        Console.WriteLine($"  笔尖后 6px 断口探测          : {holeInk}（旧实现≈0，应 ≥20）");
-        Console.WriteLine($"  已画段空列 / 中位列墨        : {gapCols} / {medCol}（旧实现几十条空列＝密集断墨）");
-        Console.WriteLine($"  折返大跳后 横线中段空列      : {jumpGapCols} / {jumpW}（中位列墨 {medCol2}；旧实现≈整段被擦空）");
-        Console.WriteLine($"  交叉点两侧空列               : {crossGapCols} / 28（旧实现每侧缺 ~3.5px；中位列墨 {medCol3}）");
-        Console.WriteLine($"  松手后笔迹像素               : {afterUp}（干墨接管，仅供参考）");
-        Console.WriteLine($"  截图                         : {Path.GetFullPath(shot)}");
-
-        bool ok = peak > 40 && holeInk >= 20 && gapCols <= 8 && jumpGapCols <= 8 && crossGapCols <= 6;
-        Console.WriteLine(ok
-            ? "  PASS: FastWet 按住期间持续可见；慢写/折返/交叉都没有断墨"
-            : "  FAIL: " + (peak <= 40
-                ? "按住期间几乎没有湿墨——FastWet 没画出来或被上层盖住（白板下先查视觉层序）"
-                : holeInk < 20
-                    ? "笔尖后面出现断口——更新矩形里没有把整笔重画"
-                    : "已经画过的湿墨被更新矩形擦掉没补回来（折返/交叉处断墨）"));
-        SettleFrames(60);
-        _quit = true;
-    }
-
-    /// <summary>
-    /// 数一块屏幕区域里**几乎没有墨的列**（断口的量度），返回空列数；
-    /// <paramref name="medCol"/> 给出列墨像素数的**中位**（线宽的量度）。
-    ///
-    /// 基准必须用中位、不能用最大：交叉点那一列会同时压着横线和竖线（墨量翻几倍），
-    /// 拿它当"满列"会把所有正常列都误判成空列（2026-10-13 第一版指标就这么错过一次）。
-    /// 墨色判据用**品红**（自检墨色，见 FastWetTest）——桌面上的红/蓝内容不会混进来。
-    /// </summary>
-    private static int CountEmptyColumnsInk(int x, int y, int w, int h, out int medCol)
-    {
-        medCol = 0;
-        if (w <= 0 || h <= 0) return 0;
-        var buf = ScreenProbe.CaptureRegion(x, y, w, h);
-        if (buf.Length < w * h * 4) return 0;
-        var col = new int[w];
-        for (int yy = 0; yy < h; yy++)
-        {
-            int row = yy * w * 4;
-            for (int xx = 0; xx < w; xx++)
-            {
-                int o = row + xx * 4;
-                byte b = buf[o], g = buf[o + 1], r = buf[o + 2];
-                if (b > 200 && g < 90 && r > 200) col[xx]++;
-            }
-        }
-        var sorted = (int[])col.Clone();
-        Array.Sort(sorted);
-        medCol = sorted[w / 2];
-        int need = Math.Max(1, (int)(medCol * 0.4f));
-        int gaps = 0;
-        foreach (var c in col) if (c < need) gaps++;
-        return gaps;
-    }
-
     // =====================================================================
     //  湿墨延时对照（--lagtest）
     // =====================================================================
@@ -2232,18 +2091,17 @@ internal sealed partial class App
     ///   ① 拖动时"屏幕上的墨尖落后指针"多少像素（÷速度换算成毫秒）；
     ///   ② 指针瞬跳后，新位置多久出现墨（毫秒）。
     ///
-    /// 四档模式（同一进程里来回切，别的变量都不动）：
-    ///   · 主交换链自绘 —— 关轨迹、关 FastWet（= 2026-10 以前的老路径，基线）；
-    ///   · FastWet      —— 关轨迹、压掉主自绘（屏幕上只剩应用侧独立湿墨层）；
-    ///   · 系统轨迹      —— 压掉主自绘、关 FastWet（屏幕上只剩系统画的短尾）；
+    /// 三档模式（同一进程里来回切，别的变量都不动；2026-10-15 应用湿墨层撤除后少一档）：
+    ///   · 主交换链自绘 —— 关轨迹（= 2026-10 以前的老路径，基线）；
+    ///   · 系统轨迹      —— 压掉主自绘（屏幕上只剩系统画的短尾）；
     ///   · 产品组合      —— 轨迹 + 主自绘（Win11 默认就是它）。
     ///
     /// 每档跑**两个负载**，这是整个对照的关键：
-    ///   · 正常帧：三条路径应当都≈0 落后——"原来那套其实也跟手"在这档上会得到证实；
+    ///   · 正常帧：各路径应当都≈0 落后——"原来那套其实也跟手"在这档上会得到证实；
     ///   · 慢帧+50ms：渲染之前故意忙 50ms（模拟"这一帧很重"）。主交换链的墨要等
-    ///     这一帧画完 + Present 才动；系统轨迹 / FastWet 在输入处理那一刻就提交给
+    ///     这一帧画完 + Present 才动；系统轨迹在输入处理那一刻就提交给
     ///     DComp，不经过交换链 Present——**慢帧中途**那一列（湿墨已上屏、主绘还没画）
-    ///     就是这两层真正买到的东西。
+    ///     就是它真正买到的东西。
     /// </summary>
     private void WetLagTest()
     {
@@ -2260,19 +2118,18 @@ internal sealed partial class App
         CurrentColor = new Color4(1f, 0f, 1f, 1f);
         Tool = Tool.Pen;
 
-        var modes = new (string Name, bool Trail, bool FastWet, bool SuppressMain)[]
+        var modes = new (string Name, bool Trail, bool SuppressMain)[]
         {
-            ("主交换链自绘", false, false, false),
-            ("FastWet",      false, true,  true),
-            ("系统轨迹",      true,  false, true),
-            ("产品组合",      true,  false, false),
+            ("主交换链自绘", false, false),
+            ("系统轨迹",      true,  true),
+            ("产品组合",      true,  false),
         };
 
         const int bandW = 340, bandH = 40;
         // ★ 预分配复用（逐帧 new 会进 LOH，量到的是测量工具自己——见 CaptureRegionInto 的注释）。
         var buf = new byte[bandW * bandH * 4];
 
-        foreach (var (name, trail, fastWet, suppressMain) in modes)
+        foreach (var (name, trail, suppressMain) in modes)
         {
             if (trail && !OverlayWindow.InkTrailAvailable)
             {
@@ -2280,7 +2137,7 @@ internal sealed partial class App
                 continue;
             }
 
-            SetWetModeForLagTest(trail, fastWet, suppressMain);
+            SetWetModeForLagTest(trail, suppressMain);
             Console.WriteLine($"  {name,-12}（轨迹喂点/画没画看下面的\"有墨\"）");
 
             int fedTotal = 0;
@@ -2332,18 +2189,17 @@ internal sealed partial class App
         Console.WriteLine("   · 系统轨迹档的\"有墨\"接近样本数 = 它真的在画；喂了点但全是 0 = 它没生效；");
         Console.WriteLine("   · \"产品组合\" = Win11 默认设置下你实际看到的效果（轨迹∪主绘）。");
 
-        foreach (var w in _windows) { w.EndInkTrail(); w.EndFastWet(); }
+        foreach (var w in _windows) { w.EndInkTrail(); }
         SuppressActiveStroke = false;
         SettleFrames(80);
         _quit = true;
     }
 
     /// <summary>把湿墨切成单变量：这一档允许哪一层出现。换档先把上一档的湿墨收干净。</summary>
-    private void SetWetModeForLagTest(bool trail, bool fastWet, bool suppressMain)
+    private void SetWetModeForLagTest(bool trail, bool suppressMain)
     {
-        foreach (var w in _windows) { w.EndInkTrail(); w.EndFastWet(); }
+        foreach (var w in _windows) { w.EndInkTrail(); }
         OverlayWindow.InkTrailEnabled = trail;
-        OverlayWindow.FastWetFallbackEnabled = fastWet;
         SuppressActiveStroke = suppressMain;
     }
 
@@ -2382,7 +2238,7 @@ internal sealed partial class App
             float tx = startX + (float)(speedPxPerSec * el / 1000.0);
             if (tx >= lastTx + 0.5f) { SendMouse((int)tx, (int)y, 0); lastTx = tx; }
 
-            // 产品节奏：等到合成边界 → 抽输入（喂轨迹/FastWet）→ 画。
+            // 产品节奏：等到合成边界 → 抽输入（喂轨迹）→ 画。
             if (OverlayWindow.VBlankPaced) Native.DwmFlush();
             DrainMessages();
 
@@ -2517,17 +2373,16 @@ internal sealed partial class App
     /// 像素距离，除以速度就是毫秒——各档之间可以直接横比。
     ///
     /// 屏上标记：左上角 N 条蓝横条 = 第 N 档；扫线下方每 50 物理像素一个灰色刻度（尺子）。
-    /// 档位：1=主交换链自绘 2=FastWet 3=系统轨迹 4=产品组合；`all` = 全部跑一遍。
+    /// 档位：1=主交换链自绘 2=系统轨迹 3=产品组合；`all` = 全部跑一遍。
     /// `--live N` 时不做合成拖动，改成"你自己用笔写 N 秒"（手写板 / 真笔用）。
     /// </summary>
     private void CamLagTest(string modeArg, int speed, int sweeps, double liveSecs)
     {
-        var modes = new (string Name, bool Trail, bool FastWet, bool SuppressMain)[]
+        var modes = new (string Name, bool Trail, bool SuppressMain)[]
         {
-            ("主交换链自绘", false, false, false),
-            ("FastWet",      false, true,  true),
-            ("系统轨迹",      true,  false, true),
-            ("产品组合",      true,  false, false),
+            ("主交换链自绘", false, false),
+            ("系统轨迹",      true,  true),
+            ("产品组合",      true,  false),
         };
 
         Console.WriteLine();
@@ -2556,7 +2411,7 @@ internal sealed partial class App
         }
         else
         {
-            Console.WriteLine($"  档位参数不认：{modeArg}（用 all 或 1~4）");
+            Console.WriteLine($"  档位参数不认：{modeArg}（用 all 或 1~3）");
             _quit = true;
             return;
         }
@@ -2568,14 +2423,14 @@ internal sealed partial class App
 
         foreach (int mi in pick)
         {
-            var (name, trail, fastWet, suppressMain) = modes[mi - 1];
+            var (name, trail, suppressMain) = modes[mi - 1];
             if (trail && !OverlayWindow.InkTrailAvailable)
             {
                 Console.WriteLine($"  第 {mi} 档 {name}：SKIP（这台机器没有系统轨迹接口）");
                 continue;
             }
 
-            SetWetModeForLagTest(trail, fastWet, suppressMain);
+            SetWetModeForLagTest(trail, suppressMain);
             Doc.Clear();
             DrawCamMarkers(mi, leftX, rightX, y);
             Doc.ClearHistory();
@@ -2607,7 +2462,7 @@ internal sealed partial class App
             Console.WriteLine($"   第 {mi} 档结束。");
         }
 
-        foreach (var w in _windows) { w.EndInkTrail(); w.EndFastWet(); }
+        foreach (var w in _windows) { w.EndInkTrail(); }
         SuppressActiveStroke = false;
         SettleFrames(100);
         Console.WriteLine("  全部档位结束（手机可以停了）。");

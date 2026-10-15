@@ -276,9 +276,8 @@ public sealed class FullUi : IOverlayUi
         // 判据/落盘都在引擎（见 Engine.SetWetModeFromUi）；界面只显示 Host.State.WetMode。
         // 四档：0 原路径（默认，什么都不加）/ 1 +系统委托轨迹 / 2 +应用湿墨层 / 3 全开。
         (Row.WetMode, "湿墨档位", false, false,
-         "点一下换一档：0 原路径（默认）/ 1 +系统委托轨迹（推荐）/ 2 实验：应用湿墨层 / "
-         + "3 +轨迹与兜底。只加不减，关回 0 与原来完全一样；"
-         + "手机录像实测：系统轨迹最跟手（Win11 才有），应用湿墨层与原路径基本相当"),
+         "点一下换一档：0 原路径（默认）/ 1 +系统委托轨迹（推荐）。"
+         + "系统轨迹只在 Win11 24H2+ 有、没有就自动退回软件自绘；关回 0 与原来完全一样"),
         // 墨迹三条偏好（原本在「墨迹」页，2026-10-02 启动器改版后搬进设置子页）。
         (Row.RestoreInk, "自动恢复上次板书", false, false, "下次启动接上这次的板书"),
         // ⚠ 名称 2026-10-10 改：这个开关**不只管 PPT**——文档（PDF/图片）批注的按页
@@ -1338,7 +1337,7 @@ public sealed class FullUi : IOverlayUi
         Tool.Laser => (4f, 22f),           // = LaserWidthGrades 首尾
         Tool.Eraser => (12f, 34f),         // 整笔橡皮的**落点半径** = EraserWidthGrades 首尾
         Tool.PixelEraser => (46f, 150f),   // 面积橡皮的**横边**（高 = 横边 × 1.618）＝ 首尾
-        _ => (1f, 40f),                    // 画笔 = PenWidthGrades 首尾
+        _ => (1f, 20f),                    // 画笔 = PenWidthGrades 首尾
     };
 
     /// <summary>
@@ -1347,12 +1346,15 @@ public sealed class FullUi : IOverlayUi
     ///
     /// 和引擎里那五张表各留一份，靠 --paneltest 逐项比对卡住（同 WidthRange 的老规矩）；
     /// 界面只认公开契约、拿不到引擎 internal 是故意的。
-    /// 新表（常用段加密一倍 + 粗端封顶）：
-    ///   笔 1/1.5/2/2.5/3/3.5/4/5/6/7/8/9/10/20/40（15 档）；
+    /// **笔表 2026-10-15 换代：1~20 每档差 1**（用户定；原 15 档的 .5 中点与 40 撤掉）：
     ///   荧光笔 8/13/18/25/32；激光 4/6/8/11/14/18/22；
     ///   整笔橡皮 12/17/22/28/34（固定 5 档）；面积橡皮 46/70/93/122/150（固定 5 档）。
     /// </summary>
-    private static readonly float[] PenWidthGrades = { 1f, 1.5f, 2f, 2.5f, 3f, 3.5f, 4f, 5f, 6f, 7f, 8f, 9f, 10f, 20f, 40f };
+    private static readonly float[] PenWidthGrades =
+    {
+        1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f, 9f, 10f,
+        11f, 12f, 13f, 14f, 15f, 16f, 17f, 18f, 19f, 20f,
+    };
     private static readonly float[] HighlighterWidthGrades = { 8f, 13f, 18f, 25f, 32f };
     private static readonly float[] LaserWidthGrades = { 4f, 6f, 8f, 11f, 14f, 18f, 22f };
     private static readonly float[] EraserWidthGrades = { 12f, 17f, 22f, 28f, 34f };
@@ -2258,8 +2260,10 @@ public sealed class FullUi : IOverlayUi
             // 湿墨档位（2026-10-13 加）：点一下换一档（0→1→2→3→0）。
             // 引擎是权威：它立刻生效 + 落盘（设置里的 "wetmode"），界面下一帧从
             // `Host.State.WetMode` 读回来显示——界面**自己不记档**（避免两份状态）。
+            // 湿墨档位（2026-10-13 加；2026-10-15 精简为两档：0 原路径 ⇄ 1 系统轨迹）：
+            // 点一下换一档（与 CycleWetMode 同一规则），引擎落盘。
             case Row.WetMode:
-                _host.Commands.SetWetMode((_host.State.WetMode + 1) & 3);
+                _host.Commands.SetWetMode(_host.State.WetMode == 1 ? 0 : 1);
                 break;
 
             // 墨迹预测（2026-10-09 加；2026-10-14 测试版起默认开）：
@@ -2606,11 +2610,10 @@ public sealed class FullUi : IOverlayUi
     /// 「湿墨档位」那一行右侧的值（短名；四档的完整解释在悬停提示里）。
     /// 和引擎的 `WetModeName` **刻意不同**：这里要塞进窄窄的一列，用短名。
     /// </summary>
+    /// <summary>「湿墨档位」那一行右侧的值（0 原路径 / 1 系统轨迹；2026-10-15 精简为两档）。</summary>
     private static string WetModeShortName(int m) => m switch
     {
         1 => "1 系统轨迹",
-        2 => "2 应用湿墨层",
-        3 => "3 全开",
         _ => "0 原路径",
     };
 
