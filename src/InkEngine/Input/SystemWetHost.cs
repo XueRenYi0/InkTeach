@@ -1,7 +1,11 @@
-﻿// SystemWetHost.cs —— 系统托管湿墨后端（CoreInkPresenterHost + CoreWetStrokeUpdateSource 旁听）
+﻿// SystemWetHost.cs —— 系统托管湿墨后端（InkDesktopHost 默认 / CoreInkPresenterHost 可选
+//                    + CoreWetStrokeUpdateSource 旁听）
 //
-// 用在**委托墨迹轨迹不可用**的环境（Win10 1709+）或 `--syswethost` 强制时。后端优先级：
+// 用在**委托墨迹轨迹不可用**的环境或 `--syswethost` 强制时。后端优先级：
 // 委托墨迹轨迹 → **系统托管湿墨（本文件）** → 自绘湿墨。系统墨迹线程收笔、画湿墨（低延迟），
+// 2026-10-15：宿主本体加 **InkDesktopHost（IDH）** 档为默认（Win10 1511+ 全系可用——教室机
+// 就靠它；探针双端全绿）；CoreInkPresenterHost 留作 `--cmhost`（Win10 上实测坏的，Win11
+// 对照/回退）。两者旁听/交接/输入策略**完全共用**（下面一字不动），差异只在"宿主创建+合成树"。
 // 我们在 CoreWetStrokeUpdateSource 上**旁听**逐点喂自己的笔迹模型（压力映射、去抖、停顿成型
 // 全部复用不动），收笔后干墨自己画、再把系统那一份清掉（重叠交接，见 AfterPresent）。
 //
@@ -445,6 +449,24 @@ internal sealed class SystemWetHost
     static DispatcherQueueController s_dispatcher;   // 保活：合成与墨迹都要本线程有 DispatcherQueue
     static Compositor s_compositor;                  // 每屏的合成目标共用一个合成器
 
+    // ---- IDH（InkDesktopHost）档（2026-10-15 接入）-----------------------------
+    /// <summary>这台机器建不建得起 InkDesktopHost（Win10 1511+ 全系；探针双端全绿）。</summary>
+    public static bool IdhAvailable;
+    /// <summary>IDH 探测说明（横幅用）。</summary>
+    public static string IdhNote = "未尝试";
+    /// <summary>`--cmhost`：强制老后端 CoreInkPresenterHost（UWP 合成树那条老路）。</summary>
+    public static bool CmHostForced;
+    static bool s_idhProbed;
+
+    /// <summary>IDH 探测一次（只 CoCreateInstance，不碰 presenter）。</summary>
+    public static void EnsureIdhProbed()
+    {
+        if (s_idhProbed) return;
+        s_idhProbed = true;
+        try { IdhAvailable = InkDesktopHostImpl.Probe(out string n); IdhNote = n; }
+        catch (Exception ex) { IdhAvailable = false; IdhNote = "不可用：" + ex.GetType().Name + " " + ex.Message; }
+    }
+
     /// <summary>
     /// 探测一次：线程 DispatcherQueue + Compositor + CoreInkPresenterHost 能不能建起来。
     /// 建不起来（老系统）就安静记一行，各窗口照旧走自绘湿墨。
@@ -484,6 +506,15 @@ internal sealed class SystemWetHost
     ContainerVisual _root, _inkLayer;
     SpriteVisual _swapVisual;
     CoreInkPresenterHost _host;
+    // ---- InkDesktopHost 后端（2026-10-15 接入，默认档）---------------------------
+    // 非空 = 本窗口走 IDH：合成树由 Overlay 以 raw DComp 建好（交换链/墨迹视觉都在
+    // 普通树里），这里只管 presenter 与"墨迹线程封送"（presenter 生于墨迹线程）。
+    InkDesktopHostImpl _idh;
+    Vortice.DirectComposition.IDCompositionVisual _idhVisual;
+    Vortice.DirectComposition.IDCompositionVisual3 _idhVisual3;   // Opacity 在 V3 上（Vortice 绑定口径）
+    Vortice.DirectComposition.IDCompositionDevice _idhDevice;
+    bool _idhLayerVisible = true;
+    float _layerAlpha = 1f;
     InkPresenter _presenter;
     CoreWetStrokeUpdateSource _wet;
 
@@ -492,6 +523,8 @@ internal sealed class SystemWetHost
     int _presentsSinceDry;
     /// <summary>系统那份干墨还挂着没清（主循环为它兜一帧，见 Overlay.NeedsFrame）。</summary>
     public bool HandoffPending => _handoffPending;
+    /// <summary>本窗口的托管后端是不是 IDH（横幅/描述用；false=CM）。</summary>
+    public bool IdhBackend => _idh != null;
     // 自绘/UI 模式把墨迹层藏起来的手势数（归零才亮回来）
     int _hiddenGestures;
     // 本宿主自己记的"每个指针这一笔归谁"（墨迹后台线程写、OnWetEnding 读）：
@@ -527,7 +560,16 @@ internal sealed class SystemWetHost
     /// </summary>
     void DismissWetInk()
     {
-        try { _synchronizer.BeginDry(); _synchronizer.EndDry(); }
+        try
+        {
+            if (_idh != null)
+            {
+                // IDH：InkSynchronizer 生在墨迹线程——封送到那里配对执行（已在则直走，见 Run）。
+                if (!_idh.Run(() => { _synchronizer.BeginDry(); _synchronizer.EndDry(); }))
+                    throw new InvalidOperationException("封送失败/超时（墨迹线程未执行）");
+            }
+            else { _synchronizer.BeginDry(); _synchronizer.EndDry(); }
+        }
         catch (Exception ex)
         {
             _synchronizer = null;
@@ -596,10 +638,13 @@ internal sealed class SystemWetHost
             {
                 color = _syncColor; widthDip = _syncWidth; hl = _syncHl; noPressure = _syncNoPressure;
             }
-            var attrs = _presenter.CopyDefaultDrawingAttributes();
             byte R = (byte)Math.Clamp(color.X * 255f + 0.5f, 0f, 255f);
             byte G = (byte)Math.Clamp(color.Y * 255f + 0.5f, 0f, 255f);
             byte B = (byte)Math.Clamp(color.Z * 255f + 0.5f, 0f, 255f);
+            // IDH：presenter 生于墨迹线程——属性"读改写"整套在**一次封送**里做完（对象不跨线程）。
+            PresenterDo(p =>
+            {
+            var attrs = p.CopyDefaultDrawingAttributes();
             attrs.Color = new Windows.UI.Color { A = 255, R = R, G = G, B = B };
             attrs.Size = new Windows.Foundation.Size { Width = widthDip, Height = widthDip };
             // ★ IsHighlighter **故意不设**（2026-10-13 --highlightertest D 段对照试验钉死）：
@@ -613,7 +658,8 @@ internal sealed class SystemWetHost
             attrs.IgnorePressure = hl || noPressure;
             attrs.FitToCurve = false;
             attrs.PenTip = Windows.UI.Input.Inking.PenTipShape.Circle;
-            _presenter.UpdateDefaultDrawingAttributes(attrs);
+            p.UpdateDefaultDrawingAttributes(attrs);
+            });
             // ★ 荧光笔的半透明一致性（2026-10-13 --highlightertest 像素取证，见文件头⑤）：
             //   **墨迹层整层按 α 合成**（ContainerVisual.Opacity=α）+ 基色原样，
             //   合成结果 = 底×(1−α) + 色×α，和我们干墨的 α 铺色**逐像素同一个公式**
@@ -621,7 +667,7 @@ internal sealed class SystemWetHost
             //   中灰底交叉色 Δ=(0,1,0)。Opacity 是逐帧合成属性、没有"起笔快照"时序问题
             //   （IgnorePressure 有，见 ApplyPointerKind），所以这里随手就套。
             float a = Math.Clamp(color.W, 0f, 1f);
-            try { _inkLayer.Opacity = hl ? a : 1f; } catch { }
+            SetLayerAlpha(hl ? a : 1f);
             ColorSyncNote = $"已同步 #{R:X2}{G:X2}{B:X2} 宽{widthDip:F1}DIP"
                           + (hl
                               ? $"（荧光笔·不压感·整层α={a:F2}×基色 #{R:X2}{G:X2}{B:X2}）"
@@ -737,6 +783,79 @@ internal sealed class SystemWetHost
         }
     }
 
+    /// <summary>
+    /// 建 **IDH 版**宿主（InkDesktopHost）。合成树由 Overlay 以 raw DComp 建好：
+    /// 传进来合成设备（提交 + 交给 presenter）与墨迹容器视觉（presenter 的内容挂它下面）。
+    /// 失败返回错误文字，调用方安静退回轨迹/自绘（树保持普通树，零损失）。
+    /// </summary>
+    public static string CreateIdh(OverlayWindow win, Vortice.DirectComposition.IDCompositionDevice device,
+                                   Vortice.DirectComposition.IDCompositionVisual inkVisual, out SystemWetHost host)
+    {
+        host = null;
+        SystemWetHost h = null;
+        try
+        {
+            EnsureProbed();       // DispatcherQueue（旁听转发唤醒要）+（CM 路径才用的）Compositor
+            EnsureIdhProbed();
+            if (!IdhAvailable) return IdhNote;
+
+            h = new SystemWetHost { _win = win, _idhDevice = device, _idhVisual = inkVisual };
+            Vector2 size = new Vector2(win.Width / (win.Dpi / 96f), win.Height / (win.Dpi / 96f));
+
+            h._idh = InkDesktopHostImpl.CreateOnCallingThread();          // ① 主线程 CoCreate（实测要求）
+            IntPtr pVisual = ComposeInterop.NativePointerOf(inkVisual);   // ③ 原生指针（SharpGen：NativePointer）
+            IntPtr pDevice = ComposeInterop.NativePointerOf(device);
+
+            // ② 一切 presenter 操作经 QueueWorkItem 在墨迹线程执行（直呼 = RPC_E_WRONG_THREAD）。
+            bool ok = h._idh.Run(() =>
+            {
+                h._idh.CreatePresenterOnInkThread();
+                h._presenter = h._idh.Presenter;
+                // 自定义干燥：同 CM 口径，挂 RootVisual **之前**调；失败自动回退 ClearStrokes 交接。
+                if (CustomDryingWanted)
+                {
+                    try
+                    {
+                        h._synchronizer = h._presenter.ActivateCustomDrying();
+                        CustomDryingNote = "开（InkSynchronizer 已拿到·IDH）";
+                    }
+                    catch (Exception cdEx)
+                    {
+                        CustomDryingNote = $"不可用，回退 ClearStrokes 交接（IDH hr=0x{cdEx.HResult:X8}）";
+                    }
+                }
+                else CustomDryingNote = "关（--nocustomdrying）";
+                int hrRoot = h._idh.Desktop.SetRootVisual(pVisual, pDevice);
+                if (hrRoot < 0) Marshal.ThrowExceptionForHR(hrRoot);
+                h._idh.AttachCommitHandler(() => { try { h._idhDevice.Commit(); } catch { } });
+                try { h._idh.Desktop.SetSize(size.X, size.Y); } catch { }
+                // 输入先不开：等引擎把回调接好（Attach）再开（与 CM 同一顺序）。
+                h._presenter.InputDeviceTypes = Windows.UI.Core.CoreInputDeviceTypes.None;
+                h._wet = CoreWetStrokeUpdateSource.Create(h._presenter);
+                h._wet.WetStrokeStarting += h.OnWetStarting;
+                h._wet.WetStrokeContinuing += h.OnWetContinuing;
+                h._wet.WetStrokeStopping += h.OnWetStopping;
+                h._wet.WetStrokeCompleted += h.OnWetEnding;
+                h._wet.WetStrokeCanceled += h.OnWetEnding;
+                // 未受理输入计数（自检取证，同 CM）。
+                h._presenter.UnprocessedInput.PointerPressed += (s2, e) => Interlocked.Increment(ref UnprocDown);
+                h._presenter.UnprocessedInput.PointerMoved += (s2, e) => Interlocked.Increment(ref UnprocMove);
+                h._presenter.UnprocessedInput.PointerReleased += (s2, e) => Interlocked.Increment(ref UnprocUp);
+            }, 8000);
+            if (!ok) { h.Dispose(); return "IDH 创建序列未走完（投递失败/超时）"; }
+            h._idhDevice.Commit();    // 挂树先提交一次（墨迹视觉立即可见/可画）
+            host = h;
+            Active = true;
+            return null;
+        }
+        catch (Exception ex)
+        {
+            try { h?.Dispose(); } catch { }
+            host = null;
+            return ex.GetType().Name + "：0x" + ex.HResult.ToString("X8") + " " + ex.Message;
+        }
+    }
+
     /// <summary>引擎把"自己"接上来（回调都走引擎内部方法），随后才能开输入。</summary>
     public void Attach(InkEngine app)
     {
@@ -758,7 +877,7 @@ internal sealed class SystemWetHost
                 types |= Windows.UI.Core.CoreInputDeviceTypes.Pen;
                 if (touch) types |= Windows.UI.Core.CoreInputDeviceTypes.Touch;
             }
-            _presenter.InputDeviceTypes = types;
+            PresenterDo(p => p.InputDeviceTypes = types);
         }
         catch { }
     }
@@ -972,15 +1091,61 @@ internal sealed class SystemWetHost
 
     HostPointerState HostPointFeedState(uint pid) => HostPointFeed.StateOf(pid);
 
+    // ---- presenter 线程封送（IDH：presenter 生于墨迹线程；CM：直呼——行为一字不变）----
+    void PresenterDo(Action<InkPresenter> act)
+    {
+        if (_presenter == null) return;
+        if (_idh != null)
+        {
+            if (!_idh.Run(() => act(_presenter))) Note = "presenter 调用未完成（封送失败/超时）";
+            return;
+        }
+        act(_presenter);
+    }
+
+    T PresenterDoT<T>(Func<InkPresenter, T> f, T fallback)
+    {
+        if (_presenter == null) return fallback;
+        if (_idh != null) return _idh.RunT(() => f(_presenter), fallback);
+        try { return f(_presenter); } catch { return fallback; }
+    }
+
+    /// <summary>墨迹层整层 α（荧光笔一致性）：CM=ContainerVisual.Opacity、IDH=视觉 Opacity。</summary>
+    void SetLayerAlpha(float a)
+    {
+        _layerAlpha = a;
+        if (_idhVisual != null) UpdateIdhOpacity();
+        else { try { _inkLayer.Opacity = a; } catch { } }
+    }
+
+    /// <summary>IDH：藏/显与整层 α 合在同一个 Opacity 上（CM 是 IsVisible＋Opacity 两个属性）。</summary>
+    void UpdateIdhOpacity()
+    {
+        try
+        {
+            _idhVisual3 ??= _idhVisual.QueryInterfaceOrNull<Vortice.DirectComposition.IDCompositionVisual3>();
+            _idhVisual3?.SetOpacity(_idhLayerVisible ? _layerAlpha : 0f);
+            _idhDevice?.Commit();
+        }
+        catch { }
+    }
+
+    /// <summary>藏/显墨迹层（IDH 走视觉 Opacity；CM 走原来的 IsVisible）。</summary>
+    void SetInkLayerVisible(bool vis)
+    {
+        if (_idhVisual != null) { _idhLayerVisible = vis; UpdateIdhOpacity(); }
+        else { try { _inkLayer.IsVisible = vis; } catch { } }
+    }
+
     void HideInkLayer()
     {
         _hiddenGestures++;
-        try { _inkLayer.IsVisible = false; } catch { }
+        SetInkLayerVisible(false);
     }
 
     void ShowInkLayer()
     {
-        try { _inkLayer.IsVisible = true; } catch { }
+        SetInkLayerVisible(true);
     }
 
     void ClearStrokes()
@@ -988,7 +1153,7 @@ internal sealed class SystemWetHost
         // R1：自定义干燥下 StrokeContainer 整个不可用（探针 v3 实测：GetStrokes/Clear
         // 都抛 NullReferenceException）——直接跳过，不让无谓异常走进来。
         if (CustomDrying) return;
-        try { _presenter.StrokeContainer.Clear(); } catch { }
+        PresenterDo(p => { try { p.StrokeContainer.Clear(); } catch { } });
     }
 
     // ---- 干墨交接（重叠交接：干墨上屏 → 泵一帧 → 清系统那份）--------------------
@@ -1037,7 +1202,7 @@ internal sealed class SystemWetHost
         //（复用 Self 模式那套延迟亮层，见 AfterPresent）：亮出来的只剩一层。
         if (_handoffHl)
         {
-            try { _inkLayer.IsVisible = false; } catch { }
+            SetInkLayerVisible(false);
             _showAfterClear = true;
             _selfWaitStartMs = Environment.TickCount64;
             _selfEmptyFrames = 0;
@@ -1093,8 +1258,7 @@ internal sealed class SystemWetHost
                 }
                 return;
             }
-            int n = 0;
-            try { n = _presenter.StrokeContainer.GetStrokes().Count; } catch { }
+            int n = PresenterDoT(p => { try { return p.StrokeContainer.GetStrokes().Count; } catch { return 0; } }, 0);
             if (n > 0)
             {
                 _selfEmptyFrames = 0;
@@ -1121,6 +1285,8 @@ internal sealed class SystemWetHost
         }
         catch { }
         _wet = null; _presenter = null; _host = null;
+        try { _idh?.Dispose(); } catch { }
+        _idh = null; _idhVisual = null; _idhVisual3 = null; _idhDevice = null;
         _inkLayer = null; _swapVisual = null; _root = null; _target = null;
     }
 
@@ -1193,7 +1359,7 @@ internal static class ComposeInterop
     }
 
     /// <summary>SharpGen ComObject → 原生 IUnknown 指针（不同版本属性名不同，逐个试）。</summary>
-    static IntPtr NativePointerOf(object o)
+    internal static IntPtr NativePointerOf(object o)
     {
         foreach (var name in new[] { "NativePointer", "Handle" })
         {

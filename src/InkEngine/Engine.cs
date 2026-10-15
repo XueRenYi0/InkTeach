@@ -108,7 +108,7 @@ public partial class InkEngine
             // 2026-10-13 补登记（两线合并）：托管 / 自定义干燥 / 染色笔 / 湿墨档位这批新开关——
             // 缺了它们，敲在第一位会被当"自检 mode"→ 构造期不读设置盘、HUD 被关
             //（兜底分支只撤隔离，救不回"没读设置"——换机测试的命令正好全踩在这上面）。
-            or "--syswethost" or "--nosyswethost" or "--nocustomdrying"
+            or "--syswethost" or "--nosyswethost" or "--nocustomdrying" or "--cmhost"
             or "--wetmode" or "--selfpen" or "--framepen" => true,
         _ => false,
     };
@@ -2407,6 +2407,9 @@ public partial class InkEngine
             OverlayWindow.SystemWetHostEnabled = true;
             OverlayWindow.SystemWetHostPrefer = true;
         }
+        // 2026-10-15：托管后端选谁——默认 **InkDesktopHost**（Win10 1511+ 全系可用，探针双端全绿）；
+        // `--cmhost` 强制老后端 CoreInkPresenterHost（UWP 合成树那条路；Win11 对照/回退用）。
+        SystemWetHost.CmHostForced = args.Contains("--cmhost");
         // R1（2026-10-13）：自定义干燥（系统只画湿墨、干墨自绘；`--customdry` 探针钉死的接法）。
         // 默认开，`--nocustomdrying` 关（A/B 对照用）；失败自动回退 ClearStrokes 交接。
         SystemWetHost.CustomDryingWanted = !args.Contains("--nocustomdrying");
@@ -3487,8 +3490,9 @@ public partial class InkEngine
             Console.WriteLine($"湿墨呈现: {(OverlayWindow.SystemWetPreferred ? "系统轨迹独占（--syswet）" : "自己画（系统轨迹照喂）")}");
             // 系统托管湿墨（2026-10-12）：后端第二档。开 = 本窗口的湿墨由系统墨迹线程画、
             // 我们旁听喂模型（接法见 Input/SystemWetHost.cs）。
+            SystemWetHost.EnsureIdhProbed();   // 横幅把两套后端的可用性都印出来
             Console.WriteLine($"系统托管湿墨(SystemWetHost): {(w.SysWetHost != null ? "开" : "关")}"
-                              + $"（{SystemWetHost.Note}）");
+                              + $"（IDH: {SystemWetHost.IdhNote}；CM: {SystemWetHost.Note}）");
             // 当前**湿墨后端**与**系统层颜色同步**（用户 2026-10-12 要的"横幅一眼确认"）：
             // 三种后端（系统托管 / 委托轨迹 / 自绘）任何时刻只有一个在画湿墨。
             SyncSystemWetAppearance();   // 先同步一次，横幅才报得出"已同步 …"而不是"未同步"
@@ -4655,7 +4659,9 @@ public partial class InkEngine
     /// <summary>这个窗口的湿墨现在归谁画（横幅/日志用）。三者任何时刻只有一个在画。</summary>
     internal static string DescribeWetBackend(OverlayWindow w)
     {
-        if (w.SysWetHost != null) return "系统托管（CoreInkPresenterHost＋旁听喂模型）";
+        if (w.SysWetHost != null)
+            return w.SysWetHost.IdhBackend ? "系统托管（InkDesktopHost＋旁听喂模型）"
+                                           : "系统托管（CoreInkPresenterHost＋旁听喂模型）";
         if (OverlayWindow.InkTrailAvailable && OverlayWindow.InkTrailEnabled)
             return OverlayWindow.SystemWetPreferred ? "委托轨迹独占（--syswet）" : "自绘（委托轨迹并行喂）";
         return "自绘";

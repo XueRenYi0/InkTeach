@@ -297,6 +297,8 @@ internal sealed partial class OverlayWindow : IDisposable
     private IDCompositionTarget _target;
     /// <summary>根视觉：纯容器（交换链挂在子视觉里，墨迹才有地方叠上去）。</summary>
     private IDCompositionVisual _visual;
+    /// <summary>IDH 托管模式的墨迹容器视觉（presenter 内容挂它下面；建不起来/不用时为空）。</summary>
+    private IDCompositionVisual _idhInkVisual;
     /// <summary>交换链内容视觉（每帧画的内容都在这）。2026-10-10 试验C 从"根视觉直接装内容"改成子视觉。</summary>
     private IDCompositionVisual _swapVisual;
     /// <summary>委托墨迹轨迹视觉（内容＝_inkTrail，叠在交换链之上）。2026-10-10 试验C 新增。</summary>
@@ -1214,6 +1216,31 @@ internal sealed partial class OverlayWindow : IDisposable
             (uint)System.Runtime.InteropServices.Marshal.SizeOf<Native.RAWINPUTDEVICE>());
     }
 
+    /// <summary>
+    /// 普通模式的 raw DComp 合成树（IDH 托管也用这一套）：根视觉不装内容，
+    /// 交换链放在子视觉里 —— 湿墨（轨迹 / 应用湿墨层 / IDH 墨迹容器）才有地方叠在它上面。
+    ///
+    /// ⚠ `AddVisual` 的 insertAbove 语义**和直觉相反**（MSDN 原文：referenceVisual 为 NULL 时，
+    ///   "If insertAbove is TRUE, the new child visual is above no sibling,
+    ///   therefore it is rendered below all of its siblings"）：
+    ///   · insertAbove:false ＋ 参照 null → 加到**所有兄弟之上**；
+    ///   · insertAbove:true  ＋ 参照 null → 加到**所有兄弟之下**。
+    ///   湿墨视觉必须叠在交换链**上面**——用 true（=压在最下面）时开着不透明白板
+    ///   按住书写屏幕上一个湿墨像素都没有（2026-10-13 实测：白板 + 系统轨迹 0 像素、
+    ///   白板 + FastWet 0 像素，桌面都正常），因为白板底色把下面的一切盖住了。
+    ///   2026-10-10 试验C 按 Chromium 的结构改。
+    /// </summary>
+    private void BuildNormalTree()
+    {
+        _dcomp.CreateTargetForHwnd(Hwnd, true, out _target).CheckError();
+        _visual = _dcomp.CreateVisual();
+        _swapVisual = _dcomp.CreateVisual();
+        _swapVisual.SetContent(_swapChain).CheckError();
+        _visual.AddVisual(_swapVisual, false, null).CheckError();
+        _target.SetRoot(_visual).CheckError();
+        _dcomp.Commit().CheckError();
+    }
+
     private void CreateDeviceResources()
     {
         var desc = new SwapChainDescription1(
@@ -1300,67 +1327,75 @@ internal sealed partial class OverlayWindow : IDisposable
             }
         }
 
-        // ---- 湿墨后端优先级（2026-10-12）：委托轨迹 → 系统托管湿墨 → 自绘 ----
+        // ---- 湿墨后端优先级（2026-10-12；2026-10-15 加 IDH 档）：委托轨迹 → 系统托管湿墨 → 自绘 ----
         //
-        // 第二档（系统托管湿墨）的合成根是 DesktopWindowTarget，交换链挂进它的视觉树
-        // （一个 HWND 只有一个合成根，见 Input/SystemWetHost.cs 文件头①）——
-        // 所以两档**按窗口二选一**，不是叠着用。探测失败安静退回自绘那一档。
+        // 系统托管湿墨两套后端二选一：
+        //   · **InkDesktopHost（IDH，默认）**——Win10 1511+ 全系可用（本机探针双端全绿）；
+        //     合成树 = 我们自己的 raw DComp 树 + 一个墨迹容器视觉（见下）。
+        //   · CoreInkPresenterHost（`--cmhost`）——老路（UWP 合成树：DesktopWindowTarget）；
+        //     Win10 上实测坏的（教室机症状），留作 Win11 对照/回退。
+        // 两档**按窗口二选一**，不是叠着用。构建失败安静退回轨迹/自绘（树保持普通树，零损失）。
         bool hostWanted = SystemWetHostEnabled && (SystemWetHostPrefer || !InkTrailAvailable);
-        if (hostWanted)
+        bool treeBuilt = false;
+        if (hostWanted && !SystemWetHost.CmHostForced)
         {
-            string hostErr = SystemWetHost.Create(this, _swapChain, out SysWetHost);
+            // IDH：普通合成树 + 墨迹容器视觉（叠在交换链之上，presenter 的内容挂它下面）
+            BuildNormalTree(); treeBuilt = true;
+            _idhInkVisual = _dcomp.CreateVisual();
+            _visual.AddVisual(_idhInkVisual, false, null).CheckError();
+            _dcomp.Commit().CheckError();
+            string idhErr = SystemWetHost.CreateIdh(this, _dcomp, _idhInkVisual, out SysWetHost);
             if (SysWetHost == null)
             {
-                Console.WriteLine($"系统托管湿墨: 建不起来（{hostErr}），本窗口退回自绘湿墨");
+                Console.WriteLine($"系统托管湿墨(IDH): 建不起来（{idhErr}），本窗口退回轨迹/自绘");
+                try { _visual.RemoveVisual(_idhInkVisual); _dcomp.Commit(); } catch { }
+                _idhInkVisual = null;
             }
             else
             {
                 _inkTrail = null;      // 本窗口不走轨迹通道（喂点自动空转）
-                InkTrailNote += "（本窗口走系统托管湿墨）";
+                InkTrailNote += "（本窗口走系统托管湿墨·IDH）";
+            }
+        }
+        if (hostWanted && SystemWetHost.CmHostForced)
+        {
+            string hostErr = SystemWetHost.Create(this, _swapChain, out SysWetHost);
+            if (SysWetHost == null)
+            {
+                Console.WriteLine($"系统托管湿墨(CM): 建不起来（{hostErr}），本窗口退回轨迹/自绘");
+            }
+            else
+            {
+                _inkTrail = null;      // 本窗口不走轨迹通道（喂点自动空转）
+                InkTrailNote += "（本窗口走系统托管湿墨·CM）";
             }
         }
 
-        if (SysWetHost == null)
+        if (SysWetHost == null && !treeBuilt)
         {
             // 第一/第三档：合成根还是我们自己的 DComp 目标（原有接法一字不动）。
-            _dcomp.CreateTargetForHwnd(Hwnd, true, out _target).CheckError();
-            // 根视觉**不装内容**，交换链放在子视觉里 —— 这样湿墨（轨迹 / 应用湿墨层）才有地方
-            // 叠在它上面。2026-10-10 试验C 按 Chromium 的结构改；2026-10-13 修正层序：
-            // ⚠ `AddVisual` 的 insertAbove 语义**和直觉相反**（MSDN 原文：referenceVisual 为
-            //   NULL 时，"If insertAbove is TRUE, the new child visual is above no sibling,
-            //   therefore it is rendered below all of its siblings"）：
-            //   · insertAbove:false ＋ 参照 null → 加到**所有兄弟之上**；
-            //   · insertAbove:true  ＋ 参照 null → 加到**所有兄弟之下**。
-            //   湿墨视觉必须叠在交换链**上面**——用 true（=压在最下面）时开着不透明白板
-            //   按住书写屏幕上一个湿墨像素都没有（2026-10-13 实测：白板 + 系统轨迹 0 像素、
-            //   白板 + FastWet 0 像素，桌面都正常），因为白板底色把下面的一切盖住了。
-            _visual = _dcomp.CreateVisual();
-            _swapVisual = _dcomp.CreateVisual();
-            _swapVisual.SetContent(_swapChain).CheckError();
-            _visual.AddVisual(_swapVisual, false, null).CheckError();
-            _target.SetRoot(_visual).CheckError();
-            _dcomp.Commit().CheckError();
+            BuildNormalTree();
+        }
 
-            if (_inkTrail != null && InkTrailAvailable)
+        if (SysWetHost == null && _inkTrail != null && InkTrailAvailable)
+        {
+            // ★ 关键一步（Chromium 的 InkTrail 就是这么挂的，我们以前漏了）：
+            //   轨迹对象必须**作为视觉内容放进视觉树**、叠在交换链上面，系统才会画。
+            //   只创建不挂树 → 调用全成功、gen 递增，但屏幕上永远没有墨。
+            try
             {
-                // ★ 关键一步（Chromium 的 InkTrail 就是这么挂的，我们以前漏了）：
-                //   轨迹对象必须**作为视觉内容放进视觉树**、叠在交换链上面，系统才会画。
-                //   只创建不挂树 → 调用全成功、gen 递增，但屏幕上永远没有墨。
-                try
-                {
-                    _inkVisual = _dcomp.CreateVisual();
-                    _inkVisual.SetContent(_inkTrail).CheckError();
-                    // insertAbove:false + 参照 null = 加到所有兄弟**之上**（语义说明见上面修正注释）。
-                    _visual.AddVisual(_inkVisual, false, null).CheckError();
-                    _dcomp.Commit().CheckError();
-                    InkTrailNote += "（已挂视觉树）";
-                }
-                catch (Exception layEx)
-                {
-                    InkTrailAvailable = false;
-                    _inkTrail = null;
-                    InkTrailNote += "（挂视觉树失败: " + layEx.Message + "）";
-                }
+                _inkVisual = _dcomp.CreateVisual();
+                _inkVisual.SetContent(_inkTrail).CheckError();
+                // insertAbove:false + 参照 null = 加到所有兄弟**之上**（语义说明见 BuildNormalTree 注释）。
+                _visual.AddVisual(_inkVisual, false, null).CheckError();
+                _dcomp.Commit().CheckError();
+                InkTrailNote += "（已挂视觉树）";
+            }
+            catch (Exception layEx)
+            {
+                InkTrailAvailable = false;
+                _inkTrail = null;
+                InkTrailNote += "（挂视觉树失败: " + layEx.Message + "）";
             }
         }
         Mem.Stage("5. 接入 DirectComposition 之后");
@@ -6942,6 +6977,9 @@ internal sealed partial class OverlayWindow : IDisposable
         // 系统托管湿墨的干墨交接（2026-10-12）：干墨这一帧已经上屏，现在清系统那一份不闪
         //（"同帧 Clear 必掉一帧空白"是 InkBystanderTest T6 实测；必须重叠交接）。
         SysWetHost?.AfterPresent();
+        // IDH 托管：系统墨迹的变更挂在我们这个合成设备上——宿主期**每帧提交一次**
+        //（探针里"泵循环主动 commit"就是喂它的；commit 是廉价批量提交）。
+        if (SysWetHost != null) { try { _dcomp.Commit(); } catch { } }
         if (hr.Failure)
         {
             LastError = "Present: " + hr.Description;
