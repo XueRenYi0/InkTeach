@@ -378,14 +378,6 @@ public interface IEngineCommands
     void SetPredict(bool on);
 
     /// <summary>
-    /// 「设置 → 书写 → 预测时长」（2026-10-14 加）：0 = 自动（v6 默认 21.3ms）/ 10 / 15 / 25（ms）。
-    /// 引擎是权威：立刻生效（v6 `SetMeasuredLatency`，地平线与自适应限幅一起走）、
-    /// 落盘（"predictms"，0 = 删项）、打日志；界面只显示 <see cref="UiState.PredictHorizonMs"/>。
-    /// 和设置行 / `--predlatency` 同源（后者会话级、不落盘）。
-    /// </summary>
-    void SetPredictHorizon(int ms);
-
-    /// <summary>
     /// 「设置 → 墨迹 → 湿墨档位」（2026-10-13 加）：定到某一档（0..3）。
     /// 0 = 原路径（默认，什么都不加）/ 1 = +系统委托轨迹 / 2 = +应用湿墨层（FastWet）/
     /// 3 = 全开（轨迹优先、FastWet 兜底）。**只加不减**：任何一档主交换链自绘都照旧。
@@ -970,12 +962,6 @@ public readonly struct UiState
     public bool FineStrokeOn { get; init; }
     /// <summary>「墨迹预测」（自绘预测尾）总开关的状态（默认开）。</summary>
     public bool PredictTailOn { get; init; }
-    /// <summary>
-    /// **预测时长档**（「设置 → 书写 → 预测时长」，2026-10-14 加）：0 = 自动（v6 默认 21.3ms）/
-    /// 10 / 15 / 25（ms）。界面拿它显示当前档；
-    /// 切换命令见 <see cref="IEngineCommands.SetPredictHorizon"/>。
-    /// </summary>
-    public int PredictHorizonMs { get; init; }
     /// <summary>
     /// **湿墨档位**（「设置 → 墨迹 → 湿墨档位」，2026-10-13 加）：
     /// 0 = 原路径（默认）/ 1 = +系统委托轨迹 / 2 = +应用湿墨层 / 3 = 全开。

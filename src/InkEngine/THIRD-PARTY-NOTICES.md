@@ -137,6 +137,49 @@ Apache-2.0 与本项目的 GPL-3.0 兼容；分发时须保留上述声明与文
 
 ---
 
+## Chromium `linear_predictor`（线性预测，**按上游算法移植**）
+
+- **文件**：`src/InkEngine/Prediction/InkPredictorLinear.cs`（用户 2026-10-15 提供的
+  C# 交付件接入，随包备份 `.revert/2026-10-15-预测线性接入/`）
+- **来源**：https://chromium.googlesource.com/chromium/src/+/main/ui/base/prediction/linear_predictor.cc
+- **内容**：线性/二阶运动学预测——`p(t) = p0 + v·t`（v 由最近两点算，上游同款）；
+  二阶 `p0 + v·t + ½·a·t²` 为上游原式、本项目保留但**默认关闭**（原因见该文件头注释）。
+  文件里的**弧长安全层**（ArcCap 弧长截断 + 方向自适应门控）为本项目自加，**非上游代码**
+- **许可证**：**BSD 3-Clause**（Chromium 项目许可；版权行以 Chromium 仓库 `LICENSE` 为准，
+  正文如下）
+
+```
+Copyright 2015 The Chromium Authors. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+   * Neither the name of Google Inc. nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+---
+
 ## Inno Setup（只在**打安装包**时用到，不进 App）
 
 - **文件**：`installer\InkTeach.iss`（安装脚本）、`installer\ChineseSimplified.isl`（中文界面文字）

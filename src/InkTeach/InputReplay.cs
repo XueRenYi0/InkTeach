@@ -7,7 +7,7 @@ namespace InkTeach;
 /// <summary>
 /// **黑匣子回放**（`--replayinput &lt;文件&gt;`）：把 `--reclive` 记录的真实输入按原时间轴
 /// **1:1 喂回引擎**（起笔/采样/收笔全走真入口、推时钟、不 sleep），逐帧采样"墨尖"，
-/// 算出：**供给率 / 帧间墨尖位移（含前 5 大）/ 方向翻转 / 门触发**。
+/// 算出：**供给率 / 帧间墨尖位移（含前 5 大）/ 方向翻转**。
 ///
 /// 用途：用户真机上"跳一下"说不清时——按一下记录，把文件发回来，这里把那一跳
 /// 变成"第几秒、哪一帧、多少像素"。判据口径与 `--pdmetrics`（离线语料版）同源。
@@ -47,7 +47,7 @@ internal static class InputReplayProbe
         // ---- 主循环：事件与帧交替推进 ----
         var tips = new List<(int Stroke, double T, float X, float Y)>();
         int frame = 0, frameWithStroke = 0, frameWithTail = 0;
-        int strokeIdx = -1, gates = 0, reversals = 0;
+        int strokeIdx = -1;
         double nextFrame = evs[0].T;
         double lastT = evs[^1].T;
 
@@ -79,14 +79,11 @@ internal static class InputReplayProbe
             switch (e.K)
             {
                 case 'B':
-                    if (strokeIdx >= 0) { var c0 = app.PredictGateCounters; gates += c0.gates; reversals += c0.reversals; }
                     strokeIdx++;
                     app.ReplayBeginForTest(e.X, e.Y, e.P, e.Type);
                     break;
                 case 'S': app.ReplaySampleForTest(e.X, e.Y, e.P); break;
                 case 'E':
-                    var c = app.PredictGateCounters;
-                    gates += c.gates; reversals += c.reversals;
                     app.ReplayEndForTest();
                     break;
             }
@@ -118,8 +115,6 @@ internal static class InputReplayProbe
 
         double supply = frameWithStroke > 0 ? 100.0 * frameWithTail / frameWithStroke : 0;
         Console.WriteLine($"  有笔帧 {frameWithStroke} / 总帧 {frame}；**供给率（尾激活）{supply:F1}%**");
-        Console.WriteLine($"  门触发：急转 {gates} 次 / 反向 {reversals} 次"
-                          + (samples > 0 ? $"（每千采样 {1000.0 * (gates + reversals) / samples:F1}）" : ""));
         Console.WriteLine($"  方向翻转（>100° 且两侧位移>3px）：{flips} 次");
         Console.WriteLine("  帧间墨尖位移（前 5 大）:");
         for (int i = 0; i < Math.Min(5, jumps.Count); i++)

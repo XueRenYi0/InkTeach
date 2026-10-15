@@ -5,14 +5,15 @@ namespace InkTeach;
 
 /// <summary>
 /// **预测器离线评测**（`--pdmetrics`）：拿真实语料逐点过**当前预测器**，量四件事——
-/// **供给率 / 吃到率 / 角度误差 / 门触发频率**——让"参数改动"由数据说话（2026-10-08 大数据管线第二环）。
+/// **供给率 / 吃到率 / 角度误差 / 超前量**——让"参数改动"由数据说话（2026-10-08 大数据管线第二环）。
 ///
 /// 口径（都有出处）：
 ///   · **一步预测对比**：预测器在看到第 i-1 点为止的数据时，先要一个"下一步"的预测；
 ///     误差 = |预测点 − 真实第 i 点|；**吃到 = 1 − 平均误差 / 平均"不预测"基线**（同 `--predictdata` 老口径）。
 ///   · **角度误差** = 预测方向 vs 真实方向（三星/Google 专利："用户对角度误差比距离误差更敏感"）。
 ///   · **供给率** = 给得出预测点的比例（门 / 低速 / 断笔都会把它打下去——中文"折钩"多，这条要盯住）。
-///   · **门触发** = 急转门 / 反向门各触发几次（每千点）；**超前** = 预测越过真实点的像素（p95 兜底用）。
+///   · **超前** = 预测越过真实点的像素（p95 兜底用）。
+///   · `--sweep` 扫**弧长截断 ArcCap**（0 = 纯 Chromium 行为、6 = 出厂默认）。
 ///
 /// 用法（pwsh 7）：
 ///   InkTeach.exe --pdmetrics <语料.txt> [--dt 15] [--limit 20000] [--sweep]
@@ -52,32 +53,31 @@ internal static class PdMetricsProbe
         foreach (var s in samples) { pts += s.Count; total++; }
         Console.WriteLine($"  样本 {total} 条、点 {pts} 个");
         Console.WriteLine();
-        Console.WriteLine("  转度阈值 | 供给率  吃到率  角度均值 角度p95 | 超前均值 超前p95 | 急转门/千点 反向门/千点");
-        Console.WriteLine("  ---------|-----------------------------------|-----------------|--------------------");
+        Console.WriteLine("  弧长cap  | 供给率  吃到率  角度均值 角度p95 | 超前均值 超前p95");
+        Console.WriteLine("  ---------|----------------------------------|----------------");
 
-        foreach (var deg in (sweep ? new[] { 180f, 90f, 75f, 60f, 50f } : new[] { 60f }))
-            RunConfig(samples, dt, deg);
+        foreach (var cap in (sweep ? new[] { 0.0, 3.0, 6.0, 9.0, 12.0 } : new[] { 6.0 }))
+            RunConfig(samples, dt, cap);
 
         return 0;
     }
 
     // ---------------------------------------------------------------- 单配置评测
 
-    private static void RunConfig(List<List<Pt>> samples, float dt, float turndeg)
+    private static void RunConfig(List<List<Pt>> samples, float dt, double arcCap)
     {
-        // 2026-10-15 收口：评测对象 = 唯一预测器 v6（B4 退役）。
-        // turndeg 映射到 v6 的 SharpTurnCos（软收缩的起始转角）；Damping/VelocitySmoothing
-        // 沿用 v6 自身默认（B4 时代的运行时覆盖不再模拟）。
-        var p = new InkPredictorV6
+        // 2026-10-15：评测对象 = 唯一预测器（线性，Chromium 同族；v6 已退役）。
+        // sweep 扫**弧长截断**（ArcCap；0 = 纯 Chromium 行为、6 = 出厂默认）——
+        // 它是这一版最关键的安全旋钮。
+        var p = new InkPredictorLinear
         {
-            HorizonMs = Math.Clamp(dt, InkPredictorV6.MinHorizonMs, InkPredictorV6.HardMaxHorizonMs),
-            SharpTurnCos = (float)Math.Cos(Math.Max(0.0, Math.Min(180.0, turndeg)) * Math.PI / 180.0),
+            HorizonMs = Math.Clamp(dt, 1f, 200f),
+            ArcCap = arcCap,
         };
-        var predBuf = new PredictedPoint[6];
+        var predBuf = new PredictedPoint[16];
 
         double sumErr = 0, sumBase = 0, sumAngle = 0, sumOver = 0;
         long nErr = 0, nPoints = 0, nUnavail = 0;
-        long gates = 0, reversals = 0;
         var angles = new List<float>();
         var overs = new List<float>();
 
@@ -128,7 +128,6 @@ internal static class PdMetricsProbe
                 t += dt;
                 p.Add(act.X, act.Y, t);
             }
-            gates += p.GateFires; reversals += p.ReversalFires;
         }
 
         static string P95(List<float> a)
@@ -141,9 +140,8 @@ internal static class PdMetricsProbe
         double eat = sumBase > 0 ? (1.0 - sumErr / sumBase) * 100.0 : 0;
         double supply = nPoints > 0 ? 100.0 * nErr / nPoints : 0;
         double angMean = angles.Count > 0 ? sumAngle / angles.Count : 0;
-        Console.WriteLine($"  {turndeg,7:F0}° | {supply,5:F1}%  {eat,5:F1}%  {angMean,6:F1}°  {P95(angles),6}°"
-                          + $" | {sumOver / Math.Max(1, nErr),7:F1}px {P95(overs),6}px"
-                          + $" | {1000.0 * gates / Math.Max(1, nPoints),8:F1} {1000.0 * reversals / Math.Max(1, nPoints),9:F1}");
+        Console.WriteLine($"  {arcCap,7:F0}px | {supply,5:F1}%  {eat,5:F1}%  {angMean,6:F1}°  {P95(angles),6}°"
+                          + $" | {sumOver / Math.Max(1, nErr),7:F1}px {P95(overs),6}px");
     }
 
     // ---------------------------------------------------------------- 语料读取

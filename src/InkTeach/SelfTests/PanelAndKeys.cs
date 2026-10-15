@@ -2928,8 +2928,8 @@ internal sealed partial class App
                   $"行空 = {ui.RowRectByLabelForTest("触摸手势").IsEmpty}");
         }
 
-        // 「墨迹预测」（2026-10-09 回归；**2026-10-14 发布测试版起默认开**——三档算法收口，
-        // 用户开箱直接体验/切换）：点行 → 引擎状态翻转 → 落盘（关过才写 "0"）。
+        // 「墨迹预测」（2026-10-09 回归；**2026-10-14 发布测试版起默认开**——
+        // 2026-10-15 线性预测接入，只剩这一个开关）：点行 → 引擎状态翻转 → 落盘（关过才写 "0"）。
         // （原 2026-10-05 停用块里顺带的「启动器/底栏提示文案」那段仍留停用——它跟本行无关，
         //   需要时从 git 历史恢复；这里只验"墨迹预测"行自己的链路。）
         {
@@ -2990,44 +2990,19 @@ internal sealed partial class App
         // 只验"行已不在设置页"（和「精细笔迹」「触摸手势」撤开关时同一条判据）。
         {
             var engineRow = ui.RowRectByLabelForTest("预测算法");
-            Check("「预测算法」行已撤（收口：只剩 v6，没有可切的了）",
+            Check("「预测算法」行已撤（收口：只剩线性预测，没有可切的了）",
                   engineRow.IsEmpty && !ui.IsToggleRowByLabelForTest("预测算法"),
                   $"行空 = {engineRow.IsEmpty}");
         }
 
-        // 「预测时长」（2026-10-14 加；2026-10-15 收口后只作用于 v6）：
-        // 自动(0) → 10 → 15 → 25 → 自动。
+        // 「预测时长」（2026-10-14 加；**2026-10-15 随毫秒调节一起撤除**——线性预测的地平线
+        // 固定 21.3ms，产品里只剩「墨迹预测」一个开关）：
+        // 只验"行已不在设置页"（同一条撤行判据）。
         {
             var hzRow = ui.RowRectByLabelForTest("预测时长");
-            Check("「预测时长」那一行找得到", hzRow.MaxY > hzRow.MinY,
-                  $"行高 {hzRow.MaxY - hzRow.MinY:F0}");
-            Check("「预测时长」是**换档行**（不是开关行；右侧显示当前档）",
-                  !ui.IsToggleRowByLabelForTest("预测时长"),
-                  "IsToggleRow = " + ui.IsToggleRowByLabelForTest("预测时长"));
-            Check("预测时长默认是自动（0）", Host.State.PredictHorizonMs == 0,
-                  $"PredictHorizonMs = {Host.State.PredictHorizonMs}");
-
-            void ClickHzRow() =>
-                ClickPhysical((hzRow.MinX + hzRow.MaxX) * 0.5f * DpiScale,
-                              (hzRow.MinY + hzRow.MaxY) * 0.5f * DpiScale);
-
-            ClickHzRow(); SettleFrames(200);
-            Check("点「预测时长」：自动 → 10 ms", Host.State.PredictHorizonMs == 10,
-                  $"PredictHorizonMs = {Host.State.PredictHorizonMs}");
-            Check("10 ms 落到引擎（v6 地平线 = 10）", Math.Abs(PredictHorizonForTest - 10.0) < 1e-9,
-                  $"生效值 = {PredictHorizonForTest:F1}");
-            ClickHzRow(); SettleFrames(200);
-            Check("再点：10 → 15 ms", Host.State.PredictHorizonMs == 15,
-                  $"PredictHorizonMs = {Host.State.PredictHorizonMs}");
-            Check("15 ms 落到引擎", Math.Abs(PredictHorizonForTest - 15.0) < 1e-9,
-                  $"生效值 = {PredictHorizonForTest:F1}");
-            ClickHzRow(); SettleFrames(200);
-            Check("再点：15 → 25 ms", Host.State.PredictHorizonMs == 25,
-                  $"PredictHorizonMs = {Host.State.PredictHorizonMs}");
-            ClickHzRow(); SettleFrames(200);
-            Check("再点：25 → 自动（回 v6 默认 21.3）",
-                  Host.State.PredictHorizonMs == 0 && Math.Abs(PredictHorizonForTest - 21.3) < 1e-6,
-                  $"PredictHorizonMs = {Host.State.PredictHorizonMs}，生效值 = {PredictHorizonForTest:F1}");
+            Check("「预测时长」行已撤（毫秒不可调：只剩开关）",
+                  hzRow.IsEmpty && !ui.IsToggleRowByLabelForTest("预测时长"),
+                  $"行空 = {hzRow.IsEmpty}");
         }
 
         // 「功能提示」开关也过一遍完整链路（2026-10-02 新增；原叫「悬停提示」）：
@@ -3059,7 +3034,7 @@ internal sealed partial class App
         ReloadUiPrefsForTest();
         ApplyPressurePrefForTest();       // 压感是引擎状态，要补"启动时应用偏好"那一步
         ApplyFineStrokePrefForTest();     // 精细笔迹同理（原始输入补点）
-        ApplyPredictPrefForTest();        // 墨迹预测同理（B4 自绘预测尾）
+        ApplyPredictPrefForTest();        // 墨迹预测同理（自绘预测尾）
         SetUiFactory(() => new InkUi.FullUi());
         SettleFrames(300);
         ui = CurrentUi as InkUi.FullUi;

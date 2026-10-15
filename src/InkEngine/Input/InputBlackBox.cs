@@ -13,7 +13,7 @@ namespace InkEngine;
 ///   · **Sample** = `AddPointCleaned` 的**入参**（净化前 + 引擎 NowMs）——
 ///     回放时用同一函数喂回去，净化、曲线建模、预测器全部逐字复现；
 ///   · **End** = `EndStroke`。
-/// 回放不需要屏幕/像素：尾的每个数字（供给率、帧间位移、门触发）都从引擎状态算出来。
+/// 回放不需要屏幕/像素：尾的每个数字（供给率、帧间位移）都从引擎状态算出来。
 ///
 /// 格式（UTF-8 无 BOM；时间 = 引擎 NowMs 毫秒、InvariantCulture）：
 ///   #InkTeach input v1
