@@ -294,14 +294,28 @@ internal sealed partial class App
             Check("操作条每一格都有提示文案（逐格数）", barTipsAll,
                   barTipsAll ? $"{SelectionHandles.BarButtonCount} 格" : $"缺：{barTipsMiss}");
 
-            // 开关真的在闸门上：关掉之后同样的悬停不出提示
-            SetTooltipsFromUi(false);
+            // 延迟两档（2026-10-16，WPF Initial/BetweenShowDelay 口径）：
+            // 出过提示后 2 秒窗口内 → 150ms 就亮；隔久了 → 恢复 500ms。
             SelBarHover = (int)SelBarButton.Color;
             UpdateEngineTooltip();
-            SettleFrames(650);
-            StepEngineTooltip();
-            Check("关掉「悬停提示」：引擎侧提示不再出现", !TooltipShown, $"亮={TooltipShown}");
-            SetTooltipsFromUi(true);
+            SettleFrames(650); StepEngineTooltip();
+            bool slowFirst = TooltipShown;                     // 第一次：走完整延迟
+            SelBarHover = (int)SelBarButton.Lock;              // 换一格（窗口内）
+            UpdateEngineTooltip();
+            SettleFrames(220); StepEngineTooltip();
+            Check("刚出过提示：换一格 150ms 就亮（快延迟）",
+                  slowFirst && TooltipShown, $"先={slowFirst}，快={TooltipShown}");
+
+            SelBarHover = -1;                                  // 离开 → 收
+            UpdateEngineTooltip();
+            SettleFrames(2300);                                // 等窗口（2 秒）过期
+            SelBarHover = (int)SelBarButton.Export;
+            UpdateEngineTooltip();
+            SettleFrames(220); StepEngineTooltip();
+            bool slowEarly = !TooltipShown;                    // 220ms 还不该亮
+            SettleFrames(450); StepEngineTooltip();
+            Check("隔 2 秒以上：恢复完整延迟（220ms 不亮、之后亮）",
+                  slowEarly && TooltipShown, $"早亮={!slowEarly}，后亮={TooltipShown}");
             SelBarHover = -1;
             UpdateEngineTooltip();
         }
@@ -911,13 +925,15 @@ internal sealed partial class App
             bool oneUndoStep = depthAfterDrag == undoBefore + 1;
             float midAppliedValue = bA.Width / dpi;
             float frameWAfter = LiveSelectionFrame.CanvasAabb.MaxX - LiveSelectionFrame.CanvasAabb.MinX;
-            bool widthChanged = midAppliedValue > wBefore + 1f;
+            // 新 20 档表（2026-10-15）中点 = 10.5，离 fixture 的 10.0 只差 0.5 逻辑像素——
+            // "真的变了"的余量收到 0.2（0.5 仍是它的 2.5 倍；15 档时代差 10.5，写的 +1）。
+            bool widthChanged = MathF.Abs(midAppliedValue - wBefore) > 0.2f;
             Doc.Undo();
             SettleFrames(140);
             bool widthBack = MathF.Abs(bA.Width / dpi - wBefore) < 0.02f;
             Check("粗细滑条：拖到中点 → 连续值生效、显示值一致、一步撤销、框跟着变",
                   tookSlider && midApplied && shownMatches && oneUndoStep && widthChanged
-                  && frameWAfter > frameWBefore + 1f && widthBack,
+                  && MathF.Abs(frameWAfter - frameWBefore) > 0.5f && widthBack,
                   $"宽 {wBefore:F1} → {midAppliedValue:F1}（拖动中显示 {shownValue:F1}，中点 {midWant:F1}）；"
                   + $"撤销栈 +{depthAfterDrag - undoBefore}（该是 1），撤销后回 {bA.Width / dpi:F1}；"
                   + $"框宽 {frameWBefore:F0} → {frameWAfter:F0}");
@@ -926,11 +942,13 @@ internal sealed partial class App
             // 面板滑条改的是**选中对象**；"改当前工具 + 落盘"仍走主条滑条那条
             // `SetWidthFromUi`——这里直接用那条真实入口点一下，确认引擎值和偏好都落上
             // （8.0.8/8.0.9 加的 wv.pen）。
-            // **2026-10-09 晚起：滑条值吸附到最近一档**——11.5 离 10 最近（10 与 20 之间），
-            // 吸附到 **10**；wv.pen 记的也是吸附后的值（界面不会出现"不存在的档"）。
+            // **2026-10-09 晚起：滑条值吸附到最近一档**——用 **10.4**（离 10 最近）吸附到 **10**；
+            // wv.pen 记的也是吸附后的值（界面不会出现"不存在的档"）。
+            // （原来是 11.5——15 档时代 11.5 离 10 最近；新 20 档表里 11.5 两边一样近、会吸到 11，
+            //   2026-10-16 随新表一起改。）
             {
                 float oldPen = PenWidthLogical;
-                SetWidthFromUi(11.5f);
+                SetWidthFromUi(10.4f);
                 bool engineValue = MathF.Abs(PenWidthLogical - 10f) < 0.01f;
                 bool prefSaved = GetUiPref("wv.pen") == "10";
                 Check("工具粗细：SetWidthFromUi 吸附到最近档 + 写 wv.pen（能落盘）",

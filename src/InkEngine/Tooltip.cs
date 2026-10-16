@@ -10,37 +10,49 @@ namespace InkEngine;
 ///   · PPT 控件条（页码格"长按出菜单"、◀▶）与长按菜单四项。
 ///
 /// 规矩和界面层完全一致（规格见《调研-悬停提示-Tooltip.md》）：
-///   · 停留 <see cref="TipDelayMs"/> 才出；换块重新计时；移开 / 按下 / 拖动 / 穿透立刻收；
+///   · 停留 <see cref="TipDelayMs"/> 才出；**出过提示后的 <see cref="TipBetweenWindowMs"/> 窗口内
+///     下一个提示只等 <see cref="TipFastDelayMs"/>**（WPF 的 InitialShowDelay/BetweenShowDelay，
+///     2026-10-16 加）；换块重新计时；移开 / 按下 / 拖动 / 穿透立刻收；
 ///   · 内容 = 名称 + 键位 + 一句说明；**键位从 <see cref="KeyMap"/> 查**，引擎里不抄第二份；
 ///   · 画在锚点（物理像素、和浮层同一套屏幕坐标）的上方，顶到屏幕就翻到下方。
+///   · **常开**（原「功能提示」设置 2026-10-16 撤除）。
 ///
 /// 谁在什么时机调：
 ///   · 指针移动的悬停路径里，各浮层的 hover 状态更新完之后调 <see cref="UpdateEngineTooltip"/>；
-///   · 主循环每帧调 <see cref="StepEngineTooltip"/> 推 500ms 延迟；
+///   · 主循环每帧调 <see cref="StepEngineTooltip"/> 推延迟（两档）；
 ///   · 指针按下/离开、穿透、写字中 → <see cref="ClearEngineTooltip"/>。
 /// 绘制与脏区在 Overlay.cs（那里才有 DirectWrite 量文字）。
 /// </summary>
 public partial class InkEngine
 {
-    /// <summary>停留多久才出提示（毫秒）。和界面层 `Tokens.TipDelayMs` 同值（两个工程，
-    /// 各自一份常量；WPF 默认 400 是出处，取 500 给"扫过一排"留余量）。</summary>
+    /// <summary>停留多久才出提示（毫秒）——**第一次 / 隔久了**走它。出处：WPF
+    /// `ToolTipService.InitialShowDelay`（默认 400）；我们取 500 给"扫过一排"留余量。</summary>
     private const double TipDelayMs = 500;
 
-    /// <summary>悬停提示的总开关。**默认开**；界面在 LoadPrefs / 点那一行时推过来
-    /// （见 <see cref="IEngineCommands.SetTooltips"/>）。</summary>
-    internal bool TooltipsOn { get; private set; } = true;
+    /// <summary>"刚出过提示"之后，下一个提示的**快延迟**（毫秒）。出处：WPF
+    /// `ToolTipService.BetweenShowDelay` 的语义——**出现过提示之后的一段时间内，
+    /// 下一个提示不再等首次延迟**。WPF 在窗口内是零延迟；我们的浮层格子排得密，
+    /// 零延迟会在扫过时连续闪提示，取 150（仍远小于 500）。
+    /// （2026-10-16 用户定："第一次提示时间长一些，后面再提示就会快一些"。）</summary>
+    private const double TipFastDelayMs = 150;
+
+    /// <summary>"刚出过提示"的窗口（毫秒）。出处：WPF 官方 `BetweenShowDelay` 示例值 2000。</summary>
+    private const double TipBetweenWindowMs = 2000;
 
     private int _tipId;                         // 0 = 没有；其余由各浮层给（只需唯一）
     private string _tipTitle, _tipKey, _tipNote;
     private RectF _tipAnchor;                    // 物理像素、和浮层同一套屏幕坐标
     private double _tipSinceMs;
     private bool _tipShown;
+    /// <summary>上次**真的出过提示**的时刻（"刚看过提示"窗口用，见 <see cref="TipFastDelayMs"/>）。
+    /// 亮着期间由 <see cref="StepEngineTooltip"/> 持续刷新——"刚收起"也算"刚看过"。</summary>
+    private double _lastTipShownAtMs = double.NegativeInfinity;
 
     /// <summary>这一刻提示真的亮着（Overlay 用来画卡 + 算脏区）。</summary>
-    internal bool TooltipShown => TooltipsOn && _tipId != 0 && _tipShown;
+    internal bool TooltipShown => _tipId != 0 && _tipShown;
 
-    /// <summary>还在等 500ms 延迟（主循环据此要帧，否则"到点了"没人去点亮它）。</summary>
-    internal bool TooltipPending => TooltipsOn && _tipId != 0 && !_tipShown;
+    /// <summary>还在等延迟（主循环据此要帧，否则"到点了"没人去点亮它）。</summary>
+    internal bool TooltipPending => _tipId != 0 && !_tipShown;
 
     internal string TooltipTitle => _tipTitle;
     internal string TooltipKey => _tipKey;
@@ -50,19 +62,10 @@ public partial class InkEngine
     /// <summary>虚拟屏幕矩形（物理像素）——给 Overlay 把提示卡夹在屏幕里用。</summary>
     internal RectF TipScreenNow => ScreenRectPhysical();
 
-    /// <summary>界面推开关（「更多 → 设置 → 外观 → 悬停提示」）。</summary>
-    internal void SetTooltipsFromUi(bool on)
-    {
-        if (on == TooltipsOn) return;
-        TooltipsOn = on;
-        if (!on) ClearEngineTooltip();
-        _dirty = true;
-    }
-
     /// <summary>某一刻指针停在哪一块（由各浮层的 hover 状态算出来）。</summary>
     internal void UpdateEngineTooltip()
     {
-        if (!TooltipsOn || PassThrough || CaptureActive
+        if (PassThrough || CaptureActive
             || _drawing || PptBarDragging)
         {
             ClearEngineTooltip();
@@ -143,13 +146,17 @@ public partial class InkEngine
         _dirty = true;
     }
 
-    /// <summary>每帧推进：到点就点亮（主循环里紧跟 StepPptBar 调一次）。</summary>
+    /// <summary>每帧推进：到点就点亮（主循环里紧跟 StepPptBar 调一次）。
+    /// 延迟分两档（2026-10-16）：**刚出过提示**（<see cref="TipBetweenWindowMs"/> 窗口内）
+    /// 走 <see cref="TipFastDelayMs"/>，否则走完整的 <see cref="TipDelayMs"/>。</summary>
     internal void StepEngineTooltip()
     {
-        if (!TooltipsOn) { ClearEngineTooltip(); return; }
-        if (_tipId == 0 || _tipShown) return;
-        if (NowMs - _tipSinceMs < TipDelayMs) return;
+        if (_tipId == 0) return;
+        if (_tipShown) { _lastTipShownAtMs = NowMs; return; }   // 亮着：持续刷新"刚看过"
+        double delay = (NowMs - _lastTipShownAtMs) <= TipBetweenWindowMs ? TipFastDelayMs : TipDelayMs;
+        if (NowMs - _tipSinceMs < delay) return;
         _tipShown = true;
+        _lastTipShownAtMs = NowMs;
         _dirty = true;
     }
 

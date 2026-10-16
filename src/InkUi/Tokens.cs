@@ -364,11 +364,26 @@ internal static class Tokens
     // ---- 悬停提示（Tooltip；2026-10-02）--------------------------------------
 
     /// <summary>
-    /// 鼠标在同一块地方停多久才浮出提示。500ms 的出处：WPF
-    /// `ToolTipService.InitialShowDelay` 默认 400ms（微软官方文档，`BetweenShowDelay`
-    /// 默认 100ms），取松一档是给"扫过一排格子"留余量——路过不算数，停住才说明在问它。
+    /// 鼠标在同一块地方停多久才浮出提示（**第一次 / 隔久了**走它）。500ms 的出处：WPF
+    /// `ToolTipService.InitialShowDelay` 默认 400ms，取松一档是给"扫过一排格子"留余量——
+    /// 路过不算数，停住才说明在问它。
     /// </summary>
     public const double TipDelayMs = 500;
+
+    /// <summary>
+    /// "刚出过提示"之后，下一个提示的**快延迟**（毫秒）。出处：WPF
+    /// `ToolTipService.BetweenShowDelay`（默认 100ms）的语义——**出现了提示之后的一段时间内，
+    /// 下一个提示不再等首次延迟**。WPF 在窗口内是零延迟；我们的格子排得密，零延迟会在
+    /// 扫过时连续闪提示，取 150（仍远小于 500）。
+    /// （2026-10-16 用户定："第一次提示时间长一些，后面再提示快一些"。）
+    /// </summary>
+    public const double TipFastDelayMs = 150;
+
+    /// <summary>
+    /// "刚出过提示"的窗口（毫秒）。出处：WPF 官方 `BetweenShowDelay` 用法示例里就是 2000。
+    /// 亮着期间持续刷新（"刚收起"也算"刚看过"）。
+    /// </summary>
+    public const double TipBetweenWindowMs = 2000;
 
     /// <summary>提示淡入的时长（和悬停反馈一套节奏，别让它"啪"地跳出来）。</summary>
     public const double TipFadeMs = 100;

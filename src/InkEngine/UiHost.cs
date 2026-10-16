@@ -130,7 +130,6 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetWetMode(int mode) => _engine.SetWetModeFromUi(mode);
     /// <summary>触摸手势总开关（默认开；关掉只剩单指书写）。</summary>
     public void SetTouchGestures(bool on) => _engine.SetTouchGesturesFromUi(on);
-    public void SetTooltips(bool on) => _engine.SetTooltipsFromUi(on);
     public int ToggleCoordGrid() => _engine.ToggleSelectionGrid();
 
     public void SetBoardPattern(int pattern, float stepLogical)

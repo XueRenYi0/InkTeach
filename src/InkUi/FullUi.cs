@@ -139,6 +139,9 @@ public sealed class FullUi : IOverlayUi
     //
     // 行为：鼠标停在同一个东西上 **500ms**（Tokens.TipDelayMs，照 WPF 默认 400 取松一档），
     // 浮出一张小卡片（名称 + 当前键位 + 一句说明）；移开/按下/拖动立刻收起。
+    // **2026-10-16 起**：出过提示后的 2 秒窗口内，下一个提示只等 150ms
+    //（Tokens.TipFastDelayMs/TipBetweenWindowMs，WPF 的 BetweenShowDelay 口径）；
+    // 原「功能提示」开关撤除、改常开。
     //
     // 目标编号**沿用 `HoverAt` 那一套**（-2 球 / 0..12 格 / 100+ 色片 / 200+ 分段 /
     // 300 滑条 / 400 动作按钮 / 500 虚实线）——同一份编号既管高亮也管提示，
@@ -146,10 +149,10 @@ public sealed class FullUi : IOverlayUi
     //
     // 触屏/手写笔**没有悬停事件**（仓库老规矩：图形工具的"悬停预览"就是因此改成
     // "按住拖"的），所以提示只当增强，面板上的常显文字一个字都不动。
-    private bool _tipEnabled = true;          // 开关在「更多 → 设置 → 外观」，默认开
     private const int TipNoTarget = int.MinValue;
     private int _tipTarget = TipNoTarget;     // 现在停在哪（没有 = 不出提示）
     private double _tipSinceMs;               // 什么时候停上去的（过了延迟才显示）
+    private double _lastTipShownAtMs = double.NegativeInfinity;  // 上次真出提示的时刻（"刚看过"窗口）
     private bool _tipShown;                   // 已经过了延迟、正在显示（静态，不再烧帧）
     private readonly Anim _tipFade;           // 0→1 淡入
 
@@ -236,7 +239,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按三列里的布局走**：
     /// 外观（4）/ 书写（5）/ 墨迹（3）三列并排——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, Tooltip, UiSize, DwellShape, Pressure, Predict, WetMode, RestoreInk, PptAutoSave, HistoryDays }
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, WetMode, RestoreInk, PptAutoSave, HistoryDays }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -249,11 +252,11 @@ public sealed class FullUi : IOverlayUi
         // 色带常开（2026-10-05 用户实测点名）：设置条一直摊着。触摸屏上那条 10 像素的色线很难点中，
         // 触摸点工具格也会自动带出来（自适应，见 UpdateRail 的 _railTouchHoldUntilMs）。
         (Row.RailPin, "色带常开", false, false, "设置条一直摊开（触摸屏不用去碰那条色线）"),
-        // 悬停提示（2026-10-02）：鼠标停住半秒、手指长按，浮出"名称 + 快捷键 + 说明"。
-        // 默认开；触屏没有悬停，所以长按是它在触摸上的等价物（见 Tooltip 那一节）。
-        // **范围是收窄过的**：只给图标-only / 带快捷键 / 隐藏手势，别的（色带、文字段、
-        // 点一下就见结果的）都不配——判据见《调研-悬停提示-Tooltip.md》10.8。
-        (Row.Tooltip, "功能提示", false, false, "鼠标 / 笔悬停、手指长按，显示名称与快捷键"),
+        // 悬停提示：原来这里有一行「功能提示」开关（2026-10-02 加，默认开）——
+        // **2026-10-16 用户定：开关撤除、改常开**（逻辑变成"第一次慢、之后快"，
+        // 见 Tokens.TipFastDelayMs / 引擎 Tooltip.cs）。
+        // ⚠ 提示的**范围仍是收窄的**：只给图标-only / 带快捷键 / 隐藏手势，别的
+        //（色带、文字段、点一下就见结果的）都不配——判据见《调研-悬停提示-Tooltip.md》10.8。
         // 界面缩放（2026-10-10 用户拍板"做 A：档位式全局缩放"）：五档 0.8/0.9/1/1.15/1.3，
         // 点一下换一档、到顶回头。**缩的是界面自己**（工具带 / 色带 / 抽屉 / 设置页 / 图库面板）；
         // 笔宽、画布内容这些"纸上的尺"不跟着动。
@@ -428,10 +431,7 @@ public sealed class FullUi : IOverlayUi
         _hideEnabled = _host.GetPref("hide") == "1";
         // 色带常开（2026-10-05）：设置条一直摊着——触摸屏上不用去碰那条 10 像素的色线。
         _railPinned = _host.GetPref("railPin") == "1";
-        // 悬停提示：**默认开**，只写"关过的"那一份（和 dwellShape / pressure 同一条规矩）。
-        // 引擎自己画的浮层（操作条 / PPT 条）读不到界面偏好，这里推一次开关过去。
-        _tipEnabled = _host.GetPref("tooltip") != "0";
-        _host.Commands.SetTooltips(_tipEnabled);
+        // 悬停提示：**常开**（原「功能提示」设置 2026-10-16 撤除，用户定）。
 
         string prof = _host.GetPref("profile");
         _profile = prof == "mini" ? Profile.Mini
@@ -492,8 +492,7 @@ public sealed class FullUi : IOverlayUi
         // 墨迹预测：**默认关**（2026-10-16 用户定："以后的软件默认不开预测"），
         // 只写"开过"的那一种情况（写 "1"）。
         _host.SetPref("predict2", st.PredictTailOn ? "1" : null);
-        // 悬停提示：**默认开**，只写"关了"这一种情况。
-        _host.SetPref("tooltip", _tipEnabled ? null : "0");
+        // 悬停提示：**常开**（2026-10-16 起；原来的"关过才写 0"随开关撤除）。
 
         var off = new List<string>();
         for (int i = 1; i < _pinned.Length; i++) if (!_pinned[i]) off.Add(i.ToString());
@@ -2156,7 +2155,7 @@ public sealed class FullUi : IOverlayUi
     }
 
     private bool IsToggleRow(int i)
-        => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.Tooltip or Row.DwellShape
+        => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.DwellShape
            or Row.Pressure or Row.Predict or Row.RestoreInk or Row.PptAutoSave;
 
     /// <summary>
@@ -2224,14 +2223,8 @@ public sealed class FullUi : IOverlayUi
                 SavePrefs();
                 break;
 
-            // 悬停提示（2026-10-02）：只影响界面自己，落盘走 "tooltip" 那一项。
-            // 关掉时顺手把已经显示的提示清掉（不然它要等下一次移开才消失）。
-            case Row.Tooltip:
-                _tipEnabled = !_tipEnabled;
-                if (!_tipEnabled) HideTip();
-                _host.Commands.SetTooltips(_tipEnabled);   // 引擎自己画的浮层跟着开关
-                SavePrefs();
-                break;
+            // 悬停提示（2026-10-02 的「功能提示」开关）：**2026-10-16 撤除、改常开**——
+            // 逻辑变成"第一次慢、之后快"（Tokens.TipDelayMs / TipFastDelayMs），不再有开关。
 
             // 界面大小（2026-10-10）：五档循环、到顶回头。引擎立刻生效（重排 + 重画），
             // 界面落盘 "uiscale"——**标准档不写项**（只写和默认不一样的，老规矩）。
@@ -2347,7 +2340,7 @@ public sealed class FullUi : IOverlayUi
     /// 2026-10-09：两列（左列堆"外观＋书写"）→ **三列并排**（外观 / 书写 / 墨迹 各一列）——
     /// 用户说"设置现在太长了"。原来左列堆 9 行（组头 26 + 9×48 + 8 ≈ 476），三列后最高 5 行。
     /// </summary>
-    private const int LookRowCount = 5;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 悬停提示 / 界面大小
+    private const int LookRowCount = 4;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小（「功能提示」2026-10-16 撤除、改常开）
     private const int WriteRowCount = 3;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测（「预测时长」2026-10-15 随毫秒调节撤除；精细笔迹、触摸手势 2026-10-09 撤开关、改常开）
     private const int InkRowCount = 4;     // 墨迹：湿墨档位 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理
     private const float MoreColumnGap = 16f;
@@ -2569,8 +2562,7 @@ public sealed class FullUi : IOverlayUi
         Row.DarkTheme => SetColRow(SetColKind.Look, 0),
         Row.AutoHide => SetColRow(SetColKind.Look, 1),
         Row.RailPin => SetColRow(SetColKind.Look, 2),
-        Row.Tooltip => SetColRow(SetColKind.Look, 3),
-        Row.UiSize => SetColRow(SetColKind.Look, 4),
+        Row.UiSize => SetColRow(SetColKind.Look, 3),      // 「功能提示」行 2026-10-16 撤除（改常开），界面上移一格
         Row.DwellShape => SetColRow(SetColKind.Write, 0),
         Row.Pressure => SetColRow(SetColKind.Write, 1),
         Row.Predict => SetColRow(SetColKind.Write, 2),
@@ -4753,8 +4745,6 @@ public sealed class FullUi : IOverlayUi
         Row.DarkTheme => _dark,
         // 色带常开（2026-10-05）：同贴边隐藏，界面自己的偏好。
         Row.RailPin => _railPinned,
-        // 悬停提示（界面自己的偏好，默认开；详见字段区那一段）
-        Row.Tooltip => _tipEnabled,
         // 停顿成型：**默认开**，所以配置里没有这一项时显示的就是"开"
         //（见 LoadPrefs 里那一行：只有读到 "0" 才关）。
         Row.DwellShape => _host == null || _host.State.DwellShapeOn,
@@ -4981,7 +4971,7 @@ public sealed class FullUi : IOverlayUi
     /// 悬停要求：开关开着、有目标、有文案、没在按/拖、也没有触摸长按正在计时。
     /// </summary>
     private bool TipWanted
-        => _tipEnabled && _tipTarget != TipNoTarget
+        => _tipTarget != TipNoTarget
            && (_tipHoldFired
                || (_press == -1 && !_dragging && !_sliderDragging
                    && _tipHoldStart == double.NegativeInfinity))
@@ -5048,6 +5038,10 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private void UpdateTip()
     {
+        // "刚看过提示"窗口的刷新（2026-10-16）：亮着期间持续刷新——"刚收起"也算"刚看过"，
+        // 下一个提示走快延迟（Tokens.TipFastDelayMs；WPF BetweenShowDelay 的口径）。
+        if (_tipShown) _lastTipShownAtMs = _host.NowMs;
+
         // ① 长按到点：这一次按下就算"作废"了（松手不执行，见 PointerUp）
         if (_tipHoldStart > double.NegativeInfinity && !_tipHoldFired
             && _host.NowMs - _tipHoldStart >= Tokens.TipHoldMs)
@@ -5055,6 +5049,7 @@ public sealed class FullUi : IOverlayUi
             _tipHoldFired = true;
             SetTipTarget(_tipHoldTarget);
             _tipShown = true;
+            _lastTipShownAtMs = _host.NowMs;
             _tipFade.To(1f, Tokens.TipFadeMs);
             Invalidate();
         }
@@ -5075,9 +5070,12 @@ public sealed class FullUi : IOverlayUi
             }
             return;
         }
-        if (!_tipShown && _host.NowMs - _tipSinceMs >= Tokens.TipDelayMs)
+        double tipDelay = _host.NowMs - _lastTipShownAtMs <= Tokens.TipBetweenWindowMs
+            ? Tokens.TipFastDelayMs : Tokens.TipDelayMs;
+        if (!_tipShown && _host.NowMs - _tipSinceMs >= tipDelay)
         {
             _tipShown = true;
+            _lastTipShownAtMs = _host.NowMs;
             _tipFade.To(1f, Tokens.TipFadeMs);
         }
     }
@@ -5098,8 +5096,6 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private (string Title, string Key, string Note) TipContent(int id)
     {
-        if (!_tipEnabled) return default;
-
         // ---- 「更多」面板（编号 = 1000 + 命中码；2026-10-02 第二批）----------------
         // 面板是触摸主场，所以这些提示**鼠标悬停和手指长按都能出**。
         // 启动器格子和设置行原来那行小灰字已从画面撤掉，这里就是它们的去处。
@@ -5566,9 +5562,7 @@ public sealed class FullUi : IOverlayUi
 
     // ---- 自检用：悬停提示 ----------------------------------------------------
 
-    /// <summary>提示开关（「更多 → 设置 → 外观」那一行；默认开）。</summary>
-    internal bool TipEnabledForTest => _tipEnabled;
-    /// <summary>提示这一刻真的画出来了没有（过了 500ms 延迟 + 淡入中有值）。</summary>
+    /// <summary>提示这一刻真的画出来了没有（过了延迟 + 淡入中有值）。</summary>
     internal bool TipVisibleForTest => _tipShown && _tipFade.Value > 0.01f;
     /// <summary>任意目标的提示文案（名称 / 键位 / 说明；Title 为 null = 不出提示）。</summary>
     internal (string Title, string Key, string Note) TipContentForTest(int id) => TipContent(id);
@@ -5591,12 +5585,6 @@ public sealed class FullUi : IOverlayUi
                 MaxX = r.MaxX + s.X, MaxY = r.MaxY + s.Y,
             };
         }
-    }
-    /// <summary>自检用：直接开关提示（不落盘；生产路径是点设置里那一行）。</summary>
-    internal void SetTipEnabledForTest(bool on)
-    {
-        _tipEnabled = on;
-        if (!on) HideTip();
     }
     /// <summary>自检/出图用：直接把某个目标的提示摆出来（产品里靠真悬停等 500ms，出图等不起）。</summary>
     internal void ShowTipForTest(int id)

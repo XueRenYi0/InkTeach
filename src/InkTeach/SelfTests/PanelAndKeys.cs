@@ -2578,7 +2578,6 @@ internal sealed partial class App
         //（"加一段漏一处"是这个仓库的老毛病，用逐个数兜住）。
         {
             ui.SetExpandForTest(1f);
-            ui.SetTipEnabledForTest(true);
             // 先把指针放画布上，清掉上一段留下的悬停
             SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.3f), 0);
             SettleFrames(150);
@@ -2995,17 +2994,13 @@ internal sealed partial class App
                   $"行空 = {hzRow.IsEmpty}");
         }
 
-        // 「功能提示」开关也过一遍完整链路（2026-10-02 新增；原叫「悬停提示」）：
-        // 点行 → 界面状态翻转 → 落盘
+        // 「功能提示」开关（2026-10-02 加，原叫「悬停提示」）：**2026-10-16 用户定撤除、改常开**
+        //（逻辑变成"第一次慢、之后快"）——只验"行已不在设置页"（和「预测算法」撤行同一条判据）。
         {
             var tipRow = ui.RowRectByLabelForTest("功能提示");
-            Check("「功能提示」那一行找得到", tipRow.MaxY > tipRow.MinY,
-                  $"行高 {tipRow.MaxY - tipRow.MinY:F0}");
-            ClickPhysical((tipRow.MinX + tipRow.MaxX) * 0.5f * DpiScale,
-                          (tipRow.MinY + tipRow.MaxY) * 0.5f * DpiScale);
-            SettleFrames(200);
-            Check("点「功能提示」：开关翻到关", !ui.TipEnabledForTest,
-                  $"开关 = {ui.TipEnabledForTest}");
+            Check("「功能提示」行已撤（改常开：第一次慢、之后快）",
+                  tipRow.IsEmpty && !ui.IsToggleRowByLabelForTest("功能提示"),
+                  $"行空 = {tipRow.IsEmpty}");
         }
         SaveSettingsForTest();
 
@@ -3016,7 +3011,6 @@ internal sealed partial class App
               && prefsText.Contains("\"profile\"") && prefsText.Contains("\"unpinned\"")
               && prefsText.Contains("\"pressure\"")
               && prefsText.Contains("\"predict2\"")
-              && prefsText.Contains("\"tooltip\"")
               ,
               $"{Path.GetFileName(prefsPath)}（{prefsText.Length} 字节）");
 
@@ -3029,10 +3023,8 @@ internal sealed partial class App
         SettleFrames(300);
         ui = CurrentUi as InkUi.FullUi;
         Check("重开界面读回了偏好",
-              ui != null && ui.DarkForTest && ui.ProfileForTest == 1 && !ui.PinnedForTest(8)
-              && !ui.TipEnabledForTest,
-              $"深色={ui?.DarkForTest}，档位={ui?.ProfileForTest}（1=自定义），图形钉着={ui?.PinnedForTest(8)}，"
-              + $"功能提示={ui?.TipEnabledForTest}");
+              ui != null && ui.DarkForTest && ui.ProfileForTest == 1 && !ui.PinnedForTest(8),
+              $"深色={ui?.DarkForTest}，档位={ui?.ProfileForTest}（1=自定义），图形钉着={ui?.PinnedForTest(8)}");
         Check("压感偏好也读回来了（重启后仍是关）",
               !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
         Check("精细笔迹：开关撤掉后重启仍是开（常开）",
@@ -3040,15 +3032,14 @@ internal sealed partial class App
         Check("墨迹预测偏好也读回来了（重启后仍是开——测试里点成了开）",
               Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
 
-        // 关着开关时，"停在笔上 0.7 秒"必须**什么都不出**（开关真的在闸门上，不是装饰）
+        // 「功能提示」已改常开（2026-10-16）：同样的悬停**照样出提示**（把"常开"钉住）。
         {
             var penCell4 = ui.CellRectForTest(3);
             SendMouse((int)((penCell4.MinX + penCell4.MaxX) * 0.5f * DpiScale),
                       (int)((penCell4.MinY + penCell4.MaxY) * 0.5f * DpiScale), 0);
             SettleFrames(700);
-            Check("关着开关：同样的悬停不出提示",
-                  !ui.TipVisibleForTest && !ui.TipEnabledForTest,
-                  $"可见 = {ui.TipVisibleForTest}，开关 = {ui.TipEnabledForTest}");
+            Check("提示常开（开关已撤）：悬停工具格 0.7 秒出提示",
+                  ui.TipVisibleForTest, $"可见 = {ui.TipVisibleForTest}");
             SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.4f), 0);
             SettleFrames(150);
         }
