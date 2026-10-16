@@ -1197,7 +1197,7 @@ public partial class InkEngine
     // 旧账（"乱跳"的正身，写在 App.TailJumpTest 的注释里）：鼠标/兼容模式输入是突发的——
     // 来一阵 → 尾巴甩出去；间隔一超 40ms → 速度清零 → 尾巴整个消失。修法 = 长度限速平滑。
     // 纪律：只画显示（独立几何，不进文档/存档/命中）、每帧重建、慢写/反向/断笔由
-    // InkPredictorLinear 内建把关；开关：设置「墨迹预测」行 / `--nopredict2`（**默认开**）。
+    // InkPredictorLinear 内建把关；开关：设置「墨迹预测」行 / `--predict2`（**默认关**，2026-10-16 用户定）。
     // 2026-10-15 用户拍板：**取消毫秒调节**（「预测时长」行与 `--predlatency` 撤除）、
     // **替换 v6**（用户在 Win10 机器实测 v6 甩尾明显）——只剩这个线性预测 + 一个开关。
     // v6 备份 `.revert/2026-10-15-预测线性接入/`、说明 `调研/已停用-预测算法收口.md`、
@@ -2456,11 +2456,11 @@ public partial class InkEngine
             if (args.Contains("--nosmooth")) StrokeSmoothing.SetEnabled(false);
             if (args.Contains("--smooth")) StrokeSmoothing.SetEnabled(true);
             // 自绘预测尾（2026-10-08 用户 90Hz 真机验收 → 2026-10-09 改默认关 →
-            // **2026-10-14 发布测试版起又改默认开**）。2026-10-15：接入线性预测
-            //（Chromium 同族）、v6 退役（见 `调研/已停用-预测算法收口.md`）。
-            // 设置页「墨迹预测」开关，偏好落盘 `ui.predict2`（默认开，只写"关过"的那一份）；
-            // `--nopredict2` 关、`--predict2` 强开，两者都给对照实验用、优先于偏好。
-            // **时长不可调**（用户 2026-10-15 定）：地平线固定 21.3ms，见 InkPredictorLinear。
+            // 2026-10-14 发布测试版起默认开 → **2026-10-16 用户定：以后默认关**）。
+            // 2026-10-15：接入线性预测（Chromium 同族）、v6 退役（见 `调研/已停用-预测算法收口.md`）。
+            // 设置页「墨迹预测」开关，偏好落盘 `ui.predict2`（**默认关，只写"开过"的那一份**）；
+            // `--nopredict2` 强关、`--predict2` 强开，两者都给对照实验用、优先于偏好。
+            // **时长不可调**（用户定）：地平线按刷新率自动缩放，见 InkPredictorLinear。
             _noPredictArg = args.Contains("--nopredict2");
             _forcePredictArg = args.Contains("--predict2");
             for (int i = 0; i < args.Length - 1; i++)
@@ -3684,7 +3684,7 @@ public partial class InkEngine
                     DrainMessages();
                     _dirty = true;
                 }
-                UpdatePredictTail();   // B4：预测尾（每帧重建；默认开（2026-10-14 起）；`--nopredict2` 可关）
+                UpdatePredictTail();   // 预测尾（每帧重建；默认关（2026-10-16 起）；`--predict2` 可开）
                 // 渲染期间界面可能又提出"我还要一帧"（在 Render 里调 InvalidateUi）。
                 // 用序号认出来，别让这一句 _dirty = false 把它抹掉——
                 // 抹掉的表现就是"动画或一次性外观变化卡在第一帧"。
@@ -11009,7 +11009,7 @@ public partial class InkEngine
         DwellShapeOn = DwellShapeEnabled,
         PressureOn = PressureWidth.Enabled,      // 界面拿它显示「设置 → 书写 → 压感粗细」那个开关
         FineStrokeOn = RawInputCapture,          // 「设置 → 书写 → 精细笔迹」（原始输入补点）总开关
-        PredictTailOn = PredictTailEnabled,      // 「设置 → 书写 → 墨迹预测」（自绘预测尾）总开关（默认开，2026-10-14 测试版起）
+        PredictTailOn = PredictTailEnabled,      // 「设置 → 书写 → 墨迹预测」（自绘预测尾）总开关（默认关，2026-10-16 起）
         WetMode = WetMode,                       // 「设置 → 墨迹 → 湿墨档位」（0..3；界面显示当前档）
         HistoryCount = BoardHistory.Count,       // 「更多 → 墨迹 → 历史板书」那一格的亮/灰
         TouchGesturesOn = _touch.Enabled,        // 「设置 → 书写 → 触摸手势」总开关（默认开）
@@ -11212,7 +11212,7 @@ public partial class InkEngine
     /// <summary>精简笔迹（原始输入补点）的偏好键（同样只写"关过"的那一份）。</summary>
     private const string FineStrokePrefKey = "finestroke";
 
-    /// <summary>「墨迹预测」（自绘预测尾）的偏好键（**默认开**，只写"关过"的那一份）。</summary>
+    /// <summary>「墨迹预测」（自绘预测尾）的偏好键（**默认关**，只写"开过"的那一份）。</summary>
     private const string PredictPrefKey = "predict2";
 
     /// <summary>命令行上有没有 `--nopredict2` / `--predict2`（对照实验用，优先于用户偏好）。</summary>
@@ -11261,11 +11261,11 @@ public partial class InkEngine
     /// <summary>启动时应用"墨迹预测"偏好（自检要单独调一次，理由同压感 / 精细笔迹）。</summary>
     internal void ApplyPredictPrefForTest() => ApplyPredictTailSetting();
 
-    /// <summary>**默认开**（2026-10-14 发布测试版起；2026-10-09 曾定默认关）；命令行为对照实验优先
-    /// （`--nopredict2` 关 / `--predict2` 开），否则听偏好（偏好写过 "0" 才关）。</summary>
+    /// <summary>**默认关**（2026-10-16 用户定："以后的软件默认不开预测"）；命令行为对照实验优先
+    /// （`--nopredict2` 强关 / `--predict2` 强开），否则听偏好（偏好写过 "1" 才开）。</summary>
     private void ApplyPredictTailSetting()
         => PredictTailEnabled = !_noPredictArg
-           && (_forcePredictArg || GetUiPref(PredictPrefKey) != "0");
+           && (_forcePredictArg || GetUiPref(PredictPrefKey) == "1");
 
     /// <summary>
     /// 自检用：把"压感粗细"的偏好**重新应用一次**——模拟"重开软件"里读偏好那一步。

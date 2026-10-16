@@ -32,7 +32,12 @@ internal sealed class UiHost : IUiHost, IEngineCommands
         _screen = screen;
         // 工作区一开始就从引擎取一次（后面的刷新走 UpdateWorkArea）：
         // 界面的"默认位置"要它，而它在 Attach → Layout 那一刻就要用上。
-        _workArea = engine.LogicalPrimaryWorkArea;
+        // ⚠ **必须与 Screen 同一套单位**（界面逻辑 = 物理 ÷ DPI ÷ UiScale，见
+        //   `UiLogicalWorkArea`）——2026-10-16 修：原来取的是只除 DPI 的
+        //   `LogicalPrimaryWorkArea`，界面缩放 ≠1 时"居中"整体偏移（用户报
+        //   "界面大小调过之后，重启就不居中"：运行中换档会走 SetUiScaleFromUi 重刷
+        //   工作区，所以只有**重启后的第一份**是错的）。
+        _workArea = engine.UiLogicalWorkArea;
         _dpiScale = dpiScale;
         IsReattach = isReattach;
         Commands = this;
@@ -119,7 +124,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetDwellShape(bool on) => _engine.SetDwellShapeFromUi(on);
     public void SetPressure(bool on) => _engine.SetPressureFromUi(on);
     public void SetFineStroke(bool on) => _engine.SetFineStrokeFromUi(on);
-    /// <summary>「设置 → 书写 → 墨迹预测」：自绘预测尾总开关（默认开）。</summary>
+    /// <summary>「设置 → 书写 → 墨迹预测」：自绘预测尾总开关（默认关，2026-10-16 起）。</summary>
     public void SetPredict(bool on) => _engine.SetPredictFromUi(on);
     /// <summary>「设置 → 墨迹 → 湿墨档位」：0..3（引擎落盘并立刻生效）。</summary>
     public void SetWetMode(int mode) => _engine.SetWetModeFromUi(mode);

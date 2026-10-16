@@ -76,7 +76,7 @@ internal sealed partial class App : InkEngine.InkEngine
             {
                 var bb = System.IO.Path.GetFullPath(args[i + 1]);
                 // ⚠ 表头在**参数解析前**生成，别读引擎的静态值（那时还是默认）——按 args 自己算：
-                bool pred = !args.Contains("--nopredict2");
+                bool pred = args.Contains("--predict2") && !args.Contains("--nopredict2");   // 默认关（2026-10-16 起）
                 InputBlackBox.Open(bb,
                     $"version {UpdateFeed.CurrentVersion} pred {(pred ? 1 : 0)}");
                 Console.WriteLine($"[黑匣子] 输入日志：{bb}");
@@ -1266,7 +1266,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --replayinput <文件> [--frame 10]  黑匣子回放：供给率/帧间墨尖位移/方向翻转（诊断）");
         Console.WriteLine("  --himetric / --nohimetric  亚像素输入（默认开；--nohimetric 退回 D0 对照）");
         Console.WriteLine("  模型调参：--mean2win 画布像素 / --smoothcorner N 角点阈值");
-        Console.WriteLine("  预测尾：--nopredict2 关（默认开；唯一算法 = 线性预测（Chromium 同族），--predict2 可再开）");
+        Console.WriteLine("  预测尾：--predict2 开（**默认关**；唯一算法 = 线性预测（Chromium 同族），--nopredict2 强关）");
         Console.WriteLine("  [已停用] 预测、拟合(--mean2fit)、模拟压力(--simpressure/--pfpressure)、笔锋");
         Console.WriteLine("           (--simtaper/--flicktip)、对照模式(raw/sliding/spring/oneeuro/mean/gauss)等：");
         Console.WriteLine("           见 已停用-渲染实验.md（代码保留）");

@@ -374,7 +374,7 @@ public interface IEngineCommands
     /// <summary>「设置 → 书写 → 精细笔迹」：原始输入补点总开关（2026-10-07 加）。</summary>
     void SetFineStroke(bool on);
 
-    /// <summary>「设置 → 书写 → 墨迹预测」：自绘预测尾总开关（2026-10-09 加；**默认开**，2026-10-14 测试版起）。</summary>
+    /// <summary>「设置 → 书写 → 墨迹预测」：自绘预测尾总开关（2026-10-09 加；**默认关**，2026-10-16 用户定）。</summary>
     void SetPredict(bool on);
 
     /// <summary>
@@ -960,7 +960,7 @@ public readonly struct UiState
 
     /// <summary>「精细笔迹」（原始输入补点）总开关的状态（默认开）。</summary>
     public bool FineStrokeOn { get; init; }
-    /// <summary>「墨迹预测」（自绘预测尾）总开关的状态（默认开）。</summary>
+    /// <summary>「墨迹预测」（自绘预测尾）总开关的状态（默认关，2026-10-16 起）。</summary>
     public bool PredictTailOn { get; init; }
     /// <summary>
     /// **湿墨档位**（「设置 → 墨迹 → 湿墨档位」，2026-10-13 加）：

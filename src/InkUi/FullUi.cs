@@ -266,11 +266,10 @@ public sealed class FullUi : IOverlayUi
         // 压感粗细（2026-10-01，批次 0.2）：默认开；关掉 = 整块板等宽，
         // 手写板的流畅 / 预测不受影响（渲染期开关，文档里的压力数据不动）。
         (Row.Pressure, "压感粗细", false, false, "关掉后所有笔迹等宽（手写板照样流畅）"),
-        // 墨迹预测（2026-10-09 回归；**2026-10-14 发布测试版起默认开**；2026-10-15：
-        // 唯一算法 = 线性预测（Chromium 同族），且**只剩这一个开关**——「预测时长」
-        // 随毫秒调节一起撤除；想关：设置里点掉这一行 / `--nopredict2`）。
-        // 链路：行表 → ActivateRow → IsOn → SavePrefs（"关过"才写 "0"）。
-        (Row.Predict, "墨迹预测", false, false, "让墨尾更跟手一点（默认开）；关了笔尾更稳当"),
+        // 墨迹预测（2026-10-09 回归；**2026-10-16 用户定：默认关**——"以后的软件默认不开预测"；
+        // 唯一算法 = 线性预测（Chromium 同族），只剩这一个开关）。
+        // 链路：行表 → ActivateRow → IsOn → SavePrefs（"开过"才写 "1"）。
+        (Row.Predict, "墨迹预测", false, false, "开了让墨尾更跟手一点；默认关，想跟手就在这里打开"),
         // 湿墨档位（2026-10-13 加，用户点名要"在设置里能看到到了哪一档"）：
         // **点一下换一档**（和「界面大小」同一个手感，到顶回头），右侧显示当前档。
         // 判据/落盘都在引擎（见 Engine.SetWetModeFromUi）；界面只显示 Host.State.WetMode。
@@ -490,8 +489,9 @@ public sealed class FullUi : IOverlayUi
         // 压感粗细：**默认开**，同样只写"关了"这一种情况（引擎启动时自己读它）。
         _host.SetPref("pressure", st.PressureOn ? null : "0");
         // （精细笔迹 / 触摸手势的偏好写入 2026-10-09 晚随开关一起撤——两项都常开，没有可写的状态。）
-        // 墨迹预测：**默认开**（2026-10-14 测试版起），只写"关过"的那一种情况。
-        _host.SetPref("predict2", st.PredictTailOn ? null : "0");
+        // 墨迹预测：**默认关**（2026-10-16 用户定："以后的软件默认不开预测"），
+        // 只写"开过"的那一种情况（写 "1"）。
+        _host.SetPref("predict2", st.PredictTailOn ? "1" : null);
         // 悬停提示：**默认开**，只写"关了"这一种情况。
         _host.SetPref("tooltip", _tipEnabled ? null : "0");
 
@@ -2266,8 +2266,8 @@ public sealed class FullUi : IOverlayUi
                 _host.Commands.SetWetMode(_host.State.WetMode == 1 ? 0 : 1);
                 break;
 
-            // 墨迹预测（2026-10-09 加；2026-10-14 测试版起默认开）：
-            // 引擎是权威，界面翻转后落盘 "predict2"（关过才写 "0"）。
+            // 墨迹预测（2026-10-09 加；2026-10-16 起默认关）：
+            // 引擎是权威，界面翻转后落盘 "predict2"（开过才写 "1"）。
             case Row.Predict:
                 _host.Commands.SetPredict(!_host.State.PredictTailOn);
                 SavePrefs();
@@ -4760,7 +4760,7 @@ public sealed class FullUi : IOverlayUi
         Row.DwellShape => _host == null || _host.State.DwellShapeOn,
         // 压感粗细：状态在**引擎**（渲染期开关），界面只是显示它
         Row.Pressure => _host == null || _host.State.PressureOn,
-        // 墨迹预测：同样在引擎（默认开），界面只是显示它
+        // 墨迹预测：同样在引擎（默认关，2026-10-16 起），界面只是显示它
         Row.Predict => _host == null || _host.State.PredictTailOn,
         // 墨迹两条开关：读偏好（restoreInk 默认关、pptAutoSave 默认开）。
         Row.RestoreInk => _host.GetPref("restoreInk") == "1",

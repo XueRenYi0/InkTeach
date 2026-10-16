@@ -2918,7 +2918,7 @@ internal sealed partial class App
                   $"行空 = {ui.RowRectByLabelForTest("触摸手势").IsEmpty}");
         }
 
-        // 「墨迹预测」（2026-10-09 回归；**2026-10-14 发布测试版起默认开**——
+        // 「墨迹预测」（2026-10-09 回归；**2026-10-16 用户定：默认关**——
         // 2026-10-15 线性预测接入，只剩这一个开关）：点行 → 引擎状态翻转 → 落盘（关过才写 "0"）。
         // （原 2026-10-05 停用块里顺带的「启动器/底栏提示文案」那段仍留停用——它跟本行无关，
         //   需要时从 git 历史恢复；这里只验"墨迹预测"行自己的链路。）
@@ -2929,7 +2929,7 @@ internal sealed partial class App
             Check("「墨迹预测」是**开关行**（有开关，不是空白行）",
                   ui.IsToggleRowByLabelForTest("墨迹预测"),
                   "IsToggleRow = " + ui.IsToggleRowByLabelForTest("墨迹预测"));
-            Check("墨迹预测默认是开的（2026-10-14 发布测试版起）", Host.State.PredictTailOn,
+            Check("墨迹预测默认**关**（2026-10-16 用户定：以后的软件默认不开预测）", !Host.State.PredictTailOn,
                   $"PredictTailOn = {Host.State.PredictTailOn}");
 
             // 鼠标悬停设置行 → 出提示（小字搬进提示）
@@ -2965,15 +2965,15 @@ internal sealed partial class App
                 Check("长按设置行 0.6 秒：出提示", ui.TipVisibleForTest && ui.TipHoldFiredForTest,
                       $"可见={ui.TipVisibleForTest}，触发={ui.TipHoldFiredForTest}");
                 SendTouches(false, (rhx, rhy)); SettleFrames(200);
-                Check("长按后松手：这一次**不翻转**开关", Host.State.PredictTailOn,
+                Check("长按后松手：这一次**不翻转**开关", !Host.State.PredictTailOn,
                       $"PredictTailOn = {Host.State.PredictTailOn}");
             }
 
             ClickPhysical((predictRow.MinX + predictRow.MaxX) * 0.5f * DpiScale,
                           (predictRow.MinY + predictRow.MaxY) * 0.5f * DpiScale);
             SettleFrames(200);
-            Check("点「墨迹预测」：引擎状态立刻翻转（默认开 → 关）",
-                  !Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
+            Check("点「墨迹预测」：引擎状态立刻翻转（默认关 → 开）",
+                  Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
         }
 
         // 「预测算法」（2026-10-14 加；2026-10-15 收口随 B4/Google 退役一起撤除）：
@@ -3037,8 +3037,8 @@ internal sealed partial class App
               !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
         Check("精细笔迹：开关撤掉后重启仍是开（常开）",
               Host.State.FineStrokeOn, $"FineStrokeOn = {Host.State.FineStrokeOn}");
-        Check("墨迹预测偏好也读回来了（重启后仍是关——测试里点成了关）",
-              !Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
+        Check("墨迹预测偏好也读回来了（重启后仍是开——测试里点成了开）",
+              Host.State.PredictTailOn, $"PredictTailOn = {Host.State.PredictTailOn}");
 
         // 关着开关时，"停在笔上 0.7 秒"必须**什么都不出**（开关真的在闸门上，不是装饰）
         {
@@ -3106,6 +3106,30 @@ internal sealed partial class App
 
         Recovery.DeleteAuto();
         Recovery.ClearRestartCount();
+
+        // 「界面大小」的**重启路径**（2026-10-16 修；用户报"调过界面大小、重启就不居中"）：
+        // 新建 UiHost 时工作区必须和屏幕用**同一套单位**（界面逻辑 = 物理 ÷ DPI ÷ UiScale）。
+        // `SetUiFactory` 会重建 UiHost——和重启走的是同一个构造函数，所以这里能验到；
+        // 运行中换档那条路本来就对（`SetUiScaleFromUi` 会重刷工作区），只有"重启后的第一份"错过。
+        {
+            Host.Commands.SetUiScale(1.3f);
+            SettleFrames(150);
+            SetUiFactory(() => new InkUi.FullUi());     // ← 重开界面 = 重建 UiHost（含工作区取数）
+            SettleFrames(200);
+            ui = CurrentUi as InkUi.FullUi;
+            var wa = Host.WorkArea;
+            var sc = Host.Screen;
+            Check("界面大小 1.3 下重开界面：工作区落在屏幕内（同一套单位，居中不偏）",
+                  wa.MaxX <= sc.MaxX + 1f && wa.MaxY <= sc.MaxY + 1f
+                  && wa.MaxX - wa.MinX > 100f && wa.MaxY - wa.MinY > 100f,
+                  $"WorkArea x[{wa.MinX:F0},{wa.MaxX:F0}] y[{wa.MinY:F0},{wa.MaxY:F0}] / "
+                  + $"Screen x[{sc.MinX:F0},{sc.MaxX:F0}]（UiScale={Host.UiScale:F2}）");
+            Host.Commands.SetUiScale(1f);               // 还原，别把后面的收尾带偏
+            SettleFrames(150);
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(150);
+            ui = CurrentUi as InkUi.FullUi;
+        }
 
         Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
         ExitCode = fail == 0 ? 0 : 1;

@@ -307,7 +307,7 @@ PPT 联动需要机器上装有 PowerPoint 或 WPS；没装也能正常批注，
 
 | 作用域 | 键 |
 |---|---|
-| 全局（任何程序在前台） | `Ctrl+Alt+Shift+T` 穿透 ｜ `Ctrl+Alt+Shift+X` 退出 ｜ `Ctrl+Alt+Shift+Q` 呼出盘（按住划向扇区；**穿透中也能用**，选扇区即退出穿透）｜ `Ctrl+Alt+Shift+W` 湿墨档位循环（预测默认开着，不想用可在设置里关） |
+| 全局（任何程序在前台） | `Ctrl+Alt+Shift+T` 穿透 ｜ `Ctrl+Alt+Shift+X` 退出 ｜ `Ctrl+Alt+Shift+Q` 呼出盘（按住划向扇区；**穿透中也能用**，选扇区即退出穿透）｜ `Ctrl+Alt+Shift+W` 湿墨档位循环（预测默认关，想更跟手可在设置里开） |
 | 批注内（默认键盘归批注层） | `Ctrl+P` 笔 ｜ `Ctrl+I` 荧光笔 ｜ `Ctrl+L` 激光笔 ｜ `Ctrl+E` 橡皮 ｜ `Ctrl+M` 选中 ｜ `Ctrl+S` 截图 |
 | 编辑 | `Ctrl+Z / Y`（重做也有 `Ctrl+Shift+Z`）撤销 / 重做 ｜ `Ctrl+A` 全选 ｜ `Ctrl+C / V` 复制 / 粘贴 ｜ `Delete` 删除 ｜ `Esc` 取消 ｜ 方向键微调（`Shift` ×10；**没选中时 ←→ 翻屏、↑↓ 滚画布**）｜ `Ctrl+= / Ctrl+-` 放大 / 缩小选中（连按合并成一步撤销） |
 | 其他 | `Ctrl+6` 换粗细 ｜ `Ctrl+B` 开 / 关白板 ｜ `Ctrl+Shift+C` 清空 ｜ `PageUp / PageDown` 翻屏 |
