@@ -215,6 +215,55 @@ public partial class InkEngine
         if (err != null) SetInkStatus("打开文档失败：" + err);
     }
 
+    /// <summary>
+    /// **「打开…」**（2026-10-16 合并入口：原「打开墨迹」＋「打开文档」，用户定 7→5）。
+    /// 一条"打开"收全——板书 .inkb / 图片 / PDF / PPT，**按扩展名分派**：
+    /// 单独一个 .inkb → 替换板书（先备份）；其余 → 铺页 / 放映（图片仍可多选）。
+    /// 放映中不响应；结果写进 <see cref="UiState.InkStatus"/>。
+    /// </summary>
+    internal void OpenBoardAnyFromUi()
+    {
+        if (PptMode) { SetInkStatus("放映中不打开（先退出放映）"); return; }
+        if (!ExportDialogEnabled) { SetInkStatus("自检模式不弹对话框"); return; }
+
+        string dir = GetUiPref("docDir");
+        BorrowFocusForDialog();
+        ExportDialogOpen = true;
+        string[] files;
+        try
+        {
+            files = ExportFileDialog.AskForOpenDocuments(OwnerHwnd(), dir,
+                        ExportFileDialog.OpenAnyFilter, "打开（板书 / 图片 / PDF / PPT）");
+        }
+        catch (Exception ex) { SetInkStatus("弹打开对话框失败：" + ex.Message); return; }
+        finally { ExportDialogOpen = false; ReturnFocusAfterDialog(); }
+        if (files == null || files.Length == 0) { SetInkStatus("已取消"); return; }
+        SetUiPref("docDir", System.IO.Path.GetDirectoryName(files[0]) ?? "");
+        OpenBoardAnyCore(files);
+    }
+
+    /// <summary>「打开…」的分派核心（自检直接调它，绕开对话框）。</summary>
+    internal void OpenBoardAnyCore(string[] files)
+    {
+        if (files == null || files.Length == 0) { SetInkStatus("没有选中文件"); return; }
+        // 板书文件 = "替换整块板书"的重动作：只认单独一份（混选里不做，把原因说清）。
+        bool anyInk = false;
+        foreach (var f in files)
+            if (string.Equals(System.IO.Path.GetExtension(f), ".inkb", StringComparison.OrdinalIgnoreCase))
+            { anyInk = true; break; }
+        if (anyInk && files.Length > 1)
+        {
+            SetInkStatus("板书文件（.inkb）请单独打开（它会替换整块板书）");
+            return;
+        }
+        if (anyInk) { OpenInkFile(files[0]); return; }
+        var err = OpenDocuments(files);
+        if (err != null) SetInkStatus("打开失败：" + err);
+    }
+
+    /// <summary>自检用：绕开对话框，直接按扩展名分派。</summary>
+    internal void OpenBoardAnyForTest(string[] files) => OpenBoardAnyCore(files);
+
     /// <summary>「关闭文档」：页位图 / 解码缓存 / PDF 全放；**批注留在画布上**。</summary>
     internal void CloseDocumentFromUi()
     {

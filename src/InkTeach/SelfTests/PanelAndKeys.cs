@@ -2146,7 +2146,7 @@ internal sealed partial class App
         {
             Check("启动器：打开面板默认停在主页", ui.MorePageForTest == 0, $"页 = {ui.MorePageForTest}");
             bool tilesOk = true;
-            for (int code = 0; code < 7; code++)
+            for (int code = 0; code < 8; code++)
             {
                 var t = ui.HubTileRectForTest(code);
                 if (t.IsEmpty || t.MinX < moreRect.MinX || t.MaxX > moreRect.MaxX
@@ -2158,7 +2158,7 @@ internal sealed partial class App
                 var t = ui.HubBottomRectForTest(i);
                 if (t.IsEmpty || t.MaxX > moreRect.MaxX || t.MaxY > moreRect.MaxY) bottomOk = false;
             }
-            Check("启动器：七格（课堂 3 ＋ 墨迹 4）＋ 底栏四格都在面板内", tilesOk && bottomOk,
+            Check("启动器：八格（课堂 3 ＋ 墨迹 5）＋ 底栏四格都在面板内", tilesOk && bottomOk,
                   $"面板 {moreRect.MaxX - moreRect.MinX:F0}×{moreRect.MaxY - moreRect.MinY:F0}");
 
             // 分辨率规范化 B：面板宽 = min(640, 55% 工作宽)
@@ -2247,7 +2247,7 @@ internal sealed partial class App
             SettleFrames(150);
             Check("点名窗：✕ 关窗", !Host.State.RollCardOpen);
 
-            // 命令格：空板书点「保存」，关面板 ＋ 引擎写"没有可保存"（点置灰也写状态）
+            // 命令格：空板书点「保存…」，关面板 ＋ 引擎写"没有可保存"（点置灰也写状态）
             Host.Commands.Clear();
             SettleFrames(150);
             var moreCell3 = ui.CellRectForTest(12);
@@ -2258,21 +2258,21 @@ internal sealed partial class App
             ClickPhysical((saveTile.MinX + saveTile.MaxX) * 0.5f * DpiScale,
                           (saveTile.MinY + saveTile.MaxY) * 0.5f * DpiScale);
             SettleFrames(200);
-            Check("启动器：空板书点「保存墨迹」→ 关面板、引擎写「没有可保存」",
+            Check("启动器：空板书点「保存…」→ 关面板、引擎写「没有可保存」",
                   !ui.MoreOpenForTest && Host.State.InkStatus.Contains("没有可保存"),
                   $"status={Host.State.InkStatus}");
 
-            // 「保存图片」（2026-10-02）：空板书同样 → 关面板 + 状态行说清
-            var moreCellImg = ui.CellRectForTest(12);
-            ClickPhysical((moreCellImg.MinX + moreCellImg.MaxX) * 0.5f * DpiScale,
-                          (moreCellImg.MinY + moreCellImg.MaxY) * 0.5f * DpiScale);
+            // 「打开…」（2026-10-16 合并入口）：自检模式 → 关面板 + 状态行说"不弹对话框"
+            var moreCellOpen = ui.CellRectForTest(12);
+            ClickPhysical((moreCellOpen.MinX + moreCellOpen.MaxX) * 0.5f * DpiScale,
+                          (moreCellOpen.MinY + moreCellOpen.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
-            var imgTile = ui.HubTileRectForTest(6);
-            ClickPhysical((imgTile.MinX + imgTile.MaxX) * 0.5f * DpiScale,
-                          (imgTile.MinY + imgTile.MaxY) * 0.5f * DpiScale);
+            var openTile = ui.HubTileRectForTest(4);
+            ClickPhysical((openTile.MinX + openTile.MaxX) * 0.5f * DpiScale,
+                          (openTile.MinY + openTile.MaxY) * 0.5f * DpiScale);
             SettleFrames(200);
-            Check("启动器：空板书点「保存图片」→ 关面板、引擎写「没有可保存」",
-                  !ui.MoreOpenForTest && Host.State.InkStatus.Contains("没有可保存"),
+            Check("启动器：自检模式点「打开…」→ 关面板、引擎写「不弹对话框」",
+                  !ui.MoreOpenForTest && Host.State.InkStatus.Contains("不弹对话框"),
                   $"status={Host.State.InkStatus}");
 
             // 「设置」格 → 设置子页；返回箭头回启动器

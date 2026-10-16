@@ -1426,6 +1426,39 @@ internal sealed partial class App
             Check("放映中：退出放映后桌面板书原样（那两条真的什么都没做）",
                   Doc.PageKey == 0 && DocSig() == sigPpt, $"页键 {Doc.PageKey}，{Doc.Strokes.Count} 条");
         }
+        // ---- 「保存…/打开…」的分派（2026-10-16 合并入口）：按扩展名走对路 ----
+        {
+            Doc.Clear();
+            var disp = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 6f * DpiScale };
+            for (int k = 0; k <= 30; k++) disp.AddPoint(420 + k * 12, 320, 1f, NowMs);
+            Doc.AddStroke(disp);
+            Doc.InvalidateAll();
+
+            string anyInk = Path.Combine(temp, "分派-板书.inkb");
+            string anyPng = Path.Combine(temp, "分派-图片.png");
+            Check("保存…：.inkb → 按扩展名走板书文件", SaveBoardAnyForTest(anyInk) && File.Exists(anyInk),
+                  $"状态：{InkStatus}");
+            Check("保存…：.png → 按扩展名走图片", SaveBoardAnyForTest(anyPng) && File.Exists(anyPng),
+                  $"状态：{InkStatus}");
+            bool pngHead = false;
+            try
+            {
+                var head = File.ReadAllBytes(anyPng);
+                pngHead = head.Length > 8 && head[0] == 0x89 && head[1] == 0x50 && head[2] == 0x4E;
+            }
+            catch { }
+            Check("保存…：.png 内容真的是 PNG", pngHead, "");
+
+            Doc.Clear();
+            Doc.InvalidateAll();
+            OpenBoardAnyForTest(new[] { anyInk });
+            Check("打开…：单个 .inkb → 装回板书", Doc.Strokes.Count == 1, $"{Doc.Strokes.Count} 条");
+            int beforeMix = Doc.Strokes.Count;
+            OpenBoardAnyForTest(new[] { anyInk, anyPng });
+            Check("打开…：混选 .inkb → 拒（请单独打开）、板书不动",
+                  InkStatus.Contains("单独打开") && Doc.Strokes.Count == beforeMix,
+                  $"状态：{InkStatus}");
+        }
         Doc.ResetToSinglePage();
         Doc.ClearHistory();
 

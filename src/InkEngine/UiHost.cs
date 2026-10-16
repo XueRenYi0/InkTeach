@@ -148,7 +148,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     /// <summary>「历史板书」：起始目录落在历史目录里的"打开墨迹"。</summary>
     public void OpenInkHistory() => _engine.OpenInkHistoryFromUi();
     public void SaveBoardImage() => _engine.SaveBoardImageFromUi();
+    public void SaveBoardAny() => _engine.SaveBoardAnyFromUi();
     public void OpenDocument() => _engine.OpenDocumentFromUi();
+    public void OpenBoardAny() => _engine.OpenBoardAnyFromUi();
     public void CloseDocument() => _engine.CloseDocumentFromUi();
     public void StartReplay() => _engine.StartReplayFromUi();
     public void StopReplay() => _engine.StopReplayFromUi();

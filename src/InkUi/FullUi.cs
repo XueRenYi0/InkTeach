@@ -2455,12 +2455,13 @@ public sealed class FullUi : IOverlayUi
     private int HubCount(int section) => HubCounts[Math.Clamp(section, 0, HubCounts.Length - 1)];
 
     /// <summary>
-    /// 每个分组的格子数：课堂 3 个（计时 / 点名 / 随机一人）；墨迹 **7 个**
-    /// （保存墨迹 / 打开墨迹 / 墨迹回放 / 保存图片 / 打开文档 / 关闭文档 /
-    /// **历史板书**，最后一个是 2026-10-14 加的：找回以前写过又清掉/关掉的板书）。
+    /// 每个分组的格子数：课堂 3 个（计时 / 点名 / 随机一人）；墨迹 **5 个**
+    /// （**保存… / 打开… / 墨迹回放 / 关闭文档 / 历史板书**——2026-10-16 用户定合并：
+    /// 原"保存墨迹＋保存图片"并为「保存…」、"打开墨迹＋打开文档"并为「打开…」，
+    /// 按扩展名分派；历史板书是 2026-10-14 加的找回入口）。
     /// 格子编号（`HubTileCode`）从这里算出来，**不写死 3**——加格子不会再串段。
     /// </summary>
-    private static readonly int[] HubCounts = { 3, 7 };
+    private static readonly int[] HubCounts = { 3, 5 };
 
     /// <summary>第 section 组的组头矩形。</summary>
     private RectF HubHeadRect(int section)
@@ -2745,26 +2746,24 @@ public sealed class FullUi : IOverlayUi
     /// <summary>
     /// 启动器格子的表：`Hint` **不再画在格子里**（2026-10-02 第二批：搬进悬停/长按提示），
     /// 但它是提示的**唯一文案来源**——绘制、命中、提示都读这一份。
-    /// 格子编号：课堂 0..2（计时 / 点名 / 随机一人）、墨迹 3..6（保存墨迹 / 打开墨迹 /
-    /// 墨迹回放 / 保存图片）。
+    /// 格子编号：课堂 0..2（计时 / 点名 / 随机一人）、墨迹 3..7（保存… / 打开… /
+    /// 墨迹回放 / 关闭文档 / 历史板书——2026-10-16 合并后）。
     /// </summary>
     private (string Label, string Hint, bool Enabled, bool Danger) HubTileInfo(int code) => code switch
     {
         0 => ("计时器", "倒计时 / 正计时 / 秒表；卡片可拖动、双击放大", true, false),
         1 => ("点名", "全名单，抽过的不重复；范围可设", true, false),
         2 => ("随机一人", "自动抽一个，1.5 秒自动关", true, false),
-        3 => ("保存墨迹", "把整份板书存成 .inkb 文件", _host != null && !_host.State.PptMode && _host.State.StrokeCount > 0, false),
-        4 => ("打开墨迹", "打开一份 .inkb，替换当前板书（先备份）", _host != null && !_host.State.PptMode, false),
+        3 => ("保存…", "整份板书存成 .inkb，或存成图片（jpg / png，好发微信）", _host != null && !_host.State.PptMode && _host.State.StrokeCount > 0, false),
+        4 => ("打开…", "打开板书(.inkb) / 图片 / PDF / PPT；图片可多选", _host != null && !_host.State.PptMode, false),
         5 => ("墨迹回放", "把这一屏的板书重演一遍（只读，不动板书）", _host != null && (_host.State.ReplayActive || _host.State.StrokeCount > 0), false),
-        6 => ("保存图片", "把整块板书存成图片（png / jpg，好发微信）", _host != null && !_host.State.PptMode && _host.State.StrokeCount > 0, false),
-        7 => ("打开文档", "图片/PDF 铺成页批注；PPT 走 Office/WPS 直接进放映", _host != null && !_host.State.PptMode, false),
-        8 => ("关闭文档",
+        6 => ("关闭文档",
               _host != null && _host.State.DocOpen
                   ? $"关掉《{_host.State.DocInfo}》；批注留在画布上"
                   : "关掉当前文档；批注留在画布上",
               _host != null && _host.State.DocOpen, false),
         // 历史板书（2026-10-14 加）：引擎自动留的板书画布快照（不含截图），这里是找回入口。
-        9 => ("历史板书",
+        7 => ("历史板书",
               "找回以前写在板书 / 桌面上的墨迹（自动留存，停手时写；不含截图）",
               _host != null && !_host.State.PptMode && _host.State.HistoryCount > 0, false),
         _ => ("", "", false, false),
@@ -2931,28 +2930,20 @@ public sealed class FullUi : IOverlayUi
             case 0: CloseMore(); _host.Commands.OpenTimerCard(); break;
             case 1: CloseMore(); _host.Commands.OpenRollCard(); break;
             case 2: CloseMore(); _host.Commands.OpenRollOne(); break;
-            case 3: CloseMore(); _host.Commands.SaveInkFile(); break;
-            case 4: CloseMore(); _host.Commands.OpenInkFile(); break;
+            case 3: CloseMore(); _host.Commands.SaveBoardAny(); break;    // 保存…（2026-10-16 合并入口）
+            case 4: CloseMore(); _host.Commands.OpenBoardAny(); break;    // 打开…（2026-10-16 合并入口）
             case 5:
                 CloseMore();
                 if (_host.State.ReplayActive) _host.Commands.StopReplay();
                 else _host.Commands.StartReplay();
                 break;
-            case 6:                                   // 保存图片（2026-10-02）
-                CloseMore();
-                _host.Commands.SaveBoardImage();
-                break;
-            case 7:                                   // 打开文档（2026-10-07）
-                CloseMore();
-                _host.Commands.OpenDocument();
-                break;
-            case 9:                                   // 历史板书（2026-10-14）
-                CloseMore();
-                _host.Commands.OpenInkHistory();
-                break;
-            case 8:                                   // 关闭文档
+            case 6:                                   // 关闭文档
                 CloseMore();
                 _host.Commands.CloseDocument();
+                break;
+            case 7:                                   // 历史板书（2026-10-14）
+                CloseMore();
+                _host.Commands.OpenInkHistory();
                 break;
         }
         Invalidate();

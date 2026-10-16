@@ -477,11 +477,27 @@ public interface IEngineCommands
     void SaveBoardImage();
 
     /// <summary>
+    /// **保存…**（2026-10-16 合并入口：原「保存墨迹」＋「保存图片」，用户定 7→5）：
+    /// 一条"另存为"，类型栏三条（图片 JPG / 图片 PNG / 板书 .inkb），**按扩展名分派**：
+    /// .inkb → 整份板书文件；图片 → 整块板书出图（白底）。空板书 / 放映中不响应；
+    /// 结果写进 <see cref="UiState.InkStatus"/>。
+    /// </summary>
+    void SaveBoardAny();
+
+    /// <summary>
     /// **打开文档**（图片可多选 / PDF 一份；2026-10-07）：把文件铺成"一叠页"——
     /// 纵向排、可按页翻，笔迹照旧写在上面（页图不进笔迹：不存档、不导出、不回放）。
     /// 弹系统多选对话框；结果写进 <see cref="UiState.InkStatus"/>；放映中不响应。
     /// </summary>
     void OpenDocument();
+
+    /// <summary>
+    /// **打开…**（2026-10-16 合并入口：原「打开墨迹」＋「打开文档」，用户定 7→5）：
+    /// 一条"打开"收全——板书 .inkb / 图片 / PDF / PPT，**按扩展名分派**（单独 .inkb →
+    /// 替换板书、先备份；图片可多选铺页；PPT 直接放映）。放映中不响应；
+    /// 结果写进 <see cref="UiState.InkStatus"/>。
+    /// </summary>
+    void OpenBoardAny();
 
     /// <summary>
     /// **关闭文档**：页位图 / 解码缓存 / PDF 文档全放（**批注留在画布上**，不跟着走）。

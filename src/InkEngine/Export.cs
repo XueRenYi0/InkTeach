@@ -918,6 +918,17 @@ internal static class ExportFileDialog
         "PPT 演示文稿 (" + PptLaunch.FilterSpec + ")\0" + PptLaunch.FilterSpec + "\0" +
         "所有文件 (*.*)\0*.*\0\0";
 
+    /// <summary>
+    /// 「打开…」（2026-10-16 合并入口：原「打开墨迹」＋「打开文档」）的过滤器：
+    /// 在 <see cref="DocumentFilter"/> 前**再加一条混合项和一条纯板书项（含 *.inkb）**；
+    /// "分工"仍不在对话框里做——调用方按扩展名分派。
+    /// </summary>
+    internal const string OpenAnyFilter =
+        "板书、图片、PDF 与 PPT\0*.inkb;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.pdf;" +
+        PptLaunch.FilterSpec + "\0" +
+        "板书文件 (*.inkb)\0*.inkb\0" +
+        DocumentFilter;
+
     [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool GetOpenFileNameW([In, Out] OpenFileName ofn);
 
@@ -974,6 +985,42 @@ internal static class ExportFileDialog
         return string.IsNullOrEmpty(path) ? null : path;
     }
 
+    /// <summary>
+    /// 「保存…」（2026-10-16 合并入口：原「保存墨迹」＋「保存图片」）：一条"另存为"，
+    /// 类型栏三条——图片 JPG（白底，默认，好发微信）/ 图片 PNG（白底）/ 板书文件 .inkb。
+    /// **按最终扩展名分派**（调用方看返回路径的扩展名决定存板书还是出图）。
+    /// </summary>
+    private const string BoardSaveFilter =
+        "图片 JPG（白底 · 好发微信）\0*.jpg;*.jpeg\0"
+      + "图片 PNG（白底 · 无损）\0*.png\0"
+      + "板书文件 (*.inkb · 以后可再打开)\0*.inkb\0\0";
+
+    /// <summary>"保存…"：弹另存为。返回 null = 取消。</summary>
+    public static string AskForBoardSave(IntPtr owner, string suggestedName, string initialDir)
+    {
+        StartDialogWatcher();
+        InstallDialogPositionHook();
+        var ofn = new OpenFileName
+        {
+            lStructSize = SizeOfOpenFileName,
+            hwndOwner = owner,
+            lpstrFilter = BoardSaveFilter,
+            nFilterIndex = 1,
+            lpstrFile = suggestedName + new string('\0', Math.Max(0, 512 - suggestedName.Length)),
+            nMaxFile = 512,
+            lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
+            lpstrTitle = "保存（板书 / 图片）",
+            lpstrDefExt = "jpg",
+            Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
+        };
+        bool ok;
+        try { ok = GetSaveFileNameW(ofn); }
+        finally { RemoveDialogPositionHook(); }
+        if (!ok) return null;
+        var path = (ofn.lpstrFile ?? "").Trim().TrimEnd('\0');
+        return string.IsNullOrEmpty(path) ? null : path;
+    }
+
     // ---- "打开文档…"（图片批量 / PDF；2026-10-07，图片与 PDF 导入第一步）------------
 
     /// <summary>
@@ -985,7 +1032,8 @@ internal static class ExportFileDialog
     ///
     /// 返回 null = 用户取消（或一个都没选中）。返回的每条都是**完整路径字符串**。
     /// </summary>
-    public static string[] AskForOpenDocuments(IntPtr owner, string initialDir)
+    public static string[] AskForOpenDocuments(IntPtr owner, string initialDir,
+                                               string filter = null, string title = null)
     {
         StartDialogWatcher();
         InstallDialogPositionHook();
@@ -996,13 +1044,13 @@ internal static class ExportFileDialog
         {
             lStructSize = SizeOfOpenFileName,
             hwndOwner = owner,
-            lpstrFilter = DocumentFilter,
+            lpstrFilter = filter ?? DocumentFilter,
             nFilterIndex = 1,
             // 字段只能是 string（见 OpenFileName 里的说明）：预分配一整条空缓冲
             lpstrFile = new string('\0', cap),
             nMaxFile = cap,
             lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
-            lpstrTitle = "打开文档（图片可多选；PPT 直接放映）",
+            lpstrTitle = title ?? "打开文档（图片可多选；PPT 直接放映）",
             lpstrDefExt = "pdf",
             Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_ALLOWMULTISELECT,
         };

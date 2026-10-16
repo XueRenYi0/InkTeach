@@ -284,4 +284,49 @@ public partial class InkEngine
         SetInkStatus($"已保存图片 {Path.GetFileName(path)}（{w}×{h}）");
         return true;
     }
+
+    // =====================================================================
+    //  「保存…」/「打开…」——2026-10-16 合并入口（原「保存墨迹」＋「保存图片」、
+    //  「打开墨迹」＋「打开文档」，用户定 7→5 格）。**按扩展名分派**，内部全走老路：
+    //  .inkb → 板书文件（SaveInkFile / OpenInkFile）；图片 → 整块板书出图；
+    //  图片/PDF/PPT → 铺页 / 放映（OpenDocuments）。对话框只有一个（各一条）。
+    // =====================================================================
+
+    /// <summary>
+    /// **「保存…」**（2026-10-16 合并入口：原「保存墨迹」＋「保存图片」）。
+    /// 一条"另存为"收三种：图片 JPG（默认）/ 图片 PNG / 板书 .inkb——
+    /// **按最终扩展名分派**（.inkb → 整份板书文件；图片 → 整块板书出图，白底）。
+    /// 空板书 / 放映中不响应；结果写进 <see cref="UiState.InkStatus"/>。
+    /// </summary>
+    internal void SaveBoardAnyFromUi()
+    {
+        if (PptMode) { SetInkStatus("放映中由 PPT 自己保存（退出放映后再用这里）"); return; }
+        if (Doc.Strokes.Count == 0) { SetInkStatus("还没有可保存的墨迹"); return; }
+        if (!ExportDialogEnabled) { SetInkStatus("自检模式不弹对话框"); return; }
+
+        string dir = GetUiPref("inkDir");
+        string suggested = $"板书-{DateTime.Now:yyyyMMdd-HHmm}.jpg";
+        BorrowFocusForDialog();
+        ExportDialogOpen = true;
+        string path;
+        try { path = ExportFileDialog.AskForBoardSave(OwnerHwnd(), suggested, dir); }
+        catch (Exception ex) { SetInkStatus("弹保存对话框失败：" + ex.Message); return; }
+        finally { ExportDialogOpen = false; ReturnFocusAfterDialog(); }
+        if (path == null) { SetInkStatus("已取消"); return; }
+        SetUiPref("inkDir", Path.GetDirectoryName(path) ?? "");
+        SaveBoardAnyCore(path);
+    }
+
+    /// <summary>「保存…」的分派核心（自检直接调它，绕开对话框）。</summary>
+    internal bool SaveBoardAnyCore(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        if (ext == ".inkb") return SaveInkFile(path);
+        // 图片：白底两条（JPG = 2、PNG 白底 = 3）；手动敲成 .bmp 也认（4）。
+        int fmt = ext is ".jpg" or ".jpeg" ? 2 : ext == ".bmp" ? 4 : 3;
+        return SaveBoardImage(path, fmt);
+    }
+
+    /// <summary>自检用：绕开对话框，直接按扩展名分派。</summary>
+    internal bool SaveBoardAnyForTest(string path) => SaveBoardAnyCore(path);
 }
