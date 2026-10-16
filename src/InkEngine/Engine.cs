@@ -104,7 +104,7 @@ public partial class InkEngine
             or "--nosmooth" or "--printersafe"
             or "--mean2gauss" or "--mean2guniform" or "--mean2gsigma" or "--mean2gfast"
             or "--mean2glo" or "--mean2ghi" or "--mean2gtip"
-            or "--predict2" or "--nopredict2" or "--syscursor" => true,
+            or "--predict2" or "--nopredict2" or "--syscursor" or "--nosyscursor" => true,
         _ => false,
     };
 
@@ -2442,9 +2442,11 @@ public partial class InkEngine
                 if (args[i] == "--wetpred" && float.TryParse(args[i + 1], out float wp))
                     _wetPredScale = Math.Clamp(wp, 0f, 1f);
             ApplyPredictTailSetting();
-            // 光标 A/B（2026-10-16，用户提议"把系统的笔光标当软件内光标"）：`--syscursor`
-            // 让**荧光笔 / 激光**也改用系统斜笔（硬件光标、零延迟），不画自绘落点。
-            if (args.Contains("--syscursor")) SysCursorAll = true;
+            // 光标风格（2026-10-16 用户拍板：**三支笔统一系统斜笔＝默认**）：
+            // `--nosyscursor` 退回"自绘落点"（笔尖环 / 圆盘 / 实心点）做对照；
+            // `--syscursor` 是默认行为，保留写法（写不写一样）。
+            if (args.Contains("--nosyscursor")) SysCursorAll = false;
+            else if (args.Contains("--syscursor")) SysCursorAll = true;
             // [停用] if (args.Contains("--inkmodel")) motionMode = StrokeMotionMode.Spring;
             for (int i = 0; i < args.Length - 1; i++)
             {
@@ -7574,15 +7576,15 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// （A/B，2026-10-16）`--syscursor`：**笔 / 荧光笔 / 激光**一律改用系统斜笔光标
-    /// （硬件光标、零延迟跟随），不再画自绘落点（丢掉"落点粗细"预览）。默认关 = 现状。
-    /// 真机对比"跟手 vs 信息量"之后再决定要不要转正。见 ToolCursorKind / DrawnCursor。
+    /// **三支笔（笔 / 荧光笔 / 激光）一律用系统斜笔光标**（硬件光标、零延迟跟随），
+    /// 不画自绘落点（笔尖环 / 荧光笔圆盘 / 激光实心点）。
     ///
-    /// 2026-10-16 当天从"荧光笔 / 激光"扩到**笔**：用户拿手写板跑 A/B，发现只有画画笔
-    /// 还是自绘圆环——因为笔模式要问"设备出身"（见 PenShowsCursor），而他那台板子被
-    /// Windows 报成了"屏内笔"，判定翻车。这个开关先兜住：不看设备，一律系统斜笔。
+    /// 2026-10-16：**这是默认**（用户真机 A/B 后拍板"把系统的笔光标当软件内光标"，转正）。
+    /// 缘起：手写板被 Windows 报成"屏内笔"时，笔模式走"藏光标＋画环"、和另外两支笔不统一；
+    /// 用户试过统一档后定为默认。`--nosyscursor` 退回自绘落点（对照 / 备选）。
+    /// 橡皮不在内——它的圆环/方框是"会擦掉多大一块"，是功能不是装饰。
     /// </summary>
-    internal static bool SysCursorAll;
+    internal static bool SysCursorAll = true;
 
     /// <summary>
     /// 画布上的工具光标（不含滚动条、操作条、手柄）。
@@ -7597,12 +7599,11 @@ public partial class InkEngine
         // 用户点名要 InkClass 那种斜笔：热点在笔尖、不挡视线，且一路跟着落点走
         // （手写板写字时尤其需要，见 PenDeviceOnScreen 的注释）。
         // 用的是**系统那支 IDC_PEN**（自绘彩笔版试过、被用户否掉，见 CursorKind.Pen 的注释）。
-        // 只有"笔尖就压在屏幕上"的触屏笔才藏起来（笔尖即落点，环由自绘表达）；
-        // `--syscursor` 时**不管出身**，一律给斜笔（见 SysCursorAll 的注释）。
+        // 默认（SysCursorAll）**不管出身**，一律斜笔；`--nosyscursor` 退回时才分：
+        // "笔尖就压在屏幕上"的触屏笔藏起来（笔尖即落点，环由自绘表达）。
         Tool.Pen => (SysCursorAll || PenShowsCursor) ? CursorKind.Pen : CursorKind.Hidden,
-        // 荧光笔 / 激光：默认"藏系统光标 + 自绘落点"（圆盘 / 实心点带着**粗细信息**）；
-        // `--syscursor`（2026-10-16 A/B：用户提议"系统的笔光标当软件内光标"——硬件光标
-        // **不经过我们的渲染循环**，输入一到就动，理论上更跟手）时改用系统斜笔。
+        // 荧光笔 / 激光：默认（2026-10-16 用户拍板）**系统斜笔**（硬件光标零延迟）；
+        // `--nosyscursor` 退回"藏系统光标 + 自绘落点"（圆盘 / 实心点，带粗细信息）。
         Tool.Highlighter => SysCursorAll ? CursorKind.Pen : CursorKind.Hidden,
         Tool.Laser => SysCursorAll ? CursorKind.Pen : CursorKind.Hidden,
         // 落点由自绘圆环 / 矩形表达；开了 EraserKeepsSystemCursor 就两个都显示（A/B 用）。
@@ -7803,15 +7804,15 @@ public partial class InkEngine
                 // 8.3.0 那个 24×24 角括号被用户点名"比较难用"，整批退场。
                 return ToolCursorShape.None;
                 case Tool.Pen:
-                    // 已经在显示斜笔（鼠标 / 手写板；`--syscursor` 时含屏内笔）：落点由它
-                    // 一路表达，**不再叠自绘环**——"笔上再套一个圈"就是这段开头说的那种叠影。
+                    // 已经在显示斜笔（鼠标 / 手写板 / 默认档下的所有笔）：落点由它一路表达，
+                    // **不再叠自绘环**——"笔上再套一个圈"就是这段开头说的那种叠影。
                     if (SysCursorAll || PenShowsCursor) return ToolCursorShape.None;
                     return penTip && _drawing ? ToolCursorShape.None : ToolCursorShape.Ring;
                 case Tool.Highlighter:
-                    if (SysCursorAll) return ToolCursorShape.None;   // A/B：斜笔一路表达落点
+                    if (SysCursorAll) return ToolCursorShape.None;   // 默认：斜笔一路表达落点
                     return penTip && _drawing ? ToolCursorShape.None : ToolCursorShape.Disc;
                 case Tool.Laser:
-                    if (SysCursorAll) return ToolCursorShape.None;   // A/B：斜笔一路表达落点
+                    if (SysCursorAll) return ToolCursorShape.None;   // 默认：斜笔一路表达落点
                     return penTip && _drawing ? ToolCursorShape.None : ToolCursorShape.Dot;
                 default:
                     return ToolCursorShape.None;
@@ -11868,7 +11869,7 @@ public partial class InkEngine
     internal int SliderStepCount() => WidthStepsForSelection().Length;
 
     /// <summary>
-    /// 按下粗细滑条：**连续拖动**开始（8.2.0，不再是"点一下吸到档位"）。
+    /// 按下粗细滑条：**连续拖动**开始（8.2.0 起；2026-10-16 起值**整数吸附**、不再有小数）。
     /// 按下这一下就立刻生效（和旧手感一致：点哪儿就是哪儿），拖动中反复改、
     /// 松手才进撤销栈（<see cref="EndWidthSliderDrag"/>）。
     /// </summary>
@@ -11919,12 +11920,13 @@ public partial class InkEngine
         _dirty = true;
     }
 
-    /// <summary>x → 滑条上的连续值（逻辑像素），夹在 <see cref="WidthRangeForSelection"/> 里。</summary>
+    /// <summary>x → 滑条上的值（逻辑像素，**整数吸附**——2026-10-16 用户："粗细不要小数点"），
+    /// 夹在 <see cref="WidthRangeForSelection"/> 里。</summary>
     private float SliderValueAtX(float x, in RectF aabb)
     {
         var (min, max) = WidthRangeForSelection();
         float t = SelectionHandles.SliderTAt(x, aabb, DpiScale, ViewportCanvas, SelectionHandles.SwatchCount);
-        return min + (max - min) * t;
+        return MathF.Round(min + (max - min) * t);
     }
 
     // ---- 自定义取色板（8.2.0：色相条 + 饱和度/明度方块 + 当前色预览）--------

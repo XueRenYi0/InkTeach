@@ -504,6 +504,28 @@ internal sealed partial class App
         Tool = Tool.Pen;
         PointerX = 100; PointerY = 100;
 
+        // ---- 默认档（2026-10-16 用户拍板）：**三支笔一律系统斜笔** ----
+        // 这一节钉"默认就是它"；下面整段**显式按退回档（--nosyscursor）**验证旧的
+        // "藏光标＋自绘落点"行为——环/盘/点都保留着，随时能退回去。
+        CheckBool("默认＝三支笔系统斜笔（不用带开关）", SysCursorAll, $"SysCursorAll={SysCursorAll}");
+        LastPointerType = Native.PT_PEN;
+        PenDeviceOnScreen = true;                  // 故意设成"屏内笔"：默认档下也该给斜笔
+        Tool = Tool.Pen;
+        Check("默认·屏内笔悬停：系统斜笔（不再藏）", CursorKind.Pen);
+        CheckBool("默认·屏内笔悬停：不叠自绘圆环", DrawnCursor == ToolCursorShape.None, $"{DrawnCursor}");
+        Tool = Tool.Highlighter;
+        Check("默认·荧光笔：系统斜笔", CursorKind.Pen);
+        CheckBool("默认·荧光笔：不画圆盘", DrawnCursor == ToolCursorShape.None, $"{DrawnCursor}");
+        Tool = Tool.Laser;
+        Check("默认·激光：系统斜笔", CursorKind.Pen);
+        CheckBool("默认·激光：不画实心点", DrawnCursor == ToolCursorShape.None, $"{DrawnCursor}");
+        Tool = Tool.Pen;
+        PenDeviceOnScreen = false;
+        LastPointerType = Native.PT_MOUSE;
+
+        // ---- 以下整段按**退回档**跑（`--nosyscursor`）：藏光标＋自绘落点逐条保持原样 ----
+        SysCursorAll = false;
+
         // ---- 输入设备 × 工具 ----
         // 规则（2026-09-27 更新，用户报"手写板书写时光标消失"之后定的）：
         //   · 鼠标 / 手写板 → **一路给斜笔**（自绘彩笔：热点在笔尖、跟墨色/笔宽）；
@@ -913,32 +935,13 @@ internal sealed partial class App
                 CursorAppliedForTest == hPen, $"已设 0x{CursorAppliedForTest:X}");
         }
 
-        // ---- `--syscursor` A/B（2026-10-16 扩到笔）：**三支笔一律系统斜笔** ----
-        //
-        // 起因：用户拿手写板跑 A/B，发现"荧光笔 / 激光是斜笔、画画笔却是自绘圆环"——
-        // 笔模式的斜笔要过"设备出身"这道判定（PenDeviceOnScreen），而他那台板子被
-        // Windows 报成了"屏内笔"，于是走了"藏光标＋画环"。修法之一：`--syscursor`
-        // 也覆盖笔模式——不看设备，一律系统斜笔、不画落点（真机对比用）。
+        // ---- 恢复默认档（三支笔系统斜笔）：后面的用例按产品默认路径走 ----
         {
             SysCursorAll = true;
-            LastPointerType = Native.PT_PEN;
-            PenDeviceOnScreen = true;              // 故意设成"屏内笔"：A/B 下也该给斜笔
-            Tool = Tool.Pen;
-            Check("A/B·屏内笔 + --syscursor：给系统斜笔（不再藏）", CursorKind.Pen);
-            CheckBool("A/B·屏内笔 + --syscursor：不叠自绘圆环",
-                DrawnCursor == ToolCursorShape.None, $"{DrawnCursor}");
-            Tool = Tool.Highlighter;
-            Check("A/B·荧光笔 + --syscursor：系统斜笔", CursorKind.Pen);
-            CheckBool("A/B·荧光笔 + --syscursor：不画圆盘",
-                DrawnCursor == ToolCursorShape.None, $"{DrawnCursor}");
-            Tool = Tool.Laser;
-            Check("A/B·激光 + --syscursor：系统斜笔", CursorKind.Pen);
-            CheckBool("A/B·激光 + --syscursor：不画实心点",
-                DrawnCursor == ToolCursorShape.None, $"{DrawnCursor}");
-            SysCursorAll = false;                  // 还原：后面的用例按默认路径走
-            Tool = Tool.Pen;
-            PenDeviceOnScreen = false;
             LastPointerType = Native.PT_MOUSE;
+            PenDeviceOnScreen = false;
+            Tool = Tool.Pen;
+            Check("恢复默认档：笔 · 系统斜笔", CursorKind.Pen);
         }
 
         // 自绘光标导出成图，供人眼检查形状与抗锯齿。

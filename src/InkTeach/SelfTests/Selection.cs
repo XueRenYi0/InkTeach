@@ -329,12 +329,17 @@ internal sealed partial class App
             SettleFrames(5300);                                // 等窗口（5 秒）过期
             HoverBar((int)SelBarButton.Export);
             SettleFrames(470); StepEngineTooltip();
-            bool slowEarly = !TooltipShown;                    // 470ms 还不该亮
-            SettleFrames(1150);                                // 累计 ≥1.5s 才该亮
-            HoverBar((int)SelBarButton.Export);
-            StepEngineTooltip();
-            Check("隔 5 秒以上：恢复完整延迟（470ms 不亮、1.6s 亮）",
-                  slowEarly && TooltipShown, $"早亮={!slowEarly}，后亮={TooltipShown}");
+            bool slowEarly = !TooltipShown;                    // 470ms 还不该亮（慢档 1.5s）
+            bool slowLate = false;                             // 之后该亮；反复重申 hover 顶住迟到消息
+            for (int i = 0; i < 8 && !slowLate; i++)
+            {
+                SettleFrames(220);
+                HoverBar((int)SelBarButton.Export);            // 同格重申：不重新计时（同 id 早退）
+                StepEngineTooltip();
+                slowLate = TooltipShown;
+            }
+            Check("隔 5 秒以上：恢复完整延迟（470ms 不亮、之后亮）",
+                  slowEarly && slowLate, $"早亮={!slowEarly}，后亮={slowLate}");
             SelBarHover = -1;
             UpdateEngineTooltip();
         }
@@ -911,11 +916,11 @@ internal sealed partial class App
                   $"面板白底 {panelWhite} 像素；改色 {(colorChanged ? "对" : "不对")}，"
                   + $"撤销后回原色 {(colorBack ? "是" : "否")}");
 
-            // ⑤ 粗细滑条（8.2.0：连续拖动 + 实时数值）
+            // ⑤ 粗细滑条（8.2.0：连续拖动 + 实时数值；2026-10-16 起**整数吸附**）
             //
             // 判据（用户 2026-09-30："做滑动，记得滑动的时候显示值，参考色带"）：
-            //   · 按下 → 拖到**中点** → 松手：选中对象的宽度 == 滑条中点的连续值
-            //     （不再是"最近的那一档"）；
+            //   · 按下 → 拖到 **3/4 处** → 松手：选中对象的宽度 == 该处的**整数值**
+            //     （不再是"最近的那一档"，也不是小数）；
             //   · 拖动中引擎报的"显示值" == 同一个数（画在滑钮上方的那行字读的就是它）；
             //   · 这一次拖拽**只记一步撤销**（拖动中反复 Redo、松手才提交）；
             //   · 选中框跟着变（墨真的变粗了），一次撤销回原宽。
@@ -928,7 +933,7 @@ internal sealed partial class App
             int undoBefore = Doc.UndoDepth;
             float sx0 = SelectionHandles.SliderXOfT(0.25f, barFrame.CanvasAabb, dpi, ViewportCanvas,
                                                     SelectionHandles.SwatchCount);
-            float sx1 = SelectionHandles.SliderXOfT(0.5f, barFrame.CanvasAabb, dpi, ViewportCanvas,
+            float sx1 = SelectionHandles.SliderXOfT(0.75f, barFrame.CanvasAabb, dpi, ViewportCanvas,
                                                     SelectionHandles.SwatchCount);
             float sy = (sliderT.MinY + sliderT.MaxY) * 0.5f;
             bool tookSlider = SelectionGestureForTest(sx0, sy);
@@ -937,20 +942,21 @@ internal sealed partial class App
             float shownValue = WidthSliderDragValue;       // 拖动中"显示的值"（HUD 同口径）
             EndPanelDragForTest(sx1, sy);
             SettleFrames(140);
-            float midWant = wMin + (wMax - wMin) * 0.5f;
+            // 整数吸附后的期望值（这一条拖到 3/4 处）
+            float midWant = MathF.Round(wMin + (wMax - wMin) * 0.75f);
             bool midApplied = MathF.Abs(bA.Width / dpi - midWant) < 0.15f;
             bool shownMatches = MathF.Abs(shownValue - midWant) < 0.15f;
             int depthAfterDrag = Doc.UndoDepth;
             bool oneUndoStep = depthAfterDrag == undoBefore + 1;
             float midAppliedValue = bA.Width / dpi;
             float frameWAfter = LiveSelectionFrame.CanvasAabb.MaxX - LiveSelectionFrame.CanvasAabb.MinX;
-            // 新 20 档表（2026-10-15）中点 = 10.5，离 fixture 的 10.0 只差 0.5 逻辑像素——
-            // "真的变了"的余量收到 0.2（0.5 仍是它的 2.5 倍；15 档时代差 10.5，写的 +1）。
+            // 2026-10-16 起：滑条整数吸附，这一条拖到 3/4 处 = 15（fixture 是 10.0，差 5）。
+            // "真的变了"的余量保持 0.2。
             bool widthChanged = MathF.Abs(midAppliedValue - wBefore) > 0.2f;
             Doc.Undo();
             SettleFrames(140);
             bool widthBack = MathF.Abs(bA.Width / dpi - wBefore) < 0.02f;
-            Check("粗细滑条：拖到中点 → 连续值生效、显示值一致、一步撤销、框跟着变",
+            Check("粗细滑条：拖到 3/4 处 → 整数吸附、显示值一致、一步撤销、框跟着变",
                   tookSlider && midApplied && shownMatches && oneUndoStep && widthChanged
                   && MathF.Abs(frameWAfter - frameWBefore) > 0.5f && widthBack,
                   $"宽 {wBefore:F1} → {midAppliedValue:F1}（拖动中显示 {shownValue:F1}，中点 {midWant:F1}）；"

@@ -1290,7 +1290,8 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("                      0=原路径（默认：不喂轨迹）1=+系统委托轨迹（有就用、没有退回自绘）");
         Console.WriteLine("                      也可以点：「更多 → 设置 → 墨迹 → 湿墨档位」（点一下换一档）");
         Console.WriteLine("  --syswet            真笔 + 实线笔：湿墨只让系统轨迹画（诊断；⚠ 单条轨迹系统上限 128 点，长笔画会回滚）");
-        Console.WriteLine("  --syscursor         光标 A/B：笔 / 荧光笔 / 激光一律系统斜笔（零延迟硬件光标），不画自绘落点（2026-10-16 对照用）");
+        Console.WriteLine("  --syscursor         三支笔一律系统斜笔（零延迟硬件光标）——**已是默认**，写上等于没写");
+        Console.WriteLine("  --nosyscursor       退回自绘落点（笔尖环 / 荧光笔圆盘 / 激光实心点）做对照");
         Console.WriteLine("  --trailonly         自己那一笔不画（湿墨只剩系统轨迹）——手动验证系统到底给哪种输入画");
         // [停用] Console.WriteLine("  --predictdata [路径] 真实笔迹数据上的预测评测（UCI Character Trajectories）");
         Console.WriteLine("  --latbench <csv>    延时实测（分场景 + 分位数 + 稳定性）");

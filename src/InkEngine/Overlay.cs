@@ -4247,7 +4247,7 @@ internal sealed partial class OverlayWindow : IDisposable
         // 行高 30（8.2.1 收矮过）：字号 11 + 盒高 16，正好卡在卡片上沿和轨道之间。
         if (dragging)
         {
-            string text = value.ToString("0.0");
+            string text = value.ToString("0");           // 整数（2026-10-16：值已整数吸附）
             float tx = Math.Clamp(kx, p.MinX + 18f * dpi, slider.MaxX - 18f * dpi);
             float tw = 44f * dpi;
             _scratch.Color = th.Text;
