@@ -311,7 +311,7 @@ anything.
 | Scope | Keys |
 |---|---|
 | Global | `Ctrl+Alt+Shift+T` pass-through ｜ `Ctrl+Alt+Shift+X` quit ｜ `Ctrl+Alt+Shift+Q` radial palette (hold & flick; **works in pass-through too** — picking a sector exits it) |
-| In-app | `Ctrl+P` pen ｜ `Ctrl+I` highlighter ｜ `Ctrl+L` laser ｜ `Ctrl+E` eraser ｜ `Ctrl+M` select ｜ `Ctrl+S` screenshot |
+| In-app | `Ctrl+P` pen ｜ `Ctrl+I` highlighter ｜ `Ctrl+L` laser ｜ `Ctrl+E` eraser ｜ `Ctrl+M` select ｜ `Ctrl+Shift+A` screenshot |
 | Editing | `Ctrl+Z / Y` (also `Ctrl+Shift+Z`) undo / redo ｜ `Ctrl+A` select all ｜ `Ctrl+C / V` copy / paste ｜ `Delete` ｜ `Esc` ｜ arrows nudge (`Shift` ×10; **with nothing selected, `←→` flip pages and `↑↓` scroll**) ｜ `Ctrl+= / Ctrl+-` scale selection (a burst merges into one undo step) |
 | Other | `Ctrl+6` width ｜ `Ctrl+B` toggle board ｜ `Ctrl+Shift+C` clear ｜ `PageUp / PageDown` page |
 

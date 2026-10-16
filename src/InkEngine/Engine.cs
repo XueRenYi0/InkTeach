@@ -3673,7 +3673,7 @@ public partial class InkEngine
             // 截图流程里的按键（8.3.1）：**取景期间是模态的**——
             //   · Esc = 取消（什么都不落，回到进来之前的工具）；
             //   · Enter = 完成（调整阶段）；方向键 = 微调框（调整阶段，Shift = 改大小）；
-            //   · Ctrl+S = 换另一种截法（重新冻结一次）；
+            //   · Ctrl+Shift+A = 换另一种截法（重新冻结一次）；
             //   · 其它键一律吞掉（取景中按 Ctrl+P 换工具会把状态搅乱）。
             if (CaptureActive)
             {
@@ -9321,7 +9321,7 @@ public partial class InkEngine
     ///   · 整屏铺遮罩（全灰，还没有框）+ 十字光标 + 全屏准线 + 顶部提示 + 右上「✕ 取消」；
     ///   · 工具切到截图（面板那一格亮着；界面在取景期间由引擎收起）。
     ///
-    /// 入口三处：点模式段（`EnterCapture`）、键盘 `Ctrl+S`、以及在"截图工具已选中"时
+    /// 入口三处：点模式段（`EnterCapture`）、键盘 `Ctrl+Shift+A`、以及在"截图工具已选中"时
     /// 直接在画布上按下（<see cref="BeginCaptureAt"/> 会兜底调它）。
     /// `freeze=false` 只给自检用（不真的抓屏）。
     /// </summary>
@@ -9368,7 +9368,7 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 换另一种截法（取景中按 `Ctrl+S`）：重新冻结一次。
+    /// 换另一种截法（取景中按 `Ctrl+Shift+A`）：重新冻结一次。
     /// 「截图」←→「隐藏窗口截图」两种模式的**可见差别**全在这一抓里（藏不藏我们）。
     /// </summary>
     private void ToggleCaptureMode()

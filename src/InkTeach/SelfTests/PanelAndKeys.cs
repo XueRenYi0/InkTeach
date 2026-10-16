@@ -4591,6 +4591,18 @@ internal sealed partial class App
                   + $"重做 {map.KeyText(KeyAction.Redo)}");
         }
 
+        // ---- 截图键 2026-10-16 用户定：`Ctrl+S`（全世界的"保存"）→ `Ctrl+Shift+A` ----
+        // 钉两条：新的在（钉钉 / 飞书同款的截图键），旧的（`Ctrl+S`）**整表没人占**
+        // ——"想按保存却进了截图"从键位表层面就不可能了。
+        {
+            var anno = KeyScope.Annotation;
+            string ChordOf(KeyAction a) => map.Find(anno, a)?.Chord.ToString() ?? "×";
+            string ctrlSOwner = map.For(anno).FirstOrDefault(b => b.Chord.ToString() == "Ctrl+S")?.Action.ToString();
+            Check("截图键改 Ctrl+Shift+A（Ctrl+S 腾给'保存'习惯）",
+                  ChordOf(KeyAction.ToolCapture) == "Ctrl+Shift+A" && ctrlSOwner == null,
+                  $"截图 {ChordOf(KeyAction.ToolCapture)}；Ctrl+S 占用者 = {ctrlSOwner ?? "无"}");
+        }
+
         // **全局只留最最常用的那几个**（用户 2026-09-19："除了最最最常用的功能需要全局热键以外，
         // 其他的通通换成应用内快捷键就行了"）。判据取自 `KeyBindings.GlobalAllowed`
         // ——那份名单是**产品的规则**，不是自检自己写的一份：两边各写一份早晚会分叉

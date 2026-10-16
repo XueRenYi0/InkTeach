@@ -6161,7 +6161,7 @@ internal sealed partial class OverlayWindow : IDisposable
         {
             string hint = app.CaptureAdjusting
                 ? $"{modeName} · 拖动边角调整 · Enter / 双击 = 完成 · Esc / 右键 取消"
-                : $"{modeName} · 拖动框选截图区域 · Ctrl+S 换模式 · Esc / 右键 取消";
+                : $"{modeName} · 拖动框选截图区域 · Ctrl+Shift+A 换模式 · Esc / 右键 取消";
             float cx = (screen.MinX + screen.MaxX) * 0.5f;
             var pill = new Vortice.RawRectF(cx - 280f * s, screen.MinY + 40f * s,
                                             cx + 280f * s, screen.MinY + 74f * s);

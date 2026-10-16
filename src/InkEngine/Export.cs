@@ -902,7 +902,34 @@ internal static class ExportFileDialog
     // 不重新发明；区别只在过滤器、标题、默认扩展名，以及"另存为"换成"打开"。
 
     private const string InkFilter = "InkTeach 板书 (*.inkb)\0*.inkb\0\0";
+    private const string ZipFilter = "日志压缩包 (*.zip)\0*.zip\0\0";
     private const int OFN_FILEMUSTEXIST = 0x00001000;
+
+    /// <summary>"导出日志"：弹另存为（zip）。返回 null = 取消。</summary>
+    public static string AskForLogZip(IntPtr owner, string suggestedName, string initialDir)
+    {
+        StartDialogWatcher();
+        InstallDialogPositionHook();
+        var ofn = new OpenFileName
+        {
+            lStructSize = SizeOfOpenFileName,
+            hwndOwner = owner,
+            lpstrFilter = ZipFilter,
+            nFilterIndex = 1,
+            lpstrFile = suggestedName + new string('\0', Math.Max(0, 512 - suggestedName.Length)),
+            nMaxFile = 512,
+            lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
+            lpstrTitle = "导出日志",
+            lpstrDefExt = "zip",
+            Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
+        };
+        bool ok;
+        try { ok = GetSaveFileNameW(ofn); }
+        finally { RemoveDialogPositionHook(); }
+        if (!ok) return null;
+        var path = (ofn.lpstrFile ?? "").Trim().TrimEnd('\0');
+        return string.IsNullOrEmpty(path) ? null : path;
+    }
 
     /// <summary>
     /// "打开文档…"的过滤器。五种：

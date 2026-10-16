@@ -2640,6 +2640,81 @@ internal sealed partial class App
         Recovery.DeleteAuto();
         Doc.SwitchPage(0);
         BoardOn = false;
+
+        // ---- ⑥ 运行日志（2026-10-16 用户定）----
+        //   "日志要能锁定客户问题、又不能影响性能"——钉四件：
+        //   落盘（带时间戳）、压测（2 万行不卡）、限流（丢行只记数）、导出 zip（内容齐）+ 轮转。
+        {
+            string logDir = Path.Combine(Path.GetTempPath(), "inkteach-logtest");
+            try { if (Directory.Exists(logDir)) Directory.Delete(logDir, true); } catch { }
+            DiagLog.Retarget(logDir);
+
+            // ⚠ 读日志文件要用**共享读**：写线程把它开着（FileShare.ReadWrite），
+            // File.ReadAllText 默认按 FileShare.Read 开 → 冲突 IO 异常（首跑就栽在这）。
+            static string ReadShared(string p)
+            {
+                using var fs = new FileStream(p, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var sr = new StreamReader(fs, System.Text.Encoding.UTF8);
+                return sr.ReadToEnd();
+            }
+
+            // ① 落盘：带暗号写一条，flush 后文件里必须原样找得到（还带 [时:分:秒.mmm]）
+            string tag = "日志钉子-" + Guid.NewGuid().ToString("N")[..8];
+            Console.WriteLine(tag + " 你好");
+            DiagLog.FlushNow();
+            string logFile = DiagLog.CurrentPath;
+            string content = File.Exists(logFile) ? ReadShared(logFile) : "";
+            Check("日志落盘：标记行在文件里（带时间戳）",
+                  File.Exists(logFile) && content.Contains(tag)
+                  && System.Text.RegularExpressions.Regex.IsMatch(content, @"\[\d\d:\d\d:\d\d\.\d\d\d\] " + tag),
+                  logFile);
+
+            // ② 压测：2 万行入队不许拖慢（写入只进队列，落盘在后台）。闸门放宽到 1500ms——
+            //    真坏掉那天（有人在热路径里同步写盘）它是秒级起步，一定红。
+            DiagLog.MaxPerSecOverride = 500000;      // 这一段别被限流搅（限流下面专门测）
+            var swLog = Stopwatch.StartNew();
+            for (int i = 0; i < 20000; i++) Console.WriteLine("日志压测行 " + i + " xxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+            swLog.Stop();
+            Check("日志不卡：2 万行入队 < 1500ms", swLog.ElapsedMilliseconds < 1500,
+                  $"{swLog.ElapsedMilliseconds} ms（每行约 {(double)swLog.ElapsedMilliseconds * 1000 / 20000:F2} µs）");
+            DiagLog.MaxPerSecOverride = 0;
+
+            // ③ 限流：一秒里灌 5000 行 → 多出来的只记账（DroppedTotal 涨 + 文件里"限流"提示）
+            long droppedBefore = DiagLog.DroppedTotal;
+            for (int i = 0; i < 5000; i++) Console.WriteLine("限流测试行 " + i);
+            var swWait = Stopwatch.StartNew();
+            while (swWait.ElapsedMilliseconds < 1200) { PumpMessages(); RenderAll(); }
+            Console.WriteLine("限流窗口收尾行");       // 触发窗口翻转，把"丢了 N 行"总结行吐出来
+            DiagLog.FlushNow();
+            string content2 = ReadShared(logFile);
+            Check("日志限流：狂灌只记账不塞满（丢行计数 + '限流'提示）",
+                  DiagLog.DroppedTotal > droppedBefore && content2.Contains("日志限流"),
+                  $"丢 {DiagLog.DroppedTotal - droppedBefore} 行");
+
+            // ④ 轮转：上限调小再灌一点，应该转出 inkteach.1.log
+            DiagLog.SizeCapOverride = 8000;
+            for (int i = 0; i < 400; i++) Console.WriteLine("轮转测试行 " + i + " ........................................");
+            DiagLog.FlushNow();
+            Check("日志轮转：超上限转出 .1 备份",
+                  File.Exists(Path.Combine(logDir, "inkteach.1.log")),
+                  string.Join(" / ", Directory.GetFiles(logDir).Select(f => Path.GetFileName(f))));
+
+            // ⑤ 导出 zip：日志 + 环境.txt 都在
+            string zip = Path.Combine(Path.GetTempPath(), "inkteach-logtest-export.zip");
+            DiagLog.ExportZip(zip);
+            bool zipOk = false; string entries = "";
+            try
+            {
+                using var za = System.IO.Compression.ZipFile.OpenRead(zip);
+                entries = string.Join(" / ", za.Entries.Select(e => e.FullName));
+                zipOk = za.Entries.Any(e => e.FullName.Contains("inkteach"))
+                     && za.Entries.Any(e => e.FullName == "环境.txt");
+            }
+            catch (Exception ex) { entries = "打开失败：" + ex.Message; }
+            Check("导出 zip：含日志 + 环境.txt", zipOk, entries);
+            try { File.Delete(zip); } catch { }
+        }
+
         Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
         ExitCode = fail == 0 ? 0 : 1;
         _quit = true;

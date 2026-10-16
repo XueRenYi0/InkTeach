@@ -167,6 +167,14 @@ internal sealed partial class App : InkEngine.InkEngine
             try { if (Directory.Exists(BoardHistory.DirOverride)) Directory.Delete(BoardHistory.DirOverride, true); } catch { }
             BoardHistory.CloseSession();
         }
+        // 运行日志同理（2026-10-16）：自检**不往用户的日志目录灌**——一轮自检的日志
+        // 全落临时目录（也给"日志"那几条用例一个干净起点）。
+        if (_selfCheckMode && DiagLog.DirOverride == null)
+            DiagLog.Retarget(Path.Combine(Path.GetTempPath(), "inkteach-selfcheck-logs"));
+
+        // 「导出日志…」的环境摘要（屏幕 / 缩放这些建了窗口才算得准）：只挂**惰性取值**，
+        // 打包那一刻才调用。
+        DiagLog.EnvExtra = () => $"屏幕 {_virtualW}×{_virtualH} · 缩放 {DpiScale:0.00} · 窗口 {_windows.Count} 块";
         // 自检里**不弹"另存为"对话框**：它会阻塞等消息，而自检是自己抽消息推进的，
         // 一弹就卡到超时（`--selftest` 会逐个点操作条上的按钮，点到"导出"就中招）。
         // 导出那条链由 `--iotest` 走"不弹框、直接写指定路径"验，见 ExportSelectionToPathForTest。
@@ -7106,6 +7114,12 @@ internal static class Program
         // 那些 `Console.WriteLine` 不能一起丢掉。两边兼顾：**有参数时**试着接上父进程的控制台
         //（接不上说明是从资源管理器双击出来的，那正好——安静启动）。
         if (args.Length > 0) TryAttachParentConsole();
+
+        // **运行日志**（2026-10-16 用户定）：接住全仓的 Console 诊断输出、落
+        // `%LOCALAPPDATA%\InkTeach\Logs`（限流 + 轮转，绝不拖慢书写）。
+        // ⚠ 装在这里是关键：必须在"接父进程控制台"**之后**——tee 要包住最终的 stdout，
+        //   命令行 / 自检输出才会原样照打；装早了会把刚接上的控制台盖掉。
+        DiagLog.Install();
 
         // **单实例**：这个程序是一层全屏置顶的覆盖层。开两个的后果不是"多一个窗口"，
         // 而是：两层叠在一起（写字落到哪一层看运气）、第二个实例的热键注册不上、

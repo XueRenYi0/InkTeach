@@ -140,6 +140,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
 
     public void SetBoardOpacity(float opacity) => _engine.SetBoardOpacityFromUi(opacity);
 
+    /// <summary>「设置 → 导出日志…」：运行日志打包 zip（2026-10-16）。</summary>
+    public void ExportLogs() => _engine.ExportLogsFromUi();
+
     public void Paste() => _engine.PasteFromClipboard();
     public void Restart() => _engine.RestartFromUi();
     public void Quit() => _engine.QuitFromUi();
