@@ -212,7 +212,8 @@ public partial class InkEngine
         SetUiPref("docDir", System.IO.Path.GetDirectoryName(files[0]) ?? "");
 
         var err = OpenDocuments(files);
-        if (err != null) SetInkStatus("打开文档失败：" + err);
+        if (err != null) { SetInkStatus("打开文档失败：" + err); return; }
+        PrepareAnnotateAfterOpen();
     }
 
     /// <summary>
@@ -258,7 +259,25 @@ public partial class InkEngine
         }
         if (anyInk) { OpenInkFile(files[0]); return; }
         var err = OpenDocuments(files);
-        if (err != null) SetInkStatus("打开失败：" + err);
+        if (err != null) { SetInkStatus("打开失败：" + err); return; }
+        PrepareAnnotateAfterOpen();
+    }
+
+    /// <summary>
+    /// 打开文档**成功之后**的"准备批注"组合（2026-10-16 用户提议：
+    /// "穿透模式里打开 PDF，屏幕上什么都不显示，这样才知道 PDF 打开了？"）：
+    ///   · **在穿透里 → 自动退出穿透**：穿透下页位图是**全放掉**的（省内存）——
+    ///     PDF 打开了屏幕上却没有东西、也没法写；退出来页面立刻上屏，就知道"已就绪"；
+    ///   · 顺手把工具切回**画笔**（打开文档的意图就是批注；颜色 / 粗细照旧保留）。
+    /// 不在穿透里时**不动工具**（尊重课堂当下的选择）。
+    /// </summary>
+    private void PrepareAnnotateAfterOpen()
+    {
+        if (!PassThrough) return;
+        SetPassThrough(false, restoreBoard: false);   // 画布保持眼前所见（文档），不弹回白板
+        SetToolFromUi(Tool.Pen);
+        SetInkStatus(InkStatus + "；已在穿透里自动退出穿透并切回「笔」");
+        NotifyUiStateChanged();
     }
 
     /// <summary>自检用：绕开对话框，直接按扩展名分派。</summary>

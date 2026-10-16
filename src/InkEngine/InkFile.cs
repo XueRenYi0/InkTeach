@@ -221,6 +221,8 @@ public partial class InkEngine
         catch (Exception ex) { SetInkStatus("打不开：" + ex.Message); return false; }
 
         // 切到白板展示 + 相机归零 + 无选中。
+        // 穿透里打开板书：先退出穿透（穿透下画布是让开的，"打开没反应"同样说不通）。
+        if (PassThrough) SetPassThrough(false, restoreBoard: false);
         _boardReturnKey = Doc.PageKey == InkDocument.BoardPageKey ? _boardReturnKey : Doc.PageKey;
         Doc.SwitchPage(InkDocument.BoardPageKey);
         BoardOn = true;

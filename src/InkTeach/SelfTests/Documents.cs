@@ -475,6 +475,25 @@ internal sealed partial class App
         var errD = OpenDocuments(new[] { "a.pdf", pFlag });
         Check("图片和 PDF 混选 ⇒ 提示重选", errD != null, errD ?? "(没报错)");
 
+        // 多选图片：铺成"一叠页"（用户问"同时打开多张可以吗"；2026-10-16 补钉子）
+        var errM = OpenDocuments(new[] { pFlag, pLong });
+        Check("多选两张图片：一叠页都铺出来", errM == null && DocView.Count >= 2,
+              errM ?? $"Count={DocView.Count}");
+        SettleFrames(300);
+        Check("多选图片：页位图能上屏（至少一页驻留）", DocView.ResidentPages >= 1,
+              $"驻留={DocView.ResidentPages}");
+
+        // 穿透里打开文档：自动退穿透 + 切回「笔」（2026-10-16 用户提议"这样才知道打开了"）
+        {
+            Host.Commands.SetTool(Tool.Eraser);
+            SetPassThroughFromUi(true);
+            SettleFrames(120);
+            OpenBoardAnyForTest(new[] { pFlag });
+            SettleFrames(150);
+            Check("穿透里打开文档：自动退出穿透", !PassThrough, $"穿透={PassThrough}");
+            Check("穿透里打开文档：工具切回「笔」", Tool == Tool.Pen, $"工具={Tool}");
+        }
+
         CloseDocument();
         Check("关闭后页位图全放（回基线）",
               DocView.Count == 0 && ImageData.LiveImages == imgBefore && ImageData.LiveBytes == bytesBefore,
