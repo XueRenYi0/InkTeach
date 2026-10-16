@@ -729,10 +729,67 @@ public partial class InkEngine
         if (sourceDevice == IntPtr.Zero) return false;
         if (_penOnScreenCache.TryGetValue(sourceDevice, out bool known)) return known;
         bool onScreen = false;
-        if (Native.GetPointerDevice(sourceDevice, out var info))
-            onScreen = info.pointerDeviceType == Native.POINTER_DEVICE_TYPE_INTEGRATED_PEN;
+        bool ok = Native.GetPointerDevice(sourceDevice, out var info);
+        if (ok) onScreen = info.pointerDeviceType == Native.POINTER_DEVICE_TYPE_INTEGRATED_PEN;
         _penOnScreenCache[sourceDevice] = onScreen;
+        LogPenDevice(sourceDevice, ok, ref info, onScreen);   // 每台设备一行（reports\pen-devices.txt）
         return onScreen;
+    }
+
+    /// <summary>
+    /// 每见到一台**新笔设备**，把 Windows 报的"出身"原样追加一行到 `reports\pen-devices.txt`。
+    ///
+    /// 为什么值得记（2026-10-16 用户报"手写板不开驱动时只有画画笔模式不统一"）：笔的光标
+    /// 要不要藏，全靠 `GetPointerDevice` 报的 pointerDeviceType——**有手写板会被报成"屏内笔"**，
+    /// 于是笔工具藏了系统光标、画了自绘圆环（用户看到的"圆圈＋十字"）。这种事光看现象
+    /// 猜不出设备、字段、结论，得让文件说话。每台设备每进程只记一次（走上面的缓存）；
+    /// 纯诊断，任何异常静默吞掉——绝不能因为它影响输入。
+    /// </summary>
+    private static void LogPenDevice(IntPtr handle, bool queryOk, ref Native.POINTER_DEVICE_INFO info,
+                                     bool onScreen)
+    {
+        try
+        {
+            bool rectsOk = Native.GetPointerDeviceRects(handle, out _, out _);
+            var sb = new System.Text.StringBuilder();
+            sb.Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            sb.Append("  句柄=0x").Append(handle.ToString("X"));
+            sb.Append("  查询=").Append(queryOk ? "成功" : "失败");
+            sb.Append("  类型=").Append(info.pointerDeviceType)
+              .Append('(').Append(DeviceTypeName(info.pointerDeviceType)).Append(')');
+            sb.Append("  monitor=0x").Append(info.monitor.ToString("X"));
+            sb.Append("  矩形映射=").Append(rectsOk ? "成功" : "失败");
+            sb.Append("  最大触点数=").Append(info.maxActiveContacts);
+            sb.Append("  判定=").Append(onScreen ? "屏内笔（藏光标＋画环）" : "板子/外接（给斜笔）");
+            string prod = ProductStringPath(ref info);
+            if (!string.IsNullOrEmpty(prod)) sb.Append("  产品=").Append(prod);
+            System.IO.Directory.CreateDirectory("reports");
+            System.IO.File.AppendAllText(System.IO.Path.Combine("reports", "pen-devices.txt"),
+                                         sb.ToString() + Environment.NewLine);
+        }
+        catch { /* 诊断而已，不能影响输入 */ }
+    }
+
+    private static string DeviceTypeName(uint type) => type switch
+    {
+        Native.POINTER_DEVICE_TYPE_INTEGRATED_PEN => "屏内笔",
+        Native.POINTER_DEVICE_TYPE_EXTERNAL_PEN => "外接笔",
+        Native.POINTER_DEVICE_TYPE_INTEGRATED_TOUCH => "屏内触摸",
+        Native.POINTER_DEVICE_TYPE_EXTERNAL_TOUCH => "外接触摸",
+        _ => "未知",
+    };
+
+    /// <summary>
+    /// 读 POINTER_DEVICE_INFO 尾巴上的产品路径（固定长度 wchar[520]）。
+    /// **长度自己数**，不信驱动会乖乖补 '\0'——真遇到没补的，`new string(char*)` 会越界读到崩。
+    /// </summary>
+    private static unsafe string ProductStringPath(ref Native.POINTER_DEVICE_INFO info)
+    {
+        var local = info;                          // 先拷一份：栈上局部变量的定长缓冲**直接当指针用**
+        ushort* p = local.productString;
+        int len = 0;
+        while (len < Native.POINTER_DEVICE_PRODUCT_STRING_MAX && p[len] != 0) len++;
+        return new string((char*)p, 0, len);
     }
 
     /// <summary>
@@ -8081,9 +8138,13 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// （A/B，2026-10-16）`--syscursor`：**荧光笔 / 激光**改用系统斜笔光标（硬件光标、
-    /// 零延迟跟随），不再画自绘落点（丢掉"落点粗细"预览）。默认关 = 现状。
+    /// （A/B，2026-10-16）`--syscursor`：**笔 / 荧光笔 / 激光**一律改用系统斜笔光标
+    /// （硬件光标、零延迟跟随），不再画自绘落点（丢掉"落点粗细"预览）。默认关 = 现状。
     /// 真机对比"跟手 vs 信息量"之后再决定要不要转正。见 ToolCursorKind / DrawnCursor。
+    ///
+    /// 2026-10-16 当天从"荧光笔 / 激光"扩到**笔**：用户拿手写板跑 A/B，发现只有画画笔
+    /// 还是自绘圆环——因为笔模式要问"设备出身"（见 PenShowsCursor），而他那台板子被
+    /// Windows 报成了"屏内笔"，判定翻车。这个开关先兜住：不看设备，一律系统斜笔。
     /// </summary>
     internal static bool SysCursorAll;
 
@@ -8100,8 +8161,9 @@ public partial class InkEngine
         // 用户点名要 InkClass 那种斜笔：热点在笔尖、不挡视线，且一路跟着落点走
         // （手写板写字时尤其需要，见 PenDeviceOnScreen 的注释）。
         // 用的是**系统那支 IDC_PEN**（自绘彩笔版试过、被用户否掉，见 CursorKind.Pen 的注释）。
-        // 只有"笔尖就压在屏幕上"的触屏笔才藏起来（笔尖即落点，环由自绘表达）。
-        Tool.Pen => PenShowsCursor ? CursorKind.Pen : CursorKind.Hidden,
+        // 只有"笔尖就压在屏幕上"的触屏笔才藏起来（笔尖即落点，环由自绘表达）；
+        // `--syscursor` 时**不管出身**，一律给斜笔（见 SysCursorAll 的注释）。
+        Tool.Pen => (SysCursorAll || PenShowsCursor) ? CursorKind.Pen : CursorKind.Hidden,
         // 荧光笔 / 激光：默认"藏系统光标 + 自绘落点"（圆盘 / 实心点带着**粗细信息**）；
         // `--syscursor`（2026-10-16 A/B：用户提议"系统的笔光标当软件内光标"——硬件光标
         // **不经过我们的渲染循环**，输入一到就动，理论上更跟手）时改用系统斜笔。
@@ -8305,9 +8367,9 @@ public partial class InkEngine
                 // 8.3.0 那个 24×24 角括号被用户点名"比较难用"，整批退场。
                 return ToolCursorShape.None;
                 case Tool.Pen:
-                    // 已经在显示斜笔（鼠标 / 手写板，自绘彩笔）：落点由它一路表达，
-                    // **不再叠自绘环**——"笔上再套一个圈"就是这段开头说的那种叠影。
-                    if (PenShowsCursor) return ToolCursorShape.None;
+                    // 已经在显示斜笔（鼠标 / 手写板；`--syscursor` 时含屏内笔）：落点由它
+                    // 一路表达，**不再叠自绘环**——"笔上再套一个圈"就是这段开头说的那种叠影。
+                    if (SysCursorAll || PenShowsCursor) return ToolCursorShape.None;
                     return penTip && _drawing ? ToolCursorShape.None : ToolCursorShape.Ring;
                 case Tool.Highlighter:
                     if (SysCursorAll) return ToolCursorShape.None;   // A/B：斜笔一路表达落点
