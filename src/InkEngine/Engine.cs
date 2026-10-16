@@ -676,17 +676,21 @@ public partial class InkEngine
     /// 1 像素这种档位对它没意义；激光更小。共用一张表的结果就是
     /// "选了荧光笔按 Ctrl+Alt+6 没反应"（它改的是笔宽）——实测就是这个 bug。
     /// </summary>
-    /// <summary>荧光笔档位。2026-10-09 晚同笔一起"间距宽成两倍"：8/18/32 → **8/13/18/25/32**（5 档）。
-    /// 默认档仍是 18（现下标 2）。</summary>
-    internal static readonly float[] HighlighterWidthPresets = { 8f, 13f, 18f, 25f, 32f };
+    /// <summary>荧光笔档位。**2026-10-16 用户定：8–88、步 4（21 档）**——大屏上盖一行
+    /// 大字的场景，旧表最粗 32 偏细。沿革：8/18/32 → 8/13/18/25/32（10-09 晚）→ 现在这张。
+    /// 默认档 = 下标 2 = **16**（旧默认 18 离它最近）。</summary>
+    internal static readonly float[] HighlighterWidthPresets =
+        { 8f, 12f, 16f, 20f, 24f, 28f, 32f, 36f, 40f, 44f, 48f, 52f, 56f, 60f, 64f, 68f, 72f, 76f, 80f, 84f, 88f };
     /// <summary>
-    /// 激光的档位。沿革：4/8/14（初版）→ 8/14/22（2026-09-27 白天"默认档粗一点"）
-    /// → 4/8/14/22（2026-09-27 晚）→ **4/6/8/11/14/18/22**（2026-10-09 晚同笔一起
-    /// "间距宽成两倍"）。**默认档仍是 8**（现下标 2）。
+    /// 激光的档位。**2026-10-16 用户定：2–24、步 2（12 档）**（原提"2–40 步 2"，
+    /// 评估后把上限收到 24——40 逻辑像素 ≈1 厘米宽的红带，更像马克笔还挡内容）。
+    /// 沿革：4/8/14 → 8/14/22 → 4/8/14/22 → 4/6/8/11/14/18/22（10-09 晚）→ 现在这张。
+    /// 默认档 = 下标 3 = **8**（和旧默认一致）。
     /// </summary>
-    internal static readonly float[] LaserWidthPresets = { 4f, 6f, 8f, 11f, 14f, 18f, 22f };
+    internal static readonly float[] LaserWidthPresets =
+        { 2f, 4f, 6f, 8f, 10f, 12f, 14f, 16f, 18f, 20f, 22f, 24f };
     internal int HighlighterWidthIndex = 2;
-    internal int LaserWidthIndex = 2;
+    internal int LaserWidthIndex = 3;
 
     /// <summary>当前工具的粗细（逻辑像素）。落点反馈、界面状态都读它。</summary>
     internal float CurrentToolWidthLogical => Tool switch
@@ -2613,19 +2617,23 @@ public partial class InkEngine
             _hlColorIdx = hlIdx;
         }
         // **粗细档**（每个工具分开记，用户 2026-09-30 定）：存的是"第几档"。
-        // **2026-10-15 笔档表换代（15 → 20 档）**：老下标按新表读会错位，所以笔的键名
-        // 再升一代（`w4.pen`；荧光笔/激光/橡皮的表没动，仍 `w2.*`）。读不到就按
-        // "老下标 → 老表取值 → **吸附**进新表"迁移（1.5/2.5/3.5 挪半格、40 → 20）。
+        // **换表就升键名**：老下标按新表读会错位。2026-10-15 笔（15→20 档，`w4.pen`）；
+        // 2026-10-16 荧光笔（5→21 档，`w3.hl`）/ 激光（7→12 档，`w3.laser`）；
+        // 橡皮的表没动，仍 `w2.*`。读不到就按"老下标 → 老表取值 → **吸附**进新表"迁移。
         if (int.TryParse(GetUiPref("w4.pen"), out int wPen4) && wPen4 >= 0 && wPen4 < WidthPresets.Length)
         { WidthPresetIndex = wPen4; PenWidthLogical = WidthPresets[wPen4]; }
         else if (MigrateWidthPref("w3.pen", Legacy15WidthPresets, WidthPresets, ref WidthPresetIndex, ref PenWidthLogical)) { }
         else if (MigrateWidthPref("w2.pen", Legacy9WidthPresets, WidthPresets, ref WidthPresetIndex, ref PenWidthLogical)) { }
         else if (MigrateWidthPref("w.pen", LegacyWidthPresets, WidthPresets, ref WidthPresetIndex, ref PenWidthLogical)) { }
-        if (int.TryParse(GetUiPref("w2.hl"), out int wHl2) && wHl2 >= 0 && wHl2 < HighlighterWidthPresets.Length)
-        { HighlighterWidthIndex = wHl2; HighlighterWidthLogical = HighlighterWidthPresets[wHl2]; }
+        // **2026-10-16 荧光笔 / 激光换表**（8–88 步 4 / 2–24 步 2）：键名同样升一代，
+        // 老下标按老表取值、**吸附**进新表。
+        if (int.TryParse(GetUiPref("w3.hl"), out int wHl3) && wHl3 >= 0 && wHl3 < HighlighterWidthPresets.Length)
+        { HighlighterWidthIndex = wHl3; HighlighterWidthLogical = HighlighterWidthPresets[wHl3]; }
+        else if (MigrateWidthPref("w2.hl", new[] { 8f, 13f, 18f, 25f, 32f }, HighlighterWidthPresets, ref HighlighterWidthIndex, ref HighlighterWidthLogical)) { }
         else if (MigrateWidthPref("w.hl", new[] { 8f, 18f, 32f }, HighlighterWidthPresets, ref HighlighterWidthIndex, ref HighlighterWidthLogical)) { }
-        if (int.TryParse(GetUiPref("w2.laser"), out int wLaser2) && wLaser2 >= 0 && wLaser2 < LaserWidthPresets.Length)
-        { LaserWidthIndex = wLaser2; LaserWidthLogical = LaserWidthPresets[wLaser2]; }
+        if (int.TryParse(GetUiPref("w3.laser"), out int wLaser3) && wLaser3 >= 0 && wLaser3 < LaserWidthPresets.Length)
+        { LaserWidthIndex = wLaser3; LaserWidthLogical = LaserWidthPresets[wLaser3]; }
+        else if (MigrateWidthPref("w2.laser", new[] { 4f, 6f, 8f, 11f, 14f, 18f, 22f }, LaserWidthPresets, ref LaserWidthIndex, ref LaserWidthLogical)) { }
         else if (MigrateWidthPref("w.laser", new[] { 4f, 8f, 14f, 22f }, LaserWidthPresets, ref LaserWidthIndex, ref LaserWidthLogical)) { }
         if (int.TryParse(GetUiPref("w2.pixel"), out int wPixel2) && wPixel2 >= 0 && wPixel2 < PixelEraserWidthPresets.Length)
         { PixelEraserWidthIndex = wPixel2; PixelEraserWidthLogical = PixelEraserWidthPresets[wPixel2]; }
@@ -9921,8 +9929,8 @@ public partial class InkEngine
         // 混读会错位；老键只当迁移来源。笔同时写一份"数值"（`wv.pen`）。
         SetUiPref("w4.pen", WidthPresetIndex.ToString());
         SetUiPref("wv.pen", PenWidthLogical.ToString("0.##"));
-        SetUiPref("w2.hl", HighlighterWidthIndex.ToString());
-        SetUiPref("w2.laser", LaserWidthIndex.ToString());
+        SetUiPref("w3.hl", HighlighterWidthIndex.ToString());
+        SetUiPref("w3.laser", LaserWidthIndex.ToString());
         SetUiPref("w2.pixel", PixelEraserWidthIndex.ToString());
         NotifyUiStateChanged();
     }
@@ -10574,7 +10582,7 @@ public partial class InkEngine
                 int i = NearestIndex(HighlighterWidthPresets, v);
                 HighlighterWidthIndex = i;
                 HighlighterWidthLogical = HighlighterWidthPresets[i];
-                SetUiPref("w2.hl", i.ToString());
+                SetUiPref("w3.hl", i.ToString());
                 SetUiPref("wv.hl", HighlighterWidthLogical.ToString("0.##"));
                 break;
             }
@@ -10584,7 +10592,7 @@ public partial class InkEngine
                 int i = NearestIndex(LaserWidthPresets, v);
                 LaserWidthIndex = i;
                 LaserWidthLogical = LaserWidthPresets[i];
-                SetUiPref("w2.laser", i.ToString());
+                SetUiPref("w3.laser", i.ToString());
                 SetUiPref("wv.laser", LaserWidthLogical.ToString("0.##"));
                 break;
             }

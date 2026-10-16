@@ -1332,8 +1332,8 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private (float Min, float Max) WidthRange(Tool tool) => tool switch
     {
-        Tool.Highlighter => (8f, 32f),     // = HighlighterWidthGrades 首尾
-        Tool.Laser => (4f, 22f),           // = LaserWidthGrades 首尾
+        Tool.Highlighter => (8f, 88f),     // = HighlighterWidthGrades 首尾
+        Tool.Laser => (2f, 24f),           // = LaserWidthGrades 首尾
         Tool.Eraser => (12f, 34f),         // 整笔橡皮的**落点半径** = EraserWidthGrades 首尾
         Tool.PixelEraser => (46f, 150f),   // 面积橡皮的**横边**（高 = 横边 × 1.618）＝ 首尾
         _ => (1f, 20f),                    // 画笔 = PenWidthGrades 首尾
@@ -1354,8 +1354,12 @@ public sealed class FullUi : IOverlayUi
         1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f, 9f, 10f,
         11f, 12f, 13f, 14f, 15f, 16f, 17f, 18f, 19f, 20f,
     };
-    private static readonly float[] HighlighterWidthGrades = { 8f, 13f, 18f, 25f, 32f };
-    private static readonly float[] LaserWidthGrades = { 4f, 6f, 8f, 11f, 14f, 18f, 22f };
+    // 2026-10-16 换代（与引擎表逐项一致，--paneltest ⑥.1 卡住）：
+    // 荧光笔 8–88 步 4（21 档）；激光 2–24 步 2（12 档）。
+    private static readonly float[] HighlighterWidthGrades =
+        { 8f, 12f, 16f, 20f, 24f, 28f, 32f, 36f, 40f, 44f, 48f, 52f, 56f, 60f, 64f, 68f, 72f, 76f, 80f, 84f, 88f };
+    private static readonly float[] LaserWidthGrades =
+        { 2f, 4f, 6f, 8f, 10f, 12f, 14f, 16f, 18f, 20f, 22f, 24f };
     private static readonly float[] EraserWidthGrades = { 12f, 17f, 22f, 28f, 34f };
     private static readonly float[] PixelEraserWidthGrades = { 46f, 70f, 93f, 122f, 150f };
 
