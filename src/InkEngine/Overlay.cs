@@ -5173,7 +5173,7 @@ internal sealed partial class OverlayWindow : IDisposable
 
     // ---- 引擎侧悬停提示（Tooltip；2026-10-02）--------------------------------
     //
-    // 状态在 `InkEngine.Tooltip.cs`（谁悬停、500ms 延迟、开关、文案表）；这里只负责
+    // 状态在 `InkEngine.Tooltip.cs`（谁悬停、延迟两档 1.5s/400ms、文案表）；这里只负责
     // "量文字、摆位置、画卡片、报脏区"。规矩和界面层那一套一致，规格见
     // 《调研-悬停提示-Tooltip.md》——两套各自实现（两个工程画在不同表面上），
     // 但延迟、内容格式、外观语言必须一致。

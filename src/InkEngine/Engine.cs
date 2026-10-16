@@ -104,7 +104,7 @@ public partial class InkEngine
             or "--nosmooth" or "--printersafe"
             or "--mean2gauss" or "--mean2guniform" or "--mean2gsigma" or "--mean2gfast"
             or "--mean2glo" or "--mean2ghi" or "--mean2gtip"
-            or "--predict2" or "--nopredict2" => true,
+            or "--predict2" or "--nopredict2" or "--syscursor" => true,
         _ => false,
     };
 
@@ -2467,6 +2467,9 @@ public partial class InkEngine
                 if (args[i] == "--wetpred" && float.TryParse(args[i + 1], out float wp))
                     _wetPredScale = Math.Clamp(wp, 0f, 1f);
             ApplyPredictTailSetting();
+            // 光标 A/B（2026-10-16，用户提议"把系统的笔光标当软件内光标"）：`--syscursor`
+            // 让**荧光笔 / 激光**也改用系统斜笔（硬件光标、零延迟），不画自绘落点。
+            if (args.Contains("--syscursor")) SysCursorAll = true;
             // [停用] if (args.Contains("--inkmodel")) motionMode = StrokeMotionMode.Spring;
             for (int i = 0; i < args.Length - 1; i++)
             {
@@ -8078,6 +8081,13 @@ public partial class InkEngine
     }
 
     /// <summary>
+    /// （A/B，2026-10-16）`--syscursor`：**荧光笔 / 激光**改用系统斜笔光标（硬件光标、
+    /// 零延迟跟随），不再画自绘落点（丢掉"落点粗细"预览）。默认关 = 现状。
+    /// 真机对比"跟手 vs 信息量"之后再决定要不要转正。见 ToolCursorKind / DrawnCursor。
+    /// </summary>
+    internal static bool SysCursorAll;
+
+    /// <summary>
     /// 画布上的工具光标（不含滚动条、操作条、手柄）。
     ///
     /// 问的是 <see cref="EffectiveTool"/>：**笔倒过来拿（笔尾橡皮）时，光标要是橡皮的**
@@ -8092,8 +8102,11 @@ public partial class InkEngine
         // 用的是**系统那支 IDC_PEN**（自绘彩笔版试过、被用户否掉，见 CursorKind.Pen 的注释）。
         // 只有"笔尖就压在屏幕上"的触屏笔才藏起来（笔尖即落点，环由自绘表达）。
         Tool.Pen => PenShowsCursor ? CursorKind.Pen : CursorKind.Hidden,
-        Tool.Highlighter => CursorKind.Hidden,      // 落点由自绘的宽度圆盘表达
-        Tool.Laser => CursorKind.Hidden,            // 落点由自绘的实心点表达
+        // 荧光笔 / 激光：默认"藏系统光标 + 自绘落点"（圆盘 / 实心点带着**粗细信息**）；
+        // `--syscursor`（2026-10-16 A/B：用户提议"系统的笔光标当软件内光标"——硬件光标
+        // **不经过我们的渲染循环**，输入一到就动，理论上更跟手）时改用系统斜笔。
+        Tool.Highlighter => SysCursorAll ? CursorKind.Pen : CursorKind.Hidden,
+        Tool.Laser => SysCursorAll ? CursorKind.Pen : CursorKind.Hidden,
         // 落点由自绘圆环 / 矩形表达；开了 EraserKeepsSystemCursor 就两个都显示（A/B 用）。
         Tool.Eraser => EraserKeepsSystemCursor ? CursorKind.Default : CursorKind.Hidden,
         Tool.PixelEraser => EraserKeepsSystemCursor ? CursorKind.Default : CursorKind.Hidden,
@@ -8297,8 +8310,10 @@ public partial class InkEngine
                     if (PenShowsCursor) return ToolCursorShape.None;
                     return penTip && _drawing ? ToolCursorShape.None : ToolCursorShape.Ring;
                 case Tool.Highlighter:
+                    if (SysCursorAll) return ToolCursorShape.None;   // A/B：斜笔一路表达落点
                     return penTip && _drawing ? ToolCursorShape.None : ToolCursorShape.Disc;
                 case Tool.Laser:
+                    if (SysCursorAll) return ToolCursorShape.None;   // A/B：斜笔一路表达落点
                     return penTip && _drawing ? ToolCursorShape.None : ToolCursorShape.Dot;
                 default:
                     return ToolCursorShape.None;

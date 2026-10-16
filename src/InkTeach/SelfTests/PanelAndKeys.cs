@@ -2589,9 +2589,9 @@ internal sealed partial class App
             for (int attempt = 0; attempt < 3 && !ui.TipVisibleForTest; attempt++)
             {
                 SendMouse(tpx, tpy - attempt, 0);
-                SettleFrames(700);            // > 500ms 延迟 + 淡入
+                SettleFrames(1700);           // > 1.5s 首次延迟 + 淡入（2026-10-16 起）
             }
-            Check("停在「笔」上 0.5 秒：悬停提示出现", ui.TipVisibleForTest,
+            Check("停在「笔」上 1.5 秒：悬停提示出现", ui.TipVisibleForTest,
                   $"可见 = {ui.TipVisibleForTest}");
             var penTip = ui.TipContentForTest(3);
             string wantPenKey = Keys.KeyText(KeyAction.ToolPen);
@@ -2934,7 +2934,7 @@ internal sealed partial class App
             // 鼠标悬停设置行 → 出提示（小字搬进提示）
             int rhx = (int)((predictRow.MinX + predictRow.MaxX) * 0.5f * DpiScale);
             int rhy = (int)((predictRow.MinY + predictRow.MaxY) * 0.5f * DpiScale);
-            SendMouse(rhx, rhy, 0); SettleFrames(700);
+            SendMouse(rhx, rhy, 0); SettleFrames(1700);
             int rhit = ui.MoreHitForTest((predictRow.MinX + predictRow.MaxX) * 0.5f,
                                          (predictRow.MinY + predictRow.MaxY) * 0.5f);
             var rtip = ui.TipContentForTest(1000 + rhit);
@@ -3037,8 +3037,8 @@ internal sealed partial class App
             var penCell4 = ui.CellRectForTest(3);
             SendMouse((int)((penCell4.MinX + penCell4.MaxX) * 0.5f * DpiScale),
                       (int)((penCell4.MinY + penCell4.MaxY) * 0.5f * DpiScale), 0);
-            SettleFrames(700);
-            Check("提示常开（开关已撤）：悬停工具格 0.7 秒出提示",
+            SettleFrames(1700);
+            Check("提示常开（开关已撤）：悬停工具格 1.5 秒出提示",
                   ui.TipVisibleForTest, $"可见 = {ui.TipVisibleForTest}");
             SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.4f), 0);
             SettleFrames(150);

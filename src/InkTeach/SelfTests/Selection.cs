@@ -274,14 +274,32 @@ internal sealed partial class App
         {
             Tool = Tool.Marquee;                 // 让操作条处于"显示"状态（上面这些用例就是框选在跑）
             SettleFrames(120);
-            SelBarHover = (int)SelBarButton.Delete;
-            UpdateEngineTooltip();
-            SettleFrames(650);
-            StepEngineTooltip();                  // 自检里没有主循环，手动推一下"到点"
+            // 把指针也**物理移到那一格**上再定 SelBarHover：悬停期间迟到的合成鼠标消息会按
+            // 指针位置重算 hover（UpdateBarHover），只改状态不动指针会被它顶掉
+            //（2026-10-16 抓到过一次偶发红）。同一格重复设置不重新计时（EngineTooltipHover 同 id 早退）。
+            void HoverBar(int btn)
+            {
+                var r = SelectionHandles.BarButtonRect(btn, LiveSelectionFrame.CanvasAabb, DpiScale, ViewportCanvas);
+                SendMouse((int)((r.MinX + r.MaxX) * 0.5f), (int)((r.MinY + r.MaxY) * 0.5f), 0);
+                SelBarHover = btn;
+                UpdateEngineTooltip();
+            }
+            HoverBar((int)SelBarButton.Delete);
+            // ⚠ 先把**上一段用例留下的迟到消息**（鼠标 move / leave）排干净：它们会在派发时
+            // 按指针位置重算 hover、甚至清掉提示，正好卡在计时器上就是偶发红（2026-10-16 抓到）。
+            SettleFrames(200);
+            HoverBar((int)SelBarButton.Delete);    // 重设：此后队列里只剩"指向这一格"的消息
+            for (int i = 0; i < 8 && !TooltipShown; i++)
+            {
+                SettleFrames(320);                 // 累计 >1.5s 首次延迟
+                HoverBar((int)SelBarButton.Delete);   // 顶住偶发消息；同格不重新计时
+                StepEngineTooltip();               // 自检里没有主循环，手动推一下"到点"
+            }
             var delKeys = Keys.KeyText(KeyAction.DeleteSelected);
-            Check("操作条悬停 0.5 秒：提示出现（删除 + 键位）",
+            Check("操作条悬停 1.5 秒：提示出现（删除 + 键位）",
                   TooltipShown && TooltipTitle == "删除" && TooltipKey == delKeys,
-                  $"亮={TooltipShown}，标题={TooltipTitle}，键={TooltipKey}（期望 {delKeys}）");
+                  $"亮={TooltipShown}，待={TooltipPending}，hover={SelBarHover}，条在={SelectionBarShown}，"
+                  + $"标题={TooltipTitle}，键={TooltipKey}（期望 {delKeys}）");
 
             // 覆盖不变量：十格逐个数，一格都不许漏文案
             bool barTipsAll = true; string barTipsMiss = "";
@@ -295,26 +313,27 @@ internal sealed partial class App
                   barTipsAll ? $"{SelectionHandles.BarButtonCount} 格" : $"缺：{barTipsMiss}");
 
             // 延迟两档（2026-10-16，WPF Initial/BetweenShowDelay 口径）：
-            // 出过提示后 2 秒窗口内 → 150ms 就亮；隔久了 → 恢复 500ms。
-            SelBarHover = (int)SelBarButton.Color;
-            UpdateEngineTooltip();
-            SettleFrames(650); StepEngineTooltip();
-            bool slowFirst = TooltipShown;                     // 第一次：走完整延迟
-            SelBarHover = (int)SelBarButton.Lock;              // 换一格（窗口内）
-            UpdateEngineTooltip();
-            SettleFrames(220); StepEngineTooltip();
-            Check("刚出过提示：换一格 150ms 就亮（快延迟）",
-                  slowFirst && TooltipShown, $"先={slowFirst}，快={TooltipShown}");
+            // 第一次/隔久了 1.5s；出过提示后 5 秒窗口内 → 400ms 就亮。
+            HoverBar((int)SelBarButton.Color);                 // 上一条检查刚亮过 → 这里也是快路径
+            SettleFrames(470); StepEngineTooltip();
+            bool warm = TooltipShown;                         // 快路径可用（作后续对照的锚）
+            HoverBar((int)SelBarButton.Lock);                  // 换一格（窗口内）
+            SettleFrames(470); StepEngineTooltip();
+            Check("刚出过提示：换一格 400ms 就亮（快延迟）",
+                  warm && TooltipShown, $"锚={warm}，快={TooltipShown}");
 
-            SelBarHover = -1;                                  // 离开 → 收
+            // 等窗口过期：指针放回画布（迟到的消息也会算成"没悬停"，提示不会再亮 → 窗口不刷新）
+            SendMouse((int)(_virtualX + _virtualW * 0.5f), (int)(_virtualY + _virtualH * 0.35f), 0);
+            SelBarHover = -1;
             UpdateEngineTooltip();
-            SettleFrames(2300);                                // 等窗口（2 秒）过期
-            SelBarHover = (int)SelBarButton.Export;
-            UpdateEngineTooltip();
-            SettleFrames(220); StepEngineTooltip();
-            bool slowEarly = !TooltipShown;                    // 220ms 还不该亮
-            SettleFrames(450); StepEngineTooltip();
-            Check("隔 2 秒以上：恢复完整延迟（220ms 不亮、之后亮）",
+            SettleFrames(5300);                                // 等窗口（5 秒）过期
+            HoverBar((int)SelBarButton.Export);
+            SettleFrames(470); StepEngineTooltip();
+            bool slowEarly = !TooltipShown;                    // 470ms 还不该亮
+            SettleFrames(1150);                                // 累计 ≥1.5s 才该亮
+            HoverBar((int)SelBarButton.Export);
+            StepEngineTooltip();
+            Check("隔 5 秒以上：恢复完整延迟（470ms 不亮、1.6s 亮）",
                   slowEarly && TooltipShown, $"早亮={!slowEarly}，后亮={TooltipShown}");
             SelBarHover = -1;
             UpdateEngineTooltip();

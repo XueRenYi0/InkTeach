@@ -25,19 +25,19 @@ namespace InkEngine;
 /// </summary>
 public partial class InkEngine
 {
-    /// <summary>停留多久才出提示（毫秒）——**第一次 / 隔久了**走它。出处：WPF
-    /// `ToolTipService.InitialShowDelay`（默认 400）；我们取 500 给"扫过一排"留余量。</summary>
-    private const double TipDelayMs = 500;
+    /// <summary>停留多久才出提示（毫秒）——**第一次 / 隔久了**走它。**1500ms**（2026-10-16 用户定：
+    /// "很明显应该是他停顿住了在想这个功能"）。出处参考：WPF `ToolTipService.InitialShowDelay`
+    /// （默认 400）与 macOS 帮助标签（≈1–2s）之间取 1.5；2s 偏钝。</summary>
+    private const double TipDelayMs = 1500;
 
-    /// <summary>"刚出过提示"之后，下一个提示的**快延迟**（毫秒）。出处：WPF
-    /// `ToolTipService.BetweenShowDelay` 的语义——**出现过提示之后的一段时间内，
-    /// 下一个提示不再等首次延迟**。WPF 在窗口内是零延迟；我们的浮层格子排得密，
-    /// 零延迟会在扫过时连续闪提示，取 150（仍远小于 500）。
-    /// （2026-10-16 用户定："第一次提示时间长一些，后面再提示就会快一些"。）</summary>
-    private const double TipFastDelayMs = 150;
+    /// <summary>"刚出过提示"之后，下一个提示的**快延迟**：**400ms**（2026-10-16 用户定）。
+    /// 出处：WPF `ToolTipService.BetweenShowDelay` 的语义——**出现过提示之后的一段时间内，
+    /// 下一个提示不再等首次延迟**（WPF 窗口内是零延迟；400ms 是密集格子上的折中，太快会连闪）。</summary>
+    private const double TipFastDelayMs = 400;
 
-    /// <summary>"刚出过提示"的窗口（毫秒）。出处：WPF 官方 `BetweenShowDelay` 示例值 2000。</summary>
-    private const double TipBetweenWindowMs = 2000;
+    /// <summary>"刚出过提示"的窗口：**5 秒**（2026-10-16 用户定："提示消失以后 5 秒，
+    /// 再出现又是 1.5s"）。亮着期间持续刷新（"刚收起"也算"刚看过"）。</summary>
+    private const double TipBetweenWindowMs = 5000;
 
     private int _tipId;                         // 0 = 没有；其余由各浮层给（只需唯一）
     private string _tipTitle, _tipKey, _tipNote;

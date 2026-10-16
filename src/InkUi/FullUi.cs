@@ -139,7 +139,7 @@ public sealed class FullUi : IOverlayUi
     //
     // 行为：鼠标停在同一个东西上 **500ms**（Tokens.TipDelayMs，照 WPF 默认 400 取松一档），
     // 浮出一张小卡片（名称 + 当前键位 + 一句说明）；移开/按下/拖动立刻收起。
-    // **2026-10-16 起**：出过提示后的 2 秒窗口内，下一个提示只等 150ms
+    // **2026-10-16 起**：首次/隔久了 1.5s；出过提示后的 **5 秒窗口内**，下一个提示只等 **400ms**
     //（Tokens.TipFastDelayMs/TipBetweenWindowMs，WPF 的 BetweenShowDelay 口径）；
     // 原「功能提示」开关撤除、改常开。
     //
@@ -346,7 +346,7 @@ public sealed class FullUi : IOverlayUi
                 && ((_railHover && _rail.Value < 0.5f) || (!_railHover && _rail.Value > 0f)))
                 return true;
             if (_hideEnabled && _peekPendingCollapse && _peek.Value > 0f) return true;
-            // 悬停提示：还在等 500ms 延迟、或淡入没走完，都要继续给帧——
+            // 悬停提示：还在等延迟（1.5s / 快路径 400ms）、或淡入没走完，都要继续给帧——
             // 不给帧的话"到点了"没人去画它。显示完之后它是静态的，不再烧帧。
             if (TipWanted && (!_tipShown || _tipFade.Running)) return true;
             // 触摸/笔长按：还在计时（到点要点亮），或提示停留期没到点（到点要收）。
@@ -5034,7 +5034,7 @@ public sealed class FullUi : IOverlayUi
     /// <summary>
     /// 每帧推进提示状态（Render 开头调一次，和 UpdatePeek / UpdateRail 同一个位置）。
     /// 三条路：① 触摸/笔长按到点 → 直接点亮；② 停留期到点 → 收；
-    /// ③ 悬停 500ms 延迟（原来的那条）。
+    /// ③ 悬停延迟两档（首次/隔久了 1.5s；出过提示后 5 秒窗口内 400ms）。
     /// </summary>
     private void UpdateTip()
     {
