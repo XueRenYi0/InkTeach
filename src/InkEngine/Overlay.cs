@@ -1002,46 +1002,60 @@ internal sealed partial class OverlayWindow : IDisposable
         if (!_trailProbed)
         {
             _trailProbed = true;
-            try
-            {
-                _inkTrailDevice = _dcomp.QueryInterfaceOrNull<IDCompositionInkTrailDevice>();
-                if (_inkTrailDevice != null)
-                {
-                    _inkTrail = _inkTrailDevice.CreateDelegatedInkTrailForSwapChain(_swapChain);
-                    InkTrailAvailable = _inkTrail != null;
-                    InkTrailNote = InkTrailAvailable ? "可用" : "接口可用但创建轨迹失败";
-                    if (InkTrailAvailable)
-                    {
-                        // ★ 关键一步（Chromium 的 InkTrail 就是这么挂的，我们以前漏了）：
-                        //   轨迹对象必须**作为视觉内容放进视觉树**、叠在交换链上面，系统才会画。
-                        //   只创建不挂树 → 调用全成功、gen 递增，但屏幕上永远没有墨。
-                        try
-                        {
-                            _inkVisual = _dcomp.CreateVisual();
-                            _inkVisual.SetContent(_inkTrail).CheckError();
-                            // insertAbove:false + 参照 null = 加到所有兄弟**之上**
-                            //（语义说明见 CreateDeviceResources 里 AddVisual 那一段）。
-                            _visual.AddVisual(_inkVisual, false, null).CheckError();
-                            _dcomp.Commit().CheckError();
-                            InkTrailNote += "（已挂视觉树）";
-                        }
-                        catch (Exception layEx)
-                        {
-                            InkTrailAvailable = false;
-                            InkTrailNote += "（挂视觉树失败: " + layEx.Message + "）";
-                        }
-                    }
-                }
-                else
-                {
-                    InkTrailAvailable = false;
-                    InkTrailNote = "合成设备不支持 IDCompositionInkTrailDevice";
-                }
-            }
-            catch (Exception ex)
+            // ★ **系统湿墨只在 Win11 24H2 以上启用**（用户 2026-10-16 定："把系统的湿墨托管
+            //   调整到 24H2 以上，等稳定以后才用；之前是不用的，走（我们）那个软件就行了"）。
+            //   依据：21H2~23H2 这条通道有系统已知缺陷（顶三分之一屏闪烁等），Chromium 也是
+            //   从 24H2 才启用；低于 24H2 时宁可全走自绘，免得把不稳定的系统通道"有就用"进来。
+            //   （.NET 5+ 的 Environment.OSVersion 取的是 RtlGetVersion 的真实版本号。）
+            int osBuild = Environment.OSVersion.Version.Build;
+            if (osBuild < 26100)
             {
                 InkTrailAvailable = false;
-                InkTrailNote = "探测异常: " + ex.Message;
+                InkTrailNote = $"系统低于 Win11 24H2（build {osBuild}）——不启用系统湿墨，全走软件自绘";
+            }
+            else
+            {
+                try
+                {
+                    _inkTrailDevice = _dcomp.QueryInterfaceOrNull<IDCompositionInkTrailDevice>();
+                    if (_inkTrailDevice != null)
+                    {
+                        _inkTrail = _inkTrailDevice.CreateDelegatedInkTrailForSwapChain(_swapChain);
+                        InkTrailAvailable = _inkTrail != null;
+                        InkTrailNote = InkTrailAvailable ? "可用" : "接口可用但创建轨迹失败";
+                        if (InkTrailAvailable)
+                        {
+                            // ★ 关键一步（Chromium 的 InkTrail 就是这么挂的，我们以前漏了）：
+                            //   轨迹对象必须**作为视觉内容放进视觉树**、叠在交换链上面，系统才会画。
+                            //   只创建不挂树 → 调用全成功、gen 递增，但屏幕上永远没有墨。
+                            try
+                            {
+                                _inkVisual = _dcomp.CreateVisual();
+                                _inkVisual.SetContent(_inkTrail).CheckError();
+                                // insertAbove:false + 参照 null = 加到所有兄弟**之上**
+                                //（语义说明见 CreateDeviceResources 里 AddVisual 那一段）。
+                                _visual.AddVisual(_inkVisual, false, null).CheckError();
+                                _dcomp.Commit().CheckError();
+                                InkTrailNote += "（已挂视觉树）";
+                            }
+                            catch (Exception layEx)
+                            {
+                                InkTrailAvailable = false;
+                                InkTrailNote += "（挂视觉树失败: " + layEx.Message + "）";
+                            }
+                        }
+                    }
+                    else
+                    {
+                        InkTrailAvailable = false;
+                        InkTrailNote = "合成设备不支持 IDCompositionInkTrailDevice";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    InkTrailAvailable = false;
+                    InkTrailNote = "探测异常: " + ex.Message;
+                }
             }
         }
         Mem.Stage("5. 接入 DirectComposition 之后");

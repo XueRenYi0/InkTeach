@@ -1070,8 +1070,8 @@ public partial class InkEngine
     // 档位是**在原来的路径之上叠加**，不是替换：
     //   0 = 原路径：不喂系统轨迹——湿墨只有主交换链自绘（**默认**，保证"关档 = 和以前逐字一样"）；
     //   1 = + 系统委托轨迹（IDCompositionDelegatedInkTrail 只补"还没上屏的那一小截"）：
-    //       **有就用、没有就自动退回软件自绘**（Win10 没有这条通道；Win11 21H2~23H2 有系统已知的
-    //       顶三分之一屏闪烁，不放心就留在 0）。
+    //       **有就用、没有就自动退回软件自绘**（2026-10-16 起**只在 Win11 24H2+ 启用**——
+    //       低于它整条不探测、全走自绘；Win10 本就没有这条通道）。
     // 两档里**主交换链自绘都照旧**（档位只加不减），所以任何一档都不会比原路径更差。
     // （2026-10-15 用户定：删掉原档 2「应用湿墨层（FastWet）」——真机看有锯齿、松手才平滑，
     //   也感觉不到优势；原档 3「全开」随 FastWet 一起消失，语义并入 1。）
@@ -1172,11 +1172,16 @@ public partial class InkEngine
     private void AddPointCleaned(float x, float y, float p, double t)
     {
         if (ActiveStroke == null) return;
-        InputBlackBox.Sample(NowMs, x, y, p);   // 黑匣子：记录喂进预测器的原始点（回放靠它 1:1 复现）
-        // 喂预测器。**统一用处理时刻 NowMs**——同一笔里混用"硬件时标 / 消息时标"
-        // （笔消息 vs raw 补点的来源不同）会把速度算乱，v0 先用一把单调时钟保稳。
-        // 2026-10-15 收口：只剩改进版 v6（B4/Google/DL 已退役，见 `调研/已停用-预测算法收口.md`）。
-        if (PredictTailEnabled) _predictor.Add(x, y, NowMs);
+        InputBlackBox.Sample(t, x, y, p);   // 黑匣子：记录喂进预测器的原始点（回放靠它 1:1 复现）
+        // 喂预测器。**用点自己的时间 `t`**（2026-10-16 修，用户同意）：
+        //   · 笔/指针消息路径：`t` = 每点自带硬件时标（QPC）换算的相对时间——最新一点
+        //     锚在 nowMs、批内其余点按真实间隔回推（见 PenSampleBuffer / PointerSampleBuffer）；
+        //   · raw 补点 / 回放 / 合成输入：`t` 就是 NowMs（时标不可用时同样退化成 NowMs）。
+        // 以前统一用 NowMs：**同一轮消息泵里收到的一批点会拿到同一个时间戳**（dt=0 被跳过），
+        // 速度只能"跨批"估计——批内最后几步（往往正是拐弯那几笔）进不了速度，
+        // 在批量投递的机器上就表现为"拐弯甩尾"。用 `t` 后批内间隔真实，方向立刻正确。
+        // （两边的值在同一把引擎时钟上：t 是拿 NowMs 往回扣 QPC 差值，不是另一套时基。）
+        if (PredictTailEnabled) _predictor.Add(x, y, t);
         if (CleanWindow <= 1) { ActiveStroke.AddPoint(x, y, p, t); return; }
 
         _cleanBuf.Add((x, y, p));
@@ -3372,10 +3377,14 @@ public partial class InkEngine
             // 调参时"我到底调上了没有"必须一眼看得见：这里印的是**生效值**，不是"可用/不可用"。
             // （2026-09-22 用户碰到的两个坑：--predictms 100 被静默夹到 15；--noinktrail 生效了没有
             //   只能靠猜。这两件事都不该靠猜。）
-            // 2026-10-15：只剩线性预测（Chromium 同族）——算法行不再需要"档"的口径；
-            // 地平线固定 21.3ms（毫秒不可调）。
+            // 2026-10-15：只剩线性预测（Chromium 同族）——算法行不再需要"档"的口径。
+            // 2026-10-16：地平线**按刷新率缩放**（用户定：60Hz=10ms，其余按比例 600/Hz、收在 4~10ms）
+            // ——取第一块屏（和显示层限速的帧预算同一个口径），放在下面这一行之前算好。
+            if (_windows.Count == 1 && w.RefreshPeriodMs > 1.0)
+                _predictor.HorizonMs = Math.Clamp(0.6 * w.RefreshPeriodMs, 4.0, 10.0);
             Console.WriteLine(PredictTailEnabled
-                ? $"笔迹预测: 开（自绘尾；线性预测（Chromium 同族）；地平线固定 {_predictor.HorizonMs:F1} ms；"
+                ? $"笔迹预测: 开（自绘尾；线性预测（Chromium 同族）；地平线 {_predictor.HorizonMs:F1} ms"
+                  + $"（按 {(w.RefreshPeriodMs > 1.0 ? 1000.0 / w.RefreshPeriodMs : 60):F0}Hz 缩放）；"
                   + "设置「墨迹预测」可关 / --nopredict2）"
                 : "笔迹预测: 关（设置 → 书写 → 墨迹预测；--predict2 可再开）");
             // 书写期间的 GC 低延迟档：低配上"偶发卡一下"的第一嫌疑就是它没生效。

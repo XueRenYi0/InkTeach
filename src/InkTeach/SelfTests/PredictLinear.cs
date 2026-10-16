@@ -97,10 +97,10 @@ internal sealed partial class App
         // ---- ⑦ 出厂参数钉子（交付件口径；改它们要连这里一起解释清楚）----
         {
             var d = new InkPredictorLinear();
-            Check("出厂参数：地平线 21.3 / 弧长顶 6 / 半径顶 12",
+            Check("出厂参数：地平线 21.3（引擎按刷新率覆盖）/ 弧长顶 6 / 半径顶 12",
                   Math.Abs(d.HorizonMs - 21.3) < 1e-9 && Math.Abs(d.ArcCap - 6.0) < 1e-9
                   && Math.Abs(d.MaxDistance - 12.0) < 1e-9,
-                  $"{d.HorizonMs} / {d.ArcCap} / {d.MaxDistance}");
+                  $"{d.HorizonMs} / {d.ArcCap} / {d.MaxDistance}（21.3 = 未缩放参考值）");
             Check("出厂默认一阶（UseAcceleration = false）", !d.UseAcceleration, "Chromium 二阶默认关（噪声大）");
         }
 
