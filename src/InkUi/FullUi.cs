@@ -2764,7 +2764,7 @@ public sealed class FullUi : IOverlayUi
               _host != null && _host.State.DocOpen, false),
         // 历史板书（2026-10-14 加）：引擎自动留的板书画布快照（不含截图），这里是找回入口。
         7 => ("历史板书",
-              "找回以前写在板书 / 桌面上的墨迹（自动留存，停手时写；不含截图）",
+              "找回以前写在**白板**上的墨迹（自动留存，停手时写；不含截图）",
               _host != null && !_host.State.PptMode && _host.State.HistoryCount > 0, false),
         _ => ("", "", false, false),
     };

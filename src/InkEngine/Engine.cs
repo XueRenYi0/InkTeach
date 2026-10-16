@@ -126,7 +126,8 @@ public partial class InkEngine
     /// <summary>自动存档的间隔（毫秒）。板书没变就不写。</summary>
     private double _autoSaveEveryMs = 15000;
     private double _nextAutoSaveAtMs;
-    private long _autoSavedVersion = -1;
+    private long _autoSavedVersion = -1;       // PPT 页的"没变不写"（放映分支还在用）
+    private long _autoSavedBoardFp = -1;       // 白板槽的指纹（自动存档"没变不写"的判据）
 
     /// <summary>自检用：这一场跑下来自动存档写了多少次（验证"没变就不写"）。</summary>
     internal int AutoSaveCount { get; private set; }
@@ -152,16 +153,20 @@ public partial class InkEngine
     /// </summary>
     internal bool RestoreInkOnStartup => GetUiPref("restoreInk") == "1";
 
-    /// <summary>自检用：立刻按当前文档写一次自动存档（不看间隔）。</summary>
+    /// <summary>自动存档 / 会话暂存的素材：**只包含白板槽**（桌面批注不落盘，2026-10-16 用户定）。</summary>
+    private List<Stroke> BoardForSave()
+        => Doc.StrokesOf(InkDocument.BoardPageKey) ?? new List<Stroke>();
+
+    /// <summary>自检/退出用：立刻把**白板槽**写一份自动存档（不看间隔）。</summary>
     internal void AutoSaveNow()
     {
-        try { Recovery.SaveAuto(InkSerializer.Save(Doc)); }
+        try { Recovery.SaveAuto(InkSerializer.SaveStrokes(BoardForSave())); }
         catch (Exception ex) { Console.WriteLine("自动存档失败：" + ex.Message); }
-        _autoSavedVersion = Doc.Version;
+        _autoSavedBoardFp = BoardFingerprint(Doc.StrokesOf(InkDocument.BoardPageKey));
         AutoSaveCount++;
     }
 
-    // ---- 板书历史（0 号页的快照；见 BoardHistory，2026-10-14 加）----------------
+    // ---- 板书历史（**白板槽**的快照；见 BoardHistory，2026-10-14 加、10-16 改槽）----
     //
     // 和"自动存档"的分工：自动存档只有**一份**、而且**受"自动恢复上次板书"偏好管辖**
     //（默认关着 = 连写都不写）；板书历史**不看那个偏好**——它是"老师回头能找回自己写过的东西"，
@@ -178,7 +183,8 @@ public partial class InkEngine
     private double _lastStrokeEndMs = double.NegativeInfinity;
 
     /// <summary>自检用：立刻写一份板书历史（不看间隔与指纹；同步落盘——测试要立刻数文件）。</summary>
-    internal bool SnapshotBoardHistoryForTest() => WriteBoardHistory(Doc.StrokesOf(0), sync: true);
+    internal bool SnapshotBoardHistoryForTest()
+        => WriteBoardHistory(Doc.StrokesOf(InkDocument.BoardPageKey), sync: true);
 
     /// <summary>
     /// 每帧过一趟：**手停下来之后**（抬笔 ≥1.5 秒、且距上次 ≥10 秒）、而且板书画布真的变了
@@ -196,7 +202,7 @@ public partial class InkEngine
         if (_drawing || ActiveStroke != null) return;
         if (NowMs - _lastStrokeEndMs < HistoryIdleMs) return;
         _nextHistoryAtMs = NowMs + HistoryMinGapMs;
-        var board = Doc.StrokesOf(0);
+        var board = Doc.StrokesOf(InkDocument.BoardPageKey);   // 白板槽（桌面批注不进历史，2026-10-16 用户定）
         long fp = BoardFingerprint(board);
         if (fp == _historyFingerprint) return;
         if (WriteBoardHistory(board, sync: false)) _historyFingerprint = fp;
@@ -215,7 +221,7 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 把 0 号页（桌面板书）写成一份历史快照。
+    /// 把**白板槽**写成一份历史快照（2026-10-16 起白板独立；桌面批注不进历史）。
     /// **图片一律不要**：截图那种对象整条跳过（用户 2026-10-14 定）。
     /// 空板书且这一轮还没写过 → 不留空文件（免得开一下软件就多一份空的）。
     /// `sync`（2026-10-15）：周期快照走**后台写**（false）；退出前那份必须落完（true）。
@@ -270,32 +276,37 @@ public partial class InkEngine
         if (NowMs - _lastStrokeEndMs < HistoryIdleMs) return;
 
         _nextAutoSaveAtMs = NowMs + _autoSaveEveryMs;
-        if (Doc.Version == _autoSavedVersion) return;
 
         // PPT 模式：**改成写当前这一页到 PPT 自己的目录**，不写自动存档。
-        // 为什么：自动存档是"桌面的那一份板书"，下次启动会被当成桌面批注接回来——
-        // 把某一页 PPT 的内容写进去就串了（那是另一条路的数据）。
-        // PPT 页本来就有自己的落盘通道（翻页时、退出时各一次），这里补上"放映中途"
-        // 那一段（老师在一页上写很久、还没翻页就崩了，内容不至于丢）。
-        // 2026-10-15：这条也改成**后台写**（同上，只挑书写间隙）。
+        // 为什么：自动存档是"白板那一份"，把某一页 PPT 的内容写进去就串了
+        //（那是另一条路的数据）。PPT 页本来就有自己的落盘通道（翻页时、退出时各一次），
+        // 这里补上"放映中途"那一段（老师在一页上写很久、还没翻页就崩了，内容不至于丢）。
         if (PptMode)
         {
+            if (Doc.Version == _autoSavedVersion) return;
             SaveCurrentPptPage(deferred: true);
             _autoSavedVersion = Doc.Version;
             AutoSaveCount++;
             return;
         }
 
+        // 非放映：**自动存档 = 白板槽**（桌面批注不落盘——2026-10-16 用户定）。
+        // 指纹判"变没变"：在桌面 / 文档页写字而白板槽没动的，一次都不写
+        //（以前按全文档版本号判，在文档页写两笔也会顺手把白板存档重写一遍）。
+        long fp = BoardFingerprint(Doc.StrokesOf(InkDocument.BoardPageKey));
+        if (fp == _autoSavedBoardFp) return;
         AutoSaveDeferred();
+        _autoSavedBoardFp = fp;
     }
 
     /// <summary>周期自动存档（2026-10-15 加）：序列化在主线程（碰 Doc），**写盘走后台上**。
-    /// 退出 / 重启那两处仍走同步的 <see cref="AutoSaveNow"/>（必须落完才算数）。</summary>
+    /// 退出 / 重启那两处仍走同步的 <see cref="AutoSaveNow"/>（必须落完才算数）。
+    /// 2026-10-16 起**只存白板槽**。</summary>
     private void AutoSaveDeferred()
     {
-        try { Recovery.SaveAutoDeferred(InkSerializer.Save(Doc)); }
+        try { Recovery.SaveAutoDeferred(InkSerializer.SaveStrokes(BoardForSave())); }
         catch (Exception ex) { Console.WriteLine("自动存档失败：" + ex.Message); }
-        _autoSavedVersion = Doc.Version;
+        _autoSavedBoardFp = BoardFingerprint(Doc.StrokesOf(InkDocument.BoardPageKey));
         AutoSaveCount++;
     }
 
@@ -2737,9 +2748,14 @@ public partial class InkEngine
 
         try
         {
-            InkSerializer.LoadInto(Doc, blob);
+            // 暂存的也是**白板槽**（2026-10-16）：装回白板并直接进白板给它看。
+            var strokes = InkSerializer.LoadStrokes(blob, out int maxId);
+            Doc.LoadPageContent(InkDocument.BoardPageKey, strokes, maxId);
+            _boardReturnKey = 0;
+            Doc.SwitchPage(InkDocument.BoardPageKey);
+            BoardOn = true;
             Doc.InvalidateAll();
-            Console.WriteLine($"已恢复上次界面出问题时暂存的板书：{Doc.Strokes.Count} 笔");
+            Console.WriteLine($"已恢复上次界面出问题时暂存的板书（白板）：{strokes.Count} 笔");
         }
         catch (Exception ex)
         {
@@ -2780,10 +2796,17 @@ public partial class InkEngine
 
         try
         {
-            InkSerializer.LoadInto(Doc, blob);
+            // 自动存档 = **白板槽**（2026-10-16）：装回白板、直接进白板给它看
+            //（以前是"打开就铺满屏幕"；接上的东西从"桌面板书"换成了"白板"——同一份数据，
+            //  语义从"恢复桌面批注"改成"恢复上课的板书"）。
+            var strokes = InkSerializer.LoadStrokes(blob, out int maxId);
+            Doc.LoadPageContent(InkDocument.BoardPageKey, strokes, maxId);
+            _boardReturnKey = 0;
+            Doc.SwitchPage(InkDocument.BoardPageKey);
+            BoardOn = true;
+            _autoSavedBoardFp = BoardFingerprint(Doc.StrokesOf(InkDocument.BoardPageKey));
             Doc.InvalidateAll();
-            _autoSavedVersion = Doc.Version;
-            Console.WriteLine($"已接上上次的板书：{Doc.Strokes.Count} 笔");
+            Console.WriteLine($"已接上上次的板书（白板）：{strokes.Count} 笔");
         }
         catch (Exception ex)
         {
@@ -10049,17 +10072,18 @@ public partial class InkEngine
         // 只写"改过的"键位和"界面改过的"偏好；都没动过就不碰用户的配置文件。
         FlushSettings();
 
-        // 退出前补一次自动存档（下一次打开接上）。自检模式不动用户的存档。
-        if (Doc.Version != _autoSavedVersion) AutoSaveNow();
+        // 退出前补一次自动存档（**白板槽**；下一次打开接上）。自检模式不动用户的存档。
+        if (BoardFingerprint(Doc.StrokesOf(InkDocument.BoardPageKey)) != _autoSavedBoardFp)
+            AutoSaveNow();
 
         // 在途的周期写盘（板书历史 / 自动存档 / PPT 批注）先全部等落完——**顺序不能反**：
         // 反了的话，"后到的旧内容"会把下面这份退出快照盖掉。
         BackgroundSaver.Flush(5000);
 
         // 板书历史：退出前再补一份（**不受"自动恢复"偏好影响**）。这一份是"关软件那一刻"
-        // 的板书画布——上面那条"停顿才写"只保证阶段性留存，最后这一段靠它兜底。
+        // 的**白板槽**——上面那条"停顿才写"只保证阶段性留存，最后这一段靠它兜底。
         // 退出这份走**同步**（落完才算数）。
-        WriteBoardHistory(Doc.StrokesOf(0), sync: true);
+        WriteBoardHistory(Doc.StrokesOf(InkDocument.BoardPageKey), sync: true);
         BoardHistory.CloseSession();      // 下一次运行另起一份快照
 
         if (_uiInputHwnd != IntPtr.Zero)
@@ -10677,7 +10701,7 @@ public partial class InkEngine
     /// **「清除全部墨迹」**（2026-10-14 用户定：一个动作、三个场景、一个名字）：
     ///   · **PPT**：这份演示文稿**所有页**的批注（含盘上缓存；不动桌面板书、不动"播到第几页"）；
     ///   · **文档（PDF/图片）**：这份文档**所有页**的批注（含盘上缓存；不动桌面板书）；
-    ///   · **白板 / 桌面批注**：整张画布（含翻过的屏）。
+    ///   · **白板 / 桌面（当前这一槽）**：整张画布（含翻过的屏）——只清当前所在的那一槽，另一槽不动。
     /// 三个场景都**可撤销**（一步回到清空前）；两个入口调它：
     /// 橡皮带那个按住 0.8 秒的按钮（`IEngineCommands.Clear`）和翻页条菜单那一项。
     /// </summary>
@@ -11059,15 +11083,55 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
+    /// <summary>进白板前待在哪一页；关白板回哪（默认 0 = 桌面）。</summary>
+    private int _boardReturnKey = 0;
+
     /// <summary>
-    /// 开关白板。底色一变，整个内容层都要重画——缓存里那张图是按旧底色画的。
+    /// 开关白板。**2026-10-16 起白板是独立槽**（用户定）：开 = 切到白板槽
+    /// （桌面 / 文档 / PPT 的墨迹都不跟着来），关 = 切回进来之前待的那一页。
+    /// 底色 / 底纹跟着 <see cref="BoardOn"/> 走，切槽必然整层重画（缓存是按旧底色画的）。
+    ///
+    /// 与穿透的关系照旧：开白板顺手退穿透（另一边在 <see cref="SetPassThrough"/> 里，
+    /// 两个方向都挡）；**穿透本身不切槽**——它只是把白板层临时让开，退穿透原样恢复。
     /// </summary>
     internal void SetBoardFromUi(bool on)
     {
-        if (BoardOn == on) return;
-        BoardOn = on;
-        // 开白板就顺手关掉穿透（另一边在 SetPassThrough 里，两个方向都挡，理由见那儿）
-        if (on) SetPassThrough(false);
+        // 已经是目标状态就没有事做（"开且人就在白板槽" / "关且人不在白板槽"）。
+        if (on == BoardOn
+            && (on ? Doc.PageKey == InkDocument.BoardPageKey
+                   : Doc.PageKey != InkDocument.BoardPageKey))
+            return;
+
+        // 切槽 = 整页内容换了：回放是"当前这一页的只读重演"，先收掉（同 Ppt.GotoPage 的"翻页"）。
+        ExitReplayForEdit("切白板");
+
+        if (on)
+        {
+            SetPassThrough(false);          // 开白板顺手关穿透（原样）
+            int from = Doc.PageKey;
+            if (from != InkDocument.BoardPageKey) _boardReturnKey = from;
+            if (Doc.SwitchPage(InkDocument.BoardPageKey))
+            {
+                // 相机"每页一个数"（同 Ppt.GotoPage）：切回来还停在原来看的位置。
+                _pageScroll[from] = ViewOffsetY;
+                ViewOffsetY = _pageScroll.TryGetValue(InkDocument.BoardPageKey, out var v) ? v : 0f;
+                ClampViewOffset();
+                _camAnimating = false;
+            }
+            BoardOn = true;
+        }
+        else
+        {
+            int from = Doc.PageKey;
+            if (Doc.SwitchPage(_boardReturnKey))
+            {
+                _pageScroll[from] = ViewOffsetY;
+                ViewOffsetY = _pageScroll.TryGetValue(_boardReturnKey, out var v) ? v : 0f;
+                ClampViewOffset();
+                _camAnimating = false;
+            }
+            BoardOn = false;
+        }
         Doc.InvalidateAll();
         _dirty = true;
         NotifyUiStateChanged();
@@ -11292,7 +11356,7 @@ public partial class InkEngine
             return false;
         }
 
-        try { Recovery.SaveSession(InkSerializer.Save(Doc)); } catch (Exception ex) { Console.WriteLine("板书暂存失败：" + ex.Message); }
+        try { Recovery.SaveSession(InkSerializer.SaveStrokes(BoardForSave())); } catch (Exception ex) { Console.WriteLine("板书暂存失败：" + ex.Message); }
         Console.WriteLine($"  → 重启软件（第 {n} 次），板书已暂存，重启后自动读回来");
 
         if (!RestartSelf(what)) return false;

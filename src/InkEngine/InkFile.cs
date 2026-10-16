@@ -194,15 +194,17 @@ public partial class InkEngine
         try { bytes = File.ReadAllBytes(path); }
         catch (Exception ex) { SetInkStatus("打不开：" + ex.Message); return false; }
 
-        // **先校验、后动文档**：坏文件不许碰到当前板书（连备份都不必写）。
+        // **先校验、后动文档**：坏文件不许碰到白板槽（连备份都不必写）。
         try { InkSerializer.Validate(bytes); }
         catch (Exception ex) { SetInkStatus("打不开：" + ex.Message); return false; }
 
-        // 打开前留一份当前板书（有内容才留）。
-        string backupNote = "当前板书是空的，未备份";
-        if (Doc.Strokes.Count > 0)
+        // **打开落白板槽**（2026-10-16 用户定："打开的板书就是白板"）：备份的是
+        // **要被替换的那一份**（白板槽）；桌面 / 文档 / PPT 的槽一概不动。
+        var boardNow = Doc.StrokesOf(InkDocument.BoardPageKey);
+        string backupNote = "白板是空的，未备份";
+        if (boardNow != null && boardNow.Count > 0)
         {
-            try { InkFileStore.WriteBackup(InkSerializer.Save(Doc)); backupNote = "旧板书已备份"; }
+            try { InkFileStore.WriteBackup(InkSerializer.SaveStrokes(boardNow)); backupNote = "旧板书已备份"; }
             catch (Exception ex)
             {
                 Console.WriteLine("打开前备份失败（继续打开）：" + ex.Message);
@@ -210,17 +212,25 @@ public partial class InkEngine
             }
         }
 
-        try { InkSerializer.LoadInto(Doc, bytes); }
+        List<Stroke> loaded;
+        try
+        {
+            loaded = InkSerializer.LoadStrokes(bytes, out int maxId);
+            Doc.LoadPageContent(InkDocument.BoardPageKey, loaded, maxId);   // 自带清该槽的撤销栈
+        }
         catch (Exception ex) { SetInkStatus("打不开：" + ex.Message); return false; }
 
-        // 新文档从"第 0 页 ＋ 相机归零 ＋ 无选中"开始（ReplaceAll 已经重置页槽与历史）。
+        // 切到白板展示 + 相机归零 + 无选中。
+        _boardReturnKey = Doc.PageKey == InkDocument.BoardPageKey ? _boardReturnKey : Doc.PageKey;
+        Doc.SwitchPage(InkDocument.BoardPageKey);
+        BoardOn = true;
         Doc.Selected.Clear();
         ViewOffsetY = 0f;
         foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
         _pageScroll.Clear();
         Doc.InvalidateAll();
         _dirty = true;
-        SetInkStatus($"已打开 {Path.GetFileName(path)}（{Doc.Strokes.Count} 个对象；{backupNote}）");
+        SetInkStatus($"已打开 {Path.GetFileName(path)}（{loaded.Count} 个对象；{backupNote}）");
         return true;
     }
 

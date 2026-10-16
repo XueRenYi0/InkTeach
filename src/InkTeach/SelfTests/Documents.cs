@@ -714,8 +714,9 @@ internal sealed partial class App
             int redBack = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 255, 0, 0, 40);
             Check("退出穿透：页重新上屏", redBack > 4000, $"{redBack}/6400 像素");
 
-            // ⭐ 白板盖住文档时：**墨与截图都留在白板上**（用户用法："截图 PDF 里的题 → 摆到白板上"，
-            //   那些截图/批注就是要摆在白板上的内容，所以不隐）。
+            // ⭐ 白板独立槽（2026-10-16 用户定）：**文档页的墨归文档页**——开白板不把它带上来
+            //   （白板盖住时文档整页让位），关白板原来的墨原样都在。
+            //   老用法"截图 PDF 的题 → 摆到白板上"的替代路径：选中 → Ctrl+C → 切白板 → Ctrl+V。
             {
                 var coverMark = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,
                                              Color = new Color4(0f, 0f, 0f, 1f), Width = 10f };
@@ -728,13 +729,13 @@ internal sealed partial class App
                 SetBoardFromUi(true);
                 SettleFrames(420);
                 int inkOnBoard = ScreenProbe.CountNear(rb0 + 270, ry0 + 260, 100, 80, 0, 0, 0, 40);
-                Check("白板盖住文档：墨/截图留在白板上（不隐）",
-                      BoardOn && inkBefore > 100 && inkOnBoard > 100,
+                Check("白板盖住文档：文档的墨**不混进白板**（各归各的槽）",
+                      BoardOn && inkBefore > 100 && inkOnBoard < 50,
                       $"板开={BoardOn}，黑像素（盖前/盖后）={inkBefore}/{inkOnBoard}");
                 SetBoardFromUi(false);
                 SettleFrames(420);
                 int inkBack = ScreenProbe.CountNear(rb0 + 270, ry0 + 260, 100, 80, 0, 0, 0, 40);
-                Check("关白板：墨还在（回到文档上面）", !BoardOn && inkBack > 100, $"黑像素={inkBack}");
+                Check("关白板：文档的墨还在（回到文档页）", !BoardOn && inkBack > 100, $"黑像素={inkBack}");
             }
 
             // ⭐ 半透明白板盖文档：透出来的是 **PDF**（"透过上面那张纸看到下面那张"），

@@ -6560,7 +6560,18 @@ internal sealed class InkDocument
         _pages[0] = _cur;
     }
 
-    /// <summary>当前页的键：0 = 桌面批注页；&gt; 0 = PPT 那一页的 SlideID。</summary>
+    /// <summary>
+    /// **白板槽的页键**（2026-10-16 用户定："白板设置为独立槽"）。
+    ///
+    /// 键空间分配（见 DocStore.SlotOf / Ppt 的键注释）：
+    ///   0 = 桌面批注页；正数 = PPT SlideID；-1..-9999 = PPT 无 SlideID 的兜底；
+    ///   [int.MinValue, -1073741825] = 文档页槽（DocStore.SlotOf 的 int.MinValue 段）。
+    /// 白板取 **-100000**：落在两段负空间之间的空档里，谁也撞不上。
+    /// </summary>
+    public const int BoardPageKey = -100000;
+
+    /// <summary>当前页的键：0 = 桌面批注页；&gt; 0 = PPT 那一页的 SlideID；
+    /// -100000 = 白板槽（见 <see cref="BoardPageKey"/>）。</summary>
     public int PageKey => _pageKey;
 
     public List<Stroke> Strokes => _cur.Strokes;

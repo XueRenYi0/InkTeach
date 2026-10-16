@@ -451,6 +451,7 @@ public partial class InkEngine
         ExitReplayForEdit("翻页");
         int from = Doc.PageKey;
         if (!Doc.SwitchPage(key)) return false;
+        if (BoardOn) BoardOn = false;   // 切去非白板页：白板自动让位（白板槽内容原样留着）
 
         _pageScroll[from] = ViewOffsetY;
         ViewOffsetY = _pageScroll.TryGetValue(key, out var v) ? v : 0f;
@@ -524,7 +525,8 @@ public partial class InkEngine
         int saved = 0;
         foreach (int key in Doc.PageKeys())
         {
-            if (key == 0) continue;
+            if (key == 0) continue;                          // 桌面页不归 PPT 管
+            if (key == InkDocument.BoardPageKey) continue;   // 白板槽也不归（2026-10-16 独立槽）
             SavePageToDisk(key);
             saved++;
         }

@@ -3046,6 +3046,7 @@ internal sealed partial class App
 
         try { File.Delete(prefsPath); } catch { }        // 临时配置用完就删
 
+        Doc.SwitchPage(InkDocument.BoardPageKey);   // 自动存档=白板槽（2026-10-16）：这份"要留住的板书"写在白板上
         Doc.Clear();
         Doc.ClearHistory();
         var keep2 = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 6f };
@@ -3092,7 +3093,7 @@ internal sealed partial class App
             keptStrokes = Doc.Strokes.Count;
         }
         catch (Exception ex) { Console.WriteLine("  读回自动存档失败：" + ex.Message); }
-        Check("留的那一份解得回来、笔数对得上", keptStrokes == 1,
+        Check("留的那一份解得回来、笔数对得上（白板槽）", keptStrokes == 1,
               $"读回 {keptStrokes} 笔（应为 1 笔）");
 
         Recovery.DeleteAuto();

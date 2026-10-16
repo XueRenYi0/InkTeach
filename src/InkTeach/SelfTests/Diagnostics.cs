@@ -1160,6 +1160,19 @@ internal sealed partial class App
                   Doc.Strokes.Count == desktopStrokes, $"{Doc.Strokes.Count} / {desktopStrokes}");
         }
 
+        // 切白板：整页内容换掉，回放同样自动停（2026-10-16 白板独立槽）
+        {
+            AddInk(300f, 400f, 400f, 0f, 600f);
+            SettleFrames(120);
+            Check("（准备）桌面上能起回放", StartReplayForTest(), "");
+            SetBoardFromUi(true);
+            SettleFrames(150);
+            Check("切白板：回放自动停（内容整页换掉）", !ReplayActive && BoardOn,
+                  $"active={ReplayActive}，板 = {BoardOn}");
+            SetBoardFromUi(false);
+            SettleFrames(120);
+        }
+
         if (ReplayActive) StopReplay("自检收尾");
         Doc.ResetToSinglePage();
         Doc.ClearHistory();
@@ -1449,15 +1462,26 @@ internal sealed partial class App
             catch { }
             Check("保存…：.png 内容真的是 PNG", pngHead, "");
 
+            // 先往**桌面槽**放一笔：验证"打开落白板槽、桌面不动"（2026-10-16 白板独立槽）。
             Doc.Clear();
-            Doc.InvalidateAll();
+            Doc.SwitchPage(0);
+            var deskKeep = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0.5f, 0f, 1f), Width = 5f * DpiScale };
+            deskKeep.AddPoint(600, 700, 1f, NowMs); deskKeep.AddPoint(660, 730, 1f, NowMs);
+            Doc.AddStroke(deskKeep);
+
             OpenBoardAnyForTest(new[] { anyInk });
-            Check("打开…：单个 .inkb → 装回板书", Doc.Strokes.Count == 1, $"{Doc.Strokes.Count} 条");
+            Check("打开…：.inkb → 装进**白板槽**且当前在白板",
+                  Doc.Strokes.Count == 1 && Doc.PageKey == InkDocument.BoardPageKey && BoardOn,
+                  $"页键 {Doc.PageKey}，板 = {BoardOn}，{Doc.Strokes.Count} 条");
             int beforeMix = Doc.Strokes.Count;
             OpenBoardAnyForTest(new[] { anyInk, anyPng });
             Check("打开…：混选 .inkb → 拒（请单独打开）、板书不动",
                   InkStatus.Contains("单独打开") && Doc.Strokes.Count == beforeMix,
                   $"状态：{InkStatus}");
+            SetBoardFromUi(false);
+            Check("打开…：桌面槽原样（那一条还在）",
+                  Doc.PageKey == 0 && Doc.Strokes.Count == 1 && Doc.Strokes[0] == deskKeep,
+                  $"页键 {Doc.PageKey}，{Doc.Strokes.Count} 条");
         }
         Doc.ResetToSinglePage();
         Doc.ClearHistory();
@@ -2488,6 +2512,7 @@ internal sealed partial class App
 
         string path = Recovery.AutoSavePath;
         Recovery.DeleteAuto();
+        Doc.SwitchPage(InkDocument.BoardPageKey);   // 自动存档 = 白板槽（2026-10-16）：整条用例在白板上跑
 
         Check("存档落在 LOCALAPPDATA（不是 TEMP）",
               path.Contains("Local", StringComparison.OrdinalIgnoreCase)
@@ -2560,6 +2585,20 @@ internal sealed partial class App
         int afterIdle = AutoSaveCount;
         Check("板书没变就不写", afterIdle == before, $"{before} → {afterIdle} 次");
 
+        // ②.5 **桌面写字：自动存档不写**（2026-10-16 用户定：桌面批注不落盘）
+        {
+            Doc.SwitchPage(0);
+            var desk2 = new Stroke { Tool = Tool.Pen, Color = new Color4(0.8f, 0f, 0f, 1f), Width = 4f * DpiScale };
+            desk2.AddPoint(220, 220, 1f, 0); desk2.AddPoint(280, 250, 1f, 1);
+            Doc.AddStroke(desk2);
+            int beforeDesk = AutoSaveCount;
+            sw.Restart();
+            while (sw.ElapsedMilliseconds < 260) { PumpMessages(); RenderAll(); }
+            Check("桌面写字：自动存档**不写**（桌面不落盘）",
+                  AutoSaveCount == beforeDesk, $"{beforeDesk} → {AutoSaveCount} 次");
+            Doc.SwitchPage(InkDocument.BoardPageKey);
+        }
+
         // 变一下 → 到点就该写
         var c = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 4f * DpiScale };
         c.AddPoint(300, 300, 1f, 0); c.AddPoint(360, 330, 1f, 1);
@@ -2595,9 +2634,12 @@ internal sealed partial class App
         Doc.Clear();
         Doc.ClearHistory();
         RestoreAutoSaveForTest();
-        Check("重开接上上次的板书", Doc.Strokes.Count == 1, $"读回 {Doc.Strokes.Count} 笔");
+        Check("重开接上上次的板书（白板槽）", Doc.Strokes.Count == 1 && BoardOn,
+              $"读回 {Doc.Strokes.Count} 笔，板 = {BoardOn}");
 
         Recovery.DeleteAuto();
+        Doc.SwitchPage(0);
+        BoardOn = false;
         Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
         ExitCode = fail == 0 ? 0 : 1;
         _quit = true;

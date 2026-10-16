@@ -40,6 +40,7 @@ internal sealed partial class App
         // ---------- ① 快照：只含笔迹（截图不进） ----------
         Doc.Clear();
         Doc.ResetToSinglePage();
+        Doc.SwitchPage(InkDocument.BoardPageKey);   // 内容写在白板槽（历史只认它，2026-10-16）
         var pen = new Stroke
         {
             Tool = Tool.Pen, Kind = StrokeKind.Freehand,
@@ -82,6 +83,29 @@ internal sealed partial class App
         Check("快照体积：足够小（图片像素没进去）",
               snap != null && new System.IO.FileInfo(snap).Length < 8 * 1024,
               snap == null ? "没有文件" : $"{new System.IO.FileInfo(snap).Length} 字节");
+
+        // ---- ①.5 桌面批注不进快照（2026-10-16 用户定：桌面不保存、不进历史）----
+        {
+            Doc.SwitchPage(0);                       // 去桌面写一笔
+            var desk = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0f, 0.6f, 0f, 1f), Width = 6f,
+            };
+            desk.AddPoint(200f, 800f, 1f, 0); desk.AddPoint(300f, 830f, 1f, 8);
+            Doc.AddStroke(desk);
+            bool wrote2 = SnapshotBoardHistoryForTest();          // 同一会话文件覆盖写
+            int loaded2 = -1;
+            try
+            {
+                if (snap != null)
+                    loaded2 = InkSerializer.LoadStrokes(
+                        System.IO.File.ReadAllBytes(snap), out _).Count;
+            }
+            catch { }
+            Check("桌面批注**不进快照**（白板独立槽）", wrote2 && loaded2 == 2, $"读回 {loaded2} 条");
+            Doc.SwitchPage(InkDocument.BoardPageKey);             // 回白板继续后面的用例
+        }
 
         // ---------- ② 轮转：总量超上限从最老的删 ----------
         long keepMax = BoardHistory.MaxBytes;
@@ -138,9 +162,64 @@ internal sealed partial class App
               cleared && Doc.Strokes.Count == before,
               $"清空后 {0} → 撤销后 {Doc.Strokes.Count}（原 {before}）");
 
+        // ---------- ⑤ 白板独立槽（2026-10-16 用户定）：切槽 / 留存 / 清空按槽 ----------
+        {
+            // 起手归零：清当前槽（③④ 之后人站在白板上），回桌面。
+            ClearAllInkFromUi();
+            SettleFrames(120);
+            if (BoardOn) SetBoardFromUi(false);
+            SettleFrames(120);
+            Doc.Clear();
+
+            var d1 = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0f, 0f, 0f, 1f), Width = 5f,
+            };
+            d1.AddPoint(400f, 400f, 1f, 0); d1.AddPoint(460f, 420f, 1f, 6);
+            Doc.AddStroke(d1);
+            int deskBase = Doc.Strokes.Count;                       // 桌面 1 笔
+
+            SetBoardFromUi(true);
+            SettleFrames(120);
+            Check("独立槽：开白板 = 切到白板槽（桌面那笔不跟过来）",
+                  BoardOn && Doc.PageKey == InkDocument.BoardPageKey && Doc.Strokes.Count == 0,
+                  $"页键 {Doc.PageKey}，{Doc.Strokes.Count} 条");
+
+            var b1 = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0f, 0f, 1f, 1f), Width = 5f,
+            };
+            b1.AddPoint(500f, 500f, 1f, 0); b1.AddPoint(560f, 520f, 1f, 6);
+            Doc.AddStroke(b1);
+
+            SetBoardFromUi(false);
+            SettleFrames(120);
+            Check("独立槽：关白板 = 回桌面，桌面那笔还在",
+                  !BoardOn && Doc.PageKey == 0 && Doc.Strokes.Count == deskBase,
+                  $"页键 {Doc.PageKey}，{Doc.Strokes.Count} 条");
+
+            SetBoardFromUi(true);
+            SettleFrames(120);
+            Check("独立槽：再进白板，白板那笔还在",
+                  Doc.Strokes.Count == 1 && Doc.Strokes[0] == b1, $"{Doc.Strokes.Count} 条");
+
+            // 清空按槽：在桌面清空，白板不受影响
+            SetBoardFromUi(false);
+            SettleFrames(120);
+            Doc.Clear();
+            SetBoardFromUi(true);
+            SettleFrames(120);
+            Check("独立槽：在桌面清空，白板不受影响", Doc.Strokes.Count == 1, $"{Doc.Strokes.Count} 条");
+            Doc.Clear();
+            SetBoardFromUi(false);
+            SettleFrames(120);
+        }
+
         Console.WriteLine();
         Console.WriteLine(fail == 0
-            ? $"  PASS：板书历史正确（快照不含图 / 轮转 / 找回 / 清除可撤销）——共 {pass} 项"
+            ? $"  PASS：板书历史正确（快照不含图 / 轮转 / 找回 / 清除可撤销 / 桌面不进快照）——共 {pass} 项"
             : $"  FAIL：{fail} 项不对（{pass} 项通过）");
 
         // 收尾：临时目录与记忆都放掉
