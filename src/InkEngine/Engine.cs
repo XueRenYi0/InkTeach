@@ -10019,6 +10019,21 @@ public partial class InkEngine
             }
             _boardBeforePassThrough = false;   // 快照只服务相邻这几次穿透，用完即清
 
+            // **不留"人还在白板槽、板却没开"的混合态**（用户 2026-10-16 报）：
+            // 写了板书 → 开穿透 → 经「换工具/呼出盘」这类"我就要写"的路退穿透
+            // （restoreBoard=false）→ 板盖不恢复，但人还站在板槽上——屏幕上就是
+            // "白板看不见、板槽的墨迹却浮着"，接着写还会**悄悄写进白板槽**。
+            // 让过位的板只有两种正当结局：① 穿透开关退出 = 恢复原样（上面那支）；
+            // ② 不恢复 = **人退回来处**——和 SetBoardFromUi 关板同一条路（相机按槽记忆）。
+            if (!BoardOn && Doc.PageKey == InkDocument.BoardPageKey)
+            {
+                LeaveBoardSlot();
+                Doc.InvalidateAll();
+                _dirty = true;
+                NotifyUiStateChanged();
+                Console.WriteLine("退出穿透：白板未恢复 → 人退回来处（清了'板槽没板'的混合态）");
+            }
+
             // **穿透关掉 = 回到"能批注"的状态 → 必须把键盘/前台要回来**。
             // 用户 2026-09-30 复现的真 bug：穿透开开关关几次之后，Ctrl+P 这些应用内快捷键
             // 就彻底死了——因为穿透期间我们的窗口不是前台（样式里也不让它被激活），
@@ -11122,19 +11137,31 @@ public partial class InkEngine
         }
         else
         {
-            int from = Doc.PageKey;
-            if (Doc.SwitchPage(_boardReturnKey))
-            {
-                _pageScroll[from] = ViewOffsetY;
-                ViewOffsetY = _pageScroll.TryGetValue(_boardReturnKey, out var v) ? v : 0f;
-                ClampViewOffset();
-                _camAnimating = false;
-            }
+            LeaveBoardSlot();
             BoardOn = false;
         }
         Doc.InvalidateAll();
         _dirty = true;
         NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 从白板槽退回来处（<see cref="_boardReturnKey"/>），相机按"每页一个数"切
+    /// （和 <see cref="SetBoardFromUi"/> 关板那条路共用同一份逻辑）。两个调用点：
+    /// 白板关（SetBoardFromUi）、"退穿透但板不恢复"（<see cref="SetPassThrough"/>）——
+    /// 两条路都必须让"人不在板槽"与"板没开"同时成立，别留下"板槽没板"的混合态
+    /// （板槽的墨会浮在桌面上；2026-10-16 用户报的就是它）。
+    /// </summary>
+    private void LeaveBoardSlot()
+    {
+        int from = Doc.PageKey;
+        if (Doc.SwitchPage(_boardReturnKey))
+        {
+            _pageScroll[from] = ViewOffsetY;
+            ViewOffsetY = _pageScroll.TryGetValue(_boardReturnKey, out var v) ? v : 0f;
+            ClampViewOffset();
+            _camAnimating = false;
+        }
     }
 
     /// <summary>

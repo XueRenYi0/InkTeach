@@ -795,6 +795,99 @@ internal sealed partial class App
                       $"板开={BoardOn} 驻留={DocView.ResidentPages}");
             }
 
+            // ⭐ 白板 × 穿透 × 换工具（2026-10-16 用户报）：写了板书 → 开穿透 → 关穿透，
+            //   曾出现"白板盖看不见、板槽的墨迹却浮着"，再点白板格才把盖找回来。修完的规矩：
+            //   让过位的板只有两种正当结局——① 穿透开关退出 = 恢复原样（盖回来）；
+            //   ② "我就要写"的路退出（换工具/呼出盘）= 人退回来处，**不留"板槽没板"的混合态**。
+            {
+                var btSavedColor = BoardColor;
+                SetBoardColorFromUi(new Color4(0f, 0.8f, 0f, 1f));    // 绿板色当判据（本套惯用）
+                int btBackKey = Doc.PageKey;                          // 开板前的页：关板/退回来处都回它
+                SetBoardFromUi(true);
+                SettleFrames(300);
+                float btCamY = ViewOffsetY;                           // 板槽自己的相机位置
+                var btMark = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                                          Color = new Color4(0f, 0f, 0f, 1f), Width = 12f };
+                btMark.AddPoint(rb0 + 500f, ry0 + 620f - btCamY, 1f, 0);   // 落屏位置 (rb0+500, ry0+620)
+                btMark.AddPoint(rb0 + 620f, ry0 + 700f - btCamY, 1f, 0);
+                Doc.AddStroke(btMark);                                // 当前槽=白板 → 进白板槽
+                SettleFrames(300);
+                int btCover0 = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 0, 204, 0, 6);
+                int btInk0 = ScreenProbe.CountNear(rb0 + 490, ry0 + 610, 140, 100, 0, 0, 0, 40);
+                Check("（准备）白板开：盖是板色、板上有墨",
+                      BoardOn && btCover0 > 5000 && btInk0 > 100,
+                      $"板开={BoardOn} 板绿={btCover0}/6400 板墨={btInk0}");
+
+                // ① 鼠标格开穿透：板盖让位（全让开）
+                SetPassThroughFromUi(true);
+                SettleFrames(280);
+                int btCoverPt = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 0, 204, 0, 6);
+                Check("穿透：白板盖让位（全让开）", PassThrough && btCoverPt < 80, $"板绿残留={btCoverPt}");
+
+                // ② 鼠标格关穿透（穿透开关退出）：恢复原样——盖回来、人还在板槽
+                SetPassThroughFromUi(false);
+                SettleFrames(320);
+                int btCoverBack = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 0, 204, 0, 6);
+                Check("穿透开关退出：白板**恢复原样**（盖回来 + 人还在板上）",
+                      !PassThrough && BoardOn && Doc.PageKey == InkDocument.BoardPageKey && btCoverBack > 5000,
+                      $"板开={BoardOn} 槽={(Doc.PageKey == InkDocument.BoardPageKey ? "白板" : "别处")} 板绿={btCoverBack}/6400");
+
+                // ③ 再进穿透，这次走「换工具」退（笔格/呼出盘 = "我现在就要写"）——
+                //   以前这里留下混合态：盖没了、板槽的墨还浮在桌面上，接着写还会悄悄写进白板槽
+                SetPassThroughFromUi(true);
+                SettleFrames(280);
+                SetToolFromUi(Tool.Highlighter);
+                SettleFrames(380);
+                int btCoverGone = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 0, 204, 0, 6);
+                int btFloatInk = ScreenProbe.CountNear(rb0 + 490, ry0 + 610, 140, 100, 0, 0, 0, 40);
+                Check("换工具退穿透：**不留混合态**（人退回来处、板墨不浮着）",
+                      !PassThrough && !BoardOn && Doc.PageKey == btBackKey
+                      && btCoverGone < 80 && btFloatInk < 60,
+                      $"板开={BoardOn} 回原页={Doc.PageKey == btBackKey} 板绿={btCoverGone} 浮墨={btFloatInk}");
+                Check("换工具退穿透：白板槽的内容**原样都在**（人走了、内容不丢）",
+                      Doc.StrokesOf(InkDocument.BoardPageKey).Count == 1,
+                      $"{Doc.StrokesOf(InkDocument.BoardPageKey).Count} 笔");
+
+                // ④ 点白板格：盖和墨**一起回来**（用户那句"墨迹和白板都有"——一个整状态）
+                SetBoardFromUi(true);
+                SettleFrames(320);
+                int btCoverAgain = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 0, 204, 0, 6);
+                int btInkAgain = ScreenProbe.CountNear(rb0 + 490, ry0 + 610, 140, 100, 0, 0, 0, 40);
+                Check("再开白板：盖和墨一起回来（一个整状态）",
+                      BoardOn && Doc.PageKey == InkDocument.BoardPageKey && btCoverAgain > 5000 && btInkAgain > 100,
+                      $"板开={BoardOn} 板绿={btCoverAgain}/6400 板墨={btInkAgain}");
+
+                // ⑤ 关白板：人回来处、盖收掉；板槽内容留着（下次开还在）
+                SetBoardFromUi(false);
+                SettleFrames(280);
+                int btCoverOff = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 0, 204, 0, 6);
+                Check("关白板：人回来处、盖收掉、板槽内容原样留着",
+                      !BoardOn && Doc.PageKey == btBackKey && btCoverOff < 80
+                      && Doc.StrokesOf(InkDocument.BoardPageKey).Count == 1,
+                      $"板开={BoardOn} 回原页={Doc.PageKey == btBackKey} 板绿={btCoverOff} 存={Doc.StrokesOf(InkDocument.BoardPageKey).Count} 笔");
+
+                // ⑥ 穿透里开白板（Ctrl+B 同路）：退穿透 + 板回来，一条命令收两个状态
+                SetPassThroughFromUi(true);
+                SettleFrames(280);
+                SetBoardFromUi(true);
+                SettleFrames(320);
+                int btCoverKb = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 0, 204, 0, 6);
+                Check("穿透里开白板：顺手退穿透，盖+墨一起回来",
+                      !PassThrough && BoardOn && Doc.PageKey == InkDocument.BoardPageKey && btCoverKb > 5000,
+                      $"穿透={PassThrough} 板开={BoardOn} 板绿={btCoverKb}/6400");
+
+                // 收尾：板槽清掉（后面的用例从干净状态起）、板色与工具还原
+                SetBoardFromUi(false);
+                SettleFrames(240);
+                if (Doc.PageKey != InkDocument.BoardPageKey) Doc.SwitchPage(InkDocument.BoardPageKey);
+                Doc.Clear();
+                Doc.ClearHistory();
+                if (Doc.PageKey != btBackKey) Doc.SwitchPage(btBackKey);
+                SetBoardColorFromUi(btSavedColor);
+                SetToolFromUi(Tool.Pen);
+                SettleFrames(200);
+            }
+
             CloseDocument();
             Check("关文档：白板状态不受影响（文档只收自己那张纸）", !BoardOn, $"BoardOn={BoardOn}");
             if (Doc.PageKey != 0) Doc.SwitchPage(0);
