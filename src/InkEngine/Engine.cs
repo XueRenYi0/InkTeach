@@ -762,6 +762,10 @@ public partial class InkEngine
             sb.Append("  最大触点数=").Append(info.maxActiveContacts);
             sb.Append("  判定=").Append(onScreen ? "屏内笔（藏光标＋画环）" : "板子/外接（给斜笔）");
             string prod = ProductStringPath(ref info);
+            // **合成设备（自检注入的虚拟笔）不记**：CreateSyntheticPointerDevice 造出来的设备
+            // 路径长这样「\??\Microsoft HID RID\…」——它们不是用户的板子，记下来只会污染这份
+            // "给真机看"的文件（2026-10-16：pressuretest 跑一下就混进来一行）。
+            if (prod.Contains("Microsoft HID RID", StringComparison.OrdinalIgnoreCase)) return;
             if (!string.IsNullOrEmpty(prod)) sb.Append("  产品=").Append(prod);
             System.IO.Directory.CreateDirectory("reports");
             System.IO.File.AppendAllText(System.IO.Path.Combine("reports", "pen-devices.txt"),
