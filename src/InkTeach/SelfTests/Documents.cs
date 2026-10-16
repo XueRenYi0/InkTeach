@@ -475,6 +475,21 @@ internal sealed partial class App
         var errD = OpenDocuments(new[] { "a.pdf", pFlag });
         Check("图片和 PDF 混选 ⇒ 提示重选", errD != null, errD ?? "(没报错)");
 
+        // 多选打开对话框的缓冲区解析（Win32 老规矩：**"选了一个"和"选了三个"是两种形状**）：
+        // 注释里写着"不单独测就会在两者之间翻车"——2026-10-16 把这条钉子补上
+        //（用户回忆"早前多选打开图片失败过"，最像的就是这一处）。
+        {
+            var oneSel = ExportFileDialog.ParseMultiSelection("C:\\pic\\a.png\0\0");
+            Check("对话框解析：单选（一整条完整路径 + 结尾双 \\0）",
+                  oneSel != null && oneSel.Length == 1 && oneSel[0] == "C:\\pic\\a.png",
+                  oneSel == null ? "null" : string.Join(" | ", oneSel));
+            var multiSel = ExportFileDialog.ParseMultiSelection("C:\\pic\0a.png\0b.png\0\0");
+            Check("对话框解析：多选（目录 + 各文件名，拼回完整路径）",
+                  multiSel != null && multiSel.Length == 2
+                  && multiSel[0] == "C:\\pic\\a.png" && multiSel[1] == "C:\\pic\\b.png",
+                  multiSel == null ? "null" : string.Join(" | ", multiSel));
+        }
+
         // 多选图片：铺成"一叠页"（用户问"同时打开多张可以吗"；2026-10-16 补钉子）
         var errM = OpenDocuments(new[] { pFlag, pLong });
         Check("多选两张图片：一叠页都铺出来", errM == null && DocView.Count >= 2,
