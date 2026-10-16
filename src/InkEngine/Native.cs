@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 
 namespace InkEngine;
 
@@ -588,99 +588,6 @@ internal static class Native
     public static extern uint GetRawInputData(
         IntPtr hRawInput, uint uiCommand, out RAWINPUT pData, ref uint pcbSize, uint cbSizeHeader);
 
-    // ---- Wintab（数位板驱动的原生 API）---------------------------------------
-    // 只给 `--wintabprobe` 用，**产品路径不依赖它**。
-    //
-    // 为什么值得探：关掉 Windows Ink 之后，压力会整个消失（设备退化成鼠标，
-    // WM_POINTER 报 PT_MOUSE、Raw Input 也读不到厂商私有的笔集合）。
-    // 而 Wintab 是**驱动自己的 API、绕开 Windows 整条输入栈**，
-    // 所以它是"关 ink 还想有压力"的唯一一条路（Wacom 官方也推荐用 Wintab）。
-    //
-    // ⚠ 不是所有板子都有：需要驱动带 wintab32.dll。
-    //   有厂商驱动的（Wacom/绘王/高漫/XP-Pen…）通常有；
-    //   **Windows 原生笔（Surface / N-trig / MPP）从 SP5 起就没有了**。
-    public const uint WTI_INTERFACE = 1;
-    public const uint WTI_DEFCONTEXT = 3;
-    /// <summary>设备属性；`nIndex` 从 1 开始（**索引含义我不猜**，探针直接枚举出来看值）。</summary>
-    public const uint WTI_DEVICES = 100;
-    public const uint IFC_VERSION = 2;
-    public const uint IFC_NDEVICES = 4;
-    /// <summary>Wintab 的包消息默认基址（LOGCONTEXT.lcMsgBase 的默认值）。</summary>
-    public const int WT_DEFBASE = 0x7FF0;
-
-    /// <summary>AXIS：WTInfo 查"某个轴/属性的范围"时填的结构（16 字节）。</summary>
-    [StructLayout(LayoutKind.Sequential)]
-    public struct AXIS
-    {
-        public int axMin;
-        public int axMax;
-        public uint axUnits;
-        public int axResolution;
-    }
-
-    /// <summary>LOGCONTEXT（Wintab 上下文）的大小：**实测 172 字节**（不是规范上常说的 160！）。
-    /// 这里**不按字段声明结构体**，而是用一块 256 字节的裸缓冲 + 按偏移读写——
-    /// 结构体的对齐/打包一旦猜错，`WTInfo` 会写坏内存（实测返回 172 &gt; 160，
-    /// 照 160 声明就等于让驱动往栈上多写 12 字节）。裸缓冲只要求"够大"。
-    /// 用到的偏移：lcMsgBase=52。</summary>
-    public const int LOGCONTEXT_BYTES = 256;
-    // LOGCONTEXT 里各字段的偏移（按 wintab.h 的声明顺序算，全部 4 字节对齐）
-    public const int LC_OPTIONS_OFFSET = 40;
-    public const int LC_MSGBASE_OFFSET = 52;
-    public const int LC_PKTRATE_OFFSET = 60;
-    public const int LC_PKTDATA_OFFSET = 64;
-    public const int LC_PKTMODE_OFFSET = 68;
-    public const int LC_MOVEMASK_OFFSET = 72;
-    public const int LC_BTNDNMASK_OFFSET = 76;
-    public const int LC_BTNUPMASK_OFFSET = 80;
-
-    /// <summary>lcOptions 的位。**`CXO_MESSAGES` 不设 → 驱动根本不投递包消息**
-    /// （第一版探针就是漏了这一步，结果"上下文打开成功但收不到包"）。</summary>
-    public const uint CXO_SYSTEM = 0x0001;
-    public const uint CXO_PEN = 0x0002;
-    public const uint CXO_MESSAGES = 0x0004;
-    public const uint CXO_CSRMESSAGES = 0x0008;
-    public const uint CXO_MARGIN = 0x8000;
-
-    /// <summary>lcPktData 的位（包里带哪些字段）。</summary>
-    public const int PK_CONTEXT = 0x0001;
-    public const int PK_STATUS = 0x0002;
-    public const int PK_TIME = 0x0004;
-    /// <summary>PK_CHANGED（包里带"哪些字段变了"的掩码）。</summary>
-    public const int PK_CHANGED = 0x0008;
-    public const int PK_SERIAL_NUMBER = 0x0010;
-    public const int PK_CURSOR = 0x0020;
-    public const int PK_BUTTONS = 0x0040;
-    public const int PK_X = 0x0080;
-    public const int PK_Y = 0x0100;
-    public const int PK_Z = 0x0200;
-    /// <summary>正压力——关掉 ink 之后我们最想要的就是它。</summary>
-    public const int PK_NORMAL_PRESSURE = 0x0400;
-    public const int PK_TANGENT_PRESSURE = 0x0800;
-    public const int PK_ORIENTATION = 0x1000;
-    public const int PK_ROTATION = 0x2000;
-
-    [DllImport("wintab32.dll", EntryPoint = "WTInfoA", CharSet = CharSet.Ansi, SetLastError = true)]
-    public static extern uint WTInfo(uint wCategory, uint nIndex, IntPtr lpOutput);
-
-    [DllImport("wintab32.dll", EntryPoint = "WTOpenA", CharSet = CharSet.Ansi, SetLastError = true)]
-    public static extern IntPtr WTOpen(IntPtr hWnd, IntPtr lpLogCtx, bool fEnable);
-
-    /// <summary>启用/停用上下文。**`WTOpen(..., fEnable:true)` 在某些驱动上会破坏进程堆**
-    /// （见 <see cref="WintabInput"/> 里那段注释）——所以标准做法是：
-    /// 先用 `fEnable:false` 打开、再单独 `WTEnable(true)`。</summary>
-    [DllImport("wintab32.dll", EntryPoint = "WTEnable", SetLastError = true)]
-    public static extern bool WTEnable(IntPtr hCtx, bool fEnable);
-
-    [DllImport("wintab32.dll", SetLastError = true)]
-    public static extern bool WTClose(IntPtr hCtx);
-
-    /// <summary>一次取最多 cMaxPackets 个包到 lpPkt（返回实际取到几个）。
-    /// 包体长度/布局由 lcPktData 决定，调用方自己按位算字段偏移——
-    /// 不按结构体声明读，避免打包/对齐猜错。</summary>
-    [DllImport("wintab32.dll", SetLastError = true)]
-    public static extern int WTPacketsGet(IntPtr hCtx, int cMaxPackets, IntPtr lpPkt);
-
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetPointerInfo(uint pointerId, out POINTER_INFO pointerInfo);
 
@@ -704,12 +611,6 @@ internal static class Native
     public static extern bool GetPointerInfoHistory(uint pointerId, ref uint entriesCount, [Out] POINTER_INFO[] pointerInfo);
 
     // ---- kernel32 --------------------------------------------------------
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-    public static extern IntPtr LoadLibrary(string lpFileName);
-
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
-    public static extern IntPtr GetProcAddress(IntPtr hModule, string lpProcName);
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern IntPtr GetModuleHandle(string moduleName);

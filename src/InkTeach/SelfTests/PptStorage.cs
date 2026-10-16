@@ -516,9 +516,9 @@ internal sealed partial class App
             var page = PptBar.MidCell(bar, dpi);
             PptBarPointerMove((page.MinX + page.MaxX) * 0.5f, (page.MinY + page.MaxY) * 0.5f);
             UpdateEngineTooltip();
-            SettleFrames(650);
+            SettleFrames(1700);                   // > 1.5s 首次延迟 + 淡入（2026-10-16 起延迟两档）
             StepEngineTooltip();                  // 自检里没有主循环，手动推一下"到点"
-            Check("悬停页码格 0.5 秒：提示出现（点 = 页码跳转菜单）",
+            Check("悬停页码格 1.5 秒：提示出现（点 = 页码跳转菜单）",
                   TooltipShown && TooltipTitle == "页码" && TooltipNote.Contains("结束放映"),
                   $"亮={TooltipShown}，标题={TooltipTitle}，说明={TooltipNote}");
 

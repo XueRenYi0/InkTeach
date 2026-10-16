@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using Vortice.Direct2D1;
@@ -95,7 +95,7 @@ public partial class InkEngine
     /// </summary>
     private static bool IsSwitchNotMode(string a) => a switch
     {
-        "--norawinput" or "--wintab" or "--nowintab" or "--nopressure" or "--rawprobe" or "--notrend"
+        "--norawinput" or "--nopressure" or "--rawprobe" or "--notrend"
             or "--himetric" or "--nohimetric" or "--notouch" or "--syswet" or "--ownwet" or "--strokefile"
             or "--inktrail" or "--noinktrail" or "--trailonly" or "--trailcommit"
             or "--hud" or "--nohud" or "--fullpresent"
@@ -1078,10 +1078,6 @@ public partial class InkEngine
     /// <summary>这一笔里哪些点是 **raw 补点**加的（下标）。只录来源时才记。</summary>
     private readonly System.Collections.Generic.List<int> _rawAddedIdx = new();
 
-    /// <summary>最近一次 Wintab 读到的平板坐标与原始压力（`--recinkp` 录进文件，**不参与绘制**）。
-    /// 用来事后算"平板 ↔ 屏幕"的映射 —— 要做"整笔走 Wintab"就不能猜这个关系。</summary>
-    internal int WtLastTabletX, WtLastTabletY, WtLastRawPressure;
-
     // ===================== `--clean N`：入笔前的净化 =====================
     //
     // **为什么要有它（2026-10-07，用户录了真机笔迹之后）**：
@@ -1097,31 +1093,6 @@ public partial class InkEngine
     //
     // 默认 **0 = 完全不动**（一个字节不改）。等用户试出合适的档再考虑设默认。
 
-    /// <summary>`--wintab`：启用并**强制**（不许"自动退"）。</summary>
-    internal bool WintabForced;
-
-    /// <summary>Wintab 的用户偏好键（**没有界面**，只由命令行写）。</summary>
-    private const string WintabPrefKey = "wintab";
-
-    /// <summary>命令行要求的偏好值（"1"/"0"/空=没要求）。**推迟到 Loop() 才写盘**，
-    /// 理由见上面那段注释（构造函数里 SelfCheckMode 还不可信）。</summary>
-    private string _pendingWintabPref = "";
-
-    /// <summary>`--wintab` / `--nowintab` 会把它记到设置里 —— 用户敲一次就够，不用每次带开关。</summary>
-    private void WriteWintabPref(string v)
-    {
-        try
-        {
-            SetUiPref(WintabPrefKey, v);
-            // **立刻落盘**（不只是标脏）：这是用户明确表达的意愿，
-            // 万一程序之后崩了/被强杀也不该丢 —— 而且"记住了"这件事必须当场可验证。
-            FlushSettings();
-            Console.WriteLine($"  [wintab] 已记住：{(v == "1" ? "以后默认启用" : "以后默认关闭")}"
-                              + $"（设置里的 {WintabPrefKey}，没有界面）");
-        }
-        catch (Exception ex) { Console.WriteLine($"  [wintab] 记偏好失败（不影响使用）：{ex.Message}"); }
-    }
-
     // ---- 湿墨档位（2026-10-13 新增；2026-10-15 精简为两档：应用湿墨层撤除）------------
     //
     // 档位是**在原来的路径之上叠加**，不是替换：
@@ -1136,10 +1107,10 @@ public partial class InkEngine
     // 切换方式：`--wetmode N`（记住到设置里）或运行时 **Ctrl+Alt+Shift+W** 循环。
     internal static int WetMode;
 
-    /// <summary>湿墨档位的用户偏好键（和 wintab 一样：命令行/热键写，没有界面）。</summary>
+    /// <summary>湿墨档位的用户偏好键（命令行/热键写，没有界面）。</summary>
     private const string WetModePrefKey = "wetmode";
 
-    /// <summary>命令行要求的档位（推迟到 Loop() 才写盘，理由同 wintab）。</summary>
+    /// <summary>命令行要求的档位（推迟到 Loop() 才写盘——构造函数里 SelfCheckMode 还不可信）。</summary>
     private string _pendingWetModePref = "";
 
     internal static string WetModeName(int m) => m switch
@@ -1189,38 +1160,7 @@ public partial class InkEngine
     /// <summary>`--clean N`：入笔前对位置与压力做 N 点滑动平均（0/1 = 关）。</summary>
     internal static int CleanWindow;
 
-    /// <summary>连续多少笔（关 ink 那种非笔笔）没从 Wintab 拿到压力。</summary>
-    private int _wtDryStrokes;
-
-    /// <summary>
-    /// **自动退**（2026-10-07 用户提出"要不要默认关掉"之后加的保险）。
-    ///
-    /// 想清楚的事：我们**只从 Wintab 借"压力"这一样**，坐标永远走原来的路 ——
-    /// 所以最坏情况只是"压力不对"，而压力还有区间断言兜着。真正的问题是
-    /// **在别人的机器上**（教室那台）我们看不见：
-    ///   · 驱动是别家的 / 是坏的 → 拿不到压力
-    ///   · 某些板子（Avalonia 的 PR 里点名 Huion）**开了 Wintab 会把 WM_POINTER 顶掉**
-    /// 所以与其"默认关"（那就连你都享受不到），不如**默认开＋自己退**：
-    /// 连着几笔一笔压力都拿不到 → 说明这台机器上它没用 → 关掉，本次会话不再开。
-    /// 想要它留着用 `--wintab` 强制。
-    /// </summary>
-    private void WintabSelfCheckAfterStroke(uint ptype)
-    {
-        if (!_wintab.IsOpen || WintabForced) return;
-        if (ptype == Native.PT_PEN) return;          // 开 ink 的笔本来就不用它，不算数
-        if (WtPressurePoints > 0) { _wtDryStrokes = 0; return; }
-        if (++_wtDryStrokes < 3) return;
-        _wintab.Close();
-        WintabEnabled = false;
-        Console.WriteLine("  [wintab] 连续 3 笔一笔压力都没拿到 → 本次会话不再启用"
-                          + "（这台机器上它没用；想强制留着用 `--wintab`）");
-    }
-
-
     private readonly System.Collections.Generic.List<(float X, float Y, float P)> _cleanBuf = new();
-
-    /// <summary>把这一批的压力样本摊到点上用的暂存（免分配）。</summary>
-    private readonly float[] _sampleScratch = new float[64];
 
     /// <summary>
     /// 加一个点，必要时先净化。
@@ -1389,13 +1329,6 @@ public partial class InkEngine
             _tailCanvas.Add(anchor + _tailOffsets[i] * scale);
     }
 
-    /// <summary>记下"当时的 Wintab 读数"，供 `--recinkp` 录进文件（不参与绘制）。</summary>
-    private void NoteWintabSample()
-    {
-        WtLastTabletX = _wintab.LatestX;
-        WtLastTabletY = _wintab.LatestY;
-        WtLastRawPressure = _wintab.RawPressure;
-    }
 
     /// <summary>录制缓冲：**识别器这一笔看到的那串点**（`TickDwellShape` 每次攒一份）。
     /// 只存引用、不复制 —— 没开录制时一个字节都不花。</summary>
@@ -2253,7 +2186,7 @@ public partial class InkEngine
 
         string mode = args.Length > 0 ? args[0] : "";
         // ⚠ **命令行开关不能写在第一个位置**这个坑（2026-10-07 修）：
-        // 上面这行会让 `InkTeach.exe --nowintab` 把**开关**当成"自检 mode"，
+        // 上面这行会让 `InkTeach.exe --norawinput` 把**开关**当成"自检 mode"，
         // 于是 `SelfCheckMode = true` —— 换临时设置路径、关掉导出对话框…
         // 用户想对照一下手感，结果程序进了半个自检状态，**而且他看不出来**。
         // 这里把"不是 mode 的开关"排除掉：单独敲一个开关时，走的还是正常模式。
@@ -2442,25 +2375,6 @@ public partial class InkEngine
         // 不再给用户关的开关（设置页那一行已撤）。只剩开发对照：`--norawinput` 仍可关。
         if (_noRawInputArg)
             RawInputCapture = false;
-
-        // ---- Wintab（2026-10-07 用户拍板：**默认关**）------------------------
-        // ⚠ **只在这一处决定**。之前我在两个地方各写了一半（这里读偏好、下面参数块里
-        // 又无条件 `WintabEnabled = false`），后写的把先写的**整个盖掉** ——
-        // "记住"那条链子当场失效。**同一件事写在两处 = 一定出错**，今天已经栽过一次了。
-        //
-        // 优先级：命令行（`--wintab` / `--nowintab`，顺手把偏好写下来）＞ 偏好 ＞ 默认（关）。
-        // **没有界面** —— 它是内部机制，不是给用户调的偏好。
-        {
-            bool wantOn = GetUiPref(WintabPrefKey) == "1";
-            if (args.Contains("--nowintab")) { wantOn = false; _pendingWintabPref = "0"; }
-            else if (args.Contains("--wintab")) { wantOn = true; _pendingWintabPref = "1"; }
-            WintabEnabled = wantOn;
-            WintabForced = wantOn;
-            // ⚠ **偏好不能在这里写盘**：构造函数跑在 `RunModeDispatch` 之前，
-            // 那时 `SelfCheckMode` 还是"见非空参数就真"的老判据（`--wintab` 没登记过，
-            // 会被当成 mode）→ `FlushSettings()` 一看是自检模式就**直接返回，什么都不写**。
-            // 所以只记下"待写"，等 `Loop()` 里判定完了再写（和那行诊断同一个道理）。
-        }
 
         // ---- 模拟压力与笔锋：**已全部停用**（2026-10-05，代码保留）----------------
         // [停用] `--simpressure/--simpressdepth`（Xournal++ 速度压力）、
@@ -2943,421 +2857,6 @@ public partial class InkEngine
     /// <summary>主屏像素尺寸（绝对原始报的归一化基准）。</summary>
     private float _primaryW = 1920f, _primaryH = 1080f;
 
-    /// <summary>`--wintabprobe`：收到的 Wintab 包条数（只数消息，不解析包体）。</summary>
-    internal int WintabPackets;
-    /// <summary>`--wintabprobe`：收到的 WT_PROXIMITY 条数（"笔在板子上"的通知）。</summary>
-    internal int WtProximity;
-    /// <summary>`--wintabprobe`：按消息类型分项计数（基址 + 偏移），用来分开
-    /// **WT_PACKET（真数据）** 和 **WT_CTXUPDATE（驱动每秒一次的状态通知）**——
-    /// 只数总数会把后者当成包，读出来的"包率"是假的。</summary>
-    internal readonly int[] WtByType = new int[64];
-    private int _wtMsgBase = -1;
-
-    /// <summary>Wintab 消息基址 + 偏移 → 名字。</summary>
-    private static string WtMsgName(int off) => off switch
-    {
-        0 => "WT_PACKET(真数据)",
-        1 => "WT_CTXOPEN",
-        2 => "WT_CTXCLOSE",
-        3 => "WT_CTXUPDATE(状态通知)",
-        4 => "WT_CTXOVERLAP",
-        5 => "WT_PROXIMITY",
-        6 => "WT_INFOCHANGE",
-        _ => "?",
-    };
-
-    /// <summary>把 lcPktData 的位翻译成人话（探针输出用）。</summary>
-    private static string DecodePktData(int v)
-    {
-        var s = new System.Text.StringBuilder("含：");
-        void Add(int bit, string name) { if ((v & bit) != 0) s.Append(name).Append(' '); }
-        Add(Native.PK_X, "X");
-        Add(Native.PK_Y, "Y");
-        Add(Native.PK_Z, "Z");
-        Add(Native.PK_NORMAL_PRESSURE, "正压力");
-        Add(Native.PK_TANGENT_PRESSURE, "切向压力");
-        Add(Native.PK_ORIENTATION, "倾斜");
-        Add(Native.PK_ROTATION, "旋转");
-        Add(Native.PK_BUTTONS, "按键");
-        Add(Native.PK_CURSOR, "笔类型");
-        Add(Native.PK_TIME, "时间戳");
-        Add(Native.PK_STATUS, "状态");
-        Add(Native.PK_CONTEXT, "上下文");
-        Add(Native.PK_SERIAL_NUMBER, "序列号");
-        return s.ToString();
-    }
-
-    /// <summary>
-    /// `--wintabprobe`：探 Wintab 这条路通不通。
-    ///
-    /// 只回答三个问题，全是"能不能用"、不是"好不好用"：
-    ///   ① `wintab32.dll` 在不在、导出函数找不找得到；
-    ///   ② `WTInfo` 报什么（接口版本、设备数）；
-    ///   ③ **`WTOpen` 能不能打开上下文** —— 打不开后面一切免谈；
-    ///   ④ 打开之后**真的收得到包吗**（数 Wintab 消息范围内的消息条数）。
-    ///
-    /// 只读、不改产品行为；失败就说明这台机器/这块板子没有这条路。
-    /// </summary>
-    internal int WintabProbe()
-    {
-        Console.WriteLine();
-        Console.WriteLine("=== Wintab 探针（只读，不改任何产品行为）===");
-
-        IntPtr hmod = Native.LoadLibrary("wintab32.dll");
-        if (hmod == IntPtr.Zero)
-        {
-            Console.WriteLine("  wintab32.dll          : 载入失败 → 这台机器没有这条路");
-            Console.WriteLine($"                          （err={Marshal.GetLastWin32Error()}）");
-            return 1;
-        }
-        Console.WriteLine("  wintab32.dll          : 载入成功");
-
-        IntPtr pInfo = Native.GetProcAddress(hmod, "WTInfoA");
-        IntPtr pOpen = Native.GetProcAddress(hmod, "WTOpenA");
-        IntPtr pClose = Native.GetProcAddress(hmod, "WTClose");
-        Console.WriteLine($"  WTInfoA / WTOpenA     : {(pInfo != IntPtr.Zero ? "找到" : "缺")} / {(pOpen != IntPtr.Zero ? "找到" : "缺")}");
-        if (pInfo == IntPtr.Zero || pOpen == IntPtr.Zero) return 1;
-
-        // ① 接口版本（WTInfo(WTI_INTERFACE, IFC_VERSION, &ver)，返回 16 位）
-        IntPtr buf = Marshal.AllocHGlobal(1024);
-        try
-        {
-            for (int i = 0; i < 1024; i++) Marshal.WriteByte(buf, i, 0);
-            uint got = Native.WTInfo(Native.WTI_INTERFACE, Native.IFC_VERSION, buf);
-            ushort ver = (ushort)Marshal.ReadInt16(buf);
-            Console.WriteLine($"  接口版本              : 0x{ver:X4}（WTInfo 返回 {got} 字节）"
-                              + (ver == 0 ? "  → 驱动可能没在响应" : ""));
-
-            for (int i = 0; i < 1024; i++) Marshal.WriteByte(buf, i, 0);
-            Native.WTInfo(Native.WTI_INTERFACE, Native.IFC_NDEVICES, buf);
-            uint devs = (uint)Marshal.ReadInt32(buf);
-            Console.WriteLine($"  设备数                : {devs}");
-
-            // ② 取默认上下文，看它的 lcMsgBase（包消息从哪儿开始）
-            for (int i = 0; i < 1024; i++) Marshal.WriteByte(buf, i, 0);
-            uint ctxBytes = Native.WTInfo(Native.WTI_DEFCONTEXT, 0, buf);
-            int msgBase = Marshal.ReadInt32(buf, Native.LC_MSGBASE_OFFSET);
-            int opts = Marshal.ReadInt32(buf, Native.LC_OPTIONS_OFFSET);
-            int pktData = Marshal.ReadInt32(buf, Native.LC_PKTDATA_OFFSET);
-            int pktRate = Marshal.ReadInt32(buf, Native.LC_PKTRATE_OFFSET);
-            Console.WriteLine($"  默认上下文            : WTInfo 返回 {ctxBytes} 字节，lcMsgBase=0x{msgBase:X4}，lcPktRate={pktRate}");
-            string msgFlag = (opts & Native.CXO_MESSAGES) != 0
-                ? "有 CXO_MESSAGES"
-                : "**没有 CXO_MESSAGES**（不设它驱动不投包）";
-            string sysFlag = (opts & Native.CXO_SYSTEM) != 0 ? " +CXO_SYSTEM" : "";
-            string penFlag = (opts & Native.CXO_PEN) != 0 ? " +CXO_PEN" : "";
-            Console.WriteLine($"    默认 lcOptions       : 0x{opts:X4}  {msgFlag}{sysFlag}{penFlag}");
-            Console.WriteLine($"    默认 lcPktData       : 0x{pktData:X4}  " + DecodePktData(pktData));
-            if (msgBase <= 0) msgBase = Native.WT_DEFBASE;
-
-            // **补齐 Wintab 的标准初始化**（第一版漏了这步 → 上下文开得起来但收不到包）：
-            //   lcOptions |= CXO_MESSAGES          → 让驱动投递 WT_PACKET
-            //   lcPktData |= X/Y/压力/按键/…        → 包里带我们需要的字段
-            //   lcMoveMask/lcBtnDnMask/lcBtnUpMask = lcPktData  → 移动和按键都发
-            int want = Native.PK_X | Native.PK_Y | Native.PK_NORMAL_PRESSURE
-                     | Native.PK_BUTTONS | Native.PK_CURSOR | Native.PK_TIME | Native.PK_STATUS;
-            Marshal.WriteInt32(buf, Native.LC_OPTIONS_OFFSET, opts | (int)Native.CXO_MESSAGES);
-            Marshal.WriteInt32(buf, Native.LC_PKTDATA_OFFSET, pktData | want);
-            Marshal.WriteInt32(buf, Native.LC_MOVEMASK_OFFSET, pktData | want);
-            Marshal.WriteInt32(buf, Native.LC_BTNDNMASK_OFFSET, pktData | want);
-            Marshal.WriteInt32(buf, Native.LC_BTNUPMASK_OFFSET, pktData | want);
-            Console.WriteLine($"    配置后 lcOptions     : 0x{(opts | (int)Native.CXO_MESSAGES):X4}（已补 CXO_MESSAGES）");
-            Console.WriteLine($"    配置后 lcPktData     : 0x{(pktData | want):X4}  {DecodePktData(pktData | want)}");
-
-            // ③ WTOpen：真正的门槛
-            IntPtr hwnd = _windows.Count > 0 ? _windows[0].Hwnd : IntPtr.Zero;
-            IntPtr ctx = Native.WTOpen(hwnd, buf, true);
-            if (ctx == IntPtr.Zero)
-            {
-                Console.WriteLine($"  WTOpen                : **失败**（err={Marshal.GetLastWin32Error()}）"
-                                  + " → 这条路对这台机器不存在");
-                return 1;
-            }
-            Console.WriteLine($"  WTOpen                : **成功**（ctx=0x{ctx.ToInt64():X}）");
-
-            // ④ 数包：Wintab 的包消息落在 [lcMsgBase, lcMsgBase+64)，只数条数、不解析
-            //    还**分别数** WT_PACKET(基址+0) 和 WT_PROXIMITY(基址+5)：
-            //      · 只有 PROXIMITY 没有 PACKET → 驱动知道笔在附近但没给数据
-            //      · 两个都有 → 真通了
-            _wtMsgBase = msgBase;
-            WintabPackets = 0;
-            WtProximity = 0;
-            Array.Clear(WtByType);
-            Console.WriteLine();
-            Console.WriteLine("  ---- 设备属性（WTInfo 枚举，**不问布局、直接问驱动**）----");
-            // 索引含义我不猜（今天猜布局栽了三次）：**把 1..32 全枚举出来看值**，
-            // 靠"值的量级"认出哪个是 X/Y（大范围）、哪个是正压力（0..1023 或 0..8191）。
-            for (uint idx = 1; idx <= 32; idx++)
-            {
-                for (int i = 0; i < 64; i++) Marshal.WriteByte(buf, i, 0);
-                uint gotAxis = Native.WTInfo(Native.WTI_DEVICES, idx, buf);
-                if (gotAxis == 0) continue;
-                var ax = Marshal.PtrToStructure<Native.AXIS>(buf);
-                if (ax.axMax == 0 && ax.axMin == 0 && ax.axUnits == 0) continue;
-                // 索引名**按 wintab.h 的标准顺序推测**（12=X 13=Y 14=Z 15=正压力 16=切向压力 17=倾斜），
-                // 并用实测值互相印证：12/13 是 50800/31750（典型幅面）、5=400（正是 lcPktRate）、
-                // 6=0x15F7（正是默认 lcPktData）——这些"意外对上"说明索引没认错。
-                // **但 15 和 16 都是 0..16383，光看量程分不出谁是压力**（倾斜也可能是这个量程），
-                // 所以下面标的是"推测"，真正的判据是**实压下读包**（见"包体实测"）。
-                string guess = idx switch
-                {
-                    12 => "  ← 推测 X 轴幅面",
-                    13 => "  ← 推测 Y 轴幅面",
-                    14 => "  ← 推测 Z 悬停高度（0~1024 很合理）",
-                    15 => "  ← 推测 **正压力**（待实压确认）",
-                    16 => "  ← 推测 切向压力（量程与 15 相同）",
-                    17 => "  ← 推测 倾斜方位角（0.1° 为单位）",
-                    _ => "  ← 非轴属性（按 AXIS 读会得到 min=值 max=0 这种样子，不用管）",
-                };
-                Console.WriteLine($"    [{idx,2}] min={ax.axMin,12} max={ax.axMax,12} units={ax.axUnits,-6} res={ax.axResolution}{guess}");
-            }
-
-            Console.WriteLine();
-            Console.WriteLine("  ▶ 请用手写笔在板子上**来回划 12 秒**（悬停即可，不必压笔尖）…");
-            Console.WriteLine("     ⚠ 一定要真的动笔——不动的话驱动不会发 WT_PACKET，测不出结果。");
-
-            // 按 **wintab.h 的固定字段顺序** 累加偏移和长度。
-            //
-            // ⚠ **所有被 lcPktData 选中的字段都要计入长度**，包括我们不读的那些
-            //（ORIENTATION / ROTATION / CHANGED / TANGENT_PRESSURE）——
-            // 第一版只累加了"要读的字段"，算出 36 字节，而真实包是 **48 字节**
-            //（lcPktData=0x15F7 里含 ORIENTATION，12 字节）→ 跨包读取全部错位 →
-            // X/Y/压力读出 **6973 万** 这种鬼数。**这是今天第三次栽在"自己算布局"上**
-            //（前两次：LOGCONTEXT 实测 172 而不是 160；这次 36 而不是 48）。
-            // 所以下面除了算对，还加了一道**合理性断言**（见输出里的"是否可信"）。
-            int xOff = -1, yOff = -1, pOff = -1, pktBytes = 0;
-            {
-                int o = 0, tmp;
-                void Field(int bit, int size, bool want, out int off)
-                {
-                    off = -1;
-                    if ((pktData & bit) == 0) return;
-                    if (want) off = o;
-                    o += size;
-                }
-                Field(Native.PK_CONTEXT, 4, false, out tmp);
-                Field(Native.PK_STATUS, 4, false, out tmp);
-                Field(Native.PK_TIME, 4, false, out tmp);
-                Field(Native.PK_CHANGED, 4, false, out tmp);
-                Field(Native.PK_SERIAL_NUMBER, 4, false, out tmp);
-                Field(Native.PK_CURSOR, 4, false, out tmp);
-                Field(Native.PK_BUTTONS, 4, false, out tmp);
-                Field(Native.PK_X, 4, true, out xOff);
-                Field(Native.PK_Y, 4, true, out yOff);
-                Field(Native.PK_Z, 4, false, out tmp);
-                Field(Native.PK_NORMAL_PRESSURE, 4, true, out pOff);
-                Field(Native.PK_TANGENT_PRESSURE, 4, false, out tmp);
-                Field(Native.PK_ORIENTATION, 12, false, out tmp);   // ← 漏了它就是那个 bug
-                Field(Native.PK_ROTATION, 12, false, out tmp);
-                pktBytes = o;
-            }
-            Console.WriteLine($"  包体布局（按规范算）  : 每包 {pktBytes} 字节；X@{xOff} Y@{yOff} 压力@{pOff}"
-                              + "   ← **实测证明这个不对，见下**");
-
-            // ===================== 实测修正 =====================
-            // 上一轮真机 71 个包（悬停）的**每个 4 字节偏移**统计，把真实布局钉死了：
-            //
-            //   偏移  实测行为                        结论
-            //    0    恒 1000（=HCTX 0x3E8）          上下文句柄 ✓
-            //    4    恒 0                            状态
-            //    8    恒 0                            ← **驱动在这里多占了一个字**
-            //   12    71408328 → 71408703 递增        时间戳(ms)
-            //   16    0 → 70，每包 +1                包序号 ✓（71 个包正好 0..70）
-            //   20    恒 1                           笔类型（1=笔）
-            //   24    恒 0                           按键（没按）
-            //   28    504 → 1084，变 66 次           X
-            //   32    432 →  877，变 68 次           Y
-            //   36    恒 0（**悬停时本来就该是 0**）  **正压力** ← 就是它
-            //   40    869 → 1400，变 35 次           倾斜：方位角
-            //   44    417 →  529，变 35 次           倾斜：高低角
-            //
-            // 判据很干净：**悬停时压力必须是 0**，全表里只有偏移 36 和 48 是"恒 0"，
-            // 而 36 紧跟 32(Y) 之后、正好在规范里 normalPressure 该在的位置。
-            // （偏移 40/44 在悬停时是 869~1400 而不是 0，所以**不是**压力。）
-            //
-            // 根因：驱动在 offset 8 多插了一个字（规范里那里并没有已选中的字段），
-            // 于是从它往后**所有字段整体挪了 4 字节** —— 这就是我按规范算的偏移
-            // （X@24 Y@28 压力@32）全部错位、把 Y 当成压力报出来的原因。
-            // 教训升级版：**连"按规范算"都要用实测钉一遍；规范≠这个驱动的实现。**
-            xOff = 28; yOff = 32; pOff = 36;
-            Console.WriteLine($"  包体布局（**实测修正**）: X@{xOff} Y@{yOff} 压力@{pOff}"
-                              + "   ← 驱动在 offset 8 多占一个字，整体挪 4 字节");
-            // ====================================================
-
-            IntPtr pktBuf = Marshal.AllocHGlobal(64 * Math.Max(64, pktBytes));
-            int pkMinX = int.MaxValue, pkMaxX = int.MinValue;
-            int pkMinY = int.MaxValue, pkMaxY = int.MinValue;
-            int pkMinP = int.MaxValue, pkMaxP = int.MinValue;
-            long pkWithPressure = 0, pkTotal = 0;
-
-            // ---- 不靠 OCR、不靠猜，认出字段的两种办法 ----
-            //
-            // ① **按 4 字节偏移统计 min/max/变化次数**。
-            //    每个字段有自己的"性格"：上下文句柄一直不变；坐标是大幅面、
-            //    随位置变；压力是 0~16383、随用力变；时间戳一直涨。
-            //    看出这张表就能认出布局，**不用数十六进制**。
-            //    （今天在"数十六进制"上已经栽过：截图会串行、OCR 数不准。）
-            const int WORDS = 16;                       // 64 字节 ÷ 4
-            var wMin = new int[WORDS];
-            var wMax = new int[WORDS];
-            var wChg = new int[WORDS];                  // 值变化过多少次
-            var wPrev = new int[WORDS];
-            var wSeen = new bool[WORDS];
-            for (int w = 0; w < WORDS; w++) { wMin[w] = int.MaxValue; wMax[w] = int.MinValue; }
-
-            // ② **原始字节直接写文件**（抽前 32 个包，每包 64 字节）。
-            //    写文件而不是只打屏幕：屏幕会被截断、转述会出错，
-            //    文件我能直接读。**要证据，不要转述。**
-            var rawPackets = new System.Collections.Generic.List<byte[]>();
-            try
-            {
-                for (int sec = 0; sec < 12; sec++)
-                {
-                    Thread.Sleep(1000);
-                    DrainMessages();
-                    // 每秒把攒下的包全取出来，统计 X/Y/压力的范围
-                    //
-                    // ⚠ **一次只取 1 个包**（cMaxPackets=1）：这样每个包都写进 buf 的 0 偏移，
-                    // **跨包错位不可能发生**。上一版按"自算的包长 48"一次取 64 个、
-                    // 按 48 步长跳——如果真实包长不是 48，从第 2 个包起就全错位，
-                    // 结果 X/Y/压力都读出 7000 万级（第 1 个包其实是对的）。
-                    // 教训：**不要再自己算包长**；能一次一个就别批量。
-                    int nPk;
-                    while ((nPk = Native.WTPacketsGet(ctx, 1, pktBuf)) > 0)
-                    {
-                        pkTotal++;
-                        if (xOff >= 0) { int v = Marshal.ReadInt32(pktBuf, xOff); if (v < pkMinX) pkMinX = v; if (v > pkMaxX) pkMaxX = v; }
-                        if (yOff >= 0) { int v = Marshal.ReadInt32(pktBuf, yOff); if (v < pkMinY) pkMinY = v; if (v > pkMaxY) pkMaxY = v; }
-                        if (pOff >= 0) { int v = Marshal.ReadInt32(pktBuf, pOff); if (v < pkMinP) pkMinP = v; if (v > pkMaxP) pkMaxP = v; if (v > 0) pkWithPressure++; }
-                        for (int w = 0; w < WORDS; w++)
-                        {
-                            int v = Marshal.ReadInt32(pktBuf, w * 4);
-                            if (v < wMin[w]) wMin[w] = v;
-                            if (v > wMax[w]) wMax[w] = v;
-                            if (!wSeen[w]) { wSeen[w] = true; wPrev[w] = v; }
-                            else if (v != wPrev[w]) { wChg[w]++; wPrev[w] = v; }
-                        }
-                        if (rawPackets.Count < 32)
-                        {
-                            var b = new byte[64];
-                            Marshal.Copy(pktBuf, b, 0, 64);
-                            rawPackets.Add(b);
-                        }
-                        if (pkTotal > 200000) break;          // 防跑飞
-                    }
-                    Console.Write($"\r    第 {sec + 1,2}/12 秒，已取 {pkTotal} 包，压力 {pkMinP}~{pkMaxP}   ");
-                }
-            }
-            finally { Marshal.FreeHGlobal(pktBuf); }
-            Console.WriteLine();
-            int pk = WtByType[0];
-            string pktVerdict = pk > 0
-                ? $" → 这条路通了（12 秒约 {pk / 12.0:F0} Hz）"
-                : " → 收不到真包（驱动没给数据 / 笔不在范围内 / 没真的动笔）";
-            Console.WriteLine($"  WT_PACKET（真包）     : **{pk} 条**{pktVerdict}");
-            Console.WriteLine("  按类型分项：");
-            for (int off = 0; off <= 8; off++)
-                if (WtByType[off] > 0)
-                    Console.WriteLine($"    {WtMsgName(off),-24}: {WtByType[off]}");
-            Console.WriteLine("  ---- 包体实测（关键数字）----");
-            Console.WriteLine($"    取到包数            : {pkTotal}（其中压力>0 的 {pkWithPressure} 条）");
-            if (pkTotal == 0)
-            {
-                Console.WriteLine("    **没有数据**        : 一条包都没取到，下面的范围无意义"
-                                  + "（驱动没发 / 笔不在范围 / 没真的动笔）");
-            }
-            else
-            {
-                Console.WriteLine($"    X 范围              : {pkMinX} ~ {pkMaxX}");
-                Console.WriteLine($"    Y 范围              : {pkMinY} ~ {pkMaxY}");
-                Console.WriteLine($"    **压力范围**        : {pkMinP} ~ {pkMaxP}"
-                                  + (pkMaxP > 1024 ? "  ← **超过 1024！比 Windows Ink 那条路更细**" : ""));
-                // **合理性断言**：数位板坐标和压力不可能到千万级。
-                // 超了就是偏移/长度算错，**这些数一个都不能信**——
-                // 今天已经在这栽过一次（漏算 ORIENTATION → 包长算成 36 而不是 48 → 跨包错位 → 读出 6973 万）。
-                bool sane = pkMaxX < 10_000_000 && pkMaxY < 10_000_000 && pkMaxP < 10_000_000
-                            && pkMinX >= 0 && pkMinY >= 0 && pkMinP >= 0;
-                Console.WriteLine($"    这些数可信吗        : {(sane ? "**是**（在合理量级内）" : "**否 —— 偏移/长度算错了，别信**")}");
-                if (!sane)
-                    Console.WriteLine("       （坐标/压力不可能到千万级；说明包体布局算错，读数全部作废）");
-            }
-            // ---- ① 按 4 字节偏移的统计表：**认出布局靠这张表，不靠数十六进制** ----
-            if (pkTotal > 0)
-            {
-                Console.WriteLine("  ---- 按 4 字节偏移统计（认出字段靠这张表）----");
-                Console.WriteLine("    偏移   最小        最大      变化次数   像什么");
-                for (int w = 0; w < WORDS; w++)
-                {
-                    if (!wSeen[w]) continue;
-                    int lo = wMin[w], hi = wMax[w], chg = wChg[w];
-                    string look;
-                    if (chg == 0) look = "常数（上下文/状态之类）";
-                    else if (lo >= 0 && hi <= 65535 && chg > 10) look = "**变化量大、范围适中**";
-                    else if (hi > 65535) look = "时间戳或大幅面坐标";
-                    else look = "";
-                    Console.WriteLine($"    {w * 4,4}  {lo,10}  {hi,10}  {chg,8}   {look}");
-                }
-                Console.WriteLine("     判读：上下文句柄一直不变；坐标面大、随位置变；"
-                                  + "**压力范围 0~16383、随用力变**；时间戳一直涨。");
-            }
-
-            // ---- ② 原始字节写文件（不看屏幕、不用截图、不会转述出错）----
-            string rawPath = System.IO.Path.Combine(
-                Environment.CurrentDirectory, "wintab-原始数据.txt");
-            try
-            {
-                var sb = new System.Text.StringBuilder();
-                sb.AppendLine($"# Wintab 原始包（前 {rawPackets.Count} 个，每包 64 字节）");
-                sb.AppendLine($"# 上下文 lcPktData = 0x{pktData:X4}（{DecodePktData(pktData)}）");
-                sb.AppendLine($"# 一共取到 {pkTotal} 个包；X 范围 {pkMinX}~{pkMaxX}，Y 范围 {pkMinY}~{pkMaxY}，压力范围 {pkMinP}~{pkMaxP}");
-                sb.AppendLine();
-                sb.AppendLine("# ---- 按 4 字节偏移统计（认出字段靠这张表）----");
-                sb.AppendLine("#   偏移        最小          最大    变化次数");
-                for (int w = 0; w < WORDS; w++)
-                {
-                    if (!wSeen[w]) continue;
-                    sb.AppendLine($"#   {w * 4,4}  {wMin[w],11}  {wMax[w],11}  {wChg[w],8}");
-                }
-                sb.AppendLine();
-                sb.AppendLine("# 判读：上下文句柄一直不变；坐标面大、随位置变；压力 0~16383、随用力变；时间戳一直涨。");
-                sb.AppendLine();
-                for (int i = 0; i < rawPackets.Count; i++)
-                {
-                    sb.AppendLine($"包 {i + 1}:");
-                    for (int r = 0; r < 64; r += 16)      // 每行 16 字节 = 4 个 4 字节字
-                    {
-                        var line = new System.Text.StringBuilder();
-                        line.Append($"  +{r,2}  ");
-                        for (int c = 0; c < 16; c += 4)
-                        {
-                            for (int k = 0; k < 4; k++)
-                                line.Append(rawPackets[i][r + c + k].ToString("X2")).Append(' ');
-                            // 顺便把小端整数也解出来，省得以后还要心算
-                            int v = rawPackets[i][r + c]
-                                  | (rawPackets[i][r + c + 1] << 8)
-                                  | (rawPackets[i][r + c + 2] << 16)
-                                  | (rawPackets[i][r + c + 3] << 24);
-                            line.Append($"={v,11} | ");
-                        }
-                        sb.AppendLine(line.ToString().TrimEnd(' ', '|', ' '));
-                    }
-                    sb.AppendLine();
-                }
-                System.IO.File.WriteAllText(rawPath, sb.ToString(), new System.Text.UTF8Encoding(true));
-                Console.WriteLine($"  原始数据已写文件      : {rawPath}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"  ⚠ 写原始数据文件失败  : {ex.Message}");
-            }
-
-            Native.WTClose(ctx);
-            Console.WriteLine("  WTClose               : 已关闭");
-            _wtMsgBase = -1;
-            return WintabPackets > 0 ? 0 : 1;
-        }
-        finally { Marshal.FreeHGlobal(buf); }
-    }
 
     /// <summary>上一条绝对原始报的原始值（取差值用，见 HandleRawInput）。</summary>
     private int _rawAbsX, _rawAbsY;
@@ -3492,13 +2991,7 @@ public partial class InkEngine
             // **输入路径总览**（2026-10-07 用户要求）：一次说清这台机器上会走哪几条路。
             // 每条笔的 `[笔画]` 行也会用大白话报"这一笔实际走了哪条"（见 DescribeInputPath）。
             Console.WriteLine("输入路径: 开 ink → Windows Ink 笔（压力 1024 级）"
-                              + "；关 ink → "
-                              + (WintabEnabled ? "Wintab 给压力（16383 级）＋ raw 补点"
-                                               : "只有 raw 补点（Wintab 默认关；想开用 --wintab，会记住）")
-                              + "；Wintab: "
-                              + (WintabEnabled
-                                  ? "待开（为不影响开 ink，改成第一笔「关 ink」时才开）"
-                                  : "未启用"));
+                              + "；关 ink → raw 补点（等宽，无压力）");
             return true;
         }, IntPtr.Zero);
 
@@ -3667,14 +3160,8 @@ public partial class InkEngine
             _selfCheckLogged = true;
             Console.WriteLine($"  [mode] 自检：{_modeName}（设置/存档/PPT 缓存都走临时路径）");
         }
-        // 命令行要求的 Wintab 偏好，**到这里才写盘**：此刻 `RunModeDispatch` 已经判完
-        // （兜底分支会把开关的 SelfCheckMode 清掉），所以开关敲一次是真的记得住。
-        if (_pendingWintabPref.Length > 0 && !SelfCheckMode)
-        {
-            WriteWintabPref(_pendingWintabPref);
-            _pendingWintabPref = "";
-        }
-        // 命令行要求的湿墨档位，同样**到这里才写盘**（理由同 wintab）。
+        // 命令行要求的湿墨档位，**到这里才写盘**：此刻 `RunModeDispatch` 刚判完
+        // （兜底分支会把开关的 SelfCheckMode 清掉），敲一次是真的记得住。
         if (_pendingWetModePref.Length > 0 && !SelfCheckMode)
         {
             try
@@ -3699,13 +3186,6 @@ public partial class InkEngine
             // 截图、图形工具、多笔式…），漏一条就会退回"空闲也收鼠标空报"，
             // 表现就是空闲 46fps 空转、单核 26%（实测）。
             if (_rawRegistered && ActiveStroke == null) SetRawCapture(false);
-
-            // ⚠ Wintab **不在这里关**（2026-10-07 真机抓到的 bug）：
-            // 原来这里写了 `if (_wintab.IsOpen && ActiveStroke == null) _wintab.Close();`，
-            // 配上 EnsureWintab 里的 `_wintabTried` 一打过就不再打开 → **只有第一笔有压力**，
-            // 后面每一笔都是"上下文已关、又不重开"。用户真机日志的 `压感=无` 就是它。
-            // 现在改成**开一次就留着**：它用的是轮询（没有包消息），空闲时我们一次都不去取，
-            // 所以留着不产生唤醒；起笔时先 Flush 倒掉积压，也不会吃到过期样本。
 
             NowMs = _clock.Elapsed.TotalMilliseconds;
             PumpKeyGestures();            // 工具键的手势：长按判定 + 连按换色的延迟结算
@@ -4111,18 +3591,6 @@ public partial class InkEngine
 
     private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
-        // `--wintabprobe`：Wintab 的包消息落在 [lcMsgBase, lcMsgBase+64) 这一段。
-        // **只数条数、不解析包体**——探针只需要回答"驱动到底发不发包"。
-        // 顺带把 WT_PROXIMITY（基址+5）单独数一下："笔在附近"和"真有数据"是两件事。
-        if (_wtMsgBase > 0 && msg >= (uint)_wtMsgBase && msg < (uint)_wtMsgBase + 64)
-        {
-            int off = (int)(msg - (uint)_wtMsgBase);
-            WtByType[off]++;
-            WintabPackets++;
-            if (off == 5) WtProximity++;
-            return IntPtr.Zero;
-        }
-
         // **系统来问"要不要那条长按手势"**：一律回"不要"。
         //
         // 这是关掉"按住不动 = 右键"的**主路**（另两条在 Native.DisableSystemPressAndHold 里）：
@@ -4873,18 +4341,7 @@ public partial class InkEngine
             ? ActiveStroke : null;
         // 起笔：落笔这条消息里可能已经合并了几个采样点，一起收进来（以前只取最新那一个）。
         ActiveStrokeHasPressure = false;
-        _wtStrokePressure = -1f;     // Wintab 的缺压回填基准**每笔归零**（新一笔不继承上一笔的力度）
-        WtSeenPressure = false;
-        // ⚠ 三个计数**必须每笔归零**（2026-10-07 真机抓到的第二个 bug）：
-        // 原来它们一直累加，于是日志里会出现"压感=无 但 补压89点"这种**自相矛盾**的行——
-        // 那个 89 是前几笔攒下来的，害我一开始以为压力补上了、其实是后面每一笔都没开上下文。
-        // **日志数字必须是"这一笔"的**，不然它就不是证据。差值基线也一起归零。
-        WtPolledPackets = WtPressurePoints = WtBadPackets = 0;
-        WtRawPMin = int.MaxValue; WtRawPMax = int.MinValue;
-        _wtPendingPoints = 0;
         _cleanBuf.Clear();
-        _wintabPacketsSeen = _wintab.PacketsRead;
-        _wintabBadSeen = _wintab.BadPackets;
         // 委托轨迹：这一笔的喂点/结账差值基线（`[笔画]` 里报"这一笔"的数）。
         _trailFedSeen = OverlayWindow.InkTrailPointsFed;
         _trailRemovedSeen = OverlayWindow.InkTrailPointsRemoved;
@@ -4899,16 +4356,6 @@ public partial class InkEngine
         _rawHasIntermediates = false;   // 判据要攒几条才有结论
         _rawAnchorValid = false;        // 锚点由这一笔的第一条指针消息建立
         SetRawCapture(true);            // 原始输入：**只在这一笔期间收**（空闲必须关）
-        // ⚠ Wintab **不在这里开**（2026-10-07 用户提问后改的）：
-        //
-        // 原来在起笔时无条件 `EnsureWintab()`，虽然说好了"只在非笔路径上用"，
-        // 但**上下文已经开着** —— 万一驱动因为"有 Wintab 客户端"而改变笔的上报方式
-        // （Wintab 是单一提供者，历史上就有"哪个 API 拿到数据"的取舍），
-        // 那就连累了**开 ink** 那条路 —— 而那条路本该跟 Wintab 一点关系都没有。
-        //
-        // 现在改成**真正需要时才开**（见 AppendStrokeSamples 的非笔分支）：
-        // 开 ink 的笔（PT_PEN）**一辈子都不会打开 Wintab 上下文**，
-        // 这条隔离就成了结构上的事实，而不是"我审过一遍"。
         AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
         // 半径**逐点算**（见 TrailRadius）：有压感的笔，湿墨的粗细必须和干墨一致。
         FeedInkTrail(ptype, TrailRadius(), screenX, screenY);
@@ -5100,11 +4547,7 @@ public partial class InkEngine
                 for (int i = 0; i < ActiveStroke.Points.Count; i++)
                 {
                     var q = ActiveStroke.Points[i];
-                    // 最后三列是**当时的 Wintab 读数**（平板坐标 + 压力）。
-                    // 它们不参与绘制，只用来事后算出"平板坐标 ↔ 屏幕坐标"的映射 ——
-                    // 要做"整笔都走 Wintab"就必须有它，而且**不能猜**。
-                    wp.WriteLine($"{q.X:F2},{q.Y:F2},{q.P:F4},{q.T:F1},{(rawSet.Contains(i) ? 1 : 0)}"
-                                 + $",{WtLastTabletX},{WtLastTabletY},{WtLastRawPressure}");
+                    wp.WriteLine($"{q.X:F2},{q.Y:F2},{q.P:F4},{q.T:F1},{(rawSet.Contains(i) ? 1 : 0)}");
                 }
             }
             catch (Exception ex) { Console.WriteLine($"[录墨迹] 写失败：{ex.Message}"); }
@@ -7845,8 +7288,8 @@ public partial class InkEngine
                 //   ① 兜底值取 0.5 → 开头鼓粗点
                 //   ② raw 补点写成 0 → 开 ink 时整条线全是细口子（用户："笔记很脏"）
                 // 两次都**只有一个数字能看出来**：点的压力最小值/最大值。
-                // 光看 `[wintab …]` 那栏是不够的 —— 那是"采到的压力"，不是"写进点里的"。
-                // **采到了**和**用上了**是两件事，中间任何一段出错它都看不见。
+                // 光看"采到的压力"那一栏是不够的 —— **采到了**和**用上了**是两件事，
+                // 中间任何一段出错它都看不见。
                 float ptMinP = 0f, ptMaxP = 0f;
                 int ptSteps = 0;                       // 压力"跳变"次数（相邻点压力不同的次数）
                 if (ActiveStroke.Points.Count > 0)
@@ -7872,16 +7315,6 @@ public partial class InkEngine
                     + (ActiveStroke.Points.Count > 0
                         ? $"，点压力 {ptMinP:F2}~{ptMaxP:F2}（跳变 {ptSteps}/{ActiveStroke.Points.Count} 点）"
                           + (ActiveStrokeHasPressure && ptMinP <= 0.001f ? " **有0！疑似有路把它写成0**" : "")
-                        : "")
-                    // 只在**真的开着**时才报这一栏。
-                    // 没装厂商驱动（没有 Wintab）的机器上，启动时已经打过一行
-                    // 「[wintab] 未启用：…」，再每一笔都报"未开"就是噪音了。
-                    + (_wintab.IsOpen
-                        ? $"，[wintab 包{WtPolledPackets} 补压{WtPressurePoints}/{ActiveStroke.Points.Count}点"
-                          + (WtRawPMax >= 0 ? $" 压力{WtRawPMin}~{WtRawPMax}/{_wintab.MaxPressure}" : " **一笔都没拿到压力**")
-                          + $" {_wintab.LayoutText}"
-                          + (WtBadPackets > 0 ? $" **越界{WtBadPackets}**" : "")
-                          + "]"
                         : "")
                     + $"，合并 {merge}（{LastCoalescedMessages} 条消息 → {LastCoalescedSamples} 点）"
                     // 委托轨迹（2026-10-11）：**喂进去 ≠ 留在系统里**——默认模式下我们自己
@@ -7911,7 +7344,6 @@ public partial class InkEngine
                     // 第 2 代那一位出现在书写期间，就说明这一笔画到一半被全堆回收打断过。
                     + $"，分配 {StrokeAllocBytes / 1024.0:F1} KB/GC {StrokeGc0}/{StrokeGc1}/{StrokeGc2}";
                 Console.WriteLine("[笔画] " + _lastStrokeReport);
-                WintabSelfCheckAfterStroke(_activePointerType);
                 // `--strokefile`：把这一行**追加到文件**。
                 // 为什么要有它：这一行的数字（尤其"压力 a~b/上限"）是调手感参数的**唯一依据**，
                 // 而截图会折行、会被笔迹挡住、会转述错——**今天已经因此栽了三次**。
@@ -9420,11 +8852,12 @@ public partial class InkEngine
     /// <summary>
     /// **这一笔走的是哪条路** —— 用大白话写出来。
     ///
-    /// 为什么要有它（2026-10-07 用户的原话）："**我怎么知道什么时候是走了 ink？什么时候走了
-    /// 那个 wintab？什么时候又是鼠标模式补点？**"
+    /// 为什么要有它（2026-10-07 用户的原话）："**我怎么知道什么时候是走了 ink？
+    /// 什么时候又是鼠标模式补点？**"
     ///
-    /// 以前这些信息散在三处（`设备=鼠标` / `[wintab …]` / `[raw 补点 +N]`），
-    /// 得自己对读才知道 —— **那就等于没告诉用户**。这里合成一句人话，一眼看明白。
+    /// 以前这些信息散在两处（`设备=鼠标` / `[raw 补点 +N]`），得自己对读才知道 ——
+    /// **那就等于没告诉用户**。这里合成一句人话，一眼看明白。
+    /// （原还有第三处 `[wintab …]`；Wintab 支路 2026-10-16 整条移除。）
     /// </summary>
     private string DescribeInputPath(uint ptype)
     {
@@ -9432,14 +8865,9 @@ public partial class InkEngine
             return "开 ink（Windows Ink 笔）→ 压力 1024 级";
         if (ptype == Native.PT_TOUCH)
             return "触摸";
-        bool wt = WtPressurePoints > 0;
-        bool raw = _rawPointsAdded > 0;
-        if (wt && raw) return "关 ink → Wintab 给压力 ＋ raw 补点";
-        if (wt) return "关 ink → Wintab 给压力（这轮补点没出力）";
-        if (raw) return "关 ink → 只有 raw 补点（**没有 Wintab**，所以没有压力）";
-        return _wintab.IsOpen
-            ? "关 ink → 鼠标（Wintab 开着，但这一笔没拿到压力）"
-            : "鼠标（Wintab 未启用）";
+        return _rawPointsAdded > 0
+            ? "关 ink → raw 补点（等宽，无压力）"
+            : "鼠标（等宽）";
     }
 
     private void AppendStrokeSamples(uint id, uint ptype, float curCanvasX, float curCanvasY,
@@ -9509,102 +8937,13 @@ public partial class InkEngine
             // 就是被合并掉的中间点（合并率就是它除以 HistoryCount）。
             PtrCoalescedExtra += Math.Max(0, _ptr.HistoryCount - 1);
 
-            // ---- Wintab：给这条"被当成鼠标的笔"补上真实压力 ----------------------
-            //
-            // 为什么只在这条路上补：真笔（PT_PEN，即开着 ink）本来就有压力，
-            // 而且那条路更细的只有 Windows Ink 的 1024 级——不用换。**缺压力的恰恰是这一条**。
-            //
-            // ⚠ **两个"不能补"的情况**（都是想清楚才写的，不是试出来的）：
-            //   ① **真鼠标**：不产生 Wintab 包 → 取不到值 → 老行为逐字不变（鼠标画的仍旧等宽）。
-            //   ② **笔只是悬停在板上**：悬停压力**本来就该是 0**（Wacom 官方口径：
-            //      "区间最小值表示静止/未按下"）。要是把 0 当有效压力补进去，
-            //      用户"笔搁在板上、手上用鼠标画"时，鼠标线条会莫名其妙变细。
-            //      → 所以**只认 > 0**，并且沿用现成的「缺压回填」口径
-            //      （见 `Input/PenInput.cs` 的 `_lastValidPressure`）：
-            //      这一笔只要见过一次真实压力，后面偶尔缺一下就沿用上一个值，而不是掉回中点。
-            // 给这一批点的压力：
-            //   WtSeenPressure  → 已经拿到真实压力，用它
-            //   Wintab 开着但第一包还没到 → **用 0 兜底，不能用 0.5**
-            //   Wintab 没开 → -1（走老行为 `s.Pressure`，逐字不变）
-            //
-            // ⚠ **为什么第一包没到要用 0 而不是 0.5**（2026-10-07 用户真机反馈"第一个点老会有点粗"）：
-            //   0.5 映射出来是**中等**粗细（≈1.05× 名义宽），而起笔压力**物理上就是接近 0**
-            //   （用户真机实测最小值 457/16383 ≈ 3% → ≈0.15× 宽）。
-            //   于是每一笔开头都会鼓出一个粗点、后面才随压感变细。
-            //   **兜底值要贴合物理事实**，不是取个"中间值"最保险 —— 中间值在这里恰恰是错的。
-            float wp = -1f;
-            bool wpIsReal = false;
-            float wpPrev = 0f;      // 本批的**插值起点**（上一批用的那个压力值）
-            // Wintab **只在真的走到这条非笔路径时**才开（见 BeginStroke 里那段注释）：
-            // 开 ink 的笔全程不会碰到它，隔离是结构性的。
-            if (WintabEnabled && !_wintab.IsOpen && !_wintabTried)
-            {
-                EnsureWintab();
-                if (_wintab.IsOpen) _wintab.Flush();   // 倒掉空闲期间排队的过期包
-            }
-            if (_wintab.IsOpen && PressureWidth.Enabled)
-            {
-                float before = _wtStrokePressure;     // 上一批用的压力
-                bool wasReal = WtSeenPressure;
-
-                bool gotWt = _wintab.Poll();
-                WtPolledPackets += _wintab.PacketsRead - _wintabPacketsSeen;
-                _wintabPacketsSeen = _wintab.PacketsRead;
-                WtBadPackets += _wintab.BadPackets - _wintabBadSeen; _wintabBadSeen = _wintab.BadPackets;
-                if (gotWt && _wintab.Pressure01 > 0f)
-                    AcceptWintabPressure(_wintab.RawPressure, _wintab.Pressure01);
-                if (gotWt) NoteWintabSample();
-
-                // 注意：这里的 0 只是"给点用的值"，**不改变 HasPressure** ——
-                // 真鼠标（不产生 Wintab 包）仍然不会被当成有压感，老行为不受影响。
-                wp = WtSeenPressure ? _wtStrokePressure : 0f;
-                wpIsReal = WtSeenPressure;
-                // 插值起点 = 本批**之前**那个压力值。
-                // 第一批真实压力**不插值**（起点就用本批的值）—— 和"回填"保持一致，
-                // 否则会把刚回填好的开头又拉回兜底的 0，白填。
-                wpPrev = wasReal ? before : wp;
-            }
-            if (wpIsReal)
-            {
-                WtPressurePoints += _ptr.Count;      // **数点，不是数调用**
-                ActiveStrokeHasPressure = true;
-                // 和真笔那条路同一条规矩（见上面 PT_PEN 分支）：**压感只作用于「笔」这一支**。
-                if (ActiveStrokeHasPressure && ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
-            }
-
-            // ⚠ **压力要按"点在这批里的位置"摊开**（2026-10-07，用户一句话钉死了病因）：
-            // "关了 wintab 开 ink 就正常、开了 wintab 关 ink 就很脏"
-            //  → 位置两条路是**同一份**（我们只借压力），差别**只在压力分辨率**：
-            //     开 ink 那条路是**逐点自带压力**（驱动给的合并点里每点都有），
-            //     我这条原来只取"这一批最后一个包"的压力、套给这批所有点 → **宽度是台阶**。
-            // 而设备的包率（192Hz）比消息率（60~80Hz）高得多 —— **一批点本来对应着好几个包**，
-            // 那些包的压力以前被我扔了。现在 `Samples` 把它们都带出来，按位置摊到点上。
-            int nSample = _wintab.IsOpen ? _wintab.Samples.Count : 0;
-            if (nSample > 0)
-            {
-                // 前向填充：样本里的 0（悬停/未按下）沿用上一个有效值
-                // —— 同 `Input/PenInput.cs` 的「缺压回填」口径。
-                float carry = _wtStrokePressure > 0f ? _wtStrokePressure : 0f;
-                for (int j = 0; j < nSample && j < _sampleScratch.Length; j++)
-                {
-                    float v = _wintab.Samples[j];
-                    if (v > 0f) carry = v;
-                    _sampleScratch[j] = carry;
-                }
-            }
-            if (!wpIsReal) _wtPendingPoints += _ptr.Count;   // 这些点等真实压力来了要回填
             int nPtr = _ptr.Count;
             for (int i = 0; i < nPtr; i++)
             {
                 var s = _ptr[i];
                 float cx = s.X, cy = s.Y;
                 ScreenToCanvas(ref cx, ref cy);
-                float pp;
-                if (wp < 0f) pp = s.Pressure;                     // Wintab 没开 → 老行为逐字不变
-                else if (nSample <= 0) pp = wp;                   // 这次没取到包 → 沿用上一个
-                else pp = _sampleScratch[nPtr <= 1 ? nSample - 1
-                                                   : (int)MathF.Round(i * (nSample - 1) / (float)(nPtr - 1))];
-                AddPointCleaned(cx, cy, pp, s.TimeMs);
+                AddPointCleaned(cx, cy, s.Pressure, s.TimeMs);
                 PtrTotalPoints++;
             }
             // 非笔设备没有 penMask，也就永远不会给这一笔打上 HasPressure——
@@ -9613,32 +8952,7 @@ public partial class InkEngine
         }
 
         // ---- 读不到合并点：退回"一个消息一个点"的老路（行为与以前完全一致）------
-        // 但**同样补 Wintab 压力**——不然这一笔会"前半段有压力、后半段突然掉回 0.5"，
-        // 在笔画中间留下一个粗细跳变。只在非笔（关 ink）那条路上补，开 ink 的路一个字不动。
-        float fbWp = -1f;
-        if (ptype != Native.PT_PEN && _wintab.IsOpen && PressureWidth.Enabled)
-        {
-            if (_wintab.Poll())
-            {
-                NoteWintabSample();
-                if (_wintab.Pressure01 > 0f) AcceptWintabPressure(_wintab.RawPressure, _wintab.Pressure01);
-            }
-
-            WtPolledPackets += _wintab.PacketsRead - _wintabPacketsSeen;
-            _wintabPacketsSeen = _wintab.PacketsRead;
-            WtBadPackets += _wintab.BadPackets - _wintabBadSeen; _wintabBadSeen = _wintab.BadPackets;
-            // 同上：还没拿到第一包时用 **0** 兜底（起笔压力物理上接近 0），
-            // 不能用 0.5 —— 那会让每一笔开头鼓出一个中粗的点。
-            fbWp = WtSeenPressure ? _wtStrokePressure : 0f;
-            if (WtSeenPressure)
-            {
-                WtPressurePoints += 1;
-                ActiveStrokeHasPressure = true;
-                if (ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
-            }
-        }
-        if (fbWp >= 0f && !WtSeenPressure) _wtPendingPoints++;
-        AddPointCleaned(curCanvasX, curCanvasY, fbWp >= 0f ? fbWp : curPressure, NowMs);
+        AddPointCleaned(curCanvasX, curCanvasY, curPressure, NowMs);
     }
 
     /// <summary>
@@ -9732,41 +9046,15 @@ public partial class InkEngine
             if (ddx * ddx + ddy * ddy < RawMinDistPx * RawMinDistPx) { _rawSkipNear++; return; }
         }
 
-        // 压力沿用"这一笔到目前为止的值"（光标**原本就没有压力**时才用 0.5 这个中点）。
+        // 压力**沿用这一笔最后一个点**（第一个点还没有邻居时才用 0.5 这个中点）。
         //
-        // ⚠ **2026-10-07 修**：这里原来写死 `0.5f`，注释却说"沿用到目前为止的值"——注释是对的，
-        // 代码是错的。以前无所谓（鼠标那条路本来全笔都是 0.5，怎么传都一样），
-        // 但接了 Wintab 之后后果很明显：`[raw 补点 +214]` 这些点全被拉到 0.5，
-        // 而指针消息来的点拿的是真实压力 → **同一笔里一半真实、一半中点，粗细一跳一跳**。
-        //
-        // **只在 Wintab 真的在补压时才改**（`WtSeenPressure`）：没开 Wintab、
-        // 或者开 ink 走真笔那条路时，这里依旧是 0.5，老行为逐字不变。
-        // 压力沿用"这一笔到目前为止的值"——**这就是注释一直说的事**，
-        // 代码原来写死 0.5、我上一版又写死 0，两次都是"拿一个常数去代表一件有状态的事"。
-        //
-        // ⚠ **2026-10-07 修（用户报"开不开 ink 笔记都很脏"）**：
-        // 上一版写成 `_wintab.IsOpen ? 0f : 0.5f`，后果是——
-        // **开 ink 时走真笔那条路，`WtSeenPressure` 永远是 false（只在非笔路径上置位），
-        // 而 `_wintab.IsOpen` 是 true → 每一个 raw 补进来的点压力都被写成 0**
-        // → 有压感的笔画里 0 映射成 **0.10 倍宽** → 整条线上全是细口子 = 看起来"脏"。
-        // 而且它跟"压力从哪儿来"无关，所以**开 ink / 关 ink 都脏** —— 正是用户看到的。
-        //
-        // 正确做法：**沿用这一笔最后一个点的压力**。三种情况同时成立：
-        //   · 开 ink：最后一个点的压力就是真笔的真实压力 → raw 点无缝接上 ✓
-        //   · 关 ink：Wintab 压力到了就用 Wintab，没到就跟着邻居（起笔那几个点是 0，回头被回填）✓
-        //   · 真鼠标：`HasPressure` 始终为假，这个值根本不参与渲染 → 老行为不受影响 ✓
-        float rawP;
-        if (WtSeenPressure) rawP = _wtStrokePressure;
-        else if (ActiveStroke.Points.Count > 0) rawP = ActiveStroke.Points[^1].P;
-        else rawP = 0.5f;
-        // 起笔那几个（还没拿到真实压力时的）点记下来，等第一包压力到了回填。
-        if (!WtSeenPressure && _wintab.IsOpen) _wtPendingPoints++;
+        // 教训（两次都栽在"拿常数代表有状态的事"上）：写死 0.5 → 真笔的 raw 补点被拉粗；
+        // 写死 0 → 有压感的笔画上全是细口子（看起来"脏"）。沿用到目前为止的值才对：
+        //   · 真笔：最后一个点的压力就是真实压力 → raw 点无缝接上 ✓
+        //   · 真鼠标：`HasPressure` 始终为假，这个值根本不参与渲染 → 等宽不变 ✓
+        float rawP = ActiveStroke.Points.Count > 0 ? ActiveStroke.Points[^1].P : 0.5f;
         AddPointCleaned(cx, cy, rawP, NowMs);
         _rawPointsAdded++;
-        // **补压的账要把 raw 补的点也算进来**：不然 `补压N点` 只数指针消息那条路，
-        // 而 raw 补的点常常占一半以上（用户真机实测 139 点里 raw 补了 88 个）——
-        // 那行日志就会低报一半，**也就证明不了修复到底生效没有**。
-        if (WtSeenPressure) WtPressurePoints++;
     }
 
     private void ResetRawAnchor(float screenX, float screenY)
@@ -9791,102 +9079,8 @@ public partial class InkEngine
 
     private bool _rawRegistered;
 
-    // ===================== Wintab（`--nowintab` 关掉） =====================
-    //
-    // 第一阶段：**只借"压力"，不借坐标**。坐标仍旧走既有的指针/鼠标路（含 Raw Input 补点），
-    // 所以几何一个字都没动 —— 万一 Wintab 有问题，症状只会是"压力不对"，不会把笔画画歪。
-    // 详见 `Input/WintabInput.cs`（那里也记着三个从同行资料里查来的坑）。
-
-    /// <summary>Wintab 是否启用（默认开，`--nowintab` 关）。</summary>
-    /// <summary>Wintab 是否启用。**字段默认 false** —— 与"默认关"保持一致：
-    /// 万一上面那段决定没跑到，宁可不开（保守优先），也不要悄悄开着。</summary>
-    internal bool WintabEnabled;
-
-    private readonly WintabInput _wintab = new();
-
-    /// <summary>Wintab 累计取到的包数 / 越界包数 / 真的补上压力的点数（`[笔画]` 里报出来）。
-    /// 注意**和探针那个 <see cref="WintabPackets"/> 不是一回事**：那个数的是"包消息"条数
-    /// （`--wintabprobe` 用），这里数的是轮询取回来的包（产品路径用）。</summary>
-    internal int WtPolledPackets, WtBadPackets, WtPressurePoints;
-    private int _wintabPacketsSeen, _wintabBadSeen;
-
     /// <summary>上一笔结束时进程级轨迹喂点/结账数（`[笔画]` 里报"这一笔"的差值）。</summary>
     private long _trailFedSeen, _trailRemovedSeen;
-
-    /// <summary>这一笔的"缺压回填"基准（同 `Input/PenInput.cs` 的口径）：
-    /// 见过一次真实压力之后，偶尔缺一下就沿用上一个值，而不是掉回中点让笔画中间凹一下。</summary>
-    private float _wtStrokePressure = -1f;
-
-    /// <summary>这一笔有没有见过**真实**压力（> 0；悬停那个 0 不算）。</summary>
-    internal bool WtSeenPressure;
-
-    /// <summary>开头还有几个点拿的是"兜底值"（等第一包真实压力到了要把它们改回来）。
-    /// 见 <see cref="AcceptWintabPressure"/> 那段注释。</summary>
-    private int _wtPendingPoints;
-
-    /// <summary>
-    /// 接受一个**真实**压力值。**第一次接受时回填开头那几个点。**
-    ///
-    /// 为什么必须回填（2026-10-07 用户真机两轮反馈）：
-    /// 起笔那 1~3 个点是在 Wintab 第一包到达**之前**加进笔画的，只能拿兜底值：
-    ///   · 兜底 0.5 → 开头鼓一个**粗点**（第一版，"第一个点老会有点粗"）
-    ///   · 兜底 0   → 开头一段**细线**（第二版，"有的墨迹开头细细的"）
-    /// **两种都是猜的，都不对 —— 因为那一刻我们根本还不知道压力是多少。**
-    /// 正确做法：等第一包真实压力到了，**把那几个点的压力改成真实值** —— 不再猜。
-    /// （代价是 O(几个点) 的赋值，可以忽略。）
-    /// </summary>
-    private void AcceptWintabPressure(int raw, float p01)
-    {
-        _wtStrokePressure = p01;
-        WtSeenPressure = true;
-        if (raw < WtRawPMin) WtRawPMin = raw;
-        if (raw > WtRawPMax) WtRawPMax = raw;
-
-        var s = ActiveStroke;
-        if (_wtPendingPoints > 0 && s != null)
-        {
-            int cnt = Math.Min(_wtPendingPoints, s.Points.Count);
-            for (int i = 0; i < cnt; i++)
-            {
-                var q = s.Points[i];
-                q.P = p01;                 // X/Y 不动，**只改压力**
-                s.Points[i] = q;
-            }
-            s.MarkPressureEdited();        // 告诉渲染"这一笔变了"（只改压力，不碰包围盒）
-        }
-        _wtPendingPoints = 0;
-        _cleanBuf.Clear();
-    }
-
-    /// <summary>这一笔压力**原始值**的区间（0..驱动上限）。**只报 0..1 看不出力度用到了量程的哪一段**——
-    /// 用户"轻碰就满宽"或"压到底也不够粗"这类手感问题，全靠这两个数定位。</summary>
-    internal int WtRawPMin = int.MaxValue, WtRawPMax = int.MinValue;
-
-    /// <summary>打过一次就记住"这台机器没有 Wintab"，不再反复试（免得每笔都白跑一次）。</summary>
-    private bool _wintabTried;
-
-    /// <summary>起笔时开 Wintab（**只开一次**；打不开就当这台机器没有，安静退回）。</summary>
-    private void EnsureWintab()
-    {
-        // 压感关着（界面「设置 → 书写 → 压感粗细」那个开关）就不必开 ——
-        // 压力值反正没人用。**"一键关掉压感"要把这一路的工作也停掉**，
-        // 不然低配机上等于白干。关的时候 `_wintabTried` 保持 false，
-        // 用户再打开压感时下一笔就会自动开起来。
-        if (!WintabEnabled || !PressureWidth.Enabled || _wintabTried || _windows.Count == 0) return;
-        _wintabTried = true;
-        try
-        {
-            if (_wintab.Open(_windows[0].Hwnd))
-                Console.WriteLine($"  [wintab] {_wintab.Note}");
-            else
-                Console.WriteLine($"  [wintab] 未启用：{_wintab.Note}（关 ink 时就没有压力，行为与以前一致）");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"  [wintab] 异常，已忽略：{ex.Message}");
-            _wintab.Close();
-        }
-    }
 
     // 随老预测系统整条链移除。算法与接线原文见 `.revert/2026-10-05-渲染减法/`。
 

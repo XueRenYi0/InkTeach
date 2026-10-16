@@ -925,7 +925,7 @@ internal sealed partial class App
     /// <summary>
     /// `--pdfprobe <文件.pdf> [页数]`：把前几页按屏宽渲成 PNG 放到
     /// `%TEMP%\inkteach-pdfprobe\`，打出尺寸与每页耗时。
-    /// （照 Wintab 探针的先例：先能看见真东西、拿到真数字，再谈接界面。）
+    /// （先能看见真东西、拿到真数字，再谈接界面。）
     /// </summary>
     private void PdfProbe(string path, int pages)
     {

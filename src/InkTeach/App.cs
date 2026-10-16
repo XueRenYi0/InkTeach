@@ -698,15 +698,6 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             KeyTest();
         }
-        else if (mode == "--wintabprobe")
-        {
-            // 探 Wintab（数位板驱动的原生 API）这条路通不通。
-            // 只读、不改产品行为；见 Engine.WintabProbe 的说明。
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            ExitCode = WintabProbe();
-            _quit = true;
-        }
         else if (mode == "--rotateshow")
         {
             _autoExitAt = double.MaxValue;
@@ -1126,7 +1117,7 @@ internal sealed partial class App : InkEngine.InkEngine
             //
             // ⚠ **但要把"自检那套隔离"撤掉**（2026-10-07 修）。
             // 上面一进来就 `_selfCheckMode = mode.Length > 0`，于是**任何一个非空的第一参数**
-            // （包括 `--nowintab` / `--clean 3` / `--recink …` 这些**开关**）
+            // （包括 `--norawinput` / `--clean 3` / `--recink …` 这些**开关**）
             // 都会进"半个自检状态"：换临时设置、换存档路径、关掉导出对话框 ——
             // **而用户完全看不出来**（他只会觉得"怎么和平时不一样"）。
             //
