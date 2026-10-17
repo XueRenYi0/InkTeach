@@ -4515,20 +4515,13 @@ public partial class InkEngine
         // 最短长度那条门槛**在识别器里**（见 ShapeRecognize.Recognize 的 scale 参数）——
         // 这里不再自己乘一遍 DpiScale：同一个数写在两处，迟早会漂（用户 2026-09-23 的教训清单里
         // 第一条就是这个）。
-        // ★ **两笔 → 双曲线**（用户 2026-09-25 定的约定："**画两支就是双曲线，画一支就是抛物线**"）。
+        // ★ **两笔 → 双曲线：2026-10-17 用户定：停用**（"停顿变双曲线容易误触，双曲线
+        //   使用频率不高，到时候直接在图形库里面找就行了"）。配对识别器本身保留
+        //   （`TryTwoBranchPair` / `TryTwoBranchHyperbola` 还在，自检与将来要恢复时用），
+        //   只是**停顿成型这条路不再调用它**——单笔仍然只出"直线/抛物线"那一套。
         //
-        // ⚠⚠ **必须排在"认不出图形就返回"那道闸【之前】** —— 这是自检抓出来的致命错位：
-        //   单独一支双曲线**本来就不该被认成六种图形里的任何一种**（新约定：单笔不出双曲线，
-        //   而它也不是抛物线）→ `Recognize` 返回 `IsNothing`；要是把配对挡在它后面，
-        //   **这条路永远走不到**（实测：语料完全对称、一个都不出，日志里连一行配对记录都没有）。
-        var pair = TryTwoBranchPair(ink, pts);
-        if (!pair.IsNothing)
-        {
-            if (InkLogEnabled) Console.WriteLine($"[成型] 两笔 → 双曲线：{pair.Rule}");
-            if (InkRecordPath != null) _recordGuess = "两笔 → 双曲线：" + pair.Rule;
-            ArmDwellShape(ink, pair);
-            return;
-        }
+        // var pair = TryTwoBranchPair(ink, pts);
+        // if (!pair.IsNothing) { ... ArmDwellShape(ink, pair); return; }
 
         var guess = ShapeRecognize.Recognize(pts, DpiScale);
         if (guess.IsNothing)

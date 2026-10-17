@@ -498,229 +498,36 @@ internal static class DwellProbe
             app.DwellEndForTest();
         }
 
-        // ── 两笔 → 双曲线（用户 2026-09-25 定的约定："**画两支就是双曲线，画一支就是抛物线**"）
+        // ── 两笔 → 双曲线：**2026-10-17 用户定：停用** ──────────────────────────────
         //
-        // 这一段是**引擎级**的（走真入口：落笔 / 采样 / 停顿 / 抬手 / 撤销），验五件事：
-        //   · 两笔对称 → 文档里变成**一个**双曲线，**两笔原迹都收走**（净 +1）；
-        //   · **一步** Ctrl+Z → 回到**两笔手绘**（不是一笔、不是空白）；
-        //   · 两笔**不相干** → **不许**变成双曲线（"绝不抢别的活"）。
-        app.NowMs = 900000;   // 把时钟推到一个干净的起点（和前面各组不重叠）
+        // 用户原话："'停顿变双曲线'容易误触，我在想是不是要取消掉。因为双曲线的使用
+        // 频率不是很高，到时候直接在图形库里面找就行了。"
+        //
+        // 所以原来那一大段（对称两笔必须配成 / 不相干不许配 / 第一支先成型还要配 …）
+        // 现在反过来钉：**画完两支、停够，不许自动变成双曲线，两支都留在文档里**。
+        // 配对识别器本身没删（`TryTwoBranchHyperbola` 还在，`--recoprobes` 那些单元
+        // 级用例照跑），只是暂停顿成型这条路不再调用它。
+        app.NowMs = 900000;
         {
             var right = Branch(2200f, 36000f, 80f, 90f, 1.6f, +1f);
             var left = Branch(2200f, 36000f, 80f, 90f, 1.6f, -1f);
-
-            // ① 第一支：**抬手就走、不停顿** —— 这正是"画两支"里第一支该有的画法。
             Drive(app, right, 300);
-            app.DwellEndForTest();
-            int n0 = app.Doc.Strokes.Count;
-            int undo0 = app.Doc.UndoDepth;
-            var ink1 = app.Doc.Strokes.Count > 0 ? app.Doc.Strokes[^1] : null;
-            Check("两笔① 第一支（不停顿）在文档里仍是**手绘的墨**",
-                  ink1 != null && ink1.Kind == StrokeKind.Freehand,
-                  ink1 == null ? "文档空了" : KindName(ink1));
-
-            // ② 第二支：画完停顿 → 应当配成双曲线
-            //    先记下"藏之前"的版本号：下面 ⑨b 要拿它验**渲染层真的收到通知了没有**。
-            long verBeforeHide = app.Doc.Version;
+            app.DwellEndForTest();                       // 第一支不停顿
+            int beforePair = app.Doc.Strokes.Count;
             Drive(app, left, 300);
             app.NowMs += DwellAssist.HoldMs;
             app.DwellTickForTest();
-
-            // ⑧ 幽灵期按**中心**缩放（用户 2026-09-25 定："双曲线应该按中心为锚点放大缩小"）。
-            //    判据：拖完**中心一个像素都不动**、而整体尺寸**变大**。
-            //    （通用规则"离笔尖最远的那一个当锚点"在双曲线上会挑到**渐近线角点**，
-            //     那样缩放就绕角点转、图形整个跑偏 —— 所以这条要单独钉。）
-            var hpGhost = app.ActiveStroke;
-            Vector2 Cen() => hpGhost != null && hpGhost.Points.Count > 0
-                ? new Vector2(hpGhost.Points[0].X, hpGhost.Points[0].Y) : Vector2.Zero;
-            float BoxR() => hpGhost != null && hpGhost.Points.Count > 1
-                ? Vector2.Distance(Cen(), new Vector2(hpGhost.Points[1].X, hpGhost.Points[1].Y)) : 0f;
-            var c0 = Cen();
-            float box0 = BoxR();
-            app.NowMs += 40;
-            app.DwellMoveForTest(2200f, 36620f);        // 从中心（y=36000）**往外**拖
-            var c1 = Cen();
-            float box1 = BoxR();
-            Check("两笔⑧ 幽灵期缩放**绕中心**（中心不动、尺寸变大）",
-                  Vector2.Distance(c0, c1) <= 0.5f && box1 > box0 * 1.05f,
-                  $"中心挪了 {Vector2.Distance(c0, c1):F2}；渐近线框 {box0:F0} → {box1:F0}");
-
-            // ⑨ **识别那一刻第一笔就藏起来**（用户 2026-09-25 定；原来要等抬手才消失）。
-            //    判据两半都要：幽灵期**是隐藏的**，而且**文档里还在**（撤销要靠它）。
-            Check("两笔⑨ 幽灵期第一笔已隐藏、但仍在文档里",
-                  ink1 != null && ink1.HiddenForPairing && app.Doc.Strokes.Contains(ink1),
-                  ink1 == null ? "文档空了"
-                      : $"隐藏 = {ink1.HiddenForPairing}、还在文档里 = {app.Doc.Strokes.Contains(ink1)}");
-
-            // ⑨b ⚠⚠ **这一条才是用户报的那个 bug 的判据**（用户 2026-09-25：
-            //     "停顿那一刻第一笔没消失，松手以后它才消失"）。
-            //
-            // 根因：内容层是**分块位图缓存**（`CanvasTileCache`），第一笔在这一刻**早就烘进块里**；
-            // 而块**只在 `Doc.Version` 变化时**才重光栅化（`Overlay.SyncTiles`）。
-            // 于是"只置 `HiddenForPairing` 字段"的做法：`DrawStroke` 是跳过了它，
-            // 但**没有任何一帧重画那一块** → 屏幕上原样留着旧像素，一直留到抬手提交
-            // （那一步 `RemoveStroke` 抬了版本号、块才重画）—— 看着就是"松手才消失"。
-            //
-            // ⚠ 判据刻意**不查 `HiddenForPairing` 字段**：第一版⑨就只查字段，
-            //   于是这个 bug 从它眼皮底下过去了（"改了字段、没让缓存失效"是本仓库的老教训，
-            //   而"只查字段的自检照不出它"同样是）。这里查的是**渲染层收到通知没有**。
-            bool dirtyCovers = app.Doc.Dirty.Full;
-            if (!dirtyCovers && ink1 != null)
-                foreach (var dr in app.Doc.Dirty.Rects)
-                    if (dr.Intersects(ink1.PaddedBounds)) { dirtyCovers = true; break; }
-            Check("两笔⑨b 藏起来那一刻**内容层缓存被作废**（抬版本号 ＋ 标脏那一块）",
-                  app.Doc.Version > verBeforeHide && dirtyCovers,
-                  $"版本号 {verBeforeHide} → {app.Doc.Version}、脏区盖住那一笔 = {dirtyCovers}"
-                  + "（不抬版本号就永远不重画那一块 = 屏幕上不消失）");
-
+            var pairGhost = app.ActiveStroke;
             app.DwellEndForTest();
-            var got = app.Doc.Strokes.Count > 0 ? app.Doc.Strokes[^1] : null;
-            Check("两笔② 两笔对称 → **双曲线**", got != null && got.Kind == StrokeKind.Hyperbola,
-                  got == null ? "文档是空的" : KindName(got));
-            // 喂给最后那条覆盖断言：双曲线**只有这条路**能认出来（单笔不再出双曲线）。
-            if (got != null) seenKinds.Add(got.Kind);
-            // ⑩ **隐藏位不许泄漏**：提交之后文档里不该还有任何隐藏的笔 ——
-            //    泄漏的话，Ctrl+Z 放回来的那一笔是隐身的，"撤销之后屏幕上什么都没回来" ✗
-            int hiddenLeft = 0;
-            foreach (var s in app.Doc.Strokes) if (s.HiddenForPairing) hiddenLeft++;
-            Check("两笔⑩ 提交后没有笔还带着隐藏位（否则撤销会放回一条隐身的墨）",
-                  hiddenLeft == 0, $"文档里还有 {hiddenLeft} 笔是隐藏的");
-            Check("两笔③ 两笔原迹都被收走（文档净 +1、不是 +2）",
-                  app.Doc.Strokes.Count == n0,
-                  $"文档 {n0} → {app.Doc.Strokes.Count}（期望不变：少两笔、多一个双曲线）");
-            Check("两笔④ 撤销栈**只加了一步**", app.Doc.UndoDepth == undo0 + 1,
-                  $"撤销栈 {undo0} → {app.Doc.UndoDepth}");
-
-            // ③ **一步** Ctrl+Z 回到**两笔手绘**
-            // ⚠ 数的是**增量**，不是"文档里一共几笔手绘" —— 前面各组还留着十几笔呢
-            //   （第一版就是数总数，于是报"手绘 18 笔"当失败，其实是断言写错了）。
-            int freeBefore = 0, hyperBefore = 0;
-            foreach (var s in app.Doc.Strokes)
-            {
-                if (s.Kind == StrokeKind.Freehand) freeBefore++;
-                if (s.Kind == StrokeKind.Hyperbola) hyperBefore++;
-            }
-            app.RunActionForTest(KeyAction.Undo);
-            int freeAfter = 0, hyperAfter = 0;
-            foreach (var s in app.Doc.Strokes)
-            {
-                if (s.Kind == StrokeKind.Freehand) freeAfter++;
-                if (s.Kind == StrokeKind.Hyperbola) hyperAfter++;
-            }
-            // ⚠ **两项都按"增量"比，不比总数**（2026-09-26 改）：原来写的是 `hyper == 0`
-            //   —— 那假设"整个文档只有这一条双曲线"，而前面几段之后文档里已经有别的双曲线了
-            //   （判据一放宽，这里立刻报"还剩 4 个"，其实是**断言写错了**）。
-            Check("两笔⑤ 一步 Ctrl+Z 回到**两笔**手绘（这一对双曲线没了）",
-                  freeAfter == freeBefore + 2 && hyperAfter == hyperBefore - 1,
-                  $"手绘 {freeBefore} → {freeAfter}（期望 +2）、"
-                  + $"双曲线 {hyperBefore} → {hyperAfter}（期望 −1）");
-            app.RunActionForTest(KeyAction.Redo);
-
-            // ⑦ 渐近线要**铺到和支线一样远**（用户 2026-09-25 上手反馈："**渐近线看起来
-            //    明显太短了，长度要和双曲线匹配**"，并给了对照图）。
-            //    判据：渐近线框（`Points[1]`）离中心的距离，**≥ 支线实际铺开的距离** ——
-            //    后者用**真墨迹**算（沿实轴方向的最大偏移），不是拿模型的参数自证。
-            //    上下开口 ⇒ 实轴是 y 方向。
-            var hp = app.Doc.Strokes.Count > 0 ? app.Doc.Strokes[^1] : null;
-            float reachInk = 0f;
-            foreach (var p in left) reachInk = MathF.Max(reachInk, MathF.Abs(p.Y - 36000f));
-            float boxReach = hp == null || hp.Points.Count < 2
-                ? 0f : MathF.Abs(hp.Points[1].Y - hp.Points[0].Y);
-            Check("两笔⑦ 渐近线铺到和支线一样远",
-                  hp != null && hp.Kind == StrokeKind.Hyperbola && boxReach >= reachInk * 0.9f,
-                  $"渐近线实轴半宽 {boxReach:F0} vs 支线铺开 {reachInk:F0}");
+            int hyper = 0;
+            foreach (var s in app.Doc.Strokes) if (s.Kind == StrokeKind.Hyperbola) hyper++;
+            Check("两笔不再自动变双曲线（2026-10-17 用户撤：误触）",
+                  pairGhost == null || pairGhost.Kind != StrokeKind.Hyperbola,
+                  pairGhost == null ? "幽灵是空的" : $"幽灵 {KindName(pairGhost)}");
+            Check("两笔：两支都还在文档里（没有被配对吃掉）",
+                  app.Doc.Strokes.Count == beforePair + 1 && hyper == 0,
+                  $"文档 {beforePair} → {app.Doc.Strokes.Count}（期望 +1）；双曲线 {hyper} 条");
         }
-        {
-            // 反例：两笔**不相干**（同一边画了两次）→ **不许**合成双曲线。
-            // 用"同一条右支画两遍"是因为它**看起来就像两支、但关于中心不对称** ——
-            // 正是这条判据要挡的东西（真机上"两支画在同一边"是会发生的）。
-            var same1 = Branch(2200f, 36000f, 80f, 90f, 1.6f, +1f);
-            var same2 = Branch(2230f, 36000f, 80f, 90f, 1.6f, +1f);
-            Drive(app, same1, 300);
-            app.DwellEndForTest();                       // 第一笔不停顿
-            int n1 = app.Doc.Strokes.Count;
-            Drive(app, same2, 300);
-            app.NowMs += DwellAssist.HoldMs;
-            app.DwellTickForTest();
-            app.DwellEndForTest();
-            var bad = app.Doc.Strokes.Count > n1 ? app.Doc.Strokes[^1] : null;
-            Check("两笔⑥ 两笔不相干（同一边画两遍）→ **不许**变成双曲线",
-                  bad != null && bad.Kind != StrokeKind.Hyperbola,
-                  bad == null ? "文档里没多东西" : KindName(bad));
-        }
-        {
-            // 反例：**两支尺寸差太多**（一个"太小不转换"留下的小团 ＋ 一条长直线）→ **不许**配对。
-            //
-            // ⚠ 这一条本来是**碰巧**被 I 段（"直线拖端点：转向 + 吸水平"）抓到的：I 段前面那个
-            //   用例正好留下一个小圆（r=15、直径 30），紧接着那支 300 长的直线就和它配成了
-            //   一对双曲线（尺寸比 0.14）→ 直线成了"双曲线的一支"，拖端点当场不对。
-            //   靠"碰巧"是不行的：**用例一挪位置，这条判据就静默失效**（本项目的老教训）。
-            //   所以在这里**显式**把这组输入造一遍（口径和那次误配一模一样）。
-            app.NowMs += 30000;                        // 挪开时钟（配对窗口 20s，别和上一组串）
-            Drive(app, Circle(2600f, 400f, 15f), 200); // 半径 15 → 周长 47 < 门槛 56，认不出、不转换
-            app.NowMs += DwellAssist.HoldMs;
-            app.DwellTickForTest();
-            app.DwellEndForTest();
-            var tiny = app.Doc.Strokes.Count > 0 ? app.Doc.Strokes[^1] : null;
-            bool tinyStayedInk = tiny != null && tiny.Kind == StrokeKind.Freehand;   // 前提：小团真留下了
-
-            int nBeforeSize = app.Doc.Strokes.Count;
-            Drive(app, WobblyLine(300f, 500f, LineLen, 0), 200);
-            app.NowMs += DwellAssist.HoldMs;
-            app.DwellTickForTest();
-            app.DwellEndForTest();
-            var afterSize = app.Doc.Strokes.Count > nBeforeSize ? app.Doc.Strokes[^1] : null;
-            Check("两笔⑧ 一支只有另一支的 1/7（小团 30 ＋ 直线 300）→ **不许**配成双曲线",
-                  tinyStayedInk && afterSize != null && afterSize.Kind == StrokeKind.Line,
-                  $"小团留下的是 {KindName(tiny)}（前提：得是手绘的墨），"
-                  + $"长直线认成了 {KindName(afterSize)}（期望 直线）");
-        }
-
-        // ── 两笔·**第一支先被停顿成型**了，还要能配成双曲线（2026-09-26 加）──────────
-        //
-        // 用户 2026-09-26 报："双曲线**画几次才成一次**"。原因之一：画第一支时收笔前手停
-        // 一下（400ms），这一支就**先被停顿时成一个抛物线对象** —— 对象里只剩两三个定义点、
-        // **拿不回采样点**，于是配对**永远**配不上。要不要停那一下是随机的，用户看到的就是
-        // "这次不行、再画一次说不定行"。修法是引擎里留一个"这一支的**原迹**"的引用
-        //（见 `Engine._lastDwellShape`）。
-        //
-        // ⚠ 断言写成"**不管第一支变成了什么，两笔都要配成双曲线**"：
-        //   第一支到底会不会被判成抛物线，取决于它的形状（短支更像抛物线）——
-        //   语料不该假定这一点（写死"它一定会变成抛物线"就是**把猜想当期望**）。
-        //   所以这里**数一遍**"第一支真被成型了的次数"，它 > 0 才算这条路真被走到了。
-        app.NowMs = 950000;
-        int firstShaped = 0, firstShapedPaired = 0;
-        foreach (float tMax in new[] { 0.8f, 1.2f, 1.6f })
-        {
-            var r1 = Branch(2200f, 36000f, 80f, 90f, tMax, +1f);
-            var l1 = Branch(2200f, 36000f, 80f, 90f, tMax, -1f);
-            app.NowMs += 30000;                       // 挪开时钟，别和别组共用（配对窗口是 20s）
-
-            // 第一支：画完**停够** → 它会被成型成一个对象（多半是抛物线）
-            Drive(app, r1, 300);
-            app.NowMs += DwellAssist.HoldMs;
-            app.DwellTickForTest();
-            app.DwellEndForTest();
-            var ink1 = app.Doc.Strokes.Count > 0 ? app.Doc.Strokes[^1] : null;
-            bool shaped = ink1 != null && ink1.Kind != StrokeKind.Freehand;
-            if (shaped) firstShaped++;
-
-            // 第二支：画完停顿 → 应当照样配成双曲线（用第一支的**原迹**）
-            Drive(app, l1, 300);
-            app.NowMs += DwellAssist.HoldMs;
-            app.DwellTickForTest();
-            var armed = app.ActiveStroke;
-            app.DwellEndForTest();
-            var got = app.Doc.Strokes.Count > 0 ? app.Doc.Strokes[^1] : null;
-            if (got != null && got.Kind == StrokeKind.Hyperbola) firstShapedPaired++;
-            if (shaped && (armed == null || armed.Kind != StrokeKind.Hyperbola))
-                Console.WriteLine($"       ⚠ tMax {tMax:F1}：第一支被成型成 {KindName(ink1)} 之后，"
-                                  + $"第二支没能配成双曲线（幽灵 {KindName(armed)}）");
-        }
-        Check("两笔·第一支先被停顿成型 → 照样配成双曲线",
-              firstShaped > 0 && firstShapedPaired == 3,
-              $"3 组里第一支被成型了 {firstShaped} 次，配成双曲线 {firstShapedPaired}/3"
-              + $"（第一支没被成型的那几组走的是老路，一样该配成）");
 
         // ── 覆盖断言（放在最后：`seenKinds` 由上面**所有**小组一起喂）────────────────
         //    识别表里能认的每一种图形，这一趟自检必须**真认出来过**：加了新识别器
@@ -728,10 +535,15 @@ internal static class DwellProbe
         //    不在这里另写一份（写死名单会随功能移位而静默失效，本仓库踩过好几次）。
         var missingKinds = new List<string>();
         foreach (var k in ShapeRecognize.RecognizableKinds)
+        {
+            // 2026-10-17：两笔配对停用 → 双曲线不再由停顿成型产出（识别器仍支持、
+            // 两笔入口保留，只是这条路不走了），所以**不要求它在这一趟里出现**。
+            if (k == StrokeKind.Hyperbola) continue;
             if (!seenKinds.Contains(k)) missingKinds.Add(k.ToString());
-        Check("自检覆盖了识别表里每一种图形", missingKinds.Count == 0,
+        }
+        Check("自检覆盖了识别表里每一种图形（双曲线除外：两笔入口已停用）", missingKinds.Count == 0,
               missingKinds.Count == 0
-                  ? $"{seenKinds.Count} 种都出现过（识别表 {ShapeRecognize.RecognizableKinds.Length} 种）"
+                  ? $"{seenKinds.Count} 种都出现过（除双曲线外 {ShapeRecognize.RecognizableKinds.Length - 1} 种）"
                   : "漏了：" + string.Join("、", missingKinds));
 
         Console.WriteLine();

@@ -340,6 +340,9 @@ internal sealed partial class OverlayWindow : IDisposable
     private CanvasTileCache _tiles;
     /// <summary>上一次把文档脏区同步进分块缓存时的文档版本号。</summary>
     private int _tilesVersion = -1;
+    /// <summary>z 序缓存（2026-10-17）：`Stroke → Doc.Strokes 下标`，版本号变了才重建。</summary>
+    private readonly Dictionary<Stroke, int> _zCache = new();
+    private int _zCacheVersion = -1;
     /// <summary>上一帧的相机偏移。变了 → 整屏合成位置都变了，后缓冲整块作废。</summary>
     private float _lastCamY = float.NaN;
     private bool _lastBoardOn;
@@ -1549,6 +1552,25 @@ internal sealed partial class OverlayWindow : IDisposable
         if (!app.PassThrough)
         {
             doc.QueryGrid(canvas, _strokeScratch);
+
+            // **按文档列表的 z 序画**（2026-10-17 修"置顶/置底没用"）：网格查询返回的是
+            // **格子顺序**，不是层级；而置顶/置底只改 `Doc.Strokes` 列表——不按列表重排的话，
+            // 画面顺序根本不变（用户真机抓到：图片置底后仍压着墨迹）。
+            // 缓存：列表一变（Version++）重建一次 下标表；之后每次查询只做 O(k log k) 排序。
+            if (_zCacheVersion != doc.Version)
+            {
+                _zCache.Clear();
+                var all = doc.Strokes;
+                for (int i = 0; i < all.Count; i++) _zCache[all[i]] = i;
+                _zCacheVersion = doc.Version;
+            }
+            _strokeScratch.Sort((a, b) =>
+            {
+                int ia = _zCache.TryGetValue(a, out int va) ? va : 0;
+                int ib = _zCache.TryGetValue(b, out int vb) ? vb : 0;
+                return ia.CompareTo(ib);
+            });
+
             foreach (var s in _strokeScratch)
             {
                 if (!s.PaddedBounds.Intersects(canvas)) continue;
@@ -3872,7 +3894,7 @@ internal sealed partial class OverlayWindow : IDisposable
             float y = panel.MinY + LibraryLayout.PadLogical * dpi + LibraryLayout.HeaderHLogical * dpi + gap;
             _ctx.DrawText("图库还是空的", ReadoutFormat(dpi),
                           new Rect(panel.MinX, y, panel.MaxX - panel.MinX, 24f * dpi), _scratch);
-            _ctx.DrawText("选中对象 → 操作条那颗「图库」图标存进来", ReadoutFormatSmall(dpi),
+            _ctx.DrawText("选中对象 → 操作条那颗带「＋」的「图库」图标存进来", ReadoutFormatSmall(dpi),
                           new Rect(panel.MinX, y + 26f * dpi, panel.MaxX - panel.MinX, 20f * dpi), _scratch);
             return;
         }
@@ -4011,6 +4033,19 @@ internal sealed partial class OverlayWindow : IDisposable
                     DrawIcon(IsSelectionLocked(app) ? IconPaths.lockClosed : IconPaths.unlock,
                              cx - glyphBox * 0.5f, cy - glyphBox * 0.5f, glyphBox, iconBrush);
                     break;
+                case SelBarButton.Library:
+                {
+                    DrawIcon(IconPaths.library, cx - glyphBox * 0.5f, cy - glyphBox * 0.5f,
+                             glyphBox, iconBrush);
+                    // 「＋」角标（2026-10-17 用户定：这颗是"把选中的存进图库"，
+                    // 光一个书架看不出"存"这个动作）——右下角画一个小加号、和图标同色。
+                    float px = cx + glyphBox * 0.34f, py = cy + glyphBox * 0.34f;
+                    float arm = glyphBox * 0.17f;
+                    float thick = MathF.Max(1.2f, glyphBox * 0.10f);
+                    _ctx.DrawLine(new Vector2(px - arm, py), new Vector2(px + arm, py), iconBrush, thick);
+                    _ctx.DrawLine(new Vector2(px, py - arm), new Vector2(px, py + arm), iconBrush, thick);
+                    break;
+                }
                 default:
                     DrawIcon(IconForBar(kind), cx - glyphBox * 0.5f, cy - glyphBox * 0.5f,
                              glyphBox, iconBrush);

@@ -1233,15 +1233,15 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private static int LibrarySegment => ShapeSegmentCount;
 
-    /// <summary>「图库」那一段在第几行（工具表之后紧挨着的一行）。</summary>
-    private static int LibraryBandRow => ShapeRows.Length;
+    /// <summary>「图库」那一段在最后一行（2026-10-17 起**并入最后一行**，不再单独占行）。</summary>
+    private static int LibraryBandRow => ShapeRows.Length - 1;
 
     /// <summary>
-    /// 上带图形那一格一共几行：**工具表那几行 ＋ 最后那段「图库」自己一行**。
-    /// 布局（`SegmentRect` 的行高/居中）和带子总高（`BandHeightLogical`）都问它——
-    /// 少算一行的话，最后那一段会**画到带子外面去**（落在主条上），看着"点不动"。
+    /// 上带图形那一格一共几行：**工具表那几行（图库那段并在最后一行里）**。
+    /// 布局（`SegmentRect` 的行高/居中）和带子总高（`BandHeightLogical`）都问它。
+    /// 2026-10-17：图库那段不再单独占一行（用户："单独占一行不合理"）→ 行数就是工具表行数。
     /// </summary>
-    private static int ShapeBandRows => ShapeRows.Length + 1;
+    private static int ShapeBandRows => ShapeRows.Length;
 
     /// <summary>图形那一格一共几段（工具段 ＋ 最后那段「图库」）。命中与绘制都用它。</summary>
     private static int ShapeBandSegments => ShapeSegmentCount + 1;
@@ -1257,11 +1257,13 @@ public sealed class FullUi : IOverlayUi
         }
     }
 
-    /// <summary>第 `row` 行有几段（决定本行的段宽）。「图库」那一行只有一段。</summary>
+    /// <summary>第 `row` 行有几段（决定本行的段宽）。**最后一行多一段「图库」**（2026-10-17 并入）。</summary>
     private static int ShapeRowCount(int row)
     {
-        if (row == LibraryBandRow) return 1;
-        return row >= 0 && row < ShapeRows.Length ? ShapeRows[row].Length : 0;
+        if (row < 0 || row >= ShapeRows.Length) return 0;
+        int n = ShapeRows[row].Length;
+        if (row == ShapeRows.Length - 1) n += 1;   // 末尾那段是「图库」（动作）
+        return n;
     }
 
     /// <summary>
@@ -1271,7 +1273,7 @@ public sealed class FullUi : IOverlayUi
     private static int ShapeSegmentRow(int i)
     {
         if (i < 0) return 0;
-        if (i >= ShapeSegmentCount) return LibraryBandRow;   // 最后那一段「图库」自己一行
+        if (i >= ShapeSegmentCount) return ShapeRows.Length - 1;   // 末尾那段「图库」在最后一行
         int seen = 0;
         for (int r = 0; r < ShapeRows.Length; r++)
         {
@@ -3402,7 +3404,12 @@ public sealed class FullUi : IOverlayUi
             Invalidate();
         }
         SetTipTarget(hover);
-        return hover != -1;
+        // **整块界面都算"界面"**（2026-10-17 用户报"图库那行有的图标箭头、有的十字"）：
+        // 原来只认"正好压在某个可点元素上"，格子之间 / 带子右侧的空白就落回画布光标
+        //（图形工具是十字）——同一块面板里两种光标。现在主条和上带的矩形内一律箭头。
+        if (hover != -1) return true;
+        return PanelRect().Contains(p.X, p.Y)
+            || (BandVisible() && BandRect().Contains(p.X, p.Y));
     }
 
     public void PointerLeave()

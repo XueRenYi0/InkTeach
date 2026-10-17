@@ -895,6 +895,52 @@ internal sealed partial class App
                 SettleFrames(200);
             }
 
+            // ⭐ 层级（置顶/置底）必须真的改**画面**（2026-10-17 用户报"置底没效果"）：
+            //   渲染顺序来自空间索引的**格子顺序**，而置顶/置底只换列表顺序——现在渲染
+            //   按列表 z 序画（Overlay 的 `_zCache`）。这里用两条同位置的黑/蓝线验像素：
+            //   后画的蓝在上 → 黑置顶后像素变黑 → 蓝置底后又变黑。
+            {
+                int zBackKey = Doc.PageKey;
+                SetBoardFromUi(true);
+                SettleFrames(260);
+                float zCamY = ViewOffsetY;
+                var zBlack = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                                          Color = new Color4(0f, 0f, 0f, 1f), Width = 26f };
+                var zBlue = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                                         Color = new Color4(0f, 0.4f, 1f, 1f), Width = 26f };
+                float zx = rb0 + 760f, zy = ry0 + 760f - zCamY;
+                zBlack.AddPoint(zx, zy, 1f, 0); zBlack.AddPoint(zx + 220f, zy, 1f, 1);
+                zBlue.AddPoint(zx, zy, 1f, 0); zBlue.AddPoint(zx + 220f, zy, 1f, 1);
+                Doc.AddStroke(zBlack);
+                Doc.AddStroke(zBlue);                        // 后加 = 最上
+                SettleFrames(240);
+                int blueTop = ScreenProbe.CountNear(rb0 + 880, ry0 + 745, 80, 30, 0, 102, 255, 60);
+                Check("层级：后画的那条在最上面（蓝压黑）", blueTop > 1200, $"蓝像素 {blueTop}/2400");
+
+                Doc.SelectOnly(new[] { zBlack });
+                ReorderSelection(toFront: true);             // 把黑的置顶
+                SettleFrames(260);
+                int blackTop = ScreenProbe.CountNear(rb0 + 880, ry0 + 745, 80, 30, 0, 0, 0, 40);
+                Check("层级：**置顶**真的改画面（黑压蓝）", blackTop > 1200, $"黑像素 {blackTop}/2400");
+
+                Doc.Undo();
+                SettleFrames(220);
+                Doc.SelectOnly(new[] { zBlue });
+                ReorderSelection(toFront: false);            // 把蓝的置底
+                SettleFrames(260);
+                int blackTop2 = ScreenProbe.CountNear(rb0 + 880, ry0 + 745, 80, 30, 0, 0, 0, 40);
+                Check("层级：**置底**真的改画面（蓝沉下去、黑露出来）", blackTop2 > 1200,
+                      $"黑像素 {blackTop2}/2400");
+
+                SetBoardFromUi(false);
+                SettleFrames(240);
+                if (Doc.PageKey != InkDocument.BoardPageKey) Doc.SwitchPage(InkDocument.BoardPageKey);
+                Doc.Clear();
+                Doc.ClearHistory();
+                if (Doc.PageKey != zBackKey) Doc.SwitchPage(zBackKey);
+                SettleFrames(200);
+            }
+
             CloseDocument();
             Check("关文档：白板状态不受影响（文档只收自己那张纸）", !BoardOn, $"BoardOn={BoardOn}");
             if (Doc.PageKey != 0) Doc.SwitchPage(0);

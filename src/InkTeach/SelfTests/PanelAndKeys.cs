@@ -3280,9 +3280,10 @@ internal sealed partial class App
         // 第十五批加正切、第十六批加波浪线：**第二行 4 → 6** 段（604 ÷ 6 ≈ 101）。
         // 2026-09-22 加椭圆（带焦点）：**第二行 6 → 7** 段（604 ÷ 7 ≈ 86，和第三行一样宽，
         // 仍在"每段 ≥ 60"那条门槛之上）。
-        // 2026-09-22 加「图库」：**第四行 1 段**——它是**动作**（点开图库面板），
-        // 不是图形工具，所以 `want` 里没有它，但**行结构里要有它**（带子高了就得占一行）。
-        int[] wantRowLens = { 8, 7, 7, 1 };
+        // 2026-09-22 加「图库」；**2026-10-17 并进最后一行**（用户："单独占一行不合理"）——
+        // 它是**动作**（点开图库面板），不是图形工具，所以 `want` 里没有它，
+        // 但**行结构里要有它**：最后一行 = 7 个图形 ＋ 1 段动作 = **8 段**。
+        int[] wantRowLens = { 8, 7, 8 };
         /** 「图库」那一段：段表之外的**动作段**（不计入 `want`）。 */
         const int actionSegs = 1;
 
@@ -3360,6 +3361,19 @@ internal sealed partial class App
               n == want.Length + actionSegs && InkUi.FullUi.ShapeRowCountForTest == wantRowLens.Length,
               $"段数 {n}（期望 {want.Length + actionSegs}），行数 {InkUi.FullUi.ShapeRowCountForTest}"
               + $"（期望 {wantRowLens.Length}）");
+
+        // **上带里的"空隙"也归界面**（2026-10-17 用户报"图库那行有的图标箭头、有的十字"）：
+        // 光标由"这一点算不算界面"决定；以前只认"正压在某一段上"，段与段之间那 6px 的缝
+        // 会落回画布光标（图形工具 = 十字）→ 同一块面板里两种光标。现在整块带子都算界面。
+        {
+            var seg0 = ui.SegmentRectForTest(0);
+            var seg1 = ui.SegmentRectForTest(1);
+            float gx = (seg0.MaxX + seg1.MinX) * 0.5f;      // 两段之间的缝
+            float gy = (seg0.MinY + seg0.MaxY) * 0.5f;
+            bool claimed = ui.PointerMove(new UiPointerEvent(gx, gy, 0.5f, false, false));
+            Check("上带段间空隙也归界面（光标统一箭头，不再十字）", claimed,
+                  $"缝里 ({gx:F0},{gy:F0}) 算界面 = {claimed}");
+        }
 
         // 段宽和越界：段宽 = 可用宽 ÷ **本行**段数，所以各行各有各的宽度。
         // "挤到看不清" ＝ 这个入口等于没有，所以宽度本身就是判据（图标 18 逻辑像素，
