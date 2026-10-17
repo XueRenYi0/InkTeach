@@ -2717,10 +2717,18 @@ public partial class InkEngine
         if (dispatch >= 0)
             return dispatch;
 
-        // 走到这里说明是**交互模式**：把键位表打出来（连同注册失败的条目）。
-        // 测试模式不打印——三十多行会把每条自检的日志淹掉。
-        // 以前这个方法**根本没人调用**，所以键位一直只活在 README 里。
-        PrintUsageHelp();
+        // 走到这里说明是**交互模式**（2026-10-17 用户："这里好多命令，能不能精简一些"）。
+        // 原来每次启动都把**完整参数表 + 键位表**（三四十行）打到控制台：老师双击时
+        // 根本看不见，而从命令行起的时候反而把启动日志（和日志文件）淹了。
+        // 现在：控制台只留一行指路；**键位表仍然写进日志**（排查要用，见 DiagLog.LogOnly）；
+        // 完整参数表挪到 `InkTeach.exe --help`（见 App.RunModeDispatch）。
+        Console.WriteLine($"InkTeach {ProductInfo.Version} 已启动（参数与快捷键：InkTeach.exe --help）");
+        if (Keys.GlobalFailures.Count > 0)
+        {
+            Console.WriteLine("  ！这些全局键没注册上（被别的程序占了？换一个键）：");
+            foreach (var f in Keys.GlobalFailures) Console.WriteLine("    " + f);
+        }
+        DiagLog.LogOnly("键位表：\n" + Keys.ToText());
 
         Loop();
         Shutdown();
@@ -11636,11 +11644,11 @@ public partial class InkEngine
         return Native.DefWindowProc(hWnd, msg, wParam, lParam);
     }
 
-    /// <summary>控制台用法说明。产品界面不会走这里。</summary>
+    /// <summary>控制台用法说明。产品界面不会走这里；**只在 `--help` 时打印**（2026-10-17）。</summary>
     protected virtual void PrintUsageHelp()
     {
         Console.WriteLine();
-        Console.WriteLine("InkTeach 批注原型已启动。键位（可配置，见 " + InkSettings.FilePath + "）：");
+        Console.WriteLine("InkTeach 参数与快捷键（键位可配置，见 " + InkSettings.FilePath + "）：");
         Console.Write(Keys.ToText());
         if (Keys.GlobalFailures.Count > 0)
         {

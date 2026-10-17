@@ -187,6 +187,21 @@ internal static class DiagLog
         }
     }
 
+    /// <summary>只进日志、**不上控制台**：诊断细节用它（例如键位表——排查要用，
+    /// 但不该在启动时刷屏，2026-10-17 用户："这里好多命令，能不能精简一些"）。</summary>
+    public static void LogOnly(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        lock (_lk)
+        {
+            foreach (var ln in text.Split('\n'))
+            {
+                var t = ln.TrimEnd('\r');
+                if (t.Length > 0) _pending.Add("[" + Stamp() + "] " + t);
+            }
+        }
+    }
+
     /// <summary>带"读写共享"的手工拷贝（源可能正被写线程开着）。</summary>
     static void CopyShared(string src, string dst)
     {

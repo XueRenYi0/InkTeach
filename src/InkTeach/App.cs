@@ -217,7 +217,15 @@ internal sealed partial class App : InkEngine.InkEngine
             Console.WriteLine("白板: 已打开（截图只有我们自己的内容，不含桌面）");
         }
 
-        if (mode == "--selftest")
+        if (mode == "--help")
+        {
+            // 2026-10-17：完整参数表 + 键位表从"每次启动刷屏"挪到这里
+            //（用户："这里好多命令，能不能精简一些"）。打印完就走，不启动界面。
+            _autoExitAt = NowMs;
+            _nextLogAt = double.MaxValue;
+            PrintUsageHelp();
+        }
+        else if (mode == "--selftest")
         {
             double seconds = args.Length > 1 && double.TryParse(args[1], out var s) ? s : 12;
             // 基准的两个开关（2026-10-07）：`--benchpressure` 让笔画带压感，
@@ -1236,7 +1244,8 @@ internal sealed partial class App : InkEngine.InkEngine
     protected override void PrintUsageHelp()
     {
         base.PrintUsageHelp();
-        Console.WriteLine("开发期测试模式（不属于引擎）：");
+        Console.WriteLine("开发期测试模式（不属于引擎；完整表：InkTeach.exe --help）：");
+        Console.WriteLine("  --help              打印这份参数表与快捷键表（启动时不再刷屏）");
         Console.WriteLine("  --selftest [秒]     自动画几笔并检查渲染");
         Console.WriteLine("  --report [文件]     输出完整性能报告");
         Console.WriteLine("  --memory [文件]     输出内存归因报告");
@@ -7178,7 +7187,8 @@ internal static class Program
         // GUI 版（没有控制台）直接静默消失。
         try
         {
-            bool isHelper = Array.IndexOf(args, "--clicktarget") >= 0;
+            bool isHelper = Array.IndexOf(args, "--clicktarget") >= 0
+                         || Array.IndexOf(args, "--help") >= 0;   // --help 随时能打（不抢单实例）
             if (!isHelper && !AcquireSingleInstance()) return 0;
             return new App().Run(args);
         }
