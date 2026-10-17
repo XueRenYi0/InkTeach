@@ -367,6 +367,11 @@ internal static class Native
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern bool AttachConsole(int dwProcessId);
 
+    /// <summary>控制台当前的**输出**代码页（65001 = UTF-8、936 = GBK…）。
+    /// 控制台输出就按它来编码：中文 Windows 默认 936，硬写 UTF-8 会乱码（2026-10-17）。</summary>
+    [DllImport("kernel32.dll")]
+    public static extern uint GetConsoleOutputCP();
+
     /// <summary><see cref="AttachConsole"/> 的参数：挂到父进程上。</summary>
     public const int ATTACH_PARENT_PROCESS = -1;
 

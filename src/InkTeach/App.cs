@@ -7193,15 +7193,27 @@ internal static class Program
         try
         {
             if (!Native.AttachConsole(Native.ATTACH_PARENT_PROCESS)) return;
-            // **编码对齐（2026-10-17 用户报"控制台里是乱码"）**：
-            // 附着上的控制台默认代码页是 936（GBK），而 .NET 的 StreamWriter 默认按
-            // UTF-8 写 → 中文全变乱码。两件事一起做：把控制台输出代码页切到 UTF-8
-            // （65001），再用 UTF-8 写——"写出去的字节"和"控制台认为的编码"就一致了。
-            try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
-            Console.SetOut(new StreamWriter(Console.OpenStandardOutput(),
-                                            new System.Text.UTF8Encoding(false)) { AutoFlush = true });
-            Console.SetError(new StreamWriter(Console.OpenStandardError(),
-                                              new System.Text.UTF8Encoding(false)) { AutoFlush = true });
+
+            // **按"控制台现在是什么代码页"写**（2026-10-17 用户报乱码，第二版）：
+            // 中文 Windows 的控制台默认是 936（GBK），而 .NET 的 StreamWriter 默认按
+            // UTF-8 写 → 中文全乱。第一版是"把控制台切到 65001 再写 UTF-8"——遇到
+            // 老 conhost / 特定字体仍会显示成乱码，而且顺手改了用户这个窗口的代码页。
+            // 现在**不改造控制台**：读它的实际输出代码页，按它编码写（936 → GBK，
+            // 65001 → UTF-8，其它照实取）；窗口里别的程序不受影响。
+            System.Text.Encoding enc = System.Text.Encoding.UTF8;
+            try
+            {
+                uint cp = Native.GetConsoleOutputCP();
+                if (cp != 0 && cp != 65001)
+                {
+                    System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+                    enc = System.Text.Encoding.GetEncoding((int)cp);
+                }
+            }
+            catch { }
+
+            Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), enc) { AutoFlush = true });
+            Console.SetError(new StreamWriter(Console.OpenStandardError(), enc) { AutoFlush = true });
         }
         catch { /* 接不上就算了：不影响功能，只是看不到日志 */ }
     }
