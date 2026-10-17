@@ -83,10 +83,19 @@ public partial class InkEngine
             float want = ClampOffset(_virtualY - DocView.TopOf(idx));
             if (Math.Abs(want - ViewOffsetY) >= 1f)
             {
-                if (!ClientAreaAnimationOn) { ViewOffsetY = want; _dirty = true; }
+                DocView.PinPage(idx);
+                if (!ClientAreaAnimationOn)
+                {
+                    ViewOffsetY = want;
+                    _camAnimating = false;
+                    DocView.UnpinPage();
+                    _dirty = true;
+                }
                 else
                 {
-                    _camFrom = ViewOffsetY; _camTo = want; _camStartMs = NowMs; _camAnimating = true;
+                    _camFrom = ViewOffsetY; _camTo = want; _camStartMs = NowMs;
+                    _camAnimMs = DocMemory.FlipMs;
+                    _camAnimating = true;
                     _dirty = true;
                 }
             }
@@ -338,16 +347,20 @@ public partial class InkEngine
     {
         var specs = new List<DocPages.Spec>();
         int ok = 0, bad = 0;
+        int primaryW = Native.GetSystemMetrics(0);       // 页锚在主屏中心 → 按主屏宽铺页
+        int primaryH = Native.GetSystemMetrics(1);
+        int layoutW = DocMemory.LayoutWidth(primaryW);
         foreach (var f in files)
         {
             if (!DocImageSource.TryReadInfo(f, out int w, out int h)) { bad++; continue; }
-            specs.AddRange(DocImageSource.PlanSpecs(f, w, h, _virtualW, _virtualH));
+            specs.AddRange(DocImageSource.PlanSpecs(f, w, h, layoutW, primaryH));
             ok++;
         }
         if (specs.Count == 0 || ok == 0) return "这些图片都读不了（格式不支持或文件损坏）";
 
         _pdfDoc?.Dispose();       // 换文档：上一份 PDF 放掉（图片文档不用它）
         _pdfDoc = null;
+        DiagLog.PdfNote = $"image/{layoutW}px/cache1";
 
         string title = files.Count == 1 ? System.IO.Path.GetFileName(files[0]) : $"{ok} 张图片";
         StartDocView(specs, title, DocStore.KeyOf(files));
@@ -366,27 +379,39 @@ public partial class InkEngine
         var specs = new List<DocPages.Spec>();
         try
         {
+            int primaryW = Native.GetSystemMetrics(0);       // 页锚在主屏中心 → 按主屏宽渲染
+            if (primaryW <= 0) primaryW = _virtualW;
+            int layoutW = DocMemory.LayoutWidth(primaryW);
+            int maxPx = DocMemory.MaxPagePixels;
             for (int i = 0; i < doc.PageCount; i++)
             {
                 var (pw, ph) = doc.Size(i);
-                float scale = _virtualW / pw;                     // fit width（矢量页不存在"放大糊"）
-                long px = (long)(pw * scale) * (long)(ph * scale);
-                if (px > Pdfium.MaxPagePixels)                    // 极端长页/超大幅面：按像素预算缩
+                // 显示宽 = 主屏宽（页仍铺满屏）；渲染宽 = 档位上限（省内存靠它，不缩页面）。
+                int displayW = Math.Max(1, primaryW);
+                int displayH = Math.Max(1, (int)MathF.Round(ph * (displayW / pw)));
+                int renderW = Math.Max(1, layoutW);
+                int renderH = Math.Max(1, (int)MathF.Round(ph * (renderW / pw)));
+                long px = (long)renderW * renderH;
+                if (px > maxPx)                                     // 极端长页/超大幅面：按像素预算缩
                 {
-                    scale *= MathF.Sqrt((float)Pdfium.MaxPagePixels / px);
-                    Console.WriteLine($"    [文档] 第 {i + 1} 页很大，已缩到约 {Pdfium.MaxPagePixels / 1_000_000}MP");
+                    float k = MathF.Sqrt((float)maxPx / px);
+                    renderW = Math.Max(1, (int)MathF.Round(renderW * k));
+                    renderH = Math.Max(1, (int)MathF.Round(renderH * k));
+                    Console.WriteLine($"    [文档] 第 {i + 1} 页很大，渲染已缩到约 {maxPx / 1_000_000}MP");
                 }
-                int outW = Math.Max(1, (int)MathF.Round(pw * scale));
-                int outH = Math.Max(1, (int)MathF.Round(ph * scale));
                 specs.Add(new DocPages.Spec
                 {
                     Kind = 1,
                     Source = path,
                     SourceIndex = i,
                     SrcX = 0f, SrcY = 0f, SrcW = pw, SrcH = ph,
-                    OutW = outW, OutH = outH,
+                    OutW = displayW, OutH = displayH,
+                    RenderW = renderW, RenderH = renderH,
                 });
             }
+            Console.WriteLine($"[文档] PDF 渲染：主屏 {primaryW}px → 显示 {primaryW}px / 位图 ≤{layoutW}px"
+                + $"（{DocMemory.Name}档；静止缓存 1 页；翻页 {DocMemory.FlipMs:F0}ms）");
+            DiagLog.PdfNote = DocMemory.Note;
         }
         catch (Exception ex)
         {
@@ -448,7 +473,7 @@ public partial class InkEngine
         => spec.Kind switch
         {
             0 => DocImageSource.RenderSpec(spec),
-            1 => _pdfDoc?.RenderPage(spec.SourceIndex, spec.OutW, spec.OutH),
+            1 => _pdfDoc?.RenderPage(spec.SourceIndex, spec.BitmapW, spec.BitmapH),
             _ => null,
         };
 
@@ -467,6 +492,7 @@ public partial class InkEngine
         DocImageSource.TrimCache();
         _pdfDoc?.Dispose();
         _pdfDoc = null;
+        DiagLog.PdfNote = "";
 
         LeaveDocPageSpace();                // 回桌面（含相机位置恢复）
 

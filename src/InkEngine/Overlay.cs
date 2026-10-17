@@ -1391,7 +1391,14 @@ internal sealed partial class OverlayWindow : IDisposable
         if (pages.IsOpen)
         {
             if (hidden) { pages.ReleaseAll(); pages.StopWanting(); }
-            else pages.SyncWindow(VisibleCanvasRect.MinY, VisibleCanvasRect.MaxY, 1, 1f);
+            else
+            {
+                int adopted = pages.SyncWindow(VisibleCanvasRect.MinY, VisibleCanvasRect.MaxY,
+                                               1, DocMemory.CacheMarginScreens);
+                if (adopted > 0)
+                    Console.WriteLine($"[文档] 页缓存 {pages.ResidentPages} 页 / "
+                        + $"{pages.ResidentBytes / 1048576.0:F1} MB");
+            }
         }
 
         if (pages.FullDirty)

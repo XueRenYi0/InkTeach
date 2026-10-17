@@ -174,6 +174,38 @@ internal sealed partial class App
               $"峰值 {Math.Max(cap, DocView.ResidentBytes) / 1024 / 1024:F1} MB");
 
         // ------------------------------------------------------------------
+        Console.WriteLine("  -- A8 一页缓存：静止 1 页 / 跨页 2 页 / 翻页钉住目标页 --");
+        // ------------------------------------------------------------------
+        var onePage = new List<DocPages.Spec>
+        {
+            DocSpec(600, 900, "P0.png"),
+            DocSpec(600, 900, "P1.png"),
+            DocSpec(600, 900, "P2.png"),
+        };
+        DocView.Open(onePage, "一页缓存", 0f, 0f, 20f);
+        int m1 = DocView.SyncWindow(0f, 800f, 1, 0f);              // 视口 800 < 页高 900：只压第 1 页
+        Check("静止：只驻留 1 页", m1 == 1 && DocView.ResidentPages == 1,
+              $"生成={m1} 驻留={DocView.ResidentPages}");
+
+        int m2 = DocView.SyncWindow(800f, 1600f, 1, 0f);           // 跨页缝：p0 余 100 + p1
+        m2 += DocView.SyncWindow(800f, 1600f, 1, 0f);
+        Check("跨页缝：最多 2 页", DocView.ResidentPages >= 1 && DocView.ResidentPages <= 2,
+              $"驻留={DocView.ResidentPages}（生成 {m2}）");
+
+        DocView.Close();
+        DocView.Open(onePage, "一页缓存-钉页", 0f, 0f, 20f);
+        DocView.SyncWindow(0f, 800f, 1, 0f);                       // 先有第 1 页
+        DocView.PinPage(2);                                        // 模拟翻页：目标第 3 页还没进视口
+        DocView.SyncWindow(0f, 800f, 1, 0f);
+        Check("钉住的目标页：视口外也先渲", DocView.At(2).Image != null,
+              $"第 3 页 Image={(DocView.At(2).Image != null)}，驻留={DocView.ResidentPages}");
+        Check("钉页期间仍 ≤ 2 页", DocView.ResidentPages <= 2, $"驻留={DocView.ResidentPages}");
+        DocView.UnpinPage();
+        DocView.SyncWindow(0f, 800f, 1, 0f);
+        Check("取消钉页：目标页被回收，回到 1 页", DocView.At(2).Image == null && DocView.ResidentPages == 1,
+              $"驻留={DocView.ResidentPages}");
+
+        // ------------------------------------------------------------------
         Console.WriteLine("  -- A5 失败当没有：坏页不重试、不阻塞其它页 --");
         // ------------------------------------------------------------------
         int genCalls = 0;
@@ -576,9 +608,11 @@ internal sealed partial class App
             Check("打开 PDF：不报错、3 页", errPdf == null && DocView.Count == 3,
                   errPdf ?? $"Count={DocView.Count}");
             Check("标题 = 文件名", DocView.Title == "三色三页.pdf", DocView.Title);
-            int expectW = (int)MathF.Round(_virtualW);
-            Check("每页宽度 = 屏宽（fit width）", DocView.At(0).Spec.OutW == expectW,
+            int expectW = Native.GetSystemMetrics(0);
+            Check("每页显示宽 = 主屏宽（fit width）", DocView.At(0).Spec.OutW == expectW,
                   $"{DocView.At(0).Spec.OutW}（应 {expectW}）");
+            Check("位图渲染宽 = 档位上限", DocView.At(0).Spec.BitmapW == DocMemory.LayoutWidth(expectW),
+                  $"{DocView.At(0).Spec.BitmapW}（应 {DocMemory.LayoutWidth(expectW)}）");
 
             SettleFrames(400);
             Check("页位图生成并上屏（账在涨）",
@@ -637,16 +671,16 @@ internal sealed partial class App
             Check("条上页码 1/3", BarPageNow == 1 && BarTotal == 3, $"{BarPageNow}/{BarTotal}");
 
             BarNext();
-            SettleFrames(260);
+            SettleFrames((int)DocMemory.FlipMs + 120);
             Check("下一页：视口到第 2 页顶 + 页码跟着变",
                   Math.Abs(ViewOffsetY + DocView.TopOf(1)) < 2f && BarPageNow == 2,
                   $"camY={ViewOffsetY:F0}（应 {-DocView.TopOf(1):F0}）页码={BarPageNow}");
 
             BarGoto(3);
-            SettleFrames(260);
+            SettleFrames((int)DocMemory.FlipMs + 120);
             Check("跳页（面板同一入口）：到第 3 页", BarPageNow == 3, $"{BarPageNow}");
             BarGoto(1);
-            SettleFrames(260);
+            SettleFrames((int)DocMemory.FlipMs + 120);
 
             // ★ 文档批注独立：写一笔进当前槽（= 文档槽），桌面板书一个字不动
             var mark = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,

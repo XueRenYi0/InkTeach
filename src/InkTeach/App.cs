@@ -1309,6 +1309,8 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --prefetchtest      分块空闲预取自检（预取命中则再滚一格不重画；含关预取对照）");
         Console.WriteLine("  --noprefetch        关掉分块空闲预取（对照；默认开）");
         Console.WriteLine("  --warp              强制 WARP 软件渲染（无显卡兜底；诊断/性能地板用）");
+        Console.WriteLine("  --pdflowmem         强制 PDF 省内存档（4GB 档：渲染宽 1600 / 1 页缓存 / 1s 翻页）");
+        Console.WriteLine("  --pdfhighmem        强制 PDF 高清档（尽量按主屏物理宽；单页最多 12MP）");
         Console.WriteLine("  --trailtest [--touch]  委托墨迹轨迹对照（默认合成鼠标；--touch = 合成触摸）");
         Console.WriteLine("  --uiscale <0.8|0.9|1|1.15|1.3>  界面缩放档（工具带/色带/抽屉/设置页；只覆盖本次运行，不落盘）");
         Console.WriteLine("  --smoothtest        中心线曲线化自检（过点 Catmull-Rom：直角不变形 / 圆弧更圆滑 / 形状不跑）");

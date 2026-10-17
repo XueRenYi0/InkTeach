@@ -99,6 +99,7 @@ public partial class InkEngine
             or "--himetric" or "--nohimetric" or "--notouch" or "--syswet" or "--ownwet" or "--strokefile"
             or "--inktrail" or "--noinktrail" or "--trailonly" or "--trailcommit"
             or "--hud" or "--nohud" or "--fullpresent" or "--warp"
+            or "--pdflowmem" or "--pdfhighmem"
             or "--recink" or "--recinkp" or "--reclive"
             or "--doc"
             or "--nosmooth" or "--printersafe"
@@ -2291,6 +2292,9 @@ public partial class InkEngine
         // --fullpresent：每次整屏上屏（不走 Present1 脏矩形）。诊断"固定横线闪"用：
         // 如果加上它就不闪了，说明问题在"部分上屏 + DWM 合成"这条路上（见 Overlay 的说明）。
         if (args.Contains("--fullpresent")) OverlayWindow.FullPresent = true;
+        // PDF 内存档案（2026-10-17）：默认按内存自动；这两条是诊断/对照开关。
+        if (args.Contains("--pdflowmem")) DocMemory.Force = DocMemoryMode.Low;
+        else if (args.Contains("--pdfhighmem")) DocMemory.Force = DocMemoryMode.High;
         // --noprefetch：关掉"视口外一圈"的空闲预取，回到纯同步光栅（对照用）。
         if (args.Contains("--noprefetch")) CanvasTileCache.PrefetchEnabled = false;
         // --traceframes：把每帧的脏区/上屏/分块/预取日志打到控制台（OverlayWindow.Trace）。
@@ -3557,6 +3561,7 @@ public partial class InkEngine
                   + $" 置顶={_lastTopmostMs,5:F2}ms"
                   + $" 脏区={_windows[0].LastPresentRectCount}块/{_windows[0].LastPresentAreaPercent,5:F1}%"
                   + $" 动因={drive}"
+                  + (DocView.IsOpen ? $" 页={DocView.ResidentPages}/{DocView.ResidentBytes / 1048576.0:F1}MB" : "")
                   + $" ws={_workingSetMb,6:F1}MB");
             _accRecord = _accPresent = _accHud = _accStats = 0;
             _hudAvgMs = _accPanel / n;
@@ -8069,6 +8074,7 @@ public partial class InkEngine
 
     private double _camFrom, _camTo, _camStartMs;
     private bool _camAnimating;
+    private double _camAnimMs = CamAnimMs;
     private const double CamAnimMs = 167;      // 和界面同一套时长（167ms 是 Windows 的 Direct Entrance）
 
     /// <summary>
@@ -8078,6 +8084,7 @@ public partial class InkEngine
     internal bool FlipPage(bool down)
     {
         float want;
+        int docTarget = -1;
         if (DocView.IsOpen)
         {
             // 文档模式：翻页 = **跳到上/下一页的页顶**（"一页一翻"，10-03 文档定的交互）。
@@ -8101,6 +8108,7 @@ public partial class InkEngine
                 target = intoPage > _virtualH * 0.12f ? cur : cur - 1;
             }
             target = Math.Clamp(target, 0, DocView.Count - 1);
+            docTarget = target;
             want = ClampOffset(_virtualY - DocView.TopOf(target));
         }
         else
@@ -8109,9 +8117,20 @@ public partial class InkEngine
         }
         if (Math.Abs(want - ViewOffsetY) < 1f) return false;
 
+        // PDF：低配 1 秒过渡，给扫描版页留渲染时间；目标页先钉住、后台先渲。
+        if (docTarget >= 0)
+        {
+            DocView.PinPage(docTarget);
+            _camAnimMs = DocMemory.FlipMs;
+        }
+        else _camAnimMs = CamAnimMs;
+
         if (!ClientAreaAnimationOn)
         {
             ViewOffsetY = want;               // 系统关了动画就直接跳终态（老机器上是常事）
+            _camAnimating = false;
+            _camAnimMs = CamAnimMs;
+            DocView.UnpinPage();
             _dirty = true;
             return true;
         }
@@ -8130,8 +8149,14 @@ public partial class InkEngine
     internal void StepCameraAnim()
     {
         if (!_camAnimating) return;
-        double t = (NowMs - _camStartMs) / CamAnimMs;
-        if (t >= 1.0) { ViewOffsetY = (float)_camTo; _camAnimating = false; }
+        double t = (NowMs - _camStartMs) / Math.Max(1.0, _camAnimMs);
+        if (t >= 1.0)
+        {
+            ViewOffsetY = (float)_camTo;
+            _camAnimating = false;
+            _camAnimMs = CamAnimMs;
+            DocView.UnpinPage();          // 目标页已经到视口；下一帧只留当前页
+        }
         else
         {
             float k = 1f - MathF.Pow(1f - (float)t, 3f);

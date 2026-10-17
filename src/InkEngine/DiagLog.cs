@@ -62,6 +62,9 @@ internal static class DiagLog
     public static float UiScale = 1f;
     public static string ScreenSize = "?";
 
+    /// <summary>PDF 档案一句（low/1600px/cache1/flip1000ms）；打开文档时由引擎填。</summary>
+    public static string PdfNote = "";
+
     /// <summary>启动后由引擎填一次：GPU / 是否软件渲染 / 刷新率 / DPI / 界面缩放。</summary>
     public static void SetEnv(string gpu, bool software, int vramMb,
                               int refreshHz, uint dpi, float uiScale, string screen)
@@ -296,6 +299,7 @@ internal static class DiagLog
         if (SessionId.Length > 0) sb.AppendLine($"会话：{SessionId}");
         sb.AppendLine($"显卡：{GpuName}（{(GpuSoftware ? "软件渲染/WARP" : "硬件渲染")}，显存 {GpuVramMb} MB）");
         sb.AppendLine($"显示：{RefreshHz} Hz · DPI {Dpi} · 界面缩放 {UiScale.ToString("F2", CultureInfo.InvariantCulture)} · 屏幕 {ScreenSize}");
+        if (!string.IsNullOrEmpty(PdfNote)) sb.AppendLine($"PDF：{PdfNote}");
         try
         {
             var x = EnvExtra?.Invoke();
@@ -729,6 +733,7 @@ internal static class DiagLog
             + ",\"dpi\":" + Dpi
             + ",\"ui\":" + Num(UiScale, "0.00")
             + ",\"screen\":\"" + J(ScreenSize) + "\""
+            + ",\"pdf\":\"" + J(PdfNote) + "\""
             + ",\"perf\":{"
                 + "\"fps\":" + Num(ps.Fps, "0.0")
                 + ",\"avgMs\":" + Num(ps.AvgFrameMs, "0.00")
@@ -825,6 +830,7 @@ internal static class DiagLog
              + ",\"hz\":" + RefreshHz
              + ",\"dpi\":" + Dpi
              + ",\"ui\":" + F(UiScale, "0.00")
+             + ",\"pdf\":\"" + J(PdfNote) + "\""
              + ",\"fps\":" + F(ps.Fps, "0.0")
              + ",\"recMs\":" + F(ps.AvgFrameMs, "0.00")
              + ",\"maxMs\":" + F(ps.MaxFrameMs, "0.0")

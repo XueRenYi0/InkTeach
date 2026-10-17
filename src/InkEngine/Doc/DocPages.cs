@@ -43,6 +43,14 @@ internal sealed class DocPages
         public float SrcX, SrcY, SrcW, SrcH;
         /// <summary>输出位图尺寸（物理像素）。</summary>
         public int OutW, OutH;
+        /// <summary>
+        /// 内部渲染位图的宽高（0 = 跟 OutW/OutH 一样）。
+        /// PDF 低内存档：OutW 仍是主屏显示宽（页铺满屏），RenderW 只需 1600；
+        /// 绘制时 D2D 把它放大到 OutW，内存按 RenderW 算。
+        /// </summary>
+        public int RenderW, RenderH;
+        public int BitmapW => RenderW > 0 ? RenderW : OutW;
+        public int BitmapH => RenderH > 0 ? RenderH : OutH;
 
         public override string ToString() =>
             $"{(Kind == 0 ? "图片" : "PDF")} {System.IO.Path.GetFileName(Source)}#{SourceIndex} {OutW}x{OutH}";
@@ -62,7 +70,7 @@ internal sealed class DocPages
 
     /// <summary>
     /// 页位图生成器（宿主注入：图片 = GDI+ 解码＋裁切＋缩放；PDF = PDFium 渲进缓冲）。
-    /// 返回 BGRA（OutW×OutH×4，长度不够算失败）；失败返回 null。
+    /// 返回 BGRA（BitmapW×BitmapH×4，长度不够算失败）；失败返回 null。
     /// **worker 模式下它跑在后台线程**（见 <see cref="UseWorker"/>）。
     /// </summary>
     public Func<Spec, byte[]> Generator;
@@ -151,6 +159,7 @@ internal sealed class DocPages
         DirtyRects.Clear();
         ResidentPages = 0;
         ResidentBytes = 0;
+        _pinnedIndex = -1;
         Title = "";
         FullDirty = true;
         Version++;
@@ -170,6 +179,7 @@ internal sealed class DocPages
     private readonly AutoResetEvent _wake = new(false);
     private readonly object _gate = new();
     private readonly List<Page> _want = new();     // 渲染线程填、worker 取（离视口近的在前）
+    private volatile int _pinnedIndex = -1;        // 翻页动画的目标页：即使还没进视口也先渲
     private Page _inFlight;                        // worker 正在渲的页
     private Page _readyPage;                       // 渲完、等渲染线程采纳
     private ImageData _readyImage;
@@ -242,8 +252,8 @@ internal sealed class DocPages
             }
 
             ImageData img = null;
-            if (bgra != null && bgra.Length >= (long)job.Spec.OutW * job.Spec.OutH * 4)
-                img = ImageData.Adopt(job.Spec.OutW, job.Spec.OutH, bgra, false);
+                if (bgra != null && bgra.Length >= (long)job.Spec.BitmapW * job.Spec.BitmapH * 4)
+                    img = ImageData.Adopt(job.Spec.BitmapW, job.Spec.BitmapH, bgra, false);
 
             lock (_gate)
             {
@@ -304,7 +314,7 @@ internal sealed class DocPages
                         adopted = 1;
                         GenerateCount++;
                         ResidentPages++;
-                        ResidentBytes += (long)rp.Spec.OutW * rp.Spec.OutH * 4;
+                        ResidentBytes += ri.ByteSize;
                     }
                     else
                     {
@@ -330,18 +340,17 @@ internal sealed class DocPages
             if (_pages[mid].Rect.MaxY < top) lo = mid + 1; else hi = mid;
         }
 
-        // ② 窗口上方：全放
-        for (int k = 0; k < lo; k++) ReleasePage(_pages[k]);
+        // ② 窗口上方：全放（翻页动画钉住的目标页除外）
+        for (int k = 0; k < lo; k++)
+            if (k != _pinnedIndex) ReleasePage(_pages[k]);
 
-        // ③ 窗口内：直通模式当场生成（预算内）；worker 模式只记"想要什么"
+        // ③ 窗口内：直通模式当场生成（预算内）；worker 模式只记"想要什么"。
+        //    翻页动画钉住的目标页**优先**——它可能还没进视口，但动画结束前必须准备好。
         int made = 0;
-        int k2 = lo;
-        for (; k2 < _pages.Count && _pages[k2].Rect.MinY <= bottom; k2++)
+        bool GeneratePage(Page p)
         {
-            var p = _pages[k2];
-            if (p.Image != null || p.Failed) continue;
-            if (_worker != null) continue;                       // 交给下面的"想要清单"
-            if (made >= maxGenerate || Generator == null) continue;
+            if (p == null || p.Image != null || p.Failed || Generator == null) return false;
+            if (_worker != null || made >= maxGenerate) return false;
 
             byte[] bgra;
             try { bgra = Generator(p.Spec); }
@@ -350,47 +359,60 @@ internal sealed class DocPages
                 Console.WriteLine($"    [文档] 生成失败（{p.Spec}）：{ex.Message}");
                 bgra = null;
             }
-            if (bgra == null || bgra.Length < (long)p.Spec.OutW * p.Spec.OutH * 4)
+            if (bgra == null || bgra.Length < (long)p.Spec.BitmapW * p.Spec.BitmapH * 4)
             {
                 p.Failed = true;
                 FailCount++;
                 DirtyRects.Add(p.Rect);
                 Version++;
-                continue;
+                return false;
             }
-            p.Image = ImageData.Adopt(p.Spec.OutW, p.Spec.OutH, bgra, false);
-            if (p.Image == null) { p.Failed = true; FailCount++; DirtyRects.Add(p.Rect); Version++; continue; }
+            p.Image = ImageData.Adopt(p.Spec.BitmapW, p.Spec.BitmapH, bgra, false);
+            if (p.Image == null) { p.Failed = true; FailCount++; DirtyRects.Add(p.Rect); Version++; return false; }
             GenerateCount++;
             made++;
             ResidentPages++;
-            ResidentBytes += (long)p.Spec.OutW * p.Spec.OutH * 4;
+            ResidentBytes += p.Image.ByteSize;
             DirtyRects.Add(p.Rect);
             Version++;
+            return true;
         }
 
-        // ④ 窗口下方：全放
-        int end = k2;
-        for (; k2 < _pages.Count; k2++) ReleasePage(_pages[k2]);
+        Page pinned = _pinnedIndex >= 0 && _pinnedIndex < _pages.Count ? _pages[_pinnedIndex] : null;
+        if (pinned != null) GeneratePage(pinned);
 
-        // ⑤ worker 模式：重建"想要清单"（视口中心近的排前面）并叫醒后台线程
+        int k2 = lo;
+        for (; k2 < _pages.Count && _pages[k2].Rect.MinY <= bottom; k2++)
+        {
+            var p = _pages[k2];
+            if (ReferenceEquals(p, pinned)) continue;
+            if (p.Image != null || p.Failed) continue;
+            if (_worker != null) continue;                       // 交给下面的"想要清单"
+            if (made >= maxGenerate) continue;
+            GeneratePage(p);
+        }
+
+        // ④ 窗口下方：全放（同样跳过钉住的目标页）
+        int end = k2;
+        for (; k2 < _pages.Count; k2++)
+            if (k2 != _pinnedIndex) ReleasePage(_pages[k2]);
+
+        // ⑤ worker 模式：重建"想要清单"（钉住的目标页排最前）并叫醒后台线程
         if (_worker != null)
         {
             lock (_gate)
             {
                 _want.Clear();
+                if (pinned != null && pinned.Image == null && !pinned.Failed
+                    && !ReferenceEquals(pinned, _inFlight))
+                    _want.Add(pinned);
                 for (int k = lo; k < end; k++)
                 {
                     var p = _pages[k];
+                    if (ReferenceEquals(p, pinned)) continue;
                     if (p.Image != null || p.Failed || ReferenceEquals(p, _inFlight)) continue;
                     _want.Add(p);
                 }
-                float center = (viewTop + viewBottom) * 0.5f;
-                _want.Sort((a, b) =>
-                {
-                    float da = MathF.Abs((a.Rect.MinY + a.Rect.MaxY) * 0.5f - center);
-                    float db = MathF.Abs((b.Rect.MinY + b.Rect.MaxY) * 0.5f - center);
-                    return da.CompareTo(db);
-                });
             }
             _wake.Set();
         }
@@ -402,22 +424,42 @@ internal sealed class DocPages
     /// 整层作废由调用方负责（穿透状态翻转时 MarkAllDirty）。</summary>
     public void ReleaseAll()
     {
+        _pinnedIndex = -1;
         foreach (var p in _pages) ReleasePage(p);
     }
 
     /// <summary>"让开"用：把后台线程的"想要"清单清掉（别再白渲——页都收起来了）。</summary>
     public void StopWanting()
     {
+        _pinnedIndex = -1;
         lock (_gate) _want.Clear();
     }
+
+    /// <summary>
+    /// 翻页动画开始：钉住目标页。它可能还没进视口，但必须比别的页先渲。
+    /// 动画结束/取消时 <see cref="UnpinPage"/>；钉住期间即使滚出窗口也**不回收**。
+    /// </summary>
+    public void PinPage(int index)
+    {
+        if (index < 0 || index >= _pages.Count) return;
+        _pinnedIndex = index;
+        _wake.Set();
+    }
+
+    public void UnpinPage() => _pinnedIndex = -1;
+
+    /// <summary>这一页的位图在手上吗（翻页前判断要不要等）。</summary>
+    public bool IsPageReady(int index)
+        => index >= 0 && index < _pages.Count && _pages[index].Image != null;
 
     private void ReleasePage(Page p)
     {
         if (p.Image == null) return;
+        long bytes = p.Image.ByteSize;
         p.Image.Release();
         p.Image = null;
         ResidentPages = Math.Max(0, ResidentPages - 1);
-        ResidentBytes = Math.Max(0, ResidentBytes - (long)p.Spec.OutW * p.Spec.OutH * 4);
+        ResidentBytes = Math.Max(0, ResidentBytes - bytes);
         ReleaseCount++;
         // **不标脏**：页被放掉之后重生成出来的是同一份像素（同源、确定性），
         // 屏幕上贴着的是旧块，内容没有区别；等块自己过期时才会重光栅。
