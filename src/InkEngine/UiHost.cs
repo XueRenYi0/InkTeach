@@ -143,6 +143,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     /// <summary>「设置 → 导出日志…」：运行日志打包 zip（2026-10-16）。</summary>
     public void ExportLogs() => _engine.ExportLogsFromUi();
 
+    /// <summary>「设置 → 上传日志…」：日志一键传云端（2026-10-17）。</summary>
+    public void UploadLogs() => _engine.UploadLogsFromUi();
+
     public void Paste() => _engine.PasteFromClipboard();
     public void Restart() => _engine.RestartFromUi();
     public void Quit() => _engine.QuitFromUi();

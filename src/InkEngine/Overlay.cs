@@ -1541,14 +1541,21 @@ internal sealed partial class OverlayWindow : IDisposable
 
         // 空间索引按**带笔宽外扩**的框返回候选，所以跨在块边界上的粗笔画
         // 两边都会被画到，不会出现"贴边被削掉一半"的缺口。
-        doc.QueryGrid(canvas, _strokeScratch);
+        //
+        // **穿透 = 全让开（2026-10-17 用户定）：连墨迹也不画**——屏幕只剩下层程序
+        // 和我们的面板，不再"各槽的墨一起浮着、分不清在哪一层"。退出穿透原样回来；
+        // 翻转那一帧的"整层作废"走 SyncDocPages 的 `hidden`（它本来就含 PassThrough）。
         int drawn = 0;
-        foreach (var s in _strokeScratch)
+        if (!app.PassThrough)
         {
-            if (!s.PaddedBounds.Intersects(canvas)) continue;
-            if (app.IsContentDetached(s)) continue;      // 同上：拖动预览那一批不进内容层
-            DrawStroke(s);
-            drawn++;
+            doc.QueryGrid(canvas, _strokeScratch);
+            foreach (var s in _strokeScratch)
+            {
+                if (!s.PaddedBounds.Intersects(canvas)) continue;
+                if (app.IsContentDetached(s)) continue;      // 同上：拖动预览那一批不进内容层
+                DrawStroke(s);
+                drawn++;
+            }
         }
 
         _ctx.Transform = Matrix3x2.Identity;
@@ -3235,6 +3242,10 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawSelection(InkEngine app)
     {
+        // **穿透 = 全让开（2026-10-17 用户定）**：选中框 / 手柄 / 操作条也一起藏——
+        // 屏幕只剩下层程序 + 我们的面板（墨迹在 RasterizeTile 里同一条规矩）。
+        if (app.PassThrough) return;
+
         var sel = app.Doc.Selected;
         if (sel.Count == 0) return;
 

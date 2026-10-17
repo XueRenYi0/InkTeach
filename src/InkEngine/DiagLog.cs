@@ -16,6 +16,7 @@
 // 都落在 `%LOCALAPPDATA%\InkTeach\Logs`；「更多 → 设置 → 导出日志…」打包成 zip 给支持。
 
 using System.IO.Compression;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -427,5 +428,140 @@ public partial class InkEngine
             SetInkStatus("日志导出失败：" + ex.Message);
             Console.WriteLine("[日志] 导出失败：" + ex);
         }
+    }
+
+    // ---- 日志上云（2026-10-17 用户定）------------------------------------------
+    //
+    // 目标：老师机器卡了 →「设置 → 上传日志…」→ 日志 zip 到云端 → 我们取下来直接分析。
+    // 方案：GitCode 上的一个**日志收集仓**（免费、国内直连、接口现成——和
+    //       `tools\gitcode-release.ps1` 用的是同一条"发行版附件"链路）。
+    //
+    // ⚠ 没有服务器，令牌只能藏在客户端里（能从 exe 里抠出来）：所以
+    //   ① 这个令牌**只给日志收集仓用**（绝不复用发版令牌）；
+    //   ② 泄漏的最坏后果 = 有人往那个仓写垃圾（读不到别的东西、也删不掉我们的仓库）——
+    //      发现异常换个令牌发个小版本即可。取日志见 `tools\fetch-logs.ps1`，
+    //      完整方案与建仓步骤见 `调研\日志上传-方案.md`。
+
+    /// <summary>日志收集仓坐标（建好后把令牌回填到下面；空 = 未配置、按钮提示改用导出）。</summary>
+    const string LogUploadOwner = "XueRenYI0";
+    const string LogUploadRepo = "InkTeach-Logs";
+    const string LogUploadTag = "logs";
+    const string LogUploadToken = "";      // ← 建好仓后回填细粒度令牌（见 调研\日志上传-方案.md）
+
+    /// <summary>「设置 → 上传日志…」：打包日志 → 传云端。任何失败都不抛，只提示改用导出。</summary>
+    internal void UploadLogsFromUi()
+    {
+        if (string.IsNullOrEmpty(LogUploadToken))
+        {
+            SetInkStatus("上传未配置——请用「导出日志…」把 zip 发回来");
+            return;
+        }
+        if (!ExportDialogEnabled) { SetInkStatus("自检模式不上传"); return; }
+
+        SetInkStatus("正在上传日志…");
+        Console.WriteLine("[日志] 开始上传…");
+        string zip = Path.Combine(Path.GetTempPath(),
+            $"inkteach-upload-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
+        try
+        {
+            DiagLog.ExportZip(zip);
+            string leaf = $"日志-{DateTime.Now:yyyyMMdd-HHmmss}-{LogSafeName(Environment.MachineName)}-{Guid.NewGuid().ToString("N")[..6]}.zip";
+            UploadZipToGitCode(zip, leaf);
+            SetInkStatus($"日志已上传：{leaf}（把这个编号告诉开发）");
+            Console.WriteLine($"[日志] 已上传 {leaf}");
+        }
+        catch (Exception ex)
+        {
+            SetInkStatus("上传失败：" + ex.Message + "——请改用「导出日志…」发回来");
+            Console.WriteLine("[日志] 上传失败：" + ex);
+        }
+        finally
+        {
+            try { File.Delete(zip); } catch { }
+        }
+    }
+
+    /// <summary>文件名安全字符（机器名可能带中文/空格）。</summary>
+    static string LogSafeName(string s)
+    {
+        var sb = new StringBuilder();
+        foreach (var c in s)
+            sb.Append(char.IsLetterOrDigit(c) || c == '-' || c == '_' ? c : '_');
+        return sb.Length == 0 ? "机器" : sb.ToString();
+    }
+
+    /// <summary>把 zip 传到日志收集仓的 `logs` 发行版（同 tools\gitcode-release.ps1 的链路）。</summary>
+    static void UploadZipToGitCode(string zipPath, string assetName)
+    {
+        // GitCode 是国内直连的：**显式不走系统代理**（同 UpdateFeed 那条规矩——
+        // 半死不活的"给 GitHub 用的代理"会把上传卡到超时）。
+        using var http = new HttpClient(new HttpClientHandler { UseProxy = false });
+        http.Timeout = TimeSpan.FromSeconds(90);
+        try { http.DefaultRequestHeaders.UserAgent.ParseAdd("InkTeach-log/" + ProductInfo.Version); } catch { }
+
+        string api = $"https://api.gitcode.com/api/v5/repos/{LogUploadOwner}/{LogUploadRepo}";
+        // ① 取上传点：给个文件名，拿回 PUT 地址 + 要带上的头（接口与发版脚本一致）
+        string q = $"{api}/releases/{LogUploadTag}/upload_url" +
+                   $"?access_token={Uri.EscapeDataString(LogUploadToken)}" +
+                   $"&file_name={Uri.EscapeDataString(assetName)}";
+        string txt = http.GetStringAsync(q).GetAwaiter().GetResult();
+        string url = JsonStringField(txt, "url")
+            ?? throw new Exception("接口没给上传地址（检查：收集仓 / logs 发行版 / 令牌）");
+
+        using var req = new HttpRequestMessage(HttpMethod.Put, url);
+        string ctype = null;
+        foreach (var (k, v) in JsonHeadersOf(txt))
+        {
+            if (string.Equals(k, "content-type", StringComparison.OrdinalIgnoreCase)) { ctype = v; continue; }
+            req.Headers.TryAddWithoutValidation(k, v);
+        }
+        var body = new ByteArrayContent(File.ReadAllBytes(zipPath));
+        body.Headers.TryAddWithoutValidation("Content-Type",
+            string.IsNullOrEmpty(ctype) ? "application/zip" : ctype);
+        req.Content = body;
+
+        // ② 上传（PUT 二进制）
+        using var resp = http.SendAsync(req).GetAwaiter().GetResult();
+        if (!resp.IsSuccessStatusCode) throw new Exception($"http={(int)resp.StatusCode}");
+    }
+
+    /// <summary>扁平 JSON 抠一个字符串字段（不引 JSON 库，同仓库习惯）。</summary>
+    static string JsonStringField(string json, string key)
+    {
+        int k = json.IndexOf("\"" + key + "\"", StringComparison.OrdinalIgnoreCase);
+        if (k < 0) return null;
+        int colon = json.IndexOf(':', k + key.Length + 2);
+        if (colon < 0) return null;
+        int q1 = json.IndexOf('"', colon + 1);
+        if (q1 < 0) return null;
+        int q2 = json.IndexOf('"', q1 + 1);
+        if (q2 < 0) return null;
+        return json.Substring(q1 + 1, q2 - q1 - 1);
+    }
+
+    /// <summary>抠 `"headers"` 对象里的键值对（PUT 要按接口给的头来）。</summary>
+    static List<(string Key, string Value)> JsonHeadersOf(string json)
+    {
+        var list = new List<(string, string)>();
+        int k = json.IndexOf("\"headers\"", StringComparison.OrdinalIgnoreCase);
+        if (k < 0) return list;
+        int ob = json.IndexOf('{', k);
+        if (ob < 0) return list;
+        int oe = json.IndexOf('}', ob + 1);
+        if (oe < 0) return list;
+        var body = json.Substring(ob + 1, oe - ob - 1);
+        int i = 0;
+        while (true)
+        {
+            int q1 = body.IndexOf('"', i); if (q1 < 0) break;
+            int q2 = body.IndexOf('"', q1 + 1); if (q2 < 0) break;
+            string key = body.Substring(q1 + 1, q2 - q1 - 1);
+            int colon = body.IndexOf(':', q2 + 1); if (colon < 0) break;
+            int v1 = body.IndexOf('"', colon + 1); if (v1 < 0) break;
+            int v2 = body.IndexOf('"', v1 + 1); if (v2 < 0) break;
+            list.Add((key, body.Substring(v1 + 1, v2 - v1 - 1)));
+            i = v2 + 1;
+        }
+        return list;
     }
 }

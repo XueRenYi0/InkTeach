@@ -239,7 +239,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按三列里的布局走**：
     /// 外观（4）/ 书写（5）/ 墨迹（3）三列并排——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, WetMode, RestoreInk, PptAutoSave, HistoryDays, LogExport }
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, WetMode, RestoreInk, PptAutoSave, HistoryDays, LogExport, LogUpload }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -290,6 +290,9 @@ public sealed class FullUi : IOverlayUi
         // 导出日志（2026-10-16 用户定）：运行日志打成 zip（存 U 盘 / 发给开发都行）。
         // **不是开关行**（IsToggleRow 名单里没有它）：点一下直接弹另存为；点完回启动器页看状态行。
         (Row.LogExport, "导出日志…", false, false, "把运行日志打包成 zip（排查问题时发给开发；不含板书内容）"),
+        // 上传日志（2026-10-17 用户定）：运行日志**一键传云端**（GitCode 日志收集仓）。
+        // 老师机器卡了就点它；链路 / 令牌风险 / 取日志见 调研\日志上传-方案.md 与 tools\fetch-logs.ps1。
+        (Row.LogUpload, "上传日志…", false, false, "把运行日志直接传到云端给开发排查；不成功就用「导出日志…」发回来"),
         // 板书历史本身没有开关（默认留、默认不显示）；上限是"总量 1 GB、份数不限"，
         // 见 BoardHistory。老师想清空就删 `%LOCALAPPDATA%\InkTeach\History`，或把这一行设成 7 天。
         // ⚠ 「精细笔迹」「触摸手势」两个开关 2026-10-09 晚**已撤**（用户真机试稳：
@@ -2289,6 +2292,13 @@ public sealed class FullUi : IOverlayUi
                 });
                 break;
 
+            // 上传日志（2026-10-17）：一键传云端；同样跳回启动器页看状态行
+            //（"日志已上传：<编号>"——那个编号就是报给开发用的）。
+            case Row.LogUpload:
+                _host.Commands.UploadLogs();
+                _morePage = MorePage.Home;
+                break;
+
             // 导出日志（2026-10-16）：弹另存为存 zip；成功后跳回启动器页——
             // 状态行在那边，"日志已导出：<路径>"才看得见（反馈规则和「检查更新」同一条）。
             case Row.LogExport:
@@ -2356,7 +2366,7 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private const int LookRowCount = 4;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小（「功能提示」2026-10-16 撤除、改常开）
     private const int WriteRowCount = 3;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测（「预测时长」2026-10-15 随毫秒调节撤除；精细笔迹、触摸手势 2026-10-09 撤开关、改常开）
-    private const int InkRowCount = 5;     // 墨迹：湿墨档位 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理 / 导出日志
+    private const int InkRowCount = 6;     // 墨迹：湿墨档位 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理 / 上传日志 / 导出日志
     private const float MoreColumnGap = 16f;
     private const float MoreSwitchW = 44f;
     private const float MoreSwitchH = 26f;
@@ -2585,8 +2595,9 @@ public sealed class FullUi : IOverlayUi
         Row.RestoreInk => SetColRow(SetColKind.Ink, 1),
         Row.PptAutoSave => SetColRow(SetColKind.Ink, 2),
         Row.HistoryDays => SetColRow(SetColKind.Ink, 3),
-        Row.LogExport => SetColRow(SetColKind.Ink, 4),
-        _ => SetColRow(SetColKind.Ink, 4),
+        Row.LogUpload => SetColRow(SetColKind.Ink, 4),     // 上传日志（2026-10-17）：在"导出"上面一格
+        Row.LogExport => SetColRow(SetColKind.Ink, 5),
+        _ => SetColRow(SetColKind.Ink, 5),
     };
 
     /// <summary>设置页下半的三列：外观 / 书写 / 墨迹（并排；序号 = 列序，`SetColX` 用它）。</summary>

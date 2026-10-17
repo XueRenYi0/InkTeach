@@ -818,19 +818,26 @@ internal sealed partial class App
                       BoardOn && btCover0 > 5000 && btInk0 > 100,
                       $"板开={BoardOn} 板绿={btCover0}/6400 板墨={btInk0}");
 
-                // ① 鼠标格开穿透：板盖让位（全让开）
+                // ① 鼠标格开穿透：板盖让位 + **墨迹也让开**（2026-10-17 用户定：全让开——
+                //    屏幕只剩下层程序，不再"几层墨浮着分不清在哪一层"）
                 SetPassThroughFromUi(true);
                 SettleFrames(280);
                 int btCoverPt = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 0, 204, 0, 6);
                 Check("穿透：白板盖让位（全让开）", PassThrough && btCoverPt < 80, $"板绿残留={btCoverPt}");
+                int btInkPt = ScreenProbe.CountNear(rb0 + 490, ry0 + 610, 140, 100, 0, 0, 0, 40);
+                Check("穿透：板上的墨也让开（屏幕只剩下面那一层）",
+                      PassThrough && btInkPt < btInk0 / 2,
+                      $"板墨（让开前 {btInk0} → 让开中 {btInkPt}；窗口里还含桌面背景）");
 
-                // ② 鼠标格关穿透（穿透开关退出）：恢复原样——盖回来、人还在板槽
+                // ② 鼠标格关穿透（穿透开关退出）：恢复原样——盖回来、墨回来、人还在板槽
                 SetPassThroughFromUi(false);
                 SettleFrames(320);
                 int btCoverBack = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 0, 204, 0, 6);
-                Check("穿透开关退出：白板**恢复原样**（盖回来 + 人还在板上）",
-                      !PassThrough && BoardOn && Doc.PageKey == InkDocument.BoardPageKey && btCoverBack > 5000,
-                      $"板开={BoardOn} 槽={(Doc.PageKey == InkDocument.BoardPageKey ? "白板" : "别处")} 板绿={btCoverBack}/6400");
+                int btInkBack = ScreenProbe.CountNear(rb0 + 490, ry0 + 610, 140, 100, 0, 0, 0, 40);
+                Check("穿透开关退出：白板**恢复原样**（盖回来 + 墨回来 + 人还在板上）",
+                      !PassThrough && BoardOn && Doc.PageKey == InkDocument.BoardPageKey
+                      && btCoverBack > 5000 && btInkBack > btInk0 / 2,
+                      $"板开={BoardOn} 槽={(Doc.PageKey == InkDocument.BoardPageKey ? "白板" : "别处")} 板绿={btCoverBack}/6400 板墨={btInkBack}");
 
                 // ③ 再进穿透，这次走「换工具」退（笔格/呼出盘 = "我现在就要写"）——
                 //   以前这里留下混合态：盖没了、板槽的墨还浮在桌面上，接着写还会悄悄写进白板槽

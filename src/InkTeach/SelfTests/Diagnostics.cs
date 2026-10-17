@@ -2713,6 +2713,13 @@ internal sealed partial class App
             catch (Exception ex) { entries = "打开失败：" + ex.Message; }
             Check("导出 zip：含日志 + 环境.txt", zipOk, entries);
             try { File.Delete(zip); } catch { }
+
+            // ⑥ 上传日志：未配置 / 自检档下必须**只提示、不抛错不卡**（老师机器上更不能炸）
+            {
+                UploadLogsFromUi();
+                bool known = InkStatus.Contains("上传未配置") || InkStatus.Contains("自检模式不上传");
+                Check("上传日志：未配置/自检档只提示、不炸", known, InkStatus);
+            }
         }
 
         Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
