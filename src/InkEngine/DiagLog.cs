@@ -446,7 +446,9 @@ public partial class InkEngine
     const string LogUploadOwner = "XueRenYI0";
     const string LogUploadRepo = "InkTeach-Logs";
     const string LogUploadTag = "logs";
-    const string LogUploadToken = "";      // ← 建好仓后回填细粒度令牌（见 调研\日志上传-方案.md）
+    // ← 专用令牌（2026-10-17 用户建：仅"项目"组，其余全禁止）。
+    //   等"只读版"令牌验证（若只读也能传，换只读的发出——最小权限）。
+    const string LogUploadToken = "gCssTfbNazQFxq26cmyR7xs8";
 
     /// <summary>「设置 → 上传日志…」：打包日志 → 传云端。任何失败都不抛，只提示改用导出。</summary>
     internal void UploadLogsFromUi()
@@ -465,7 +467,7 @@ public partial class InkEngine
         try
         {
             DiagLog.ExportZip(zip);
-            string leaf = $"日志-{DateTime.Now:yyyyMMdd-HHmmss}-{LogSafeName(Environment.MachineName)}-{Guid.NewGuid().ToString("N")[..6]}.zip";
+            string leaf = $"log-{DateTime.Now:yyyyMMdd-HHmmss}-{LogSafeName(Environment.MachineName)}-{Guid.NewGuid().ToString("N")[..6]}.zip";
             UploadZipToGitCode(zip, leaf);
             SetInkStatus($"日志已上传：{leaf}（把这个编号告诉开发）");
             Console.WriteLine($"[日志] 已上传 {leaf}");
@@ -481,87 +483,46 @@ public partial class InkEngine
         }
     }
 
-    /// <summary>文件名安全字符（机器名可能带中文/空格）。</summary>
+    /// <summary>文件名安全字符（**只留 ASCII**：它要进 URL 路径；机器名可能带中文）。</summary>
     static string LogSafeName(string s)
     {
         var sb = new StringBuilder();
         foreach (var c in s)
-            sb.Append(char.IsLetterOrDigit(c) || c == '-' || c == '_' ? c : '_');
-        return sb.Length == 0 ? "机器" : sb.ToString();
+            sb.Append(c < 128 && (char.IsLetterOrDigit(c) || c == '-' || c == '_') ? c : '_');
+        return sb.Length == 0 ? "machine" : sb.ToString();
     }
 
-    /// <summary>把 zip 传到日志收集仓的 `logs` 发行版（同 tools\gitcode-release.ps1 的链路）。</summary>
+    /// <summary>
+    /// 把 zip 传成日志收集仓里的一个**文件**（`logs/<名字>`，contents 接口）。
+    ///
+    /// ⚠ 为什么不用"发行版附件"（发版脚本那条路）：**私有仓的附件下载会 403**
+    /// （各种鉴权姿势都试过，见 调研\日志上传-方案.md 的"踩坑记录"）——而仓库
+    /// 文件这条链（api.gitcode.com + access_token）一路都通：读、写、列表全过。
+    /// 新建用 **POST**（PUT 是"更新已存在的文件"，会向你要 sha）。
+    /// </summary>
     static void UploadZipToGitCode(string zipPath, string assetName)
     {
         // GitCode 是国内直连的：**显式不走系统代理**（同 UpdateFeed 那条规矩——
         // 半死不活的"给 GitHub 用的代理"会把上传卡到超时）。
         using var http = new HttpClient(new HttpClientHandler { UseProxy = false });
-        http.Timeout = TimeSpan.FromSeconds(90);
+        http.Timeout = TimeSpan.FromSeconds(120);
         try { http.DefaultRequestHeaders.UserAgent.ParseAdd("InkTeach-log/" + ProductInfo.Version); } catch { }
 
         string api = $"https://api.gitcode.com/api/v5/repos/{LogUploadOwner}/{LogUploadRepo}";
-        // ① 取上传点：给个文件名，拿回 PUT 地址 + 要带上的头（接口与发版脚本一致）
-        string q = $"{api}/releases/{LogUploadTag}/upload_url" +
-                   $"?access_token={Uri.EscapeDataString(LogUploadToken)}" +
-                   $"&file_name={Uri.EscapeDataString(assetName)}";
-        string txt = http.GetStringAsync(q).GetAwaiter().GetResult();
-        string url = JsonStringField(txt, "url")
-            ?? throw new Exception("接口没给上传地址（检查：收集仓 / logs 发行版 / 令牌）");
-
-        using var req = new HttpRequestMessage(HttpMethod.Put, url);
-        string ctype = null;
-        foreach (var (k, v) in JsonHeadersOf(txt))
-        {
-            if (string.Equals(k, "content-type", StringComparison.OrdinalIgnoreCase)) { ctype = v; continue; }
-            req.Headers.TryAddWithoutValidation(k, v);
-        }
-        var body = new ByteArrayContent(File.ReadAllBytes(zipPath));
-        body.Headers.TryAddWithoutValidation("Content-Type",
-            string.IsNullOrEmpty(ctype) ? "application/zip" : ctype);
-        req.Content = body;
-
-        // ② 上传（PUT 二进制）
+        string b64 = Convert.ToBase64String(File.ReadAllBytes(zipPath));
+        // 手工拼 JSON：base64 和文件名里没有需要转义的字符（名字已 ASCII 化）
+        string body = "{\"message\":\"log " + assetName + "\",\"content\":\"" + b64 + "\",\"branch\":\"main\"}";
+        string q = $"{api}/contents/logs/{Uri.EscapeDataString(assetName)}" +
+                   $"?access_token={Uri.EscapeDataString(LogUploadToken)}";
+        using var req = new HttpRequestMessage(HttpMethod.Post, q);
+        req.Content = new StringContent(body, Encoding.UTF8, "application/json");
         using var resp = http.SendAsync(req).GetAwaiter().GetResult();
-        if (!resp.IsSuccessStatusCode) throw new Exception($"http={(int)resp.StatusCode}");
-    }
-
-    /// <summary>扁平 JSON 抠一个字符串字段（不引 JSON 库，同仓库习惯）。</summary>
-    static string JsonStringField(string json, string key)
-    {
-        int k = json.IndexOf("\"" + key + "\"", StringComparison.OrdinalIgnoreCase);
-        if (k < 0) return null;
-        int colon = json.IndexOf(':', k + key.Length + 2);
-        if (colon < 0) return null;
-        int q1 = json.IndexOf('"', colon + 1);
-        if (q1 < 0) return null;
-        int q2 = json.IndexOf('"', q1 + 1);
-        if (q2 < 0) return null;
-        return json.Substring(q1 + 1, q2 - q1 - 1);
-    }
-
-    /// <summary>抠 `"headers"` 对象里的键值对（PUT 要按接口给的头来）。</summary>
-    static List<(string Key, string Value)> JsonHeadersOf(string json)
-    {
-        var list = new List<(string, string)>();
-        int k = json.IndexOf("\"headers\"", StringComparison.OrdinalIgnoreCase);
-        if (k < 0) return list;
-        int ob = json.IndexOf('{', k);
-        if (ob < 0) return list;
-        int oe = json.IndexOf('}', ob + 1);
-        if (oe < 0) return list;
-        var body = json.Substring(ob + 1, oe - ob - 1);
-        int i = 0;
-        while (true)
+        if (!resp.IsSuccessStatusCode)
         {
-            int q1 = body.IndexOf('"', i); if (q1 < 0) break;
-            int q2 = body.IndexOf('"', q1 + 1); if (q2 < 0) break;
-            string key = body.Substring(q1 + 1, q2 - q1 - 1);
-            int colon = body.IndexOf(':', q2 + 1); if (colon < 0) break;
-            int v1 = body.IndexOf('"', colon + 1); if (v1 < 0) break;
-            int v2 = body.IndexOf('"', v1 + 1); if (v2 < 0) break;
-            list.Add((key, body.Substring(v1 + 1, v2 - v1 - 1)));
-            i = v2 + 1;
+            string t = "";
+            try { t = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult(); } catch { }
+            throw new Exception($"http={(int)resp.StatusCode}"
+                + (t.Length > 0 ? "；" + t.Substring(0, Math.Min(160, t.Length)) : ""));
         }
-        return list;
     }
 }

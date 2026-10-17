@@ -1098,6 +1098,18 @@ internal sealed partial class App : InkEngine.InkEngine
             // 给路径时**保留文件**（人工核对 / 拿别的解码器验它）
             IoTest(args.Length > 1 ? args[1] : null);
         }
+        else if (mode == "--logupload")
+        {
+            // 开发用：走一遍**真实的上传链路**（设置页「上传日志…」屁股底下同一条路），
+            // 打完就退——发布前 / 换令牌后用它验"仓 + `logs` 发行版 + 令牌"还通。
+            // （自检模式默认拦上传，是护栏；这里显式放行。）
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ExportDialogEnabled = true;
+            UploadLogsFromUi();
+            Console.WriteLine("logupload: " + InkStatus);
+            _quit = true;
+        }
         else if (mode == "--patterntest")
         {
             _autoExitAt = double.MaxValue;
@@ -1246,6 +1258,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --clipboardtest     剪贴板对象通道（复制 → 粘回来仍是对象；会覆盖系统剪贴板）");
         Console.WriteLine("  --lassotest         套索选择（80% 判据 / 贴边无限延伸 / 加选减选）");
         Console.WriteLine("  --capturetest       截图（拖框 → 左上角 → 剪贴板，且不拍进自己的批注）");
+        Console.WriteLine("  --logupload         开发用：真传一次运行日志（验日志收集仓 / 令牌是否通）");
         Console.WriteLine("  --cursorshow <笔|荧光笔|激光笔|橡皮|像素橡皮> [宽]  落点摆样");
         Console.WriteLine("  --widthtest         笔迹粗细/压力");
         Console.WriteLine("  --ghosttest         残影检测");
