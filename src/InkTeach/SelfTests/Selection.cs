@@ -1909,15 +1909,25 @@ internal sealed partial class App
         // 缩小：真实框的**对面角**必须钉住 —— 拿操作框的角当缩放中心的话，
         // 内容会绕着框外一个点漂（用户 2026-10-05："缩到最小以后鼠标乱动，
         // 它跟着乱移动"）。这条断言在旧实现下会红。
-        var shrinkTo = new Vector2(ttl.X + 6f, ttl.Y + 6f);        // 往里拖一点
-        var mShrink = SelectionHandles.DragMatrix(SelHandle.TopLeft, tiny, ttl, shrinkTo, dpi, false, false);
-        var realBr = new Vector2(tiny.MaxX, tiny.MaxY);
+        // 缩小：改用"比尺寸下限大"的对象验锚点（矮于下限的对象现在会被下限挡住——
+        // 2026-10-17 用户定："拖到最小就停住"）。
+        var shrinkBox = new RectF { MinX = 100, MinY = 100, MaxX = 220, MaxY = 180 };
+        var shrinkTl = SelectionHandles.Position(SelHandle.TopLeft, shrinkBox, dpi);
+        var shrinkTo = new Vector2(shrinkTl.X + 30f, shrinkTl.Y + 30f);   // 往里拖一点
+        var mShrink = SelectionHandles.DragMatrix(SelHandle.TopLeft, shrinkBox, shrinkTl, shrinkTo, dpi, false, false);
+        var realBr = new Vector2(shrinkBox.MaxX, shrinkBox.MaxY);
         var brAfter = Vector2.Transform(realBr, mShrink);
-        Check("小对象缩小：真实框的对面角钉住（不乱漂）",
+        Check("缩小：真实框的对面角钉住（不乱漂）",
               MathF.Abs(brAfter.X - realBr.X) < 0.05f && MathF.Abs(brAfter.Y - realBr.Y) < 0.05f,
               $"对面角 ({brAfter.X:F1},{brAfter.Y:F1})，原位 ({realBr.X:F1},{realBr.Y:F1})");
-        Check("小对象缩小：内容真的变小了（不是纹丝不动）", mShrink.M11 < 0.95f && mShrink.M11 > 0f,
+        Check("缩小：内容真的变小了（不是纹丝不动）", mShrink.M11 < 0.95f && mShrink.M11 > 0f,
               $"sx={mShrink.M11:F3}");
+        // 小对象（本来就 < 下限）：**不许再缩**（可以放大）——拖也停在原大小
+        var mTinyShrink = SelectionHandles.DragMatrix(SelHandle.TopLeft, tiny, ttl,
+                                                      new Vector2(ttl.X + 6f, ttl.Y + 6f), dpi, false, false);
+        Check("小对象（本已 <12 逻辑像素）：再拖也不缩（停在原大小）",
+              MathF.Abs(mTinyShrink.M11 - 1f) < 1e-3f && MathF.Abs(mTinyShrink.M22 - 1f) < 1e-3f,
+              $"sx={mTinyShrink.M11:F3} sy={mTinyShrink.M22:F3}");
 
         // ---- 四角拖动：锚点不动，被拖的角跟手 ----
         var br = SelectionHandles.Position(SelHandle.BottomRight, b, dpi);
@@ -1944,12 +1954,16 @@ internal sealed partial class App
         Check("右边中点只拉伸 X", MathF.Abs(mEdge.M22 - 1f) < 1e-4f && mEdge.M11 > 1.49f,
               $"sx={mEdge.M11:F2} sy={mEdge.M22:F2}（Y 的拖动被忽略）");
 
-        // ---- 拖过头：夹住，不翻转 ----
+        // ---- 拖过头：停在**最小尺寸**（12 逻辑像素短边），不翻转、不缩成小点 ----
         var wayPast = new Vector2(br.X + 600, br.Y + 600);
         var mOver = SelectionHandles.DragMatrix(SelHandle.TopLeft, b, tl, wayPast, dpi, false, false);
-        Check("拖过头不翻转（夹住）",
-              mOver.M11 > 0f && mOver.M22 > 0f && MathF.Abs(mOver.M11 - SelectionHandles.MinScale) < 1e-3f,
-              $"sx={mOver.M11:F3} sy={mOver.M22:F3}，下限 {SelectionHandles.MinScale}");
+        float floorWant = MathF.Max(SelectionHandles.MinScale,
+            MathF.Min(1f, SelectionHandles.MinSizeLogical * dpi
+                          / MathF.Min(b.MaxX - b.MinX, b.MaxY - b.MinY)));
+        Check("拖过头：停在最小尺寸（不翻转、不再继续变小）",
+              mOver.M11 > 0f && mOver.M22 > 0f
+              && MathF.Abs(mOver.M11 - floorWant) < 1e-3f && MathF.Abs(mOver.M22 - floorWant) < 1e-3f,
+              $"sx={mOver.M11:F3} sy={mOver.M22:F3}，下限 {floorWant:F3}");
 
         // ---- Shift 等比 ----
         var mUni = SelectionHandles.DragMatrix(SelHandle.TopLeft, b, tl,

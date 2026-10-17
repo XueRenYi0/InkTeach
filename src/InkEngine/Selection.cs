@@ -269,22 +269,21 @@ internal static class SelectionHandles
     /// <summary>
     /// 手柄的视觉直径（**逻辑**像素）。
     ///
-    /// 注意单位：这是"看起来多大"，与 DPI 无关。在 2 倍屏上会画成 28 物理像素。
-    /// 第一版我按物理像素实现（7 逻辑 = 14 物理），在这台机器上量出来只有
-    /// 7 逻辑像素，比设计意图小了一半，投影上会看不清——尺寸一律用逻辑像素。
+    /// 2026-10-17 用户："8 个点有点大、占空间，精致一些" → **14 → 10**。
+    /// 命中半径不跟着缩（见 <see cref="HitRadiusLogical"/>），所以"看着更小、还是好点"。
+    ///
+    /// 注意单位：这是"看起来多大"，与 DPI 无关。在 2 倍屏上会画成 20 物理像素。
     /// </summary>
-    public const float VisualSizeLogical = 14f;
+    public const float VisualSizeLogical = 10f;
 
     /// <summary>
-    /// 旋转手柄的直径（逻辑像素）。
-    ///
-    /// 比普通手柄（14）大一圈：它里面要装一个图标，14 的话图标只剩几个像素，
-    /// 投影上就糊成一个点。大一圈也让"这是个按钮"更好认。
+    /// 旋转手柄的直径（逻辑像素）。比普通手柄（10）大一圈：它里面要装一个图标。
+    /// 2026-10-17 同步收小：20 → **16**（图标 13 → 11）。
     /// </summary>
-    public const float RotateGripLogical = 20f;
+    public const float RotateGripLogical = 16f;
 
     /// <summary>旋转手柄里那个图标的尺寸（逻辑像素）。</summary>
-    public const float RotateGlyphLogical = 13f;
+    public const float RotateGlyphLogical = 11f;
 
     /// <summary>
     /// 手柄的命中半径（逻辑像素）。**是视觉尺寸的两倍**：
@@ -340,8 +339,22 @@ internal static class SelectionHandles
     /// <summary>
     /// 缩放下限。**刻意不为 0**：矩阵一旦退化（行列式为 0）就求不出逆矩阵，
     /// 撤销那一步会静默失效，对象就卡死在缩小状态里回不来了。
+    ///
+    /// ⚠ 2026-10-17 起它只是**数学上的最后一道保险**；真正的"拖到最小就停"是
+    /// <see cref="MinSizeLogical"/>（缩成 12 逻辑像素的短边就停，不再一路缩小）。
     /// </summary>
     public const float MinScale = 0.02f;
+
+    /// <summary>
+    /// **缩放的尺寸下限**（逻辑像素，短边）。2026-10-17 用户定：
+    /// "选中框拖到最小的时候还会继续变小……给选中框设定一个最小值，拖到最小就不能再拖小。"
+    ///
+    /// 原来只有 2% 的纯数学下限——100px 的对象能缩到 2px，手一滑就"没了"。
+    /// 现在判据是**缩放后的短边 ≥ 12 逻辑像素**（等比缩放的时两轴取同一个下限，
+    /// 否则比例会被夹歪）；边中点只夹它自己那一轴。
+    /// 比它还小的对象（本来就 < 12）**不许再缩**，但可以放大（下限不逼它变大）。
+    /// </summary>
+    public const float MinSizeLogical = 12f;
 
     /// <summary>把一个手柄换算成它在包围盒上的相对位置（0~1）。</summary>
     private static (float u, float v) Uv(SelHandle h) => h switch
@@ -1352,9 +1365,11 @@ internal static class SelectionHandles
         float side = (w + h) * 0.5f * su;
         float fx = MathF.Sign(sx == 0f ? 1f : sx) * side / w;
         float fy = MathF.Sign(sy == 0f ? 1f : sy) * side / h;
-        // 会被夹到最小缩放的不算吸住：那种时候对象已经被夹住了，"精确的正方形"没有意义，
-        // 而报"吸住了"却是假的。
-        if (MathF.Abs(fx) < MinScale || MathF.Abs(fy) < MinScale) return false;
+        // 尺寸下限（2026-10-17）：会被夹到"最小尺寸"的不算吸住——那种时候对象已经
+        // 被下限挡住了，"精确的正方形"没有意义，而报"吸住了"却是假的。
+        float minS = MathF.Max(MinScale,
+            MathF.Min(1f, MinSizeLogical * dpiScale / MathF.Min(w, h)));
+        if (MathF.Abs(fx) < minS || MathF.Abs(fy) < minS) return false;
 
         localM = Matrix3x2.CreateScale(fx, fy, anchorReal);
         return true;
@@ -1878,6 +1893,30 @@ internal static class SelectionHandles
         // **夹住而不是翻转**：拖过头时停在最小尺寸，不越过锚点变成镜像。
         // 镜像要从操作条按按钮——那里是显式操作，不会误触。
         // （同时也保证矩阵不退化，撤销永远能回来。）
+        //
+        // 2026-10-17 用户定：**"拖到最小就停住"**——下限从"2% 的数学值"换成
+        // "缩放后的短边 ≥ MinSizeLogical"（等比时两轴同一档，否则比例会被夹歪）。
+        float wReal = MathF.Max(1e-3f, startBounds.MaxX - startBounds.MinX);
+        float hReal = MathF.Max(1e-3f, startBounds.MaxY - startBounds.MinY);
+        float floorAll = MathF.Max(MinScale,
+            MathF.Min(1f, MinSizeLogical * dpiScale / MathF.Min(wReal, hReal)));
+        float floorX = MathF.Max(MinScale,
+            MathF.Min(1f, MinSizeLogical * dpiScale / wReal));
+        float floorY = MathF.Max(MinScale,
+            MathF.Min(1f, MinSizeLogical * dpiScale / hReal));
+        if (isCorner || uniform)
+        {
+            // ⚠ 夹的是**带符号的**尺度：拖过锚点时 s 是负的——旧写法先取绝对值再乘回符号，
+            //   负值最后被 `ClampScale` 兜成 2%（= 缩没了）；现在 max(负值, 下限) 直接停在
+            //   下限上（这也正是"夹住不翻转"想要的样子）。
+            sx = MathF.Max(sx, floorAll);
+            sy = MathF.Max(sy, floorAll);
+        }
+        else
+        {
+            if (u != 0.5f) sx = MathF.Max(sx, floorX);
+            if (v != 0.5f) sy = MathF.Max(sy, floorY);
+        }
         sx = ClampScale(sx);
         sy = ClampScale(sy);
 

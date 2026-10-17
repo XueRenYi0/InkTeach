@@ -7193,8 +7193,15 @@ internal static class Program
         try
         {
             if (!Native.AttachConsole(Native.ATTACH_PARENT_PROCESS)) return;
-            Console.SetOut(new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true });
-            Console.SetError(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
+            // **编码对齐（2026-10-17 用户报"控制台里是乱码"）**：
+            // 附着上的控制台默认代码页是 936（GBK），而 .NET 的 StreamWriter 默认按
+            // UTF-8 写 → 中文全变乱码。两件事一起做：把控制台输出代码页切到 UTF-8
+            // （65001），再用 UTF-8 写——"写出去的字节"和"控制台认为的编码"就一致了。
+            try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
+            Console.SetOut(new StreamWriter(Console.OpenStandardOutput(),
+                                            new System.Text.UTF8Encoding(false)) { AutoFlush = true });
+            Console.SetError(new StreamWriter(Console.OpenStandardError(),
+                                              new System.Text.UTF8Encoding(false)) { AutoFlush = true });
         }
         catch { /* 接不上就算了：不影响功能，只是看不到日志 */ }
     }
