@@ -14,6 +14,7 @@
 #>
 param(
     [switch]$Download,
+    [switch]$Devices,
     [string]$OutDir = "logs-download"
 )
 
@@ -35,6 +36,39 @@ function Read-GcJson([string]$file) {
     try { $raw = [System.IO.File]::ReadAllText($file, [System.Text.Encoding]::UTF8) } catch { }
     if (-not $raw) { return $null }
     try { return ($raw | ConvertFrom-Json) } catch { return $null }
+}
+
+# -Devices：列 devices/（设备卡：台数 / 型号 / 最近活跃）；默认：列 logs/（日志）
+if ($Devices)
+{
+    $null = curl.exe -s --max-time 60 -o $tmpJson "$api/contents/devices`?access_token=$tok"
+    $dl = Read-GcJson $tmpJson
+    if ($null -eq $dl -or $dl.error_code) {
+        Write-Host "还没有设备卡（每台机器第一次运行后会自动传一张，之后每天更新）。" -ForegroundColor Yellow
+        Remove-Item $tmpJson -Force -ErrorAction SilentlyContinue
+        return
+    }
+    $files = @($dl | Where-Object { $_.type -eq 'file' })
+    $cards = @()
+    foreach ($f in $files) {
+        $null = curl.exe -s --max-time 60 -o $tmpJson "$api/contents/devices/$($f.name)?access_token=$tok"
+        $one = Read-GcJson $tmpJson
+        if ($one -and $one.content) {
+            try {
+                $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($one.content -replace '\s', '')))
+                $cards += ($json | ConvertFrom-Json)
+            } catch { }
+        }
+    }
+    Write-Host "设备卡：$($cards.Count) 台（每台一份，每日更新）" -ForegroundColor Green
+    foreach ($g in ($cards | Group-Object model | Sort-Object Count -Descending)) {
+        Write-Host ("  {0,3} 台  {1}" -f $g.Count, $g.Name)
+    }
+    $today = Get-Date -Format 'yyyy-MM-dd'
+    $recent = @($cards | Where-Object { $_.last -eq $today }).Count
+    Write-Host "  最近一天有活动：$recent 台" -ForegroundColor DarkGray
+    Remove-Item $tmpJson -Force -ErrorAction SilentlyContinue
+    return
 }
 
 # 列 logs/ 目录

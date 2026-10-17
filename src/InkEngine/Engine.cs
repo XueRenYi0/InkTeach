@@ -3248,6 +3248,10 @@ public partial class InkEngine
             StepEngineTooltip();              // 引擎侧悬停提示的 500ms 延迟（到点点亮）
             StepTimerCard();                  // 课堂计时卡片：推进秒数 / 到点 / 同步接输入小窗
             StepRollCard();                   // 课堂点名卡片：滚动推进 / 同步接输入小窗
+            // 设备卡（2026-10-17）：和 StepPpt 一样**两处都调**——Loop 这条负责"空闲也在转"，
+            // RenderAll 那条负责自检驱动；函数自己幂等（每天最多传一次）。
+            MaybeDeviceCardUpload();
+            StepLogUpload();                  // 日志上传结果轮询（后台线程传，界面不卡）
             if (NeedsFrame())
             {
                 // VBlankPaced：先等到合成边界，**再抽一次消息**，然后画、提交。
@@ -3336,6 +3340,9 @@ public partial class InkEngine
         MaybeAutoSave();
         // 板书历史（0 号页快照）：只在**手停下来**之后写（见 MaybeHistorySnapshot 的注释）。
         MaybeHistorySnapshot();
+        // 运行日志的设备卡（2026-10-17）：每天最多传一次（台数 / 型号统计；自检不传）。
+        MaybeDeviceCardUpload();
+        StepLogUpload();
 
         // PPT 状态机。**为什么两处都调**（这里 + 主循环 Loop 里）：主循环那条路
         // 只在"真有帧"时才走到，而自检是用"抽消息＋渲染"驱动的（同 MaybeAutoSave
@@ -3483,6 +3490,11 @@ public partial class InkEngine
         }
         if (statsRan) _accStats += _lastStatsMs;
         _accFrames++;
+
+        // 运行日志的性能快照（2026-10-17）：每 5 分钟一条窗口快照 + 慢帧（≥150ms）立刻记。
+        // 代价 = 每帧几次加法；写盘走日志的队列（见 DiagLog.NoteFrame）。
+        DiagLog.DocOpenNote = DocView.IsOpen ? "文档开着" : BoardOn ? "白板" : "桌面";
+        DiagLog.NoteFrame(NowMs, _fps, _lastFrameMs, _lastPresentMs, _workingSetMb);
 
         if (NowMs >= _nextLogAt)
         {

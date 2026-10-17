@@ -15,6 +15,7 @@
 // 内容：系统/版本/键位表（启动时本来就打）+ 状态切换 + 文件操作 + 异常……
 // 都落在 `%LOCALAPPDATA%\InkTeach\Logs`；「更多 → 设置 → 导出日志…」打包成 zip 给支持。
 
+using Microsoft.Win32;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Runtime.InteropServices;
@@ -248,6 +249,7 @@ internal static class DiagLog
             sb.AppendLine();
             sb.AppendLine($"====== InkTeach {ProductInfo.Version} 启动 · {DateTime.Now:yyyy-MM-dd HH:mm:ss} ======");
             try { sb.AppendLine($"系统 {RuntimeInformation.OSDescription}（{RuntimeInformation.OSArchitecture}）· 进程 {(Environment.Is64BitProcess ? "64" : "32")} 位 · {Environment.MachineName}"); } catch { }
+            try { sb.AppendLine($"机器 {MachineModel} · {CpuName} · RAM {RamGb}G"); } catch { }
             File.AppendAllText(CurrentPath, sb.ToString(), new UTF8Encoding(false));
         }
         catch { }
@@ -399,6 +401,276 @@ internal static class DiagLog
             try { _inner.Flush(); } catch { }
         }
     }
+    /// <summary>日志收集仓坐标（建好后把令牌回填到下面；空 = 未配置、按钮提示改用导出）。</summary>
+    internal const string LogUploadOwner = "XueRenYI0";
+    internal const string LogUploadRepo = "InkTeach-Logs";
+    internal const string LogUploadTag = "logs";
+
+    /// <summary>
+    /// 上传专用令牌（2026-10-17 用户建：仅"项目"组，其余全禁止）——
+    /// **异或 + Base64 掩码存储**，不再明文（防 grep / 防一眼看穿）。
+    /// ⚠ 老实说：客户端必须能自己解开，所以这不是"真加密"——真正的防线是
+    ///   "专用令牌 + 出事就换"（见 调研\日志上传-方案.md）。
+    /// </summary>
+    internal const string LogUploadTokenMasked = "Li0YJzEHASZMNj4hVUMCBFUkFzljHRJb";
+    internal static string LogUploadToken => Unmask(LogUploadTokenMasked);
+    internal static string Unmask(string s)
+    {
+        var b = Convert.FromBase64String(s);
+        var k = Encoding.UTF8.GetBytes("InkTeach-Log-2026");
+        for (int i = 0; i < b.Length; i++) b[i] ^= k[i % k.Length];
+        return Encoding.UTF8.GetString(b);
+    }
+
+    // ---- 本机信息 / 性能快照（2026-10-17 用户定）-------------------------------
+    //
+    // 用户要两件事：
+    //   ① 知道"装了多少台、什么型号、还在不在用"——见下面的**设备卡**（自动上传）；
+    //   ② 能分析"卡顿"——每 5 分钟一条性能快照 + 单帧长卡（≥150ms）立刻记一条。
+    // 两样都极便宜：型号/CPU/内存读注册表和一次 P/Invoke（进程内缓存），
+    // 快照只是把引擎已有的 fps/帧耗时/内存数抄进日志。
+
+    /// <summary>设备卡的安装 ID（引擎启动时从偏好注入；匿名 GUID，不含个人信息）。</summary>
+    public static string DeviceId;
+    /// <summary>首次运行日期（yyyy-MM-dd，本地偏好）。</summary>
+    public static string InstallFirstDay;
+
+    static string _model, _cpu;
+    static int _ramGb;
+
+    /// <summary>机器型号（"HONOR HGF-WX6-V" 这种；读 BIOS 注册表，一次缓存）。</summary>
+    public static string MachineModel
+    {
+        get { if (_model == null) ReadHardware(); return _model; }
+    }
+    public static string CpuName
+    {
+        get { if (_cpu == null) ReadHardware(); return _cpu; }
+    }
+    public static int RamGb
+    {
+        get { if (_cpu == null) ReadHardware(); return _ramGb; }
+    }
+
+    static void ReadHardware()
+    {
+        try
+        {
+            using var k = Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\BIOS");
+            string mk = k?.GetValue("SystemManufacturer") as string;
+            string md = k?.GetValue("SystemProductName") as string;
+            _model = ((mk ?? "").Trim() + " " + (md ?? "").Trim()).Trim();
+        }
+        catch { }
+        if (string.IsNullOrEmpty(_model)) _model = "未知";
+        try
+        {
+            using var k = Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\CentralProcessor\0");
+            _cpu = ((k?.GetValue("ProcessorNameString") as string) ?? "").Trim();
+        }
+        catch { }
+        if (string.IsNullOrEmpty(_cpu)) _cpu = "未知";
+        try
+        {
+            var m = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
+            if (GlobalMemoryStatusEx(ref m)) _ramGb = (int)Math.Round(m.ullTotalPhys / 1024.0 / 1024.0 / 1024.0);
+        }
+        catch { }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct MEMORYSTATUSEX
+    {
+        public uint dwLength;
+        public uint dwMemoryLoad;
+        public ulong ullTotalPhys;
+        public ulong ullAvailPhys;
+        public ulong ullTotalPageFile;
+        public ulong ullAvailPageFile;
+        public ulong ullTotalVirtual;
+        public ulong ullAvailVirtual;
+        public ulong ullAvailExtendedVirtual;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
+
+    // ---- 性能快照（写进日志，排查"卡顿"用）-------------------------------------
+
+    static long _perfWinStartMs = -1;
+    static long _perfFrames;
+    static double _perfSumFrame, _perfMaxFrame, _perfMaxPresent;
+    static int _perfGc2Last;
+    static long _slowLogAtMs;
+
+    /// <summary>慢帧日志里的"当时在干什么"（引擎只在变化时写，几纳秒）。</summary>
+    public static string DocOpenNote = "桌面";
+
+    /// <summary>
+    /// 每帧调一次（渲染线程，几十纳秒的量级）：累计窗口统计；
+    /// **单帧 ≥150ms** 立刻记一条（12 秒内至多一条），**每 5 分钟**一条窗口快照。
+    /// 卡顿排查最值钱的就是"哪一秒、卡了多久、当时内存多少"。
+    /// </summary>
+    public static void NoteFrame(double nowMs, double fps, double frameMs, double presentMs, double workingSetMb)
+    {
+        if (_perfWinStartMs < 0) { _perfWinStartMs = (long)nowMs; _perfGc2Last = GC.CollectionCount(2); }
+        _perfFrames++;
+        _perfSumFrame += frameMs;
+        if (frameMs > _perfMaxFrame) _perfMaxFrame = frameMs;
+        if (presentMs > _perfMaxPresent) _perfMaxPresent = presentMs;
+
+        if (frameMs >= 150 && nowMs - _slowLogAtMs > 12_000)
+        {
+            _slowLogAtMs = (long)nowMs;
+            Console.WriteLine($"[perf] 慢帧 {(long)frameMs}ms（fps≈{fps:F0}，ws={workingSetMb:F0}MB，{DocOpenNote}）");
+        }
+
+        if (nowMs - _perfWinStartMs >= 300_000)
+        {
+            int gc2 = GC.CollectionCount(2);
+            Console.WriteLine($"[perf] 5 分钟：平均帧 {_perfSumFrame / Math.Max(1, _perfFrames):F1}ms"
+                + $" 最差帧 {(long)_perfMaxFrame}ms 最差上屏 {_perfMaxPresent:F1}ms"
+                + $" ws={workingSetMb:F0}MB gc2+={gc2 - _perfGc2Last}");
+            _perfGc2Last = gc2;
+            _perfWinStartMs = (long)nowMs;
+            _perfFrames = 0;
+            _perfSumFrame = _perfMaxFrame = _perfMaxPresent = 0;
+        }
+    }
+
+    // ---- 设备卡（台数 / 型号 / 活跃统计；老师零操作）---------------------------
+
+    static volatile bool _cardStarted, _cardDone, _cardOk;
+
+    /// <summary>后台传一次设备卡（每天最多一次，由引擎的主循环触发）。</summary>
+    public static void StartDeviceCardUpload(string version, string screen)
+    {
+        if (_cardStarted) return;
+        _cardStarted = true;
+        _cardDone = _cardOk = false;
+        var th = new Thread(() => DeviceCardWorker(version, screen)) { IsBackground = true, Name = "DeviceCard" };
+        th.Start();
+    }
+
+    /// <summary>主循环轮询：传完了没有（true = 有结果，ok = 成功）。</summary>
+    public static bool PollDeviceCard(out bool ok)
+    {
+        ok = _cardOk;
+        return _cardDone;
+    }
+
+    static void DeviceCardWorker(string version, string screen)
+    {
+        bool ok = false;
+        try
+        {
+            using var http = NewLogHttp(120);
+            string api = $"https://api.gitcode.com/api/v5/repos/{LogUploadOwner}/{LogUploadRepo}";
+            string name = "devices/" + DeviceId + ".json";
+            string b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(BuildCardJson(version, screen)));
+
+            // 已有旧卡 → 要 sha 才能更新（每天覆盖同一份，**仓库不会越长越大**）
+            string sha = null;
+            string getUrl = $"{api}/contents/{name}?access_token={Uri.EscapeDataString(LogUploadToken)}";
+            var getResp = http.GetAsync(getUrl).GetAwaiter().GetResult();
+            if (getResp.IsSuccessStatusCode)
+                sha = JsonStringField(getResp.Content.ReadAsStringAsync().GetAwaiter().GetResult(), "sha");
+
+            string body = "{\"message\":\"device card\",\"content\":\"" + b64 + "\",\"branch\":\"main\""
+                        + (sha != null ? ",\"sha\":\"" + sha + "\"" : "") + "}";
+            using var req = new HttpRequestMessage(sha == null ? HttpMethod.Post : HttpMethod.Put,
+                $"{api}/contents/{name}?access_token={Uri.EscapeDataString(LogUploadToken)}");
+            req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+            using var resp = http.SendAsync(req).GetAwaiter().GetResult();
+            ok = resp.IsSuccessStatusCode;
+        }
+        catch { ok = false; }
+        _cardOk = ok;
+        _cardDone = true;
+    }
+
+    static string BuildCardJson(string version, string screen)
+    {
+        string J(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var sb = new StringBuilder(s.Length + 8);
+            foreach (var c in s)
+            {
+                if (c == '"' || c == '\\') sb.Append('\\').Append(c);
+                else if (c < ' ') sb.Append(' ');
+                else sb.Append(c);
+            }
+            return sb.ToString();
+        }
+        return "{\"id\":\"" + DeviceId + "\""
+             + ",\"ver\":\"" + J(version) + "\""
+             + ",\"os\":\"" + J(RuntimeInformation.OSDescription) + "\""
+             + ",\"build\":" + Environment.OSVersion.Version.Build
+             + ",\"model\":\"" + J(MachineModel) + "\""
+             + ",\"cpu\":\"" + J(CpuName) + "\""
+             + ",\"ramGb\":" + RamGb
+             + ",\"screen\":\"" + J(screen) + "\""
+             + ",\"first\":\"" + J(InstallFirstDay) + "\""
+             + ",\"last\":\"" + DateTime.Now.ToString("yyyy-MM-dd") + "\""
+             + "}";
+    }
+
+    static HttpClient NewLogHttp(int seconds)
+    {
+        var http = new HttpClient(new HttpClientHandler { UseProxy = false });
+        http.Timeout = TimeSpan.FromSeconds(seconds);
+        try { http.DefaultRequestHeaders.UserAgent.ParseAdd("InkTeach-log/" + ProductInfo.Version); } catch { }
+        return http;
+    }
+
+    static string JsonStringField(string json, string key)
+    {
+        int k = json.IndexOf("\"" + key + "\"", StringComparison.OrdinalIgnoreCase);
+        if (k < 0) return null;
+        int colon = json.IndexOf(':', k + key.Length + 2);
+        if (colon < 0) return null;
+        int q1 = json.IndexOf('"', colon + 1);
+        if (q1 < 0) return null;
+        int q2 = json.IndexOf('"', q1 + 1);
+        if (q2 < 0) return null;
+        return json.Substring(q1 + 1, q2 - q1 - 1);
+    }
+
+
+    // ---- 异步上传（2026-10-17）：点「日志」时界面绝不能被网络卡住 -------------------
+
+    static volatile int _upState;      // 0 空闲 / 1 上传中 / 2 成功 / 3 失败
+    static volatile string _upMsg, _upLeaf;
+
+    public static bool UploadBusy => _upState == 1;
+
+    public static void StartZipUpload(string zipPath, string leaf)
+    {
+        if (_upState == 1) return;
+        _upState = 1;
+        _upMsg = null;
+        _upLeaf = leaf;
+        var th = new Thread(() =>
+        {
+            try { InkEngine.UploadZipToGitCode(zipPath, leaf); _upState = 2; }
+            catch (Exception ex) { _upMsg = ex.Message; _upState = 3; }
+        }) { IsBackground = true, Name = "LogUpload" };
+        th.Start();
+    }
+
+    /// <summary>主循环轮询：0 = 没消息、1 = 还在传、2 = 成功、3 = 失败（msg 有效）。取走即清。</summary>
+    public static int PollUpload(out string msg, out string leaf)
+    {
+        int s = _upState;
+        if (s != 2 && s != 3) { msg = null; leaf = null; return s; }
+        msg = _upMsg;
+        leaf = _upLeaf;
+        _upState = 0;
+        return s;
+    }
+
+
 }
 
 public partial class InkEngine
@@ -442,45 +714,90 @@ public partial class InkEngine
     //      发现异常换个令牌发个小版本即可。取日志见 `tools\fetch-logs.ps1`，
     //      完整方案与建仓步骤见 `调研\日志上传-方案.md`。
 
-    /// <summary>日志收集仓坐标（建好后把令牌回填到下面；空 = 未配置、按钮提示改用导出）。</summary>
-    const string LogUploadOwner = "XueRenYI0";
-    const string LogUploadRepo = "InkTeach-Logs";
-    const string LogUploadTag = "logs";
-    // ← 专用令牌（2026-10-17 用户建：仅"项目"组，其余全禁止）。
-    //   等"只读版"令牌验证（若只读也能传，换只读的发出——最小权限）。
-    const string LogUploadToken = "gCssTfbNazQFxq26cmyR7xs8";
-
-    /// <summary>「设置 → 上传日志…」：打包日志 → 传云端。任何失败都不抛，只提示改用导出。</summary>
+    /// <summary>「日志」入口（2026-10-17 用户定，**合并成一个**）：先试上传（后台线程）；
+    /// 没网 / 没配令牌 / 接口错 → **自动转成「导出日志」**（弹另存为），老师总能把 zip 拿出来。
+    /// ⚠ 上传走后台：教室网络差时**界面不会冻住**（结果由 <see cref="StepLogUpload"/> 轮询）。</summary>
     internal void UploadLogsFromUi()
     {
-        if (string.IsNullOrEmpty(LogUploadToken))
+        if (!ExportDialogEnabled) { SetInkStatus("自检模式不上传"); return; }
+        if (DiagLog.UploadBusy) { SetInkStatus("正在上传日志…（请稍等）"); return; }
+
+        if (string.IsNullOrEmpty(DiagLog.LogUploadToken))
         {
-            SetInkStatus("上传未配置——请用「导出日志…」把 zip 发回来");
+            // 没配置 = 直接导出（老师侧永远有一条能走的路）
+            SetInkStatus("上传未配置——改为导出，请把 zip 发回来");
+            ExportLogsFromUi();
             return;
         }
-        if (!ExportDialogEnabled) { SetInkStatus("自检模式不上传"); return; }
 
-        SetInkStatus("正在上传日志…");
-        Console.WriteLine("[日志] 开始上传…");
         string zip = Path.Combine(Path.GetTempPath(),
             $"inkteach-upload-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
         try
         {
-            DiagLog.ExportZip(zip);
-            string leaf = $"log-{DateTime.Now:yyyyMMdd-HHmmss}-{LogSafeName(Environment.MachineName)}-{Guid.NewGuid().ToString("N")[..6]}.zip";
-            UploadZipToGitCode(zip, leaf);
-            SetInkStatus($"日志已上传：{leaf}（把这个编号告诉开发）");
-            Console.WriteLine($"[日志] 已上传 {leaf}");
+            DiagLog.ExportZip(zip);      // 本地打包（≤8MB）很快，同步没问题
         }
         catch (Exception ex)
         {
-            SetInkStatus("上传失败：" + ex.Message + "——请改用「导出日志…」发回来");
-            Console.WriteLine("[日志] 上传失败：" + ex);
+            SetInkStatus("打包失败：" + ex.Message);
+            Console.WriteLine("[日志] 打包失败：" + ex);
+            return;
         }
-        finally
+        _logUploadZip = zip;
+        string leaf = $"log-{DateTime.Now:yyyyMMdd-HHmmss}-{LogSafeName(Environment.MachineName)}-{Guid.NewGuid().ToString("N")[..6]}.zip";
+        DiagLog.StartZipUpload(zip, leaf);
+        SetInkStatus("正在上传日志…");
+        Console.WriteLine("[日志] 开始上传…（后台线程，界面不卡）");
+    }
+
+    string _logUploadZip;
+
+    /// <summary>上传结果轮询（Loop / RenderAll 两处都调）：成功报编号；失败自动转导出。</summary>
+    internal void StepLogUpload()
+    {
+        int st = DiagLog.PollUpload(out string msg, out string leaf);
+        if (st != 2 && st != 3) return;
+        if (st == 2)
         {
-            try { File.Delete(zip); } catch { }
+            SetInkStatus($"日志已上传：{leaf}（把这个编号告诉开发）");
+            Console.WriteLine($"[日志] 已上传 {leaf}");
         }
+        else
+        {
+            SetInkStatus("上传失败：" + msg + "——已改为导出");
+            Console.WriteLine("[日志] 上传失败，转导出：" + msg);
+            ExportLogsFromUi();
+        }
+        try { if (_logUploadZip != null) File.Delete(_logUploadZip); } catch { }
+        _logUploadZip = null;
+    }
+
+    /// <summary>设备卡自动上传（台数 / 型号统计；2026-10-17）。每天最多一次、启动 25 秒后才试。</summary>
+    bool _cardTried, _cardDoneHandled;
+    internal void MaybeDeviceCardUpload()
+    {
+        if (!ExportDialogEnabled) return;                 // 自检 / 测试模式不自动传
+        bool cardOk = false;
+        if (!_cardDoneHandled && DiagLog.PollDeviceCard(out cardOk))
+        {
+            _cardDoneHandled = true;
+            if (cardOk)
+            {
+                SetUiPref("log.cardDay", DateTime.Now.ToString("yyyy-MM-dd"));
+                Console.WriteLine("[日志] 设备卡已上传（今日台数统计）");
+            }
+            else
+            {
+                Console.WriteLine("[日志] 设备卡上传失败（下个会话再试）");
+            }
+            return;
+        }
+        if (_cardTried) return;
+        if (NowMs < 25_000) return;                        // 别抢启动那几秒
+        if (GetUiPref("log.cardDay") == DateTime.Now.ToString("yyyy-MM-dd")) return;
+        if (string.IsNullOrEmpty(DiagLog.DeviceId)) return;
+        _cardTried = true;
+        Console.WriteLine("[日志] 设备卡开始上传…");
+        DiagLog.StartDeviceCardUpload(ProductInfo.Version, $"{_virtualW}x{_virtualH}");
     }
 
     /// <summary>文件名安全字符（**只留 ASCII**：它要进 URL 路径；机器名可能带中文）。</summary>
@@ -500,7 +817,7 @@ public partial class InkEngine
     /// 文件这条链（api.gitcode.com + access_token）一路都通：读、写、列表全过。
     /// 新建用 **POST**（PUT 是"更新已存在的文件"，会向你要 sha）。
     /// </summary>
-    static void UploadZipToGitCode(string zipPath, string assetName)
+    internal static void UploadZipToGitCode(string zipPath, string assetName)
     {
         // GitCode 是国内直连的：**显式不走系统代理**（同 UpdateFeed 那条规矩——
         // 半死不活的"给 GitHub 用的代理"会把上传卡到超时）。
@@ -508,12 +825,12 @@ public partial class InkEngine
         http.Timeout = TimeSpan.FromSeconds(120);
         try { http.DefaultRequestHeaders.UserAgent.ParseAdd("InkTeach-log/" + ProductInfo.Version); } catch { }
 
-        string api = $"https://api.gitcode.com/api/v5/repos/{LogUploadOwner}/{LogUploadRepo}";
+        string api = $"https://api.gitcode.com/api/v5/repos/{DiagLog.LogUploadOwner}/{DiagLog.LogUploadRepo}";
         string b64 = Convert.ToBase64String(File.ReadAllBytes(zipPath));
         // 手工拼 JSON：base64 和文件名里没有需要转义的字符（名字已 ASCII 化）
         string body = "{\"message\":\"log " + assetName + "\",\"content\":\"" + b64 + "\",\"branch\":\"main\"}";
         string q = $"{api}/contents/logs/{Uri.EscapeDataString(assetName)}" +
-                   $"?access_token={Uri.EscapeDataString(LogUploadToken)}";
+                   $"?access_token={Uri.EscapeDataString(DiagLog.LogUploadToken)}";
         using var req = new HttpRequestMessage(HttpMethod.Post, q);
         req.Content = new StringContent(body, Encoding.UTF8, "application/json");
         using var resp = http.SendAsync(req).GetAwaiter().GetResult();

@@ -180,6 +180,22 @@ internal sealed partial class App : InkEngine.InkEngine
         // 导出那条链由 `--iotest` 走"不弹框、直接写指定路径"验，见 ExportSelectionToPathForTest。
         if (_selfCheckMode) ExportDialogEnabled = false;
 
+        // 设备卡（台数 / 型号 / 活跃统计；2026-10-17 用户定）：安装 ID 首次生成、之后不变。
+        // 匿名 GUID，不含任何个人信息；只在产品模式上传（自检/测试模式 ExportDialogEnabled=false，不传）。
+        {
+            string lid = GetUiPref("log.id");
+            if (string.IsNullOrEmpty(lid)) { lid = Guid.NewGuid().ToString("N"); SetUiPref("log.id", lid); }
+            DiagLog.DeviceId = lid;
+            string firstDay = GetUiPref("log.first");
+            if (string.IsNullOrEmpty(firstDay))
+            {
+                firstDay = DateTime.Now.ToString("yyyy-MM-dd");
+                SetUiPref("log.first", firstDay);
+            }
+            DiagLog.InstallFirstDay = firstDay;
+            Console.WriteLine($"[设备] {DiagLog.MachineModel} · {DiagLog.CpuName} · RAM {DiagLog.RamGb}G · id {(lid.Length >= 8 ? lid[..8] : lid)}");
+        }
+
         // 交互模式挂**产品界面**；自检/基准模式挂"什么都不画"的空宿主
         // （自检要数屏幕上的墨，一块面板盖上去会把判据搞脏——这条踩过）。
         //
@@ -1100,13 +1116,23 @@ internal sealed partial class App : InkEngine.InkEngine
         }
         else if (mode == "--logupload")
         {
-            // 开发用：走一遍**真实的上传链路**（设置页「上传日志…」屁股底下同一条路），
-            // 打完就退——发布前 / 换令牌后用它验"仓 + `logs` 发行版 + 令牌"还通。
+            // 开发用：走一遍**真实的上传链路**（「更多 → 日志」屁股底下同一条路），
+            // 打完就退——发布前 / 换令牌后用它验"仓 + 令牌 + 接口"还通。
             // （自检模式默认拦上传，是护栏；这里显式放行。）
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             ExportDialogEnabled = true;
             UploadLogsFromUi();
+            ExportDialogEnabled = false;      // 失败也别弹"导出"（开发模式）
+            // 上传在后台线程：抽消息＋渲染驱动，等状态行落定（最多 90 秒）。
+            var swLu = System.Diagnostics.Stopwatch.StartNew();
+            while (swLu.ElapsedMilliseconds < 90_000
+                   && (swLu.ElapsedMilliseconds < 900 || InkStatus.StartsWith("正在上传")))
+            {
+                PumpMessages();
+                RenderAll();
+                Thread.Sleep(30);
+            }
             Console.WriteLine("logupload: " + InkStatus);
             _quit = true;
         }

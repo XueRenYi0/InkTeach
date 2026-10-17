@@ -239,7 +239,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按三列里的布局走**：
     /// 外观（4）/ 书写（5）/ 墨迹（3）三列并排——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, WetMode, RestoreInk, PptAutoSave, HistoryDays, LogExport, LogUpload }
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, WetMode, RestoreInk, PptAutoSave, HistoryDays }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -287,12 +287,6 @@ public sealed class FullUi : IOverlayUi
         //   PPT 和文档都是老师的课件（"文档"在我们界面语汇里专指 PDF/图片那类）。
         (Row.PptAutoSave, "课件墨迹自动保存", false, false, "PPT 放映 / 文档打开时，批注按页自动保存、下次自动装载"),
         (Row.HistoryDays, "历史清理", false, false, "过期 PPT 缓存 / 打开前备份 / 历史板书，启动时清掉"),
-        // 导出日志（2026-10-16 用户定）：运行日志打成 zip（存 U 盘 / 发给开发都行）。
-        // **不是开关行**（IsToggleRow 名单里没有它）：点一下直接弹另存为；点完回启动器页看状态行。
-        (Row.LogExport, "导出日志…", false, false, "把运行日志打包成 zip（排查问题时发给开发；不含板书内容）"),
-        // 上传日志（2026-10-17 用户定）：运行日志**一键传云端**（GitCode 日志收集仓）。
-        // 老师机器卡了就点它；链路 / 令牌风险 / 取日志见 调研\日志上传-方案.md 与 tools\fetch-logs.ps1。
-        (Row.LogUpload, "上传日志…", false, false, "把运行日志直接传到云端给开发排查；不成功就用「导出日志…」发回来"),
         // 板书历史本身没有开关（默认留、默认不显示）；上限是"总量 1 GB、份数不限"，
         // 见 BoardHistory。老师想清空就删 `%LOCALAPPDATA%\InkTeach\History`，或把这一行设成 7 天。
         // ⚠ 「精细笔迹」「触摸手势」两个开关 2026-10-09 晚**已撤**（用户真机试稳：
@@ -2291,20 +2285,6 @@ public sealed class FullUi : IOverlayUi
                     "90" => "30", "30" => "7", "7" => null, _ => "90",
                 });
                 break;
-
-            // 上传日志（2026-10-17）：一键传云端；同样跳回启动器页看状态行
-            //（"日志已上传：<编号>"——那个编号就是报给开发用的）。
-            case Row.LogUpload:
-                _host.Commands.UploadLogs();
-                _morePage = MorePage.Home;
-                break;
-
-            // 导出日志（2026-10-16）：弹另存为存 zip；成功后跳回启动器页——
-            // 状态行在那边，"日志已导出：<路径>"才看得见（反馈规则和「检查更新」同一条）。
-            case Row.LogExport:
-                _host.Commands.ExportLogs();
-                _morePage = MorePage.Home;
-                break;
         }
         Invalidate();
     }
@@ -2366,7 +2346,7 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private const int LookRowCount = 4;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小（「功能提示」2026-10-16 撤除、改常开）
     private const int WriteRowCount = 3;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测（「预测时长」2026-10-15 随毫秒调节撤除；精细笔迹、触摸手势 2026-10-09 撤开关、改常开）
-    private const int InkRowCount = 6;     // 墨迹：湿墨档位 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理 / 上传日志 / 导出日志
+    private const int InkRowCount = 4;     // 墨迹：湿墨档位 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理（日志两行 2026-10-17 合并进「更多 → 日志」）
     private const float MoreColumnGap = 16f;
     private const float MoreSwitchW = 44f;
     private const float MoreSwitchH = 26f;
@@ -2383,7 +2363,7 @@ public sealed class FullUi : IOverlayUi
     private const int MoreHitChip = 30;       // 30+cell（钉住宫格；只有自定义档显示）
     private const int MoreHitRow = 60;        // 60+Rows 下标（设置子页的行）
     private const int MoreHitTile = 140;      // 140+启动器格子（0..5：计时/点名/分组 保存/打开/回放）
-    private const int MoreHitBottom = 150;    // 150+底栏（0..3：设置/检查更新/重启/退出）
+    private const int MoreHitBottom = 150;    // 150+底栏（0..4：设置/日志/检查更新/重启/退出）
 
     /// <summary>面板宽：**min(640, 55% 工作宽)**（2026-10-02 拍板的分辨率规范化 B）。</summary>
     private float MoreWidth()
@@ -2531,8 +2511,11 @@ public sealed class FullUi : IOverlayUi
     {
         var head = HubHeadRect(1);
         float y = head.MaxY + HubRows(1) * (MoreTile + MoreTileGap) + MoreGroupGap + MoreStatusH + 8f;
-        float x = MoreLeftX() + i * (MoreTile + MoreTileGap);
-        return new RectF { MinX = x, MinY = y, MaxX = x + MoreTile, MaxY = y + MoreTile };
+        // **五格也要放得下**（2026-10-17 加「日志」）：窄面板上按内容宽均分，不超出。
+        float tw = MathF.Min(MoreTile,
+            (MoreContentW() - (MoreBottomTiles.Length - 1) * MoreTileGap) / MoreBottomTiles.Length);
+        float x = MoreLeftX() + i * (tw + MoreTileGap);
+        return new RectF { MinX = x, MinY = y, MaxX = x + tw, MaxY = y + tw };
     }
 
     // ---- 设置子页几何 --------------------------------------------------------
@@ -2595,9 +2578,7 @@ public sealed class FullUi : IOverlayUi
         Row.RestoreInk => SetColRow(SetColKind.Ink, 1),
         Row.PptAutoSave => SetColRow(SetColKind.Ink, 2),
         Row.HistoryDays => SetColRow(SetColKind.Ink, 3),
-        Row.LogUpload => SetColRow(SetColKind.Ink, 4),     // 上传日志（2026-10-17）：在"导出"上面一格
-        Row.LogExport => SetColRow(SetColKind.Ink, 5),
-        _ => SetColRow(SetColKind.Ink, 5),
+        _ => SetColRow(SetColKind.Ink, 3),
     };
 
     /// <summary>设置页下半的三列：外观 / 书写 / 墨迹（并排；序号 = 列序，`SetColX` 用它）。</summary>
@@ -2792,12 +2773,14 @@ public sealed class FullUi : IOverlayUi
     };
 
     /// <summary>
-    /// 底栏固定四格的唯一一份表（2026-10-02 第二批：小字搬进提示，格子上只留标题）。
+    /// 底栏五格的唯一一份表（2026-10-02 第二批：小字搬进提示，格子上只留标题；
+    /// 2026-10-17 加「日志」——放在「设置」后面，上传/导出合并成它一个入口）。
     /// 绘制、命中、提示都读它。
     /// </summary>
     private static readonly (string Label, string Hint, bool Danger)[] MoreBottomTiles =
     {
         ("设置", "外观 / 书写 / 墨迹 / 工具条，都在里面", false),
+        ("日志", "上传运行日志给开发（会显示编号）；上传不了会自动改为存 zip", false),
         ("检查更新", $"当前 v{ProductInfo.Version}；有新版本会提示，也可以直接应用更新", false),
         ("重启软件", "像电脑重启：不恢复本次板书（自动存档还在）", false),
         ("退出", "关掉批注（会先把键位落盘）", true),
@@ -2976,15 +2959,18 @@ public sealed class FullUi : IOverlayUi
         switch (i)
         {
             case 0: _morePage = MorePage.Settings; _moreHover = MoreHitNone; Invalidate(); break;
-            case 1:
+            // 「日志」（2026-10-17）：合并后的唯一入口——先试上传，失败自动转导出；
+            // 留在启动器页，状态行里的"编号 / 已导出路径"才看得见。
+            case 1: _morePage = MorePage.Home; _host.Commands.UploadLogs(); break;
+            case 2:
                 var stage = _host.State.UpdateStage;
                 if (stage == UpdateStage.Available) _host.Commands.ApplyUpdate();
                 else if (stage != UpdateStage.Downloading && stage != UpdateStage.Ready)
                     _host.Commands.CheckUpdate();
                 Invalidate();
                 break;
-            case 2: _host.Commands.Restart(); break;   // 像电脑重启：不写会话暂存，板书不接回来（引擎语义见 RestartFromUi）
-            case 3: _host.Commands.Quit(); break;
+            case 3: _host.Commands.Restart(); break;   // 像电脑重启：不写会话暂存，板书不接回来（引擎语义见 RestartFromUi）
+            case 4: _host.Commands.Quit(); break;
         }
     }
 
@@ -3489,7 +3475,7 @@ public sealed class FullUi : IOverlayUi
                 ActivateRow(pressed - MoreHitRow);
             else if (pressed >= MoreHitTile && pressed <= MoreHitTile + HubTileTotal - 1 && hit == pressed)
                 ActivateHub(pressed - MoreHitTile);
-            else if (pressed >= MoreHitBottom && pressed <= MoreHitBottom + 3 && hit == pressed)
+            else if (pressed >= MoreHitBottom && pressed <= MoreHitBottom + MoreBottomTiles.Length - 1 && hit == pressed)
                 ActivateBottom(pressed - MoreHitBottom);
             Invalidate();
             return true;

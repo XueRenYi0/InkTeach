@@ -2153,13 +2153,23 @@ internal sealed partial class App
                     || t.MinY < moreRect.MinY || t.MaxY > moreRect.MaxY) tilesOk = false;
             }
             bool bottomOk = true;
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < 5; i++)
             {
                 var t = ui.HubBottomRectForTest(i);
                 if (t.IsEmpty || t.MaxX > moreRect.MaxX || t.MaxY > moreRect.MaxY) bottomOk = false;
             }
-            Check("启动器：八格（课堂 3 ＋ 墨迹 5）＋ 底栏四格都在面板内", tilesOk && bottomOk,
+            Check("启动器：八格（课堂 3 ＋ 墨迹 5）＋ 底栏五格都在面板内", tilesOk && bottomOk,
                   $"面板 {moreRect.MaxX - moreRect.MinX:F0}×{moreRect.MaxY - moreRect.MinY:F0}");
+
+            // 「日志」格（2026-10-17，合并后的唯一日志入口）：自检档下点它 = 只提示、
+            // 不弹框、不上传（护栏）；面板留在启动器页（状态行在那边看编号）。
+            var logTile = ui.HubBottomRectForTest(1);
+            ClickPhysical((logTile.MinX + logTile.MaxX) * 0.5f * DpiScale,
+                          (logTile.MinY + logTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(160);
+            Check("启动器：「日志」格（自检档只提示、不弹框）",
+                  InkStatus.Contains("自检模式") && ui.MoreOpenForTest,
+                  InkStatus);
 
             // 分辨率规范化 B：面板宽 = min(640, 55% 工作宽)
             float wantW = Math.Clamp((panelWork.MaxX - panelWork.MinX) * 0.55f, 380f, 640f);
@@ -3059,10 +3069,10 @@ internal sealed partial class App
         // 2026-09-19 把「学科工具」换成坐标系/数轴/网格三行），
         // 写死下标的话每插一次就要改一处引用，而且点错行时红的是那条断言本身
         // （"点重启没反应"）——2026-09-19 就是这么又红了一次。
-        // 「重启软件」现在在启动器的底栏（固定四格之一，不再是一行——2026-10-02 改版）
+        // 「重启软件」现在在启动器的底栏（设置/日志/检查更新/重启/退出 五格之一；2026-10-17 加「日志」后后移一格）
         ui.SetMorePageForTest(0);       // 测试钩子：退回启动器主页
         SettleFrames(150);
-        var restartTile = ui.HubBottomRectForTest(2);
+        var restartTile = ui.HubBottomRectForTest(3);
         Check("自检能按格找到「重启软件」（底栏固定位）",
               restartTile.MaxY > restartTile.MinY, $"格高 {restartTile.MaxY - restartTile.MinY:F0}");
         // 造一个"上次崩溃抢救留下的残留"，并清掉自动存档从零开始：
