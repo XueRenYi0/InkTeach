@@ -372,6 +372,24 @@ internal static class Native
     [DllImport("kernel32.dll")]
     public static extern uint GetConsoleOutputCP();
 
+    /// <summary>标准设备句柄 id（`GetStdHandle` 的参数）。</summary>
+    public const int STD_OUTPUT_HANDLE = -11;
+    public const int STD_ERROR_HANDLE = -12;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GetStdHandle(int nStdHandle);
+
+    /// <summary>这个句柄是不是**控制台**句柄（成功 = 它指着某个控制台屏幕缓冲区）。</summary>
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+    /// <summary>**按宽字符写控制台**：与代码页无关（936 / 65001 都不会乱）。
+    /// 返回 false 表示这次没写出去（句柄不是控制台 / 缓冲满）。</summary>
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool WriteConsoleW(IntPtr hConsoleOutput, char[] lpBuffer,
+                                            uint nNumberOfCharsToWrite, out uint lpNumberOfCharsWritten,
+                                            IntPtr lpReserved);
+
     /// <summary><see cref="AttachConsole"/> 的参数：挂到父进程上。</summary>
     public const int ATTACH_PARENT_PROCESS = -1;
 

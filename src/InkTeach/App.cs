@@ -7149,10 +7149,15 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        // **WinExe 默认不带控制台**（双击时不该弹黑框），但自检 / 出图几乎全是从命令行跑的，
-        // 那些 `Console.WriteLine` 不能一起丢掉。两边兼顾：**有参数时**试着接上父进程的控制台
-        //（接不上说明是从资源管理器双击出来的，那正好——安静启动）。
-        if (args.Length > 0) TryAttachParentConsole();
+        // **WinExe 默认不带控制台**（双击时不该弹黑框），但从命令行启动时那些
+        // `Console.WriteLine` 不能一起丢掉。**无条件**做一次输出设置（双击时没有父
+        // 控制台，这里失败即静默跳过，正好安静启动）。
+        // 2026-10-17 用户报"控制台乱码"的真正病根就在这一类：
+        // **GUI 程序从控制台启动时"继承了一个控制台句柄、但自己没挂控制台"**——
+        // .NET 就把 stdout 当普通输出流按 UTF-8 写，控制台按 936 显示 → 全乱。
+        // 第一版修复只在"带参数"时才做（`if (args.Length > 0)`），而用户直接
+        // 从 PowerShell 跑无参数的 exe，根本走不到 → 还是乱。见 SetupConsoleOutput。
+        SetupConsoleOutput();
 
         // **运行日志**（2026-10-16 用户定）：接住全仓的 Console 诊断输出、落
         // `%LOCALAPPDATA%\InkTeach\Logs`（限流 + 轮转，绝不拖慢书写）。
@@ -7187,19 +7192,35 @@ internal static class Program
         }
     }
 
-    /// <summary>接上父进程的控制台并重开 stdout（见 Main 里那一段）。</summary>
-    private static void TryAttachParentConsole()
+    /// <summary>
+    /// 把控制台输出接对编码（见 Main 里那一段）。两条路，按"手里有没有控制台句柄"分：
+    ///
+    /// ① **stdout 本来就指着控制台**（从 cmd / PowerShell 启动 GUI 程序时，句柄是继承的）：
+    ///    直接用 `WriteConsoleW` 写**宽字符**——与控制台代码页（936 / 65001）无关，永远不乱。
+    ///    ⚠ 这条路**故意不 AttachConsole**：附着上以后，关掉那个控制台窗口会把 InkTeach
+    ///    也一起带走（CTRL_CLOSE 事件）；写宽字符不需要附着，句柄就够。
+    ///
+    /// ② 没有可用的控制台句柄（例如 `start` 起的、或带参数从别处拉起需要接父控制台）：
+    ///    才试 `AttachConsole`，然后按**控制台实际代码页**编码写（936 → GBK、65001 → UTF-8）。
+    /// </summary>
+    private static void SetupConsoleOutput()
     {
         try
         {
-            if (!Native.AttachConsole(Native.ATTACH_PARENT_PROCESS)) return;
+            // ① 输出句柄就是控制台 → 宽字符直写
+            IntPtr hOut = Native.GetStdHandle(Native.STD_OUTPUT_HANDLE);
+            if (hOut != IntPtr.Zero && hOut != new IntPtr(-1) && Native.GetConsoleMode(hOut, out _))
+            {
+                Console.SetOut(new ConsoleWideWriter(hOut));
 
-            // **按"控制台现在是什么代码页"写**（2026-10-17 用户报乱码，第二版）：
-            // 中文 Windows 的控制台默认是 936（GBK），而 .NET 的 StreamWriter 默认按
-            // UTF-8 写 → 中文全乱。第一版是"把控制台切到 65001 再写 UTF-8"——遇到
-            // 老 conhost / 特定字体仍会显示成乱码，而且顺手改了用户这个窗口的代码页。
-            // 现在**不改造控制台**：读它的实际输出代码页，按它编码写（936 → GBK，
-            // 65001 → UTF-8，其它照实取）；窗口里别的程序不受影响。
+                IntPtr hErr = Native.GetStdHandle(Native.STD_ERROR_HANDLE);
+                if (hErr != IntPtr.Zero && hErr != new IntPtr(-1) && Native.GetConsoleMode(hErr, out _))
+                    Console.SetError(new ConsoleWideWriter(hErr));
+                return;
+            }
+
+            // ② 没有控制台句柄：接父控制台，按它的实际代码页写
+            if (!Native.AttachConsole(Native.ATTACH_PARENT_PROCESS)) return;
             System.Text.Encoding enc = System.Text.Encoding.UTF8;
             try
             {
@@ -7216,6 +7237,71 @@ internal static class Program
             Console.SetError(new StreamWriter(Console.OpenStandardError(), enc) { AutoFlush = true });
         }
         catch { /* 接不上就算了：不影响功能，只是看不到日志 */ }
+    }
+
+    /// <summary>
+    /// 用 `WriteConsoleW` 直写控制台的 TextWriter：**宽字符、与代码页无关**。
+    /// 为什么需要它：.NET 在"进程没有挂控制台、但 stdout 句柄恰是控制台"时会把输出
+    /// 当普通流按 UTF-8 写 → 中文 Windows 的 936 控制台看到的就是乱码（2026-10-17）。
+    /// </summary>
+    private sealed class ConsoleWideWriter : TextWriter
+    {
+        private readonly IntPtr _h;
+        private readonly char[] _buf = new char[2048];
+        private readonly object _lk = new();
+        private int _n;
+
+        public ConsoleWideWriter(IntPtr h) { _h = h; }
+
+        public override System.Text.Encoding Encoding => System.Text.Encoding.Unicode;
+
+        public override void Write(char c)
+        {
+            lock (_lk)
+            {
+                if (_n >= _buf.Length) FlushLocked();
+                _buf[_n++] = c;
+            }
+        }
+
+        public override void Write(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return;
+            lock (_lk)
+            {
+                foreach (char c in s)
+                {
+                    if (_n >= _buf.Length) FlushLocked();
+                    _buf[_n++] = c;
+                }
+                FlushLocked();          // 控制台输出本来就要即时可见，攒着没意义
+            }
+        }
+
+        public override void WriteLine(string s)
+        {
+            Write(s);
+            Write('\n');
+            Flush();
+        }
+
+        public override void WriteLine()
+        {
+            Write('\n');
+            Flush();
+        }
+
+        public override void Flush()
+        {
+            lock (_lk) FlushLocked();
+        }
+
+        private void FlushLocked()
+        {
+            if (_n <= 0) return;
+            try { Native.WriteConsoleW(_h, _buf, (uint)_n, out _, IntPtr.Zero); } catch { }
+            _n = 0;
+        }
     }
 
     /// <summary>
