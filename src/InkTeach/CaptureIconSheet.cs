@@ -24,14 +24,14 @@ internal sealed class CaptureIconSheet : IOverlayUi
 
     private static readonly (string Icon, string Name)[] Items =
     {
-        ("capture",   "① Fluent Screenshot（现在用这个）"),
+        ("capture",   "① Fluent Screenshot（**原用**；2026-10-17 起主条换成 ⑧）"),
         ("camera",    "② Fluent Camera（相机）"),
         ("shotRecord","③ Fluent Screenshot Record（带点）"),
         ("crop",      "④ Fluent Crop（裁切）"),
         ("scan",      "⑤ Fluent Scan（扫描）"),
         ("scanObject","⑥ Fluent Scan Object（框选扫描）"),
         ("image",     "⑦ Fluent Image（图片）"),
-        ("cut",       "⑧ Fluent Cut（**官方剪刀**·regular——同库同网格，2026-10-17 新拉）"),
+        ("cut",       "⑧ Fluent Cut（**现在用这个**·regular，同库同网格）"),
         ("cutFilled", "⑨ Fluent Cut（filled 实心版）"),
         ("scissors",  "⑩ 自绘剪刀（早期手绘试作，供对照）"),
         ("select",    "⑪ Fluent Select Object（选择工具在用，拿来对照）"),

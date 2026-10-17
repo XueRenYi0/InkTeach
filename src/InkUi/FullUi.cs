@@ -40,7 +40,7 @@ public sealed class FullUi : IOverlayUi
         ("eraser",    "eraserFilled",    "橡皮擦"),
         ("select",    "selectFilled",    "选择"),
         ("shapes",    "shapesFilled",    "图形"),
-        ("capture",   "captureFilled",   "截屏"),
+        ("cut",       "cutFilled",       "截屏"),
         ("undo",      "undoFilled",      "后撤"),
         ("redo",      "redoFilled",      "重做"),
         ("more",      "moreFilled",      "更多"),
