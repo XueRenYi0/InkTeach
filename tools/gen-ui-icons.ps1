@@ -53,6 +53,7 @@ $icons = [ordered]@{
     'lasso'       = @('Lasso')
     'shapes'      = @('Shapes')
     'capture'     = @('Screenshot', 'Camera')
+    'cut'         = @('Cut')          # 剪刀（2026-10-17 加：截图图标候选，用户点名问"有没有配套的剪刀"）
     'undo'        = @('Arrow Undo')
     'redo'        = @('Arrow Redo')
     'settings'    = @('Settings')

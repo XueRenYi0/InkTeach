@@ -1,3 +1,4 @@
+using System.Numerics;
 using InkEngine;
 using Vortice.Direct2D1;
 using Vortice.DirectWrite;
@@ -28,7 +29,12 @@ internal sealed class CaptureIconSheet : IOverlayUi
         ("shotRecord","③ Fluent Screenshot Record（带点）"),
         ("crop",      "④ Fluent Crop（裁切）"),
         ("scan",      "⑤ Fluent Scan（扫描）"),
-        ("select",    "⑥ Fluent Select Object（选择工具在用，拿来对照）"),
+        ("scanObject","⑥ Fluent Scan Object（框选扫描）"),
+        ("image",     "⑦ Fluent Image（图片）"),
+        ("cut",       "⑧ Fluent Cut（**官方剪刀**·regular——同库同网格，2026-10-17 新拉）"),
+        ("cutFilled", "⑨ Fluent Cut（filled 实心版）"),
+        ("scissors",  "⑩ 自绘剪刀（早期手绘试作，供对照）"),
+        ("select",    "⑪ Fluent Select Object（选择工具在用，拿来对照）"),
     };
 
     public string Name => "截屏图标对照";
@@ -79,11 +85,53 @@ internal sealed class CaptureIconSheet : IOverlayUi
             var cell = new RectF { MinX = _bounds.MinX + 290f, MinY = y + 4f, MaxX = _bounds.MinX + 330f, MaxY = y + 44f };
             var cbox = new Vortice.RawRectF(cell.MinX, cell.MinY, cell.MaxX, cell.MaxY);
             ctx.FillRoundedRectangle(new RoundedRectangle(cbox, 8f, 8f), Brush(ctx, new Color4(0f, 0f, 0f, 0.07f)));
-            InkUi.IconAtlas.DrawCentered(ctx, Items[i].Icon, cell, 24f, Brush(ctx, ink));
+            if (Items[i].Icon == "scissors")
+            {
+                DrawScissors(ctx, cell, 24f, Brush(ctx, ink));
+            }
+            else
+            {
+                InkUi.IconAtlas.DrawCentered(ctx, Items[i].Icon, cell, 24f, Brush(ctx, ink));
+            }
 
             var big = new RectF { MinX = _bounds.MinX + 360f, MinY = y - 8f, MaxX = _bounds.MinX + 440f, MaxY = y + 72f };
-            InkUi.IconAtlas.DrawCentered(ctx, Items[i].Icon, big, 48f, Brush(ctx, ink));
+            if (Items[i].Icon == "scissors")
+            {
+                DrawScissors(ctx, big, 48f, Brush(ctx, ink));
+            }
+            else
+            {
+                InkUi.IconAtlas.DrawCentered(ctx, Items[i].Icon, big, 48f, Brush(ctx, ink));
+            }
         }
+    }
+
+    /// <summary>
+    /// **自绘剪刀**（2026-10-17 用户："截图图标有没有必要换成剪刀形态？图标集里有没有"）：
+    /// 图标集（94 个）里**没有** scissors / cut，只能画一个试作——
+    /// 两个指环在左下、两片刀刃向右上交叉（24 像素下也认得出）。
+    /// </summary>
+    private static void DrawScissors(ID2D1DeviceContext ctx, in RectF cell, float size,
+                                     ID2D1Brush brush)
+    {
+        float cx = (cell.MinX + cell.MaxX) * 0.5f;
+        float cy = (cell.MinY + cell.MaxY) * 0.5f;
+        float s = size;
+        float th = MathF.Max(1.4f, s * 0.075f);
+
+        // 刀刃：从左端的指环一带向右上 / 右下伸出，在中心偏右交叉
+        ctx.DrawLine(new Vector2(cx - s * 0.26f, cy - s * 0.22f),
+                     new Vector2(cx + s * 0.44f, cy + s * 0.30f), brush, th);
+        ctx.DrawLine(new Vector2(cx - s * 0.26f, cy + s * 0.22f),
+                     new Vector2(cx + s * 0.44f, cy - s * 0.30f), brush, th);
+
+        // 两个指环（左下 / 左上）
+        float r = s * 0.14f;
+        ctx.DrawEllipse(new Ellipse(new Vector2(cx - s * 0.33f, cy - s * 0.33f), r, r), brush, th);
+        ctx.DrawEllipse(new Ellipse(new Vector2(cx - s * 0.33f, cy + s * 0.33f), r, r), brush, th);
+
+        // 轴点
+        ctx.FillEllipse(new Ellipse(new Vector2(cx + s * 0.09f, cy), th * 0.9f, th * 0.9f), brush);
     }
 
     private ID2D1SolidColorBrush Brush(ID2D1DeviceContext ctx, Color4 c)
