@@ -2161,6 +2161,25 @@ internal sealed partial class App
             Check("启动器：八格（课堂 3 ＋ 墨迹 5）＋ 底栏五格都在面板内", tilesOk && bottomOk,
                   $"面板 {moreRect.MaxX - moreRect.MinX:F0}×{moreRect.MaxY - moreRect.MinY:F0}");
 
+            // **底栏每一格都必须进命中表**（2026-10-17 紧急修：加第 5 格「退出」时，
+            // `MoreHitAt` 的循环还写着 i < 4——格子在、点它等于点空白，用户真机抓到）。
+            // 没有用例敢"真点退出"（点了测试进程就退了），所以改钉**命中码**：
+            // 每一个格心都必须返回它自己的编号；以后再加/挪格子漏改命中表，这条当场红。
+            bool hitOk = true;
+            string hitDetail = "5/5";
+            for (int i = 0; i < 5; i++)
+            {
+                var t = ui.HubBottomRectForTest(i);
+                int code = ui.MoreHitAtForTest((t.MinX + t.MaxX) * 0.5f, (t.MinY + t.MaxY) * 0.5f);
+                if (code != ui.MoreHitBottomBaseForTest + i)
+                {
+                    hitOk = false;
+                    hitDetail = $"第 {i} 格命中码 = {code}（应为 {ui.MoreHitBottomBaseForTest + i}）";
+                    break;
+                }
+            }
+            Check("启动器：底栏每一格都进命中表（含第 5 格「退出」）", hitOk, hitDetail);
+
             // 「日志」格（2026-10-17，合并后的唯一日志入口）：自检档下点它 = 只提示、
             // 不弹框、不上传（护栏）；面板留在启动器页（状态行在那边看编号）。
             var logTile = ui.HubBottomRectForTest(1);

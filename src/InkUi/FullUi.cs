@@ -2631,7 +2631,7 @@ public sealed class FullUi : IOverlayUi
             for (int s = 0; s < 2; s++)
                 for (int i = 0; i < HubCount(s); i++)
                     if (HubTileRect(s, i).Contains(x, y)) return MoreHitTile + HubTileCode(s, i);
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < MoreBottomTiles.Length; i++)
                 if (HubBottomRect(i).Contains(x, y)) return MoreHitBottom + i;
             return MoreHitInside;
         }
@@ -5469,6 +5469,11 @@ public sealed class FullUi : IOverlayUi
         return RectF.Empty;
     }
     internal RectF HubBottomRectForTest(int i) => HubBottomRect(i);
+    /// <summary>自检用：底栏命中的基码（钉子用它算"第 i 格应返回什么"）。</summary>
+    internal int MoreHitBottomBaseForTest => MoreHitBottom;
+    /// <summary>自检用：直接问"这一点命中什么"（不点击、不执行——点"退出"会杀掉测试进程，
+    /// 所以这类**命中表漏项**只能靠这个出口钉住；2026-10-17 的"退出点不动"就是它抓的类）。</summary>
+    internal int MoreHitAtForTest(float x, float y) => MoreHitAt(x, y);
     /// <summary>自检用：某个坐标这一刻的命中码（面板里"点得中吗"的探针）。</summary>
     internal int MoreHitForTest(float x, float y) => MoreHitAt(x, y);
 
