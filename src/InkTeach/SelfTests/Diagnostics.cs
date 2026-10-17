@@ -3,6 +3,7 @@
 // 拆开的目的：产品代码与自检代码互不干扰，人和 AI 读代码时不必互相穿插。
 
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Numerics;
 using System.Runtime;
 using System.Runtime.InteropServices;
@@ -2734,5 +2735,65 @@ internal sealed partial class App
     /// 好处是锁屏 / 远程 / 这台机器上没人看着的时候照样能出图，
     /// 而且图里只有界面本身，没有桌面、任务栏、别的窗口。
     /// </summary>
+
+    /// <summary>
+    /// 日志系统自检（2026-10-17）：验 session.json / 环境.txt / 性能摘要 / 慢帧 / zip。
+    ///
+    /// 为什么要有它：日志现在是"远程排障"的唯一入口，格式坏了不会有人当场发现；
+    /// 这条用例把"分析工具依赖的字段"钉住（GPU、刷新率、DPI、perf.slow150、logs）。
+    /// </summary>
+    private void LogTest()
+    {
+        string zip = Path.Combine(Path.GetTempPath(), "inkteach-logtest-" + Environment.ProcessId + ".zip");
+        try { if (File.Exists(zip)) File.Delete(zip); } catch { }
+
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail = "")
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine((ok ? "  通过  " : "  失败  ") + name
+                + (string.IsNullOrEmpty(detail) ? "" : "  " + detail));
+        }
+
+        // 普通帧 + 一条慢帧：保证体检摘要不是空的（slow150 必须能数出来）。
+        for (int i = 0; i < 8; i++)
+            DiagLog.NoteFrame(1000 + i * 16, 60, 2.2, 0.2, 100, "测试");
+        DiagLog.NoteFrame(1200, 55, 170, 0.3, 100, "测试慢帧");
+
+        // 自检的日志目录是在 App 的 RunModeDispatch 里才切到临时目录的，
+        // 而 SetEnv 发生在它之前；这里补写一次，保证导出的 zip 里有 [env] 行。
+        DiagLog.SetEnv(DiagLog.GpuName, DiagLog.GpuSoftware, DiagLog.GpuVramMb,
+                       DiagLog.RefreshHz, DiagLog.Dpi, DiagLog.UiScale, DiagLog.ScreenSize);
+
+        DiagLog.ExportZip(zip);
+        Check("导出 zip 存在", File.Exists(zip), zip);
+
+        using var z = ZipFile.OpenRead(zip);
+        var eSession = z.GetEntry("session.json");
+        var eEnv = z.GetEntry("环境.txt");
+        Check("zip 含 session.json", eSession != null);
+        Check("zip 含 环境.txt", eEnv != null);
+
+        string session = "", summary = "";
+        if (eSession != null) using (var r = new StreamReader(eSession.Open())) session = r.ReadToEnd();
+        if (eEnv != null) using (var r = new StreamReader(eEnv.Open())) summary = r.ReadToEnd();
+
+        Check("session: 会话/版本", session.Contains("\"session\"") && session.Contains("\"ver\""));
+        Check("session: GPU/软件渲染", session.Contains("\"gpu\"") && session.Contains("\"soft\""));
+        Check("session: 刷新率/DPI/缩放", session.Contains("\"hz\"") && session.Contains("\"dpi\"") && session.Contains("\"ui\""));
+        Check("session: 性能摘要/慢帧", session.Contains("\"perf\"") && session.Contains("\"slow150\":1"));
+        Check("session: 日志清单", session.Contains("\"logs\"") && session.Contains("inkteach.log"));
+        Check("环境.txt: 显卡/显示", summary.Contains("显卡：") && summary.Contains("显示："));
+
+        string logText = "";
+        var eLog = z.GetEntry("inkteach.log");
+        if (eLog != null) using (var r = new StreamReader(eLog.Open())) logText = r.ReadToEnd();
+        Check("日志含 [env] 行", logText.Contains("[env] gpu="));
+        Check("日志含 动因 字段", logText.Contains("动因="));
+
+        Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
+        ExitCode = fail == 0 ? 0 : 1;
+        _quit = true;
+    }
 
 }

@@ -174,7 +174,8 @@ internal sealed partial class App : InkEngine.InkEngine
 
         // 「导出日志…」的环境摘要（屏幕 / 缩放这些建了窗口才算得准）：只挂**惰性取值**，
         // 打包那一刻才调用。
-        DiagLog.EnvExtra = () => $"屏幕 {_virtualW}×{_virtualH} · 缩放 {DpiScale:0.00} · 窗口 {_windows.Count} 块";
+        DiagLog.EnvExtra = () => $"屏幕 {_virtualW}×{_virtualH} · 缩放 {DpiScale:0.00} · 窗口 {_windows.Count} 块"
+            + $" · GPU {DiagLog.GpuName} · {DiagLog.RefreshHz}Hz · 软件渲染 {(DiagLog.GpuSoftware ? "是" : "否")}";
         // 自检里**不弹"另存为"对话框**：它会阻塞等消息，而自检是自己抽消息推进的，
         // 一弹就卡到超时（`--selftest` 会逐个点操作条上的按钮，点到"导出"就中招）。
         // 导出那条链由 `--iotest` 走"不弹框、直接写指定路径"验，见 ExportSelectionToPathForTest。
@@ -461,6 +462,12 @@ internal sealed partial class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             RecoveryTest();
+        }
+        else if (mode == "--logtest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            LogTest();
         }
         else if (mode == "--panelperf")
         {
@@ -1294,12 +1301,14 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --lassotest         套索选择（80% 判据 / 贴边无限延伸 / 加选减选）");
         Console.WriteLine("  --capturetest       截图（拖框 → 左上角 → 剪贴板，且不拍进自己的批注）");
         Console.WriteLine("  --logupload         开发用：真传一次运行日志（验日志收集仓 / 令牌是否通）");
+        Console.WriteLine("  --logtest           日志系统自检（session.json / 环境 / 性能摘要 / 导出 zip）");
         Console.WriteLine("  --cursorshow <笔|荧光笔|激光笔|橡皮|像素橡皮> [宽]  落点摆样");
         Console.WriteLine("  --widthtest         笔迹粗细/压力");
         Console.WriteLine("  --ghosttest         残影检测");
         Console.WriteLine("  --tiletest          分块缓存自检（边界无缝 / 回程复用 / 内存上界）");
         Console.WriteLine("  --prefetchtest      分块空闲预取自检（预取命中则再滚一格不重画；含关预取对照）");
         Console.WriteLine("  --noprefetch        关掉分块空闲预取（对照；默认开）");
+        Console.WriteLine("  --warp              强制 WARP 软件渲染（无显卡兜底；诊断/性能地板用）");
         Console.WriteLine("  --trailtest [--touch]  委托墨迹轨迹对照（默认合成鼠标；--touch = 合成触摸）");
         Console.WriteLine("  --uiscale <0.8|0.9|1|1.15|1.3>  界面缩放档（工具带/色带/抽屉/设置页；只覆盖本次运行，不落盘）");
         Console.WriteLine("  --smoothtest        中心线曲线化自检（过点 Catmull-Rom：直角不变形 / 圆弧更圆滑 / 形状不跑）");

@@ -16,6 +16,7 @@
 // 都落在 `%LOCALAPPDATA%\InkTeach\Logs`；「更多 → 设置 → 导出日志…」打包成 zip 给支持。
 
 using Microsoft.Win32;
+using System.Globalization;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Runtime.InteropServices;
@@ -45,6 +46,41 @@ internal static class DiagLog
     /// <summary>导出/打包时的"环境"摘取口（屏幕 / 缩放这些建了窗口才算得准，
     /// 所以只挂一个惰性取值函数，导出那一刻才调用）。</summary>
     public static Func<string> EnvExtra;
+
+    // ---- 环境 / 会话（2026-10-17 加：日志从"只有文本"升级成"可机读"）----
+    //
+    // 为什么需要：同一版本，一台机器 2ms/帧、另一台 14ms/帧，第一件要区分的事
+    // 就是"真显卡 / 软件渲染 / 刷新率 / 缩放"。这些值以前只进 --report，
+    // 日志里看不见，分析时只能猜。
+    public static string SessionId = "";
+    public static string SessionStartText = "";
+    public static string GpuName = "unknown";
+    public static bool GpuSoftware;
+    public static int GpuVramMb;
+    public static int RefreshHz;
+    public static uint Dpi = 96;
+    public static float UiScale = 1f;
+    public static string ScreenSize = "?";
+
+    /// <summary>启动后由引擎填一次：GPU / 是否软件渲染 / 刷新率 / DPI / 界面缩放。</summary>
+    public static void SetEnv(string gpu, bool software, int vramMb,
+                              int refreshHz, uint dpi, float uiScale, string screen)
+    {
+        try
+        {
+            GpuName = string.IsNullOrWhiteSpace(gpu) ? "unknown" : gpu.Trim();
+            GpuSoftware = software;
+            GpuVramMb = Math.Max(0, vramMb);
+            RefreshHz = refreshHz > 0 ? refreshHz : 60;
+            Dpi = dpi > 0 ? dpi : 96;
+            UiScale = uiScale > 0 ? uiScale : 1f;
+            ScreenSize = string.IsNullOrWhiteSpace(screen) ? "?" : screen;
+            Console.WriteLine($"[env] gpu={GpuName} soft={(GpuSoftware ? 1 : 0)}"
+                + $" vram={GpuVramMb} hz={RefreshHz} dpi={Dpi} ui={UiScale.ToString("F2", CultureInfo.InvariantCulture)}"
+                + $" screen={ScreenSize} session={SessionId}");
+        }
+        catch { }
+    }
 
     // ---- 状态 ----
     static readonly object _lk = new();           // 行队列（快，几纳秒一把锁）
@@ -76,6 +112,13 @@ internal static class DiagLog
             if (_installed) return;
             _installed = true;
         }
+
+        try
+        {
+            SessionId = DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Environment.ProcessId.ToString("x");
+            SessionStartText = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        }
+        catch { }
 
         try
         {
@@ -155,6 +198,10 @@ internal static class DiagLog
         FlushNow();
         string stage = Path.Combine(Path.GetTempPath(),
             "inkteach-log-" + Environment.ProcessId + "-" + DateTime.Now.ToString("HHmmss"));
+        string crashPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "InkTeach", "last-crash.txt");
+        bool copiedCrash = false;
         try
         {
             Directory.CreateDirectory(stage);
@@ -170,15 +217,35 @@ internal static class DiagLog
             File.WriteAllText(Path.Combine(stage, "环境.txt"), BuildSummary(), new UTF8Encoding(false));
             try
             {
-                string crash = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "InkTeach", "last-crash.txt");
-                if (File.Exists(crash)) CopyShared(crash, Path.Combine(stage, "last-crash.txt"));
+                File.WriteAllText(Path.Combine(stage, "session.json"),
+                    BuildSessionJson(), new UTF8Encoding(false));
+            }
+            catch { }
+            try
+            {
+                if (File.Exists(crashPath))
+                {
+                    CopyShared(crashPath, Path.Combine(stage, "last-crash.txt"));
+                    copiedCrash = true;
+                }
             }
             catch { }
 
             if (File.Exists(destPath)) File.Delete(destPath);
+            try
+            {
+                string parent = Path.GetDirectoryName(destPath);
+                if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
+            }
+            catch { }
             ZipFile.CreateFromDirectory(stage, destPath);
+            // 崩溃记录**只带一次**：否则一个 10-16 的自检崩溃会被复制进 10-17 的每一份
+            // 日志里，分析时每次都要先排除它（真实踩到）。导出成功后改名；真正的下一次
+            // 崩溃会重新写 last-crash.txt。
+            if (copiedCrash)
+            {
+                try { File.Move(crashPath, crashPath + ".sent", true); } catch { }
+            }
             return destPath;
         }
         finally
@@ -226,6 +293,9 @@ internal static class DiagLog
         sb.AppendLine($"系统：{RuntimeInformation.OSDescription}（{RuntimeInformation.OSArchitecture}）");
         sb.AppendLine($".NET：{Environment.Version}；进程 {RuntimeInformation.ProcessArchitecture}，{(Environment.Is64BitProcess ? "64" : "32")} 位");
         sb.AppendLine($"机器：{Environment.MachineName}");
+        if (SessionId.Length > 0) sb.AppendLine($"会话：{SessionId}");
+        sb.AppendLine($"显卡：{GpuName}（{(GpuSoftware ? "软件渲染/WARP" : "硬件渲染")}，显存 {GpuVramMb} MB）");
+        sb.AppendLine($"显示：{RefreshHz} Hz · DPI {Dpi} · 界面缩放 {UiScale.ToString("F2", CultureInfo.InvariantCulture)} · 屏幕 {ScreenSize}");
         try
         {
             var x = EnvExtra?.Invoke();
@@ -263,6 +333,7 @@ internal static class DiagLog
             var sb = new StringBuilder();
             sb.AppendLine();
             sb.AppendLine($"====== InkTeach {ProductInfo.Version} 启动 · {DateTime.Now:yyyy-MM-dd HH:mm:ss} ======");
+            if (SessionId.Length > 0) sb.AppendLine($"会话 {SessionId}");
             try { sb.AppendLine($"系统 {RuntimeInformation.OSDescription}（{RuntimeInformation.OSArchitecture}）· 进程 {(Environment.Is64BitProcess ? "64" : "32")} 位 · {Environment.MachineName}"); } catch { }
             try { sb.AppendLine($"机器 {MachineModel} · {CpuName} · RAM {RamGb}G"); } catch { }
             File.AppendAllText(CurrentPath, sb.ToString(), new UTF8Encoding(false));
@@ -512,9 +583,21 @@ internal static class DiagLog
 
     // ---- 性能快照（写进日志，排查"卡顿"用）-------------------------------------
 
+    /// <summary>给设备卡 / session.json 用的一窗口性能摘要（JSON 里不带中文键）。</summary>
+    public struct PerfSnapshot
+    {
+        public double Fps, AvgFrameMs, MaxFrameMs, MaxPresentMs, WorkingSetMb, WindowSec;
+        public long Slow50, Slow150;
+        public string WorstDrive;
+    }
+
+    static readonly object _perfLock = new();
     static long _perfWinStartMs = -1;
     static long _perfFrames;
     static double _perfSumFrame, _perfMaxFrame, _perfMaxPresent;
+    static long _perfSlow50, _perfSlow150;
+    static double _perfLastFps, _perfLastWs, _perfLastNow;
+    static string _perfWorstDrive = "";
     static int _perfGc2Last;
     static long _slowLogAtMs;
 
@@ -524,33 +607,141 @@ internal static class DiagLog
     /// <summary>
     /// 每帧调一次（渲染线程，几十纳秒的量级）：累计窗口统计；
     /// **单帧 ≥150ms** 立刻记一条（12 秒内至多一条），**每 5 分钟**一条窗口快照。
-    /// 卡顿排查最值钱的就是"哪一秒、卡了多久、当时内存多少"。
+    /// 卡顿排查最值钱的就是"哪一秒、卡了多久、当时内存多少、是谁在让它出帧"。
     /// </summary>
-    public static void NoteFrame(double nowMs, double fps, double frameMs, double presentMs, double workingSetMb)
+    public static void NoteFrame(double nowMs, double fps, double frameMs, double presentMs,
+                                 double workingSetMb, string drive = "")
     {
-        if (_perfWinStartMs < 0) { _perfWinStartMs = (long)nowMs; _perfGc2Last = GC.CollectionCount(2); }
-        _perfFrames++;
-        _perfSumFrame += frameMs;
-        if (frameMs > _perfMaxFrame) _perfMaxFrame = frameMs;
-        if (presentMs > _perfMaxPresent) _perfMaxPresent = presentMs;
-
-        if (frameMs >= 150 && nowMs - _slowLogAtMs > 12_000)
+        string slowLine = null, snapLine = null;
+        lock (_perfLock)
         {
-            _slowLogAtMs = (long)nowMs;
-            Console.WriteLine($"[perf] 慢帧 {(long)frameMs}ms（fps≈{fps:F0}，ws={workingSetMb:F0}MB，{DocOpenNote}）");
-        }
+            if (_perfWinStartMs < 0) { _perfWinStartMs = (long)nowMs; _perfGc2Last = GC.CollectionCount(2); }
+            _perfFrames++;
+            _perfSumFrame += frameMs;
+            if (frameMs > _perfMaxFrame) { _perfMaxFrame = frameMs; _perfWorstDrive = drive ?? ""; }
+            if (presentMs > _perfMaxPresent) _perfMaxPresent = presentMs;
+            if (frameMs >= 50) _perfSlow50++;
+            if (frameMs >= 150)
+            {
+                _perfSlow150++;
+                if (nowMs - _slowLogAtMs > 12_000)
+                {
+                    _slowLogAtMs = (long)nowMs;
+                    slowLine = $"[perf] 慢帧 {(long)frameMs}ms（fps≈{fps:F0}，ws={workingSetMb:F0}MB，"
+                             + $"{DocOpenNote}，动因={drive}）";
+                }
+            }
+            _perfLastFps = fps;
+            _perfLastWs = workingSetMb;
+            _perfLastNow = nowMs;
 
-        if (nowMs - _perfWinStartMs >= 300_000)
-        {
-            int gc2 = GC.CollectionCount(2);
-            Console.WriteLine($"[perf] 5 分钟：平均帧 {_perfSumFrame / Math.Max(1, _perfFrames):F1}ms"
-                + $" 最差帧 {(long)_perfMaxFrame}ms 最差上屏 {_perfMaxPresent:F1}ms"
-                + $" ws={workingSetMb:F0}MB gc2+={gc2 - _perfGc2Last}");
-            _perfGc2Last = gc2;
-            _perfWinStartMs = (long)nowMs;
-            _perfFrames = 0;
-            _perfSumFrame = _perfMaxFrame = _perfMaxPresent = 0;
+            if (nowMs - _perfWinStartMs >= 300_000)
+            {
+                int gc2 = GC.CollectionCount(2);
+                snapLine = $"[perf] 5 分钟：平均帧 {_perfSumFrame / Math.Max(1, _perfFrames):F1}ms"
+                    + $" 最差帧 {(long)_perfMaxFrame}ms（动因={_perfWorstDrive}）"
+                    + $" 最差上屏 {_perfMaxPresent:F1}ms"
+                    + $" 慢帧≥50ms {_perfSlow50} 次 / ≥150ms {_perfSlow150} 次"
+                    + $" ws={workingSetMb:F0}MB gc2+={gc2 - _perfGc2Last}";
+                _perfGc2Last = gc2;
+                _perfWinStartMs = (long)nowMs;
+                _perfFrames = 0;
+                _perfSumFrame = _perfMaxFrame = _perfMaxPresent = 0;
+                _perfSlow50 = _perfSlow150 = 0;
+                _perfWorstDrive = "";
+            }
         }
+        if (slowLine != null) Console.WriteLine(slowLine);
+        if (snapLine != null) Console.WriteLine(snapLine);
+    }
+
+    /// <summary>设备卡 / session.json 读一份当前窗口的性能摘要（加锁，不会和渲染线程打架）。</summary>
+    public static PerfSnapshot SnapshotPerf()
+    {
+        lock (_perfLock)
+        {
+            return new PerfSnapshot
+            {
+                Fps = _perfLastFps,
+                AvgFrameMs = _perfFrames > 0 ? _perfSumFrame / _perfFrames : 0,
+                MaxFrameMs = _perfMaxFrame,
+                MaxPresentMs = _perfMaxPresent,
+                WorkingSetMb = _perfLastWs,
+                WindowSec = _perfWinStartMs >= 0 ? Math.Max(0, (_perfLastNow - _perfWinStartMs) / 1000.0) : 0,
+                Slow50 = _perfSlow50,
+                Slow150 = _perfSlow150,
+                WorstDrive = _perfWorstDrive ?? "",
+            };
+        }
+    }
+
+    // ---- session.json（zip 里给分析工具读的机读摘要）-------------------------
+
+    static string J(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        var sb = new StringBuilder(s.Length + 8);
+        foreach (var c in s)
+        {
+            if (c == '"' || c == '\\') sb.Append('\\').Append(c);
+            else if (c < ' ') sb.Append(' ');
+            else sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    static string Num(double v, string format = "0.##")
+        => v.ToString(format, CultureInfo.InvariantCulture);
+
+    static string BuildSessionJson()
+    {
+        var ps = SnapshotPerf();
+        string logs = "";
+        try
+        {
+            var names = new List<string>();
+            foreach (var f in Directory.GetFiles(Dir, "inkteach*.log"))
+                names.Add("\"" + J(Path.GetFileName(f)) + "\"");
+            logs = string.Join(",", names);
+        }
+        catch { }
+
+        string hwErr = "";
+        try { hwErr = Gfx.HardwareError ?? ""; } catch { }
+        if (hwErr.Length > 240) hwErr = hwErr[..240];
+
+        return "{"
+            + "\"schema\":1"
+            + ",\"session\":\"" + J(SessionId) + "\""
+            + ",\"ver\":\"" + J(ProductInfo.Version) + "\""
+            + ",\"start\":\"" + J(SessionStartText) + "\""
+            + ",\"end\":\"" + J(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")) + "\""
+            + ",\"os\":\"" + J(RuntimeInformation.OSDescription) + "\""
+            + ",\"build\":" + Environment.OSVersion.Version.Build
+            + ",\"model\":\"" + J(MachineModel) + "\""
+            + ",\"cpu\":\"" + J(CpuName) + "\""
+            + ",\"ramGb\":" + RamGb
+            + ",\"gpu\":\"" + J(GpuName) + "\""
+            + ",\"vramMb\":" + GpuVramMb
+            + ",\"soft\":" + (GpuSoftware ? "true" : "false")
+            + ",\"hwErr\":\"" + J(hwErr) + "\""
+            + ",\"hz\":" + RefreshHz
+            + ",\"dpi\":" + Dpi
+            + ",\"ui\":" + Num(UiScale, "0.00")
+            + ",\"screen\":\"" + J(ScreenSize) + "\""
+            + ",\"perf\":{"
+                + "\"fps\":" + Num(ps.Fps, "0.0")
+                + ",\"avgMs\":" + Num(ps.AvgFrameMs, "0.00")
+                + ",\"maxMs\":" + Num(ps.MaxFrameMs, "0.0")
+                + ",\"presentMs\":" + Num(ps.MaxPresentMs, "0.00")
+                + ",\"wsMb\":" + Num(ps.WorkingSetMb, "0.0")
+                + ",\"slow50\":" + ps.Slow50
+                + ",\"slow150\":" + ps.Slow150
+                + ",\"worstDrive\":\"" + J(ps.WorstDrive) + "\""
+                + ",\"windowSec\":" + Num(ps.WindowSec, "0.0")
+            + "}"
+            + ",\"logs\":[" + logs + "]"
+            + "}";
     }
 
     // ---- 设备卡（台数 / 型号 / 活跃统计；老师零操作）---------------------------
@@ -618,6 +809,8 @@ internal static class DiagLog
             }
             return sb.ToString();
         }
+        var ps = SnapshotPerf();
+        string F(double v, string fmt) => v.ToString(fmt, CultureInfo.InvariantCulture);
         return "{\"id\":\"" + DeviceId + "\""
              + ",\"ver\":\"" + J(version) + "\""
              + ",\"os\":\"" + J(RuntimeInformation.OSDescription) + "\""
@@ -626,6 +819,19 @@ internal static class DiagLog
              + ",\"cpu\":\"" + J(CpuName) + "\""
              + ",\"ramGb\":" + RamGb
              + ",\"screen\":\"" + J(screen) + "\""
+             + ",\"gpu\":\"" + J(GpuName) + "\""
+             + ",\"vramMb\":" + GpuVramMb
+             + ",\"soft\":" + (GpuSoftware ? 1 : 0)
+             + ",\"hz\":" + RefreshHz
+             + ",\"dpi\":" + Dpi
+             + ",\"ui\":" + F(UiScale, "0.00")
+             + ",\"fps\":" + F(ps.Fps, "0.0")
+             + ",\"recMs\":" + F(ps.AvgFrameMs, "0.00")
+             + ",\"maxMs\":" + F(ps.MaxFrameMs, "0.0")
+             + ",\"wsMb\":" + F(ps.WorkingSetMb, "0.0")
+             + ",\"slow50\":" + ps.Slow50
+             + ",\"slow150\":" + ps.Slow150
+             + ",\"worst\":" + "\"" + J(ps.WorstDrive) + "\""
              + ",\"first\":\"" + J(InstallFirstDay) + "\""
              + ",\"last\":\"" + DateTime.Now.ToString("yyyy-MM-dd") + "\""
              + "}";

@@ -98,7 +98,7 @@ public partial class InkEngine
         "--norawinput" or "--nopressure" or "--rawprobe" or "--notrend"
             or "--himetric" or "--nohimetric" or "--notouch" or "--syswet" or "--ownwet" or "--strokefile"
             or "--inktrail" or "--noinktrail" or "--trailonly" or "--trailcommit"
-            or "--hud" or "--nohud" or "--fullpresent"
+            or "--hud" or "--nohud" or "--fullpresent" or "--warp"
             or "--recink" or "--recinkp" or "--reclive"
             or "--doc"
             or "--nosmooth" or "--printersafe"
@@ -1855,8 +1855,30 @@ public partial class InkEngine
     private static readonly Dictionary<IntPtr, OverlayWindow> s_map = new();
     internal bool _quit;
     internal bool _dirty = true;
-    private bool _animating;
     internal bool _drawing;
+
+    /// <summary>这一帧为什么出（位标志）。只在 NeedsFrame 里填；1Hz 日志/慢帧日志读。</summary>
+    [Flags]
+    private enum FrameDrive
+    {
+        None = 0,
+        Dirty = 1 << 0,
+        Laser = 1 << 1,
+        Drawing = 1 << 2,
+        Selection = 1 << 3,
+        UiAnim = 1 << 4,
+        Camera = 1 << 5,
+        Replay = 1 << 6,
+        Timer = 1 << 7,
+        Roll = 1 << 8,
+        Radial = 1 << 9,
+        Tooltip = 1 << 10,
+        Trail = 1 << 11,
+    }
+    private FrameDrive _frameDrive;
+    /// <summary>最近一次"用户动作"（按下/按键）的时间：用来识别"没人操作却一直出帧"。</summary>
+    private double _lastActivityMs;
+    private double _idleWarnAtMs;
     private uint _activePointer;
     private uint _activePointerType;
 
@@ -2105,7 +2127,7 @@ public partial class InkEngine
 
     /// <summary>Stamped whenever a pointer message is handled, so the loop can
     /// report how long input took to reach the screen.</summary>
-    private void StampInput() => _lastInputMs = _clock.Elapsed.TotalMilliseconds;
+    private void StampInput() => _lastInputMs = _lastActivityMs = _clock.Elapsed.TotalMilliseconds;
 
     /// <summary>
     /// 把"这一帧覆盖的那条最新输入"记成一条延时样本。调用点在每个窗口都
@@ -2195,7 +2217,7 @@ public partial class InkEngine
         Native.SetProcessDpiAwarenessContext(Native.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         Native.EnableMouseInPointer(true);
 
-        Gfx.Init();
+        Gfx.Init(args.Contains("--warp"));
         NowMs = _clock.Elapsed.TotalMilliseconds;
 
         _hInstance = Native.GetModuleHandle(null);
@@ -3063,6 +3085,21 @@ public partial class InkEngine
         Console.WriteLine($"DPI 缩放 {DpiScale:F2}（逻辑 {_windows[0].Width / DpiScale:F0}x{_windows[0].Height / DpiScale:F0}），"
                           + $"界面缩放 {UiScale:F2}（{UiScalePresets.Name(UiScale)}）");
 
+        // 环境摘要进日志（2026-10-17）：同一版本一台 2ms/帧、一台 14ms/帧，先看这行。
+        int envHz = _windows[0].RefreshPeriodMs > 1.0
+            ? (int)Math.Round(1000.0 / _windows[0].RefreshPeriodMs) : 60;
+        DiagLog.SetEnv(Gfx.AdapterName, Gfx.IsSoftware, Gfx.AdapterVramMb,
+                       envHz, _windows[0].Dpi, UiScale, $"{_virtualW}x{_virtualH}");
+        if (Gfx.IsSoftware)
+            Console.WriteLine("[env] ⚠ 没有可用的硬件显卡，正在用 WARP 软件渲染（能用，但会明显慢；4K 尤其）");
+        if (Gfx.HardwareError.Length > 0)
+        {
+            if (Gfx.HardwareError.StartsWith("强制", StringComparison.Ordinal))
+                Console.WriteLine("[env] " + Gfx.HardwareError);
+            else
+                Console.WriteLine("[env] 硬件 D3D 失败原因：" + Gfx.HardwareError);
+        }
+
         // 把键盘模式落到窗口样式上。字段默认是开的，但样式要等窗口建好才能改——
         // 不调这一句，默认值和实际样式就对不上（得按一次 Ctrl+Alt+K 才生效）。
         SetKeyboardMode(KeyboardMode);
@@ -3502,9 +3539,13 @@ public partial class InkEngine
         // 运行日志的性能快照（2026-10-17）：每 5 分钟一条窗口快照 + 慢帧（≥150ms）立刻记。
         // 代价 = 每帧几次加法；写盘走日志的队列（见 DiagLog.NoteFrame）。
         DiagLog.DocOpenNote = DocView.IsOpen ? "文档开着" : BoardOn ? "白板" : "桌面";
-        DiagLog.NoteFrame(NowMs, _fps, _lastFrameMs, _lastPresentMs, _workingSetMb);
+        bool logTick = NowMs >= _nextLogAt;
+        // 动因只在"要写日志"的那一帧拼字符串（1Hz / 慢帧），不在 60fps 热路径里分配。
+        string drive = (_lastFrameMs >= 50 || logTick) ? FrameDriveText() : "";
+        DiagLog.NoteFrame(NowMs, _fps, _lastFrameMs, _lastPresentMs, _workingSetMb, drive);
+        MaybeWarnIdleFrames();
 
-        if (NowMs >= _nextLogAt)
+        if (logTick)
         {
             _nextLogAt = NowMs + 1000;
             int n = Math.Max(1, _accFrames);
@@ -3515,6 +3556,7 @@ public partial class InkEngine
                   + $" 合计={(_accRecord + _accPresent + _accHud + _accStats) / n,6:F2}ms"
                   + $" 置顶={_lastTopmostMs,5:F2}ms"
                   + $" 脏区={_windows[0].LastPresentRectCount}块/{_windows[0].LastPresentAreaPercent,5:F1}%"
+                  + $" 动因={drive}"
                   + $" ws={_workingSetMb,6:F1}MB");
             _accRecord = _accPresent = _accHud = _accStats = 0;
             _hudAvgMs = _accPanel / n;
@@ -3942,15 +3984,66 @@ public partial class InkEngine
     /// </summary>
     internal bool NeedsFrame()
     {
-        _animating = Laser.Visible || _drawing || SelFlashing
-                   || UiIsAnimatingNow || _camAnimating
-                   || _replayPlaying            // 回放播着：持续出帧（暂停即停）
-                   || TimerWantsFrame            // 计时器跑着/到点闪烁（倒计时 1Hz、秒表连续）
-                   || RollWantsFrame             // 点名滚动（80ms 一跳，定格即停）
-                   || RadialPaletteActive        // 呼出盘开着要连续出帧（出盘延迟 + 松手轮询）
-                   || TooltipPending;            // 引擎侧悬停提示还在等 500ms（到点要有人点亮它）
-        return _dirty || _animating
-               || _windows.Exists(w => w.TrailEndPending);  // --syswet：收笔撤轨迹必须有一帧兜底
+        var d = FrameDrive.None;
+        if (_dirty) d |= FrameDrive.Dirty;
+        if (Laser.Visible) d |= FrameDrive.Laser;
+        if (_drawing) d |= FrameDrive.Drawing;
+        if (SelFlashing) d |= FrameDrive.Selection;
+        if (UiIsAnimatingNow) d |= FrameDrive.UiAnim;
+        if (_camAnimating) d |= FrameDrive.Camera;
+        if (_replayPlaying) d |= FrameDrive.Replay;
+        if (TimerWantsFrame) d |= FrameDrive.Timer;
+        if (RollWantsFrame) d |= FrameDrive.Roll;
+        if (RadialPaletteActive) d |= FrameDrive.Radial;
+        if (TooltipPending) d |= FrameDrive.Tooltip;
+        if (_windows.Exists(w => w.TrailEndPending)) d |= FrameDrive.Trail;
+
+        _frameDrive = d;
+        return d != FrameDrive.None;
+    }
+
+    /// <summary>把这一帧的出帧原因翻成一句人能读的话（只在 1Hz/慢帧日志里调，不在热路径里拼）。</summary>
+    private string FrameDriveText()
+    {
+        var d = _frameDrive;
+        if (d == FrameDrive.None) return "无";
+        var parts = new List<string>(4);
+        if ((d & FrameDrive.Dirty) != 0) parts.Add("脏区");
+        if ((d & FrameDrive.Drawing) != 0) parts.Add("书写");
+        if ((d & FrameDrive.Laser) != 0) parts.Add("激光");
+        if ((d & FrameDrive.Selection) != 0) parts.Add("选中闪烁");
+        if ((d & FrameDrive.UiAnim) != 0) parts.Add("界面动画");
+        if ((d & FrameDrive.Camera) != 0) parts.Add("翻页动画");
+        if ((d & FrameDrive.Replay) != 0) parts.Add("回放");
+        if ((d & FrameDrive.Timer) != 0) parts.Add("计时器");
+        if ((d & FrameDrive.Roll) != 0) parts.Add("点名");
+        if ((d & FrameDrive.Radial) != 0) parts.Add("呼出盘");
+        if ((d & FrameDrive.Tooltip) != 0) parts.Add("悬停提示");
+        if ((d & FrameDrive.Trail) != 0) parts.Add("轨迹收尾");
+        return string.Join("+", parts);
+    }
+
+    /// <summary>
+    /// "没人操作，却一直在出帧"的告警（2026-10-17 加：线上日志里抓到一台 Win10
+    /// 空闲 45fps、记录 13ms/帧，但日志没写是谁在驱动）。
+    ///
+    /// 只在**确实空闲**（10 秒没有按下/按键）、**没有合理的长动画**（计时器/回放/呼出盘/
+    /// 激光淡出）时告警；30 秒最多一条，不会刷屏。正常写字、PPT 翻页、点名都不会触发。
+    /// </summary>
+    private void MaybeWarnIdleFrames()
+    {
+        if (_drawing || _quit) return;
+        if (_lastActivityMs <= 0) return;
+        double idle = NowMs - _lastActivityMs;
+        if (idle < 10_000) return;
+        if (NowMs < _idleWarnAtMs) return;
+        var d = _frameDrive;
+        // 这些是"用户/界面明确要求的持续动画"，不算异常。
+        if ((d & (FrameDrive.Timer | FrameDrive.Roll | FrameDrive.Radial | FrameDrive.Replay | FrameDrive.Laser)) != 0) return;
+        if ((d & (FrameDrive.UiAnim | FrameDrive.Selection | FrameDrive.Camera | FrameDrive.Tooltip | FrameDrive.Trail)) == 0) return;
+        _idleWarnAtMs = NowMs + 30_000;
+        Console.WriteLine($"[perf] 空闲仍在出帧：动因={FrameDriveText()}，已空闲 {idle / 1000:F0}s，"
+            + $"fps={_fps:F0}，记录≈{_lastRecordMs:F1}ms，ws={_workingSetMb:F0}MB");
     }
 
     // =====================================================================

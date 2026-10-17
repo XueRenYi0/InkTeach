@@ -43,7 +43,9 @@ if ($Devices)
 {
     $null = curl.exe -s --max-time 60 -o $tmpJson "$api/contents/devices`?access_token=$tok"
     $dl = Read-GcJson $tmpJson
-    if ($null -eq $dl -or $dl.error_code) {
+    # 接口返回**数组**时，PowerShell 会把元素的 `.error_code` 变成「$null 数组」，
+    # 而 `if (@($null,$null))` 为真 → 有设备卡也会误报“还没有”。2026-10-17 修。
+    if ($null -eq $dl -or ($dl -isnot [array] -and $dl.error_code)) {
         Write-Host "还没有设备卡（每台机器第一次运行后会自动传一张，之后每天更新）。" -ForegroundColor Yellow
         Remove-Item $tmpJson -Force -ErrorAction SilentlyContinue
         return
@@ -74,7 +76,7 @@ if ($Devices)
 # 列 logs/ 目录
 $null = curl.exe -s --max-time 60 -o $tmpJson "$api/contents/logs`?access_token=$tok"
 $list = Read-GcJson $tmpJson
-if ($null -eq $list -or $list.error_code) {
+if ($null -eq $list -or ($list -isnot [array] -and $list.error_code)) {
     $msg = if ($list -and $list.error_message) { $list.error_message } else { "（读不出来）" }
     throw "列日志失败：$msg —— 若第一次用：得先有一条日志传上去（logs/ 目录不存在时就这样）"
 }

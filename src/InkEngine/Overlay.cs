@@ -54,6 +54,18 @@ internal static class Gfx
     public static IDWriteFactory WriteFactory;
     public static IDXGIAdapter3 Adapter3;
     public static string AdapterInfo = "unknown";
+    /// <summary>适配器名（不含显存那串说明；日志/设备卡用）。</summary>
+    public static string AdapterName = "unknown";
+    /// <summary>专用显存 MB（WARP/核显可能为 0；只作参考）。</summary>
+    public static int AdapterVramMb;
+    /// <summary>
+    /// 当前是不是**软件渲染**（WARP / Microsoft Basic Render Driver）。
+    /// 2026-10-17 加：排查"同一版本，一台 2ms/帧、一台 14ms/帧"时，
+    /// 第一件要知道的事就是它——软件渲染和真显卡差一个数量级。
+    /// </summary>
+    public static bool IsSoftware;
+    /// <summary>硬件设备建不起来时的原始错误（WARP 兜底成功也保留，日志里能看出为什么降级）。</summary>
+    public static string HardwareError = "";
 
     /// <summary>
     /// 圆头圆角的描边样式。**渲染和命中测试必须共用同一个对象**——
@@ -124,7 +136,7 @@ internal static class Gfx
         _ => Round,
     };
 
-    public static void Init()
+    public static void Init(bool forceWarp = false)
     {
         Mem.Stage("0. 进程启动（运行时 + 程序集）");
 
@@ -134,9 +146,36 @@ internal static class Gfx
             Vortice.Direct3D.FeatureLevel.Level_10_1,
             Vortice.Direct3D.FeatureLevel.Level_10_0,
         };
-        var hr = D3D11.D3D11CreateDevice((IDXGIAdapter)null, DriverType.Hardware,
-            DeviceCreationFlags.BgraSupport, levels, out Device);
-        hr.CheckError();
+
+        // 硬件优先；建不起来（虚拟机 / 云桌面 / 远程桌面 / 驱动被禁用 / 极老 GPU）
+        // 再用 WARP 软件渲染兜底。**这不是提速功能**：1080p 还能用，4K 会很慢；
+        // 但没有它，这些机器会直接启动失败、弹一个老师看不懂的错误。
+        // `--warp` 是强制走软件渲染的诊断开关（量性能地板用）。
+        if (!forceWarp)
+        {
+            try
+            {
+                var hr = D3D11.D3D11CreateDevice((IDXGIAdapter)null, DriverType.Hardware,
+                    DeviceCreationFlags.BgraSupport, levels, out Device);
+                hr.CheckError();
+            }
+            catch (Exception ex)
+            {
+                HardwareError = ex.Message;
+                Device?.Dispose();
+                Device = null;
+            }
+        }
+
+        if (Device == null)
+        {
+            var hr = D3D11.D3D11CreateDevice((IDXGIAdapter)null, DriverType.Warp,
+                DeviceCreationFlags.BgraSupport, levels, out Device);
+            hr.CheckError();
+            IsSoftware = true;
+            if (HardwareError.Length == 0 && forceWarp) HardwareError = "强制 --warp";
+        }
+
         Mem.Stage("1. 创建 Direct3D 11 设备之后");
 
         using var dxgiDevice = Device.QueryInterface<IDXGIDevice>();
@@ -149,8 +188,26 @@ internal static class Gfx
             var d = adapter.Description;
             ulong dedicated = (ulong)d.DedicatedVideoMemory;
             ulong shared = (ulong)d.SharedSystemMemory;
-            AdapterInfo = $"{d.Description}  专用显存 {dedicated / 1048576.0:F0} MB, 共享内存 {shared / 1048576.0:F0} MB"
-                        + (dedicated < 512UL * 1048576 ? "  → 核显（显存来自系统内存）" : "  → 独显");
+            AdapterName = (d.Description ?? "unknown").Trim();
+            AdapterVramMb = (int)(dedicated / 1048576UL);
+            // DXGI 的软件适配器标志（Basic Render Driver / WARP）。拿不到就按名字兜底。
+            bool softFlag = false;
+            try
+            {
+                using var a1 = adapter.QueryInterface<IDXGIAdapter1>();
+                var d1 = a1.Description1;
+                softFlag = (d1.Flags & Vortice.DXGI.AdapterFlags.Software) != 0;
+            }
+            catch { }
+            if (softFlag
+                || AdapterName.Contains("WARP", StringComparison.OrdinalIgnoreCase)
+                || AdapterName.Contains("Basic Render", StringComparison.OrdinalIgnoreCase)
+                || AdapterName.Contains("Software Adapter", StringComparison.OrdinalIgnoreCase))
+                IsSoftware = true;
+
+            AdapterInfo = $"{AdapterName}  专用显存 {dedicated / 1048576.0:F0} MB, 共享内存 {shared / 1048576.0:F0} MB"
+                        + (IsSoftware ? "  → 软件渲染（WARP）"
+                           : dedicated < 512UL * 1048576 ? "  → 核显（显存来自系统内存）" : "  → 独显");
         }
         catch { }
 
