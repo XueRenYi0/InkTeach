@@ -1254,6 +1254,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("开发期测试模式（不属于引擎；完整表：InkTeach.exe --help）：");
         Console.WriteLine("  --help              打印这份参数表与快捷键表（启动时不再刷屏）");
         Console.WriteLine("  --selftest [秒]     自动画几笔并检查渲染");
+        Console.WriteLine("  自检取消：Ctrl+Alt+Shift+C（全局；UI 卡住也能停；终端 Ctrl+C 也行）");
         Console.WriteLine("  --report [文件]     输出完整性能报告");
         Console.WriteLine("  --memory [文件]     输出内存归因报告");
         Console.WriteLine("  --inputtest         指针输入路径自检");

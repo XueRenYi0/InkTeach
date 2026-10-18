@@ -2730,6 +2730,11 @@ public partial class InkEngine
 
         RegisterHotkeys();
 
+        // 自检取消看门狗（2026-10-18）：独立线程读键，不依赖 UI 的 WM_HOTKEY。
+        // --help / --clicktarget 是一次性/辅助进程，不需要。
+        if (SelfCheckMode && mode != "--help" && mode != "--clicktarget")
+            SelfTestCancel.Start();
+
         // 自检/基准模式下面板默认关掉，除非显式 --hud。
         //
         // 为什么：面板是个大黑框，画在屏幕左上角**压在一切之上**。而很多自检的

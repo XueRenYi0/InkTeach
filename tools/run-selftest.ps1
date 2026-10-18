@@ -13,6 +13,7 @@
 #   .\run-selftest.ps1 -Perf               # 性能套件（不判红绿，只看数字）
 #
 # **跑的过程中按任意键 = 取消**（会把正在跑的那一条连同它的子进程一起杀掉）。
+# 自检内部还挂了全局取消键 **Ctrl+Alt+Shift+C**（UI 卡住也能停）；控制台不在前台时用它。
 #
 # 两条硬规矩（原委见 InkTeach\_优化记录\baseline.md）：
 #   1. 必须用 pwsh（PowerShell 7）：Windows PowerShell 5.1 下 Get-Content 按 GBK 解码，
@@ -72,6 +73,7 @@ if ($onlyList.Count -gt 0) { $cmd += " -Only @($(($onlyList | ForEach-Object { Q
 $count = if ($onlyList.Count -gt 0) { "只跑：$($onlyList -join ', ')" } else { '全套（发布前再跑）' }
 Write-Host "==> $($PSVersionTable.PSVersion) / $script / $count / out=$OutDir" -ForegroundColor Cyan
 Write-Host '    **跑的过程中按任意键 = 取消**' -ForegroundColor DarkGray
+Write-Host '    控制台不在前台时：按 Ctrl+Alt+Shift+C（自检全局取消）' -ForegroundColor DarkGray
 
 # 子进程继承本控制台（输出实时可见），同时我们轮询键盘——按键就整棵进程树杀掉。
 # 为什么不用 Ctrl+C：PowerShell 的 Ctrl+C 会把子进程留在后台，InkTeach 的窗口还在，

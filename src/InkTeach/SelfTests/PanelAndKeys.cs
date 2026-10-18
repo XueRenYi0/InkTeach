@@ -4215,6 +4215,7 @@ internal sealed partial class App
             _quit = true;
             return;
         }
+        SelfTestTracker.Track(target);
 
         for (int i = 0; i < 120 && !ReadTextShared(log, 200).Contains("ready"); i++)
             Thread.Sleep(50);
@@ -5069,6 +5070,7 @@ internal sealed partial class App
         };
         var target = Process.Start(psi);
         if (target == null) { Console.WriteLine("  无法启动点击目标进程"); _quit = true; return; }
+        SelfTestTracker.Track(target);
 
         // 读的时候带重试：父进程读、子进程写，撞上共享冲突时直接抛会把整条用例打成异常
         for (int i = 0; i < 120 && !ReadTextShared(log, 200).Contains("ready"); i++)
