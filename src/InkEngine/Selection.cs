@@ -62,7 +62,7 @@ internal enum SelHandle
 internal enum ShapeHandle
 {
     None = 0,
-    /// <summary>直线 / 箭头的起点、**圆的圆心**、椭圆的中心。（拖它 = 整体平移）</summary>
+    /// <summary>直线 / 箭头的起点。（2026-10-18 起圆的圆心不再有手柄，圆的圆心十字是墨迹。）</summary>
     Anchor,
     /// <summary>直线 / 箭头的终点、**圆的圆周点**。（拖它 = 改这个定义元素）</summary>
     Rim,
@@ -507,11 +507,17 @@ internal static class SelectionHandles
         {
             case StrokeKind.Line:
             case StrokeKind.Arrow:
-            case StrokeKind.Circle:
                 if (dst.Length < 2) return 0;
                 dst[0] = ShapeHandle.Anchor;
                 dst[1] = ShapeHandle.Rim;
                 return 2;
+
+            case StrokeKind.Circle:
+                // **只留圆周点**（2026-10-18 用户定）：圆心不再是手柄——拖整条就是平移，
+                // 和椭圆 2026-09-20 精简掉中心手柄同一个口径。圆心十字是墨迹本身。
+                if (dst.Length < 1) return 0;
+                dst[0] = ShapeHandle.Rim;
+                return 1;
 
             case StrokeKind.Ellipse:
                 // **两个**（用户 2026-09-20 精简：原来是五个）：
@@ -689,18 +695,12 @@ internal static class SelectionHandles
     /// <summary>
     /// 这个定义元素手柄拖起来是**整体平移**还是**改几何**。
     ///
-    /// 只有"**圆的圆心**"是平移（用户定：拖圆心 = 整个圆平移、半径不变）。
-    /// 直线的起点**不是**——直线没有"中心"这个概念，拖它就是把那一头拉走
-    /// （这也是 <see cref="ShapeHandle.Anchor"/> 这个名字的含义："这条图形挂靠的那个点"，
-    /// 对直线是起点、对圆是圆心）。
-    ///
-    /// **椭圆的中心 2026-09-20 起不在名单里**：那个手柄本身被精简掉了（拖整条就是平移），
-    /// 所以这里也不该再认它——认了就等于给一条已经没有入口的路留后门。
-    /// 判据集中在这一个函数里：手势入口（Engine）与写点（Engine）都用它，
-    /// 免得"入口按平移处理、写点却按改几何"这种两套账。
+    /// **2026-10-18 起圆的圆心手柄已删**（用户定：只留圆周点；圆心十字是墨迹），
+    /// 所以这条现在对所有图形都返回 false；保留函数供手势入口统一判断，
+    /// 将来若恢复“中心平移柄”只改这里。
     /// </summary>
     public static bool IsAnchorMove(Stroke s, ShapeHandle h)
-        => h == ShapeHandle.Anchor && s.Kind is StrokeKind.Circle;
+        => false;
 
     /// <summary>ShapeHandle → SelHandle（手势状态机统一用 SelHandle 记"抓着哪个"，见 Engine）。</summary>
     public static SelHandle SelHandleOf(ShapeHandle h) => h switch

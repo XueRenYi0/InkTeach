@@ -2350,6 +2350,39 @@ internal sealed partial class OverlayWindow : IDisposable
                               MathF.Max(1f, s.Width * (grid ? Stroke.AxisGridWidthFactor : 0.6f)),
                               Gfx.StyleFor(grid ? StrokeDash.Solid : StrokeDash.Dashed));
         }
+
+        // **圆心十字是墨迹本身**（2026-10-18 用户定）：圆/椭圆都要，一直存在，
+        // 选中不消失、导出/存档都带着。画在主几何之后，颜色同笔迹；线宽固定 1 逻辑像素。
+        DrawShapeCenterInk(s, extra);
+    }
+
+    /// <summary>
+    /// **圆**的圆心十字（**墨迹**，不是界面装饰；2026-10-18 用户定）。
+    ///
+    /// 规则：
+    ///   · **只有圆**要，椭圆不要；
+    ///   · 选中/未选中、移动/缩放后、导出/存档/复制都带着；
+    ///   · 十字**大小固定**（模仿 ClassIn）：线宽 1 逻辑像素、臂长 5.5 逻辑像素，
+    ///     不随圆半径/选中框缩放变粗变长；圆心位置跟着图形变换走。
+    ///
+    /// 为什么放在 DrawStrokeCore 而不是浮动层：它就是图形墨迹的一部分，必须进
+    /// 内容分块和导出；选中切换不需要额外重烘。
+    /// </summary>
+    private void DrawShapeCenterInk(Stroke s, Matrix3x2? extra)
+    {
+        if (s.Kind != StrokeKind.Circle) return;
+
+        float unit = Dpi / 96f;
+        var m = s.Transform * (extra ?? Matrix3x2.Identity);
+        var c = Vector2.Transform(s.ShapeCenterLocal, m);
+
+        // 固定大小：不按半径收、不按变换缩放。
+        float arm = 5.5f * unit;
+        float width = MathF.Max(1f, unit);
+
+        var brush = Brush(s.Color);
+        _ctx.DrawLine(new Vector2(c.X - arm, c.Y), new Vector2(c.X + arm, c.Y), brush, width);
+        _ctx.DrawLine(new Vector2(c.X, c.Y - arm), new Vector2(c.X, c.Y + arm), brush, width);
     }
 
     /// <summary>
@@ -2696,11 +2729,6 @@ internal sealed partial class OverlayWindow : IDisposable
 
             // 回放：正在"长"的那一条（前缀几何；已经出完的都在内容层里了）
             if (app.ReplayActive) DrawReplayCurrent(app);
-
-            // 圆 / 椭圆的圆心十字：只画在**未选中**的图形上，属于编辑辅助层，
-            // 不烘进内容分块（否则选中/取消选中要重烘整块）。停顿成型最终也是
-            // StrokeKind.Circle/Ellipse，走同一条路。
-            DrawShapeCenters(app, c);
 
             DrawDragPreview(app);
             DrawVertexPreview(app);
@@ -3316,69 +3344,6 @@ internal sealed partial class OverlayWindow : IDisposable
         g.Transform = src.Transform;
         g.SetPoints(pts);           // 局部坐标：变换那一层仍由 g.Transform 负责
         DrawStroke(g);
-    }
-
-    /// <summary>
-    /// 圆 / 椭圆的**圆心十字**（2026-10-18 用户定）。
-    ///
-    /// 为什么画在浮动层、不进内容分块：
-    ///   · 它是"编辑辅助"，不是图形的一部分；选中以后要消失，取消选中要回来；
-    ///   · 烘进分块的话，每次选中切换都要重烘整块，代价和画一条新笔一样；
-    ///   · 和选中框/手柄一样每帧画一遍最省。
-    ///
-    /// 圆心在模型里就是 `Points[0]`（<see cref="Stroke.ShapeCenterLocal"/>），
-    /// 圆和椭圆同一定义；**停顿成型最终也是 StrokeKind.Circle/Ellipse**，所以
-    /// 不需要为停顿单独接线。
-    /// </summary>
-    private void DrawShapeCenters(InkEngine app, in RectF dirty)
-    {
-        if (app.PassThrough || app.ReplayActive) return;
-
-        var save = _ctx.Transform;
-        _ctx.Transform = Matrix3x2.Identity;       // 下面全是窗口坐标
-
-        float unit = Dpi / 96f;
-        float baseArm = 5.5f * unit;
-        float width = MathF.Max(1f, unit);
-
-        foreach (var s in app.Doc.Strokes)
-            DrawShapeCenter(app, s, dirty, baseArm, width);
-
-        // 正在画/停顿预览的图形：还没进 Doc，但圆心同样要看得见。
-        if (app.ActiveStroke != null && !app.SuppressActiveStroke)
-            DrawShapeCenter(app, app.ActiveStroke, dirty, baseArm, width);
-
-        _ctx.Transform = save;
-    }
-
-    private void DrawShapeCenter(InkEngine app, Stroke s, in RectF dirty, float baseArm, float width)
-    {
-        if (s.Kind != StrokeKind.Circle && s.Kind != StrokeKind.Ellipse) return;
-        if (app.Doc.Selected.Contains(s)) return;      // 选中后有手柄，不再需要圆心
-        if (app.IsContentDetached(s)) return;
-
-        var cLocal = s.ShapeCenterLocal;
-        var cCanvas = Vector2.Transform(cLocal, s.Transform);
-        var c = new Vector2(cCanvas.X - OriginX + ViewOffsetX,
-                            cCanvas.Y - OriginY + ViewOffsetY);
-
-        float rLocal = s.Kind == StrokeKind.Circle
-            ? s.CircleRadiusLocal
-            : MathF.Min(s.SemiAxisALocal, s.SemiAxisBLocal);
-        var rimX = Vector2.Transform(cLocal + new Vector2(rLocal, 0f), s.Transform);
-        var rimY = Vector2.Transform(cLocal + new Vector2(0f, rLocal), s.Transform);
-        float rPx = MathF.Min(Vector2.Distance(cCanvas, rimX), Vector2.Distance(cCanvas, rimY));
-
-        // 小圆上别让十字比圆还大；最小也留 2 逻辑像素，否则看不见。
-        float arm = MathF.Min(baseArm, MathF.Max(2f * Dpi / 96f, rPx * 0.35f));
-
-        if (c.X + arm < dirty.MinX || c.X - arm > dirty.MaxX ||
-            c.Y + arm < dirty.MinY || c.Y - arm > dirty.MaxY) return;
-
-        var col = s.Color;
-        var brush = Brush(new Color4(col.R, col.G, col.B, MathF.Max(col.A, 0.85f)));
-        _ctx.DrawLine(new Vector2(c.X - arm, c.Y), new Vector2(c.X + arm, c.Y), brush, width);
-        _ctx.DrawLine(new Vector2(c.X, c.Y - arm), new Vector2(c.X, c.Y + arm), brush, width);
     }
 
     /// <summary>

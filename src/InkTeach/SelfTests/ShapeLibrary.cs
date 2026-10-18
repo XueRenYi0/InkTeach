@@ -1666,8 +1666,8 @@ internal sealed partial class App
 
         // ================= I. 圆：画法 / 手柄 / 紧框 / 命中 =================
         //
-        // 规格是 计划-图形工具.md 9.2：存"圆心 + 圆周点"、按下=圆心拖=半径、
-        // 手柄只有圆心（平移）与圆周点（改半径）、**不给旋转柄**、紧框 = 圆心 ± r。
+        // 规格（2026-10-18 更新）：存"圆心 + 圆周点"、按下=圆心拖=半径；
+        // **手柄只有圆周点**（圆心手柄已删；圆心十字是墨迹，始终存在）、**不给旋转柄**、紧框 = 圆心 ± r。
         Console.WriteLine("  -- I. 圆 --");
         {
             bool Near(float a, float b, float tol) => MathF.Abs(a - b) <= tol;
@@ -1740,12 +1740,12 @@ internal sealed partial class App
                   c2.HitTestExact(ccx + 240f, ccy) && !c2.HitTestExact(ccx, ccy),
                   $"圈上 {c2.HitTestExact(ccx + 240f, ccy)}，圆心 {c2.HitTestExact(ccx, ccy)}");
 
-            // 手柄：两个（圆心 + 圆周点）、**没有旋转柄**
+            // 手柄：**只留圆周点一个**（2026-10-18 用户定：圆心手柄不需要；圆心十字是墨迹）
             Span<ShapeHandle> cHandles = stackalloc ShapeHandle[5];
             int cn = SelectionHandles.ShapeHandlesOf(c2, cHandles);
-            Check("圆：手柄是两个（圆心 + 圆周点）",
-                  cn == 2 && cHandles[0] == ShapeHandle.Anchor && cHandles[1] == ShapeHandle.Rim,
-                  $"手柄数 {cn}");
+            Check("圆：手柄只剩圆周点（圆心手柄已删）",
+                  cn == 1 && cHandles[0] == ShapeHandle.Rim,
+                  $"手柄数 {cn}，第一个 {(cn > 0 ? cHandles[0].ToString() : "-")}");
             // 旋转柄的位置上按一下：**必须是 None**（圆的旋转柄连命中都不做）
             var cFrame = SelectionHandles.FrameOf(Doc.Selected);
             var cRotGrip = SelectionHandles.CanvasPosition(SelHandle.Rotate, cFrame, DpiScale);
@@ -1754,7 +1754,7 @@ internal sealed partial class App
                   !SelectionHandles.RotateHandleVisible(c2) && circleRotateHit == SelHandle.None,
                   $"可见={SelectionHandles.RotateHandleVisible(c2)}，命中={circleRotateHit}");
 
-            // ---- 拖圆心 = 平移（半径逐位不变；几何一个点都不动）----
+            // ---- 拖圆内（含圆心位置）= 平移；圆心手柄已删，这里走的是框内整体拖动 ----
             float rBefore = c2.CircleRadiusLocal;
             // 圆心位移在**画布坐标**上比：几何点（局部坐标）本来就不动，动的是变换矩阵。
             var cx0 = SelectionHandles.ShapeHandleCanvasPosition(c2, ShapeHandle.Anchor);
@@ -1763,7 +1763,7 @@ internal sealed partial class App
             UpdateSelectionGestureForTest(cx0.X + 300f, cx0.Y + 150f);
             SettleFrames(80);
             bool geomUntouched = ptsBefore == $"{c2.Points[0].X},{c2.Points[0].Y}|{c2.Points[1].X},{c2.Points[1].Y}";
-            Check("圆：拖圆心 = 整体平移（走的是变换，几何一个点不动）",
+            Check("圆：拖圆内（含圆心）= 整体平移（几何一个点不动）",
                   tookCenter && geomUntouched,
                   $"接住={tookCenter}，几何原样={geomUntouched}（若走改几何这条路这里就会变）");
             EndSelectionGestureForTest();
@@ -3449,8 +3449,8 @@ internal sealed partial class App
                   $"矩形 {shapeProbe.KeepsWidth}、笔迹 {inkProbe.KeepsWidth}");
         }
 
-        // ================= E. 圆心十字：未选中可见 / 选中隐藏 =================
-        Console.WriteLine("  -- E. 圆心十字（圆 / 椭圆共用；停顿成型同一条路）--");
+        // ================= E. 圆的圆心十字：是墨迹，始终存在；圆只留圆周点手柄；椭圆没有十字 =================
+        Console.WriteLine("  -- E. 圆的圆心十字（墨迹；选中不消失）／圆只留圆周点；椭圆没有十字 --");
         {
             Doc.Clear();
             Doc.ClearHistory();
@@ -3472,25 +3472,50 @@ internal sealed partial class App
             Doc.InvalidateAll();                     // 强制整层重画，排除“没脏就不重画”
             SettleFrames(180);
 
+            var hs = new ShapeHandle[4];
+            int hn = SelectionHandles.ShapeHandlesOf(circle, hs);
+            Check("圆：选中后只剩圆周点一个手柄", hn == 1 && hs[0] == ShapeHandle.Rim,
+                  $"手柄数 {hn}，第一个 {(hn > 0 ? hs[0].ToString() : "-")}");
+
             int marker = ScreenProbe.CountMagenta((int)cx - 7, (int)cy - 7, 14, 14);
-            Check("未选中：圆心有同色十字", marker >= 8, $"中心 14×14 品红像素 {marker}");
+            Check("圆·未选中：圆心十字是墨迹、可见", marker >= 8, $"中心 14×14 品红像素 {marker}");
 
             Doc.Selected.Add(circle);
             _dirty = true;
             Doc.InvalidateAll();
             SettleFrames(180);
             int selected = ScreenProbe.CountMagenta((int)cx - 7, (int)cy - 7, 14, 14);
-            Check("选中：圆心十字隐藏（有手柄就不需要）", selected < 5, $"中心品红像素 {selected}");
+            Check("圆·选中：圆心十字仍然存在（不随选中消失）", selected >= 8, $"中心品红像素 {selected}");
 
             Doc.Selected.Clear();
             _dirty = true;
             Doc.InvalidateAll();
             SettleFrames(180);
             int back = ScreenProbe.CountMagenta((int)cx - 7, (int)cy - 7, 14, 14);
-            Check("取消选中：圆心十字回来", back >= 8, $"中心品红像素 {back}");
+            Check("圆·取消选中：圆心十字仍在", back >= 8, $"中心品红像素 {back}");
 
-            // 停顿成型最终也是 StrokeKind.Circle/ellipse，同一个 DrawShapeCenters；
-            // 这里用同一 Kind 的对象等价覆盖。椭圆共用 ShapeCenterLocal，不另测。
+            // **椭圆不要十字**（用户 2026-10-18 明确）：同一个中心位置放一个椭圆，
+            // 中心应该是空板色，不能出现品红十字。
+            float ex = _virtualX + 1400f, ey = _virtualY + 760f;
+            var ellipse = new Stroke
+            {
+                Tool = Tool.Ellipse,
+                Kind = StrokeKind.Ellipse,
+                Color = new Color4(1f, 0f, 1f, 1f),
+                Width = 8f,
+            };
+            ellipse.AddPoint(ex, ey, 1f, 0);                 // 中心
+            ellipse.AddPoint(ex + 200f, ey + 110f, 1f, 0);   // 外角点
+            Doc.AddStroke(ellipse);
+            Doc.Selected.Clear();
+            _dirty = true;
+            Doc.InvalidateAll();
+            SettleFrames(180);
+            int ellipseCenter = ScreenProbe.CountMagenta((int)ex - 7, (int)ey - 7, 14, 14);
+            Check("椭圆：圆心没有十字", ellipseCenter < 5, $"中心品红像素 {ellipseCenter}");
+
+            // 停顿成型最终也是 StrokeKind.Circle，走同一个 DrawStrokeCore；
+            // 这里用同一 Kind 的对象等价覆盖。椭圆明确不参与。
             Doc.Clear();
             Doc.ClearHistory();
             Doc.Selected.Clear();
