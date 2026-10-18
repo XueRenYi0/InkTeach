@@ -15,12 +15,23 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
+> **Latest 9.2.1 (2026-10-18)**: the laser pointer no longer has an outer halo — just a clean
+> red edge and white core — and the occasional afterimage after the last trail fades is fixed.
+> Object snapping for shapes/images arrived in 9.2.0.
+
 **Requirements**: Windows 10 / 11 x64, **no .NET install needed** (self-contained).
 PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else works without.
 
 <p align="center"><img src="design/readme/00-演示.gif" width="800" alt="Demo: draw a rough circle, hold still, it snaps into a real circle; select and drag it; then screenshot mode"></p>
 
 ---
+
+## Quick start
+
+1. Download `InkTeach-Setup-9.2.1.exe`, double-click, Next, Done — or unzip the portable build.
+2. Open PowerPoint/WPS in slideshow mode, or any app; the InkTeach toolbar sits at the bottom.
+3. Write with a pen or mouse. `Ctrl+L` = laser, `Ctrl+E` = eraser, `Ctrl+Alt+Shift+T` hands the mouse back.
+4. Hold `Ctrl+Alt+Shift+Q` and flick to a sector to switch tools without hunting for the toolbar.
 
 ## What makes it different
 
@@ -149,6 +160,15 @@ right-click cancels or restores pinning; hovering about 0.5s (long-press 0.6s on
   touch, splitting the stroke in two). The area eraser's size follows hand speed (no shrink when
   slow, capped at 2.5× on a fast sweep), and the box you see *is* the affected region.
 
+### Laser pointer: point where you are talking (9.2.1)
+
+- **Clean red edge + white core**, with no outer halo; readable on whiteboards, slides and dark backgrounds.
+- The full trail stays while writing; after release it holds for **2 seconds**, then fades as one
+  piece over **0.6 seconds**. A new stroke can coexist with the previous trail.
+- Width is 2–24 logical pixels and the slider affects the trail. It is **not ink**: not saved in the
+  document, not undoable, and not erasable.
+- 9.2.1 fixes the occasional red afterimage left after the last trail fades.
+
 ### Selecting and editing
 
 Click to select ink (`Shift` add / `Alt` subtract), rectangular marquee (touch selects), or lasso
@@ -162,6 +182,12 @@ flip V / delete**. The colour panel has a continuous width slider (live readout 
 one undo step on release), three line styles, a 4×4 palette plus HSV picking. Duplicate supports a
 "drag out a copy" mode, and **during drag or rotation the model is not touched at all** — the preview
 is drawn on the floating layer and committed on release as a single undo step.
+
+**Object snapping (9.2.0)**: dragging a single shape or image aligns the selection frame's left /
+centre / right with the target's left / centre / right (and the same horizontally), with a soft
+24px intersection gate, 5px enter / 8px exit, and `Alt` to disable temporarily. The target frame is
+never drawn; only the dragged object gets a pale-orange centre cross. Circles now use a fine ink
+dot as their permanent centre mark.
 
 <p align="center"><img src="design/readme/03-选中与操作条.png" width="620" alt="Selection frame, action bar and colour panel"></p>
 

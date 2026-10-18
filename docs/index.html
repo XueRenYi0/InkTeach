@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>InkTeach 课堂批注 · 在 PPT / WPS 上直接写板书的 Windows 覆盖层</title>
-<meta name="description" content="InkTeach（ink teach）是一款 Windows 课堂批注软件：透明覆盖层，直接在任何软件上写板书；色带 6 像素↔34 像素展开、贴边隐藏、全局呼出盘、停顿变图形、22 种图形、PPT 逐页隔离、深色主题。底层走 D3D11/Direct2D 增量渲染（分块缓存 + 脏矩形 + 视口预取），低延迟手写。开源 GPL-3.0，安装不需要管理员权限，不需要安装 .NET。">
-<meta name="keywords" content="InkTeach,ink teach,课堂批注,批注软件,板书软件,Windows批注,PPT批注,WPS批注,白板,手写批注,教学软件,电子白板,呼出盘,色带,Direct2D,分块缓存,脏矩形,增量渲染,低延迟手写">
+<title>InkTeach 9.2.1 · 在 PPT / WPS / PDF 上直接写板书</title>
+<meta name="description" content="InkTeach（ink teach）是一款 Windows 课堂批注软件：透明覆盖层，直接在任何软件上写板书；PDF/图片批注、对象吸附、激光笔、色带 6 像素↔34 像素展开、贴边隐藏、全局呼出盘、停顿变图形、22 种图形、PPT 逐页隔离、深色主题。底层走 D3D11/Direct2D 增量渲染（分块缓存 + 脏矩形 + 视口预取），低延迟手写。开源 GPL-3.0，安装不需要管理员权限，不需要安装 .NET。">
+<meta name="keywords" content="InkTeach,ink teach,课堂批注,批注软件,板书软件,Windows批注,PPT批注,WPS批注,PDF批注,图片批注,对象吸附,激光笔,白板,手写批注,教学软件,电子白板,呼出盘,色带,Direct2D,分块缓存,脏矩形,增量渲染,低延迟手写">
 <meta name="author" content="XueRenYi0">
 <link rel="canonical" href="https://xuerenyi0.github.io/InkTeach/">
 <meta property="og:type" content="website">
-<meta property="og:title" content="InkTeach 课堂批注 · 在 PPT / WPS 上直接写板书">
-<meta property="og:description" content="透明覆盖层 + 色带式设置条 + 贴边隐藏 + 全局呼出盘 + 停顿变图形 + 22 种图形 + PPT 逐页隔离 + 深色主题。开源免费，Windows 10/11，无需安装 .NET。">
+<meta property="og:title" content="InkTeach 9.2.1 · 在 PPT / WPS / PDF 上直接写板书">
+<meta property="og:description" content="透明覆盖层 + PDF/图片批注 + 对象吸附 + 激光笔 + 色带式设置条 + 贴边隐藏 + 全局呼出盘 + 停顿变图形 + 22 种图形 + PPT 逐页隔离 + 深色主题。开源免费，Windows 10/11，无需安装 .NET。">
 <meta property="og:image" content="https://xuerenyi0.github.io/InkTeach/img/social-preview.png">
 <link rel="icon" type="image/png" href="img/icon.png">
 <link rel="apple-touch-icon" href="img/icon.png">
@@ -23,12 +23,12 @@
   "alternateName": ["ink teach", "InkTeach 课堂批注"],
   "operatingSystem": "Windows 10 / 11 x64",
   "applicationCategory": "EducationalApplication",
-  "description": "Windows 课堂批注覆盖层：在 PPT / WPS / 任意软件上直接写板书。色带式设置条、贴边隐藏、全局呼出盘、停顿变图形、22 种图形、PPT 逐页隔离、深色主题。",
+  "description": "Windows 课堂批注覆盖层：在 PPT / WPS / PDF / 图片上直接写板书。对象吸附、激光笔、色带式设置条、贴边隐藏、全局呼出盘、停顿变图形、22 种图形、PPT 逐页隔离、深色主题。",
   "image": "https://xuerenyi0.github.io/InkTeach/img/icon.png",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
   "license": "https://www.gnu.org/licenses/gpl-3.0.html",
   "downloadUrl": "https://gitcode.com/XueRenYI0/InkTeach/releases/download/latest/InkTeach-Setup.exe",
-  "softwareVersion": "8.9.2",
+  "softwareVersion": "9.2.1",
   "author": { "@type": "Person", "name": "XueRenYi0" },
   "codeRepository": "https://github.com/XueRenYi0/InkTeach"
 }
@@ -46,6 +46,7 @@
       <a href="#why">技术选择</a>
       <a href="#tech">底层细节</a>
       <a href="#perf">性能</a>
+      <a href="#updates">更新</a>
       <a href="#install">下载</a>
       <a href="https://github.com/XueRenYi0/InkTeach" target="_blank" rel="noopener">GitHub</a>
     </nav>
@@ -55,19 +56,20 @@
 <section class="hero">
   <div class="wrap">
     <img class="hero-icon" src="img/icon.png" alt="InkTeach 图标" width="84" height="84">
+    <p class="pill">最新 9.2.1 · 激光笔去光晕 / 修残影</p>
     <h1>在 PPT 上，直接写板书</h1>
     <p class="lead">
-      InkTeach 是一层<b>透明批注覆盖层</b>：浮在 PPT / WPS / 任意软件之上。
-      板书写在自己的图层里，底下的 PPT 一点没动；点一下就把鼠标还给 PPT，
-      想写字时再用<b>全局键</b>把人拉回来。
+      InkTeach 是一层<b>透明批注覆盖层</b>：浮在 PPT / WPS / PDF / 图片 / 任意软件之上。
+      板书写在自己的图层里，底下的内容一点没动；点一下就把鼠标还回去，
+      想写字时再用<b>全局键</b>把人拉回来。图形和图片拖动会自动对齐，
       数据全在本机，<b>安装不需要管理员权限</b>。
     </p>
     <p class="btns">
       <a class="btn primary" href="https://gitcode.com/XueRenYI0/InkTeach/releases/download/latest/InkTeach-Setup.exe" target="_blank" rel="noopener">下载安装包（国内直连）</a>
       <a class="btn" href="https://github.com/XueRenYi0/InkTeach/releases/latest" target="_blank" rel="noopener">GitHub Releases</a>
-      <a class="btn ghost" href="#install">安装说明</a>
+      <a class="btn ghost" href="#updates">看看更新</a>
     </p>
-    <p class="note">Windows 10 / 11 · 64 位 · 免装 .NET · 开源 GPL-3.0（可商业授权）</p>
+    <p class="note">Windows 10 / 11 · 64 位 · 免装 .NET · 开源 GPL-3.0（可商业授权） · <b>9.2.1</b></p>
     <div class="hero-shot"><img src="img/demo.gif" alt="演示：手写一个圆 → 停顿变图形 → 选中拖动 → 截图取景"></div>
     <p class="caption">手写一个歪圆 → 停住 0.4 秒自动变规整图形 → 选中拖动 → 截图取景</p>
   </div>
@@ -166,6 +168,30 @@
         <div class="shot"><img src="img/capture.png" alt="截图取景与调整">
           <div class="cap">截图取景：拖框、8 手柄调整</div></div>
       </article>
+
+      <article>
+        <h3><span class="num">09</span>激光笔：干净的红边 + 白芯（9.2.1）</h3>
+        <p>不再画一圈圈外围光晕——现在只有<b>饱和红边 + 纯白芯</b>两层，白板、PPT 和深色背景上都清楚。
+        按住写时整条保留；松手后停 <b>2 秒</b>，再整体淡出 <b>0.6 秒</b>；抬手再写，多条可以同时存在。</p>
+        <p>粗细 <b>2–24</b> 逻辑像素，滑条对轨迹真的生效；它<b>不是笔迹</b>，不进文档、不进撤销、橡皮也擦不掉。
+        9.2.1 还修掉了最后一条淡出后偶尔留在屏幕上的残影。</p>
+      </article>
+
+      <article>
+        <h3><span class="num">10</span>PDF / 图片批注：一页一页讲</h3>
+        <p>图片可多选、PDF 一次一份，纵向铺成一叠：滚轮细滚、<code>PageUp/PageDown</code> 翻页，
+        批注照旧写在页面上。PDF 按屏幕物理宽显示，A4 试卷/课本看得清；超长图自动切片，不会压成一根针。</p>
+        <p>页位图是独立的“文档页层”，<b>只留视口附近的几页</b>，后台线程渲染；不写进 <code>.inkb</code>、
+        不进回放/导出、不占撤销栈。PDF 渲染用 <b>PDFium</b>，随包带库和许可文本。</p>
+      </article>
+
+      <article>
+        <h3><span class="num">11</span>对象吸附：拖图形不再靠眼估（9.2.0）</h3>
+        <p>单选图形或图片整体拖动时，选中框的左/中/右与目标框左/中/右自动对齐，横向同理；
+        软相交 <b>24px</b>，进入 <b>5px</b> / 离开 <b>8px</b>，<code>Alt</code> 临时关闭。</p>
+        <p>目标侧不显示目标框，只有被拖对象出现淡橙色中心十字；圆的永久圆心改成细墨点。
+        背景里的手写、擦断碎片和多选不参与，避免“整屏都在抢”。</p>
+      </article>
     </div>
   </div>
 </section>
@@ -224,7 +250,7 @@
 
 <section id="why" class="section">
   <div class="wrap">
-    <h2>为什么是 Direct2D ＋ .NET 8</h2>
+    <h2>为什么是 Direct2D ＋ .NET 10</h2>
     <p class="lead small">常被问："批注软件用 D2D，是不是大炮打蚊子？"
       不是——不是为了画动画选它，而是有三件事<b>只有这一条路能做</b>，而且都不是渲染特效。</p>
 
@@ -246,22 +272,23 @@
         <b>代价也说实话</b>：自绘没有设计器，靠"单点收口 ＋ 离屏出图"代替——
         <code>--panelshow</code> 能把任意一格、任意一页面板离屏渲染成图当设计稿看。</p>
 
-      <h4>为什么是 .NET 8（而不是 C++ / WPF / WinUI3）</h4>
+      <h4>为什么是 .NET 10（而不是 C++ / WPF / WinUI3）</h4>
       <table>
         <tr><th>理由</th><th>具体是什么</th></tr>
         <tr><td><b>教室机能装</b></td><td>自包含发布，绿色版解压即用：<b>不弹 UAC、不装 .NET、拷 U 盘就能用</b>。学校机器往往锁着安装权限，装不上等于用不了</td></tr>
         <tr><td><b>不背 UI 框架</b></td><td>我们要的是"一块透明覆盖层 ＋ 逐帧增量出帧"。WPF/WinUI 的合成与主题行为在这里全是负担（WinUI 的 Mica/亚克力在投影仪上掉帧，我们明确不做毛玻璃）</td></tr>
-        <tr><td><b>结构上留了 AOT 的门</b></td><td>"自绘 UI ＋ P/Invoke ＋ Vortice"恰好是<b>少数能走 Native AOT 的 Windows 桌面栈之一</b>——WPF / WinForms / WinUI3 官方就不支持 trimming / AOT。将来 AOT 跑通是结构性优势，不是小优化</td></tr>
+        <tr><td><b>AOT 已经跑通并成为默认</b></td><td>"自绘 UI ＋ P/Invoke ＋ Vortice"恰好是<b>少数能走 Native AOT 的 Windows 桌面栈之一</b>——WPF / WinForms / WinUI3 官方就不支持 trimming / AOT。v8.9.0 起默认发 AOT：单 exe、冷启动约 642ms，绿色包从 74MB 目录缩到 11MB 级单 exe；JIT 自包含版仍可用 <code>publish.ps1 -Jit</code> 保留</td></tr>
         <tr><td><b>GC 我们自己管</b></td><td>书写期间切 <code>SustainedLowLatency</code>，自检断言<b>一笔全程不发生第 2 代回收</b>——这是靠"能控制 GC 模式"换来的</td></tr>
       </table>
     </div>
 
     <div class="honest">
-      <h4>还没做的，和已知短板（不想吹过头）</h4>
+      <h4>已知短板（不想吹过头）</h4>
       <ul>
-        <li><b>Native AOT 还没上</b>：卡口是 <code>PptLink</code> 的 <code>dynamic</code> COM、<code>System.Drawing.Common</code>、Vortice/SharpGen 兼容性，目前发布的是 JIT。</li>
-        <li><b>.NET 8 的安全更新 2026-11-10 到期</b>：在那之前需要完成升 .NET 10。</li>
-        <li><b>内存不便宜</b>：空载提交 93MB（一万笔 392MB）——其中 .NET 运行时＋程序集约 31MB、D3D/D2D 设备与交换链约 42MB、我们自己的代码和数据约 26MB。</li>
+        <li><b>系统湿墨委托轨迹只在 Win11 24H2+ 启用</b>：Win10 和更早的 Win11 主动走软件自绘，不影响书写；这是按系统已知缺陷做的取舍。</li>
+        <li><b>内存不便宜</b>：AOT 空载提交约 88MB，一万笔约 388MB——其中 D3D/D2D 设备与交换链约占 42MB，运行时/程序集约 12MB（AOT），其余是我们的代码和数据。</li>
+        <li><b>PDF 依赖随包的 <code>pdfium.dll</code></b>：只拷 exe 时 PDF 会提示缺库，其它功能不受影响；PDF 的按页独立撤销/清空、带批注导出仍在下一步。</li>
+        <li><b>系统要求</b>：Windows 10 / 11 x64；ARM64 和 32 位没有专用包，x64 模拟未做专门验证。</li>
       </ul>
     </div>
   </div>
@@ -270,9 +297,10 @@
 <section id="tech" class="section alt">
   <div class="wrap">
     <h2>底层细节</h2>
-    <p class="lead small">这一版没加新功能，专门把"脏区 / 相机 / 分块缓存"这条渲染路径，
+    <p class="lead small">9.x 继续把"脏区 / 相机 / 分块缓存 / 出帧"这条渲染路径，
       对着 <b>Xournal++</b> 的分块与预取、<b>Rnote</b> 的视口余量、<b>MyPaint</b> 的 tile 分区纪律、
-      <b>Excalidraw</b> 的相机处理、<b>Windows Terminal</b> 的后缓冲不变量逐条过了一遍——
+      <b>Excalidraw</b> 的相机处理、<b>Windows Terminal</b> 的后缓冲不变量逐条过了一遍；
+      9.2.1 的激光笔也把 13 层柔光收成红边+白芯两层，并补上淡出后的清屏帧。
       能直接对齐上游稳定做法的，就直接对齐，不重新发明。</p>
     <table>
       <tr><th>细节</th><th>做法</th></tr>
@@ -302,14 +330,37 @@
       <tr><td>空闲帧</td><td><b>0</b>（有东西动才画）</td></tr>
       <tr><td>冷启动（窗口可见）</td><td><b>267 ms</b>（同机空白 WPF 窗 402 ms）</td></tr>
       <tr><td>书写期间 GC</td><td><code>SustainedLowLatency</code>，一笔全程保持</td></tr>
-      <tr><td>常驻内存（空载 / 一万笔）</td><td>提交 93MB / 392MB</td></tr>
+      <tr><td>常驻内存（AOT 空载 / 一万笔）</td><td>提交约 88MB / 388MB</td></tr>
     </table>
+  </div>
+</section>
+
+<section id="updates" class="section">
+  <div class="wrap">
+    <h2>最近更新</h2>
+    <p class="lead small">当前最新版 <b>9.2.1</b>。这里只放最影响课堂体验的几条，完整记录在仓库的《发版历史》。</p>
+    <div class="grid">
+      <div class="card">
+        <h3>9.2.1 · 激光笔</h3>
+        <p>撤掉 13 层外围光晕，改成干净的红边 + 白芯；同时修掉最后一条淡出后偶尔留在屏幕上的残影。</p>
+      </div>
+      <div class="card">
+        <h3>9.2.0 · 对象吸附</h3>
+        <p>图形/图片单选整体拖动支持选中框 3×3 对齐；进入 5px、离开 8px，<code>Alt</code> 关闭；圆的永久圆心改成细墨点。</p>
+      </div>
+      <div class="card">
+        <h3>9.1 · PDF / 图片批注</h3>
+        <p>PDF 一次一份、图片可多选；页位图独立缓存，只留视口附近几页；PDFium 随包发布，缺库只影响 PDF。</p>
+      </div>
+    </div>
+    <p class="note" style="margin-top:14px">完整更新与校验值：<a href="https://github.com/XueRenYi0/InkTeach/blob/main/%E8%B0%83%E7%A0%94/%E4%BC%98%E5%8C%96%E8%AE%B0%E5%BD%95/%E5%8F%91%E7%89%88%E5%8E%86%E5%8F%B2.md" target="_blank" rel="noopener">GitHub 发版历史</a> ｜ <a href="https://github.com/XueRenYi0/InkTeach/releases" target="_blank" rel="noopener">Release 列表</a>。</p>
   </div>
 </section>
 
 <section id="install" class="section alt">
   <div class="wrap">
     <h2>下载与安装</h2>
+    <p class="note" style="margin-bottom:12px"><b>当前版本 9.2.1</b> · zip 与 Setup 都会在启动更新时校验 sha256。</p>
     <div class="grid two">
       <div class="card">
         <h3>安装包（推荐）</h3>
@@ -321,7 +372,8 @@
       <div class="card">
         <h3>绿色版</h3>
         <p>解压 <code>InkTeach-*-win-x64.zip</code>，双击 <code>InkTeach.exe</code> 就能用；
-        拷 U 盘、换机器都不求人。运行时已经打进去，<b>不需要装 .NET</b>。</p>
+        拷 U 盘、换机器都不求人。运行时已经打进去，<b>不需要装 .NET</b>。
+        目录里要保留 <code>InkTeach.exe</code> 和 <code>pdfium.dll</code>（PDF 渲染库）。</p>
         <p><a class="btn" href="https://gitcode.com/XueRenYI0/InkTeach/releases/download/latest/InkTeach-win-x64.zip" target="_blank" rel="noopener">国内下载（免登录直链）</a></p>
       </div>
     </div>
@@ -354,7 +406,7 @@
 
 <footer>
   <div class="wrap">
-    <p>© 2026 XueRenYi0 · InkTeach · <a href="https://github.com/XueRenYi0/InkTeach/releases" target="_blank" rel="noopener">更新日志</a> ·
+    <p>© 2026 XueRenYi0 · InkTeach 9.2.1 · <a href="https://github.com/XueRenYi0/InkTeach/releases" target="_blank" rel="noopener">更新日志</a> ·
     <a href="https://github.com/XueRenYi0/InkTeach/blob/main/README.md" target="_blank" rel="noopener">文档</a></p>
     <p class="en">InkTeach — a transparent annotation overlay for Windows classrooms. Colour-rail toolbar, dock-away handle, global radial palette, 22 shapes, per-slide PowerPoint isolation, dark theme. Free &amp; open source (GPL-3.0).</p>
   </div>
