@@ -3449,6 +3449,53 @@ internal sealed partial class App
                   $"矩形 {shapeProbe.KeepsWidth}、笔迹 {inkProbe.KeepsWidth}");
         }
 
+        // ================= E. 圆心十字：未选中可见 / 选中隐藏 =================
+        Console.WriteLine("  -- E. 圆心十字（圆 / 椭圆共用；停顿成型同一条路）--");
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            Doc.Selected.Clear();
+
+            float cx = _virtualX + 800f, cy = _virtualY + 760f, r = 180f;
+            var circle = new Stroke
+            {
+                Tool = Tool.Circle,
+                Kind = StrokeKind.Circle,
+                Color = new Color4(1f, 0f, 1f, 1f),
+                Width = 8f,
+            };
+            circle.AddPoint(cx, cy, 1f, 0);          // 圆心
+            circle.AddPoint(cx + r, cy, 1f, 0);      // 圆周点
+            Doc.AddStroke(circle);
+            Doc.Selected.Clear();
+            _dirty = true;
+            Doc.InvalidateAll();                     // 强制整层重画，排除“没脏就不重画”
+            SettleFrames(180);
+
+            int marker = ScreenProbe.CountMagenta((int)cx - 7, (int)cy - 7, 14, 14);
+            Check("未选中：圆心有同色十字", marker >= 8, $"中心 14×14 品红像素 {marker}");
+
+            Doc.Selected.Add(circle);
+            _dirty = true;
+            Doc.InvalidateAll();
+            SettleFrames(180);
+            int selected = ScreenProbe.CountMagenta((int)cx - 7, (int)cy - 7, 14, 14);
+            Check("选中：圆心十字隐藏（有手柄就不需要）", selected < 5, $"中心品红像素 {selected}");
+
+            Doc.Selected.Clear();
+            _dirty = true;
+            Doc.InvalidateAll();
+            SettleFrames(180);
+            int back = ScreenProbe.CountMagenta((int)cx - 7, (int)cy - 7, 14, 14);
+            Check("取消选中：圆心十字回来", back >= 8, $"中心品红像素 {back}");
+
+            // 停顿成型最终也是 StrokeKind.Circle/ellipse，同一个 DrawShapeCenters；
+            // 这里用同一 Kind 的对象等价覆盖。椭圆共用 ShapeCenterLocal，不另测。
+            Doc.Clear();
+            Doc.ClearHistory();
+            Doc.Selected.Clear();
+        }
+
         Console.WriteLine();
         Console.WriteLine(fail == 0
             ? $"  PASS: 图形工具（画图入口 / 吸附 / 端点编辑）都正确（{pass} 项）"
