@@ -444,6 +444,8 @@ internal sealed partial class OverlayWindow : IDisposable
     private RectF _cursorRectPrev = RectF.Empty;
     /// <summary>上一帧多指擦会话的落点反馈包围盒：结束那一帧再擦一次旧位置（"不消失"就出在这）。</summary>
     private RectF _touchEraseRectPrev = RectF.Empty;
+    /// <summary>上一帧对象吸附短亮占的矩形（窗口坐标）：淡出结束那一帧要把它擦干净。</summary>
+    private RectF _alignPulseRectPrev = RectF.Empty;
 
     /// <summary>
     /// 右缘滚动条那一条。**单独成一块脏区**，不并进静止图元的联合包围盒
@@ -2351,19 +2353,19 @@ internal sealed partial class OverlayWindow : IDisposable
                               Gfx.StyleFor(grid ? StrokeDash.Solid : StrokeDash.Dashed));
         }
 
-        // **圆心十字是墨迹本身**（2026-10-18 用户定）：圆/椭圆都要，一直存在，
-        // 选中不消失、导出/存档都带着。画在主几何之后，颜色同笔迹；线宽固定 1 逻辑像素。
+        // **圆心点是墨迹本身**（2026-10-18 用户定）：只有圆要，一直存在，
+        // 选中不消失、导出/存档都带着。画在主几何之后，颜色同笔迹；大小固定。
         DrawShapeCenterInk(s, extra);
     }
 
     /// <summary>
-    /// **圆**的圆心十字（**墨迹**，不是界面装饰；2026-10-18 用户定）。
+    /// **圆**的圆心点（**墨迹**，不是界面装饰；2026-10-18 用户定）。
     ///
     /// 规则：
     ///   · **只有圆**要，椭圆不要；
     ///   · 选中/未选中、移动/缩放后、导出/存档/复制都带着；
-    ///   · 十字**大小固定**（模仿 ClassIn）：线宽 1 逻辑像素、臂长 5.5 逻辑像素，
-    ///     不随圆半径/选中框缩放变粗变长；圆心位置跟着图形变换走。
+    ///   · 点**大小固定**：半径约 1.25 逻辑像素，不随圆半径/选中框缩放变粗变大；
+    ///     圆心位置跟着图形变换走。
     ///
     /// 为什么放在 DrawStrokeCore 而不是浮动层：它就是图形墨迹的一部分，必须进
     /// 内容分块和导出；选中切换不需要额外重烘。
@@ -2377,12 +2379,8 @@ internal sealed partial class OverlayWindow : IDisposable
         var c = Vector2.Transform(s.ShapeCenterLocal, m);
 
         // 固定大小：不按半径收、不按变换缩放。
-        float arm = 5.5f * unit;
-        float width = MathF.Max(1f, unit);
-
-        var brush = Brush(s.Color);
-        _ctx.DrawLine(new Vector2(c.X - arm, c.Y), new Vector2(c.X + arm, c.Y), brush, width);
-        _ctx.DrawLine(new Vector2(c.X, c.Y - arm), new Vector2(c.X, c.Y + arm), brush, width);
+        float r = 1.25f * unit;
+        _ctx.FillEllipse(new Ellipse(c, r, r), Brush(s.Color));
     }
 
     /// <summary>
@@ -2733,6 +2731,8 @@ internal sealed partial class OverlayWindow : IDisposable
             DrawDragPreview(app);
             DrawVertexPreview(app);
             DrawSelection(app);
+            DrawSelectionCenterCross(app);
+            DrawAlignSnapPulse(app);
             // 图库面板：它从工具条上沿往上长，压在内容之上（不压界面——界面比它更靠下）
             DrawLibraryPanel(app);
             // 画线中的 α 读数画在浮动层最上面（它贴着正在拖的那一端，压住什么都不碍事）。
@@ -2915,6 +2915,41 @@ internal sealed partial class OverlayWindow : IDisposable
         {
             r.Add(_touchEraseRectPrev);
             _touchEraseRectPrev = RectF.Empty;
+        }
+
+        // 对象吸附的短亮：吸附瞬间只在目标处亮 220ms，不写字、不常驻。
+        // 和落点反馈一样，当前帧与上一帧都要并进脏区，否则淡出最后一帧会留一圈残影。
+        if (app.AlignSnapPulseActive && app.AlignSnapPulseKind != InkEngine.AlignSnapKind.None)
+        {
+            float dpi = app.DpiScale;
+            var p = app.AlignSnapPulsePoint;
+            var b = RectF.Empty;
+            if (app.AlignSnapPulseKind == InkEngine.AlignSnapKind.Point)
+            {
+                b.Add(p.X - 24f * dpi, p.Y - 24f * dpi);
+                b.Add(p.X + 24f * dpi, p.Y + 24f * dpi);
+            }
+            else if (app.AlignSnapPulseKind == InkEngine.AlignSnapKind.Horizontal)
+            {
+                float h = app.AlignSnapPulseHalfLen + 8f * dpi;
+                b.Add(p.X - h, p.Y - 8f * dpi);
+                b.Add(p.X + h, p.Y + 8f * dpi);
+            }
+            else
+            {
+                float h = app.AlignSnapPulseHalfLen + 8f * dpi;
+                b.Add(p.X - 8f * dpi, p.Y - h);
+                b.Add(p.X + 8f * dpi, p.Y + h);
+            }
+            var w = CanvasRectToWindow(b);
+            r.Add(w);
+            if (!_alignPulseRectPrev.IsEmpty) r.Add(_alignPulseRectPrev);
+            _alignPulseRectPrev = w;
+        }
+        else if (!_alignPulseRectPrev.IsEmpty)
+        {
+            r.Add(_alignPulseRectPrev);
+            _alignPulseRectPrev = RectF.Empty;
         }
 
         if (app.MarqueeActive)
@@ -3344,6 +3379,108 @@ internal sealed partial class OverlayWindow : IDisposable
         g.Transform = src.Transform;
         g.SetPoints(pts);           // 局部坐标：变换那一层仍由 g.Transform 负责
         DrawStroke(g);
+    }
+
+    /// <summary>
+    /// 单选整体拖动时，给**被拖对象自己**画一个淡橙中心十字。
+    ///
+    /// 它只负责告诉老师"我这个框的中心在哪"，不画目标中心、不画目标框。
+    /// 十字中间留空，圆心的永久墨点/坐标原点能在中间露出来；固定屏幕大小，不参与命中。
+    /// </summary>
+    private void DrawSelectionCenterCross(InkEngine app)
+    {
+        if (!app.SelectionCenterCrossVisible) return;
+
+        var frame = app.LiveSelectionFrame;
+        if (frame.IsEmpty) return;
+
+        var box = frame.CanvasAabb;
+        var c = new Vector2((box.MinX + box.MaxX) * 0.5f,
+                            (box.MinY + box.MaxY) * 0.5f);
+        float dpi = app.DpiScale;
+        float arm = 7f * dpi;
+        float gap = 2.5f * dpi;
+        float width = 1.1f * dpi;
+        var white = new Color4(1f, 1f, 1f, 0.42f);
+        var accent = new Color4(1f, 0.62f, 0.22f, 0.55f);   // 淡橙：只做瞄准，不做确认
+
+        _scratch.Color = white;
+        _ctx.DrawLine(new Vector2(c.X - arm, c.Y), new Vector2(c.X - gap, c.Y), _scratch, width + 0.8f * dpi);
+        _ctx.DrawLine(new Vector2(c.X + gap, c.Y), new Vector2(c.X + arm, c.Y), _scratch, width + 0.8f * dpi);
+        _ctx.DrawLine(new Vector2(c.X, c.Y - arm), new Vector2(c.X, c.Y - gap), _scratch, width + 0.8f * dpi);
+        _ctx.DrawLine(new Vector2(c.X, c.Y + gap), new Vector2(c.X, c.Y + arm), _scratch, width + 0.8f * dpi);
+
+        _scratch.Color = accent;
+        _ctx.DrawLine(new Vector2(c.X - arm, c.Y), new Vector2(c.X - gap, c.Y), _scratch, width);
+        _ctx.DrawLine(new Vector2(c.X + gap, c.Y), new Vector2(c.X + arm, c.Y), _scratch, width);
+        _ctx.DrawLine(new Vector2(c.X, c.Y - arm), new Vector2(c.X, c.Y - gap), _scratch, width);
+        _ctx.DrawLine(new Vector2(c.X, c.Y + gap), new Vector2(c.X, c.Y + arm), _scratch, width);
+    }
+
+    /// <summary>
+    /// 对象吸附的“短亮一下”：不写字、不画全屏辅助线，只在吸附目标处闪 220ms 后淡出。
+    /// 中心/双轴＝外扩圆环＋十字；横向/纵向＝目标线的一小段高亮。
+    /// 用暖橙色，和蓝色选中框区分开。
+    /// </summary>
+    private void DrawAlignSnapPulse(InkEngine app)
+    {
+        if (app.PassThrough || !app.AlignSnapPulseVisible) return;
+        if (app.AlignSnapPulseKind == InkEngine.AlignSnapKind.None) return;
+
+        float alpha = app.AlignSnapPulseAlpha;
+        if (alpha <= 0.01f) return;
+
+        float dpi = app.DpiScale;
+        var p = app.AlignSnapPulsePoint;
+        // 暖橙色：短亮要在白板、PPT、选中框旁边都跳出来；蓝色会和选中框混在一起。
+        var accent = new Color4(1f, 0.55f, 0.08f, alpha);
+        var white = new Color4(1f, 1f, 1f, 0.78f * alpha);
+
+        if (app.AlignSnapPulseKind == InkEngine.AlignSnapKind.Point)
+        {
+            // 吸附瞬间小环从 10px 外扩一点，比静止细环更容易被看见。
+            float grow = 1f + (1f - alpha) * 0.9f;
+            float r = 10f * dpi * grow;
+            _scratch.Color = white;
+            _ctx.DrawEllipse(new Ellipse(p, r + 1.4f * dpi, r + 1.4f * dpi), _scratch, 2.6f * dpi);
+            _scratch.Color = accent;
+            _ctx.DrawEllipse(new Ellipse(p, r, r), _scratch, 2.2f * dpi);
+            return;
+        }
+
+        float half = app.AlignSnapPulseHalfLen;
+        Vector2 a, b;
+        Vector2 ta, tb;
+        if (app.AlignSnapPulseKind == InkEngine.AlignSnapKind.Horizontal)
+        {
+            a = new Vector2(p.X - half, p.Y);
+            b = new Vector2(p.X + half, p.Y);
+            ta = new Vector2(a.X, a.Y - 5f * dpi);
+            tb = new Vector2(a.X, a.Y + 5f * dpi);
+            _scratch.Color = white;
+            _ctx.DrawLine(a, b, _scratch, 3.6f * dpi);
+            _scratch.Color = accent;
+            _ctx.DrawLine(a, b, _scratch, 1.8f * dpi);
+            _ctx.DrawLine(ta, tb, _scratch, 1.8f * dpi);
+            ta = new Vector2(b.X, b.Y - 5f * dpi);
+            tb = new Vector2(b.X, b.Y + 5f * dpi);
+            _ctx.DrawLine(ta, tb, _scratch, 1.8f * dpi);
+        }
+        else
+        {
+            a = new Vector2(p.X, p.Y - half);
+            b = new Vector2(p.X, p.Y + half);
+            ta = new Vector2(a.X - 5f * dpi, a.Y);
+            tb = new Vector2(a.X + 5f * dpi, a.Y);
+            _scratch.Color = white;
+            _ctx.DrawLine(a, b, _scratch, 3.6f * dpi);
+            _scratch.Color = accent;
+            _ctx.DrawLine(a, b, _scratch, 1.8f * dpi);
+            _ctx.DrawLine(ta, tb, _scratch, 1.8f * dpi);
+            ta = new Vector2(b.X - 5f * dpi, b.Y);
+            tb = new Vector2(b.X + 5f * dpi, b.Y);
+            _ctx.DrawLine(ta, tb, _scratch, 1.8f * dpi);
+        }
     }
 
     /// <summary>

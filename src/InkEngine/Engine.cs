@@ -1824,6 +1824,85 @@ public partial class InkEngine
     private Matrix3x2[] _dragStartXform;
     private Stroke[] _dragTargets;
     private Matrix3x2 _selDragMatrix = Matrix3x2.Identity;
+
+    // ---- 对象吸附（2026-10-18）--------------------------------------------
+    //
+    // 最终口径：**只看单选对象的内容选中框**，不认锚点。
+    //   · 参与对象：图形 + 图片（`IsShape`，自由笔迹不参与）；
+    //   · 同边对齐：左/左、右/右、上/上、下/下；
+    //   · 对边拼接：右/左、下/上（左右或上下刚好贴住）；
+    //   · 中心线：横中线对横中线、竖中线对竖中线；
+    //   · 中心：两条中心线同时对上。
+    //
+    // 手势期间只存“这一帧吸住了什么”；模型仍然不动，最终仍由 `_selDragMatrix`
+    // 走原来的那一步提交。这样吸附不会多出撤销记录，也不影响非拖动路径。
+    internal enum AlignSnapKind
+    {
+        None = 0,
+        Point,       // 点提示：两条中心线同时对上 / 中心对中心
+        Horizontal,  // 横线提示：只改 y
+        Vertical,    // 竖线提示：只改 x
+    }
+
+    /// <summary>一个框在某一轴上的三条线：左/中/右，或上/中/下。</summary>
+    private enum AlignLineRole
+    {
+        Start = 0,
+        Center = 1,
+        End = 2,
+    }
+
+    private struct AlignAxisCandidate
+    {
+        public AlignLineRole SourceRole;
+        public AlignLineRole TargetRole;
+        public float Delta;        // 这一轴要补的平移量
+        public float TargetLine;   // 画布坐标里的目标线（x 或 y）
+    }
+
+    private bool _alignSnapLatched;
+    private Stroke _alignSnapTarget;
+    private RectF _alignSnapTargetFrame;
+    private bool _alignSnapTargetCenterline;
+    private AlignAxisCandidate? _alignSnapX;
+    private AlignAxisCandidate? _alignSnapY;
+
+    // 手势开始时一次性收集“图形 + 图片”目标框；自由笔迹不参与。
+    // 这样每帧只遍历少量图形/图片，不会去扫几百个汉字的墨迹框。
+    private Stroke[] _alignTargets;
+    private RectF[] _alignTargetFrames;
+    private bool[] _alignTargetCenterlines;
+    private bool _alignSourceCenterline;
+
+    // 短亮提示：吸附“刚吸住”的那一下闪一次，不写字、不常驻。
+    private AlignSnapKind _alignPulseKind;
+    private Vector2 _alignPulsePoint;
+    private float _alignPulseHalfLen;
+    private double _alignPulseStartMs;
+    private double _alignPulseEndMs;
+
+    /// <summary>这帧的吸附短亮还该不该出帧（比可见时间多留一点，最后一帧负责擦干净）。</summary>
+    internal bool AlignSnapPulseActive
+        => _alignPulseEndMs > 0 && NowMs < _alignPulseEndMs + 40.0;
+
+    /// <summary>短亮本体还在不在可见期。</summary>
+    internal bool AlignSnapPulseVisible
+        => _alignPulseEndMs > 0 && NowMs < _alignPulseEndMs;
+
+    /// <summary>短亮的透明度（从 1 线性淡出）。</summary>
+    internal float AlignSnapPulseAlpha
+    {
+        get
+        {
+            double span = Math.Max(1.0, _alignPulseEndMs - _alignPulseStartMs);
+            double t = (NowMs - _alignPulseStartMs) / span;
+            return (float)Math.Clamp(1.0 - t, 0.0, 1.0);
+        }
+    }
+
+    internal AlignSnapKind AlignSnapPulseKind => _alignPulseKind;
+    internal Vector2 AlignSnapPulsePoint => _alignPulsePoint;
+    internal float AlignSnapPulseHalfLen => _alignPulseHalfLen;
     /// <summary>调试开关：不画自己那一笔，只留系统合成器画出来的委托轨迹。</summary>
     internal bool SuppressActiveStroke;
     internal float MqMinX, MqMinY, MqMaxX, MqMaxY;
@@ -1875,6 +1954,7 @@ public partial class InkEngine
         Radial = 1 << 9,
         Tooltip = 1 << 10,
         Trail = 1 << 11,
+        Align = 1 << 12,
     }
     private FrameDrive _frameDrive;
     /// <summary>最近一次"用户动作"（按下/按键）的时间：用来识别"没人操作却一直出帧"。</summary>
@@ -4007,6 +4087,7 @@ public partial class InkEngine
         if (RadialPaletteActive) d |= FrameDrive.Radial;
         if (TooltipPending) d |= FrameDrive.Tooltip;
         if (_windows.Exists(w => w.TrailEndPending)) d |= FrameDrive.Trail;
+        if (AlignSnapPulseActive) d |= FrameDrive.Align;
 
         _frameDrive = d;
         return d != FrameDrive.None;
@@ -4030,6 +4111,7 @@ public partial class InkEngine
         if ((d & FrameDrive.Radial) != 0) parts.Add("呼出盘");
         if ((d & FrameDrive.Tooltip) != 0) parts.Add("悬停提示");
         if ((d & FrameDrive.Trail) != 0) parts.Add("轨迹收尾");
+        if ((d & FrameDrive.Align) != 0) parts.Add("吸附提示");
         return string.Join("+", parts);
     }
 
@@ -4050,7 +4132,8 @@ public partial class InkEngine
         var d = _frameDrive;
         // 这些是"用户/界面明确要求的持续动画"，不算异常。
         if ((d & (FrameDrive.Timer | FrameDrive.Roll | FrameDrive.Radial | FrameDrive.Replay | FrameDrive.Laser)) != 0) return;
-        if ((d & (FrameDrive.UiAnim | FrameDrive.Selection | FrameDrive.Camera | FrameDrive.Tooltip | FrameDrive.Trail)) == 0) return;
+        if ((d & (FrameDrive.UiAnim | FrameDrive.Selection | FrameDrive.Camera
+                  | FrameDrive.Tooltip | FrameDrive.Trail | FrameDrive.Align)) == 0) return;
         _idleWarnAtMs = NowMs + 30_000;
         Console.WriteLine($"[perf] 空闲仍在出帧：动因={FrameDriveText()}，已空闲 {idle / 1000:F0}s，"
             + $"fps={_fps:F0}，记录≈{_lastRecordMs:F1}ms，ws={_workingSetMb:F0}MB");
@@ -11812,6 +11895,14 @@ public partial class InkEngine
     /// <summary>拖动预览在不在：手势进行中，而且真的有一批对象被摘出来了。</summary>
     internal bool DragPreviewActive => SelDragging && !_vertexDragging && _detachOrdered.Count > 0;
 
+    /// <summary>
+    /// 拖动时给当前对象画中心十字的条件：
+    /// **单选的图形/图片、真的整体移动过**。缩放手柄、旋转、手写墨迹、多选都不画。
+    /// </summary>
+    internal bool SelectionCenterCrossVisible
+        => !PassThrough && SelDragging && _selDragMoved && _dragIsMove && !_vertexDragging
+           && Doc.Selected.Count == 1 && Doc.Selected[0].IsShape;
+
     /// <summary>拖动预览要画的那一批（按文档顺序，用 <see cref="DragPreviewMatrix"/> 变换）。</summary>
     internal IReadOnlyList<Stroke> DragPreviewStrokes => _detachOrdered;
 
@@ -13006,6 +13097,8 @@ public partial class InkEngine
     {
         _dragHitStroke = null;
         _pendingClone = null;
+        ResetAlignSnapLatch();
+        ClearAlignTargets();
         float dpi = DpiScale;
 
         bool move = false;
@@ -13215,6 +13308,9 @@ public partial class InkEngine
         for (int i = 0; i < _dragTargets.Length; i++)
             _dragStartXform[i] = _dragTargets[i].Transform;
 
+        // 对象吸附只服务“单选、整体拖动”；目标框在这里一次性收集。
+        PrepareAlignTargets(move && _dragTargets.Length == 1 ? _dragTargets[0] : null);
+
         // 方案 B：把这一批从**内容层**摘出去，改由浮动层画实时预览。
         // 模型在整个手势里一个字都不改，所以内容层一帧都不用重画。
         DetachForDrag();
@@ -13286,6 +13382,416 @@ public partial class InkEngine
     /// <summary>自检/出图用：按真实入口打开自定义取色板（起点色 = 选中墨迹/手里那支笔）。</summary>
     internal void OpenCustomColorForTest() => OpenCustomColor();
 
+    private const float AlignSnapEnterLogical = 5f;
+    private const float AlignSnapReleaseLogical = 8f;
+    private const float AlignSnapProximityLogical = 24f;
+    private const float AlignSnapPulseMs = 220f;
+
+    /// <summary>清掉这一手势的“吸住了谁”（短亮不跟着清，它自己淡出）。</summary>
+    private void ResetAlignSnapLatch()
+    {
+        _alignSnapLatched = false;
+        _alignSnapTarget = null;
+        _alignSnapTargetFrame = RectF.Empty;
+        _alignSnapTargetCenterline = false;
+        _alignSnapX = null;
+        _alignSnapY = null;
+    }
+
+    private void ClearAlignTargets()
+    {
+        _alignTargets = null;
+        _alignTargetFrames = null;
+        _alignTargetCenterlines = null;
+        _alignSourceCenterline = false;
+    }
+
+    /// <summary>
+    /// 手势开始时收集一次“图形 + 图片”的目标框。自由笔迹不参与，
+    /// 所以几百个汉字的墨迹不会进入每帧的候选循环。
+    /// </summary>
+    private void PrepareAlignTargets(Stroke selected)
+    {
+        ClearAlignTargets();
+        if (selected == null || !selected.IsShape) return;
+
+        _alignSourceCenterline = IsAxisAlignedTransform(selected.Transform);
+        var targets = new List<Stroke>();
+        var frames = new List<RectF>();
+        var centerlines = new List<bool>();
+        for (int i = 0; i < Doc.Strokes.Count; i++)
+        {
+            var s = Doc.Strokes[i];
+            if (ReferenceEquals(s, selected) || !s.IsShape) continue;
+            var b = s.WorldInkBounds;
+            if (b.IsEmpty) continue;
+            targets.Add(s);
+            frames.Add(b);
+            centerlines.Add(IsAxisAlignedTransform(s.Transform));
+        }
+        _alignTargets = targets.ToArray();
+        _alignTargetFrames = frames.ToArray();
+        _alignTargetCenterlines = centerlines.ToArray();
+    }
+
+    /// <summary>中心线只对未旋转的图形有意义；旋转过的框不是图形自身的对称轴。</summary>
+    private static bool IsAxisAlignedTransform(in Matrix3x2 m)
+    {
+        float s = MathF.Max(MathF.Abs(m.M11), MathF.Abs(m.M22));
+        if (s < 1e-6f) return false;
+        return MathF.Abs(m.M12) <= s * 1e-3f && MathF.Abs(m.M21) <= s * 1e-3f;
+    }
+
+    private static float AlignCenterX(in RectF r) => (r.MinX + r.MaxX) * 0.5f;
+    private static float AlignCenterY(in RectF r) => (r.MinY + r.MaxY) * 0.5f;
+
+    private static float AlignLineX(in RectF r, AlignLineRole role) => role switch
+    {
+        AlignLineRole.Start => r.MinX,
+        AlignLineRole.Center => AlignCenterX(r),
+        _ => r.MaxX,
+    };
+
+    private static float AlignLineY(in RectF r, AlignLineRole role) => role switch
+    {
+        AlignLineRole.Start => r.MinY,
+        AlignLineRole.Center => AlignCenterY(r),
+        _ => r.MaxY,
+    };
+
+    /// <summary>两个一维区间之间的空隙（重叠 = 0；分离时是正数）。</summary>
+    private static float IntervalGap(float a0, float a1, float b0, float b1)
+    {
+        if (a1 < b0) return b0 - a1;
+        if (b1 < a0) return a0 - b1;
+        return 0f;
+    }
+
+    /// <summary>
+    /// 软相交：两条竖线要比较时，上下范围必须重叠或相距不超过 24px；
+    /// 两条横线要比较时，左右范围同理。避免屏幕两角也触发对齐。
+    /// </summary>
+    private static bool AlignNearX(in RectF a, in RectF b, float proximity)
+        => IntervalGap(a.MinX, a.MaxX, b.MinX, b.MaxX) <= proximity;
+
+    private static bool AlignNearY(in RectF a, in RectF b, float proximity)
+        => IntervalGap(a.MinY, a.MaxY, b.MinY, b.MaxY) <= proximity;
+
+    /// <summary>中心对中心优先级最高；同边其次；交叉边最后；距离永远优先。</summary>
+    private static int AlignPriority(AlignLineRole source, AlignLineRole target)
+        => source == AlignLineRole.Center && target == AlignLineRole.Center ? 0
+         : source == target ? 1
+         : 2;
+
+    private static void ConsiderAlignCandidate(float delta, AlignLineRole sourceRole,
+                                               AlignLineRole targetRole, float targetLine,
+                                               float tolerance, ref AlignAxisCandidate? best)
+    {
+        if (MathF.Abs(delta) > tolerance) return;
+        if (best.HasValue)
+        {
+            var old = best.Value;
+            float oldD = MathF.Abs(old.Delta), newD = MathF.Abs(delta);
+            if (newD > oldD + 1e-4f) return;
+            if (MathF.Abs(newD - oldD) <= 1e-4f
+                && AlignPriority(sourceRole, targetRole)
+                   > AlignPriority(old.SourceRole, old.TargetRole)) return;
+        }
+        best = new AlignAxisCandidate
+        {
+            SourceRole = sourceRole,
+            TargetRole = targetRole,
+            Delta = delta,
+            TargetLine = targetLine,
+        };
+    }
+
+    /// <summary>
+    /// 一根轴上的候选：源框三条线 × 目标框三条线（3×3），
+    /// 但先用另一轴的软相交门槛把远处的框排掉。只保留最近的一个。
+    /// </summary>
+    private static AlignAxisCandidate? BestX(in RectF a, in RectF b, float tolerance,
+                                             float proximity, bool allowCenterline)
+    {
+        if (!AlignNearY(a, b, proximity)) return null;
+        AlignAxisCandidate? best = null;
+        for (int si = 0; si < 3; si++)
+        {
+            var sourceRole = (AlignLineRole)si;
+            if (!allowCenterline && sourceRole == AlignLineRole.Center) continue;
+            float sourceLine = AlignLineX(a, sourceRole);
+            for (int ti = 0; ti < 3; ti++)
+            {
+                var targetRole = (AlignLineRole)ti;
+                if (!allowCenterline && targetRole == AlignLineRole.Center) continue;
+                float targetLine = AlignLineX(b, targetRole);
+                ConsiderAlignCandidate(targetLine - sourceLine, sourceRole, targetRole,
+                                       targetLine, tolerance, ref best);
+            }
+        }
+        return best;
+    }
+
+    private static AlignAxisCandidate? BestY(in RectF a, in RectF b, float tolerance,
+                                             float proximity, bool allowCenterline)
+    {
+        if (!AlignNearX(a, b, proximity)) return null;
+        AlignAxisCandidate? best = null;
+        for (int si = 0; si < 3; si++)
+        {
+            var sourceRole = (AlignLineRole)si;
+            if (!allowCenterline && sourceRole == AlignLineRole.Center) continue;
+            float sourceLine = AlignLineY(a, sourceRole);
+            for (int ti = 0; ti < 3; ti++)
+            {
+                var targetRole = (AlignLineRole)ti;
+                if (!allowCenterline && targetRole == AlignLineRole.Center) continue;
+                float targetLine = AlignLineY(b, targetRole);
+                ConsiderAlignCandidate(targetLine - sourceLine, sourceRole, targetRole,
+                                       targetLine, tolerance, ref best);
+            }
+        }
+        return best;
+    }
+
+    /// <summary>按已经吸住的那一对线重算；吸住期间不换线。</summary>
+    private static AlignAxisCandidate? CandidateForRoles(AlignLineRole sourceRole,
+                                                        AlignLineRole targetRole,
+                                                        bool xAxis,
+                                                        in RectF a, in RectF b,
+                                                        float tolerance, float proximity,
+                                                        bool allowCenterline)
+    {
+        if (!allowCenterline
+            && (sourceRole == AlignLineRole.Center || targetRole == AlignLineRole.Center))
+            return null;
+        if (xAxis)
+        {
+            if (!AlignNearY(a, b, proximity)) return null;
+            float targetLine = AlignLineX(b, targetRole);
+            float delta = targetLine - AlignLineX(a, sourceRole);
+            if (MathF.Abs(delta) > tolerance) return null;
+            return new AlignAxisCandidate
+            {
+                SourceRole = sourceRole, TargetRole = targetRole,
+                Delta = delta, TargetLine = targetLine,
+            };
+        }
+        else
+        {
+            if (!AlignNearX(a, b, proximity)) return null;
+            float targetLine = AlignLineY(b, targetRole);
+            float delta = targetLine - AlignLineY(a, sourceRole);
+            if (MathF.Abs(delta) > tolerance) return null;
+            return new AlignAxisCandidate
+            {
+                SourceRole = sourceRole, TargetRole = targetRole,
+                Delta = delta, TargetLine = targetLine,
+            };
+        }
+    }
+
+    /// <summary>找最近的、在 5px 内有候选的目标框；一个手势只跟一个目标框。</summary>
+    private bool TryFindAlignTarget(in RectF a, float tolerance, float proximity,
+                                    bool sourceCenterline,
+                                    out Stroke target, out RectF targetFrame,
+                                    out bool targetCenterline,
+                                    out AlignAxisCandidate? x, out AlignAxisCandidate? y)
+    {
+        target = null;
+        targetFrame = RectF.Empty;
+        targetCenterline = false;
+        x = null;
+        y = null;
+        float bestScore = float.MaxValue;
+        int bestPriority = int.MaxValue;
+
+        for (int i = 0; i < _alignTargets.Length; i++)
+        {
+            bool allowCenterline = sourceCenterline && _alignTargetCenterlines[i];
+            var bx = BestX(a, _alignTargetFrames[i], tolerance, proximity, allowCenterline);
+            var by = BestY(a, _alignTargetFrames[i], tolerance, proximity, allowCenterline);
+            if (!bx.HasValue && !by.HasValue) continue;
+
+            float sxc = bx.HasValue ? MathF.Abs(bx.Value.Delta) : float.MaxValue;
+            float syc = by.HasValue ? MathF.Abs(by.Value.Delta) : float.MaxValue;
+            float score = MathF.Min(sxc, syc);
+            int prio = Math.Min(
+                bx.HasValue ? AlignPriority(bx.Value.SourceRole, bx.Value.TargetRole) : int.MaxValue,
+                by.HasValue ? AlignPriority(by.Value.SourceRole, by.Value.TargetRole) : int.MaxValue);
+
+            if (score > bestScore + 1e-4f) continue;
+            if (MathF.Abs(score - bestScore) <= 1e-4f && prio >= bestPriority) continue;
+
+            bestScore = score;
+            bestPriority = prio;
+            target = _alignTargets[i];
+            targetFrame = _alignTargetFrames[i];
+            targetCenterline = allowCenterline;
+            x = bx;
+            y = by;
+        }
+        return target != null;
+    }
+
+    private void BeginAlignPulse(AlignSnapKind kind, Vector2 point, float halfLen)
+    {
+        _alignPulseKind = kind;
+        _alignPulsePoint = point;
+        _alignPulseHalfLen = halfLen;
+        _alignPulseStartMs = NowMs;
+        _alignPulseEndMs = NowMs + AlignSnapPulseMs;
+        _dirty = true;
+    }
+
+    /// <summary>吸附刚发生 / 某一轴刚吸住时，短亮一次；持续吸住不重复闪。</summary>
+    private void MaybeBeginAlignPulse(in RectF a, bool hadX, bool hadY, Stroke oldTarget)
+    {
+        if (!_alignSnapX.HasValue && !_alignSnapY.HasValue) return;
+        bool targetChanged = !ReferenceEquals(oldTarget, _alignSnapTarget);
+        bool newX = !hadX && _alignSnapX.HasValue;
+        bool newY = !hadY && _alignSnapY.HasValue;
+        if (!targetChanged && !newX && !newY) return;
+
+        float dpi = DpiScale;
+        bool xMoved = _alignSnapX.HasValue && MathF.Abs(_alignSnapX.Value.Delta) > 0.01f;
+        bool yMoved = _alignSnapY.HasValue && MathF.Abs(_alignSnapY.Value.Delta) > 0.01f;
+
+        // 两个方向都真的动了（或本来就对齐）才画点；
+        // 其中一个方向只是“本来就已经对齐”（delta≈0），就只画另一个方向的线，
+        // 这样两个正弦周期拼接时看到的是竖缝，而不是一个笼统的圆点。
+        if (_alignSnapX.HasValue && _alignSnapY.HasValue && xMoved && yMoved)
+        {
+            var p = new Vector2(_alignSnapX.Value.TargetLine, _alignSnapY.Value.TargetLine);
+            BeginAlignPulse(AlignSnapKind.Point, p, 0f);
+        }
+        else if (xMoved)
+        {
+            var p = new Vector2(_alignSnapX.Value.TargetLine, AlignCenterY(a));
+            BeginAlignPulse(AlignSnapKind.Vertical, p, 44f * dpi);
+        }
+        else if (yMoved)
+        {
+            var p = new Vector2(AlignCenterX(a), _alignSnapY.Value.TargetLine);
+            BeginAlignPulse(AlignSnapKind.Horizontal, p, 44f * dpi);
+        }
+        else if (_alignSnapX.HasValue && _alignSnapY.HasValue)
+        {
+            var p = new Vector2(_alignSnapX.Value.TargetLine, _alignSnapY.Value.TargetLine);
+            BeginAlignPulse(AlignSnapKind.Point, p, 0f);
+        }
+    }
+
+    /// <summary>
+    /// 整体移动矩阵：先按指针算纯平移，再在单选时叠一层选中框吸附。
+    /// 只改平移量；模型 / 撤销仍然走原来的那一步（见 EndSelDrag）。
+    /// </summary>
+    private Matrix3x2 MoveMatrixWithAlignSnap(Vector2 cur, bool alt)
+    {
+        var raw = cur - _dragStartPoint;
+
+        if (_dragTargets == null || _dragTargets.Length != 1 || alt || _pendingClone != null
+            || _alignTargets == null || _alignTargets.Length == 0)
+        {
+            ResetAlignSnapLatch();
+            return Matrix3x2.CreateTranslation(raw);
+        }
+
+        var s = _dragTargets[0];
+        if (s == null || s.Locked || !s.IsShape)
+        {
+            ResetAlignSnapLatch();
+            return Matrix3x2.CreateTranslation(raw);
+        }
+
+        float dpi = DpiScale;
+        float enterTol = AlignSnapEnterLogical * dpi;
+        float releaseTol = AlignSnapReleaseLogical * dpi;
+        float proximity = AlignSnapProximityLogical * dpi;
+        bool movedEnough = Vector2.Distance(cur, _dragStartPoint) > ClickToleranceLogical * dpi;
+        if (!movedEnough && !_alignSnapLatched)
+        {
+            ResetAlignSnapLatch();
+            return Matrix3x2.CreateTranslation(raw);
+        }
+
+        var a = s.WorldInkBounds;
+        if (a.IsEmpty)
+        {
+            ResetAlignSnapLatch();
+            return Matrix3x2.CreateTranslation(raw);
+        }
+        a.MinX += raw.X; a.MaxX += raw.X;
+        a.MinY += raw.Y; a.MaxY += raw.Y;
+
+        var oldTarget = _alignSnapTarget;
+        bool hadX = _alignSnapX.HasValue;
+        bool hadY = _alignSnapY.HasValue;
+        AlignAxisCandidate? x = null;
+        AlignAxisCandidate? y = null;
+
+        // 已吸住同一个目标：先按释放距离验证；目标被删掉也立刻松开。
+        if (_alignSnapLatched)
+        {
+            bool alive = _alignSnapTarget != null && Doc.Strokes.Contains(_alignSnapTarget);
+            if (alive)
+            {
+                // 吸住期间只沿原来那一对线走：不因为另一条线更近就突然换线。
+                bool allowCenterline = _alignSourceCenterline && _alignSnapTargetCenterline;
+                x = _alignSnapX.HasValue
+                    ? CandidateForRoles(_alignSnapX.Value.SourceRole,
+                                        _alignSnapX.Value.TargetRole,
+                                        xAxis: true, a, _alignSnapTargetFrame,
+                                        releaseTol, proximity, allowCenterline)
+                    : null;
+                y = _alignSnapY.HasValue
+                    ? CandidateForRoles(_alignSnapY.Value.SourceRole,
+                                        _alignSnapY.Value.TargetRole,
+                                        xAxis: false, a, _alignSnapTargetFrame,
+                                        releaseTol, proximity, allowCenterline)
+                    : null;
+
+                // 原来只有一条轴吸住时，另一条轴后来进入范围也可以补上。
+                // 仍然只在同一个目标框上补，不换目标。
+                if (!x.HasValue) x = BestX(a, _alignSnapTargetFrame, enterTol, proximity, allowCenterline);
+                if (!y.HasValue) y = BestY(a, _alignSnapTargetFrame, enterTol, proximity, allowCenterline);
+            }
+            if (!alive || (!x.HasValue && !y.HasValue))
+            {
+                ResetAlignSnapLatch();
+                x = null;
+                y = null;
+            }
+            else
+            {
+                _alignSnapX = x;
+                _alignSnapY = y;
+            }
+        }
+
+        // 没吸住：找最近目标框（5px 内）。
+        if (!_alignSnapLatched
+            && TryFindAlignTarget(a, enterTol, proximity, _alignSourceCenterline,
+                                  out var target, out var targetFrame, out var targetCenterline,
+                                  out x, out y))
+        {
+            _alignSnapTarget = target;
+            _alignSnapTargetFrame = targetFrame;
+            _alignSnapTargetCenterline = targetCenterline;
+            _alignSnapX = x;
+            _alignSnapY = y;
+            _alignSnapLatched = true;
+        }
+
+        if (!_alignSnapLatched) return Matrix3x2.CreateTranslation(raw);
+
+        if (_alignSnapX.HasValue) raw.X += _alignSnapX.Value.Delta;
+        if (_alignSnapY.HasValue) raw.Y += _alignSnapY.Value.Delta;
+
+        MaybeBeginAlignPulse(a, hadX, hadY, oldTarget);
+        return Matrix3x2.CreateTranslation(raw);
+    }
+
     /// <summary>
     /// 拖动中：每帧都从**按下那一刻的变换**重算，而不是在上一帧结果上继续乘。
     /// 后者会累积浮点误差，拖得越久偏得越多，撤销也回不到原样。
@@ -13294,6 +13800,9 @@ public partial class InkEngine
     {
         // 拖端点：另一条路（改几何，模型不动），和"拖对象"分开走。
         if (_vertexDragging) { UpdateVertexDrag(x, y); return; }
+
+        // 缩放 / 旋转不参与对象吸附：只清掉上一次可能留下的“吸住”状态。
+        if (!_dragIsMove) ResetAlignSnapLatch();
 
         var cur = new Vector2(x, y);
         bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
@@ -13310,7 +13819,9 @@ public partial class InkEngine
         {
             // 整体移动：指针在画布上走多少，对象就走多少。**不能**在框坐标里算
             // 再共轭回来——框是斜的时候那样会走偏方向。
-            m = Matrix3x2.CreateTranslation(cur - _dragStartPoint);
+            // 单选拖动时这里再叠一层选中框吸附；每帧从按下点重算，
+            // 所以吸住后再拖开也不会累积误差。
+            m = MoveMatrixWithAlignSnap(cur, alt);
         }
         else if (_dragHandle == SelHandle.Rotate)
         {
@@ -13467,6 +13978,8 @@ public partial class InkEngine
     {
         SelDragging = false;
         SelRotating = false;            // 度数标签只在拖动中出现
+        ResetAlignSnapLatch();          // 吸附只活在这一次拖动里；短亮自己淡出
+        ClearAlignTargets();
         _rotAccumDeg = 0f;              // 下一次拖拽从 0 开始数（标签也不显示了）
         SelRotationReadsInclination = false;   // 读数归位：下一次按下时重新判定读 α 还是 Δ
         SelRotationReadsPose = false;          // 姿态角那一档同样归位

@@ -62,7 +62,7 @@ internal enum SelHandle
 internal enum ShapeHandle
 {
     None = 0,
-    /// <summary>直线 / 箭头的起点。（2026-10-18 起圆的圆心不再有手柄，圆的圆心十字是墨迹。）</summary>
+    /// <summary>直线 / 箭头的起点。（2026-10-18 起圆的圆心不再有手柄，圆的圆心点是墨迹。）</summary>
     Anchor,
     /// <summary>直线 / 箭头的终点、**圆的圆周点**。（拖它 = 改这个定义元素）</summary>
     Rim,
@@ -514,7 +514,7 @@ internal static class SelectionHandles
 
             case StrokeKind.Circle:
                 // **只留圆周点**（2026-10-18 用户定）：圆心不再是手柄——拖整条就是平移，
-                // 和椭圆 2026-09-20 精简掉中心手柄同一个口径。圆心十字是墨迹本身。
+                // 和椭圆 2026-09-20 精简掉中心手柄同一个口径。圆心点是墨迹本身。
                 if (dst.Length < 1) return 0;
                 dst[0] = ShapeHandle.Rim;
                 return 1;
@@ -695,7 +695,7 @@ internal static class SelectionHandles
     /// <summary>
     /// 这个定义元素手柄拖起来是**整体平移**还是**改几何**。
     ///
-    /// **2026-10-18 起圆的圆心手柄已删**（用户定：只留圆周点；圆心十字是墨迹），
+    /// **2026-10-18 起圆的圆心手柄已删**（用户定：只留圆周点；圆心点是墨迹），
     /// 所以这条现在对所有图形都返回 false；保留函数供手势入口统一判断，
     /// 将来若恢复“中心平移柄”只改这里。
     /// </summary>

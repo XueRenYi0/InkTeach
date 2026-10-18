@@ -643,6 +643,12 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             ShapeToolTest();
         }
+        else if (mode == "--snaptest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SnapTest();
+        }
         else if (mode == "--shapetoolshow")
         {
             _autoExitAt = double.MaxValue;
@@ -1267,6 +1273,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --toolicons [路径]  出图：白板 / 激光笔的图标候选（未选中 / 选中 / 放大三格）");
         Console.WriteLine("  --penshow [路径] [bars]  出图：上游那批「带笔的」图标；带第 2 个参数就每格加一副「三道杠」");
         Console.WriteLine("  --shapebandtest     图形那格的界面入口自检（七段 / 三个新热键 / 主条图标跟着变）");
+        Console.WriteLine("  --snaptest          对象吸附自检（3×3 线组合 / 软相交 / 抛物线顶点 / 正弦拼缝）");
         Console.WriteLine("  --inktest           **墨迹识别的单独测试**（日常改识别只跑这一条：准确率 / 误报 / 难例 / 写回）");
         Console.WriteLine("  --dwelltest         停顿成型的手势自检（真入口 + 推时钟：触发 / 定型 / 撤销回手绘 / 不留墨）");
         Console.WriteLine("  --dashtest          线型自检（实线/虚线/点线上屏墨量、面板那一行、存档往返）");
