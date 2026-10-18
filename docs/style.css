@@ -75,6 +75,15 @@ a { color: inherit; }
 .card p { margin: 0 0 10px; color: var(--gray); font-size: 14px; }
 .card code { background: #eef1f5; padding: 1px 6px; border-radius: 6px; font-size: 13px; }
 
+/* 数学图形 */
+.math-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 24px; }
+.math-grid figure:nth-child(3) { grid-column: 1 / -1; }
+.math-grid figure { margin: 0; background: #fff; border: 1px solid var(--line); border-radius: 14px;
+  padding: 12px; box-shadow: 0 4px 14px rgba(31,35,40,.05); }
+.math-grid img { width: 100%; display: block; border-radius: 10px; border: 1px solid #edf0f4; }
+.math-grid figcaption { margin-top: 10px; color: var(--gray); font-size: 13px; line-height: 1.65; }
+.math-grid figcaption b { color: var(--ink); }
+
 /* 截图 */
 .shots { display: grid; gap: 18px; margin-top: 22px; }
 .shots.two { grid-template-columns: repeat(2, 1fr); }
@@ -137,7 +146,7 @@ footer .en { color: #8a939d; }
 .honest li { margin-bottom: 4px; }
 
 @media (max-width: 820px) {
-  .grid, .grid.two, .shots.two, .feat, .darkband .pair { grid-template-columns: 1fr; }
+  .grid, .grid.two, .shots.two, .feat, .math-grid, .darkband .pair { grid-template-columns: 1fr; }
   .hero h1 { font-size: 30px; }
   .topbar nav a { margin-left: 10px; font-size: 13px; }
   table.keys td:first-child { width: auto; }

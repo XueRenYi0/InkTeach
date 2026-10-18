@@ -33,6 +33,23 @@ PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else
 3. Write with a pen or mouse. `Ctrl+L` = laser, `Ctrl+E` = eraser, `Ctrl+Alt+Shift+T` hands the mouse back.
 4. Hold `Ctrl+Alt+Shift+Q` and flick to a sector to switch tools without hunting for the toolbar.
 
+## Made for maths: function graphs + solid geometry
+
+Not just “it can draw shapes”: **every defining element is draggable** — change a parabola's opening,
+inspect a hyperbola's asymptotes, resize a cylinder, with live angle / radius / length readouts.
+
+- **Function graphs**: parabolas in four directions, hyperbolas (with optional asymptotes), sine /
+  cosine / tangent / wave, coordinate systems.
+- **Conic sections**: hyperbola with / without asymptotes, ellipse with / without foci, side by side.
+- **Solid geometry**: cylinder / cone / frustum / sphere, prism / pyramid / truncated pyramid;
+  base, apex and generatrix are all draggable.
+
+<p align="center"><img src="design/readme/20-函数图像.png" width="900" alt="Function graphs: four parabola directions, hyperbolas, sine and cosine"></p>
+
+<p align="center"><img src="design/readme/21-圆锥曲线.png" width="900" alt="Hyperbola with/without asymptotes, ellipse with/without foci"></p>
+
+<p align="center"><img src="design/readme/22-立体几何.png" width="900" alt="Cylinder, cone, frustum, sphere, prisms and pyramids"></p>
+
 ## What makes it different
 
 ### ① The settings rail is a 6-pixel line until you need it
@@ -160,13 +177,14 @@ right-click cancels or restores pinning; hovering about 0.5s (long-press 0.6s on
   touch, splitting the stroke in two). The area eraser's size follows hand speed (no shrink when
   slow, capped at 2.5× on a fast sweep), and the box you see *is* the affected region.
 
-### Laser pointer: point where you are talking (9.2.1)
+### Three pens: pen / highlighter / laser (9.2.1)
 
-- **Clean red edge + white core**, with no outer halo; readable on whiteboards, slides and dark backgrounds.
-- The full trail stays while writing; after release it holds for **2 seconds**, then fades as one
-  piece over **0.6 seconds**. A new stroke can coexist with the previous trail.
-- Width is 2–24 logical pixels and the slider affects the trail. It is **not ink**: not saved in the
-  document, not undoable, and not erasable.
+- Three classroom “voices”: **pen** for derivations, **highlighter** for emphasis, **laser** for
+  pointing at what you are explaining.
+- Switch with `Ctrl+P / I / L`, or hold `Ctrl+Alt+Shift+Q` and flick to a sector.
+- **Laser pointer**: clean red edge + white core, no outer halo; readable on whiteboards, slides and
+  dark backgrounds. The full trail stays while writing; after release it holds for **2 seconds**,
+  then fades as one piece over **0.6 seconds**. Width is 2–24 logical pixels; it is **not ink**.
 - 9.2.1 fixes the occasional red afterimage left after the last trail fades.
 
 ### Selecting and editing
@@ -315,6 +333,15 @@ approach fits, we align with it instead of reinventing it:
 | Memory (idle / 10,000 strokes) | 93 MB / 392 MB committed |
 
 ---
+
+## Lightweight: Windows 10 / 11, no .NET
+
+- Native AOT single exe, about **11MB**; the 9.2.1 installer is **8.96MB** and the portable zip **9.96MB**.
+- **No .NET install, no UAC, no administrator rights**; the portable build is unzip-and-run.
+- On 4GB classroom machines, PDF pages are cached only around the viewport and rendered in the
+  background, so memory does not grow with the page count.
+- Under the hood it is Direct2D drawing plus Native AOT; what you feel is the responsive toolbar,
+  smooth ink and a small download.
 
 ## Install
 
