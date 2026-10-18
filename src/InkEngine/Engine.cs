@@ -376,8 +376,8 @@ public partial class InkEngine
     /// ⚠ 默认档 2026-09-27 从 4 改粗到 8（用户："可以把默认档改粗一点"）。
     /// 为什么当时显得细：那条轨迹是"**细白芯 ＋ 一层淡红晕**"，
     /// 白芯只占 0.32 个直径 → 4 的直径下白芯才 1.3 像素，肉眼基本只剩一点红雾。
-    /// 现在发光比例改成 ClassIn 那种（**宽白芯 ＋ 细红边 ＋ 柔光**，见 `Overlay.DrawLaser`），
-    /// 同一档在屏幕上也更"实"。
+    /// 现在比例改成 ClassIn 那种（**宽白芯 ＋ 实红边**，2026-10-18 起撤掉外围柔光，
+    /// 见 `Overlay.DrawLaser`），同一档在屏幕上也更"实"、且不再有一圈圈光晕。
     /// </summary>
     internal float LaserWidthLogical = 8f;
     /// <summary>
@@ -385,7 +385,7 @@ public partial class InkEngine
     ///
     /// 和 <see cref="PenWidthLogical"/> 同一个地位：**这支笔自己的设置**。
     /// 只作用于新画出来的**自由笔迹**，而且是"只有笔用"——
-    /// 荧光笔与激光笔的两条半透明/发光轨迹画成虚线没有意义，图形也不吃它
+    /// 荧光笔的半透明轨迹与激光笔的指示轨迹画成虚线没有意义，图形也不吃它
     /// （图形的线型历来是"选中之后在操作条面板里改"，见 <see cref="SetSelectionDash"/>）。
     ///
     /// 画的时候取当时的值写进对象（见 <see cref="Stroke.Dash"/>），之后各存各的：
@@ -3543,6 +3543,11 @@ public partial class InkEngine
         foreach (var w in _windows)
             w.Present();
 
+        // 这一拍已经把"激光淡完后的空画面"贴上去了，欠账可以销掉。
+        // 必须放在 Present 之后：提前销掉的话，NeedsFrame 会在下一拍放行，
+        // 而后缓冲里仍然留着最后一帧激光——表现就是那道红影忽然定住不消失。
+        Laser.ClearFramePainted();
+
         if (LatencyRecording) RecordLatencySample();
 
         // 界面自己要求的重画（InvalidateUi）已经在这一帧贴完，可以清掉了。
@@ -4076,7 +4081,8 @@ public partial class InkEngine
     {
         var d = FrameDrive.None;
         if (_dirty) d |= FrameDrive.Dirty;
-        if (Laser.Visible) d |= FrameDrive.Laser;
+        // 最后一帧淡完/清空后还要补一帧空画面，否则后缓冲里会留着上一帧的激光。
+        if (Laser.Visible || Laser.NeedsClearFrame) d |= FrameDrive.Laser;
         if (_drawing) d |= FrameDrive.Drawing;
         if (SelFlashing) d |= FrameDrive.Selection;
         if (UiIsAnimatingNow) d |= FrameDrive.UiAnim;
@@ -8083,13 +8089,12 @@ public partial class InkEngine
     internal float CursorRingTrueRadius => CurrentToolWidthLogical * 0.5f * DpiScale;
 
     /// <summary>
-    /// 激光轨迹的粗细（像素）。**默认值和以前一模一样**：以前轨迹写死
-    /// "芯 5 像素 + 外发光 26 像素"，和任何宽度设置都无关；现在按激光自己的
-    /// 粗细缩放（0.625 这个系数就是让默认 4 逻辑像素 × 2 倍屏 = 5 像素，
-    /// 外观不变），这样切粗细对激光才是有意义的。
+    /// 激光落点的核心半径（像素）。默认值沿用旧版"芯 5 像素"的观感：
+    /// 0.625 这个系数就是让默认 4 逻辑像素 × 2 倍屏 = 5 像素。
+    /// 轨迹本身在 `Overlay.DrawLaser` 里按 `WidthLogical` 直接算红带直径；
+    /// 这里只给落点圆点用，不再有外围发光半径。
     /// </summary>
     internal float LaserCorePx => MathF.Max(2f, LaserWidthLogical * DpiScale * 0.625f);
-    internal float LaserGlowPx => LaserCorePx * 5.2f;
 
     /// <summary>
     /// 激光落点的半径（像素）。取"轨迹头部的粗细"（细激光有个可见下限），

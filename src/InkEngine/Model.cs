@@ -8359,7 +8359,7 @@ internal sealed class LaserTrail
     /// 数值参考 InkCanvas-Ultra 的 `LaserSampleThreshold = 6.25`（＝ 2.5 像素的平方，
     /// 见它的 `MW_LaserPointer.cs:39`）。为什么现在必须设：以前靠 600ms 窗口顺带把点数限住了，
     /// 现在**整条一直留着**，不设门槛的话一条长轨迹能攒到几千个点，
-    /// 而每一帧都要绕着它重算三次轮廓（三层发光，见 Overlay.DrawLaser）。
+    /// 而每一帧都要绕着它重建红边和白芯两层轮廓（见 Overlay.DrawLaser）。
     /// </summary>
     private const float SampleThresholdSq = 6.25f;
 
@@ -8378,6 +8378,23 @@ internal sealed class LaserTrail
     }
 
     private readonly List<Stroke> _strokes = new();
+
+    /// <summary>
+    /// 这一批已经淡完（或清掉）之后，**还欠屏幕一帧空画面**。
+    ///
+    /// 为什么不能只靠 `Visible`：主循环是先 `Prune` 再问 `NeedsFrame`。
+    /// 最后一帧淡到 1 时 `Prune` 把最后一条移掉，`Visible` 立刻变 false；
+    /// 如果这一拍不额外要一帧，屏幕上留下的就是**上一帧那条还没擦掉的激光**，
+    /// 要等下一次鼠标移动/界面变化才被脏区顺手擦掉——这就是用户 2026-10-18
+    /// 报的"激光笔写的时候偶尔会留残影"。
+    /// </summary>
+    private bool _needsClearFrame;
+
+    /// <summary>淡完/清空之后还要不要补一帧空画面（`NeedsFrame` 会读它）。</summary>
+    public bool NeedsClearFrame => _needsClearFrame;
+
+    /// <summary>那一帧空画面已经贴出去了，清掉欠账。</summary>
+    public void ClearFramePainted() => _needsClearFrame = false;
 
     /// <summary>正在写的那条（没有就 null）。</summary>
     public Stroke Writing { get; private set; }
@@ -8469,15 +8486,20 @@ internal sealed class LaserTrail
             ? 0f                                                    // 停留期：一点都没淡
             : (float)Math.Clamp((since - HoldMs) / FadeMs, 0.0, 1.0);
 
+        bool hadStrokes = _strokes.Count > 0;
         for (int i = _strokes.Count - 1; i >= 0; i--)
         {
             _strokes[i].Fade = fade;
             if (fade >= 1f) _strokes.RemoveAt(i);
         }
+        // 最后一帧的淡出已经画过了，但那一帧还留在后缓冲里；必须再出一帧
+        // 空画面把它擦掉（见 _needsClearFrame 的说明）。
+        if (hadStrokes && _strokes.Count == 0) _needsClearFrame = true;
     }
 
     public void Clear()
     {
+        if (_strokes.Count > 0 || Writing != null) _needsClearFrame = true;
         _strokes.Clear();
         Writing = null;
         _releasedAtMs = double.NegativeInfinity;

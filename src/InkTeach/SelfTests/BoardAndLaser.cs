@@ -271,6 +271,8 @@ internal sealed partial class App
         for (int i = 1; i <= 200; i++)
             // 每一步横着走 6 像素（远大于采样门槛 2.5），所以 200 个点应该一个不少
             Laser.Add(bx + i * 6f, by + MathF.Sin(i * 0.12f) * 40f, t0 + i * 16.0);
+        // 先让它**真的上屏**：下面要验证"淡完补帧把残影擦掉"，不先画出来就没东西可擦。
+        SettleFrames(30);
 
         int pts = Laser.Strokes.Count > 0 ? Laser.Strokes[0].Points.Count : 0;
         Check("一直写：整条都留着（201 个点一个不少）", pts == 201, $"点数 {pts}（期望 201）");
@@ -296,6 +298,34 @@ internal sealed partial class App
         Laser.Prune(rel + LaserTrail.HoldMs + LaserTrail.FadeMs + 50);
         Check($"停留 {LaserTrail.HoldMs / 1000:F0} 秒 ＋ 淡出 {LaserTrail.FadeMs / 1000:F1} 秒之后：没了",
               Laser.Strokes.Count == 0, $"条数 {Laser.Strokes.Count}");
+
+        // 淡完最后一帧还必须**再出一帧空画面**：后缓冲里躺着的是上一帧的激光，
+        // 只把数据移掉、不再 Present 一次，那道红影就会留到下一次鼠标移动。
+        // 用户 2026-10-18 报的"激光笔写的时候偶尔留残影"就是这一拍。
+        _dirty = false;
+        bool clearPending = Laser.NeedsClearFrame;
+        bool clearFrame = NeedsFrame();
+        Check("淡完后还要补一帧清屏（不然残影留在后缓冲）",
+              clearPending && clearFrame,
+              $"欠清屏={clearPending}，NeedsFrame={clearFrame}");
+        SettleFrames(30);
+        Check("补帧贴出后，清屏欠账归零", !Laser.NeedsClearFrame,
+              $"欠清屏={Laser.NeedsClearFrame}");
+
+        // 不只看标志位：真抓一块屏幕，确认那道红影已经没了。
+        var ghostBuf = ScreenProbe.CaptureRegion((int)bx, (int)(by - 90f), 1200, 180);
+        int ghostRed = 0;
+        if (ghostBuf != null)
+        {
+            for (int i = 0; i + 3 < ghostBuf.Length; i += 4)
+            {
+                int b = ghostBuf[i], g = ghostBuf[i + 1], r = ghostBuf[i + 2];
+                if (b < 250 && r > g + 30 && r > b + 30) ghostRed++;
+            }
+        }
+        Check("淡完补帧后屏幕上没有红色残影",
+              ghostBuf != null && ghostRed == 0,
+              ghostBuf == null ? "抓屏失败" : $"红像素 {ghostRed}");
 
         // ---- ③ 多条并存 ＋ **整批共用一个计时**（用户 2026-09-27 报的那个 bug）----
         //
