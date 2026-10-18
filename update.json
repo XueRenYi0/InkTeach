@@ -1,8 +1,8 @@
 {
-  "version": "9.2.0",
-  "url": "https://github.com/XueRenYi0/InkTeach/releases/latest/download/InkTeach-9.2.0-win-x64.zip",
-  "cn": "https://gitcode.com/XueRenYI0/InkTeach/releases/download/v9.2.0/InkTeach-9.2.0-win-x64.zip",
-  "sha256": "9f8d18ddea9d1dc7038bdea2708361addd2c7b0edc95606affcbd25a43e65617",
+  "version": "9.2.1",
+  "url": "https://github.com/XueRenYi0/InkTeach/releases/latest/download/InkTeach-9.2.1-win-x64.zip",
+  "cn": "https://gitcode.com/XueRenYI0/InkTeach/releases/download/v9.2.1/InkTeach-9.2.1-win-x64.zip",
+  "sha256": "c695190f73e00529e952931eb1dc04616acea643316063353e9345d6e8b022c7",
   "notes": "",
   "minVersion": ""
 }
