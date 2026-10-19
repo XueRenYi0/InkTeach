@@ -97,6 +97,19 @@ internal sealed partial class App
             Doc.AddStroke(s);
             return s;
         }
+        Stroke AddLine(float x0, float y0, float x1, float y1, float width)
+        {
+            var s = new Stroke
+            {
+                Tool = Tool.Line,
+                Kind = StrokeKind.Line,
+                Width = width,
+            };
+            s.AddPoint(x0, y0, 1f, 0);
+            s.AddPoint(x1, y1, 1f, 0);
+            Doc.AddStroke(s);
+            return s;
+        }
         bool Drag(Stroke s, Vector2 from, Vector2 to)
         {
             Doc.SelectOnly(new[] { s });
@@ -173,6 +186,18 @@ internal sealed partial class App
         var sb = sineB.WorldInkBounds;
         Check("两个正弦周期拼缝", sTook && Near(sb.MinX, sineA.WorldInkBounds.MaxX),
               $"接缝 {sineA.WorldInkBounds.MaxX:F1} / {sb.MinX:F1}");
+
+        // ⑥ 细线 / 轴类目标只认中心线：正弦中线应落到 X 轴中心，
+        //    而不是被笔宽造成的上沿 / 下沿先吸走（用户 2026-10-19 报的场景）。
+        ResetDoc();
+        AddLine(900f, 1000f, 1400f, 1000f, 8f * dpi);
+        var axisSine = AddSine(1000f, 1000f + 4f * dpi - 10f, 300f);
+        var aStart = FrameCenter(axisSine);
+        // 拖 10px 后：中线离轴心 4*dpi，离笔迹下沿 0——旧逻辑会吸下沿。
+        bool aTook = Drag(axisSine, aStart, aStart + new Vector2(0f, 10f));
+        var ac = FrameCenter(axisSine);
+        Check("正弦中线对横轴中心", aTook && Near(ac.Y, 1000f),
+              $"中线 y {ac.Y:F1}（轴心 1000.0）");
 
         Console.WriteLine();
         Console.WriteLine(fail == 0

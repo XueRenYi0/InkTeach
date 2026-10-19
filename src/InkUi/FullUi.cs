@@ -2827,10 +2827,17 @@ public sealed class FullUi : IOverlayUi
         if (status.Length != 0)
             _widgets.Text(ctx, status, sr, 11.5f, Brush(ctx, MutedCol), center: false);
 
-        // 底栏固定四格（表在上面，绘制/命中/提示共用）
+        // 底栏固定五格（表在上面，绘制/命中/提示共用）
         for (int i = 0; i < MoreBottomTiles.Length; i++)
             DrawHubTile(ctx, HubBottomRect(i), MoreBottomTiles[i].Label, true, MoreBottomTiles[i].Danger,
                         MoreHitBottom + i);
+
+        // 新版本红点：面板已经打开时落在「检查更新」这一格上（主条那颗此时被遮住）。
+        if (UpdateAvailable)
+        {
+            var tr = HubBottomRect(2);
+            DrawUpdateDot(ctx, new Vector2(tr.MaxX - 8f, tr.MinY + 8f), 4.5f, 1f);
+        }
     }
 
     private void DrawMoreGroupHead(ID2D1DeviceContext ctx, RectF r, string label)
@@ -3901,6 +3908,11 @@ public sealed class FullUi : IOverlayUi
             if (clip) ctx.PopAxisAlignedClip();
         }
 
+        // 更新红点：收起态在球上，展开态在「更多」格上。它不占面板内容层
+        // （图层只给形变淡入用），所以单独按当前 alpha 画；「更多」面板打开时
+        // 由面板里的「检查更新」格接手。
+        if (!_moreOpen) DrawUpdateBadge(ctx, e, ballA, cellsA);
+
         // 面板上/下沿那道 1 像素的"收边"。**两个主题走相反的方向**（理由见 Tokens）：
         //   深色 → 顶沿一道极淡的白高光（读"接光"）；
         //   浅色 → 底沿一道极淡的暗线（读"卷边"）。白高光画在白面板上等于没画。
@@ -4007,6 +4019,51 @@ public sealed class FullUi : IOverlayUi
         var iconInk = InkCol;
         IconAtlas.DrawCentered(ctx, "pen", iconBox, ballR * Tokens.BallIcon,
                                Brush(ctx, new Color4(iconInk.R, iconInk.G, iconInk.B, iconInk.A * a)));
+    }
+
+    /// <summary>是不是有已发现、还没安装的新版本；红点只看这一个状态。</summary>
+    private bool UpdateAvailable => _host != null && _host.State.UpdateStage == UpdateStage.Available;
+
+    /// <summary>
+    /// 「有新版本」的小红点。**挂在用户下一步会点的地方**，不做独立通知：
+    ///   · 收起态 → 球右上角（球是唯一常驻的入口）；
+    ///   · 展开态 → 「更多」格右上角（更新入口就在「更多」里）；
+    ///   · 更多面板 → 「检查更新」格右上角（已经打开面板时不用再找主条）。
+    /// 只有已发现新版本才画；检查中 / 已是最新 / 失败都不打扰。
+    /// </summary>
+    private void DrawUpdateBadge(ID2D1DeviceContext ctx, float e, float ballA, float cellsA)
+    {
+        if (!UpdateAvailable) return;
+
+        if (ballA > 0.004f)
+        {
+            var br = BallRect();
+            // 球本身有一圈**当前笔色**（默认就是红色）；红点放在球右上角的
+            // 白色小底上，才不会被同色的笔环吃掉（用户 2026-10-19 的场景）。
+            DrawUpdateDot(ctx, new Vector2(br.MaxX - 6f, br.MinY + 6f), 3.5f, ballA, halo: 2.5f);
+        }
+
+        if (cellsA > 0.004f)
+        {
+            int pos = PosOf(12);                 // 主条最后一格「更多」
+            if (pos >= 0)
+            {
+                var cr = CellRect(pos);
+                DrawUpdateDot(ctx, new Vector2(cr.MaxX - 7f, cr.MinY + 7f), 4f, cellsA);
+            }
+        }
+    }
+
+    /// <summary>红点本体：白色描边垫底，深色 / 浅色主题上都看得清。</summary>
+    private void DrawUpdateDot(ID2D1DeviceContext ctx, Vector2 c, float radius, float alpha,
+                               float halo = 1.5f)
+    {
+        float a = QA(alpha);
+        if (a <= 0.004f) return;
+        var red = new Color4(0.93f, 0.18f, 0.14f, a);
+        var ring = new Color4(1f, 1f, 1f, a * 0.95f);
+        ctx.FillEllipse(new Ellipse(c, radius + halo, radius + halo), Brush(ctx, ring));
+        ctx.FillEllipse(new Ellipse(c, radius, radius), Brush(ctx, red));
     }
 
     /// <summary>
@@ -5157,7 +5214,7 @@ public sealed class FullUi : IOverlayUi
                 9 => (c.Tip, Key(KeyAction.ToolCapture), ""),
                 10 => (c.Tip, Key(KeyAction.Undo), ""),
                 11 => (c.Tip, Key(KeyAction.Redo), ""),
-                12 => (c.Tip, "", "课堂工具、墨迹、设置都在这儿"),
+                12 => (c.Tip, "", UpdateAvailable ? "有新版本，点开去「检查更新」" : "课堂工具、墨迹、设置都在这儿"),
                 _ => default,
             };
         }

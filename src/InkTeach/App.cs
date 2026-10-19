@@ -1292,7 +1292,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --lasertest         激光笔自检（拖尾一直写不缩 / 松手停 2 秒再整体淡出 / 多条并存 /");
         Console.WriteLine("                      粗细真的管用 / 不是笔迹）；顺带出图 reports/laser-trail.png");
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
-        Console.WriteLine("  --panelshow <图> [--band] [--mini] [--more [--page N]] [--cell N] [--shape 名字] [--zoom N]   界面出图（离屏；--more --page 0=启动器 1=设置）");
+        Console.WriteLine("  --panelshow <图> [--band] [--mini] [--more [--page N]] [--cell N] [--shape 名字] [--zoom N] [--update]   界面出图（离屏；--more --page 0=启动器 1=设置；--update 摆出新版本红点）");
         Console.WriteLine("  --demogif <目录>    演示连拍（写字→停顿变图形→选中拖动→截图取景，存 NNNN.bmp 帧）");
         Console.WriteLine("  --makeicon <图.ico>      用界面自己的渲染生成程序图标（线条笔＋白砖＋带笔锋的红笔迹）");
         Console.WriteLine("  --captureshow <图>  截图取景框 + 尺寸读数出图（离屏）");
@@ -4787,6 +4787,12 @@ internal sealed partial class App : InkEngine.InkEngine
         _panelShowMini = Environment.GetCommandLineArgs().Contains("--mini");
         _panelShowBand = Environment.GetCommandLineArgs().Contains("--band");
         SetUiFactory(() => new InkUi.FullUi());
+        // 出图专用：把“有新版本”状态摆出来，查看红点位置（产品里由静默检查设置）。
+        if (Environment.GetCommandLineArgs().Contains("--update"))
+        {
+            UpdateState = UpdateStage.Available;
+            UpdateText = "有新版本 9.2.2";
+        }
         Tool = Tool.Pen;
         BoardOn = true;                      // 白板打底：截出来的图里没有桌面上的杂东西
         // --pixel：把工具切成面积橡皮再出图（看"橡皮按钮的图标跟着换"那一版）

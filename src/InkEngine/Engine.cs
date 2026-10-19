@@ -1864,6 +1864,8 @@ public partial class InkEngine
     private Stroke _alignSnapTarget;
     private RectF _alignSnapTargetFrame;
     private bool _alignSnapTargetCenterline;
+    private bool _alignSnapTargetAxisCenterOnlyX;
+    private bool _alignSnapTargetAxisCenterOnlyY;
     private AlignAxisCandidate? _alignSnapX;
     private AlignAxisCandidate? _alignSnapY;
 
@@ -1872,6 +1874,13 @@ public partial class InkEngine
     private Stroke[] _alignTargets;
     private RectF[] _alignTargetFrames;
     private bool[] _alignTargetCenterlines;
+    /// <summary>
+    /// 轴类目标（直线 / 箭头 / 数轴）在**厚度方向**只认中心线。
+    /// 直线本身有笔宽，3×3 框会把上沿、下沿也当成两条可吸附的线；对数学里的
+    /// X 轴来说，那只是笔迹边缘，真正要的是轴线中心（用户 2026-10-19）。
+    /// </summary>
+    private bool[] _alignTargetAxisCenterOnlyX;
+    private bool[] _alignTargetAxisCenterOnlyY;
     private bool _alignSourceCenterline;
 
     // 短亮提示：吸附“刚吸住”的那一下闪一次，不写字、不常驻。
@@ -2005,6 +2014,11 @@ public partial class InkEngine
     long _mAlloc0;
     int _mGc0, _mGc1, _mGc2;
     bool _measureDone;
+    /// <summary>
+    /// 这一笔按下时的时刻。形状识别 / 图形工具生成的点 `T` 可能是 0（不是真实采样时间），
+    /// 不能拿 `Points[0].T` 算历时——否则日志会把一笔 2 秒的图形写成“28 分钟”。
+    /// </summary>
+    double _measureStartMs;
 
     /// <summary>起仪表：记下这一刻的分配计数和三代 GC 次数。</summary>
     private void BeginStrokeMeasure()
@@ -2014,6 +2028,7 @@ public partial class InkEngine
         _mGc0 = GC.CollectionCount(0);
         _mGc1 = GC.CollectionCount(1);
         _mGc2 = GC.CollectionCount(2);
+        _measureStartMs = NowMs;
         _measureDone = false;
     }
 
@@ -3359,6 +3374,7 @@ public partial class InkEngine
             if (_rawRegistered && ActiveStroke == null) SetRawCapture(false);
 
             NowMs = _clock.Elapsed.TotalMilliseconds;
+            MaybeAutoCheckUpdate();       // 静默查更新：气泡 / 更多上的红点靠它出现
             PumpKeyGestures();            // 工具键的手势：长按判定 + 连按换色的延迟结算
             PumpRadialPalette();          // 呼出盘：出盘延迟 / 松手轮询 / 超时
             StepMicroAdjust();            // 连续微调会话：停手 400ms 就"封口"（下一次另起一条撤销）
@@ -7517,7 +7533,11 @@ public partial class InkEngine
                 //   2~3 个硬件采样合并进一条消息（真机实测 12 条消息 → 31 个采样点），
                 //   拿消息数当频率会**把笔的采样率报低一半以上**（第一版就是这么写的）。
                 //   同时把合并比打出来——它本身就说明"这一路到底有没有合并可恢复"。
-                double strokeMs = NowMs - (ActiveStroke.Points.Count > 0 ? ActiveStroke.Points[0].T : NowMs);
+                // 普通手写用第一个点的采样时间；形状识别 / 图形工具的点 T 是 0，
+                // 退回按下时刻，否则会印出“历时 28 分钟”这种假数（2026-10-19 学校日志）。
+                double pointT = ActiveStroke.Points.Count > 0 ? ActiveStroke.Points[0].T : 0;
+                double strokeStart = pointT > 0 ? pointT : _measureStartMs;
+                double strokeMs = Math.Max(0, NowMs - strokeStart);
                 double sampleHz = strokeMs > 1 ? LastCoalescedSamples * 1000.0 / strokeMs : 0;
                 double msgHz = strokeMs > 1 ? LastCoalescedMessages * 1000.0 / strokeMs : 0;
                 string merge = LastCoalescedMessages > 0
@@ -11083,6 +11103,17 @@ public partial class InkEngine
     /// （产品里没有这个开关——用户点一下查、再点一下装，界面当然要留着）。
     /// </summary>
     internal bool AutoCheckOnly;
+
+    /// <summary>
+    /// 静默自检：启动后 8 秒查一次、之后每 6 小时一次。查到新版本才改状态；
+    /// 已是最新 / 网络失败都还原成 Idle，面板状态行仍然显示版本号。
+    /// 这样“更多”上的红点不需要用户先手动点一次检查。
+    /// </summary>
+    private bool _autoUpdateCheck;
+    private double _nextUpdateCheckAtMs = -1;
+    private const double UpdateCheckFirstDelayMs = 8_000;
+    private const double UpdateCheckRepeatMs = 6 * 60 * 60 * 1000;
+
     private readonly object _updLock = new();
     private (UpdateFeed.Manifest m, string err, List<(string Url, bool UseProxy)> dl) _updResult;
     private string _updUsedUrl = "";
@@ -11125,6 +11156,34 @@ public partial class InkEngine
         })
         { IsBackground = true, Name = "InkTeach-Update-Check" };
         th.Start();
+    }
+
+    /// <summary>
+    /// 主循环里的静默更新检查。自检 / `--updatecheck` 不跑；产品里启动 8 秒后
+    /// 查一次，之后每 6 小时一次。没有网络或没有配置源时什么都不显示。
+    /// </summary>
+    private void MaybeAutoCheckUpdate()
+    {
+        if (SelfCheckMode || AutoCheckOnly || !UpdateFeed.HasAnySource) return;
+        if (_nextUpdateCheckAtMs < 0)
+        {
+            _nextUpdateCheckAtMs = NowMs + UpdateCheckFirstDelayMs;
+            return;
+        }
+        if (NowMs < _nextUpdateCheckAtMs) return;
+        if (UpdateState is UpdateStage.Available or UpdateStage.Downloading or UpdateStage.Ready)
+        {
+            _nextUpdateCheckAtMs = NowMs + UpdateCheckRepeatMs;   // 已经知道了，不重复查
+            return;
+        }
+        if (_updBusy)
+        {
+            _nextUpdateCheckAtMs = NowMs + 60_000;   // 正忙：一分钟后再看
+            return;
+        }
+        _nextUpdateCheckAtMs = NowMs + UpdateCheckRepeatMs;
+        _autoUpdateCheck = true;
+        CheckUpdateFromUi();
     }
 
     /// <summary>
@@ -11201,6 +11260,8 @@ public partial class InkEngine
             List<(string Url, bool UseProxy)> dl;
             lock (_updLock) (m, err, dl) = _updResult;
 
+            bool silent = _autoUpdateCheck;
+            _autoUpdateCheck = false;
             bool needApply = false;
             if (m == null)
             {
@@ -11232,6 +11293,13 @@ public partial class InkEngine
                                   + $"源 {UpdateFeed.HostOf(_updUsedUrl)}）"
                                   + (m.Notes.Length > 0 ? "：" + Shorten(m.Notes) : ""));
                 needApply = AutoApplyUpdate;
+            }
+
+            // 静默检查只负责把「有新版本」变成红点；已是最新 / 失败不占状态行。
+            if (silent && UpdateState != UpdateStage.Available)
+            {
+                UpdateState = UpdateStage.Idle;
+                UpdateText = "";
             }
             NotifyUiStateChanged();
 
@@ -13399,6 +13467,8 @@ public partial class InkEngine
         _alignSnapTarget = null;
         _alignSnapTargetFrame = RectF.Empty;
         _alignSnapTargetCenterline = false;
+        _alignSnapTargetAxisCenterOnlyX = false;
+        _alignSnapTargetAxisCenterOnlyY = false;
         _alignSnapX = null;
         _alignSnapY = null;
     }
@@ -13408,6 +13478,8 @@ public partial class InkEngine
         _alignTargets = null;
         _alignTargetFrames = null;
         _alignTargetCenterlines = null;
+        _alignTargetAxisCenterOnlyX = null;
+        _alignTargetAxisCenterOnlyY = null;
         _alignSourceCenterline = false;
     }
 
@@ -13424,6 +13496,8 @@ public partial class InkEngine
         var targets = new List<Stroke>();
         var frames = new List<RectF>();
         var centerlines = new List<bool>();
+        var centerOnlyX = new List<bool>();
+        var centerOnlyY = new List<bool>();
         for (int i = 0; i < Doc.Strokes.Count; i++)
         {
             var s = Doc.Strokes[i];
@@ -13432,11 +13506,45 @@ public partial class InkEngine
             if (b.IsEmpty) continue;
             targets.Add(s);
             frames.Add(b);
-            centerlines.Add(IsAxisAlignedTransform(s.Transform));
+            bool axisAligned = IsAxisAlignedTransform(s.Transform);
+            centerlines.Add(axisAligned);
+
+            // 轴类目标只把**真正的轴线**留给吸附。直线 / 箭头横着放时，
+            // 它自己的笔宽会让 3×3 框多出“上沿 / 下沿”两条假轴线；数轴同理。
+            // 只在这条轴与屏幕轴平行时启用：斜线 / 已经旋转过的图形仍走原来的
+            // 3×3，避免把端点当成厚度。坐标系保留 3×3——它的外框（网格边界）
+            // 本身也是用户可能要对齐的对象，不能一起砍掉。
+            bool horizontal = axisAligned && IsHorizontalAxisTarget(s);
+            bool vertical = axisAligned && IsVerticalAxisTarget(s);
+            centerOnlyX.Add(axisAligned && s.IsLineLike && vertical);
+            centerOnlyY.Add((axisAligned && s.Kind == StrokeKind.NumberLine)
+                            || (axisAligned && s.IsLineLike && horizontal));
         }
         _alignTargets = targets.ToArray();
         _alignTargetFrames = frames.ToArray();
         _alignTargetCenterlines = centerlines.ToArray();
+        _alignTargetAxisCenterOnlyX = centerOnlyX.ToArray();
+        _alignTargetAxisCenterOnlyY = centerOnlyY.ToArray();
+    }
+
+    /// <summary>目标是一条水平直线 / 箭头（按画布里的两个端点判，容差 5%）。</summary>
+    private static bool IsHorizontalAxisTarget(Stroke s)
+    {
+        if (!s.IsLineLike || s.Points.Count < 2) return false;
+        var p0 = Vector2.Transform(new Vector2(s.Points[0].X, s.Points[0].Y), s.Transform);
+        var p1 = Vector2.Transform(new Vector2(s.Points[^1].X, s.Points[^1].Y), s.Transform);
+        float dx = MathF.Abs(p1.X - p0.X), dy = MathF.Abs(p1.Y - p0.Y);
+        return dx > 1e-3f && dy <= MathF.Max(1f, dx * 0.05f);
+    }
+
+    /// <summary>目标是一条竖直直线 / 箭头（按画布里的两个端点判，容差 5%）。</summary>
+    private static bool IsVerticalAxisTarget(Stroke s)
+    {
+        if (!s.IsLineLike || s.Points.Count < 2) return false;
+        var p0 = Vector2.Transform(new Vector2(s.Points[0].X, s.Points[0].Y), s.Transform);
+        var p1 = Vector2.Transform(new Vector2(s.Points[^1].X, s.Points[^1].Y), s.Transform);
+        float dx = MathF.Abs(p1.X - p0.X), dy = MathF.Abs(p1.Y - p0.Y);
+        return dy > 1e-3f && dx <= MathF.Max(1f, dy * 0.05f);
     }
 
     /// <summary>中心线只对未旋转的图形有意义；旋转过的框不是图形自身的对称轴。</summary>
@@ -13516,7 +13624,8 @@ public partial class InkEngine
     /// 但先用另一轴的软相交门槛把远处的框排掉。只保留最近的一个。
     /// </summary>
     private static AlignAxisCandidate? BestX(in RectF a, in RectF b, float tolerance,
-                                             float proximity, bool allowCenterline)
+                                             float proximity, bool allowCenterline,
+                                             bool targetCenterOnly)
     {
         if (!AlignNearY(a, b, proximity)) return null;
         AlignAxisCandidate? best = null;
@@ -13528,6 +13637,7 @@ public partial class InkEngine
             for (int ti = 0; ti < 3; ti++)
             {
                 var targetRole = (AlignLineRole)ti;
+                if (targetCenterOnly && targetRole != AlignLineRole.Center) continue;
                 if (!allowCenterline && targetRole == AlignLineRole.Center) continue;
                 float targetLine = AlignLineX(b, targetRole);
                 ConsiderAlignCandidate(targetLine - sourceLine, sourceRole, targetRole,
@@ -13538,7 +13648,8 @@ public partial class InkEngine
     }
 
     private static AlignAxisCandidate? BestY(in RectF a, in RectF b, float tolerance,
-                                             float proximity, bool allowCenterline)
+                                             float proximity, bool allowCenterline,
+                                             bool targetCenterOnly)
     {
         if (!AlignNearX(a, b, proximity)) return null;
         AlignAxisCandidate? best = null;
@@ -13550,6 +13661,7 @@ public partial class InkEngine
             for (int ti = 0; ti < 3; ti++)
             {
                 var targetRole = (AlignLineRole)ti;
+                if (targetCenterOnly && targetRole != AlignLineRole.Center) continue;
                 if (!allowCenterline && targetRole == AlignLineRole.Center) continue;
                 float targetLine = AlignLineY(b, targetRole);
                 ConsiderAlignCandidate(targetLine - sourceLine, sourceRole, targetRole,
@@ -13565,8 +13677,10 @@ public partial class InkEngine
                                                         bool xAxis,
                                                         in RectF a, in RectF b,
                                                         float tolerance, float proximity,
-                                                        bool allowCenterline)
+                                                        bool allowCenterline,
+                                                        bool targetCenterOnly)
     {
+        if (targetCenterOnly && targetRole != AlignLineRole.Center) return null;
         if (!allowCenterline
             && (sourceRole == AlignLineRole.Center || targetRole == AlignLineRole.Center))
             return null;
@@ -13601,11 +13715,14 @@ public partial class InkEngine
                                     bool sourceCenterline,
                                     out Stroke target, out RectF targetFrame,
                                     out bool targetCenterline,
+                                    out bool targetCenterOnlyX, out bool targetCenterOnlyY,
                                     out AlignAxisCandidate? x, out AlignAxisCandidate? y)
     {
         target = null;
         targetFrame = RectF.Empty;
         targetCenterline = false;
+        targetCenterOnlyX = false;
+        targetCenterOnlyY = false;
         x = null;
         y = null;
         float bestScore = float.MaxValue;
@@ -13614,8 +13731,10 @@ public partial class InkEngine
         for (int i = 0; i < _alignTargets.Length; i++)
         {
             bool allowCenterline = sourceCenterline && _alignTargetCenterlines[i];
-            var bx = BestX(a, _alignTargetFrames[i], tolerance, proximity, allowCenterline);
-            var by = BestY(a, _alignTargetFrames[i], tolerance, proximity, allowCenterline);
+            bool centerOnlyX = allowCenterline && _alignTargetAxisCenterOnlyX[i];
+            bool centerOnlyY = allowCenterline && _alignTargetAxisCenterOnlyY[i];
+            var bx = BestX(a, _alignTargetFrames[i], tolerance, proximity, allowCenterline, centerOnlyX);
+            var by = BestY(a, _alignTargetFrames[i], tolerance, proximity, allowCenterline, centerOnlyY);
             if (!bx.HasValue && !by.HasValue) continue;
 
             float sxc = bx.HasValue ? MathF.Abs(bx.Value.Delta) : float.MaxValue;
@@ -13633,6 +13752,8 @@ public partial class InkEngine
             target = _alignTargets[i];
             targetFrame = _alignTargetFrames[i];
             targetCenterline = allowCenterline;
+            targetCenterOnlyX = centerOnlyX;
+            targetCenterOnlyY = centerOnlyY;
             x = bx;
             y = by;
         }
@@ -13743,23 +13864,25 @@ public partial class InkEngine
             {
                 // 吸住期间只沿原来那一对线走：不因为另一条线更近就突然换线。
                 bool allowCenterline = _alignSourceCenterline && _alignSnapTargetCenterline;
+                bool centerOnlyX = allowCenterline && _alignSnapTargetAxisCenterOnlyX;
+                bool centerOnlyY = allowCenterline && _alignSnapTargetAxisCenterOnlyY;
                 x = _alignSnapX.HasValue
                     ? CandidateForRoles(_alignSnapX.Value.SourceRole,
                                         _alignSnapX.Value.TargetRole,
                                         xAxis: true, a, _alignSnapTargetFrame,
-                                        releaseTol, proximity, allowCenterline)
+                                        releaseTol, proximity, allowCenterline, centerOnlyX)
                     : null;
                 y = _alignSnapY.HasValue
                     ? CandidateForRoles(_alignSnapY.Value.SourceRole,
                                         _alignSnapY.Value.TargetRole,
                                         xAxis: false, a, _alignSnapTargetFrame,
-                                        releaseTol, proximity, allowCenterline)
+                                        releaseTol, proximity, allowCenterline, centerOnlyY)
                     : null;
 
                 // 原来只有一条轴吸住时，另一条轴后来进入范围也可以补上。
                 // 仍然只在同一个目标框上补，不换目标。
-                if (!x.HasValue) x = BestX(a, _alignSnapTargetFrame, enterTol, proximity, allowCenterline);
-                if (!y.HasValue) y = BestY(a, _alignSnapTargetFrame, enterTol, proximity, allowCenterline);
+                if (!x.HasValue) x = BestX(a, _alignSnapTargetFrame, enterTol, proximity, allowCenterline, centerOnlyX);
+                if (!y.HasValue) y = BestY(a, _alignSnapTargetFrame, enterTol, proximity, allowCenterline, centerOnlyY);
             }
             if (!alive || (!x.HasValue && !y.HasValue))
             {
@@ -13778,11 +13901,14 @@ public partial class InkEngine
         if (!_alignSnapLatched
             && TryFindAlignTarget(a, enterTol, proximity, _alignSourceCenterline,
                                   out var target, out var targetFrame, out var targetCenterline,
+                                  out var targetCenterOnlyX, out var targetCenterOnlyY,
                                   out x, out y))
         {
             _alignSnapTarget = target;
             _alignSnapTargetFrame = targetFrame;
             _alignSnapTargetCenterline = targetCenterline;
+            _alignSnapTargetAxisCenterOnlyX = targetCenterOnlyX;
+            _alignSnapTargetAxisCenterOnlyY = targetCenterOnlyY;
             _alignSnapX = x;
             _alignSnapY = y;
             _alignSnapLatched = true;
