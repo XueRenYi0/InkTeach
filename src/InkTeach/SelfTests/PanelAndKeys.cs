@@ -2902,35 +2902,11 @@ internal sealed partial class App
                   !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
         }
 
-        // 「湿墨档位」那一行（2026-10-13 加，用户点名"设置里要能看到到了哪一档"）：
-        // 点一下换一档（**2026-10-15 起两档：0 ⇄ 1**）→ 引擎立刻生效（静态开关跟着变）→
-        // 界面下一帧读回来显示。自检模式下引擎**不落盘**（临时设置路径那条规矩）。
-        {
-            var wetRow = ui.RowRectByLabelForTest("湿墨档位");
-            Check("「湿墨档位」那一行找得到", wetRow.MaxY > wetRow.MinY,
-                  $"行高 {wetRow.MaxY - wetRow.MinY:F0}");
-            Check("湿墨档位默认 = 0（原路径；关档 = 与改动前一致）", Host.State.WetMode == 0,
-                  $"WetMode = {Host.State.WetMode}");
-            Check("湿墨档位是**值行**（右侧显示当前档，不是开关）",
-                  !ui.IsToggleRowByLabelForTest("湿墨档位"),
-                  "IsToggleRow = " + ui.IsToggleRowByLabelForTest("湿墨档位"));
-
-            ClickPhysical((wetRow.MinX + wetRow.MaxX) * 0.5f * DpiScale,
-                          (wetRow.MinY + wetRow.MaxY) * 0.5f * DpiScale);
-            SettleFrames(200);
-            Check("点「湿墨档位」：换到下一档（0 → 1）", Host.State.WetMode == 1,
-                  $"WetMode = {Host.State.WetMode}");
-            Check("换档落到引擎：系统委托轨迹那一档跟着开",
-                  OverlayWindow.InkTrailEnabled, "InkTrailEnabled = " + OverlayWindow.InkTrailEnabled);
-
-            // 再点一下回到 0（2026-10-15：只剩两档——应用湿墨层撤除后"到顶回头"就是 1→0）。
-            ClickPhysical((wetRow.MinX + wetRow.MaxX) * 0.5f * DpiScale,
-                          (wetRow.MinY + wetRow.MaxY) * 0.5f * DpiScale);
-            SettleFrames(150);
-            Check("再点一下回到 0（两档循环，轨迹关回去）",
-                  Host.State.WetMode == 0 && !OverlayWindow.InkTrailEnabled,
-                  $"WetMode = {Host.State.WetMode}，轨迹 = {OverlayWindow.InkTrailEnabled}");
-        }
+        // 「湿墨档位」行与快捷键 2026-10-19 撤除（默认系统湿墨，自绘回退已稳定）。
+        // 反向钉住：设置页里不能再出现这一行；快捷键表里也不能再出现 CycleWetMode。
+        Check("「湿墨档位」设置行已撤",
+              ui.RowRectByLabelForTest("湿墨档位").IsEmpty
+              && !ui.IsToggleRowByLabelForTest("湿墨档位"));
 
         // 「精细笔迹」「触摸手势」两行 **2026-10-09 晚已撤**（用户真机试稳："开关拿掉，默认开"）。
         // 这里反过来钉住"两行都不在了 + 行为常开"，别再被无意加回来。

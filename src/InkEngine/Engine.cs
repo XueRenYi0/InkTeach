@@ -1137,34 +1137,6 @@ public partial class InkEngine
         _dirty = true;
     }
 
-    /// <summary>热键：切下一档（0→1→0；2026-10-15 只剩两档）。</summary>
-    internal void CycleWetMode() => SetWetMode(WetMode == 1 ? 0 : 1, "Ctrl+Alt+Shift+W");
-
-    /// <summary>界面点「设置 → 墨迹 → 湿墨档位」：直接定到某一档（0..1）。</summary>
-    internal void SetWetModeFromUi(int mode) => SetWetMode(mode, "设置 → 墨迹 → 湿墨档位");
-
-    /// <summary>
-    /// 定档（**引擎是权威**）：立刻生效、立刻落盘、打一行说明。
-    /// 两个入口都走这里：全局热键 <see cref="CycleWetMode"/> 和设置页那一行
-    /// （`IEngineCommands.SetWetMode`）——"同一件事只写一份"，界面不自己记档。
-    /// </summary>
-    private void SetWetMode(int mode, string from)
-    {
-        WetMode = Math.Clamp(mode, 0, 1);   // 旧档 2/3（应用湿墨层/全开）并入 1
-        ApplyWetMode();
-        if (!SelfCheckMode)
-        {
-            try
-            {
-                SetUiPref(WetModePrefKey, WetMode.ToString());
-                FlushSettings();     // 立刻落盘：用户是"按了一下"，不能丢
-            }
-            catch (Exception ex) { Console.WriteLine($"  [湿墨] 记档位失败（本次仍生效）：{ex.Message}"); }
-        }
-        Console.WriteLine($"[湿墨] 档位 {WetMode}：{WetModeName(WetMode)}（{from}；主交换链自绘始终照旧兜底）");
-        _dirty = true;
-    }
-
     /// <summary>`--clean N`：入笔前对位置与压力做 N 点滑动平均（0/1 = 关）。</summary>
     internal static int CleanWindow;
 
@@ -10024,7 +9996,6 @@ public partial class InkEngine
             case KeyAction.Clear: ClearAllInkFromUi(); break;
             case KeyAction.ToggleBoard: SetBoardFromUi(!BoardOn); break;
             case KeyAction.ToggleHud: ShowHud = !ShowHud; break;
-            case KeyAction.CycleWetMode: CycleWetMode(); break;
             case KeyAction.CycleWidth: CycleWidth(); break;
             case KeyAction.ToggleKeyboardMode: SetKeyboardMode(!KeyboardMode); break;
             case KeyAction.Quit: _quit = true; break;
@@ -10063,12 +10034,18 @@ public partial class InkEngine
             case KeyAction.NudgeDownFar: Nudge(0f, 10f); break;
             case KeyAction.ScaleUp: ScaleSelection(1.1f); break;
             case KeyAction.ScaleDown: ScaleSelection(1f / 1.1f); break;
-            // PageUp / PageDown 是白板翻页键：板没开时不能落到 FlipPage 的文档分支。
+            // PageUp / PageDown 跟随“当前这张纸”：白板 → 白板屏，PPT → PPT 页，
+            // 文档 → 文档页。板开着时**绝不**落到下层的 PPT / 文档；
+            // 这样独立白板之后，三个模式也不用记三套翻页键。
             case KeyAction.FlipPageUp:
                 if (BoardOn) FlipPageFromUi(false);
+                else if (PptMode) PptPrevFromUi();
+                else if (DocView.IsOpen) FlipPageFromUi(false);
                 break;
             case KeyAction.FlipPageDown:
                 if (BoardOn) FlipPageFromUi(true);
+                else if (PptMode) PptNextFromUi();
+                else if (DocView.IsOpen) FlipPageFromUi(true);
                 break;
             // 放映时 ←→（临时全局热键送进来的）：**有选中 → 微调；没选中 → 代 WPS/PPT 翻页**。
             // 键盘在我们手里，不拦的话 WPS 收不到 ←→，表现就是"按了没反应"（用户实测）。
@@ -15134,6 +15111,17 @@ public partial class InkEngine
         if ((Native.GetAsyncKeyState(0x11 /*VK_CONTROL*/) & 0x8000) != 0) mods |= KeyChord.ModCtrl;
         if ((Native.GetAsyncKeyState(0x12 /*VK_MENU*/) & 0x8000) != 0) mods |= KeyChord.ModAlt;
         if ((Native.GetAsyncKeyState(0x10 /*VK_SHIFT*/) & 0x8000) != 0) mods |= KeyChord.ModShift;
+
+        int vk = wParam.ToInt32();
+        // 使用说明层优先：打开时 Esc/F1 关闭、左右切页，其它键也不许落到画布。
+        // 关闭时 F1 打开；只在批注键盘模式收到（和 Ctrl+P/I/L 同一入口）。
+        if (Ui != null && Ui.HandleHelpKey(vk)) return true;
+        if (!isRepeat && vk == 0x70 /*F1*/ && mods == 0)
+        {
+            Ui?.ToggleHelp();
+            _dirty = true;
+            return true;
+        }
 
         var chord = new KeyChord(mods, (uint)wParam.ToInt32());
 

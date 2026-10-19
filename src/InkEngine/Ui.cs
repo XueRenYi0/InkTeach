@@ -99,6 +99,18 @@ public interface IOverlayUi
 
     /// <summary>引擎状态变化（工具/颜色/粗细/撤销深度等），界面据此刷新显示。</summary>
     void OnStateChanged(in UiState state);
+
+    /// <summary>
+    /// F1 打开/关闭界面自己的使用说明。默认空实现，只有带帮助层的界面需要覆写。
+    /// 放在接口上是为了让引擎能把 F1 转给界面，而不需要认识 InkUi 的具体类型。
+    /// </summary>
+    void ToggleHelp() { }
+
+    /// <summary>
+    /// 使用说明打开时优先吃掉键盘（Esc/F1 关闭、左右切页；其它键也不许落到画布）。
+    /// 返回 true = 这个按键已被说明层消费。默认 false。
+    /// </summary>
+    bool HandleHelpKey(int vk) => false;
 }
 
 /// <summary>引擎提供给界面的能力。</summary>
@@ -389,14 +401,6 @@ public interface IEngineCommands
 
     /// <summary>「设置 → 书写 → 墨迹预测」：自绘预测尾总开关（2026-10-09 加；**默认关**，2026-10-16 用户定）。</summary>
     void SetPredict(bool on);
-
-    /// <summary>
-    /// 「设置 → 墨迹 → 湿墨档位」（2026-10-13 加；**2026-10-15 精简为两档**——应用湿墨层撤除）：
-    /// 定到某一档（0..1）。0 = 原路径（默认）/ 1 = +系统委托轨迹（**有就用、没有退回软件自绘**）。
-    /// **只加不减**：任何一档主交换链自绘都照旧。
-    /// 引擎是权威：它落盘（设置里的 "wetmode"）、打日志，界面只显示 <see cref="UiState.WetMode"/>。
-    /// </summary>
-    void SetWetMode(int mode);
 
     /// <summary>
     /// **触摸手势总开关**（「更多 → 设置 → 书写 → 触摸手势」，2026-10-05 加，用户点名要的"保险丝"）。
@@ -984,9 +988,8 @@ public readonly struct UiState
     /// <summary>「墨迹预测」（自绘预测尾）总开关的状态（默认关，2026-10-16 起）。</summary>
     public bool PredictTailOn { get; init; }
     /// <summary>
-    /// **湿墨档位**（「设置 → 墨迹 → 湿墨档位」，2026-10-13 加）：
-    /// 0 = 原路径（默认）/ 1 = +系统委托轨迹 / 2 = +应用湿墨层 / 3 = 全开。
-    /// 界面拿它显示当前档；档位之间的**切换命令**见 <see cref="IEngineCommands.SetWetMode"/>。
+    /// **湿墨档位**（内部/命令行保留）：0 = 原路径 / 1 = 系统委托轨迹。
+    /// 2026-10-19 起设置页和快捷键不再暴露它；默认使用系统轨迹，失败回软件自绘。
     /// </summary>
     public int WetMode { get; init; }
 

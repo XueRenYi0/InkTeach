@@ -15,13 +15,12 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
-> **Latest 9.2.6 (2026-10-19)**: the whiteboard’s bottom page bar is now board-specific — page
-> jump, play this screen, clear the whole board slot (two-step confirm), and exit the board, sharing
-> one page/camera state with the colour-band arrows. Clearing touches only the board, returns to
-> page 1 and stays undoable; PPT remote paging and slideshow exit no longer interrupt the board,
-> and closing the board returns to the current PPT slide. PDF/image backgrounds stay frozen at the
-> opening page. The page-boundary line is no longer drawn, while page height and paging remain.
-> The 9.2.5 stopwatch work and 9.2.4 board/copy/Backspace work are retained.
+> **Latest 9.2.7 (2026-10-19)**: the built-in guide is now a third page inside **More**, sharing
+> the same layout, DPI scaling and hit-testing as **Settings** — it stays centred at 200% scaling.
+> Its three tabs cover quick start, gestures and shortcuts, with shortcut rows read live from the
+> current key map. The wet-ink level shortcut/setting was removed; `PageUp / PageDown` now pages the
+> active surface (whiteboard / PPT / document), while PPT still also accepts `← / →`. The 9.2.6
+> board page bar / independent PPT background and 9.2.5 stopwatch work are retained.
 
 **Requirements**: Windows 10 / 11 x64, **no .NET install needed** (self-contained).
 PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else works without.
@@ -32,7 +31,7 @@ PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else
 
 ## Quick start
 
-1. Download `InkTeach-Setup-9.2.6.exe`, double-click, Next, Done — or unzip the portable build.
+1. Download `InkTeach-Setup-9.2.7.exe`, double-click, Next, Done — or unzip the portable build.
 2. Open PowerPoint/WPS in slideshow mode, or any app; the InkTeach toolbar sits at the bottom.
 3. Write with a pen or mouse. `Ctrl+L` = laser, `Ctrl+E` = eraser, `Ctrl+Alt+Shift+T` hands the mouse back.
 4. Hold `Ctrl+Alt+Shift+Q` and flick to a sector to switch tools without hunting for the toolbar.
@@ -348,7 +347,7 @@ approach fits, we align with it instead of reinventing it:
 
 ## Lightweight: Windows 10 / 11, no .NET
 
-- Native AOT single exe, about **11MB**; the 9.2.6 installer is **8.56MB** and the portable zip **9.27MB**.
+- Native AOT single exe, about **11MB**; the 9.2.7 installer is **8.56MB** and the portable zip **9.28MB**.
 - **No .NET install, no UAC, no administrator rights**; the portable build is unzip-and-run.
 - On 4GB classroom machines, PDF pages are cached only around the viewport and rendered in the
   background, so memory does not grow with the page count.

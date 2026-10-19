@@ -72,7 +72,6 @@ public enum KeyAction
     /// <summary>湿墨档位循环（0→1→2→3→0，2026-10-13 新增，用户要求"档位式切换"）：
     /// 原路径 / +系统委托轨迹 / +应用湿墨层 / 全开。**全局键**——试档位时前台可能是
     /// PPT / 视频，也要能切。</summary>
-    CycleWetMode,
     CycleWidth,
 
     // —— 批注内（编辑类）——
@@ -371,7 +370,6 @@ internal sealed class KeyMap
         KeyAction.Copy => "复制选中",
         KeyAction.Clear => "清除全部墨迹",
         KeyAction.ToggleHud => "性能面板开关",
-        KeyAction.CycleWetMode => "湿墨档位切换",
         KeyAction.CycleWidth => "切换当前工具粗细",
         KeyAction.ToggleKeyboardMode => "批注键盘模式开关",
         KeyAction.ToggleBoard => "白板开关",
@@ -436,9 +434,6 @@ internal sealed class KeyMap
     {
         KeyAction.TogglePassThrough, KeyAction.ToggleKeyboardMode, KeyAction.RadialPalette,
         KeyAction.Quit,
-        // 湿墨档位（2026-10-13）：试档位时前台可能是别的程序，必须是全局键。
-        // 用 `Ctrl+Alt+Shift+W`——三层修饰，和现有三条（T/X/Q）不撞，也不占单层组合。
-        KeyAction.CycleWetMode,
     };
 
     /// <summary>自检用：全局作用域允许出现哪些动作（见上面的说明）。</summary>
@@ -479,10 +474,6 @@ internal sealed class KeyMap
         // ⚠ 全局热键只送按下（WM_HOTKEY）、没有松手消息，松手靠 PumpRadialPalette 轮询。
         m.Add(G, KeyAction.RadialPalette, "Ctrl+Alt+Shift+Q",
               "呼出盘：按住 → 划向扇区 → 松手（笔/黑/红/蓝/荧光笔/橡皮/框选/激光）");
-        // 湿墨档位循环（2026-10-13）：0 原路径 → 1 系统委托轨迹 → 2 应用湿墨层 → 3 全开。
-        // **只加不减**：任何一档主交换链自绘都照旧，关档（回到 0）与改动前逐字一致。
-        m.Add(G, KeyAction.CycleWetMode, "Ctrl+Alt+Shift+W",
-              "湿墨档位 0→1→2→3 循环（原路径 / +系统轨迹 / +应用湿墨层 / 全开）");
         // （预测算法切换 `Ctrl+Alt+Shift+P`：2026-10-14 加、2026-10-15 随预测收口撤除——
         //   只留 v6 一份，没有可切的了。详见 `调研/已停用-预测算法收口.md`。）
 
@@ -517,8 +508,8 @@ internal sealed class KeyMap
         // 白板翻页。**故意只放批注内**：注册成全局热键会把 PPT / PDF / 浏览器
         // 的 PageUp / PageDown 全抢走——那正是"绝不能全局注册编辑类键"的同一条理由。
         // 教室里没键盘的老师走面板上带那两个按钮（见 InkUi.FullUi）。
-        m.Add(A, KeyAction.FlipPageUp, "PageUp", "白板翻到上一屏（已经在最上面就不动）");
-        m.Add(A, KeyAction.FlipPageDown, "PageDown", "白板翻到下一屏（下面永远还有一屏空白）");
+        m.Add(A, KeyAction.FlipPageUp, "PageUp", "白板 / 文档翻上一屏；PPT 翻上一页");
+        m.Add(A, KeyAction.FlipPageDown, "PageDown", "白板 / 文档翻下一屏；PPT 翻下一页");
 
         // ---- 应用内：2026-09-19 从全局**降下来**的那一批 ----
         //

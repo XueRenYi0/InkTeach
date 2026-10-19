@@ -14,7 +14,7 @@ namespace InkUi;
 ///
 /// 它只认引擎的三个接口：画自己、解释点击、改状态走命令。
 /// </summary>
-public sealed class FullUi : IOverlayUi
+public sealed partial class FullUi : IOverlayUi
 {
     // ---- 性能归因开关（开发期）--------------------------------------------
     //
@@ -239,7 +239,7 @@ public sealed class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按三列里的布局走**：
     /// 外观（4）/ 书写（5）/ 墨迹（3）三列并排——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, WetMode, RestoreInk, PptAutoSave, HistoryDays }
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, RestoreInk, PptAutoSave, HistoryDays }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -273,13 +273,6 @@ public sealed class FullUi : IOverlayUi
         // 唯一算法 = 线性预测（Chromium 同族），只剩这一个开关）。
         // 链路：行表 → ActivateRow → IsOn → SavePrefs（"开过"才写 "1"）。
         (Row.Predict, "墨迹预测", false, false, "开了让墨尾更跟手一点；默认关，想跟手就在这里打开"),
-        // 湿墨档位（2026-10-13 加，用户点名要"在设置里能看到到了哪一档"）：
-        // **点一下换一档**（和「界面大小」同一个手感，到顶回头），右侧显示当前档。
-        // 判据/落盘都在引擎（见 Engine.SetWetModeFromUi）；界面只显示 Host.State.WetMode。
-        // 四档：0 原路径（默认，什么都不加）/ 1 +系统委托轨迹 / 2 +应用湿墨层 / 3 全开。
-        (Row.WetMode, "湿墨档位", false, false,
-         "点一下换一档：0 原路径（默认）/ 1 +系统委托轨迹（推荐）。"
-         + "系统轨迹只在 Win11 24H2 以上启用（代码里卡住，更低系统全走软件自绘）；关回 0 与原来完全一样"),
         // 墨迹三条偏好（原本在「墨迹」页，2026-10-02 启动器改版后搬进设置子页）。
         (Row.RestoreInk, "自动恢复上次板书", false, false, "下次启动接上这次的板书"),
         // ⚠ 名称 2026-10-10 改：这个开关**不只管 PPT**——文档（PDF/图片）批注的按页
@@ -2262,15 +2255,6 @@ public sealed class FullUi : IOverlayUi
                 SavePrefs();
                 break;
 
-            // 湿墨档位（2026-10-13 加）：点一下换一档（0→1→2→3→0）。
-            // 引擎是权威：它立刻生效 + 落盘（设置里的 "wetmode"），界面下一帧从
-            // `Host.State.WetMode` 读回来显示——界面**自己不记档**（避免两份状态）。
-            // 湿墨档位（2026-10-13 加；2026-10-15 精简为两档：0 原路径 ⇄ 1 系统轨迹）：
-            // 点一下换一档（与 CycleWetMode 同一规则），引擎落盘。
-            case Row.WetMode:
-                _host.Commands.SetWetMode(_host.State.WetMode == 1 ? 0 : 1);
-                break;
-
             // 墨迹预测（2026-10-09 加；2026-10-16 起默认关）：
             // 引擎是权威，界面翻转后落盘 "predict2"（开过才写 "1"）。
             case Row.Predict:
@@ -2329,7 +2313,7 @@ public sealed class FullUi : IOverlayUi
     private string _hubHint = "";         // 启动器状态行的临时提示（点置灰格/预留格时写）
 
     /// <summary>面板两页：启动器（主页）/ 设置子页。**没有页签**——底栏与返回箭头导航。</summary>
-    private enum MorePage { Home = 0, Settings = 1 }
+    private enum MorePage { Home = 0, Settings = 1, Help = 2 }
 
     // 尺度（逻辑像素）。tile 76、底栏同款；面板宽 = min(640, 55% 工作宽)。
     // 规矩见《规范-功能卡.md》§二/§3.4。
@@ -2354,7 +2338,7 @@ public sealed class FullUi : IOverlayUi
     /// </summary>
     private const int LookRowCount = 4;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小（「功能提示」2026-10-16 撤除、改常开）
     private const int WriteRowCount = 3;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测（「预测时长」2026-10-15 随毫秒调节撤除；精细笔迹、触摸手势 2026-10-09 撤开关、改常开）
-    private const int InkRowCount = 4;     // 墨迹：湿墨档位 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理（日志两行 2026-10-17 合并进「更多 → 日志」）
+    private const int InkRowCount = 3;     // 墨迹：湿墨档位 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理（日志两行 2026-10-17 合并进「更多 → 日志」）
     private const float MoreColumnGap = 16f;
     private const float MoreSwitchW = 44f;
     private const float MoreSwitchH = 26f;
@@ -2377,10 +2361,19 @@ public sealed class FullUi : IOverlayUi
     private float MoreWidth()
     {
         float workW = _work.MaxX - _work.MinX;
+        // 使用说明页要同时放两列卡片/手势/快捷键，给到接近全屏的宽度；
+        // 其余页保持原来的 640 上限。两页共用同一个居中的 MoreRect。
+        if (_morePage == MorePage.Help)
+            return Math.Clamp(workW - 32f, 620f, 1060f);
         return Math.Clamp(workW * 0.55f, 380f, 640f);
     }
 
-    private float MoreTargetH() => _morePage == MorePage.Home ? MoreHomeH() : MoreSettingsH();
+    private float MoreTargetH() => _morePage switch
+    {
+        MorePage.Home => MoreHomeH(),
+        MorePage.Settings => MoreSettingsH(),
+        _ => MoreHelpH(),
+    };
 
     /// <summary>启动器高：两组（课堂/墨迹）各若干行 tile ＋ 状态行 ＋ 底栏一行。
     /// ⚠ 每组的行数要用 <see cref="HubRows"/>（宽度决定）真实算——旧式子按
@@ -2469,7 +2462,7 @@ public sealed class FullUi : IOverlayUi
     /// 按扩展名分派；历史板书是 2026-10-14 加的找回入口）。
     /// 格子编号（`HubTileCode`）从这里算出来，**不写死 3**——加格子不会再串段。
     /// </summary>
-    private static readonly int[] HubCounts = { 3, 5 };
+    private static readonly int[] HubCounts = { 4, 5 };   // 课堂 4（使用说明紧跟随机一人），墨迹 5
 
     /// <summary>第 section 组的组头矩形。</summary>
     private RectF HubHeadRect(int section)
@@ -2494,9 +2487,14 @@ public sealed class FullUi : IOverlayUi
     /// 加一组/加一格都不用改这里）。</summary>
     private int HubTileCode(int section, int index)
     {
-        int code = 0;
-        for (int s = 0; s < section && s < HubCounts.Length; s++) code += HubCounts[s];
-        return code + index;
+        // 课堂组第 4 格是「使用说明」，但**编号故意仍用 8**：它原来没有占 3..7，
+        // 这样保存/打开/回放/关闭文档/历史板书那五格的编号和既有自检全部不变。
+        if (section == 0)
+        {
+            if (index < 3) return index;
+            return HelpTileCode;
+        }
+        return 3 + index;
     }
 
     /// <summary>当前工作区宽度下能排几列格子。**只用工作区/面板宽算**，不经过
@@ -2582,11 +2580,10 @@ public sealed class FullUi : IOverlayUi
         Row.DwellShape => SetColRow(SetColKind.Write, 0),
         Row.Pressure => SetColRow(SetColKind.Write, 1),
         Row.Predict => SetColRow(SetColKind.Write, 2),
-        Row.WetMode => SetColRow(SetColKind.Ink, 0),      // 2026-10-13 加：墨迹列第一行（最好找）
-        Row.RestoreInk => SetColRow(SetColKind.Ink, 1),
-        Row.PptAutoSave => SetColRow(SetColKind.Ink, 2),
-        Row.HistoryDays => SetColRow(SetColKind.Ink, 3),
-        _ => SetColRow(SetColKind.Ink, 3),
+        Row.RestoreInk => SetColRow(SetColKind.Ink, 0),
+        Row.PptAutoSave => SetColRow(SetColKind.Ink, 1),
+        Row.HistoryDays => SetColRow(SetColKind.Ink, 2),
+        _ => SetColRow(SetColKind.Ink, 2),
     };
 
     /// <summary>设置页下半的三列：外观 / 书写 / 墨迹（并排；序号 = 列序，`SetColX` 用它）。</summary>
@@ -2614,17 +2611,6 @@ public sealed class FullUi : IOverlayUi
         "90" => "90 天", "30" => "30 天", "7" => "7 天", _ => "永久",
     };
 
-    /// <summary>
-    /// 「湿墨档位」那一行右侧的值（短名；四档的完整解释在悬停提示里）。
-    /// 和引擎的 `WetModeName` **刻意不同**：这里要塞进窄窄的一列，用短名。
-    /// </summary>
-    /// <summary>「湿墨档位」那一行右侧的值（0 原路径 / 1 系统轨迹；2026-10-15 精简为两档）。</summary>
-    private static string WetModeShortName(int m) => m switch
-    {
-        1 => "1 系统轨迹",
-        _ => "0 原路径",
-    };
-
     // ---- 命中 ----------------------------------------------------------------
 
     private int MoreHitAt(float x, float y)
@@ -2632,7 +2618,14 @@ public sealed class FullUi : IOverlayUi
         if (!_moreOpen) return MoreHitNone;
         if (!MoreRect().Contains(x, y)) return MoreHitNone;
         if (MoreCloseRect().Contains(x, y)) return MoreHitClose;
-        if (_morePage == MorePage.Settings && MoreBackRect().Contains(x, y)) return MoreHitBack;
+        if (_morePage != MorePage.Home && MoreBackRect().Contains(x, y)) return MoreHitBack;
+
+        if (_morePage == MorePage.Help)
+        {
+            for (int i = 0; i < HelpTabCount; i++)
+                if (HelpTabRect(i).Contains(x, y)) return HelpHitTabBase + i;
+            return MoreHitInside;
+        }
 
         if (_morePage == MorePage.Home)
         {
@@ -2723,13 +2716,19 @@ public sealed class FullUi : IOverlayUi
         ctx.FillRoundedRectangle(card, Brush(ctx, _dark ? Tokens.PopoverPanelDark : Tokens.PopoverPanelLight));
         ctx.DrawRoundedRectangle(card, Brush(ctx, BorderCol), 1f);
 
-        // 标题（启动器「更多」/ 子页「设置」）＋ 返回 ＋ 关闭
-        string title = _morePage == MorePage.Home ? "更多" : "设置";
+        // 标题（启动器「更多」/ 子页「设置」「使用说明」）＋ 返回 ＋ 关闭
+        string title = _morePage switch
+        {
+            MorePage.Home => "更多",
+            MorePage.Settings => "设置",
+            _ => "使用说明",
+        };
+        bool showBack = _morePage != MorePage.Home;
         _widgets.Text(ctx, title,
-                      new RectF { MinX = MoreHeaderRect().MinX + (_morePage == MorePage.Home ? 0f : MoreCloseSize + 8f),
+                      new RectF { MinX = MoreHeaderRect().MinX + (showBack ? MoreCloseSize + 8f : 0f),
                                   MinY = MoreHeaderRect().MinY, MaxX = MoreHeaderRect().MaxX, MaxY = MoreHeaderRect().MaxY },
                       17f, Brush(ctx, InkCol), center: false);
-        if (_morePage == MorePage.Settings)
+        if (showBack)
         {
             _widgets.Text(ctx, "‹", MoreBackRect(), 24f,
                           Brush(ctx, _moreHover == MoreHitBack ? InkCol : MutedCol));
@@ -2738,7 +2737,8 @@ public sealed class FullUi : IOverlayUi
                       Brush(ctx, _moreHover == MoreHitClose ? InkCol : MutedCol));
 
         if (_morePage == MorePage.Home) DrawMoreHome(ctx);
-        else DrawMoreSettings(ctx);
+        else if (_morePage == MorePage.Settings) DrawMoreSettings(ctx);
+        else DrawHelpPage(ctx);
     }
 
     // ---- 启动器绘制 ----------------------------------------------------------
@@ -2777,6 +2777,9 @@ public sealed class FullUi : IOverlayUi
         7 => ("历史板书",
               "找回以前写在**白板**上的墨迹（自动留存，停手时写；不含截图）",
               _host != null && !_host.State.PptMode && _host.State.HistoryCount > 0, false),
+        HelpTileCode => ("使用说明",
+              "4 步上手 / 手势 / 快捷键；F1 也能打开",
+              true, false),
         _ => ("", "", false, false),
     };
 
@@ -2798,12 +2801,14 @@ public sealed class FullUi : IOverlayUi
     /// 悬停/长按由 FullUi 的提示系统补。</summary>
     private void DrawHubTile(ID2D1DeviceContext ctx, in RectF t, string label, bool enabled, bool danger, int hitCode)
     {
+        bool help = hitCode == MoreHitTile + HelpTileCode;
         var rr = new RoundedRectangle(new Vortice.RawRectF(t.MinX, t.MinY, t.MaxX, t.MaxY), 12f, 12f);
         if (_moreHover == hitCode) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
-        ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+        ctx.DrawRoundedRectangle(rr, Brush(ctx, help ? Tokens.Accent : BorderCol), help ? 1.5f : 1f);
         Color4 ink = !enabled ? new Color4(InkCol.R, InkCol.G, InkCol.B, 0.35f)
                    : danger ? new Color4(0.85f, 0.22f, 0.22f, 1f)
                    : InkCol;
+        // 只留「使用说明」四个字；蓝色的强调边框负责让它在课堂工具里一眼可见。
         _widgets.Text(ctx, label, t, 14f, Brush(ctx, ink));
     }
 
@@ -2917,7 +2922,6 @@ public sealed class FullUi : IOverlayUi
         {
             Row.HistoryDays => HistoryDaysName(_host.GetPref("historyDays")),
             Row.UiSize => UiScalePresets.Name(_host.UiScale),
-            Row.WetMode => WetModeShortName(_host.State.WetMode),
             _ => null,
         };
         float valueW = value != null ? _widgets.Measure(value, 12.5f) : 0f;
@@ -2964,6 +2968,15 @@ public sealed class FullUi : IOverlayUi
             case 7:                                   // 历史板书（2026-10-14）
                 CloseMore();
                 _host.Commands.OpenInkHistory();
+                break;
+            case HelpTileCode:                        // 使用说明（2026-10-19）
+                // 和「设置」一样留在 More 面板里换页，不另开一层——DPI、遮罩、
+                // 命中、居中都沿用 More，200% 缩放下不会再错位。
+                _morePage = MorePage.Help;
+                _moreHover = MoreHitNone;
+                _morePress = -1;
+                _moreH.To(MoreHelpH(), Tokens.MoreOpenMs);
+                Invalidate();
                 break;
         }
         Invalidate();
@@ -3021,6 +3034,7 @@ public sealed class FullUi : IOverlayUi
     {
         // 面板开着（或开合动画中）一律不平移：模态面板必须纹丝不动，
         // 而且它此刻占的就是整块屏幕——跟着贴边位移会立刻被夹回，看着会跳。
+        // 全屏模态（更多 / 使用说明页）不做贴边隐藏的平移：命中矩形和绘制都按屏幕坐标算。
         if (_moreOpen || _more.Running) return Vector2.Zero;
         if (!_hideEnabled) return Vector2.Zero;
         float t = 1f - _peek.Value;
@@ -3164,7 +3178,18 @@ public sealed class FullUi : IOverlayUi
         {
             int hit = MoreHitAt(p.X, p.Y);
             if (hit == MoreHitNone || hit == MoreHitClose) { CloseMore(); return true; }
-            if (hit == MoreHitBack) { _morePage = MorePage.Home; Invalidate(); return true; }
+            if (hit == MoreHitBack)
+            {
+                _morePage = MorePage.Home;
+                _moreHover = MoreHitNone;
+                Invalidate();
+                return true;
+            }
+            if (_morePage == MorePage.Help && hit >= HelpHitTabBase && hit < HelpHitTabBase + HelpTabCount)
+            {
+                SetHelpTab(hit - HelpHitTabBase);
+                return true;
+            }
             if (hit >= MoreHitProfile && hit < MoreHitProfile + 3)
             { SetProfile((Profile)(hit - MoreHitProfile)); return true; }
             // 区间必须**按表的长度收口**：宫格 30+1..30+12、行 60+0..60+8、启动器格子 140+0..140+5。
@@ -5531,12 +5556,9 @@ public sealed class FullUi : IOverlayUi
     /// <summary>自检用：启动器格子的矩形（按**全局编号**，各分组自动展开；越界返回空）。</summary>
     internal RectF HubTileRectForTest(int code)
     {
-        int seen = 0;
         for (int s = 0; s < HubCounts.Length; s++)
-        {
-            if (code < seen + HubCounts[s]) return HubTileRect(s, code - seen);
-            seen += HubCounts[s];
-        }
+            for (int i = 0; i < HubCounts[s]; i++)
+                if (HubTileCode(s, i) == code) return HubTileRect(s, i);
         return RectF.Empty;
     }
     internal RectF HubBottomRectForTest(int i) => HubBottomRect(i);
@@ -5560,7 +5582,7 @@ public sealed class FullUi : IOverlayUi
     /// <summary>自检/出图用：切到启动器（0）/ 设置子页（1）。</summary>
     internal void SetMorePageForTest(int i)
     {
-        _morePage = (MorePage)Math.Clamp(i, 0, 1);
+        _morePage = (MorePage)Math.Clamp(i, 0, 2);
         _moreHover = MoreHitNone;
         _moreH.Jump(MoreTargetH());
         Invalidate();

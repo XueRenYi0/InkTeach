@@ -4784,6 +4784,7 @@ internal sealed partial class App : InkEngine.InkEngine
     private void PanelShow(string path)
     {
         _panelShowMore = Environment.GetCommandLineArgs().Contains("--more");
+        bool showHelp = Environment.GetCommandLineArgs().Contains("--helpui");
         _panelShowMini = Environment.GetCommandLineArgs().Contains("--mini");
         _panelShowBand = Environment.GetCommandLineArgs().Contains("--band");
         SetUiFactory(() => new InkUi.FullUi());
@@ -4947,6 +4948,38 @@ internal sealed partial class App : InkEngine.InkEngine
                 if (pi2 >= 0 && pi2 + 1 < argvMore.Length && int.TryParse(argvMore[pi2 + 1], out int pageArg))
                     ui.SetMorePageForTest(pageArg);
             }
+            if (showHelp)
+            {
+                // 走真实入口：先开「更多」，再点「使用说明」格；顺便把“格子真的能打开”
+                // 这条路径也测到。找不到格子时才退回直开，出图不静默失败。
+                ui.OpenMoreForTest();
+                var tile = ui.HubTileRectForTest(8);
+                if (!tile.IsEmpty)
+                {
+                    var ev = new InkEngine.UiPointerEvent(
+                        (tile.MinX + tile.MaxX) * 0.5f, (tile.MinY + tile.MaxY) * 0.5f,
+                        1f, false, false);
+                    ui.PointerDown(ev);
+                    ui.PointerUp(ev);
+                }
+                if (!ui.HelpOpenForTest) ui.OpenHelpForTest();
+                var argvHelp = Environment.GetCommandLineArgs();
+                int ciHelp = Array.IndexOf(argvHelp, "--clicktab");
+                if (ciHelp >= 0 && ciHelp + 1 < argvHelp.Length
+                    && int.TryParse(argvHelp[ciHelp + 1], out int clickTab))
+                {
+                    var tr = ui.HelpTabRectForTest(clickTab);
+                    var cev = new InkEngine.UiPointerEvent(
+                        (tr.MinX + tr.MaxX) * 0.5f, (tr.MinY + tr.MaxY) * 0.5f,
+                        1f, false, false);
+                    ui.PointerDown(cev);
+                    ui.PointerUp(cev);
+                    Console.WriteLine($"  [helpui] clicktab={clickTab} open={ui.HelpOpenForTest} now={ui.HelpTabForTest}");
+                }
+                int hi = Array.IndexOf(argvHelp, "--tab");
+                if (hi >= 0 && hi + 1 < argvHelp.Length && int.TryParse(argvHelp[hi + 1], out int tabArg))
+                    ui.SetHelpTabForTest(tabArg);
+            }
             SettleFrames(500);
 
             // --timerwin [--run|--edit|--min|--full] / --rollwin [--n 3] [--names]：
@@ -5056,7 +5089,7 @@ internal sealed partial class App : InkEngine.InkEngine
             var b = ui.QueryBounds();
             // --more：面板打开时占用 = 整块屏幕，照它出图会得到一整屏（20MB 级）。
             // 设计验收要的是那块卡片 ＋ 周围一圈遮罩，所以裁到"面板 ＋ 64"。
-            if (_panelShowMore)
+            if (_panelShowMore || showHelp)
             {
                 var mr = ui.MoreRectForTest;
                 b = new RectF
