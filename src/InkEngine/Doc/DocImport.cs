@@ -514,6 +514,10 @@ public partial class InkEngine
         if (!DocView.IsOpen && _pdfDoc == null) return;
         string title = DocView.Title;
 
+        // 白板是独立槽：关文档前先退出白板，回到文档页，避免出现
+        // “BoardOn 还是 true、但 Doc.PageKey 已经不是 BoardPageKey”的混合状态。
+        if (BoardOn) SetBoardFromUi(false);
+
         SaveDocInk();                       // 关闭时兜底存一次（节流之外的那一下）
         ClearBoardFreeze();                 // 文档都关了，白板下面没有页可冻结
 

@@ -1608,14 +1608,12 @@ internal sealed partial class OverlayWindow : IDisposable
             boardOverDocTranslucent ? Brush(app.DocPaperColor) : BoardBrush(app));
         _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
 
-        // 白板模式：先画**底纹**（方格/横线），再画"页界线"（一屏一页）。
-        // 两个都是**画布内容**——固定在图上的位置、不随相机动，
-        // 所以一起烘进分块缓存：滚动、翻页、写字都不额外花钱。
-        // （半透明盖文档时，它们属于"上面那张纸"，挪到板色盖完之后再画。）
+        // 白板模式：画**底纹**（方格/横线）。页界线的一屏一页逻辑仍保留在
+        // PageHeightCanvas / 翻页 / 页码里，但**视觉上不再绘制**——它和底纹
+        // 混在一起会让老师写字时分心；这里只去掉“看得见的那条线”。
         if (app.BoardOn && !boardOverDocTranslucent)
         {
             DrawBoardPattern(app, canvas);
-            DrawPageLines(app, canvas);
         }
 
         // 文档页层：**在底纹之上、笔迹之下**。页图是内容层的一部分，
@@ -1627,7 +1625,6 @@ internal sealed partial class OverlayWindow : IDisposable
         {
             _ctx.FillRectangle(clearRect, BoardBrush(app));
             DrawBoardPattern(app, canvas);
-            DrawPageLines(app, canvas);
         }
 
         // 空间索引按**带笔宽外扩**的框返回候选，所以跨在块边界上的粗笔画
@@ -3007,7 +3004,7 @@ internal sealed partial class OverlayWindow : IDisposable
                 cur = app.PptBarRect();
                 if (app.PptPagePanelOpen) { app.PptPanelRect(out var pp); cur.Add(pp.MinX, pp.MinY); cur.Add(pp.MaxX, pp.MaxY); }
                 // 菜单和首次引导都长在条的上方（引导还比菜单窄一点，用同一个矩形兜住就够）
-                if ((app.PptMode && app.PptHintVisible) || app.PptMenuOpen)
+                if ((!app.BoardOn && app.PptMode && app.PptHintVisible) || app.PptMenuOpen)
                 { app.PptMenuRect(out var pm); cur.Add(pm.MinX, pm.MinY); cur.Add(pm.MaxX, pm.MaxY); }
                 float barPad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
                 r.Add(cur.Inflate(barPad));
@@ -5033,7 +5030,7 @@ internal sealed partial class OverlayWindow : IDisposable
         _scratch.Color = theme.TextMuted;
         _ctx.DrawText(pRest, pfmt, new Rect(pX0 + pWCur, mid.MinY, pWRest, mid.MaxY - mid.MinY), _scratch);
 
-        if (app.PptMode && app.PptHintVisible) DrawPptHint(app);
+        if (!app.BoardOn && app.PptMode && app.PptHintVisible) DrawPptHint(app);
         if (app.PptPagePanelOpen) DrawPptPagePanel(app);
         if (app.PptMenuOpen) DrawPptMenu(app);
     }
@@ -5392,7 +5389,7 @@ internal sealed partial class OverlayWindow : IDisposable
                               new Vector2(item.MaxX - 10f * dpi, y), _scratch, 1f * dpi);
             }
 
-            bool danger = InkEngine.PptMenuItemDanger(i);
+            bool danger = app.PptMenuItemDanger(i);
             bool waiting = danger && app.PptClearConfirm;       // 正在等确认：整行上强调底
             bool enabled = app.PptMenuItemEnabled(i);           // 置灰项：不亮、不高亮、点了不动
             if (enabled && (app.PptBarHover == 100 + i || waiting))

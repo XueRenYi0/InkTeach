@@ -2049,8 +2049,14 @@ public sealed class FullUi : IOverlayUi
                 var seg = BoardSegAt(i);
                 switch (seg.Kind)
                 {
-                    case BoardSegKind.PageUp: _host.Commands.FlipPage(false); break;
-                    case BoardSegKind.PageDown: _host.Commands.FlipPage(true); break;
+                    // 这一格只属于白板。板没开时不能再落到 FlipPage 的文档分支上，
+                    // 否则白板色带会把底下的 PDF / 图片翻走。
+                    case BoardSegKind.PageUp:
+                        if (_host.State.Board) _host.Commands.FlipPage(false);
+                        break;
+                    case BoardSegKind.PageDown:
+                        if (_host.State.Board) _host.Commands.FlipPage(true);
+                        break;
                     case BoardSegKind.PageLabel: break;    // 只读的一块，点它什么都不做
 
                     // 板色 / 底纹 / 间距：都是"要用板"的意思，所以都顺手把板打开
@@ -4432,7 +4438,8 @@ public sealed class FullUi : IOverlayUi
             case BoardSegKind.PageDown:
             {
                 // 这条判据**与放映状态无关**——这一格只管白板（见 ActivateSegment 的说明）。
-                bool enabled = seg.Kind == BoardSegKind.PageDown || _host.State.CanFlipPageUp;
+                bool enabled = _host.State.Board
+                               && (seg.Kind == BoardSegKind.PageDown || _host.State.CanFlipPageUp);
                 var fg = enabled ? InkCol : new Color4(InkCol.R, InkCol.G, InkCol.B, 0.30f);
                 if (hover && enabled) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
                 ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);

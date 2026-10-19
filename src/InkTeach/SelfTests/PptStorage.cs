@@ -1100,6 +1100,101 @@ internal sealed partial class App
         fake.Showing = false; fake.SlideId = 0;
         Step();
 
+        // ---- 白板独立纸 × PPT：背景翻页 / 结束放映都不打断白板 ----
+        {
+            fake.Connected = true; fake.Showing = true; fake.Slide = 1; fake.SlideId = 256;
+            Step();
+            SetBoardFromUi(true);
+            SettleFrames(150);
+            Check("白板盖 PPT：进入白板槽、页码条改白板",
+                  BoardOn && Doc.PageKey == InkDocument.BoardPageKey
+                  && PptMenuItemText(0) == "指定页码跳转"
+                  && PptMenuItemText(2) == "清空白板全部墨迹"
+                  && PptMenuItemText(3) == "退出白板",
+                  $"板开={BoardOn} slot={Doc.PageKey} 菜单={PptMenuItemText(2)} / {PptMenuItemText(3)}");
+
+            var boardMark = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                                         Color = new Color4(0f, 0f, 0f, 1f), Width = 8f };
+            boardMark.AddPoint(_virtualX + 160f, _virtualY + 160f, 1f, 0);
+            boardMark.AddPoint(_virtualX + 260f, _virtualY + 220f, 1f, 0);
+            Doc.AddStroke(boardMark);
+            SettleFrames(120);
+            Check("白板槽有墨，PPT 页仍不在当前槽", Doc.Strokes.Count == 1 && Doc.PageKey == InkDocument.BoardPageKey,
+                  $"{Doc.Strokes.Count} 笔 / slot={Doc.PageKey}");
+
+            // 清空白板必须优先走 BoardOn：从白板页码条菜单点两项确认，
+            // 不能清到 PPT 当前页，也不能关掉白板。
+            {
+                var bbar = PptBarRect();
+                float bmx = (bbar.MinX + bbar.MaxX) * 0.5f;
+                float bmy = (bbar.MinY + bbar.MaxY) * 0.5f;
+                PptBarPointerDown(bmx, bmy);
+                PptBarPointerUp(bmx, bmy);
+                Check("白板页码条：点页码开白板菜单", PptMenuOpen, $"菜单={PptMenuOpen}");
+                PptMenuItemRectAt(2, out var miClearBoard);
+                PptBarPointerDown((miClearBoard.MinX + miClearBoard.MaxX) * 0.5f,
+                                  (miClearBoard.MinY + miClearBoard.MaxY) * 0.5f);
+                Check("白板清空第一下：等确认、还没清",
+                      PptClearConfirm && PptMenuItemText(2) == "再点确认"
+                      && Doc.Strokes.Count == 1,
+                      $"等确认={PptClearConfirm} 文字={PptMenuItemText(2)} 笔={Doc.Strokes.Count}");
+                PptBarPointerDown((miClearBoard.MinX + miClearBoard.MaxX) * 0.5f,
+                                  (miClearBoard.MinY + miClearBoard.MaxY) * 0.5f);
+                SettleFrames(150);
+                Check("白板清空第二下：只清白板、PPT 保持、回第 1 屏",
+                      BoardOn && PptMode && Doc.PageKey == InkDocument.BoardPageKey
+                      && Doc.Strokes.Count == 0 && !PptMenuOpen
+                      && Math.Abs(ViewOffsetY) < 1f,
+                      $"板开={BoardOn} PPT={PptMode} slot={Doc.PageKey} 笔={Doc.Strokes.Count} cam={ViewOffsetY:F0}");
+            }
+
+            // 给后面的“白板保持”用例补一笔
+            boardMark = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                                     Color = new Color4(0f, 0f, 0f, 1f), Width = 8f };
+            boardMark.AddPoint(_virtualX + 160f, _virtualY + 160f, 1f, 0);
+            boardMark.AddPoint(_virtualX + 260f, _virtualY + 220f, 1f, 0);
+            Doc.AddStroke(boardMark);
+            SettleFrames(120);
+
+            // PPT 遥控器翻页：只更新背景和返回目标，不能把白板关掉或切走。
+            fake.Slide = 2; fake.SlideId = 257;
+            Step();
+            Check("PPT 背景翻页：白板保持、笔迹不动、返回目标更新",
+                  BoardOn && Doc.PageKey == InkDocument.BoardPageKey
+                  && PptSlide == 2 && Doc.Strokes.Count == 1,
+                  $"板开={BoardOn} slot={Doc.PageKey} PPT={PptSlide} 笔={Doc.Strokes.Count}");
+
+            SetBoardFromUi(false);
+            SettleFrames(120);
+            Check("关白板：回到当前 PPT 第 2 页，不是开板时的第 1 页",
+                  !BoardOn && Doc.PageKey == 257,
+                  $"板开={BoardOn} slot={Doc.PageKey}");
+
+            // 再开板，然后 PPT 结束：白板仍然留着；关板才回桌面。
+            SetBoardFromUi(true);
+            SettleFrames(120);
+            fake.Showing = false;
+            Step();
+            SettleFrames(120);
+            Check("PPT 结束放映：白板不自动退出",
+                  BoardOn && !PptMode && Doc.PageKey == InkDocument.BoardPageKey,
+                  $"板开={BoardOn} PPT={PptMode} slot={Doc.PageKey}");
+            // 从白板页码条菜单的「退出白板」退出：只关白板，不关 PPT / 软件。
+            var endBar = PptBarRect();
+            float endX = (endBar.MinX + endBar.MaxX) * 0.5f;
+            float endY = (endBar.MinY + endBar.MaxY) * 0.5f;
+            PptBarPointerDown(endX, endY);
+            PptBarPointerUp(endX, endY);
+            Check("PPT 结束后白板页码条还能开菜单", PptMenuOpen, $"菜单={PptMenuOpen}");
+            PptMenuItemRectAt(3, out var miExitBoard);
+            PptBarPointerDown((miExitBoard.MinX + miExitBoard.MaxX) * 0.5f,
+                              (miExitBoard.MinY + miExitBoard.MaxY) * 0.5f);
+            SettleFrames(120);
+            Check("点「退出白板」：只关白板，回桌面，不关软件/PPT",
+                  !BoardOn && Doc.PageKey == 0 && !PptMode,
+                  $"板开={BoardOn} PPT={PptMode} slot={Doc.PageKey}");
+        }
+
         Console.WriteLine();
         Console.WriteLine(fail == 0
             ? $"  PASS：PPT 模式正确（隔离 / 页内滚动 / 清除全部墨迹=所有页且可撤销 / 退出写盘 / 再进读回 / 按钮走 PPT）——共 {pass} 项"

@@ -1529,7 +1529,9 @@ public partial class InkEngine
             var vp = ViewportCanvas;
             var r = Doc.Extent(vp);
             // 文档页层也要算进画布范围，否则相机到最后一页之前就被夹住（滚不下去）。
-            if (DocView.IsOpen) r.Add(DocView.Extent());
+            // **白板是独立纸**：板开着时不能再把下面 PDF / 图片的页数算进来，
+            // 否则白板会凭空多出很多空白屏，页码也会被底层文档带偏。
+            if (!BoardOn && DocView.IsOpen) r.Add(DocView.Extent());
             r.Add(new RectF
             {
                 MinX = vp.MinX, MinY = vp.MaxY,
@@ -8251,7 +8253,14 @@ public partial class InkEngine
         if (BoardOn)
         {
             // 白板有自己的屏页相机：翻页只动白板，不碰底下 PDF / PPT 的页。
-            want = ClampOffset(down ? ViewOffsetY - _virtualH : ViewOffsetY + _virtualH);
+            // 箭头按**页顶**走，不按“当前偏移 ± 一屏”走：自由滚到半页时，
+            // 上一屏先回本页页顶，再上一屏才退到上一页。
+            int cur = Math.Max(1, ScreenIndex);
+            float curTop = _virtualY - (cur - 1) * PageHeightCanvas;
+            bool atTop = Math.Abs(ViewOffsetY - curTop) <= PageHeightCanvas * 0.10f;
+            int target = down ? cur + 1 : (atTop ? cur - 1 : cur);
+            target = Math.Max(1, target);
+            want = ClampOffset(_virtualY - (target - 1) * PageHeightCanvas);
         }
         else if (DocView.IsOpen)
         {
@@ -10054,8 +10063,13 @@ public partial class InkEngine
             case KeyAction.NudgeDownFar: Nudge(0f, 10f); break;
             case KeyAction.ScaleUp: ScaleSelection(1.1f); break;
             case KeyAction.ScaleDown: ScaleSelection(1f / 1.1f); break;
-            case KeyAction.FlipPageUp: FlipPageFromUi(false); break;
-            case KeyAction.FlipPageDown: FlipPageFromUi(true); break;
+            // PageUp / PageDown 是白板翻页键：板没开时不能落到 FlipPage 的文档分支。
+            case KeyAction.FlipPageUp:
+                if (BoardOn) FlipPageFromUi(false);
+                break;
+            case KeyAction.FlipPageDown:
+                if (BoardOn) FlipPageFromUi(true);
+                break;
             // 放映时 ←→（临时全局热键送进来的）：**有选中 → 微调；没选中 → 代 WPS/PPT 翻页**。
             // 键盘在我们手里，不拦的话 WPS 收不到 ←→，表现就是"按了没反应"（用户实测）。
             case KeyAction.PptPrev:
@@ -11047,7 +11061,23 @@ public partial class InkEngine
     internal void ClearAllInkFromUi()
     {
         ExitReplayForEdit("清除全部墨迹");
-        if (PptMode)
+
+        // **白板优先**：白板盖在文档 / PPT 上时，清空仍然只能清白板槽。
+        // 以前这里先看 PptMode / DocView，结果白板清屏会清到底下的文档或 PPT。
+        if (BoardOn)
+        {
+            int n = Doc.Strokes.Count;
+            Doc.Clear();
+            // 清完整槽后回第 1 屏；否则会停在一个已经没有内容的空屏上。
+            ViewOffsetY = 0f;
+            _pageScroll[InkDocument.BoardPageKey] = 0f;
+            _camAnimating = false;
+            _dirty = true;
+            Console.WriteLine(n > 0
+                ? $"[白板] 已清空整个白板槽（{n} 个对象；可撤销，文档/PPT 不受影响）"
+                : "[白板] 清空白板：本来就没有墨迹");
+        }
+        else if (PptMode)
         {
             ClearAllPptMarks();          // 所有页 + 连盘删；可撤销（见 ClearSlidesAction）
         }
@@ -11517,6 +11547,14 @@ public partial class InkEngine
 
         // 切槽 = 整页内容换了：回放是"当前这一页的只读重演"，先收掉（同 Ppt.GotoPage 的"翻页"）。
         ExitReplayForEdit("切白板");
+
+        // 白板菜单和文档/PPT 菜单共用页码条；无论开还是关，都先把上一套
+        // 菜单/页号面板/等确认收掉，避免切换后留下“看不见但吃输入”的层。
+        PptMenuOpen = false;
+        PptPagePanelOpen = false;
+        PptClearConfirm = false;
+        PptBarHover = -1;
+        CancelPptPress();
 
         if (on)
         {

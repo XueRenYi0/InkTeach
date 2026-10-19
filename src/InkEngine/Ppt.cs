@@ -342,6 +342,19 @@ public partial class InkEngine
             }
 
             int want = PageKeyOf(s);
+
+            // 白板是独立纸：PPT 遥控器翻页只更新背景页码，不切 `Doc`、不关白板、
+            // 不把白板笔迹误存成 PPT 页；关白板时再按当前 PPT 键回去。
+            if (BoardOn)
+            {
+                _boardReturnKey = want;
+                PptSlide = s.Slide;
+                PptTotal = s.Total;
+                NotifyUiStateChanged();
+                Console.WriteLine($"[PPT] 背景翻到第 {s.Slide}/{s.Total} 页（白板保持）");
+                return;
+            }
+
             if (want == Doc.PageKey)
             {
                 // 同一页，只是页码数字变了（理论上不该有，兜一下）：只更新界面数字。
@@ -406,7 +419,15 @@ public partial class InkEngine
         // 保留"每次都提示"的理由：菜单虽然改成了点一下就能看见，但老师未必会去点
         // 那个数字；一行 1.5 秒的小字最省事，也不会挡着讲课（用户要的是"一两秒钟"）。
         _pptHintUntilMs = NowMs + PptHintMs;
-        GotoPage(PageKeyOf(s));
+        if (BoardOn)
+        {
+            // 白板先开着、后来才进放映：PPT 只作为背景，不切走白板槽。
+            _boardReturnKey = PageKeyOf(s);
+        }
+        else
+        {
+            GotoPage(PageKeyOf(s));
+        }
         NotifyUiStateChanged();
         Console.WriteLine($"[PPT] 进入放映：{_pptKey}，第 {s.Slide}/{s.Total} 页");
     }
@@ -434,9 +455,20 @@ public partial class InkEngine
         SaveAllPptPages();
         PptSlide = 0;
         PptTotal = 0;
-        GotoPage(0);
+        if (BoardOn)
+        {
+            // 白板不跟着 PPT 退场；只把“关白板后回到哪里”改成桌面。
+            _boardReturnKey = 0;
+            _dirty = true;
+        }
+        else
+        {
+            GotoPage(0);
+        }
         NotifyUiStateChanged();
-        Console.WriteLine("[PPT] 退出放映，已回到桌面批注");
+        Console.WriteLine(BoardOn
+            ? "[PPT] 退出放映；白板保持不动，关白板后回桌面"
+            : "[PPT] 退出放映，已回到桌面批注");
     }
 
     /// <summary>
@@ -713,17 +745,27 @@ public partial class InkEngine
     private static readonly string[] PptMenuItems =
         { "指定页码跳转", "自动保存墨迹", "回放本页墨迹", "清除全部墨迹", "结束本次放映" };
 
+    /// <summary>
+    /// 白板打开时底部页码条的菜单。和 PPT/文档菜单共用同一个壳，但**动作完全不同**：
+    /// 页码跳转、播放本屏、清空整个白板槽、退出白板、历史板书。
+    /// </summary>
+    private static readonly string[] BoardMenuItems =
+        { "指定页码跳转", "播放本屏墨迹", "清空白板全部墨迹", "退出白板", "历史板书" };
+
     internal static int PptMenuItemCount => PptMenuItems.Length;
 
     /// <summary>菜单项之间画分隔线的位置（在第 i 项**之前**画）。[跳转] | [存/放] | [清空] | [结束]。</summary>
     internal static bool PptMenuDividerBefore(int i) => i is 1 or 3 or 4;
 
     /// <summary>这一项是危险动作吗（"墨迹清空"）——绘制据此上强调色（等确认时也用它）。</summary>
-    internal static bool PptMenuItemDanger(int i) => i == 3;
+    internal bool PptMenuItemDanger(int i) => BoardOn ? i == 2 : i == 3;
 
     /// <summary>第 i 项这一刻显示的文字（"清空"等确认时变成"再点确认"）。文档模式另有文案。</summary>
     internal string PptMenuItemText(int i)
     {
+        if (BoardOn)
+            return i == 2 && PptClearConfirm ? "再点确认" : BoardMenuItems[i];
+
         if (!PptMode && DocView.IsOpen)
         {
             return i switch
@@ -741,13 +783,30 @@ public partial class InkEngine
 
     /// <summary>第 i 项右边的状态文字（开关 = 开/关；回放 = N 笔）。其余返回 null。</summary>
     internal string PptMenuItemStatus(int i)
-        => i == 1 ? (PptAutoSaveOn ? "开" : "关")
-         : i == 2 ? $"{Doc.Strokes.Count} 笔"
-         : null;
+    {
+        if (BoardOn) return i == 1 ? $"{BoardScreenStrokeCount()} 笔" : null;
+        return i == 1 ? (PptAutoSaveOn ? "开" : "关")
+             : i == 2 ? $"{Doc.Strokes.Count} 笔"
+             : null;
+    }
+
+    /// <summary>当前白板屏（视口）里的笔数。菜单的"播放本屏"只回放这些笔，
+    /// 不能拿整个白板槽的总笔数误导老师（别的屏有字、这一屏是空的）。</summary>
+    private int BoardScreenStrokeCount()
+    {
+        if (!BoardOn) return 0;
+        var vp = ViewportCanvas;
+        int n = 0;
+        foreach (var s in Doc.Strokes)
+            if (s.PaddedBounds.Intersects(vp)) n++;
+        return n;
+    }
 
     /// <summary>这一项这一刻能不能点。"回放本页墨迹"没笔迹时**置灰**——
     /// 点是老师最自然的动作，"点了没反应"最伤人（右邻的"0 笔"顺便把原因说清）。</summary>
-    internal bool PptMenuItemEnabled(int i) => i != 2 || Doc.Strokes.Count > 0;
+    internal bool PptMenuItemEnabled(int i)
+        => BoardOn ? (i != 1 || BoardScreenStrokeCount() > 0)
+                   : (i != 2 || Doc.Strokes.Count > 0);
 
     /// <summary>虚拟桌面矩形（物理像素）。</summary>
     private RectF ScreenRectPhysical() => new()
@@ -1284,6 +1343,10 @@ public partial class InkEngine
     /// </summary>
     private void RunPptMenuItem(int index)
     {
+        // **白板优先**：白板盖在 PPT / 文档 / 桌面上时，底部页码条执行白板动作，
+        // 不能被下面的 DocView / PptMode 抢走。
+        if (BoardOn) { RunBoardBarMenuItem(index); return; }
+
         // 文档模式：同一套菜单壳，五项按文档的语义执行（见 RunDocBarMenuItem）。
         if (!PptMode && DocView.IsOpen) { RunDocBarMenuItem(index); return; }
 
@@ -1334,6 +1397,56 @@ public partial class InkEngine
         SetUiPref(PptAutoSavePref, PptAutoSaveOn ? null : "0");
         _dirty = true;
         Console.WriteLine($"[{(PptMode ? "PPT" : "文档")}] 自动保存墨迹 → {(PptAutoSaveOn ? "开" : "关")}");
+    }
+
+    /// <summary>
+    /// 白板专用菜单：0 页码 / 1 播放本屏 / 2 清空整个白板槽 / 3 退出白板 / 4 历史板书。
+    /// 所有动作只碰白板槽，不碰下面的文档 / PPT。
+    /// </summary>
+    private void RunBoardBarMenuItem(int index)
+    {
+        switch (index)
+        {
+            case 0:
+                PptMenuOpen = false;
+                PptClearConfirm = false;
+                PptPagePanelOpen = true;
+                _dirty = true;
+                Console.WriteLine($"[白板] 页号面板打开（共 {BoardPageCount} 页）");
+                return;
+            case 1:
+                PptMenuOpen = false;
+                PptClearConfirm = false;
+                _dirty = true;
+                StartReplay();                    // 只取当前视口内的白板笔迹
+                return;
+            case 2:
+                if (!PptClearConfirm)
+                {
+                    PptClearConfirm = true;
+                    _pptClearConfirmAt = NowMs;
+                    _dirty = true;
+                    Console.WriteLine("[白板] 再点一次「再点确认」才清空整个白板槽");
+                    return;
+                }
+                PptClearConfirm = false;
+                ClearAllInkFromUi();              // BoardOn 分支：只清白板槽、回第 1 屏
+                PptMenuOpen = false;
+                _dirty = true;
+                return;
+            case 3:
+                PptMenuOpen = false;
+                PptClearConfirm = false;
+                _dirty = true;
+                SetBoardFromUi(false);             // 只退出白板，不关文档/PPT/软件
+                return;
+            case 4:
+                PptMenuOpen = false;
+                PptClearConfirm = false;
+                _dirty = true;
+                OpenInkHistoryFromUi();
+                return;
+        }
     }
 
     /// <summary>

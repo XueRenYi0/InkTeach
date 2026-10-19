@@ -72,8 +72,8 @@ public partial class InkEngine
             return;
         }
 
-        // ---- ① PPT 条 / 长按菜单 / 页号面板 ----
-        if (PptMode && PptBarHover >= 0)
+        // ---- ① 页码条 / 长按菜单 / 页号面板（白板和 PPT/文档共用同一块）----
+        if ((PptMode || BoardOn) && PptBarHover >= 0)
         {
             if (PptBarHover >= 100 && PptBarHover < 100 + PptMenuItemCount)
             {
@@ -102,7 +102,8 @@ public partial class InkEngine
                 // 2026-10-02 第五轮：长按入口取消、改成"点页码 = 菜单"。这句话把
                 // "点一下会出什么"说清楚；触屏用户看进放映那张 1.5 秒引导卡，两条路一致。
                 EngineTooltipHover(12, "页码", null,
-                    "点 = 页码跳转菜单（含结束放映）", mid);
+                    BoardOn ? "点 = 白板页码菜单（跳页 / 播放 / 清空 / 退出）"
+                            : "点 = 页码跳转菜单（含结束放映）", mid);
                 return;
             }
         }
@@ -163,6 +164,18 @@ public partial class InkEngine
     /// <summary>菜单每一项的说明（六字标题之外，把"到底动了什么"说清）。</summary>
     private (string Title, string Note) PptMenuTip(int i)
     {
+        if (BoardOn)
+        {
+            return i switch
+            {
+                0 => ("指定页码跳转", "打开页号格子，点哪一屏跳哪一屏"),
+                1 => ("播放本屏墨迹", "只重演当前白板屏，不移动相机、不跨页"),
+                2 => ("清空白板全部墨迹", "清空整个白板槽，点两次才清（可撤销；不碰文档/PPT）"),
+                3 => ("退出白板", "只回到打开白板前的页面，不关文档、不结束放映"),
+                _ => ("历史板书", "打开白板墨迹的历史存档"),
+            };
+        }
+
         // 第 4 项（清除全部墨迹）的说明要**按模式说**：PPT 是整副演示，文档是整份文档
         //（2026-10-14 改名时一起修的；别的几项文案本来就通用）。
         if (i == 3)
