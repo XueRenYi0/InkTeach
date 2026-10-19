@@ -24,7 +24,7 @@ internal sealed partial class OverlayWindow
     private readonly record struct WinPal(
         Color4 Panel, Color4 Border, Color4 Ink, Color4 Muted, Color4 Soft,
         Color4 Accent, Color4 AccentInk, Color4 Track, Color4 Danger, Color4 DangerSoft,
-        Color4 RingArc, float Corner);
+        Color4 RingArc, Color4 EdgeBottom, bool Dark, float Corner);
 
     /// <summary>
     /// 按当前主题取色。两个"自己决定的"值在这里说明理由：
@@ -38,17 +38,21 @@ internal sealed partial class OverlayWindow
     ///   这条闸不能省——"跟着笔色走"好看，"看不见时间"是事故。
     /// · **Danger 不跟主题走**：红是"到点 / 关闭"的固定语义，两套主题里取同一个值，
     ///   免得深浅两档的"红"不是同一个红。
+    /// · **课堂窗面板完全不透明**：计时器 / 点名是独立功能窗，花哨桌面不该透进内容区；
+    ///   层级由 1px 边、边缘高光和投影负责，不再靠面板 alpha。
     /// </summary>
     private static WinPal PalFor(UiTheme t, Color4 penColor)
     {
         var danger = new Color4(0.86f, 0.22f, 0.25f, 1f);
         var accent = t.ActiveBg;
         var arc = Contrast(penColor, t.Panel) >= 3.0f ? penColor : accent;
+        bool dark = RelLum(t.Panel) < 0.35f;
         return new WinPal(
-            Panel: t.Panel, Border: t.PanelBorder, Ink: t.Text, Muted: t.TextMuted,
+            Panel: new Color4(t.Panel.R, t.Panel.G, t.Panel.B, 1f),
+            Border: t.PanelBorder, Ink: t.Text, Muted: t.TextMuted,
             Soft: t.Hover, Accent: accent, AccentInk: t.ActiveText, Track: t.Hover,
             Danger: danger, DangerSoft: new Color4(danger.R, danger.G, danger.B, 0.12f),
-            RingArc: arc, Corner: t.CornerRadius);
+            RingArc: arc, EdgeBottom: t.EdgeBottom, Dark: dark, Corner: t.CornerRadius);
     }
 
     /// <summary>WCAG 相对亮度对比度（1:1 ～ 21:1）；alpha 一律当不透明看。</summary>
@@ -74,8 +78,11 @@ internal sealed partial class OverlayWindow
     // =====================================================================
 
     /// <summary>
-    /// 卡片：面板底 + 1px 描边 + 圆角，下面垫主题给的投影层
+    /// 卡片：实心面板底 + 1px 描边 + 圆角，下面垫主题给的投影层
     /// （<c>UiTheme.Shadow</c>，和「更多」面板同一个来源）。
+    ///
+    /// 深色再加一道顶部极淡高光、浅色加一道底沿卷边：面板全不透明以后，
+    /// 这两条 1px 是“材质”而不是“玻璃”的来源；阴影仍由主题控制。
     /// </summary>
     private void WinCard(in RectF r, float u, in WinPal p)
     {
@@ -92,6 +99,23 @@ internal sealed partial class OverlayWindow
         _ctx.FillRoundedRectangle(box, _scratch);
         _scratch.Color = p.Border;
         _ctx.DrawRoundedRectangle(box, _scratch, MathF.Max(1f, u));
+
+        float inset = MathF.Max(rad, 2f * u);
+        if (p.Dark)
+        {
+            _scratch.Color = new Color4(1f, 1f, 1f, 0.065f);
+            _ctx.DrawLine(new Vector2(r.MinX + inset, r.MinY + 1f * u),
+                          new Vector2(r.MaxX - inset, r.MinY + 1f * u), _scratch, MathF.Max(1f, u));
+            _scratch.Color = new Color4(0f, 0f, 0f, 0.22f);
+            _ctx.DrawLine(new Vector2(r.MinX + inset, r.MaxY - 1f * u),
+                          new Vector2(r.MaxX - inset, r.MaxY - 1f * u), _scratch, MathF.Max(1f, u));
+        }
+        else if (p.EdgeBottom.A > 0.01f)
+        {
+            _scratch.Color = p.EdgeBottom;
+            _ctx.DrawLine(new Vector2(r.MinX + inset, r.MaxY - 1f * u),
+                          new Vector2(r.MaxX - inset, r.MaxY - 1f * u), _scratch, MathF.Max(1f, u));
+        }
     }
 
     /// <summary>圆角方钮（幽灵底）。窗口钮、步进钮、名片底都用它。</summary>
@@ -261,7 +285,7 @@ internal sealed partial class OverlayWindow
                     if (app.TryGetLastTimerLap(out var last))
                         DrawTimerLapStrip(last, card, lu, pal);
                     else
-                        WinText("按「计次」记录分段", TimerWin.PillRect(card, lu),
+                        WinText("按「分段」记录本段", TimerWin.PillRect(card, lu),
                                 12.5f * lu, pal.Muted, false);
                 }
             }
@@ -270,26 +294,32 @@ internal sealed partial class OverlayWindow
         }
     }
 
-    /// <summary>秒表底部按钮：跑着时 [暂停] [计次] [重置]，暂停/待机仍是两枚。</summary>
+    /// <summary>
+    /// 秒表底部只有两枚按钮：左 = 开始 / 暂停 / 继续；右 = 上下文键。
+    /// 运行中右键是「分段」，待机 / 暂停右键才是「重置」。
+    /// </summary>
     private void DrawTimerButtons(InkEngine app, in RectF card, float lu, in WinPal pal, bool finished)
     {
         bool withLap = app.TimerLapButtonVisible;
         bool running = app.TimerActive && !app.TimerPaused && !finished;
-        WinPillBtn(TimerWin.BtnRect(card, lu, TimerZone.Start, withLap), lu, pal,
+        WinPillBtn(TimerWin.BtnRect(card, lu, TimerZone.Start), lu, pal,
                    running ? "pause" : "play",
                    running ? "暂停" : finished ? "再来一次" : app.TimerActive ? "继续" : "开始",
                    pal.Accent, pal.AccentInk);
         if (withLap)
         {
-            WinPillBtn(TimerWin.BtnRect(card, lu, TimerZone.Lap, true), lu, pal, null, "计次",
+            WinPillBtn(TimerWin.BtnRect(card, lu, TimerZone.Lap), lu, pal, null, "分段",
                        pal.Soft, pal.Ink);
         }
-        bool resetOn = app.TimerActive || finished;
-        WinPillBtn(TimerWin.BtnRect(card, lu, TimerZone.Reset, withLap), lu, pal, "sync", "重置",
-                   pal.Soft, resetOn ? pal.Ink : pal.Muted);
+        else
+        {
+            bool resetOn = app.TimerActive || finished;
+            WinPillBtn(TimerWin.BtnRect(card, lu, TimerZone.Reset), lu, pal, "sync", "重置",
+                       pal.Soft, resetOn ? pal.Ink : pal.Muted);
+        }
     }
 
-    /// <summary>秒表跑着时环下面的最近一次计次；主数字始终是总时间。</summary>
+    /// <summary>秒表跑着时环下面的最近一次分段；主数字始终是总时间。</summary>
     private void DrawTimerLapStrip(in TimerLapView last, in RectF card, float lu, in WinPal pal)
     {
         var r = TimerWin.PillRect(card, lu);
@@ -354,8 +384,8 @@ internal sealed partial class OverlayWindow
                                        MaxX = left.MaxX - 22f * lu, MaxY = left.MinY + (y + 28f) * lu },
                     15f * lu, statInk, true);
         }
-        StatLine("计次", app.TimerLapCount.ToString(), 142f);
-        StatLine("分段", laps.ToString(), 178f);
+        StatLine("分段", app.TimerLapCount.ToString(), 142f);
+        StatLine("段数", laps.ToString(), 178f);
         StatLine("平均本段", avg, 214f);
         StatLine("最快", fastest, 250f);
         StatLine("最慢", slowest, 286f);
@@ -377,8 +407,8 @@ internal sealed partial class OverlayWindow
         int end = Math.Min(rows.Count, start + pageSize);
         if (rows.Count == 0)
         {
-            WinText("还没有计次", table, 15f * lu, pal.Muted, false);
-            WinText("回到计时页按「计次」记录分段", new RectF
+            WinText("还没有分段", table, 15f * lu, pal.Muted, false);
+            WinText("回到计时页按「分段」记录本段", new RectF
             {
                 MinX = table.MinX + 24f * lu, MinY = table.MinY + 196f * lu,
                 MaxX = table.MaxX - 24f * lu, MaxY = table.MaxY - 46f * lu,

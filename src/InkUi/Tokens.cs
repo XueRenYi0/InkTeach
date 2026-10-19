@@ -216,6 +216,14 @@ internal static class Tokens
     public static readonly Color4 PanelDark = new(0.125f, 0.125f, 0.125f, 0.80f);
 
     /// <summary>
+    /// 「更多」这类大浮层的近实心面板：留约 1.5% / 6% 的透光，保留一点悬浮材质感，
+    /// 但不再让背后的图标和文字影响可读性。独立功能窗（计时器 / 点名）则直接用
+    /// 主题面板的 RGB、alpha 拉满（见 ClassroomDraw.PalFor），不另存一份颜色。
+    /// </summary>
+    public static readonly Color4 PopoverPanelLight = new(0.984f, 0.984f, 0.992f, 0.985f);
+    public static readonly Color4 PopoverPanelDark = new(0.125f, 0.125f, 0.125f, 0.94f);
+
+    /// <summary>
     /// 1px 描边。**它比透明度更影响"立不立得住"**：没有这道边，圆角会糊进背景里。
     /// 浅色带冷调：纯黑描边会发脏，也容易和暖色的课件底子打架。
     /// </summary>

@@ -138,37 +138,45 @@ internal sealed partial class App
         StopTimerFromUi(); TimerTickForTest();
         Check("停止：不要帧", !TimerWantsFrame);
 
-        // ⑦.5 秒表计次：主显示始终总时间；计次不暂停；暂停出统计；继续/重置
+        // ⑦.5 秒表两键 / 分段：主显示始终总时间；分段不暂停；暂停出统计；继续/重置
         {
             OpenTimerCardFromUi();
             var sc = Card();
             float slu = TimerWin.Layout(sc, U());
             ClickRect(TimerWin.TabRect(sc, slu, 2));
-            Check("计次：待机不显示计次按钮", !TimerLapButtonVisible);
+            var rightIdle = TimerWin.BtnRect(sc, slu, TimerZone.Reset);
+            Check("两键：待机右侧是重置，不是分段",
+                  !TimerLapButtonVisible
+                  && TimerWin.ZoneAt(sc, slu, (rightIdle.MinX + rightIdle.MaxX) * 0.5f,
+                                     (rightIdle.MinY + rightIdle.MaxY) * 0.5f,
+                                     false, false, false) == TimerZone.Reset);
             ClickRect(TimerWin.BtnRect(sc, slu, TimerZone.Start));
             SettleFrames(25);
-            Check("秒表：跑着出现计次按钮", TimerLapButtonVisible,
+            Check("秒表：跑着右侧变成分段", TimerLapButtonVisible,
                   $"active={TimerActive} paused={TimerPaused}");
 
-            var lap = TimerWin.BtnRect(sc, slu, TimerZone.Lap, true);
-            Check("命中：秒表跑着有独立计次热区",
+            var lap = TimerWin.BtnRect(sc, slu, TimerZone.Lap);
+            Check("命中：秒表跑着右侧是独立分段热区",
                   TimerWin.ZoneAt(sc, slu, (lap.MinX + lap.MaxX) * 0.5f,
                                   (lap.MinY + lap.MaxY) * 0.5f,
                                   false, false, true) == TimerZone.Lap);
             SettleFrames(35);
             ClickRect(lap);
-            Check("计次 1：秒表没暂停、主显示仍是总时间",
+            Check("分段 1：秒表没暂停、主显示仍是总时间",
                   TimerLapCount == 1 && TimerActive && !TimerPaused && TimerDisplayText().Contains('.'),
                   $"{TimerDisplayText()} laps={TimerLapCount}");
             SettleFrames(35);
             ClickRect(lap);
-            Check("计次 2：再记一段、仍然跑着", TimerLapCount == 2 && TimerActive && !TimerPaused);
+            Check("分段 2：再记一段、仍然跑着", TimerLapCount == 2 && TimerActive && !TimerPaused);
 
             SettleFrames(35);   // 给尾段留一点真实运行时间，暂停统计里才会出现第 3 行
             PauseTimerFromUi(); TimerTickForTest();
             var stats = TimerLapRowsForUi();
-            Check("暂停：统计显示、尾段自动补上",
-                  TimerStatsVisible && stats.Count == 3 && stats[2].Tail,
+            Check("暂停：统计显示、右侧变回重置",
+                  TimerStatsVisible && stats.Count == 3 && stats[2].Tail
+                  && TimerWin.ZoneAt(sc, slu, (rightIdle.MinX + rightIdle.MaxX) * 0.5f,
+                                     (rightIdle.MinY + rightIdle.MaxY) * 0.5f,
+                                     false, false, false) == TimerZone.Reset,
                   $"stats={stats.Count} tail={(stats.Count > 2 && stats[2].Tail)}");
             Check("统计：本段 / 累计前后对得上",
                   stats.Count >= 2
@@ -177,11 +185,12 @@ internal sealed partial class App
                   stats.Count >= 2 ? $"{stats[0].LapMs:F0}/{stats[1].LapMs:F0}" : "无");
 
             ClickRect(TimerWin.BtnRect(sc, slu, TimerZone.Start));   // 继续
-            Check("继续：统计收起、计次保留、计时接着跑",
+            Check("继续：统计收起、分段保留、计时接着跑",
                   !TimerStatsVisible && TimerLapCount == 2 && TimerActive && !TimerPaused);
 
-            ClickRect(TimerWin.BtnRect(sc, slu, TimerZone.Reset, true));
-            Check("重置：计次清空、统计收起", TimerLapCount == 0 && !TimerStatsVisible && !TimerActive);
+            ClickRect(TimerWin.BtnRect(sc, slu, TimerZone.Start));   // 再暂停才允许重置
+            ClickRect(TimerWin.BtnRect(sc, slu, TimerZone.Reset));
+            Check("重置：分段清空、统计收起", TimerLapCount == 0 && !TimerStatsVisible && !TimerActive);
             StopTimerFromUi();
         }
 

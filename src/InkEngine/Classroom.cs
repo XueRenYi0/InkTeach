@@ -12,7 +12,7 @@ internal enum TimerZone
     Body,        // 空白：拖动窗口
     Value,       // 数字/环：倒计时待机=进"改时长"；跑/暂停=暂停/继续；到点=重开
     Start,       // 开始 / 暂停 / 继续 / 到点重开
-    Lap,         // 秒表：计次（只记录，不打断计时）
+    Lap,         // 秒表：分段（只记录，不打断计时）
     Reset,       // 重置回待机
     Minimize,    // 收成 320×150 小时钟（点数字还原）
     Fullscreen,  // 全屏
@@ -114,7 +114,7 @@ internal static class TimerWin
     private const float CapY = 478f, CapH = 26f, CapW = 700f;
     /// <summary>底部按钮行：比旧版下移 6px，和 26px 的说明行留出 8px 呼吸。</summary>
     private const float BarY = 512f, BarH = 52f;
-    private const float StartW = 176f, LapW = 128f, ResetW = 108f, BarGap = 14f;
+    private const float StartW = 176f, ResetW = 108f, BarGap = 14f;
     private const float StepW = 100f, StepH = 40f, StepGapX = 12f;
     private const float StepColW = 212f, StepColGap = 32f;
     private const float OkW = 148f, OkH = 48f;
@@ -274,8 +274,12 @@ internal static class TimerWin
 
     // ---- 底部主按钮（带文字）-------------------------------------------------
 
-    /// <param name="withLap">秒表跑着时底部多一个「计次」；它会把开始/重置整体重新居中。</param>
-    public static RectF BtnRect(in RectF card, float u, TimerZone which, bool withLap = false)
+    /// <summary>
+    /// 底部永远只有两枚按钮：左边主按钮（开始 / 暂停 / 继续），右边副按钮。
+    /// 副按钮是**上下文键**：秒表跑着 =「分段」，待机 / 暂停 =「重置」。
+    /// 这样运行中不出现重置，少一枚按钮，也不会误触清空。
+    /// </summary>
+    public static RectF BtnRect(in RectF card, float u, TimerZone which)
     {
         switch (which)
         {
@@ -283,20 +287,12 @@ internal static class TimerWin
             case TimerZone.Lap:
             case TimerZone.Reset:
             {
-                if (which == TimerZone.Lap && !withLap) return new RectF();
-                float total = (withLap
-                    ? StartW + BarGap + LapW + BarGap + ResetW
-                    : StartW + BarGap + ResetW) * u;
+                float total = (StartW + BarGap + ResetW) * u;
                 float x = CX(card) - total * 0.5f;
                 float y = card.MinY + BarY * u;
                 if (which == TimerZone.Start)
                     return new RectF { MinX = x, MinY = y, MaxX = x + StartW * u, MaxY = y + BarH * u };
-                if (which == TimerZone.Lap)
-                {
-                    x += (StartW + BarGap) * u;
-                    return new RectF { MinX = x, MinY = y, MaxX = x + LapW * u, MaxY = y + BarH * u };
-                }
-                x += (StartW + BarGap + (withLap ? LapW + BarGap : 0f)) * u;
+                x += (StartW + BarGap) * u;
                 return new RectF { MinX = x, MinY = y, MaxX = x + ResetW * u, MaxY = y + BarH * u };
             }
             case TimerZone.Minimize:
@@ -388,9 +384,9 @@ internal static class TimerWin
         }
 
         if (ValueRect(card, u).Contains(x, y)) return TimerZone.Value;
-        if (withLap && BtnRect(card, u, TimerZone.Lap, true).Contains(x, y)) return TimerZone.Lap;
-        if (BtnRect(card, u, TimerZone.Start, withLap).Contains(x, y)) return TimerZone.Start;
-        if (BtnRect(card, u, TimerZone.Reset, withLap).Contains(x, y)) return TimerZone.Reset;
+        if (BtnRect(card, u, TimerZone.Start).Contains(x, y)) return TimerZone.Start;
+        if (BtnRect(card, u, TimerZone.Reset).Contains(x, y))
+            return withLap ? TimerZone.Lap : TimerZone.Reset;
         if (BtnRect(card, u, TimerZone.Minimize).Contains(x, y)) return TimerZone.Minimize;
         if (BtnRect(card, u, TimerZone.Fullscreen).Contains(x, y)) return TimerZone.Fullscreen;
         if (BtnRect(card, u, TimerZone.Close).Contains(x, y)) return TimerZone.Close;
@@ -754,7 +750,7 @@ public partial class InkEngine
     internal int TimerSetS => _timerSetS;
     internal int TimerLapCount => _timerLapMarks.Count;
     internal int TimerLapPage => _timerLapPage;
-    /// <summary>秒表正在跑时才有「计次」；暂停/待机不显示。</summary>
+    /// <summary>秒表正在跑时右侧才是「分段」；暂停/待机右侧是「重置」。</summary>
     internal bool TimerLapButtonVisible
         => _timerKind == TimerMode.Stopwatch && _timerActive && !_timerPaused;
     /// <summary>暂停时显示统计表（只影响显示，不改暂停/继续的计时状态）。</summary>
@@ -1007,7 +1003,7 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 秒表计次：只记下当前累计时刻，不改变 Active/Paused/Accum/Anchor。
+    /// 秒表分段：只记下当前累计时刻，不改变 Active/Paused/Accum/Anchor。
     /// 主显示始终是总时间，所以这个动作不会“停一下表再接着跑”。
     /// </summary>
     internal void MarkTimerLapFromUi()
@@ -1022,7 +1018,7 @@ public partial class InkEngine
         _timerLapPage = 0;
         _dirty = true;
         NotifyUiStateChanged();
-        Console.WriteLine($"计时器：秒表计次 {_timerLapMarks.Count}"
+        Console.WriteLine($"计时器：秒表分段 {_timerLapMarks.Count}"
                           + $"（本段 {total - last:F0}ms，累计 {total:F0}ms）");
     }
 

@@ -2714,7 +2714,7 @@ public sealed class FullUi : IOverlayUi
     {
         var r = MoreRect();
         var card = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 20f, 20f);
-        ctx.FillRoundedRectangle(card, Brush(ctx, _dark ? Tokens.PanelDark : Tokens.PanelLight));
+        ctx.FillRoundedRectangle(card, Brush(ctx, _dark ? Tokens.PopoverPanelDark : Tokens.PopoverPanelLight));
         ctx.DrawRoundedRectangle(card, Brush(ctx, BorderCol), 1f);
 
         // 标题（启动器「更多」/ 子页「设置」）＋ 返回 ＋ 关闭

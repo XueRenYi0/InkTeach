@@ -4975,7 +4975,7 @@ internal sealed partial class App : InkEngine.InkEngine
                         for (int i = 0; i < 3; i++)
                         {
                             SettleFrames(420);
-                            ClickAxis(TimerWin.BtnRect(cin, lu, TimerZone.Lap, true));
+                            ClickAxis(TimerWin.BtnRect(cin, lu, TimerZone.Lap));
                         }
                         SettleFrames(220);
                     }
