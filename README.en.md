@@ -15,10 +15,9 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
-> **Latest 9.2.2 (2026-10-19)**: update checks now run silently after launch and a small red dot
-> appears on the ball / **More** when a new version is available. Axis-like targets (lines, arrows,
-> number lines) snap to their true centreline, so a sine wave no longer catches the stroke's top or
-> bottom edge instead of the X axis. The clean laser from 9.2.1 is unchanged.
+> **Latest 9.2.3 (2026-10-19)**: two sine / cosine / wave strokes now snap by their **curve
+> centreline endpoints** when joined, so the seam no longer keeps a one-stroke-width step. The update
+> red dot and axis-centreline snapping from 9.2.2, and the clean laser from 9.2.1, are unchanged.
 
 **Requirements**: Windows 10 / 11 x64, **no .NET install needed** (self-contained).
 PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else works without.
@@ -29,7 +28,7 @@ PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else
 
 ## Quick start
 
-1. Download `InkTeach-Setup-9.2.2.exe`, double-click, Next, Done — or unzip the portable build.
+1. Download `InkTeach-Setup-9.2.3.exe`, double-click, Next, Done — or unzip the portable build.
 2. Open PowerPoint/WPS in slideshow mode, or any app; the InkTeach toolbar sits at the bottom.
 3. Write with a pen or mouse. `Ctrl+L` = laser, `Ctrl+E` = eraser, `Ctrl+Alt+Shift+T` hands the mouse back.
 4. Hold `Ctrl+Alt+Shift+Q` and flick to a sector to switch tools without hunting for the toolbar.
@@ -202,13 +201,15 @@ one undo step on release), three line styles, a 4×4 palette plus HSV picking. D
 "drag out a copy" mode, and **during drag or rotation the model is not touched at all** — the preview
 is drawn on the floating layer and committed on release as a single undo step.
 
-**Object snapping (9.2.0, axis targets refined in 9.2.2)**: dragging a single shape or image aligns
-the selection frame's left / centre / right with the target's left / centre / right (and the same
-horizontally), with a soft 24px intersection gate, 5px enter / 8px exit, and `Alt` to disable
-temporarily. Since 9.2.2, axis-like targets (lines, arrows, number lines) expose only their true
-centreline, so a sine wave aligns to the X axis instead of catching the stroke's top or bottom edge.
-The target frame is never drawn; only the dragged object gets a pale-orange centre cross. Circles
-use a fine ink dot as their permanent centre mark.
+**Object snapping (9.2.0; axis targets 9.2.2; curve seams 9.2.3)**: dragging a single shape or
+image aligns the selection frame's left / centre / right with the target's left / centre / right
+(and the same horizontally), with a soft 24px intersection gate, 5px enter / 8px exit, and `Alt` to
+disable temporarily. Since 9.2.2, axis-like targets (lines, arrows, number lines) expose only their
+true centreline, so a sine wave aligns to the X axis instead of catching the stroke's top or bottom
+edge. Since 9.2.3, two sine / cosine / wave strokes snap by their curve centreline endpoints when
+joined, so the seam no longer keeps a one-stroke-width step. The target frame is never drawn; only
+the dragged object gets a pale-orange centre cross. Circles use a fine ink dot as their permanent
+centre mark.
 
 <p align="center"><img src="design/readme/03-选中与操作条.png" width="620" alt="Selection frame, action bar and colour panel"></p>
 
@@ -339,7 +340,7 @@ approach fits, we align with it instead of reinventing it:
 
 ## Lightweight: Windows 10 / 11, no .NET
 
-- Native AOT single exe, about **11MB**; the 9.2.2 installer is **8.55MB** and the portable zip **9.50MB**.
+- Native AOT single exe, about **11MB**; the 9.2.3 installer is **8.54MB** and the portable zip **9.50MB**.
 - **No .NET install, no UAC, no administrator rights**; the portable build is unzip-and-run.
 - On 4GB classroom machines, PDF pages are cached only around the viewport and rendered in the
   background, so memory does not grow with the page count.

@@ -110,6 +110,10 @@ internal sealed partial class App
             Doc.AddStroke(s);
             return s;
         }
+        Vector2 WaveStartWorld(Stroke s)
+            => Vector2.Transform(s.WaveTracedPointAt(0f), s.Transform);
+        Vector2 WaveEndWorld(Stroke s)
+            => Vector2.Transform(s.WaveTracedPointAt(1f), s.Transform);
         bool Drag(Stroke s, Vector2 from, Vector2 to)
         {
             Doc.SelectOnly(new[] { s });
@@ -174,18 +178,23 @@ internal sealed partial class App
         Check("远距离不触发左对齐", fTook && !Near(fb.MinX, farTarget.WorldInkBounds.MinX),
               $"源左边 {fb.MinX:F1}，目标左边 {farTarget.WorldInkBounds.MinX:F1}");
 
-        // ⑤ 两个正弦周期：右边对左边拼上
+        // ⑤ 两个正弦周期：右边对左边拼上。
+        // 拼缝看的是**曲线端点中心线**，不是含笔宽的外框；否则外沿相碰、
+        // 中心线还差一个笔宽，看起来就是一个小台阶（用户 2026-10-19）。
         ResetDoc();
         var sineA = AddSine(1000f, 1000f, 300f);
         var sineB = AddSine(1400f, 1000f, 300f);
         var sStart = FrameCenter(sineB);
         float gapWant = 3f * dpi;
-        float moveX = sineA.WorldInkBounds.MaxX - sineB.WorldInkBounds.MinX + gapWant;
+        float moveX = sineA.WorldInkBounds.MaxX - sineB.WorldInkBounds.MinX
+                      - sineB.Width + gapWant;
         var sEnd = sStart + new Vector2(moveX, 0f);
         bool sTook = Drag(sineB, sStart, sEnd);
-        var sb = sineB.WorldInkBounds;
-        Check("两个正弦周期拼缝", sTook && Near(sb.MinX, sineA.WorldInkBounds.MaxX),
-              $"接缝 {sineA.WorldInkBounds.MaxX:F1} / {sb.MinX:F1}");
+        var sAEnd = WaveEndWorld(sineA);
+        var sBStart = WaveStartWorld(sineB);
+        Check("两个正弦周期拼缝（中心线）",
+              sTook && Near(sAEnd.X, sBStart.X) && Near(sAEnd.Y, sBStart.Y),
+              $"接缝 A({sAEnd.X:F1},{sAEnd.Y:F1}) / B({sBStart.X:F1},{sBStart.Y:F1})");
 
         // ⑥ 细线 / 轴类目标只认中心线：正弦中线应落到 X 轴中心，
         //    而不是被笔宽造成的上沿 / 下沿先吸走（用户 2026-10-19 报的场景）。

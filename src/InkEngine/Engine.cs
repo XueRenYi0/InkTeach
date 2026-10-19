@@ -1863,6 +1863,8 @@ public partial class InkEngine
     private bool _alignSnapLatched;
     private Stroke _alignSnapTarget;
     private RectF _alignSnapTargetFrame;
+    private RectF _alignSnapTargetCurveFrame;
+    private bool _alignSnapTargetWave;
     private bool _alignSnapTargetCenterline;
     private bool _alignSnapTargetAxisCenterOnlyX;
     private bool _alignSnapTargetAxisCenterOnlyY;
@@ -1873,6 +1875,8 @@ public partial class InkEngine
     // 这样每帧只遍历少量图形/图片，不会去扫几百个汉字的墨迹框。
     private Stroke[] _alignTargets;
     private RectF[] _alignTargetFrames;
+    private RectF[] _alignTargetCurveFrames;
+    private bool[] _alignTargetWaves;
     private bool[] _alignTargetCenterlines;
     /// <summary>
     /// 轴类目标（直线 / 箭头 / 数轴）在**厚度方向**只认中心线。
@@ -1882,6 +1886,8 @@ public partial class InkEngine
     private bool[] _alignTargetAxisCenterOnlyX;
     private bool[] _alignTargetAxisCenterOnlyY;
     private bool _alignSourceCenterline;
+    private bool _alignSourceWave;
+    private RectF _alignSourceCurveFrame;
 
     // 短亮提示：吸附“刚吸住”的那一下闪一次，不写字、不常驻。
     private AlignSnapKind _alignPulseKind;
@@ -13466,6 +13472,8 @@ public partial class InkEngine
         _alignSnapLatched = false;
         _alignSnapTarget = null;
         _alignSnapTargetFrame = RectF.Empty;
+        _alignSnapTargetCurveFrame = RectF.Empty;
+        _alignSnapTargetWave = false;
         _alignSnapTargetCenterline = false;
         _alignSnapTargetAxisCenterOnlyX = false;
         _alignSnapTargetAxisCenterOnlyY = false;
@@ -13477,10 +13485,14 @@ public partial class InkEngine
     {
         _alignTargets = null;
         _alignTargetFrames = null;
+        _alignTargetCurveFrames = null;
+        _alignTargetWaves = null;
         _alignTargetCenterlines = null;
         _alignTargetAxisCenterOnlyX = null;
         _alignTargetAxisCenterOnlyY = null;
         _alignSourceCenterline = false;
+        _alignSourceWave = false;
+        _alignSourceCurveFrame = RectF.Empty;
     }
 
     /// <summary>
@@ -13493,8 +13505,12 @@ public partial class InkEngine
         if (selected == null || !selected.IsShape) return;
 
         _alignSourceCenterline = IsAxisAlignedTransform(selected.Transform);
+        _alignSourceWave = IsWaveLike(selected.Kind);
+        _alignSourceCurveFrame = _alignSourceWave ? CurveSnapFrame(selected) : RectF.Empty;
         var targets = new List<Stroke>();
         var frames = new List<RectF>();
+        var curveFrames = new List<RectF>();
+        var waves = new List<bool>();
         var centerlines = new List<bool>();
         var centerOnlyX = new List<bool>();
         var centerOnlyY = new List<bool>();
@@ -13506,6 +13522,9 @@ public partial class InkEngine
             if (b.IsEmpty) continue;
             targets.Add(s);
             frames.Add(b);
+            bool wave = IsWaveLike(s.Kind);
+            waves.Add(wave);
+            curveFrames.Add(wave ? CurveSnapFrame(s) : RectF.Empty);
             bool axisAligned = IsAxisAlignedTransform(s.Transform);
             centerlines.Add(axisAligned);
 
@@ -13522,6 +13541,8 @@ public partial class InkEngine
         }
         _alignTargets = targets.ToArray();
         _alignTargetFrames = frames.ToArray();
+        _alignTargetCurveFrames = curveFrames.ToArray();
+        _alignTargetWaves = waves.ToArray();
         _alignTargetCenterlines = centerlines.ToArray();
         _alignTargetAxisCenterOnlyX = centerOnlyX.ToArray();
         _alignTargetAxisCenterOnlyY = centerOnlyY.ToArray();
@@ -13545,6 +13566,32 @@ public partial class InkEngine
         var p1 = Vector2.Transform(new Vector2(s.Points[^1].X, s.Points[^1].Y), s.Transform);
         float dx = MathF.Abs(p1.X - p0.X), dy = MathF.Abs(p1.Y - p0.Y);
         return dy > 1e-3f && dx <= MathF.Max(1f, dy * 0.05f);
+    }
+
+    /// <summary>
+    /// 正弦 / 余弦 / 波浪线是“有中心线的开放曲线”。两块这类图形拼接时，
+    /// 要用**曲线中心线框**，不能用含笔宽的墨迹外框；否则外沿碰上了，中心线
+    /// 还差一个笔宽（用户 2026-10-19 报的两个正弦接缝）。
+    /// 这里只开这三类，闭合图形 / 图片仍走墨迹外框。
+    /// </summary>
+    private static bool IsWaveLike(StrokeKind kind)
+        => kind is StrokeKind.Sine or StrokeKind.Cosine or StrokeKind.Wave;
+
+    /// <summary>曲线中心线框（画布坐标，不含笔宽）。</summary>
+    private static RectF CurveSnapFrame(Stroke s)
+    {
+        var b = s.CurveBoxLocal();
+        if (b.IsEmpty) return b;
+        var m = s.Transform;
+        if (m.IsIdentity) return b;
+
+        var r = RectF.Empty;
+        void Add(Vector2 p) => r.Add(p.X, p.Y);
+        Add(Vector2.Transform(new Vector2(b.MinX, b.MinY), m));
+        Add(Vector2.Transform(new Vector2(b.MaxX, b.MinY), m));
+        Add(Vector2.Transform(new Vector2(b.MaxX, b.MaxY), m));
+        Add(Vector2.Transform(new Vector2(b.MinX, b.MaxY), m));
+        return r;
     }
 
     /// <summary>中心线只对未旋转的图形有意义；旋转过的框不是图形自身的对称轴。</summary>
@@ -13711,15 +13758,18 @@ public partial class InkEngine
     }
 
     /// <summary>找最近的、在 5px 内有候选的目标框；一个手势只跟一个目标框。</summary>
-    private bool TryFindAlignTarget(in RectF a, float tolerance, float proximity,
+    private bool TryFindAlignTarget(in RectF a, in RectF aCurve, float tolerance, float proximity,
                                     bool sourceCenterline,
                                     out Stroke target, out RectF targetFrame,
+                                    out RectF targetCurveFrame, out bool targetWave,
                                     out bool targetCenterline,
                                     out bool targetCenterOnlyX, out bool targetCenterOnlyY,
                                     out AlignAxisCandidate? x, out AlignAxisCandidate? y)
     {
         target = null;
         targetFrame = RectF.Empty;
+        targetCurveFrame = RectF.Empty;
+        targetWave = false;
         targetCenterline = false;
         targetCenterOnlyX = false;
         targetCenterOnlyY = false;
@@ -13730,11 +13780,15 @@ public partial class InkEngine
 
         for (int i = 0; i < _alignTargets.Length; i++)
         {
+            bool useCurveFrame = _alignSourceWave && _alignTargetWaves[i] && !aCurve.IsEmpty
+                                 && !_alignTargetCurveFrames[i].IsEmpty;
+            var aa = useCurveFrame ? aCurve : a;
+            var bb = useCurveFrame ? _alignTargetCurveFrames[i] : _alignTargetFrames[i];
             bool allowCenterline = sourceCenterline && _alignTargetCenterlines[i];
             bool centerOnlyX = allowCenterline && _alignTargetAxisCenterOnlyX[i];
             bool centerOnlyY = allowCenterline && _alignTargetAxisCenterOnlyY[i];
-            var bx = BestX(a, _alignTargetFrames[i], tolerance, proximity, allowCenterline, centerOnlyX);
-            var by = BestY(a, _alignTargetFrames[i], tolerance, proximity, allowCenterline, centerOnlyY);
+            var bx = BestX(aa, bb, tolerance, proximity, allowCenterline, centerOnlyX);
+            var by = BestY(aa, bb, tolerance, proximity, allowCenterline, centerOnlyY);
             if (!bx.HasValue && !by.HasValue) continue;
 
             float sxc = bx.HasValue ? MathF.Abs(bx.Value.Delta) : float.MaxValue;
@@ -13751,6 +13805,8 @@ public partial class InkEngine
             bestPriority = prio;
             target = _alignTargets[i];
             targetFrame = _alignTargetFrames[i];
+            targetCurveFrame = _alignTargetCurveFrames[i];
+            targetWave = useCurveFrame;
             targetCenterline = allowCenterline;
             targetCenterOnlyX = centerOnlyX;
             targetCenterOnlyY = centerOnlyY;
@@ -13841,14 +13897,22 @@ public partial class InkEngine
             return Matrix3x2.CreateTranslation(raw);
         }
 
-        var a = s.WorldInkBounds;
-        if (a.IsEmpty)
+        var aInk = s.WorldInkBounds;
+        if (aInk.IsEmpty)
         {
             ResetAlignSnapLatch();
             return Matrix3x2.CreateTranslation(raw);
         }
-        a.MinX += raw.X; a.MaxX += raw.X;
-        a.MinY += raw.Y; a.MaxY += raw.Y;
+        aInk.MinX += raw.X; aInk.MaxX += raw.X;
+        aInk.MinY += raw.Y; aInk.MaxY += raw.Y;
+
+        var aCurve = _alignSourceWave ? _alignSourceCurveFrame : RectF.Empty;
+        if (!aCurve.IsEmpty)
+        {
+            aCurve.MinX += raw.X; aCurve.MaxX += raw.X;
+            aCurve.MinY += raw.Y; aCurve.MaxY += raw.Y;
+        }
+        var a = aInk;
 
         var oldTarget = _alignSnapTarget;
         bool hadX = _alignSnapX.HasValue;
@@ -13866,23 +13930,28 @@ public partial class InkEngine
                 bool allowCenterline = _alignSourceCenterline && _alignSnapTargetCenterline;
                 bool centerOnlyX = allowCenterline && _alignSnapTargetAxisCenterOnlyX;
                 bool centerOnlyY = allowCenterline && _alignSnapTargetAxisCenterOnlyY;
+                bool curvePair = _alignSnapTargetWave && _alignSourceWave && !aCurve.IsEmpty
+                                 && !_alignSnapTargetCurveFrame.IsEmpty;
+                var af = curvePair ? aCurve : aInk;
+                var bf = curvePair ? _alignSnapTargetCurveFrame : _alignSnapTargetFrame;
+                a = af;
                 x = _alignSnapX.HasValue
                     ? CandidateForRoles(_alignSnapX.Value.SourceRole,
                                         _alignSnapX.Value.TargetRole,
-                                        xAxis: true, a, _alignSnapTargetFrame,
+                                        xAxis: true, af, bf,
                                         releaseTol, proximity, allowCenterline, centerOnlyX)
                     : null;
                 y = _alignSnapY.HasValue
                     ? CandidateForRoles(_alignSnapY.Value.SourceRole,
                                         _alignSnapY.Value.TargetRole,
-                                        xAxis: false, a, _alignSnapTargetFrame,
+                                        xAxis: false, af, bf,
                                         releaseTol, proximity, allowCenterline, centerOnlyY)
                     : null;
 
                 // 原来只有一条轴吸住时，另一条轴后来进入范围也可以补上。
                 // 仍然只在同一个目标框上补，不换目标。
-                if (!x.HasValue) x = BestX(a, _alignSnapTargetFrame, enterTol, proximity, allowCenterline, centerOnlyX);
-                if (!y.HasValue) y = BestY(a, _alignSnapTargetFrame, enterTol, proximity, allowCenterline, centerOnlyY);
+                if (!x.HasValue) x = BestX(af, bf, enterTol, proximity, allowCenterline, centerOnlyX);
+                if (!y.HasValue) y = BestY(af, bf, enterTol, proximity, allowCenterline, centerOnlyY);
             }
             if (!alive || (!x.HasValue && !y.HasValue))
             {
@@ -13899,19 +13968,24 @@ public partial class InkEngine
 
         // 没吸住：找最近目标框（5px 内）。
         if (!_alignSnapLatched
-            && TryFindAlignTarget(a, enterTol, proximity, _alignSourceCenterline,
-                                  out var target, out var targetFrame, out var targetCenterline,
+            && TryFindAlignTarget(aInk, aCurve, enterTol, proximity, _alignSourceCenterline,
+                                  out var target, out var targetFrame,
+                                  out var targetCurveFrame, out var targetWave,
+                                  out var targetCenterline,
                                   out var targetCenterOnlyX, out var targetCenterOnlyY,
                                   out x, out y))
         {
             _alignSnapTarget = target;
             _alignSnapTargetFrame = targetFrame;
+            _alignSnapTargetCurveFrame = targetCurveFrame;
+            _alignSnapTargetWave = targetWave;
             _alignSnapTargetCenterline = targetCenterline;
             _alignSnapTargetAxisCenterOnlyX = targetCenterOnlyX;
             _alignSnapTargetAxisCenterOnlyY = targetCenterOnlyY;
             _alignSnapX = x;
             _alignSnapY = y;
             _alignSnapLatched = true;
+            if (targetWave && !aCurve.IsEmpty) a = aCurve;
         }
 
         if (!_alignSnapLatched) return Matrix3x2.CreateTranslation(raw);
