@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>InkTeach 9.2.4 · PPT 上写板书，画函数图像 / 双曲线 / 立体几何</title>
+<title>InkTeach 9.2.5 · PPT 上写板书，画函数图像 / 双曲线 / 立体几何</title>
 <meta name="description" content="InkTeach（ink teach）是一款 Windows 数学课堂批注软件：透明覆盖层，直接在 PPT / WPS / PDF / 图片上写板书；抛物线四方向、双曲线渐近线、正弦余弦、圆柱/圆锥/球/棱柱等 22 种图形；对象吸附、激光笔、色带式设置条、贴边隐藏、全局呼出盘、PDF/图片批注、PPT 逐页隔离、深色主题。开源 GPL-3.0，Windows 10/11，安装不需要管理员权限，不需要安装 .NET。">
 <meta name="keywords" content="InkTeach,ink teach,课堂批注,数学批注,函数图像,抛物线,双曲线,立体几何,PPT批注,WPS批注,PDF批注,图片批注,对象吸附,激光笔,白板,手写批注,教学软件,电子白板,呼出盘,色带,Direct2D,分块缓存,增量渲染,低延迟手写">
 <meta name="author" content="XueRenYi0">
 <link rel="canonical" href="https://xuerenyi0.github.io/InkTeach/">
 <meta property="og:type" content="website">
-<meta property="og:title" content="InkTeach 9.2.4 · PPT 上写板书，画函数图像 / 双曲线 / 立体几何">
+<meta property="og:title" content="InkTeach 9.2.5 · PPT 上写板书，画函数图像 / 双曲线 / 立体几何">
 <meta property="og:description" content="透明覆盖层 + 函数图像 / 抛物线 / 双曲线 / 立体几何 + 三种笔 + PDF/图片批注 + 对象吸附 + 色带式设置条 + 全局呼出盘 + 22 种图形 + PPT 逐页隔离 + 深色主题。开源免费，Windows 10/11，无需安装 .NET。">
 <meta property="og:image" content="https://xuerenyi0.github.io/InkTeach/img/social-preview.png">
 <link rel="icon" type="image/png" href="img/icon.png">
@@ -28,7 +28,7 @@
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
   "license": "https://www.gnu.org/licenses/gpl-3.0.html",
   "downloadUrl": "https://gitcode.com/XueRenYI0/InkTeach/releases/download/latest/InkTeach-Setup.exe",
-  "softwareVersion": "9.2.4",
+  "softwareVersion": "9.2.5",
   "author": { "@type": "Person", "name": "XueRenYi0" },
   "codeRepository": "https://github.com/XueRenYi0/InkTeach"
 }
@@ -57,7 +57,7 @@
 <section class="hero">
   <div class="wrap">
     <img class="hero-icon" src="img/icon.png" alt="InkTeach 图标" width="84" height="84">
-    <p class="pill">最新 9.2.4 · 白板独立页 / 复制与退格</p>
+    <p class="pill">最新 9.2.5 · 秒表计次 / 分段统计</p>
     <h1>在 PPT 上，直接写板书</h1>
     <p class="lead">
       InkTeach 是一层<b>透明批注覆盖层</b>：浮在 PPT / WPS / PDF / 图片 / 任意软件之上。
@@ -70,7 +70,7 @@
       <a class="btn" href="https://github.com/XueRenYi0/InkTeach/releases/latest" target="_blank" rel="noopener">GitHub Releases</a>
       <a class="btn ghost" href="#updates">看看更新</a>
     </p>
-    <p class="note">Windows 10 / 11 · 64 位 · 免装 .NET · AOT 单 exe 约 11MB · 开源 GPL-3.0（可商业授权） · <b>9.2.4</b></p>
+    <p class="note">Windows 10 / 11 · 64 位 · 免装 .NET · AOT 单 exe 约 11MB · 开源 GPL-3.0（可商业授权） · <b>9.2.5</b></p>
     <div class="hero-shot"><img src="img/demo.gif" alt="演示：手写一个圆 → 停顿变图形 → 选中拖动 → 截图取景"></div>
     <p class="caption">手写一个歪圆 → 停住 0.4 秒自动变规整图形 → 选中拖动 → 截图取景</p>
   </div>
@@ -273,6 +273,7 @@
     <p class="note" style="margin-top:16px">
       课堂窗和工具带是<b>同一套视觉语言</b>（分段控件、方块幽灵钮、带文字的主按钮），
       深浅两套主题都有。计时器到点时<b>数字和进度环一起变红</b>，投影上远处一眼就看见。
+      秒表主显示始终是总时间，「计次」只记录本段而不打断计时，暂停后自动汇总分段成绩。
     </p>
   </div>
 </section>
@@ -367,8 +368,12 @@
 <section id="updates" class="section">
   <div class="wrap">
     <h2>最近更新</h2>
-    <p class="lead small">当前最新版 <b>9.2.4</b>。这里只放最影响课堂体验的几条，完整记录在仓库的《发版历史》。</p>
+    <p class="lead small">当前最新版 <b>9.2.5</b>。这里只放最影响课堂体验的几条，完整记录在仓库的《发版历史》。</p>
     <div class="grid">
+      <div class="card">
+        <h3>9.2.5 · 秒表计次 / 分段统计</h3>
+        <p>秒表主显示始终是总时间，跑着时按「计次」只记本段、不打断计时；暂停后列出本段 / 累计 / 平均 / 最快 / 最慢，继续保留记录，重置才清空。倒计时和正计时的冗余说明行已移除，按钮间距重新排开。</p>
+      </div>
       <div class="card">
         <h3>9.2.4 · 白板独立页 / 复制与退格</h3>
         <p>白板拥有独立页码和相机：开板冻结当前 PDF / 图片 / PPT 页，白板翻页不再把文档带回第 1 页，关板回原页。Backspace 可直接删除选中；选择条“复制”改为原件保留、副本错位选中并同时进剪贴板。</p>
@@ -401,7 +406,7 @@
 <section id="install" class="section alt">
   <div class="wrap">
     <h2>下载与安装</h2>
-    <p class="note" style="margin-bottom:12px"><b>当前版本 9.2.4</b> · AOT 单 exe，安装包 8.54MB / 绿色包 9.26MB（以实际发布件为准） · 免装 .NET · zip 与 Setup 都会在启动更新时校验 sha256。</p>
+    <p class="note" style="margin-bottom:12px"><b>当前版本 9.2.5</b> · AOT 单 exe，安装包 8.56MB / 绿色包 9.27MB（以实际发布件为准） · 免装 .NET · zip 与 Setup 都会在启动更新时校验 sha256。</p>
     <div class="grid two">
       <div class="card">
         <h3>安装包（推荐）</h3>
@@ -448,7 +453,7 @@
 
 <footer>
   <div class="wrap">
-    <p>© 2026 XueRenYi0 · InkTeach 9.2.4 · <a href="https://github.com/XueRenYi0/InkTeach/releases" target="_blank" rel="noopener">更新日志</a> ·
+    <p>© 2026 XueRenYi0 · InkTeach 9.2.5 · <a href="https://github.com/XueRenYi0/InkTeach/releases" target="_blank" rel="noopener">更新日志</a> ·
     <a href="https://github.com/XueRenYi0/InkTeach/blob/main/README.md" target="_blank" rel="noopener">文档</a></p>
     <p class="en">InkTeach — a transparent annotation overlay for Windows classrooms. Colour-rail toolbar, dock-away handle, global radial palette, 22 shapes, per-slide PowerPoint isolation, dark theme. Free &amp; open source (GPL-3.0).</p>
   </div>

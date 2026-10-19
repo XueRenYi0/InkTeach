@@ -15,11 +15,11 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
-> **Latest 9.2.4 (2026-10-19)**: the whiteboard now has its own page state, independent from the
-> underlying PDF / image / PPT page; opening the board freezes the current page, and board paging no
-> longer moves the document. `Backspace` deletes the selection, and the selection-bar Copy button now
-> keeps the original, creates a 24px-offset selected copy and writes both to the clipboard. The
-> curve-seam fix from 9.2.3 and update/axis improvements from 9.2.2 are retained.
+> **Latest 9.2.5 (2026-10-19)**: the stopwatch now has professional lap timing — the main display
+> always shows total time, and **Lap** records a split without stopping it. Pausing shows per-lap,
+> cumulative, average, fastest and slowest times; Continue keeps the records and Reset clears them.
+> The redundant countdown/elapsed captions were removed and the action row no longer overlaps them.
+> The 9.2.4 whiteboard/copy/Backspace work and the 9.2.3 curve-seam fix are retained.
 
 **Requirements**: Windows 10 / 11 x64, **no .NET install needed** (self-contained).
 PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else works without.
@@ -30,7 +30,7 @@ PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else
 
 ## Quick start
 
-1. Download `InkTeach-Setup-9.2.4.exe`, double-click, Next, Done — or unzip the portable build.
+1. Download `InkTeach-Setup-9.2.5.exe`, double-click, Next, Done — or unzip the portable build.
 2. Open PowerPoint/WPS in slideshow mode, or any app; the InkTeach toolbar sits at the bottom.
 3. Write with a pen or mouse. `Ctrl+L` = laser, `Ctrl+E` = eraser, `Ctrl+Alt+Shift+T` hands the mouse back.
 4. Hold `Ctrl+Alt+Shift+Q` and flick to a sector to switch tools without hunting for the toolbar.
@@ -238,6 +238,9 @@ centre mark.
   language, in both themes. The timer keeps three independent modes (switching tabs doesn't stop a
   running one, it rings at zero), collapses to a 320×150 clock, and can go truly fullscreen; at zero
   the **digits and the progress ring turn red together**, readable from the back of the room.
+  The stopwatch always shows total time; **Lap** records a split without stopping it, and pausing
+  shows per-lap, cumulative, average, fastest and slowest times. Continue keeps the records;
+  Reset clears them.
   The picker never repeats anyone (and resets when exhausted); the roster lives in
   `%APPDATA%\InkTeach\Names.txt`, and with no roster it can pick student numbers `1–N` directly.
 
@@ -343,7 +346,7 @@ approach fits, we align with it instead of reinventing it:
 
 ## Lightweight: Windows 10 / 11, no .NET
 
-- Native AOT single exe, about **11MB**; the 9.2.4 installer is **8.54MB** and the portable zip **9.26MB**.
+- Native AOT single exe, about **11MB**; the 9.2.5 installer is **8.56MB** and the portable zip **9.27MB**.
 - **No .NET install, no UAC, no administrator rights**; the portable build is unzip-and-run.
 - On 4GB classroom machines, PDF pages are cached only around the viewport and rendered in the
   background, so memory does not grow with the page count.

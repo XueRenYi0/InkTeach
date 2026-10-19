@@ -132,16 +132,6 @@ internal sealed partial class OverlayWindow
         WinText(name, r, size, p.AccentInk, true);
     }
 
-    /// <summary>一行"图标 + 文字"（环下面那行说明用）。</summary>
-    private void WinIconText(string glyph, in RectF r, float u, string text, Color4 ink)
-    {
-        float w = (text.Length * 13f + 30f) * u;
-        float x = MidX(r) - w * 0.5f;
-        WinGlyph(glyph, x + 8f * u, MidY(r), 14f * u, ink, u);
-        WinText(text, new RectF { MinX = x + 20f * u, MinY = r.MinY, MaxX = x + w, MaxY = r.MaxY },
-                14f * u, ink, false);
-    }
-
     // =====================================================================
     //  计时窗
     // =====================================================================
@@ -251,32 +241,201 @@ internal sealed partial class OverlayWindow
         }
         else
         {
-            // 环 + 压在上面的大字
-            WinRing(TimerWin.CX(card), TimerWin.RingCY(card, lu), TimerWin.RingR(lu),
-                    TimerWin.RingTh(lu), app.TimerRingFraction(),
-                    finished ? pal.Danger : pal.RingArc, pal.Track);
-            WinText(app.TimerDisplayText(), TimerWin.ValueRect(card, lu), 76f * lu, bigInk, true);
+            if (app.TimerStatsVisible)
+            {
+                DrawTimerStats(app, card, lu, pal);
+            }
+            else
+            {
+                // 环 + 压在上面的大字。倒计时/正计时不再显示“预计到点 / 正在计时”：
+                // 环和按钮已经说明状态，旧说明行还会和按钮压在一起（2026-10-19 用户报）。
+                WinRing(TimerWin.CX(card), TimerWin.RingCY(card, lu), TimerWin.RingR(lu),
+                        TimerWin.RingTh(lu), app.TimerRingFraction(),
+                        finished ? pal.Danger : pal.RingArc, pal.Track);
+                WinText(app.TimerDisplayText(), TimerWin.ValueRect(card, lu), 76f * lu, bigInk, true);
 
-            // 环下面一行**纯文字**（原来是个灰药丸——那是 InkClass 的签名形状）
-            if (app.TimerKind == TimerMode.Countdown && app.TimerActive && !finished)
-                WinIconText("clock", TimerWin.PillRect(card, lu), lu, app.TimerEndText(), pal.Muted);
-            else if (app.TimerKind == TimerMode.Countdown && finished)
-                WinText("时间到", TimerWin.PillRect(card, lu), 17f * lu, pal.Danger, true);
-            else if (app.TimerKind == TimerMode.Stopwatch)
-                WinText("秒表", TimerWin.PillRect(card, lu), 15f * lu, pal.Muted, false);
-            else if (app.TimerKind == TimerMode.CountUp && app.TimerActive)
-                WinIconText("clock", TimerWin.PillRect(card, lu), lu, "正在计时", pal.Muted);
+                if (app.TimerKind == TimerMode.Countdown && finished)
+                    WinText("时间到", TimerWin.PillRect(card, lu), 17f * lu, pal.Danger, true);
+                else if (app.TimerKind == TimerMode.Stopwatch && app.TimerActive && !app.TimerPaused)
+                {
+                    if (app.TryGetLastTimerLap(out var last))
+                        DrawTimerLapStrip(last, card, lu, pal);
+                    else
+                        WinText("按「计次」记录分段", TimerWin.PillRect(card, lu),
+                                12.5f * lu, pal.Muted, false);
+                }
+            }
 
-            // ---- 底排：开始 / 暂停 ＋ 重置（带文字，投影上远处也读得出来）----
-            bool running = app.TimerActive && !app.TimerPaused && !finished;
-            WinPillBtn(TimerWin.BtnRect(card, lu, TimerZone.Start), lu, pal,
-                       running ? "pause" : "play",
-                       running ? "暂停" : finished ? "再来一次" : app.TimerActive ? "继续" : "开始",
-                       pal.Accent, pal.AccentInk);
-            bool resetOn = app.TimerActive || finished;
-            WinPillBtn(TimerWin.BtnRect(card, lu, TimerZone.Reset), lu, pal, "sync", "重置",
-                       pal.Soft, resetOn ? pal.Ink : pal.Muted);
+            DrawTimerButtons(app, card, lu, pal, finished);
         }
+    }
+
+    /// <summary>秒表底部按钮：跑着时 [暂停] [计次] [重置]，暂停/待机仍是两枚。</summary>
+    private void DrawTimerButtons(InkEngine app, in RectF card, float lu, in WinPal pal, bool finished)
+    {
+        bool withLap = app.TimerLapButtonVisible;
+        bool running = app.TimerActive && !app.TimerPaused && !finished;
+        WinPillBtn(TimerWin.BtnRect(card, lu, TimerZone.Start, withLap), lu, pal,
+                   running ? "pause" : "play",
+                   running ? "暂停" : finished ? "再来一次" : app.TimerActive ? "继续" : "开始",
+                   pal.Accent, pal.AccentInk);
+        if (withLap)
+        {
+            WinPillBtn(TimerWin.BtnRect(card, lu, TimerZone.Lap, true), lu, pal, null, "计次",
+                       pal.Soft, pal.Ink);
+        }
+        bool resetOn = app.TimerActive || finished;
+        WinPillBtn(TimerWin.BtnRect(card, lu, TimerZone.Reset, withLap), lu, pal, "sync", "重置",
+                   pal.Soft, resetOn ? pal.Ink : pal.Muted);
+    }
+
+    /// <summary>秒表跑着时环下面的最近一次计次；主数字始终是总时间。</summary>
+    private void DrawTimerLapStrip(in TimerLapView last, in RectF card, float lu, in WinPal pal)
+    {
+        var r = TimerWin.PillRect(card, lu);
+        float third = (r.MaxX - r.MinX) / 3f;
+        var a = new RectF { MinX = r.MinX, MinY = r.MinY, MaxX = r.MinX + third, MaxY = r.MaxY };
+        var b = new RectF { MinX = a.MaxX, MinY = r.MinY, MaxX = a.MaxX + third, MaxY = r.MaxY };
+        var c = new RectF { MinX = b.MaxX, MinY = r.MinY, MaxX = r.MaxX, MaxY = r.MaxY };
+        WinText($"第 {last.Number} 次", a, 13f * lu, pal.Accent, true);
+        WinText("本段 " + TimerWin.Format((float)last.LapMs, TimerMode.Stopwatch),
+                b, 13.5f * lu, pal.Ink, true);
+        WinText("累计 " + TimerWin.Format((float)last.TotalMs, TimerMode.Stopwatch),
+                c, 13f * lu, pal.Muted, false);
+    }
+
+    /// <summary>秒表暂停统计：左侧总时长/平均，右侧分段表；超过一页可翻页。</summary>
+    private void DrawTimerStats(InkEngine app, in RectF card, float lu, in WinPal pal)
+    {
+        var rows = app.TimerLapRowsForUi();
+        int pageSize = TimerWin.StatsRowsPerPage;
+        int pages = Math.Max(1, (rows.Count + pageSize - 1) / pageSize);
+        int page = Math.Clamp(app.TimerLapPage, 0, pages - 1);
+
+        var left = TimerWin.StatsLeftRect(card, lu);
+        var table = TimerWin.StatsTableRect(card, lu);
+        WinTimerPanel(left, lu, pal);
+        WinTimerPanel(table, lu, pal);
+
+        // ---- 左栏：总时长 + 关键统计 ----
+        WinText("总时长", new RectF { MinX = left.MinX + 22f * lu, MinY = left.MinY + 16f * lu,
+                                      MaxX = left.MaxX - 22f * lu, MaxY = left.MinY + 38f * lu },
+                13f * lu, pal.Muted, false);
+        WinText(app.TimerDisplayText(), new RectF { MinX = left.MinX + 12f * lu,
+                                                   MinY = left.MinY + 44f * lu,
+                                                   MaxX = left.MaxX - 12f * lu,
+                                                   MaxY = left.MinY + 112f * lu },
+                42f * lu, pal.Ink, true);
+
+        _scratch.Color = new Color4(pal.Border.R, pal.Border.G, pal.Border.B, 0.65f);
+        _ctx.DrawLine(new Vector2(left.MinX + 22f * lu, left.MinY + 126f * lu),
+                      new Vector2(left.MaxX - 22f * lu, left.MinY + 126f * lu), _scratch, 1f * lu);
+
+        int laps = rows.Count;
+        double sum = 0, fast = double.MaxValue, slow = 0;
+        foreach (var row in rows)
+        {
+            sum += row.LapMs;
+            fast = Math.Min(fast, row.LapMs);
+            slow = Math.Max(slow, row.LapMs);
+        }
+        string avg = laps > 0 ? TimerWin.Format((float)(sum / laps), TimerMode.Stopwatch) : "—";
+        string fastest = laps > 0 ? TimerWin.Format((float)fast, TimerMode.Stopwatch) : "—";
+        string slowest = laps > 0 ? TimerWin.Format((float)slow, TimerMode.Stopwatch) : "—";
+
+        var statMuted = pal.Muted;
+        var statInk = pal.Ink;
+        void StatLine(string label, string value, float y)
+        {
+            WinText(label, new RectF { MinX = left.MinX + 22f * lu, MinY = left.MinY + y * lu,
+                                       MaxX = left.MinX + 118f * lu, MaxY = left.MinY + (y + 28f) * lu },
+                    13f * lu, statMuted, false);
+            WinText(value, new RectF { MinX = left.MinX + 118f * lu, MinY = left.MinY + y * lu,
+                                       MaxX = left.MaxX - 22f * lu, MaxY = left.MinY + (y + 28f) * lu },
+                    15f * lu, statInk, true);
+        }
+        StatLine("计次", app.TimerLapCount.ToString(), 142f);
+        StatLine("分段", laps.ToString(), 178f);
+        StatLine("平均本段", avg, 214f);
+        StatLine("最快", fastest, 250f);
+        StatLine("最慢", slowest, 286f);
+
+        // ---- 右栏：分段表 ----
+        var header = TimerWin.StatsHeaderRect(card, lu);
+        float colNo = 74f * lu, colLap = 220f * lu;
+        var hNo = new RectF { MinX = header.MinX, MinY = header.MinY, MaxX = header.MinX + colNo, MaxY = header.MaxY };
+        var hLap = new RectF { MinX = hNo.MaxX, MinY = header.MinY, MaxX = hNo.MaxX + colLap, MaxY = header.MaxY };
+        var hTotal = new RectF { MinX = hLap.MaxX, MinY = header.MinY, MaxX = header.MaxX, MaxY = header.MaxY };
+        WinText("次", hNo, 12.5f * lu, pal.Muted, false);
+        WinText("本段", hLap, 12.5f * lu, pal.Muted, false);
+        WinText("累计", hTotal, 12.5f * lu, pal.Muted, false);
+        _scratch.Color = new Color4(pal.Border.R, pal.Border.G, pal.Border.B, 0.65f);
+        _ctx.DrawLine(new Vector2(header.MinX, header.MaxY),
+                      new Vector2(header.MaxX, header.MaxY), _scratch, 1f * lu);
+
+        int start = page * pageSize;
+        int end = Math.Min(rows.Count, start + pageSize);
+        if (rows.Count == 0)
+        {
+            WinText("还没有计次", table, 15f * lu, pal.Muted, false);
+            WinText("回到计时页按「计次」记录分段", new RectF
+            {
+                MinX = table.MinX + 24f * lu, MinY = table.MinY + 196f * lu,
+                MaxX = table.MaxX - 24f * lu, MaxY = table.MaxY - 46f * lu,
+            }, 12.5f * lu, pal.Muted, false);
+        }
+        else
+        {
+            for (int i = start; i < end; i++)
+            {
+                var row = TimerWin.StatsRowRect(card, lu, i - start);
+                var v = rows[i];
+                if ((i & 1) != 0)
+                {
+                    _scratch.Color = new Color4(pal.Soft.R, pal.Soft.G, pal.Soft.B, 0.45f);
+                    _ctx.FillRoundedRectangle(new RoundedRectangle(
+                        new RawRectF(row.MinX, row.MinY, row.MaxX, row.MaxY), 7f * lu, 7f * lu), _scratch);
+                }
+                var n = new RectF { MinX = row.MinX, MinY = row.MinY, MaxX = row.MinX + colNo, MaxY = row.MaxY };
+                var lap = new RectF { MinX = n.MaxX, MinY = row.MinY, MaxX = n.MaxX + colLap, MaxY = row.MaxY };
+                var total = new RectF { MinX = lap.MaxX, MinY = row.MinY, MaxX = row.MaxX, MaxY = row.MaxY };
+                WinText(v.Tail ? "尾段" : v.Number.ToString(), n, 12.5f * lu,
+                        v.Tail ? pal.Accent : pal.Muted, v.Tail);
+                WinText(TimerWin.Format((float)v.LapMs, TimerMode.Stopwatch), lap,
+                        15f * lu, pal.Ink, true);
+                WinText(TimerWin.Format((float)v.TotalMs, TimerMode.Stopwatch), total,
+                        14f * lu, v.Tail ? pal.Muted : pal.Ink, false);
+                _scratch.Color = new Color4(pal.Border.R, pal.Border.G, pal.Border.B, 0.38f);
+                _ctx.DrawLine(new Vector2(row.MinX, row.MaxY),
+                              new Vector2(row.MaxX, row.MaxY), _scratch, 1f * lu);
+            }
+
+            if (pages > 1)
+            {
+                var prev = TimerWin.StatsPrevRect(card, lu);
+                var next = TimerWin.StatsNextRect(card, lu);
+                var pageText = TimerWin.StatsPageTextRect(card, lu);
+                WinGhostBtn(prev, lu, pal, 8f);
+                WinGhostBtn(next, lu, pal, 8f);
+                WinGlyph("chevleft", MidX(prev), MidY(prev), 13f * lu,
+                         page > 0 ? pal.Ink : pal.Muted, lu);
+                WinGlyph("chevright", MidX(next), MidY(next), 13f * lu,
+                         page + 1 < pages ? pal.Ink : pal.Muted, lu);
+                WinText($"{page + 1} / {pages}", pageText, 12.5f * lu, pal.Muted, false);
+            }
+        }
+    }
+
+    /// <summary>课堂窗的浅色分区底板（统计左右两栏共用）。</summary>
+    private void WinTimerPanel(in RectF r, float u, in WinPal p)
+    {
+        float rad = 14f * u;
+        _scratch.Color = new Color4(p.Soft.R, p.Soft.G, p.Soft.B, 0.42f);
+        _ctx.FillRoundedRectangle(new RoundedRectangle(
+            new RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), rad, rad), _scratch);
+        _scratch.Color = new Color4(p.Border.R, p.Border.G, p.Border.B, 0.55f);
+        _ctx.DrawRoundedRectangle(new RoundedRectangle(
+            new RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), rad, rad), _scratch, 1f * u);
     }
 
     // =====================================================================
@@ -482,6 +641,14 @@ internal sealed partial class OverlayWindow
             case "chevdown":
                 _ctx.DrawLine(new Vector2(cx - s * 0.38f, cy - s * 0.14f), new Vector2(cx, cy + s * 0.24f), _scratch, th);
                 _ctx.DrawLine(new Vector2(cx, cy + s * 0.24f), new Vector2(cx + s * 0.38f, cy - s * 0.14f), _scratch, th);
+                break;
+            case "chevleft":
+                _ctx.DrawLine(new Vector2(cx + s * 0.16f, cy - s * 0.34f), new Vector2(cx - s * 0.18f, cy), _scratch, th);
+                _ctx.DrawLine(new Vector2(cx - s * 0.18f, cy), new Vector2(cx + s * 0.16f, cy + s * 0.34f), _scratch, th);
+                break;
+            case "chevright":
+                _ctx.DrawLine(new Vector2(cx - s * 0.16f, cy - s * 0.34f), new Vector2(cx + s * 0.18f, cy), _scratch, th);
+                _ctx.DrawLine(new Vector2(cx + s * 0.18f, cy), new Vector2(cx - s * 0.16f, cy + s * 0.34f), _scratch, th);
                 break;
             case "max":
             {

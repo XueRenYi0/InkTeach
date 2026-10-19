@@ -4970,6 +4970,20 @@ internal sealed partial class App : InkEngine.InkEngine
                     }
                     if (argvW.Contains("--stopwatch")) { StartTimerFromUi(TimerMode.Stopwatch, 0f); SettleFrames(900); }
                     else if (argvW.Contains("--run")) StartTimerFromUi(TimerMode.Countdown, 300f);
+                    if (TimerKind == TimerMode.Stopwatch && argvW.Contains("--laps"))
+                    {
+                        for (int i = 0; i < 3; i++)
+                        {
+                            SettleFrames(420);
+                            ClickAxis(TimerWin.BtnRect(cin, lu, TimerZone.Lap, true));
+                        }
+                        SettleFrames(220);
+                    }
+                    if (TimerKind == TimerMode.Stopwatch && argvW.Contains("--pause"))
+                    {
+                        PauseTimerFromUi();
+                        SettleFrames(220);
+                    }
                     int tbi = Array.IndexOf(argvW, "--tab");
                     if (tbi >= 0 && tbi + 1 < argvW.Length && int.TryParse(argvW[tbi + 1], out int tabArg))
                     {

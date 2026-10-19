@@ -12,6 +12,7 @@ internal enum TimerZone
     Body,        // 空白：拖动窗口
     Value,       // 数字/环：倒计时待机=进"改时长"；跑/暂停=暂停/继续；到点=重开
     Start,       // 开始 / 暂停 / 继续 / 到点重开
+    Lap,         // 秒表：计次（只记录，不打断计时）
     Reset,       // 重置回待机
     Minimize,    // 收成 320×150 小时钟（点数字还原）
     Fullscreen,  // 全屏
@@ -20,6 +21,9 @@ internal enum TimerZone
     Ok,          // 改时长态的 ✓
     Restore,     // 最小化态点数字：还原
 }
+
+/// <summary>秒表的一行分段统计。Number 从 1 开始；Tail = 最后一次计次到暂停之间的尾段。</summary>
+internal readonly record struct TimerLapView(int Number, double LapMs, double TotalMs, bool Tail);
 
 /// <summary>点名窗口上点到了哪一块。</summary>
 internal enum RollZone
@@ -105,14 +109,23 @@ internal static class TimerWin
     /// <summary>窗口钮 34 方块、间隔 10。</summary>
     private const float WinD = 34f, WinGap = 10f;
     private const float RingY = 300f, RingR0 = 168f, RingTh0 = 10f;
-    /// <summary>环下面那行说明（预计几点到 / 时间到）。**故意不再套药丸**：
+    /// <summary>环下面那行：倒计时到点用“时间到”，秒表用最近一次计次。**故意不再套药丸**：
     /// 药丸是 InkClass 的签名形状，去掉以后这一行才像本项目的东西。</summary>
-    private const float CapY = 484f, CapH = 30f, CapW = 360f;
-    private const float BarY = 506f, BarH = 52f;
-    private const float StartW = 176f, ResetW = 108f, BarGap = 16f;
+    private const float CapY = 478f, CapH = 26f, CapW = 700f;
+    /// <summary>底部按钮行：比旧版下移 6px，和 26px 的说明行留出 8px 呼吸。</summary>
+    private const float BarY = 512f, BarH = 52f;
+    private const float StartW = 176f, LapW = 128f, ResetW = 108f, BarGap = 14f;
     private const float StepW = 100f, StepH = 40f, StepGapX = 12f;
     private const float StepColW = 212f, StepColGap = 32f;
     private const float OkW = 148f, OkH = 48f;
+
+    // ---- 暂停统计（秒表）------------------------------------------------------
+    public const int StatsRowsPerPage = 9;
+    private const float StatsY = 112f, StatsH = 356f;
+    private const float StatsLeftW = 298f, StatsGapX = 24f;
+    private const float StatsHeaderY = 12f, StatsHeaderH = 32f;
+    private const float StatsRowY = 50f, StatsRowH = 28f;
+    private const float StatsFooterY = 322f, StatsFooterH = 28f;
 
     public static float Unit(in RectF screen, float dpi) => WinScale.Unit(screen, dpi, DW, DH);
 
@@ -179,29 +192,111 @@ internal static class TimerWin
         return new RectF { MinX = c - r, MinY = cy - r, MaxX = c + r, MaxY = cy + r };
     }
 
-    /// <summary>环下面那行说明（预计到点时刻 / 时间到）。名字沿用旧的 <c>PillRect</c>，
+    /// <summary>环下面那行：倒计时到点 / 秒表最近一次计次。名字沿用旧的 <c>PillRect</c>，
     /// 但**画法已经改成纯文字**，不再有药丸底。</summary>
     public static RectF PillRect(in RectF card, float u)
         => new() { MinX = CX(card) - CapW * u * 0.5f, MinY = card.MinY + CapY * u,
                    MaxX = CX(card) + CapW * u * 0.5f, MaxY = card.MinY + (CapY + CapH) * u };
 
+    // ---- 秒表暂停统计 --------------------------------------------------------
+
+    public static RectF StatsLeftRect(in RectF card, float u)
+        => new()
+        {
+            MinX = card.MinX + Pad * u,
+            MinY = card.MinY + StatsY * u,
+            MaxX = card.MinX + (Pad + StatsLeftW) * u,
+            MaxY = card.MinY + (StatsY + StatsH) * u,
+        };
+
+    public static RectF StatsTableRect(in RectF card, float u)
+    {
+        var left = StatsLeftRect(card, u);
+        return new()
+        {
+            MinX = left.MaxX + StatsGapX * u,
+            MinY = card.MinY + StatsY * u,
+            MaxX = card.MaxX - Pad * u,
+            MaxY = card.MinY + (StatsY + StatsH) * u,
+        };
+    }
+
+    public static RectF StatsHeaderRect(in RectF card, float u)
+    {
+        var table = StatsTableRect(card, u);
+        return new()
+        {
+            MinX = table.MinX + 18f * u,
+            MinY = table.MinY + StatsHeaderY * u,
+            MaxX = table.MaxX - 18f * u,
+            MaxY = table.MinY + (StatsHeaderY + StatsHeaderH) * u,
+        };
+    }
+
+    public static RectF StatsRowRect(in RectF card, float u, int row)
+    {
+        var table = StatsTableRect(card, u);
+        float y = table.MinY + (StatsRowY + row * StatsRowH) * u;
+        return new()
+        {
+            MinX = table.MinX + 18f * u,
+            MinY = y,
+            MaxX = table.MaxX - 18f * u,
+            MaxY = y + StatsRowH * u,
+        };
+    }
+
+    public static RectF StatsPrevRect(in RectF card, float u)
+    {
+        var table = StatsTableRect(card, u);
+        float d = StatsFooterH * u;
+        float cx = CX(table) - 76f * u;
+        return new() { MinX = cx - d * 0.5f, MinY = table.MinY + StatsFooterY * u,
+                       MaxX = cx + d * 0.5f, MaxY = table.MinY + (StatsFooterY + StatsFooterH) * u };
+    }
+
+    public static RectF StatsNextRect(in RectF card, float u)
+    {
+        var table = StatsTableRect(card, u);
+        float d = StatsFooterH * u;
+        float cx = CX(table) + 76f * u;
+        return new() { MinX = cx - d * 0.5f, MinY = table.MinY + StatsFooterY * u,
+                       MaxX = cx + d * 0.5f, MaxY = table.MinY + (StatsFooterY + StatsFooterH) * u };
+    }
+
+    public static RectF StatsPageTextRect(in RectF card, float u)
+    {
+        var prev = StatsPrevRect(card, u);
+        var next = StatsNextRect(card, u);
+        return new() { MinX = prev.MaxX + 8f * u, MinY = prev.MinY,
+                       MaxX = next.MinX - 8f * u, MaxY = prev.MaxY };
+    }
+
     // ---- 底部主按钮（带文字）-------------------------------------------------
 
-    public static RectF BtnRect(in RectF card, float u, TimerZone which)
+    /// <param name="withLap">秒表跑着时底部多一个「计次」；它会把开始/重置整体重新居中。</param>
+    public static RectF BtnRect(in RectF card, float u, TimerZone which, bool withLap = false)
     {
         switch (which)
         {
             case TimerZone.Start:
-            {
-                float total = (StartW + BarGap + ResetW) * u;
-                float x = CX(card) - total * 0.5f;
-                float y = card.MinY + BarY * u;
-                return new RectF { MinX = x, MinY = y, MaxX = x + StartW * u, MaxY = y + BarH * u };
-            }
+            case TimerZone.Lap:
             case TimerZone.Reset:
             {
-                float x = CX(card) + BarGap * u + (StartW - ResetW) * u * 0.5f;
+                if (which == TimerZone.Lap && !withLap) return new RectF();
+                float total = (withLap
+                    ? StartW + BarGap + LapW + BarGap + ResetW
+                    : StartW + BarGap + ResetW) * u;
+                float x = CX(card) - total * 0.5f;
                 float y = card.MinY + BarY * u;
+                if (which == TimerZone.Start)
+                    return new RectF { MinX = x, MinY = y, MaxX = x + StartW * u, MaxY = y + BarH * u };
+                if (which == TimerZone.Lap)
+                {
+                    x += (StartW + BarGap) * u;
+                    return new RectF { MinX = x, MinY = y, MaxX = x + LapW * u, MaxY = y + BarH * u };
+                }
+                x += (StartW + BarGap + (withLap ? LapW + BarGap : 0f)) * u;
                 return new RectF { MinX = x, MinY = y, MaxX = x + ResetW * u, MaxY = y + BarH * u };
             }
             case TimerZone.Minimize:
@@ -273,7 +368,8 @@ internal static class TimerWin
 
     // ---- 命中 ---------------------------------------------------------------
 
-    public static TimerZone ZoneAt(in RectF card, float u, float x, float y, bool edit, bool countdown)
+    public static TimerZone ZoneAt(in RectF card, float u, float x, float y, bool edit, bool countdown,
+                                   bool withLap = false)
     {
         if (!card.Contains(x, y)) return TimerZone.None;
         for (int i = 0; i < 3; i++)
@@ -292,8 +388,9 @@ internal static class TimerWin
         }
 
         if (ValueRect(card, u).Contains(x, y)) return TimerZone.Value;
-        if (BtnRect(card, u, TimerZone.Start).Contains(x, y)) return TimerZone.Start;
-        if (BtnRect(card, u, TimerZone.Reset).Contains(x, y)) return TimerZone.Reset;
+        if (withLap && BtnRect(card, u, TimerZone.Lap, true).Contains(x, y)) return TimerZone.Lap;
+        if (BtnRect(card, u, TimerZone.Start, withLap).Contains(x, y)) return TimerZone.Start;
+        if (BtnRect(card, u, TimerZone.Reset, withLap).Contains(x, y)) return TimerZone.Reset;
         if (BtnRect(card, u, TimerZone.Minimize).Contains(x, y)) return TimerZone.Minimize;
         if (BtnRect(card, u, TimerZone.Fullscreen).Contains(x, y)) return TimerZone.Fullscreen;
         if (BtnRect(card, u, TimerZone.Close).Contains(x, y)) return TimerZone.Close;
@@ -630,6 +727,8 @@ public partial class InkEngine
     private bool _timerDragging, _timerRestoreArmed;
     private bool _timerCapturing;
     private int _timerBeepCount;
+    private readonly List<double> _timerLapMarks = new();   // 秒表：每次计次时的累计运行毫秒
+    private int _timerLapPage;                                  // 暂停统计表的页码（0 起）
     private float _timerCX = float.NaN, _timerCY = float.NaN;     // 窗口中心（物理）
     private bool _timerPosLoaded;
     private double _timerLastBodyClickMs = double.NegativeInfinity;
@@ -653,6 +752,14 @@ public partial class InkEngine
     internal int TimerSetH => _timerSetH;
     internal int TimerSetM => _timerSetM;
     internal int TimerSetS => _timerSetS;
+    internal int TimerLapCount => _timerLapMarks.Count;
+    internal int TimerLapPage => _timerLapPage;
+    /// <summary>秒表正在跑时才有「计次」；暂停/待机不显示。</summary>
+    internal bool TimerLapButtonVisible
+        => _timerKind == TimerMode.Stopwatch && _timerActive && !_timerPaused;
+    /// <summary>暂停时显示统计表（只影响显示，不改暂停/继续的计时状态）。</summary>
+    internal bool TimerStatsVisible
+        => _timerKind == TimerMode.Stopwatch && _timerActive && _timerPaused;
 
     /// <summary>要连续帧：**任一模式**在跑就画（切走的也在跑、也要到点；用户 2026-10-03 定）。</summary>
     internal bool TimerWantsFrame
@@ -709,11 +816,58 @@ public partial class InkEngine
         return (float)((elapsed % 60000.0) / 60000.0);
     }
 
-    /// <summary>预计结束时刻文本（仅倒计时跑着时显示；InkClass 同款药丸）。</summary>
-    internal string TimerEndText()
+    private void ClearTimerLaps()
     {
-        var t = DateTime.Now + TimeSpan.FromMilliseconds(Math.Max(0f, _timerValueMs));
-        return "预计 " + t.ToString("HH:mm") + " 到点";
+        _timerLapMarks.Clear();
+        _timerLapPage = 0;
+    }
+
+    /// <summary>
+    /// 秒表最近一次已经按下的计次。主显示始终是总时间；这一条只给环下方那条
+    /// “第 N 次 / 本段 / 累计”提示用。返回 false = 还没有计次。
+    /// </summary>
+    internal bool TryGetLastTimerLap(out TimerLapView lap)
+    {
+        lap = default;
+        if (_timerKind != TimerMode.Stopwatch || _timerLapMarks.Count == 0) return false;
+        double total = _timerLapMarks[^1];
+        double prev = _timerLapMarks.Count > 1 ? _timerLapMarks[^2] : 0;
+        lap = new TimerLapView(_timerLapMarks.Count, total - prev, total, false);
+        return true;
+    }
+
+    /// <summary>
+    /// 暂停统计用：已计次的每一段 + 最后一次计次到暂停之间的尾段。
+    /// 尾段只参与统计显示，不写进 _timerLapMarks；继续后它自然接回当前段。
+    /// </summary>
+    internal List<TimerLapView> TimerLapRowsForUi()
+    {
+        var rows = new List<TimerLapView>();
+        if (_timerKind != TimerMode.Stopwatch) return rows;
+
+        double prev = 0;
+        for (int i = 0; i < _timerLapMarks.Count; i++)
+        {
+            double total = _timerLapMarks[i];
+            rows.Add(new TimerLapView(i + 1, total - prev, total, false));
+            prev = total;
+        }
+
+        // 没有按过计次时不伪造“尾段”；左侧总时长已经说明一切。
+        if (_timerLapMarks.Count > 0)
+        {
+            double total = TimerElapsedMs();
+            if (total - prev > 0.5)
+                rows.Add(new TimerLapView(_timerLapMarks.Count + 1, total - prev, total, true));
+        }
+        return rows;
+    }
+
+    /// <summary>暂停统计表翻页；页码由绘制侧按行数夹紧。</summary>
+    internal void SetTimerLapPage(int page)
+    {
+        _timerLapPage = Math.Max(0, page);
+        _dirty = true;
     }
 
     private TimerRun CaptureRun() => new()
@@ -798,6 +952,7 @@ public partial class InkEngine
         _timerRestoreArmed = false;
         _timerDragging = false;
         _timerShownUnit = long.MinValue;
+        ClearTimerLaps();
         ClassroomWantPassThrough(true);
         RefreshTimerValue();
         _dirty = true;
@@ -808,6 +963,7 @@ public partial class InkEngine
     internal void StartTimerFromUi(TimerMode mode, float seconds)
     {
         if (mode != _timerKind) { RefreshRun(_timerKind); ParkVisibleRun(); LoadRun(mode); }
+        if (mode == TimerMode.Stopwatch) ClearTimerLaps();   // 新的一轮秒表从零开始
         if (mode == TimerMode.Countdown)
         {
             int total = Math.Max(1, (int)MathF.Round(seconds));
@@ -850,11 +1006,32 @@ public partial class InkEngine
         }
     }
 
+    /// <summary>
+    /// 秒表计次：只记下当前累计时刻，不改变 Active/Paused/Accum/Anchor。
+    /// 主显示始终是总时间，所以这个动作不会“停一下表再接着跑”。
+    /// </summary>
+    internal void MarkTimerLapFromUi()
+    {
+        if (_timerKind != TimerMode.Stopwatch || !_timerActive || _timerPaused) return;
+
+        double total = TimerElapsedMs();
+        double last = _timerLapMarks.Count > 0 ? _timerLapMarks[^1] : 0;
+        if (total - last <= 0.001) return;   // 同一毫秒重复按，不制造 0 分段
+
+        _timerLapMarks.Add(total);
+        _timerLapPage = 0;
+        _dirty = true;
+        NotifyUiStateChanged();
+        Console.WriteLine($"计时器：秒表计次 {_timerLapMarks.Count}"
+                          + $"（本段 {total - last:F0}ms，累计 {total:F0}ms）");
+    }
+
     internal void PauseTimerFromUi()
     {
         if (!_timerActive || _timerPaused || _timerFinished) return;
         _timerAccumMs += NowMs - _timerAnchorMs;
         _timerPaused = true;
+        if (_timerKind == TimerMode.Stopwatch) _timerLapPage = 0;
         RefreshTimerValue();
         _dirty = true;
         NotifyUiStateChanged();
@@ -867,6 +1044,7 @@ public partial class InkEngine
         if (_timerFinished) { StartTimerFromCurrentSet(); return; }
         if (!_timerPaused) return;
         _timerPaused = false;
+        if (_timerKind == TimerMode.Stopwatch) _timerLapPage = 0;
         _timerAnchorMs = NowMs;
         _dirty = true;
         NotifyUiStateChanged();
@@ -876,6 +1054,7 @@ public partial class InkEngine
     /// <summary>重置：停表、回待机（倒计时保留设定；正/秒归零）。</summary>
     private void ResetTimerFromUi()
     {
+        if (_timerKind == TimerMode.Stopwatch) ClearTimerLaps();
         _timerActive = false;
         _timerPaused = false;
         _timerFinished = false;
@@ -896,6 +1075,7 @@ public partial class InkEngine
         _timerPaused = false;
         _timerFinished = false;
         _timerAccumMs = 0;
+        ClearTimerLaps();
         _timerCardOpen = false;
         _timerEdit = false;
         _timerMinimized = false;
@@ -1064,7 +1244,23 @@ public partial class InkEngine
                         }
         }
 
-        var zone = TimerWin.ZoneAt(card, lu, x, y, _timerEdit, _timerKind == TimerMode.Countdown);
+        if (TimerStatsVisible)
+        {
+            int rows = TimerLapRowsForUi().Count;
+            int pages = Math.Max(1, (rows + TimerWin.StatsRowsPerPage - 1) / TimerWin.StatsRowsPerPage);
+            if (TimerWin.StatsPrevRect(card, lu).Contains(x, y) && _timerLapPage > 0)
+            { SetTimerLapPage(_timerLapPage - 1); return true; }
+            if (TimerWin.StatsNextRect(card, lu).Contains(x, y) && _timerLapPage + 1 < pages)
+            { SetTimerLapPage(_timerLapPage + 1); return true; }
+
+            // 统计面板本身不兼任“点数字继续”；要续跑请点底部「继续」。
+            if (TimerWin.StatsLeftRect(card, lu).Contains(x, y)
+                || TimerWin.StatsTableRect(card, lu).Contains(x, y))
+                return true;
+        }
+
+        var zone = TimerWin.ZoneAt(card, lu, x, y, _timerEdit,
+                                  _timerKind == TimerMode.Countdown, TimerLapButtonVisible);
         switch (zone)
         {
             case TimerZone.Close: StopTimerFromUi(); return true;
@@ -1106,6 +1302,7 @@ public partial class InkEngine
                 return true;
             case TimerZone.Value: OnTimerValueClick(); return true;
             case TimerZone.Start: OnTimerStartClick(); return true;
+            case TimerZone.Lap: MarkTimerLapFromUi(); return true;
             case TimerZone.Reset: ResetTimerFromUi(); return true;
         }
 
