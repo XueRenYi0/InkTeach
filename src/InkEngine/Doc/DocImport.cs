@@ -30,22 +30,23 @@ public partial class InkEngine
     //  底部页码条（"像打开 PPT 一样"——2026-10-07 用户定，见 计划-文档模式-状态模型.md）
     // ======================================================================
 
-    /// <summary>底部页码条现在活跃吗（PPT 放映中 / 打开了文档）。条的所有交互（命中/悬停/菜单/面板）都看它。</summary>
-    internal bool PageBarActive => PptMode || DocView.IsOpen;
+    /// <summary>底部页码条现在活跃吗（PPT 放映中 / 打开了文档 / 白板）。条的所有交互（命中/悬停/菜单/面板）都看它。</summary>
+    internal bool PageBarActive => PptMode || DocView.IsOpen || BoardOn;
 
     /// <summary>
-    /// 条现在**看得见 / 点得到**吗。与 <see cref="PageBarActive"/> 的差别 = 穿透 / 白板盖住：
-    ///   · 文档模式：穿透 = 全让开（S2，用户 2026-10-07 定）→ 条跟着收 ✗；
-    ///     **白板铺上来盖住文档时**同样收（页都在白板底下了，条没用；2026-10-09"两张纸"）；
+    /// 条现在**看得见 / 点得到**吗。与 <see cref="PageBarActive"/> 的差别 = 穿透：
+    ///   · 文档 / 白板：穿透 = 全让开（S2，用户 2026-10-07 定）→ 条跟着收 ✗；
     ///   · PPT 模式：穿透时条**保留**（它管的是下层放映的东西，还有用 ✓，有接输入小窗撑着）。
+    /// 白板现在有自己的页数，**不再**因为盖住文档就把条收掉。
     /// </summary>
-    internal bool PageBarVisible => PageBarActive && (PptMode || (!PassThrough && !BoardOn));
+    internal bool PageBarVisible => PageBarActive && (PptMode || !PassThrough);
 
-    /// <summary>条上的"第几页"（1 起）。文档模式 = 视口中心所在的页（没页时给 1）。</summary>
+    /// <summary>条上的"第几页"（1 起）。白板 = 白板自己的屏页；文档 = 视口中心所在页。</summary>
     internal int BarPageNow
     {
         get
         {
+            if (BoardOn) return ScreenIndex;
             if (!PptMode && DocView.IsOpen)
             {
                 var vp = ViewportCanvas;
@@ -58,25 +59,52 @@ public partial class InkEngine
         }
     }
 
-    /// <summary>条上的"共几页"。</summary>
-    internal int BarTotal => !PptMode && DocView.IsOpen ? DocView.Count : PptTotal;
+    /// <summary>条上的"共几页"。白板 = 白板自己的内容页数。</summary>
+    internal int BarTotal => BoardOn ? BoardPageCount
+                           : !PptMode && DocView.IsOpen ? DocView.Count
+                           : PptTotal;
 
-    /// <summary>翻上/下一页（箭头）。文档模式 = 跳页顶（连续滚仍用滚轮）。</summary>
+    /// <summary>翻上/下一页（箭头）。白板 = 白板自己的屏页；文档 = 跳页顶。</summary>
     internal void BarPrev()
     {
-        if (!PptMode && DocView.IsOpen) FlipPage(false);
+        if (BoardOn) FlipPage(false);
+        else if (!PptMode && DocView.IsOpen) FlipPage(false);
         else PptPrevFromUi();
     }
 
     internal void BarNext()
     {
-        if (!PptMode && DocView.IsOpen) FlipPage(true);
+        if (BoardOn) FlipPage(true);
+        else if (!PptMode && DocView.IsOpen) FlipPage(true);
         else PptNextFromUi();
     }
 
     /// <summary>跳到第 <paramref name="page"/> 页（1 起；页号面板用）。文档模式 = 页顶对齐视口顶。</summary>
     internal void BarGoto(int page)
     {
+        if (BoardOn)
+        {
+            int idx = Math.Clamp(page - 1, 0, Math.Max(0, BoardPageCount - 1));
+            float want = ClampOffset(_virtualY - idx * PageHeightCanvas);
+            if (Math.Abs(want - ViewOffsetY) < 1f) return;
+            if (!ClientAreaAnimationOn)
+            {
+                ViewOffsetY = want;
+                _camAnimating = false;
+                _dirty = true;
+            }
+            else
+            {
+                _camFrom = ViewOffsetY;
+                _camTo = want;
+                _camStartMs = NowMs;
+                _camAnimMs = CamAnimMs;
+                _camAnimating = true;
+                _dirty = true;
+            }
+            Console.WriteLine($"[白板] 跳到第 {idx + 1} 页");
+            return;
+        }
         if (!PptMode && DocView.IsOpen)
         {
             int idx = Math.Clamp(page - 1, 0, Math.Max(0, DocView.Count - 1));
@@ -487,6 +515,7 @@ public partial class InkEngine
         string title = DocView.Title;
 
         SaveDocInk();                       // 关闭时兜底存一次（节流之外的那一下）
+        ClearBoardFreeze();                 // 文档都关了，白板下面没有页可冻结
 
         DocView.Close();
         DocImageSource.TrimCache();

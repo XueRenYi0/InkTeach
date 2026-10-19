@@ -1319,13 +1319,27 @@ internal sealed partial class OverlayWindow : IDisposable
         // ⚠ 板**半透明**时不藏页——要"透过上面那张纸看到 PDF"（2026-10-09 用户问；见 RasterizeTile）。
         if (app.BoardOn && app.BoardOpacity >= 0.999f) return;
 
+        // 白板半透明时，文档页只画**打开白板那一刻**冻结的那一页；页矩形按
+        // (冻结时的文档相机 − 当前白板相机) 平移，所以在屏幕上位置不动。
+        bool frozen = app.BoardFrozenDocActive;
+        float shiftY = frozen ? app.BoardFrozenDocViewOffsetY - ViewOffsetY : 0f;
+        int start = frozen ? app.BoardFrozenDocPage : pages.FirstAtOrAfter(canvas.MinY);
+        int end = frozen ? start + 1 : pages.Count;
+        if (start < 0 || start >= pages.Count) return;
+
         ID2D1SolidColorBrush placeholder = null, failed = null, border = null;
-        int i = pages.FirstAtOrAfter(canvas.MinY);
-        for (; i < pages.Count; i++)
+        for (int i = start; i < end; i++)
         {
             var p = pages.At(i);
-            if (p.Rect.MinY > canvas.MaxY) break;
-            if (!p.Rect.Intersects(canvas)) continue;
+            if (!frozen && p.Rect.MinY > canvas.MaxY) break;
+            var r = frozen
+                ? new RectF
+                {
+                    MinX = p.Rect.MinX, MaxX = p.Rect.MaxX,
+                    MinY = p.Rect.MinY + shiftY, MaxY = p.Rect.MaxY + shiftY,
+                }
+                : p.Rect;
+            if (!r.Intersects(canvas)) continue;
 
             if (p.Image != null)
             {
@@ -1333,31 +1347,31 @@ internal sealed partial class OverlayWindow : IDisposable
                 if (bmp != null)
                 {
                     _ctx.DrawBitmap(bmp,
-                        new Vortice.RawRectF(p.Rect.MinX, p.Rect.MinY, p.Rect.MaxX, p.Rect.MaxY),
+                        new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY),
                         1f, Vortice.Direct2D1.InterpolationMode.Linear, null, null);
                     p.Image.DropCpuBytes();
                 }
                 else
                 {
                     placeholder ??= Brush(new Color4(0.94f, 0.94f, 0.94f, 1f));
-                    _ctx.FillRectangle(new Vortice.RawRectF(p.Rect.MinX, p.Rect.MinY, p.Rect.MaxX, p.Rect.MaxY),
+                    _ctx.FillRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY),
                                        placeholder);
                 }
             }
             else if (p.Failed)
             {
                 failed ??= Brush(new Color4(0.99f, 0.90f, 0.90f, 1f));
-                _ctx.FillRectangle(new Vortice.RawRectF(p.Rect.MinX, p.Rect.MinY, p.Rect.MaxX, p.Rect.MaxY), failed);
+                _ctx.FillRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), failed);
             }
             else
             {
                 placeholder ??= Brush(new Color4(0.94f, 0.94f, 0.94f, 1f));
-                _ctx.FillRectangle(new Vortice.RawRectF(p.Rect.MinX, p.Rect.MinY, p.Rect.MaxX, p.Rect.MaxY),
+                _ctx.FillRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY),
                                    placeholder);
             }
 
             border ??= Brush(new Color4(0f, 0f, 0f, 0.22f));
-            _ctx.DrawRectangle(new Vortice.RawRectF(p.Rect.MinX, p.Rect.MinY, p.Rect.MaxX, p.Rect.MaxY),
+            _ctx.DrawRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY),
                                border, 1f);
         }
     }
@@ -1392,7 +1406,11 @@ internal sealed partial class OverlayWindow : IDisposable
 
         if (pages.IsOpen)
         {
-            if (hidden) { pages.ReleaseAll(); pages.StopWanting(); }
+            // 白板打开后冻结页要一直留着（即使用户先把透明度拉满、或临时进穿透）：
+            // 否则再回来时页图已被 ReleaseAll 放掉，只剩占位。
+            bool keepFrozen = app.BoardFrozenDocPage >= 0;
+            if (hidden && keepFrozen) pages.ReleaseAllExceptPinned();
+            else if (hidden) { pages.ReleaseAll(); pages.StopWanting(); }
             else
             {
                 int adopted = pages.SyncWindow(VisibleCanvasRect.MinY, VisibleCanvasRect.MaxY,
@@ -1475,6 +1493,10 @@ internal sealed partial class OverlayWindow : IDisposable
         // 滚动前的画面，整块都不可信，所以这一帧整屏重合成。
         if (ViewOffsetY != _lastCamY)
         {
+            // 普通内容只换贴合位置；但白板冻结的 PDF 页是按"冻结相机 − 当前相机"
+            // 补偿画进分块的，相机一动就必须重烘，否则页图会跟着白板一起滚走。
+            if (app.BoardFrozenDocActive)
+                _tiles.MarkAllDirty();
             _lastCamY = ViewOffsetY;
             _fullFramesLeft = 2;      // 相机变了：两个缓冲都要重画到新位置（见字段说明）
         }
@@ -3564,9 +3586,7 @@ internal sealed partial class OverlayWindow : IDisposable
             _scratch.Color = new Color4(accent.R, accent.G, accent.B, 0.16f);
             DrawQuad(c0, c1, c2, c3, 6.5f);
 
-            // 2) 描边。两种特殊状态在这里体现：
-            //    · **复制拖拽模式**：框画成虚线（"按着拖 = 拖出副本"的通用语言）；
-            //    · **复制成功那 0.25 秒**：框加粗变亮，闪一下（用户反馈"复制以后看不出来"）。
+            // 2) 描边。复制成功那 0.25 秒加粗变亮，闪一下（用户反馈"复制以后看不出来"）。
             if (app.SelFlashing)
             {
                 _scratch.Color = new Color4(accent.R, accent.G, accent.B, 1f);
@@ -3575,8 +3595,7 @@ internal sealed partial class OverlayWindow : IDisposable
             else
             {
                 _scratch.Color = accent;
-                if (app.CopyDragArmed) DrawQuadDashed(c0, c1, c2, c3, 2.5f);
-                else DrawQuad(c0, c1, c2, c3, 2.5f);
+                DrawQuad(c0, c1, c2, c3, 2.5f);
             }
         }
 
@@ -4308,7 +4327,6 @@ internal sealed partial class OverlayWindow : IDisposable
     {
         SelBarButton.Color => app.SelPanelOpen == SelPanel.Ink,
         SelBarButton.Layer => app.SelPanelOpen == SelPanel.Layer,
-        SelBarButton.Copy => app.CopyDragArmed,
         _ => false,
     };
 
@@ -4902,21 +4920,6 @@ internal sealed partial class OverlayWindow : IDisposable
         _ctx.DrawLine(b, c, _scratch, width);
         _ctx.DrawLine(c, d, _scratch, width);
         _ctx.DrawLine(d, a, _scratch, width);
-    }
-
-    /// <summary>
-    /// 画一个**虚线**四边形（复制拖拽模式的框用）。
-    ///
-    /// 为什么不用 D2D 的 dash style：那要给每种线宽各建一个 `ID2D1StrokeStyle`
-    /// 并管生命周期，而现在只有两处要虚线（这个框 + 面板里的"虚线"示意）。手算分段
-    /// 十来行、结果完全可控，也不用担心各版本 Vortice 的 API 差异。
-    /// </summary>
-    private void DrawQuadDashed(Vector2 a, Vector2 b, Vector2 c, Vector2 d, float width)
-    {
-        DrawDashed(a, b, width);
-        DrawDashed(b, c, width);
-        DrawDashed(c, d, width);
-        DrawDashed(d, a, width);
     }
 
     private void DrawDashed(Vector2 a, Vector2 b, float width) => DrawDashes(a, b, width, 7f, 5f);

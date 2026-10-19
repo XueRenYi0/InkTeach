@@ -15,9 +15,11 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
-> **Latest 9.2.3 (2026-10-19)**: two sine / cosine / wave strokes now snap by their **curve
-> centreline endpoints** when joined, so the seam no longer keeps a one-stroke-width step. The update
-> red dot and axis-centreline snapping from 9.2.2, and the clean laser from 9.2.1, are unchanged.
+> **Latest 9.2.4 (2026-10-19)**: the whiteboard now has its own page state, independent from the
+> underlying PDF / image / PPT page; opening the board freezes the current page, and board paging no
+> longer moves the document. `Backspace` deletes the selection, and the selection-bar Copy button now
+> keeps the original, creates a 24px-offset selected copy and writes both to the clipboard. The
+> curve-seam fix from 9.2.3 and update/axis improvements from 9.2.2 are retained.
 
 **Requirements**: Windows 10 / 11 x64, **no .NET install needed** (self-contained).
 PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else works without.
@@ -28,7 +30,7 @@ PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else
 
 ## Quick start
 
-1. Download `InkTeach-Setup-9.2.3.exe`, double-click, Next, Done — or unzip the portable build.
+1. Download `InkTeach-Setup-9.2.4.exe`, double-click, Next, Done — or unzip the portable build.
 2. Open PowerPoint/WPS in slideshow mode, or any app; the InkTeach toolbar sits at the bottom.
 3. Write with a pen or mouse. `Ctrl+L` = laser, `Ctrl+E` = eraser, `Ctrl+Alt+Shift+T` hands the mouse back.
 4. Hold `Ctrl+Alt+Shift+Q` and flick to a sector to switch tools without hunting for the toolbar.
@@ -197,9 +199,10 @@ object's own corner.
 
 Ten-cell action bar: **collapse / colour / lock / layer / export / gallery / duplicate / flip H /
 flip V / delete**. The colour panel has a continuous width slider (live readout while dragging,
-one undo step on release), three line styles, a 4×4 palette plus HSV picking. Duplicate supports a
-"drag out a copy" mode, and **during drag or rotation the model is not touched at all** — the preview
-is drawn on the floating layer and committed on release as a single undo step.
+one undo step on release), three line styles, a 4×4 palette plus HSV picking. Duplicate (9.2.4) keeps
+the original, creates a selected 24px-offset copy and writes the selection to the clipboard; the old
+infinite drag-copy mode is gone. **During drag or rotation the model is not touched at all** — the
+preview is drawn on the floating layer and committed on release as a single undo step.
 
 **Object snapping (9.2.0; axis targets 9.2.2; curve seams 9.2.3)**: dragging a single shape or
 image aligns the selection frame's left / centre / right with the target's left / centre / right
@@ -340,7 +343,7 @@ approach fits, we align with it instead of reinventing it:
 
 ## Lightweight: Windows 10 / 11, no .NET
 
-- Native AOT single exe, about **11MB**; the 9.2.3 installer is **8.54MB** and the portable zip **9.50MB**.
+- Native AOT single exe, about **11MB**; the 9.2.4 installer is **8.54MB** and the portable zip **9.26MB**.
 - **No .NET install, no UAC, no administrator rights**; the portable build is unzip-and-run.
 - On 4GB classroom machines, PDF pages are cached only around the viewport and rendered in the
   background, so memory does not grow with the page count.
@@ -371,7 +374,7 @@ downloaded package's sha256 is verified before it replaces anything.
 |---|---|
 | Global | `Ctrl+Alt+Shift+T` pass-through ｜ `Ctrl+Alt+Shift+X` quit ｜ `Ctrl+Alt+Shift+Q` radial palette (hold & flick; **works in pass-through too** — picking a sector exits it) |
 | In-app | `Ctrl+P` pen ｜ `Ctrl+I` highlighter ｜ `Ctrl+L` laser ｜ `Ctrl+E` eraser ｜ `Ctrl+M` select ｜ `Ctrl+Shift+A` screenshot |
-| Editing | `Ctrl+Z / Y` (also `Ctrl+Shift+Z`) undo / redo ｜ `Ctrl+A` select all ｜ `Ctrl+C / V` copy / paste ｜ `Delete` ｜ `Esc` ｜ arrows nudge (`Shift` ×10; **with nothing selected, `←→` flip pages and `↑↓` scroll**) ｜ `Ctrl+= / Ctrl+-` scale selection (a burst merges into one undo step) |
+| Editing | `Ctrl+Z / Y` (also `Ctrl+Shift+Z`) undo / redo ｜ `Ctrl+A` select all ｜ `Ctrl+C / V` copy / paste ｜ `Delete / Backspace` ｜ `Esc` ｜ arrows nudge (`Shift` ×10; **with nothing selected, `←→` flip pages and `↑↓` scroll**) ｜ `Ctrl+= / Ctrl+-` scale selection (a burst merges into one undo step) |
 | Other | `Ctrl+6` width ｜ `Ctrl+B` toggle board ｜ `Ctrl+Shift+C` clear ｜ `PageUp / PageDown` page |
 
 Pressing the same tool key again only changes colour for pen/highlighter; eraser (whole-stroke/area)

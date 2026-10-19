@@ -679,6 +679,29 @@ internal sealed partial class App
             BarGoto(3);
             SettleFrames((int)DocMemory.FlipMs + 120);
             Check("跳页（面板同一入口）：到第 3 页", BarPageNow == 3, $"{BarPageNow}");
+
+            // 白板 A 方案：开板冻结当前 PDF 页；白板翻页只动白板，关板回 PDF 第 3 页。
+            SetBoardFromUi(true);
+            SetBoardOpacityFromUi(0.5f);
+            SettleFrames(300);
+            Check("白板：冻结在 PDF 第 3 页 + 页码改白板",
+                  BoardOn && BoardFrozenDocPage == 2 && PageBarVisible
+                  && BarPageNow == 1 && Doc.PageKey == InkDocument.BoardPageKey,
+                  $"板开={BoardOn} 冻结={BoardFrozenDocPage} 白板页={BarPageNow} 条={PageBarVisible}");
+            BarNext();
+            SettleFrames(300);
+            Check("白板翻页：只动白板，不翻 PDF",
+                  BoardOn && BoardFrozenDocPage == 2 && BarPageNow == 2
+                  && Doc.PageKey == InkDocument.BoardPageKey,
+                  $"冻结={BoardFrozenDocPage} 白板页={BarPageNow} slot={Doc.PageKey}");
+            BarGoto(1);
+            SettleFrames(300);
+            SetBoardFromUi(false);
+            SettleFrames(300);
+            Check("关白板：回到 PDF 第 3 页",
+                  !BoardOn && BarPageNow == 3 && BoardFrozenDocPage == -1,
+                  $"板开={BoardOn} 页={BarPageNow} 冻结={BoardFrozenDocPage}");
+            SetBoardOpacityFromUi(1f);
             BarGoto(1);
             SettleFrames((int)DocMemory.FlipMs + 120);
 
@@ -730,12 +753,13 @@ internal sealed partial class App
             Check("换绿板色：纸**不变**（纸与板互不干涉）", gapWhite2 > 1580 && gapGreen2 < 40,
                   $"纸白 {gapWhite2}/1600、绿 {gapGreen2}（应≈0）");
 
-            // 白板铺上来（"上面那张纸"）：页让位、条收起、板色盖满；关板回到文档。
+            // 白板铺上来：PDF 页冻结在打开那一刻；不透明时盖住页图，页码条改白板；关板回到文档。
             SetBoardFromUi(true);
             SettleFrames(420);
-            Check("开白板（文档开着）：盖住文档（页位图让位 + 条收起）",
-                  BoardOn && DocView.ResidentPages == 0 && !PageBarVisible,
-                  $"板开={BoardOn} 驻留={DocView.ResidentPages} 条可见={PageBarVisible}");
+            Check("开白板（文档开着）：冻结页保留 + 页码条改白板",
+                  BoardOn && DocView.ResidentPages >= 1 && PageBarVisible
+                  && BoardFrozenDocPage == 0,
+                  $"板开={BoardOn} 驻留={DocView.ResidentPages} 条可见={PageBarVisible} 冻结={BoardFrozenDocPage}");
             int pagePx = (int)pg1.Rect.MinX + 40;
             int pagePy = 840 - 470;                                  // 屏幕上页 0 的可见段里
             int pageRedBoardOn = ScreenProbe.CountNear(pagePx, pagePy, 80, 80, 255, 0, 0, 40);

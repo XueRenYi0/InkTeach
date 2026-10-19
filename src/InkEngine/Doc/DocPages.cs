@@ -428,6 +428,14 @@ internal sealed class DocPages
         foreach (var p in _pages) ReleasePage(p);
     }
 
+    /// <summary>白板冻结页用：只留钉住的那一页，其余位图放掉（板不透明时也不白占内存）。</summary>
+    public void ReleaseAllExceptPinned()
+    {
+        int keep = _pinnedIndex;
+        for (int i = 0; i < _pages.Count; i++)
+            if (i != keep) ReleasePage(_pages[i]);
+    }
+
     /// <summary>"让开"用：把后台线程的"想要"清单清掉（别再白渲——页都收起来了）。</summary>
     public void StopWanting()
     {

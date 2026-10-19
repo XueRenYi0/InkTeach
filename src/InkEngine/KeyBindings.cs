@@ -496,6 +496,8 @@ internal sealed class KeyMap
         m.Add(A, KeyAction.SelectAll, "Ctrl+A", "全选");
         m.Add(A, KeyAction.Duplicate, "Ctrl+D", "复制一份");
         m.Add(A, KeyAction.DeleteSelected, "Delete", "删除选中");
+        // Backspace 是 Windows 编辑器里最顺手的“删除选中”习惯键；和 Delete 是同一条动作。
+        m.Add(A, KeyAction.DeleteSelected, "Backspace", "删除选中（Backspace 别名）");
         m.Add(A, KeyAction.CancelSelection, "Esc", "取消选择");
         m.Add(A, KeyAction.Paste, "Ctrl+V", "粘贴：优先粘回可编辑对象，否则把图粘到左上角");
         m.Add(A, KeyAction.NudgeLeft, "Left", "左移 1 像素");

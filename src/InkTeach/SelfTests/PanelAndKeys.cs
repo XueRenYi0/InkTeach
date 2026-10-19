@@ -4615,6 +4615,9 @@ internal sealed partial class App
               !map.For(KeyScope.Global).Any(b => b.Action == KeyAction.Redo
                     || b.Action == KeyAction.SelectAll || b.Action == KeyAction.DeleteSelected
                     || b.Action == KeyAction.NudgeLeft), "");
+        string delText = map.KeyText(KeyAction.DeleteSelected) ?? "";
+        Check("删除选中同时绑定 Delete 和 Backspace",
+              delText.Contains("Delete") && delText.Contains("Backspace"), delText);
 
         // ---- 1.5 2026-10-05 新增键位：白板开关 / 选中缩放 / 重做别名 ----
         bool eqOk = KeyChord.TryParse("Ctrl+=", out var eqKey, out _);
@@ -4824,6 +4827,16 @@ internal sealed partial class App
         Doc.Undo();
         SettleFrames(150);
         Check("这一步能撤销回来", Doc.Strokes.Count == 3, $"撤销后 {Doc.Strokes.Count} 笔");
+
+        // Backspace 是同一动作的别名：默认表里必须也有它。
+        SelectAll();
+        Native.PostMessage(_windows[0].Hwnd, (uint)Native.WM_KEYDOWN, new IntPtr(0x08), IntPtr.Zero);
+        SettleFrames(200);
+        Check("批注内按 Backspace 同样删除选中",
+              Doc.Strokes.Count == 0, $"{Doc.Strokes.Count} 笔（应 0）");
+        Doc.Undo();
+        SettleFrames(150);
+        Check("Backspace 删除也能撤销", Doc.Strokes.Count == 3, $"撤销后 {Doc.Strokes.Count} 笔");
         if (!wasKeyboardMode) SetKeyboardMode(false);
 
         // ---- 8. 白板开关 Ctrl+B：和点白板格同一条命令（含"开板顺手退穿透"）----

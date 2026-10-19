@@ -123,7 +123,7 @@ internal enum SelBarButton
     /// 之后从图形面板最后那一段「图库」里取出来复用。见 <see cref="ShapeLibrary"/>。
     /// </summary>
     Library = 5,
-    /// <summary>复制拖拽模式（点一下进入/退出）。</summary>
+    /// <summary>复制一份：原件原位保留，副本错位选中，同时写入剪贴板。</summary>
     Copy = 6,
     FlipH = 7,
     FlipV = 8,

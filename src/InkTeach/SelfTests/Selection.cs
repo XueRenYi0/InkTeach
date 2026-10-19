@@ -468,8 +468,8 @@ internal sealed partial class App
                   Doc.Selected.Count == 1 && camMoved,
                   $"选中 {Doc.Selected.Count} 条，相机 {(camMoved ? "动了" : "没动")}");
 
-            // **复制拖拽模式**：点复制按钮进模式 → 按住选中内容拖 → 拖出副本（原件不动）→
-            // 可以连着拖第二份；**克隆 + 位移算一步撤销**
+            // **复制按钮**：点一下 = 原件原位保留 + 副本错位 24px 并选中 + 同时写入剪贴板。
+            // 不再有“复制拖动模式”；生成副本后直接拖新副本即可。
             Doc.Clear();
             Doc.ClearHistory();
             Tool = Tool.Marquee;
@@ -478,48 +478,31 @@ internal sealed partial class App
             Doc.SelectOnly(new[] { src });
             var srcXform0 = src.Transform;
 
-            RunBarActionForTest((int)SelBarButton.Copy);              // 复制按钮（第二轮从 0 挪到 5）
-            bool armed = CopyDragArmed && Doc.Selected.Count == 1;
+            RunBarActionForTest((int)SelBarButton.Copy);
+            var copy = Doc.Selected.Count == 1 ? Doc.Selected[0] : null;
+            bool copyOffset = copy != null
+                && MathF.Abs(copy.Transform.M31 - (src.Transform.M31 + 24f)) < 0.5f
+                && MathF.Abs(copy.Transform.M32 - (src.Transform.M32 + 24f)) < 0.5f;
+            bool copyOriginalKept = src.Transform.Equals(srcXform0);
+            bool clipboardHasCopy = ClipboardInk.TryGetObjects(out var clipObjs)
+                                    && clipObjs != null && clipObjs.Count == 1;
+            Check("复制按钮：原件原位保留 + 副本错位选中",
+                  Doc.Strokes.Count == 2 && copy != null && !ReferenceEquals(copy, src)
+                  && copyOffset && copyOriginalKept,
+                  $"对象={Doc.Strokes.Count}，选中={Doc.Selected.Count}，"
+                  + $"偏移={(copy != null ? $"{copy.Transform.M31 - src.Transform.M31:F0},{copy.Transform.M32 - src.Transform.M32:F0}" : "无")}，"
+                  + $"原件={(copyOriginalKept ? "没动" : "动了")}，剪贴板={clipboardHasCopy}");
+            if (clipboardHasCopy)
+                Check("复制按钮：同一动作也进了剪贴板", true, "可编辑对象格式已读到");
+            else
+                Console.WriteLine("    [剪贴板] 当前被其他程序占用，跳过这一条（--clipboardtest 另测）");
 
-            bool took = SelectionGestureForTest(x0 + 100f, y0);        // 按在原件上（框内 → 拖动）
-            bool cloneMade = Doc.Strokes.Count == 2;                   // 克隆发生在按下那一刻
-            if (took)
-            {
-                UpdateSelectionGestureForTest(x0 + 300f, y0 + 60f);    // 拖出去
-                EndSelectionGestureForTest();
-            }
-            var firstCopy = Doc.Selected.Count == 1 ? Doc.Selected[0] : null;
-            bool firstOk = armed && took && cloneMade
-                        && firstCopy != null && !ReferenceEquals(firstCopy, src)
-                        && src.Transform.Equals(srcXform0);
-
-            // 再拖一次 → 第三份（「可连续多份」）
-            bool took2 = SelectionGestureForTest(x0 + 300f, y0 + 60f);
-            if (took2)
-            {
-                UpdateSelectionGestureForTest(x0 + 500f, y0 + 120f);
-                EndSelectionGestureForTest();
-            }
-            bool secondOk = Doc.Strokes.Count == 3 && Doc.Selected.Count == 1;
-
-            Check("复制拖拽模式：拖出副本、原件不动、可连续拖第二份",
-                  firstOk && secondOk,
-                  $"进模式={armed}，第一次接住={took}（克隆重合={cloneMade}），"
-                  + $"第二次接住={took2}；对象数 {Doc.Strokes.Count}（应 3），"
-                  + $"原件 {(src.Transform.Equals(srcXform0) ? "没动" : "动了")}");
-
-            // 每拖出一份 = 一步撤销（**克隆 + 位移是一步**，不是两步）
+            // 副本是一次独立撤销；原件不应被带走
             Doc.Undo();
-            bool backToTwo = Doc.Strokes.Count == 2;
-            Doc.Undo();
-            Check("复制拖拽：一次撤销回退一份（克隆+位移合成一步）",
-                  backToTwo && Doc.Strokes.Count == 1 && ReferenceEquals(Doc.Strokes[0], src)
+            Check("复制按钮：一次撤销只回退副本，原件回原位",
+                  Doc.Strokes.Count == 1 && ReferenceEquals(Doc.Strokes[0], src)
                   && src.Transform.Equals(srcXform0),
-                  $"撤一次后 {2} 条、再撤一次 {Doc.Strokes.Count} 条，"
-                  + $"原件位置 {(src.Transform.Equals(srcXform0) ? "回到原位" : "没回来")}");
-
-            RunBarActionForTest((int)SelBarButton.Copy);              // 退出模式（收尾）
-            Check("再点一次复制按钮 → 退出复制拖拽模式", !CopyDragArmed, $"armed={CopyDragArmed}");
+                  $"{Doc.Strokes.Count} 条，原件位置 {(src.Transform.Equals(srcXform0) ? "原位" : "变了")}");
         }
 
         // ⑭ 拖动 / 旋转期间的画法（2026-09-16）：方案 A 收装饰 + 方案 B 拖动预览

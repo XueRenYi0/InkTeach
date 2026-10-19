@@ -861,18 +861,6 @@ public partial class InkEngine
     internal EraserTelemetry EraserTelemetry;
 
     /// <summary>
-    /// **复制拖拽模式**：点了操作条的复制按钮之后进入，此时按住选中内容拖动 = **拖出一份副本**
-    /// （原件不动），可以连着拖多份；再点按钮 / 点空白 / 换工具退出。
-    ///
-    /// 语义抄 InkClass（那边已经踩过一轮坑）：点图标**只进模式**，不是"点一下原地克隆一份"
-    /// ——后者副本固定偏移 24px、落点不可控，已经废弃。
-    /// </summary>
-    internal bool CopyDragArmed;
-
-    /// <summary>复制拖拽这一次拖动里"插入副本"那条待提交的动作（松手时和位移合成一步）。</summary>
-    private AddStrokesAction _pendingClone;
-
-    /// <summary>
     /// 橡皮的落点反馈之外，**同时显示系统箭头**（默认藏起来，只画我们自己的圈/方块）。
     ///
     /// 留这个开关是为了做 A/B：自绘的方块光标本质是"我们画的一帧"，天生比系统光标晚
@@ -2133,6 +2121,18 @@ public partial class InkEngine
     /// 关掉就是原本的"透明批注"——直接写在别人的 PPT、网页上面。
     /// </summary>
     internal bool BoardOn;
+
+    /// <summary>
+    /// 打开白板时冻结在底层的文档页（0 起；-1 = 没有文档底座）。
+    /// 白板翻页只动白板相机，页图按打开那一刻的文档相机画，不再被白板滚动带回第 1 页。
+    /// </summary>
+    internal int BoardFrozenDocPage = -1;
+    internal float BoardFrozenDocViewOffsetY;
+
+    /// <summary>半透明白板 + 打开时冻结的文档页是否应该参与绘制。</summary>
+    internal bool BoardFrozenDocActive =>
+        BoardOn && DocView.IsOpen && BoardFrozenDocPage >= 0 && BoardOpacity < 0.999f;
+
     /// <summary>
     /// **文档的"纸"**（2026-10-09 用户定的"两张纸"模型）：文档开着时自动铺的一层白底
     /// （页缝/页边不露桌面）。它**独立于白板**——白板是"再来一张纸"，盖在文档上面；
@@ -5850,7 +5850,7 @@ public partial class InkEngine
             return false;
         }
 
-        ClipboardImage.SetImage(pixels, w, h);
+        bool clipOk = ClipboardImage.SetImage(pixels, w, h);
 
         var img = ImageData.Adopt(w, h, pixels);
         if (img == null) return false;
@@ -5870,9 +5870,12 @@ public partial class InkEngine
         {
             Doc.SelectOnly(new[] { placed });
             Tool = Tool.Marquee;             // 刚截完图，最可能的下一件事是摆放它
-            NotifyUiStateChanged();
+            SetInkStatus(clipOk
+                ? $"截图 {w}×{h} 已落图并选中，已复制到剪贴板"
+                : $"截图 {w}×{h} 已落图并选中；剪贴板被占用，未复制");
         }
-        Console.WriteLine($"截图 {w}×{h} 物理像素 → 原位落在画布 ({px:F0},{py:F0})，已选中");
+        Console.WriteLine($"截图 {w}×{h} 物理像素 → 原位落在画布 ({px:F0},{py:F0})，已选中；"
+                          + (clipOk ? "剪贴板已写入" : "剪贴板写入失败"));
         RegainKeyboardFocus();          // 回到批注态：前台/键盘要回来（见那段注释）
         return placed != null;
     }
@@ -6626,7 +6629,8 @@ public partial class InkEngine
         if (MathF.Abs(totalX) < TouchGestures.PageTurnLogical * DpiScale) return;
         _g2Turned = true;                      // 一次手势只翻一页（抬手再滑才是下一页）
         bool next = totalX < 0;                // 往左滑 = 下一页
-        if (PptMode)
+        if (BoardOn) FlipPage(next);           // 白板自己的页，优先于 PPT 翻页
+        else if (PptMode)
         {
             if (next) PptNextFromUi(); else PptPrevFromUi();
         }
@@ -6754,6 +6758,46 @@ public partial class InkEngine
         // 提示条 2026-09-16 按用户要求去掉了：屏幕上一个字都不留。
         if (ok) SelFlashUntilMs = NowMs + SelFlashMs;
         return ok;
+    }
+
+    /// <summary>
+    /// 操作条“复制”按钮：**原件原位保留，副本错位 24px 并选中，同时写入剪贴板**。
+    /// 不再有复制拖动模式；副本生成后直接拖它即可。
+    ///
+    /// 两个结果分开处理：剪贴板失败不影响副本，副本失败也不抹掉剪贴板；
+    /// 两边都失败 / 被上限拒绝时都有可见状态，而不是只在控制台留一行。
+    /// </summary>
+    internal bool CopySelectionAndDuplicate()
+    {
+        int n = Doc.Selected.Count;
+        if (n == 0)
+        {
+            SetInkStatus("复制：先选中要复制的对象");
+            return false;
+        }
+
+        // 先复制（内部可编辑对象 + 外部图片）；即使剪贴板被占用也继续生成副本。
+        bool copied = CopySelectionToClipboard();
+
+        // 原位保留原件，副本偏移 24px（和 Ctrl+D 的手感一致），并只选中副本。
+        bool duplicated = Doc.DuplicateSelected();
+
+        if (duplicated)
+        {
+            // 剪贴板成功时 CopySelectionToClipboard 已经闪过一次；失败时也闪一下，
+            // 至少让“副本已经生成”这件事在屏幕上看得见。
+            if (!copied) SelFlashUntilMs = NowMs + SelFlashMs;
+            SetInkStatus(copied
+                ? $"已复制 {n} 个对象：原件保留，新副本已选中，同时进入剪贴板"
+                : $"已复制 {n} 个对象：原件保留，新副本已选中；剪贴板被占用，未写入");
+            return true;
+        }
+
+        string why = string.IsNullOrEmpty(Doc.LastRejectReason) ? "副本创建失败" : Doc.LastRejectReason;
+        SetInkStatus(copied
+            ? $"已复制到剪贴板，但{why}"
+            : $"复制失败：剪贴板不可用，{why}");
+        return false;
     }
 
     // ---- 导出（选中 → 透明底 PNG）------------------------------------------
@@ -8204,7 +8248,12 @@ public partial class InkEngine
     {
         float want;
         int docTarget = -1;
-        if (DocView.IsOpen)
+        if (BoardOn)
+        {
+            // 白板有自己的屏页相机：翻页只动白板，不碰底下 PDF / PPT 的页。
+            want = ClampOffset(down ? ViewOffsetY - _virtualH : ViewOffsetY + _virtualH);
+        }
+        else if (DocView.IsOpen)
         {
             // 文档模式：翻页 = **跳到上/下一页的页顶**（"一页一翻"，10-03 文档定的交互）。
             // 相机只有一个数：把目标页顶摆到视口顶 → ViewOffsetY = _virtualY - 页顶。
@@ -8249,7 +8298,7 @@ public partial class InkEngine
             ViewOffsetY = want;               // 系统关了动画就直接跳终态（老机器上是常事）
             _camAnimating = false;
             _camAnimMs = CamAnimMs;
-            DocView.UnpinPage();
+            if (!BoardOn) DocView.UnpinPage();   // 白板的冻结页不能被翻页动画解钉
             _dirty = true;
             return true;
         }
@@ -8274,7 +8323,7 @@ public partial class InkEngine
             ViewOffsetY = (float)_camTo;
             _camAnimating = false;
             _camAnimMs = CamAnimMs;
-            DocView.UnpinPage();          // 目标页已经到视口；下一帧只留当前页
+            if (!BoardOn) DocView.UnpinPage();   // 白板的冻结页不能被翻页动画解钉
         }
         else
         {
@@ -8286,6 +8335,27 @@ public partial class InkEngine
 
     /// <summary>当前在第几屏（1 起）。相机偏移除以视口高 + 1。</summary>
     internal int ScreenIndex => (int)Math.Round(-ViewOffsetY / Math.Max(1f, _virtualH)) + 1;
+
+    /// <summary>
+    /// 白板自己的页数：内容最远到第几屏，至少当前屏；空白板至少 1 页。
+    /// 白板是连续画布，翻到新的一屏再写会自动把总页数长出来。
+    /// </summary>
+    internal int BoardPageCount
+    {
+        get
+        {
+            float h = Math.Max(1f, _virtualH);
+            int last = 1;
+            foreach (var s in Doc.Strokes)
+            {
+                var b = s.PaddedBounds;
+                if (b.IsEmpty) continue;
+                int p = (int)MathF.Ceiling((b.MaxY - _virtualY) / h);
+                if (p > last) last = p;
+            }
+            return Math.Max(ScreenIndex, last);
+        }
+    }
 
     /// <summary>还能不能往上翻（到顶了就不行；往下永远可以——画布下面永远多一屏）。</summary>
     internal bool CanFlipPageUp => ViewOffsetY < -1f;
@@ -9792,7 +9862,6 @@ public partial class InkEngine
         {
             // 点一下空白就想"什么都别选"——和框选那条同样的处理（见 ApplyMarquee）。
             Doc.Selected.Clear();
-            CopyDragArmed = false;
             LassoPath.Clear();
             _dirty = true;
             return;
@@ -9961,6 +10030,7 @@ public partial class InkEngine
             // 放映里没选中时同样走 ←→（代 PPT 翻页），和放映临时全局键那条路一致。
             case KeyAction.NudgeLeft:
                 if (Doc.Selected.Count > 0) Nudge(-1f, 0f);
+                else if (BoardOn) FlipPageFromUi(false);
                 else if (PptMode) PptPrevFromUi();
                 else FlipPageFromUi(false);
                 break;
@@ -9971,6 +10041,7 @@ public partial class InkEngine
                 break;
             case KeyAction.NudgeRight:
                 if (Doc.Selected.Count > 0) Nudge(1f, 0f);
+                else if (BoardOn) FlipPageFromUi(true);
                 else if (PptMode) PptNextFromUi();
                 else FlipPageFromUi(true);
                 break;
@@ -9988,10 +10059,14 @@ public partial class InkEngine
             // 放映时 ←→（临时全局热键送进来的）：**有选中 → 微调；没选中 → 代 WPS/PPT 翻页**。
             // 键盘在我们手里，不拦的话 WPS 收不到 ←→，表现就是"按了没反应"（用户实测）。
             case KeyAction.PptPrev:
-                if (Doc.Selected.Count > 0) Nudge(-1f, 0f); else PptPrevFromUi();
+                if (Doc.Selected.Count > 0) Nudge(-1f, 0f);
+                else if (BoardOn) FlipPageFromUi(false);
+                else PptPrevFromUi();
                 break;
             case KeyAction.PptNext:
-                if (Doc.Selected.Count > 0) Nudge(1f, 0f); else PptNextFromUi();
+                if (Doc.Selected.Count > 0) Nudge(1f, 0f);
+                else if (BoardOn) FlipPageFromUi(true);
+                else PptNextFromUi();
                 break;
             // 放映时 ↑↓（临时全局热键送进来的）：和普通模式同一条逻辑——一格 = 屏幕高的 1/10。
             case KeyAction.PanUp:
@@ -10149,7 +10224,6 @@ public partial class InkEngine
     /// <summary>收起选区（换工具、以及"与选中无关的新操作"走这里）。</summary>
     private void ClearSelectionForNewContext()
     {
-        CopyDragArmed = false;
         // 选区没了，面板和它下面挂的自定义取色板也一起收掉——
         // 不收的话"面板关了色板还挂在屏幕上"（见 CloseCustomColor 那段注释）。
         CloseCustomColor();
@@ -11400,6 +11474,32 @@ public partial class InkEngine
     private int _boardReturnKey = 0;
 
     /// <summary>
+    /// 打开白板前冻结当前文档页：白板是独立画布，但半透明时露出的 PDF/图片页
+    /// 必须停在**打开那一刻**的那一页，不能跟着白板相机回到第 1 页。
+    /// </summary>
+    private void CaptureBoardFreeze()
+    {
+        ClearBoardFreeze();
+        if (!DocView.IsOpen) return;
+
+        var vp = ViewportCanvas;
+        int idx = DocView.CurrentIndex(vp.MinY, vp.MaxY);
+        if (idx < 0) idx = DocView.FirstAtOrAfter(vp.MinY);
+        if (idx < 0 || idx >= DocView.Count) return;
+
+        BoardFrozenDocPage = idx;
+        BoardFrozenDocViewOffsetY = ViewOffsetY;
+        DocView.PinPage(idx);
+    }
+
+    private void ClearBoardFreeze()
+    {
+        BoardFrozenDocPage = -1;
+        BoardFrozenDocViewOffsetY = 0f;
+        DocView.UnpinPage();
+    }
+
+    /// <summary>
     /// 开关白板。**2026-10-16 起白板是独立槽**（用户定）：开 = 切到白板槽
     /// （桌面 / 文档 / PPT 的墨迹都不跟着来），关 = 切回进来之前待的那一页。
     /// 底色 / 底纹跟着 <see cref="BoardOn"/> 走，切槽必然整层重画（缓存是按旧底色画的）。
@@ -11421,6 +11521,7 @@ public partial class InkEngine
         if (on)
         {
             SetPassThrough(false);          // 开白板顺手关穿透（原样）
+            CaptureBoardFreeze();           // 先记下 PDF/图片停在哪一页（切槽前！）
             int from = Doc.PageKey;
             if (from != InkDocument.BoardPageKey) _boardReturnKey = from;
             if (Doc.SwitchPage(InkDocument.BoardPageKey))
@@ -11452,6 +11553,7 @@ public partial class InkEngine
     /// </summary>
     private void LeaveBoardSlot()
     {
+        ClearBoardFreeze();
         int from = Doc.PageKey;
         if (Doc.SwitchPage(_boardReturnKey))
         {
@@ -13175,7 +13277,6 @@ public partial class InkEngine
     private bool TryBeginSelectionGesture(float x, float y, bool shift, bool alt)
     {
         _dragHitStroke = null;
-        _pendingClone = null;
         ResetAlignSnapLatch();
         ClearAlignTargets();
         float dpi = DpiScale;
@@ -13331,20 +13432,6 @@ public partial class InkEngine
             // 无修饰键：选中它并**直接进入整体拖动**（点住就能拖，和 PPT 一样）。
             frame = SelectionHandles.FrameOf(Doc.Selected);
             move = true;
-        }
-
-        // —— 4.5：复制拖拽模式：按住选中内容拖动 = **拖出一份副本**（原件不动）——
-        // 克隆放在这里（按下那一刻），副本与原件完全重合，随后这一次拖动移动的就是副本；
-        // 松手时把"插入副本 + 移动副本"合成一步撤销（见 EndSelDrag）。
-        if (move && CopyDragArmed)
-        {
-            _pendingClone = Doc.CloneSelectedInPlace();
-            if (_pendingClone.Strokes.Count > 0)
-            {
-                frame = SelectionHandles.FrameOf(Doc.Selected);   // 副本与原件重合，框不变
-                _dirty = true;
-            }
-            else _pendingClone = null;
         }
 
         _dragHandle = h;
@@ -13872,7 +13959,7 @@ public partial class InkEngine
     {
         var raw = cur - _dragStartPoint;
 
-        if (_dragTargets == null || _dragTargets.Length != 1 || alt || _pendingClone != null
+        if (_dragTargets == null || _dragTargets.Length != 1 || alt
             || _alignTargets == null || _alignTargets.Length == 0)
         {
             ResetAlignSnapLatch();
@@ -14204,7 +14291,6 @@ public partial class InkEngine
             _dragHandle = SelHandle.None;
             _dragIsMove = false;
             _dragHitStroke = null;
-            _pendingClone = null;
             _selDragMatrix = Matrix3x2.Identity;
             ReattachAfterDrag();
             _dirty = true;
@@ -14221,25 +14307,8 @@ public partial class InkEngine
         foreach (var t in _dragTargets) Doc.Selected.Add(t);
         // **一点没移动就别进撤销栈**：按一下选中框（或者点选一条）原本会多出一条
         // "原样"的撤销记录——点选一多，撤销栈里全是这种空记录。
-        if (_pendingClone != null)
-        {
-            // 拖出副本：**插入副本 + 移动副本 = 一步撤销**（拖错了按一次就全回去）。
-            if (_selDragMatrix.IsIdentity)
-            {
-                Doc.CommitCompound(_pendingClone);
-            }
-            else
-            {
-                var moveAct = new TransformObjectsAction(Doc.Selected, _selDragMatrix);
-                moveAct.Redo(Doc);
-                Doc.CommitCompound(_pendingClone, moveAct);
-            }
-            _pendingClone = null;
-        }
-        else if (!_selDragMatrix.IsIdentity)
-        {
+        if (!_selDragMatrix.IsIdentity)
             Doc.ApplyTransform(_selDragMatrix);
-        }
 
         // "点一下把多选收窄成单选"：按下时命中了一条、而这一次**一点没移动** → 只留它
         // （PPT/Figma 的行为）。移动过就正常整体搬，不收窄。
@@ -14252,7 +14321,6 @@ public partial class InkEngine
         _dragHandle = SelHandle.None;
         _dragIsMove = false;
         _dragHitStroke = null;
-        _pendingClone = null;
         _selDragMatrix = Matrix3x2.Identity;
 
         // 方案 B：这一批回到内容层（下一次重画就把它们画进块里）。
@@ -14279,7 +14347,6 @@ public partial class InkEngine
                 SelBarCollapsed = true;
                 CloseCustomColor();
                 SelPanelOpen = SelPanel.None;
-                CopyDragArmed = false;
                 break;
 
             case SelBarButton.Color:
@@ -14326,11 +14393,10 @@ public partial class InkEngine
                 break;
             }
 
-            // **进入/退出"复制拖拽模式"**，不是"点一下原地克隆一份"。
-            // 抄 InkClass 的结论：点击即克隆那版"副本固定偏移 24px、落点不可控"，已废弃；
-            // 现在点图标只进模式（图标高亮 + 框变虚线），之后按住选中内容拖 = 拖出副本。
+            // 复制按钮 = **原件原位保留 + 新副本错位选中 + 写入剪贴板**。
+            // 不再有"复制拖动模式"；生成副本后直接拖新副本即可。
             case SelBarButton.Copy:
-                CopyDragArmed = !CopyDragArmed;
+                CopySelectionAndDuplicate();
                 break;
 
             // 翻转绕**框自己的轴**。框现在一律轴对齐，所以它就是屏幕的左右/上下翻——
@@ -14356,8 +14422,6 @@ public partial class InkEngine
             }
         }
         Laser.Clear();
-        // 删除之后选区可能空了；模式跟着选区走（InkClass 同款：选区没了就退出）。
-        if (Doc.Selected.Count == 0) CopyDragArmed = false;
         _dirty = true;
     }
 

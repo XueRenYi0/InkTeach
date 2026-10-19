@@ -6998,39 +6998,6 @@ internal sealed class InkDocument
     }
 
     /// <summary>
-    /// 复制拖拽用：把当前选中**原地克隆一份**插进文档，**不进撤销栈**——调用方会在松手时
-    /// 把"插入副本 + 拖动副本"合成一步（见 <see cref="CommitCompound"/>）。
-    ///
-    /// 为什么是"原地重合"而不是像 Ctrl+D 那样偏移 24 像素：拖出副本的手感就是
-    /// "从原件上拖出来一份"，起点必须重合（抄 InkClass 的结论：固定偏移的落点不可控）。
-    /// </summary>
-    public AddStrokesAction CloneSelectedInPlace()
-    {
-        var act = new AddStrokesAction();
-        if (Selected.Count == 0) return act;
-
-        // 护栏和 Ctrl+D 同一套（见 DuplicateSelected 的注释）
-        foreach (var s in Selected)
-        {
-            if (Strokes.Count + act.Strokes.Count + 1 > MaxObjects)
-            {
-                LastRejectReason = $"批注数量将达到上限 {MaxObjects}，这一份副本没复制。";
-                Console.WriteLine("[拒绝] " + LastRejectReason);
-                break;
-            }
-            var c = s.Clone();
-            act.Strokes.Add(c);
-            AppendStroke(c);        // 这一步给它分配 Id
-        }
-        if (act.Strokes.Count > 0)
-        {
-            Selected.Clear();
-            Selected.AddRange(act.Strokes);
-        }
-        return act;
-    }
-
-    /// <summary>
     /// 把几步**合成一步**提交。调用方保证这些效果**已经应用过**了
     /// （副本已插入、变换在拖动中逐帧设过），这里只记账。
     /// </summary>
