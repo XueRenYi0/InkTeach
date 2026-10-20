@@ -52,9 +52,9 @@ public sealed partial class FullUi : IOverlayUi
     // ---- 界面档位 -----------------------------------------------------------
     //
     // 三档（用户定的默认是"完整档"）：
-    //   · 极简 = 一条**短胶囊**，只留最常用的六格；
+    //   · 极简 = 一条**短胶囊**，只留最常用的七格（也是自定义的硬下限）；
     //   · 自定义 = 老师自己钉的那份集合（默认＝全部，等于完整档，改过之后才不一样）；
-    //   · 完整 = 全部十二格。
+    //   · 完整 = 全部十三格。
     // 规则一条：**极简与自定义都必须是完整档顺序的子序列**——同一个工具在哪一档里
     // 都在同一个相对位置，来回切档不用重新找。
 
@@ -64,6 +64,7 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>
     /// 极简档留哪几格。**照抄假面板的结论**（鼠标/白板/笔/橡皮/后撤/更多）：
     /// 补"鼠标"是因为看 PPT 时要能点下层，补"后撤"是因为误画一笔要有救。
+    /// 加上永远在的 0 号收起格 = 7 格；这 7 格同时是自定义的硬下限。
     /// </summary>
     private static readonly int[] MiniCells = { 1, 2, 3, 6, 10, 12 };
 
@@ -72,8 +73,12 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>自定义档钉了哪些格（下标对齐 Cells；0 号"收起格"永远在，不参与钉）。</summary>
     private readonly bool[] _pinned = CreateAllPinned();
 
-    /// <summary>笔、橡皮、「更多」是**安全项**：取消钉住之后就没法用了，所以不许取消。</summary>
-    private static bool CanUnpin(int cell) => cell is not (3 or 6 or 12);
+    /// <summary>
+    /// **7 格硬下限**：收起、鼠标、白板、画笔、橡皮、后撤、更多。
+    /// 这七项任何一项取消钉住都会让极简/自定义档失去核心入口，所以全部锁死；
+    /// 自定义只能在 7 格之上增删可选格，不能再往下减。
+    /// </summary>
+    private static bool CanUnpin(int cell) => cell is not (1 or 2 or 3 or 6 or 10 or 12);
 
     private static bool[] CreateAllPinned()
     {
@@ -102,6 +107,46 @@ public sealed partial class FullUi : IOverlayUi
                 break;
         }
         return list.ToArray();
+    }
+
+    /// <summary>
+    /// 上带的**宽度档**。主条每个工具格固定 40 宽，所以可见格数就是带宽的单调代理；
+    /// 用格数分档比用绝对像素阈值稳——同样 8 格，因为跨组缝不同会差十几像素，
+    /// 用像素阈值会在“加一个图标”时来回跳档，颜色数也跟着闪。
+    ///
+    ///   7 格（极简/硬下限）= 4 色、5 档粗细、无虚线、两字标签；
+    ///   8～9 格          = 6 色、7 档粗细、方形虚线、两字标签；
+    ///   10～11 格        = 8 色、10 档粗细、方形虚线、两字标签；
+    ///   12～13 格（完整）= 全部 8 色、全部粗细档、长方形虚线、完整标签。
+    ///
+    /// 色片**按可用宽度铺满**（7 格约 47×26、8 格约 31×26、完整约 47×26），
+    /// 不再固定成小方块，避免极简档出现一大片空缝。
+    ///
+    /// ⚠ 笔色表实际只有 8 色（<see cref="Tokens.Palette"/>），完整档就是 8 色；
+    ///    不为了凑“12 色”硬造四个没有名字的颜色。
+    /// </summary>
+    private enum BandDensity { Minimal = 0, Compact = 1, Regular = 2, Full = 3 }
+
+    private BandDensity Density
+    {
+        get
+        {
+            int n = VisibleCount();
+            if (n <= 7) return BandDensity.Minimal;
+            if (n <= 9) return BandDensity.Compact;
+            if (n <= 11) return BandDensity.Regular;
+            return BandDensity.Full;
+        }
+    }
+
+    /// <summary>只数可见格数，不建列表——绘制时每帧会问很多次，别在这里制造垃圾。</summary>
+    private int VisibleCount()
+    {
+        if (_profile == Profile.Mini) return MiniCells.Length + 1;
+        if (_profile == Profile.Full) return Cells.Length;
+        int n = 1;                                  // 0 号收起格永远在
+        for (int i = 1; i < _pinned.Length; i++) if (_pinned[i]) n++;
+        return n;
     }
 
     private IUiHost _host;
@@ -843,7 +888,7 @@ public sealed partial class FullUi : IOverlayUi
     // ---- 上带（当前工具的设置条）-------------------------------------------
     //
     // 一条规则贯穿到底：**上带显示"现在这个按钮的设置"**。
-    // 笔/荧光笔 = 12 色片 ＋ 粗细；激光 = 光点大小；橡皮 = 整笔/面积 ＋ 大小；
+    // 笔/荧光笔 = 色片（按宽度档 4/6/8 个）＋ 粗细；激光 = 光点大小；橡皮 = 整笔/面积 ＋ 大小；
     // 选择 = 矩形/套索；白板 = 三种板色；图形 = 整块图形面板（见 ShapeRows）。
     // 没有设置项的（后撤/重做/更多/截屏）就不长上带——不做一排空按钮。
 
@@ -852,17 +897,19 @@ public sealed partial class FullUi : IOverlayUi
 
     private RectF SwatchRect(int i)
     {
-        // **色片按可用宽度平分，铺满整条**（照假面板：cw = (avail - gap*(n-1)) / n）。
-        // 早先我写的是固定 26 宽 ＋ 6 缝，结果右边空出一大块，跟假面板一比就露馅了。
+        // **按可用宽度铺满，不再固定方块**。7 格 4 个色片各约 47×26，
+        // 8 格 6 个约 31×26，完整档 8 个约 47×26；色片之间只留 4 的缝，
+        // 看起来是一条连续的色带，而不是四个孤零零的小方块。
+        // 极简档曾经试过 26×26 方块，留下的空隙太大，用户 2026-10-20 否掉了。
         var band = BandRect();
         int n = SwatchCount;
-        float gap = 4f;
         float avail = band.MaxX - band.MinX - BarInset() * 2f
                     - (BandHasSlider ? SliderTrackW + 14f : 0f)    // 给右端的粗细滑条让位
                     - (BandHasDashToggle ? DashToggleW + DashToggleGap : 0f)   // 给虚实线那一格让位
                     - ActionReserve;                                // 给最右端的动作按钮让位
-        float w = (avail - gap * (n - 1)) / n;
         float h = SwatchHeight();
+        float gap = 4f;
+        float w = MathF.Max(18f, (avail - gap * (n - 1)) / n);
         float x = band.MinX + BarInset() + i * (w + gap);
         float y = BandCenterY() - h * 0.5f;
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
@@ -874,8 +921,11 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>色片的高：最多 26，带子矮的时候按比例缩（假面板：min(26, band * 0.8)）。</summary>
     private float SwatchHeight() => MathF.Min(Tokens.Swatch, BandHeightFull() * 0.8f);
 
-    /// <summary>虚实线那一格的宽（逻辑像素）：46 = 里面还画得下一小段线 + 左右各留 8。</summary>
-    private const float DashToggleW = 46f;
+    /// <summary>
+    /// 虚实线那一格的宽（逻辑像素）：完整档 46 = 一小段线 + 左右各留 8；
+    /// 8～11 格收成 28×26 的方形（只画一小段样本线），极简档直接不出现。
+    /// </summary>
+    private float DashToggleW => Density == BandDensity.Full ? 46f : 28f;
     /// <summary>它和左边色片、右边滑条之间的缝。</summary>
     private const float DashToggleGap = 8f;
 
@@ -883,7 +933,7 @@ public sealed partial class FullUi : IOverlayUi
     /// **虚实线切换那一格**：从滑条左边往左让出"一格 + 一道缝"算出来。
     ///
     /// 为什么锚在滑条上、不锚在色片上：滑条是**贴着面板右沿**摆的（位置由 BarInset 定死），
-    /// 所以从它往左量出来的这一格**不会随色片个数变**——极简档 4 个色片、完整档 12 个，
+    /// 所以从它往左量出来的这一格**不会随色片个数变**——极简档 4 个色片、完整档 8 个，
     /// 它都不会跳。色片那边再让开同一对常量（见 <see cref="SwatchRect"/>），两边同源。
     /// </summary>
     private RectF DashToggleRect()
@@ -902,8 +952,17 @@ public sealed partial class FullUi : IOverlayUi
     private bool HitDashToggle(float x, float y)
         => BandHasDashToggle && RailOpen && DashToggleRect().Contains(x, y);
 
-    /// <summary>粗细滑条的轨道宽（逻辑像素）。</summary>
-    private const float SliderTrackW = 132f;
+    /// <summary>
+    /// 粗细滑条的轨道宽（逻辑像素）。**先缩间距/滑条，再减颜色**：
+    /// 极简 110、8～9 格 118、10 格以上 132。滑条短了但档位吸附还在，
+    /// 不会因为省宽度把滑条挤没。
+    /// </summary>
+    private float SliderTrackW => Density switch
+    {
+        BandDensity.Minimal => 110f,
+        BandDensity.Compact => 118f,
+        _ => 132f,
+    };
 
     /// <summary>
     /// 粗细滑条：**长在设置条里面、靠右端**（用户 2026-09-17："笔、荧光笔的调节大小
@@ -1135,14 +1194,12 @@ public sealed partial class FullUi : IOverlayUi
     /// 这一格的设置条上要不要那个**虚实线切换**（夹在色片和粗细滑条之间，
     /// 用户 2026-09-19 定的位置："加在'调按钮大小'和'颜色带'中间"）。
     ///
-    /// **只有完整档的笔有**，两条理由：
-    ///   · 荧光笔 / 激光笔的轨迹画成虚线没有意义（见 Engine.PenDash），图形的线型历来
-    ///     是"选中之后在操作条面板里改"——所以只有第 3 格；
-    ///   · 极简档那条带子只有 ~333 宽，4 个色片 + 粗细滑条已经吃掉 155，再塞一格
-    ///     就把色片压到 30 像素以下——而"色片挤到看不清"等于这个入口没有
-    ///     （自检里"每个色片 ≥30 宽"那条就是这个意思）。极简档想要虚线就切回完整档。
+    /// 只有笔（第 3 格）有；荧光笔 / 激光笔画虚线没有意义（见 Engine.PenDash）。
+    /// 显示档随带宽走：极简 7 格没有（4 个方块色片 + 滑条已经很满），
+    /// 8～11 格是 28×26 方形，12 格以上才恢复 46 宽的长方形。
+    /// 这样不是“少一个功能”，而是把这一档最不常用的开关让位给颜色/滑条。
     /// </summary>
-    private bool BandHasDashToggle => _bandCell == 3 && _profile != Profile.Mini;
+    private bool BandHasDashToggle => _bandCell == 3 && Density != BandDensity.Minimal;
     /// <summary>
     /// 哪几格的设置条右边有滑条。
     ///
@@ -1382,6 +1439,47 @@ public sealed partial class FullUi : IOverlayUi
         _ => PenWidthGrades,
     };
 
+    /// <summary>
+    /// **滑条实际吸附的档位**：极简 5 档、8～9 格 7 档、10～11 格 10 档、完整全档。
+    /// 首尾一定保留（最细到最粗），中间按等距抽样；抽出来的值都来自原档表，
+    /// 所以引擎按全档表吸附时也会落在同一个值上。
+    ///
+    /// 只影响“拖滑条一次能停几个位置”，不改变实际笔宽范围；
+    /// 键盘 Ctrl+Alt+6 的循环仍走引擎全档表，那是另一条入口。
+    /// </summary>
+    private float[] ActiveWidthGrades(Tool tool)
+    {
+        var all = WidthGrades(tool);
+        int want = Density switch
+        {
+            BandDensity.Minimal => 5,
+            BandDensity.Compact => 7,
+            BandDensity.Regular => 10,
+            _ => all.Length,
+        };
+        if (want >= all.Length) return all;
+
+        var picked = new float[want];
+        for (int i = 0; i < want; i++)
+        {
+            int idx = (int)MathF.Round(i * (all.Length - 1f) / (want - 1f));
+            picked[i] = all[idx];
+        }
+        return picked;
+    }
+
+    private static int NearestGradeIndex(float[] grades, float value)
+    {
+        int best = 0;
+        float bestD = float.MaxValue;
+        for (int i = 0; i < grades.Length; i++)
+        {
+            float d = MathF.Abs(grades[i] - value);
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+    }
+
     private float SliderT(in UiState st)
     {
         // 白板那一格：滑条 = **板面不透明度**（不是粗细）。
@@ -1412,6 +1510,9 @@ public sealed partial class FullUi : IOverlayUi
         }
         var (min, max) = WidthRange(_host.State.Tool);
         float want = min + (max - min) * t;
+        // 窄档只吸附到这一档可见的 5/7/10 个位置；完整档仍是全档表。
+        var grades = ActiveWidthGrades(_host.State.Tool);
+        want = grades[NearestGradeIndex(grades, want)];
         if (MathF.Abs(want - _host.State.Width) < 0.5f) return;   // 没变就不提交
         _host.Commands.SetWidth(want);
     }
@@ -1472,11 +1573,20 @@ public sealed partial class FullUi : IOverlayUi
     /// 宽一点不会挤坏带子：段和滑条是按剩余宽度等比缩的（见 SegmentRect）。
     /// </summary>
     private const float ActionWClear = 128f;
+    /// <summary>窄档的「清空」只放两字（62 = 图标 16 + 两字 + 留白）。</summary>
+    private const float ActionWClearTight = 62f;
+    /// <summary>8～9 格的「清空」比完整档窄一档，但还放得下两字 + 图标。</summary>
+    private const float ActionWClearCompact = 92f;
 
-    private static float ActionWidthOf(BandAction a) => a switch
+    private float ActionWidthOf(BandAction a) => a switch
     {
         BandAction.CloseBoard => ActionWNarrow,
-        BandAction.Clear => ActionWClear,
+        BandAction.Clear => Density switch
+        {
+            BandDensity.Minimal => ActionWClearTight,
+            BandDensity.Compact => ActionWClearCompact,
+            _ => ActionWClear,
+        },
         _ => ActionW,
     };
 
@@ -1585,7 +1695,10 @@ public sealed partial class FullUi : IOverlayUi
         var iconBox = new RectF { MinX = r.MinX + 6f, MinY = r.MinY, MaxX = r.MinX + 28f, MaxY = r.MaxY };
         IconAtlas.DrawCentered(ctx, paste ? "image" : clear ? "broom" : "selectAll", iconBox, 16f, Brush(ctx, ink));
         var labelBox = new RectF { MinX = r.MinX + 28f, MinY = r.MinY, MaxX = r.MaxX - 6f, MaxY = r.MaxY };
-        _widgets.Text(ctx, paste ? "粘贴图片" : clear ? "清除全部墨迹" : "全选",
+        bool tight = Density <= BandDensity.Compact;
+        _widgets.Text(ctx, paste ? (tight ? "粘贴" : "粘贴图片")
+                              : clear ? (tight ? "清空" : "清除全部墨迹")
+                              : "全选",
                       labelBox, 12.5f, Brush(ctx, InkCol));
 
         if (_host != null && _host.NowMs < _actionFlashUntil)
@@ -1932,14 +2045,14 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>
     /// 这一档显示哪几个色片（返回**色片表**里的下标）。
     ///
-    /// 三张映射各有各的用法（表本身在 <see cref="Tokens"/> 里）：
+    /// 四张映射各有各的用法（表本身在 <see cref="Tokens"/> 里）：
     ///   · **荧光笔**（`HlSwatchIdx`）：用 `Tokens.HighlighterPalette` 那张亮色表，
     ///     5 个全给——2026-09-27 用户定的"独立一张亮色表"；
-    ///   · **极简档的笔**只给 4 个：短胶囊（359 宽）里塞 12 个色片、再减掉滑条占的那 146，
-    ///     每个只剩 11 像素宽——点都点不准（用户 2026-09-17："极简模式的色带展开栏里面的
-    ///     内容排布有点问题"）。4 个的话每个 42 像素，和完整档一个手感。
+    ///   · **7 格极简的笔**只给 4 个：短胶囊（约 359 宽）里塞 8 个色片、再减掉滑条，
+    ///     每个都会变窄；4 个色片按可用宽度铺开（约 47×26），既饱满又好点。
     ///     颜色照假面板定的：**红 / 黑 / 蓝 / 白**（讲课时最常用的四支）；
-    ///   · **完整档的笔**：12 个全给。
+    ///   · **8～9 格**给 6 个（加绿 / 黄）；
+    ///   · **10 格以上**给全部 8 个（色表本身只有 8 色，不虚标）。
     ///
     /// ⚠ 极简档里**没有荧光笔那一格**（见 `MiniCells`），所以那里不会用到荧光笔表；
     ///    但映射还是给全了——哪天极简档加了荧光笔格，这里不用再补。
@@ -1947,6 +2060,7 @@ public sealed partial class FullUi : IOverlayUi
     ///   （绿和蓝对调、灰/青/粉/棕拿掉），所以这一行跟着改成了 { 1 红, 0 黑, 2 蓝, 7 白 }。
     /// </summary>
     private static readonly int[] MiniSwatchIdx = { 1, 0, 2, 7 };      // 红 / 黑 / 蓝 / 白
+    private static readonly int[] CompactSwatchIdx = { 1, 0, 2, 7, 3, 4 }; // + 绿 / 黄
     private static readonly int[] FullSwatchIdx = CreateAllIdx(Tokens.Palette.Length);
     private static readonly int[] HlSwatchIdx = CreateAllIdx(Tokens.HighlighterPalette.Length);
 
@@ -1966,7 +2080,12 @@ public sealed partial class FullUi : IOverlayUi
 
     private int[] SwatchIdx => UsingHighlighterSwatches
         ? HlSwatchIdx
-        : (_profile == Profile.Mini ? MiniSwatchIdx : FullSwatchIdx);
+        : Density switch
+        {
+            BandDensity.Minimal => MiniSwatchIdx,
+            BandDensity.Compact => CompactSwatchIdx,
+            _ => FullSwatchIdx,
+        };
     private int SwatchCount => SwatchIdx.Length;
     private Color4 SwatchColor(int i) => SwatchTable[SwatchIdx[i]].Color;
 
@@ -2661,7 +2780,8 @@ public sealed partial class FullUi : IOverlayUi
             if (MoreProfileRect(i).Contains(x, y)) return MoreHitProfile + i;
         if (ChipsShown)
             for (int cell = 1; cell < Cells.Length; cell++)
-                if (MoreChipRect(cell).Contains(x, y)) return MoreHitChip + cell;
+                if (CanUnpin(cell) && MoreChipRect(cell).Contains(x, y))
+                    return MoreHitChip + cell;
         for (int i = 0; i < Rows.Length; i++)
             if (MoreRowRect(i).Contains(x, y)) return MoreHitRow + i;
         return MoreHitInside;
@@ -2900,8 +3020,9 @@ public sealed partial class FullUi : IOverlayUi
             {
                 var c = MoreChipRect(cell);
                 bool pinned = _pinned[cell];
+                bool locked = !CanUnpin(cell);
                 var rr = new RoundedRectangle(new Vortice.RawRectF(c.MinX, c.MinY, c.MaxX, c.MaxY), 8f, 8f);
-                if (_moreHover == MoreHitChip + cell) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+                if (!locked && _moreHover == MoreHitChip + cell) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
                 ctx.DrawRoundedRectangle(rr, Brush(ctx, pinned ? Tokens.Accent : BorderCol), 1f);
                 DrawCellIcon(ctx, cell, c, Tokens.Icon,
                              new Color4(InkCol.R, InkCol.G, InkCol.B, pinned ? 1f : 0.35f),
@@ -2909,6 +3030,7 @@ public sealed partial class FullUi : IOverlayUi
                 if (!pinned)
                     _widgets.Text(ctx, "+", new RectF { MinX = c.MaxX - 18f, MinY = c.MinY + 2f, MaxX = c.MaxX - 3f, MaxY = c.MinY + 18f },
                                   12f, Brush(ctx, MutedCol));
+                if (locked) DrawLockBadge(ctx, c);
             }
         }
         else
@@ -2924,6 +3046,22 @@ public sealed partial class FullUi : IOverlayUi
         DrawMoreGroupHead(ctx, SetWriteHeadRect(), "书写");
         DrawMoreGroupHead(ctx, SetInkHeadRect(), "墨迹");
         for (int i = 0; i < Rows.Length; i++) DrawMoreRow(ctx, i);
+    }
+
+    /// <summary>
+    /// 自定义档里**核心七格**右上角的小锁：它们不能取消钉住，不画锁的话
+    /// 点一下没反应会被当成 bug。锁用线条画，不依赖图标资源。
+    /// </summary>
+    private void DrawLockBadge(ID2D1DeviceContext ctx, RectF chip)
+    {
+        var c = new Color4(InkCol.R, InkCol.G, InkCol.B, 0.55f);
+        float x = chip.MaxX - 15f, y = chip.MinY + 5f;
+        // 先画锁梁（半圆），再用锁身盖住下半截。
+        ctx.DrawEllipse(new Ellipse(new Vector2(x + 4.5f, y + 3.5f), 3.2f, 3.6f),
+                        Brush(ctx, c), 1.2f);
+        ctx.FillRoundedRectangle(
+            new RoundedRectangle(new Vortice.RawRectF(x, y + 4f, x + 9f, y + 13f), 2f, 2f),
+            Brush(ctx, c));
     }
 
     private void DrawMoreRow(ID2D1DeviceContext ctx, int i)
@@ -4847,11 +4985,15 @@ public sealed partial class FullUi : IOverlayUi
 
     private string SegmentLabel(int i) => _bandCell switch
     {
-        6 => i == 0 ? "整笔擦" : "面积擦",
+        // 窄档两字：笔擦 / 面擦 / 清空（绝不缩成单个“清”，歧义太大）。
+        6 => Density <= BandDensity.Compact
+                ? (i == 0 ? "笔擦" : "面擦")
+                : (i == 0 ? "整笔擦" : "面积擦"),
         7 => i == 0 ? "矩形" : "套索",
         // 截图：名字照微信那套（8.3.1）——"截图" = 屏幕原样（连我们的板书一起），
         // "隐藏窗口截图" = 先把我们这层藏起来，拍到的只有下层内容。
-        9 => i == 0 ? "截图" : "隐藏窗口截图",
+        9 => i == 0 ? "截图"
+                    : (Density <= BandDensity.Compact ? "隐窗截图" : "隐藏窗口截图"),
         8 => "",                                   // 图形：画图标（见 ShapeIcon）
         _ => "",
     };
@@ -5752,6 +5894,10 @@ public sealed partial class FullUi : IOverlayUi
     internal int VisibleCountForTest => VisibleCells().Length;
     internal int ProfileForTest => (int)_profile;
     internal bool PinnedForTest(int cell) => _pinned[cell];
+    internal bool CanUnpinForTest(int cell) => CanUnpin(cell);
+    internal int DensityForTest => (int)Density;
+    internal float SwatchWidthForTest(int i) => SwatchRect(i).MaxX - SwatchRect(i).MinX;
+    internal int ActiveGradeCountForTest(Tool tool) => ActiveWidthGrades(tool).Length;
 
     /// <summary>自检用：档位条第 i 段、钉住栏第 cell 格的矩形（与产品同一处：更多面板里）。</summary>
     internal RectF ProfileRectForTest(int i) => MoreProfileRect(i);

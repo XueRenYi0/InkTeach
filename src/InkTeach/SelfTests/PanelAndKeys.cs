@@ -556,10 +556,12 @@ internal sealed partial class App
                   dashR.MinX >= lastSw.MaxX - 0.5f && dashR.MaxX <= sliderR.MinX + 0.5f,
                   $"色片到 {lastSw.MaxX:F0}，虚实线 {dashR.MinX:F0}..{dashR.MaxX:F0}，滑条从 {sliderR.MinX:F0}");
 
-            // 加了这一格之后色片会变窄——"挤到看不清"等于这个入口没有（和极简档 4 色那条同一个判据）。
+            // 完整档恢复原来的“按可用宽度铺开”：宽色块比小正方形饱满，仍要够宽。
             var swFirst = ui.SwatchRectForTest(0);
-            Check("完整档：加了这一格之后色片仍然够宽（≥ 30 逻辑像素）",
-                  swFirst.MaxX - swFirst.MinX >= 30f, $"色片宽 {swFirst.MaxX - swFirst.MinX:F0}");
+            float swFirstW = swFirst.MaxX - swFirst.MinX;
+            Check("完整档：色片铺满可用宽度（≥ 30 逻辑像素，保持饱满）",
+                  swFirstW >= 30f,
+                  $"色片 {swFirstW:F0}×{swFirst.MaxY - swFirst.MinY:F0}");
 
             float dx = (dashR.MinX + dashR.MaxX) * 0.5f * DpiScale;
             float dy = (dashR.MinY + dashR.MaxY) * 0.5f * DpiScale;
@@ -2489,6 +2491,9 @@ internal sealed partial class App
         SettleFrames(250);
 
         Check("完整档是 13 格", ui.VisibleCountForTest == 13, $"显示 {ui.VisibleCountForTest} 格");
+        Check("完整档 = 最宽宽度档", ui.DensityForTest == 3, $"宽度档 = {ui.DensityForTest}");
+        Check("完整档的笔保留全部 20 个粗细档", ui.ActiveGradeCountForTest(Tool.Pen) == 20,
+              $"档数 = {ui.ActiveGradeCountForTest(Tool.Pen)}");
 
         // 极简档的色片行：**只给 4 个**（用户 2026-09-17："极简模式的色带展开栏里面的
         // 内容排布有点问题"——短胶囊里塞一整排色片，减掉滑条之后每个只有十几像素宽）。
@@ -2502,11 +2507,19 @@ internal sealed partial class App
             Check("极简档：色片只有 4 个", ui.SwatchCountForTest == 4,
                   $"色片数 {ui.SwatchCountForTest}");
             var sw0 = ui.SwatchRectForTest(0);
-            Check("极简档：每个色片都够宽（≥ 30 逻辑像素，点得准）",
-                  sw0.MaxX - sw0.MinX >= 30f, $"色片宽 {sw0.MaxX - sw0.MinX:F0}");
+            var sw1 = ui.SwatchRectForTest(1);
+            float sw0W = sw0.MaxX - sw0.MinX;
+            float swGap = sw1.MinX - sw0.MaxX;
+            Check("极简档：4 个色片铺满宽度（≥ 30，缝 ≤ 6）",
+                  sw0W >= 30f && swGap <= 6f,
+                  $"色片 {sw0W:F0}×{sw0.MaxY - sw0.MinY:F0}，缝 {swGap:F0}");
+            Check("极简档 = 最紧凑宽度档", ui.DensityForTest == 0,
+                  $"宽度档 = {ui.DensityForTest}");
+            Check("极简档的笔只保留 5 个粗细档", ui.ActiveGradeCountForTest(Tool.Pen) == 5,
+                  $"档数 = {ui.ActiveGradeCountForTest(Tool.Pen)}");
             // 极简档那条带子塞不下第三样东西（见 FullUi.BandHasDashToggle），
             // 所以那一格**不给**——色片优先。这条要验出来，不然以后谁把它加回去，
-            // 色片会悄悄变窄、而"≥30"那条也会跟着红，两处却对不上因果。
+            // 色片会悄悄变窄、而"色片宽度"那条也会跟着红，两处却对不上因果。
             Check("极简档：没有虚实线那一格（挤不下，让位给色片）",
                   !ui.DashToggleVisibleForTest, $"可见 = {ui.DashToggleVisibleForTest}");
             // 切回完整档
@@ -2567,6 +2580,10 @@ internal sealed partial class App
                       (penChip.MinY + penChip.MaxY) * 0.5f * DpiScale);
         SettleFrames(200);
         Check("安全项（笔）取消不掉", ui.PinnedForTest(3), $"笔钉着 = {ui.PinnedForTest(3)}");
+        Check("7 格硬下限：鼠标/白板/笔/橡皮/后撤/更多全部锁定",
+              !ui.CanUnpinForTest(1) && !ui.CanUnpinForTest(2) && !ui.CanUnpinForTest(3)
+              && !ui.CanUnpinForTest(6) && !ui.CanUnpinForTest(10) && !ui.CanUnpinForTest(12),
+              "1/2/3/6/10/12 应全部不可取消");
 
         // 钉回去，回到完整档，别把后面的用例带偏
         // 注意：每次点之前**重新取一次矩形**——切档会让主条宽度变、档位段自己也跟着重排，
@@ -3307,7 +3324,7 @@ internal sealed partial class App
         // 让上带回到"图形"那一格，再把指针挪回主条等它张开。
         // **每一步都要重新做**：上带是跟着当前工具走的（CellForTool），按过换工具的热键
         // 或换成笔之后，它显示的是**那个工具**的设置条——这时去点"第 3 段"会点在
-        // 别的设置条上（笔那格是 12 个色片），点出来的结果和图形毫无关系。
+        // 别的设置条上（笔那格是一排色片），点出来的结果和图形毫无关系。
         // C 段第一次跑就是这么点空的。
         void GotoShapeBand()
         {

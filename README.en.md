@@ -15,11 +15,11 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
-> **Latest 9.2.9 (2026-10-20)**: optional **Start with Windows** (off by default).
-> At sign-in InkTeach waits in pass-through mode with the toolbar collapsed to a ball, does not
-> steal focus or reopen the previous board, and expands when you click the ball or launch the app
-> again. It writes only the current user's `HKCU` Run entry, needs no admin, is removed on uninstall,
-> and honours a Task Manager disable. The 9.2.8 UI-scale unification and 9.2.7 paging fix are retained.
+> **Latest 9.3.0 (2026-10-20)**: the upper toolbar band is now width-tiered with a **7-cell hard floor**.
+> 7 cells = 4 colors / 5 width grades / no dash; 8–9 = 6 / 7 / square dash; 10–11 = 8 / 10;
+> 12–13 = full 8-color strip and long dash. Mouse, whiteboard and undo are locked as mandatory,
+> and the custom profile cannot drop below 7 cells. Color chips fill the available width instead of
+> leaving large gaps in the minimal profile. 9.2.9 autostart, 9.2.8 UI scaling and the 9.2.7 paging fix remain.
 
 **Requirements**: Windows 10 / 11 x64, **no .NET install needed** (self-contained).
 PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else works without.
@@ -30,7 +30,7 @@ PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else
 
 ## Quick start
 
-1. Download `InkTeach-Setup-9.2.9.exe`, double-click, Next, Done — or unzip the portable build.
+1. Download `InkTeach-Setup-9.3.0.exe`, double-click, Next, Done — or unzip the portable build.
 2. Open PowerPoint/WPS in slideshow mode, or any app; the InkTeach toolbar sits at the bottom.
 3. Write with a pen or mouse. `Ctrl+L` = laser, `Ctrl+E` = eraser, `Ctrl+Alt+Shift+T` hands the mouse back.
 4. Hold `Ctrl+Alt+Shift+Q` and flick to a sector to switch tools without hunting for the toolbar.
@@ -346,7 +346,7 @@ approach fits, we align with it instead of reinventing it:
 
 ## Lightweight: Windows 10 / 11, no .NET
 
-- Native AOT single exe, about **11MB**; the 9.2.9 installer is **8.57MB** and the portable zip **9.53MB**.
+- Native AOT single exe, about **11MB**; the 9.3.0 installer is **8.57MB** and the portable zip **9.29MB**.
 - **No .NET install, no UAC, no administrator rights**; the portable build is unzip-and-run.
 - On 4GB classroom machines, PDF pages are cached only around the viewport and rendered in the
   background, so memory does not grow with the page count.
