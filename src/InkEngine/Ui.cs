@@ -86,6 +86,13 @@ public interface IOverlayUi
     bool PointerMove(in UiPointerEvent e);
 
     /// <summary>
+    /// 鼠标滚轮。默认不消费，交给画布；打开的面板/说明页可以接过去滚动内部内容。
+    /// 坐标是界面逻辑坐标；delta 和 Win32 WM_MOUSEWHEEL 同号（向下为负）。
+    /// 只有指针落在界面上时引擎才会调用。
+    /// </summary>
+    bool Wheel(float x, float y, int delta) => false;
+
+    /// <summary>
     /// 指针离开了界面这一块。
     ///
     /// 为什么必须有这个出口：引擎只会把**落在界面矩形内**的移动转给界面，

@@ -166,7 +166,7 @@ internal sealed partial class OverlayWindow
         var pal = PalFor(app.FloatingTheme, app.CurrentColor);
         _winShadow = app.FloatingTheme.Shadow ?? Array.Empty<UiShadowLayer>();
 
-        float dpi = Dpi / 96f;
+        float dpi = app.UiUnit;
         var win = app.TimerCardRect();
         float u = app.TimerUnit();
 

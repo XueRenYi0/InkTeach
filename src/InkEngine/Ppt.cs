@@ -847,8 +847,8 @@ public partial class InkEngine
         if (r.IsEmpty) return RectF.Empty;
         return new RectF
         {
-            MinX = r.MinX * DpiScale, MinY = r.MinY * DpiScale,
-            MaxX = r.MaxX * DpiScale, MaxY = r.MaxY * DpiScale,
+            MinX = r.MinX * UiUnit, MinY = r.MinY * UiUnit,
+            MaxX = r.MaxX * UiUnit, MaxY = r.MaxY * UiUnit,
         };
     }
 
@@ -863,7 +863,7 @@ public partial class InkEngine
     internal RectF PptBarRect()
     {
         var screen = ScreenRectPhysical();
-        float dpi = DpiScale;
+        float dpi = UiUnit;
 
         bool first = float.IsNaN(_pptBarX);
         if (first)
@@ -895,25 +895,25 @@ public partial class InkEngine
 
     /// <summary>菜单矩形。</summary>
     internal void PptMenuRect(out RectF rect)
-        => rect = PptBar.MenuRect(PptBarRect(), PptMenuItemCount, DpiScale, ScreenRectPhysical());
+        => rect = PptBar.MenuRect(PptBarRect(), PptMenuItemCount, UiUnit, ScreenRectPhysical());
 
     /// <summary>菜单里第 <paramref name="index"/> 行的矩形。**绘制、命中、悬停都读它**
     /// （三处各算一遍的话迟早差几个像素——"看得见却点不中"就是这么来的）。</summary>
     internal void PptMenuItemRectAt(int index, out RectF rect)
     {
         PptMenuRect(out var menu);
-        rect = PptBar.MenuItemRect(menu, index, DpiScale);
+        rect = PptBar.MenuItemRect(menu, index, UiUnit);
     }
 
     /// <summary>页号面板矩形（点页码弹出来的那张）。</summary>
     internal void PptPanelRect(out RectF rect)
-        => rect = PptBar.PanelRect(PptBarRect(), Math.Max(1, BarTotal), DpiScale, ScreenRectPhysical());
+        => rect = PptBar.PanelRect(PptBarRect(), Math.Max(1, BarTotal), UiUnit, ScreenRectPhysical());
 
     /// <summary>面板里第 <paramref name="index"/> 个格子的矩形（index 从 0 起 = 第 1 页）。</summary>
     internal void PptPanelCellRectAt(int index, out RectF rect)
     {
         PptPanelRect(out var panel);
-        rect = PptBar.CellRect(panel, index, DpiScale);
+        rect = PptBar.CellRect(panel, index, UiUnit);
     }
 
     /// <summary>这一块归不归底部条（**穿透豁免**与命中都要用同一份判据——
@@ -962,7 +962,7 @@ public partial class InkEngine
             PptClearConfirm = false;               // 菜单关了，"等确认"也一起放掉
             _dirty = true;
             // 点在页码格上 = "再点一次收起"：吃掉它，别再打开（不收就成了点不掉的鬼打墙）
-            if (PptBar.ZoneAt(PptBarRect(), x, y, DpiScale) == PptBarZone.Page) return true;
+            if (PptBar.ZoneAt(PptBarRect(), x, y, UiUnit) == PptBarZone.Page) return true;
         }
 
         // 页号面板开着
@@ -992,11 +992,11 @@ public partial class InkEngine
             _dirty = true;
             // 而如果这一下正落在页码格上，那就是"再点一次收起"——**吃掉它，别再弹**
             //（不收的话就成了"点一下收起、松手又打开"的鬼打墙）。
-            if (PptBar.ZoneAt(PptBarRect(), x, y, DpiScale) == PptBarZone.Page) return true;
+            if (PptBar.ZoneAt(PptBarRect(), x, y, UiUnit) == PptBarZone.Page) return true;
         }
 
         var bar = PptBarRect();
-        var zone = PptBar.ZoneAt(bar, x, y, DpiScale);
+        var zone = PptBar.ZoneAt(bar, x, y, UiUnit);
         if (zone == PptBarZone.None) return false;
 
         if (zone == PptBarZone.LeftArrow) { BarPrev(); return true; }
@@ -1022,7 +1022,7 @@ public partial class InkEngine
         // 通用语言（Excel 调列宽、网页拖滑块都这么分）：拖动**不用等那 600ms**，
         // 而单击回归本职——松手弹菜单（2026-10-02 第五轮起，见 PptBarPointerUp）。
         float moved = Math.Abs(x - _pptPressX) + Math.Abs(y - _pptPressY);
-        if (_pptPressed && !PptBarDragging && moved > PptBar.DragSlop * DpiScale)
+        if (_pptPressed && !PptBarDragging && moved > PptBar.DragSlop * UiUnit)
         {
             // 拖起来了就不再是"单击"：把按下标记清掉（松手时不会再弹菜单）。
             _pptPressed = false;
@@ -1036,7 +1036,7 @@ public partial class InkEngine
         // ---- 拖动中：条跟着指针走 ----
         if (PptBarDragging)
         {
-            var sp = PptBar.ClampTopLeft(x - _pptGrabDX, y - _pptGrabDY, ScreenRectPhysical(), DpiScale);
+            var sp = PptBar.ClampTopLeft(x - _pptGrabDX, y - _pptGrabDY, ScreenRectPhysical(), UiUnit);
             _pptBarX = sp.X; _pptBarY = sp.Y;
             _dirty = true;
             return true;                           // 拖动中吃掉所有移动，别去落墨
@@ -1068,7 +1068,7 @@ public partial class InkEngine
         }
         if (hover < 0)
         {
-            var zone = PptBar.ZoneAt(PptBarRect(), x, y, DpiScale);
+            var zone = PptBar.ZoneAt(PptBarRect(), x, y, UiUnit);
             if (zone != PptBarZone.None) hover = (int)zone;
         }
         if (hover != PptBarHover) { PptBarHover = hover; _dirty = true; }
@@ -1087,12 +1087,12 @@ public partial class InkEngine
 
         if (PptBarDragging)
         {
-            var p = PptBar.ClampTopLeft(_pptBarX, _pptBarY, ScreenRectPhysical(), DpiScale);
+            var p = PptBar.ClampTopLeft(_pptBarX, _pptBarY, ScreenRectPhysical(), UiUnit);
             _pptBarX = p.X; _pptBarY = p.Y;
             SavePptBarPos();                       // 记住（下次打开还在）
             PptBarDragging = false;
             _dirty = true;
-            Console.WriteLine($"[PPT] 条已挪到 ({p.X / DpiScale:F0}, {p.Y / DpiScale:F0}) 逻辑像素");
+            Console.WriteLine($"[PPT] 条已挪到 ({p.X / UiUnit:F0}, {p.Y / UiUnit:F0}) 逻辑像素");
             return;
         }
 
@@ -1102,7 +1102,7 @@ public partial class InkEngine
         if (_pptPressed)
         {
             _pptPressed = false;
-            if (PptBar.ZoneAt(PptBarRect(), x, y, DpiScale) == PptBarZone.Page)
+            if (PptBar.ZoneAt(PptBarRect(), x, y, UiUnit) == PptBarZone.Page)
             {
                 PptMenuOpen = true;
                 PptPagePanelOpen = false;
@@ -1529,6 +1529,8 @@ public partial class InkEngine
     {
         if (float.IsNaN(_pptBarX)) return;
         var screen = ScreenRectPhysical();
+        // 位置偏好仍按 DPI 逻辑坐标存：这是跨版本/跨界面大小档兼容的老格式；
+        // 尺寸跟 UiScale 变，位置只做夹紧，不把用户拖好的位置整体放大。
         SetUiPref(PptBarXPref, ((_pptBarX - screen.MinX) / DpiScale)
             .ToString("F1", CultureInfo.InvariantCulture));
         SetUiPref(PptBarYPref, ((_pptBarY - screen.MinY) / DpiScale)

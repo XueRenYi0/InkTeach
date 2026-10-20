@@ -4994,8 +4994,9 @@ internal sealed partial class App : InkEngine.InkEngine
                     OpenTimerCardFromUi();
                     SettleFrames(200);
                     var tw = TimerCardRect();
-                    var cin = TimerWin.CardRect(tw, DpiScale, false);
-                    float lu = TimerWin.Layout(cin, DpiScale);
+                    float tu = TimerUnit();
+                    var cin = TimerWin.CardRect(tw, tu, false);
+                    float lu = TimerWin.Layout(cin, tu);
                     void ClickAxis(in RectF r)
                     {
                         TimerPointerDownForTest((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
@@ -5020,8 +5021,9 @@ internal sealed partial class App : InkEngine.InkEngine
                     int tbi = Array.IndexOf(argvW, "--tab");
                     if (tbi >= 0 && tbi + 1 < argvW.Length && int.TryParse(argvW[tbi + 1], out int tabArg))
                     {
-                        var tcin = TimerWin.CardRect(TimerCardRect(), DpiScale, false);
-                        float tlu = TimerWin.Layout(tcin, DpiScale);
+                        float tcu = TimerUnit();
+                        var tcin = TimerWin.CardRect(TimerCardRect(), tcu, false);
+                        float tlu = TimerWin.Layout(tcin, tcu);
                         var tr = TimerWin.TabRect(tcin, tlu, Math.Clamp(tabArg, 0, 2));
                         TimerPointerDownForTest((tr.MinX + tr.MaxX) * 0.5f, (tr.MinY + tr.MaxY) * 0.5f);
                         TimerPointerUpForTest((tr.MinX + tr.MaxX) * 0.5f, (tr.MinY + tr.MaxY) * 0.5f);

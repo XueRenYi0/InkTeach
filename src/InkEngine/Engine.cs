@@ -15237,6 +15237,17 @@ public partial class InkEngine
     internal IntPtr HandleWheel(IntPtr wParam)
     {
         int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);
+        // 有面板/图库等界面时先给界面（说明页要滚内部内容）；没消费才滚画布。
+        if (UiVisibleNow && Ui != null)
+        {
+            bool consumed = UiGuard("Wheel",
+                () => Ui.Wheel(PointerX / UiUnit, PointerY / UiUnit, delta), false);
+            if (consumed)
+            {
+                _dirty = true;
+                return IntPtr.Zero;
+            }
+        }
         // 往下滚时 delta = -120，要先变负（内容上移）——所以这里是 +=。
         // 写成 -= 会把符号翻过来：滚轮往下 = 视图往上，正好抵掉，
         // 再被"不许滚过顶部"夹回 0，表现就是**完全滚不动**。
