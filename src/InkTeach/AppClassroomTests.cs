@@ -33,7 +33,9 @@ internal sealed partial class App
             SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTDOWN);    SettleFrames(60);
             SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTUP);      SettleFrames(250);
         }
-        float U() => DpiScale;                                    // 自检机适配缩放 k=1
+        // 计时窗现在跟 UiScale 走，并按屏宽 70% / 屏高 80% 封顶；
+        // 自检点击必须和产品绘制用同一个单位。
+        float U() => TimerUnit();
         RectF Card() => TimerWin.CardRect(TimerCardRect(), U(), TimerMinimized);
 
         StopTimerFromUi();
@@ -45,8 +47,8 @@ internal sealed partial class App
         var win = TimerCardRect();
         Check("打开：窗口开着、待机（未编辑）", TimerCardOpen && !TimerActive && !TimerSettingsOpen);
         Check("尺寸：1100×700 逻辑（卡片内缩 60）",
-              MathF.Abs(win.MaxX - win.MinX - TimerWin.DW * DpiScale) < 1.5f
-              && MathF.Abs(win.MaxY - win.MinY - TimerWin.DH * DpiScale) < 1.5f,
+              MathF.Abs(win.MaxX - win.MinX - TimerWin.DW * U()) < 1.5f
+              && MathF.Abs(win.MaxY - win.MinY - TimerWin.DH * U()) < 1.5f,
               $"{win.MaxX - win.MinX:F0}×{win.MaxY - win.MinY:F0}");
         Check("居中：窗口中心 = 屏中心",
               MathF.Abs((win.MinX + win.MaxX) * 0.5f - (_virtualX + _virtualW * 0.5f)) < 1.5f
@@ -203,14 +205,14 @@ internal sealed partial class App
         var minWin = TimerCardRect();
         Check("最小化：320×150 逻辑",
               TimerMinimized
-              && MathF.Abs(minWin.MaxX - minWin.MinX - TimerWin.MinDW * DpiScale) < 1.5f
-              && MathF.Abs(minWin.MaxY - minWin.MinY - TimerWin.MinDH * DpiScale) < 1.5f,
+              && MathF.Abs(minWin.MaxX - minWin.MinX - TimerWin.MinDW * U()) < 1.5f
+              && MathF.Abs(minWin.MaxY - minWin.MinY - TimerWin.MinDH * U()) < 1.5f,
               $"{minWin.MaxX - minWin.MinX:F0}×{minWin.MaxY - minWin.MinY:F0}");
         ClickRect(TimerWin.MinimalDigitsRect(minWin, U()));
         var backWin = TimerCardRect();
         Check("最小化：点数字还原 1100×700",
               !TimerMinimized
-              && MathF.Abs(backWin.MaxX - backWin.MinX - TimerWin.DW * DpiScale) < 1.5f,
+              && MathF.Abs(backWin.MaxX - backWin.MinX - TimerWin.DW * U()) < 1.5f,
               $"{backWin.MaxX - backWin.MinX:F0}×{backWin.MaxY - backWin.MinY:F0}");
         var backCard = TimerWin.CardRect(backWin, U(), false);
         float backLu = TimerWin.Layout(backCard, U());
@@ -229,7 +231,7 @@ internal sealed partial class App
         ClickRect(TimerWin.BtnRect(fsCard, fsLu, TimerZone.Fullscreen));
         Check("全屏：再点还原 1100×700",
               !TimerExpanded
-              && MathF.Abs(TimerCardRect().MaxX - TimerCardRect().MinX - TimerWin.DW * DpiScale) < 1.5f);
+              && MathF.Abs(TimerCardRect().MaxX - TimerCardRect().MinX - TimerWin.DW * U()) < 1.5f);
 
         // 双击空白 = 全屏开关（用户 2026-10-02 加）
         {
@@ -320,7 +322,7 @@ internal sealed partial class App
             SendMouse((int)tx2, (int)ty2, Native.MOUSEEVENTF_LEFTUP);     SettleFrames(250);
             var moved = TimerCardRect();
             Check("真拖动：按住空白跟手",
-                  moved.MinX > w0.MinX + 60f * DpiScale && moved.MinY > w0.MinY + 30f * DpiScale,
+                  moved.MinX > w0.MinX + 60f * U() && moved.MinY > w0.MinY + 30f * U(),
                   $"({w0.MinX:F0},{w0.MinY:F0}) → ({moved.MinX:F0},{moved.MinY:F0})");
             for (int i = 1; i <= 8; i++)
             {
@@ -415,7 +417,7 @@ internal sealed partial class App
             double t0 = NowMs;
             while (RollingNow && NowMs - t0 < 3000) { DrainMessages(); Thread.Sleep(10); RollTickForTest(); }
         }
-        float U() => DpiScale;
+        float U() => RollUnit();
 
         CloseRollCardFromUi();
         SetPassThroughFromUi(false);
@@ -431,8 +433,8 @@ internal sealed partial class App
         var win = RollCardRect();
         Check("打开：窗口开着、待抽态", RollCardOpen && RollSettingsOpen && !RollingNow);
         Check("尺寸：900×500 逻辑",
-              MathF.Abs(win.MaxX - win.MinX - RollWin.DW * DpiScale) < 1.5f
-              && MathF.Abs(win.MaxY - win.MinY - RollWin.DH * DpiScale) < 1.5f,
+              MathF.Abs(win.MaxX - win.MinX - RollWin.DW * U()) < 1.5f
+              && MathF.Abs(win.MaxY - win.MinY - RollWin.DH * U()) < 1.5f,
               $"{win.MaxX - win.MinX:F0}×{win.MaxY - win.MinY:F0}");
         Check("无名单：候选 = 1..60", !RollHasNames && RollTotalNow == 60, $"{RollTotalNow}");
 
@@ -565,7 +567,7 @@ internal sealed partial class App
             SendMouse((int)tx2, (int)ty2, Native.MOUSEEVENTF_LEFTUP);     SettleFrames(250);
             var moved = RollCardRect();
             Check("真拖动：按住空白跟手",
-                  moved.MinX > card.MinX + 40f * DpiScale || moved.MinY < card.MinY - 20f * DpiScale,
+                  moved.MinX > card.MinX + 40f * U() || moved.MinY < card.MinY - 20f * U(),
                   $"({card.MinX:F0},{card.MinY:F0}) → ({moved.MinX:F0},{moved.MinY:F0})");
             for (int i = 1; i <= 8; i++)
             {

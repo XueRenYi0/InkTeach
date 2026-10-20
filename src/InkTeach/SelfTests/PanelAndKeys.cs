@@ -2190,10 +2190,10 @@ internal sealed partial class App
                   InkStatus.Contains("自检模式") && ui.MoreOpenForTest,
                   InkStatus);
 
-            // 分辨率规范化 B：面板宽 = min(640, 55% 工作宽)
-            float wantW = Math.Clamp((panelWork.MaxX - panelWork.MinX) * 0.55f, 380f, 640f);
-            Check("面板宽：min(640, 55% 工作宽)", moreRect.MaxX - moreRect.MinX <= wantW + 0.5f,
-                  $"宽 {moreRect.MaxX - moreRect.MinX:F0} ≤ {wantW:F0}");
+            // 2026-10-20 统一：所有 More 页共用 clamp(55% 工作宽, 560, 980)。
+            float wantW = Math.Clamp((panelWork.MaxX - panelWork.MinX) * 0.55f, 560f, 980f);
+            Check("面板宽：clamp(55% 工作宽, 560, 980)", MathF.Abs((moreRect.MaxX - moreRect.MinX) - wantW) <= 0.5f,
+                  $"宽 {moreRect.MaxX - moreRect.MinX:F0}，期望 {wantW:F0}");
 
             // 「随机一人」格：关面板 ＋ 点名窗自动开抽，出结果 1.5 秒后自动关
             var oneTile = ui.HubTileRectForTest(2);
@@ -2229,8 +2229,9 @@ internal sealed partial class App
 
             // 计时窗真路：点大圆钮 → 跑；点数字 → 暂停；✕ = 停止并关窗
             var tcard = TimerCardRect();
-            var tcardIn = TimerWin.CardRect(tcard, DpiScale, false);
-            float tlu = TimerWin.Layout(tcardIn, DpiScale);
+            float tunit = TimerUnit();
+            var tcardIn = TimerWin.CardRect(tcard, tunit, false);
+            float tlu = TimerWin.Layout(tcardIn, tunit);
             var tstart = TimerWin.BtnRect(tcardIn, tlu, TimerZone.Start);
             ClickPhysical((tstart.MinX + tstart.MaxX) * 0.5f, (tstart.MinY + tstart.MaxY) * 0.5f);
             SettleFrames(250);

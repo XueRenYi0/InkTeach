@@ -4977,7 +4977,7 @@ internal sealed partial class OverlayWindow : IDisposable
     private void DrawPptBar(InkEngine app)
     {
         if (!app.PageBarVisible) return;     // PPT 放映 / 文档共用；文档+穿透时收走（S2 全让开）
-        float dpi = Dpi / 96f;
+        float dpi = app.UiUnit;
         var theme = app.FloatingTheme;
         var bar = app.PptBarRect();
         float radius = MathF.Min(theme.CornerRadius * dpi, (bar.MaxY - bar.MinY) * 0.5f);
@@ -5115,7 +5115,7 @@ internal sealed partial class OverlayWindow : IDisposable
     private void DrawReplayBar(InkEngine app)
     {
         if (!app.ReplayActive) return;
-        float dpi = Dpi / 96f;
+        float dpi = app.UiUnit;
         var theme = app.FloatingTheme;
         var bar = app.ReplayBarRect();
         float radius = MathF.Min(theme.CornerRadius * dpi, (bar.MaxY - bar.MinY) * 0.5f);
@@ -5266,7 +5266,7 @@ internal sealed partial class OverlayWindow : IDisposable
 
     private void DrawPptPagePanel(InkEngine app)
     {
-        float dpi = Dpi / 96f;
+        float dpi = app.UiUnit;
         var theme = app.FloatingTheme;
         app.PptPanelRect(out var panel);
         DrawPanelCard(app, panel, theme.CornerRadius * dpi);
@@ -5332,7 +5332,7 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawPptArrow(InkEngine app, in RectF box, bool left, bool hot)
     {
-        float dpi = Dpi / 96f;
+        float dpi = app.UiUnit;
         var theme = app.FloatingTheme;
         if (hot)
         {
@@ -5366,7 +5366,7 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawPptMenu(InkEngine app)
     {
-        float dpi = Dpi / 96f;
+        float dpi = app.UiUnit;
         var theme = app.FloatingTheme;
         app.PptMenuRect(out var menu);
         DrawPanelCard(app, menu, theme.CornerRadius * dpi);
@@ -5434,7 +5434,7 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawPptHint(InkEngine app)
     {
-        float dpi = Dpi / 96f;
+        float dpi = app.UiUnit;
         var theme = app.FloatingTheme;
         app.PptMenuRect(out var anchor);            // 借菜单的位置（就是条的上方）
         var hint = new RectF

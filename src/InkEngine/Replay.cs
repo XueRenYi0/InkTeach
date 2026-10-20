@@ -47,7 +47,10 @@ internal static class ReplayBar
     /// <summary>控制条矩形（物理像素）。x 居中、贴屏幕**下边**（避让主条由引擎那一层做）。</summary>
     public static RectF RectAt(in RectF screen, float dpi)
     {
-        float w = BarW(screen, dpi), h = BarH * dpi;
+        float w = BarW(screen, dpi);
+        float maxW = MathF.Max(240f * dpi, (screen.MaxX - screen.MinX) - 16f * dpi);
+        w = MathF.Min(w, maxW);
+        float h = BarH * dpi;
         float x = (screen.MinX + screen.MaxX) * 0.5f - w * 0.5f;
         float y = screen.MaxY - BottomMargin * dpi - h;
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
@@ -456,7 +459,7 @@ public partial class InkEngine
     internal RectF ReplayBarRect()
     {
         var screen = ScreenRectPhysical();
-        var bar = ReplayBar.RectAt(screen, DpiScale);
+        var bar = ReplayBar.RectAt(screen, UiUnit);
         // 和主条（默认也贴底部居中）真叠上了就整条抬到主条上方——**够得着优先**
         //（用户 2026-10-01："个子低的老师够不到顶上"）。主条回放期间不会动，避让稳定。
         var ui = UiRectPhysical();
@@ -464,7 +467,7 @@ public partial class InkEngine
             && ui.MaxY > bar.MinY && ui.MinY < bar.MaxY)
         {
             float h = bar.MaxY - bar.MinY;
-            float top = MathF.Max(screen.MinY + 8f * DpiScale, ui.MinY - 8f * DpiScale - h);
+            float top = MathF.Max(screen.MinY + 8f * UiUnit, ui.MinY - 8f * UiUnit - h);
             bar = new RectF { MinX = bar.MinX, MinY = top, MaxX = bar.MaxX, MaxY = top + h };
         }
         return bar;
@@ -478,7 +481,7 @@ public partial class InkEngine
         if (_replay == null) return false;
         var bar = ReplayBarRect();
         if (!bar.Contains(x, y)) return false;
-        switch (ReplayBar.ZoneAt(bar, x, y, DpiScale))
+        switch (ReplayBar.ZoneAt(bar, x, y, UiUnit))
         {
             case ReplayBarZone.PlayPause:
                 ReplayTogglePause();
@@ -487,7 +490,7 @@ public partial class InkEngine
             case ReplayBarZone.Speed1:
             case ReplayBarZone.Speed2:
             case ReplayBarZone.Speed4:
-                ReplaySetSpeed(ReplayBar.SpeedOfZone(ReplayBar.ZoneAt(bar, x, y, DpiScale)));
+                ReplaySetSpeed(ReplayBar.SpeedOfZone(ReplayBar.ZoneAt(bar, x, y, UiUnit)));
                 break;
             case ReplayBarZone.Progress:
                 if (_replayPlaying) ReplayTogglePause();      // 拖进度 = 先暂停（拖完停在那儿）
@@ -507,7 +510,7 @@ public partial class InkEngine
         if (_replay == null) return;
         if (_replayScrubbing) { ReplayScrubTo(x); return; }
         var zone = ReplayBarContains(x, y)
-            ? ReplayBar.ZoneAt(ReplayBarRect(), x, y, DpiScale)
+            ? ReplayBar.ZoneAt(ReplayBarRect(), x, y, UiUnit)
             : ReplayBarZone.None;
         if (zone != _replayHover) { _replayHover = zone; _dirty = true; }
     }
@@ -520,7 +523,7 @@ public partial class InkEngine
             _replayScrubbing = false;      // 松手停在拖到的位置（保持暂停）
         }
         _replayHover = ReplayBarContains(x, y)
-            ? ReplayBar.ZoneAt(ReplayBarRect(), x, y, DpiScale)
+            ? ReplayBar.ZoneAt(ReplayBarRect(), x, y, UiUnit)
             : ReplayBarZone.None;
         _dirty = true;
     }
@@ -528,7 +531,7 @@ public partial class InkEngine
     private void ReplayScrubTo(float x)
     {
         if (_replay == null) return;
-        float p = ReplayBar.Progress01(ReplayBarRect(), x, DpiScale);
+        float p = ReplayBar.Progress01(ReplayBarRect(), x, UiUnit);
         ReplaySeek(p * _replay.Total);
     }
 

@@ -2357,15 +2357,16 @@ public sealed partial class FullUi : IOverlayUi
     private const int MoreHitTile = 140;      // 140+启动器格子（0..5：计时/点名/分组 保存/打开/回放）
     private const int MoreHitBottom = 150;    // 150+底栏（0..4：设置/日志/检查更新/重启/退出）
 
-    /// <summary>面板宽：**min(640, 55% 工作宽)**（2026-10-02 拍板的分辨率规范化 B）。</summary>
+    /// <summary>
+    /// 面板宽：**所有 More 页共用**工作区的 55%，夹在 560～980 逻辑像素。
+    /// 2026-10-20：说明页不再单独吃接近全屏的宽度；同一面板轮廓/字体/边距，
+    /// 不同分辨率下屏幕占比保持相对稳定。宽度是 UI 逻辑单位，界面大小档位
+    /// 只改变内部字号/控件，不把面板轮廓无限放大。
+    /// </summary>
     private float MoreWidth()
     {
         float workW = _work.MaxX - _work.MinX;
-        // 使用说明页要同时放两列卡片/手势/快捷键，给到接近全屏的宽度；
-        // 其余页保持原来的 640 上限。两页共用同一个居中的 MoreRect。
-        if (_morePage == MorePage.Help)
-            return Math.Clamp(workW - 32f, 620f, 1060f);
-        return Math.Clamp(workW * 0.55f, 380f, 640f);
+        return Math.Clamp(workW * 0.55f, 560f, 980f);
     }
 
     private float MoreTargetH() => _morePage switch
@@ -2975,6 +2976,7 @@ public sealed partial class FullUi : IOverlayUi
                 _morePage = MorePage.Help;
                 _moreHover = MoreHitNone;
                 _morePress = -1;
+                _helpScroll = 0f;
                 _moreH.To(MoreHelpH(), Tokens.MoreOpenMs);
                 Invalidate();
                 break;
@@ -3448,6 +3450,18 @@ public sealed partial class FullUi : IOverlayUi
         if (hover != -1) return true;
         return PanelRect().Contains(p.X, p.Y)
             || (BandVisible() && BandRect().Contains(p.X, p.Y));
+    }
+
+    /// <summary>
+    /// 面板打开时吃掉滚轮：说明页内部滚动；其他 More 页也吃掉，避免滚轮把
+    /// 遮罩后的画布滚走。没开面板才交还给引擎。
+    /// </summary>
+    public bool Wheel(float x, float y, int delta)
+    {
+        if (!_moreOpen) return false;
+        if (_morePage == MorePage.Help && MoreRect().Contains(x, y))
+            ScrollHelp(-delta / 120f * 48f);
+        return true;
     }
 
     public void PointerLeave()

@@ -127,7 +127,15 @@ internal static class TimerWin
     private const float StatsRowY = 50f, StatsRowH = 28f;
     private const float StatsFooterY = 322f, StatsFooterH = 28f;
 
-    public static float Unit(in RectF screen, float dpi) => WinScale.Unit(screen, dpi, DW, DH);
+    public static float Unit(in RectF screen, float dpi)
+    {
+        // 正常态最多占屏幕宽 70%、高 80%；全屏态由 WindowRect 直接铺满，
+        // 最小态也沿用这个上限，避免 200%+大界面档时小窗反而变巨窗。
+        float u = WinScale.Unit(screen, dpi, DW, DH);
+        float maxW = MathF.Max(1f, (screen.MaxX - screen.MinX) * 0.70f);
+        float maxH = MathF.Max(1f, (screen.MaxY - screen.MinY) * 0.80f);
+        return MathF.Min(u, MathF.Min(maxW / DW, maxH / DH));
+    }
 
     public static RectF WindowRect(in RectF screen, float dpi, float cx, float cy, bool minimized, bool fullscreen)
     {
@@ -452,7 +460,13 @@ internal static class RollWin
     private const float BotH = 44f;                       // 底行（名单 / 学号范围）
     private const float StepD = 48f, CountW = 88f, DrawW = 220f;
 
-    public static float Unit(in RectF screen, float dpi) => WinScale.Unit(screen, dpi, DW, DH);
+    public static float Unit(in RectF screen, float dpi)
+    {
+        float u = WinScale.Unit(screen, dpi, DW, DH);
+        float maxW = MathF.Max(1f, (screen.MaxX - screen.MinX) * 0.70f);
+        float maxH = MathF.Max(1f, (screen.MaxY - screen.MinY) * 0.80f);
+        return MathF.Min(u, MathF.Min(maxW / DW, maxH / DH));
+    }
 
     public static RectF WindowRect(in RectF screen, float dpi, float cx, float cy)
     {
@@ -777,11 +791,11 @@ public partial class InkEngine
     {
         var screen = ScreenRectPhysical();
         LoadTimerPosIfNeeded();
-        return TimerWin.WindowRect(screen, DpiScale, _timerCX, _timerCY, _timerMinimized, _timerFullscreen);
+        return TimerWin.WindowRect(screen, UiUnit, _timerCX, _timerCY, _timerMinimized, _timerFullscreen);
     }
 
-    /// <summary>计时窗的物理缩放单位（Overlay 画字/按钮要用同一个）。</summary>
-    internal float TimerUnit() => TimerWin.Unit(ScreenRectPhysical(), DpiScale);
+    /// <summary>计时窗的物理缩放单位（Overlay 画字/按钮要用同一个，包含界面大小档）。</summary>
+    internal float TimerUnit() => TimerWin.Unit(ScreenRectPhysical(), UiUnit);
 
     internal bool TimerCardContains(float x, float y)
         => _timerCardOpen && TimerCardRect().Contains(x, y);
@@ -1209,7 +1223,7 @@ public partial class InkEngine
     {
         if (!_timerCardOpen) return false;
         var screen = ScreenRectPhysical();
-        float dpi = DpiScale;
+        float dpi = UiUnit;
         var win = TimerWin.WindowRect(screen, dpi, _timerCX, _timerCY, _timerMinimized, _timerFullscreen);
         if (!win.Contains(x, y)) return false;
 
@@ -1319,7 +1333,7 @@ public partial class InkEngine
         {
             if (_timerPressAtMs >= 0 && !_timerDragging)
             {
-                float lim = 4f * DpiScale;
+                float lim = 4f * UiUnit;
                 if (MathF.Abs(x - _timerPressX) > lim || MathF.Abs(y - _timerPressY) > lim)
                 {
                     _timerDragging = true;
@@ -1329,7 +1343,7 @@ public partial class InkEngine
             if (_timerDragging)
             {
                 var screen = ScreenRectPhysical();
-                float dpi = DpiScale;
+                float dpi = UiUnit;
                 var win = TimerWin.WindowRect(screen, dpi, _timerCX, _timerCY, _timerMinimized, _timerFullscreen);
                 float w = win.MaxX - win.MinX, h = win.MaxY - win.MinY;
                 float m = 8f * dpi;
@@ -1373,7 +1387,7 @@ public partial class InkEngine
             {
                 // 双击空白 = 全屏开关（用户 2026-10-02：全屏加个"点哪里"的入口）
                 double t = NowMs;
-                float tol = 12f * DpiScale;
+                float tol = 12f * UiUnit;
                 if (t - _timerLastBodyClickMs < 350
                     && MathF.Abs(x - _timerLastBodyClickX) < tol
                     && MathF.Abs(y - _timerLastBodyClickY) < tol)
@@ -1571,11 +1585,11 @@ public partial class InkEngine
     {
         var screen = ScreenRectPhysical();
         LoadRollPosIfNeeded();
-        return RollWin.WindowRect(screen, DpiScale, _rollCX, _rollCY);
+        return RollWin.WindowRect(screen, UiUnit, _rollCX, _rollCY);
     }
 
-    /// <summary>点名窗的物理缩放单位（Overlay 画字/按钮要用同一个）。</summary>
-    internal float RollUnit() => RollWin.Unit(ScreenRectPhysical(), DpiScale);
+    /// <summary>点名窗的物理缩放单位（Overlay 画字/按钮要用同一个，包含界面大小档）。</summary>
+    internal float RollUnit() => RollWin.Unit(ScreenRectPhysical(), UiUnit);
 
     internal bool RollCardContains(float x, float y)
         => _rollCardOpen && RollCardRect().Contains(x, y);
@@ -1789,7 +1803,7 @@ public partial class InkEngine
     {
         if (!_rollCardOpen) return false;
         var screen = ScreenRectPhysical();
-        float dpi = DpiScale;
+        float dpi = UiUnit;
         var win = RollWin.WindowRect(screen, dpi, _rollCX, _rollCY);
         if (!win.Contains(x, y)) return false;
         float u = RollWin.Unit(screen, dpi);
@@ -1823,14 +1837,14 @@ public partial class InkEngine
         {
             if (_rollPressAtMs >= 0 && !_rollDragging)
             {
-                float lim = 4f * DpiScale;
+                float lim = 4f * UiUnit;
                 if (MathF.Abs(x - _rollPressX) > lim || MathF.Abs(y - _rollPressY) > lim)
                     _rollDragging = true;
             }
             if (_rollDragging)
             {
                 var screen = ScreenRectPhysical();
-                float dpi = DpiScale;
+                float dpi = UiUnit;
                 var win = RollWin.WindowRect(screen, dpi, _rollCX, _rollCY);
                 float w = win.MaxX - win.MinX, h = win.MaxY - win.MinY;
                 float m = 8f * dpi;

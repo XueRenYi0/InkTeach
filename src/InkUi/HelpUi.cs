@@ -21,9 +21,19 @@ public sealed partial class FullUi
     private const int HelpTabCount = 3;
     private const int HelpHitTabBase = 40;    // MoreHit 区间：40..42
 
+    // 2026-10-20：说明页自己的字号回落到和「设置」同一套：
+    // 标题/卡片 14、正文 13、辅助 12.5、页脚 11.5；不再单独用 16.5/14.5。
+    private const float HelpTabFont = 13f;
+    private const float HelpTitleFont = 14f;
+    private const float HelpBodyFont = 13f;
+    private const float HelpNoteFont = 12.5f;
+    private const float HelpKeyFont = 12f;
+    private const float HelpFootFont = 11.5f;
+
     private static readonly string[] HelpTabNames = { "快速上手", "手势", "快捷键" };
 
     private int _helpTab;
+    private float _helpScroll;
 
     // =====================================================================
     //  入口 / 页面切换
@@ -43,7 +53,8 @@ public sealed partial class FullUi
         _moreHover = MoreHitNone;
         _morePress = -1;
         _helpTab = Math.Clamp(_helpTab, 0, HelpTabCount - 1);
-        // 说明页比首页宽：更多面板的宽度/高度都按页切换；切换时高度做一次短动画。
+        _helpScroll = 0f;
+        // 同一 MoreRect 的宽度不变，只在内容需要时做一次高度动画。
         _moreH.To(MoreHelpH(), Tokens.MoreOpenMs);
         Invalidate();
     }
@@ -64,6 +75,18 @@ public sealed partial class FullUi
             case 0x27:                         // →
                 SetHelpTab(_helpTab + 1);
                 return true;
+            case 0x26:                         // ↑
+                ScrollHelp(-36f);
+                return true;
+            case 0x28:                         // ↓
+                ScrollHelp(+36f);
+                return true;
+            case 0x21:                         // PageUp
+                ScrollHelp(-(HelpViewportRect().MaxY - HelpViewportRect().MinY) * 0.8f);
+                return true;
+            case 0x22:                         // PageDown
+                ScrollHelp(+(HelpViewportRect().MaxY - HelpViewportRect().MinY) * 0.8f);
+                return true;
             default:
                 return true;
         }
@@ -74,19 +97,63 @@ public sealed partial class FullUi
         int next = Math.Clamp(i, 0, HelpTabCount - 1);
         if (next == _helpTab) return;
         _helpTab = next;
+        _helpScroll = 0f;
         _moreH.To(MoreHelpH(), 167);            // 快捷键页更高，切换时收一下高度
         Invalidate();
     }
 
+    /// <summary>说明页外框（标题、页签、上下留白）；内容区在下面单独算。</summary>
+    private static float HelpShellH => MorePad * 2 + MoreHeaderH + 8f + 42f + 14f;
+
+    private float HelpLayoutW()
+    {
+        float w = MathF.Min(MoreWidth(), MathF.Max(240f, (_work.MaxX - _work.MinX) - 16f));
+        return MathF.Max(120f, w - MorePad * 2f);
+    }
+
+    /// <summary>当前宽度/页签下，内容真正需要的高度（不裁切）。</summary>
+    private float HelpDesiredH()
+    {
+        float w = HelpLayoutW();
+        switch (_helpTab)
+        {
+            case 0:
+            {
+                int cols = w < 620f ? 1 : 2;
+                int rows = (4 + cols - 1) / cols;
+                return rows * (132f + 14f) + 4f + 112f;
+            }
+            case 1:
+            {
+                int cols = w < 620f ? 1 : 2;
+                int rows = (10 + cols - 1) / cols;
+                return rows * 62f + 8f + 86f;
+            }
+            default:
+            {
+                // 快捷键：宽度够就两列；窄屏改一列，内容在面板里滚动。
+                bool one = w < 620f;
+                int[] n = { 3, 6, 7, 3, 2 };
+                float GroupH(int count) => 26f + count * 28f;
+                if (one)
+                {
+                    float h = 0f;
+                    for (int i = 0; i < n.Length; i++)
+                        h += GroupH(n[i]) + (i + 1 < n.Length ? 12f : 0f);
+                    return h + 24f;
+                }
+                float left = GroupH(n[0]) + 12f + GroupH(n[1]);
+                float right = GroupH(n[2]) + 12f + GroupH(n[3]) + 12f + GroupH(n[4]);
+                return MathF.Max(left, right) + 24f;
+            }
+        }
+    }
+
     private float MoreHelpH()
     {
-        float contentH = _helpTab switch
-        {
-            0 => 400f,                         // 2×2 卡片 + 界面小地图
-            1 => 410f,                         // 5 行 × 2 列 + 最容易搞混
-            _ => 450f,                         // 两组快捷键列 + 页脚
-        };
-        return MorePad * 2 + MoreHeaderH + 8f + 42f + 14f + contentH;
+        float workH = _work.MaxY - _work.MinY;
+        float maxPanel = MathF.Max(260f, MathF.Min(workH - 16f, workH * 0.80f));
+        return MathF.Min(HelpShellH + HelpDesiredH(), maxPanel);
     }
 
     // =====================================================================
@@ -96,13 +163,16 @@ public sealed partial class FullUi
     private RectF HelpTabRect(int i)
     {
         var r = MoreRect();
-        float w = 150f, gap = 10f;
+        float gap = 10f;
+        float avail = r.MaxX - r.MinX - MorePad * 2f;
+        float w = MathF.Min(150f, MathF.Max(80f, (avail - gap * (HelpTabCount - 1)) / HelpTabCount));
         float x = r.MinX + MorePad + i * (w + gap);
         float y = r.MinY + MorePad + MoreHeaderH + 8f;
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + 42f };
     }
 
-    private RectF HelpContentRect()
+    /// <summary>可见内容区（滚动视口）。</summary>
+    private RectF HelpViewportRect()
     {
         var r = MoreRect();
         float y = r.MinY + MorePad + MoreHeaderH + 8f + 42f + 14f;
@@ -111,8 +181,37 @@ public sealed partial class FullUi
             MinX = r.MinX + MorePad,
             MinY = y,
             MaxX = r.MaxX - MorePad,
-            MaxY = r.MaxY - MorePad,
+            MaxY = MathF.Max(y, r.MaxY - MorePad),
         };
+    }
+
+    /// <summary>内容的完整矩形（可以比视口高；绘制时向上平移 _helpScroll）。</summary>
+    private RectF HelpFullContentRect()
+    {
+        var v = HelpViewportRect();
+        float h = MathF.Max(v.MaxY - v.MinY, HelpDesiredH());
+        return new RectF
+        {
+            MinX = v.MinX,
+            MinY = v.MinY - _helpScroll,
+            MaxX = v.MaxX,
+            MaxY = v.MinY - _helpScroll + h,
+        };
+    }
+
+    private float HelpMaxScroll()
+    {
+        float vh = HelpViewportRect().MaxY - HelpViewportRect().MinY;
+        return MathF.Max(0f, HelpDesiredH() - vh);
+    }
+
+    private void ScrollHelp(float delta)
+    {
+        float max = HelpMaxScroll();
+        float next = Math.Clamp(_helpScroll + delta, 0f, max);
+        if (MathF.Abs(next - _helpScroll) < 0.01f) return;
+        _helpScroll = next;
+        Invalidate();
     }
 
     // =====================================================================
@@ -131,16 +230,36 @@ public sealed partial class FullUi
             if (active) ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Accent));
             else if (hot) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
             ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : BorderCol), 1f);
-            _widgets.Text(ctx, HelpTabNames[i], tab, 14.5f,
+            _widgets.Text(ctx, HelpTabNames[i], tab, HelpTabFont,
                           Brush(ctx, active ? Tokens.AccentInk : InkCol));
         }
 
-        var content = HelpContentRect();
+        var viewport = HelpViewportRect();
+        _helpScroll = Math.Clamp(_helpScroll, 0f, HelpMaxScroll());
+        ctx.PushAxisAlignedClip(
+            new Vortice.RawRectF(viewport.MinX, viewport.MinY, viewport.MaxX, viewport.MaxY),
+            AntialiasMode.Aliased);
+        var content = HelpFullContentRect();
         switch (_helpTab)
         {
             case 0: DrawHelpQuick(ctx, content); break;
             case 1: DrawHelpGestures(ctx, content); break;
             default: DrawHelpShortcuts(ctx, content); break;
+        }
+        ctx.PopAxisAlignedClip();
+
+        // 内容超过视口时，右侧给一条很轻的滚动提示；不抢面板内容。
+        float maxScroll = HelpMaxScroll();
+        if (maxScroll > 0.5f)
+        {
+            float trackX = viewport.MaxX + 5f;
+            float h = viewport.MaxY - viewport.MinY;
+            float thumbH = MathF.Max(28f, h * h / (h + maxScroll));
+            float t = maxScroll <= 0.01f ? 0f : _helpScroll / maxScroll;
+            float top = viewport.MinY + (h - thumbH) * t;
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(trackX, top, trackX + 3f, top + thumbH), 1.5f, 1.5f),
+                Brush(ctx, _dark ? new Color4(1f, 1f, 1f, 0.28f) : new Color4(0f, 0f, 0f, 0.22f)));
         }
     }
 
@@ -155,11 +274,12 @@ public sealed partial class FullUi
         };
 
         float gap = 14f;
-        float w = (content.MaxX - content.MinX - gap) * 0.5f;
+        int cols = (content.MaxX - content.MinX) < 620f ? 1 : 2;
+        float w = (content.MaxX - content.MinX - gap * (cols - 1)) / cols;
         float h = 132f;
         for (int i = 0; i < cards.Length; i++)
         {
-            int col = i % 2, row = i / 2;
+            int col = i % cols, row = i / cols;
             var box = new RectF
             {
                 MinX = content.MinX + col * (w + gap),
@@ -170,7 +290,7 @@ public sealed partial class FullUi
             DrawHelpCard(ctx, box, i + 1, cards[i][0], cards[i][1]);
         }
 
-        float mapY = content.MinY + 2f * (h + gap) + 4f;
+        float mapY = content.MinY + ((cards.Length + cols - 1) / cols) * (h + gap) + 4f;
         var map = new RectF
         {
             MinX = content.MinX, MinY = mapY,
@@ -183,11 +303,11 @@ public sealed partial class FullUi
         _widgets.Text(ctx, "界面小地图",
                       new RectF { MinX = map.MinX + 16f, MinY = map.MinY + 12f,
                                   MaxX = map.MaxX - 14f, MaxY = map.MinY + 38f },
-                      13.5f, Brush(ctx, MutedCol), center: false);
+                      HelpNoteFont, Brush(ctx, MutedCol), center: false);
         _widgets.Text(ctx, "底部 = 工具带；工具上方 = 当前设置；右下「更多」= 文件 / 课堂 / 设置。\nPPT / 白板 / 文档打开时，底部还会出现页码条。",
                       new RectF { MinX = map.MinX + 16f, MinY = map.MinY + 38f,
                                   MaxX = map.MaxX - 14f, MaxY = map.MaxY - 10f },
-                      14f, Brush(ctx, InkCol), center: false);
+                      HelpBodyFont, Brush(ctx, InkCol), center: false);
     }
 
     private void DrawHelpCard(ID2D1DeviceContext ctx, in RectF box, int number, string title, string body)
@@ -203,15 +323,15 @@ public sealed partial class FullUi
                               MaxX = box.MinX + 40f, MaxY = box.MinY + 38f };
         ctx.FillEllipse(new Ellipse(new Vector2((num.MinX + num.MaxX) * 0.5f, (num.MinY + num.MaxY) * 0.5f),
                                    13f, 13f), Brush(ctx, Tokens.Accent));
-        _widgets.Text(ctx, number.ToString(), num, 12f, Brush(ctx, Tokens.AccentInk));
+        _widgets.Text(ctx, number.ToString(), num, 11.5f, Brush(ctx, Tokens.AccentInk));
         _widgets.Text(ctx, title,
-                      new RectF { MinX = box.MinX + 50f, MinY = box.MinY + 10f,
-                                  MaxX = box.MaxX - 12f, MaxY = box.MinY + 40f },
-                      16.5f, Brush(ctx, InkCol), center: false);
+                      new RectF { MinX = box.MinX + 50f, MinY = box.MinY + 9f,
+                                  MaxX = box.MaxX - 12f, MaxY = box.MinY + 38f },
+                      HelpTitleFont, Brush(ctx, InkCol), center: false);
         _widgets.Text(ctx, body,
-                      new RectF { MinX = box.MinX + 16f, MinY = box.MinY + 44f,
+                      new RectF { MinX = box.MinX + 16f, MinY = box.MinY + 42f,
                                   MaxX = box.MaxX - 14f, MaxY = box.MaxY - 10f },
-                      13.5f, Brush(ctx, InkCol), center: false);
+                      HelpBodyFont, Brush(ctx, InkCol), center: false);
     }
 
     private void DrawHelpGestures(ID2D1DeviceContext ctx, in RectF content)
@@ -231,11 +351,13 @@ public sealed partial class FullUi
         };
 
         float gap = 22f;
-        float w = (content.MaxX - content.MinX - gap) * 0.5f;
+        int cols = (content.MaxX - content.MinX) < 620f ? 1 : 2;
+        float w = (content.MaxX - content.MinX - gap * (cols - 1)) / cols;
         float rowH = 62f;
         for (int i = 0; i < rows.Length; i++)
         {
             int col = i / 5, row = i % 5;
+            if (cols == 1) { col = 0; row = i; }
             var box = new RectF
             {
                 MinX = content.MinX + col * (w + gap),
@@ -248,14 +370,14 @@ public sealed partial class FullUi
             _widgets.Text(ctx, rows[i].Title,
                           new RectF { MinX = box.MinX + 18f, MinY = box.MinY,
                                       MaxX = box.MaxX, MaxY = box.MinY + 30f },
-                          14.5f, Brush(ctx, InkCol), center: false);
+                          HelpBodyFont, Brush(ctx, InkCol), center: false);
             _widgets.Text(ctx, rows[i].Note,
                           new RectF { MinX = box.MinX + 18f, MinY = box.MinY + 28f,
                                       MaxX = box.MaxX, MaxY = box.MinY + 56f },
-                          12.5f, Brush(ctx, MutedCol), center: false);
+                          HelpNoteFont, Brush(ctx, MutedCol), center: false);
         }
 
-        float calloutY = content.MinY + 5f * rowH + 8f;
+        float calloutY = content.MinY + (cols == 1 ? 10f : 5f) * rowH + 8f;
         var callout = new RectF
         {
             MinX = content.MinX, MinY = calloutY,
@@ -268,11 +390,11 @@ public sealed partial class FullUi
         _widgets.Text(ctx, "最容易搞混的几条",
                       new RectF { MinX = callout.MinX + 16f, MinY = callout.MinY + 10f,
                                   MaxX = callout.MaxX - 14f, MaxY = callout.MinY + 34f },
-                      13.5f, Brush(ctx, MutedCol), center: false);
+                      HelpNoteFont, Brush(ctx, MutedCol), center: false);
         _widgets.Text(ctx, "双指上下 = 滚动，左右 = 翻页；三指 = 擦；轮盘中心松手 = 取消。\n手掌擦需要屏幕上报接触面积；不支持的屏幕不会触发。",
                       new RectF { MinX = callout.MinX + 16f, MinY = callout.MinY + 34f,
                                   MaxX = callout.MaxX - 14f, MaxY = callout.MaxY - 9f },
-                      13.5f, Brush(ctx, InkCol), center: false);
+                      HelpBodyFont, Brush(ctx, InkCol), center: false);
     }
 
     private string HelpKey(KeyAction a)
@@ -312,7 +434,7 @@ public sealed partial class FullUi
         {
             ("白板开关", HelpKey(KeyAction.ToggleBoard)),
             ("白板 / 文档翻页", $"{HelpKey(KeyAction.FlipPageUp)} / {HelpKey(KeyAction.FlipPageDown)}"),
-            ("PPT 翻页", $"{HelpKey(KeyAction.FlipPageUp)} / {HelpKey(KeyAction.FlipPageDown)} 或 ← / →"),
+            ("PPT 翻页", $"{HelpKey(KeyAction.FlipPageUp)} / {HelpKey(KeyAction.FlipPageDown)} / ←→"),
         };
         (string Label, string Key)[] help =
         {
@@ -320,23 +442,37 @@ public sealed partial class FullUi
             ("关闭说明", "Esc"),
         };
 
+        bool oneCol = (content.MaxX - content.MinX) < 620f;
         float gap = 32f;
-        float w = (content.MaxX - content.MinX - gap) * 0.5f;
+        float w = oneCol
+            ? content.MaxX - content.MinX
+            : (content.MaxX - content.MinX - gap) * 0.5f;
         float leftX = content.MinX;
         float rightX = content.MinX + w + gap;
         float y = content.MinY;
-        y = DrawHelpShortcutGroup(ctx, leftX, y, w, "全局键（任何软件前台）", global);
-        y = DrawHelpShortcutGroup(ctx, leftX, y + 12f, w, "工具（批注键盘）", tools);
+        if (oneCol)
+        {
+            y = DrawHelpShortcutGroup(ctx, leftX, y, w, "全局键（任何软件前台）", global);
+            y = DrawHelpShortcutGroup(ctx, leftX, y + 12f, w, "工具（批注键盘）", tools);
+            y = DrawHelpShortcutGroup(ctx, leftX, y + 12f, w, "编辑（批注键盘）", edit);
+            y = DrawHelpShortcutGroup(ctx, leftX, y + 12f, w, "白板 / 放映", board);
+            y = DrawHelpShortcutGroup(ctx, leftX, y + 12f, w, "说明", help);
+        }
+        else
+        {
+            y = DrawHelpShortcutGroup(ctx, leftX, y, w, "全局键（任何软件前台）", global);
+            y = DrawHelpShortcutGroup(ctx, leftX, y + 12f, w, "工具（批注键盘）", tools);
 
-        float ry = content.MinY;
-        ry = DrawHelpShortcutGroup(ctx, rightX, ry, w, "编辑（批注键盘）", edit);
-        ry = DrawHelpShortcutGroup(ctx, rightX, ry + 12f, w, "白板 / 放映", board);
-        ry = DrawHelpShortcutGroup(ctx, rightX, ry + 12f, w, "说明", help);
+            float ry = content.MinY;
+            ry = DrawHelpShortcutGroup(ctx, rightX, ry, w, "编辑（批注键盘）", edit);
+            ry = DrawHelpShortcutGroup(ctx, rightX, ry + 12f, w, "白板 / 放映", board);
+            ry = DrawHelpShortcutGroup(ctx, rightX, ry + 12f, w, "说明", help);
+        }
 
         _widgets.Text(ctx, "这里显示当前生效键位；改键后本页会同步。",
                       new RectF { MinX = content.MinX, MinY = content.MaxY - 24f,
                                   MaxX = content.MaxX, MaxY = content.MaxY },
-                      11.5f, Brush(ctx, MutedCol), center: false);
+                      HelpFootFont, Brush(ctx, MutedCol), center: false);
     }
 
     private float DrawHelpShortcutGroup(
@@ -345,16 +481,16 @@ public sealed partial class FullUi
     {
         _widgets.Text(ctx, title,
                       new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + 24f },
-                      13f, Brush(ctx, MutedCol), center: false);
+                      HelpNoteFont, Brush(ctx, MutedCol), center: false);
         float rowY = y + 26f;
         foreach (var row in rows)
         {
             _widgets.Text(ctx, row.Label,
-                          new RectF { MinX = x, MinY = rowY, MaxX = x + w * 0.60f, MaxY = rowY + 27f },
-                          13.5f, Brush(ctx, InkCol), center: false);
+                          new RectF { MinX = x, MinY = rowY, MaxX = x + w * 0.40f, MaxY = rowY + 27f },
+                          HelpBodyFont, Brush(ctx, InkCol), center: false);
             _widgets.Text(ctx, row.Key,
-                          new RectF { MinX = x + w * 0.56f, MinY = rowY, MaxX = x + w, MaxY = rowY + 27f },
-                          13.5f, Brush(ctx, InkCol));
+                          new RectF { MinX = x + w * 0.38f, MinY = rowY, MaxX = x + w, MaxY = rowY + 27f },
+                          HelpKeyFont, Brush(ctx, InkCol));
             rowY += 28f;
         }
         return rowY;
@@ -370,9 +506,13 @@ public sealed partial class FullUi
         if (!_moreOpen) OpenMore();
         _morePage = MorePage.Help;
         _moreHover = MoreHitNone;
+        _helpScroll = 0f;
         _moreH.Jump(MoreHelpH());
         Invalidate();
     }
 
     internal void SetHelpTabForTest(int tab) => SetHelpTab(tab);
+    internal float HelpScrollForTest => _helpScroll;
+    internal float HelpDesiredHForTest => HelpDesiredH();
+    internal float HelpMoreHForTest => MoreHelpH();
 }
