@@ -2355,6 +2355,13 @@ internal sealed partial class App
             Check("每一行都在面板内、互不重叠", rowsOk, $"逐行取了 {seenRows.Count} 个矩形");
         }
 
+        {
+            var autoRow = ui.RowRectByLabelForTest("开机自动启动");
+            Check("设置页有「开机自动启动」开关",
+                  autoRow.MaxY > autoRow.MinY && ui.IsToggleRowByLabelForTest("开机自动启动"),
+                  $"行高 {autoRow.MaxY - autoRow.MinY:F0}，开关 = {ui.IsToggleRowByLabelForTest("开机自动启动")}");
+        }
+
         var darkRow = ui.RowRectForTest(0);
         ClickPhysical((darkRow.MinX + darkRow.MaxX) * 0.5f * DpiScale,
                       (darkRow.MinY + darkRow.MaxY) * 0.5f * DpiScale);

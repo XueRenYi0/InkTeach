@@ -469,6 +469,18 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             LogTest();
         }
+        else if (mode == "--autostarttest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            AutoStartTest();
+        }
+        else if (mode == "--startupcheck")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            StartupCheck();
+        }
         else if (mode == "--panelperf")
         {
             _autoExitAt = double.MaxValue;
@@ -1310,6 +1322,8 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --capturetest       截图（拖框 → 左上角 → 剪贴板，且不拍进自己的批注）");
         Console.WriteLine("  --logupload         开发用：真传一次运行日志（验日志收集仓 / 令牌是否通）");
         Console.WriteLine("  --logtest           日志系统自检（session.json / 环境 / 性能摘要 / 导出 zip）");
+        Console.WriteLine("  --autostarttest     开机自启自检（注册表写入 / 任务管理器禁用位 / 路径修复 / 清理）");
+        Console.WriteLine("  --startupcheck     开机自启装配自检（穿透 + 小球收起 → 再启动后展开 + 退出穿透）");
         Console.WriteLine("  --cursorshow <笔|荧光笔|激光笔|橡皮|像素橡皮> [宽]  落点摆样");
         Console.WriteLine("  --widthtest         笔迹粗细/压力");
         Console.WriteLine("  --ghosttest         残影检测");
@@ -7475,6 +7489,13 @@ internal static class Program
 
         if (found != IntPtr.Zero)
         {
+            // 先叫醒已有实例：后台待命是“穿透 + 小球收起”，只 SetForegroundWindow
+            // 的话用户还是点不到工具条，看起来就像双击没反应。
+            Native.GetWindowThreadProcessId(found, out uint foundPid);
+            // 同步发：第二个进程马上要退出，PostMessage 留在队列里理论上也能到，
+            // 但实测在锁屏/消息泵正忙时不可靠；SendMessage 会等对方 WndProc 处理完。
+            Native.SendMessage(found, InkEngine.Native.WM_INKTEACH_ACTIVATE, IntPtr.Zero, IntPtr.Zero);
+            Console.WriteLine($"单实例：已叫醒运行中的窗口（pid {foundPid}）");
             Native.SetForegroundWindow(found);
             return;
         }

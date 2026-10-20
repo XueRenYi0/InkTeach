@@ -118,6 +118,12 @@ public interface IOverlayUi
     /// 返回 true = 这个按键已被说明层消费。默认 false。
     /// </summary>
     bool HandleHelpKey(int vk) => false;
+
+    /// <summary>
+    /// 用户又双击了一次 exe（或从快捷方式启动）。已有实例收到后：
+    /// 退出穿透，并把收起的工具条展开。默认空实现，给只需要“提到前面”的界面用。
+    /// </summary>
+    void Activate() { }
 }
 
 /// <summary>引擎提供给界面的能力。</summary>
@@ -153,6 +159,13 @@ public interface IUiHost
     /// 采纳引擎给的屏幕尺寸——重新采纳会把界面摆到按另一套坐标算的位置上。
     /// </summary>
     bool IsReattach { get; }
+
+    /// <summary>
+    /// 本次进程是不是由开机自启的 `--startup` 参数拉起来的。
+    /// 界面首次 Attach 时据此决定“后台待命”形态：穿透 + 小球收起；
+    /// 手动启动仍然是原来的“画笔 + 工具条展开”。
+    /// </summary>
+    bool StartupMode => false;
 
     /// <summary>
     /// 文字工厂。界面画图标/标签用它创建 <c>IDWriteTextFormat</c>，
@@ -311,6 +324,16 @@ public interface IEngineCommands
     void Redo();
     void Clear();
     void SetPassThrough(bool on);
+    /// <summary>
+    /// 打开/关闭“开机自动启动”。写当前用户的 Run 键，不要求管理员。
+    /// 失败时保持原状态；真实状态以 <see cref="UiState.AutoStartOn"/> 为准。
+    /// </summary>
+    void SetAutoStart(bool on);
+    /// <summary>
+    /// 重新读一次自启状态（任务管理器可能在软件运行期间改过开关）。
+    /// 设置页打开时调用，不写注册表。
+    /// </summary>
+    void RefreshAutoStart();
     /// <summary>
     /// 白板开关。开=给画布铺一层不透明底色（遮住桌面，像一块白板）；
     /// 关=透明批注，直接写在别的程序上面。
@@ -962,6 +985,11 @@ public readonly struct UiState
     /// </summary>
     public bool EllipseFocusTriangle { get; init; }
     public bool PassThrough { get; init; }
+    /// <summary>
+    /// 开机自动启动当前是否真的生效（HKCU Run 有值，且没被任务管理器禁用）。
+    /// 设置页那一行的开关读它；写它只走 <see cref="IEngineCommands.SetAutoStart"/>。
+    /// </summary>
+    public bool AutoStartOn { get; init; }
     /// <summary>是否处于白板模式（画布有不透明底色）。</summary>
     public bool Board { get; init; }
     /// <summary>白板底色（界面用它高亮"现在是哪种板"）。</summary>

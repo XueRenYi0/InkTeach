@@ -174,6 +174,9 @@ public partial class InkEngine
     internal int PptSlide { get; private set; }
     internal int PptTotal { get; private set; }
 
+    /// <summary>产品启动时是否已经接过 COM 源；开机自启会把它推迟到用户激活之后。</summary>
+    private bool _pptLinkStarted;
+
     /// <summary>自检/探针用：轮询线程真的跑了几次（证明"设了不是忘了"）。</summary>
     internal int PptPollCount => _pptWatcher?.PollCount ?? 0;
 
@@ -187,7 +190,8 @@ public partial class InkEngine
     /// </summary>
     internal void StartPptLink()
     {
-        if (SelfCheckMode) return;
+        if (SelfCheckMode || _pptLinkStarted) return;
+        _pptLinkStarted = true;
         AttachPptSource(new PptComSource(), watch: true);
     }
 

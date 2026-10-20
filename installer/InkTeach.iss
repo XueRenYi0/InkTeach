@@ -112,3 +112,16 @@ begin
   Exec('taskkill.exe', '/IM {#AppExeName} /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Result := True;
 end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  { 卸载时清掉“开机自动启动”的当前用户登记（不需要管理员）。
+    Run 值由软件设置页写入；StartupApproved 里是任务管理器的开关状态。 }
+  if CurUninstallStep = usPostUninstall then
+  begin
+    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'InkTeach');
+    RegDeleteValue(HKCU,
+      'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run',
+      'InkTeach');
+  end;
+end;

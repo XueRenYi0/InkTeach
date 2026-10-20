@@ -101,7 +101,7 @@ public partial class InkEngine
             or "--hud" or "--nohud" or "--fullpresent" or "--warp"
             or "--pdflowmem" or "--pdfhighmem"
             or "--recink" or "--recinkp" or "--reclive"
-            or "--doc"
+            or "--doc" or "--startup"
             or "--nosmooth" or "--printersafe"
             or "--mean2gauss" or "--mean2guniform" or "--mean2gsigma" or "--mean2gfast"
             or "--mean2glo" or "--mean2ghi" or "--mean2gtip"
@@ -110,6 +110,18 @@ public partial class InkEngine
     };
 
     internal bool SelfCheckMode;
+
+    /// <summary>
+    /// 本次进程由开机自启拉起（命令行带 `--startup`）。产品启动态：
+    /// 穿透先开着、工具条收成小球、不抢焦点；手动双击仍然是画笔 + 展开。
+    /// </summary>
+    internal bool StartupMode;
+
+    /// <summary>第一次退出穿透时还要把后台待命的小球展开（只做一次）。</summary>
+    private bool _startupPassive;
+
+    /// <summary>开机自启当前真实生效（HKCU Run 有值且未被任务管理器禁用）。</summary>
+    internal bool AutoStartOn;
 
     /// <summary>启动时拿到的那个参数（`args[0]`）。只给"自检模式"那行诊断用。</summary>
     private string _modeName = "";
@@ -2311,6 +2323,13 @@ public partial class InkEngine
         //   真敲错了 mode 名的行为不变，仍旧进自检模式。）
         if (IsSwitchNotMode(mode)) mode = "";
         SelfCheckMode = mode.Length > 0;
+        // `--startupcheck` 是自检模式，但也要走一遍真实的后台待命装配。
+        StartupMode = args.Contains("--startup") || args.Contains("--startupcheck");
+        _startupPassive = StartupMode;
+        // 后台待命不抢键盘/前台；等用户点小球或选工具时再恢复。
+        KeyboardMode = !StartupMode;
+        if (StartupMode)
+            Console.WriteLine("启动模式：开机自启后台待命（穿透 + 工具条收起；点小球或再次双击 exe 激活）");
         _modeName = mode;
         // 这一行**不在这里打** —— 见下面 update 里那句注释。
         // （这里打的话，`--clean 3` 这种"开关写在第一个位置"会被误报成自检模式，
@@ -2335,16 +2354,56 @@ public partial class InkEngine
             foreach (var w in InkSettings.LoadUiPrefs(UiPrefs))
                 Console.WriteLine("settings: " + w);
 
+        // 开机自启：Run 值是唯一真源（不另存 settings.json）。
+        // 已启用但路径变了（换目录 / 升级）就在这里修回当前 exe。
+        if (!SelfCheckMode)
+        {
+            // 用户点过“开”的意愿记在 ui.autostart；升级/换目录后如果 Run 被安装器
+            // 清掉，下一次启动自动补写。注意：Run 值还在、只是被任务管理器禁用时
+            // 不能补写——那是用户明确的“不要自启”，必须尊重。
+            // 用户可能在任务管理器里把它禁用了。Run 值还在、状态是关，
+            // 这时把“想要自启”的旧意愿清掉，免得以后安装器清掉 Run 后
+            // 下一次启动又把它擅自打开。
+            if (GetUiPref("autostart") == "1" && AutoStart.HasEntry() && !AutoStart.IsEnabled())
+            {
+                SetUiPref("autostart", null);
+                Console.WriteLine("开机自启：任务管理器已禁用，按“关”处理");
+            }
+
+            bool wantAutoStart = GetUiPref("autostart") == "1";
+            string autoEnableErr = null;
+            if (wantAutoStart && !AutoStart.HasEntry()
+                && AutoStart.TryEnable(Environment.ProcessPath, out autoEnableErr))
+                Console.WriteLine("开机自启：按上次设置补写 Run 值");
+            else if (wantAutoStart && !string.IsNullOrEmpty(autoEnableErr))
+                Console.WriteLine("开机自启：补写 Run 值失败（不影响本次启动）：" + autoEnableErr);
+
+            AutoStartOn = AutoStart.IsEnabled();
+            string autoStartErr = null;
+            if (AutoStartOn && AutoStart.EnsureCurrentPath(Environment.ProcessPath, out autoStartErr))
+                Console.WriteLine("开机自启：已把记录路径修成当前程序");
+            else if (!string.IsNullOrEmpty(autoStartErr))
+                Console.WriteLine("开机自启：修路径失败（不影响本次启动）：" + autoStartErr);
+        }
+
         // 点名名单（`%APPDATA%\InkTeach\Names.txt`）：产品模式启动读一次；
         // 自检不读用户的名单（判据要确定），要用就临时设 NamesPathOverride + ReloadNames。
         if (mode.Length == 0) LoadClassroomPrefs();
 
         // 上次因为界面出问题重启过？把板书读回来（读走就删，只恢复一次）。
         // 自检/基准模式不掺和：那些模式不该被"上次留下的板书"影响判据。
-        if (mode.Length == 0) RestoreSessionIfAny();
-
-        // 上次的自动存档（崩溃/正常退出都留）：**默认不接**，见 RestoreAutoSaveIfAny。
-        if (mode.Length == 0) RestoreAutoSaveIfAny();
+        // 开机自启是“后台待命”，不能一登录就把旧板书铺到桌面上：
+        // 恢复留到用户手动启动时做；这里只把自动存档的指纹对上，避免 15 秒后
+        // 用空板覆盖掉用户上次的板书。
+        if (mode.Length == 0 && !StartupMode)
+        {
+            RestoreSessionIfAny();
+            RestoreAutoSaveIfAny();
+        }
+        else if (mode.Length == 0)
+        {
+            PrimeAutoSaveForStartup();
+        }
 
         // 宿主自己的启动分支（开发期的点击目标、截图工具等）。返回 true
         // 表示这条命令行已经由宿主处理完，引擎不再往下走。产品界面不需要覆写。
@@ -2354,7 +2413,9 @@ public partial class InkEngine
         // PPT 放映联动：**只在产品模式下真的接**（自检/基准模式不接——那要碰 COM，
         // 判据会变得不确定；而且探针 `--pptprobe` 自己 new 一个源去问，
         // 不走这条路）。没装 Office / 没开 PPT 时它什么都不做。
-        StartPptLink();
+        // 开机自启先不接 PPT：等用户真正激活（退出穿透）时再接，
+        // 避免一登录就因为放映中的 PPT 自动展开页条/抢前台。
+        if (!StartupMode) StartPptLink();
 
         // --hud：显式打开调试性能面板（默认关，交互里已没有开它的快捷键）。
         // 测"写一笔的内存/延时"就靠它：面板上并列 提交 / 工作集 / 显存 / 笔画数。
@@ -2819,6 +2880,10 @@ public partial class InkEngine
         // 放大到 700×258 逻辑像素就当场踩到了。交互模式仍然默认开着。
         if (mode.Length > 0 && !args.Contains("--hud")) ShowHud = false;
 
+        // 界面是在 RunModeDispatch 里 Attach 的：先把“后台待命”的穿透态摆好，
+        // FullUi 首次 Attach 才能据此收成小球而不是展开工具条。
+        if (StartupMode) SetPassThrough(true, restoreBoard: false);
+
         int dispatch = RunModeDispatch(mode, args);
         if (dispatch >= 0)
             return dispatch;
@@ -2926,6 +2991,26 @@ public partial class InkEngine
         {
             Console.WriteLine("自动存档读不出来（已忽略，从空白开始）：" + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// 开机自启的“不展开旧板书，但别把旧板书覆盖掉”处理。
+    ///
+    /// 正常启动时 <see cref="RestoreAutoSaveIfAny"/> 会把旧板书读进文档；自启刻意
+    /// 不读。可是自动存档每 15 秒会看指纹，如果这里不先把指纹对齐，空文档会
+    /// 被判成“变了”，转头把用户上一节课的板书覆盖成空。
+    /// </summary>
+    private void PrimeAutoSaveForStartup()
+    {
+        _nextAutoSaveAtMs = NowMs + _autoSaveEveryMs;
+
+        // 自启不把旧板书读进文档，但**也不能让空文档把旧自动存档写掉**：
+        // 当前文档就是空板，指纹按 0 对齐。15 秒后的自动存档和退出时的兜底
+        // 都会认为“没变”，旧文件原样保留；用户一旦真写了/打开了内容，
+        // 指纹变化，才走正常保存。
+        _autoSavedBoardFp = 0;
+        if (RestoreInkOnStartup)
+            Console.WriteLine("开机自启：不展开上次板书；旧自动存档保留到用户开始写");
     }
 
     /// <summary>
@@ -3792,6 +3877,13 @@ public partial class InkEngine
         // 落笔更跟手。
         if (msg == Native.WM_TABLET_QUERYSYSTEMGESTURESTATUS)
             return new IntPtr(Native.TABLET_DISABLE_PRESSANDHOLD);
+
+        // 第二个进程双击启动：叫醒已有实例（退出穿透 + 展开工具条）。
+        if (msg == Native.WM_INKTEACH_ACTIVATE)
+        {
+            ActivateFromExternal();
+            return IntPtr.Zero;
+        }
 
         // 面板的"接输入小窗"（方案 B）：它只收输入，什么都不画。
         if (_uiInputHwnd != IntPtr.Zero && hWnd == _uiInputHwnd)
@@ -10356,7 +10448,24 @@ public partial class InkEngine
             // `SetKeyboardMode` 里那句 SetForegroundWindow 正是干这个的（幂等，重复调没副作用）。
             // ⚠ 和"退出放映要把前台要回来"是同一类补丁，见 Ppt.ExitPptMode——以后凡是
             //   "从别的状态切回批注态"的地方都要做这一步。
+            //
+            // 开机自启的后台待命态之前刻意把 KeyboardMode 关了（不抢登录后的前台）；
+            // 用户第一次用小球/工具/快捷键退出穿透时，在这里把键盘模式补回来，
+            // 并把因为待命而没接的 PPT 联动接上。
+            if (StartupMode && !_pptLinkStarted)
+            {
+                KeyboardMode = true;
+                StartPptLink();
+            }
             if (_windows.Count > 0) SetKeyboardMode(KeyboardMode);
+
+            // 第一次退出穿透 = 用户开始用了：后台待命的小球展开成完整条。
+            // 只做一次，之后用户自己收起就尊重他的选择。
+            if (_startupPassive)
+            {
+                _startupPassive = false;
+                if (Ui != null) UiGuard("Activate", () => Ui.Activate());
+            }
         }
 
         Console.WriteLine($"pass-through = {on} (mode {PassMode})");
@@ -10636,6 +10745,7 @@ public partial class InkEngine
         LaserWidth = LaserWidthLogical,
         Dash = PenDash,
         PassThrough = PassThrough,
+        AutoStartOn = AutoStartOn,
         Board = BoardOn,
         BoardColor = BoardColor,
         BoardPattern = BoardPattern,
@@ -11477,6 +11587,67 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
+    /// <summary>
+    /// 设置页“开机自动启动”。只改当前用户的 Run 值；成功与否都以重新读到的
+    /// <see cref="AutoStartOn"/> 为准，界面不会出现“开关开着、实际没登记”。
+    /// </summary>
+    internal void SetAutoStartFromUi(bool on)
+    {
+        bool ok;
+        string err;
+        if (on)
+        {
+            ok = AutoStart.TryEnable(Environment.ProcessPath, out err);
+        }
+        else
+        {
+            ok = AutoStart.TryDisable(out err);
+        }
+
+        AutoStartOn = AutoStart.IsEnabled();
+        if (ok && AutoStartOn == on)
+        {
+            // 记下“用户想要什么”，供升级/安装器清掉 Run 后下一次启动补写。
+            // 任务管理器禁用不走这里：Run 还在，HasEntry 为真，启动时不会擅自打开。
+            SetUiPref("autostart", on ? "1" : null);
+            FlushSettings();
+        }
+        if (!ok)
+            Console.WriteLine($"开机自启：{(on ? "打开" : "关闭")}失败：" + err);
+        else
+            Console.WriteLine($"开机自启：已{(on ? "打开" : "关闭")}（当前 {(AutoStartOn ? "生效" : "未生效")}）");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>设置页打开时重读一次；任务管理器可能在运行期间改过。</summary>
+    internal void RefreshAutoStartFromUi()
+    {
+        bool now = AutoStart.IsEnabled();
+        // 用户可能在任务管理器里禁用了：清掉“想要自启”的旧意愿，
+        // 以后安装器清掉 Run 时不要擅自再打开。
+        if (!now && AutoStart.HasEntry() && GetUiPref("autostart") == "1")
+        {
+            SetUiPref("autostart", null);
+            FlushSettings();
+        }
+        if (now == AutoStartOn) return;
+        AutoStartOn = now;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 第二个进程发来的“用户又启动了 InkTeach”：把后台待命态叫醒。
+    /// 单实例互斥体挡住了第二个进程，但它不能只会 SetForegroundWindow——
+    /// 穿透 + 收起的小球被提到前面仍然点不到桌面上的东西，看起来就像没启动。
+    /// </summary>
+    internal void ActivateFromExternal()
+    {
+        Console.WriteLine("启动：收到第二个实例的激活请求");
+        if (PassThrough) SetPassThroughFromUi(false);
+        if (Ui != null) UiGuard("Activate", () => Ui.Activate());
+        NotifyUiStateChanged();
+    }
+
     /// <summary>进白板前待在哪一页；关白板回哪（默认 0 = 桌面）。</summary>
     private int _boardReturnKey = 0;
 
@@ -11820,7 +11991,12 @@ public partial class InkEngine
 
             var psi = new ProcessStartInfo(exe) { UseShellExecute = false };
             var args = Environment.GetCommandLineArgs();
-            for (int i = 1; i < args.Length; i++) psi.ArgumentList.Add(args[i]);
+            // 重启后应该回到“用户正在用”的形态，而不是因为原始命令行带着
+            // --startup 又变回后台待命。只有当前确实还是穿透待命时才保留它。
+            bool keepStartup = StartupMode && PassThrough;
+            for (int i = 1; i < args.Length; i++)
+                if (args[i] != "--startup") psi.ArgumentList.Add(args[i]);
+            if (keepStartup) psi.ArgumentList.Add("--startup");
             Process.Start(psi);
             return true;
         }

@@ -75,6 +75,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     /// </summary>
     public bool IsReattach { get; }
 
+    /// <summary>本次进程由 `--startup` 拉起时，界面首次 Attach 进入后台待命形态。</summary>
+    public bool StartupMode => _engine.StartupMode;
+
     public IDWriteFactory TextFactory => Gfx.WriteFactory;
 
     public ID2D1Factory1 PathFactory => Gfx.D2DFactory;
@@ -114,6 +117,8 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void Redo() => _engine.RedoFromUi();
     public void Clear() => _engine.ClearAllInkFromUi();
     public void SetPassThrough(bool on) => _engine.SetPassThroughFromUi(on);
+    public void SetAutoStart(bool on) => _engine.SetAutoStartFromUi(on);
+    public void RefreshAutoStart() => _engine.RefreshAutoStartFromUi();
     public void SetBoard(bool on) => _engine.SetBoardFromUi(on);
     public void SetBoardColor(Color4 color) => _engine.SetBoardColorFromUi(color);
     public void SetSelectMode(SelectMode mode) => _engine.SetSelectModeFromUi(mode);

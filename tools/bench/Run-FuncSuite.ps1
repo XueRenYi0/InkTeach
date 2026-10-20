@@ -71,6 +71,8 @@ $cases = @(
     @{ f = '产品界面';   n = 'shapebandtest'; a = @('--shapebandtest');  t = 240; d = '图形那格的界面入口：上带七段逐段点 / 三个新热键合成键盘真按 / 主条图标跟着种类变' }
     @{ f = '键位设置';   n = 'keytest';      a = @('--keytest');         t = 180; d = '键位表 / 冲突检测 / 落盘读回 / 真机注册' }
     @{ f = '图形动作';   n = 'snaptest';    a = @('--snaptest');      t = 120; d = '对象吸附：3×3 线组合 / 软相交 / 抛物线底边 / 正弦拼缝' }
+    @{ f = '启动与自启'; n = 'autostarttest'; a = @('--autostarttest'); t = 120; d = '开机自启：Run 写入 / 任务管理器禁用位 / 路径修复 / 清理 / 引擎命令' }
+    @{ f = '启动与自启'; n = 'startupcheck'; a = @('--startupcheck'); t = 120; d = '开机自启装配：待命态穿透 + 小球收起，叫醒后退出穿透 + 展开' }
 )
 
 $results = New-Object System.Collections.Generic.List[object]

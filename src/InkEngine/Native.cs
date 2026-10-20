@@ -693,9 +693,19 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern short GetAsyncKeyState(int vKey);
 
+    /// <summary>
+    /// 第二个进程唤醒已有实例的自定义消息（WM_APP + 0x51）。
+    /// 产品里由 Program.BringExistingToFront 发送，Engine.WndProc 接。
+    /// </summary>
+    public const uint WM_INKTEACH_ACTIVATE = 0x8000 + 0x51;
+
     /// <summary>往窗口队列塞一条消息。自检里用它模拟"批注键盘模式下按了一个键"。</summary>
     [DllImport("user32.dll")]
     public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    /// <summary>同步发一条窗口消息（第二个实例叫醒已有实例用，确保不会因为队列忙而丢）。</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     // ---- 线程消息（PPT 轮询线程 → 主线程的唤醒）---------------------------
     //

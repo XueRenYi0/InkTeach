@@ -237,9 +237,9 @@ public sealed partial class FullUi : IOverlayUi
     /// </summary>
     private bool _peekArmed;
 
-    /// <summary>设置子页里的行（启动器的底栏不在这张表里）。**顺序按三列里的布局走**：
-    /// 外观（4）/ 书写（5）/ 墨迹（3）三列并排——见 <see cref="MoreRowRect"/>。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, RestoreInk, PptAutoSave, HistoryDays }
+    /// <summary>设置子页里的行（启动器的底栏不在这张表里）。外观 / 书写 / 墨迹三列并排；
+    /// `AutoStart` 排在表尾，但由 <see cref="MoreRowRect"/> 画在外观列最后一格。</summary>
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, RestoreInk, PptAutoSave, HistoryDays, AutoStart }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -280,6 +280,9 @@ public sealed partial class FullUi : IOverlayUi
         //   PPT 和文档都是老师的课件（"文档"在我们界面语汇里专指 PDF/图片那类）。
         (Row.PptAutoSave, "课件墨迹自动保存", false, false, "PPT 放映 / 文档打开时，批注按页自动保存、下次自动装载"),
         (Row.HistoryDays, "历史清理", false, false, "过期 PPT 缓存 / 打开前备份 / 历史板书，启动时清掉"),
+        // 开机自启：放在「外观」列最后一格（MoreRowRect 里按列排，不按 Rows 顺序画）。
+        // 默认关；打开后只写 HKCU Run，不需要管理员，也不碰任务计划/服务。
+        (Row.AutoStart, "开机自动启动", false, false, "登录 Windows 后在后台待命：点小球再开始批注"),
         // 板书历史本身没有开关（默认留、默认不显示）；上限是"总量 1 GB、份数不限"，
         // 见 BoardHistory。老师想清空就删 `%LOCALAPPDATA%\InkTeach\History`，或把这一行设成 7 天。
         // ⚠ 「精细笔迹」「触摸手势」两个开关 2026-10-09 晚**已撤**（用户真机试稳：
@@ -363,12 +366,13 @@ public sealed partial class FullUi : IOverlayUi
         _tipFade.Bind(host);
         _moreH.Jump(MoreTargetH());
         _lastTool = host.State.Tool;
-        // **启动即展开**（用户 2026-09-27 定："第一次打开以后，默认就展开"）。
+        // **手动启动即展开**（用户 2026-09-27 定："第一次打开以后，默认就展开"）。
         //
-        // 原来是 `Jump(0f)`——启动是一颗球，得先点一下才展开。用户上手后发现"每次开机
-        // 都要先点那一下"是多余的：工具的入口本来就该摆在那儿。
-        // 收起仍然能用（点一下条自己就收成球），只是**不再是默认态**。
-        _expand.Jump(1f);
+        // 开机自启是另一回事：那时老师和学生还没开始用，工具条展开会挡桌面，
+        // 所以后台待命态收成小球 + 穿透。判据同时看 StartupMode 和当前穿透，
+        // 用户激活之后（穿透关掉）界面重建也不会再无故收起。
+        bool startupPassive = host.StartupMode && host.State.PassThrough;
+        _expand.Jump(startupPassive ? 0f : 1f);
         _peek.Jump(1f);
         _rail.Jump(0f);
         _dashFade.Jump(1f);
@@ -377,6 +381,17 @@ public sealed partial class FullUi : IOverlayUi
         LoadPrefs();
         Layout(host.Screen, host.DpiScale);
         PushFloatingTheme();       // 浮层（操作条/小面板/旋转读数）跟着走同一套令牌
+    }
+
+    /// <summary>
+    /// 第二个进程“又启动了一次”或后台待命被叫醒：把小球展开成完整工具条。
+    /// 退出穿透由引擎先做（它会顺带把键盘/前台要回来），这里只负责外观。
+    /// </summary>
+    public void Activate()
+    {
+        _peek.Jump(1f);
+        _expand.To(1f, Tokens.ExpandMs);
+        Invalidate();
     }
 
     /// <summary>
@@ -2161,7 +2176,7 @@ public sealed partial class FullUi : IOverlayUi
 
     private bool IsToggleRow(int i)
         => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.DwellShape
-           or Row.Pressure or Row.Predict or Row.RestoreInk or Row.PptAutoSave;
+           or Row.Pressure or Row.Predict or Row.RestoreInk or Row.PptAutoSave or Row.AutoStart;
 
     /// <summary>
     /// **自检用**：这一行到底有没有画开关。
@@ -2277,6 +2292,9 @@ public sealed partial class FullUi : IOverlayUi
                     "90" => "30", "30" => "7", "7" => null, _ => "90",
                 });
                 break;
+            case Row.AutoStart:
+                _host.Commands.SetAutoStart(!_host.State.AutoStartOn);
+                break;
         }
         Invalidate();
     }
@@ -2336,7 +2354,7 @@ public sealed partial class FullUi : IOverlayUi
     /// 2026-10-09：两列（左列堆"外观＋书写"）→ **三列并排**（外观 / 书写 / 墨迹 各一列）——
     /// 用户说"设置现在太长了"。原来左列堆 9 行（组头 26 + 9×48 + 8 ≈ 476），三列后最高 5 行。
     /// </summary>
-    private const int LookRowCount = 4;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小（「功能提示」2026-10-16 撤除、改常开）
+    private const int LookRowCount = 5;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小 / 开机自动启动    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小（「功能提示」2026-10-16 撤除、改常开）
     private const int WriteRowCount = 3;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测（「预测时长」2026-10-15 随毫秒调节撤除；精细笔迹、触摸手势 2026-10-09 撤开关、改常开）
     private const int InkRowCount = 3;     // 墨迹：湿墨档位 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理（日志两行 2026-10-17 合并进「更多 → 日志」）
     private const float MoreColumnGap = 16f;
@@ -2577,7 +2595,8 @@ public sealed partial class FullUi : IOverlayUi
         Row.DarkTheme => SetColRow(SetColKind.Look, 0),
         Row.AutoHide => SetColRow(SetColKind.Look, 1),
         Row.RailPin => SetColRow(SetColKind.Look, 2),
-        Row.UiSize => SetColRow(SetColKind.Look, 3),      // 「功能提示」行 2026-10-16 撤除（改常开），界面上移一格
+        Row.UiSize => SetColRow(SetColKind.Look, 3),
+        Row.AutoStart => SetColRow(SetColKind.Look, 4),      // 「功能提示」行 2026-10-16 撤除（改常开），界面上移一格
         Row.DwellShape => SetColRow(SetColKind.Write, 0),
         Row.Pressure => SetColRow(SetColKind.Write, 1),
         Row.Predict => SetColRow(SetColKind.Write, 2),
@@ -2653,6 +2672,8 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>打开面板（入口只有主条「…」那一格）。</summary>
     private void OpenMore()
     {
+        // 任务管理器可能在运行期间把自启关掉/打开；每次打开抽屉重读一次。
+        _host?.Commands.RefreshAutoStart();
         _railHover = false;
         _rail.To(0f, Tokens.RailMs);
 
@@ -4868,6 +4889,7 @@ public sealed partial class FullUi : IOverlayUi
         // 墨迹两条开关：读偏好（restoreInk 默认关、pptAutoSave 默认开）。
         Row.RestoreInk => _host.GetPref("restoreInk") == "1",
         Row.PptAutoSave => _host.GetPref("pptAutoSave") != "0",
+        Row.AutoStart => _host != null && _host.State.AutoStartOn,
         _ => _hideEnabled,
     };
 
