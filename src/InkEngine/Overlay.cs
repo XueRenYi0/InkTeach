@@ -4080,6 +4080,7 @@ internal sealed partial class OverlayWindow : IDisposable
                 FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
             _readoutFormatSmall.TextAlignment = TextAlignment.Center;
             _readoutFormatSmall.ParagraphAlignment = ParagraphAlignment.Center;
+            _readoutFormatSmall.WordWrapping = WordWrapping.NoWrap;
             _readoutFormatSmallPx = px;
         }
         return _readoutFormatSmall;
@@ -5309,6 +5310,7 @@ internal sealed partial class OverlayWindow : IDisposable
                 FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
             _pptPageFmt.TextAlignment = TextAlignment.Center;
             _pptPageFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _pptPageFmt.WordWrapping = WordWrapping.NoWrap;
             _pptPageFmtPx = px;
         }
         return _pptPageFmt;

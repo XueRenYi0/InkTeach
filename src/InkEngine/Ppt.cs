@@ -751,14 +751,15 @@ public partial class InkEngine
 
     /// <summary>
     /// 白板打开时底部页码条的菜单。和 PPT/文档菜单共用同一个壳，但**动作完全不同**：
-    /// 页码跳转、播放本屏、清空整个白板槽、退出白板、历史板书。
+    /// 页码跳转、播放本屏、清空整个白板槽、历史板书、退出白板。
+    /// 退出放最后：和 PPT/文档菜单的"退出/关闭"末位保持一致。
     /// </summary>
     private static readonly string[] BoardMenuItems =
-        { "指定页码跳转", "播放本屏墨迹", "清空白板全部墨迹", "退出白板", "历史板书" };
+        { "指定页码跳转", "播放本屏墨迹", "清空白板全部墨迹", "历史板书", "退出白板" };
 
     internal static int PptMenuItemCount => PptMenuItems.Length;
 
-    /// <summary>菜单项之间画分隔线的位置（在第 i 项**之前**画）。[跳转] | [存/放] | [清空] | [结束]。</summary>
+    /// <summary>菜单项之间画分隔线的位置（在第 i 项**之前**画）。[跳转] | [存/放] | [清空] | [历史/退出]。</summary>
     internal static bool PptMenuDividerBefore(int i) => i is 1 or 3 or 4;
 
     /// <summary>这一项是危险动作吗（"墨迹清空"）——绘制据此上强调色（等确认时也用它）。</summary>
@@ -1404,7 +1405,7 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 白板专用菜单：0 页码 / 1 播放本屏 / 2 清空整个白板槽 / 3 退出白板 / 4 历史板书。
+    /// 白板专用菜单：0 页码 / 1 播放本屏 / 2 清空整个白板槽 / 3 历史板书 / 4 退出白板。
     /// 所有动作只碰白板槽，不碰下面的文档 / PPT。
     /// </summary>
     private void RunBoardBarMenuItem(int index)
@@ -1442,13 +1443,13 @@ public partial class InkEngine
                 PptMenuOpen = false;
                 PptClearConfirm = false;
                 _dirty = true;
-                SetBoardFromUi(false);             // 只退出白板，不关文档/PPT/软件
+                OpenInkHistoryFromUi();
                 return;
             case 4:
                 PptMenuOpen = false;
                 PptClearConfirm = false;
                 _dirty = true;
-                OpenInkHistoryFromUi();
+                SetBoardFromUi(false);             // 只退出白板，不关文档/PPT/软件
                 return;
         }
     }

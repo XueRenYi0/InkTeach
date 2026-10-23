@@ -1110,8 +1110,9 @@ internal sealed partial class App
                   BoardOn && Doc.PageKey == InkDocument.BoardPageKey
                   && PptMenuItemText(0) == "指定页码跳转"
                   && PptMenuItemText(2) == "清空白板全部墨迹"
-                  && PptMenuItemText(3) == "退出白板",
-                  $"板开={BoardOn} slot={Doc.PageKey} 菜单={PptMenuItemText(2)} / {PptMenuItemText(3)}");
+                  && PptMenuItemText(3) == "历史板书"
+                  && PptMenuItemText(4) == "退出白板",
+                  $"板开={BoardOn} slot={Doc.PageKey} 菜单={PptMenuItemText(2)} / {PptMenuItemText(3)} / {PptMenuItemText(4)}");
 
             var boardMark = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,
                                          Color = new Color4(0f, 0f, 0f, 1f), Width = 8f };
@@ -1186,7 +1187,7 @@ internal sealed partial class App
             PptBarPointerDown(endX, endY);
             PptBarPointerUp(endX, endY);
             Check("PPT 结束后白板页码条还能开菜单", PptMenuOpen, $"菜单={PptMenuOpen}");
-            PptMenuItemRectAt(3, out var miExitBoard);
+            PptMenuItemRectAt(4, out var miExitBoard);
             PptBarPointerDown((miExitBoard.MinX + miExitBoard.MaxX) * 0.5f,
                               (miExitBoard.MinY + miExitBoard.MaxY) * 0.5f);
             SettleFrames(120);
