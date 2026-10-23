@@ -1887,7 +1887,7 @@ internal sealed partial class OverlayWindow : IDisposable
         // 遮罩是"模态"的：工具条留在上面会跟遮罩打架（它在遮罩之上画、会亮着），
         // 而且"直接截取"会把它拍进图里。收起这一块由引擎做（不管界面自己怎么想），
         // 只是这一帧不画/不接输入——"界面崩了再造一个"那三级阶梯说的是 Ui 对象，不受影响。
-        if (app.CaptureActive)
+        if (app.CaptureActive || app.ColorPickActive)
         {
             _uiLogicalBounds = RectF.Empty;
             _uiBounds = RectF.Empty;
@@ -2799,7 +2799,8 @@ internal sealed partial class OverlayWindow : IDisposable
         // 放在最后 = 盖住上面所有东西（滚动条、PPT 条、HUD）；界面那一块在截图期间
         // 由引擎收起（见 PrepareUi），所以这就是屏幕上看到的全部。
         // 截图结束那一帧顺手把冻结帧位图放掉（它位图里存着整屏像素，不留着占显存/内存）。
-        if (app.CaptureActive) DrawCaptureOverlay(app, CanvasToWindow);
+        if (app.ColorPickActive) DrawColorPickOverlay(app, CanvasToWindow);
+        else if (app.CaptureActive) DrawCaptureOverlay(app, CanvasToWindow);
         else ReleaseFrozenBitmap();
 
         _ctx.PopAxisAlignedClip();
@@ -6409,6 +6410,101 @@ internal sealed partial class OverlayWindow : IDisposable
             // 得有一颗看得见的出口。放在右上角，不和顶部的提示打架。
             PillButton(app.CaptureCancelRect(), "✕ 取消", primary: false);
         }
+
+        _ctx.Transform = saved;
+    }
+
+    /// <summary>
+    /// 屏幕吸管：冻结帧铺满屏幕 + 十字准线 + 当前像素/放大镜。
+    /// **不压暗**，因为老师是在看原图取色；顶部只给一行操作提示。
+    /// </summary>
+    private void DrawColorPickOverlay(InkEngine app, Matrix3x2 canvasToTarget)
+    {
+        if (!app.ColorPickActive || app.CaptureFrameHidden) return;
+        float s = Dpi / 96f;
+        var screen = app.ViewportCanvas;
+        var saved = _ctx.Transform;
+        _ctx.Transform = canvasToTarget;
+
+        if (app.CaptureFrozen && app.CaptureFrozenBgra != null)
+        {
+            var bmp = EnsureFrozenBitmap(app);
+            if (bmp != null)
+                _ctx.DrawBitmap(bmp,
+                    new Vortice.RawRectF(app.CaptureFrozenX, app.CaptureFrozenY - app.ViewOffsetY,
+                                         app.CaptureFrozenX + app.CaptureFrozenW,
+                                         app.CaptureFrozenY - app.ViewOffsetY + app.CaptureFrozenH),
+                    1f, Vortice.Direct2D1.InterpolationMode.NearestNeighbor, null, null);
+        }
+
+        float px = app.PointerX, py = app.PointerY;
+        // 先画深色底再画白线：浅色桌面/网页上白线会完全看不见。
+        _scratch.Color = new Color4(0f, 0f, 0f, 0.50f);
+        _ctx.DrawLine(new Vector2(px, screen.MinY), new Vector2(px, screen.MaxY), _scratch, 3f * s);
+        _ctx.DrawLine(new Vector2(screen.MinX, py), new Vector2(screen.MaxX, py), _scratch, 3f * s);
+        _scratch.Color = new Color4(1f, 1f, 1f, 0.95f);
+        _ctx.DrawLine(new Vector2(px, screen.MinY), new Vector2(px, screen.MaxY), _scratch, 1f * s);
+        _ctx.DrawLine(new Vector2(screen.MinX, py), new Vector2(screen.MaxX, py), _scratch, 1f * s);
+        _ctx.DrawEllipse(new Ellipse(new Vector2(px, py), 8f * s, 8f * s),
+                         Brush(new Color4(0f, 0f, 0f, 0.55f)), 3f * s);
+        _ctx.DrawEllipse(new Ellipse(new Vector2(px, py), 8f * s, 8f * s),
+                         Brush(new Color4(1f, 1f, 1f, 0.95f)), 1f * s);
+
+        // 当前像素预览：色块 + 十六进制读数；放在指针右下方，贴边时翻转。
+        var c = app.ColorPickHoverValid ? app.ColorPickHover : new Color4(1f, 1f, 1f, 1f);
+        byte cr = (byte)Math.Clamp((int)MathF.Round(c.R * 255f), 0, 255);
+        byte cg = (byte)Math.Clamp((int)MathF.Round(c.G * 255f), 0, 255);
+        byte cb = (byte)Math.Clamp((int)MathF.Round(c.B * 255f), 0, 255);
+        string hex = $"#{cr:X2}{cg:X2}{cb:X2}";
+
+        float cardW = 132f * s, cardH = 34f * s;
+        float cx0 = px + 18f * s, cy0 = py + 18f * s;
+        if (cx0 + cardW > screen.MaxX - 4f * s) cx0 = px - cardW - 18f * s;
+        if (cy0 + cardH > screen.MaxY - 4f * s) cy0 = py - cardH - 18f * s;
+        cx0 = Math.Clamp(cx0, screen.MinX + 4f * s, screen.MaxX - cardW - 4f * s);
+        cy0 = Math.Clamp(cy0, screen.MinY + 4f * s, screen.MaxY - cardH - 4f * s);
+        var card = new Vortice.RawRectF(cx0, cy0, cx0 + cardW, cy0 + cardH);
+        _scratch.Color = new Color4(0.10f, 0.11f, 0.14f, 0.86f);
+        _ctx.FillRoundedRectangle(new RoundedRectangle(card, 8f * s, 8f * s), _scratch);
+        _scratch.Color = new Color4(1f, 1f, 1f, 0.22f);
+        _ctx.DrawRoundedRectangle(new RoundedRectangle(card, 8f * s, 8f * s), _scratch, 1f * s);
+        var sw = new Vortice.RawRectF(cx0 + 8f * s, cy0 + 8f * s, cx0 + 26f * s, cy0 + 26f * s);
+        _ctx.FillRoundedRectangle(new RoundedRectangle(sw, 4f * s, 4f * s), Brush(c));
+        _ctx.DrawRoundedRectangle(new RoundedRectangle(sw, 4f * s, 4f * s), Brush(new Color4(1f, 1f, 1f, 0.35f)), 1f * s);
+        _ctx.DrawText(hex, CaptureInfoFormat(),
+            new Rect(cx0 + 32f * s, cy0, cardW - 36f * s, cardH),
+            Brush(new Color4(1f, 1f, 1f, 1f)));
+
+        // 5×5 放大镜：给一个像素级的“落点”参考；仍然从冻结帧取，不重新抓屏。
+        float cell = 6f * s, lens = cell * 5f;
+        float lx0 = cx0, ly0 = cy0 - lens - 8f * s;
+        if (ly0 < screen.MinY + 4f * s) ly0 = cy0 + cardH + 8f * s;
+        if (ly0 + lens > screen.MaxY - 4f * s) ly0 = screen.MinY + 4f * s;
+        var lensBg = new Vortice.RawRectF(lx0 - 4f * s, ly0 - 4f * s, lx0 + lens + 4f * s, ly0 + lens + 4f * s);
+        _scratch.Color = new Color4(0.08f, 0.09f, 0.12f, 0.90f);
+        _ctx.FillRoundedRectangle(new RoundedRectangle(lensBg, 6f * s, 6f * s), _scratch);
+        for (int yy = 0; yy < 5; yy++)
+            for (int xx = 0; xx < 5; xx++)
+            {
+                var q = app.SampleFrozenColorAt(px + (xx - 2), py + (yy - 2));
+                if (!q.HasValue) continue;
+                var r = new Vortice.RawRectF(lx0 + xx * cell, ly0 + yy * cell,
+                                              lx0 + (xx + 1) * cell, ly0 + (yy + 1) * cell);
+                _ctx.FillRectangle(r, Brush(q.Value));
+            }
+        _scratch.Color = new Color4(1f, 1f, 1f, 0.22f);
+        _ctx.DrawRoundedRectangle(new RoundedRectangle(lensBg, 6f * s, 6f * s), _scratch, 1f * s);
+
+        // 顶部提示。
+        string hint = "吸管 · 点一下屏幕取色 · Esc / 右键取消";
+        float hw = 320f * s, hh = 34f * s;
+        float hx = (screen.MinX + screen.MaxX - hw) * 0.5f;
+        var pill = new Vortice.RawRectF(hx, screen.MinY + 30f * s, hx + hw, screen.MinY + 30f * s + hh);
+        _scratch.Color = new Color4(0.10f, 0.11f, 0.14f, 0.80f);
+        _ctx.FillRoundedRectangle(new RoundedRectangle(pill, hh * 0.5f, hh * 0.5f), _scratch);
+        _ctx.DrawText(hint, CaptureInfoFormat(),
+            new Rect(pill.Left, pill.Top, pill.Right - pill.Left, pill.Bottom - pill.Top),
+            Brush(new Color4(1f, 1f, 1f, 0.95f)));
 
         _ctx.Transform = saved;
     }

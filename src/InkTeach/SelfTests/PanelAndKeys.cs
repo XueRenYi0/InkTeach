@@ -542,6 +542,100 @@ internal sealed partial class App
               && !isDefault,
               $"期望 ({wantColor.R:F2},{wantColor.G:F2},{wantColor.B:F2})，实际 ({gotColor.R:F2},{gotColor.G:F2},{gotColor.B:F2})");
 
+        // ---- ⑥.0 自定义色槽（2026-10-23）：白色格换成可持久化的自定义色 ----
+        // 这里用**真实点击**走一遍：先选中、再点打开取色板、在 HSV 方块里拖/点一下、
+        // 点外面关闭。取色板的吸管会冻结屏幕，移到单独的自检里做，不在这里抢焦点。
+        {
+            static bool Same(Color4 a, Color4 b) =>
+                MathF.Abs(a.R - b.R) < 0.02f && MathF.Abs(a.G - b.G) < 0.02f
+                && MathF.Abs(a.B - b.B) < 0.02f;
+
+            int customIdx = ui.SwatchCountForTest - 1;
+            Check("自定义槽在色带最后一格（白色位）", customIdx == 7, $"最后下标 = {customIdx}");
+
+            var customColor = new Color4(0.12f, 0.66f, 0.44f, 1f);
+            Host.Commands.SetCustomPenColor(customColor);
+            Check("自定义槽可写入并立即选中",
+                  Same(Host.State.CustomPenColor, customColor) && Host.State.CustomPenSelected,
+                  $"自定义 = {Host.State.CustomPenColor}，选中 = {Host.State.CustomPenSelected}");
+            Check("自定义色写进偏好（重启可恢复）",
+                  GetUiPref("penCustom") != null && GetUiPref("penCustomSelected") == "1",
+                  $"penCustom = {GetUiPref("penCustom")}");
+
+            Host.Commands.SetColor(InkUi.Tokens.Palette[0].Color);
+            Check("切回预设色后，自定义槽取消高亮",
+                  !Host.State.CustomPenSelected, $"选中 = {Host.State.CustomPenSelected}");
+
+            var customRect = ui.SwatchRectForTest(customIdx);
+            float cx = (customRect.MinX + customRect.MaxX) * 0.5f * DpiScale;
+            float cy = (customRect.MinY + customRect.MaxY) * 0.5f * DpiScale;
+            ClickPhysical(cx, cy);
+            Check("单击自定义槽先选中，不打开取色板",
+                  Host.State.CustomPenSelected && Same(Host.State.CustomPenColor, customColor)
+                  && !ui.PenPickerOpenForTest,
+                  $"选中 = {Host.State.CustomPenSelected}，取色板 = {ui.PenPickerOpenForTest}");
+
+            ClickPhysical(cx, cy);
+            Check("已选中时再点自定义槽打开取色板", ui.PenPickerOpenForTest, "");
+            var picker = ui.PenPickerRectForTest;
+            var bandNow = ui.BandRectForTest;
+            Check("取色板贴在带子上方，且没有跑出屏幕",
+                  picker.MaxY <= bandNow.MinY + 0.5f
+                  && picker.MinX >= _virtualX - 0.5f && picker.MaxX <= _virtualX + _virtualW + 0.5f,
+                  $"取色板 {picker.MinX:F0},{picker.MinY:F0}-{picker.MaxX:F0},{picker.MaxY:F0}；带子 top={bandNow.MinY:F0}");
+            var sv = ui.PenPickerSvRectForTest;
+            float px = (sv.MinX + (sv.MaxX - sv.MinX) * 0.78f) * DpiScale;
+            float py = (sv.MinY + (sv.MaxY - sv.MinY) * 0.22f) * DpiScale;
+            ClickPhysical(px, py);
+            Check("在 HSV 方块里点一下会改自定义色并保持选中",
+                  Host.State.CustomPenSelected && !Same(Host.State.CustomPenColor, customColor),
+                  $"自定义 = {Host.State.CustomPenColor}");
+
+            // 点取色板外面：关闭，不应误触下面的工具。
+            float ox = (_virtualX + _virtualW * 0.5f) * DpiScale;
+            float oy = (_virtualY + _virtualH * 0.55f) * DpiScale;
+            ClickPhysical(ox, oy);
+            Check("点取色板外面关闭取色板", !ui.PenPickerOpenForTest, "");
+
+            // 还原测试前的颜色，后面的用例不依赖自定义色。
+            Host.Commands.SetColor(InkUi.Tokens.Palette[6].Color);
+        }
+
+        // 屏幕吸管：走真实冻结帧链路；点击屏幕后应退出并写回自定义槽，Esc 应取消。
+        {
+            static bool Same(Color4 a, Color4 b) =>
+                MathF.Abs(a.R - b.R) < 0.02f && MathF.Abs(a.G - b.G) < 0.02f
+                && MathF.Abs(a.B - b.B) < 0.02f;
+
+            Host.Commands.BeginScreenColorPick();
+            SettleFrames(700);                    // 等隐藏覆盖层 + 冻结帧完成
+            Check("屏幕吸管进入冻结取色模式", ColorPickActive,
+                  $"active = {ColorPickActive}，冻结帧 = {CaptureFrozen}");
+            float mx = (_virtualX + _virtualW * 0.5f) * DpiScale;
+            float my = (_virtualY + _virtualH * 0.42f) * DpiScale;
+            SendMouse((int)mx, (int)my, 0);                          SettleFrames(120);
+            var expect = SampleFrozenColorAt(PointerX, PointerY);
+            SendMouse((int)mx, (int)my, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(80);
+            SendMouse((int)mx, (int)my, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(320);
+            Check("吸管点屏幕后退出并选中自定义槽",
+                  !ColorPickActive && Host.State.CustomPenSelected,
+                  $"active = {ColorPickActive}，选中 = {Host.State.CustomPenSelected}，颜色 = {Host.State.CustomPenColor}");
+            Check("吸管取到的颜色 = 冻结帧对应像素",
+                  expect.HasValue && Same(Host.State.CustomPenColor, expect.Value),
+                  $"冻结帧 {(expect.HasValue ? expect.Value : default)}，实际 {Host.State.CustomPenColor}");
+
+            var picked = Host.State.CustomPenColor;
+            Host.Commands.BeginScreenColorPick();
+            SettleFrames(700);
+            SendKeyChord(0x1B);                   // Esc
+            SettleFrames(400);
+            Check("吸管 Esc 取消，不改变当前色",
+                  !ColorPickActive && Host.State.CustomPenSelected && Same(Host.State.CustomPenColor, picked),
+                  $"active = {ColorPickActive}，选中 = {Host.State.CustomPenSelected}，颜色 = {Host.State.CustomPenColor}");
+
+            Host.Commands.SetColor(InkUi.Tokens.Palette[6].Color);
+        }
+
         // ---- ⑥.1 色带条上的**虚实线切换**（用户 2026-09-19 第 2 件）----
         //
         // 位置是用户点的："加在'调按钮大小'和'颜色带'中间"。所以这里除了"点得到、
@@ -1477,7 +1571,11 @@ internal sealed partial class App
         // 判据是 BoardCompactBand —— **真的量一下放不放得下**，不是写死"极简档"；
         // 所以"自定义档里把格子取消钉得只剩几格"也一样不会撑爆（那正是原来坏掉的根因）。
         {
-            ui.SetProfileForTest(0);                        // 极简档（短胶囊）
+            // 极简档现在固定 5 格、没有白板；这里用“自定义的 7 格”
+            // （鼠标/白板/画笔/橡皮/后撤/更多 + 球）来验紧凑白板条本身，
+            // 不把白板重新塞回极简。
+            ui.SetProfileForTest(1);
+            foreach (int c in new[] { 4, 5, 7, 8, 9, 11 }) ui.SetPinForTest(c, false);
             SettleFrames(350);
             var bCellMini = ui.CellRectForTest(2);
             ClickPhysical((bCellMini.MinX + bCellMini.MaxX) * 0.5f * DpiScale,
@@ -1526,6 +1624,7 @@ internal sealed partial class App
                   Host.State.BoardPattern != patBeforeM,
                   $"{patBeforeM} → {Host.State.BoardPattern}");
 
+            foreach (int c in new[] { 4, 5, 7, 8, 9, 11 }) ui.SetPinForTest(c, true);
             ui.SetProfileForTest(2);                        // 回完整档
             SettleFrames(350);
             Host.Commands.SetBoardPattern(0, 40f);          // 收尾：回到"无底纹"
@@ -2513,6 +2612,10 @@ internal sealed partial class App
             Check("极简档：4 个色片铺满宽度（≥ 30，缝 ≤ 6）",
                   sw0W >= 30f && swGap <= 6f,
                   $"色片 {sw0W:F0}×{sw0.MaxY - sw0.MinY:F0}，缝 {swGap:F0}");
+            var miniSlider = ui.SliderRectForTest;
+            Check("极简档：滑条缩短到 64 左右",
+                  miniSlider.MaxX - miniSlider.MinX <= 80f,
+                  $"滑条 {miniSlider.MaxX - miniSlider.MinX:F0}px");
             Check("极简档 = 最紧凑宽度档", ui.DensityForTest == 0,
                   $"宽度档 = {ui.DensityForTest}");
             Check("极简档的笔只保留 5 个粗细档", ui.ActiveGradeCountForTest(Tool.Pen) == 5,
@@ -2534,14 +2637,17 @@ internal sealed partial class App
                   $"色片数 {ui.SwatchCountForTest}（笔色带 {InkPalette.PenBand.Length} 个）");
         }
 
-        // 切到极简：只留六格 ＋ 收起格，整条带子明显变短
+        // 切到极简：只留四格 ＋ 收起格，整条带子明显变短
         var miniSeg = ui.ProfileRectForTest(0);
         ClickPhysical((miniSeg.MinX + miniSeg.MaxX) * 0.5f * DpiScale,
                       (miniSeg.MinY + miniSeg.MaxY) * 0.5f * DpiScale);
         SettleFrames(250);
         var miniBar = ui.BarRectForTest;
-        Check("极简档是七格（六格 ＋ 收起格）", ui.VisibleCountForTest == 7,
+        Check("极简档是五格（四格 ＋ 收起格）", ui.VisibleCountForTest == 5,
               $"显示 {ui.VisibleCountForTest} 格，档位 = {ui.ProfileForTest}");
+        Check("极简档不显示白板和撤销",
+              ui.CellRectForTest(2).IsEmpty && ui.CellRectForTest(10).IsEmpty,
+              $"白板格 = {ui.CellRectForTest(2).IsEmpty}，撤销格 = {ui.CellRectForTest(10).IsEmpty}");
         Check("极简档是一条短胶囊", (miniBar.MaxX - miniBar.MinX) < 360f,
               $"宽 {miniBar.MaxX - miniBar.MinX:F0}（完整档是 636）");
 
@@ -2574,32 +2680,71 @@ internal sealed partial class App
               ui.ProfileForTest == 1 && !ui.PinnedForTest(8) && ui.VisibleCountForTest == 12,
               $"档位 = {ui.ProfileForTest}，钉着 = {ui.PinnedForTest(8)}，显示 {ui.VisibleCountForTest} 格");
 
-        // 安全项：笔（下标 3）点一下不该被取消
+        // 画笔现在也开放：点一下应当从主条移除。
         var penChip = ui.ChipRectForTest(3);
         ClickPhysical((penChip.MinX + penChip.MaxX) * 0.5f * DpiScale,
                       (penChip.MinY + penChip.MaxY) * 0.5f * DpiScale);
         SettleFrames(200);
-        Check("安全项（笔）取消不掉", ui.PinnedForTest(3), $"笔钉着 = {ui.PinnedForTest(3)}");
-        Check("7 格硬下限：鼠标/白板/笔/橡皮/后撤/更多全部锁定",
-              !ui.CanUnpinForTest(1) && !ui.CanUnpinForTest(2) && !ui.CanUnpinForTest(3)
-              && !ui.CanUnpinForTest(6) && !ui.CanUnpinForTest(10) && !ui.CanUnpinForTest(12),
-              "1/2/3/6/10/12 应全部不可取消");
+        Check("画笔开放：点一下可从自定义主条移除",
+              !ui.PinnedForTest(3), $"笔钉着 = {ui.PinnedForTest(3)}");
+        Check("自定义只锁鼠标和更多；画笔/橡皮/白板/后撤都可取消",
+              !ui.CanUnpinForTest(1) && !ui.CanUnpinForTest(12)
+              && ui.CanUnpinForTest(2) && ui.CanUnpinForTest(3)
+              && ui.CanUnpinForTest(6) && ui.CanUnpinForTest(10),
+              "1/12 应锁定，2/3/6/10 应可取消");
 
-        // 钉回去，回到完整档，别把后面的用例带偏
-        // 注意：每次点之前**重新取一次矩形**——切档会让主条宽度变、档位段自己也跟着重排，
-        // 复用之前算好的坐标就会点空（这一版自检当年就是这么把自己坑了一次；
-        // 现在面板是居中的，档位段只跟面板宽度走，但"点之前重取"这条纪律留着）。
-        var chipBack = ui.ChipRectForTest(8);
-        ClickPhysical((chipBack.MinX + chipBack.MaxX) * 0.5f * DpiScale,
-                      (chipBack.MinY + chipBack.MaxY) * 0.5f * DpiScale);
-        SettleFrames(200);
-        var fullSeg2 = ui.ProfileRectForTest(2);
-        ClickPhysical((fullSeg2.MinX + fullSeg2.MaxX) * 0.5f * DpiScale,
-                      (fullSeg2.MinY + fullSeg2.MaxY) * 0.5f * DpiScale);
-        SettleFrames(200);
-        var moreCell5 = ui.CellRectForTest(12);
-        ClickPhysical((moreCell5.MinX + moreCell5.MaxX) * 0.5f * DpiScale,
-                      (moreCell5.MinY + moreCell5.MaxY) * 0.5f * DpiScale);   // 点外面 = 关面板
+        // 自定义最少 3 格：球 + 鼠标 + 更多。此时色带进入 3 格档：
+        // 3 个色片（含自定义）+ 紧凑粗细按钮。
+        {
+            ui.CloseMoreForTest();                 // 设置面板会挡住主条，先关掉再验色带
+            for (int c = 2; c <= 11; c++) ui.SetPinForTest(c, false);
+            // 先验 4 格：球 + 鼠标 + 橡皮 + 更多（画笔已隐藏）
+            ui.SetPinForTest(6, true);
+            ui.OpenRailForTest();
+            ui.SelectBandCellForTest(3);
+            SettleFrames(200);
+            Check("4 格色带：4 个色片 + 紧凑粗细按钮",
+                  ui.VisibleCountForTest == 4 && ui.SwatchCountForTest == 4
+                  && ui.BandHasWidthButtonForTest && !ui.WidthButtonRectForTest.IsEmpty,
+                  $"显示 {ui.VisibleCountForTest} 格，色片 {ui.SwatchCountForTest} 个，"
+                  + $"粗细按钮 = {ui.BandHasWidthButtonForTest}");
+
+            // 再压到真正的 3 格：球 + 鼠标 + 更多
+            ui.SetPinForTest(6, false);
+            SettleFrames(150);
+            Check("自定义最少 3 格（球 + 鼠标 + 更多）",
+                  ui.VisibleCountForTest == 3, $"显示 {ui.VisibleCountForTest} 格");
+            Check("3 格时画笔/橡皮不在主条（功能仍可通过快捷键/更多恢复）",
+                  ui.CellRectForTest(3).IsEmpty && ui.CellRectForTest(6).IsEmpty,
+                  $"画笔格 = {ui.CellRectForTest(3).IsEmpty}，橡皮格 = {ui.CellRectForTest(6).IsEmpty}");
+            Check("3 格色带：3 个色片 + 紧凑粗细按钮",
+                  ui.SwatchCountForTest == 3 && ui.BandHasWidthButtonForTest
+                  && !ui.WidthButtonRectForTest.IsEmpty,
+                  $"色片 {ui.SwatchCountForTest} 个，粗细按钮 = {ui.BandHasWidthButtonForTest}");
+            Check("极简橡皮只保留 3 个粗细档",
+                  ui.ActiveGradeCountForTest(Tool.Eraser) == 3,
+                  $"档数 = {ui.ActiveGradeCountForTest(Tool.Eraser)}");
+            var sw3 = ui.SwatchRectForTest(0);
+            Check("3 格色带：色片仍有可点宽度（≥ 28）",
+                  sw3.MaxX - sw3.MinX >= 28f,
+                  $"色片 {sw3.MaxX - sw3.MinX:F0}px");
+            var wb = ui.WidthButtonRectForTest;
+            float widthBefore3 = Host.State.Width;
+            ClickPhysical((wb.MinX + wb.MaxX) * 0.5f * DpiScale,
+                          (wb.MinY + wb.MaxY) * 0.5f * DpiScale);
+            SettleFrames(200);
+            Check("3 格粗细按钮：点一下换档", Host.State.Width != widthBefore3,
+                  $"{widthBefore3:F0} → {Host.State.Width:F0}");
+
+            // 恢复为全部钉住；后面的偏好落盘用例会再取消“图形”。
+            for (int c = 2; c <= 11; c++) ui.SetPinForTest(c, true);
+            ui.SetProfileForTest(1);
+            SettleFrames(200);
+        }
+
+        // 收尾：直接回到完整档、关面板，别把后面的用例带偏。
+        ui.SetProfileForTest(2);
+        ui.CloseMoreForTest();
         SettleFrames(250);
         Check("收尾：回到完整档、面板已关",
               ui.ProfileForTest == 2 && ui.VisibleCountForTest == 13 && !ui.MoreOpenForTest,
@@ -2689,7 +2834,11 @@ internal sealed partial class App
             ui.SelectBandCellForTest(3);
             Need(ui.TipContentForTest(500).Title != null, "线型应配");
             for (int i = 0; i < ui.SwatchCountForTest; i++)
-                Need(ui.TipContentForTest(100 + i).Title == null, $"色片{i}不该有");
+            {
+                // 自定义槽是例外：它带“再点一下开取色板”的隐藏手势，需要一条提示。
+                bool custom = i == ui.SwatchCountForTest - 1 && Host.State.Tool == Tool.Pen;
+                Need(custom == (ui.TipContentForTest(100 + i).Title != null), $"色片{i}提示不符");
+            }
             Host.Commands.SetTool(Tool.Highlighter);
             ui.SelectBandCellForTest(4);
             for (int i = 0; i < ui.SwatchCountForTest; i++)

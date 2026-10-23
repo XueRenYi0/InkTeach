@@ -314,6 +314,12 @@ public interface IEngineCommands
     /// </summary>
     void CycleEllipseFocusTriangle();
     void SetColor(Color4 color);
+    /// <summary>选中工具带里的自定义色（不改变已保存的自定义颜色）。</summary>
+    void SelectCustomPenColor();
+    /// <summary>把颜色写入自定义槽并立即选中；取色板 / 屏幕吸管提交时调用。</summary>
+    void SetCustomPenColor(Color4 color);
+    /// <summary>进入屏幕吸管：冻结当前屏幕，点一下取色，Esc 取消。</summary>
+    void BeginScreenColorPick();
     void SetWidth(float logicalPx);
     /// <summary>
     /// **笔的线型**（实线 / 虚线 / 点线）。色带条上那个"虚实线切换"用它——
@@ -696,7 +702,7 @@ public static class InkPalette
 /// 而引擎其余地方一律 RGB；这个转换只在"取色板进 / 出"两处用，所以给一个十行的
 /// 极简实现就够，不引第三方色彩库（和仓库"能用系统/自带就不加依赖"的口径一致）。
 /// </summary>
-internal static class Hsv
+public static class Hsv
 {
     /// <summary>HSV → RGB。h/s/v 都夹在 0..1。</summary>
     public static Color4 ToRgb(float h, float s, float v)
@@ -906,6 +912,15 @@ public readonly struct UiState
     /// 界面的色板用它来判定"选中的是哪个色块"。
     /// </summary>
     public Color4 PaletteBase { get; init; }
+    /// <summary>
+    /// 工具带里**自定义色片**保存的颜色（默认白色）。它和当前色分开：
+    /// 用户切到红/蓝时，自定义槽仍保留原来的颜色，方便随时切回。
+    /// </summary>
+    public Color4 CustomPenColor { get; init; }
+    /// <summary>当前笔色是“自定义槽”而不是固定预设色。色片高亮按这个判，不按颜色值猜。</summary>
+    public bool CustomPenSelected { get; init; }
+    /// <summary>最近使用过的自定义颜色，最新的在前；取色板里显示，重启后恢复。</summary>
+    public Color4[] RecentPenColors { get; init; }
     /// <summary>当前工具的宽度（笔/荧光笔/激光各记各的）。</summary>
     public float Width { get; init; }
     /// <summary>下面这几个是"按工具取"的原始值：滑块要用它们，否则切工具时会跳。</summary>

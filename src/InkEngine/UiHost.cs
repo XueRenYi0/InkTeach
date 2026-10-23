@@ -111,6 +111,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void ToggleLibraryPanel() => _engine.ToggleLibraryPanel();
     public void CycleEllipseFocusTriangle() => _engine.CycleEllipseFocusTriangle();
     public void SetColor(Color4 color) => _engine.SetColorFromUi(color);
+    public void SelectCustomPenColor() => _engine.SelectCustomPenColorFromUi();
+    public void SetCustomPenColor(Color4 color) => _engine.SetCustomPenColorFromUi(color);
+    public void BeginScreenColorPick() => _engine.BeginScreenColorPickFromUi();
     public void SetWidth(float logicalPx) => _engine.SetWidthFromUi(logicalPx);
     public void SetDash(StrokeDash dash) => _engine.SetDashFromUi(dash);
     public void Undo() => _engine.UndoFromUi();
