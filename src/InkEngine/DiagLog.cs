@@ -802,6 +802,48 @@ internal static class DiagLog
         _cardDone = true;
     }
 
+    /// <summary>
+    /// 用户拒绝/关闭设备统计时，异步删除自己的设备卡。只删除本机 DeviceId 对应的文件；
+    /// 失败不阻塞退出，网络恢复后管理员可按安装 ID 清理。
+    /// </summary>
+    public static void StartDeviceCardDelete()
+    {
+        if (string.IsNullOrEmpty(DeviceId)) return;
+        var th = new Thread(DeviceCardDeleteWorker)
+        {
+            IsBackground = true,
+            Name = "InkTeach-DeviceCardDelete",
+        };
+        th.Start();
+    }
+
+    static void DeviceCardDeleteWorker()
+    {
+        try
+        {
+            using var http = NewLogHttp(120);
+            string api = $"https://api.gitcode.com/api/v5/repos/{LogUploadOwner}/{LogUploadRepo}";
+            string name = "devices/" + DeviceId + ".json";
+            string getUrl = $"{api}/contents/{name}?access_token={Uri.EscapeDataString(LogUploadToken)}";
+            var getResp = http.GetAsync(getUrl).GetAwaiter().GetResult();
+            if (!getResp.IsSuccessStatusCode) return;       // 没卡 / 已删 / 网络失败
+            string sha = JsonStringField(getResp.Content.ReadAsStringAsync().GetAwaiter().GetResult(), "sha");
+            if (string.IsNullOrEmpty(sha)) return;
+
+            string body = "{\"message\":\"privacy consent revoked\",\"sha\":\"" + sha
+                        + "\",\"branch\":\"main\"}";
+            using var req = new HttpRequestMessage(HttpMethod.Delete,
+                $"{api}/contents/{name}?access_token={Uri.EscapeDataString(LogUploadToken)}");
+            req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+            using var resp = http.SendAsync(req).GetAwaiter().GetResult();
+            Console.WriteLine("[隐私] 旧设备卡删除：" + (resp.IsSuccessStatusCode ? "完成" : "失败"));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("[隐私] 旧设备卡删除失败：" + ex.Message);
+        }
+    }
+
     static string BuildCardJson(string version, string screen)
     {
         string J(string s)
@@ -1023,6 +1065,12 @@ public partial class InkEngine
         }
         if (_cardTried) return;
         if (NowMs < 25_000) return;                        // 别抢启动那几秒
+
+        // 2026-10-24：先取得隐私同意，再上传设备卡。旧版本没有同意记录，
+        // 升级后在这里弹一次；拒绝则不传，并删除旧卡（见 SetPrivacyConsentFromUi）。
+        if (!PrivacyDecided) EnsurePrivacyConsent();
+        if (!PrivacyConsentGranted) return;
+
         if (GetUiPref("log.cardDay") == DateTime.Now.ToString("yyyy-MM-dd")) return;
         if (string.IsNullOrEmpty(DiagLog.DeviceId)) return;
         _cardTried = true;

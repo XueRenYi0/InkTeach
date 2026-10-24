@@ -291,7 +291,7 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。外观 / 书写 / 墨迹三列并排；
     /// `AutoStart` 排在表尾，但由 <see cref="MoreRowRect"/> 画在外观列最后一格。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, TouchMode, RestoreInk, PptAutoSave, HistoryDays, AutoStart }
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, TouchMode, Privacy, RestoreInk, PptAutoSave, HistoryDays, AutoStart }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -329,6 +329,9 @@ public sealed partial class FullUi : IOverlayUi
         // “只写字、完全不要手势”的保险档；默认仍是手势模式。
         (Row.TouchMode, "触摸模式", false, false,
          "手势 = 双指翻页/缩放 + 三指擦 + 长按选择；单指 = 只允许一个触点写字，完全无手势"),
+        // 设备与性能统计（2026-10-24）：首次弹窗同意；设置里可关闭。
+        (Row.Privacy, "设备与性能统计", false, false,
+         "只上传安装量、版本、硬件/性能和触摸统计；不含姓名、账号、课件或屏幕内容；可随时关闭"),
         // 墨迹三条偏好（原本在「墨迹」页，2026-10-02 启动器改版后搬进设置子页）。
         (Row.RestoreInk, "自动恢复上次板书", false, false, "下次启动接上这次的板书"),
         // ⚠ 名称 2026-10-10 改：这个开关**不只管 PPT**——文档（PDF/图片）批注的按页
@@ -2675,7 +2678,7 @@ public sealed partial class FullUi : IOverlayUi
 
     private bool IsToggleRow(int i)
         => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.DwellShape
-           or Row.Pressure or Row.Predict or Row.RestoreInk or Row.PptAutoSave or Row.AutoStart;
+           or Row.Pressure or Row.Predict or Row.Privacy or Row.RestoreInk or Row.PptAutoSave or Row.AutoStart;
 
     /// <summary>
     /// **自检用**：这一行到底有没有画开关。
@@ -2782,6 +2785,11 @@ public sealed partial class FullUi : IOverlayUi
                 _host.Commands.SetTouchGestures(!_host.State.TouchGesturesOn);
                 break;
 
+            // 设备与性能统计：引擎负责同意状态、设备卡上传/删除；界面只翻转开关。
+            case Row.Privacy:
+                _host.Commands.SetPrivacyConsent(!_host.State.PrivacyConsentOn);
+                break;
+
             // 墨迹三条偏好（原来在「墨迹」页）：只写 `ui.*`，
             // 默认值不落盘（restoreInk 默认关只写 "1"、pptAutoSave 默认开只写 "0"、
             // historyDays 默认永久写成 null = 删项）。
@@ -2860,7 +2868,7 @@ public sealed partial class FullUi : IOverlayUi
     /// 用户说"设置现在太长了"。原来左列堆 9 行（组头 26 + 9×48 + 8 ≈ 476），三列后最高 5 行。
     /// </summary>
     private const int LookRowCount = 5;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小 / 开机自动启动    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小（「功能提示」2026-10-16 撤除、改常开）
-    private const int WriteRowCount = 4;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测 / 触摸模式（2026-10-24 加）
+    private const int WriteRowCount = 5;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测 / 触摸模式 / 设备与性能统计
     private const int InkRowCount = 3;     // 墨迹：湿墨档位 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理（日志两行 2026-10-17 合并进「更多 → 日志」）
     private const float MoreColumnGap = 16f;
     private const float MoreSwitchW = 44f;
@@ -3106,6 +3114,7 @@ public sealed partial class FullUi : IOverlayUi
         Row.Pressure => SetColRow(SetColKind.Write, 1),
         Row.Predict => SetColRow(SetColKind.Write, 2),
         Row.TouchMode => SetColRow(SetColKind.Write, 3),
+        Row.Privacy => SetColRow(SetColKind.Write, 4),
         Row.RestoreInk => SetColRow(SetColKind.Ink, 0),
         Row.PptAutoSave => SetColRow(SetColKind.Ink, 1),
         Row.HistoryDays => SetColRow(SetColKind.Ink, 2),
@@ -4395,7 +4404,9 @@ public sealed partial class FullUi : IOverlayUi
         // 穿透，色带就完全没有了。我说的色带消失，就是把它折叠起来，而不是像其他一样，
         // 点过来以后还是展开的。"——所以：**面板高度不变**（贴边隐藏露出来的还是那条线），
         // 只是把设置条收回去、而且穿透期间不许再张开（没有设置可放）。
-        // **不动 `_bandCell`**：退出后带子还是回到"刚才那个工具"那一格——老师回到刚才的活。
+        // **不动 `_bandCell`**：这里只负责把设置条收起来。退出后带子停在哪一格，
+        // 由 `state.Tool` 那一支跟着工具走——2026-10-24 起"用户主动退出穿透 = 画笔"，
+        // 所以退回来带子会落在笔格，而不是进穿透前那个工具格。
         //
         // "指针还停在面板上"也必须收：老师刚点的就是穿透格，不清悬停意图的话，120 毫秒后
         // 旧设置条又自己弹开（自检里钉着它）。
@@ -5496,6 +5507,8 @@ public sealed partial class FullUi : IOverlayUi
         Row.Pressure => _host == null || _host.State.PressureOn,
         // 墨迹预测：同样在引擎（默认关，2026-10-16 起），界面只是显示它
         Row.Predict => _host == null || _host.State.PredictTailOn,
+        // 设备与性能统计：引擎是权威（首次弹窗同意/设置页切换）。
+        Row.Privacy => _host != null && _host.State.PrivacyConsentOn,
         // 墨迹两条开关：读偏好（restoreInk 默认关、pptAutoSave 默认开）。
         Row.RestoreInk => _host.GetPref("restoreInk") == "1",
         Row.PptAutoSave => _host.GetPref("pptAutoSave") != "0",
@@ -5881,7 +5894,7 @@ public sealed partial class FullUi : IOverlayUi
             return id switch
             {
                 // 0 号收起格、球（-2）：自解释，不配（收窄）
-                1 => (c.Tip, Key(KeyAction.TogglePassThrough), "打开后点击落到底下的程序"),
+                1 => (c.Tip, Key(KeyAction.TogglePassThrough), "打开后点击落到底下的程序；再点回来是画笔"),
                 2 => (c.Tip, Key(KeyAction.ToggleBoard), $"{Key(KeyAction.FlipPageUp)} / {Key(KeyAction.FlipPageDown)} 翻屏"),
                 3 => (c.Tip, Key(KeyAction.ToolPen), "已经是笔 → 再按换颜色"),
                 4 => (c.Tip, Key(KeyAction.ToolHighlighter), ""),

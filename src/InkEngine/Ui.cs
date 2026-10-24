@@ -329,6 +329,11 @@ public interface IEngineCommands
     void Undo();
     void Redo();
     void Clear();
+    /// <summary>
+    /// 穿透开关（「鼠标 / 让给下层」那一格）。**开** = 点击交给下层程序；
+    /// **关** = 回到批注，并直接切回画笔（画笔用得最多，省一次点格，2026-10-24 用户定）。
+    /// 退出时恢复进穿透前的白板状态。
+    /// </summary>
     void SetPassThrough(bool on);
     /// <summary>
     /// 打开/关闭“开机自动启动”。写当前用户的 Run 键，不要求管理员。
@@ -446,6 +451,9 @@ public interface IEngineCommands
     /// 就地中断，当前这一笔照常收尾。面积橡皮已取消，手势模式也不再用面积判定。
     /// </summary>
     void SetTouchGestures(bool on);
+
+    /// <summary>设备与性能统计开关（关闭会停止后续上传并尝试删除旧设备卡）。</summary>
+    void SetPrivacyConsent(bool on);
 
     // [删除 2026-10-05] `SetPredict(bool)`：墨迹预测开关随老预测系统移除。
     // 恢复见 `已停用-渲染实验.md`。
@@ -1048,10 +1056,12 @@ public readonly struct UiState
     /// </summary>
     public int HistoryCount { get; init; }
     /// <summary>
-    /// **触摸手势总开关**开着吗（界面用它显示「设置 → 书写 → 触摸手势」那一行的开关）。
-    /// 默认开；关掉 = 只剩单指书写（双指 / 三指 / 长按 / 漫游全部停用）。
+    /// 触摸模式：true = 手势，false = 单指书写（双指 / 三指 / 长按 / 轮盘全部停用）。
     /// </summary>
     public bool TouchGesturesOn { get; init; }
+
+    /// <summary>设备与性能统计是否已同意（设置页那一行的开关）。</summary>
+    public bool PrivacyConsentOn { get; init; }
 
     // [删除 2026-10-05] `PredictOn`（墨迹预测开关的状态）：随老预测系统移除。
     /// <summary>现在在第几屏（1 起）。界面用它显示"第 N 屏"。</summary>

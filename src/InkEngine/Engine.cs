@@ -10203,8 +10203,10 @@ public partial class InkEngine
         switch (action)
         {
             // 穿透开关（全局 Ctrl+Alt+Shift+T 这条同一条路）：退出时恢复进穿透前的板态，
-            // 见 SetPassThrough 的 restoreBoard。
-            case KeyAction.TogglePassThrough: SetPassThrough(!PassThrough, restoreBoard: true); break;
+            // 见 SetPassThrough 的 restoreBoard。用户主动退出 = 回到画笔（2026-10-24）。
+            case KeyAction.TogglePassThrough:
+                SetPassThrough(!PassThrough, restoreBoard: true, toPen: PassThrough);
+                break;
             // 呼出盘：按住才出来的"标迹菜单"（松手确认，见 OpenRadialPalette）。
             case KeyAction.RadialPalette: OpenRadialPalette(); break;
             // 工具键统一走 ToolKeyPress：**不管是应用内键还是"放映时的临时全局热键"**，
@@ -10522,7 +10524,7 @@ public partial class InkEngine
     ///     "我现在就要写"，画布要保持眼前所见（露出来的下层应用），突然盖回白板反而是惊吓；
     ///     想回板，再点一下白板格就行（用户 2026-09-30 拍板，见《调研-快捷键-焦点与穿透》8.3）。
     /// </summary>
-    private void SetPassThrough(bool on, bool restoreBoard = false)
+    private void SetPassThrough(bool on, bool restoreBoard = false, bool toPen = false)
     {
         // 进穿透先记下板态（要被"开关退出"用来恢复）。
         // 只在"真的从关到开"这一下记——重复调 SetPassThrough(true) 时 BoardOn 已经被关掉了，
@@ -10613,6 +10615,13 @@ public partial class InkEngine
                 _startupPassive = false;
                 if (Ui != null) UiGuard("Activate", () => Ui.Activate());
             }
+
+            // **用户主动退出穿透 = 直接回到画笔**（2026-10-24 用户定）。
+            // 以前退出后保留上一次的工具，老师常常接着一写发现自己还在橡皮/荧光笔上；
+            // 画笔用得最多，退回来就给笔，省一次点格。
+            // 只有"面板穿透格 / 全局 Ctrl+Alt+Shift+T"这两条用户开关路径传 toPen；
+            // 换工具、打开文档、教室卡片自动收放这些内部路径不动（各有各的工具语义）。
+            if (toPen && Tool != Tool.Pen) SwitchTool(Tool.Pen);
         }
 
         Console.WriteLine($"pass-through = {on} (mode {PassMode})");
@@ -10912,6 +10921,7 @@ public partial class InkEngine
         WetMode = WetMode,                       // 「设置 → 墨迹 → 湿墨档位」（0..3；界面显示当前档）
         HistoryCount = BoardHistory.Count,       // 「更多 → 墨迹 → 历史板书」那一格的亮/灰
         TouchGesturesOn = _touch.Enabled,        // 触摸模式：true=手势；false=单指书写（默认手势）
+        PrivacyConsentOn = PrivacyConsentGranted, // 设备与性能统计的同意状态
         // [删除 2026-10-05] PredictOn（墨迹预测）：随老预测系统移除。
         ScreenIndex = ScreenIndex,
         CanFlipPageUp = CanFlipPageUp,
@@ -11104,6 +11114,61 @@ public partial class InkEngine
         SetUiPref("touch.mode", on ? null : "single");
         if (!on && changed) TouchAbort();
         Console.WriteLine($"触摸模式：{(on ? "手势（双指 / 三指擦 / 长按选择）" : "单指书写（无手势）")}");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 隐私同意版本。2026-10-24：设备卡从“默认自动上传”改为“首次明确同意后上传”。
+    /// 以后采集范围/用途有实质变化，改这个版本号就会再弹一次。
+    /// </summary>
+    internal const int PrivacyVersion = 1;
+
+    internal bool PrivacyConsentGranted => GetUiPref("privacy.consent") == "granted";
+    private bool PrivacyDecided => GetUiPref("privacy.ver") == PrivacyVersion.ToString();
+
+    /// <summary>
+    /// 首次/升级后弹一次匿名设备统计说明。只记录同意或拒绝，不反复骚扰。
+    /// 拒绝后不再自动上传设备卡，并且会尝试删除已经上传的旧卡。
+    /// </summary>
+    private void EnsurePrivacyConsent(bool force = false)
+    {
+        if (!ExportDialogEnabled) return;
+        if (!force && PrivacyDecided) return;
+
+        string text =
+            "为了统计安装量、定位卡顿和兼容性问题，是否允许上传这台电脑的设备与性能信息？\n\n"
+            + "包含：安装 ID、软件版本、系统/硬件型号、屏幕、帧率/慢帧/内存、触摸统计。\n"
+            + "不会上传：姓名、账号、课件、作业或屏幕内容。\n\n"
+            + "拒绝不影响使用；以后可在「设置 → 设备与性能统计」中修改。\n"
+            + "选择“是”= 同意，选择“否”= 暂不。";
+
+        int r = Native.MessageBoxW(OwnerHwnd(), text, "InkTeach 隐私说明",
+            Native.MB_YESNO | Native.MB_ICONINFORMATION
+            | Native.MB_SETFOREGROUND | Native.MB_TOPMOST);
+        bool granted = r == Native.IDYES;
+
+        SetUiPref("privacy.consent", granted ? "granted" : "denied");
+        SetUiPref("privacy.ver", PrivacyVersion.ToString());
+        SetUiPref("privacy.at", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        if (!granted) DiagLog.StartDeviceCardDelete();
+        Console.WriteLine($"[隐私] 设备与性能统计：{(granted ? "同意" : "暂不")}");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>设置页开关。关闭时停止后续上传并尝试删除旧设备卡；重新打开时再确认一次。</summary>
+    internal void SetPrivacyConsentFromUi(bool on)
+    {
+        if (on)
+        {
+            if (!PrivacyConsentGranted) EnsurePrivacyConsent(force: true);
+            return;
+        }
+
+        SetUiPref("privacy.consent", "denied");
+        SetUiPref("privacy.ver", PrivacyVersion.ToString());
+        SetUiPref("privacy.at", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        DiagLog.StartDeviceCardDelete();
+        Console.WriteLine("[隐私] 设备与性能统计：已关闭");
         NotifyUiStateChanged();
     }
 
@@ -11733,13 +11798,14 @@ public partial class InkEngine
         _quit = true;
     }
 
-    internal void SetPassThroughFromUi(bool on)
+    internal void SetPassThroughFromUi(bool on, bool toPen = false)
     {
         // 开穿透 = 键盘/点击归下层：回放中开它就点不到控制条了，先收掉回放。
         if (on) ExitReplayForEdit("开穿透");
         // 界面那格只发"切换"（`!st.PassThrough`），所以这就是"穿透开关"这条路：
         // 退出时恢复进穿透前的板态（用户 2026-09-30 拍板）。
-        SetPassThrough(on, restoreBoard: true);
+        // `toPen` 只由**用户主动退出**的路径传（面板穿透格 / 全局热键）：退回来直接是画笔。
+        SetPassThrough(on, restoreBoard: true, toPen: toPen);
         NotifyUiStateChanged();
     }
 
@@ -11799,7 +11865,7 @@ public partial class InkEngine
     internal void ActivateFromExternal()
     {
         Console.WriteLine("启动：收到第二个实例的激活请求");
-        if (PassThrough) SetPassThroughFromUi(false);
+        if (PassThrough) SetPassThroughFromUi(false, toPen: true);
         if (Ui != null) UiGuard("Activate", () => Ui.Activate());
         NotifyUiStateChanged();
     }

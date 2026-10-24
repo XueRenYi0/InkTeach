@@ -823,7 +823,13 @@ internal static class Native
     public static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
 
     public const uint MB_OK = 0x00000000;
+    public const uint MB_YESNO = 0x00000004;
+    public const uint MB_ICONINFORMATION = 0x00000040;
     public const uint MB_ICONERROR = 0x00000010;
+    public const uint MB_SETFOREGROUND = 0x00010000;
+    public const uint MB_TOPMOST = 0x00040000;
+    public const int IDYES = 6;
+    public const int IDNO = 7;
 
     [DllImport("user32.dll")]
     public static extern IntPtr SetFocus(IntPtr hWnd);

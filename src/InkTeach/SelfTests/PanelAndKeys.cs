@@ -916,7 +916,8 @@ internal sealed partial class App
                   !Host.State.PassThrough && Tool == Tool.Pen && ui.BandCellForTest == 3 && sameColorP4,
                   $"穿透 = {Host.State.PassThrough}，工具 = {Tool}，色带格 = {ui.BandCellForTest}，颜色不动 = {sameColorP4}");
 
-            // ⑤ 全局开关那条路（不经面板）：同样只收成线
+            // ⑤ 全局开关那条路（不经面板）：同样只收成线；**退回来直接是画笔**（2026-10-24 用户定）。
+            Host.Commands.SetTool(Tool.Eraser);
             Host.Commands.SetPassThrough(true);
             SettleFrames(500);
             Check("全局开关进穿透：同样只收成那条线（不是只有点格子才收）",
@@ -924,6 +925,9 @@ internal sealed partial class App
                   $"张开度 {ui.RailValueForTest:F2}");
             Host.Commands.SetPassThrough(false);
             SettleFrames(300);
+            Check("退出穿透直接回到画笔（不用再点笔格）",
+                  !Host.State.PassThrough && Tool == Tool.Pen && ui.BandCellForTest == 3,
+                  $"穿透 = {Host.State.PassThrough}，工具 = {Tool}，色带格 = {ui.BandCellForTest}");
         }
 
         // ---- ⑥.3d 写字期间：色带**冻结**（2026-10-09 用户："写到附近该保持不动"）----

@@ -119,7 +119,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void Undo() => _engine.UndoFromUi();
     public void Redo() => _engine.RedoFromUi();
     public void Clear() => _engine.ClearAllInkFromUi();
-    public void SetPassThrough(bool on) => _engine.SetPassThroughFromUi(on);
+    public void SetPassThrough(bool on) => _engine.SetPassThroughFromUi(on, toPen: !on);
     public void SetAutoStart(bool on) => _engine.SetAutoStartFromUi(on);
     public void RefreshAutoStart() => _engine.RefreshAutoStartFromUi();
     public void SetBoard(bool on) => _engine.SetBoardFromUi(on);
@@ -136,6 +136,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetPredict(bool on) => _engine.SetPredictFromUi(on);
     /// <summary>触摸手势总开关（默认开；关掉只剩单指书写）。</summary>
     public void SetTouchGestures(bool on) => _engine.SetTouchGesturesFromUi(on);
+    public void SetPrivacyConsent(bool on) => _engine.SetPrivacyConsentFromUi(on);
     public int ToggleCoordGrid() => _engine.ToggleSelectionGrid();
 
     public void SetBoardPattern(int pattern, float stepLogical)
