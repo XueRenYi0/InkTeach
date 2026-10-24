@@ -63,7 +63,7 @@
       InkTeach 是一层<b>透明批注覆盖层</b>：浮在 PPT / WPS / PDF / 图片 / 任意软件之上。
       板书写在自己的图层里，底下的内容一点没动；点一下就把鼠标还回去，
       想写字时再用<b>全局键</b>把人拉回来。图形和图片拖动会自动对齐，
-      数据全在本机，<b>安装不需要管理员权限</b>。
+      板书与名单存在本机；匿名设备/性能统计见<a href="privacy.html">隐私说明</a>，<b>安装不需要管理员权限</b>。
     </p>
     <p class="btns">
       <a class="btn primary" href="https://gitcode.com/XueRenYI0/InkTeach/releases/download/latest/InkTeach-Setup.exe" target="_blank" rel="noopener">下载安装包（国内直连）</a>
@@ -368,8 +368,12 @@
 <section id="updates" class="section">
   <div class="wrap">
     <h2>最近更新</h2>
-    <p class="lead small">当前最新版 <b>9.3.1</b>。这里只放最影响课堂体验的几条，完整记录在仓库的《发版历史》。</p>
+    <p class="lead small">当前最新版 <b>9.3.1</b>；下一版 <b>9.3.2</b> 开发中。这里只放最影响课堂体验的几条，完整记录在仓库的《发版历史》。</p>
     <div class="grid">
+      <div class="card">
+        <h3>9.3.2（开发中，未发布）· 触摸模式 / 退出穿透回画笔</h3>
+        <p>新增「触摸模式：手势 / 单指」：手势模式保留双指翻页缩放、三指擦、长按选择；单指模式只允许一个触点写字、完全无手势。取消面积/手掌擦（大触点触发橡皮），三指擦只在手势模式生效。退出穿透直接回到画笔；设备与性能统计改为首次明确同意后上传，可随时在设置中关闭。</p>
+      </div>
       <div class="card">
         <h3>9.3.1 · 自定义色 / 极简 3–5 格</h3>
         <p>白色色片改为自定义色：单击使用，已选中时再点打开 HSV 取色板；支持屏幕吸管和最近颜色，重启后恢复。极简固定 5 格（球 / 鼠标 / 画笔 / 橡皮 / 更多），自定义只锁鼠标和更多，最少可到 3 格。色带按 5 / 4 / 3 格降为 4 色 + 短滑条、4 色 + 粗细按钮、3 色 + 粗细按钮；橡皮极简 3 档，清屏动作收起。</p>
@@ -464,10 +468,13 @@
     <h2>开源与许可</h2>
     <p>InkTeach 以 <b>GPL-3.0</b> 开源：可自由使用、修改、分发（包括商用），衍生产品需按 GPL 开源。
     需要闭源商用 / 嵌入自有产品，可联系作者谈商业授权。</p>
-    <p>数据全在本机：设置在 <code>%APPDATA%\InkTeach</code>，自动存档在 <code>%LOCALAPPDATA%\InkTeach</code>，
+    <p>数据默认只存本机：设置在 <code>%APPDATA%\InkTeach</code>，自动存档在 <code>%LOCALAPPDATA%\InkTeach</code>，
     点名名单是 <code>%APPDATA%\InkTeach\Names.txt</code>。更新检查在启动 8 秒后静默做一次、之后每 6 小时一次
     （只读取更新清单，不上传任何内容）；发现新版本时，收起态的球 / 展开态的「更多」会出现小红点。
     下载包先校验 sha256 再换壳安装。</p>
+    <p>为统计安装量和定位卡顿，软件会按天上传匿名设备卡（安装 ID、版本、系统/硬件、帧率/慢帧/内存、触摸统计），
+    <b>不含姓名、账号、课件、作业或屏幕内容</b>；9.3.2 起改为首次明确同意后上传，拒绝不影响使用，
+    之后可在「设置 → 书写 → 设备与性能统计」随时关闭。详见 <a href="privacy.html">隐私说明</a>。</p>
     <p class="btns">
       <a class="btn" href="https://github.com/XueRenYi0/InkTeach" target="_blank" rel="noopener">GitHub 源码</a>
       <a class="btn" href="https://gitcode.com/XueRenYI0/InkTeach" target="_blank" rel="noopener">GitCode 镜像</a>
@@ -478,6 +485,7 @@
 <footer>
   <div class="wrap">
     <p>© 2026 XueRenYi0 · InkTeach 9.3.1 · <a href="https://github.com/XueRenYi0/InkTeach/releases" target="_blank" rel="noopener">更新日志</a> ·
+    <a href="privacy.html">隐私说明</a> ·
     <a href="https://github.com/XueRenYi0/InkTeach/blob/main/README.md" target="_blank" rel="noopener">文档</a></p>
     <p class="en">InkTeach — a transparent annotation overlay for Windows classrooms. Colour-rail toolbar, dock-away handle, global radial palette, 22 shapes, per-slide PowerPoint isolation, dark theme. Free &amp; open source (GPL-3.0).</p>
   </div>

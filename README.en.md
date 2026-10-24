@@ -15,11 +15,18 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
-> **Latest 9.3.0 (2026-10-20)**: the upper toolbar band is now width-tiered with a **7-cell hard floor**.
-> 7 cells = 4 colors / 5 width grades / no dash; 8–9 = 6 / 7 / square dash; 10–11 = 8 / 10;
-> 12–13 = full 8-color strip and long dash. Mouse, whiteboard and undo are locked as mandatory,
-> and the custom profile cannot drop below 7 cells. Color chips fill the available width instead of
-> leaving large gaps in the minimal profile. 9.2.9 autostart, 9.2.8 UI scaling and the 9.2.7 paging fix remain.
+> **Latest 9.3.1 (2026-10-23)**: the white slot is now a **custom colour** — click to use it,
+> click again to edit. HSV picker + screen eyedropper + recent colours, restored after restart.
+> The minimal toolbar is fixed at **5 cells** (ball / mouse / pen / eraser / more); a custom profile
+> locks only mouse and more, down to **3 cells**. Colour chips and width controls scale with 5 / 4 / 3
+> cells, and the minimal eraser keeps 3 width grades. 9.2.9 autostart and 9.2.8 UI scaling remain.
+
+> **9.3.2 in development (not released)**: new touch mode (gestures / single-finger); palm/area erase
+> removed; three-finger erase only in gesture mode; leaving pass-through returns to the pen; device
+> telemetry now requires explicit first-run consent.
+>
+> *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
+> current version.*
 
 **Requirements**: Windows 10 / 11 x64, **no .NET install needed** (self-contained).
 PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else works without.
@@ -30,9 +37,9 @@ PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else
 
 ## Quick start
 
-1. Download `InkTeach-Setup-9.3.0.exe`, double-click, Next, Done — or unzip the portable build.
+1. Download `InkTeach-Setup-9.3.1.exe`, double-click, Next, Done — or unzip the portable build.
 2. Open PowerPoint/WPS in slideshow mode, or any app; the InkTeach toolbar sits at the bottom.
-3. Write with a pen or mouse. `Ctrl+L` = laser, `Ctrl+E` = eraser, `Ctrl+Alt+Shift+T` hands the mouse back.
+3. Write with a pen or mouse. `Ctrl+L` = laser, `Ctrl+E` = eraser, `Ctrl+Alt+Shift+T` hands the mouse back; press it again to return to the pen (9.3.2).
 4. Hold `Ctrl+Alt+Shift+Q` and flick to a sector to switch tools without hunting for the toolbar.
 
 ## Made for maths: function graphs + solid geometry
@@ -100,7 +107,8 @@ Sectors = pen / black / red / blue / eraser / select / highlighter / laser.
 Click the "mouse" cell (or press `Ctrl+Alt+Shift+T`) and the mouse goes to the app underneath, so
 you can click your slide normally. When you want to write again you don't have to hunt for the bar —
 global keys pull you back: the palette to switch tools, the same key to leave pass-through, and one
-to quit. All three global keys are `Ctrl+Alt+Shift+…` — three modifiers — precisely so they don't
+to quit. **Leaving pass-through directly returns to the pen** (9.3.2); clicking another tool cell
+while passed through still switches to that tool. All three global keys are `Ctrl+Alt+Shift+…` — three modifiers — precisely so they don't
 collide with other software.
 
 ### ⑤ A rough shape becomes a real one when you pause
@@ -178,6 +186,16 @@ right-click cancels or restores pinning; hovering about 0.5s (long-press 0.6s on
 - **Two erasers**: whole-stroke (delete whichever stroke you touch) and area (erase only what you
   touch, splitting the stroke in two). The area eraser's size follows hand speed (no shrink when
   slow, capped at 2.5× on a fast sweep), and the box you see *is* the affected region.
+
+### Touch modes (9.3.2)
+
+- **Settings → Writing → Touch mode**, two options:
+  - **Gestures (default)**: one-finger writing; two-finger vertical scroll / horizontal page turn;
+    two-finger tap or hold opens the radial palette; three-finger erase; one-finger hold selects.
+  - **Single-finger**: only one contact writes; **no gestures at all** (no hold-to-select, no palette,
+    no three-finger erase). The toolbar eraser still works.
+- **Palm/area erase (the eraser triggered by a large contact) is removed**: a large contact no longer
+  turns ink into an eraser; use the toolbar's whole-stroke or pixel eraser. Multi-writer is not enabled yet.
 
 ### Three pens: pen / highlighter / laser (9.2.1)
 
@@ -346,7 +364,7 @@ approach fits, we align with it instead of reinventing it:
 
 ## Lightweight: Windows 10 / 11, no .NET
 
-- Native AOT single exe, about **11MB**; the 9.3.0 installer is **8.57MB** and the portable zip **9.29MB**.
+- Native AOT single exe, about **11MB**; the 9.3.1 installer is **8.60MB** and the portable zip **9.31MB**.
 - **No .NET install, no UAC, no administrator rights**; the portable build is unzip-and-run.
 - On 4GB classroom machines, PDF pages are cached only around the viewport and rendered in the
   background, so memory does not grow with the page count.
@@ -371,18 +389,26 @@ waits in the background in pass-through mode with the toolbar collapsed to a bal
 launch the exe again to start annotating. It does not reopen the previous board automatically. The
 entry is removed on uninstall, and a Task Manager disable is reflected as off.
 
-**All data stays local**: settings in `%APPDATA%\InkTeach`, auto-archives in
+**Data stays local by default**: settings in `%APPDATA%\InkTeach`, auto-archives in
 `%LOCALAPPDATA%\InkTeach`, the roster in `%APPDATA%\InkTeach\Names.txt`. An update check runs
 silently 8 seconds after launch and every 6 hours after that (it only fetches the release
 manifest; nothing is uploaded). A small red dot appears on the ball / **More** button when a new
 version is available, and you can also check manually under **More → Check for updates**. The
 downloaded package's sha256 is verified before it replaces anything.
 
+**Device & performance telemetry**: to count installs and diagnose stutter/compatibility, InkTeach
+uploads an anonymous device card once a day — install ID, version, first/last-use dates, OS/CPU/RAM/
+GPU/screen/DPI, frame rate/slow frames/memory, and touch-count/area statistics. It does **not**
+include names, accounts, courseware, homework, or screen content. From 9.3.2 it is uploaded **only
+after explicit first-run consent**; declining does not affect use, and you can turn it off under
+**Settings → Writing → Device & performance statistics**. Turning it off stops uploads and attempts
+to delete the old device card for that install ID. See [PRIVACY.md](PRIVACY.md).
+
 ## Shortcuts (summary)
 
 | Scope | Keys |
 |---|---|
-| Global | `Ctrl+Alt+Shift+T` pass-through ｜ `Ctrl+Alt+Shift+X` quit ｜ `Ctrl+Alt+Shift+Q` radial palette (hold & flick; **works in pass-through too** — picking a sector exits it) |
+| Global | `Ctrl+Alt+Shift+T` pass-through (**press again to return to the pen, 9.3.2**) ｜ `Ctrl+Alt+Shift+X` quit ｜ `Ctrl+Alt+Shift+Q` radial palette (hold & flick; **works in pass-through too** — picking a sector exits it) |
 | In-app | `Ctrl+P` pen ｜ `Ctrl+I` highlighter ｜ `Ctrl+L` laser ｜ `Ctrl+E` eraser ｜ `Ctrl+M` select ｜ `Ctrl+Shift+A` screenshot |
 | Editing | `Ctrl+Z / Y` (also `Ctrl+Shift+Z`) undo / redo ｜ `Ctrl+A` select all ｜ `Ctrl+C / V` copy / paste ｜ `Delete / Backspace` ｜ `Esc` ｜ arrows nudge (`Shift` ×10; **with nothing selected, `←→` flip pages and `↑↓` scroll**) ｜ `Ctrl+= / Ctrl+-` scale selection (a burst merges into one undo step) |
 | Other | `Ctrl+6` width ｜ `Ctrl+B` toggle board ｜ `Ctrl+Shift+C` clear ｜ `PageUp / PageDown` page |
@@ -428,7 +454,8 @@ InkTeach   host: CLI / self-test / benchmarks (double-click InkTeach.exe when pu
 - **Window**: borderless, always-on-top, never steals focus, never in the taskbar; pass-through uses
   a hit-test exemption (`WM_NCHITTEST → HTTRANSPARENT`) to hand the mouse to the app below.
 - **Input**: `WM_POINTER` unifies pen / touch / mouse; a real pen's wet ink is delegated to the
-  system compositor; touch has a guard so a second finger can't steal the stroke in progress.
+  system compositor; touch has a guard so a second finger can't steal the stroke in progress, and
+  the gesture / single-finger touch modes are described above.
 - **Hit-testing**: a uniform spatial grid takes picking from O(strokes) to O(neighbouring cells)
   (measured 32× faster).
 - **Engine / UI split**: the UI only knows three contracts, so swapping the whole UI cannot affect

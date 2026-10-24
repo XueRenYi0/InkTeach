@@ -268,9 +268,10 @@ public sealed partial class FullUi
         string[][] cards =
         {
             new[] { "直接写", "选笔，或直接用手写笔 / 鼠标写。\nCtrl+P 切笔。" },
-            new[] { "把鼠标还给下层", "点「鼠标」格，或按\nCtrl+Alt+Shift+T；再按一次拿回来。" },
+            new[] { "把鼠标还给下层", "点「鼠标」格，或按\nCtrl+Alt+Shift+T；再按一次回到画笔。" },
             new[] { "换工具不用找", "按住 Ctrl+Alt+Shift+Q，\n划向扇区，松手；中心取消。" },
             new[] { "写错了", "Ctrl+Z 撤销；橡皮擦局部；\nCtrl+Shift+C 清空当前板书。" },
+            new[] { "设备与性能统计", "首次弹窗选择；设置 → 书写可改。\n不含姓名、账号、课件或屏幕内容。" },
         };
 
         float gap = 14f;
@@ -338,16 +339,16 @@ public sealed partial class FullUi
     {
         (string Title, string Note)[] rows =
         {
+            ("触摸模式：手势", "默认；双指 / 三指 / 长按都可用"),
+            ("触摸模式：单指", "只允许一个触点写字，无手势"),
             ("单指 / 笔书写", "直接写字，和鼠标一样"),
             ("笔停约 0.4 秒", "自动变成规整图形"),
-            ("单指长按约 0.5 秒", "进入框选 / 点选"),
-            ("双指上下拖", "滚动画布"),
-            ("双指左右快滑", "翻一页：白板或 PPT"),
-            ("双指轻点", "选中对象"),
-            ("双指长按约 0.5 秒", "呼出工具轮盘"),
-            ("选中后双指", "移动 / 缩放 / 旋转"),
-            ("三指", "擦除"),
-            ("手掌", "擦除（屏幕支持接触面积时）"),
+            ("单指长按 0.5 秒", "手势模式：框选 / 点选"),
+            ("双指上下 / 左右", "手势模式：滚动画布 / 翻一页"),
+            ("双指轻点 / 长按", "手势模式：呼出工具轮盘"),
+            ("选中后双指", "手势模式：移动 / 缩放 / 旋转"),
+            ("三指", "手势模式：擦除"),
+            ("退出穿透", "回到画笔（点穿透格 / 全局键）"),
         };
 
         float gap = 22f;
@@ -391,7 +392,7 @@ public sealed partial class FullUi
                       new RectF { MinX = callout.MinX + 16f, MinY = callout.MinY + 10f,
                                   MaxX = callout.MaxX - 14f, MaxY = callout.MinY + 34f },
                       HelpNoteFont, Brush(ctx, MutedCol), center: false);
-        _widgets.Text(ctx, "双指上下 = 滚动，左右 = 翻页；三指 = 擦；轮盘中心松手 = 取消。\n手掌擦需要屏幕上报接触面积；不支持的屏幕不会触发。",
+        _widgets.Text(ctx, "手势模式：双指上下 = 滚动，左右 = 翻页；三指 = 擦；轮盘中心 = 取消。\n单指模式没有这些手势；面积/手掌擦已取消，擦除请用工具栏的整笔/像素橡皮。",
                       new RectF { MinX = callout.MinX + 16f, MinY = callout.MinY + 34f,
                                   MaxX = callout.MaxX - 14f, MaxY = callout.MaxY - 9f },
                       HelpBodyFont, Brush(ctx, InkCol), center: false);
