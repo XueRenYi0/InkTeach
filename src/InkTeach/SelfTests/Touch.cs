@@ -284,27 +284,23 @@ internal sealed partial class App
                   $"宽 {back.MaxX - back.MinX:F0} vs {w0:F0}");
         }
 
-        // ---- ⑩ 漫游开关：单指拖 = 漫游（不落墨）----
+        // ---- ⑩ 单指漫游已取消：单指仍然是写字，不再拖动画布 ----
         {
-            SetUiPref("touch.roam", "1");
+            SetUiPref("touch.roam", "1");            // 旧偏好；2026-10-24 起不再采纳
             LoadTouchPrefs();
             TouchResetForTest();                     // 清掉上一用例可能残留的合成触点
             int before = Doc.Strokes.Count;
             float cam0 = ViewOffsetY;
             SendTouchesSized(true, (cx - 100, cy - 100, 24f));
             SettleFrames(40);
-            // 两段：合成注入偶尔把"第一针移动"当成新 down（重锚），第二针就能正常滚
             SendTouchesSized(true, (cx - 100, cy - 180, 24f));
             SettleFrames(40);
-            SendTouchesSized(true, (cx - 100, cy - 260, 24f));
-            SettleFrames(60);
-            Console.WriteLine($"      [探针] 漫游拖后：模式 = {TouchModeForTest}，相机 = {ViewOffsetY:F0}，拖动中 = {SelDragging}");
-            SendTouchesSized(false, (cx - 100, cy - 260, 24f));
+            SendTouchesSized(false, (cx - 100, cy - 180, 24f));
             SettleFrames(150);
-            Check("漫游开关：单指拖 = 漫游（相机动、不落墨）",
-                  Doc.Strokes.Count == before && MathF.Abs(ViewOffsetY - cam0) > 40f,
+            Check("单指漫游已取消：单指只写字、不拖动画布",
+                  Doc.Strokes.Count == before + 1 && MathF.Abs(ViewOffsetY - cam0) < 1f,
                   $"笔画 {before} → {Doc.Strokes.Count}，相机 {cam0:F0} → {ViewOffsetY:F0}");
-            SetUiPref("touch.roam", "0");
+            SetUiPref("touch.roam", null);
             LoadTouchPrefs();
             ViewOffsetY = 0f;
             ClampViewOffset();
@@ -339,6 +335,21 @@ internal sealed partial class App
             Check("总开关关掉：双指不进手势、单指照样写（保险丝）",
                   modeOK && mid == before + 1 && Doc.Strokes.Count == mid + 1,
                   $"双指时模式 {modeAtTwin}（应 Write——还在写），笔画 {before} → {mid} → {Doc.Strokes.Count}");
+
+            // 单指档下三指也不能变成橡皮（它应当继续按单指书写处理）。
+            var protectedLine = new Stroke { Tool = Tool.Pen, Color = new Color4(1f, 0f, 1f, 1f), Width = 30f * dpi };
+            for (int i = 0; i <= 16; i++) protectedLine.AddPoint(cx - 160 + i * 20, cy + 400, 0.9f, i);
+            Doc.AddStroke(protectedLine);
+            Doc.InvalidateAll();
+            SettleFrames(100);
+            Touch3Down(cx - 120, cy + 400, cx, cy + 400, cx + 120, cy + 400);
+            SettleFrames(100);
+            Check("单指模式：三指不启动橡皮",
+                  Doc.Strokes.Contains(protectedLine),
+                  $"三指后目标还在 = {Doc.Strokes.Contains(protectedLine)}");
+            SendTouchesSized(false, (cx - 120, cy + 400, 24f),
+                             (cx, cy + 400, 24f), (cx + 120, cy + 400, 24f));
+            SettleFrames(100);
             SetTouchGesturesFromUi(true);
             TouchResetForTest();
         }
@@ -391,10 +402,9 @@ internal sealed partial class App
                   $"opened={opened}，active={RadialPaletteActive}，色=({CurrentColor.R:F2},{CurrentColor.G:F2},{CurrentColor.B:F2})");
         }
 
-        // ---- ⑮ 手掌（大面积）= 擦：**相对基线**判定；按住不动不擦、移动才擦 ----
+        // ---- ⑮ 大面积触点：2026-10-24 起**只统计、不再触发橡皮** ----
         {
             TouchResetForTest();
-            EraserKindForTest = Tool.Eraser;     // 同 ⑦：固定成整笔擦
             RadialCancelForTest("用例起手");
             Doc.Clear();
             Doc.ClearHistory();
@@ -403,32 +413,20 @@ internal sealed partial class App
             Doc.AddStroke(target);
             Doc.InvalidateAll();
             SettleFrames(150);
-            // 先喂一根"正常手指"（size 24）建立手指基线——放远处，别碰目标线
+            // 先喂一根"正常手指"（size 24）建立旧基线；再放大触点。
             TouchWrite(cx - 260, cy - 420, cx - 160, cy - 420, size: 24f);
-            int before = Doc.Strokes.Count;                 // = 2（目标线 + 刚才那笔）
-            // 手掌（size 240 > 基线 24 × 3）按在目标线上：**原地按住 → 不该擦**
+            int before = Doc.Strokes.Count;
             SendTouchesSized(true, (cx - 200, cy, 240f));
             SettleFrames(120);
-            bool inErase = TouchModeForTest == TouchMode.Erase;
-            int afterHold = Doc.Strokes.Count;
-            // 沿目标线移动 → 才擦
+            bool inWrite = TouchModeForTest == TouchMode.Write;
             SendTouchesSized(true, (cx - 100, cy, 240f));
             SettleFrames(50);
-            SendTouchesSized(true, (cx, cy, 240f));
-            SettleFrames(50);
-            SendTouchesSized(true, (cx + 100, cy, 240f));
-            SettleFrames(50);
-            SendTouchesSized(true, (cx + 200, cy, 240f));
-            SettleFrames(50);
-            SendTouchesSized(false, (cx + 200, cy, 240f));
+            SendTouchesSized(false, (cx - 100, cy, 240f));
             SettleFrames(150);
-            Check("手掌（大面积）= 擦：相对基线判定；按住不动不擦、移动才擦",
-                  inErase && afterHold == before && !Doc.Strokes.Contains(target) && Doc.Strokes.Count == before - 1,
-                  $"模式 {inErase}，按住后 {before}→{afterHold}，最终笔画 {Doc.Strokes.Count}（期望 {before - 1}）");
-            SetUiPref("touch.palm", "0");
-            LoadTouchPrefs();
-            SetUiPref("touch.palm", null);
-            LoadTouchPrefs();
+            Check("大面积触点只写字，不再触发橡皮（面积仅统计）",
+                  inWrite && Doc.Strokes.Contains(target),
+                  $"模式 = {TouchModeForTest}（应 Write），目标还在 = {Doc.Strokes.Contains(target)}，"
+                  + $"笔画 {before} → {Doc.Strokes.Count}");
             TouchResetForTest();
         }
 

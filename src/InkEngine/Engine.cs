@@ -4533,8 +4533,10 @@ public partial class InkEngine
         //
         // 只有"当前在写的也是触摸"（或没有指针在写）时才喂：笔 / 鼠标在写的时候，
         // 触摸照旧走守卫忽略，不搅局、也不在表里留残留。
+        int touchW = 0, touchH = 0;
+        float touchSize = ptype == Native.PT_TOUCH ? ReadTouchSize(id, out touchW, out touchH) : 0f;
         if (ptype == Native.PT_TOUCH && (!_drawing || _activePointerType == Native.PT_TOUCH)
-            && TouchDownDispatch(hWnd, id, x, y, ReadTouchSize(id), out bool touchSteal))
+            && TouchDownDispatch(hWnd, id, x, y, touchSize, touchW, touchH, out bool touchSteal))
         {
             if (touchSteal)
             {
@@ -6348,22 +6350,26 @@ public partial class InkEngine
     private bool _radialTouchMode;    // 轮盘这次是触屏呼出的（松手改成触点驱动；没划动=留在盘上）
     private bool _radialSticky;       // 触屏轮盘：没划动松手后留在盘上等点选（5s 超时）
 
-    /// <summary>读触摸手势的旋钮（启动时一次）。**总开关 2026-10-09 晚已撤**
-    /// （用户真机试稳："开关拿掉，默认开"）；只剩 `--notouch` 这个开发对照（见参数块），
-    /// 这里恒开。</summary>
+    /// <summary>读触摸模式（启动时一次）。2026-10-24 恢复为「手势 / 单指书写」两档，
+    /// 默认手势；`--notouch` 仍可作本次运行的开发对照。</summary>
     internal void LoadTouchPrefs()
     {
-        _touch.Enabled = true;
-        _touch.PalmErase = GetUiPref("touch.palm") != "0";
-        _touch.ThreeFingerErase = GetUiPref("touch.three") != "0";
-        _touch.LongPressSelect = GetUiPref("touch.longpress") != "0";
-        _touch.TwoFingerTapSelect = GetUiPref("touch.2tap") != "0";
-        _touch.SingleFingerRoam = GetUiPref("touch.roam") == "1";
+        // 2026-10-24：只保留“手势 / 单指书写”两档；多指同时书写以后再做。
+        // 默认手势（没有 touch.mode = 手势）；单指档完全关闭触摸手势。
+        _touch.Enabled = GetUiPref("touch.mode") != "single";
+        _touch.SingleFingerRoam = false;
+        _touch.LongPressSelect = true;
+        _touch.TwoFingerTapSelect = true;    // 当前实现就是“两指轻点开轮盘”；不另做两指点选
+        _touch.TwoFingerHold = true;
+
+        // 面积橡皮取消：不再看面积触发擦除；只保留三指及以上擦。
+        // 面积/基线仍由 TouchGestures 采样，TouchStats 会写日志。
+        _touch.ThreeFingerErase = true;
         _touch.PalmFactor = GetUiPref("touch.palmLevel") switch
         {
-            "0" => 4f,      // 保守
-            "2" => 2f,      // 灵敏
-            _ => 3f,        // 标准
+            "0" => 4f,      // 仅统计用
+            "2" => 2f,      // 仅统计用
+            _ => 3f,        // 仅统计用
         };
     }
 
@@ -6375,10 +6381,16 @@ public partial class InkEngine
     /// 返回 false = 按普通写字那条路走（单指小面积）。
     /// </summary>
     private bool TouchDownDispatch(IntPtr hWnd, uint id, float x, float y, float sizePx,
-                                   out bool stealPointer)
+                                   int contactW, int contactH, out bool stealPointer)
     {
         stealPointer = false;
         var v = _touch.Down(id, x, y, sizePx, NowMs, DpiScale);
+
+        // 面积只采样、不参与判定；明细见 TouchStats。
+        TouchStats.NoteDown(_touch.Count, contactW, contactH, sizePx,
+                            _touch.FingerBaseline, _touch.PalmFactor,
+                            _touch.WouldPalm, v.ToString(), _touch.Enabled, Tool);
+
         if (v == TouchVerdict.Write)
         {
             // 单指这一下会走"普通写字那条路"（可能被它清掉选区）——先记快照，
@@ -6424,10 +6436,9 @@ public partial class InkEngine
                     if (TouchEraseCenter(out var c0)) { _lastEraseX = c0.X; _lastEraseY = c0.Y; }
                 }
                 else Doc.BeginErase();
-                // **手掌按下先不擦**（移动才擦）：手掌落在屏上不动是"手托着"，不该直接把下面
-                // 的板书擦掉；三指擦照旧按下即擦（那是主动动作）。见 TouchGestures 的注释。
-                if (!_touch.LastDownWasPalm) TouchEraseSample();
-                Console.WriteLine(_touch.LastDownWasPalm ? "触摸：手掌 → 擦除（移动才擦）" : "触摸：三指 → 擦除");
+                // 面积橡皮已取消；走到这里只剩三指及以上擦（主动动作），按下即擦。
+                TouchEraseSample();
+                Console.WriteLine("触摸：三指及以上 → 擦除");
                 return true;
 
             case TouchVerdict.Gesture2:
@@ -10100,10 +10111,12 @@ public partial class InkEngine
     /// </summary>
     /// <summary>
     /// 触摸触点的**接触面积**（矩形长边，物理像素）。拿不到 / 这块屏不报 → 0。
-    /// 手掌擦的分级靠它（见 <see cref="TouchGestures"/> 的自适应基线）。
+    /// 2026-10-24 起只用于 TouchStats 采样，不再触发手掌橡皮；同时把矩形宽高
+    /// 带出去，方便以后重新设计面积规则。
     /// </summary>
-    private static float ReadTouchSize(uint id)
+    private static float ReadTouchSize(uint id, out int contactW, out int contactH)
     {
+        contactW = contactH = 0;
         // 用**显式缓冲区**（160 字节）而不是 `out POINTER_TOUCH_INFO`：后者走的是
         // 运行时按托管结构体大小分配的栈槽，合成指针那条路上实测会 AV；
         // 显式给足缓冲区 + `PtrToStructure` 最稳（这里是纯读，没有写回）。
@@ -10114,6 +10127,8 @@ public partial class InkEngine
             var ti = Marshal.PtrToStructure<Native.POINTER_TOUCH_INFO>(buf);
             int w = ti.rcContact.Width, h = ti.rcContact.Height;
             if (w <= 0 && h <= 0) { w = ti.rcContactRaw.Width; h = ti.rcContactRaw.Height; }
+            contactW = Math.Max(0, w);
+            contactH = Math.Max(0, h);
             return MathF.Max(w, h);
         }
         finally { Marshal.FreeHGlobal(buf); }
@@ -10693,6 +10708,7 @@ public partial class InkEngine
         if (InputPrecision.UseHimetric)
             Console.WriteLine($"输入精度统计: himetric 映射 {InputPrecision.MappedPoints} 点 / "
                               + $"退回整数像素 {InputPrecision.FallbackPoints} 点");
+        TouchStats.WriteSummary();
         Console.WriteLine("shutdown complete");
     }
 
@@ -10895,7 +10911,7 @@ public partial class InkEngine
         PredictTailOn = PredictTailEnabled,      // 「设置 → 书写 → 墨迹预测」（自绘预测尾）总开关（默认关，2026-10-16 起）
         WetMode = WetMode,                       // 「设置 → 墨迹 → 湿墨档位」（0..3；界面显示当前档）
         HistoryCount = BoardHistory.Count,       // 「更多 → 墨迹 → 历史板书」那一格的亮/灰
-        TouchGesturesOn = _touch.Enabled,        // 「设置 → 书写 → 触摸手势」总开关（默认开）
+        TouchGesturesOn = _touch.Enabled,        // 触摸模式：true=手势；false=单指书写（默认手势）
         // [删除 2026-10-05] PredictOn（墨迹预测）：随老预测系统移除。
         ScreenIndex = ScreenIndex,
         CanFlipPageUp = CanFlipPageUp,
@@ -11077,16 +11093,17 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 触摸手势**总开关**（「更多 → 设置 → 书写 → 触摸手势」，2026-10-05 加）。
-    /// 关掉 = 只剩单指书写：双指手势 / ≥3 指擦 / 长按选择 / 两指点选 / 单指漫游全部停用
-    /// （闸门在 `TouchGestures.Enabled` 的每条判定里）。正在跑的手势就地中断。
+    /// 触摸模式（「更多 → 设置 → 书写 → 触摸模式」，2026-10-24 恢复为两档）。
+    /// true = 手势模式；false = 单指书写（双指手势 / ≥3 指擦 / 长按选择 / 轮盘全部停用）。
+    /// 默认手势；单指档落盘 `touch.mode=single`，手势档不写项。
     /// </summary>
     internal void SetTouchGesturesFromUi(bool on)
     {
-        if (_touch.Enabled == on) return;
+        bool changed = _touch.Enabled != on;
         _touch.Enabled = on;
-        if (!on) TouchAbort();
-        Console.WriteLine($"触摸手势：{(on ? "开（单指写 / 双指手势 / 三指擦 / 长按选择）" : "关（只剩单指书写）")}");
+        SetUiPref("touch.mode", on ? null : "single");
+        if (!on && changed) TouchAbort();
+        Console.WriteLine($"触摸模式：{(on ? "手势（双指 / 三指擦 / 长按选择）" : "单指书写（无手势）")}");
         NotifyUiStateChanged();
     }
 

@@ -291,7 +291,7 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。外观 / 书写 / 墨迹三列并排；
     /// `AutoStart` 排在表尾，但由 <see cref="MoreRowRect"/> 画在外观列最后一格。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, RestoreInk, PptAutoSave, HistoryDays, AutoStart }
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, TouchMode, RestoreInk, PptAutoSave, HistoryDays, AutoStart }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -325,6 +325,10 @@ public sealed partial class FullUi : IOverlayUi
         // 唯一算法 = 线性预测（Chromium 同族），只剩这一个开关）。
         // 链路：行表 → ActivateRow → IsOn → SavePrefs（"开过"才写 "1"）。
         (Row.Predict, "墨迹预测", false, false, "开了让墨尾更跟手一点；默认关，想跟手就在这里打开"),
+        // 触摸模式（2026-10-24）：红外屏杆子/手指同源，面积橡皮取消后给老师一个
+        // “只写字、完全不要手势”的保险档；默认仍是手势模式。
+        (Row.TouchMode, "触摸模式", false, false,
+         "手势 = 双指翻页/缩放 + 三指擦 + 长按选择；单指 = 只允许一个触点写字，完全无手势"),
         // 墨迹三条偏好（原本在「墨迹」页，2026-10-02 启动器改版后搬进设置子页）。
         (Row.RestoreInk, "自动恢复上次板书", false, false, "下次启动接上这次的板书"),
         // ⚠ 名称 2026-10-10 改：这个开关**不只管 PPT**——文档（PDF/图片）批注的按页
@@ -337,9 +341,8 @@ public sealed partial class FullUi : IOverlayUi
         (Row.AutoStart, "开机自动启动", false, false, "登录 Windows 后在后台待命：点小球再开始批注"),
         // 板书历史本身没有开关（默认留、默认不显示）；上限是"总量 1 GB、份数不限"，
         // 见 BoardHistory。老师想清空就删 `%LOCALAPPDATA%\InkTeach\History`，或把这一行设成 7 天。
-        // ⚠ 「精细笔迹」「触摸手势」两个开关 2026-10-09 晚**已撤**（用户真机试稳：
-        //   "开关拿掉，默认开"）——两条行为都常开了，只剩开发对照参数
-        //   （--norawinput / --notouch），不再占用设置页。
+        // ⚠ 「精细笔迹」开关 2026-10-09 晚撤掉（默认开）；「触摸模式」2026-10-24
+        //   恢复成“手势 / 单指书写”两档（见 Row.TouchMode），不是旧的布尔总开关。
     };
 
     private readonly Dictionary<uint, ID2D1SolidColorBrush> _brushes = new();
@@ -2773,6 +2776,12 @@ public sealed partial class FullUi : IOverlayUi
                 SavePrefs();
                 break;
 
+            // 触摸模式（2026-10-24）：引擎持有 true=手势 / false=单指；
+            // 界面不另存偏好，引擎会落 `touch.mode`。
+            case Row.TouchMode:
+                _host.Commands.SetTouchGestures(!_host.State.TouchGesturesOn);
+                break;
+
             // 墨迹三条偏好（原来在「墨迹」页）：只写 `ui.*`，
             // 默认值不落盘（restoreInk 默认关只写 "1"、pptAutoSave 默认开只写 "0"、
             // historyDays 默认永久写成 null = 删项）。
@@ -2851,7 +2860,7 @@ public sealed partial class FullUi : IOverlayUi
     /// 用户说"设置现在太长了"。原来左列堆 9 行（组头 26 + 9×48 + 8 ≈ 476），三列后最高 5 行。
     /// </summary>
     private const int LookRowCount = 5;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小 / 开机自动启动    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小（「功能提示」2026-10-16 撤除、改常开）
-    private const int WriteRowCount = 3;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测（「预测时长」2026-10-15 随毫秒调节撤除；精细笔迹、触摸手势 2026-10-09 撤开关、改常开）
+    private const int WriteRowCount = 4;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测 / 触摸模式（2026-10-24 加）
     private const int InkRowCount = 3;     // 墨迹：湿墨档位 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理（日志两行 2026-10-17 合并进「更多 → 日志」）
     private const float MoreColumnGap = 16f;
     private const float MoreSwitchW = 44f;
@@ -3096,6 +3105,7 @@ public sealed partial class FullUi : IOverlayUi
         Row.DwellShape => SetColRow(SetColKind.Write, 0),
         Row.Pressure => SetColRow(SetColKind.Write, 1),
         Row.Predict => SetColRow(SetColKind.Write, 2),
+        Row.TouchMode => SetColRow(SetColKind.Write, 3),
         Row.RestoreInk => SetColRow(SetColKind.Ink, 0),
         Row.PptAutoSave => SetColRow(SetColKind.Ink, 1),
         Row.HistoryDays => SetColRow(SetColKind.Ink, 2),
@@ -3459,6 +3469,7 @@ public sealed partial class FullUi : IOverlayUi
         {
             Row.HistoryDays => HistoryDaysName(_host.GetPref("historyDays")),
             Row.UiSize => UiScalePresets.Name(_host.UiScale),
+            Row.TouchMode => _host.State.TouchGesturesOn ? "手势" : "单指",
             _ => null,
         };
         float valueW = value != null ? _widgets.Measure(value, 12.5f) : 0f;

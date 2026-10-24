@@ -299,6 +299,7 @@ internal static class DiagLog
         if (SessionId.Length > 0) sb.AppendLine($"会话：{SessionId}");
         sb.AppendLine($"显卡：{GpuName}（{(GpuSoftware ? "软件渲染/WARP" : "硬件渲染")}，显存 {GpuVramMb} MB）");
         sb.AppendLine($"显示：{RefreshHz} Hz · DPI {Dpi} · 界面缩放 {UiScale.ToString("F2", CultureInfo.InvariantCulture)} · 屏幕 {ScreenSize}");
+        sb.AppendLine($"触摸：{TouchStats.SummaryText()}");
         if (!string.IsNullOrEmpty(PdfNote)) sb.AppendLine($"PDF：{PdfNote}");
         try
         {
@@ -745,6 +746,7 @@ internal static class DiagLog
                 + ",\"worstDrive\":\"" + J(ps.WorstDrive) + "\""
                 + ",\"windowSec\":" + Num(ps.WindowSec, "0.0")
             + "}"
+            + ",\"touch\":" + TouchStats.Json()
             + ",\"logs\":[" + logs + "]"
             + "}";
     }
@@ -838,6 +840,7 @@ internal static class DiagLog
              + ",\"slow50\":" + ps.Slow50
              + ",\"slow150\":" + ps.Slow150
              + ",\"worst\":" + "\"" + J(ps.WorstDrive) + "\""
+             + ",\"touch\":" + TouchStats.Json()
              + ",\"first\":\"" + J(InstallFirstDay) + "\""
              + ",\"last\":\"" + DateTime.Now.ToString("yyyy-MM-dd") + "\""
              + "}";

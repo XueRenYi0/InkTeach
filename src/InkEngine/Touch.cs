@@ -31,43 +31,46 @@ internal enum TouchVerdict
 /// 分工：这一层只回答"这一下是什么"（<see cref="TouchVerdict"/>）和"长按够了吗"；
 /// 具体动作（写字 / 擦 / 漫游 / 翻页 / 选中变换）在 Engine 里按 <see cref="TouchMode"/> 路由。
 ///
-/// ## 面积（`rcContact`）：**只用于手掌擦，而且是相对的**（2026-10-05 定）
+/// ## 面积（`rcContact`）：**2026-10-24 起只采样，不参与判定**
 ///
-/// 手掌 = 接触尺寸 > **这台机器自己的手指基线** × 倍数（默认 3；灵敏度三档 4/3/2）。
-/// 基线是运行中学的、只喂"判定为手指"的样本——所以跨屏 / 跨机器都**不用标定**：
-/// 比的是同一块屏上"手掌 vs 手指"的相对大小（用户实测：学校大屏在隔壁 Ink-Canvas 里
-/// 要乘 0.25 倍，量纲完全不通——相对判定就不怕这个）。
-/// 屏不报面积（`touchMask` 没置位）→ 手掌擦自动失效，其它手势照常。
+/// 学校红外屏没有真正的笔，杆子和手指同源；面积触发手掌擦会让同一块屏上
+/// “一会画笔、一会橡皮”。现在面积/旧基线只由 TouchStats 记录，三指及以上才是擦。
+/// 屏不报面积（`touchMask` 没置位）不影响手势。
 ///
 /// ## 两条纪律
 /// ① **一次手势只能"干净地开始"**：触点要在 <see cref="CleanMs"/> 里一起落下、
 ///   而且笔画还没真画出去（路径 ≤ <see cref="CleanMoveLogical"/>）——写字中途蹭到的
 ///   手指一律 <see cref="TouchVerdict.Ignore"/>（"第二根手指不许抢笔"那条守卫继续保底）。
-/// ② **"档位"= 两个布尔**（全开 / 单指拖动 / 只写字）：
-///   `<see cref="Enabled"/>` = 手势总闸、`<see cref="SingleFingerRoam"/>` = 单指拖动。
-///   下一批把它做成一个三档控件（设置里只留这一个）。
+/// ② **模式**：`<see cref="Enabled"/>` = 手势模式；关掉 = 单指书写（无任何手势）。
+///   多指同时书写留到下一阶段。
 /// </summary>
 internal sealed class TouchGestures
 {
     // ---- 旋钮 ----
-    /// <summary>手势**总开关**（"保险丝"；关掉只剩单指书写）。界面在「设置 → 书写 → 触摸手势」，
-    /// 命令行后门 `--notouch`。默认为开；每条判定都各自读它——见 <see cref="Down"/> / <see cref="Tick"/> 等。</summary>
+    /// <summary>手势模式开关（关掉 = 单指书写，无任何手势）。界面在
+    /// 「设置 → 书写 → 触摸模式」，默认开；命令行后门 `--notouch`。
+    /// 每条判定都各自读它——见 <see cref="Down"/> / <see cref="Tick"/> 等。</summary>
     public bool Enabled = true;
     /// <summary>单指拖动档（手指只用来移动画布；给只报一个触点的屏用）。</summary>
     public bool SingleFingerRoam = false;
     /// <summary>长按 = 框选 / 点选（默认开，不提供关）。</summary>
     public bool LongPressSelect = true;
-    /// <summary>两指轻点 = 点选（默认开，不提供关）。</summary>
+    /// <summary>
+    /// 两指轻点入口。当前实现实际是**开轮盘**（不是独立的对象点选）；学校实测
+    /// 两指一碰就会开轮盘，且长按逻辑按用户要求保持不变，所以这里保留。
+    /// 不再额外实现“两指点选”。
+    /// </summary>
     public bool TwoFingerTapSelect = true;
     /// <summary>两指长按 = 呼出盘（2026-10-05；默认开，不提供关——轮盘的触摸入口）。</summary>
     public bool TwoFingerHold = true;
 
-    // ---- 手掌擦（2026-10-05 恢复启用；判据=**相对基线**，绝不写死绝对值）----
-    /// <summary>手掌（大面积）擦：默认开。判据是"明显大于手指基线"，量纲跨屏不通也不影响。</summary>
-    public bool PalmErase = true;
-    /// <summary>手掌判定倍数：接触尺寸 > 手指基线 × 它 = 手掌（4=保守 / 3=标准 / 2=灵敏）。</summary>
+    // ---- 面积统计（**只统计，不参与判定**）--------------------------------
+    // 2026-10-24：学校红外屏没有真正的笔，杆子和手指同源；面积触发橡皮会在
+    // 同一块屏上时大时小，导致“一会画笔、一会橡皮”。产品先取消面积橡皮，
+    // 只保留三指及以上擦；这里继续采集面积，供以后重新设计。
+    /// <summary>旧手掌判定倍数：仅用于日志里计算“按旧规则会不会判成手掌”。</summary>
     public float PalmFactor = 3f;
-    /// <summary>三指擦（默认开）。</summary>
+    /// <summary>三指及以上擦（默认开；单指书写模式下由 Enabled 总闸关掉）。</summary>
     public bool ThreeFingerErase = true;
 
     // ---- 常量 ----
@@ -101,7 +104,10 @@ internal sealed class TouchGestures
     // 做法：**这台机器自己的手指基线** = 最近"非手掌"单指尺寸的 EMA；手掌 = 明显大于基线。
     // 基线只喂"判定为手指"的样本，所以手掌不会把它越带越大；换机器自然重新学。
     private float _fingerBaseline;        // 物理像素（0 = 还没学到）
-    public bool LastDownWasPalm { get; private set; }   // 这一次 Down 是手掌吗（引擎据此"按下先不擦"）
+    public float FingerBaseline => _fingerBaseline;      // 诊断：当前手指基线
+    public float LastSize { get; private set; }          // 诊断：这次触点长边
+    public bool WouldPalm { get; private set; }          // 诊断：按旧面积规则会不会判成手掌
+    public int LastContactCount { get; private set; }    // 诊断：这次按下后的触点数
 
     public readonly record struct ContactView(uint Id, Vector2 Pos, Vector2 Down,
                                               float Size, float Path, bool Moved);
@@ -190,26 +196,22 @@ internal sealed class TouchGestures
         if (_c.Count > MaxSeen) MaxSeen = _c.Count;
         if (sizePx > 0f) SawArea = true;        // 诊断读数
 
-        // ---- 手掌擦：**相对基线**判定（放在角色判定之前；手掌不参与"干净开始"那套）----
-        LastDownWasPalm = false;
-        if (Enabled && PalmErase && sizePx > 0f)
+        // ---- 面积只记账，不参与角色判定（2026-10-24 起）----
+        // 以前这里会把“明显大于手指基线”的单触点判成手掌并返回 Erase；学校
+        // 红外屏的杆子/手指同源，面积抖动让同一支笔时而写、时而擦。现在：
+        //   · 单指/多指仍然照常写字（面积不拦）；
+        //   · 只有三指及以上才擦（见下面角色判定）；
+        //   · 面积、基线、旧规则会判成手掌的结果都留给 TouchStats 采样。
+        LastSize = sizePx;
+        WouldPalm = false;
+        LastContactCount = _c.Count;
+        if (sizePx > 0f)
         {
             if (_fingerBaseline <= 0f)
-            {
-                // 还没基线：这一下当手指（并记下基线）。第一下就是手掌的概率低；
-                // 就算误判也只是多写一笔，一撤就回去。
                 _fingerBaseline = sizePx;
-            }
-            else if (sizePx > _fingerBaseline * PalmFactor)
-            {
-                LastDownWasPalm = true;
-                // **单掌落下 = 擦**（"按下先不擦、移动才擦"由引擎做，见 TouchDownDispatch 的 Erase 分支）。
-                // 已经有别的触点在按（写字中途蹭上来的手掌 / 掌根）→ **忽略**：不许抢笔、也不许乱擦。
-                return _c.Count == 1 ? TouchVerdict.Erase : TouchVerdict.Ignore;
-            }
             else
             {
-                // 只喂"不是手掌"的样本（手掌不会把基线越带越大）。
+                WouldPalm = sizePx > _fingerBaseline * PalmFactor;
                 _fingerBaseline += (sizePx - _fingerBaseline) * 0.25f;
             }
         }
