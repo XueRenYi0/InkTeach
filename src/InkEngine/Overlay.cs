@@ -5698,11 +5698,11 @@ internal sealed partial class OverlayWindow : IDisposable
     //   · 颜色格：`penFilled` 上色（黑/红/蓝）——"这支颜色的笔"；选中保持原色；
     //   · **没有常显标签**：名字只出现在中央读数；悬停时盘下"浮一行字"。
     internal const float RadialPlateRadiusLogical = 96f;
-    // 2026-10-25 定稿：色环取中间值 72（A 的 60 太小、原图的 80 太大）。
-    // 中央实心区 0~30、色环 30~36、功能区 36~96、图标环 66。
-    internal const float RadialInnerRadiusLogical = 36f;
-    internal const float RadialIconRingLogical = 66f;
-    internal const float RadialCenterLogical = 30f;
+    // 2026-10-25 定稿：色环 68（72 偏大、60 偏小；用户四版对比后选 68）。
+    // 中央实心区 0~28、色环 28~34、功能区 34~96、图标环 65。
+    internal const float RadialInnerRadiusLogical = 34f;
+    internal const float RadialIconRingLogical = 65f;
+    internal const float RadialCenterLogical = 28f;
     internal const float RadialSeamDeg = 2f;          // 扇格之间的缝（每边 1°）
 
     /// <summary>
@@ -5802,9 +5802,9 @@ internal sealed partial class OverlayWindow : IDisposable
                 ringCol = new Color4(ringCol.R, ringCol.G, ringCol.B, 0.45f);
         }
 
-        // 比例（2026-10-25 定稿）：色环直径 72，内沿 30、外沿 36、
-        // 线宽 6；正好夹在中央实心区（30）和功能区（36）之间。
-        float ringMid = 33f * dpi;         // 彩环中心线：内沿 30、外沿 36
+        // 比例（2026-10-25 定稿）：色环直径 68，内沿 28、外沿 34、
+        // 线宽 6；正好夹在中央实心区（28）和功能区（34）之间。
+        float ringMid = 31f * dpi;         // 彩环中心线：内沿 28、外沿 34
         float ringW = 6f * dpi;
 
         // 底环比彩环宽 2px：白笔/浅色在浅色盘面上也有轮廓（外沿 41）。
