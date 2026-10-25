@@ -5740,6 +5740,10 @@ internal sealed partial class OverlayWindow : IDisposable
 
         // 底盘 → 八扇格 → 盘边（盘边最后画，压在扇格外沿上，线才利落）
         _ctx.FillEllipse(new Ellipse(c, R, R), Brush(theme.Panel));
+        // 中央底：和未选中扇格同色（2026-10-25 用户定）。
+        // 原来中央露出的是盘底 Panel，深色主题下就是“色环外面一圈透明黑”；
+        // 填成 Hover 后，色环 → 中央底 → 扇格是同一条浅色带，没有断层。
+        _ctx.FillEllipse(new Ellipse(c, r0, r0), Brush(theme.Hover));
         DrawRadialWedges(c, dpi, r0, R, theme, sel);
         _scratch.Color = theme.PanelBorder;
         _ctx.DrawEllipse(new Ellipse(c, R, R), _scratch, 1f * dpi);
@@ -5800,6 +5804,17 @@ internal sealed partial class OverlayWindow : IDisposable
 
         float ringMid = 21.25f * dpi;      // 色环中心线：内沿 19、外沿 23.5
         float ringW = 4.5f * dpi;
+
+        // 色带过渡：色环外再铺 3 圈同色淡晕（2026-10-25 用户要“色带过渡”）。
+        // 不改变判位——淡晕只是视觉，中央死区仍是 24；它把“红环 → 浅灰盘面”
+        // 之间那道硬边化开，看起来像一条色带自然淡出。
+        for (int k = 1; k <= 3; k++)
+        {
+            _scratch.Color = new Color4(ringCol.R, ringCol.G, ringCol.B, 0.12f / k);
+            float rr = (23.5f + k * 4f) * dpi;
+            _ctx.DrawEllipse(new Ellipse(c, rr, rr), _scratch, 3.5f * dpi);
+        }
+
         // 底环比彩环宽 2px：白笔/浅色在浅色盘面上也有轮廓。
         _scratch.Color = theme.PanelBorder;
         _ctx.DrawEllipse(new Ellipse(c, ringMid, ringMid), _scratch, ringW + 2f * dpi);
