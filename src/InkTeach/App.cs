@@ -5182,9 +5182,16 @@ internal sealed partial class App : InkEngine.InkEngine
         bool ok2 = ScreenProbe.SaveBmp(path2, (int)_virtualX, (int)_virtualY,
                                        (int)_virtualW, (int)_virtualH);
 
+        // ③ 划向「橡皮」（正南）：验证中央图标跟着扇区变、色环压暗
+        RadialMoveForTest(cx, cy + 120f);
+        SettleFrames(300);
+        string path3 = System.IO.Path.ChangeExtension(path, null) + "-eraser.bmp";
+        bool ok3 = ScreenProbe.SaveBmp(path3, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+
         RadialCancelForTest("摆样结束");
         RadialTestHold = false;
-        Console.WriteLine(ok1 && ok2 ? $"出图：{path} / {path2}" : "抓屏失败（看上一行）");
+        Console.WriteLine(ok1 && ok2 && ok3 ? $"出图：{path} / {path2} / {path3}" : "抓屏失败（看上一行）");
         _quit = true;
     }
     private static byte[] MakeLegacyFile(InkDocument doc, int version, int droppedBytes)

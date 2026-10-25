@@ -5774,28 +5774,42 @@ internal sealed partial class OverlayWindow : IDisposable
         float clearP = app.RadialClearProgress;
         if (clearP > 0) DrawRadialClearProgress(c, dpi, clearP);
 
-        // 中央颜色圆（v3：中央不再放文字——用户 2026-10-25 定）。
-        // 白笔/浅色底都看得见：先铺一圈白，再描主题边，最后填当前色。
-        Color4 centerCol;
-        if (app.Tool == Tool.Highlighter)
-            centerCol = new Color4(app.HighlighterCurrent.R, app.HighlighterCurrent.G,
-                                   app.HighlighterCurrent.B, 1f);
+        // 中央：空心色环 + 当前功能图标（2026-10-25 用户定，替代 v3 的实心色圆）。
+        // 色环外径 23.5、内沿 19：整个环都在 24 的中央死区里，
+        // “看着还在圈里”就等于“还没选中扇区”，视觉和判位一致。
+        // 图标 20px：没划到扇区时 = 当前实际工具；划到扇区时 = 该扇区（实时预览）。
+        string centerIcon = sel >= 0 ? RadialSectorIcon(sel) : RadialToolIcon(app.Tool);
+
+        Color4 ringCol;
+        if (sel == 2) ringCol = app.RadialNextPenColor;              // 东：预览下一色
+        else if (sel == 6) ringCol = app.RadialPrevPenColor;         // 西：预览上一色
+        else if (sel == 0) ringCol = InkPalette.PenBand[1].Color;    // 北：固定红
+        else if (sel == 1)                                          // 荧光笔：荧光色
+            ringCol = new Color4(app.HighlighterCurrent.R, app.HighlighterCurrent.G,
+                                 app.HighlighterCurrent.B, 1f);
         else
-            centerCol = app.CurrentColor;
+        {
+            ringCol = app.Tool == Tool.Highlighter
+                ? new Color4(app.HighlighterCurrent.R, app.HighlighterCurrent.G,
+                             app.HighlighterCurrent.B, 1f)
+                : app.CurrentColor;
+            // 橡皮/框选：显示“上次笔色”，压暗，提示“回去还是这个色”。
+            if (app.Tool == Tool.Eraser || app.Tool == Tool.PixelEraser || app.Tool == Tool.Marquee)
+                ringCol = new Color4(ringCol.R, ringCol.G, ringCol.B, 0.45f);
+        }
 
-        // 橡皮/框选：显示“上次笔色”，压暗，提示“回去还是这个色”。
-        if (app.Tool == Tool.Eraser || app.Tool == Tool.PixelEraser || app.Tool == Tool.Marquee)
-            centerCol = new Color4(centerCol.R, centerCol.G, centerCol.B, 0.45f);
-
-        // R22 + 1.5 白圈 = 23.5，刚好落在 24 的中央死区里：
-        // 视觉上“还在圆里”就等于“还没选中扇区”，不会出现看着没出圈却已经选中的错位。
-        float dotR = 22f * dpi;
-        _scratch.Color = new Color4(1f, 1f, 1f, 0.92f);
-        _ctx.FillEllipse(new Ellipse(c, dotR + 1.5f * dpi, dotR + 1.5f * dpi), _scratch);
+        float ringMid = 21.25f * dpi;      // 色环中心线：内沿 19、外沿 23.5
+        float ringW = 4.5f * dpi;
+        // 底环比彩环宽 2px：白笔/浅色在浅色盘面上也有轮廓。
         _scratch.Color = theme.PanelBorder;
-        _ctx.DrawEllipse(new Ellipse(c, dotR + 1.5f * dpi, dotR + 1.5f * dpi), _scratch, 1f * dpi);
-        _scratch.Color = centerCol;
-        _ctx.FillEllipse(new Ellipse(c, dotR, dotR), _scratch);
+        _ctx.DrawEllipse(new Ellipse(c, ringMid, ringMid), _scratch, ringW + 2f * dpi);
+        _scratch.Color = ringCol;
+        _ctx.DrawEllipse(new Ellipse(c, ringMid, ringMid), _scratch, ringW);
+
+        // 中心功能图标：regular、主题文字色，压在色环里面。
+        float iconSz = 20f * dpi;
+        _scratch.Color = theme.Text;
+        DrawIcon(centerIcon, c.X - iconSz * 0.5f, c.Y - iconSz * 0.5f, iconSz, _scratch);
 
         // 悬停时"浮一行字"：盘外下方的小白条，给一句人话
         if (sel >= 0)
@@ -5962,6 +5976,27 @@ internal sealed partial class OverlayWindow : IDisposable
         5 => IconPaths.broom,
         7 => IconPaths.undo,
         _ => selected ? IconPaths.penFilled : IconPaths.pen,
+    };
+
+    /// <summary>中央预览用的扇区图标（regular 20px）。翻色格（2/6）显示笔。</summary>
+    private static string RadialSectorIcon(int i) => i switch
+    {
+        1 => IconPaths.highlighter,
+        3 => IconPaths.select,
+        4 => IconPaths.eraser,
+        5 => IconPaths.broom,
+        7 => IconPaths.undo,
+        _ => IconPaths.pen,
+    };
+
+    /// <summary>没划到扇区时，中央显示“当前实际工具”。</summary>
+    private static string RadialToolIcon(Tool t) => t switch
+    {
+        Tool.Highlighter => IconPaths.highlighter,
+        Tool.Eraser or Tool.PixelEraser => IconPaths.eraser,
+        Tool.Marquee => IconPaths.select,
+        Tool.Laser => IconPaths.laser,
+        _ => IconPaths.pen,
     };
 
     /// <summary>
