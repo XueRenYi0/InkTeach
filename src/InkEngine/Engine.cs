@@ -6351,7 +6351,7 @@ public partial class InkEngine
     /// 东西突然飞到掌根底下"就是这里漏判（2026-10-05，和 `_roamId` 同一条纪律）。</summary>
     private uint _selTouchId;
     private bool _radialTouchMode;    // 轮盘这次是触屏呼出的（松手改成触点驱动；没划动=留在盘上）
-    private bool _radialSticky;       // 触屏轮盘：没划动松手后留在盘上等点选（5s 超时）
+    private bool _radialSticky;       // 触屏轮盘：没划动松手后留在盘上等点选（点空白/Esc 取消）
 
     /// <summary>读触摸模式（启动时一次）。2026-10-24 恢复为「手势 / 单指书写」两档，
     /// 默认手势；`--notouch` 仍可作本次运行的开发对照。</summary>
@@ -15335,13 +15335,11 @@ public partial class InkEngine
     // internal（不是 private）：自检要拿它和 Overlay 的扇面几何对表——
     // "图标环 ± 图标半径"必须落在（锁定距离, 盘半径）里，改单边忘另一边就会红。
     internal const float RadialRadiusLogical = 96f;
-    // 2026-10-25 定稿：恢复原图比例——死区 24、锁定 36 不变。
-    // 色环在 34~40（原“过渡带”），所以指针在中央圆里就可能已经选中扇区，
-    // 这是原设计的手感，用户明确要保留。
+    // 2026-10-25 定稿：死区 24、锁定 36 不变（原手感）。
+    // 色环在 30~36，指针在中央圆里就可能已经选中扇区，这是原设计的行为。
     internal const float RadialDeadZoneLogical = 24f;
     internal const float RadialLockLogical = 36f;
     private const double RadialShowDelayMs = 120;     // 出盘延迟（熟手路：不等盘直接划）
-    private const double RadialTimeoutMs = 5000;      // 防呆：按太久没松手就自行取消
     /// <summary>清屏扇区要停住这么久才执行（和橡皮带的“清空”同一个防误触时长）。</summary>
     private const double RadialClearHoldMs = 800;
 
@@ -15422,7 +15420,7 @@ public partial class InkEngine
     /// 与键盘版的差别就两条：
     ///   ① 松手不是"轮询按键"，而是**由触点驱动**——两根手指的平均位就是方向（TouchMoveDispatch
     ///      的 `TouchMode.Radial` 分支在喂），最后一根抬起时确认（TouchUpDispatch）；
-    ///   ② **没划动就松手 = 留在盘上等点选**（`_radialSticky`，5s 超时；点扇区/点盘外见
+    ///   ② **没划动就松手 = 留在盘上等点选**（`_radialSticky`；点扇区/点盘外见
     ///      <see cref="RadialPaletteTryPointerDown"/>）——键盘那套的"松在中心=取消"不变。
     /// </summary>
     private void OpenRadialPaletteFromTouch(float x, float y, bool sticky)
@@ -15444,7 +15442,7 @@ public partial class InkEngine
         PointerY = y;
         _dirty = true;
         Console.WriteLine(sticky
-            ? "呼出盘（触屏·轻点）：点扇区确认，点盘外/中心取消（5s 超时）"
+            ? "呼出盘（触屏·轻点）：点扇区确认，点盘外/中心取消"
             : "呼出盘（触屏·长按）：划向扇区松手确认；没划动=留在盘上等点选");
     }
 
@@ -15517,11 +15515,11 @@ public partial class InkEngine
         }
 
         // 触屏版：**没划动就松手 = 留在盘上等点选**（Blender marking menu 的那半套；
-        // 5s 超时；点扇区/点中心、点盘外都走 RadialPaletteTryPointerDown）。
+        // 点扇区/点中心、点盘外都走 RadialPaletteTryPointerDown）。
         if (sec < 0 && _radialTouchMode && !_radialMoved)
         {
             _radialSticky = true;
-            Console.WriteLine("呼出盘：没划动 → 留在盘上等点选（5s）");
+            Console.WriteLine("呼出盘：没划动 → 留在盘上等点选（点空白/Esc 取消）");
             return;
         }
 
@@ -15668,8 +15666,7 @@ public partial class InkEngine
             CommitRadialPalette();
             return;
         }
-        if (NowMs - _radialOpenedAtMs > RadialTimeoutMs)
-            CancelRadialPalette("按太久");
+        // 2026-10-25 用户定：**不再做 5s 超时**。盘一直留到松手 / 点选 / 点空白 / Esc。
     }
 
     /// <summary>清屏停满 0.8s → 执行并关盘。返回 true = 盘已经关了。</summary>
