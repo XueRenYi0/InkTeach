@@ -5698,11 +5698,11 @@ internal sealed partial class OverlayWindow : IDisposable
     //   · 颜色格：`penFilled` 上色（黑/红/蓝）——"这支颜色的笔"；选中保持原色；
     //   · **没有常显标签**：名字只出现在中央读数；悬停时盘下"浮一行字"。
     internal const float RadialPlateRadiusLogical = 96f;
-    // 2026-10-25 比例定稿：图标 22 + 色环 4（外沿 24）= 中央 48；
-    // 扇格内沿 32（离色环 8px 呼吸），图标环 64 = 扇格 32~96 的正中。
-    internal const float RadialInnerRadiusLogical = 32f;
-    internal const float RadialIconRingLogical = 64f;
-    internal const float RadialCenterLogical = 24f;
+    // 2026-10-25 比例方案 A：色环外沿 30（= 死区）、线宽 6、直径 60；
+    // 扇格内沿 34（离色环 4px 呼吸），图标环 65 = 扇格 34~96 的正中。
+    internal const float RadialInnerRadiusLogical = 34f;
+    internal const float RadialIconRingLogical = 65f;
+    internal const float RadialCenterLogical = 30f;
     internal const float RadialSeamDeg = 2f;          // 扇格之间的缝（每边 1°）
 
     /// <summary>
@@ -5804,20 +5804,18 @@ internal sealed partial class OverlayWindow : IDisposable
                 ringCol = new Color4(ringCol.R, ringCol.G, ringCol.B, 0.45f);
         }
 
-        // 比例（2026-10-25 定稿）：图标 22、间隙 ≈3.4、色环 4（外沿 23、底环 24）。
-        // 整个“图标 + 色环”是一个 48 逻辑像素的圆，和 24 的死区完全对齐：
-        // 最外沿就是“开始选中扇区”的那条线，没有多余过渡带。
-        float ringMid = 21f * dpi;         // 彩环中心线：内沿 19、外沿 23
-        float ringW = 4f * dpi;
+        // 比例（2026-10-25 方案 A）：色环外沿 30、线宽 6、内沿 24、直径 60。
+        // 外沿 = 死区 30：最外沿就是“开始选中扇区”的那条线。
+        float ringMid = 27f * dpi;         // 彩环中心线：内沿 24、外沿 30
+        float ringW = 6f * dpi;
 
-        // 底环比彩环宽 2px：白笔/浅色在浅色盘面上也有轮廓（外沿 24）。
+        // 底环比彩环宽 2px：白笔/浅色在浅色盘面上也有轮廓（外沿 31）。
         _scratch.Color = theme.PanelBorder;
         _ctx.DrawEllipse(new Ellipse(c, ringMid, ringMid), _scratch, ringW + 2f * dpi);
         _scratch.Color = ringCol;
         _ctx.DrawEllipse(new Ellipse(c, ringMid, ringMid), _scratch, ringW);
 
-        // 中心功能图标：regular、主题文字色。22px 的外接圆半径 15.6，
-        // 离色环内沿 19 还有 3.4，不碰环、也不显得空。
+        // 中心功能图标：22px 外接圆 15.6，离色环内沿 24 还有 8.4——不碰环。
         float iconSz = 22f * dpi;
         _scratch.Color = theme.Text;
         DrawIcon(centerIcon, c.X - iconSz * 0.5f, c.Y - iconSz * 0.5f, iconSz, _scratch);
