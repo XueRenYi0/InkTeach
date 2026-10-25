@@ -5698,11 +5698,11 @@ internal sealed partial class OverlayWindow : IDisposable
     //   · 颜色格：`penFilled` 上色（黑/红/蓝）——"这支颜色的笔"；选中保持原色；
     //   · **没有常显标签**：名字只出现在中央读数；悬停时盘下"浮一行字"。
     internal const float RadialPlateRadiusLogical = 96f;
-    // 2026-10-25 定稿：色环 68（72 偏大、60 偏小；用户四版对比后选 68）。
-    // 中央实心区 0~28、色环 28~34、功能区 34~96、图标环 65。
-    internal const float RadialInnerRadiusLogical = 34f;
-    internal const float RadialIconRingLogical = 65f;
-    internal const float RadialCenterLogical = 28f;
+    // 2026-10-25 定稿（方案 A，后续不再调）：
+    // 盘 96 / 扇格 40~96 / 图标环 68 固定；色环 36~40（线宽 4）、中央 72、图标 30。
+    internal const float RadialInnerRadiusLogical = 40f;
+    internal const float RadialIconRingLogical = 68f;
+    internal const float RadialCenterLogical = 36f;
     internal const float RadialSeamDeg = 2f;          // 扇格之间的缝（每边 1°）
 
     /// <summary>
@@ -5802,10 +5802,9 @@ internal sealed partial class OverlayWindow : IDisposable
                 ringCol = new Color4(ringCol.R, ringCol.G, ringCol.B, 0.45f);
         }
 
-        // 比例（2026-10-25 定稿）：色环直径 68，内沿 28、外沿 34、
-        // 线宽 6；正好夹在中央实心区（28）和功能区（34）之间。
-        float ringMid = 31f * dpi;         // 彩环中心线：内沿 28、外沿 34
-        float ringW = 6f * dpi;
+        // 方案 A：色环 36~40、线宽 4；扇格内沿固定 40，色环不再挤扇格。
+        float ringMid = 38f * dpi;         // 彩环中心线：内沿 36、外沿 40
+        float ringW = 4f * dpi;
 
         // 底环比彩环宽 2px：白笔/浅色在浅色盘面上也有轮廓（外沿 41）。
         _scratch.Color = theme.PanelBorder;
@@ -5813,9 +5812,8 @@ internal sealed partial class OverlayWindow : IDisposable
         _scratch.Color = ringCol;
         _ctx.DrawEllipse(new Ellipse(c, ringMid, ringMid), _scratch, ringW);
 
-        // 中心功能图标：28px 外接圆 19.8，离色环内沿 34 还有 14.2——不碰环，
-        // 和原图“红”字（约 30px）的视觉重量一致。
-        float iconSz = 28f * dpi;
+        // 中心功能图标：30px 外接圆 21.2，离色环内沿 36 还有 14.8——不碰环。
+        float iconSz = 30f * dpi;
         _scratch.Color = theme.Text;
         DrawIcon(centerIcon, c.X - iconSz * 0.5f, c.Y - iconSz * 0.5f, iconSz, _scratch);
 
