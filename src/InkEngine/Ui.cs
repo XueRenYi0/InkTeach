@@ -328,6 +328,10 @@ public interface IEngineCommands
     void SetDash(StrokeDash dash);
     void Undo();
     void Redo();
+    /// <summary>
+    /// 清空**当前页 / 当前幻灯片 / 当前这一屏**的墨迹（橡皮带按住 0.8 秒）。
+    /// 整份文档 / 演示文稿的清空走翻页条菜单，不从这里。
+    /// </summary>
     void Clear();
     /// <summary>
     /// 穿透开关（「鼠标 / 让给下层」那一格）。**开** = 点击交给下层程序；

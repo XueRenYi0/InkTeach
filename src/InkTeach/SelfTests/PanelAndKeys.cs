@@ -2713,6 +2713,23 @@ internal sealed partial class App
                   $"显示 {ui.VisibleCountForTest} 格，色片 {ui.SwatchCountForTest} 个，"
                   + $"粗细按钮 = {ui.BandHasWidthButtonForTest}");
 
+            // 4 格自定义 + 橡皮：清空必须在；滑条/粗细按钮让位
+            Host.Commands.SetTool(Tool.PixelEraser);
+            ui.SelectBandCellForTest(6);
+            SettleFrames(200);
+            var act4 = ui.ActionRectForTest;
+            Check("4 格自定义：橡皮带保留「清空」",
+                  !act4.IsEmpty && act4.MaxX - act4.MinX >= 50f,
+                  $"按钮宽 {act4.MaxX - act4.MinX:F0}（0 = 没有）");
+            Check("4 格自定义：没有滑条 / 粗细按钮（给清空让位）",
+                  ui.EraserSizeHiddenForTest && !ui.BandHasSliderForTest
+                  && !ui.BandHasWidthButtonForTest,
+                  $"隐藏={ui.EraserSizeHiddenForTest}，滑条={ui.BandHasSliderForTest}"
+                  + $"，粗细按钮={ui.BandHasWidthButtonForTest}");
+            Host.Commands.SetTool(Tool.Pen);
+            ui.SelectBandCellForTest(3);
+            SettleFrames(150);
+
             // 再压到真正的 3 格：球 + 鼠标 + 更多
             ui.SetPinForTest(6, false);
             SettleFrames(150);
@@ -2739,6 +2756,25 @@ internal sealed partial class App
             SettleFrames(200);
             Check("3 格粗细按钮：点一下换档", Host.State.Width != widthBefore3,
                   $"{widthBefore3:F0} → {Host.State.Width:F0}");
+
+            // 极简 5 格：橡皮带必须有「清空」+ 3 档小滑条（2026-10-25 用户定）
+            ui.SetProfileForTest(0);
+            Host.Commands.SetTool(Tool.PixelEraser);
+            ui.OpenRailForTest();
+            ui.SelectBandCellForTest(6);
+            SettleFrames(250);
+            var actMini = ui.ActionRectForTest;
+            Check("极简 5 格：橡皮带保留「清空」",
+                  !actMini.IsEmpty && actMini.MaxX - actMini.MinX >= 50f,
+                  $"按钮宽 {actMini.MaxX - actMini.MinX:F0}（0 = 没有）");
+            Check("极简 5 格：橡皮带保留 3 档小滑条",
+                  ui.BandHasSliderForTest && !ui.BandHasWidthButtonForTest
+                  && ui.ActiveGradeCountForTest(Tool.PixelEraser) == 3,
+                  $"滑条={ui.BandHasSliderForTest}，粗细按钮={ui.BandHasWidthButtonForTest}"
+                  + $"，档数={ui.ActiveGradeCountForTest(Tool.PixelEraser)}");
+            Host.Commands.SetTool(Tool.Pen);
+            ui.SelectBandCellForTest(3);
+            SettleFrames(150);
 
             // 恢复为全部钉住；后面的偏好落盘用例会再取消“图形”。
             for (int c = 2; c <= 11; c++) ui.SetPinForTest(c, true);

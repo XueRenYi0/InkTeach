@@ -193,11 +193,13 @@ public partial class InkEngine
     /// <summary>
     /// 写文档批注（自动保存开着才写；**空文档不留空文件**——把已有文件删掉就完了，同 PPT 的规矩）。
     /// 关闭文档、节流（<see cref="StepDocAutoSave"/>）都走这里。
+    /// `force=true`：不管自动保存开关都写——「清空当前页」要立刻把剩下的页落盘，
+    /// 否则关掉自动保存时，重开又回到清空前。
     /// </summary>
-    internal void SaveDocInk()
+    internal void SaveDocInk(bool force = false)
     {
         if (DocStoreKey.Length == 0) return;
-        if (!PptAutoSaveOn) return;
+        if (!force && !PptAutoSaveOn) return;
         try
         {
             var strokes = Doc.Strokes;

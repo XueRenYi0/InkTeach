@@ -984,11 +984,18 @@ public sealed partial class FullUi : IOverlayUi
     };
 
     /// <summary>
+    /// 4 格自定义时，橡皮带让位给“面积擦 / 整笔擦 / 清空”三样：
+    /// 连 30px 的粗细按钮也不画，避免把两个模式段压到 20 多像素
+    /// （2026-10-25 用户定：4 格砍掉滑条，保清空）。
+    /// </summary>
+    private bool EraserSizeHidden => _bandCell == 6 && VisibleCount() <= 4;
+
+    /// <summary>
     /// 4 格及以下不再塞滑条，改成一颗“粗细”按钮：点一下循环当前工具的有效档位。
     /// 3 格时色片也降到 3 个，保证每个仍有可点的宽度。
     /// </summary>
     private bool BandHasWidthButton =>
-        _bandCell is 3 or 4 or 5 or 6 && VisibleCount() <= 4;
+        !EraserSizeHidden && (_bandCell is 3 or 4 or 5 or 6) && VisibleCount() <= 4;
 
     private const float WidthButtonW = 30f;
     private const float WidthButtonGap = 8f;
@@ -1252,7 +1259,7 @@ public sealed partial class FullUi : IOverlayUi
     /// 315 宽）里"板色 + 底纹 + 间距"已经占满，塞不下 146 宽的滑条——所以退到紧凑布局时
     /// 滑条一起去掉（用户 2026-09-27 选的口径：极简档"翻页不要，保留黑白色，底纹 间距"）。
     /// </summary>
-    private bool BandHasSlider => !BandHasWidthButton
+    private bool BandHasSlider => !EraserSizeHidden && !BandHasWidthButton
         && (_bandCell == 2 ? !BoardCompactBand : _bandCell is 3 or 4 or 5 or 6);
     /// <summary>
     /// 上带里有几段。白板那一格取自 <see cref="BoardBand"/>（完整 8 段 / 紧凑 5 段，
@@ -1616,9 +1623,9 @@ public sealed partial class FullUi : IOverlayUi
         9 => BandAction.PasteImage,   // 截图那条：把剪贴板里的东西粘进来（8.3.0 从分段里拆出来）
         _ => BandAction.None,
     };
-    // 极简 5 格不显示橡皮的清屏动作；功能仍在完整档，不能误删。
-    private BandAction CurAction =>
-        _bandCell == 6 && VisibleCount() <= 5 ? BandAction.None : ActionOf(_bandCell);
+    // 橡皮的“清空”始终在：极简 5 格也必须有（2026-10-25 用户定）。
+    // 它只清当前页/当前屏；整份清空在翻页条菜单。
+    private BandAction CurAction => ActionOf(_bandCell);
 
     private const float ActionW = 92f;
     /// <summary>
@@ -1632,7 +1639,7 @@ public sealed partial class FullUi : IOverlayUi
     private const float ActionWNarrow = 46f;
 
     /// <summary>
-    /// 「清除全部墨迹」那一档的宽（**六个字** + 图标；2026-10-14 从"清空"改名后加的）。
+    /// 「清空墨迹」那一档的宽（**四个字** + 图标；2026-10-25 从“清除全部墨迹”改名）。
     /// 宽一点不会挤坏带子：段和滑条是按剩余宽度等比缩的（见 SegmentRect）。
     /// </summary>
     private const float ActionWClear = 128f;
@@ -1759,8 +1766,10 @@ public sealed partial class FullUi : IOverlayUi
         IconAtlas.DrawCentered(ctx, paste ? "image" : clear ? "broom" : "selectAll", iconBox, 16f, Brush(ctx, ink));
         var labelBox = new RectF { MinX = r.MinX + 28f, MinY = r.MinY, MaxX = r.MaxX - 6f, MaxY = r.MaxY };
         bool tight = Density <= BandDensity.Compact;
+        // 标签长短按可用宽度降级：极简“清空”，宽档“清空墨迹”。
+        bool clearTight = Density <= BandDensity.Minimal;
         _widgets.Text(ctx, paste ? (tight ? "粘贴" : "粘贴图片")
-                              : clear ? (tight ? "清空" : "清除全部墨迹")
+                              : clear ? (clearTight ? "清空" : "清空墨迹")
                               : "全选",
                       labelBox, 12.5f, Brush(ctx, InkCol));
 
@@ -2600,8 +2609,8 @@ public sealed partial class FullUi : IOverlayUi
                 }
                 break;
             }
-            case 6:                       // 整笔擦 / 面积擦 —— 引擎里是**两个工具**
-                _host.Commands.SetTool(i == 0 ? Tool.Eraser : Tool.PixelEraser);
+            case 6:                       // 面积擦 / 整笔擦 —— 引擎里是**两个工具**
+                _host.Commands.SetTool(i == 0 ? Tool.PixelEraser : Tool.Eraser);
                 break;
             case 7:                       // 矩形框选 / 自由套索
                 _host.Commands.SetSelectMode(i == 0 ? SelectMode.Rect : SelectMode.Lasso);
@@ -5464,10 +5473,11 @@ public sealed partial class FullUi : IOverlayUi
 
     private string SegmentLabel(int i) => _bandCell switch
     {
-        // 窄档两字：笔擦 / 面擦 / 清空（绝不缩成单个“清”，歧义太大）。
+        // 窄档两字：面擦 / 笔擦 / 清空（绝不缩成单个“清”，歧义太大）。
+        // 顺序按用户优先级：面积擦第一，整笔擦第二。
         6 => Density <= BandDensity.Compact
-                ? (i == 0 ? "笔擦" : "面擦")
-                : (i == 0 ? "整笔擦" : "面积擦"),
+                ? (i == 0 ? "面擦" : "笔擦")
+                : (i == 0 ? "面积擦" : "整笔擦"),
         7 => i == 0 ? "矩形" : "套索",
         // 截图：名字照微信那套（8.3.1）——"截图" = 屏幕原样（连我们的板书一起），
         // "隐藏窗口截图" = 先把我们这层藏起来，拍到的只有下层内容。
@@ -5480,7 +5490,7 @@ public sealed partial class FullUi : IOverlayUi
     private bool IsSegmentActive(in UiState st, int i) => _bandCell switch
     {
         2 => BoardSegAt(i).Kind == BoardSegKind.Color && BoardColorIs(st, BoardSegAt(i).Idx),
-        6 => i == 0 ? st.Tool == Tool.Eraser : st.Tool == Tool.PixelEraser,
+        6 => i == 0 ? st.Tool == Tool.PixelEraser : st.Tool == Tool.Eraser,
         7 => i == 0 ? st.SelectMode == SelectMode.Rect : st.SelectMode == SelectMode.Lasso,
         8 => i >= 0 && i < ShapeSegmentCount && st.Tool == ShapeToolAt(i),
         9 => i == (st.CaptureHideInk ? 1 : 0),     // 截图：当前是哪一种截法就高亮哪一段
@@ -5899,7 +5909,7 @@ public sealed partial class FullUi : IOverlayUi
                 3 => (c.Tip, Key(KeyAction.ToolPen), "已经是笔 → 再按换颜色"),
                 4 => (c.Tip, Key(KeyAction.ToolHighlighter), ""),
                 5 => (c.Tip, Key(KeyAction.ToolLaser), ""),
-                6 => (c.Tip, Key(KeyAction.ToolEraser), "再按切「整笔 / 面积」"),
+                6 => (c.Tip, Key(KeyAction.ToolEraser), "再按切「面积擦 / 整笔擦」"),
                 7 => (c.Tip, Key(KeyAction.ToolMarquee), "再按切「矩形 / 套索」，双击 = 全选"),
                 8 => (c.Tip, "", "22 种图形都在上带里挑"),
                 9 => (c.Tip, Key(KeyAction.ToolCapture), ""),
@@ -5920,8 +5930,8 @@ public sealed partial class FullUi : IOverlayUi
         if (id == 400) return CurAction switch
         {
             // 清除全部墨迹（2026-10-14 统一命名）：和翻页条菜单那一项是同一个动作。
-            BandAction.Clear => ("清除全部墨迹", Key(KeyAction.Clear),
-                                 "按住 0.8 秒；整份文档 / 演示文稿 / 整张板书的全部批注，可撤销"),
+            BandAction.Clear => ("清空墨迹", Key(KeyAction.Clear),
+                                 "按住 0.8 秒；只清当前页 / 当前幻灯片 / 当前这一屏；可撤销"),
             // 全选 / 粘贴图片：段上已经写了字、点一下就知道，不配（收窄）
             BandAction.CloseBoard => ("关闭白板", Key(KeyAction.ToggleBoard), "只关白板，墨迹留着"),
             _ => default,
@@ -6392,6 +6402,8 @@ public sealed partial class FullUi : IOverlayUi
     internal float SwatchWidthForTest(int i) => SwatchRect(i).MaxX - SwatchRect(i).MinX;
     internal int ActiveGradeCountForTest(Tool tool) => ActiveWidthGrades(tool).Length;
     internal bool BandHasWidthButtonForTest => BandHasWidthButton;
+    internal bool BandHasSliderForTest => BandHasSlider;
+    internal bool EraserSizeHiddenForTest => EraserSizeHidden;
     internal RectF WidthButtonRectForTest => WidthButtonRect();
     internal void TogglePinForTest(int cell) => TogglePin(cell);
     internal void SetPinForTest(int cell, bool pinned)

@@ -713,6 +713,30 @@ internal sealed partial class App
             Doc.AddStroke(mark);
             Check("文档槽里有了 1 笔（桌面槽不受影响）", Doc.Strokes.Count == 1, $"{Doc.Strokes.Count}");
 
+            // 橡皮「清空墨迹」= 只清当前页（2026-10-25 用户定）：第 2 页那笔必须留着
+            var page2 = DocView.At(1).Rect;
+            var mark2 = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                                     Color = new Color4(0f, 0.5f, 1f, 1f), Width = 6f };
+            mark2.AddPoint(page2.MinX + 120f, page2.MinY + 160f, 1f, 0);
+            mark2.AddPoint(page2.MinX + 260f, page2.MinY + 240f, 1f, 0);
+            Doc.AddStroke(mark2);
+            Check("（准备）第 2 页也写 1 笔", Doc.Strokes.Count == 2, $"{Doc.Strokes.Count}");
+            ClearCurrentPageFromUi();
+            SettleFrames(150);
+            Check("清空墨迹：文档只清当前页（第 1 页）",
+                  Doc.Strokes.Count == 1 && Doc.Strokes.Contains(mark2),
+                  $"{Doc.Strokes.Count} 条（第 2 页那笔应在）");
+            UndoFromUi();
+            SettleFrames(150);
+            Check("清空墨迹：撤销后第 1 页那笔回来", Doc.Strokes.Count == 2,
+                  $"{Doc.Strokes.Count} 条");
+            // 收掉测试用的第 2 页那笔，后面的自动保存/重开仍按“1 笔”算
+            Doc.ClearRect(new RectF
+            {
+                MinX = page2.MinX, MinY = page2.MinY, MaxX = page2.MaxX, MaxY = page2.MaxY,
+            });
+            SettleFrames(100);
+
             // 动作同菜单第 2 项（自动保存开关默认开）+ 节流走一拍
             SetAutoSaveIntervalForTest(1);
             StepDocAutoSave();

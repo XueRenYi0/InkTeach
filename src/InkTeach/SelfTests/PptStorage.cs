@@ -580,6 +580,29 @@ internal sealed partial class App
         Check("页面条数字（界面显示 n/N 用）",
               PptSlide == 1 && PptTotal == 3, $"{PptSlide}/{PptTotal}");
 
+        // ---- ③b 橡皮「清空墨迹」= 只清**当前页**（2026-10-25 用户定）----
+        // 当前在第 1 页（2 笔），第 2 页有 1 笔；清完第 1 页，第 2 页必须还在。
+        ClearCurrentPageFromUi();
+        SettleFrames(150);
+        Check("清空墨迹：只清当前页（第 1 页）", Doc.Strokes.Count == 0,
+              $"{Doc.Strokes.Count} 条");
+        fake.Slide = 2; fake.SlideId = 257;
+        Step();
+        Check("清空墨迹：第 2 页那 1 笔还在", Doc.Strokes.Count == 1,
+              $"{Doc.Strokes.Count} 条");
+        fake.Slide = 1; fake.SlideId = 256;
+        Step();
+        UndoFromUi();
+        SettleFrames(150);
+        Check("清空墨迹：撤销后第 1 页 2 笔回来", Doc.Strokes.Count == 2,
+              $"{Doc.Strokes.Count} 条");
+        fake.Slide = 2; fake.SlideId = 257;
+        Step();
+        Check("清空墨迹：撤销后第 2 页仍是 1 笔", Doc.Strokes.Count == 1,
+              $"{Doc.Strokes.Count} 条");
+        fake.Slide = 1; fake.SlideId = 256;
+        Step();
+
         // ---- ④ 清除全部墨迹 = 清掉**所有页** + 一步撤销（2026-10-14 用户定的统一口径）----
         ClearAllInkFromUi();
         SettleFrames(150);

@@ -2922,8 +2922,11 @@ public partial class InkEngine
         if (int.TryParse(GetUiPref("w2.pixel"), out int wPixel2) && wPixel2 >= 0 && wPixel2 < PixelEraserWidthPresets.Length)
         { PixelEraserWidthIndex = wPixel2; PixelEraserWidthLogical = PixelEraserWidthPresets[wPixel2]; }
         else if (MigrateWidthPref("w.pixel", new[] { 46f, 93f, 150f }, PixelEraserWidthPresets, ref PixelEraserWidthIndex, ref PixelEraserWidthLogical)) { }
-        // 上次用的橡皮形态（整笔擦 / 面积擦）
-        if (GetUiPref("eraserKind") == "pixel") _eraserKind = Tool.PixelEraser;
+        // 上次用的橡皮形态（面积擦 / 整笔擦）。新用户默认面积擦（2026-10-25 用户定），
+        // 老用户仍按上次记忆——两种 pref 都要认，不能只认 "pixel"。
+        string eraserPref = GetUiPref("eraserKind");
+        if (eraserPref == "whole") _eraserKind = Tool.Eraser;
+        else if (eraserPref == "pixel") _eraserKind = Tool.PixelEraser;
         // 上次用的线型（实线 / 虚线 / 点线）
         if (int.TryParse(GetUiPref("lineDash"), out int dash) && dash >= 0 && dash <= 2)
             LineDash = (StrokeDash)dash;
@@ -10233,8 +10236,9 @@ public partial class InkEngine
             case KeyAction.Undo: Doc.Undo(); Laser.Clear(); break;
             case KeyAction.Redo: Doc.Redo(); break;
             case KeyAction.Copy: CopySelectionToClipboard(); break;
-            // 键盘这一条和橡皮带那个按钮是**同一个动作**（清除全部墨迹；2026-10-14 统一）。
-            case KeyAction.Clear: ClearAllInkFromUi(); break;
+            // 键盘这一条 = 橡皮带那个「清空墨迹」：只清当前页；
+            // 整份文档/演示文稿的清空在翻页条菜单（2026-10-25 拆开）。
+            case KeyAction.Clear: ClearCurrentPageFromUi(); break;
             case KeyAction.ToggleBoard: SetBoardFromUi(!BoardOn); break;
             case KeyAction.ToggleHud: ShowHud = !ShowHud; break;
             case KeyAction.CycleWidth: CycleWidth(); break;
@@ -11364,8 +11368,8 @@ public partial class InkEngine
     ///   · **PPT**：这份演示文稿**所有页**的批注（含盘上缓存；不动桌面板书、不动"播到第几页"）；
     ///   · **文档（PDF/图片）**：这份文档**所有页**的批注（含盘上缓存；不动桌面板书）；
     ///   · **白板 / 桌面（当前这一槽）**：整张画布（含翻过的屏）——只清当前所在的那一槽，另一槽不动。
-    /// 三个场景都**可撤销**（一步回到清空前）；两个入口调它：
-    /// 橡皮带那个按住 0.8 秒的按钮（`IEngineCommands.Clear`）和翻页条菜单那一项。
+    /// 三个场景都**可撤销**（一步回到清空前）。2026-10-25 起**只剩翻页条菜单**这个入口：
+    /// 橡皮带的「清空墨迹」只清当前页（见 <see cref="ClearCurrentPageFromUi"/>）。
     /// </summary>
     internal void ClearAllInkFromUi()
     {
@@ -11405,6 +11409,85 @@ public partial class InkEngine
         Laser.Clear();
         _dirty = true;
         NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 「清空墨迹」：只清**当前页 / 当前幻灯片 / 当前这一屏**。
+    ///
+    /// 和 <see cref="ClearAllInkFromUi"/> 的分工（2026-10-25 用户定）：
+    ///   · 橡皮带里的按钮、`Ctrl+Shift+C` → 这里，只清眼前这一页；
+    ///   · 翻页条菜单的「清除全部墨迹」→ 那份，整份文档 / 演示文稿 / 整块板书。
+    ///
+    /// 三个场景都一步撤销。文档和 PPT 的盘上缓存只动当前页：
+    ///   · PPT 用 <see cref="PptStore.DeletePage"/>，不碰别的幻灯片；
+    ///   · 文档是一份文件，清完当前页后把剩下的页**立即写回**（`force`），
+    ///     不能整份删，否则别的页也没了。
+    /// </summary>
+    internal void ClearCurrentPageFromUi()
+    {
+        ExitReplayForEdit("清空墨迹");
+
+        int n = 0;
+        if (BoardOn)
+        {
+            n = Doc.ClearRect(CurrentScreenRect());
+        }
+        else if (PptMode)
+        {
+            int key = Doc.PageKey;
+            n = Doc.Strokes.Count;
+            if (n > 0)
+            {
+                Doc.Clear();
+                // 0 号页是桌面批注，不属于演示文稿，不删盘。
+                if (key != 0 && _pptKey.Length > 0) PptStore.DeletePage(_pptKey, key);
+            }
+        }
+        else if (DocView.IsOpen)
+        {
+            var vp = ViewportCanvas;
+            int idx = DocView.CurrentIndex(vp.MinY, vp.MaxY);
+            if (idx < 0) idx = DocView.FirstAtOrAfter(vp.MinY);
+            if (idx >= DocView.Count) idx = DocView.Count - 1;
+            var page = DocView.At(idx);
+            if (page != null)
+            {
+                n = Doc.ClearRect(page.Rect);
+                if (n > 0) SaveDocInk(force: true);
+            }
+        }
+        else
+        {
+            // 桌面批注：当前这一屏，和没有白板时的“屏页”一致。
+            n = Doc.ClearRect(CurrentScreenRect());
+        }
+
+        Laser.Clear();
+        _dirty = true;
+        SetInkStatus(n > 0
+            ? $"已清空当前页（{n} 个对象），Ctrl+Z 可撤销"
+            : "当前页没有墨迹");
+        Console.WriteLine(n > 0
+            ? $"[清空] 当前页/屏：{n} 个对象（可撤销）"
+            : "[清空] 当前页/屏：本来就没有墨迹");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 当前“屏页”在画布上的矩形：白板/桌面按 <see cref="ScreenIndex"/> 取一屏。
+    /// 文档和 PPT 不用它（各有自己的页矩形 / 当前页）。
+    /// </summary>
+    private RectF CurrentScreenRect()
+    {
+        int idx = Math.Max(1, ScreenIndex);
+        float top = _virtualY + (idx - 1) * PageHeightCanvas;
+        return new RectF
+        {
+            MinX = _virtualX,
+            MinY = top,
+            MaxX = _virtualX + _virtualW,
+            MaxY = top + PageHeightCanvas,
+        };
     }
 
     internal void QuitFromUi() => _quit = true;
@@ -15194,7 +15277,7 @@ public partial class InkEngine
     }
 
     /// <summary>上次用的橡皮形态（整笔擦 / 面积擦）——按 Ctrl+E 时切回它，见 SetUiPref("eraserKind")。</summary>
-    private Tool _eraserKind = Tool.Eraser;
+    private Tool _eraserKind = Tool.PixelEraser;
 
     /// <summary>自检用：设置"记住的橡皮种类"（三指 / 手掌擦跟随它，和鼠标同源）。</summary>
     internal Tool EraserKindForTest { get => _eraserKind; set => _eraserKind = value; }

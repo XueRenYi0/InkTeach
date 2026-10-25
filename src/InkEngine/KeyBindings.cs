@@ -368,7 +368,7 @@ internal sealed class KeyMap
         KeyAction.Undo => "撤销",
         KeyAction.Redo => "重做",
         KeyAction.Copy => "复制选中",
-        KeyAction.Clear => "清除全部墨迹",
+        KeyAction.Clear => "清空当前页墨迹",
         KeyAction.ToggleHud => "性能面板开关",
         KeyAction.CycleWidth => "切换当前工具粗细",
         KeyAction.ToggleKeyboardMode => "批注键盘模式开关",
@@ -549,7 +549,7 @@ internal sealed class KeyMap
         // 又回到"冲突"的老问题）。
         m.Add(A, KeyAction.CycleWidth, "Ctrl+6", "切成当前工具的下一档粗细");
         m.Add(A, KeyAction.SplitErased, "Ctrl+8", "把选中的、被擦断的笔迹拆成独立对象（只服务老存档）");
-        m.Add(A, KeyAction.Clear, "Ctrl+Shift+C", "清空整页（可撤销）");
+        m.Add(A, KeyAction.Clear, "Ctrl+Shift+C", "清空当前页墨迹（可撤销；整份清空在翻页条菜单）");
         // 白板开关（2026-10-05 用户定）：和点面板白板格同一条命令（`SetBoardFromUi`，
         // 开板会顺手退穿透）；**只在批注内**——放映时白板归 PptBar 那套，不抢全局键。
         m.Add(A, KeyAction.ToggleBoard, "Ctrl+B", "开/关白板（和点白板格同一条命令）");

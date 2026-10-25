@@ -118,7 +118,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetDash(StrokeDash dash) => _engine.SetDashFromUi(dash);
     public void Undo() => _engine.UndoFromUi();
     public void Redo() => _engine.RedoFromUi();
-    public void Clear() => _engine.ClearAllInkFromUi();
+    public void Clear() => _engine.ClearCurrentPageFromUi();
     public void SetPassThrough(bool on) => _engine.SetPassThroughFromUi(on, toPen: !on);
     public void SetAutoStart(bool on) => _engine.SetAutoStartFromUi(on);
     public void RefreshAutoStart() => _engine.RefreshAutoStartFromUi();
@@ -195,7 +195,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
         if (p == null) return;
         _pending = null;
 
-        if (p.Clear) _engine.ClearAllInkFromUi();
+        if (p.Clear) _engine.ClearCurrentPageFromUi();
         if (p.Quit) _engine.QuitFromUi();
     }
 }

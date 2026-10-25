@@ -407,7 +407,7 @@ to delete the old device card for that install ID. See [PRIVACY.md](PRIVACY.md).
 | Global | `Ctrl+Alt+Shift+T` pass-through (**press again to return to the pen, 9.3.2**) ｜ `Ctrl+Alt+Shift+X` quit ｜ `Ctrl+Alt+Shift+Q` radial palette (hold & flick; **works in pass-through too** — picking a sector exits it) |
 | In-app | `Ctrl+P` pen ｜ `Ctrl+I` highlighter ｜ `Ctrl+L` laser ｜ `Ctrl+E` eraser ｜ `Ctrl+M` select ｜ `Ctrl+Shift+A` screenshot |
 | Editing | `Ctrl+Z / Y` (also `Ctrl+Shift+Z`) undo / redo ｜ `Ctrl+A` select all ｜ `Ctrl+C / V` copy / paste ｜ `Delete / Backspace` ｜ `Esc` ｜ arrows nudge (`Shift` ×10; **with nothing selected, `←→` flip pages and `↑↓` scroll**) ｜ `Ctrl+= / Ctrl+-` scale selection (a burst merges into one undo step) |
-| Other | `Ctrl+6` width ｜ `Ctrl+B` toggle board ｜ `Ctrl+Shift+C` clear ｜ `PageUp / PageDown` page |
+| Other | `Ctrl+6` width ｜ `Ctrl+B` toggle board ｜ `Ctrl+Shift+C` clear current page ｜ `PageUp / PageDown` page |
 
 Pressing the same tool key again only changes colour for pen/highlighter; eraser (whole-stroke/area)
 and select (rectangle/lasso) subtypes are picked from the panel band. During a slideshow the tool

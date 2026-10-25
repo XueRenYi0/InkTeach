@@ -6112,8 +6112,9 @@ internal sealed class ClearAction : EditAction
 /// 而"一份演示文稿的所有页"跨多个页槽——只能自己记住每一页的原内容，
 /// 撤销时逐页装回去（走动 <see cref="InkDocument.LoadPageContent"/>）。
 ///
-/// 用户 2026-10-14 定的口径：橡皮带那个「清除全部墨迹」按钮和翻页条菜单里那一项
-/// 是**同一个动作**，都要可撤销（清一节课的批注不能是不可逆的破坏）。
+/// 2026-10-14 定的是“可撤销”；2026-10-25 又把入口拆开：
+/// **只有翻页条菜单**还走这个整份清空；橡皮带里的「清空墨迹」只清当前页
+/// （见 <see cref="InkDocument.ClearRect"/>），两者都必须可撤销。
 /// </summary>
 internal sealed class ClearSlidesAction : EditAction
 {
@@ -7293,6 +7294,32 @@ internal sealed class InkDocument
         act.Removed.AddRange(Strokes);
         ClearStrokes();
         Commit(act);
+    }
+
+    /// <summary>
+    /// 「清空墨迹」：只删与 <paramref name="rect"/> 相交的**整笔**（当前页 / 当前这一屏）。
+    /// 不切笔、不碰矩形外的对象；一步撤销。返回删掉的对象数。
+    /// </summary>
+    public int ClearRect(RectF rect)
+    {
+        if (Strokes.Count == 0) return 0;
+        if (rect.MaxX <= rect.MinX || rect.MaxY <= rect.MinY) return 0;
+
+        var act = new RemoveStrokesAction();
+        for (int i = 0; i < Strokes.Count; i++)
+        {
+            var s = Strokes[i];
+            if (s == null) continue;
+            var b = s.PaddedBounds;
+            if (b.MaxX < rect.MinX || b.MinX > rect.MaxX ||
+                b.MaxY < rect.MinY || b.MinY > rect.MaxY) continue;
+            act.Items.Add((i, s));
+        }
+        if (act.Items.Count == 0) return 0;
+
+        foreach (var it in act.Items) RemoveStroke(it.stroke);
+        Commit(act);
+        return act.Items.Count;
     }
 
     /// <summary>

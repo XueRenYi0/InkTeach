@@ -205,6 +205,36 @@ internal sealed partial class App
             Check("独立槽：再进白板，白板那笔还在",
                   Doc.Strokes.Count == 1 && Doc.Strokes[0] == b1, $"{Doc.Strokes.Count} 条");
 
+            // 橡皮「清空墨迹」= 只清当前这一屏（2026-10-25 用户定），下一屏必须留着
+            ViewOffsetY = 0f;
+            SettleFrames(100);
+            var b2 = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(1f, 0.4f, 0f, 1f), Width = 5f,
+            };
+            b2.AddPoint(500f, _virtualY + PageHeightCanvas + 300f, 1f, 0);
+            b2.AddPoint(560f, _virtualY + PageHeightCanvas + 320f, 1f, 6);
+            Doc.AddStroke(b2);
+            SettleFrames(100);
+            ClearCurrentPageFromUi();
+            SettleFrames(120);
+            Check("清空墨迹：白板只清当前屏，下一屏还在",
+                  Doc.Strokes.Count == 1 && Doc.Strokes.Contains(b2),
+                  $"{Doc.Strokes.Count} 条（下一屏那笔应在）");
+            UndoFromUi();
+            SettleFrames(120);
+            Check("清空墨迹：撤销把当前屏那笔找回来",
+                  Doc.Strokes.Count == 2 && Doc.Strokes.Contains(b1) && Doc.Strokes.Contains(b2),
+                  $"{Doc.Strokes.Count} 条");
+            // 把测试用的第二屏那笔收掉，后面的“按槽清空”仍按 1 笔算
+            Doc.ClearRect(new RectF
+            {
+                MinX = _virtualX, MinY = _virtualY + PageHeightCanvas,
+                MaxX = _virtualX + _virtualW, MaxY = _virtualY + PageHeightCanvas * 2f,
+            });
+            SettleFrames(100);
+
             // 清空按槽：在桌面清空，白板不受影响
             SetBoardFromUi(false);
             SettleFrames(120);
