@@ -5175,8 +5175,8 @@ internal sealed partial class App : InkEngine.InkEngine
         bool ok1 = ScreenProbe.SaveBmp(path, (int)_virtualX, (int)_virtualY,
                                        (int)_virtualW, (int)_virtualH);
 
-        // ② 划向「红」（正东）
-        RadialMoveForTest(cx + 120f, cy);
+        // ② 划向「红笔」（正北；v3 起北格固定红，东西才是翻色）
+        RadialMoveForTest(cx, cy - 120f);
         SettleFrames(300);
         string path2 = System.IO.Path.ChangeExtension(path, null) + "-red.bmp";
         bool ok2 = ScreenProbe.SaveBmp(path2, (int)_virtualX, (int)_virtualY,

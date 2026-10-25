@@ -5703,9 +5703,12 @@ internal sealed partial class OverlayWindow : IDisposable
     internal const float RadialCenterLogical = 34f;
     internal const float RadialSeamDeg = 2f;          // 扇格之间的缝（每边 1°）
 
-    /// <summary>第 i 个扇区是不是"颜色"（黑/红/蓝 = 1/2/3）——画法/选中态不同。</summary>
+    /// <summary>
+    /// 第 i 个扇区是不是"彩笔"（画彩色 `penFilled`、选中用淡强调底）。
+    /// 2026-10-25 v3：只有北（固定红）和东/西（下一色/上一色）是彩笔。
+    /// </summary>
     private static readonly bool[] RadialSectorIsColor =
-        { false, true, true, true, false, false, false, false };
+        { true, false, true, false, false, false, true, false };
 
     // "0 号扇格"的几何缓存（以盘心为原点、北朝上）；dpi 变了才重建。
     private ID2D1PathGeometry _radialWedgeGeo;
@@ -5719,7 +5722,6 @@ internal sealed partial class OverlayWindow : IDisposable
         float R = RadialPlateRadiusLogical * dpi;
         float r0 = RadialInnerRadiusLogical * dpi;
         float ring = RadialIconRingLogical * dpi;
-        float rc = RadialCenterLogical * dpi;
         var c = new Vector2(app.RadialCenterX, app.RadialCenterY);
         var theme = app.FloatingTheme;
         int sel = app.RadialPaletteSector;
@@ -5742,7 +5744,8 @@ internal sealed partial class OverlayWindow : IDisposable
         _scratch.Color = theme.PanelBorder;
         _ctx.DrawEllipse(new Ellipse(c, R, R), _scratch, 1f * dpi);
 
-        // 八格图标（主条同款 Fluent 路径；颜色格 = penFilled 上色）
+        // 八格图标（主条同款 Fluent 路径）。
+        // v3：北 = 固定红；东/西 = “下一支/上一支笔”的实时颜色 + 小箭头；其余 = 工具图标。
         float sz = 24f * dpi;
         for (int i = 0; i < 8; i++)
         {
@@ -5750,9 +5753,15 @@ internal sealed partial class OverlayWindow : IDisposable
             bool on = i == sel;
             if (RadialSectorIsColor[i])
             {
-                // **颜色格不转白**：选中也要看得见"这是红/蓝"（红蓝压实心蓝底会发闷）
-                _scratch.Color = InkPalette.PenBand[i - 1].Color;
+                // **彩笔不转白**：选中也要看得见“这是红/蓝”（红蓝压实心蓝底会发闷）
+                _scratch.Color = i switch
+                {
+                    0 => InkPalette.PenBand[1].Color,        // 北：固定红
+                    2 => app.RadialNextPenColor,             // 东：下一色
+                    _ => app.RadialPrevPenColor,             // 西：上一色
+                };
                 DrawIcon(IconPaths.penFilled, bp.X - sz * 0.5f, bp.Y - sz * 0.5f, sz, _scratch);
+                if (i == 2 || i == 6) DrawCycleArrow(bp, i == 2 ? +1 : -1, dpi, theme);
             }
             else
             {
@@ -5761,15 +5770,32 @@ internal sealed partial class OverlayWindow : IDisposable
             }
         }
 
-        // 中央读数（这是唯一常显的文字）
-        _ctx.FillEllipse(new Ellipse(c, rc, rc), Brush(theme.Panel));
+        // 清屏进度：停在西南扇格 0.8s，沿盘边画一段红弧（到点自动执行）。
+        float clearP = app.RadialClearProgress;
+        if (clearP > 0) DrawRadialClearProgress(c, dpi, clearP);
+
+        // 中央颜色圆（v3：中央不再放文字——用户 2026-10-25 定）。
+        // 白笔/浅色底都看得见：先铺一圈白，再描主题边，最后填当前色。
+        Color4 centerCol;
+        if (app.Tool == Tool.Highlighter)
+            centerCol = new Color4(app.HighlighterCurrent.R, app.HighlighterCurrent.G,
+                                   app.HighlighterCurrent.B, 1f);
+        else
+            centerCol = app.CurrentColor;
+
+        // 橡皮/框选：显示“上次笔色”，压暗，提示“回去还是这个色”。
+        if (app.Tool == Tool.Eraser || app.Tool == Tool.PixelEraser || app.Tool == Tool.Marquee)
+            centerCol = new Color4(centerCol.R, centerCol.G, centerCol.B, 0.45f);
+
+        // R22 + 1.5 白圈 = 23.5，刚好落在 24 的中央死区里：
+        // 视觉上“还在圆里”就等于“还没选中扇区”，不会出现看着没出圈却已经选中的错位。
+        float dotR = 22f * dpi;
+        _scratch.Color = new Color4(1f, 1f, 1f, 0.92f);
+        _ctx.FillEllipse(new Ellipse(c, dotR + 1.5f * dpi, dotR + 1.5f * dpi), _scratch);
         _scratch.Color = theme.PanelBorder;
-        _ctx.DrawEllipse(new Ellipse(c, rc, rc), _scratch, 1f * dpi);
-        string centerText = sel >= 0 ? InkEngine.RadialSectorNames[sel]
-                                     : (app.RadialMovedForDraw ? "取消" : "工具");
-        _scratch.Color = sel >= 0 ? theme.Text : theme.TextMuted;
-        _ctx.DrawText(centerText, RadialCenterFormat(dpi),
-                      new Rect(c.X - rc, c.Y - rc * 0.8f, rc * 2f, rc * 1.6f), _scratch);
+        _ctx.DrawEllipse(new Ellipse(c, dotR + 1.5f * dpi, dotR + 1.5f * dpi), _scratch, 1f * dpi);
+        _scratch.Color = centerCol;
+        _ctx.FillEllipse(new Ellipse(c, dotR, dotR), _scratch);
 
         // 悬停时"浮一行字"：盘外下方的小白条，给一句人话
         if (sel >= 0)
@@ -5809,22 +5835,21 @@ internal sealed partial class OverlayWindow : IDisposable
         bool already = i switch
         {
             0 => app.Tool == Tool.Pen,
+            1 => app.Tool == Tool.Highlighter,
+            3 => app.Tool == Tool.Marquee,
             4 => app.Tool == Tool.Eraser || app.Tool == Tool.PixelEraser,
-            5 => app.Tool == Tool.Marquee,
-            6 => app.Tool == Tool.Highlighter,
-            7 => app.Tool == Tool.Laser,
             _ => false,
         };
         return i switch
         {
-            0 => already ? "已经是笔：换下一色" : "切到笔",
-            1 => "用黑笔",
-            2 => "用红笔",
-            3 => "用蓝笔",
+            0 => already ? "已经是红笔" : "用红笔",
+            1 => already ? "已经是荧光笔：换下一个色" : "切到荧光笔",
+            2 => $"下一色：{app.RadialNextPenName}",
+            3 => already ? "矩形 ⇄ 套索" : "切到框选",
             4 => already ? "整笔擦 ⇄ 面积擦" : "切到橡皮",
-            5 => already ? "矩形 ⇄ 套索" : "切到框选",
-            6 => already ? "已经是荧光笔：换下一色" : "切到荧光笔",
-            _ => already ? "已经是激光笔" : "切到激光笔",
+            5 => "清屏：按住 0.8 秒",
+            6 => $"上一色：{app.RadialPrevPenName}",
+            _ => "撤销一步",
         };
     }
 
@@ -5926,16 +5951,59 @@ internal sealed partial class OverlayWindow : IDisposable
 
     /// <summary>
     /// 呼出盘第 i 格的图标（主条同款 Fluent 路径）：常态 regular、选中 filled。
-    /// 颜色格不走这里——它们是 `penFilled` 上色的"彩笔"，见 <see cref="DrawRadialPalette"/>。
+    /// 彩笔格（0 北 / 2 东 / 6 西）不走这里——它们是 `penFilled` 上色，见 <see cref="DrawRadialPalette"/>。
+    /// 清屏（扫帚）和撤销（undo）没有 filled 版本，选中靠底下的淡强调扇格表达。
     /// </summary>
     private static string RadialIconFor(int i, bool selected) => i switch
     {
-        0 => selected ? IconPaths.penFilled : IconPaths.pen,
+        1 => selected ? IconPaths.highlighterFilled : IconPaths.highlighter,
+        3 => selected ? IconPaths.selectFilled : IconPaths.select,
         4 => selected ? IconPaths.eraserFilled : IconPaths.eraser,
-        5 => selected ? IconPaths.selectFilled : IconPaths.select,
-        6 => selected ? IconPaths.highlighterFilled : IconPaths.highlighter,
-        _ => selected ? IconPaths.laserFilled : IconPaths.laser,   // 7 激光
+        5 => IconPaths.broom,
+        7 => IconPaths.undo,
+        _ => selected ? IconPaths.penFilled : IconPaths.pen,
     };
+
+    /// <summary>
+    /// 东/西格的小箭头：告诉用户“往这个方向是下一色 / 上一色”。
+    /// 画在彩笔图标下方 16 逻辑像素处，只占 8×8，不抢图标、也不加文字。
+    /// </summary>
+    private void DrawCycleArrow(Vector2 iconCenter, int dir, float dpi, UiTheme theme)
+    {
+        // 放到彩笔的“外侧”（东格在右、西格在左），不压笔杆；箭头本身朝外，
+        // “› = 下一色 / ‹ = 上一色”比夹在图标下面更好读。
+        float s = 5f * dpi;
+        float x = iconCenter.X + dir * 14f * dpi;
+        float y = iconCenter.Y;
+        float w = 2.2f * dpi;
+        _scratch.Color = new Color4(theme.Text.R, theme.Text.G, theme.Text.B, 0.85f);
+        if (dir > 0)
+        {
+            _ctx.DrawLine(new Vector2(x - s * 0.55f, y - s), new Vector2(x + s * 0.55f, y), _scratch, w);
+            _ctx.DrawLine(new Vector2(x + s * 0.55f, y), new Vector2(x - s * 0.55f, y + s), _scratch, w);
+        }
+        else
+        {
+            _ctx.DrawLine(new Vector2(x + s * 0.55f, y - s), new Vector2(x - s * 0.55f, y), _scratch, w);
+            _ctx.DrawLine(new Vector2(x - s * 0.55f, y), new Vector2(x + s * 0.55f, y + s), _scratch, w);
+        }
+    }
+
+    /// <summary>清屏扇区的 0.8s 进度弧（沿盘边，红色，到点自动执行）。</summary>
+    private void DrawRadialClearProgress(Vector2 c, float dpi, float p)
+    {
+        float r = 92f * dpi;
+        float a0 = -90f + 45f * 5 - 21.5f;          // 西南扇格左边界
+        float a1 = a0 + 43f * Math.Clamp(p, 0f, 1f);
+        _scratch.Color = new Color4(0.90f, 0.30f, 0.28f, 1f);
+        const int seg = 14;
+        for (int t = 0; t < seg; t++)
+        {
+            float t0 = a0 + (a1 - a0) * t / seg;
+            float t1 = a0 + (a1 - a0) * (t + 1) / seg;
+            _ctx.DrawLine(OnCircle(c, r, t0), OnCircle(c, r, t1), _scratch, 3f * dpi);
+        }
+    }
 
     private static Vector2 OnCircle(Vector2 c, float r, float deg)
     {
@@ -5945,8 +6013,6 @@ internal sealed partial class OverlayWindow : IDisposable
 
     private IDWriteTextFormat _radialHintFmt;
     private float _radialHintPx;
-    private IDWriteTextFormat _radialCenterFmt;
-    private float _radialCenterPx;
 
     /// <summary>悬停那一行字的格式（12px，塞在盘下的小白条里）。</summary>
     private IDWriteTextFormat RadialHintFormat(float dpi)
@@ -5962,21 +6028,6 @@ internal sealed partial class OverlayWindow : IDisposable
             _radialHintPx = px;
         }
         return _radialHintFmt;
-    }
-
-    private IDWriteTextFormat RadialCenterFormat(float dpi)
-    {
-        float px = MathF.Max(12f, MathF.Round(17f * dpi));
-        if (_radialCenterFmt == null || _radialCenterPx != px)
-        {
-            _radialCenterFmt?.Dispose();
-            _radialCenterFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.Bold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
-            _radialCenterFmt.TextAlignment = TextAlignment.Center;
-            _radialCenterFmt.ParagraphAlignment = ParagraphAlignment.Center;
-            _radialCenterPx = px;
-        }
-        return _radialCenterFmt;
     }
 
     /// <summary>

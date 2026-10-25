@@ -15339,6 +15339,8 @@ public partial class InkEngine
     internal const float RadialLockLogical = 36f;
     private const double RadialShowDelayMs = 120;     // 出盘延迟（熟手路：不等盘直接划）
     private const double RadialTimeoutMs = 5000;      // 防呆：按太久没松手就自行取消
+    /// <summary>清屏扇区要停住这么久才执行（和橡皮带的“清空”同一个防误触时长）。</summary>
+    private const double RadialClearHoldMs = 800;
 
     internal bool RadialPaletteActive { get; private set; }
     internal bool RadialPaletteVisible { get; private set; }
@@ -15349,9 +15351,17 @@ public partial class InkEngine
     private bool _radialMoved;                        // 离开过锁定距离（中央文案用）
     private uint _radialVk = 0x51;                    // 呼出键的主键（松手轮询按它查）
 
-    /// <summary>扇区名：画盘、日志、自检共用一份（顺序 = 从北顺时针，V-a）。</summary>
+    /// <summary>清屏扇区（西南）：停住 0.8s 才执行，防止划错就清空整页。</summary>
+    internal const int RadialClearSector = 5;
+    /// <summary>进入清屏扇区的时刻（0 = 没进）。盘上进度条用 <see cref="RadialClearProgress"/>。</summary>
+    private double _radialClearArmedAtMs;
+
+    /// <summary>
+    /// 扇区名：画盘、日志、自检共用一份（顺序 = 从北顺时针）。
+    /// 2026-10-25 v3：红笔居中、东西翻色、四角常用（撤销/荧光/清屏/框选）。
+    /// </summary>
     internal static readonly string[] RadialSectorNames =
-        { "笔", "黑", "红", "蓝", "橡皮", "框选", "荧光笔", "激光" };
+        { "红笔", "荧光笔", "下一色", "框选", "橡皮", "清屏", "上一色", "撤销" };
 
     /// <summary>中央文案要用的"划过又回中心"判据（盘开着时才有意义）。</summary>
     internal bool RadialMovedForDraw => _radialMoved;
@@ -15393,6 +15403,7 @@ public partial class InkEngine
         _radialMoved = false;
         _radialTouchMode = false;              // 键盘/鼠标那套：松手轮询按键
         _radialSticky = false;
+        _radialClearArmedAtMs = 0;
         _radialOpenedAtMs = NowMs;
         RadialCenterX = PointerX;              // 盘心 = 按下的那一刻指针在哪
         RadialCenterY = PointerY;
@@ -15422,6 +15433,7 @@ public partial class InkEngine
         _radialMoved = false;
         _radialTouchMode = true;
         _radialSticky = sticky;
+        _radialClearArmedAtMs = 0;
         _radialOpenedAtMs = NowMs;
         RadialCenterX = x;
         RadialCenterY = y;
@@ -15451,6 +15463,18 @@ public partial class InkEngine
         PointerX = x;
         PointerY = y;
         UpdateRadialSelection();
+
+        // 清屏：点一下只开始/继续 0.8s 确认期，不关盘；到点由 Pump 执行。
+        // 触摸“两指点一下 → 点扇区”没有按住过程，这样也能保留防误触。
+        if (RadialPaletteSector == RadialClearSector)
+        {
+            if (_radialClearArmedAtMs > 0 && NowMs - _radialClearArmedAtMs >= RadialClearHoldMs)
+                CommitRadialPalette(clearConfirmed: true);
+            else
+                _dirty = true;                       // 还在确认期：盘留着，进度条继续走
+            return true;
+        }
+
         CommitRadialPalette();
         return true;
     }
@@ -15474,11 +15498,20 @@ public partial class InkEngine
     }
 
     /// <summary>松手 = 确认。没位移/死区 = 取消（触屏没划动则留盘等点选）；有扇区就执行那条命令。</summary>
-    private void CommitRadialPalette()
+    private void CommitRadialPalette(bool clearConfirmed = false)
     {
         if (!RadialPaletteActive) return;
         UpdateRadialSelection();               // 以松手这一刻的指针为准（快划不丢）
         int sec = RadialPaletteSector;
+
+        // 清屏：必须停满 0.8s（Pump 到点会带 clearConfirmed=true 调进来）。
+        // 划到就松手 = 不清，只提示——比“划错一下整页没了”安全得多。
+        if (sec == RadialClearSector && !clearConfirmed)
+        {
+            CancelRadialPalette("清屏要按住 0.8 秒");
+            ApplyCursor();
+            return;
+        }
 
         // 触屏版：**没划动就松手 = 留在盘上等点选**（Blender marking menu 的那半套；
         // 5s 超时；点扇区/点中心、点盘外都走 RadialPaletteTryPointerDown）。
@@ -15494,6 +15527,7 @@ public partial class InkEngine
         RadialPaletteSector = -1;
         _radialTouchMode = false;
         _radialSticky = false;
+        _radialClearArmedAtMs = 0;
         _dirty = true;
 
         if (sec < 0)
@@ -15511,21 +15545,65 @@ public partial class InkEngine
             if (PassThrough) SetPassThrough(false, restoreBoard: false);
 
             Console.WriteLine($"呼出盘 → {RadialSectorNames[sec]}");
+            // v3（2026-10-25）：北=红笔（固定）、东西=翻色、四角=撤销/荧光/清屏/框选。
             switch (sec)
             {
-                case 0: ToolKeyPress(KeyAction.ToolPen); break;
-                case 1: PickPenColorFromPalette(0); break;
-                case 2: PickPenColorFromPalette(1); break;
-                case 3: PickPenColorFromPalette(2); break;
-                // V-a：南=橡皮、西南=框选、西=荧光笔、西北=激光（2026-09-30 定）
+                case 0: PickPenColorFromPalette(1); break;      // 红笔（PenBand[1]）
+                case 1: ToolKeyPress(KeyAction.ToolHighlighter); break;
+                case 2: CyclePenColor(+1); break;               // 下一色
+                case 3: ToolKeyPress(KeyAction.ToolMarquee); break;
                 case 4: ToolKeyPress(KeyAction.ToolEraser); break;
-                case 5: ToolKeyPress(KeyAction.ToolMarquee); break;
-                case 6: ToolKeyPress(KeyAction.ToolHighlighter); break;
-                case 7: ToolKeyPress(KeyAction.ToolLaser); break;
+                case 5: ClearCurrentPageFromUi(); break;         // 只清当前页；到这里一定停满 0.8s
+                case 6: CyclePenColor(-1); break;                // 上一色
+                case 7: UndoFromUi(); break;                     // 撤销
             }
         }
         ApplyCursor();
         _dirty = true;
+    }
+
+    /// <summary>
+    /// 清屏扇区的 0~1 进度（盘上画进度条）。
+    /// 只有停在清屏扇区、且计时已武装时才大于 0；离开扇区立刻归零。
+    /// </summary>
+    internal float RadialClearProgress =>
+        RadialPaletteSector == RadialClearSector && _radialClearArmedAtMs > 0
+            ? (float)Math.Clamp((NowMs - _radialClearArmedAtMs) / RadialClearHoldMs, 0, 1)
+            : 0f;
+
+    /// <summary>西格要显示的“上一支笔”颜色（当前色不在色带里时从白开始）。</summary>
+    internal Color4 RadialPrevPenColor => PenBandColorAtOffset(-1);
+
+    /// <summary>东格要显示的“下一支笔”颜色（当前色不在色带里时从黑开始）。</summary>
+    internal Color4 RadialNextPenColor => PenBandColorAtOffset(+1);
+
+    /// <summary>盘下提示里的“上一色/下一色”名字。</summary>
+    internal string RadialPrevPenName => InkPalette.PenBand[PenBandOffsetIndex(-1)].Name;
+    internal string RadialNextPenName => InkPalette.PenBand[PenBandOffsetIndex(+1)].Name;
+
+    /// <summary>
+    /// 在 `InkPalette.PenBand` 里按当前笔色找位置再前后挪一格。
+    /// 不着色带（主条自定义色）时：下一色从黑（0）开始、上一色从白（末尾）开始。
+    /// </summary>
+    private int PenBandOffsetIndex(int dir)
+    {
+        int n = InkPalette.PenBand.Length;
+        int idx = -1;
+        for (int i = 0; i < n; i++)
+        {
+            if (ColorNear(CurrentColor, InkPalette.PenBand[i].Color, 0.02f)) { idx = i; break; }
+        }
+        if (idx < 0) idx = dir > 0 ? -1 : 0;
+        return ((idx + dir) % n + n) % n;
+    }
+
+    private Color4 PenBandColorAtOffset(int dir) => InkPalette.PenBand[PenBandOffsetIndex(dir)].Color;
+
+    /// <summary>呼出盘“上一色 / 下一色”：切到笔 + 在色带里前后挪一格（2026-10-25 v3）。</summary>
+    private void CyclePenColor(int dir)
+    {
+        if (Tool != Tool.Pen) SwitchTool(Tool.Pen);
+        SetColorFromUi(PenBandColorAtOffset(dir));
     }
 
     /// <summary>颜色扇区 = "给我这支颜色的笔"（不在笔上就切到笔；穿透互斥等照常态）。</summary>
@@ -15544,6 +15622,7 @@ public partial class InkEngine
         RadialPaletteSector = -1;
         _radialTouchMode = false;
         _radialSticky = false;
+        _radialClearArmedAtMs = 0;
         _dirty = true;
         Console.WriteLine($"呼出盘 → 取消（{why}）");
     }
@@ -15567,6 +15646,7 @@ public partial class InkEngine
             // 自检/摆样：不轮询、不超时，只把盘按出来（出图与状态断言用）。
             if (!RadialPaletteVisible) { RadialPaletteVisible = true; _dirty = true; }
             UpdateRadialSelection();
+            RadialClearHoldDone();
             return;
         }
 
@@ -15577,6 +15657,7 @@ public partial class InkEngine
         }
 
         UpdateRadialSelection();
+        if (RadialClearHoldDone()) return;
 
         // 触屏版（长按呼出）：松手不是按键，而是触点（TouchUpDispatch 里最后一根抬起时确认）。
         if (!_radialTouchMode && (Native.GetAsyncKeyState((int)_radialVk) & 0x8000) == 0)
@@ -15586,6 +15667,16 @@ public partial class InkEngine
         }
         if (NowMs - _radialOpenedAtMs > RadialTimeoutMs)
             CancelRadialPalette("按太久");
+    }
+
+    /// <summary>清屏停满 0.8s → 执行并关盘。返回 true = 盘已经关了。</summary>
+    private bool RadialClearHoldDone()
+    {
+        if (RadialPaletteSector != RadialClearSector) return false;
+        if (_radialClearArmedAtMs <= 0) return false;
+        if (NowMs - _radialClearArmedAtMs < RadialClearHoldMs) return false;
+        CommitRadialPalette(clearConfirmed: true);
+        return true;
     }
 
     /// <summary>按当前指针位置重算扇区（死区 / 锁定距离 / 跨扇区滞回都在这里）。</summary>
@@ -15622,6 +15713,8 @@ public partial class InkEngine
         if (sec != RadialPaletteSector)
         {
             RadialPaletteSector = sec;
+            // 清屏扇区：进入那一刻开始计时（离开立刻取消）。
+            _radialClearArmedAtMs = sec == RadialClearSector ? NowMs : 0;
             _dirty = true;
         }
     }

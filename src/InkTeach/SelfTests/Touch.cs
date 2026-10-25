@@ -367,14 +367,14 @@ internal sealed partial class App
             // 长按要 500ms；合成触点久不喂会被系统自动抬起——每 100ms 原地补一针。
             for (int k = 0; k < 8; k++) { SettleFrames(100); SendTouchesSized(true, (cx - 60, by, 24f), (cx + 60, by, 24f)); }
             bool opened = RadialPaletteActive;
-            // 划向右（正东 = 红）：两指一起右移两段，再松开
-            SendTouchesSized(true, (cx + 60, by, 24f), (cx + 180, by, 24f));
+            // 划向正北（北 = 红笔）：两指一起上移两段，再松开
+            SendTouchesSized(true, (cx - 60, by - 60, 24f), (cx + 60, by - 60, 24f));
             SettleFrames(60);
-            SendTouchesSized(true, (cx + 180, by, 24f), (cx + 300, by, 24f));
+            SendTouchesSized(true, (cx - 60, by - 150, 24f), (cx + 60, by - 150, 24f));
             SettleFrames(60);
-            SendTouchesSized(false, (cx + 180, by, 24f), (cx + 300, by, 24f));
+            SendTouchesSized(false, (cx - 60, by - 150, 24f), (cx + 60, by - 150, 24f));
             SettleFrames(150);
-            Check("两指长按 = 呼出盘；划向右松手 = 红笔",
+            Check("两指长按 = 呼出盘；划向正北松手 = 红笔",
                   opened && !RadialPaletteActive && Tool == Tool.Pen && SameC(CurrentColor, red),
                   $"opened={opened}，active={RadialPaletteActive}，色=({CurrentColor.R:F2},{CurrentColor.G:F2},{CurrentColor.B:F2})");
         }
@@ -386,6 +386,7 @@ internal sealed partial class App
             TouchResetForTest();
             RadialCancelForTest("用例起手");
             Tool = Tool.Pen;
+            Host.Commands.SetColor(InkPalette.PenBand[1].Color);   // 红；下一色 = 蓝
             var blue = InkPalette.PenBand[2].Color;
             float by = cy + 420;
             SendTouchesSized(true, (cx - 60, by, 24f), (cx + 60, by, 24f));
@@ -394,8 +395,8 @@ internal sealed partial class App
             SettleFrames(150);
             bool opened = RadialPaletteActive;           // 轻点 = 留在盘上等点选
             SettleFrames(150);                           // 出盘延迟 120ms 之后再点
-            // 点"东南"扇区（蓝）：径向距离要大于死区、小于半径（96 逻辑 × 2 倍屏 = 192 物理）
-            SendTouches(true, (cx + 130, by + 130));
+            // 点"正东"扇区（下一色）：径向距离要大于死区、小于半径（96 逻辑 × 2 倍屏 = 192 物理）
+            SendTouches(true, (cx + 130, by + 0));
             SettleFrames(120);
             Check("两指轻点 = 呼出盘；点扇区 = 应用并关闭",
                   opened && !RadialPaletteActive && Tool == Tool.Pen && SameC(CurrentColor, blue),

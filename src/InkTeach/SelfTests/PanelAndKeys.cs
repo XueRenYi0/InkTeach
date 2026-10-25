@@ -5394,69 +5394,117 @@ internal sealed partial class App
               !RadialPaletteActive && Host.State.Tool == tool0,
               $"active = {RadialPaletteActive}，工具 = {Host.State.Tool}");
 
-        // ---- ③ 划向正东 =「红」：执行后是红笔 ----
+        // ---- ③ 划向正东 =「下一色」：红 → 蓝 ----
+        Host.Commands.SetTool(Tool.Pen);
+        Host.Commands.SetColor(InkPalette.PenBand[1].Color);   // 红
+        SettleFrames(120);
         RadialOpenForTest(cx, cy);
         RadialMoveForTest(cx + 120f, cy);
-        Check("划向正东 = 选中「红」扇区", RadialPaletteSector == 2, $"扇区 {RadialPaletteSector}");
+        Check("划向正东 = 选中「下一色」扇区", RadialPaletteSector == 2, $"扇区 {RadialPaletteSector}");
         RadialCommitForTest();
-        Check("松手执行：切成红笔",
+        Check("松手执行：红 → 蓝",
               !RadialPaletteActive && Host.State.Tool == Tool.Pen
-              && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
+              && SameCol(Host.State.PaletteBase, InkPalette.PenBand[2].Color),
               $"工具 = {Host.State.Tool}，色 = {Host.State.PaletteBase}");
 
-        // ---- ④ 在别的工具上选颜色 = "给我这支颜色的笔"（切回笔） ----
+        // ---- ④ 在别的工具上点北（红笔）= 切回笔 + 红 ----
         Host.Commands.SetTool(Tool.Eraser);
         SettleFrames(120);
         RadialOpenForTest(cx, cy);
-        RadialMoveForTest(cx + 85f, cy - 85f);          // 东北 = 黑
-        Check("划向东北 = 选中「黑」扇区", RadialPaletteSector == 1, $"扇区 {RadialPaletteSector}");
+        RadialMoveForTest(cx, cy - 120f);               // 北 = 红笔
+        Check("划向正北 = 选中「红笔」扇区", RadialPaletteSector == 0, $"扇区 {RadialPaletteSector}");
         RadialCommitForTest();
-        Check("在橡皮上选颜色：会切回笔并给对应色",
+        Check("在橡皮上点红笔：切回笔 + 红",
               Host.State.Tool == Tool.Pen
-              && SameCol(Host.State.PaletteBase, InkPalette.PenBand[0].Color),
+              && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
               $"工具 = {Host.State.Tool}，色 = {Host.State.PaletteBase}");
 
-        // ---- ⑤ 工具扇区 = 和按 Ctrl+P 同一条命令（已经是它 → 换色） ----
-        Host.Commands.SetTool(Tool.Pen);
-        Host.Commands.SetColor(InkPalette.PenBand[0].Color);
-        SettleFrames(120);
+        // ---- ⑤ 北格固定红：已经是红笔时再点，还是红（不循环） ----
         RadialOpenForTest(cx, cy);
-        RadialMoveForTest(cx, cy - 120f);               // 北 = 笔
-        Check("划向正北 = 选中「笔」扇区", RadialPaletteSector == 0, $"扇区 {RadialPaletteSector}");
+        RadialMoveForTest(cx, cy - 120f);               // 北 = 红笔
         RadialCommitForTest();
-        Check("已经是笔时选「笔」= 连按语义（换下一色）",
+        Check("已经是红笔时再点北：保持红笔（不循环）",
               Host.State.Tool == Tool.Pen
               && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
               $"色 = {Host.State.PaletteBase}");
 
-        // ---- ⑥ 其余扇区各换一次工具（V-a 排序：南=橡皮、西南=框选、西=荧光笔） ----
+        // ---- ⑥ 其余扇区（v3：东北=荧光、南=橡皮、西=上一色、东南=框选、西北=撤销） ----
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx + 85f, cy - 85f);          // 东北 = 荧光笔
+        RadialCommitForTest();
+        Check("划向东北 = 荧光笔", Host.State.Tool == Tool.Highlighter, $"工具 = {Host.State.Tool}");
+
         RadialOpenForTest(cx, cy);
         RadialMoveForTest(cx, cy + 120f);               // 南 = 橡皮
         RadialCommitForTest();
         Check("划向正南 = 橡皮", Host.State.Tool == Tool.Eraser, $"工具 = {Host.State.Tool}");
 
+        Host.Commands.SetTool(Tool.Pen);
+        Host.Commands.SetColor(InkPalette.PenBand[1].Color);   // 红
+        SettleFrames(120);
         RadialOpenForTest(cx, cy);
-        RadialMoveForTest(cx - 85f, cy + 85f);          // 西南 = 框选
+        RadialMoveForTest(cx - 120f, cy);               // 西 = 上一色
+        Check("划向正西 = 选中「上一色」扇区", RadialPaletteSector == 6, $"扇区 {RadialPaletteSector}");
         RadialCommitForTest();
-        Check("划向西南 = 框选", Host.State.Tool == Tool.Marquee, $"工具 = {Host.State.Tool}");
+        Check("上一色：红 → 黑",
+              Host.State.Tool == Tool.Pen
+              && SameCol(Host.State.PaletteBase, InkPalette.PenBand[0].Color),
+              $"色 = {Host.State.PaletteBase}");
 
         RadialOpenForTest(cx, cy);
-        RadialMoveForTest(cx - 120f, cy);               // 西 = 荧光笔
+        RadialMoveForTest(cx + 85f, cy + 85f);          // 东南 = 框选
         RadialCommitForTest();
-        Check("划向正西 = 荧光笔", Host.State.Tool == Tool.Highlighter, $"工具 = {Host.State.Tool}");
+        Check("划向东南 = 框选", Host.State.Tool == Tool.Marquee, $"工具 = {Host.State.Tool}");
+
+        // ---- ⑥.1 西北 = 撤销一步 ----
+        Host.Commands.SetTool(Tool.Pen);
+        SettleFrames(120);
+        int strokesBefore = Doc.Strokes.Count;
+        SendMouse((int)cx, (int)(cy + 140f), 0);
+        SettleFrames(60);
+        SendMouse((int)cx, (int)(cy + 140f), Native.MOUSEEVENTF_LEFTDOWN);
+        SettleFrames(60);
+        SendMouse((int)(cx + 80f), (int)(cy + 160f), 0);
+        SettleFrames(60);
+        SendMouse((int)(cx + 80f), (int)(cy + 160f), Native.MOUSEEVENTF_LEFTUP);
+        SettleFrames(200);
+        bool drew = Doc.Strokes.Count > strokesBefore;
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx - 85f, cy - 85f);          // 西北 = 撤销
+        Check("划向西北 = 选中「撤销」扇区", RadialPaletteSector == 7, $"扇区 {RadialPaletteSector}");
+        RadialCommitForTest();
+        Check("撤销：刚才那一笔没了",
+              drew && Doc.Strokes.Count == strokesBefore,
+              $"画前 {strokesBefore}，画后 {Doc.Strokes.Count}");
+
+        // ---- ⑥.2 西南 = 清屏：停不满 0.8s 不执行，停满才清当前页 ----
+        var clearProbe = new Stroke { Tool = Tool.Pen, Color = InkPalette.PenBand[1].Color, Width = 6f };
+        for (int i = 0; i <= 12; i++) clearProbe.AddPoint(cx - 80 + i * 12, cy + 200, 0.9f, i);
+        Doc.AddStroke(clearProbe);
+        Doc.InvalidateAll();
+        SettleFrames(120);
+        int n0 = Doc.Strokes.Count;
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx - 85f, cy + 85f);          // 西南 = 清屏
+        Check("划向西南 = 选中「清屏」扇区", RadialPaletteSector == 5, $"扇区 {RadialPaletteSector}");
+        RadialCommitForTest();                          // 没停满 → 不执行
+        Check("清屏：停不满 0.8s 松手 = 不清",
+              !RadialPaletteActive && Doc.Strokes.Count == n0,
+              $"active = {RadialPaletteActive}，笔画 {Doc.Strokes.Count} / {n0}");
 
         RadialOpenForTest(cx, cy);
-        RadialMoveForTest(cx - 85f, cy - 85f);          // 西北 = 激光
-        RadialCommitForTest();
-        Check("划向西北 = 激光", Host.State.Tool == Tool.Laser, $"工具 = {Host.State.Tool}");
+        RadialMoveForTest(cx - 85f, cy + 85f);
+        SettleFrames(900);                              // 停满 0.8s
+        Check("清屏：停满 0.8s = 自动清空并关盘",
+              !RadialPaletteActive && Doc.Strokes.Count == 0,
+              $"active = {RadialPaletteActive}，笔画 {Doc.Strokes.Count}");
 
-        // ---- ⑥.5 排序 V-a 与扇面几何（2026-09-30 v4 定稿） ----
-        // 正位（上下左右）＝前四高频：笔 / 红 / 橡皮 / 荧光笔；四角＝次频。
-        Check("排序 V-a：上下左右＝笔/红/橡皮/荧光笔，四角＝黑/蓝/框选/激光",
-              RadialSectorNames[0] == "笔" && RadialSectorNames[2] == "红"
-              && RadialSectorNames[4] == "橡皮" && RadialSectorNames[6] == "荧光笔"
-              && RadialSectorNames[1] == "黑" && RadialSectorNames[3] == "蓝"
-              && RadialSectorNames[5] == "框选" && RadialSectorNames[7] == "激光",
+        // ---- ⑥.5 v3 排序与扇面几何（2026-10-25 定稿） ----
+        Check("v3 排序：北红笔、东西翻色、四角撤销/荧光/清屏/框选",
+              RadialSectorNames[0] == "红笔" && RadialSectorNames[1] == "荧光笔"
+              && RadialSectorNames[2] == "下一色" && RadialSectorNames[3] == "框选"
+              && RadialSectorNames[4] == "橡皮" && RadialSectorNames[5] == "清屏"
+              && RadialSectorNames[6] == "上一色" && RadialSectorNames[7] == "撤销",
               string.Join(" ", RadialSectorNames));
         // 扇面几何：图标环 68 ± 图标半径 12 要落在（锁定距离, 盘半径）里，也别压到中央读数。
         Check("扇面几何：图标环 68 与死区/锁定/中央读数不打架",
@@ -5470,7 +5518,7 @@ internal sealed partial class App
         // ---- ⑦ 跨扇区滞回：出界 9° 以内不跳扇区 ----
         RadialOpenForTest(cx, cy);
         float rr = 120f;
-        RadialMoveForTest(cx + rr, cy);                 // 正东 = 红
+        RadialMoveForTest(cx + rr, cy);                 // 正东 = 下一色
         float a23 = 23f * MathF.PI / 180f;              // 刚过 22.5° 边界
         RadialMoveForTest(cx + rr * MathF.Cos(a23), cy + rr * MathF.Sin(a23));
         Check("越过扇区边界 9° 内：不跳扇区（滞回）", RadialPaletteSector == 2,
@@ -5500,16 +5548,15 @@ internal sealed partial class App
         // ⚠ 这里**必须真移鼠标**、不能用 `RadialMoveForTest`：穿透时指针位置每帧从
         // `GetCursorPos` 刷（我们收不到鼠标消息），直接写 PointerX/Y 会被立刻覆盖掉。
         // 这也正是这段判据要钉的东西——穿透里扇区方向跟不跟得上系统光标。
-        SendMouse((int)(cx + 85f), (int)(cy - 85f), 0);  // 东北 = 黑（颜色扇区）
+        SendMouse((int)(cx + 85f), (int)(cy - 85f), 0);  // 东北 = 荧光笔
         SettleFrames(150);
         RadialPumpForTest();
         Check("穿透里：扇区方向跟得上系统光标（GetCursorPos 那一路）", RadialPaletteSector == 1,
               $"扇区 {RadialPaletteSector}");
         RadialCommitForTest();
-        Check("穿透里选扇区：退出穿透 + 换到那支笔",
-              !PassThrough && Host.State.Tool == Tool.Pen
-              && SameCol(Host.State.PaletteBase, InkPalette.PenBand[0].Color),
-              $"穿透 = {PassThrough}，工具 = {Host.State.Tool}，色 = {Host.State.PaletteBase}");
+        Check("穿透里选扇区：退出穿透 + 切到荧光笔",
+              !PassThrough && Host.State.Tool == Tool.Highlighter,
+              $"穿透 = {PassThrough}，工具 = {Host.State.Tool}");
 
         // 反向守卫：死区松手 = 取消，穿透必须原样留着。
         Host.Commands.SetPassThrough(true);
@@ -5622,7 +5669,7 @@ internal sealed partial class App
             SettleFrames(250);
             Check("真键盘 + 穿透：能呼出盘", RadialPaletteActive,
                   $"active = {RadialPaletteActive}，穿透 = {PassThrough}");
-            SendMouse((int)(cx + 120f), (int)cy, 0);      // 正东 = 红
+            SendMouse((int)cx, (int)(cy - 120f), 0);      // 正北 = 红笔
             SettleFrames(200);
             Native.SendInput((uint)qUp.Length, qUp, Marshal.SizeOf<Native.INPUT_KBD>());
             SettleFrames(300);
