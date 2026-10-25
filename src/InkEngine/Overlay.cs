@@ -5698,11 +5698,11 @@ internal sealed partial class OverlayWindow : IDisposable
     //   · 颜色格：`penFilled` 上色（黑/红/蓝）——"这支颜色的笔"；选中保持原色；
     //   · **没有常显标签**：名字只出现在中央读数；悬停时盘下"浮一行字"。
     internal const float RadialPlateRadiusLogical = 96f;
-    // 2026-10-25 比例方案 A：色环外沿 30（= 死区）、线宽 6、直径 60；
-    // 扇格内沿 34（离色环 4px 呼吸），图标环 65 = 扇格 34~96 的正中。
-    internal const float RadialInnerRadiusLogical = 34f;
-    internal const float RadialIconRingLogical = 65f;
-    internal const float RadialCenterLogical = 30f;
+    // 2026-10-25 定稿：恢复原图比例。
+    // 中央实心区 0~34、色环 34~40（原“过渡带”）、功能区 40~96、图标环 68。
+    internal const float RadialInnerRadiusLogical = 40f;
+    internal const float RadialIconRingLogical = 68f;
+    internal const float RadialCenterLogical = 34f;
     internal const float RadialSeamDeg = 2f;          // 扇格之间的缝（每边 1°）
 
     /// <summary>
@@ -5742,10 +5742,8 @@ internal sealed partial class OverlayWindow : IDisposable
 
         // 底盘 → 八扇格 → 盘边（盘边最后画，压在扇格外沿上，线才利落）
         _ctx.FillEllipse(new Ellipse(c, R, R), Brush(theme.Panel));
-        // 中央底：和未选中扇格同色（2026-10-25 用户定）。
-        // 原来中央露出的是盘底 Panel，深色主题下就是“色环外面一圈透明黑”；
-        // 填成 Hover 后，色环 → 中央底 → 扇格是同一条浅色带，没有断层。
-        _ctx.FillEllipse(new Ellipse(c, r0, r0), Brush(theme.Hover));
+        // 中央实心区直接用盘底 Panel：原图就是“里面一块更深的内盘”。
+        // 不再额外填 Hover，否则中央会和扇格糊成一片、丢掉三层层次。
         DrawRadialWedges(c, dpi, r0, R, theme, sel);
         _scratch.Color = theme.PanelBorder;
         _ctx.DrawEllipse(new Ellipse(c, R, R), _scratch, 1f * dpi);
@@ -5804,19 +5802,20 @@ internal sealed partial class OverlayWindow : IDisposable
                 ringCol = new Color4(ringCol.R, ringCol.G, ringCol.B, 0.45f);
         }
 
-        // 比例（2026-10-25 方案 A）：色环外沿 30、线宽 6、内沿 24、直径 60。
-        // 外沿 = 死区 30：最外沿就是“开始选中扇区”的那条线。
-        float ringMid = 27f * dpi;         // 彩环中心线：内沿 24、外沿 30
+        // 比例（2026-10-25 定稿）：色环 = 原来的“过渡带”，内沿 34、外沿 40、
+        // 线宽 6、直径 80；它正好夹在中央实心区（34）和功能区（40）之间。
+        float ringMid = 37f * dpi;         // 彩环中心线：内沿 34、外沿 40
         float ringW = 6f * dpi;
 
-        // 底环比彩环宽 2px：白笔/浅色在浅色盘面上也有轮廓（外沿 31）。
+        // 底环比彩环宽 2px：白笔/浅色在浅色盘面上也有轮廓（外沿 41）。
         _scratch.Color = theme.PanelBorder;
         _ctx.DrawEllipse(new Ellipse(c, ringMid, ringMid), _scratch, ringW + 2f * dpi);
         _scratch.Color = ringCol;
         _ctx.DrawEllipse(new Ellipse(c, ringMid, ringMid), _scratch, ringW);
 
-        // 中心功能图标：22px 外接圆 15.6，离色环内沿 24 还有 8.4——不碰环。
-        float iconSz = 22f * dpi;
+        // 中心功能图标：28px 外接圆 19.8，离色环内沿 34 还有 14.2——不碰环，
+        // 和原图“红”字（约 30px）的视觉重量一致。
+        float iconSz = 28f * dpi;
         _scratch.Color = theme.Text;
         DrawIcon(centerIcon, c.X - iconSz * 0.5f, c.Y - iconSz * 0.5f, iconSz, _scratch);
 
