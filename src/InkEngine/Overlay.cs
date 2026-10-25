@@ -5698,9 +5698,11 @@ internal sealed partial class OverlayWindow : IDisposable
     //   · 颜色格：`penFilled` 上色（黑/红/蓝）——"这支颜色的笔"；选中保持原色；
     //   · **没有常显标签**：名字只出现在中央读数；悬停时盘下"浮一行字"。
     internal const float RadialPlateRadiusLogical = 96f;
-    internal const float RadialInnerRadiusLogical = 40f;
-    internal const float RadialIconRingLogical = 68f;
-    internal const float RadialCenterLogical = 34f;
+    // 2026-10-25 比例定稿：图标 22 + 色环 4（外沿 24）= 中央 48；
+    // 扇格内沿 32（离色环 8px 呼吸），图标环 64 = 扇格 32~96 的正中。
+    internal const float RadialInnerRadiusLogical = 32f;
+    internal const float RadialIconRingLogical = 64f;
+    internal const float RadialCenterLogical = 24f;
     internal const float RadialSeamDeg = 2f;          // 扇格之间的缝（每边 1°）
 
     /// <summary>
@@ -5802,27 +5804,21 @@ internal sealed partial class OverlayWindow : IDisposable
                 ringCol = new Color4(ringCol.R, ringCol.G, ringCol.B, 0.45f);
         }
 
-        float ringMid = 21.25f * dpi;      // 色环中心线：内沿 19、外沿 23.5
-        float ringW = 4.5f * dpi;
+        // 比例（2026-10-25 定稿）：图标 22、间隙 ≈3.4、色环 4（外沿 23、底环 24）。
+        // 整个“图标 + 色环”是一个 48 逻辑像素的圆，和 24 的死区完全对齐：
+        // 最外沿就是“开始选中扇区”的那条线，没有多余过渡带。
+        float ringMid = 21f * dpi;         // 彩环中心线：内沿 19、外沿 23
+        float ringW = 4f * dpi;
 
-        // 色带过渡：色环外再铺 3 圈同色淡晕（2026-10-25 用户要“色带过渡”）。
-        // 不改变判位——淡晕只是视觉，中央死区仍是 24；它把“红环 → 浅灰盘面”
-        // 之间那道硬边化开，看起来像一条色带自然淡出。
-        for (int k = 1; k <= 3; k++)
-        {
-            _scratch.Color = new Color4(ringCol.R, ringCol.G, ringCol.B, 0.12f / k);
-            float rr = (23.5f + k * 4f) * dpi;
-            _ctx.DrawEllipse(new Ellipse(c, rr, rr), _scratch, 3.5f * dpi);
-        }
-
-        // 底环比彩环宽 2px：白笔/浅色在浅色盘面上也有轮廓。
+        // 底环比彩环宽 2px：白笔/浅色在浅色盘面上也有轮廓（外沿 24）。
         _scratch.Color = theme.PanelBorder;
         _ctx.DrawEllipse(new Ellipse(c, ringMid, ringMid), _scratch, ringW + 2f * dpi);
         _scratch.Color = ringCol;
         _ctx.DrawEllipse(new Ellipse(c, ringMid, ringMid), _scratch, ringW);
 
-        // 中心功能图标：regular、主题文字色，压在色环里面。
-        float iconSz = 20f * dpi;
+        // 中心功能图标：regular、主题文字色。22px 的外接圆半径 15.6，
+        // 离色环内沿 19 还有 3.4，不碰环、也不显得空。
+        float iconSz = 22f * dpi;
         _scratch.Color = theme.Text;
         DrawIcon(centerIcon, c.X - iconSz * 0.5f, c.Y - iconSz * 0.5f, iconSz, _scratch);
 
