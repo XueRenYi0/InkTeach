@@ -15,11 +15,11 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
-> **Latest 9.3.2 (2026-10-24)**: new **touch mode** — **Gestures** (default) / **Single-finger**;
-> single-finger mode lets only one contact write and disables all gestures. Palm/area erase is removed;
-> three-finger erase works only in gesture mode; leaving pass-through returns to the pen. Device &
-> performance telemetry now requires **explicit first-run consent** and can be turned off in Settings
-> (see [PRIVACY.md](PRIVACY.md)).
+> **Latest 9.4.0 (2026-10-25)**: the radial palette is rebuilt — eight sectors (clockwise from north)
+> are **red pen / highlighter / next colour / select / eraser / clear page / previous colour / undo**;
+> the centre shows the current tool icon + colour ring and previews the hovered sector. Clear page
+> requires a 0.8s hold, and the palette no longer auto-closes after 5s. Also includes 9.3.2's touch
+> modes, pass-through return-to-pen, and first-run telemetry consent (see [PRIVACY.md](PRIVACY.md)).
 >
 > *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
 > current version.*
@@ -33,7 +33,7 @@ PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else
 
 ## Quick start
 
-1. Download `InkTeach-Setup-9.3.2.exe`, double-click, Next, Done — or unzip the portable build.
+1. Download `InkTeach-Setup-9.4.0.exe`, double-click, Next, Done — or unzip the portable build.
 2. Open PowerPoint/WPS in slideshow mode, or any app; the InkTeach toolbar sits at the bottom.
 3. Write with a pen or mouse. `Ctrl+L` = laser, `Ctrl+E` = eraser, `Ctrl+Alt+Shift+T` hands the mouse back; press it again to return to the pen (9.3.2).
 4. Hold `Ctrl+Alt+Shift+Q` and flick to a sector to switch tools without hunting for the toolbar.
@@ -87,9 +87,16 @@ default position never hides by accident. Hiding has to be a deliberate drag.
 ### ③ The radial palette — hold a global key, flick, release
 
 `Ctrl+Alt+Shift+Q` (**a global key: it works while any other app is in front**): hold it and eight
-sectors appear at the cursor; flick toward the tool or colour you want and **release to apply**.
-Sectors = pen / black / red / blue / eraser / select / highlighter / laser.
+sectors appear at the cursor; flick toward the function you want and **release to apply**.
+Eight sectors (clockwise from north) = red pen / highlighter / next colour / select / eraser /
+clear page / previous colour / undo. The centre shows the current tool icon + colour ring and
+previews the sector under the cursor.
 
+- **Red pen is fixed at north**; the east/west cells are next/previous colour (black and blue sit
+  on either side of red).
+- **Clear page is at the south-west corner** and requires a 0.8s hold (current page only);
+  **undo is at the north-west corner**.
+- The palette **no longer closes after 5s** (9.4.0): it stays until release / click / click outside / Esc.
 - Skipping the wait: the palette appears after 120ms, so an expert can flick before it is ever shown.
 - **It also works while pass-through is on** — it is the way to *take the pen back* from the app
   underneath: picking a sector exits pass-through and switches to it. Release at the dead centre to
@@ -360,7 +367,7 @@ approach fits, we align with it instead of reinventing it:
 
 ## Lightweight: Windows 10 / 11, no .NET
 
-- Native AOT single exe, about **11MB**; the 9.3.2 installer is **8.59MB** and the portable zip **9.32MB**.
+- Native AOT single exe, about **11MB**; the 9.4.0 installer is **8.59MB** and the portable zip **9.57MB**.
 - **No .NET install, no UAC, no administrator rights**; the portable build is unzip-and-run.
 - On 4GB classroom machines, PDF pages are cached only around the viewport and rendered in the
   background, so memory does not grow with the page count.
