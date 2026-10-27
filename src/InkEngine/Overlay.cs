@@ -509,6 +509,18 @@ internal sealed partial class OverlayWindow : IDisposable
     private float _readoutFormatPx;
 
     /// <summary>
+    /// **收藏页签**用的文字格式：13 逻辑像素、常规字重、水平居中。
+    ///
+    /// 为什么不复用上面那两个：主读数是 15 SemiBold（太大，四个页签立刻挤爆 28 高的标题栏），
+    /// 小号是 11（投到教室大屏上读不清）。13 是「能读清」和「放得下」的交点——
+    /// 1440p 投 100 寸时约 3cm 高，后排能认。
+    /// 选中态不靠加粗区分（那要多一份 SemiBold 格式），靠**颜色 + 2px 下划线**，
+    /// 投影上这两种差别都比字重明显。
+    /// </summary>
+    private IDWriteTextFormat _readoutTabFormat;
+    private float _readoutTabFormatPx;
+
+    /// <summary>
     /// **角标**（三角形的三个内角 / 平行四边形的两个夹角）用的小号文字格式：
     /// 比主读数小一号（11 逻辑像素）。
     ///
@@ -1887,7 +1899,7 @@ internal sealed partial class OverlayWindow : IDisposable
         // 遮罩是"模态"的：工具条留在上面会跟遮罩打架（它在遮罩之上画、会亮着），
         // 而且"直接截取"会把它拍进图里。收起这一块由引擎做（不管界面自己怎么想），
         // 只是这一帧不画/不接输入——"界面崩了再造一个"那三级阶梯说的是 Ui 对象，不受影响。
-        if (app.CaptureActive || app.ColorPickActive)
+        if (app.CaptureActive || app.ColorPickActive || app.LibraryPlacementMode)
         {
             _uiLogicalBounds = RectF.Empty;
             _uiBounds = RectF.Empty;
@@ -2192,6 +2204,7 @@ internal sealed partial class OverlayWindow : IDisposable
                 // **图库面板**同理（2026-09-22 加）：它是浮动层上的东西，不补画的话
                 // "面板长什么样"这张图永远拍不到（这条路是给自检/出图用的，
                 // 少画一样就是"看了一张没有面板的图还以为面板没开"）。
+                DrawLibraryGhost(app);
                 DrawLibraryPanel(app);
                 DrawShapeInclination(app);
                 DrawCaptureOverlay(app, _ctx.Transform);   // 截图取景（含遮罩/冻结帧）——不在截图态就直接返回
@@ -2753,6 +2766,7 @@ internal sealed partial class OverlayWindow : IDisposable
             DrawSelectionCenterCross(app);
             DrawAlignSnapPulse(app);
             // 图库面板：它从工具条上沿往上长，压在内容之上（不压界面——界面比它更靠下）
+            DrawLibraryGhost(app);
             DrawLibraryPanel(app);
             // 画线中的 α 读数画在浮动层最上面（它贴着正在拖的那一端，压住什么都不碍事）。
             DrawShapeInclination(app);
@@ -2820,9 +2834,31 @@ internal sealed partial class OverlayWindow : IDisposable
         // 记住这一帧界面的位置，下一帧靠它把"刚刚消失"的界面擦干净。
         _uiBoundsPrev = uiVisible ? _uiBounds : RectF.Empty;
         // 图库面板同理：下一帧用它把刚刚关掉的那张卡片从屏幕上擦掉。
-        _libraryRectPrev = app.LibraryPanelOpen
-            ? CanvasRectToWindow(app.LibraryPanelRectNow()).Inflate(4f * Dpi / 96f)
-            : RectF.Empty;
+        // 抽屉可能比窄面板宽，也要一起并进来。
+        _libraryRectPrev = RectF.Empty;
+        if (app.LibraryPanelVisibleNow && !app.LibraryPlacementMode)
+        {
+            var pr = CanvasRectToWindow(app.LibraryPanelRectNow()).Inflate(4f * app.UiUnit);
+            if (app.LibraryCategoriesOpen)
+            {
+                var dr = CanvasRectToWindow(app.LibraryDrawerRectNow()).Inflate(4f * app.UiUnit);
+                pr = new RectF
+                {
+                    MinX = MathF.Min(pr.MinX, dr.MinX), MinY = MathF.Min(pr.MinY, dr.MinY),
+                    MaxX = MathF.Max(pr.MaxX, dr.MaxX), MaxY = MathF.Max(pr.MaxY, dr.MaxY),
+                };
+            }
+            if (app.LibraryMenu != 0)
+            {
+                var mr = CanvasRectToWindow(app.LibraryMenuRect()).Inflate(4f * app.UiUnit);
+                pr = new RectF
+                {
+                    MinX = MathF.Min(pr.MinX, mr.MinX), MinY = MathF.Min(pr.MinY, mr.MinY),
+                    MaxX = MathF.Max(pr.MaxX, mr.MaxX), MaxY = MathF.Max(pr.MaxY, mr.MaxY),
+                };
+            }
+            _libraryRectPrev = pr;
+        }
     }
 
     /// <summary>
@@ -2988,12 +3024,36 @@ internal sealed partial class OverlayWindow : IDisposable
             r.Add(new RectF { MinX = OriginX, MinY = OriginY, MaxX = OriginX + Width, MaxY = OriginY + Height });
         _captureWasActive = app.CaptureActive;
 
-        // 图库面板：开合、悬停高亮、整理模式删格子都会变，所以**每帧按当前矩形算进脏区**；
+        // 图库面板：开合、悬停高亮、勾选都会变，所以**每帧按当前矩形算进脏区**；
         // 关掉之后旧位置也要擦干净——所以上一帧那份矩形同样并进来
         //（和界面 `_uiBoundsPrev` 一模一样的做法：只算当前，屏幕会留一张擦不掉的卡片印子）。
-        if (app.LibraryPanelOpen)
-            r.Add(CanvasRectToWindow(app.LibraryPanelRectNow()).Inflate(4f * Dpi / 96f));
+        if (app.LibraryPanelVisibleNow && !app.LibraryPlacementMode)
+        {
+            r.Add(CanvasRectToWindow(app.LibraryPanelRectNow()).Inflate(4f * app.UiUnit));
+            if (app.LibraryCategoriesOpen)
+                r.Add(CanvasRectToWindow(app.LibraryDrawerRectNow()).Inflate(4f * app.UiUnit));
+            if (app.LibraryMenu != 0)
+                r.Add(CanvasRectToWindow(app.LibraryMenuRect()).Inflate(4f * app.UiUnit));
+        }
         if (!_libraryRectPrev.IsEmpty) r.Add(_libraryRectPrev);
+
+        // 跟随鼠标的收藏虚影：它每帧都在动，必须和光标圈同一套脏区，
+        // 否则只会画在上一块脏区里（表现为“虚影只能在屏幕某一块矩形里移动”）。
+        if (app.LibraryGhostVisibleNow && app.LibraryUseSelected?.Strokes != null)
+        {
+            var box = EditRegion.Of(app.LibraryUseSelected.Strokes);
+            if (!box.IsEmpty)
+            {
+                var move = app.LibraryPlacementMatrix(app.LibraryUseSelected.Strokes,
+                                                      app.PointerX, app.PointerY);
+                var world = new RectF
+                {
+                    MinX = box.MinX + move.M31, MinY = box.MinY + move.M32,
+                    MaxX = box.MaxX + move.M31, MaxY = box.MaxY + move.M32,
+                };
+                r.Add(CanvasRectToWindow(world).Inflate(8f * app.DpiScale));
+            }
+        }
 
         // 底部页码条（含它上面的页号面板 / 菜单）：悬停、拖动每帧都在变，
         // 必须按当前矩形算进脏区；**退出放映/关文档那一帧**旧位置也要擦掉，所以上一帧
@@ -3087,13 +3147,13 @@ internal sealed partial class OverlayWindow : IDisposable
             // 脏区必须跟着它走，否则框和手柄会在新位置上留下擦不掉的残影。
             var frame = app.LiveSelectionFrame;
             var sb = frame.CanvasAabb;
-            float dpi = app.DpiScale;
-            float margin = SelectionHandles.VisualSizeLogical * 0.5f * dpi + 6f;
+            float dpi = app.UiUnit;
+            float margin = SelectionHandles.VisualSizeLogical * 0.5f * dpi + 6f * dpi;
             // 手柄画在**最小操作框**上（小对象时比真实框大一圈），脏区也按它算。
             var ui = SelectionHandles.UiBox(sb, dpi).Inflate(margin);
 
             var rot = SelectionHandles.CanvasPosition(SelHandle.Rotate, frame, dpi);
-            float grip = SelectionHandles.RotateGripLogical * 0.5f * dpi + 3f;
+            float grip = SelectionHandles.RotateGripLogical * 0.5f * dpi + 3f * dpi;
             ui.Add(rot.X - grip, rot.Y - grip);
             ui.Add(rot.X + grip, rot.Y + grip);
             r.Add(CanvasRectToWindow(ui));   // 选中框也是画布坐标（它跟着墨迹走）
@@ -3101,32 +3161,32 @@ internal sealed partial class OverlayWindow : IDisposable
             // 操作条在选中框下方，也必须算进来，否则它自己会留下残影。
             // **余量 = 4 ＋ 投影最远伸出多少**：操作条现在带投影（主题给的），
             // 只放 4 像素的话投影会被脏区切掉、在屏幕上留一条印子。
-            float cardPad = 4f + app.FloatingTheme.ShadowReachLogical * dpi;
-            r.Add(CanvasRectToWindow(SelectionHandles.BarRect(sb, dpi, app.ViewportCanvas).Inflate(cardPad)));
+            float cardPad = (4f + app.FloatingTheme.ShadowReachLogical) * dpi;
+            r.Add(CanvasRectToWindow(SelectionHandles.BarRect(sb, dpi, app.FurnitureViewport).Inflate(cardPad)));
 
             // 收起态的圆钮 / 打开的面板 / 提示条：都是"每帧都在变"的浮动层，
             // 漏一块就在屏幕上留一块擦不掉的残影（这条踩过好几次了）。
-            r.Add(CanvasRectToWindow(SelectionHandles.BarCollapsedRect(sb, dpi, app.ViewportCanvas).Inflate(cardPad)));
+            r.Add(CanvasRectToWindow(SelectionHandles.BarCollapsedRect(sb, dpi, app.FurnitureViewport).Inflate(cardPad)));
             if (app.SelPanelOpen == SelPanel.Ink)
             {
                 r.Add(CanvasRectToWindow(SelectionHandles
-                    .PanelRect(sb, dpi, app.ViewportCanvas, SelectionHandles.SwatchCount)
-                    .Inflate(cardPad + 2f)));
+                    .PanelRect(sb, dpi, app.FurnitureViewport, SelectionHandles.SwatchCount)
+                    .Inflate(cardPad + 2f * dpi)));
                 if (app.CustomColorOpen)
                     r.Add(CanvasRectToWindow(SelectionHandles
-                        .CustomPanelRect(sb, dpi, app.ViewportCanvas, SelectionHandles.SwatchCount)
-                        .Inflate(cardPad + 2f)));
+                        .CustomPanelRect(sb, dpi, app.FurnitureViewport, SelectionHandles.SwatchCount)
+                        .Inflate(cardPad + 2f * dpi)));
             }
             else if (app.SelPanelOpen == SelPanel.Layer)
-                r.Add(CanvasRectToWindow(SelectionHandles.LayerPanelRect(sb, dpi, app.ViewportCanvas)
-                    .Inflate(cardPad + 2f)));
+                r.Add(CanvasRectToWindow(SelectionHandles.LayerPanelRect(sb, dpi, app.FurnitureViewport)
+                    .Inflate(cardPad + 2f * dpi)));
 
             // 旋转读数标签贴在旋转手柄外侧，比选中框本身还高出去一截，
             // 同样必须进脏区；拖动中它每帧都在动，靠 _transientHistory 回溯两帧。
             // **文案要和绘制用同一个函数**：单选直线时它是 `α = xx.x°`、别的对象是 `Δ`，
             // 两者宽度不同——脏区按哪个文案算，就得画哪个文案。
             if (app.SelRotating)
-                r.Add(CanvasRectToWindow(RotationReadoutRect(frame, dpi, CurrentRotationReadout(app)).Inflate(3f)));
+                r.Add(CanvasRectToWindow(RotationReadoutRect(frame, dpi, CurrentRotationReadout(app)).Inflate(3f * dpi)));
 
             // 拖定义元素 / 拖四角时的读数胶囊：挂在"正在拖的那个元素"上方，每帧都跟着指针走，
             // 而且它在元素外侧、根本不在选中框里——漏了这一块就会在屏幕上留一行残影。
@@ -3417,7 +3477,7 @@ internal sealed partial class OverlayWindow : IDisposable
         var box = frame.CanvasAabb;
         var c = new Vector2((box.MinX + box.MaxX) * 0.5f,
                             (box.MinY + box.MaxY) * 0.5f);
-        float dpi = app.DpiScale;
+        float dpi = app.UiUnit;
         float arm = 7f * dpi;
         float gap = 2.5f * dpi;
         float width = 1.1f * dpi;
@@ -3450,7 +3510,7 @@ internal sealed partial class OverlayWindow : IDisposable
         float alpha = app.AlignSnapPulseAlpha;
         if (alpha <= 0.01f) return;
 
-        float dpi = app.DpiScale;
+        float dpi = app.UiUnit;
         var p = app.AlignSnapPulsePoint;
         // 暖橙色：短亮要在白板、PPT、选中框旁边都跳出来；蓝色会和选中框混在一起。
         var accent = new Color4(1f, 0.55f, 0.08f, alpha);
@@ -3532,7 +3592,7 @@ internal sealed partial class OverlayWindow : IDisposable
         if (frame.IsEmpty) return;
         var b = frame.CanvasAabb;      // 操作条和脏区用它的轴对齐范围
 
-        float dpi = app.DpiScale;
+        float dpi = app.UiUnit;
         var accent = new Color4(0f, 0.47f, 0.83f, 1f);      // #0078D4
 
         // 单选一个"有定义元素的图形"（直线 / 箭头 / 圆 / 椭圆）时，手柄按定义元素给
@@ -3582,18 +3642,18 @@ internal sealed partial class OverlayWindow : IDisposable
         {
             // 1) 光晕
             _scratch.Color = new Color4(accent.R, accent.G, accent.B, 0.16f);
-            DrawQuad(c0, c1, c2, c3, 6.5f);
+            DrawQuad(c0, c1, c2, c3, 6.5f * dpi);
 
             // 2) 描边。复制成功那 0.25 秒加粗变亮，闪一下（用户反馈"复制以后看不出来"）。
             if (app.SelFlashing)
             {
                 _scratch.Color = new Color4(accent.R, accent.G, accent.B, 1f);
-                DrawQuad(c0, c1, c2, c3, 5.5f);
+                DrawQuad(c0, c1, c2, c3, 5.5f * dpi);
             }
             else
             {
                 _scratch.Color = accent;
-                DrawQuad(c0, c1, c2, c3, 2.5f);
+                DrawQuad(c0, c1, c2, c3, 2.5f * dpi);
             }
         }
 
@@ -3622,9 +3682,9 @@ internal sealed partial class OverlayWindow : IDisposable
                 var topCenter = nh > 0
                     ? RotationGripAnchor(shapeStroke)
                     : SelectionHandles.CanvasPosition(SelHandle.Top, frame, dpi);
-                _ctx.DrawLine(topCenter, rot, _scratch, 1.4f);
+                _ctx.DrawLine(topCenter, rot, _scratch, 1.4f * dpi);
                 _ctx.FillEllipse(new Ellipse(rot, rotR, rotR), white);
-                _ctx.DrawEllipse(new Ellipse(rot, rotR, rotR), _scratch, 1.6f);
+                _ctx.DrawEllipse(new Ellipse(rot, rotR, rotR), _scratch, 1.6f * dpi);
                 // 圆里放**官方图标**，不是手画一段弧。
                 // 手画那版在投影上看像个"©"——旋转图标的识别特征就是那个箭头，
                 // 少一笔就不成形。这是"图标别自己画"的又一个实例。
@@ -3982,7 +4042,7 @@ internal sealed partial class OverlayWindow : IDisposable
                                        p.X + size * 0.5f, p.Y + size * 0.5f);
         var rr = new RoundedRectangle(box, radius, radius);
         _ctx.FillRoundedRectangle(rr, white);
-        _ctx.DrawRoundedRectangle(rr, _scratch, 1.8f);
+        _ctx.DrawRoundedRectangle(rr, _scratch, 1.8f * _app.UiUnit);
     }
 
     /// <summary>
@@ -3999,7 +4059,8 @@ internal sealed partial class OverlayWindow : IDisposable
         // **这里要的是"缩放倍数"（96 DPI 基准），不是 Dpi 那个原始值**：
         // Dpi 是窗口的物理 DPI（200% 屏上就是 192），拿它去 CreateTextFormat
         // 会造出一个 2880 像素高的字号，字直接糊满整个画面（踩过）。
-        float dpi = _app.DpiScale;
+        // 2026-10-25 起跟选中家具一起乘界面档（UiUnit），大档读数也跟着大。
+        float dpi = _app.UiUnit;
         var accent = new Color4(0f, 0.47f, 0.83f, 1f);      // #0078D4
         var box = new Vortice.RawRectF(label.MinX, label.MinY, label.MaxX, label.MaxY);
         float pill = (label.MaxY - label.MinY) * 0.5f;
@@ -4011,7 +4072,7 @@ internal sealed partial class OverlayWindow : IDisposable
         _scratch.Color = snapped
             ? new Color4(1f, 1f, 1f, 0.85f)
             : new Color4(accent.R, accent.G, accent.B, 0.85f);
-        _ctx.DrawRoundedRectangle(shape, _scratch, 1.5f);
+        _ctx.DrawRoundedRectangle(shape, _scratch, 1.5f * dpi);
 
         _scratch.Color = snapped
             ? new Color4(1f, 1f, 1f, 1f)
@@ -4064,6 +4125,22 @@ internal sealed partial class OverlayWindow : IDisposable
         return _readoutFormat;
     }
 
+    /// <summary>收藏页签那一行字（13 逻辑像素、常规、居中）。见字段处的说明。</summary>
+    private IDWriteTextFormat ReadoutFormatTab(float dpi)
+    {
+        float px = MathF.Max(11f, MathF.Round(13f * dpi));
+        if (_readoutTabFormat == null || _readoutTabFormatPx != px)
+        {
+            _readoutTabFormat?.Dispose();
+            _readoutTabFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _readoutTabFormat.TextAlignment = TextAlignment.Center;
+            _readoutTabFormat.ParagraphAlignment = ParagraphAlignment.Center;
+            _readoutTabFormatPx = px;
+        }
+        return _readoutTabFormat;
+    }
+
     /// <summary>
     /// **角标**用的小号文字格式（11 逻辑像素，比主读数小一号）。
     ///
@@ -4086,6 +4163,26 @@ internal sealed partial class OverlayWindow : IDisposable
         return _readoutFormatSmall;
     }
 
+    private IDWriteTextFormat _readoutLeft;
+    private float _readoutLeftPx;
+
+    /// <summary>左对齐的小号字（收藏弹窗的分类列 / 菜单行）。</summary>
+    private IDWriteTextFormat ReadoutFormatLeft(float dpi)
+    {
+        float px = MathF.Max(9f, MathF.Round(11f * dpi));
+        if (_readoutLeft == null || _readoutLeftPx != px)
+        {
+            _readoutLeft?.Dispose();
+            _readoutLeft = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _readoutLeft.TextAlignment = TextAlignment.Leading;
+            _readoutLeft.ParagraphAlignment = ParagraphAlignment.Center;
+            _readoutLeft.WordWrapping = WordWrapping.NoWrap;
+            _readoutLeftPx = px;
+        }
+        return _readoutLeft;
+    }
+
     /// <summary>
     /// **图库面板**（"我的图形"）：从工具条上沿往上长的一张卡片，里面是收藏的缩略图墙。
     ///
@@ -4098,112 +4195,500 @@ internal sealed partial class OverlayWindow : IDisposable
     /// 画法与操作条/其它面板同一套：`DrawPanelCard` 卡片 ＋ 主题色，圆角取界面推上来的
     /// `CornerRadius`（三块东西必须是一家）。
     /// </summary>
+    /// <summary>
+    /// 收藏卡片跟随指针的虚影：只在指针真的在画布上时画，位置和最终落点同源
+    /// （<see cref="InkEngine.LibraryPlacementMatrix"/>）。图片按 0.45 透明度画位图，
+    /// 其它对象复制一份把颜色 alpha 降下来。
+    /// </summary>
+    private void DrawLibraryGhost(InkEngine app)
+    {
+        if (!app.LibraryGhostVisibleNow) return;
+        var entry = app.LibraryUseSelected;
+        if (entry?.Strokes == null || entry.Strokes.Count == 0) return;
+
+        var move = app.LibraryPlacementMatrix(entry.Strokes, app.PointerX, app.PointerY);
+        foreach (var s in entry.Strokes)
+        {
+            if (s == null || s.HiddenForPairing) continue;
+            // 和最终插入同一条路：先把 move 烘进 Transform，再画。
+            // 不再用 DrawStroke 的 extra 参数，避免图形/图片两套变换路径在
+            // 非单位 Transform 上出现偏差（虚影和鼠标对不上）。
+            var ghost = s.Clone();
+            ghost.Transform = s.Transform * move;
+
+            if (ghost.IsImage)
+            {
+                var bmp = ghost.Image?.GetBitmap(_ctx);
+                if (bmp == null || ghost.Points.Count < 2) continue;
+                var a = new Vector2(ghost.Points[0].X, ghost.Points[0].Y);
+                var b = new Vector2(ghost.Points[^1].X, ghost.Points[^1].Y);
+                var dst = new Vortice.RawRectF(MathF.Min(a.X, b.X), MathF.Min(a.Y, b.Y),
+                                               MathF.Max(a.X, b.X), MathF.Max(a.Y, b.Y));
+                var canvasToWindow = _ctx.Transform;
+                _ctx.Transform = ghost.Transform * canvasToWindow;
+                _ctx.DrawBitmap(bmp, dst, 0.45f, Vortice.Direct2D1.InterpolationMode.Linear,
+                                null, null);
+                _ctx.Transform = canvasToWindow;
+                continue;
+            }
+
+            ghost.Color = new Color4(s.Color.R, s.Color.G, s.Color.B, s.Color.A * 0.45f);
+            DrawStroke(ghost);
+        }
+    }
+
     private void DrawLibraryPanel(InkEngine app)
     {
-        if (!app.LibraryPanelOpen) return;
-        float dpi = Dpi / 96f * app.UiScale;   // 图库面板跟着界面缩放（挂在工具条上，一家子）
+        if (!app.LibraryPanelVisibleNow || app.LibraryPlacementMode)
+        {
+            // 全屏层 / 截图 / 放映 / 拿起卡片：只藏，不销毁。改名输入框也一起收。
+            if (!string.IsNullOrEmpty(app.LibraryRenamingId)) app.EndLibraryCategoryRename(false);
+            return;
+        }
+        float dpi = app.UiUnit;
         var theme = app.FloatingTheme;
-        var panel = app.LibraryPanelRectNow();
+        var m = app.LibraryPanelInfoNow();
+        var panel = m.Panel;
         int n = app.LibraryEntries.Count;
 
         float radius = MathF.Min(theme.CornerRadius * dpi, 12f * dpi);
-        DrawPanelCard(app, panel, radius);
+        DrawPanelCard(app, panel, radius, dpi);
 
-        // ---- 标题行：「图库 · N 个」＋ 右边「整理」「✕」 ----
-        var head = LibraryLayout.HeaderRect(panel, dpi);
-        _scratch.Color = theme.Text;
-        _ctx.DrawText(n > 0 ? $"图库 · {n} 个" : "图库",
-                      ReadoutFormat(dpi),
-                      new Rect(head.MinX, head.MinY, head.MaxX - head.MinX, head.MaxY - head.MinY),
-                      _scratch);
+        var head = m.Header;
+        bool trashView = app.LibraryCategoryId == ShapeLibrary.TrashCategory;
+        string catName = "全部";
+        int catCount = 0;
+        foreach (var c in app.LibraryCategoryListForPaint())
+            if (c.Id == app.LibraryCategoryId) { catName = c.Name; catCount = c.Count; break; }
 
-        var edit = LibraryLayout.EditRect(panel, dpi);
-        if (app.LibraryEditMode)
+        if (app.LibrarySelectMode)
         {
-            // 激活态用主题的实心蓝（和操作条上"复制模式开着"同一种表达）
-            _scratch.Color = theme.ActiveBg;
-            float br = (edit.MaxY - edit.MinY) * 0.32f;
-            _ctx.FillRoundedRectangle(
-                new RoundedRectangle(new Vortice.RawRectF(edit.MinX, edit.MinY, edit.MaxX, edit.MaxY),
-                                     br, br), _scratch);
+            // 整理：顶栏整条变成操作条（全选 / 移动 / 删除 / 完成）。
+            var (all, move, del, done) = LibraryLayout.ManageRects(m);
+            _scratch.Color = theme.Text;
+            _ctx.DrawText($"已选 {app.LibrarySelectionCount}", ReadoutFormatSmall(dpi),
+                          new Rect(head.MinX, head.MinY, MathF.Max(10f, all.MinX - head.MinX),
+                                   head.MaxY - head.MinY), _scratch);
+            DrawLibPill(all, "全选", false, dpi, theme);
+            DrawLibPill(move, "移动", false, dpi, theme);
+            DrawLibPill(del, app.LibraryConfirm == "deleteselected" ? "再点" : "删除", true, dpi, theme);
+            DrawLibPill(done, "完成", false, dpi, theme);
         }
-        _scratch.Color = app.LibraryEditMode ? theme.ActiveText : theme.TextMuted;
-        _ctx.DrawText(app.LibraryEditMode ? "完成" : "整理", ReadoutFormatSmall(dpi),
-                      new Rect(edit.MinX, edit.MinY, edit.MaxX - edit.MinX, edit.MaxY - edit.MinY),
-                      _scratch);
+        else if (app.LibraryUseSelected != null)
+        {
+            // 使用态：卡片已经“拿起”，顶上只留一个状态字；放置/取消都用手势。
+            _scratch.Color = theme.Text;
+            _ctx.DrawText("已选 1 项", ReadoutFormatLeft(dpi),
+                          new Rect(head.MinX + 8f * dpi, head.MinY,
+                                   MathF.Max(10f, m.Close.MinX - head.MinX - 12f * dpi),
+                                   head.MaxY - head.MinY), _scratch);
+            DrawLibGlyph(m.Close, "✕", theme.TextMuted, dpi);
+            return;                 // 收起后只画状态条，不画卡片区 / 滚动条 / 缩放手柄
+        }
+        else
+        {
+            DrawLibMenuGlyph(m.Menu, theme.TextMuted, dpi);
+            if (trashView)
+            {
+                _scratch.Color = theme.Text;
+                _ctx.DrawText($"‹ 返回收藏 · 回收站 {n}", ReadoutFormatLeft(dpi),
+                              new Rect(m.Menu.MaxX + 8f * dpi, head.MinY,
+                                       MathF.Max(20f, m.Close.MinX - m.Menu.MaxX - 16f * dpi),
+                                       head.MaxY - head.MinY), _scratch);
+            }
+            else if (m.Tabbed)
+            {
+                DrawLibraryTabs(app, m, dpi, theme);
+            }
+            else
+            {
+                DrawLibPill(m.CurrentCategory, $"{catName} · {catCount} ▾", false, dpi, theme);
+            }
+            DrawLibGlyph(m.Close, "✕", theme.TextMuted, dpi);
+        }
 
-        var close = LibraryLayout.CloseRect(panel, dpi);
-        _scratch.Color = theme.TextMuted;
-        _ctx.DrawText("✕", ReadoutFormatSmall(dpi),
-                      new Rect(close.MinX, close.MinY, close.MaxX - close.MinX, close.MaxY - close.MinY),
-                      _scratch);
-
-        // ---- 空库：给一句"怎么存"，而不是空白一片（参考实现的空态文案同款）----
+        // ---- 内容 ----
         if (n == 0)
         {
+            var g = m.Grid;
             _scratch.Color = theme.TextMuted;
-            float gap = LibraryLayout.CellGapLogical * dpi;
-            float y = panel.MinY + LibraryLayout.PadLogical * dpi + LibraryLayout.HeaderHLogical * dpi + gap;
-            _ctx.DrawText("图库还是空的", ReadoutFormat(dpi),
-                          new Rect(panel.MinX, y, panel.MaxX - panel.MinX, 24f * dpi), _scratch);
-            _ctx.DrawText("选中对象 → 操作条那颗带「＋」的「图库」图标存进来", ReadoutFormatSmall(dpi),
-                          new Rect(panel.MinX, y + 26f * dpi, panel.MaxX - panel.MinX, 20f * dpi), _scratch);
-            return;
+            bool scopedEmpty = !trashView && app.LibraryCategoryId != "all";
+            _ctx.DrawText(trashView ? "回收站是空的"
+                          : scopedEmpty ? "这个分类还是空的" : "收藏还是空的",
+                          ReadoutFormat(dpi),
+                          new Rect(g.MinX, g.MinY + 8f * dpi, g.MaxX - g.MinX, 24f * dpi), _scratch);
+            _ctx.DrawText(trashView
+                              ? "收藏里删掉的东西会先来这里；点卡片恢复"
+                              : scopedEmpty
+                                  ? "把卡片拖到页签，或点 ☰ → 导入图片"
+                                  : "选中对象 → 收藏；透明贴纸点 ☰ → 导入图片",
+                          ReadoutFormatSmall(dpi),
+                          new Rect(g.MinX, g.MinY + 34f * dpi, g.MaxX - g.MinX, 20f * dpi), _scratch);
+        }
+        else
+        {
+            // D2D ? PushAxisAlignedClip ?**????**???????????
+            // ??? CanvasRectToWindow??????????????
+            var clip = m.Grid;
+            _ctx.PushAxisAlignedClip(
+                new Vortice.RawRectF(clip.MinX, clip.MinY, clip.MaxX, clip.MaxY),
+                AntialiasMode.Aliased);
+            for (int i = 0; i < n; i++)
+            {
+                var cell = LibraryLayout.CellRect(m, i, app.LibraryScrollY);
+                if (cell.MaxY < m.Grid.MinY - 1f) continue;
+                if (cell.MinY > m.Grid.MaxY + 1f) break;
+
+                bool selected = app.LibrarySelectMode
+                    ? app.IsLibrarySelected(app.LibraryEntries[i])
+                    : ReferenceEquals(app.LibraryUseSelected, app.LibraryEntries[i]);
+                if (i == app.LibraryHover || selected)
+                {
+                    _scratch.Color = selected ? theme.ActiveBg : theme.Hover;
+                    float inset = 2f * dpi;
+                    _ctx.FillRoundedRectangle(new RoundedRectangle(
+                        new Vortice.RawRectF(cell.MinX + inset, cell.MinY + inset,
+                                             cell.MaxX - inset, cell.MaxY - inset),
+                        radius * 0.6f, radius * 0.6f), _scratch);
+                }
+
+                var entry = app.LibraryEntries[i];
+                var box = EditRegion.Of(entry.Strokes);
+                float boxW = box.MaxX - box.MinX, boxH = box.MaxY - box.MinY;
+                if (boxW > 0.1f && boxH > 0.1f)
+                {
+                    float inner = 6f * dpi;
+                    float availW = MathF.Max(1f, (cell.MaxX - cell.MinX) - inner * 2f);
+                    float availH = MathF.Max(1f, (cell.MaxY - cell.MinY) - inner * 2f);
+                    float k = MathF.Min(availW / boxW, availH / boxH);
+                    float thumbCy = (cell.MinY + cell.MaxY) * 0.5f;
+                    var fit = Matrix3x2.CreateScale(k) * Matrix3x2.CreateTranslation(
+                        (cell.MinX + cell.MaxX) * 0.5f - k * (box.MinX + box.MaxX) * 0.5f,
+                        thumbCy - k * (box.MinY + box.MaxY) * 0.5f);
+                    var cellClip = cell;
+                    _ctx.PushAxisAlignedClip(
+                        new Vortice.RawRectF(cellClip.MinX, cellClip.MinY, cellClip.MaxX, cellClip.MaxY),
+                        AntialiasMode.Aliased);
+                    foreach (var st in entry.Strokes) DrawStroke(st, fit);
+                    _ctx.PopAxisAlignedClip();
+                }
+
+                if (app.LibrarySelectMode)
+                {
+                    // 整理：勾选框常驻；右下角排序把手。
+                    var check = LibraryLayout.CheckRect(cell, dpi);
+                    bool on = app.IsLibrarySelected(entry);
+                    _scratch.Color = on ? theme.ActiveBg : new Color4(1f, 1f, 1f, 0.9f);
+                    _ctx.FillRoundedRectangle(new RoundedRectangle(
+                        new Vortice.RawRectF(check.MinX, check.MinY, check.MaxX, check.MaxY),
+                        4f * dpi, 4f * dpi), _scratch);
+                    _scratch.Color = on ? theme.ActiveText : theme.TextMuted;
+                    _ctx.DrawRoundedRectangle(new RoundedRectangle(
+                        new Vortice.RawRectF(check.MinX, check.MinY, check.MaxX, check.MaxY),
+                        4f * dpi, 4f * dpi), _scratch, 1f * dpi);
+                    if (on)
+                        _ctx.DrawText("✓", ReadoutFormatSmall(dpi),
+                                      new Rect(check.MinX, check.MinY, check.MaxX - check.MinX,
+                                               check.MaxY - check.MinY), _scratch);
+
+                    var grip = LibraryLayout.GripRect(cell, dpi);
+                    _scratch.Color = theme.TextMuted;
+                    for (int k2 = 0; k2 < 3; k2++)
+                        _ctx.DrawLine(new System.Numerics.Vector2(grip.MinX + 4f * dpi,
+                                                                  grip.MinY + (5f + k2 * 4f) * dpi),
+                                      new System.Numerics.Vector2(grip.MaxX - 4f * dpi,
+                                                                  grip.MinY + (5f + k2 * 4f) * dpi),
+                                      _scratch, 1.1f * dpi);
+                }
+            }
+            _ctx.PopAxisAlignedClip();
         }
 
-        // ---- 缩略图墙 ----
-        for (int i = 0; i < n; i++)
+        // 框选
+        if (app.LibraryMarqueeActive)
         {
-            var cell = LibraryLayout.CellRect(panel, dpi, i);
-            if (cell.MinY > panel.MaxY) break;        // 超出面板的行不画（列数 × 行数已由布局夹住）
+            var r = app.LibraryMarqueeRect;
+            var rr = CanvasRectToWindow(r);
+            _scratch.Color = new Color4(theme.ActiveBg.R, theme.ActiveBg.G, theme.ActiveBg.B, 0.12f);
+            _ctx.FillRectangle(new Vortice.RawRectF(rr.MinX, rr.MinY, rr.MaxX, rr.MaxY), _scratch);
+            _scratch.Color = theme.ActiveBg;
+            _ctx.DrawRectangle(new Vortice.RawRectF(rr.MinX, rr.MinY, rr.MaxX, rr.MaxY), _scratch, 1.5f * dpi);
+        }
 
-            if (i == app.LibraryHover)
+        // 整理排序的插入线
+        if (app.LibraryManageSortingForPaint)
+        {
+            int drop = app.LibraryManageDropIndex;
+            float x = float.NaN;
+            if (drop >= 0)
             {
-                _scratch.Color = theme.Hover;
-                float inset = 2f * dpi;
-                float hr = radius * 0.6f;
+                if (drop < n)
+                    x = LibraryLayout.CellRect(m, drop, app.LibraryScrollY).MinX - 3f * dpi;
+                else if (n > 0)
+                    x = LibraryLayout.CellRect(m, n - 1, app.LibraryScrollY).MaxX + 3f * dpi;
+                if (x >= m.Grid.MinX && x <= m.Grid.MaxX)
+                {
+                    _scratch.Color = theme.ActiveBg;
+                    _ctx.DrawLine(new System.Numerics.Vector2(x, m.Grid.MinY),
+                                  new System.Numerics.Vector2(x, m.Grid.MaxY), _scratch, 2f * dpi);
+                }
+            }
+        }
+
+        // 滚动条
+        float maxScroll = LibraryLayout.MaxScroll(m, n);
+        if (maxScroll > 0.5f)
+        {
+            var track = LibraryLayout.ScrollTrack(m);
+            var thumb = LibraryLayout.ScrollThumb(m, n, app.LibraryScrollY);
+            _scratch.Color = new Color4(theme.TextMuted.R, theme.TextMuted.G, theme.TextMuted.B, 0.12f);
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(track.MinX, track.MinY, track.MaxX, track.MaxY),
+                2f * dpi, 2f * dpi), _scratch);
+            _scratch.Color = new Color4(theme.TextMuted.R, theme.TextMuted.G, theme.TextMuted.B, 0.55f);
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(thumb.MinX, thumb.MinY, thumb.MaxX, thumb.MaxY),
+                2f * dpi, 2f * dpi), _scratch);
+        }
+
+        if (app.LibraryCategoriesOpen) DrawLibraryDrawer(app, m, dpi, theme);
+
+        var grip2 = LibraryLayout.ResizeRect(panel, dpi);
+        _scratch.Color = theme.TextMuted;
+        for (int i = 0; i < 3; i++)
+            _ctx.DrawLine(new System.Numerics.Vector2(grip2.MaxX - (5f + i * 4f) * dpi, grip2.MaxY - 3f * dpi),
+                          new System.Numerics.Vector2(grip2.MaxX - 3f * dpi, grip2.MaxY - (5f + i * 4f) * dpi),
+                          _scratch, 1.2f * dpi);
+
+        if (app.LibraryMenu != 0) DrawLibraryMenu(app, dpi, theme);
+    }
+
+    private void DrawLibraryTabs(InkEngine app, in LibraryLayout.Info m, float dpi, UiTheme theme)
+    {
+        var cats = app.LibraryTabCategories();
+        var widths = new float[cats.Length];
+        for (int i = 0; i < cats.Length; i++)
+            widths[i] = LibraryLayout.TabWidthLogical(cats[i].Name) * dpi;
+        var clip = m.Tabs;
+        _ctx.PushAxisAlignedClip(
+            new Vortice.RawRectF(clip.MinX, clip.MinY, clip.MaxX, clip.MaxY),
+            AntialiasMode.Aliased);
+        for (int i = 0; i < cats.Length; i++)
+        {
+            var tr = LibraryLayout.TabRect(m, widths, i, dpi, app.LibraryTabScroll);
+            if (tr.MaxX < m.Tabs.MinX) continue;
+            if (tr.MinX > m.Tabs.MaxX) break;
+            bool on = cats[i].Id == app.LibraryCategoryId;
+            float starW = 0f;
+            if (cats[i].Pinned)
+            {
+                starW = 12f * dpi;
+                _scratch.Color = new Color4(0.95f, 0.68f, 0.12f, 1f);
+                _ctx.DrawText("?", ReadoutFormatSmall(dpi),
+                              new Rect(tr.MinX, tr.MinY, starW, tr.MaxY - tr.MinY), _scratch);
+            }
+            _scratch.Color = on ? theme.Text : theme.TextMuted;
+            _ctx.DrawText(cats[i].Name, ReadoutFormatTab(dpi),
+                          new Rect(tr.MinX + starW, tr.MinY, tr.MaxX - tr.MinX - starW,
+                                   tr.MaxY - tr.MinY - 2f * dpi), _scratch);
+            if (on)
+            {
+                _scratch.Color = theme.ActiveBg;
+                _ctx.DrawLine(new System.Numerics.Vector2(tr.MinX, tr.MaxY - 1f * dpi),
+                              new System.Numerics.Vector2(tr.MaxX, tr.MaxY - 1f * dpi),
+                              _scratch, 2f * dpi);
+            }
+        }
+        // 页签拖动：目标位置一条竖线。
+        if (app.LibraryTabDropIndex >= 0)
+        {
+            float x = m.Tabs.MaxX;
+            if (app.LibraryTabDropIndex < cats.Length)
+                x = LibraryLayout.TabRect(m, widths, app.LibraryTabDropIndex, dpi, app.LibraryTabScroll).MinX - 3f * dpi;
+            else if (cats.Length > 0)
+                x = LibraryLayout.TabRect(m, widths, cats.Length - 1, dpi, app.LibraryTabScroll).MaxX + 3f * dpi;
+            if (x >= m.Tabs.MinX && x <= m.Tabs.MaxX)
+            {
+                _scratch.Color = theme.ActiveBg;
+                _ctx.DrawLine(new System.Numerics.Vector2(x, m.Tabs.MinY),
+                              new System.Numerics.Vector2(x, m.Tabs.MaxY),
+                              _scratch, 2f * dpi);
+            }
+        }
+        _ctx.PopAxisAlignedClip();
+    }
+
+    private void DrawLibMenuGlyph(in RectF r, Color4 color, float dpi)
+    {
+        if (r.IsEmpty) return;
+        _scratch.Color = color;
+        float cx = (r.MinX + r.MaxX) * 0.5f;
+        float cy = (r.MinY + r.MaxY) * 0.5f;
+        for (int i = -1; i <= 1; i++)
+            _ctx.DrawLine(new System.Numerics.Vector2(cx - 8f * dpi, cy + i * 4f * dpi),
+                          new System.Numerics.Vector2(cx + 8f * dpi, cy + i * 4f * dpi),
+                          _scratch, 1.4f * dpi);
+    }
+
+    private void DrawLibPill(in RectF r, string label, bool danger, float dpi, UiTheme theme)
+    {
+        if (r.IsEmpty) return;
+        var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f * dpi, 7f * dpi);
+        _scratch.Color = danger ? new Color4(0.85f, 0.22f, 0.22f, 0.14f) : theme.Hover;
+        _ctx.FillRoundedRectangle(rr, _scratch);
+        _scratch.Color = danger ? new Color4(0.85f, 0.22f, 0.22f, 1f) : theme.Text;
+        _ctx.DrawText(label, ReadoutFormatSmall(dpi),
+                      new Rect(r.MinX + 2f * dpi, r.MinY,
+                               r.MaxX - r.MinX - 4f * dpi, r.MaxY - r.MinY), _scratch);
+    }
+
+    private void DrawLibGlyph(in RectF r, string glyph, Color4 color, float dpi)
+    {
+        if (r.IsEmpty) return;
+        _scratch.Color = color;
+        _ctx.DrawText(glyph, ReadoutFormatSmall(dpi),
+                      new Rect(r.MinX, r.MinY, r.MaxX - r.MinX, r.MaxY - r.MinY), _scratch);
+    }
+
+    private void DrawLibraryDrawer(InkEngine app, in LibraryLayout.Info m, float dpi, UiTheme theme)
+    {
+        var drawer = app.LibraryDrawerRectNow();
+        var rr = new RoundedRectangle(new Vortice.RawRectF(
+            drawer.MinX, drawer.MinY, drawer.MaxX, drawer.MaxY), 10f * dpi, 10f * dpi);
+        _scratch.Color = new Color4(theme.Panel.R, theme.Panel.G, theme.Panel.B, 0.99f);
+        _ctx.FillRoundedRectangle(rr, _scratch);
+        _scratch.Color = theme.PanelBorder;
+        _ctx.DrawRoundedRectangle(rr, _scratch, 1f);
+
+        var cats = app.LibraryCategoryListForPaint();
+        int shown = app.LibraryDrawerVisibleCountForPaint;
+        int first = Math.Clamp(app.LibraryCategoryScroll, 0, Math.Max(0, cats.Length - shown));
+        for (int row = 0; row < shown; row++)
+        {
+            var info = cats[first + row];
+            var r = LibraryLayout.CategoryDrawerRowRect(drawer, dpi, row);
+            bool active = info.Id == app.LibraryCategoryId;
+            bool target = app.LibraryDropTarget == 1 && app.LibraryDropCategory == info.Id;
+            bool renaming = app.LibraryRenamingId == info.Id;
+            bool confirm = app.LibraryConfirm == "delcat:" + info.Id;
+            if (active || target || confirm)
+            {
+                _scratch.Color = confirm ? new Color4(0.85f, 0.22f, 0.22f, 0.12f)
+                                : target ? theme.ActiveBg : theme.Hover;
                 _ctx.FillRoundedRectangle(new RoundedRectangle(
-                    new Vortice.RawRectF(cell.MinX + inset, cell.MinY + inset,
-                                         cell.MaxX - inset, cell.MaxY - inset), hr, hr), _scratch);
+                    new Vortice.RawRectF(r.MinX + 3f * dpi, r.MinY + 1f * dpi,
+                                         r.MaxX - 3f * dpi, r.MaxY - 1f * dpi), 6f * dpi, 6f * dpi), _scratch);
             }
 
-            // 缩略图：条目包围盒等比缩进格子（内缩 4 逻辑像素），整格裁掉溢出的部分。
-            var entry = app.LibraryEntries[i];
-            var box = EditRegion.Of(entry.Strokes);
-            float boxW = box.MaxX - box.MinX, boxH = box.MaxY - box.MinY;
-            if (boxW > 0.1f && boxH > 0.1f)
+            bool userCat = LibraryLayout.DrawerRowIsUserCategory(info.Id);
+            bool manage = app.LibraryDrawerManage;
+            float textRight = manage && userCat
+                ? LibraryLayout.DrawerStarRect(r, dpi).MinX - 4f * dpi
+                : r.MaxX - 8f * dpi;
+            if (confirm)
             {
-                float inner = 4f * dpi;
-                float availW = MathF.Max(1f, (cell.MaxX - cell.MinX) - inner * 2f);
-                float availH = MathF.Max(1f, (cell.MaxY - cell.MinY) - inner * 2f);
-                float k = MathF.Min(availW / boxW, availH / boxH);
-                var fit = Matrix3x2.CreateScale(k) * Matrix3x2.CreateTranslation(
-                    (cell.MinX + cell.MaxX) * 0.5f - k * (box.MinX + box.MaxX) * 0.5f,
-                    (cell.MinY + cell.MaxY) * 0.5f - k * (box.MinY + box.MaxY) * 0.5f);
-
-                // 裁剪必须用**窗口坐标**（PushAxisAlignedClip 吃的是窗口坐标，见
-                // CanvasRectToWindow 上面那条注释）——喂画布坐标在相机滚过之后会裁歪。
-                var clipWin = CanvasRectToWindow(cell);
-                _ctx.PushAxisAlignedClip(
-                    new Vortice.RawRectF(clipWin.MinX, clipWin.MinY, clipWin.MaxX, clipWin.MaxY),
-                    AntialiasMode.Aliased);
-                foreach (var s in entry.Strokes) DrawStroke(s, fit);
-                _ctx.PopAxisAlignedClip();
+                _scratch.Color = new Color4(0.85f, 0.22f, 0.22f, 1f);
+                _ctx.DrawText($"再点一次删除「{info.Name}」", ReadoutFormatSmall(dpi),
+                              new Rect(r.MinX + 12f * dpi, r.MinY + 1f * dpi,
+                                       textRight - r.MinX - 16f * dpi, 13f * dpi), _scratch);
+                _scratch.Color = theme.TextMuted;
+                _ctx.DrawText($"{info.Count} 个内容会移到「未分类」", ReadoutFormatSmall(dpi),
+                              new Rect(r.MinX + 12f * dpi, r.MinY + 14f * dpi,
+                                       textRight - r.MinX - 16f * dpi, 13f * dpi), _scratch);
+            }
+            else if (!renaming)
+            {
+                _scratch.Color = active || target ? theme.ActiveText : theme.Text;
+                _ctx.DrawText($"{info.Name} · {info.Count}", ReadoutFormatLeft(dpi),
+                              new Rect(r.MinX + 12f * dpi, r.MinY,
+                                       MathF.Max(10f, textRight - r.MinX - 12f * dpi),
+                                       r.MaxY - r.MinY), _scratch);
             }
 
-            // 整理模式：右上角一颗红 ✕（触摸屏的删除入口——那儿没有右键）
-            if (app.LibraryEditMode)
+            if (manage && userCat && !renaming)
             {
-                var badge = LibraryLayout.BadgeRect(cell, dpi);
-                float br = (badge.MaxY - badge.MinY) * 0.5f;
-                _scratch.Color = new Color4(0.90f, 0.28f, 0.30f, 1f);
-                _ctx.FillEllipse(new Ellipse(new System.Numerics.Vector2(
-                    (badge.MinX + badge.MaxX) * 0.5f, (badge.MinY + badge.MaxY) * 0.5f), br, br), _scratch);
-                _scratch.Color = new Color4(1f, 1f, 1f, 1f);
+                var star = LibraryLayout.DrawerStarRect(r, dpi);
+                var pencil = LibraryLayout.DrawerPencilRect(r, dpi);
+                var trash = LibraryLayout.DrawerTrashRect(r, dpi);
+                _scratch.Color = info.Pinned ? new Color4(0.95f, 0.68f, 0.12f, 1f) : theme.TextMuted;
+                _ctx.DrawText(info.Pinned ? "★" : "☆", ReadoutFormatSmall(dpi),
+                              new Rect(star.MinX, star.MinY, star.MaxX - star.MinX,
+                                       star.MaxY - star.MinY), _scratch);
+                _scratch.Color = theme.TextMuted;
+                _ctx.DrawText("✎", ReadoutFormatSmall(dpi),
+                              new Rect(pencil.MinX, pencil.MinY, pencil.MaxX - pencil.MinX,
+                                       pencil.MaxY - pencil.MinY), _scratch);
+                DrawLibTrash(trash, confirm ? new Color4(0.85f, 0.22f, 0.22f, 1f) : theme.TextMuted, dpi);
+            }
+
+            if (renaming)
+            {
+                var save = LibraryLayout.DrawerSaveRect(r, dpi);
+                var cancel = LibraryLayout.DrawerCancelRect(r, dpi);
+                _scratch.Color = new Color4(0.18f, 0.66f, 0.36f, 1f);
+                _ctx.DrawText("✓", ReadoutFormatSmall(dpi),
+                              new Rect(save.MinX, save.MinY, save.MaxX - save.MinX,
+                                       save.MaxY - save.MinY), _scratch);
+                _scratch.Color = new Color4(0.85f, 0.22f, 0.22f, 1f);
                 _ctx.DrawText("✕", ReadoutFormatSmall(dpi),
-                              new Rect(badge.MinX, badge.MinY, badge.MaxX - badge.MinX, badge.MaxY - badge.MinY),
-                              _scratch);
+                              new Rect(cancel.MinX, cancel.MinY, cancel.MaxX - cancel.MinX,
+                                       cancel.MaxY - cancel.MinY), _scratch);
             }
+        }
+        var add = LibraryLayout.CategoryDrawerRowRect(drawer, dpi, shown);
+        _scratch.Color = theme.TextMuted;
+        _ctx.DrawText("＋ 新建分类", ReadoutFormatLeft(dpi),
+                      new Rect(add.MinX + 12f * dpi, add.MinY, add.MaxX - add.MinX - 24f * dpi,
+                               add.MaxY - add.MinY), _scratch);
+    }
+
+    private void DrawLibTrash(in RectF r, Color4 color, float dpi)
+    {
+        _scratch.Color = color;
+        float w = 10f * dpi, h = 11f * dpi;
+        float cx = (r.MinX + r.MaxX) * 0.5f;
+        float top = (r.MinY + r.MaxY - h) * 0.5f;
+        _ctx.DrawLine(new System.Numerics.Vector2(cx - 5f * dpi, top + 1.5f * dpi),
+                      new System.Numerics.Vector2(cx + 5f * dpi, top + 1.5f * dpi),
+                      _scratch, 1.4f * dpi);
+        _ctx.DrawLine(new System.Numerics.Vector2(cx - 2.5f * dpi, top),
+                      new System.Numerics.Vector2(cx + 2.5f * dpi, top),
+                      _scratch, 1.4f * dpi);
+        _ctx.DrawRoundedRectangle(new RoundedRectangle(
+            new Vortice.RawRectF(cx - w * 0.5f, top + 3f * dpi,
+                                 cx + w * 0.5f, top + h), 2f * dpi, 2f * dpi),
+            _scratch, 1.2f * dpi);
+        for (int i = -1; i <= 1; i++)
+            _ctx.DrawLine(new System.Numerics.Vector2(cx + i * 2.4f * dpi, top + 4.5f * dpi),
+                          new System.Numerics.Vector2(cx + i * 2.4f * dpi, top + h - 1.5f * dpi),
+                          _scratch, 0.9f * dpi);
+    }
+
+    private void DrawLibraryMenu(InkEngine app, float dpi, UiTheme theme)
+    {
+        var menu = app.LibraryMenuRect();
+        var items = app.LibraryMenuItems();
+        var rr = new RoundedRectangle(new Vortice.RawRectF(
+            menu.MinX, menu.MinY, menu.MaxX, menu.MaxY), 10f * dpi, 10f * dpi);
+        _scratch.Color = new Color4(theme.Panel.R, theme.Panel.G, theme.Panel.B, 0.99f);
+        _ctx.FillRoundedRectangle(rr, _scratch);
+        _scratch.Color = theme.PanelBorder;
+        _ctx.DrawRoundedRectangle(rr, _scratch, 1f);
+        var danger = new Color4(0.85f, 0.22f, 0.22f, 1f);
+        for (int i = 0; i < items.Count; i++)
+        {
+            var r = app.LibraryMenuRowRect(menu, i);
+            bool armed = items[i].Danger && app.LibraryConfirm == items[i].Key;
+            if (armed)
+            {
+                _scratch.Color = new Color4(0.85f, 0.22f, 0.22f, 0.14f);
+                _ctx.FillRoundedRectangle(new RoundedRectangle(
+                    new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 6f * dpi, 6f * dpi), _scratch);
+            }
+            _scratch.Color = !items[i].Enabled ? theme.TextMuted : items[i].Danger ? danger : theme.Text;
+            _ctx.DrawText(items[i].Label, ReadoutFormatLeft(dpi),
+                          new Rect(r.MinX + 10f * dpi, r.MinY,
+                                   r.MaxX - r.MinX - 20f * dpi, r.MaxY - r.MinY), _scratch);
         }
     }
 
@@ -4224,8 +4709,8 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawSelectionBar(InkEngine app, in RectF sel)
     {
-        var visible = app.ViewportCanvas;
-        float dpi = Dpi / 96f;
+        var visible = app.FurnitureViewport;
+        float dpi = app.UiUnit;
         // 布局从 SelectionHandles 取，与命中判定同源：分开写迟早差几个像素，
         // 表现就是"看得见按钮却点不中"。
         var rect = SelectionHandles.BarRect(sel, dpi, visible);
@@ -4236,7 +4721,7 @@ internal sealed partial class OverlayWindow : IDisposable
         // 配色与投影**全取界面推上来的主题**（UiTheme.Default 只是没界面时的兜底）：
         // 操作条和工具条必须是同一套颜色，各写一份迟早会花
         // （用户 2026-09-18 实测：浅色主题改完之后，工具条有投影、操作条没有，一眼就看得出）。
-        DrawPanelCard(app, rect, radius);
+        DrawPanelCard(app, rect, radius, dpi);
         var theme = app.FloatingTheme;
 
         const int n = SelectionHandles.BarButtonCount;
@@ -4287,15 +4772,24 @@ internal sealed partial class OverlayWindow : IDisposable
                     break;
                 case SelBarButton.Library:
                 {
-                    DrawIcon(IconPaths.library, cx - glyphBox * 0.5f, cy - glyphBox * 0.5f,
-                             glyphBox, iconBrush);
-                    // 「＋」角标（2026-10-17 用户定：这颗是"把选中的存进图库"，
-                    // 光一个书架看不出"存"这个动作）——右下角画一个小加号、和图标同色。
-                    float px = cx + glyphBox * 0.34f, py = cy + glyphBox * 0.34f;
-                    float arm = glyphBox * 0.17f;
-                    float thick = MathF.Max(1.2f, glyphBox * 0.10f);
-                    _ctx.DrawLine(new Vector2(px - arm, py), new Vector2(px + arm, py), iconBrush, thick);
-                    _ctx.DrawLine(new Vector2(px, py - arm), new Vector2(px, py + arm), iconBrush, thick);
+                    bool feedback = app.LibraryFeedbackActive;
+                    bool collected = app.SelectionInLibrary
+                                     || (feedback && app.LibraryFeedback != InkEngine.LibraryFeedbackKind.Error);
+                    if (collected)
+                    {
+                        // 已收藏：实心星 ＋ 绿色对勾（用户 2026-10-25 定的口径）
+                        DrawIcon(IconPaths.starFilled, cx - glyphBox * 0.5f, cy - glyphBox * 0.5f,
+                                 glyphBox, iconBrush);
+                        var checkBrush = Brush(new Color4(0.09f, 0.64f, 0.29f, 1f));
+                        DrawCheckBadge(cx + glyphBox * 0.34f, cy + glyphBox * 0.34f,
+                                       glyphBox * 0.17f, checkBrush, MathF.Max(1.4f, glyphBox * 0.11f));
+                    }
+                    else
+                    {
+                        // 未收藏 / 失败：星标＋（加号是 Fluent 图标自带的，不再手画角标）
+                        DrawIcon(IconPaths.starAdd, cx - glyphBox * 0.5f, cy - glyphBox * 0.5f,
+                                 glyphBox, iconBrush);
+                    }
                     break;
                 }
                 default:
@@ -4312,13 +4806,22 @@ internal sealed partial class OverlayWindow : IDisposable
         SelBarButton.Collapse => IconPaths.collapse,
         SelBarButton.Layer => IconPaths.layer,
         SelBarButton.Export => IconPaths.export,
-        SelBarButton.Library => IconPaths.library,
+        SelBarButton.Library => IconPaths.starAdd,
         SelBarButton.Copy => IconPaths.copy,
         SelBarButton.FlipH => IconPaths.flipH,
         SelBarButton.FlipV => IconPaths.flipV,
         SelBarButton.Delete => IconPaths.delete,
         _ => IconPaths.layer,
     };
+
+    /// <summary>收藏成功/重复时，星标右下角那颗小对勾（两段线，和原来的「＋」角标同一套画法）。</summary>
+    private void DrawCheckBadge(float cx, float cy, float arm, ID2D1SolidColorBrush brush, float thick)
+    {
+        _ctx.DrawLine(new Vector2(cx - arm, cy),
+                      new Vector2(cx - arm * 0.15f, cy + arm * 0.75f), brush, thick);
+        _ctx.DrawLine(new Vector2(cx - arm * 0.15f, cy + arm * 0.75f),
+                      new Vector2(cx + arm, cy - arm * 0.75f), brush, thick);
+    }
 
 
     /// <summary>这一格是"激活"状态吗（面板开着 / 模式开着）。</summary>
@@ -4358,11 +4861,11 @@ internal sealed partial class OverlayWindow : IDisposable
         if (!any)                                   // 全是图像对象：画个灰环（禁用态）
         {
             _scratch.Color = new Color4(0.5f, 0.52f, 0.56f, 0.35f);
-            _ctx.DrawEllipse(new Ellipse(new Vector2(cx, cy), r, r), _scratch, 2.6f * Dpi / 96f);
+            _ctx.DrawEllipse(new Ellipse(new Vector2(cx, cy), r, r), _scratch, 2.6f * app.UiUnit);
             return;
         }
 
-        float w = 2.2f * Dpi / 96f;
+        float w = 2.2f * app.UiUnit;
         var half = new Ellipse(new Vector2(cx, cy), r, r);
         _scratch.Color = disabled ? new Color4(a.R, a.G, a.B, 0.35f) : a;
         // 先整圈画底色，再把"另一种颜色"那一段盖上去（用一小段圆弧当示意，不做精密分色：
@@ -4392,8 +4895,8 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawCollapsedDot(InkEngine app, in RectF sel)
     {
-        float dpi = Dpi / 96f;
-        var r = SelectionHandles.BarCollapsedRect(sel, dpi, app.ViewportCanvas);
+        float dpi = app.UiUnit;
+        var r = SelectionHandles.BarCollapsedRect(sel, dpi, app.FurnitureViewport);
         float d = r.MaxX - r.MinX;
         var c = new Vector2((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
 
@@ -4417,16 +4920,18 @@ internal sealed partial class OverlayWindow : IDisposable
     /// 所以浮层和工具条永远是一套，不会再出现"工具条换了投影、操作条还是老样子"。
     /// 没有界面挂上来时用 `UiTheme.Default` 兜底（自检宿主）。
     /// </summary>
-    private void DrawPanelCard(InkEngine app, in RectF r, float radius)
+    private void DrawPanelCard(InkEngine app, in RectF r, float radius, float? uiUnit = null)
     {
-        float dpi = Dpi / 96f;
-        var th = app.FloatingTheme;
+        float dpi = uiUnit ?? Dpi / 96f;
+        var th = app?.FloatingTheme ?? UiTheme.Default;
         var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
 
         // **投影按形状大小缩一缩**：这套胀幅（最远 16 逻辑像素）是按 48 高的面板定的，
         // 直接套在一个 28 像素的小圆（收起后那颗球）上会变成一大团光晕。
-        // 规则：比 48 矮的按比例缩，不超过 1。
-        float shadowK = MathF.Min(1f, (r.MaxY - r.MinY) / 48f);
+        // 规则：比 48 矮的按比例缩，不超过 1。2026-10-25 起高度按**界面逻辑**算，
+        // 否则 1.3 档下 40 的条会被当成 52 物理像素、投影不跟着放大。
+        float hLogical = (r.MaxY - r.MinY) / MathF.Max(0.01f, dpi);
+        float shadowK = MathF.Min(1f, hLogical / 48f);
         for (int i = th.Shadow.Length - 1; i >= 0; i--)
         {
             var layer = th.Shadow[i];
@@ -4474,17 +4979,17 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawInkPanel(InkEngine app, in RectF sel)
     {
-        float dpi = Dpi / 96f;
+        float dpi = app.UiUnit;
         int sc = SelectionHandles.SwatchCount;
         var th = app.FloatingTheme;
-        var p = SelectionHandles.PanelRect(sel, dpi, app.ViewportCanvas, sc);
+        var p = SelectionHandles.PanelRect(sel, dpi, app.FurnitureViewport, sc);
         // 圆角用界面推上来的主题令牌（= InkUi.Tokens.FloatingCorner 10），
         // 三处浮层同一个数——以前这两张面板各写了一个 10f 字面量。
-        DrawPanelCard(app, p, th.CornerRadius * dpi);
+        DrawPanelCard(app, p, th.CornerRadius * dpi, dpi);
 
         // ---- ① 粗细滑条（连续；拖动实时数值；右端笔尖预览）----
-        var slider = SelectionHandles.SliderRect(sel, dpi, app.ViewportCanvas, sc);
-        var (tx0, tx1) = SelectionHandles.SliderTrackRange(sel, dpi, app.ViewportCanvas, sc);
+        var slider = SelectionHandles.SliderRect(sel, dpi, app.FurnitureViewport, sc);
+        var (tx0, tx1) = SelectionHandles.SliderTrackRange(sel, dpi, app.FurnitureViewport, sc);
         int steps = app.SliderStepCount();
         float cy = (slider.MinY + slider.MaxY) * 0.5f;
 
@@ -4521,7 +5026,7 @@ internal sealed partial class OverlayWindow : IDisposable
         // 旧档位的位置留一排**参考刻度**（滑条连续了，点还在——凭肌肉记忆找得到地方）。
         for (int i = 0; i < steps; i++)
         {
-            float x = SelectionHandles.SliderStepX(i, steps, sel, dpi, app.ViewportCanvas, sc);
+            float x = SelectionHandles.SliderStepX(i, steps, sel, dpi, app.FurnitureViewport, sc);
             _scratch.Color = new Color4(th.TextMuted.R, th.TextMuted.G, th.TextMuted.B, 0.55f);
             _ctx.FillEllipse(new Ellipse(new Vector2(x, cy), 1.4f * dpi, 1.4f * dpi), _scratch);
         }
@@ -4558,7 +5063,7 @@ internal sealed partial class OverlayWindow : IDisposable
         var curDash = SelectionHandles.DashOfSelection(app.Doc.Selected);
         for (int i = 0; i < SelectionHandles.StyleCellCount; i++)
         {
-            var cell = SelectionHandles.StyleCellRect(i, sel, dpi, app.ViewportCanvas, sc);
+            var cell = SelectionHandles.StyleCellRect(i, sel, dpi, app.FurnitureViewport, sc);
             var dash = (StrokeDash)i;             // 格序 = 线型取值，见 StyleCellRect 的注释
             bool active = dash == curDash;
 
@@ -4602,7 +5107,7 @@ internal sealed partial class OverlayWindow : IDisposable
         }
         for (int i = 0; i < sc; i++)
         {
-            var cell = SelectionHandles.SwatchRect(i, sel, dpi, app.ViewportCanvas, sc);
+            var cell = SelectionHandles.SwatchRect(i, sel, dpi, app.FurnitureViewport, sc);
             var c = new Vector2((cell.MinX + cell.MaxX) * 0.5f, (cell.MinY + cell.MaxY) * 0.5f);
             float rad = (cell.MaxX - cell.MinX) * 0.5f;
             bool custom = i == swatches.Length - 1;      // 末格 = 自定义取色（8.2.0：色相环）
@@ -4678,15 +5183,15 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawPickPanel(InkEngine app, in RectF sel)
     {
-        float dpi = Dpi / 96f;
+        float dpi = app.UiUnit;
         int sc = SelectionHandles.SwatchCount;
         var th = app.FloatingTheme;
-        var p = SelectionHandles.CustomPanelRect(sel, dpi, app.ViewportCanvas, sc);
-        DrawPanelCard(app, p, th.CornerRadius * dpi);
+        var p = SelectionHandles.CustomPanelRect(sel, dpi, app.FurnitureViewport, sc);
+        DrawPanelCard(app, p, th.CornerRadius * dpi, dpi);
 
-        var sv = SelectionHandles.PickSvRect(sel, dpi, app.ViewportCanvas, sc);
-        var hue = SelectionHandles.PickHueRect(sel, dpi, app.ViewportCanvas, sc);
-        var prev = SelectionHandles.PickPreviewRect(sel, dpi, app.ViewportCanvas, sc);
+        var sv = SelectionHandles.PickSvRect(sel, dpi, app.FurnitureViewport, sc);
+        var hue = SelectionHandles.PickHueRect(sel, dpi, app.FurnitureViewport, sc);
+        var prev = SelectionHandles.PickPreviewRect(sel, dpi, app.FurnitureViewport, sc);
         var (ph, ps, pv) = app.PickHsv;
         var picked = Hsv.ToRgb(ph, ps, pv);
 
@@ -4802,16 +5307,16 @@ internal sealed partial class OverlayWindow : IDisposable
     /// <summary>层级小面板：置顶 / 置底两格（图标用 Fluent 的"上/下箭头 + 底托"）。</summary>
     private void DrawLayerPanel(InkEngine app, in RectF sel)
     {
-        float dpi = Dpi / 96f;
-        var p = SelectionHandles.LayerPanelRect(sel, dpi, app.ViewportCanvas);
+        float dpi = app.UiUnit;
+        var p = SelectionHandles.LayerPanelRect(sel, dpi, app.FurnitureViewport);
         // 圆角同样取界面推上来的主题令牌（三处浮层一个数，8.2.0 收口）。
-        DrawPanelCard(app, p, app.FloatingTheme.CornerRadius * dpi);
+        DrawPanelCard(app, p, app.FloatingTheme.CornerRadius * dpi, dpi);
 
         string[] icons = { IconPaths.toFront, IconPaths.toBack };
         var th = app.FloatingTheme;
         for (int i = 0; i < 2; i++)
         {
-            var cell = SelectionHandles.LayerCellRect(i, sel, dpi, app.ViewportCanvas);
+            var cell = SelectionHandles.LayerCellRect(i, sel, dpi, app.FurnitureViewport);
             _scratch.Color = th.Hover;
             float cr = 8f * dpi;
             _ctx.FillRoundedRectangle(new RoundedRectangle(

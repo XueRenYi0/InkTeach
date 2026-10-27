@@ -50,6 +50,11 @@ $icons = [ordered]@{
     # 图库（用户 2026-09-22 要的"图像收藏"）：操作条上那颗「存入图库」＋ 图形面板最后
     # 那一段「图库」。用书架那个 Library（参考实现 InkClass 的图形面板也是用这张）。
     'library'    = @('Library')                       # 图库（我的图形）
+    # 收藏（2026-10-25 用户定：星标，像抖音收藏）——
+    #   star     = 主条/面板入口（**不带加号**）
+    #   starAdd  = 选中栏的“收进来”动作（**带加号**）
+    'star'       = @('Star')
+    'starAdd'    = @('Star Add')
     # 呼出盘 v4（2026-09-30）：工具格改用**主条同一套 Fluent 图标**——数据同源、逐点一致。
     # 引擎不能引 InkUi（分层规矩：引擎看不见界面），所以在这张表里再来一份。
     'pen'         = @('Pen')                          # 笔（呼出盘北格）
@@ -67,6 +72,8 @@ $filledIcons = [ordered]@{
     'laserFilled'       = @('Flash')
     'eraserFilled'      = @('Eraser')
     'selectFilled'      = @('Select Object')
+    # 收藏：已收藏 = 实心星（和 starAdd 的加号区分开）
+    'starFilled'        = @('Star')
 }
 
 function Get-UpstreamFile([string]$folder, [string]$fileName) {

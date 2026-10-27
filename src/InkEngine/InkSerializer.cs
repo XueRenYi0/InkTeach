@@ -468,7 +468,8 @@ internal static class InkSerializer
                     throw new InvalidDataException($"图像尺寸与像素长度对不上：{iw}×{ih} / {len}。");
                 var pix = r.ReadBytes(len);
                 if (pix.Length != len) throw new InvalidDataException("图像像素数据不完整。");
-                s.Image = ImageData.Adopt(iw, ih, pix, hasAlpha: true);
+                // 文件里的像素在写入前已经预乘过，读回来不能再预乘一次。
+                s.Image = ImageData.AdoptPremultiplied(iw, ih, pix);
             }
         }
 

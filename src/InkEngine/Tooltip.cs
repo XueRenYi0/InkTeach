@@ -113,8 +113,8 @@ public partial class InkEngine
         {
             var aabb = LiveSelectionFrame.CanvasAabb;
             var btn = BarDrawnCollapsed
-                ? SelectionHandles.BarCollapsedRect(aabb, DpiScale, ViewportCanvas)
-                : SelectionHandles.BarButtonRect(SelBarHover, aabb, DpiScale, ViewportCanvas);
+                ? SelectionHandles.BarCollapsedRect(aabb, UiUnit, FurnitureViewport)
+                : SelectionHandles.BarButtonRect(SelBarHover, aabb, UiUnit, FurnitureViewport);
             var (t, k, n) = BarButtonTip((SelBarButton)SelBarHover);
             if (t != null)
             {
@@ -199,7 +199,7 @@ public partial class InkEngine
         SelBarButton.Lock => ("锁定", null, "锁定后拖不动，仍然能选中"),
         SelBarButton.Layer => ("层级", null, "置顶 / 置底"),
         SelBarButton.Export => ("导出", null, "存成图片文件（png / jpg）"),
-        SelBarButton.Library => ("存入图库", null, "之后从图形面板的「图库」里取用"),
+        SelBarButton.Library => ("收藏", null, "把选中的内容存进「收藏」；已收过不会重复存"),
         SelBarButton.Copy => ("复制一份", null,
                               "原件原位保留，新副本错位选中，同时进入剪贴板"),
         SelBarButton.FlipH => ("左右翻转", null, null),

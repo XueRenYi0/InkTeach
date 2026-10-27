@@ -31,6 +31,18 @@ internal static class Native
     public const int WM_POINTERLEAVE = 0x024A;
     public const int WM_POINTERCAPTURECHANGED = 0x024C;
     public const int WM_DPICHANGED = 0x02E0;
+    public const int WM_KILLFOCUS = 0x0008;
+    public const int WM_SETFONT = 0x0030;
+    public const int WM_GETDLGCODE = 0x0087;
+    public const int WM_CHAR = 0x0102;
+    public const int EM_SETSEL = 0x00B1;
+    public const int EM_SETLIMITTEXT = 0x00C5;
+    public const int EM_SETMARGINS = 0x00D3;
+    public const int EC_LEFTMARGIN = 0x0001;
+    public const int EC_RIGHTMARGIN = 0x0002;
+    public const int DLGC_WANTALLKEYS = 0x0004;
+    public const int GWLP_WNDPROC = -4;
+    public const int DEFAULT_GUI_FONT = 17;
 
     public const int HTTRANSPARENT = -1;
     public const int HTCLIENT = 1;
@@ -52,6 +64,7 @@ internal static class Native
     public const uint SWP_SHOWWINDOW = 0x0040;
 
     public const int SW_SHOWNOACTIVATE = 4;
+    public const int SW_SHOW = 5;
     public const int SW_HIDE = 0;
 
     public static readonly IntPtr HWND_TOPMOST = new(-1);
@@ -745,6 +758,20 @@ internal static class Native
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern int GetWindowTextW(IntPtr hWnd, System.Text.StringBuilder s, int n);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool SetWindowTextW(IntPtr hWnd, string text);
+
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr GetStockObject(int i);
+
+    [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr CreateFontW(int cHeight, int cWidth, int cEscapement, int cOrientation,
+        int cWeight, uint bItalic, uint bUnderline, uint bStrikeOut, uint iCharSet,
+        uint iOutPrecision, uint iClipPrecision, uint iQuality, uint iPitchAndFamily, string pszFaceName);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     /// <summary>AttachThreadInput：借前台窗口线程的输入队列（"把放映窗提到最前"用，见 PptLaunch）。</summary>
     [DllImport("user32.dll")]

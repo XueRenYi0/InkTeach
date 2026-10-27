@@ -931,6 +931,60 @@ internal static class ExportFileDialog
         return string.IsNullOrEmpty(path) ? null : path;
     }
 
+    private const string BackupFilter = "InkTeach 备份包 (*.zip)\0*.zip\0\0";
+
+    /// <summary>「备份全部数据」：弹另存为（.zip）。返回 null = 取消。</summary>
+    public static string AskForBackupSave(IntPtr owner, string suggestedName, string initialDir)
+    {
+        StartDialogWatcher();
+        InstallDialogPositionHook();
+        var ofn = new OpenFileName
+        {
+            lStructSize = SizeOfOpenFileName,
+            hwndOwner = owner,
+            lpstrFilter = BackupFilter,
+            nFilterIndex = 1,
+            lpstrFile = suggestedName + new string('\0', Math.Max(0, 512 - suggestedName.Length)),
+            nMaxFile = 512,
+            lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
+            lpstrTitle = "备份全部数据",
+            lpstrDefExt = "zip",
+            Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
+        };
+        bool ok;
+        try { ok = GetSaveFileNameW(ofn); }
+        finally { RemoveDialogPositionHook(); }
+        if (!ok) return null;
+        var path = (ofn.lpstrFile ?? "").Trim().TrimEnd('\0');
+        return string.IsNullOrEmpty(path) ? null : path;
+    }
+
+    /// <summary>「从备份恢复」：弹打开（.zip，必须已存在）。返回 null = 取消。</summary>
+    public static string AskForBackupOpen(IntPtr owner, string initialDir)
+    {
+        StartDialogWatcher();
+        InstallDialogPositionHook();
+        var ofn = new OpenFileName
+        {
+            lStructSize = SizeOfOpenFileName,
+            hwndOwner = owner,
+            lpstrFilter = BackupFilter,
+            nFilterIndex = 1,
+            lpstrFile = new string('\0', 512),
+            nMaxFile = 512,
+            lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
+            lpstrTitle = "从备份恢复",
+            lpstrDefExt = "zip",
+            Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
+        };
+        bool ok;
+        try { ok = GetOpenFileNameW(ofn); }
+        finally { RemoveDialogPositionHook(); }
+        if (!ok) return null;
+        var path = (ofn.lpstrFile ?? "").Trim().TrimEnd('\0');
+        return string.IsNullOrEmpty(path) ? null : path;
+    }
+
     /// <summary>
     /// "打开文档…"的过滤器。五种：
     /// ① 图片+PDF+PPT 混合（默认——老师不用先想"我这是啥"；图片可多选）；

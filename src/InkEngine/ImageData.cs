@@ -18,7 +18,7 @@ namespace InkEngine;
 ///
 /// ## 像素格式：一律 BGRA32
 ///
-/// 两种来源（屏幕截图走 GDI、剪贴板走 CF_DIB）给的都是 BGRA，D2D 直接吃，
+/// 三种来源（屏幕截图走 GDI、剪贴板走 CF_DIB、贴纸导入走 GDI+）最后都是 BGRA，D2D 直接吃，
 /// 中间不做任何解码——不引 WIC、不引 System.Drawing，符合"核心不引依赖"。
 ///
 /// **透明度有两个坑，都在 <see cref="Adopt"/> 里堵住**：
@@ -74,6 +74,30 @@ internal sealed class ImageData
         };
         // 记账用原子操作：文档页是**后台线程**渲染的，Adopt 可能在非主线程调
         // （渲染线程同款计数也在跑），普通 ++/-- 会丢增量。
+        Interlocked.Add(ref LiveBytes, img.ByteSize);
+        Interlocked.Increment(ref LiveImages);
+        return img;
+    }
+
+    /// <summary>
+    /// 收下一份**已经预乘好**的 BGRA（存档反序列化 / 贴纸导入用）。
+    ///
+    /// 保存进 `.ink` 的像素已经经过 <see cref="Adopt"/> 预乘；读回来如果再走一次
+    /// `hasAlpha:true` 就会**二次预乘**——透明 PNG 的边缘越存越黑，而且每次
+    /// 打开/保存都更黑一层。所以存档路径必须走这里，跳过 Normalize。
+    /// </summary>
+    public static ImageData AdoptPremultiplied(int width, int height, byte[] bgra)
+    {
+        if (width <= 0 || height <= 0) return null;
+        if (bgra == null || bgra.Length < (long)width * height * 4) return null;
+
+        var img = new ImageData
+        {
+            Width = width,
+            Height = height,
+            Bgra = bgra,
+            _accounted = true,
+        };
         Interlocked.Add(ref LiveBytes, img.ByteSize);
         Interlocked.Increment(ref LiveImages);
         return img;

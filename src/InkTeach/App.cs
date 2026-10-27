@@ -329,8 +329,25 @@ internal sealed partial class App : InkEngine.InkEngine
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
-            // 第二个参数给了路径就顺手出一张面板的图（和 --shapetoolshow 一个用法）
-            LibraryTest(args.Length > 1 ? args[1] : null);
+            // 第二个参数给了路径就顺手出一张面板的图（和 --shapetoolshow 一个用法）。
+            // 以 `--` 开头的是别的开关（如 `--uiscale 0.8`），不能当文件名。
+            string shot = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)
+                ? args[1] : null;
+            LibraryTest(shot);
+        }
+        else if (mode == "--libraryshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            string shot = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)
+                ? args[1] : "reports/library-show.png";
+            LibraryShow(shot);
+        }
+        else if (mode == "--backuptest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            BackupTest();
         }
         else if (mode == "--dashtest")
         {
@@ -1322,6 +1339,9 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --capturetest       截图（拖框 → 左上角 → 剪贴板，且不拍进自己的批注）");
         Console.WriteLine("  --logupload         开发用：真传一次运行日志（验日志收集仓 / 令牌是否通）");
         Console.WriteLine("  --logtest           日志系统自检（session.json / 环境 / 性能摘要 / 导出 zip）");
+        Console.WriteLine("  --backuptest        全局备份自检（收藏/设置/历史/课件批注打包 → 恢复 → 坏包拒绝；不含 PDF/PPT 原文件）");
+        Console.WriteLine("  --librarytest [图]  收藏自检（存入/去重/面板/插入/回收站/分类/⋯ 菜单/拖动排序/整组/吸附）");
+        Console.WriteLine("  --libraryshow [图]  收藏弹窗摆样（横排 / 竖排 / 分类菜单各出一张；不依赖合成鼠标）");
         Console.WriteLine("  --autostarttest     开机自启自检（注册表写入 / 任务管理器禁用位 / 路径修复 / 清理）");
         Console.WriteLine("  --startupcheck     开机自启装配自检（穿透 + 小球收起 → 再启动后展开 + 退出穿透）");
         Console.WriteLine("  --cursorshow <笔|荧光笔|激光笔|橡皮|像素橡皮> [宽]  落点摆样");
@@ -2122,7 +2142,7 @@ internal sealed partial class App : InkEngine.InkEngine
         // 点一下那颗圆钮：把操作条摊开（图里才有完整的十格）。
         {
             var dot = SelectionHandles.BarCollapsedRect(
-                SelectionHandles.FrameOf(Doc.Selected).CanvasAabb, DpiScale, ViewportCanvas);
+                SelectionHandles.FrameOf(Doc.Selected).CanvasAabb, UiUnit, FurnitureViewport);
             float dx = (dot.MinX + dot.MaxX) * 0.5f, dy = (dot.MinY + dot.MaxY) * 0.5f;
             SendMouse((int)dx, (int)dy, 0);
             SettleFrames(90); Snap();
@@ -2239,9 +2259,9 @@ internal sealed partial class App : InkEngine.InkEngine
         if (cmdArgs.Contains("--dragmid"))
         {
             var sl = SelectionHandles.SliderRect(SelectionHandles.FrameOf(Doc.Selected).CanvasAabb,
-                                                  DpiScale, ViewportCanvas, SelectionHandles.SwatchCount);
+                                                  UiUnit, FurnitureViewport, SelectionHandles.SwatchCount);
             float mx = SelectionHandles.SliderXOfT(0.62f, SelectionHandles.FrameOf(Doc.Selected).CanvasAabb,
-                                                   DpiScale, ViewportCanvas, SelectionHandles.SwatchCount);
+                                                   UiUnit, FurnitureViewport, SelectionHandles.SwatchCount);
             SelectionGestureForTest(mx, (sl.MinY + sl.MaxY) * 0.5f);
             PanelDragMoveForTest(mx + 2f, (sl.MinY + sl.MaxY) * 0.5f);
         }
@@ -2260,7 +2280,7 @@ internal sealed partial class App : InkEngine.InkEngine
         // 操作条挂在框下方（SelectionHandles.BarRect 算的就是那个位置），
         // 所以把它一起并进来，否则出图会把操作条切掉一半。
         var aabb = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
-        var bar = SelectionHandles.BarRect(aabb, DpiScale, ViewportCanvas);
+        var bar = SelectionHandles.BarRect(aabb, UiUnit, FurnitureViewport);
         var region = new RectF
         {
             MinX = MathF.Min(aabb.MinX, bar.MinX), MinY = MathF.Min(aabb.MinY, bar.MinY),
@@ -2269,14 +2289,14 @@ internal sealed partial class App : InkEngine.InkEngine
         if (SelPanelOpen == SelPanel.Ink)
         {
             region.Add(SelectionHandles
-                .PanelRect(aabb, DpiScale, ViewportCanvas, SelectionHandles.SwatchCount));
+                .PanelRect(aabb, UiUnit, FurnitureViewport, SelectionHandles.SwatchCount));
             if (CustomColorOpen)
-                region.Add(SelectionHandles.CustomPanelRect(aabb, DpiScale, ViewportCanvas,
+                region.Add(SelectionHandles.CustomPanelRect(aabb, UiUnit, FurnitureViewport,
                                                            SelectionHandles.SwatchCount));
         }
         else if (SelPanelOpen == SelPanel.Layer)
         {
-            region.Add(SelectionHandles.LayerPanelRect(aabb, DpiScale, ViewportCanvas));
+            region.Add(SelectionHandles.LayerPanelRect(aabb, UiUnit, FurnitureViewport));
         }
         if (!OffscreenFloatingShot(path, region.Inflate(30f))) Console.WriteLine("出图失败");
         _quit = true;
@@ -2353,7 +2373,7 @@ internal sealed partial class App : InkEngine.InkEngine
     /// </summary>
     private void CheckFloatOverlayTokens(Action<string, bool, string> check)
     {
-        float dpi = DpiScale;
+        float dpi = UiUnit;
         const float tol = 0.01f;
         var sel = new RectF { MinX = 400, MinY = 300, MaxX = 800, MaxY = 600 };
         int sc = SelectionHandles.SwatchCount;
@@ -2945,7 +2965,7 @@ internal sealed partial class App : InkEngine.InkEngine
 
             var sFrame = SelectionHandles.FrameOf(Doc.Selected);
             var sAabb = sFrame.CanvasAabb;
-            var sBar = SelectionHandles.BarRect(sAabb, DpiScale, ViewportCanvas);
+            var sBar = SelectionHandles.BarRect(sAabb, UiUnit, FurnitureViewport);
             var region = sAabb;
             region.Add(sBar);
             if (SelectionHandles.RotateHandleVisible(sh))       // 圆没有旋转柄，别白算一块
@@ -2993,7 +3013,7 @@ internal sealed partial class App : InkEngine.InkEngine
 
             var fr = SelectionHandles.FrameOf(Doc.Selected);
             var aabbR = fr.CanvasAabb;
-            var barR = SelectionHandles.BarRect(aabbR, DpiScale, ViewportCanvas);
+            var barR = SelectionHandles.BarRect(aabbR, UiUnit, FurnitureViewport);
             var gripR = SelectionHandles.CanvasPosition(SelHandle.Rotate, fr, DpiScale);
             var regionR = aabbR;
             regionR.Add(barR);
@@ -3144,7 +3164,7 @@ internal sealed partial class App : InkEngine.InkEngine
             // 范围 = 选中框 ∪ 旋转柄 ∪ 操作条（操作条也由 DrawSelection 画，
             // 不并进来会被裁掉一半），再留一圈给投影。
             var aabb = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
-            var bar = SelectionHandles.BarRect(aabb, DpiScale, ViewportCanvas);
+            var bar = SelectionHandles.BarRect(aabb, UiUnit, FurnitureViewport);
             var grip = SelectionHandles.CanvasPosition(SelHandle.Rotate,
                                                        SelectionHandles.FrameOf(Doc.Selected), DpiScale);
             var region = aabb;

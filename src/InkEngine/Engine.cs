@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Globalization;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using Vortice.Direct2D1;
@@ -1581,6 +1582,57 @@ public partial class InkEngine
         MaxX = _virtualX + _virtualW,
         MaxY = _virtualY - ViewOffsetY + _virtualH,
     };
+
+    /// <summary>
+    /// **选中家具**（操作条 / 收起圆钮 / 颜色·层级·取色面板）这一刻可用的画布范围：
+    /// 和 <see cref="ViewportCanvas"/> 同一套坐标，但把**主工具条和色带**那块让出去。
+    ///
+    /// 为什么必须让：UI 是后画的，主工具条压在上面；操作条原来只按屏幕底边夹，
+    /// 选区靠下时整条会钻到工具条底下——看得见框、找不到按钮。条放大到 40 以后
+    /// 这件事更容易发生，所以 2026-10-25 把它提到和"界面块"同一套判据。
+    ///
+    /// 判据只看界面在**屏幕哪一半**：
+    ///   · 贴底（默认）→ 家具的下边停在工具条上沿再留 8；`BarRect` 自己的 16 下限再叠一层
+    ///     （实际留 24，给投影和描边让位）；
+    ///   · 拖到上半屏 → 家具的上边让到工具条下沿再留 8（带子在工具条下方）。
+    /// 界面没挂 / 尺寸退化时原样返回——绝不因为算不出界面就把家具夹到屏幕外。
+    /// </summary>
+    internal RectF FurnitureViewport
+    {
+        get
+        {
+            var v = ViewportCanvas;
+            var ui = UiQueryBoundsNow();
+            if (ui.IsEmpty) return v;
+
+            float unit = UiUnit;
+            float uiTop = ui.MinY * unit;
+            float uiBottom = ui.MaxY * unit;
+            float screenMidY = (VirtualScreen.MinY + VirtualScreen.MaxY) * 0.5f;
+
+            // `ViewportCanvas` 是**画布坐标**（屏幕 Y 减了相机偏移），界面的上下沿是
+            // **屏幕坐标**——滚过画布以后两者差一个 ViewOffsetY。不换算的话，
+            // "避开工具条"会在滚动后整体偏一截（条要么钻下去、要么被推得太高）。
+            float uiTopCanvas = uiTop - ViewOffsetY;
+            float uiBottomCanvas = uiBottom - ViewOffsetY;
+
+            if ((uiTop + uiBottom) * 0.5f >= screenMidY)
+            {
+                // 工具条在下半屏：下边不许低于它的上沿。
+                float limit = uiTopCanvas - 8f * unit;
+                if (limit > v.MinY) v.MaxY = MathF.Min(v.MaxY, limit);
+            }
+            else
+            {
+                // 工具条在上半屏：上边不许高于它的下沿。
+                float limit = uiBottomCanvas + 8f * unit;
+                if (limit < v.MaxY) v.MinY = MathF.Max(v.MinY, limit);
+            }
+
+            if (v.MaxX <= v.MinX || v.MaxY <= v.MinY) return ViewportCanvas;
+            return v;
+        }
+    }
 
     /// <summary>
     /// 画布范围 = 内容边界 ∪ 当前视口 ∪ **视口下方一屏空白**。
@@ -3581,6 +3633,7 @@ public partial class InkEngine
             // RenderAll 那条负责自检驱动；函数自己幂等（每天最多传一次）。
             MaybeDeviceCardUpload();
             StepLogUpload();                  // 日志上传结果轮询（后台线程传，界面不卡）
+            StepAppDataJob();                 // 全局备份/恢复结果轮询（后台线程，界面不卡）
             if (NeedsFrame())
             {
                 // VBlankPaced：先等到合成边界，**再抽一次消息**，然后画、提交。
@@ -3672,6 +3725,7 @@ public partial class InkEngine
         // 运行日志的设备卡（2026-10-17）：每天最多传一次（台数 / 型号统计；自检不传）。
         MaybeDeviceCardUpload();
         StepLogUpload();
+        StepAppDataJob();
 
         // PPT 状态机。**为什么两处都调**（这里 + 主循环 Loop 里）：主循环那条路
         // 只在"真有帧"时才走到，而自检是用"抽消息＋渲染"驱动的（同 MaybeAutoSave
@@ -4161,12 +4215,23 @@ public partial class InkEngine
                 return IntPtr.Zero;
             case Native.WM_POINTERCAPTURECHANGED:
                 _cntCaptureLost++;
+                CancelLibraryPanelDrag();
+                CancelLibraryTouchScroll();
                 EndStroke();
                 return IntPtr.Zero;
 
             // 右键：截图流程里 = 取消（和 Esc 一条口径，8.3.0）。
             // 鼠标和笔的桶状键都会合成 WM_RBUTTONDOWN，所以这一条两种设备都覆盖。
             case Native.WM_RBUTTONDOWN:
+                if (LibraryPlacementMode)
+                {
+                    LibraryUseSelected = null;
+                    _libraryPending = null;
+                    _libraryPendingTitle = null;
+                    NotifyUiStateChanged();
+                    _dirty = true;
+                    return IntPtr.Zero;
+                }
                 if (ColorPickActive) { CancelColorPick(); return IntPtr.Zero; }
                 if (CaptureActive) { CancelCapture(); return IntPtr.Zero; }
                 break;
@@ -4293,6 +4358,7 @@ public partial class InkEngine
         if (Laser.Visible || Laser.NeedsClearFrame) d |= FrameDrive.Laser;
         if (_drawing) d |= FrameDrive.Drawing;
         if (SelFlashing) d |= FrameDrive.Selection;
+        if (LibraryFeedbackActive) d |= FrameDrive.Selection;
         if (UiIsAnimatingNow) d |= FrameDrive.UiAnim;
         if (_camAnimating) d |= FrameDrive.Camera;
         if (_replayPlaying) d |= FrameDrive.Replay;
@@ -4370,6 +4436,11 @@ public partial class InkEngine
         float screenX = sx, screenY = sy;
         float x = sx, y = sy;
         ScreenToCanvas(ref x, ref y);
+
+        // 收藏触摸滚动进行中：第二根手指一律吞掉，别把第二下落到卡片/画布上。
+        if ((_libraryTouchScrollArmed || _libraryTouchScrolling) && ptype == Native.PT_TOUCH)
+            return;
+
         if (ColorPickActive)
         {
             PointerX = x; PointerY = y; PointerInside = true;
@@ -4383,15 +4454,27 @@ public partial class InkEngine
         //   "落笔表示我要写字了"仍然成立：点盘外还是取消。）
         if (RadialPaletteActive && RadialPaletteTryPointerDown(x, y)) return;
 
-        // 图库面板排在界面之前：它从工具条上沿**往上长**，两块本来不重叠，
-        // 但顺序写清楚——面板是自己的浮层，先问它。
-        // 按在面板外 = 先把它收起来，然后这一下**照常往下面走**（同颜色/层级面板的口径：
-        // 面板外的第一下既收面板、也不耽误画）。`LibraryPointerDown` 内部还会管
-        // "面板里的空白"（吃掉，不穿透到画布）。
-        if (LibraryPanelOpen)
+        // 收藏弹窗是**常驻浮层**（用户 2026-10-26 定）：点面板外/画布/换工具都不收，
+        // 只有 Esc、关闭、再点收藏格才收。这里只让面板自己先吃它范围内的按下。
+        if (LibraryPanelVisibleNow && LibraryPointerDown(x, y, ptype, id))
         {
-            if (LibraryPointerDown(x, y)) { ApplyCursor(); return; }
-            CloseLibraryPanel();
+            ApplyCursor();
+            return;
+        }
+
+        // 使用态选中一张后，直接点画布 = 落点插入；面板保持打开。
+        if (LibraryPanelVisibleNow && LibraryUseSelected != null
+            && !InUiPopup(x, y) && !UiContains(screenX, screenY)
+            && !PptBarContains(screenX, screenY)
+            && !TimerCardContains(screenX, screenY)
+            && !RollCardContains(screenX, screenY))
+        {
+            var picked = LibraryUseSelected;
+            LibraryUseSelected = null;
+            InsertLibraryGroupAt(new[] { picked }, x, y);
+            _dirty = true;
+            ApplyCursor();
+            return;
         }
 
         // 回放（墨迹 C）优先于界面与画布，三种落点：
@@ -4520,6 +4603,16 @@ public partial class InkEngine
         {
             TryInsertLibraryAt(x, y);
             ApplyCursor();
+            return;
+        }
+
+        // 从收藏放下的对象还在临时选中：点空白 = 取消选中并回到插入前的工具。
+        // 这一下只做“退出”，不落墨；点另一个对象则继续走正常选择。
+        if (_restoreToolAfterLibrarySelection && Doc.Selected.Count > 0
+            && AutoSelectionZoneAt(x, y) == AutoSelZone.None
+            && Doc.HitObjectAt(x, y, ClickToleranceLogical * DpiScale) == null)
+        {
+            ExitLibraryPlacementSelection();
             return;
         }
 
@@ -5380,6 +5473,11 @@ public partial class InkEngine
         ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布，下游全按画布坐标走
         PointerX = x; PointerY = y; PointerInside = true;
 
+        // 触摸滚动中：只认第一根手指；其它手指的移动吞掉。
+        if ((_libraryTouchScrollArmed || _libraryTouchScrolling)
+            && ptype == Native.PT_TOUCH && id != _libraryTouchScrollId)
+            return;
+
         if (ColorPickActive)
         {
             UpdateColorPickHover(x, y);
@@ -5395,14 +5493,34 @@ public partial class InkEngine
             if (_replayScrubbing) return;
         }
 
-        // 图库面板的悬停（和按下同一条口径：面板是最上面那一层）。
-        // 格子亮一下是"这一格点得中"的反馈；整理模式下光标停在红 ✕ 上也是同一套。
-        if (LibraryPanelOpen && !_drawing)
+        // 整理 / 页签 / 滚动条：这一串移动归收藏面板。
+        if (LibraryPanelVisibleNow && LibraryPanelPointerMove(x, y, id))
         {
-            float dpi = UiUnit;   // 图库面板跟着界面缩放走（它挂在工具条上，一家子）
-            var panel = LibraryPanelRectNow();
+            ClearEngineTooltip();
+            ApplyCursor();
+            return;
+        }
+
+        // 收藏弹窗：拖标题栏 / 拖右下角。拖动期间整串移动都归它。
+        if (LibraryPanelVisibleNow && LibraryPanelDragMove(x, y))
+        {
+            ClearEngineTooltip();
+            ApplyCursor();
+            return;
+        }
+
+        // 选中的收藏跟着指针走：每次移动都重画一帧，虚影才不粘滞。
+        if (LibraryPanelVisibleNow && LibraryUseSelected != null && !_drawing)
+            _dirty = true;
+
+        // 图库面板的悬停（和按下同一条口径：面板是最上面那一层）。
+        // 格子亮一下是"这一格点得中"的反馈；光标停在复选框上也是同一套。
+        if (LibraryPanelVisibleNow && !_drawing && !InUiPopup(x, y))
+        {
+            var m = LibraryPanelInfoNow();
+            var panel = m.Panel;
             bool inside = LibraryLayout.Contains(panel, x, y);
-            int hov = inside ? LibraryLayout.CellAt(panel, dpi, LibraryEntries.Count, x, y) : -1;
+            int hov = inside ? LibraryLayout.CellAt(m, LibraryEntries.Count, x, y, LibraryScrollY) : -1;
             if (hov != LibraryHover)
             {
                 LibraryHover = hov;
@@ -5579,7 +5697,28 @@ public partial class InkEngine
         StampInput();
         _cntUp++;
         uint id = (uint)(wParam.ToInt64() & 0xFFFF);
+        if ((_libraryTouchScrollArmed || _libraryTouchScrolling)
+            && id != _libraryTouchScrollId)
+            return;
         if (ColorPickActive) return;
+        // 划线选收尾：先于"卡片拖动"，也先于"面板拖动"（它们在这条路上是互斥的）。
+        if (LibraryPanelVisibleNow && LibraryPanelPointerUp(PointerX, PointerY, id))
+        {
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
+        if (_libraryDrag != 0)
+        {
+            LibraryPanelDragEnd();
+            Native.ReleaseCapture();
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
         if (TouchHud && _touchDiagIds.Remove(id))
         {
             RebuildTouchHud();
@@ -7316,87 +7455,1182 @@ public partial class InkEngine
     //      （平移对齐落点、进文档一步撤销、插入后自动选中）——不另造一套。
     // ==================================================================
 
+    /// <summary>收藏动作的即时反馈（图标换星/对勾；2026-10-25 第一批）。</summary>
+    internal enum LibraryFeedbackKind
+    {
+        None = 0,
+        Success,
+        Duplicate,
+        Error,
+    }
+
     /// <summary>图库面板开着吗（引擎侧浮动面板，和颜色 / 层级面板同一套画法）。</summary>
     internal bool LibraryPanelOpen;
-    /// <summary>面板里的条目。打开面板时读一次，存 / 删之后重读——不做增量更新（条目很少）。</summary>
+    /// <summary>收藏动作这一刻的反馈（成功 / 重复 / 失败）；<see cref="LibraryFeedbackUntilMs"/> 到点自动回普通态。</summary>
+    internal LibraryFeedbackKind LibraryFeedback;
+    internal double LibraryFeedbackUntilMs;
+    internal string LibraryFeedbackCategory = "";
+    internal bool LibraryFeedbackActive => NowMs < LibraryFeedbackUntilMs;
+    /// <summary>上一次收藏/重复命中时选中的那批对象；用来让"已收藏"的对勾**留在条上**。</summary>
+    private Stroke[] _librarySavedSelection;
+
+    /// <summary>当前选中的还是不是"上一次收进去的那批"（只比引用，不读盘）。</summary>
+    internal bool SelectionInLibrary
+    {
+        get
+        {
+            if (_librarySavedSelection == null || _librarySavedSelection.Length != Doc.Selected.Count)
+                return false;
+            for (int i = 0; i < _librarySavedSelection.Length; i++)
+                if (!ReferenceEquals(_librarySavedSelection[i], Doc.Selected[i])) return false;
+            return true;
+        }
+    }
+    /// <summary>图库面板里的条目。打开面板时读一次，存 / 删之后重读——不做增量更新（条目很少）。</summary>
     internal List<ShapeLibrary.Entry> LibraryEntries = new();
+    /// <summary>未筛选的全部条目（分类计数、切分类都从这里来）。</summary>
+    internal List<ShapeLibrary.Entry> LibraryAllEntries = new();
+    /// <summary>当前收藏筛选：`"all"` = 全部；其他是分类 id。</summary>
+    internal string LibraryCategoryId = "all";
+    /// <summary>下一次收藏动作落到哪个分类（「全部」筛选时不改它）。</summary>
+    internal string LibrarySaveCategoryId = ShapeLibrary.Uncategorized;
+    /// <summary>分类表缓存（打开面板/建删分类时刷新）。</summary>
+    internal List<ShapeLibrary.Category> LibraryCategories = new();
+    /// <summary>给界面的分类快照（缓存；只有分类/计数/筛选变化时才重建）。</summary>
+    private LibraryCategoryInfo[] _libraryCategoryInfos = Array.Empty<LibraryCategoryInfo>();
     /// <summary>指针悬停在哪个格子上（-1 = 没在格子上）。</summary>
     internal int LibraryHover = -1;
+    /// <summary>内容滚动位置（物理像素，0 = 顶部）。</summary>
+    internal float LibraryScrollY;
+    /// <summary>分类页签的横向滚动位置（物理像素）。</summary>
+    internal float LibraryTabScroll;
+    /// <summary>当前第几页（旧分页字段；新界面用滚动，保留只为兼容旧自检）。</summary>
+    internal int LibraryPage;
+    /// <summary>收藏弹窗的形状：横条 / 竖条（内部布局跟着换）。</summary>
+    internal LibraryPanelMode LibraryMode = LibraryPanelMode.Horizontal;
+    /// <summary>弹窗位置/大小（**逻辑屏幕坐标**；实际绘制乘 UiUnit）。空 = 还没摆过。</summary>
+    private RectF _libraryPanelLogical;
+    private bool _libraryPanelPrefsLoaded;
+    /// <summary>0 = 没拖；1 = 拖标题栏移动；2 = 拖右下角缩放。</summary>
+    private int _libraryDrag;
+    private Vector2 _libraryDragStart;
+    private RectF _libraryDragStartRect;
+    /// <summary>缩放拖动中的**连续**外框（逻辑坐标，未整格吸附）；松手才落盘。</summary>
+    private RectF _libraryResizePreviewLogical;
+    /// <summary>缩放拖动中冻结的列/行：外框跟手，卡片不跟着每像素重排。</summary>
+    private int _libraryResizeCols;
+    private int _libraryResizeRows;
+    /// <summary>分类抽屉的分类滚动起点（分类多时用）。</summary>
+    internal int LibraryCategoryScroll;
+    /// <summary>分类抽屉是否展开（管理分类 / 2 列快速切换时用）。</summary>
+    internal bool LibraryCategoriesOpen;
+    /// <summary>抽屉是不是「管理分类」（显示铅笔/垃圾桶/新建）；false = 2 列的快速切换。</summary>
+    internal bool LibraryDrawerManage;
+    /// <summary>界面自己的全屏层（更多 / 说明）开着；收藏弹窗先藏，关掉自动回来。</summary>
+    internal bool UiOverlayOpen;
+    /// <summary>
+    /// 这一刻收藏弹窗该不该显示 / 收输入。
+    /// 全屏层、截图、放映、**穿透**时暂时藏；退出后自动回来，状态不销毁。
+    /// </summary>
+    internal bool LibraryPanelVisibleNow
+        => LibraryPanelOpen && !PassThrough && !UiOverlayOpen && !CaptureActive && !PptMode;
+    /// <summary>正在改名的分类 id（空 = 没在改名）。</summary>
+    internal string LibraryRenamingId;
+    /// <summary>改名用的原生 EDIT：中文走系统 IME，不能自己画假输入框。</summary>
+    private IntPtr _libraryRenameHwnd;
+    private Native.WndProcDelegate _libraryRenameWndProc;
+    private IntPtr _libraryRenameOldProc;
+    private bool _libraryRenameHadNoActivate;
+    private IntPtr _libraryRenameFont;
+    private float _libraryRenameFontPx;
+    private long _libraryDrawerLastClickMs;
+    private string _libraryDrawerLastClickId;
+
+    /// <summary>使用态选中的那一张（拿起 / 跟着指针）；空 = 没选。整理态不用它。</summary>
+    internal ShapeLibrary.Entry LibraryUseSelected;
+    /// <summary>拿着一张卡时：面板收成状态条，工具栏也让位，整个屏幕都能放。</summary>
+    internal bool LibraryPlacementMode => LibraryUseSelected != null && !LibrarySelectMode;
+    /// <summary>放下后临时选择的工具，用来“点空白回到原来的工具”。</summary>
+    private Tool _toolBeforeLibraryInsert = Tool.Pen;
+    private bool _restoreToolAfterLibrarySelection;
+    /// <summary>0 = 没按卡；1 = 待判；2 = 从卡片拖到画布。</summary>
+    private int _libraryCardPress;
+    private ShapeLibrary.Entry _libraryCardPressEntry;
+    private Vector2 _libraryCardPressStart;
+    private uint _libraryCardPressId;
+    private bool _libraryCardPressWasSelected;
+    /// <summary>整理模式选中的条目（勾选框）。</summary>
+    internal readonly HashSet<ShapeLibrary.Entry> LibrarySelected = new();
+    internal int LibrarySelectionCount => LibrarySelected.Count;
+    internal bool IsLibrarySelected(ShapeLibrary.Entry e) => e != null && LibrarySelected.Contains(e);
+
+    /// <summary>**整理模式**：从 ☰ 进入，点卡=勾选，拖把手=排序，空白拖=框选。退出清选择。</summary>
+    internal bool LibrarySelectMode;
+
+    // ---- 整理模式的框选 / 排序 -------------------------------------------
+    private int _libraryManagePress;          // 0 没按；1 待判；2 框选
+    private ShapeLibrary.Entry _libraryManageDown;
+    private Vector2 _libraryManageStart;
+    internal bool LibraryMarqueeActive;
+    internal RectF LibraryMarqueeRect;
+    internal bool LibraryManageSorting;
+    internal ShapeLibrary.Entry LibraryManageSortEntry;
+    internal ShapeLibrary.Entry LibraryManageDropBefore;
+    /// <summary>滚动条拖动。</summary>
+    private bool _libraryScrollDrag;
+    private float _libraryScrollDragStartY;
+    private float _libraryScrollDragStart;
+    // ---- 触摸上下滚动（单指拖卡片区；点一下仍是选中） -------------------
+    private bool _libraryTouchScrollArmed;
+    private bool _libraryTouchScrolling;
+    private uint _libraryTouchScrollId;
+    private Vector2 _libraryTouchScrollStart;
+    private float _libraryTouchScrollStartY;
+    private ShapeLibrary.Entry _libraryTouchTapEntry;
+    // ---- 页签拖动 / 滚动 ------------------------------------------------
+    private int _libraryTabPress;             // 0 没按；1 待判；2 拖动
+    private int _libraryTabDragIndex = -1;
+    private string _libraryTabDragId;
+    private float _libraryTabDragStartX;
+    private float _libraryTabDragStartScroll;
+    internal int LibraryTabDropIndex = -1;
+    /// <summary>拖动落点（整理排序时画插入线用）：1 = 分类行；2 = 卡片插入线；3 = 画布。</summary>
+    internal int LibraryDropTarget;
+    internal string LibraryDropCategory;
+    internal ShapeLibrary.Entry LibraryDropBefore;
+    /// <summary>0 = 没菜单；3 = 移动到… 的二级分类；4 = ☰ 主菜单。</summary>
+    internal int LibraryMenu;
+    internal int LibraryMenuPage;
+    internal string LibraryConfirm = "";
     /// <summary>
     /// 上一帧指针在不在"自绘界面块"（图库面板）上。只用来在**进出那一刻标脏**：
     /// 从画布带进来的落点环要擦掉（见 <see cref="PointerOnDrawnChrome"/> 的注释）。
     /// </summary>
     private bool _onDrawnChrome;
-    /// <summary>
-    /// 「整理」模式：每个格子上叠一颗红 ✕，点它就是删。
-    /// 为什么要有这个模式（参考实现也有一模一样的一个）：**触摸屏没有右键**，
-    /// 而"点格子"本身已经是"插入"，所以删除必须换一种手势。
-    /// </summary>
-    internal bool LibraryEditMode;
+
+    /// <summary>把一张卡设成"选中 / 不选中"（框选 / 点选共用）。</summary>
+    private void ApplyLibrarySelection(ShapeLibrary.Entry entry, bool on)
+    {
+        if (entry == null) return;
+        bool changed = on ? LibrarySelected.Add(entry) : LibrarySelected.Remove(entry);
+        if (!changed) return;
+        NotifyUiStateChanged();
+        _dirty = true;
+    }
+
+    /// <summary>整组替换勾选（框选一帧用；不做逐条 toggle）。</summary>
+    private void SetLibrarySelection(IEnumerable<ShapeLibrary.Entry> entries)
+    {
+        var next = new HashSet<ShapeLibrary.Entry>();
+        foreach (var e in entries) if (e != null) next.Add(e);
+        if (next.SetEquals(LibrarySelected)) return;
+        LibrarySelected.Clear();
+        foreach (var e in next) LibrarySelected.Add(e);
+        NotifyUiStateChanged();
+        _dirty = true;
+    }
     /// <summary>待插入的内容（非空 = 已经点了格子，下一次在画布上按下就落在那里）。</summary>
     private List<Stroke> _libraryPending;
+    private string _libraryPendingTitle;
 
     /// <summary>是不是"等着落笔插入"（自检 / 光标要看它）。</summary>
     internal bool LibraryInsertArmed => _libraryPending != null;
 
-    /// <summary>把选中的对象存成一个图库条目。返回存了几个（0 = 没存成）。</summary>
+    /// <summary>把选中的对象存成一个收藏条目。返回存了几个（0 = 没存成或重复）。</summary>
     internal int SaveSelectionToLibrary()
     {
         if (Doc.Selected.Count == 0) return 0;
         var items = new List<Stroke>(Doc.Selected);
-        if (ShapeLibrary.Save(items) == null) return 0;
-        // 反馈只有"闪一下"（和全选同一个 `SelFlashUntilMs`）：这一版没有 toast，
-        // 而存进图库这件事**必须有个动静**——不然老师不知道点中了没有。
+        string category = (LibraryCategoryId == "all" || LibraryCategoryId == ShapeLibrary.TrashCategory)
+            ? LibrarySaveCategoryId
+            : LibraryCategoryId;
+        var result = ShapeLibrary.SaveEx(items, category);
+        if (!result.Success)
+        {
+            SetLibraryFeedback(LibraryFeedbackKind.Error, "");
+            return 0;
+        }
+        if (result.Duplicate)
+        {
+            SetLibraryFeedback(LibraryFeedbackKind.Duplicate,
+                                result.Entry?.CategoryName ?? ShapeLibrary.UncategorizedName);
+            Console.WriteLine("收藏：这张已经在「"
+                              + (result.Entry?.CategoryName ?? ShapeLibrary.UncategorizedName)
+                              + "」里了，没有重复存");
+            return 0;
+        }
+
+        LibrarySaveCategoryId = result.Entry?.CategoryId ?? category;
+        SetLibraryFeedback(LibraryFeedbackKind.Success,
+                            result.Entry?.CategoryName ?? ShapeLibrary.UncategorizedName);
+        if (LibraryPanelOpen)
+        {
+            ReloadLibrary();
+            NotifyUiStateChanged();
+        }
+        // 反馈除了图标换星，选中框也闪一下（和全选同一个 `SelFlashUntilMs`）。
         SelFlashUntilMs = NowMs + SelFlashMs;
         _dirty = true;
         return items.Count;
     }
 
+    /// <summary>
+    /// ☰ → 导入图片…：选 PNG / JPG 等文件，**原样存进收藏**，透明 PNG 保留透明底。
+    /// 不走截图（截图只会抓到屏幕像素，没有 alpha），也不走文档页的白底合成。
+    /// </summary>
+    private void ImportLibraryImages()
+    {
+        // 自检 / 自动测试里绝不弹系统对话框（模态调用会把消息泵卡住）。
+        if (!ExportDialogEnabled)
+        {
+            SetInkStatus("自检模式不弹对话框");
+            return;
+        }
+
+        string dir = GetUiPref("imageDir");
+        BorrowFocusForDialog();
+        ExportDialogOpen = true;
+        string[] files;
+        try
+        {
+            files = ExportFileDialog.AskForOpenDocuments(
+                OwnerHwnd(), dir, ImageFile.OpenFilter,
+                "导入图片 / 贴纸（透明 PNG 会保留透明底，可多选）");
+        }
+        catch (Exception ex)
+        {
+            SetInkStatus("弹图片对话框失败：" + ex.Message);
+            return;
+        }
+        finally
+        {
+            ExportDialogOpen = false;
+            ReturnFocusAfterDialog();
+        }
+
+        if (files == null || files.Length == 0)
+        {
+            SetInkStatus("已取消");
+            return;
+        }
+        SetUiPref("imageDir", Path.GetDirectoryName(files[0]) ?? "");
+        ImportLibraryImagesFrom(files);
+    }
+
+    /// <summary>
+    /// 把一组图片文件导入当前收藏分类（对话框和自检共用）。返回成功导入的条数。
+    /// 每条图片各存一张卡片；同一张图已经存在时按重复跳过，不写第二份。
+    /// </summary>
+    internal int ImportLibraryImagesFrom(IReadOnlyList<string> files)
+    {
+        if (files == null || files.Count == 0) return 0;
+
+        // 和“从画布收藏”同一条分类口径：在「全部 / 回收站」里操作时，
+        // 落到上一次选的分类（没有就是未分类）。
+        string targetId = (LibraryCategoryId == "all" || LibraryCategoryId == ShapeLibrary.TrashCategory)
+            ? LibrarySaveCategoryId
+            : LibraryCategoryId;
+        if (!LibraryCategories.Exists(c => c.Id == targetId))
+            targetId = ShapeLibrary.Uncategorized;
+
+        string targetName = ShapeLibrary.UncategorizedName;
+        foreach (var c in LibraryCategories)
+            if (c.Id == targetId) { targetName = c.Name; break; }
+
+        int ok = 0, duplicate = 0, failed = 0;
+        string firstError = null;
+
+        // 大图最多摆到视口的一半左右；小图标按“屏幕像素 1:1”走，不被放大。
+        float dpi = MathF.Max(0.1f, DpiScale);
+        float natural = 1f / dpi;
+        var vp = ViewportCanvas;
+        float maxW = MathF.Max(64f, (vp.MaxX - vp.MinX) * 0.55f);
+        float maxH = MathF.Max(64f, (vp.MaxY - vp.MinY) * 0.55f);
+
+        foreach (string path in files)
+        {
+            var loaded = ImageFile.Load(path);
+            if (!loaded.Success)
+            {
+                failed++;
+                firstError ??= loaded.Error;
+                Console.WriteLine($"[收藏] 导入图片失败：{path}：{loaded.Error}");
+                continue;
+            }
+
+            // ImageFile 已经按预乘 alpha 输出，不能再走 Adopt（会二次预乘）。
+            var img = ImageData.AdoptPremultiplied(loaded.Width, loaded.Height, loaded.Bgra);
+            if (img == null)
+            {
+                failed++;
+                firstError ??= "图片像素无法识别";
+                continue;
+            }
+
+            float scale = MathF.Min(natural,
+                MathF.Min(maxW / MathF.Max(1, img.Width), maxH / MathF.Max(1, img.Height)));
+            if (!(scale > 0.0001f)) scale = natural;
+
+            var stroke = new Stroke
+            {
+                Tool = Tool.Capture,
+                Kind = StrokeKind.Image,
+                Color = new Color4(1f, 1f, 1f, 1f),
+                Width = 0f,
+                Image = img,
+            };
+            stroke.SetPoints(new[]
+            {
+                new Vector2(0f, 0f),
+                new Vector2(img.Width, img.Height),
+            });
+            stroke.Transform = Matrix3x2.CreateScale(scale);
+
+            string title = Path.GetFileNameWithoutExtension(path);
+            if (string.IsNullOrWhiteSpace(title)) title = null;
+            else if (title.Length > 40) title = title[..40];
+
+            var save = ShapeLibrary.SaveEx(new[] { stroke }, targetId, title);
+            // 存完这一张就把它从“存活图像”账上放掉；收藏卡片之后从磁盘重新读。
+            // 不释放的话每导入一张，诊断里的 LiveImages / LiveBytes 就永久多一张。
+            img.Release();
+            if (!save.Success)
+            {
+                failed++;
+                firstError ??= "写入收藏失败";
+            }
+            else if (save.Duplicate) duplicate++;
+            else ok++;
+        }
+
+        if (ok > 0)
+        {
+            // 在回收站里导入时切回「全部」，否则新卡片会被回收站过滤掉、看不见。
+            if (LibraryCategoryId == ShapeLibrary.TrashCategory)
+            {
+                LibraryCategoryId = "all";
+                LibrarySelected.Clear();
+                LibrarySelectMode = false;
+                LibraryUseSelected = null;
+            }
+            ReloadLibrary();
+            LibraryScrollY = 0;                 // 新条目排最前，滚回顶部让老师马上看到
+            ClampLibraryScroll();
+            NotifyUiStateChanged();
+            _dirty = true;
+        }
+
+        string extra = "";
+        if (duplicate > 0) extra += $"，{duplicate} 张已在收藏里";
+        if (failed > 0) extra += $"，{failed} 张失败";
+        if (ok > 0)
+            SetInkStatus($"已导入 {ok} 张到「{targetName}」{extra}；选中卡片 → 放置");
+        else if (duplicate > 0 || failed > 0)
+        {
+            string msg = duplicate > 0 ? $"这 {duplicate} 张已经在收藏里了" : "没有导入图片";
+            if (failed > 0)
+                msg += string.IsNullOrEmpty(firstError) ? $"；{failed} 张失败"
+                                                        : $"；{failed} 张失败：{firstError}";
+            SetInkStatus(msg);
+        }
+        else
+        {
+            SetInkStatus("没有导入图片");
+        }
+        return ok;
+    }
+
+    private void SetLibraryFeedback(LibraryFeedbackKind kind, string category)
+    {
+        LibraryFeedback = kind;
+        LibraryFeedbackCategory = category ?? "";
+        LibraryFeedbackUntilMs = NowMs + 1400;
+        if (kind == LibraryFeedbackKind.Success || kind == LibraryFeedbackKind.Duplicate)
+            _librarySavedSelection = Doc.Selected.ToArray();
+        _dirty = true;
+    }
+
+    /// <summary>界面全屏层（更多 / 说明）开合：只翻一个标志，弹窗内容不销毁。</summary>
+    internal void SetUiOverlayFromUi(bool open)
+    {
+        if (UiOverlayOpen == open) return;
+        UiOverlayOpen = open;
+        if (open)
+        {
+            HideLibraryRenameWindow();
+            LibraryHover = -1;
+            LibraryDropTarget = 0;
+            LibraryDropCategory = null;
+            LibraryDropBefore = null;
+        }
+        _dirty = true;
+    }
+
     internal void OpenLibraryPanel()
     {
+        // 穿透下收藏弹窗没有独立输入窗，会被藏起来；用户明确点“收藏”= 现在要用它，
+        // 先退出穿透（和 SwitchTool 选工具同一条语义）。
+        if (PassThrough) SetPassThrough(false);
         ReloadLibrary();
         LibraryPanelOpen = true;
-        LibraryEditMode = false;
+        LibraryMenu = 0;
+        LibraryMenuPage = 0;
+        LibraryConfirm = "";
+        LibraryCategoryScroll = 0;
+        LibraryCategoriesOpen = false;
+        LibraryDrawerManage = false;
+        LibrarySelectMode = false;
+        LibraryUseSelected = null;
+        LibraryScrollY = 0;
+        LibraryTabScroll = 0;
+        LibraryMarqueeActive = false;
+        LibraryManageSorting = false;
+        HideLibraryRenameWindow();
+        EnsureLibraryCategoryVisible();
+        EnsureLibraryTabVisible();
         _dirty = true;
+        NotifyUiStateChanged();
     }
 
     internal void CloseLibraryPanel()
     {
-        if (!LibraryPanelOpen && !LibraryEditMode) return;
+        if (!LibraryPanelOpen) return;
         LibraryPanelOpen = false;
-        LibraryEditMode = false;
+        LibrarySelected.Clear();
+        LibrarySelectMode = false;
+        LibraryUseSelected = null;
+        LibraryMarqueeActive = false;
+        LibraryManageSorting = false;
+        LibraryManageSortEntry = null;
+        CancelLibraryTouchScroll();
+        _libraryScrollDrag = false;
+        _libraryTabPress = 0;
+        _libraryTabDragIndex = -1;
+        _libraryTabDragId = null;
+        _libraryPending = null;
+        _libraryPendingTitle = null;
+        LibraryMenu = 0;
+        LibraryMenuPage = 0;
+        LibraryConfirm = "";
+        LibraryCategoriesOpen = false;
+        LibraryDrawerManage = false;
+        HideLibraryRenameWindow();
+        CancelLibraryPanelDrag();
         LibraryHover = -1;
         _onDrawnChrome = false;   // 面板没了，"在界面上"这条状态跟着清零（下次打开重新触发标脏）
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 进穿透时把收藏弹窗藏起来：**只藏，不关**——分类、位置、大小、勾选都留着，
+    /// 退出穿透自动回来。正在进行的拖动 / 框选 / 菜单 / 改名要收掉，
+    /// 否则回来时会留下半截状态（或者一个飘在外面的原生 EDIT）。
+    /// </summary>
+    private void HideLibraryForPassThrough()
+    {
+        if (!LibraryPanelOpen) return;
+
+        CancelLibraryTouchScroll();
+
+        // 没在改名就别碰焦点：进去穿透是要把焦点交给下层程序的。
+        if (!string.IsNullOrEmpty(LibraryRenamingId)) HideLibraryRenameWindow();
+
+        bool hadCapture = _libraryDrag != 0 || _libraryScrollDrag
+                       || _libraryManagePress != 0 || LibraryManageSorting
+                       || _libraryTabPress != 0;
+        CancelLibraryPanelDrag();
+        _libraryScrollDrag = false;
+        _libraryManagePress = 0;
+        _libraryManageDown = null;
+        LibraryMarqueeActive = false;
+        LibraryMarqueeRect = default;
+        LibraryManageSorting = false;
+        LibraryManageSortEntry = null;
+        LibraryManageDropBefore = null;
+        LibraryManageDropIndex = -1;
+        _libraryTabPress = 0;
+        _libraryTabDragIndex = -1;
+        _libraryTabDragId = null;
+        LibraryTabDropIndex = -1;
+        LibraryDropTarget = 0;
+        LibraryDropCategory = null;
+        LibraryDropBefore = null;
+        LibraryHover = -1;
+        ClearEngineTooltip();
+        LibraryMenu = 0;
+        LibraryMenuPage = 0;
+        LibraryConfirm = "";
+        LibraryCategoriesOpen = false;
+        LibraryDrawerManage = false;
+        _libraryDrawerLastClickMs = 0;
+        _libraryDrawerLastClickId = null;
+        // 已经按了“放置”、还没落笔的：穿透期间画布不归我们，先取消，免得
+        // 退出穿透后老师只是随手点一下画布却突然插进一张图。
+        _libraryPending = null;
+        _libraryPendingTitle = null;
+        _onDrawnChrome = false;
+        if (hadCapture) Native.ReleaseCapture();
         _dirty = true;
     }
 
     internal void ToggleLibraryPanel()
     {
+        // 穿透下弹窗只是“藏着”，不是“关着”。这一下先把穿透退掉，
+        // 把原来那个弹窗带回来；不要当成“关闭”把它真的关掉。
+        if (PassThrough)
+        {
+            SetPassThrough(false);
+            if (!LibraryPanelOpen) OpenLibraryPanel();
+            return;
+        }
         if (LibraryPanelOpen) CloseLibraryPanel();
         else OpenLibraryPanel();
     }
 
-    /// <summary>重读目录（打开面板 / 存完 / 删完都走这里）。</summary>
+    /// <summary>重读目录（打开面板 / 存完 / 删完都走这里），按当前分类重新筛。</summary>
     internal void ReloadLibrary()
     {
-        LibraryEntries = ShapeLibrary.List();
+        LibraryAllEntries = ShapeLibrary.List(includeTrash: true);
+        LibraryCategories = ShapeLibrary.ListCategories();
+        if (LibraryCategoryId != "all"
+            && LibraryCategoryId != ShapeLibrary.TrashCategory
+            && !LibraryCategories.Exists(c => c.Id == LibraryCategoryId))
+            LibraryCategoryId = "all";
+        if (LibrarySaveCategoryId != ShapeLibrary.Uncategorized
+            && !LibraryCategories.Exists(c => c.Id == LibrarySaveCategoryId))
+            LibrarySaveCategoryId = ShapeLibrary.Uncategorized;
+        ApplyLibraryFilter();
+        RefreshLibraryCategoryInfos();
+        ClampLibraryScroll();
+        EnsureLibraryCategoryVisible();
+        EnsureLibraryTabVisible();
+        _dirty = true;
+    }
+
+    /// <summary>收藏面板：切分类（`"all"` = 全部）。只筛，不搬。</summary>
+    internal void SetLibraryCategory(string id)
+    {
+        if (id != "all" && id != ShapeLibrary.TrashCategory
+            && !LibraryCategories.Exists(c => c.Id == id)) return;
+        LibraryCategoryId = id;
+        if (id != "all" && id != ShapeLibrary.TrashCategory) LibrarySaveCategoryId = id;
+        // 切分类 = 换了一批卡，原来的勾选 / 选中 / 滚动都没意义了。
+        LibrarySelected.Clear();
+        LibrarySelectMode = false;
+        LibraryUseSelected = null;
+        _libraryPending = null;
+        _libraryPendingTitle = null;
+        LibraryConfirm = "";
+        LibraryScrollY = 0;
+        LibraryMarqueeActive = false;
+        LibraryManageSorting = false;
+        ApplyLibraryFilter();
+        RefreshLibraryCategoryInfos();
+        EnsureLibraryCategoryVisible();
+        EnsureLibraryTabVisible();
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    internal void CreateLibraryCategory()
+    {
+        var cat = ShapeLibrary.CreateCategory(null);
+        LibraryCategories = ShapeLibrary.ListCategories();
+        LibraryCategoryId = cat.Id;
+        LibrarySaveCategoryId = cat.Id;
+        ApplyLibraryFilter();
+        RefreshLibraryCategoryInfos();
+        LibraryScrollY = 0;
+        EnsureLibraryCategoryVisible();
+        EnsureLibraryTabVisible();
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    internal void DeleteLibraryCategory(string id)
+    {
+        if (string.IsNullOrEmpty(id) || id == ShapeLibrary.Uncategorized) return;
+        ShapeLibrary.DeleteCategory(id);       // 条目全部移到「未分类」，绝不删内容
+        if (LibraryCategoryId == id) LibraryCategoryId = ShapeLibrary.Uncategorized;
+        if (LibrarySaveCategoryId == id) LibrarySaveCategoryId = ShapeLibrary.Uncategorized;
+        LibraryConfirm = "";
+        LibraryRenamingId = null;
+        LibraryCategoriesOpen = true;
+        LibraryDrawerManage = true;
+        ReloadLibrary();
+        SetInkStatus("分类已删除；里面的内容都在「未分类」");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>抽屉行几何（按 id 找，已经算上滚动）。</summary>
+    private RectF LibraryDrawerRowRectForId(string id)
+    {
+        var m = LibraryPanelInfoNow();
+        var drawer = LibraryDrawerRectNow();
+        int shown = LibraryDrawerVisibleCount();
+        int first = Math.Clamp(LibraryCategoryScroll, 0, Math.Max(0, _libraryCategoryInfos.Length - shown));
+        for (int row = 0; row < shown; row++)
+            if (_libraryCategoryInfos[first + row].Id == id)
+                return LibraryLayout.CategoryDrawerRowRect(drawer, m.Dpi, row);
+        return default;
+    }
+
+    /// <summary>开始改分类名：原生 EDIT 盖在那一行上，中文/输入法都由系统处理。</summary>
+    internal void BeginLibraryCategoryRename(string id)
+    {
+        if (!LibraryLayout.DrawerRowIsUserCategory(id)) return;
+        EnsureLibraryRenameWindow();
+        if (_libraryRenameHwnd == IntPtr.Zero) return;
+        LibraryRenamingId = id;
+        LibraryConfirm = "";
+        LibraryMenu = 0;
+        LibraryCategoriesOpen = true;
+        var row = LibraryDrawerRowRectForId(id);
+        if (row.IsEmpty) { LibraryRenamingId = null; return; }
+        var edit = LibraryLayout.DrawerEditRect(row, UiUnit);
+        string current = ShapeLibrary.CategoryNameOf(id) ?? "";
+        Native.SetWindowTextW(_libraryRenameHwnd, current);
+        var font = EnsureLibraryRenameFont(UiUnit);
+        Native.SendMessage(_libraryRenameHwnd, Native.WM_SETFONT, font, new IntPtr(1));
+        int marginL = Math.Max(1, (int)MathF.Round(3f * UiUnit));
+        int marginR = Math.Max(1, (int)MathF.Round(2f * UiUnit));
+        Native.SendMessage(_libraryRenameHwnd, Native.EM_SETMARGINS,
+                           new IntPtr(Native.EC_LEFTMARGIN | Native.EC_RIGHTMARGIN),
+                           new IntPtr(marginL | (marginR << 16)));
+        Native.SendMessage(_libraryRenameHwnd, Native.EM_SETLIMITTEXT, new IntPtr(60), IntPtr.Zero);
+        Native.SendMessage(_libraryRenameHwnd, Native.EM_SETSEL, IntPtr.Zero, new IntPtr(-1));
+        int x = (int)MathF.Round(edit.MinX);
+        int y = (int)MathF.Round(edit.MinY + ViewOffsetY);
+        int w = Math.Max(40, (int)MathF.Round(edit.MaxX - edit.MinX));
+        int h = Math.Max(20, (int)MathF.Round(edit.MaxY - edit.MinY));
+        Native.SetWindowPos(_libraryRenameHwnd, Native.HWND_TOPMOST, x, y, w, h,
+                            Native.SWP_SHOWWINDOW);
+        FocusLibraryRenameWindow();
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// 原生输入框要收键盘，必须先是"前台线程"的焦点窗口；覆盖层平时是
+    /// WS_EX_NOACTIVATE，直接 SetFocus 会被系统忽略。这里临时摘掉它，借前台线程的输入队列。
+    /// </summary>
+    private void FocusLibraryRenameWindow()
+    {
+        if (_libraryRenameHwnd == IntPtr.Zero) return;
+        IntPtr main = _windows.Count > 0 ? _windows[0].Hwnd : IntPtr.Zero;
+        _libraryRenameHadNoActivate = false;
+        if (main != IntPtr.Zero)
+        {
+            long ex = Native.GetWindowLongPtr(main, Native.GWL_EXSTYLE).ToInt64();
+            if ((ex & Native.WS_EX_NOACTIVATE) != 0)
+            {
+                _libraryRenameHadNoActivate = true;
+                Native.SetWindowLongPtr(main, Native.GWL_EXSTYLE,
+                    new IntPtr(ex & ~Native.WS_EX_NOACTIVATE));
+                Native.SetWindowPos(main, IntPtr.Zero, 0, 0, 0, 0,
+                    Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER);
+            }
+        }
+        IntPtr fg = Native.GetForegroundWindow();
+        uint fgTid = Native.GetWindowThreadProcessId(fg, out _);
+        uint myTid = Native.GetCurrentThreadId();
+        IntPtr target = _libraryRenameHwnd;
+        if (fgTid != 0 && fgTid != myTid)
+        {
+            Native.AttachThreadInput(myTid, fgTid, true);
+            Native.SetForegroundWindow(target);
+            Native.SetFocus(_libraryRenameHwnd);
+            Native.AttachThreadInput(myTid, fgTid, false);
+        }
+        else
+        {
+            Native.SetForegroundWindow(target);
+            Native.SetFocus(_libraryRenameHwnd);
+        }
+        Native.SetWindowPos(_libraryRenameHwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
+                            Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+    }
+
+    private void RestoreLibraryRenameFocus()
+    {
+        bool had = _libraryRenameHadNoActivate;
+        _libraryRenameHadNoActivate = false;
+        if (had && _windows.Count > 0)
+        {
+            IntPtr main = _windows[0].Hwnd;
+            long ex = Native.GetWindowLongPtr(main, Native.GWL_EXSTYLE).ToInt64();
+            Native.SetWindowLongPtr(main, Native.GWL_EXSTYLE,
+                new IntPtr(ex | Native.WS_EX_NOACTIVATE));
+            Native.SetWindowPos(main, IntPtr.Zero, 0, 0, 0, 0,
+                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
+        }
+        // 键盘模式：焦点本来就该在覆盖层上，改名输入框藏了要还回去，不然按键全丢。
+        if (KeyboardMode && _windows.Count > 0) Native.SetFocus(_windows[0].Hwnd);
+    }
+
+    /// <summary>结束改名：`✓`/Enter 保存，`✕`/Esc/点别处取消。</summary>
+    internal void EndLibraryCategoryRename(bool save)
+    {
+        if (string.IsNullOrEmpty(LibraryRenamingId)) return;
+        string id = LibraryRenamingId;
+        LibraryRenamingId = null;
+        string text = "";
+        if (_libraryRenameHwnd != IntPtr.Zero)
+        {
+            var sb = new System.Text.StringBuilder(256);
+            Native.GetWindowTextW(_libraryRenameHwnd, sb, sb.Capacity);
+            text = sb.ToString();
+            Native.ShowWindow(_libraryRenameHwnd, Native.SW_HIDE);
+        }
+        RestoreLibraryRenameFocus();
+        if (save && !string.IsNullOrWhiteSpace(text))
+        {
+            string before = ShapeLibrary.CategoryNameOf(id);
+            if (ShapeLibrary.RenameCategory(id, text))
+            {
+                string after = ShapeLibrary.CategoryNameOf(id);
+                if (!string.Equals(before, after, StringComparison.Ordinal))
+                    SetInkStatus($"分类已改名：{after}");
+            }
+        }
+        LibraryCategories = ShapeLibrary.ListCategories();
+        string nowName = ShapeLibrary.CategoryNameOf(id);
+        foreach (var e in LibraryAllEntries)
+            if (e.CategoryId == id) e.CategoryName = nowName;
+        RefreshLibraryCategoryInfos();
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    private void HideLibraryRenameWindow()
+    {
+        LibraryRenamingId = null;
+        if (_libraryRenameHwnd != IntPtr.Zero)
+            Native.ShowWindow(_libraryRenameHwnd, Native.SW_HIDE);
+        RestoreLibraryRenameFocus();
+    }
+
+    private IntPtr EnsureLibraryRenameFont(float dpi)
+    {
+        float px = MathF.Round(11f * dpi);
+        if (_libraryRenameFont != IntPtr.Zero && MathF.Abs(_libraryRenameFontPx - px) < 0.5f)
+            return _libraryRenameFont;
+        if (_libraryRenameFont != IntPtr.Zero)
+        {
+            Native.DeleteObject(_libraryRenameFont);
+            _libraryRenameFont = IntPtr.Zero;
+        }
+        _libraryRenameFont = Native.CreateFontW(
+            -(int)px, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Microsoft YaHei UI");
+        _libraryRenameFontPx = px;
+        return _libraryRenameFont != IntPtr.Zero
+            ? _libraryRenameFont
+            : Native.GetStockObject(Native.DEFAULT_GUI_FONT);
+    }
+
+    private void EnsureLibraryRenameWindow()
+    {
+        if (_libraryRenameHwnd != IntPtr.Zero) return;
+        long exStyle = Native.WS_EX_TOPMOST | Native.WS_EX_TOOLWINDOW;
+        _libraryRenameHwnd = Native.CreateWindowEx(exStyle, "EDIT", "InkTeachCategoryName",
+            0x80000000L /*WS_POPUP*/ | 0x00800000L /*WS_BORDER*/, 0, 0, 1, 1,
+            IntPtr.Zero, IntPtr.Zero, _hInstance, IntPtr.Zero);
+        if (_libraryRenameHwnd == IntPtr.Zero)
+        {
+            Console.WriteLine("分类改名输入框创建失败: " + Marshal.GetLastWin32Error());
+            return;
+        }
+        _libraryRenameWndProc = LibraryRenameWndProc;
+        _libraryRenameOldProc = Native.SetWindowLongPtr(
+            _libraryRenameHwnd, Native.GWLP_WNDPROC,
+            Marshal.GetFunctionPointerForDelegate(_libraryRenameWndProc));
+    }
+
+    private IntPtr LibraryRenameWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        switch (msg)
+        {
+            case Native.WM_KEYDOWN:
+            {
+                int vk = (int)wParam.ToInt64();
+                if (vk == 0x0D) { EndLibraryCategoryRename(true); return IntPtr.Zero; }
+                if (vk == 0x1B) { EndLibraryCategoryRename(false); return IntPtr.Zero; }
+                break;
+            }
+            case Native.WM_CHAR:
+                // Enter/Esc 已经处理过，别再让 EDIT 发“叮”。
+                if ((int)wParam.ToInt64() == 0x0D || (int)wParam.ToInt64() == 0x1B)
+                    return IntPtr.Zero;
+                break;
+            case Native.WM_KILLFOCUS:
+                if (!string.IsNullOrEmpty(LibraryRenamingId)) EndLibraryCategoryRename(false);
+                return IntPtr.Zero;
+            case Native.WM_GETDLGCODE:
+                return new IntPtr(Native.DLGC_WANTALLKEYS);
+        }
+        return Native.CallWindowProc(_libraryRenameOldProc, hWnd, msg, wParam, lParam);
+    }
+
+    /// <summary>清空回收站（永久删除，二次确认由界面负责）。</summary>
+    internal int EmptyLibraryTrash()
+    {
+        int n = ShapeLibrary.EmptyTrash();
+        if (n > 0) SetInkStatus($"已清空回收站（{n} 项）");
+        if (LibraryCategoryId == ShapeLibrary.TrashCategory)
+        {
+            LibrarySelected.Clear();
+            LibraryConfirm = "";
+            ReloadLibrary();
+            NotifyUiStateChanged();
+        }
+        _dirty = true;
+        return n;
+    }
+
+    /// <summary>把选中的条目移到某个分类（从回收站移出 = 恢复并落到那个分类）。</summary>
+    internal void MoveLibraryEntry(string categoryId)
+    {
+        if (LibrarySelected.Count == 0) return;
+        var moving = new List<ShapeLibrary.Entry>();
+        foreach (var e in LibraryEntries) if (LibrarySelected.Contains(e)) moving.Add(e);
+        if (moving.Count == 0) return;
+        foreach (var e in moving) ShapeLibrary.Move(e, categoryId);
+        ShapeLibrary.ReorderToTop(moving);
+        LibrarySelected.Clear();
+        ReloadLibrary();
+        SetInkStatus($"已移动到「{ShapeLibrary.CategoryNameOf(categoryId)}」（{moving.Count} 项，排最前）");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>勾选后删除：收藏里 = 进回收站；回收站里 = 永久删。</summary>
+    internal void DeleteLibrarySelection()
+    {
+        if (LibrarySelected.Count == 0) return;
+        bool permanent = LibraryCategoryId == ShapeLibrary.TrashCategory;
+        int n = LibrarySelected.Count;
+        foreach (var e in new List<ShapeLibrary.Entry>(LibrarySelected))
+        {
+            if (permanent) ShapeLibrary.Delete(e.Path);
+            else ShapeLibrary.Trash(e);
+        }
+        SetInkStatus(permanent ? $"已永久删除 {n} 项" : $"已移入回收站（{n} 项）");
+        LibrarySelected.Clear();
+        LibraryConfirm = "";
+        ReloadLibrary();
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 用**画布上当前选中的对象**覆盖收藏面板里选中的那一条（画布内改完 → 回写收藏）。
+    /// 只允许一次一条、且不是回收站里的；内容撞另一条时拒绝。
+    /// </summary>
+    internal void UpdateLibraryEntryFromSelection()
+    {
+        if (LibrarySelected.Count != 1 || Doc.Selected.Count == 0) return;
+        ShapeLibrary.Entry entry = null;
+        foreach (var e in LibrarySelected) { entry = e; break; }
+        var r = ShapeLibrary.Replace(entry, Doc.Selected);
+        if (r.Success)
+        {
+            SetInkStatus($"已更新收藏「{r.Entry?.Title}」（{r.Entry?.Objects} 个对象）");
+        }
+        else if (r.Duplicate)
+        {
+            SetInkStatus($"改完的内容和「{r.DuplicateEntry?.CategoryName}」里已有的收藏重复，没有更新");
+        }
+        else if (r.Unchanged)
+        {
+            SetInkStatus("内容和这条收藏一样，没有变化");
+        }
+        else
+        {
+            SetInkStatus("更新收藏失败：" + (r.Error ?? "未知原因"));
+        }
+        if (r.Success)
+        {
+            ReloadLibrary();
+            NotifyUiStateChanged();
+        }
+        _dirty = true;
+    }
+
+    /// <summary>收藏弹窗菜单里的一行（绘制与命中共用）。</summary>
+    internal readonly record struct LibraryMenuItem(string Key, string Label, bool Danger, bool Enabled);
+
+    private const int LibraryMenuPerPage = 8;
+
+    internal List<LibraryMenuItem> LibraryMenuItems()
+    {
+        var rows = new List<LibraryMenuItem>(8);
+        if (LibraryMenu == 3)
+        {
+            rows.Add(new LibraryMenuItem("back", "‹ 返回", false, true));
+            var cats = _libraryCategoryInfos;
+            int pages = Math.Max(1, (cats.Length + LibraryMenuPerPage - 1) / LibraryMenuPerPage);
+            int page = Math.Clamp(LibraryMenuPage, 0, pages - 1);
+            int start = page * LibraryMenuPerPage;
+            int end = Math.Min(cats.Length, start + LibraryMenuPerPage);
+            for (int i = start; i < end; i++)
+            {
+                if (cats[i].Id == LibraryCategoryIds.All || cats[i].Id == LibraryCategoryIds.Trash) continue;
+                rows.Add(new LibraryMenuItem("move:" + cats[i].Id, cats[i].Name, false, true));
+            }
+            if (pages > 1)
+                rows.Add(new LibraryMenuItem("nextmove", $"下一页 {page + 1}/{pages} ›", false, true));
+            return rows;
+        }
+
+        // ☰ 主菜单：只放“调整 / 补充内容”，使用态不出现删除/改名。
+        // “导入图片”是**内容导入**（透明贴纸），不是收藏备份的导入/导出。
+        rows.Add(new LibraryMenuItem("importimg", "导入图片 / 贴纸…", false, true));
+        rows.Add(new LibraryMenuItem("manage", "整理收藏…", false, true));
+        rows.Add(new LibraryMenuItem("categories", "管理分类…", false, true));
+        bool trashView = LibraryCategoryId == ShapeLibrary.TrashCategory;
+        int trashN = 0;
+        foreach (var e in LibraryAllEntries) if (e.InTrash) trashN++;
+        if (trashView)
+        {
+            rows.Add(new LibraryMenuItem("backcat", "‹ 返回收藏", false, true));
+            rows.Add(new LibraryMenuItem("emptytrash",
+                LibraryConfirm == "emptytrash" ? "再点一次：清空回收站" : $"清空回收站 · {trashN} 个",
+                true, trashN > 0));
+        }
+        else
+        {
+            rows.Add(new LibraryMenuItem("trash",
+                trashN > 0 ? $"回收站 · {trashN} 个" : "回收站（空）", false, true));
+        }
+        // 方向和位置分开：拖动只挪位置，要换横/竖排走这里，不靠“拖到哪儿”。
+        rows.Add(new LibraryMenuItem("orientation",
+            LibraryMode == LibraryPanelMode.Horizontal ? "切换为竖排" : "切换为横排",
+            false, true));
+        rows.Add(new LibraryMenuItem("reset", "重置位置与大小", false, true));
+        return rows;
+    }
+
+    internal RectF LibraryMenuRect()
+    {
+        var m = LibraryPanelInfoNow();
+        var screen = UiLogicalScreen;
+        float dpi = UiUnit;
+        var items = LibraryMenuItems();
+        float w = 220f * dpi;
+        float h = (8f + Math.Max(1, items.Count) * 30f) * dpi;
+        var anchor = m.Menu;                 // 画布坐标
+        var uiBar = UiBarBoundsNow();
+        // 屏幕边界先换成画布坐标，再和 anchor 比；不然滚动白板后菜单会跑。
+        float screenMinX = screen.MinX * dpi;
+        float screenMaxX = screen.MaxX * dpi;
+        float screenMinY = screen.MinY * dpi - ViewOffsetY;
+        float screenMaxY = screen.MaxY * dpi - ViewOffsetY;
+        float bottom = uiBar.IsEmpty ? screenMaxY - 8f * dpi
+                                     : uiBar.MinY * dpi - ViewOffsetY - 8f * dpi;
+        float x = Math.Clamp(anchor.MinX, screenMinX + 8f * dpi,
+                             MathF.Max(screenMinX + 8f * dpi, screenMaxX - 8f * dpi - w));
+        float y = anchor.MaxY + 6f * dpi;
+        if (y + h > bottom) y = anchor.MinY - h - 6f * dpi;
+        y = Math.Clamp(y, screenMinY + 8f * dpi,
+                       MathF.Max(screenMinY + 8f * dpi, bottom - h));
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    internal RectF LibraryMenuRowRect(in RectF menu, int i)
+        => new()
+        {
+            MinX = menu.MinX + 4f * UiUnit, MinY = menu.MinY + 4f * UiUnit + i * 30f * UiUnit,
+            MaxX = menu.MaxX - 4f * UiUnit, MaxY = menu.MinY + 4f * UiUnit + (i + 1) * 30f * UiUnit,
+        };
+
+    private void CloseLibraryMenu()
+    {
+        LibraryMenu = 0;
+        LibraryMenuPage = 0;
+        LibraryConfirm = "";
+        _dirty = true;
+    }
+
+    /// <summary>自检用：关掉收藏弹窗的菜单。</summary>
+    internal void CloseLibraryMenuForTest() => CloseLibraryMenu();
+
+    private void RunLibraryMenu(string key)
+    {
+        if (key.StartsWith("move:", StringComparison.Ordinal))
+        {
+            string id = key.Substring(5);
+            CloseLibraryMenu();
+            MoveLibraryEntry(id);
+            return;
+        }
+        if (key == "nextmove")
+        {
+            LibraryMenuPage++;
+            _dirty = true;
+            return;
+        }
+        switch (key)
+        {
+            case "importimg":
+                CloseLibraryMenu();
+                ImportLibraryImages();
+                break;
+            case "manage":
+                CloseLibraryMenu();
+                LibrarySelectMode = true;
+                LibraryUseSelected = null;
+                _libraryPending = null;
+                _libraryPendingTitle = null;
+                LibrarySelected.Clear();
+                LibraryMarqueeActive = false;
+                LibraryConfirm = "";
+                NotifyUiStateChanged();
+                _dirty = true;
+                break;
+            case "categories":
+                CloseLibraryMenu();
+                LibraryCategoriesOpen = true;
+                LibraryDrawerManage = true;
+                EnsureLibraryCategoryVisible();
+                _dirty = true;
+                break;
+            case "trash":
+                CloseLibraryMenu();
+                SetLibraryCategory(LibraryCategoryIds.Trash);
+                break;
+            case "backcat":
+                CloseLibraryMenu();
+                SetLibraryCategory(LibraryCategoryIds.All);
+                break;
+            case "orientation":
+                CloseLibraryMenu();
+                ToggleLibraryOrientation();
+                break;
+            case "reset":
+                CloseLibraryMenu();
+                ResetLibraryPlacement();
+                break;
+            case "back":
+                CloseLibraryMenu();
+                break;
+            case "emptytrash":
+                if (LibraryConfirm != key) { LibraryConfirm = key; _dirty = true; break; }
+                CloseLibraryMenu();
+                EmptyLibraryTrash();
+                break;
+        }
+    }
+
+    private void ApplyLibraryFilter()
+    {
+        if (LibraryCategoryId == "all")
+        {
+            LibraryEntries = new List<ShapeLibrary.Entry>();
+            foreach (var e in LibraryAllEntries) if (!e.InTrash) LibraryEntries.Add(e);
+        }
+        else if (LibraryCategoryId == ShapeLibrary.TrashCategory)
+        {
+            LibraryEntries = new List<ShapeLibrary.Entry>();
+            foreach (var e in LibraryAllEntries) if (e.InTrash) LibraryEntries.Add(e);
+        }
+        else
+        {
+            LibraryEntries = new List<ShapeLibrary.Entry>();
+            foreach (var e in LibraryAllEntries)
+                if (!e.InTrash && e.CategoryId == LibraryCategoryId) LibraryEntries.Add(e);
+        }
+        LibraryHover = -1;
+        LibrarySelected.Clear();
+        LibraryUseSelected = null;
+    }
+
+    /// <summary>滚轮 / 滚动条滚内容（0 = 顶部）。</summary>
+    internal void LibraryScrollBy(float dy)
+    {
+        var m = LibraryPanelInfoNow();
+        float max = LibraryLayout.MaxScroll(m, LibraryEntries.Count);
+        float next = Math.Clamp(LibraryScrollY + dy, 0f, max);
+        if (MathF.Abs(next - LibraryScrollY) < 0.01f) return;
+        LibraryScrollY = next;
         LibraryHover = -1;
         _dirty = true;
     }
 
-    /// <summary>点了第 i 个格子 = 进"落笔插入"态（面板自己收起来，别挡着要落的地方）。</summary>
-    internal bool ArmLibraryInsert(int index)
+    internal void ClampLibraryScroll()
     {
-        if (index < 0 || index >= LibraryEntries.Count) return false;
-        _libraryPending = LibraryEntries[index].Strokes;
-        CloseLibraryPanel();
-        // 手头正在画的东西作废（和粘贴前一样：免得这一次按下又被当成接着画）
-        ActiveStroke = null;
-        _stepPlan = null;
-        _stepIndex = 0;
-        Console.WriteLine($"图库：已选中第 {index + 1} 个条目（{_libraryPending.Count} 个对象），到画布上按下就落在那里");
-        _dirty = true;
-        return true;
+        var m = LibraryPanelInfoNow();
+        LibraryScrollY = Math.Clamp(LibraryScrollY, 0f,
+            LibraryLayout.MaxScroll(m, LibraryEntries.Count));
+    }
+
+    /// <summary>让当前分类的页签始终露在可视区里；分类多时页签条横向滚。</summary>
+    internal void EnsureLibraryTabVisible()
+    {
+        var m = LibraryPanelInfoNow();
+        if (!m.Tabbed) { LibraryTabScroll = 0; return; }
+        var cats = LibraryTabCategories();
+        if (cats.Length == 0) return;
+        var widths = new float[cats.Length];
+        for (int i = 0; i < cats.Length; i++)
+            widths[i] = LibraryLayout.TabWidthLogical(cats[i].Name) * UiUnit;
+        int idx = Array.FindIndex(cats, c => c.Id == LibraryCategoryId);
+        if (idx < 0) { LibraryTabScroll = 0; return; }
+        float gap = LibraryLayout.TabGapLogical * UiUnit;
+        float left = 0;
+        for (int i = 0; i < idx; i++) left += widths[i] + gap;
+        float right = left + widths[idx];
+        float view = m.Tabs.MaxX - m.Tabs.MinX;
+        float max = MathF.Max(0f, LibraryLayout.TabsWidth(widths, UiUnit) - view);
+        if (left < LibraryTabScroll) LibraryTabScroll = left;
+        else if (right > LibraryTabScroll + view) LibraryTabScroll = right - view;
+        LibraryTabScroll = Math.Clamp(LibraryTabScroll, 0f, max);
+    }
+
+    /// <summary>页签用到的分类：全部 + 未分类 + 用户分类；回收站不进页签（在 ☰ 里）。</summary>
+    internal LibraryCategoryInfo[] LibraryTabCategories()
+    {
+        var list = new List<LibraryCategoryInfo>(_libraryCategoryInfos.Length);
+        foreach (var c in _libraryCategoryInfos)
+            if (c.Id != ShapeLibrary.TrashCategory) list.Add(c);
+        return list.ToArray();
+    }
+
+    /// <summary>竖排左列：保证当前分类在可视范围内（分类多时跟着滚动）。</summary>
+    private void EnsureLibraryCategoryVisible()
+    {
+        var m = LibraryPanelInfoNow();
+        if (_libraryCategoryInfos.Length == 0) return;
+        int cap = Math.Max(1, LibraryLayout.CategoryDrawerCapacity(m) - 1);
+        int idx = Array.FindIndex(_libraryCategoryInfos, c => c.Id == LibraryCategoryId);
+        if (idx < 0) return;
+        // 当前分类尽量放在第二行：上面留一行、下面也露一行，拖到相邻分类不用先滚。
+        int maxScroll = Math.Max(0, _libraryCategoryInfos.Length - cap);
+        LibraryCategoryScroll = Math.Clamp(idx - (cap > 1 ? 1 : 0), 0, maxScroll);
+    }
+
+    private void RefreshLibraryCategoryInfos()
+    {
+        var list = new List<LibraryCategoryInfo>(LibraryCategories.Count + 2);
+        int activeCount = 0, trashCount = 0;
+        foreach (var e in LibraryAllEntries)
+        {
+            if (e.InTrash) trashCount++; else activeCount++;
+        }
+        list.Add(new LibraryCategoryInfo { Id = "all", Name = "全部", Count = activeCount });
+        foreach (var c in LibraryCategories)
+        {
+            int n = 0;
+            foreach (var e in LibraryAllEntries)
+                if (!e.InTrash && e.CategoryId == c.Id) n++;
+            list.Add(new LibraryCategoryInfo
+            {
+                Id = c.Id, Name = c.Name, Count = n, Pinned = c.Pinned
+            });
+        }
+        // 回收站是虚拟分类：不写进 categories.txt，但界面要能选到它。
+        list.Add(new LibraryCategoryInfo
+        {
+            Id = ShapeLibrary.TrashCategory, Name = ShapeLibrary.TrashName, Count = trashCount
+        });
+        _libraryCategoryInfos = list.ToArray();
     }
 
     /// <summary>
@@ -7407,74 +8641,1279 @@ public partial class InkEngine
     {
         if (_libraryPending == null) return false;
         var src = _libraryPending;
+        string title = _libraryPendingTitle;
         _libraryPending = null;
+        _libraryPendingTitle = null;
 
         var objs = new List<Stroke>(src.Count);
         foreach (var s in src) objs.Add(s.Clone());
         foreach (var s in objs) s.Id = 0;          // 身份重新发（同剪贴板那条教训：撞号会指错对象）
 
-        var box = EditRegion.Of(objs);
-        var move = Matrix3x2.CreateTranslation(x - box.MinX, y - box.MinY);
+        // 包围盒中心对齐指针，并整体夹进可见区；虚影用同一个矩阵。
+        var move = LibraryPlacementMatrix(objs, x, y);
         foreach (var s in objs) s.Transform = s.Transform * move;
 
         Doc.AddStrokes(objs);
         Doc.SelectOnly(objs);
+        // 插入后要能马上拖 / 缩放，所以切到选择工具；否则当前若是画笔，
+        // 选中框亮着但一拖就变成写字，老师会觉得“选中了却操作不了”。
+        // 记住插入前的工具：点空白取消选中时回到它（荧光笔/橡皮也照原样回）。
+        if (Tool != Tool.Marquee || !_restoreToolAfterLibrarySelection)
+            _toolBeforeLibraryInsert = Tool;
+        // 和粘贴图片同一条口径（见 PasteFromClipboard）。
+        SwitchTool(Tool.Marquee);
+        _restoreToolAfterLibrarySelection = true;
         // **收起来那一态**：和"刚画完一个图形"一致（见 `_autoSelCollapsed`）——
         // 插进来只是先给个轻的框，要整条操作条点一下圆钮。
         _autoSelCollapsed = true;
         SelFlashUntilMs = NowMs + SelFlashMs;
         _dirty = true;
+        NotifyUiStateChanged();
         Console.WriteLine($"从图库插入 {objs.Count} 个对象");
+        SetInkStatus(string.IsNullOrWhiteSpace(title)
+            ? $"已插入收藏（{objs.Count} 个对象）"
+            : $"已插入收藏「{title}」（{objs.Count} 个对象）");
         return true;
     }
+
+    /// <summary>屏幕矩形 → 画布矩形。面板位置按**屏幕**记住，绘制/命中按画布。</summary>
+    private RectF LibraryScreenToCanvas(in RectF r) => new()
+    {
+        MinX = r.MinX, MinY = r.MinY - ViewOffsetY,
+        MaxX = r.MaxX, MaxY = r.MaxY - ViewOffsetY,
+    };
 
     /// <summary>图库面板这一刻的矩形（**画布坐标**）。绘制、命中、脏区都问它。</summary>
     internal RectF LibraryPanelRectNow()
     {
         float dpi = UiUnit;
-        var ui = UiQueryBoundsNow();                 // 界面那套是**逻辑**像素，要乘回物理（DPI × 界面缩放）
-        var screen = LogicalVirtualScreen;           // 逻辑虚拟桌面
-        float uiTop = ui.IsEmpty
-            ? screen.MinY + 80f
-            : ui.MinY * dpi;                         // 界面块的上沿（工具条在最下，上带在它上面）
-        return LibraryLayout.PanelRect(screen.MinX * dpi, screen.MaxX * dpi, uiTop, dpi,
-                                       LibraryEntries.Count);
+        var screen = UiLogicalScreen;
+        var ui = UiBarBoundsNow();
+        float uiTop = ui.IsEmpty ? screen.MaxY - 80f : ui.MinY;
+
+        EnsureLibraryPanelPrefs();
+        if (_libraryDrag == 2 && !_libraryResizePreviewLogical.IsEmpty)
+        {
+            // 缩放拖动：外框跟手连续走，不做整格 Snap；卡片布局由 Info 冻结列/行。
+            var preview = new RectF
+            {
+                MinX = _libraryResizePreviewLogical.MinX * dpi,
+                MinY = _libraryResizePreviewLogical.MinY * dpi,
+                MaxX = _libraryResizePreviewLogical.MaxX * dpi,
+                MaxY = _libraryResizePreviewLogical.MaxY * dpi,
+            };
+            return LibraryScreenToCanvas(
+                ClampLibraryPanel(preview, screen, uiTop, dpi, LibraryMode));
+        }
+        if (_libraryPanelLogical.IsEmpty || _libraryPanelLogical.MaxX <= _libraryPanelLogical.MinX
+            || _libraryPanelLogical.MaxY <= _libraryPanelLogical.MinY)
+        {
+            var def = DefaultLibraryRect(screen, uiTop, dpi, LibraryMode);
+            _libraryPanelLogical = new RectF { MinX = def.MinX / dpi, MinY = def.MinY / dpi,
+                                               MaxX = def.MaxX / dpi, MaxY = def.MaxY / dpi };
+        }
+
+        var desired = new RectF
+        {
+            MinX = _libraryPanelLogical.MinX * dpi, MinY = _libraryPanelLogical.MinY * dpi,
+            MaxX = _libraryPanelLogical.MaxX * dpi, MaxY = _libraryPanelLogical.MaxY * dpi,
+        };
+        var panel = ClampLibraryPanel(desired, screen, uiTop, dpi, LibraryMode);
+        panel = LibraryLayout.Snap(panel, dpi, LibraryMode);
+        panel = ClampLibraryPanel(panel, screen, uiTop, dpi, LibraryMode);
+        _libraryPanelLogical = new RectF { MinX = panel.MinX / dpi, MinY = panel.MinY / dpi,
+                                           MaxX = panel.MaxX / dpi, MaxY = panel.MaxY / dpi };
+        // 拿起卡片后连小状态条也不画：整块屏幕交给虚影/落点。
+        // 但完整矩形已经存进 _libraryPanelLogical，放下/取消后原样恢复。
+        if (LibraryPlacementMode) return RectF.Empty;
+        return LibraryScreenToCanvas(panel);
     }
 
-    /// <summary>图库面板上的按下。返回 true = 这一下归面板（不再往下走到画布）。</summary>
-    private bool LibraryPointerDown(float x, float y)
+    internal LibraryLayout.Info LibraryPanelInfoNow()
+    {
+        bool resizing = _libraryDrag == 2 && !_libraryResizePreviewLogical.IsEmpty;
+        var m = LibraryLayout.Measure(LibraryPanelRectNow(), UiUnit, LibraryMode,
+            resizing ? _libraryResizeCols : 0,
+            resizing ? _libraryResizeRows : 0);
+        if (!m.Tabbed) return m;
+
+        // 页签档：把 CurrentCategory 指到当前页签（抽屉/管理分类定位用）。
+        var cats = LibraryTabCategories();
+        int idx = Array.FindIndex(cats, c => c.Id == LibraryCategoryId);
+        if (idx < 0) return m;
+        var widths = new float[cats.Length];
+        for (int i = 0; i < cats.Length; i++)
+            widths[i] = LibraryLayout.TabWidthLogical(cats[i].Name) * UiUnit;
+        m = m with { CurrentCategory = LibraryLayout.TabRect(m, widths, idx, UiUnit, LibraryTabScroll) };
+        return m;
+    }
+
+    /// <summary>整理操作条：全选 / 移动 / 删除 / 完成。</summary>
+    internal (RectF All, RectF Move, RectF Delete, RectF Done) LibraryManageRects()
+        => LibraryLayout.ManageRects(LibraryPanelInfoNow());
+
+    /// <summary>旧接口：选中操作条（兼容旧自检；返回 更新/移动/删除/取消）。</summary>
+    internal (RectF Update, RectF Move, RectF Delete, RectF Cancel) LibrarySelectionRects()
+    {
+        var (all, move, del, done) = LibraryManageRects();
+        return (all, move, del, done);
+    }
+
+    /// <summary>
+    /// 「用画布上当前选中的对象更新这条收藏」能不能点。
+    /// 条件（沿用 2026-10-25 的规矩）：**只选中一张收藏** ＋ **画布上有选中**。
+    /// 页签档把它从 ⋯ 菜单里搬到操作条上（菜单没了），所以需要这个显式的可用性判断。
+    /// </summary>
+    internal bool CanUpdateFromCanvas => LibrarySelected.Count == 1 && Doc.Selected.Count > 0;
+
+    /// <summary>分类抽屉这一刻的矩形（覆盖在卡片上）。</summary>
+    internal RectF LibraryDrawerRectNow()
+    {
+        var m = LibraryPanelInfoNow();
+        int cap = LibraryLayout.CategoryDrawerCapacity(m) - (LibraryDrawerManage ? 1 : 0);
+        int shown = Math.Min(Math.Max(1, cap), Math.Max(1, _libraryCategoryInfos.Length));
+        var r = LibraryLayout.CategoryDrawerRect(m, shown + (LibraryDrawerManage ? 1 : 0));
+        // 抽屉可能比窄面板宽：别伸出屏幕。
+        float screenMaxX = UiLogicalScreen.MaxX * UiUnit - 8f * UiUnit;
+        if (r.MaxX > screenMaxX)
+        {
+            float dx = r.MaxX - screenMaxX;
+            r = new RectF { MinX = r.MinX - dx, MinY = r.MinY, MaxX = r.MaxX - dx, MaxY = r.MaxY };
+        }
+        return r;
+    }
+
+    private int LibraryDrawerVisibleCount()
+    {
+        var m = LibraryPanelInfoNow();
+        int cap = Math.Max(1, LibraryLayout.CategoryDrawerCapacity(m) - (LibraryDrawerManage ? 1 : 0));
+        return Math.Min(cap, Math.Max(1, _libraryCategoryInfos.Length));
+    }
+
+    /// <summary>抽屉行的命中：返回分类 id；`"__new"` = 新建；null = 没命中。</summary>
+    private string LibraryDrawerCategoryAt(float x, float y)
+    {
+        var m = LibraryPanelInfoNow();
+        var drawer = LibraryDrawerRectNow();
+        int shown = LibraryDrawerVisibleCount();
+        int first = Math.Clamp(LibraryCategoryScroll, 0, Math.Max(0, _libraryCategoryInfos.Length - shown));
+        for (int row = 0; row < shown; row++)
+            if (LibraryLayout.CategoryDrawerRowRect(drawer, m.Dpi, row).Contains(x, y))
+                return _libraryCategoryInfos[first + row].Id;
+        if (LibraryDrawerManage
+            && LibraryLayout.CategoryDrawerRowRect(drawer, m.Dpi, shown).Contains(x, y))
+            return "__new";
+        return null;
+    }
+
+    /// <summary>绘制用：分类快照（含「全部」和回收站）。</summary>
+    internal LibraryCategoryInfo[] LibraryCategoryListForPaint() => _libraryCategoryInfos;
+
+    /// <summary>☰ → 重置位置与大小：回到默认横排、贴工具条上沿居中。</summary>
+    internal void ResetLibraryPlacement()
+    {
+        CancelLibraryPanelDrag();
+        CancelLibraryTouchScroll();
+        LibraryMode = LibraryPanelMode.Horizontal;
+        _libraryPanelLogical = default;
+        _libraryPanelPrefsLoaded = true;
+        LibraryScrollY = 0;
+        LibraryTabScroll = 0;
+        LibraryCategoriesOpen = false;
+        LibraryDrawerManage = false;
+        LibraryMenu = 0;
+        LibraryConfirm = "";
+        SaveLibraryPanelPrefs();
+        SetInkStatus("收藏弹窗已恢复默认位置");
+        _dirty = true;
+    }
+
+    /// <summary>自检用：把弹窗位置/大小/方向恢复成默认，避免上一条用例带偏。</summary>
+    internal void ResetLibraryPanelForTest()
+    {
+        CancelLibraryPanelDrag();
+        CancelLibraryTouchScroll();
+        _libraryPanelLogical = default;
+        LibraryMode = LibraryPanelMode.Horizontal;
+        _libraryPanelPrefsLoaded = true;
+        LibraryPage = 0;
+        LibraryScrollY = 0;
+        LibraryTabScroll = 0;
+        LibraryCategoryScroll = 0;
+        LibraryMenu = 0;
+        LibraryConfirm = "";
+        LibrarySelectMode = false;
+        LibraryUseSelected = null;
+        LibrarySelected.Clear();
+        LibraryCategoriesOpen = false;
+        LibraryDrawerManage = false;
+        LibraryMarqueeActive = false;
+        LibraryManageSorting = false;
+        SaveLibraryPanelPrefs();
+        _dirty = true;
+    }
+
+    private RectF DefaultLibraryRect(in RectF screen, float uiTop, float dpi, LibraryPanelMode mode)
+    {
+        // 2026-10-26：卡片 72×80 → 84×92 之后重算的默认档。
+        // 横排 752 = 24 + 8×84 + 7×8，252 = 24 + 28 + 8 + 2×92 + 8（8 列 2 行）。
+        // 竖排 384 = 24 + 4×84 + 3×8，548 = 24 + 28 + 4 + 5×92 + 4×8（4 列 5 行）。
+        float w = (mode == LibraryPanelMode.Horizontal ? 752f : 384f) * dpi;
+        float h = (mode == LibraryPanelMode.Horizontal ? 252f : 548f) * dpi;
+        var desired = new RectF
+        {
+            MinX = (screen.MinX + screen.MaxX) * 0.5f * dpi - w * 0.5f,
+            MinY = uiTop * dpi - LibraryLayout.GapAboveUiLogical * dpi - h,
+            MaxX = 0, MaxY = 0,
+        };
+        desired.MaxX = desired.MinX + w;
+        desired.MaxY = desired.MinY + h;
+        var snapped = LibraryLayout.Snap(desired, dpi, mode);
+        return ClampLibraryPanel(snapped, screen, uiTop, dpi, mode);
+    }
+
+    private RectF ClampLibraryPanel(in RectF rect, in RectF screen, float uiTop, float dpi, LibraryPanelMode mode)
+    {
+        float minX = screen.MinX * dpi + 8f * dpi;
+        float minY = screen.MinY * dpi + 8f * dpi;
+        float maxX = screen.MaxX * dpi - 8f * dpi;
+        float maxY = uiTop * dpi - LibraryLayout.GapAboveUiLogical * dpi;
+        float w = MathF.Min(rect.MaxX - rect.MinX, MathF.Max(72f * dpi, maxX - minX));
+        float h = MathF.Min(rect.MaxY - rect.MinY, MathF.Max(72f * dpi, maxY - minY));
+        float x = Math.Clamp(rect.MinX, minX, MathF.Max(minX, maxX - w));
+        float y = Math.Clamp(rect.MinY, minY, MathF.Max(minY, maxY - h));
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    private void EnsureLibraryPanelPrefs()
+    {
+        if (_libraryPanelPrefsLoaded) return;
+        _libraryPanelPrefsLoaded = true;
+        LibraryMode = GetUiPref("libMode") == "v" ? LibraryPanelMode.Vertical : LibraryPanelMode.Horizontal;
+        string raw = GetUiPref("libRect");
+        if (string.IsNullOrWhiteSpace(raw)) return;
+        var parts = raw.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 4) return;
+        if (float.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out float x)
+            && float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float y)
+            && float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float w)
+            && float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float h)
+            && w > 60f && h > 60f)
+            _libraryPanelLogical = new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    private void SaveLibraryPanelPrefs()
+    {
+        SetUiPref("libMode", LibraryMode == LibraryPanelMode.Vertical ? "v" : "h");
+        if (_libraryPanelLogical.IsEmpty) { SetUiPref("libRect", null); return; }
+        var r = _libraryPanelLogical;
+        SetUiPref("libRect", string.Join(",",
+            r.MinX.ToString("F1", CultureInfo.InvariantCulture),
+            r.MinY.ToString("F1", CultureInfo.InvariantCulture),
+            (r.MaxX - r.MinX).ToString("F1", CultureInfo.InvariantCulture),
+            (r.MaxY - r.MinY).ToString("F1", CultureInfo.InvariantCulture)));
+    }
+
+    private void StartLibraryDrag(int kind, float x, float y)
+    {
+        if (kind == 2)
+        {
+            // 外框随便变，卡片列/行先冻在这一刻；松手才重排。
+            var now = LibraryPanelInfoNow();
+            _libraryResizeCols = now.Cols;
+            _libraryResizeRows = now.Rows;
+            // preview / _libraryPanelLogical 都按**屏幕**逻辑坐标存；now.Panel 是画布。
+            _libraryResizePreviewLogical = new RectF
+            {
+                MinX = now.Panel.MinX / UiUnit,
+                MinY = (now.Panel.MinY + ViewOffsetY) / UiUnit,
+                MaxX = now.Panel.MaxX / UiUnit,
+                MaxY = (now.Panel.MaxY + ViewOffsetY) / UiUnit,
+            };
+        }
+        _libraryDrag = kind;
+        _libraryDragStart = new Vector2(x, y + ViewOffsetY);
+        _libraryDragStartRect = _libraryPanelLogical;
+        if (_windows.Count > 0) Native.SetCapture(_windows[0].Hwnd);
+    }
+
+    internal bool LibraryPanelDragMove(float x, float y)
+    {
+        if (_libraryDrag == 0) return false;
+        float dpi = UiUnit;
+        var screen = UiLogicalScreen;
+        var ui = UiBarBoundsNow();
+        float uiTop = ui.IsEmpty ? screen.MaxY - 80f : ui.MinY;
+        // 指针是画布坐标，面板位置是屏幕坐标；先把 y 加回相机偏移。
+        float sx = x;
+        float sy = y + ViewOffsetY;
+        float dx = (sx - _libraryDragStart.X) / dpi;
+        float dy = (sy - _libraryDragStart.Y) / dpi;
+        var r = _libraryDragStartRect;
+        if (_libraryDrag == 1)
+        {
+            r = new RectF { MinX = r.MinX + dx, MinY = r.MinY + dy,
+                            MaxX = r.MaxX + dx, MaxY = r.MaxY + dy };
+        }
+        else
+        {
+            // 拖动中允许连续像素，只要不塌到 1×2 以下；松手才吸附整格。
+            float w = MathF.Max(LibraryLayout.MinWidthLogical, (r.MaxX - r.MinX) + dx);
+            float h = MathF.Max(LibraryLayout.MinHeightLogical, (r.MaxY - r.MinY) + dy);
+            r = new RectF { MinX = r.MinX, MinY = r.MinY, MaxX = r.MinX + w, MaxY = r.MinY + h };
+        }
+        var phys = new RectF { MinX = r.MinX * dpi, MinY = r.MinY * dpi,
+                               MaxX = r.MaxX * dpi, MaxY = r.MaxY * dpi };
+        phys = ClampLibraryPanel(phys, screen, uiTop, dpi, LibraryMode);
+        if (_libraryDrag == 2)
+        {
+            _libraryResizePreviewLogical = new RectF
+            {
+                MinX = phys.MinX / dpi, MinY = phys.MinY / dpi,
+                MaxX = phys.MaxX / dpi, MaxY = phys.MaxY / dpi,
+            };
+        }
+        else
+        {
+            _libraryPanelLogical = new RectF { MinX = phys.MinX / dpi, MinY = phys.MinY / dpi,
+                                               MaxX = phys.MaxX / dpi, MaxY = phys.MaxY / dpi };
+        }
+        _dirty = true;
+        return true;
+    }
+
+    internal void LibraryPanelDragEnd()
+    {
+        if (_libraryDrag == 0) return;
+        int kind = _libraryDrag;
+        float dpi = UiUnit;
+        var screen = UiLogicalScreen;
+        var ui = UiBarBoundsNow();
+        float uiTop = ui.IsEmpty ? screen.MaxY - 80f : ui.MinY;
+
+        // 缩放：拖动中一直是连续外框，松手才吸到**最近**整格。
+        // 吸附只改宽高，左上角不动；不在这里再按屏幕边“贴一下”，免得松手整块跳。
+        if (kind == 2 && !_libraryResizePreviewLogical.IsEmpty)
+        {
+            _libraryDrag = 0;
+            var raw = new RectF
+            {
+                MinX = _libraryResizePreviewLogical.MinX * dpi,
+                MinY = _libraryResizePreviewLogical.MinY * dpi,
+                MaxX = _libraryResizePreviewLogical.MaxX * dpi,
+                MaxY = _libraryResizePreviewLogical.MaxY * dpi,
+            };
+            var settled = LibraryLayout.SnapNearest(raw, dpi, LibraryMode);
+            settled = ClampLibraryPanel(settled, screen, uiTop, dpi, LibraryMode);
+            _libraryPanelLogical = new RectF
+            {
+                MinX = settled.MinX / dpi, MinY = settled.MinY / dpi,
+                MaxX = settled.MaxX / dpi, MaxY = settled.MaxY / dpi,
+            };
+            _libraryResizePreviewLogical = default;
+            _libraryResizeCols = 0;
+            _libraryResizeRows = 0;
+            ClampLibraryScroll();
+            EnsureLibraryTabVisible();
+            SaveLibraryPanelPrefs();
+            _dirty = true;
+            return;
+        }
+
+        _libraryDrag = 0;
+        var p = new RectF { MinX = _libraryPanelLogical.MinX * dpi, MinY = _libraryPanelLogical.MinY * dpi,
+                            MaxX = _libraryPanelLogical.MaxX * dpi, MaxY = _libraryPanelLogical.MaxY * dpi };
+        bool nearLeft = p.MinX <= screen.MinX * dpi + 40f * dpi;
+        bool nearRight = p.MaxX >= screen.MaxX * dpi - 40f * dpi;
+        bool nearBottom = p.MaxY >= uiTop * dpi - 40f * dpi;
+        bool nearTop = p.MinY <= screen.MinY * dpi + 40f * dpi;
+        // **只移动，不改形状**：以前拖到左/右就自动变竖排、拖到上/下就自动变横排，
+        // 老师只是想把弹窗挪个位置，卡片却突然全部重排。方向和大小只由右侧
+        // 缩放角 + ☰ 里的“切换横排/竖排”决定；这里最多贴边，不改 LibraryMode。
+        var desired = new RectF { MinX = p.MinX, MinY = p.MinY, MaxX = p.MaxX, MaxY = p.MaxY };
+        var snapped = LibraryLayout.Snap(desired, dpi, LibraryMode);
+        if (nearLeft)
+            snapped = new RectF { MinX = screen.MinX * dpi + 8f * dpi, MinY = snapped.MinY,
+                                  MaxX = screen.MinX * dpi + 8f * dpi + (snapped.MaxX - snapped.MinX),
+                                  MaxY = snapped.MaxY };
+        else if (nearRight)
+        {
+            float nw = snapped.MaxX - snapped.MinX;
+            snapped = new RectF { MinX = screen.MaxX * dpi - 8f * dpi - nw, MinY = snapped.MinY,
+                                  MaxX = screen.MaxX * dpi - 8f * dpi, MaxY = snapped.MaxY };
+        }
+        if (nearBottom)
+            snapped = new RectF { MinX = snapped.MinX, MinY = uiTop * dpi - LibraryLayout.GapAboveUiLogical * dpi - (snapped.MaxY - snapped.MinY),
+                                  MaxX = snapped.MaxX, MaxY = uiTop * dpi - LibraryLayout.GapAboveUiLogical * dpi };
+        else if (nearTop)
+            snapped = new RectF { MinX = snapped.MinX, MinY = screen.MinY * dpi + 8f * dpi,
+                                  MaxX = snapped.MaxX, MaxY = screen.MinY * dpi + 8f * dpi + (snapped.MaxY - snapped.MinY) };
+        snapped = ClampLibraryPanel(snapped, screen, uiTop, dpi, LibraryMode);
+        _libraryPanelLogical = new RectF { MinX = snapped.MinX / dpi, MinY = snapped.MinY / dpi,
+                                           MaxX = snapped.MaxX / dpi, MaxY = snapped.MaxY / dpi };
+        var lm = LibraryPanelInfoNow();
+        ClampLibraryScroll();
+        EnsureLibraryTabVisible();
+        SaveLibraryPanelPrefs();
+        _dirty = true;
+    }
+
+    internal void ToggleLibraryOrientation()
     {
         float dpi = UiUnit;
-        var panel = LibraryPanelRectNow();
-        if (!LibraryLayout.Contains(panel, x, y)) return false;    // 面板外：交给调用方收面板
+        var p = LibraryPanelRectNow();
+        float cx = (p.MinX + p.MaxX) * 0.5f;
+        float cy = (p.MinY + p.MaxY) * 0.5f + ViewOffsetY;   // 屏幕坐标
+        LibraryMode = LibraryMode == LibraryPanelMode.Horizontal
+            ? LibraryPanelMode.Vertical : LibraryPanelMode.Horizontal;
+        float w = (LibraryMode == LibraryPanelMode.Horizontal ? 752f : 384f) * dpi;
+        float h = (LibraryMode == LibraryPanelMode.Horizontal ? 252f : 548f) * dpi;
+        var desired = new RectF { MinX = cx - w * 0.5f, MinY = cy - h * 0.5f,
+                                  MaxX = cx + w * 0.5f, MaxY = cy + h * 0.5f };
+        var screen = UiLogicalScreen;
+        var ui = UiBarBoundsNow();
+        float uiTop = ui.IsEmpty ? screen.MaxY - 80f : ui.MinY;
+        var snapped = LibraryLayout.Snap(desired, dpi, LibraryMode);
+        snapped = ClampLibraryPanel(snapped, screen, uiTop, dpi, LibraryMode);
+        _libraryPanelLogical = new RectF { MinX = snapped.MinX / dpi, MinY = snapped.MinY / dpi,
+                                           MaxX = snapped.MaxX / dpi, MaxY = snapped.MaxY / dpi };
+        var lm = LibraryPanelInfoNow();
+        ClampLibraryScroll();
+        EnsureLibraryTabVisible();
+        SaveLibraryPanelPrefs();
+        _dirty = true;
+    }
 
-        if (LibraryLayout.CloseRect(panel, dpi).Contains(x, y)) { CloseLibraryPanel(); return true; }
-
-        if (LibraryLayout.EditRect(panel, dpi).Contains(x, y))
+    /// <summary>点选卡片（触摸滚动里"没滚 = 点了一下"走这里，抬手才选）。</summary>
+    private void SelectLibraryCardForTap(ShapeLibrary.Entry entry)
+    {
+        LibraryUseSelected = entry;
+        LibrarySelected.Clear();
+        _libraryPending = null;
+        _libraryPendingTitle = null;
+        LibraryConfirm = "";
+        LibraryCategoriesOpen = false;
+        LibraryDrawerManage = false;
+        LibraryMenu = 0;
+        if (entry == null)
         {
-            LibraryEditMode = !LibraryEditMode;
             LibraryHover = -1;
+        }
+        else
+        {
+            SetInkStatus($"已选中「{entry.Title}」：点画布落下，Esc 返回");
+        }
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>再点同一张卡 = 放下；点别的卡 = 换一张。</summary>
+    private void ToggleLibraryCardForTap(ShapeLibrary.Entry entry)
+    {
+        if (entry != null && ReferenceEquals(LibraryUseSelected, entry))
+        {
+            LibraryUseSelected = null;
+            _libraryPending = null;
+            _libraryPendingTitle = null;
+            _dirty = true;
+            NotifyUiStateChanged();
+            return;
+        }
+        SelectLibraryCardForTap(entry);
+    }
+
+    /// <summary>取消面板移动/缩放拖动（失焦 / 关面板 / 进穿透）。</summary>
+    private void CancelLibraryPanelDrag()
+    {
+        bool had = _libraryDrag != 0 || !_libraryResizePreviewLogical.IsEmpty
+                || _libraryCardPress != 0;
+        _libraryDrag = 0;
+        _libraryResizePreviewLogical = default;
+        _libraryResizeCols = 0;
+        _libraryResizeRows = 0;
+        _libraryCardPress = 0;
+        _libraryCardPressEntry = null;
+        _libraryCardPressWasSelected = false;
+        if (had)
+        {
+            Native.ReleaseCapture();
+            _dirty = true;
+        }
+    }
+
+    /// <summary>画布上的这个落点能不能放下收藏（面板、工具栏、PPT 条等都不算画布）。</summary>
+    private bool LibraryCanvasPointAllowed(float x, float y)
+    {
+        if (!LibraryPanelVisibleNow) return false;
+        if (LibraryLayout.Contains(LibraryPanelRectNow(), x, y)) return false;
+        float sy = y + ViewOffsetY;
+        if (InUiPopup(x, sy) || UiContains(x, sy) || PptBarContains(x, sy)
+            || TimerCardContains(x, sy) || RollCardContains(x, sy)) return false;
+        var vp = ViewportCanvas;
+        return x >= vp.MinX && x <= vp.MaxX && y >= vp.MinY && y <= vp.MaxY;
+    }
+
+    /// <summary>
+    /// 收藏对象放到画布上时的矩阵：**包围盒中心对齐指针**，并整体夹进可见区
+    /// （包括工具栏上方）。虚影和最终落点都用这一份，保证"看到哪就落在哪"。
+    /// </summary>
+    internal Matrix3x2 LibraryPlacementMatrix(IReadOnlyList<Stroke> strokes, float x, float y)
+    {
+        var box = EditRegion.Of(strokes);
+        if (box.IsEmpty) return Matrix3x2.CreateTranslation(x, y);
+
+        float halfW = (box.MaxX - box.MinX) * 0.5f;
+        float halfH = (box.MaxY - box.MinY) * 0.5f;
+        float margin = 8f * UiUnit;
+        var vp = ViewportCanvas;
+        var ui = UiBarBoundsNow();
+        // 拿起卡片时工具栏暂时让位，所以下边界直接到屏幕底；
+        // 普通放置才夹在工具条上方，避免落进看不见的面板底下。
+        float bottom = LibraryPlacementMode ? vp.MaxY : vp.MaxY - margin;
+        // UiBarBounds 是**逻辑**坐标，这里要和 ViewportCanvas 的物理坐标对齐；
+        // 少乘一个 UiUnit 会把落点夹到屏幕上半（虚影和放置都只能到上半屏）。
+        if (!LibraryPlacementMode && !ui.IsEmpty)
+            bottom = MathF.Min(bottom, ui.MinY * UiUnit - ViewOffsetY - margin);
+
+        float minCx = vp.MinX + margin + halfW;
+        float maxCx = vp.MaxX - margin - halfW;
+        float minCy = vp.MinY + margin + halfH;
+        float maxCy = bottom - halfH;
+        float cx = minCx > maxCx ? (vp.MinX + vp.MaxX) * 0.5f : Math.Clamp(x, minCx, maxCx);
+        float cy = minCy > maxCy ? (vp.MinY + bottom) * 0.5f : Math.Clamp(y, minCy, maxCy);
+        return Matrix3x2.CreateTranslation(cx - (box.MinX + box.MaxX) * 0.5f,
+                                           cy - (box.MinY + box.MaxY) * 0.5f);
+    }
+
+    /// <summary>虚影只在"指针真的在画布上"时显示；移到面板/界面/别的窗口就藏起来。</summary>
+    internal bool LibraryGhostVisibleNow
+    {
+        get
+        {
+            if (!LibraryPanelVisibleNow || LibraryUseSelected == null || LibrarySelectMode
+                || !PointerInside) return false;
+            if (LibraryLayout.Contains(LibraryPanelRectNow(), PointerX, PointerY)) return false;
+            if (LibraryMenu != 0 && LibraryLayout.Contains(LibraryMenuRect(), PointerX, PointerY))
+                return false;
+            float sy = PointerY + ViewOffsetY;
+            if (InUiPopup(PointerX, sy) || UiContains(PointerX, sy)
+                || PptBarContains(PointerX, sy) || TimerCardContains(PointerX, sy)
+                || RollCardContains(PointerX, sy)) return false;
+            var vp = ViewportCanvas;
+            return PointerX >= vp.MinX && PointerX <= vp.MaxX
+                && PointerY >= vp.MinY && PointerY <= vp.MaxY;
+        }
+    }
+
+    /// <summary>
+    /// 放下后对象是临时选中的；点空白 / Esc 时取消选中，并回到插入前的工具。
+    /// 截屏、激光这种瞬态工具回退到画笔，其余按老师原来的工具恢复。
+    /// </summary>
+    private void ExitLibraryPlacementSelection()
+    {
+        if (!_restoreToolAfterLibrarySelection) return;
+        var back = _toolBeforeLibraryInsert;
+        _restoreToolAfterLibrarySelection = false;
+        ClearSelectionForNewContext();
+        if (back == Tool.Capture || back == Tool.Laser) back = Tool.Pen;
+        SwitchTool(back);
+        NotifyUiStateChanged();
+        _dirty = true;
+    }
+
+    /// <summary>取消触摸滚动（失焦 / 关面板 / 进穿透都要走，别让状态粘住）。</summary>
+    private void CancelLibraryTouchScroll()
+    {
+        bool had = _libraryTouchScrollArmed || _libraryTouchScrolling;
+        _libraryTouchScrollArmed = false;
+        _libraryTouchScrolling = false;
+        _libraryTouchScrollId = 0;
+        _libraryTouchTapEntry = null;
+        if (had) Native.ReleaseCapture();
+        _dirty = true;
+    }
+
+    internal bool LibraryPointerDown(float x, float y, uint pointerType, uint pointerId)
+    {
+        if (InUiPopup(x, y)) return false;
+        float dpi = UiUnit;
+        var m = LibraryPanelInfoNow();
+        var panel = m.Panel;
+
+        // 改名中：只有「✓ / ✕」留给下面的抽屉分支，其余任何点击都先取消。
+        if (!string.IsNullOrEmpty(LibraryRenamingId))
+        {
+            var renRow = LibraryDrawerRowRectForId(LibraryRenamingId);
+            bool keep = LibraryCategoriesOpen && !renRow.IsEmpty
+                        && (LibraryLayout.DrawerSaveRect(renRow, dpi).Contains(x, y)
+                            || LibraryLayout.DrawerCancelRect(renRow, dpi).Contains(x, y));
+            if (!keep) EndLibraryCategoryRename(false);
+        }
+
+        if (LibraryMenu != 0)
+        {
+            var menu = LibraryMenuRect();
+            var items = LibraryMenuItems();
+            if (LibraryLayout.Contains(menu, x, y))
+            {
+                for (int i = 0; i < items.Count; i++)
+                    if (LibraryLayout.Contains(LibraryMenuRowRect(menu, i), x, y))
+                    {
+                        if (items[i].Enabled) RunLibraryMenu(items[i].Key);
+                        return true;
+                    }
+                return true;
+            }
+            CloseLibraryMenu();
+            return LibraryLayout.Contains(panel, x, y);
+        }
+
+        // 分类抽屉：管理分类 / 2 列的快速切换。
+        if (LibraryCategoriesOpen)
+        {
+            var drawer = LibraryDrawerRectNow();
+            if (LibraryLayout.Contains(drawer, x, y))
+            {
+                if (!string.IsNullOrEmpty(LibraryRenamingId))
+                {
+                    var renRow = LibraryDrawerRowRectForId(LibraryRenamingId);
+                    if (!renRow.IsEmpty && LibraryLayout.DrawerSaveRect(renRow, dpi).Contains(x, y))
+                    { EndLibraryCategoryRename(true); return true; }
+                    if (!renRow.IsEmpty && LibraryLayout.DrawerCancelRect(renRow, dpi).Contains(x, y))
+                    { EndLibraryCategoryRename(false); return true; }
+                    EndLibraryCategoryRename(false);
+                }
+
+                string id = LibraryDrawerCategoryAt(x, y);
+                if (id == "__new")
+                {
+                    LibraryConfirm = "";
+                    CreateLibraryCategory();
+                    BeginLibraryCategoryRename(LibraryCategoryId);
+                    return true;
+                }
+                if (!string.IsNullOrEmpty(id))
+                {
+                    var row = LibraryDrawerRowRectForId(id);
+                    bool userCat = LibraryLayout.DrawerRowIsUserCategory(id);
+                    if (LibraryDrawerManage && userCat
+                        && LibraryLayout.DrawerStarRect(row, dpi).Contains(x, y))
+                    {
+                        bool pinned = false;
+                        foreach (var c in _libraryCategoryInfos)
+                            if (c.Id == id) { pinned = c.Pinned; break; }
+                        ShapeLibrary.SetCategoryPinned(id, !pinned);
+                        LibraryCategories = ShapeLibrary.ListCategories();
+                        RefreshLibraryCategoryInfos();
+                        EnsureLibraryCategoryVisible();
+                        EnsureLibraryTabVisible();
+                        SetInkStatus(!pinned ? "已标记为常用分类" : "已取消常用标记");
+                        _dirty = true;
+                        return true;
+                    }
+                    if (LibraryDrawerManage && userCat
+                        && LibraryLayout.DrawerPencilRect(row, dpi).Contains(x, y))
+                    { BeginLibraryCategoryRename(id); return true; }
+                    if (LibraryDrawerManage && userCat
+                        && LibraryLayout.DrawerTrashRect(row, dpi).Contains(x, y))
+                    {
+                        if (LibraryConfirm == "delcat:" + id)
+                        {
+                            DeleteLibraryCategory(id);
+                        }
+                        else
+                        {
+                            int count = 0;
+                            foreach (var c in _libraryCategoryInfos)
+                                if (c.Id == id) { count = c.Count; break; }
+                            LibraryConfirm = "delcat:" + id;
+                            SetInkStatus($"再点一次删除分类；{count} 个内容会移到「未分类」");
+                            _dirty = true;
+                        }
+                        return true;
+                    }
+                    LibraryConfirm = "";
+                    LibraryCategoriesOpen = false;
+                    LibraryDrawerManage = false;
+                    SetLibraryCategory(id);
+                    return true;
+                }
+                return true;
+            }
+            LibraryCategoriesOpen = false;
+            LibraryDrawerManage = false;
+            LibraryConfirm = "";
+            _dirty = true;
+        }
+
+        if (!LibraryLayout.Contains(panel, x, y)) return false;
+
+        if (LibraryLayout.ResizeRect(panel, dpi).Contains(x, y))
+        {
+            StartLibraryDrag(2, x, y);
+            return true;
+        }
+
+        // 右侧很细的滚动条（内容超过一屏才有）。
+        if (LibraryLayout.MaxScroll(m, LibraryEntries.Count) > 0.5f)
+        {
+            var track = LibraryLayout.ScrollTrack(m);
+            if (x >= track.MinX - 6f * dpi && x <= track.MaxX + 6f * dpi
+                && y >= track.MinY && y <= track.MaxY)
+            {
+                _libraryScrollDrag = true;
+                _libraryScrollDragStartY = y;
+                _libraryScrollDragStart = LibraryScrollY;
+                if (_windows.Count > 0) Native.SetCapture(_windows[0].Hwnd);
+                LibraryScrollTo(y);
+                return true;
+            }
+        }
+
+        // ================= 整理模式 =================
+        if (LibrarySelectMode)
+        {
+            var (all, move, del, done) = LibraryLayout.ManageRects(m);
+            if (done.Contains(x, y)) { ExitLibraryManage(); return true; }
+            if (all.Contains(x, y)) { ToggleSelectAllLibrary(); return true; }
+            if (move.Contains(x, y))
+            {
+                if (LibrarySelected.Count > 0)
+                {
+                    LibraryMenu = 3;
+                    LibraryMenuPage = 0;
+                    LibraryConfirm = "";
+                    _dirty = true;
+                }
+                return true;
+            }
+            if (del.Contains(x, y)) { DeleteLibraryManage(); return true; }
+            if (m.Header.Contains(x, y)) return true;
+
+            int idx = LibraryLayout.CellAt(m, LibraryEntries.Count, x, y, LibraryScrollY);
+            if (idx >= 0 && idx < LibraryEntries.Count)
+            {
+                var cell = LibraryLayout.CellRect(m, idx, LibraryScrollY);
+                var entry = LibraryEntries[idx];
+                if (LibraryLayout.GripRect(cell, dpi).Contains(x, y))
+                {
+                    BeginLibraryManageSort(entry, x, y);
+                    return true;
+                }
+                BeginLibraryManagePress(entry, x, y);
+                return true;
+            }
+            BeginLibraryManagePress(null, x, y);
+            return true;
+        }
+
+        // ================= 回收站（使用态） =================
+        if (LibraryCategoryId == ShapeLibrary.TrashCategory)
+        {
+            if (m.Menu.Contains(x, y))
+            {
+                LibraryMenu = 4;
+                LibraryMenuPage = 0;
+                LibraryConfirm = "";
+                _dirty = true;
+                return true;
+            }
+            if (m.Close.Contains(x, y)) { CloseLibraryPanel(); return true; }
+            if (m.Header.Contains(x, y)) { SetLibraryCategory(LibraryCategoryIds.All); return true; }
+            int idx = LibraryLayout.CellAt(m, LibraryEntries.Count, x, y, LibraryScrollY);
+            if (idx >= 0 && idx < LibraryEntries.Count)
+            {
+                string t = LibraryEntries[idx].Title;
+                ShapeLibrary.Restore(LibraryEntries[idx]);
+                ReloadLibrary();
+                SetInkStatus($"已恢复「{t}」");
+                NotifyUiStateChanged();
+                return true;
+            }
+            StartLibraryDrag(1, x, y);
+            return true;
+        }
+
+        // 顶栏：☰ / 页签（或当前分类）/ ✕
+        if (m.Menu.Contains(x, y))
+        {
+            LibraryMenu = 4;
+            LibraryMenuPage = 0;
+            LibraryConfirm = "";
+            _dirty = true;
+            return true;
+        }
+        if (m.Close.Contains(x, y)) { CloseLibraryPanel(); return true; }
+
+        if (m.Tabbed)
+        {
+            var cats = LibraryTabCategories();
+            var widths = new float[cats.Length];
+            for (int i = 0; i < cats.Length; i++)
+                widths[i] = LibraryLayout.TabWidthLogical(cats[i].Name) * dpi;
+            int ti = LibraryLayout.TabAt(m, widths, x, y, dpi, LibraryTabScroll);
+            if (ti >= 0 && ti < cats.Length)
+            {
+                BeginLibraryTabPress(ti, cats[ti].Id, x, y);
+                return true;
+            }
+        }
+        else if (m.CurrentCategory.Contains(x, y))
+        {
+            LibraryCategoriesOpen = true;
+            LibraryDrawerManage = false;
+            LibraryCategoryScroll = 0;
+            EnsureLibraryCategoryVisible();
             _dirty = true;
             return true;
         }
 
-        int idx = LibraryLayout.CellAt(panel, dpi, LibraryEntries.Count, x, y);
-        if (idx < 0) return true;                 // 面板里的空白：吃掉，别穿透到画布上去
+        int hit = LibraryLayout.CellAt(m, LibraryEntries.Count, x, y, LibraryScrollY);
 
-        if (LibraryEditMode)
+        // 触摸：单指在卡片区上下拖 = 滚动，点一下（移动没过阈值）= 选中。
+        // 鼠标 / 笔保持原来的立即点选；整理模式下单指仍归框选/排序，不抢。
+        if (pointerType == Native.PT_TOUCH && !LibrarySelectMode
+            && LibraryLayout.Contains(m.Grid, x, y)
+            && LibraryLayout.MaxScroll(m, LibraryEntries.Count) > 0.5f)
         {
-            var cell = LibraryLayout.CellRect(panel, dpi, idx);
-            if (LibraryLayout.BadgeRect(cell, dpi).Contains(x, y))
-            {
-                ShapeLibrary.Delete(LibraryEntries[idx].Path);
-                ReloadLibrary();
-            }
-            // 整理模式下点格子本体**不插入**（参考实现同款：防止整理时误插一堆）
+            _libraryTouchScrollArmed = true;
+            _libraryTouchScrolling = false;
+            _libraryTouchScrollId = pointerId;
+            _libraryTouchScrollStart = new Vector2(x, y);
+            _libraryTouchScrollStartY = LibraryScrollY;
+            _libraryTouchTapEntry = (hit >= 0 && hit < LibraryEntries.Count)
+                ? LibraryEntries[hit] : null;
+            if (_windows.Count > 0) Native.SetCapture(_windows[0].Hwnd);
             return true;
         }
 
-        ArmLibraryInsert(idx);
+        if (hit >= 0 && hit < LibraryEntries.Count)
+        {
+            var entry = LibraryEntries[hit];
+            // 触摸没有 hover：直接点选/再点收起；鼠标/笔要等抬手或拖出阈值，
+            // 才能分清“点一下”和“按住拖到画布”。
+            if (pointerType == Native.PT_TOUCH)
+            {
+                ToggleLibraryCardForTap(entry);
+                return true;
+            }
+
+            _libraryCardPress = 1;
+            _libraryCardPressEntry = entry;
+            _libraryCardPressStart = new Vector2(x, y);
+            _libraryCardPressId = pointerId;
+            _libraryCardPressWasSelected = ReferenceEquals(LibraryUseSelected, entry);
+            if (_windows.Count > 0) Native.SetCapture(_windows[0].Hwnd);
+            return true;
+        }
+
+        LibraryUseSelected = null;
+        _libraryPending = null;
+        _libraryPendingTitle = null;
+        StartLibraryDrag(1, x, y);
         return true;
+    }
+
+    // ================= 指针移动 / 抬起（整理、页签、滚动条） =================
+
+    /// <summary>面板内的专用拖动状态；返回 true = 这一串移动归它。</summary>
+    internal bool LibraryPanelPointerMove(float x, float y, uint pointerId)
+    {
+        // 从卡片按住往外拖：过阈值才算拖，松手在画布上放置。
+        if (_libraryCardPress != 0)
+        {
+            if (pointerId != _libraryCardPressId) return true;
+            if (_libraryCardPress == 1
+                && Vector2.Distance(new Vector2(x, y), _libraryCardPressStart) > 6f * UiUnit)
+            {
+                _libraryCardPress = 2;
+                if (_libraryCardPressEntry != null)
+                    SelectLibraryCardForTap(_libraryCardPressEntry);
+            }
+            if (_libraryCardPress == 2)
+            {
+                ClearEngineTooltip();
+                _dirty = true;       // 虚影位置靠 PointerX/Y，重画一帧
+            }
+            return true;
+        }
+
+        // 触摸滚动：第一根手指负责滚动，其它手指吞掉，别落成笔画/第二次点选。
+        if (_libraryTouchScrollArmed || _libraryTouchScrolling)
+        {
+            if (pointerId != _libraryTouchScrollId) return true;
+            float dx = x - _libraryTouchScrollStart.X;
+            float dy = y - _libraryTouchScrollStart.Y;
+            float threshold = 8f * UiUnit;
+            if (!_libraryTouchScrolling)
+            {
+                if (MathF.Abs(dy) >= threshold && MathF.Abs(dy) > MathF.Abs(dx) * 1.1f)
+                {
+                    _libraryTouchScrolling = true;
+                    _libraryTouchTapEntry = null;   // 已经是在滚动，抬手不能当成点选
+                }
+                else if (MathF.Abs(dx) >= threshold)
+                {
+                    // 横向滑：这次不算点选，也不让面板跟着跑；继续等纵向手势。
+                    _libraryTouchTapEntry = null;
+                }
+            }
+            if (_libraryTouchScrolling)
+            {
+                var m = LibraryPanelInfoNow();
+                float max = LibraryLayout.MaxScroll(m, LibraryEntries.Count);
+                LibraryScrollY = Math.Clamp(_libraryTouchScrollStartY - dy, 0f, max);
+                LibraryHover = -1;
+                ClearEngineTooltip();
+                _dirty = true;
+            }
+            return true;
+        }
+
+        if (_libraryScrollDrag) { LibraryScrollTo(y); return true; }
+        if (_libraryTabPress != 0) { LibraryTabDragMove(x, y); return true; }
+        if (LibraryManageSorting) { LibraryManageSortMove(x, y); return true; }
+        if (_libraryManagePress != 0) { LibraryManagePressMove(x, y); return true; }
+        return false;
+    }
+
+    internal bool LibraryPanelPointerUp(float x, float y, uint pointerId)
+    {
+        if (_libraryCardPress != 0)
+        {
+            if (pointerId != _libraryCardPressId) return true;
+            bool dragged = _libraryCardPress == 2;
+            bool wasSelected = _libraryCardPressWasSelected;
+            var entry = _libraryCardPressEntry;
+            _libraryCardPress = 0;
+            _libraryCardPressEntry = null;
+            _libraryCardPressWasSelected = false;
+            Native.ReleaseCapture();
+            if (dragged && entry != null && LibraryCanvasPointAllowed(x, y))
+            {
+                LibraryUseSelected = null;
+                InsertLibraryGroupAt(new[] { entry }, x, y);
+            }
+            else if (!dragged)
+            {
+                // 没拖 = 点了一下：再点同一张收起，点别的换一张。
+                if (wasSelected) ToggleLibraryCardForTap(entry);
+                else SelectLibraryCardForTap(entry);
+            }
+            _dirty = true;
+            return true;
+        }
+
+        if (_libraryTouchScrollArmed || _libraryTouchScrolling)
+        {
+            if (pointerId != _libraryTouchScrollId) return true;
+            bool scrolled = _libraryTouchScrolling;
+            var tap = _libraryTouchTapEntry;
+            _libraryTouchScrollArmed = false;
+            _libraryTouchScrolling = false;
+            _libraryTouchScrollId = 0;
+            _libraryTouchTapEntry = null;
+            Native.ReleaseCapture();
+            if (!scrolled) ToggleLibraryCardForTap(tap);
+            _dirty = true;
+            return true;
+        }
+        if (_libraryScrollDrag)
+        {
+            _libraryScrollDrag = false;
+            Native.ReleaseCapture();
+            return true;
+        }
+        if (_libraryTabPress != 0)
+        {
+            LibraryTabDragEnd(x, y);
+            return true;
+        }
+        if (LibraryManageSorting)
+        {
+            LibraryManageSortEnd();
+            return true;
+        }
+        if (_libraryManagePress != 0)
+        {
+            LibraryManagePressEnd(x, y);
+            return true;
+        }
+        return false;
+    }
+
+    private void LibraryScrollTo(float y)
+    {
+        var m = LibraryPanelInfoNow();
+        float max = LibraryLayout.MaxScroll(m, LibraryEntries.Count);
+        var track = LibraryLayout.ScrollTrack(m);
+        var thumb = LibraryLayout.ScrollThumb(m, LibraryEntries.Count, LibraryScrollY);
+        if (max <= 0.5f || track.IsEmpty) return;
+        float thumbH = thumb.IsEmpty ? 22f * UiUnit : thumb.MaxY - thumb.MinY;
+        float span = MathF.Max(1f, (track.MaxY - track.MinY) - thumbH);
+        float t = Math.Clamp((y - track.MinY - thumbH * 0.5f) / span, 0f, 1f);
+        LibraryScrollY = t * max;
+        LibraryHover = -1;
+        _dirty = true;
+    }
+
+    // ---- 页签拖动 / 点击 ----
+
+    private void BeginLibraryTabPress(int index, string id, float x, float y)
+    {
+        _libraryTabPress = 1;
+        _libraryTabDragIndex = index;
+        _libraryTabDragId = id;
+        _libraryTabDragStartX = x;
+        _libraryTabDragStartScroll = LibraryTabScroll;
+        LibraryTabDropIndex = -1;
+        if (_windows.Count > 0) Native.SetCapture(_windows[0].Hwnd);
+    }
+
+    private void LibraryTabDragMove(float x, float y)
+    {
+        if (_libraryTabPress == 0) return;
+        if (_libraryTabPress == 1)
+        {
+            if (MathF.Abs(x - _libraryTabDragStartX) < 4f * UiUnit) return;
+            if (!LibraryLayout.DrawerRowIsUserCategory(_libraryTabDragId))
+                return;   // 「全部 / 未分类」固定，不参与排序
+            _libraryTabPress = 2;
+        }
+        var m = LibraryPanelInfoNow();
+        var cats = LibraryTabCategories();
+        var widths = new float[cats.Length];
+        for (int i = 0; i < cats.Length; i++)
+            widths[i] = LibraryLayout.TabWidthLogical(cats[i].Name) * UiUnit;
+        int drop = cats.Length;
+        for (int i = 0; i < cats.Length; i++)
+        {
+            if (!LibraryLayout.DrawerRowIsUserCategory(cats[i].Id)) continue;
+            var tr = LibraryLayout.TabRect(m, widths, i, UiUnit, LibraryTabScroll);
+            if (x < (tr.MinX + tr.MaxX) * 0.5f) { drop = i; break; }
+        }
+        LibraryTabDropIndex = drop;
+        _dirty = true;
+    }
+
+    private void LibraryTabDragEnd(float x, float y)
+    {
+        int state = _libraryTabPress;
+        string id = _libraryTabDragId;
+        int drop = LibraryTabDropIndex;
+        _libraryTabPress = 0;
+        LibraryTabDropIndex = -1;
+        _libraryTabDragIndex = -1;
+        _libraryTabDragId = null;
+        Native.ReleaseCapture();
+        if (state == 2 && !string.IsNullOrEmpty(id) && LibraryLayout.DrawerRowIsUserCategory(id))
+        {
+            var cats = LibraryTabCategories();
+            string before = drop >= 0 && drop < cats.Length ? cats[drop].Id : null;
+            if (before == id) before = null;
+            if (ShapeLibrary.ReorderCategory(id, before))
+            {
+                ReloadLibrary();
+                SetLibraryCategory(id);
+                SetInkStatus("分类顺序已更新");
+            }
+        }
+        else if (!string.IsNullOrEmpty(id))
+        {
+            SetLibraryCategory(id);
+        }
+        _dirty = true;
+    }
+
+    // ---- 整理模式：点击 / 框选 ----
+
+    private void BeginLibraryManagePress(ShapeLibrary.Entry entry, float x, float y)
+    {
+        _libraryManagePress = 1;
+        _libraryManageDown = entry;
+        _libraryManageStart = new Vector2(x, y);
+        LibraryMarqueeActive = false;
+        _libraryPending = null;
+        _libraryPendingTitle = null;
+        LibraryUseSelected = null;
+        LibraryConfirm = "";
+        if (_windows.Count > 0) Native.SetCapture(_windows[0].Hwnd);
+    }
+
+    private void LibraryManagePressMove(float x, float y)
+    {
+        if (_libraryManagePress == 0) return;
+        if (_libraryManagePress == 1)
+        {
+            if (Vector2.Distance(new Vector2(x, y), _libraryManageStart) < 4f * UiUnit) return;
+            _libraryManagePress = 2;
+            LibraryMarqueeActive = true;
+        }
+        var m = LibraryPanelInfoNow();
+        LibraryAutoScrollForDrag(m, y);
+        var rect = new RectF
+        {
+            MinX = MathF.Min(_libraryManageStart.X, x),
+            MinY = MathF.Min(_libraryManageStart.Y, y),
+            MaxX = MathF.Max(_libraryManageStart.X, x),
+            MaxY = MathF.Max(_libraryManageStart.Y, y),
+        };
+        LibraryMarqueeRect = rect;
+        var picked = new List<ShapeLibrary.Entry>();
+        for (int i = 0; i < LibraryEntries.Count; i++)
+        {
+            var cell = LibraryLayout.CellRect(m, i, LibraryScrollY);
+            if (!cell.Intersects(m.Grid)) continue;
+            if (cell.Intersects(rect)) picked.Add(LibraryEntries[i]);
+        }
+        SetLibrarySelection(picked);
+        _dirty = true;
+    }
+
+    private void LibraryManagePressEnd(float x, float y)
+    {
+        int state = _libraryManagePress;
+        var down = _libraryManageDown;
+        _libraryManagePress = 0;
+        _libraryManageDown = null;
+        LibraryMarqueeActive = false;
+        Native.ReleaseCapture();
+        if (state == 1)
+        {
+            if (down != null) ApplyLibrarySelection(down, !IsLibrarySelected(down));
+            else SetLibrarySelection(Array.Empty<ShapeLibrary.Entry>());
+        }
+        _dirty = true;
+    }
+
+    // ---- 整理模式：拖把手排序 ----
+
+    private void BeginLibraryManageSort(ShapeLibrary.Entry entry, float x, float y)
+    {
+        LibraryManageSorting = true;
+        LibraryManageSortEntry = entry;
+        LibraryManageDropBefore = null;
+        LibraryManageDropIndex = -1;
+        LibrarySelected.Clear();
+        LibrarySelected.Add(entry);
+        if (_windows.Count > 0) Native.SetCapture(_windows[0].Hwnd);
+        NotifyUiStateChanged();
+        _dirty = true;
+    }
+
+    private void LibraryManageSortMove(float x, float y)
+    {
+        if (!LibraryManageSorting || LibraryManageSortEntry == null) return;
+        var m = LibraryPanelInfoNow();
+        LibraryAutoScrollForDrag(m, y);
+        int moving = LibraryEntries.FindIndex(e => e.Path == LibraryManageSortEntry.Path);
+        int idx = LibraryLayout.CellAt(m, LibraryEntries.Count, x, y, LibraryScrollY);
+        int drop;
+        if (idx < 0)
+        {
+            drop = LibraryEntries.Count;
+        }
+        else
+        {
+            var cell = LibraryLayout.CellRect(m, idx, LibraryScrollY);
+            bool after = x > (cell.MinX + cell.MaxX) * 0.5f;
+            drop = idx + (after ? 1 : 0);
+        }
+        // 落回自己身上 = 不做任何事。
+        if (drop == moving || drop == moving + 1) LibraryManageDropIndex = -1;
+        else LibraryManageDropIndex = drop;
+        LibraryManageDropBefore = drop < LibraryEntries.Count ? LibraryEntries[drop] : null;
+        _dirty = true;
+    }
+
+    private void LibraryManageSortEnd()
+    {
+        var entry = LibraryManageSortEntry;
+        int drop = LibraryManageDropIndex;
+        LibraryManageSorting = false;
+        LibraryManageSortEntry = null;
+        LibraryManageDropIndex = -1;
+        LibraryManageDropBefore = null;
+        Native.ReleaseCapture();
+        if (entry != null && drop >= 0)
+        {
+            var before = drop < LibraryEntries.Count ? LibraryEntries[drop] : null;
+            if (before != null && before.Path == entry.Path) before = null;
+            if (ShapeLibrary.ReorderBefore(new[] { entry }, before))
+            {
+                ReloadLibrary();
+                SetInkStatus("顺序已更新");
+            }
+        }
+        _dirty = true;
+    }
+
+    private void LibraryAutoScrollForDrag(in LibraryLayout.Info m, float y)
+    {
+        float margin = 24f * UiUnit;
+        if (y < m.Grid.MinY + margin) LibraryScrollBy(-12f * UiUnit);
+        else if (y > m.Grid.MaxY - margin) LibraryScrollBy(12f * UiUnit);
+    }
+
+    private void ToggleSelectAllLibrary()
+    {
+        if (LibraryEntries.Count == 0) return;
+        if (LibrarySelected.Count == LibraryEntries.Count)
+            LibrarySelected.Clear();
+        else
+            foreach (var e in LibraryEntries) LibrarySelected.Add(e);
+        NotifyUiStateChanged();
+        _dirty = true;
+    }
+
+    private void DeleteLibraryManage()
+    {
+        if (LibrarySelected.Count == 0) return;
+        if (LibraryCategoryId == ShapeLibrary.TrashCategory
+            && LibraryConfirm != "deleteselected")
+        {
+            LibraryConfirm = "deleteselected";
+            SetInkStatus($"再点一次：永久删除选中的 {LibrarySelected.Count} 项");
+            _dirty = true;
+            return;
+        }
+        DeleteLibrarySelection();
+        LibraryConfirm = "";
+    }
+
+    private void ExitLibraryManage()
+    {
+        LibrarySelectMode = false;
+        LibrarySelected.Clear();
+        LibraryMarqueeActive = false;
+        LibraryManageSorting = false;
+        LibraryManageSortEntry = null;
+        LibraryConfirm = "";
+        NotifyUiStateChanged();
+        _dirty = true;
+    }
+
+    internal int LibraryDrawerVisibleCountForPaint => LibraryDrawerVisibleCount();
+    internal IntPtr LibraryRenameHwndForTest => _libraryRenameHwnd;
+    internal bool LibraryManageSortingForPaint => LibraryManageSorting;
+    internal int LibraryManageDropIndex;
+    internal bool LibraryManageModeForTest => LibrarySelectMode;
+    internal ShapeLibrary.Entry LibraryUseSelectedForTest => LibraryUseSelected;
+
+    private void InsertLibraryGroupAt(IReadOnlyList<ShapeLibrary.Entry> entries, float x, float y)
+    {
+        if (entries == null || entries.Count == 0) return;
+        var strokes = new List<Stroke>();
+        foreach (var e in entries)
+            if (e.Strokes != null) strokes.AddRange(e.Strokes);
+        if (strokes.Count == 0) return;
+        _libraryPending = strokes;
+        _libraryPendingTitle = entries.Count == 1 ? entries[0].Title : $"{entries.Count} 项";
+        TryInsertLibraryAt(x, y);
+        SetInkStatus(entries.Count == 1
+            ? $"已插入「{entries[0].Title}」"
+            : $"已插入 {entries.Count} 项");
+        _dirty = true;
     }
 
     /// <summary>
@@ -8015,6 +10454,8 @@ public partial class InkEngine
     internal CursorKind ComputeCursorKind()
     {
         if (ColorPickActive) return CursorKind.Cross;
+        // 已拿起收藏、指针在画布上：给箭头（不是画笔），配合虚影表示“这一下是落下”。
+        if (LibraryGhostVisibleNow) return CursorKind.Default;
         // 指针停在**界面块**上（接输入小窗 / 图库面板这类自绘界面）：给箭头。
         // 界面上的按钮不该顶着一个笔尖圈/橡皮圈——那一圈是"落点反馈"，
         // 只对画布有意义。
@@ -8084,7 +10525,7 @@ public partial class InkEngine
     /// </summary>
     private bool PointerOnDrawnChrome()
     {
-        if (LibraryPanelOpen && LibraryLayout.Contains(LibraryPanelRectNow(), PointerX, PointerY))
+        if (LibraryPanelVisibleNow && LibraryLayout.Contains(LibraryPanelRectNow(), PointerX, PointerY))
             return true;
         // 画布坐标 → 屏幕坐标只差一个垂直滚动量（ScreenToCanvas 就是 `y -= ViewOffsetY`），
         // x 没有滚动、直接用。
@@ -8175,7 +10616,7 @@ public partial class InkEngine
     private CursorKind? SelectionCursor(float canvasX, float canvasY)
     {
         var frame = SelectionHandles.FrameOf(Doc.Selected);
-        float dpi = DpiScale;
+        float dpi = UiUnit;
         var aabb = frame.CanvasAabb;
 
         // **操作条是"一块"，不只是几个按钮**（用户 2026-09-17 报的："操作对应图标的时候
@@ -8192,19 +10633,19 @@ public partial class InkEngine
         {
             if (BarDrawnCollapsed)
             {
-                if (SelectionHandles.BarCollapsedRect(aabb, dpi, ViewportCanvas).Contains(canvasX, canvasY))
+                if (SelectionHandles.BarCollapsedRect(aabb, dpi, FurnitureViewport).Contains(canvasX, canvasY))
                     return CursorKind.Default;
             }
             else
             {
                 if (CustomColorOpen
-                    && SelectionHandles.PickContains(canvasX, canvasY, aabb, dpi, ViewportCanvas,
+                    && SelectionHandles.PickContains(canvasX, canvasY, aabb, dpi, FurnitureViewport,
                                                      SelectionHandles.SwatchCount))
                     return CursorKind.Default;
-                if (SelectionHandles.BarRect(aabb, dpi, ViewportCanvas).Contains(canvasX, canvasY))
+                if (SelectionHandles.BarRect(aabb, dpi, FurnitureViewport).Contains(canvasX, canvasY))
                     return CursorKind.Default;
                 if (SelPanelOpen != SelPanel.None
-                    && SelectionHandles.PanelContains(canvasX, canvasY, aabb, dpi, ViewportCanvas,
+                    && SelectionHandles.PanelContains(canvasX, canvasY, aabb, dpi, FurnitureViewport,
                                                       SelPanelOpen, SelectionHandles.SwatchCount))
                     return CursorKind.Default;
             }
@@ -10404,6 +12845,20 @@ public partial class InkEngine
     /// </summary>
     private void SwitchTool(Tool t)
     {
+        // 老师自己换工具 = 不再自动恢复“插入前的工具”；插入完成后会再置 true。
+        _restoreToolAfterLibrarySelection = false;
+        // 换工具也把“拿起的收藏卡片”放下，别让虚影跟着跑到新工具里。
+        if (LibraryUseSelected != null || _libraryCardPress != 0)
+        {
+            LibraryUseSelected = null;
+            _libraryPending = null;
+            _libraryPendingTitle = null;
+            _libraryCardPress = 0;
+            _libraryCardPressEntry = null;
+            _libraryCardPressWasSelected = false;
+            Native.ReleaseCapture();
+        }
+        // 收藏弹窗是常驻浮层，换工具不收（用户 2026-10-26 定）；只在 Esc/关闭/收藏格收。
         // 任何换工具（面板格 / 工具键 / 自检）都要先把呼出盘收掉——盘还在、
         // 工具已经换走，是最容易看出来的状态打架。
         if (RadialPaletteActive) CancelRadialPalette("换工具");
@@ -10533,12 +12988,19 @@ public partial class InkEngine
         // 进穿透先记下板态（要被"开关退出"用来恢复）。
         // 只在"真的从关到开"这一下记——重复调 SetPassThrough(true) 时 BoardOn 已经被关掉了，
         // 再记一次就会把外面的快照覆盖成 false，退出时反而不恢复。
-        if (on && !PassThrough) _boardBeforePassThrough = BoardOn;
+        if (on && !PassThrough)
+        {
+            _boardBeforePassThrough = BoardOn;
+            // 收藏弹窗是引擎自绘的浮动面板，没有独立输入窗；穿透下留着只会
+            // “看得见、点不动”，点击还会落到下层 PPT。先藏，退出自动回来。
+            HideLibraryForPassThrough();
+        }
 
         // 进穿透 = "键盘/指针都给下层"：开着的呼出盘收掉（和 8.5 工具键不响应同一条语义）。
         if (on && RadialPaletteActive) CancelRadialPalette("进穿透");
 
         PassThrough = on;
+        _dirty = true;                 // 藏 / 恢复收藏弹窗都要立刻重画
         // 穿透 = "键盘让给下层"：放映临时全局键跟着挂/摘（用户 2026-09-30 定，
         // 见 PptHotkeys 那段注释）。不在放映时这一句是空操作。
         SyncPptHotkeys();
@@ -10933,6 +13395,7 @@ public partial class InkEngine
         UndoDepth = Doc.UndoDepth,
         RedoDepth = Doc.RedoDepth,
         StrokeCount = Doc.Strokes.Count,
+        SelectionCount = Doc.Selected.Count,
         UpdateStage = UpdateState,
         UpdateText = UpdateText,
         InkStatus = InkStatus,                  // 界面「墨迹」页的状态行
@@ -10952,6 +13415,11 @@ public partial class InkEngine
         TimerExpanded = TimerExpanded,
         RollCardOpen = RollCardOpen,
         RollSettingsOpen = RollSettingsOpen,
+        IsFirstRun = !InkSettings.ExistedAtLoad,
+        LibraryOpen = LibraryPanelOpen,
+        LibraryCategoryId = LibraryCategoryId,
+        LibraryCategories = _libraryCategoryInfos,
+        LibrarySelectionCount = LibrarySelected.Count,
         Names = Names,
     };
 
@@ -11537,6 +14005,9 @@ public partial class InkEngine
     internal void FlushSettings()
     {
         if (SelfCheckMode) return;
+        // 从备份恢复之后：内存里还是旧设置，这一轮**不许再写盘**，
+        // 否则老师随手改一个开关就会把刚恢复的整份设置覆盖回去。重启后新设置才生效。
+        if (_settingsRestored) return;
         if (!Keys.Dirty && !_uiPrefsDirty) return;
         InkSettings.Save(Keys, UiPrefs, UpdateFeed.Url);
         _uiPrefsDirty = false;
@@ -12147,6 +14618,7 @@ public partial class InkEngine
 
     private bool UiContains(float x, float y)
     {
+        if (LibraryPlacementMode) return false;   // 工具栏已让位，整屏归画布
         x /= UiUnit; y /= UiUnit;   // 物理 → 界面逻辑（DPI × 界面缩放）
         foreach (var w in _windows)
             if (w.UiBoundsLogicalContains(x, y)) return true;
@@ -12344,6 +14816,30 @@ public partial class InkEngine
     internal bool UiVisibleNow => Ui != null && UiGuard("Visible", () => Ui.Visible, false);
     internal RectF UiQueryBoundsNow() =>
         Ui == null ? RectF.Empty : UiGuard("QueryBounds", () => Ui.QueryBounds(), RectF.Empty);
+    /// <summary>主条本身（不含分类下拉/动作菜单这类弹层）。收藏面板定位只认它。</summary>
+    internal RectF UiChromeBoundsNow() =>
+        Ui == null ? RectF.Empty : UiGuard("ChromeBounds", () => Ui.ChromeBounds, RectF.Empty);
+    /// <summary>主条那一条（不含上带）。收藏弹窗默认位置用它的上沿。</summary>
+    internal RectF UiBarBoundsNow() =>
+        Ui == null ? RectF.Empty : UiGuard("BarBounds", () => Ui.BarBounds, RectF.Empty);
+
+    /// <summary>
+    /// 这一点是不是落在"界面临时弹层"（分类下拉 / 动作菜单 / 调色盘）里。
+    /// 这类弹层可能压在收藏面板上；它归界面，引擎不能先吃掉（否则看得见点不中）。
+    /// </summary>
+    private bool InUiPopup(float x, float y)
+    {
+        if (LibraryPlacementMode) return false;   // 工具栏已让位
+        var q = UiQueryBoundsNow();
+        var c = UiChromeBoundsNow();
+        if (q.IsEmpty) return false;
+        float dpi = UiUnit;
+        bool inQ = x >= q.MinX * dpi && x <= q.MaxX * dpi
+                   && y >= q.MinY * dpi && y <= q.MaxY * dpi;
+        bool inC = x >= c.MinX * dpi && x <= c.MaxX * dpi
+                   && y >= c.MinY * dpi && y <= c.MaxY * dpi;
+        return inQ && !inC;
+    }
     /// <summary>界面声明"我会画到占用矩形外面一圈"（投影/浮出预览），见 IOverlayUi.PaintMargin。</summary>
     internal float UiPaintMarginNow =>
         Ui == null ? 0f : UiGuard("PaintMargin", () => Ui.PaintMargin, 0f);
@@ -12361,7 +14857,8 @@ public partial class InkEngine
     {
         // 截图期间界面是收起的（见 PrepareUi 开头那段）：接输入小窗也一起收——
         // 不然"看不见的工具条"那一条还会把点击吃掉（截图拖框正好要用那一片）。
-        RectF logical = (UiVisibleNow && !CaptureActive) ? UiQueryBoundsNow() : RectF.Empty;
+        RectF logical = (UiVisibleNow && !CaptureActive && !LibraryPlacementMode)
+            ? UiQueryBoundsNow() : RectF.Empty;
 
         if (logical.IsEmpty)
         {
@@ -12746,9 +15243,9 @@ public partial class InkEngine
     private bool HandlePanelClick(float x, float y)
     {
         var aabb = LiveSelectionFrame.CanvasAabb;
-        float dpi = DpiScale;
+        float dpi = UiUnit;
         int sc = SelectionHandles.SwatchCount;
-        var part = SelectionHandles.PanelPartAt(x, y, aabb, dpi, ViewportCanvas, SelPanelOpen, sc);
+        var part = SelectionHandles.PanelPartAt(x, y, aabb, dpi, FurnitureViewport, SelPanelOpen, sc);
 
         switch (part)
         {
@@ -12811,7 +15308,7 @@ public partial class InkEngine
     private bool HandlePickClick(float x, float y)
     {
         var aabb = LiveSelectionFrame.CanvasAabb;
-        var part = SelectionHandles.PickPartAt(x, y, aabb, DpiScale, ViewportCanvas,
+        var part = SelectionHandles.PickPartAt(x, y, aabb, UiUnit, FurnitureViewport,
                                                SelectionHandles.SwatchCount);
         switch (part)
         {
@@ -12929,7 +15426,7 @@ public partial class InkEngine
     private float SliderValueAtX(float x, in RectF aabb)
     {
         var (min, max) = WidthRangeForSelection();
-        float t = SelectionHandles.SliderTAt(x, aabb, DpiScale, ViewportCanvas, SelectionHandles.SwatchCount);
+        float t = SelectionHandles.SliderTAt(x, aabb, UiUnit, FurnitureViewport, SelectionHandles.SwatchCount);
         return MathF.Round(min + (max - min) * t);
     }
 
@@ -12996,12 +15493,12 @@ public partial class InkEngine
         int sc = SelectionHandles.SwatchCount;
         if (hue)
         {
-            var r = SelectionHandles.PickHueRect(aabb, DpiScale, ViewportCanvas, sc);
+            var r = SelectionHandles.PickHueRect(aabb, UiUnit, FurnitureViewport, sc);
             if (r.MaxY > r.MinY) _pickH = Math.Clamp((y - r.MinY) / (r.MaxY - r.MinY), 0f, 1f);
         }
         else
         {
-            var r = SelectionHandles.PickSvRect(aabb, DpiScale, ViewportCanvas, sc);
+            var r = SelectionHandles.PickSvRect(aabb, UiUnit, FurnitureViewport, sc);
             if (r.MaxX > r.MinX) _pickS = Math.Clamp((x - r.MinX) / (r.MaxX - r.MinX), 0f, 1f);
             if (r.MaxY > r.MinY) _pickV = Math.Clamp((y - r.MinY) / (r.MaxY - r.MinY), 0f, 1f);
         }
@@ -13032,8 +15529,8 @@ public partial class InkEngine
         _colorDragAction = null;
         if (act == null) { _dirty = true; return; }
 
-        bool inside = SelectionHandles.PickContains(x, y, LiveSelectionFrame.CanvasAabb, DpiScale,
-                                                    ViewportCanvas, SelectionHandles.SwatchCount);
+        bool inside = SelectionHandles.PickContains(x, y, LiveSelectionFrame.CanvasAabb, UiUnit,
+                                                    FurnitureViewport, SelectionHandles.SwatchCount);
         if (inside && act.HasChange)
         {
             Doc.CommitInteractive(act);
@@ -13064,10 +15561,10 @@ public partial class InkEngine
             var aabb = LiveSelectionFrame.CanvasAabb;
             if (BarDrawnCollapsed)
             {
-                var dot = SelectionHandles.BarCollapsedRect(aabb, DpiScale, ViewportCanvas);
+                var dot = SelectionHandles.BarCollapsedRect(aabb, UiUnit, FurnitureViewport);
                 hover = dot.Contains(x, y) ? (int)SelBarButton.Collapse : -1;
             }
-            else hover = SelectionHandles.BarButtonAt(x, y, aabb, DpiScale, ViewportCanvas);
+            else hover = SelectionHandles.BarButtonAt(x, y, aabb, UiUnit, FurnitureViewport);
         }
         if (hover == SelBarHover) return;
         SelBarHover = hover;
@@ -13673,7 +16170,7 @@ public partial class InkEngine
     /// </summary>
     private AutoSelZone AutoSelectionZoneAt(float x, float y)
     {
-        float dpi = DpiScale;
+        float dpi = UiUnit;
         var frame = SelectionHandles.FrameOf(Doc.Selected);
         var aabb = frame.CanvasAabb;
 
@@ -13682,19 +16179,19 @@ public partial class InkEngine
         //    必须是同一个）。
         if (BarDrawnCollapsed)
         {
-            if (SelectionHandles.BarCollapsedRect(aabb, dpi, ViewportCanvas).Contains(x, y))
+            if (SelectionHandles.BarCollapsedRect(aabb, dpi, FurnitureViewport).Contains(x, y))
                 return AutoSelZone.Furniture;
         }
         else
         {
-            if (SelectionHandles.BarRect(aabb, dpi, ViewportCanvas).Contains(x, y))
+            if (SelectionHandles.BarRect(aabb, dpi, FurnitureViewport).Contains(x, y))
                 return AutoSelZone.Furniture;
             if (CustomColorOpen
-                && SelectionHandles.PickContains(x, y, aabb, dpi, ViewportCanvas,
+                && SelectionHandles.PickContains(x, y, aabb, dpi, FurnitureViewport,
                                                  SelectionHandles.SwatchCount))
                 return AutoSelZone.Furniture;
             if (SelPanelOpen != SelPanel.None
-                && SelectionHandles.PanelContains(x, y, aabb, dpi, ViewportCanvas,
+                && SelectionHandles.PanelContains(x, y, aabb, dpi, FurnitureViewport,
                                                   SelPanelOpen, SelectionHandles.SwatchCount))
                 return AutoSelZone.Furniture;
         }
@@ -13776,7 +16273,8 @@ public partial class InkEngine
         _dragHitStroke = null;
         ResetAlignSnapLatch();
         ClearAlignTargets();
-        float dpi = DpiScale;
+        float dpi = DpiScale;      // 内容命中容差 / 粗细换算（"纸上的尺"，不跟界面档）
+        float ui = UiUnit;         // 选中家具（条 / 面板 / 手柄）的尺寸与命中
 
         bool move = false;
         var h = SelHandle.None;
@@ -13799,7 +16297,7 @@ public partial class InkEngine
             if (BarDrawnCollapsed)
             {
                 // 收起态：只有一个圆钮，点它展开（框和手柄照旧，收起的只是"条"）。
-                var dot = SelectionHandles.BarCollapsedRect(aabb0, dpi, ViewportCanvas);
+                var dot = SelectionHandles.BarCollapsedRect(aabb0, ui, FurnitureViewport);
                 if (dot.Contains(x, y))
                 {
                     SelBarCollapsed = false;
@@ -13813,14 +16311,14 @@ public partial class InkEngine
             // **自定义取色板优先**：它挂在墨迹面板旁边，可能压着别的控件，而且
             // "点它自己 = 不算点在外面"（点空白不取消，只有点卡片以外才取消）。
             else if (CustomColorOpen
-                     && SelectionHandles.PickContains(x, y, aabb0, dpi, ViewportCanvas,
+                     && SelectionHandles.PickContains(x, y, aabb0, ui, FurnitureViewport,
                                                       SelectionHandles.SwatchCount))
             {
                 HandlePickClick(x, y);
                 return true;                        // 色板上的点击一律吃掉（包括空白处）
             }
             else if (SelPanelOpen != SelPanel.None
-                     && SelectionHandles.PanelContains(x, y, aabb0, dpi, ViewportCanvas,
+                     && SelectionHandles.PanelContains(x, y, aabb0, ui, FurnitureViewport,
                                                        SelPanelOpen, SelectionHandles.SwatchCount))
             {
                 HandlePanelClick(x, y);
@@ -13828,7 +16326,7 @@ public partial class InkEngine
             }
             else
             {
-                int btn0 = SelectionHandles.BarButtonAt(x, y, aabb0, dpi, ViewportCanvas);
+                int btn0 = SelectionHandles.BarButtonAt(x, y, aabb0, ui, FurnitureViewport);
                 if (btn0 >= 0) { RunBarAction(btn0, frame, aabb0); return true; }
                 if (SelPanelOpen != SelPanel.None || CustomColorOpen)
                 {
@@ -13847,7 +16345,7 @@ public partial class InkEngine
             var aabb = frame.CanvasAabb;
 
             // （操作条与面板已经在 ⓪ 里处理过了，这里只剩手柄 / 框内拖动 / 点选）
-            h = SelectionHandles.HitTest(x, y, Doc.Selected, frame, dpi);
+            h = SelectionHandles.HitTest(x, y, Doc.Selected, frame, ui);
 
             // 定义元素手柄（直线 / 箭头 / 圆 / 椭圆）：**两种语义分派**
             //   · **圆心 / 中心**（Anchor）：拖它 = 整体平移（改变换矩阵、几何一个点不动，
@@ -13905,7 +16403,7 @@ public partial class InkEngine
                     // 没点在手柄上：看指针是不是落在**操作框**里（整体拖动）。
                     // 小对象那个框撑到最小尺寸（见 SelectionHandles.UiBox），
                     // "看得见的那一圈"里面都能拖——判据和光标、自动选中框同一份。
-                    move = SelectionHandles.InsideUiFrame(frame, new Vector2(x, y), dpi);
+                    move = SelectionHandles.InsideUiFrame(frame, new Vector2(x, y), ui);
 
                     // 顺手记下"指针底下是哪一条"：松手时若一点没移动，就把多选**收窄成只选它**
                     // （PPT/Figma 的行为）。落在框内空白处 → 记不到东西 → 松手不改选择。
@@ -14419,7 +16917,7 @@ public partial class InkEngine
         bool newY = !hadY && _alignSnapY.HasValue;
         if (!targetChanged && !newX && !newY) return;
 
-        float dpi = DpiScale;
+        float dpi = UiUnit;
         bool xMoved = _alignSnapX.HasValue && MathF.Abs(_alignSnapX.Value.Delta) > 0.01f;
         bool yMoved = _alignSnapY.HasValue && MathF.Abs(_alignSnapY.Value.Delta) > 0.01f;
 
@@ -14880,13 +17378,13 @@ public partial class InkEngine
 
             case SelBarButton.Library:
             {
-                // **存入图库**：把选中的对象存成一个条目（磁盘那点事在 ShapeLibrary 里）。
-                // 反馈只有"闪一下"——这一版没有 toast；存进去之后从图形面板最后那一段
-                // 「图库」里能看见（`--librarytest` 就是照这条链路量的）。
+                // **收藏**：把选中的对象存成一个条目（磁盘那点事在 ShapeLibrary 里）。
+                // 重复内容不写新文件；图标会从“星标＋”换成“实心星＋对勾”。
                 int saved = SaveSelectionToLibrary();
-                Console.WriteLine(saved > 0
-                    ? $"已存入图库（{saved} 个对象）"
-                    : "存入图库失败（选中为空或者写不进去）");
+                if (saved > 0)
+                    Console.WriteLine($"已收藏（{saved} 个对象）");
+                else if (LibraryFeedback == LibraryFeedbackKind.Error)
+                    Console.WriteLine("收藏失败（选中为空或者写不进去）");
                 break;
             }
 
@@ -15776,6 +18274,40 @@ public partial class InkEngine
         // 使用说明层优先：打开时 Esc/F1 关闭、左右切页，其它键也不许落到画布。
         // 关闭时 F1 打开；只在批注键盘模式收到（和 Ctrl+P/I/L 同一入口）。
         if (Ui != null && Ui.HandleHelpKey(vk)) return true;
+        // 收藏面板点了一张卡、还没落笔：Esc = 取消这次插入（别让老师找不到怎么退）。
+        if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && _libraryPending != null)
+        {
+            _libraryPending = null;
+            _libraryPendingTitle = null;
+            SetInkStatus("已取消插入收藏");
+            _dirty = true;
+            return true;
+        }
+        // 收藏面板：Esc = 先关菜单，再关面板（和其它浮层同一套手感）。
+        if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && LibraryPanelVisibleNow)
+        {
+            if (LibraryCategoriesOpen)
+            {
+                LibraryCategoriesOpen = false;
+                LibraryDrawerManage = false;
+                LibraryConfirm = "";
+            }
+            else if (LibraryMenu != 0) CloseLibraryMenu();
+            else if (LibrarySelectMode) ExitLibraryManage();
+            else if (LibraryUseSelected != null)
+            {
+                LibraryUseSelected = null;
+                CancelLibraryPanelDrag();
+                NotifyUiStateChanged();
+            }
+            else if (_restoreToolAfterLibrarySelection)
+            {
+                ExitLibraryPlacementSelection();
+            }
+            else CloseLibraryPanel();
+            _dirty = true;
+            return true;
+        }
         if (!isRepeat && vk == 0x70 /*F1*/ && mods == 0)
         {
             Ui?.ToggleHelp();
@@ -15897,7 +18429,54 @@ public partial class InkEngine
     internal IntPtr HandleWheel(IntPtr wParam)
     {
         int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);
+        // 收藏分类抽屉：滚轮滚分类。
+        if (LibraryPanelVisibleNow && LibraryCategoriesOpen)
+        {
+            var lm = LibraryPanelInfoNow();
+            if (LibraryDrawerRectNow().Contains(PointerX, PointerY))
+            {
+                int cap = Math.Max(1, LibraryLayout.CategoryDrawerCapacity(lm) - 1);
+                if (_libraryCategoryInfos.Length > cap)
+                {
+                    int step = delta > 0 ? -1 : 1;
+                    LibraryCategoryScroll = Math.Clamp(LibraryCategoryScroll + step, 0,
+                        Math.Max(0, _libraryCategoryInfos.Length - cap));
+                    _dirty = true;
+                    return IntPtr.Zero;
+                }
+            }
+        }
         // 有面板/图库等界面时先给界面（说明页要滚内部内容）；没消费才滚画布。
+        // ????? / ?????????????????????
+        if (LibraryPanelVisibleNow)
+        {
+            var lm = LibraryPanelInfoNow();
+            if (LibraryLayout.Contains(lm.Panel, PointerX, PointerY))
+            {
+                if (lm.Tabbed && LibraryLayout.Contains(lm.Tabs, PointerX, PointerY))
+                {
+                    var cats = LibraryTabCategories();
+                    var widths = new float[cats.Length];
+                    for (int i = 0; i < cats.Length; i++)
+                        widths[i] = LibraryLayout.TabWidthLogical(cats[i].Name) * UiUnit;
+                    float view = lm.Tabs.MaxX - lm.Tabs.MinX;
+                    float max = MathF.Max(0f, LibraryLayout.TabsWidth(widths, UiUnit) - view);
+                    if (max > 0.5f)
+                    {
+                        float step = delta > 0 ? -36f : 36f;
+                        LibraryTabScroll = Math.Clamp(LibraryTabScroll + step * UiUnit, 0f, max);
+                        _dirty = true;
+                        return IntPtr.Zero;
+                    }
+                }
+                if (LibraryLayout.Contains(lm.Grid, PointerX, PointerY))
+                {
+                    LibraryScrollBy(-delta / 120f * 80f * UiUnit);
+                    return IntPtr.Zero;
+                }
+            }
+        }
+
         if (UiVisibleNow && Ui != null)
         {
             bool consumed = UiGuard("Wheel",
@@ -15923,4 +18502,5 @@ public partial class InkEngine
         // 重画——正是这次要拔掉的病根。分块缓存自己会发现相机变了，只做重合成。
         _dirty = true;
         return IntPtr.Zero;
-    }}
+    }
+}

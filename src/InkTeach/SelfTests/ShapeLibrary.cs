@@ -79,12 +79,12 @@ internal sealed partial class App
     ///   E. 旋转过的直线拖端点：端点仍落在指针位置（走 Transform⁻¹ 那条路）。
     /// </summary>
     /// <summary>
-    /// 自检 `--librarytest`：**图库（我的图形）**——"选中 → 存入 → 面板 → 落笔插入 → 整理删除"
-    /// 整条链真机跑一遍（用户 2026-09-22 要的"图像收藏"，口径见 计划-图形工具.md §41）。
+    /// 自检 `--librarytest`：**收藏**——"选中 → 存入 → 面板 → 落笔插入 → 整理删除"
+    /// 整条链真机跑一遍（用户 2026-09-22 要的"图像收藏"，2026-10-25 改成星标口径）。
     ///
     /// 为什么每一段都走真机而不是直接调 API：这条链上有四处"看得见的东西"——
     ///   ① 操作条上那颗图标**画在哪儿、点得中吗**（几何与命中同源，`--handletest` 的教训）；
-    ///   ② 上带最后那一段「图库」**点得开面板吗**（它是一段"动作"，不进工具表）；
+    ///   ② 主条收藏格 / 更多兜底入口**点得开面板吗**；
     ///   ③ 面板里的缩略图**真的画出来了吗**——只断言条目数的话，
     ///      "存进去了、格子却是空的"照样绿，所以这里数屏幕像素；
     ///   ④ 落笔插入：**落在按下的地方**、插入后是**选中的**、**一步撤销**。
@@ -94,7 +94,7 @@ internal sealed partial class App
     /// </summary>
     private void LibraryTest(string shotPath)
     {
-        Console.WriteLine("===== 图库（我的图形）：存入 → 面板 → 落笔插入 → 整理删除 =====");
+        Console.WriteLine("===== 图库：存入 → 面板 → 插入 → 排序 / 整理 / 导入透明图 / 穿透隐藏 =====");
         int pass = 0, fail = 0;
         void Check(string name, bool ok, string detail)
         {
@@ -122,13 +122,39 @@ internal sealed partial class App
             return;
         }
 
+        // 界面本地坐标 → 物理像素。**必须带界面缩放档**（--uiscale 0.8 / 1.3 验收）。
+        float uiK = DpiScale * Host.UiScale;
+
+        // 自检必须落在我们自己的窗口上：穿透开着时命中测试会回 HTTRANSPARENT，
+        // 合成点击就落到终端下面的窗口去了（表现为"合成输入不可用"）。
+        PassThrough = false;
+        foreach (var w in _windows)
+        {
+            ApplyPassThroughStyle(w);
+            // 终端 / 其它置顶窗口可能压在上面：自检时把覆盖层提到最前。
+            Native.SetWindowPos(w.Hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
+                                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+        }
+        SettleFrames(120);
+
+        // 合成鼠标不可用（别的程序占着鼠标 / 锁屏 / 远程桌面限制）时整支跳过，
+        // 不要让后面的坐标点到空处再抛 IndexOutOfRange。
+        if (SkipIfNoSyntheticInput("收藏"))
+        {
+            ShapeLibrary.DirOverride = null;
+            try { if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true); } catch { }
+            _quit = true;
+            return;
+        }
+        ResetLibraryPanelForTest();
+
         // 面板刚挂上是**收起态（一个球）**：先点一下球展开，不然后面点"图形"那一格
         // 点的是球（点球＝展开），段一个都点不到 —— ShapeBandTest 第一次跑全红就是这个原因。
         if (!ui.ExpandedForTest)
         {
             var bb = ui.QueryBounds();
-            ClickPhys((bb.MinX + bb.MaxX) * 0.5f * DpiScale,
-                      (bb.MinY + bb.MaxY) * 0.5f * DpiScale);
+            ClickPhys((bb.MinX + bb.MaxX) * 0.5f * uiK,
+                      (bb.MinY + bb.MaxY) * 0.5f * uiK);
             SettleFrames(300);
         }
         Check("面板点球展开了（不然上带那一段点不到）", ui.ExpandedForTest,
@@ -142,11 +168,93 @@ internal sealed partial class App
             SendMouse((int)x1, (int)y1, 0);                                 SettleFrames(40);
             SendMouse((int)x1, (int)y1, Native.MOUSEEVENTF_LEFTUP);         SettleFrames(holdFrames);
         }
+        // 拖卡片到分类：先经过标题栏（抽屉自动展开），再进分类行——
+        // 直接斜穿会落回卡片区，被当成排序。
+        void DragCardToRow(float x0, float y0, float rowX, float rowY)
+        {
+            var hdr = LibraryPanelInfoNow().Header;
+            float hx = hdr.MinX + 24f * uiK;
+            float hy = (hdr.MinY + hdr.MaxY) * 0.5f;
+            SendMouse((int)x0, (int)y0, 0);                                 SettleFrames(60);
+            SendMouse((int)x0, (int)y0, Native.MOUSEEVENTF_LEFTDOWN);       SettleFrames(60);
+            SendMouse((int)hx, (int)hy, 0);                                 SettleFrames(150);
+            SendMouse((int)rowX, (int)rowY, 0);                             SettleFrames(150);
+            SendMouse((int)rowX, (int)rowY, Native.MOUSEEVENTF_LEFTUP);     SettleFrames(250);
+        }
         void ClickPhys(float x, float y)
         {
             SendMouse((int)x, (int)y, 0);                            SettleFrames(80);
             SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
             SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(320);
+        }
+        void ClickUi(RectF r)
+            => ClickPhys((r.MinX + r.MaxX) * 0.5f * uiK,
+                         (r.MinY + r.MaxY) * 0.5f * uiK);
+        // 收藏弹窗是引擎画的（物理坐标），不要再乘 UI 系数。
+        void ClickPanel(RectF r)
+            => ClickPhys((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
+        // 2026-10-26：⋯ 已取消，PanelMore 不再需要。
+        RectF DrawerRow(string id)
+        {
+            var cats = LibraryCategoryListForPaint();
+            int idx = Array.FindIndex(cats, c => c.Id == id);
+            if (idx < 0) return RectF.Empty;
+            int shown = LibraryDrawerVisibleCountForPaint;
+            int first = Math.Clamp(LibraryCategoryScroll, 0, Math.Max(0, cats.Length - shown));
+            if (idx < first || idx >= first + shown) return RectF.Empty;
+            return LibraryLayout.CategoryDrawerRowRect(LibraryDrawerRectNow(), uiK, idx - first);
+        }
+        RectF PanelMenuRow(string key)
+        {
+            if (LibraryMenu == 0) return RectF.Empty;
+            var rows = LibraryMenuItems();
+            var menu = LibraryMenuRect();
+            for (int i = 0; i < rows.Count; i++)
+                if (rows[i].Key == key) return LibraryMenuRowRect(menu, i);
+            return RectF.Empty;
+        }
+        bool MenuOpen(int kind) => LibraryMenu == kind;
+        void OpenLibraryMenu() { ClickPanel(LibraryPanelInfoNow().Menu); SettleFrames(120); }
+        void ClickCard(int i)
+        {
+            var mm = LibraryPanelInfoNow();
+            var cc = LibraryLayout.CellRect(mm, i, LibraryScrollY);
+            ClickPhys((cc.MinX + cc.MaxX) * 0.5f, (cc.MinY + cc.MaxY) * 0.5f);
+            SettleFrames(100);
+        }
+        void EnterManage()
+        {
+            OpenLibraryMenu();
+            ClickPanel(PanelMenuRow("manage"));
+            SettleFrames(120);
+        }
+        void RevealTab(string id)
+        {
+            var mm = LibraryPanelInfoNow();
+            if (!mm.Tabbed) return;
+            var cats = LibraryTabCategories();
+            int idx = Array.FindIndex(cats, c => c.Id == id);
+            if (idx < 0) return;
+            var widths = new float[cats.Length];
+            for (int i = 0; i < cats.Length; i++)
+                widths[i] = LibraryLayout.TabWidthLogical(cats[i].Name) * uiK;
+            float gap = LibraryLayout.TabGapLogical * uiK;
+            float left = 0;
+            for (int i = 0; i < idx; i++) left += widths[i] + gap;
+            float view = mm.Tabs.MaxX - mm.Tabs.MinX;
+            float max = MathF.Max(0f, LibraryLayout.TabsWidth(widths, uiK) - view);
+            LibraryTabScroll = Math.Clamp(left, 0f, max);
+        }
+        RectF TabRectOf(string id)
+        {
+            var mm = LibraryPanelInfoNow();
+            var cats = LibraryTabCategories();
+            int idx = Array.FindIndex(cats, c => c.Id == id);
+            if (idx < 0) return RectF.Empty;
+            var widths = new float[cats.Length];
+            for (int i = 0; i < cats.Length; i++)
+                widths[i] = LibraryLayout.TabWidthLogical(cats[i].Name) * uiK;
+            return LibraryLayout.TabRect(mm, widths, idx, uiK, LibraryTabScroll);
         }
 
         Doc.Clear();
@@ -186,34 +294,54 @@ internal sealed partial class App
                   ? $"，第一个里有 {entries[0].Strokes.Count} 个对象"
                   : ""));
 
-        // ---- B. 从上带最后那一段「图库」打开面板（真机点段）----
+        // A2：**同一内容再点一次**——不写第二份，图标反馈 = 重复。
+        ClickPhys((libCell.MinX + libCell.MaxX) * 0.5f, (libCell.MinY + libCell.MaxY) * 0.5f);
+        var entries2 = ShapeLibrary.List();
+        Check("A2：同一内容再收藏 → 不重复存，反馈=已收藏",
+              entries2.Count == 1 && LibraryFeedback == LibraryFeedbackKind.Duplicate,
+              $"条目 {entries2.Count} 个，反馈 {LibraryFeedback}");
+
+        // A3：**挪个位置**再收藏——仍然算同一个东西（指纹先平移到原点）。
+        Doc.ApplyTransform(Matrix3x2.CreateTranslation(120f, 80f));
+        ClickPhys((libCell.MinX + libCell.MaxX) * 0.5f, (libCell.MinY + libCell.MaxY) * 0.5f);
+        var entries3 = ShapeLibrary.List();
+        Check("A3：同一个图形挪位置再收藏 → 仍然不重复",
+              entries3.Count == 1 && LibraryFeedback == LibraryFeedbackKind.Duplicate,
+              $"条目 {entries3.Count} 个，反馈 {LibraryFeedback}");
+
+        // ---- B. 从主条「收藏」格或更多兜底入口打开面板（旧图形带入口已删）----
         {
-            var cell = ui.CellRectForTest(8);
-            ClickPhys((cell.MinX + cell.MaxX) * 0.5f * DpiScale, (cell.MinY + cell.MaxY) * 0.5f * DpiScale);
-            // 上带只在指针停在面板上时张开：**等它完全张开（≥0.99）再采样**——
-            // 动画中途采样会把"还在长"的 layout 当成终态（2026-10-09 调慢节奏后踩过）。
-            for (int attempt = 0; attempt < 3 && ui.RailValueForTest < 0.99f; attempt++)
+            var cell = ui.CellRectForTest(10);
+            bool direct = cell.MaxX > cell.MinX && cell.MaxY > cell.MinY;
+            if (direct)
             {
-                var bar = ui.BarRectForTest;
-                SendMouse((int)((bar.MinX + bar.MaxX) * 0.5f * DpiScale),
-                          (int)((bar.MinY + bar.MaxY) * 0.5f * DpiScale) - attempt, 0);
-                SettleFrames(700);
+                ClickUi(cell);
             }
-            int segCount = ui.BandSegmentCountForTest;
-            Check("B：图形那一格多了最后一段（工具段 ＋ 图库）",
-                  segCount == 23, $"现在 {segCount} 段（22 个图形 ＋ 1 段图库）");
-            var seg = ui.SegmentRectForTest(segCount - 1);
-            ClickPhys((seg.MinX + seg.MaxX) * 0.5f * DpiScale,
-                      (seg.MinY + seg.MaxY) * 0.5f * DpiScale);
-            Check("B：点那一段 → 图库面板开了，而且读到了那个条目",
+            else
+            {
+                ui.OpenMoreForTest();
+                SettleFrames(120);
+                var tile = ui.HubTileRectForTest(9);
+                Check("B：主条没有收藏格时，更多里有兜底入口",
+                      tile.MaxX > tile.MinX && tile.MaxY > tile.MinY,
+                      $"格 ({tile.MinX:F0},{tile.MinY:F0})-({tile.MaxX:F0},{tile.MaxY:F0})");
+                ClickUi(tile);
+            }
+            SettleFrames(500);
+            Check("B：收藏入口 → 面板开了，而且读到了那个条目",
                   LibraryPanelOpen && LibraryEntries.Count == 1,
-                  $"面板 {LibraryPanelOpen}，条目 {LibraryEntries.Count} 个");
+                  $"入口 {(direct ? "主条" : "更多")}，面板 {LibraryPanelOpen}，"
+                  + $"条目 {LibraryEntries.Count} 个，更多开着 {ui.MoreOpenForTest}，"
+                  + $"uiK={uiK:F2}，格 ({cell.MinX:F0},{cell.MinY:F0})-({cell.MaxX:F0},{cell.MaxY:F0})");
+            Check("B：收藏打开时色带收回成色线、不切专用条",
+                  ui.BandCellForTest != 100 && (ui.BandHeightForTest <= 12f),
+                  $"bandCell {ui.BandCellForTest}，带高 {ui.BandHeightForTest:F1}");
         }
 
         // ---- C. 面板里的缩略图真的画出来了吗（数屏幕像素）----
         {
             var panel = LibraryPanelRectNow();
-            var cell = LibraryLayout.CellRect(panel, DpiScale, 0);
+            var cell = LibraryLayout.CellRect(LibraryPanelInfoNow(), 0);
             int pix = ScreenProbe.CountMagenta((int)cell.MinX, (int)cell.MinY,
                                                (int)(cell.MaxX - cell.MinX),
                                                (int)(cell.MaxY - cell.MinY));
@@ -229,66 +357,858 @@ internal sealed partial class App
             }
         }
 
-        // ---- D. 点第一格 → 进"落笔插入"态；再到画布上按一下 → 落在那儿 ----
+        // ---- D. 使用态：点卡=选中，点画布=放置 ----
         {
-            var panel = LibraryPanelRectNow();
-            var cell = LibraryLayout.CellRect(panel, DpiScale, 0);
+            // 复现用户场景：原先停在画笔，插入后必须切到选择工具，否则选中框
+            // 亮着但一拖就变成写字。
+            SetToolFromUi(Tool.Pen);
+            SetLibraryCategory(LibraryCategoryIds.All);
+            SettleFrames(150);
+            var cell = LibraryLayout.CellRect(LibraryPanelInfoNow(), 0, LibraryScrollY);
             ClickPhys((cell.MinX + cell.MaxX) * 0.5f, (cell.MinY + cell.MaxY) * 0.5f);
-            Check("D：点格子 = 准备插入，面板自己收起来了",
-                  LibraryInsertArmed && !LibraryPanelOpen,
-                  $"待插入 {LibraryInsertArmed}，面板 {LibraryPanelOpen}");
-
-            // 落点：画布右侧空地。**按下的地方 = 插入内容的包围盒左上角**。
-            float px = ax + 520f, py = ay - 380f;
+            SettleFrames(120);
+            Check("D：单击卡片=选中，弹窗不关",
+                  LibraryUseSelected != null && LibraryPanelOpen
+                  && LibrarySelectionCount == 0 && !LibraryInsertArmed,
+                  $"选中 {LibraryUseSelected?.Title ?? "（空）"}，面板 {LibraryPanelOpen}，"
+                  + $"整理选中 {LibrarySelectionCount}，待插入 {LibraryInsertArmed}");
+            Check("D：拿起后小卡片 / 面板也收起（整屏让给画布）",
+                  LibraryPanelRectNow().IsEmpty,
+                  $"面板 {LibraryPanelRectNow().MinX:F0},{LibraryPanelRectNow().MinY:F0}-"
+                  + $"{LibraryPanelRectNow().MaxX:F0},{LibraryPanelRectNow().MaxY:F0}");
+            SendKeyChord(0x1B);
+            SettleFrames(150);
+            Check("D：Esc 返回收藏，完整面板恢复",
+                  LibraryUseSelected == null && !LibraryPanelRectNow().IsEmpty,
+                  $"选中 {LibraryUseSelected?.Title ?? "（空）"}，"
+                  + $"面板宽 {LibraryPanelRectNow().MaxX - LibraryPanelRectNow().MinX:F0}");
+            ClickPhys((cell.MinX + cell.MaxX) * 0.5f, (cell.MinY + cell.MaxY) * 0.5f);
+            SettleFrames(120);
+            Check("D：再点一下重新拿起", LibraryUseSelected != null,
+                  $"选中 {LibraryUseSelected?.Title ?? "（空）"}");
+            int before = Doc.Strokes.Count;
+            float px = ax + 520f, py = _virtualY + 200f;
+            SendMouse((int)px, (int)py, 0);
+            SettleFrames(120);
+            Check("D：选中后移到画布上出现虚影", LibraryGhostVisibleNow,
+                  $"虚影 {LibraryGhostVisibleNow}");
+            SendMouse((int)(_virtualX + 100), (int)(_virtualY + _virtualH * 0.65f), 0);
+            SettleFrames(120);
+            Check("D：虚影能到画布下半（面板外）", LibraryGhostVisibleNow,
+                  $"虚影 {LibraryGhostVisibleNow}，"
+                  + $"面板 {LibraryPanelRectNow().MinX:F0},{LibraryPanelRectNow().MinY:F0}-"
+                  + $"{LibraryPanelRectNow().MaxX:F0},{LibraryPanelRectNow().MaxY:F0}");
+            SendMouse((int)px, (int)py, 0);
+            SettleFrames(80);
             ClickPhys(px, py);
-            Check("D：按下就插进来了（对象数 +1）", Doc.Strokes.Count == 2,
-                  $"对象 {Doc.Strokes.Count} 个（期望 2）");
-            var placed = Doc.Strokes[1];
-            var box = EditRegion.Of(new[] { placed });
-            var srcBox = EditRegion.Of(new[] { Doc.Strokes[0] });
-            Check("D：包围盒左上角正好落在按下的地方、大小和原件一样",
-                  MathF.Abs(box.MinX - px) < 3f && MathF.Abs(box.MinY - py) < 3f
-                  && MathF.Abs((box.MaxX - box.MinX) - (srcBox.MaxX - srcBox.MinX)) < 0.5f
-                  && MathF.Abs((box.MaxY - box.MinY) - (srcBox.MaxY - srcBox.MinY)) < 0.5f,
-                  $"落点 ({px:F0},{py:F0})，实际 ({box.MinX:F0},{box.MinY:F0})，"
-                  + $"尺寸 {box.MaxX - box.MinX:F1}×{box.MaxY - box.MinY:F1}"
-                  + $"（原件 {srcBox.MaxX - srcBox.MinX:F1}×{srcBox.MaxY - srcBox.MinY:F1}）");
-            Check("D：插入之后是选中的（能直接拖走）",
-                  Doc.Selected.Count == 1 && Doc.Selected[0] == placed,
-                  $"选中 {Doc.Selected.Count} 个");
+            SettleFrames(150);
+            Check("D：插入后自动切到选择工具（选中项能马上拖）",
+                  Tool == Tool.Marquee,
+                  $"工具 {Tool}（期望 Marquee）");
+            Check("D：选中后点画布=直接放置，面板不关",
+                  Doc.Strokes.Count == before + 1 && LibraryPanelOpen && LibraryUseSelected == null
+                  && !LibraryGhostVisibleNow,
+                  $"对象 {before}→{Doc.Strokes.Count}，面板 {LibraryPanelOpen}，"
+                  + $"选中 {LibraryUseSelected?.Title ?? "（空）"}，虚影 {LibraryGhostVisibleNow}");
+            if (Doc.Strokes.Count > before)
+            {
+                var box = EditRegion.Of(new[] { Doc.Strokes[^1] });
+                var src = EditRegion.Of(new[] { Doc.Strokes[0] });
+                Check("D：落点=包围盒中心对齐指针、大小不变",
+                      MathF.Abs((box.MinX + box.MaxX) * 0.5f - px) < 3f
+                      && MathF.Abs((box.MinY + box.MaxY) * 0.5f - py) < 3f
+                      && MathF.Abs((box.MaxX - box.MinX) - (src.MaxX - src.MinX)) < 0.5f
+                      && MathF.Abs((box.MaxY - box.MinY) - (src.MaxY - src.MinY)) < 0.5f,
+                      $"中心 ({(box.MinX + box.MaxX) * 0.5f:F0},{(box.MinY + box.MaxY) * 0.5f:F0})，"
+                      + $"尺寸 {box.MaxX - box.MinX:F1}×{box.MaxY - box.MinY:F1}");
+            }
+
+            // 点空白 = 取消临时选中，并回到插入前的画笔；这一下不落墨。
+            int placed = Doc.Strokes.Count;
+            ClickPhys(px + 420f, _virtualY + 50f);
+            SettleFrames(120);
+            Check("D：点空白取消选中、回到画笔（不落墨）",
+                  Doc.Selected.Count == 0 && Tool == Tool.Pen && Doc.Strokes.Count == placed,
+                  $"选中 {Doc.Selected.Count}，工具 {Tool}，对象 {Doc.Strokes.Count}");
+            Doc.Undo();
+            SettleFrames(120);
+            Check("D：放置是一步撤销", Doc.Strokes.Count == before,
+                  $"撤销后对象 {Doc.Strokes.Count} 个（期望 {before}）");
+
+            // 下半屏也要能真正放下，而且虚影是**真的画出来**，不是只有一个
+            // 可见性标志。用屏幕像素差分：先把指针放屏幕上方（虚影在画面上方，
+            // 下半屏抓一张基线），再移到下半屏抓一张，差出来的就是虚影。
+            SetToolFromUi(Tool.Pen);
+            SettleFrames(80);
+            var lowerCard = LibraryLayout.CellRect(LibraryPanelInfoNow(), 0, LibraryScrollY);
+            ClickPhys((lowerCard.MinX + lowerCard.MaxX) * 0.5f,
+                      (lowerCard.MinY + lowerCard.MaxY) * 0.5f);
+            SettleFrames(120);
+            float lx = _virtualX + 100f, ly = _virtualY + _virtualH * 0.65f;
+            int cropX = (int)(_virtualX + 0f);
+            int cropY = (int)(_virtualY + _virtualH * 0.52f);
+            const int cropW = 420, cropH = 340;
+
+            SendMouse((int)px, (int)(_virtualY + 120f), 0);
+            SettleFrames(120);
+            var noGhost = ScreenProbe.CaptureRegion(cropX, cropY, cropW, cropH);
+
+            SendMouse((int)lx, (int)ly, 0);
+            SettleFrames(120);
+            Check("D：下半屏也能看到虚影", LibraryGhostVisibleNow,
+                  $"虚影 {LibraryGhostVisibleNow}");
+            var withGhost = ScreenProbe.CaptureRegion(cropX, cropY, cropW, cropH);
+            int ghostDiff = 0;
+            int nPix = Math.Min(noGhost.Length, withGhost.Length) / 4;
+            for (int i = 0; i < nPix; i++)
+            {
+                int p = i * 4;
+                if (Math.Abs(noGhost[p] - withGhost[p]) > 12
+                    || Math.Abs(noGhost[p + 1] - withGhost[p + 1]) > 12
+                    || Math.Abs(noGhost[p + 2] - withGhost[p + 2]) > 12)
+                    ghostDiff++;
+            }
+            Check("D：下半屏虚影真的画在屏幕上（像素差分）",
+                  ghostDiff > 500, $"差异像素 {ghostDiff}");
+            ClickPhys(lx, ly);
+            SettleFrames(150);
+            Check("D：下半屏点击也能放下",
+                  Doc.Strokes.Count == before + 1 && Doc.Selected.Count == 1,
+                  $"对象 {before}→{Doc.Strokes.Count}，选中 {Doc.Selected.Count}");
+            if (Doc.Strokes.Count > before)
+            {
+                var lowerBox = EditRegion.Of(new[] { Doc.Strokes[^1] });
+                Check("D：下半屏落点也在下半屏",
+                      (lowerBox.MinY + lowerBox.MaxY) * 0.5f
+                          > _virtualY + _virtualH * 0.5f,
+                      $"中心 y {(lowerBox.MinY + lowerBox.MaxY) * 0.5f:F0}，"
+                      + $"屏幕中线 {_virtualY + _virtualH * 0.5f:F0}");
+            }
+            ClickPhys(_virtualX + 100f, _virtualY + 50f);
+            SettleFrames(120);
+            Doc.Undo();
+            SettleFrames(120);
+
+            // 按住卡片拖到画布：显示虚影，松手放置；结果同样是选中。
+            SetToolFromUi(Tool.Highlighter);
+            SettleFrames(80);
+            var card = LibraryLayout.CellRect(LibraryPanelInfoNow(), 0, LibraryScrollY);
+            float dx = ax + 640f, dy = _virtualY + 220f;
+            DragPhys((card.MinX + card.MaxX) * 0.5f, (card.MinY + card.MaxY) * 0.5f, dx, dy, 200);
+            SettleFrames(180);
+            Check("D：按住卡片拖到画布 = 松手放置并选中",
+                  Doc.Strokes.Count == before + 1 && Doc.Selected.Count == 1
+                  && Tool == Tool.Marquee,
+                  $"对象 {before}→{Doc.Strokes.Count}，选中 {Doc.Selected.Count}，工具 {Tool}");
+            if (Doc.Strokes.Count > before)
+            {
+                var box = EditRegion.Of(new[] { Doc.Strokes[^1] });
+                Check("D：拖放落点也以指针为中心",
+                      MathF.Abs((box.MinX + box.MaxX) * 0.5f - dx) < 3f
+                      && MathF.Abs((box.MinY + box.MaxY) * 0.5f - dy) < 3f,
+                      $"中心 ({(box.MinX + box.MaxX) * 0.5f:F0},{(box.MinY + box.MaxY) * 0.5f:F0})，"
+                      + $"指针 ({dx:F0},{dy:F0})");
+            }
+            ClickPhys(dx + 300f, _virtualY + 50f);
+            SettleFrames(120);
+            Check("D：插入前是荧光笔 → 取消选中后回荧光笔",
+                  Tool == Tool.Highlighter && Doc.Selected.Count == 0,
+                  $"工具 {Tool}，选中 {Doc.Selected.Count}");
+            Doc.Undo();
+            SettleFrames(120);
+            Check("D：拖放也是一步撤销", Doc.Strokes.Count == before,
+                  $"撤销后对象 {Doc.Strokes.Count} 个（期望 {before}）");
         }
 
-        // ---- E. 一步撤销 + 整理模式删条目 ----
-        Doc.Undo();
-        SettleFrames(150);
-        Check("E：插入是**一步**撤销（退回插入前）", Doc.Strokes.Count == 1,
-              $"撤销后对象 {Doc.Strokes.Count} 个（期望 1）");
-
+        // ---- E. 整理模式：勾选、删除、回收站 ----
         {
-            Doc.Selected.Clear();
-            OpenLibraryPanel();
+            SetLibraryCategory(LibraryCategoryIds.All);
             SettleFrames(120);
-            var panel = LibraryPanelRectNow();
-            ClickPhys((LibraryLayout.EditRect(panel, DpiScale).MinX
-                       + LibraryLayout.EditRect(panel, DpiScale).MaxX) * 0.5f,
-                      (LibraryLayout.EditRect(panel, DpiScale).MinY
-                       + LibraryLayout.EditRect(panel, DpiScale).MaxY) * 0.5f);
-            Check("E：点「整理」进了整理模式（触摸屏删格子的入口）", LibraryEditMode,
-                  $"LibraryEditMode={LibraryEditMode}");
+            EnterManage();
+            Check("E：☰ → 整理进入整理模式（0 选中也算进）",
+                  LibrarySelectMode && LibrarySelectionCount == 0,
+                  $"模式 {LibrarySelectMode}，选中 {LibrarySelectionCount}");
+            ClickCard(0);
+            Check("E：整理模式点卡片=勾选（不插入）",
+                  LibrarySelectionCount == 1 && !LibraryInsertArmed,
+                  $"勾选 {LibrarySelectionCount}，待插入 {LibraryInsertArmed}");
 
-            var cell = LibraryLayout.CellRect(panel, DpiScale, 0);
-            var badge = LibraryLayout.BadgeRect(cell, DpiScale);
-            ClickPhys((badge.MinX + badge.MaxX) * 0.5f, (badge.MinY + badge.MaxY) * 0.5f);
-            Check("E：点红 ✕ 把条目删了（目录里也真没了）",
-                  LibraryEntries.Count == 0 && ShapeLibrary.List().Count == 0,
-                  $"面板里 {LibraryEntries.Count} 个，目录里 {ShapeLibrary.List().Count} 个");
+            var (_, _, del, done) = LibraryManageRects();
+            ClickPanel(del);
+            SettleFrames(150);
+            Check("E：整理里删除 → 进回收站（收藏里不再显示）",
+                  LibraryEntries.Count == 0 && ShapeLibrary.List().Count == 0
+                  && ShapeLibrary.List(includeTrash: true).Count == 1,
+                  $"面板 {LibraryEntries.Count}，收藏 {ShapeLibrary.List().Count}，"
+                  + $"含回收站 {ShapeLibrary.List(includeTrash: true).Count}");
+            ClickPanel(done);
+            Check("E：完成退出整理", !LibrarySelectMode, $"模式 {LibrarySelectMode}");
+
+            SetLibraryCategory(ShapeLibrary.TrashCategory);
+            SettleFrames(120);
+            ClickCard(0);
+            Check("E：回收站点卡片=恢复",
+                  ShapeLibrary.List().Count == 1 && LibraryEntries.Count == 0,
+                  $"收藏 {ShapeLibrary.List().Count}，回收站面板 {LibraryEntries.Count}");
+
+            // 再删一次，进回收站后永久删除（第一次确认，第二次才删）。
+            SetLibraryCategory(LibraryCategoryIds.All);
+            SettleFrames(120);
+            EnterManage();
+            ClickCard(0);
+            var (_, _, del2, done2) = LibraryManageRects();
+            ClickPanel(del2);
+            ClickPanel(done2);
+            SetLibraryCategory(ShapeLibrary.TrashCategory);
+            SettleFrames(120);
+            EnterManage();
+            ClickCard(0);
+            var (_, _, del3, done3) = LibraryManageRects();
+            ClickPanel(del3);
+            Check("E：回收站第一次点删除只是确认",
+                  ShapeLibrary.List(includeTrash: true).Count == 1
+                  && LibraryConfirm == "deleteselected",
+                  $"含回收站 {ShapeLibrary.List(includeTrash: true).Count}，确认 {LibraryConfirm}");
+            ClickPanel(del3);
+            SettleFrames(120);
+            Check("E：回收站第二次点删除 → 永久删除",
+                  ShapeLibrary.List(includeTrash: true).Count == 0,
+                  $"含回收站 {ShapeLibrary.List(includeTrash: true).Count}");
+            ClickPanel(done3);
+        }
+
+        // ---- F. 分类管理：改名 / 删除 / 新建 ----
+        {
+            var catA = ShapeLibrary.CreateCategory("分类A");
+            var catB = ShapeLibrary.CreateCategory("分类B");
+            void SaveOne(string cat, int i)
+            {
+                var st = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = new Color4(0.2f, 0.4f, 0.8f, 1f), Width = 4f,
+                };
+                st.AddPoint(120f + i * 30f, 120f, 1f, 0);
+                st.AddPoint(200f + i * 30f, 180f, 1f, 8);
+                ShapeLibrary.SaveEx(new[] { st }, cat);
+            }
+            SaveOne(catA.Id, 0);
+            SaveOne(catB.Id, 1);
+            ReloadLibrary();
+            SetLibraryCategory(LibraryCategoryIds.All);
+            SettleFrames(120);
+
+            OpenLibraryMenu();
+            ClickPanel(PanelMenuRow("categories"));
+            SettleFrames(150);
+            Check("F：☰ → 管理分类打开抽屉（带铅笔/垃圾桶/新建）",
+                  LibraryCategoriesOpen && LibraryDrawerManage,
+                  $"抽屉 {LibraryCategoriesOpen}，管理 {LibraryDrawerManage}");
+
+            var rowA = DrawerRow(catA.Id);
+            var pencil = LibraryLayout.DrawerPencilRect(rowA, uiK);
+            ClickPanel(pencil);
+            Check("F：铅笔 → 原生输入框改名",
+                  LibraryRenamingId == catA.Id && LibraryRenameHwndForTest != IntPtr.Zero,
+                  $"改名 {LibraryRenamingId}，输入框 {(LibraryRenameHwndForTest != IntPtr.Zero ? "有" : "无")}");
+            Native.SetWindowTextW(LibraryRenameHwndForTest, "改名A");
+            Native.SendMessage(LibraryRenameHwndForTest, Native.WM_KEYDOWN, new IntPtr(0x0D), IntPtr.Zero);
+            SettleFrames(120);
+            Check("F：Enter 保存分类名",
+                  ShapeLibrary.ListCategories().Exists(c => c.Id == catA.Id && c.Name == "改名A"),
+                  $"名字 {ShapeLibrary.ListCategories().Find(c => c.Id == catA.Id)?.Name}");
+
+            // 常用分类星标：管理员点 ☆ → 落盘 + 排到最前；再点 ★ → 取消。
+            var rowAPin = DrawerRow(catA.Id);
+            ClickPanel(LibraryLayout.DrawerStarRect(rowAPin, uiK));
+            SettleFrames(120);
+            var pinnedCats = ShapeLibrary.ListCategories();
+            Check("F：☆ → 标记为常用分类（落盘）",
+                  pinnedCats.Find(c => c.Id == catA.Id)?.Pinned == true
+                  && pinnedCats.Count > 0 && pinnedCats[0].Id == catA.Id,
+                  $"收藏标记 {pinnedCats.Find(c => c.Id == catA.Id)?.Pinned}，"
+                  + $"顺序 {string.Join(">", pinnedCats.Select(c => c.Name))}");
+            var rowAPin2 = DrawerRow(catA.Id);
+            ClickPanel(LibraryLayout.DrawerStarRect(rowAPin2, uiK));
+            SettleFrames(120);
+            Check("F：★ → 取消常用标记",
+                  ShapeLibrary.ListCategories().Find(c => c.Id == catA.Id)?.Pinned == false,
+                  $"收藏标记 {ShapeLibrary.ListCategories().Find(c => c.Id == catA.Id)?.Pinned}");
+
+            var rowB = DrawerRow(catB.Id);
+            var trashB = LibraryLayout.DrawerTrashRect(rowB, uiK);
+            ClickPanel(trashB);
+            Check("F：第一次点垃圾桶只是确认（分类还在）",
+                  ShapeLibrary.ListCategories().Exists(c => c.Id == catB.Id)
+                  && LibraryConfirm == "delcat:" + catB.Id,
+                  $"分类还在 {ShapeLibrary.ListCategories().Exists(c => c.Id == catB.Id)}，确认 {LibraryConfirm}");
+            rowB = DrawerRow(catB.Id);
+            ClickPanel(LibraryLayout.DrawerTrashRect(rowB, uiK));
+            SettleFrames(120);
+            Check("F：第二次点垃圾桶 → 分类删除、内容回未分类",
+                  !ShapeLibrary.ListCategories().Exists(c => c.Id == catB.Id)
+                  && ShapeLibrary.List().Find(e => e.CategoryId == ShapeLibrary.Uncategorized) != null,
+                  $"分类还在 {ShapeLibrary.ListCategories().Exists(c => c.Id == catB.Id)}");
+
+            int shown = LibraryDrawerVisibleCountForPaint;
+            var add = LibraryLayout.CategoryDrawerRowRect(LibraryDrawerRectNow(), uiK, shown);
+            ClickPanel(add);
+            SettleFrames(120);
+            Check("F：＋ 新建分类 → 新分类出现并进入改名",
+                  LibraryRenamingId != null && ShapeLibrary.ListCategories().Count >= 3,
+                  $"改名 {LibraryRenamingId}，分类数 {ShapeLibrary.ListCategories().Count}");
+            if (LibraryRenameHwndForTest != IntPtr.Zero)
+                Native.SendMessage(LibraryRenameHwndForTest, Native.WM_KEYDOWN, new IntPtr(0x1B), IntPtr.Zero);
+            SettleFrames(100);
+            LibraryCategoriesOpen = false;
+            LibraryDrawerManage = false;
+        }
+
+        // ---- G. 内容滚动（36 条，不再分页） ----
+        {
+            foreach (var e in ShapeLibrary.List(includeTrash: true)) ShapeLibrary.Delete(e.Path);
+            for (int i = 0; i < 36; i++)
+            {
+                var st = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = new Color4(0.2f, 0.4f, 0.8f, 1f), Width = 4f,
+                };
+                st.AddPoint(100f + i * 3f, 100f, 1f, 0);
+                st.AddPoint(160f + i * 3f, 150f, 1f, 8);
+                ShapeLibrary.SaveEx(new[] { st });
+            }
+            ReloadLibrary();
+            SetLibraryCategory(LibraryCategoryIds.All);
+            OpenLibraryPanel();
+            SettleFrames(200);
+            var gm = LibraryPanelInfoNow();
+            float max = LibraryLayout.MaxScroll(gm, LibraryEntries.Count);
+            Check("G：36 条内容可以滚动（不再分页）",
+                  LibraryEntries.Count == 36 && max > 1f,
+                  $"条目 {LibraryEntries.Count}，最大滚动 {max:F0}");
+            var lastCellTop = LibraryLayout.CellRect(gm, 35, 0f);
+            Check("G：首屏只露前面的卡（最后一张不在首屏）",
+                  LibraryLayout.CellAt(gm, 36, (lastCellTop.MinX + lastCellTop.MaxX) * 0.5f,
+                                       (lastCellTop.MinY + lastCellTop.MaxY) * 0.5f, 0f) < 0,
+                  "最后一张应在屏幕外");
+            LibraryScrollBy(max);
+            SettleFrames(120);
+            var gm2 = LibraryPanelInfoNow();
+            var lastCell = LibraryLayout.CellRect(gm2, 35, LibraryScrollY);
+            Check("G：滚到底能看到最后一张",
+                  LibraryScrollY > 1f
+                  && LibraryLayout.CellAt(gm2, 36, (lastCell.MinX + lastCell.MaxX) * 0.5f,
+                                          (lastCell.MinY + lastCell.MaxY) * 0.5f,
+                                          LibraryScrollY) == 35,
+                  $"滚动 {LibraryScrollY:F0}，最后一张 y {lastCell.MinY:F0}-{lastCell.MaxY:F0}");
+            LibraryScrollBy(-max);
+            Check("G：滚回顶部", LibraryScrollY < 0.5f, $"滚动 {LibraryScrollY:F0}");
+
+            // 触摸手势：单指在卡片区上拖 = 滚动；轻点 = 选中；两者不能混。
+            LibraryScrollY = 0;
+            LibraryUseSelected = null;
+            var touchM = LibraryPanelInfoNow();
+            var touchCell = LibraryLayout.CellRect(touchM, 0, 0);
+            float touchX = (touchCell.MinX + touchCell.MaxX) * 0.5f;
+            float touchY = (touchCell.MinY + touchCell.MaxY) * 0.5f;
+            bool touchDown = LibraryPointerDown(touchX, touchY, Native.PT_TOUCH, 9001);
+            LibraryPanelPointerMove(touchX, touchY - 100f * uiK, 9001);
+            LibraryPanelPointerUp(touchX, touchY - 100f * uiK, 9001);
+            Check("G：单指在卡片区上拖 = 滚动，不点选",
+                  touchDown && LibraryScrollY > 10f * uiK
+                  && LibraryUseSelected == null && !LibraryInsertArmed,
+                  $"滚动 {LibraryScrollY:F0}，选中 {LibraryUseSelected?.Title ?? "（空）"}");
+
+            LibraryScrollY = 0;
+            LibraryUseSelected = null;
+            touchM = LibraryPanelInfoNow();
+            touchCell = LibraryLayout.CellRect(touchM, 0, 0);
+            touchX = (touchCell.MinX + touchCell.MaxX) * 0.5f;
+            touchY = (touchCell.MinY + touchCell.MaxY) * 0.5f;
+            _ = LibraryPointerDown(touchX, touchY, Native.PT_TOUCH, 9002);
+            LibraryPanelPointerUp(touchX, touchY, 9002);
+            Check("G：单指轻点 = 选中，不滚动",
+                  LibraryUseSelected != null && LibraryScrollY < 0.5f,
+                  $"选中 {LibraryUseSelected?.Title ?? "（空）"}，滚动 {LibraryScrollY:F0}");
+            LibraryUseSelected = null;
+
+            foreach (var e in ShapeLibrary.List(includeTrash: true)) ShapeLibrary.Delete(e.Path);
+            ReloadLibrary();
+        }
+
+        // ---- H. 主条没有收藏格时，「更多」里必须有兜底入口（AGENTS 硬规则）----
+        {
+            CloseLibraryPanel();
+            ui.SetProfileForTest(1);                 // 自定义
+            ui.SetPinForTest(10, false);             // 收藏不钉
+            SettleFrames(150);
+            Check("H：自定义未钉收藏时，主条没有收藏格",
+                  ui.CellRectForTest(10).IsEmpty, "收藏格应为空");
+
+            ui.OpenMoreForTest();
+            SettleFrames(150);
+            var tile = ui.HubTileRectForTest(9);
+            Check("H：更多里出现「收藏」兜底入口",
+                  tile.MaxX > tile.MinX && tile.MaxY > tile.MinY,
+                  $"格 ({tile.MinX:F0},{tile.MinY:F0})-({tile.MaxX:F0},{tile.MaxY:F0})");
+
+            ClickUi(tile);
+            SettleFrames(200);
+            Check("H：点兜底入口 → 面板开、更多关上",
+                  LibraryPanelOpen && !ui.MoreOpenForTest,
+                  $"面板 {LibraryPanelOpen}，更多 {ui.MoreOpenForTest}");
+
+            CloseLibraryPanel();
+            ui.SetPinForTest(10, true);
+            ui.SetProfileForTest(2);
+            SettleFrames(150);
+        }
+
+        // ---- I. 页签 / 拖动 / 缩放 / 2×2 ----
+        {
+            foreach (var e in ShapeLibrary.List(includeTrash: true)) ShapeLibrary.Delete(e.Path);
+            var catA = ShapeLibrary.CreateCategory("页签A");
+            var catB = ShapeLibrary.CreateCategory("页签B");
+            void SaveOne(string cat, int i)
+            {
+                var st = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = new Color4(0.2f, 0.4f, 0.8f, 1f), Width = 4f,
+                };
+                st.AddPoint(120f + i * 30f, 120f, 1f, 0);
+                st.AddPoint(200f + i * 30f, 180f, 1f, 8);
+                ShapeLibrary.SaveEx(new[] { st }, cat);
+            }
+            SaveOne(catA.Id, 0);
+            SaveOne(catB.Id, 1);
+            ReloadLibrary();
+            ResetLibraryPanelForTest();
+            OpenLibraryPanel();
+            SetLibraryCategory(LibraryCategoryIds.All);
+            SettleFrames(200);
+
+            var im = LibraryPanelInfoNow();
+            Check("I：横向默认是「☰ + 分类页签 + ✕」",
+                  im.Tabbed && !im.Menu.IsEmpty && !im.Close.IsEmpty && !im.Tabs.IsEmpty,
+                  $"页签档 {im.Tabbed}，菜单 {!im.Menu.IsEmpty}，页签 {!im.Tabs.IsEmpty}");
+
+            RevealTab(catA.Id);
+            var tabA = TabRectOf(catA.Id);
+            ClickPanel(tabA);
+            SettleFrames(120);
+            Check("I：点页签切换分类", LibraryCategoryId == catA.Id,
+                  $"分类 {LibraryCategoryId}");
+
+            // 把 A 拖到 B 右边 → A 排到最后。
+            RevealTab(catA.Id);
+            var tabA2 = TabRectOf(catA.Id);
+            var tabB2 = TabRectOf(catB.Id);
+            DragPhys((tabA2.MinX + tabA2.MaxX) * 0.5f, (tabA2.MinY + tabA2.MaxY) * 0.5f,
+                     tabB2.MaxX - 2f * uiK, (tabB2.MinY + tabB2.MaxY) * 0.5f, 150);
+            SettleFrames(150);
+            var order = ShapeLibrary.ListCategories().FindAll(c => c.Id == catA.Id || c.Id == catB.Id)
+                        .Select(c => c.Id).ToList();
+            Check("I：拖页签排序（落盘）",
+                  order.Count == 2 && order[0] == catB.Id && order[1] == catA.Id,
+                  $"顺序 {string.Join(">", order)}");
+
+            var before = LibraryPanelRectNow();
+            float startX = before.MinX + 5f * uiK;
+            float startY = before.MinY + 40f * uiK;
+            DragPhys(startX, startY, startX, startY - 50f * uiK, 150);
+            var moved = LibraryPanelRectNow();
+            Check("I：拖动面板空白处能移动",
+                  moved.MinY < before.MinY - 20f * uiK
+                  && MathF.Abs(moved.MinX - before.MinX) < 3f,
+                  $"y {before.MinY:F0}→{moved.MinY:F0}");
+
+            float w0 = moved.MaxX - moved.MinX;
+            var grip = LibraryLayout.ResizeRect(moved, uiK);
+            DragPhys((grip.MinX + grip.MaxX) * 0.5f, (grip.MinY + grip.MaxY) * 0.5f,
+                     (grip.MinX + grip.MaxX) * 0.5f - 120f * uiK,
+                     (grip.MinY + grip.MaxY) * 0.5f, 150);
+            var resized = LibraryPanelRectNow();
+            Check("I：拖右下角按整格改大小",
+                  resized.MaxX - resized.MinX < w0 - 40f * uiK,
+                  $"宽 {w0:F0}→{resized.MaxX - resized.MinX:F0}");
+
+            OpenLibraryMenu();
+            var resetRow = PanelMenuRow("reset");
+            Check("I：☰ 里有「重置位置与大小」", !resetRow.IsEmpty,
+                  $"行 {resetRow.MinX:F0}-{resetRow.MaxX:F0}");
+            ClickPanel(resetRow);
+            SettleFrames(180);
+            var resetRect = LibraryPanelRectNow();
+            float barTop = UiBarBoundsNow().MinY * uiK;
+            Check("I：重置后回到横排、贴工具条上沿",
+                  LibraryMode == LibraryPanelMode.Horizontal
+                  && resetRect.MaxY <= barTop + 1f
+                  && resetRect.MaxY > barTop - 40f * uiK,
+                  $"方向 {LibraryMode}，底 {resetRect.MaxY:F0}，条上沿 {barTop:F0}");
+
+            // 白板滚动时，收藏弹窗必须钉在屏幕上，不能跟着内容走。
+            {
+                var p0 = LibraryPanelRectNow();
+                float off0 = ViewOffsetY;
+                ViewOffsetY = off0 + 220f;
+                SettleFrames(150);
+                var p1 = LibraryPanelRectNow();
+                Check("I：滚动白板时收藏弹窗不跟着走",
+                      MathF.Abs((p0.MinY + off0) - (p1.MinY + ViewOffsetY)) < 2f
+                      && MathF.Abs(p0.MinX - p1.MinX) < 2f,
+                      $"屏幕 y {p0.MinY + off0:F0}→{p1.MinY + ViewOffsetY:F0}，"
+                      + $"相机 {off0:F0}→{ViewOffsetY:F0}");
+                var scrolledCell = LibraryLayout.CellRect(LibraryPanelInfoNow(), 0, LibraryScrollY);
+                int cardPix = ScreenProbe.CountNear(
+                    (int)scrolledCell.MinX, (int)(scrolledCell.MinY + ViewOffsetY),
+                    Math.Max(1, (int)(scrolledCell.MaxX - scrolledCell.MinX)),
+                    Math.Max(1, (int)(scrolledCell.MaxY - scrolledCell.MinY)),
+                    51, 102, 204, 50);
+                Check("I：滚动白板后卡片内容还在（没被裁掉）", cardPix > 20,
+                      $"蓝色像素 {cardPix}");
+                ViewOffsetY = off0;
+                SettleFrames(150);
+            }
+
+            // 缩放：拖动中外框连续跟手、卡片列/行冻结；松手才吸到最近整格。
+            ResetLibraryPanelForTest();
+            SettleFrames(150);
+            var resizeStart = LibraryPanelRectNow();
+            var resizeStartInfo = LibraryPanelInfoNow();
+            var resizeGrip = LibraryLayout.ResizeRect(resizeStart, UiUnit);
+            float rgx = (resizeGrip.MinX + resizeGrip.MaxX) * 0.5f;
+            float rgy = (resizeGrip.MinY + resizeGrip.MaxY) * 0.5f;
+            LibraryPointerDown(rgx, rgy, Native.PT_PEN, 9101);
+            LibraryPanelDragMove(rgx - 60f * UiUnit, rgy);
+            var resizePreview = LibraryPanelRectNow();
+            var resizePreviewInfo = LibraryPanelInfoNow();
+            Check("I：缩放拖动中外框连续跟手（不按格跳）",
+                  MathF.Abs((resizeStart.MaxX - resizeStart.MinX)
+                            - (resizePreview.MaxX - resizePreview.MinX) - 60f * UiUnit) < 2f * UiUnit,
+                  $"宽 {resizeStart.MaxX - resizeStart.MinX:F0}→"
+                  + $"{resizePreview.MaxX - resizePreview.MinX:F0}，UiUnit={UiUnit:F2}");
+            Check("I：缩放拖动中列/行冻结（卡片不每像素重排）",
+                  resizePreviewInfo.Cols == resizeStartInfo.Cols
+                  && resizePreviewInfo.Rows == resizeStartInfo.Rows,
+                  $"列 {resizeStartInfo.Cols}→{resizePreviewInfo.Cols}，"
+                  + $"行 {resizeStartInfo.Rows}→{resizePreviewInfo.Rows}");
+            LibraryPanelDragEnd();
+            Native.ReleaseCapture();
+            var resizeSettled = LibraryPanelRectNow();
+            var resizeSettledInfo = LibraryPanelInfoNow();
+            Check("I：松手吸附到最近整格",
+                  resizeSettled.MaxX - resizeSettled.MinX < resizePreview.MaxX - resizePreview.MinX - 1f
+                  && resizeSettledInfo.Cols < resizeStartInfo.Cols,
+                  $"宽 {resizePreview.MaxX - resizePreview.MinX:F0}→"
+                  + $"{resizeSettled.MaxX - resizeSettled.MinX:F0}，"
+                  + $"列 {resizeStartInfo.Cols}→{resizeSettledInfo.Cols}");
+            ResetLibraryPanelForTest();
+
+            // 拖到左边只挪位置，不自动变竖排；要换方向走 ☰。
+            var horizontalRect = LibraryPanelRectNow();
+            float hDragX = horizontalRect.MinX + 30f * uiK;
+            float hDragY = horizontalRect.MinY + 10f * uiK;
+            DragPhys(hDragX, hDragY,
+                     UiLogicalScreen.MinX * uiK + 8f * uiK, hDragY, 150);
+            SettleFrames(150);
+            var leftRect = LibraryPanelRectNow();
+            Check("I：拖到左边只移动、不自动变竖排",
+                  LibraryMode == LibraryPanelMode.Horizontal,
+                  $"方向 {LibraryMode}，宽 {horizontalRect.MaxX - horizontalRect.MinX:F0}"
+                  + $"→{leftRect.MaxX - leftRect.MinX:F0}");
+
+            OpenLibraryMenu();
+            var orientRow = PanelMenuRow("orientation");
+            Check("I：☰ 里有「切换横排 / 竖排」", !orientRow.IsEmpty,
+                  $"行 {orientRow.MinX:F0}-{orientRow.MaxX:F0}");
+            ClickPanel(orientRow);
+            SettleFrames(180);
+            Check("I：手动切换 → 竖排", LibraryMode == LibraryPanelMode.Vertical,
+                  $"方向 {LibraryMode}");
+            var verticalRect = LibraryPanelRectNow();
+            float vDragX = verticalRect.MinX + 30f * uiK;
+            float vDragY = verticalRect.MinY + 10f * uiK;
+            DragPhys(vDragX, vDragY, vDragX,
+                     UiLogicalScreen.MinY * uiK + 8f * uiK, 150);
+            SettleFrames(150);
+            Check("I：拖到上边仍保持竖排",
+                  LibraryMode == LibraryPanelMode.Vertical,
+                  $"方向 {LibraryMode}");
+
+            ResetLibraryPanelForTest();
+            var tiny = LibraryLayout.Snap(new RectF
+            {
+                MinX = 100f * uiK, MinY = 100f * uiK,
+                MaxX = 100f * uiK + 80f * uiK, MaxY = 100f * uiK + 60f * uiK,
+            }, uiK, LibraryPanelMode.Horizontal);
+            var tinyM = LibraryLayout.Measure(tiny, uiK, LibraryPanelMode.Horizontal);
+            Check("I：最小 1×2（一行两列），2 列时用当前分类 ▾",
+                  tinyM.Cols == 2 && tinyM.Rows == 1 && !tinyM.Tabbed
+                  && tinyM.Tabs.IsEmpty && !tinyM.CurrentCategory.IsEmpty,
+                  $"列 {tinyM.Cols}，行 {tinyM.Rows}，页签档 {tinyM.Tabbed}");
+
+            // 方向只决定默认形状，不再锁死另一轴：横排也能 2×5，竖排也能 5×2。
+            var tallDesired = new RectF
+            {
+                MinX = 100f, MinY = 100f,
+                MaxX = 100f + LibraryLayout.MinWidthLogical * UiUnit,
+                MaxY = 100f + LibraryLayout.MinHeightLogical * UiUnit
+                       + 4f * (LibraryLayout.CellHLogical + LibraryLayout.RowGapLogical) * UiUnit,
+            };
+            var tallSnapped = LibraryLayout.SnapNearest(tallDesired, UiUnit, LibraryPanelMode.Horizontal);
+            var tallInfo = LibraryLayout.Measure(tallSnapped, UiUnit, LibraryPanelMode.Horizontal);
+            Check("I：横排也能拖到 2×5（不再锁 3 行）",
+                  tallInfo.Cols == 2 && tallInfo.Rows == 5,
+                  $"列 {tallInfo.Cols}，行 {tallInfo.Rows}，高 {tallDesired.MaxY - tallDesired.MinY:F0}"
+                  + $"→{tallSnapped.MaxY - tallSnapped.MinY:F0}，"
+                  + $"UiUnit {UiUnit:F2}，MinH {LibraryLayout.MinHeightLogical:F0}");
+
+            var wideDesired = new RectF
+            {
+                MinX = 100f, MinY = 100f,
+                MaxX = 100f + LibraryLayout.MinWidthLogical * UiUnit
+                       + 3f * (LibraryLayout.CellWLogical + LibraryLayout.CellGapLogical) * UiUnit,
+                MaxY = 100f + LibraryLayout.MinHeightLogical * UiUnit
+                       + 1f * (LibraryLayout.CellHLogical + LibraryLayout.RowGapLogical) * UiUnit,
+            };
+            var wideSnapped = LibraryLayout.SnapNearest(wideDesired, UiUnit, LibraryPanelMode.Vertical);
+            var wideInfo = LibraryLayout.Measure(wideSnapped, UiUnit, LibraryPanelMode.Vertical);
+            Check("I：竖排也能拖到 5×2（方向不锁另一轴）",
+                  wideInfo.Cols == 5 && wideInfo.Rows == 2,
+                  $"列 {wideInfo.Cols}，行 {wideInfo.Rows}");
+
+            ResetLibraryPanelForTest();
+            OpenLibraryPanel();
+            SettleFrames(150);
+            Check("I：位置/方向写进偏好",
+                  !string.IsNullOrEmpty(GetUiPref("libRect")),
+                  $"libRect={GetUiPref("libRect")}，libMode={GetUiPref("libMode")}");
+
+            CloseLibraryPanel();
+        }
+
+        // ---- J. 整理：整组移动 / 拖把手排序 / 全屏隐藏 ----
+        {
+            foreach (var e in ShapeLibrary.List(includeTrash: true)) ShapeLibrary.Delete(e.Path);
+            var catJ1 = ShapeLibrary.CreateCategory("整理A");
+            var catJ2 = ShapeLibrary.CreateCategory("整理B");
+            void SaveOne(string cat, int i)
+            {
+                var st = new Stroke
+                {
+                    Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                    Color = new Color4(0.2f, 0.4f, 0.8f, 1f), Width = 4f,
+                };
+                st.AddPoint(100f + i * 20f, 100f, 1f, 0);
+                st.AddPoint(160f + i * 20f, 150f, 1f, 8);
+                ShapeLibrary.SaveEx(new[] { st }, cat);
+            }
+            SaveOne(catJ1.Id, 0);
+            SaveOne(catJ1.Id, 1);
+            SaveOne(catJ1.Id, 2);
+            SaveOne(catJ2.Id, 3);
+            ReloadLibrary();
+            ResetLibraryPanelForTest();
+            OpenLibraryPanel();
+            SetLibraryCategory(catJ1.Id);
+            SettleFrames(200);
+
+            EnterManage();
+            Check("J：整理操作条（全选/移动/删除/完成）都在",
+                  LibrarySelectMode && LibraryManageRects().All.MaxX > 0
+                  && LibraryManageRects().Done.MaxX > 0,
+                  $"模式 {LibrarySelectMode}");
+            ClickCard(0);
+            ClickCard(1);
+            Check("J：点两张卡 = 勾两条", LibrarySelectionCount == 2,
+                  $"勾选 {LibrarySelectionCount}");
+
+            var moveBtn = LibraryManageRects().Move;
+            ClickPanel(moveBtn);
+            Check("J：移动打开分类菜单", MenuOpen(3), $"菜单 {LibraryMenu}");
+            var moveJ2 = PanelMenuRow("move:" + catJ2.Id);
+            Check("J：移动菜单里有目标分类", !moveJ2.IsEmpty,
+                  $"行 {moveJ2.MinX:F0}-{moveJ2.MaxX:F0}，选中 {LibrarySelectionCount}，"
+                  + $"菜单 {string.Join(",", LibraryMenuItems().Select(x => x.Key))}");
+            ClickPanel(moveJ2);
+            SettleFrames(180);
+            Check("J：整组移动 → 目标分类多两条",
+                  ShapeLibrary.List().FindAll(e => e.CategoryId == catJ2.Id).Count == 3
+                  && ShapeLibrary.List().FindAll(e => e.CategoryId == catJ1.Id).Count == 1,
+                  $"A {ShapeLibrary.List().FindAll(e => e.CategoryId == catJ1.Id).Count}，"
+                  + $"B {ShapeLibrary.List().FindAll(e => e.CategoryId == catJ2.Id).Count}");
+
+            SetLibraryCategory(catJ2.Id);
+            SettleFrames(150);
+            EnterManage();
+            string firstPath = LibraryEntries[0].Path;
+            var from = LibraryLayout.CellRect(LibraryPanelInfoNow(), 0, LibraryScrollY);
+            var last = LibraryLayout.CellRect(LibraryPanelInfoNow(), LibraryEntries.Count - 1, LibraryScrollY);
+            var gripFrom = LibraryLayout.GripRect(from, uiK);
+            DragPhys((gripFrom.MinX + gripFrom.MaxX) * 0.5f, (gripFrom.MinY + gripFrom.MaxY) * 0.5f,
+                     last.MaxX - 4f * uiK, (last.MinY + last.MaxY) * 0.5f, 150);
+            SettleFrames(150);
+            var afterOrder = LibraryEntries.Select(e => e.Path).ToList();
+            Check("J：拖把手排序 → 第一条到末尾",
+                  LibraryEntries.Count == 3 && LibraryEntries[^1].Path == firstPath,
+                  $"顺序 {string.Join(">", LibraryEntries.Select(e => e.Title))}");
+            var persisted = ShapeLibrary.List().Where(e => e.CategoryId == catJ2.Id)
+                                            .Select(e => e.Path).ToList();
+            Check("J：排序落盘", persisted.SequenceEqual(afterOrder),
+                  $"重读 {string.Join(">", persisted)}");
+
+            Check("J：整理中弹窗可见", LibraryPanelVisibleNow, "应可见");
+            SetUiOverlayFromUi(true);
+            Check("J：☰/说明打开 → 弹窗暂时隐藏、没关",
+                  !LibraryPanelVisibleNow && LibraryPanelOpen,
+                  $"可见 {LibraryPanelVisibleNow}，打开 {LibraryPanelOpen}");
+            SetUiOverlayFromUi(false);
+            Check("J：返回 → 弹窗恢复", LibraryPanelVisibleNow, "应恢复");
+            CaptureActive = true;
+            Check("J：截图时弹窗暂时隐藏", !LibraryPanelVisibleNow, "应隐藏");
+            CaptureActive = false;
+            Check("J：截图结束恢复", LibraryPanelVisibleNow, "应恢复");
+
+            // 穿透：弹窗没有独立输入窗，必须暂时藏起来，不能“看得见、点不动”。
+            SetPassThroughFromUi(true, toPen: false);
+            SettleFrames(150);
+            Check("J：穿透时收藏弹窗隐藏、没关",
+                  !LibraryPanelVisibleNow && LibraryPanelOpen,
+                  $"可见 {LibraryPanelVisibleNow}，打开 {LibraryPanelOpen}");
+            // 穿透下点“收藏”= 先退出穿透再显示；不能当成“关闭”。
+            ToggleLibraryPanel();
+            SettleFrames(150);
+            Check("J：穿透下点收藏 → 退出穿透并显示",
+                  !PassThrough && LibraryPanelVisibleNow && LibraryPanelOpen,
+                  $"穿透 {PassThrough}，可见 {LibraryPanelVisibleNow}，打开 {LibraryPanelOpen}");
+            SetPassThroughFromUi(true, toPen: false);
+            SettleFrames(120);
+            SetPassThroughFromUi(false, toPen: false);
+            SettleFrames(150);
+            Check("J：退出穿透 → 收藏弹窗自动恢复",
+                  LibraryPanelVisibleNow && LibraryPanelOpen,
+                  $"可见 {LibraryPanelVisibleNow}，打开 {LibraryPanelOpen}");
+
+            var done = LibraryManageRects().Done;
+            ClickPanel(done);
+            OpenLibraryMenu();
+            var keys = LibraryMenuItems().Select(x => x.Key).ToList();
+            LibraryMenu = 0;
+            Check("J：☰ 有导入图片 / 没有关闭 / 备份导入 / 导出 / 删分类 / 帮助",
+                  keys.Contains("importimg") && !keys.Contains("close")
+                  && !keys.Contains("import") && !keys.Contains("export")
+                  && !keys.Contains("deletecat") && !keys.Contains("help"),
+                  $"菜单 {string.Join(",", keys)}");
+
+            var bandLine = ui.BandRectForTest;
+            Check("J：收藏打开时色带线还在", !bandLine.IsEmpty,
+                  $"band {bandLine.MinX:F0}-{bandLine.MaxX:F0}");
+            ClickUi(bandLine);
+            SettleFrames(350);
+            Check("J：点色带线 → 色带能展开", ui.RailOpenForTest,
+                  $"rail {ui.RailOpenForTest}");
+            Check("J：色带展开时收藏仍在",
+                  LibraryPanelVisibleNow && LibraryPanelOpen,
+                  $"可见 {LibraryPanelVisibleNow}，打开 {LibraryPanelOpen}");
+            SendMouse((int)(_virtualX + 100), (int)(_virtualY + 100), 0);
+            SettleFrames(900);
+            Check("J：色带收起后收藏仍在", LibraryPanelVisibleNow,
+                  $"可见 {LibraryPanelVisibleNow}，rail {ui.RailOpenForTest}");
+
+            // ---- K. 框选 ----
+            SetLibraryCategory(catJ2.Id);
+            SettleFrames(120);
+            EnterManage();
+            var p0 = LibraryLayout.CellRect(LibraryPanelInfoNow(), 0, LibraryScrollY);
+            var p2 = LibraryLayout.CellRect(LibraryPanelInfoNow(), 2, LibraryScrollY);
+            DragPhys((p0.MinX + p0.MaxX) * 0.5f, (p0.MinY + p0.MaxY) * 0.5f,
+                     (p2.MinX + p2.MaxX) * 0.5f, (p2.MinY + p2.MaxY) * 0.5f, 150);
+            Check("K：框选经过的三张全勾上", LibrarySelectionCount == 3,
+                  $"勾选 {LibrarySelectionCount}");
+            var gm = LibraryPanelInfoNow();
+            float blankX = gm.Grid.MinX + 10f * uiK;
+            float blankY = gm.Grid.MinY - 2f * uiK;
+            ClickPhys(blankX, blankY);
+            Check("K：点空白处清空勾选", LibrarySelectionCount == 0,
+                  $"勾选 {LibrarySelectionCount}");
+            ClickCard(0);
+            Check("K：单击卡片勾选", LibrarySelectionCount == 1, $"勾选 {LibrarySelectionCount}");
+            ClickCard(0);
+            Check("K：再点同一张取消", LibrarySelectionCount == 0, $"勾选 {LibrarySelectionCount}");
+            var kdone = LibraryManageRects().Done;
+            ClickPanel(kdone);
+
+        // ---- L. 导入透明图片 / 贴纸（保留 alpha，往返不二次预乘） ----
+            {
+                var catImport = ShapeLibrary.CreateCategory("导入测试");
+                ReloadLibrary();
+                SetLibraryCategory(catImport.Id);
+                SettleFrames(120);
+
+                // 32×32 透明底，中间 16×16 是 50% 透明红块。
+                // PngWriter 吃预乘 BGRA，写出 PNG 时会转回直通 alpha。
+                var src = new byte[32 * 32 * 4];
+                for (int y = 8; y < 24; y++)
+                    for (int x = 8; x < 24; x++)
+                    {
+                        int p = (y * 32 + x) * 4;
+                        src[p + 0] = 10;    // B: 20 × 128/255
+                        src[p + 1] = 20;    // G: 40 × 128/255
+                        src[p + 2] = 100;   // R: 200 × 128/255
+                        src[p + 3] = 128;
+                    }
+                string pngPath = System.IO.Path.Combine(dir, "transparent-sticker.png");
+                System.IO.File.WriteAllBytes(pngPath,
+                    PngWriter.EncodeBgraPremultiplied(src, 32, 32));
+
+                int imported = ImportLibraryImagesFrom(new[] { pngPath });
+                SettleFrames(150);
+                var got = ShapeLibrary.List().Find(e => e.CategoryId == catImport.Id);
+                Check("L：导入透明 PNG → 当前分类多一张图",
+                      imported == 1 && got != null && got.Strokes.Count == 1
+                      && got.Strokes[0].IsImage,
+                      $"导入 {imported} 张，条目 {got?.Title ?? "（空）"}，"
+                      + $"对象 {got?.Strokes.Count ?? 0}");
+                if (got != null && got.Strokes.Count > 0 && got.Strokes[0].Image != null)
+                {
+                    var bgra = got.Strokes[0].Image.Bgra;
+                    int c = (16 * 32 + 16) * 4;
+                    Check("L：透明 PNG 的 alpha 保留（中心 128±1）",
+                          Math.Abs(bgra[c + 3] - 128) <= 1, $"A={bgra[c + 3]}");
+                    Check("L：预乘颜色没有二次变暗（R≈100）",
+                          Math.Abs(bgra[c + 2] - 100) <= 5, $"R={bgra[c + 2]}");
+                    Check("L：透明边角仍然全透明",
+                          bgra[3] == 0, $"A={bgra[3]}");
+                }
+
+                int again = ImportLibraryImagesFrom(new[] { pngPath });
+                Check("L：同一张图再导入 → 去重，不写第二份",
+                      again == 0
+                      && ShapeLibrary.List().FindAll(e => e.CategoryId == catImport.Id).Count == 1,
+                      $"再次导入 {again} 张，条目 "
+                      + $"{ShapeLibrary.List().FindAll(e => e.CategoryId == catImport.Id).Count} 个");
+
+                foreach (var e in ShapeLibrary.List().FindAll(e => e.CategoryId == catImport.Id))
+                    ShapeLibrary.Delete(e.Path);
+                ShapeLibrary.DeleteCategory(catImport.Id);
+                ReloadLibrary();
+                SettleFrames(100);
+            }
+
+            foreach (var e in ShapeLibrary.List(includeTrash: true)) ShapeLibrary.Delete(e.Path);
+            ShapeLibrary.DeleteCategory(catJ1.Id);
+            ShapeLibrary.DeleteCategory(catJ2.Id);
+            ReloadLibrary();
+            CloseLibraryPanel();
+            SettleFrames(100);
         }
 
         CloseLibraryPanel();
-        ShapeLibrary.DirOverride = null;      // 收尾：还回真实目录
         try { if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true); } catch { }
         Console.WriteLine(fail == 0
-            ? $"  PASS: 图库（存入 / 面板 / 落笔插入 / 整理删除）都对（{pass} 项）"
+            ? $"  PASS: 图库（存入 / 面板 / 插入 / 回收站 / 排序 / 整理 / 导入透明图 / 星标 / 重置 / 穿透隐藏 / 触摸滚动 / 吸附）都对（{pass} 项）"
             : $"  FAIL: {fail} 项不对（{pass} 项通过）");
         _quit = true;
     }

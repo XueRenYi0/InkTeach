@@ -44,29 +44,60 @@ public sealed partial class FullUi : IOverlayUi
         ("select",    "selectFilled",    "选择"),
         ("shapes",    "shapesFilled",    "图形"),
         ("cut",       "cutFilled",       "截屏"),
+        ("star",      "starFilled",      "收藏"),
         ("undo",      "undoFilled",      "后撤"),
         ("redo",      "redoFilled",      "重做"),
         ("more",      "moreFilled",      "更多"),
     };
 
     /// <summary>每一组的最后一格（下标）。组之间画一条分隔线。</summary>
-    private static readonly int[] GroupEnds = { 0, 2, 6, 9, 12 };
+    private static readonly int[] GroupEnds = { 0, 2, 6, 10, 13 };
+
+    /// <summary>
+    /// 格子的**稳定身份**（下标会因排序变化，身份不会）。
+    /// 持久化"取消了哪几格"只存这些 key；老配置里的数字按下标顺序翻译。
+    /// </summary>
+    private static readonly string[] CellKeys =
+    {
+        "ball", "cursor", "board", "pen", "highlighter", "laser", "eraser",
+        "select", "shapes", "capture", "star", "undo", "redo", "more",
+    };
+
+    /// <summary>v2 落盘顺序（收藏追加在最右）。老配置的数字只在这个顺序里解释。</summary>
+    private static readonly string[] LegacyCellKeysV2 =
+    {
+        "ball", "cursor", "board", "pen", "highlighter", "laser", "eraser",
+        "select", "shapes", "capture", "undo", "redo", "more", "star",
+    };
 
     // ---- 界面档位 -----------------------------------------------------------
     //
     // 三档（用户定的默认是"完整档"）：
     //   · 极简 = 一条**短胶囊**，固定五格（球 + 鼠标 + 画笔 + 橡皮 + 更多）；
     //   · 自定义 = 老师自己钉的那份集合（默认＝全部；最少可到球 + 鼠标 + 更多）；
-    //   · 完整 = 全部十三格。
+    //   · 完整 = 全部十四格。
     // 规则一条：**极简与自定义都必须是完整档顺序的子序列**——同一个工具在哪一档里
     // 都在同一个相对位置，来回切档不用重新找。
 
     /// <summary>档位。</summary>
     private enum Profile { Mini = 0, Custom = 1, Full = 2 }
 
+    /// <summary>
+    /// 主条格表的版本。**每加一个新格就 +1**；老「完整版」靠它转「自定义」，
+    /// 不把新格硬塞进老用户的工具条（用户 2026-10-25 定的硬规则）。
+    /// v3 只重排（收藏挪到截屏后），不新增格子；老配置按稳定 key 迁移钉住状态。
+    /// </summary>
+    private const int CellsVersion = 3;
+
+    /// <summary>每一格从哪个版本开始存在（和 <see cref="CellKeys"/> 对齐）。</summary>
+    private static readonly int[] CellSinceVersion =
+    {
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0,
+    };
+
     // 极简固定 5 格：球 + 鼠标 + 画笔 + 橡皮 + 更多。
     // 白板 / 撤销仍在完整档和自定义里，只是不在极简主栏显示。
-    private static readonly int[] MiniCells = { 1, 3, 6, 12 };
+    private static readonly int[] MiniCells = { 1, 3, 6, 13 };
 
     private Profile _profile = Profile.Full;
 
@@ -75,7 +106,7 @@ public sealed partial class FullUi : IOverlayUi
 
     // 自定义硬地板只保留鼠标和「更多」：球永远在，所以最少 3 格。
     // 画笔 / 橡皮 / 白板 / 后撤都开放取消；极简仍是固定 5 格，不受这里影响。
-    private static bool CanUnpin(int cell) => cell is not (1 or 12);
+    private static bool CanUnpin(int cell) => cell is not (1 or 13);
 
     private static bool[] CreateAllPinned()
     {
@@ -115,7 +146,7 @@ public sealed partial class FullUi : IOverlayUi
     ///   4～7 格          = 4 色、5 档笔/3 档橡皮；4 格用粗细按钮，5～7 格用滑条；
     ///   8～9 格          = 6 色、7 档粗细、方形虚线；
     ///   10～11 格        = 8 色、10 档粗细、方形虚线；
-    ///   12～13 格（完整）= 全部 8 色、全部粗细档、长方形虚线、完整标签。
+    ///   12～14 格（完整）= 全部 8 色、全部粗细档、长方形虚线、完整标签。
     ///
     /// 色片**按可用宽度铺满**；低于约 28px 时先减色片，不继续缩。
     ///
@@ -185,7 +216,7 @@ public sealed partial class FullUi : IOverlayUi
     //（Tokens.TipFastDelayMs/TipBetweenWindowMs，WPF 的 BetweenShowDelay 口径）；
     // 原「功能提示」开关撤除、改常开。
     //
-    // 目标编号**沿用 `HoverAt` 那一套**（-2 球 / 0..12 格 / 100+ 色片 / 200+ 分段 /
+    // 目标编号**沿用 `HoverAt` 那一套**（-2 球 / 0..13 格 / 100+ 色片 / 200+ 分段 /
     // 300 滑条 / 400 动作按钮 / 500 虚实线）——同一份编号既管高亮也管提示，
     // 不另写一套"哪块算哪块"的映射（那迟早会和高亮漂移）。
     //
@@ -223,7 +254,8 @@ public sealed partial class FullUi : IOverlayUi
     /// 同步规则把它掰回来，不然会出现"拿着橡皮、上带还是色板"。
     /// </summary>
     private int _bandCell = 3;
-
+    /// <summary>上一次看到的收藏面板开合（边沿：打开时把上带收回色线，关闭时恢复正常）。</summary>
+    private bool _lastLibraryOpen;
     /// <summary>上一次看到的工具。用它判断"工具真的换了"，而不是"带子对不对"。</summary>
     private Tool _lastTool = Tool.Pen;
 
@@ -291,7 +323,7 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。外观 / 书写 / 墨迹三列并排；
     /// `AutoStart` 排在表尾，但由 <see cref="MoreRowRect"/> 画在外观列最后一格。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, TouchMode, Privacy, RestoreInk, PptAutoSave, HistoryDays, AutoStart }
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, TouchMode, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -339,6 +371,12 @@ public sealed partial class FullUi : IOverlayUi
         //   PPT 和文档都是老师的课件（"文档"在我们界面语汇里专指 PDF/图片那类）。
         (Row.PptAutoSave, "课件墨迹自动保存", false, false, "PPT 放映 / 文档打开时，批注按页自动保存、下次自动装载"),
         (Row.HistoryDays, "历史清理", false, false, "过期 PPT 缓存 / 打开前备份 / 历史板书，启动时清掉"),
+        // 全局备份（2026-10-25）：只放这里，不在「更多」首页重复。
+        // 备份 = 收藏 / 历史板书 / 设置 / 课件批注；不含 PDF / PPT 原文件。
+        (Row.BackupAll, "备份全部数据…", false, false,
+         "收藏 / 历史板书 / 设置 / 课件批注打包成 .zip；不含 PDF / PPT 原文件"),
+        (Row.RestoreAll, "从备份恢复…", false, false,
+         "选备份包；恢复后重启软件生效，旧数据留在 .before-restore"),
         // 开机自启：放在「外观」列最后一格（MoreRowRect 里按列排，不按 Rows 顺序画）。
         // 默认关；打开后只写 HKCU Run，不需要管理员，也不碰任务计划/服务。
         (Row.AutoStart, "开机自动启动", false, false, "登录 Windows 后在后台待命：点小球再开始批注"),
@@ -436,6 +474,7 @@ public sealed partial class FullUi : IOverlayUi
         _dashFade.Jump(1f);
         _lastPpt = host.State.PptMode;
         _lastPass = host.State.PassThrough;
+        _lastLibraryOpen = host.State.LibraryOpen;
         LoadPrefs();
         Layout(host.Screen, host.DpiScale);
         PushFloatingTheme();       // 浮层（操作条/小面板/旋转读数）跟着走同一套令牌
@@ -505,9 +544,42 @@ public sealed partial class FullUi : IOverlayUi
                  : Profile.Full;
 
         for (int i = 1; i < _pinned.Length; i++) _pinned[i] = true;
-        foreach (var s in (_host.GetPref("unpinned") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
-            if (int.TryParse(s, out int cell) && cell > 0 && cell < Cells.Length && CanUnpin(cell))
+        // 「取消了哪几格」按**稳定 key** 存；老配置里的数字按 v2 顺序翻译。
+        // 重排（收藏挪到截屏后）不能把老用户的"取消钉住"挪到别的格上。
+        foreach (var token in (_host.GetPref("unpinned") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string key = null;
+            if (int.TryParse(token, out int legacyCell)
+                && legacyCell > 0 && legacyCell < LegacyCellKeysV2.Length)
+                key = LegacyCellKeysV2[legacyCell];
+            else
+                key = token.Trim();
+            int cell = Array.IndexOf(CellKeys, key);
+            if (cell > 0 && cell < Cells.Length && CanUnpin(cell))
                 _pinned[cell] = false;
+        }
+
+        // **新增格子的迁移**（2026-10-25 硬规则）：老用户不硬塞新格，
+        // 内部转「自定义」、旧格全钉、新格不钉，工具条外观一个像素不变。
+        // 用 `CellSinceVersion` 按身份判断，不再假设"新格一定在最后"。
+        int savedVersion = int.TryParse(_host.GetPref("cellsVersion"), out int cellsVer) ? cellsVer : 1;
+        if (savedVersion < CellsVersion)
+        {
+            for (int i = 1; i < Cells.Length; i++)
+            {
+                if (CellSinceVersion[i] <= savedVersion) continue;
+                if (_host.State.IsFirstRun)
+                {
+                    _pinned[i] = true;
+                }
+                else
+                {
+                    _pinned[i] = false;
+                    if (_profile == Profile.Full) _profile = Profile.Custom;
+                }
+            }
+            SavePrefs();
+        }
 
         // 白板底纹是**引擎状态**（画进分块缓存的），界面这边只是它的"存储器"：
         // 启动时把上次的档位推给引擎一次。数值不合法就当默认。
@@ -561,10 +633,12 @@ public sealed partial class FullUi : IOverlayUi
         // 悬停提示：**常开**（2026-10-16 起；原来的"关过才写 0"随开关撤除）。
 
         var off = new List<string>();
-        for (int i = 1; i < _pinned.Length; i++) if (!_pinned[i]) off.Add(i.ToString());
+        for (int i = 1; i < _pinned.Length; i++) if (!_pinned[i]) off.Add(CellKeys[i]);
         _host.SetPref("unpinned", off.Count == 0 ? null : string.Join(",", off));
         // 色带常开：默认关，只写"开了"这一种情况。
         _host.SetPref("railPin", _railPinned ? "1" : null);
+        // 主条格表版本：每次加新格都要写，老用户的迁移靠它只跑一次。
+        _host.SetPref("cellsVersion", CellsVersion.ToString());
     }
 
     // ---- 布局 ---------------------------------------------------------------
@@ -589,12 +663,28 @@ public sealed partial class FullUi : IOverlayUi
 
         // 占用矩形必须跟着"实际画出来的东西"走：贴边隐藏时它就只剩露头那一条，
         // 输入小窗也跟着缩——这样指针扫过露头才算"碰到面板"，其余位置照旧穿透/画线。
-        var u = UnionRect();
+        var u = BaseBoundsLocal();
         // **粗细预览会画到面板外面**（带子那一侧的上/下方）：可见范围也得跟出去，
         // 否则引擎会把超出 QueryBounds 的部分裁掉（引擎是按这份矩形做裁剪的），
         // 表现就是"预览没画出来"。它只在拖滑条/悬停滑条时出现，平时这份矩形不变。
         if (SizePreviewVisible && _host != null) u = Union(u, SizePreviewRect(_host.State));
         if (_penPickerOpen) u = Union(u, PenPickerRect());
+        return FinishBounds(u);
+    }
+
+    /// <summary>
+    /// **主条本身**的占用矩形（不含下拉/动作菜单/粗细预览这些临时弹层）。
+    /// 收藏面板定位只认它：否则一开菜单，面板会跟着弹层往上跳（见 IOverlayUi.ChromeBounds）。
+    /// </summary>
+    public RectF ChromeBounds => FinishBounds(BaseBoundsLocal());
+
+    public RectF BarBounds => FinishBounds(BarRect());
+
+    private RectF BaseBoundsLocal() => UnionRect();
+
+    /// <summary>把本地矩形平移到屏幕坐标、夹进屏幕，并按露头状态收短。</summary>
+    private RectF FinishBounds(RectF u)
+    {
         var s = Shift();
         u = new RectF
         {
@@ -1275,7 +1365,7 @@ public sealed partial class FullUi : IOverlayUi
     /// </summary>
     private int BandSegmentCount => _bandCell switch
     {
-        2 => BoardBand.Length, 6 => 2, 7 => 2, 8 => ShapeBandSegments, 9 => 2, _ => 0,
+        2 => BoardBand.Length, 6 => 2, 7 => 2, 8 => ShapeSegmentCount, 9 => 2, _ => 0,
     };
 
     /// <summary>
@@ -1339,29 +1429,10 @@ public sealed partial class FullUi : IOverlayUi
     private const int ShapeCell = 8;
 
     /// <summary>
-    /// 图形那一格**最后那一段**：「图库」（我的图形，2026-09-22 加，用户要的"图像收藏"）。
-    ///
-    /// 它**不是图形工具、是动作**（点开图库面板），所以**不进 <see cref="ShapeRows"/>**：
-    /// 那张表是"段 ↔ 工具"的唯一来源，塞一个非工具进去，`ShapeToolAt`、段高亮、
-    /// 以及 `--shapebandtest` 那条"每个有入口的图形都要真拖一笔"全都会跟着错。
-    /// 它单独占**第四行**一段（放在所有图形之后 = 不影响任何现有段号，肌肉记忆不动）。
-    ///
-    /// 纪律：**加图形只动 `ShapeRows`；加动作才动这里**。
-    /// </summary>
-    private static int LibrarySegment => ShapeSegmentCount;
-
-    /// <summary>「图库」那一段在最后一行（2026-10-17 起**并入最后一行**，不再单独占行）。</summary>
-    private static int LibraryBandRow => ShapeRows.Length - 1;
-
-    /// <summary>
-    /// 上带图形那一格一共几行：**工具表那几行（图库那段并在最后一行里）**。
-    /// 布局（`SegmentRect` 的行高/居中）和带子总高（`BandHeightLogical`）都问它。
-    /// 2026-10-17：图库那段不再单独占一行（用户："单独占一行不合理"）→ 行数就是工具表行数。
+    /// 上带图形那一格一共几行。布局（`SegmentRect` 的行高/居中）和带子总高
+    /// （`BandHeightLogical`）都问它。
     /// </summary>
     private static int ShapeBandRows => ShapeRows.Length;
-
-    /// <summary>图形那一格一共几段（工具段 ＋ 最后那段「图库」）。命中与绘制都用它。</summary>
-    private static int ShapeBandSegments => ShapeSegmentCount + 1;
 
     /// <summary>图形那一格一共几段（各行加起来）——命中与绘制的循环都用它。</summary>
     private static int ShapeSegmentCount
@@ -1374,13 +1445,11 @@ public sealed partial class FullUi : IOverlayUi
         }
     }
 
-    /// <summary>第 `row` 行有几段（决定本行的段宽）。**最后一行多一段「图库」**（2026-10-17 并入）。</summary>
+    /// <summary>第 `row` 行有几段（决定本行的段宽）。</summary>
     private static int ShapeRowCount(int row)
     {
         if (row < 0 || row >= ShapeRows.Length) return 0;
-        int n = ShapeRows[row].Length;
-        if (row == ShapeRows.Length - 1) n += 1;   // 末尾那段是「图库」（动作）
-        return n;
+        return ShapeRows[row].Length;
     }
 
     /// <summary>
@@ -1390,7 +1459,6 @@ public sealed partial class FullUi : IOverlayUi
     private static int ShapeSegmentRow(int i)
     {
         if (i < 0) return 0;
-        if (i >= ShapeSegmentCount) return ShapeRows.Length - 1;   // 末尾那段「图库」在最后一行
         int seen = 0;
         for (int r = 0; r < ShapeRows.Length; r++)
         {
@@ -2615,13 +2683,8 @@ public sealed partial class FullUi : IOverlayUi
             case 7:                       // 矩形框选 / 自由套索
                 _host.Commands.SetSelectMode(i == 0 ? SelectMode.Rect : SelectMode.Lasso);
                 break;
-            case 8:                       // 图形那一格：**两行**拉平编号，顺序见两张表
-                if (i >= 0 && i < ShapeBandSegments)
+            case 8:                       // 图形那一格：三行拉平编号，顺序见 ShapeRows
                 {
-                    // 最后那一段是**动作**：点开图库面板（"我的图形"，2026-09-22）。
-                    // 它不进 ShapeRows（那张表是工具表），所以这里**必须先判**。
-                    if (i >= ShapeSegmentCount) { _host.Commands.ToggleLibraryPanel(); break; }
-
                     var picked = ShapeToolAt(i);
                     // **同一个图形格再点一次 = 换一档**。只对三种图形这样，别的照旧"再点=选中它"：
                     //   · 抛物线：换开口方向（用户 2026-09-20 定："选中框的抛物线按钮取消，
@@ -2814,6 +2877,12 @@ public sealed partial class FullUi : IOverlayUi
                     "90" => "30", "30" => "7", "7" => null, _ => "90",
                 });
                 break;
+            case Row.BackupAll:
+                _host.Commands.BackupAllData();
+                break;
+            case Row.RestoreAll:
+                _host.Commands.RestoreFromBackup();
+                break;
             case Row.AutoStart:
                 _host.Commands.SetAutoStart(!_host.State.AutoStartOn);
                 break;
@@ -2878,13 +2947,18 @@ public sealed partial class FullUi : IOverlayUi
     /// </summary>
     private const int LookRowCount = 5;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小 / 开机自动启动    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小（「功能提示」2026-10-16 撤除、改常开）
     private const int WriteRowCount = 5;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测 / 触摸模式 / 设备与性能统计
-    private const int InkRowCount = 3;     // 墨迹：湿墨档位 / 自动恢复上次板书 / PPT 墨迹默认自动保存 / 历史清理（日志两行 2026-10-17 合并进「更多 → 日志」）
+    private const int InkRowCount = 5;     // 墨迹：自动恢复 / 课件墨迹自动保存 / 历史清理 / 备份 / 恢复
     private const float MoreColumnGap = 16f;
     private const float MoreSwitchW = 44f;
     private const float MoreSwitchH = 26f;
     private const float MoreCloseSize = 44f;
     private const float MoreProfileGap = 8f;
     private const float MoreChipTopGap = 10f;
+    /// <summary>钉住宫格有几行（按 Cells 数量算；加新格不会再把后面的组头顶穿）。</summary>
+    private static int MoreChipRows
+        => Math.Max(1, (Cells.Length - 1 + MoreChipCols - 1) / MoreChipCols);
+    private static float MoreChipBlockH
+        => MoreChipRows * MoreChipH + (MoreChipRows - 1) * MoreChipGap;
 
     // 命中编号：一整块用**一个整数**编码；绘制/命中/执行都读同一个号。
     private const int MoreHitNone = -1;
@@ -2931,7 +3005,7 @@ public sealed partial class FullUi : IOverlayUi
     private float MoreSettingsH()
         => MorePad * 2 + MoreHeaderH + 8
            + MoreGroupHeadH + MoreProfileH + MoreChipTopGap
-           + (ChipsShown ? 2 * MoreChipH + MoreChipGap : 42f)
+           + (ChipsShown ? MoreChipBlockH : 42f)
            + MoreGroupGap + MoreLowerH;
 
     /// <summary>下半区高度 = 最高那一列（三列并排，三个组头都在同一行）。</summary>
@@ -2994,7 +3068,13 @@ public sealed partial class FullUi : IOverlayUi
         return Math.Max(1, (count + TileCols() - 1) / TileCols());
     }
 
-    private int HubCount(int section) => HubCounts[Math.Clamp(section, 0, HubCounts.Length - 1)];
+    private int HubCount(int section)
+    {
+        int n = HubCounts[Math.Clamp(section, 0, HubCounts.Length - 1)];
+        // 主条已经有「收藏」格时，更多里不再放同一个入口（AGENTS 硬规则）。
+        if (section == 1 && PosOf(10) >= 0) n = Math.Max(0, n - 1);
+        return n;
+    }
 
     /// <summary>
     /// 每个分组的格子数：课堂 3 个（计时 / 点名 / 随机一人）；墨迹 **5 个**
@@ -3003,7 +3083,7 @@ public sealed partial class FullUi : IOverlayUi
     /// 按扩展名分派；历史板书是 2026-10-14 加的找回入口）。
     /// 格子编号（`HubTileCode`）从这里算出来，**不写死 3**——加格子不会再串段。
     /// </summary>
-    private static readonly int[] HubCounts = { 4, 5 };   // 课堂 4（使用说明紧跟随机一人），墨迹 5
+    private static readonly int[] HubCounts = { 4, 6 };   // 课堂 4（使用说明紧跟随机一人），墨迹 6（含收藏）
 
     /// <summary>第 section 组的组头矩形。</summary>
     private RectF HubHeadRect(int section)
@@ -3035,6 +3115,9 @@ public sealed partial class FullUi : IOverlayUi
             if (index < 3) return index;
             return HelpTileCode;
         }
+        // 墨迹组第 6 格是「收藏」（2026-10-25），编号用 9：
+        // 3..7 是原来的保存/打开/回放/关文档/历史板书，8 留给「使用说明」。
+        if (index == 5) return 9;
         return 3 + index;
     }
 
@@ -3089,7 +3172,7 @@ public sealed partial class FullUi : IOverlayUi
 
     private float SetLowerTop()
         => MoreProfileRect(0).MaxY + MoreChipTopGap
-           + (ChipsShown ? 2 * MoreChipH + MoreChipGap : 42f) + MoreGroupGap;
+           + (ChipsShown ? MoreChipBlockH : 42f) + MoreGroupGap;
 
     /// <summary>三列并排时每列的宽（内容宽减两道列距，再三等分）。</summary>
     private float SetColW() => MathF.Max(110f, (MoreContentW() - MoreColumnGap * 2f) / 3f);
@@ -3127,6 +3210,8 @@ public sealed partial class FullUi : IOverlayUi
         Row.RestoreInk => SetColRow(SetColKind.Ink, 0),
         Row.PptAutoSave => SetColRow(SetColKind.Ink, 1),
         Row.HistoryDays => SetColRow(SetColKind.Ink, 2),
+        Row.BackupAll => SetColRow(SetColKind.Ink, 3),
+        Row.RestoreAll => SetColRow(SetColKind.Ink, 4),
         _ => SetColRow(SetColKind.Ink, 2),
     };
 
@@ -3291,12 +3376,12 @@ public sealed partial class FullUi : IOverlayUi
     // ---- 启动器绘制 ----------------------------------------------------------
 
     /// <summary>启动器格子总数（各分组相加；「加格子忘了别处」用这一条兜住）。</summary>
-    private static int HubTileTotal
+    private int HubTileTotal
     {
         get
         {
             int n = 0;
-            foreach (int c in HubCounts) n += c;
+            for (int s = 0; s < HubCounts.Length; s++) n += HubCount(s);
             return n;
         }
     }
@@ -3324,6 +3409,9 @@ public sealed partial class FullUi : IOverlayUi
         7 => ("历史板书",
               "找回以前写在**白板**上的墨迹（自动留存，停手时写；不含截图）",
               _host != null && !_host.State.PptMode && _host.State.HistoryCount > 0, false),
+        9 => ("收藏",
+              "打开收藏；同一内容不会重复存。主条没有收藏格时从这里进",
+              true, false),
         HelpTileCode => ("使用说明",
               "4 步上手 / 手势 / 快捷键；F1 也能打开",
               true, false),
@@ -3511,8 +3599,6 @@ public sealed partial class FullUi : IOverlayUi
                           12.5f, Brush(ctx, InkCol));
     }
 
-    // ---- 执行 ----------------------------------------------------------------
-
     private void ActivateHub(int code)
     {
         switch (code)
@@ -3534,6 +3620,10 @@ public sealed partial class FullUi : IOverlayUi
             case 7:                                   // 历史板书（2026-10-14）
                 CloseMore();
                 _host.Commands.OpenInkHistory();
+                break;
+            case 9:                                   // 收藏（2026-10-25）
+                CloseMore();
+                _host.Commands.ToggleLibraryPanel();
                 break;
             case HelpTileCode:                        // 使用说明（2026-10-19）
                 // 和「设置」一样留在 More 面板里换页，不另开一层——DPI、遮罩、
@@ -3880,6 +3970,14 @@ public sealed partial class FullUi : IOverlayUi
             return true;
         }
 
+        // 主条上的空白（格间缝、两端内边距）也允许拖动整条：
+        // 14 格之后整条中心正好落在组间缝里，从中心按下拖不走会被当成"面板坏了"。
+        if (BarRect().Contains(p.X, p.Y))
+        {
+            _press = -3;
+            return true;
+        }
+
         // 上带：色片 / 分段（滑条已经在上面判过了）
         if (BandOpen())
         {
@@ -4173,6 +4271,7 @@ public sealed partial class FullUi : IOverlayUi
         _press = -1;
         _dragging = false;
         if (idx == -1) return false;
+        if (idx == -3) return true;              // 主条空白：只是拖动/点一下，不执行功能
 
         if (dragged)
         {
@@ -4358,10 +4457,15 @@ public sealed partial class FullUi : IOverlayUi
                 if (!HasShapeEntry(st.Tool)) cmd.SetTool(Tool.Rectangle);
                 break;
             case 9: cmd.SetTool(Tool.Capture); break;
-            case 10: cmd.Undo(); break;
-            case 11: cmd.Redo(); break;
-            case 12:
+            case 10:
+                // 收藏：打开/关闭收藏弹窗；色带保持当前工具的色线，不参与收藏。
+                cmd.ToggleLibraryPanel();
+                break;
+            case 11: cmd.Undo(); break;
+            case 12: cmd.Redo(); break;
+            case 13:
                 // 「更多」：打开屏幕中央的面板（2026-10-01 起；抽屉从产品路径退场）
+                if (st.LibraryOpen) cmd.ToggleLibraryPanel();
                 OpenMore();
                 break;
         }
@@ -4405,6 +4509,17 @@ public sealed partial class FullUi : IOverlayUi
             int cell = CellForTool(state.Tool);
             if (HasBand(cell)) _bandCell = cell;
             if (_penPickerOpen && state.Tool != Tool.Pen) ClosePenColorPicker();
+        }
+
+        // ---- 收藏弹窗开合：**不切换、不展开色带** ----
+        // 打开时把设置条收回那条笔色线（同穿透）；关闭后恢复当前工具的悬停行为。
+        if (state.LibraryOpen != _lastLibraryOpen)
+        {
+            _lastLibraryOpen = state.LibraryOpen;
+            _railHover = false;
+            _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
+            if (state.LibraryOpen) _rail.To(0f, Tokens.RailMs);
+            Invalidate();
         }
 
         // ---- 穿透开的那一刻：上带收回那条 10 像素色线（2026-10-02 用户口径）----
@@ -4460,6 +4575,9 @@ public sealed partial class FullUi : IOverlayUi
     public void Render(ID2D1DeviceContext ctx, UiTheme theme)
     {
         if (_host == null) return;
+        // 全屏层（更多 / 说明）开合：收藏弹窗先藏，关掉自动回来。
+        // 色带 / 取色器只是底部临时展开，**不影响收藏弹窗**。
+        _host.Commands.SetUiOverlay(_moreOpen);
         UpdatePeek();                    // 每帧问一次"该不该收起来"（贴边隐藏）
         UpdateRail();                    // 色线该不该长成设置条
         UpdateBandAction();              // "按住清空"够 0.8 秒没有（每帧推进）
@@ -4511,13 +4629,13 @@ public sealed partial class FullUi : IOverlayUi
 
         // ---- 内容是**两段式**的：形状先长，内容再交叉换 ----
         //
-        // 原来是在 e = 0.5 上硬切（球在 e<0.5 画、13 格在 e≥0.5 画）。出图当场看出两个毛病
+        // 原来是在 e = 0.5 上硬切（球在 e<0.5 画、14 格在 e≥0.5 画）。出图当场看出两个毛病
         // （`--panelshow <图> --expand 0.15` / `0.5`）：
         //   ① 色环和笔图标是按**面板的一半宽**算的，面板一长它们就被撑成一整个大图标，
         //      而且还跟着面板中心往右跑；
-        //   ② 硬切那一下 13 格"啪"地出现，而且**没被面板裁住**——右边几个工具跑到面板外面。
+        //   ② 硬切那一下 14 格"啪"地出现，而且**没被面板裁住**——右边几个工具跑到面板外面。
         // 现在：形状照旧按 e 长（200ms、ease-out），
-        //   球的内容：e 0.05→0.45 淡出；  13 格：e 0.45→0.80 淡入。
+        //   球的内容：e 0.05→0.45 淡出；  14 格：e 0.45→0.80 淡入。
         // 中间那段两者同时在，位置也是同一个（球那一格），读起来就是"球摊开成格子"。
         float ballA = 1f - Smooth01((e - 0.05f) / 0.40f);
         float cellsA = Smooth01((e - 0.45f) / 0.35f);
@@ -4536,7 +4654,7 @@ public sealed partial class FullUi : IOverlayUi
                 ctx.PushAxisAlignedClip(new Vortice.RawRectF(panel.MinX, panel.MinY, panel.MaxX, panel.MaxY),
                                         AntialiasMode.Aliased);
             // 淡入整层做（不透明度图层），而不是把 alpha 一路传进每个绘制函数：
-            // 要淡的东西有几十处（13 格的图标、组分隔线、色片、滑条…），传 alpha 得改十几处签名。
+            // 要淡的东西有几十处（14 格的图标、组分隔线、色片、滑条…），传 alpha 得改十几处签名。
             bool layered = cellsA < 0.996f && BeginFade(ctx, cellsA);
             DrawExpandedContent(ctx, st, panel, band, radius);
             if (layered) EndFade(ctx);
@@ -4681,7 +4799,7 @@ public sealed partial class FullUi : IOverlayUi
 
         if (cellsA > 0.004f)
         {
-            int pos = PosOf(12);                 // 主条最后一格「更多」
+            int pos = PosOf(13);                 // 主条最后一格「更多」
             if (pos >= 0)
             {
                 var cr = CellRect(pos);
@@ -5229,14 +5347,6 @@ public sealed partial class FullUi : IOverlayUi
         //
         // **"这一格有几档、现在是第几档"只有 `PipsOf` 那一处**（绘制与自检共用）：
         // 在这里再列一遍工具名，加一种图形就会漏一处。
-        // 最后那一段是**动作**不是图形：画书架图标（自绘，见 `IconAtlas.DrawLibrary`），
-        // 没有档位点、也不参与"哪个图形选中了"的高亮。
-        if (i >= ShapeSegmentCount)
-        {
-            IconAtlas.DrawCentered(ctx, "library", r, 18f, Brush(ctx, segInk));
-            return;
-        }
-
         var segTool = ShapeToolAt(i);
         var (pipCount, pipCur) = PipsOf(segTool, st);
         if (pipCount > 0)
@@ -5681,6 +5791,7 @@ public sealed partial class FullUi : IOverlayUi
     {
         if (i == 1) return st.PassThrough;
         if (i == 2) return st.Board;
+        if (i == 10) return st.LibraryOpen;
         if (st.PassThrough) return false;
         return i switch
         {
@@ -5703,7 +5814,7 @@ public sealed partial class FullUi : IOverlayUi
     /// 那种猜法迟早和引擎对不上。
     /// </summary>
     private static bool CellUnavailable(int i, in UiState st) =>
-        (i == 10 && st.UndoDepth == 0) || (i == 11 && st.RedoDepth == 0);
+        (i == 11 && st.UndoDepth == 0) || (i == 12 && st.RedoDepth == 0);
 
     /// <summary>
     /// 画刷按颜色缓存。**不能每帧重建**（性能账里点过名：几何与画刷都要缓存）。
@@ -5913,9 +6024,10 @@ public sealed partial class FullUi : IOverlayUi
                 7 => (c.Tip, Key(KeyAction.ToolMarquee), "再按切「矩形 / 套索」，双击 = 全选"),
                 8 => (c.Tip, "", "22 种图形都在上带里挑"),
                 9 => (c.Tip, Key(KeyAction.ToolCapture), ""),
-                10 => (c.Tip, Key(KeyAction.Undo), ""),
-                11 => (c.Tip, Key(KeyAction.Redo), ""),
-                12 => (c.Tip, "", UpdateAvailable ? "有新版本，点开去「检查更新」" : "课堂工具、墨迹、设置都在这儿"),
+                10 => (c.Tip, "", "打开收藏；选中内容后可存进来"),
+                11 => (c.Tip, Key(KeyAction.Undo), ""),
+                12 => (c.Tip, Key(KeyAction.Redo), ""),
+                13 => (c.Tip, "", UpdateAvailable ? "有新版本，点开去「检查更新」" : "课堂工具、墨迹、设置都在这儿"),
                 _ => default,
             };
         }
@@ -5960,7 +6072,6 @@ public sealed partial class FullUi : IOverlayUi
             // 橡皮 / 框选 / 截图的分段上已经写着"整笔擦 / 面积擦 / 矩形 / 套索 / 截图…"，
             // 不配（收窄）；只有图形那 22 段是纯图标，全配。
             case 8:
-                if (i >= ShapeSegmentCount) return ("图库", "", "攒下的图形，点开挑一个");
                 return (ToolNames.Of(ShapeToolAt(i)), "", "");
         }
         return default;
@@ -6231,7 +6342,7 @@ public sealed partial class FullUi : IOverlayUi
     internal RectF HubTileRectForTest(int code)
     {
         for (int s = 0; s < HubCounts.Length; s++)
-            for (int i = 0; i < HubCounts[s]; i++)
+            for (int i = 0; i < HubCount(s); i++)
                 if (HubTileCode(s, i) == code) return HubTileRect(s, i);
         return RectF.Empty;
     }
@@ -6405,6 +6516,7 @@ public sealed partial class FullUi : IOverlayUi
     internal bool BandHasSliderForTest => BandHasSlider;
     internal bool EraserSizeHiddenForTest => EraserSizeHidden;
     internal RectF WidthButtonRectForTest => WidthButtonRect();
+
     internal void TogglePinForTest(int cell) => TogglePin(cell);
     internal void SetPinForTest(int cell, bool pinned)
     {

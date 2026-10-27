@@ -105,6 +105,11 @@ $icons = [ordered]@{
     'desktop'         = @('Desktop')
     'maximize'        = @('Full Screen Maximize')
     'image'           = @('Image')
+    # 收藏（2026-10-25 用户定：星标，像抖音收藏）——
+    #   star     = 主条/面板入口（**不带加号**）
+    #   starAdd  = 选中栏的“收进来”动作（**带加号**）
+    'star'            = @('Star')
+    'starAdd'         = @('Star Add')
 }
 
 # 激活态用的 filled 变体（Windows 11 的惯例：常态 regular、选中 filled）
@@ -126,6 +131,9 @@ $filledIcons = [ordered]@{
     'redoFilled'        = @('Arrow Redo')
     'settingsFilled'    = @('Settings')
     'moreFilled'        = @('More Horizontal')
+    # 收藏：入口打开/已收藏 = 实心星；动作 = Star Add
+    'starFilled'        = @('Star')
+    'starAddFilled'     = @('Star Add')
 }
 
 # 每张外库图标来自哪一家（写进生成的注释里，便于追许可：MDI/Lucide/Tabler/Radix 都要留版权声明）

@@ -27,6 +27,9 @@ internal static class InkSettings
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "InkTeach", "settings.json");
 
+    /// <summary>本次启动前 settings.json 是否已经存在（新安装 / 老用户迁移用）。</summary>
+    public static bool ExistedAtLoad;
+
     /// <summary>
     /// 把配置文件里的键位覆盖读进 <paramref name="map"/>。
     /// 返回的每一行都是"用户该知道的问题"（键名不认识、组合非法、文件坏了），
@@ -84,6 +87,7 @@ internal static class InkSettings
     {
         var warnings = new List<string>();
         string path = FilePath;
+        ExistedAtLoad = File.Exists(path);
         if (!File.Exists(path)) return warnings;
 
         string text;

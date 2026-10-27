@@ -108,7 +108,7 @@ internal static class DocImageSource
         try
         {
             using var img = LoadSafe(path);
-            int o = ReadOrientation(img.Bitmap);
+            int o = ImageFile.ReadOrientation(img.Bitmap);
             w = img.Bitmap.Width; h = img.Bitmap.Height;
             if (o >= 5 && o <= 8) (w, h) = (h, w);
             return w > 0 && h > 0;
@@ -120,37 +120,9 @@ internal static class DocImageSource
         }
     }
 
-    private static int ReadOrientation(Bitmap bmp)
-    {
-        try
-        {
-            if (Array.IndexOf(bmp.PropertyIdList, 0x0112) >= 0)
-            {
-                var p = bmp.GetPropertyItem(0x0112);
-                if (p?.Value != null && p.Value.Length >= 2) return p.Value[0] | (p.Value[1] << 8);
-            }
-        }
-        catch { }
-        return 1;
-    }
-
-    /// <summary>
-    /// EXIF 方向 → GDI+ 的旋转翻转（照业界那张标准表）。
-    /// 拆成 internal 是为了能自检（造 8 种方向的小图直接验映射，不依赖 EXIF 往返）。
-    /// </summary>
+    /// <summary>兼容旧自检入口；实现已经搬到 <see cref="ImageFile"/>，两边共用一份映射。</summary>
     internal static void ApplyOrientation(Bitmap bmp, int orientation)
-    {
-        switch (orientation)
-        {
-            case 2: bmp.RotateFlip(RotateFlipType.RotateNoneFlipX); break;
-            case 3: bmp.RotateFlip(RotateFlipType.Rotate180FlipNone); break;
-            case 4: bmp.RotateFlip(RotateFlipType.RotateNoneFlipY); break;
-            case 5: bmp.RotateFlip(RotateFlipType.Rotate90FlipX); break;
-            case 6: bmp.RotateFlip(RotateFlipType.Rotate90FlipNone); break;
-            case 7: bmp.RotateFlip(RotateFlipType.Rotate270FlipX); break;
-            case 8: bmp.RotateFlip(RotateFlipType.Rotate270FlipNone); break;
-        }
-    }
+        => ImageFile.ApplyOrientation(bmp, orientation);
 
     // ======================================================================
     //  布局：一图 → 一页或几页（长图切片）
@@ -264,7 +236,7 @@ internal static class DocImageSource
         try
         {
             img = LoadSafe(path);
-            ApplyOrientation(img.Bitmap, ReadOrientation(img.Bitmap));
+            ImageFile.ApplyOrientation(img.Bitmap, ImageFile.ReadOrientation(img.Bitmap));
         }
         catch (Exception ex)
         {

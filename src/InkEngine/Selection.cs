@@ -119,8 +119,8 @@ internal enum SelBarButton
     /// <summary>导出（另存为）。</summary>
     Export = 4,
     /// <summary>
-    /// **存入图库**（用户 2026-09-22 要的"图像收藏"）：把选中的对象存进图形库，
-    /// 之后从图形面板最后那一段「图库」里取出来复用。见 <see cref="ShapeLibrary"/>。
+    /// **收藏**（2026-09-22 要的"图像收藏"，2026-10-25 改成星标口径）：
+    /// 把选中的对象存进「收藏」，之后从收藏面板取出来复用。见 <see cref="ShapeLibrary"/>。
     /// </summary>
     Library = 5,
     /// <summary>复制一份：原件原位保留，副本错位选中，同时写入剪贴板。</summary>
@@ -1979,7 +1979,7 @@ internal static class SelectionHandles
     ///
     /// **2026-09-22 加的第十格是「图库」**（用户："墨迹选中的操作栏有一个收藏的图标"）。
     /// 位置挑在**导出旁边**：两者都是"把选中的东西弄到别处去"，而且离删除这一格还隔着
-    /// 复制/翻转三格——不会手滑点到删除。整条从 348 宽变 386（38×10），仍然是胶囊。
+    /// 复制/翻转三格——不会手滑点到删除。整条宽度随尺寸 token 走（2026-10-25 起 40×10 ＋ 两端 8 = 416）。
     ///
     /// **2026-09-20 这天第十格「开口方向」加了又撤、撤了又加，最后**真的撤掉**了**，
     /// 三次的理由都记在这儿（免得以后又翻烧饼）：
@@ -1996,17 +1996,26 @@ internal static class SelectionHandles
     /// <summary>
     /// 操作条的高度 / 每格宽度 / 格间距（逻辑像素）。
     ///
-    /// 沿革：九格铺开时 44×34（太厚）→ 2026-09-16 缩到 38×30 → **8.2.1 收成 30×30 方格子**
-    /// （用户 2026-09-30 第二轮："选中条还是太松散——选中悬停是长方形不是正方形，所以分散"）。
-    /// 30 是条件定出来的：条高就是 30，格子宽取同一个数 → **每格是正方形**；
-    /// 图标 18 / 格子 30 = **0.6**，正好和主工具条那条的 24 / 40 同比例。
-    /// 悬停 / 激活的底也跟着变成正方形（见 <see cref="BarHoverChip"/>）。
+    /// 沿革：九格铺开时 44×34（太厚）→ 2026-09-16 缩到 38×30 → 8.2.1 收成 30×30 方格子
+    /// → **2026-10-25 放大到 40×40**（用户："选中后的悬浮栏非常小"）。
     ///
-    /// ⚠ 两端内边距不在这里，用浮层那套 token（<see cref="FloatPadLogical"/> = 6）：
+    /// **40 不是随手加的**：主工具条就是 40×40、图标 24；选中条以前只有 30，
+    /// 格宽 75%、条高 62.5%，在大屏/投影上看着就是"小一号"。现在两者同级：
+    /// 40 格 / 24 图标 / 8 内边距，**次级感交给浮起、分组和留白**，不靠缩小点击目标。
+    /// 40 也正好是 Windows 触摸目标的下限（鼠标 32、触摸 40、44 更稳）。
+    ///
+    /// 图标 24 / 格子 40 = **0.6**，和主工具条同比例；悬停/激活底是 34×34 正方形
+    /// （见 <see cref="BarHoverChip"/>）。
+    ///
+    /// ⚠ **单位口径（2026-10-25）**：这一整套尺寸的调用方一律传 `UiUnit`
+    /// （`DpiScale × UiScale`），和主工具条同档；画布内容（笔宽/对象/取景框）仍用裸 `DpiScale`。
+    /// 漏一处就会出现"画得大、点得小"——绘制、命中、光标、提示、脏区必须同一个乘数。
+    ///
+    /// ⚠ 两端内边距不在这里，用浮层那套 token（<see cref="FloatPadLogical"/> = 8）：
     /// "三处浮层共用一套尺寸"是 8.2.0 定的。
     /// </summary>
-    public const float BarHeightLogical = 30f;
-    public const float BarButtonWidthLogical = 30f;
+    public const float BarHeightLogical = 40f;
+    public const float BarButtonWidthLogical = 40f;
     public const float BarGapLogical = 0f;
 
     /// <summary>
@@ -2014,11 +2023,11 @@ internal static class SelectionHandles
     ///
     /// 8.2.1 之前它是"四周各缩 3"，于是 38×30 的格子里画出来是 **32×24 的长方形**——
     /// 用户一眼就看出问题（"悬停是长方形不是正方形，所以分散"）。
-    /// 现在：底 = min(格宽, 格高) − 2×2 = **26×26 正方形**，居中；格与格之间只隔 4 像素，
-    /// 高亮连成"一排小方块"，比原来那种扁长高亮收紧得多。
+    /// 现在：底 = min(格宽, 格高) − 2×3 = **34×34 正方形**，居中；格与格之间不留缝，
+    /// 高亮连成"一排小方块"，比扁长高亮收紧得多。
     /// **画和自检都读这一份**（见 <see cref="BarHoverChip"/>）。
     /// </summary>
-    public const float BarHoverInsetLogical = 2f;
+    public const float BarHoverInsetLogical = 3f;
 
     /// <summary>
     /// 操作条第 <paramref name="i"/> 格"悬停 / 激活"那块正方形底。
@@ -2034,8 +2043,8 @@ internal static class SelectionHandles
         return new RectF { MinX = cx - side * 0.5f, MinY = cy - side * 0.5f,
                            MaxX = cx + side * 0.5f, MaxY = cy + side * 0.5f };
     }
-    /// <summary>选中框下边到操作条的距离（逻辑像素）。</summary>
-    public const float BarOffsetLogical = 14f;
+    /// <summary>选中框下边到操作条的距离（逻辑像素）。40 高的条用 16，和 34 高那条的 14 同一个视觉节奏。</summary>
+    public const float BarOffsetLogical = 16f;
     /// <summary>
     /// 操作条下边缘与"可见区域下边"的最小距离（逻辑像素）——即**给条一个下限**。
     ///
@@ -2043,89 +2052,81 @@ internal static class SelectionHandles
     /// 翻上去会盖住选区上方的板书，而且条的位置会跳来跳去；给下限更稳——条永远在框
     /// 下方，到了离屏幕下边这么近就**停住**，宁可压住一点选中内容（条画在浮动层上，
     /// 永远可见、可点）。
+    ///
+    /// ⚠ 2026-10-25 起这个"下边"不再只是屏幕底：`FurnitureViewport` 会先把
+    /// **主工具条和色带**那块让出去，否则放大后的条会钻到工具条底下（UI 后画，直接盖住）。
     /// </summary>
-    public const float BarMinBottomMarginLogical = 12f;
+    public const float BarMinBottomMarginLogical = 16f;
     /// <summary>两侧留白：条不贴屏幕边（逻辑像素）。</summary>
-    public const float BarScreenPaddingLogical = 8f;
-    /// <summary>图标框边长（逻辑像素）。Fluent 图标自带内边距，所以比字形大一点。</summary>
-    /// <summary>图标框边长（逻辑像素）。从 22 收到 18：图标跟着条一起缩小，
-    /// 但**不能再小**——投影上 16 以下就开始糊。</summary>
-    public const float BarIconBoxLogical = 18f;
+    public const float BarScreenPaddingLogical = 10f;
+    /// <summary>图标框边长（逻辑像素）。24 / 40 = 0.6，和主工具条 24 / 40 同比例。</summary>
+    public const float BarIconBoxLogical = 24f;
 
     /// <summary>
-    /// 收起态那个小圆钮的直径（逻辑像素）。
+    /// 收起态圆钮的直径（逻辑像素）。
     ///
     /// 用户 2026-09-16 更正："条首那个 ✕ 不是取消选择，是**收起工具条**"——
     /// 点它整条收起来，只剩这么一个小圆，点它再展开（参考实现也是这个形状）。
-    /// 定 44：和条高（34）一个量级、比手柄大一圈，投影上点得中。
+    /// 2026-10-25 跟着条一起放大：26 → **36**。它虽然只是"点我展开"的标记，
+    /// 但放大档下 26 实在太像一颗小点，和 40 的格子不是一家。
     /// </summary>
-    /// <summary>
-    /// 收起态小圆球的直径。44 → 36 → **26**（用户："收起以后的小圆球太大，不美观"）。
-    ///
-    /// 为什么敢给这么小：它只干一件事——"点我展开"，而且指针此刻就在附近
-    /// （老师刚点过条上的收起）。与其说它是个按钮，不如说是个**标记**；
-    /// 26 逻辑像素在投影上仍然看得清，和工具条那边 40 的最小可点尺寸是两种东西。
-    /// </summary>
-    public const float BarCollapsedDotLogical = 26f;
+    public const float BarCollapsedDotLogical = 36f;
 
     /// <summary>收起态圆钮与选中框下边的距离（逻辑像素，和展开态一致，位置不跳）。</summary>
-    public const float BarCollapsedOffsetLogical = 14f;
+    public const float BarCollapsedOffsetLogical = 16f;
 
     // ---- 浮层尺寸 token（8.2.0：三处浮层共用这一套）------------------------
     //
     // 用户 2026-09-30："有点松散，不精致" → 只把**尺寸**统一到这一套，不动交互。
-    // 为什么这么定（都不新开数）：外框内边距沿用操作条原来那个 6（比面板原来的 10 紧一档）；
-    // 格间距取 4，和主工具条的 `GapInGroup` 同一个节奏；圆角走界面推上来的
-    // `UiTheme.CornerRadius`（= InkUi.Tokens.FloatingCorner 10），不在这里再写一份。
-    // 分组缝沿用各自已有的数（操作条格缝 0、面板与条之间 10），没有新开。
+    // 2026-10-25：跟着操作条 30 → 40 一起放大（8/6/32/36/30/48），
+    // 不然 40 的按钮配 26 的色片会像"大人穿小鞋"。
+    // 分组缝沿用各自已有的数（操作条格缝 0、面板与条之间 12），没有新开。
 
     /// <summary>
     /// 浮层外框的内边距（逻辑像素）：操作条两端、墨迹/层级面板四边、取色板四边。
-    /// 6 = 原有操作条的那个数；面板原来 10，8.2.0 收到 6（"对齐主工具条的密度"）。
+    /// 8 = 原有操作条那个 6 跟着 40 的格子放大一档（主工具条是 8）。
     /// </summary>
-    public const float FloatPadLogical = 6f;
+    public const float FloatPadLogical = 8f;
 
     /// <summary>
     /// 浮层里的格间距（逻辑像素）：面板里相邻色片 / 线型格 / 层级格 / 行与行之间。
-    /// 4 = 和主工具条组内缝（`Tokens.GapInGroup`）同一个节奏；面板原来 7/8，收到 4。
+    /// 6 = 和主工具条组内缝（`Tokens.GapInGroup` = 4）保持同一节奏，比原来 4 松一点。
     /// </summary>
-    public const float FloatGapLogical = 4f;
+    public const float FloatGapLogical = 6f;
 
-    /// <summary>色片边长。26 不动：三处浮层收的是"缝"，不是控件本身。</summary>
-    public const float SwatchSizeLogical = 26f;
+    /// <summary>色片边长。32 = 26 跟着条放大一档；仍比格子 40 小一圈，像"面板里的控件"。</summary>
+    public const float SwatchSizeLogical = 32f;
     /// <summary>色板列数（4 列：中性一行、暖一行、冷一行 + 末格自定义）。</summary>
     public const int SwatchColumns = 4;
     /// <summary>
-    /// 面板里那两行的高度（逻辑像素）：**滑条行 30、线型行 26**。
+    /// 面板里那两行的高度（逻辑像素）：**滑条行 36、线型行 30**。
     ///
-    /// 原来两行都是 34；8.2.1 用户第二眼："那三个（实/虚/点）线占位太多"——
-    /// 线型行收到 26、滑条行收到 30，面板总高 196 → **184**。
-    /// 滑条行比线型行多 4：它上方要留"拖动中的数值"那行字的位置（见
-    /// `DrawInkPanel` 里画数值那段）。
+    /// 原来两行都是 34；8.2.1 收到 30/26；2026-10-25 跟着 40 的条放大到 36/30。
+    /// 滑条行比线型行多 6：它上方要留"拖动中的数值"那行字的位置。
     /// </summary>
-    public const float SliderRowLogical = 30f;
-    public const float StyleRowLogical = 26f;
+    public const float SliderRowLogical = 36f;
+    public const float StyleRowLogical = 30f;
     /// <summary>面板与它上面那条（操作条）的距离。</summary>
-    public const float PanelGapLogical = 10f;
+    public const float PanelGapLogical = 12f;
     /// <summary>层级面板每一格的边长（两格并排）。</summary>
-    public const float LayerCellLogical = 40f;
+    public const float LayerCellLogical = 48f;
 
     /// <summary>滑条右端留给"笔尖预览点"的宽度（逻辑像素）。和主条那条滑条同一个语言：
     /// 右端一颗跟着值变大的点——粗细一眼看得见，不用读数字。</summary>
-    public const float SliderTailLogical = 30f;
+    public const float SliderTailLogical = 34f;
     /// <summary>滑条两端的缩进：滑钮（半径 7）不许贴着面板边。</summary>
-    public const float SliderInsetLogical = 8f;
+    public const float SliderInsetLogical = 10f;
 
     // ---- 自定义取色板（8.2.0，色相条 + 饱和度/明度方块）的尺寸（逻辑像素）----
 
-    /// <summary>饱和度/明度方块的边长。104 够用：它是最主要的那块取色面。</summary>
-    public const float PickSvLogical = 104f;
+    /// <summary>饱和度/明度方块的边长。120 够用：它是最主要的那块取色面。</summary>
+    public const float PickSvLogical = 120f;
 
-    /// <summary>竖直色相条的宽。16 在投影上也点得中、拖得住。</summary>
-    public const float PickHueLogical = 16f;
+    /// <summary>竖直色相条的宽。18 在投影上也点得中、拖得住。</summary>
+    public const float PickHueLogical = 18f;
 
-    /// <summary>底部"当前色预览"那一行的高（和色片 26 同一个量级）。</summary>
-    public const float PickPreviewLogical = 26f;
+    /// <summary>底部"当前色预览"那一行的高（和色片 32 同一个量级）。</summary>
+    public const float PickPreviewLogical = 32f;
 
     /// <summary>
     /// 自定义取色板里那三个可点部分。

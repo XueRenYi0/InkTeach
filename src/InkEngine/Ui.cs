@@ -59,6 +59,18 @@ public interface IOverlayUi
     /// </summary>
     RectF QueryBounds();
 
+    /// <summary>主条**那一条**（不含上带/弹层）的占用矩形；收藏弹窗默认位置用它算上沿。</summary>
+    RectF BarBounds => ChromeBounds;
+
+    /// <summary>
+    /// **主条本身**的占用矩形（不含分类下拉、动作菜单这类临时弹层），逻辑屏幕坐标。
+    ///
+    /// 收藏面板贴着工具条上沿往上长，位置必须只认"工具条在哪儿"；如果直接读
+    /// <see cref="QueryBounds"/>，一开下拉菜单（弹层比工具条高）面板就会跟着往上跳。
+    /// 默认实现回退到 <see cref="QueryBounds"/>，老界面不受影响。
+    /// </summary>
+    RectF ChromeBounds => QueryBounds();
+
     /// <summary>
     /// 界面**会画到 <see cref="QueryBounds"/> 外面**的那一圈余量（逻辑像素），默认 0。
     ///
@@ -305,6 +317,20 @@ public interface IEngineCommands
     /// 所以界面这边只需要这一句开关。
     /// </summary>
     void ToggleLibraryPanel();
+    /// <summary>收藏面板：切到某个分类（`"all"` = 全部）。只改筛选，不搬条目。</summary>
+    void SetLibraryCategory(string id);
+    /// <summary>收藏面板：新建一个分类（自动命名 第一类/第二类…），并切过去。</summary>
+    void CreateLibraryCategory();
+    /// <summary>收藏面板：删分类（条目移到未分类，绝不删条目）。</summary>
+    void DeleteLibraryCategory(string id);
+    /// <summary>清空回收站（永久删除）。返回删了几个。</summary>
+    int EmptyLibraryTrash();
+    /// <summary>把勾选的条目移到某个分类（回收站 = 软删除）。</summary>
+    void MoveLibraryEntry(string categoryId);
+    /// <summary>把勾选的条目删掉（收藏里 = 进回收站；回收站里 = 永久）。</summary>
+    void DeleteLibrarySelection();
+    /// <summary>用画布上当前选中的对象覆盖收藏面板里选中的那一条。</summary>
+    void UpdateLibraryEntryFromSelection();
     /// <summary>
     /// **换下一档"椭圆（带焦点）画不画焦点三角形"**（有 → 无 → 有）。
     ///
@@ -458,6 +484,18 @@ public interface IEngineCommands
 
     /// <summary>设备与性能统计开关（关闭会停止后续上传并尝试删除旧设备卡）。</summary>
     void SetPrivacyConsent(bool on);
+
+    /// <summary>
+    /// 「设置 → 墨迹 → 备份全部数据…」：收藏 / 历史板书 / 设置 / 课件批注打包成 zip。
+    /// 不含 PDF / PPT 原文件。弹系统另存为；打包在后台线程做。
+    /// </summary>
+    void BackupAllData();
+
+    /// <summary>「设置 → 墨迹 → 从备份恢复…」：校验备份包后换入；提示重启。</summary>
+    void RestoreFromBackup();
+
+    /// <summary>界面全屏层（更多 / 说明）开合：收藏弹窗只藏不销毁，关掉恢复。</summary>
+    void SetUiOverlay(bool open);
 
     // [删除 2026-10-05] `SetPredict(bool)`：墨迹预测开关随老预测系统移除。
     // 恢复见 `已停用-渲染实验.md`。
@@ -893,6 +931,30 @@ public static class ShapeSpec
 }
 
 /// <summary>
+/// 收藏分类的只读快照（界面画分类片/下拉用）。
+/// `Id` 用 `"all"` 表示虚拟的「全部」；其他是 `ShapeLibrary` 的分类 id。
+/// </summary>
+public readonly struct LibraryCategoryInfo
+{
+    public string Id { get; init; }
+    public string Name { get; init; }
+    public int Count { get; init; }
+    /// <summary>常用分类（页签排最前、带星）。</summary>
+    public bool Pinned { get; init; }
+}
+
+/// <summary>
+/// 收藏分类表里的固定 id。界面判断「全部 / 未分类 / 回收站」时读这里，
+/// **不要各自抄字符串**（抄错了会静默少一档，且编译期查不出来）。
+/// </summary>
+public static class LibraryCategoryIds
+{
+    public const string All = "all";
+    public const string Uncategorized = ShapeLibrary.Uncategorized;
+    public const string Trash = ShapeLibrary.TrashCategory;
+}
+
+/// <summary>
 /// 引擎状态的只读快照，界面拿来显示。
 ///
 /// 用 init 属性而不是十几个位置参数：这个快照只会越加越多（每加一个界面要显示的东西
@@ -1082,6 +1144,8 @@ public readonly struct UiState
     public int UndoDepth { get; init; }
     public int RedoDepth { get; init; }
     public int StrokeCount { get; init; }
+    /// <summary>画布上当前选中的对象数（收藏面板「用当前选中更新」按它判断）。</summary>
+    public int SelectionCount { get; init; }
 
     /// <summary>
     /// **自动更新的状态**（2026-09-29 加）。「更多」抽屉里的「检查更新」那一行：
@@ -1124,6 +1188,18 @@ public readonly struct UiState
     /// <summary>点名卡片开着吗；<see cref="RollSettingsOpen"/> = 设置态。</summary>
     public bool RollCardOpen { get; init; }
     public bool RollSettingsOpen { get; init; }
+
+    /// <summary>本次启动前 settings.json 是否已经存在（老用户 / 新安装的迁移判据）。</summary>
+    public bool IsFirstRun { get; init; }
+
+    /// <summary>收藏面板开着吗（界面据此把上带切到收藏条 / 高亮收藏格）。</summary>
+    public bool LibraryOpen { get; init; }
+    /// <summary>勾选了几条（标题栏动作 / 整组拖动按它走）。</summary>
+    public int LibrarySelectionCount { get; init; }
+    /// <summary>当前收藏筛选：`"all"` = 全部，其他是分类 id。</summary>
+    public string LibraryCategoryId { get; init; }
+    /// <summary>分类快照（第一项永远是「全部」；后面是未分类/第一类…）。</summary>
+    public LibraryCategoryInfo[] LibraryCategories { get; init; }
 
     /// <summary>
     /// 点名名单（`%APPDATA%\InkTeach\Names.txt`，一行一个；空数组 = 没名单、用学号）。
