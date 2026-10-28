@@ -38,9 +38,10 @@ internal enum TouchVerdict
 /// 屏不报面积（`touchMask` 没置位）不影响手势。
 ///
 /// ## 两条纪律
-/// ① **一次手势只能"干净地开始"**：触点要在 <see cref="CleanMs"/> 里一起落下、
-///   而且笔画还没真画出去（路径 ≤ <see cref="CleanMoveLogical"/>）——写字中途蹭到的
-///   手指一律 <see cref="TouchVerdict.Ignore"/>（"第二根手指不许抢笔"那条守卫继续保底）。
+/// ① **三指擦要"干净地开始"**：触点要在 <see cref="CleanMs"/> 里一起落下、
+///   而且笔画还没真画出去——写字中途蹭到的掌根一律 <see cref="TouchVerdict.Ignore"/>。
+///   **两指手势例外（2026-10-28）**：真机双指滑动时第一指一定先动，所以两指只看
+///   时间差 + 落点距离；第一指已画出的那一小笔在升级时撤掉。
 /// ② **模式**：`<see cref="Enabled"/>` = 手势模式；关掉 = 单指书写（无任何手势）。
 ///   多指同时书写留到下一阶段。
 /// </summary>
@@ -74,14 +75,21 @@ internal sealed class TouchGestures
     public bool ThreeFingerErase = true;
 
     // ---- 常量 ----
-    public const double CleanMs = 150;          // "一起落下"的时间窗
-    public const float CleanMoveLogical = 10f;  // 还没真画出去（逻辑像素）
+    public const double CleanMs = 150;          // 三指"一起落下"的时间窗（两指另有放宽规则）
+    public const float CleanMoveLogical = 10f;  // 还没真画出去（逻辑像素；三指擦仍用它）
     public const double LongPressMs = 500;      // > 停顿成型的 400ms
     public const double TwoFingerHoldMs = 500;  // 两指长按 = 呼出盘（和单指长按同一个时长，触点数天然分开）
     public const float TapSlopLogical = 8f;     // 和 DwellTapLeaveNoInk 同一个数
-    public const float DirLockLogical = 15f;    // 两指方向锁
-    public const float DirRatio = 1.5f;         // 主方向要占 1.5 倍
-    public const float PageTurnLogical = 80f;   // 横滑翻页阈值
+    // ---- 两指手势的放宽规则（2026-10-28）----
+    // 真机日志：第二指 20~60ms 就到了，但第一指已经移动超过 10px，旧规则仍判 Ignore。
+    // 两指滑动本来就要先动，所以**不再要求第一指没动**；改为"时间差 + 两指距离"为主，
+    // 第一指已经画出去的那一小笔在升级时撤掉（不进撤销栈）。
+    public const double TwoFingerJoinMs = 300;  // 第二指最晚多久内可升级为手势
+    public const float PairMaxLogical = 420f;   // 两指落下点的最大间距（宽松过滤掌根/另一只手）
+    public const float TwoFingerPathLogical = 240f; // 晚到（>CleanMs）时，第一笔最多还能有多长
+    public const float DirLockLogical = 10f;    // 两指方向锁（原来 15，放大后太迟才动）
+    public const float DirRatio = 1.25f;        // 主方向占比（原来 1.5，斜一点会一直不锁）
+    public const float PageTurnLogical = 60f;   // 横滑翻页阈值（原来 80）
 
     private sealed class Contact
     {
@@ -217,13 +225,37 @@ internal sealed class TouchGestures
         }
 
         // ---- 角色判定 ----
-        // "干净开始"= 时间（150ms 窗口）+ 位移（第一根手指还没画出去）**两条一起**。
-        // 少了位移那条，"写字写到一半、第二根手指很快蹭上来"会被当成手势、把字撤掉。
-        bool clean = inWindow && (_c.Count == 1 || !_c[0].Moved);
-        if (!clean) return _c.Count == 1 ? SingleVerdict() : TouchVerdict.Ignore;
+        // 三指仍走原来的"干净开始"：时间窗 + 第一指没画出去，避免掌根晚到变擦。
+        // 两指手势**放宽**（2026-10-28）：真机双指滑动时第一指一定先动，
+        // 旧规则 `!_c[0].Moved` 会把第二指判成 Ignore，第一指继续落墨。
+        // 现在只看两指落下的时间差和落点距离；第一指已经画出的那一小笔
+        // 由 Engine 在切到 Gesture2 时撤掉（CancelTouchStroke，不进撤销栈）。
+        if (_c.Count >= 3)
+        {
+            bool clean = inWindow && !_c[0].Moved;
+            return clean && Enabled ? TouchVerdict.Erase : TouchVerdict.Ignore;
+        }
 
-        if (_c.Count >= 3) return Enabled ? TouchVerdict.Erase : TouchVerdict.Ignore;
-        if (_c.Count == 2) return Enabled ? TouchVerdict.Gesture2 : TouchVerdict.Ignore;
+        if (_c.Count == 2)
+        {
+            if (!Enabled) return TouchVerdict.Ignore;
+
+            // 以**落下时刻**认第一/第二指，不依赖列表顺序（防重报/乱序）。
+            var first = _c[0].DownMs <= _c[1].DownMs ? _c[0] : _c[1];
+            var second = ReferenceEquals(first, _c[0]) ? _c[1] : _c[0];
+            double joinMs = second.DownMs - first.DownMs;
+            float pairDist = Vector2.Distance(first.Down, second.Down);
+            bool pairNear = pairDist <= PairMaxLogical * dpi;
+            // 150ms 内：只要两指落点别太远就认（快速双指滑动，第一指已经动也算）。
+            // 150~300ms：第一笔还没画长才认，避免写字中途晚到的掌根把字撤掉。
+            bool early = joinMs <= CleanMs;
+            bool lateOk = joinMs <= TwoFingerJoinMs
+                          && first.Path <= TwoFingerPathLogical * dpi;
+            return pairNear && (early || lateOk)
+                ? TouchVerdict.Gesture2
+                : TouchVerdict.Ignore;
+        }
+
         return SingleVerdict();
     }
 

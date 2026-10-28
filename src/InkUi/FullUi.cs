@@ -3069,21 +3069,17 @@ public sealed partial class FullUi : IOverlayUi
     }
 
     private int HubCount(int section)
-    {
-        int n = HubCounts[Math.Clamp(section, 0, HubCounts.Length - 1)];
-        // 主条已经有「收藏」格时，更多里不再放同一个入口（AGENTS 硬规则）。
-        if (section == 1 && PosOf(10) >= 0) n = Math.Max(0, n - 1);
-        return n;
-    }
+        => HubCounts[Math.Clamp(section, 0, HubCounts.Length - 1)];
 
     /// <summary>
-    /// 每个分组的格子数：课堂 3 个（计时 / 点名 / 随机一人）；墨迹 **5 个**
-    /// （**保存… / 打开… / 墨迹回放 / 关闭文档 / 历史板书**——2026-10-16 用户定合并：
-    /// 原"保存墨迹＋保存图片"并为「保存…」、"打开墨迹＋打开文档"并为「打开…」，
-    /// 按扩展名分派；历史板书是 2026-10-14 加的找回入口）。
+    /// 每个分组的格子数：课堂 4 个（计时 / 点名 / 随机一人 / 使用说明）；
+    /// 墨迹 **5 个**（**保存… / 打开… / 墨迹回放 / 关闭文档 / 历史板书**——
+    /// 2026-10-16 用户定合并：原"保存墨迹＋保存图片"并为「保存…」、
+    /// "打开墨迹＋打开文档"并为「打开…」，按扩展名分派；历史板书是 2026-10-14
+    /// 加的找回入口）。收藏只留在主工具条那一格，更多里不再放重复入口。
     /// 格子编号（`HubTileCode`）从这里算出来，**不写死 3**——加格子不会再串段。
     /// </summary>
-    private static readonly int[] HubCounts = { 4, 6 };   // 课堂 4（使用说明紧跟随机一人），墨迹 6（含收藏）
+    private static readonly int[] HubCounts = { 4, 5 };   // 课堂 4（含使用说明），墨迹 5（不含收藏）
 
     /// <summary>第 section 组的组头矩形。</summary>
     private RectF HubHeadRect(int section)
@@ -3115,9 +3111,7 @@ public sealed partial class FullUi : IOverlayUi
             if (index < 3) return index;
             return HelpTileCode;
         }
-        // 墨迹组第 6 格是「收藏」（2026-10-25），编号用 9：
-        // 3..7 是原来的保存/打开/回放/关文档/历史板书，8 留给「使用说明」。
-        if (index == 5) return 9;
+        // 3..7 = 保存/打开/回放/关文档/历史板书；8 留给「使用说明」。
         return 3 + index;
     }
 
@@ -3409,9 +3403,6 @@ public sealed partial class FullUi : IOverlayUi
         7 => ("历史板书",
               "找回以前写在**白板**上的墨迹（自动留存，停手时写；不含截图）",
               _host != null && !_host.State.PptMode && _host.State.HistoryCount > 0, false),
-        9 => ("收藏",
-              "打开收藏；同一内容不会重复存。主条没有收藏格时从这里进",
-              true, false),
         HelpTileCode => ("使用说明",
               "4 步上手 / 手势 / 快捷键；F1 也能打开",
               true, false),
@@ -3620,10 +3611,6 @@ public sealed partial class FullUi : IOverlayUi
             case 7:                                   // 历史板书（2026-10-14）
                 CloseMore();
                 _host.Commands.OpenInkHistory();
-                break;
-            case 9:                                   // 收藏（2026-10-25）
-                CloseMore();
-                _host.Commands.ToggleLibraryPanel();
                 break;
             case HelpTileCode:                        // 使用说明（2026-10-19）
                 // 和「设置」一样留在 More 面板里换页，不另开一层——DPI、遮罩、

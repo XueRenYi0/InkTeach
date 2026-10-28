@@ -2082,6 +2082,7 @@ public partial class InkEngine
         Tooltip = 1 << 10,
         Trail = 1 << 11,
         Align = 1 << 12,
+        TouchFling = 1 << 13,
     }
     private FrameDrive _frameDrive;
     /// <summary>最近一次"用户动作"（按下/按键）的时间：用来识别"没人操作却一直出帧"。</summary>
@@ -3733,6 +3734,7 @@ public partial class InkEngine
         // 两边都是幂等的（TakeDirty 取走就清、SameAs 挡重复）。
         StepPpt();
         StepPptBar();     // 底部那条：引导过期 / "再点确认"过期（理由同上，自检那条路也走它）
+        StepTouchFling(); // 双指纵滑松手后的惯性（每帧衰减；自检也走这一条）
         StepTimerCard();  // 课堂计时卡片同理：自检用"抽消息＋渲染"驱动，不走主循环
         StepRollCard();   // 课堂点名卡片同理
         PumpRadialPalette();   // 呼出盘同理：自检用"抽消息＋渲染"驱动，不走主循环
@@ -4368,6 +4370,7 @@ public partial class InkEngine
         if (TooltipPending) d |= FrameDrive.Tooltip;
         if (_windows.Exists(w => w.TrailEndPending)) d |= FrameDrive.Trail;
         if (AlignSnapPulseActive) d |= FrameDrive.Align;
+        if (_g2FlingActive) d |= FrameDrive.TouchFling;
 
         _frameDrive = d;
         return d != FrameDrive.None;
@@ -4392,6 +4395,7 @@ public partial class InkEngine
         if ((d & FrameDrive.Tooltip) != 0) parts.Add("悬停提示");
         if ((d & FrameDrive.Trail) != 0) parts.Add("轨迹收尾");
         if ((d & FrameDrive.Align) != 0) parts.Add("吸附提示");
+        if ((d & FrameDrive.TouchFling) != 0) parts.Add("触摸惯性");
         return string.Join("+", parts);
     }
 
@@ -4411,7 +4415,8 @@ public partial class InkEngine
         if (NowMs < _idleWarnAtMs) return;
         var d = _frameDrive;
         // 这些是"用户/界面明确要求的持续动画"，不算异常。
-        if ((d & (FrameDrive.Timer | FrameDrive.Roll | FrameDrive.Radial | FrameDrive.Replay | FrameDrive.Laser)) != 0) return;
+        if ((d & (FrameDrive.Timer | FrameDrive.Roll | FrameDrive.Radial | FrameDrive.Replay
+                  | FrameDrive.Laser | FrameDrive.TouchFling)) != 0) return;
         if ((d & (FrameDrive.UiAnim | FrameDrive.Selection | FrameDrive.Camera
                   | FrameDrive.Tooltip | FrameDrive.Trail | FrameDrive.Align)) == 0) return;
         _idleWarnAtMs = NowMs + 30_000;
@@ -4426,6 +4431,7 @@ public partial class InkEngine
     private void OnPointerDown(IntPtr hWnd, IntPtr wParam)
     {
         StampInput();
+        StopTouchFling();                // 任何按下（画布/界面/笔）= 先刹住双指惯性
         _cntDown++;
         ClearEngineTooltip();            // 按下 = 新动作开始，悬停提示先收
         uint id = (uint)(wParam.ToInt64() & 0xFFFF);
@@ -6473,6 +6479,18 @@ public partial class InkEngine
     private bool _g2Tap;              // 两指点按候选（松手时结算）
     private float _g2Dist0;           // 变换用：起始两指距离（双指只做缩放，绕选区中心）
 
+    // ---- 双指纵滑的惯性（2026-10-28）--------------------------------------
+    // 真机反馈：上下滑松手就停，不如浏览器"甩一下继续走"。
+    // 速度单位 = 逻辑像素 / 毫秒；滚动仍走 ScrollCanvasBy，和滚轮/上下键同一条路。
+    private float _g2FlingVy;         // 松手时的纵向速度（带符号；负 = 手指向上、画布向下滚）
+    private double _g2LastMoveMs;     // 上一次双指移动的时刻（算瞬时速度）
+    private bool _g2FlingActive;      // 惯性还在跑
+    private double _g2FlingLastMs;    // 惯性上一拍的时刻
+    private const float TouchFlingMax = 1.8f;          // 最大速度（逻辑像素/ms，约 1800px/s）
+    private const float TouchFlingStop = 0.02f;        // 低于它 = 停（约 20px/s）
+    private const float TouchFlingDecayPerSec = 3.5f;  // 指数衰减；越小惯性越大
+    private const float TouchFlingMaxStepMs = 80f;     // 卡顿后别一跳半屏
+
     /// <summary>一根手指按下那一刻的选区快照。这一下可能在图形工具下被"点框外 = 收起选区"
     /// 清掉（见 <see cref="ClearSelectionForNewContext"/>）；但它若紧接着升级成双指手势，
     /// 那个"点框外"其实没发生——手势起手时把选区救回来
@@ -6760,6 +6778,7 @@ public partial class InkEngine
     private void TouchAbort()
     {
         if (_touchMode == TouchMode.None && !_touch.Any) return;
+        StopTouchFling();
         if (_touchMode == TouchMode.Erase) { Doc.EndErase(); EndStrokeMeasure(); PixelEraseDragging = false; }
         // 触屏呼出的轮盘：手势中断 = 盘也收掉（别留一个没人管的盘在屏幕上）。
         if (RadialPaletteActive && _radialTouchMode) CancelRadialPalette("手势中断");
@@ -6878,9 +6897,12 @@ public partial class InkEngine
         // 重入保护：钉子还活着就不重置（手指 blip 重落会再走到这里，不能把
         // _g2StartMid / 轴锁 重新洗一遍）。
         if (_g2IdA != 0 && _touch.Contains(_g2IdA) && _touch.Contains(_g2IdB)) return;
+        StopTouchFling();
         _g2IdA = p.IdA;
         _g2IdB = p.IdB;
         _g2ScrollSm = 0f;
+        _g2FlingVy = 0f;
+        _g2LastMoveMs = NowMs;
 
         _g2StartMid = _g2LastMid = (p.A + p.B) * 0.5f;
         _g2Axis = 0;
@@ -6946,7 +6968,6 @@ public partial class InkEngine
             _dirty = true;
             return;
         }
-
         float dx = mid.X - _g2LastMid.X, dy = mid.Y - _g2LastMid.Y;
         _g2LastMid = mid;
 
@@ -6970,10 +6991,18 @@ public partial class InkEngine
             _g2ScrollSm += (dy - _g2ScrollSm) * 0.55f;
             float lim = 90f * DpiScale;
             float use = Math.Clamp(_g2ScrollSm, -lim, lim);
+            // 记瞬时速度，松手后 StepTouchFling 接着跑（2026-10-28）。
+            // 单位统一成**逻辑像素 / ms**；dt 太小/太大都夹一下，防异常事件把速度打飞。
+            double dtMs = Math.Clamp(NowMs - _g2LastMoveMs, 1.0, 40.0);
+            _g2LastMoveMs = NowMs;
+            float instVy = (use * TouchScrollGain / DpiScale) / (float)dtMs;
+            _g2FlingVy = Math.Clamp(_g2FlingVy * 0.70f + instVy * 0.30f,
+                                    -TouchFlingMax, TouchFlingMax);
             ScrollCanvasBy(use * TouchScrollGain / DpiScale);
             return;
         }
 
+        _g2FlingVy = 0f;                       // 横滑翻页不带纵向惯性
         if (_g2Turned || dx == 0f) return;
         float totalX = mid.X - _g2StartMid.X;
         if (MathF.Abs(totalX) < TouchGestures.PageTurnLogical * DpiScale) return;
@@ -7009,7 +7038,49 @@ public partial class InkEngine
             _g2Transform = false;
             return;
         }
+        // 最后一根手指抬起：纵向滑动如果还有速度，交给惯性继续跑。
+        // 只认最后一根（第一根先抬时 _touch.Count 还是 2，不能提前开船）。
+        if (_g2Axis == 2 && _touch.Count <= 1
+            && NowMs - _g2LastMoveMs <= 150
+            && MathF.Abs(_g2FlingVy) >= TouchFlingStop)
+        {
+            _g2FlingActive = true;
+            _g2FlingLastMs = NowMs;
+            _dirty = true;
+        }
         _g2Tap = false;
+    }
+
+    /// <summary>
+    /// 双指纵滑松手后的惯性：每帧按指数衰减，滚动仍走 <see cref="ScrollCanvasBy"/>。
+    /// 到边界（顶上/底下）或速度低于 <see cref="TouchFlingStop"/> 就停。
+    /// </summary>
+    private void StepTouchFling()
+    {
+        if (!_g2FlingActive) return;
+
+        double dtMs = Math.Clamp(NowMs - _g2FlingLastMs, 0.0, TouchFlingMaxStepMs);
+        _g2FlingLastMs = NowMs;
+        if (dtMs <= 0.0) return;
+
+        float decay = MathF.Exp(-TouchFlingDecayPerSec * (float)(dtMs / 1000.0));
+        _g2FlingVy *= decay;
+        if (MathF.Abs(_g2FlingVy) < TouchFlingStop)
+        {
+            StopTouchFling();
+            return;
+        }
+
+        float before = ViewOffsetY;
+        ScrollCanvasBy(_g2FlingVy * (float)dtMs);
+        if (MathF.Abs(ViewOffsetY - before) < 0.01f)
+            StopTouchFling();                  // 已经到边：别让速度空转
+    }
+
+    private void StopTouchFling()
+    {
+        _g2FlingActive = false;
+        _g2FlingVy = 0f;
     }
 
     /// <summary>
@@ -7048,6 +7119,9 @@ public partial class InkEngine
     internal int TouchCountForTest => _touch.Count;
     internal bool TouchSelectedForTest => _touchSelected;
     internal int _touchDebugAxis => _g2Axis;
+    internal bool TouchFlingActiveForTest => _g2FlingActive;
+    internal float TouchFlingVelocityForTest => _g2FlingVy;
+    internal void StopTouchFlingForTest() => StopTouchFling();
     /// <summary>自检用：直接喂一个触点取判定（合成触摸的 `rcContact` 系统不认，面积那条只能这么测）。</summary>
     internal TouchVerdict TouchClassifyForTest(uint id, float x, float y, float sizePx)
         => _touch.Down(id, x, y, sizePx, NowMs, DpiScale);
@@ -18428,6 +18502,7 @@ public partial class InkEngine
 
     internal IntPtr HandleWheel(IntPtr wParam)
     {
+        StopTouchFling();                      // 滚轮/触控板接管：先刹住双指惯性
         int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);
         // 收藏分类抽屉：滚轮滚分类。
         if (LibraryPanelVisibleNow && LibraryCategoriesOpen)

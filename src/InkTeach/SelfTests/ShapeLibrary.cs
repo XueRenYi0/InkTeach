@@ -84,7 +84,7 @@ internal sealed partial class App
     ///
     /// 为什么每一段都走真机而不是直接调 API：这条链上有四处"看得见的东西"——
     ///   ① 操作条上那颗图标**画在哪儿、点得中吗**（几何与命中同源，`--handletest` 的教训）；
-    ///   ② 主条收藏格 / 更多兜底入口**点得开面板吗**；
+    ///   ② 主条收藏格**点得开面板吗**；
     ///   ③ 面板里的缩略图**真的画出来了吗**——只断言条目数的话，
     ///      "存进去了、格子却是空的"照样绿，所以这里数屏幕像素；
     ///   ④ 落笔插入：**落在按下的地方**、插入后是**选中的**、**一步撤销**。
@@ -309,28 +309,16 @@ internal sealed partial class App
               entries3.Count == 1 && LibraryFeedback == LibraryFeedbackKind.Duplicate,
               $"条目 {entries3.Count} 个，反馈 {LibraryFeedback}");
 
-        // ---- B. 从主条「收藏」格或更多兜底入口打开面板（旧图形带入口已删）----
+        // ---- B. 从主条「收藏」格打开面板（更多里不再放重复入口）----
         {
             var cell = ui.CellRectForTest(10);
-            bool direct = cell.MaxX > cell.MinX && cell.MaxY > cell.MinY;
-            if (direct)
-            {
-                ClickUi(cell);
-            }
-            else
-            {
-                ui.OpenMoreForTest();
-                SettleFrames(120);
-                var tile = ui.HubTileRectForTest(9);
-                Check("B：主条没有收藏格时，更多里有兜底入口",
-                      tile.MaxX > tile.MinX && tile.MaxY > tile.MinY,
-                      $"格 ({tile.MinX:F0},{tile.MinY:F0})-({tile.MaxX:F0},{tile.MaxY:F0})");
-                ClickUi(tile);
-            }
+            Check("B：主条有收藏格", !cell.IsEmpty,
+                  $"格 ({cell.MinX:F0},{cell.MinY:F0})-({cell.MaxX:F0},{cell.MaxY:F0})");
+            if (!cell.IsEmpty) ClickUi(cell);
             SettleFrames(500);
             Check("B：收藏入口 → 面板开了，而且读到了那个条目",
                   LibraryPanelOpen && LibraryEntries.Count == 1,
-                  $"入口 {(direct ? "主条" : "更多")}，面板 {LibraryPanelOpen}，"
+                  $"入口 主条，面板 {LibraryPanelOpen}，"
                   + $"条目 {LibraryEntries.Count} 个，更多开着 {ui.MoreOpenForTest}，"
                   + $"uiK={uiK:F2}，格 ({cell.MinX:F0},{cell.MinY:F0})-({cell.MaxX:F0},{cell.MaxY:F0})");
             Check("B：收藏打开时色带收回成色线、不切专用条",
@@ -737,7 +725,7 @@ internal sealed partial class App
             ReloadLibrary();
         }
 
-        // ---- H. 主条没有收藏格时，「更多」里必须有兜底入口（AGENTS 硬规则）----
+        // ---- H. 收藏只留在主条；取消钉住后更多里不再有重复入口 ----
         {
             CloseLibraryPanel();
             ui.SetProfileForTest(1);                 // 自定义
@@ -749,17 +737,13 @@ internal sealed partial class App
             ui.OpenMoreForTest();
             SettleFrames(150);
             var tile = ui.HubTileRectForTest(9);
-            Check("H：更多里出现「收藏」兜底入口",
-                  tile.MaxX > tile.MinX && tile.MaxY > tile.MinY,
+            Check("H：更多里不再有「收藏」入口", tile.IsEmpty,
                   $"格 ({tile.MinX:F0},{tile.MinY:F0})-({tile.MaxX:F0},{tile.MaxY:F0})");
+            Check("H：更多仍开着，没有误触发收藏",
+                  ui.MoreOpenForTest && !LibraryPanelOpen,
+                  $"更多 {ui.MoreOpenForTest}，面板 {LibraryPanelOpen}");
 
-            ClickUi(tile);
-            SettleFrames(200);
-            Check("H：点兜底入口 → 面板开、更多关上",
-                  LibraryPanelOpen && !ui.MoreOpenForTest,
-                  $"面板 {LibraryPanelOpen}，更多 {ui.MoreOpenForTest}");
-
-            CloseLibraryPanel();
+            ui.CloseMoreForTest();
             ui.SetPinForTest(10, true);
             ui.SetProfileForTest(2);
             SettleFrames(150);

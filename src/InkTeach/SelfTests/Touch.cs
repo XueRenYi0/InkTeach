@@ -59,7 +59,7 @@ internal sealed partial class App
 
         // 多指落下**要一个一个来**：系统对"一次注入里出现两个新触点"只认第一个
         //（实测：同一批塞两个新触点 → 只收到 1 根手指；分两次注入就对了）。
-        // 真实手指也是先后落下的，30ms 间隔仍在"干净开始"的 150ms 窗口里。
+        // 真实手指也是先后落下的，30ms 间隔在**两指 300ms**的升级窗口里。
         void Touch2Down(float x1, float y1, float x2, float y2, float size = 24f)
         {
             SendTouchesSized(true, (x1, y1, size));
@@ -111,6 +111,15 @@ internal sealed partial class App
             Check("双指纵滑 = 漫游（相机动、墨迹坐标一个没变）",
                   MathF.Abs(ViewOffsetY - cam0) > 60f && MathF.Abs(p1.X - p0.X) < 0.01f && MathF.Abs(p1.Y - p0.Y) < 0.01f,
                   $"相机 {cam0:F0} → {ViewOffsetY:F0}；首点 ({p0.X:F0},{p0.Y:F0}) → ({p1.X:F0},{p1.Y:F0})");
+
+            // 松手后再跑一段：浏览器式惯性（2026-10-28）。
+            float camRelease = ViewOffsetY;
+            bool flingStarted = TouchFlingActiveForTest;
+            SettleFrames(240);
+            Check("双指纵滑松手后有惯性（还会继续走）",
+                  flingStarted && MathF.Abs(ViewOffsetY - camRelease) > 12f,
+                  $"松手时 {camRelease:F0}（惯性 {flingStarted}）→ {ViewOffsetY:F0}");
+            StopTouchFlingForTest();
         }
 
         // ---- ③ 双指横滑 = 翻页（一次手势只翻一页）----
@@ -135,20 +144,61 @@ internal sealed partial class App
             SettleFrames(80);
         }
 
-        // ---- ④ 异步第二指（>150ms）= 忽略，不抢正在写的那一笔 ----
+        // ---- ④ 写字中途晚到的掌根（>300ms）= 忽略 ----
         {
             int before = Doc.Strokes.Count;
             SendTouchesSized(true, (cx - 300, cy + 80, 24f));
-            SettleFrames(250);              // 真等过 150ms 的"干净开始"窗口（SettleFrames 的单位是**毫秒**）
+            SettleFrames(400);              // 超过两指可升级的 300ms
             SendTouchesSized(true, (cx - 300, cy + 80, 24f), (cx - 100, cy + 80, 200f));   // 手掌晚到
             SettleFrames(80);
             SendTouchesSized(true, (cx - 260, cy + 80, 24f), (cx - 100, cy + 80, 200f));
             SettleFrames(80);
             SendTouchesSized(false, (cx - 260, cy + 80, 24f), (cx - 100, cy + 80, 200f));
             SettleFrames(120);
-            Check("写字中途来的手掌 = 忽略（不抢笔、不误擦）",
+            Check("写字中途来的手掌（>300ms）= 忽略（不抢笔、不误擦）",
                   Doc.Strokes.Count == before + 1 && TouchModeForTest == TouchMode.None,
                   $"笔画 {before} → {Doc.Strokes.Count}，模式 {TouchModeForTest}");
+        }
+
+        // ---- ④b 第一指已经画出去，第二指仍能升级（真机日志的主场景）----
+        {
+            int before = Doc.Strokes.Count;
+            float cam0 = ViewOffsetY;
+            SendTouchesSized(true, (cx + 320, cy + 120, 24f));
+            SettleFrames(30);
+            SendTouchesSized(true, (cx + 290, cy + 120, 24f));      // 第一指先走 30px
+            SettleFrames(20);
+            SendTouchesSized(true, (cx + 290, cy + 120, 24f), (cx + 90, cy + 120, 24f)); // 第二指 ~50ms
+            SettleFrames(60);
+            SendTouchesSized(true, (cx + 230, cy + 120, 24f), (cx + 30, cy + 120, 24f));
+            SettleFrames(60);
+            SendTouchesSized(false, (cx + 230, cy + 120, 24f), (cx + 30, cy + 120, 24f));
+            SettleFrames(120);
+            Check("第一指已移动，第二指仍能升级为手势（不落墨）",
+                  Doc.Strokes.Count == before,
+                  $"笔画 {before} → {Doc.Strokes.Count}，模式 {TouchModeForTest}，相机 {cam0:F0} → {ViewOffsetY:F0}");
+            ViewOffsetY = 0f;
+            ClampViewOffset();
+            SettleFrames(80);
+        }
+
+        // ---- ④c 第二指 250ms 晚到、第一笔还短 → 仍升级（旧规则会 Ignore）----
+        {
+            int before = Doc.Strokes.Count;
+            SendTouchesSized(true, (cx - 320, cy + 180, 24f));
+            SettleFrames(250);
+            SendTouchesSized(true, (cx - 320, cy + 180, 24f), (cx - 120, cy + 180, 24f));
+            SettleFrames(60);
+            SendTouchesSized(true, (cx - 260, cy + 180, 24f), (cx - 60, cy + 180, 24f));
+            SettleFrames(60);
+            SendTouchesSized(false, (cx - 260, cy + 180, 24f), (cx - 60, cy + 180, 24f));
+            SettleFrames(120);
+            Check("第二指 250ms 晚到、第一笔还短 → 仍升级为手势",
+                  Doc.Strokes.Count == before,
+                  $"笔画 {before} → {Doc.Strokes.Count}，模式 {TouchModeForTest}");
+            ViewOffsetY = 0f;
+            ClampViewOffset();
+            SettleFrames(80);
         }
 
         // ---- ⑤ 快速两指 = 手势：刚起头那一小笔被撤掉 ----

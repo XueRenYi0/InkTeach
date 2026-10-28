@@ -15,12 +15,10 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
-> **Latest 9.4.1 (2026-10-27)**: the favourites popup is rebuilt — click a card to pick it up, a
-> full-screen ghost follows the pointer, then click or drag to drop. The panel and toolbar step aside
-> while carrying; `Esc` or right-click cancels. The dropped object stays temporarily selected; click
-> empty space or press `Esc` to restore the tool you were using. The panel is at least 1×2, orientation
-> is switched manually, resizing follows the pointer and snaps to whole cells on release. Scrolling the
-> whiteboard no longer moves or clips the popup. Also adds transparent PNG/JPG import with alpha kept.
+> **Latest 9.4.2 (2026-10-28)**: two-finger gestures are more forgiving — both fingers can land
+> within 300 ms and the first finger may already be moving; two-finger left/right turns pages and
+> up/down scrolls, with inertia after release. The duplicate favourites entry was removed from the
+> More panel, fixing the flicker when the favourites popup and More overlapped. Three-finger erase is unchanged.
 >
 > *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
 > current version.*
@@ -34,7 +32,7 @@ PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else
 
 ## Quick start
 
-1. Download `InkTeach-Setup-9.4.1.exe`, double-click, Next, Done — or unzip the portable build.
+1. Download `InkTeach-Setup-9.4.2.exe`, double-click, Next, Done — or unzip the portable build.
 2. Open PowerPoint/WPS in slideshow mode, or any app; the InkTeach toolbar sits at the bottom.
 3. Write with a pen or mouse. `Ctrl+L` = laser, `Ctrl+E` = eraser, `Ctrl+Alt+Shift+T` hands the mouse back; press it again to return to the pen (9.3.2).
 4. Hold `Ctrl+Alt+Shift+Q` and flick to a sector to switch tools without hunting for the toolbar.

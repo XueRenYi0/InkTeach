@@ -2252,7 +2252,9 @@ internal sealed partial class App
         {
             Check("启动器：打开面板默认停在主页", ui.MorePageForTest == 0, $"页 = {ui.MorePageForTest}");
             bool tilesOk = true;
-            for (int code = 0; code < 8; code++)
+            // 课堂 4（计时 / 点名 / 随机一人 / 使用说明）＋ 墨迹 5（保存 / 打开 /
+            // 回放 / 关文档 / 历史板书）。收藏不再放这里。
+            for (int code = 0; code <= 8; code++)
             {
                 var t = ui.HubTileRectForTest(code);
                 if (t.IsEmpty || t.MinX < moreRect.MinX || t.MaxX > moreRect.MaxX
@@ -2264,7 +2266,7 @@ internal sealed partial class App
                 var t = ui.HubBottomRectForTest(i);
                 if (t.IsEmpty || t.MaxX > moreRect.MaxX || t.MaxY > moreRect.MaxY) bottomOk = false;
             }
-            Check("启动器：八格（课堂 3 ＋ 墨迹 5）＋ 底栏五格都在面板内", tilesOk && bottomOk,
+            Check("启动器：九格（课堂 4 ＋ 墨迹 5）＋ 底栏五格都在面板内", tilesOk && bottomOk,
                   $"面板 {moreRect.MaxX - moreRect.MinX:F0}×{moreRect.MaxY - moreRect.MinY:F0}");
 
             // **底栏每一格都必须进命中表**（2026-10-17 紧急修：加第 5 格「退出」时，
@@ -3495,12 +3497,11 @@ internal sealed partial class App
         // 第十五批加正切、第十六批加波浪线：**第二行 4 → 6** 段（604 ÷ 6 ≈ 101）。
         // 2026-09-22 加椭圆（带焦点）：**第二行 6 → 7** 段（604 ÷ 7 ≈ 86，和第三行一样宽，
         // 仍在"每段 ≥ 60"那条门槛之上）。
-        // 2026-09-22 加「图库」；**2026-10-17 并进最后一行**（用户："单独占一行不合理"）——
-        // 它是**动作**（点开图库面板），不是图形工具，所以 `want` 里没有它，
-        // 但**行结构里要有它**：最后一行 = 7 个图形 ＋ 1 段动作 = **8 段**。
-        int[] wantRowLens = { 8, 7, 8 };
-        /** 「图库」那一段：段表之外的**动作段**（不计入 `want`）。 */
-        const int actionSegs = 1;
+        // 2026-09-22 加「图库」；2026-10-17 并进主工具条「收藏」格后，图形带的动作段
+        // 已撤掉——所以最后一行只剩 7 个图形，不再有独立动作段。
+        int[] wantRowLens = { 8, 7, 7 };
+        /** 图形带里不再有独立动作段（图库入口已归主工具条）。 */
+        const int actionSegs = 0;
 
         // 上带只在"指针落在面板上"时张开（见 FullUi.RailHoverZone）。点完一格、画完一笔
         // 之后指针可能在画布上，所以每次要点段之前先把指针挪回主条等它张开。
