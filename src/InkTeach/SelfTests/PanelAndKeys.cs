@@ -597,6 +597,67 @@ internal sealed partial class App
             ClickPhysical(ox, oy);
             Check("点取色板外面关闭取色板", !ui.PenPickerOpenForTest, "");
 
+            // 用户 2026-10-28 报的"再点一下自定义色片就闪"：第二次点击必须**只关**，
+            // 不能关掉又被同一次点击重新打开。
+            ClickPhysical(cx, cy);
+            Check("已选中时再点自定义槽再次打开取色板", ui.PenPickerOpenForTest, "");
+            ClickPhysical(cx, cy);
+            Check("色板打开时再点同一个自定义色片：只关闭、不重开",
+                  !ui.PenPickerOpenForTest, "");
+
+            // 色板打开时点其他色片：选中那个颜色并关闭（不是只关、不选）。
+            ClickPhysical(cx, cy);
+            var firstSw = ui.SwatchRectForTest(0);
+            ClickPhysical((firstSw.MinX + firstSw.MaxX) * 0.5f * DpiScale,
+                          (firstSw.MinY + firstSw.MaxY) * 0.5f * DpiScale);
+            var wantFirst = InkUi.Tokens.Palette[0].Color;
+            Check("色板打开时点其他色片：选色并关闭",
+                  !ui.PenPickerOpenForTest && !Host.State.CustomPenSelected
+                  && Same(Host.State.PaletteBase, wantFirst),
+                  $"取色板 = {ui.PenPickerOpenForTest}，自定义选中 = {Host.State.CustomPenSelected}，"
+                  + $"色 = {Host.State.PaletteBase}");
+
+            // 右栏常用色 / 最近颜色：都写进“当前正在改的那个色位”，并且点完关闭。
+            // 常用色是固定的，不写“最近使用”；最近颜色才写。
+            {
+                ClickPhysical(cx, cy);      // 先选中最后一个色位
+                ClickPhysical(cx, cy);      // 再点一次打开取色板
+                int recentBefore = Host.State.RecentPenColors?.Length ?? 0;
+                var wantBrightRed = new Color4(1f, 0.231f, 0.188f, 1f);
+                var commonRed = ui.PenPickerCommonRectForTest(8);
+                ClickPhysical((commonRed.MinX + commonRed.MaxX) * 0.5f * DpiScale,
+                              (commonRed.MinY + commonRed.MaxY) * 0.5f * DpiScale);
+                Check("点常用色：写进当前色位并关闭",
+                      !ui.PenPickerOpenForTest && Same(Host.State.CustomPenColor, wantBrightRed),
+                      $"取色板 = {ui.PenPickerOpenForTest}，色 = {Host.State.CustomPenColor}");
+                Check("固定常用色不写“最近使用”",
+                      (Host.State.RecentPenColors?.Length ?? 0) == recentBefore,
+                      $"最近 {recentBefore} → {Host.State.RecentPenColors?.Length ?? 0}");
+
+                var recent = Host.State.RecentPenColors;
+                if (recent != null && recent.Length > 0)
+                {
+                    var wantRecent = recent[0];
+                    ClickPhysical(cx, cy);  // 当前色位还选中，再点打开
+                    var rr = ui.PenPickerRecentRectForTest(0);
+                    ClickPhysical((rr.MinX + rr.MaxX) * 0.5f * DpiScale,
+                                  (rr.MinY + rr.MaxY) * 0.5f * DpiScale);
+                    Check("点最近颜色：写进当前色位并关闭",
+                          !ui.PenPickerOpenForTest && Same(Host.State.CustomPenColor, wantRecent),
+                          $"取色板 = {ui.PenPickerOpenForTest}，色 = {Host.State.CustomPenColor}");
+                }
+
+                // 首行第 8 个是默认白色；点它把这个色位恢复成默认白。
+                ClickPhysical(cx, cy);
+                var commonWhite = ui.PenPickerCommonRectForTest(7);
+                ClickPhysical((commonWhite.MinX + commonWhite.MaxX) * 0.5f * DpiScale,
+                              (commonWhite.MinY + commonWhite.MaxY) * 0.5f * DpiScale);
+                Check("首行默认色可把色位恢复成默认",
+                      !ui.PenPickerOpenForTest
+                      && Same(Host.State.CustomPenColor, InkUi.Tokens.Palette[7].Color),
+                      $"取色板 = {ui.PenPickerOpenForTest}，色 = {Host.State.CustomPenColor}");
+            }
+
             // 还原测试前的颜色，后面的用例不依赖自定义色。
             Host.Commands.SetColor(InkUi.Tokens.Palette[6].Color);
         }
@@ -2884,14 +2945,14 @@ internal sealed partial class App
             Need(ui.TipContentForTest(500).Title != null, "线型应配");
             for (int i = 0; i < ui.SwatchCountForTest; i++)
             {
-                // 自定义槽是例外：它带“再点一下开取色板”的隐藏手势，需要一条提示。
-                bool custom = i == ui.SwatchCountForTest - 1 && Host.State.Tool == Tool.Pen;
-                Need(custom == (ui.TipContentForTest(100 + i).Title != null), $"色片{i}提示不符");
+                // 每个笔色片都有“再点当前色片换色”的隐藏手势，所以都要一条提示。
+                bool wantTip = Host.State.Tool == Tool.Pen;
+                Need(wantTip == (ui.TipContentForTest(100 + i).Title != null), $"色片{i}提示不符");
             }
             Host.Commands.SetTool(Tool.Highlighter);
             ui.SelectBandCellForTest(4);
             for (int i = 0; i < ui.SwatchCountForTest; i++)
-                Need(ui.TipContentForTest(100 + i).Title == null, $"荧光色{i}不该有");
+                Need(ui.TipContentForTest(100 + i).Title != null, $"荧光色{i}应有提示");
             Host.Commands.SetTool(Tool.Eraser);
             ui.SelectBandCellForTest(6);
             Need(ui.TipContentForTest(400).Title != null, "清空（按住）应配");

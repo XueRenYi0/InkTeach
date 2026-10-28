@@ -201,6 +201,11 @@ public sealed partial class FullUi : IOverlayUi
     // 于是"没拖过"会被当成"拖到了 (0,0)"（自检当场抓到过这一条）。
     private Vector2? _anchor;
     private readonly Anim _expand;         // 0 = 球，1 = 带子
+    // 这一帧的贴边位移**只算一次**：PrepareFrame 里推进动画后拍一张快照，
+    // QueryBounds、命中测试、Render 全读它。三处各算一次的话，动画中的每一帧
+    // 都可能读到略微不同的值——画在这、擦在那，就是"原地残影"。
+    private Vector2 _frameShift;
+    private bool _frameShiftValid;
 
     private int _hover = -1;               // -2 = 球，0.. = 格子，-1 = 没有
     private int _press = -1;
@@ -231,9 +236,31 @@ public sealed partial class FullUi : IOverlayUi
 
     // ---- 工具带自定义色取色板（2026-10-23）--------------------------------
     private bool _penPickerOpen;
+    /// <summary>取色板是在改荧光笔（true）还是画笔（false）。</summary>
+    private bool _pickerHighlighter;
+    /// <summary>取色板正在改哪个色位（0..7 画笔 / 0..4 荧光笔）。</summary>
+    private int _penPickerSlot = PenLastSlot;
+    /// <summary>色值输入框：正在编辑 / 输入缓冲 / 进入时全选 / 进来前的键盘模式。</summary>
+    private bool _hexEditing;
+    private string _hexBuffer = "";
+    private bool _hexSelectAll;
+    private bool _hexKeyboardWasOn;
+    /// <summary>荧光笔浓度滑条正在拖。</summary>
+    private bool _penPickOpacityDragging;
+    /// <summary>吸管取完/取消后，把取色板放回来（从取色板里点的吸管）。</summary>
+    private bool _pickerReturnAfterPick;
+    private bool _pickerReturnArmed;
+    private int _pickerReturnSlot;
+    private bool _pickerReturnHighlighter;
     private float _penPickH = 0f, _penPickS = 0f, _penPickV = 1f;
     private bool _penPickDragging;
     private bool _penPickOnHue;
+    /// <summary>
+    /// 色板打开时，某一次按下把它关掉了：这一次**抬起也要吃掉**。
+    /// 不吃的话，抬起会落回普通工具条路径（`_press == -1` 时虽然多半什么都不做，
+    /// 但任何一次状态漂移都会变成"关掉又重开"的那一下闪烁）。
+    /// </summary>
+    private bool _penPickerDismissUp;
     private ID2D1Bitmap _penPickSvBmp;
     private ID2D1Bitmap _penPickHueBmp;
     private float _penPickBmpHue = -1f;
@@ -651,7 +678,30 @@ public sealed partial class FullUi : IOverlayUi
         // 那会让默认位置把面板夹到屏幕左上角。
         var w = _host?.WorkArea ?? default;
         _work = (w.MaxX > w.MinX && w.MaxY > w.MinY) ? w : screen;
+        _frameShiftValid = false;          // 屏幕/DPI 变了：旧的位移快照作废
         return QueryBounds();
+    }
+
+    /// <summary>
+    /// 引擎每帧在 QueryBounds **之前**调一次：把动画/贴边隐藏/提示推进到这一帧，
+    /// 然后给这一帧拍一张位移快照。
+    ///
+    /// 这些更新原来在 <see cref="Render"/> 开头。Render 只在一部分路径上被调用
+    /// （引擎先算脏区再画），于是"位置在 Render 里变、脏区按变之前算"——
+    /// 贴边隐藏 + 色板那一组残影就是从这里来的。
+    /// </summary>
+    public void PrepareFrame()
+    {
+        if (_host == null) return;
+        // 全屏层（更多 / 说明）开合：收藏弹窗先藏，关掉自动回来。
+        // 色带 / 取色器只是底部临时展开，**不影响收藏弹窗**。
+        _host.Commands.SetUiOverlay(_moreOpen);
+        UpdatePeek();                    // 贴边隐藏该不该收
+        UpdateRail();                    // 色线该不该长成设置条
+        UpdateBandAction();              // "按住清空"够 0.8 秒没有
+        UpdateTip();                     // 悬停提示"到点没有"
+        _frameShift = ComputeShift();
+        _frameShiftValid = true;
     }
 
     public RectF QueryBounds()
@@ -2192,25 +2242,18 @@ public sealed partial class FullUi : IOverlayUi
     }
 
     /// <summary>
-    /// 这一档显示哪几个色片（返回**色片表**里的下标）。
+    /// 这一档显示哪几个色片（返回**色位编号**）。
     ///
-    /// 几张映射各有各的用法（表本身在 <see cref="Tokens"/> 里）：
-    ///   · **荧光笔**：完整档用全部 5 色；主栏只剩 3/4 个工具时降到 3/4 色；
-    ///   · **笔**：3 格给 3 色（红 / 黑 / 自定义），4–7 格给 4 色
-    ///     （红 / 黑 / 蓝 / 自定义），8–9 格给 6 色，10 格以上给全部 8 色；
-    ///   · 极简 5 格用 4 色；原来的白色位仍由自定义槽占着。
+    /// 2026-10-28 起笔的 8 个色位都是同一种东西：位置固定、默认色固定、每个都能被用户换色；
+    /// 不再分“固定色片 / 自定义槽”。密度只决定显示哪几个色位：
+    ///   3 格 = 红 / 黑 / 白；4–7 格 = 红 / 黑 / 蓝 / 白；8–9 格 = 红黑蓝绿黄白；10+ = 全部 8 个。
+    /// 荧光笔仍用自己那张固定表（5 色）。
     /// </summary>
-    /// <summary>虚拟“自定义色”槽位；不落到 Tokens.Palette 的下标里。</summary>
-    private const int CustomSwatchIdx = -10000;
-    // 原来的白色位（下标 7）换成自定义槽；色片数量随主栏宽度降档：
-    //   3 格 = 3 色（红 / 黑 / 自定义）
-    //   4–7 格 = 4 色（红 / 黑 / 蓝 / 自定义）
-    //   8–9 = 6 色，10 格以上 = 8 色。
-    private static readonly int[] NanoSwatchIdx = { 1, 0, CustomSwatchIdx };
-    private static readonly int[] MiniSwatchIdx = { 1, 0, 2, CustomSwatchIdx };
-    // 自定义色永远放末尾；8–9 格以前把自定义插在蓝色后面，导致它“有时在中间”。
-    private static readonly int[] CompactSwatchIdx = { 1, 0, 2, 3, 4, CustomSwatchIdx };
-    private static readonly int[] FullSwatchIdx = { 0, 1, 2, 3, 4, 5, 6, CustomSwatchIdx };
+    private const int PenLastSlot = 7;
+    private static readonly int[] NanoSwatchIdx = { 1, 0, PenLastSlot };
+    private static readonly int[] MiniSwatchIdx = { 1, 0, 2, PenLastSlot };
+    private static readonly int[] CompactSwatchIdx = { 1, 0, 2, 3, 4, PenLastSlot };
+    private static readonly int[] FullSwatchIdx = { 0, 1, 2, 3, 4, 5, 6, PenLastSlot };
     private static readonly int[] HlSwatchIdx = CreateAllIdx(Tokens.HighlighterPalette.Length);
     private static readonly int[] HlSwatchIdx4 = { 0, 1, 2, 3 };
     private static readonly int[] HlSwatchIdx3 = { 0, 1, 2 };
@@ -2249,22 +2292,31 @@ public sealed partial class FullUi : IOverlayUi
     private Color4 SwatchColor(int i)
     {
         int idx = SwatchIdx[i];
-        if (idx == CustomSwatchIdx)
-            return _host?.State.CustomPenColor ?? new Color4(1f, 1f, 1f, 1f);
-        return SwatchTable[idx].Color;
+        if (UsingHighlighterSwatches)
+        {
+            var hl = _host?.State.HighlighterSwatchColors;
+            return hl != null && idx >= 0 && idx < hl.Length
+                ? hl[idx] : SwatchTable[idx].Color;
+        }
+        var colors = _host?.State.PenSwatchColors;
+        return colors != null && idx >= 0 && idx < colors.Length
+            ? colors[idx] : SwatchTable[idx].Color;
     }
 
     private void ActivateSwatch(int i)
     {
-        if (SwatchIdx[i] != CustomSwatchIdx)
+        int slot = SwatchIdx[i];
+        if (UsingHighlighterSwatches)
         {
-            _host.Commands.SetColor(SwatchColor(i));
+            // 荧光笔也是：已经是这一格 → 再点打开它的取色板；否则只选色。
+            if (_host.State.HighlighterSwatchSelected == slot) OpenHighlighterColorPicker(slot);
+            else _host.Commands.SelectHighlighterSwatch(slot);
             return;
         }
 
-        // 已选中自定义槽 → 再点打开取色板；否则先把保存的自定义色选上。
-        if (_host.State.CustomPenSelected) OpenPenColorPicker();
-        else _host.Commands.SelectCustomPenColor();
+        // 已经是这一格 → 再点一次 = 换这个色位的颜色；否则只选色。
+        if (_host.State.PenSwatchSelected == slot) OpenPenColorPicker(slot);
+        else _host.Commands.SelectPenSwatch(slot);
     }
 
     /// <summary>
@@ -2287,15 +2339,34 @@ public sealed partial class FullUi : IOverlayUi
         int n = SwatchCount;
         if (n == 0) return;
         var st = _host.State;
-        int at = -1;
+
+        if (!UsingHighlighterSwatches)
+        {
+            int at = -1;
+            for (int i = 0; i < n; i++)
+                if (st.PenSwatchSelected == SwatchIdx[i]) { at = i; break; }
+            // 外部改色（选中面板等）没有色位编号：按颜色值找回当前位置，
+            // 这样“点笔格换下一个色”仍然从眼前这个颜色往后走，不会先跳回第一个。
+            if (at < 0)
+            {
+                for (int i = 0; i < n; i++)
+                    if (SameColor(SwatchColor(i), st.PaletteBase)) { at = i; break; }
+            }
+            int next = at >= 0 ? (at + 1) % n : 0;
+            _host.Commands.SelectPenSwatch(SwatchIdx[next]);
+            Invalidate();
+            return;
+        }
+
+        int atHl = -1;
         for (int i = 0; i < n; i++)
-            if (IsSwatchActive(st, i)) { at = i; break; }
-        if (at < 0)
+            if (IsSwatchActive(st, i)) { atHl = i; break; }
+        if (atHl < 0)
         {
             for (int i = 0; i < n; i++)
-                if (SameColor(SwatchColor(i), st.PaletteBase)) { at = i; break; }
+                if (SameColor(SwatchColor(i), st.PaletteBase)) { atHl = i; break; }
         }
-        ActivateSwatch((at + 1) % n);
+        ActivateSwatch((atHl + 1) % n);
         Invalidate();
     }
 
@@ -2321,52 +2392,184 @@ public sealed partial class FullUi : IOverlayUi
     /// 顺手起一次换挡动画（见 <see cref="_dashFade"/>）：**旧档要先当场记下来**，
     /// 不然命令一发、状态就变了，动画开始之后再也问不出"从哪一档来的"。
     /// </summary>
-    // ---- 自定义色取色板 -----------------------------------------------------
-
+    // ---- 色位取色板（左边 HSV / 吸管，右边常用色 + 最近；荧光笔多一段浓度）----
     private const float PenPickSv = 120f;
     private const float PenPickHue = 18f;
     private const float PenPickPad = 10f;
     private const float PenPickGap = 8f;
-    // 右下角留出 22px：读数文字不能挤成两行（截图里 #1FA870 被折成 #1FA87 / 0 过）。
-    private const float PenPickCardW = PenPickPad * 2 + PenPickSv + PenPickGap + PenPickHue + 22f;
-    private const float PenPickCardH = PenPickPad * 2 + PenPickSv + PenPickGap + 26f + PenPickGap + 24f;
+    private const float PenPickLeftW = PenPickSv + PenPickGap + PenPickHue; // 146：吸管右沿和彩虹带右沿对齐
+    private const float PenPickColGap = 12f;
+    private const float PenPickCell = 18f;
+    private const float PenPickCellGap = 4f;
+    private const int PenPickCols = 8;
+    private const float PenPickRightW = PenPickCols * PenPickCell + (PenPickCols - 1) * PenPickCellGap; // 172
+    private const float PenPickCardW = PenPickPad * 2 + PenPickLeftW + PenPickColGap + PenPickRightW;    // 350
+    private const float PenPickRightX = PenPickPad + PenPickLeftW + PenPickColGap;
+    private const float PenPickGridY = PenPickPad + 18f;
 
-    private int CustomSwatchPos()
+    /// <summary>笔 5 行 40 色；荧光笔 3 行 24 色（只要亮色）。</summary>
+    private int PickerCommonRows => _pickerHighlighter ? 3 : 5;
+    private float PickerCardH => _pickerHighlighter ? 204f : 196f;
+    private float PickerRecentHeaderY
+        => PenPickGridY + PickerCommonRows * (PenPickCell + PenPickCellGap) + 10f;
+    private float PickerRecentY => PickerRecentHeaderY + 16f;
+    /// <summary>荧光笔：浓度滑条在左栏（预览/吸管下面）；预览条在右栏底部。</summary>
+    private const float PenPickOpacityHeaderY = 168f;
+    private const float PenPickOpacityTrackY = 182f;
+    private float PickerPreviewY => PickerCardH - PenPickPad - 20f;
+
+    private static Color4 C(int r, int g, int b) => new(r / 255f, g / 255f, b / 255f, 1f);
+
+    /// <summary>
+    /// 取色板右栏的 40 个固定常用色（5 行 × 8 列）。**第一行 = 现在色带上的 8 个默认色**，
+    /// 既能当常用色，也能当“误改后手动恢复”的入口；后 4 行按课堂用途分组。
+    /// </summary>
+    private static readonly (string Name, Color4 Color)[] PenPickerCommon =
+    {
+        Tokens.Palette[0], Tokens.Palette[1], Tokens.Palette[2], Tokens.Palette[3],
+        Tokens.Palette[4], Tokens.Palette[5], Tokens.Palette[6], Tokens.Palette[7],
+
+        // 批改 / 强调
+        ("亮红", C(0xFF, 0x3B, 0x30)), ("朱红", C(0xFF, 0x45, 0x00)),
+        ("珊瑚", C(0xFF, 0x6B, 0x6B)), ("玫红", C(0xFF, 0x2D, 0x55)),
+        ("品红", C(0xE9, 0x1E, 0x63)), ("亮橙", C(0xFF, 0x7A, 0x00)),
+        ("琥珀", C(0xFF, 0xB3, 0x00)), ("金", C(0xFF, 0xD5, 0x4F)),
+
+        // 公式 / 理科
+        ("纯蓝", C(0x00, 0x66, 0xFF)), ("天蓝", C(0x38, 0xBD, 0xF8)),
+        ("青", C(0x06, 0xB6, 0xD4)), ("蓝绿", C(0x0D, 0x94, 0x88)),
+        ("亮绿", C(0x22, 0xC5, 0x5E)), ("薄荷", C(0x34, 0xD3, 0x99)),
+        ("靛蓝", C(0x4F, 0x46, 0xE5)), ("紫罗兰", C(0x7C, 0x3A, 0xED)),
+
+        // 结构 / 中性
+        ("深灰", C(0x37, 0x41, 0x51)), ("中灰", C(0x6B, 0x72, 0x80)),
+        ("浅灰", C(0x9C, 0xA3, 0xAF)), ("银灰", C(0xD1, 0xD5, 0xDB)),
+        ("深蓝", C(0x1E, 0x3A, 0x8A)), ("石板", C(0x47, 0x55, 0x69)),
+        ("棕", C(0x92, 0x40, 0x0E)), ("橄榄", C(0x4D, 0x7C, 0x0F)),
+
+        // 暗板 / 浅色
+        ("奶油", C(0xFF, 0xF8, 0xE7)), ("浅黄", C(0xFF, 0xF5, 0x9D)),
+        ("浅橙", C(0xFD, 0xBA, 0x74)), ("浅绿", C(0x86, 0xEF, 0xAC)),
+        ("浅青", C(0x67, 0xE8, 0xF9)), ("浅蓝", C(0x93, 0xC5, 0xFD)),
+        ("薰衣草", C(0xC4, 0xB5, 0xFD)), ("浅粉", C(0xF9, 0xA8, 0xD4)),
+    };
+
+    /// <summary>
+    /// 荧光笔取色板的 24 个固定亮色（3 行 × 8 列）。第一行 = 现有 5 个荧光色 + 3 个常用亮色；
+    /// 不放黑/深灰/深棕/藏青——它们加 alpha 后会变成脏灰/脏棕。
+    /// </summary>
+    private static readonly (string Name, Color4 Color)[] HighlighterPickerCommon =
+    {
+        Tokens.HighlighterPalette[0], Tokens.HighlighterPalette[1], Tokens.HighlighterPalette[2],
+        Tokens.HighlighterPalette[3], Tokens.HighlighterPalette[4],
+        ("荧光紫", C(0xC7, 0x7D, 0xFF)), ("荧光蓝", C(0x7C, 0xC7, 0xFF)),
+        ("浅黄", C(0xFF, 0xF5, 0x9D)),
+
+        ("浅绿", C(0xB9, 0xF6, 0xCA)), ("浅青", C(0xB2, 0xEB, 0xF2)),
+        ("浅蓝", C(0xBB, 0xDE, 0xFB)), ("浅紫", C(0xD1, 0xC4, 0xE9)),
+        ("浅粉", C(0xF8, 0xBB, 0xD0)), ("桃", C(0xFF, 0xCC, 0xBC)),
+        ("金", C(0xFF, 0xE0, 0x82)), ("柠檬", C(0xF0, 0xF4, 0xC3)),
+
+        ("珊瑚", C(0xFF, 0xAB, 0x91)), ("玫红", C(0xF4, 0x8F, 0xB1)),
+        ("青绿", C(0x80, 0xCB, 0xC4)), ("湖蓝", C(0x81, 0xD4, 0xFA)),
+        ("薰衣草", C(0xB3, 0x9D, 0xDB)), ("薄荷", C(0xA7, 0xFF, 0xEB)),
+        ("杏", C(0xFF, 0xE0, 0xB2)), ("草绿", C(0xC5, 0xE1, 0xA5)),
+    };
+
+    private (string Name, Color4 Color)[] PickerCommon =>
+        _pickerHighlighter ? HighlighterPickerCommon : PenPickerCommon;
+    private int PickerCommonCount => PickerCommon.Length;
+    private Color4 PickerCommonColor(int i) => PickerCommon[i].Color;
+
+    private int PenPickerBandPos()
     {
         var idx = SwatchIdx;
-        for (int i = 0; i < idx.Length; i++) if (idx[i] == CustomSwatchIdx) return i;
+        for (int i = 0; i < idx.Length; i++) if (idx[i] == _penPickerSlot) return i;
         return -1;
     }
 
-    private void OpenPenColorPicker()
+    private void OpenPenColorPicker(int slot) => OpenColorPicker(slot, highlighter: false);
+    private void OpenHighlighterColorPicker(int slot) => OpenColorPicker(slot, highlighter: true);
+
+    private void OpenColorPicker(int slot, bool highlighter)
     {
+        if (_hexEditing) CancelHexEdit();
+        _pickerReturnAfterPick = false;
+        _pickerReturnArmed = false;
         var st = _host.State;
-        (_penPickH, _penPickS, _penPickV) = Hsv.FromRgb(st.CustomPenColor);
+        Color4 c;
+        if (highlighter)
+        {
+            var colors = st.HighlighterSwatchColors;
+            c = colors != null && slot >= 0 && slot < colors.Length
+                ? colors[slot] : Tokens.HighlighterPalette[0].Color;
+        }
+        else
+        {
+            var colors = st.PenSwatchColors;
+            c = colors != null && slot >= 0 && slot < colors.Length
+                ? colors[slot] : Tokens.Palette[0].Color;
+        }
+        _pickerHighlighter = highlighter;
+        _penPickerSlot = slot;
+        (_penPickH, _penPickS, _penPickV) = Hsv.FromRgb(c);
         _penPickDragging = false;
+        _penPickOpacityDragging = false;
+        _hexEditing = false;
+        _hexBuffer = "";
+        _hexSelectAll = false;
+        _penPickerDismissUp = false;
         _penPickerOpen = true;
+        // 打开 = 新的一次交互：上一次按下的残留一律清掉，免得抬起时被当成"点某格"。
+        _press = -1;
+        _pressId = 0;
+        _dragging = false;
+        _sliderDragging = false;
+        CancelTipHold();
+        HideTip();
+        // 锁住贴边隐藏（见 UpdatePeek）：**原地冻结**在这一刻的露头进度，
+        // 工具条和色板都不再动。不钉到 1 是怕老师正好在半收合时点开，
+        // 面板"啪"地弹回全展开——那也是看得见的跳。
+        _peek.Jump(_peek.Value);
+        _peekPendingCollapse = false;
+        _leftAtMs = _host.NowMs;
+        _frameShiftValid = false;
         Invalidate();
     }
 
-    private void ClosePenColorPicker()
+    private void ClosePenColorPicker(bool consumeUp = false)
     {
         if (!_penPickerOpen) return;
+        if (_hexEditing) CancelHexEdit();
+        _penPickOpacityDragging = false;
         _penPickerOpen = false;
         _penPickDragging = false;
+        _penPickerDismissUp = consumeUp;   // 关掉它的这一下，抬起也归它
+        _press = -1;
+        _dragging = false;
+        _leftAtMs = _host.NowMs;
+        _frameShiftValid = false;
         Invalidate();
     }
 
     private RectF PenPickerRect()
     {
         var band = BandRect();
-        int customPos = CustomSwatchPos();
-        var anchor = customPos >= 0 ? SwatchRect(customPos) : band;
+        int pos = PenPickerBandPos();
+        var anchor = pos >= 0 ? SwatchRect(pos) : band;
+        // **局部坐标**（RenderShifted 会整体平移 Shift）。夹取也要按"局部坐标系里的
+        // 屏幕"来夹：色板打开时贴边位移被冻结，Shift 可能不是 0；直接拿 _screen
+        // 夹局部坐标会错一块（画出来跑到屏幕外/脏区对不上）。
+        var shift = Shift();
+        float minX = _screen.MinX - shift.X, maxX = _screen.MaxX - shift.X;
+        float minY = _screen.MinY - shift.Y, maxY = _screen.MaxY - shift.Y;
         float x = (anchor.MinX + anchor.MaxX - PenPickCardW) * 0.5f;
         float y = BandAbove()
-            ? band.MinY - PenPickGap - PenPickCardH
+            ? band.MinY - PenPickGap - PickerCardH
             : band.MaxY + PenPickGap;
-        x = Math.Clamp(x, _screen.MinX + 8f, MathF.Max(_screen.MinX + 8f, _screen.MaxX - 8f - PenPickCardW));
-        y = Math.Clamp(y, _screen.MinY + 8f, MathF.Max(_screen.MinY + 8f, _screen.MaxY - 8f - PenPickCardH));
-        return new RectF { MinX = x, MinY = y, MaxX = x + PenPickCardW, MaxY = y + PenPickCardH };
+        x = Math.Clamp(x, minX + 8f, MathF.Max(minX + 8f, maxX - 8f - PenPickCardW));
+        y = Math.Clamp(y, minY + 8f, MathF.Max(minY + 8f, maxY - 8f - PickerCardH));
+        return new RectF { MinX = x, MinY = y, MaxX = x + PenPickCardW, MaxY = y + PickerCardH };
     }
 
     private RectF PenPickerSvRect()
@@ -2400,15 +2603,61 @@ public sealed partial class FullUi : IOverlayUi
     {
         var p = PenPickerRect();
         float y = PenPickerPreviewRect().MinY;
-        return new RectF { MinX = p.MaxX - PenPickPad - 44f, MinY = y, MaxX = p.MaxX - PenPickPad, MaxY = y + 26f };
+        float right = p.MinX + PenPickPad + PenPickLeftW;
+        return new RectF { MinX = right - 44f, MinY = y, MaxX = right, MaxY = y + 26f };
+    }
+
+    private RectF PenPickerCommonRect(int index)
+    {
+        var p = PenPickerRect();
+        int row = index / PenPickCols, col = index % PenPickCols;
+        float x = p.MinX + PenPickRightX + col * (PenPickCell + PenPickCellGap);
+        float y = p.MinY + PenPickGridY + row * (PenPickCell + PenPickCellGap);
+        return new RectF { MinX = x, MinY = y, MaxX = x + PenPickCell, MaxY = y + PenPickCell };
+    }
+
+    private int PenPickerCommonHit(float x, float y)
+    {
+        for (int i = 0; i < PickerCommonCount; i++)
+            if (PenPickerCommonRect(i).Contains(x, y)) return i;
+        return -1;
     }
 
     private RectF PenPickerRecentRect(int i)
     {
         var p = PenPickerRect();
-        float y = p.MaxY - PenPickPad - 18f;
-        float x = p.MinX + PenPickPad + i * 26f;
-        return new RectF { MinX = x, MinY = y, MaxX = x + 18f, MaxY = y + 18f };
+        float x = p.MinX + PenPickRightX + i * (PenPickCell + PenPickCellGap);
+        float y = p.MinY + PickerRecentY;
+        return new RectF { MinX = x, MinY = y, MaxX = x + PenPickCell, MaxY = y + PenPickCell };
+    }
+
+    /// <summary>色值文本的可点/可编辑区域（预览色块和吸管之间）。</summary>
+    private RectF PenPickerHexRect()
+    {
+        var prev = PenPickerPreviewRect();
+        var eye = PenPickerEyeRect();
+        return new RectF
+        {
+            MinX = prev.MaxX + 4f, MinY = prev.MinY + 2f,
+            MaxX = eye.MinX - 4f, MaxY = prev.MaxY - 2f,
+        };
+    }
+
+    /// <summary>荧光笔浓度滑条（左栏，预览/吸管下面）。</summary>
+    private RectF PenPickerOpacityTrackRect()
+    {
+        var p = PenPickerRect();
+        float x = p.MinX + PenPickPad;
+        float y = p.MinY + PenPickOpacityTrackY;
+        return new RectF { MinX = x, MinY = y, MaxX = x + PenPickLeftW, MaxY = y + 16f };
+    }
+
+    private int PenPickerOpacityLevelAt(float x)
+    {
+        var r = PenPickerOpacityTrackRect();
+        float left = r.MinX + 6f, right = r.MaxX - 6f;
+        float t = Math.Clamp((x - left) / MathF.Max(1f, right - left), 0f, 1f);
+        return (int)MathF.Round(t * 4f);
     }
 
     private void SetPenPickFromPoint(float x, float y, bool hue)
@@ -2431,21 +2680,70 @@ public sealed partial class FullUi : IOverlayUi
     private bool PenPickerPointerDown(float x, float y)
     {
         if (!_penPickerOpen) return false;
-        if (PenPickerEyeRect().Contains(x, y))
+        int slot = _penPickerSlot;
+        bool inHex = PenPickerHexRect().Contains(x, y);
+        if (_hexEditing && !inHex) CommitHexEdit();
+        if (inHex)
         {
-            ClosePenColorPicker();
-            _host.Commands.BeginScreenColorPick();
+            if (_hexEditing) CommitHexEdit();
+            else BeginHexEdit();
             return true;
         }
 
-        var recent = _host.State.RecentPenColors;
-        int n = Math.Min(recent?.Length ?? 0, 6);
+        if (PenPickerEyeRect().Contains(x, y))
+        {
+            // 从取色板里点吸管：取完（或 Esc 取消）把取色板放回来，老师可以接着调浓淡/换色。
+            _pickerReturnAfterPick = true;
+            _pickerReturnArmed = true;
+            _pickerReturnSlot = slot;
+            _pickerReturnHighlighter = _pickerHighlighter;
+            ClosePenColorPicker();
+            _host.Commands.BeginScreenColorPickAt(slot);
+            return true;
+        }
+
+        var recent = _pickerHighlighter
+            ? _host.State.RecentHighlighterColors
+            : _host.State.RecentPenColors;
+        int n = Math.Min(recent?.Length ?? 0, 8);
         for (int i = 0; i < n; i++)
         {
             if (!PenPickerRecentRect(i).Contains(x, y)) continue;
-            _host.Commands.SetCustomPenColor(recent[i]);
-            ClosePenColorPicker();
+            if (_pickerHighlighter)
+                _host.Commands.SetHighlighterSwatchColor(slot, recent[i], rememberRecent: true, normalize: false);
+            else
+                _host.Commands.SetPenSwatchColor(slot, recent[i], rememberRecent: true);
+            ClosePenColorPicker(consumeUp: true);
             return true;
+        }
+
+        int common = PenPickerCommonHit(x, y);
+        if (common >= 0)
+        {
+            // 固定常用色：只改色位，不写“最近使用”（它本来就在常用色里）。
+            if (_pickerHighlighter)
+                _host.Commands.SetHighlighterSwatchColor(
+                    slot, PickerCommonColor(common), rememberRecent: false, normalize: false);
+            else
+                _host.Commands.SetPenSwatchColor(slot, PickerCommonColor(common), rememberRecent: false);
+            ClosePenColorPicker(consumeUp: true);
+            return true;
+        }
+
+        if (_pickerHighlighter)
+        {
+            var track = PenPickerOpacityTrackRect();
+            var hit = new RectF
+            {
+                MinX = track.MinX - 6f, MinY = track.MinY - 8f,
+                MaxX = track.MaxX + 6f, MaxY = track.MaxY + 8f,
+            };
+            if (hit.Contains(x, y))
+            {
+                _penPickOpacityDragging = true;
+                _host.Commands.SetHighlighterOpacity(slot, PenPickerOpacityLevelAt(x));
+                return true;
+            }
         }
 
         if (PenPickerSvRect().Contains(x, y))
@@ -2464,23 +2762,188 @@ public sealed partial class FullUi : IOverlayUi
         }
         if (PenPickerRect().Contains(x, y)) return true;   // 卡片空白：吃掉，不关
 
-        ClosePenColorPicker();
+        // ---- 卡片外：先看是不是色片，再关 ----
+        //
+        // 点当前色片 = 只关；点别的色片 = 选中那个色位并关。两种都吃掉这一次按下，
+        // `ClosePenColorPicker` 会把抬起也记成"已消费"。
+        int sw = HitSwatch(x, y);
+        if (sw >= 0)
+        {
+            int hitSlot = SwatchIdx[sw];
+            if (hitSlot != slot)
+            {
+                if (_pickerHighlighter) _host.Commands.SelectHighlighterSwatch(hitSlot);
+                else _host.Commands.SelectPenSwatch(hitSlot);
+            }
+        }
+        ClosePenColorPicker(consumeUp: true);
         return true;
     }
 
     private bool PenPickerPointerMove(float x, float y)
     {
-        if (!_penPickerOpen || !_penPickDragging) return false;
+        if (!_penPickerOpen) return false;
+        if (_penPickOpacityDragging)
+        {
+            _host.Commands.SetHighlighterOpacity(_penPickerSlot, PenPickerOpacityLevelAt(x));
+            return true;
+        }
+        if (!_penPickDragging) return false;
         SetPenPickFromPoint(x, y, _penPickOnHue);
         return true;
     }
 
     private bool PenPickerPointerUp()
     {
-        if (!_penPickerOpen || !_penPickDragging) return false;
+        if (!_penPickerOpen) return false;
+        if (_penPickOpacityDragging)
+        {
+            _penPickOpacityDragging = false;
+            return true;
+        }
+        if (!_penPickDragging) return false;
         _penPickDragging = false;
-        _host.Commands.SetCustomPenColor(Hsv.ToRgb(_penPickH, _penPickS, _penPickV));
+        var c = Hsv.ToRgb(_penPickH, _penPickS, _penPickV);
+        if (_pickerHighlighter)
+            _host.Commands.SetHighlighterSwatchColor(_penPickerSlot, c, rememberRecent: true, normalize: true);
+        else
+            _host.Commands.SetPenSwatchColor(_penPickerSlot, c, rememberRecent: true);
         return true;
+    }
+
+    private Color4 PickerShownColor()
+    {
+        var picked = Hsv.ToRgb(_penPickH, _penPickS, _penPickV);
+        return _pickerHighlighter ? InkPalette.HighlighterBase(picked) : picked;
+    }
+
+    /// <summary>进入色值编辑：当前值全选，第一次输入直接替换。</summary>
+    private void BeginHexEdit()
+    {
+        _hexEditing = true;
+        _hexBuffer = Hex(PickerShownColor()).TrimStart('#');
+        _hexSelectAll = true;
+        _hexKeyboardWasOn = _host.State.KeyboardMode;
+        if (!_hexKeyboardWasOn) _host.Commands.SetKeyboardMode(true);
+        Invalidate();
+    }
+
+    private void CommitHexEdit() => FinishHexEdit(apply: true);
+    private void CancelHexEdit() => FinishHexEdit(apply: false);
+
+    private void FinishHexEdit(bool apply)
+    {
+        if (!_hexEditing) return;
+        string buffer = _hexBuffer;
+        _hexEditing = false;
+        _hexBuffer = "";
+        _hexSelectAll = false;
+        bool restoreKeyboard = !_hexKeyboardWasOn;
+        _hexKeyboardWasOn = false;
+        if (restoreKeyboard) _host.Commands.SetKeyboardMode(false);
+
+        if (apply)
+        {
+            var c = ParseHex(buffer);
+            if (c.HasValue)
+            {
+                var baseColor = _pickerHighlighter ? InkPalette.HighlighterBase(c.Value) : c.Value;
+                if (_pickerHighlighter)
+                    _host.Commands.SetHighlighterSwatchColor(
+                        _penPickerSlot, baseColor, rememberRecent: true, normalize: false);
+                else
+                    _host.Commands.SetPenSwatchColor(_penPickerSlot, baseColor, rememberRecent: true);
+                (_penPickH, _penPickS, _penPickV) = Hsv.FromRgb(baseColor);
+            }
+        }
+        Invalidate();
+    }
+
+    private static Color4? ParseHex(string text)
+    {
+        string s = (text ?? "").Trim().TrimStart('#').ToUpperInvariant();
+        if (s.Length == 3)
+            s = new string(new[] { s[0], s[0], s[1], s[1], s[2], s[2] });
+        if (s.Length != 6
+            || !int.TryParse(s, System.Globalization.NumberStyles.HexNumber,
+                             System.Globalization.CultureInfo.InvariantCulture, out int v))
+            return null;
+        return new Color4(((v >> 16) & 0xFF) / 255f, ((v >> 8) & 0xFF) / 255f, (v & 0xFF) / 255f, 1f);
+    }
+
+    /// <summary>取色板色值输入框：只吃十六进制需要的键；编辑期间按键不落到画布/热键。</summary>
+    public bool HandlePickerKey(int vk, bool ctrl)
+    {
+        if (!_penPickerOpen) return false;
+
+        // Ctrl+V：色值可以直接粘进来（剪贴板里带不带 # 都行）。
+        if (ctrl && vk == 0x56 /*V*/)
+        {
+            string text = _host.GetClipboardText();
+            string hex = FilterHex(text);
+            if (hex.Length >= 3)
+            {
+                if (!_hexEditing) BeginHexEdit();
+                _hexBuffer = hex.Length > 6 ? hex[..6] : hex;
+                _hexSelectAll = false;
+                Invalidate();
+                return true;
+            }
+            return true;
+        }
+
+        if (!_hexEditing)
+        {
+            if (vk == 0x1B /*Esc*/) { ClosePenColorPicker(); return true; }
+            return false;
+        }
+
+        if (vk == 0x1B /*Esc*/) { CancelHexEdit(); return true; }
+        if (vk == 0x0D || vk == 0x0A /*Enter*/) { CommitHexEdit(); return true; }
+        if (vk == 0x08 /*Backspace*/)
+        {
+            if (_hexSelectAll) { _hexBuffer = ""; _hexSelectAll = false; }
+            else if (_hexBuffer.Length > 0) _hexBuffer = _hexBuffer[..^1];
+            Invalidate();
+            return true;
+        }
+
+        int digit = vk switch
+        {
+            >= 0x30 and <= 0x39 => vk - 0x30,          // 0-9
+            >= 0x41 and <= 0x46 => vk - 0x41 + 10,     // A-F
+            >= 0x60 and <= 0x69 => vk - 0x60,          // 小键盘 0-9
+            _ => -1,
+        };
+        if (digit >= 0)
+        {
+            if (_hexSelectAll) { _hexBuffer = ""; _hexSelectAll = false; }
+            if (_hexBuffer.Length < 6) _hexBuffer += digit.ToString("X");
+            Invalidate();
+            return true;
+        }
+        return true;   // 编辑期间吞掉其它键，避免 Ctrl+P 之类把工具切走
+    }
+
+    private static string FilterHex(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        Span<char> buf = stackalloc char[Math.Min(6, text.Length)];
+        int n = 0;
+        foreach (char ch in text)
+        {
+            int d = ch switch
+            {
+                >= '0' and <= '9' => ch - '0',
+                >= 'a' and <= 'f' => ch - 'a' + 10,
+                >= 'A' and <= 'F' => ch - 'A' + 10,
+                _ => -1,
+            };
+            if (d < 0) continue;
+            if (n >= 6) break;
+            buf[n++] = "0123456789ABCDEF"[d];
+        }
+        return new string(buf[..n]);
     }
 
     private static string Hex(Color4 c)
@@ -2563,15 +3026,29 @@ public sealed partial class FullUi : IOverlayUi
         ctx.DrawLine(new Vector2(hue.MinX + 1f, hy), new Vector2(hue.MaxX - 1f, hy),
                      Brush(ctx, new Color4(1f, 1f, 1f, 1f)), 2f);
 
-        // 当前色预览 + 十六进制。
+        // 当前色预览 + 十六进制。荧光笔先做一次“高亮化”，预览里看到的就是会画出来的基色。
         var picked = Hsv.ToRgb(_penPickH, _penPickS, _penPickV);
+        var shown = _pickerHighlighter ? InkPalette.HighlighterBase(picked) : picked;
         var prev = PenPickerPreviewRect();
         var prevR = new RoundedRectangle(new Vortice.RawRectF(prev.MinX, prev.MinY, prev.MaxX, prev.MaxY), 6f, 6f);
-        ctx.FillRoundedRectangle(prevR, Brush(ctx, picked));
+        ctx.FillRoundedRectangle(prevR, Brush(ctx, shown));
         ctx.DrawRoundedRectangle(prevR, Brush(ctx, BorderCol), 1f);
-        _widgets.Text(ctx, Hex(picked),
-                      new RectF { MinX = prev.MaxX + 6f, MinY = prev.MinY, MaxX = PenPickerEyeRect().MinX - 6f, MaxY = prev.MaxY },
-                      11f, Brush(ctx, InkCol), center: false);
+        var hexRect = PenPickerHexRect();
+        var hb = new RoundedRectangle(
+            new Vortice.RawRectF(hexRect.MinX, hexRect.MinY, hexRect.MaxX, hexRect.MaxY), 5f, 5f);
+        if (_hexEditing)
+        {
+            ctx.FillRoundedRectangle(hb, Brush(ctx, new Color4(
+                Tokens.Accent.R, Tokens.Accent.G, Tokens.Accent.B, _hexSelectAll ? 0.18f : 0.10f)));
+            ctx.DrawRoundedRectangle(hb, Brush(ctx, Tokens.Accent), 1.2f);
+        }
+        else
+        {
+            // 平时也带一圈细边：让老师一眼看出这是可点的输入框，不是静态读数。
+            ctx.DrawRoundedRectangle(hb, Brush(ctx, BorderCol), 1f);
+        }
+        _widgets.Text(ctx, _hexEditing ? "#" + _hexBuffer : Hex(shown),
+                      hexRect, 11f, Brush(ctx, InkCol), center: true);
 
         // 吸管按钮。
         var eye = PenPickerEyeRect();
@@ -2580,16 +3057,43 @@ public sealed partial class FullUi : IOverlayUi
         ctx.DrawRoundedRectangle(eyeR, Brush(ctx, BorderCol), 1f);
         _widgets.Text(ctx, "吸管", eye, 12f, Brush(ctx, InkCol));
 
-        // 最近颜色。
-        var recent = st.RecentPenColors;
-        int n = Math.Min(recent?.Length ?? 0, 6);
+        // ---- 右栏：常用色 + 最近（荧光笔再多一段 5 档浓度）-------------------
+        float rx = p.MinX + PenPickRightX;
+        float rw = PenPickRightW;
+        _widgets.Text(ctx, "常用",
+                      new RectF { MinX = rx, MinY = p.MinY + PenPickPad, MaxX = rx + 60f, MaxY = p.MinY + PenPickPad + 15f },
+                      11f, Brush(ctx, InkCol), center: false);
+
+        for (int i = 0; i < PickerCommonCount; i++)
+        {
+            var r = PenPickerCommonRect(i);
+            var color = PickerCommonColor(i);
+            var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 4f, 4f);
+            ctx.FillRoundedRectangle(rr, Brush(ctx, color));
+            ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+            if (SameColor(color, shown))
+            {
+                var ring = new Vortice.RawRectF(r.MinX - 2f, r.MinY - 2f, r.MaxX + 2f, r.MaxY + 2f);
+                ctx.DrawRoundedRectangle(new RoundedRectangle(ring, 6f, 6f), Brush(ctx, Tokens.Accent), 1.5f);
+            }
+        }
+
+        float recentHeaderY = p.MinY + PickerRecentHeaderY;
+        float recentY = p.MinY + PickerRecentY;
+        float divY = recentHeaderY - 6f;
+        ctx.DrawLine(new Vector2(rx, divY), new Vector2(rx + rw, divY), Brush(ctx, BorderCol), 1f);
+
+        _widgets.Text(ctx, "最近",
+                      new RectF { MinX = rx, MinY = recentHeaderY, MaxX = rx + 60f, MaxY = recentHeaderY + 15f },
+                      11f, Brush(ctx, InkCol), center: false);
+
+        var recent = _pickerHighlighter ? st.RecentHighlighterColors : st.RecentPenColors;
+        int n = Math.Min(recent?.Length ?? 0, 8);
         if (n == 0)
         {
-            _widgets.Text(ctx, "最近颜色：暂无", new RectF
-            {
-                MinX = p.MinX + PenPickPad, MinY = p.MaxY - PenPickPad - 22f,
-                MaxX = p.MaxX - PenPickPad, MaxY = p.MaxY - PenPickPad,
-            }, 11f, Brush(ctx, MutedCol), center: false);
+            _widgets.Text(ctx, "暂无",
+                          new RectF { MinX = rx, MinY = recentY, MaxX = rx + 60f, MaxY = recentY + PenPickCell },
+                          9f, Brush(ctx, MutedCol), center: false);
         }
         for (int i = 0; i < n; i++)
         {
@@ -2597,6 +3101,63 @@ public sealed partial class FullUi : IOverlayUi
             var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 4f, 4f);
             ctx.FillRoundedRectangle(rr, Brush(ctx, recent[i]));
             ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+            if (SameColor(recent[i], shown))
+            {
+                var ring = new Vortice.RawRectF(r.MinX - 2f, r.MinY - 2f, r.MaxX + 2f, r.MaxY + 2f);
+                ctx.DrawRoundedRectangle(new RoundedRectangle(ring, 6f, 6f), Brush(ctx, Tokens.Accent), 1.5f);
+            }
+        }
+
+        if (_pickerHighlighter)
+        {
+            int selectedSlot = _penPickerSlot;
+            int selectedLevel = st.HighlighterSwatchOpacity != null
+                && selectedSlot >= 0 && selectedSlot < st.HighlighterSwatchOpacity.Length
+                ? st.HighlighterSwatchOpacity[selectedSlot] : 2;
+
+            // 左栏底部：透明度滑条（5 个吸附档）。**不是 5 个色块**，一眼就是滑条。
+            float opHeaderY = p.MinY + PenPickOpacityHeaderY;
+            _widgets.Text(ctx, "透明度",
+                          new RectF
+                          {
+                              MinX = p.MinX + PenPickPad, MinY = opHeaderY,
+                              MaxX = p.MinX + PenPickPad + 80f, MaxY = opHeaderY + 12f,
+                          }, 9f, Brush(ctx, MutedCol), center: false);
+
+            var track = PenPickerOpacityTrackRect();
+            float left = track.MinX + 6f, right = track.MaxX - 6f;
+            float cy = (track.MinY + track.MaxY) * 0.5f;
+            ctx.DrawLine(new Vector2(left, cy), new Vector2(right, cy), Brush(ctx, BorderCol), 4f);
+
+            float kx = left + (right - left) * (selectedLevel / 4f);
+            ctx.DrawLine(new Vector2(left, cy), new Vector2(kx, cy), Brush(ctx, Tokens.Accent), 3f);
+
+            for (int lv = 0; lv < 5; lv++)
+            {
+                float tx = left + (right - left) * (lv / 4f);
+                ctx.FillEllipse(new Ellipse(new Vector2(tx, cy), lv == selectedLevel ? 2.4f : 1.6f,
+                                                                  lv == selectedLevel ? 2.4f : 1.6f),
+                                Brush(ctx, lv == selectedLevel ? Tokens.Accent : MutedCol));
+            }
+
+            float alpha = InkEngine.InkPalette.HighlighterOpacityLevels[selectedLevel];
+            ctx.FillEllipse(new Ellipse(new Vector2(kx, cy), 6.5f, 6.5f),
+                            Brush(ctx, new Color4(1f, 1f, 1f, 1f)));
+            ctx.FillEllipse(new Ellipse(new Vector2(kx, cy), 6.5f, 6.5f),
+                            Brush(ctx, new Color4(shown.R, shown.G, shown.B, alpha)));
+            ctx.DrawEllipse(new Ellipse(new Vector2(kx, cy), 6.5f, 6.5f), Brush(ctx, BorderCol), 1.5f);
+
+            // 右栏底部：文字预览——白底上先写“高亮预览”，再把当前色按这一档 alpha 盖上去。
+            // 比左右两半色条直观：老师看到的是“字被高亮后”的样子。
+            float py = p.MinY + PickerPreviewY;
+            var pv = new Vortice.RawRectF(rx, py, rx + rw, py + 20f);
+            ctx.FillRectangle(pv, Brush(ctx, new Color4(0.99f, 0.99f, 0.98f, 1f)));
+            _widgets.Text(ctx, "高亮预览",
+                          new RectF { MinX = rx + 6f, MinY = py, MaxX = rx + rw - 6f, MaxY = py + 20f },
+                          11f, Brush(ctx, new Color4(0.12f, 0.15f, 0.20f, 1f)), center: true);
+            var translucent = new Color4(shown.R, shown.G, shown.B, alpha);
+            ctx.FillRectangle(pv, Brush(ctx, translucent));
+            ctx.DrawRectangle(pv, Brush(ctx, BorderCol), 1f);
         }
     }
 
@@ -3674,7 +4235,10 @@ public sealed partial class FullUi : IOverlayUi
     /// 收不收由 `_peek` 那个状态机管（见 <see cref="UpdatePeek"/>）；这里只回答
     /// "该不该移动、往哪移"。
     /// </summary>
-    private Vector2 Shift()
+    /// <summary>这一帧的贴边位移（单帧快照；没有快照时现算一次，供 Layout/自检用）。</summary>
+    private Vector2 Shift() => _frameShiftValid ? _frameShift : ComputeShift();
+
+    private Vector2 ComputeShift()
     {
         // 面板开着（或开合动画中）一律不平移：模态面板必须纹丝不动，
         // 而且它此刻占的就是整块屏幕——跟着贴边位移会立刻被夹回，看着会跳。
@@ -3727,6 +4291,20 @@ public sealed partial class FullUi : IOverlayUi
         // 才允许"离开就收"——那时候他已经知道东西在哪儿了。
         if (!_peekArmed) { _peek.To(1f, 0); _peekPendingCollapse = false; return; }
 
+        // **色板打开期间锁住贴边隐藏**（用户 2026-10-28："打开色板的时候如果主条贴边
+        // 隐藏了，也会色板原地残留残影"）。色板是挂在工具带上的模态 popover：
+        // 指针会移到卡片里（那里不在工具带的 hover 判定区），不锁的话 700ms 后整条
+        // 面板带着色板一起下沉——画在新位置、脏区还按旧位置算，就在原地留下半张色板。
+        // 这里**原地冻结**：Shift() 在色板打开期间保持这一刻的值，既不继续收，
+        // 也不弹回全展开——工具条和色板的位置一动不动。
+        if (_penPickerOpen)
+        {
+            _peek.Jump(_peek.Value);
+            _peekPendingCollapse = false;
+            _leftAtMs = _host.NowMs;
+            return;
+        }
+
         // **写字中：什么都不做**（原样返回），不是"强制展开"。
         //
         // 这条规则的本意一直是"写字的时候不许收"——老师写到屏幕边上，工具条不能自己缩回去。
@@ -3770,6 +4348,15 @@ public sealed partial class FullUi : IOverlayUi
         if (_peek.Value > 0.01f)
         {
             var full = UnionRect();
+            // `UnionRect` 是**局部坐标**，指针事件是**屏幕坐标**：贴边下沉时两者差一个
+            // Shift。以前这里没加，半收起状态下判定区整体偏上，指针明明在面板上
+            // 也会被判成"离开"。
+            var sh = Shift();
+            full = new RectF
+            {
+                MinX = full.MinX + sh.X, MinY = full.MinY + sh.Y,
+                MaxX = full.MaxX + sh.X, MaxY = full.MaxY + sh.Y,
+            };
             float pad = Tokens.RailHoverPad;
             if (x >= full.MinX - pad && x <= full.MaxX + pad
                 && y >= full.MinY - pad && y <= full.MaxY + pad) return true;
@@ -3785,6 +4372,7 @@ public sealed partial class FullUi : IOverlayUi
         _pressId = e.PointerId;                // 这一按是谁按的（长按期间挡别的指针）
         _press = -1;
         _dragging = false;
+        _penPickerDismissUp = false;           // 新按下：上一次"关色板"的收尾不再延续
         HideTip();                         // 按下 = 新动作开始，提示先收
         CancelTipHold();                   // 上一次的长按候选也作废（新按下重新计时）
         // **"按下了"不等于"按在面板上"**。引擎会把**每一次**按下都转给界面
@@ -4176,6 +4764,16 @@ public sealed partial class FullUi : IOverlayUi
 
     public bool PointerUp(in UiPointerEvent e)
     {
+        // 色板在这一按里被关掉了：抬起也归它，不再走普通工具条路径。
+        if (_penPickerDismissUp)
+        {
+            _penPickerDismissUp = false;
+            _penPickDragging = false;
+            _press = -1;
+            _dragging = false;
+            Invalidate();
+            return true;
+        }
         if (_penPickerOpen)
         {
             PenPickerPointerUp();
@@ -4486,6 +5084,26 @@ public sealed partial class FullUi : IOverlayUi
         if (state.ReplayActive && _moreOpen) CloseMore();
         if (state.PassThrough && _penPickerOpen) ClosePenColorPicker();
 
+        // 从取色板里点吸管：等 ColorPickActive 真的起来（armed），再等它落下，
+        // 然后把取色板放回同一个色位——比“取完就没了、还要再点一次色片”顺手。
+        if (_pickerReturnAfterPick)
+        {
+            if (state.ColorPickActive)
+                _pickerReturnArmed = true;
+            else if (_pickerReturnArmed)
+            {
+                _pickerReturnAfterPick = false;
+                _pickerReturnArmed = false;
+                bool wantHl = _pickerReturnHighlighter;
+                if ((wantHl && state.Tool == Tool.Highlighter)
+                    || (!wantHl && state.Tool == Tool.Pen))
+                {
+                    if (wantHl) OpenHighlighterColorPicker(_pickerReturnSlot);
+                    else OpenPenColorPicker(_pickerReturnSlot);
+                }
+            }
+        }
+
         // **工具变了就跟着换上带**（键盘热键是老师更常用的那条路）。
         // 判据是"工具真的换了"，不是"当前带子对不对"：点白板之后带子显示的是板色，
         // 那时工具没变、带子也不该被掰走；而一旦换成别的工具，带子必须跟上，
@@ -4495,7 +5113,9 @@ public sealed partial class FullUi : IOverlayUi
             _lastTool = state.Tool;
             int cell = CellForTool(state.Tool);
             if (HasBand(cell)) _bandCell = cell;
-            if (_penPickerOpen && state.Tool != Tool.Pen) ClosePenColorPicker();
+            if (_penPickerOpen
+                && state.Tool != (_pickerHighlighter ? Tool.Highlighter : Tool.Pen))
+                ClosePenColorPicker();
         }
 
         // ---- 收藏弹窗开合：**不切换、不展开色带** ----
@@ -4562,13 +5182,8 @@ public sealed partial class FullUi : IOverlayUi
     public void Render(ID2D1DeviceContext ctx, UiTheme theme)
     {
         if (_host == null) return;
-        // 全屏层（更多 / 说明）开合：收藏弹窗先藏，关掉自动回来。
-        // 色带 / 取色器只是底部临时展开，**不影响收藏弹窗**。
-        _host.Commands.SetUiOverlay(_moreOpen);
-        UpdatePeek();                    // 每帧问一次"该不该收起来"（贴边隐藏）
-        UpdateRail();                    // 色线该不该长成设置条
-        UpdateBandAction();              // "按住清空"够 0.8 秒没有（每帧推进）
-        UpdateTip();                     // 悬停提示"到点没有"（每帧推进）
+        // 状态推进已经挪到 PrepareFrame（引擎在 QueryBounds 之前调用）。
+        // 这里**只画**：再在绘制里改位置/带高，就会出现"画在新位置、脏区按旧值"。
         RenderShifted(ctx);
     }
 
@@ -4982,10 +5597,7 @@ public sealed partial class FullUi : IOverlayUi
                     ctx.DrawRoundedRectangle(new RoundedRectangle(outer, 9f, 9f), Brush(ctx, InkCol), 1.5f);
                 }
 
-                // 自定义槽：右下角一颗小“调色盘”徽标（2×2 四色点）。
-                // 不盖住中间颜色本身，只给“这格不是固定预设”一个一眼能认出的记号。
-                if (SwatchIdx[i] == CustomSwatchIdx && !PerfSkipSwatchDetail)
-                    DrawCustomSwatchBadge(ctx, r);
+                // 2026-10-28：8 个色位是同一种东西，不再给最后一格画“自定义”徽标。
             }
         }
 
@@ -5011,27 +5623,6 @@ public sealed partial class FullUi : IOverlayUi
     /// "焦点在面板上"时才出现（见 RailHoverZone），等于永远处在悬停态。
     /// 只在拖动时才出现的话，老师会以为那是个静态的分隔符。
     /// </summary>
-    /// <summary>自定义色片右下角的小徽标：白底上一颗 2×2 四色点（红/黄/绿/蓝）。</summary>
-    private void DrawCustomSwatchBadge(ID2D1DeviceContext ctx, in RectF r)
-    {
-        float s = 11f;
-        float x = r.MaxX - s - 2f, y = r.MaxY - s - 2f;
-        var bg = new RoundedRectangle(new Vortice.RawRectF(x, y, x + s, y + s), 4f, 4f);
-        ctx.FillRoundedRectangle(bg, Brush(ctx, new Color4(1f, 1f, 1f, 0.92f)));
-        ctx.DrawRoundedRectangle(bg, Brush(ctx, new Color4(0f, 0f, 0f, 0.30f)), 0.8f);
-
-        float d = 3.5f, o = 2.2f;
-        void Dot(float dx, float dy, Color4 c) =>
-            ctx.FillRoundedRectangle(
-                new RoundedRectangle(new Vortice.RawRectF(x + dx, y + dy, x + dx + d, y + dy + d), 1.2f, 1.2f),
-                Brush(ctx, c));
-
-        Dot(o, o, new Color4(0.95f, 0.22f, 0.22f, 1f));
-        Dot(o + d + 0.8f, o, new Color4(0.98f, 0.80f, 0.16f, 1f));
-        Dot(o, o + d + 0.8f, new Color4(0.24f, 0.76f, 0.36f, 1f));
-        Dot(o + d + 0.8f, o + d + 0.8f, new Color4(0.22f, 0.48f, 0.94f, 1f));
-    }
-
     /// <summary>4 格及以下的紧凑粗细按钮：三根不同粗细的横线，点一下换档。</summary>
     private void DrawWidthButton(ID2D1DeviceContext ctx, in UiState st)
     {
@@ -5167,11 +5758,11 @@ public sealed partial class FullUi : IOverlayUi
     private static Color4 Alpha(in Color4 c, float a)
         => new(c.R, c.G, c.B, Math.Clamp(MathF.Round(a * 32f) / 32f, 0f, 1f));
 
-    /// <summary>这一片色片是不是"当前色"（比较尺度见 <see cref="SameColor"/>，和切色共用一把）。</summary>
+    /// <summary>这一片色片是不是"当前色"（笔/荧光笔都按色位编号判）。</summary>
     private bool IsSwatchActive(in UiState st, int i)
     {
-        if (SwatchIdx[i] == CustomSwatchIdx) return st.CustomPenSelected;
-        return !st.CustomPenSelected && SameColor(SwatchColor(i), st.PaletteBase);
+        if (st.Tool == Tool.Highlighter) return st.HighlighterSwatchSelected == SwatchIdx[i];
+        return st.PenSwatchSelected == SwatchIdx[i];
     }
 
     /// <summary>
@@ -6019,10 +6610,21 @@ public sealed partial class FullUi : IOverlayUi
             };
         }
 
-        // 色片（100+）：颜色一眼就懂，不配（收窄；名字表还留着，画的时候要用）。
-        // 例外：自定义槽不是固定色，且“再点一下”是隐藏手势，需要提示。
-        if (id >= 100 && id < 100 + SwatchCount && SwatchIdx[id - 100] == CustomSwatchIdx)
-            return ("自定义颜色", "", "单击使用保存的颜色；已选中时再点打开取色板");
+        // 色片（100+）：默认色片本来就一眼看懂，但“再点当前色片换色”是隐藏手势，
+        // 所以每一格都给一条短提示（画笔和荧光笔现在同一套交互）。
+        if (id >= 100 && id < 100 + SwatchCount)
+        {
+            int slot = SwatchIdx[id - 100];
+            bool highlighter = UsingHighlighterSwatches;
+            bool active = highlighter
+                ? _host?.State.HighlighterSwatchSelected == slot
+                : _host?.State.PenSwatchSelected == slot;
+            var table = highlighter ? Tokens.HighlighterPalette : Tokens.Palette;
+            string name = slot >= 0 && slot < table.Length
+                          && SameColor(SwatchColor(id - 100), table[slot].Color)
+                ? table[slot].Name : "自定义色";
+            return (name, "", active ? "再点一下换色" : "单击使用；已选中时再点换色");
+        }
 
         if (id >= 200 && id < 200 + BandSegmentCount) return SegmentTip(id - 200);
 
@@ -6435,7 +7037,22 @@ public sealed partial class FullUi : IOverlayUi
     internal RectF PenPickerRectForTest => PenPickerRect();
     internal RectF PenPickerSvRectForTest => PenPickerSvRect();
     internal RectF PenPickerEyeRectForTest => PenPickerEyeRect();
-    internal void OpenPenPickerForTest() => OpenPenColorPicker();
+    internal RectF PenPickerCommonRectForTest(int i) => PenPickerCommonRect(i);
+    internal RectF PenPickerRecentRectForTest(int i) => PenPickerRecentRect(i);
+    internal RectF PenPickerOpacityTrackRectForTest => PenPickerOpacityTrackRect();
+    internal RectF PenPickerOpacityStopRectForTest(int level)
+    {
+        var tr = PenPickerOpacityTrackRect();
+        float left = tr.MinX + 6f, right = tr.MaxX - 6f;
+        float x = left + (right - left) * (Math.Clamp(level, 0, 4) / 4f);
+        float cy = (tr.MinY + tr.MaxY) * 0.5f;
+        return new RectF { MinX = x - 9f, MinY = cy - 9f, MaxX = x + 9f, MaxY = cy + 9f };
+    }
+    internal int PenPickerCommonCountForTest => PickerCommonCount;
+    internal bool PenPickerHighlighterForTest => _pickerHighlighter;
+    internal void OpenPenPickerForTest() =>
+        OpenPenColorPicker(_host.State.PenSwatchSelected >= 0 ? _host.State.PenSwatchSelected : PenLastSlot);
+    internal void OpenHighlighterPickerForTest(int slot) => OpenHighlighterColorPicker(slot);
 
     /// <summary>自检用："允许自动收起"的开关（启动时应该是 false）。</summary>
     internal bool PeekArmedForTest => _peekArmed;
@@ -6542,7 +7159,7 @@ public sealed partial class FullUi : IOverlayUi
     /// 自检/出图用：把"球 → 带子"的展开进度一把按到某个值（0 = 球，1 = 完全展开）。
     /// 中间态平时只看得到 200 毫秒，想核对这一段长什么样就只能这么钉住它。
     /// </summary>
-    internal void SetExpandForTest(float v) => _expand.Jump(v);
+    internal void SetExpandForTest(float v) { _expand.Jump(v); _frameShiftValid = false; }
 
     /// <summary>
     /// 自检/出图用：把贴边隐藏一把按到某个进度（顺带允许"离开就收"）。
@@ -6552,6 +7169,7 @@ public sealed partial class FullUi : IOverlayUi
     {
         _peekArmed = true;
         _peek.Jump(v);
+        _frameShiftValid = false;
     }
 
     /// <summary>自检用：色线张开没有（false = 平时那条 6 像素的线）。</summary>

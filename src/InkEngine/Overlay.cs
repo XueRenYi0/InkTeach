@@ -459,6 +459,13 @@ internal sealed partial class OverlayWindow : IDisposable
     /// <summary>上一帧"截图取景"开着吗——收场那一帧要整窗重画，把遮罩擦干净（8.3.0）。</summary>
     private bool _captureWasActive;
 
+    /// <summary>
+    /// 上一帧"屏幕吸管"开着吗——吸管也是整屏模态：放大镜每帧跟着指针跑，
+    /// 退出那一帧还要把镜片擦干净。只算 CaptureActive 不够（用户 2026-10-28 报的
+    /// "十字/镜片有残留"就是这里漏了 ColorPickActive）。
+    /// </summary>
+    private bool _colorPickWasActive;
+
     /// <summary>PPT 控件条上一帧的矩形（退出放映 / 拖动那一帧要靠它把旧位置擦干净，
     /// 同 `_libraryRectPrev` 的做法）。</summary>
     private RectF _pptBarRectPrev = RectF.Empty;
@@ -2638,6 +2645,34 @@ internal sealed partial class OverlayWindow : IDisposable
         Array.Resize(ref _inkSegs, Math.Max(need, _inkSegs.Length * 2));
     }
 
+    /// <summary>
+    /// 抓屏专用的一帧：整窗清成全透明，不画内容/界面/光标。
+    /// 窗口不藏，DWM 仍然合成桌面，所以 BitBlt 能直接看到下层；比 HiddenOverlay 少一次闪屏。
+    /// </summary>
+    private void RenderTransparentForCapture()
+    {
+        _frameDirty.Clear();
+        _frameDirty.Add(new RectF
+        {
+            MinX = OriginX, MinY = OriginY,
+            MaxX = OriginX + Width, MaxY = OriginY + Height,
+        });
+
+        _ctx.Target = _backBuffer;
+        _ctx.BeginDraw();
+        _ctx.Transform = Matrix3x2.Identity;
+        _ctx.PrimitiveBlend = PrimitiveBlend.Copy;
+        _ctx.FillRectangle(new Vortice.RawRectF(0f, 0f, Width, Height),
+                           Brush(new Color4(0f, 0f, 0f, 0f)));
+        _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
+        var hr = _ctx.EndDraw();
+        _ctx.Target = null;
+        if (hr.Failure) LastError = "transparent capture EndDraw: " + hr.Description;
+
+        _uiBoundsPrev = RectF.Empty;
+        _libraryRectPrev = RectF.Empty;
+    }
+
     // ------------------------------------------------------------------
     //  Frame
     // ------------------------------------------------------------------
@@ -2646,6 +2681,14 @@ internal sealed partial class OverlayWindow : IDisposable
     {
         _app = app;
         s_frameNo++;
+
+        // 抓屏专用：整窗清成透明（不画内容/界面/光标），让 BitBlt 直接看到桌面。
+        // 比“把窗口藏起来再显示”少一次闪屏；见 Engine.CaptureTransparentFrame。
+        if (app.CaptureTransparentFrame)
+        {
+            RenderTransparentForCapture();
+            return;
+        }
 
         // 回放：推进"现在演到哪"必须**排在 SyncTiles 之前**。
         //
@@ -3023,6 +3066,13 @@ internal sealed partial class OverlayWindow : IDisposable
         if (app.CaptureActive || _captureWasActive)
             r.Add(new RectF { MinX = OriginX, MinY = OriginY, MaxX = OriginX + Width, MaxY = OriginY + Height });
         _captureWasActive = app.CaptureActive;
+
+        // 屏幕吸管（2026-10-28）：冻结帧铺满整窗，放大镜跟着指针每帧移动，
+        // 退出后的第一帧还要把上一次的镜片/读数擦掉。和截图同理，短时模态，
+        // **整窗进脏区**最稳；按"旧镜 ∪ 新镜"抠细节省不了多少，还会漏。
+        if (app.ColorPickActive || _colorPickWasActive)
+            r.Add(new RectF { MinX = OriginX, MinY = OriginY, MaxX = OriginX + Width, MaxY = OriginY + Height });
+        _colorPickWasActive = app.ColorPickActive;
 
         // 图库面板：开合、悬停高亮、勾选都会变，所以**每帧按当前矩形算进脏区**；
         // 关掉之后旧位置也要擦干净——所以上一帧那份矩形同样并进来
@@ -4184,18 +4234,6 @@ internal sealed partial class OverlayWindow : IDisposable
     }
 
     /// <summary>
-    /// **图库面板**（"我的图形"）：从工具条上沿往上长的一张卡片，里面是收藏的缩略图墙。
-    ///
-    /// 为什么这个面板归引擎画（而不是界面）：格子里的内容是**画笔迹**——把条目的包围盒
-    /// 等比缩进格子、`DrawStroke(s, fit)` 直接画。这条路现成、零新机制，而且**不落缩略图位图**：
-    /// 存的是对象，画的时候就永远和对象一致（参考实现也是"加载时现渲染"，只是它那边得
-    /// 造一张 RenderTargetBitmap，我们连位图都不用建）。
-    /// 代价：每帧重画 N 个格子里的笔画——格子最多 16 个、每个条目几个对象，忽略不计。
-    ///
-    /// 画法与操作条/其它面板同一套：`DrawPanelCard` 卡片 ＋ 主题色，圆角取界面推上来的
-    /// `CornerRadius`（三块东西必须是一家）。
-    /// </summary>
-    /// <summary>
     /// 收藏卡片跟随指针的虚影：只在指针真的在画布上时画，位置和最终落点同源
     /// （<see cref="InkEngine.LibraryPlacementMatrix"/>）。图片按 0.45 透明度画位图，
     /// 其它对象复制一份把颜色 alpha 降下来。
@@ -4237,6 +4275,17 @@ internal sealed partial class OverlayWindow : IDisposable
         }
     }
 
+    /// **图库面板**（"我的图形"）：从工具条上沿往上长的一张卡片，里面是收藏的缩略图墙。
+    ///
+    /// 为什么这个面板归引擎画（而不是界面）：格子里的内容是**画笔迹**——把条目的包围盒
+    /// 等比缩进格子、`DrawStroke(s, fit)` 直接画。这条路现成、零新机制，而且**不落缩略图位图**：
+    /// 存的是对象，画的时候就永远和对象一致（参考实现也是"加载时现渲染"，只是它那边得
+    /// 造一张 RenderTargetBitmap，我们连位图都不用建）。
+    /// 代价：每帧重画 N 个格子里的笔画——格子最多 16 个、每个条目几个对象，忽略不计。
+    ///
+    /// 画法与操作条/其它面板同一套：`DrawPanelCard` 卡片 ＋ 主题色，圆角取界面推上来的
+    /// `CornerRadius`（三块东西必须是一家）。
+    /// </summary>
     private void DrawLibraryPanel(InkEngine app)
     {
         if (!app.LibraryPanelVisibleNow || app.LibraryPlacementMode)
@@ -7014,9 +7063,57 @@ internal sealed partial class OverlayWindow : IDisposable
     }
 
     /// <summary>
-    /// 屏幕吸管：冻结帧铺满屏幕 + 十字准线 + 当前像素/放大镜。
-    /// **不压暗**，因为老师是在看原图取色；顶部只给一行操作提示。
+    /// 屏幕吸管（2026-10-28）：冻结帧铺满屏幕 + **跟着鼠标**的放大预览。
+    ///
+    /// 和微信截图取色一样：鼠标箭头可见，箭头尖就是取样点；预览贴在箭头**右下方**，
+    /// 里面是 11×11 像素放大格 + 色块/HEX。靠近屏幕右边/下边时自动翻到左上，
+    /// 不画全屏十字线，也不把预览钉在屏幕角落。
     /// </summary>
+    internal RectF ColorPickPanelRect(InkEngine app)
+    {
+        float s = Dpi / 96f;
+        var screen = app.ViewportCanvas;
+        float w = 120f * s, h = 136f * s;
+        float px = app.PointerX, py = app.PointerY;
+
+        // 默认：箭头右下方；右边/下边放不下就翻到另一侧。
+        float x = px + 18f * s;
+        float y = py + 18f * s;
+        if (x + w > screen.MaxX - 8f * s) x = px - 18f * s - w;
+        if (y + h > screen.MaxY - 8f * s) y = py - 18f * s - h;
+        x = Math.Clamp(x, screen.MinX + 8f * s,
+                        MathF.Max(screen.MinX + 8f * s, screen.MaxX - 8f * s - w));
+        y = Math.Clamp(y, screen.MinY + 8f * s,
+                        MathF.Max(screen.MinY + 8f * s, screen.MaxY - 8f * s - h));
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    /// <summary>预览里的“色块 + 色值”那一行；点它 = 复制当前色值（Canvas 坐标）。</summary>
+    internal RectF ColorPickCopyRect(InkEngine app)
+    {
+        var p = ColorPickPanelRect(app);
+        float s = Dpi / 96f;
+        return new RectF
+        {
+            MinX = p.MinX + 10f * s, MinY = p.MinY + 106f * s,
+            MaxX = p.MaxX - 10f * s, MaxY = p.MinY + 130f * s,
+        };
+    }
+
+    /// <summary>顶部提示条（Canvas 坐标）；点它不取色，免得点到我们自己的字。</summary>
+    internal RectF ColorPickHintRect(InkEngine app)
+    {
+        float s = Dpi / 96f;
+        var screen = app.ViewportCanvas;
+        float w = 440f * s, h = 34f * s;
+        float x = (screen.MinX + screen.MaxX - w) * 0.5f;
+        return new RectF
+        {
+            MinX = x, MinY = screen.MinY + 30f * s,
+            MaxX = x + w, MaxY = screen.MinY + 30f * s + h,
+        };
+    }
+
     private void DrawColorPickOverlay(InkEngine app, Matrix3x2 canvasToTarget)
     {
         if (!app.ColorPickActive || app.CaptureFrameHidden) return;
@@ -7037,76 +7134,76 @@ internal sealed partial class OverlayWindow : IDisposable
         }
 
         float px = app.PointerX, py = app.PointerY;
-        // 先画深色底再画白线：浅色桌面/网页上白线会完全看不见。
-        _scratch.Color = new Color4(0f, 0f, 0f, 0.50f);
-        _ctx.DrawLine(new Vector2(px, screen.MinY), new Vector2(px, screen.MaxY), _scratch, 3f * s);
-        _ctx.DrawLine(new Vector2(screen.MinX, py), new Vector2(screen.MaxX, py), _scratch, 3f * s);
-        _scratch.Color = new Color4(1f, 1f, 1f, 0.95f);
-        _ctx.DrawLine(new Vector2(px, screen.MinY), new Vector2(px, screen.MaxY), _scratch, 1f * s);
-        _ctx.DrawLine(new Vector2(screen.MinX, py), new Vector2(screen.MaxX, py), _scratch, 1f * s);
-        _ctx.DrawEllipse(new Ellipse(new Vector2(px, py), 8f * s, 8f * s),
-                         Brush(new Color4(0f, 0f, 0f, 0.55f)), 3f * s);
-        _ctx.DrawEllipse(new Ellipse(new Vector2(px, py), 8f * s, 8f * s),
-                         Brush(new Color4(1f, 1f, 1f, 0.95f)), 1f * s);
-
-        // 当前像素预览：色块 + 十六进制读数；放在指针右下方，贴边时翻转。
         var c = app.ColorPickHoverValid ? app.ColorPickHover : new Color4(1f, 1f, 1f, 1f);
-        byte cr = (byte)Math.Clamp((int)MathF.Round(c.R * 255f), 0, 255);
-        byte cg = (byte)Math.Clamp((int)MathF.Round(c.G * 255f), 0, 255);
-        byte cb = (byte)Math.Clamp((int)MathF.Round(c.B * 255f), 0, 255);
-        string hex = $"#{cr:X2}{cg:X2}{cb:X2}";
+        string hex = app.ColorPickHexText();
 
-        float cardW = 132f * s, cardH = 34f * s;
-        float cx0 = px + 18f * s, cy0 = py + 18f * s;
-        if (cx0 + cardW > screen.MaxX - 4f * s) cx0 = px - cardW - 18f * s;
-        if (cy0 + cardH > screen.MaxY - 4f * s) cy0 = py - cardH - 18f * s;
-        cx0 = Math.Clamp(cx0, screen.MinX + 4f * s, screen.MaxX - cardW - 4f * s);
-        cy0 = Math.Clamp(cy0, screen.MinY + 4f * s, screen.MaxY - cardH - 4f * s);
-        var card = new Vortice.RawRectF(cx0, cy0, cx0 + cardW, cy0 + cardH);
-        _scratch.Color = new Color4(0.10f, 0.11f, 0.14f, 0.86f);
-        _ctx.FillRoundedRectangle(new RoundedRectangle(card, 8f * s, 8f * s), _scratch);
-        _scratch.Color = new Color4(1f, 1f, 1f, 0.22f);
-        _ctx.DrawRoundedRectangle(new RoundedRectangle(card, 8f * s, 8f * s), _scratch, 1f * s);
-        var sw = new Vortice.RawRectF(cx0 + 8f * s, cy0 + 8f * s, cx0 + 26f * s, cy0 + 26f * s);
-        _ctx.FillRoundedRectangle(new RoundedRectangle(sw, 4f * s, 4f * s), Brush(c));
-        _ctx.DrawRoundedRectangle(new RoundedRectangle(sw, 4f * s, 4f * s), Brush(new Color4(1f, 1f, 1f, 0.35f)), 1f * s);
-        _ctx.DrawText(hex, CaptureInfoFormat(),
-            new Rect(cx0 + 32f * s, cy0, cardW - 36f * s, cardH),
-            Brush(new Color4(1f, 1f, 1f, 1f)));
+        // ---- 跟着鼠标的预览：放大格在上，色块/HEX 在下 ----
+        var panel = ColorPickPanelRect(app);
+        var panelR = new Vortice.RawRectF(panel.MinX, panel.MinY, panel.MaxX, panel.MaxY);
+        _scratch.Color = new Color4(0.08f, 0.09f, 0.12f, 0.94f);
+        _ctx.FillRoundedRectangle(new RoundedRectangle(panelR, 10f * s, 10f * s), _scratch);
 
-        // 5×5 放大镜：给一个像素级的“落点”参考；仍然从冻结帧取，不重新抓屏。
-        float cell = 6f * s, lens = cell * 5f;
-        float lx0 = cx0, ly0 = cy0 - lens - 8f * s;
-        if (ly0 < screen.MinY + 4f * s) ly0 = cy0 + cardH + 8f * s;
-        if (ly0 + lens > screen.MaxY - 4f * s) ly0 = screen.MinY + 4f * s;
-        var lensBg = new Vortice.RawRectF(lx0 - 4f * s, ly0 - 4f * s, lx0 + lens + 4f * s, ly0 + lens + 4f * s);
-        _scratch.Color = new Color4(0.08f, 0.09f, 0.12f, 0.90f);
+        const int cells = 11;
+        const int half = cells / 2;
+        float cell = 8f * s;
+        float lens = cell * cells;
+        float pad = 10f * s;
+        float lensX = panel.MinX + pad;
+        float lensY = panel.MinY + pad;
+
+        var lensBg = new Vortice.RawRectF(lensX - 3f * s, lensY - 3f * s,
+                                           lensX + lens + 3f * s, lensY + lens + 3f * s);
+        _scratch.Color = new Color4(0.04f, 0.05f, 0.07f, 0.98f);
         _ctx.FillRoundedRectangle(new RoundedRectangle(lensBg, 6f * s, 6f * s), _scratch);
-        for (int yy = 0; yy < 5; yy++)
-            for (int xx = 0; xx < 5; xx++)
+
+        for (int yy = 0; yy < cells; yy++)
+            for (int xx = 0; xx < cells; xx++)
             {
-                var q = app.SampleFrozenColorAt(px + (xx - 2), py + (yy - 2));
+                var q = app.SampleFrozenColorAt(px + (xx - half), py + (yy - half));
                 if (!q.HasValue) continue;
-                var r = new Vortice.RawRectF(lx0 + xx * cell, ly0 + yy * cell,
-                                              lx0 + (xx + 1) * cell, ly0 + (yy + 1) * cell);
-                _ctx.FillRectangle(r, Brush(q.Value));
+                var r = new Vortice.RawRectF(lensX + xx * cell, lensY + yy * cell,
+                                              lensX + (xx + 1) * cell, lensY + (yy + 1) * cell);
+                _scratch.Color = q.Value;
+                _ctx.FillRectangle(r, _scratch);
             }
+
+        // 中心格：取色点
+        float mx = lensX + half * cell, my = lensY + half * cell;
+        var center = new Vortice.RawRectF(mx - 1f * s, my - 1f * s,
+                                           mx + cell + 1f * s, my + cell + 1f * s);
+        _scratch.Color = new Color4(0f, 0f, 0f, 0.80f);
+        _ctx.DrawRectangle(center, _scratch, 2.4f * s);
+        _scratch.Color = new Color4(1f, 1f, 1f, 0.95f);
+        _ctx.DrawRectangle(center, _scratch, 1f * s);
+
         _scratch.Color = new Color4(1f, 1f, 1f, 0.22f);
         _ctx.DrawRoundedRectangle(new RoundedRectangle(lensBg, 6f * s, 6f * s), _scratch, 1f * s);
 
-        // 顶部提示。
-        string hint = "吸管 · 点一下屏幕取色 · Esc / 右键取消";
-        float hw = 320f * s, hh = 34f * s;
-        float hx = (screen.MinX + screen.MaxX - hw) * 0.5f;
-        var pill = new Vortice.RawRectF(hx, screen.MinY + 30f * s, hx + hw, screen.MinY + 30f * s + hh);
+        // 下方：色块 + HEX（点这一行 = 复制）
+        float infoY = panel.MinY + 106f * s;
+        var swatch = new Vortice.RawRectF(panel.MinX + pad, infoY,
+                                            panel.MinX + pad + 18f * s, infoY + 20f * s);
+        _ctx.FillRoundedRectangle(new RoundedRectangle(swatch, 3f * s, 3f * s), Brush(c));
+        _ctx.DrawRoundedRectangle(new RoundedRectangle(swatch, 3f * s, 3f * s),
+                                  Brush(new Color4(1f, 1f, 1f, 0.35f)), 1f * s);
+        _ctx.DrawText(hex, CaptureInfoFormat(),
+            new Rect(panel.MinX + pad + 24f * s, infoY - 2f * s,
+                     panel.MaxX - pad - (panel.MinX + pad + 24f * s), 24f * s),
+            Brush(new Color4(1f, 1f, 1f, 1f)));
+
+        // 顶部提示
+        var pill = ColorPickHintRect(app);
+        var pillR = new Vortice.RawRectF(pill.MinX, pill.MinY, pill.MaxX, pill.MaxY);
         _scratch.Color = new Color4(0.10f, 0.11f, 0.14f, 0.80f);
-        _ctx.FillRoundedRectangle(new RoundedRectangle(pill, hh * 0.5f, hh * 0.5f), _scratch);
+        _ctx.FillRoundedRectangle(new RoundedRectangle(pillR, 17f * s, 17f * s), _scratch);
+        string hint = "吸管 · 点一下取色 · Ctrl+C / 点色值复制 · Esc 取消";
         _ctx.DrawText(hint, CaptureInfoFormat(),
-            new Rect(pill.Left, pill.Top, pill.Right - pill.Left, pill.Bottom - pill.Top),
+            new Rect(pill.MinX, pill.MinY, pill.MaxX - pill.MinX, pill.MaxY - pill.MinY),
             Brush(new Color4(1f, 1f, 1f, 0.95f)));
 
         _ctx.Transform = saved;
     }
+
 
     // ---- 冻结帧位图缓存（每个窗口一份，按 buffer 引用判"换没换"）----
 

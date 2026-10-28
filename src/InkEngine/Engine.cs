@@ -597,6 +597,12 @@ public partial class InkEngine
     /// </summary>
     internal bool CaptureFrameHidden;
 
+    /// <summary>
+    /// 抓屏专用：这一帧把整个覆盖层清成**全透明**（不画内容/界面/光标），
+    /// 让 BitBlt 直接看到桌面。用它替代"把窗口藏起来再显示"可去掉吸管/截图的闪屏。
+    /// </summary>
+    internal bool CaptureTransparentFrame;
+
     // ---- 白板底纹（方格 / 横线）--------------------------------------------
     //
     // 用户 2026-09-17 要的："给白板增加网格和横线功能，可以参[考]inkclass 的实现"。
@@ -676,10 +682,13 @@ public partial class InkEngine
     /// 再抓虚拟桌面到 `CaptureFrozenBgra`。之后只在这张冻结图上取像素，所以不会取到
     /// 我们自己的工具栏、墨迹或取色板；也不需要每次移动都隐藏窗口。
     /// </summary>
-    internal void BeginScreenColorPickFromUi()
+    internal void BeginScreenColorPickFromUi(int targetSlot = -1)
     {
         if (ColorPickActive) return;
         if (CaptureActive) CancelCapture();
+        int targetCount = Tool == Tool.Highlighter
+            ? HighlighterSwatchColors.Length : PenSwatchColors.Length;
+        ColorPickTargetSlot = targetSlot >= 0 && targetSlot < targetCount ? targetSlot : -1;
 
         if (Native.GetCursorPos(out var p))
         {
@@ -699,12 +708,16 @@ public partial class InkEngine
         {
             ColorPickActive = false;
             Console.WriteLine("吸管：抓屏失败，取消");
+            _dirty = true;
+            NotifyUiStateChanged();
             return;
         }
         UpdateColorPickHover(PointerX, PointerY);
         _dirty = true;
         ApplyCursor();
         NotifyUiStateChanged();
+        // 透明帧抓完之后立刻把冻结帧铺上，别让桌面在"抓完 → 下一帧"之间多露一帧。
+        RenderAll();
         Console.WriteLine("吸管：点屏幕取色，Esc 取消");
     }
 
@@ -730,12 +743,44 @@ public partial class InkEngine
         if (c.HasValue) ColorPickHover = c.Value;
     }
 
+    internal string ColorPickHexText()
+    {
+        var c = ColorPickHover;
+        int r = Math.Clamp((int)MathF.Round(c.R * 255f), 0, 255);
+        int g = Math.Clamp((int)MathF.Round(c.G * 255f), 0, 255);
+        int b = Math.Clamp((int)MathF.Round(c.B * 255f), 0, 255);
+        return $"#{r:X2}{g:X2}{b:X2}";
+    }
+
+    internal void CopyColorPickHex()
+    {
+        if (!ColorPickActive || !ColorPickHoverValid) return;
+        if (ClipboardText.Set(ColorPickHexText()))
+        {
+            ColorPickCopiedUntilMs = NowMs + 1000;
+            _dirty = true;
+        }
+    }
+
     private void CommitColorPickAt(float x, float y)
     {
         var c = SampleFrozenColorAt(x, y);
+        bool highlighter = Tool == Tool.Highlighter;
+        int count = highlighter ? HighlighterSwatchColors.Length : PenSwatchColors.Length;
+        int selected = highlighter ? HighlighterSwatchSelected : PenSwatchSelected;
+        int slot = ColorPickTargetSlot >= 0
+            ? ColorPickTargetSlot
+            : selected >= 0 ? selected : count - 1;
+        ColorPickTargetSlot = -1;
         ColorPickActive = false;
         ReleaseCaptureFrozen();
-        if (c.HasValue) SetCustomPenColorFromUi(c.Value);
+        if (c.HasValue)
+        {
+            if (highlighter)
+                SetHighlighterSwatchColorFromUi(slot, c.Value, rememberRecent: true, normalize: true);
+            else
+                SetPenSwatchColorFromUi(slot, c.Value, rememberRecent: true);
+        }
         _dirty = true;
         ApplyCursor();
         RegainKeyboardFocus();
@@ -747,6 +792,7 @@ public partial class InkEngine
     {
         if (!ColorPickActive) return;
         ColorPickActive = false;
+        ColorPickTargetSlot = -1;
         ReleaseCaptureFrozen();
         _dirty = true;
         ApplyCursor();
@@ -2216,19 +2262,54 @@ public partial class InkEngine
     internal Color4 CurrentColor = InkPalette.PenDefault;
     internal Color4 HighlighterCurrent = InkPalette.HighlighterDefault;
 
-    // ---- 工具带自定义色 / 最近颜色（2026-10-23）----------------------------
-    /// <summary>自定义槽的颜色；默认白色，保持原来“白”格的位置和第一眼效果。</summary>
-    internal Color4 CustomPenColor = new(1f, 1f, 1f, 1f);
-    /// <summary>当前笔色是否来自自定义槽。**不能只靠颜色值判断**——自定义色可能刚好等于某个预设色。</summary>
-    internal bool CustomPenSelected;
-    private const int RecentPenColorMax = 6;
+    // ---- 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位）----
+    /// <summary>
+    /// 笔的 8 个色位。默认 = <see cref="InkPalette.PenBand"/> 的 8 色；
+    /// 每个色位都可以被用户换色（不再分“固定色 / 自定义槽”两种身份）。
+    /// </summary>
+    internal Color4[] PenSwatchColors = Array.ConvertAll(InkPalette.PenBand, p => p.Color);
+    /// <summary>当前笔色来自第几个色位；-1 = 颜色不是从色带选的（选中面板等外部改色）。</summary>
+    internal int PenSwatchSelected = -1;
+    /// <summary>屏幕吸管这次要把颜色写回哪个色位；-1 = 按当前选中/最后一格兜底。</summary>
+    internal int ColorPickTargetSlot = -1;
+    /// <summary>兼容旧接口：最后一格就是原来的“自定义槽”。</summary>
+    internal Color4 CustomPenColor
+    {
+        get => PenSwatchColors[^1];
+        set => PenSwatchColors[^1] = value;
+    }
+    /// <summary>兼容旧接口：最后一格是否当前选中。</summary>
+    internal bool CustomPenSelected
+    {
+        get => PenSwatchSelected == PenSwatchColors.Length - 1;
+        set
+        {
+            if (value) PenSwatchSelected = PenSwatchColors.Length - 1;
+            else if (PenSwatchSelected == PenSwatchColors.Length - 1) PenSwatchSelected = -1;
+        }
+    }
+    private const int RecentPenColorMax = 8;
     private readonly List<Color4> _recentPenColors = new();
+
+    // ---- 荧光笔的 5 个色位 / 5 档浓度（2026-10-28）----------------------------
+    /// <summary>5 个色位的基色（不透明）；实际画的时候按对应档位加 alpha。</summary>
+    internal Color4[] HighlighterSwatchColors = Array.ConvertAll(
+        InkPalette.HighlighterBand,
+        p => new Color4(p.Color.R, p.Color.G, p.Color.B, 1f));
+    /// <summary>5 个色位各自的透明度档位下标（0..4）；默认都是第 3 档 0.32。</summary>
+    internal int[] HighlighterSwatchOpacity = { 2, 2, 2, 2, 2 };
+    /// <summary>当前荧光色来自第几个色位；-1 = 外部改色。</summary>
+    internal int HighlighterSwatchSelected = -1;
+    private const int RecentHighlighterColorMax = 8;
+    private readonly List<Color4> _recentHighlighterColors = new();
 
     /// <summary>屏幕吸管模式：冻结帧已经抓好，等用户点一下屏幕。</summary>
     internal bool ColorPickActive;
     /// <summary>吸管当前指向的颜色（画预览 / 提交用）。</summary>
     internal Color4 ColorPickHover = new(1f, 1f, 1f, 1f);
     internal bool ColorPickHoverValid;
+    /// <summary>吸管“已复制”提示的截止时刻。</summary>
+    internal double ColorPickCopiedUntilMs = double.NegativeInfinity;
     internal bool UiCapturing;
 
     /// <summary>自检用：系统问了我们几次命中测试、其中几次回答"这块是我的"。</summary>
@@ -2928,18 +3009,51 @@ public partial class InkEngine
             UpdateText = "";
         }
 
-        // **上次用的颜色**：每个工具各记一个（存的是色带序号，见 SetColorFromUi）。
-        // 读不到 / 对不上就用默认色（笔=红、荧光=黄）——那是 InkPalette 里的默认。
-        if (int.TryParse(GetUiPref("penColor"), out int penIdx)
-            && penIdx >= 0 && penIdx < InkPalette.PenBand.Length)
+        // **笔的 8 个色位**：默认 = PenBand；老配置的 penCustom 迁到最后一格。
+        // 每个色位都能被用户换色，所以不再只存一个“自定义色”。
+        for (int i = 0; i < PenSwatchColors.Length; i++)
+            PenSwatchColors[i] = InkPalette.PenBand[i].Color;
+        PenSwatchSelected = -1;
+        var savedSwatches = GetUiPref("penSwatches");
+        if (!string.IsNullOrEmpty(savedSwatches))
         {
-            CurrentColor = InkPalette.PenBand[penIdx].Color;
-            _penColorIdx = penIdx;                     // 连按时从这里往下走
+            var parts = savedSwatches.Split(';', StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length && i < PenSwatchColors.Length; i++)
+            {
+                var c = ParseColorPref(parts[i], default);
+                if (c.A > 0.5f) PenSwatchColors[i] = c;
+            }
         }
-        // 自定义槽与最近颜色。自定义槽默认白色；没有这个偏好时仍保持原来的白色格效果。
-        CustomPenColor = ParseColorPref(GetUiPref("penCustom"), new Color4(1f, 1f, 1f, 1f));
-        CustomPenSelected = GetUiPref("penCustomSelected") == "1";
-        if (CustomPenSelected) CurrentColor = CustomPenColor;
+        else
+        {
+            // 老版本只有一个自定义槽：把它搬到最后一位。
+            var oldCustom = ParseColorPref(GetUiPref("penCustom"), default);
+            if (oldCustom.A > 0.5f) PenSwatchColors[^1] = oldCustom;
+        }
+
+        if (int.TryParse(GetUiPref("penSwatchSelected"), out int savedSel)
+            && savedSel >= -1 && savedSel < PenSwatchColors.Length)
+            PenSwatchSelected = savedSel;
+        else if (GetUiPref("penCustomSelected") == "1")
+            PenSwatchSelected = PenSwatchColors.Length - 1;
+        else if (int.TryParse(GetUiPref("penColor"), out int oldPenIdx)
+                 && oldPenIdx >= 0 && oldPenIdx < PenSwatchColors.Length)
+            PenSwatchSelected = oldPenIdx;
+
+        if (PenSwatchSelected >= 0)
+            CurrentColor = PenSwatchColors[PenSwatchSelected];
+        else
+        {
+            // 外部改色（选中面板等）没有“第几个色位”，单独存 RGB。
+            var savedColor = ParseColorPref(GetUiPref("penColorValue"), default);
+            if (savedColor.A > 0.5f) CurrentColor = savedColor;
+            else if (int.TryParse(GetUiPref("penColor"), out int penIdx)
+                     && penIdx >= 0 && penIdx < PenSwatchColors.Length)
+                CurrentColor = PenSwatchColors[penIdx];
+        }
+
+        // 旧字段只给“恢复上一版”用；新代码不再读它。
+
         _recentPenColors.Clear();
         foreach (var s in (GetUiPref("penRecent") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
         {
@@ -2947,12 +3061,69 @@ public partial class InkEngine
             if (c.A > 0.5f && _recentPenColors.Count < RecentPenColorMax) _recentPenColors.Add(c);
         }
 
-        if (int.TryParse(GetUiPref("hlColor"), out int hlIdx)
-            && hlIdx >= 0 && hlIdx < InkPalette.HighlighterBand.Length)
+        // ---- 荧光笔的 5 个色位 + 5 档浓度 ----
+        for (int i = 0; i < HighlighterSwatchColors.Length; i++)
         {
-            HighlighterCurrent = InkPalette.ToHighlighter(InkPalette.HighlighterBand[hlIdx].Color);
-            _hlColorIdx = hlIdx;
+            var c = InkPalette.HighlighterBand[i].Color;
+            HighlighterSwatchColors[i] = new Color4(c.R, c.G, c.B, 1f);
+            HighlighterSwatchOpacity[i] = 2;
         }
+        var savedHlSwatches = GetUiPref("hlSwatches");
+        if (!string.IsNullOrEmpty(savedHlSwatches))
+        {
+            var parts = savedHlSwatches.Split(';', StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length && i < HighlighterSwatchColors.Length; i++)
+            {
+                var c = ParseColorPref(parts[i], default);
+                if (c.A > 0.5f)
+                    HighlighterSwatchColors[i] = new Color4(c.R, c.G, c.B, 1f);
+            }
+        }
+        var savedHlOps = GetUiPref("hlOpacities");
+        if (!string.IsNullOrEmpty(savedHlOps))
+        {
+            var parts = savedHlOps.Split(';', StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length && i < HighlighterSwatchOpacity.Length; i++)
+            {
+                if (int.TryParse(parts[i], out int lv))
+                    HighlighterSwatchOpacity[i] = Math.Clamp(lv, 0, InkPalette.HighlighterOpacityLevels.Length - 1);
+            }
+        }
+
+        if (int.TryParse(GetUiPref("hlSwatchSelected"), out int savedHlSel)
+            && savedHlSel >= -1 && savedHlSel < HighlighterSwatchColors.Length)
+            HighlighterSwatchSelected = savedHlSel;
+        else if (int.TryParse(GetUiPref("hlColor"), out int hlIdx)
+                 && hlIdx >= 0 && hlIdx < HighlighterSwatchColors.Length)
+            HighlighterSwatchSelected = hlIdx;
+        else
+            HighlighterSwatchSelected = 0;
+
+        if (HighlighterSwatchSelected >= 0)
+        {
+            int si = HighlighterSwatchSelected;
+            HighlighterCurrent = InkPalette.ToHighlighter(
+                HighlighterSwatchColors[si], InkPalette.HighlighterOpacityLevels[HighlighterSwatchOpacity[si]]);
+        }
+        else
+        {
+            var savedHlColor = ParseColorPref(GetUiPref("hlColorValue"), default);
+            float savedHlAlpha = 0.32f;
+            if (float.TryParse(GetUiPref("hlColorOpacity"), System.Globalization.NumberStyles.Float,
+                               System.Globalization.CultureInfo.InvariantCulture, out float a))
+                savedHlAlpha = Math.Clamp(a, 0.02f, 1f);
+            if (savedHlColor.A > 0.5f)
+                HighlighterCurrent = InkPalette.ToHighlighter(savedHlColor, savedHlAlpha);
+        }
+
+        _recentHighlighterColors.Clear();
+        foreach (var s in (GetUiPref("hlRecent") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var c = ParseColorPref(s, default);
+            if (c.A > 0.5f && _recentHighlighterColors.Count < RecentHighlighterColorMax)
+                _recentHighlighterColors.Add(new Color4(c.R, c.G, c.B, 1f));
+        }
+
         // **粗细档**（每个工具分开记，用户 2026-09-30 定）：存的是"第几档"。
         // **换表就升键名**：老下标按新表读会错位。2026-10-15 笔（15→20 档，`w4.pen`）；
         // 2026-10-16 荧光笔（5→21 档，`w3.hl`）/ 激光（7→12 档，`w3.laser`）；
@@ -3779,8 +3950,9 @@ public partial class InkEngine
         // 放在渲染之前：这一帧界面画在哪，输入就该收在哪，两件事同源。
         UpdateUiInputWindow();
 
-        // 记下渲染前的文档版本：**渲染期间界面可能改文档**（"按住清空"就是在界面的
-        // Render 回调里够时间的——界面没有别的"每帧回调"可用）。见下面的判断。
+        // 记下渲染前的文档版本：**界面在这一帧之前可能改文档**（"按住清空"就是在
+        // `PrepareFrame` / `UpdateBandAction` 里够时间的——界面没有别的每帧回调可用）。
+        // 见下面的判断。
         //
         // ⚠ 盯的是 **RenderDoc**（平时=真文档；回放中=影子文档）：脏区/增量清单是
         // 内容层照着渲染的那一份留下的。以前这里只清真文档，结果回放里影子文档的
@@ -4093,6 +4265,12 @@ public partial class InkEngine
             if (ColorPickActive)
             {
                 if (wParam.ToInt32() == 0x1B /*VK_ESCAPE*/) { CancelColorPick(); return IntPtr.Zero; }
+                if (wParam.ToInt32() == 0x43 /*C*/
+                    && (Native.GetAsyncKeyState(0x11 /*VK_CONTROL*/) & 0x8000) != 0)
+                {
+                    CopyColorPickHex();
+                    return IntPtr.Zero;
+                }
                 return IntPtr.Zero;                 // 吸管期间吞掉其它按键
             }
             if (CaptureActive)
@@ -4132,6 +4310,14 @@ public partial class InkEngine
                 // 这两个计数只给自检用：它回答"穿透时系统到底还问不问我"，
                 // 这是判定"能不能只靠命中测试做区域穿透"的唯一硬证据。
                 _cntNcHitTest++;
+                // 截图 / 吸管是**整屏模态**：冻结帧铺满整个屏幕，这一下必须归我们。
+                // 穿透模式也照此处理——否则取色点落在画布上时会漏给下层程序，
+                // 吸管看着有预览、却点不下去。
+                if (ColorPickActive || CaptureActive)
+                {
+                    _cntNcHitClient++;
+                    return new IntPtr(Native.HTCLIENT);
+                }
                 if (!PassThrough)
                 {
                     _cntNcHitClient++;
@@ -4450,6 +4636,20 @@ public partial class InkEngine
         if (ColorPickActive)
         {
             PointerX = x; PointerY = y; PointerInside = true;
+            // 左下角面板是“工具”，不是取色点：点复制=复制，点面板/提示=不取色。
+            OverlayWindow cpw = null;
+            foreach (var win in _windows)
+                if (win.Hwnd == hWnd) { cpw = win; break; }
+            if (cpw != null)
+            {
+                if (cpw.ColorPickCopyRect(this).Contains(x, y))
+                {
+                    CopyColorPickHex();
+                    return;
+                }
+                if (cpw.ColorPickPanelRect(this).Contains(x, y)) return;
+                if (cpw.ColorPickHintRect(this).Contains(x, y)) return;
+            }
             CommitColorPickAt(x, y);
             return;
         }   // 相机：屏幕 → 画布
@@ -10527,7 +10727,9 @@ public partial class InkEngine
     /// <summary>当前该显示什么光标。纯函数（不碰系统），所以能拿来做自检。</summary>
     internal CursorKind ComputeCursorKind()
     {
-        if (ColorPickActive) return CursorKind.Cross;
+        // 吸管：让系统箭头留在屏幕上（老师要知道鼠标在哪）；放大镜固定在左下角，
+        // 不再画全屏十字线，也不会因为指针外圈留下残影。
+        if (ColorPickActive) return CursorKind.Default;
         // 已拿起收藏、指针在画布上：给箭头（不是画笔），配合虚影表示“这一下是落下”。
         if (LibraryGhostVisibleNow) return CursorKind.Default;
         // 指针停在**界面块**上（接输入小窗 / 图库面板这类自绘界面）：给箭头。
@@ -12465,11 +12667,34 @@ public partial class InkEngine
         byte[] px;
         if (CaptureHideInk)
         {
-            // 藏整个覆盖层（含接输入小窗）→ 抓 → 恢复。恢复之后把内容层整层作废：
-            // 窗口藏过又显示，后缓冲里躺的是旧画面（这条老注释里记过）。
-            using (ScreenCapture.HiddenOverlay(OverlayHandles()))
+            // 吸管：**不藏窗口**，只把覆盖层清成透明一帧，再 BitBlt。
+            // 老路（HiddenOverlay）会让屏幕明显闪一下；透明帧对 DWM 来说是"这层没东西"，
+            // 抓到的仍然是桌面，但窗口不用隐藏/恢复。
+            if (ColorPickActive)
+            {
+                CaptureTransparentFrame = true;
+                _dirty = true;
+                RenderAll();
+                Native.DwmFlush();
                 px = ScreenCapture.Grab(x, y, w, h);
-            Doc.InvalidateAll();
+                CaptureTransparentFrame = false;
+                _dirty = true;
+                Doc.InvalidateAll();
+                if (px == null)
+                {
+                    // 透明帧没抓到：退回老路，保证功能不失效。
+                    using (ScreenCapture.HiddenOverlay(OverlayHandles()))
+                        px = ScreenCapture.Grab(x, y, w, h);
+                }
+            }
+            else
+            {
+                // 截图（藏墨）：藏整个覆盖层（含接输入小窗）→ 抓 → 恢复。恢复之后把内容层整层作废：
+                // 窗口藏过又显示，后缓冲里躺的是旧画面（这条老注释里记过）。
+                using (ScreenCapture.HiddenOverlay(OverlayHandles()))
+                    px = ScreenCapture.Grab(x, y, w, h);
+                Doc.InvalidateAll();
+            }
         }
         else
         {
@@ -12498,6 +12723,9 @@ public partial class InkEngine
         CaptureFrozenX = x; CaptureFrozenY = y;
         CaptureFrozenW = w; CaptureFrozenH = h;
         CaptureFrozen = true;
+        // 抓屏期间那条"接输入小窗"必须立刻收掉；HiddenOverlay 恢复窗口时可能把它
+        // 又显示出来，下一帧再收就晚了——截图确认键正好压在工具条那一块时会被它吃掉。
+        UpdateUiInputWindow();
     }
 
     /// <summary>放掉冻结帧的内存（确认/取消/重新截图时都走它）。</summary>
@@ -13436,15 +13664,23 @@ public partial class InkEngine
             : CurrentColor,
         CustomPenColor = CustomPenColor,
         CustomPenSelected = CustomPenSelected,
+        PenSwatchColors = (Color4[])PenSwatchColors.Clone(),
+        PenSwatchSelected = PenSwatchSelected,
         RecentPenColors = _recentPenColors.ToArray(),
         Width = CurrentToolWidthLogical,
         // 按工具分开给：只给一个 Width 的话，滑块在切工具时会跳（三个工具各记各的宽度）。
         PenWidth = PenWidthLogical,
         HighlighterWidth = HighlighterWidthLogical,
         HighlighterColor = HighlighterCurrent,
+        HighlighterSwatchColors = (Color4[])HighlighterSwatchColors.Clone(),
+        HighlighterSwatchOpacity = (int[])HighlighterSwatchOpacity.Clone(),
+        HighlighterSwatchSelected = HighlighterSwatchSelected,
+        RecentHighlighterColors = _recentHighlighterColors.ToArray(),
         LaserWidth = LaserWidthLogical,
         Dash = PenDash,
         PassThrough = PassThrough,
+        KeyboardMode = KeyboardMode,
+        ColorPickActive = ColorPickActive,
         AutoStartOn = AutoStartOn,
         Board = BoardOn,
         BoardColor = BoardColor,
@@ -13542,11 +13778,21 @@ public partial class InkEngine
     {
         // 荧光笔用同一组基色，只是降低不透明度——老师看到的色相是一致的。
         if (Tool == Tool.Highlighter)
-            HighlighterCurrent = InkPalette.ToHighlighter(color);
+        {
+            float alpha = HighlighterCurrent.A > 0.02f ? HighlighterCurrent.A : 0.32f;
+            var baseColor = InkPalette.HighlighterBase(color);
+            HighlighterCurrent = InkPalette.ToHighlighter(baseColor, alpha);
+            HighlighterSwatchSelected = -1;
+            SetUiPref("hlSwatchSelected", "-1");
+            SetUiPref("hlColorValue", FormatColorPref(baseColor));
+            SetUiPref("hlColorOpacity", alpha.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture));
+        }
         else
         {
             CurrentColor = color;
-            CustomPenSelected = false;
+            PenSwatchSelected = -1;
+            SetUiPref("penSwatchSelected", "-1");
+            SetUiPref("penColorValue", FormatColorPref(color));
             SetUiPref("penCustomSelected", "0");
         }
         // **记住这个颜色**（用户 2026-09-30 定：每个工具各记一个色，重启回来还是它）。
@@ -13555,7 +13801,6 @@ public partial class InkEngine
         for (int i = 0; i < band.Length; i++)
             if (CloseColor(band[i].Color, color))
             {
-                if (Tool == Tool.Highlighter) _hlColorIdx = i; else _penColorIdx = i;
                 SetUiPref(Tool == Tool.Highlighter ? "hlColor" : "penColor", i.ToString());
                 break;
             }
@@ -14659,7 +14904,10 @@ public partial class InkEngine
     private bool UiPointerDown(float x, float y, float pressure, bool fromPen, bool eraserTip,
                                bool fromTouch = false, uint pointerId = 0)
     {
-        if (!UiVisibleNow) return false;
+        // 截图 / 吸管 / 收藏落点期间界面是**藏起来的**（PrepareUi 直接返回 false）。
+        // 引擎仍会把每一次按下转给界面；界面如果还按自己的几何去吃点击，
+        // 就会把截图确认键（正好压在工具条那一块）吃掉——只能按 Enter。
+        if (!UiVisibleNow || CaptureActive || ColorPickActive || LibraryPlacementMode) return false;
         var e = new UiPointerEvent(x / UiUnit, y / UiUnit, pressure, fromPen, eraserTip,
                                    fromTouch, pointerId);
         if (!UiGuard("PointerDown", () => Ui.PointerDown(e), false)) return false;
@@ -14670,7 +14918,7 @@ public partial class InkEngine
     private bool UiPointerMove(float x, float y, float pressure, bool fromPen, bool eraserTip,
                                uint pointerId = 0)
     {
-        if (!UiVisibleNow) return false;
+        if (!UiVisibleNow || CaptureActive || ColorPickActive || LibraryPlacementMode) return false;
 
         // 只有在界面已经捕获输入或指针落在界面矩形内时才转发，避免没必要的调用。
         if (!UiCapturing && !UiContains(x, y)) return false;
@@ -14682,6 +14930,11 @@ public partial class InkEngine
     private bool UiPointerUp(float x, float y, float pressure, bool fromPen, bool eraserTip,
                              uint pointerId = 0)
     {
+        if (CaptureActive || ColorPickActive || LibraryPlacementMode)
+        {
+            UiCapturing = false;
+            return false;
+        }
         if (!UiVisibleNow || !UiCapturing) return false;
         var e = new UiPointerEvent(x / UiUnit, y / UiUnit, pressure, fromPen, eraserTip,
                                    false, pointerId);
@@ -14918,6 +15171,8 @@ public partial class InkEngine
     internal float UiPaintMarginNow =>
         Ui == null ? 0f : UiGuard("PaintMargin", () => Ui.PaintMargin, 0f);
     internal bool UiIsAnimatingNow => Ui != null && UiGuard("IsAnimating", () => Ui.IsAnimating, false);
+    internal void UiPrepareFrameNow() =>
+        UiGuard("PrepareFrame", () => { if (Ui != null) Ui.PrepareFrame(); });
     internal RectF UiLayoutNow(RectF screen, float dpiScale) =>
         Ui == null ? RectF.Empty : UiGuard("Layout", () => Ui.Layout(screen, dpiScale), RectF.Empty);
     internal void UiRenderNow(ID2D1DeviceContext ctx, UiTheme theme) =>
@@ -14929,14 +15184,21 @@ public partial class InkEngine
     /// </summary>
     private void UpdateUiInputWindow()
     {
-        // 截图期间界面是收起的（见 PrepareUi 开头那段）：接输入小窗也一起收——
-        // 不然"看不见的工具条"那一条还会把点击吃掉（截图拖框正好要用那一片）。
-        RectF logical = (UiVisibleNow && !CaptureActive && !LibraryPlacementMode)
-            ? UiQueryBoundsNow() : RectF.Empty;
+        // 截图 / 吸管期间界面是收起的（见 PrepareUi 开头那段）：接输入小窗也一起收——
+        // 不然"看不见的工具条"那一条还会把点击吃掉（截图拖框、吸管取色正好要用那一片）。
+        bool uiActive = UiVisibleNow && !CaptureActive && !ColorPickActive && !LibraryPlacementMode;
+        // **先把界面自己的状态推进一帧，再问它占哪儿**：贴边隐藏、色带张开、提示计时
+        // 都会改位置/占位。顺序反了就是"按新位置画、按旧位置擦"——见 IOverlayUi.PrepareFrame。
+        // 放在这里（而不是 Render 里）还保证接输入小窗和这一帧画出来的界面同源。
+        if (uiActive) UiPrepareFrameNow();
+        RectF logical = uiActive ? UiQueryBoundsNow() : RectF.Empty;
 
         if (logical.IsEmpty)
         {
-            if (_uiInputShown && _uiInputHwnd != IntPtr.Zero)
+            // **不看 `_uiInputShown`**：HiddenOverlay 恢复窗口时不会同步这个标志，
+            // 可能出现"窗口实际显示、标志是 false"的错位；那条透明的接输入小窗
+            // 会压在截图确认键/工具条上，点击全被它吃掉。这里无条件藏一次。
+            if (_uiInputHwnd != IntPtr.Zero)
             {
                 Native.ShowWindow(_uiInputHwnd, Native.SW_HIDE);
                 _uiInputShown = false;
@@ -15042,6 +15304,15 @@ public partial class InkEngine
                 if (!ReadPointer(id, out float sx, out float sy, out float pressure,
                                  out bool inverted, out uint ptype))
                     return IntPtr.Zero;
+                // 截图/吸管/收藏落点期间这个透明小窗不该收点击；万一它还残留着，
+                // 把这一下转给主覆盖层（截图确认键正好压在工具条上时，就是这里吃掉的）。
+                if (CaptureActive || ColorPickActive || LibraryPlacementMode)
+                {
+                    Native.ShowWindow(hWnd, Native.SW_HIDE);
+                    _uiInputShown = false;
+                    if (_windows.Count > 0) OnPointerDown(_windows[0].Hwnd, wParam);
+                    return IntPtr.Zero;
+                }
                 StampInput(); _cntDown++;
                 LastPointerType = ptype;
                 _uiHover = true;
@@ -17534,11 +17805,23 @@ public partial class InkEngine
                 | Native.SWP_NOACTIVATE | 0x0020 /*SWP_FRAMECHANGED*/);
             if (on)
             {
-                Native.SetForegroundWindow(w.Hwnd);
-                // **前台 + 焦点要一起给**（2026-09-30）：只 SetForegroundWindow 的话，
-                // 在某些路径下（从"被藏过/被抢过"的状态回来）窗口虽然是前台，
-                // 键盘焦点却还留在别人那儿——屏幕上看着一切正常，按键全收不到。
-                Native.SetFocus(w.Hwnd);
+                // 覆盖层平时是 WS_EX_NOACTIVATE，直接 SetForegroundWindow 可能被系统拒绝；
+                // 借前台线程的输入队列（和分类改名输入框同一套）才能保证键盘焦点真的过来。
+                IntPtr fg = Native.GetForegroundWindow();
+                uint fgTid = Native.GetWindowThreadProcessId(fg, out _);
+                uint myTid = Native.GetCurrentThreadId();
+                if (fgTid != 0 && fgTid != myTid)
+                {
+                    Native.AttachThreadInput(myTid, fgTid, true);
+                    Native.SetForegroundWindow(w.Hwnd);
+                    Native.SetFocus(w.Hwnd);
+                    Native.AttachThreadInput(myTid, fgTid, false);
+                }
+                else
+                {
+                    Native.SetForegroundWindow(w.Hwnd);
+                    Native.SetFocus(w.Hwnd);
+                }
             }
         }
         Console.WriteLine($"批注键盘模式 = {on}"
@@ -17727,11 +18010,11 @@ public partial class InkEngine
         switch (a)
         {
             case KeyAction.ToolPen:
-                SetColorFromUi(InkPalette.PenBand[0].Color);
+                SelectPenSwatchFromUi(0);
                 Console.WriteLine($"长按 → 笔回到「{InkPalette.PenBand[0].Name}」");
                 break;
             case KeyAction.ToolHighlighter:
-                SetColorFromUi(InkPalette.HighlighterBand[0].Color);
+                SelectHighlighterSwatchFromUi(0);
                 Console.WriteLine($"长按 → 荧光笔回到「{InkPalette.HighlighterBand[0].Name}」");
                 break;
             // [2026-10-05 用户定] 橡皮 / 框选的子类型不再由键盘（长按）改；面板上带里选。
@@ -17748,68 +18031,150 @@ public partial class InkEngine
     /// </summary>
     private void CycleBandColor(bool highlighter)
     {
-        var band = highlighter ? InkPalette.HighlighterBand : InkPalette.PenBand;
         if (!highlighter)
         {
-            // 工具带已经把白色位换成了自定义槽；Ctrl+P 的循环也跟着走：
-            // 7 个固定色 → 自定义槽 → 回第一个。
-            if (CustomPenSelected)
-            {
-                SetColorFromUi(band[0].Color);
-                Console.WriteLine($"连按 → {band[0].Name}");
-                return;
-            }
-            int nextPen = (_penColorIdx + 1) % band.Length;
-            if (nextPen == band.Length - 1)
-            {
-                SetCustomPenColorFromUi(CustomPenColor);
-                Console.WriteLine("连按 → 自定义色");
-                return;
-            }
-            _penColorIdx = nextPen;
-            SetColorFromUi(band[nextPen].Color);
-            Console.WriteLine($"连按 → {band[nextPen].Name}");
+            // 8 个色位一起循环（含最后一格）；当前色不是从色带选的就从第 1 格开始。
+            int penN = PenSwatchColors.Length;
+            int next = PenSwatchSelected >= 0 ? (PenSwatchSelected + 1) % penN : 0;
+            SelectPenSwatchFromUi(next);
+            Console.WriteLine($"连按 → 色位 {next + 1}");
             return;
         }
 
-        int idx = _hlColorIdx;
-        int next = ((idx % band.Length) + 1) % band.Length;
-        _hlColorIdx = next;
-        SetColorFromUi(band[next].Color);      // 荧光笔的透明度由 SetColorFromUi 自己加
-        Console.WriteLine($"连按 → {band[next].Name}");
+        // 5 个荧光色位一起循环；当前色不是从色带选的就从第 1 格开始。
+        int n = HighlighterSwatchColors.Length;
+        int nextHl = HighlighterSwatchSelected >= 0 ? (HighlighterSwatchSelected + 1) % n : 0;
+        SelectHighlighterSwatchFromUi(nextHl);
+        Console.WriteLine($"连按 → 荧光色位 {nextHl + 1}");
     }
-
-    /// <summary>当前笔色 / 荧光色在色带里的序号（默认 红 / 荧光黄）。</summary>
-    private int _penColorIdx = 1;
-    private int _hlColorIdx;
 
     private static bool CloseColor(Color4 a, Color4 b) =>
         Math.Abs(a.R - b.R) < 0.10f && Math.Abs(a.G - b.G) < 0.10f && Math.Abs(a.B - b.B) < 0.10f;
 
-    // ---- 自定义笔色 / 最近颜色（2026-10-23）--------------------------------
+    // ---- 荧光笔的 5 个色位 / 5 档浓度（2026-10-28）----------------------------
 
-    /// <summary>选中工具带里的自定义色，不改动自定义槽本身。</summary>
-    internal void SelectCustomPenColorFromUi()
+    internal void SelectHighlighterSwatchFromUi(int slot)
     {
-        CurrentColor = CustomPenColor;
-        CustomPenSelected = true;
-        SetUiPref("penCustomSelected", "1");
-        RememberRecentPenColor(CustomPenColor);
+        if (slot < 0 || slot >= HighlighterSwatchColors.Length || Tool != Tool.Highlighter) return;
+        HighlighterSwatchSelected = slot;
+        HighlighterCurrent = InkPalette.ToHighlighter(
+            HighlighterSwatchColors[slot], InkPalette.HighlighterOpacityLevels[HighlighterSwatchOpacity[slot]]);
+        PersistHighlighterSwatches();
         _dirty = true;
         NotifyUiStateChanged();
     }
 
-    /// <summary>把新颜色写进自定义槽并立即使用；取色板和屏幕吸管都走这里。</summary>
-    internal void SetCustomPenColorFromUi(Color4 color)
+    /// <summary>
+    /// 把颜色写进荧光笔的第 <paramref name="slot"/> 个色位，并套这个色位自己的浓度。
+    /// <paramref name="normalize"/> = true 时先做“高亮化”（HSV/吸管取色走这条），
+    /// 固定常用色已经挑好，传 false。
+    /// </summary>
+    internal void SetHighlighterSwatchColorFromUi(int slot, Color4 color, bool rememberRecent, bool normalize)
     {
-        CustomPenColor = color;
-        CurrentColor = color;
-        CustomPenSelected = true;
-        SetUiPref("penCustom", FormatColorPref(color));
-        SetUiPref("penCustomSelected", "1");
-        RememberRecentPenColor(color);
+        if (slot < 0 || slot >= HighlighterSwatchColors.Length || Tool != Tool.Highlighter) return;
+        if (normalize) color = InkPalette.HighlighterBase(color);
+        var baseColor = new Color4(color.R, color.G, color.B, 1f);
+        HighlighterSwatchColors[slot] = baseColor;
+        HighlighterSwatchSelected = slot;
+        HighlighterCurrent = InkPalette.ToHighlighter(
+            baseColor, InkPalette.HighlighterOpacityLevels[HighlighterSwatchOpacity[slot]]);
+        if (rememberRecent) RememberRecentHighlighterColor(baseColor);
+        PersistHighlighterSwatches();
         _dirty = true;
         NotifyUiStateChanged();
+    }
+
+    /// <summary>只改当前荧光色位的浓度档（0..4）；已经画好的笔迹不动。</summary>
+    internal void SetHighlighterOpacityFromUi(int slot, int level)
+    {
+        if (slot < 0 || slot >= HighlighterSwatchColors.Length || Tool != Tool.Highlighter) return;
+        HighlighterSwatchOpacity[slot] = Math.Clamp(level, 0, InkPalette.HighlighterOpacityLevels.Length - 1);
+        if (HighlighterSwatchSelected == slot)
+            HighlighterCurrent = InkPalette.ToHighlighter(
+                HighlighterSwatchColors[slot], InkPalette.HighlighterOpacityLevels[HighlighterSwatchOpacity[slot]]);
+        PersistHighlighterSwatches();
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    private void PersistHighlighterSwatches()
+    {
+        var swatches = new string[HighlighterSwatchColors.Length];
+        for (int i = 0; i < swatches.Length; i++) swatches[i] = FormatColorPref(HighlighterSwatchColors[i]);
+        SetUiPref("hlSwatches", string.Join(';', swatches));
+        SetUiPref("hlOpacities", string.Join(';', HighlighterSwatchOpacity));
+        SetUiPref("hlSwatchSelected", HighlighterSwatchSelected.ToString());
+        SetUiPref("hlColorValue", FormatColorPref(
+            new Color4(HighlighterCurrent.R, HighlighterCurrent.G, HighlighterCurrent.B, 1f)));
+        SetUiPref("hlColorOpacity", HighlighterCurrent.A.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture));
+        if (HighlighterSwatchSelected >= 0 && HighlighterSwatchSelected < HighlighterSwatchColors.Length)
+            SetUiPref("hlColor", HighlighterSwatchSelected.ToString());
+    }
+
+    private void RememberRecentHighlighterColor(Color4 color)
+    {
+        for (int i = _recentHighlighterColors.Count - 1; i >= 0; i--)
+            if (ColorNear(_recentHighlighterColors[i], color, 0.02f)) _recentHighlighterColors.RemoveAt(i);
+        _recentHighlighterColors.Insert(0, color);
+        while (_recentHighlighterColors.Count > RecentHighlighterColorMax)
+            _recentHighlighterColors.RemoveAt(_recentHighlighterColors.Count - 1);
+
+        var parts = new string[_recentHighlighterColors.Count];
+        for (int i = 0; i < parts.Length; i++) parts[i] = FormatColorPref(_recentHighlighterColors[i]);
+        SetUiPref("hlRecent", string.Join(';', parts));
+    }
+
+    // ---- 笔的 8 个色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成可改色位）----
+
+    /// <summary>选中笔的第 <paramref name="slot"/> 个色位，不改色位里的颜色。</summary>
+    internal void SelectPenSwatchFromUi(int slot)
+    {
+        if (slot < 0 || slot >= PenSwatchColors.Length || Tool != Tool.Pen) return;
+        PenSwatchSelected = slot;
+        CurrentColor = PenSwatchColors[slot];
+        PersistPenSwatches();
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 把颜色写进笔的第 <paramref name="slot"/> 个色位并立即选中。
+    /// <paramref name="rememberRecent"/> = false：固定常用色只改色位，不写“最近使用”。
+    /// </summary>
+    internal void SetPenSwatchColorFromUi(int slot, Color4 color, bool rememberRecent)
+    {
+        if (slot < 0 || slot >= PenSwatchColors.Length || Tool != Tool.Pen) return;
+        PenSwatchColors[slot] = color;
+        PenSwatchSelected = slot;
+        CurrentColor = color;
+        if (rememberRecent) RememberRecentPenColor(color);
+        PersistPenSwatches();
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>选中工具带里的最后一个色位（兼容旧“自定义槽”入口）。</summary>
+    internal void SelectCustomPenColorFromUi()
+    {
+        SelectPenSwatchFromUi(PenSwatchColors.Length - 1);
+    }
+
+    /// <summary>把新颜色写进最后一个色位并立即使用；旧自定义槽入口。</summary>
+    internal void SetCustomPenColorFromUi(Color4 color)
+    {
+        SetPenSwatchColorFromUi(PenSwatchColors.Length - 1, color, rememberRecent: true);
+    }
+
+    /// <summary>把 8 个色位 + 当前选中 + 当前 RGB 一起落盘；旧键也同步写，方便回退上一版。</summary>
+    private void PersistPenSwatches()
+    {
+        var parts = new string[PenSwatchColors.Length];
+        for (int i = 0; i < parts.Length; i++) parts[i] = FormatColorPref(PenSwatchColors[i]);
+        SetUiPref("penSwatches", string.Join(';', parts));
+        SetUiPref("penSwatchSelected", PenSwatchSelected.ToString());
+        SetUiPref("penColorValue", FormatColorPref(CurrentColor));
+        SetUiPref("penCustom", FormatColorPref(PenSwatchColors[^1]));
+        SetUiPref("penCustomSelected", PenSwatchSelected == PenSwatchColors.Length - 1 ? "1" : "0");
     }
 
     private void RememberRecentPenColor(Color4 color)
@@ -18348,6 +18713,8 @@ public partial class InkEngine
         // 使用说明层优先：打开时 Esc/F1 关闭、左右切页，其它键也不许落到画布。
         // 关闭时 F1 打开；只在批注键盘模式收到（和 Ctrl+P/I/L 同一入口）。
         if (Ui != null && Ui.HandleHelpKey(vk)) return true;
+        // 取色板色值输入框：编辑期间优先吃键盘（数字/A-F/退格/回车/Esc）。
+        if (Ui != null && Ui.HandlePickerKey(vk, (mods & KeyChord.ModCtrl) != 0)) return true;
         // 收藏面板点了一张卡、还没落笔：Esc = 取消这次插入（别让老师找不到怎么退）。
         if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && _libraryPending != null)
         {

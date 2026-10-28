@@ -91,6 +91,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     // ---- 界面自己的偏好（引擎只存不解释，落在 settings.json 的 ui 段）----
 
     public string GetPref(string key) => _engine.GetUiPref(key);
+    public string GetClipboardText() => ClipboardText.Get();
     public void SetPref(string key, string value) => _engine.SetUiPref(key, value);
 
     /// <summary>某个动作当前的键位文本（悬停提示用；唯一起源见 KeyBindings）。</summary>
@@ -120,13 +121,23 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetColor(Color4 color) => _engine.SetColorFromUi(color);
     public void SelectCustomPenColor() => _engine.SelectCustomPenColorFromUi();
     public void SetCustomPenColor(Color4 color) => _engine.SetCustomPenColorFromUi(color);
+    public void SelectPenSwatch(int slot) => _engine.SelectPenSwatchFromUi(slot);
+    public void SetPenSwatchColor(int slot, Color4 color, bool rememberRecent)
+        => _engine.SetPenSwatchColorFromUi(slot, color, rememberRecent);
+    public void SelectHighlighterSwatch(int slot) => _engine.SelectHighlighterSwatchFromUi(slot);
+    public void SetHighlighterSwatchColor(int slot, Color4 color, bool rememberRecent, bool normalize)
+        => _engine.SetHighlighterSwatchColorFromUi(slot, color, rememberRecent, normalize);
+    public void SetHighlighterOpacity(int slot, int level)
+        => _engine.SetHighlighterOpacityFromUi(slot, level);
     public void BeginScreenColorPick() => _engine.BeginScreenColorPickFromUi();
+    public void BeginScreenColorPickAt(int slot) => _engine.BeginScreenColorPickFromUi(slot);
     public void SetWidth(float logicalPx) => _engine.SetWidthFromUi(logicalPx);
     public void SetDash(StrokeDash dash) => _engine.SetDashFromUi(dash);
     public void Undo() => _engine.UndoFromUi();
     public void Redo() => _engine.RedoFromUi();
     public void Clear() => _engine.ClearCurrentPageFromUi();
     public void SetPassThrough(bool on) => _engine.SetPassThroughFromUi(on, toPen: !on);
+    public void SetKeyboardMode(bool on) => _engine.SetKeyboardMode(on);
     public void SetAutoStart(bool on) => _engine.SetAutoStartFromUi(on);
     public void RefreshAutoStart() => _engine.RefreshAutoStartFromUi();
     public void SetBoard(bool on) => _engine.SetBoardFromUi(on);

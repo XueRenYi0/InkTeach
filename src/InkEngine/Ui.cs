@@ -49,6 +49,18 @@ public interface IOverlayUi
     RectF Layout(RectF screen, float dpiScale);
 
     /// <summary>
+    /// 推进一帧界面状态（动画、贴边隐藏、悬停提示……）。
+    ///
+    /// 引擎在**读取 <see cref="QueryBounds"/> 之前**调用一次。界面必须把"会改变
+    /// 自己的位置/占位"的状态推进放在这里，而不是 <see cref="Render"/> 里：
+    /// 引擎先用 QueryBounds 算脏区和输入小窗，再画；如果 Render 里才改位置，
+    /// 这一帧就会"按新位置画、擦旧位置"，轻则闪一下，重则原地留残影。
+    ///
+    /// 默认空实现，老界面不受影响。
+    /// </summary>
+    void PrepareFrame() { }
+
+    /// <summary>
     /// 界面这一刻实际占用的矩形（逻辑屏幕坐标）。
     ///
     /// 和 <see cref="Layout"/> 的区别很重要：Layout 只在尺寸/DPI 变化时调用，
@@ -130,6 +142,12 @@ public interface IOverlayUi
     /// 返回 true = 这个按键已被说明层消费。默认 false。
     /// </summary>
     bool HandleHelpKey(int vk) => false;
+
+    /// <summary>
+    /// 取色板里的色值输入框优先吃键盘（0-9/A-F、Backspace、Enter、Esc）。
+    /// 返回 true = 这个按键已被输入框消费；默认 false，不影响老界面。
+    /// </summary>
+    bool HandlePickerKey(int vk, bool ctrl) => false;
 
     /// <summary>
     /// 用户又双击了一次 exe（或从快捷方式启动）。已有实例收到后：
@@ -217,6 +235,9 @@ public interface IUiHost
     /// **引擎只当仓库**：它不认识这些键的含义，界面说存什么就存什么。
     /// </summary>
     string GetPref(string key);
+
+    /// <summary>读剪贴板纯文本（色值输入框 Ctrl+V 用）。默认没有。</summary>
+    string GetClipboardText() => null;
 
     /// <summary>
     /// 记一条界面偏好。传 null = 回到默认（引擎会把这一项删掉，不会写进配置文件）。
@@ -344,6 +365,24 @@ public interface IEngineCommands
     void SelectCustomPenColor();
     /// <summary>把颜色写入自定义槽并立即选中；取色板 / 屏幕吸管提交时调用。</summary>
     void SetCustomPenColor(Color4 color);
+    /// <summary>选中笔的第 <paramref name="slot"/> 个色位（0..7），不改色位里的颜色。</summary>
+    void SelectPenSwatch(int slot);
+    /// <summary>
+    /// 把颜色写进笔的第 <paramref name="slot"/> 个色位并立即选中。
+    /// <paramref name="rememberRecent"/> = false 时只改色位、不写“最近使用”（固定常用色走这条）。
+    /// </summary>
+    void SetPenSwatchColor(int slot, Color4 color, bool rememberRecent);
+    /// <summary>选中荧光笔的第 <paramref name="slot"/> 个色位（0..4），不改色位内容。</summary>
+    void SelectHighlighterSwatch(int slot);
+    /// <summary>
+    /// 把颜色写进荧光笔的第 <paramref name="slot"/> 个色位，并套这个色位自己的浓度。
+    /// <paramref name="normalize"/> = true 先做“高亮化”（HSV/吸管取色）。
+    /// </summary>
+    void SetHighlighterSwatchColor(int slot, Color4 color, bool rememberRecent, bool normalize);
+    /// <summary>改荧光笔第 <paramref name="slot"/> 个色位的浓度档（0..4）。</summary>
+    void SetHighlighterOpacity(int slot, int level);
+    /// <summary>进入屏幕吸管，并把取到的颜色写回指定色位；-1 = 当前选中/最后一格兜底。</summary>
+    void BeginScreenColorPickAt(int slot);
     /// <summary>进入屏幕吸管：冻结当前屏幕，点一下取色，Esc 取消。</summary>
     void BeginScreenColorPick();
     void SetWidth(float logicalPx);
@@ -365,6 +404,8 @@ public interface IEngineCommands
     /// 退出时恢复进穿透前的白板状态。
     /// </summary>
     void SetPassThrough(bool on);
+    /// <summary>临时开关批注键盘模式（取色板色值输入框要收键盘）。</summary>
+    void SetKeyboardMode(bool on);
     /// <summary>
     /// 打开/关闭“开机自动启动”。写当前用户的 Run 键，不要求管理员。
     /// 失败时保持原状态；真实状态以 <see cref="UiState.AutoStartOn"/> 为准。
@@ -645,6 +686,9 @@ public static class InkPalette
     /// <summary>默认荧光笔色：黄。</summary>
     public static readonly Color4 HighlighterDefault = new(1f, 0.85f, 0.15f, 0.32f);
 
+    /// <summary>荧光笔 5 档透明度，从淡到浓；第 3 档 0.32 是旧版手感。</summary>
+    public static readonly float[] HighlighterOpacityLevels = { 0.15f, 0.22f, 0.32f, 0.45f, 0.60f };
+
     /// <summary>笔的色板。荧光笔用的是同一组基色，只把透明度调低。</summary>
     public static readonly (string Name, Color4 Color)[] Presets =
     {
@@ -660,7 +704,24 @@ public static class InkPalette
     };
 
     /// <summary>把笔色换算成荧光笔色：保留色相，降低不透明度。</summary>
-    public static Color4 ToHighlighter(Color4 pen) => new(pen.R, pen.G, pen.B, 0.32f);
+    public static Color4 ToHighlighter(Color4 pen) => ToHighlighter(pen, 0.32f);
+
+    /// <summary>同上，但透明度由调用方给（荧光笔 5 档）。</summary>
+    public static Color4 ToHighlighter(Color4 pen, float alpha)
+        => new(pen.R, pen.G, pen.B, Math.Clamp(alpha, 0.02f, 1f));
+
+    /// <summary>
+    /// 把任意颜色“高亮化”：色相不动，主要把太暗的颜色提亮；饱和度只做很轻的上限，
+    /// 避免把现有荧光黄/橙改浅（它们的 S 本来就在 0.85 左右）。
+    /// 用于荧光笔的 HSV / 吸管取色——深色直接加 alpha 会变成脏灰/脏棕。
+    /// </summary>
+    public static Color4 HighlighterBase(Color4 c)
+    {
+        var (h, s, v) = Hsv.FromRgb(c);
+        s = MathF.Min(s, 0.88f);
+        v = MathF.Max(v, 0.86f);
+        return Hsv.ToRgb(h, s, v);
+    }
 
     /// <summary>
     /// **把基色套到某个对象上**：荧光笔（半透明墨）走 <see cref="ToHighlighter"/>，
@@ -992,6 +1053,10 @@ public readonly struct UiState
     public Color4 CustomPenColor { get; init; }
     /// <summary>当前笔色是“自定义槽”而不是固定预设色。色片高亮按这个判，不按颜色值猜。</summary>
     public bool CustomPenSelected { get; init; }
+    /// <summary>笔的 8 个色位（每个都可以被用户改色）；和 <see cref="PenSwatchSelected"/> 一起用。</summary>
+    public Color4[] PenSwatchColors { get; init; }
+    /// <summary>当前笔色来自第几个色位；-1 = 颜色不是从色带选的。</summary>
+    public int PenSwatchSelected { get; init; }
     /// <summary>最近使用过的自定义颜色，最新的在前；取色板里显示，重启后恢复。</summary>
     public Color4[] RecentPenColors { get; init; }
     /// <summary>当前工具的宽度（笔/荧光笔/激光各记各的）。</summary>
@@ -1000,6 +1065,14 @@ public readonly struct UiState
     public float PenWidth { get; init; }
     public float HighlighterWidth { get; init; }
     public Color4 HighlighterColor { get; init; }
+    /// <summary>荧光笔 5 个色位的基色（不透明）；实际画的时候按 <see cref="HighlighterSwatchOpacity"/> 加 alpha。</summary>
+    public Color4[] HighlighterSwatchColors { get; init; }
+    /// <summary>荧光笔 5 个色位各自的透明度档位下标（0..4，对应 15/22/32/45/60%）。</summary>
+    public int[] HighlighterSwatchOpacity { get; init; }
+    /// <summary>当前荧光色来自第几个色位；-1 = 外部改色。</summary>
+    public int HighlighterSwatchSelected { get; init; }
+    /// <summary>荧光笔的最近自定义颜色（基色，不透明），最新的在前。</summary>
+    public Color4[] RecentHighlighterColors { get; init; }
     public float LaserWidth { get; init; }
     /// <summary>
     /// **笔的线型**（实线 / 虚线 / 点线）。界面色带条上那个"虚实线切换"按它显示当前档。
@@ -1073,6 +1146,10 @@ public readonly struct UiState
     /// </summary>
     public bool EllipseFocusTriangle { get; init; }
     public bool PassThrough { get; init; }
+    /// <summary>批注键盘模式（覆盖层能不能收到按键）。色值输入框临时借用它。</summary>
+    public bool KeyboardMode { get; init; }
+    /// <summary>屏幕吸管正在冻结取色（界面据此在取完色后把取色板放回来）。</summary>
+    public bool ColorPickActive { get; init; }
     /// <summary>
     /// 开机自动启动当前是否真的生效（HKCU Run 有值，且没被任务管理器禁用）。
     /// 设置页那一行的开关读它；写它只走 <see cref="IEngineCommands.SetAutoStart"/>。

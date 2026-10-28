@@ -4935,6 +4935,41 @@ internal sealed partial class App : InkEngine.InkEngine
             }
             if (_panelShowMini) ui.SetProfileForTest(0);     // --mini：极简档（短胶囊）
             if (_panelShowBand) ui.OpenRailForTest();        // --band：把色线张开成设置条
+            // --picker：把笔的取色板打开（设计验收用；默认落在第 3 个色位，蓝色好核对）。
+            // 顺便塞几条“最近使用”，让截图能看到右栏下半段（产品里由用户实际取色产生）。
+            if (Environment.GetCommandLineArgs().Contains("--picker"))
+            {
+                var seed = new[]
+                {
+                    new Color4(0.05f, 0.58f, 0.53f, 1f), new Color4(0.88f, 0.11f, 0.28f, 1f),
+                    new Color4(0.49f, 0.23f, 0.93f, 1f), new Color4(0.92f, 0.35f, 0.05f, 1f),
+                    new Color4(0.40f, 0.64f, 0.05f, 1f), new Color4(0.03f, 0.57f, 0.70f, 1f),
+                    new Color4(0.86f, 0.15f, 0.47f, 1f), new Color4(0.29f, 0.33f, 0.39f, 1f),
+                };
+                foreach (var c in seed) Host.Commands.SetPenSwatchColor(7, c, rememberRecent: true);
+                Host.Commands.SetPenSwatchColor(7, InkUi.Tokens.Palette[7].Color, rememberRecent: false);
+                Host.Commands.SelectPenSwatch(2);
+                ui.OpenPenPickerForTest();
+            }
+
+            // --hlpicker：荧光笔取色板（设计验收用；顺便塞几条最近色，看看右栏下半段）。
+            if (Environment.GetCommandLineArgs().Contains("--hlpicker"))
+            {
+                Host.Commands.SetTool(Tool.Highlighter);
+                var hlSeed = new[]
+                {
+                    new Color4(0.05f, 0.58f, 0.53f, 1f), new Color4(0.88f, 0.11f, 0.28f, 1f),
+                    new Color4(0.49f, 0.23f, 0.93f, 1f), new Color4(0.92f, 0.35f, 0.05f, 1f),
+                    new Color4(0.40f, 0.64f, 0.05f, 1f), new Color4(0.03f, 0.57f, 0.70f, 1f),
+                };
+                foreach (var c in hlSeed)
+                    Host.Commands.SetHighlighterSwatchColor(4, c, rememberRecent: true, normalize: true);
+                var orange = InkUi.Tokens.HighlighterPalette[4].Color;
+                Host.Commands.SetHighlighterSwatchColor(4, orange, rememberRecent: false, normalize: false);
+                Host.Commands.SetHighlighterOpacity(0, 2);
+                Host.Commands.SelectHighlighterSwatch(0);
+                ui.OpenHighlighterPickerForTest(0);
+            }
             // --cell N：把上带掰到第 N 格再出图（N=2 就是白板那条
             // `[上一屏] [白][绿][黑] [下一屏]` ＋ "第 N 屏"）
             var cli = Environment.GetCommandLineArgs();
@@ -5119,6 +5154,20 @@ internal sealed partial class App : InkEngine.InkEngine
             }
 
             // 优先离屏出图（锁屏 / 远程也能出，图里不混桌面）。
+            // --pickshow：直接进吸管冻结帧，截一张全屏看左下角面板/抓屏是否正确。
+            if (Environment.GetCommandLineArgs().Contains("--pickshow"))
+            {
+                Host.Commands.BeginScreenColorPick();
+                SettleFrames(900);
+                bool okPick = ScreenProbe.SaveBmp(path,
+                    (int)MathF.Floor(_virtualX), (int)MathF.Floor(_virtualY),
+                    Math.Max(1, (int)MathF.Ceiling(_virtualW)), Math.Max(1, (int)MathF.Ceiling(_virtualH)));
+                Console.WriteLine(okPick ? $"已出图 {path}（吸管全屏）" : "出图失败");
+                ExitCode = okPick ? 0 : 1;
+                _quit = true;
+                return;
+            }
+
             // **范围要连"画到外面那一圈"一起给**（投影，见 IOverlayUi.PaintMargin）：
             // 这一条的边上留白只有 24 **物理**像素，200% 缩放下就是 12 逻辑像素，
             // 而投影最远胀出去 16+8 逻辑像素——不给就会被切掉一半，图看着像"没有投影"。
