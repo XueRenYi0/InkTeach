@@ -327,6 +327,53 @@ internal static class UpdateFeed
             "InkTeach", "update", SafeVer(ver));
 
     /// <summary>
+    /// 启动后清理安装目录旁边遗留的 `...old-YYYYMMDD-HHMMSS` 备份。
+    ///
+    /// 为什么放在 App 侧而不是只靠换壳脚本：换壳脚本是**旧版本**写出来并执行的，
+    /// 修好脚本只能保证“下一次更新”不再堆；用户机器上已经堆出来的旧目录，需要
+    /// 新版本启动后自己扫一遍。只删“名字带 .old- 且里面有 InkTeach.exe”的同级目录，
+    /// 不碰用户自己的其它文件夹；删不掉（被占用/权限）就跳过，下次再试。
+    ///
+    /// 新版本已经启动成功，旧备份不再需要，**全部删掉**；如果当前进程本身就是从
+    /// `.old-*` 启动的，跳过自己（这一份还在用），其余照删。
+    /// </summary>
+    public static int CleanupOldBackups(string appDir = null)
+    {
+        try
+        {
+            appDir ??= Path.GetDirectoryName(Environment.ProcessPath ?? "");
+            if (string.IsNullOrWhiteSpace(appDir)) return 0;
+            string current = Path.GetFullPath(appDir);
+            string parent = Path.GetDirectoryName(current);
+            if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent)) return 0;
+
+            var backups = new List<string>();
+            foreach (string d in Directory.GetDirectories(parent))
+            {
+                if (string.Equals(Path.GetFullPath(d), current, StringComparison.OrdinalIgnoreCase))
+                    continue;                                  // 正跑着的这一份，绝不删
+                string name = Path.GetFileName(d);
+                if (!name.Contains(".old-", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!File.Exists(Path.Combine(d, "InkTeach.exe")))
+                    continue;                                  // 只认程序备份，不碰普通目录
+                backups.Add(d);
+            }
+
+            int removed = 0;
+            foreach (string dir in backups)
+            {
+                try { Directory.Delete(dir, true); removed++; }
+                catch { }                                      // 被占用就下次再清
+            }
+            if (removed > 0)
+                Console.WriteLine($"自动更新：清理了 {removed} 个旧备份目录");
+            return removed;
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>
     /// 建一个取清单 / 下载用的 <see cref="HttpClient"/>。<paramref name="useProxy"/>=false
     /// 时**显式不走系统代理**。
     ///
@@ -693,13 +740,78 @@ internal static class UpdateFeed
             if (-not (Get-Process -Id $AppPid -ErrorAction SilentlyContinue)) { break }
             Start-Sleep -Milliseconds 300
         }
+        if (Get-Process -Id $AppPid -ErrorAction SilentlyContinue) {
+            Log "app still running after 90s; abort (no files touched)"
+            exit 2
+        }
         Start-Sleep -Milliseconds 800
 
-        # remove backups left by earlier updates (bounded: one generation)
         $parent = Split-Path -Parent $AppDir
         $leaf = Split-Path -Leaf $AppDir
-        Get-ChildItem -LiteralPath $parent -Directory -Filter "$leaf.old-*" -ErrorAction SilentlyContinue |
-            ForEach-Object { try { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop; Log ("removed old backup " + $_.Name) } catch {} }
+        $baseLeaf = $leaf -replace '(\.old-\d{8}-\d{6})+$', ''
+
+        # If this copy was launched from an .old-* backup, update the stable
+        # sibling instead of renaming the backup again. Renaming a backup
+        # produced nested names like X.old-A.old-B.old-C (seen in the field).
+        if ($baseLeaf -ne $leaf) {
+            $stable = Join-Path $parent $baseLeaf
+            $stableExe = Join-Path $stable 'InkTeach.exe'
+            if (Test-Path -LiteralPath $stableExe) {
+                Log "running from backup; target stable dir $stable"
+                $AppDir = $stable
+                $Exe = $stableExe
+                $leaf = $baseLeaf
+            } else {
+                Log "running from backup but stable dir is missing; abort"
+                exit 3
+            }
+        }
+
+        # Validate the package before touching the install dir. A zip without
+        # InkTeach.exe at its root would otherwise leave a half-swapped folder.
+        $zipHasExe = $false
+        try {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+            $z = [System.IO.Compression.ZipFile]::OpenRead($Zip)
+            try {
+                foreach ($e in $z.Entries) {
+                    if ($e.FullName -eq 'InkTeach.exe') { $zipHasExe = $true; break }
+                }
+            } finally { $z.Dispose() }
+        } catch { Log ("zip check failed: " + $_.Exception.Message) }
+        if (-not $zipHasExe) {
+            Log "zip does not contain InkTeach.exe at root; abort"
+            exit 4
+        }
+
+        function Remove-OldBackup([string]$dir) {
+            for ($i = 0; $i -lt 3; $i++) {
+                try {
+                    Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction Stop
+                    Log ("removed old backup " + (Split-Path -Leaf $dir))
+                    return
+                } catch {
+                    if ($i -lt 2) { Start-Sleep -Milliseconds 500 }
+                    else { Log ("remove old backup failed: " + $dir + " : " + $_.Exception.Message) }
+                }
+            }
+        }
+
+        # Clean every sibling backup of this product, with retries. The old
+        # filter only matched "$leaf.old-*"; when the app had been started
+        # from a backup, its siblings did not match and piled up.
+        $patterns = @("InkTeach-*.old-*", "$baseLeaf.old-*")
+        $seen = @{}
+        foreach ($pat in $patterns) {
+            Get-ChildItem -LiteralPath $parent -Directory -Filter $pat -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    $full = $_.FullName
+                    if (-not $seen.ContainsKey($full) -and (Test-Path -LiteralPath (Join-Path $full 'InkTeach.exe'))) {
+                        $seen[$full] = $true
+                        Remove-OldBackup $full
+                    }
+                }
+        }
 
         $bak = "$AppDir.old-" + (Get-Date -Format 'yyyyMMdd-HHmmss')
         $renamed = $false
@@ -713,6 +825,9 @@ internal static class UpdateFeed
         try {
             New-Item -ItemType Directory -Path $AppDir -Force | Out-Null
             Expand-Archive -LiteralPath $Zip -DestinationPath $AppDir -Force -ErrorAction Stop
+            if (-not (Test-Path -LiteralPath (Join-Path $AppDir 'InkTeach.exe'))) {
+                throw "InkTeach.exe is missing after extraction"
+            }
             Log "extracted $Zip"
         } catch {
             Log ("extract failed: " + $_.Exception.Message + " -- rolling back")

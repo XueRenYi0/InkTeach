@@ -53,6 +53,9 @@ public partial class InkEngine
     /// <summary>主循环线程 id（后台线程叫醒用；<see cref="Loop"/> 第一句填）。</summary>
     private volatile uint _mainThreadId;
 
+    /// <summary>启动后清一次旧版备份目录（只跑一次，后台线程）。</summary>
+    private bool _oldBackupCleanupStarted;
+
     /// <summary>后台渲完一页的"叫醒"标记（渲染线程写、主循环读）。</summary>
     private volatile bool _docPageReady;
 
@@ -3734,6 +3737,19 @@ public partial class InkEngine
     {
         // 主循环线程 id：后台线程（文档页渲染 / PPT 轮询）用它 PostThreadMessage 叫醒我们。
         _mainThreadId = Native.GetCurrentThreadId();
+
+        // 旧版换壳脚本只按“当前目录名.old-*”清备份；如果用户从旧备份启动过，
+        // 目录会变成 X.old-A.old-B.old-C，老脚本就再也匹配不到。新版本启动后
+        // 自己清一遍；等 5 秒确认这次启动不是“刚起来就崩”，再全删，后台做。
+        if (!_oldBackupCleanupStarted)
+        {
+            _oldBackupCleanupStarted = true;
+            Task.Run(() =>
+            {
+                Thread.Sleep(5000);
+                UpdateFeed.CleanupOldBackups();
+            });
+        }
 
         // **自检模式那行诊断**（2026-10-07）：打在这里，而不是构造函数里。
         //

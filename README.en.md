@@ -15,13 +15,12 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
-> **Latest 9.4.3 (2026-10-28)**: all 8 pen swatches are now customisable, with 40 built-in
-> colours plus 8 recent ones and one-click reset from the default swatch. The highlighter has
-> 5 swatches, 24 highlighter-friendly bright colours and an independent 5-step opacity for each
-> swatch. Colour values can be typed or pasted with `Ctrl+V`. The on-screen eyedropper follows
-> the mouse like WeChat Capture: an 11×11 magnifier sits at the arrow's lower-right, shows the
-> `#RRGGBB` value, copies on click or `Ctrl+C`, and returns to the palette afterwards. Also fixes
-> the screenshot confirm button being unclickable when it overlapped the colour bar.
+> **Latest 9.4.4 (2026-10-29)**: the updater is sturdier. It now verifies that the old process
+> has exited and that the package contains `InkTeach.exe` at its root, checks again after
+> extraction, and updates the stable install folder when launched from an `.old-*` backup
+> instead of nesting another backup. Five seconds after startup, the new build removes leftover
+> `*.old-*` folders next to both portable and installed builds; the uninstaller removes them too.
+> The normal download / checksum / swap flow is unchanged.
 >
 > *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
 > current version.*
@@ -35,7 +34,7 @@ PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else
 
 ## Quick start
 
-1. Download `InkTeach-Setup-9.4.3.exe`, double-click, Next, Done — or unzip the portable build.
+1. Download `InkTeach-Setup-9.4.4.exe`, double-click, Next, Done — or unzip the portable build.
 2. Open PowerPoint/WPS in slideshow mode, or any app; the InkTeach toolbar sits at the bottom.
 3. Write with a pen or mouse. `Ctrl+L` = laser, `Ctrl+E` = eraser, `Ctrl+Alt+Shift+T` hands the mouse back; press it again to return to the pen (9.3.2).
 4. Hold `Ctrl+Alt+Shift+Q` and flick to a sector to switch tools without hunting for the toolbar.

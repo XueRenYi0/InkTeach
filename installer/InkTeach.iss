@@ -23,6 +23,10 @@
 ;      kira-96/Inno-Setup-Chinese-Simplified-Translation，MIT），随仓库放在
 ;      installer\ 下，见 THIRD-PARTY-NOTICES.md。
 ;
+;   5. 卸载时顺带删掉自动更新留下的 {app}.old-* 备份：它们不在安装清单里，
+;      [UninstallDelete] 的 {app} 管不到；不删的话用户卸载后还会剩二十多 MB。
+;      只删这个前缀的目录，不碰用户自己的文件，也不影响更新流程。
+;
 ;  版本号 / 包目录由 publish.ps1 用 /D 传进来（保证和 exe 里的版本同源）。
 ; ============================================================================
 
@@ -113,6 +117,27 @@ begin
   Result := True;
 end;
 
+procedure DeleteOldBackups();
+var
+  BaseDir, Pattern: String;
+  FindRec: TFindRec;
+begin
+  { 自动更新会把旧目录改名成 AppDir.old-YYYYMMDD-HHMMSS；
+    这些目录不在安装清单里，[UninstallDelete] 只删 AppDir 清不到。
+    只按固定前缀找，删不掉（被占用/权限）就跳过，不影响卸载结果。 }
+  BaseDir := ExtractFileDir(ExpandConstant('{app}'));
+  Pattern := AddBackslash(BaseDir) + ExtractFileName(ExpandConstant('{app}')) + '.old-*';
+  if FindFirst(Pattern, FindRec) then
+  try
+    repeat
+      if (FindRec.Attributes and $10) <> 0 then
+        DelTree(AddBackslash(BaseDir) + FindRec.Name, True, True, True);
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   { 卸载时清掉“开机自动启动”的当前用户登记（不需要管理员）。
@@ -123,5 +148,6 @@ begin
     RegDeleteValue(HKCU,
       'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run',
       'InkTeach');
+    DeleteOldBackups();
   end;
 end;

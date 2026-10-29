@@ -198,6 +198,7 @@ internal static class UpdateProbe
         string stage = Path.Combine(sandbox, "stage");
         Directory.CreateDirectory(stage);
         File.WriteAllText(Path.Combine(stage, "new-marker.txt"), "new");
+        File.WriteAllText(Path.Combine(stage, "InkTeach.exe"), "fake-exe");
         string newZip = Path.Combine(sandbox, "new.zip");
         System.IO.Compression.ZipFile.CreateFromDirectory(stage, newZip);
         string swapDir = Path.Combine(sandbox, "upd");
@@ -228,6 +229,48 @@ internal static class UpdateProbe
               doneWrote ? "内容 " + (File.ReadAllText(Path.Combine(swapDir, "done.txt")).Trim()) : "没写");
         Check("换壳（沙箱真跑）：更新包用完就删（不留 33 MB 的 zip）", !File.Exists(newZip),
               File.Exists(newZip) ? "zip 还在" : "");
+
+        // ---- ⑥a 旧备份清理（2026-10-29 用户截图：同一目录堆了 3 个 .old）----
+        string cleanupRoot = Path.Combine(dir, "cleanup");
+        try { if (Directory.Exists(cleanupRoot)) Directory.Delete(cleanupRoot, true); } catch { }
+        Directory.CreateDirectory(cleanupRoot);
+        string cleanupMain = Path.Combine(cleanupRoot, "InkTeach-9.4.2-win-x64");
+        Directory.CreateDirectory(cleanupMain);
+        File.WriteAllText(Path.Combine(cleanupMain, "InkTeach.exe"), "main");
+        for (int i = 0; i < 3; i++)
+        {
+            string b = Path.Combine(cleanupRoot, $"InkTeach-9.4.2-win-x64.old-2026010{i + 1}-000000");
+            Directory.CreateDirectory(b);
+            File.WriteAllText(Path.Combine(b, "InkTeach.exe"), "old");
+            Directory.SetLastWriteTimeUtc(b, DateTime.UtcNow.AddMinutes(-30 + i));
+        }
+        int cleaned = UpdateFeed.CleanupOldBackups(cleanupMain);
+        int backupsLeft = Directory.GetDirectories(cleanupRoot, "*.old-*").Length;
+        Check("旧备份清理：新版本启动后全部删掉", cleaned == 3 && backupsLeft == 0,
+              $"删了 {cleaned}，还剩 {backupsLeft}");
+
+        // ---- ⑥b 从 .old 备份启动时，不能再套一层 .old ----
+        string nestedRoot = Path.Combine(dir, "nested");
+        try { if (Directory.Exists(nestedRoot)) Directory.Delete(nestedRoot, true); } catch { }
+        Directory.CreateDirectory(nestedRoot);
+        string nestedMain = Path.Combine(nestedRoot, "InkTeach-9.4.2-win-x64");
+        Directory.CreateDirectory(nestedMain);
+        File.WriteAllText(Path.Combine(nestedMain, "InkTeach.exe"), "main");
+        string nestedOld = Path.Combine(nestedRoot,
+            "InkTeach-9.4.2-win-x64.old-20260101-000000.old-20260102-000000.old-20260103-000000");
+        Directory.CreateDirectory(nestedOld);
+        File.WriteAllText(Path.Combine(nestedOld, "InkTeach.exe"), "old");
+        File.WriteAllText(Path.Combine(nestedOld, "old-marker.txt"), "old");
+        string newZip2 = Path.Combine(nestedRoot, "new2.zip");
+        System.IO.Compression.ZipFile.CreateFromDirectory(stage, newZip2);
+        string swapDir2 = Path.Combine(nestedRoot, "upd");
+        string swapScript2 = UpdateFeed.WriteSwapScript(swapDir2);
+        var (nestedOk, nestedMsg) = RunSwapSandbox(swapScript2, nestedOld, newZip2);
+        bool nestedArrived = File.Exists(Path.Combine(nestedMain, "new-marker.txt"));
+        int nestedDepth = Directory.GetDirectories(nestedRoot, "*.old-*.old-*").Length;
+        Check("换壳：从旧备份启动时改为更新稳定目录，不再嵌套 .old",
+              nestedOk && nestedArrived && nestedDepth == 0,
+              nestedMsg + $" / arrived={nestedArrived} / nested={nestedDepth}");
 
         // ---- ⑥b 加速站缓存：不能"第一个说已是最新"就收工 -------------------------
         // 2026-09-29 真机踩到：发了 8.0.2 之后 gh-proxy.com 还在送 8.0.1 的清单，
