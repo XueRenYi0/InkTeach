@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://xuerenyi0.github.io/InkTeach/sitemap.xml
+Sitemap: https://www.inkteach.com/sitemap.xml
