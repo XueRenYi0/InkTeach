@@ -98,7 +98,7 @@ public partial class InkEngine
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETMARGINS,
                            new IntPtr(Native.EC_LEFTMARGIN | Native.EC_RIGHTMARGIN),
                            new IntPtr(margin | (margin << 16)));
-        Native.SendMessage(_textBoxEditHwnd, Native.EM_SETLIMITTEXT, new IntPtr(4000), IntPtr.Zero);
+        Native.SendMessage(_textBoxEditHwnd, Native.EM_SETLIMITTEXT, new IntPtr(20000), IntPtr.Zero);
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL, IntPtr.Zero, new IntPtr(-1));
 
         var b = s.PaddedBounds;
@@ -121,9 +121,9 @@ public partial class InkEngine
         string text = before;
         if (accept && _textBoxEditHwnd != IntPtr.Zero)
         {
-            var sb = new System.Text.StringBuilder(8192);
+            var sb = new System.Text.StringBuilder(32768);
             Native.GetWindowTextW(_textBoxEditHwnd, sb, sb.Capacity);
-            text = sb.ToString();
+            text = sb.ToString().Replace("\r\n", "\n").Replace('\r', '\n');
         }
         _textBoxEditStroke = null;
         HideTextBoxEdit();
@@ -139,6 +139,8 @@ public partial class InkEngine
             Doc.Dirty.Add(s.PaddedBounds);
             Doc.StructureChangedSinceRender = true;
             Doc.Version++;
+            if (!string.Equals(before, text, StringComparison.Ordinal))
+                Doc.CommitInteractive(new TextBoxTextAction(s, before, text, oldBounds, s.PaddedBounds));
         }
         _dirty = true;
         NotifyUiStateChanged();
@@ -248,5 +250,48 @@ public partial class InkEngine
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
         }
         if (KeyboardMode && _windows.Count > 0) Native.SetFocus(_windows[0].Hwnd);
+    }
+}
+
+/// <summary>
+/// 文本框改文字的一步撤销。只换 <see cref="TextBoxData.Text"/> 并重排，
+/// 不碰宽高/字号（那些由 <see cref="TextBoxGeometryAction"/> 管）。
+/// </summary>
+internal sealed class TextBoxTextAction : EditAction
+{
+    private readonly Stroke _stroke;
+    private readonly string _before, _after;
+    private readonly RectF _beforeBounds, _afterBounds;
+
+    public TextBoxTextAction(Stroke s, string before, string after,
+                             RectF beforeBounds, RectF afterBounds)
+    {
+        _stroke = s;
+        _before = before;
+        _after = after;
+        _beforeBounds = beforeBounds;
+        _afterBounds = afterBounds;
+    }
+
+    public override int HeldStrokes => 1;
+    public override RectF AffectedBefore => _beforeBounds;
+    public override RectF AffectedAfter => _afterBounds;
+
+    public override void Undo(InkDocument doc) => Apply(doc, _before);
+    public override void Redo(InkDocument doc) => Apply(doc, _after);
+
+    private void Apply(InkDocument doc, string text)
+    {
+        var box = _stroke.TextBox;
+        if (box == null) return;
+        var old = _stroke.PaddedBounds;
+        box.Text = text;
+        box.InvalidateLayout();
+        _stroke.SyncTextBoxBounds();
+        doc.RefreshStrokeGrid(_stroke);
+        doc.Dirty.Add(old);
+        doc.Dirty.Add(_stroke.PaddedBounds);
+        doc.StructureChangedSinceRender = true;
+        doc.Version++;
     }
 }
