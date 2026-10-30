@@ -3375,6 +3375,7 @@ internal sealed partial class OverlayWindow : IDisposable
             // 只放 4 像素的话投影会被脏区切掉、在屏幕上留一条印子。
             float cardPad = (4f + app.FloatingTheme.ShadowReachLogical) * dpi;
             var barRect = app.Doc.Selected.Count == 1 && app.Doc.Selected[0].Kind == StrokeKind.TextBox
+                          && app.SelPanelOpen == SelPanel.None && !app.CustomColorOpen
                 ? SelectionHandles.BarRectForTextBox(sb, dpi, app.FurnitureViewport)
                 : SelectionHandles.BarRect(sb, dpi, app.FurnitureViewport);
             r.Add(CanvasRectToWindow(barRect.Inflate(cardPad)));
@@ -4932,7 +4933,7 @@ internal sealed partial class OverlayWindow : IDisposable
                           && app.Doc.Selected[0].Kind == StrokeKind.TextBox;
         // 布局从 SelectionHandles 取，与命中判定同源：分开写迟早差几个像素，
         // 表现就是"看得见按钮却点不中"。
-        var rect = textBoxSel
+        var rect = textBoxSel && app.SelPanelOpen == SelPanel.None && !app.CustomColorOpen
             ? SelectionHandles.BarRectForTextBox(sel, dpi, visible)
             : SelectionHandles.BarRect(sel, dpi, visible);
         // 圆角**用界面那套令牌**（UiTheme.CornerRadius = 10），不自己发明一个胶囊：
@@ -4954,6 +4955,7 @@ internal sealed partial class OverlayWindow : IDisposable
             var kind = (SelBarButton)i;
             bool hot = app.SelBarHover == i;
             bool active = IsBarButtonActive(app, kind);
+            bool danger = kind == SelBarButton.Delete && hot;
             // 禁用（图标改用 theme.TextMuted）：九格都是通用操作（收起/颜色/锁定/层级/
             // 导出/复制/翻转×2/删除），对任何选中对象都成立，所以**当前没有一格会灰**。
             // 这一格留着是给"以后真需要禁用"的位置——2026-09-20 加过又撤掉的
@@ -4969,13 +4971,16 @@ internal sealed partial class OverlayWindow : IDisposable
                 var chip = SelectionHandles.BarHoverChipIn(btn, dpi);
                 var bg = new Vortice.RawRectF(chip.MinX, chip.MinY, chip.MaxX, chip.MaxY);
                 float br = MathF.Min(bg.Bottom - bg.Top, bg.Right - bg.Left) * 0.32f;
-                _scratch.Color = active
-                    ? theme.ActiveBg                            // 激活：主题的实心蓝
-                    : theme.Hover;                              // 悬停：主题的浅蓝灰
+                _scratch.Color = danger
+                    ? new Color4(0.86f, 0.18f, 0.18f, 0.12f)     // 删除：悬停淡红，和普通格区分
+                    : active
+                        ? theme.ActiveBg                            // 激活：主题的实心蓝
+                        : theme.Hover;                              // 悬停：主题的浅蓝灰
                 _ctx.FillRoundedRectangle(new RoundedRectangle(bg, br, br), _scratch);
             }
 
-            var iconBrush = Brush(disabled ? theme.TextMuted
+            var iconBrush = Brush(danger ? new Color4(0.80f, 0.16f, 0.16f, 1f)
+                                     : disabled ? theme.TextMuted
                                      : active ? theme.ActiveText
                                               : theme.Text);
             float cx = (btn.MinX + btn.MaxX) * 0.5f, cy = (btn.MinY + btn.MaxY) * 0.5f;
@@ -4985,7 +4990,7 @@ internal sealed partial class OverlayWindow : IDisposable
                 case SelBarButton.Color:
                     // 圆环的**半径**按图标框的一半左右给（以前给成 0.62 倍，画出来比
                     // 别的图标还大一圈——用户："那个颜色圈的比例也太大了"）。
-                    DrawColorRing(app, cx, cy, glyphBox * 0.44f, disabled || (textBoxSel && app.Doc.Selected[0].TextBox?.Role == TextBoxRole.AiQuestion));
+                    DrawColorRing(app, cx, cy, glyphBox * 0.40f, disabled || (textBoxSel && app.Doc.Selected[0].TextBox?.Role == TextBoxRole.AiQuestion));
                     break;
                 case SelBarButton.Lock:
                     DrawIcon(IsSelectionLocked(app) ? IconPaths.lockClosed : IconPaths.unlock,
@@ -4995,7 +5000,7 @@ internal sealed partial class OverlayWindow : IDisposable
                 {
                     // 文本框把"翻转"两格换成字号 A- / A+（图片的翻转对文字没意义）。
                     string glyph = kind == SelBarButton.FlipH ? "A−" : "A+";
-                    var fmt = AiTextFormat(14f * dpi, true, true);
+                    var fmt = AiTextFormat(16f * dpi, true, true);
                     _ctx.DrawText(glyph, fmt,
                         new Rect(btn.MinX, btn.MinY, btn.MaxX - btn.MinX, btn.MaxY - btn.MinY),
                         iconBrush);

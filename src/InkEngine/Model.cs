@@ -6357,7 +6357,16 @@ internal sealed class SetStrokePropAction : EditAction
             doc.Dirty.Add(s.PaddedBounds);                 // 旧样子要擦
             switch (_prop)
             {
-                case Prop.Color: s.Color = old ? _oldColor[i] : _newColor[i]; break;
+                case Prop.Color:
+                    s.Color = old ? _oldColor[i] : _newColor[i];
+                    // 普通文本框：公式是位图，改色必须重排重烘；文字本来就跟 s.Color 走。
+                    if (s.TextBox is { Role: TextBoxRole.Normal } box)
+                    {
+                        box.Ink = s.Color;
+                        box.InvalidateLayout();
+                        s.SyncTextBoxBounds();
+                    }
+                    break;
                 case Prop.Width: s.Width = old ? _oldWidth[i] : _width; break;
                 case Prop.Lock:  s.Locked = old ? _oldLock[i] : _lock; break;
                 case Prop.Dash:  s.Dash = old ? _oldDash[i] : _dash; break;

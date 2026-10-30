@@ -632,6 +632,7 @@ internal static class InkSerializer
                 });
             }
             s.TextBox = c;
+            c.Ink = s.Color;
             c.InvalidateLayout();
             _ = c.EnsureLayout();
             s.SyncTextBoxBounds();

@@ -15960,6 +15960,7 @@ public partial class InkEngine
     /// </summary>
     private RectF SelectionBarRect(in RectF aabb)
         => Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.TextBox
+           && SelPanelOpen == SelPanel.None && !CustomColorOpen
             ? SelectionHandles.BarRectForTextBox(aabb, UiUnit, FurnitureViewport)
             : SelectionHandles.BarRect(aabb, UiUnit, FurnitureViewport);
 
@@ -17791,6 +17792,10 @@ public partial class InkEngine
                 break;
 
             case SelBarButton.Color:
+                // AI 题卡的颜色/粗细固定（题干黑、答案红），点开面板也调不了，直接不响应。
+                if (Doc.Selected.Count == 1
+                    && Doc.Selected[0].TextBox?.Role == TextBoxRole.AiQuestion)
+                    break;
                 if (SelPanelOpen == SelPanel.Ink)
                 {
                     CloseCustomColor();                         // 关面板 = 色板一起关

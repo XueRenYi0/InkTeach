@@ -1321,7 +1321,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --mathtest          公式渲染 spike：CSharpMath 渲染 6 个典型 LaTeX 到 reports/math-spike/");
         Console.WriteLine("  --radialtest        呼出盘自检（Ctrl+Alt+Shift+Q：开 / 划 / 松 / 取消 / 穿透 / 松键轮询）");
         Console.WriteLine("  --radialshow [图]   呼出盘摆样：定格在屏幕中央出图（默认 reports/radial-palette.bmp）");
-        Console.WriteLine("  --aishow [图]       AI 面板 + 题卡 + 文本框摆样：面板 / 折叠 / 选中 / 展开 / 文本框五张（默认 reports/ai-card.bmp）");
+        Console.WriteLine("  --aishow [图]       AI 面板 + 题卡 + 文本框摆样：面板 / 折叠 / 选中 / 展开 / 文本框 / 改色六张（默认 reports/ai-card.bmp）");
         Console.WriteLine("  --shapeiconshow [路径] 出图：图形面板图标的对照表（含每一档的变体）");
         Console.WriteLine("  --toolicons [路径]  出图：白板 / 激光笔的图标候选（未选中 / 选中 / 放大三格）");
         Console.WriteLine("  --penshow [路径] [bars]  出图：上游那批「带笔的」图标；带第 2 个参数就每格加一副「三道杠」");
@@ -5500,8 +5500,15 @@ internal sealed partial class App : InkEngine.InkEngine
         bool ok4 = ScreenProbe.SaveBmp(p4, (int)_virtualX, (int)_virtualY,
                                        (int)_virtualW, (int)_virtualH);
 
-        Console.WriteLine(ok1 && ok2 && ok3 && oks && ok4
-            ? $"出图：{p1} / {p2} / {ps} / {p3} / {p4}"
+        // ⑥ 改字色：文字和公式图都应该跟着变，不能只变文字
+        SetSelectionColor(new Color4(0.80f, 0.18f, 0.18f, 1f));
+        SettleFrames(200);
+        string p5 = System.IO.Path.ChangeExtension(path, null) + "-red.bmp";
+        bool ok5 = ScreenProbe.SaveBmp(p5, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+
+        Console.WriteLine(ok1 && ok2 && ok3 && oks && ok4 && ok5
+            ? $"出图：{p1} / {p2} / {ps} / {p3} / {p4} / {p5}"
             : "抓屏失败（看上一行）");
         Console.WriteLine($"题卡/文本框数：{TextBoxCountForTest}（应为 1）");
         _quit = true;

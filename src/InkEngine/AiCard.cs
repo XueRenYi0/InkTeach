@@ -56,6 +56,13 @@ internal sealed class TextBoxData
     /// <summary>正文字号（逻辑像素，乘 <see cref="Unit"/> 后是画布像素）。</summary>
     public float FontSize = 14.5f;
 
+    /// <summary>
+    /// 普通文本框的文字/公式颜色（= Stroke.Color 的副本）。
+    /// 公式是位图，颜色必须在渲染时定；改颜色时同步这里并让排版重烘。
+    /// AI 题卡不用它（题干黑、答案红由 Role 决定）。
+    /// </summary>
+    public Color4 Ink = new(0.12f, 0.14f, 0.18f, 1f);
+
     /// <summary>建卡时的 DPI 单位（1 = 100%）。卡片是自包含的，换机器后仍按这个比例排版。</summary>
     public float Unit = 1f;
 
@@ -108,7 +115,7 @@ internal sealed class TextBoxData
         {
             Role = Role, Title = Title, Meta = Meta, Text = Text,
             ShowAnswers = ShowAnswers, Width = Width, Height = Height,
-            AutoHeight = AutoHeight, FontSize = FontSize, Unit = Unit,
+            AutoHeight = AutoHeight, FontSize = FontSize, Unit = Unit, Ink = Ink,
         };
         foreach (var q in Questions) c.Questions.Add(q.Clone());
         return c;
@@ -377,7 +384,7 @@ internal static class TextBoxLayout
 
                 if (sb.Length > 0)
                 {
-                    AddMathBlock(lines, sb.ToString().Trim(), size, pad, textW, u, ref y);
+                    AddMathBlock(lines, sb.ToString().Trim(), size, pad, textW, card.Ink, u, ref y);
                     hi = consumedTo;
                     continue;
                 }
@@ -403,14 +410,14 @@ internal static class TextBoxLayout
             string trimmed = display.Trim();
             if (TryBlockMath(trimmed, out string latex))
             {
-                AddMathBlock(lines, latex, lineSize, pad, textW, u, ref y);
+                AddMathBlock(lines, latex, lineSize, pad, textW, card.Ink, u, ref y);
                 continue;
             }
 
             if (display.Contains('$') || display.Contains("\\(") || display.Contains("\\)")
                 || display.Contains('*') || boldAll)
             {
-                var runs = ParseInline(display, lineSize, u, boldAll);
+                var runs = ParseInline(display, lineSize, u, boldAll, card.Ink);
                 if (runs.Count > 0)
                 {
                     LayoutInlineRuns(lines, runs, pad, textW, lineSize, lineH2, u, ref y);
@@ -428,7 +435,8 @@ internal static class TextBoxLayout
         return lines;
     }
 
-    private static List<TextBoxRun> ParseInline(string text, float size, float u, bool boldAll = false)
+    private static List<TextBoxRun> ParseInline(string text, float size, float u, bool boldAll,
+                                                Color4 ink)
     {
         // DeepSeek / ChatGPT 常输出 \(...\) 行内公式；内部统一成 $...$ 再解析。
         text = text.Replace("\\(", "$").Replace("\\)", "$");
@@ -451,7 +459,7 @@ internal static class TextBoxLayout
                 break;
             }
             string latex = text[(open + 1)..close].Trim();
-            AddMathRuns(runs, latex, size * 0.95f);
+            AddMathRuns(runs, latex, size * 0.95f, ink);
             i = close + 1;
         }
         return runs;
@@ -461,7 +469,7 @@ internal static class TextBoxLayout
     /// 公式 → 若干 run。含中文的 `\text{...}` 拆成普通文字 run，
     /// 其余按公式图；这样中文不会画成方框，又能和公式排在同一基线。
     /// </summary>
-    private static void AddMathRuns(List<TextBoxRun> runs, string latex, float size)
+    private static void AddMathRuns(List<TextBoxRun> runs, string latex, float size, Color4 ink)
     {
         latex = LatexCompat.Normalize(latex);
         if (string.IsNullOrWhiteSpace(latex)) return;
@@ -481,16 +489,15 @@ internal static class TextBoxLayout
             }
             else
             {
-                AddMathImageRun(runs, value.Trim(), size);
+                AddMathImageRun(runs, value.Trim(), size, ink);
             }
         }
     }
 
-    private static void AddMathImageRun(List<TextBoxRun> runs, string latex, float size)
+    private static void AddMathImageRun(List<TextBoxRun> runs, string latex, float size, Color4 ink)
     {
         if (string.IsNullOrEmpty(latex)) return;
-        var math = MathRenderer.RenderImage(latex, size,
-            new Color4(0.12f, 0.14f, 0.18f, 1f), 2f);
+        var math = MathRenderer.RenderImage(latex, size, ink, 2f);
         if (math == null)
         {
             AddStyledTextRuns(runs, "（公式）", size, false);
@@ -676,6 +683,15 @@ internal static class TextBoxLayout
         return w;
     }
 
+    /// <summary>AI 题卡的墨色；必须和 Overlay.AiColor 保持同一组值，公式才能和文字同色。</summary>
+    private static Color4 AiInk(TextBoxInk ink) => ink switch
+    {
+        TextBoxInk.Red => new Color4(0.72f, 0.16f, 0.16f, 1f),
+        TextBoxInk.Muted => new Color4(0.42f, 0.45f, 0.50f, 1f),
+        TextBoxInk.Accent => new Color4(0.72f, 0.16f, 0.16f, 1f),
+        _ => new Color4(0.12f, 0.14f, 0.18f, 1f),
+    };
+
     /// <summary>
     /// 题卡的富文本行：支持 `$...$` / `\(...\)` 公式、`**粗体**`、`*斜体*`，
     /// 没有公式时退回普通换行。题干预设黑色，答案/解析传红色。
@@ -690,7 +706,7 @@ internal static class TextBoxLayout
             if (line.Contains('$') || line.Contains("\\(") || line.Contains("\\)")
                 || line.Contains('*'))
             {
-                var runs = ParseInline(line, size, u);
+                var runs = ParseInline(line, size, u, false, AiInk(ink));
                 if (runs.Count > 0)
                 {
                     int before = lines.Count;
@@ -720,7 +736,7 @@ internal static class TextBoxLayout
 
     /// <summary>把一整行公式排成居中的公式图；失败时给一句提示，不露 LaTeX 源码。</summary>
     private static void AddMathBlock(List<TextBoxLine> lines, string latex, float size,
-                                     float pad, float textW, float u, ref float y)
+                                     float pad, float textW, Color4 ink, float u, ref float y)
     {
         latex = LatexCompat.Normalize(latex);
         if (string.IsNullOrWhiteSpace(latex)) return;
@@ -730,7 +746,7 @@ internal static class TextBoxLayout
         foreach (var (isText, _) in segments) hasText |= isText;
         if (!hasText)
         {
-            var math = MathRenderer.RenderImage(latex, size, new Color4(0.12f, 0.14f, 0.18f, 1f), 2f);
+            var math = MathRenderer.RenderImage(latex, size, ink, 2f);
             if (math == null)
             {
                 AddText(lines, "（公式渲染失败）", pad, y, size, size * 1.55f, TextBoxInk.Muted);
@@ -759,7 +775,7 @@ internal static class TextBoxLayout
 
         // 公式里混了中文（\text{当 }x>0\text{ 时}）：拆成文字 + 公式 run，居中排一行。
         var runs = new List<TextBoxRun>();
-        AddMathRuns(runs, latex, size);
+        AddMathRuns(runs, latex, size, ink);
         if (runs.Count == 0)
         {
             AddText(lines, "（公式渲染失败）", pad, y, size, size * 1.55f, TextBoxInk.Muted);

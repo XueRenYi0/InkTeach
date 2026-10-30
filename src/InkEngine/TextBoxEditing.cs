@@ -63,6 +63,7 @@ public partial class InkEngine
             Color = new Color4(0.12f, 0.14f, 0.18f, 1f),
             Width = 0f,
         };
+        data.Ink = s.Color;
         s.SetTextBoxRect(new Vector2(x, y), w, h);
         Doc.AddStroke(s);
         _ = data.EnsureLayout();
