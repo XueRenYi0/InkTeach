@@ -5550,6 +5550,20 @@ internal sealed partial class App : InkEngine.InkEngine
                                        (int)_virtualW, (int)_virtualH);
 
         // ⑦ 删除：删完不能有残字；再框选/点删除也不能命中已删对象
+        // 先做一次真实的"改宽 → 长高 → 重登记索引"，再删。
+        if (editTarget?.TextBox != null)
+        {
+            var oldB = editTarget.PaddedBounds;
+            editTarget.TextBox.Width *= 0.85f;
+            editTarget.TextBox.InvalidateLayout();
+            editTarget.SyncTextBoxBounds();
+            Doc.RefreshStrokeGrid(editTarget);
+            Doc.Dirty.Add(oldB);
+            Doc.Dirty.Add(editTarget.PaddedBounds);
+            Doc.StructureChangedSinceRender = true;
+            Doc.Version++;
+            SettleFrames(150);
+        }
         var victim = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
         var vb = victim?.PaddedBounds ?? default;
         RunBarActionForTest((int)SelBarButton.Delete);   // 走真实操作条删除路径
@@ -5600,6 +5614,21 @@ internal sealed partial class App : InkEngine.InkEngine
             ScreenProbe.SaveBmp(pr, (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
         }
         Console.WriteLine(undoOk && redoOk ? "删除撤销/重做通过" : $"删除撤销/重做失败：undo={undoOk} redo={redoOk}");
+
+        // 编辑中直接删：先收原生 EDIT，不能留一个还在显示文字的窗口
+        Doc.Clear();
+        Doc.ClearHistory();
+        InsertPlainTextBoxForTest("编辑中删除测试");
+        var st2 = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+        if (st2 != null)
+        {
+            BeginTextBoxEdit(st2);
+            SetTextBoxEditTextForTest("编辑中删除测试\n第二行文字");
+            RunBarActionForTest((int)SelBarButton.Delete);
+            SettleFrames(250);
+        }
+        bool editDelOk = !TextBoxEditing && Doc.Strokes.Count == 0 && Doc.Selected.Count == 0;
+        Console.WriteLine(editDelOk ? "编辑中删除通过" : $"编辑中删除失败：editing={TextBoxEditing} strokes={Doc.Strokes.Count}");
 
         Console.WriteLine(ok1 && ok2 && ok3 && oks && ok4 && ok5 && ok6
             ? $"出图：{p1} / {p2} / {ps} / {p3} / {p4} / {p5} / {p6}"

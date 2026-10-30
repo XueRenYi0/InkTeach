@@ -10,6 +10,7 @@ internal static class Native
     public const int WM_PAINT = 0x000F;
     public const int WM_CLOSE = 0x0010;
     public const int WM_ERASEBKGND = 0x0014;
+    public const int WM_CTLCOLOREDIT = 0x0133;
     public const int WM_SETCURSOR = 0x0020;
     public const int WM_MOUSEACTIVATE = 0x0021;
     public const int WM_DISPLAYCHANGE = 0x007E;
@@ -776,6 +777,12 @@ internal static class Native
 
     [DllImport("gdi32.dll")]
     public static extern IntPtr GetStockObject(int i);
+
+    [DllImport("gdi32.dll")]
+    public static extern uint SetBkColor(IntPtr hdc, uint color);
+
+    [DllImport("gdi32.dll")]
+    public static extern uint SetTextColor(IntPtr hdc, uint color);
 
     [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr CreateFontW(int cHeight, int cWidth, int cEscapement, int cOrientation,

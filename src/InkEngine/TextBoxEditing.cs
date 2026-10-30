@@ -12,6 +12,8 @@ namespace InkEngine;
 public partial class InkEngine
 {
     private IntPtr _textBoxEditHwnd;
+    private IntPtr _textBoxEditHost;
+    private static Native.WndProcDelegate _textBoxEditHostProc;
     private Native.WndProcDelegate _textBoxEditWndProc;
     private IntPtr _textBoxEditOldProc;
     private bool _textBoxEditHadNoActivate;
@@ -115,8 +117,18 @@ public partial class InkEngine
         int w = Math.Max(80, (int)MathF.Round(b.MaxX - b.MinX - 4f - pad * 2f));
         int h = Math.Max(40, (int)MathF.Round(editH - pad * 2f));
         int maxBottom = (int)MathF.Round(screen.MaxY - 16f * unit);
+        if (y + h > maxBottom)
+        {
+            // 框贴着屏幕底：编辑窗优先翻到框上方；再不行才压缩高度。
+            int above = (int)MathF.Round(b.MinY - h - 8f * unit);
+            int top = (int)MathF.Round(screen.MinY + 16f * unit);
+            if (above >= top) y = above;
+            else y = Math.Max(top, maxBottom - h);
+        }
         if (y + h > maxBottom) h = Math.Max(40, maxBottom - y);
-        Native.SetWindowPos(_textBoxEditHwnd, Native.HWND_TOPMOST, x, y, w, h,
+        Native.SetWindowPos(_textBoxEditHost, Native.HWND_TOPMOST, x, y, w, h,
+                            Native.SWP_SHOWWINDOW);
+        Native.SetWindowPos(_textBoxEditHwnd, IntPtr.Zero, 0, 0, w, h,
                             Native.SWP_SHOWWINDOW);
         FocusTextBoxEditWindow();
         _dirty = true;
@@ -167,6 +179,8 @@ public partial class InkEngine
     {
         bool was = _textBoxEditing;
         _textBoxEditing = false;
+        if (_textBoxEditHost != IntPtr.Zero)
+            Native.ShowWindow(_textBoxEditHost, Native.SW_HIDE);
         if (_textBoxEditHwnd != IntPtr.Zero)
             Native.ShowWindow(_textBoxEditHwnd, Native.SW_HIDE);
         RestoreTextBoxEditFocus();
@@ -176,20 +190,56 @@ public partial class InkEngine
     private void EnsureTextBoxEditWindow()
     {
         if (_textBoxEditHwnd != IntPtr.Zero) return;
+        RegisterTextBoxEditHost();
         long exStyle = Native.WS_EX_TOPMOST | Native.WS_EX_TOOLWINDOW;
-        // WS_POPUP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN
-        long style = 0x80000000L | 0x00200000L | 0x0004L | 0x0040L | 0x1000L;
-        _textBoxEditHwnd = Native.CreateWindowEx(exStyle, "EDIT", "InkTeachTextBox",
-            style, 0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, _hInstance, IntPtr.Zero);
+        long hostStyle = 0x80000000L /* WS_POPUP */;
+        _textBoxEditHost = Native.CreateWindowEx(exStyle, "InkTeachEditHost", "InkTeachTextBoxHost",
+            hostStyle, 0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, _hInstance, IntPtr.Zero);
+        if (_textBoxEditHost == IntPtr.Zero) return;
+
+        // WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN
+        long style = 0x40000000L | 0x10000000L | 0x00200000L | 0x0004L | 0x0040L | 0x1000L;
+        _textBoxEditHwnd = Native.CreateWindowEx(0, "EDIT", "InkTeachTextBox",
+            style, 0, 0, 1, 1, _textBoxEditHost, IntPtr.Zero, _hInstance, IntPtr.Zero);
         if (_textBoxEditHwnd == IntPtr.Zero) return;
-        // 顶层 EDIT 的默认类背景不刷；显式挂白刷子（真正显示仍由 DWM 决定）。
-        Native.SetClassLongPtr(_textBoxEditHwnd, -10 /* GCLP_HBRBACKGROUND */,
-                               Native.GetStockObject(0 /* WHITE_BRUSH */));
-        Native.InvalidateRect(_textBoxEditHwnd, IntPtr.Zero, true);
         _textBoxEditWndProc = TextBoxEditWndProc;
         _textBoxEditOldProc = Native.SetWindowLongPtr(
             _textBoxEditHwnd, Native.GWLP_WNDPROC,
             System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(_textBoxEditWndProc));
+    }
+
+    private void RegisterTextBoxEditHost()
+    {
+        if (_textBoxEditHostProc != null) return;
+        _textBoxEditHostProc = TextBoxEditHostProc;
+        var wc = new Native.WNDCLASSEX
+        {
+            cbSize = System.Runtime.InteropServices.Marshal.SizeOf<Native.WNDCLASSEX>(),
+            lpfnWndProc = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(_textBoxEditHostProc),
+            hInstance = _hInstance,
+            hCursor = Native.LoadCursor(IntPtr.Zero, new IntPtr(Native.IDC_ARROW)),
+            hbrBackground = Native.GetStockObject(0 /* WHITE_BRUSH */),
+            lpszClassName = "InkTeachEditHost",
+        };
+        Native.RegisterClassEx(ref wc);
+    }
+
+    private static IntPtr TextBoxEditHostProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        switch (msg)
+        {
+            case Native.WM_ERASEBKGND:
+            {
+                Native.GetClientRect(hWnd, out var rc);
+                Native.FillRect(wParam, ref rc, Native.GetStockObject(0 /* WHITE_BRUSH */));
+                return new IntPtr(1);
+            }
+            case Native.WM_CTLCOLOREDIT:
+                Native.SetBkColor(wParam, 0x00FFFFFF);
+                Native.SetTextColor(wParam, 0x00000000);
+                return Native.GetStockObject(0 /* WHITE_BRUSH */);
+        }
+        return Native.DefWindowProc(hWnd, msg, wParam, lParam);
     }
 
     private IntPtr TextBoxEditWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
@@ -252,16 +302,16 @@ public partial class InkEngine
         if (fgTid != 0 && fgTid != myTid)
         {
             Native.AttachThreadInput(myTid, fgTid, true);
-            Native.SetForegroundWindow(_textBoxEditHwnd);
+            Native.SetForegroundWindow(_textBoxEditHost);
             Native.SetFocus(_textBoxEditHwnd);
             Native.AttachThreadInput(myTid, fgTid, false);
         }
         else
         {
-            Native.SetForegroundWindow(_textBoxEditHwnd);
+            Native.SetForegroundWindow(_textBoxEditHost);
             Native.SetFocus(_textBoxEditHwnd);
         }
-        Native.SetWindowPos(_textBoxEditHwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
+        Native.SetWindowPos(_textBoxEditHost, Native.HWND_TOPMOST, 0, 0, 0, 0,
                             Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
     }
 
