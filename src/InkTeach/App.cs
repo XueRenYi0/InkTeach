@@ -5383,6 +5383,15 @@ internal sealed partial class App : InkEngine.InkEngine
                 if (l.Kind == TextBoxLineKind.Math && l.MathImage != null) { hasMath = true; break; }
             Check(hasMath, "普通文本框：整行 $$...$$ 渲染成公式图");
 
+            var inlineBox = TextBoxData.CreatePlain("当 $x=1$ 时，$y=x^2$。", 2f, 840f, 240f);
+            var inlineLines = inlineBox.EnsureLayout();
+            bool hasInlineMath = false;
+            foreach (var l in inlineLines)
+                if (l.Runs != null)
+                    foreach (var r in l.Runs)
+                        if (r.IsMath) { hasInlineMath = true; break; }
+            Check(hasInlineMath, "普通文本框：行内 $...$ 渲染成公式 run");
+
             // 8 手柄：右下角拖拽 = 同时改宽高，字号不变
             if (pt != null)
             {
@@ -5471,6 +5480,8 @@ internal sealed partial class App : InkEngine.InkEngine
         Doc.Clear();
         Doc.ClearHistory();
         InsertPlainTextBoxForTest("这是一个普通文本框。\n可以输入中文，选中后用 8 个手柄改宽高；\n"
+            + "# Markdown 标题\n**粗体** 和 *斜体*，以及列表：\n- 第一项\n- 第二项\n"
+            + "行内公式：当 $x=1$ 时，$y=x^2$ 的值为 $1$。\n"
             + "整行公式：\n$$x=\\frac{-b\\pm\\sqrt{b^2-4ac}}{2a}$$\n"
             + "会渲染成公式；字号用操作条的 A− / A+ 调。");
         Doc.SelectOnly(Doc.Strokes.Count > 0 ? new[] { Doc.Strokes[^1] } : Array.Empty<Stroke>());

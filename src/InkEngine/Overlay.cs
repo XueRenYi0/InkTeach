@@ -549,7 +549,7 @@ internal sealed partial class OverlayWindow : IDisposable
     /// AI 题卡的文字格式缓存。键 = (字号, 粗体, 居中)；题卡只在内容层重画时用到，
     /// 量很小，但别每帧重建 DirectWrite 格式。
     /// </summary>
-    private readonly Dictionary<(int Px, bool Bold, bool Center), IDWriteTextFormat> _aiFormats = new();
+    private readonly Dictionary<(int Px, bool Bold, bool Center, bool Italic), IDWriteTextFormat> _aiFormats = new();
 
     /// <summary>题卡配色（纸面始终浅色，保证黑题/红解析在深色主题下也读得清）。</summary>
     private static readonly Color4 AiPaper = new(0.999f, 0.995f, 0.972f, 0.985f);
@@ -2472,6 +2472,29 @@ internal sealed partial class OverlayWindow : IDisposable
                         break;
                     }
 
+                    case TextBoxLineKind.Text when line.Runs != null:
+                    {
+                        foreach (var run in line.Runs)
+                        {
+                            float rx = o.X + line.X + run.X;
+                            float ry = o.Y + line.Y + run.Y;
+                            if (run.IsMath)
+                            {
+                                var bmp = run.MathImage.GetBitmap(_ctx);
+                                if (bmp == null) continue;
+                                _ctx.DrawBitmap(bmp, new Vortice.RawRectF(rx, ry, rx + run.Width, ry + run.Height),
+                                                1f, Vortice.Direct2D1.InterpolationMode.Linear, null, null);
+                            }
+                            else
+                            {
+                                Color4 ink = card.Role == TextBoxRole.Normal ? s.Color : AiBlack;
+                                _ctx.DrawText(run.Text, AiTextFormat(run.Size, run.Bold, false, run.Italic),
+                                    new Rect(rx, ry, run.Width + 2f, run.Height), Brush(ink));
+                            }
+                        }
+                        break;
+                    }
+
                     case TextBoxLineKind.Math:
                     {
                         var bmp = line.MathImage?.GetBitmap(_ctx);
@@ -2517,14 +2540,15 @@ internal sealed partial class OverlayWindow : IDisposable
         _ => AiBlack,
     };
 
-    private IDWriteTextFormat AiTextFormat(float size, bool bold, bool center)
+    private IDWriteTextFormat AiTextFormat(float size, bool bold, bool center, bool italic = false)
     {
         int px = Math.Max(8, (int)MathF.Round(size));
-        var key = (px, bold, center);
+        var key = (px, bold, center, italic);
         if (_aiFormats.TryGetValue(key, out var f)) return f;
         f = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
             bold ? FontWeight.SemiBold : FontWeight.Normal,
-            FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            italic ? FontStyle.Italic : FontStyle.Normal,
+            FontStretch.Normal, px, "zh-CN");
         f.WordWrapping = WordWrapping.NoWrap;
         if (center)
         {

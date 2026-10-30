@@ -211,6 +211,20 @@ internal sealed class TextBoxLine
     /// <summary>独立公式行的透明位图；Math 行才有。</summary>
     public ImageData MathImage;
     public float MathW, MathH;
+    /// <summary>行内混排（文字 + 公式片段）；普通文本框含 `$...$` 时才有。</summary>
+    public List<TextBoxRun> Runs;
+}
+
+/// <summary>行内的一段：普通文字或公式图片。X/Y 是相对卡片内容左上角。</summary>
+internal sealed class TextBoxRun
+{
+    public string Text = "";
+    public ImageData MathImage;
+    public float X, Y, Width, Height, Ascent, Descent;
+    public float Size;
+    public bool Bold;
+    public bool Italic;
+    public bool IsMath => MathImage != null;
 }
 
 /// <summary>
@@ -322,17 +336,39 @@ internal static class TextBoxLayout
         string[] hardLines = (card.Text ?? "").Replace("\r\n", "\n").Split('\n');
         foreach (string hard in hardLines)
         {
-            string trimmed = hard.Trim();
+            string display = hard;
+            float lineSize = size;
+            float lineH2 = lineH;
+            bool boldAll = false;
+
+            // Markdown 标题：### / ## / #
+            int hash = 0;
+            while (hash < display.Length && hash < 3 && display[hash] == '#') hash++;
+            if (hash > 0 && hash < display.Length && display[hash] == ' ')
+            {
+                display = display[(hash + 1)..].Trim();
+                float scale = hash == 1 ? 1.45f : hash == 2 ? 1.25f : 1.12f;
+                lineSize = size * scale;
+                lineH2 = lineSize * 1.5f;
+                boldAll = true;
+            }
+            else if (display.StartsWith("- ", StringComparison.Ordinal)
+                     || display.StartsWith("* ", StringComparison.Ordinal))
+            {
+                display = "• " + display[2..];
+            }
+
+            string trimmed = display.Trim();
             if (TryBlockMath(trimmed, out string latex))
             {
-                var math = MathRenderer.RenderImage(latex, size, new Color4(0.12f, 0.14f, 0.18f, 1f), 2f);
+                var math = MathRenderer.RenderImage(latex, lineSize, new Color4(0.12f, 0.14f, 0.18f, 1f), 2f);
                 if (math != null)
                 {
                     float mx = pad + MathF.Max(0f, (textW - math.LogicalWidth) * 0.5f);
                     lines.Add(new TextBoxLine
                     {
                         Kind = TextBoxLineKind.Math,
-                        X = mx, Y = y, Size = size, Height = math.LogicalHeight,
+                        X = mx, Y = y, Size = lineSize, Height = math.LogicalHeight,
                         MathImage = math.Image,
                         MathW = math.LogicalWidth,
                         MathH = math.LogicalHeight,
@@ -340,19 +376,185 @@ internal static class TextBoxLayout
                     y += math.LogicalHeight + 8f * u;
                     continue;
                 }
-                AddText(lines, "（公式渲染失败）", pad, y, size, lineH, TextBoxInk.Muted);
-                y += lineH;
+                AddText(lines, "（公式渲染失败）", pad, y, lineSize, lineH2, TextBoxInk.Muted);
+                y += lineH2;
                 continue;
             }
 
-            foreach (string line in Wrap(hard, textW, size))
+            if (display.Contains('$') || display.Contains('*') || boldAll)
             {
-                AddText(lines, line, pad, y, size, lineH, TextBoxInk.Black);
-                y += lineH;
+                var runs = ParseInline(display, lineSize, u, boldAll);
+                if (runs.Count > 0)
+                {
+                    LayoutInlineRuns(lines, runs, pad, textW, lineSize, lineH2, u, ref y);
+                    continue;
+                }
+            }
+
+            foreach (string line in Wrap(display, textW, lineSize))
+            {
+                AddText(lines, line, pad, y, lineSize, lineH2, TextBoxInk.Black, boldAll);
+                y += lineH2;
             }
         }
         height = MathF.Max(y + pad, pad * 2f + lineH);
         return lines;
+    }
+
+    private static List<TextBoxRun> ParseInline(string text, float size, float u, bool boldAll = false)
+    {
+        var runs = new List<TextBoxRun>();
+        int i = 0;
+        while (i < text.Length)
+        {
+            int open = text.IndexOf('$', i);
+            if (open < 0)
+            {
+                AddStyledTextRuns(runs, text[i..], size, boldAll);
+                break;
+            }
+            if (open > i) AddStyledTextRuns(runs, text[i..open], size, boldAll);
+
+            int close = text.IndexOf('$', open + 1);
+            if (close < 0 || close == open + 1)
+            {
+                AddStyledTextRuns(runs, text[open..], size, boldAll);
+                break;
+            }
+            string latex = text[(open + 1)..close].Trim();
+            var math = MathRenderer.RenderImage(latex, size * 0.95f,
+                new Color4(0.12f, 0.14f, 0.18f, 1f), 2f);
+            if (math != null)
+            {
+                runs.Add(new TextBoxRun
+                {
+                    MathImage = math.Image,
+                    Width = math.LogicalWidth,
+                    Height = math.LogicalHeight,
+                    Ascent = math.LogicalAscent,
+                    Descent = math.LogicalDescent,
+                    Size = size,
+                });
+            }
+            else
+            {
+                AddStyledTextRuns(runs, "（公式）", size, boldAll);
+            }
+            i = close + 1;
+        }
+        return runs;
+    }
+
+    /// <summary>解析 `**粗体**` / `*斜体*`；标记本身不进显示。</summary>
+    private static void AddStyledTextRuns(List<TextBoxRun> runs, string text, float size, bool boldAll)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        var sb = new System.Text.StringBuilder();
+        bool bold = boldAll, italic = false;
+        void Flush()
+        {
+            if (sb.Length == 0) return;
+            string t = sb.ToString();
+            runs.Add(new TextBoxRun
+            {
+                Text = t, Size = size, Bold = bold, Italic = italic,
+                Width = MeasureText(t, size),
+                Height = size * 1.55f, Ascent = size * 0.82f, Descent = size * 0.30f,
+            });
+            sb.Clear();
+        }
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '*' && i + 1 < text.Length && text[i + 1] == '*')
+            {
+                Flush(); bold = !bold; i++;
+            }
+            else if (text[i] == '*')
+            {
+                Flush(); italic = !italic;
+            }
+            else sb.Append(text[i]);
+        }
+        Flush();
+    }
+
+    private static void LayoutInlineRuns(List<TextBoxLine> lines, List<TextBoxRun> source,
+                                         float pad, float textW, float size, float lineH,
+                                         float u, ref float y)
+    {
+        var current = new List<TextBoxRun>();
+        float x = 0f;
+        float cursorY = y;
+        void Flush()
+        {
+            if (current.Count == 0) return;
+            float asc = size * 0.82f, desc = size * 0.30f;
+            foreach (var r in current)
+            {
+                asc = MathF.Max(asc, r.Ascent);
+                desc = MathF.Max(desc, r.Descent);
+            }
+            float h = MathF.Max(lineH, asc + desc + 2f * u);
+            foreach (var r in current) r.Y = asc - r.Ascent;
+            lines.Add(new TextBoxLine
+            {
+                Kind = TextBoxLineKind.Text,
+                X = pad, Y = cursorY, Size = size, Height = h,
+                Runs = current,
+            });
+            cursorY += h;
+            current = new List<TextBoxRun>();
+            x = 0f;
+        }
+
+        foreach (var token in source)
+        {
+            if (token.IsMath)
+            {
+                if (current.Count > 0 && x + token.Width > textW) Flush();
+                token.X = x;
+                current.Add(token);
+                x += token.Width + 2f * u;
+                continue;
+            }
+
+            var textRun = token;
+            var sb = new System.Text.StringBuilder();
+            foreach (char ch in textRun.Text)
+            {
+                float cw = CharWidth(ch, size);
+                if (current.Count > 0 && x + cw > textW)
+                {
+                    if (sb.Length > 0)
+                    {
+                        current.Add(new TextBoxRun
+                        {
+                            Text = sb.ToString(), Size = size, X = x - MeasureText(sb.ToString(), size),
+                            Width = MeasureText(sb.ToString(), size),
+                            Height = size * 1.55f, Ascent = size * 0.82f, Descent = size * 0.30f,
+                            Bold = textRun.Bold, Italic = textRun.Italic,
+                        });
+                        sb.Clear();
+                    }
+                    Flush();
+                }
+                sb.Append(ch);
+                x += cw;
+            }
+            if (sb.Length > 0)
+            {
+                string t = sb.ToString();
+                current.Add(new TextBoxRun
+                {
+                    Text = t, Size = size, X = x - MeasureText(t, size),
+                    Width = MeasureText(t, size),
+                    Height = size * 1.55f, Ascent = size * 0.82f, Descent = size * 0.30f,
+                    Bold = textRun.Bold, Italic = textRun.Italic,
+                });
+            }
+        }
+        Flush();
+        y = cursorY;
     }
 
     private static bool TryBlockMath(string text, out string latex)
@@ -370,6 +572,15 @@ internal static class TextBoxLayout
             return latex.Length > 0;
         }
         return false;
+    }
+
+    /// <summary>按同一套字宽估算一段文字的宽度（行内 run 排版用）。</summary>
+    public static float MeasureText(string text, float size)
+    {
+        if (string.IsNullOrEmpty(text)) return 0f;
+        float w = 0f;
+        foreach (char ch in text) w += CharWidth(ch, size);
+        return w;
     }
 
     private static void AddText(List<TextBoxLine> lines, string text, float x, float y,

@@ -179,6 +179,7 @@ public partial class InkEngine
         box.FontSize = Math.Clamp(box.FontSize + delta, 8f, 72f);
         box.InvalidateLayout();
         s.SyncTextBoxBounds();
+        ClampTextBoxIntoView(s);
         Doc.RefreshStrokeGrid(s);
         Doc.Dirty.Add(old);
         Doc.Dirty.Add(s.PaddedBounds);

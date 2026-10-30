@@ -27,14 +27,20 @@ internal static class MathRenderer
     {
         public ImageData Image;
         public float Scale;
+        public float Ascent;
+        public float Descent;
         public float LogicalWidth => Image == null ? 0f : Image.Width / MathF.Max(0.5f, Scale);
         public float LogicalHeight => Image == null ? 0f : Image.Height / MathF.Max(0.5f, Scale);
+        public float LogicalAscent => Ascent / MathF.Max(0.5f, Scale);
+        public float LogicalDescent => Descent / MathF.Max(0.5f, Scale);
     }
 
     private static SKBitmap RenderBitmap(string latex, float fontSizePx, Color4 color, float scale,
-                                         out int width, out int height)
+                                         out int width, out int height,
+                                         out float ascent, out float descent)
     {
         width = height = 0;
+        ascent = descent = 0f;
         if (string.IsNullOrWhiteSpace(latex)) return null;
         try
         {
@@ -48,9 +54,11 @@ internal static class MathRenderer
                     (byte)Math.Clamp((int)MathF.Round(color.B * 255f), 0, 255),
                     (byte)Math.Clamp((int)MathF.Round(color.A * 255f), 0, 255)),
             };
-            var measured = painter.Measure(1000f).Size;
+            var measured = painter.Measure(1000f);
             width = Math.Max(1, (int)MathF.Ceiling(measured.Width) + 8);
             height = Math.Max(1, (int)MathF.Ceiling(measured.Height) + 8);
+            ascent = MathF.Max(0f, -measured.Y);
+            descent = MathF.Max(0f, measured.Height - ascent);
             var bmp = new SKBitmap(new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul));
             using (var canvas = new SKCanvas(bmp))
             {
@@ -69,7 +77,7 @@ internal static class MathRenderer
     public static Rendered RenderPng(string latex, float fontSizePx, Color4 color,
                                      float scale = 2f)
     {
-        using var bmp = RenderBitmap(latex, fontSizePx, color, scale, out int w, out int h);
+        using var bmp = RenderBitmap(latex, fontSizePx, color, scale, out int w, out int h, out _, out _);
         if (bmp == null) return null;
         using var image = SKImage.FromBitmap(bmp);
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);
@@ -80,7 +88,8 @@ internal static class MathRenderer
     public static RenderedImage RenderImage(string latex, float fontSizePx, Color4 color,
                                             float scale = 2f)
     {
-        using var bmp = RenderBitmap(latex, fontSizePx, color, scale, out int w, out int h);
+        using var bmp = RenderBitmap(latex, fontSizePx, color, scale, out int w, out int h,
+                                     out float asc, out float desc);
         if (bmp == null) return null;
         var bgra = new byte[w * h * 4];
         IntPtr pixels = bmp.GetPixels();
@@ -89,7 +98,7 @@ internal static class MathRenderer
         for (int y = 0; y < h; y++)
             Marshal.Copy(IntPtr.Add(pixels, y * bmp.RowBytes), bgra, y * row, row);
         var img = ImageData.AdoptPremultiplied(w, h, bgra);
-        return new RenderedImage { Image = img, Scale = scale };
+        return new RenderedImage { Image = img, Scale = scale, Ascent = asc, Descent = desc };
     }
 
     /// <summary>自检/摆样用：渲染一组典型公式，输出 PNG，返回成功数。</summary>

@@ -67,6 +67,7 @@ public partial class InkEngine
         Doc.AddStroke(s);
         _ = data.EnsureLayout();
         s.SyncTextBoxBounds();
+        ClampTextBoxIntoView(s);
         Doc.RefreshStrokeGrid(s);
         return s;
     }
@@ -128,10 +129,13 @@ public partial class InkEngine
         HideTextBoxEdit();
         if (s != null && s.TextBox != null)
         {
+            var oldBounds = s.PaddedBounds;
             s.TextBox.Text = text;
             s.TextBox.InvalidateLayout();
             s.SyncTextBoxBounds();
+            ClampTextBoxIntoView(s);
             Doc.RefreshStrokeGrid(s);
+            Doc.Dirty.Add(oldBounds);
             Doc.Dirty.Add(s.PaddedBounds);
             Doc.StructureChangedSinceRender = true;
             Doc.Version++;
