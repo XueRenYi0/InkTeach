@@ -280,6 +280,12 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PanelTest();
         }
+        else if (mode == "--aitest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            AiTest();
+        }
         else if (mode == "--radialtest")
         {
             _autoExitAt = double.MaxValue;
@@ -291,6 +297,12 @@ internal sealed partial class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             RadialShow(args.Length > 1 ? args[1] : "reports/radial-palette.bmp");
+        }
+        else if (mode == "--aishow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            AiShow(args.Length > 1 ? args[1] : "reports/ai-card.bmp");
         }
         else if (mode == "--shapebandtest")
         {
@@ -1296,8 +1308,10 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --passtest          穿透真机测试（跨进程点击）");
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
+        Console.WriteLine("  --aitest            AI 题卡自检（插入 / 折叠 / 存档 / 删除 / 撤销）");
         Console.WriteLine("  --radialtest        呼出盘自检（Ctrl+Alt+Shift+Q：开 / 划 / 松 / 取消 / 穿透 / 松键轮询）");
         Console.WriteLine("  --radialshow [图]   呼出盘摆样：定格在屏幕中央出图（默认 reports/radial-palette.bmp）");
+        Console.WriteLine("  --aishow [图]       AI 面板 + 题卡摆样：面板 / 折叠 / 展开三张（默认 reports/ai-card.bmp）");
         Console.WriteLine("  --shapeiconshow [路径] 出图：图形面板图标的对照表（含每一档的变体）");
         Console.WriteLine("  --toolicons [路径]  出图：白板 / 激光笔的图标候选（未选中 / 选中 / 放大三格）");
         Console.WriteLine("  --penshow [路径] [bars]  出图：上游那批「带笔的」图标；带第 2 个参数就每格加一副「三道杠」");
@@ -5218,6 +5232,178 @@ internal sealed partial class App : InkEngine.InkEngine
         }
         _quit = true;
     }
+    private void AiTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== AI 题卡自检（1A：插入 / 折叠 / 存档 / 删除 / 撤销）===");
+        BoardOn = true;
+        Doc.Clear();
+        Doc.ClearHistory();
+        ViewOffsetY = 0f;
+        AiPromptText = "给初二出三道二次函数题，中等难度，带答案";
+
+        int fails = 0;
+        void Check(bool ok, string what)
+        {
+            Console.WriteLine((ok ? "  PASS  " : "  FAIL  ") + what);
+            if (!ok) fails++;
+        }
+
+        InsertMockAiCardFromUi();
+        Stroke card = null;
+        foreach (var s in Doc.Strokes)
+            if (s.Kind == StrokeKind.AiCard) { card = s; break; }
+
+        // 原生输入框：开 / 关 / 文字留在状态里（中文/输入法由系统 EDIT 负责）
+        Host.Commands.SetAiPromptText("测试提示");
+        var pr = new RectF { MinX = 100f, MinY = 100f, MaxX = 300f, MaxY = 140f };
+        Host.Commands.BeginAiPromptEdit(pr.MinX, pr.MinY, pr.MaxX - pr.MinX, pr.MaxY - pr.MinY);
+        SettleFrames(150);
+        Check(Host.State.AiPromptEditing, "AI 原生输入框能打开");
+        Host.Commands.EndAiPromptEdit(true);
+        SettleFrames(100);
+        Check(!Host.State.AiPromptEditing && Host.State.AiPrompt == "测试提示",
+              $"输入框关闭后文字保留（{Host.State.AiPrompt}）");
+        Host.Commands.SetAiPromptText("给初二出三道二次函数题，中等难度，带答案");
+
+        Check(card != null, "插入一张题卡");
+        Check(card?.AiCard != null && card.AiCard.Questions.Count == 3, "题卡有 3 道题");
+        Check(card != null && !card.AiCard.ShowAnswers, "答案默认折叠");
+        float h0 = card?.AiCard.LayoutHeight ?? 0f;
+        Check(h0 > 100f, $"折叠高度 > 100（{h0:0}）");
+
+        // ---- 拖动 / 改宽 / 点答案（走和真机同一条指针路径）----
+        {
+            var b = card.PaddedBounds;
+            float sx = (b.MinX + b.MaxX) * 0.5f;
+            float sy = b.MinY + 18f;
+            float bx = b.MinX, by = b.MinY;
+            AiCardPointerDown(sx, sy);
+            AiCardPointerMove(sx + 120f, sy + 60f);
+            AiCardPointerUp();
+            var nb = card.PaddedBounds;
+            Check(MathF.Abs(nb.MinX - bx - 120f) < 2f && MathF.Abs(nb.MinY - by - 60f) < 2f,
+                  $"拖标题栏移动整卡（Δ {nb.MinX - bx:0},{nb.MinY - by:0}）");
+
+            float w0 = card.AiCard.Width;
+            b = card.PaddedBounds;
+            AiCardPointerDown(b.MaxX - 4f, b.MinY + 80f);
+            AiCardPointerMove(b.MaxX - 104f, b.MinY + 80f);
+            AiCardPointerUp();
+            Check(card.AiCard.Width < w0 - 50f,
+                  $"拖右边缘改宽（{w0:0} → {card.AiCard.Width:0}）");
+
+            b = card.PaddedBounds;
+            AiCardLine firstToggle = null;
+            foreach (var l in card.AiCard.EnsureLayout())
+                if (l.Kind == AiCardLineKind.Toggle) { firstToggle = l; break; }
+            Check(firstToggle != null, "折叠态有「显示答案」按钮");
+            if (firstToggle != null)
+            {
+                var local = new Vector2(card.Points[0].X + (firstToggle.Box.MinX + firstToggle.Box.MaxX) * 0.5f,
+                                        card.Points[0].Y + (firstToggle.Box.MinY + firstToggle.Box.MaxY) * 0.5f);
+                var canvas = Vector2.Transform(local, card.Transform);
+                AiCardPointerDown(canvas.X, canvas.Y + ViewOffsetY);
+                AiCardPointerUp();
+                Check(card.AiCard.ShowAnswers, "点「显示答案」展开");
+                AiCardLine collapse = null;
+                foreach (var l in card.AiCard.EnsureLayout())
+                    if (l.Kind == AiCardLineKind.Toggle) { collapse = l; break; }
+                Check(collapse != null, "展开态有「收起答案」按钮");
+                if (collapse != null)
+                {
+                    local = new Vector2(card.Points[0].X + (collapse.Box.MinX + collapse.Box.MaxX) * 0.5f,
+                                        card.Points[0].Y + (collapse.Box.MinY + collapse.Box.MaxY) * 0.5f);
+                    canvas = Vector2.Transform(local, card.Transform);
+                    AiCardPointerDown(canvas.X, canvas.Y + ViewOffsetY);
+                    AiCardPointerUp();
+                    Check(!card.AiCard.ShowAnswers, "点「收起答案」折叠");
+                }
+            }
+        }
+
+        ToggleAiCardAnswersForTest();
+        Check(card != null && card.AiCard.ShowAnswers, "展开后 ShowAnswers = true");
+        Check(card != null && card.AiCard.LayoutHeight > h0 + 50f,
+              $"展开后变高（{h0:0} → {card?.AiCard.LayoutHeight:0}）");
+
+        byte[] data = InkSerializer.Save(Doc);
+        var loaded = InkSerializer.LoadStrokes(data, out _);
+        Stroke lc = null;
+        foreach (var s in loaded)
+            if (s.Kind == StrokeKind.AiCard) { lc = s; break; }
+        Check(lc != null, "存档能读回题卡");
+        Check(lc?.AiCard != null && lc.AiCard.Questions.Count == 3, "读回 3 道题");
+        Check(lc?.AiCard != null && lc.AiCard.ShowAnswers, "读回折叠状态");
+        Check(lc?.AiCard != null && lc.AiCard.Title == card?.AiCard.Title, "读回标题");
+        Check(lc != null && MathF.Abs((lc.PaddedBounds.MaxY - lc.PaddedBounds.MinY)
+                                   - (card.PaddedBounds.MaxY - card.PaddedBounds.MinY)) < 2f,
+              "读回后的卡片高度一致");
+
+        Doc.RemoveStrokeWithUndo(card);
+        bool gone = true;
+        foreach (var s in Doc.Strokes)
+            if (ReferenceEquals(s, card)) gone = false;
+        Check(gone, "✕ 删除整卡");
+        Doc.Undo();
+        bool back = false;
+        foreach (var s in Doc.Strokes)
+            if (ReferenceEquals(s, card)) back = true;
+        Check(back, "撤销恢复整卡");
+
+        Console.WriteLine(fails == 0 ? "AI 题卡自检：全部通过" : $"AI 题卡自检：{fails} 项失败");
+        ExitCode = fails == 0 ? 0 : 1;
+        _quit = true;
+    }
+
+    private void AiShow(string path)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== AI 面板 + 题卡摆样（1A：mock，不联网）===");
+
+        SetUiFactory(() => new InkUi.FullUi());
+        PassThrough = false;
+        BoardOn = true;
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Pen;
+        ShowHud = false;
+
+        if (Ui is not InkUi.FullUi ui)
+        {
+            Console.WriteLine("界面不是 FullUi，出图取消。");
+            _quit = true;
+            return;
+        }
+
+        // ① 面板
+        ui.OpenAiPanelForTest();
+        SettleFrames(400);
+        string p1 = path;
+        bool ok1 = ScreenProbe.SaveBmp(p1, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+
+        // ② 生成 mock 题卡（答案默认折叠）
+        ui.GenerateMockForTest();
+        SettleFrames(400);
+        string p2 = System.IO.Path.ChangeExtension(path, null) + "-card.bmp";
+        bool ok2 = ScreenProbe.SaveBmp(p2, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+
+        // ③ 展开答案
+        ToggleAiCardAnswersForTest();
+        SettleFrames(300);
+        string p3 = System.IO.Path.ChangeExtension(path, null) + "-answer.bmp";
+        bool ok3 = ScreenProbe.SaveBmp(p3, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+
+        Console.WriteLine(ok1 && ok2 && ok3
+            ? $"出图：{p1} / {p2} / {p3}"
+            : "抓屏失败（看上一行）");
+        Console.WriteLine($"题卡数：{AiCardCountForTest}（应为 1）");
+        _quit = true;
+    }
+
     private void RadialShow(string path)
     {
         Console.WriteLine();

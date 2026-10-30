@@ -544,6 +544,20 @@ internal sealed partial class OverlayWindow : IDisposable
     /// <summary>点名结果的字号格式（按结果长度自适应，现建现缓存）。</summary>
     private IDWriteTextFormat _rollResultFormat;
     private float _rollResultFormatPx;
+
+    /// <summary>
+    /// AI 题卡的文字格式缓存。键 = (字号, 粗体, 居中)；题卡只在内容层重画时用到，
+    /// 量很小，但别每帧重建 DirectWrite 格式。
+    /// </summary>
+    private readonly Dictionary<(int Px, bool Bold, bool Center), IDWriteTextFormat> _aiFormats = new();
+
+    /// <summary>题卡配色（纸面始终浅色，保证黑题/红解析在深色主题下也读得清）。</summary>
+    private static readonly Color4 AiPaper = new(0.999f, 0.995f, 0.972f, 0.985f);
+    private static readonly Color4 AiBorder = new(0.83f, 0.85f, 0.89f, 1f);
+    private static readonly Color4 AiBlack = new(0.12f, 0.14f, 0.18f, 1f);
+    private static readonly Color4 AiRed = new(0.72f, 0.16f, 0.16f, 1f);
+    private static readonly Color4 AiMuted = new(0.42f, 0.45f, 0.50f, 1f);
+    private static readonly Color4 AiRedSoft = new(0.98f, 0.91f, 0.90f, 1f);
     /// <summary>到点闪烁那一拍的颜色（和主题无关：就是"提醒红"）。</summary>
     private static readonly Color4 TimerFlashCol = new(0.91f, 0.26f, 0.21f, 1f);
 
@@ -2335,6 +2349,14 @@ internal sealed partial class OverlayWindow : IDisposable
 
     private void DrawStrokeCore(Stroke s, Matrix3x2? extra = null)
     {
+        // AI 题卡：结构化内容，由 DirectWrite 逐行画；不是位图、也不是几何。
+        // **必须放在最前面**：它和图像一样没有可描边的中心线。
+        if (s.Kind == StrokeKind.AiCard)
+        {
+            DrawAiCard(s);
+            return;
+        }
+
         // 图像对象：画的是位图，不是几何。**必须放在最前面**——它和图形一样
         // 属于"非自由笔迹"，走到下面那条 DrawGeometry 分支就会被描一个矩形边框。
         if (s.IsImage)
@@ -2395,6 +2417,110 @@ internal sealed partial class OverlayWindow : IDisposable
         // **圆心点是墨迹本身**（2026-10-18 用户定）：只有圆要，一直存在，
         // 选中不消失、导出/存档都带着。画在主几何之后，颜色同笔迹；大小固定。
         DrawShapeCenterInk(s, extra);
+    }
+
+    /// <summary>
+    /// 画一张 AI 题卡。**逐行画**：排版（断行、行高、折叠）在 <see cref="AiCardLayout"/> 里算好，
+    /// 这里只负责把每一行贴到卡片局部坐标上——折叠/变宽时重排一次，不需要重新截图。
+    /// </summary>
+    private void DrawAiCard(Stroke s)
+    {
+        var card = s.AiCard;
+        if (card == null) return;
+        if (s.Points.Count == 0) return;
+        var lines = card.EnsureLayout();
+        float u = MathF.Max(0.5f, card.Unit);
+        Vector2 o = new(s.Points[0].X, s.Points[0].Y);
+        var rect = new Vortice.RawRectF(o.X, o.Y, o.X + card.Width, o.Y + card.LayoutHeight);
+        float r = 12f * u;
+        var rr = new RoundedRectangle(rect, r, r);
+
+        // 纸面 + 细边。投影刻意不做：题卡在内容层，投影会放大脏区且对投影仪没有收益。
+        _ctx.FillRoundedRectangle(rr, Brush(AiPaper));
+        _ctx.DrawRoundedRectangle(rr, Brush(AiBorder), 1f);
+
+        // 卡片内容裁剪在里面：公式/长英文万一超宽也不会画到卡片外。
+        _ctx.PushAxisAlignedClip(rect, AntialiasMode.Aliased);
+        try
+        {
+            float pad = 18f * u;
+            foreach (var line in lines)
+            {
+                switch (line.Kind)
+                {
+                    case AiCardLineKind.Divider:
+                        _ctx.DrawLine(
+                            new Vector2(o.X + line.X, o.Y + line.Y),
+                            new Vector2(o.X + line.Box.MaxX, o.Y + line.Y),
+                            Brush(new Color4(0.90f, 0.91f, 0.93f, 1f)), MathF.Max(1f, u));
+                        break;
+
+                    case AiCardLineKind.Toggle:
+                    {
+                        var b = new Vortice.RawRectF(o.X + line.Box.MinX, o.Y + line.Box.MinY,
+                                                     o.X + line.Box.MaxX, o.Y + line.Box.MaxY);
+                        var pill = new RoundedRectangle(b, 8f * u, 8f * u);
+                        _ctx.FillRoundedRectangle(pill, Brush(AiRedSoft));
+                        _ctx.DrawRoundedRectangle(pill, Brush(new Color4(0.88f, 0.60f, 0.57f, 1f)), 1f);
+                        _ctx.DrawText(line.Text, AiTextFormat(line.Size, false, true),
+                            new Rect(b.Left, b.Top, b.Right - b.Left, b.Bottom - b.Top), Brush(AiRed));
+                        break;
+                    }
+
+                    default:
+                    {
+                        float w = MathF.Max(10f, card.Width - line.X - pad);
+                        _ctx.DrawText(line.Text, AiTextFormat(line.Size, line.Bold, false),
+                            new Rect(o.X + line.X, o.Y + line.Y, w, line.Height),
+                            Brush(AiColor(line.Ink)));
+                        break;
+                    }
+                }
+            }
+
+            // 右上角关闭：和拖动/改宽同一条命中逻辑（见 AiCardPointerDown）。
+            var close = new Rect(o.X + card.Width - 38f * u, o.Y + 6f * u, 30f * u, 30f * u);
+            _ctx.DrawText("✕", AiTextFormat(13f * u, false, true), close, Brush(AiMuted));
+
+            // 右边缘的改宽提示：三条短横线，只在右边缘中间。
+            float gy = o.Y + card.LayoutHeight * 0.5f;
+            var grip = Brush(new Color4(0.72f, 0.75f, 0.80f, 1f));
+            float gx = o.X + card.Width - 7f * u;
+            for (int i = -1; i <= 1; i++)
+                _ctx.DrawLine(new Vector2(gx, gy + i * 5f * u),
+                              new Vector2(gx + 3.5f * u, gy + i * 5f * u),
+                              grip, MathF.Max(1f, 1.4f * u));
+        }
+        finally
+        {
+            _ctx.PopAxisAlignedClip();
+        }
+    }
+
+    private static Color4 AiColor(AiCardInk ink) => ink switch
+    {
+        AiCardInk.Red => AiRed,
+        AiCardInk.Muted => AiMuted,
+        AiCardInk.Accent => AiRed,
+        _ => AiBlack,
+    };
+
+    private IDWriteTextFormat AiTextFormat(float size, bool bold, bool center)
+    {
+        int px = Math.Max(8, (int)MathF.Round(size));
+        var key = (px, bold, center);
+        if (_aiFormats.TryGetValue(key, out var f)) return f;
+        f = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+            bold ? FontWeight.SemiBold : FontWeight.Normal,
+            FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+        f.WordWrapping = WordWrapping.NoWrap;
+        if (center)
+        {
+            f.TextAlignment = TextAlignment.Center;
+            f.ParagraphAlignment = ParagraphAlignment.Center;
+        }
+        _aiFormats[key] = f;
+        return f;
     }
 
     /// <summary>

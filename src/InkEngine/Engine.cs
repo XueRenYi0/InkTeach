@@ -4777,6 +4777,19 @@ public partial class InkEngine
             return;
         }
 
+        // AI 题卡（文档对象）：和计时卡一样"看得见的那一块就是点得到的"。
+        // 排在界面之后：工具条压住卡片的区域仍然归工具条；排在穿透之前：
+        // 开着穿透时也要能折叠答案 / 拖卡片。
+        if (AiCardPointerDown(screenX, screenY))
+        {
+            _drawing = false;
+            _aiCardCapturing = true;
+            Native.SetCapture(hWnd);
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
         // 课堂计时卡片（引擎侧浮层）：**排在界面之后、PPT 条之前、穿透之前**——
         // 和 PPT 条同一条规矩：看得见的那一块就是点得到的（穿透/放映下也要能暂停/停）。
         if (TimerCardPointerDown(screenX, screenY))
@@ -5779,6 +5792,16 @@ public partial class InkEngine
         }
         if (_uiHover) { _uiHover = false; ApplyCursor(); }
 
+        // AI 题卡：拖动 / 改宽跟手。
+        if (_aiCardCapturing)
+        {
+            AiCardPointerMove(screenX, screenY);
+            ClearEngineTooltip();
+            ApplyCursor();
+            _dirty = true;
+            return;
+        }
+
         // 课堂计时卡片：拖动跟手 / 悬停（排在 PPT 条之前、穿透之前——同按下顺序）。
         if (!_drawing && TimerCardPointerMove(screenX, screenY))
         {
@@ -5971,6 +5994,17 @@ public partial class InkEngine
             // 再拖滚动条全被那张表吃掉（直到重启）。滚动条同日已停用，这句留着防复活。
             if (_activePointerType == Native.PT_TOUCH) _touch.Up(id);
             EndScrollBarDrag();
+            Native.ReleaseCapture();
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
+        // AI 题卡：按下归过它就无条件放开捕获（哪怕卡片已经被 ✕ 删掉）。
+        if (_aiCardCapturing)
+        {
+            AiCardPointerUp();
             Native.ReleaseCapture();
             _drawing = false;
             _dirty = true;
@@ -10823,7 +10857,8 @@ public partial class InkEngine
         // x 没有滚动、直接用。
         return PptBarContains(PointerX, PointerY + ViewOffsetY)
             || TimerCardContains(PointerX, PointerY + ViewOffsetY)
-            || RollCardContains(PointerX, PointerY + ViewOffsetY);
+            || RollCardContains(PointerX, PointerY + ViewOffsetY)
+            || AiCardContains(PointerX, PointerY + ViewOffsetY);
     }
 
     /// <summary>
@@ -13747,6 +13782,8 @@ public partial class InkEngine
         LibraryCategories = _libraryCategoryInfos,
         LibrarySelectionCount = LibrarySelected.Count,
         Names = Names,
+        AiPrompt = AiPromptText,
+        AiPromptEditing = _aiPromptEditing,
     };
 
     private void NotifyUiStateChanged()
@@ -18731,6 +18768,8 @@ public partial class InkEngine
         if (Ui != null && Ui.HandleHelpKey(vk)) return true;
         // 取色板色值输入框：编辑期间优先吃键盘（数字/A-F/退格/回车/Esc）。
         if (Ui != null && Ui.HandlePickerKey(vk, (mods & KeyChord.ModCtrl) != 0)) return true;
+        // 界面最上面那层（AI 面板 / 更多 / 色板）：Esc 先关它。
+        if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && Ui != null && Ui.HandleEscape()) return true;
         // 收藏面板点了一张卡、还没落笔：Esc = 取消这次插入（别让老师找不到怎么退）。
         if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && _libraryPending != null)
         {

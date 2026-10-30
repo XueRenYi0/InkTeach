@@ -2313,9 +2313,9 @@ internal sealed partial class App
         {
             Check("启动器：打开面板默认停在主页", ui.MorePageForTest == 0, $"页 = {ui.MorePageForTest}");
             bool tilesOk = true;
-            // 课堂 4（计时 / 点名 / 随机一人 / 使用说明）＋ 墨迹 5（保存 / 打开 /
+            // 课堂 5（计时 / 点名 / 随机一人 / AI 出题 / 使用说明）＋ 墨迹 5（保存 / 打开 /
             // 回放 / 关文档 / 历史板书）。收藏不再放这里。
-            for (int code = 0; code <= 8; code++)
+            for (int code = 0; code <= 9; code++)
             {
                 var t = ui.HubTileRectForTest(code);
                 if (t.IsEmpty || t.MinX < moreRect.MinX || t.MaxX > moreRect.MaxX
@@ -2327,7 +2327,7 @@ internal sealed partial class App
                 var t = ui.HubBottomRectForTest(i);
                 if (t.IsEmpty || t.MaxX > moreRect.MaxX || t.MaxY > moreRect.MaxY) bottomOk = false;
             }
-            Check("启动器：九格（课堂 4 ＋ 墨迹 5）＋ 底栏五格都在面板内", tilesOk && bottomOk,
+            Check("启动器：十格（课堂 5 ＋ 墨迹 5）＋ 底栏五格都在面板内", tilesOk && bottomOk,
                   $"面板 {moreRect.MaxX - moreRect.MinX:F0}×{moreRect.MaxY - moreRect.MinY:F0}");
 
             // **底栏每一格都必须进命中表**（2026-10-17 紧急修：加第 5 格「退出」时，
@@ -3428,6 +3428,29 @@ internal sealed partial class App
             SetUiFactory(() => new InkUi.FullUi());
             SettleFrames(150);
             ui = CurrentUi as InkUi.FullUi;
+        }
+
+        // ---- AI 出题：更多 → AI 格 → 面板 → 生成 mock 题卡（1A 真机入口）----
+        {
+            ui.OpenMoreForTest();
+            SettleFrames(250);
+            var aiTile = ui.HubTileRectForTest(9);
+            ClickPhysical((aiTile.MinX + aiTile.MaxX) * 0.5f * DpiScale,
+                          (aiTile.MinY + aiTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("更多 → AI 出题：打开面板、收起更多", ui.AiOpenForTest && !ui.MoreOpenForTest,
+                  $"AI={ui.AiOpenForTest} More={ui.MoreOpenForTest}");
+
+            var gen = ui.AiGenerateRectForTest;
+            ClickPhysical((gen.MinX + gen.MaxX) * 0.5f * DpiScale,
+                          (gen.MinY + gen.MaxY) * 0.5f * DpiScale);
+            SettleFrames(300);
+            Check("AI 面板「生成题卡」：插入一张 mock 卡并收起面板",
+                  !ui.AiOpenForTest && AiCardCountForTest == 1,
+                  $"AI={ui.AiOpenForTest} 题卡={AiCardCountForTest}");
+            Doc.Clear();
+            Doc.ClearHistory();
+            SettleFrames(120);
         }
 
         Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");

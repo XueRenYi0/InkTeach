@@ -455,6 +455,7 @@ public sealed partial class FullUi : IOverlayUi
             if (_dashFade.Running) return true;      // 换挡那一下要把淡入淡出画完
             if (_more.Running) return true;          // 「更多」面板开合（遮罩淡入淡出跟着它）
             if (_moreH.Running) return true;         // 面板换页时的高度动画
+            if (_ai.Running) return true;            // AI 面板开合
             // 按住清空、或者刚按完那一下的闪光：都要继续给帧，否则进度条不走、
             // 也永远到不了 0.8 秒那个点（"按住不放"这条全靠帧在推进）。
             if (ActionHolding) return true;
@@ -486,6 +487,7 @@ public sealed partial class FullUi : IOverlayUi
         _dashFade.Bind(host);
         _more.Bind(host);
         _moreH.Bind(host);
+        _ai.Bind(host);
         _tipFade.Bind(host);
         _moreH.Jump(MoreTargetH());
         _lastTool = host.State.Tool;
@@ -695,7 +697,7 @@ public sealed partial class FullUi : IOverlayUi
         if (_host == null) return;
         // 全屏层（更多 / 说明）开合：收藏弹窗先藏，关掉自动回来。
         // 色带 / 取色器只是底部临时展开，**不影响收藏弹窗**。
-        _host.Commands.SetUiOverlay(_moreOpen);
+        _host.Commands.SetUiOverlay(_moreOpen || _aiOpen || _more.Running || _ai.Running);
         UpdatePeek();                    // 贴边隐藏该不该收
         UpdateRail();                    // 色线该不该长成设置条
         UpdateBandAction();              // "按住清空"够 0.8 秒没有
@@ -710,6 +712,8 @@ public sealed partial class FullUi : IOverlayUi
         //（命中测试、裁剪、接输入小窗都按这份矩形走，理由见「更多」面板那一节）。
         // 关掉（动画也跑完）立刻回到主条那一条，一帧都不多占。
         if (_moreOpen || _more.Running) return _screen;
+        // AI 面板也是全屏模态（遮罩 + 居中卡片），占用整屏。
+        if (_aiOpen || _ai.Running) return _screen;
 
         // 占用矩形必须跟着"实际画出来的东西"走：贴边隐藏时它就只剩露头那一条，
         // 输入小窗也跟着缩——这样指针扫过露头才算"碰到面板"，其余位置照旧穿透/画线。
@@ -3633,14 +3637,14 @@ public sealed partial class FullUi : IOverlayUi
         => HubCounts[Math.Clamp(section, 0, HubCounts.Length - 1)];
 
     /// <summary>
-    /// 每个分组的格子数：课堂 4 个（计时 / 点名 / 随机一人 / 使用说明）；
+    /// 每个分组的格子数：课堂 5 个（计时 / 点名 / 随机一人 / AI 出题 / 使用说明）；
     /// 墨迹 **5 个**（**保存… / 打开… / 墨迹回放 / 关闭文档 / 历史板书**——
     /// 2026-10-16 用户定合并：原"保存墨迹＋保存图片"并为「保存…」、
     /// "打开墨迹＋打开文档"并为「打开…」，按扩展名分派；历史板书是 2026-10-14
     /// 加的找回入口）。收藏只留在主工具条那一格，更多里不再放重复入口。
     /// 格子编号（`HubTileCode`）从这里算出来，**不写死 3**——加格子不会再串段。
     /// </summary>
-    private static readonly int[] HubCounts = { 4, 5 };   // 课堂 4（含使用说明），墨迹 5（不含收藏）
+    private static readonly int[] HubCounts = { 5, 5 };   // 课堂 5（计时/点名/随机/AI/使用说明），墨迹 5（不含收藏）
 
     /// <summary>第 section 组的组头矩形。</summary>
     private RectF HubHeadRect(int section)
@@ -3670,6 +3674,7 @@ public sealed partial class FullUi : IOverlayUi
         if (section == 0)
         {
             if (index < 3) return index;
+            if (index == 3) return AiTileCode;
             return HelpTileCode;
         }
         // 3..7 = 保存/打开/回放/关文档/历史板书；8 留给「使用说明」。
@@ -3944,7 +3949,7 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>
     /// 启动器格子的表：`Hint` **不再画在格子里**（2026-10-02 第二批：搬进悬停/长按提示），
     /// 但它是提示的**唯一文案来源**——绘制、命中、提示都读这一份。
-    /// 格子编号：课堂 0..2（计时 / 点名 / 随机一人）、墨迹 3..7（保存… / 打开… /
+    /// 格子编号：课堂 0..2（计时 / 点名 / 随机一人）、AI 9（AI 出题）、墨迹 3..7（保存… / 打开… /
     /// 墨迹回放 / 关闭文档 / 历史板书——2026-10-16 合并后）。
     /// </summary>
     private (string Label, string Hint, bool Enabled, bool Danger) HubTileInfo(int code) => code switch
@@ -3964,6 +3969,9 @@ public sealed partial class FullUi : IOverlayUi
         7 => ("历史板书",
               "找回以前写在**白板**上的墨迹（自动留存，停手时写；不含截图）",
               _host != null && !_host.State.PptMode && _host.State.HistoryCount > 0, false),
+        AiTileCode => ("AI 出题",
+              "语音/文字出题；1A 先出示例题卡（不联网）",
+              true, false),
         HelpTileCode => ("使用说明",
               "4 步上手 / 手势 / 快捷键；F1 也能打开",
               true, false),
@@ -4172,6 +4180,10 @@ public sealed partial class FullUi : IOverlayUi
             case 7:                                   // 历史板书（2026-10-14）
                 CloseMore();
                 _host.Commands.OpenInkHistory();
+                break;
+            case AiTileCode:                          // AI 出题（1A：面板 + mock 题卡）
+                CloseMore();
+                OpenAiPanel();
                 break;
             case HelpTileCode:                        // 使用说明（2026-10-19）
                 // 和「设置」一样留在 More 面板里换页，不另开一层——DPI、遮罩、
@@ -4409,6 +4421,13 @@ public sealed partial class FullUi : IOverlayUi
             _railTouchHoldUntilMs = _host.NowMs + 2500;
         }
 
+        // 「AI 出题」面板：全屏模态，先于「更多」和一切其它命中。
+        if (_aiOpen)
+        {
+            AiPointerDown(p);
+            return true;
+        }
+
         // 「更多」面板：全屏模态，先于一切其它命中（它盖住整块屏幕）。
         // 点面板外 = 关闭，而且这一下**不落墨**（消费掉；这也是自检要钉的一条）。
         if (_moreOpen)
@@ -4618,6 +4637,14 @@ public sealed partial class FullUi : IOverlayUi
         _railHover = !_host.State.PassThrough && BandVisible() && RailHoverZone().Contains(p.X, p.Y);
         _railHoverStamp = _host.NowMs;    // 位置更新打时间戳（写字后"离开一次"的判据用）
 
+        // 「AI 出题」面板开着时，指针只喂给面板：更新悬停、别再碰主条的悬停/拖动状态
+        if (_aiOpen)
+        {
+            int hit = AiHitAt(p.X, p.Y);
+            if (hit != _aiHover) { _aiHover = hit; Invalidate(); }
+            return true;
+        }
+
         // 「更多」面板开着时，指针只喂给面板：更新悬停、别再碰主条的悬停/拖动状态
         if (_moreOpen)
         {
@@ -4711,6 +4738,7 @@ public sealed partial class FullUi : IOverlayUi
     /// </summary>
     public bool Wheel(float x, float y, int delta)
     {
+        if (_aiOpen) return true;
         if (!_moreOpen) return false;
         if (_morePage == MorePage.Help && MoreRect().Contains(x, y))
             ScrollHelp(-delta / 120f * 48f);
@@ -4727,6 +4755,11 @@ public sealed partial class FullUi : IOverlayUi
             CancelTipHold();
         }
         // 面板开着时指针只会"离开整块屏幕"（占用 = 全屏）：把面板的悬停/按下也清掉
+        if (_aiOpen)
+        {
+            _aiHover = AiHitOutside;
+            Invalidate();
+        }
         if (_moreOpen)
         {
             _moreHover = MoreHitNone;
@@ -4783,6 +4816,12 @@ public sealed partial class FullUi : IOverlayUi
         if ((_tipHoldStart > double.NegativeInfinity || _tipHoldFired)
             && e.PointerId != _pressId)
             return true;
+        // 「AI 出题」面板：按下已经在 AiPointerDown 里执行；抬起只消费。
+        if (_aiOpen)
+        {
+            Invalidate();
+            return true;
+        }
         // 「更多」面板：按下和抬起落在**同一行**才算一次执行（和抽屉同一套手感）
         if (_moreOpen)
         {
@@ -5079,9 +5118,11 @@ public sealed partial class FullUi : IOverlayUi
 
     public void OnStateChanged(in UiState state)
     {
-        // 回放一开始：把「更多」面板收掉。它是**全屏模态**，开着会挡住控制条和画布；
-        // 而引擎那边"点界面 = 先退出回放"——不收掉的话，老师想关面板那一刻回放就没了。
+        _aiPrompt = state.AiPrompt ?? _aiPrompt;
+        _aiPromptEditing = state.AiPromptEditing;
+        // 回放一开始：把「更多」/「AI」面板收掉。它们都是**全屏模态**，开着会挡住控制条和画布；
         if (state.ReplayActive && _moreOpen) CloseMore();
+        if (state.ReplayActive && _aiOpen) CloseAiPanel();
         if (state.PassThrough && _penPickerOpen) ClosePenColorPicker();
 
         // 从取色板里点吸管：等 ColorPickActive 真的起来（armed），再等它落下，
@@ -5314,6 +5355,8 @@ public sealed partial class FullUi : IOverlayUi
         // 「更多」面板**比一切都后**：遮罩要压住主条和粗细预览，面板再压住遮罩。
         // 它打开时 QueryBounds 已经是整块屏幕，不会被引擎裁掉。
         if (_moreOpen || _more.Running) DrawMorePanel(ctx);
+        // AI 面板和「更多」互斥；它也画在最后，遮罩压住主条。
+        if (_aiOpen || _ai.Running) DrawAiPanel(ctx);
     }
 
     // ---- 颜色（深色主题只是一整套换过来，形状一个都不动）------------------

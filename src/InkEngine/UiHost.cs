@@ -110,6 +110,11 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void CycleSolidSides() => _engine.CycleSolidSides();
     public void CycleHyperbolaAsymptotes() => _engine.CycleHyperbolaAsymptotes();
     public void ToggleLibraryPanel() => _engine.ToggleLibraryPanel();
+    public void SetAiPromptText(string text) => _engine.AiPromptText = text ?? "";
+    public void BeginAiPromptEdit(float x, float y, float w, float h)
+        => _engine.BeginAiPromptEditFromUi(x, y, w, h);
+    public void EndAiPromptEdit(bool accept) => _engine.EndAiPromptEditFromUi(accept);
+    public void InsertMockAiCard() => _engine.InsertMockAiCardFromUi();
     public void SetLibraryCategory(string id) => _engine.SetLibraryCategory(id);
     public void CreateLibraryCategory() => _engine.CreateLibraryCategory();
     public void DeleteLibraryCategory(string id) => _engine.DeleteLibraryCategory(id);

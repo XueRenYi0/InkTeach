@@ -150,6 +150,12 @@ public interface IOverlayUi
     bool HandlePickerKey(int vk, bool ctrl) => false;
 
     /// <summary>
+    /// Esc：先关最上面那层界面（AI 面板 / 更多 / 色板）。返回 true = 这次 Esc 归界面，
+    /// 引擎不再往画布/键位表传。默认 false，给不需要的界面用。
+    /// </summary>
+    bool HandleEscape() => false;
+
+    /// <summary>
     /// 用户又双击了一次 exe（或从快捷方式启动）。已有实例收到后：
     /// 退出穿透，并把收起的工具条展开。默认空实现，给只需要“提到前面”的界面用。
     /// </summary>
@@ -338,6 +344,25 @@ public interface IEngineCommands
     /// 所以界面这边只需要这一句开关。
     /// </summary>
     void ToggleLibraryPanel();
+
+    /// <summary>AI 面板：改输入框里的题目要求（预设标签用）。</summary>
+    void SetAiPromptText(string text);
+
+    /// <summary>
+    /// AI 面板：在给定的**界面逻辑坐标**上开一个原生单行输入框（中文/输入法交给系统）。
+    /// 结束走 <see cref="EndAiPromptEdit"/>；输入内容落在 <see cref="UiState.AiPrompt"/>。
+    /// </summary>
+    void BeginAiPromptEdit(float x, float y, float w, float h);
+
+    /// <summary>AI 面板：结束输入。accept=false = 放弃这次编辑（保留原文字）。</summary>
+    void EndAiPromptEdit(bool accept);
+
+    /// <summary>
+    /// AI 面板：按当前 <see cref="UiState.AiPrompt"/> 插入一张 **mock 题卡**（1A）。
+    /// 不联网、不调模型；接模型以后只换这个方法里的数据源。
+    /// </summary>
+    void InsertMockAiCard();
+
     /// <summary>收藏面板：切到某个分类（`"all"` = 全部）。只改筛选，不搬条目。</summary>
     void SetLibraryCategory(string id);
     /// <summary>收藏面板：新建一个分类（自动命名 第一类/第二类…），并切过去。</summary>
@@ -1283,6 +1308,11 @@ public readonly struct UiState
     /// 每次装载给整份快照——点名全在界面层做，引擎只负责读盘与推送。
     /// </summary>
     public string[] Names { get; init; }
+
+    /// <summary>AI 面板输入框里的题目要求（1A：mock 生成也用它）。</summary>
+    public string AiPrompt { get; init; }
+    /// <summary>原生输入框是否正在编辑（界面据此画光标/边框）。</summary>
+    public bool AiPromptEditing { get; init; }
 }
 
 /// <summary>
