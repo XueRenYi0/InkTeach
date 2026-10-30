@@ -17866,6 +17866,8 @@ public partial class InkEngine
                 int n = Doc.Selected.Count, locked = 0;
                 foreach (var s in Doc.Selected) if (s.Locked) locked++;
                 Doc.DeleteSelected();
+                SelBarHover = -1;
+                ClearEngineTooltip();
                 Console.WriteLine(locked > 0
                     ? $"删除 {n - locked} 个对象（{locked} 个锁定，没删）"
                     : $"删除 {n} 个对象");

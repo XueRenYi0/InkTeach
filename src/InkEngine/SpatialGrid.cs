@@ -58,7 +58,8 @@ internal sealed class SpatialGrid
         {
             // 按 Insert 当时的格子快照删除：包围盒之后变过也不会漏。
             foreach (long k in keys)
-                if (_cells.TryGetValue(k, out var list)) list.Remove(s);
+                if (_cells.TryGetValue(k, out var list))
+                    list.RemoveAll(x => ReferenceEquals(x, s));
             s.GridKeys = null;
             return;
         }
@@ -72,7 +73,8 @@ internal sealed class SpatialGrid
         for (int cy = y0; cy <= y1; cy++)
             for (int cx = x0; cx <= x1; cx++)
             {
-                if (_cells.TryGetValue(Key(cx, cy), out var list)) list.Remove(s);
+                if (_cells.TryGetValue(Key(cx, cy), out var list))
+                    list.RemoveAll(x => ReferenceEquals(x, s));
             }
     }
 
