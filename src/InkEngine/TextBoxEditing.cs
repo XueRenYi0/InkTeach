@@ -192,7 +192,7 @@ public partial class InkEngine
         if (_textBoxEditHwnd != IntPtr.Zero) return;
         RegisterTextBoxEditHost();
         long exStyle = Native.WS_EX_TOPMOST | Native.WS_EX_TOOLWINDOW;
-        long hostStyle = 0x80000000L /* WS_POPUP */;
+        long hostStyle = 0x80000000L /* WS_POPUP */ | 0x02000000L /* WS_CLIPCHILDREN */;
         _textBoxEditHost = Native.CreateWindowEx(exStyle, "InkTeachEditHost", "InkTeachTextBoxHost",
             hostStyle, 0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, _hInstance, IntPtr.Zero);
         if (_textBoxEditHost == IntPtr.Zero) return;
