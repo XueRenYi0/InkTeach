@@ -2435,9 +2435,13 @@ internal sealed partial class OverlayWindow : IDisposable
         float r = 12f * u;
         var rr = new RoundedRectangle(rect, r, r);
 
-        // 纸面 + 细边。投影刻意不做：题卡在内容层，投影会放大脏区且对投影仪没有收益。
-        _ctx.FillRoundedRectangle(rr, Brush(AiPaper));
-        _ctx.DrawRoundedRectangle(rr, Brush(AiBorder), 1f);
+        // 纸面 + 细边。普通文本框默认**透明**，直接融进白板/PPT；
+        // AI 题卡默认浅色纸面，保证黑题红解析在任何背景上都读得清。
+        if (card.Role == TextBoxRole.AiQuestion)
+        {
+            _ctx.FillRoundedRectangle(rr, Brush(AiPaper));
+            _ctx.DrawRoundedRectangle(rr, Brush(AiBorder), 1f);
+        }
 
         // 卡片内容裁剪在里面：公式/长英文万一超宽也不会画到卡片外。
         _ctx.PushAxisAlignedClip(rect, AntialiasMode.Aliased);
@@ -2465,6 +2469,16 @@ internal sealed partial class OverlayWindow : IDisposable
                         _ctx.DrawText(line.Text, AiTextFormat(line.Size, false, true),
                             new Rect(b.Left, b.Top, b.Right - b.Left, b.Bottom - b.Top),
                             Brush(AiRed));
+                        break;
+                    }
+
+                    case TextBoxLineKind.Math:
+                    {
+                        var bmp = line.MathImage?.GetBitmap(_ctx);
+                        if (bmp == null) break;
+                        var dst = new Vortice.RawRectF(o.X + line.X, o.Y + line.Y,
+                                                       o.X + line.X + line.MathW, o.Y + line.Y + line.MathH);
+                        _ctx.DrawBitmap(bmp, dst, 1f, Vortice.Direct2D1.InterpolationMode.Linear, null, null);
                         break;
                     }
 

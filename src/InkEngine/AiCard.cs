@@ -75,7 +75,11 @@ internal sealed class TextBoxData
     {
         if (_lines != null) return _lines;
         _lines = TextBoxLayout.Build(this, out float h);
-        if (AutoHeight) Height = MathF.Max(1f, h);
+        if (AutoHeight)
+        {
+            float minH = Role == TextBoxRole.Normal ? 120f * MathF.Max(0.5f, Unit) : 0f;
+            Height = MathF.Max(minH, h);
+        }
         return _lines;
     }
 
@@ -167,7 +171,7 @@ internal sealed class TextBoxData
             Unit = MathF.Max(0.5f, unit),
             Width = MathF.Max(120f, width),
             Height = MathF.Max(60f, height),
-            AutoHeight = false,
+            AutoHeight = true,
             FontSize = 15f,
         };
         c.InvalidateLayout();
@@ -180,6 +184,8 @@ internal enum TextBoxLineKind
     Text = 0,
     Toggle = 1,
     Divider = 2,
+    /// <summary>独立公式行（整行 LaTeX），画的是透明位图。</summary>
+    Math = 3,
 }
 
 internal enum TextBoxInk
@@ -202,6 +208,9 @@ internal sealed class TextBoxLine
 
     /// <summary>Toggle 的按钮矩形（局部坐标）；Text/Divider 不用。</summary>
     public RectF Box;
+    /// <summary>独立公式行的透明位图；Math 行才有。</summary>
+    public ImageData MathImage;
+    public float MathW, MathH;
 }
 
 /// <summary>
@@ -310,13 +319,57 @@ internal static class TextBoxLayout
         float lineH = size * 1.55f;
         var lines = new List<TextBoxLine>();
         float y = pad;
-        foreach (string line in Wrap(card.Text ?? "", textW, size))
+        string[] hardLines = (card.Text ?? "").Replace("\r\n", "\n").Split('\n');
+        foreach (string hard in hardLines)
         {
-            AddText(lines, line, pad, y, size, lineH, TextBoxInk.Black);
-            y += lineH;
+            string trimmed = hard.Trim();
+            if (TryBlockMath(trimmed, out string latex))
+            {
+                var math = MathRenderer.RenderImage(latex, size, new Color4(0.12f, 0.14f, 0.18f, 1f), 2f);
+                if (math != null)
+                {
+                    float mx = pad + MathF.Max(0f, (textW - math.LogicalWidth) * 0.5f);
+                    lines.Add(new TextBoxLine
+                    {
+                        Kind = TextBoxLineKind.Math,
+                        X = mx, Y = y, Size = size, Height = math.LogicalHeight,
+                        MathImage = math.Image,
+                        MathW = math.LogicalWidth,
+                        MathH = math.LogicalHeight,
+                    });
+                    y += math.LogicalHeight + 8f * u;
+                    continue;
+                }
+                AddText(lines, "（公式渲染失败）", pad, y, size, lineH, TextBoxInk.Muted);
+                y += lineH;
+                continue;
+            }
+
+            foreach (string line in Wrap(hard, textW, size))
+            {
+                AddText(lines, line, pad, y, size, lineH, TextBoxInk.Black);
+                y += lineH;
+            }
         }
         height = MathF.Max(y + pad, pad * 2f + lineH);
         return lines;
+    }
+
+    private static bool TryBlockMath(string text, out string latex)
+    {
+        latex = "";
+        if (text.Length < 4) return false;
+        if (text.StartsWith("$$", StringComparison.Ordinal) && text.EndsWith("$$", StringComparison.Ordinal))
+        {
+            latex = text[2..^2].Trim();
+            return latex.Length > 0;
+        }
+        if (text.StartsWith("\\[", StringComparison.Ordinal) && text.EndsWith("\\]", StringComparison.Ordinal))
+        {
+            latex = text[2..^2].Trim();
+            return latex.Length > 0;
+        }
+        return false;
     }
 
     private static void AddText(List<TextBoxLine> lines, string text, float x, float y,

@@ -286,6 +286,15 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             AiTest();
         }
+        else if (mode == "--mathtest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            int ok = MathRenderer.RenderSamples("reports/math-spike");
+            Console.WriteLine($"公式 spike：{ok}/6 张成功，输出 reports/math-spike/");
+            ExitCode = ok == 6 ? 0 : 1;
+            _quit = true;
+        }
         else if (mode == "--radialtest")
         {
             _autoExitAt = double.MaxValue;
@@ -1309,6 +1318,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
         Console.WriteLine("  --aitest            AI 题卡自检（插入 / 折叠 / 存档 / 删除 / 撤销）");
+        Console.WriteLine("  --mathtest          公式渲染 spike：CSharpMath 渲染 6 个典型 LaTeX 到 reports/math-spike/");
         Console.WriteLine("  --radialtest        呼出盘自检（Ctrl+Alt+Shift+Q：开 / 划 / 松 / 取消 / 穿透 / 松键轮询）");
         Console.WriteLine("  --radialshow [图]   呼出盘摆样：定格在屏幕中央出图（默认 reports/radial-palette.bmp）");
         Console.WriteLine("  --aishow [图]       AI 面板 + 题卡 + 文本框摆样：面板 / 折叠 / 选中 / 展开 / 文本框五张（默认 reports/ai-card.bmp）");
@@ -5366,6 +5376,13 @@ internal sealed partial class App : InkEngine.InkEngine
                   && pt2.TextBox.Text.Contains("第二行"),
                   "普通文本框：存档读回文字与角色");
 
+            var mathBox = TextBoxData.CreatePlain("整行公式：\n$$\\frac{\\sqrt{2}}{3}$$", 2f, 840f, 240f);
+            var mathLines = mathBox.EnsureLayout();
+            bool hasMath = false;
+            foreach (var l in mathLines)
+                if (l.Kind == TextBoxLineKind.Math && l.MathImage != null) { hasMath = true; break; }
+            Check(hasMath, "普通文本框：整行 $$...$$ 渲染成公式图");
+
             // 8 手柄：右下角拖拽 = 同时改宽高，字号不变
             if (pt != null)
             {
@@ -5453,7 +5470,9 @@ internal sealed partial class App : InkEngine.InkEngine
         // ⑤ 普通文本框：同样 8 手柄、可改字号
         Doc.Clear();
         Doc.ClearHistory();
-        InsertPlainTextBoxForTest("这是一个普通文本框。\n可以输入中文，选中后用 8 个手柄改宽高；\n字号用操作条的 A− / A+ 调。");
+        InsertPlainTextBoxForTest("这是一个普通文本框。\n可以输入中文，选中后用 8 个手柄改宽高；\n"
+            + "整行公式：\n$$x=\\frac{-b\\pm\\sqrt{b^2-4ac}}{2a}$$\n"
+            + "会渲染成公式；字号用操作条的 A− / A+ 调。");
         Doc.SelectOnly(Doc.Strokes.Count > 0 ? new[] { Doc.Strokes[^1] } : Array.Empty<Stroke>());
         Host.Commands.SetTool(Tool.Marquee);
         SettleFrames(300);

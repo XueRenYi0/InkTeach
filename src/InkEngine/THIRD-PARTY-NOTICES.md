@@ -262,3 +262,15 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 | `Inkeys` | **GPL-3.0** | **只读过思路，没有复制任何代码** |
 | `WXRIW/Ink-Canvas`（Ink Canvas / 文档里叫 InkClass） | **GPL-3.0** | **只参考了做法与思路**（选页逻辑、图形绘制流程、停顿变直线、手势判据等），**没有复制代码**；本项目是 Win32 + Direct2D 的独立实现，与它的 WPF 实现不同 |
 | `$P Point-Cloud Recognizer`（华盛顿大学） | New BSD | 单笔图形识别（`PointCloudRecognizer.cs`），按其公开算法实现 |
+
+
+---
+
+## CSharpMath / SkiaSharp??????
+
+- **??**??? spike ? LaTeX ????? PNG?`MathRenderer.cs`??
+- **CSharpMath**?https://github.com/verybadcat/CSharpMath ?MIT License?
+- **SkiaSharp**?https://github.com/mono/SkiaSharp ?MIT License?
+- **??**?????? NuGet ?? `CSharpMath.SkiaSharp` 0.5.1?`SkiaSharp` 2.88.9?
+  `SkiaSharp.NativeAssets.Win32` 2.88.9??????? API???????
+  ???????? NuGet ???????????MIT ???????? Fluent UI ???
