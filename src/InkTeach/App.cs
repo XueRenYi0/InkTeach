@@ -290,9 +290,9 @@ internal sealed partial class App : InkEngine.InkEngine
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
-            int ok = MathRenderer.RenderSamples("reports/math-spike");
-            Console.WriteLine($"公式 spike：{ok}/6 张成功，输出 reports/math-spike/");
-            ExitCode = ok == 6 ? 0 : 1;
+            int ok = MathRenderer.RenderSamples("reports/math-spike", out int total);
+            Console.WriteLine($"公式 spike：{ok}/{total} 张成功，输出 reports/math-spike/");
+            ExitCode = ok == total ? 0 : 1;
             _quit = true;
         }
         else if (mode == "--radialtest")
@@ -5479,12 +5479,20 @@ internal sealed partial class App : InkEngine.InkEngine
         // ⑤ 普通文本框：同样 8 手柄、可改字号
         Doc.Clear();
         Doc.ClearHistory();
-        InsertPlainTextBoxForTest("这是一个普通文本框。\n可以输入中文，选中后用 8 个手柄改宽高；\n"
-            + "DeepSeek 格式：已知数列 \\(\\{a_n\\}\\) 满足 \\(a_{n+1}=3a_n-4\\)。\n"
-            + "# Markdown 标题\n**粗体** 和 *斜体*，以及列表：\n- 第一项\n- 第二项\n"
-            + "行内公式：当 $x=1$ 时，$y=x^2$ 的值为 $1$。\n"
-            + "整行公式：\n$$x=\\frac{-b\\pm\\sqrt{b^2-4ac}}{2a}$$\n"
-            + "会渲染成公式；字号用操作条的 A− / A+ 调。");
+        InsertPlainTextBoxForTest("# 例题\n\n"
+            + "已知数列 \\(\\{a_n\\}\\) 满足：\n"
+            + "\\[\na_1=2,\\qquad a_{n+1}=3a_n+2\\quad(n\\ge 1)\n\\]\n"
+            + "求数列 \\(\\{a_n\\}\\) 的通项公式。\n\n"
+            + "### 分析\n\n"
+            + "形式：\\(a_{n+1}=pa_n+q\\)，用待定系数构造等比数列。\n"
+            + "设 \\(a_{n+1}+c=3(a_n+c)\\)，展开得 \\(a_{n+1}=3a_n+2c\\)，\n"
+            + "与原式比较得 \\(2c=2\\Rightarrow c=1\\)。\n\n"
+            + "行内中文：\\(\\text{当 }n\\ge 1\\text{ 时，}a_n>0\\)。\n"
+            + "中文混排：\n"
+            + "\\[\n\\text{当 }a_n>0\\text{ 时，}a_{n+1}=3a_n+2\n\\]\n"
+            + "所以：\n"
+            + "\\[\na_n+1=3\\cdot 3^{n-1}=3^n\n\\]\n"
+            + "**答案：** \\(\\boxed{a_n=3^n-1}\\)");
         Doc.SelectOnly(Doc.Strokes.Count > 0 ? new[] { Doc.Strokes[^1] } : Array.Empty<Stroke>());
         Host.Commands.SetTool(Tool.Marquee);
         SettleFrames(300);

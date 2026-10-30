@@ -2487,7 +2487,7 @@ internal sealed partial class OverlayWindow : IDisposable
                             }
                             else
                             {
-                                Color4 ink = card.Role == TextBoxRole.Normal ? s.Color : AiBlack;
+                                Color4 ink = card.Role == TextBoxRole.Normal ? s.Color : AiColor(line.Ink);
                                 _ctx.DrawText(run.Text, AiTextFormat(run.Size, run.Bold, false, run.Italic),
                                     new Rect(rx, ry, run.Width + 2f, run.Height), Brush(ink));
                             }
@@ -3374,7 +3374,10 @@ internal sealed partial class OverlayWindow : IDisposable
             // **余量 = 4 ＋ 投影最远伸出多少**：操作条现在带投影（主题给的），
             // 只放 4 像素的话投影会被脏区切掉、在屏幕上留一条印子。
             float cardPad = (4f + app.FloatingTheme.ShadowReachLogical) * dpi;
-            r.Add(CanvasRectToWindow(SelectionHandles.BarRect(sb, dpi, app.FurnitureViewport).Inflate(cardPad)));
+            var barRect = app.Doc.Selected.Count == 1 && app.Doc.Selected[0].Kind == StrokeKind.TextBox
+                ? SelectionHandles.BarRectForTextBox(sb, dpi, app.FurnitureViewport)
+                : SelectionHandles.BarRect(sb, dpi, app.FurnitureViewport);
+            r.Add(CanvasRectToWindow(barRect.Inflate(cardPad)));
 
             // 收起态的圆钮 / 打开的面板 / 提示条：都是"每帧都在变"的浮动层，
             // 漏一块就在屏幕上留一块擦不掉的残影（这条踩过好几次了）。
@@ -4925,9 +4928,13 @@ internal sealed partial class OverlayWindow : IDisposable
     {
         var visible = app.FurnitureViewport;
         float dpi = app.UiUnit;
+        bool textBoxSel = app.Doc.Selected.Count == 1
+                          && app.Doc.Selected[0].Kind == StrokeKind.TextBox;
         // 布局从 SelectionHandles 取，与命中判定同源：分开写迟早差几个像素，
         // 表现就是"看得见按钮却点不中"。
-        var rect = SelectionHandles.BarRect(sel, dpi, visible);
+        var rect = textBoxSel
+            ? SelectionHandles.BarRectForTextBox(sel, dpi, visible)
+            : SelectionHandles.BarRect(sel, dpi, visible);
         // 圆角**用界面那套令牌**（UiTheme.CornerRadius = 10），不自己发明一个胶囊：
         // 工具条、操作条、面板三样东西的圆角必须是同一个数，看着才是一家的。
         float radius = MathF.Min(app.FloatingTheme.CornerRadius * dpi, (rect.MaxY - rect.MinY) * 0.5f);
@@ -4940,12 +4947,10 @@ internal sealed partial class OverlayWindow : IDisposable
 
         const int n = SelectionHandles.BarButtonCount;
         float glyphBox = SelectionHandles.BarIconBoxLogical * dpi;   // 图标框比字形大一点
-        bool textBoxSel = app.Doc.Selected.Count == 1
-                          && app.Doc.Selected[0].Kind == StrokeKind.TextBox;
 
         for (int i = 0; i < n; i++)
         {
-            var btn = SelectionHandles.BarButtonRect(i, sel, dpi, visible);
+            var btn = SelectionHandles.BarButtonRectIn(rect, i, dpi);
             var kind = (SelBarButton)i;
             bool hot = app.SelBarHover == i;
             bool active = IsBarButtonActive(app, kind);
@@ -4961,7 +4966,7 @@ internal sealed partial class OverlayWindow : IDisposable
             // 用户一眼看出"悬停是长方形不是正方形，所以分散"——现在 30×30 的格子里是 26×26。
             if (hot || active)
             {
-                var chip = SelectionHandles.BarHoverChip(i, sel, dpi, visible);
+                var chip = SelectionHandles.BarHoverChipIn(btn, dpi);
                 var bg = new Vortice.RawRectF(chip.MinX, chip.MinY, chip.MaxX, chip.MaxY);
                 float br = MathF.Min(bg.Bottom - bg.Top, bg.Right - bg.Left) * 0.32f;
                 _scratch.Color = active

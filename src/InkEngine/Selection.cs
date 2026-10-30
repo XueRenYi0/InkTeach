@@ -2041,8 +2041,11 @@ internal static class SelectionHandles
     /// （见 <see cref="BarHoverInsetLogical"/> 那段：这个形状是用户点名要改的，别再各算一份）。
     /// </summary>
     public static RectF BarHoverChip(int i, in RectF sel, float dpi, in RectF visible)
+        => BarHoverChipIn(BarButtonRect(i, sel, dpi, visible), dpi);
+
+    /// <summary>按已算好的格子矩形取悬停底；与 <see cref="BarButtonRectIn"/> 配套。</summary>
+    public static RectF BarHoverChipIn(in RectF btn, float dpi)
     {
-        var btn = BarButtonRect(i, sel, dpi, visible);
         float side = MathF.Min(btn.MaxX - btn.MinX, btn.MaxY - btn.MinY) - BarHoverInsetLogical * 2f * dpi;
         side = MathF.Max(1f, side);
         float cx = (btn.MinX + btn.MaxX) * 0.5f, cy = (btn.MinY + btn.MaxY) * 0.5f;
@@ -2538,10 +2541,33 @@ internal static class SelectionHandles
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
     }
 
-    /// <summary>第 i 个按钮的矩形（i 从 0 起）。</summary>
-    public static RectF BarButtonRect(int i, in RectF sel, float dpi, in RectF visible)
+    /// <summary>
+    /// 文本框专用：下方放不下时**翻到框上方**，避免操作条压住正在看的文字。
+    ///
+    /// 普通对象仍走 <see cref="BarRect"/> 的"给下限、不翻面"规则；
+    /// 只有文本框（内容会一直长到条底下）才需要这条兜底。
+    /// 上方也放不下时保持原样，条仍然可见、可点。
+    /// </summary>
+    public static RectF BarRectForTextBox(in RectF sel, float dpi, in RectF visible)
     {
         var bar = BarRect(sel, dpi, visible);
+        if (visible.IsEmpty || bar.MinY >= sel.MaxY - 0.5f) return bar;
+
+        float gap = BarOffsetLogical * dpi;
+        float h = bar.MaxY - bar.MinY;
+        float top = visible.MinY + BarScreenPaddingLogical * dpi;
+        float y = sel.MinY - gap - h;
+        if (y < top) return bar;
+        return new RectF { MinX = bar.MinX, MinY = y, MaxX = bar.MaxX, MaxY = y + h };
+    }
+
+    /// <summary>第 i 个按钮的矩形（i 从 0 起）。</summary>
+    public static RectF BarButtonRect(int i, in RectF sel, float dpi, in RectF visible)
+        => BarButtonRectIn(BarRect(sel, dpi, visible), i, dpi);
+
+    /// <summary>按已算好的操作条矩形取第 i 格；文本框翻面后画和命中必须共用这一份。</summary>
+    public static RectF BarButtonRectIn(in RectF bar, int i, float dpi)
+    {
         float btnW = BarButtonWidthLogical * dpi;
         float pad = FloatPadLogical * dpi;
         float gap = BarGapLogical * dpi;
@@ -2551,12 +2577,15 @@ internal static class SelectionHandles
 
     /// <summary>点到哪个按钮上了。返回 -1 表示没点到操作条。</summary>
     public static int BarButtonAt(float x, float y, in RectF sel, float dpi, in RectF visible)
+        => BarButtonAtIn(x, y, BarRect(sel, dpi, visible), dpi);
+
+    /// <summary>按已算好的操作条矩形做命中；文本框翻面后必须和画共用这一份。</summary>
+    public static int BarButtonAtIn(float x, float y, in RectF bar, float dpi)
     {
-        var bar = BarRect(sel, dpi, visible);
         if (x < bar.MinX || x > bar.MaxX || y < bar.MinY || y > bar.MaxY) return -1;
         for (int i = 0; i < BarButtonCount; i++)
         {
-            var b = BarButtonRect(i, sel, dpi, visible);
+            var b = BarButtonRectIn(bar, i, dpi);
             if (x >= b.MinX && x <= b.MaxX) return i;
         }
         return -1;

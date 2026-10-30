@@ -15953,6 +15953,16 @@ public partial class InkEngine
     /// 判据走 <see cref="SelectionBarShown"/>（和绘制、光标同一条）：那一块不在的时候
     /// 悬停高亮也不该亮。收起态（用户自己收的 / 画完自动选中那个框）只高亮那颗圆钮。
     /// </summary>
+    /// <summary>
+    /// 当前选中对象的操作条矩形。文本框内容会一直长到条底下，所以只有它走
+    /// "下方放不下就翻到上方"的兜底；普通对象仍用条的下限规则。
+    /// 画（Overlay）和命中（这里）必须同一份。
+    /// </summary>
+    private RectF SelectionBarRect(in RectF aabb)
+        => Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.TextBox
+            ? SelectionHandles.BarRectForTextBox(aabb, UiUnit, FurnitureViewport)
+            : SelectionHandles.BarRect(aabb, UiUnit, FurnitureViewport);
+
     private void UpdateBarHover(float x, float y)
     {
         int hover = -1;
@@ -15964,7 +15974,7 @@ public partial class InkEngine
                 var dot = SelectionHandles.BarCollapsedRect(aabb, UiUnit, FurnitureViewport);
                 hover = dot.Contains(x, y) ? (int)SelBarButton.Collapse : -1;
             }
-            else hover = SelectionHandles.BarButtonAt(x, y, aabb, UiUnit, FurnitureViewport);
+            else hover = SelectionHandles.BarButtonAtIn(x, y, SelectionBarRect(aabb), UiUnit);
         }
         if (hover == SelBarHover) return;
         SelBarHover = hover;
@@ -16727,7 +16737,7 @@ public partial class InkEngine
             }
             else
             {
-                int btn0 = SelectionHandles.BarButtonAt(x, y, aabb0, ui, FurnitureViewport);
+                int btn0 = SelectionHandles.BarButtonAtIn(x, y, SelectionBarRect(aabb0), ui);
                 if (btn0 >= 0) { RunBarAction(btn0, frame, aabb0); return true; }
                 if (SelPanelOpen != SelPanel.None || CustomColorOpen)
                 {
