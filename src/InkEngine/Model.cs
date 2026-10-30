@@ -3350,11 +3350,22 @@ internal sealed class Stroke
     /// （以前自己拼轮廓、内角要补到两条内边的交点，最远能到好几倍半宽，
     /// 那时这个系数必须留得很大——现在就按事实来。）
     /// </summary>
-    public RectF PaddedBounds => Kind == StrokeKind.TextBox
-        ? WorldBounds.Inflate(2f)
-        : IsParametricShape
-            ? WorldInkBounds.Inflate(2f)
-            : WorldBounds.Inflate(MaxHalfWidth + 2f);
+    public RectF PaddedBounds
+    {
+        get
+        {
+            // 文本框按**实际画出来的卡片**（含排版后的高度）算：Points 的包围盒
+            // 可能在自动长高后还没同步，按它做脏区/命中会漏掉最后几行。
+            if (Kind == StrokeKind.TextBox && TextBox != null)
+            {
+                var r = TextBoxWorldRect();
+                if (!r.IsEmpty) return r.Inflate(2f);
+            }
+            return IsParametricShape
+                ? WorldInkBounds.Inflate(2f)
+                : WorldBounds.Inflate(MaxHalfWidth + 2f);
+        }
+    }
 
     private RectF _inkBounds = RectF.Empty;
     private int _inkBoundsRevision = -1;
@@ -3867,7 +3878,7 @@ internal sealed class Stroke
         // 不走几何：卡片没有描边中心线，硬按两点的线去算会出现"看得见却点不中"。
         if (Kind == StrokeKind.TextBox && TextBox != null && Points.Count >= 1)
         {
-            var b = WorldBounds;
+            var b = TextBoxWorldRect();
             return canvasX >= b.MinX - tolerance && canvasX <= b.MaxX + tolerance
                 && canvasY >= b.MinY - tolerance && canvasY <= b.MaxY + tolerance;
         }

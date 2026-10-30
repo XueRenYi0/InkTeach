@@ -14,6 +14,7 @@ public partial class InkEngine
     private IntPtr _textBoxEditHwnd;
     private IntPtr _textBoxEditHost;
     private static Native.WndProcDelegate _textBoxEditHostProc;
+    private static uint _textBoxEditTextColor;
     private Native.WndProcDelegate _textBoxEditWndProc;
     private IntPtr _textBoxEditOldProc;
     private bool _textBoxEditHadNoActivate;
@@ -95,6 +96,9 @@ public partial class InkEngine
         _textBoxEditStroke = s;
         _textBoxEditing = true;
         Native.SetWindowTextW(_textBoxEditHwnd, s.TextBox.Text ?? "");
+        _textBoxEditTextColor = ((uint)(s.Color.B * 255f) & 0xFF)
+                              | (((uint)(s.Color.G * 255f) & 0xFF) << 8)
+                              | (((uint)(s.Color.R * 255f) & 0xFF) << 16);
         var font = EnsureTextBoxEditFont(s.TextBox.FontSize * s.TextBox.Unit);
         Native.SendMessage(_textBoxEditHwnd, Native.WM_SETFONT, font, new IntPtr(1));
         int margin = Math.Max(1, (int)MathF.Round(2f * s.TextBox.Unit));
@@ -102,7 +106,10 @@ public partial class InkEngine
                            new IntPtr(Native.EC_LEFTMARGIN | Native.EC_RIGHTMARGIN),
                            new IntPtr(margin | (margin << 16)));
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETLIMITTEXT, new IntPtr(20000), IntPtr.Zero);
-        Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL, IntPtr.Zero, new IntPtr(-1));
+        // 光标放末尾，**不要全选**：双击已经存在的文本框后随手打字，
+        // 全选会让第一个字把整段内容替换掉（老师最怕的误操作）。
+        int len = Native.GetWindowTextLengthW(_textBoxEditHwnd);
+        Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL, new IntPtr(len), new IntPtr(len));
 
         var b = s.PaddedBounds;
         float unit = MathF.Max(0.5f, s.TextBox.Unit);
@@ -236,7 +243,7 @@ public partial class InkEngine
             }
             case Native.WM_CTLCOLOREDIT:
                 Native.SetBkColor(wParam, 0x00FFFFFF);
-                Native.SetTextColor(wParam, 0x00000000);
+                Native.SetTextColor(wParam, _textBoxEditTextColor);
                 return Native.GetStockObject(0 /* WHITE_BRUSH */);
         }
         return Native.DefWindowProc(hWnd, msg, wParam, lParam);

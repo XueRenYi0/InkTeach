@@ -773,6 +773,9 @@ internal static class Native
     public static extern int GetWindowTextW(IntPtr hWnd, System.Text.StringBuilder s, int n);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowTextLengthW(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern bool SetWindowTextW(IntPtr hWnd, string text);
 
     [DllImport("gdi32.dll")]
