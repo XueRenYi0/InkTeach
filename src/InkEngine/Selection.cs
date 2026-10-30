@@ -1608,7 +1608,7 @@ internal static class SelectionHandles
         var r = RectF.Empty;
         foreach (var s in sel)
         {
-            var b = s.WorldInkBounds;
+            var b = s.Kind == StrokeKind.TextBox ? s.TextBoxWorldRect() : s.WorldInkBounds;
             if (!b.IsEmpty) r.Add(b);
         }
         return new SelectionFrame { Local = r, ToCanvas = Matrix3x2.Identity };
