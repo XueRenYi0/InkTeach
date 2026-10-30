@@ -43,6 +43,19 @@ internal static class LatexCompat
             s = s.Replace("\\end{" + env + "}", "");
         }
 
+        // 字体命令：CSharpMath 只认 \text / \mathrm，粗斜体先保内容
+        s = s.Replace("\\textnormal", "\\text")
+             .Replace("\\textrm", "\\text")
+             .Replace("\\textbf", "\\text")
+             .Replace("\\textit", "\\text")
+             .Replace("\\emph", "\\text")
+             .Replace("\\mbox", "\\text")
+             .Replace("\\hbox", "\\text");
+
+        // 小矩阵 → 普通矩阵
+        s = s.Replace("\\begin{smallmatrix}", "\\begin{matrix}")
+             .Replace("\\end{smallmatrix}", "\\end{matrix}");
+
         // 常见别名
         s = s.Replace("\\dfrac", "\\frac").Replace("\\tfrac", "\\frac");
         s = s.Replace("\\overrightarrow", "\\vec")
@@ -93,6 +106,9 @@ internal static class LatexCompat
         // cases / array 里的行距：[2pt]、[1ex] 之类
         s = StripRowSpacing(s);
 
+        // 多行下标：\substack{a\\b} → array
+        s = WrapArg(s, "\\substack", "\\begin{array}{c}", "\\end{array}");
+
         // CSharpMath 的解析器对"希腊字母紧跟运算符"会卡住（\alpha+、\alpha\cap），
         // 补一个空格就好。只处理希腊字母，避免动 \left\{ / \right\} 这类定界符。
         s = System.Text.RegularExpressions.Regex.Replace(s,
@@ -114,6 +130,23 @@ internal static class LatexCompat
             int close = MatchBrace(s, open);
             if (close < 0) break;
             s = s[..at] + s[(open + 1)..close] + s[(close + 1)..];
+        }
+        return s;
+    }
+
+    /// <summary>`\cmd{arg}` → `prefix + arg + suffix`（用于 \substack → array）。</summary>
+    private static string WrapArg(string s, string cmd, string prefix, string suffix)
+    {
+        for (int guard = 0; guard < 20; guard++)
+        {
+            int at = s.IndexOf(cmd, StringComparison.Ordinal);
+            if (at < 0) break;
+            int open = s.IndexOf('{', at + cmd.Length);
+            if (open < 0) break;
+            int close = MatchBrace(s, open);
+            if (close < 0) break;
+            string inner = s[(open + 1)..close];
+            s = s[..at] + prefix + inner + suffix + s[(close + 1)..];
         }
         return s;
     }

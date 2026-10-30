@@ -91,3 +91,12 @@ A\Rightarrow B,\ B\Leftrightarrow C
 \partial f/\partial x+\nabla f
 A\bigcup B,\ A\bigcap B
 \bigoplus_{i=1}^{n} A_i
+\textbf{解：}\ \textit{略}
+\textrm{cm},\ \mbox{kg}
+\mathcal{O}(n)
+\substack{a>0\\b>0}
+\begin{smallmatrix}1&2\\3&4\end{smallmatrix}
+\vdots\ \ddots\ \cdots
+\left.f(x)\right|_{x=0}
+x\notin A,\ A\ne\emptyset
+a\leftrightarrow b,\ c\uparrow,\ d\downarrow
