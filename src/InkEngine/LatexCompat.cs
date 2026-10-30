@@ -80,6 +80,10 @@ internal static class LatexCompat
         {
             s = s.Replace(cmd, "");
         }
+        // 括号大小修饰：只删除完整的命令名，别把 \bigcup / \bigcap 误伤成 cup/cap。
+        s = System.Text.RegularExpressions.Regex.Replace(s,
+            @"\\(?:Biggl|Biggr|biggl|biggr|Bigl|Bigr|bigl|bigr|Bigg|bigg|Big|big|middle)(?![a-zA-Z])",
+            "");
         s = StripArg(s, "\\tag");
         s = StripArg(s, "\\label");
         s = StripArg(s, "\\hspace");
@@ -88,6 +92,12 @@ internal static class LatexCompat
 
         // cases / array 里的行距：[2pt]、[1ex] 之类
         s = StripRowSpacing(s);
+
+        // CSharpMath 的解析器对"希腊字母紧跟运算符"会卡住（\alpha+、\alpha\cap），
+        // 补一个空格就好。只处理希腊字母，避免动 \left\{ / \right\} 这类定界符。
+        s = System.Text.RegularExpressions.Regex.Replace(s,
+            @"\\(alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|pi|varpi|rho|varrho|sigma|varsigma|tau|upsilon|phi|varphi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega)(?=[+\-=<>/\\])",
+            @"\$1 ");
 
         return s.Trim();
     }

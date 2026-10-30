@@ -286,6 +286,15 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             AiTest();
         }
+        else if (mode == "--mathcorpus")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            string file = args.Length > 1 ? args[1] : "调研/公式语料/高中数学-公式语料.txt";
+            int ok = MathRenderer.RenderCorpus(file, out int total);
+            ExitCode = ok == total && total > 0 ? 0 : 1;
+            _quit = true;
+        }
         else if (mode == "--mathtest")
         {
             _autoExitAt = double.MaxValue;
@@ -1318,7 +1327,8 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
         Console.WriteLine("  --aitest            AI 题卡自检（插入 / 折叠 / 存档 / 删除 / 撤销）");
-        Console.WriteLine("  --mathtest          公式渲染 spike：CSharpMath 渲染 6 个典型 LaTeX 到 reports/math-spike/");
+        Console.WriteLine("  --mathtest          公式渲染回归：CSharpMath 渲染 50 个典型 LaTeX 到 reports/math-spike/");
+        Console.WriteLine("  --mathcorpus [文件] 批量跑公式语料（默认 调研/公式语料/高中数学-公式语料.txt），列出失败项");
         Console.WriteLine("  --radialtest        呼出盘自检（Ctrl+Alt+Shift+Q：开 / 划 / 松 / 取消 / 穿透 / 松键轮询）");
         Console.WriteLine("  --radialshow [图]   呼出盘摆样：定格在屏幕中央出图（默认 reports/radial-palette.bmp）");
         Console.WriteLine("  --aishow [图]       AI 面板 + 题卡 + 文本框摆样：面板 / 折叠 / 选中 / 展开 / 文本框 / 改色六张（默认 reports/ai-card.bmp）");
@@ -5490,6 +5500,9 @@ internal sealed partial class App : InkEngine.InkEngine
             + "行内中文：\\(\\text{当 }n\\ge 1\\text{ 时，}a_n>0\\)。\n"
             + "中文混排：\n"
             + "\\[\n\\text{当 }a_n>0\\text{ 时，}a_{n+1}=3a_n+2\n\\]\n"
+            + "括号：\n"
+            + "\\[\na_{n+1}+An+B=2\\bigl(a_n+A(n-1)+B\\bigr)\n\\]\n"
+            + "```latex\n\\boxed{a_n=7\\cdot 2^{n-1}-3n-3}\n```\n"
             + "所以：\n"
             + "\\[\na_n+1=3\\cdot 3^{n-1}=3^n\n\\]\n"
             + "**答案：** \\(\\boxed{a_n=3^n-1}\\)");

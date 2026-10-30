@@ -346,6 +346,40 @@ internal static class TextBoxLayout
                 continue;
             }
 
+            // Markdown 代码块：AI 常把 LaTeX 包在 ```latex ... ``` 里
+            if (t.StartsWith("```", StringComparison.Ordinal))
+            {
+                string lang = t[3..].Trim().ToLowerInvariant();
+                var body = new System.Text.StringBuilder();
+                int j = hi + 1;
+                while (j < hardLines.Length
+                       && !hardLines[j].Trim().StartsWith("```", StringComparison.Ordinal))
+                {
+                    body.AppendLine(hardLines[j]);
+                    j++;
+                }
+                string code = body.ToString().Trim();
+                bool math = lang is "latex" or "tex" or "math" or "katex"
+                            || (lang.Length == 0 && LooksLikeLatex(code));
+                if (math)
+                {
+                    AddMathBlock(lines, code, size, pad, textW, card.Ink, u, ref y);
+                }
+                else
+                {
+                    foreach (string row in code.Replace("\r\n", "\n").Split('\n'))
+                    {
+                        foreach (string part in Wrap(row, textW, size))
+                        {
+                            AddText(lines, part, pad, y, size, lineH, TextBoxInk.Black);
+                            y += lineH;
+                        }
+                    }
+                }
+                hi = j;
+                continue;
+            }
+
             // 跨行块公式：\[ ... \] 或 $$ ... $$；开符号可以和公式同一行。
             string opener = null, closer = null;
             if (t.StartsWith("\\[", StringComparison.Ordinal)) { opener = "\\["; closer = "\\]"; }
@@ -415,7 +449,7 @@ internal static class TextBoxLayout
             }
 
             if (display.Contains('$') || display.Contains("\\(") || display.Contains("\\)")
-                || display.Contains('*') || boldAll)
+                || display.Contains('*') || display.Contains('`') || boldAll)
             {
                 var runs = ParseInline(display, lineSize, u, boldAll, card.Ink);
                 if (runs.Count > 0)
@@ -535,6 +569,8 @@ internal static class TextBoxLayout
         }
         for (int i = 0; i < text.Length; i++)
         {
+            // 行内代码/公式的 ` 号不显示；内容照常排版。
+            if (text[i] == '`') { Flush(); continue; }
             if (text[i] == '*' && i + 1 < text.Length && text[i + 1] == '*')
             {
                 // 成对的 ** 才当粗体；落单的 ** 原样显示，避免把 2**3 吃掉。
@@ -657,6 +693,10 @@ internal static class TextBoxLayout
     private static bool IsClosingPunct(char ch)
         => "。，、；：！？）》」』】”’%,.;:!?)]}".IndexOf(ch) >= 0;
 
+    private static bool LooksLikeLatex(string s)
+        => !string.IsNullOrWhiteSpace(s)
+           && (s.Contains('\\') || s.Contains("^{") || s.Contains("_{"));
+
     private static bool TryBlockMath(string text, out string latex)
     {
         latex = "";
@@ -704,7 +744,7 @@ internal static class TextBoxLayout
         {
             string line = raw;
             if (line.Contains('$') || line.Contains("\\(") || line.Contains("\\)")
-                || line.Contains('*'))
+                || line.Contains('*') || line.Contains('`'))
             {
                 var runs = ParseInline(line, size, u, false, AiInk(ink));
                 if (runs.Count > 0)
@@ -749,7 +789,8 @@ internal static class TextBoxLayout
             var math = MathRenderer.RenderImage(latex, size, ink, 2f);
             if (math == null)
             {
-                AddText(lines, "（公式渲染失败）", pad, y, size, size * 1.55f, TextBoxInk.Muted);
+                Console.WriteLine("[math] 未能渲染：" + latex);
+            AddText(lines, "（公式）", pad, y, size, size * 1.55f, TextBoxInk.Muted);
                 y += size * 1.55f;
                 return;
             }
@@ -778,7 +819,8 @@ internal static class TextBoxLayout
         AddMathRuns(runs, latex, size, ink);
         if (runs.Count == 0)
         {
-            AddText(lines, "（公式渲染失败）", pad, y, size, size * 1.55f, TextBoxInk.Muted);
+            Console.WriteLine("[math] 未能渲染：" + latex);
+            AddText(lines, "（公式）", pad, y, size, size * 1.55f, TextBoxInk.Muted);
             y += size * 1.55f;
             return;
         }

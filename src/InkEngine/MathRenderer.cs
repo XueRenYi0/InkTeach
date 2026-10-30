@@ -138,6 +138,29 @@ internal static class MathRenderer
         get { lock (_cache) return _cache.Count; }
     }
 
+    /// <summary>批量跑一份公式语料（一行一条，空行/# 开头跳过），返回通过数。</summary>
+    internal static int RenderCorpus(string file, out int total)
+    {
+        total = 0;
+        int ok = 0;
+        if (!File.Exists(file))
+        {
+            Console.WriteLine("找不到公式语料：" + file);
+            return 0;
+        }
+        foreach (string raw in File.ReadAllLines(file))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
+            total++;
+            var r = RenderPng(line, 18f, new Color4(0.12f, 0.14f, 0.18f, 1f), 2f);
+            if (r == null) Console.WriteLine("  FAIL  " + line);
+            else ok++;
+        }
+        Console.WriteLine($"公式语料：{ok}/{total} 通过");
+        return ok;
+    }
+
     /// <summary>自检/摆样用：渲染一组典型公式，输出 PNG，返回成功数。</summary>
     internal static int RenderSamples(string dir, out int total)
     {
@@ -186,6 +209,15 @@ internal static class MathRenderer
             ("stackrel", @"\stackrel{\text{def}}{=}"),
             ("vmatrix", @"\begin{vmatrix}a&b\\c&d\end{vmatrix}"),
             ("bmatrix", @"\begin{bmatrix}1&2\\3&4\end{bmatrix}"),
+            ("bigl", @"a_{n+1}+An+B=2\bigl(a_n+A(n-1)+B\bigr)"),
+            ("bigparen", @"\Bigl(\dfrac{1}{2}\Bigr)"),
+            ("middle", @"\left\{x\middle|x>0\right\}"),
+            ("boxed2", @"\boxed{a_n=7\cdot 2^{n-1}-3n-3}"),
+            ("dfrac2", @"\dfrac{a_{n+1}}{a_n}=f(n)"),
+            ("frac3", @"a_{n+1}=\dfrac{a_n}{ka_n+b}"),
+            ("iter", @"a_{n+1}=pa_n+q\cdot r^n"),
+            ("arith", @"a_1+3\times1+3=1+3+3=7"),
+            ("bigcup", @"A\bigcup B"),
         };
         int ok = 0;
         total = cases.Length;
