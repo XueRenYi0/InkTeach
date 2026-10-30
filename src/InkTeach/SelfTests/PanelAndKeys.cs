@@ -3489,6 +3489,17 @@ internal sealed partial class App
                 Check("笔工具：题卡不挡笔，可以在卡片上落墨",
                       Doc.Strokes.Count > beforeInk && Doc.Selected.Count == 0,
                       $"笔数 {beforeInk} → {Doc.Strokes.Count}，选中 {Doc.Selected.Count}");
+
+                // 墨迹在卡片上面：切回选择工具点它，必须选中墨迹而不是卡片
+                Stroke topInk = Doc.Strokes.Count > beforeInk ? Doc.Strokes[^1] : null;
+                Host.Commands.SetTool(Tool.Marquee);
+                SettleFrames(180);
+                ClickPhysical(px + 15, py + 10);
+                SettleFrames(220);
+                Check("墨迹压在题卡上：点墨迹选中墨迹，不选卡片",
+                      topInk != null && Doc.Selected.Count == 1
+                      && ReferenceEquals(Doc.Selected[0], topInk),
+                      $"选中 {Doc.Selected.Count}，对象={(Doc.Selected.Count == 1 ? Doc.Selected[0].Kind.ToString() : "-")}");
             }
             Doc.Clear();
             Doc.ClearHistory();

@@ -16804,9 +16804,15 @@ public partial class InkEngine
                     // "看得见的那一圈"里面都能拖——判据和光标、自动选中框同一份。
                     move = SelectionHandles.InsideUiFrame(frame, new Vector2(x, y), ui);
 
-                    // 顺手记下"指针底下是哪一条"：松手时若一点没移动，就把多选**收窄成只选它**
-                    // （PPT/Figma 的行为）。落在框内空白处 → 记不到东西 → 松手不改选择。
-                    if (move) _dragHitStroke = Doc.HitObjectAt(x, y, ClickToleranceLogical * dpi);
+                    // **框里有别的对象压在上面时，不能拖当前选区**：先让位给点选。
+                    // 典型场景：文本框上面写了墨迹，当前文本框是选中的，老师点那条墨迹，
+                    // 期望是"选中墨迹"，不是"把文本框拖走"。
+                    if (move)
+                    {
+                        var under = Doc.HitObjectAt(x, y, ClickToleranceLogical * dpi);
+                        if (under != null && !Doc.Selected.Contains(under)) move = false;
+                        else _dragHitStroke = under;
+                    }
                 }
             }
         }

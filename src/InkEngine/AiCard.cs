@@ -401,6 +401,14 @@ public partial class InkEngine
         var s = AiCardAt(screenX, screenY);
         if (s == null) return false;
 
+        float cx = screenX, cy = screenY - ViewOffsetY;
+
+        // **先按 z 序问一句**：卡片是填充矩形，但它上面的墨迹/图形/另一张卡才是
+        // 这一下真正点到的东西。这里如果不让位，就会出现"墨迹明明在卡上面，
+        // 却永远选不中墨迹"——2026-10-30 用户实测报的就是这个。
+        var top = Doc.HitObjectAt(cx, cy, ClickToleranceLogical * DpiScale);
+        if (top != null && !ReferenceEquals(top, s)) return false;
+
         // 没选中 = 先选中，再把这一下交回标准选择手势（单击选中、按住可顺势拖动）。
         bool single = Doc.Selected.Count == 1 && ReferenceEquals(Doc.Selected[0], s);
         if (!single)
@@ -414,7 +422,6 @@ public partial class InkEngine
         // 锁定语义和普通对象一致：能选中、能看，但卡片专属动作（改宽/✕/折叠）不动它。
         if (s.Locked) return false;
 
-        float cx = screenX, cy = screenY - ViewOffsetY;
         Vector2 local = new(cx, cy);
         if (!s.Transform.IsIdentity && Matrix3x2.Invert(s.Transform, out var inv))
             local = Vector2.Transform(local, inv);
