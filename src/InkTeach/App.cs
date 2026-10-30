@@ -5480,6 +5480,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Doc.Clear();
         Doc.ClearHistory();
         InsertPlainTextBoxForTest("这是一个普通文本框。\n可以输入中文，选中后用 8 个手柄改宽高；\n"
+            + "DeepSeek 格式：已知数列 \\(\\{a_n\\}\\) 满足 \\(a_{n+1}=3a_n-4\\)。\n"
             + "# Markdown 标题\n**粗体** 和 *斜体*，以及列表：\n- 第一项\n- 第二项\n"
             + "行内公式：当 $x=1$ 时，$y=x^2$ 的值为 $1$。\n"
             + "整行公式：\n$$x=\\frac{-b\\pm\\sqrt{b^2-4ac}}{2a}$$\n"

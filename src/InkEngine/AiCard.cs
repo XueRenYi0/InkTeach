@@ -381,7 +381,8 @@ internal static class TextBoxLayout
                 continue;
             }
 
-            if (display.Contains('$') || display.Contains('*') || boldAll)
+            if (display.Contains('$') || display.Contains("\\(") || display.Contains("\\)")
+                || display.Contains('*') || boldAll)
             {
                 var runs = ParseInline(display, lineSize, u, boldAll);
                 if (runs.Count > 0)
@@ -403,6 +404,8 @@ internal static class TextBoxLayout
 
     private static List<TextBoxRun> ParseInline(string text, float size, float u, bool boldAll = false)
     {
+        // DeepSeek / ChatGPT 常输出 \(...\) 行内公式；内部统一成 $...$ 再解析。
+        text = text.Replace("\\(", "$").Replace("\\)", "$");
         var runs = new List<TextBoxRun>();
         int i = 0;
         while (i < text.Length)
