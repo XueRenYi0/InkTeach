@@ -463,6 +463,8 @@ internal static class TextBoxLayout
     /// </summary>
     private static void AddMathRuns(List<TextBoxRun> runs, string latex, float size)
     {
+        latex = LatexCompat.Normalize(latex);
+        if (string.IsNullOrWhiteSpace(latex)) return;
         var segments = LatexCompat.SplitTextSegments(latex);
         if (segments.Count == 0) return;
         foreach (var (isText, value) in segments)
@@ -720,6 +722,8 @@ internal static class TextBoxLayout
     private static void AddMathBlock(List<TextBoxLine> lines, string latex, float size,
                                      float pad, float textW, float u, ref float y)
     {
+        latex = LatexCompat.Normalize(latex);
+        if (string.IsNullOrWhiteSpace(latex)) return;
         // 纯公式：仍走单张公式图，居中。
         var segments = LatexCompat.SplitTextSegments(latex);
         bool hasText = false;

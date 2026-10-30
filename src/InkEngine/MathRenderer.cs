@@ -126,7 +126,7 @@ internal static class MathRenderer
     }
 
     private readonly record struct CacheKey(string Latex, int Size10, uint Color, int Scale10);
-    private const int CacheLimit = 256;
+    private const int CacheLimit = 128;
     private static readonly Dictionary<CacheKey, RenderedImage> _cache = new();
 
     /// <summary>
