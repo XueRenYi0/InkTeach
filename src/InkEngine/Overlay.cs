@@ -2351,9 +2351,9 @@ internal sealed partial class OverlayWindow : IDisposable
     {
         // AI 题卡：结构化内容，由 DirectWrite 逐行画；不是位图、也不是几何。
         // **必须放在最前面**：它和图像一样没有可描边的中心线。
-        if (s.Kind == StrokeKind.AiCard)
+        if (s.Kind == StrokeKind.TextBox)
         {
-            DrawAiCard(s);
+            DrawTextBox(s);
             return;
         }
 
@@ -2420,12 +2420,12 @@ internal sealed partial class OverlayWindow : IDisposable
     }
 
     /// <summary>
-    /// 画一张 AI 题卡。**逐行画**：排版（断行、行高、折叠）在 <see cref="AiCardLayout"/> 里算好，
+    /// 画一张 AI 题卡。**逐行画**：排版（断行、行高、折叠）在 <see cref="TextBoxLayout"/> 里算好，
     /// 这里只负责把每一行贴到卡片局部坐标上——折叠/变宽时重排一次，不需要重新截图。
     /// </summary>
-    private void DrawAiCard(Stroke s)
+    private void DrawTextBox(Stroke s)
     {
-        var card = s.AiCard;
+        var card = s.TextBox;
         if (card == null) return;
         if (s.Points.Count == 0) return;
         var lines = card.EnsureLayout();
@@ -2448,14 +2448,14 @@ internal sealed partial class OverlayWindow : IDisposable
             {
                 switch (line.Kind)
                 {
-                    case AiCardLineKind.Divider:
+                    case TextBoxLineKind.Divider:
                         _ctx.DrawLine(
                             new Vector2(o.X + line.X, o.Y + line.Y),
                             new Vector2(o.X + line.Box.MaxX, o.Y + line.Y),
                             Brush(new Color4(0.90f, 0.91f, 0.93f, 1f)), MathF.Max(1f, u));
                         break;
 
-                    case AiCardLineKind.Toggle:
+                    case TextBoxLineKind.Toggle:
                     {
                         var b = new Vortice.RawRectF(o.X + line.Box.MinX, o.Y + line.Box.MinY,
                                                      o.X + line.Box.MaxX, o.Y + line.Box.MaxY);
@@ -2471,9 +2471,11 @@ internal sealed partial class OverlayWindow : IDisposable
                     default:
                     {
                         float w = MathF.Max(10f, card.Width - line.X - pad);
+                        Color4 ink = card.Role == TextBoxRole.Normal && line.Ink == TextBoxInk.Black
+                            ? s.Color : AiColor(line.Ink);
                         _ctx.DrawText(line.Text, AiTextFormat(line.Size, line.Bold, false),
                             new Rect(o.X + line.X, o.Y + line.Y, w, line.Height),
-                            Brush(AiColor(line.Ink)));
+                            Brush(ink));
                         break;
                     }
                 }
@@ -2481,17 +2483,11 @@ internal sealed partial class OverlayWindow : IDisposable
 
             // 卡片内容里的操作提示（只在选择工具 + 已选中时才响应命中）。
             // 画在内容层，所以**不能随选中状态变样式**：否则选区一变就要重烘分块。
-            var close = new Rect(o.X + card.Width - 38f * u, o.Y + 6f * u, 30f * u, 30f * u);
-            _ctx.DrawText("✕", AiTextFormat(13f * u, false, true), close, Brush(AiMuted));
-
-            // 右边缘的改宽提示：三条短横线，只在右边缘中间。
-            float gy = o.Y + card.LayoutHeight * 0.5f;
-            var grip = Brush(new Color4(0.72f, 0.75f, 0.80f, 1f));
-            float gx = o.X + card.Width - 7f * u;
-            for (int i = -1; i <= 1; i++)
-                _ctx.DrawLine(new Vector2(gx, gy + i * 5f * u),
-                              new Vector2(gx + 3.5f * u, gy + i * 5f * u),
-                              grip, MathF.Max(1f, 1.4f * u));
+            if (card.Role == TextBoxRole.AiQuestion)
+            {
+                var close = new Rect(o.X + card.Width - 38f * u, o.Y + 6f * u, 30f * u, 30f * u);
+                _ctx.DrawText("✕", AiTextFormat(13f * u, false, true), close, Brush(AiMuted));
+            }
         }
         finally
         {
@@ -2499,11 +2495,11 @@ internal sealed partial class OverlayWindow : IDisposable
         }
     }
 
-    private static Color4 AiColor(AiCardInk ink) => ink switch
+    private static Color4 AiColor(TextBoxInk ink) => ink switch
     {
-        AiCardInk.Red => AiRed,
-        AiCardInk.Muted => AiMuted,
-        AiCardInk.Accent => AiRed,
+        TextBoxInk.Red => AiRed,
+        TextBoxInk.Muted => AiMuted,
+        TextBoxInk.Accent => AiRed,
         _ => AiBlack,
     };
 
@@ -3778,7 +3774,7 @@ internal sealed partial class OverlayWindow : IDisposable
         bool shapeLike = SelectionHandles.ShapeEditable(sel, out var shapeStroke);
         // AI 题卡走"文字对象"那一档：只给选中框 + 框内拖动 + 右边缘改宽，
         // 不给通用八手柄（会把字拉变形），也不给旋转柄。
-        bool cardLike = sel.Count == 1 && sel[0].Kind == StrokeKind.AiCard;
+        bool cardLike = sel.Count == 1 && sel[0].Kind == StrokeKind.TextBox;
 
         // **这一帧要画几个"定义元素手柄"**（0 = 一个都没有）。
         //
@@ -3885,7 +3881,7 @@ internal sealed partial class OverlayWindow : IDisposable
         //      ——在那之前它们两头空（见上面 `nh` 那段）。
         //    白底 + 蓝边：深色背景上是白方块显眼，浅色背景上靠蓝边立住，一套画法两边都成立。
         //    拖动 / 旋转 / 拖元素中收起来（此刻点不中，而且是最"晃眼"的一圈家具）。
-        if (!collapsed && !cardLike)
+        if (!collapsed)
         {
             // 视觉柄**跟着对象大小缩**（小对象别被手柄盖住），命中半径不缩——
             // 判据与理由都在 SelectionHandles.VisualHandleSize。
@@ -4906,6 +4902,8 @@ internal sealed partial class OverlayWindow : IDisposable
 
         const int n = SelectionHandles.BarButtonCount;
         float glyphBox = SelectionHandles.BarIconBoxLogical * dpi;   // 图标框比字形大一点
+        bool textBoxSel = app.Doc.Selected.Count == 1
+                          && app.Doc.Selected[0].Kind == StrokeKind.TextBox;
 
         for (int i = 0; i < n; i++)
         {
@@ -4944,12 +4942,22 @@ internal sealed partial class OverlayWindow : IDisposable
                 case SelBarButton.Color:
                     // 圆环的**半径**按图标框的一半左右给（以前给成 0.62 倍，画出来比
                     // 别的图标还大一圈——用户："那个颜色圈的比例也太大了"）。
-                    DrawColorRing(app, cx, cy, glyphBox * 0.44f, disabled);
+                    DrawColorRing(app, cx, cy, glyphBox * 0.44f, disabled || (textBoxSel && app.Doc.Selected[0].TextBox?.Role == TextBoxRole.AiQuestion));
                     break;
                 case SelBarButton.Lock:
                     DrawIcon(IsSelectionLocked(app) ? IconPaths.lockClosed : IconPaths.unlock,
                              cx - glyphBox * 0.5f, cy - glyphBox * 0.5f, glyphBox, iconBrush);
                     break;
+                case SelBarButton.FlipH or SelBarButton.FlipV when textBoxSel:
+                {
+                    // 文本框把"翻转"两格换成字号 A- / A+（图片的翻转对文字没意义）。
+                    string glyph = kind == SelBarButton.FlipH ? "A−" : "A+";
+                    var fmt = AiTextFormat(14f * dpi, true, true);
+                    _ctx.DrawText(glyph, fmt,
+                        new Rect(btn.MinX, btn.MinY, btn.MaxX - btn.MinX, btn.MaxY - btn.MinY),
+                        iconBrush);
+                    break;
+                }
                 case SelBarButton.Library:
                 {
                     bool feedback = app.LibraryFeedbackActive;

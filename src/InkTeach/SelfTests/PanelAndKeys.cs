@@ -2313,9 +2313,9 @@ internal sealed partial class App
         {
             Check("启动器：打开面板默认停在主页", ui.MorePageForTest == 0, $"页 = {ui.MorePageForTest}");
             bool tilesOk = true;
-            // 课堂 5（计时 / 点名 / 随机一人 / AI 出题 / 使用说明）＋ 墨迹 5（保存 / 打开 /
+            // 课堂 6（计时 / 点名 / 随机一人 / AI 出题 / 文本框 / 使用说明）＋ 墨迹 5（保存 / 打开 /
             // 回放 / 关文档 / 历史板书）。收藏不再放这里。
-            for (int code = 0; code <= 9; code++)
+            for (int code = 0; code <= 10; code++)
             {
                 var t = ui.HubTileRectForTest(code);
                 if (t.IsEmpty || t.MinX < moreRect.MinX || t.MaxX > moreRect.MaxX
@@ -2327,7 +2327,7 @@ internal sealed partial class App
                 var t = ui.HubBottomRectForTest(i);
                 if (t.IsEmpty || t.MaxX > moreRect.MaxX || t.MaxY > moreRect.MaxY) bottomOk = false;
             }
-            Check("启动器：十格（课堂 5 ＋ 墨迹 5）＋ 底栏五格都在面板内", tilesOk && bottomOk,
+            Check("启动器：十一格（课堂 6 ＋ 墨迹 5）＋ 底栏五格都在面板内", tilesOk && bottomOk,
                   $"面板 {moreRect.MaxX - moreRect.MinX:F0}×{moreRect.MaxY - moreRect.MinY:F0}");
 
             // **底栏每一格都必须进命中表**（2026-10-17 紧急修：加第 5 格「退出」时，
@@ -2480,9 +2480,9 @@ internal sealed partial class App
                           (moreCellD.MinY + moreCellD.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
             var setTile = ui.HubBottomRectForTest(0);
-            Check("启动器：底栏「设置」格命中码 = 150（区间不与格子串段）",
+            Check("启动器：底栏「设置」格命中码 = 底栏基址（区间不与格子串段）",
                   ui.MoreHitForTest((setTile.MinX + setTile.MaxX) * 0.5f, (setTile.MinY + setTile.MaxY) * 0.5f)
-                    == 150,
+                    == ui.MoreHitBottomBaseForTest,
                   $"格 ({setTile.MinX:F0},{setTile.MinY:F0})-({setTile.MaxX:F0},{setTile.MaxY:F0})，"
                   + $"命中 {ui.MoreHitForTest((setTile.MinX + setTile.MaxX) * 0.5f, (setTile.MinY + setTile.MaxY) * 0.5f)}");
             ClickPhysical((setTile.MinX + setTile.MaxX) * 0.5f * DpiScale,
@@ -3446,13 +3446,13 @@ internal sealed partial class App
                           (gen.MinY + gen.MaxY) * 0.5f * DpiScale);
             SettleFrames(300);
             Check("AI 面板「生成题卡」：插入一张 mock 卡并收起面板",
-                  !ui.AiOpenForTest && AiCardCountForTest == 1,
-                  $"AI={ui.AiOpenForTest} 题卡={AiCardCountForTest}");
+                  !ui.AiOpenForTest && TextBoxCountForTest == 1,
+                  $"AI={ui.AiOpenForTest} 题卡={TextBoxCountForTest}");
 
             // 选中框：选择工具点卡片 = 选中，框内拖动 = 移动；笔工具下不拦
             Stroke aiCard = null;
             foreach (var s in Doc.Strokes)
-                if (s.Kind == StrokeKind.AiCard) { aiCard = s; break; }
+                if (s.Kind == StrokeKind.TextBox) { aiCard = s; break; }
             if (aiCard != null)
             {
                 Host.Commands.SetTool(Tool.Marquee);
@@ -3501,6 +3501,24 @@ internal sealed partial class App
                       && ReferenceEquals(Doc.Selected[0], topInk),
                       $"选中 {Doc.Selected.Count}，对象={(Doc.Selected.Count == 1 ? Doc.Selected[0].Kind.ToString() : "-")}");
             }
+            Doc.Clear();
+            Doc.ClearHistory();
+            SettleFrames(120);
+        }
+
+        // ---- 普通文本框入口：更多 → 文本框 → 插入并进入编辑 ----
+        {
+            ui.OpenMoreForTest();
+            SettleFrames(250);
+            var tbTile = ui.HubTileRectForTest(10);
+            ClickPhysical((tbTile.MinX + tbTile.MaxX) * 0.5f * DpiScale,
+                          (tbTile.MinY + tbTile.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("更多 → 文本框：插入一个普通文本框并进入编辑",
+                  TextBoxEditing && TextBoxCountForTest == 1,
+                  $"editing={TextBoxEditing} 文本框={TextBoxCountForTest}");
+            EndTextBoxEditFromUi(true);
+            SettleFrames(150);
             Doc.Clear();
             Doc.ClearHistory();
             SettleFrames(120);

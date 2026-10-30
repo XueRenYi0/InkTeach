@@ -637,13 +637,13 @@ internal enum StrokeKind
     /// **AI 题卡**（2026-10-30）：结构化卡片对象，不是一张截图。
     ///
     /// `Points` 只存卡片左上角（第二个点是"左上角 + 宽高"，给包围盒/命中用）；
-    /// 内容、颜色、折叠状态都在 <see cref="Stroke.AiCard"/> 里。渲染由
-    /// `Overlay.DrawAiCard` 用 DirectWrite 逐行画，所以变宽、折叠、改字号都不需要
+    /// 内容、颜色、折叠状态都在 <see cref="Stroke.TextBox"/> 里。渲染由
+    /// `Overlay.DrawTextBox` 用 DirectWrite 逐行画，所以变宽、折叠、改字号都不需要
     /// 重新截图；后面换公式渲染器也只换卡片里的片段，不动对象本身。
     ///
     /// 值只能追加在末尾（见 <see cref="InkSerializer"/> 的版本说明）。
     /// </summary>
-    AiCard = 27,
+    TextBox = 27,
 }
 
 /// <summary>
@@ -948,10 +948,10 @@ internal sealed class Stroke
     public ImageData Image;
 
     /// <summary>
-    /// **AI 题卡内容**（只有 <see cref="StrokeKind.AiCard"/> 有）。
+    /// **AI 题卡内容**（只有 <see cref="StrokeKind.TextBox"/> 有）。
     /// 结构化数据，不是位图；宽/高、折叠状态、题目段落都跟着对象走，进存档/复制/撤销。
     /// </summary>
-    public AiCardData AiCard;
+    public TextBoxData TextBox;
 
     /// <summary>是不是图像对象。渲染、命中测试、顶点编辑三处都要按它分流。</summary>
     public bool IsImage => Kind == StrokeKind.Image;
@@ -3022,7 +3022,7 @@ internal sealed class Stroke
     /// 于是描边发生在画布空间、宽度恒等于 <see cref="Width"/>。
     /// </summary>
     public bool KeepsWidth => Kind != StrokeKind.Freehand && Kind != StrokeKind.Image
-                              && Kind != StrokeKind.AiCard;
+                              && Kind != StrokeKind.TextBox;
 
     /// <summary>
     /// **画布空间**几何（"线宽不变"那条路，见 <see cref="KeepsWidth"/>）。
@@ -3140,7 +3140,7 @@ internal sealed class Stroke
             FocusTriangle = FocusTriangle,     // 椭圆（带焦点）画不画焦点三角形
             FocusPointU = FocusPointU,         // 焦点三角形的顶点 P 在椭圆上哪个位置（NaN = 还没定过）
             Transform = Transform,
-            AiCard = AiCard?.Clone(),   // 题卡内容也是"这一条的样子"，复制要独立一份
+            TextBox = TextBox?.Clone(),   // 题卡内容也是"这一条的样子"，复制要独立一份
         };
         // 用 AddPoint 加：它会顺便把 Bounds 和 Revision 收拾好。
         for (int i = 0; i < Points.Count; i++)
@@ -3196,14 +3196,26 @@ internal sealed class Stroke
     /// 把题卡的包围盒控制点同步成"左上角 + 宽高"。
     /// 宽度/折叠状态一变就调用；只改 `Points` 的两个角，**不动 Transform、不动内容**。
     /// </summary>
-    internal void SyncAiCardBounds()
+    internal void SyncTextBoxBounds()
     {
-        if (Kind != StrokeKind.AiCard || AiCard == null) return;
-        _ = AiCard.EnsureLayout();      // 折叠/改宽之后先把高度算出来，再同步两个角
+        if (Kind != StrokeKind.TextBox || TextBox == null) return;
+        _ = TextBox.EnsureLayout();      // 折叠/改宽之后先把高度算出来，再同步两个角
         Vector2 o = Points.Count > 0 ? new Vector2(Points[0].X, Points[0].Y) : Vector2.Zero;
+        SetTextBoxRect(o, TextBox.Width, TextBox.LayoutHeight);
+    }
+
+    /// <summary>
+    /// 按"左上角 + 宽高"重设文本框的局部矩形（拖左边/上边改大小时原点也要跟着走）。
+    /// 不动 Transform、不动内容；只负责包围盒和几何版本。
+    /// </summary>
+    internal void SetTextBoxRect(Vector2 origin, float width, float height)
+    {
+        if (Kind != StrokeKind.TextBox || TextBox == null) return;
+        TextBox.Width = MathF.Max(1f, width);
+        TextBox.Height = MathF.Max(1f, height);
         Points.Clear();
-        Points.Add(new InkPoint { X = o.X, Y = o.Y, P = 1f, T = 0 });
-        Points.Add(new InkPoint { X = o.X + AiCard.Width, Y = o.Y + AiCard.LayoutHeight, P = 1f, T = 0 });
+        Points.Add(new InkPoint { X = origin.X, Y = origin.Y, P = 1f, T = 0 });
+        Points.Add(new InkPoint { X = origin.X + TextBox.Width, Y = origin.Y + TextBox.Height, P = 1f, T = 0 });
         RecomputeBounds();
         Revision++;
     }
@@ -3275,11 +3287,11 @@ internal sealed class Stroke
             return;
         }
 
-        if (Kind == StrokeKind.AiCard && AiCard != null && Points.Count >= 1)
+        if (Kind == StrokeKind.TextBox && TextBox != null && Points.Count >= 1)
         {
             var o = new Vector2(Points[0].X, Points[0].Y);
             Bounds.Add(o.X, o.Y);
-            Bounds.Add(o.X + AiCard.Width, o.Y + AiCard.LayoutHeight);
+            Bounds.Add(o.X + TextBox.Width, o.Y + TextBox.LayoutHeight);
             return;
         }
 
@@ -3303,7 +3315,7 @@ internal sealed class Stroke
     /// （以前自己拼轮廓、内角要补到两条内边的交点，最远能到好几倍半宽，
     /// 那时这个系数必须留得很大——现在就按事实来。）
     /// </summary>
-    public RectF PaddedBounds => Kind == StrokeKind.AiCard
+    public RectF PaddedBounds => Kind == StrokeKind.TextBox
         ? WorldBounds.Inflate(2f)
         : IsParametricShape
             ? WorldInkBounds.Inflate(2f)
@@ -3818,7 +3830,7 @@ internal sealed class Stroke
     {
         // AI 题卡是"填满的一块矩形"（和图像同义）：点在卡片里就算命中。
         // 不走几何：卡片没有描边中心线，硬按两点的线去算会出现"看得见却点不中"。
-        if (Kind == StrokeKind.AiCard && AiCard != null && Points.Count >= 1)
+        if (Kind == StrokeKind.TextBox && TextBox != null && Points.Count >= 1)
         {
             var b = WorldBounds;
             return canvasX >= b.MinX - tolerance && canvasX <= b.MaxX + tolerance
@@ -4521,7 +4533,7 @@ internal sealed class Stroke
     public ID2D1Geometry BuildGeometry(ID2D1Factory1 factory)
     {
         // AI 题卡由 Overlay 用 DirectWrite 画，没有中心线几何。
-        if (Kind == StrokeKind.AiCard) return null;
+        if (Kind == StrokeKind.TextBox) return null;
 
         // 缓存键 = 几何版本（Revision）＋ 曲线化版本 ＋ 活笔/模型版本；
         // 只比 Revision 的话，开关一拨会把旧几何还回来。
@@ -6637,24 +6649,24 @@ internal sealed class InkDocument
     public readonly List<Stroke> Selected = new();
 
     private int _aiCardScanVersion = -1;
-    private bool _hasAiCards;
+    private bool _hasTextBoxs;
 
     /// <summary>
     /// 当前页有没有 AI 题卡。按文档版本缓存一次扫描——指针每次移动都要问
     /// "在不在题卡上"，没有缓存的话一万笔的板书上每次移动都要扫一遍全表。
     /// </summary>
-    internal bool HasAiCards
+    internal bool HasTextBoxs
     {
         get
         {
             if (_aiCardScanVersion != Version)
             {
-                _hasAiCards = false;
+                _hasTextBoxs = false;
                 foreach (var s in Strokes)
-                    if (s.Kind == StrokeKind.AiCard) { _hasAiCards = true; break; }
+                    if (s.Kind == StrokeKind.TextBox) { _hasTextBoxs = true; break; }
                 _aiCardScanVersion = Version;
             }
-            return _hasAiCards;
+            return _hasTextBoxs;
         }
     }
     public readonly DirtyRegion Dirty = new();
@@ -7646,7 +7658,7 @@ internal sealed class InkDocument
             var s = _queryScratch[i];
             if (s.IsImage) continue;
             // AI 题卡和图像同一条规矩：像素橡皮不啃内容；要删整张用对象橡皮 / 选择框。
-            if (s.Kind == StrokeKind.AiCard) continue;
+            if (s.Kind == StrokeKind.TextBox) continue;
             if (s.Locked) continue;        // 同整笔橡皮：锁定的不擦（见 Stroke.Locked）
             if (!s.PaddedBounds.Intersects(rect)) continue;
             if (s.Kind != StrokeKind.Freehand && !ShapeTouchesRect(s, rect)) continue;

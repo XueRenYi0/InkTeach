@@ -3534,7 +3534,7 @@ public sealed partial class FullUi : IOverlayUi
     private const int MoreHitChip = 30;       // 30+cell（钉住宫格；只有自定义档显示）
     private const int MoreHitRow = 60;        // 60+Rows 下标（设置子页的行）
     private const int MoreHitTile = 140;      // 140+启动器格子（0..5：计时/点名/分组 保存/打开/回放）
-    private const int MoreHitBottom = 150;    // 150+底栏（0..4：设置/日志/检查更新/重启/退出）
+    private const int MoreHitBottom = 200;    // 200+底栏（0..4：设置/日志/检查更新/重启/退出）
 
     /// <summary>
     /// 面板宽：**所有 More 页共用**工作区的 55%，夹在 560～980 逻辑像素。
@@ -3637,14 +3637,14 @@ public sealed partial class FullUi : IOverlayUi
         => HubCounts[Math.Clamp(section, 0, HubCounts.Length - 1)];
 
     /// <summary>
-    /// 每个分组的格子数：课堂 5 个（计时 / 点名 / 随机一人 / AI 出题 / 使用说明）；
+    /// 每个分组的格子数：课堂 6 个（计时 / 点名 / 随机一人 / AI 出题 / 文本框 / 使用说明）；
     /// 墨迹 **5 个**（**保存… / 打开… / 墨迹回放 / 关闭文档 / 历史板书**——
     /// 2026-10-16 用户定合并：原"保存墨迹＋保存图片"并为「保存…」、
     /// "打开墨迹＋打开文档"并为「打开…」，按扩展名分派；历史板书是 2026-10-14
     /// 加的找回入口）。收藏只留在主工具条那一格，更多里不再放重复入口。
     /// 格子编号（`HubTileCode`）从这里算出来，**不写死 3**——加格子不会再串段。
     /// </summary>
-    private static readonly int[] HubCounts = { 5, 5 };   // 课堂 5（计时/点名/随机/AI/使用说明），墨迹 5（不含收藏）
+    private static readonly int[] HubCounts = { 6, 5 };   // 课堂 6（计时/点名/随机/AI/文本框/使用说明），墨迹 5（不含收藏）
 
     /// <summary>第 section 组的组头矩形。</summary>
     private RectF HubHeadRect(int section)
@@ -3675,6 +3675,7 @@ public sealed partial class FullUi : IOverlayUi
         {
             if (index < 3) return index;
             if (index == 3) return AiTileCode;
+            if (index == 4) return TextBoxTileCode;
             return HelpTileCode;
         }
         // 3..7 = 保存/打开/回放/关文档/历史板书；8 留给「使用说明」。
@@ -3972,6 +3973,9 @@ public sealed partial class FullUi : IOverlayUi
         AiTileCode => ("AI 出题",
               "语音/文字出题；1A 先出示例题卡（不联网）",
               true, false),
+        TextBoxTileCode => ("文本框",
+              "输入文字；选中后可拖动、8 个手柄改宽高、调字号",
+              true, false),
         HelpTileCode => ("使用说明",
               "4 步上手 / 手势 / 快捷键；F1 也能打开",
               true, false),
@@ -4184,6 +4188,10 @@ public sealed partial class FullUi : IOverlayUi
             case AiTileCode:                          // AI 出题（1A：面板 + mock 题卡）
                 CloseMore();
                 OpenAiPanel();
+                break;
+            case TextBoxTileCode:                     // 普通文本框：插入并直接进入输入
+                CloseMore();
+                _host.Commands.InsertTextBox();
                 break;
             case HelpTileCode:                        // 使用说明（2026-10-19）
                 // 和「设置」一样留在 More 面板里换页，不另开一层——DPI、遮罩、

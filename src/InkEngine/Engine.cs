@@ -4645,6 +4645,19 @@ public partial class InkEngine
         float x = sx, y = sy;
         ScreenToCanvas(ref x, ref y);
 
+        // 文本框编辑中：点编辑框以外 = 结束输入（然后这一下照常给界面/画布）。
+        if (_textBoxEditing)
+        {
+            bool inside = false;
+            if (_textBoxEditStroke != null)
+            {
+                var b = _textBoxEditStroke.PaddedBounds;
+                inside = screenX >= b.MinX && screenX <= b.MaxX
+                      && screenY >= b.MinY + ViewOffsetY && screenY <= b.MaxY + ViewOffsetY;
+            }
+            if (!inside) EndTextBoxEditFromUi(true);
+        }
+
         // 收藏触摸滚动进行中：第二根手指一律吞掉，别把第二下落到卡片/画布上。
         if ((_libraryTouchScrollArmed || _libraryTouchScrolling) && ptype == Native.PT_TOUCH)
             return;
@@ -4779,7 +4792,7 @@ public partial class InkEngine
 
         // AI 题卡（文档对象）：**只在使用「选择」工具时**才由它接管按钮/右边缘；
         // 笔、荧光笔、激光、图形和橡皮一律放行——题卡不能挡住写字。
-        if (Tool == Tool.Marquee && !inverted && AiCardPointerDown(screenX, screenY))
+        if (Tool == Tool.Marquee && !inverted && TextBoxPointerDown(screenX, screenY))
         {
             _drawing = false;
             _aiCardCapturing = true;
@@ -5791,16 +5804,6 @@ public partial class InkEngine
         }
         if (_uiHover) { _uiHover = false; ApplyCursor(); }
 
-        // AI 题卡：拖动 / 改宽跟手。
-        if (_aiCardCapturing)
-        {
-            AiCardPointerMove(screenX, screenY);
-            ClearEngineTooltip();
-            ApplyCursor();
-            _dirty = true;
-            return;
-        }
-
         // 课堂计时卡片：拖动跟手 / 悬停（排在 PPT 条之前、穿透之前——同按下顺序）。
         if (!_drawing && TimerCardPointerMove(screenX, screenY))
         {
@@ -6003,7 +6006,7 @@ public partial class InkEngine
         // AI 题卡：按下归过它就无条件放开捕获（哪怕卡片已经被 ✕ 删掉）。
         if (_aiCardCapturing)
         {
-            AiCardPointerUp();
+            TextBoxPointerUp();
             Native.ReleaseCapture();
             _drawing = false;
             _dirty = true;
@@ -10857,7 +10860,7 @@ public partial class InkEngine
         return PptBarContains(PointerX, PointerY + ViewOffsetY)
             || TimerCardContains(PointerX, PointerY + ViewOffsetY)
             || RollCardContains(PointerX, PointerY + ViewOffsetY)
-            || (Tool == Tool.Marquee && AiCardContains(PointerX, PointerY + ViewOffsetY));
+            || (Tool == Tool.Marquee && TextBoxContains(PointerX, PointerY + ViewOffsetY));
     }
 
     /// <summary>
@@ -16640,7 +16643,6 @@ public partial class InkEngine
     /// </summary>
     internal bool SelectionBarShown
         => Doc.Selected.Count > 0
-           && !(Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.AiCard)
            && (Tool == Tool.Marquee || IsShapeTool(Tool) || _dwellSelected || _touchSelected);
 
     /// <summary>图形工具下那个自动选中的框：指针落在"家具 / 算动它 / 都不是"哪一档。</summary>
@@ -16832,6 +16834,15 @@ public partial class InkEngine
             // 无修饰键：选中它并**直接进入整体拖动**（点住就能拖，和 PPT 一样）。
             frame = SelectionHandles.FrameOf(Doc.Selected);
             move = true;
+        }
+
+        // 文本框：8 手柄改的是"框的宽高"，不是缩放内容。走专用手势，
+        // 不进下面的 Transform 缩放（否则字和公式会被拉变形）。
+        if (h != SelHandle.None && Doc.Selected.Count == 1
+            && Doc.Selected[0].Kind == StrokeKind.TextBox)
+        {
+            BeginTextBoxResize(Doc.Selected[0], h, x, y);
+            return true;
         }
 
         _dragHandle = h;
@@ -17490,6 +17501,9 @@ public partial class InkEngine
     /// </summary>
     private void UpdateSelDrag(float x, float y)
     {
+        // 文本框：8 手柄改宽高（不是 Transform 缩放）。
+        if (_textBoxResizing) { UpdateTextBoxResize(x, y); return; }
+
         // 拖端点：另一条路（改几何，模型不动），和"拖对象"分开走。
         if (_vertexDragging) { UpdateVertexDrag(x, y); return; }
 
@@ -17668,6 +17682,9 @@ public partial class InkEngine
     /// </summary>
     private void EndSelDrag()
     {
+        // 文本框：改宽高手势收尾（模型已经实时改好，这里只清状态）。
+        if (_textBoxResizing) { FinishTextBoxResize(); return; }
+
         SelDragging = false;
         SelRotating = false;            // 度数标签只在拖动中出现
         ResetAlignSnapLatch();          // 吸附只活在这一次拖动里；短亮自己淡出
@@ -17739,16 +17756,19 @@ public partial class InkEngine
     {
         // 下标 ↔ 语义只在 SelBarButton 里写一遍（渲染、命中、动作三处共用它）。
         var btn = (SelBarButton)index;
-        // 题卡的颜色是"黑题红解析"这一条产品规则，不是可改的墨色；
-        // 翻转会把整张文字卡镜像成反字，也不该给。其它（锁定/层级/导出/收藏/复制/删除）照常。
-        bool cardOnly = Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.AiCard;
-        if (cardOnly && btn is SelBarButton.Color or SelBarButton.FlipH or SelBarButton.FlipV)
+        // 文本框把"翻转"两格换成字号 A- / A+；AI 题卡颜色固定，普通文本框可改字色。
+        bool textBoxOnly = Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.TextBox;
+        if (textBoxOnly)
         {
-            SetInkStatus(btn == SelBarButton.Color
-                ? "题卡颜色固定为黑题红解析"
-                : "题卡不支持翻转");
-            _dirty = true;
-            return;
+            var tb = Doc.Selected[0].TextBox;
+            if (btn == SelBarButton.Color && tb?.Role == TextBoxRole.AiQuestion)
+            {
+                SetInkStatus("题卡颜色固定为黑题红解析");
+                _dirty = true;
+                return;
+            }
+            if (btn == SelBarButton.FlipH) { AdjustTextBoxFont(-1f); return; }
+            if (btn == SelBarButton.FlipV) { AdjustTextBoxFont(+1f); return; }
         }
         switch (btn)
         {

@@ -164,13 +164,17 @@ internal static class InkSerializer
     /// 正好就是加这一位之前的行为。升版本号的理由同 v6 / v7 / v15 / v23：
     /// 老程序读 v24 的文件会在"这一位是不是格距"上错位，所以得让它明确报"版本太新"。
     ///
-    /// v25（2026-10-30）：新增 **AI 题卡**（`StrokeKind.AiCard = 27`），
+    /// v25（2026-10-30）：新增 **AI 题卡**（`StrokeKind.TextBox = 27`），
     /// 并在卡片的笔画后面追加：标题、副标题、DPI 单位、宽度、折叠状态、题目数，
     /// 以及每道题的题干/答案/解析（都是长度前缀 UTF-8 字符串）。
-    /// 读端卡在 `version >= 25 && Kind == AiCard`；老文件没有这些字段，
+    /// 读端卡在 `version >= 25 && Kind == TextBox`；老文件没有这些字段，
     /// 不会多读一个字节。升版本的理由同前面几条：老程序不认识 27。
+    ///
+    /// v26（2026-10-30）：同一个 Kind 正式变成**通用文本框**。
+    /// 在 v25 字段前面追加：角色（普通/ AI 题卡）、普通文本、高度、自动高度、字号。
+    /// v25 的旧题卡读进来按 `Role = AiQuestion` 处理；普通文本框用 `Role = Normal`。
     /// </summary>
-    public const int FormatVersion = 25;
+    public const int FormatVersion = 26;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -337,10 +341,17 @@ internal static class InkSerializer
         // 同样**不按 Kind 判断要不要写**（理由同上面几位：写起来省事，读端也不用再复现判断）。
         w.Write(s.AxisGridStep);
 
-        // ---- v25：AI 题卡内容（只有 Kind == AiCard 才写；其它对象一个字节都不加）----
-        if (s.Kind == StrokeKind.AiCard)
+        // ---- v25 / v26：文本框内容（只有 Kind == TextBox 才写；其它对象一个字节都不加）----
+        if (s.Kind == StrokeKind.TextBox)
         {
-            var c = s.AiCard ?? new AiCardData();
+            var c = s.TextBox ?? new TextBoxData();
+            // v26 前缀：角色 / 普通文本 / 高度 / 自动高度 / 字号
+            w.Write((byte)c.Role);
+            w.Write(c.Text ?? "");
+            w.Write(c.Height);
+            w.Write((byte)(c.AutoHeight ? 1 : 0));
+            w.Write(c.FontSize);
+            // v25 起的 AI 题卡字段（普通文本框也照样写，保持同一段结构）
             w.Write(c.Title ?? "");
             w.Write(c.Meta ?? "");
             w.Write(c.Unit);
@@ -577,17 +588,32 @@ internal static class InkSerializer
             s.AxisGridStep = float.IsFinite(gs) && gs > 0f ? gs : 0f;
         }
 
-        // ---- v25：AI 题卡内容（只有 Kind == AiCard 才有）----
-        // **必须卡在 version >= 25 且 Kind 上**：老文件没有这一段，
-        // 非卡片的临时对象也不会多读一个字节（写端同样只在卡片上写）。
-        if (version >= 25 && s.Kind == StrokeKind.AiCard)
+        // ---- v25 / v26：文本框内容（只有 Kind == TextBox 才有）----
+        // v25 只有 AI 题卡字段；v26 前面多了角色/普通文本/高度/自动高度/字号。
+        if (version >= 25 && s.Kind == StrokeKind.TextBox)
         {
-            var c = new AiCardData
+            var c = new TextBoxData();
+            if (version >= 26)
             {
-                Title = ReadString(r, 65536),
-                Meta = ReadString(r, 65536),
-                ShowAnswers = false,
-            };
+                c.Role = (TextBoxRole)r.ReadByte();
+                if (c.Role != TextBoxRole.Normal && c.Role != TextBoxRole.AiQuestion)
+                    c.Role = TextBoxRole.Normal;
+                c.Text = ReadString(r, 65536);
+                float h = r.ReadSingle();
+                c.Height = float.IsFinite(h) && h >= 1f ? h : 120f;
+                c.AutoHeight = r.ReadByte() != 0;
+                float fs = r.ReadSingle();
+                c.FontSize = float.IsFinite(fs) ? Math.Clamp(fs, 8f, 72f) : 14.5f;
+            }
+            else
+            {
+                c.Role = TextBoxRole.AiQuestion;
+                c.AutoHeight = true;
+                c.FontSize = 14.5f;
+            }
+
+            c.Title = ReadString(r, 65536);
+            c.Meta = ReadString(r, 65536);
             float unit = r.ReadSingle();
             c.Unit = float.IsFinite(unit) && unit >= 0.5f && unit <= 8f ? unit : 1f;
             float width = r.ReadSingle();
@@ -598,17 +624,17 @@ internal static class InkSerializer
                 throw new InvalidDataException($"题卡题目数量不合理：{qn}。");
             for (int qi = 0; qi < qn; qi++)
             {
-                c.Questions.Add(new AiCardQuestion
+                c.Questions.Add(new TextBoxQuestion
                 {
                     Stem = ReadString(r, 65536),
                     Answer = ReadString(r, 65536),
                     Analysis = ReadString(r, 65536),
                 });
             }
-            s.AiCard = c;
+            s.TextBox = c;
             c.InvalidateLayout();
             _ = c.EnsureLayout();
-            s.SyncAiCardBounds();
+            s.SyncTextBoxBounds();
         }
 
         // ---- v13：抛物线的第二个点**换了含义**，老文件要迁移一次 ----

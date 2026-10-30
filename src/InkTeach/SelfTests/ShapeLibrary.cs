@@ -736,7 +736,7 @@ internal sealed partial class App
 
             ui.OpenMoreForTest();
             SettleFrames(150);
-            var tile = ui.HubTileRectForTest(10);
+            var tile = ui.HubTileRectForTest(11);
             Check("H：更多里不再有「收藏」入口", tile.IsEmpty,
                   $"格 ({tile.MinX:F0},{tile.MinY:F0})-({tile.MaxX:F0},{tile.MaxY:F0})");
             Check("H：更多仍开着，没有误触发收藏",

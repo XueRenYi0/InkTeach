@@ -8,52 +8,74 @@ namespace InkEngine;
 /// 公式不显示 LaTeX 源码；以后接 MicroTeX/KaTeX 时，这里再加 `runs` 和图片片段，
 /// 题卡对象、存档、交互都不用推倒重来。
 /// </summary>
-internal sealed class AiCardQuestion
+internal sealed class TextBoxQuestion
 {
     public string Stem = "";
     public string Answer = "";
     public string Analysis = "";
 
-    public AiCardQuestion Clone() => new()
+    public TextBoxQuestion Clone() => new()
     {
         Stem = Stem, Answer = Answer, Analysis = Analysis,
     };
 }
 
-/// <summary>
-/// 一张 AI 题卡的内容。它是 <see cref="StrokeKind.AiCard"/> 对象的数据，
-/// 不是 UI 浮窗、也不是整张截图：宽、折叠状态、每道题都在这里，
-/// 所以能保存、复制、撤销、翻页隔离，也能在换宽/展开答案时重新排版。
-/// </summary>
-internal sealed class AiCardData
+internal enum TextBoxRole
 {
-    public string Title = "AI 出题 · 示例";
-    public string Meta = "AI 生成 · 请老师核对";
+    /// <summary>普通文本框：一段可编辑文字。</summary>
+    Normal = 0,
+    /// <summary>AI 题卡：结构化题目、答案折叠、黑题红解析。</summary>
+    AiQuestion = 1,
+}
+
+/// <summary>
+/// 一个文本框的内容。它是 <see cref="StrokeKind.TextBox"/> 对象的数据，
+/// 不是 UI 浮窗、也不是整张截图：宽高、字号、折叠状态、每道题都在这里，
+/// 所以能保存、复制、撤销、翻页隔离，也能在换宽/换字号时重新排版。
+///
+/// **AI 题卡只是 Role = AiQuestion 的文本框**；普通文本框用 Role = Normal 和
+/// <see cref="Text"/>。两条路共用同一套选中、改宽高、存档和操作条。
+/// </summary>
+internal sealed class TextBoxData
+{
+    public TextBoxRole Role = TextBoxRole.Normal;
+    public string Title = "";
+    public string Meta = "";
+    public string Text = "";
     public bool ShowAnswers;
 
-    /// <summary>卡片宽度（画布像素）。</summary>
+    /// <summary>文本框宽度（画布像素）。</summary>
     public float Width = 560f;
+
+    /// <summary>文本框高度（画布像素）。AI 题卡自动高度时由排版维护。</summary>
+    public float Height = 120f;
+
+    /// <summary>高度是否随内容自动增长（AI 题卡默认开；普通文本框默认关）。</summary>
+    public bool AutoHeight = true;
+
+    /// <summary>正文字号（逻辑像素，乘 <see cref="Unit"/> 后是画布像素）。</summary>
+    public float FontSize = 14.5f;
 
     /// <summary>建卡时的 DPI 单位（1 = 100%）。卡片是自包含的，换机器后仍按这个比例排版。</summary>
     public float Unit = 1f;
 
-    public readonly List<AiCardQuestion> Questions = new();
+    public readonly List<TextBoxQuestion> Questions = new();
 
-    /// <summary>当前排版后的高度（画布像素），由 <see cref="EnsureLayout"/> 维护。</summary>
-    public float LayoutHeight { get; private set; }
+    /// <summary>当前排版后的内容高度（画布像素）。</summary>
+    public float LayoutHeight => Height;
 
-    private List<AiCardLine> _lines;
+    private List<TextBoxLine> _lines;
 
     public void InvalidateLayout()
     {
         _lines = null;
     }
 
-    public IReadOnlyList<AiCardLine> EnsureLayout()
+    public IReadOnlyList<TextBoxLine> EnsureLayout()
     {
         if (_lines != null) return _lines;
-        _lines = AiCardLayout.Build(this, out float h);
-        LayoutHeight = h;
+        _lines = TextBoxLayout.Build(this, out float h);
+        if (AutoHeight) Height = MathF.Max(1f, h);
         return _lines;
     }
 
@@ -63,18 +85,26 @@ internal sealed class AiCardData
         InvalidateLayout();
     }
 
+    public void SetHeight(float height)
+    {
+        Height = MathF.Max(1f, height);
+        AutoHeight = false;
+        InvalidateLayout();
+    }
+
     public void ToggleAnswers()
     {
         ShowAnswers = !ShowAnswers;
         InvalidateLayout();
     }
 
-    public AiCardData Clone()
+    public TextBoxData Clone()
     {
-        var c = new AiCardData
+        var c = new TextBoxData
         {
-            Title = Title, Meta = Meta, ShowAnswers = ShowAnswers,
-            Width = Width, Unit = Unit,
+            Role = Role, Title = Title, Meta = Meta, Text = Text,
+            ShowAnswers = ShowAnswers, Width = Width, Height = Height,
+            AutoHeight = AutoHeight, FontSize = FontSize, Unit = Unit,
         };
         foreach (var q in Questions) c.Questions.Add(q.Clone());
         return c;
@@ -84,7 +114,7 @@ internal sealed class AiCardData
     /// 1A 的 mock 题卡：固定三题，题干黑、答案/解析红，答案默认折叠。
     /// 接模型以后只换这个工厂，题卡和排版一行都不用改。
     /// </summary>
-    public static AiCardData CreateMock(string prompt, float unit)
+    public static TextBoxData CreateMock(string prompt, float unit)
     {
         string topic = "二次函数";
         if (!string.IsNullOrEmpty(prompt))
@@ -95,26 +125,29 @@ internal sealed class AiCardData
             else if (prompt.Contains("函数", StringComparison.Ordinal)) topic = "函数";
         }
 
-        var c = new AiCardData
+        var c = new TextBoxData
         {
+            Role = TextBoxRole.AiQuestion,
             Title = $"{topic} · 中等 · 3 道",
             Meta = "AI 生成 · 示例数据，请老师核对",
             Unit = MathF.Max(0.5f, unit),
             Width = 560f * MathF.Max(0.5f, unit),
+            AutoHeight = true,
+            FontSize = 14.5f,
         };
-        c.Questions.Add(new AiCardQuestion
+        c.Questions.Add(new TextBoxQuestion
         {
             Stem = "1. 已知二次函数 y = x² − 4x + 3。\n（1）求它的对称轴和顶点坐标；\n（2）当 x 取何值时，y 随 x 增大而减小？",
             Answer = "对称轴 x = 2，顶点 (2, −1)；当 x < 2 时，y 随 x 增大而减小。",
             Analysis = "配方得 y = (x − 2)² − 1，所以对称轴 x = 2、顶点 (2, −1)；开口向上，对称轴左侧递减。",
         });
-        c.Questions.Add(new AiCardQuestion
+        c.Questions.Add(new TextBoxQuestion
         {
             Stem = "2. 二次函数 y = −2(x + 1)² + 8 的图象与 x 轴交于 A、B 两点，求线段 AB 的长度。",
             Answer = "AB = 4。",
             Analysis = "令 y = 0，得 (x + 1)² = 4，所以 x₁ = −3、x₂ = 1，AB = 1 − (−3) = 4。",
         });
-        c.Questions.Add(new AiCardQuestion
+        c.Questions.Add(new TextBoxQuestion
         {
             Stem = "3. 某商店销售一种商品，每件进价 40 元。售价 60 元时每天可卖出 100 件；售价每降低 1 元，每天多卖出 10 件。求每天利润的最大值。",
             Answer = "每天利润最大为 2250 元。",
@@ -123,16 +156,33 @@ internal sealed class AiCardData
         c.InvalidateLayout();
         return c;
     }
+
+    /// <summary>普通文本框：固定宽高、默认不自动高度；内容超出时先裁切（滚动后续）。</summary>
+    public static TextBoxData CreatePlain(string text, float unit, float width, float height)
+    {
+        var c = new TextBoxData
+        {
+            Role = TextBoxRole.Normal,
+            Text = text ?? "",
+            Unit = MathF.Max(0.5f, unit),
+            Width = MathF.Max(120f, width),
+            Height = MathF.Max(60f, height),
+            AutoHeight = false,
+            FontSize = 15f,
+        };
+        c.InvalidateLayout();
+        return c;
+    }
 }
 
-internal enum AiCardLineKind
+internal enum TextBoxLineKind
 {
     Text = 0,
     Toggle = 1,
     Divider = 2,
 }
 
-internal enum AiCardInk
+internal enum TextBoxInk
 {
     Black = 0,
     Red = 1,
@@ -141,12 +191,12 @@ internal enum AiCardInk
 }
 
 /// <summary>排版后的一行。坐标是**卡片局部坐标**，由 Overlay 逐行画。</summary>
-internal sealed class AiCardLine
+internal sealed class TextBoxLine
 {
-    public AiCardLineKind Kind;
+    public TextBoxLineKind Kind;
     public string Text = "";
     public float X, Y, Size, Height;
-    public AiCardInk Ink;
+    public TextBoxInk Ink;
     public bool Bold;
     public int QuestionIndex = -1;
 
@@ -161,21 +211,27 @@ internal sealed class AiCardLine
 /// 公式目前按 Unicode 线性文本排；以后换成图片片段时，只需要在 <see cref="Build"/>
 /// 里把某一段换成 inline 占位，行高与基线仍由这一层算。
 /// </summary>
-internal static class AiCardLayout
+internal static class TextBoxLayout
 {
-    public static List<AiCardLine> Build(AiCardData card, out float height)
+    public static List<TextBoxLine> Build(TextBoxData card, out float height)
+        => card.Role == TextBoxRole.AiQuestion
+            ? BuildAi(card, out height)
+            : BuildPlain(card, out height);
+
+    private static List<TextBoxLine> BuildAi(TextBoxData card, out float height)
     {
         float u = MathF.Max(0.5f, card.Unit);
+        float baseSize = Math.Clamp(card.FontSize, 8f, 72f) * u;
         float pad = 18f * u;
         float right = MathF.Max(pad + 40f * u, card.Width - pad);
         float textW = MathF.Max(40f * u, right - pad);
-        var lines = new List<AiCardLine>();
+        var lines = new List<TextBoxLine>();
 
         float y = 14f * u;
-        AddText(lines, card.Title, pad, y, 16f * u, 24f * u, AiCardInk.Black, bold: true);
+        AddText(lines, card.Title, pad, y, baseSize * 1.1f, 24f * u, TextBoxInk.Black, bold: true);
         y += 24f * u;
 
-        AddText(lines, card.Meta, pad, y, 11f * u, 16f * u, AiCardInk.Muted);
+        AddText(lines, card.Meta, pad, y, baseSize * 0.76f, 16f * u, TextBoxInk.Muted);
         y += 18f * u;
 
         AddDivider(lines, pad, right, y);
@@ -184,53 +240,54 @@ internal static class AiCardLayout
         for (int qi = 0; qi < card.Questions.Count; qi++)
         {
             var q = card.Questions[qi];
-            AddText(lines, $"第 {qi + 1} 题", pad, y, 11f * u, 15f * u, AiCardInk.Muted);
+            AddText(lines, $"第 {qi + 1} 题", pad, y, baseSize * 0.76f, 15f * u, TextBoxInk.Muted);
             y += 17f * u;
 
-            foreach (string line in Wrap(q.Stem, textW, 14.5f * u))
+            foreach (string line in Wrap(q.Stem, textW, baseSize))
             {
-                AddText(lines, line, pad, y, 14.5f * u, 22f * u, AiCardInk.Black);
+                AddText(lines, line, pad, y, baseSize, 22f * u, TextBoxInk.Black);
                 y += 22f * u;
             }
 
             y += 4f * u;
             if (card.ShowAnswers)
             {
-                AddText(lines, "答案", pad, y, 11f * u, 15f * u, AiCardInk.Red, bold: true);
+                AddText(lines, "答案", pad, y, baseSize * 0.76f, 15f * u, TextBoxInk.Red, bold: true);
                 y += 15f * u;
-                foreach (string line in Wrap(q.Answer, textW, 13.5f * u))
+                float answerSize = baseSize * 0.93f;
+                foreach (string line in Wrap(q.Answer, textW, answerSize))
                 {
-                    AddText(lines, line, pad, y, 13.5f * u, 20f * u, AiCardInk.Red);
+                    AddText(lines, line, pad, y, answerSize, 20f * u, TextBoxInk.Red);
                     y += 20f * u;
                 }
 
-                AddText(lines, "解析", pad, y, 11f * u, 15f * u, AiCardInk.Red, bold: true);
+                AddText(lines, "解析", pad, y, baseSize * 0.76f, 15f * u, TextBoxInk.Red, bold: true);
                 y += 15f * u;
-                foreach (string line in Wrap(q.Analysis, textW, 13.5f * u))
+                foreach (string line in Wrap(q.Analysis, textW, answerSize))
                 {
-                    AddText(lines, line, pad, y, 13.5f * u, 20f * u, AiCardInk.Red);
+                    AddText(lines, line, pad, y, answerSize, 20f * u, TextBoxInk.Red);
                     y += 20f * u;
                 }
                 y += 2f * u;
                 var box = new RectF { MinX = pad, MinY = y, MaxX = pad + 96f * u, MaxY = y + 26f * u };
-                lines.Add(new AiCardLine
+                lines.Add(new TextBoxLine
                 {
-                    Kind = AiCardLineKind.Toggle,
+                    Kind = TextBoxLineKind.Toggle,
                     Text = "收起答案",
-                    X = box.MinX, Y = box.MinY, Size = 12f * u, Height = 26f * u,
-                    Ink = AiCardInk.Muted, QuestionIndex = qi, Box = box,
+                    X = box.MinX, Y = box.MinY, Size = baseSize * 0.83f, Height = 26f * u,
+                    Ink = TextBoxInk.Muted, QuestionIndex = qi, Box = box,
                 });
                 y += 30f * u;
             }
             else
             {
                 var box = new RectF { MinX = pad, MinY = y, MaxX = pad + 96f * u, MaxY = y + 26f * u };
-                lines.Add(new AiCardLine
+                lines.Add(new TextBoxLine
                 {
-                    Kind = AiCardLineKind.Toggle,
+                    Kind = TextBoxLineKind.Toggle,
                     Text = "显示答案",
-                    X = box.MinX, Y = box.MinY, Size = 12f * u, Height = 26f * u,
-                    Ink = AiCardInk.Red, QuestionIndex = qi, Box = box,
+                    X = box.MinX, Y = box.MinY, Size = baseSize * 0.83f, Height = 26f * u,
+                    Ink = TextBoxInk.Red, QuestionIndex = qi, Box = box,
                 });
                 y += 30f * u;
             }
@@ -240,26 +297,44 @@ internal static class AiCardLayout
         }
 
         y += 12f * u;
-        height = y + 12f * u;
+        height = y;
         return lines;
     }
 
-    private static void AddText(List<AiCardLine> lines, string text, float x, float y,
-                                float size, float h, AiCardInk ink, bool bold = false)
+    private static List<TextBoxLine> BuildPlain(TextBoxData card, out float height)
+    {
+        float u = MathF.Max(0.5f, card.Unit);
+        float pad = 18f * u;
+        float textW = MathF.Max(40f * u, card.Width - pad * 2f);
+        float size = Math.Clamp(card.FontSize, 8f, 72f) * u;
+        float lineH = size * 1.55f;
+        var lines = new List<TextBoxLine>();
+        float y = pad;
+        foreach (string line in Wrap(card.Text ?? "", textW, size))
+        {
+            AddText(lines, line, pad, y, size, lineH, TextBoxInk.Black);
+            y += lineH;
+        }
+        height = MathF.Max(y + pad, pad * 2f + lineH);
+        return lines;
+    }
+
+    private static void AddText(List<TextBoxLine> lines, string text, float x, float y,
+                                float size, float h, TextBoxInk ink, bool bold = false)
     {
         if (string.IsNullOrEmpty(text)) return;
-        lines.Add(new AiCardLine
+        lines.Add(new TextBoxLine
         {
-            Kind = AiCardLineKind.Text, Text = text, X = x, Y = y,
+            Kind = TextBoxLineKind.Text, Text = text, X = x, Y = y,
             Size = size, Height = h, Ink = ink, Bold = bold,
         });
     }
 
-    private static void AddDivider(List<AiCardLine> lines, float x0, float x1, float y)
+    private static void AddDivider(List<TextBoxLine> lines, float x0, float x1, float y)
     {
-        lines.Add(new AiCardLine
+        lines.Add(new TextBoxLine
         {
-            Kind = AiCardLineKind.Divider,
+            Kind = TextBoxLineKind.Divider,
             X = x0, Y = y, Size = 1f, Height = 1f,
             Box = new RectF { MinX = x0, MinY = y, MaxX = x1, MaxY = y + 1f },
         });
@@ -322,21 +397,18 @@ public partial class InkEngine
     private bool _aiPromptHadNoActivate;
 
     private bool _aiCardCapturing;
-    private Stroke _aiCardGrab;
-    private bool _aiCardResize;
-    private Vector2 _aiCardPress;
-    private float _aiCardStartWidth;
 
     internal bool AiPromptEditing => _aiPromptEditing;
 
     // ---- 插入 ---------------------------------------------------------------
 
-    internal void InsertMockAiCardFromUi()
+    internal void InsertMockTextBoxFromUi()
     {
         HideAiPromptEdit();
+        if (_textBoxEditing) EndTextBoxEditFromUi(true);
         var screen = ScreenRectPhysical();
         float u = MathF.Max(0.75f, DpiScale);
-        var card = AiCardData.CreateMock(AiPromptText, u);
+        var card = TextBoxData.CreateMock(AiPromptText, u);
         float screenW = screen.MaxX - screen.MinX;
         float maxW = MathF.Max(240f * u, MathF.Min(screenW * 0.8f, screenW - 32f * u));
         float minW = MathF.Min(360f * u, maxW);
@@ -356,8 +428,8 @@ public partial class InkEngine
         var s = new Stroke
         {
             Tool = Tool,
-            Kind = StrokeKind.AiCard,
-            AiCard = card,
+            Kind = StrokeKind.TextBox,
+            TextBox = card,
             Color = new Color4(0.12f, 0.14f, 0.18f, 1f),
             Width = 0f,
         };
@@ -374,20 +446,20 @@ public partial class InkEngine
 
     // ---- 命中 / 拖动 --------------------------------------------------------
 
-    private Stroke AiCardAt(float screenX, float screenY)
+    private Stroke TextBoxAt(float screenX, float screenY)
     {
-        if (!Doc.HasAiCards) return null;
+        if (!Doc.HasTextBoxs) return null;
         float cx = screenX, cy = screenY - ViewOffsetY;
         for (int i = Doc.Strokes.Count - 1; i >= 0; i--)
         {
             var s = Doc.Strokes[i];
-            if (s.Kind != StrokeKind.AiCard || s.AiCard == null) continue;
+            if (s.Kind != StrokeKind.TextBox || s.TextBox == null) continue;
             if (s.HitTestExact(cx, cy)) return s;
         }
         return null;
     }
 
-    internal bool AiCardContains(float screenX, float screenY) => AiCardAt(screenX, screenY) != null;
+    internal bool TextBoxContains(float screenX, float screenY) => TextBoxAt(screenX, screenY) != null;
 
     /// <summary>
     /// 「选择」工具下的题卡命中。返回 true = 这一下归题卡（调用方负责 SetCapture）；
@@ -396,9 +468,9 @@ public partial class InkEngine
     /// **卡片不再自己拖整卡**：移动、删除、撤销都走现有选中框那一套，只有
     /// 三个卡片专属动作留在这里——右上角 ✕、显示/收起答案、右边缘改宽。
     /// </summary>
-    internal bool AiCardPointerDown(float screenX, float screenY)
+    internal bool TextBoxPointerDown(float screenX, float screenY)
     {
-        var s = AiCardAt(screenX, screenY);
+        var s = TextBoxAt(screenX, screenY);
         if (s == null) return false;
 
         float cx = screenX, cy = screenY - ViewOffsetY;
@@ -419,8 +491,15 @@ public partial class InkEngine
             return false;
         }
 
-        // 锁定语义和普通对象一致：能选中、能看，但卡片专属动作（改宽/✕/折叠）不动它。
+        // 锁定语义和普通对象一致：能选中、能看，但文本框专属动作（✕/折叠）不动它。
         if (s.Locked) return false;
+
+        // 普通文本框只有文字，没有 ✕/显示答案这些卡片 chrome。
+        if (s.TextBox.Role != TextBoxRole.AiQuestion)
+        {
+            MaybeEditTextBoxOnDoubleClick(s);
+            return _textBoxEditing;
+        }
 
         Vector2 local = new(cx, cy);
         if (!s.Transform.IsIdentity && Matrix3x2.Invert(s.Transform, out var inv))
@@ -429,7 +508,7 @@ public partial class InkEngine
         // 这里把"对象局部坐标"换成"卡片内容坐标"，否则原点不在 (0,0) 时按钮点不中。
         if (s.Points.Count > 0) local -= new Vector2(s.Points[0].X, s.Points[0].Y);
 
-        var card = s.AiCard;
+        var card = s.TextBox;
         var lines = card.EnsureLayout();
 
         // 右上角 ✕：删整卡，一步撤销。
@@ -449,12 +528,12 @@ public partial class InkEngine
         // 每道题的「显示答案 / 收起答案」。
         foreach (var line in lines)
         {
-            if (line.Kind != AiCardLineKind.Toggle) continue;
+            if (line.Kind != TextBoxLineKind.Toggle) continue;
             if (!line.Box.Contains(local.X, local.Y)) continue;
             var before = s.PaddedBounds;
             card.ToggleAnswers();
-            s.SyncAiCardBounds();
-            ClampAiCardIntoView(s);
+            s.SyncTextBoxBounds();
+            ClampTextBoxIntoView(s);
             Doc.RefreshStrokeGrid(s);
             Doc.Dirty.Add(before);
             Doc.Dirty.Add(s.PaddedBounds);
@@ -465,63 +544,27 @@ public partial class InkEngine
             return true;
         }
 
-        // 右边缘 / 右下角：卡片专属的改宽（高度自动重排）。
-        if (local.X >= card.Width - 14f * card.Unit)
-        {
-            _aiCardGrab = s;
-            _aiCardPress = new Vector2(cx, cy);
-            _aiCardStartWidth = card.Width;
-            _aiCardResize = true;
-            _aiCardCapturing = true;
-            return true;
-        }
-
-        // 卡片正文：不抢，交给标准选中框的"框内拖动"。
+        // 卡片正文：不抢，交给标准选中框的"框内拖动 / 8 手柄改宽高"。
         return false;
     }
 
-    internal void AiCardPointerMove(float screenX, float screenY)
-    {
-        if (!_aiCardCapturing || !_aiCardResize || _aiCardGrab == null) return;
-        var s = _aiCardGrab;
-        var card = s.AiCard;
-        if (card == null) return;
-
-        float cx = screenX;
-        var old = s.PaddedBounds;
-        float dx = cx - _aiCardPress.X;
-        float min = 360f * card.Unit;
-        float max = MathF.Max(min, (ScreenRectPhysical().MaxX - ScreenRectPhysical().MinX) * 0.8f);
-        card.SetWidth(Math.Clamp(_aiCardStartWidth + dx, min, max));
-        s.SyncAiCardBounds();
-        Doc.RefreshStrokeGrid(s);
-
-        Doc.Dirty.Add(old);
-        Doc.Dirty.Add(s.PaddedBounds);
-        Doc.StructureChangedSinceRender = true;
-        Doc.Version++;
-        _dirty = true;
-    }
-
-    internal void AiCardPointerUp()
+    internal void TextBoxPointerUp()
     {
         _aiCardCapturing = false;
-        _aiCardGrab = null;
-        _aiCardResize = false;
         _dirty = true;
         NotifyUiStateChanged();
     }
 
     /// <summary>自检 / 摆样：展开或收起所有答案。</summary>
-    internal void ToggleAiCardAnswersForTest()
+    internal void ToggleTextBoxAnswersForTest()
     {
         foreach (var s in Doc.Strokes)
         {
-            if (s.Kind != StrokeKind.AiCard || s.AiCard == null) continue;
+            if (s.Kind != StrokeKind.TextBox || s.TextBox == null) continue;
             var old = s.PaddedBounds;
-            s.AiCard.ToggleAnswers();
-            s.SyncAiCardBounds();
-            ClampAiCardIntoView(s);
+            s.TextBox.ToggleAnswers();
+            s.SyncTextBoxBounds();
+            ClampTextBoxIntoView(s);
             Doc.RefreshStrokeGrid(s);
             Doc.Dirty.Add(old);
             Doc.Dirty.Add(s.PaddedBounds);
@@ -533,9 +576,9 @@ public partial class InkEngine
     }
 
     /// <summary>卡片变高/变宽后如果超出当前视野，把它整体挪回来（设计：答案展开不能顶到工具条外）。</summary>
-    private void ClampAiCardIntoView(Stroke s)
+    private void ClampTextBoxIntoView(Stroke s)
     {
-        if (s.Kind != StrokeKind.AiCard || s.AiCard == null) return;
+        if (s.Kind != StrokeKind.TextBox || s.TextBox == null) return;
         var screen = ScreenRectPhysical();
         float u = MathF.Max(0.75f, DpiScale);
         float top = screen.MinY - ViewOffsetY + 16f * u;
@@ -549,13 +592,13 @@ public partial class InkEngine
             s.Transform = Matrix3x2.CreateTranslation(0f, dy) * s.Transform;
     }
 
-    internal int AiCardCountForTest
+    internal int TextBoxCountForTest
     {
         get
         {
             int n = 0;
             foreach (var s in Doc.Strokes)
-                if (s.Kind == StrokeKind.AiCard) n++;
+                if (s.Kind == StrokeKind.TextBox) n++;
             return n;
         }
     }
@@ -564,6 +607,7 @@ public partial class InkEngine
 
     internal void BeginAiPromptEditFromUi(float x, float y, float w, float h)
     {
+        if (_textBoxEditing) EndTextBoxEditFromUi(true);
         EnsureAiPromptWindow();
         if (_aiPromptHwnd == IntPtr.Zero) return;
 

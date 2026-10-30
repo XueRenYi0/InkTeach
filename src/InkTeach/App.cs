@@ -1311,7 +1311,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --aitest            AI 题卡自检（插入 / 折叠 / 存档 / 删除 / 撤销）");
         Console.WriteLine("  --radialtest        呼出盘自检（Ctrl+Alt+Shift+Q：开 / 划 / 松 / 取消 / 穿透 / 松键轮询）");
         Console.WriteLine("  --radialshow [图]   呼出盘摆样：定格在屏幕中央出图（默认 reports/radial-palette.bmp）");
-        Console.WriteLine("  --aishow [图]       AI 面板 + 题卡摆样：面板 / 折叠 / 选中框 / 展开四张（默认 reports/ai-card.bmp）");
+        Console.WriteLine("  --aishow [图]       AI 面板 + 题卡 + 文本框摆样：面板 / 折叠 / 选中 / 展开 / 文本框五张（默认 reports/ai-card.bmp）");
         Console.WriteLine("  --shapeiconshow [路径] 出图：图形面板图标的对照表（含每一档的变体）");
         Console.WriteLine("  --toolicons [路径]  出图：白板 / 激光笔的图标候选（未选中 / 选中 / 放大三格）");
         Console.WriteLine("  --penshow [路径] [bars]  出图：上游那批「带笔的」图标；带第 2 个参数就每格加一副「三道杠」");
@@ -5249,10 +5249,10 @@ internal sealed partial class App : InkEngine.InkEngine
             if (!ok) fails++;
         }
 
-        InsertMockAiCardFromUi();
+        InsertMockTextBoxFromUi();
         Stroke card = null;
         foreach (var s in Doc.Strokes)
-            if (s.Kind == StrokeKind.AiCard) { card = s; break; }
+            if (s.Kind == StrokeKind.TextBox) { card = s; break; }
 
         // 原生输入框：开 / 关 / 文字留在状态里（中文/输入法由系统 EDIT 负责）
         Host.Commands.SetAiPromptText("测试提示");
@@ -5267,9 +5267,9 @@ internal sealed partial class App : InkEngine.InkEngine
         Host.Commands.SetAiPromptText("给初二出三道二次函数题，中等难度，带答案");
 
         Check(card != null, "插入一张题卡");
-        Check(card?.AiCard != null && card.AiCard.Questions.Count == 3, "题卡有 3 道题");
-        Check(card != null && !card.AiCard.ShowAnswers, "答案默认折叠");
-        float h0 = card?.AiCard.LayoutHeight ?? 0f;
+        Check(card?.TextBox != null && card.TextBox.Questions.Count == 3, "题卡有 3 道题");
+        Check(card != null && !card.TextBox.ShowAnswers, "答案默认折叠");
+        float h0 = card?.TextBox.LayoutHeight ?? 0f;
         Check(h0 > 100f, $"折叠高度 > 100（{h0:0}）");
 
         // ---- 拖动 / 改宽 / 点答案（走和真机同一条指针路径）----
@@ -5277,62 +5277,62 @@ internal sealed partial class App : InkEngine.InkEngine
             var b = card.PaddedBounds;
             float sx = (b.MinX + b.MaxX) * 0.5f;
             float sy = b.MinY + 18f;
-            AiCardPointerDown(sx, sy);
-            AiCardPointerUp();
+            TextBoxPointerDown(sx, sy);
+            TextBoxPointerUp();
             Check(Doc.Selected.Count == 1 && ReferenceEquals(Doc.Selected[0], card),
                   "点卡片 = 选中（移动交给标准选中框）");
 
-            float w0 = card.AiCard.Width;
+            float w0 = card.TextBox.Width;
             b = card.PaddedBounds;
-            AiCardPointerDown(b.MaxX - 4f, b.MinY + 80f);
-            AiCardPointerMove(b.MaxX - 104f, b.MinY + 80f);
-            AiCardPointerUp();
-            Check(card.AiCard.Width < w0 - 50f,
-                  $"拖右边缘改宽（{w0:0} → {card.AiCard.Width:0}）");
+            BeginTextBoxResize(card, SelHandle.Right, b.MaxX - 4f, b.MinY + 80f);
+            UpdateSelectionGestureForTest(b.MaxX - 104f, b.MinY + 80f);
+            EndSelectionGestureForTest();
+            Check(card.TextBox.Width < w0 - 50f,
+                  $"拖右边缘改宽（{w0:0} → {card.TextBox.Width:0}）");
 
             b = card.PaddedBounds;
-            AiCardLine firstToggle = null;
-            foreach (var l in card.AiCard.EnsureLayout())
-                if (l.Kind == AiCardLineKind.Toggle) { firstToggle = l; break; }
+            TextBoxLine firstToggle = null;
+            foreach (var l in card.TextBox.EnsureLayout())
+                if (l.Kind == TextBoxLineKind.Toggle) { firstToggle = l; break; }
             Check(firstToggle != null, "折叠态有「显示答案」按钮");
             if (firstToggle != null)
             {
                 var local = new Vector2(card.Points[0].X + (firstToggle.Box.MinX + firstToggle.Box.MaxX) * 0.5f,
                                         card.Points[0].Y + (firstToggle.Box.MinY + firstToggle.Box.MaxY) * 0.5f);
                 var canvas = Vector2.Transform(local, card.Transform);
-                AiCardPointerDown(canvas.X, canvas.Y + ViewOffsetY);
-                AiCardPointerUp();
-                Check(card.AiCard.ShowAnswers, "点「显示答案」展开");
-                AiCardLine collapse = null;
-                foreach (var l in card.AiCard.EnsureLayout())
-                    if (l.Kind == AiCardLineKind.Toggle) { collapse = l; break; }
+                TextBoxPointerDown(canvas.X, canvas.Y + ViewOffsetY);
+                TextBoxPointerUp();
+                Check(card.TextBox.ShowAnswers, "点「显示答案」展开");
+                TextBoxLine collapse = null;
+                foreach (var l in card.TextBox.EnsureLayout())
+                    if (l.Kind == TextBoxLineKind.Toggle) { collapse = l; break; }
                 Check(collapse != null, "展开态有「收起答案」按钮");
                 if (collapse != null)
                 {
                     local = new Vector2(card.Points[0].X + (collapse.Box.MinX + collapse.Box.MaxX) * 0.5f,
                                         card.Points[0].Y + (collapse.Box.MinY + collapse.Box.MaxY) * 0.5f);
                     canvas = Vector2.Transform(local, card.Transform);
-                    AiCardPointerDown(canvas.X, canvas.Y + ViewOffsetY);
-                    AiCardPointerUp();
-                    Check(!card.AiCard.ShowAnswers, "点「收起答案」折叠");
+                    TextBoxPointerDown(canvas.X, canvas.Y + ViewOffsetY);
+                    TextBoxPointerUp();
+                    Check(!card.TextBox.ShowAnswers, "点「收起答案」折叠");
                 }
             }
         }
 
-        ToggleAiCardAnswersForTest();
-        Check(card != null && card.AiCard.ShowAnswers, "展开后 ShowAnswers = true");
-        Check(card != null && card.AiCard.LayoutHeight > h0 + 50f,
-              $"展开后变高（{h0:0} → {card?.AiCard.LayoutHeight:0}）");
+        ToggleTextBoxAnswersForTest();
+        Check(card != null && card.TextBox.ShowAnswers, "展开后 ShowAnswers = true");
+        Check(card != null && card.TextBox.LayoutHeight > h0 + 50f,
+              $"展开后变高（{h0:0} → {card?.TextBox.LayoutHeight:0}）");
 
         byte[] data = InkSerializer.Save(Doc);
         var loaded = InkSerializer.LoadStrokes(data, out _);
         Stroke lc = null;
         foreach (var s in loaded)
-            if (s.Kind == StrokeKind.AiCard) { lc = s; break; }
+            if (s.Kind == StrokeKind.TextBox) { lc = s; break; }
         Check(lc != null, "存档能读回题卡");
-        Check(lc?.AiCard != null && lc.AiCard.Questions.Count == 3, "读回 3 道题");
-        Check(lc?.AiCard != null && lc.AiCard.ShowAnswers, "读回折叠状态");
-        Check(lc?.AiCard != null && lc.AiCard.Title == card?.AiCard.Title, "读回标题");
+        Check(lc?.TextBox != null && lc.TextBox.Questions.Count == 3, "读回 3 道题");
+        Check(lc?.TextBox != null && lc.TextBox.ShowAnswers, "读回折叠状态");
+        Check(lc?.TextBox != null && lc.TextBox.Title == card?.TextBox.Title, "读回标题");
         Check(lc != null && MathF.Abs((lc.PaddedBounds.MaxY - lc.PaddedBounds.MinY)
                                    - (card.PaddedBounds.MaxY - card.PaddedBounds.MinY)) < 2f,
               "读回后的卡片高度一致");
@@ -5347,6 +5347,48 @@ internal sealed partial class App : InkEngine.InkEngine
         foreach (var s in Doc.Strokes)
             if (ReferenceEquals(s, card)) back = true;
         Check(back, "撤销恢复整卡");
+
+        // ---- 普通文本框：同一套对象/存档/8 手柄 ----
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            InsertPlainTextBoxForTest("普通文本框\n第二行中文");
+            Stroke pt = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+            Check(pt != null && pt.Kind == StrokeKind.TextBox
+                  && pt.TextBox.Role == TextBoxRole.Normal
+                  && pt.TextBox.Text.Contains("第二行"),
+                  "普通文本框：Role=Normal、文字在");
+            byte[] pd = InkSerializer.Save(Doc);
+            var pl = InkSerializer.LoadStrokes(pd, out _);
+            Stroke pt2 = null;
+            foreach (var s in pl) if (s.Kind == StrokeKind.TextBox) { pt2 = s; break; }
+            Check(pt2?.TextBox != null && pt2.TextBox.Role == TextBoxRole.Normal
+                  && pt2.TextBox.Text.Contains("第二行"),
+                  "普通文本框：存档读回文字与角色");
+
+            // 8 手柄：右下角拖拽 = 同时改宽高，字号不变
+            if (pt != null)
+            {
+                Doc.SelectOnly(new[] { pt });
+                var frame = SelectionHandles.FrameOf(Doc.Selected);
+                var br = SelectionHandles.CanvasPosition(SelHandle.BottomRight, frame, UiUnit);
+                float w0 = pt.TextBox.Width, ph0 = pt.TextBox.Height;
+                SelectionGestureForTest(br.X, br.Y);
+                UpdateSelectionGestureForTest(br.X + 80f, br.Y + 60f);
+                EndSelectionGestureForTest();
+                Check(pt.TextBox.Width > w0 + 50f && pt.TextBox.Height > ph0 + 30f,
+                      $"8 手柄右下角：改宽高（{w0:0}×{ph0:0} → {pt.TextBox.Width:0}×{pt.TextBox.Height:0}）");
+
+                Doc.Undo();
+                Check(MathF.Abs(pt.TextBox.Width - w0) < 2f && MathF.Abs(pt.TextBox.Height - ph0) < 2f,
+                      $"改宽高可撤销（回到 {w0:0}×{ph0:0}）");
+                Doc.Redo();
+
+                float fs0 = pt.TextBox.FontSize;
+                RunBarActionForTest((int)SelBarButton.FlipV);
+                Check(pt.TextBox.FontSize > fs0, $"操作条 A+：字号 {fs0:0} → {pt.TextBox.FontSize:0}");
+            }
+        }
 
         Console.WriteLine(fails == 0 ? "AI 题卡自检：全部通过" : $"AI 题卡自检：{fails} 项失败");
         ExitCode = fails == 0 ? 0 : 1;
@@ -5390,7 +5432,7 @@ internal sealed partial class App : InkEngine.InkEngine
         // ③ 选中框（选择工具 + 点选卡片）
         Stroke card = null;
         foreach (var s in Doc.Strokes)
-            if (s.Kind == StrokeKind.AiCard) { card = s; break; }
+            if (s.Kind == StrokeKind.TextBox) { card = s; break; }
         if (card != null)
         {
             Host.Commands.SetTool(Tool.Marquee);
@@ -5402,16 +5444,27 @@ internal sealed partial class App : InkEngine.InkEngine
                                                        (int)_virtualW, (int)_virtualH);
 
         // ④ 展开答案
-        ToggleAiCardAnswersForTest();
+        ToggleTextBoxAnswersForTest();
         SettleFrames(300);
         string p3 = System.IO.Path.ChangeExtension(path, null) + "-answer.bmp";
         bool ok3 = ScreenProbe.SaveBmp(p3, (int)_virtualX, (int)_virtualY,
                                        (int)_virtualW, (int)_virtualH);
 
-        Console.WriteLine(ok1 && ok2 && ok3 && oks
-            ? $"出图：{p1} / {p2} / {ps} / {p3}"
+        // ⑤ 普通文本框：同样 8 手柄、可改字号
+        Doc.Clear();
+        Doc.ClearHistory();
+        InsertPlainTextBoxForTest("这是一个普通文本框。\n可以输入中文，选中后用 8 个手柄改宽高；\n字号用操作条的 A− / A+ 调。");
+        Doc.SelectOnly(Doc.Strokes.Count > 0 ? new[] { Doc.Strokes[^1] } : Array.Empty<Stroke>());
+        Host.Commands.SetTool(Tool.Marquee);
+        SettleFrames(300);
+        string p4 = System.IO.Path.ChangeExtension(path, null) + "-textbox.bmp";
+        bool ok4 = ScreenProbe.SaveBmp(p4, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+
+        Console.WriteLine(ok1 && ok2 && ok3 && oks && ok4
+            ? $"出图：{p1} / {p2} / {ps} / {p3} / {p4}"
             : "抓屏失败（看上一行）");
-        Console.WriteLine($"题卡数：{AiCardCountForTest}（应为 1）");
+        Console.WriteLine($"题卡/文本框数：{TextBoxCountForTest}（应为 1）");
         _quit = true;
     }
 

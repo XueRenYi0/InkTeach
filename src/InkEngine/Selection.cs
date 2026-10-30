@@ -670,7 +670,7 @@ internal static class SelectionHandles
     /// </summary>
     public static bool RotateHandleVisible(Stroke s)
         => !(s.Kind is StrokeKind.Circle or StrokeKind.Coordinate or StrokeKind.NumberLine
-             or StrokeKind.AiCard);
+             or StrokeKind.TextBox);
 
     /// <summary>
     /// **这个对象有没有"定义元素手柄"**——也就是它走**特殊手柄那一套**（直线 / 箭头 / 圆 /
@@ -839,15 +839,9 @@ internal static class SelectionHandles
     public static SelHandle HitTest(float canvasX, float canvasY, IReadOnlyList<Stroke> sel,
                                     in SelectionFrame f, float dpiScale)
     {
-        // AI 题卡：**只保留"框内拖动 + 右边缘改宽"**，不给通用八手柄、也不给旋转柄。
-        // 通用缩放会把文字和公式一起拉变形；改宽由 AiCardPointerDown 的右边缘专用命中负责。
-        if (sel.Count == 1 && sel[0].Kind == StrokeKind.AiCard)
-            return SelHandle.None;
-
         if (ShapeEditable(sel, out var s))
         {
-            float rad = HitRadiusLogical * dpiScale;
-            var p = new Vector2(canvasX, canvasY);
+            float rad = HitRadiusLogical * dpiScale;            var p = new Vector2(canvasX, canvasY);
             Span<ShapeHandle> handles = stackalloc ShapeHandle[5];
             int n = ShapeHandlesOf(s, handles);
             // **倒着找**：后画的手柄先命中。椭圆上"中心"和"轴端点"离得可能很近
@@ -866,7 +860,9 @@ internal static class SelectionHandles
             // **没有** → 落到下面通用框那一关。
             if (n > 0) return SelHandle.None;
         }
-        return HitTest(canvasX, canvasY, f, dpiScale);
+        // 文本框：旋转柄不画也不给命中；其它对象照旧。
+        bool allowRotate = !(sel.Count == 1 && sel[0].Kind == StrokeKind.TextBox);
+        return HitTest(canvasX, canvasY, f, dpiScale, includeEdgeHandles: true, includeRotate: allowRotate);
     }
 
     // =====================================================================
@@ -1633,7 +1629,8 @@ internal static class SelectionHandles
 
     /// <summary>按给定的选区坐标系做手柄命中判定。</summary>
     public static SelHandle HitTest(float canvasX, float canvasY, in SelectionFrame f,
-                                    float dpiScale, bool includeEdgeHandles = true)
+                                    float dpiScale, bool includeEdgeHandles = true,
+                                    bool includeRotate = true)
     {
         float r = HitRadiusLogical * dpiScale;
         var p = new Vector2(canvasX, canvasY);
@@ -1644,7 +1641,8 @@ internal static class SelectionHandles
 
         // 旋转手柄先测：它在框外，不会和四角重叠，但它离上边中点最近，
         // 先测它能避免两个窄命中区互相抢。
-        if (Vector2.DistanceSquared(p, CanvasPosition(SelHandle.Rotate, f, dpiScale)) <= r * r)
+        if (includeRotate
+            && Vector2.DistanceSquared(p, CanvasPosition(SelHandle.Rotate, f, dpiScale)) <= r * r)
             return SelHandle.Rotate;
 
         Span<SelHandle> order = stackalloc SelHandle[]
@@ -1685,7 +1683,8 @@ internal static class SelectionHandles
     /// 那是"极简"观感：画面干净，代价是单轴拉伸要进菜单。
     /// </summary>
     public static SelHandle HitTest(float canvasX, float canvasY, in RectF b,
-                                    float dpiScale, bool includeEdgeHandles = true)
+                                    float dpiScale, bool includeEdgeHandles = true,
+                                    bool includeRotate = true)
     {
         float r = HitRadiusLogical * dpiScale;
         var p = new Vector2(canvasX, canvasY);
@@ -1701,7 +1700,8 @@ internal static class SelectionHandles
 
         // 旋转手柄先测：它在框外，不会和四角重叠，但它离上边中点的
         // "上"手柄最近，先测它能避免两个窄命中区互相抢。
-        if (Vector2.DistanceSquared(p, Position(SelHandle.Rotate, b, dpiScale)) <= r * r)
+        if (includeRotate
+            && Vector2.DistanceSquared(p, Position(SelHandle.Rotate, b, dpiScale)) <= r * r)
             return SelHandle.Rotate;
 
         Span<SelHandle> order = stackalloc SelHandle[]

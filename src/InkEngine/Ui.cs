@@ -361,7 +361,13 @@ public interface IEngineCommands
     /// AI 面板：按当前 <see cref="UiState.AiPrompt"/> 插入一张 **mock 题卡**（1A）。
     /// 不联网、不调模型；接模型以后只换这个方法里的数据源。
     /// </summary>
-    void InsertMockAiCard();
+    void InsertMockTextBox();
+
+    /// <summary>
+    /// 插入一个**普通文本框**并直接进入输入（中文/输入法交给系统 EDIT）。
+    /// 属于文档对象：可选中、拖动、8 手柄改宽高、撤销、保存。
+    /// </summary>
+    void InsertTextBox();
 
     /// <summary>收藏面板：切到某个分类（`"all"` = 全部）。只改筛选，不搬条目。</summary>
     void SetLibraryCategory(string id);
