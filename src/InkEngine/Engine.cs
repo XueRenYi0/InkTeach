@@ -4777,10 +4777,9 @@ public partial class InkEngine
             return;
         }
 
-        // AI 题卡（文档对象）：和计时卡一样"看得见的那一块就是点得到的"。
-        // 排在界面之后：工具条压住卡片的区域仍然归工具条；排在穿透之前：
-        // 开着穿透时也要能折叠答案 / 拖卡片。
-        if (AiCardPointerDown(screenX, screenY))
+        // AI 题卡（文档对象）：**只在使用「选择」工具时**才由它接管按钮/右边缘；
+        // 笔、荧光笔、激光、图形和橡皮一律放行——题卡不能挡住写字。
+        if (Tool == Tool.Marquee && !inverted && AiCardPointerDown(screenX, screenY))
         {
             _drawing = false;
             _aiCardCapturing = true;
@@ -10858,7 +10857,7 @@ public partial class InkEngine
         return PptBarContains(PointerX, PointerY + ViewOffsetY)
             || TimerCardContains(PointerX, PointerY + ViewOffsetY)
             || RollCardContains(PointerX, PointerY + ViewOffsetY)
-            || AiCardContains(PointerX, PointerY + ViewOffsetY);
+            || (Tool == Tool.Marquee && AiCardContains(PointerX, PointerY + ViewOffsetY));
     }
 
     /// <summary>
@@ -16640,7 +16639,9 @@ public partial class InkEngine
     /// "画了但点不到"或者反过来"点得到但看不见"。具体画整条还是画圆钮，问 `BarDrawnCollapsed`。
     /// </summary>
     internal bool SelectionBarShown
-        => Doc.Selected.Count > 0 && (Tool == Tool.Marquee || IsShapeTool(Tool) || _dwellSelected || _touchSelected);
+        => Doc.Selected.Count > 0
+           && !(Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.AiCard)
+           && (Tool == Tool.Marquee || IsShapeTool(Tool) || _dwellSelected || _touchSelected);
 
     /// <summary>图形工具下那个自动选中的框：指针落在"家具 / 算动它 / 都不是"哪一档。</summary>
     private enum AutoSelZone
@@ -17732,6 +17733,17 @@ public partial class InkEngine
     {
         // 下标 ↔ 语义只在 SelBarButton 里写一遍（渲染、命中、动作三处共用它）。
         var btn = (SelBarButton)index;
+        // 题卡的颜色是"黑题红解析"这一条产品规则，不是可改的墨色；
+        // 翻转会把整张文字卡镜像成反字，也不该给。其它（锁定/层级/导出/收藏/复制/删除）照常。
+        bool cardOnly = Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.AiCard;
+        if (cardOnly && btn is SelBarButton.Color or SelBarButton.FlipH or SelBarButton.FlipV)
+        {
+            SetInkStatus(btn == SelBarButton.Color
+                ? "题卡颜色固定为黑题红解析"
+                : "题卡不支持翻转");
+            _dirty = true;
+            return;
+        }
         switch (btn)
         {
             // **收起工具条**（用户 2026-09-16 更正：条首那个 ✕ 不是"取消选择"）。

@@ -3448,6 +3448,48 @@ internal sealed partial class App
             Check("AI 面板「生成题卡」：插入一张 mock 卡并收起面板",
                   !ui.AiOpenForTest && AiCardCountForTest == 1,
                   $"AI={ui.AiOpenForTest} 题卡={AiCardCountForTest}");
+
+            // 选中框：选择工具点卡片 = 选中，框内拖动 = 移动；笔工具下不拦
+            Stroke aiCard = null;
+            foreach (var s in Doc.Strokes)
+                if (s.Kind == StrokeKind.AiCard) { aiCard = s; break; }
+            if (aiCard != null)
+            {
+                Host.Commands.SetTool(Tool.Marquee);
+                SettleFrames(180);
+                var cb = aiCard.PaddedBounds;
+                float ccx = (cb.MinX + cb.MaxX) * 0.5f;
+                float ccy = (cb.MinY + cb.MaxY) * 0.5f + ViewOffsetY;
+                ClickPhysical(ccx, ccy);
+                SettleFrames(220);
+                Check("选择工具：点题卡 = 选中（不需要拖框）",
+                      Doc.Selected.Count == 1 && ReferenceEquals(Doc.Selected[0], aiCard),
+                      $"选中 {Doc.Selected.Count}");
+
+                float beforeX = aiCard.PaddedBounds.MinX;
+                SendMouse((int)ccx, (int)ccy, 0); SettleFrames(60);
+                SendMouse((int)ccx, (int)ccy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+                SendMouse((int)ccx + 100, (int)ccy + 40, 0); SettleFrames(80);
+                SendMouse((int)ccx + 100, (int)ccy + 40, Native.MOUSEEVENTF_LEFTUP); SettleFrames(260);
+                Check("选择工具：框内拖动 = 移动题卡",
+                      aiCard.PaddedBounds.MinX > beforeX + 50f,
+                      $"Δx={aiCard.PaddedBounds.MinX - beforeX:F0}");
+
+                // 切到笔：题卡不再拦，笔在卡片上能正常落墨
+                Host.Commands.SetTool(Tool.Pen);
+                SettleFrames(180);
+                int beforeInk = Doc.Strokes.Count;
+                var cb2 = aiCard.PaddedBounds;
+                float px = (cb2.MinX + cb2.MaxX) * 0.5f;
+                float py = (cb2.MinY + cb2.MaxY) * 0.5f + ViewOffsetY;
+                SendMouse((int)px, (int)py, 0); SettleFrames(60);
+                SendMouse((int)px, (int)py, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+                SendMouse((int)px + 30, (int)py + 20, 0); SettleFrames(80);
+                SendMouse((int)px + 30, (int)py + 20, Native.MOUSEEVENTF_LEFTUP); SettleFrames(220);
+                Check("笔工具：题卡不挡笔，可以在卡片上落墨",
+                      Doc.Strokes.Count > beforeInk && Doc.Selected.Count == 0,
+                      $"笔数 {beforeInk} → {Doc.Strokes.Count}，选中 {Doc.Selected.Count}");
+            }
             Doc.Clear();
             Doc.ClearHistory();
             SettleFrames(120);

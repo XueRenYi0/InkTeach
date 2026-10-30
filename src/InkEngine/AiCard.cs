@@ -325,9 +325,7 @@ public partial class InkEngine
     private Stroke _aiCardGrab;
     private bool _aiCardResize;
     private Vector2 _aiCardPress;
-    private Matrix3x2 _aiCardStartTransform;
     private float _aiCardStartWidth;
-    private RectF _aiCardOldBounds;
 
     internal bool AiPromptEditing => _aiPromptEditing;
 
@@ -391,11 +389,30 @@ public partial class InkEngine
 
     internal bool AiCardContains(float screenX, float screenY) => AiCardAt(screenX, screenY) != null;
 
-    /// <summary>返回 true = 这一下归题卡（调用方负责 SetCapture / 收尾）。</summary>
+    /// <summary>
+    /// 「选择」工具下的题卡命中。返回 true = 这一下归题卡（调用方负责 SetCapture）；
+    /// 返回 false = 交给标准选择手势（框内拖动 / 点选）。
+    ///
+    /// **卡片不再自己拖整卡**：移动、删除、撤销都走现有选中框那一套，只有
+    /// 三个卡片专属动作留在这里——右上角 ✕、显示/收起答案、右边缘改宽。
+    /// </summary>
     internal bool AiCardPointerDown(float screenX, float screenY)
     {
         var s = AiCardAt(screenX, screenY);
         if (s == null) return false;
+
+        // 没选中 = 先选中，再把这一下交回标准选择手势（单击选中、按住可顺势拖动）。
+        bool single = Doc.Selected.Count == 1 && ReferenceEquals(Doc.Selected[0], s);
+        if (!single)
+        {
+            Doc.SelectOnly(new[] { s });
+            _dirty = true;
+            NotifyUiStateChanged();
+            return false;
+        }
+
+        // 锁定语义和普通对象一致：能选中、能看，但卡片专属动作（改宽/✕/折叠）不动它。
+        if (s.Locked) return false;
 
         float cx = screenX, cy = screenY - ViewOffsetY;
         Vector2 local = new(cx, cy);
@@ -407,12 +424,6 @@ public partial class InkEngine
 
         var card = s.AiCard;
         var lines = card.EnsureLayout();
-        _aiCardOldBounds = s.PaddedBounds;
-        _aiCardGrab = s;
-        _aiCardPress = new Vector2(cx, cy);
-        _aiCardStartTransform = s.Transform;
-        _aiCardStartWidth = card.Width;
-        _aiCardResize = false;
 
         // 右上角 ✕：删整卡，一步撤销。
         var close = new RectF
@@ -422,7 +433,6 @@ public partial class InkEngine
         };
         if (close.Contains(local.X, local.Y))
         {
-            _aiCardGrab = null;
             Doc.RemoveStrokeWithUndo(s);
             _dirty = true;
             NotifyUiStateChanged();
@@ -443,50 +453,44 @@ public partial class InkEngine
             Doc.Dirty.Add(s.PaddedBounds);
             Doc.StructureChangedSinceRender = true;
             Doc.Version++;
-            _aiCardGrab = null;
             _dirty = true;
             NotifyUiStateChanged();
             return true;
         }
 
-        // 右边缘 / 右下角：改宽，高度自动重排。
+        // 右边缘 / 右下角：卡片专属的改宽（高度自动重排）。
         if (local.X >= card.Width - 14f * card.Unit)
+        {
+            _aiCardGrab = s;
+            _aiCardPress = new Vector2(cx, cy);
+            _aiCardStartWidth = card.Width;
             _aiCardResize = true;
+            _aiCardCapturing = true;
+            return true;
+        }
 
-        _aiCardCapturing = true;
-        return true;
+        // 卡片正文：不抢，交给标准选中框的"框内拖动"。
+        return false;
     }
 
     internal void AiCardPointerMove(float screenX, float screenY)
     {
-        if (!_aiCardCapturing || _aiCardGrab == null) return;
+        if (!_aiCardCapturing || !_aiCardResize || _aiCardGrab == null) return;
         var s = _aiCardGrab;
         var card = s.AiCard;
         if (card == null) return;
 
-        float cx = screenX, cy = screenY - ViewOffsetY;
+        float cx = screenX;
         var old = s.PaddedBounds;
-
-        if (_aiCardResize)
-        {
-            float dx = cx - _aiCardPress.X;
-            float min = 360f * card.Unit;
-            float max = MathF.Max(min, (ScreenRectPhysical().MaxX - ScreenRectPhysical().MinX) * 0.8f);
-            card.SetWidth(Math.Clamp(_aiCardStartWidth + dx, min, max));
-            s.SyncAiCardBounds();
-            Doc.RefreshStrokeGrid(s);
-        }
-        else
-        {
-            float dx = cx - _aiCardPress.X;
-            float dy = cy - _aiCardPress.Y;
-            s.Transform = Matrix3x2.CreateTranslation(dx, dy) * _aiCardStartTransform;
-            Doc.RefreshStrokeGrid(s);
-        }
+        float dx = cx - _aiCardPress.X;
+        float min = 360f * card.Unit;
+        float max = MathF.Max(min, (ScreenRectPhysical().MaxX - ScreenRectPhysical().MinX) * 0.8f);
+        card.SetWidth(Math.Clamp(_aiCardStartWidth + dx, min, max));
+        s.SyncAiCardBounds();
+        Doc.RefreshStrokeGrid(s);
 
         Doc.Dirty.Add(old);
         Doc.Dirty.Add(s.PaddedBounds);
-        Doc.Dirty.Add(_aiCardOldBounds);
         Doc.StructureChangedSinceRender = true;
         Doc.Version++;
         _dirty = true;

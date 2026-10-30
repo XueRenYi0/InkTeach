@@ -2463,7 +2463,8 @@ internal sealed partial class OverlayWindow : IDisposable
                         _ctx.FillRoundedRectangle(pill, Brush(AiRedSoft));
                         _ctx.DrawRoundedRectangle(pill, Brush(new Color4(0.88f, 0.60f, 0.57f, 1f)), 1f);
                         _ctx.DrawText(line.Text, AiTextFormat(line.Size, false, true),
-                            new Rect(b.Left, b.Top, b.Right - b.Left, b.Bottom - b.Top), Brush(AiRed));
+                            new Rect(b.Left, b.Top, b.Right - b.Left, b.Bottom - b.Top),
+                            Brush(AiRed));
                         break;
                     }
 
@@ -2478,7 +2479,8 @@ internal sealed partial class OverlayWindow : IDisposable
                 }
             }
 
-            // 右上角关闭：和拖动/改宽同一条命中逻辑（见 AiCardPointerDown）。
+            // 卡片内容里的操作提示（只在选择工具 + 已选中时才响应命中）。
+            // 画在内容层，所以**不能随选中状态变样式**：否则选区一变就要重烘分块。
             var close = new Rect(o.X + card.Width - 38f * u, o.Y + 6f * u, 30f * u, 30f * u);
             _ctx.DrawText("✕", AiTextFormat(13f * u, false, true), close, Brush(AiMuted));
 
@@ -3774,6 +3776,9 @@ internal sealed partial class OverlayWindow : IDisposable
         // 单选一个"有定义元素的图形"（直线 / 箭头 / 圆 / 椭圆）时，手柄按定义元素给
         // （见下面第 3、4 步）：两个或五个，而不是通用 8 个。
         bool shapeLike = SelectionHandles.ShapeEditable(sel, out var shapeStroke);
+        // AI 题卡走"文字对象"那一档：只给选中框 + 框内拖动 + 右边缘改宽，
+        // 不给通用八手柄（会把字拉变形），也不给旋转柄。
+        bool cardLike = sel.Count == 1 && sel[0].Kind == StrokeKind.AiCard;
 
         // **这一帧要画几个"定义元素手柄"**（0 = 一个都没有）。
         //
@@ -3839,7 +3844,7 @@ internal sealed partial class OverlayWindow : IDisposable
         var white = Brush(new Color4(1f, 1f, 1f, 1f));
         if (!collapsed || app.SelRotating)
         {
-            if (!shapeLike || SelectionHandles.RotateHandleVisible(shapeStroke))
+            if (!cardLike && (!shapeLike || SelectionHandles.RotateHandleVisible(shapeStroke)))
             {
                 float rotR = SelectionHandles.RotateGripLogical * 0.5f * dpi;
                 // 旋转柄的位置：直线/箭头/椭圆三种"定义元素图形"也用**通用框**的算法
@@ -3880,7 +3885,7 @@ internal sealed partial class OverlayWindow : IDisposable
         //      ——在那之前它们两头空（见上面 `nh` 那段）。
         //    白底 + 蓝边：深色背景上是白方块显眼，浅色背景上靠蓝边立住，一套画法两边都成立。
         //    拖动 / 旋转 / 拖元素中收起来（此刻点不中，而且是最"晃眼"的一圈家具）。
-        if (!collapsed)
+        if (!collapsed && !cardLike)
         {
             // 视觉柄**跟着对象大小缩**（小对象别被手柄盖住），命中半径不缩——
             // 判据与理由都在 SelectionHandles.VisualHandleSize。

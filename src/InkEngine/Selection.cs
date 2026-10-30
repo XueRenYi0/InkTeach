@@ -669,7 +669,8 @@ internal static class SelectionHandles
     /// 抛物线的朝向切换仍在图形面板那一格（不受旋转影响）。
     /// </summary>
     public static bool RotateHandleVisible(Stroke s)
-        => !(s.Kind is StrokeKind.Circle or StrokeKind.Coordinate or StrokeKind.NumberLine);
+        => !(s.Kind is StrokeKind.Circle or StrokeKind.Coordinate or StrokeKind.NumberLine
+             or StrokeKind.AiCard);
 
     /// <summary>
     /// **这个对象有没有"定义元素手柄"**——也就是它走**特殊手柄那一套**（直线 / 箭头 / 圆 /
@@ -838,6 +839,11 @@ internal static class SelectionHandles
     public static SelHandle HitTest(float canvasX, float canvasY, IReadOnlyList<Stroke> sel,
                                     in SelectionFrame f, float dpiScale)
     {
+        // AI 题卡：**只保留"框内拖动 + 右边缘改宽"**，不给通用八手柄、也不给旋转柄。
+        // 通用缩放会把文字和公式一起拉变形；改宽由 AiCardPointerDown 的右边缘专用命中负责。
+        if (sel.Count == 1 && sel[0].Kind == StrokeKind.AiCard)
+            return SelHandle.None;
+
         if (ShapeEditable(sel, out var s))
         {
             float rad = HitRadiusLogical * dpiScale;

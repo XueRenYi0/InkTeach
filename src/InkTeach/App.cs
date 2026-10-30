@@ -1311,7 +1311,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --aitest            AI 题卡自检（插入 / 折叠 / 存档 / 删除 / 撤销）");
         Console.WriteLine("  --radialtest        呼出盘自检（Ctrl+Alt+Shift+Q：开 / 划 / 松 / 取消 / 穿透 / 松键轮询）");
         Console.WriteLine("  --radialshow [图]   呼出盘摆样：定格在屏幕中央出图（默认 reports/radial-palette.bmp）");
-        Console.WriteLine("  --aishow [图]       AI 面板 + 题卡摆样：面板 / 折叠 / 展开三张（默认 reports/ai-card.bmp）");
+        Console.WriteLine("  --aishow [图]       AI 面板 + 题卡摆样：面板 / 折叠 / 选中框 / 展开四张（默认 reports/ai-card.bmp）");
         Console.WriteLine("  --shapeiconshow [路径] 出图：图形面板图标的对照表（含每一档的变体）");
         Console.WriteLine("  --toolicons [路径]  出图：白板 / 激光笔的图标候选（未选中 / 选中 / 放大三格）");
         Console.WriteLine("  --penshow [路径] [bars]  出图：上游那批「带笔的」图标；带第 2 个参数就每格加一副「三道杠」");
@@ -5277,13 +5277,10 @@ internal sealed partial class App : InkEngine.InkEngine
             var b = card.PaddedBounds;
             float sx = (b.MinX + b.MaxX) * 0.5f;
             float sy = b.MinY + 18f;
-            float bx = b.MinX, by = b.MinY;
             AiCardPointerDown(sx, sy);
-            AiCardPointerMove(sx + 120f, sy + 60f);
             AiCardPointerUp();
-            var nb = card.PaddedBounds;
-            Check(MathF.Abs(nb.MinX - bx - 120f) < 2f && MathF.Abs(nb.MinY - by - 60f) < 2f,
-                  $"拖标题栏移动整卡（Δ {nb.MinX - bx:0},{nb.MinY - by:0}）");
+            Check(Doc.Selected.Count == 1 && ReferenceEquals(Doc.Selected[0], card),
+                  "点卡片 = 选中（移动交给标准选中框）");
 
             float w0 = card.AiCard.Width;
             b = card.PaddedBounds;
@@ -5390,15 +5387,29 @@ internal sealed partial class App : InkEngine.InkEngine
         bool ok2 = ScreenProbe.SaveBmp(p2, (int)_virtualX, (int)_virtualY,
                                        (int)_virtualW, (int)_virtualH);
 
-        // ③ 展开答案
+        // ③ 选中框（选择工具 + 点选卡片）
+        Stroke card = null;
+        foreach (var s in Doc.Strokes)
+            if (s.Kind == StrokeKind.AiCard) { card = s; break; }
+        if (card != null)
+        {
+            Host.Commands.SetTool(Tool.Marquee);
+            Doc.SelectOnly(new[] { card });
+            SettleFrames(300);
+        }
+        string ps = System.IO.Path.ChangeExtension(path, null) + "-selected.bmp";
+        bool oks = card != null && ScreenProbe.SaveBmp(ps, (int)_virtualX, (int)_virtualY,
+                                                       (int)_virtualW, (int)_virtualH);
+
+        // ④ 展开答案
         ToggleAiCardAnswersForTest();
         SettleFrames(300);
         string p3 = System.IO.Path.ChangeExtension(path, null) + "-answer.bmp";
         bool ok3 = ScreenProbe.SaveBmp(p3, (int)_virtualX, (int)_virtualY,
                                        (int)_virtualW, (int)_virtualH);
 
-        Console.WriteLine(ok1 && ok2 && ok3
-            ? $"出图：{p1} / {p2} / {p3}"
+        Console.WriteLine(ok1 && ok2 && ok3 && oks
+            ? $"出图：{p1} / {p2} / {ps} / {p3}"
             : "抓屏失败（看上一行）");
         Console.WriteLine($"题卡数：{AiCardCountForTest}（应为 1）");
         _quit = true;

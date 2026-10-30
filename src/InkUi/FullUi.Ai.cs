@@ -320,7 +320,7 @@ public sealed partial class FullUi
 
         // 提示行
         string hint = string.IsNullOrEmpty(_aiHint)
-            ? "1A · 示例数据，不联网"
+            ? "1A · 生成后用「选择」工具点卡片管理"
             : _aiHint;
         _widgets.TextLeftMiddle(ctx, hint, AiHintRect(), 10.5f, Brush(ctx, MutedCol));
     }
