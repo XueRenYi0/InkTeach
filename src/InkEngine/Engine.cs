@@ -13043,7 +13043,10 @@ public partial class InkEngine
 
             case KeyAction.SelectAll: SelectAll(); break;
             case KeyAction.Duplicate: Doc.DuplicateSelected(); break;
-            case KeyAction.DeleteSelected: Doc.DeleteSelected(); break;
+            case KeyAction.DeleteSelected:
+                if (_textBoxEditing) EndTextBoxEditFromUi(false);
+                Doc.DeleteSelected();
+                break;
             case KeyAction.CancelSelection: Doc.Selected.Clear(); break;
             case KeyAction.Paste: PasteFromClipboard(); break;
             // 有选中 = 左/右移 1；**没选中：←→ 也是翻页**（2026-10-05 用户定：
@@ -17858,6 +17861,8 @@ public partial class InkEngine
 
             case SelBarButton.Delete:
             {
+                // 编辑中直接删：先把原生 EDIT 收掉，别让它留在屏幕上当"残字"。
+                if (_textBoxEditing) EndTextBoxEditFromUi(false);
                 int n = Doc.Selected.Count, locked = 0;
                 foreach (var s in Doc.Selected) if (s.Locked) locked++;
                 Doc.DeleteSelected();

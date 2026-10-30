@@ -295,6 +295,26 @@ internal sealed partial class App : InkEngine.InkEngine
             ExitCode = ok == total && total > 0 ? 0 : 1;
             _quit = true;
         }
+        else if (mode == "--textboxedit")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            Doc.Clear();
+            Doc.ClearHistory();
+            InsertPlainTextBoxForTest("文本框编辑对齐检查\n第二行：$x=1$ 与中文混排。");
+            var st = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+            if (st != null)
+            {
+                BeginTextBoxEdit(st);
+                SetTextBoxEditTextForTest("文本框编辑对齐检查\n第二行：$x=1$ 与中文混排。\n第三行：看看光标和文字是否对齐。");
+                SettleFrames(300);
+                ScreenProbe.SaveBmp("reports/textbox-edit.bmp", (int)_virtualX, (int)_virtualY,
+                                    (int)_virtualW, (int)_virtualH);
+                EndTextBoxEditFromUi(false);
+            }
+            Console.WriteLine("出图：reports/textbox-edit.bmp");
+            _quit = true;
+        }
         else if (mode == "--mathtest")
         {
             _autoExitAt = double.MaxValue;
@@ -5489,7 +5509,7 @@ internal sealed partial class App : InkEngine.InkEngine
         // ⑤ 普通文本框：同样 8 手柄、可改字号
         Doc.Clear();
         Doc.ClearHistory();
-        InsertPlainTextBoxForTest("# 例题\n\n"
+        string sample = "# 例题\n\n"
             + "已知数列 \\(\\{a_n\\}\\) 满足：\n"
             + "\\[\na_1=2,\\qquad a_{n+1}=3a_n+2\\quad(n\\ge 1)\n\\]\n"
             + "求数列 \\(\\{a_n\\}\\) 的通项公式。\n\n"
@@ -5505,8 +5525,17 @@ internal sealed partial class App : InkEngine.InkEngine
             + "```latex\n\\boxed{a_n=7\\cdot 2^{n-1}-3n-3}\n```\n"
             + "所以：\n"
             + "\\[\na_n+1=3\\cdot 3^{n-1}=3^n\n\\]\n"
-            + "**答案：** \\(\\boxed{a_n=3^n-1}\\)");
-        Doc.SelectOnly(Doc.Strokes.Count > 0 ? new[] { Doc.Strokes[^1] } : Array.Empty<Stroke>());
+            + "**答案：** \\(\\boxed{a_n=3^n-1}\\)";
+        // 走真实路径：插入空框 → 原生 EDIT 粘贴长文 → 结束编辑（会重新排版长高）
+        InsertPlainTextBoxForTest("");
+        var editTarget = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+        if (editTarget != null)
+        {
+            BeginTextBoxEdit(editTarget);
+            SetTextBoxEditTextForTest(sample);
+            EndTextBoxEditFromUi(true);
+        }
+        Doc.SelectOnly(editTarget != null ? new[] { editTarget } : Array.Empty<Stroke>());
         Host.Commands.SetTool(Tool.Marquee);
         SettleFrames(300);
         string p4 = System.IO.Path.ChangeExtension(path, null) + "-textbox.bmp";
@@ -5520,10 +5549,62 @@ internal sealed partial class App : InkEngine.InkEngine
         bool ok5 = ScreenProbe.SaveBmp(p5, (int)_virtualX, (int)_virtualY,
                                        (int)_virtualW, (int)_virtualH);
 
-        Console.WriteLine(ok1 && ok2 && ok3 && oks && ok4 && ok5
-            ? $"出图：{p1} / {p2} / {ps} / {p3} / {p4} / {p5}"
+        // ⑦ 删除：删完不能有残字；再框选/点删除也不能命中已删对象
+        var victim = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+        var vb = victim?.PaddedBounds ?? default;
+        RunBarActionForTest((int)SelBarButton.Delete);   // 走真实操作条删除路径
+        SettleFrames(300);
+        string p6 = System.IO.Path.ChangeExtension(path, null) + "-deleted.bmp";
+        bool ok6 = ScreenProbe.SaveBmp(p6, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+        bool clean = Doc.Strokes.Count == 0 && Doc.Selected.Count == 0;
+        bool ghost = false;
+        if (victim != null)
+        {
+            var candidates = new List<Stroke>();
+            Doc.QueryGrid(vb, candidates);
+            ghost |= candidates.Count > 0;
+            for (int gy = 0; gy <= 2 && !ghost; gy++)
+                for (int gx = 0; gx <= 2 && !ghost; gx++)
+                {
+                    float px = vb.MinX + (vb.MaxX - vb.MinX) * (0.15f + 0.35f * gx);
+                    float py = vb.MinY + (vb.MaxY - vb.MinY) * (0.15f + 0.35f * gy);
+                    if (Doc.HitObjectAt(px, py, 8f) != null) ghost = true;
+                }
+        }
+        clean &= !ghost;
+        // 翻到上方的操作条：删除格也必须点得到（画/命中同源）
+        var barRect = SelectionHandles.BarRectForTextBox(vb, UiUnit, FurnitureViewport);
+        var delBtn = SelectionHandles.BarButtonRectIn(barRect, (int)SelBarButton.Delete, UiUnit);
+        bool delHit = SelectionHandles.BarButtonAtIn((delBtn.MinX + delBtn.MaxX) * 0.5f,
+                                                     (delBtn.MinY + delBtn.MaxY) * 0.5f,
+                                                     barRect, UiUnit) == (int)SelBarButton.Delete;
+        clean &= delHit;
+        Console.WriteLine(clean
+            ? $"删除自检通过：strokes={Doc.Strokes.Count} selected={Doc.Selected.Count}"
+            : $"删除自检失败：strokes={Doc.Strokes.Count} selected={Doc.Selected.Count} ghost={ghost} delHit={delHit}");
+
+        // 删除 → 撤销 → 重做：反复进出不能让框/字残留
+        bool undoOk = true, redoOk = true;
+        if (victim != null)
+        {
+            Doc.Undo();
+            SettleFrames(300);
+            undoOk = Doc.Strokes.Count == 1 && ReferenceEquals(Doc.Strokes[0], victim);
+            string pu = System.IO.Path.ChangeExtension(path, null) + "-undo.bmp";
+            ScreenProbe.SaveBmp(pu, (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+            Doc.Redo();
+            SettleFrames(300);
+            redoOk = Doc.Strokes.Count == 0;
+            string pr = System.IO.Path.ChangeExtension(path, null) + "-redo.bmp";
+            ScreenProbe.SaveBmp(pr, (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+        }
+        Console.WriteLine(undoOk && redoOk ? "删除撤销/重做通过" : $"删除撤销/重做失败：undo={undoOk} redo={redoOk}");
+
+        Console.WriteLine(ok1 && ok2 && ok3 && oks && ok4 && ok5 && ok6
+            ? $"出图：{p1} / {p2} / {ps} / {p3} / {p4} / {p5} / {p6}"
             : "抓屏失败（看上一行）");
-        Console.WriteLine($"题卡/文本框数：{TextBoxCountForTest}（应为 1）");
+        Console.WriteLine($"题卡/文本框数：{TextBoxCountForTest}（删除后应为 0）");
         _quit = true;
     }
 

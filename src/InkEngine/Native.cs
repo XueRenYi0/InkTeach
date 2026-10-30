@@ -754,6 +754,18 @@ internal static class Native
     public static extern int GetClassNameW(IntPtr hWnd, System.Text.StringBuilder s, int n);
 
     [DllImport("user32.dll")]
+    public static extern bool GetClientRect(IntPtr hWnd, out RECT r);
+
+    [DllImport("user32.dll")]
+    public static extern int FillRect(IntPtr hdc, ref RECT r, IntPtr brush);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetClassLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+    [DllImport("user32.dll")]
+    public static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
+
+    [DllImport("user32.dll")]
     public static extern bool IsWindowVisible(IntPtr hWnd);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]

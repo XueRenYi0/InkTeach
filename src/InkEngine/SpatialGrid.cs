@@ -36,10 +36,12 @@ internal sealed class SpatialGrid
         int y0 = (int)MathF.Floor(b.MinY / CellSize);
         int x1 = (int)MathF.Floor(b.MaxX / CellSize);
         int y1 = (int)MathF.Floor(b.MaxY / CellSize);
+        var keys = new List<long>((x1 - x0 + 1) * (y1 - y0 + 1));
         for (int cy = y0; cy <= y1; cy++)
             for (int cx = x0; cx <= x1; cx++)
             {
                 long k = Key(cx, cy);
+                keys.Add(k);
                 if (!_cells.TryGetValue(k, out var list))
                 {
                     list = new List<Stroke>();
@@ -47,10 +49,20 @@ internal sealed class SpatialGrid
                 }
                 list.Add(s);
             }
+        s.GridKeys = keys.ToArray();
     }
 
     public void Remove(Stroke s)
     {
+        if (s.GridKeys is { Length: > 0 } keys)
+        {
+            // 按 Insert 当时的格子快照删除：包围盒之后变过也不会漏。
+            foreach (long k in keys)
+                if (_cells.TryGetValue(k, out var list)) list.Remove(s);
+            s.GridKeys = null;
+            return;
+        }
+
         var b = s.PaddedBounds;
         if (b.IsEmpty) return;
         int x0 = (int)MathF.Floor(b.MinX / CellSize);

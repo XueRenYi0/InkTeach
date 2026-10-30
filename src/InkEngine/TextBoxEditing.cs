@@ -64,12 +64,12 @@ public partial class InkEngine
             Width = 0f,
         };
         data.Ink = s.Color;
-        s.SetTextBoxRect(new Vector2(x, y), w, h);
-        Doc.AddStroke(s);
+        // 先排版，再入文档：AddStroke 的脏区和空间索引都按**最终包围盒**登记。
+        // 以前先 Add 再长高，低处的字不在脏区里，删除后会残留最后几行（用户实测）。
         _ = data.EnsureLayout();
-        s.SyncTextBoxBounds();
+        s.SetTextBoxRect(new Vector2(x, y), w, data.Height);
         ClampTextBoxIntoView(s);
-        Doc.RefreshStrokeGrid(s);
+        Doc.AddStroke(s);
         return s;
     }
 
@@ -95,7 +95,7 @@ public partial class InkEngine
         Native.SetWindowTextW(_textBoxEditHwnd, s.TextBox.Text ?? "");
         var font = EnsureTextBoxEditFont(s.TextBox.FontSize * s.TextBox.Unit);
         Native.SendMessage(_textBoxEditHwnd, Native.WM_SETFONT, font, new IntPtr(1));
-        int margin = Math.Max(4, (int)MathF.Round(s.TextBox.FontSize * 0.7f * s.TextBox.Unit));
+        int margin = Math.Max(1, (int)MathF.Round(2f * s.TextBox.Unit));
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETMARGINS,
                            new IntPtr(Native.EC_LEFTMARGIN | Native.EC_RIGHTMARGIN),
                            new IntPtr(margin | (margin << 16)));
@@ -103,15 +103,31 @@ public partial class InkEngine
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL, IntPtr.Zero, new IntPtr(-1));
 
         var b = s.PaddedBounds;
-        int x = (int)MathF.Round(b.MinX);
-        int y = (int)MathF.Round(b.MinY + ViewOffsetY);
-        int w = Math.Max(80, (int)MathF.Round(b.MaxX - b.MinX));
-        int h = Math.Max(40, (int)MathF.Round(b.MaxY - b.MinY));
+        float unit = MathF.Max(0.5f, s.TextBox.Unit);
+        float pad = 18f * unit;
+        // 编辑窗按**内容区**摆：留出和渲染一致的 18 逻辑像素内边距；
+        // 高度至少 320 逻辑像素，粘长文不用在一个 120 高的小框里滚。
+        float editH = MathF.Max(s.TextBox.Height, 320f * unit);
+        var screen = ScreenRectPhysical();
+        editH = MathF.Min(editH, (screen.MaxY - screen.MinY) * 0.65f);
+        int x = (int)MathF.Round(b.MinX + 2f + pad);
+        int y = (int)MathF.Round(b.MinY + 2f + pad + ViewOffsetY);
+        int w = Math.Max(80, (int)MathF.Round(b.MaxX - b.MinX - 4f - pad * 2f));
+        int h = Math.Max(40, (int)MathF.Round(editH - pad * 2f));
+        int maxBottom = (int)MathF.Round(screen.MaxY - 16f * unit);
+        if (y + h > maxBottom) h = Math.Max(40, maxBottom - y);
         Native.SetWindowPos(_textBoxEditHwnd, Native.HWND_TOPMOST, x, y, w, h,
                             Native.SWP_SHOWWINDOW);
         FocusTextBoxEditWindow();
         _dirty = true;
         NotifyUiStateChanged();
+    }
+
+    /// <summary>自检：直接改原生 EDIT 里的文字（模拟粘贴），不经过键盘。</summary>
+    internal void SetTextBoxEditTextForTest(string text)
+    {
+        if (_textBoxEditing && _textBoxEditHwnd != IntPtr.Zero)
+            Native.SetWindowTextW(_textBoxEditHwnd, text ?? "");
     }
 
     internal void EndTextBoxEditFromUi(bool accept)
@@ -166,6 +182,10 @@ public partial class InkEngine
         _textBoxEditHwnd = Native.CreateWindowEx(exStyle, "EDIT", "InkTeachTextBox",
             style, 0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, _hInstance, IntPtr.Zero);
         if (_textBoxEditHwnd == IntPtr.Zero) return;
+        // 顶层 EDIT 的默认类背景不刷；显式挂白刷子（真正显示仍由 DWM 决定）。
+        Native.SetClassLongPtr(_textBoxEditHwnd, -10 /* GCLP_HBRBACKGROUND */,
+                               Native.GetStockObject(0 /* WHITE_BRUSH */));
+        Native.InvalidateRect(_textBoxEditHwnd, IntPtr.Zero, true);
         _textBoxEditWndProc = TextBoxEditWndProc;
         _textBoxEditOldProc = Native.SetWindowLongPtr(
             _textBoxEditHwnd, Native.GWLP_WNDPROC,
@@ -176,6 +196,13 @@ public partial class InkEngine
     {
         switch (msg)
         {
+            case Native.WM_ERASEBKGND:
+            {
+                // 顶层 EDIT 默认不刷底色，会透出下面的 PPT/浏览器；编辑时铺白底。
+                Native.GetClientRect(hWnd, out var rc);
+                Native.FillRect(wParam, ref rc, Native.GetStockObject(0 /* WHITE_BRUSH */));
+                return new IntPtr(1);
+            }
             case Native.WM_KEYDOWN:
             {
                 int vk = (int)wParam.ToInt64();

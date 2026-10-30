@@ -3085,6 +3085,13 @@ internal sealed class Stroke
     /// same stroke twice for one query without allocating a set.</summary>
     public int QueryStamp;
 
+    /// <summary>
+    /// 空间索引登记过的格子键。**移除时按这份快照走**——对象的包围盒
+    /// 可能在 Insert 之后变过（文本框长高、改宽），按当前包围盒 Remove
+    /// 会漏掉旧格子，留下"框选还能选中、再点删除没反应"的幽灵。
+    /// </summary>
+    internal long[] GridKeys;
+
     public static long ReleasedGeometries;
 
     /// <summary>
@@ -3193,7 +3200,35 @@ internal sealed class Stroke
     }
 
     /// <summary>
-    /// 把题卡的包围盒控制点同步成"左上角 + 宽高"。
+    /// 文本框**实际画出来的**世界矩形（含 Transform）。用 <see cref="TextBoxData.LayoutHeight"/>
+    /// 而不是 Points/AABB 的高度：排版长高之后、包围盒还没来得及同步时，删除/重绘
+    /// 必须按这张真实卡片擦，否则最后几行会留在屏幕上。
+    /// </summary>
+    internal RectF TextBoxWorldRect()
+    {
+        if (Kind != StrokeKind.TextBox || TextBox == null || Points.Count == 0)
+            return RectF.Empty;
+        var o = new Vector2(Points[0].X, Points[0].Y);
+        var r = new RectF
+        {
+            MinX = o.X, MinY = o.Y,
+            MaxX = o.X + TextBox.Width, MaxY = o.Y + TextBox.LayoutHeight,
+        };
+        if (Transform.IsIdentity) return r;
+        var p0 = Vector2.Transform(new Vector2(r.MinX, r.MinY), Transform);
+        var p1 = Vector2.Transform(new Vector2(r.MaxX, r.MinY), Transform);
+        var p2 = Vector2.Transform(new Vector2(r.MinX, r.MaxY), Transform);
+        var p3 = Vector2.Transform(new Vector2(r.MaxX, r.MaxY), Transform);
+        return new RectF
+        {
+            MinX = MathF.Min(MathF.Min(p0.X, p1.X), MathF.Min(p2.X, p3.X)),
+            MinY = MathF.Min(MathF.Min(p0.Y, p1.Y), MathF.Min(p2.Y, p3.Y)),
+            MaxX = MathF.Max(MathF.Max(p0.X, p1.X), MathF.Max(p2.X, p3.X)),
+            MaxY = MathF.Max(MathF.Max(p0.Y, p1.Y), MathF.Max(p2.Y, p3.Y)),
+        };
+    }
+
+    /// <summary>把题卡的包围盒控制点同步成"左上角 + 宽高"。
     /// 宽度/折叠状态一变就调用；只改 `Points` 的两个角，**不动 Transform、不动内容**。
     /// </summary>
     internal void SyncTextBoxBounds()
@@ -6365,6 +6400,7 @@ internal sealed class SetStrokePropAction : EditAction
                         box.Ink = s.Color;
                         box.InvalidateLayout();
                         s.SyncTextBoxBounds();
+                        doc.RefreshStrokeGrid(s);
                     }
                     break;
                 case Prop.Width: s.Width = old ? _oldWidth[i] : _width; break;
@@ -6982,7 +7018,25 @@ internal sealed class InkDocument
         s.Release();
         TotalPoints -= s.Points.Count;
         TotalIntervals -= s.Erased.Count;
-        Dirty.Add(dirty ?? s.PaddedBounds);
+        // 文本框按"实际画出来的卡片"擦：排版长高后包围盒可能还没同步，
+        // 只擦 PaddedBounds 会留下最后几行字（用户实测）。
+        var dirtyRect = dirty ?? s.PaddedBounds;
+        if (s.Kind == StrokeKind.TextBox)
+        {
+            var card = s.TextBoxWorldRect();
+            if (!card.IsEmpty)
+            {
+                card = card.Inflate(6f + MathF.Max(0f, s.Width) * 0.5f);
+                dirtyRect = dirtyRect.IsEmpty ? card : new RectF
+                {
+                    MinX = MathF.Min(dirtyRect.MinX, card.MinX),
+                    MinY = MathF.Min(dirtyRect.MinY, card.MinY),
+                    MaxX = MathF.Max(dirtyRect.MaxX, card.MaxX),
+                    MaxY = MathF.Max(dirtyRect.MaxY, card.MaxY),
+                };
+            }
+        }
+        Dirty.Add(dirtyRect);
         Version++;
     }
 
