@@ -601,6 +601,15 @@ internal static class TextBoxLayout
         {
             if (token.IsMath)
             {
+                // 单个公式比整行还宽：等比缩到行宽，宁可小一点也不能漏到卡片外。
+                if (token.Width > textW)
+                {
+                    float k = textW / token.Width;
+                    token.Width = textW;
+                    token.Height *= k;
+                    token.Ascent *= k;
+                    token.Descent *= k;
+                }
                 if (current.Count > 0 && x + token.Width > textW) Flush();
                 token.X = x;
                 current.Add(token);
@@ -724,16 +733,23 @@ internal static class TextBoxLayout
                 y += size * 1.55f;
                 return;
             }
-            float mx = pad + MathF.Max(0f, (textW - math.LogicalWidth) * 0.5f);
+            float mw = math.LogicalWidth, mh = math.LogicalHeight;
+            if (mw > textW)
+            {
+                float k = textW / mw;
+                mw = textW;
+                mh *= k;
+            }
+            float mx = pad + MathF.Max(0f, (textW - mw) * 0.5f);
             lines.Add(new TextBoxLine
             {
                 Kind = TextBoxLineKind.Math,
-                X = mx, Y = y, Size = size, Height = math.LogicalHeight,
+                X = mx, Y = y, Size = size, Height = mh,
                 MathImage = math.Image,
-                MathW = math.LogicalWidth,
-                MathH = math.LogicalHeight,
+                MathW = mw,
+                MathH = mh,
             });
-            y += math.LogicalHeight + 8f * u;
+            y += mh + 8f * u;
             return;
         }
 

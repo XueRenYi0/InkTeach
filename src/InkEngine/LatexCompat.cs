@@ -57,6 +57,13 @@ internal static class LatexCompat
         s = UnwrapArg(s, "\\xcancel");
         s = UnwrapArg(s, "\\mathop");
         s = UnwrapTwoArgs(s, "\\textcolor");
+        // 上下标注 CSharpMath 不支持：保留底下的主体，丢掉标注，至少公式不报错。
+        // 圆弧 AB 用上划线近似（Chinese 几何题里最常见）。
+        s = s.Replace("\\overset{\\frown}", "\\overline")
+             .Replace("\\overset{\\smile}", "\\underline");
+        s = UnwrapSecondArg(s, "\\overset");
+        s = UnwrapSecondArg(s, "\\underset");
+        s = UnwrapSecondArg(s, "\\stackrel");
 
         // 箭头上的文字：CSharpMath 只画箭头（后面留空格，防止 \toB 被当成一条命令）
         s = ReplaceCommandArg(s, "\\xrightarrow", "\\to ");
@@ -103,6 +110,26 @@ internal static class LatexCompat
 
     /// <summary>`\cmd{第一个参数}{内容}` → 内容；第一个参数丢掉（如 \textcolor{red}{x}）。</summary>
     private static string UnwrapTwoArgs(string s, string cmd)
+    {
+        for (int guard = 0; guard < 20; guard++)
+        {
+            int at = s.IndexOf(cmd, StringComparison.Ordinal);
+            if (at < 0) break;
+            int open1 = s.IndexOf('{', at + cmd.Length);
+            if (open1 < 0) break;
+            int close1 = MatchBrace(s, open1);
+            if (close1 < 0) break;
+            int open2 = s.IndexOf('{', close1 + 1);
+            if (open2 < 0) break;
+            int close2 = MatchBrace(s, open2);
+            if (close2 < 0) break;
+            s = s[..at] + s[(open2 + 1)..close2] + s[(close2 + 1)..];
+        }
+        return s;
+    }
+
+    /// <summary>`\cmd{标注}{主体}` → 主体；CSharpMath 没有上下标注，先保住主体。</summary>
+    private static string UnwrapSecondArg(string s, string cmd)
     {
         for (int guard = 0; guard < 20; guard++)
         {

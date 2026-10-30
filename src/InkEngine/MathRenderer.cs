@@ -179,6 +179,13 @@ internal static class MathRenderer
             ("cancel", @"\cancel{x}"),
             ("xarrow", @"A\xrightarrow{f}B"),
             ("leftright", @"\left\{\begin{array}{l}a=1\\b=2\end{array}\right."),
+            ("geometry", @"\triangle ABC\cong\triangle DEF"),
+            ("angle", @"\angle A=90^\circ"),
+            ("parallel", @"AB\parallel CD,\ AB\perp BC"),
+            ("overset", @"\overset{\frown}{AB}"),
+            ("stackrel", @"\stackrel{\text{def}}{=}"),
+            ("vmatrix", @"\begin{vmatrix}a&b\\c&d\end{vmatrix}"),
+            ("bmatrix", @"\begin{bmatrix}1&2\\3&4\end{bmatrix}"),
         };
         int ok = 0;
         total = cases.Length;
