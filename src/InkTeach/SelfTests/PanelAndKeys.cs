@@ -296,7 +296,7 @@ internal sealed partial class App
             }
             if (!ui.MoreOpenForTest)
             {
-                var m = ui.CellRectForTest(13);
+                var m = ui.CellRectForTest(14);
                 ClickPhysical((m.MinX + m.MaxX) * 0.5f * DpiScale,
                               (m.MinY + m.MaxY) * 0.5f * DpiScale);
                 SettleFrames(250);
@@ -893,7 +893,7 @@ internal sealed partial class App
             SettleFrames(250);
             Check("穿透开着时，工具格一律不高亮（免得`穿透＋笔`同时亮）",
                   ui.CellActiveForTest(1) && !ui.CellActiveForTest(3) && !ui.CellActiveForTest(4)
-                  && !ui.CellActiveForTest(6) && !ui.CellActiveForTest(9),
+                  && !ui.CellActiveForTest(6) && !ui.CellActiveForTest(10),
                   $"鼠标 = {ui.CellActiveForTest(1)}，笔 = {ui.CellActiveForTest(3)}，工具 = {Tool}");
 
             var penCellPt = ui.CellRectForTest(3);
@@ -1285,7 +1285,7 @@ internal sealed partial class App
         // ---- ⑥.4 截图那一格真的接上了（用户 2026-09-17："截图功能还没有接进来"）----
         //
         // 引擎里截图工具（Tool.Capture）和"拖框抓图"这条链路是有的（--capturetest 全绿），
-        // 面板上第 9 格也在走 SetTool(Capture)。这一条把它**钉在自检里**：
+        // 面板上第 10 格（文本插进来后顺延）也在走 SetTool(Capture)。这一条把它**钉在自检里**：
         // 点一下必须真的切到截图工具、而且那一格要亮——不然老师点了没反应，
         // 只能得出"还没接进来"这个结论（这正是用户看到的）。
         //
@@ -1295,13 +1295,13 @@ internal sealed partial class App
         {
             Host.Commands.SetTool(Tool.Pen);
             SettleFrames(150);
-            var cap = ui.CellRectForTest(9);
+            var cap = ui.CellRectForTest(10);
             ClickPhysical((cap.MinX + cap.MaxX) * 0.5f * DpiScale,
                           (cap.MinY + cap.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
             Check("点「截屏」真的切到截图工具", Tool == Tool.Capture, $"工具 = {Tool}");
-            Check("截屏那一格亮起来（点了有反馈）", ui.CellActiveForTest(9),
-                  $"截屏格高亮 = {ui.CellActiveForTest(9)}");
+            Check("截屏那一格亮起来（点了有反馈）", ui.CellActiveForTest(10),
+                  $"截屏格高亮 = {ui.CellActiveForTest(10)}");
             Check("点格子**先不进取景**（8.3.1：出模式条，屏幕还没灰）",
                   !CaptureActive, $"取景 = {CaptureActive}");
 
@@ -1499,8 +1499,8 @@ internal sealed partial class App
             Doc.ClearHistory();
             SettleFrames(250);
             Check("栈空：撤销和重做都压暗",
-                  ui.CellUnavailableForTest(11) && ui.CellUnavailableForTest(12),
-                  $"撤销压暗 = {ui.CellUnavailableForTest(11)}，重做压暗 = {ui.CellUnavailableForTest(12)}");
+                  ui.CellUnavailableForTest(12) && ui.CellUnavailableForTest(13),
+                  $"撤销压暗 = {ui.CellUnavailableForTest(12)}，重做压暗 = {ui.CellUnavailableForTest(13)}");
 
             var s1 = new Stroke
             {
@@ -1512,14 +1512,14 @@ internal sealed partial class App
             Doc.AddStroke(s1);
             SettleFrames(250);
             Check("画一笔之后：撤销亮、重做仍暗",
-                  !ui.CellUnavailableForTest(11) && ui.CellUnavailableForTest(12),
-                  $"撤销压暗 = {ui.CellUnavailableForTest(11)}，重做压暗 = {ui.CellUnavailableForTest(12)}");
+                  !ui.CellUnavailableForTest(12) && ui.CellUnavailableForTest(13),
+                  $"撤销压暗 = {ui.CellUnavailableForTest(12)}，重做压暗 = {ui.CellUnavailableForTest(13)}");
 
             Host.Commands.Undo();
             SettleFrames(250);
             Check("撤销之后：重做亮起来",
-                  ui.CellUnavailableForTest(11) && !ui.CellUnavailableForTest(12),
-                  $"撤销压暗 = {ui.CellUnavailableForTest(11)}，重做压暗 = {ui.CellUnavailableForTest(12)}");
+                  ui.CellUnavailableForTest(12) && !ui.CellUnavailableForTest(13),
+                  $"撤销压暗 = {ui.CellUnavailableForTest(12)}，重做压暗 = {ui.CellUnavailableForTest(13)}");
             Doc.Clear();
             Doc.ClearHistory();
             SettleFrames(150);
@@ -1616,7 +1616,7 @@ internal sealed partial class App
 
             // 「更多」抽屉里**不该再有**那两行——防"挪了没删"（那样两处都能改，用户会以为是两个开关）。
             // 口径和「坐标系网格」那次一样：**按标签找，找不到 = 空矩形**。
-            var moreMoved = ui.CellRectForTest(13);
+            var moreMoved = ui.CellRectForTest(14);
             ClickPhysical((moreMoved.MinX + moreMoved.MaxX) * 0.5f * DpiScale,
                           (moreMoved.MinY + moreMoved.MaxY) * 0.5f * DpiScale);
             SettleFrames(300);
@@ -1624,7 +1624,7 @@ internal sealed partial class App
                   ui.RowRectByLabelForTest("白板底纹").IsEmpty, "按标签找不到 = 已经删干净");
             Check("「更多」面板里已经没有「底纹间距」这一行",
                   ui.RowRectByLabelForTest("底纹间距").IsEmpty, "按标签找不到 = 已经删干净");
-            var moreMoved2 = ui.CellRectForTest(13);
+            var moreMoved2 = ui.CellRectForTest(14);
             ClickPhysical((moreMoved2.MinX + moreMoved2.MaxX) * 0.5f * DpiScale,
                           (moreMoved2.MinY + moreMoved2.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
@@ -2278,7 +2278,7 @@ internal sealed partial class App
         SettleFrames(150);
 
         // ---- ⑦ 「更多」面板：开合、页签、深色主题、贴边隐藏 ----
-        var moreCell = ui.CellRectForTest(13);
+        var moreCell = ui.CellRectForTest(14);
         ClickPhysical((moreCell.MinX + moreCell.MaxX) * 0.5f * DpiScale,
                       (moreCell.MinY + moreCell.MaxY) * 0.5f * DpiScale);
         SettleFrames(250);
@@ -2313,9 +2313,9 @@ internal sealed partial class App
         {
             Check("启动器：打开面板默认停在主页", ui.MorePageForTest == 0, $"页 = {ui.MorePageForTest}");
             bool tilesOk = true;
-            // 课堂 6（计时 / 点名 / 随机一人 / AI 出题 / 文本框 / 使用说明）＋ 墨迹 5（保存 / 打开 /
-            // 回放 / 关文档 / 历史板书）。收藏不再放这里。
-            for (int code = 0; code <= 10; code++)
+            // 课堂 5（计时 / 点名 / 随机一人 / AI 出题 / 使用说明；文本框已钉在主条，
+            // 这里不再重复）＋ 墨迹 5（保存 / 打开 / 回放 / 关文档 / 历史板书）。收藏不放这里。
+            for (int code = 0; code <= 9; code++)
             {
                 var t = ui.HubTileRectForTest(code);
                 if (t.IsEmpty || t.MinX < moreRect.MinX || t.MaxX > moreRect.MaxX
@@ -2327,8 +2327,11 @@ internal sealed partial class App
                 var t = ui.HubBottomRectForTest(i);
                 if (t.IsEmpty || t.MaxX > moreRect.MaxX || t.MaxY > moreRect.MaxY) bottomOk = false;
             }
-            Check("启动器：十一格（课堂 6 ＋ 墨迹 5）＋ 底栏五格都在面板内", tilesOk && bottomOk,
+            Check("启动器：十格（课堂 5 ＋ 墨迹 5）＋ 底栏五格都在面板内", tilesOk && bottomOk,
                   $"面板 {moreRect.MaxX - moreRect.MinX:F0}×{moreRect.MaxY - moreRect.MinY:F0}");
+            Check("启动器：文本框已钉在主条，更多里不再重复",
+                  ui.HubTileRectForTest(10).IsEmpty,
+                  $"文本框格 = {ui.HubTileRectForTest(10)}");
 
             // **底栏每一格都必须进命中表**（2026-10-17 紧急修：加第 5 格「退出」时，
             // `MoreHitAt` 的循环还写着 i < 4——格子在、点它等于点空白，用户真机抓到）。
@@ -2381,7 +2384,7 @@ internal sealed partial class App
 
             // 「随机一人」会把面板关掉 —— 计时器格之前先把「更多」重新打开
             {
-                var again = ui.CellRectForTest(13);
+                var again = ui.CellRectForTest(14);
                 ClickPhysical((again.MinX + again.MaxX) * 0.5f * DpiScale,
                               (again.MinY + again.MaxY) * 0.5f * DpiScale);
                 SettleFrames(250);
@@ -2418,7 +2421,7 @@ internal sealed partial class App
             // 三模式/改时长/到点/最小化/全屏那些细节在 `--timertest` 里逐条验，这里只验"启动器→窗"的真路。
 
             // 点名格 → 点名窗（待抽态）；抽奖 → 滚动 → 定格；✕ 关窗
-            var moreCellB = ui.CellRectForTest(13);
+            var moreCellB = ui.CellRectForTest(14);
             ClickPhysical((moreCellB.MinX + moreCellB.MaxX) * 0.5f * DpiScale,
                           (moreCellB.MinY + moreCellB.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
@@ -2449,7 +2452,7 @@ internal sealed partial class App
             // 命令格：空板书点「保存…」，关面板 ＋ 引擎写"没有可保存"（点置灰也写状态）
             Host.Commands.Clear();
             SettleFrames(150);
-            var moreCell3 = ui.CellRectForTest(13);
+            var moreCell3 = ui.CellRectForTest(14);
             ClickPhysical((moreCell3.MinX + moreCell3.MaxX) * 0.5f * DpiScale,
                           (moreCell3.MinY + moreCell3.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
@@ -2462,7 +2465,7 @@ internal sealed partial class App
                   $"status={Host.State.InkStatus}");
 
             // 「打开…」（2026-10-16 合并入口）：自检模式 → 关面板 + 状态行说"不弹对话框"
-            var moreCellOpen = ui.CellRectForTest(13);
+            var moreCellOpen = ui.CellRectForTest(14);
             ClickPhysical((moreCellOpen.MinX + moreCellOpen.MaxX) * 0.5f * DpiScale,
                           (moreCellOpen.MinY + moreCellOpen.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
@@ -2475,7 +2478,7 @@ internal sealed partial class App
                   $"status={Host.State.InkStatus}");
 
             // 「设置」格 → 设置子页；返回箭头回启动器
-            var moreCellD = ui.CellRectForTest(13);
+            var moreCellD = ui.CellRectForTest(14);
             ClickPhysical((moreCellD.MinX + moreCellD.MaxX) * 0.5f * DpiScale,
                           (moreCellD.MinY + moreCellD.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
@@ -2631,7 +2634,7 @@ internal sealed partial class App
         }
 
         // 关掉贴边隐藏，免得影响后面的用例（点「…」开面板 → 点行 → 点面板外关掉）
-        var moreCell2 = ui.CellRectForTest(13);
+        var moreCell2 = ui.CellRectForTest(14);
         ClickPhysical((moreCell2.MinX + moreCell2.MaxX) * 0.5f * DpiScale,
                       (moreCell2.MinY + moreCell2.MaxY) * 0.5f * DpiScale);   // 开面板
         SettleFrames(250);
@@ -2648,7 +2651,7 @@ internal sealed partial class App
         Check("关掉贴边隐藏", !ui.HideEnabledForTest, $"开关 = {ui.HideEnabledForTest}");
 
         // ---- ⑦.5 界面档位与钉住 ----
-        var moreCell4 = ui.CellRectForTest(13);
+        var moreCell4 = ui.CellRectForTest(14);
         ClickPhysical((moreCell4.MinX + moreCell4.MaxX) * 0.5f * DpiScale,
                       (moreCell4.MinY + moreCell4.MaxY) * 0.5f * DpiScale);   // 开面板
         SettleFrames(200);
@@ -2657,13 +2660,16 @@ internal sealed partial class App
                       (setTile45.MinY + setTile45.MaxY) * 0.5f * DpiScale);   // 设置子页（档位/宫格在这页）
         SettleFrames(250);
 
-        Check("完整档是 14 格", ui.VisibleCountForTest == 14, $"显示 {ui.VisibleCountForTest} 格");
-        Check("收藏排在截屏后面、撤销/重做/更多之前",
-              ui.CellRectForTest(10).MinX > ui.CellRectForTest(9).MaxX
+        Check("完整档是 15 格", ui.VisibleCountForTest == 15, $"显示 {ui.VisibleCountForTest} 格");
+        Check("文本在图形后、截屏前；收藏在截屏后、撤销/重做/更多之前",
+              ui.CellRectForTest(9).MinX > ui.CellRectForTest(8).MaxX
+              && ui.CellRectForTest(10).MinX > ui.CellRectForTest(9).MaxX
               && ui.CellRectForTest(11).MinX > ui.CellRectForTest(10).MaxX
-              && ui.CellRectForTest(13).MinX > ui.CellRectForTest(12).MaxX,
-              $"截屏 {ui.CellRectForTest(9).MinX:F0} → 收藏 {ui.CellRectForTest(10).MinX:F0} → "
-              + $"撤销 {ui.CellRectForTest(11).MinX:F0} → 更多 {ui.CellRectForTest(13).MinX:F0}");
+              && ui.CellRectForTest(12).MinX > ui.CellRectForTest(11).MaxX
+              && ui.CellRectForTest(14).MinX > ui.CellRectForTest(13).MaxX,
+              $"文本 {ui.CellRectForTest(9).MinX:F0} → 截屏 {ui.CellRectForTest(10).MinX:F0} → "
+              + $"收藏 {ui.CellRectForTest(11).MinX:F0} → 撤销 {ui.CellRectForTest(12).MinX:F0} → "
+              + $"更多 {ui.CellRectForTest(14).MinX:F0}");
         Check("完整档 = 最宽宽度档", ui.DensityForTest == 3, $"宽度档 = {ui.DensityForTest}");
         Check("完整档的笔保留全部 20 个粗细档", ui.ActiveGradeCountForTest(Tool.Pen) == 20,
               $"档数 = {ui.ActiveGradeCountForTest(Tool.Pen)}");
@@ -2720,8 +2726,8 @@ internal sealed partial class App
         Check("极简档是五格（四格 ＋ 收起格）", ui.VisibleCountForTest == 5,
               $"显示 {ui.VisibleCountForTest} 格，档位 = {ui.ProfileForTest}");
         Check("极简档不显示白板和撤销",
-              ui.CellRectForTest(2).IsEmpty && ui.CellRectForTest(11).IsEmpty,
-              $"白板格 = {ui.CellRectForTest(2).IsEmpty}，撤销格 = {ui.CellRectForTest(11).IsEmpty}");
+              ui.CellRectForTest(2).IsEmpty && ui.CellRectForTest(12).IsEmpty,
+              $"白板格 = {ui.CellRectForTest(2).IsEmpty}，撤销格 = {ui.CellRectForTest(12).IsEmpty}");
         Check("极简档是一条短胶囊", (miniBar.MaxX - miniBar.MinX) < 360f,
               $"宽 {miniBar.MaxX - miniBar.MinX:F0}（完整档是 693）");
 
@@ -2738,7 +2744,7 @@ internal sealed partial class App
         ClickPhysical((fullSeg.MinX + fullSeg.MaxX) * 0.5f * DpiScale,
                       (fullSeg.MinY + fullSeg.MaxY) * 0.5f * DpiScale);
         SettleFrames(250);
-        Check("切回完整档", ui.VisibleCountForTest == 14, $"显示 {ui.VisibleCountForTest} 格");
+        Check("切回完整档", ui.VisibleCountForTest == 15, $"显示 {ui.VisibleCountForTest} 格");
 
         // 取消钉住"图形"（下标 8）：档位自动变成自定义，主条上少一格。
         // ⚠ 宫格**只在自定义档显示**（2026-10-02 拍板），所以先切到自定义档再点宫格。
@@ -2751,7 +2757,7 @@ internal sealed partial class App
                       (chip.MinY + chip.MaxY) * 0.5f * DpiScale);
         SettleFrames(250);
         Check("取消钉住→进自定义档、主条少一格",
-              ui.ProfileForTest == 1 && !ui.PinnedForTest(8) && ui.VisibleCountForTest == 13,
+              ui.ProfileForTest == 1 && !ui.PinnedForTest(8) && ui.VisibleCountForTest == 14,
               $"档位 = {ui.ProfileForTest}，钉着 = {ui.PinnedForTest(8)}，显示 {ui.VisibleCountForTest} 格");
 
         // 画笔现在也开放：点一下应当从主条移除。
@@ -2762,10 +2768,10 @@ internal sealed partial class App
         Check("画笔开放：点一下可从自定义主条移除",
               !ui.PinnedForTest(3), $"笔钉着 = {ui.PinnedForTest(3)}");
         Check("自定义只锁鼠标和更多；画笔/橡皮/白板/后撤都可取消",
-              !ui.CanUnpinForTest(1) && !ui.CanUnpinForTest(13)
+              !ui.CanUnpinForTest(1) && !ui.CanUnpinForTest(14)
               && ui.CanUnpinForTest(2) && ui.CanUnpinForTest(3)
-              && ui.CanUnpinForTest(6) && ui.CanUnpinForTest(11),
-              "1/13 应锁定，2/3/6/11 应可取消");
+              && ui.CanUnpinForTest(6) && ui.CanUnpinForTest(12),
+              "1/14 应锁定，2/3/6/12 应可取消");
 
         // 自定义最少 3 格：球 + 鼠标 + 更多。此时色带进入 3 格档：
         // 3 个色片（含自定义）+ 紧凑粗细按钮。
@@ -2847,7 +2853,7 @@ internal sealed partial class App
             SettleFrames(150);
 
             // 恢复为全部钉住；后面的偏好落盘用例会再取消“图形”。
-            for (int c = 2; c <= 11; c++) ui.SetPinForTest(c, true);
+            for (int c = 2; c <= 13; c++) ui.SetPinForTest(c, true);
             ui.SetProfileForTest(1);
             SettleFrames(200);
         }
@@ -2857,7 +2863,7 @@ internal sealed partial class App
         ui.CloseMoreForTest();
         SettleFrames(250);
         Check("收尾：回到完整档、面板已关",
-              ui.ProfileForTest == 2 && ui.VisibleCountForTest == 14 && !ui.MoreOpenForTest,
+              ui.ProfileForTest == 2 && ui.VisibleCountForTest == 15 && !ui.MoreOpenForTest,
               $"档位 = {ui.ProfileForTest}，显示 {ui.VisibleCountForTest} 格，面板 = {ui.MoreOpenForTest}");
 
         // ---- ⑥ 收起来，然后空闲必须 0 帧 ----
@@ -2925,7 +2931,7 @@ internal sealed partial class App
             bool cover = true; string missing = "";
             void Need(bool ok, string what) { if (!ok) { cover = false; missing += what + " "; } }
 
-            for (int c = 1; c <= 12; c++)                       // 1..12 该有（0 号收起格不配）
+            for (int c = 1; c <= 14; c++)                       // 1..14 该有（0 号收起格不配）
                 Need(ui.TipContentForTest(c).Title != null, $"缺格{c}");
             Need(ui.TipContentForTest(0).Title == null, "收起格不该有");
             Need(ui.TipContentForTest(-2).Title == null, "球不该有");
@@ -2968,13 +2974,13 @@ internal sealed partial class App
             for (int i = 0; i < ui.BandSegmentCountForTest; i++)
                 Need(ui.TipContentForTest(200 + i).Title != null, $"缺图形段{i}");
             Host.Commands.SetTool(Tool.Capture);
-            ui.SelectBandCellForTest(9);
+            ui.SelectBandCellForTest(10);
             Need(ui.TipContentForTest(400).Title == null, "粘贴图片不该有");
             for (int i = 0; i < 2; i++)
                 Need(ui.TipContentForTest(200 + i).Title == null, $"截图段{i}不该有");
             Host.Commands.SetTool(Tool.Pen);
             Check("提示范围：该有的都有、该没有的都没有（收窄后的清单）", cover,
-                  cover ? "14 格 + 各格上带逐个数过" : $"不符：{missing}");
+                  cover ? "15 格 + 各格上带逐个数过" : $"不符：{missing}");
 
             // --- 触摸长按（2026-10-02 第二轮）：主流四步手势 ---
             //   短按=执行 / 按住不动 0.6 秒=出提示且松手不执行 / 按住后滑走=不弹提示。
@@ -3157,7 +3163,7 @@ internal sealed partial class App
         ClickPhysical((ballFirst.MinX + ballFirst.MaxX) * 0.5f * DpiScale,
                       (ballFirst.MinY + ballFirst.MaxY) * 0.5f * DpiScale);
         SettleFrames(300);
-        var moreCell6 = ui.CellRectForTest(13);
+        var moreCell6 = ui.CellRectForTest(14);
         ClickPhysical((moreCell6.MinX + moreCell6.MaxX) * 0.5f * DpiScale,
                       (moreCell6.MinY + moreCell6.MaxY) * 0.5f * DpiScale);       // 开面板
         SettleFrames(200);
@@ -3315,7 +3321,8 @@ internal sealed partial class App
               ui != null && ui.DarkForTest && ui.ProfileForTest == 1 && !ui.PinnedForTest(8),
               $"深色={ui?.DarkForTest}，档位={ui?.ProfileForTest}（1=自定义），图形钉着={ui?.PinnedForTest(8)}");
 
-        // 重排迁移：v2 里的 `10` 是「撤销」，v3 里撤销在 11；不能把"取消钉住"挪到收藏(10)上。
+        // 重排/新增迁移：v2 里的 `10` 是「撤销」，v4 里撤销在 12；不能把"取消钉住"
+        // 挪到收藏(11)上。v4 新增的文本(9)按硬规则不塞进老用户主条。
         // 同时验落盘已改成稳定 key（以后再加图标/再排序都不会串格）。
         SetUiPref("cellsVersion", "2");
         SetUiPref("unpinned", "8,10");
@@ -3324,13 +3331,14 @@ internal sealed partial class App
         SetUiFactory(() => new InkUi.FullUi());
         SettleFrames(300);
         ui = CurrentUi as InkUi.FullUi;
-        Check("老配置的 unpinned 按稳定 key 迁移（v2 的 10=撤销 → 11）",
-              ui != null && !ui.PinnedForTest(8) && !ui.PinnedForTest(11)
-              && ui.PinnedForTest(10) && ui.PinnedForTest(13),
-              $"图形={ui?.PinnedForTest(8)} 撤销={ui?.PinnedForTest(11)} "
-              + $"收藏={ui?.PinnedForTest(10)} 更多={ui?.PinnedForTest(13)}");
-        Check("迁移后落盘用稳定 key（shapes,undo）",
-              GetUiPref("unpinned") == "shapes,undo" && GetUiPref("cellsVersion") == "3",
+        Check("老配置的 unpinned 按稳定 key 迁移（v2 的 10=撤销 → 12）",
+              ui != null && !ui.PinnedForTest(8) && !ui.PinnedForTest(12)
+              && !ui.PinnedForTest(9) && ui.PinnedForTest(11) && ui.PinnedForTest(14),
+              $"图形={ui?.PinnedForTest(8)} 撤销={ui?.PinnedForTest(12)} "
+              + $"文本={ui?.PinnedForTest(9)} 收藏={ui?.PinnedForTest(11)} "
+              + $"更多={ui?.PinnedForTest(14)}");
+        Check("迁移后落盘用稳定 key（shapes,text,undo）",
+              GetUiPref("unpinned") == "shapes,text,undo" && GetUiPref("cellsVersion") == "4",
               $"unpinned={GetUiPref("unpinned")}，cellsVersion={GetUiPref("cellsVersion")}");
         Check("压感偏好也读回来了（重启后仍是关）",
               !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
@@ -3506,11 +3514,46 @@ internal sealed partial class App
             SettleFrames(120);
         }
 
-        // ---- 普通文本框入口：更多 → 文本框 → 插入并进入编辑 ----
+        // ---- 普通文本框入口：主栏直达；未钉住时「更多」兜底，且不重复 ----
         {
+            // 前面的迁移用例把界面留在了「自定义、text 未钉」，这里先恢复成完整档再验主栏。
+            ui.SetPinForTest(9, true);
+            ui.SetProfileForTest(2);
+            SettleFrames(150);
+            var textCell = ui.CellRectForTest(9);
+            Check("主栏有「文本」格（已钉住）",
+                  !textCell.IsEmpty && ui.PinnedForTest(9)
+                  && ui.CellIconForTest(9) == "text",
+                  $"格 ({textCell.MinX:F0},{textCell.MinY:F0})-({textCell.MaxX:F0},{textCell.MaxY:F0})，"
+                  + $"图标 = {ui.CellIconForTest(9)}");
+            Check("主栏可见时「更多」不重复文本框",
+                  ui.HubTileRectForTest(10).IsEmpty,
+                  $"文本框格 = {ui.HubTileRectForTest(10)}");
+            ClickPhysical((textCell.MinX + textCell.MaxX) * 0.5f * DpiScale,
+                          (textCell.MinY + textCell.MaxY) * 0.5f * DpiScale);
+            SettleFrames(250);
+            Check("主栏「文本」：插入一个普通文本框并进入编辑",
+                  TextBoxEditing && TextBoxCountForTest == 1,
+                  $"editing={TextBoxEditing} 文本框={TextBoxCountForTest}");
+            Check("插入后切回选择，文本格不高亮（动作不是模式）",
+                  Tool == Tool.Marquee && !ui.CellActiveForTest(9),
+                  $"工具 = {Tool}，文本格高亮 = {ui.CellActiveForTest(9)}");
+            EndTextBoxEditFromUi(true);
+            Doc.Clear();
+            Doc.ClearHistory();
+            SettleFrames(120);
+
+            // 未钉住（老用户迁移后的状态）：主栏没有，更多里必须有。
+            ui.SetProfileForTest(1);
+            ui.SetPinForTest(9, false);
+            SettleFrames(150);
+            Check("未钉住时主栏没有「文本」格", ui.CellRectForTest(9).IsEmpty,
+                  $"格 = {ui.CellRectForTest(9)}");
             ui.OpenMoreForTest();
             SettleFrames(250);
             var tbTile = ui.HubTileRectForTest(10);
+            Check("未钉住时「更多」保留文本框入口", !tbTile.IsEmpty,
+                  $"格 ({tbTile.MinX:F0},{tbTile.MinY:F0})-({tbTile.MaxX:F0},{tbTile.MaxY:F0})");
             ClickPhysical((tbTile.MinX + tbTile.MaxX) * 0.5f * DpiScale,
                           (tbTile.MinY + tbTile.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
@@ -3518,10 +3561,13 @@ internal sealed partial class App
                   TextBoxEditing && TextBoxCountForTest == 1,
                   $"editing={TextBoxEditing} 文本框={TextBoxCountForTest}");
             EndTextBoxEditFromUi(true);
-            SettleFrames(150);
             Doc.Clear();
             Doc.ClearHistory();
             SettleFrames(120);
+            ui.CloseMoreForTest();
+            ui.SetPinForTest(9, true);
+            ui.SetProfileForTest(2);
+            SettleFrames(150);
         }
 
         Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
@@ -4849,6 +4895,9 @@ internal sealed partial class App
               $"重建次数 {uiBuilt - 1}，当前界面 = {CurrentUi.Name}");
 
         // ② 重建之后继续崩（重建额度用完）→ 重启软件，且重启前把板书存下来
+        // 会话暂存只写**白板槽**（2026-10-16 用户定：桌面批注不落盘），
+        // 这条用例必须把要留住的板书放在白板页，否则测的是相反的口径。
+        Doc.SwitchPage(InkDocument.BoardPageKey);
         Doc.Clear();
         Doc.ClearHistory();
         var keep = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 6f };

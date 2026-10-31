@@ -311,7 +311,7 @@ internal sealed partial class App
 
         // ---- B. 从主条「收藏」格打开面板（更多里不再放重复入口）----
         {
-            var cell = ui.CellRectForTest(10);
+            var cell = ui.CellRectForTest(11);
             Check("B：主条有收藏格", !cell.IsEmpty,
                   $"格 ({cell.MinX:F0},{cell.MinY:F0})-({cell.MaxX:F0},{cell.MaxY:F0})");
             if (!cell.IsEmpty) ClickUi(cell);
@@ -729,10 +729,10 @@ internal sealed partial class App
         {
             CloseLibraryPanel();
             ui.SetProfileForTest(1);                 // 自定义
-            ui.SetPinForTest(10, false);             // 收藏不钉
+            ui.SetPinForTest(11, false);             // 收藏不钉
             SettleFrames(150);
             Check("H：自定义未钉收藏时，主条没有收藏格",
-                  ui.CellRectForTest(10).IsEmpty, "收藏格应为空");
+                  ui.CellRectForTest(11).IsEmpty, "收藏格应为空");
 
             ui.OpenMoreForTest();
             SettleFrames(150);

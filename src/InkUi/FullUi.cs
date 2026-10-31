@@ -76,7 +76,7 @@ public sealed partial class FullUi : IOverlayUi
     // 三档（用户定的默认是"完整档"）：
     //   · 极简 = 一条**短胶囊**，固定五格（球 + 鼠标 + 画笔 + 橡皮 + 更多）；
     //   · 自定义 = 老师自己钉的那份集合（默认＝全部；最少可到球 + 鼠标 + 更多）；
-    //   · 完整 = 全部十四格。
+    //   · 完整 = 全部十五格。
     // 规则一条：**极简与自定义都必须是完整档顺序的子序列**——同一个工具在哪一档里
     // 都在同一个相对位置，来回切档不用重新找。
 
@@ -147,7 +147,7 @@ public sealed partial class FullUi : IOverlayUi
     ///   4～7 格          = 4 色、5 档笔/3 档橡皮；4 格用粗细按钮，5～7 格用滑条；
     ///   8～9 格          = 6 色、7 档粗细、方形虚线；
     ///   10～11 格        = 8 色、10 档粗细、方形虚线；
-    ///   12～14 格（完整）= 全部 8 色、全部粗细档、长方形虚线、完整标签。
+    ///   12～15 格（完整）= 全部 8 色、全部粗细档、长方形虚线、完整标签。
     ///
     /// 色片**按可用宽度铺满**；低于约 28px 时先减色片，不继续缩。
     ///
@@ -1420,7 +1420,7 @@ public sealed partial class FullUi : IOverlayUi
     /// </summary>
     private int BandSegmentCount => _bandCell switch
     {
-        2 => BoardBand.Length, 6 => 2, 7 => 2, 8 => ShapeSegmentCount, 9 => 2, _ => 0,
+        2 => BoardBand.Length, 6 => 2, 7 => 2, 8 => ShapeSegmentCount, 10 => 2, _ => 0,
     };
 
     /// <summary>
@@ -1743,7 +1743,7 @@ public sealed partial class FullUi : IOverlayUi
         2 => BandAction.CloseBoard,   // 白板那条：最右端一个"关闭白板"
         6 => BandAction.Clear,        // 清空 ≈ "全擦掉"，和两种橡皮排一条
         7 => BandAction.SelectAll,    // 全选 ≈ "把要操作的东西一次选上"，归选择这条
-        9 => BandAction.PasteImage,   // 截图那条：把剪贴板里的东西粘进来（8.3.0 从分段里拆出来）
+        10 => BandAction.PasteImage,  // 截图那条：把剪贴板里的东西粘进来（8.3.0 从分段里拆出来）
         _ => BandAction.None,
     };
     // 橡皮的“清空”始终在：极简 5 格也必须有（2026-10-25 用户定）。
@@ -6242,8 +6242,8 @@ public sealed partial class FullUi : IOverlayUi
         7 => i == 0 ? "矩形" : "套索",
         // 截图：名字照微信那套（8.3.1）——"截图" = 屏幕原样（连我们的板书一起），
         // "隐藏窗口截图" = 先把我们这层藏起来，拍到的只有下层内容。
-        9 => i == 0 ? "截图"
-                    : (Density <= BandDensity.Compact ? "隐窗截图" : "隐藏窗口截图"),
+        10 => i == 0 ? "截图"
+                     : (Density <= BandDensity.Compact ? "隐窗截图" : "隐藏窗口截图"),
         8 => "",                                   // 图形：画图标（见 ShapeIcon）
         _ => "",
     };
@@ -6254,7 +6254,7 @@ public sealed partial class FullUi : IOverlayUi
         6 => i == 0 ? st.Tool == Tool.PixelEraser : st.Tool == Tool.Eraser,
         7 => i == 0 ? st.SelectMode == SelectMode.Rect : st.SelectMode == SelectMode.Lasso,
         8 => i >= 0 && i < ShapeSegmentCount && st.Tool == ShapeToolAt(i),
-        9 => i == (st.CaptureHideInk ? 1 : 0),     // 截图：当前是哪一种截法就高亮哪一段
+        10 => i == (st.CaptureHideInk ? 1 : 0),    // 截图：当前是哪一种截法就高亮哪一段
         _ => false,
     };
 
@@ -6674,11 +6674,12 @@ public sealed partial class FullUi : IOverlayUi
                 6 => (c.Tip, Key(KeyAction.ToolEraser), "再按切「面积擦 / 整笔擦」"),
                 7 => (c.Tip, Key(KeyAction.ToolMarquee), "再按切「矩形 / 套索」，双击 = 全选"),
                 8 => (c.Tip, "", "22 种图形都在上带里挑"),
-                9 => (c.Tip, Key(KeyAction.ToolCapture), ""),
-                10 => (c.Tip, "", "打开收藏；选中内容后可存进来"),
-                11 => (c.Tip, Key(KeyAction.Undo), ""),
-                12 => (c.Tip, Key(KeyAction.Redo), ""),
-                13 => (c.Tip, "", UpdateAvailable ? "有新版本，点开去「检查更新」" : "课堂工具、墨迹、设置都在这儿"),
+                9 => (c.Tip, "", "插入一行高的文本框，直接开始输入"),
+                10 => (c.Tip, Key(KeyAction.ToolCapture), ""),
+                11 => (c.Tip, "", "打开收藏；选中内容后可存进来"),
+                12 => (c.Tip, Key(KeyAction.Undo), ""),
+                13 => (c.Tip, Key(KeyAction.Redo), ""),
+                14 => (c.Tip, "", UpdateAvailable ? "有新版本，点开去「检查更新」" : "课堂工具、墨迹、设置都在这儿"),
                 _ => default,
             };
         }
