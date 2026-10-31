@@ -15,6 +15,7 @@ public partial class InkEngine
     private IntPtr _textBoxEditHost;
     private static Native.WndProcDelegate _textBoxEditHostProc;
     private static uint _textBoxEditTextColor;
+    private static bool _textBoxEditLightText;
     private static IntPtr _msftedit;
     private static bool _richEditReady;
     private Native.WndProcDelegate _textBoxEditWndProc;
@@ -125,6 +126,7 @@ public partial class InkEngine
         _textBoxEditTextColor = ((uint)(s.Color.R * 255f) & 0xFF)
                               | (((uint)(s.Color.G * 255f) & 0xFF) << 8)
                               | (((uint)(s.Color.B * 255f) & 0xFF) << 16);
+        _textBoxEditLightText = 0.299f * s.Color.R + 0.587f * s.Color.G + 0.114f * s.Color.B > 0.65f;
         var font = EnsureTextBoxEditFont(s.TextBox.FontSize * s.TextBox.Unit);
         Native.SendMessage(_textBoxEditHwnd, Native.WM_SETFONT, font, new IntPtr(1));
         ApplyRichEditFormat(s);
@@ -301,13 +303,14 @@ public partial class InkEngine
             case Native.WM_ERASEBKGND:
             {
                 Native.GetClientRect(hWnd, out var rc);
-                Native.FillRect(wParam, ref rc, Native.GetStockObject(0 /* WHITE_BRUSH */));
+                Native.FillRect(wParam, ref rc,
+                    Native.GetStockObject(_textBoxEditLightText ? 2 /* GRAY_BRUSH */ : 0 /* WHITE_BRUSH */));
                 return new IntPtr(1);
             }
             case Native.WM_CTLCOLOREDIT:
-                Native.SetBkColor(wParam, 0x00FFFFFF);
+                Native.SetBkColor(wParam, _textBoxEditLightText ? 0x00808080u : 0x00FFFFFFu);
                 Native.SetTextColor(wParam, _textBoxEditTextColor);
-                return Native.GetStockObject(0 /* WHITE_BRUSH */);
+                return Native.GetStockObject(_textBoxEditLightText ? 2 /* GRAY_BRUSH */ : 0 /* WHITE_BRUSH */);
         }
         return Native.DefWindowProc(hWnd, msg, wParam, lParam);
     }
@@ -320,7 +323,8 @@ public partial class InkEngine
             {
                 // 顶层 EDIT 默认不刷底色，会透出下面的 PPT/浏览器；编辑时铺白底。
                 Native.GetClientRect(hWnd, out var rc);
-                Native.FillRect(wParam, ref rc, Native.GetStockObject(0 /* WHITE_BRUSH */));
+                Native.FillRect(wParam, ref rc,
+                    Native.GetStockObject(_textBoxEditLightText ? 2 /* GRAY_BRUSH */ : 0 /* WHITE_BRUSH */));
                 return new IntPtr(1);
             }
             case Native.WM_KEYDOWN:
@@ -331,6 +335,9 @@ public partial class InkEngine
                 if (vk == 0x1B) { EndTextBoxEditFromUi(false); return IntPtr.Zero; }
                 break;
             }
+            case 0x0302 /* WM_PASTE */:
+                if (PastePlainText(hWnd)) return IntPtr.Zero;
+                break;
             case Native.WM_KILLFOCUS:
                 if (_textBoxEditing) EndTextBoxEditFromUi(true);
                 return IntPtr.Zero;
@@ -338,6 +345,36 @@ public partial class InkEngine
                 return new IntPtr(Native.DLGC_WANTALLKEYS);
         }
         return Native.CallWindowProc(_textBoxEditOldProc, hWnd, msg, wParam, lParam);
+    }
+
+    private static bool PastePlainText(IntPtr hWnd)
+    {
+        if (!Native.OpenClipboard(hWnd)) return false;
+        try
+        {
+            IntPtr h = Native.GetClipboardData(Native.CF_UNICODETEXT);
+            if (h == IntPtr.Zero) return false;
+            IntPtr p = Native.GlobalLock(h);
+            if (p == IntPtr.Zero) return false;
+            string text;
+            try
+            {
+                text = System.Runtime.InteropServices.Marshal.PtrToStringUni(p) ?? "";
+            }
+            finally
+            {
+                Native.GlobalUnlock(h);
+            }
+            if (text.Length == 0) return true;
+            // 只取纯文本：避免从浏览器/Word 粘进来改掉字体和行距。
+            Native.SendMessageString(hWnd, Native.EM_REPLACESEL, new IntPtr(1), text);
+            Native.InvalidateRect(hWnd, IntPtr.Zero, true);
+            return true;
+        }
+        finally
+        {
+            Native.CloseClipboard();
+        }
     }
 
     private void ApplyRichEditFormat(Stroke s)
@@ -348,7 +385,7 @@ public partial class InkEngine
         int fontTwips = Math.Max(80, (int)MathF.Round(fontPx * 15f / dpi));
 
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETBKGNDCOLOR,
-                           IntPtr.Zero, new IntPtr(0x00FFFFFF));
+                           IntPtr.Zero, new IntPtr(_textBoxEditLightText ? 0x00808080 : 0x00FFFFFF));
 
         var cf = new Native.CHARFORMAT2W
         {

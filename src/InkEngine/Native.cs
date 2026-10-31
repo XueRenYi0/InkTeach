@@ -16,6 +16,7 @@ internal static class Native
     public const int EM_SETCHARFORMAT = 0x0444;
     public const int EM_SETPARAFORMAT = 0x0447;
     public const int EM_SETBKGNDCOLOR = 0x0443;
+    public const int EM_REPLACESEL = 0x00C2;
     public const int SCF_ALL = 4;
     public const uint CFM_BOLD = 0x00000001;
     public const uint CFM_ITALIC = 0x00000002;
@@ -801,6 +802,9 @@ internal static class Native
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     public static extern IntPtr LoadLibraryW(string fileName);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageW")]
+    public static extern IntPtr SendMessageString(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
 
     // ---- 线程消息（PPT 轮询线程 → 主线程的唤醒）---------------------------
     //
