@@ -5553,6 +5553,7 @@ internal sealed partial class App : InkEngine.InkEngine
         // 先做一次真实的"改宽 → 长高 → 重登记索引"，再删。
         if (editTarget?.TextBox != null)
         {
+            float hBeforeWidth = editTarget.TextBox.Height;
             var oldB = editTarget.PaddedBounds;
             editTarget.TextBox.Width *= 0.85f;
             editTarget.TextBox.InvalidateLayout();
@@ -5563,6 +5564,28 @@ internal sealed partial class App : InkEngine.InkEngine
             Doc.StructureChangedSinceRender = true;
             Doc.Version++;
             SettleFrames(150);
+            bool manualKept = !editTarget.TextBox.AutoHeight
+                              && MathF.Abs(editTarget.TextBox.Height - hBeforeWidth) < 1f;
+            Console.WriteLine(manualKept
+                ? $"改宽后保持手动高度：{hBeforeWidth:0} → {editTarget.TextBox.Height:0}"
+                : $"改宽后高度跳变：{hBeforeWidth:0} → {editTarget.TextBox.Height:0} auto={editTarget.TextBox.AutoHeight}");
+        }
+        // 改窄后拖下边：高度应跟指针平滑变化，不能跳回"自动全高"
+        if (editTarget?.TextBox != null)
+        {
+            var frameW = SelectionHandles.FrameOf(Doc.Selected);
+            var bh = SelectionHandles.CanvasPosition(SelHandle.Bottom, frameW, UiUnit);
+            float hPreDrag = editTarget.TextBox.Height;
+            SelectionGestureForTest(bh.X, bh.Y);
+            UpdateSelectionGestureForTest(bh.X, bh.Y - 90f);
+            EndSelectionGestureForTest();
+            SettleFrames(150);
+            float hPostDrag = editTarget.TextBox.Height;
+            bool smooth = !editTarget.TextBox.AutoHeight
+                          && hPostDrag < hPreDrag - 20f && hPostDrag > hPreDrag - 180f;
+            Console.WriteLine(smooth
+                ? $"手动拖下边平滑：{hPreDrag:0} → {hPostDrag:0}"
+                : $"手动拖下边异常：{hPreDrag:0} → {hPostDrag:0} auto={editTarget.TextBox.AutoHeight}");
         }
         var victim = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
         var vb = victim?.PaddedBounds ?? default;

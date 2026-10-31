@@ -636,6 +636,9 @@ internal static class InkSerializer
             c.InvalidateLayout();
             _ = c.EnsureLayout();
             s.SyncTextBoxBounds();
+            // 老文件里普通文本框可能还是 AutoHeight；读进来按"已自适应过一次"处理，
+            // 之后由用户拖动，避免一改宽就自己长高。
+            if (c.Role == TextBoxRole.Normal) c.AutoHeight = false;
         }
 
         // ---- v13：抛物线的第二个点**换了含义**，老文件要迁移一次 ----

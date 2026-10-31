@@ -11,6 +11,7 @@ internal static class Native
     public const int WM_CLOSE = 0x0010;
     public const int WM_ERASEBKGND = 0x0014;
     public const int WM_CTLCOLOREDIT = 0x0133;
+    public const int EM_SETRECT = 0x00B3;
     public const int WM_SETCURSOR = 0x0020;
     public const int WM_MOUSEACTIVATE = 0x0021;
     public const int WM_DISPLAYCHANGE = 0x007E;
@@ -720,6 +721,9 @@ internal static class Native
     /// <summary>同步发一条窗口消息（第二个实例叫醒已有实例用，确保不会因为队列忙而丢）。</summary>
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageW")]
+    public static extern IntPtr SendMessageRect(IntPtr hWnd, uint msg, IntPtr wParam, ref RECT lParam);
 
     // ---- 线程消息（PPT 轮询线程 → 主线程的唤醒）---------------------------
     //

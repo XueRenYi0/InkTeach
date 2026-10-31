@@ -73,6 +73,9 @@ public partial class InkEngine
         s.SetTextBoxRect(new Vector2(x, y), w, data.Height);
         ClampTextBoxIntoView(s);
         Doc.AddStroke(s);
+        // 第一次按内容自适应；已经有文字（自检/粘贴入口）就这一下算完，
+        // 之后宽高由用户拖，不再"一改宽就自己长高"。
+        if (!string.IsNullOrWhiteSpace(text)) data.AutoHeight = false;
         return s;
     }
 
@@ -101,10 +104,6 @@ public partial class InkEngine
                               | (((uint)(s.Color.R * 255f) & 0xFF) << 16);
         var font = EnsureTextBoxEditFont(s.TextBox.FontSize * s.TextBox.Unit);
         Native.SendMessage(_textBoxEditHwnd, Native.WM_SETFONT, font, new IntPtr(1));
-        int margin = Math.Max(1, (int)MathF.Round(2f * s.TextBox.Unit));
-        Native.SendMessage(_textBoxEditHwnd, Native.EM_SETMARGINS,
-                           new IntPtr(Native.EC_LEFTMARGIN | Native.EC_RIGHTMARGIN),
-                           new IntPtr(margin | (margin << 16)));
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETLIMITTEXT, new IntPtr(20000), IntPtr.Zero);
         // 光标放末尾，**不要全选**：双击已经存在的文本框后随手打字，
         // 全选会让第一个字把整段内容替换掉（老师最怕的误操作）。
@@ -114,29 +113,25 @@ public partial class InkEngine
         var b = s.PaddedBounds;
         float unit = MathF.Max(0.5f, s.TextBox.Unit);
         float pad = 18f * unit;
-        // 编辑窗按**内容区**摆：留出和渲染一致的 18 逻辑像素内边距；
-        // 高度至少 320 逻辑像素，粘长文不用在一个 120 高的小框里滚。
-        float editH = MathF.Max(s.TextBox.Height, 320f * unit);
-        var screen = ScreenRectPhysical();
-        editH = MathF.Min(editH, (screen.MaxY - screen.MinY) * 0.65f);
-        int x = (int)MathF.Round(b.MinX + 2f + pad);
-        int y = (int)MathF.Round(b.MinY + 2f + pad + ViewOffsetY);
-        int w = Math.Max(80, (int)MathF.Round(b.MaxX - b.MinX - 4f - pad * 2f));
-        int h = Math.Max(40, (int)MathF.Round(editH - pad * 2f));
-        int maxBottom = (int)MathF.Round(screen.MaxY - 16f * unit);
-        if (y + h > maxBottom)
-        {
-            // 框贴着屏幕底：编辑窗优先翻到框上方；再不行才压缩高度。
-            int above = (int)MathF.Round(b.MinY - h - 8f * unit);
-            int top = (int)MathF.Round(screen.MinY + 16f * unit);
-            if (above >= top) y = above;
-            else y = Math.Max(top, maxBottom - h);
-        }
-        if (y + h > maxBottom) h = Math.Max(40, maxBottom - y);
+        // 白底 = **蓝框里的卡片本身**：宿主按卡片矩形，EDIT 子窗铺满宿主，
+        // 再用 EM_SETRECT 把文字缩进 18 逻辑像素——白底和蓝框严格同尺寸。
+        int x = (int)MathF.Round(b.MinX + 2f);
+        int y = (int)MathF.Round(b.MinY + 2f + ViewOffsetY);
+        int w = Math.Max(80, (int)MathF.Round(b.MaxX - b.MinX - 4f));
+        int h = Math.Max(40, (int)MathF.Round(b.MaxY - b.MinY - 4f));
         Native.SetWindowPos(_textBoxEditHost, Native.HWND_TOPMOST, x, y, w, h,
                             Native.SWP_SHOWWINDOW);
         Native.SetWindowPos(_textBoxEditHwnd, IntPtr.Zero, 0, 0, w, h,
                             Native.SWP_SHOWWINDOW);
+        var textRect = new Native.RECT
+        {
+            Left = (int)MathF.Round(pad),
+            Top = (int)MathF.Round(pad),
+            Right = Math.Max((int)MathF.Round(pad) + 40, w - (int)MathF.Round(pad) - (int)MathF.Round(18f * unit)),
+            Bottom = Math.Max((int)MathF.Round(pad) + 20, h - (int)MathF.Round(pad)),
+        };
+        Native.SendMessageRect(_textBoxEditHwnd, Native.EM_SETRECT, IntPtr.Zero, ref textRect);
+        Native.InvalidateRect(_textBoxEditHwnd, IntPtr.Zero, true);
         FocusTextBoxEditWindow();
         _dirty = true;
         NotifyUiStateChanged();
@@ -171,6 +166,8 @@ public partial class InkEngine
             s.SyncTextBoxBounds();
             ClampTextBoxIntoView(s);
             Doc.RefreshStrokeGrid(s);
+            // 第一次编辑/粘贴 = 最后一次自适应；之后一律手动拖宽高。
+            if (accept && s.TextBox.Role == TextBoxRole.Normal) s.TextBox.AutoHeight = false;
             Doc.Dirty.Add(oldBounds);
             Doc.Dirty.Add(s.PaddedBounds);
             Doc.StructureChangedSinceRender = true;
