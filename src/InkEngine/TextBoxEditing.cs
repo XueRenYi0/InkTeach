@@ -174,7 +174,11 @@ public partial class InkEngine
         if (s != null && s.TextBox != null)
         {
             var oldBounds = s.PaddedBounds;
-            float oldW = s.TextBox.Width;
+            float oldW = s.TextBox.Width, oldH = s.TextBox.Height;
+            bool oldAuto = s.TextBox.AutoHeight;
+            var oldOrigin = s.Points.Count > 0
+                ? new Vector2(s.Points[0].X, s.Points[0].Y) : Vector2.Zero;
+            var oldXf = s.Transform;
             s.TextBox.Text = text;
             s.TextBox.InvalidateLayout();
             // 第一次收编辑 = 最后一次自适应：宽按文本自然宽、高按内容；
@@ -202,7 +206,15 @@ public partial class InkEngine
             Doc.StructureChangedSinceRender = true;
             Doc.Version++;
             if (!string.Equals(before, text, StringComparison.Ordinal))
-                Doc.CommitInteractive(new TextBoxTextAction(s, before, text, oldBounds, s.PaddedBounds));
+            {
+                var newOrigin = s.Points.Count > 0
+                    ? new Vector2(s.Points[0].X, s.Points[0].Y) : Vector2.Zero;
+                Doc.CommitInteractive(new TextBoxTextAction(
+                    s, before, text, oldBounds, s.PaddedBounds,
+                    oldW, oldH, oldAuto, oldOrigin, oldXf,
+                    s.TextBox.Width, s.TextBox.Height, s.TextBox.AutoHeight,
+                    newOrigin, s.Transform));
+            }
         }
         _dirty = true;
         NotifyUiStateChanged();
@@ -373,31 +385,51 @@ internal sealed class TextBoxTextAction : EditAction
     private readonly Stroke _stroke;
     private readonly string _before, _after;
     private readonly RectF _beforeBounds, _afterBounds;
+    private readonly float _beforeW, _beforeH, _afterW, _afterH;
+    private readonly bool _beforeAuto, _afterAuto;
+    private readonly Vector2 _beforeOrigin, _afterOrigin;
+    private readonly Matrix3x2 _beforeXf, _afterXf;
 
     public TextBoxTextAction(Stroke s, string before, string after,
-                             RectF beforeBounds, RectF afterBounds)
+                             RectF beforeBounds, RectF afterBounds,
+                             float beforeW, float beforeH, bool beforeAuto,
+                             Vector2 beforeOrigin, Matrix3x2 beforeXf,
+                             float afterW, float afterH, bool afterAuto,
+                             Vector2 afterOrigin, Matrix3x2 afterXf)
     {
         _stroke = s;
         _before = before;
         _after = after;
         _beforeBounds = beforeBounds;
         _afterBounds = afterBounds;
+        _beforeW = beforeW; _beforeH = beforeH; _beforeAuto = beforeAuto;
+        _beforeOrigin = beforeOrigin; _beforeXf = beforeXf;
+        _afterW = afterW; _afterH = afterH; _afterAuto = afterAuto;
+        _afterOrigin = afterOrigin; _afterXf = afterXf;
     }
 
     public override int HeldStrokes => 1;
     public override RectF AffectedBefore => _beforeBounds;
     public override RectF AffectedAfter => _afterBounds;
 
-    public override void Undo(InkDocument doc) => Apply(doc, _before);
-    public override void Redo(InkDocument doc) => Apply(doc, _after);
+    public override void Undo(InkDocument doc)
+        => Apply(doc, _before, _beforeW, _beforeH, _beforeAuto, _beforeOrigin, _beforeXf);
+    public override void Redo(InkDocument doc)
+        => Apply(doc, _after, _afterW, _afterH, _afterAuto, _afterOrigin, _afterXf);
 
-    private void Apply(InkDocument doc, string text)
+    private void Apply(InkDocument doc, string text, float w, float h, bool auto,
+                       Vector2 origin, Matrix3x2 xf)
     {
         var box = _stroke.TextBox;
         if (box == null) return;
         var old = _stroke.PaddedBounds;
         box.Text = text;
+        box.Width = MathF.Max(1f, w);
+        box.Height = MathF.Max(1f, h);
+        box.AutoHeight = auto;
         box.InvalidateLayout();
+        _stroke.Transform = xf;
+        _stroke.SetTextBoxRect(origin, box.Width, box.Height);
         _stroke.SyncTextBoxBounds();
         doc.RefreshStrokeGrid(_stroke);
         doc.Dirty.Add(old);

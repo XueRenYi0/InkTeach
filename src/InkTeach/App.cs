@@ -5653,6 +5653,39 @@ internal sealed partial class App : InkEngine.InkEngine
         bool editDelOk = !TextBoxEditing && Doc.Strokes.Count == 0 && Doc.Selected.Count == 0;
         Console.WriteLine(editDelOk ? "编辑中删除通过" : $"编辑中删除失败：editing={TextBoxEditing} strokes={Doc.Strokes.Count}");
 
+        // 第一次粘贴的尺寸也要能随文字一起撤销/重做
+        Doc.Clear();
+        Doc.ClearHistory();
+        InsertPlainTextBoxForTest("");
+        var st3 = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+        if (st3 != null)
+        {
+            float emptyW = st3.TextBox.Width, emptyH = st3.TextBox.Height;
+            var emptyPos = new Vector2(st3.Points[0].X, st3.Points[0].Y);
+            BeginTextBoxEdit(st3);
+            SetTextBoxEditTextForTest("短文本");
+            EndTextBoxEditFromUi(true);
+            SettleFrames(150);
+            float fitW = st3.TextBox.Width, fitH = st3.TextBox.Height;
+            var fitPos = new Vector2(st3.Points[0].X, st3.Points[0].Y);
+            Doc.Undo();
+            SettleFrames(100);
+            bool undoOk2 = st3.TextBox.Text.Length == 0
+                           && MathF.Abs(st3.TextBox.Width - emptyW) < 1f
+                           && MathF.Abs(st3.TextBox.Height - emptyH) < 1f
+                           && st3.TextBox.AutoHeight
+                           && Vector2.Distance(emptyPos, new Vector2(st3.Points[0].X, st3.Points[0].Y)) < 1f;
+            Doc.Redo();
+            SettleFrames(100);
+            bool redoOk2 = st3.TextBox.Text == "短文本"
+                           && MathF.Abs(st3.TextBox.Width - fitW) < 1f
+                           && MathF.Abs(st3.TextBox.Height - fitH) < 1f
+                           && !st3.TextBox.AutoHeight;
+            Console.WriteLine(undoOk2 && redoOk2
+                ? $"首贴尺寸撤销/重做通过：{emptyW:0}×{emptyH:0} ↔ {fitW:0}×{fitH:0}"
+                : $"首贴尺寸撤销/重做失败：undo={undoOk2} redo={redoOk2} 当前 {st3.TextBox.Width:0}×{st3.TextBox.Height:0} auto={st3.TextBox.AutoHeight}");
+        }
+
         Console.WriteLine(ok1 && ok2 && ok3 && oks && ok4 && ok5 && ok6
             ? $"出图：{p1} / {p2} / {ps} / {p3} / {p4} / {p5} / {p6}"
             : "抓屏失败（看上一行）");
