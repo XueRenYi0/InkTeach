@@ -15,6 +15,8 @@ public partial class InkEngine
     private IntPtr _textBoxEditHost;
     private static Native.WndProcDelegate _textBoxEditHostProc;
     private static uint _textBoxEditTextColor;
+    private static IntPtr _msftedit;
+    private static bool _richEditReady;
     private Native.WndProcDelegate _textBoxEditWndProc;
     private IntPtr _textBoxEditOldProc;
     private bool _textBoxEditHadNoActivate;
@@ -111,12 +113,21 @@ public partial class InkEngine
 
         _textBoxEditStroke = s;
         _textBoxEditing = true;
+        // 原生编辑窗总是从顶部显示：把内容也回到顶部，编辑和显示同一位置。
+        if (s.TextBox.ScrollY > 0.5f)
+        {
+            s.TextBox.ScrollY = 0f;
+            Doc.Dirty.Add(s.PaddedBounds);
+            Doc.StructureChangedSinceRender = true;
+            Doc.Version++;
+        }
         Native.SetWindowTextW(_textBoxEditHwnd, s.TextBox.Text ?? "");
-        _textBoxEditTextColor = ((uint)(s.Color.B * 255f) & 0xFF)
+        _textBoxEditTextColor = ((uint)(s.Color.R * 255f) & 0xFF)
                               | (((uint)(s.Color.G * 255f) & 0xFF) << 8)
-                              | (((uint)(s.Color.R * 255f) & 0xFF) << 16);
+                              | (((uint)(s.Color.B * 255f) & 0xFF) << 16);
         var font = EnsureTextBoxEditFont(s.TextBox.FontSize * s.TextBox.Unit);
         Native.SendMessage(_textBoxEditHwnd, Native.WM_SETFONT, font, new IntPtr(1));
+        ApplyRichEditFormat(s);
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETLIMITTEXT, new IntPtr(20000), IntPtr.Zero);
         // 光标放末尾，**不要全选**：双击已经存在的文本框后随手打字，
         // 全选会让第一个字把整段内容替换掉（老师最怕的误操作）。
@@ -140,7 +151,7 @@ public partial class InkEngine
         {
             Left = (int)MathF.Round(pad),
             Top = (int)MathF.Round(pad),
-            Right = Math.Max((int)MathF.Round(pad) + 40, w - (int)MathF.Round(pad) - (int)MathF.Round(18f * unit)),
+            Right = Math.Max((int)MathF.Round(pad) + 40, w - (int)MathF.Round(pad)),
             Bottom = Math.Max((int)MathF.Round(pad) + 20, h - (int)MathF.Round(pad)),
         };
         Native.SendMessageRect(_textBoxEditHwnd, Native.EM_SETRECT, IntPtr.Zero, ref textRect);
@@ -242,10 +253,24 @@ public partial class InkEngine
             hostStyle, 0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, _hInstance, IntPtr.Zero);
         if (_textBoxEditHost == IntPtr.Zero) return;
 
-        // WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN
-        long style = 0x40000000L | 0x10000000L | 0x00200000L | 0x0004L | 0x0040L | 0x1000L;
-        _textBoxEditHwnd = Native.CreateWindowEx(0, "EDIT", "InkTeachTextBox",
+        if (_msftedit == IntPtr.Zero)
+        {
+            _msftedit = Native.LoadLibraryW("Msftedit.dll");
+            _richEditReady = _msftedit != IntPtr.Zero;
+        }
+
+        // WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN
+        // ??????????? 17px ????????????????????
+        long style = 0x40000000L | 0x10000000L | 0x0004L | 0x0040L | 0x1000L;
+        string cls = _richEditReady ? "RICHEDIT50W" : "EDIT";
+        _textBoxEditHwnd = Native.CreateWindowEx(0, cls, "InkTeachTextBox",
             style, 0, 0, 1, 1, _textBoxEditHost, IntPtr.Zero, _hInstance, IntPtr.Zero);
+        if (_textBoxEditHwnd == IntPtr.Zero && _richEditReady)
+        {
+            _richEditReady = false;
+            _textBoxEditHwnd = Native.CreateWindowEx(0, "EDIT", "InkTeachTextBox",
+                style, 0, 0, 1, 1, _textBoxEditHost, IntPtr.Zero, _hInstance, IntPtr.Zero);
+        }
         if (_textBoxEditHwnd == IntPtr.Zero) return;
         _textBoxEditWndProc = TextBoxEditWndProc;
         _textBoxEditOldProc = Native.SetWindowLongPtr(
@@ -313,6 +338,45 @@ public partial class InkEngine
                 return new IntPtr(Native.DLGC_WANTALLKEYS);
         }
         return Native.CallWindowProc(_textBoxEditOldProc, hWnd, msg, wParam, lParam);
+    }
+
+    private void ApplyRichEditFormat(Stroke s)
+    {
+        if (!_richEditReady || s?.TextBox == null) return;
+        float fontPx = MathF.Max(6f, s.TextBox.FontSize * MathF.Max(0.5f, s.TextBox.Unit));
+        float dpi = MathF.Max(1f, DpiScale);
+        int fontTwips = Math.Max(80, (int)MathF.Round(fontPx * 15f / dpi));
+
+        Native.SendMessage(_textBoxEditHwnd, Native.EM_SETBKGNDCOLOR,
+                           IntPtr.Zero, new IntPtr(0x00FFFFFF));
+
+        var cf = new Native.CHARFORMAT2W
+        {
+            cbSize = System.Runtime.InteropServices.Marshal.SizeOf<Native.CHARFORMAT2W>(),
+            dwMask = Native.CFM_FACE | Native.CFM_SIZE | Native.CFM_COLOR | Native.CFM_CHARSET,
+            yHeight = fontTwips,
+            crTextColor = (int)_textBoxEditTextColor,
+            bCharSet = 1,
+            szFaceName = "Microsoft YaHei UI",
+        };
+        Native.SendMessageCharFormat(_textBoxEditHwnd, Native.EM_SETCHARFORMAT,
+                                     new IntPtr(Native.SCF_ALL), ref cf);
+
+        // 行距和显示端一致：1.55 × 字号；RichEdit 用"固定值"最稳。
+        float linePx = fontPx * 1.55f;
+        var pf = new Native.PARAFORMAT2
+        {
+            cbSize = System.Runtime.InteropServices.Marshal.SizeOf<Native.PARAFORMAT2>(),
+            dwMask = Native.PFM_LINESPACING,
+            dyLineSpacing = 155,
+            bLineSpacingRule = 5,
+            rgxTabs = new int[32],
+        };
+        Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL, IntPtr.Zero, new IntPtr(-1));
+        Native.SendMessageParaFormat(_textBoxEditHwnd, Native.EM_SETPARAFORMAT, IntPtr.Zero, ref pf);
+
+        int len = Native.GetWindowTextLengthW(_textBoxEditHwnd);
+        Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL, new IntPtr(len), new IntPtr(len));
     }
 
     private IntPtr EnsureTextBoxEditFont(float px)

@@ -5720,6 +5720,13 @@ public partial class InkEngine
         ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布，下游全按画布坐标走
         PointerX = x; PointerY = y; PointerInside = true;
 
+        // 文本框右侧滚动条拖动：只滚内容，不滚画布。
+        if (_textBoxScrollDragging)
+        {
+            UpdateTextBoxScrollDrag(y);
+            return;
+        }
+
         // 触摸滚动中：只认第一根手指；其它手指的移动吞掉。
         if ((_libraryTouchScrollArmed || _libraryTouchScrolling)
             && ptype == Native.PT_TOUCH && id != _libraryTouchScrollId)
@@ -18986,6 +18993,29 @@ public partial class InkEngine
     {
         StopTouchFling();                      // 滚轮/触控板接管：先刹住双指惯性
         int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);
+        // 选中一个内容溢出的文本框时，滚轮先滚它自己的内容，不滚画布。
+        if (Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.TextBox)
+        {
+            var ts = Doc.Selected[0];
+            var card = ts.TextBox;
+            if (card != null && card.MaxScroll > 0.5f)
+            {
+                float cx = PointerX, cy = PointerY;
+                ScreenToCanvas(ref cx, ref cy);
+                if (ts.PaddedBounds.Contains(cx, cy))
+                {
+                    float step = 80f * MathF.Max(0.5f, card.Unit);
+                    if (card.ScrollBy(-delta / 120f * step))
+                    {
+                        Doc.Dirty.Add(ts.PaddedBounds);
+                        Doc.StructureChangedSinceRender = true;
+                        Doc.Version++;
+                        _dirty = true;
+                        return IntPtr.Zero;
+                    }
+                }
+            }
+        }
         // 收藏分类抽屉：滚轮滚分类。
         if (LibraryPanelVisibleNow && LibraryCategoriesOpen)
         {

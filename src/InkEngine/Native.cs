@@ -12,6 +12,18 @@ internal static class Native
     public const int WM_ERASEBKGND = 0x0014;
     public const int WM_CTLCOLOREDIT = 0x0133;
     public const int EM_SETRECT = 0x00B3;
+    // RichEdit???/????????
+    public const int EM_SETCHARFORMAT = 0x0444;
+    public const int EM_SETPARAFORMAT = 0x0447;
+    public const int EM_SETBKGNDCOLOR = 0x0443;
+    public const int SCF_ALL = 4;
+    public const uint CFM_BOLD = 0x00000001;
+    public const uint CFM_ITALIC = 0x00000002;
+    public const uint CFM_SIZE = 0x80000000;
+    public const uint CFM_COLOR = 0x40000000;
+    public const uint CFM_FACE = 0x20000000;
+    public const uint CFM_CHARSET = 0x08000000;
+    public const uint PFM_LINESPACING = 0x00000100;
     public const int WM_SETCURSOR = 0x0020;
     public const int WM_MOUSEACTIVATE = 0x0021;
     public const int WM_DISPLAYCHANGE = 0x007E;
@@ -200,6 +212,62 @@ internal static class Native
     public static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new(-4);
 
     // ---- structs ---------------------------------------------------------
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct CHARFORMAT2W
+    {
+        public int cbSize;
+        public uint dwMask;
+        public uint dwEffects;
+        public int yHeight;
+        public int yOffset;
+        public int crTextColor;
+        public byte bCharSet;
+        public byte bPitchAndFamily;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string szFaceName;
+        public ushort wWeight;
+        public short sSpacing;
+        public int crBackColor;
+        public int lcid;
+        public uint dwReserved;
+        public short sStyle;
+        public ushort wKerning;
+        public byte bUnderlineType;
+        public byte bAnimation;
+        public byte bRevAuthor;
+        public byte bReserved1;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PARAFORMAT2
+    {
+        public int cbSize;
+        public uint dwMask;
+        public short wNumbering;
+        public short wReserved;
+        public int dxStartIndent;
+        public int dxRightIndent;
+        public int dxOffset;
+        public short wAlignment;
+        public short cTabCount;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
+        public int[] rgxTabs;
+        public int dySpaceBefore;
+        public int dySpaceAfter;
+        public int dyLineSpacing;
+        public short sStyle;
+        public byte bLineSpacingRule;
+        public byte bOutlineLevel;
+        public short wShadingWeight;
+        public short wShadingStyle;
+        public ushort wNumberingStart;
+        public ushort wNumberingStyle;
+        public ushort wNumberingTab;
+        public short wBorderSpace;
+        public short wBorderWidth;
+        public short wBorders;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT
@@ -724,6 +792,15 @@ internal static class Native
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageW")]
     public static extern IntPtr SendMessageRect(IntPtr hWnd, uint msg, IntPtr wParam, ref RECT lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageW")]
+    public static extern IntPtr SendMessageCharFormat(IntPtr hWnd, uint msg, IntPtr wParam, ref CHARFORMAT2W lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageW")]
+    public static extern IntPtr SendMessageParaFormat(IntPtr hWnd, uint msg, IntPtr wParam, ref PARAFORMAT2 lParam);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr LoadLibraryW(string fileName);
 
     // ---- 线程消息（PPT 轮询线程 → 主线程的唤醒）---------------------------
     //

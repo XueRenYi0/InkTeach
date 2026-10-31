@@ -301,12 +301,12 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             Doc.Clear();
             Doc.ClearHistory();
-            InsertPlainTextBoxForTest("文本框编辑对齐检查\n第二行：$x=1$ 与中文混排。");
+            InsertPlainTextBoxForTest("文本框编辑对齐检查\n第二行：中文混排，没有公式。");
             var st = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
             if (st != null)
             {
                 BeginTextBoxEdit(st);
-                SetTextBoxEditTextForTest("文本框编辑对齐检查\n第二行：$x=1$ 与中文混排。\n第三行：看看光标和文字是否对齐。");
+                SetTextBoxEditTextForTest("文本框编辑对齐检查\n第二行：中文混排，没有公式。\n第三行：看看光标和文字是否对齐。");
                 SettleFrames(300);
                 ScreenProbe.SaveBmp("reports/textbox-edit.bmp", (int)_virtualX, (int)_virtualY,
                                     (int)_virtualW, (int)_virtualH);
@@ -5586,6 +5586,37 @@ internal sealed partial class App : InkEngine.InkEngine
             Console.WriteLine(smooth
                 ? $"手动拖下边平滑：{hPreDrag:0} → {hPostDrag:0}"
                 : $"手动拖下边异常：{hPreDrag:0} → {hPostDrag:0} auto={editTarget.TextBox.AutoHeight}");
+        }
+        // 内部滚动：固定高度小于内容时，滚轮/ScrollBy 只动内容，不动画布
+        if (editTarget?.TextBox != null)
+        {
+            var tbCard = editTarget.TextBox;
+            var oldB = editTarget.PaddedBounds;
+            tbCard.Height = MathF.Max(200f, MathF.Min(400f, tbCard.ContentHeight * 0.5f));
+            tbCard.AutoHeight = false;
+            tbCard.InvalidateLayout();
+            editTarget.SyncTextBoxBounds();
+            Doc.RefreshStrokeGrid(editTarget);
+            Doc.Dirty.Add(oldB);
+            Doc.Dirty.Add(editTarget.PaddedBounds);
+            bool scrollOk = tbCard.MaxScroll > 1f && tbCard.ScrollBy(90f) && tbCard.ScrollY > 0.5f;
+            // ?????????????????????????????
+            tbCard.ScrollY = 0f;
+            var bb = editTarget.PaddedBounds;
+            PointerX = (bb.MinX + bb.MaxX) * 0.5f;
+            PointerY = (bb.MinY + bb.MaxY) * 0.5f + ViewOffsetY;
+            PointerInside = true;
+            HandleWheel(new IntPtr((long)(((-120) & 0xFFFF) << 16)));
+            bool wheelOk = tbCard.ScrollY > 0.5f;
+            scrollOk &= wheelOk;
+            Doc.StructureChangedSinceRender = true;
+            Doc.Version++;
+            SettleFrames(150);
+            string p7 = System.IO.Path.ChangeExtension(path, null) + "-scroll.bmp";
+            ScreenProbe.SaveBmp(p7, (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+            Console.WriteLine(scrollOk
+                ? $"内部滚动通过：内容 {tbCard.ContentHeight:0} 高，框 {tbCard.Height:0} 高，ScrollY={tbCard.ScrollY:0}"
+                : $"内部滚动失败：content={tbCard.ContentHeight:0} height={tbCard.Height:0} scroll={tbCard.ScrollY:0}");
         }
         var victim = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
         var vb = victim?.PaddedBounds ?? default;

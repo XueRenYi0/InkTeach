@@ -68,6 +68,35 @@ internal sealed class TextBoxData
 
     public readonly List<TextBoxQuestion> Questions = new();
 
+    /// <summary>
+    /// 固定高度时，内容向上滚了多少（画布像素）。0 = 顶部；只影响绘制/命中，
+    /// 不改排版行本身。自动高度时恒 0。
+    /// </summary>
+    public float ScrollY;
+
+    /// <summary>最近一次排版的内容总高度（可能大于 Height）。</summary>
+    public float ContentHeight { get; private set; }
+
+    public float MaxScroll => MathF.Max(0f, ContentHeight - Height);
+    public bool CanScroll => !AutoHeight && MaxScroll > 0.5f;
+
+    /// <summary>滚轮滚内容；返回是否真的动了（没溢出/到顶到底 = false，交回画布滚动）。</summary>
+    public bool ScrollBy(float dy)
+    {
+        float max = MaxScroll;
+        if (max <= 0.5f) return false;
+        float next = Math.Clamp(ScrollY + dy, 0f, max);
+        if (MathF.Abs(next - ScrollY) < 0.01f) return false;
+        ScrollY = next;
+        return true;
+    }
+
+    private void ClampScroll()
+    {
+        if (AutoHeight) ScrollY = 0f;
+        else ScrollY = Math.Clamp(ScrollY, 0f, MaxScroll);
+    }
+
     /// <summary>当前排版后的内容高度（画布像素）。</summary>
     public float LayoutHeight => Height;
 
@@ -84,6 +113,7 @@ internal sealed class TextBoxData
     {
         if (_lines != null) return _lines;
         _lines = TextBoxLayout.Build(this, out float h);
+        ContentHeight = h;
         if (AutoHeight)
         {
             float u = MathF.Max(0.5f, Unit);
@@ -92,6 +122,11 @@ internal sealed class TextBoxData
                 ? (string.IsNullOrWhiteSpace(Text) ? 120f * u : 60f * u)
                 : 0f;
             Height = MathF.Max(minH, h);
+            ScrollY = 0f;
+        }
+        else
+        {
+            ClampScroll();
         }
         return _lines;
     }
@@ -195,10 +230,12 @@ internal sealed class TextBoxData
         }
 
         AutoHeight = true;
+        ScrollY = 0f;
         InvalidateLayout();
         _ = EnsureLayout();
         if (Height > maxHeight) Height = maxHeight;
         AutoHeight = false;
+        ClampScroll();
         InvalidateLayout();
     }
 
@@ -243,6 +280,7 @@ internal sealed class TextBoxData
     {
         Height = MathF.Max(1f, height);
         AutoHeight = false;
+        ScrollY = Math.Clamp(ScrollY, 0f, MathF.Max(0f, ContentHeight - Height));
         InvalidateLayout();
     }
 
@@ -259,6 +297,7 @@ internal sealed class TextBoxData
             Role = Role, Title = Title, Meta = Meta, Text = Text,
             ShowAnswers = ShowAnswers, Width = Width, Height = Height,
             AutoHeight = AutoHeight, FontSize = FontSize, Unit = Unit, Ink = Ink,
+            ScrollY = ScrollY,
         };
         foreach (var q in Questions) c.Questions.Add(q.Clone());
         return c;
@@ -1165,41 +1204,47 @@ public partial class InkEngine
         if (s.Locked) return false;
 
         // 普通文本框只有文字，没有 ✕/显示答案这些卡片 chrome。
-        if (s.TextBox.Role != TextBoxRole.AiQuestion)
-        {
-            MaybeEditTextBoxOnDoubleClick(s);
-            return _textBoxEditing;
-        }
-
+        // 先把指针换成卡片内容坐标：滚动条和题卡按钮都用它。
         Vector2 local = new(cx, cy);
         if (!s.Transform.IsIdentity && Matrix3x2.Invert(s.Transform, out var inv))
             local = Vector2.Transform(local, inv);
-        // 题卡内容以 Points[0] 为左上角（局部坐标），排版行/按钮都是相对它的；
-        // 这里把"对象局部坐标"换成"卡片内容坐标"，否则原点不在 (0,0) 时按钮点不中。
         if (s.Points.Count > 0) local -= new Vector2(s.Points[0].X, s.Points[0].Y);
 
         var card = s.TextBox;
         var lines = card.EnsureLayout();
 
-        // 右上角 ✕：删整卡，一步撤销。
-        var close = new RectF
+        // 右上角 ✕：删整卡，一步撤销（先于滚动条，避免抢掉关闭）。
+        if (card.Role == TextBoxRole.AiQuestion)
         {
-            MinX = card.Width - 42f * card.Unit, MinY = 6f * card.Unit,
-            MaxX = card.Width - 8f * card.Unit, MaxY = 40f * card.Unit,
-        };
-        if (close.Contains(local.X, local.Y))
-        {
-            Doc.RemoveStrokeWithUndo(s);
-            _dirty = true;
-            NotifyUiStateChanged();
+            var close = new RectF
+            {
+                MinX = card.Width - 42f * card.Unit, MinY = 6f * card.Unit,
+                MaxX = card.Width - 8f * card.Unit, MaxY = 40f * card.Unit,
+            };
+            if (close.Contains(local.X, local.Y))
+            {
+                Doc.RemoveStrokeWithUndo(s);
+                _dirty = true;
+                NotifyUiStateChanged();
+                return true;
+            }
+        }
+
+        // 右侧滚动条：按下即进入拖动（不用滚轮也能滚）。
+        if (TryStartTextBoxScrollDrag(s, card, local, cy))
             return true;
+
+        if (card.Role != TextBoxRole.AiQuestion)
+        {
+            MaybeEditTextBoxOnDoubleClick(s);
+            return _textBoxEditing;
         }
 
         // 每道题的「显示答案 / 收起答案」。
         foreach (var line in lines)
         {
             if (line.Kind != TextBoxLineKind.Toggle) continue;
-            if (!line.Box.Contains(local.X, local.Y)) continue;
+            if (!line.Box.Contains(local.X, local.Y + card.ScrollY)) continue;
             var before = s.PaddedBounds;
             card.ToggleAnswers();
             s.SyncTextBoxBounds();
@@ -1218,9 +1263,55 @@ public partial class InkEngine
         return false;
     }
 
+    private bool _textBoxScrollDragging;
+    private Stroke _textBoxScrollStroke;
+    private float _textBoxScrollStartY, _textBoxScrollStartScroll;
+    private float _textBoxScrollTrackH, _textBoxScrollThumbH;
+
+    private bool TryStartTextBoxScrollDrag(Stroke s, TextBoxData card, Vector2 local, float canvasY)
+    {
+        if (card == null || card.MaxScroll <= 0.5f) return false;
+        float u = MathF.Max(0.5f, card.Unit);
+        // ?????????????????????
+        if (local.X < card.Width - 30f * u || local.X > card.Width - 12f * u) return false;
+        float top = 18f * u;
+        float bottom = card.Height - 18f * u;
+        if (local.Y < top || local.Y > bottom) return false;
+        if (card.Role == TextBoxRole.AiQuestion && local.Y < 44f * u) return false;
+
+        float trackH = MathF.Max(8f, bottom - top);
+        float thumbH = MathF.Max(20f * u, trackH * card.Height / MathF.Max(1f, card.ContentHeight));
+        _textBoxScrollDragging = true;
+        _textBoxScrollStroke = s;
+        _textBoxScrollStartY = canvasY;
+        _textBoxScrollStartScroll = card.ScrollY;
+        _textBoxScrollTrackH = trackH;
+        _textBoxScrollThumbH = MathF.Min(thumbH, trackH);
+        return true;
+    }
+
+    private void UpdateTextBoxScrollDrag(float canvasY)
+    {
+        var s = _textBoxScrollStroke;
+        var card = s?.TextBox;
+        if (card == null) return;
+        float range = MathF.Max(1f, _textBoxScrollTrackH - _textBoxScrollThumbH);
+        float target = _textBoxScrollStartScroll
+                     + (canvasY - _textBoxScrollStartY) / range * card.MaxScroll;
+        target = Math.Clamp(target, 0f, card.MaxScroll);
+        if (MathF.Abs(target - card.ScrollY) < 0.1f) return;
+        card.ScrollY = target;
+        Doc.Dirty.Add(s.PaddedBounds);
+        Doc.StructureChangedSinceRender = true;
+        Doc.Version++;
+        _dirty = true;
+    }
+
     internal void TextBoxPointerUp()
     {
         _aiCardCapturing = false;
+        _textBoxScrollDragging = false;
+        _textBoxScrollStroke = null;
         _dirty = true;
         NotifyUiStateChanged();
     }

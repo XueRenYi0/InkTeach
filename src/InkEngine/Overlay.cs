@@ -2448,21 +2448,23 @@ internal sealed partial class OverlayWindow : IDisposable
         try
         {
             float pad = 18f * u;
+            // ??????????????????????????? ScrollY?
+            float scrolledY = o.Y - card.ScrollY;
             foreach (var line in lines)
             {
                 switch (line.Kind)
                 {
                     case TextBoxLineKind.Divider:
                         _ctx.DrawLine(
-                            new Vector2(o.X + line.X, o.Y + line.Y),
-                            new Vector2(o.X + line.Box.MaxX, o.Y + line.Y),
+                            new Vector2(o.X + line.X, scrolledY + line.Y),
+                            new Vector2(o.X + line.Box.MaxX, scrolledY + line.Y),
                             Brush(new Color4(0.90f, 0.91f, 0.93f, 1f)), MathF.Max(1f, u));
                         break;
 
                     case TextBoxLineKind.Toggle:
                     {
-                        var b = new Vortice.RawRectF(o.X + line.Box.MinX, o.Y + line.Box.MinY,
-                                                     o.X + line.Box.MaxX, o.Y + line.Box.MaxY);
+                        var b = new Vortice.RawRectF(o.X + line.Box.MinX, scrolledY + line.Box.MinY,
+                                                     o.X + line.Box.MaxX, scrolledY + line.Box.MaxY);
                         var pill = new RoundedRectangle(b, 8f * u, 8f * u);
                         _ctx.FillRoundedRectangle(pill, Brush(AiRedSoft));
                         _ctx.DrawRoundedRectangle(pill, Brush(new Color4(0.88f, 0.60f, 0.57f, 1f)), 1f);
@@ -2477,7 +2479,7 @@ internal sealed partial class OverlayWindow : IDisposable
                         foreach (var run in line.Runs)
                         {
                             float rx = o.X + line.X + run.X;
-                            float ry = o.Y + line.Y + run.Y;
+                            float ry = scrolledY + line.Y + run.Y;
                             if (run.IsMath)
                             {
                                 var bmp = run.MathImage.GetBitmap(_ctx);
@@ -2499,8 +2501,8 @@ internal sealed partial class OverlayWindow : IDisposable
                     {
                         var bmp = line.MathImage?.GetBitmap(_ctx);
                         if (bmp == null) break;
-                        var dst = new Vortice.RawRectF(o.X + line.X, o.Y + line.Y,
-                                                       o.X + line.X + line.MathW, o.Y + line.Y + line.MathH);
+                        var dst = new Vortice.RawRectF(o.X + line.X, scrolledY + line.Y,
+                                                       o.X + line.X + line.MathW, scrolledY + line.Y + line.MathH);
                         _ctx.DrawBitmap(bmp, dst, 1f, Vortice.Direct2D1.InterpolationMode.Linear, null, null);
                         break;
                     }
@@ -2511,11 +2513,38 @@ internal sealed partial class OverlayWindow : IDisposable
                         Color4 ink = card.Role == TextBoxRole.Normal && line.Ink == TextBoxInk.Black
                             ? s.Color : AiColor(line.Ink);
                         _ctx.DrawText(line.Text, AiTextFormat(line.Size, line.Bold, false),
-                            new Rect(o.X + line.X, o.Y + line.Y, w, line.Height),
+                            new Rect(o.X + line.X, scrolledY + line.Y, w, line.Height),
                             Brush(ink));
                         break;
                     }
                 }
+            }
+
+            // 内容溢出时右侧一根细滚动条：告诉老师"下面还有"，滚轮可滚。
+            if (card.MaxScroll > 0.5f)
+            {
+                float trackW = 3f * u;
+                float gap = 14f * u;
+                float tx = o.X + card.Width - gap - trackW;
+                float top = o.Y + pad;
+                float trackH = Math.Max(8f, card.LayoutHeight - pad * 2f);
+                float thumbH = MathF.Max(20f * u, trackH * (card.Height / MathF.Max(1f, card.ContentHeight)));
+                thumbH = MathF.Min(thumbH, trackH);
+                float thumbY = top + (trackH - thumbH) * (card.ScrollY / card.MaxScroll);
+                Color4 trackColor = card.Role == TextBoxRole.Normal
+                    ? new Color4(s.Color.R, s.Color.G, s.Color.B, 0.10f)
+                    : new Color4(AiMuted.R, AiMuted.G, AiMuted.B, 0.18f);
+                Color4 barColor = card.Role == TextBoxRole.Normal
+                    ? new Color4(s.Color.R, s.Color.G, s.Color.B, 0.42f)
+                    : new Color4(AiMuted.R, AiMuted.G, AiMuted.B, 0.55f);
+                var track = new RoundedRectangle(
+                    new Vortice.RawRectF(tx, top, tx + trackW, top + trackH),
+                    trackW * 0.5f, trackW * 0.5f);
+                _ctx.FillRoundedRectangle(track, Brush(trackColor));
+                var thumb = new RoundedRectangle(
+                    new Vortice.RawRectF(tx, thumbY, tx + trackW, thumbY + thumbH),
+                    trackW * 0.5f, trackW * 0.5f);
+                _ctx.FillRoundedRectangle(thumb, Brush(barColor));
             }
 
             // 卡片内容里的操作提示（只在选择工具 + 已选中时才响应命中）。
