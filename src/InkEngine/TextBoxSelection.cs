@@ -24,6 +24,7 @@ public partial class InkEngine
     private float _textBoxResizeStartHeight;
     private float _textBoxResizeStartFont;
     private RectF _textBoxResizeBeforeBounds;
+    private float _textBoxResizeMinWidth;
 
     internal void BeginTextBoxResize(Stroke s, SelHandle handle, float screenX, float screenY)
     {
@@ -50,6 +51,7 @@ public partial class InkEngine
         _textBoxResizeStartHeight = box.Height;
         _textBoxResizeStartFont = box.FontSize;
         _textBoxResizeBeforeBounds = s.PaddedBounds;
+        _textBoxResizeMinWidth = box.MinWidth;
         _textBoxResizing = true;
         SelDragging = true;
         _dirty = true;
@@ -77,8 +79,14 @@ public partial class InkEngine
         if (top) r.MinY = p.Y;
         if (bottom) r.MaxY = p.Y;
 
-        float minW = 120f * MathF.Max(0.5f, box.Unit);
-        float minH = 60f * MathF.Max(0.5f, box.Unit);
+        var screen = ScreenRectPhysical();
+        float unit = MathF.Max(0.5f, box.Unit);
+        float minH = 60f * unit;
+        float maxW = MathF.Max(60f * unit, (screen.MaxX - screen.MinX) * 0.9f);
+        float maxH = MathF.Max(minH, (screen.MaxY - screen.MinY) * 0.9f);
+        // 最窄由"最长不可断的 token"决定（中文单字 / 英文单词 / 可缩小公式）；
+        // 最宽由屏幕决定。两者都写在这一处，拖手柄和自适应用同一口径。
+        float minW = MathF.Min(MathF.Max(60f * unit, _textBoxResizeMinWidth), maxW);
         if (r.MaxX - r.MinX < minW)
         {
             if (left) r.MinX = r.MaxX - minW;
@@ -90,9 +98,6 @@ public partial class InkEngine
             else r.MaxY = r.MinY + minH;
         }
 
-        var screen = ScreenRectPhysical();
-        float maxW = MathF.Max(minW, (screen.MaxX - screen.MinX) * 0.9f);
-        float maxH = MathF.Max(minH, (screen.MaxY - screen.MinY) * 0.9f);
         if (r.MaxX - r.MinX > maxW) r.MaxX = r.MinX + maxW;
         if (r.MaxY - r.MinY > maxH) r.MaxY = r.MinY + maxH;
 

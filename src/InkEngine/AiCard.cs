@@ -72,10 +72,12 @@ internal sealed class TextBoxData
     public float LayoutHeight => Height;
 
     private List<TextBoxLine> _lines;
+    private float _minWidth = -1f;
 
     public void InvalidateLayout()
     {
         _lines = null;
+        _minWidth = -1f;
     }
 
     public IReadOnlyList<TextBoxLine> EnsureLayout()
@@ -84,11 +86,152 @@ internal sealed class TextBoxData
         _lines = TextBoxLayout.Build(this, out float h);
         if (AutoHeight)
         {
-            float minH = Role == TextBoxRole.Normal ? 120f * MathF.Max(0.5f, Unit) : 0f;
+            float u = MathF.Max(0.5f, Unit);
+            // 空框留一个能点进去的高度；有内容就按行高算，别硬留 120 的空白。
+            float minH = Role == TextBoxRole.Normal
+                ? (string.IsNullOrWhiteSpace(Text) ? 120f * u : 60f * u)
+                : 0f;
             Height = MathF.Max(minH, h);
         }
         return _lines;
     }
+
+    /// <summary>
+    /// 当前文字允许拖到的最窄宽度：取"最长不可断的 token"＋左右内边距。
+    /// 中文按单字、英文按空格分词、公式按可缩小的宽度算；再小就会把字/公式切掉。
+    /// 结果缓存，改文字/字号/单位时随 <see cref="InvalidateLayout"/> 失效。
+    /// </summary>
+    public float MinWidth
+    {
+        get
+        {
+            if (Role != TextBoxRole.Normal) return 120f * MathF.Max(0.5f, Unit);
+            if (_minWidth < 0f)
+            {
+                var (_, min) = MeasureWidths(MathF.Max(4000f * Unit, Width * 4f));
+                _minWidth = min;
+            }
+            return _minWidth;
+        }
+    }
+
+    /// <summary>
+    /// 量两件事（画布像素）：
+    ///   · Natural = 完全不换行时的自然宽度（最宽那一行 + 两边内边距）；
+    ///   · Min     = 最长不可断 token + 两边内边距（再窄就会切字）。
+    /// 用"超宽排版"复用现成的 Markdown/公式/换行逻辑，量完恢复原状。
+    /// </summary>
+    internal (float Natural, float Min) MeasureWidths(float probeWidth)
+    {
+        if (Role != TextBoxRole.Normal)
+            return (Width, Width);
+
+        float oldW = Width, oldH = Height;
+        bool oldAuto = AutoHeight;
+        Width = MathF.Max(1200f, probeWidth);
+        InvalidateLayout();
+        var lines = TextBoxLayout.Build(this, out _);
+
+        float u = MathF.Max(0.5f, Unit);
+        float pad = 18f * u;
+        float natural = 0f, minToken = MathF.Max(8f * u, FontSize * u);
+        foreach (var line in lines)
+        {
+            switch (line.Kind)
+            {
+                case TextBoxLineKind.Math:
+                    natural = MathF.Max(natural, line.MathW + pad * 2f);
+                    minToken = MathF.Max(minToken, line.MathW * 0.55f);
+                    break;
+
+                case TextBoxLineKind.Text when line.Runs != null:
+                    foreach (var run in line.Runs)
+                    {
+                        natural = MathF.Max(natural, line.X + run.X + run.Width + pad);
+                        if (run.IsMath)
+                            minToken = MathF.Max(minToken, run.Width * 0.55f);
+                        else
+                            minToken = MathF.Max(minToken, LongestToken(run.Text, run.Size));
+                    }
+                    break;
+
+                case TextBoxLineKind.Text:
+                    natural = MathF.Max(natural,
+                        line.X + TextBoxLayout.MeasureText(line.Text, line.Size) + pad);
+                    minToken = MathF.Max(minToken, LongestToken(line.Text, line.Size));
+                    break;
+            }
+        }
+
+        Width = oldW;
+        Height = oldH;
+        AutoHeight = oldAuto;
+        InvalidateLayout();
+
+        float min = MathF.Max(80f * u, minToken + pad * 2f + 4f * u);
+        return (natural, min);
+    }
+
+    /// <summary>
+    /// 第一次自适应：宽度按自然宽度（夹在"最长 token"和屏幕宽之间），
+    /// 高度按内容；完成后 AutoHeight=false，之后完全由用户拖。
+    /// </summary>
+    internal void FitToContent(float maxWidth, float maxHeight, bool fitWidth)
+    {
+        if (Role != TextBoxRole.Normal) return;
+        float u = MathF.Max(0.5f, Unit);
+        maxWidth = MathF.Max(80f * u, maxWidth);
+        maxHeight = MathF.Max(80f * u, maxHeight);
+
+        var (natural, min) = MeasureWidths(MathF.Max(maxWidth * 3f, 2400f * u));
+        if (fitWidth && !string.IsNullOrWhiteSpace(Text))
+        {
+            float lo = MathF.Min(min, maxWidth);
+            Width = Math.Clamp(natural, lo, maxWidth);
+        }
+        else
+        {
+            Width = MathF.Min(Width, maxWidth);
+        }
+
+        AutoHeight = true;
+        InvalidateLayout();
+        _ = EnsureLayout();
+        if (Height > maxHeight) Height = maxHeight;
+        AutoHeight = false;
+        InvalidateLayout();
+    }
+
+    private static float LongestToken(string text, float size)
+    {
+        if (string.IsNullOrEmpty(text)) return 0f;
+        float best = 0f, word = 0f;
+        foreach (char ch in text)
+        {
+            if (char.IsWhiteSpace(ch))
+            {
+                best = MathF.Max(best, word);
+                word = 0f;
+                continue;
+            }
+            if (IsCjk(ch))
+            {
+                best = MathF.Max(best, word);
+                word = 0f;
+                best = MathF.Max(best, TextBoxLayout.MeasureText(ch.ToString(), size));
+            }
+            else
+            {
+                word += TextBoxLayout.MeasureText(ch.ToString(), size);
+            }
+        }
+        return MathF.Max(best, word);
+    }
+
+    private static bool IsCjk(char ch)
+        => (ch >= 0x2E80 && ch <= 0x9FFF)
+           || (ch >= 0xF900 && ch <= 0xFAFF)
+           || (ch >= 0xFF00 && ch <= 0xFFEF);
 
     public void SetWidth(float width)
     {
@@ -1112,11 +1255,15 @@ public partial class InkEngine
         // 底部留出工具条那一条（120 逻辑像素）：题卡展开后不能压住工具条。
         float bottom = screen.MaxY - ViewOffsetY - 120f * u;
         var b = s.PaddedBounds;
-        float dy = 0f;
+        float dy = 0f, dx = 0f;
         if (b.MaxY > bottom) dy = bottom - b.MaxY;
         if (b.MinY + dy < top) dy = top - b.MinY;
-        if (MathF.Abs(dy) > 0.5f)
-            s.Transform = Matrix3x2.CreateTranslation(0f, dy) * s.Transform;
+        float left = screen.MinX + 16f * u;
+        float right = screen.MaxX - 16f * u;
+        if (b.MaxX > right) dx = right - b.MaxX;
+        if (b.MinX + dx < left) dx = left - b.MinX;
+        if (MathF.Abs(dx) > 0.5f || MathF.Abs(dy) > 0.5f)
+            s.Transform = Matrix3x2.CreateTranslation(dx, dy) * s.Transform;
     }
 
     internal int TextBoxCountForTest

@@ -67,15 +67,28 @@ public partial class InkEngine
             Width = 0f,
         };
         data.Ink = s.Color;
+
+        // 第一次按内容定宽高：宽 = 文本自然宽（夹在最长 token 和屏幕 90% 之间），
+        // 高 = 内容高。空框保持默认宽 + 最小高度，等第一次粘贴/输入再自适应。
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            float maxW = MathF.Max(80f * u, (screen.MaxX - screen.MinX) * 0.9f);
+            float maxH = MathF.Max(80f * u, (screen.MaxY - screen.MinY) * 0.9f);
+            data.FitToContent(maxW, maxH, fitWidth: true);
+            x = (screen.MinX + screen.MaxX) * 0.5f - data.Width * 0.5f;
+            y = (screen.MinY + screen.MaxY) * 0.5f - ViewOffsetY - data.Height * 0.5f;
+            s.SetTextBoxRect(new Vector2(x, y), data.Width, data.Height);
+        }
+        else
+        {
+            _ = data.EnsureLayout();
+            s.SetTextBoxRect(new Vector2(x, y), w, data.Height);
+        }
+
         // 先排版，再入文档：AddStroke 的脏区和空间索引都按**最终包围盒**登记。
         // 以前先 Add 再长高，低处的字不在脏区里，删除后会残留最后几行（用户实测）。
-        _ = data.EnsureLayout();
-        s.SetTextBoxRect(new Vector2(x, y), w, data.Height);
         ClampTextBoxIntoView(s);
         Doc.AddStroke(s);
-        // 第一次按内容自适应；已经有文字（自检/粘贴入口）就这一下算完，
-        // 之后宽高由用户拖，不再"一改宽就自己长高"。
-        if (!string.IsNullOrWhiteSpace(text)) data.AutoHeight = false;
         return s;
     }
 
@@ -161,12 +174,28 @@ public partial class InkEngine
         if (s != null && s.TextBox != null)
         {
             var oldBounds = s.PaddedBounds;
+            float oldW = s.TextBox.Width;
             s.TextBox.Text = text;
             s.TextBox.InvalidateLayout();
+            // 第一次收编辑 = 最后一次自适应：宽按文本自然宽、高按内容；
+            // 之后 AutoHeight=false，完全由用户拖。
+            if (accept && s.TextBox.Role == TextBoxRole.Normal && s.TextBox.AutoHeight)
+            {
+                var screen = ScreenRectPhysical();
+                float u = MathF.Max(0.5f, s.TextBox.Unit);
+                float maxW = MathF.Max(80f * u, (screen.MaxX - screen.MinX) * 0.9f);
+                float maxH = MathF.Max(80f * u, (screen.MaxY - screen.MinY) * 0.9f);
+                s.TextBox.FitToContent(maxW, maxH, fitWidth: !string.IsNullOrWhiteSpace(text));
+                // 变宽/变窄都保持原来的中心，不要只往右长。
+                if (s.Points.Count > 0 && MathF.Abs(s.TextBox.Width - oldW) > 0.5f)
+                {
+                    var p0 = s.Points[0];
+                    s.SetPoint(0, new Vector2(p0.X - (s.TextBox.Width - oldW) * 0.5f, p0.Y));
+                }
+            }
             s.SyncTextBoxBounds();
             ClampTextBoxIntoView(s);
             Doc.RefreshStrokeGrid(s);
-            // 第一次编辑/粘贴 = 最后一次自适应；之后一律手动拖宽高。
             if (accept && s.TextBox.Role == TextBoxRole.Normal) s.TextBox.AutoHeight = false;
             Doc.Dirty.Add(oldBounds);
             Doc.Dirty.Add(s.PaddedBounds);
