@@ -43,6 +43,7 @@ public sealed partial class FullUi : IOverlayUi
         ("eraser",    "eraserFilled",    "橡皮擦"),
         ("select",    "selectFilled",    "选择"),
         ("shapes",    "shapesFilled",    "图形"),
+        ("text",      "text",            "文本（插入文本框）"),
         ("cut",       "cutFilled",       "截屏"),
         ("star",      "starFilled",      "收藏"),
         ("undo",      "undoFilled",      "后撤"),
@@ -51,7 +52,7 @@ public sealed partial class FullUi : IOverlayUi
     };
 
     /// <summary>每一组的最后一格（下标）。组之间画一条分隔线。</summary>
-    private static readonly int[] GroupEnds = { 0, 2, 6, 10, 13 };
+    private static readonly int[] GroupEnds = { 0, 2, 6, 11, 14 };
 
     /// <summary>
     /// 格子的**稳定身份**（下标会因排序变化，身份不会）。
@@ -60,7 +61,7 @@ public sealed partial class FullUi : IOverlayUi
     private static readonly string[] CellKeys =
     {
         "ball", "cursor", "board", "pen", "highlighter", "laser", "eraser",
-        "select", "shapes", "capture", "star", "undo", "redo", "more",
+        "select", "shapes", "text", "capture", "star", "undo", "redo", "more",
     };
 
     /// <summary>v2 落盘顺序（收藏追加在最右）。老配置的数字只在这个顺序里解释。</summary>
@@ -87,17 +88,17 @@ public sealed partial class FullUi : IOverlayUi
     /// 不把新格硬塞进老用户的工具条（用户 2026-10-25 定的硬规则）。
     /// v3 只重排（收藏挪到截屏后），不新增格子；老配置按稳定 key 迁移钉住状态。
     /// </summary>
-    private const int CellsVersion = 3;
+    private const int CellsVersion = 4;
 
     /// <summary>每一格从哪个版本开始存在（和 <see cref="CellKeys"/> 对齐）。</summary>
     private static readonly int[] CellSinceVersion =
     {
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 2, 0, 0, 0,
     };
 
     // 极简固定 5 格：球 + 鼠标 + 画笔 + 橡皮 + 更多。
     // 白板 / 撤销仍在完整档和自定义里，只是不在极简主栏显示。
-    private static readonly int[] MiniCells = { 1, 3, 6, 13 };
+    private static readonly int[] MiniCells = { 1, 3, 6, 14 };
 
     private Profile _profile = Profile.Full;
 
@@ -106,7 +107,7 @@ public sealed partial class FullUi : IOverlayUi
 
     // 自定义硬地板只保留鼠标和「更多」：球永远在，所以最少 3 格。
     // 画笔 / 橡皮 / 白板 / 后撤都开放取消；极简仍是固定 5 格，不受这里影响。
-    private static bool CanUnpin(int cell) => cell is not (1 or 13);
+    private static bool CanUnpin(int cell) => cell is not (1 or 14);
 
     private static bool[] CreateAllPinned()
     {
@@ -3286,7 +3287,7 @@ public sealed partial class FullUi : IOverlayUi
                         _host.Commands.SetTool(picked);
                 }
                 break;
-            case 9:                       // 截图：[截图][隐藏窗口截图]（"粘贴图片"已挪到右端的动作按钮）
+            case 10:                      // 截图：[截图][隐藏窗口截图]（"粘贴图片"已挪到右端的动作按钮）
                 // 名字照微信那套（8.3.1）；**点哪一段就用哪种截法进屋**——
                 // 段本身是"入口"：`EnterCapture` 一进去就整屏灰下来（详见 IEngineCommands）。
                 // 以前点格子就只把工具选中、什么都不发生，"仿微信仿得不像"就是这条。
@@ -3634,7 +3635,25 @@ public sealed partial class FullUi : IOverlayUi
     }
 
     private int HubCount(int section)
-        => HubCounts[Math.Clamp(section, 0, HubCounts.Length - 1)];
+        => section == 0 ? (TextBoxInMore ? 6 : 5) : 5;
+
+    /// <summary>
+    /// ??????????????????????????? / ??????????
+    /// ?????? text ???????????????????
+    /// </summary>
+    private bool TextBoxInMore
+    {
+        get
+        {
+            if (_profile == Profile.Full) return false;
+            if (_profile == Profile.Custom)
+            {
+                int cell = Array.IndexOf(CellKeys, "text");
+                return cell <= 0 || !_pinned[cell];
+            }
+            return true;
+        }
+    }
 
     /// <summary>
     /// 每个分组的格子数：课堂 6 个（计时 / 点名 / 随机一人 / AI 出题 / 文本框 / 使用说明）；
@@ -3644,8 +3663,6 @@ public sealed partial class FullUi : IOverlayUi
     /// 加的找回入口）。收藏只留在主工具条那一格，更多里不再放重复入口。
     /// 格子编号（`HubTileCode`）从这里算出来，**不写死 3**——加格子不会再串段。
     /// </summary>
-    private static readonly int[] HubCounts = { 6, 5 };   // 课堂 6（计时/点名/随机/AI/文本框/使用说明），墨迹 5（不含收藏）
-
     /// <summary>第 section 组的组头矩形。</summary>
     private RectF HubHeadRect(int section)
     {
@@ -3665,7 +3682,7 @@ public sealed partial class FullUi : IOverlayUi
         return new RectF { MinX = x, MinY = y, MaxX = x + MoreTile, MaxY = y + MoreTile };
     }
 
-    /// <summary>第 section 组第 index 个格子的全局编号（从 <see cref="HubCounts"/> 累加，
+    /// <summary>第 section 组第 index 个格子的全局编号（从 <see cref="HubCount"/> 累加，
     /// 加一组/加一格都不用改这里）。</summary>
     private int HubTileCode(int section, int index)
     {
@@ -3675,7 +3692,7 @@ public sealed partial class FullUi : IOverlayUi
         {
             if (index < 3) return index;
             if (index == 3) return AiTileCode;
-            if (index == 4) return TextBoxTileCode;
+            if (TextBoxInMore && index == 4) return TextBoxTileCode;
             return HelpTileCode;
         }
         // 3..7 = 保存/打开/回放/关文档/历史板书；8 留给「使用说明」。
@@ -3942,7 +3959,7 @@ public sealed partial class FullUi : IOverlayUi
         get
         {
             int n = 0;
-            for (int s = 0; s < HubCounts.Length; s++) n += HubCount(s);
+            for (int s = 0; s < 2; s++) n += HubCount(s);
             return n;
         }
     }
@@ -5088,14 +5105,19 @@ public sealed partial class FullUi : IOverlayUi
                 // 三角形会被换掉。不是图形工具才给一个默认种类（矩形，沿用老行为）。
                 if (!HasShapeEntry(st.Tool)) cmd.SetTool(Tool.Rectangle);
                 break;
-            case 9: cmd.SetTool(Tool.Capture); break;
-            case 10:
+            case 9:
+                // 文本：**动作**不是模式。插入一个一行高的文本框并直接进入编辑，
+                // 工具切回选择，格本身不高亮；钉住 = 主栏直达，不钉 = 更多里。
+                cmd.InsertTextBox();
+                break;
+            case 10: cmd.SetTool(Tool.Capture); break;
+            case 11:
                 // 收藏：打开/关闭收藏弹窗；色带保持当前工具的色线，不参与收藏。
                 cmd.ToggleLibraryPanel();
                 break;
-            case 11: cmd.Undo(); break;
-            case 12: cmd.Redo(); break;
-            case 13:
+            case 12: cmd.Undo(); break;
+            case 13: cmd.Redo(); break;
+            case 14:
                 // 「更多」：打开屏幕中央的面板（2026-10-01 起；抽屉从产品路径退场）
                 if (st.LibraryOpen) cmd.ToggleLibraryPanel();
                 OpenMore();
@@ -5105,7 +5127,7 @@ public sealed partial class FullUi : IOverlayUi
     }
 
     /// <summary>哪些格子有上带。没有的（后撤/重做/更多/截屏）点了不长出一条空带子。</summary>
-    private static bool HasBand(int cell) => cell is 2 or 3 or 4 or 5 or 6 or 7 or 8 or 9;
+    private static bool HasBand(int cell) => cell is 2 or 3 or 4 or 5 or 6 or 7 or 8 or 10;
 
     /// <summary>当前工具对应的格子——键盘换工具时用它把上带掰回来。</summary>
     private static int CellForTool(Tool t)
@@ -5119,7 +5141,7 @@ public sealed partial class FullUi : IOverlayUi
             Tool.Laser => 5,
             Tool.Eraser or Tool.PixelEraser => 6,
             Tool.Marquee => 7,
-            Tool.Capture => 9,
+            Tool.Capture => 10,
             _ => 3,
         };
     }
@@ -6420,7 +6442,7 @@ public sealed partial class FullUi : IOverlayUi
     {
         if (i == 1) return st.PassThrough;
         if (i == 2) return st.Board;
-        if (i == 10) return st.LibraryOpen;
+        if (i == 11) return st.LibraryOpen;
         if (st.PassThrough) return false;
         return i switch
         {
@@ -6430,7 +6452,7 @@ public sealed partial class FullUi : IOverlayUi
             6 => st.Tool is Tool.Eraser or Tool.PixelEraser,
             7 => st.Tool == Tool.Marquee,
             8 => HasShapeEntry(st.Tool),
-            9 => st.Tool == Tool.Capture,
+            10 => st.Tool == Tool.Capture,
             _ => false,
         };
     }
@@ -6443,7 +6465,7 @@ public sealed partial class FullUi : IOverlayUi
     /// 那种猜法迟早和引擎对不上。
     /// </summary>
     private static bool CellUnavailable(int i, in UiState st) =>
-        (i == 11 && st.UndoDepth == 0) || (i == 12 && st.RedoDepth == 0);
+        (i == 12 && st.UndoDepth == 0) || (i == 13 && st.RedoDepth == 0);
 
     /// <summary>
     /// 画刷按颜色缓存。**不能每帧重建**（性能账里点过名：几何与画刷都要缓存）。
@@ -6981,7 +7003,7 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>自检用：启动器格子的矩形（按**全局编号**，各分组自动展开；越界返回空）。</summary>
     internal RectF HubTileRectForTest(int code)
     {
-        for (int s = 0; s < HubCounts.Length; s++)
+        for (int s = 0; s < 2; s++)
             for (int i = 0; i < HubCount(s); i++)
                 if (HubTileCode(s, i) == code) return HubTileRect(s, i);
         return RectF.Empty;

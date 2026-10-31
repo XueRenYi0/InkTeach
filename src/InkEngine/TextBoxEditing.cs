@@ -35,6 +35,8 @@ public partial class InkEngine
         HideAiPromptEdit();
         if (_textBoxEditing) EndTextBoxEditFromUi(true);
         else HideTextBoxEdit();
+        // 文本是"插入动作"，不是模式：插完切回选择，方便马上拖动/改宽高。
+        if (Tool != Tool.Marquee) SetToolFromUi(Tool.Marquee);
         var s = CreatePlainTextBox("");
         Doc.SelectOnly(new[] { s });
         BeginTextBoxEdit(s);
@@ -56,7 +58,7 @@ public partial class InkEngine
         var screen = ScreenRectPhysical();
         float u = MathF.Max(0.75f, DpiScale);
         float w = MathF.Min(420f * u, (screen.MaxX - screen.MinX) * 0.55f);
-        float h = 120f * u;
+        float h = 60f * u;
         float x = (screen.MinX + screen.MaxX) * 0.5f - w * 0.5f;
         float y = (screen.MinY + screen.MaxY) * 0.5f - ViewOffsetY - h * 0.5f;
 

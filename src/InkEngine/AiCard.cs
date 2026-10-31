@@ -118,9 +118,7 @@ internal sealed class TextBoxData
         {
             float u = MathF.Max(0.5f, Unit);
             // 空框留一个能点进去的高度；有内容就按行高算，别硬留 120 的空白。
-            float minH = Role == TextBoxRole.Normal
-                ? (string.IsNullOrWhiteSpace(Text) ? 120f * u : 60f * u)
-                : 0f;
+            float minH = Role == TextBoxRole.Normal ? 60f * u : 0f;
             Height = MathF.Max(minH, h);
             ScrollY = 0f;
         }

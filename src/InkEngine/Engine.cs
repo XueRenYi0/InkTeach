@@ -6734,7 +6734,10 @@ public partial class InkEngine
     private uint _g2IdA, _g2IdB;      // 钉住的两根手指（2026-10-09：手掌/杂触点不参与；0 = 未钉）
     private float _g2ScrollSm;        // 双指漫游的滚动量平滑（压"两指事件交错"的半格锯齿）
     private bool _g2Turned;           // 这一次手势已经翻过页（一次手势只翻一页）
-    private bool _g2Transform;        // 有选中：这一次双指是在变换对象
+    private bool _g2Transform;
+    private bool _g2TextBoxScroll;
+    private Stroke _g2TextBoxScrollStroke;
+    private float _g2TextBoxScrollStart, _g2TextBoxScrollStartY;        // 有选中：这一次双指是在变换对象
     private bool _g2Tap;              // 两指点按候选（松手时结算）
     private float _g2Dist0;           // 变换用：起始两指距离（双指只做缩放，绕选区中心）
 
@@ -7210,6 +7213,24 @@ public partial class InkEngine
         if (!_touch.TryPair(_g2IdA, _g2IdB, out var p)) return;
         var mid = (p.A + p.B) * 0.5f;
 
+        if (_g2TextBoxScroll)
+        {
+            var ts = _g2TextBoxScrollStroke;
+            var tc = ts?.TextBox;
+            if (tc == null) return;
+            float target = Math.Clamp(_g2TextBoxScrollStart - (mid.Y - _g2TextBoxScrollStartY),
+                                      0f, tc.MaxScroll);
+            if (MathF.Abs(target - tc.ScrollY) > 0.1f)
+            {
+                tc.ScrollY = target;
+                Doc.Dirty.Add(ts.PaddedBounds);
+                Doc.StructureChangedSinceRender = true;
+                Doc.Version++;
+                _dirty = true;
+            }
+            return;
+        }
+
         if (_g2Transform)
         {
             // 绕**选区中心**缩放（不带平移、不带旋转）。
@@ -7279,6 +7300,8 @@ public partial class InkEngine
     /// <summary>双指手势收尾（最后一根指头抬起时）。</summary>
     private void TouchGestureReleased()
     {
+        _g2TextBoxScroll = false;
+        _g2TextBoxScrollStroke = null;
         // **两指轻点优先于"变换提交"**：点按没有位移，不该走变换那条路。
         // （2026-10-05 实测：画布上有选中对象时，轻点会被 `_g2Transform` 分支吃掉——
         //   老顺序把 transform 放在前面，轻点永远轮不到。）

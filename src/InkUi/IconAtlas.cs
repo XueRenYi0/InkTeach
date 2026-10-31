@@ -56,6 +56,9 @@ internal static class IconAtlas
         // 这里的画法照仓库里已有的自绘图标（激光笔、两种橡皮）：网格 24、圆头圆角、
         // 线宽和上游 regular 那一套（1.5）对齐，混在一排里看不出是谁画的。
         if (name == "parallelogram") { DrawParallelogram(ctx, x, y, size, brush); return; }
+        // 文本：卡片轮廓 + 一个 T。Fluent 库里没有"文本框"专名，自绘一张，
+        // 和旁边那排 1.5 线宽的图标同一套光学比例。
+        if (name == "text" || name == "textFilled") { DrawTextBoxIcon(ctx, x, y, size, brush); return; }
         if (name == "oval") { DrawOval(ctx, x, y, size, brush); return; }
         if (name == "axes") { DrawAxes(ctx, x, y, size, brush); return; }
         // "坐标系 + 网格"那一档（2026-09-24）：同一张图多一层细格线。
@@ -294,6 +297,24 @@ internal static class IconAtlas
         ctx.DrawLine(br, tr, brush, 1.5f, _round);
         ctx.DrawLine(tr, tl, brush, 1.5f, _round);
         ctx.DrawLine(tl, bl, brush, 1.5f, _round);
+
+        ctx.Transform = saved;
+    }
+
+    /// <summary>「文本」：圆角卡片 + 大写 T，一眼看出是文本框不是普通文字。</summary>
+    private static void DrawTextBoxIcon(ID2D1DeviceContext ctx, float x, float y,
+                                        float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        var box = new RoundedRectangle(new Vortice.RawRectF(2.6f, 3.8f, 21.4f, 20.2f), 3f, 3f);
+        ctx.DrawRoundedRectangle(box, brush, 1.4f);
+        ctx.DrawLine(new Vector2(7.4f, 8.7f), new Vector2(16.6f, 8.7f), brush, 1.6f, _round);
+        ctx.DrawLine(new Vector2(12f, 8.7f), new Vector2(12f, 17f), brush, 1.6f, _round);
+        ctx.DrawLine(new Vector2(9.4f, 17f), new Vector2(14.6f, 17f), brush, 1.4f, _round);
 
         ctx.Transform = saved;
     }
