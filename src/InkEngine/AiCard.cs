@@ -53,6 +53,13 @@ internal sealed class TextBoxData
     /// <summary>高度是否随内容自动增长（AI 题卡默认开；普通文本框默认关）。</summary>
     public bool AutoHeight = true;
 
+    /// <summary>
+    /// **运行时**标记：这一个文本框还在“第一次输入”里，宽度跟着文字长。
+    /// 不进存档（读回来一律 false）——落盘之后尺寸就是用户看到的那个，
+    /// 再打开不会因为内容量一遍又跳宽。
+    /// </summary>
+    public bool AutoWidth;
+
     /// <summary>正文字号（逻辑像素，乘 <see cref="Unit"/> 后是画布像素）。</summary>
     public float FontSize = 14.5f;
 
@@ -237,6 +244,34 @@ internal sealed class TextBoxData
         InvalidateLayout();
     }
 
+    /// <summary>
+    /// 输入中的实时自适应：宽度按自然宽长（夹在 token 最小宽和屏幕可用宽之间），
+    /// 到右沿后由排版自动换行，高度继续长；超过 maxHeight 时停住并转内部滚动。
+    /// 和 <see cref="FitToContent"/> 的区别：**不把 AutoHeight 关掉**，下一次输入继续长。
+    /// </summary>
+    internal void GrowToContent(float maxWidth, float maxHeight)
+    {
+        if (Role != TextBoxRole.Normal) return;
+        float u = MathF.Max(0.5f, Unit);
+        maxWidth = MathF.Max(80f * u, maxWidth);
+        maxHeight = MathF.Max(60f * u, maxHeight);
+
+        var (natural, min) = MeasureWidths(MathF.Max(maxWidth * 3f, 2400f * u));
+        float lo = MathF.Min(min, maxWidth);
+        Width = Math.Clamp(natural, lo, maxWidth);
+
+        AutoHeight = true;
+        ScrollY = 0f;
+        InvalidateLayout();
+        _ = EnsureLayout();
+        if (Height > maxHeight)
+        {
+            Height = maxHeight;
+            AutoHeight = false;
+            ClampScroll();
+        }
+    }
+
     private static float LongestToken(string text, float size)
     {
         if (string.IsNullOrEmpty(text)) return 0f;
@@ -294,8 +329,8 @@ internal sealed class TextBoxData
         {
             Role = Role, Title = Title, Meta = Meta, Text = Text,
             ShowAnswers = ShowAnswers, Width = Width, Height = Height,
-            AutoHeight = AutoHeight, FontSize = FontSize, Unit = Unit, Ink = Ink,
-            ScrollY = ScrollY,
+            AutoHeight = AutoHeight, AutoWidth = AutoWidth, FontSize = FontSize,
+            Unit = Unit, Ink = Ink, ScrollY = ScrollY,
         };
         foreach (var q in Questions) c.Questions.Add(q.Clone());
         return c;
@@ -1134,7 +1169,9 @@ public partial class InkEngine
 
         var s = new Stroke
         {
-            Tool = Tool,
+            // 文本框/题卡的对象身份看 Kind=TextBox，不看当前手里拿什么工具；
+            // 写 Marquee 避免把新加的 Tool.Text 值带进存档（旧程序不认识 32）。
+            Tool = Tool.Marquee,
             Kind = StrokeKind.TextBox,
             TextBox = card,
             Color = new Color4(0.12f, 0.14f, 0.18f, 1f),

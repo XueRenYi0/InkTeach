@@ -1254,17 +1254,17 @@ internal sealed partial class App
             Host.Commands.SetSelectMode(SelectMode.Rect);
             SettleFrames(150);
             Check("选择那一格：选中·框选 → MDI 那张（四角括号＋断续边）",
-                  ui.CellIconForTest(7) == "mdiSelection",
+                  ui.CellIconForTest(8) == "mdiSelection",
                   $"画的是 {ui.CellIconForTest(7)}（期望 mdiSelection）");
             Host.Commands.SetSelectMode(SelectMode.Lasso);
             SettleFrames(150);
             Check("选择那一格：切到套索 → 图标跟着换成套索",
-                  ui.CellIconForTest(7) == "lasso",
+                  ui.CellIconForTest(8) == "lasso",
                   $"画的是 {ui.CellIconForTest(7)}（期望 lasso）");
             Host.Commands.SetTool(Tool.Pen);
             SettleFrames(150);
             Check("选择那一格：没选中 → 固定的那支（Lucide 虚线框＋指针）",
-                  ui.CellIconForTest(7) == "lucideSelectPointer",
+                  ui.CellIconForTest(8) == "lucideSelectPointer",
                   $"画的是 {ui.CellIconForTest(7)}（期望 lucideSelectPointer）");
 
             Host.Commands.SetTool(Tool.Laser);
@@ -1924,7 +1924,7 @@ internal sealed partial class App
             Doc.Selected.Clear();
             SettleFrames(250);
 
-            var selCell = ui.CellRectForTest(7);
+            var selCell = ui.CellRectForTest(8);
             float sxSel = (selCell.MinX + selCell.MaxX) * 0.5f * DpiScale;
             float sySel = (selCell.MinY + selCell.MaxY) * 0.5f * DpiScale;
 
@@ -2661,13 +2661,16 @@ internal sealed partial class App
         SettleFrames(250);
 
         Check("完整档是 15 格", ui.VisibleCountForTest == 15, $"显示 {ui.VisibleCountForTest} 格");
-        Check("文本在图形后、截屏前；收藏在截屏后、撤销/重做/更多之前",
-              ui.CellRectForTest(9).MinX > ui.CellRectForTest(8).MaxX
+        Check("文本在橡皮后、选择前；图形/截屏/收藏/撤销/重做依次顺延",
+              ui.CellRectForTest(7).MinX > ui.CellRectForTest(6).MaxX
+              && ui.CellRectForTest(8).MinX > ui.CellRectForTest(7).MaxX
+              && ui.CellRectForTest(9).MinX > ui.CellRectForTest(8).MaxX
               && ui.CellRectForTest(10).MinX > ui.CellRectForTest(9).MaxX
               && ui.CellRectForTest(11).MinX > ui.CellRectForTest(10).MaxX
               && ui.CellRectForTest(12).MinX > ui.CellRectForTest(11).MaxX
               && ui.CellRectForTest(14).MinX > ui.CellRectForTest(13).MaxX,
-              $"文本 {ui.CellRectForTest(9).MinX:F0} → 截屏 {ui.CellRectForTest(10).MinX:F0} → "
+              $"文本 {ui.CellRectForTest(7).MinX:F0} → 选择 {ui.CellRectForTest(8).MinX:F0} → "
+              + $"图形 {ui.CellRectForTest(9).MinX:F0} → 截屏 {ui.CellRectForTest(10).MinX:F0} → "
               + $"收藏 {ui.CellRectForTest(11).MinX:F0} → 撤销 {ui.CellRectForTest(12).MinX:F0} → "
               + $"更多 {ui.CellRectForTest(14).MinX:F0}");
         Check("完整档 = 最宽宽度档", ui.DensityForTest == 3, $"宽度档 = {ui.DensityForTest}");
@@ -2752,13 +2755,13 @@ internal sealed partial class App
         ClickPhysical((customSeg.MinX + customSeg.MaxX) * 0.5f * DpiScale,
                       (customSeg.MinY + customSeg.MaxY) * 0.5f * DpiScale);
         SettleFrames(250);
-        var chip = ui.ChipRectForTest(8);
+        var chip = ui.ChipRectForTest(9);
         ClickPhysical((chip.MinX + chip.MaxX) * 0.5f * DpiScale,
                       (chip.MinY + chip.MaxY) * 0.5f * DpiScale);
         SettleFrames(250);
         Check("取消钉住→进自定义档、主条少一格",
-              ui.ProfileForTest == 1 && !ui.PinnedForTest(8) && ui.VisibleCountForTest == 14,
-              $"档位 = {ui.ProfileForTest}，钉着 = {ui.PinnedForTest(8)}，显示 {ui.VisibleCountForTest} 格");
+              ui.ProfileForTest == 1 && !ui.PinnedForTest(9) && ui.VisibleCountForTest == 14,
+              $"档位 = {ui.ProfileForTest}，钉着 = {ui.PinnedForTest(9)}，显示 {ui.VisibleCountForTest} 格");
 
         // 画笔现在也开放：点一下应当从主条移除。
         var penChip = ui.ChipRectForTest(3);
@@ -2965,12 +2968,12 @@ internal sealed partial class App
             for (int i = 0; i < 2; i++)
                 Need(ui.TipContentForTest(200 + i).Title == null, $"橡皮段{i}不该有");
             Host.Commands.SetTool(Tool.Marquee);
-            ui.SelectBandCellForTest(7);
+            ui.SelectBandCellForTest(8);
             Need(ui.TipContentForTest(400).Title == null, "全选不该有");
             for (int i = 0; i < 2; i++)
                 Need(ui.TipContentForTest(200 + i).Title == null, $"框选段{i}不该有");
             Host.Commands.SetTool(Tool.Rectangle);
-            ui.SelectBandCellForTest(8);
+            ui.SelectBandCellForTest(9);
             for (int i = 0; i < ui.BandSegmentCountForTest; i++)
                 Need(ui.TipContentForTest(200 + i).Title != null, $"缺图形段{i}");
             Host.Commands.SetTool(Tool.Capture);
@@ -3175,7 +3178,7 @@ internal sealed partial class App
         ClickPhysical((customSeg9.MinX + customSeg9.MaxX) * 0.5f * DpiScale,
                       (customSeg9.MinY + customSeg9.MaxY) * 0.5f * DpiScale);     // 自定义档（宫格才显示）
         SettleFrames(250);
-        var chip6 = ui.ChipRectForTest(8);
+        var chip6 = ui.ChipRectForTest(9);
         ClickPhysical((chip6.MinX + chip6.MaxX) * 0.5f * DpiScale,
                       (chip6.MinY + chip6.MaxY) * 0.5f * DpiScale);               // 取消钉住"图形"
         SettleFrames(250);
@@ -3318,8 +3321,8 @@ internal sealed partial class App
         SettleFrames(300);
         ui = CurrentUi as InkUi.FullUi;
         Check("重开界面读回了偏好",
-              ui != null && ui.DarkForTest && ui.ProfileForTest == 1 && !ui.PinnedForTest(8),
-              $"深色={ui?.DarkForTest}，档位={ui?.ProfileForTest}（1=自定义），图形钉着={ui?.PinnedForTest(8)}");
+              ui != null && ui.DarkForTest && ui.ProfileForTest == 1 && !ui.PinnedForTest(9),
+              $"深色={ui?.DarkForTest}，档位={ui?.ProfileForTest}（1=自定义），图形钉着={ui?.PinnedForTest(9)}");
 
         // 重排/新增迁移：v2 里的 `10` 是「撤销」，v4 里撤销在 12；不能把"取消钉住"
         // 挪到收藏(11)上。v4 新增的文本(9)按硬规则不塞进老用户主条。
@@ -3332,13 +3335,13 @@ internal sealed partial class App
         SettleFrames(300);
         ui = CurrentUi as InkUi.FullUi;
         Check("老配置的 unpinned 按稳定 key 迁移（v2 的 10=撤销 → 12）",
-              ui != null && !ui.PinnedForTest(8) && !ui.PinnedForTest(12)
-              && !ui.PinnedForTest(9) && ui.PinnedForTest(11) && ui.PinnedForTest(14),
-              $"图形={ui?.PinnedForTest(8)} 撤销={ui?.PinnedForTest(12)} "
-              + $"文本={ui?.PinnedForTest(9)} 收藏={ui?.PinnedForTest(11)} "
+              ui != null && !ui.PinnedForTest(9) && !ui.PinnedForTest(12)
+              && !ui.PinnedForTest(7) && ui.PinnedForTest(11) && ui.PinnedForTest(14),
+              $"图形={ui?.PinnedForTest(9)} 撤销={ui?.PinnedForTest(12)} "
+              + $"文本={ui?.PinnedForTest(7)} 收藏={ui?.PinnedForTest(11)} "
               + $"更多={ui?.PinnedForTest(14)}");
         Check("迁移后落盘用稳定 key（shapes,text,undo）",
-              GetUiPref("unpinned") == "shapes,text,undo" && GetUiPref("cellsVersion") == "4",
+              GetUiPref("unpinned") == "text,shapes,undo" && GetUiPref("cellsVersion") == "4",
               $"unpinned={GetUiPref("unpinned")}，cellsVersion={GetUiPref("cellsVersion")}");
         Check("压感偏好也读回来了（重启后仍是关）",
               !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
@@ -3514,59 +3517,171 @@ internal sealed partial class App
             SettleFrames(120);
         }
 
-        // ---- 普通文本框入口：主栏直达；未钉住时「更多」兜底，且不重复 ----
+        // ---- 文本工具：橡皮后入口、点画布输入、自动换行、空框清理、更多兜底 ----
         {
             // 前面的迁移用例把界面留在了「自定义、text 未钉」，这里先恢复成完整档再验主栏。
-            ui.SetPinForTest(9, true);
+            ui.SetPinForTest(7, true);
             ui.SetProfileForTest(2);
             SettleFrames(150);
-            var textCell = ui.CellRectForTest(9);
-            Check("主栏有「文本」格（已钉住）",
-                  !textCell.IsEmpty && ui.PinnedForTest(9)
-                  && ui.CellIconForTest(9) == "text",
+            var textCell = ui.CellRectForTest(7);
+            Check("主栏有「文本」格（橡皮后、已钉住）",
+                  !textCell.IsEmpty && ui.PinnedForTest(7)
+                  && ui.CellIconForTest(7) == "text",
                   $"格 ({textCell.MinX:F0},{textCell.MinY:F0})-({textCell.MaxX:F0},{textCell.MaxY:F0})，"
-                  + $"图标 = {ui.CellIconForTest(9)}");
+                  + $"图标 = {ui.CellIconForTest(7)}");
             Check("主栏可见时「更多」不重复文本框",
                   ui.HubTileRectForTest(10).IsEmpty,
                   $"文本框格 = {ui.HubTileRectForTest(10)}");
+
+            void ClickCanvas(float x, float y)
+            {
+                SendMouse((int)x, (int)y, 0); SettleFrames(60);
+                SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(80);
+                SendMouse((int)x, (int)y, Native.MOUSEEVENTF_LEFTUP); SettleFrames(220);
+            }
+
             ClickPhysical((textCell.MinX + textCell.MaxX) * 0.5f * DpiScale,
                           (textCell.MinY + textCell.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
-            Check("主栏「文本」：插入一个普通文本框并进入编辑",
+            Check("点「文本」= 选中文本工具（不再立刻插框）",
+                  Tool == Tool.Text && ui.CellActiveForTest(7)
+                  && !TextBoxEditing && TextBoxCountForTest == 0,
+                  $"工具={Tool} 高亮={ui.CellActiveForTest(7)} editing={TextBoxEditing} 文本框={TextBoxCountForTest}");
+            ui.SelectBandCellForTest(7);
+            SettleFrames(150);
+            Check("文本工具带：有字号和文字色片",
+                  ui.BandCellForTest == 7 && ui.SwatchCountForTest > 0
+                  && Host.State.TextFontSize > 0f,
+                  $"bandCell={ui.BandCellForTest} 色片={ui.SwatchCountForTest} 字号={Host.State.TextFontSize}");
+            float fontBefore = Host.State.TextFontSize;
+            var plusBtn = ui.TextFontPlusRectForTest;
+            ClickPhysical((plusBtn.MinX + plusBtn.MaxX) * 0.5f * DpiScale,
+                          (plusBtn.MinY + plusBtn.MaxY) * 0.5f * DpiScale);
+            SettleFrames(120);
+            Check("文本色带 A+：默认字号 +1", Host.State.TextFontSize > fontBefore,
+                  $"{fontBefore:F0} → {Host.State.TextFontSize:F0}");
+            var redSwatch = ui.SwatchRectForTest(1);
+            ClickPhysical((redSwatch.MinX + redSwatch.MaxX) * 0.5f * DpiScale,
+                          (redSwatch.MinY + redSwatch.MaxY) * 0.5f * DpiScale);
+            SettleFrames(120);
+            Check("文本色带点红色：默认文字色跟着变",
+                  Host.State.TextColor.R > 0.8f && Host.State.TextColor.G < 0.4f,
+                  $"文字色 = ({Host.State.TextColor.R:F2},{Host.State.TextColor.G:F2},{Host.State.TextColor.B:F2})");
+            Host.Commands.SetTextColor(InkPalette.PenBand[0].Color);
+
+            float tx = _virtualX + _virtualW * 0.55f;
+            float ty = _virtualY + _virtualH * 0.35f;
+            ClickCanvas(tx, ty);
+            Check("点画布空白：在落点新建文本框并进入编辑",
+                  TextBoxEditing && TextBoxCountForTest == 1 && Tool == Tool.Text,
+                  $"editing={TextBoxEditing} 文本框={TextBoxCountForTest} 工具={Tool}");
+            var tbStroke = Doc.Selected.Count == 1 ? Doc.Selected[0] : null;
+            var tb = tbStroke?.TextBox;
+            float initialW = tb?.Width ?? 0f;
+
+            string sample = "文本工具自动换行测试：" + new string('长', 160);
+            Host.SetTextBoxEditTextForTest(sample);
+            SettleFrames(250);
+            float maxWOnScreen = _virtualW * 0.9f + 2f;
+            Check("输入时自动变宽，到屏幕右沿后换行长高",
+                  tb != null && tb.Width > initialW && tb.Width <= maxWOnScreen
+                  && tb.ContentHeight > 60f * MathF.Max(0.75f, tb.Unit),
+                  $"宽 {initialW:F0} → {tb?.Width:F0}（上限 {maxWOnScreen:F0}），"
+                  + $"高 {tb?.Height:F0}，内容 {tb?.ContentHeight:F0}");
+            var doneBtn = ui.ActionRectForTest;
+            Check("编辑中文本色带出现「完成」按钮", !doneBtn.IsEmpty,
+                  $"按钮 ({doneBtn.MinX:F0},{doneBtn.MinY:F0})-({doneBtn.MaxX:F0},{doneBtn.MaxY:F0})");
+            ClickPhysical((doneBtn.MinX + doneBtn.MaxX) * 0.5f * DpiScale,
+                          (doneBtn.MinY + doneBtn.MaxY) * 0.5f * DpiScale);
+            SettleFrames(180);
+            Check("点「完成」提交，尺寸冻结（AutoWidth/AutoHeight 都关掉）",
+                  !TextBoxEditing && tb != null && !tb.AutoWidth && !tb.AutoHeight,
+                  $"editing={TextBoxEditing} autoW={tb?.AutoWidth} autoH={tb?.AutoHeight}");
+
+            // 上下手柄回归：滚动画布（ViewOffsetY 非 0）后，按下/拖动不能跳高度。
+            // 老实现把已经转成画布坐标的 y 又减了一次 ViewOffsetY，只有上下会跳。
+            if (tb != null && tbStroke != null)
+            {
+                float oldOffset = ViewOffsetY;
+                ViewOffsetY = -240f;
+                var frame = SelectionHandles.FrameOf(new[] { tbStroke });
+                var bh = SelectionHandles.CanvasPosition(SelHandle.Bottom, frame, UiUnit);
+                float hBefore = tb.Height;
+                SelectionGestureForTest(bh.X, bh.Y);
+                UpdateSelectionGestureForTest(bh.X, bh.Y);
+                EndSelectionGestureForTest();
+                Check("滚动画布后点下边手柄：高度不跳",
+                      MathF.Abs(tb.Height - hBefore) < 2f,
+                      $"{hBefore:F0} → {tb.Height:F0}（ViewOffsetY={ViewOffsetY:F0}）");
+
+                SelectionGestureForTest(bh.X, bh.Y);
+                UpdateSelectionGestureForTest(bh.X, bh.Y + 80f);
+                EndSelectionGestureForTest();
+                Check("滚动画布后拖下边：高度跟手 +80",
+                      MathF.Abs(tb.Height - (hBefore + 80f)) < 4f,
+                      $"{hBefore:F0} → {tb.Height:F0}");
+
+                frame = SelectionHandles.FrameOf(new[] { tbStroke });
+                var th = SelectionHandles.CanvasPosition(SelHandle.Top, frame, UiUnit);
+                float hTop = tb.Height;
+                SelectionGestureForTest(th.X, th.Y);
+                UpdateSelectionGestureForTest(th.X, th.Y + 60f);
+                EndSelectionGestureForTest();
+                Check("滚动画布后拖上边：高度跟手 −60（底边不动）",
+                      MathF.Abs(tb.Height - (hTop - 60f)) < 4f,
+                      $"{hTop:F0} → {tb.Height:F0}");
+                ViewOffsetY = oldOffset;
+            }
+
+            // 点已有文字：第一下选中，第二下编辑；不新建第二个。
+            Doc.Selected.Clear();                     // 提交后仍选中着；先模拟“点空白取消选中”
+            SettleFrames(120);
+            var cb = tbStroke?.PaddedBounds ?? default;
+            float ccx = (cb.MinX + cb.MaxX) * 0.5f;
+            float ccy = (cb.MinY + cb.MaxY) * 0.5f + ViewOffsetY;
+            ClickCanvas(ccx, ccy);
+            Check("点已有文字：选中，不新建",
+                  TextBoxCountForTest == 1 && Doc.Selected.Count == 1 && !TextBoxEditing,
+                  $"文本框={TextBoxCountForTest} 选中={Doc.Selected.Count} editing={TextBoxEditing}");
+            ClickCanvas(ccx, ccy);
+            Check("再点已选中的文字：进入编辑",
                   TextBoxEditing && TextBoxCountForTest == 1,
                   $"editing={TextBoxEditing} 文本框={TextBoxCountForTest}");
-            Check("插入后切回选择，文本格不高亮（动作不是模式）",
-                  Tool == Tool.Marquee && !ui.CellActiveForTest(9),
-                  $"工具 = {Tool}，文本格高亮 = {ui.CellActiveForTest(9)}");
             EndTextBoxEditFromUi(true);
+            SettleFrames(120);
+
+            // 新建后不输入就提交：空框必须自己消失，不留隐形对象。
+            int beforeEmpty = TextBoxCountForTest;
+            ClickCanvas(tx + 40f, ty + 40f);
+            EndTextBoxEditFromUi(true);
+            SettleFrames(150);
+            Check("新建后没输入就结束：空框自动清理",
+                  TextBoxCountForTest == beforeEmpty,
+                  $"{beforeEmpty} → {TextBoxCountForTest}");
             Doc.Clear();
             Doc.ClearHistory();
             SettleFrames(120);
 
-            // 未钉住（老用户迁移后的状态）：主栏没有，更多里必须有。
+            // 未钉住（老用户迁移后的状态）：主栏没有，更多里必须能进文本工具。
             ui.SetProfileForTest(1);
-            ui.SetPinForTest(9, false);
+            ui.SetPinForTest(7, false);
             SettleFrames(150);
-            Check("未钉住时主栏没有「文本」格", ui.CellRectForTest(9).IsEmpty,
-                  $"格 = {ui.CellRectForTest(9)}");
+            Check("未钉住时主栏没有「文本」格", ui.CellRectForTest(7).IsEmpty,
+                  $"格 = {ui.CellRectForTest(7)}");
             ui.OpenMoreForTest();
             SettleFrames(250);
             var tbTile = ui.HubTileRectForTest(10);
-            Check("未钉住时「更多」保留文本框入口", !tbTile.IsEmpty,
+            Check("未钉住时「更多」保留文本入口", !tbTile.IsEmpty,
                   $"格 ({tbTile.MinX:F0},{tbTile.MinY:F0})-({tbTile.MaxX:F0},{tbTile.MaxY:F0})");
             ClickPhysical((tbTile.MinX + tbTile.MaxX) * 0.5f * DpiScale,
                           (tbTile.MinY + tbTile.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
-            Check("更多 → 文本框：插入一个普通文本框并进入编辑",
-                  TextBoxEditing && TextBoxCountForTest == 1,
-                  $"editing={TextBoxEditing} 文本框={TextBoxCountForTest}");
-            EndTextBoxEditFromUi(true);
-            Doc.Clear();
-            Doc.ClearHistory();
-            SettleFrames(120);
-            ui.CloseMoreForTest();
-            ui.SetPinForTest(9, true);
+            Check("更多 → 文本：切到文本工具，点画布再输入",
+                  Tool == Tool.Text && !TextBoxEditing && !ui.MoreOpenForTest,
+                  $"工具={Tool} editing={TextBoxEditing} more={ui.MoreOpenForTest}");
+            ui.SetPinForTest(7, true);
             ui.SetProfileForTest(2);
+            ui.CloseMoreForTest();
             SettleFrames(150);
         }
 
@@ -3744,7 +3859,7 @@ internal sealed partial class App
         // C 段第一次跑就是这么点空的。
         void GotoShapeBand()
         {
-            var cell = ui.CellRectForTest(8);
+            var cell = ui.CellRectForTest(9);
             ClickPhysical((cell.MinX + cell.MaxX) * 0.5f * DpiScale,
                           (cell.MinY + cell.MaxY) * 0.5f * DpiScale);
             EnsureRailOpen();
@@ -4550,7 +4665,7 @@ internal sealed partial class App
         {
             Host.Commands.SetTool(tool);
             SettleFrames(120);
-            string icon = ui.CellIconForTest(8);
+            string icon = ui.CellIconForTest(9);
             bool changed = icons.Count == 0 || icon != icons[icons.Count - 1];
             Check($"「{name}」那一格的图标 = {icon}", changed,
                   changed
@@ -4572,7 +4687,7 @@ internal sealed partial class App
         {
             Host.Commands.SetTool(t);
             SettleFrames(120);
-            string icon = ui.CellIconForTest(8);
+            string icon = ui.CellIconForTest(9);
             Check($"手里是{t}时，图形那一格画通用图标",
                   icon == "shapes", $"画的是 {icon}（期望 shapes）");
         }
@@ -4580,7 +4695,7 @@ internal sealed partial class App
         Host.Commands.SetTool(Tool.Rectangle);
         SettleFrames(120);
         Check("切回矩形：图标立刻跟着回到矩形",
-              ui.CellIconForTest(8) == "square", $"画的是 {ui.CellIconForTest(8)}（期望 square）");
+              ui.CellIconForTest(9) == "square", $"画的是 {ui.CellIconForTest(9)}（期望 square）");
         // 这一段是**真渲染过的**：图标名一旦拼错，`IconAtlas.Draw` 会当场抛
         // （那条"绝不画一个空图标了事"的规矩），所以它同时就是
         // "自绘的图标（oval / parallelogram / axes / parabola / hyperbola / sine / cosine

@@ -236,6 +236,17 @@ public enum Tool
     /// —— 多出来的只有一个"P 在椭圆上的角度"和一个"画不画焦点三角形"的开关。
     /// </summary>
     ConicEllipse = 31,
+
+    /// <summary>
+    /// **文本工具**（2026-10-31）：和画笔一样是常驻工具，不是“点一下插一个框”的动作。
+    /// 选中后光标变 I-beam；点画布空白 = 在点击处新建文本框并进入编辑，
+    /// 点已有文字 = 选中它，点空白以外的地方不会落墨。
+    ///
+    /// 它和 <see cref="StrokeKind.TextBox"/> 是两件事：这个枚举值是“当前手里拿什么”，
+    /// 文本框对象自己仍然以 <see cref="StrokeKind.TextBox"/> 识别；新建的 Stroke.Tool
+    /// 仍写 <see cref="Marquee"/>，避免旧程序读到不认识的新工具值。
+    /// </summary>
+    Text = 32,
 }
 
 /// <summary>An axis-aligned rectangle in virtual-desktop pixels.</summary>
@@ -7347,6 +7358,18 @@ internal sealed class InkDocument
         act.Strokes.Add(s);
         AppendStroke(s);
         Commit(act);
+    }
+
+    /// <summary>
+    /// “新建后没输入就取消”的收尾：把刚插入的那条连同它的 Add 撤销记录一起丢掉，
+    /// 不在历史里留一个“撤销后复活空框”的怪步骤。
+    /// </summary>
+    internal void DropLastAddStrokeIf(Stroke s)
+    {
+        if (_undo.Count == 0) return;
+        if (_undo[^1] is AddStrokesAction a && a.Strokes.Count == 1
+            && ReferenceEquals(a.Strokes[0], s))
+            _undo.RemoveAt(_undo.Count - 1);
     }
 
     /// <summary>一次插入多条（粘贴用），**算一步撤销**。</summary>

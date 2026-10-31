@@ -806,6 +806,9 @@ internal static class Native
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageW")]
     public static extern IntPtr SendMessageString(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool UpdateWindow(IntPtr hWnd);
+
     // ---- 线程消息（PPT 轮询线程 → 主线程的唤醒）---------------------------
     //
     // 为什么不给窗口 PostMessage：**不需要 hwnd**。主循环的消息泵本来就是

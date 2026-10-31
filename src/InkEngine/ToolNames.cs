@@ -48,6 +48,7 @@ public static class ToolNames
         Tool.Pyramid => "棱锥",
         Tool.Frustum => "棱台",
         Tool.ConicEllipse => "椭圆（带焦点）",
+        Tool.Text => "文本",
         _ => "?",
     };
 }

@@ -41,9 +41,9 @@ public sealed partial class FullUi : IOverlayUi
         ("highlighter","highlighterFilled","荧光笔"),
         ("laser",     "laserFilled",     "激光笔"),
         ("eraser",    "eraserFilled",    "橡皮擦"),
+        ("text",      "text",            "文本（点画布输入）"),
         ("select",    "selectFilled",    "选择"),
         ("shapes",    "shapesFilled",    "图形"),
-        ("text",      "text",            "文本（插入文本框）"),
         ("cut",       "cutFilled",       "截屏"),
         ("star",      "starFilled",      "收藏"),
         ("undo",      "undoFilled",      "后撤"),
@@ -52,7 +52,7 @@ public sealed partial class FullUi : IOverlayUi
     };
 
     /// <summary>每一组的最后一格（下标）。组之间画一条分隔线。</summary>
-    private static readonly int[] GroupEnds = { 0, 2, 6, 11, 14 };
+    private static readonly int[] GroupEnds = { 0, 2, 7, 11, 14 };
 
     /// <summary>
     /// 格子的**稳定身份**（下标会因排序变化，身份不会）。
@@ -61,7 +61,7 @@ public sealed partial class FullUi : IOverlayUi
     private static readonly string[] CellKeys =
     {
         "ball", "cursor", "board", "pen", "highlighter", "laser", "eraser",
-        "select", "shapes", "text", "capture", "star", "undo", "redo", "more",
+        "text", "select", "shapes", "capture", "star", "undo", "redo", "more",
     };
 
     /// <summary>v2 落盘顺序（收藏追加在最右）。老配置的数字只在这个顺序里解释。</summary>
@@ -93,7 +93,7 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>每一格从哪个版本开始存在（和 <see cref="CellKeys"/> 对齐）。</summary>
     private static readonly int[] CellSinceVersion =
     {
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 2, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 2, 0, 0, 0,
     };
 
     // 极简固定 5 格：球 + 鼠标 + 画笔 + 橡皮 + 更多。
@@ -1066,6 +1066,7 @@ public sealed partial class FullUi : IOverlayUi
                     - (BandHasSlider ? SliderTrackW + 14f : 0f)    // 给右端的粗细滑条让位
                     - (BandHasWidthButton ? WidthButtonW + WidthButtonGap : 0f) // 4 格以下的粗细按钮
                     - (BandHasDashToggle ? DashToggleW + DashToggleGap : 0f)   // 给虚实线那一格让位
+                    - TextSizeReserve                              // 文本：右端 A− / 字号 / A+
                     - ActionReserve;                                // 给最右端的动作按钮让位
         float h = SwatchHeight();
         float gap = 4f;
@@ -1385,7 +1386,51 @@ public sealed partial class FullUi : IOverlayUi
         return best;
     }
 
-    private bool BandHasSwatches => _bandCell is 3 or 4;
+    private bool BandHasSwatches => _bandCell is 3 or 4 or 7;
+
+    /// <summary>文本那一格：色片 = 文字颜色；右边是字号 A− / 15 / A+。</summary>
+    private bool BandHasTextSize => _bandCell == 7;
+    // 文本带在 4~5 格的自定义主条里会很窄：字号按钮收小、色片只留 3 个，
+    // 否则 8 个色片 + 114 宽的字号组会叠在一起。
+    private bool TextSizeTight => VisibleCount() <= 5;
+    private float TextSizeBtnW => TextSizeTight ? 26f : 30f;
+    private float TextSizeLabelW => TextSizeTight ? 24f : 36f;
+    private float TextSizeGap => TextSizeTight ? 2f : 4f;
+    private float TextSizeReserve => BandHasTextSize
+        ? TextSizeBtnW * 2f + TextSizeLabelW + TextSizeGap * 2f + 10f : 0f;
+
+    private RectF TextSizePlusRect()
+    {
+        var band = BandRect();
+        float right = band.MaxX - BarInset() - ActionReserve;
+        float cy = (band.MinY + band.MaxY) * 0.5f;
+        float h = SwatchHeight();
+        return new RectF
+        {
+            MinX = right - TextSizeBtnW, MinY = cy - h * 0.5f,
+            MaxX = right, MaxY = cy + h * 0.5f,
+        };
+    }
+    private RectF TextSizeMinusRect()
+    {
+        var plus = TextSizePlusRect();
+        return new RectF
+        {
+            MinX = plus.MinX - TextSizeGap - TextSizeLabelW - TextSizeGap - TextSizeBtnW,
+            MinY = plus.MinY, MaxX = plus.MinX - TextSizeGap - TextSizeLabelW - TextSizeGap,
+            MaxY = plus.MaxY,
+        };
+    }
+    private RectF TextSizeLabelRect()
+    {
+        var plus = TextSizePlusRect();
+        var minus = TextSizeMinusRect();
+        return new RectF
+        {
+            MinX = minus.MaxX + TextSizeGap, MinY = plus.MinY,
+            MaxX = plus.MinX - TextSizeGap, MaxY = plus.MaxY,
+        };
+    }
     /// <summary>
     /// 这一格的设置条上要不要那个**虚实线切换**（夹在色片和粗细滑条之间，
     /// 用户 2026-09-19 定的位置："加在'调按钮大小'和'颜色带'中间"）。
@@ -1420,7 +1465,7 @@ public sealed partial class FullUi : IOverlayUi
     /// </summary>
     private int BandSegmentCount => _bandCell switch
     {
-        2 => BoardBand.Length, 6 => 2, 7 => 2, 8 => ShapeSegmentCount, 10 => 2, _ => 0,
+        2 => BoardBand.Length, 6 => 2, 8 => 2, 9 => ShapeSegmentCount, 10 => 2, _ => 0,
     };
 
     /// <summary>
@@ -1481,7 +1526,7 @@ public sealed partial class FullUi : IOverlayUi
     };
 
     /// <summary>图形那一格在上带里的下标（三行都在这一个格子里）。</summary>
-    private const int ShapeCell = 8;
+    private const int ShapeCell = 9;
 
     /// <summary>
     /// 上带图形那一格一共几行。布局（`SegmentRect` 的行高/居中）和带子总高
@@ -1736,13 +1781,14 @@ public sealed partial class FullUi : IOverlayUi
     //
     // 位置：上带**最右端**。粗细滑条也在右端，所以橡皮那条是
     // `[整笔擦][面积擦] …… [粗细滑条][清空]`——动作永远贴在最外沿。
-    private enum BandAction { None = 0, Clear, SelectAll, CloseBoard, PasteImage }
+    private enum BandAction { None = 0, Clear, SelectAll, CloseBoard, PasteImage, TextDone }
 
     private BandAction ActionOf(int bandCell) => bandCell switch
     {
         2 => BandAction.CloseBoard,   // 白板那条：最右端一个"关闭白板"
         6 => BandAction.Clear,        // 清空 ≈ "全擦掉"，和两种橡皮排一条
-        7 => BandAction.SelectAll,    // 全选 ≈ "把要操作的东西一次选上"，归选择这条
+        7 => _host?.State.TextBoxEditing == true ? BandAction.TextDone : BandAction.None,
+        8 => BandAction.SelectAll,    // 全选 ≈ "把要操作的东西一次选上"，归选择这条
         10 => BandAction.PasteImage,  // 截图那条：把剪贴板里的东西粘进来（8.3.0 从分段里拆出来）
         _ => BandAction.None,
     };
@@ -1862,6 +1908,7 @@ public sealed partial class FullUi : IOverlayUi
         bool clear = a == BandAction.Clear;
         bool closeBoard = a == BandAction.CloseBoard;
         bool paste = a == BandAction.PasteImage;
+        bool textDone = a == BandAction.TextDone;
         bool dim = closeBoard && (_host == null || !_host.State.Board);
         var ink = dim ? new Color4(InkCol.R, InkCol.G, InkCol.B, 0.30f) : InkCol;
         var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f, 7f);
@@ -1886,12 +1933,14 @@ public sealed partial class FullUi : IOverlayUi
         }
 
         var iconBox = new RectF { MinX = r.MinX + 6f, MinY = r.MinY, MaxX = r.MinX + 28f, MaxY = r.MaxY };
-        IconAtlas.DrawCentered(ctx, paste ? "image" : clear ? "broom" : "selectAll", iconBox, 16f, Brush(ctx, ink));
+        IconAtlas.DrawCentered(ctx, textDone ? "check" : paste ? "image" : clear ? "broom" : "selectAll",
+                                iconBox, 16f, Brush(ctx, ink));
         var labelBox = new RectF { MinX = r.MinX + 28f, MinY = r.MinY, MaxX = r.MaxX - 6f, MaxY = r.MaxY };
         bool tight = Density <= BandDensity.Compact;
         // 标签长短按可用宽度降级：极简“清空”，宽档“清空墨迹”。
         bool clearTight = Density <= BandDensity.Minimal;
-        _widgets.Text(ctx, paste ? (tight ? "粘贴" : "粘贴图片")
+        _widgets.Text(ctx, textDone ? "完成"
+                              : paste ? (tight ? "粘贴" : "粘贴图片")
                               : clear ? (clearTight ? "清空" : "清空墨迹")
                               : "全选",
                       labelBox, 12.5f, Brush(ctx, InkCol));
@@ -1920,7 +1969,7 @@ public sealed partial class FullUi : IOverlayUi
     // 那个是不是也不需要"）——橡皮的块头由落点自己说话，滑条上不再弹尺寸气泡；
     // 笔 / 荧光笔 / 激光 / 白板（板色片）照旧。
     private bool SizePreviewVisible =>
-        BandOpen() && BandHasSlider
+        BandOpen() && BandHasSlider && !BandHasTextSize
         && (_bandCell == 2 || _host == null
             || _host.State.Tool is not (Tool.Eraser or Tool.PixelEraser))
         && (_sliderDragging || _hover == 300);
@@ -2272,8 +2321,9 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>这一刻用的是荧光笔那张表吗（色片表 / 切色循环都看它）。</summary>
     private bool UsingHighlighterSwatches => _host != null && _host.State.Tool == Tool.Highlighter;
+    private bool UsingTextSwatches => _bandCell == 7;
 
-    /// <summary>这一刻生效的色片表（笔那张 / 荧光笔那张）。</summary>
+    /// <summary>这一刻生效的色片表（笔那张 / 荧光笔那张 / 文本那张）。</summary>
     private (string Name, Color4 Color)[] SwatchTable =>
         UsingHighlighterSwatches ? Tokens.HighlighterPalette : Tokens.Palette;
 
@@ -2284,6 +2334,8 @@ public sealed partial class FullUi : IOverlayUi
             int n = VisibleCount();
             if (UsingHighlighterSwatches)
                 return n <= 3 ? HlSwatchIdx3 : n <= 5 ? HlSwatchIdx4 : HlSwatchIdx;
+            if (UsingTextSwatches)
+                return n <= 5 ? NanoSwatchIdx : n <= 9 ? MiniSwatchIdx : FullSwatchIdx;
             if (n <= 3) return NanoSwatchIdx;
             return Density switch
             {
@@ -2297,6 +2349,7 @@ public sealed partial class FullUi : IOverlayUi
     private Color4 SwatchColor(int i)
     {
         int idx = SwatchIdx[i];
+        if (UsingTextSwatches) return SwatchTable[idx].Color;
         if (UsingHighlighterSwatches)
         {
             var hl = _host?.State.HighlighterSwatchColors;
@@ -2311,6 +2364,11 @@ public sealed partial class FullUi : IOverlayUi
     private void ActivateSwatch(int i)
     {
         int slot = SwatchIdx[i];
+        if (UsingTextSwatches)
+        {
+            _host.Commands.SetTextColor(SwatchColor(i));
+            return;
+        }
         if (UsingHighlighterSwatches)
         {
             // 荧光笔也是：已经是这一格 → 再点打开它的取色板；否则只选色。
@@ -3246,10 +3304,10 @@ public sealed partial class FullUi : IOverlayUi
             case 6:                       // 面积擦 / 整笔擦 —— 引擎里是**两个工具**
                 _host.Commands.SetTool(i == 0 ? Tool.PixelEraser : Tool.Eraser);
                 break;
-            case 7:                       // 矩形框选 / 自由套索
+            case 8:                       // 矩形框选 / 自由套索
                 _host.Commands.SetSelectMode(i == 0 ? SelectMode.Rect : SelectMode.Lasso);
                 break;
-            case 8:                       // 图形那一格：三行拉平编号，顺序见 ShapeRows
+            case 9:                       // 图形那一格：三行拉平编号，顺序见 ShapeRows
                 {
                     var picked = ShapeToolAt(i);
                     // **同一个图形格再点一次 = 换一档**。只对三种图形这样，别的照旧"再点=选中它"：
@@ -4206,9 +4264,9 @@ public sealed partial class FullUi : IOverlayUi
                 CloseMore();
                 OpenAiPanel();
                 break;
-            case TextBoxTileCode:                     // 普通文本框：插入并直接进入输入
+            case TextBoxTileCode:                     // 普通文本框：切到文本工具，点画布放置
                 CloseMore();
-                _host.Commands.InsertTextBox();
+                _host.Commands.SetTool(Tool.Text);
                 break;
             case HelpTileCode:                        // 使用说明（2026-10-19）
                 // 和「设置」一样留在 More 面板里换页，不另开一层——DPI、遮罩、
@@ -4559,6 +4617,12 @@ public sealed partial class FullUi : IOverlayUi
                 _host.Commands.Paste();
                 _actionFlashUntil = _host.NowMs + 260;
             }
+            else if (CurAction == BandAction.TextDone)
+            {
+                // 文本工具的「完成」：触摸屏没有 Ctrl+Enter，必须有一颗明确的结束键。
+                _host.Commands.CommitTextEdit();
+                _actionFlashUntil = _host.NowMs + 260;
+            }
             else
             {
                 _host.Commands.SelectAll();          // 全选：点一下就执行
@@ -4568,6 +4632,21 @@ public sealed partial class FullUi : IOverlayUi
             return true;
         }
 
+        if (BandOpen() && BandHasTextSize)
+        {
+            if (TextSizeMinusRect().Contains(p.X, p.Y))
+            {
+                _host.Commands.AdjustTextFont(-1f);
+                Invalidate();
+                return true;
+            }
+            if (TextSizePlusRect().Contains(p.X, p.Y))
+            {
+                _host.Commands.AdjustTextFont(+1f);
+                Invalidate();
+                return true;
+            }
+        }
         if (BandOpen() && BandHasWidthButton && HitWidthButton(p.X, p.Y))
         {
             CycleWidthGrade();
@@ -4810,6 +4889,11 @@ public sealed partial class FullUi : IOverlayUi
         if (!BandOpen()) return -1;
         // 动作按钮（清空/全选）：编号 400，和色片 100、分段 200、滑条 300 排成一套
         if (CurAction != BandAction.None && RailOpen && ActionRect().Contains(x, y)) return 400;
+        if (BandHasTextSize && RailOpen)
+        {
+            if (TextSizeMinusRect().Contains(x, y)) return 610;
+            if (TextSizePlusRect().Contains(x, y)) return 611;
+        }
         if (BandHasWidthButton && HitWidthButton(x, y)) return 501;
         if (BandHasSlider && Widgets.SliderHit(SliderRect()).Contains(x, y)) return 300;
         if (HitDashToggle(x, y)) return 500;                       // 虚实线那一格
@@ -4999,7 +5083,7 @@ public sealed partial class FullUi : IOverlayUi
         // **点了别的格子 = 选择格那次"双击"序列到此为止**。
         // 不这么做的话，"选择格 →（200ms）笔格 →（200ms）选择格"会被算成对选择格的双击，
         // 于是老师只是在两个格子之间来回看一眼，就被全选了。
-        if (idx != 7) _lastSelCellClickMs = double.NegativeInfinity;
+        if (idx != 8) _lastSelCellClickMs = double.NegativeInfinity;
 
         // 点工具格时，上带跟着换成这个工具的设置（"上带＝这个按钮的设置条"），
         // 并且**钉住展开**——不钉的话指针一移开就收了，选项来不及选。
@@ -5078,37 +5162,34 @@ public sealed partial class FullUi : IOverlayUi
                 cmd.SetEraserPreferred();
                 break;
             case 7:
+                // 文本：和画笔一样是常驻工具。选中后点画布空白 = 在点击处输入；
+                // 点已有文字 = 选中它。色带跟着这一格出来（字号 + 颜色 + 完成）。
+                // 正在输入时再点这一格 = 完成（触摸屏没有 Ctrl+Enter）。
+                if (st.TextBoxEditing) cmd.CommitTextEdit();
+                else cmd.SetTool(Tool.Text);
+                break;
+            case 8:
                 // 选择那一格：**不再"再点一下换档"**（矩形/套索去上带那两段里选，2026-10-05）。
                 //
                 // **双击 = 全选**（500ms 内两击，照 InkClass 那个经典交互）。
                 // 没有"再点换档"之后，两击的净效果就是"选中工具 + 全选"——比原来更直白。
                 if (_host.NowMs - _lastSelCellClickMs < SelectDoubleClickMs)
                 {
-                    _lastSelCellClickMs = double.NegativeInfinity;   // 这一次序列到此为止
+                    _lastSelCellClickMs = double.NegativeInfinity;
                     cmd.SetTool(Tool.Marquee);
                     cmd.SetSelectMode(_selModeBeforeDoubleClick);
                     cmd.SelectAll();
-                    // 闪一下：闪的是色带上那个「全选」按钮（和点它自己一样，
-                    // 见调研-界面-上下文设置条.md 里"点一下 → 全部进选中框 → 按钮闪一下"）。
                     _actionFlashUntil = _host.NowMs + 260;
                     break;
                 }
                 _lastSelCellClickMs = _host.NowMs;
-                _selModeBeforeDoubleClick = st.SelectMode;           // 记下"双击前"的档
+                _selModeBeforeDoubleClick = st.SelectMode;
                 cmd.SetTool(Tool.Marquee);
                 break;
-            case 8:
-                // 七种图形之后**不能再"两档对切"**了（以前是直线 ↔ 矩形）。
-                //
-                // 现在的规则：已经是图形工具就**不动工具**——用户只是想看上带（指针就在
-                // 面板上，下一手点哪一段都行）；偷偷换成矩形是最气人的，画到一半的
-                // 三角形会被换掉。不是图形工具才给一个默认种类（矩形，沿用老行为）。
-                if (!HasShapeEntry(st.Tool)) cmd.SetTool(Tool.Rectangle);
-                break;
             case 9:
-                // 文本：**动作**不是模式。插入一个一行高的文本框并直接进入编辑，
-                // 工具切回选择，格本身不高亮；钉住 = 主栏直达，不钉 = 更多里。
-                cmd.InsertTextBox();
+                // 图形那一格：已经是图形工具就不动工具（只是看上带）；
+                // 不是图形工具才给默认的矩形。
+                if (!HasShapeEntry(st.Tool)) cmd.SetTool(Tool.Rectangle);
                 break;
             case 10: cmd.SetTool(Tool.Capture); break;
             case 11:
@@ -5127,20 +5208,21 @@ public sealed partial class FullUi : IOverlayUi
     }
 
     /// <summary>哪些格子有上带。没有的（后撤/重做/更多/截屏）点了不长出一条空带子。</summary>
-    private static bool HasBand(int cell) => cell is 2 or 3 or 4 or 5 or 6 or 7 or 8 or 10;
+    private static bool HasBand(int cell) => cell is >= 2 and <= 10;
 
     /// <summary>当前工具对应的格子——键盘换工具时用它把上带掰回来。</summary>
     private static int CellForTool(Tool t)
     {
-        // 七种图形共用第 8 格（哪一种是哪一段由上带里的高亮标出来）。
+        // 图形共用第 9 格（哪一种是哪一段由上带里的高亮标出来）。
         // 判据走 HasShapeEntry 而不是再列一遍图形名字：加一种图形只改 ShapeRows。
-        if (HasShapeEntry(t)) return 8;
+        if (HasShapeEntry(t)) return 9;
         return t switch
         {
             Tool.Highlighter => 4,
             Tool.Laser => 5,
             Tool.Eraser or Tool.PixelEraser => 6,
-            Tool.Marquee => 7,
+            Tool.Text => 7,
+            Tool.Marquee => 8,
             Tool.Capture => 10,
             _ => 3,
         };
@@ -5639,6 +5721,8 @@ public sealed partial class FullUi : IOverlayUi
 
         if (!RailOpen) return;
 
+        if (BandHasTextSize) DrawTextSize(ctx, st);
+
         if (BandHasSwatches)
         {
             for (int i = 0; i < SwatchCount; i++)
@@ -5719,6 +5803,27 @@ public sealed partial class FullUi : IOverlayUi
         float dot = 2.2f + t * 2.2f;
         ctx.FillEllipse(new Ellipse(new Vector2(r.MaxX - 7f, r.MaxY - 7f), dot, dot),
                         Brush(ctx, ink));
+    }
+
+    private void DrawTextSize(ID2D1DeviceContext ctx, in UiState st)
+    {
+        var minus = TextSizeMinusRect();
+        var plus = TextSizePlusRect();
+        var label = TextSizeLabelRect();
+        var ink = st.TextColor;
+
+        void Button(RectF r, string text, int hover)
+        {
+            var rr = new RoundedRectangle(
+                new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f, 7f);
+            if (_hover == hover) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+            ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+            _widgets.Text(ctx, text, r, 12.5f, Brush(ctx, InkCol));
+        }
+
+        Button(minus, "A−", 610);
+        Button(plus, "A+", 611);
+        _widgets.Text(ctx, $"{st.TextFontSize:F0}", label, 12.5f, Brush(ctx, ink));
     }
 
     private void DrawBandSlider(ID2D1DeviceContext ctx, in UiState st)
@@ -5834,6 +5939,7 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>这一片色片是不是"当前色"（笔/荧光笔都按色位编号判）。</summary>
     private bool IsSwatchActive(in UiState st, int i)
     {
+        if (UsingTextSwatches) return SameColor(st.TextColor, SwatchColor(i));
         if (st.Tool == Tool.Highlighter) return st.HighlighterSwatchSelected == SwatchIdx[i];
         return st.PenSwatchSelected == SwatchIdx[i];
     }
@@ -6239,12 +6345,12 @@ public sealed partial class FullUi : IOverlayUi
         6 => Density <= BandDensity.Compact
                 ? (i == 0 ? "面擦" : "笔擦")
                 : (i == 0 ? "面积擦" : "整笔擦"),
-        7 => i == 0 ? "矩形" : "套索",
+        8 => i == 0 ? "矩形" : "套索",
         // 截图：名字照微信那套（8.3.1）——"截图" = 屏幕原样（连我们的板书一起），
         // "隐藏窗口截图" = 先把我们这层藏起来，拍到的只有下层内容。
         10 => i == 0 ? "截图"
                      : (Density <= BandDensity.Compact ? "隐窗截图" : "隐藏窗口截图"),
-        8 => "",                                   // 图形：画图标（见 ShapeIcon）
+        9 => "",                                   // 图形：画图标（见 ShapeIcon）
         _ => "",
     };
 
@@ -6252,8 +6358,8 @@ public sealed partial class FullUi : IOverlayUi
     {
         2 => BoardSegAt(i).Kind == BoardSegKind.Color && BoardColorIs(st, BoardSegAt(i).Idx),
         6 => i == 0 ? st.Tool == Tool.PixelEraser : st.Tool == Tool.Eraser,
-        7 => i == 0 ? st.SelectMode == SelectMode.Rect : st.SelectMode == SelectMode.Lasso,
-        8 => i >= 0 && i < ShapeSegmentCount && st.Tool == ShapeToolAt(i),
+        8 => i == 0 ? st.SelectMode == SelectMode.Rect : st.SelectMode == SelectMode.Lasso,
+        9 => i >= 0 && i < ShapeSegmentCount && st.Tool == ShapeToolAt(i),
         10 => i == (st.CaptureHideInk ? 1 : 0),    // 截图：当前是哪一种截法就高亮哪一段
         _ => false,
     };
@@ -6417,11 +6523,11 @@ public sealed partial class FullUi : IOverlayUi
     private string CellIconName(int cell, in UiState st) => cell switch
     {
         // 图形那一格：亮着（手里就是某种图形）才跟着当前种类走，没亮画通用的那张（见 DrawCell 那段）
-        8 => IsActive(8, st) ? ShapeIcon(st.Tool) : Cells[8].Icon,
+        9 => IsActive(9, st) ? ShapeIcon(st.Tool) : Cells[9].Icon,
         6 => IsActive(6, st)
                 ? (st.Tool == Tool.PixelEraser ? "eraserMedium" : "eraser")
                 : "eraserPure",
-        7 => IsActive(7, st)
+        8 => IsActive(8, st)
                 ? (st.SelectMode == SelectMode.Lasso ? "lasso" : "mdiSelection")
                 : "lucideSelectPointer",
         _ => IsActive(cell, st) ? Cells[cell].Filled : Cells[cell].Icon,
@@ -6450,8 +6556,9 @@ public sealed partial class FullUi : IOverlayUi
             4 => st.Tool == Tool.Highlighter,
             5 => st.Tool == Tool.Laser,
             6 => st.Tool is Tool.Eraser or Tool.PixelEraser,
-            7 => st.Tool == Tool.Marquee,
-            8 => HasShapeEntry(st.Tool),
+            7 => st.Tool == Tool.Text,
+            8 => st.Tool == Tool.Marquee,
+            9 => HasShapeEntry(st.Tool),
             10 => st.Tool == Tool.Capture,
             _ => false,
         };
@@ -6672,9 +6779,9 @@ public sealed partial class FullUi : IOverlayUi
                 4 => (c.Tip, Key(KeyAction.ToolHighlighter), ""),
                 5 => (c.Tip, Key(KeyAction.ToolLaser), ""),
                 6 => (c.Tip, Key(KeyAction.ToolEraser), "再按切「面积擦 / 整笔擦」"),
-                7 => (c.Tip, Key(KeyAction.ToolMarquee), "再按切「矩形 / 套索」，双击 = 全选"),
-                8 => (c.Tip, "", "22 种图形都在上带里挑"),
-                9 => (c.Tip, "", "插入一行高的文本框，直接开始输入"),
+                7 => (c.Tip, "", "点画布输入；点已有文字选中，再点编辑"),
+                8 => (c.Tip, Key(KeyAction.ToolMarquee), "再按切「矩形 / 套索」，双击 = 全选"),
+                9 => (c.Tip, "", "22 种图形都在上带里挑"),
                 10 => (c.Tip, Key(KeyAction.ToolCapture), ""),
                 11 => (c.Tip, "", "打开收藏；选中内容后可存进来"),
                 12 => (c.Tip, Key(KeyAction.Undo), ""),
@@ -6689,6 +6796,8 @@ public sealed partial class FullUi : IOverlayUi
         if (id >= 100 && id < 100 + SwatchCount)
         {
             int slot = SwatchIdx[id - 100];
+            if (UsingTextSwatches)
+                return (SwatchTable[slot].Name, "", "文字颜色");
             bool highlighter = UsingHighlighterSwatches;
             bool active = highlighter
                 ? _host?.State.HighlighterSwatchSelected == slot
@@ -6714,6 +6823,8 @@ public sealed partial class FullUi : IOverlayUi
 
         if (id == 500) return ("线型", "", "实线 / 虚线 / 点线，点一下换");
         if (id == 501) return ("粗细", "", "点一下换一档");
+        if (id == 610) return ("缩小字号", "", "也可以直接点色带上的 A−");
+        if (id == 611) return ("放大字号", "", "也可以直接点色带上的 A+");
         return default;      // 滑条（300）不出第二张卡，见上文
     }
 
@@ -6734,7 +6845,7 @@ public sealed partial class FullUi : IOverlayUi
             }
             // 橡皮 / 框选 / 截图的分段上已经写着"整笔擦 / 面积擦 / 矩形 / 套索 / 截图…"，
             // 不配（收窄）；只有图形那 22 段是纯图标，全配。
-            case 8:
+            case 9:
                 return (ToolNames.Of(ShapeToolAt(i)), "", "");
         }
         return default;
@@ -7097,6 +7208,8 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>自检用：上带右端那个动作按钮（清空/全选）的矩形 + 按住状态。</summary>
     internal RectF ActionRectForTest => CurAction == BandAction.None ? RectF.Empty : ActionRect();
+    internal RectF TextFontMinusRectForTest => TextSizeMinusRect();
+    internal RectF TextFontPlusRectForTest => TextSizePlusRect();
     internal bool ActionHoldingForTest => ActionHolding;
     internal float HoldProgressForTest => HoldProgress();
 

@@ -369,6 +369,13 @@ public interface IEngineCommands
     /// </summary>
     void InsertTextBox();
 
+    /// <summary>文本工具：改字号（选中文本框时改它；没选中时改下一次的默认值）。</summary>
+    void AdjustTextFont(float delta);
+    /// <summary>文本工具：改文字颜色。选中文本框时改它，否则只改下一次的默认色。</summary>
+    void SetTextColor(Color4 color);
+    /// <summary>文本工具：结束当前文字编辑（色带上的「完成」和 Ctrl+Enter 走这里）。</summary>
+    void CommitTextEdit();
+
     /// <summary>收藏面板：切到某个分类（`"all"` = 全部）。只改筛选，不搬条目。</summary>
     void SetLibraryCategory(string id);
     /// <summary>收藏面板：新建一个分类（自动命名 第一类/第二类…），并切过去。</summary>
@@ -1105,6 +1112,12 @@ public readonly struct UiState
     /// <summary>荧光笔的最近自定义颜色（基色，不透明），最新的在前。</summary>
     public Color4[] RecentHighlighterColors { get; init; }
     public float LaserWidth { get; init; }
+    /// <summary>文本工具：当前字号（选中文本框时是它自己的，没选中时是下一次的默认值）。</summary>
+    public float TextFontSize { get; init; }
+    /// <summary>文本工具：当前文字颜色（选中文本框时是它自己的，没选中时是默认值）。</summary>
+    public Color4 TextColor { get; init; }
+    /// <summary>文本工具：正在编辑文字（界面据此显示「完成」按钮）。</summary>
+    public bool TextBoxEditing { get; init; }
     /// <summary>
     /// **笔的线型**（实线 / 虚线 / 点线）。界面色带条上那个"虚实线切换"按它显示当前档。
     ///

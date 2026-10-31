@@ -32,7 +32,10 @@ public partial class InkEngine
         if (box == null) return;
 
         // 起点用对象局部坐标（文本框只做平移，不旋转；逆变换仍然写全，防以后加旋转）。
-        Vector2 p = new(screenX, screenY - ViewOffsetY);
+        // ⚠ 传进来的 screenX/screenY 已经是**画布坐标**（OnPointerDown 先过了 ScreenToCanvas）；
+        // 这里再减一次 ViewOffsetY 会让纵向拖手柄在滚动画布后整体偏移，横向却正常
+        // ——用户 2026-10-31 报的“点下边突然长高、点上面又缩下去”就是它。
+        Vector2 p = new(screenX, screenY);
         if (!s.Transform.IsIdentity && Matrix3x2.Invert(s.Transform, out var inv))
             p = Vector2.Transform(p, inv);
 
@@ -43,7 +46,7 @@ public partial class InkEngine
             MinX = s.Points.Count > 0 ? s.Points[0].X : 0f,
             MinY = s.Points.Count > 0 ? s.Points[0].Y : 0f,
             MaxX = (s.Points.Count > 0 ? s.Points[0].X : 0f) + box.Width,
-            MaxY = (s.Points.Count > 0 ? s.Points[0].Y : 0f) + box.Height,
+            MaxY = (s.Points.Count > 0 ? s.Points[0].Y : 0f) + box.LayoutHeight,
         };
         _textBoxResizeWasAuto = box.AutoHeight;
         _textBoxResizeStartOrigin = new Vector2(_textBoxResizeStartRect.MinX, _textBoxResizeStartRect.MinY);
@@ -64,7 +67,7 @@ public partial class InkEngine
         var box = s.TextBox;
         if (box == null) return;
 
-        Vector2 p = new(screenX, screenY - ViewOffsetY);
+        Vector2 p = new(screenX, screenY);
         if (!s.Transform.IsIdentity && Matrix3x2.Invert(s.Transform, out var inv))
             p = Vector2.Transform(p, inv);
 
@@ -79,6 +82,8 @@ public partial class InkEngine
         if (top) r.MinY = p.Y;
         if (bottom) r.MaxY = p.Y;
 
+        // 用户一旦亲手拖过手柄，就不再让输入时的“自动长宽”覆盖他的尺寸。
+        box.AutoWidth = false;
         var screen = ScreenRectPhysical();
         float unit = MathF.Max(0.5f, box.Unit);
         float minH = 60f * unit;

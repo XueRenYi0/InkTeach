@@ -17,6 +17,9 @@ internal enum CursorKind
     /// <summary>精确取点。图形类工具（笔、荧光笔、图形、框选）都用它。</summary>
     Cross,
 
+    /// <summary>文本输入：系统 I-beam，和 ClassIn / 记事本同一套认知。</summary>
+    IBeam,
+
     /// <summary>
     /// 斜笔（系统"笔"光标 IDC_PEN，InkClass / Ink Canvas 同款）：笔工具在
     /// **鼠标 / 手写板**下用它（2026-09-27 加，用户点名要的）。
@@ -127,6 +130,7 @@ internal static class Cursors
     {
         CursorKind.Pen => System(Native.IDC_PEN),
         CursorKind.Cross => System(Native.IDC_CROSS),
+        CursorKind.IBeam => System(Native.IDC_IBEAM),
         CursorKind.Move => System(Native.IDC_SIZEALL),
         CursorKind.ResizeWE => System(Native.IDC_SIZEWE),
         CursorKind.ResizeNS => System(Native.IDC_SIZENS),
@@ -142,6 +146,7 @@ internal static class Cursors
     {
         CursorKind.Pen => "IDC_PEN 斜笔",
         CursorKind.Cross => "IDC_CROSS 十字",
+        CursorKind.IBeam => "IDC_IBEAM 文本",
         CursorKind.Move => "IDC_SIZEALL 移动",
         CursorKind.ResizeWE => "IDC_SIZEWE 左右拉伸",
         CursorKind.ResizeNS => "IDC_SIZENS 上下拉伸",

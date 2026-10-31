@@ -116,6 +116,10 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void EndAiPromptEdit(bool accept) => _engine.EndAiPromptEditFromUi(accept);
     public void InsertMockTextBox() => _engine.InsertMockTextBoxFromUi();
     public void InsertTextBox() => _engine.InsertTextBoxFromUi();
+    public void AdjustTextFont(float delta) => _engine.AdjustTextFontFromUi(delta);
+    public void SetTextColor(Color4 color) => _engine.SetTextColorFromUi(color);
+    public void CommitTextEdit() => _engine.CommitTextEditFromUi();
+    internal void SetTextBoxEditTextForTest(string text) => _engine.SetTextBoxEditTextForTest(text);
     public void SetLibraryCategory(string id) => _engine.SetLibraryCategory(id);
     public void CreateLibraryCategory() => _engine.CreateLibraryCategory();
     public void DeleteLibraryCategory(string id) => _engine.DeleteLibraryCategory(id);

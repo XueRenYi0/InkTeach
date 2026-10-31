@@ -4646,6 +4646,8 @@ public partial class InkEngine
         ScreenToCanvas(ref x, ref y);
 
         // 文本框编辑中：点编辑框以外 = 结束输入（然后这一下照常给界面/画布）。
+        // 点界面（尤其是文本色带）不算“点外面”：色带要能在编辑中直接改字号/颜色。
+        bool textEditJustEnded = false;
         if (_textBoxEditing)
         {
             bool inside = false;
@@ -4655,7 +4657,11 @@ public partial class InkEngine
                 inside = screenX >= b.MinX && screenX <= b.MaxX
                       && screenY >= b.MinY + ViewOffsetY && screenY <= b.MaxY + ViewOffsetY;
             }
-            if (!inside) EndTextBoxEditFromUi(true);
+            if (!inside && !UiContains(screenX, screenY))
+            {
+                EndTextBoxEditFromUi(true);
+                textEditJustEnded = true;
+            }
         }
 
         // 收藏触摸滚动进行中：第二根手指一律吞掉，别把第二下落到卡片/画布上。
@@ -4788,6 +4794,30 @@ public partial class InkEngine
             _drawing = false;
             _dirty = true;
             return;
+        }
+
+        // 文本工具：结束编辑的那一下只负责提交，不顺手在落点新建下一个文本。
+        if (textEditJustEnded && Tool == Tool.Text)
+        {
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
+        // 文本工具：点已有文字 = 选中/再点编辑；点空白 = 在点击处新建并输入。
+        if (Tool == Tool.Text && !inverted)
+        {
+            if (TextToolPointerDown(screenX, screenY))
+            {
+                _drawing = false;
+                Native.SetCapture(hWnd);
+                _dirty = true;
+                ApplyCursor();
+                return;
+            }
+            // 点到了非文本对象：TextToolPointerDown 已切回选择工具，
+            // 这一下继续走下面的标准点选/拖动。
         }
 
         // AI 题卡（文档对象）：**只在使用「选择」工具时**才由它接管按钮/右边缘；
@@ -10932,6 +10962,7 @@ public partial class InkEngine
         // 调整阶段压在手柄上换成系统的缩放箭头——这是 Windows 截图工具的做法，认起来最快。
         Tool.Capture => CaptureCursorKind(),
         // 框选 / 图形仍然用十字准星："从这儿拖到那儿"的通用语言。
+        Tool.Text => CursorKind.IBeam,
         Tool.Marquee or Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Arrow
             => CursorKind.Cross,
         // 椭圆（带焦点）：和椭圆一样是"从这儿拖到那儿"的一拖，给十字准星。
@@ -13233,6 +13264,8 @@ public partial class InkEngine
     /// </summary>
     private void SwitchTool(Tool t)
     {
+        // 离开文本工具 = 先把正在编辑的文字收掉（光标/白底不能跟着换工具跑）。
+        if (_textBoxEditing && t != Tool.Text) EndTextBoxEditFromUi(true);
         // 老师自己换工具 = 不再自动恢复“插入前的工具”；插入完成后会再置 true。
         _restoreToolAfterLibrarySelection = false;
         // 换工具也把“拿起的收藏卡片”放下，别让虚影跟着跑到新工具里。
@@ -13744,10 +13777,11 @@ public partial class InkEngine
         // 双曲线的渐近线（有 / 无）、椭圆（带焦点）的焦点三角形（有 / 无）。
         HyperbolaAsymptotes = HyperbolaAsymptotes,
         EllipseFocusTriangle = EllipseFocusTriangle,
-        Color = Tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor,
+        Color = Tool == Tool.Highlighter ? HighlighterCurrent
+              : Tool == Tool.Text ? TextToolColor : CurrentColor,
         PaletteBase = Tool == Tool.Highlighter
             ? new Color4(HighlighterCurrent.R, HighlighterCurrent.G, HighlighterCurrent.B, 1f)
-            : CurrentColor,
+            : Tool == Tool.Text ? TextToolColor : CurrentColor,
         CustomPenColor = CustomPenColor,
         CustomPenSelected = CustomPenSelected,
         PenSwatchColors = (Color4[])PenSwatchColors.Clone(),
@@ -13763,6 +13797,9 @@ public partial class InkEngine
         HighlighterSwatchSelected = HighlighterSwatchSelected,
         RecentHighlighterColors = _recentHighlighterColors.ToArray(),
         LaserWidth = LaserWidthLogical,
+        TextFontSize = TextToolFontSize,
+        TextColor = TextToolColor,
+        TextBoxEditing = _textBoxEditing,
         Dash = PenDash,
         PassThrough = PassThrough,
         KeyboardMode = KeyboardMode,
@@ -13830,6 +13867,8 @@ public partial class InkEngine
 
     internal void SetToolFromUi(Tool tool)
     {
+        if (tool == Tool.Text) EnsureTextPrefs();
+        if (_textBoxEditing && tool != Tool.Text) EndTextBoxEditFromUi(true);
         ExitReplayForEdit("换工具");
         SwitchTool(tool);
         EraserTelemetry?.Note($"界面换工具 → {ToolName(tool)}", NowMs);
