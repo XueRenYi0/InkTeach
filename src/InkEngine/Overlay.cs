@@ -269,6 +269,9 @@ internal sealed partial class OverlayWindow : IDisposable
 
     private ID2D1DeviceContext1 _ctx1;
 
+    /// <summary>图形卡的真实墨迹小样：每个档位造一次，之后只改颜色/线宽再复用。</summary>
+    private readonly Dictionary<ShapePreset, Stroke> _shapePreviewCache = new();
+
     /// <summary>帧号（跨窗口共享）：给笔画盖"最近被画过"的时间戳，用来淘汰冷掉的细分缓存。</summary>
     private static long s_frameNo;
 
@@ -4915,7 +4918,38 @@ internal sealed partial class OverlayWindow : IDisposable
             MinX = cell.MinX + 6f * dpi, MinY = cell.MinY + 5f * dpi,
             MaxX = cell.MaxX - 6f * dpi, MaxY = cell.MaxY - 5f * dpi,
         };
-        DrawShapeGlyph(preset, glyph, dpi, active ? theme.ActiveText : theme.Text);
+        _ctx.PushAxisAlignedClip(
+            new Vortice.RawRectF(cell.MinX + 2f * dpi, cell.MinY + 2f * dpi,
+                                 cell.MaxX - 2f * dpi, cell.MaxY - 2f * dpi),
+            AntialiasMode.Aliased);
+        DrawShapePreview(preset, glyph, dpi, active ? theme.ActiveText : theme.Text);
+        _ctx.PopAxisAlignedClip();
+    }
+
+    private Stroke ShapePreviewFor(ShapePreset preset)
+    {
+        if (!_shapePreviewCache.TryGetValue(preset, out var s))
+        {
+            s = ShapePreview.Create(preset);
+            _shapePreviewCache[preset] = s;
+        }
+        return s;
+    }
+
+    /// <summary>用正式 <see cref="Stroke"/> 渲染路径画卡片小样；线宽不随卡片缩放。</summary>
+    private void DrawShapePreview(ShapePreset preset, in RectF box, float dpi, Color4 color)
+    {
+        var s = ShapePreviewFor(preset);
+        s.Color = color;
+        s.Width = MathF.Max(1.4f, 2.1f * dpi);
+        float w = box.MaxX - box.MinX, h = box.MaxY - box.MinY;
+        float scale = MathF.Min(w, h) / ShapePreview.Size;
+        float cx = (box.MinX + box.MaxX) * 0.5f;
+        float cy = (box.MinY + box.MaxY) * 0.5f;
+        var m = Matrix3x2.CreateScale(scale)
+              * Matrix3x2.CreateTranslation(cx - ShapePreview.Size * 0.5f * scale,
+                                            cy - ShapePreview.Size * 0.5f * scale);
+        DrawStroke(s, m);
     }
 
     private void DrawShapeGlyph(ShapePreset preset, in RectF box, float dpi, Color4 color)
