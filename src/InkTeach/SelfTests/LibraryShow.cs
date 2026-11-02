@@ -125,6 +125,16 @@ internal sealed partial class App
             Console.WriteLine($"  已出图：{spath}");
         else Console.WriteLine("  出图失败：" + spath);
 
+        // 名称不常驻：悬停时在卡片上方浮一条。
+        ShapeHoverIndex = 4;
+        SettleFrames(350);
+        string snpath = Path.Combine(Path.GetDirectoryName(path) ?? ".",
+            Path.GetFileNameWithoutExtension(path) + "-shapes-name" + Path.GetExtension(path));
+        if (OffscreenFloatingShot(snpath, panelS.Inflate(16f)))
+            Console.WriteLine($"  已出图：{snpath}");
+        else Console.WriteLine("  出图失败：" + snpath);
+        ShapeHoverIndex = -1;
+
         // 图形页竖排：4 列 × 5 行，余下的滚轮滚动。
         ToggleLibraryOrientation();
         SettleFrames(450);

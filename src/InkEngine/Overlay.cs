@@ -4814,9 +4814,38 @@ internal sealed partial class OverlayWindow : IDisposable
             var cell = LibraryLayout.CellRect(m, i, scroll);
             if (cell.MaxY < m.Grid.MinY - 1f) continue;
             if (cell.MinY > m.Grid.MaxY + 1f) break;
-            DrawShapeCatalogCard(cards[i], cell, app.ShapePresetActive(cards[i]), dpi, theme);
+            DrawShapeCatalogCard(cards[i], cell, app.ShapePresetActive(cards[i]),
+                                 i == app.ShapeHoverIndex, dpi, theme);
         }
         _ctx.PopAxisAlignedClip();
+
+        // 名字不常驻：悬停时在卡片上方浮一条；触摸点完短暂显示 1.5 秒。
+        int nameIdx = app.ShapeHoverIndex >= 0
+            ? app.ShapeHoverIndex
+            : (app.NowMs <= app.ShapeNameUntilMs ? app.ShapeNameIndex : -1);
+        if (nameIdx >= 0 && nameIdx < cards.Length)
+        {
+            var cell = LibraryLayout.CellRect(m, nameIdx, scroll);
+            string label = cards[nameIdx].Label;
+            float tw = MathF.Max(44f * dpi, (label.Length * 13f + 18f) * dpi);
+            float th = 22f * dpi;
+            float tx = Math.Clamp((cell.MinX + cell.MaxX - tw) * 0.5f,
+                                  m.Grid.MinX, MathF.Max(m.Grid.MinX, m.Grid.MaxX - tw));
+            float ty = cell.MinY - th - 5f * dpi;
+            if (ty < m.Grid.MinY) ty = MathF.Min(m.Grid.MaxY - th, cell.MaxY + 5f * dpi);
+            var tip = new RectF { MinX = tx, MinY = ty, MaxX = tx + tw, MaxY = ty + th };
+            var rr = new RoundedRectangle(
+                new Vortice.RawRectF(tip.MinX, tip.MinY, tip.MaxX, tip.MaxY),
+                6f * dpi, 6f * dpi);
+            _scratch.Color = new Color4(theme.Panel.R, theme.Panel.G, theme.Panel.B, 0.98f);
+            _ctx.FillRoundedRectangle(rr, _scratch);
+            _scratch.Color = theme.PanelBorder;
+            _ctx.DrawRoundedRectangle(rr, _scratch, 1f);
+            _scratch.Color = theme.Text;
+            _ctx.DrawText(label, ReadoutFormatSmall(dpi),
+                          new Rect(tip.MinX, tip.MinY, tip.MaxX - tip.MinX, tip.MaxY - tip.MinY),
+                          _scratch);
+        }
 
         if (maxScroll > 0.5f)
         {
@@ -4866,30 +4895,27 @@ internal sealed partial class OverlayWindow : IDisposable
     }
 
     private void DrawShapeCatalogCard(ShapePreset preset, in RectF cell,
-                                      bool active, float dpi, UiTheme theme)
+                                      bool active, bool hover, float dpi, UiTheme theme)
     {
         float inset = 2f * dpi;
         var rr = new RoundedRectangle(
             new Vortice.RawRectF(cell.MinX + inset, cell.MinY + inset,
                                  cell.MaxX - inset, cell.MaxY - inset),
             8f * dpi, 8f * dpi);
-        _scratch.Color = active ? theme.ActiveBg : theme.Hover;
+        _scratch.Color = active ? theme.ActiveBg
+                        : hover ? new Color4(theme.ActiveBg.R, theme.ActiveBg.G, theme.ActiveBg.B, 0.12f)
+                        : theme.Hover;
         _ctx.FillRoundedRectangle(rr, _scratch);
-        _scratch.Color = active ? theme.ActiveBg : theme.PanelBorder;
-        _ctx.DrawRoundedRectangle(rr, _scratch, active ? 2f : 1f);
+        _scratch.Color = active ? theme.ActiveBg
+                        : hover ? theme.ActiveBg : theme.PanelBorder;
+        _ctx.DrawRoundedRectangle(rr, _scratch, active || hover ? 2f : 1f);
 
-        float glyphH = 46f * dpi;
         var glyph = new RectF
         {
             MinX = cell.MinX + 6f * dpi, MinY = cell.MinY + 5f * dpi,
-            MaxX = cell.MaxX - 6f * dpi, MaxY = cell.MinY + glyphH,
+            MaxX = cell.MaxX - 6f * dpi, MaxY = cell.MaxY - 5f * dpi,
         };
         DrawShapeGlyph(preset, glyph, dpi, active ? theme.ActiveText : theme.Text);
-
-        _scratch.Color = active ? theme.ActiveText : theme.Text;
-        _ctx.DrawText(preset.Label, ReadoutFormatSmall(dpi),
-                      new Rect(cell.MinX + 2f * dpi, cell.MinY + glyphH - 4f * dpi,
-                               cell.MaxX - cell.MinX - 4f * dpi, 18f * dpi), _scratch);
     }
 
     private void DrawShapeGlyph(ShapePreset preset, in RectF box, float dpi, Color4 color)
@@ -4897,8 +4923,8 @@ internal sealed partial class OverlayWindow : IDisposable
         Tool tool = preset.Tool;
         int variant = preset.Variant;
         _scratch.Color = color;
-        float w = MathF.Min(box.MaxX - box.MinX, 36f * dpi);
-        float h = MathF.Min(box.MaxY - box.MinY, 28f * dpi);
+        float w = MathF.Min(box.MaxX - box.MinX, 44f * dpi);
+        float h = MathF.Min(box.MaxY - box.MinY, 38f * dpi);
         float cx = (box.MinX + box.MaxX) * 0.5f;
         float cy = (box.MinY + box.MaxY) * 0.5f;
         float l = cx - w * 0.5f, r = cx + w * 0.5f;

@@ -7938,6 +7938,11 @@ public partial class InkEngine
     internal string LibraryCategoryId = "all";
     /// <summary>图形页当前分类：all / common / curve / solid（与收藏分类互不影响）。</summary>
     internal string ShapeCategoryId = "all";
+    /// <summary>图形卡悬停（-1 = 没在卡上）；只在图形页用。</summary>
+    internal int ShapeHoverIndex = -1;
+    /// <summary>触摸点卡后短暂显示名称（没有 hover 的替代）。</summary>
+    internal int ShapeNameIndex = -1;
+    internal double ShapeNameUntilMs;
     /// <summary>下一次收藏动作落到哪个分类（「全部」筛选时不改它）。</summary>
     internal string LibrarySaveCategoryId = ShapeLibrary.Uncategorized;
     /// <summary>分类表缓存（打开面板/建删分类时刷新）。</summary>
@@ -8333,6 +8338,8 @@ public partial class InkEngine
         if (LibraryPanelOpen) SaveCurrentTabHeight();
         LibraryTab = tab;
         LibraryPanelOpen = true;
+        ShapeHoverIndex = -1;
+        ShapeNameIndex = -1;
         LibraryMenu = 0;
         LibraryMenuPage = 0;
         LibraryConfirm = "";
@@ -8371,6 +8378,8 @@ public partial class InkEngine
         LibraryTabScroll = 0;
         LibraryMarqueeActive = false;
         LibraryManageSorting = false;
+        ShapeHoverIndex = -1;
+        ShapeNameIndex = -1;
         HideLibraryRenameWindow();
         ApplyTabHeight(tab);
         _dirty = true;
@@ -8457,6 +8466,8 @@ public partial class InkEngine
         SaveCurrentTabHeight();
         SaveLibraryPanelPrefs();
         LibraryPanelOpen = false;
+        ShapeHoverIndex = -1;
+        ShapeNameIndex = -1;
         LibrarySelected.Clear();
         LibrarySelectMode = false;
         LibraryUseSelected = null;
@@ -9184,6 +9195,8 @@ public partial class InkEngine
     {
         if (ShapeCategoryId == id) return;
         ShapeCategoryId = id;
+        ShapeHoverIndex = -1;
+        ShapeNameIndex = -1;
         LibraryScrollY = 0;
         _dirty = true;
         NotifyUiStateChanged();
@@ -9607,6 +9620,7 @@ public partial class InkEngine
 
     private void StartLibraryDrag(int kind, float x, float y)
     {
+        ShapeHoverIndex = -1;
         if (kind == 2)
         {
             // 外框随便变，卡片列/行先冻在这一刻；松手才重排。
@@ -10111,7 +10125,12 @@ public partial class InkEngine
                     if (_windows.Count > 0) Native.SetCapture(_windows[0].Hwnd);
                     return true;
                 }
-                if (idx >= 0 && idx < cards.Length) SetShapePresetFromUi(cards[idx]);
+                if (idx >= 0 && idx < cards.Length)
+                {
+                    ShapeNameIndex = idx;
+                    ShapeNameUntilMs = NowMs + 1500;
+                    SetShapePresetFromUi(cards[idx]);
+                }
                 else StartLibraryDrag(1, x, y);   // 卡片之间的缝 / 最后一行空白 = 拖面板
                 return true;
             }
@@ -10341,6 +10360,19 @@ public partial class InkEngine
         if (_libraryTabPress != 0) { LibraryTabDragMove(x, y); return true; }
         if (LibraryManageSorting) { LibraryManageSortMove(x, y); return true; }
         if (_libraryManagePress != 0) { LibraryManagePressMove(x, y); return true; }
+
+        if (LibraryTab == LibraryTab.Shapes && LastPointerType != Native.PT_TOUCH)
+        {
+            var m = LibraryPanelInfoNow();
+            var cards = ShapeCardsNow();
+            int hover = m.Grid.Contains(x, y)
+                ? LibraryLayout.CellAt(m, cards.Length, x, y, LibraryScrollY) : -1;
+            if (hover != ShapeHoverIndex)
+            {
+                ShapeHoverIndex = hover;
+                _dirty = true;
+            }
+        }
         return false;
     }
 

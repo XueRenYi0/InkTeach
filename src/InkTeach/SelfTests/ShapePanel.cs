@@ -153,6 +153,19 @@ internal sealed partial class App
               && Doc.Strokes.Count == strokesBefore + 1,
               $"tool={Tool} oneShot={ShapeOneShotForTest} open={LibraryPanelOpen} strokes={Doc.Strokes.Count - strokesBefore}");
 
+        // 悬停：名字不常驻，指针停在哪张卡就显示哪张。
+        m = LibraryPanelInfoNow();
+        var hoverCell = LibraryLayout.CellRect(m, 5, 0f);
+        LastPointerType = Native.PT_MOUSE;
+        LibraryPanelPointerMove((hoverCell.MinX + hoverCell.MaxX) * 0.5f,
+                                (hoverCell.MinY + hoverCell.MaxY) * 0.5f, 1);
+        Check("悬停卡片：名称索引跟上", ShapeHoverIndex == 5,
+              $"hover={ShapeHoverIndex}");
+        LibraryPanelPointerMove(m.Panel.MinX - 30f * UiUnit,
+                                (hoverCell.MinY + hoverCell.MaxY) * 0.5f, 1);
+        Check("移出卡片：悬停清空", ShapeHoverIndex == -1,
+              $"hover={ShapeHoverIndex}");
+
         // 2b. 面板里的页签也能切；主条蓝色同步
         var beforeTab = LibraryPanelRectNow();
         var m2 = LibraryPanelInfoNow();
@@ -340,6 +353,19 @@ internal sealed partial class App
               Tool == Tool.Pen && !ShapeOneShotForTest && LibraryPanelOpen
               && Doc.Strokes.Count == strokesBefore + 1,
               $"tool={Tool} oneShot={ShapeOneShotForTest} open={LibraryPanelOpen} strokes={Doc.Strokes.Count - strokesBefore}");
+
+        // 悬停：名字不常驻，指针停在哪张卡就显示哪张。
+        m = LibraryPanelInfoNow();
+        var hoverCell = LibraryLayout.CellRect(m, 5, 0f);
+        LastPointerType = Native.PT_MOUSE;
+        LibraryPanelPointerMove((hoverCell.MinX + hoverCell.MaxX) * 0.5f,
+                                (hoverCell.MinY + hoverCell.MaxY) * 0.5f, 1);
+        Check("悬停卡片：名称索引跟上", ShapeHoverIndex == 5,
+              $"hover={ShapeHoverIndex}");
+        LibraryPanelPointerMove(m.Panel.MinX - 30f * UiUnit,
+                                (hoverCell.MinY + hoverCell.MaxY) * 0.5f, 1);
+        Check("移出卡片：悬停清空", ShapeHoverIndex == -1,
+              $"hover={ShapeHoverIndex}");
         Check("选图形后面板常驻、主条图形蓝",
               LibraryPanelOpen && LibraryTab == LibraryTab.Shapes && ui.CellActiveForTest(10),
               $"open={LibraryPanelOpen} tab={LibraryTab} 图形={ui.CellActiveForTest(10)}");
