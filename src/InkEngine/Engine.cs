@@ -5773,6 +5773,17 @@ public partial class InkEngine
     /// <summary>预测器诊断（黑匣子回放报告用）——2026-10-15：线性预测没有"门"这套离散计数，
     /// 回放报告里的门触发列随之撤除。</summary>
 
+    /// <summary>自检用：走真入口画一个单笔图形（起手 → 控制点 → 抬手）。</summary>
+    internal void ShapeDragForTest(float ax, float ay, float bx, float by)
+    {
+        BeginShapeAt(Tool, ax, ay);
+        UpdateShapePreview(bx, by);
+        EndStroke();
+    }
+
+    /// <summary>自检用：面板选卡的一次性图形还等不等“画完回去”。</summary>
+    internal bool ShapeOneShotForTest => _shapeOneShot;
+
     /// <summary>自检用：状态机在哪一档。</summary>
     internal DwellState DwellStateForTest => _dwell.State;
 
@@ -7991,6 +8002,11 @@ public partial class InkEngine
     /// <summary>放下后临时选择的工具，用来“点空白回到原来的工具”。</summary>
     private Tool _toolBeforeLibraryInsert = Tool.Pen;
     private bool _restoreToolAfterLibrarySelection;
+    /// <summary>图形面板选卡 = 一次性工具：画完一个图形就回到上一次的非图形工具。</summary>
+    private Tool _shapeOneShotReturn = Tool.Pen;
+    private bool _shapeOneShot;
+    /// <summary>最近一次非图形工具（笔/荧光笔/橡皮…），一次性图形画完回到它。</summary>
+    private Tool _lastNonShapeTool = Tool.Pen;
     /// <summary>0 = 没按卡；1 = 待判；2 = 从卡片拖到画布。</summary>
     private int _libraryCardPress;
     private ShapeLibrary.Entry _libraryCardPressEntry;
@@ -9192,7 +9208,11 @@ public partial class InkEngine
     /// <summary>点面板里的图形卡：换工具 + 直接设到这张卡对应的档位。</summary>
     internal void SetShapePresetFromUi(ShapePreset p)
     {
+        // 一次性：从面板点卡进来时记住“上一次的非图形工具”，画完一个图形就回去。
+        var back = _shapeOneShot ? _shapeOneShotReturn : _lastNonShapeTool;
         SetToolFromUi(p.Tool);
+        _shapeOneShotReturn = back;
+        _shapeOneShot = true;
         switch (p.Tool)
         {
             case Tool.Line:
@@ -10063,6 +10083,7 @@ public partial class InkEngine
                     widths[i] = LibraryLayout.TabWidthLogical(shapeCats[i].Name) * dpi;
                 int ti = LibraryLayout.TabAt(m, widths, x, y, dpi, LibraryTabScroll);
                 if (ti >= 0 && ti < shapeCats.Length) SetShapeCategory(shapeCats[ti].Id);
+                else StartLibraryDrag(1, x, y);   // 页签右边的空白也能拖面板
                 return true;
             }
             if (!m.Tabbed && m.CurrentCategory.Contains(x, y))
@@ -10091,6 +10112,7 @@ public partial class InkEngine
                     return true;
                 }
                 if (idx >= 0 && idx < cards.Length) SetShapePresetFromUi(cards[idx]);
+                else StartLibraryDrag(1, x, y);   // 卡片之间的缝 / 最后一行空白 = 拖面板
                 return true;
             }
             StartLibraryDrag(1, x, y);
@@ -11099,11 +11121,26 @@ public partial class InkEngine
             //
             // 而且刚画完是**收起来**的形态（一颗圆钮），点一下它才展开成常规那一套
             // ——理由见 `_autoSelCollapsed`（用户上手之后定的：一整条摊在图形下面又重又挡）。
+            // **面板选的一次性图形：画完一个就回到上一次的非图形工具**（和收藏插入后
+            // 回到原工具同一套直觉）。直接在主条选的图形工具不在此列，保持原来“接着画”。
+            bool oneShotShape = _shapeOneShot && committedShape != null;
+            if (oneShotShape)
+            {
+                _shapeOneShot = false;
+                var back = _shapeOneShotReturn;
+                if (back == Tool.Capture || back == Tool.Laser) back = Tool.Pen;
+                SwitchTool(back);
+                _dirty = true;
+                NotifyUiStateChanged();
+            }
             if (committedShape != null)
             {
-                Doc.SelectOnly(new[] { committedShape });
-                _autoSelCollapsed = true;
-                _dirty = true;
+                if (!oneShotShape)
+                {
+                    Doc.SelectOnly(new[] { committedShape });
+                    _autoSelCollapsed = true;
+                    _dirty = true;
+                }
             }
             // **停顿变出来的那个框，工具还是笔** —— 所以还要记一笔"这一次选中
             // 是停顿给的"，否则那个框会"画得出来、点不着"（见 `_dwellSelected`）。
@@ -13693,6 +13730,9 @@ public partial class InkEngine
         _stepIndex = 0;
         _stepSnap = ShapeSnapKind.None;      // 「直棱柱」那颗胶囊跟着半成品一起作废
         Tool = t;
+        // 一次性图形：任何主动换工具都取消它；面板选卡会在 SetShapePresetFromUi 里重新置上。
+        _shapeOneShot = false;
+        if (!IsShapeTool(t)) _lastNonShapeTool = t;
         // **记住"橡皮用的是哪一种形态"**（整笔擦 / 面积擦）：按 Ctrl+E 回来时切回它，
         // 并且下次启动也还在（见 ToolKeyPress 与 Run 里的读取）。
         if (t == Tool.Eraser || t == Tool.PixelEraser)

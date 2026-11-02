@@ -37,7 +37,7 @@ internal static class ShapeCatalog
         // ---- 常用 11 ----
         new(Tool.Line, "实线", ShapeGroup.Common, (int)StrokeDash.Solid),
         new(Tool.Line, "虚线", ShapeGroup.Common, (int)StrokeDash.Dashed),
-        new(Tool.Line, "点划线", ShapeGroup.Common, (int)StrokeDash.Dotted),
+        new(Tool.Line, "点线", ShapeGroup.Common, (int)StrokeDash.Dotted),
         new(Tool.Rectangle, "矩形", ShapeGroup.Common, 0),
         new(Tool.Ellipse, "椭圆", ShapeGroup.Common, 0),
         new(Tool.Circle, "圆", ShapeGroup.Common, 0),
@@ -48,8 +48,8 @@ internal static class ShapeCatalog
         new(Tool.Coordinate, "无网格坐标系", ShapeGroup.Common, 1),
 
         // ---- 曲线 10 ----
-        new(Tool.ConicEllipse, "带焦点椭圆", ShapeGroup.Curve, 0),
-        new(Tool.ConicEllipse, "无焦点椭圆", ShapeGroup.Curve, 1),
+        new(Tool.ConicEllipse, "带焦点三角", ShapeGroup.Curve, 0),
+        new(Tool.ConicEllipse, "无焦点三角", ShapeGroup.Curve, 1),
         new(Tool.Hyperbola, "带渐近线", ShapeGroup.Curve, 0),
         new(Tool.Hyperbola, "无渐近线", ShapeGroup.Curve, 1),
         new(Tool.Parabola, "开口上", ShapeGroup.Curve, 0),

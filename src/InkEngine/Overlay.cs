@@ -4928,16 +4928,39 @@ internal sealed partial class OverlayWindow : IDisposable
             if (close && pts.Length > 2) Line(pts[^1].X, pts[^1].Y, pts[0].X, pts[0].Y);
         }
 
-        Vector2[] Ring(float rx, float ry, float y)
+        int sides = variant is >= 3 and <= 6 ? variant : 4;
+
+        Vector2[] BasePoints(float rx, float ry, float baseY, int n)
         {
-            int sides = variant is >= 3 and <= 6 ? variant : 4;
-            var pts = new Vector2[sides];
-            for (int i = 0; i < sides; i++)
+            var pts = new Vector2[n];
+            float ang0 = ShapeSpec.PrismBaseOffsetDegrees(n) * MathF.PI / 180f;
+            for (int i = 0; i < n; i++)
             {
-                float a = -MathF.PI * 0.5f + i * MathF.PI * 2f / sides;
-                pts[i] = new Vector2(cx + rx * MathF.Cos(a), y + ry * MathF.Sin(a));
+                float a = ang0 + i * MathF.Tau / n;
+                var off = ShapeSpec.PrismBasePointOffset(MathF.Cos(a), MathF.Sin(a), rx, ry);
+                pts[i] = new Vector2(cx + off.X, baseY + off.Y);
             }
             return pts;
+        }
+
+        void Solid(Vector2[] bot, Vector2[] top, bool hasTopRing,
+                   float rx, float ry, bool fullWire = false)
+        {
+            int n = bot.Length;
+            float ang0 = ShapeSpec.PrismBaseOffsetDegrees(n) * MathF.PI / 180f;
+            for (int i = 0; i < n; i++)
+            {
+                float mid = ang0 + (i + 0.5f) * MathF.Tau / n;
+                bool face = ShapeSpec.PrismFaceVisible(MathF.Cos(mid), MathF.Sin(mid), rx, ry);
+                int nx = (i + 1) % n;
+                if (hasTopRing) Line(top[i].X, top[i].Y, top[nx].X, top[nx].Y);
+                if (fullWire || face) Line(bot[i].X, bot[i].Y, bot[nx].X, bot[nx].Y);
+                int prev = (i + n - 1) % n;
+                bool prevFace = ShapeSpec.PrismFaceVisible(
+                    MathF.Cos(ang0 + (prev + 0.5f) * MathF.Tau / n),
+                    MathF.Sin(ang0 + (prev + 0.5f) * MathF.Tau / n), rx, ry);
+                if (fullWire || face || prevFace) Line(bot[i].X, bot[i].Y, top[i].X, top[i].Y);
+            }
         }
 
         switch (tool)
@@ -4991,10 +5014,10 @@ internal sealed partial class OverlayWindow : IDisposable
             case Tool.Coordinate:
                 if (variant == 0)
                 {
-                    for (int i = 1; i <= 3; i++)
+                    for (int i = 1; i <= 2; i++)
                     {
-                        float gx = l + (r - l) * i / 4f;
-                        float gy = t + (b - t) * i / 4f;
+                        float gx = l + (r - l) * i / 3f;
+                        float gy = t + (b - t) * i / 3f;
                         Line(gx, t, gx, b);
                         Line(l, gy, r, gy);
                     }
@@ -5012,22 +5035,46 @@ internal sealed partial class OverlayWindow : IDisposable
                     Dashed(l, t, r, b, false);
                     Dashed(l, b, r, t, false);
                 }
-                Line(l, t, cx - 4f * dpi, cy);
-                Line(cx - 4f * dpi, cy, l, b);
-                Line(r, t, cx + 4f * dpi, cy);
-                Line(cx + 4f * dpi, cy, r, b);
+                {
+                    float a = w * 0.18f, bb = h * 0.40f;
+                    for (int branch = -1; branch <= 1; branch += 2)
+                    {
+                        Vector2? prev = null;
+                        for (int i = 0; i <= 14; i++)
+                        {
+                            float u = -1.25f + 2.5f * i / 14f;
+                            var pt = new Vector2(cx + branch * a * MathF.Cosh(u),
+                                                 cy + bb * MathF.Sinh(u));
+                            if (prev != null) Line(prev.Value.X, prev.Value.Y, pt.X, pt.Y);
+                            prev = pt;
+                        }
+                    }
+                }
                 break;
             case Tool.Parabola:
                 if (variant == 0)
                 {
-                    Line(l, b, cx, t);
-                    Line(cx, t, r, b);
+                    // 开口上：顶点在底边中点，向左右上方展开。
+                    Vector2? prev = null;
+                    for (int i = 0; i <= 16; i++)
+                    {
+                        float u = -1f + 2f * i / 16f;
+                        var pt = new Vector2(cx + u * w * 0.5f, b - (1f - u * u) * h * 0.9f);
+                        if (prev != null) Line(prev.Value.X, prev.Value.Y, pt.X, pt.Y);
+                        prev = pt;
+                    }
                 }
                 else
                 {
-                    Line(l, t, l, b);
-                    Line(l, t, r, cy);
-                    Line(r, cy, l, b);
+                    // 开口右：顶点在左边中点，向上下右方展开。
+                    Vector2? prev = null;
+                    for (int i = 0; i <= 16; i++)
+                    {
+                        float u = -1f + 2f * i / 16f;
+                        var pt = new Vector2(l + (1f - u * u) * w * 0.9f, cy + u * h * 0.5f);
+                        if (prev != null) Line(prev.Value.X, prev.Value.Y, pt.X, pt.Y);
+                        prev = pt;
+                    }
                 }
                 break;
             case Tool.Sine:
@@ -5053,14 +5100,26 @@ internal sealed partial class OverlayWindow : IDisposable
                 Line(l, t, r, b);
                 break;
             case Tool.Cylinder:
-            case Tool.Cone:
-            case Tool.ConeFrustum:
                 _ctx.DrawEllipse(new Ellipse(new Vector2(cx, t + 4f * dpi),
                                              w * 0.45f, 5f * dpi), _scratch, lw);
                 Line(l, t + 4f * dpi, l, b - 4f * dpi);
                 Line(r, t + 4f * dpi, r, b - 4f * dpi);
                 _ctx.DrawEllipse(new Ellipse(new Vector2(cx, b - 4f * dpi),
                                              w * 0.45f, 5f * dpi), _scratch, lw);
+                break;
+            case Tool.Cone:
+                _ctx.DrawEllipse(new Ellipse(new Vector2(cx, b - 5f * dpi),
+                                             w * 0.45f, 5f * dpi), _scratch, lw);
+                Line(l, b - 5f * dpi, cx, t);
+                Line(r, b - 5f * dpi, cx, t);
+                break;
+            case Tool.ConeFrustum:
+                _ctx.DrawEllipse(new Ellipse(new Vector2(cx, t + 5f * dpi),
+                                             w * 0.22f, 4f * dpi), _scratch, lw);
+                _ctx.DrawEllipse(new Ellipse(new Vector2(cx, b - 5f * dpi),
+                                             w * 0.45f, 5f * dpi), _scratch, lw);
+                Line(cx - w * 0.22f, t + 5f * dpi, cx - w * 0.45f, b - 5f * dpi);
+                Line(cx + w * 0.22f, t + 5f * dpi, cx + w * 0.45f, b - 5f * dpi);
                 break;
             case Tool.Sphere:
                 _ctx.DrawEllipse(new Ellipse(new Vector2(cx, cy),
@@ -5070,27 +5129,34 @@ internal sealed partial class OverlayWindow : IDisposable
                 break;
             case Tool.Prism:
                 {
-                    var bot = Ring(w * 0.42f, h * 0.13f, b - h * 0.13f);
-                    var top = Ring(w * 0.42f, h * 0.13f, t + h * 0.13f);
-                    Poly(top, true);
-                    Poly(bot, true);
-                    for (int i = 0; i < bot.Length; i++) Line(bot[i].X, bot[i].Y, top[i].X, top[i].Y);
+                    float rx = w * 0.42f, ry = h * 0.14f;
+                    var bot = BasePoints(rx, ry, b - h * 0.20f, sides);
+                    var top = new Vector2[bot.Length];
+                    for (int i = 0; i < bot.Length; i++)
+                        top[i] = new Vector2(bot[i].X, bot[i].Y - h * 0.52f);
+                    Solid(bot, top, true, rx, ry);
                 }
                 break;
             case Tool.Pyramid:
                 {
-                    var bot = Ring(w * 0.42f, h * 0.14f, b - h * 0.14f);
-                    Poly(bot, true);
-                    for (int i = 0; i < bot.Length; i++) Line(bot[i].X, bot[i].Y, cx, t);
+                    float rx = w * 0.42f, ry = h * 0.14f;
+                    var bot = BasePoints(rx, ry, b - h * 0.14f, sides);
+                    var top = new Vector2[bot.Length];
+                    for (int i = 0; i < top.Length; i++) top[i] = new Vector2(cx, t);
+                    Solid(bot, top, false, rx, ry, fullWire: sides == 3);
                 }
                 break;
             case Tool.Frustum:
                 {
-                    var bot = Ring(w * 0.42f, h * 0.13f, b - h * 0.13f);
-                    var top = Ring(w * 0.25f, h * 0.09f, t + h * 0.15f);
-                    Poly(top, true);
-                    Poly(bot, true);
-                    for (int i = 0; i < bot.Length; i++) Line(bot[i].X, bot[i].Y, top[i].X, top[i].Y);
+                    float rx = w * 0.42f, ry = h * 0.13f;
+                    float baseY = b - h * 0.14f;
+                    var bot = BasePoints(rx, ry, baseY, sides);
+                    float k0 = ShapeSpec.FrustumTopScale;
+                    var apex = new Vector2(cx, t + h * 0.06f);
+                    var center = new Vector2(cx, baseY);
+                    var top = new Vector2[bot.Length];
+                    for (int i = 0; i < bot.Length; i++) top[i] = apex + (bot[i] - center) * k0;
+                    Solid(bot, top, true, rx, ry);
                 }
                 break;
             default:
@@ -5127,9 +5193,12 @@ internal sealed partial class OverlayWindow : IDisposable
             if (cats[i].Pinned)
             {
                 starW = 12f * dpi;
-                _scratch.Color = new Color4(0.95f, 0.68f, 0.12f, 1f);
-                _ctx.DrawText("?", ReadoutFormatSmall(dpi),
-                              new Rect(tr.MinX, tr.MinY, starW, tr.MaxY - tr.MinY), _scratch);
+                var starBox = new RectF
+                {
+                    MinX = tr.MinX, MinY = tr.MinY + 2f * dpi,
+                    MaxX = tr.MinX + starW, MaxY = tr.MaxY - 2f * dpi,
+                };
+                DrawLibStar(starBox, true, new Color4(0.95f, 0.68f, 0.12f, 1f), dpi);
             }
             _scratch.Color = on ? theme.Text : theme.TextMuted;
             _ctx.DrawText(cats[i].Name, ReadoutFormatTab(dpi),
@@ -5254,14 +5323,9 @@ internal sealed partial class OverlayWindow : IDisposable
                 var star = LibraryLayout.DrawerStarRect(r, dpi);
                 var pencil = LibraryLayout.DrawerPencilRect(r, dpi);
                 var trash = LibraryLayout.DrawerTrashRect(r, dpi);
-                _scratch.Color = info.Pinned ? new Color4(0.95f, 0.68f, 0.12f, 1f) : theme.TextMuted;
-                _ctx.DrawText(info.Pinned ? "★" : "☆", ReadoutFormatSmall(dpi),
-                              new Rect(star.MinX, star.MinY, star.MaxX - star.MinX,
-                                       star.MaxY - star.MinY), _scratch);
-                _scratch.Color = theme.TextMuted;
-                _ctx.DrawText("✎", ReadoutFormatSmall(dpi),
-                              new Rect(pencil.MinX, pencil.MinY, pencil.MaxX - pencil.MinX,
-                                       pencil.MaxY - pencil.MinY), _scratch);
+                DrawLibStar(star, info.Pinned,
+                            info.Pinned ? new Color4(0.95f, 0.68f, 0.12f, 1f) : theme.TextMuted, dpi);
+                DrawLibPencil(pencil, theme.TextMuted, dpi);
                 DrawLibTrash(trash, confirm ? new Color4(0.85f, 0.22f, 0.22f, 1f) : theme.TextMuted, dpi);
             }
 
@@ -5286,9 +5350,58 @@ internal sealed partial class OverlayWindow : IDisposable
                                add.MaxY - add.MinY), _scratch);
     }
 
-    private void DrawLibTrash(in RectF r, Color4 color, float dpi)
+    /// <summary>收藏分类的“常用”星标：矢量画，不依赖字体里有没有 ★。</summary>
+    private void DrawLibStar(in RectF r, bool filled, Color4 color, float dpi)
     {
+        if (r.IsEmpty) return;
+        float cx = (r.MinX + r.MaxX) * 0.5f;
+        float cy = (r.MinY + r.MaxY) * 0.5f;
+        float outer = MathF.Min(r.MaxX - r.MinX, r.MaxY - r.MinY) * 0.42f;
+        float inner = outer * 0.46f;
+        var pts = new Vector2[10];
+        for (int i = 0; i < pts.Length; i++)
+        {
+            float a = -MathF.PI * 0.5f + i * MathF.PI / 5f;
+            float rad = (i & 1) == 0 ? outer : inner;
+            pts[i] = new Vector2(cx + MathF.Cos(a) * rad, cy + MathF.Sin(a) * rad);
+        }
+        using var geo = Gfx.D2DFactory.CreatePathGeometry();
+        using (var sink = geo.Open())
+        {
+            sink.BeginFigure(pts[0], FigureBegin.Filled);
+            for (int i = 1; i < pts.Length; i++) sink.AddLine(pts[i]);
+            sink.EndFigure(FigureEnd.Closed);
+        }
         _scratch.Color = color;
+        if (filled) _ctx.FillGeometry(geo, _scratch);
+        else _ctx.DrawGeometry(geo, _scratch, 1.2f * dpi);
+    }
+
+    /// <summary>收藏分类的改名铅笔：矢量画，不依赖字体里有没有 ✎。</summary>
+    private void DrawLibPencil(in RectF r, Color4 color, float dpi)
+    {
+        if (r.IsEmpty) return;
+        float cx = (r.MinX + r.MaxX) * 0.5f;
+        float cy = (r.MinY + r.MaxY) * 0.5f;
+        float len = MathF.Min(r.MaxX - r.MinX, r.MaxY - r.MinY) * 0.62f;
+        float dx = len * 0.5f, dy = -len * 0.5f;
+        var n = new Vector2(-dy, dx) * (2.2f * dpi / MathF.Max(1f, len));
+        var a = new Vector2(cx - dx, cy - dy);
+        var b = new Vector2(cx + dx, cy + dy);
+        var dir = new Vector2(dx, dy) / MathF.Max(1f, len);
+        var tip = a - dir * 3.2f * dpi;
+        _scratch.Color = color;
+        void L(Vector2 p, Vector2 q)
+            => _ctx.DrawLine(p, q, _scratch, 1.2f * dpi);
+        L(a + n, b + n);
+        L(a - n, b - n);
+        L(a + n, a - n);
+        L(tip, a + n);
+        L(tip, a - n);
+    }
+
+    private void DrawLibTrash(in RectF r, Color4 color, float dpi)
+    {        _scratch.Color = color;
         float w = 10f * dpi, h = 11f * dpi;
         float cx = (r.MinX + r.MaxX) * 0.5f;
         float top = (r.MinY + r.MaxY - h) * 0.5f;

@@ -90,6 +90,22 @@ internal sealed partial class App
               $"cat={ShapeCategoryId} cols={m.Cols} rows={m.Rows} cell={m.CellW / UiUnit:F0}×{m.CellH / UiUnit:F0}");
         float shapesPageH = LibraryPanelRectNow().MaxY - LibraryPanelRectNow().MinY;
 
+        // 卡片缝里也能拖面板（和收藏页同一条逻辑）。
+        {
+            var card0 = LibraryLayout.CellRect(m, 0, 0f);
+            float gapX = card0.MaxX + LibraryLayout.CellGapLogical * UiUnit * 0.5f;
+            float gapY = (card0.MinY + card0.MaxY) * 0.5f;
+            var beforeDrag = LibraryPanelRectNow();
+            LibraryPointerDown(gapX, gapY, Native.PT_MOUSE, 1);
+            LibraryPanelDragMove(gapX + 80f * UiUnit, gapY + 40f * UiUnit);
+            LibraryPanelDragEnd();
+            var afterDrag = LibraryPanelRectNow();
+            Check("卡片缝里拖一下：面板跟着走",
+                  MathF.Abs(afterDrag.MinX - beforeDrag.MinX) > 20f
+                  || MathF.Abs(afterDrag.MinY - beforeDrag.MinY) > 20f,
+                  $"x={beforeDrag.MinX:F0}→{afterDrag.MinX:F0} y={beforeDrag.MinY:F0}→{afterDrag.MinY:F0}");
+        }
+
         void ClickShapeTab(string id)
         {
             var mm = LibraryPanelInfoNow();
@@ -128,6 +144,14 @@ internal sealed partial class App
         Check("虚线卡高亮、实线卡不高亮",
               ShapePresetActive(cards[1]) && !ShapePresetActive(cards[0]),
               $"实线={ShapePresetActive(cards[0])} 虚线={ShapePresetActive(cards[1])}");
+        Check("面板选图形后标记为一次性", ShapeOneShotForTest,
+              $"oneShot={ShapeOneShotForTest} tool={Tool}");
+        int strokesBefore = Doc.Strokes.Count;
+        ShapeDragForTest(200f, 200f, 520f, 360f);
+        Check("画完一个图形 → 自动回到画笔、面板不关",
+              Tool == Tool.Pen && !ShapeOneShotForTest && LibraryPanelOpen
+              && Doc.Strokes.Count == strokesBefore + 1,
+              $"tool={Tool} oneShot={ShapeOneShotForTest} open={LibraryPanelOpen} strokes={Doc.Strokes.Count - strokesBefore}");
 
         // 2b. 面板里的页签也能切；主条蓝色同步
         var beforeTab = LibraryPanelRectNow();
@@ -269,6 +293,22 @@ internal sealed partial class App
               $"cat={ShapeCategoryId} cols={m.Cols} h={m.Panel.MaxY - m.Panel.MinY:F0} cell={m.CellW / UiUnit:F0}×{m.CellH / UiUnit:F0}");
         float shapesPageH = m.Panel.MaxY - m.Panel.MinY;
 
+        // 2a1. 卡片缝里也能拖面板（和收藏页同一条逻辑）。
+        {
+            var card0 = LibraryLayout.CellRect(m, 0, 0f);
+            float gapX = card0.MaxX + LibraryLayout.CellGapLogical * UiUnit * 0.5f;
+            float gapY = (card0.MinY + card0.MaxY) * 0.5f;
+            var beforeDrag = LibraryPanelRectNow();
+            LibraryPointerDown(gapX, gapY, Native.PT_MOUSE, 1);
+            LibraryPanelDragMove(gapX + 80f * UiUnit, gapY + 40f * UiUnit);
+            LibraryPanelDragEnd();
+            var afterDrag = LibraryPanelRectNow();
+            Check("卡片缝里拖一下：面板跟着走",
+                  MathF.Abs(afterDrag.MinX - beforeDrag.MinX) > 20f
+                  || MathF.Abs(afterDrag.MinY - beforeDrag.MinY) > 20f,
+                  $"x={beforeDrag.MinX:F0}→{afterDrag.MinX:F0} y={beforeDrag.MinY:F0}→{afterDrag.MinY:F0}");
+        }
+
         ClickShapeTab("common");
         Check("点「常用」→ 11 张、面板不变高",
               ShapeCategoryId == "common" && ShapeCardsNow().Length == 11
@@ -291,6 +331,15 @@ internal sealed partial class App
         Check("虚线卡高亮、实线卡不高亮",
               ShapePresetActive(cards[1]) && !ShapePresetActive(cards[0]),
               $"实线={ShapePresetActive(cards[0])} 虚线={ShapePresetActive(cards[1])}");
+        Check("面板选图形后标记为一次性",
+              ShapeOneShotForTest,
+              $"oneShot={ShapeOneShotForTest} tool={Tool}");
+        int strokesBefore = Doc.Strokes.Count;
+        ShapeDragForTest(200f, 200f, 520f, 360f);
+        Check("画完一个图形 → 自动回到画笔、面板不关",
+              Tool == Tool.Pen && !ShapeOneShotForTest && LibraryPanelOpen
+              && Doc.Strokes.Count == strokesBefore + 1,
+              $"tool={Tool} oneShot={ShapeOneShotForTest} open={LibraryPanelOpen} strokes={Doc.Strokes.Count - strokesBefore}");
         Check("选图形后面板常驻、主条图形蓝",
               LibraryPanelOpen && LibraryTab == LibraryTab.Shapes && ui.CellActiveForTest(10),
               $"open={LibraryPanelOpen} tab={LibraryTab} 图形={ui.CellActiveForTest(10)}");
