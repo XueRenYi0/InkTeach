@@ -4534,6 +4534,13 @@ internal sealed partial class OverlayWindow : IDisposable
 
         float radius = MathF.Min(theme.CornerRadius * dpi, 12f * dpi);
         DrawPanelCard(app, panel, radius, dpi);
+        DrawLibraryTopTabs(app, m, dpi, theme);
+
+        if (app.LibraryTab == LibraryTab.Shapes)
+        {
+            DrawShapeLibraryPage(app, m, dpi, theme);
+            return;
+        }
 
         var head = m.Header;
         bool trashView = app.LibraryCategoryId == ShapeLibrary.TrashCategory;
@@ -4742,6 +4749,362 @@ internal sealed partial class OverlayWindow : IDisposable
                           _scratch, 1.2f * dpi);
 
         if (app.LibraryMenu != 0) DrawLibraryMenu(app, dpi, theme);
+    }
+
+    /// <summary>一级页签：图形 / 我的收藏。2026-11-02 起面板最上面这一行。</summary>
+    private void DrawLibraryTopTabs(InkEngine app, in LibraryLayout.Info m, float dpi, UiTheme theme)
+    {
+        var bg = new RoundedRectangle(
+            new Vortice.RawRectF(m.TopTabs.MinX, m.TopTabs.MinY, m.TopTabs.MaxX, m.TopTabs.MaxY),
+            8f * dpi, 8f * dpi);
+        _scratch.Color = theme.Hover;
+        _ctx.FillRoundedRectangle(bg, _scratch);
+        _scratch.Color = theme.PanelBorder;
+        _ctx.DrawRoundedRectangle(bg, _scratch, 1f);
+
+        DrawLibraryTopTab(m.ShapesTab, "图形", app.LibraryTab == LibraryTab.Shapes, dpi, theme);
+        DrawLibraryTopTab(m.FavoritesTab, "我的收藏", app.LibraryTab == LibraryTab.Favorites, dpi, theme);
+    }
+
+    private void DrawLibraryTopTab(in RectF r, string label, bool active, float dpi, UiTheme theme)
+    {
+        if (r.IsEmpty) return;
+        if (active)
+        {
+            var rr = new RoundedRectangle(
+                new Vortice.RawRectF(r.MinX + 3f * dpi, r.MinY + 3f * dpi,
+                                     r.MaxX - 3f * dpi, r.MaxY - 3f * dpi),
+                7f * dpi, 7f * dpi);
+            _scratch.Color = theme.ActiveBg;
+            _ctx.FillRoundedRectangle(rr, _scratch);
+        }
+        _scratch.Color = active ? theme.ActiveText : theme.TextMuted;
+        _ctx.DrawText(label, ReadoutFormatSmall(dpi),
+                      new Rect(r.MinX, r.MinY, r.MaxX - r.MinX, r.MaxY - r.MinY), _scratch);
+    }
+
+    /// <summary>
+    /// 图形页：全部 / 常用 / 曲线 / 立体 四个分类 + 每个档位一张卡（37 张）。
+    /// 图标先用基础几何近似（墨迹预览），点卡 = 换工具并直接设到该档。
+    /// </summary>
+    private void DrawShapeLibraryPage(InkEngine app, in LibraryLayout.Info m, float dpi, UiTheme theme)
+    {
+        var cards = app.ShapeCardsNow();
+        if (m.Tabbed)
+        {
+            DrawShapeTabs(app, m, dpi, theme);
+        }
+        else
+        {
+            DrawLibPill(m.CurrentCategory,
+                        $"{ShapeCatalog.NameFor(app.ShapeCategoryId)} · {cards.Length} ▾",
+                        false, dpi, theme);
+        }
+        DrawLibGlyph(m.Close, "✕", theme.TextMuted, dpi);
+
+        float maxScroll = LibraryLayout.MaxScroll(m, cards.Length);
+        float scroll = Math.Clamp(app.LibraryScrollY, 0f, maxScroll);
+
+        var clip = m.Grid;
+        _ctx.PushAxisAlignedClip(
+            new Vortice.RawRectF(clip.MinX, clip.MinY, clip.MaxX, clip.MaxY),
+            AntialiasMode.Aliased);
+        for (int i = 0; i < cards.Length; i++)
+        {
+            var cell = LibraryLayout.CellRect(m, i, scroll);
+            if (cell.MaxY < m.Grid.MinY - 1f) continue;
+            if (cell.MinY > m.Grid.MaxY + 1f) break;
+            DrawShapeCatalogCard(cards[i], cell, app.ShapePresetActive(cards[i]), dpi, theme);
+        }
+        _ctx.PopAxisAlignedClip();
+
+        if (maxScroll > 0.5f)
+        {
+            var track = LibraryLayout.ScrollTrack(m);
+            var thumb = LibraryLayout.ScrollThumb(m, cards.Length, scroll);
+            _scratch.Color = new Color4(theme.TextMuted.R, theme.TextMuted.G, theme.TextMuted.B, 0.12f);
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(track.MinX, track.MinY, track.MaxX, track.MaxY),
+                2f * dpi, 2f * dpi), _scratch);
+            _scratch.Color = new Color4(theme.TextMuted.R, theme.TextMuted.G, theme.TextMuted.B, 0.55f);
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(thumb.MinX, thumb.MinY, thumb.MaxX, thumb.MaxY),
+                2f * dpi, 2f * dpi), _scratch);
+        }
+    }
+
+    /// <summary>图形页的二级分类页签：全部 / 常用 / 曲线 / 立体（数量写在名字后）。</summary>
+    private void DrawShapeTabs(InkEngine app, in LibraryLayout.Info m, float dpi, UiTheme theme)
+    {
+        var cats = ShapeCatalog.Categories;
+        var widths = new float[cats.Length];
+        for (int i = 0; i < cats.Length; i++)
+            widths[i] = LibraryLayout.TabWidthLogical(cats[i].Name) * dpi;
+        var clip = m.Tabs;
+        _ctx.PushAxisAlignedClip(
+            new Vortice.RawRectF(clip.MinX, clip.MinY, clip.MaxX, clip.MaxY),
+            AntialiasMode.Aliased);
+        for (int i = 0; i < cats.Length; i++)
+        {
+            var tr = LibraryLayout.TabRect(m, widths, i, dpi, app.LibraryTabScroll);
+            if (tr.MaxX < m.Tabs.MinX) continue;
+            if (tr.MinX > m.Tabs.MaxX) break;
+            bool on = cats[i].Id == app.ShapeCategoryId;
+            _scratch.Color = on ? theme.Text : theme.TextMuted;
+            _ctx.DrawText(cats[i].Name, ReadoutFormatTab(dpi),
+                          new Rect(tr.MinX, tr.MinY, tr.MaxX - tr.MinX,
+                                   tr.MaxY - tr.MinY - 2f * dpi), _scratch);
+            if (on)
+            {
+                _scratch.Color = theme.ActiveBg;
+                _ctx.DrawLine(new System.Numerics.Vector2(tr.MinX, tr.MaxY - 1f * dpi),
+                              new System.Numerics.Vector2(tr.MaxX, tr.MaxY - 1f * dpi),
+                              _scratch, 2f * dpi);
+            }
+        }
+        _ctx.PopAxisAlignedClip();
+    }
+
+    private void DrawShapeCatalogCard(ShapePreset preset, in RectF cell,
+                                      bool active, float dpi, UiTheme theme)
+    {
+        float inset = 2f * dpi;
+        var rr = new RoundedRectangle(
+            new Vortice.RawRectF(cell.MinX + inset, cell.MinY + inset,
+                                 cell.MaxX - inset, cell.MaxY - inset),
+            8f * dpi, 8f * dpi);
+        _scratch.Color = active ? theme.ActiveBg : theme.Hover;
+        _ctx.FillRoundedRectangle(rr, _scratch);
+        _scratch.Color = active ? theme.ActiveBg : theme.PanelBorder;
+        _ctx.DrawRoundedRectangle(rr, _scratch, active ? 2f : 1f);
+
+        float glyphH = 46f * dpi;
+        var glyph = new RectF
+        {
+            MinX = cell.MinX + 6f * dpi, MinY = cell.MinY + 5f * dpi,
+            MaxX = cell.MaxX - 6f * dpi, MaxY = cell.MinY + glyphH,
+        };
+        DrawShapeGlyph(preset, glyph, dpi, active ? theme.ActiveText : theme.Text);
+
+        _scratch.Color = active ? theme.ActiveText : theme.Text;
+        _ctx.DrawText(preset.Label, ReadoutFormatSmall(dpi),
+                      new Rect(cell.MinX + 2f * dpi, cell.MinY + glyphH - 4f * dpi,
+                               cell.MaxX - cell.MinX - 4f * dpi, 18f * dpi), _scratch);
+    }
+
+    private void DrawShapeGlyph(ShapePreset preset, in RectF box, float dpi, Color4 color)
+    {
+        Tool tool = preset.Tool;
+        int variant = preset.Variant;
+        _scratch.Color = color;
+        float w = MathF.Min(box.MaxX - box.MinX, 36f * dpi);
+        float h = MathF.Min(box.MaxY - box.MinY, 28f * dpi);
+        float cx = (box.MinX + box.MaxX) * 0.5f;
+        float cy = (box.MinY + box.MaxY) * 0.5f;
+        float l = cx - w * 0.5f, r = cx + w * 0.5f;
+        float t = cy - h * 0.5f, b = cy + h * 0.5f;
+        float lw = 1.7f * dpi;
+
+        void Line(float x0, float y0, float x1, float y1)
+            => _ctx.DrawLine(new Vector2(x0, y0), new Vector2(x1, y1), _scratch, lw);
+
+        void Dashed(float x0, float y0, float x1, float y1, bool dotted)
+        {
+            float len = MathF.Sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
+            if (len < 0.1f) return;
+            float seg = dotted ? 2f * dpi : 5f * dpi;
+            float gap = dotted ? 3f * dpi : 3.5f * dpi;
+            for (float s = 0; s < len; s += seg + gap)
+            {
+                float e = MathF.Min(len, s + seg);
+                Line(x0 + (x1 - x0) * s / len, y0 + (y1 - y0) * s / len,
+                     x0 + (x1 - x0) * e / len, y0 + (y1 - y0) * e / len);
+            }
+        }
+
+        void Poly(Vector2[] pts, bool close)
+        {
+            for (int i = 1; i < pts.Length; i++) Line(pts[i - 1].X, pts[i - 1].Y, pts[i].X, pts[i].Y);
+            if (close && pts.Length > 2) Line(pts[^1].X, pts[^1].Y, pts[0].X, pts[0].Y);
+        }
+
+        Vector2[] Ring(float rx, float ry, float y)
+        {
+            int sides = variant is >= 3 and <= 6 ? variant : 4;
+            var pts = new Vector2[sides];
+            for (int i = 0; i < sides; i++)
+            {
+                float a = -MathF.PI * 0.5f + i * MathF.PI * 2f / sides;
+                pts[i] = new Vector2(cx + rx * MathF.Cos(a), y + ry * MathF.Sin(a));
+            }
+            return pts;
+        }
+
+        switch (tool)
+        {
+            case Tool.Line:
+                if (variant == (int)StrokeDash.Dashed) Dashed(l, b, r, t, false);
+                else if (variant == (int)StrokeDash.Dotted) Dashed(l, b, r, t, true);
+                else Line(l, b, r, t);
+                break;
+            case Tool.Arrow:
+                Line(l, b, r, t);
+                Line(r, t, r - 8f * dpi, t + 4f * dpi);
+                Line(r, t, r - 4f * dpi, t + 8f * dpi);
+                break;
+            case Tool.Rectangle:
+                _ctx.DrawRectangle(new Vortice.RawRectF(l, t, r, b), _scratch, lw);
+                break;
+            case Tool.Parallelogram:
+                Line(l + 6f * dpi, t, r, t);
+                Line(r, t, r - 6f * dpi, b);
+                Line(r - 6f * dpi, b, l, b);
+                Line(l, b, l + 6f * dpi, t);
+                break;
+            case Tool.Ellipse:
+            case Tool.ConicEllipse:
+                _ctx.DrawEllipse(new Ellipse(new Vector2(cx, cy),
+                                             w * 0.5f, h * 0.42f), _scratch, lw);
+                if (tool == Tool.ConicEllipse)
+                {
+                    float fx = w * 0.2f;
+                    _ctx.DrawEllipse(new Ellipse(new Vector2(cx - fx, cy), 1.6f * dpi, 1.6f * dpi),
+                                     _scratch, 1f * dpi);
+                    _ctx.DrawEllipse(new Ellipse(new Vector2(cx + fx, cy), 1.6f * dpi, 1.6f * dpi),
+                                     _scratch, 1f * dpi);
+                    if (variant == 0)
+                    {
+                        Line(cx - fx, cy, cx, t + h * 0.16f);
+                        Line(cx + fx, cy, cx, t + h * 0.16f);
+                    }
+                }
+                break;
+            case Tool.Circle:
+                _ctx.DrawEllipse(new Ellipse(new Vector2(cx, cy),
+                                             h * 0.42f, h * 0.42f), _scratch, lw);
+                break;
+            case Tool.Triangle:
+                Line(cx, t, r, b);
+                Line(r, b, l, b);
+                Line(l, b, cx, t);
+                break;
+            case Tool.Coordinate:
+                if (variant == 0)
+                {
+                    for (int i = 1; i <= 3; i++)
+                    {
+                        float gx = l + (r - l) * i / 4f;
+                        float gy = t + (b - t) * i / 4f;
+                        Line(gx, t, gx, b);
+                        Line(l, gy, r, gy);
+                    }
+                }
+                Line(l, cy, r, cy);
+                Line(cx, b, cx, t);
+                Line(r, cy, r - 4f * dpi, cy - 3f * dpi);
+                Line(r, cy, r - 4f * dpi, cy + 3f * dpi);
+                Line(cx, t, cx - 3f * dpi, t + 4f * dpi);
+                Line(cx, t, cx + 3f * dpi, t + 4f * dpi);
+                break;
+            case Tool.Hyperbola:
+                if (variant == 0)
+                {
+                    Dashed(l, t, r, b, false);
+                    Dashed(l, b, r, t, false);
+                }
+                Line(l, t, cx - 4f * dpi, cy);
+                Line(cx - 4f * dpi, cy, l, b);
+                Line(r, t, cx + 4f * dpi, cy);
+                Line(cx + 4f * dpi, cy, r, b);
+                break;
+            case Tool.Parabola:
+                if (variant == 0)
+                {
+                    Line(l, b, cx, t);
+                    Line(cx, t, r, b);
+                }
+                else
+                {
+                    Line(l, t, l, b);
+                    Line(l, t, r, cy);
+                    Line(r, cy, l, b);
+                }
+                break;
+            case Tool.Sine:
+            case Tool.Cosine:
+            case Tool.Wave:
+                {
+                    int n = 16;
+                    float phase = tool == Tool.Cosine ? MathF.PI * 0.5f : 0f;
+                    float amp = h * (tool == Tool.Wave ? 0.22f : 0.30f);
+                    float prevX = l, prevY = cy + MathF.Sin(phase) * amp;
+                    for (int i = 1; i <= n; i++)
+                    {
+                        float u = i / (float)n;
+                        float x = l + (r - l) * u;
+                        float y = cy + MathF.Sin(phase + u * MathF.PI * 2f) * amp;
+                        Line(prevX, prevY, x, y);
+                        prevX = x; prevY = y;
+                    }
+                }
+                break;
+            case Tool.Tangent:
+                Line(l, b, r, t);
+                Line(l, t, r, b);
+                break;
+            case Tool.Cylinder:
+            case Tool.Cone:
+            case Tool.ConeFrustum:
+                _ctx.DrawEllipse(new Ellipse(new Vector2(cx, t + 4f * dpi),
+                                             w * 0.45f, 5f * dpi), _scratch, lw);
+                Line(l, t + 4f * dpi, l, b - 4f * dpi);
+                Line(r, t + 4f * dpi, r, b - 4f * dpi);
+                _ctx.DrawEllipse(new Ellipse(new Vector2(cx, b - 4f * dpi),
+                                             w * 0.45f, 5f * dpi), _scratch, lw);
+                break;
+            case Tool.Sphere:
+                _ctx.DrawEllipse(new Ellipse(new Vector2(cx, cy),
+                                             h * 0.42f, h * 0.42f), _scratch, lw);
+                _ctx.DrawEllipse(new Ellipse(new Vector2(cx, cy),
+                                             h * 0.42f, h * 0.18f), _scratch, lw);
+                break;
+            case Tool.Prism:
+                {
+                    var bot = Ring(w * 0.42f, h * 0.13f, b - h * 0.13f);
+                    var top = Ring(w * 0.42f, h * 0.13f, t + h * 0.13f);
+                    Poly(top, true);
+                    Poly(bot, true);
+                    for (int i = 0; i < bot.Length; i++) Line(bot[i].X, bot[i].Y, top[i].X, top[i].Y);
+                }
+                break;
+            case Tool.Pyramid:
+                {
+                    var bot = Ring(w * 0.42f, h * 0.14f, b - h * 0.14f);
+                    Poly(bot, true);
+                    for (int i = 0; i < bot.Length; i++) Line(bot[i].X, bot[i].Y, cx, t);
+                }
+                break;
+            case Tool.Frustum:
+                {
+                    var bot = Ring(w * 0.42f, h * 0.13f, b - h * 0.13f);
+                    var top = Ring(w * 0.25f, h * 0.09f, t + h * 0.15f);
+                    Poly(top, true);
+                    Poly(bot, true);
+                    for (int i = 0; i < bot.Length; i++) Line(bot[i].X, bot[i].Y, top[i].X, top[i].Y);
+                }
+                break;
+            default:
+                Line(l + 5f * dpi, t, r, t);
+                Line(l + 5f * dpi, t, l, t + 6f * dpi);
+                Line(l, t + 6f * dpi, l, b);
+                Line(l, b, r - 5f * dpi, b);
+                Line(r - 5f * dpi, b, r, b - 6f * dpi);
+                Line(r, b - 6f * dpi, r, t);
+                Line(l + 5f * dpi, t, l, b - 6f * dpi);
+                Line(l, b - 6f * dpi, r - 5f * dpi, b - 6f * dpi);
+                Line(r, t, r - 5f * dpi, b - 6f * dpi);
+                break;
+        }
     }
 
     private void DrawLibraryTabs(InkEngine app, in LibraryLayout.Info m, float dpi, UiTheme theme)

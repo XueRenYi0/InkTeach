@@ -7897,6 +7897,8 @@ public partial class InkEngine
 
     /// <summary>图库面板开着吗（引擎侧浮动面板，和颜色 / 层级面板同一套画法）。</summary>
     internal bool LibraryPanelOpen;
+    /// <summary>统一面板当前页：图形 / 我的收藏。默认收藏，图形入口会切过来。</summary>
+    internal LibraryTab LibraryTab = LibraryTab.Favorites;
     /// <summary>收藏动作这一刻的反馈（成功 / 重复 / 失败）；<see cref="LibraryFeedbackUntilMs"/> 到点自动回普通态。</summary>
     internal LibraryFeedbackKind LibraryFeedback;
     internal double LibraryFeedbackUntilMs;
@@ -7923,6 +7925,8 @@ public partial class InkEngine
     internal List<ShapeLibrary.Entry> LibraryAllEntries = new();
     /// <summary>当前收藏筛选：`"all"` = 全部；其他是分类 id。</summary>
     internal string LibraryCategoryId = "all";
+    /// <summary>图形页当前分类：all / common / curve / solid（与收藏分类互不影响）。</summary>
+    internal string ShapeCategoryId = "all";
     /// <summary>下一次收藏动作落到哪个分类（「全部」筛选时不改它）。</summary>
     internal string LibrarySaveCategoryId = ShapeLibrary.Uncategorized;
     /// <summary>分类表缓存（打开面板/建删分类时刷新）。</summary>
@@ -7942,6 +7946,9 @@ public partial class InkEngine
     /// <summary>弹窗位置/大小（**逻辑屏幕坐标**；实际绘制乘 UiUnit）。空 = 还没摆过。</summary>
     private RectF _libraryPanelLogical;
     private bool _libraryPanelPrefsLoaded;
+    /// <summary>2026-11-02：位置/宽度/横竖共用一份，高度按页签各记各的（逻辑像素）。</summary>
+    private float _libraryHeightShapes;
+    private float _libraryHeightFavorites;
     /// <summary>0 = 没拖；1 = 拖标题栏移动；2 = 拖右下角缩放。</summary>
     private int _libraryDrag;
     private Vector2 _libraryDragStart;
@@ -8297,12 +8304,16 @@ public partial class InkEngine
         _dirty = true;
     }
 
-    internal void OpenLibraryPanel()
+    internal void OpenLibraryPanel() => OpenLibraryPanel(LibraryTab.Favorites);
+
+    internal void OpenLibraryPanel(LibraryTab tab)
     {
-        // 穿透下收藏弹窗没有独立输入窗，会被藏起来；用户明确点“收藏”= 现在要用它，
+        // 穿透下收藏弹窗没有独立输入窗，会被藏起来；用户明确点“收藏/图形”= 现在要用它，
         // 先退出穿透（和 SwitchTool 选工具同一条语义）。
         if (PassThrough) SetPassThrough(false);
         ReloadLibrary();
+        if (LibraryPanelOpen) SaveCurrentTabHeight();
+        LibraryTab = tab;
         LibraryPanelOpen = true;
         LibraryMenu = 0;
         LibraryMenuPage = 0;
@@ -8319,13 +8330,114 @@ public partial class InkEngine
         HideLibraryRenameWindow();
         EnsureLibraryCategoryVisible();
         EnsureLibraryTabVisible();
+        ApplyTabHeight(tab);
         _dirty = true;
         NotifyUiStateChanged();
+    }
+
+    /// <summary>切一级页签：只换内容，不清面板位置/大小/横竖。</summary>
+    internal void SetLibraryTab(LibraryTab tab)
+    {
+        if (!LibraryPanelOpen) { OpenLibraryPanel(tab); return; }
+        if (LibraryTab == tab) return;
+        SaveCurrentTabHeight();
+        LibraryTab = tab;
+        LibraryMenu = 0;
+        LibraryMenuPage = 0;
+        LibraryConfirm = "";
+        LibraryCategoriesOpen = false;
+        LibraryDrawerManage = false;
+        LibrarySelectMode = false;
+        LibraryUseSelected = null;
+        LibraryScrollY = 0;
+        LibraryTabScroll = 0;
+        LibraryMarqueeActive = false;
+        LibraryManageSorting = false;
+        HideLibraryRenameWindow();
+        ApplyTabHeight(tab);
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>图形入口：已开在图形页就关；开在收藏页就切过来。</summary>
+    internal void ToggleShapesPanel()
+    {
+        if (PassThrough)
+        {
+            SetPassThrough(false);
+            if (!LibraryPanelOpen) OpenLibraryPanel(LibraryTab.Shapes);
+            else SetLibraryTab(LibraryTab.Shapes);
+            return;
+        }
+        if (LibraryPanelOpen && LibraryTab == LibraryTab.Shapes) { CloseLibraryPanel(); return; }
+        if (LibraryPanelOpen) { SetLibraryTab(LibraryTab.Shapes); return; }
+        OpenLibraryPanel(LibraryTab.Shapes);
+    }
+
+    /// <summary>把当前页签的高度记到它自己那一份里（位置/宽度/横竖不记）。</summary>
+    private void SaveCurrentTabHeight()
+    {
+        if (_libraryPanelLogical.IsEmpty) return;
+        float h = _libraryPanelLogical.MaxY - _libraryPanelLogical.MinY;
+        if (h <= 1f) return;
+        if (LibraryTab == LibraryTab.Shapes) _libraryHeightShapes = h;
+        else _libraryHeightFavorites = h;
+    }
+
+    /// <summary>某页签在“还没手动拖过”时的默认高度（逻辑像素）。</summary>
+    private float DefaultTabHeightLogical(LibraryTab tab)
+    {
+        if (LibraryMode == LibraryPanelMode.Horizontal)
+            return tab == LibraryTab.Shapes
+                ? LibraryLayout.HeightForRows(5, 1f, LibraryLayout.ShapeCellHLogical)
+                : 286f;
+        // 竖排：图形页固定露 5 行（4 列时多出来的滚动看），收藏默认 5 行。
+        return tab == LibraryTab.Shapes
+            ? LibraryLayout.HeightForRows(5, 1f, LibraryLayout.ShapeCellHLogical)
+            : 582f;
+    }
+
+    /// <summary>
+    /// 切页签时只换高度：位置、宽度、横竖都不动，贴主条那条边（MaxY）固定。
+    /// 图形页固定 5 行高（37 张在 9 列下刚好放完，变窄就滚动），切分类不变高。
+    /// </summary>
+    private void ApplyTabHeight(LibraryTab tab)
+    {
+        var m = LibraryPanelInfoNow();
+        float dpi = UiUnit;
+        float hLog = tab == LibraryTab.Shapes ? _libraryHeightShapes : _libraryHeightFavorites;
+        if (hLog <= 1f) hLog = DefaultTabHeightLogical(tab);
+
+        if (tab == LibraryTab.Shapes)
+        {
+            // 固定 5 行；窄面板放不下就滚动，不把面板越撑越高。
+            float need = LibraryLayout.HeightForRows(5, 1f, LibraryLayout.ShapeCellHLogical);
+            hLog = MathF.Max(hLog, need);
+        }
+
+        var panel = m.Panel;
+        float want = hLog * dpi;
+        var screen = UiLogicalScreen;
+        var ui = UiBarBoundsNow();
+        float uiTop = ui.IsEmpty ? screen.MaxY - 80f : ui.MinY;
+        var desired = new RectF
+        {
+            MinX = panel.MinX, MaxX = panel.MaxX,
+            MinY = panel.MaxY - want, MaxY = panel.MaxY,
+        };
+        desired = ClampLibraryPanel(desired, screen, uiTop, dpi, LibraryMode);
+        _libraryPanelLogical = new RectF
+        {
+            MinX = desired.MinX / dpi, MinY = desired.MinY / dpi,
+            MaxX = desired.MaxX / dpi, MaxY = desired.MaxY / dpi,
+        };
     }
 
     internal void CloseLibraryPanel()
     {
         if (!LibraryPanelOpen) return;
+        SaveCurrentTabHeight();
+        SaveLibraryPanelPrefs();
         LibraryPanelOpen = false;
         LibrarySelected.Clear();
         LibrarySelectMode = false;
@@ -8412,11 +8524,13 @@ public partial class InkEngine
         if (PassThrough)
         {
             SetPassThrough(false);
-            if (!LibraryPanelOpen) OpenLibraryPanel();
+            if (!LibraryPanelOpen) OpenLibraryPanel(LibraryTab.Favorites);
+            else SetLibraryTab(LibraryTab.Favorites);
             return;
         }
-        if (LibraryPanelOpen) CloseLibraryPanel();
-        else OpenLibraryPanel();
+        if (LibraryPanelOpen && LibraryTab == LibraryTab.Favorites) { CloseLibraryPanel(); return; }
+        if (LibraryPanelOpen) { SetLibraryTab(LibraryTab.Favorites); return; }
+        OpenLibraryPanel(LibraryTab.Favorites);
     }
 
     /// <summary>重读目录（打开面板 / 存完 / 删完都走这里），按当前分类重新筛。</summary>
@@ -8973,11 +9087,15 @@ public partial class InkEngine
         LibraryUseSelected = null;
     }
 
+    /// <summary>当前页签的滚动项数（图形页是过滤后的卡片数）。</summary>
+    private int LibraryScrollCountNow()
+        => LibraryTab == LibraryTab.Shapes ? ShapeCardsNow().Length : LibraryEntries.Count;
+
     /// <summary>滚轮 / 滚动条滚内容（0 = 顶部）。</summary>
     internal void LibraryScrollBy(float dy)
     {
         var m = LibraryPanelInfoNow();
-        float max = LibraryLayout.MaxScroll(m, LibraryEntries.Count);
+        float max = LibraryLayout.MaxScroll(m, LibraryScrollCountNow());
         float next = Math.Clamp(LibraryScrollY + dy, 0f, max);
         if (MathF.Abs(next - LibraryScrollY) < 0.01f) return;
         LibraryScrollY = next;
@@ -8989,7 +9107,7 @@ public partial class InkEngine
     {
         var m = LibraryPanelInfoNow();
         LibraryScrollY = Math.Clamp(LibraryScrollY, 0f,
-            LibraryLayout.MaxScroll(m, LibraryEntries.Count));
+            LibraryLayout.MaxScroll(m, LibraryScrollCountNow()));
     }
 
     /// <summary>让当前分类的页签始终露在可视区里；分类多时页签条横向滚。</summary>
@@ -8997,12 +9115,13 @@ public partial class InkEngine
     {
         var m = LibraryPanelInfoNow();
         if (!m.Tabbed) { LibraryTabScroll = 0; return; }
-        var cats = LibraryTabCategories();
+        var cats = LibraryTabsNow();
         if (cats.Length == 0) return;
         var widths = new float[cats.Length];
         for (int i = 0; i < cats.Length; i++)
             widths[i] = LibraryLayout.TabWidthLogical(cats[i].Name) * UiUnit;
-        int idx = Array.FindIndex(cats, c => c.Id == LibraryCategoryId);
+        string curId = LibraryTab == LibraryTab.Shapes ? ShapeCategoryId : LibraryCategoryId;
+        int idx = Array.FindIndex(cats, c => c.Id == curId);
         if (idx < 0) { LibraryTabScroll = 0; return; }
         float gap = LibraryLayout.TabGapLogical * UiUnit;
         float left = 0;
@@ -9022,6 +9141,91 @@ public partial class InkEngine
         foreach (var c in _libraryCategoryInfos)
             if (c.Id != ShapeLibrary.TrashCategory) list.Add(c);
         return list.ToArray();
+    }
+
+    /// <summary>当前页签真正显示的页签表：图形页是 全部/常用/曲线/立体，收藏页是分类。</summary>
+    internal (string Id, string Name)[] LibraryTabsNow()
+    {
+        if (LibraryTab == LibraryTab.Shapes)
+        {
+            var a = new (string Id, string Name)[ShapeCatalog.Categories.Length];
+            for (int i = 0; i < a.Length; i++)
+                a[i] = (ShapeCatalog.Categories[i].Id, ShapeCatalog.Categories[i].Name);
+            return a;
+        }
+        var cats = LibraryTabCategories();
+        var b = new (string Id, string Name)[cats.Length];
+        for (int i = 0; i < cats.Length; i++) b[i] = (cats[i].Id, cats[i].Name);
+        return b;
+    }
+
+    /// <summary>图形页当前分类的卡片（已按分类过滤）。</summary>
+    internal ShapePreset[] ShapeCardsNow() => ShapeCatalog.ForCategory(ShapeCategoryId);
+
+    internal void SetShapeCategory(string id)
+    {
+        if (ShapeCategoryId == id) return;
+        ShapeCategoryId = id;
+        LibraryScrollY = 0;
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>图形卡是否就是当前选中的那一张：工具相同 + 档位相同。</summary>
+    internal bool ShapePresetActive(ShapePreset p)
+    {
+        if (Tool != p.Tool) return false;
+        return p.Tool switch
+        {
+            Tool.Line => (int)LineDash == p.Variant,
+            Tool.Parabola => p.Variant == 0 ? ParabolaAxis == CurveAxis.OpenUp : ParabolaAxis != CurveAxis.OpenUp,
+            Tool.Hyperbola => HyperbolaAsymptotes == (p.Variant == 0),
+            Tool.ConicEllipse => EllipseFocusTriangle == (p.Variant == 0),
+            Tool.Coordinate => CoordGridDefault == (p.Variant == 0),
+            Tool.Prism or Tool.Pyramid or Tool.Frustum => SidesFor(p.Tool) == p.Variant,
+            _ => true,
+        };
+    }
+
+    /// <summary>点面板里的图形卡：换工具 + 直接设到这张卡对应的档位。</summary>
+    internal void SetShapePresetFromUi(ShapePreset p)
+    {
+        SetToolFromUi(p.Tool);
+        switch (p.Tool)
+        {
+            case Tool.Line:
+                var dash = (StrokeDash)p.Variant;
+                if (LineDash != dash)
+                {
+                    LineDash = dash;
+                    SetUiPref("lineDash", ((int)dash).ToString());
+                }
+                break;
+            case Tool.Parabola:
+                ParabolaAxis = p.Variant == 0 ? CurveAxis.OpenUp : CurveAxis.OpenRight;
+                break;
+            case Tool.Hyperbola:
+                HyperbolaAsymptotes = p.Variant == 0;
+                break;
+            case Tool.ConicEllipse:
+                EllipseFocusTriangle = p.Variant == 0;
+                break;
+            case Tool.Coordinate:
+                CoordGridDefault = p.Variant == 0;
+                SetUiPref("coordGrid", CoordGridDefault ? "1" : null);
+                break;
+            case Tool.Prism:
+                _sidesPrism = p.Variant;
+                break;
+            case Tool.Pyramid:
+                _sidesPyramid = p.Variant;
+                break;
+            case Tool.Frustum:
+                _sidesFrustum = p.Variant;
+                break;
+        }
+        _dirty = true;
+        NotifyUiStateChanged();
     }
 
     /// <summary>竖排左列：保证当前分类在可视范围内（分类多时跟着滚动）。</summary>
@@ -9150,7 +9354,9 @@ public partial class InkEngine
             MaxX = _libraryPanelLogical.MaxX * dpi, MaxY = _libraryPanelLogical.MaxY * dpi,
         };
         var panel = ClampLibraryPanel(desired, screen, uiTop, dpi, LibraryMode);
-        panel = LibraryLayout.Snap(panel, dpi, LibraryMode);
+        // 宽度和位置两页共用，统一按收藏卡的 84 吸附；图形卡更小，同一个宽度自然就是 9 列。
+        panel = LibraryLayout.Snap(panel, dpi, LibraryMode, LibraryLayout.CellWLogical,
+            LibraryTab == LibraryTab.Shapes ? LibraryLayout.ShapeCellHLogical : LibraryLayout.CellHLogical);
         panel = ClampLibraryPanel(panel, screen, uiTop, dpi, LibraryMode);
         _libraryPanelLogical = new RectF { MinX = panel.MinX / dpi, MinY = panel.MinY / dpi,
                                            MaxX = panel.MaxX / dpi, MaxY = panel.MaxY / dpi };
@@ -9165,16 +9371,19 @@ public partial class InkEngine
         bool resizing = _libraryDrag == 2 && !_libraryResizePreviewLogical.IsEmpty;
         var m = LibraryLayout.Measure(LibraryPanelRectNow(), UiUnit, LibraryMode,
             resizing ? _libraryResizeCols : 0,
-            resizing ? _libraryResizeRows : 0);
+            resizing ? _libraryResizeRows : 0,
+            LibraryTab == LibraryTab.Shapes ? LibraryLayout.ShapeCellWLogical : LibraryLayout.CellWLogical,
+            LibraryTab == LibraryTab.Shapes ? LibraryLayout.ShapeCellHLogical : LibraryLayout.CellHLogical);
         if (!m.Tabbed) return m;
 
         // 页签档：把 CurrentCategory 指到当前页签（抽屉/管理分类定位用）。
-        var cats = LibraryTabCategories();
-        int idx = Array.FindIndex(cats, c => c.Id == LibraryCategoryId);
+        var tabs = LibraryTabsNow();
+        string curId = LibraryTab == LibraryTab.Shapes ? ShapeCategoryId : LibraryCategoryId;
+        int idx = Array.FindIndex(tabs, t => t.Id == curId);
         if (idx < 0) return m;
-        var widths = new float[cats.Length];
-        for (int i = 0; i < cats.Length; i++)
-            widths[i] = LibraryLayout.TabWidthLogical(cats[i].Name) * UiUnit;
+        var widths = new float[tabs.Length];
+        for (int i = 0; i < tabs.Length; i++)
+            widths[i] = LibraryLayout.TabWidthLogical(tabs[i].Name) * UiUnit;
         m = m with { CurrentCategory = LibraryLayout.TabRect(m, widths, idx, UiUnit, LibraryTabScroll) };
         return m;
     }
@@ -9266,6 +9475,8 @@ public partial class InkEngine
         CancelLibraryTouchScroll();
         _libraryPanelLogical = default;
         LibraryMode = LibraryPanelMode.Horizontal;
+        _libraryHeightShapes = 0f;
+        _libraryHeightFavorites = 0f;
         _libraryPanelPrefsLoaded = true;
         LibraryPage = 0;
         LibraryScrollY = 0;
@@ -9287,10 +9498,11 @@ public partial class InkEngine
     private RectF DefaultLibraryRect(in RectF screen, float uiTop, float dpi, LibraryPanelMode mode)
     {
         // 2026-10-26：卡片 72×80 → 84×92 之后重算的默认档。
-        // 横排 752 = 24 + 8×84 + 7×8，252 = 24 + 28 + 8 + 2×92 + 8（8 列 2 行）。
-        // 竖排 384 = 24 + 4×84 + 3×8，548 = 24 + 28 + 4 + 5×92 + 4×8（4 列 5 行）。
+        // 2026-11-02：顶上加一级页签（30 + 4），默认高度各 +34。
+        // 横排 752 = 24 + 8×84 + 7×8，286 = 24 + 34 + 28 + 8 + 2×92 + 8（8 列 2 行）。
+        // 竖排 384 = 24 + 4×84 + 3×8，582 = 24 + 34 + 28 + 4 + 5×92 + 4×8（4 列 5 行）。
         float w = (mode == LibraryPanelMode.Horizontal ? 752f : 384f) * dpi;
-        float h = (mode == LibraryPanelMode.Horizontal ? 252f : 548f) * dpi;
+        float h = (mode == LibraryPanelMode.Horizontal ? 286f : 582f) * dpi;
         var desired = new RectF
         {
             MinX = (screen.MinX + screen.MaxX) * 0.5f * dpi - w * 0.5f,
@@ -9299,7 +9511,9 @@ public partial class InkEngine
         };
         desired.MaxX = desired.MinX + w;
         desired.MaxY = desired.MinY + h;
-        var snapped = LibraryLayout.Snap(desired, dpi, mode);
+        var snapped = LibraryLayout.Snap(desired, dpi, mode,
+            LibraryTab == LibraryTab.Shapes ? LibraryLayout.ShapeCellWLogical : LibraryLayout.CellWLogical,
+            LibraryTab == LibraryTab.Shapes ? LibraryLayout.ShapeCellHLogical : LibraryLayout.CellHLogical);
         return ClampLibraryPanel(snapped, screen, uiTop, dpi, mode);
     }
 
@@ -9321,6 +9535,12 @@ public partial class InkEngine
         if (_libraryPanelPrefsLoaded) return;
         _libraryPanelPrefsLoaded = true;
         LibraryMode = GetUiPref("libMode") == "v" ? LibraryPanelMode.Vertical : LibraryPanelMode.Horizontal;
+        if (float.TryParse(GetUiPref("libHShapes"), NumberStyles.Float,
+                           CultureInfo.InvariantCulture, out float hs) && hs > 60f)
+            _libraryHeightShapes = hs;
+        if (float.TryParse(GetUiPref("libHFav"), NumberStyles.Float,
+                           CultureInfo.InvariantCulture, out float hf) && hf > 60f)
+            _libraryHeightFavorites = hf;
         string raw = GetUiPref("libRect");
         if (string.IsNullOrWhiteSpace(raw)) return;
         var parts = raw.Split(',', StringSplitOptions.RemoveEmptyEntries);
@@ -9330,12 +9550,30 @@ public partial class InkEngine
             && float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float w)
             && float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float h)
             && w > 60f && h > 60f)
+        {
+            // 2026-11-02：面板顶上加了一级页签。老 libRect 没这 34，补一次，
+            // 否则老用户打开收藏会只剩 1 行卡片。
+            if (GetUiPref("libVer") != "2")
+            {
+                h += LibraryLayout.TopTabHLogical + LibraryLayout.TopTabGapLogical;
+                SetUiPref("libVer", "2");
+            }
             _libraryPanelLogical = new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+            // 老配置没有按页签的高度：把这份高度先记给收藏页（启动默认页），
+            // 不丢用户以前手动拖过的高度。
+            if (_libraryHeightFavorites <= 1f) _libraryHeightFavorites = h;
+        }
     }
 
     private void SaveLibraryPanelPrefs()
     {
+        SaveCurrentTabHeight();
         SetUiPref("libMode", LibraryMode == LibraryPanelMode.Vertical ? "v" : "h");
+        SetUiPref("libVer", "2");
+        SetUiPref("libHShapes", _libraryHeightShapes > 1f
+            ? _libraryHeightShapes.ToString("F1", CultureInfo.InvariantCulture) : null);
+        SetUiPref("libHFav", _libraryHeightFavorites > 1f
+            ? _libraryHeightFavorites.ToString("F1", CultureInfo.InvariantCulture) : null);
         if (_libraryPanelLogical.IsEmpty) { SetUiPref("libRect", null); return; }
         var r = _libraryPanelLogical;
         SetUiPref("libRect", string.Join(",",
@@ -9434,7 +9672,8 @@ public partial class InkEngine
                 MaxX = _libraryResizePreviewLogical.MaxX * dpi,
                 MaxY = _libraryResizePreviewLogical.MaxY * dpi,
             };
-            var settled = LibraryLayout.SnapNearest(raw, dpi, LibraryMode);
+            var settled = LibraryLayout.SnapNearest(raw, dpi, LibraryMode, LibraryLayout.CellWLogical,
+                LibraryTab == LibraryTab.Shapes ? LibraryLayout.ShapeCellHLogical : LibraryLayout.CellHLogical);
             settled = ClampLibraryPanel(settled, screen, uiTop, dpi, LibraryMode);
             _libraryPanelLogical = new RectF
             {
@@ -9462,7 +9701,8 @@ public partial class InkEngine
         // 老师只是想把弹窗挪个位置，卡片却突然全部重排。方向和大小只由右侧
         // 缩放角 + ☰ 里的“切换横排/竖排”决定；这里最多贴边，不改 LibraryMode。
         var desired = new RectF { MinX = p.MinX, MinY = p.MinY, MaxX = p.MaxX, MaxY = p.MaxY };
-        var snapped = LibraryLayout.Snap(desired, dpi, LibraryMode);
+        var snapped = LibraryLayout.Snap(desired, dpi, LibraryMode, LibraryLayout.CellWLogical,
+            LibraryTab == LibraryTab.Shapes ? LibraryLayout.ShapeCellHLogical : LibraryLayout.CellHLogical);
         if (nearLeft)
             snapped = new RectF { MinX = screen.MinX * dpi + 8f * dpi, MinY = snapped.MinY,
                                   MaxX = screen.MinX * dpi + 8f * dpi + (snapped.MaxX - snapped.MinX),
@@ -9497,14 +9737,18 @@ public partial class InkEngine
         float cy = (p.MinY + p.MaxY) * 0.5f + ViewOffsetY;   // 屏幕坐标
         LibraryMode = LibraryMode == LibraryPanelMode.Horizontal
             ? LibraryPanelMode.Vertical : LibraryPanelMode.Horizontal;
+        // 换横竖后，旧的“按页签高度”已经不适用；两页都回到新方向的默认高度。
+        _libraryHeightShapes = 0f;
+        _libraryHeightFavorites = 0f;
         float w = (LibraryMode == LibraryPanelMode.Horizontal ? 752f : 384f) * dpi;
-        float h = (LibraryMode == LibraryPanelMode.Horizontal ? 252f : 548f) * dpi;
+        float h = DefaultTabHeightLogical(LibraryTab) * dpi;
         var desired = new RectF { MinX = cx - w * 0.5f, MinY = cy - h * 0.5f,
                                   MaxX = cx + w * 0.5f, MaxY = cy + h * 0.5f };
         var screen = UiLogicalScreen;
         var ui = UiBarBoundsNow();
         float uiTop = ui.IsEmpty ? screen.MaxY - 80f : ui.MinY;
-        var snapped = LibraryLayout.Snap(desired, dpi, LibraryMode);
+        var snapped = LibraryLayout.Snap(desired, dpi, LibraryMode, LibraryLayout.CellWLogical,
+            LibraryTab == LibraryTab.Shapes ? LibraryLayout.ShapeCellHLogical : LibraryLayout.CellHLogical);
         snapped = ClampLibraryPanel(snapped, screen, uiTop, dpi, LibraryMode);
         _libraryPanelLogical = new RectF { MinX = snapped.MinX / dpi, MinY = snapped.MinY / dpi,
                                            MaxX = snapped.MaxX / dpi, MaxY = snapped.MaxY / dpi };
@@ -9782,6 +10026,42 @@ public partial class InkEngine
         if (LibraryLayout.ResizeRect(panel, dpi).Contains(x, y))
         {
             StartLibraryDrag(2, x, y);
+            return true;
+        }
+
+        // 一级页签：图形 / 我的收藏。只换内容，不动位置/大小。
+        if (m.ShapesTab.Contains(x, y)) { SetLibraryTab(LibraryTab.Shapes); return true; }
+        if (m.FavoritesTab.Contains(x, y)) { SetLibraryTab(LibraryTab.Favorites); return true; }
+
+        // 图形页：分类页签 + 37 张档位卡；点卡换工具并直接设档，面板常驻。
+        if (LibraryTab == LibraryTab.Shapes)
+        {
+            if (m.Close.Contains(x, y)) { CloseLibraryPanel(); return true; }
+            var shapeCats = ShapeCatalog.Categories;
+            if (m.Tabbed && m.Tabs.Contains(x, y))
+            {
+                var widths = new float[shapeCats.Length];
+                for (int i = 0; i < shapeCats.Length; i++)
+                    widths[i] = LibraryLayout.TabWidthLogical(shapeCats[i].Name) * dpi;
+                int ti = LibraryLayout.TabAt(m, widths, x, y, dpi, LibraryTabScroll);
+                if (ti >= 0 && ti < shapeCats.Length) SetShapeCategory(shapeCats[ti].Id);
+                return true;
+            }
+            if (!m.Tabbed && m.CurrentCategory.Contains(x, y))
+            {
+                // 窄面板放不下四个页签：点当前分类依次换下一个，标签始终可见。
+                int i = Array.FindIndex(shapeCats, c => c.Id == ShapeCategoryId);
+                SetShapeCategory(shapeCats[(Math.Max(0, i) + 1) % shapeCats.Length].Id);
+                return true;
+            }
+            if (m.Grid.Contains(x, y))
+            {
+                var cards = ShapeCardsNow();
+                int idx = LibraryLayout.CellAt(m, cards.Length, x, y, LibraryScrollY);
+                if (idx >= 0 && idx < cards.Length) SetShapePresetFromUi(cards[idx]);
+                return true;
+            }
+            StartLibraryDrag(1, x, y);
             return true;
         }
 
@@ -13915,6 +14195,7 @@ public partial class InkEngine
         RollSettingsOpen = RollSettingsOpen,
         IsFirstRun = !InkSettings.ExistedAtLoad,
         LibraryOpen = LibraryPanelOpen,
+        LibraryShapesTab = LibraryPanelOpen && LibraryTab == LibraryTab.Shapes,
         LibraryCategoryId = LibraryCategoryId,
         LibraryCategories = _libraryCategoryInfos,
         LibrarySelectionCount = LibrarySelected.Count,

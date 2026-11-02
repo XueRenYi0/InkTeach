@@ -108,6 +108,33 @@ internal sealed partial class App
             Console.WriteLine($"  已出图：{dpath}");
         else Console.WriteLine("  出图失败：" + dpath);
 
+        // 统一面板 2A：图形页（22 张卡，先只显示）。出图用横排，8 列 3 行。
+        LibraryMenu = 0;
+        LibrarySelectMode = false;
+        LibrarySelected.Clear();
+        LibraryCategoriesOpen = false;
+        LibraryDrawerManage = false;
+        if (LibraryMode == LibraryPanelMode.Vertical) ToggleLibraryOrientation();
+        OpenLibraryPanel(LibraryTab.Shapes);
+        SetToolFromUi(Tool.Line);       // 让第一张卡显示“当前工具”蓝框
+        SettleFrames(450);
+        string spath = Path.Combine(Path.GetDirectoryName(path) ?? ".",
+            Path.GetFileNameWithoutExtension(path) + "-shapes" + Path.GetExtension(path));
+        var panelS = LibraryPanelRectNow();
+        if (OffscreenFloatingShot(spath, panelS.Inflate(16f)))
+            Console.WriteLine($"  已出图：{spath}");
+        else Console.WriteLine("  出图失败：" + spath);
+
+        // 图形页竖排：4 列 × 5 行，余下的滚轮滚动。
+        ToggleLibraryOrientation();
+        SettleFrames(450);
+        string svpath = Path.Combine(Path.GetDirectoryName(path) ?? ".",
+            Path.GetFileNameWithoutExtension(path) + "-shapes-v" + Path.GetExtension(path));
+        var panelSV = LibraryPanelRectNow();
+        if (OffscreenFloatingShot(svpath, panelSV.Inflate(16f)))
+            Console.WriteLine($"  已出图：{svpath}");
+        else Console.WriteLine("  出图失败：" + svpath);
+
         CloseLibraryPanel();
         ShapeLibrary.DirOverride = null;
         try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }

@@ -9,6 +9,13 @@ internal enum LibraryPanelMode
     Vertical = 1,
 }
 
+/// <summary>统一面板的一级页签（2026-11-02）。</summary>
+internal enum LibraryTab
+{
+    Shapes = 0,
+    Favorites = 1,
+}
+
 /// <summary>
 /// **收藏弹窗的布局**（几何只有这一份：绘制、命中、自检都问它）。
 ///
@@ -18,9 +25,15 @@ internal enum LibraryPanelMode
 internal static class LibraryLayout
 {
     public const float PadLogical = 12f;
+    /// <summary>2026-11-02：面板最上面多一行「图形 / 我的收藏」一级页签。</summary>
+    public const float TopTabHLogical = 30f;
+    public const float TopTabGapLogical = 4f;
     public const float HeaderHLogical = 28f;
     public const float CellWLogical = 84f;
     public const float CellHLogical = 92f;
+    /// <summary>图形页的卡比收藏小一档：72×82，9 列 × 5 行刚好 37 张。</summary>
+    public const float ShapeCellWLogical = 72f;
+    public const float ShapeCellHLogical = 82f;
     public const float CellGapLogical = 8f;
     public const float RowGapLogical = 8f;
     public const float GapAboveUiLogical = 12f;
@@ -33,13 +46,18 @@ internal static class LibraryLayout
     /// <summary>最小 1×2（一行、两列）时的面板尺寸（逻辑像素）。</summary>
     public const float MinWidthLogical = PadLogical * 2 + MinCols * CellWLogical
                                       + (MinCols - 1) * CellGapLogical;
-    public const float MinHeightLogical = PadLogical * 2 + HeaderHLogical + 4f
+    public const float MinHeightLogical = PadLogical * 2 + TopTabHLogical + TopTabGapLogical
+                                       + HeaderHLogical + 4f
                                        + MinRows * CellHLogical
                                        + (MinRows - 1) * RowGapLogical;
 
     internal readonly struct Info
     {
         public RectF Panel { get; init; }
+        /// <summary>一级页签整行：图形 / 我的收藏。</summary>
+        public RectF TopTabs { get; init; }
+        public RectF ShapesTab { get; init; }
+        public RectF FavoritesTab { get; init; }
         public RectF Header { get; init; }
         public RectF Body { get; init; }
         public RectF Grid { get; init; }
@@ -62,6 +80,9 @@ internal static class LibraryLayout
 
         public float Dpi { get; init; }
         public LibraryPanelMode Mode { get; init; }
+        /// <summary>当前页签的卡片尺寸（物理像素）。收藏 84×92，图形 72×82。</summary>
+        public float CellW { get; init; }
+        public float CellH { get; init; }
         public int Cols { get; init; }
         public int Rows { get; init; }
         public int PageSize => Math.Max(1, Cols * Rows);
@@ -74,24 +95,32 @@ internal static class LibraryLayout
     public static bool Contains(in RectF r, float x, float y)
         => x >= r.MinX && x <= r.MaxX && y >= r.MinY && y <= r.MaxY;
 
+    /// <summary>给定行数时面板应该多高（含一级页签 + 二级顶栏）。</summary>
+    public static float HeightForRows(int rows, float dpi, float cellHLogical = CellHLogical)
+        => PadLogical * 2 * dpi
+           + (TopTabHLogical + TopTabGapLogical + HeaderHLogical + 4f) * dpi
+           + rows * cellHLogical * dpi + Math.Max(0, rows - 1) * RowGapLogical * dpi;
+
     /// <summary>把任意大小吸附到“标题栏 + 整数张卡”的尺寸；只改宽高，不动左上角。</summary>
-    public static RectF Snap(in RectF desired, float dpi, LibraryPanelMode mode)
+    public static RectF Snap(in RectF desired, float dpi, LibraryPanelMode mode,
+                             float cellWLogical = CellWLogical, float cellHLogical = CellHLogical)
     {
         float pad = PadLogical * dpi;
         float gap = CellGapLogical * dpi;
         float rowGap = RowGapLogical * dpi;
         float w = desired.MaxX - desired.MinX;
         float h = desired.MaxY - desired.MinY;
-        int cols = Math.Max(1, (int)MathF.Floor((w - pad * 2 + gap) / (CellWLogical * dpi + gap) + 0.01f));
-        int rows = Math.Max(1, (int)MathF.Floor((h - pad * 2 - HeaderHLogical * dpi - 4f * dpi + rowGap)
-                                                / (CellHLogical * dpi + rowGap) + 0.01f));
+        int cols = Math.Max(1, (int)MathF.Floor((w - pad * 2 + gap) / (cellWLogical * dpi + gap) + 0.01f));
+        int rows = Math.Max(1, (int)MathF.Floor((h - pad * 2
+                                                - (TopTabHLogical + TopTabGapLogical + HeaderHLogical + 4f) * dpi
+                                                + rowGap) / (cellHLogical * dpi + rowGap) + 0.01f));
         // 只保底 2×2；另一方向交给老师拖到屏幕/工具条边界为止。
         // 以前横排最多 3 行、竖排最多 3 列，横排往下拖会被硬截，手感像“拖不动”。
         cols = Math.Max(MinCols, cols);
         rows = Math.Max(MinRows, rows);
-        float sw = pad * 2 + cols * CellWLogical * dpi + (cols - 1) * gap;
-        float sh = pad * 2 + HeaderHLogical * dpi + 4f * dpi
-                   + rows * CellHLogical * dpi + (rows - 1) * rowGap;
+        float sw = pad * 2 + cols * cellWLogical * dpi + (cols - 1) * gap;
+        float sh = pad * 2 + (TopTabHLogical + TopTabGapLogical + HeaderHLogical + 4f) * dpi
+                   + rows * cellHLogical * dpi + (rows - 1) * rowGap;
         return new RectF { MinX = desired.MinX, MinY = desired.MinY,
                            MaxX = desired.MinX + sw, MaxY = desired.MinY + sh };
     }
@@ -100,22 +129,24 @@ internal static class LibraryLayout
     /// 松手时用：吸到**最近**的整格，而不是像 <see cref="Snap"/> 那样向下取整。
     /// 拖动中预览保持连续，只有松手这一下才重排卡片。
     /// </summary>
-    public static RectF SnapNearest(in RectF desired, float dpi, LibraryPanelMode mode)
+    public static RectF SnapNearest(in RectF desired, float dpi, LibraryPanelMode mode,
+                                    float cellWLogical = CellWLogical, float cellHLogical = CellHLogical)
     {
         float pad = PadLogical * dpi;
         float gap = CellGapLogical * dpi;
         float rowGap = RowGapLogical * dpi;
         float w = desired.MaxX - desired.MinX;
         float h = desired.MaxY - desired.MinY;
-        int cols = Math.Max(1, (int)MathF.Round((w - pad * 2 + gap) / (CellWLogical * dpi + gap)));
-        int rows = Math.Max(1, (int)MathF.Round((h - pad * 2 - HeaderHLogical * dpi - 4f * dpi + rowGap)
-                                                / (CellHLogical * dpi + rowGap)));
+        int cols = Math.Max(1, (int)MathF.Round((w - pad * 2 + gap) / (cellWLogical * dpi + gap)));
+        int rows = Math.Max(1, (int)MathF.Round((h - pad * 2
+                                                - (TopTabHLogical + TopTabGapLogical + HeaderHLogical + 4f) * dpi
+                                                + rowGap) / (cellHLogical * dpi + rowGap)));
         // 只保底 2×2；另一方向交给老师拖到屏幕/工具条边界为止。
         cols = Math.Max(MinCols, cols);
         rows = Math.Max(MinRows, rows);
-        float sw = pad * 2 + cols * CellWLogical * dpi + (cols - 1) * gap;
-        float sh = pad * 2 + HeaderHLogical * dpi + 4f * dpi
-                   + rows * CellHLogical * dpi + (rows - 1) * rowGap;
+        float sw = pad * 2 + cols * cellWLogical * dpi + (cols - 1) * gap;
+        float sh = pad * 2 + (TopTabHLogical + TopTabGapLogical + HeaderHLogical + 4f) * dpi
+                   + rows * cellHLogical * dpi + (rows - 1) * rowGap;
         return new RectF { MinX = desired.MinX, MinY = desired.MinY,
                            MaxX = desired.MinX + sw, MaxY = desired.MinY + sh };
     }
@@ -123,21 +154,39 @@ internal static class LibraryLayout
     /// <param name="forceCols">拖动缩放时冻结列数；0 = 按面板宽度重新算。</param>
     /// <param name="forceRows">拖动缩放时冻结行数；0 = 按面板高度重新算。</param>
     public static Info Measure(in RectF panel, float dpi, LibraryPanelMode mode,
-                               int forceCols = 0, int forceRows = 0)
+                               int forceCols = 0, int forceRows = 0,
+                               float cellWLogical = CellWLogical, float cellHLogical = CellHLogical)
     {
         float pad = PadLogical * dpi;
         float headerH = HeaderHLogical * dpi;
         float gap = CellGapLogical * dpi;
         float rowGap = RowGapLogical * dpi;
-        float cellW = CellWLogical * dpi;
-        float cellH = CellHLogical * dpi;
+        float cellW = cellWLogical * dpi;
+        float cellH = cellHLogical * dpi;
         float icon = IconBtnLogical * dpi;
         bool tabbed = (panel.MaxX - panel.MinX) >= 292f * dpi - 0.5f;
 
-        var header = new RectF
+        var topTabs = new RectF
         {
             MinX = panel.MinX + pad, MinY = panel.MinY + pad,
-            MaxX = panel.MaxX - pad, MaxY = panel.MinY + pad + headerH,
+            MaxX = panel.MaxX - pad, MaxY = panel.MinY + pad + TopTabHLogical * dpi,
+        };
+        float topGap = 6f * dpi;
+        float topTabW = MathF.Max(60f * dpi, (topTabs.MaxX - topTabs.MinX - topGap) * 0.5f);
+        var shapesTab = new RectF
+        {
+            MinX = topTabs.MinX, MinY = topTabs.MinY,
+            MaxX = topTabs.MinX + topTabW, MaxY = topTabs.MaxY,
+        };
+        var favoritesTab = new RectF
+        {
+            MinX = shapesTab.MaxX + topGap, MinY = topTabs.MinY,
+            MaxX = topTabs.MaxX, MaxY = topTabs.MaxY,
+        };
+        var header = new RectF
+        {
+            MinX = panel.MinX + pad, MinY = topTabs.MaxY + TopTabGapLogical * dpi,
+            MaxX = panel.MaxX - pad, MaxY = topTabs.MaxY + TopTabGapLogical * dpi + headerH,
         };
         float cy = (header.MinY + header.MaxY) * 0.5f;
         var menu = Sq(header.MinX, cy, icon);
@@ -179,9 +228,10 @@ internal static class LibraryLayout
         if (forceRows > 0) rows = forceRows;
         return new Info
         {
-            Panel = panel, Header = header, Body = body, Grid = body,
+            Panel = panel, TopTabs = topTabs, ShapesTab = shapesTab, FavoritesTab = favoritesTab,
+            Header = header, Body = body, Grid = body,
             Menu = menu, Close = close, Tabs = tabs, CurrentCategory = current,
-            Dpi = dpi, Mode = mode, Cols = cols, Rows = rows,
+            Dpi = dpi, Mode = mode, CellW = cellW, CellH = cellH, Cols = cols, Rows = rows,
         };
     }
 
@@ -237,7 +287,7 @@ internal static class LibraryLayout
         if (count <= 0) return 0f;
         int cols = Math.Max(1, m.Cols);
         int rows = (count + cols - 1) / cols;
-        float cellH = CellHLogical * m.Dpi;
+        float cellH = m.CellH;
         float rowGap = RowGapLogical * m.Dpi;
         return rows * cellH + (rows - 1) * rowGap;
     }
@@ -250,7 +300,7 @@ internal static class LibraryLayout
         int col = index % Math.Max(1, m.Cols);
         int row = index / Math.Max(1, m.Cols);
         float gap = CellGapLogical * m.Dpi;
-        float w = CellWLogical * m.Dpi, h = CellHLogical * m.Dpi;
+        float w = m.CellW, h = m.CellH;
         float x = m.Grid.MinX + col * (w + gap);
         float y = m.Grid.MinY - scrollY + row * (h + RowGapLogical * m.Dpi);
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
@@ -261,7 +311,7 @@ internal static class LibraryLayout
     {
         if (!Contains(m.Grid, x, y)) return -1;
         float gap = CellGapLogical * m.Dpi;
-        float w = CellWLogical * m.Dpi, h = CellHLogical * m.Dpi;
+        float w = m.CellW, h = m.CellH;
         float contentY = y + scrollY - m.Grid.MinY;
         if (contentY < 0) return -1;
         int row = (int)MathF.Floor(contentY / (h + RowGapLogical * m.Dpi));

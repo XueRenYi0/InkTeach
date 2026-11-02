@@ -43,8 +43,8 @@ public sealed partial class FullUi : IOverlayUi
         ("eraser",    "eraserFilled",    "橡皮擦"),
         ("text",      "text",            "文本（点画布输入）"),
         ("select",    "selectFilled",    "选择"),
-        ("shapes",    "shapesFilled",    "图形"),
         ("cut",       "cutFilled",       "截屏"),
+        ("shapes",    "shapesFilled",    "图形"),
         ("star",      "starFilled",      "收藏"),
         ("undo",      "undoFilled",      "后撤"),
         ("redo",      "redoFilled",      "重做"),
@@ -52,7 +52,7 @@ public sealed partial class FullUi : IOverlayUi
     };
 
     /// <summary>每一组的最后一格（下标）。组之间画一条分隔线。</summary>
-    private static readonly int[] GroupEnds = { 0, 2, 7, 11, 14 };
+    private static readonly int[] GroupEnds = { 0, 2, 7, 9, 13, 14 };
 
     /// <summary>
     /// 格子的**稳定身份**（下标会因排序变化，身份不会）。
@@ -61,7 +61,7 @@ public sealed partial class FullUi : IOverlayUi
     private static readonly string[] CellKeys =
     {
         "ball", "cursor", "board", "pen", "highlighter", "laser", "eraser",
-        "text", "select", "shapes", "capture", "star", "undo", "redo", "more",
+        "text", "select", "capture", "shapes", "star", "undo", "redo", "more",
     };
 
     /// <summary>v2 落盘顺序（收藏追加在最右）。老配置的数字只在这个顺序里解释。</summary>
@@ -88,7 +88,7 @@ public sealed partial class FullUi : IOverlayUi
     /// 不把新格硬塞进老用户的工具条（用户 2026-10-25 定的硬规则）。
     /// v3 只重排（收藏挪到截屏后），不新增格子；老配置按稳定 key 迁移钉住状态。
     /// </summary>
-    private const int CellsVersion = 4;
+    private const int CellsVersion = 5;
 
     /// <summary>每一格从哪个版本开始存在（和 <see cref="CellKeys"/> 对齐）。</summary>
     private static readonly int[] CellSinceVersion =
@@ -860,23 +860,10 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>
     /// 这一格的上带**完全张开**时有多高（逻辑像素）。
     ///
-    /// 从 2026-09-20 起它**按格子算**、不是一个常量：图形那一格是**三行**
-    /// （第一行 8 个高频图形、第二行 6 个曲线、第三行 7 个立体），所以它比别的格子高两整行。
-    /// 带子朝屏幕中心那一侧长（见 <see cref="BandRect"/>），
-    /// 所以变高是往上/往下长，不会把主条顶走。
-    ///
-    /// ⚠ **"带子多高"只能问这一处**（2026-09-20 第十六批收的口子）：以前有四处各写一遍
-    /// `Tokens.BandHeight`（判定区 / 夹取 / 总高 / 弹出面板定位），而那一格从第十三批起就是多行，
-    /// 于是判定区只盖住**最下面那一行** —— 用户 2026-09-20 报的正是这个：
-    /// "**鼠标移动到第一行的任何图形位置，色带会收起来**"（指针一挪到上面那行就被判成
-    /// "离开面板"，220 毫秒后带子收回去）。四处都改问这个函数之后，
-    /// 加行/加图形都不用再来补一遍。
+    /// 2026-11-02：图形改成独立面板后，所有上带统一 34，不再有“图形那一格三行”的特例。
+    /// 带子仍朝屏幕中心那一侧长（见 <see cref="BandRect"/>），不会把主条顶走。
     /// </summary>
-    private float BandHeightLogical()
-        => _bandCell == ShapeCell && ShapeBandRows > 1
-            ? Tokens.BandHeight
-              + (ShapeBandRows - 1) * (Tokens.SegmentHeight + ShapeRowGap)
-            : Tokens.BandHeight;
+    private float BandHeightLogical() => Tokens.BandHeight;
 
     /// <summary>
     /// 上带**完全张开**时那一整块占多高（含它与主条之间的缝）——
@@ -1511,7 +1498,7 @@ public sealed partial class FullUi : IOverlayUi
     /// </summary>
     private int BandSegmentCount => _bandCell switch
     {
-        2 => BoardBand.Length, 6 => 2, 8 => 2, 9 => ShapeSegmentCount, 10 => 2, _ => 0,
+        2 => BoardBand.Length, 6 => 2, 8 => 2, 9 => 2, _ => 0,
     };
 
     /// <summary>
@@ -1572,7 +1559,7 @@ public sealed partial class FullUi : IOverlayUi
     };
 
     /// <summary>图形那一格在上带里的下标（三行都在这一个格子里）。</summary>
-    private const int ShapeCell = 9;
+    private const int ShapeCell = 10;
 
     /// <summary>
     /// 上带图形那一格一共几行。布局（`SegmentRect` 的行高/居中）和带子总高
@@ -3433,7 +3420,7 @@ public sealed partial class FullUi : IOverlayUi
             case 8:                       // 矩形框选 / 自由套索
                 _host.Commands.SetSelectMode(i == 0 ? SelectMode.Rect : SelectMode.Lasso);
                 break;
-            case 9:                       // 图形那一格：三行拉平编号，顺序见 ShapeRows
+            case 10:                      // 图形那一格：三行拉平编号，顺序见 ShapeRows
                 {
                     var picked = ShapeToolAt(i);
                     // **同一个图形格再点一次 = 换一档**。只对三种图形这样，别的照旧"再点=选中它"：
@@ -3471,7 +3458,7 @@ public sealed partial class FullUi : IOverlayUi
                         _host.Commands.SetTool(picked);
                 }
                 break;
-            case 10:                      // 截图：[截图][隐藏窗口截图]（"粘贴图片"已挪到右端的动作按钮）
+            case 9:                       // 截图：[截图][隐藏窗口截图]（"粘贴图片"已挪到右端的动作按钮）
                 // 名字照微信那套（8.3.1）；**点哪一段就用哪种截法进屋**——
                 // 段本身是"入口"：`EnterCapture` 一进去就整屏灰下来（详见 IEngineCommands）。
                 // 以前点格子就只把工具选中、什么都不发生，"仿微信仿得不像"就是这条。
@@ -5494,12 +5481,8 @@ public sealed partial class FullUi : IOverlayUi
                 _selModeBeforeDoubleClick = st.SelectMode;
                 cmd.SetTool(Tool.Marquee);
                 break;
-            case 9:
-                // 图形那一格：已经是图形工具就不动工具（只是看上带）；
-                // 不是图形工具才给默认的矩形。
-                if (!HasShapeEntry(st.Tool)) cmd.SetTool(Tool.Rectangle);
-                break;
-            case 10: cmd.SetTool(Tool.Capture); break;
+            case 9: cmd.SetTool(Tool.Capture); break;
+            case 10: cmd.ToggleShapesPanel(); break;
             case 11:
                 // 收藏：打开/关闭收藏弹窗；色带保持当前工具的色线，不参与收藏。
                 cmd.ToggleLibraryPanel();
@@ -5516,14 +5499,14 @@ public sealed partial class FullUi : IOverlayUi
     }
 
     /// <summary>哪些格子有上带。没有的（后撤/重做/更多/截屏）点了不长出一条空带子。</summary>
-    private static bool HasBand(int cell) => cell is >= 2 and <= 10;
+    private static bool HasBand(int cell) => cell is >= 2 and <= 9;
 
     /// <summary>当前工具对应的格子——键盘换工具时用它把上带掰回来。</summary>
     private static int CellForTool(Tool t)
     {
-        // 图形共用第 9 格（哪一种是哪一段由上带里的高亮标出来）。
+        // 图形共用第 10 格（哪一种是哪一段由上带里的高亮标出来）。
         // 判据走 HasShapeEntry 而不是再列一遍图形名字：加一种图形只改 ShapeRows。
-        if (HasShapeEntry(t)) return 9;
+        if (HasShapeEntry(t)) return 10;
         return t switch
         {
             Tool.Highlighter => 4,
@@ -5531,7 +5514,7 @@ public sealed partial class FullUi : IOverlayUi
             Tool.Eraser or Tool.PixelEraser => 6,
             Tool.Text => 7,
             Tool.Marquee => 8,
-            Tool.Capture => 10,
+            Tool.Capture => 9,
             _ => 3,
         };
     }
@@ -5575,6 +5558,14 @@ public sealed partial class FullUi : IOverlayUi
             if (state.Tool != Tool.Text) CloseTextFontMenu();
             int cell = CellForTool(state.Tool);
             if (HasBand(cell)) _bandCell = cell;
+            else if (HasShapeEntry(state.Tool))
+            {
+                // 图形不再有上带：从面板/快捷键选图形时，把旧带子收掉，
+                // 否则会留着上一把工具（比如笔）的设置条。
+                _bandCell = -1;
+                _railHover = false;
+                _rail.To(0f, Tokens.RailMs);
+            }
             if (_penPickerOpen
                 && state.Tool != (_pickerHighlighter ? Tool.Highlighter : Tool.Pen))
                 ClosePenColorPicker();
@@ -6674,9 +6665,8 @@ public sealed partial class FullUi : IOverlayUi
         8 => i == 0 ? "矩形" : "套索",
         // 截图：名字照微信那套（8.3.1）——"截图" = 屏幕原样（连我们的板书一起），
         // "隐藏窗口截图" = 先把我们这层藏起来，拍到的只有下层内容。
-        10 => i == 0 ? "截图"
-                     : (Density <= BandDensity.Compact ? "隐窗截图" : "隐藏窗口截图"),
-        9 => "",                                   // 图形：画图标（见 ShapeIcon）
+        9 => i == 0 ? "截图"
+                    : (Density <= BandDensity.Compact ? "隐窗截图" : "隐藏窗口截图"),
         _ => "",
     };
 
@@ -6685,8 +6675,8 @@ public sealed partial class FullUi : IOverlayUi
         2 => BoardSegAt(i).Kind == BoardSegKind.Color && BoardColorIs(st, BoardSegAt(i).Idx),
         6 => i == 0 ? st.Tool == Tool.PixelEraser : st.Tool == Tool.Eraser,
         8 => i == 0 ? st.SelectMode == SelectMode.Rect : st.SelectMode == SelectMode.Lasso,
-        9 => i >= 0 && i < ShapeSegmentCount && st.Tool == ShapeToolAt(i),
-        10 => i == (st.CaptureHideInk ? 1 : 0),    // 截图：当前是哪一种截法就高亮哪一段
+        10 => i >= 0 && i < ShapeSegmentCount && st.Tool == ShapeToolAt(i),
+        9 => i == (st.CaptureHideInk ? 1 : 0),    // 截图：当前是哪一种截法就高亮哪一段
         _ => false,
     };
 
@@ -6874,7 +6864,7 @@ public sealed partial class FullUi : IOverlayUi
     {
         if (i == 1) return st.PassThrough;
         if (i == 2) return st.Board;
-        if (i == 11) return st.LibraryOpen;
+        if (i == 11) return st.LibraryOpen && !st.LibraryShapesTab;
         if (st.PassThrough) return false;
         return i switch
         {
@@ -6884,8 +6874,8 @@ public sealed partial class FullUi : IOverlayUi
             6 => st.Tool is Tool.Eraser or Tool.PixelEraser,
             7 => st.Tool == Tool.Text,
             8 => st.Tool == Tool.Marquee,
-            9 => HasShapeEntry(st.Tool),
-            10 => st.Tool == Tool.Capture,
+            9 => st.Tool == Tool.Capture,
+            10 => st.LibraryOpen && st.LibraryShapesTab,
             _ => false,
         };
     }
@@ -7107,8 +7097,8 @@ public sealed partial class FullUi : IOverlayUi
                 6 => (c.Tip, Key(KeyAction.ToolEraser), "再按切「面积擦 / 整笔擦」"),
                 7 => (c.Tip, "", "点画布输入；点已有文字选中，再点编辑"),
                 8 => (c.Tip, Key(KeyAction.ToolMarquee), "再按切「矩形 / 套索」，双击 = 全选"),
-                9 => (c.Tip, "", "22 种图形都在上带里挑"),
-                10 => (c.Tip, Key(KeyAction.ToolCapture), ""),
+                9 => (c.Tip, Key(KeyAction.ToolCapture), ""),
+                10 => (c.Tip, "", "22 种图形都在面板里挑"),
                 11 => (c.Tip, "", "打开收藏；选中内容后可存进来"),
                 12 => (c.Tip, Key(KeyAction.Undo), ""),
                 13 => (c.Tip, Key(KeyAction.Redo), ""),
@@ -7171,7 +7161,7 @@ public sealed partial class FullUi : IOverlayUi
             }
             // 橡皮 / 框选 / 截图的分段上已经写着"整笔擦 / 面积擦 / 矩形 / 套索 / 截图…"，
             // 不配（收窄）；只有图形那 22 段是纯图标，全配。
-            case 9:
+            case 10:
                 return (ToolNames.Of(ShapeToolAt(i)), "", "");
         }
         return default;

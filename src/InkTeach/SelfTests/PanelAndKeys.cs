@@ -893,7 +893,7 @@ internal sealed partial class App
             SettleFrames(250);
             Check("穿透开着时，工具格一律不高亮（免得`穿透＋笔`同时亮）",
                   ui.CellActiveForTest(1) && !ui.CellActiveForTest(3) && !ui.CellActiveForTest(4)
-                  && !ui.CellActiveForTest(6) && !ui.CellActiveForTest(10),
+                  && !ui.CellActiveForTest(6) && !ui.CellActiveForTest(9),
                   $"鼠标 = {ui.CellActiveForTest(1)}，笔 = {ui.CellActiveForTest(3)}，工具 = {Tool}");
 
             var penCellPt = ui.CellRectForTest(3);
@@ -1295,13 +1295,13 @@ internal sealed partial class App
         {
             Host.Commands.SetTool(Tool.Pen);
             SettleFrames(150);
-            var cap = ui.CellRectForTest(10);
+            var cap = ui.CellRectForTest(9);
             ClickPhysical((cap.MinX + cap.MaxX) * 0.5f * DpiScale,
                           (cap.MinY + cap.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
             Check("点「截屏」真的切到截图工具", Tool == Tool.Capture, $"工具 = {Tool}");
-            Check("截屏那一格亮起来（点了有反馈）", ui.CellActiveForTest(10),
-                  $"截屏格高亮 = {ui.CellActiveForTest(10)}");
+            Check("截屏那一格亮起来（点了有反馈）", ui.CellActiveForTest(9),
+                  $"截屏格高亮 = {ui.CellActiveForTest(9)}");
             Check("点格子**先不进取景**（8.3.1：出模式条，屏幕还没灰）",
                   !CaptureActive, $"取景 = {CaptureActive}");
 
@@ -2685,7 +2685,7 @@ internal sealed partial class App
         SettleFrames(250);
 
         Check("完整档是 15 格", ui.VisibleCountForTest == 15, $"显示 {ui.VisibleCountForTest} 格");
-        Check("文本在橡皮后、选择前；图形/截屏/收藏/撤销/重做依次顺延",
+        Check("文本在橡皮后、选择前；截屏/图形/收藏/撤销/重做依次顺延",
               ui.CellRectForTest(7).MinX > ui.CellRectForTest(6).MaxX
               && ui.CellRectForTest(8).MinX > ui.CellRectForTest(7).MaxX
               && ui.CellRectForTest(9).MinX > ui.CellRectForTest(8).MaxX
@@ -2694,7 +2694,7 @@ internal sealed partial class App
               && ui.CellRectForTest(12).MinX > ui.CellRectForTest(11).MaxX
               && ui.CellRectForTest(14).MinX > ui.CellRectForTest(13).MaxX,
               $"文本 {ui.CellRectForTest(7).MinX:F0} → 选择 {ui.CellRectForTest(8).MinX:F0} → "
-              + $"图形 {ui.CellRectForTest(9).MinX:F0} → 截屏 {ui.CellRectForTest(10).MinX:F0} → "
+              + $"截屏 {ui.CellRectForTest(9).MinX:F0} → 图形 {ui.CellRectForTest(10).MinX:F0} → "
               + $"收藏 {ui.CellRectForTest(11).MinX:F0} → 撤销 {ui.CellRectForTest(12).MinX:F0} → "
               + $"更多 {ui.CellRectForTest(14).MinX:F0}");
         Check("完整档 = 最宽宽度档", ui.DensityForTest == 3, $"宽度档 = {ui.DensityForTest}");
@@ -2773,19 +2773,19 @@ internal sealed partial class App
         SettleFrames(250);
         Check("切回完整档", ui.VisibleCountForTest == 15, $"显示 {ui.VisibleCountForTest} 格");
 
-        // 取消钉住"图形"（下标 8）：档位自动变成自定义，主条上少一格。
+        // 取消钉住"图形"（下标 10）：档位自动变成自定义，主条上少一格。
         // ⚠ 宫格**只在自定义档显示**（2026-10-02 拍板），所以先切到自定义档再点宫格。
         var customSeg = ui.ProfileRectForTest(1);
         ClickPhysical((customSeg.MinX + customSeg.MaxX) * 0.5f * DpiScale,
                       (customSeg.MinY + customSeg.MaxY) * 0.5f * DpiScale);
         SettleFrames(250);
-        var chip = ui.ChipRectForTest(9);
+        var chip = ui.ChipRectForTest(10);
         ClickPhysical((chip.MinX + chip.MaxX) * 0.5f * DpiScale,
                       (chip.MinY + chip.MaxY) * 0.5f * DpiScale);
         SettleFrames(250);
         Check("取消钉住→进自定义档、主条少一格",
-              ui.ProfileForTest == 1 && !ui.PinnedForTest(9) && ui.VisibleCountForTest == 14,
-              $"档位 = {ui.ProfileForTest}，钉着 = {ui.PinnedForTest(9)}，显示 {ui.VisibleCountForTest} 格");
+              ui.ProfileForTest == 1 && !ui.PinnedForTest(10) && ui.VisibleCountForTest == 14,
+              $"档位 = {ui.ProfileForTest}，钉着 = {ui.PinnedForTest(10)}，显示 {ui.VisibleCountForTest} 格");
 
         // 画笔现在也开放：点一下应当从主条移除。
         var penChip = ui.ChipRectForTest(3);
@@ -3202,7 +3202,7 @@ internal sealed partial class App
         ClickPhysical((customSeg9.MinX + customSeg9.MaxX) * 0.5f * DpiScale,
                       (customSeg9.MinY + customSeg9.MaxY) * 0.5f * DpiScale);     // 自定义档（宫格才显示）
         SettleFrames(250);
-        var chip6 = ui.ChipRectForTest(9);
+        var chip6 = ui.ChipRectForTest(10);
         ClickPhysical((chip6.MinX + chip6.MaxX) * 0.5f * DpiScale,
                       (chip6.MinY + chip6.MaxY) * 0.5f * DpiScale);               // 取消钉住"图形"
         SettleFrames(250);
@@ -3345,8 +3345,8 @@ internal sealed partial class App
         SettleFrames(300);
         ui = CurrentUi as InkUi.FullUi;
         Check("重开界面读回了偏好",
-              ui != null && ui.DarkForTest && ui.ProfileForTest == 1 && !ui.PinnedForTest(9),
-              $"深色={ui?.DarkForTest}，档位={ui?.ProfileForTest}（1=自定义），图形钉着={ui?.PinnedForTest(9)}");
+              ui != null && ui.DarkForTest && ui.ProfileForTest == 1 && !ui.PinnedForTest(10),
+              $"深色={ui?.DarkForTest}，档位={ui?.ProfileForTest}（1=自定义），图形钉着={ui?.PinnedForTest(10)}");
 
         // 重排/新增迁移：v2 里的 `10` 是「撤销」，v4 里撤销在 12；不能把"取消钉住"
         // 挪到收藏(11)上。v4 新增的文本(9)按硬规则不塞进老用户主条。
@@ -3359,13 +3359,13 @@ internal sealed partial class App
         SettleFrames(300);
         ui = CurrentUi as InkUi.FullUi;
         Check("老配置的 unpinned 按稳定 key 迁移（v2 的 10=撤销 → 12）",
-              ui != null && !ui.PinnedForTest(9) && !ui.PinnedForTest(12)
+              ui != null && !ui.PinnedForTest(10) && !ui.PinnedForTest(12)
               && !ui.PinnedForTest(7) && ui.PinnedForTest(11) && ui.PinnedForTest(14),
-              $"图形={ui?.PinnedForTest(9)} 撤销={ui?.PinnedForTest(12)} "
+              $"图形={ui?.PinnedForTest(10)} 撤销={ui?.PinnedForTest(12)} "
               + $"文本={ui?.PinnedForTest(7)} 收藏={ui?.PinnedForTest(11)} "
               + $"更多={ui?.PinnedForTest(14)}");
         Check("迁移后落盘用稳定 key（shapes,text,undo）",
-              GetUiPref("unpinned") == "text,shapes,undo" && GetUiPref("cellsVersion") == "4",
+              GetUiPref("unpinned") == "text,shapes,undo" && GetUiPref("cellsVersion") == "5",
               $"unpinned={GetUiPref("unpinned")}，cellsVersion={GetUiPref("cellsVersion")}");
         Check("压感偏好也读回来了（重启后仍是关）",
               !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
@@ -4153,7 +4153,7 @@ internal sealed partial class App
         // C 段第一次跑就是这么点空的。
         void GotoShapeBand()
         {
-            var cell = ui.CellRectForTest(9);
+            var cell = ui.CellRectForTest(10);
             ClickPhysical((cell.MinX + cell.MaxX) * 0.5f * DpiScale,
                           (cell.MinY + cell.MaxY) * 0.5f * DpiScale);
             EnsureRailOpen();

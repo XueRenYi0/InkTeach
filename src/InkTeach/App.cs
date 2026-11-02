@@ -280,6 +280,13 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             PanelTest();
         }
+        else if (mode == "--shapepaneltest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ShapePanelTest();
+            _quit = true;
+        }
         else if (mode == "--aitest")
         {
             _autoExitAt = double.MaxValue;
@@ -478,12 +485,6 @@ internal sealed partial class App : InkEngine.InkEngine
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             AiShow(args.Length > 1 ? args[1] : "reports/ai-card.bmp");
-        }
-        else if (mode == "--shapebandtest")
-        {
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            ShapeBandTest();
         }
         else if (mode == "--inktest")
         {
@@ -1483,6 +1484,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --passtest          穿透真机测试（跨进程点击）");
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
+        Console.WriteLine("  --shapepaneltest    图形面板专项（入口 / 页签 / 选图形 / 蓝色互斥）");
         Console.WriteLine("  --textboxsim        文本框仿真自检（真实鼠标/键盘 + 截图 reports/textbox-sim/）");
         Console.WriteLine("  --textboxedit       文本框编辑截图（reports/textbox-edit.bmp）");
         Console.WriteLine("  --aitest            AI 题卡自检（插入 / 折叠 / 存档 / 删除 / 撤销）");
@@ -1494,7 +1496,6 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --shapeiconshow [路径] 出图：图形面板图标的对照表（含每一档的变体）");
         Console.WriteLine("  --toolicons [路径]  出图：白板 / 激光笔的图标候选（未选中 / 选中 / 放大三格）");
         Console.WriteLine("  --penshow [路径] [bars]  出图：上游那批「带笔的」图标；带第 2 个参数就每格加一副「三道杠」");
-        Console.WriteLine("  --shapebandtest     图形那格的界面入口自检（七段 / 三个新热键 / 主条图标跟着变）");
         Console.WriteLine("  --snaptest          对象吸附自检（3×3 线组合 / 软相交 / 抛物线顶点 / 正弦拼缝）");
         Console.WriteLine("  --inktest           **墨迹识别的单独测试**（日常改识别只跑这一条：准确率 / 误报 / 难例 / 写回）");
         Console.WriteLine("  --dwelltest         停顿成型的手势自检（真入口 + 推时钟：触发 / 定型 / 撤销回手绘 / 不留墨）");

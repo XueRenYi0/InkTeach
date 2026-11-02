@@ -344,6 +344,8 @@ public interface IEngineCommands
     /// 所以界面这边只需要这一句开关。
     /// </summary>
     void ToggleLibraryPanel();
+    /// <summary>图形入口：打开统一面板的「图形」页；已开在图形页则关。</summary>
+    void ToggleShapesPanel();
 
     /// <summary>AI 面板：改输入框里的题目要求（预设标签用）。</summary>
     void SetAiPromptText(string text);
@@ -1344,6 +1346,8 @@ public readonly struct UiState
 
     /// <summary>收藏面板开着吗（界面据此把上带切到收藏条 / 高亮收藏格）。</summary>
     public bool LibraryOpen { get; init; }
+    /// <summary>统一面板当前是不是「图形」页（false = 我的收藏）。</summary>
+    public bool LibraryShapesTab { get; init; }
     /// <summary>勾选了几条（标题栏动作 / 整组拖动按它走）。</summary>
     public int LibrarySelectionCount { get; init; }
     /// <summary>当前收藏筛选：`"all"` = 全部，其他是分类 id。</summary>
