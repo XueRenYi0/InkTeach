@@ -8025,6 +8025,8 @@ public partial class InkEngine
     private Vector2 _libraryTouchScrollStart;
     private float _libraryTouchScrollStartY;
     private ShapeLibrary.Entry _libraryTouchTapEntry;
+    /// <summary>图形页触摸滚动后抬手要选的那张卡（和收藏的 TapEntry 同构）。</summary>
+    private ShapePreset _libraryTouchTapShape;
     // ---- 页签拖动 / 滚动 ------------------------------------------------
     private int _libraryTabPress;             // 0 没按；1 待判；2 拖动
     private int _libraryTabDragIndex = -1;
@@ -9904,6 +9906,7 @@ public partial class InkEngine
         _libraryTouchScrolling = false;
         _libraryTouchScrollId = 0;
         _libraryTouchTapEntry = null;
+        _libraryTouchTapShape = null;
         if (had) Native.ReleaseCapture();
         _dirty = true;
     }
@@ -10038,6 +10041,21 @@ public partial class InkEngine
         {
             if (m.Close.Contains(x, y)) { CloseLibraryPanel(); return true; }
             var shapeCats = ShapeCatalog.Categories;
+            var shapeCards = ShapeCardsNow();
+            if (LibraryLayout.MaxScroll(m, shapeCards.Length) > 0.5f)
+            {
+                var track = LibraryLayout.ScrollTrack(m);
+                if (x >= track.MinX - 6f * dpi && x <= track.MaxX + 6f * dpi
+                    && y >= track.MinY && y <= track.MaxY)
+                {
+                    _libraryScrollDrag = true;
+                    _libraryScrollDragStartY = y;
+                    _libraryScrollDragStart = LibraryScrollY;
+                    if (_windows.Count > 0) Native.SetCapture(_windows[0].Hwnd);
+                    LibraryScrollTo(y);
+                    return true;
+                }
+            }
             if (m.Tabbed && m.Tabs.Contains(x, y))
             {
                 var widths = new float[shapeCats.Length];
@@ -10056,8 +10074,22 @@ public partial class InkEngine
             }
             if (m.Grid.Contains(x, y))
             {
-                var cards = ShapeCardsNow();
+                var cards = shapeCards;
                 int idx = LibraryLayout.CellAt(m, cards.Length, x, y, LibraryScrollY);
+                // 触摸：可滚动时先当“可能滚动”，点一下（没超阈值）才选卡。
+                if (pointerType == Native.PT_TOUCH
+                    && LibraryLayout.MaxScroll(m, cards.Length) > 0.5f)
+                {
+                    _libraryTouchScrollArmed = true;
+                    _libraryTouchScrolling = false;
+                    _libraryTouchScrollId = pointerId;
+                    _libraryTouchScrollStart = new Vector2(x, y);
+                    _libraryTouchScrollStartY = LibraryScrollY;
+                    _libraryTouchTapEntry = null;
+                    _libraryTouchTapShape = idx >= 0 && idx < cards.Length ? cards[idx] : null;
+                    if (_windows.Count > 0) Native.SetCapture(_windows[0].Hwnd);
+                    return true;
+                }
                 if (idx >= 0 && idx < cards.Length) SetShapePresetFromUi(cards[idx]);
                 return true;
             }
@@ -10262,17 +10294,19 @@ public partial class InkEngine
                 {
                     _libraryTouchScrolling = true;
                     _libraryTouchTapEntry = null;   // 已经是在滚动，抬手不能当成点选
+                    _libraryTouchTapShape = null;
                 }
                 else if (MathF.Abs(dx) >= threshold)
                 {
                     // 横向滑：这次不算点选，也不让面板跟着跑；继续等纵向手势。
                     _libraryTouchTapEntry = null;
+                    _libraryTouchTapShape = null;
                 }
             }
             if (_libraryTouchScrolling)
             {
                 var m = LibraryPanelInfoNow();
-                float max = LibraryLayout.MaxScroll(m, LibraryEntries.Count);
+                float max = LibraryLayout.MaxScroll(m, LibraryScrollCountNow());
                 LibraryScrollY = Math.Clamp(_libraryTouchScrollStartY - dy, 0f, max);
                 LibraryHover = -1;
                 ClearEngineTooltip();
@@ -10320,12 +10354,18 @@ public partial class InkEngine
             if (pointerId != _libraryTouchScrollId) return true;
             bool scrolled = _libraryTouchScrolling;
             var tap = _libraryTouchTapEntry;
+            var tapShape = _libraryTouchTapShape;
             _libraryTouchScrollArmed = false;
             _libraryTouchScrolling = false;
             _libraryTouchScrollId = 0;
             _libraryTouchTapEntry = null;
+            _libraryTouchTapShape = null;
             Native.ReleaseCapture();
-            if (!scrolled) ToggleLibraryCardForTap(tap);
+            if (!scrolled)
+            {
+                if (tapShape != null) SetShapePresetFromUi(tapShape);
+                else ToggleLibraryCardForTap(tap);
+            }
             _dirty = true;
             return true;
         }
@@ -10356,9 +10396,10 @@ public partial class InkEngine
     private void LibraryScrollTo(float y)
     {
         var m = LibraryPanelInfoNow();
-        float max = LibraryLayout.MaxScroll(m, LibraryEntries.Count);
+        int count = LibraryScrollCountNow();
+        float max = LibraryLayout.MaxScroll(m, count);
         var track = LibraryLayout.ScrollTrack(m);
-        var thumb = LibraryLayout.ScrollThumb(m, LibraryEntries.Count, LibraryScrollY);
+        var thumb = LibraryLayout.ScrollThumb(m, count, LibraryScrollY);
         if (max <= 0.5f || track.IsEmpty) return;
         float thumbH = thumb.IsEmpty ? 22f * UiUnit : thumb.MaxY - thumb.MinY;
         float span = MathF.Max(1f, (track.MaxY - track.MinY) - thumbH);
