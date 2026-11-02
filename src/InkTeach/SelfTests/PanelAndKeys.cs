@@ -2352,15 +2352,39 @@ internal sealed partial class App
             }
             Check("启动器：底栏每一格都进命中表（含第 5 格「退出」）", hitOk, hitDetail);
 
-            // 「日志」格（2026-10-17，合并后的唯一日志入口）：自检档下点它 = 只提示、
-            // 不弹框、不上传（护栏）；面板留在启动器页（状态行在那边看编号）。
+            // 「日志」格（2026-11-02）：先打开「日志与反馈」页，让用户可选填问题；
+            // 空着也能上传。自检档不实际上传，只检查页面和几何。
             var logTile = ui.HubBottomRectForTest(1);
             ClickPhysical((logTile.MinX + logTile.MaxX) * 0.5f * DpiScale,
                           (logTile.MinY + logTile.MaxY) * 0.5f * DpiScale);
-            SettleFrames(160);
-            Check("启动器：「日志」格（自检档只提示、不弹框）",
-                  InkStatus.Contains("自检模式") && ui.MoreOpenForTest,
-                  InkStatus);
+            SettleFrames(250);
+            Check("启动器：「日志」格 → 日志与反馈页",
+                  ui.MorePageForTest == 3 && ui.MoreOpenForTest,
+                  $"page={ui.MorePageForTest} open={ui.MoreOpenForTest}");
+            Check("日志页：问题框 / 上传 / 导出都有几何",
+                  !ui.LogNoteRectForTest.IsEmpty
+                  && !ui.LogUploadRectForTest.IsEmpty
+                  && !ui.LogExportRectForTest.IsEmpty,
+                  $"note={ui.LogNoteRectForTest} upload={ui.LogUploadRectForTest} export={ui.LogExportRectForTest}");
+            var noteRect = ui.LogNoteRectForTest;
+            ClickPhysical((noteRect.MinX + noteRect.MaxX) * 0.5f * DpiScale,
+                          (noteRect.MinY + noteRect.MaxY) * 0.5f * DpiScale);
+            SettleFrames(180);
+            Check("日志页：点问题框 = 进入输入", Host.State.LogNoteEditing,
+                  $"editing={Host.State.LogNoteEditing}");
+            Host.SetLogNoteTextForTest("日志页测试问题：清屏后底部还剩一条");
+            Host.Commands.EndLogNoteEdit(true);
+            SettleFrames(120);
+            Check("日志页：输入内容保存到状态并结束编辑",
+                  !Host.State.LogNoteEditing
+                  && Host.State.LogNote == "日志页测试问题：清屏后底部还剩一条",
+                  $"editing={Host.State.LogNoteEditing} note={Host.State.LogNote}");
+            var logBack = ui.MoreBackRectForTest;
+            ClickPhysical((logBack.MinX + logBack.MaxX) * 0.5f * DpiScale,
+                          (logBack.MinY + logBack.MaxY) * 0.5f * DpiScale);
+            SettleFrames(180);
+            Check("日志页返回：回启动器", ui.MorePageForTest == 0 && ui.MoreOpenForTest,
+                  $"page={ui.MorePageForTest} open={ui.MoreOpenForTest}");
 
             // 2026-10-20 统一：所有 More 页共用 clamp(55% 工作宽, 560, 980)。
             float wantW = Math.Clamp((panelWork.MaxX - panelWork.MinX) * 0.55f, 560f, 980f);
@@ -3441,7 +3465,7 @@ internal sealed partial class App
             ui = CurrentUi as InkUi.FullUi;
         }
 
-        // ---- AI 出题：更多 → AI 格 → 面板 → 生成 mock 题卡（1A 真机入口）----
+        // ---- AI 出题：入口开发中置灰；面板本身仍从自检入口直接打开 ----
         {
             ui.OpenMoreForTest();
             SettleFrames(250);
@@ -3449,8 +3473,19 @@ internal sealed partial class App
             ClickPhysical((aiTile.MinX + aiTile.MaxX) * 0.5f * DpiScale,
                           (aiTile.MinY + aiTile.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
-            Check("更多 → AI 出题：打开面板、收起更多", ui.AiOpenForTest && !ui.MoreOpenForTest,
-                  $"AI={ui.AiOpenForTest} More={ui.MoreOpenForTest}");
+            Check("更多 → AI 出题：入口置灰（开发中）、不打开面板",
+                  !ui.HubTileEnabledForTest(9) && !ui.AiOpenForTest && ui.MoreOpenForTest,
+                  $"enabled={ui.HubTileEnabledForTest(9)} AI={ui.AiOpenForTest} More={ui.MoreOpenForTest}");
+            Check("点置灰格：状态行说明开发中",
+                  ui.HubHintForTest.Contains("开发中"),
+                  $"hint={ui.HubHintForTest}");
+
+            ui.CloseMoreForTest();
+            SettleFrames(150);
+            ui.OpenAiPanelForTest();
+            SettleFrames(200);
+            Check("自检入口仍可打开 AI 面板（只关入口，不拆面板）",
+                  ui.AiOpenForTest, $"AI={ui.AiOpenForTest}");
 
             var gen = ui.AiGenerateRectForTest;
             ClickPhysical((gen.MinX + gen.MaxX) * 0.5f * DpiScale,
@@ -3632,8 +3667,9 @@ internal sealed partial class App
             ClickPhysical((doneBtn.MinX + doneBtn.MaxX) * 0.5f * DpiScale,
                           (doneBtn.MinY + doneBtn.MaxY) * 0.5f * DpiScale);
             SettleFrames(180);
-            Check("点「完成」提交：宽固定、高继续自动",
-                  !TextBoxEditing && tb != null && !tb.AutoWidth && tb.AutoHeight,
+            // 2026-11-02 文本定稿：提交后仍保持 AutoWidth，只有手动拖宽/角缩放才固定宽。
+            Check("点「完成」提交：仍自动宽、自动高",
+                  !TextBoxEditing && tb != null && tb.AutoWidth && tb.AutoHeight,
                   $"editing={TextBoxEditing} autoW={tb?.AutoWidth} autoH={tb?.AutoHeight}");
 
             // **色带 vs 操作条**：色带只改下一次输入的默认值，操作条只改当前选中的文字。

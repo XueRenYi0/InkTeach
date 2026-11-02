@@ -195,8 +195,15 @@ internal static class DiagLog
 
     // ---- 导出（「更多 → 设置 → 导出日志…」走这里）--------------------------------
 
-    /// <summary>把日志（+环境摘要 + 上次崩溃记录）打包成 zip。返回实际路径。</summary>
-    public static string ExportZip(string destPath)
+    /// <summary>
+    /// 把日志（+环境摘要 + 上次崩溃记录）打包成 zip。返回实际路径。
+    ///
+    /// `includeOlder=false`（默认）只带**最近 2 份**：当前 `inkteach.log` + `inkteach.1.log`，
+    /// 合计不超过 4MB。用户勾“包含更早日志”才带 `.2/.3`，最多 4 份 / 8MB。
+    /// `note` 是用户自己填的问题，写进 zip 的 `问题.txt`；`context` 是自动上下文。
+    /// </summary>
+    public static string ExportZip(string destPath, bool includeOlder = false,
+                                   string note = null, string context = null)
     {
         FlushNow();
         string stage = Path.Combine(Path.GetTempPath(),
@@ -213,15 +220,27 @@ internal static class DiagLog
                 // ⚠ 当前日志文件被写线程**开着**（FileShare.ReadWrite）——不能用 File.Copy
                 //（它按 FileShare.Read 开源，和写句柄的"允许写"冲突 → IO 异常；而这里
                 //  恰恰是"出问题想看日志"的时刻，绝不能悄悄失败）。统一走共享读拷贝。
-                foreach (var f in Directory.GetFiles(Dir, "inkteach*.log"))
-                    CopyShared(f, Path.Combine(stage, Path.GetFileName(f)));
+                foreach (var name in LogFileNames(includeOlder))
+                {
+                    string f = Path.Combine(Dir, name);
+                    if (File.Exists(f)) CopyShared(f, Path.Combine(stage, name));
+                }
             }
             catch { }
-            File.WriteAllText(Path.Combine(stage, "环境.txt"), BuildSummary(), new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(stage, "环境.txt"), BuildSummary(includeOlder),
+                              new UTF8Encoding(false));
             try
             {
                 File.WriteAllText(Path.Combine(stage, "session.json"),
-                    BuildSessionJson(), new UTF8Encoding(false));
+                    BuildSessionJson(includeOlder), new UTF8Encoding(false));
+            }
+            catch { }
+            try
+            {
+                string problem = BuildProblemText(note, context);
+                if (problem.Length > 0)
+                    File.WriteAllText(Path.Combine(stage, "问题.txt"), problem,
+                                      new UTF8Encoding(false));
             }
             catch { }
             try
@@ -280,7 +299,31 @@ internal static class DiagLog
         fs.CopyTo(outFs);
     }
 
-    static string BuildSummary()
+    /// <summary>要打进 zip 的日志文件名：默认最近 2 份，勾选后才带更早的 2 份。</summary>
+    static string[] LogFileNames(bool includeOlder)
+        => includeOlder
+            ? new[] { "inkteach.log", "inkteach.1.log", "inkteach.2.log", "inkteach.3.log" }
+            : new[] { "inkteach.log", "inkteach.1.log" };
+
+    /// <summary>zip 里的 `问题.txt`：用户原话 + 自动上下文；两样都空就不生成。</summary>
+    static string BuildProblemText(string note, string context)
+    {
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(note))
+        {
+            sb.AppendLine("问题（用户填写）：");
+            sb.AppendLine(note.Trim());
+            sb.AppendLine();
+        }
+        if (!string.IsNullOrWhiteSpace(context))
+        {
+            sb.AppendLine("自动上下文：");
+            sb.AppendLine(context.Trim());
+        }
+        return sb.ToString().TrimEnd() + (sb.Length > 0 ? Environment.NewLine : "");
+    }
+
+    static string BuildSummary(bool includeOlder = false)
     {
         var sb = new StringBuilder();
         sb.AppendLine("InkTeach 运行日志摘要（导出时生成，供排查问题用）");
@@ -308,11 +351,15 @@ internal static class DiagLog
         }
         catch { }
         sb.AppendLine();
-        sb.AppendLine("日志文件：");
+        sb.AppendLine($"日志文件（{(includeOlder ? "最多 4 份 / 8MB" : "最近 2 份 / 4MB")}）：");
         try
         {
-            foreach (var f in Directory.GetFiles(Dir, "inkteach*.log"))
-                sb.AppendLine($"  {Path.GetFileName(f)}  {new FileInfo(f).Length / 1024.0:F0} KB");
+            foreach (var name in LogFileNames(includeOlder))
+            {
+                string f = Path.Combine(Dir, name);
+                if (File.Exists(f))
+                    sb.AppendLine($"  {name}  {new FileInfo(f).Length / 1024.0:F0} KB");
+            }
         }
         catch { }
         return sb.ToString();
@@ -698,15 +745,15 @@ internal static class DiagLog
     static string Num(double v, string format = "0.##")
         => v.ToString(format, CultureInfo.InvariantCulture);
 
-    static string BuildSessionJson()
+    static string BuildSessionJson(bool includeOlder = false)
     {
         var ps = SnapshotPerf();
         string logs = "";
         try
         {
             var names = new List<string>();
-            foreach (var f in Directory.GetFiles(Dir, "inkteach*.log"))
-                names.Add("\"" + J(Path.GetFileName(f)) + "\"");
+            foreach (var name in LogFileNames(includeOlder))
+                if (File.Exists(Path.Combine(Dir, name))) names.Add("\"" + J(name) + "\"");
             logs = string.Join(",", names);
         }
         catch { }
@@ -952,7 +999,9 @@ public partial class InkEngine
     /// 打成一个 zip。存 U 盘、发微信、上传都能用——排查教室机器问题时先要这个。
     /// 自检模式不弹对话框（同其它导出链路）。
     /// </summary>
-    internal void ExportLogsFromUi()
+    internal void ExportLogsFromUi() => ExportLogsFromUi(LogNoteText, false);
+
+    internal void ExportLogsFromUi(string note, bool includeOlder)
     {
         if (!ExportDialogEnabled) { SetInkStatus("自检模式不弹对话框"); return; }
 
@@ -963,9 +1012,9 @@ public partial class InkEngine
 
         try
         {
-            DiagLog.ExportZip(dest);
+            DiagLog.ExportZip(dest, includeOlder, note, LogContextSummary());
             SetInkStatus($"日志已导出：{dest}");
-            Console.WriteLine($"[日志] 已导出 {dest}");
+            Console.WriteLine($"[日志] 已导出 {dest}（{(includeOlder ? "最多4份" : "最近2份")}）");
         }
         catch (Exception ex)
         {
@@ -989,16 +1038,34 @@ public partial class InkEngine
     /// <summary>「日志」入口（2026-10-17 用户定，**合并成一个**）：先试上传（后台线程）；
     /// 没网 / 没配令牌 / 接口错 → **自动转成「导出日志」**（弹另存为），老师总能把 zip 拿出来。
     /// ⚠ 上传走后台：教室网络差时**界面不会冻住**（结果由 <see cref="StepLogUpload"/> 轮询）。</summary>
-    internal void UploadLogsFromUi()
+    internal void UploadLogsFromUi() => UploadLogsFromUi(LogNoteText, false);
+
+    /// <summary>
+    /// 用户点「上传日志」：先过一道**日志专用同意**。
+    ///
+    /// 2026-11-02 用户定：
+    ///   · 之前已经同意过设备/性能统计的 → 不再弹同意，直接传；
+    ///   · 之前拒绝过 / 还没同意的 → 上传前弹一次日志专用说明：
+    ///       “是” = 同意并上传；“否” = 只导出 zip；“取消” = 什么都不做。
+    /// 日志永远不自动上传，只有用户点这个按钮才走。
+    /// </summary>
+    internal void UploadLogsFromUi(string note, bool includeOlder)
     {
         if (!ExportDialogEnabled) { SetInkStatus("自检模式不上传"); return; }
         if (DiagLog.UploadBusy) { SetInkStatus("正在上传日志…（请稍等）"); return; }
+
+        if (!LogUploadConsentGranted
+            && !EnsureLogUploadConsent(out bool exportInstead))
+        {
+            if (exportInstead) ExportLogsFromUi(note, includeOlder);
+            return;
+        }
 
         if (string.IsNullOrEmpty(DiagLog.LogUploadToken))
         {
             // 没配置 = 直接导出（老师侧永远有一条能走的路）
             SetInkStatus("上传未配置——改为导出，请把 zip 发回来");
-            ExportLogsFromUi();
+            ExportLogsFromUi(note, includeOlder);
             return;
         }
 
@@ -1006,7 +1073,7 @@ public partial class InkEngine
             $"inkteach-upload-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
         try
         {
-            DiagLog.ExportZip(zip);      // 本地打包（≤8MB）很快，同步没问题
+            DiagLog.ExportZip(zip, includeOlder, note, LogContextSummary());  // 本地打包（≤8MB）很快
         }
         catch (Exception ex)
         {
@@ -1018,7 +1085,71 @@ public partial class InkEngine
         string leaf = $"log-{DateTime.Now:yyyyMMdd-HHmmss}-{LogSafeName(Environment.MachineName)}-{Guid.NewGuid().ToString("N")[..6]}.zip";
         DiagLog.StartZipUpload(zip, leaf);
         SetInkStatus("正在上传日志…");
-        Console.WriteLine("[日志] 开始上传…（后台线程，界面不卡）");
+        Console.WriteLine($"[日志] 开始上传…（{(includeOlder ? "最多4份" : "最近2份")}，后台线程，界面不卡）");
+    }
+
+    /// <summary>这台机器是否已经明确同意过“上传运行日志”。</summary>
+    internal bool LogUploadConsentGranted
+    {
+        get
+        {
+            string v = GetUiPref("privacy.logUpload");
+            if (v == "granted") return true;
+            if (v == "denied") return false;
+            // 没单独表过态：设备/性能统计已同意 = 视为同意，不再多弹一次。
+            return PrivacyConsentGranted;
+        }
+    }
+
+    /// <summary>日志专用同意。返回 true = 可以传；false 时 <paramref name="exportInstead"/> 表示用户选了“只导出”。</summary>
+    private bool EnsureLogUploadConsent(out bool exportInstead)
+    {
+        exportInstead = false;
+        if (!ExportDialogEnabled) { SetInkStatus("自检模式不上传"); return false; }
+
+        string text =
+            "为了定位你刚才遇到的问题，是否允许上传这台电脑最近的运行日志？\n\n"
+            + "将上传：最近 2 份运行日志（不超过 4MB）、环境摘要、这次的问题描述（选填）、上次崩溃记录（如有）。\n"
+            + "不会上传：板书内容、课件/作业文件、学生姓名/账号、屏幕截图。\n"
+            + "日志里可能包含文件名/路径和错误堆栈，但不会包含文档内容。\n\n"
+            + "选择“是”= 同意并上传；选择“否”= 只导出 zip，自己发给我们；选择“取消”= 什么都不做。\n"
+            + "以后可在「设置 → 书写 → 设备与性能统计」附近查看/关闭。";
+
+        int r = Native.MessageBoxW(OwnerHwnd(), text, "上传日志前确认",
+            Native.MB_YESNOCANCEL | Native.MB_ICONINFORMATION
+            | Native.MB_SETFOREGROUND | Native.MB_TOPMOST);
+        if (r == Native.IDYES)
+        {
+            SetUiPref("privacy.logUpload", "granted");
+            SetUiPref("privacy.logUpload.at", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            Console.WriteLine("[隐私] 上传运行日志：同意");
+            NotifyUiStateChanged();
+            return true;
+        }
+        if (r == Native.IDNO)
+        {
+            SetUiPref("privacy.logUpload", "denied");
+            SetUiPref("privacy.logUpload.at", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            exportInstead = true;
+            Console.WriteLine("[隐私] 上传运行日志：只导出");
+            NotifyUiStateChanged();
+            return false;
+        }
+        Console.WriteLine("[隐私] 上传运行日志：取消");
+        return false;
+    }
+
+    /// <summary>日志 zip 里的自动上下文：模式 / 屏幕 / 最近一次清屏。</summary>
+    internal string LogContextSummary()
+    {
+        string mode = BoardOn ? "白板" : PptMode ? "PPT" : DocView.IsOpen ? "文档" : "桌面";
+        var sb = new StringBuilder();
+        sb.AppendLine($"版本：{ProductInfo.Version}");
+        sb.AppendLine($"模式：{mode}");
+        sb.AppendLine($"屏幕：{_virtualW}x{_virtualH}，DPI {DpiScale:0.00}，界面缩放 {UiScale:0.00}");
+        if (!string.IsNullOrEmpty(LastClearSummary))
+            sb.AppendLine($"最近清屏：{LastClearSummary}");
+        return sb.ToString();
     }
 
     string _logUploadZip;

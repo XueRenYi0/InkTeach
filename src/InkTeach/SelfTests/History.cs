@@ -191,7 +191,7 @@ internal sealed partial class App
                 Tool = Tool.Pen, Kind = StrokeKind.Freehand,
                 Color = new Color4(0f, 0f, 1f, 1f), Width = 5f,
             };
-            b1.AddPoint(500f, 500f, 1f, 0); b1.AddPoint(560f, 520f, 1f, 6);
+            b1.AddPoint(500f, 700f, 1f, 0); b1.AddPoint(560f, 720f, 1f, 6);
             Doc.AddStroke(b1);
 
             SetBoardFromUi(false);
@@ -227,6 +227,26 @@ internal sealed partial class App
             Check("清空墨迹：撤销把当前屏那笔找回来",
                   Doc.Strokes.Count == 2 && Doc.Strokes.Contains(b1) && Doc.Strokes.Contains(b2),
                   $"{Doc.Strokes.Count} 条");
+
+            // 2026-11-02 用户日志：滚到两屏之间时，屏幕下方露出的是下一屏的一条。
+            // 只清“当前屏”会把它留在屏幕底下，看起来就是“清屏没清干净”。
+            ViewOffsetY = -PageHeightCanvas * 0.4f;
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
+            SettleFrames(120);
+            ClearCurrentPageFromUi();
+            SettleFrames(120);
+            Check("清屏：两屏之间、露在屏幕下方的墨迹也清掉",
+                  Doc.Strokes.Count == 0,
+                  $"{Doc.Strokes.Count} 条（当前屏 + 下方露出的那一条都应清掉）");
+            UndoFromUi();
+            SettleFrames(120);
+            Check("清屏（跨屏）：撤销把两屏的墨迹都找回来",
+                  Doc.Strokes.Count == 2 && Doc.Strokes.Contains(b1) && Doc.Strokes.Contains(b2),
+                  $"{Doc.Strokes.Count} 条");
+            ViewOffsetY = 0f;
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
+            SettleFrames(100);
+
             // 把测试用的第二屏那笔收掉，后面的“按槽清空”仍按 1 笔算
             Doc.ClearRect(new RectF
             {

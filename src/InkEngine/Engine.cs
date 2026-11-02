@@ -13921,6 +13921,9 @@ public partial class InkEngine
         Names = Names,
         AiPrompt = AiPromptText,
         AiPromptEditing = _aiPromptEditing,
+        LogNote = LogNoteText,
+        LogNoteEditing = _logNoteEditing,
+        LogUploadConsentOn = LogUploadConsentGranted,
     };
 
     private void NotifyUiStateChanged()
@@ -14120,8 +14123,11 @@ public partial class InkEngine
 
         string text =
             "为了统计安装量、定位卡顿和兼容性问题，是否允许上传这台电脑的设备与性能信息？\n\n"
-            + "包含：安装 ID、软件版本、首次/最近使用日期、系统/硬件型号、屏幕、帧率/慢帧/内存、触摸统计。\n"
-            + "不会上传：姓名、账号、课件、作业或屏幕内容。\n\n"
+            + "另外，只有你主动点「更多 → 日志 → 上传日志」时，才会把最近 2 份运行日志（≤4MB）\n"
+            + "和这次的问题描述发给我们；日志不会自动上传。\n\n"
+            + "包含：安装 ID、软件版本、首次/最近使用日期、系统/硬件型号、屏幕、帧率/慢帧/内存、触摸统计；\n"
+            + "以及你主动上传的运行日志（可能含文件名/路径和错误堆栈，但不含文档内容）。\n"
+            + "不会上传：姓名、账号、课件、作业、板书内容或屏幕截图。\n\n"
             + "拒绝不影响使用；以后可在「设置 → 书写 → 设备与性能统计」中修改。\n"
             + "详见官网「隐私说明」或安装目录 PRIVACY.md。\n"
             + "选择“是”= 同意，选择“否”= 暂不。";
@@ -14409,7 +14415,7 @@ public partial class InkEngine
         int n = 0;
         if (BoardOn)
         {
-            n = Doc.ClearRect(CurrentScreenRect());
+            n = Doc.ClearRect(ClearScreenRect());
         }
         else if (PptMode)
         {
@@ -14438,9 +14444,11 @@ public partial class InkEngine
         else
         {
             // 桌面批注：当前这一屏，和没有白板时的“屏页”一致。
-            n = Doc.ClearRect(CurrentScreenRect());
+            n = Doc.ClearRect(ClearScreenRect());
         }
 
+        LastClearSummary = $"{DateTime.Now:HH:mm:ss} 清空 {n} 个对象"
+            + $"（屏 {ScreenIndex}，视口 y {ViewOffsetY:F0}）";
         Laser.Clear();
         _dirty = true;
         SetInkStatus(n > 0
@@ -14466,6 +14474,31 @@ public partial class InkEngine
             MinY = top,
             MaxX = _virtualX + _virtualW,
             MaxY = top + PageHeightCanvas,
+        };
+    }
+
+    /// <summary>
+    /// 「清墨迹」真正要清的范围：**当前屏页 ∪ 当前视口**。
+    ///
+    /// 为什么不能只清 <see cref="CurrentScreenRect"/>：
+    /// 白板允许停在两屏之间（滚到一半），屏幕最下方露出来的是下一屏的一条。
+    /// 这时只清“当前屏”，那条墨会被留在屏幕底下——用户看到的就是
+    /// “清屏没清干净，底部还有一条”，只能再拿橡皮补一下。
+    /// 2026-11-02 用户日志里 10:49–10:53 画了 17 笔、清屏只清了 13 个对象，
+    /// 和这个边界对得上。
+    ///
+    /// 取并集只多清**屏幕上真的看得见**的那一条；屏幕外的下一屏内容不动。
+    /// </summary>
+    private RectF ClearScreenRect()
+    {
+        var page = CurrentScreenRect();
+        var view = ViewportCanvas;
+        return new RectF
+        {
+            MinX = MathF.Min(page.MinX, view.MinX),
+            MinY = MathF.Min(page.MinY, view.MinY),
+            MaxX = MathF.Max(page.MaxX, view.MaxX),
+            MaxY = MathF.Max(page.MaxY, view.MaxY),
         };
     }
 

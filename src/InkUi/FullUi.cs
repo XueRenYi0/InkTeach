@@ -3672,7 +3672,7 @@ public sealed partial class FullUi : IOverlayUi
     private string _hubHint = "";         // 启动器状态行的临时提示（点置灰格/预留格时写）
 
     /// <summary>面板两页：启动器（主页）/ 设置子页。**没有页签**——底栏与返回箭头导航。</summary>
-    private enum MorePage { Home = 0, Settings = 1, Help = 2 }
+    private enum MorePage { Home = 0, Settings = 1, Help = 2, Log = 3 }
 
     // 尺度（逻辑像素）。tile 76、底栏同款；面板宽 = min(640, 55% 工作宽)。
     // 规矩见《规范-功能卡.md》§二/§3.4。
@@ -3720,6 +3720,10 @@ public sealed partial class FullUi : IOverlayUi
     private const int MoreHitRow = 60;        // 60+Rows 下标（设置子页的行）
     private const int MoreHitTile = 140;      // 140+启动器格子（0..5：计时/点名/分组 保存/打开/回放）
     private const int MoreHitBottom = 200;    // 200+底栏（0..4：设置/日志/检查更新/重启/退出）
+    private const int MoreHitLogNote = 300;   // 「日志与反馈」：问题输入框
+    private const int MoreHitLogUpload = 301; // 上传日志
+    private const int MoreHitLogExport = 302; // 只导出 zip
+    private const int MoreHitLogOlder = 303;  // 包含更早日志
 
     /// <summary>
     /// 面板宽：**所有 More 页共用**工作区的 55%，夹在 560～980 逻辑像素。
@@ -3737,8 +3741,62 @@ public sealed partial class FullUi : IOverlayUi
     {
         MorePage.Home => MoreHomeH(),
         MorePage.Settings => MoreSettingsH(),
+        MorePage.Log => MoreLogH(),
         _ => MoreHelpH(),
     };
+
+    // ---- 日志与反馈页 --------------------------------------------------------
+    private const float LogNoteH = 58f;
+    private const float LogButtonH = 44f;
+    private const float LogToggleH = 36f;
+
+    private float MoreLogH()
+        => MorePad * 2 + MoreHeaderH + 10
+           + 20 + LogNoteH + 12
+           + 36 + LogToggleH + 14
+           + LogButtonH + 12 + MoreStatusH;
+
+    private bool _logIncludeOlder;
+
+    private RectF LogNoteRect() => new()
+    {
+        MinX = MoreLeftX(), MinY = MoreHeaderRect().MaxY + 30f,
+        MaxX = MoreLeftX() + MoreContentW(), MaxY = MoreHeaderRect().MaxY + 30f + LogNoteH,
+    };
+
+    private RectF LogScopeRect() => new()
+    {
+        MinX = MoreLeftX(), MinY = LogNoteRect().MaxY + 8f,
+        MaxX = MoreLeftX() + MoreContentW(), MaxY = LogNoteRect().MaxY + 8f + 34f,
+    };
+
+    private RectF LogToggleRect() => new()
+    {
+        MinX = MoreLeftX(), MinY = LogScopeRect().MaxY + 8f,
+        MaxX = MoreLeftX() + MoreContentW(), MaxY = LogScopeRect().MaxY + 8f + LogToggleH,
+    };
+
+    private RectF LogUploadRect()
+    {
+        var t = LogToggleRect();
+        float w = MathF.Min(190f, (MoreContentW() - 10f) * 0.58f);
+        return new RectF
+        {
+            MinX = t.MaxX - w, MinY = t.MaxY + 14f,
+            MaxX = t.MaxX, MaxY = t.MaxY + 14f + LogButtonH,
+        };
+    }
+
+    private RectF LogExportRect()
+    {
+        var u = LogUploadRect();
+        float w = MathF.Min(150f, MoreContentW() - (u.MaxX - u.MinX) - 20f);
+        return new RectF
+        {
+            MinX = u.MinX - 10f - w, MinY = u.MinY,
+            MaxX = u.MinX - 10f, MaxY = u.MaxY,
+        };
+    }
 
     /// <summary>启动器高：两组（课堂/墨迹）各若干行 tile ＋ 状态行 ＋ 底栏一行。
     /// ⚠ 每组的行数要用 <see cref="HubRows"/>（宽度决定）真实算——旧式子按
@@ -3988,6 +4046,15 @@ public sealed partial class FullUi : IOverlayUi
         if (MoreCloseRect().Contains(x, y)) return MoreHitClose;
         if (_morePage != MorePage.Home && MoreBackRect().Contains(x, y)) return MoreHitBack;
 
+        if (_morePage == MorePage.Log)
+        {
+            if (LogNoteRect().Contains(x, y)) return MoreHitLogNote;
+            if (LogUploadRect().Contains(x, y)) return MoreHitLogUpload;
+            if (LogExportRect().Contains(x, y)) return MoreHitLogExport;
+            if (LogToggleRect().Contains(x, y)) return MoreHitLogOlder;
+            return MoreHitInside;
+        }
+
         if (_morePage == MorePage.Help)
         {
             for (int i = 0; i < HelpTabCount; i++)
@@ -4041,6 +4108,7 @@ public sealed partial class FullUi : IOverlayUi
     private void CloseMore()
     {
         if (!_moreOpen) return;
+        if (_host?.State.LogNoteEditing == true) _host.Commands.EndLogNoteEdit(true);
         _moreOpen = false;
         _moreHover = MoreHitNone;
         _morePress = -1;
@@ -4092,6 +4160,7 @@ public sealed partial class FullUi : IOverlayUi
         {
             MorePage.Home => "更多",
             MorePage.Settings => "设置",
+            MorePage.Log => "日志与反馈",
             _ => "使用说明",
         };
         bool showBack = _morePage != MorePage.Home;
@@ -4109,6 +4178,7 @@ public sealed partial class FullUi : IOverlayUi
 
         if (_morePage == MorePage.Home) DrawMoreHome(ctx);
         else if (_morePage == MorePage.Settings) DrawMoreSettings(ctx);
+        else if (_morePage == MorePage.Log) DrawLogPage(ctx);
         else DrawHelpPage(ctx);
     }
 
@@ -4149,8 +4219,10 @@ public sealed partial class FullUi : IOverlayUi
               "找回以前写在**白板**上的墨迹（自动留存，停手时写；不含截图）",
               _host != null && !_host.State.PptMode && _host.State.HistoryCount > 0, false),
         AiTileCode => ("AI 出题",
-              "语音/文字出题；1A 先出示例题卡（不联网）",
-              true, false),
+              AiEntryEnabled
+                  ? "语音/文字出题；1A 先出示例题卡（不联网）"
+                  : "开发中：AI 出题先暂停，等新想法后再开放",
+              AiEntryEnabled, false),
         HelpTileCode => ("使用说明",
               "4 步上手 / 手势 / 快捷键；F1 也能打开",
               true, false),
@@ -4184,6 +4256,75 @@ public sealed partial class FullUi : IOverlayUi
                    : InkCol;
         // 只留「使用说明」四个字；蓝色的强调边框负责让它在课堂工具里一眼可见。
         _widgets.Text(ctx, label, t, 14f, Brush(ctx, ink));
+    }
+
+    private void DrawLogPage(ID2D1DeviceContext ctx)
+    {
+        var st = _host?.State;
+        string note = st?.LogNote ?? "";
+        bool editing = st?.LogNoteEditing ?? false;
+
+        _widgets.Text(ctx, "刚才遇到了什么问题？（选填）",
+            new RectF
+            {
+                MinX = MoreLeftX(), MinY = MoreHeaderRect().MaxY + 6f,
+                MaxX = MoreLeftX() + MoreContentW(), MaxY = MoreHeaderRect().MaxY + 26f,
+            },
+            12.5f, Brush(ctx, MutedCol), center: false);
+
+        var nr = LogNoteRect();
+        var nrr = new RoundedRectangle(new Vortice.RawRectF(nr.MinX, nr.MinY, nr.MaxX, nr.MaxY), 10f, 10f);
+        ctx.FillRoundedRectangle(nrr, Brush(ctx, HoverCol));
+        ctx.DrawRoundedRectangle(nrr,
+            Brush(ctx, editing || _moreHover == MoreHitLogNote ? Tokens.Accent : BorderCol),
+            editing ? 1.6f : 1f);
+        string noteText = editing
+            ? "正在输入…（回车确认 / Esc 取消）"
+            : (note.Length > 0 ? note : "例如：清屏后屏幕底部还剩一条黑线");
+        _widgets.TextLeftMiddle(ctx, noteText,
+            new RectF { MinX = nr.MinX + 12f, MinY = nr.MinY, MaxX = nr.MaxX - 12f, MaxY = nr.MaxY },
+            13.5f, Brush(ctx, note.Length > 0 || editing ? InkCol : MutedCol));
+
+        string scope = _logIncludeOlder
+            ? "将上传：最多 4 份运行日志（≤8MB）、环境摘要、这段描述。"
+            : "将上传：最近 2 份运行日志（≤4MB）、环境摘要、这段描述。";
+        if (st?.LogUploadConsentOn != true) scope += " 首次上传会先征求同意。";
+        _widgets.TextLeftMiddle(ctx, scope, LogScopeRect(), 11f, Brush(ctx, MutedCol));
+
+        var tr = LogToggleRect();
+        _widgets.TextLeftMiddle(ctx, "包含更早日志（最多 4 份 / 8MB）",
+            new RectF { MinX = tr.MinX, MinY = tr.MinY, MaxX = tr.MaxX - MoreSwitchW - 12f, MaxY = tr.MaxY },
+            12.5f, Brush(ctx, InkCol));
+        var sw = new RectF
+        {
+            MinX = tr.MaxX - MoreSwitchW,
+            MinY = tr.MinY + (tr.MaxY - tr.MinY - MoreSwitchH) * 0.5f,
+            MaxX = tr.MaxX,
+            MaxY = tr.MinY + (tr.MaxY - tr.MinY - MoreSwitchH) * 0.5f + MoreSwitchH,
+        };
+        DrawSwitch(ctx, sw, _logIncludeOlder);
+
+        var ur = LogUploadRect();
+        var urr = new RoundedRectangle(new Vortice.RawRectF(ur.MinX, ur.MinY, ur.MaxX, ur.MaxY), 10f, 10f);
+        ctx.FillRoundedRectangle(urr, Brush(ctx, Tokens.Accent));
+        _widgets.Text(ctx, "上传日志", ur, 14f, Brush(ctx, Tokens.AccentInk));
+
+        var er = LogExportRect();
+        var err = new RoundedRectangle(new Vortice.RawRectF(er.MinX, er.MinY, er.MaxX, er.MaxY), 10f, 10f);
+        ctx.DrawRoundedRectangle(err, Brush(ctx, _moreHover == MoreHitLogExport ? Tokens.Accent : BorderCol), 1f);
+        _widgets.Text(ctx, "只导出 zip", er, 12.5f,
+            Brush(ctx, _moreHover == MoreHitLogExport ? Tokens.Accent : InkCol));
+
+        string status = !string.IsNullOrEmpty(_hubHint) ? _hubHint
+                      : !string.IsNullOrEmpty(st?.InkStatus) ? (st?.InkStatus ?? "")
+                      : "日志不会自动上传；上传成功后会显示编号。";
+        _widgets.TextLeftMiddle(ctx, status,
+            new RectF
+            {
+                MinX = MoreLeftX(), MinY = ur.MaxY + 10f,
+                MaxX = MoreLeftX() + MoreContentW(), MaxY = ur.MaxY + 10f + MoreStatusH,
+            },
+            11f, Brush(ctx, MutedCol));
     }
 
     private void DrawMoreHome(ID2D1DeviceContext ctx)
@@ -4360,7 +4501,14 @@ public sealed partial class FullUi : IOverlayUi
                 CloseMore();
                 _host.Commands.OpenInkHistory();
                 break;
-            case AiTileCode:                          // AI 出题（1A：面板 + mock 题卡）
+            case AiTileCode:                          // AI 出题（开发中，入口置灰）
+                if (!AiEntryEnabled)
+                {
+                    // 置灰格不执行功能；留在「更多」里，把原因写进状态行。
+                    // 触摸没有悬停，点一下也能看到“开发中”，不用去猜为什么是灰的。
+                    _hubHint = "AI 出题开发中，暂未开放";
+                    break;
+                }
                 CloseMore();
                 OpenAiPanel();
                 break;
@@ -4378,14 +4526,63 @@ public sealed partial class FullUi : IOverlayUi
         Invalidate();
     }
 
+    private void ActivateLog(int hit)
+    {
+        var st = _host?.State;
+        if (st == null) return;
+
+        if (hit == MoreHitLogOlder)
+        {
+            _logIncludeOlder = !_logIncludeOlder;
+            Invalidate();
+            return;
+        }
+
+        if (hit == MoreHitLogNote)
+        {
+            if (_host.State.LogNoteEditing)
+            {
+                _host.Commands.EndLogNoteEdit(true);
+                return;
+            }
+            var r = LogNoteRect();
+            _hubHint = "";
+            _host.Commands.BeginLogNoteEdit(r.MinX, r.MinY, r.MaxX - r.MinX, r.MaxY - r.MinY);
+            return;
+        }
+
+        if (_host.State.LogNoteEditing) _host.Commands.EndLogNoteEdit(true);
+        string note = _host.State.LogNote ?? "";
+
+        if (hit == MoreHitLogUpload)
+        {
+            _hubHint = "";
+            _host.Commands.UploadLogs(note, _logIncludeOlder);
+            Invalidate();
+        }
+        else if (hit == MoreHitLogExport)
+        {
+            _hubHint = "";
+            _host.Commands.ExportLogs(note, _logIncludeOlder);
+            Invalidate();
+        }
+    }
+
     private void ActivateBottom(int i)
     {
         switch (i)
         {
             case 0: _morePage = MorePage.Settings; _moreHover = MoreHitNone; Invalidate(); break;
-            // 「日志」（2026-10-17）：合并后的唯一入口——先试上传，失败自动转导出；
-            // 留在启动器页，状态行里的"编号 / 已导出路径"才看得见。
-            case 1: _morePage = MorePage.Home; _host.Commands.UploadLogs(); break;
+            // 「日志」（2026-11-02）：先打开「日志与反馈」页，让用户可选填一句问题；
+            // 空着也能直接上传，上传/导出都在这一页完成，状态行就在下面。
+            case 1:
+                _morePage = MorePage.Log;
+                _moreHover = MoreHitNone;
+                _morePress = -1;
+                _hubHint = "";
+                _moreH.To(MoreLogH(), Tokens.MoreOpenMs);
+                Invalidate();
+                break;
             case 2:
                 var stage = _host.State.UpdateStage;
                 if (stage == UpdateStage.Available) _host.Commands.ApplyUpdate();
@@ -4622,9 +4819,16 @@ public sealed partial class FullUi : IOverlayUi
             if (hit == MoreHitNone || hit == MoreHitClose) { CloseMore(); return true; }
             if (hit == MoreHitBack)
             {
+                if (_host?.State.LogNoteEditing == true) _host.Commands.EndLogNoteEdit(true);
                 _morePage = MorePage.Home;
                 _moreHover = MoreHitNone;
                 Invalidate();
+                return true;
+            }
+            if (_morePage == MorePage.Log
+                && hit >= MoreHitLogNote && hit <= MoreHitLogOlder)
+            {
+                ActivateLog(hit);
                 return true;
             }
             if (_morePage == MorePage.Help && hit >= HelpHitTabBase && hit < HelpHitTabBase + HelpTabCount)
@@ -7242,6 +7446,12 @@ public sealed partial class FullUi : IOverlayUi
                 if (HubTileCode(s, i) == code) return HubTileRect(s, i);
         return RectF.Empty;
     }
+    internal bool HubTileEnabledForTest(int code) => HubTileInfo(code).Enabled;
+    internal string HubHintForTest => _hubHint;
+    internal RectF LogNoteRectForTest => LogNoteRect();
+    internal RectF LogUploadRectForTest => LogUploadRect();
+    internal RectF LogExportRectForTest => LogExportRect();
+    internal RectF LogToggleRectForTest => LogToggleRect();
     internal RectF HubBottomRectForTest(int i) => HubBottomRect(i);
     /// <summary>自检用：底栏命中的基码（钉子用它算"第 i 格应返回什么"）。</summary>
     internal int MoreHitBottomBaseForTest => MoreHitBottom;
@@ -7263,7 +7473,7 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>自检/出图用：切到启动器（0）/ 设置子页（1）。</summary>
     internal void SetMorePageForTest(int i)
     {
-        _morePage = (MorePage)Math.Clamp(i, 0, 2);
+        _morePage = (MorePage)Math.Clamp(i, 0, 3);
         _moreHover = MoreHitNone;
         _moreH.Jump(MoreTargetH());
         Invalidate();

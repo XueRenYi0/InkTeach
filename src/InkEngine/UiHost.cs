@@ -114,6 +114,10 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void BeginAiPromptEdit(float x, float y, float w, float h)
         => _engine.BeginAiPromptEditFromUi(x, y, w, h);
     public void EndAiPromptEdit(bool accept) => _engine.EndAiPromptEditFromUi(accept);
+    public void BeginLogNoteEdit(float x, float y, float w, float h)
+        => _engine.BeginLogNoteEditFromUi(x, y, w, h);
+    public void EndLogNoteEdit(bool accept) => _engine.EndLogNoteEditFromUi(accept);
+    internal void SetLogNoteTextForTest(string text) => _engine.SetLogNoteTextForTest(text);
     public void InsertMockTextBox() => _engine.InsertMockTextBoxFromUi();
     public void InsertTextBox() => _engine.InsertTextBoxFromUi();
     public void AdjustTextFont(float delta) => _engine.AdjustTextFontFromUi(delta);
@@ -182,10 +186,12 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetBoardOpacity(float opacity) => _engine.SetBoardOpacityFromUi(opacity);
 
     /// <summary>「设置 → 导出日志…」：运行日志打包 zip（2026-10-16）。</summary>
-    public void ExportLogs() => _engine.ExportLogsFromUi();
+    public void ExportLogs(string note, bool includeOlder)
+        => _engine.ExportLogsFromUi(note, includeOlder);
 
     /// <summary>「设置 → 上传日志…」：日志一键传云端（2026-10-17）。</summary>
-    public void UploadLogs() => _engine.UploadLogsFromUi();
+    public void UploadLogs(string note, bool includeOlder)
+        => _engine.UploadLogsFromUi(note, includeOlder);
 
     public void Paste() => _engine.PasteFromClipboard();
     public void Restart() => _engine.RestartFromUi();

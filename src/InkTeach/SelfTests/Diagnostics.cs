@@ -2700,20 +2700,48 @@ internal sealed partial class App
                   File.Exists(Path.Combine(logDir, "inkteach.1.log")),
                   string.Join(" / ", Directory.GetFiles(logDir).Select(f => Path.GetFileName(f))));
 
-            // ⑤ 导出 zip：日志 + 环境.txt 都在
-            string zip = Path.Combine(Path.GetTempPath(), "inkteach-logtest-export.zip");
-            DiagLog.ExportZip(zip);
+            // ⑤ 导出 zip：默认只带最近 2 份；勾“更早”才带 4 份，并写入 问题.txt
+            File.WriteAllText(Path.Combine(logDir, "inkteach.2.log"), "older2");
+            File.WriteAllText(Path.Combine(logDir, "inkteach.3.log"), "older3");
+            string zipDefault = Path.Combine(Path.GetTempPath(), "inkteach-logtest-default.zip");
+            DiagLog.ExportZip(zipDefault);
             bool zipOk = false; string entries = "";
             try
             {
-                using var za = System.IO.Compression.ZipFile.OpenRead(zip);
+                using var za = System.IO.Compression.ZipFile.OpenRead(zipDefault);
                 entries = string.Join(" / ", za.Entries.Select(e => e.FullName));
                 zipOk = za.Entries.Any(e => e.FullName.Contains("inkteach"))
-                     && za.Entries.Any(e => e.FullName == "环境.txt");
+                     && za.Entries.Any(e => e.FullName == "环境.txt")
+                     && !za.Entries.Any(e => e.FullName == "inkteach.2.log")
+                     && !za.Entries.Any(e => e.FullName == "inkteach.3.log");
             }
             catch (Exception ex) { entries = "打开失败：" + ex.Message; }
-            Check("导出 zip：含日志 + 环境.txt", zipOk, entries);
-            try { File.Delete(zip); } catch { }
+            Check("导出 zip：默认只带最近 2 份 + 环境.txt", zipOk, entries);
+            try { File.Delete(zipDefault); } catch { }
+
+            string zipAll = Path.Combine(Path.GetTempPath(), "inkteach-logtest-all.zip");
+            DiagLog.ExportZip(zipAll, includeOlder: true,
+                note: "清屏后屏幕底部还剩一条黑线", context: "模式：白板；最近清屏：10:53");
+            bool allOk = false; string allEntries = ""; string problem = "";
+            try
+            {
+                using var za = System.IO.Compression.ZipFile.OpenRead(zipAll);
+                allEntries = string.Join(" / ", za.Entries.Select(e => e.FullName));
+                var pe = za.GetEntry("问题.txt");
+                if (pe != null)
+                {
+                    using var sr = new StreamReader(pe.Open(), System.Text.Encoding.UTF8);
+                    problem = sr.ReadToEnd();
+                }
+                allOk = za.Entries.Any(e => e.FullName == "inkteach.2.log")
+                     && za.Entries.Any(e => e.FullName == "inkteach.3.log")
+                     && problem.Contains("清屏后屏幕底部还剩一条黑线")
+                     && problem.Contains("最近清屏");
+            }
+            catch (Exception ex) { allEntries = "打开失败：" + ex.Message; }
+            Check("导出 zip：勾更早 = 4 份 + 问题.txt（原话 + 自动上下文）", allOk,
+                  allEntries + " / 问题.txt=" + (problem.Length > 0 ? "有" : "空"));
+            try { File.Delete(zipAll); } catch { }
 
             // ⑥ 上传日志：未配置 / 自检档下必须**只提示、不抛错不卡**（老师机器上更不能炸）
             {

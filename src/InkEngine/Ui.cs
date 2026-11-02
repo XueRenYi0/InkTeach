@@ -357,6 +357,11 @@ public interface IEngineCommands
     /// <summary>AI 面板：结束输入。accept=false = 放弃这次编辑（保留原文字）。</summary>
     void EndAiPromptEdit(bool accept);
 
+    /// <summary>「日志与反馈」：在给定逻辑坐标上开一个原生单行输入框（最多 240 字）。</summary>
+    void BeginLogNoteEdit(float x, float y, float w, float h);
+    /// <summary>「日志与反馈」：结束输入。accept=false = 放弃这次编辑（保留原文字）。</summary>
+    void EndLogNoteEdit(bool accept);
+
     /// <summary>
     /// AI 面板：按当前 <see cref="UiState.AiPrompt"/> 插入一张 **mock 题卡**（1A）。
     /// 不联网、不调模型；接模型以后只换这个方法里的数据源。
@@ -510,14 +515,14 @@ public interface IEngineCommands
     /// 「设置 → 导出日志…」（2026-10-16 用户定）：把运行日志（+环境摘要）打包成 zip，
     /// 走系统"另存为"——存 U 盘 / 发给开发都能用。自检模式不弹对话框。
     /// </summary>
-    void ExportLogs();
+    void ExportLogs(string note, bool includeOlder);
 
     /// <summary>
     /// 「设置 → 上传日志…」（2026-10-17 用户定）：把运行日志（zip）**一键传到云端**
     /// （日志收集仓；链路与建仓步骤见 `调研\日志上传-方案.md`）——老师机器卡了，
     /// 点一下我们就能拿到数据分析。未配置 / 失败时只提示，改用导出。
     /// </summary>
-    void UploadLogs();
+    void UploadLogs(string note, bool includeOlder);
 
     /// <summary>
     /// **粘贴**：剪贴板里有我们的对象就粘成可编辑对象，否则当图粘到视口左上角。
@@ -1356,6 +1361,13 @@ public readonly struct UiState
     public string AiPrompt { get; init; }
     /// <summary>原生输入框是否正在编辑（界面据此画光标/边框）。</summary>
     public bool AiPromptEditing { get; init; }
+
+    /// <summary>「日志与反馈」里用户写的问题描述（上传/导出时进 zip 的 问题.txt）。</summary>
+    public string LogNote { get; init; }
+    /// <summary>日志问题输入框是否正在编辑。</summary>
+    public bool LogNoteEditing { get; init; }
+    /// <summary>是否已允许上传运行日志（设备统计已同意时也视为 true）。</summary>
+    public bool LogUploadConsentOn { get; init; }
 }
 
 /// <summary>

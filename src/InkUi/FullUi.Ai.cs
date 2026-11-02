@@ -20,6 +20,14 @@ public sealed partial class FullUi
     /// <summary>「更多 → 课堂」里的 AI 格编号。不占 3..7（墨迹格）和 8（使用说明）。</summary>
     private const int AiTileCode = 9;
 
+    /// <summary>
+    /// AI 出题入口开关。
+    /// 2026-11-02 用户决定：AI 出题先暂停，等有更好的想法再做；
+    /// 入口保留但置灰，点它只提示“开发中”，不打开旧面板。
+    /// 以后恢复时把这里改回 true 即可，不用再动绘制/命中。
+    /// </summary>
+    private static readonly bool AiEntryEnabled = false;
+
     private const int AiHitOutside = -1;
     private const int AiHitInside = 0;
     private const int AiHitClose = 1;

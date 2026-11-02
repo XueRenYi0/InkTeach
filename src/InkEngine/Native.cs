@@ -999,6 +999,8 @@ internal static class Native
 
     public const uint MB_OK = 0x00000000;
     public const uint MB_YESNO = 0x00000004;
+    public const uint MB_YESNOCANCEL = 0x00000003;
+    public const int IDCANCEL = 2;
     public const uint MB_ICONINFORMATION = 0x00000040;
     public const uint MB_ICONERROR = 0x00000010;
     public const uint MB_SETFOREGROUND = 0x00010000;
