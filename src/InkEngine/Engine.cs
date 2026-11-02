@@ -1090,6 +1090,55 @@ public partial class InkEngine
     /// </summary>
     internal bool SelBarCollapsed;
 
+    // 操作条 / 收起圆钮的**画布坐标缓存**：只在文档、选区、界面单位、可见区尺寸
+    // 发生变化时重算；**画布滚动不重算**。这样滚动时条跟着对象一起走、滚出视野就消失，
+    // 而不是一直粘在屏幕下沿（ClassIn 的行为，用户 2026-11-01 确认合理）。
+    private RectF _barCanvasCache, _dotCanvasCache;
+    private int _barCacheVersion = int.MinValue;
+    private float _barCacheUnit;
+    private float _barCacheViewW, _barCacheViewH;
+    private Stroke[] _barCacheSelection = Array.Empty<Stroke>();
+
+    /// <summary>当前操作条的画布矩形（滚动时跟着对象走）。</summary>
+    internal RectF SelectionBarCanvasRect
+    {
+        get { EnsureSelectionChromeCache(); return _barCanvasCache; }
+    }
+
+    /// <summary>收起态圆钮的画布矩形（同上）。</summary>
+    internal RectF SelectionDotCanvasRect
+    {
+        get { EnsureSelectionChromeCache(); return _dotCanvasCache; }
+    }
+
+    private void EnsureSelectionChromeCache()
+    {
+        var sel = Doc.Selected;
+        var vp = FurnitureViewport;
+        float vw = vp.IsEmpty ? 0f : vp.MaxX - vp.MinX;
+        float vh = vp.IsEmpty ? 0f : vp.MaxY - vp.MinY;
+        bool sameSel = _barCacheSelection.Length == sel.Count;
+        if (sameSel)
+            for (int i = 0; i < sel.Count; i++)
+                if (!ReferenceEquals(_barCacheSelection[i], sel[i])) { sameSel = false; break; }
+        bool stale = _barCacheVersion != Doc.Version
+                  || MathF.Abs(_barCacheUnit - UiUnit) > 1e-4f
+                  || MathF.Abs(_barCacheViewW - vw) > 0.5f
+                  || MathF.Abs(_barCacheViewH - vh) > 0.5f
+                  || !sameSel;
+        if (!stale) return;
+
+        var aabb = LiveSelectionFrame.CanvasAabb;
+        int count = SelectionHandles.BarButtonCountFor(SingleTextBoxSelection);
+        _barCanvasCache = SelectionHandles.BarRect(aabb, UiUnit, vp, count);
+        _dotCanvasCache = SelectionHandles.BarCollapsedRect(aabb, UiUnit, vp);
+        _barCacheVersion = Doc.Version;
+        _barCacheUnit = UiUnit;
+        _barCacheViewW = vw;
+        _barCacheViewH = vh;
+        _barCacheSelection = sel.ToArray();
+    }
+
     /// <summary>
     /// **画完自动选中那个框**现在把操作条"收起来"画（只挂一颗圆钮 ＋ 框 ＋ 手柄 ＋ 旋转柄）。
     ///
@@ -4645,9 +4694,9 @@ public partial class InkEngine
         float x = sx, y = sy;
         ScreenToCanvas(ref x, ref y);
 
-        // 文本框编辑中：点编辑框以外 = 结束输入（然后这一下照常给界面/画布）。
-        // 点界面（尤其是文本色带）不算“点外面”：色带要能在编辑中直接改字号/颜色。
-        bool textEditJustEnded = false;
+        // 文本框编辑中：点编辑框以外 = 先提交，**同一下**继续走文本工具分流。
+        //（ClassIn 的行为：点空白马上出新输入框，旧框变成普通显示、不再带操作条。）
+        // 点界面（尤其是文本色带/操作条）只提交，不新建。
         if (_textBoxEditing)
         {
             bool inside = false;
@@ -4658,10 +4707,7 @@ public partial class InkEngine
                       && screenY >= b.MinY + ViewOffsetY && screenY <= b.MaxY + ViewOffsetY;
             }
             if (!inside && !UiContains(screenX, screenY))
-            {
                 EndTextBoxEditFromUi(true);
-                textEditJustEnded = true;
-            }
         }
 
         // 收藏触摸滚动进行中：第二根手指一律吞掉，别把第二下落到卡片/画布上。
@@ -4796,21 +4842,20 @@ public partial class InkEngine
             return;
         }
 
-        // 文本工具：结束编辑的那一下只负责提交，不顺手在落点新建下一个文本。
-        if (textEditJustEnded && Tool == Tool.Text)
-        {
-            _drawing = false;
-            _dirty = true;
-            ApplyCursor();
-            return;
-        }
-
         // 文本工具：点已有文字 = 选中/再点编辑；点空白 = 在点击处新建并输入。
         if (Tool == Tool.Text && !inverted)
         {
+            // 这条分支在下面统一的 `_activePointer = id` 之前就 return 了；
+            // 不在这里记下指针，OnPointerUp 会因 `id != _activePointer` 直接丢掉，
+            // 选中拖动就永远收不了尾（表现为"选中了拖不动/松手还在拖"）。
+            _activePointer = id;
+            _activePointerType = ptype;
             if (TextToolPointerDown(screenX, screenY))
             {
-                _drawing = false;
+                // 文本工具点住已选中的文字时，TextToolPointerDown 会起一次选择拖动；
+                // 这时 `_drawing` 必须是 true，否则 OnPointerMove 会走"悬停"分支，
+                // 永远到不了 SelDragging——表现就是"选中了但拖不动"。
+                _drawing = SelDragging;
                 Native.SetCapture(hWnd);
                 _dirty = true;
                 ApplyCursor();
@@ -10760,10 +10805,22 @@ public partial class InkEngine
         // ⚠ 判据是 `SelDragging` 而**不是**"是不是框选工具"：画完自动选中那个框
         //（见上面 `AutoSelectionPress` 那段）是在**图形工具**下起手拖的，
         // 按工具判的话这一拖同样永远不提交。
-        if (SelDragging) EndSelDrag();
+        // 文本框的双击编辑**等松手再兑现**：按下去先交给选择手势，
+        // 拖过就是移动，没拖才是双击。必须在 EndSelDrag 之前读 `_selDragMoved`，
+        // 它在收尾里会被清掉。
+        bool pendingTextEdit = _pendingTextEdit && SelDragging
+                            && !_selDragMoved && _dragHandle == SelHandle.None;
+        bool wasSelDragging = SelDragging;
+        if (wasSelDragging) EndSelDrag();
+        if (wasSelDragging)
+        {
+            if (pendingTextEdit) EnterPendingTextBoxEdit();
+            else _pendingTextEdit = false;
+        }
         else if (_sliderDragging) EndWidthSliderDrag();        // 粗细滑条：松手 = 一步撤销
         else if (_colorDragging) EndColorPickerDrag(PointerX, PointerY);   // 取色板：板内应用 / 板外取消
         else if (Tool == Tool.Marquee || MarqueeActive) ApplyMarquee();    // MarqueeActive：触摸长按那条路（工具可能还是笔）
+        if (!wasSelDragging) _pendingTextEdit = false;
         EndStrokeMeasure();      // 兜底：没收过的分支（取消、切换工具等）也把总账结掉
         _drawing = false;
         _dirty = true;
@@ -11023,20 +11080,22 @@ public partial class InkEngine
         {
             if (BarDrawnCollapsed)
             {
-                if (SelectionHandles.BarCollapsedRect(aabb, dpi, FurnitureViewport).Contains(canvasX, canvasY))
+                if (SelectionDotCanvasRect.Contains(canvasX, canvasY))
                     return CursorKind.Default;
             }
             else
             {
                 if (CustomColorOpen
                     && SelectionHandles.PickContains(canvasX, canvasY, aabb, dpi, FurnitureViewport,
-                                                     SelectionHandles.SwatchCount))
+                                                     SelectionHandles.SwatchCount,
+                                                     SingleTextBoxSelection))
                     return CursorKind.Default;
-                if (SelectionHandles.BarRect(aabb, dpi, FurnitureViewport).Contains(canvasX, canvasY))
+                if (SelectionBarCanvasRect.Contains(canvasX, canvasY))
                     return CursorKind.Default;
                 if (SelPanelOpen != SelPanel.None
                     && SelectionHandles.PanelContains(canvasX, canvasY, aabb, dpi, FurnitureViewport,
-                                                      SelPanelOpen, SelectionHandles.SwatchCount))
+                                                      SelPanelOpen, SelectionHandles.SwatchCount,
+                                                      SingleTextBoxSelection))
                     return CursorKind.Default;
             }
         }
@@ -13266,6 +13325,11 @@ public partial class InkEngine
     {
         // 离开文本工具 = 先把正在编辑的文字收掉（光标/白底不能跟着换工具跑）。
         if (_textBoxEditing && t != Tool.Text) EndTextBoxEditFromUi(true);
+        if (t != Tool.Text)
+        {
+            _lastTextBoxClickStroke = null;
+            _lastTextBoxClickMs = double.NegativeInfinity;
+        }
         // 老师自己换工具 = 不再自动恢复“插入前的工具”；插入完成后会再置 true。
         _restoreToolAfterLibrarySelection = false;
         // 换工具也把“拿起的收藏卡片”放下，别让虚影跟着跑到新工具里。
@@ -13799,6 +13863,7 @@ public partial class InkEngine
         LaserWidth = LaserWidthLogical,
         TextFontSize = TextToolFontSize,
         TextColor = TextToolColor,
+        TextSwatchColors = (Color4[])TextSwatchColors.Clone(),
         TextBoxEditing = _textBoxEditing,
         Dash = PenDash,
         PassThrough = PassThrough,
@@ -15595,6 +15660,13 @@ public partial class InkEngine
         }
         if (changed == 0) return 0;
         Doc.ApplyColors(targets, colors.ToArray());   // 一条动作 = 一步撤销
+        // 正在编辑的那个文本框改色后，编辑窗的文字/背景也要立刻跟着走。
+        if (_textBoxEditing && _textBoxEditStroke != null && targets.Contains(_textBoxEditStroke))
+        {
+            UpdateTextBoxEditColors(_textBoxEditStroke);
+            ApplyRichEditFormat(_textBoxEditStroke);
+            Native.InvalidateRect(_textBoxEditHwnd, IntPtr.Zero, true);
+        }
         // 屏幕反馈按用户要求**只留"选中框上看得见的变化"**（颜色环、框的粗细），
         // 不再弹提示条；需要留痕的写控制台（这一版一直如此）。
         Console.WriteLine($"改颜色：{changed} 个对象");
@@ -15717,7 +15789,8 @@ public partial class InkEngine
         var aabb = LiveSelectionFrame.CanvasAabb;
         float dpi = UiUnit;
         int sc = SelectionHandles.SwatchCount;
-        var part = SelectionHandles.PanelPartAt(x, y, aabb, dpi, FurnitureViewport, SelPanelOpen, sc);
+        var part = SelectionHandles.PanelPartAt(x, y, aabb, dpi, FurnitureViewport, SelPanelOpen, sc,
+            SingleTextBoxSelection);
 
         switch (part)
         {
@@ -15754,6 +15827,17 @@ public partial class InkEngine
             // 导出格式：0 = PNG（透明底）、1 = JPG（白底）。
         }
 
+        if (part >= SelectionHandles.PanelPart.FontBase)
+        {
+            int i = part - SelectionHandles.PanelPart.FontBase;
+            if (i >= 0 && i < InkPalette.TextFontSizes.Length)
+            {
+                SetSelectedTextFontFromUi(InkPalette.TextFontSizes[i]);
+                SelPanelOpen = SelPanel.None;
+            }
+            return true;
+        }
+
         if (part >= SelectionHandles.PanelPart.SwatchBase)
         {
             int i = part - SelectionHandles.PanelPart.SwatchBase;
@@ -15781,7 +15865,7 @@ public partial class InkEngine
     {
         var aabb = LiveSelectionFrame.CanvasAabb;
         var part = SelectionHandles.PickPartAt(x, y, aabb, UiUnit, FurnitureViewport,
-                                               SelectionHandles.SwatchCount);
+                                               SelectionHandles.SwatchCount, SingleTextBoxSelection);
         switch (part)
         {
             case SelectionHandles.PickPart.Hue:
@@ -15963,14 +16047,15 @@ public partial class InkEngine
     private void UpdatePickAtPoint(float x, float y, in RectF aabb, bool hue)
     {
         int sc = SelectionHandles.SwatchCount;
+        bool textBar = SingleTextBoxSelection;
         if (hue)
         {
-            var r = SelectionHandles.PickHueRect(aabb, UiUnit, FurnitureViewport, sc);
+            var r = SelectionHandles.PickHueRect(aabb, UiUnit, FurnitureViewport, sc, textBar);
             if (r.MaxY > r.MinY) _pickH = Math.Clamp((y - r.MinY) / (r.MaxY - r.MinY), 0f, 1f);
         }
         else
         {
-            var r = SelectionHandles.PickSvRect(aabb, UiUnit, FurnitureViewport, sc);
+            var r = SelectionHandles.PickSvRect(aabb, UiUnit, FurnitureViewport, sc, textBar);
             if (r.MaxX > r.MinX) _pickS = Math.Clamp((x - r.MinX) / (r.MaxX - r.MinX), 0f, 1f);
             if (r.MaxY > r.MinY) _pickV = Math.Clamp((y - r.MinY) / (r.MaxY - r.MinY), 0f, 1f);
         }
@@ -16002,7 +16087,8 @@ public partial class InkEngine
         if (act == null) { _dirty = true; return; }
 
         bool inside = SelectionHandles.PickContains(x, y, LiveSelectionFrame.CanvasAabb, UiUnit,
-                                                    FurnitureViewport, SelectionHandles.SwatchCount);
+                                                    FurnitureViewport, SelectionHandles.SwatchCount,
+                                                    SingleTextBoxSelection);
         if (inside && act.HasChange)
         {
             Doc.CommitInteractive(act);
@@ -16025,29 +16111,33 @@ public partial class InkEngine
     /// 判据走 <see cref="SelectionBarShown"/>（和绘制、光标同一条）：那一块不在的时候
     /// 悬停高亮也不该亮。收起态（用户自己收的 / 画完自动选中那个框）只高亮那颗圆钮。
     /// </summary>
+    /// <summary>单选一个文本框吗（决定用七格文字条还是十格通用条）。</summary>
+    internal bool SingleTextBoxSelection
+        => Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.TextBox;
+
     /// <summary>
-    /// 当前选中对象的操作条矩形。文本框内容会一直长到条底下，所以只有它走
-    /// "下方放不下就翻到上方"的兜底；普通对象仍用条的下限规则。
+    /// 当前选中对象的操作条矩形。**所有对象统一"给下限、不翻面"**；
+    /// 文本框只是少三格（七格），位置规则和其他对象一模一样。
     /// 画（Overlay）和命中（这里）必须同一份。
     /// </summary>
     private RectF SelectionBarRect(in RectF aabb)
-        => Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.TextBox
-           && SelPanelOpen == SelPanel.None && !CustomColorOpen
-            ? SelectionHandles.BarRectForTextBox(aabb, UiUnit, FurnitureViewport)
-            : SelectionHandles.BarRect(aabb, UiUnit, FurnitureViewport);
+    {
+        _ = aabb;                       // 位置用画布缓存：滚动时条跟着对象走
+        return SelectionBarCanvasRect;
+    }
 
     private void UpdateBarHover(float x, float y)
     {
         int hover = -1;
         if (!_drawing && SelectionBarShown)
         {
-            var aabb = LiveSelectionFrame.CanvasAabb;
             if (BarDrawnCollapsed)
             {
-                var dot = SelectionHandles.BarCollapsedRect(aabb, UiUnit, FurnitureViewport);
+                var dot = SelectionDotCanvasRect;
                 hover = dot.Contains(x, y) ? (int)SelBarButton.Collapse : -1;
             }
-            else hover = SelectionHandles.BarButtonAtIn(x, y, SelectionBarRect(aabb), UiUnit);
+            else hover = SelectionHandles.BarButtonAtIn(x, y, SelectionBarCanvasRect, UiUnit,
+                SelectionHandles.BarButtonCountFor(SingleTextBoxSelection));
         }
         if (hover == SelBarHover) return;
         SelBarHover = hover;
@@ -16662,20 +16752,21 @@ public partial class InkEngine
         //    必须是同一个）。
         if (BarDrawnCollapsed)
         {
-            if (SelectionHandles.BarCollapsedRect(aabb, dpi, FurnitureViewport).Contains(x, y))
+            if (SelectionDotCanvasRect.Contains(x, y))
                 return AutoSelZone.Furniture;
         }
         else
         {
-            if (SelectionHandles.BarRect(aabb, dpi, FurnitureViewport).Contains(x, y))
+            if (SelectionBarCanvasRect.Contains(x, y))
                 return AutoSelZone.Furniture;
             if (CustomColorOpen
                 && SelectionHandles.PickContains(x, y, aabb, dpi, FurnitureViewport,
-                                                 SelectionHandles.SwatchCount))
+                                                 SelectionHandles.SwatchCount, SingleTextBoxSelection))
                 return AutoSelZone.Furniture;
             if (SelPanelOpen != SelPanel.None
                 && SelectionHandles.PanelContains(x, y, aabb, dpi, FurnitureViewport,
-                                                  SelPanelOpen, SelectionHandles.SwatchCount))
+                                                  SelPanelOpen, SelectionHandles.SwatchCount,
+                                                  SingleTextBoxSelection))
                 return AutoSelZone.Furniture;
         }
 
@@ -16708,7 +16799,11 @@ public partial class InkEngine
     /// </summary>
     private bool SelectionInteractiveAt(float canvasX, float canvasY)
         => Doc.Selected.Count > 0
+           && !_textBoxEditing
            && (Tool == Tool.Marquee
+               // 文本工具下，**已选中的文字框**也要给"移动十字"：未选中的文字仍是 I 字，
+               // 选中之后拖它走、双击编辑（2026-11-01 用户照 ClassIn 定的）。
+               || (Tool == Tool.Text && SingleTextBoxSelection)
                || ((IsShapeTool(Tool) || _dwellSelected || _touchSelected)
                    && AutoSelectionZoneAt(canvasX, canvasY) != AutoSelZone.None));
 
@@ -16726,7 +16821,9 @@ public partial class InkEngine
     /// </summary>
     internal bool SelectionBarShown
         => Doc.Selected.Count > 0
-           && (Tool == Tool.Marquee || IsShapeTool(Tool) || _dwellSelected || _touchSelected);
+           && !_textBoxEditing
+           && (Tool == Tool.Marquee || (Tool == Tool.Text && SingleTextBoxSelection)
+               || IsShapeTool(Tool) || _dwellSelected || _touchSelected);
 
     /// <summary>图形工具下那个自动选中的框：指针落在"家具 / 算动它 / 都不是"哪一档。</summary>
     private enum AutoSelZone
@@ -16781,8 +16878,7 @@ public partial class InkEngine
             if (BarDrawnCollapsed)
             {
                 // 收起态：只有一个圆钮，点它展开（框和手柄照旧，收起的只是"条"）。
-                var dot = SelectionHandles.BarCollapsedRect(aabb0, ui, FurnitureViewport);
-                if (dot.Contains(x, y))
+                if (SelectionDotCanvasRect.Contains(x, y))
                 {
                     SelBarCollapsed = false;
                     // **画完自动选中那个框**：点开这颗圆钮之后就成"常规那一套"了
@@ -16796,21 +16892,24 @@ public partial class InkEngine
             // "点它自己 = 不算点在外面"（点空白不取消，只有点卡片以外才取消）。
             else if (CustomColorOpen
                      && SelectionHandles.PickContains(x, y, aabb0, ui, FurnitureViewport,
-                                                      SelectionHandles.SwatchCount))
+                                                      SelectionHandles.SwatchCount,
+                                                      SingleTextBoxSelection))
             {
                 HandlePickClick(x, y);
                 return true;                        // 色板上的点击一律吃掉（包括空白处）
             }
             else if (SelPanelOpen != SelPanel.None
                      && SelectionHandles.PanelContains(x, y, aabb0, ui, FurnitureViewport,
-                                                       SelPanelOpen, SelectionHandles.SwatchCount))
+                                                       SelPanelOpen, SelectionHandles.SwatchCount,
+                                                       SingleTextBoxSelection))
             {
                 HandlePanelClick(x, y);
                 return true;                        // 面板上的点击一律吃掉（包括空白处）
             }
             else
             {
-                int btn0 = SelectionHandles.BarButtonAtIn(x, y, SelectionBarRect(aabb0), ui);
+                int btn0 = SelectionHandles.BarButtonAtIn(x, y, SelectionBarRect(aabb0), ui,
+                    SelectionHandles.BarButtonCountFor(SingleTextBoxSelection));
                 if (btn0 >= 0) { RunBarAction(btn0, frame, aabb0); return true; }
                 if (SelPanelOpen != SelPanel.None || CustomColorOpen)
                 {
@@ -17838,9 +17937,9 @@ public partial class InkEngine
     private void RunBarAction(int index, in SelectionFrame frame, in RectF aabb)
     {
         // 下标 ↔ 语义只在 SelBarButton 里写一遍（渲染、命中、动作三处共用它）。
-        var btn = (SelBarButton)index;
-        // 文本框把"翻转"两格换成字号 A- / A+；AI 题卡颜色固定，普通文本框可改字色。
-        bool textBoxOnly = Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.TextBox;
+        // 文本框是**七格**，第 1 格是字号；普通对象是十格，第 7/8 格才是翻转。
+        bool textBoxOnly = SingleTextBoxSelection;
+        var btn = SelectionHandles.BarButtonOf(index, textBoxOnly);
         if (textBoxOnly)
         {
             var tb = Doc.Selected[0].TextBox;
@@ -17850,8 +17949,6 @@ public partial class InkEngine
                 _dirty = true;
                 return;
             }
-            if (btn == SelBarButton.FlipH) { AdjustTextBoxFont(-1f); return; }
-            if (btn == SelBarButton.FlipV) { AdjustTextBoxFont(+1f); return; }
         }
         switch (btn)
         {
@@ -17877,6 +17974,12 @@ public partial class InkEngine
                 {
                     SelPanelOpen = SelPanel.Ink;
                 }
+                break;
+
+            case SelBarButton.FontSize:
+                // 只有文字条有这一格：开/关常用字号下拉（10/14/18/24/48/64）。
+                CloseCustomColor();
+                SelPanelOpen = SelPanelOpen == SelPanel.FontSize ? SelPanel.None : SelPanel.FontSize;
                 break;
 
             case SelBarButton.Lock:

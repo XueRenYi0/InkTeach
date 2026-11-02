@@ -173,8 +173,12 @@ internal static class InkSerializer
     /// v26（2026-10-30）：同一个 Kind 正式变成**通用文本框**。
     /// 在 v25 字段前面追加：角色（普通/ AI 题卡）、普通文本、高度、自动高度、字号。
     /// v25 的旧题卡读进来按 `Role = AiQuestion` 处理；普通文本框用 `Role = Normal`。
+    ///
+    /// v27（2026-11-02）：文本框追加一位 **AutoWidth**（是否还跟着字长自动变宽）。
+    /// v26 及以前没有这一位：普通文本框按自动宽迁移（老版本没有手动改宽这回事），
+    /// AI 题卡按固定宽；读端必须卡在 `version >= 27`。
     /// </summary>
-    public const int FormatVersion = 26;
+    public const int FormatVersion = 27;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -364,6 +368,8 @@ internal static class InkSerializer
                 w.Write(q.Answer ?? "");
                 w.Write(q.Analysis ?? "");
             }
+            // v27：是否仍处于"自动宽"（没手动拖过左右竖线/四角）。
+            w.Write((byte)(c.AutoWidth ? 1 : 0));
         }
     }
 
@@ -617,7 +623,11 @@ internal static class InkSerializer
             float unit = r.ReadSingle();
             c.Unit = float.IsFinite(unit) && unit >= 0.5f && unit <= 8f ? unit : 1f;
             float width = r.ReadSingle();
-            c.Width = float.IsFinite(width) && width >= 180f ? width : 560f * c.Unit;
+            float minW = c.Role == TextBoxRole.Normal ? 40f * c.Unit : 180f;
+            float fallbackW = c.Role == TextBoxRole.Normal ? 240f * c.Unit : 560f * c.Unit;
+            c.Width = float.IsFinite(width) && width >= 1f
+                ? MathF.Max(width, minW)
+                : fallbackW;
             c.ShowAnswers = r.ReadByte() != 0;
             int qn = r.ReadInt32();
             if (qn < 0 || qn > 200)
@@ -631,14 +641,19 @@ internal static class InkSerializer
                     Analysis = ReadString(r, 65536),
                 });
             }
+            // v27 起：普通文本记住"自动宽"状态。
+            // v26 及以前没有这个字段——那些文本框默认按**自动宽**迁移：老版本的
+            // 文本框没有"手动改宽"这回事，用户双击编辑时本来就期望它跟着字长。
+            if (version >= 27) c.AutoWidth = r.ReadByte() != 0;
+            else if (c.Role == TextBoxRole.Normal) c.AutoWidth = true;
             s.TextBox = c;
             c.Ink = s.Color;
             c.InvalidateLayout();
             _ = c.EnsureLayout();
             s.SyncTextBoxBounds();
-            // 老文件里普通文本框可能还是 AutoHeight；读进来按"已自适应过一次"处理，
-            // 之后由用户拖动，避免一改宽就自己长高。
-            if (c.Role == TextBoxRole.Normal) c.AutoHeight = false;
+            // 普通文本框：高度永远自动（2026-11-01 新规则）。
+            // 老文件里存的 false 一并迁移成 true；固定高/内部滚动只留给 AI 题卡。
+            if (c.Role == TextBoxRole.Normal) c.AutoHeight = true;
         }
 
         // ---- v13：抛物线的第二个点**换了含义**，老文件要迁移一次 ----

@@ -371,8 +371,17 @@ public interface IEngineCommands
 
     /// <summary>文本工具：改字号（选中文本框时改它；没选中时改下一次的默认值）。</summary>
     void AdjustTextFont(float delta);
-    /// <summary>文本工具：改文字颜色。选中文本框时改它，否则只改下一次的默认色。</summary>
+    /// <summary>文本工具：直接设**下一次输入**的默认字号（色带字号菜单用）。</summary>
+    void SetTextFont(float size);
+    /// <summary>
+    /// 文本工具：改**下一次输入**的默认色，并写回当前选中的文字色位
+    /// （取色板 / 最近色 / 屏幕吸管提交时调用）。
+    /// </summary>
     void SetTextColor(Color4 color);
+    /// <summary>选中文字色带的第 <paramref name="slot"/> 个色位（0..3），不改色位里的颜色。</summary>
+    void SelectTextSwatch(int slot);
+    /// <summary>打开文字取色板前记下要改的是哪个色位（取色板提交时写回这一格）。</summary>
+    void BeginTextColorPick(int slot);
     /// <summary>文本工具：结束当前文字编辑（色带上的「完成」和 Ctrl+Enter 走这里）。</summary>
     void CommitTextEdit();
 
@@ -726,6 +735,13 @@ public static class InkPalette
 
     /// <summary>荧光笔 5 档透明度，从淡到浓；第 3 档 0.32 是旧版手感。</summary>
     public static readonly float[] HighlighterOpacityLevels = { 0.15f, 0.22f, 0.32f, 0.45f, 0.60f };
+
+    /// <summary>
+    /// 文本框常用字号档（ClassIn 2026-11-01 实测的六档：10/14/18/24/48/64）。
+    /// **引擎和界面共用这一份**：色带字号菜单、文字操作条字号下拉都读它，
+    /// 各写一份迟早出现"色带里能选 64、操作条里没有"。
+    /// </summary>
+    public static readonly float[] TextFontSizes = { 10f, 14f, 18f, 24f, 48f, 64f };
 
     /// <summary>笔的色板。荧光笔用的是同一组基色，只把透明度调低。</summary>
     public static readonly (string Name, Color4 Color)[] Presets =
@@ -1112,10 +1128,18 @@ public readonly struct UiState
     /// <summary>荧光笔的最近自定义颜色（基色，不透明），最新的在前。</summary>
     public Color4[] RecentHighlighterColors { get; init; }
     public float LaserWidth { get; init; }
-    /// <summary>文本工具：当前字号（选中文本框时是它自己的，没选中时是下一次的默认值）。</summary>
+    /// <summary>
+    /// 文本工具：**下一次输入**的默认字号（选中文本框时**不**变成它的字号——
+    /// 当前选中文字的字号在文字操作条上改，色带永远只表态"下一段文字"）。
+    /// </summary>
     public float TextFontSize { get; init; }
-    /// <summary>文本工具：当前文字颜色（选中文本框时是它自己的，没选中时是默认值）。</summary>
+    /// <summary>文本工具：**下一次输入**的默认文字颜色（同上，选中文字改的是操作条）。</summary>
     public Color4 TextColor { get; init; }
+    /// <summary>
+    /// 文字色带的 4 个色位（红 / 黑 / 白 / 自定义），和笔一样各自独立保存。
+    /// 色带按宽度只取前 3 或 4 个；点已选中的色位再点一次 = 换这个色位的颜色。
+    /// </summary>
+    public Color4[] TextSwatchColors { get; init; }
     /// <summary>文本工具：正在编辑文字（界面据此显示「完成」按钮）。</summary>
     public bool TextBoxEditing { get; init; }
     /// <summary>

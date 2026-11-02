@@ -7133,9 +7133,36 @@ internal sealed class InkDocument
     {
         StructureChangedSinceRender = true;
         _grid.Remove(s);
-        s.Transform = s.Transform * m;
+
+        // **文本框的平移直接并进 Points，不记在 Transform 上**（2026-11-01）。
+        // 原因：文本框的输入/改宽/边缘夹取都按 Points[0] 当画布坐标；如果移动只改
+        // Transform，之后编辑还得把平移"烘焙"回去，而旧的移动撤销记录仍然按
+        // Transform 算，撤销/重做会越走越偏。移动一开始就写进 Points，transform
+        // 保持单位阵，两条路就统一了。
+        bool textMove = s.Kind == StrokeKind.TextBox && s.TextBox != null
+                     && IsPureTranslation(s.Transform) && IsPureTranslation(m);
+        if (textMove)
+        {
+            var cur = s.Transform;
+            var p0 = s.Points.Count > 0 ? s.Points[0] : default;
+            s.Transform = Matrix3x2.Identity;
+            s.SetTextBoxRect(
+                new Vector2(p0.X + cur.M31 + m.M31, p0.Y + cur.M32 + m.M32),
+                s.TextBox.Width, s.TextBox.Height);
+        }
+        else
+        {
+            s.Transform = s.Transform * m;
+        }
         _grid.Insert(s);
     }
+
+    /// <summary>只含平移（没有旋转/缩放）的矩阵。文本框移动可以用这个安全烘焙。</summary>
+    internal static bool IsPureTranslation(in Matrix3x2 m)
+        => MathF.Abs(m.M11 - 1f) < 1e-4f
+        && MathF.Abs(m.M22 - 1f) < 1e-4f
+        && MathF.Abs(m.M12) < 1e-4f
+        && MathF.Abs(m.M21) < 1e-4f;
 
     /// <summary>
     /// 改一条图形的**几何**（控制点），并把空间索引重摆。
@@ -7592,7 +7619,14 @@ internal sealed class InkDocument
             // **锁定的也不碰**（2026-09-16）：橡皮改的是内容，不是位置——
             // "锁了还能被擦掉"等于没锁。图像那条先例的同一个形状。
             if (s.Locked) continue;
-            if (s.IsShape)
+            if (s.Kind == StrokeKind.TextBox)
+            {
+                // **整笔橡皮点中文本框 = 删掉整个文本框**（用户 2026-11-01 定）：
+                // 文字不是墨，没有"擦掉半个字"这回事；要么整框消失（可撤销），
+                // 要么完全不碰（面积擦走 EraseRectAt，那边显式跳过 TextBox）。
+                if (!s.HitTestExact(x, y, radius)) continue;
+            }
+            else if (s.IsShape)
             {
                 // 图形的轮廓不是两个端点之间的线段，近似会偏，交给 Direct2D 精确算。
                 if (!s.HitTestExact(x, y, radius)) continue;

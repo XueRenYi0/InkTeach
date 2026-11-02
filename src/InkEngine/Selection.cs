@@ -128,6 +128,11 @@ internal enum SelBarButton
     FlipH = 7,
     FlipV = 8,
     Delete = 9,
+    /// <summary>
+    /// 文本框专用：字号（下拉常用档）。它只出现在**文字操作条**上，
+    /// 不挤进普通对象的十格；普通对象没有这一格。
+    /// </summary>
+    FontSize = 10,
 }
 
 /// <summary>
@@ -183,6 +188,8 @@ internal enum SelPanel
     Ink = 1,
     /// <summary>层级（挂在"层级"那一格下）。</summary>
     Layer = 2,
+    /// <summary>文字操作条的字号下拉（挂在"字号"那一格下）。</summary>
+    FontSize = 3,
     // 注：**没有"导出"面板了**。曾经有过一种（两格：PNG 透明底 / JPG 白底），
     // 是为了绕开"选不到 jpg"；那个 bug 的真因（覆盖层每秒抢层）修掉之后，
     // 用户 2026-09-17 说"这两个图标没用了"，于是删掉——点导出直接弹系统对话框，
@@ -839,6 +846,10 @@ internal static class SelectionHandles
     public static SelHandle HitTest(float canvasX, float canvasY, IReadOnlyList<Stroke> sel,
                                     in SelectionFrame f, float dpiScale)
     {
+        // 普通文本框：四个角 + 左右两条整高竖线；没有上下边、没有旋转。
+        if (PlainTextBox(sel, out _))
+            return HitTestPlainTextBox(canvasX, canvasY, f, dpiScale);
+
         if (ShapeEditable(sel, out var s))
         {
             float rad = HitRadiusLogical * dpiScale;            var p = new Vector2(canvasX, canvasY);
@@ -1627,7 +1638,67 @@ internal static class SelectionHandles
         return ((box.MaxY - box.MinY) < d, (box.MaxX - box.MinX) < d);
     }
 
-    /// <summary>按给定的选区坐标系做手柄命中判定。</summary>
+    /// <summary>单选一个“普通文本框”（不是 AI 题卡）。</summary>
+    public static bool PlainTextBox(IReadOnlyList<Stroke> sel, out Stroke stroke)
+    {
+        stroke = null;
+        if (sel == null || sel.Count != 1) return false;
+        var s = sel[0];
+        if (s == null || s.Kind != StrokeKind.TextBox) return false;
+        if (s.TextBox == null || s.TextBox.Role != TextBoxRole.Normal) return false;
+        stroke = s;
+        return true;
+    }
+
+    /// <summary>
+    /// 普通文本框的手柄：**四个角 + 左右两条整高竖线**。
+    /// 没有上下边、没有旋转柄；高度永远自动，所以不给“拖高”的入口。
+    /// 竖线整条都能拖——超长文本框不用去屏幕外找中点。
+    /// </summary>
+    public static SelHandle HitTestPlainTextBox(float canvasX, float canvasY,
+                                                in SelectionFrame f, float dpiScale)
+    {
+        var b = f.CanvasAabb;
+        float r = HitRadiusLogical * dpiScale;
+        var p = new Vector2(canvasX, canvasY);
+
+        Span<SelHandle> corners = stackalloc SelHandle[]
+        {
+            SelHandle.TopLeft, SelHandle.TopRight,
+            SelHandle.BottomLeft, SelHandle.BottomRight,
+        };
+        foreach (var h in corners)
+            if (Vector2.DistanceSquared(p, CanvasPosition(h, f, dpiScale)) <= r * r)
+                return h;
+
+        // 命中区向里外各让 10 逻辑像素；只压在左右内边距上，不盖住文字。
+        float bar = 10f * dpiScale;
+        if (canvasY >= b.MinY - bar && canvasY <= b.MaxY + bar)
+        {
+            bool left = MathF.Abs(canvasX - b.MinX) <= bar;
+            bool right = MathF.Abs(canvasX - b.MaxX) <= bar;
+            if (left && right) return canvasX < (b.MinX + b.MaxX) * 0.5f
+                ? SelHandle.Left : SelHandle.Right;
+            if (left) return SelHandle.Left;
+            if (right) return SelHandle.Right;
+        }
+        return SelHandle.None;
+    }
+
+    /// <summary>左右竖线的绘制矩形（视觉 6 逻辑像素宽，上下让开四角）。</summary>
+    public static RectF TextBoxBarRect(bool left, in RectF box, float dpiScale)
+    {
+        float w = 6f * dpiScale;
+        float inset = 8f * dpiScale;
+        float x = left ? box.MinX : box.MaxX;
+        float top = box.MinY + inset;
+        float bottom = box.MaxY - inset;
+        if (bottom < top) bottom = top;
+        return new RectF { MinX = x - w * 0.5f, MinY = top, MaxX = x + w * 0.5f, MaxY = bottom };
+    }
+
+    /// <summary>
+    /// 按给定的选区坐标系做手柄命中判定。</summary>
     public static SelHandle HitTest(float canvasX, float canvasY, in SelectionFrame f,
                                     float dpiScale, bool includeEdgeHandles = true,
                                     bool includeRotate = true)
@@ -1999,6 +2070,48 @@ internal static class SelectionHandles
     ///     选中之后就是不能再改朝向——这是用户的选择，不是缺功能。
     /// </summary>
     public const int BarButtonCount = 10;
+
+    /// <summary>
+    /// 文本框的操作条：**七格**（用户 2026-11-01 按 ClassIn 定的顺序）：
+    /// 收起 / 字号 / 颜色 / 锁定 / 层级 / 复制 / 删除。
+    ///
+    /// 为什么不复用普通对象的十格再"借两格当字号"：普通条里的导出、图库、翻转
+    /// 对纯文字要么无意义、要么会把条撑得比文字本身还长。单独一条七格，
+    /// **信息结构照 ClassIn，配色和图标仍用我们自己那套**。
+    /// </summary>
+    public const int TextBarButtonCount = 7;
+
+    private static readonly SelBarButton[] TextBarOrder =
+    {
+        SelBarButton.Collapse,
+        SelBarButton.FontSize,
+        SelBarButton.Color,
+        SelBarButton.Lock,
+        SelBarButton.Layer,
+        SelBarButton.Copy,
+        SelBarButton.Delete,
+    };
+
+    /// <summary>这一条有几格（文本框七格，其余十格）。</summary>
+    public static int BarButtonCountFor(bool textBar)
+        => textBar ? TextBarButtonCount : BarButtonCount;
+
+    /// <summary>第 <paramref name="i"/> 格在这条上是什么语义（顺序表只此一份）。</summary>
+    public static SelBarButton BarButtonOf(int i, bool textBar)
+    {
+        if (!textBar) return (SelBarButton)i;
+        return i >= 0 && i < TextBarOrder.Length ? TextBarOrder[i] : SelBarButton.Collapse;
+    }
+
+    /// <summary>某个语义在这条上的格子下标（挂面板时要用：文字条的"层级"是第 5 格，不是第 4 格）。</summary>
+    public static int BarIndexOf(SelBarButton button, bool textBar)
+    {
+        if (!textBar) return (int)button;
+        for (int i = 0; i < TextBarOrder.Length; i++)
+            if (TextBarOrder[i] == button) return i;
+        return 0;
+    }
+
     /// <summary>
     /// 操作条的高度 / 每格宽度 / 格间距（逻辑像素）。
     ///
@@ -2120,6 +2233,13 @@ internal static class SelectionHandles
     /// <summary>层级面板每一格的边长（两格并排）。</summary>
     public const float LayerCellLogical = 48f;
 
+    /// <summary>字号下拉：3 列 × 2 行的方格，格子边长 56（放得下 48/64 两位数字）。</summary>
+    public const int FontCellColumns = 3;
+    public const int FontCellRows = 2;
+    public const float FontCellLogical = 56f;
+    /// <summary>常用字号档数（与 <see cref="InkPalette.TextFontSizes"/> 同长）。</summary>
+    public const int FontPanelSizeCount = 6;
+
     /// <summary>滑条右端留给"笔尖预览点"的宽度（逻辑像素）。和主条那条滑条同一个语言：
     /// 右端一颗跟着值变大的点——粗细一眼看得见，不用读数字。</summary>
     public const float SliderTailLogical = 34f;
@@ -2158,11 +2278,12 @@ internal static class SelectionHandles
     /// 自定义取色板的外框：挂在墨迹面板旁边（右边放不下翻到左边），**底边对齐**——
     /// 离"自定义"那一格（色板末格）最近，眼睛不用跨半张面板找。
     /// </summary>
-    public static RectF CustomPanelRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
+    public static RectF CustomPanelRect(in RectF sel, float dpi, in RectF visible, int swatchCount,
+                                        bool textBar = false)
     {
         float w = (FloatPadLogical * 2 + PickSvLogical + FloatGapLogical + PickHueLogical) * dpi;
         float h = (FloatPadLogical * 2 + PickSvLogical + FloatGapLogical + PickPreviewLogical) * dpi;
-        var ink = PanelRect(sel, dpi, visible, swatchCount);
+        var ink = PanelRect(sel, dpi, visible, swatchCount, textBar);
         float gap = PanelGapLogical * dpi;
         float x = ink.MaxX + gap;
         float y = ink.MaxY - h;
@@ -2182,9 +2303,10 @@ internal static class SelectionHandles
     }
 
     /// <summary>取色板里饱和度/明度方块的矩形（画与命中同源）。</summary>
-    public static RectF PickSvRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
+    public static RectF PickSvRect(in RectF sel, float dpi, in RectF visible, int swatchCount,
+                                   bool textBar = false)
     {
-        var p = CustomPanelRect(sel, dpi, visible, swatchCount);
+        var p = CustomPanelRect(sel, dpi, visible, swatchCount, textBar);
         float pad = FloatPadLogical * dpi;
         return new RectF
         {
@@ -2194,9 +2316,10 @@ internal static class SelectionHandles
     }
 
     /// <summary>取色板里竖直色相条的矩形。</summary>
-    public static RectF PickHueRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
+    public static RectF PickHueRect(in RectF sel, float dpi, in RectF visible, int swatchCount,
+                                    bool textBar = false)
     {
-        var sv = PickSvRect(sel, dpi, visible, swatchCount);
+        var sv = PickSvRect(sel, dpi, visible, swatchCount, textBar);
         float gap = FloatGapLogical * dpi;
         return new RectF
         {
@@ -2206,31 +2329,34 @@ internal static class SelectionHandles
     }
 
     /// <summary>取色板底部"当前色预览"那一格（含原色／新色两块色片）。</summary>
-    public static RectF PickPreviewRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
+    public static RectF PickPreviewRect(in RectF sel, float dpi, in RectF visible, int swatchCount,
+                                        bool textBar = false)
     {
-        var sv = PickSvRect(sel, dpi, visible, swatchCount);
+        var sv = PickSvRect(sel, dpi, visible, swatchCount, textBar);
         float gap = FloatGapLogical * dpi;
         return new RectF
         {
             MinX = sv.MinX, MinY = sv.MaxY + gap,
-            MaxX = PickHueRect(sel, dpi, visible, swatchCount).MaxX, MaxY = sv.MaxY + gap + PickPreviewLogical * dpi,
+            MaxX = PickHueRect(sel, dpi, visible, swatchCount, textBar).MaxX,
+            MaxY = sv.MaxY + gap + PickPreviewLogical * dpi,
         };
     }
 
     /// <summary>点到取色板的哪一块了（<see cref="PickPart.Inside"/> = 卡片里、控件外）。</summary>
     public static PickPart PickPartAt(float x, float y, in RectF sel, float dpi, in RectF visible,
-                                      int swatchCount)
+                                      int swatchCount, bool textBar = false)
     {
-        if (!CustomPanelRect(sel, dpi, visible, swatchCount).Contains(x, y)) return PickPart.None;
-        if (PickSvRect(sel, dpi, visible, swatchCount).Contains(x, y)) return PickPart.Sv;
-        if (PickHueRect(sel, dpi, visible, swatchCount).Contains(x, y)) return PickPart.Hue;
+        if (!CustomPanelRect(sel, dpi, visible, swatchCount, textBar).Contains(x, y))
+            return PickPart.None;
+        if (PickSvRect(sel, dpi, visible, swatchCount, textBar).Contains(x, y)) return PickPart.Sv;
+        if (PickHueRect(sel, dpi, visible, swatchCount, textBar).Contains(x, y)) return PickPart.Hue;
         return PickPart.Inside;
     }
 
     /// <summary>点在不在取色板这张卡片里（"点外面 = 取消"那条判据用它）。</summary>
     public static bool PickContains(float x, float y, in RectF sel, float dpi, in RectF visible,
-                                    int swatchCount)
-        => CustomPanelRect(sel, dpi, visible, swatchCount).Contains(x, y);
+                                    int swatchCount, bool textBar = false)
+        => CustomPanelRect(sel, dpi, visible, swatchCount, textBar).Contains(x, y);
 
     /// <summary>色板里有几个色片（引擎侧的色板表长度）。</summary>
     public static int SwatchCount => InkPalette.SelectionSwatches.Length;
@@ -2258,11 +2384,14 @@ internal static class SelectionHandles
     }
 
     /// <summary>面板的高度：滑条行 + 线型行 + 色板若干行 + 内边距（画与命中同源）。</summary>
-    public static float PanelHeightLogical(int swatchCount)
+    public static float PanelHeightLogical(int swatchCount, bool textBar = false)
     {
         int rows = (swatchCount + SwatchColumns - 1) / SwatchColumns;
         float gridH = rows * SwatchSizeLogical + MathF.Max(0, rows - 1) * FloatGapLogical;
-        return FloatPadLogical * 2 + SliderRowLogical + StyleRowLogical + gridH;
+        // 文字的颜色面板**只有色板**：粗细和线型对文字没有意义，不画也不给点。
+        return FloatPadLogical * 2
+             + (textBar ? 0f : SliderRowLogical + StyleRowLogical)
+             + gridH;
     }
 
     /// <summary>
@@ -2272,14 +2401,15 @@ internal static class SelectionHandles
     /// 注意它比条高一截（240 逻辑像素量级），比条更容易出屏——所以夹取规则比 BarRect
     /// 多一条"翻面"，不能照抄条形那套"给下限、不翻面"。
     /// </summary>
-    public static RectF PanelRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
+    public static RectF PanelRect(in RectF sel, float dpi, in RectF visible, int swatchCount,
+                                  bool textBar = false)
     {
         float w = FloatPadLogical * 2
                 + SwatchColumns * SwatchSizeLogical + (SwatchColumns - 1) * FloatGapLogical;
-        float h = PanelHeightLogical(swatchCount) * dpi;
+        float h = PanelHeightLogical(swatchCount, textBar) * dpi;
         w *= dpi;
 
-        var bar = BarRect(sel, dpi, visible);
+        var bar = BarRect(sel, dpi, visible, BarButtonCountFor(textBar));
         float x = bar.MinX;                                       // 左对齐条（参考图）
         float y = bar.MaxY + PanelGapLogical * dpi;
 
@@ -2303,21 +2433,69 @@ internal static class SelectionHandles
     }
 
     /// <summary>层级小面板的矩形（两格并排，贴在"层级"那一格的下面）。</summary>
-    public static RectF LayerPanelRect(in RectF sel, float dpi, in RectF visible)
-        => PanelBelow((int)SelBarButton.Layer, LayerCellLogical, LayerCellLogical, 2, sel, dpi, visible);
+    public static RectF LayerPanelRect(in RectF sel, float dpi, in RectF visible, bool textBar = false)
+        => PanelBelow(BarIndexOf(SelBarButton.Layer, textBar), LayerCellLogical, LayerCellLogical,
+                      2, sel, dpi, visible, textBar);
+
+    /// <summary>
+    /// 文字操作条的字号下拉：**三列两行**的常用字号（10/14/18/24/48/64）。
+    /// 挂在「字号」那一格的下面；下方放不下就翻到框上方，再放不下夹进可见区。
+    ///
+    /// 和操作条本身"不翻面"是两件事：条永远在下方、夹在屏幕底；
+    /// 弹出菜单比条高，翻面是为了不被屏幕底裁掉（颜色/层级面板早就是这么做的）。
+    /// </summary>
+    public static RectF FontPanelRect(in RectF sel, float dpi, in RectF visible)
+    {
+        float w = (FloatPadLogical * 2 + FontCellColumns * FontCellLogical
+                 + (FontCellColumns - 1) * FloatGapLogical) * dpi;
+        float h = (FloatPadLogical * 2 + FontCellRows * FontCellLogical
+                 + (FontCellRows - 1) * FloatGapLogical) * dpi;
+        var bar = BarRect(sel, dpi, visible, TextBarButtonCount);
+        var btn = BarButtonRectIn(bar, BarIndexOf(SelBarButton.FontSize, true), dpi);
+
+        float x = (btn.MinX + btn.MaxX) * 0.5f - w * 0.5f;
+        float y = bar.MaxY + PanelGapLogical * dpi;
+
+        if (!visible.IsEmpty)
+        {
+            float margin = BarScreenPaddingLogical * dpi;
+            x = Math.Clamp(x, visible.MinX + margin,
+                           MathF.Max(visible.MinX + margin, visible.MaxX - margin - w));
+            float top = visible.MinY + margin;
+            float bottom = visible.MaxY - margin;
+            if (y + h > bottom)
+            {
+                float above = sel.MinY - PanelGapLogical * dpi - h;
+                y = above >= top ? above : MathF.Max(top, bottom - h);
+            }
+            y = Math.Clamp(y, top, MathF.Max(top, bottom - h));
+        }
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    /// <summary>字号下拉里第 i 格（0 = 10，1 = 14 …，按三列两行排）。</summary>
+    public static RectF FontPanelCellRect(int i, in RectF sel, float dpi, in RectF visible)
+    {
+        var p = FontPanelRect(sel, dpi, visible);
+        int col = i % FontCellColumns, row = i / FontCellColumns;
+        float cell = FontCellLogical * dpi, gap = FloatGapLogical * dpi, pad = FloatPadLogical * dpi;
+        float x = p.MinX + pad + col * (cell + gap);
+        float y = p.MinY + pad + row * (cell + gap);
+        return new RectF { MinX = x, MinY = y, MaxX = x + cell, MaxY = y + cell };
+    }
 
     /// <summary>
     /// "挂在操作条某个按钮下面的小面板"——层级和导出共用这一份几何：
     /// 水平对准按钮中心、垂直贴在条下方；下方放不下就翻到选区上方；最后夹进可见区。
     /// </summary>
-    private static RectF PanelBelow(int button, float cellLogical, float cellHeightLogical, int cells,
-                                    in RectF sel, float dpi, in RectF visible)
+    private static RectF PanelBelow(int buttonIndex, float cellLogical, float cellHeightLogical, int cells,
+                                    in RectF sel, float dpi, in RectF visible, bool textBar = false)
     {
         float w = (cellLogical * cells + FloatGapLogical * (cells - 1)
                  + FloatPadLogical * 2) * dpi;
         float h = (cellHeightLogical + FloatPadLogical * 2) * dpi;
-        var bar = BarRect(sel, dpi, visible);
-        var btn = BarButtonRect(button, sel, dpi, visible);
+        var bar = BarRect(sel, dpi, visible, BarButtonCountFor(textBar));
+        var btn = BarButtonRectIn(bar, buttonIndex, dpi);
 
         float x = btn.MinX + (btn.MaxX - btn.MinX) * 0.5f - w * 0.5f;
         float y = bar.MaxY + PanelGapLogical * dpi;
@@ -2339,18 +2517,20 @@ internal static class SelectionHandles
     }
 
     /// <summary>层级面板里第 i 格（0 = 置顶，1 = 置底）。</summary>
-    public static RectF LayerCellRect(int i, in RectF sel, float dpi, in RectF visible)
+    public static RectF LayerCellRect(int i, in RectF sel, float dpi, in RectF visible,
+                                      bool textBar = false)
     {
-        var p = LayerPanelRect(sel, dpi, visible);
+        var p = LayerPanelRect(sel, dpi, visible, textBar);
         float pad = FloatPadLogical * dpi, cell = LayerCellLogical * dpi;
         float x = p.MinX + pad + i * (cell + FloatGapLogical * dpi);
         return new RectF { MinX = x, MinY = p.MinY + pad, MaxX = x + cell, MaxY = p.MinY + pad + cell };
     }
 
     /// <summary>颜色面板里第 i 个色片。</summary>
-    public static RectF SwatchRect(int i, in RectF sel, float dpi, in RectF visible, int swatchCount)
+    public static RectF SwatchRect(int i, in RectF sel, float dpi, in RectF visible, int swatchCount,
+                                   bool textBar = false)
     {
-        var p = PanelRect(sel, dpi, visible, swatchCount);
+        var p = PanelRect(sel, dpi, visible, swatchCount, textBar);
         float pad = FloatPadLogical * dpi;
         float size = SwatchSizeLogical * dpi, gap = FloatGapLogical * dpi;
         float gridTop = p.MaxY - pad - ((swatchCount + SwatchColumns - 1) / SwatchColumns) * size
@@ -2362,9 +2542,11 @@ internal static class SelectionHandles
     }
 
     /// <summary>颜色面板里"粗细滑条"那一行的矩形（行高见 <see cref="SliderRowLogical"/>）。</summary>
-    public static RectF SliderRect(in RectF sel, float dpi, in RectF visible, int swatchCount)
+    public static RectF SliderRect(in RectF sel, float dpi, in RectF visible, int swatchCount,
+                                   bool textBar = false)
     {
-        var p = PanelRect(sel, dpi, visible, swatchCount);
+        if (textBar) return RectF.Empty;
+        var p = PanelRect(sel, dpi, visible, swatchCount, textBar);
         float pad = FloatPadLogical * dpi;
         return new RectF
         {
@@ -2381,9 +2563,11 @@ internal static class SelectionHandles
     /// 这一行原来是 2 格（实线/虚线）的占位；2026-09-19 接底层时扩成 3 格。
     /// 格宽按"面板内宽 ÷ 格数"平分，以后再加档位只改 <see cref="StyleCellCount"/>。
     /// </summary>
-    public static RectF StyleCellRect(int i, in RectF sel, float dpi, in RectF visible, int swatchCount)
+    public static RectF StyleCellRect(int i, in RectF sel, float dpi, in RectF visible, int swatchCount,
+                                      bool textBar = false)
     {
-        var p = PanelRect(sel, dpi, visible, swatchCount);
+        if (textBar) return RectF.Empty;
+        var p = PanelRect(sel, dpi, visible, swatchCount, textBar);
         float pad = FloatPadLogical * dpi;
         float gap = FloatGapLogical * dpi;
         float rowTop = p.MinY + pad + SliderRowLogical * dpi;
@@ -2425,6 +2609,8 @@ internal static class SelectionHandles
         SwatchBase,     // + i
         LayerFront,
         LayerBack,
+        /// <summary>字号下拉的格子（+ i，0..5）。值刻意离 SwatchBase 远一点，避免区间重叠。</summary>
+        FontBase = 20,
     }
 
     /// <summary>
@@ -2432,40 +2618,53 @@ internal static class SelectionHandles
     /// <see cref="PanelContains"/> 区分"点在外面（该收起面板）"和"点在面板上（别收起）"。
     /// </summary>
     public static PanelPart PanelPartAt(float x, float y, in RectF sel, float dpi, in RectF visible,
-                                        SelPanel panel, int swatchCount)
+                                        SelPanel panel, int swatchCount, bool textBar = false)
     {
+        if (panel == SelPanel.FontSize && !textBar) return PanelPart.None;
         if (panel == SelPanel.Ink)
         {
-            var slider = SliderRect(sel, dpi, visible, swatchCount);
-            if (slider.Contains(x, y)) return PanelPart.Slider;
-            for (int i = 0; i < StyleCellCount; i++)
+            if (!textBar)
             {
-                if (!StyleCellRect(i, sel, dpi, visible, swatchCount).Contains(x, y)) continue;
-                return i switch
+                var slider = SliderRect(sel, dpi, visible, swatchCount);
+                if (slider.Contains(x, y)) return PanelPart.Slider;
+                for (int i = 0; i < StyleCellCount; i++)
                 {
-                    1 => PanelPart.StyleDashed,
-                    2 => PanelPart.StyleDotted,
-                    _ => PanelPart.StyleSolid,
-                };
+                    if (!StyleCellRect(i, sel, dpi, visible, swatchCount).Contains(x, y)) continue;
+                    return i switch
+                    {
+                        1 => PanelPart.StyleDashed,
+                        2 => PanelPart.StyleDotted,
+                        _ => PanelPart.StyleSolid,
+                    };
+                }
             }
             for (int i = 0; i < swatchCount; i++)
-                if (SwatchRect(i, sel, dpi, visible, swatchCount).Contains(x, y))
+                if (SwatchRect(i, sel, dpi, visible, swatchCount, textBar).Contains(x, y))
                     return PanelPart.SwatchBase + i;
         }
         else if (panel == SelPanel.Layer)
         {
-            if (LayerCellRect(0, sel, dpi, visible).Contains(x, y)) return PanelPart.LayerFront;
-            if (LayerCellRect(1, sel, dpi, visible).Contains(x, y)) return PanelPart.LayerBack;
+            if (LayerCellRect(0, sel, dpi, visible, textBar).Contains(x, y)) return PanelPart.LayerFront;
+            if (LayerCellRect(1, sel, dpi, visible, textBar).Contains(x, y)) return PanelPart.LayerBack;
+        }
+        else if (panel == SelPanel.FontSize)
+        {
+            for (int i = 0; i < FontPanelSizeCount; i++)
+                if (FontPanelCellRect(i, sel, dpi, visible).Contains(x, y))
+                    return (PanelPart)((int)PanelPart.FontBase + i);
         }
         return PanelPart.None;
     }
 
     /// <summary>点在不在（当前这个）面板的卡片里面。</summary>
     public static bool PanelContains(float x, float y, in RectF sel, float dpi, in RectF visible,
-                                     SelPanel panel, int swatchCount)
+                                     SelPanel panel, int swatchCount, bool textBar = false)
     {
-        if (panel == SelPanel.Ink) return PanelRect(sel, dpi, visible, swatchCount).Contains(x, y);
-        if (panel == SelPanel.Layer) return LayerPanelRect(sel, dpi, visible).Contains(x, y);
+        if (panel == SelPanel.FontSize && !textBar) return false;
+        if (panel == SelPanel.Ink)
+            return PanelRect(sel, dpi, visible, swatchCount, textBar).Contains(x, y);
+        if (panel == SelPanel.Layer) return LayerPanelRect(sel, dpi, visible, textBar).Contains(x, y);
+        if (panel == SelPanel.FontSize) return FontPanelRect(sel, dpi, visible).Contains(x, y);
         return false;
     }
 
@@ -2514,13 +2713,14 @@ internal static class SelectionHandles
     /// **渲染和命中必须调这一个函数**（分开写迟早差几个像素，表现就是"看得见点不中"）。
     /// 夹取规则只有两条：横向夹在可见区域内；纵向上边不越顶、**下边不低于下限**。
     /// </summary>
-    public static RectF BarRect(in RectF sel, float dpi, in RectF visible)
+    public static RectF BarRect(in RectF sel, float dpi, in RectF visible,
+                                int count = BarButtonCount)
     {
         float btnW = BarButtonWidthLogical * dpi;
         float h = BarHeightLogical * dpi;
         float pad = FloatPadLogical * dpi;
         float gap = BarGapLogical * dpi;
-        float w = pad * 2 + BarButtonCount * btnW + (BarButtonCount - 1) * gap;
+        float w = pad * 2 + count * btnW + MathF.Max(0, count - 1) * gap;
 
         float x = (sel.MinX + sel.MaxX) * 0.5f - w * 0.5f;
         float y = sel.MaxY + BarOffsetLogical * dpi;
@@ -2541,31 +2741,12 @@ internal static class SelectionHandles
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
     }
 
-    /// <summary>
-    /// 文本框专用：下方放不下时**翻到框上方**，避免操作条压住正在看的文字。
-    ///
-    /// 普通对象仍走 <see cref="BarRect"/> 的"给下限、不翻面"规则；
-    /// 只有文本框（内容会一直长到条底下）才需要这条兜底。
-    /// 上方也放不下时保持原样，条仍然可见、可点。
-    /// </summary>
-    public static RectF BarRectForTextBox(in RectF sel, float dpi, in RectF visible)
-    {
-        var bar = BarRect(sel, dpi, visible);
-        if (visible.IsEmpty || bar.MinY >= sel.MaxY - 0.5f) return bar;
-
-        float gap = BarOffsetLogical * dpi;
-        float h = bar.MaxY - bar.MinY;
-        float top = visible.MinY + BarScreenPaddingLogical * dpi;
-        float y = sel.MinY - gap - h;
-        if (y < top) return bar;
-        return new RectF { MinX = bar.MinX, MinY = y, MaxX = bar.MaxX, MaxY = y + h };
-    }
-
     /// <summary>第 i 个按钮的矩形（i 从 0 起）。</summary>
-    public static RectF BarButtonRect(int i, in RectF sel, float dpi, in RectF visible)
-        => BarButtonRectIn(BarRect(sel, dpi, visible), i, dpi);
+    public static RectF BarButtonRect(int i, in RectF sel, float dpi, in RectF visible,
+                                      int count = BarButtonCount)
+        => BarButtonRectIn(BarRect(sel, dpi, visible, count), i, dpi);
 
-    /// <summary>按已算好的操作条矩形取第 i 格；文本框翻面后画和命中必须共用这一份。</summary>
+    /// <summary>按已算好的操作条矩形取第 i 格；画和命中必须共用这一份。</summary>
     public static RectF BarButtonRectIn(in RectF bar, int i, float dpi)
     {
         float btnW = BarButtonWidthLogical * dpi;
@@ -2576,14 +2757,16 @@ internal static class SelectionHandles
     }
 
     /// <summary>点到哪个按钮上了。返回 -1 表示没点到操作条。</summary>
-    public static int BarButtonAt(float x, float y, in RectF sel, float dpi, in RectF visible)
-        => BarButtonAtIn(x, y, BarRect(sel, dpi, visible), dpi);
+    public static int BarButtonAt(float x, float y, in RectF sel, float dpi, in RectF visible,
+                                  int count = BarButtonCount)
+        => BarButtonAtIn(x, y, BarRect(sel, dpi, visible, count), dpi, count);
 
-    /// <summary>按已算好的操作条矩形做命中；文本框翻面后必须和画共用这一份。</summary>
-    public static int BarButtonAtIn(float x, float y, in RectF bar, float dpi)
+    /// <summary>按已算好的操作条矩形做命中；画和命中必须共用这一份。</summary>
+    public static int BarButtonAtIn(float x, float y, in RectF bar, float dpi,
+                                    int count = BarButtonCount)
     {
         if (x < bar.MinX || x > bar.MaxX || y < bar.MinY || y > bar.MaxY) return -1;
-        for (int i = 0; i < BarButtonCount; i++)
+        for (int i = 0; i < count; i++)
         {
             var b = BarButtonRectIn(bar, i, dpi);
             if (x >= b.MinX && x <= b.MaxX) return i;

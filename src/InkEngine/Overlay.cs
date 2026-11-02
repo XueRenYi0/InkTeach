@@ -3403,27 +3403,29 @@ internal sealed partial class OverlayWindow : IDisposable
             // **余量 = 4 ＋ 投影最远伸出多少**：操作条现在带投影（主题给的），
             // 只放 4 像素的话投影会被脏区切掉、在屏幕上留一条印子。
             float cardPad = (4f + app.FloatingTheme.ShadowReachLogical) * dpi;
-            var barRect = app.Doc.Selected.Count == 1 && app.Doc.Selected[0].Kind == StrokeKind.TextBox
-                          && app.SelPanelOpen == SelPanel.None && !app.CustomColorOpen
-                ? SelectionHandles.BarRectForTextBox(sb, dpi, app.FurnitureViewport)
-                : SelectionHandles.BarRect(sb, dpi, app.FurnitureViewport);
-            r.Add(CanvasRectToWindow(barRect.Inflate(cardPad)));
+            r.Add(CanvasRectToWindow(app.SelectionBarCanvasRect.Inflate(cardPad)));
 
             // 收起态的圆钮 / 打开的面板 / 提示条：都是"每帧都在变"的浮动层，
             // 漏一块就在屏幕上留一块擦不掉的残影（这条踩过好几次了）。
-            r.Add(CanvasRectToWindow(SelectionHandles.BarCollapsedRect(sb, dpi, app.FurnitureViewport).Inflate(cardPad)));
+            r.Add(CanvasRectToWindow(app.SelectionDotCanvasRect.Inflate(cardPad)));
             if (app.SelPanelOpen == SelPanel.Ink)
             {
                 r.Add(CanvasRectToWindow(SelectionHandles
-                    .PanelRect(sb, dpi, app.FurnitureViewport, SelectionHandles.SwatchCount)
+                    .PanelRect(sb, dpi, app.FurnitureViewport, SelectionHandles.SwatchCount,
+                               app.SingleTextBoxSelection)
                     .Inflate(cardPad + 2f * dpi)));
                 if (app.CustomColorOpen)
                     r.Add(CanvasRectToWindow(SelectionHandles
-                        .CustomPanelRect(sb, dpi, app.FurnitureViewport, SelectionHandles.SwatchCount)
+                        .CustomPanelRect(sb, dpi, app.FurnitureViewport, SelectionHandles.SwatchCount,
+                                         app.SingleTextBoxSelection)
                         .Inflate(cardPad + 2f * dpi)));
             }
             else if (app.SelPanelOpen == SelPanel.Layer)
-                r.Add(CanvasRectToWindow(SelectionHandles.LayerPanelRect(sb, dpi, app.FurnitureViewport)
+                r.Add(CanvasRectToWindow(SelectionHandles.LayerPanelRect(sb, dpi, app.FurnitureViewport,
+                        app.SingleTextBoxSelection)
+                    .Inflate(cardPad + 2f * dpi)));
+            else if (app.SelPanelOpen == SelPanel.FontSize && app.SingleTextBoxSelection)
+                r.Add(CanvasRectToWindow(SelectionHandles.FontPanelRect(sb, dpi, app.FurnitureViewport)
                     .Inflate(cardPad + 2f * dpi)));
 
             // 旋转读数标签贴在旋转手柄外侧，比选中框本身还高出去一截，
@@ -3827,6 +3829,11 @@ internal sealed partial class OverlayWindow : IDisposable
         // 屏幕只剩下层程序 + 我们的面板（墨迹在 RasterizeTile 里同一条规矩）。
         if (app.PassThrough) return;
 
+        // **编辑文字时选中框、手柄、操作条全部藏起来**（2026-11-01 用户照 ClassIn 定）：
+        // 此刻屏幕上只该有"文字 + 编辑光标 + 很淡的框"，再多一圈蓝框会让人分不清
+        // 自己在编辑还是在选对象。提交后 `TextBoxEditing` 落回 false，框自己回来。
+        if (app.TextBoxEditing) return;
+
         var sel = app.Doc.Selected;
         if (sel.Count == 0) return;
 
@@ -3846,6 +3853,8 @@ internal sealed partial class OverlayWindow : IDisposable
         // AI 题卡走"文字对象"那一档：只给选中框 + 框内拖动 + 右边缘改宽，
         // 不给通用八手柄（会把字拉变形），也不给旋转柄。
         bool cardLike = sel.Count == 1 && sel[0].Kind == StrokeKind.TextBox;
+        // 普通文本框：四个角 + 左右两条整高竖线；没有上下边/旋转。
+        bool plainTextBox = SelectionHandles.PlainTextBox(sel, out _);
 
         // **这一帧要画几个"定义元素手柄"**（0 = 一个都没有）。
         //
@@ -3964,6 +3973,29 @@ internal sealed partial class OverlayWindow : IDisposable
                     DrawHandleSquare(SelectionHandles.ShapeHandleCanvasPosition(shapeStroke, shapeHandles[i]),
                                      hs, radius, white);
             }
+            else if (plainTextBox)
+            {
+                // 四个角：等比放大/缩小字号。
+                Span<SelHandle> corners = stackalloc SelHandle[]
+                {
+                    SelHandle.TopLeft, SelHandle.TopRight,
+                    SelHandle.BottomLeft, SelHandle.BottomRight,
+                };
+                foreach (var h in corners)
+                    DrawHandleSquare(SelectionHandles.CanvasPosition(h, frame, dpi), hs, radius, white);
+
+                // 左右两条整高竖线：整条都能拖宽，超长文本框也不用找中点。
+                var aabb = frame.CanvasAabb;
+                for (int side = 0; side < 2; side++)
+                {
+                    var bar = SelectionHandles.TextBoxBarRect(side == 0, aabb, dpi);
+                    var rr = new RoundedRectangle(
+                        new Vortice.RawRectF(bar.MinX, bar.MinY, bar.MaxX, bar.MaxY),
+                        3f * dpi, 3f * dpi);
+                    _ctx.FillRoundedRectangle(rr, white);
+                    _ctx.DrawRoundedRectangle(rr, _scratch, 1.6f * dpi);
+                }
+            }
             else
             {
                 Span<SelHandle> all = stackalloc SelHandle[]
@@ -4003,6 +4035,8 @@ internal sealed partial class OverlayWindow : IDisposable
         {
             if (app.SelPanelOpen == SelPanel.Ink) DrawInkPanel(app, b);
             else if (app.SelPanelOpen == SelPanel.Layer) DrawLayerPanel(app, b);
+            else if (app.SelPanelOpen == SelPanel.FontSize && app.SingleTextBoxSelection)
+                DrawFontPanel(app, b);
             // 自定义取色板挂在墨迹面板旁边（画在面板之后 = 压在它上面）。
             // 它只在墨迹面板开着时才有意义（面板一关，子面板由引擎一起清掉）。
             if (app.CustomColorOpen && app.SelPanelOpen == SelPanel.Ink) DrawPickPanel(app, b);
@@ -4956,15 +4990,13 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawSelectionBar(InkEngine app, in RectF sel)
     {
-        var visible = app.FurnitureViewport;
         float dpi = app.UiUnit;
-        bool textBoxSel = app.Doc.Selected.Count == 1
-                          && app.Doc.Selected[0].Kind == StrokeKind.TextBox;
+        bool textBoxSel = app.SingleTextBoxSelection;
         // 布局从 SelectionHandles 取，与命中判定同源：分开写迟早差几个像素，
         // 表现就是"看得见按钮却点不中"。
-        var rect = textBoxSel && app.SelPanelOpen == SelPanel.None && !app.CustomColorOpen
-            ? SelectionHandles.BarRectForTextBox(sel, dpi, visible)
-            : SelectionHandles.BarRect(sel, dpi, visible);
+        int barCount = SelectionHandles.BarButtonCountFor(textBoxSel);
+        // 用引擎的画布缓存：滚动时操作条跟着对象走，不会粘在屏幕下沿。
+        var rect = app.SelectionBarCanvasRect;
         // 圆角**用界面那套令牌**（UiTheme.CornerRadius = 10），不自己发明一个胶囊：
         // 工具条、操作条、面板三样东西的圆角必须是同一个数，看着才是一家的。
         float radius = MathF.Min(app.FloatingTheme.CornerRadius * dpi, (rect.MaxY - rect.MinY) * 0.5f);
@@ -4975,13 +5007,13 @@ internal sealed partial class OverlayWindow : IDisposable
         DrawPanelCard(app, rect, radius, dpi);
         var theme = app.FloatingTheme;
 
-        const int n = SelectionHandles.BarButtonCount;
+        int n = barCount;
         float glyphBox = SelectionHandles.BarIconBoxLogical * dpi;   // 图标框比字形大一点
 
         for (int i = 0; i < n; i++)
         {
             var btn = SelectionHandles.BarButtonRectIn(rect, i, dpi);
-            var kind = (SelBarButton)i;
+            var kind = SelectionHandles.BarButtonOf(i, textBoxSel);
             bool hot = app.SelBarHover == i;
             bool active = IsBarButtonActive(app, kind);
             bool danger = kind == SelBarButton.Delete && hot;
@@ -5025,14 +5057,22 @@ internal sealed partial class OverlayWindow : IDisposable
                     DrawIcon(IsSelectionLocked(app) ? IconPaths.lockClosed : IconPaths.unlock,
                              cx - glyphBox * 0.5f, cy - glyphBox * 0.5f, glyphBox, iconBrush);
                     break;
-                case SelBarButton.FlipH or SelBarButton.FlipV when textBoxSel:
+                case SelBarButton.FontSize:
                 {
-                    // 文本框把"翻转"两格换成字号 A- / A+（图片的翻转对文字没意义）。
-                    string glyph = kind == SelBarButton.FlipH ? "A−" : "A+";
-                    var fmt = AiTextFormat(16f * dpi, true, true);
+                    // 文字条的第 2 格：当前字号 + 下拉小箭头（点开是 10/14/18/24/48/64）。
+                    float fs = app.Doc.Selected.Count == 1
+                        ? app.Doc.Selected[0].TextBox?.FontSize ?? 18f : 18f;
+                    string glyph = fs.ToString("F0");
+                    var fmt = AiTextFormat(14f * dpi, true, true);
+                    float arrow = 9f * dpi;
+                    float textW = btn.MaxX - btn.MinX - arrow - 2f * dpi;
                     _ctx.DrawText(glyph, fmt,
-                        new Rect(btn.MinX, btn.MinY, btn.MaxX - btn.MinX, btn.MaxY - btn.MinY),
-                        iconBrush);
+                        new Rect(btn.MinX - arrow * 0.25f, btn.MinY,
+                                 textW, btn.MaxY - btn.MinY), iconBrush);
+                    var chev = IconPaths.chevronDown;
+                    float chevX = btn.MaxX - arrow - 2f * dpi;
+                    float chevY = btn.MinY + (btn.MaxY - btn.MinY) * 0.5f;
+                    DrawIcon(chev, chevX, chevY - arrow * 0.5f, arrow, iconBrush);
                     break;
                 }
                 case SelBarButton.Library:
@@ -5094,6 +5134,7 @@ internal sealed partial class OverlayWindow : IDisposable
     {
         SelBarButton.Color => app.SelPanelOpen == SelPanel.Ink,
         SelBarButton.Layer => app.SelPanelOpen == SelPanel.Layer,
+        SelBarButton.FontSize => app.SelPanelOpen == SelPanel.FontSize,
         _ => false,
     };
 
@@ -5160,8 +5201,9 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawCollapsedDot(InkEngine app, in RectF sel)
     {
+        _ = sel;
         float dpi = app.UiUnit;
-        var r = SelectionHandles.BarCollapsedRect(sel, dpi, app.FurnitureViewport);
+        var r = app.SelectionDotCanvasRect;
         float d = r.MaxX - r.MinX;
         var c = new Vector2((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
 
@@ -5246,13 +5288,17 @@ internal sealed partial class OverlayWindow : IDisposable
     {
         float dpi = app.UiUnit;
         int sc = SelectionHandles.SwatchCount;
+        bool textBar = app.SingleTextBoxSelection;
         var th = app.FloatingTheme;
-        var p = SelectionHandles.PanelRect(sel, dpi, app.FurnitureViewport, sc);
+        var p = SelectionHandles.PanelRect(sel, dpi, app.FurnitureViewport, sc, textBar);
         // 圆角用界面推上来的主题令牌（= InkUi.Tokens.FloatingCorner 10），
         // 三处浮层同一个数——以前这两张面板各写了一个 10f 字面量。
         DrawPanelCard(app, p, th.CornerRadius * dpi, dpi);
 
         // ---- ① 粗细滑条（连续；拖动实时数值；右端笔尖预览）----
+        // 文字的面板只有色板：粗细对文字没有意义。
+        if (!textBar)
+        {
         var slider = SelectionHandles.SliderRect(sel, dpi, app.FurnitureViewport, sc);
         var (tx0, tx1) = SelectionHandles.SliderTrackRange(sel, dpi, app.FurnitureViewport, sc);
         int steps = app.SliderStepCount();
@@ -5322,10 +5368,13 @@ internal sealed partial class OverlayWindow : IDisposable
                           new Rect(tx - tw * 0.5f, cy - 19f * dpi, tw, 16f * dpi), _scratch);
         }
 
+        }
+
         // ---- ②③ 线型：实线 / 虚线 / 点线 ----
         // 当前是哪一档**由 SelectionHandles 统一算**（见 DashOfSelection 的注释：
         // 画和自检必须读同一份，不然"面板认不认得当前档"这件事自己验不了自己）。
         var curDash = SelectionHandles.DashOfSelection(app.Doc.Selected);
+        if (!textBar)
         for (int i = 0; i < SelectionHandles.StyleCellCount; i++)
         {
             var cell = SelectionHandles.StyleCellRect(i, sel, dpi, app.FurnitureViewport, sc);
@@ -5372,7 +5421,7 @@ internal sealed partial class OverlayWindow : IDisposable
         }
         for (int i = 0; i < sc; i++)
         {
-            var cell = SelectionHandles.SwatchRect(i, sel, dpi, app.FurnitureViewport, sc);
+            var cell = SelectionHandles.SwatchRect(i, sel, dpi, app.FurnitureViewport, sc, textBar);
             var c = new Vector2((cell.MinX + cell.MaxX) * 0.5f, (cell.MinY + cell.MaxY) * 0.5f);
             float rad = (cell.MaxX - cell.MinX) * 0.5f;
             bool custom = i == swatches.Length - 1;      // 末格 = 自定义取色（8.2.0：色相环）
@@ -5450,13 +5499,14 @@ internal sealed partial class OverlayWindow : IDisposable
     {
         float dpi = app.UiUnit;
         int sc = SelectionHandles.SwatchCount;
+        bool textBar = app.SingleTextBoxSelection;
         var th = app.FloatingTheme;
-        var p = SelectionHandles.CustomPanelRect(sel, dpi, app.FurnitureViewport, sc);
+        var p = SelectionHandles.CustomPanelRect(sel, dpi, app.FurnitureViewport, sc, textBar);
         DrawPanelCard(app, p, th.CornerRadius * dpi, dpi);
 
-        var sv = SelectionHandles.PickSvRect(sel, dpi, app.FurnitureViewport, sc);
-        var hue = SelectionHandles.PickHueRect(sel, dpi, app.FurnitureViewport, sc);
-        var prev = SelectionHandles.PickPreviewRect(sel, dpi, app.FurnitureViewport, sc);
+        var sv = SelectionHandles.PickSvRect(sel, dpi, app.FurnitureViewport, sc, textBar);
+        var hue = SelectionHandles.PickHueRect(sel, dpi, app.FurnitureViewport, sc, textBar);
+        var prev = SelectionHandles.PickPreviewRect(sel, dpi, app.FurnitureViewport, sc, textBar);
         var (ph, ps, pv) = app.PickHsv;
         var picked = Hsv.ToRgb(ph, ps, pv);
 
@@ -5570,10 +5620,41 @@ internal sealed partial class OverlayWindow : IDisposable
     }
 
     /// <summary>层级小面板：置顶 / 置底两格（图标用 Fluent 的"上/下箭头 + 底托"）。</summary>
+    /// <summary>
+    /// 文字操作条的字号下拉：3×2 的常用档（10/14/18/24/48/64），当前字号高亮。
+    /// 和色带那个字号菜单读**同一张表**（<see cref="InkPalette.TextFontSizes"/>）。
+    /// </summary>
+    private void DrawFontPanel(InkEngine app, in RectF sel)
+    {
+        float dpi = app.UiUnit;
+        var p = SelectionHandles.FontPanelRect(sel, dpi, app.FurnitureViewport);
+        DrawPanelCard(app, p, app.FloatingTheme.CornerRadius * dpi, dpi);
+        var th = app.FloatingTheme;
+
+        float current = app.Doc.Selected.Count == 1
+            ? app.Doc.Selected[0].TextBox?.FontSize ?? 18f : 18f;
+
+        for (int i = 0; i < SelectionHandles.FontPanelSizeCount
+                        && i < InkPalette.TextFontSizes.Length; i++)
+        {
+            var cell = SelectionHandles.FontPanelCellRect(i, sel, dpi, app.FurnitureViewport);
+            bool active = MathF.Abs(current - InkPalette.TextFontSizes[i]) < 0.1f;
+            float cr = 8f * dpi;
+            _scratch.Color = active ? th.ActiveBg : th.Hover;
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(cell.MinX, cell.MinY, cell.MaxX, cell.MaxY), cr, cr), _scratch);
+            var fmt = AiTextFormat(15f * dpi, true, true);
+            _ctx.DrawText(InkPalette.TextFontSizes[i].ToString("F0"), fmt,
+                new Rect(cell.MinX, cell.MinY, cell.MaxX - cell.MinX, cell.MaxY - cell.MinY),
+                Brush(active ? th.ActiveText : th.Text));
+        }
+    }
+
     private void DrawLayerPanel(InkEngine app, in RectF sel)
     {
         float dpi = app.UiUnit;
-        var p = SelectionHandles.LayerPanelRect(sel, dpi, app.FurnitureViewport);
+        bool textBar = app.SingleTextBoxSelection;
+        var p = SelectionHandles.LayerPanelRect(sel, dpi, app.FurnitureViewport, textBar);
         // 圆角同样取界面推上来的主题令牌（三处浮层一个数，8.2.0 收口）。
         DrawPanelCard(app, p, app.FloatingTheme.CornerRadius * dpi, dpi);
 
@@ -5581,7 +5662,7 @@ internal sealed partial class OverlayWindow : IDisposable
         var th = app.FloatingTheme;
         for (int i = 0; i < 2; i++)
         {
-            var cell = SelectionHandles.LayerCellRect(i, sel, dpi, app.FurnitureViewport);
+            var cell = SelectionHandles.LayerCellRect(i, sel, dpi, app.FurnitureViewport, textBar);
             _scratch.Color = th.Hover;
             float cr = 8f * dpi;
             _ctx.FillRoundedRectangle(new RoundedRectangle(

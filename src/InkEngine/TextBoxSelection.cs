@@ -15,6 +15,7 @@ namespace InkEngine;
 public partial class InkEngine
 {
     private bool _textBoxResizing;
+    private bool _textBoxResizePlain;
     private Stroke _textBoxResizeStroke;
     private SelHandle _textBoxResizeHandle;
     private RectF _textBoxResizeStartRect;
@@ -30,6 +31,8 @@ public partial class InkEngine
     {
         var box = s?.TextBox;
         if (box == null) return;
+        // 移动过的框先把平移烘焙进 Points，后面按画布坐标夹屏幕才准。
+        BakeTextBoxTranslation(s);
 
         // 起点用对象局部坐标（文本框只做平移，不旋转；逆变换仍然写全，防以后加旋转）。
         // ⚠ 传进来的 screenX/screenY 已经是**画布坐标**（OnPointerDown 先过了 ScreenToCanvas）；
@@ -40,6 +43,7 @@ public partial class InkEngine
             p = Vector2.Transform(p, inv);
 
         _textBoxResizeStroke = s;
+        _textBoxResizePlain = box.Role == TextBoxRole.Normal;
         _textBoxResizeHandle = handle;
         _textBoxResizeStartRect = new RectF
         {
@@ -77,6 +81,90 @@ public partial class InkEngine
         bool top = _textBoxResizeHandle is SelHandle.Top or SelHandle.TopLeft or SelHandle.TopRight;
         bool bottom = _textBoxResizeHandle is SelHandle.Bottom or SelHandle.BottomLeft or SelHandle.BottomRight;
 
+        var screen = ScreenRectPhysical();
+        float unit = MathF.Max(0.5f, box.Unit);
+        float margin = 16f * unit;
+        float screenLeft = screen.MinX + margin;
+        float screenRight = screen.MaxX - margin;
+        // 宽度上限 = 屏幕可用宽；只按"当前起点的右沿"算会让框一拖就顶出屏幕。
+        float maxW = MathF.Max(24f * unit, screenRight - screenLeft);
+        float minW = MathF.Min(MathF.Max(24f * unit, _textBoxResizeMinWidth), maxW);
+        var old = s.PaddedBounds;
+
+        // ---- 普通文本框：左右竖线 = 改宽；四个角 = 等比缩放字号 ----
+        if (_textBoxResizePlain)
+        {
+            float startW = MathF.Max(1f, _textBoxResizeStartWidth);
+            float startH = MathF.Max(1f, _textBoxResizeStartHeight);
+
+            if (_textBoxResizeHandle is SelHandle.Left or SelHandle.Right)
+            {
+                if (left) r.MinX = MathF.Max(p.X, screenLeft);
+                if (right) r.MaxX = MathF.Min(p.X, screenRight);
+                float w = r.MaxX - r.MinX;
+                if (w < minW)
+                {
+                    if (left) r.MinX = r.MaxX - minW;
+                    else r.MaxX = r.MinX + minW;
+                }
+                if (r.MaxX - r.MinX > maxW)
+                {
+                    if (left) r.MinX = r.MaxX - maxW;
+                    else r.MaxX = r.MinX + maxW;
+                }
+                // 再夹一次左右沿（左边拖到屏幕外时只收左沿，不动右边）。
+                if (r.MinX < screenLeft) r.MinX = screenLeft;
+                if (r.MaxX > screenRight) r.MaxX = screenRight;
+                w = MathF.Max(1f, r.MaxX - r.MinX);
+
+                box.AutoWidth = false;
+                box.AutoHeight = true;
+                box.InvalidateLayout();
+                s.SetTextBoxRect(new Vector2(r.MinX, _textBoxResizeStartOrigin.Y), w, box.Height);
+                _ = box.EnsureLayout();
+                s.SetTextBoxRect(new Vector2(r.MinX, _textBoxResizeStartOrigin.Y), w, box.Height);
+            }
+            else
+            {
+                // 角拖：按“长出去更多的那一轴”等比放大字号；宽跟着字号走，高再按行数算。
+                float anchorX = left ? r.MaxX : r.MinX;
+                float anchorY = top ? r.MaxY : r.MinY;
+                float dragW = left ? anchorX - p.X : p.X - anchorX;
+                float dragH = top ? anchorY - p.Y : p.Y - anchorY;
+                float scale = MathF.Max(dragW / startW, dragH / startH);
+                float minFont = 8f;
+                float maxFont = 72f;
+                float newFont = Math.Clamp(
+                    _textBoxResizeStartFont * MathF.Max(scale, minFont / _textBoxResizeStartFont),
+                    minFont, maxFont);
+                float k = newFont / MathF.Max(1f, _textBoxResizeStartFont);
+                box.FontSize = newFont;
+                box.AutoWidth = false;
+                box.AutoHeight = true;
+                box.InvalidateLayout();
+                float newW = MathF.Max(MathF.Max(24f * unit, box.MinWidth), startW * k);
+                newW = MathF.Min(newW, maxW);
+                box.Width = newW;
+                s.SetTextBoxRect(new Vector2(anchorX, anchorY), newW, box.Height);
+                _ = box.EnsureLayout();
+                float newH = MathF.Max(1f, box.Height);
+                float newX = left ? anchorX - newW : anchorX;
+                // 角拖也不能把框拉出屏幕：右边顶住就往左收，左边顶住就往右收。
+                if (newX + newW > screenRight) newX = screenRight - newW;
+                if (newX < screenLeft) newX = screenLeft;
+                s.SetTextBoxRect(new Vector2(newX, top ? anchorY - newH : anchorY), newW, newH);
+            }
+
+            Doc.RefreshStrokeGrid(s);
+            Doc.Dirty.Add(old);
+            Doc.Dirty.Add(s.PaddedBounds);
+            Doc.StructureChangedSinceRender = true;
+            Doc.Version++;
+            _dirty = true;
+            return;
+        }
+
+        // ---- AI 题卡：保留原来的宽/高拖动语义 ----
         if (left) r.MinX = p.X;
         if (right) r.MaxX = p.X;
         if (top) r.MinY = p.Y;
@@ -84,14 +172,8 @@ public partial class InkEngine
 
         // 用户一旦亲手拖过手柄，就不再让输入时的“自动长宽”覆盖他的尺寸。
         box.AutoWidth = false;
-        var screen = ScreenRectPhysical();
-        float unit = MathF.Max(0.5f, box.Unit);
         float minH = 60f * unit;
-        float maxW = MathF.Max(60f * unit, (screen.MaxX - screen.MinX) * 0.9f);
         float maxH = MathF.Max(minH, (screen.MaxY - screen.MinY) * 0.9f);
-        // 最窄由"最长不可断的 token"决定（中文单字 / 英文单词 / 可缩小公式）；
-        // 最宽由屏幕决定。两者都写在这一处，拖手柄和自适应用同一口径。
-        float minW = MathF.Min(MathF.Max(60f * unit, _textBoxResizeMinWidth), maxW);
         if (r.MaxX - r.MinX < minW)
         {
             if (left) r.MinX = r.MaxX - minW;
@@ -102,34 +184,32 @@ public partial class InkEngine
             if (top) r.MinY = r.MaxY - minH;
             else r.MaxY = r.MinY + minH;
         }
-
         if (r.MaxX - r.MinX > maxW) r.MaxX = r.MinX + maxW;
         if (r.MaxY - r.MinY > maxH) r.MaxY = r.MinY + maxH;
 
-        float w = r.MaxX - r.MinX;
-        float h = r.MaxY - r.MinY;
-        var old = s.PaddedBounds;
+        float w2 = r.MaxX - r.MinX;
+        float h2 = r.MaxY - r.MinY;
 
         // 左右拖：只改宽，AI 题卡继续自动高度；
         // 上下/角拖：切成固定高度（用户定："拖了高度就以手动为准"）。
         if (_textBoxResizeWasAuto && (top || bottom))
         {
             box.AutoHeight = false;
-            box.Height = h;
+            box.Height = h2;
         }
         else if (!_textBoxResizeWasAuto)
         {
             box.AutoHeight = false;
-            box.Height = h;
+            box.Height = h2;
         }
 
         box.InvalidateLayout();
-        s.SetTextBoxRect(new Vector2(r.MinX, r.MinY), w,
-                         box.AutoHeight ? box.Height : h);
+        s.SetTextBoxRect(new Vector2(r.MinX, r.MinY), w2,
+                         box.AutoHeight ? box.Height : h2);
         if (box.AutoHeight)
         {
             _ = box.EnsureLayout();
-            s.SetTextBoxRect(new Vector2(r.MinX, r.MinY), w, box.Height);
+            s.SetTextBoxRect(new Vector2(r.MinX, r.MinY), w2, box.Height);
         }
         Doc.RefreshStrokeGrid(s);
         Doc.Dirty.Add(old);
@@ -144,6 +224,7 @@ public partial class InkEngine
         if (!_textBoxResizing) return;
         var s = _textBoxResizeStroke;
         _textBoxResizing = false;
+        _textBoxResizePlain = false;
         _textBoxResizeStroke = null;
         SelDragging = false;
         if (s?.TextBox != null)

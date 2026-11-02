@@ -16,7 +16,10 @@ public partial class InkEngine
     private IntPtr _textBoxEditHost;
     private static Native.WndProcDelegate _textBoxEditHostProc;
     private static uint _textBoxEditTextColor;
-    private static bool _textBoxEditLightText;
+    // 编辑底：**白板 = 当前板色**；文档/图片上退而求其次，用一块很淡的近白
+    //（原生 RichEdit 给不了真透明，见 RefreshTextBoxEditWindow 的注释）。
+    private static uint _textBoxEditBackColor = 0x00FFFFFF;
+    private static IntPtr _textBoxEditBgBrush;
     private static IntPtr _msftedit;
     private static bool _richEditReady;
     private static InkEngine _textBoxEditOwner;
@@ -29,20 +32,51 @@ public partial class InkEngine
     private float _textBoxEditFontPx;
     private double _lastTextBoxClickMs = double.NegativeInfinity;
     private Stroke _lastTextBoxClickStroke;
+    // 双击进入编辑**不在按下时立即发生**：等松手时看有没有拖动。
+    // 否则"选中后再按住拖"会被当成双击，直接进编辑、拖不动。
+    private bool _pendingTextEdit;
+    private Stroke _pendingTextEditStroke;
+    private float _pendingTextEditX, _pendingTextEditY;
     private bool _textBoxEditWasNew;
     private bool _textBoxEditSuppressChange;
     private string _textBoxEditOriginalText = "";
+    private int _textBoxEditCaretIndex = -1;
     private float _textBoxEditOriginalW, _textBoxEditOriginalH;
     private bool _textBoxEditOriginalAuto, _textBoxEditOriginalAutoWidth;
     private RectF _textBoxEditOriginalBounds;
     private Vector2 _textBoxEditOriginalOrigin;
     private Matrix3x2 _textBoxEditOriginalXf = Matrix3x2.Identity;
-    private float _textFontSize = 15f;
+    // 2026-11-01 按 ClassIn 的常用档定：默认 **18**，不再用 15。
+    private float _textFontSize = 18f;
     private Color4 _textColor = InkPalette.PenBand[0].Color;
     private bool _textPrefsLoaded;
     private bool _textColorExplicit;
 
+    /// <summary>
+    /// 文字色带的 4 个色位：红 / 黑 / 白 / 自定义。和笔的 8 个色位是**两套独立状态**，
+    /// 改文字色不会改笔色，反之亦然。窄带只显示前 3 个（见 FullUi.TextSwatchCount）。
+    /// </summary>
+    private readonly Color4[] _textSwatchColors =
+    {
+        InkPalette.PenBand[1].Color,   // 红
+        InkPalette.PenBand[0].Color,   // 黑
+        InkPalette.PenBand[7].Color,   // 白
+        InkPalette.PenBand[2].Color,   // 自定义（默认蓝）
+    };
+
+    /// <summary>色带要显示的 4 个色位（快照用；界面只取前 N 个）。</summary>
+    internal Color4[] TextSwatchColors => _textSwatchColors;
+
+    /// <summary>取色板这次要改的色位；-1 = 按当前颜色反找。</summary>
+    private int _textPickerSlot = -1;
+
+    internal void BeginTextColorPickFromUi(int slot)
+    {
+        if (slot >= 0 && slot < _textSwatchColors.Length) _textPickerSlot = slot;
+    }
+
     internal bool TextBoxEditing => _textBoxEditing;
+    internal int TextBoxEditCaretForTest => _textBoxEditCaretIndex;
 
     /// <summary>文本工具当前该显示的字号/颜色：选中了普通文本框就用它的，否则用默认值。</summary>
     private TextBoxData SelectedPlainTextBox
@@ -56,13 +90,35 @@ public partial class InkEngine
         }
     }
 
-    internal float TextToolFontSize => SelectedPlainTextBox?.FontSize ?? _textFontSize;
+    /// <summary>
+    /// 文字色带永远表示**下一次输入**的默认字号；选中文字的字号在文字操作条上改。
+    /// （2026-11-01 用户拍板，照 ClassIn 的"文本工具面板 vs 选中操作条"分工。）
+    /// </summary>
+    /// <summary>选中对象里的第一个文本框（普通文字和 AI 题卡都算；操作条字号用）。</summary>
+    private TextBoxData SelectedFontTextBox
+    {
+        get
+        {
+            foreach (var s in Doc.Selected)
+                if (s.Kind == StrokeKind.TextBox && s.TextBox != null) return s.TextBox;
+            return null;
+        }
+    }
+
+    internal float TextToolFontSize
+    {
+        get
+        {
+            EnsureTextPrefs();
+            return _textFontSize;
+        }
+    }
+
+    /// <summary>文字色带永远表示**下一次输入**的默认颜色。</summary>
     internal Color4 TextToolColor
     {
         get
         {
-            var b = SelectedPlainTextBox;
-            if (b != null) return b.Ink;
             EnsureTextPrefs();
             return _textColorExplicit ? _textColor : DefaultTextColor();
         }
@@ -73,13 +129,72 @@ public partial class InkEngine
         if (_textPrefsLoaded) return;
         _textPrefsLoaded = true;
         if (float.TryParse(GetUiPref("textFont"), out float fs))
+        {
             _textFontSize = Math.Clamp(fs, 8f, 72f);
+            // 老配置里的 15 是旧默认值，统一迁到新默认 18；其他不在六档里的值
+            // 吸到最近的常用档，免得色带显示一个菜单里选不中的字号。
+            if (MathF.Abs(_textFontSize - 15f) < 0.1f)
+                _textFontSize = 18f;
+            else
+                _textFontSize = NearestTextFontSize(_textFontSize);
+            SetUiPref("textFont", _textFontSize.ToString(CultureInfo.InvariantCulture));
+        }
+
+        bool hadSwatches = false;
+        string savedSwatches = GetUiPref("textSwatches");
+        if (!string.IsNullOrEmpty(savedSwatches))
+        {
+            var parts = savedSwatches.Split(';');
+            for (int i = 0; i < _textSwatchColors.Length && i < parts.Length; i++)
+            {
+                if (string.IsNullOrWhiteSpace(parts[i])) continue;
+                _textSwatchColors[i] = ParseColorPref(parts[i], _textSwatchColors[i]);
+                hadSwatches = true;
+            }
+        }
+
         string saved = GetUiPref("textColor");
         if (!string.IsNullOrEmpty(saved))
         {
             _textColor = ParseColorPref(saved, _textColor);
             _textColorExplicit = GetUiPref("textColorExplicit") == "1";
         }
+
+        // 老配置迁移：以前只有一个"最近文字色"，没有色位表。
+        // 如果它不等于红/黑/白，就放进第 4 格，色带才亮得起来。
+        if (!hadSwatches && _textColorExplicit && FindTextSwatchSlot(_textColor) < 0)
+            _textSwatchColors[3] = _textColor;
+    }
+
+    private static float NearestTextFontSize(float value)
+    {
+        float best = InkPalette.TextFontSizes[0], bestD = float.MaxValue;
+        foreach (float v in InkPalette.TextFontSizes)
+        {
+            float d = MathF.Abs(v - value);
+            if (d < bestD) { bestD = d; best = v; }
+        }
+        return best;
+    }
+
+    /// <summary>当前色在 4 个色位里的下标；不比任何一格接近时返回 -1。</summary>
+    private int FindTextSwatchSlot(Color4 color)
+    {
+        for (int i = 0; i < _textSwatchColors.Length; i++)
+            if (SameColor(_textSwatchColors[i], color)) return i;
+        return -1;
+    }
+
+    private static bool SameColor(Color4 a, Color4 b)
+        => MathF.Abs(a.R - b.R) < 0.01f
+        && MathF.Abs(a.G - b.G) < 0.01f
+        && MathF.Abs(a.B - b.B) < 0.01f;
+
+    private void SaveTextSwatchPrefs()
+    {
+        var parts = new string[_textSwatchColors.Length];
+        for (int i = 0; i < parts.Length; i++) parts[i] = FormatColorPref(_textSwatchColors[i]);
+        SetUiPref("textSwatches", string.Join(";", parts));
     }
 
     /// <summary>新建文本的默认颜色：没主动选过色时，浅板深字、深板白字。</summary>
@@ -93,52 +208,77 @@ public partial class InkEngine
             : InkPalette.PenBand[0].Color;
     }
 
+    /// <summary>色带 A−/A+：只改**下一次输入**的默认字号，不碰选中的文字。</summary>
     internal void AdjustTextFontFromUi(float delta)
     {
         EnsureTextPrefs();
-        var box = SelectedPlainTextBox;
-        if (box == null)
-        {
-            _textFontSize = Math.Clamp(_textFontSize + delta, 8f, 72f);
-            SetUiPref("textFont", _textFontSize.ToString(CultureInfo.InvariantCulture));
-            NotifyUiStateChanged();
-            return;
-        }
-        float before = box.FontSize;
-        AdjustTextBoxFont(delta);
-        if (MathF.Abs(box.FontSize - before) > 0.01f)
-        {
-            _textFontSize = box.FontSize;
-            SetUiPref("textFont", _textFontSize.ToString(CultureInfo.InvariantCulture));
-        }
-        if (_textBoxEditing) RefreshTextBoxEditWindow(box);
+        _textFontSize = Math.Clamp(_textFontSize + delta, 8f, 72f);
+        SetUiPref("textFont", _textFontSize.ToString(CultureInfo.InvariantCulture));
         NotifyUiStateChanged();
     }
 
+    /// <summary>色带字号菜单：只改**下一次输入**的默认字号。</summary>
+    internal void SetTextFontFromUi(float size)
+    {
+        EnsureTextPrefs();
+        size = Math.Clamp(size, 8f, 72f);
+        if (MathF.Abs(_textFontSize - size) < 0.01f) { NotifyUiStateChanged(); return; }
+        _textFontSize = size;
+        SetUiPref("textFont", _textFontSize.ToString(CultureInfo.InvariantCulture));
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>选中文字色带的第 <paramref name="slot"/> 格：只改默认色，不动作选中文字。</summary>
+    internal void SelectTextSwatchFromUi(int slot)
+    {
+        EnsureTextPrefs();
+        if (slot < 0 || slot >= _textSwatchColors.Length) return;
+        _textColor = _textSwatchColors[slot];
+        _textColorExplicit = true;
+        SetUiPref("textColor", FormatColorPref(_textColor));
+        SetUiPref("textColorExplicit", "1");
+        SetUiPref("textSwatchSelected", slot.ToString(CultureInfo.InvariantCulture));
+        Console.WriteLine($"文字默认色：色位 {slot + 1}");
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 文字取色板提交：写回**当前色所在的那一格**（找不到就写第 4 格），
+    /// 并把它设为下一次输入的默认色。只改默认值，不碰选中的文字。
+    /// </summary>
     internal void SetTextColorFromUi(Color4 color)
     {
         EnsureTextPrefs();
+        // 取色板是从哪一格打开的，就写回哪一格；没有记录才按当前色反找。
+        int slot = _textPickerSlot;
+        if (slot < 0 || slot >= _textSwatchColors.Length)
+            slot = FindTextSwatchSlot(_textColor);
+        if (slot < 0) slot = _textSwatchColors.Length - 1;
+        _textSwatchColors[slot] = color;
         _textColor = color;
         _textColorExplicit = true;
-        SetUiPref("textColor", $"{color.R:F3},{color.G:F3},{color.B:F3}");
+        SetUiPref("textColor", FormatColorPref(color));
         SetUiPref("textColorExplicit", "1");
-        bool changed = false;
-        foreach (var s in Doc.Selected)
-        {
-            if (s.Kind != StrokeKind.TextBox || s.TextBox is not { Role: TextBoxRole.Normal }) continue;
-            changed = true;
-        }
-        if (changed) SetSelectionColor(color);
-        if (_textBoxEditing && _textBoxEditStroke?.TextBox is { Role: TextBoxRole.Normal } eb)
-        {
-            _textBoxEditTextColor = ((uint)(eb.Ink.R * 255f) & 0xFF)
-                                  | (((uint)(eb.Ink.G * 255f) & 0xFF) << 8)
-                                  | (((uint)(eb.Ink.B * 255f) & 0xFF) << 16);
-            _textBoxEditLightText = 0.299f * eb.Ink.R + 0.587f * eb.Ink.G + 0.114f * eb.Ink.B > 0.65f;
-            ApplyRichEditFormat(_textBoxEditStroke);
-            Native.InvalidateRect(_textBoxEditHwnd, IntPtr.Zero, true);
-        }
+        SetUiPref("textSwatchSelected", slot.ToString(CultureInfo.InvariantCulture));
+        SaveTextSwatchPrefs();
         _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 文字操作条的字号下拉：改**当前选中的文本框**（不是下一次输入的默认值）。
+    /// 走 <see cref="AdjustTextBoxFont"/> 那条路，自动高度和一步撤销都由它保证。
+    /// </summary>
+    internal void SetSelectedTextFontFromUi(float size)
+    {
+        // AI 题卡也有字号（题干/答案按同一个 FontSize 排版），只是颜色固定。
+        var box = SelectedFontTextBox;
+        if (box == null) { NotifyUiStateChanged(); return; }
+        float delta = Math.Clamp(size, 8f, 72f) - box.FontSize;
+        if (MathF.Abs(delta) < 0.01f) { NotifyUiStateChanged(); return; }
+        AdjustTextBoxFont(delta);
+        if (_textBoxEditing) RefreshTextBoxEditWindow(box);
         NotifyUiStateChanged();
     }
 
@@ -163,11 +303,25 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 文本工具的按下：先找文本框（文本优先于墨迹），点已有文字 = 选中/再点编辑；
-    /// 点空白 = 在点击处新建并编辑。点到其它对象返回 false，让调用方转成选择工具的点选。
+    /// 文本工具的按下：先找文本框（文本优先于墨迹），点已有文字 = **直接编辑**，
+    /// 光标落在点击处；点空白 = 在点击处新建并编辑。
+    /// 点到其它对象返回 false，让调用方转成选择工具的点选。
     /// </summary>
     internal bool TextToolPointerDown(float screenX, float screenY)
     {
+        // 新的一下按下：上一次未兑现的双击作废（真正的双击会在下面重新 arm）。
+        _pendingTextEdit = false;
+        _pendingTextEditStroke = null;
+
+        // 先让**选中文字的操作条 / 菜单 / 手柄**接住：它们可能落在文本框外面。
+        // 不先判断的话，文本工具下点操作条会被当成"点空白"，又新建一个文本框。
+        if (SelectionBarShown && Doc.Selected.Count > 0 && TextBoxChromeAt(screenX, screenY))
+        {
+            _ = TryBeginSelectionGesture(screenX, screenY - ViewOffsetY, shift: false, alt: false);
+            _dirty = true;
+            return true;
+        }
+
         var hit = TextBoxAt(screenX, screenY);
         if (hit?.TextBox != null)
         {
@@ -180,15 +334,14 @@ public partial class InkEngine
                 NotifyUiStateChanged();
                 return true;
             }
-            bool selected = Doc.Selected.Count == 1 && ReferenceEquals(Doc.Selected[0], hit);
-            if (!selected)
-            {
-                Doc.SelectOnly(new[] { hit });
-                _dirty = true;
-                NotifyUiStateChanged();
-                return true;
-            }
-            BeginTextBoxEdit(hit);
+            Doc.SelectOnly(new[] { hit });
+            // 第一次点 = 选中（可拖动/改宽），双击才进入编辑。
+            // **双击延迟到松手**：第二下按下去先交给选择手势，拖了就是移动，
+            // 没拖才在松手时进编辑——这样"选中后马上按住拖"不会被双击吃掉。
+            ArmTextBoxEditOnDoubleClick(hit, screenX, screenY);
+            _ = TryBeginSelectionGesture(screenX, screenY - ViewOffsetY, shift: false, alt: false);
+            _dirty = true;
+            NotifyUiStateChanged();
             return true;
         }
 
@@ -209,6 +362,33 @@ public partial class InkEngine
         return true;
     }
 
+    /// <summary>
+    /// 指针是不是落在**选中文字的家具**上：操作条 / 收起圆钮 / 面板 / 取色板 / 手柄。
+    /// 文本工具下这些都可能伸到文本框外面；不先接住就会被当成"点空白又新建"。
+    /// </summary>
+    private bool TextBoxChromeAt(float screenX, float screenY)
+    {
+        float x = screenX;
+        float y = screenY - ViewOffsetY;
+        if (BarDrawnCollapsed)
+            return SelectionDotCanvasRect.Contains(x, y);
+
+        if (SelectionBarCanvasRect.Contains(x, y)) return true;
+        if (CustomColorOpen
+            && SelectionHandles.PickContains(x, y, LiveSelectionFrame.CanvasAabb, UiUnit,
+                                             FurnitureViewport, SelectionHandles.SwatchCount,
+                                             SingleTextBoxSelection))
+            return true;
+        if (SelPanelOpen != SelPanel.None
+            && SelectionHandles.PanelContains(x, y, LiveSelectionFrame.CanvasAabb, UiUnit,
+                                              FurnitureViewport, SelPanelOpen,
+                                              SelectionHandles.SwatchCount, SingleTextBoxSelection))
+            return true;
+
+        var frame = SelectionHandles.FrameOf(Doc.Selected);
+        return SelectionHandles.HitTest(x, y, Doc.Selected, frame, UiUnit) != SelHandle.None;
+    }
+
     /// <summary>自检/摆样：插入一个已有文字的普通文本框，不进入编辑。</summary>
     internal void InsertPlainTextBoxForTest(string text)
     {
@@ -216,6 +396,31 @@ public partial class InkEngine
         Doc.SelectOnly(new[] { s });
         _dirty = true;
         NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 把文本框的**纯平移**从 `Transform` 并进 `Points[0]`，并把 Transform 归零。
+    ///
+    /// 为什么：通用移动手势走的是 `Transform`，而文本框的改宽/输入/边缘夹取都按
+    /// `Points[0]` 当画布坐标算。移动过的框再编辑时两边坐标系不一致，宽度会跳、
+    /// 位置会漂。文本框不旋转、不缩放（字号走 FontSize），所以纯平移可以安全烘焙。
+    /// 带旋转/缩放的组变换不动它，保持原样。
+    /// </summary>
+    internal static void BakeTextBoxTranslation(Stroke s)
+    {
+        if (s?.TextBox == null || s.Points.Count == 0) return;
+        var t = s.Transform;
+        bool pureTranslation = MathF.Abs(t.M11 - 1f) < 1e-4f
+                            && MathF.Abs(t.M22 - 1f) < 1e-4f
+                            && MathF.Abs(t.M12) < 1e-4f
+                            && MathF.Abs(t.M21) < 1e-4f
+                            && (MathF.Abs(t.M31) > 0.01f || MathF.Abs(t.M32) > 0.01f);
+        if (!pureTranslation) return;
+
+        var p0 = s.Points[0];
+        var origin = new Vector2(p0.X + t.M31, p0.Y + t.M32);
+        s.Transform = Matrix3x2.Identity;
+        s.SetTextBoxRect(origin, s.TextBox.Width, s.TextBox.Height);
     }
 
     /// <summary>
@@ -227,23 +432,33 @@ public partial class InkEngine
         EnsureTextPrefs();
         var screen = ScreenRectPhysical();
         float u = MathF.Max(0.75f, DpiScale);
-        float w = MathF.Max(80f * u, 3f * _textFontSize * u);
-        float h = 60f * u;
         float margin = 16f * u;
+        // 排版的内边距是左右各 18×Unit；最小宽 = 两边内边距 + 一个字。
+        // 不再固定 80，否则前两个字都挤在最小宽里，看起来像“输入一个字不变宽”。
+        float minW = MathF.Max(24f * u, 36f * u + _textFontSize * u);
+        float w = minW;                         // 初始只够一个字，之后逐字向右长
+        float h = 60f * u;
         float canvasBottom = screen.MaxY - ViewOffsetY;
-        float canvasRight = screen.MaxX;
+        float canvasRight = screen.MaxX - margin;
 
-        // 点击点靠近右/下边缘时，先给“至少能长几行”的空间；不然一点就只剩十几像素。
-        float roomW = MathF.Min(420f * u, (screen.MaxX - screen.MinX) * 0.45f);
-        float x = MathF.Min(canvasX,
-            MathF.Max(screen.MinX + margin, canvasRight - margin - roomW));
+        // **落点就是左上角**（ClassIn 的输入起点）：不再先把框往左挪 420。
+        // 右边不够时只把初始宽度收到最小可排版宽度；后续输入到边界会自动换行/整体左让，
+        // 见 OnTextBoxEditChanged。
+        float x = Math.Clamp(canvasX, screen.MinX + margin,
+                             MathF.Max(screen.MinX + margin, canvasRight - minW));
+        w = MathF.Max(minW, MathF.Min(w, canvasRight - x));
+
+        // 纵向**落点就是框顶**，只保证第一行在屏幕内；继续往下写时由画布自动上滚
+        // （KeepTextBoxEditInView），不预先把这个框往上顶三行。
         float lineH = _textFontSize * u * 1.55f;
-        float roomH = 3f * lineH + 36f * u;
-        float y = MathF.Min(canvasY,
-            MathF.Max(screen.MinY - ViewOffsetY + margin, canvasBottom - margin - roomH));
+        float minY = screen.MinY - ViewOffsetY + margin;
+        float maxY = MathF.Max(minY, canvasBottom - margin - lineH);
+        float y = Math.Clamp(canvasY, minY, maxY);
 
         var data = TextBoxData.CreatePlain("", u, w, h);
         data.FontSize = _textFontSize;
+        // CreatePlain 有 120 的最小宽；这里按落点可用宽覆盖，右侧才不会被硬撑出屏幕。
+        data.Width = MathF.Max(minW, w);
         data.AutoWidth = true;
         data.AutoHeight = true;
         var color = DefaultTextColor();
@@ -256,7 +471,7 @@ public partial class InkEngine
             Width = 0f,
         };
         data.Ink = color;
-        s.SetTextBoxRect(new Vector2(x, y), w, data.Height);
+        s.SetTextBoxRect(new Vector2(x, y), data.Width, data.Height);
         ClampTextBoxIntoView(s);
         Doc.AddStroke(s);
         return s;
@@ -273,6 +488,7 @@ public partial class InkEngine
         float y = (screen.MinY + screen.MaxY) * 0.5f - ViewOffsetY - h * 0.5f;
 
         var data = TextBoxData.CreatePlain(text, u, w, h);
+        data.FontSize = _textFontSize;
         data.AutoWidth = true;
         var s = new Stroke
         {
@@ -288,7 +504,7 @@ public partial class InkEngine
         // 高 = 内容高。空框保持默认宽 + 最小高度，等第一次粘贴/输入再自适应。
         if (!string.IsNullOrWhiteSpace(text))
         {
-            float maxW = MathF.Max(80f * u, (screen.MaxX - screen.MinX) * 0.9f);
+            float maxW = MathF.Max(80f * u, screen.MaxX - screen.MinX - 32f * u);
             float maxH = MathF.Max(80f * u, (screen.MaxY - screen.MinY) * 0.9f);
             data.FitToContent(maxW, maxH, fitWidth: true);
             x = (screen.MinX + screen.MaxX) * 0.5f - data.Width * 0.5f;
@@ -308,20 +524,41 @@ public partial class InkEngine
         return s;
     }
 
-    /// <summary>双击普通文本框进入编辑；AI 题卡暂不进入文字编辑。</summary>
-    private void MaybeEditTextBoxOnDoubleClick(Stroke s)
+    /// <summary>
+    /// 双击普通文本框：只**记下**"松手时若不是拖动就进编辑"，不立刻进。
+    /// AI 题卡暂不进入文字编辑。
+    /// </summary>
+    private void ArmTextBoxEditOnDoubleClick(Stroke s, float screenX, float screenY)
     {
-        if (s?.TextBox == null || s.TextBox.Role != TextBoxRole.Normal) return;
+        if (s?.TextBox == null || s.TextBox.Role != TextBoxRole.Normal || s.Locked) return;
         double now = NowMs;
         bool dbl = ReferenceEquals(_lastTextBoxClickStroke, s) && now - _lastTextBoxClickMs < 450;
         _lastTextBoxClickStroke = s;
         _lastTextBoxClickMs = now;
-        if (dbl) BeginTextBoxEdit(s);
+        if (!dbl) return;
+        _pendingTextEdit = true;
+        _pendingTextEditStroke = s;
+        _pendingTextEditX = screenX;
+        _pendingTextEditY = screenY;
     }
 
-    internal void BeginTextBoxEdit(Stroke s, bool isNew = false)
+    /// <summary>松手时兑现双击：没拖动过才进入编辑。</summary>
+    private void EnterPendingTextBoxEdit()
+    {
+        if (!_pendingTextEdit) return;
+        var s = _pendingTextEditStroke;
+        float x = _pendingTextEditX, y = _pendingTextEditY;
+        _pendingTextEdit = false;
+        _pendingTextEditStroke = null;
+        if (s == null || !Doc.Selected.Contains(s) || s.Locked) return;
+        BeginTextBoxEdit(s, caretScreenX: x, caretScreenY: y);
+    }
+
+    internal void BeginTextBoxEdit(Stroke s, bool isNew = false,
+                                   float? caretScreenX = null, float? caretScreenY = null)
     {
         if (s?.TextBox == null || s.TextBox.Role != TextBoxRole.Normal) return;
+        BakeTextBoxTranslation(s);
         EnsureTextBoxEditWindow();
         if (_textBoxEditHwnd == IntPtr.Zero) return;
 
@@ -348,10 +585,7 @@ public partial class InkEngine
         _textBoxEditSuppressChange = true;
         Native.SetWindowTextW(_textBoxEditHwnd, s.TextBox.Text ?? "");
         _textBoxEditSuppressChange = false;
-        _textBoxEditTextColor = ((uint)(s.Color.R * 255f) & 0xFF)
-                              | (((uint)(s.Color.G * 255f) & 0xFF) << 8)
-                              | (((uint)(s.Color.B * 255f) & 0xFF) << 16);
-        _textBoxEditLightText = 0.299f * s.Color.R + 0.587f * s.Color.G + 0.114f * s.Color.B > 0.65f;
+        UpdateTextBoxEditColors(s);
         var font = EnsureTextBoxEditFont(s.TextBox.FontSize * s.TextBox.Unit);
         Native.SendMessage(_textBoxEditHwnd, Native.WM_SETFONT, font, new IntPtr(1));
         ApplyRichEditFormat(s);
@@ -362,9 +596,156 @@ public partial class InkEngine
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL, new IntPtr(len), new IntPtr(len));
 
         RefreshTextBoxEditWindow(s.TextBox);
+        if (caretScreenX.HasValue && caretScreenY.HasValue)
+            PlaceTextBoxCaretAtScreenPoint(s, caretScreenX.Value, caretScreenY.Value);
+        else
+        {
+            int len2 = Native.GetWindowTextLengthW(_textBoxEditHwnd);
+            Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL, new IntPtr(len2), new IntPtr(len2));
+            _textBoxEditCaretIndex = len2;
+        }
+        KeepTextBoxEditInView(s);
         FocusTextBoxEditWindow();
         _dirty = true;
         NotifyUiStateChanged();
+    }
+
+    private void ScrollCanvasForTextEdit(IntPtr wParam)
+    {
+        int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);
+        if (delta == 0) return;
+        ScrollCanvasBy(delta / 120f * 72f);
+        if (_textBoxEditStroke?.TextBox is { } box) RefreshTextBoxEditWindow(box);
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// 光标跑到屏幕底部/工具条下面时，把画布往上让一点。
+    /// 只动视野，不动文本框内部——普通文本框永远没有内部滚动。
+    /// 注意：**按光标位置让**，不是按框底让；否则编辑一个比屏幕还高的老框时，
+    /// 点上面一行也会被强行滚到底部。
+    /// </summary>
+    private void KeepTextBoxEditInView(Stroke s)
+    {
+        if (!_textBoxEditing || s?.TextBox == null || _windows.Count == 0) return;
+        if (!TryGetTextBoxEditCaretPoint(out int caretX, out int caretY)) return;
+        _ = caretX;
+
+        var screen = ScreenRectPhysical();
+        var b = s.PaddedBounds;
+        int hostY = (int)MathF.Round(b.MinY + 2f + ViewOffsetY);
+        float screenCaretY = hostY + caretY;
+        float safeTop = screen.MinY + 72f * DpiScale;
+        float safeBottom = screen.MaxY - 120f * DpiScale;
+
+        float dy = 0f;
+        if (screenCaretY > safeBottom) dy = safeBottom - screenCaretY;
+        else if (screenCaretY < safeTop) dy = safeTop - screenCaretY;
+        if (MathF.Abs(dy) < 0.5f) return;
+
+        ViewOffsetY += dy;
+        ClampViewOffset();
+        _dirty = true;
+        RefreshTextBoxEditWindow(s.TextBox);
+    }
+
+    /// <summary>取编辑窗里光标在客户区的位置（RichEdit 用 POINTL* 语法）。</summary>
+    private bool TryGetTextBoxEditCaretPoint(out int x, out int y)
+    {
+        x = y = 0;
+        if (_textBoxEditHwnd == IntPtr.Zero) return false;
+        int len = Native.GetWindowTextLengthW(_textBoxEditHwnd);
+        int index = _textBoxEditCaretIndex;
+        if (_richEditReady)
+        {
+            var range = new Native.CHARRANGE();
+            var pinRange = System.Runtime.InteropServices.GCHandle.Alloc(
+                range, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try
+            {
+                Native.SendMessage(_textBoxEditHwnd, (uint)Native.EM_EXGETSEL_RICH,
+                                   IntPtr.Zero, pinRange.AddrOfPinnedObject());
+                range = System.Runtime.InteropServices.Marshal.PtrToStructure<Native.CHARRANGE>(
+                    pinRange.AddrOfPinnedObject());
+                index = range.cpMax;
+            }
+            finally { pinRange.Free(); }
+        }
+        else
+        {
+            long sel = Native.SendMessage(_textBoxEditHwnd, Native.EM_GETSEL,
+                                          IntPtr.Zero, IntPtr.Zero).ToInt64();
+            index = (int)((sel >> 16) & 0xFFFF);
+        }
+        index = Math.Clamp(index, 0, Math.Max(0, len));
+        _textBoxEditCaretIndex = index;
+
+        if (_richEditReady)
+        {
+            var pt = new Native.POINT();
+            var pin = System.Runtime.InteropServices.GCHandle.Alloc(
+                pt, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try
+            {
+                Native.SendMessage(_textBoxEditHwnd, (uint)Native.EM_POSFROMCHAR_RICH,
+                                   pin.AddrOfPinnedObject(), new IntPtr(index));
+                pt = System.Runtime.InteropServices.Marshal.PtrToStructure<Native.POINT>(
+                    pin.AddrOfPinnedObject());
+                x = pt.X; y = pt.Y;
+                return true;
+            }
+            finally { pin.Free(); }
+        }
+
+        IntPtr pos = Native.SendMessage(_textBoxEditHwnd, Native.EM_POSFROMCHAR,
+                                        new IntPtr(index), IntPtr.Zero);
+        long v = pos.ToInt64();
+        x = (short)(v & 0xFFFF);
+        y = (short)((v >> 16) & 0xFFFF);
+        return true;
+    }
+
+    /// <summary>
+    /// 把光标放到“点下去的那一行/那个字”附近，而不是永远末尾。
+    /// 编辑窗已经铺在卡片上，直接把屏幕坐标换成 EDIT 客户区坐标，
+    /// 交给 RichEdit 自己算字符索引——它的换行/字宽就是最终排版，最准。
+    /// </summary>
+    private void PlaceTextBoxCaretAtScreenPoint(Stroke s, float screenX, float screenY)
+    {
+        if (_textBoxEditHwnd == IntPtr.Zero || s?.TextBox == null) return;
+        var b = s.PaddedBounds;
+        int hostX = (int)MathF.Round(b.MinX + 2f);
+        int hostY = (int)MathF.Round(b.MinY + 2f + ViewOffsetY);
+        int clientX = (int)MathF.Round(screenX) - hostX;
+        int clientY = (int)MathF.Round(screenY) - hostY;
+        clientX = Math.Clamp(clientX, 0, Math.Max(0, (int)MathF.Round(b.MaxX - b.MinX) - 4));
+        clientY = Math.Clamp(clientY, 0, Math.Max(0, (int)MathF.Round(b.MaxY - b.MinY) - 4));
+        uint scrollCaret = (uint)(_richEditReady ? Native.EM_SCROLLCARET_RICH : Native.EM_SCROLLCARET);
+        IntPtr at;
+        if (_richEditReady)
+        {
+            // RichEdit：lParam 是 POINTL*，不是 MAKELPARAM（传错会被当成指针解引用，直接崩）。
+            var pt = new Native.POINT { X = clientX, Y = clientY };
+            var pin = System.Runtime.InteropServices.GCHandle.Alloc(
+                pt, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try
+            {
+                at = Native.SendMessage(_textBoxEditHwnd, (uint)Native.EM_CHARFROMPOS_RICH,
+                                        IntPtr.Zero, pin.AddrOfPinnedObject());
+            }
+            finally { pin.Free(); }
+        }
+        else
+        {
+            IntPtr lParam = new(((long)clientY << 16) | ((long)clientX & 0xFFFF));
+            at = Native.SendMessage(_textBoxEditHwnd, Native.EM_CHARFROMPOS, IntPtr.Zero, lParam);
+        }
+        int index = (int)(at.ToInt64() & 0xFFFF);
+        int len = Native.GetWindowTextLengthW(_textBoxEditHwnd);
+        index = Math.Clamp(index, 0, len);
+        _textBoxEditCaretIndex = index;
+        Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL, new IntPtr(index), new IntPtr(index));
+        Native.SendMessage(_textBoxEditHwnd, scrollCaret, IntPtr.Zero, IntPtr.Zero);
     }
 
     /// <summary>
@@ -376,6 +757,7 @@ public partial class InkEngine
     {
         if (!_textBoxEditing || _textBoxEditStroke == null || box == null) return;
         var s = _textBoxEditStroke;
+        UpdateTextBoxEditColors(s);
         s.SyncTextBoxBounds();
         var b = s.PaddedBounds;
         float unit = MathF.Max(0.5f, box.Unit);
@@ -396,8 +778,46 @@ public partial class InkEngine
             Bottom = Math.Max((int)MathF.Round(pad) + 20, h - (int)MathF.Round(pad)),
         };
         Native.SendMessageRect(_textBoxEditHwnd, Native.EM_SETRECT, IntPtr.Zero, ref textRect);
+        // 宽度自动长的时候，RichEdit 偶尔会把内部视图横向滚到光标处，
+        // 于是"字在长、前面的字却看不见"。这里只把 X 钉回 0，Y 保留
+        //（长文本编辑时视口仍跟着光标上下走）。
+        ResetRichEditScroll();
         Native.InvalidateRect(_textBoxEditHwnd, IntPtr.Zero, true);
         Native.UpdateWindow(_textBoxEditHwnd);
+    }
+
+    /// <summary>
+    /// 把 RichEdit 的内部滚动钉回左上角。
+    ///
+    /// 为什么需要：文本框是"宽高跟着字长"的，窗口变宽/变高/左移时 RichEdit 仍可能
+    /// 保留"滚到光标"的偏移，表现为前面的字/上一行被推出可视区。高度既然自动，
+    /// 内容本来就该完整显示，编辑窗不需要内部滚动；屏幕装不下时滚的是画布。
+    /// 纯 EDIT 没有这组消息。
+    /// </summary>
+    private void ResetRichEditScroll()
+    {
+        if (!_richEditReady || _textBoxEditHwnd == IntPtr.Zero) return;
+        var pt = new Native.POINT();
+        var pin = System.Runtime.InteropServices.GCHandle.Alloc(
+            pt, System.Runtime.InteropServices.GCHandleType.Pinned);
+        try
+        {
+            Native.SendMessage(_textBoxEditHwnd, (uint)Native.EM_GETSCROLLPOS,
+                               IntPtr.Zero, pin.AddrOfPinnedObject());
+            pt = System.Runtime.InteropServices.Marshal.PtrToStructure<Native.POINT>(
+                pin.AddrOfPinnedObject());
+            if (pt.X == 0 && pt.Y == 0) return;
+            pt.X = 0;
+            pt.Y = 0;
+            System.Runtime.InteropServices.Marshal.StructureToPtr(
+                pt, pin.AddrOfPinnedObject(), false);
+            Native.SendMessage(_textBoxEditHwnd, (uint)Native.EM_SETSCROLLPOS,
+                               IntPtr.Zero, pin.AddrOfPinnedObject());
+        }
+        finally
+        {
+            pin.Free();
+        }
     }
 
     /// <summary>
@@ -409,7 +829,7 @@ public partial class InkEngine
         if (!_textBoxEditing || _textBoxEditSuppressChange) return;
         var s = _textBoxEditStroke;
         var box = s?.TextBox;
-        if (box == null || box.Role != TextBoxRole.Normal || !box.AutoWidth) return;
+        if (box == null || box.Role != TextBoxRole.Normal) return;
 
         string text = ReadTextBoxEditText();
         if (string.Equals(box.Text, text, StringComparison.Ordinal)) return;
@@ -422,11 +842,34 @@ public partial class InkEngine
 
         var screen = ScreenRectPhysical();
         float u = MathF.Max(0.5f, box.Unit);
-        float maxW = MathF.Min((screen.MaxX - screen.MinX) * 0.9f,
-                               screen.MaxX - origin.X - 16f * u);
-        float maxH = MathF.Max(60f * u,
-                               screen.MaxY - ViewOffsetY - origin.Y - 16f * u);
-        box.GrowToContent(MathF.Max(120f * u, maxW), maxH);
+        float margin = 16f * u;
+        // 宽度上限 = **整条屏幕可用宽**（不是"从落点到右沿"，也不另设 800 上限）：
+        // 到屏幕边才换行；右沿放不下时把整框往左让，绝不让字长到屏幕外。
+        float maxW = MathF.Max(80f * u, screen.MaxX - screen.MinX - margin * 2f);
+        if (box.AutoWidth)
+        {
+            float maxH = MathF.Max(60f * u,
+                                   screen.MaxY - ViewOffsetY - origin.Y - 16f * u);
+            box.GrowToContent(maxW, maxH);
+        }
+        else
+        {
+            // 宽固定之后，输入仍然要**实时更新高度**：否则编辑窗会停在旧高度，
+            // 后面的字只能在 RichEdit 内部滚，和“普通文本框没有内部滚动”冲突。
+            // 固定宽本身也不许超过屏幕（老存档/换屏幕尺寸的兜底）。
+            if (box.Width > maxW)
+            {
+                box.Width = maxW;
+                box.InvalidateLayout();
+            }
+            box.AutoHeight = true;
+            _ = box.EnsureLayout();
+        }
+
+        // 横向夹回屏幕：先右沿、再左沿（框比屏幕还宽时 GrowToContent 已经收到上限）。
+        float maxOriginX = screen.MaxX - margin - box.Width;
+        float minOriginX = screen.MinX + margin;
+        origin.X = Math.Clamp(origin.X, MathF.Min(minOriginX, maxOriginX), maxOriginX);
         s.SetTextBoxRect(origin, box.Width, box.Height);
         Doc.RefreshStrokeGrid(s);
         Doc.Dirty.Add(old);
@@ -435,6 +878,7 @@ public partial class InkEngine
         Doc.Version++;
         _dirty = true;
         RefreshTextBoxEditWindow(box);
+        KeepTextBoxEditInView(s);
     }
 
     private string ReadTextBoxEditText()
@@ -443,6 +887,26 @@ public partial class InkEngine
         var sb = new System.Text.StringBuilder(32768);
         Native.GetWindowTextW(_textBoxEditHwnd, sb, sb.Capacity);
         return sb.ToString().Replace("\r\n", "\n").Replace('\r', '\n');
+    }
+
+    /// <summary>自检：发一个字符消息（模拟真实键盘逐字输入，走 RichEdit 的输入路径）。</summary>
+    internal void TypeTextBoxEditCharForTest(char c)
+    {
+        if (!_textBoxEditing || _textBoxEditHwnd == IntPtr.Zero) return;
+        Native.SendMessageW(_textBoxEditHwnd, (uint)Native.WM_CHAR,
+                            new IntPtr(c), new IntPtr(1));
+        // 不再手动调 OnTextBoxEditChanged：这里要验证 WndProc 自己会边打边长。
+    }
+
+    /// <summary>自检：在光标处**逐字追加**（模拟真实键盘输入，不经过输入法）。</summary>
+    internal void AppendTextBoxEditTextForTest(string text)
+    {
+        if (!_textBoxEditing || _textBoxEditHwnd == IntPtr.Zero) return;
+        int len = Native.GetWindowTextLengthW(_textBoxEditHwnd);
+        Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL,
+                           new IntPtr(len), new IntPtr(len));
+        Native.SendMessageString(_textBoxEditHwnd, Native.EM_REPLACESEL, new IntPtr(1), text ?? "");
+        OnTextBoxEditChanged();
     }
 
     /// <summary>自检：直接改原生 EDIT 里的文字（模拟粘贴），不经过键盘。</summary>
@@ -454,6 +918,10 @@ public partial class InkEngine
             Native.SetWindowTextW(_textBoxEditHwnd, text ?? "");
             _textBoxEditSuppressChange = false;
             OnTextBoxEditChanged();
+            // 自检模拟"继续在末尾输入"：光标放到末尾，截图/滚动才是真实状态。
+            int end = Native.GetWindowTextLengthW(_textBoxEditHwnd);
+            Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL,
+                               new IntPtr(end), new IntPtr(end));
         }
     }
 
@@ -472,24 +940,50 @@ public partial class InkEngine
             text = sb.ToString().Replace("\r\n", "\n").Replace('\r', '\n');
         }
         bool wasNew = _textBoxEditWasNew;
-        bool emptyNew = accept && wasNew && string.IsNullOrWhiteSpace(text);
+        bool blank = accept && s?.TextBox is { Role: TextBoxRole.Normal } && IsBlankText(text);
         _textBoxEditStroke = null;
         _textBoxEditWasNew = false;
         HideTextBoxEdit();
-        if (emptyNew && s != null)
+
+        // 空文本：普通文本框不应该留下一个看不见却能选中的空框。
+        //   · 新建后没输入：直接丢，不留撤销记录（和以前一样）；
+        //   · 老框被清空：先恢复编辑前的文字/几何，再走“删除”撤销——
+        //     这样 Ctrl+Z 回来的是清空前的原文，而不是一个空框。
+        if (blank && s != null)
         {
-            // 新建后没输入就结束：不要留下一个透明、看不见却能选中的空框。
             var old = s.PaddedBounds;
-            Doc.RemoveStroke(s);
-            Doc.DropLastAddStrokeIf(s);
-            Doc.Selected.Remove(s);
-            Doc.Dirty.Add(old);
+            if (wasNew)
+            {
+                Doc.RemoveStroke(s);
+                Doc.DropLastAddStrokeIf(s);
+                Doc.Selected.Remove(s);
+                Doc.Dirty.Add(old);
+            }
+            else
+            {
+                var box = s.TextBox;
+                box.Text = before;
+                box.Width = _textBoxEditOriginalW;
+                box.Height = _textBoxEditOriginalH;
+                box.AutoHeight = _textBoxEditOriginalAuto;
+                box.AutoWidth = _textBoxEditOriginalAutoWidth;
+                box.InvalidateLayout();
+                s.Transform = _textBoxEditOriginalXf;
+                s.SetTextBoxRect(_textBoxEditOriginalOrigin, box.Width, box.Height);
+                s.SyncTextBoxBounds();
+                Doc.RefreshStrokeGrid(s);
+                Doc.Dirty.Add(old);
+                Doc.Dirty.Add(_textBoxEditOriginalBounds);
+                Doc.Dirty.Add(s.PaddedBounds);
+                Doc.RemoveStrokeWithUndo(s);
+            }
             Doc.StructureChangedSinceRender = true;
             Doc.Version++;
             _dirty = true;
             NotifyUiStateChanged();
             return;
         }
+
         if (s != null && s.TextBox != null)
         {
             var oldBounds = _textBoxEditOriginalBounds;
@@ -499,26 +993,29 @@ public partial class InkEngine
             var oldXf = _textBoxEditOriginalXf;
             s.TextBox.Text = text;
             s.TextBox.InvalidateLayout();
-            // 第一次收编辑 = 最后一次自适应：宽按文本自然宽、高按内容；
-            // 之后 AutoHeight=false，完全由用户拖。
-            if (accept && s.TextBox.Role == TextBoxRole.Normal && s.TextBox.AutoHeight)
+            // 普通文本框：宽度只在“自动宽”时按内容收一次；之后宽度听用户的。
+            // 高度永远自动——内容多高就多高，不再冻结、不再转内部滚动。
+            if (accept && s.TextBox.Role == TextBoxRole.Normal)
             {
                 var screen = ScreenRectPhysical();
                 float u = MathF.Max(0.5f, s.TextBox.Unit);
-                float maxW = MathF.Max(80f * u, MathF.Min(
-                    (screen.MaxX - screen.MinX) * 0.9f,
-                    screen.MaxX - oldOrigin.X - 16f * u));
+                float margin = 16f * u;
+                float maxW = MathF.Max(80f * u, screen.MaxX - screen.MinX - margin * 2f);
                 float maxH = MathF.Max(80f * u, MathF.Min(
                     (screen.MaxY - screen.MinY) * 0.9f,
-                    screen.MaxY - ViewOffsetY - oldOrigin.Y - 16f * u));
-                s.TextBox.FitToContent(maxW, maxH, fitWidth: !string.IsNullOrWhiteSpace(text));
-                // 变宽/变窄都保持原来的中心，不要只往右长。
-                // ???????????????????????????????
-                // ????????????????????
-                if (!wasNew && s.Points.Count > 0 && MathF.Abs(s.TextBox.Width - oldW) > 0.5f)
+                    screen.MaxY - ViewOffsetY - oldOrigin.Y - margin));
+                s.TextBox.FitToContent(maxW, maxH, fitWidth: s.TextBox.AutoWidth);
+                // **左沿不动、只往右长**：不要按"变宽/变窄保持中心"去挪 p0，
+                // 否则提交那一下框会往左跳半个宽度，看起来就不是"右边长"了。
+                // 提交时再横向夹一次：老框/粘贴长文本都不能超出屏幕左右沿。
+                if (s.Points.Count > 0)
                 {
                     var p0 = s.Points[0];
-                    s.SetPoint(0, new Vector2(p0.X - (s.TextBox.Width - oldW) * 0.5f, p0.Y));
+                    float minX = screen.MinX + margin;
+                    float maxX = screen.MaxX - margin - s.TextBox.Width;
+                    float nx = Math.Clamp(p0.X, MathF.Min(minX, maxX), maxX);
+                    if (MathF.Abs(nx - p0.X) > 0.5f)
+                        s.SetPoint(0, new Vector2(nx, p0.Y));
                 }
             }
             s.SyncTextBoxBounds();
@@ -526,8 +1023,10 @@ public partial class InkEngine
             Doc.RefreshStrokeGrid(s);
             if (accept && s.TextBox.Role == TextBoxRole.Normal)
             {
-                s.TextBox.AutoHeight = false;
-                s.TextBox.AutoWidth = false;
+                // **不要在这里把 AutoWidth 关掉**：关掉的话"点一下外面再回来编辑"
+                // 就变成固定宽，用户会看到"输入汉字长度不变"。只有手动拖过左右竖线/
+                // 四角缩放（TextBoxSelection 那边）才把 AutoWidth 置 false。
+                s.TextBox.AutoHeight = true;
             }
             Doc.Dirty.Add(oldBounds);
             Doc.Dirty.Add(s.PaddedBounds);
@@ -546,6 +1045,18 @@ public partial class InkEngine
         }
         _dirty = true;
         NotifyUiStateChanged();
+    }
+
+    /// <summary>空白 = 连一个可见字符都没有（含全角空格、零宽字符）。</summary>
+    internal static bool IsBlankText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return true;
+        foreach (char c in text)
+        {
+            if (c == '\u200B' || c == '\uFEFF') continue;
+            if (!char.IsWhiteSpace(c)) return false;
+        }
+        return true;
     }
 
     private void HideTextBoxEdit()
@@ -594,6 +1105,14 @@ public partial class InkEngine
         long editStyle = Native.GetWindowLongPtr(_textBoxEditHwnd, -16 /* GWL_STYLE */).ToInt64();
         editStyle &= ~0x80L;                    // ES_AUTOHSCROLL
         Native.SetWindowLongPtr(_textBoxEditHwnd, -16 /* GWL_STYLE */, new IntPtr(editStyle));
+        // **RichEdit 还有一份自己的 options**（和窗口 style 分开）：只清 GWL_STYLE 不够。
+        // 不清 ECO_AUTOHSCROLL，每打一个字它会把文本**向右滚 10 个字符**，
+        // 表现就是"前一个字被滚走、只看得到末尾"——正是 ES_AUTOHSCROLL 的文档行为。
+        if (_richEditReady)
+        {
+            Native.SendMessage(_textBoxEditHwnd, (uint)Native.EM_SETOPTIONS,
+                new IntPtr(Native.ECOOP_AND), new IntPtr(~Native.ECO_AUTOHSCROLL));
+        }
         _textBoxEditOwner = this;
         _textBoxEditWndProc = TextBoxEditWndProc;
         _textBoxEditOldProc = Native.SetWindowLongPtr(
@@ -624,14 +1143,18 @@ public partial class InkEngine
             case Native.WM_ERASEBKGND:
             {
                 Native.GetClientRect(hWnd, out var rc);
-                Native.FillRect(wParam, ref rc,
-                    Native.GetStockObject(_textBoxEditLightText ? 2 /* GRAY_BRUSH */ : 0 /* WHITE_BRUSH */));
+                IntPtr brush = _textBoxEditBgBrush != IntPtr.Zero
+                    ? _textBoxEditBgBrush
+                    : Native.GetStockObject(0 /* WHITE_BRUSH */);
+                Native.FillRect(wParam, ref rc, brush);
                 return new IntPtr(1);
             }
             case Native.WM_CTLCOLOREDIT:
-                Native.SetBkColor(wParam, _textBoxEditLightText ? 0x00808080u : 0x00FFFFFFu);
+                Native.SetBkColor(wParam, _textBoxEditBackColor);
                 Native.SetTextColor(wParam, _textBoxEditTextColor);
-                return Native.GetStockObject(_textBoxEditLightText ? 2 /* GRAY_BRUSH */ : 0 /* WHITE_BRUSH */);
+                return _textBoxEditBgBrush != IntPtr.Zero
+                    ? _textBoxEditBgBrush
+                    : Native.GetStockObject(0 /* WHITE_BRUSH */);
             case 0x0111 /* WM_COMMAND */:
                 // RichEdit 的文字变化通知发给父窗口；这里转回引擎做“边打边长”。
                 if (_textBoxEditOwner != null
@@ -646,6 +1169,14 @@ public partial class InkEngine
         return Native.DefWindowProc(hWnd, msg, wParam, lParam);
     }
 
+    /// <summary>先交给 RichEdit 默认处理，再按新文本立即重排（边打边长）。</summary>
+    private IntPtr PassToEditThenRefresh(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        IntPtr r = Native.CallWindowProc(_textBoxEditOldProc, hWnd, msg, wParam, lParam);
+        if (_textBoxEditing) OnTextBoxEditChanged();
+        return r;
+    }
+
     private IntPtr TextBoxEditWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
         switch (msg)
@@ -654,8 +1185,10 @@ public partial class InkEngine
             {
                 // 顶层 EDIT 默认不刷底色，会透出下面的 PPT/浏览器；编辑时铺白底。
                 Native.GetClientRect(hWnd, out var rc);
-                Native.FillRect(wParam, ref rc,
-                    Native.GetStockObject(_textBoxEditLightText ? 2 /* GRAY_BRUSH */ : 0 /* WHITE_BRUSH */));
+                IntPtr brush = _textBoxEditBgBrush != IntPtr.Zero
+                    ? _textBoxEditBgBrush
+                    : Native.GetStockObject(0 /* WHITE_BRUSH */);
+                Native.FillRect(wParam, ref rc, brush);
                 return new IntPtr(1);
             }
             case Native.WM_KEYDOWN:
@@ -665,10 +1198,38 @@ public partial class InkEngine
                 if (vk == 0x0D && ctrl) { EndTextBoxEditFromUi(true); return IntPtr.Zero; }
                 // Esc = 结束输入（提交），不是丢掉刚打的字；要反悔用 Ctrl+Z。
                 if (vk == 0x1B) { EndTextBoxEditFromUi(true); return IntPtr.Zero; }
+                // 退格 / Delete / 回车 / Tab / Ctrl+Z：默认处理完要立即重排，
+                // 不能等下一次 EN_CHANGE（某些输入法路径下它来得晚）。
+                if (vk is 0x08 or 0x2E or 0x0D or 0x09 || (ctrl && vk == 0x5A))
+                    return PassToEditThenRefresh(hWnd, msg, wParam, lParam);
                 break;
             }
-            case 0x0302 /* WM_PASTE */:
-                if (PastePlainText(hWnd)) return IntPtr.Zero;
+            case Native.WM_CHAR:
+            case Native.WM_IME_CHAR:
+            case Native.WM_IME_COMPOSITION:
+            case Native.WM_IME_ENDCOMPOSITION:
+            case Native.WM_CUT:
+            case Native.WM_CLEAR:
+            case Native.WM_UNDO:
+                // **真实键盘/输入法上屏的每个字都走这里**：先让 RichEdit 处理，
+                // 再立刻按新文本重排。只靠 EN_CHANGE 在中文 IME 下并不可靠，
+                // 表现就是"打字时不变宽，点走以后才变"。
+                return PassToEditThenRefresh(hWnd, msg, wParam, lParam);
+            case Native.WM_PASTE:
+                if (PastePlainText(hWnd))
+                {
+                    if (_textBoxEditing) OnTextBoxEditChanged();
+                    return IntPtr.Zero;
+                }
+                break;
+            case Native.WM_MOUSEWHEEL:
+                // 编辑时滚轮滚的是**画布**，不是文本框内部：和 Excalidraw 一样，
+                // 普通文本框没有第二个滚动条。滚完把编辑窗跟着卡片重新铺一次。
+                if (_textBoxEditing)
+                {
+                    ScrollCanvasForTextEdit(wParam);
+                    return IntPtr.Zero;
+                }
                 break;
             case Native.WM_KILLFOCUS:
                 if (_textBoxEditing) EndTextBoxEditFromUi(true);
@@ -709,6 +1270,55 @@ public partial class InkEngine
         }
     }
 
+    /// <summary>
+    /// 编辑窗的两块底色：文字色 + 背景色。
+    ///
+    /// 背景规则（2026-11-01 用户拍板）：
+    ///   · **白板页**：直接用当前板色（白/绿/黑），编辑框看起来就是"同一个底"；
+    ///   · **文档 / 图片上**：原生 RichEdit 不能真透明，先用一块比纯白柔和的近白；
+    ///     文字本身是浅色（白字）时改用中性灰，否则白字会看不见。
+    /// 完全透明要换掉 RichEdit 做自绘编辑器，本批不做。
+    /// </summary>
+    private void UpdateTextBoxEditColors(Stroke s)
+    {
+        if (s?.TextBox == null) return;
+        var c = s.Color;
+        _textBoxEditTextColor = ((uint)(c.R * 255f) & 0xFF)
+                              | (((uint)(c.G * 255f) & 0xFF) << 8)
+                              | (((uint)(c.B * 255f) & 0xFF) << 16);
+
+        float textLuma = 0.299f * c.R + 0.587f * c.G + 0.114f * c.B;
+        bool lightText = textLuma > 0.65f;
+        Color4 bg;
+        if (Doc.PageKey == InkDocument.BoardPageKey)
+        {
+            float boardLuma = 0.299f * BoardColor.R + 0.587f * BoardColor.G
+                            + 0.114f * BoardColor.B;
+            // 板色优先；只有"字和板几乎同色"（白字白板、黑字黑板）才临时换一块
+            // 高对比底，否则编辑时连字都看不见。
+            if (MathF.Abs(textLuma - boardLuma) < 0.28f)
+                bg = textLuma > 0.5f
+                    ? new Color4(0.32f, 0.34f, 0.36f, 1f)
+                    : new Color4(0.95f, 0.95f, 0.94f, 1f);
+            else
+                bg = BoardColor;
+        }
+        else
+        {
+            bg = lightText
+                ? new Color4(0.44f, 0.46f, 0.49f, 1f)
+                : new Color4(0.95f, 0.95f, 0.94f, 1f);
+        }
+
+        uint cref = ((uint)(bg.R * 255f) & 0xFF)
+                  | (((uint)(bg.G * 255f) & 0xFF) << 8)
+                  | (((uint)(bg.B * 255f) & 0xFF) << 16);
+        if (cref == _textBoxEditBackColor && _textBoxEditBgBrush != IntPtr.Zero) return;
+        _textBoxEditBackColor = cref;
+        if (_textBoxEditBgBrush != IntPtr.Zero) Native.DeleteObject(_textBoxEditBgBrush);
+        _textBoxEditBgBrush = Native.CreateSolidBrush(cref);
+    }
+
     private void ApplyRichEditFormat(Stroke s)
     {
         if (!_richEditReady || s?.TextBox == null) return;
@@ -717,7 +1327,7 @@ public partial class InkEngine
         int fontTwips = Math.Max(80, (int)MathF.Round(fontPx * 15f / dpi));
 
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETBKGNDCOLOR,
-                           IntPtr.Zero, new IntPtr(_textBoxEditLightText ? 0x00808080 : 0x00FFFFFF));
+                           IntPtr.Zero, new IntPtr(_textBoxEditBackColor));
 
         var cf = new Native.CHARFORMAT2W
         {

@@ -3549,24 +3549,61 @@ internal sealed partial class App
                   $"工具={Tool} 高亮={ui.CellActiveForTest(7)} editing={TextBoxEditing} 文本框={TextBoxCountForTest}");
             ui.SelectBandCellForTest(7);
             SettleFrames(150);
-            Check("文本工具带：有字号和文字色片",
-                  ui.BandCellForTest == 7 && ui.SwatchCountForTest > 0
-                  && Host.State.TextFontSize > 0f,
+            Check("文本工具带：有字号按钮和 4 个文字色片（默认 18）",
+                  ui.BandCellForTest == 7 && ui.SwatchCountForTest == 4
+                  && MathF.Abs(Host.State.TextFontSize - 18f) < 0.1f,
                   $"bandCell={ui.BandCellForTest} 色片={ui.SwatchCountForTest} 字号={Host.State.TextFontSize}");
-            float fontBefore = Host.State.TextFontSize;
-            var plusBtn = ui.TextFontPlusRectForTest;
-            ClickPhysical((plusBtn.MinX + plusBtn.MaxX) * 0.5f * DpiScale,
-                          (plusBtn.MinY + plusBtn.MaxY) * 0.5f * DpiScale);
-            SettleFrames(120);
-            Check("文本色带 A+：默认字号 +1", Host.State.TextFontSize > fontBefore,
-                  $"{fontBefore:F0} → {Host.State.TextFontSize:F0}");
-            var redSwatch = ui.SwatchRectForTest(1);
+            // 文字操作条和其他对象**同一套**：永远在下方、贴底时卡在屏幕里，绝不翻到上方。
+            var vp = FurnitureViewport;
+            var lowSel = new RectF
+            {
+                MinX = _virtualX + 120f, MinY = vp.MaxY - 90f,
+                MaxX = _virtualX + 420f, MaxY = vp.MaxY - 60f,
+            };
+            var lowBar = SelectionHandles.BarRect(lowSel, UiUnit, vp,
+                SelectionHandles.TextBarButtonCount);
+            float barBottomLimit = vp.MaxY - SelectionHandles.BarMinBottomMarginLogical * UiUnit;
+            Check("文字操作条不翻面：贴底时仍压在框下、下沿卡在屏幕边",
+                  lowBar.MaxY > lowSel.MaxY
+                  && MathF.Abs(lowBar.MaxY - barBottomLimit) < 1.5f,
+                  $"框底={lowSel.MaxY:F0} 条={lowBar.MinY:F0}..{lowBar.MaxY:F0} "
+                  + $"下限={barBottomLimit:F0}");
+
+            var fontBtn = ui.TextFontButtonRectForTest;
+            ClickPhysical((fontBtn.MinX + fontBtn.MaxX) * 0.5f * DpiScale,
+                          (fontBtn.MinY + fontBtn.MaxY) * 0.5f * DpiScale);
+            SettleFrames(150);
+            Check("文本色带点字号：打开字号菜单",
+                  ui.TextFontMenuOpenForTest && !ui.TextFontMenuRectForTest.IsEmpty,
+                  $"菜单={ui.TextFontMenuRectForTest}");
+            int pick24 = -1;
+            for (int i = 0; i < ui.TextFontSizeCountForTest; i++)
+                if (MathF.Abs(ui.TextFontSizeAtForTest(i) - 24f) < 0.1f) pick24 = i;
+            var sizeCell = ui.TextFontCellRectForTest(pick24);
+            ClickPhysical((sizeCell.MinX + sizeCell.MaxX) * 0.5f * DpiScale,
+                          (sizeCell.MinY + sizeCell.MaxY) * 0.5f * DpiScale);
+            SettleFrames(150);
+            Check("字号菜单选 24：默认字号直接变 24",
+                  MathF.Abs(Host.State.TextFontSize - 24f) < 0.1f && !ui.TextFontMenuOpenForTest,
+                  $"字号={Host.State.TextFontSize:F0} 菜单={ui.TextFontMenuOpenForTest}");
+            var redSwatch = ui.SwatchRectForTest(0);
             ClickPhysical((redSwatch.MinX + redSwatch.MaxX) * 0.5f * DpiScale,
                           (redSwatch.MinY + redSwatch.MaxY) * 0.5f * DpiScale);
             SettleFrames(120);
             Check("文本色带点红色：默认文字色跟着变",
                   Host.State.TextColor.R > 0.8f && Host.State.TextColor.G < 0.4f,
                   $"文字色 = ({Host.State.TextColor.R:F2},{Host.State.TextColor.G:F2},{Host.State.TextColor.B:F2})");
+            ClickPhysical((redSwatch.MinX + redSwatch.MaxX) * 0.5f * DpiScale,
+                          (redSwatch.MinY + redSwatch.MaxY) * 0.5f * DpiScale);
+            SettleFrames(150);
+            Check("再点已选中的红色：打开文字取色板",
+                  ui.PenPickerOpenForTest && ui.PenPickerTextForTest,
+                  $"open={ui.PenPickerOpenForTest} text={ui.PenPickerTextForTest}");
+            ClickPhysical((_virtualX + _virtualW * 0.2f) * DpiScale,
+                          (_virtualY + _virtualH * 0.2f) * DpiScale);
+            SettleFrames(120);
+            Check("点外面关闭文字取色板", !ui.PenPickerOpenForTest,
+                  $"open={ui.PenPickerOpenForTest}");
             Host.Commands.SetTextColor(InkPalette.PenBand[0].Color);
 
             float tx = _virtualX + _virtualW * 0.55f;
@@ -3582,8 +3619,9 @@ internal sealed partial class App
             string sample = "文本工具自动换行测试：" + new string('长', 160);
             Host.SetTextBoxEditTextForTest(sample);
             SettleFrames(250);
-            float maxWOnScreen = _virtualW * 0.9f + 2f;
-            Check("输入时自动变宽，到屏幕右沿后换行长高",
+            float maxWOnScreen = _virtualW
+                - 32f * MathF.Max(0.75f, tb?.Unit ?? 1f) + 2f;
+            Check("输入时自动变宽，到上限后换行长高",
                   tb != null && tb.Width > initialW && tb.Width <= maxWOnScreen
                   && tb.ContentHeight > 60f * MathF.Max(0.75f, tb.Unit),
                   $"宽 {initialW:F0} → {tb?.Width:F0}（上限 {maxWOnScreen:F0}），"
@@ -3594,61 +3632,237 @@ internal sealed partial class App
             ClickPhysical((doneBtn.MinX + doneBtn.MaxX) * 0.5f * DpiScale,
                           (doneBtn.MinY + doneBtn.MaxY) * 0.5f * DpiScale);
             SettleFrames(180);
-            Check("点「完成」提交，尺寸冻结（AutoWidth/AutoHeight 都关掉）",
-                  !TextBoxEditing && tb != null && !tb.AutoWidth && !tb.AutoHeight,
+            Check("点「完成」提交：宽固定、高继续自动",
+                  !TextBoxEditing && tb != null && !tb.AutoWidth && tb.AutoHeight,
                   $"editing={TextBoxEditing} autoW={tb?.AutoWidth} autoH={tb?.AutoHeight}");
 
-            // 上下手柄回归：滚动画布（ViewOffsetY 非 0）后，按下/拖动不能跳高度。
-            // 老实现把已经转成画布坐标的 y 又减了一次 ViewOffsetY，只有上下会跳。
+            // **色带 vs 操作条**：色带只改下一次输入的默认值，操作条只改当前选中的文字。
+            if (tb != null)
+            {
+                float defaultFont = Host.State.TextFontSize;
+                SetSelectedTextFontFromUi(48f);
+                SettleFrames(120);
+                Check("文字操作条字号：只改当前文字，不动色带默认值",
+                      MathF.Abs(tb.FontSize - 48f) < 0.1f
+                      && MathF.Abs(Host.State.TextFontSize - defaultFont) < 0.1f,
+                      $"文字字号={tb.FontSize:F0} 默认字号={Host.State.TextFontSize:F0}");
+                Host.Commands.Undo();
+                SettleFrames(120);
+
+                var bandColorBefore = Host.State.TextColor;
+                SetSelectionColor(InkPalette.PenBand[2].Color);
+                SettleFrames(120);
+                Check("文字操作条颜色：只改当前文字，不动色带默认色",
+                      tb.Ink.B > 0.7f && tb.Ink.R < 0.4f
+                      && MathF.Abs(Host.State.TextColor.R - bandColorBefore.R) < 0.01f
+                      && MathF.Abs(Host.State.TextColor.G - bandColorBefore.G) < 0.01f
+                      && MathF.Abs(Host.State.TextColor.B - bandColorBefore.B) < 0.01f,
+                      $"文字色=({tb.Ink.R:F2},{tb.Ink.G:F2},{tb.Ink.B:F2}) "
+                      + $"默认色=({Host.State.TextColor.R:F2},{Host.State.TextColor.G:F2},{Host.State.TextColor.B:F2})");
+                Host.Commands.Undo();
+                SettleFrames(120);
+            }
+
+            // 文本框移动：平移写进 Points、Transform 保持单位阵；
+            // 撤销/重做不能因为"烘焙"而越移越远。
+            if (tbStroke != null && tbStroke.Points.Count > 0)
+            {
+                var p0 = tbStroke.Points[0];
+                var start = new Vector2(p0.X, p0.Y);
+                Doc.ApplyTransform(Matrix3x2.CreateTranslation(60f, 40f));
+                bool moved = tbStroke.Transform.IsIdentity
+                          && MathF.Abs(tbStroke.Points[0].X - (start.X + 60f)) < 0.5f
+                          && MathF.Abs(tbStroke.Points[0].Y - (start.Y + 40f)) < 0.5f;
+                Doc.Undo();
+                bool undone = MathF.Abs(tbStroke.Points[0].X - start.X) < 0.5f
+                           && MathF.Abs(tbStroke.Points[0].Y - start.Y) < 0.5f;
+                Doc.Redo();
+                bool redone = MathF.Abs(tbStroke.Points[0].X - (start.X + 60f)) < 0.5f
+                           && MathF.Abs(tbStroke.Points[0].Y - (start.Y + 40f)) < 0.5f;
+                Doc.Undo();
+                SettleFrames(120);
+                Check("文本框移动：平移进 Points；撤销/重做位置不漂",
+                      moved && undone && redone
+                      && MathF.Abs(tbStroke.Points[0].X - start.X) < 0.5f,
+                      $"moved={moved} undone={undone} redone={redone}");
+            }
+
+            // 普通文本框：左右整高竖线改宽；四个角等比缩放字号。没有上下边手柄。
             if (tb != null && tbStroke != null)
             {
                 float oldOffset = ViewOffsetY;
                 ViewOffsetY = -240f;
                 var frame = SelectionHandles.FrameOf(new[] { tbStroke });
-                var bh = SelectionHandles.CanvasPosition(SelHandle.Bottom, frame, UiUnit);
+                var rh = SelectionHandles.CanvasPosition(SelHandle.Right, frame, UiUnit);
+                float wBefore = tb.Width;
                 float hBefore = tb.Height;
-                SelectionGestureForTest(bh.X, bh.Y);
-                UpdateSelectionGestureForTest(bh.X, bh.Y);
+                // 先往左收，给"再拖宽"留出屏幕空间（文本框上限 = 屏幕可用宽）。
+                SelectionGestureForTest(rh.X, rh.Y);
+                UpdateSelectionGestureForTest(rh.X - 160f, rh.Y);
                 EndSelectionGestureForTest();
-                Check("滚动画布后点下边手柄：高度不跳",
-                      MathF.Abs(tb.Height - hBefore) < 2f,
-                      $"{hBefore:F0} → {tb.Height:F0}（ViewOffsetY={ViewOffsetY:F0}）");
+                Check("拖右侧整高竖线向左：宽变窄，高度仍自动",
+                      tb.Width < wBefore - 100f && tb.AutoHeight,
+                      $"{wBefore:F0} → {tb.Width:F0}，autoH={tb.AutoHeight}");
+                frame = SelectionHandles.FrameOf(new[] { tbStroke });
+                rh = SelectionHandles.CanvasPosition(SelHandle.Right, frame, UiUnit);
+                wBefore = tb.Width;
+                SelectionGestureForTest(rh.X, rh.Y);
+                UpdateSelectionGestureForTest(rh.X + 80f, rh.Y);
+                EndSelectionGestureForTest();
+                Check("再拖右侧整高竖线向右：宽变宽，高度仍自动",
+                      tb.Width > wBefore + 60f && tb.AutoHeight,
+                      $"{wBefore:F0} → {tb.Width:F0}，autoH={tb.AutoHeight}");
 
+                frame = SelectionHandles.FrameOf(new[] { tbStroke });
+                var br = SelectionHandles.CanvasPosition(SelHandle.BottomRight, frame, UiUnit);
+                var hitBr = SelectionHandles.HitTest(br.X, br.Y, Doc.Selected, frame, UiUnit);
+                Check("右下角命中：是角手柄（不是右边竖线）",
+                      hitBr == SelHandle.BottomRight,
+                      $"br={br.X:F0},{br.Y:F0} hit={hitBr} frame={frame.CanvasAabb}");
+                float fontBefore = tb.FontSize;
+                float wBefore2 = tb.Width;
+                SelectionGestureForTest(br.X, br.Y);
+                UpdateSelectionGestureForTest(br.X + 80f, br.Y + 80f);
+                EndSelectionGestureForTest();
+                Check("拖右下角：字号变大，宽跟着变",
+                      tb.FontSize > fontBefore + 0.1f && tb.Width > wBefore2,
+                      $"字号 {fontBefore:F1} → {tb.FontSize:F1}，宽 {wBefore2:F0} → {tb.Width:F0}");
+
+                // 没有上下边手柄：直接拿 Bottom 走手势，不应当改变高度。
+                frame = SelectionHandles.FrameOf(new[] { tbStroke });
+                var bh = SelectionHandles.CanvasPosition(SelHandle.Bottom, frame, UiUnit);
+                float hBottom = tb.Height;
                 SelectionGestureForTest(bh.X, bh.Y);
                 UpdateSelectionGestureForTest(bh.X, bh.Y + 80f);
                 EndSelectionGestureForTest();
-                Check("滚动画布后拖下边：高度跟手 +80",
-                      MathF.Abs(tb.Height - (hBefore + 80f)) < 4f,
-                      $"{hBefore:F0} → {tb.Height:F0}");
-
-                frame = SelectionHandles.FrameOf(new[] { tbStroke });
-                var th = SelectionHandles.CanvasPosition(SelHandle.Top, frame, UiUnit);
-                float hTop = tb.Height;
-                SelectionGestureForTest(th.X, th.Y);
-                UpdateSelectionGestureForTest(th.X, th.Y + 60f);
-                EndSelectionGestureForTest();
-                Check("滚动画布后拖上边：高度跟手 −60（底边不动）",
-                      MathF.Abs(tb.Height - (hTop - 60f)) < 4f,
-                      $"{hTop:F0} → {tb.Height:F0}");
+                Check("普通文本框没有下边手柄：拖下边不改高度",
+                      MathF.Abs(tb.Height - hBottom) < 2f,
+                      $"{hBottom:F0} → {tb.Height:F0}");
                 ViewOffsetY = oldOffset;
             }
 
-            // 点已有文字：第一下选中，第二下编辑；不新建第二个。
+            // 滚动时操作条跟着对象走（画布坐标缓存不因滚轮/拖动视野而重算），
+            // 不会一直粘在屏幕下沿——ClassIn 的行为，用户 2026-11-01 确认合理。
+            if (Doc.Selected.Count == 1)
+            {
+                var barCanvasBefore = SelectionBarCanvasRect;
+                float savedOffset = ViewOffsetY;
+                ViewOffsetY += 400f;
+                SettleFrames(30);
+                var barCanvasAfter = SelectionBarCanvasRect;
+                ViewOffsetY = savedOffset;
+                Check("滚动视野：操作条画布位置不重算（跟着对象滚走）",
+                      MathF.Abs(barCanvasBefore.MinX - barCanvasAfter.MinX) < 0.5f
+                      && MathF.Abs(barCanvasBefore.MinY - barCanvasAfter.MinY) < 0.5f,
+                      $"{barCanvasBefore.MinX:F0},{barCanvasBefore.MinY:F0} → "
+                      + $"{barCanvasAfter.MinX:F0},{barCanvasAfter.MinY:F0}");
+            }
+
+            // 文字的颜色面板只有色板：没有粗细滑条、没有线型行（对文字没意义）。
+            // 这些纯几何检查放在双击**之前**：两次点击之间不能塞 SettleFrames。
+            var textAabb = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
+            int tsc = SelectionHandles.SwatchCount;
+            var textInkPanel = SelectionHandles.PanelRect(textAabb, UiUnit, FurnitureViewport, tsc, true);
+            var normalInkPanel = SelectionHandles.PanelRect(textAabb, UiUnit, FurnitureViewport, tsc, false);
+            var sw0 = SelectionHandles.SwatchRect(0, textAabb, UiUnit, FurnitureViewport, tsc, true);
+            var swatchPart = SelectionHandles.PanelPartAt(
+                (sw0.MinX + sw0.MaxX) * 0.5f, (sw0.MinY + sw0.MaxY) * 0.5f,
+                textAabb, UiUnit, FurnitureViewport, SelPanel.Ink, tsc, true);
+            Check("文字颜色面板：只有色板，没有粗细/线型",
+                  textInkPanel.MaxY - textInkPanel.MinY < normalInkPanel.MaxY - normalInkPanel.MinY - 40f
+                  && SelectionHandles.SliderRect(textAabb, UiUnit, FurnitureViewport, tsc, true).IsEmpty
+                  && SelectionHandles.StyleCellRect(0, textAabb, UiUnit, FurnitureViewport, tsc, true).IsEmpty
+                  && swatchPart == SelectionHandles.PanelPart.SwatchBase,
+                  $"高 {textInkPanel.MaxY - textInkPanel.MinY:F0} < 普通 {normalInkPanel.MaxY - normalInkPanel.MinY:F0}；"
+                  + $"色片命中={swatchPart}");
+
+            // 文字操作条第 2 格 = 字号下拉：打开后六格都能点中（3 列 × 2 行）。
+            RunBarActionForTest(SelectionHandles.BarIndexOf(SelBarButton.FontSize, textBar: true));
+            var fCell = SelectionHandles.FontPanelCellRect(
+                5, textAabb, UiUnit, FurnitureViewport);
+            var fPart = SelectionHandles.PanelPartAt(
+                (fCell.MinX + fCell.MaxX) * 0.5f, (fCell.MinY + fCell.MaxY) * 0.5f,
+                textAabb, UiUnit, FurnitureViewport, SelPanel.FontSize, tsc, true);
+            Check("文字操作条字号格：打开字号下拉，6 格命中",
+                  SelPanelOpen == SelPanel.FontSize
+                  && fPart == (SelectionHandles.PanelPart)((int)SelectionHandles.PanelPart.FontBase + 5),
+                  $"panel={SelPanelOpen} 命中={fPart}");
+            SelPanelOpen = SelPanel.None;
+            SettleFrames(80);
+
+            // 光标：未选中的文字 = I 字；选中之后 = 移动十字（和 ClassIn 一致）。
+            // **放在双击之前**：两次点击之间不能塞好几次 SettleFrames，否则超过 450ms
+            // 双击窗口，后面那条"双击进入编辑"会变成两条单击。
+            var cb0 = tbStroke?.PaddedBounds ?? default;
+            float cc0x = (cb0.MinX + cb0.MaxX) * 0.5f;
+            float cc0y = (cb0.MinY + cb0.MaxY) * 0.5f + ViewOffsetY;
+            SendMouse((int)cc0x, (int)cc0y, 0);
+            SettleFrames(120);
+            var selCursor = ComputeCursorKind();
+            Doc.Selected.Clear();
+            SettleFrames(120);
+            SendMouse((int)cc0x, (int)cc0y, 0);
+            SettleFrames(120);
+            var freeCursor = ComputeCursorKind();
+            Check("文字光标：未选中 I 字 / 选中后移动十字",
+                  freeCursor == CursorKind.IBeam && selCursor == CursorKind.Move,
+                  $"未选中={freeCursor} 选中={selCursor}");
+
+            // 点已有文字：第一下选中（可拖），双击才进入编辑。
             Doc.Selected.Clear();                     // 提交后仍选中着；先模拟“点空白取消选中”
             SettleFrames(120);
             var cb = tbStroke?.PaddedBounds ?? default;
             float ccx = (cb.MinX + cb.MaxX) * 0.5f;
             float ccy = (cb.MinY + cb.MaxY) * 0.5f + ViewOffsetY;
             ClickCanvas(ccx, ccy);
-            Check("点已有文字：选中，不新建",
-                  TextBoxCountForTest == 1 && Doc.Selected.Count == 1 && !TextBoxEditing,
+            Check("点已有文字：第一下只选中，不编辑",
+                  !TextBoxEditing && TextBoxCountForTest == 1 && Doc.Selected.Count == 1,
                   $"文本框={TextBoxCountForTest} 选中={Doc.Selected.Count} editing={TextBoxEditing}");
+            Check("文本工具选中文字：下方操作条出现（七格）",
+                  SelectionBarShown && SingleTextBoxSelection,
+                  $"barShown={SelectionBarShown} 单选文字={SingleTextBoxSelection}");
             ClickCanvas(ccx, ccy);
-            Check("再点已选中的文字：进入编辑",
+            Check("双击已有文字：进入编辑",
                   TextBoxEditing && TextBoxCountForTest == 1,
-                  $"editing={TextBoxEditing} 文本框={TextBoxCountForTest}");
+                  $"文本框={TextBoxCountForTest} editing={TextBoxEditing}");
+            Check("编辑文字时：选中框 / 操作条隐藏",
+                  TextBoxEditing && !SelectionBarShown,
+                  $"editing={TextBoxEditing} barShown={SelectionBarShown}");
+
+            // 多行定位：双击靠上的位置，光标应落在点击处，而不是末尾。
             EndTextBoxEditFromUi(true);
             SettleFrames(120);
+            // 提交时可能横向夹回屏幕 / 自动上移视野，包围盒要重新取一次。
+            cb = tbStroke?.PaddedBounds ?? default;
+            float lineH = (tb?.FontSize ?? 20f) * (tb?.Unit ?? 1f) * 1.55f;
+            float clickX = cb.MinX + 40f;
+            float clickY = cb.MinY + ViewOffsetY + 18f * (tb?.Unit ?? 1f) + lineH * 0.6f;
+            ClickCanvas(clickX, clickY);
+            ClickCanvas(clickX, clickY);
+            int caretAtClick = TextBoxEditCaretForTest;
+            int textLen = tb?.Text?.Length ?? 0;
+            Check("双击上方文字：光标落在点击处（不是末尾）",
+                  TextBoxEditing && caretAtClick > 0 && caretAtClick < textLen - 5,
+                  $"caret={caretAtClick} len={textLen}");
+            EndTextBoxEditFromUi(true);
+            SettleFrames(120);
+
+            // 老框被清空：整框删除；撤销要恢复“清空前的原文”，不是恢复空框。
+            int beforeExistingEmpty = TextBoxCountForTest;
+            ClickCanvas(ccx, ccy);
+            ClickCanvas(ccx, ccy);
+            Host.SetTextBoxEditTextForTest("   ");
+            EndTextBoxEditFromUi(true);
+            SettleFrames(150);
+            Check("老文本框清空后：整框删除",
+                  TextBoxCountForTest == beforeExistingEmpty - 1,
+                  $"{beforeExistingEmpty} → {TextBoxCountForTest}");
+            Host.Commands.Undo();
+            SettleFrames(180);
+            Check("撤销清空删除：恢复原文字",
+                  TextBoxCountForTest == beforeExistingEmpty
+                  && tb?.Text != null && tb.Text.Trim().Length > 0,
+                  $"文本框={TextBoxCountForTest} 文字长度={tb?.Text?.Length ?? 0}");
 
             // 新建后不输入就提交：空框必须自己消失，不留隐形对象。
             int beforeEmpty = TextBoxCountForTest;
@@ -3658,11 +3872,61 @@ internal sealed partial class App
             Check("新建后没输入就结束：空框自动清理",
                   TextBoxCountForTest == beforeEmpty,
                   $"{beforeEmpty} → {TextBoxCountForTest}");
+
+            // 橡皮策略：面积擦只擦墨、**不碰文字**；整笔擦点中文本 = 整框删除（可撤销）。
+            if (tbStroke != null)
+            {
+                var eb = tbStroke.PaddedBounds;
+                float ecx = (eb.MinX + eb.MaxX) * 0.5f;
+                float ecy = (eb.MinY + eb.MaxY) * 0.5f;
+                int beforeArea = TextBoxCountForTest;
+                int areaHit = Doc.EraseRectAt(ecx, ecy, 24f, 24f);
+                Check("面积擦：只擦墨迹，不碰文本框",
+                      TextBoxCountForTest == beforeArea && areaHit == 0,
+                      $"文本框 {beforeArea} → {TextBoxCountForTest}，命中 {areaHit}");
+                int beforeWhole = TextBoxCountForTest;
+                Doc.EraseAt(ecx, ecy, EraserRadius);
+                Check("整笔擦：点中文本框 = 删整个框",
+                      TextBoxCountForTest == beforeWhole - 1,
+                      $"{beforeWhole} → {TextBoxCountForTest}");
+                Host.Commands.Undo();
+                SettleFrames(120);
+                Check("撤销整笔擦：文本框和文字一起回来",
+                      TextBoxCountForTest == beforeWhole
+                      && tb?.Text != null && tb.Text.Trim().Length > 0,
+                      $"文本框={TextBoxCountForTest} 文字长度={tb?.Text?.Length ?? 0}");
+            }
+
+            // 编辑中点击画布空白：**同一下**就出新输入框，旧框变成普通显示、
+            // 不再带操作条（ClassIn 的行为，用户 2026-11-02 报过我们原来会留着旧框选中）。
+            Doc.Clear();
+            Doc.ClearHistory();
+            SettleFrames(120);
+            SetToolFromUi(Tool.Text);
+            InsertPlainTextBoxForTest("旧文字");
+            var oldBox = Doc.Selected.Count == 1 ? Doc.Selected[0] : null;
+            if (oldBox != null)
+            {
+                BeginTextBoxEdit(oldBox);
+                Host.SetTextBoxEditTextForTest("旧文字");
+                SettleFrames(120);
+                int beforeClick = TextBoxCountForTest;
+                ClickCanvas(_virtualX + 50f, _virtualY + 60f);
+                SettleFrames(220);
+                Check("编辑中点击空白：旧框取消选中，同一下出现新输入框",
+                      TextBoxEditing && TextBoxCountForTest == beforeClick + 1
+                      && !Doc.Selected.Contains(oldBox),
+                      $"editing={TextBoxEditing} 文本框={beforeClick}→{TextBoxCountForTest} "
+                      + $"旧框仍选中={Doc.Selected.Contains(oldBox)}");
+                EndTextBoxEditFromUi(true);       // 新框是空的 → 自动清理
+                SettleFrames(120);
+            }
+
             Doc.Clear();
             Doc.ClearHistory();
             SettleFrames(120);
 
-            // 未钉住（老用户迁移后的状态）：主栏没有，更多里必须能进文本工具。
+            // 未钉住（老用户迁移后的状态）：主栏没有，更多里也**不再**给文本框兜底。
             ui.SetProfileForTest(1);
             ui.SetPinForTest(7, false);
             SettleFrames(150);
@@ -3671,14 +3935,8 @@ internal sealed partial class App
             ui.OpenMoreForTest();
             SettleFrames(250);
             var tbTile = ui.HubTileRectForTest(10);
-            Check("未钉住时「更多」保留文本入口", !tbTile.IsEmpty,
-                  $"格 ({tbTile.MinX:F0},{tbTile.MinY:F0})-({tbTile.MaxX:F0},{tbTile.MaxY:F0})");
-            ClickPhysical((tbTile.MinX + tbTile.MaxX) * 0.5f * DpiScale,
-                          (tbTile.MinY + tbTile.MaxY) * 0.5f * DpiScale);
-            SettleFrames(250);
-            Check("更多 → 文本：切到文本工具，点画布再输入",
-                  Tool == Tool.Text && !TextBoxEditing && !ui.MoreOpenForTest,
-                  $"工具={Tool} editing={TextBoxEditing} more={ui.MoreOpenForTest}");
+            Check("未钉住时「更多」也不再保留文本入口", tbTile.IsEmpty,
+                  $"格 = {tbTile}");
             ui.SetPinForTest(7, true);
             ui.SetProfileForTest(2);
             ui.CloseMoreForTest();

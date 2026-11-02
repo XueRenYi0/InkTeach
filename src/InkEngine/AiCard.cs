@@ -123,10 +123,9 @@ internal sealed class TextBoxData
         ContentHeight = h;
         if (AutoHeight)
         {
-            float u = MathF.Max(0.5f, Unit);
-            // 空框留一个能点进去的高度；有内容就按行高算，别硬留 120 的空白。
-            float minH = Role == TextBoxRole.Normal ? 60f * u : 0f;
-            Height = MathF.Max(minH, h);
+            // 高度 = 内容高度（空框也有一行）；不再强制 60 逻辑像素，
+            // 否则小字号会凭空多出一条空白。
+            Height = MathF.Max(1f, h);
             ScrollY = 0f;
         }
         else
@@ -208,20 +207,21 @@ internal sealed class TextBoxData
         AutoHeight = oldAuto;
         InvalidateLayout();
 
-        float min = MathF.Max(80f * u, minToken + pad * 2f + 4f * u);
+        // 最小宽 = **一个最长 token + 左右内边距**，不再固定 80：
+        // 这样起始框可以窄到一个字，之后每多一个字就真的往右长一格。
+        float min = MathF.Max(24f * u, minToken + pad * 2f + 4f * u);
         return (natural, min);
     }
 
     /// <summary>
-    /// 第一次自适应：宽度按自然宽度（夹在"最长 token"和屏幕宽之间），
-    /// 高度按内容；完成后 AutoHeight=false，之后完全由用户拖。
+    /// 第一次自适应：宽度按自然宽度（夹在"最长 token"和上限之间）；
+    /// 高度按内容，且**一直保持自动**——普通文本框没有固定高这一态。
     /// </summary>
     internal void FitToContent(float maxWidth, float maxHeight, bool fitWidth)
     {
         if (Role != TextBoxRole.Normal) return;
         float u = MathF.Max(0.5f, Unit);
         maxWidth = MathF.Max(80f * u, maxWidth);
-        maxHeight = MathF.Max(80f * u, maxHeight);
 
         var (natural, min) = MeasureWidths(MathF.Max(maxWidth * 3f, 2400f * u));
         if (fitWidth && !string.IsNullOrWhiteSpace(Text))
@@ -238,23 +238,19 @@ internal sealed class TextBoxData
         ScrollY = 0f;
         InvalidateLayout();
         _ = EnsureLayout();
-        if (Height > maxHeight) Height = maxHeight;
-        AutoHeight = false;
-        ClampScroll();
-        InvalidateLayout();
+        // 高度不再封顶：内容多高，框就多高；超过屏幕时滚画布，不滚框内。
+        _ = maxHeight;
     }
 
     /// <summary>
     /// 输入中的实时自适应：宽度按自然宽长（夹在 token 最小宽和屏幕可用宽之间），
-    /// 到右沿后由排版自动换行，高度继续长；超过 maxHeight 时停住并转内部滚动。
-    /// 和 <see cref="FitToContent"/> 的区别：**不把 AutoHeight 关掉**，下一次输入继续长。
+    /// 到右沿后由排版自动换行，高度继续长。高度**永远自动**，不转内部滚动。
     /// </summary>
     internal void GrowToContent(float maxWidth, float maxHeight)
     {
         if (Role != TextBoxRole.Normal) return;
         float u = MathF.Max(0.5f, Unit);
         maxWidth = MathF.Max(80f * u, maxWidth);
-        maxHeight = MathF.Max(60f * u, maxHeight);
 
         var (natural, min) = MeasureWidths(MathF.Max(maxWidth * 3f, 2400f * u));
         float lo = MathF.Min(min, maxWidth);
@@ -264,12 +260,7 @@ internal sealed class TextBoxData
         ScrollY = 0f;
         InvalidateLayout();
         _ = EnsureLayout();
-        if (Height > maxHeight)
-        {
-            Height = maxHeight;
-            AutoHeight = false;
-            ClampScroll();
-        }
+        _ = maxHeight;
     }
 
     private static float LongestToken(string text, float size)
@@ -383,7 +374,10 @@ internal sealed class TextBoxData
         return c;
     }
 
-    /// <summary>普通文本框：固定宽高、默认不自动高度；内容超出时先裁切（滚动后续）。</summary>
+    /// <summary>
+    /// 普通文本框：**宽度手动、高度永远自动**（2026-11-01 定稿）。
+    /// 默认字号 18（与 ClassIn 的常用档一致）；内容多高框就多高，没有内部滚动。
+    /// </summary>
     public static TextBoxData CreatePlain(string text, float unit, float width, float height)
     {
         var c = new TextBoxData
@@ -394,7 +388,7 @@ internal sealed class TextBoxData
             Width = MathF.Max(120f, width),
             Height = MathF.Max(60f, height),
             AutoHeight = true,
-            FontSize = 15f,
+            FontSize = 18f,
         };
         c.InvalidateLayout();
         return c;
@@ -538,7 +532,7 @@ internal static class TextBoxLayout
     {
         float u = MathF.Max(0.5f, card.Unit);
         float pad = 18f * u;
-        float textW = MathF.Max(40f * u, card.Width - pad * 2f);
+        float textW = MathF.Max(8f * u, card.Width - pad * 2f);
         float size = Math.Clamp(card.FontSize, 8f, 72f) * u;
         float lineH = size * 1.55f;
         var lines = new List<TextBoxLine>();
@@ -1271,8 +1265,10 @@ public partial class InkEngine
 
         if (card.Role != TextBoxRole.AiQuestion)
         {
-            MaybeEditTextBoxOnDoubleClick(s);
-            return _textBoxEditing;
+            // 选择工具下也遵守"第一下选中/可拖，双击松手才编辑"：
+            // 这里只 arm，返回 false 让标准选择手势接住这一下。
+            ArmTextBoxEditOnDoubleClick(s, screenX, screenY);
+            return false;
         }
 
         // 每道题的「显示答案 / 收起答案」。
@@ -1378,18 +1374,47 @@ public partial class InkEngine
         var screen = ScreenRectPhysical();
         float u = MathF.Max(0.75f, DpiScale);
         float top = screen.MinY - ViewOffsetY + 16f * u;
+        bool normal = s.TextBox.Role == TextBoxRole.Normal;
+        // 通用移动手势会把平移记在 Transform 上；普通文本先并进 Points，
+        // 下面按画布坐标夹取才是准的（不并的话移动过的框一夹就漂）。
+        if (normal) BakeTextBoxTranslation(s);
         // 底部留出工具条那一条（120 逻辑像素）：题卡展开后不能压住工具条。
+        // **普通文本框不封底**：长文本高了就高，画布自己滚（用户 2026-11-01 定）。
         float bottom = screen.MaxY - ViewOffsetY - 120f * u;
         var b = s.PaddedBounds;
         float dy = 0f, dx = 0f;
-        if (b.MaxY > bottom) dy = bottom - b.MaxY;
+        if (!normal && b.MaxY > bottom) dy = bottom - b.MaxY;
         if (b.MinY + dy < top) dy = top - b.MinY;
+
         float left = screen.MinX + 16f * u;
         float right = screen.MaxX - 16f * u;
+        // 宽度不能超过屏幕左右沿；普通文本框在输入/改宽那边已经收过一次，
+        // 这里兜底处理老存档和载入的宽框。
+        if (normal && s.TextBox.Width > right - left)
+        {
+            s.TextBox.Width = right - left;
+            s.TextBox.InvalidateLayout();
+            _ = s.TextBox.EnsureLayout();
+            s.SetTextBoxRect(s.Points.Count > 0
+                ? new Vector2(s.Points[0].X, s.Points[0].Y) : Vector2.Zero,
+                s.TextBox.Width, s.TextBox.Height);
+            b = s.PaddedBounds;
+        }
         if (b.MaxX > right) dx = right - b.MaxX;
         if (b.MinX + dx < left) dx = left - b.MinX;
         if (MathF.Abs(dx) > 0.5f || MathF.Abs(dy) > 0.5f)
-            s.Transform = Matrix3x2.CreateTranslation(dx, dy) * s.Transform;
+        {
+            if (normal && s.Points.Count > 0)
+            {
+                var p0 = s.Points[0];
+                s.SetTextBoxRect(new Vector2(p0.X + dx, p0.Y + dy),
+                                 s.TextBox.Width, s.TextBox.Height);
+            }
+            else
+            {
+                s.Transform = Matrix3x2.CreateTranslation(dx, dy) * s.Transform;
+            }
+        }
     }
 
     internal int TextBoxCountForTest

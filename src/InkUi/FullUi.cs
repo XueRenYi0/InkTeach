@@ -239,6 +239,8 @@ public sealed partial class FullUi : IOverlayUi
     private bool _penPickerOpen;
     /// <summary>取色板是在改荧光笔（true）还是画笔（false）。</summary>
     private bool _pickerHighlighter;
+    /// <summary>取色板是在改普通文本框的文字颜色（true）——此时没有色位，直接写 TextColor。</summary>
+    private bool _pickerText;
     /// <summary>取色板正在改哪个色位（0..7 画笔 / 0..4 荧光笔）。</summary>
     private int _penPickerSlot = PenLastSlot;
     /// <summary>色值输入框：正在编辑 / 输入缓冲 / 进入时全选 / 进来前的键盘模式。</summary>
@@ -724,6 +726,7 @@ public sealed partial class FullUi : IOverlayUi
         // 表现就是"预览没画出来"。它只在拖滑条/悬停滑条时出现，平时这份矩形不变。
         if (SizePreviewVisible && _host != null) u = Union(u, SizePreviewRect(_host.State));
         if (_penPickerOpen) u = Union(u, PenPickerRect());
+        if (_textFontMenuOpen) u = Union(u, TextFontMenuRect());
         return FinishBounds(u);
     }
 
@@ -1388,18 +1391,15 @@ public sealed partial class FullUi : IOverlayUi
 
     private bool BandHasSwatches => _bandCell is 3 or 4 or 7;
 
-    /// <summary>文本那一格：色片 = 文字颜色；右边是字号 A− / 15 / A+。</summary>
+    /// <summary>文本那一格：色片 = 下一次输入的文字颜色；右边是字号下拉。</summary>
     private bool BandHasTextSize => _bandCell == 7;
     // 文本带在 4~5 格的自定义主条里会很窄：字号按钮收小、色片只留 3 个，
-    // 否则 8 个色片 + 114 宽的字号组会叠在一起。
+    // 否则字号按钮和色片会叠在一起。
     private bool TextSizeTight => VisibleCount() <= 5;
-    private float TextSizeBtnW => TextSizeTight ? 26f : 30f;
-    private float TextSizeLabelW => TextSizeTight ? 24f : 36f;
-    private float TextSizeGap => TextSizeTight ? 2f : 4f;
-    private float TextSizeReserve => BandHasTextSize
-        ? TextSizeBtnW * 2f + TextSizeLabelW + TextSizeGap * 2f + 10f : 0f;
+    private float TextSizeBtnW => TextSizeTight ? 46f : 56f;
+    private float TextSizeReserve => BandHasTextSize ? TextSizeBtnW + 10f : 0f;
 
-    private RectF TextSizePlusRect()
+    private RectF TextSizeButtonRect()
     {
         var band = BandRect();
         float right = band.MaxX - BarInset() - ActionReserve;
@@ -1411,25 +1411,71 @@ public sealed partial class FullUi : IOverlayUi
             MaxX = right, MaxY = cy + h * 0.5f,
         };
     }
-    private RectF TextSizeMinusRect()
+
+    // ---- 字号菜单（点按钮弹出）-------------------------------------------
+    private bool _textFontMenuOpen;
+    // 和文字操作条的下拉读同一张表（ClassIn 的六档），见 InkPalette.TextFontSizes。
+    private static float[] TextFontSizes => InkPalette.TextFontSizes;
+    private const int TextFontCols = 3;
+    private const float TextFontCellW = 46f;
+    private const float TextFontCellH = 28f;
+    private const float TextFontGap = 4f;
+    private const float TextFontPad = 8f;
+    private const float TextFontHeaderH = 20f;
+    private static int TextFontRows => (TextFontSizes.Length + TextFontCols - 1) / TextFontCols;
+    private static float TextFontMenuW => TextFontPad * 2 + TextFontCols * TextFontCellW
+                                        + (TextFontCols - 1) * TextFontGap;
+    private static float TextFontMenuH => TextFontPad * 2 + TextFontHeaderH
+                                        + TextFontRows * TextFontCellH
+                                        + (TextFontRows - 1) * TextFontGap;
+
+    private RectF TextFontMenuRect()
     {
-        var plus = TextSizePlusRect();
-        return new RectF
-        {
-            MinX = plus.MinX - TextSizeGap - TextSizeLabelW - TextSizeGap - TextSizeBtnW,
-            MinY = plus.MinY, MaxX = plus.MinX - TextSizeGap - TextSizeLabelW - TextSizeGap,
-            MaxY = plus.MaxY,
-        };
+        var band = BandRect();
+        var btn = TextSizeButtonRect();
+        var shift = Shift();
+        float minX = _screen.MinX - shift.X, maxX = _screen.MaxX - shift.X;
+        float minY = _screen.MinY - shift.Y, maxY = _screen.MaxY - shift.Y;
+        float x = (btn.MinX + btn.MaxX - TextFontMenuW) * 0.5f;
+        float y = BandAbove()
+            ? band.MinY - PenPickGap - TextFontMenuH
+            : band.MaxY + PenPickGap;
+        x = Math.Clamp(x, minX + 8f, MathF.Max(minX + 8f, maxX - 8f - TextFontMenuW));
+        y = Math.Clamp(y, minY + 8f, MathF.Max(minY + 8f, maxY - 8f - TextFontMenuH));
+        return new RectF { MinX = x, MinY = y, MaxX = x + TextFontMenuW, MaxY = y + TextFontMenuH };
     }
-    private RectF TextSizeLabelRect()
+
+    private RectF TextFontCellRect(int i)
     {
-        var plus = TextSizePlusRect();
-        var minus = TextSizeMinusRect();
-        return new RectF
-        {
-            MinX = minus.MaxX + TextSizeGap, MinY = plus.MinY,
-            MaxX = plus.MinX - TextSizeGap, MaxY = plus.MaxY,
-        };
+        var p = TextFontMenuRect();
+        int col = i % TextFontCols, row = i / TextFontCols;
+        float x = p.MinX + TextFontPad + col * (TextFontCellW + TextFontGap);
+        float y = p.MinY + TextFontPad + TextFontHeaderH + row * (TextFontCellH + TextFontGap);
+        return new RectF { MinX = x, MinY = y, MaxX = x + TextFontCellW, MaxY = y + TextFontCellH };
+    }
+
+    private int HitTextFontCell(float x, float y)
+    {
+        for (int i = 0; i < TextFontSizes.Length; i++)
+            if (TextFontCellRect(i).Contains(x, y)) return i;
+        return -1;
+    }
+
+    private void OpenTextFontMenu()
+    {
+        if (_penPickerOpen) ClosePenColorPicker();
+        _textFontMenuOpen = true;
+        _railHover = true;
+        Invalidate();
+    }
+
+    private void CloseTextFontMenu()
+    {
+        if (!_textFontMenuOpen) return;
+        _textFontMenuOpen = false;
+        _leftAtMs = _host.NowMs;
+        _frameShiftValid = false;
+        Invalidate();
     }
     /// <summary>
     /// 这一格的设置条上要不要那个**虚实线切换**（夹在色片和粗细滑条之间，
@@ -2136,11 +2182,12 @@ public sealed partial class FullUi : IOverlayUi
         {
             _penPickerOpen = false;
             _penPickDragging = false;
+            CloseTextFontMenu();
             _rail.To(0f, 0);
             _railHover = false;
             return;
         }
-        if (_penPickerOpen)
+        if (_penPickerOpen || _textFontMenuOpen)
         {
             _railHover = true;
             _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
@@ -2327,6 +2374,26 @@ public sealed partial class FullUi : IOverlayUi
     private (string Name, Color4 Color)[] SwatchTable =>
         UsingHighlighterSwatches ? Tokens.HighlighterPalette : Tokens.Palette;
 
+    /// <summary>
+    /// 文字色带显示几格：**看当前主条实际剩多宽**（用户 2026-11-01 定的
+    /// "几格取决于当前主操作条的长度"）。至少 3 格（红/黑/白），够宽才给第 4 格自定义。
+    /// </summary>
+    private int TextSwatchCountNow
+    {
+        get
+        {
+            // 用**展开后的整条宽**判断，不用动画中的宽度：否则色带张开到一半
+            // 会从 3 格跳成 4 格，看着像闪了一下（和 BoardCompactBand 同一条经验）。
+            float avail = ExpandedWidth() - BarInset() * 2f - TextSizeReserve - ActionReserve;
+            const float minCell = 34f;
+            return avail >= minCell * 4 + 4f * 3
+                ? 4 : 3;
+        }
+    }
+
+    private static readonly int[] TextSwatchIdx3 = { 0, 1, 2 };
+    private static readonly int[] TextSwatchIdx4 = { 0, 1, 2, 3 };
+
     private int[] SwatchIdx
     {
         get
@@ -2335,7 +2402,7 @@ public sealed partial class FullUi : IOverlayUi
             if (UsingHighlighterSwatches)
                 return n <= 3 ? HlSwatchIdx3 : n <= 5 ? HlSwatchIdx4 : HlSwatchIdx;
             if (UsingTextSwatches)
-                return n <= 5 ? NanoSwatchIdx : n <= 9 ? MiniSwatchIdx : FullSwatchIdx;
+                return TextSwatchCountNow >= 4 ? TextSwatchIdx4 : TextSwatchIdx3;
             if (n <= 3) return NanoSwatchIdx;
             return Density switch
             {
@@ -2349,7 +2416,12 @@ public sealed partial class FullUi : IOverlayUi
     private Color4 SwatchColor(int i)
     {
         int idx = SwatchIdx[i];
-        if (UsingTextSwatches) return SwatchTable[idx].Color;
+        if (UsingTextSwatches)
+        {
+            var textColors = _host?.State.TextSwatchColors;
+            return textColors != null && idx >= 0 && idx < textColors.Length
+                ? textColors[idx] : SwatchTable[idx].Color;
+        }
         if (UsingHighlighterSwatches)
         {
             var hl = _host?.State.HighlighterSwatchColors;
@@ -2366,7 +2438,14 @@ public sealed partial class FullUi : IOverlayUi
         int slot = SwatchIdx[i];
         if (UsingTextSwatches)
         {
-            _host.Commands.SetTextColor(SwatchColor(i));
+            // 和画笔同一套：已经是这个颜色 → 再点打开取色板改这一格；
+            // 否则只选这一格（只影响下一次输入，不改已经选中的文字）。
+            if (SameColor(_host.State.TextColor, SwatchColor(i)))
+            {
+                _host.Commands.BeginTextColorPick(slot);
+                OpenTextColorPicker(slot);
+            }
+            else _host.Commands.SelectTextSwatch(slot);
             return;
         }
         if (UsingHighlighterSwatches)
@@ -2402,6 +2481,17 @@ public sealed partial class FullUi : IOverlayUi
         int n = SwatchCount;
         if (n == 0) return;
         var st = _host.State;
+
+        if (UsingTextSwatches)
+        {
+            // 文本格连点第二下 = 换下一个文字色（只管下一次输入）。
+            int atText = -1;
+            for (int i = 0; i < n; i++)
+                if (SameColor(SwatchColor(i), st.TextColor)) { atText = i; break; }
+            ActivateSwatch((atText + 1) % n);
+            Invalidate();
+            return;
+        }
 
         if (!UsingHighlighterSwatches)
         {
@@ -2553,15 +2643,21 @@ public sealed partial class FullUi : IOverlayUi
 
     private void OpenPenColorPicker(int slot) => OpenColorPicker(slot, highlighter: false);
     private void OpenHighlighterColorPicker(int slot) => OpenColorPicker(slot, highlighter: true);
+    private void OpenTextColorPicker(int slot) => OpenColorPicker(slot, highlighter: false, text: true);
 
-    private void OpenColorPicker(int slot, bool highlighter)
+    private void OpenColorPicker(int slot, bool highlighter, bool text = false)
     {
         if (_hexEditing) CancelHexEdit();
+        if (_textFontMenuOpen) CloseTextFontMenu();
         _pickerReturnAfterPick = false;
         _pickerReturnArmed = false;
         var st = _host.State;
         Color4 c;
-        if (highlighter)
+        if (text)
+        {
+            c = st.TextColor;
+        }
+        else if (highlighter)
         {
             var colors = st.HighlighterSwatchColors;
             c = colors != null && slot >= 0 && slot < colors.Length
@@ -2574,6 +2670,7 @@ public sealed partial class FullUi : IOverlayUi
                 ? colors[slot] : Tokens.Palette[0].Color;
         }
         _pickerHighlighter = highlighter;
+        _pickerText = text;
         _penPickerSlot = slot;
         (_penPickH, _penPickS, _penPickV) = Hsv.FromRgb(c);
         _penPickDragging = false;
@@ -2753,7 +2850,7 @@ public sealed partial class FullUi : IOverlayUi
             return true;
         }
 
-        if (PenPickerEyeRect().Contains(x, y))
+        if (!_pickerText && PenPickerEyeRect().Contains(x, y))
         {
             // 从取色板里点吸管：取完（或 Esc 取消）把取色板放回来，老师可以接着调浓淡/换色。
             _pickerReturnAfterPick = true;
@@ -2772,7 +2869,9 @@ public sealed partial class FullUi : IOverlayUi
         for (int i = 0; i < n; i++)
         {
             if (!PenPickerRecentRect(i).Contains(x, y)) continue;
-            if (_pickerHighlighter)
+            if (_pickerText)
+                _host.Commands.SetTextColor(recent[i]);
+            else if (_pickerHighlighter)
                 _host.Commands.SetHighlighterSwatchColor(slot, recent[i], rememberRecent: true, normalize: false);
             else
                 _host.Commands.SetPenSwatchColor(slot, recent[i], rememberRecent: true);
@@ -2784,7 +2883,9 @@ public sealed partial class FullUi : IOverlayUi
         if (common >= 0)
         {
             // 固定常用色：只改色位，不写“最近使用”（它本来就在常用色里）。
-            if (_pickerHighlighter)
+            if (_pickerText)
+                _host.Commands.SetTextColor(PickerCommonColor(common));
+            else if (_pickerHighlighter)
                 _host.Commands.SetHighlighterSwatchColor(
                     slot, PickerCommonColor(common), rememberRecent: false, normalize: false);
             else
@@ -2832,11 +2933,19 @@ public sealed partial class FullUi : IOverlayUi
         int sw = HitSwatch(x, y);
         if (sw >= 0)
         {
-            int hitSlot = SwatchIdx[sw];
-            if (hitSlot != slot)
+            if (_pickerText)
             {
-                if (_pickerHighlighter) _host.Commands.SelectHighlighterSwatch(hitSlot);
-                else _host.Commands.SelectPenSwatch(hitSlot);
+                if (!SameColor(_host.State.TextColor, SwatchColor(sw)))
+                    _host.Commands.SetTextColor(SwatchColor(sw));
+            }
+            else
+            {
+                int hitSlot = SwatchIdx[sw];
+                if (hitSlot != slot)
+                {
+                    if (_pickerHighlighter) _host.Commands.SelectHighlighterSwatch(hitSlot);
+                    else _host.Commands.SelectPenSwatch(hitSlot);
+                }
             }
         }
         ClosePenColorPicker(consumeUp: true);
@@ -2867,7 +2976,9 @@ public sealed partial class FullUi : IOverlayUi
         if (!_penPickDragging) return false;
         _penPickDragging = false;
         var c = Hsv.ToRgb(_penPickH, _penPickS, _penPickV);
-        if (_pickerHighlighter)
+        if (_pickerText)
+            _host.Commands.SetTextColor(c);
+        else if (_pickerHighlighter)
             _host.Commands.SetHighlighterSwatchColor(_penPickerSlot, c, rememberRecent: true, normalize: true);
         else
             _host.Commands.SetPenSwatchColor(_penPickerSlot, c, rememberRecent: true);
@@ -2911,7 +3022,9 @@ public sealed partial class FullUi : IOverlayUi
             if (c.HasValue)
             {
                 var baseColor = _pickerHighlighter ? InkPalette.HighlighterBase(c.Value) : c.Value;
-                if (_pickerHighlighter)
+                if (_pickerText)
+                    _host.Commands.SetTextColor(baseColor);
+                else if (_pickerHighlighter)
                     _host.Commands.SetHighlighterSwatchColor(
                         _penPickerSlot, baseColor, rememberRecent: true, normalize: false);
                 else
@@ -2937,6 +3050,11 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>取色板色值输入框：只吃十六进制需要的键；编辑期间按键不落到画布/热键。</summary>
     public bool HandlePickerKey(int vk, bool ctrl)
     {
+        if (_textFontMenuOpen)
+        {
+            if (vk == 0x1B /*Esc*/) CloseTextFontMenu();
+            return true;
+        }
         if (!_penPickerOpen) return false;
 
         // Ctrl+V：色值可以直接粘进来（剪贴板里带不带 # 都行）。
@@ -3113,12 +3231,20 @@ public sealed partial class FullUi : IOverlayUi
         _widgets.Text(ctx, _hexEditing ? "#" + _hexBuffer : Hex(shown),
                       hexRect, 11f, Brush(ctx, InkCol), center: true);
 
-        // 吸管按钮。
+        // 吸管按钮。文字取色时不做吸管（吸管写回的是笔的色位），改成一句“文字色”。
         var eye = PenPickerEyeRect();
         var eyeR = new RoundedRectangle(new Vortice.RawRectF(eye.MinX, eye.MinY, eye.MaxX, eye.MaxY), 7f, 7f);
-        ctx.FillRoundedRectangle(eyeR, Brush(ctx, _dark ? Tokens.HoverDark : Tokens.HoverLight));
-        ctx.DrawRoundedRectangle(eyeR, Brush(ctx, BorderCol), 1f);
-        _widgets.Text(ctx, "吸管", eye, 12f, Brush(ctx, InkCol));
+        if (!_pickerText)
+        {
+            ctx.FillRoundedRectangle(eyeR, Brush(ctx, _dark ? Tokens.HoverDark : Tokens.HoverLight));
+            ctx.DrawRoundedRectangle(eyeR, Brush(ctx, BorderCol), 1f);
+            _widgets.Text(ctx, "吸管", eye, 12f, Brush(ctx, InkCol));
+        }
+        else
+        {
+            ctx.DrawRoundedRectangle(eyeR, Brush(ctx, BorderCol), 1f);
+            _widgets.Text(ctx, "文字色", eye, 11.5f, Brush(ctx, MutedCol));
+        }
 
         // ---- 右栏：常用色 + 最近（荧光笔再多一段 5 档浓度）-------------------
         float rx = p.MinX + PenPickRightX;
@@ -3692,35 +3818,13 @@ public sealed partial class FullUi : IOverlayUi
         return Math.Max(1, (count + TileCols() - 1) / TileCols());
     }
 
-    private int HubCount(int section)
-        => section == 0 ? (TextBoxInMore ? 6 : 5) : 5;
-
     /// <summary>
-    /// ??????????????????????????? / ??????????
-    /// ?????? text ???????????????????
+    /// 每个分组的格子数：课堂 5 个（计时 / 点名 / 随机一人 / AI 出题 / 使用说明）；
+    /// 墨迹 **5 个**（保存… / 打开… / 墨迹回放 / 关闭文档 / 历史板书）。
+    /// 收藏只留在主工具条那一格，更多里不再放重复入口。
     /// </summary>
-    private bool TextBoxInMore
-    {
-        get
-        {
-            if (_profile == Profile.Full) return false;
-            if (_profile == Profile.Custom)
-            {
-                int cell = Array.IndexOf(CellKeys, "text");
-                return cell <= 0 || !_pinned[cell];
-            }
-            return true;
-        }
-    }
+    private int HubCount(int section) => 5;
 
-    /// <summary>
-    /// 每个分组的格子数：课堂 6 个（计时 / 点名 / 随机一人 / AI 出题 / 文本框 / 使用说明）；
-    /// 墨迹 **5 个**（**保存… / 打开… / 墨迹回放 / 关闭文档 / 历史板书**——
-    /// 2026-10-16 用户定合并：原"保存墨迹＋保存图片"并为「保存…」、
-    /// "打开墨迹＋打开文档"并为「打开…」，按扩展名分派；历史板书是 2026-10-14
-    /// 加的找回入口）。收藏只留在主工具条那一格，更多里不再放重复入口。
-    /// 格子编号（`HubTileCode`）从这里算出来，**不写死 3**——加格子不会再串段。
-    /// </summary>
     /// <summary>第 section 组的组头矩形。</summary>
     private RectF HubHeadRect(int section)
     {
@@ -3750,7 +3854,6 @@ public sealed partial class FullUi : IOverlayUi
         {
             if (index < 3) return index;
             if (index == 3) return AiTileCode;
-            if (TextBoxInMore && index == 4) return TextBoxTileCode;
             return HelpTileCode;
         }
         // 3..7 = 保存/打开/回放/关文档/历史板书；8 留给「使用说明」。
@@ -4048,9 +4151,6 @@ public sealed partial class FullUi : IOverlayUi
         AiTileCode => ("AI 出题",
               "语音/文字出题；1A 先出示例题卡（不联网）",
               true, false),
-        TextBoxTileCode => ("文本框",
-              "输入文字；选中后可拖动、8 个手柄改宽高、调字号",
-              true, false),
         HelpTileCode => ("使用说明",
               "4 步上手 / 手势 / 快捷键；F1 也能打开",
               true, false),
@@ -4263,10 +4363,6 @@ public sealed partial class FullUi : IOverlayUi
             case AiTileCode:                          // AI 出题（1A：面板 + mock 题卡）
                 CloseMore();
                 OpenAiPanel();
-                break;
-            case TextBoxTileCode:                     // 普通文本框：切到文本工具，点画布放置
-                CloseMore();
-                _host.Commands.SetTool(Tool.Text);
                 break;
             case HelpTileCode:                        // 使用说明（2026-10-19）
                 // 和「设置」一样留在 More 面板里换页，不另开一层——DPI、遮罩、
@@ -4485,6 +4581,13 @@ public sealed partial class FullUi : IOverlayUi
             PenPickerPointerDown(p.X, p.Y);
             return true;
         }
+        if (_textFontMenuOpen)
+        {
+            int fi = HitTextFontCell(p.X, p.Y);
+            if (fi >= 0) _host.Commands.SetTextFont(TextFontSizes[fi]);
+            CloseTextFontMenu();
+            return true;
+        }
         // 拖动记的是**左上角**（和 RawAnchor 同一套语义：锚"带子的左端"）
         _dragStartAnchor = Anchor();
 
@@ -4634,15 +4737,10 @@ public sealed partial class FullUi : IOverlayUi
 
         if (BandOpen() && BandHasTextSize)
         {
-            if (TextSizeMinusRect().Contains(p.X, p.Y))
+            if (TextSizeButtonRect().Contains(p.X, p.Y))
             {
-                _host.Commands.AdjustTextFont(-1f);
-                Invalidate();
-                return true;
-            }
-            if (TextSizePlusRect().Contains(p.X, p.Y))
-            {
-                _host.Commands.AdjustTextFont(+1f);
+                if (_textFontMenuOpen) CloseTextFontMenu();
+                else OpenTextFontMenu();
                 Invalidate();
                 return true;
             }
@@ -4884,6 +4982,12 @@ public sealed partial class FullUi : IOverlayUi
     /// </summary>
     private int HoverAt(float x, float y)
     {
+        if (_textFontMenuOpen)
+        {
+            int fi = HitTextFontCell(x, y);
+            if (fi >= 0) return 620 + fi;
+            if (TextFontMenuRect().Contains(x, y)) return 619;
+        }
         int idx = HitCell(x, y);
         if (idx >= 0) return idx;
         if (!BandOpen()) return -1;
@@ -4891,8 +4995,7 @@ public sealed partial class FullUi : IOverlayUi
         if (CurAction != BandAction.None && RailOpen && ActionRect().Contains(x, y)) return 400;
         if (BandHasTextSize && RailOpen)
         {
-            if (TextSizeMinusRect().Contains(x, y)) return 610;
-            if (TextSizePlusRect().Contains(x, y)) return 611;
+            if (TextSizeButtonRect().Contains(x, y)) return 610;
         }
         if (BandHasWidthButton && HitWidthButton(x, y)) return 501;
         if (BandHasSlider && Widgets.SliderHit(SliderRect()).Contains(x, y)) return 300;
@@ -5070,6 +5173,7 @@ public sealed partial class FullUi : IOverlayUi
     /// </summary>
     private void Activate(int idx)
     {
+        CloseTextFontMenu();
         var cmd = _host.Commands;
         var st = _host.State;
 
@@ -5264,6 +5368,7 @@ public sealed partial class FullUi : IOverlayUi
         if (state.Tool != _lastTool)
         {
             _lastTool = state.Tool;
+            if (state.Tool != Tool.Text) CloseTextFontMenu();
             int cell = CellForTool(state.Tool);
             if (HasBand(cell)) _bandCell = cell;
             if (_penPickerOpen
@@ -5496,6 +5601,7 @@ public sealed partial class FullUi : IOverlayUi
 
         if (BandVisible()) DrawBand(ctx, st);
         if (_penPickerOpen) DrawPenColorPicker(ctx, st);
+        if (_textFontMenuOpen) DrawTextFontMenu(ctx, st);
     }
 
     /// <summary>
@@ -5807,23 +5913,39 @@ public sealed partial class FullUi : IOverlayUi
 
     private void DrawTextSize(ID2D1DeviceContext ctx, in UiState st)
     {
-        var minus = TextSizeMinusRect();
-        var plus = TextSizePlusRect();
-        var label = TextSizeLabelRect();
-        var ink = st.TextColor;
+        var r = TextSizeButtonRect();
+        var rr = new RoundedRectangle(
+            new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f, 7f);
+        if (_hover == 610 || _textFontMenuOpen) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+        ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+        _widgets.Text(ctx, $"{st.TextFontSize:F0} ▾", r, 12.5f, Brush(ctx, InkCol));
+    }
 
-        void Button(RectF r, string text, int hover)
+    private void DrawTextFontMenu(ID2D1DeviceContext ctx, in UiState st)
+    {
+        var p = TextFontMenuRect();
+        DrawCard(ctx, p, 10f);
+        _widgets.Text(ctx, "字号",
+                      new RectF
+                      {
+                          MinX = p.MinX + TextFontPad, MinY = p.MinY + 6f,
+                          MaxX = p.MaxX - TextFontPad, MaxY = p.MinY + 6f + TextFontHeaderH,
+                      },
+                      11.5f, Brush(ctx, MutedCol), center: false);
+
+        for (int i = 0; i < TextFontSizes.Length; i++)
         {
+            var r = TextFontCellRect(i);
+            bool active = MathF.Abs(st.TextFontSize - TextFontSizes[i]) < 0.1f;
+            bool hover = _hover == 620 + i;
             var rr = new RoundedRectangle(
                 new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f, 7f);
-            if (_hover == hover) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
-            ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
-            _widgets.Text(ctx, text, r, 12.5f, Brush(ctx, InkCol));
+            if (active) ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Accent));
+            else if (hover) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+            ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : BorderCol), 1f);
+            _widgets.Text(ctx, $"{TextFontSizes[i]:F0}", r, 12.5f,
+                          Brush(ctx, active ? Tokens.AccentInk : InkCol));
         }
-
-        Button(minus, "A−", 610);
-        Button(plus, "A+", 611);
-        _widgets.Text(ctx, $"{st.TextFontSize:F0}", label, 12.5f, Brush(ctx, ink));
     }
 
     private void DrawBandSlider(ID2D1DeviceContext ctx, in UiState st)
@@ -6823,8 +6945,8 @@ public sealed partial class FullUi : IOverlayUi
 
         if (id == 500) return ("线型", "", "实线 / 虚线 / 点线，点一下换");
         if (id == 501) return ("粗细", "", "点一下换一档");
-        if (id == 610) return ("缩小字号", "", "也可以直接点色带上的 A−");
-        if (id == 611) return ("放大字号", "", "也可以直接点色带上的 A+");
+        if (id == 610) return ("字号", "", "点开直接选字号");
+        if (id == 611) return default;
         return default;      // 滑条（300）不出第二张卡，见上文
     }
 
@@ -7208,8 +7330,12 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>自检用：上带右端那个动作按钮（清空/全选）的矩形 + 按住状态。</summary>
     internal RectF ActionRectForTest => CurAction == BandAction.None ? RectF.Empty : ActionRect();
-    internal RectF TextFontMinusRectForTest => TextSizeMinusRect();
-    internal RectF TextFontPlusRectForTest => TextSizePlusRect();
+    internal RectF TextFontButtonRectForTest => TextSizeButtonRect();
+    internal RectF TextFontMenuRectForTest => TextFontMenuRect();
+    internal RectF TextFontCellRectForTest(int i) => TextFontCellRect(i);
+    internal int TextFontSizeCountForTest => TextFontSizes.Length;
+    internal float TextFontSizeAtForTest(int i) => TextFontSizes[i];
+    internal bool TextFontMenuOpenForTest => _textFontMenuOpen;
     internal bool ActionHoldingForTest => ActionHolding;
     internal float HoldProgressForTest => HoldProgress();
 
@@ -7221,6 +7347,7 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>自检/截图用：自定义色取色板是否打开、卡片矩形。</summary>
     internal bool PenPickerOpenForTest => _penPickerOpen;
+    internal bool PenPickerTextForTest => _pickerText;
     internal RectF PenPickerRectForTest => PenPickerRect();
     internal RectF PenPickerSvRectForTest => PenPickerSvRect();
     internal RectF PenPickerEyeRectForTest => PenPickerEyeRect();

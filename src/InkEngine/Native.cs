@@ -16,6 +16,13 @@ internal static class Native
     public const int EM_SETCHARFORMAT = 0x0444;
     public const int EM_SETPARAFORMAT = 0x0447;
     public const int EM_SETBKGNDCOLOR = 0x0443;
+    // RichEdit：读写内部滚动位置（只用于把水平滚动钉回 0）。
+    public const int EM_GETSCROLLPOS = 0x04DD;
+    public const int EM_SETSCROLLPOS = 0x04DE;
+    public const int EM_SETOPTIONS = 0x044D;
+    public const int EM_GETOPTIONS = 0x044E;
+    public const int ECOOP_AND = 0x0003;
+    public const int ECO_AUTOHSCROLL = 0x0080;
     public const int EM_REPLACESEL = 0x00C2;
     public const int SCF_ALL = 4;
     public const uint CFM_BOLD = 0x00000001;
@@ -47,10 +54,28 @@ internal static class Native
     public const int WM_POINTERCAPTURECHANGED = 0x024C;
     public const int WM_DPICHANGED = 0x02E0;
     public const int WM_KILLFOCUS = 0x0008;
+    public const int WM_MOUSEWHEEL = 0x020A;
     public const int WM_SETFONT = 0x0030;
     public const int WM_GETDLGCODE = 0x0087;
     public const int WM_CHAR = 0x0102;
+    public const int WM_IME_STARTCOMPOSITION = 0x010D;
+    public const int WM_IME_ENDCOMPOSITION = 0x010E;
+    public const int WM_IME_COMPOSITION = 0x010F;
+    public const int WM_IME_CHAR = 0x0286;
+    public const int WM_CUT = 0x0300;
+    public const int WM_PASTE = 0x0302;
+    public const int WM_CLEAR = 0x0303;
+    public const int WM_UNDO = 0x0304;
     public const int EM_SETSEL = 0x00B1;
+    public const int EM_GETSEL = 0x00B0;
+    public const int EM_POSFROMCHAR = 0x00D6;
+    public const int EM_SCROLLCARET = 0x00B7;          // 标准 EDIT
+    public const int EM_CHARFROMPOS = 0x00D7;          // 标准 EDIT
+    // RichEdit 的同名消息是 WM_USER + 38/39/49/52（见 richedit.h）；混用会进错分支。
+    public const int EM_POSFROMCHAR_RICH = 0x0426;
+    public const int EM_CHARFROMPOS_RICH = 0x0437;
+    public const int EM_SCROLLCARET_RICH = 0x0449;
+    public const int EM_EXGETSEL_RICH = 0x0434;
     public const int EM_SETLIMITTEXT = 0x00C5;
     public const int EM_SETMARGINS = 0x00D3;
     public const int EC_LEFTMARGIN = 0x0001;
@@ -282,6 +307,12 @@ internal static class Native
     public struct POINT
     {
         public int X, Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct CHARRANGE
+    {
+        public int cpMin, cpMax;
     }
 
     [DllImport("user32.dll")]
@@ -791,6 +822,10 @@ internal static class Native
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
+    /// <summary>Unicode 版：发 WM_CHAR / WM_SETTEXT 时必须用它，否则中文会被按 ANSI 截断。</summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageW")]
+    public static extern IntPtr SendMessageW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageW")]
     public static extern IntPtr SendMessageRect(IntPtr hWnd, uint msg, IntPtr wParam, ref RECT lParam);
 
@@ -868,6 +903,9 @@ internal static class Native
 
     [DllImport("gdi32.dll")]
     public static extern IntPtr GetStockObject(int i);
+
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr CreateSolidBrush(uint color);
 
     [DllImport("gdi32.dll")]
     public static extern uint SetBkColor(IntPtr hdc, uint color);

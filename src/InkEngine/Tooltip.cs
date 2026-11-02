@@ -111,11 +111,11 @@ public partial class InkEngine
         // ---- ② 选中操作条十格 ----
         if (SelectionBarShown && SelBarHover >= 0)
         {
-            var aabb = LiveSelectionFrame.CanvasAabb;
             var btn = BarDrawnCollapsed
-                ? SelectionHandles.BarCollapsedRect(aabb, UiUnit, FurnitureViewport)
-                : SelectionHandles.BarButtonRectIn(SelectionBarRect(aabb), SelBarHover, UiUnit);
-            var (t, k, n) = BarButtonTip((SelBarButton)SelBarHover);
+                ? SelectionDotCanvasRect
+                : SelectionHandles.BarButtonRectIn(SelectionBarCanvasRect, SelBarHover, UiUnit);
+            var (t, k, n) = BarButtonTip(
+                SelectionHandles.BarButtonOf(SelBarHover, SingleTextBoxSelection));
             if (t != null)
             {
                 EngineTooltipHover(200 + SelBarHover, t, k, n, btn);
@@ -194,16 +194,14 @@ public partial class InkEngine
     /// <summary>选中操作条每一格的说明（图标-only，这里是唯一的文字出口）。</summary>
     private (string Title, string Key, string Note) BarButtonTip(SelBarButton b)
     {
-        bool textBox = Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.TextBox;
+        bool textBox = SingleTextBoxSelection;
         if (textBox && Doc.Selected[0].TextBox?.Role == TextBoxRole.AiQuestion
             && b == SelBarButton.Color)
             return ("颜色固定", null, "题卡题干黑、答案红，不跟笔色走");
         if (textBox && b == SelBarButton.Color)
             return ("颜色", null, "改字色；公式图会跟着一起重烘");
-        if (textBox && b == SelBarButton.FlipH)
-            return ("缩小字号", null, "A−：字号小一档（8–72）");
-        if (textBox && b == SelBarButton.FlipV)
-            return ("放大字号", null, "A+：字号大一档（8–72）");
+        if (b == SelBarButton.FontSize)
+            return ("字号", null, "改选中文字的字号（10/14/18/24/48/64）");
         return b switch
         {
             SelBarButton.Collapse => ("收起操作条", null, "之后只剩一颗圆钮，点它再展开"),

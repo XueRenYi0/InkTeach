@@ -310,11 +310,14 @@ internal static class IconAtlas
                       * Matrix3x2.CreateTranslation(x, y)
                       * saved;
 
-        var box = new RoundedRectangle(new Vortice.RawRectF(2.6f, 3.8f, 21.4f, 20.2f), 3f, 3f);
-        ctx.DrawRoundedRectangle(box, brush, 1.4f);
-        ctx.DrawLine(new Vector2(7.4f, 8.7f), new Vector2(16.6f, 8.7f), brush, 1.6f, _round);
-        ctx.DrawLine(new Vector2(12f, 8.7f), new Vector2(12f, 17f), brush, 1.6f, _round);
-        ctx.DrawLine(new Vector2(9.4f, 17f), new Vector2(14.6f, 17f), brush, 1.4f, _round);
+        // 用户 2026-11-02："文字图标看着比旁边的橡皮 / 激光小一点"。
+        // 不是错觉：旧卡片只有 18.8×16.4，旁边 Fluent 图标的墨迹一般 20×20。
+        // 放大到 20.8×18.8，T 也加粗一档；盒子仍留 1.6 的边，和 24 网格对齐。
+        var box = new RoundedRectangle(new Vortice.RawRectF(1.6f, 2.6f, 22.4f, 21.4f), 3.4f, 3.4f);
+        ctx.DrawRoundedRectangle(box, brush, 1.6f);
+        ctx.DrawLine(new Vector2(6.2f, 7.2f), new Vector2(17.8f, 7.2f), brush, 2.0f, _round);
+        ctx.DrawLine(new Vector2(12f, 7.2f), new Vector2(12f, 18.2f), brush, 2.0f, _round);
+        ctx.DrawLine(new Vector2(8.8f, 18.2f), new Vector2(15.2f, 18.2f), brush, 1.8f, _round);
 
         ctx.Transform = saved;
     }

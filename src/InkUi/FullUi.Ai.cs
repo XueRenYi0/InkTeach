@@ -19,8 +19,6 @@ public sealed partial class FullUi
 {
     /// <summary>「更多 → 课堂」里的 AI 格编号。不占 3..7（墨迹格）和 8（使用说明）。</summary>
     private const int AiTileCode = 9;
-    /// <summary>「更多 → 课堂」里的普通文本框入口。</summary>
-    private const int TextBoxTileCode = 10;
 
     private const int AiHitOutside = -1;
     private const int AiHitInside = 0;

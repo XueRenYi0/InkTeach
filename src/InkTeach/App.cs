@@ -295,6 +295,13 @@ internal sealed partial class App : InkEngine.InkEngine
             ExitCode = ok == total && total > 0 ? 0 : 1;
             _quit = true;
         }
+        else if (mode == "--textboxsim")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            TextBoxSimTest();
+            _quit = true;
+        }
         else if (mode == "--textboxedit")
         {
             _autoExitAt = double.MaxValue;
@@ -313,6 +320,136 @@ internal sealed partial class App : InkEngine.InkEngine
                 EndTextBoxEditFromUi(false);
             }
             Console.WriteLine("出图：reports/textbox-edit.bmp");
+
+            // 文本工具专项：在屏幕右侧贴近边缘处逐字输入，框必须向左长/换行，
+            // 不能把前面的汉字挤出可视区；然后点画布空白，应当同一下出新输入框。
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetToolFromUi(Tool.Text);
+            float edgeX = _virtualX + _virtualW - 40f * DpiScale;
+            float edgeY = _virtualY + _virtualH * 0.35f;
+            if (TextToolPointerDown(edgeX, edgeY))
+            {
+                // 逐字追加，模拟真实键盘：每次插入都会触发"边打边长"和 RichEdit 重排。
+                for (int n = 1; n <= 12; n++)
+                {
+                    TypeTextBoxEditCharForTest('你');
+                    SettleFrames(160);
+                    var s = Doc.Selected.Count > 0 ? Doc.Selected[0] : null;
+                    var b = s?.PaddedBounds ?? default;
+                    Console.WriteLine($"右侧输入 {n} 字：x={b.MinX:F0}..{b.MaxX:F0} "
+                                    + $"宽={s?.TextBox?.Width:F0} 屏右={_virtualX + _virtualW:F0}");
+                    if (n is 2 or 6 or 12)
+                        ScreenProbe.SaveBmp($"reports/textbox-edit-right-{n}.bmp",
+                            (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+                }
+                int beforeClick = TextBoxCountForTest;
+                var old = Doc.Selected.Count > 0 ? Doc.Selected[0] : null;
+                int cxp = (int)(_virtualX + 40f), cyp = (int)(_virtualY + 40f);
+                SendMouse(cxp, cyp, 0); SettleFrames(60);
+                SendMouse(cxp, cyp, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(80);
+                SendMouse(cxp, cyp, Native.MOUSEEVENTF_LEFTUP); SettleFrames(220);
+                Console.WriteLine($"点空白：editing={TextBoxEditing} 文本框 {beforeClick}"
+                                + $"→{TextBoxCountForTest} 旧框仍选中="
+                                + (old != null && Doc.Selected.Contains(old)));
+                ScreenProbe.SaveBmp("reports/textbox-edit-after-click.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+                EndTextBoxEditFromUi(true);
+                SettleFrames(160);
+
+                // 旧框：未选中时悬停应是 I 字；单击选中后应是移动十字；按住拖要真的能移动。
+                if (old?.TextBox is { Role: TextBoxRole.Normal } && Doc.Strokes.Contains(old))
+                {
+                    var ob = old.PaddedBounds;
+                    int ocx = (int)((ob.MinX + ob.MaxX) * 0.5f);
+                    int ocy = (int)((ob.MinY + ob.MaxY) * 0.5f + ViewOffsetY);
+                    SendMouse(ocx, ocy, 0); SettleFrames(140);
+                    var hoverCursor = ComputeCursorKind();
+                    SendMouse(ocx, ocy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(70);
+                    SendMouse(ocx, ocy, Native.MOUSEEVENTF_LEFTUP); SettleFrames(220);
+                    bool selected = Doc.Selected.Count == 1 && ReferenceEquals(Doc.Selected[0], old);
+                    SendMouse(ocx, ocy, 0); SettleFrames(140);
+                    var selCursor = ComputeCursorKind();
+                    var p0 = old.Points.Count > 0 ? old.Points[0] : default;
+                    float beforeX = p0.X, beforeY = p0.Y;
+                    SendMouse(ocx, ocy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(70);
+                    SendMouse(ocx - 140, ocy + 90, 0); SettleFrames(160);
+                    SendMouse(ocx - 140, ocy + 90, Native.MOUSEEVENTF_LEFTUP); SettleFrames(220);
+                    var p1 = old.Points.Count > 0 ? old.Points[0] : default;
+                    Console.WriteLine($"旧框悬停：光标={hoverCursor} 选中={selected} "
+                                    + $"选中后光标={selCursor} 移动 Δ=({p1.X - beforeX:F0},{p1.Y - beforeY:F0})");
+                    ScreenProbe.SaveBmp("reports/textbox-edit-moved.bmp",
+                        (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+
+                    // 双击进入编辑：真双击（松手才兑现）；然后继续打字，宽度仍应自动长。
+                    if (selected)
+                    {
+                        var ob2 = old.PaddedBounds;
+                        int ox2 = (int)((ob2.MinX + ob2.MaxX) * 0.5f);
+                        int oy2 = (int)((ob2.MinY + ob2.MaxY) * 0.5f + ViewOffsetY);
+                        for (int k = 0; k < 2; k++)
+                        {
+                            SendMouse(ox2, oy2, 0); SettleFrames(60);
+                            SendMouse(ox2, oy2, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(70);
+                            SendMouse(ox2, oy2, Native.MOUSEEVENTF_LEFTUP); SettleFrames(160);
+                        }
+                        bool dblOk = TextBoxEditing;
+                        if (!dblOk) BeginTextBoxEdit(old);   // 兜底，保证后面的宽高检查仍能跑
+                        float wBefore = old.TextBox?.Width ?? 0f;
+                        TypeTextBoxEditCharForTest('你');
+                        TypeTextBoxEditCharForTest('好');
+                        SettleFrames(220);
+                        float wAfter = old.TextBox?.Width ?? 0f;
+                        Console.WriteLine($"双击={dblOk} 重新编辑追加 2 字：宽 {wBefore:F0}→{wAfter:F0} "
+                                        + $"autoW={old.TextBox?.AutoWidth}");
+                        ScreenProbe.SaveBmp("reports/textbox-edit-reedit.bmp",
+                            (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+                        EndTextBoxEditFromUi(true);
+
+                        // 文本专项：存读一圈，确认 v27 的 AutoWidth 字节和文字都没丢。
+                        var bytes = InkSerializer.SaveStrokes(new[] { old });
+                        var loaded = InkSerializer.LoadStrokes(bytes, out _);
+                        var lb = loaded.Count > 0 ? loaded[0].TextBox : null;
+                        Console.WriteLine($"存读：文本={lb?.Text?.Length ?? 0} 字 "
+                                        + $"autoW={lb?.AutoWidth} 宽={lb?.Width:F0}");
+                    }
+
+                    // 靠近底部主状态栏的文本框：确认选中后从上半部分也能往上拖。
+                    Doc.Clear();
+                    Doc.ClearHistory();
+                    SetToolFromUi(Tool.Text);
+                    float bottomX = _virtualX + _virtualW * 0.45f;
+                    float bottomY = _virtualY + _virtualH - 210f * DpiScale;
+                    if (TextToolPointerDown(bottomX, bottomY))
+                    {
+                        for (int k = 0; k < 4; k++)
+                        {
+                            AppendTextBoxEditTextForTest("底部文字测试\n");
+                        }
+                        SettleFrames(200);
+                        EndTextBoxEditFromUi(true);
+                        if (Doc.Strokes.Count > 0)
+                        {
+                            var bottom = Doc.Strokes[^1];
+                            Doc.SelectOnly(new[] { bottom });
+                            var bb = bottom.PaddedBounds;
+                            int bcx = (int)((bb.MinX + bb.MaxX) * 0.5f);
+                            int bcy = (int)(bb.MinY + 24f + ViewOffsetY);
+                            var q0 = bottom.Points.Count > 0 ? bottom.Points[0] : default;
+                            float qx = q0.X, qy = q0.Y;
+                            SendMouse(bcx, bcy, 0); SettleFrames(80);
+                            SendMouse(bcx, bcy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(80);
+                            SendMouse(bcx, bcy - 120, 0); SettleFrames(160);
+                            SendMouse(bcx, bcy - 120, Native.MOUSEEVENTF_LEFTUP); SettleFrames(180);
+                            var q1 = bottom.Points.Count > 0 ? bottom.Points[0] : default;
+                            Console.WriteLine($"底部文本框：框={bb.MinY:F0}..{bb.MaxY:F0} "
+                                            + $"拖动 Δ=({q1.X - qx:F0},{q1.Y - qy:F0})");
+                            ScreenProbe.SaveBmp("reports/textbox-edit-bottom.bmp",
+                                (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+                        }
+                    }
+                }
+            }
             _quit = true;
         }
         else if (mode == "--mathtest")
@@ -1346,6 +1483,8 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --passtest          穿透真机测试（跨进程点击）");
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
+        Console.WriteLine("  --textboxsim        文本框仿真自检（真实鼠标/键盘 + 截图 reports/textbox-sim/）");
+        Console.WriteLine("  --textboxedit       文本框编辑截图（reports/textbox-edit.bmp）");
         Console.WriteLine("  --aitest            AI 题卡自检（插入 / 折叠 / 存档 / 删除 / 撤销）");
         Console.WriteLine("  --mathtest          公式渲染回归：CSharpMath 渲染 50 个典型 LaTeX 到 reports/math-spike/");
         Console.WriteLine("  --mathcorpus [文件] 批量跑公式语料（默认 调研/公式语料/高中数学-公式语料.txt），列出失败项");
@@ -5641,12 +5780,15 @@ internal sealed partial class App : InkEngine.InkEngine
                 }
         }
         clean &= !ghost;
-        // 翻到上方的操作条：删除格也必须点得到（画/命中同源）
-        var barRect = SelectionHandles.BarRectForTextBox(vb, UiUnit, FurnitureViewport);
-        var delBtn = SelectionHandles.BarButtonRectIn(barRect, (int)SelBarButton.Delete, UiUnit);
+        // 操作条统一"给下限、不翻面"：删除格也必须点得到（画/命中同源）。
+        bool textBar = Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.TextBox;
+        int barCount = SelectionHandles.BarButtonCountFor(textBar);
+        int delIndex = SelectionHandles.BarIndexOf(SelBarButton.Delete, textBar);
+        var barRect = SelectionHandles.BarRect(vb, UiUnit, FurnitureViewport, barCount);
+        var delBtn = SelectionHandles.BarButtonRectIn(barRect, delIndex, UiUnit);
         bool delHit = SelectionHandles.BarButtonAtIn((delBtn.MinX + delBtn.MaxX) * 0.5f,
                                                      (delBtn.MinY + delBtn.MaxY) * 0.5f,
-                                                     barRect, UiUnit) == (int)SelBarButton.Delete;
+                                                     barRect, UiUnit, barCount) == delIndex;
         clean &= delHit;
         Console.WriteLine(clean
             ? $"删除自检通过：strokes={Doc.Strokes.Count} selected={Doc.Selected.Count}"
