@@ -1994,7 +1994,6 @@ internal sealed partial class App
         var frameBefore = cs.AxisFrameLocal();
         var oHandle = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.Vertex2);
         var oTarget = new Vector2(frameBefore.MinX + 60f, frameBefore.MaxY - 60f);
-        var move = oTarget - oHandle;
         bool tookO = SelectionGestureForTest(oHandle.X, oHandle.Y);
         UpdateSelectionGestureForTest(oTarget.X, oTarget.Y);
         SettleFrames(120);
@@ -2006,28 +2005,42 @@ internal sealed partial class App
               Near(cs.AxisOriginLocal().X, oTarget.X, 2f) && Near(cs.AxisOriginLocal().Y, oTarget.Y, 2f),
               $"原点 ({cs.AxisOriginLocal().X:F0},{cs.AxisOriginLocal().Y:F0})"
               + $" 期望 ({oTarget.X:F0},{oTarget.Y:F0})");
-        Check("拖原点：**整组平移**（外框跟着走同一个位移）",
-              Near(frameAfter.MinX, frameBefore.MinX + move.X, 2f)
-              && Near(frameAfter.MaxX, frameBefore.MaxX + move.X, 2f)
-              && Near(frameAfter.MinY, frameBefore.MinY + move.Y, 2f)
-              && Near(frameAfter.MaxY, frameBefore.MaxY + move.Y, 2f),
-              $"框位移 ({frameAfter.MinX - frameBefore.MinX:F0},{frameAfter.MinY - frameBefore.MinY:F0})"
-              + $" 期望 ({move.X:F0},{move.Y:F0})");
-        Check("拖原点：四根半轴长度一个都不变",
-              Near((frameAfter.MaxX - frameAfter.MinX), (frameBefore.MaxX - frameBefore.MinX), 0.5f)
-              && Near((frameAfter.MaxY - frameAfter.MinY), (frameBefore.MaxY - frameBefore.MinY), 0.5f),
-              $"尺寸 {frameAfter.MaxX - frameAfter.MinX:F0}×{frameAfter.MaxY - frameAfter.MinY:F0}"
-              + $"（原 {frameBefore.MaxX - frameBefore.MinX:F0}×{frameBefore.MaxY - frameBefore.MinY:F0}）");
+        Check("拖原点：**外框一分不动**（原点在框里挪，框还是那个框）",
+              Near(frameAfter.MinX, frameBefore.MinX, 0.01f)
+              && Near(frameAfter.MaxX, frameBefore.MaxX, 0.01f)
+              && Near(frameAfter.MinY, frameBefore.MinY, 0.01f)
+              && Near(frameAfter.MaxY, frameBefore.MaxY, 0.01f),
+              $"框 {frameBefore.MinX:F0},{frameBefore.MinY:F0}..{frameBefore.MaxX:F0},{frameBefore.MaxY:F0} 未变");
+
+        // 原点拖出框外要被夹回来（跑到框外，两条轴就都不在框里交叉了）
+        {
+            var far = new Vector2(frameBefore.MaxX + 900f, frameBefore.MaxY + 900f);
+            var oh = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.Vertex2);
+            SelectionGestureForTest(oh.X, oh.Y);
+            UpdateSelectionGestureForTest(far.X, far.Y);
+            SettleFrames(120);
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            var ov = cs.AxisOriginLocal();
+            Check("拖原点：拖出框外会被夹回框里（轴永远不会跑出框）",
+                  ov.X <= frameBefore.MaxX + 0.5f && ov.Y <= frameBefore.MaxY + 0.5f
+                  && ov.X >= frameBefore.MinX - 0.5f && ov.Y >= frameBefore.MinY - 0.5f,
+                  $"原点 ({ov.X:F0},{ov.Y:F0})，"
+                  + $"框 ({frameBefore.MinX:F0},{frameBefore.MinY:F0})..({frameBefore.MaxX:F0},{frameBefore.MaxY:F0})");
+        }
 
         // ---- 四个轴端：各自只改自己那一截（正负半轴可以不一样长）----
-        cs.Grid = false;                        // 这一段只验几何，先把网格吸附关掉
-        cs.InvalidateMetrics();
-        Doc.SelectOnly(new[] { cs });
+        // 用一张**新的、原点在正中**的坐标系：上一段把原点拖到框角后，
+        // 有两条半轴长度是 0，按规矩不发手柄（见 ShapeHandlesOf），
+        // 拿它测四个轴端会少两颗。
+        var ax = MakeCoordinateForTest(x0 + 700f, y0 + 600f, 260f, 200f, grid: false);
+        Doc.AddStroke(ax);
+        Doc.SelectOnly(new[] { ax });
         SettleFrames(200);
 
         void DragAxis(ShapeHandle h, float dx, float dy)
         {
-            var from = SelectionHandles.ShapeHandleCanvasPosition(cs, h);
+            var from = SelectionHandles.ShapeHandleCanvasPosition(ax, h);
             SelectionGestureForTest(from.X, from.Y);
             UpdateSelectionGestureForTest(from.X + dx, from.Y + dy);
             SettleFrames(120);
@@ -2036,10 +2049,10 @@ internal sealed partial class App
         }
 
         {
-            var b = cs.AxisFrameLocal();
-            var end = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.AxisRight);
+            var b = ax.AxisFrameLocal();
+            var end = SelectionHandles.ShapeHandleCanvasPosition(ax, ShapeHandle.AxisRight);
             DragAxis(ShapeHandle.AxisRight, 100f, 40f);       // y 偏移必须被忽略
-            var a = cs.AxisFrameLocal();
+            var a = ax.AxisFrameLocal();
             Check("轴端 +x：只拉长右半轴（minX / 上下边一分不动）",
                   Near(a.MaxX, end.X + 100f, 2f)
                   && Near(a.MinX, b.MinX, 0.5f) && Near(a.MinY, b.MinY, 0.5f)
@@ -2047,10 +2060,10 @@ internal sealed partial class App
                   $"maxX {b.MaxX:F0}→{a.MaxX:F0}，期望 {end.X + 100f:F0}");
         }
         {
-            var b = cs.AxisFrameLocal();
-            var end = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.AxisLeft);
+            var b = ax.AxisFrameLocal();
+            var end = SelectionHandles.ShapeHandleCanvasPosition(ax, ShapeHandle.AxisLeft);
             DragAxis(ShapeHandle.AxisLeft, -80f, -30f);
-            var a = cs.AxisFrameLocal();
+            var a = ax.AxisFrameLocal();
             Check("轴端 −x：只拉长左半轴（maxX / 上下边一分不动）",
                   Near(a.MinX, end.X - 80f, 2f)
                   && Near(a.MaxX, b.MaxX, 0.5f) && Near(a.MinY, b.MinY, 0.5f)
@@ -2058,10 +2071,10 @@ internal sealed partial class App
                   $"minX {b.MinX:F0}→{a.MinX:F0}，期望 {end.X - 80f:F0}");
         }
         {
-            var b = cs.AxisFrameLocal();
-            var end = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.AxisTop);
+            var b = ax.AxisFrameLocal();
+            var end = SelectionHandles.ShapeHandleCanvasPosition(ax, ShapeHandle.AxisTop);
             DragAxis(ShapeHandle.AxisTop, 50f, -70f);         // x 偏移必须被忽略
-            var a = cs.AxisFrameLocal();
+            var a = ax.AxisFrameLocal();
             Check("轴端 +y：只拉长上半轴（minX / maxX / 下边一分不动）",
                   Near(a.MinY, end.Y - 70f, 2f)
                   && Near(a.MinX, b.MinX, 0.5f) && Near(a.MaxX, b.MaxX, 0.5f)
@@ -2069,10 +2082,10 @@ internal sealed partial class App
                   $"minY {b.MinY:F0}→{a.MinY:F0}，期望 {end.Y - 70f:F0}");
         }
         {
-            var b = cs.AxisFrameLocal();
-            var end = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.AxisBottom);
+            var b = ax.AxisFrameLocal();
+            var end = SelectionHandles.ShapeHandleCanvasPosition(ax, ShapeHandle.AxisBottom);
             DragAxis(ShapeHandle.AxisBottom, -40f, 90f);
-            var a = cs.AxisFrameLocal();
+            var a = ax.AxisFrameLocal();
             Check("轴端 −y：只拉长下半轴（minX / maxX / 上边一分不动）",
                   Near(a.MaxY, end.Y + 90f, 2f)
                   && Near(a.MinX, b.MinX, 0.5f) && Near(a.MaxX, b.MaxX, 0.5f)
@@ -2082,9 +2095,9 @@ internal sealed partial class App
 
         // ---- 紧框就是"定义点的外接 + 半笔宽"（**刻度取消之后不该再虚报那一截**）----
         {
-            var wb = cs.WorldInkBounds;
-            var f2 = cs.AxisFrameLocal();
-            float halfPen = cs.Width * 0.5f;
+            var wb = ax.WorldInkBounds;
+            var f2 = ax.AxisFrameLocal();
+            float halfPen = ax.Width * 0.5f;
             // 外框宽 + 半笔宽 ×2 = 紧框宽（±2 像素：渲染那边还会各留一点抗锯齿余量）。
             float needW = (f2.MaxX - f2.MinX) + halfPen * 2f;
             Check("紧框：等于「外框 + 半笔宽」（没有刻度就不该再往外多算）",
@@ -2121,13 +2134,42 @@ internal sealed partial class App
                   Near(sc.AxisOriginLocal().X, cx, 1f) && Near(sc.AxisOriginLocal().Y, cy, 1f),
                   $"原点 ({sc.AxisOriginLocal().X:F0},{sc.AxisOriginLocal().Y:F0})");
 
-            var ec = MakeCoordinateForTest(vp.MinX + 200f, vp.MinY + 500f, 150f, 100f, grid: false);
+            // 外框左下角：老师最常用的"只留第一象限"摆法。
+            var fc = MakeCoordinateForTest(x0 + 700f, y0 + 600f, 300f, 200f, grid: false);
+            Doc.AddStroke(fc);
+            Doc.SelectOnly(new[] { fc });
+            SettleFrames(200);
+            var ff = fc.AxisFrameLocal();
+            var corner = new Vector2(ff.MinX, ff.MaxY);
+            var fh = SelectionHandles.ShapeHandleCanvasPosition(fc, ShapeHandle.Vertex2);
+            SelectionGestureForTest(fh.X, fh.Y);
+            UpdateSelectionGestureForTest(corner.X + 5f, corner.Y - 5f);
+            SettleFrames(120);
+            Check("原点吸附：靠近外框左下角 → 吸住并写「左下角」",
+                  ShapeSnapKind == ShapeSnapKind.FrameAnchor
+                  && ShapeSnapText.Contains("左下角")
+                  && Near(ShapeSnapAnchor.X, corner.X, 0.5f)
+                  && Near(ShapeSnapAnchor.Y, corner.Y, 0.5f),
+                  $"kind={ShapeSnapKind} text={ShapeSnapText}"
+                  + $" anchor=({ShapeSnapAnchor.X:F0},{ShapeSnapAnchor.Y:F0})");
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            var ff2 = fc.AxisFrameLocal();
+            Check("原点吸附：松手后原点真的在左下角、外框没动",
+                  Near(fc.AxisOriginLocal().X, corner.X, 1f)
+                  && Near(fc.AxisOriginLocal().Y, corner.Y, 1f)
+                  && Near(ff2.MinX, ff.MinX, 0.5f) && Near(ff2.MaxY, ff.MaxY, 0.5f),
+                  $"原点 ({fc.AxisOriginLocal().X:F0},{fc.AxisOriginLocal().Y:F0})"
+                  + $" 期望 ({corner.X:F0},{corner.Y:F0})");
+
+            float edgeY = vp.MinY + (vp.MaxY - vp.MinY) * 0.25f;
+            var ec = MakeCoordinateForTest(vp.MinX + 200f, edgeY - 80f, 300f, 400f, grid: false);
             Doc.AddStroke(ec);
             Doc.SelectOnly(new[] { ec });
             SettleFrames(200);
             var eh = SelectionHandles.ShapeHandleCanvasPosition(ec, ShapeHandle.Vertex2);
             SelectionGestureForTest(eh.X, eh.Y);
-            UpdateSelectionGestureForTest(vp.MinX, vp.MinY + 600f);
+            UpdateSelectionGestureForTest(vp.MinX, edgeY);
             SettleFrames(120);
             Check("原点吸附：贴左边界 → 吸住并说清是哪条边",
                   ShapeSnapKind == ShapeSnapKind.CanvasEdge
@@ -2138,7 +2180,7 @@ internal sealed partial class App
             SettleFrames(200);
             Check("原点吸附：松手后原点真的贴在左边界",
                   Near(ec.AxisOriginLocal().X, vp.MinX, 1f)
-                  && Near(ec.AxisOriginLocal().Y, vp.MinY + 600f, 1f),
+                  && Near(ec.AxisOriginLocal().Y, edgeY, 1f),
                   $"原点 ({ec.AxisOriginLocal().X:F0},{ec.AxisOriginLocal().Y:F0})");
         }
 

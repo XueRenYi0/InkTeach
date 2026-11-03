@@ -16867,7 +16867,7 @@ public partial class InkEngine
         if (snapping && !alt && s.Kind == StrokeKind.Coordinate
             && _vertexHandle == ShapeHandle.Vertex2)
         {
-            canvasPoint = SnapCoordinateOrigin(canvasPoint, out _shapeSnap, out string snapText);
+            canvasPoint = SnapCoordinateOrigin(s, canvasPoint, out _shapeSnap, out string snapText);
             _shapeSnapText = snapText;
             _shapeSnapAnchor = canvasPoint;
         }
@@ -17116,11 +17116,16 @@ public partial class InkEngine
 
                 if (_vertexHandle == ShapeHandle.Vertex2)
                 {
-                    // **原点 = 整组平移**（2026-11-03 用户确认）：三个点一起走，
-                    // 四根半轴的长度一个都不变。原来是在外框里挪、只改原点，
-                    // 那样"贴画布中心"这类吸附会顺手把轴长改掉，语义也说不清。
-                    var delta = local - o;
-                    for (int i = 0; i < pts.Length; i++) pts[i] += delta;
+                    // **原点：在框里自由挪**（2026-11-03 用户纠正："原本他的原点是可以拖动
+                    // 位置的，比如刚开始在最中心，可以拖到左下角"）。
+                    // 夹在框内是必须的：跑到框外，两条轴就都不在框里交叉了，
+                    // 画出来是个说不清的东西（而贴在框角上正是想要的那种用法）。
+                    // 特殊位置（框中心 / 四角 / 画布中心 / 画布边）的吸附在
+                    // SnapCoordinateOrigin 里已经做完了，这里只负责夹取。
+                    float fx0 = MathF.Min(pts[0].X, pts[1].X), fx1 = MathF.Max(pts[0].X, pts[1].X);
+                    float fy0 = MathF.Min(pts[0].Y, pts[1].Y), fy1 = MathF.Max(pts[0].Y, pts[1].Y);
+                    pts[2] = new Vector2(Math.Clamp(local.X, fx0, fx1),
+                                         Math.Clamp(local.Y, fy0, fy1));
                     break;
                 }
                 break;
@@ -17216,16 +17221,20 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 坐标系**原点**的吸附：画布中心 / 四条边；横竖各判各的（可以只吸 x 不吸 y）。
+    /// 坐标系**原点**的吸附：外框自己的中心 / 四边（＝四角）＋ 画布中心 / 四条边；
+    /// 横竖各判各的（可以只吸 x 不吸 y）。
     ///
-    /// 为什么允许分轴吸：老师最常见的摆法是"原点贴左边、垂直方向随便"或者
-    /// "原点贴下边、水平居中"——两轴绑成一个点反而难摆。中心优先于边
-    /// （屏幕很小时两者会重叠，先判中心）。
+    /// 为什么先吸**外框**：老师最常用的动作是"原点拖到框的左下角，只留第一象限"。
+    /// 外框角离得最近、又正是那个位置，先判它；画布中心 / 边是第二层，
+    /// 用来把整个坐标系摆到屏幕的固定位置上。
+    /// 为什么允许分轴吸：只吸 x 或只吸 y 也是常见摆法（贴左边、垂直居中），
+    /// 两轴绑成一个点反而难摆。
     ///
     /// 半径 = <see cref="CoordinateSnapRadiusLogical"/>；`Alt` 在调用处已经排除。
     /// 返回的是**画布坐标**，文案给胶囊用（为空 = 没吸住）。
     /// </summary>
-    private Vector2 SnapCoordinateOrigin(Vector2 p, out ShapeSnapKind kind, out string text)
+    private Vector2 SnapCoordinateOrigin(Stroke s, Vector2 p,
+                                         out ShapeSnapKind kind, out string text)
     {
         kind = ShapeSnapKind.None;
         text = "";
@@ -17235,21 +17244,83 @@ public partial class InkEngine
         float cy = (vp.MinY + vp.MaxY) * 0.5f;
         float x = p.X, y = p.Y;
         string sx = "", sy = "";
+        bool hitX = false, hitY = false;
+        bool frameX = false, frameY = false;
         bool centerX = false, centerY = false;
+        float bestX = tol, bestY = tol;
 
-        if (MathF.Abs(p.X - cx) <= tol) { x = cx; sx = "水平居中"; centerX = true; }
-        else if (MathF.Abs(p.X - vp.MinX) <= tol) { x = vp.MinX; sx = "左边缘"; }
-        else if (MathF.Abs(p.X - vp.MaxX) <= tol) { x = vp.MaxX; sx = "右边缘"; }
+        // 外框在**画布坐标**里的中心 / 四条边（坐标系本身不可旋转，但可能被整体缩放）。
+        var (minX, minY, maxX, maxY) = s.AxisFrameLocal();
+        float fcx = (minX + maxX) * 0.5f, fcy = (minY + maxY) * 0.5f;
+        var fCenter = Vector2.Transform(new Vector2(fcx, fcy), s.Transform);
+        var fMin = Vector2.Transform(new Vector2(minX, minY), s.Transform);
+        var fMax = Vector2.Transform(new Vector2(maxX, maxY), s.Transform);
 
-        if (MathF.Abs(p.Y - cy) <= tol) { y = cy; sy = "垂直居中"; centerY = true; }
-        else if (MathF.Abs(p.Y - vp.MinY) <= tol) { y = vp.MinY; sy = "上边缘"; }
-        else if (MathF.Abs(p.Y - vp.MaxY) <= tol) { y = vp.MaxY; sy = "下边缘"; }
+        void TakeX(float target, string label, bool isFrame, bool isCenter)
+        {
+            float d = MathF.Abs(p.X - target);
+            if (d <= tol && (!hitX || d < bestX))
+            {
+                x = target; sx = label; bestX = d; hitX = true;
+                frameX = isFrame; centerX = isCenter;
+            }
+        }
+        void TakeY(float target, string label, bool isFrame, bool isCenter)
+        {
+            float d = MathF.Abs(p.Y - target);
+            if (d <= tol && (!hitY || d < bestY))
+            {
+                y = target; sy = label; bestY = d; hitY = true;
+                frameY = isFrame; centerY = isCenter;
+            }
+        }
 
-        if (sx.Length == 0 && sy.Length == 0) return p;
-        kind = centerX && centerY ? ShapeSnapKind.CanvasCenter : ShapeSnapKind.CanvasEdge;
-        text = centerX && centerY ? "画布中心"
-             : sx.Length > 0 && sy.Length > 0 ? sx + " + " + sy
-             : sx.Length > 0 ? sx : sy;
+        // 第一层：外框中心 / 四条边（＝四个角）。
+        TakeX(fCenter.X, "框内水平居中", true, true);
+        TakeX(fMin.X, "框左边缘", true, false);
+        TakeX(fMax.X, "框右边缘", true, false);
+        TakeY(fCenter.Y, "框内垂直居中", true, true);
+        TakeY(fMin.Y, "框上边缘", true, false);
+        TakeY(fMax.Y, "框下边缘", true, false);
+
+        // 第二层：画布中心 / 四条边。
+        TakeX(cx, "画布水平居中", false, true);
+        TakeX(vp.MinX, "画布左边缘", false, false);
+        TakeX(vp.MaxX, "画布右边缘", false, false);
+        TakeY(cy, "画布垂直居中", false, true);
+        TakeY(vp.MinY, "画布上边缘", false, false);
+        TakeY(vp.MaxY, "画布下边缘", false, false);
+
+        if (!hitX && !hitY) return p;
+
+        string Join() => sx.Length > 0 && sy.Length > 0 ? sx + " + " + sy
+                        : sx.Length > 0 ? sx : sy;
+
+        if (frameX && frameY)
+        {
+            kind = ShapeSnapKind.FrameAnchor;
+            if (centerX && centerY) text = "框中心";
+            else if (sx == "框左边缘" && sy == "框下边缘") text = "左下角";
+            else if (sx == "框右边缘" && sy == "框下边缘") text = "右下角";
+            else if (sx == "框左边缘" && sy == "框上边缘") text = "左上角";
+            else if (sx == "框右边缘" && sy == "框上边缘") text = "右上角";
+            else text = Join();
+        }
+        else if (frameX || frameY)
+        {
+            kind = ShapeSnapKind.FrameAnchor;
+            text = Join();
+        }
+        else if (centerX && centerY)
+        {
+            kind = ShapeSnapKind.CanvasCenter;
+            text = "画布中心";
+        }
+        else
+        {
+            kind = ShapeSnapKind.CanvasEdge;
+            text = Join();
+        }
         return new Vector2(x, y);
     }
 

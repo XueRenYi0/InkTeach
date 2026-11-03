@@ -191,6 +191,8 @@ internal enum ShapeSnapKind
     RightFrustum,
     /// <summary>梯形被拖成两组对边都平行（上底=下底但中点错开）。</summary>
     ParallelogramTrapezoid,
+    /// <summary>坐标系原点吸到外框自己的特殊点（中心 / 四角 / 四边）。</summary>
+    FrameAnchor,
     /// <summary>坐标系原点吸到画布中心（横竖都居中）。</summary>
     CanvasCenter,
     /// <summary>坐标系原点吸到画布某一条边（具体是哪条看 `Engine.ShapeSnapText`）。</summary>
@@ -601,32 +603,34 @@ internal static class SelectionHandles
                 return 3;
 
             case StrokeKind.Coordinate:
-                // **五颗**（2026-11-03 起）：四个轴端 + 原点。
+                // **四轴端 + 原点**（2026-11-03）：四个轴端各自只改**自己那一截**的长度，
+                // 所以正负半轴可以不一样长。用户原话："能不能给坐标轴上加上 4 个点，
+                // 这样的话拖动长度会更方便"。
                 //
-                // 用户："能不能给坐标轴上加 4 个点，这样的话拖动长度会更方便"——
-                // 四个轴端各自只改**自己那一截**的长度，所以正负半轴可以不一样长；
-                // 原点在手柄列表里排最后（命中倒着找），它和某根轴端重合时优先抓原点
-                // （整组平移），但 `HitTest` 对坐标系改成了"取最近的那颗"，所以
-                // 轴端缩到最短时仍然抓得到。
+                // **长度为 0 的那一截不发手柄**：原点被拖到框角时（"只留第一象限"），
+                // 两条轴本来就是 0 长，手柄会和原点叠在一起——"画都不画却点得到"
+                // 正是要避免的死元素；把原点往框里挪一点，那一截长出来，手柄自然出现。
+                // 顺序仍按 +x / +y / −x / −y / 原点 / 格距 排，命中时坐标系按最近的那颗算。
                 if (dst.Length < 5 || s.Points.Count < 3) return 0;
-                dst[0] = ShapeHandle.AxisRight;    // +x
-                dst[1] = ShapeHandle.AxisTop;      // +y（屏幕 y 向下，上是 minY）
-                dst[2] = ShapeHandle.AxisLeft;     // −x
-                dst[3] = ShapeHandle.AxisBottom;   // −y
-                dst[4] = ShapeHandle.Vertex2;      // 原点
-                // **开了网格还有第六颗：格距**（用户 2026-09-24："那个第一个方格上那个格点，
-                // 它也做一个空心点，这样的话我就可以通过拖动那个点来改变这个方格的大小"）。
-                // 它**不是控制点**——拖它只改 `Stroke.AxisGridStep`（见 Engine 那一支）。
-                //
-                // ⚠ **只有开网格时才给**：没画格子就没有"第一个格子"这个可见的东西，
-                // 那时给一颗"拖了也看不见变化"的手柄，正是 2026-09-19 撤掉
-                // "单位长度点"时说的那种"画都不画却点得到"的死元素。
-                if (s.Grid && dst.Length >= 6)
                 {
-                    dst[5] = ShapeHandle.Vertex3;
-                    return 6;
+                    var (minX, minY, maxX, maxY) = s.AxisFrameLocal();
+                    var o = s.AxisOriginLocal();
+                    int n = 0;
+                    if (maxX - o.X > 0.5f) dst[n++] = ShapeHandle.AxisRight;   // +x
+                    if (o.Y - minY > 0.5f) dst[n++] = ShapeHandle.AxisTop;     // +y（屏幕 y 向下，上是 minY）
+                    if (o.X - minX > 0.5f) dst[n++] = ShapeHandle.AxisLeft;    // −x
+                    if (maxY - o.Y > 0.5f) dst[n++] = ShapeHandle.AxisBottom;  // −y
+                    dst[n++] = ShapeHandle.Vertex2;                            // 原点
+                    // **开了网格还有一颗：格距**（用户 2026-09-24："那个第一个方格上那个格点，
+                    // 它也做一个空心点，这样的话我就可以通过拖动那个点来改变这个方格的大小"）。
+                    // 它**不是控制点**——拖它只改 `Stroke.AxisGridStep`（见 Engine 那一支）。
+                    //
+                    // ⚠ **只有开网格时才给**：没画格子就没有"第一个格子"这个可见的东西，
+                    // 那时给一颗"拖了也看不见变化"的手柄，正是 2026-09-19 撤掉
+                    // "单位长度点"时说的那种"画都不画却点得到"的死元素。
+                    if (s.Grid && dst.Length >= n + 1) dst[n++] = ShapeHandle.Vertex3;
+                    return n;
                 }
-                return 5;
 
             case StrokeKind.NumberLine:
                 // **两个**（左端 / 右端）。没有刻度之后，"零点"和"单位长度点"退场了
@@ -1312,6 +1316,7 @@ internal static class SelectionHandles
         ShapeSnapKind.RightPyramid => "直棱锥",
         ShapeSnapKind.RightFrustum => "直棱台",
         ShapeSnapKind.ParallelogramTrapezoid => "平行四边形",
+        ShapeSnapKind.FrameAnchor => "框内特殊点",
         ShapeSnapKind.CanvasCenter => "画布中心",
         ShapeSnapKind.CanvasEdge => "画布边",
         ShapeSnapKind.GridStep => "网格",

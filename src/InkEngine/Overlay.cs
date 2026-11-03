@@ -4183,8 +4183,8 @@ internal sealed partial class OverlayWindow : IDisposable
     {
         if (app.ShapeSnapKind != ShapeSnapKind.None)
         {
-            string snap = app.ShapeSnapKind is ShapeSnapKind.CanvasCenter or ShapeSnapKind.CanvasEdge
-                                                   or ShapeSnapKind.GridStep
+            string snap = app.ShapeSnapKind is ShapeSnapKind.FrameAnchor or ShapeSnapKind.CanvasCenter
+                                                   or ShapeSnapKind.CanvasEdge or ShapeSnapKind.GridStep
                           && !string.IsNullOrEmpty(app.ShapeSnapText)
                 ? app.ShapeSnapText
                 : SelectionHandles.ShapeSnapLabel(app.ShapeSnapKind);
