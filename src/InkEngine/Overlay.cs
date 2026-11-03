@@ -2401,6 +2401,17 @@ internal sealed partial class OverlayWindow : IDisposable
                 _ctx.DrawGeometry(geo, Brush(s.Color), MathF.Max(1f, s.Width), Gfx.StyleFor(s.Dash));
         }
 
+        // **焦点小样**：正式画布上是空心小圆；卡片里缩到 44px 后会变成两个大圈，
+        // 这里改成固定大小的小实心点（只影响图形卡小样）。
+        if (s.Kind == StrokeKind.ConicEllipse && s.PreviewFocusDots)
+        {
+            var m = s.Transform * (extra ?? Matrix3x2.Identity);
+            var (f1, f2) = s.ConicEllipseFociLocal();
+            float r = 1.3f * (Dpi / 96f);
+            _ctx.FillEllipse(new Ellipse(Vector2.Transform(f1, m), r, r), Brush(s.Color));
+            _ctx.FillEllipse(new Ellipse(Vector2.Transform(f2, m), r, r), Brush(s.Color));
+        }
+
         // **辅助几何**（双曲线的两条虚线渐近线、立体图形被挡的半圈、**坐标系的网格**）：
         // 同一支笔的墨色，但**风格由身份定**——
         //   · 辅助线（渐近线 / 被挡的棱）：恒定细虚线，粗细 0.6 倍（辅助线的本分是不抢主线）；
@@ -4945,13 +4956,39 @@ internal sealed partial class OverlayWindow : IDisposable
         var s = ShapePreviewFor(preset);
         s.Color = color;
         s.Width = MathF.Max(1.4f, 2.1f * dpi);
+
+        // 统一 1:1 视觉框：量**实际轮廓**再等比缩到同一个正方形里居中。
+        // 不能用 InkBounds：圆/椭圆的控制点只有"圆心 + 边上一点"，量出来会漏掉整个圆。
+        var b = RectF.Empty;
+        foreach (var p in s.ShapeOutline())
+        {
+            if (!float.IsFinite(p.X) || !float.IsFinite(p.Y)) continue;
+            b.Add(p.X, p.Y);
+        }
+        if (b.IsEmpty) b = s.InkBounds;
+        b = b.Inflate(s.Width * 0.5f);
         float w = box.MaxX - box.MinX, h = box.MaxY - box.MinY;
-        float scale = MathF.Min(w, h) / ShapePreview.Size;
+        float side = MathF.Min(w, h) * 0.92f;
         float cx = (box.MinX + box.MaxX) * 0.5f;
         float cy = (box.MinY + box.MaxY) * 0.5f;
+
+        // 正弦 / 余弦 / 波浪用**同一套局部框**（宽 76、高 64、中心 50），
+        // 避免各自的轮廓包围盒略有差异，导致三条振幅看起来不一样高。
+        if (preset.Tool is Tool.Sine or Tool.Cosine or Tool.Wave)
+        {
+            float s0 = side / 76f;
+            var wm = Matrix3x2.CreateScale(s0)
+                   * Matrix3x2.CreateTranslation(cx - 50f * s0, cy - 50f * s0);
+            DrawStroke(s, wm);
+            return;
+        }
+
+        float bw = b.MaxX - b.MinX, bh = b.MaxY - b.MinY;
+        if (bw <= 0.01f || bh <= 0.01f) return;
+        float scale = side / MathF.Max(bw, bh);
         var m = Matrix3x2.CreateScale(scale)
-              * Matrix3x2.CreateTranslation(cx - ShapePreview.Size * 0.5f * scale,
-                                            cy - ShapePreview.Size * 0.5f * scale);
+              * Matrix3x2.CreateTranslation(cx - (b.MinX + b.MaxX) * 0.5f * scale,
+                                            cy - (b.MinY + b.MaxY) * 0.5f * scale);
         DrawStroke(s, m);
     }
 

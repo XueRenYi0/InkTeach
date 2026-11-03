@@ -32,6 +32,8 @@ internal static class ShapePreview
             FocusTriangle = p.Tool != Tool.ConicEllipse || p.Variant == 0,
             ShowAsymptotes = p.Tool == Tool.Hyperbola && p.Variant == 0,
         };
+        s.PreviewSmooth = true;
+        s.PreviewFocusDots = p.Tool == Tool.ConicEllipse;
 
         const float pad = 12f;
         const float lo = pad, hi = Size - pad, mid = Size * 0.5f;
@@ -91,13 +93,21 @@ internal static class ShapePreview
                 s.AddPoint(mid, mid, 1f, 0);
                 s.SetHyperbolaFromAsymptote(mid, mid, hi, lo, 2f);
                 // 经过点要**离开横轴**，否则 a = 到中心的距离、t = 0，两支会缩成两个小竖点。
-                s.SetHyperbolaThroughPoint(80f, 30f);
+                // 取靠近渐近线的点，让两支真正伸到卡片上下边，而不是中间两段小括号。
+                s.SetHyperbolaThroughPoint(85f, 20f);
                 break;
             case Tool.Sine:
             case Tool.Cosine:
             case Tool.Wave:
                 s.AddPoint(lo, mid, 1f, 0);
-                s.SetWaveBox(lo, mid, hi, lo + 18f, 2f);
+                // 余弦的振幅定义是 |dy|/2，要和其他两条一样高，终点得多拉一倍。
+                float waveEndY = p.Tool == Tool.Cosine ? mid - 64f : mid - 32f;
+                s.SetWaveBox(lo, mid, hi, waveEndY, 2f);
+                float cycles = p.Tool == Tool.Wave ? 2.5f : 1f;
+                s.PreviewWaveCycles = cycles;
+                // 波浪铺满图标宽：2.5 个周期压缩进同一个 76 宽的框，而不是把周期也画到框外。
+                s.PreviewWavePeriod = (hi - lo) / cycles;
+                s.PreviewStandardCosine = p.Tool == Tool.Cosine;
                 break;
             case Tool.Tangent:
                 s.AddPoint(mid, mid, 1f, 0);

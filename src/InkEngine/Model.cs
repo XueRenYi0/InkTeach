@@ -1359,9 +1359,11 @@ internal sealed class Stroke
 
     /// <summary>椭圆上一段弧的采样点列（`u0 → u1`）：**立体图形的实线几何、虚线半圈、
     /// 以及熔墨三处共用这一份点列**（渲染与熔出来的逐点相同）。</summary>
-    private static List<Vector2> ArcPoints(Vector2 c, float rx, float ry, float u0, float u1)
+    private List<Vector2> ArcPoints(Vector2 c, float rx, float ry, float u0, float u1)
     {
-        int n = Math.Clamp((int)(MathF.Max(rx, ry) / 4f), 12, 48);
+        int n = PreviewSmooth
+            ? Math.Clamp((int)(MathF.Max(rx, ry) / 2f), 64, 160)
+            : Math.Clamp((int)(MathF.Max(rx, ry) / 4f), 12, 48);
         var pts = new List<Vector2>(n + 1);
         for (int i = 0; i <= n; i++)
             pts.Add(EllipseArcPoint(c, rx, ry, u0 + (u1 - u0) * i / n));
@@ -2251,6 +2253,21 @@ internal sealed class Stroke
     /// <summary>仅“图形卡小样”用：坐标系箭头长度；不设则按线宽算。</summary>
     public float PreviewArrowHeadLen;
 
+    /// <summary>仅“图形卡小样”用：余弦画成标准余弦（从峰开始），而不是画布上的“单峰”。</summary>
+    public bool PreviewStandardCosine;
+
+    /// <summary>仅“图形卡小样”用：焦点画成小实心点，不画空心小圆。</summary>
+    public bool PreviewFocusDots;
+
+    /// <summary>仅“图形卡小样”用：圆弧/椭圆用更高段数，缩到卡片上不显多边形。</summary>
+    public bool PreviewSmooth;
+
+    /// <summary>仅“图形卡小样”用：正弦/余弦/波浪固定画几个周期；0 = 按真实长度算。</summary>
+    public float PreviewWaveCycles;
+
+    /// <summary>仅“图形卡小样”用：一个周期占多宽；0 = 按真实长度/振幅算。</summary>
+    public float PreviewWavePeriod;
+
     /// <summary>
     /// 改"画不画那两条虚线渐近线"，**并且让几何缓存失效**。
     ///
@@ -2515,7 +2532,10 @@ internal sealed class Stroke
     ///（手画的三个波 T/A 通常是 3~6），锁死 T = A 就只能认"我们自己工具画出来那种比例"。
     /// </summary>
     public float WavePeriodLocal()
-        => WavePeriodOf(Kind, WaveStartLocal(), WaveEndLocal(), CurvePointLocal(2));
+    {
+        if (PreviewWavePeriod > 0.01f) return PreviewWavePeriod;
+        return WavePeriodOf(Kind, WaveStartLocal(), WaveEndLocal(), CurvePointLocal(2));
+    }
 
     /// <summary>
     /// **一个周期的宽度**（三种波共用的一份算式，p0/p1/p2 = 起点 / 终点 / 第三个点）。
@@ -2570,6 +2590,7 @@ internal sealed class Stroke
     /// </summary>
     public float WaveCyclesLocal()
     {
+        if (PreviewWaveCycles > 0.01f) return PreviewWaveCycles;
         float t = WavePeriodLocal();
         return t > 1e-3f ? WaveLengthLocal() / t : 1f;
     }
@@ -2612,8 +2633,14 @@ internal sealed class Stroke
 
     /// <summary>实例版：按模型里的两个定义元素算（渲染与轮廓折线走它）。</summary>
     public Vector2 WavePointAt(float u)
-        => new(WaveStartLocal().X + WavePeriodLocal() * u,
-              WaveYAt(WaveStartLocal(), WaveEndLocal(), Kind, u));
+    {
+        var start = WaveStartLocal();
+        var end = WaveEndLocal();
+        float y = PreviewStandardCosine
+            ? start.Y + (end.Y - start.Y) * 0.5f * MathF.Cos(u * MathF.Tau)
+            : WaveYAt(start, end, Kind, u);
+        return new Vector2(start.X + WavePeriodLocal() * u, y);
+    }
 
     /// <summary>
     /// **画出来的那一段**上 `t ∈ [0, 1]` 处的点（`t = 0` 起点、`t = 1` 终点）。
@@ -2625,8 +2652,11 @@ internal sealed class Stroke
 
     /// <summary>波形那一段的**采样段数**：按总长算，并且保证每个周期至少 24 段（多个周期才够滑）。</summary>
     private int WaveSegmentsLocal()
-        => Math.Clamp((int)MathF.Ceiling(WaveLengthLocal() / 16f * MathF.Max(1f, WaveCyclesLocal())),
-                      24, 512);
+    {
+        int n = Math.Clamp((int)MathF.Ceiling(WaveLengthLocal() / 16f * MathF.Max(1f, WaveCyclesLocal())),
+                           24, 512);
+        return PreviewSmooth ? Math.Max(n, 160) : n;
+    }
 
 
     /// <summary>
@@ -4960,6 +4990,7 @@ internal sealed class Stroke
 
         // ① 椭圆本体：一圈折线（首尾相接 → 闭合）
         int n = EllipseSegments(MathF.Max(rx, ry));
+        if (PreviewSmooth) n = Math.Max(n, 72);
         sink.BeginFigure(new Vector2(c.X + rx, c.Y), FigureBegin.Hollow);
         for (int i = 1; i <= n; i++)
         {
@@ -4984,8 +5015,11 @@ internal sealed class Stroke
         // ③ 两个焦点：小圆点（描边＝这一笔的宽度，见 FocusDotRadius 的注释）。
         //    同样按折线画一圈（8 段足够小到看不出棱角）。
         //    **两档都画**：用户 2026-09-22 定的"无焦点三角形"只是不连那两条边，焦点还在。
-        AddDot(sink, f1);
-        AddDot(sink, f2);
+        if (!PreviewFocusDots)
+        {
+            AddDot(sink, f1);
+            AddDot(sink, f2);
+        }
 
         sink.Close();
         return geo;
