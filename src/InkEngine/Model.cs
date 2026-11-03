@@ -247,6 +247,13 @@ public enum Tool
     /// 仍写 <see cref="Marquee"/>，避免旧程序读到不认识的新工具值。
     /// </summary>
     Text = 32,
+
+    /// <summary>五角星：中心 → 外半径，正五角星；大小/旋转复用选中框。</summary>
+    Star = 33,
+    /// <summary>梯形：一个框画出默认等腰梯形；四个顶点可调，上下底保持平行。</summary>
+    Trapezoid = 34,
+    /// <summary>扇形：圆心 → 半径，默认 90°；圆弧端点可调 5°~360°。</summary>
+    Sector = 35,
 }
 
 /// <summary>An axis-aligned rectangle in virtual-desktop pixels.</summary>
@@ -655,6 +662,13 @@ internal enum StrokeKind
     /// 值只能追加在末尾（见 <see cref="InkSerializer"/> 的版本说明）。
     /// </summary>
     TextBox = 27,
+
+    /// <summary>五角星：Points = 10 个外/内顶点；几何直接连成闭合星形。</summary>
+    Star = 28,
+    /// <summary>梯形：Points = 左下/右下/右上/左上；上下底保持水平。</summary>
+    Trapezoid = 29,
+    /// <summary>扇形：Points = 圆心/起始半径端点/圆弧端点；半径与张角由三点现算。</summary>
+    Sector = 30,
 }
 
 /// <summary>
@@ -1477,8 +1491,7 @@ internal sealed class Stroke
     ///     松手那一瞬的紧框和用户拖出来的那个框重合，不会"松手就长大一截"。
     /// </summary>
     public void SetShapeBox(float x0, float y0, float x1, float y1)
-    {
-        // 起手只有 BeginShapeAt 铺的那一个占位点，这里补齐到三个（控制点数固定）。
+    {        // 起手只有 BeginShapeAt 铺的那一个占位点，这里补齐到三个（控制点数固定）。
         while (Points.Count < 3) AddPoint(x0, y0, 1f, 0);
 
         float minX = MathF.Min(x0, x1), maxX = MathF.Max(x0, x1);
@@ -1496,6 +1509,97 @@ internal sealed class Stroke
             SetPoint(1, new Vector2(maxX - shift, maxY));           // 底右
             SetPoint(2, new Vector2(minX + shift, minY));           // 顶左
         }
+    }
+
+    /// <summary>五角星：中心 + 外半径，生成 10 个外/内顶点（正五角星）。</summary>
+    public void SetStarFromCenter(float cx, float cy, float x, float y)
+    {
+        float r = MathF.Max(2f, Vector2.Distance(new Vector2(cx, cy), new Vector2(x, y)));
+        var pts = new Vector2[10];
+        for (int i = 0; i < pts.Length; i++)
+        {
+            float a = -MathF.PI * 0.5f + i * MathF.PI / 5f;
+            float rr = (i & 1) == 0 ? r : r * 0.382f;   // 正五角星内外半径比
+            pts[i] = new Vector2(cx + MathF.Cos(a) * rr, cy + MathF.Sin(a) * rr);
+        }
+        SetPoints(pts);
+    }
+
+    /// <summary>梯形：从外框生成默认等腰梯形（上底 = 下底的一半、居中）。</summary>
+    public void SetTrapezoidBox(float x0, float y0, float x1, float y1)
+    {
+        float minX = MathF.Min(x0, x1), maxX = MathF.Max(x0, x1);
+        float minY = MathF.Min(y0, y1), maxY = MathF.Max(y0, y1);
+        float cx = (minX + maxX) * 0.5f;
+        float halfTop = (maxX - minX) * 0.25f;
+        SetPoints(new[]
+        {
+            new Vector2(minX, maxY), new Vector2(maxX, maxY),
+            new Vector2(cx + halfTop, minY), new Vector2(cx - halfTop, minY),
+        });
+    }
+
+    /// <summary>
+    /// 扇形：圆心 + 起始半径端点 + 默认张角。第三点存圆弧端点，
+    /// 半径和张角都由三个点现算，不另存字段。
+    /// </summary>
+    public void SetSectorFromCenter(float cx, float cy, float x, float y, float sweepDegrees = 90f)
+    {
+        float r = MathF.Max(2f, Vector2.Distance(new Vector2(cx, cy), new Vector2(x, y)));
+        float a = MathF.Atan2(y - cy, x - cx);
+        float sweep = Math.Clamp(sweepDegrees, 5f, 359f) * MathF.PI / 180f;
+        var c = new Vector2(cx, cy);
+        SetPoints(new[]
+        {
+            c,
+            c + new Vector2(MathF.Cos(a), MathF.Sin(a)) * r,
+            c + new Vector2(MathF.Cos(a + sweep), MathF.Sin(a + sweep)) * r,
+        });
+    }
+
+    public float SectorRadiusLocal()
+        => Points.Count >= 2
+            ? Vector2.Distance(new Vector2(Points[0].X, Points[0].Y),
+                               new Vector2(Points[1].X, Points[1].Y))
+            : 0f;
+
+    public float SectorStartAngleLocal()
+        => Points.Count >= 2
+            ? MathF.Atan2(Points[1].Y - Points[0].Y, Points[1].X - Points[0].X)
+            : 0f;
+
+    /// <summary>张角（度，0~359）；按“从起始半径顺时针转到圆弧端点”算。</summary>
+    public float SectorSweepDegrees()
+    {
+        if (Points.Count < 3) return 90f;
+        float a0 = SectorStartAngleLocal();
+        float a1 = MathF.Atan2(Points[2].Y - Points[0].Y, Points[2].X - Points[0].X);
+        float d = (a1 - a0) * 180f / MathF.PI;
+        while (d < 0f) d += 360f;
+        while (d >= 360f) d -= 360f;
+        return Math.Clamp(d, 0f, 359f);
+    }
+
+    /// <summary>扇形轮廓：圆心 → 圆弧 → 圆心；接近 359° 时直接按整圆画。</summary>
+    public List<Vector2> SectorOutlinePoints()
+    {
+        var list = new List<Vector2>();
+        if (Points.Count < 3) return list;
+        var c = new Vector2(Points[0].X, Points[0].Y);
+        float r = SectorRadiusLocal();
+        float a0 = SectorStartAngleLocal();
+        float sweep = SectorSweepDegrees();
+        bool full = sweep >= 358.5f;
+        list.Add(c);
+        int n = Math.Clamp((int)MathF.Ceiling(MathF.Max(r, 1f) * MathF.Tau / 8f), 32, 160);
+        for (int i = 0; i <= n; i++)
+        {
+            float u = full ? i / (float)n : sweep / 360f * i / n;
+            float a = a0 + u * MathF.Tau;
+            list.Add(c + new Vector2(MathF.Cos(a), MathF.Sin(a)) * r);
+        }
+        if (!full) list.Add(c);
+        return list;
     }
 
     /// <summary>
@@ -2234,7 +2338,8 @@ internal sealed class Stroke
     {
         var o = CurvePointLocal(0);
         // 方向恒为 (±A, ±B)：两种朝向同一个式子（A / B 本身就是按 x / y 定义的量）。
-        var dir = new Vector2(HyperbolaALocal(), side * HyperbolaBLocal());
+        float k = PreviewAsymptoteScale > 0.01f ? PreviewAsymptoteScale : 1f;
+        var dir = new Vector2(HyperbolaALocal() * k, side * HyperbolaBLocal() * k);
         return (o - dir, o + dir);
     }
 
@@ -2253,8 +2358,17 @@ internal sealed class Stroke
     /// <summary>仅“图形卡小样”用：坐标系箭头长度；不设则按线宽算。</summary>
     public float PreviewArrowHeadLen;
 
+    /// <summary>仅“图形卡小样”用：双曲线渐近线缩到中心的倍率；0 = 画满整个渐近线框。</summary>
+    public float PreviewAsymptoteScale;
+
     /// <summary>仅“图形卡小样”用：余弦画成标准余弦（从峰开始），而不是画布上的“单峰”。</summary>
     public bool PreviewStandardCosine;
+
+    /// <summary>仅“图形卡小样”用：辅助线（渐近线/被挡棱）的线宽倍率；0 = 默认 0.6。</summary>
+    public float PreviewAuxWidthScale;
+
+    /// <summary>仅“图形卡小样”用：辅助线不透明度；0 = 默认不透明。</summary>
+    public float PreviewAuxAlpha;
 
     /// <summary>仅“图形卡小样”用：焦点画成小实心点，不画空心小圆。</summary>
     public bool PreviewFocusDots;
@@ -3339,6 +3453,13 @@ internal sealed class Stroke
             return;
         }
 
+        if (Kind == StrokeKind.Sector && Points.Count >= 3)
+        {
+            Bounds = RectF.Empty;
+            foreach (var p in SectorOutlinePoints()) Bounds.Add(p.X, p.Y);
+            return;
+        }
+
         // **长方体**同理：它的第三条棱伸到"正面 ∪ 背面"，
         // 而背面左上 / 右下两个角里只有一个是控制点（第三个点存的是背面右下角），
         // 照控制点算出来的框会**少了背面那一角**（命中粗筛在那儿就点不中）。
@@ -3440,6 +3561,18 @@ internal sealed class Stroke
         get
         {
             if (_inkBoundsRevision == Revision) return _inkBounds;
+
+            if (Kind == StrokeKind.Sector && Points.Count >= 3)
+            {
+                float hw0 = Width * 0.5f;
+                var rr = RectF.Empty;
+                foreach (var p in SectorOutlinePoints()) rr.Add(p.X, p.Y);
+                rr.MinX -= hw0; rr.MinY -= hw0; rr.MaxX += hw0; rr.MaxY += hw0;
+                _inkBounds = rr;
+                _maxHalfWidth = hw0;
+                _inkBoundsRevision = Revision;
+                return rr;
+            }
 
             // **长方体 / 棱柱一族 / 球**是仅有的几个例外：它们的墨迹伸到"控制点的外接"之外
             //（球反过来——是**控制在画出来的东西之外**，所以照控制点算框会虚胖）——
@@ -3568,6 +3701,7 @@ internal sealed class Stroke
                 or StrokeKind.Sphere
                 or StrokeKind.Cuboid or StrokeKind.Tetrahedron
                 or StrokeKind.Prism or StrokeKind.Pyramid or StrokeKind.Frustum
+                or StrokeKind.Star or StrokeKind.Trapezoid or StrokeKind.Sector
            || IsCurveKind(kind);
 
     /// <summary>
@@ -4253,6 +4387,29 @@ internal sealed class Stroke
                 break;
             }
 
+            case StrokeKind.Star:
+            {
+                if (Points.Count < 3) break;
+                foreach (var p in Points) list.Add(new Vector2(p.X, p.Y));
+                list.Add(new Vector2(Points[0].X, Points[0].Y));
+                break;
+            }
+
+            case StrokeKind.Trapezoid:
+            {
+                if (Points.Count < 4) break;
+                for (int i = 0; i < 4; i++)
+                    list.Add(new Vector2(Points[i].X, Points[i].Y));
+                list.Add(new Vector2(Points[0].X, Points[0].Y));
+                break;
+            }
+
+            case StrokeKind.Sector:
+            {
+                list.AddRange(SectorOutlinePoints());
+                break;
+            }
+
             case StrokeKind.Coordinate:
             case StrokeKind.NumberLine:
             {
@@ -4657,6 +4814,9 @@ internal sealed class Stroke
             StrokeKind.Line => BuildLine(factory),
             StrokeKind.Triangle => BuildPolygon(factory),
             StrokeKind.Parallelogram => BuildPolygon(factory),
+            StrokeKind.Star => BuildStar(factory),
+            StrokeKind.Trapezoid => BuildTrapezoid(factory),
+            StrokeKind.Sector => BuildSector(factory),
             StrokeKind.Coordinate => BuildAxes(factory),
             StrokeKind.NumberLine => BuildAxes(factory),
             StrokeKind.Parabola => BuildParabola(factory),
@@ -4738,6 +4898,48 @@ internal sealed class Stroke
         sink.AddLine(new Vector2(Points[1].X, Points[1].Y));
         if (Kind == StrokeKind.Parallelogram) sink.AddLine(ParallelogramFourthLocal());
         sink.AddLine(new Vector2(Points[2].X, Points[2].Y));
+        sink.EndFigure(FigureEnd.Closed);
+        sink.Close();
+        return geo;
+    }
+
+    private ID2D1PathGeometry BuildStar(ID2D1Factory1 factory)
+    {
+        if (Points.Count < 3) return BuildLine(factory);
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+        sink.SetFillMode(FillMode.Winding);
+        sink.BeginFigure(new Vector2(Points[0].X, Points[0].Y), FigureBegin.Hollow);
+        for (int i = 1; i < Points.Count; i++)
+            sink.AddLine(new Vector2(Points[i].X, Points[i].Y));
+        sink.EndFigure(FigureEnd.Closed);
+        sink.Close();
+        return geo;
+    }
+
+    private ID2D1PathGeometry BuildTrapezoid(ID2D1Factory1 factory)
+    {
+        if (Points.Count < 4) return BuildLine(factory);
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+        sink.SetFillMode(FillMode.Winding);
+        sink.BeginFigure(new Vector2(Points[0].X, Points[0].Y), FigureBegin.Hollow);
+        for (int i = 1; i < 4; i++)
+            sink.AddLine(new Vector2(Points[i].X, Points[i].Y));
+        sink.EndFigure(FigureEnd.Closed);
+        sink.Close();
+        return geo;
+    }
+
+    private ID2D1PathGeometry BuildSector(ID2D1Factory1 factory)
+    {
+        var pts = SectorOutlinePoints();
+        if (pts.Count < 2) return BuildLine(factory);
+        var geo = factory.CreatePathGeometry();
+        using var sink = geo.Open();
+        sink.SetFillMode(FillMode.Winding);
+        sink.BeginFigure(pts[0], FigureBegin.Hollow);
+        for (int i = 1; i < pts.Count; i++) sink.AddLine(pts[i]);
         sink.EndFigure(FigureEnd.Closed);
         sink.Close();
         return geo;

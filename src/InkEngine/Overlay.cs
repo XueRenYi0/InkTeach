@@ -2424,9 +2424,12 @@ internal sealed partial class OverlayWindow : IDisposable
             if (aux != null)
             {
                 bool grid = s.Kind == StrokeKind.Coordinate && s.Grid;
-                _ctx.DrawGeometry(aux,
-                                  Brush(grid ? Stroke.Fade(s.Color, Stroke.AxisGridAlpha) : s.Color),
-                                  MathF.Max(1f, s.Width * (grid ? Stroke.AxisGridWidthFactor : 0.6f)),
+                var auxColor = grid ? Stroke.Fade(s.Color, Stroke.AxisGridAlpha) : s.Color;
+                if (s.PreviewAuxAlpha > 0.01f) auxColor = Stroke.Fade(auxColor, s.PreviewAuxAlpha);
+                float auxScale = grid ? Stroke.AxisGridWidthFactor
+                                : (s.PreviewAuxWidthScale > 0.01f ? s.PreviewAuxWidthScale : 0.6f);
+                _ctx.DrawGeometry(aux, Brush(auxColor),
+                                  MathF.Max(1f, s.Width * auxScale),
                                   Gfx.StyleFor(grid ? StrokeDash.Solid : StrokeDash.Dashed));
             }
         }
@@ -4197,6 +4200,7 @@ internal sealed partial class OverlayWindow : IDisposable
             //（纵向 = 振幅、横向 = 周期），所以两个数都报出来。
             InkEngine.VertexReadoutKind.WavePeriod =>
                 $"T = {app.VertexReadoutValue:F1}  A = {app.VertexReadoutSecondary:F1}",
+            InkEngine.VertexReadoutKind.SectorAngle => $"{app.VertexReadoutValue:F0}°",
             // 直线/箭头：倾斜角 α（[0°,180°)），和旋转读数 Δ 是两个数；
             // 长度是 2026-10-05 加的第二个数（同 α 一颗胶囊）。
             InkEngine.VertexReadoutKind.Inclination =>

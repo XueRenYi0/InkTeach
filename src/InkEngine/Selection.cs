@@ -555,6 +555,21 @@ internal static class SelectionHandles
                 return 2;
             }
 
+            case StrokeKind.Trapezoid:
+                if (dst.Length < 4 || s.Points.Count < 4) return 0;
+                dst[0] = ShapeHandle.Vertex0;
+                dst[1] = ShapeHandle.Vertex1;
+                dst[2] = ShapeHandle.Vertex2;
+                dst[3] = ShapeHandle.Vertex3;
+                return 4;
+
+            case StrokeKind.Sector:
+                if (dst.Length < 3 || s.Points.Count < 3) return 0;
+                dst[0] = ShapeHandle.Vertex0;
+                dst[1] = ShapeHandle.Vertex1;
+                dst[2] = ShapeHandle.Vertex2;
+                return 3;
+
             case StrokeKind.Triangle:
             case StrokeKind.Parallelogram:
                 // **只有三个**：多边形是由顶点定义的，第四个角（平行四边形）是算出来的。
@@ -799,11 +814,13 @@ internal static class SelectionHandles
     /// </summary>
     public static bool IsVertexDefined(Stroke s)
         => s != null && s.Kind is StrokeKind.Triangle or StrokeKind.Parallelogram
+                                   or StrokeKind.Trapezoid or StrokeKind.Sector
                                    or StrokeKind.Coordinate or StrokeKind.NumberLine;
 
     /// <summary>是不是"三个顶点定义"的多边形（三角形 / 平行四边形）。</summary>
     public static bool IsPolygon(Stroke s)
-        => s != null && s.Kind is StrokeKind.Triangle or StrokeKind.Parallelogram;
+        => s != null && s.Kind is StrokeKind.Triangle or StrokeKind.Parallelogram
+                                  or StrokeKind.Trapezoid;
 
     /// <summary>
     /// 端点手柄在**画布坐标**里的位置。

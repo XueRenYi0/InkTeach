@@ -60,6 +60,8 @@ internal static class IconAtlas
         // 和旁边那排 1.5 线宽的图标同一套光学比例。
         if (name == "text" || name == "textFilled") { DrawTextBoxIcon(ctx, x, y, size, brush); return; }
         if (name == "oval") { DrawOval(ctx, x, y, size, brush); return; }
+        if (name == "trapezoid") { DrawTrapezoidIcon(ctx, x, y, size, brush); return; }
+        if (name == "sector") { DrawSectorIcon(ctx, x, y, size, brush); return; }
         if (name == "axes") { DrawAxes(ctx, x, y, size, brush); return; }
         // "坐标系 + 网格"那一档（2026-09-24）：同一张图多一层细格线。
         if (name == "axesGrid") { DrawAxes(ctx, x, y, size, brush, grid: true); return; }
@@ -360,6 +362,41 @@ internal static class IconAtlas
     /// 画布上的坐标系同一天已经定了"不画刻度"（见 StrokeKind.Coordinate），
     /// 图标还留着刻度就是**画给用户看一个不存在的东西**。
     /// </summary>
+    private static void DrawTrapezoidIcon(ID2D1DeviceContext ctx, float x, float y,
+                                          float size, ID2D1Brush brush)
+    {
+        float s = size / 24f;
+        void L(float x0, float y0, float x1, float y1)
+            => ctx.DrawLine(new Vector2(x + x0 * s, y + y0 * s),
+                            new Vector2(x + x1 * s, y + y1 * s), brush, 1.5f, _round);
+        L(4f, 20f, 20f, 20f);
+        L(20f, 20f, 16f, 5f);
+        L(16f, 5f, 8f, 5f);
+        L(8f, 5f, 4f, 20f);
+    }
+
+    private static void DrawSectorIcon(ID2D1DeviceContext ctx, float x, float y,
+                                       float size, ID2D1Brush brush)
+    {
+        float s = size / 24f;
+        void L(float x0, float y0, float x1, float y1)
+            => ctx.DrawLine(new Vector2(x + x0 * s, y + y0 * s),
+                            new Vector2(x + x1 * s, y + y1 * s), brush, 1.5f, _round);
+        // 圆心在左下，扇形朝右上；和画布上的“圆心 + 半径 + 90°”同一读法。
+        L(6f, 18f, 20f, 18f);
+        L(6f, 18f, 6f, 4f);
+        const int n = 12;
+        var prev = new Vector2(x + 20f * s, y + 18f * s);
+        for (int i = 1; i <= n; i++)
+        {
+            float a = -MathF.PI * 0.5f * i / n;
+            var q = new Vector2(x + (6f + 14f * MathF.Cos(a)) * s,
+                                y + (18f + 14f * MathF.Sin(a)) * s);
+            ctx.DrawLine(prev, q, brush, 1.5f, _round);
+            prev = q;
+        }
+    }
+
     private static void DrawAxes(ID2D1DeviceContext ctx, float x, float y,
                                  float size, ID2D1Brush brush, bool grid = false)
     {

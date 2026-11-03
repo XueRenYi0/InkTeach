@@ -68,6 +68,18 @@ internal static class ShapePreview
                 s.AddPoint(lo, lo, 1f, 0);
                 s.SetShapeBox(lo, lo, hi, hi);
                 break;
+            case Tool.Star:
+                s.AddPoint(mid, mid, 1f, 0);
+                s.SetStarFromCenter(mid, mid, hi, mid);
+                break;
+            case Tool.Trapezoid:
+                s.AddPoint(lo, lo, 1f, 0);
+                s.SetTrapezoidBox(lo, lo, hi, hi);
+                break;
+            case Tool.Sector:
+                s.AddPoint(mid, mid, 1f, 0);
+                s.SetSectorFromCenter(mid, mid, hi, mid, 90f);
+                break;
             case Tool.Coordinate:
                 s.AddPoint(mid, mid, 1f, 0);
                 // 原点就是卡片中心，四条轴臂等长；不这么写会偏到右下角。
@@ -94,7 +106,10 @@ internal static class ShapePreview
                 s.SetHyperbolaFromAsymptote(mid, mid, hi, lo, 2f);
                 // 经过点要**离开横轴**，否则 a = 到中心的距离、t = 0，两支会缩成两个小竖点。
                 // 取靠近渐近线的点，让两支真正伸到卡片上下边，而不是中间两段小括号。
-                s.SetHyperbolaThroughPoint(85f, 20f);
+                s.SetHyperbolaThroughPoint(80f, 22f);
+                s.PreviewAuxWidthScale = 0.5f;
+                s.PreviewAuxAlpha = 0.75f;
+                s.PreviewAsymptoteScale = 0.8f;
                 break;
             case Tool.Sine:
             case Tool.Cosine:

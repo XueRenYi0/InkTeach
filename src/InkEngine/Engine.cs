@@ -1950,6 +1950,8 @@ public partial class InkEngine
         HyperbolaImag,
         /// <summary>正弦 / 余弦：**周期 T**（一个周期有多宽；secondary 是振幅 A）。</summary>
         WavePeriod,
+        /// <summary>扇形：圆心角（度）。</summary>
+        SectorAngle,
     }
 
     /// <summary>正在拖旋转手柄——度数标签靠它决定显不显示。</summary>
@@ -9208,7 +9210,7 @@ public partial class InkEngine
         if (Tool != p.Tool) return false;
         return p.Tool switch
         {
-            Tool.Line => (int)LineDash == p.Variant,
+            Tool.Line => true,
             Tool.Parabola => p.Variant == 0 ? ParabolaAxis == CurveAxis.OpenUp : ParabolaAxis != CurveAxis.OpenUp,
             Tool.Hyperbola => HyperbolaAsymptotes == (p.Variant == 0),
             Tool.ConicEllipse => EllipseFocusTriangle == (p.Variant == 0),
@@ -9228,14 +9230,6 @@ public partial class InkEngine
         _shapeOneShot = true;
         switch (p.Tool)
         {
-            case Tool.Line:
-                var dash = (StrokeDash)p.Variant;
-                if (LineDash != dash)
-                {
-                    LineDash = dash;
-                    SetUiPref("lineDash", ((int)dash).ToString());
-                }
-                break;
             case Tool.Parabola:
                 ParabolaAxis = p.Variant == 0 ? CurveAxis.OpenUp : CurveAxis.OpenRight;
                 break;
@@ -12023,7 +12017,8 @@ public partial class InkEngine
              or Tool.ConicEllipse
              or Tool.Cylinder or Tool.Cone or Tool.Cuboid or Tool.Tetrahedron
              or Tool.Prism or Tool.Pyramid or Tool.Frustum
-             or Tool.ConeFrustum or Tool.Sphere;
+             or Tool.ConeFrustum or Tool.Sphere
+             or Tool.Star or Tool.Trapezoid or Tool.Sector;
 
     /// <summary>
     /// **一笔**做什么：把"这一笔拖到的位置"写进半成品的几何。
@@ -12277,6 +12272,9 @@ public partial class InkEngine
         Tool.Frustum => StrokeKind.Frustum,
         Tool.ConeFrustum => StrokeKind.ConeFrustum,
         Tool.Sphere => StrokeKind.Sphere,
+        Tool.Star => StrokeKind.Star,
+        Tool.Trapezoid => StrokeKind.Trapezoid,
+        Tool.Sector => StrokeKind.Sector,
         _ => StrokeKind.Arrow,
     };
 
@@ -12550,6 +12548,26 @@ public partial class InkEngine
         var start = new Vector2(s.Points[0].X, s.Points[0].Y);
         var end = new Vector2(x, y);
 
+        // 五角星 / 梯形 / 扇形：各自一条直接的"定义元素 → 几何"路径。
+        if (s.Kind == StrokeKind.Star)
+        {
+            s.SetStarFromCenter(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y);
+            _shapeAnchor = new Vector2(x, y);
+            return;
+        }
+        if (s.Kind == StrokeKind.Trapezoid)
+        {
+            s.SetTrapezoidBox(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y);
+            _shapeAnchor = new Vector2(x, y);
+            return;
+        }
+        if (s.Kind == StrokeKind.Sector)
+        {
+            s.SetSectorFromCenter(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y, 90f);
+            _shapeAnchor = new Vector2(x, y);
+            return;
+        }
+
         // 三角形 / 平行四边形：外框（按下点 ＋ 指针）→ **三个控制点**一次算出来。
         if (s.Kind is StrokeKind.Triangle or StrokeKind.Parallelogram)
         {
@@ -12681,6 +12699,13 @@ public partial class InkEngine
     private bool ShapeDragLongEnough(Stroke s)
     {
         if (s.Points.Count < 2) return false;
+        // 星形 / 梯形 / 扇形：首末点不代表大小（星形首末是相邻顶点），改量真实包围盒。
+        if (s.Kind is StrokeKind.Star or StrokeKind.Trapezoid or StrokeKind.Sector)
+        {
+            var bb = s.InkBounds;
+            float size = MathF.Max(bb.MaxX - bb.MinX, bb.MaxY - bb.MinY);
+            return size >= ShapeMinDragLogical * DpiScale;
+        }
         // 坐标系要单独算：它的**原点是按下点**（见 Stroke.SetAxisBox），
         // 而"拖出去的那一下" = 原点 ↔ 外框角的距离（外框角 = 原点 ± 拖动量，所以正好等于拖动量）。
         // 拿外框对角去判的话（= √2 × 拖动量）会把"只拖了 3 像素"也当成够长。
@@ -16784,6 +16809,97 @@ public partial class InkEngine
 
         switch (s.Kind)
         {
+            case StrokeKind.Trapezoid:
+            {
+                int idx = SelectionHandles.VertexIndex(_vertexHandle);
+                if (idx < 0 || idx >= 4 || pts.Length < 4) break;
+                if (idx <= 1)
+                {
+                    pts[0].Y = pts[1].Y = local.Y;
+                    pts[idx].X = local.X;
+                }
+                else
+                {
+                    pts[2].Y = pts[3].Y = local.Y;
+                    pts[idx].X = local.X;
+                }
+                // 保证上下底都还有宽度；太窄就把被拖的点顶回去。
+                float minW = ShapeMinAxisLogical * DpiScale;
+                if (MathF.Abs(pts[1].X - pts[0].X) < minW)
+                    pts[idx <= 1 ? 1 : 0] = new Vector2(pts[idx <= 1 ? 0 : 1].X + minW, pts[0].Y);
+                if (MathF.Abs(pts[2].X - pts[3].X) < minW)
+                {
+                    float mid = (pts[2].X + pts[3].X) * 0.5f;
+                    pts[2].X = mid + minW * 0.5f;
+                    pts[3].X = mid - minW * 0.5f;
+                }
+                if (!alt)
+                {
+                    float mb = (pts[0].X + pts[1].X) * 0.5f;
+                    float mt = (pts[2].X + pts[3].X) * 0.5f;
+                    if (MathF.Abs(mb - mt) <= lenTol)
+                    {
+                        float d = mb - mt;
+                        pts[2].X += d; pts[3].X += d;
+                        _shapeSnap = ShapeSnapKind.Isosceles;
+                    }
+                    else
+                    {
+                        bool right = (idx == 2 && MathF.Abs(pts[2].X - pts[1].X) <= lenTol)
+                                  || (idx == 3 && MathF.Abs(pts[3].X - pts[0].X) <= lenTol)
+                                  || (idx == 1 && MathF.Abs(pts[1].X - pts[2].X) <= lenTol)
+                                  || (idx == 0 && MathF.Abs(pts[0].X - pts[3].X) <= lenTol);
+                        if (right)
+                        {
+                            if (idx == 2) pts[2].X = pts[1].X;
+                            else if (idx == 3) pts[3].X = pts[0].X;
+                            else if (idx == 1) pts[1].X = pts[2].X;
+                            else pts[0].X = pts[3].X;
+                            _shapeSnap = ShapeSnapKind.RightAngle;
+                        }
+                    }
+                }
+                break;
+            }
+
+            case StrokeKind.Sector:
+            {
+                int idx = SelectionHandles.VertexIndex(_vertexHandle);
+                if (idx < 0 || idx >= 3 || pts.Length < 3) break;
+                var center = new Vector2(pts[0].X, pts[0].Y);
+                float r = MathF.Max(minAxis, Vector2.Distance(center, local));
+                float a0 = MathF.Atan2(pts[1].Y - center.Y, pts[1].X - center.X);
+                float sweep = s.SectorSweepDegrees();
+                if (idx == 0)
+                {
+                    var d = local - center;
+                    pts[0] += d; pts[1] += d; pts[2] += d;
+                    break;
+                }
+                if (idx == 1)
+                {
+                    a0 = MathF.Atan2(local.Y - center.Y, local.X - center.X);
+                    pts[1] = center + new Vector2(MathF.Cos(a0), MathF.Sin(a0)) * r;
+                    pts[2] = center + new Vector2(MathF.Cos(a0 + sweep * MathF.PI / 180f),
+                                                  MathF.Sin(a0 + sweep * MathF.PI / 180f)) * r;
+                }
+                else
+                {
+                    float a1 = MathF.Atan2(local.Y - center.Y, local.X - center.X);
+                    float d = (a1 - a0) * 180f / MathF.PI;
+                    while (d < 0f) d += 360f;
+                    if (!alt)
+                    {
+                        float snapped = MathF.Round(d / 15f) * 15f;
+                        if (MathF.Abs(snapped - d) <= 3f) d = snapped;
+                    }
+                    sweep = Math.Clamp(d, 5f, 359f);
+                    pts[2] = center + new Vector2(MathF.Cos(a0 + sweep * MathF.PI / 180f),
+                                                  MathF.Sin(a0 + sweep * MathF.PI / 180f)) * r;
+                }
+                break;
+            }
+
             case StrokeKind.Triangle:
             case StrokeKind.Parallelogram:
             {
@@ -16979,7 +17095,8 @@ public partial class InkEngine
 
             case StrokeKind.Triangle:
             case StrokeKind.Parallelogram:
-                // 三角形 / 平行四边形**这一轮没有读数**：它们要显示的是内角 / 夹角，
+            case StrokeKind.Trapezoid:
+                // 三角形 / 平行四边形 / 梯形**这一轮没有读数**：它们要显示的是内角 / 夹角，
                 // 那是第③轮（9.7）的事；现在改顶点时只有"吸到了什么"那一颗胶囊
                 // （见 ShapeSnapKind）。**不要**落到 default 去报一个 α：
                 // 三个顶点之间根本没有"倾斜角"这个量。
@@ -16987,6 +17104,18 @@ public partial class InkEngine
                 _vertexReadoutValue = 0f;
                 _vertexReadoutSecondary = 0f;
                 break;
+
+            case StrokeKind.Sector:
+            {
+                float a0 = MathF.Atan2(pts[1].Y - pts[0].Y, pts[1].X - pts[0].X);
+                float a1 = MathF.Atan2(pts[2].Y - pts[0].Y, pts[2].X - pts[0].X);
+                float deg = (a1 - a0) * 180f / MathF.PI;
+                while (deg < 0f) deg += 360f;
+                _vertexReadout = VertexReadoutKind.SectorAngle;
+                _vertexReadoutValue = Math.Clamp(deg, 0f, 359f);
+                _vertexReadoutSecondary = 0f;
+                break;
+            }
 
             // 四种曲线的读数（p / 实半轴 / 虚半轴 / 周期＋振幅）2026-09-20 随手柄一起删了：
             // 读数挂在手柄上，手柄没了，那个量就没人拖得动它们了（见 ShapeHandlesOf）。

@@ -6528,6 +6528,7 @@ public sealed partial class FullUi : IOverlayUi
         // "这一笔画出来带不带格子"看不出来。显示的是**"以后新画的那些"**那一档
         //（已经画在板上的各存各的，见 Stroke.Grid）。
         Tool.Coordinate => _host.State.CoordGridDefault ? "axesGrid" : "axes",
+        Tool.Star => "star",
         _ when ShapeSpec.HasSideCount(t) => SolidIconName(t, _host.State.SidesOf(t)),
         _ => ShapeIconFor(t),
     };
@@ -6609,6 +6610,9 @@ public sealed partial class FullUi : IOverlayUi
         Tool.Ellipse => "oval",                    // 自绘：Fluent 只有正圆
         Tool.Circle => "circle",
         Tool.Triangle => "triangle",
+        Tool.Trapezoid => "trapezoid",
+        Tool.Sector => "sector",
+        Tool.Star => "star",
         Tool.Parallelogram => "parallelogram",     // 自绘：Fluent 没有这个专名
         // 坐标系 / 数轴也是自绘的（见 IconAtlas.DrawAxes / DrawNumberLine）：
         // 上游图标库里没有"两条轴"和"一条带刻度的轴"这两个专名。

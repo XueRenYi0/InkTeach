@@ -75,12 +75,12 @@ internal sealed partial class App
         Check("选图形后：旧图形上带不再出现", ui.BandCellForTest != 10,
               $"bandCell={ui.BandCellForTest}");
 
-        // 2a. 37 张档位卡 + 五个分类；图形卡 72×82，固定 5 行高
-        Check("档位展开后共 37 张卡",
-              ShapeCatalog.All.Length == 37 && ShapeCatalog.CountFor("all") == 37,
+        // 2a. 38 张档位卡 + 分类；图形卡 72×82，固定 5 行高
+        Check("档位展开后共 38 张卡",
+              ShapeCatalog.All.Length == 38 && ShapeCatalog.CountFor("all") == 38,
               $"all={ShapeCatalog.CountFor("all")}");
-        Check("分类数量：全部37 / 常用11 / 曲线10 / 立体16",
-              ShapeCatalog.CountFor("common") == 11 && ShapeCatalog.CountFor("curve") == 10
+        Check("分类数量：全部38 / 常用12 / 曲线10 / 立体16",
+              ShapeCatalog.CountFor("common") == 12 && ShapeCatalog.CountFor("curve") == 10
               && ShapeCatalog.CountFor("solid") == 16,
               $"常用={ShapeCatalog.CountFor("common")} 曲线={ShapeCatalog.CountFor("curve")} 立体={ShapeCatalog.CountFor("solid")}");
         Check("图形页默认「全部」、9 列 × 5 行、卡片 72×82",
@@ -118,8 +118,8 @@ internal sealed partial class App
         }
 
         ClickShapeTab("common");
-        Check("点「常用」→ 11 张、面板不变高",
-              ShapeCategoryId == "common" && ShapeCardsNow().Length == 11
+        Check("点「常用」→ 12 张、面板不变高",
+              ShapeCategoryId == "common" && ShapeCardsNow().Length == 12
               && MathF.Abs((LibraryPanelRectNow().MaxY - LibraryPanelRectNow().MinY) - shapesPageH) < 1f,
               $"cat={ShapeCategoryId} n={ShapeCardsNow().Length} h={(LibraryPanelRectNow().MaxY - LibraryPanelRectNow().MinY):F0}");
         ClickShapeTab("curve");
@@ -129,21 +129,21 @@ internal sealed partial class App
         Check("点「立体」→ 16 张", ShapeCategoryId == "solid" && ShapeCardsNow().Length == 16,
               $"cat={ShapeCategoryId} n={ShapeCardsNow().Length}");
         ClickShapeTab("all");
-        Check("点「全部」→ 37 张、仍是 5 行高",
-              ShapeCategoryId == "all" && ShapeCardsNow().Length == 37
+        Check("点「全部」→ 38 张、仍是 5 行高",
+              ShapeCategoryId == "all" && ShapeCardsNow().Length == 38
               && LibraryPanelInfoNow().Rows == 5,
               $"cat={ShapeCategoryId} n={ShapeCardsNow().Length} rows={LibraryPanelInfoNow().Rows}");
 
-        // 2a2. 档位直接选：第 2 张 = 虚线，不再“同卡再点换档”
+        // 2a2. 点卡直接选：第 6 张 = 梯形
         var cards = ShapeCardsNow();
         m = LibraryPanelInfoNow();
-        ClickCanvasRect(LibraryLayout.CellRect(m, 1, 0f));
-        Check("点「虚线」卡 = 直线 + 虚线档",
-              Tool == Tool.Line && LineDash == StrokeDash.Dashed && ShapePresetActive(cards[1]),
-              $"tool={Tool} dash={LineDash} active={ShapePresetActive(cards[1])}");
-        Check("虚线卡高亮、实线卡不高亮",
-              ShapePresetActive(cards[1]) && !ShapePresetActive(cards[0]),
-              $"实线={ShapePresetActive(cards[0])} 虚线={ShapePresetActive(cards[1])}");
+        ClickCanvasRect(LibraryLayout.CellRect(m, 5, 0f));
+        Check("点「梯形」卡 = 选梯形",
+              Tool == Tool.Trapezoid && ShapePresetActive(cards[5]),
+              $"tool={Tool} active={ShapePresetActive(cards[5])}");
+        Check("梯形卡高亮、直线卡不高亮",
+              ShapePresetActive(cards[5]) && !ShapePresetActive(cards[0]),
+              $"直线={ShapePresetActive(cards[0])} 梯形={ShapePresetActive(cards[5])}");
         Check("面板选图形后标记为一次性", ShapeOneShotForTest,
               $"oneShot={ShapeOneShotForTest} tool={Tool}");
         int strokesBefore = Doc.Strokes.Count;
@@ -165,6 +165,18 @@ internal sealed partial class App
                                 (hoverCell.MinY + hoverCell.MaxY) * 0.5f, 1);
         Check("移出卡片：悬停清空", ShapeHoverIndex == -1,
               $"hover={ShapeHoverIndex}");
+
+        // 五角星 / 扇形各画一个，确认新工具真的能落笔。
+        m = LibraryPanelInfoNow();
+        ClickCanvasRect(LibraryLayout.CellRect(m, 8, 0f));
+        ShapeDragForTest(300f, 260f, 470f, 390f);
+        Check("五角星能画出来", Doc.Strokes.Count > 0 && Doc.Strokes[^1].Kind == StrokeKind.Star,
+              $"kind={(Doc.Strokes.Count > 0 ? Doc.Strokes[^1].Kind.ToString() : "无")}");
+        m = LibraryPanelInfoNow();
+        ClickCanvasRect(LibraryLayout.CellRect(m, 9, 0f));
+        ShapeDragForTest(600f, 260f, 760f, 390f);
+        Check("扇形能画出来", Doc.Strokes.Count > 0 && Doc.Strokes[^1].Kind == StrokeKind.Sector,
+              $"kind={(Doc.Strokes.Count > 0 ? Doc.Strokes[^1].Kind.ToString() : "无")}");
 
         // 2b. 面板里的页签也能切；主条蓝色同步
         var beforeTab = LibraryPanelRectNow();
@@ -290,11 +302,11 @@ internal sealed partial class App
               $"图形={ui.CellActiveForTest(10)} 收藏={ui.CellActiveForTest(11)}");
 
         var m = LibraryPanelInfoNow();
-        Check("档位展开后共 37 张卡",
-              ShapeCatalog.All.Length == 37 && ShapeCatalog.CountFor("all") == 37,
+        Check("档位展开后共 38 张卡",
+              ShapeCatalog.All.Length == 38 && ShapeCatalog.CountFor("all") == 38,
               $"all={ShapeCatalog.CountFor("all")}");
-        Check("分类数量：常用11 / 曲线10 / 立体16",
-              ShapeCatalog.CountFor("common") == 11 && ShapeCatalog.CountFor("curve") == 10
+        Check("分类数量：常用12 / 曲线10 / 立体16",
+              ShapeCatalog.CountFor("common") == 12 && ShapeCatalog.CountFor("curve") == 10
               && ShapeCatalog.CountFor("solid") == 16,
               $"常用={ShapeCatalog.CountFor("common")} 曲线={ShapeCatalog.CountFor("curve")} 立体={ShapeCatalog.CountFor("solid")}");
         Check("图形页默认「全部」、9 列 × 5 行、卡片 72×82",
@@ -323,8 +335,8 @@ internal sealed partial class App
         }
 
         ClickShapeTab("common");
-        Check("点「常用」→ 11 张、面板不变高",
-              ShapeCategoryId == "common" && ShapeCardsNow().Length == 11
+        Check("点「常用」→ 12 张、面板不变高",
+              ShapeCategoryId == "common" && ShapeCardsNow().Length == 12
               && MathF.Abs((LibraryPanelRectNow().MaxY - LibraryPanelRectNow().MinY) - shapesPageH) < 1f,
               $"cat={ShapeCategoryId} n={ShapeCardsNow().Length}");
         ClickShapeTab("curve");
@@ -337,13 +349,13 @@ internal sealed partial class App
 
         var cards = ShapeCardsNow();
         m = LibraryPanelInfoNow();
-        Click(LibraryLayout.CellRect(m, 1, 0f));
-        Check("点「虚线」卡 = 直线 + 虚线档",
-              Tool == Tool.Line && LineDash == StrokeDash.Dashed && ShapePresetActive(cards[1]),
-              $"tool={Tool} dash={LineDash} active={ShapePresetActive(cards[1])}");
-        Check("虚线卡高亮、实线卡不高亮",
-              ShapePresetActive(cards[1]) && !ShapePresetActive(cards[0]),
-              $"实线={ShapePresetActive(cards[0])} 虚线={ShapePresetActive(cards[1])}");
+        Click(LibraryLayout.CellRect(m, 5, 0f));
+        Check("点「梯形」卡 = 选梯形",
+              Tool == Tool.Trapezoid && ShapePresetActive(cards[5]),
+              $"tool={Tool} active={ShapePresetActive(cards[5])}");
+        Check("梯形卡高亮、直线卡不高亮",
+              ShapePresetActive(cards[5]) && !ShapePresetActive(cards[0]),
+              $"直线={ShapePresetActive(cards[0])} 梯形={ShapePresetActive(cards[5])}");
         Check("面板选图形后标记为一次性",
               ShapeOneShotForTest,
               $"oneShot={ShapeOneShotForTest} tool={Tool}");
@@ -366,6 +378,18 @@ internal sealed partial class App
                                 (hoverCell.MinY + hoverCell.MaxY) * 0.5f, 1);
         Check("移出卡片：悬停清空", ShapeHoverIndex == -1,
               $"hover={ShapeHoverIndex}");
+        // 五角星 / 扇形各画一个，确认新工具真的能落笔。
+        m = LibraryPanelInfoNow();
+        Click(LibraryLayout.CellRect(m, 8, 0f));
+        ShapeDragForTest(300f, 260f, 470f, 390f);
+        Check("五角星能画出来", Doc.Strokes.Count > 0 && Doc.Strokes[^1].Kind == StrokeKind.Star,
+              $"kind={(Doc.Strokes.Count > 0 ? Doc.Strokes[^1].Kind.ToString() : "无")}");
+        m = LibraryPanelInfoNow();
+        Click(LibraryLayout.CellRect(m, 9, 0f));
+        ShapeDragForTest(600f, 260f, 760f, 390f);
+        Check("扇形能画出来", Doc.Strokes.Count > 0 && Doc.Strokes[^1].Kind == StrokeKind.Sector,
+              $"kind={(Doc.Strokes.Count > 0 ? Doc.Strokes[^1].Kind.ToString() : "无")}");
+
         Check("选图形后面板常驻、主条图形蓝",
               LibraryPanelOpen && LibraryTab == LibraryTab.Shapes && ui.CellActiveForTest(10),
               $"open={LibraryPanelOpen} tab={LibraryTab} 图形={ui.CellActiveForTest(10)}");

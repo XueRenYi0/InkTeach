@@ -27,23 +27,24 @@ internal sealed class ShapePreset
 
 /// <summary>
 /// 图形面板的固定目录（37 张卡）。
-/// 顺序：常用（基础 + 直线 3 档 + 坐标系 2 档）→ 曲线（10）→ 立体（16）。
+/// 顺序：常用（基础 + 梯形 + 五角星 + 扇形 + 坐标系 2 档）→ 曲线（10）→ 立体（16）。
 /// “全部”只是把这三组按顺序拼起来，不另维护一张表。
 /// </summary>
 internal static class ShapeCatalog
 {
     public static readonly ShapePreset[] All =
     {
-        // ---- 常用 11 ----
-        new(Tool.Line, "实线", ShapeGroup.Common, (int)StrokeDash.Solid),
-        new(Tool.Line, "虚线", ShapeGroup.Common, (int)StrokeDash.Dashed),
-        new(Tool.Line, "点线", ShapeGroup.Common, (int)StrokeDash.Dotted),
+        // ---- 常用 12 ----
+        new(Tool.Line, "直线", ShapeGroup.Common, 0),
         new(Tool.Rectangle, "矩形", ShapeGroup.Common, 0),
         new(Tool.Ellipse, "椭圆", ShapeGroup.Common, 0),
         new(Tool.Circle, "圆", ShapeGroup.Common, 0),
         new(Tool.Triangle, "三角形", ShapeGroup.Common, 0),
+        new(Tool.Trapezoid, "梯形", ShapeGroup.Common, 0),
         new(Tool.Parallelogram, "平行四边形", ShapeGroup.Common, 0),
         new(Tool.Arrow, "箭头", ShapeGroup.Common, 0),
+        new(Tool.Star, "五角星", ShapeGroup.Common, 0),
+        new(Tool.Sector, "扇形", ShapeGroup.Common, 0),
         new(Tool.Coordinate, "网格坐标系", ShapeGroup.Common, 0),
         new(Tool.Coordinate, "无网格坐标系", ShapeGroup.Common, 1),
 
