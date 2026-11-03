@@ -2028,6 +2028,16 @@ internal sealed partial class App
                   && Near(s.Points[2].X, newY.X) && Near(s.Points[3].Y, zyBefore),
                   $"X=({s.Points[1].X:F0},{s.Points[1].Y:F0})");
 
+            var xNow = new Vector2(s.Points[1].X, s.Points[1].Y);
+            Stroke.InkPiece xArrow = null;
+            foreach (var p in s.InkPieces())
+                if (p.Pts.Count == 3 && Near2(p.Pts[1], xNow)) { xArrow = p; break; }
+            Check("X 箭头方向跟着实际 X 轴（不是默认向右）",
+                  xArrow != null
+                  && Vector2.Dot(xArrow.Pts[0] - xNow, xNow - o) < 0f
+                  && Vector2.Dot(xArrow.Pts[2] - xNow, xNow - o) < 0f,
+                  xArrow == null ? "没找到箭头" : $"翼 {xArrow.Pts[0]} / {xArrow.Pts[2]}");
+
             var yh2 = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceY);
             var yCur = new Vector2(s.Points[2].X - o.X, s.Points[2].Y - o.Y);
             var yTarget2 = o - Vector2.Normalize(yCur) * 80f;

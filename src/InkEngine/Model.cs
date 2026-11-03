@@ -2020,7 +2020,8 @@ internal sealed class Stroke
         }
 
         for (int i = 0; i < 4; i++) Add(pts[i]);
-        Arrow(pts[1], new Vector2(1f, 0f));
+        var xDir = pts[1] - pts[0];
+        Arrow(pts[1], xDir.LengthSquared() > 1e-6f ? Vector2.Normalize(xDir) : new Vector2(1f, 0f));
         var yDir = pts[2] - pts[0];
         Arrow(pts[2], yDir.LengthSquared() > 1e-6f ? Vector2.Normalize(yDir) : SpaceAxisYDirection);
         Arrow(pts[3], new Vector2(0f, -1f));
@@ -5147,7 +5148,10 @@ internal sealed class Stroke
                 list.Add(new InkPiece(new List<Vector2> { so, end }, false));
                 list.Add(new InkPiece(AxisArrowPoints(end, dir, head), false));
             }
-            Axis(new Vector2(Points[1].X, Points[1].Y), new Vector2(1f, 0f));
+            var xEnd = new Vector2(Points[1].X, Points[1].Y);
+            var xDir = xEnd - so;
+            Axis(xEnd, xDir.LengthSquared() > 1e-6f
+                ? Vector2.Normalize(xDir) : new Vector2(1f, 0f));
             var yEnd = new Vector2(Points[2].X, Points[2].Y);
             var yDir = yEnd - so;
             Axis(yEnd, yDir.LengthSquared() > 1e-6f
