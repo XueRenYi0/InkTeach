@@ -210,11 +210,8 @@ public partial class InkEngine
             SelBarButton.Layer => ("层级", null, "置顶 / 置底"),
             SelBarButton.Export => ("导出", null, "存成图片文件（png / jpg）"),
             SelBarButton.Library => ("收藏", null, "把选中的内容存进「收藏」；已收过不会重复存"),
-            SelBarButton.Copy => textBox
-                ? ("复制一份", null, "原件原位保留，新副本错位选中")
-                : ("复制", null, "复制选中对象；点旁边的「粘贴」放到旁边"),
-            SelBarButton.Paste => ("粘贴", Keys.KeyText(KeyAction.Paste),
-                                   "落在原件旁边 24px；剪贴板里是图就贴图"),
+            SelBarButton.Copy => ("复制一份", null,
+                                  "原件原位保留，新副本错位选中"),
             SelBarButton.FlipH => ("左右翻转", null, null),
             SelBarButton.FlipV => ("上下翻转", null, null),
             SelBarButton.Delete => ("删除", Keys.KeyText(KeyAction.DeleteSelected), null),

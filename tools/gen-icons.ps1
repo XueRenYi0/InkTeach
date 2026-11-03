@@ -31,8 +31,6 @@ $base = 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-system-icons@main/assets
 # 本地用的名字 → 上游图标目录候选（按顺序试）
 $icons = [ordered]@{
     'copy'   = @('Copy')
-    # 剪贴板粘贴（2026-11-03：操作条拆出「复制 / 粘贴」两格）。Fluent 叫 Clipboard Paste。
-    'clipboardPaste' = @('Clipboard Paste')
     'delete' = @('Delete')
     'flipH'  = @('Flip Horizontal', 'Flip Horizontal 24', 'Arrow Swap')
     'flipV'  = @('Flip Vertical',   'Flip Vertical 24',   'Arrow Swap')

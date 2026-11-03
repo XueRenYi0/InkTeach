@@ -287,6 +287,13 @@ internal sealed partial class App : InkEngine.InkEngine
             ShapePanelTest();
             _quit = true;
         }
+        else if (mode == "--bandactiontest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            BandActionTest();
+            _quit = true;
+        }
         else if (mode == "--shapeaudittest")
         {
             _autoExitAt = double.MaxValue;
@@ -1506,6 +1513,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --uitest            界面输入通路自检（合成点击，看谁收到）");
         Console.WriteLine("  --paneltest         产品界面自检（球 → 按钮带这条最小闭环）");
         Console.WriteLine("  --shapepaneltest    图形面板专项（入口 / 页签 / 选图形 / 蓝色互斥）");
+        Console.WriteLine("  --bandactiontest    选择带上带的三连（全选 / 复制 / 粘贴）几何与提示");
         Console.WriteLine("  --shapeaudittest    图形面板 39 张卡逐张仿真（种类 / 档位 / 紧框 / 手柄 / 小样）");
         Console.WriteLine("  --librarysizetest   面板尺寸记忆专项（图形/收藏的位置·宽·高 + 重启读回）");
         Console.WriteLine("  --textboxsim        文本框仿真自检（真实鼠标/键盘 + 截图 reports/textbox-sim/）");

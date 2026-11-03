@@ -5703,7 +5703,7 @@ internal sealed partial class OverlayWindow : IDisposable
         }
     }
 
-    /// <summary>操作条十一格各自的图标（颜色那格是自绘的"当前色环"，不在这里）。</summary>
+    /// <summary>操作条十格各自的图标（颜色那格是自绘的"当前色环"，不在这里）。</summary>
     private static string IconForBar(SelBarButton b) => b switch
     {
         SelBarButton.Collapse => IconPaths.collapse,
@@ -5711,7 +5711,6 @@ internal sealed partial class OverlayWindow : IDisposable
         SelBarButton.Export => IconPaths.export,
         SelBarButton.Library => IconPaths.starAdd,
         SelBarButton.Copy => IconPaths.copy,
-        SelBarButton.Paste => IconPaths.clipboardPaste,
         SelBarButton.FlipH => IconPaths.flipH,
         SelBarButton.FlipV => IconPaths.flipV,
         SelBarButton.Delete => IconPaths.delete,

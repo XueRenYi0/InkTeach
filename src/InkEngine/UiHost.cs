@@ -195,6 +195,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
         => _engine.UploadLogsFromUi(note, includeOlder);
 
     public void Paste() => _engine.PasteFromClipboard();
+    public void Copy() => _engine.CopySelectionToClipboard();
     public void Restart() => _engine.RestartFromUi();
     public void Quit() => _engine.QuitFromUi();
     public void SaveInkFile() => _engine.SaveInkFileFromUi();

@@ -468,8 +468,8 @@ internal sealed partial class App
                   Doc.Selected.Count == 1 && camMoved,
                   $"选中 {Doc.Selected.Count} 条，相机 {(camMoved ? "动了" : "没动")}");
 
-            // **复制 / 粘贴**（2026-11-03 拆分）：复制只写剪贴板、**不再顺手生成副本**；
-            // 粘贴落在原件旁边 24px，一步撤销。以前这里验的是"复制一份 + 同时进剪贴板"。
+            // **复制一份**（2026-11-03 改）：操作条这颗仍只再制（原件原位保留 + 副本错位 24px），
+            // **不再顺手写系统剪贴板**——"复制到剪贴板"是「选择」上带右端那颗「复制」的事。
             Doc.Clear();
             Doc.ClearHistory();
             Tool = Tool.Marquee;
@@ -478,37 +478,32 @@ internal sealed partial class App
             Doc.SelectOnly(new[] { src });
             var srcXform0 = src.Transform;
 
+            // 先放一张 64×48 的"哨兵图"：复制完它必须原样还在，才说明没写剪贴板。
+            var sentinel = MakeTestImage(64, 48);
+            bool sentinelOk = ClipboardImage.SetImage(sentinel.Bgra, sentinel.Width, sentinel.Height);
+
             RunBarActionForTest((int)SelBarButton.Copy);
-            bool copyKeptOnlyOne = Doc.Strokes.Count == 1 && ReferenceEquals(Doc.Strokes[0], src);
-            bool clipboardHasCopy = ClipboardInk.TryGetObjects(out var clipObjs)
-                                    && clipObjs != null && clipObjs.Count == 1;
-            Check("复制：只进剪贴板，不生成副本",
-                  copyKeptOnlyOne && clipboardHasCopy,
-                  $"对象={Doc.Strokes.Count}，剪贴板={(clipboardHasCopy ? "有" : "无")}");
+            var copy = Doc.Selected.Count == 1 ? Doc.Selected[0] : null;
+            bool copyOffset = copy != null && !ReferenceEquals(copy, src)
+                && MathF.Abs(copy.Transform.M31 - (src.Transform.M31 + 24f)) < 0.5f
+                && MathF.Abs(copy.Transform.M32 - (src.Transform.M32 + 24f)) < 0.5f;
+            Check("复制一份：原件原位保留 + 副本错位选中",
+                  Doc.Strokes.Count == 2 && copyOffset,
+                  $"对象={Doc.Strokes.Count}，选中={Doc.Selected.Count}，"
+                  + $"偏移={(copy != null ? $"{copy.Transform.M31 - src.Transform.M31:F0},{copy.Transform.M32 - src.Transform.M32:F0}" : "无")}");
 
-            if (clipboardHasCopy)
-            {
-                RunBarActionForTest((int)SelBarButton.Paste);
-                var pasted = Doc.Selected.Count == 1 ? Doc.Selected[0] : null;
-                bool pastedOffset = pasted != null
-                    && MathF.Abs(pasted.Transform.M31 - (src.Transform.M31 + 24f)) < 0.5f
-                    && MathF.Abs(pasted.Transform.M32 - (src.Transform.M32 + 24f)) < 0.5f;
-                Check("粘贴：落在原件旁边 24px、自动选中",
-                      Doc.Strokes.Count == 2 && pasted != null && !ReferenceEquals(pasted, src)
-                      && pastedOffset,
-                      $"对象={Doc.Strokes.Count}，选中={Doc.Selected.Count}，"
-                      + $"偏移={(pasted != null ? $"{pasted.Transform.M31 - src.Transform.M31:F0},{pasted.Transform.M32 - src.Transform.M32:F0}" : "无")}");
+            if (sentinelOk && ClipboardImage.TryGetImage(out _, out int cw, out int ch, out _))
+                Check("复制一份：不再写系统剪贴板（哨兵图 64×48 还在）",
+                      cw == 64 && ch == 48, $"{cw}×{ch}");
+            else if (!sentinelOk)
+                Console.WriteLine("    [剪贴板] 当前被其他程序占用，跳过剪贴板这一条（--clipboardtest 另测）");
 
-                Doc.Undo();
-                Check("粘贴：一次撤销只回退副本，原件不动",
-                      Doc.Strokes.Count == 1 && ReferenceEquals(Doc.Strokes[0], src)
-                      && src.Transform.Equals(srcXform0),
-                      $"{Doc.Strokes.Count} 条，原件位置 {(src.Transform.Equals(srcXform0) ? "原位" : "变了")}");
-            }
-            else
-            {
-                Console.WriteLine("    [剪贴板] 当前被其他程序占用，跳过复制/粘贴这两条（--clipboardtest 另测）");
-            }
+            // 副本是一次独立撤销；原件不应被带走
+            Doc.Undo();
+            Check("复制一份：一次撤销只回退副本，原件回原位",
+                  Doc.Strokes.Count == 1 && ReferenceEquals(Doc.Strokes[0], src)
+                  && src.Transform.Equals(srcXform0),
+                  $"{Doc.Strokes.Count} 条，原件位置 {(src.Transform.Equals(srcXform0) ? "原位" : "变了")}");
         }
 
         // ⑭ 拖动 / 旋转期间的画法（2026-09-16）：方案 A 收装饰 + 方案 B 拖动预览

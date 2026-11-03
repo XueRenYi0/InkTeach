@@ -1491,6 +1491,21 @@ internal sealed partial class App
             Check("点「全选」：选中的条数 = 笔画数",
                   Doc.Selected.Count == Doc.Strokes.Count && Doc.Selected.Count > 0,
                   $"选中 {Doc.Selected.Count} / 笔画 {Doc.Strokes.Count}");
+
+            // 2026-11-03：右端变成三连（全选 / 复制 / 粘贴），从左到右排、不重叠
+            // （极简档只留复制 / 粘贴，所以只验实际有几个）
+            int acts = ui.ActionCountForTest;
+            bool threeInRow = true;
+            var prev = act2;
+            for (int i = 1; i < acts; i++)
+            {
+                var r = ui.ActionRectAtForTest(i);
+                threeInRow &= r.MaxX > r.MinX && r.MinX >= prev.MaxX - 0.5f;
+                prev = r;
+            }
+            Check("选择那条右端是「全选 / 复制 / 粘贴」三连",
+                  acts >= 2 && threeInRow && act2.MaxX > act2.MinX,
+                  $"{acts} 个动作，最后到 {prev.MaxX:F0}（带子右端）");
         }
 
         // ---- ⑥.6 撤销/重做的**灰度**（用户 2026-09-17："撤销重做灰度"）----
@@ -2993,7 +3008,11 @@ internal sealed partial class App
                 Need(ui.TipContentForTest(200 + i).Title == null, $"橡皮段{i}不该有");
             Host.Commands.SetTool(Tool.Marquee);
             ui.SelectBandCellForTest(8);
-            Need(ui.TipContentForTest(400).Title == null, "全选不该有");
+            // 2026-11-03：全选旁边多了复制 / 粘贴，都要有说明；
+            // 极简档只留复制 / 粘贴（见 FullUi.SelectActionsNow），按实际个数验。
+            int actN = ui.ActionCountForTest;
+            for (int i = 0; i < actN; i++)
+                Need(ui.TipContentForTest(400 + i).Title != null, $"选择带动作{i}应配");
             for (int i = 0; i < 2; i++)
                 Need(ui.TipContentForTest(200 + i).Title == null, $"框选段{i}不该有");
             Host.Commands.SetTool(Tool.Rectangle);

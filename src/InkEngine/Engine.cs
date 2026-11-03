@@ -7618,11 +7618,12 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 操作条「复制」：**只写剪贴板**，不顺手生成副本（2026-11-03 用户：
-    /// "点击操作条上的复制，它会默认复制到剪贴板里，造成剪贴板污染"）。
-    /// 要副本就用旁边的「粘贴」或 `Ctrl+D`；文本条上仍然是"复制一份"（那里没有粘贴格）。
+    /// 操作条「复制一份」：**原件原位保留，副本错位 24px 并选中**。
+    ///
+    /// 2026-11-03（用户）：**不再顺手写系统剪贴板**——"复制到剪贴板"是「选择」上带
+    /// 右端那颗「复制」的事；条上这颗只管再制，避免只想复制图形却把剪贴板冲掉。
     /// </summary>
-    internal bool CopySelectionFromBar()
+    internal bool CopySelectionAndDuplicate()
     {
         int n = Doc.Selected.Count;
         if (n == 0)
@@ -7631,11 +7632,17 @@ public partial class InkEngine
             return false;
         }
 
-        bool ok = CopySelectionToClipboard();
-        SetInkStatus(ok
-            ? $"已复制 {n} 个对象，点「粘贴」放到旁边"
-            : "复制失败：剪贴板被别的程序占着");
-        return ok;
+        bool duplicated = Doc.DuplicateSelected();
+        SelFlashUntilMs = NowMs + SelFlashMs;
+        if (duplicated)
+        {
+            SetInkStatus($"已复制 {n} 个对象：原件保留，新副本已选中");
+            return true;
+        }
+
+        string why = string.IsNullOrEmpty(Doc.LastRejectReason) ? "副本创建失败" : Doc.LastRejectReason;
+        SetInkStatus($"复制失败：{why}");
+        return false;
     }
 
     // ---- 导出（选中 → 透明底 PNG）------------------------------------------
@@ -19212,15 +19219,10 @@ public partial class InkEngine
                 break;
             }
 
-            // 复制按钮（2026-11-03 起）= **只写剪贴板**；要副本用旁边的「粘贴」或 Ctrl+D。
-            // 文本条上没有粘贴格，仍然保持"复制一份"。
+            // 复制按钮 = **只再制**（原件保留 + 新副本错位）；2026-11-03 起不再写剪贴板。
+            // 复制到剪贴板走「选择」上带右端的「复制」（触摸屏也能用）。
             case SelBarButton.Copy:
-                if (textBoxOnly) Doc.DuplicateSelected();
-                else CopySelectionFromBar();
-                break;
-
-            case SelBarButton.Paste:
-                PasteFromClipboard();
+                CopySelectionAndDuplicate();
                 break;
 
             // 翻转绕**框自己的轴**。框现在一律轴对齐，所以它就是屏幕的左右/上下翻——

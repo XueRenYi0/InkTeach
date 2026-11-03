@@ -22,7 +22,7 @@ public static class ToolNames
         Tool.Eraser => "橡皮擦",
         Tool.PixelEraser => "像素橡皮",
         Tool.Capture => "截图",
-        Tool.Marquee => "框选",
+        Tool.Marquee => "选择",
         Tool.Line => "直线",
         Tool.Rectangle => "矩形",
         Tool.Ellipse => "椭圆",

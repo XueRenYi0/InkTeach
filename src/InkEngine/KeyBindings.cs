@@ -362,7 +362,7 @@ internal sealed class KeyMap
         KeyAction.ToolPixelEraser => "像素橡皮",
         KeyAction.SplitErased => "拆开擦断的笔迹",
         KeyAction.ToolCapture => "截图",
-        KeyAction.ToolMarquee => "框选",
+        KeyAction.ToolMarquee => "选择",
         KeyAction.RadialPalette => "呼出盘",
         KeyAction.SelectShape => "选择方式",
         KeyAction.Undo => "撤销",
@@ -538,12 +538,12 @@ internal sealed class KeyMap
         m.Add(A, KeyAction.ToolPen, "Ctrl+P", "换成笔（已经是笔→再按换色）");
         m.Add(A, KeyAction.ToolHighlighter, "Ctrl+I", "换成荧光笔（半透明大笔；单击语义同笔）");
         m.Add(A, KeyAction.ToolLaser, "Ctrl+L", "换成激光笔（只留痕迹，不留墨）");
-        m.Add(A, KeyAction.ToolEraser, "Ctrl+E", "换成橡皮擦（碰到哪一条就整条删掉；整笔/面积看上带）");
-        m.Add(A, KeyAction.ToolMarquee, "Ctrl+M", "换成框选（选择/移动/缩放/旋转；矩形/套索看上带）");
-        // **旧别名取消**（用户 2026-09-30："只保留一套"）：原来的 Ctrl+7（面积擦）、
-        // Ctrl+9（切选择方式）删掉——那两件事现在都归"连按同一个工具键"：
-        // Ctrl+E 连按切整笔/面积、Ctrl+M 连按切矩形/套索，不再占额外键位。
-        m.Add(A, KeyAction.ToolCapture, "Ctrl+Shift+A", "截图：拖一个框，抓到的图放到左上角、自动选中并进剪贴板");
+        m.Add(A, KeyAction.ToolEraser, "Ctrl+E", "换成橡皮擦（碰到哪一条就整条删掉；整笔/像素橡皮看上带）");
+        m.Add(A, KeyAction.ToolMarquee, "Ctrl+M", "换成选择（选择/移动/缩放/旋转；矩形/套索看上带）");
+        // **旧别名取消**（用户 2026-09-30："只保留一套"）：原来的 Ctrl+7（像素橡皮）、
+        // Ctrl+9（切选择方式）删掉。2026-10-05 起**连按也不再换档**——子类型固定，
+        // 去上带里选（见 Engine.DoToolKeyRepeat 的注释）。
+        m.Add(A, KeyAction.ToolCapture, "Ctrl+Shift+A", "截图：拖一个框，抓到的那块原位落图并选中");
         // ⚠ 呼出盘 2026-10-04 从这一档**升到全局**（`Ctrl+Alt+Shift+Q`，见上面全局那一段）：
         // 它现在是全局键，这里不再留批注内的 `Ctrl+Q` 副本（留了就会一个动作两把键、
         // 又回到"冲突"的老问题）。

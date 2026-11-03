@@ -533,6 +533,12 @@ public interface IEngineCommands
     /// </summary>
     void Paste();
 
+    /// <summary>
+    /// **复制**：把选中对象写进系统剪贴板（对象格式 + 一张图），供「粘贴」或外部程序用。
+    /// 触摸屏没有 `Ctrl+C`，入口在「选择」上带的右端（2026-11-03 用户定）。
+    /// </summary>
+    void Copy();
+
     /// <summary>框选工具下的选择方式：矩形框（碰到墨就选中）／自由套索（圈住 80% 才选中）。</summary>
     void SetSelectMode(SelectMode mode);
 

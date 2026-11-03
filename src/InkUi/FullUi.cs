@@ -1814,17 +1814,49 @@ public sealed partial class FullUi : IOverlayUi
     //
     // 位置：上带**最右端**。粗细滑条也在右端，所以橡皮那条是
     // `[整笔擦][面积擦] …… [粗细滑条][清空]`——动作永远贴在最外沿。
-    private enum BandAction { None = 0, Clear, SelectAll, CloseBoard, PasteImage, TextDone }
+    private enum BandAction { None = 0, Clear, SelectAll, Copy, Paste, CloseBoard, PasteImage, TextDone }
+
+    /// <summary>
+    /// 「选择」上带右端的三连（2026-11-03 用户定）：全选 / 复制 / 粘贴。
+    /// 触摸屏没有快捷键，复制粘贴必须有一个不用键盘的入口；
+    /// 放这里而不是选中操作条，是因为"先选中、再操作"的顺序就是这个带子。
+    ///
+    /// **极简档只留复制 / 粘贴**：5 格时带子只有两百来像素，三个动作会把
+    /// 「矩形 / 套索」挤到 5px（实测算式），那一档全选仍可双击选择格。
+    /// </summary>
+    private static readonly BandAction[] SelectBandActions =
+        { BandAction.SelectAll, BandAction.Copy, BandAction.Paste };
+
+    private static readonly BandAction[] SelectBandActionsNarrow =
+        { BandAction.Copy, BandAction.Paste };
+
+    private BandAction[] SelectActionsNow =>
+        Density <= BandDensity.Minimal ? SelectBandActionsNarrow : SelectBandActions;
 
     private BandAction ActionOf(int bandCell) => bandCell switch
     {
         2 => BandAction.CloseBoard,   // 白板那条：最右端一个"关闭白板"
         6 => BandAction.Clear,        // 清空 ≈ "全擦掉"，和两种橡皮排一条
         7 => _host?.State.TextBoxEditing == true ? BandAction.TextDone : BandAction.None,
-        8 => BandAction.SelectAll,    // 全选 ≈ "把要操作的东西一次选上"，归选择这条
+        8 => BandAction.SelectAll,    // 单动作口径的兜底；实际按 ActionAt 取三连
         10 => BandAction.PasteImage,  // 截图那条：把剪贴板里的东西粘进来（8.3.0 从分段里拆出来）
         _ => BandAction.None,
     };
+
+    /// <summary>这一条带上动作按钮有几个（选择那条是三个，其余最多一个）。</summary>
+    private int ActionCount => _bandCell == 8
+        ? SelectActionsNow.Length
+        : ActionOf(_bandCell) == BandAction.None ? 0 : 1;
+
+    private BandAction ActionAt(int i)
+    {
+        if (_bandCell == 8)
+        {
+            var actions = SelectActionsNow;
+            return i >= 0 && i < actions.Length ? actions[i] : BandAction.None;
+        }
+        return i == 0 ? ActionOf(_bandCell) : BandAction.None;
+    }
     // 橡皮的“清空”始终在：极简 5 格也必须有（2026-10-25 用户定）。
     // 它只清当前页/当前屏；整份清空在翻页条菜单。
     private BandAction CurAction => ActionOf(_bandCell);
@@ -1853,6 +1885,8 @@ public sealed partial class FullUi : IOverlayUi
     private float ActionWidthOf(BandAction a) => a switch
     {
         BandAction.CloseBoard => ActionWNarrow,
+        // 全选 / 复制 / 粘贴：两字 + 留白（62 = 图标 16 + 两字 + 边距；这三个是纯文字）
+        BandAction.SelectAll or BandAction.Copy or BandAction.Paste => ActionWClearTight,
         BandAction.Clear => Density switch
         {
             BandDensity.Minimal => ActionWClearTight,
@@ -1862,14 +1896,23 @@ public sealed partial class FullUi : IOverlayUi
         _ => ActionW,
     };
 
+    /// <summary>三个动作按钮之间的缝（选择那条带才有三个）。</summary>
+    private const float ActionGap = 6f;
+
+    private float ActionWidthAt(int i) =>
+        _bandCell == 8 ? ActionWClearTight : ActionWidthOf(ActionAt(i));
+
     private const double ClearHoldMs = 800;
 
-    private RectF ActionRect()
+    /// <summary>动作区整块：贴在带子最右端，三个按钮从左到右排。</summary>
+    private RectF ActionGroupRect()
     {
         var band = BandRect();
         float right = band.MaxX - BarInset();
         float cy = (band.MinY + band.MaxY) * 0.5f;
-        float w = ActionWidthOf(CurAction);
+        float w = 0f;
+        for (int i = 0; i < ActionCount; i++)
+            w += ActionWidthAt(i) + (i > 0 ? ActionGap : 0f);
         return new RectF
         {
             MinX = right - w, MinY = cy - Tokens.SegmentHeight * 0.5f,
@@ -1877,9 +1920,41 @@ public sealed partial class FullUi : IOverlayUi
         };
     }
 
+    private RectF ActionRectAt(int i)
+    {
+        var g = ActionGroupRect();
+        float x = g.MinX;
+        for (int k = 0; k < i; k++) x += ActionWidthAt(k) + ActionGap;
+        return new RectF
+        {
+            MinX = x, MinY = g.MinY,
+            MaxX = x + ActionWidthAt(i), MaxY = g.MaxY,
+        };
+    }
+
+    /// <summary>单动作那条带用的旧口径（等于第 0 个）。</summary>
+    private RectF ActionRect() => ActionRectAt(0);
+
+    /// <summary>指针落在第几个动作按钮上（-1 = 不在）。</summary>
+    private int ActionHitAt(float x, float y)
+    {
+        for (int i = 0; i < ActionCount; i++)
+            if (ActionRectAt(i).Contains(x, y)) return i;
+        return -1;
+    }
+
     /// <summary>动作按钮要占的横向空间（色片 / 分段 / 滑条都得让位）。</summary>
-    private float ActionReserve =>
-        CurAction == BandAction.None ? 0f : ActionWidthOf(CurAction) + 10f;
+    private float ActionReserve
+    {
+        get
+        {
+            if (ActionCount == 0) return 0f;
+            float w = 0f;
+            for (int i = 0; i < ActionCount; i++)
+                w += ActionWidthAt(i) + (i > 0 ? ActionGap : 0f);
+            return w + 10f;
+        }
+    }
 
     /// <summary>清空的按住计时（-inf = 没在按）与"刚按完闪一下"的时刻。</summary>
     private double _actionHoldFrom = double.NegativeInfinity;
@@ -1927,17 +2002,70 @@ public sealed partial class FullUi : IOverlayUi
     }
 
     /// <summary>
+    /// 动作按钮被点：按语义分派。清空是**按住**（这里只记时刻），其余点一下执行。
+    /// 选择那条的三连（全选 / 复制 / 粘贴）走同一条路。
+    /// </summary>
+    private void HandleBandAction(int i)
+    {
+        if (_host == null) return;
+        switch (ActionAt(i))
+        {
+            case BandAction.Clear:
+                // 清空：**按住才算数**（0.8 秒），松手即取消。进度由 UpdateBandAction 每帧推进。
+                _actionHoldFrom = _host.NowMs;
+                _press = 2000;
+                return;
+            case BandAction.CloseBoard:
+                // 关闭白板：**点一下就执行**（和全选一样）——关板可逆，不必按住。
+                // ⚠ 板已经关着时这一下什么都不做（按钮也是压暗的，见 DrawOneBandAction）。
+                if (_host.State.Board)
+                {
+                    _host.Commands.SetBoard(false);
+                    _actionFlashUntil = _host.NowMs + 260;
+                }
+                return;
+            case BandAction.PasteImage:
+                // 粘贴图片：点一下就执行——就是批注内的 Ctrl+V。
+                _host.Commands.Paste();
+                break;
+            case BandAction.TextDone:
+                // 文本工具的「完成」：触摸屏没有 Ctrl+Enter，必须有一颗明确的结束键。
+                _host.Commands.CommitTextEdit();
+                break;
+            case BandAction.Copy:
+                _host.Commands.Copy();
+                break;
+            case BandAction.Paste:
+                _host.Commands.Paste();
+                break;
+            default:
+                _host.Commands.SelectAll();
+                break;
+        }
+        _actionFlashUntil = _host.NowMs + 260;
+    }
+
+    /// <summary>
     /// 动作按钮：图标 ＋ 文字；清空那条按住时从左边往右填进度。
     ///
     /// 白板那条的「关闭白板」只有**一个 ✕**（窄版，没有文字，见 <see cref="ActionWNarrow"/>），
     /// 而且**板已经关着时整块压暗、点了也不动**——那时候关板没有意义
     ///（压暗的写法沿用"到顶时上一屏"那一套：同色降到 30% 不透明度）。
+    ///
+    /// 2026-11-03：「选择」那条右端变成**三连**（全选 / 复制 / 粘贴），纯文字、无图标——
+    /// 三个都是两个字，加图标会挤成小方块；其余带子仍是一个图标 + 文字。
     /// </summary>
     private void DrawBandAction(ID2D1DeviceContext ctx)
     {
-        var a = CurAction;
-        if (a == BandAction.None || !RailOpen) return;
-        var r = ActionRect();
+        if (!RailOpen) return;
+        int n = ActionCount;
+        for (int i = 0; i < n; i++)
+            DrawOneBandAction(ctx, ActionAt(i), ActionRectAt(i), textOnly: _bandCell == 8);
+    }
+
+    private void DrawOneBandAction(ID2D1DeviceContext ctx, BandAction a, in RectF r, bool textOnly)
+    {
+        if (a == BandAction.None) return;
         bool clear = a == BandAction.Clear;
         bool closeBoard = a == BandAction.CloseBoard;
         bool paste = a == BandAction.PasteImage;
@@ -1960,6 +2088,22 @@ public sealed partial class FullUi : IOverlayUi
         if (closeBoard)
         {
             IconAtlas.DrawCentered(ctx, "dismiss", r, 16f, Brush(ctx, ink));
+            if (_host != null && _host.NowMs < _actionFlashUntil)
+                ctx.DrawRoundedRectangle(rr, Brush(ctx, Tokens.Accent), 2f);
+            return;
+        }
+
+        // 三连（全选 / 复制 / 粘贴）：纯文字居中，不画图标
+        if (textOnly)
+        {
+            string text = a switch
+            {
+                BandAction.SelectAll => "全选",
+                BandAction.Copy => "复制",
+                BandAction.Paste => "粘贴",
+                _ => "",
+            };
+            _widgets.Text(ctx, text, r, 12.5f, Brush(ctx, InkCol));
             if (_host != null && _host.NowMs < _actionFlashUntil)
                 ctx.DrawRoundedRectangle(rr, Brush(ctx, Tokens.Accent), 2f);
             return;
@@ -4882,46 +5026,11 @@ public sealed partial class FullUi : IOverlayUi
 
         // **滑条要排在工具格前面**：它在面板最下沿，和工具格的矩形是重叠的。
         // 排在后面的话，按最下沿那一条会被当成"点了某个工具"（假面板里 groove 也是先判的）。
-        // 动作按钮（清空/全选）排在最前面：它贴在上带最外沿，和谁都挨着。
-        if (BandOpen() && CurAction != BandAction.None
-            && ActionRect().Contains(p.X, p.Y))
+        // 动作按钮（清空/全选/复制/粘贴）排在最前面：它贴在上带最外沿，和谁都挨着。
+        int actIdx = BandOpen() ? ActionHitAt(p.X, p.Y) : -1;
+        if (actIdx >= 0)
         {
-            if (CurAction == BandAction.Clear)
-            {
-                // 清空：**按住才算数**（0.8 秒），松手即取消。进度由 UpdateBandAction 每帧推进。
-                _actionHoldFrom = _host.NowMs;
-                _press = 2000;
-            }
-            else if (CurAction == BandAction.CloseBoard)
-            {
-                // 关闭白板：**点一下就执行**（和全选一样）——关板是可逆的（再点白板格就开回来），
-                // 不像清空那样代价大，所以不必按住。
-                // ⚠ 板已经关着时这一下什么都不做（按钮也是压暗的，见 DrawBandAction）。
-                if (_host.State.Board)
-                {
-                    _host.Commands.SetBoard(false);
-                    _actionFlashUntil = _host.NowMs + 260;
-                }
-            }
-            else if (CurAction == BandAction.PasteImage)
-            {
-                // 粘贴图片：点一下就执行——就是批注内的 Ctrl+V。
-                // 它以前是截图那格的第三段（分段=模式，它=动作，混着永远不亮）；
-                // 8.3.0 拆到这里之后，触摸屏/手写板没键盘的老师照样够得着。
-                _host.Commands.Paste();
-                _actionFlashUntil = _host.NowMs + 260;
-            }
-            else if (CurAction == BandAction.TextDone)
-            {
-                // 文本工具的「完成」：触摸屏没有 Ctrl+Enter，必须有一颗明确的结束键。
-                _host.Commands.CommitTextEdit();
-                _actionFlashUntil = _host.NowMs + 260;
-            }
-            else
-            {
-                _host.Commands.SelectAll();          // 全选：点一下就执行
-                _actionFlashUntil = _host.NowMs + 260;
-            }
+            HandleBandAction(actIdx);
             Invalidate();
             return true;
         }
@@ -5182,8 +5291,12 @@ public sealed partial class FullUi : IOverlayUi
         int idx = HitCell(x, y);
         if (idx >= 0) return idx;
         if (!BandOpen()) return -1;
-        // 动作按钮（清空/全选）：编号 400，和色片 100、分段 200、滑条 300 排成一套
-        if (CurAction != BandAction.None && RailOpen && ActionRect().Contains(x, y)) return 400;
+        // 动作按钮：编号 400 + 第几个，和色片 100、分段 200、滑条 300 排成一套
+        if (RailOpen && ActionCount > 0)
+        {
+            int act = ActionHitAt(x, y);
+            if (act >= 0) return 400 + act;
+        }
         if (BandHasTextSize && RailOpen)
         {
             if (TextSizeButtonRect().Contains(x, y)) return 610;
@@ -6662,11 +6775,11 @@ public sealed partial class FullUi : IOverlayUi
 
     private string SegmentLabel(int i) => _bandCell switch
     {
-        // 窄档两字：面擦 / 笔擦 / 清空（绝不缩成单个“清”，歧义太大）。
-        // 顺序按用户优先级：面积擦第一，整笔擦第二。
+        // 窄档两字：像素 / 整笔 / 清空（绝不缩成单个“清”，歧义太大）。
+        // 顺序按用户优先级：像素橡皮第一，整笔橡皮第二。
         6 => Density <= BandDensity.Compact
-                ? (i == 0 ? "面擦" : "笔擦")
-                : (i == 0 ? "面积擦" : "整笔擦"),
+                ? (i == 0 ? "像素" : "整笔")
+                : (i == 0 ? "像素橡皮" : "整笔橡皮"),
         8 => i == 0 ? "矩形" : "套索",
         // 截图：名字照微信那套（8.3.1）——"截图" = 屏幕原样（连我们的板书一起），
         // "隐藏窗口截图" = 先把我们这层藏起来，拍到的只有下层内容。
@@ -7052,6 +7165,21 @@ public sealed partial class FullUi : IOverlayUi
     /// 名字取"唯一来源"：图形名读 `ToolNames.Of`（引擎和界面共用），键位读
     /// `IUiHost.KeyText`——界面里不写死任何一个键。
     /// </summary>
+    /// <summary>上带右端动作按钮的提示（「选择」那条是三个：全选 / 复制 / 粘贴）。</summary>
+    private (string Title, string Key, string Note) ActionTip(int i)
+    {
+        return ActionAt(i) switch
+        {
+            BandAction.Clear => ("清空墨迹", Key(KeyAction.Clear),
+                                 "按住 0.8 秒；只清当前页 / 当前幻灯片 / 当前这一屏；可撤销"),
+            BandAction.CloseBoard => ("关闭白板", Key(KeyAction.ToggleBoard), "只关白板，墨迹留着"),
+            BandAction.SelectAll => ("全选", Key(KeyAction.SelectAll), "选中当前这一屏的全部对象"),
+            BandAction.Copy => ("复制", Key(KeyAction.Copy), "复制选中对象到剪贴板；可粘到本软件或别的程序"),
+            BandAction.Paste => ("粘贴", Key(KeyAction.Paste), "落在原件旁边 24px；剪贴板里是图就贴图"),
+            _ => default,
+        };
+    }
+
     private (string Title, string Key, string Note) TipContent(int id)
     {
         // ---- 「更多」面板（编号 = 1000 + 命中码；2026-10-02 第二批）----------------
@@ -7099,7 +7227,7 @@ public sealed partial class FullUi : IOverlayUi
                 3 => (c.Tip, Key(KeyAction.ToolPen), "已经是笔 → 再按换颜色"),
                 4 => (c.Tip, Key(KeyAction.ToolHighlighter), ""),
                 5 => (c.Tip, Key(KeyAction.ToolLaser), ""),
-                6 => (c.Tip, Key(KeyAction.ToolEraser), "整笔擦 / 面积擦在上带里选"),
+                6 => (c.Tip, Key(KeyAction.ToolEraser), "整笔橡皮 / 像素橡皮在上带里选"),
                 7 => (c.Tip, "", "点画布输入；点已有文字选中，再点编辑"),
                 8 => (c.Tip, Key(KeyAction.ToolMarquee), "矩形 / 套索在上带里选；双击 = 全选"),
                 9 => (c.Tip, Key(KeyAction.ToolCapture), ""),
@@ -7132,15 +7260,7 @@ public sealed partial class FullUi : IOverlayUi
 
         if (id >= 200 && id < 200 + BandSegmentCount) return SegmentTip(id - 200);
 
-        if (id == 400) return CurAction switch
-        {
-            // 清除全部墨迹（2026-10-14 统一命名）：和翻页条菜单那一项是同一个动作。
-            BandAction.Clear => ("清空墨迹", Key(KeyAction.Clear),
-                                 "按住 0.8 秒；只清当前页 / 当前幻灯片 / 当前这一屏；可撤销"),
-            // 全选 / 粘贴图片：段上已经写了字、点一下就知道，不配（收窄）
-            BandAction.CloseBoard => ("关闭白板", Key(KeyAction.ToggleBoard), "只关白板，墨迹留着"),
-            _ => default,
-        };
+        if (id >= 400 && id < 400 + ActionCount) return ActionTip(id - 400);
 
         if (id == 500) return ("线型", "", "实线 / 虚线 / 点线，点一下换");
         if (id == 501) return ("粗细", "", "点一下换一档");
@@ -7183,7 +7303,7 @@ public sealed partial class FullUi : IOverlayUi
         }
         if (id >= 100 && id < 100 + SwatchCount) return SwatchRect(id - 100);
         if (id >= 200 && id < 200 + BandSegmentCount) return SegmentRect(id - 200, BandSegmentCount);
-        if (id == 400 && CurAction != BandAction.None) return ActionRect();
+        if (id >= 400 && id < 400 + ActionCount) return ActionRectAt(id - 400);
         if (id == 500) return DashToggleRect();
         if (id == 501) return BandHasWidthButton ? WidthButtonRect() : RectF.Empty;
         return RectF.Empty;
@@ -7535,6 +7655,12 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>自检用：上带右端那个动作按钮（清空/全选）的矩形 + 按住状态。</summary>
     internal RectF ActionRectForTest => CurAction == BandAction.None ? RectF.Empty : ActionRect();
+    /// <summary>自检用：选择那条右端三连里第 i 个（0 全选 / 1 复制 / 2 粘贴）的矩形。</summary>
+    internal RectF ActionRectAtForTest(int i) => i >= 0 && i < ActionCount ? ActionRectAt(i) : RectF.Empty;
+    /// <summary>自检用：这一条带上有几个动作按钮。</summary>
+    internal int ActionCountForTest => ActionCount;
+    /// <summary>自检用：上带的悬停命中编号（400 + 第几个动作）。</summary>
+    internal int HoverAtForTest(float x, float y) => HoverAt(x, y);
     internal RectF TextFontButtonRectForTest => TextSizeButtonRect();
     internal RectF TextFontMenuRectForTest => TextFontMenuRect();
     internal RectF TextFontCellRectForTest(int i) => TextFontCellRect(i);
