@@ -98,6 +98,10 @@ internal enum ShapeHandle
     /// 所以它**不在** `Points` 里，也没有"第几个点"这回事——这就是它不复用 Vertex 那几格的原因。
     /// </summary>
     FocusPoint,
+    /// <summary>梯形上底中点（拖它只改上底长度，保持等腰居中和上下底平行）。</summary>
+    EdgeTop,
+    /// <summary>梯形下底中点（拖它只改下底长度）。</summary>
+    EdgeBottom,
 }
 
 /// <summary>
@@ -561,14 +565,20 @@ internal static class SelectionHandles
                 dst[1] = ShapeHandle.Vertex1;
                 dst[2] = ShapeHandle.Vertex2;
                 dst[3] = ShapeHandle.Vertex3;
+                if (dst.Length >= 6)
+                {
+                    dst[4] = ShapeHandle.EdgeTop;
+                    dst[5] = ShapeHandle.EdgeBottom;
+                    return 6;
+                }
                 return 4;
 
             case StrokeKind.Sector:
-                if (dst.Length < 3 || s.Points.Count < 3) return 0;
-                dst[0] = ShapeHandle.Vertex0;
-                dst[1] = ShapeHandle.Vertex1;
-                dst[2] = ShapeHandle.Vertex2;
-                return 3;
+                // 只留两个：半径点 + 圆弧端点。圆心不给手柄（整条拖动 = 移动）。
+                if (dst.Length < 2 || s.Points.Count < 3) return 0;
+                dst[0] = ShapeHandle.Rim;
+                dst[1] = ShapeHandle.FocusPoint;
+                return 2;
 
             case StrokeKind.Triangle:
             case StrokeKind.Parallelogram:
@@ -661,12 +671,24 @@ internal static class SelectionHandles
         return h switch
         {
             ShapeHandle.Anchor => c,
-            ShapeHandle.Rim => s.RimLocalPoint(),
+            ShapeHandle.Rim => s.Kind == StrokeKind.Sector && s.Points.Count >= 2
+                ? new Vector2(s.Points[1].X, s.Points[1].Y)
+                : s.RimLocalPoint(),
             // 椭圆只剩"右端点（管 a）＋ 上端点（管 b）"两个，见 ShapeHandlesOf。
             ShapeHandle.AxisRight => c + new Vector2(s.SemiAxisALocal, 0f),
             ShapeHandle.AxisTop => c + new Vector2(0f, -s.SemiAxisBLocal),   // 屏幕 y 向下，"上"是 -y
             // 焦点三角形的顶点 P：由参数角算（不在 Points 里，见 ShapeHandle.FocusPoint）
-            ShapeHandle.FocusPoint => s.ConicEllipsePointLocal(),
+            ShapeHandle.FocusPoint => s.Kind == StrokeKind.Sector && s.Points.Count >= 3
+                ? new Vector2(s.Points[2].X, s.Points[2].Y)
+                : s.ConicEllipsePointLocal(),
+            ShapeHandle.EdgeTop => s.Points.Count >= 4
+                ? new Vector2((s.Points[2].X + s.Points[3].X) * 0.5f,
+                              (s.Points[2].Y + s.Points[3].Y) * 0.5f)
+                : c,
+            ShapeHandle.EdgeBottom => s.Points.Count >= 2
+                ? new Vector2((s.Points[0].X + s.Points[1].X) * 0.5f,
+                              (s.Points[0].Y + s.Points[1].Y) * 0.5f)
+                : c,
             _ => c,
         };
     }
@@ -711,7 +733,7 @@ internal static class SelectionHandles
     /// </summary>
     public static bool HasShapeHandles(Stroke s)
     {
-        Span<ShapeHandle> buf = stackalloc ShapeHandle[5];
+        Span<ShapeHandle> buf = stackalloc ShapeHandle[8];
         return ShapeHandlesOf(s, buf) > 0;
     }
 
@@ -737,6 +759,8 @@ internal static class SelectionHandles
         ShapeHandle.Vertex2 => SelHandle.VertexC,
         ShapeHandle.Vertex3 => SelHandle.VertexD,
         ShapeHandle.FocusPoint => SelHandle.FocusPoint,
+        ShapeHandle.EdgeTop => SelHandle.Top,
+        ShapeHandle.EdgeBottom => SelHandle.Bottom,
         _ => SelHandle.None,
     };
 
@@ -755,6 +779,11 @@ internal static class SelectionHandles
         //
         // 这里**不设上限**：三角形只用到前三个顶点，第四个自然落空——多给一格
         // 比"按种类写死 3 还是 4"少一处会写错的地方。
+        // 梯形：上/下底中点手柄借用通用框的 Top/Bottom 命中位；有定义柄时优先给定义柄。
+        if (s.Kind == StrokeKind.Trapezoid && h == SelHandle.Top && HasHandle(s, ShapeHandle.EdgeTop))
+            return ShapeHandle.EdgeTop;
+        if (s.Kind == StrokeKind.Trapezoid && h == SelHandle.Bottom && HasHandle(s, ShapeHandle.EdgeBottom))
+            return ShapeHandle.EdgeBottom;
         if (IsVertexDefined(s))
             return h switch
             {
@@ -814,7 +843,7 @@ internal static class SelectionHandles
     /// </summary>
     public static bool IsVertexDefined(Stroke s)
         => s != null && s.Kind is StrokeKind.Triangle or StrokeKind.Parallelogram
-                                   or StrokeKind.Trapezoid or StrokeKind.Sector
+                                   or StrokeKind.Trapezoid
                                    or StrokeKind.Coordinate or StrokeKind.NumberLine;
 
     /// <summary>是不是"三个顶点定义"的多边形（三角形 / 平行四边形）。</summary>
@@ -870,7 +899,7 @@ internal static class SelectionHandles
         if (ShapeEditable(sel, out var s))
         {
             float rad = HitRadiusLogical * dpiScale;            var p = new Vector2(canvasX, canvasY);
-            Span<ShapeHandle> handles = stackalloc ShapeHandle[5];
+            Span<ShapeHandle> handles = stackalloc ShapeHandle[8];
             int n = ShapeHandlesOf(s, handles);
             // **倒着找**：后画的手柄先命中。椭圆上"中心"和"轴端点"离得可能很近
             // （半轴很小时），后画的轴端点是更具体的那个（拖它只改一条半轴），

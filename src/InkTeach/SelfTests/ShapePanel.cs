@@ -5,6 +5,7 @@
 //   收藏格 → 同一面板切收藏页；两格蓝色互斥；
 //   再点当前入口 → 关面板，两格都不蓝。
 using InkEngine;
+using System.Numerics;
 
 namespace InkTeach;
 
@@ -148,10 +149,30 @@ internal sealed partial class App
               $"oneShot={ShapeOneShotForTest} tool={Tool}");
         int strokesBefore = Doc.Strokes.Count;
         ShapeDragForTest(200f, 200f, 520f, 360f);
-        Check("画完一个图形 → 自动回到画笔、面板不关",
-              Tool == Tool.Pen && !ShapeOneShotForTest && LibraryPanelOpen
-              && Doc.Strokes.Count == strokesBefore + 1,
-              $"tool={Tool} oneShot={ShapeOneShotForTest} open={LibraryPanelOpen} strokes={Doc.Strokes.Count - strokesBefore}");
+        Check("画完一个图形 → 默认选中、工具切框选、面板不关",
+              Tool == Tool.Marquee && !ShapeOneShotForTest && LibraryPanelOpen
+              && Doc.Selected.Count == 1 && Doc.Strokes.Count == strokesBefore + 1,
+              $"tool={Tool} oneShot={ShapeOneShotForTest} open={LibraryPanelOpen} sel={Doc.Selected.Count} strokes={Doc.Strokes.Count - strokesBefore}");
+        Check("画完图形已挂上“点空白回上一个工具”",
+              RestoreToolAfterShapeSelectionForTest,
+              $"restore={RestoreToolAfterShapeSelectionForTest}");
+        ClickBlankAfterShapeForTest();
+        Check("点空白 → 回到上一个工具、取消选中",
+              Tool == Tool.Pen && Doc.Selected.Count == 0 && !RestoreToolAfterShapeSelectionForTest,
+              $"tool={Tool} sel={Doc.Selected.Count} restore={RestoreToolAfterShapeSelectionForTest}");
+
+        // 梯形上底中点手柄：只改上底长度，上下底仍平行。
+        var trap = Doc.Strokes[^1];
+        float topW0 = MathF.Abs(trap.Points[2].X - trap.Points[3].X);
+        float midTop = (trap.Points[2].X + trap.Points[3].X) * 0.5f;
+        VertexDragForTest(trap, ShapeHandle.EdgeTop, midTop, trap.Points[2].Y,
+                          midTop + 30f, trap.Points[2].Y);
+        float topW1 = MathF.Abs(trap.Points[2].X - trap.Points[3].X);
+        Check("梯形上底中点手柄：只拉长上底、上下底保持平行",
+              topW1 > topW0 + 20f
+              && MathF.Abs(trap.Points[2].Y - trap.Points[3].Y) < 0.5f
+              && MathF.Abs(trap.Points[0].Y - trap.Points[1].Y) < 0.5f,
+              $"上底 {topW0:F0}→{topW1:F0}");
 
         // 悬停：名字不常驻，指针停在哪张卡就显示哪张。
         m = LibraryPanelInfoNow();
@@ -177,6 +198,20 @@ internal sealed partial class App
         ShapeDragForTest(600f, 260f, 760f, 390f);
         Check("扇形能画出来", Doc.Strokes.Count > 0 && Doc.Strokes[^1].Kind == StrokeKind.Sector,
               $"kind={(Doc.Strokes.Count > 0 ? Doc.Strokes[^1].Kind.ToString() : "无")}");
+        {
+            var sec = Doc.Strokes[^1];
+            float r0 = sec.SectorRadiusLocal();
+            float a0 = sec.SectorStartAngleLocal();
+            var c = new Vector2(sec.Points[0].X, sec.Points[0].Y);
+            var end = new Vector2(c.X + MathF.Cos(a0 + MathF.PI) * r0,
+                                  c.Y + MathF.Sin(a0 + MathF.PI) * r0);
+            var oldEnd = new Vector2(sec.Points[2].X, sec.Points[2].Y);
+            VertexDragForTest(sec, ShapeHandle.FocusPoint, oldEnd.X, oldEnd.Y, end.X, end.Y);
+            float sweep = sec.SectorSweepDegrees();
+            Check("扇形圆弧端点：改角度、半径不变",
+                  MathF.Abs(sweep - 180f) < 2f && MathF.Abs(sec.SectorRadiusLocal() - r0) < 0.5f,
+                  $"角度={sweep:F0}° 半径={sec.SectorRadiusLocal():F0}（原 {r0:F0}）");
+        }
 
         // 2b. 面板里的页签也能切；主条蓝色同步
         var beforeTab = LibraryPanelRectNow();
@@ -361,10 +396,30 @@ internal sealed partial class App
               $"oneShot={ShapeOneShotForTest} tool={Tool}");
         int strokesBefore = Doc.Strokes.Count;
         ShapeDragForTest(200f, 200f, 520f, 360f);
-        Check("画完一个图形 → 自动回到画笔、面板不关",
-              Tool == Tool.Pen && !ShapeOneShotForTest && LibraryPanelOpen
-              && Doc.Strokes.Count == strokesBefore + 1,
-              $"tool={Tool} oneShot={ShapeOneShotForTest} open={LibraryPanelOpen} strokes={Doc.Strokes.Count - strokesBefore}");
+        Check("画完一个图形 → 默认选中、工具切框选、面板不关",
+              Tool == Tool.Marquee && !ShapeOneShotForTest && LibraryPanelOpen
+              && Doc.Selected.Count == 1 && Doc.Strokes.Count == strokesBefore + 1,
+              $"tool={Tool} oneShot={ShapeOneShotForTest} open={LibraryPanelOpen} sel={Doc.Selected.Count} strokes={Doc.Strokes.Count - strokesBefore}");
+        Check("画完图形已挂上“点空白回上一个工具”",
+              RestoreToolAfterShapeSelectionForTest,
+              $"restore={RestoreToolAfterShapeSelectionForTest}");
+        ClickBlankAfterShapeForTest();
+        Check("点空白 → 回到上一个工具、取消选中",
+              Tool == Tool.Pen && Doc.Selected.Count == 0 && !RestoreToolAfterShapeSelectionForTest,
+              $"tool={Tool} sel={Doc.Selected.Count} restore={RestoreToolAfterShapeSelectionForTest}");
+
+        // 梯形上底中点手柄：只改上底长度，上下底仍平行。
+        var trap = Doc.Strokes[^1];
+        float topW0 = MathF.Abs(trap.Points[2].X - trap.Points[3].X);
+        float midTop = (trap.Points[2].X + trap.Points[3].X) * 0.5f;
+        VertexDragForTest(trap, ShapeHandle.EdgeTop, midTop, trap.Points[2].Y,
+                          midTop + 30f, trap.Points[2].Y);
+        float topW1 = MathF.Abs(trap.Points[2].X - trap.Points[3].X);
+        Check("梯形上底中点手柄：只拉长上底、上下底保持平行",
+              topW1 > topW0 + 20f
+              && MathF.Abs(trap.Points[2].Y - trap.Points[3].Y) < 0.5f
+              && MathF.Abs(trap.Points[0].Y - trap.Points[1].Y) < 0.5f,
+              $"上底 {topW0:F0}→{topW1:F0}");
 
         // 悬停：名字不常驻，指针停在哪张卡就显示哪张。
         m = LibraryPanelInfoNow();
@@ -389,6 +444,20 @@ internal sealed partial class App
         ShapeDragForTest(600f, 260f, 760f, 390f);
         Check("扇形能画出来", Doc.Strokes.Count > 0 && Doc.Strokes[^1].Kind == StrokeKind.Sector,
               $"kind={(Doc.Strokes.Count > 0 ? Doc.Strokes[^1].Kind.ToString() : "无")}");
+        {
+            var sec = Doc.Strokes[^1];
+            float r0 = sec.SectorRadiusLocal();
+            float a0 = sec.SectorStartAngleLocal();
+            var c = new Vector2(sec.Points[0].X, sec.Points[0].Y);
+            var end = new Vector2(c.X + MathF.Cos(a0 + MathF.PI) * r0,
+                                  c.Y + MathF.Sin(a0 + MathF.PI) * r0);
+            var oldEnd = new Vector2(sec.Points[2].X, sec.Points[2].Y);
+            VertexDragForTest(sec, ShapeHandle.FocusPoint, oldEnd.X, oldEnd.Y, end.X, end.Y);
+            float sweep = sec.SectorSweepDegrees();
+            Check("扇形圆弧端点：改角度、半径不变",
+                  MathF.Abs(sweep - 180f) < 2f && MathF.Abs(sec.SectorRadiusLocal() - r0) < 0.5f,
+                  $"角度={sweep:F0}° 半径={sec.SectorRadiusLocal():F0}（原 {r0:F0}）");
+        }
 
         Check("选图形后面板常驻、主条图形蓝",
               LibraryPanelOpen && LibraryTab == LibraryTab.Shapes && ui.CellActiveForTest(10),

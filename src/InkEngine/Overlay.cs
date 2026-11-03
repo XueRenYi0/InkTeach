@@ -3884,7 +3884,7 @@ internal sealed partial class OverlayWindow : IDisposable
         // 于是两头空：既画不出特殊手柄，又拿不到下面 else 里的**通用八手柄**
         //（缩放 / 对角拉伸）。用户 2026-09-20 问的就是这件事：
         // "没有特殊点的图形选中以后那八个拉伸对角拉伸旋转这些是不是应该都给？"——**该给**。
-        Span<ShapeHandle> shapeHandles = stackalloc ShapeHandle[5];
+        Span<ShapeHandle> shapeHandles = stackalloc ShapeHandle[8];
         int nh = shapeLike ? SelectionHandles.ShapeHandlesOf(shapeStroke, shapeHandles) : 0;
 
         // 拖动 / 旋转期间的**装饰收敛**（方案 A）：手柄与操作条此刻点不中

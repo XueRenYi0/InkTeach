@@ -5783,6 +5783,15 @@ public partial class InkEngine
         EndStroke();
     }
 
+    /// <summary>自检用：直接拖动某个图形的定义点（走正式 Begin/Update/Commit）。</summary>
+    internal void VertexDragForTest(Stroke s, ShapeHandle h,
+                                    float x0, float y0, float x1, float y1)
+    {
+        BeginVertexDrag(s, h, x0, y0);
+        UpdateVertexDrag(x1, y1);
+        CommitVertexDrag();
+    }
+
     /// <summary>自检用：面板选卡的一次性图形还等不等“画完回去”。</summary>
     internal bool ShapeOneShotForTest => _shapeOneShot;
 
@@ -9028,6 +9037,11 @@ public partial class InkEngine
     /// <summary>自检用：关掉收藏弹窗的菜单。</summary>
     internal void CloseLibraryMenuForTest() => CloseLibraryMenu();
 
+    /// <summary>自检用：画完图形后点空白是否已经挂上“回到上一个工具”。</summary>
+    internal bool RestoreToolAfterShapeSelectionForTest => _restoreToolAfterLibrarySelection;
+    /// <summary>自检用：模拟点空白，兑现“回到上一个工具”。</summary>
+    internal void ClickBlankAfterShapeForTest() => ExitLibraryPlacementSelection();
+
     private void RunLibraryMenu(string key)
     {
         if (key.StartsWith("move:", StringComparison.Ordinal))
@@ -11155,18 +11169,20 @@ public partial class InkEngine
                 _shapeOneShot = false;
                 var back = _shapeOneShotReturn;
                 if (back == Tool.Capture || back == Tool.Laser) back = Tool.Pen;
-                SwitchTool(back);
+                // 画完先选中；工具切到框选，点空白时沿用收藏插入那一套“回到上一个工具”。
+                SwitchTool(Tool.Marquee);
+                Doc.SelectOnly(new[] { committedShape });
+                _autoSelCollapsed = false;
+                _toolBeforeLibraryInsert = back;
+                _restoreToolAfterLibrarySelection = true;
                 _dirty = true;
                 NotifyUiStateChanged();
             }
-            if (committedShape != null)
+            else if (committedShape != null)
             {
-                if (!oneShotShape)
-                {
-                    Doc.SelectOnly(new[] { committedShape });
-                    _autoSelCollapsed = true;
-                    _dirty = true;
-                }
+                Doc.SelectOnly(new[] { committedShape });
+                _autoSelCollapsed = true;
+                _dirty = true;
             }
             // **停顿变出来的那个框，工具还是笔** —— 所以还要记一笔"这一次选中
             // 是停顿给的"，否则那个框会"画得出来、点不着"（见 `_dwellSelected`）。
@@ -16811,8 +16827,28 @@ public partial class InkEngine
         {
             case StrokeKind.Trapezoid:
             {
+                float minW = ShapeMinAxisLogical * DpiScale;
+                if (pts.Length < 4) break;
+                if (_vertexHandle == ShapeHandle.EdgeTop)
+                {
+                    float mid = (pts[2].X + pts[3].X) * 0.5f;
+                    float oldHalf = MathF.Abs(pts[2].X - pts[3].X) * 0.5f;
+                    float half = MathF.Max(minW * 0.5f, oldHalf + (local.X - mid));
+                    pts[2].X = mid + half;
+                    pts[3].X = mid - half;
+                    break;
+                }
+                if (_vertexHandle == ShapeHandle.EdgeBottom)
+                {
+                    float mid = (pts[0].X + pts[1].X) * 0.5f;
+                    float oldHalf = MathF.Abs(pts[1].X - pts[0].X) * 0.5f;
+                    float half = MathF.Max(minW * 0.5f, oldHalf + (local.X - mid));
+                    pts[0].X = mid - half;
+                    pts[1].X = mid + half;
+                    break;
+                }
                 int idx = SelectionHandles.VertexIndex(_vertexHandle);
-                if (idx < 0 || idx >= 4 || pts.Length < 4) break;
+                if (idx < 0 || idx >= 4) break;
                 if (idx <= 1)
                 {
                     pts[0].Y = pts[1].Y = local.Y;
@@ -16824,7 +16860,6 @@ public partial class InkEngine
                     pts[idx].X = local.X;
                 }
                 // 保证上下底都还有宽度；太窄就把被拖的点顶回去。
-                float minW = ShapeMinAxisLogical * DpiScale;
                 if (MathF.Abs(pts[1].X - pts[0].X) < minW)
                     pts[idx <= 1 ? 1 : 0] = new Vector2(pts[idx <= 1 ? 0 : 1].X + minW, pts[0].Y);
                 if (MathF.Abs(pts[2].X - pts[3].X) < minW)
@@ -16864,27 +16899,21 @@ public partial class InkEngine
 
             case StrokeKind.Sector:
             {
-                int idx = SelectionHandles.VertexIndex(_vertexHandle);
-                if (idx < 0 || idx >= 3 || pts.Length < 3) break;
+                if (pts.Length < 3) break;
                 var center = new Vector2(pts[0].X, pts[0].Y);
-                float r = MathF.Max(minAxis, Vector2.Distance(center, local));
                 float a0 = MathF.Atan2(pts[1].Y - center.Y, pts[1].X - center.X);
                 float sweep = s.SectorSweepDegrees();
-                if (idx == 0)
+                if (_vertexHandle == ShapeHandle.Rim)
                 {
-                    var d = local - center;
-                    pts[0] += d; pts[1] += d; pts[2] += d;
-                    break;
-                }
-                if (idx == 1)
-                {
-                    a0 = MathF.Atan2(local.Y - center.Y, local.X - center.X);
+                    float r = MathF.Max(minAxis, Vector2.Distance(center, local));
                     pts[1] = center + new Vector2(MathF.Cos(a0), MathF.Sin(a0)) * r;
                     pts[2] = center + new Vector2(MathF.Cos(a0 + sweep * MathF.PI / 180f),
                                                   MathF.Sin(a0 + sweep * MathF.PI / 180f)) * r;
+                    break;
                 }
-                else
+                if (_vertexHandle == ShapeHandle.FocusPoint)
                 {
+                    float r = MathF.Max(minAxis, Vector2.Distance(center, new Vector2(pts[1].X, pts[1].Y)));
                     float a1 = MathF.Atan2(local.Y - center.Y, local.X - center.X);
                     float d = (a1 - a0) * 180f / MathF.PI;
                     while (d < 0f) d += 360f;
@@ -17107,13 +17136,23 @@ public partial class InkEngine
 
             case StrokeKind.Sector:
             {
-                float a0 = MathF.Atan2(pts[1].Y - pts[0].Y, pts[1].X - pts[0].X);
-                float a1 = MathF.Atan2(pts[2].Y - pts[0].Y, pts[2].X - pts[0].X);
-                float deg = (a1 - a0) * 180f / MathF.PI;
-                while (deg < 0f) deg += 360f;
-                _vertexReadout = VertexReadoutKind.SectorAngle;
-                _vertexReadoutValue = Math.Clamp(deg, 0f, 359f);
-                _vertexReadoutSecondary = 0f;
+                if (_vertexHandle == ShapeHandle.Rim)
+                {
+                    float r = Vector2.Distance(pts[0], pts[1]);
+                    _vertexReadout = VertexReadoutKind.Radius;
+                    _vertexReadoutValue = r;
+                    _vertexReadoutSecondary = r * 2f;
+                }
+                else
+                {
+                    float a0 = MathF.Atan2(pts[1].Y - pts[0].Y, pts[1].X - pts[0].X);
+                    float a1 = MathF.Atan2(pts[2].Y - pts[0].Y, pts[2].X - pts[0].X);
+                    float deg = (a1 - a0) * 180f / MathF.PI;
+                    while (deg < 0f) deg += 360f;
+                    _vertexReadout = VertexReadoutKind.SectorAngle;
+                    _vertexReadoutValue = Math.Clamp(deg, 0f, 359f);
+                    _vertexReadoutSecondary = 0f;
+                }
                 break;
             }
 
