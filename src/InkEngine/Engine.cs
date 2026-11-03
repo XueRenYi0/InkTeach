@@ -5809,6 +5809,28 @@ public partial class InkEngine
         EndStroke();
     }
 
+    /// <summary>
+    /// 自检用：按正式多笔表模拟一次完整图形（1 笔或 2 笔都用同一份 StepPlan）。
+    /// 每个 tuple = 这一笔的起点 / 终点；`steps.Length` 由 <see cref="ShapeStepCount"/> 给出。
+    /// </summary>
+    internal void ShapeStepsForTest(Tool tool, (float Ax, float Ay, float Bx, float By)[] steps)
+    {
+        var plan = PlanOf(tool);
+        if (plan == null || plan.Apply.Length <= 1)
+        {
+            BeginShapeAt(tool, steps[0].Ax, steps[0].Ay);
+        }
+        else
+        {
+            BeginStepShape(tool, plan, steps[0].Ax, steps[0].Ay);
+        }
+        for (int i = 0; i < steps.Length; i++)
+        {
+            UpdateShapePreview(steps[i].Bx, steps[i].By);
+            EndStroke();
+        }
+    }
+
     /// <summary>自检用：直接拖动某个图形的定义点（走正式 Begin/Update/Commit）。</summary>
     internal void VertexDragForTest(Stroke s, ShapeHandle h,
                                     float x0, float y0, float x1, float y1)
