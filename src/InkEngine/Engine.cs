@@ -8462,9 +8462,10 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 切页签时只换高度：位置、宽度、横竖都不动，贴主条那条边（MaxY）固定。
-    /// **两个页签的高度各记各的，也不再把图形页硬卡在 5 行**——图形页同样允许
+    /// 切页签时只换高度：位置、宽度、横竖都不动，**顶边（MinY）固定**。
+    /// 两个页签的高度各记各的，也不再把图形页硬卡在 5 行——图形页同样允许
     /// 拖矮后用滚动看，和收藏页一个口径（2026-11-03 用户报"大小没记忆"）。
+    /// 顶部对齐是用户 2026-11-03 明确要的："收藏和图形应该高对齐，不应该对齐底部"。
     /// </summary>
     private void ApplyTabHeight(LibraryTab tab)
     {
@@ -8492,11 +8493,18 @@ public partial class InkEngine
 
         var r = _libraryPanelLogical;
         float want = hLog * dpi;
-        // 贴主条那条边（MaxY）固定，只改高度。宽度保持用户拖过的那一档。
+        // **顶边（MinY）固定，只往下/往上换高度**（2026-11-03 用户：
+        // "收藏和图形应该高对齐，不应该对齐底部"）。切到矮的页签时下面留空；
+        // 切到高的页签如果会压到工具条，就把整块往上提刚好放下（提不动才缩高）。
+        float top = r.MinY * dpi;
+        float maxBottom = uiTop * dpi - LibraryLayout.GapAboveUiLogical * dpi;
+        float minTop = screen.MinY * dpi + 8f * dpi;
+        if (top + want > maxBottom)
+            top = MathF.Max(minTop, maxBottom - want);
         var desired = new RectF
         {
             MinX = r.MinX * dpi, MaxX = r.MaxX * dpi,
-            MinY = r.MaxY * dpi - want, MaxY = r.MaxY * dpi,
+            MinY = top, MaxY = top + want,
         };
         desired = ClampLibraryPanel(desired, screen, uiTop, dpi, LibraryMode);
         _libraryPanelLogical = new RectF
@@ -9628,10 +9636,15 @@ public partial class InkEngine
     {
         // 2026-10-26：卡片 72×80 → 84×92 之后重算的默认档。
         // 2026-11-02：顶上加一级页签（30 + 4），默认高度各 +34。
-        // 横排 752 = 24 + 8×84 + 7×8，286 = 24 + 34 + 28 + 8 + 2×92 + 8（8 列 2 行）。
-        // 竖排 384 = 24 + 4×84 + 3×8，582 = 24 + 34 + 28 + 4 + 5×92 + 4×8（4 列 5 行）。
+        // 横排 752 = 24 + 8×84 + 7×8；竖排 384 = 24 + 4×84 + 3×8。
+        //
+        // 2026-11-03：切页签改成**顶边固定**之后，默认高度取两页里更高的那一档
+        //（横排 = 图形 5 行 532；竖排 = 收藏 5 行 582）。这样第一次打开任何一页，
+        // 顶边都在同一个位置，切页签时菜单栏不会上下跳；矮的那页下方自然留空。
+        float hLog = MathF.Max(DefaultTabHeightLogical(LibraryTab.Shapes),
+                               DefaultTabHeightLogical(LibraryTab.Favorites));
         float w = (mode == LibraryPanelMode.Horizontal ? 752f : 384f) * dpi;
-        float h = (mode == LibraryPanelMode.Horizontal ? 286f : 582f) * dpi;
+        float h = hLog * dpi;
         var desired = new RectF
         {
             MinX = (screen.MinX + screen.MaxX) * 0.5f * dpi - w * 0.5f,

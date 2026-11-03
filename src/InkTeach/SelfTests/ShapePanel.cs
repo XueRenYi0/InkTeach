@@ -220,11 +220,12 @@ internal sealed partial class App
               LibraryTab == LibraryTab.Favorites
               && ui.CellActiveForTest(11) && !ui.CellActiveForTest(10),
               $"tab={LibraryTab} 图形={ui.CellActiveForTest(10)} 收藏={ui.CellActiveForTest(11)}");
-        Check("切收藏：位置/宽度不变，只换高度",
+        Check("切收藏：位置/宽度/顶边不变，只换高度",
               MathF.Abs(afterFav.MinX - beforeTab.MinX) < 0.5f
+              && MathF.Abs(afterFav.MinY - beforeTab.MinY) < 0.5f
               && MathF.Abs((afterFav.MaxX - afterFav.MinX) - (beforeTab.MaxX - beforeTab.MinX)) < 0.5f
               && MathF.Abs((afterFav.MaxY - afterFav.MinY) - (beforeTab.MaxY - beforeTab.MinY)) > 10f,
-              $"x={beforeTab.MinX:F0}→{afterFav.MinX:F0} w={beforeTab.MaxX - beforeTab.MinX:F0}→{afterFav.MaxX - afterFav.MinX:F0} h={beforeTab.MaxY - beforeTab.MinY:F0}→{afterFav.MaxY - afterFav.MinY:F0}");
+              $"x={beforeTab.MinX:F0}→{afterFav.MinX:F0} y={beforeTab.MinY:F0}→{afterFav.MinY:F0} w={beforeTab.MaxX - beforeTab.MinX:F0}→{afterFav.MaxX - afterFav.MinX:F0} h={beforeTab.MaxY - beforeTab.MinY:F0}→{afterFav.MaxY - afterFav.MinY:F0}");
         m2 = LibraryPanelInfoNow();
         ClickCanvasRect(m2.ShapesTab);
         var afterShapes = LibraryPanelRectNow();
@@ -232,9 +233,10 @@ internal sealed partial class App
               LibraryTab == LibraryTab.Shapes
               && ui.CellActiveForTest(10) && !ui.CellActiveForTest(11),
               $"tab={LibraryTab} 图形={ui.CellActiveForTest(10)} 收藏={ui.CellActiveForTest(11)}");
-        Check("切回图形：高度恢复成图形页自己的",
+        Check("切回图形：高度恢复成图形页自己的，顶边仍不动",
               MathF.Abs((afterShapes.MaxY - afterShapes.MinY) - (beforeTab.MaxY - beforeTab.MinY)) < 1f
-              && MathF.Abs(afterShapes.MinX - beforeTab.MinX) < 0.5f,
+              && MathF.Abs(afterShapes.MinX - beforeTab.MinX) < 0.5f
+              && MathF.Abs(afterShapes.MinY - beforeTab.MinY) < 0.5f,
               $"h={afterShapes.MaxY - afterShapes.MinY:F0} 期望={beforeTab.MaxY - beforeTab.MinY:F0}");
 
         // 3. 收藏格 → 同一面板切收藏页
@@ -478,18 +480,20 @@ internal sealed partial class App
               LibraryTab == LibraryTab.Favorites
               && ui.CellActiveForTest(11) && !ui.CellActiveForTest(10),
               $"tab={LibraryTab} 图形={ui.CellActiveForTest(10)} 收藏={ui.CellActiveForTest(11)}");
-        Check("切收藏：位置/宽度不变，只换高度",
+        Check("切收藏：位置/宽度/顶边不变，只换高度",
               MathF.Abs(afterFav.MinX - beforeTab.MinX) < 0.5f
+              && MathF.Abs(afterFav.MinY - beforeTab.MinY) < 0.5f
               && MathF.Abs((afterFav.MaxX - afterFav.MinX) - (beforeTab.MaxX - beforeTab.MinX)) < 0.5f
               && MathF.Abs((afterFav.MaxY - afterFav.MinY) - (beforeTab.MaxY - beforeTab.MinY)) > 10f,
-              $"x={beforeTab.MinX:F0}→{afterFav.MinX:F0} h={beforeTab.MaxY - beforeTab.MinY:F0}→{afterFav.MaxY - afterFav.MinY:F0}");
+              $"x={beforeTab.MinX:F0}→{afterFav.MinX:F0} y={beforeTab.MinY:F0}→{afterFav.MinY:F0} h={beforeTab.MaxY - beforeTab.MinY:F0}→{afterFav.MaxY - afterFav.MinY:F0}");
         m = LibraryPanelInfoNow();
         Click(m.ShapesTab);
         var afterShapes = LibraryPanelRectNow();
-        Check("切回图形：高度恢复成图形页自己的",
+        Check("切回图形：高度恢复成图形页自己的，顶边仍不动",
               MathF.Abs((afterShapes.MaxY - afterShapes.MinY)
                         - (beforeTab.MaxY - beforeTab.MinY)) < 1f
-              && MathF.Abs(afterShapes.MinX - beforeTab.MinX) < 0.5f,
+              && MathF.Abs(afterShapes.MinX - beforeTab.MinX) < 0.5f
+              && MathF.Abs(afterShapes.MinY - beforeTab.MinY) < 0.5f,
               $"h={afterShapes.MaxY - afterShapes.MinY:F0} 期望={beforeTab.MaxY - beforeTab.MinY:F0}");
 
         ToggleShapesPanel();
@@ -621,10 +625,12 @@ internal sealed partial class App
         SetLibraryTab(LibraryTab.Shapes);
         SettleFrames(150);
         var shapesBack = LibraryPanelRectNow();
-        Check("切回图形页：仍用图形页自己的高度和分类",
+        Check("切回图形页：仍用图形页自己的高度和分类，顶边不动",
               Near(shapesBack.MaxY - shapesBack.MinY, sh)
+              && Near(shapesBack.MinY, reopened.MinY)
               && ShapeCategoryId == "solid",
-              $"高 {shapesBack.MaxY - shapesBack.MinY:F0}，期望 {sh:F0}；分类 {ShapeCategoryId}");
+              $"高 {shapesBack.MaxY - shapesBack.MinY:F0}，期望 {sh:F0}；"
+              + $"顶 {shapesBack.MinY:F0}，期望 {reopened.MinY:F0}；分类 {ShapeCategoryId}");
 
         Check("落盘：图形 / 收藏高度各一份，分类也各一份",
               !string.IsNullOrEmpty(GetUiPref("libHShapes"))
@@ -642,15 +648,15 @@ internal sealed partial class App
             SettleFrames(120);
             var cam0 = LibraryPanelRectNow();
             float x0 = cam0.MinX;
-            float bottom0 = cam0.MaxY + ViewOffsetY;
+            float top0 = cam0.MinY + ViewOffsetY;
             SetLibraryTab(LibraryTab.Favorites);
             SettleFrames(120);
             SetLibraryTab(LibraryTab.Shapes);
             SettleFrames(120);
             var cam1 = LibraryPanelRectNow();
-            Check("白板滚动后切页签：面板仍钉在屏幕同一位置",
-                  Near(cam1.MinX, x0) && Near(cam1.MaxY + ViewOffsetY, bottom0),
-                  $"x {x0:F0}→{cam1.MinX:F0}，屏幕底 {bottom0:F0}→{cam1.MaxY + ViewOffsetY:F0}");
+            Check("白板滚动后切页签：面板仍钉在屏幕同一位置（顶边不动）",
+                  Near(cam1.MinX, x0) && Near(cam1.MinY + ViewOffsetY, top0),
+                  $"x {x0:F0}→{cam1.MinX:F0}，屏幕顶 {top0:F0}→{cam1.MinY + ViewOffsetY:F0}");
             ViewOffsetY = oldOff;
             SettleFrames(120);
         }
