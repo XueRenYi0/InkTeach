@@ -7973,6 +7973,8 @@ public partial class InkEngine
     internal string LibraryCategoryId = "all";
     /// <summary>图形页当前分类：all / common / curve / solid（与收藏分类互不影响）。</summary>
     internal string ShapeCategoryId = "all";
+    /// <summary>分类偏好是否已经从盘里恢复过（只恢复一次，不能在每次 ReloadLibrary 时覆盖用户当前选择）。</summary>
+    private bool _libraryCategoryRestored;
     /// <summary>图形卡悬停（-1 = 没在卡上）；只在图形页用。</summary>
     internal int ShapeHoverIndex = -1;
     /// <summary>触摸点卡后短暂显示名称（没有 hover 的替代）。</summary>
@@ -8606,11 +8608,35 @@ public partial class InkEngine
         OpenLibraryPanel(LibraryTab.Favorites);
     }
 
+    /// <summary>
+    /// 分类偏好**只恢复一次**（2026-11-03 用户："比如用户使用的是立体这一类，
+    /// 那么重启以后还是这个"）。`ReloadLibrary` 每次存 / 删 / 打开都会跑，
+    /// 不能每跑一次就拿盘里的值覆盖用户当前的选择，所以用一次性闸门。
+    /// 收藏分类是动态 id（用户建的分类可能已被删），恢复时要按当前分类表校验；
+    /// 回收站是临时视图，不恢复（重启回到「全部」，免得一打开就是回收站）。
+    /// </summary>
+    private void RestoreLibraryCategoriesOnce()
+    {
+        if (_libraryCategoryRestored) return;
+        _libraryCategoryRestored = true;
+
+        string sc = GetUiPref("shapeCat");
+        if (!string.IsNullOrEmpty(sc)
+            && Array.Exists(ShapeCatalog.Categories, c => c.Id == sc))
+            ShapeCategoryId = sc;
+
+        string lc = GetUiPref("libCat");
+        if (!string.IsNullOrEmpty(lc) && lc != ShapeLibrary.TrashCategory
+            && (lc == "all" || LibraryCategories.Exists(c => c.Id == lc)))
+            LibraryCategoryId = lc;
+    }
+
     /// <summary>重读目录（打开面板 / 存完 / 删完都走这里），按当前分类重新筛。</summary>
     internal void ReloadLibrary()
     {
         LibraryAllEntries = ShapeLibrary.List(includeTrash: true);
         LibraryCategories = ShapeLibrary.ListCategories();
+        RestoreLibraryCategoriesOnce();
         if (LibraryCategoryId != "all"
             && LibraryCategoryId != ShapeLibrary.TrashCategory
             && !LibraryCategories.Exists(c => c.Id == LibraryCategoryId))
@@ -8633,6 +8659,7 @@ public partial class InkEngine
             && !LibraryCategories.Exists(c => c.Id == id)) return;
         LibraryCategoryId = id;
         if (id != "all" && id != ShapeLibrary.TrashCategory) LibrarySaveCategoryId = id;
+        if (id != ShapeLibrary.TrashCategory) SetUiPref("libCat", id);
         // 切分类 = 换了一批卡，原来的勾选 / 选中 / 滚动都没意义了。
         LibrarySelected.Clear();
         LibrarySelectMode = false;
@@ -8657,6 +8684,7 @@ public partial class InkEngine
         LibraryCategories = ShapeLibrary.ListCategories();
         LibraryCategoryId = cat.Id;
         LibrarySaveCategoryId = cat.Id;
+        SetUiPref("libCat", cat.Id);
         ApplyLibraryFilter();
         RefreshLibraryCategoryInfos();
         LibraryScrollY = 0;
@@ -8672,6 +8700,7 @@ public partial class InkEngine
         ShapeLibrary.DeleteCategory(id);       // 条目全部移到「未分类」，绝不删内容
         if (LibraryCategoryId == id) LibraryCategoryId = ShapeLibrary.Uncategorized;
         if (LibrarySaveCategoryId == id) LibrarySaveCategoryId = ShapeLibrary.Uncategorized;
+        if (LibraryCategoryId != ShapeLibrary.TrashCategory) SetUiPref("libCat", LibraryCategoryId);
         LibraryConfirm = "";
         LibraryRenamingId = null;
         LibraryCategoriesOpen = true;
@@ -9244,9 +9273,11 @@ public partial class InkEngine
     {
         if (ShapeCategoryId == id) return;
         ShapeCategoryId = id;
+        SetUiPref("shapeCat", id);
         ShapeHoverIndex = -1;
         ShapeNameIndex = -1;
         LibraryScrollY = 0;
+        EnsureLibraryTabVisible();
         _dirty = true;
         NotifyUiStateChanged();
     }
@@ -9554,6 +9585,9 @@ public partial class InkEngine
         _libraryHeightShapes = 0f;
         _libraryHeightFavorites = 0f;
         _libraryPanelPrefsLoaded = true;
+        ShapeCategoryId = "all";
+        LibraryCategoryId = "all";
+        _libraryCategoryRestored = true;     // 自检要确定性：别让上一轮存下的分类把默认带偏
         LibraryPage = 0;
         LibraryScrollY = 0;
         LibraryTabScroll = 0;
@@ -9584,6 +9618,9 @@ public partial class InkEngine
         _libraryHeightFavorites = 0f;
         _libraryPanelPrefsLoaded = false;
         LibraryPanelOpen = false;
+        ShapeCategoryId = "all";
+        LibraryCategoryId = "all";
+        _libraryCategoryRestored = false;
         _dirty = true;
     }
 
@@ -9660,6 +9697,8 @@ public partial class InkEngine
     private void SaveLibraryPanelPrefs()
     {
         SaveCurrentTabHeight();
+        SetUiPref("shapeCat", ShapeCategoryId);
+        if (LibraryCategoryId != ShapeLibrary.TrashCategory) SetUiPref("libCat", LibraryCategoryId);
         SetUiPref("libMode", LibraryMode == LibraryPanelMode.Vertical ? "v" : "h");
         SetUiPref("libVer", "2");
         SetUiPref("libHShapes", _libraryHeightShapes > 1f

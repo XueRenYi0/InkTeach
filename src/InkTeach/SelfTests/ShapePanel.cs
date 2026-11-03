@@ -559,6 +559,9 @@ internal sealed partial class App
         ResetLibraryPanelForTest();
         OpenLibraryPanel(LibraryTab.Shapes);
         SettleFrames(150);
+        SetShapeCategory("solid");
+        Check("图形页切到「立体」→ 16 张", ShapeCategoryId == "solid" && ShapeCardsNow().Length == 16,
+              $"分类 {ShapeCategoryId}，{ShapeCardsNow().Length} 张");
 
         ResizeBy(-2f * (LibraryLayout.CellWLogical + LibraryLayout.CellGapLogical),
                  -2f * (LibraryLayout.ShapeCellHLogical + LibraryLayout.RowGapLogical), 9301u);
@@ -581,10 +584,16 @@ internal sealed partial class App
               $"({sx:F0},{sy:F0}) {sw:F0}×{sh:F0} → "
               + $"({reopened.MinX:F0},{reopened.MinY:F0}) "
               + $"{reopened.MaxX - reopened.MinX:F0}×{reopened.MaxY - reopened.MinY:F0}");
+        Check("图形页：关闭重开后仍停在「立体」",
+              ShapeCategoryId == "solid" && ShapeCardsNow().Length == 16,
+              $"分类 {ShapeCategoryId}，{ShapeCardsNow().Length} 张");
 
         // ---- 收藏页：高度是另一份；缩到 1 行后照样记得 ----
         SetLibraryTab(LibraryTab.Favorites);
         SettleFrames(150);
+        SetLibraryCategory(ShapeLibrary.Uncategorized);
+        Check("收藏页切到「未分类」", LibraryCategoryId == ShapeLibrary.Uncategorized,
+              $"分类 {LibraryCategoryId}");
         ResizeBy(0f, -(LibraryLayout.CellHLogical + LibraryLayout.RowGapLogical), 9302u);
         var fav = LibraryPanelRectNow();
         var favInfo = LibraryPanelInfoNow();
@@ -604,19 +613,26 @@ internal sealed partial class App
               $"({fx:F0},{fy:F0}) {fw:F0}×{fh:F0} → "
               + $"({favBack.MinX:F0},{favBack.MinY:F0}) "
               + $"{favBack.MaxX - favBack.MinX:F0}×{favBack.MaxY - favBack.MinY:F0}");
+        Check("收藏页：关闭重开后仍停在「未分类」",
+              LibraryCategoryId == ShapeLibrary.Uncategorized,
+              $"分类 {LibraryCategoryId}");
 
         // ---- 两页高度各一份：切回图形页仍是刚才的矮档 ----
         SetLibraryTab(LibraryTab.Shapes);
         SettleFrames(150);
         var shapesBack = LibraryPanelRectNow();
-        Check("切回图形页：仍用图形页自己的高度（不被收藏页覆盖）",
-              Near(shapesBack.MaxY - shapesBack.MinY, sh),
-              $"高 {shapesBack.MaxY - shapesBack.MinY:F0}，期望 {sh:F0}");
+        Check("切回图形页：仍用图形页自己的高度和分类",
+              Near(shapesBack.MaxY - shapesBack.MinY, sh)
+              && ShapeCategoryId == "solid",
+              $"高 {shapesBack.MaxY - shapesBack.MinY:F0}，期望 {sh:F0}；分类 {ShapeCategoryId}");
 
-        Check("落盘：图形 / 收藏高度各一份",
+        Check("落盘：图形 / 收藏高度各一份，分类也各一份",
               !string.IsNullOrEmpty(GetUiPref("libHShapes"))
-              && !string.IsNullOrEmpty(GetUiPref("libHFav")),
-              $"shapes={GetUiPref("libHShapes")} fav={GetUiPref("libHFav")}");
+              && !string.IsNullOrEmpty(GetUiPref("libHFav"))
+              && GetUiPref("shapeCat") == "solid"
+              && GetUiPref("libCat") == ShapeLibrary.Uncategorized,
+              $"shapes={GetUiPref("libHShapes")} fav={GetUiPref("libHFav")} "
+              + $"shapeCat={GetUiPref("shapeCat")} libCat={GetUiPref("libCat")}");
 
         // ---- 白板滚动后切页签：面板必须还钉在屏幕同一位置 ----
         // （老代码把画布坐标当屏幕坐标用，相机一滚，切一次页签就偏一截。）
