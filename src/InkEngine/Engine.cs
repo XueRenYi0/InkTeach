@@ -17129,21 +17129,30 @@ public partial class InkEngine
                 }
                 if (_vertexHandle == ShapeHandle.SpaceX)
                 {
-                    float len = MathF.Max(minAxis, local.X - o.X);
-                    pts[1] = o + new Vector2(len, 0f);
+                    // 有符号长度：拖到原点左边 → x 轴翻向左（对应另一个底角）。
+                    float dx = local.X - o.X;
+                    float sign = dx < 0f ? -1f : 1f;
+                    float len = MathF.Max(minAxis, MathF.Abs(dx));
+                    pts[1] = o + new Vector2(sign * len, 0f);
                     break;
                 }
                 if (_vertexHandle == ShapeHandle.SpaceZ)
                 {
+                    // z 永远向上（用户："Z 轴一般都是会向上"）：往下拖只缩到最小。
                     float len = MathF.Max(minAxis, o.Y - local.Y);
                     pts[3] = o + new Vector2(0f, -len);
                     break;
                 }
                 if (_vertexHandle == ShapeHandle.SpaceY)
                 {
-                    var dir = Stroke.SpaceAxisYDirection;
-                    float len = MathF.Max(minAxis, Vector2.Dot(local - o, dir));
-                    pts[2] = o + dir * len;
+                    // 沿当前 y 轴方向做有符号投影：拖过原点 → y 轴翻到相反方向。
+                    var cur = new Vector2(pts[2].X - o.X, pts[2].Y - o.Y);
+                    var dir = cur.LengthSquared() > 1e-6f
+                        ? Vector2.Normalize(cur) : Stroke.SpaceAxisYDirection;
+                    float dot = Vector2.Dot(local - o, dir);
+                    float sign = dot < 0f ? -1f : 1f;
+                    float len = MathF.Max(minAxis, MathF.Abs(dot));
+                    pts[2] = o + dir * (sign * len);
                     break;
                 }
                 break;

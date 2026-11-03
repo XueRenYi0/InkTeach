@@ -1910,33 +1910,43 @@ internal sealed class Stroke
     }
 
     /// <summary>
-    /// **空间直角坐标系的 y 轴方向**（局部坐标）：跟随立体图的斜二测——
+    /// **空间直角坐标系的 y 轴默认方向**（局部坐标）：跟随立体图的斜二测——
     /// `(PrismDepthSkew, −1)` 归一化（屏幕 y 向下，所以"向后上方"是负 y）。
-    /// 和棱柱族共用同一个常量，画出来才和立体图是一套透视。
+    /// 画的时候会根据拖动象限换成左后 / 左前 / 右前；这个常量只作为默认值和图标参考。
     /// </summary>
     public static readonly Vector2 SpaceAxisYDirection =
         Vector2.Normalize(new Vector2(ShapeSpec.PrismDepthSkew, -1f));
 
     /// <summary>
     /// **空间直角坐标系**的一笔画法（2026-11-03）：按下点 `(x0,y0)` = 原点 O，
-    /// 指针 `(x1,y1)` 只定 **x / z 两截的长度**；y 轴按斜二测固定方向、
-    /// 默认取 `min(x, z) / 2`，之后可以拖轴端单独改。
+    /// 指针 `(x1,y1)` 除了定 **x / z 长度**，还决定原点在长方体哪个底角：
     ///
-    /// `Points` = `[O, +x 端, +y 端, +z 端]`：
-    ///   · **只画正半轴**（用户 2026-11-03 拍板），原点在角上；
-    ///   · 拖到左边 / 下边也只取长度，x 始终向右、z 始终向上；
-    ///   · 不带网格、不写 x/y/z 字母（没有文字层）。
+    /// - **x 的正方向 = 拖动的左右方向**（往左拖 → x 向左）；
+    /// - **y 的"后/前" = 拖动的上下方向**（往上拖 → y 向后上方，往下拖 → y 向前下方）；
+    /// - **z 永远向上**（即使往下拖，长度取 |dy|）。
+    ///
+    /// 四个拖动象限正好对应长方体四个底角；松手后还能拖 X / Y 轴端把方向翻过去。
+    /// 默认（往右上拖）就是课本最常见的"front-left：x 右、y 后右、z 上"。
+    /// `Points` = `[O, +x 端, +y 端, +z 端]`，只画正半轴。
     /// </summary>
     public void SetSpaceAxisBox(float x0, float y0, float x1, float y1)
     {
         while (Points.Count < 4) AddPoint(x0, y0, 1f, 0);
-        float xLen = MathF.Max(0.5f, MathF.Abs(x1 - x0));
-        float zLen = MathF.Max(0.5f, MathF.Abs(y1 - y0));
+        float dx = x1 - x0, dy = y1 - y0;
+        float xLen = MathF.Max(0.5f, MathF.Abs(dx));
+        float zLen = MathF.Max(0.5f, MathF.Abs(dy));
         float yLen = MathF.Max(0.5f, MathF.Min(xLen, zLen) * 0.5f);
+        float xSign = dx < 0f ? -1f : 1f;
+        bool back = dy <= 0f;
+        // 投影方向：x 的左右和 y 的前后是耦合的（长方体底面的两条边）；
+        // 四个象限 = 四个底角。z 不参与，永远朝上。
+        var yDir = Vector2.Normalize(new Vector2(
+            xSign * (back ? 1f : -1f) * ShapeSpec.PrismDepthSkew,
+            back ? -1f : 1f));
         var o = new Vector2(x0, y0);
         SetPoint(0, o);
-        SetPoint(1, o + new Vector2(xLen, 0f));
-        SetPoint(2, o + SpaceAxisYDirection * yLen);
+        SetPoint(1, o + new Vector2(xSign * xLen, 0f));
+        SetPoint(2, o + yDir * yLen);
         SetPoint(3, o + new Vector2(0f, -zLen));
     }
 

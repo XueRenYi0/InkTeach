@@ -1888,7 +1888,7 @@ internal sealed partial class App
         Doc.Clear();
         Doc.ClearHistory();
         Tool = Tool.SpaceCoordinate;
-        ShapeDragForTest(200f, 200f, 500f, 400f);
+        ShapeDragForTest(200f, 200f, 500f, 80f);
         var s = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
         Check("一笔画出空间坐标系", s != null && s.Kind == StrokeKind.SpaceCoordinate,
               s == null ? "没有对象" : $"Kind={s.Kind}");
@@ -1903,11 +1903,42 @@ internal sealed partial class App
         var yDir = Stroke.SpaceAxisYDirection;
         Check("按下点 = 原点 O", Near2(o, new Vector2(200f, 200f)),
               $"O=({o.X:F0},{o.Y:F0})");
-        Check("拖出的 x / z 长度", Near2(x, new Vector2(500f, 200f)) && Near2(z, new Vector2(200f, 0f)),
+        Check("拖出的 x / z 长度", Near2(x, new Vector2(500f, 200f)) && Near2(z, new Vector2(200f, 80f)),
               $"X=({x.X:F0},{x.Y:F0}) Z=({z.X:F0},{z.Y:F0})");
-        Check("y 沿斜二测方向、默认半长", Near(Vector2.Distance(o, y), 100f)
+        Check("y 沿斜二测方向、默认半长", Near(Vector2.Distance(o, y), 60f)
               && Near(Vector2.Dot(Vector2.Normalize(y - o), yDir), 1f, 0.001f),
               $"Y=({y.X:F0},{y.Y:F0})，方向 {Vector2.Normalize(y - o)}");
+
+        // 四个拖动象限 = 长方体四个底角：x 左右、y 前后跟着拖动方向，z 永远向上。
+        {
+            bool ok = true;
+            string detail = "";
+            var cases = new (float Dx, float Dy, float Sx, float Syx, float Syy)[]
+            {
+                (300f, -120f, 1f, 1f, -1f),   // 右上：x 右，y 后右
+                (-300f, -120f, -1f, -1f, -1f), // 左上：x 左，y 后左
+                (300f, 120f, 1f, -1f, 1f),    // 右下：x 右，y 前左
+                (-300f, 120f, -1f, 1f, 1f),   // 左下：x 左，y 前右
+            };
+            foreach (var c in cases)
+            {
+                var t = new Stroke { Tool = Tool.SpaceCoordinate, Kind = StrokeKind.SpaceCoordinate };
+                t.AddPoint(0f, 0f, 1f, 0);
+                t.SetSpaceAxisBox(0f, 0f, c.Dx, c.Dy);
+                float xx = t.Points[1].X;
+                float yx = t.Points[2].X;
+                float yy = t.Points[2].Y;
+                float zy = t.Points[3].Y;
+                if (MathF.Sign(xx) != c.Sx || MathF.Sign(yx) != c.Syx
+                    || MathF.Sign(yy) != c.Syy || zy >= 0f)
+                {
+                    ok = false;
+                    detail = $"d=({c.Dx},{c.Dy}) → Xx={xx:F0} Y=({yx:F0},{yy:F0}) Zy={zy:F0}";
+                    break;
+                }
+            }
+            Check("四个拖动象限 = 长方体四个底角", ok, detail);
+        }
 
         Span<ShapeHandle> hs = stackalloc ShapeHandle[8];
         int hn = SelectionHandles.ShapeHandlesOf(s, hs);
@@ -1945,6 +1976,26 @@ internal sealed partial class App
               Near(Vector2.Distance(o, newY), Vector2.Distance(o, y) + 60f)
               && Near(MathF.Abs(Vector2.Dot(Vector2.Normalize(newY - o), yDir)), 1f, 0.001f),
               $"Y 长 {Vector2.Distance(o, y):F0}→{Vector2.Distance(o, newY):F0}");
+
+        // 轴端拖过原点 = 翻方向（四个底角都靠这个微调）。
+        {
+            float zyBefore = s.Points[3].Y;
+            var xh2 = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceX);
+            VertexDragForTest(s, ShapeHandle.SpaceX, xh2.X, xh2.Y, o.X - 80f, o.Y);
+            Check("拖 X 越过原点 → x 翻向左",
+                  s.Points[1].X < o.X && Near(s.Points[1].Y, o.Y)
+                  && Near(s.Points[2].X, newY.X) && Near(s.Points[3].Y, zyBefore),
+                  $"X=({s.Points[1].X:F0},{s.Points[1].Y:F0})");
+
+            var yh2 = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceY);
+            var yCur = new Vector2(s.Points[2].X - o.X, s.Points[2].Y - o.Y);
+            var yTarget2 = o - Vector2.Normalize(yCur) * 80f;
+            VertexDragForTest(s, ShapeHandle.SpaceY, yh2.X, yh2.Y, yTarget2.X, yTarget2.Y);
+            Check("拖 Y 越过原点 → y 翻到前方",
+                  s.Points[2].Y > o.Y
+                  && Near(Vector2.Distance(o, new Vector2(s.Points[2].X, s.Points[2].Y)), 80f),
+                  $"Y=({s.Points[2].X:F0},{s.Points[2].Y:F0})");
+        }
 
         // 拖 O：四个点整组平移，轴长/方向都不变。
         var beforeO = s.SpaceAxisPointsLocal();
