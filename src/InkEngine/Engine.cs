@@ -2617,7 +2617,25 @@ public partial class InkEngine
         // IOException“句柄无效”，把整个启动流程打断（踩过：双击发布版启动失败）。
         // 有控制台（命令行/带参数自检）时才真正生效，没控制台就跳过——
         // 反正没控制台时所有 Console.WriteLine 本来也是空操作，不影响任何功能。
-        try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
+        //
+        // 2026-11-03：**输出被重定向**（自检跑批 / CI）时没有控制台句柄，setter 会抛，
+        // 于是 stdout 保持系统 ANSI（936），而 `Run-FuncSuite.ps1` 按 UTF-8 读 →
+        // 中文判据（"通过 / 合计"）全变成乱码，用例被误判成"没有判据"（一批 DATA）。
+        // 重定向这条路直接把标准流换成 UTF-8，控制台那条保持原样。
+        if (Console.IsOutputRedirected)
+        {
+            try
+            {
+                var utf8 = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+                Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), utf8) { AutoFlush = true });
+                Console.SetError(new StreamWriter(Console.OpenStandardError(), utf8) { AutoFlush = true });
+            }
+            catch { }
+        }
+        else
+        {
+            try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
+        }
         Native.SetProcessDpiAwarenessContext(Native.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         Native.EnableMouseInPointer(true);
 
@@ -18288,7 +18306,14 @@ public partial class InkEngine
                     if (move)
                     {
                         var under = Doc.HitObjectAt(x, y, ClickToleranceLogical * dpi);
-                        if (under != null && !Doc.Selected.Contains(under)) move = false;
+                        // 2026-11-03：**只在"选中的是文本框 / 题卡"时让位给压在上面的墨迹**。
+                        // 形状不能这么判——椭圆的中心、矩形的内部本来就是空的，
+                        // 点在那儿仍然应该拖动整个形状（snaptest 里坐标轴的端点正好穿过
+                        // 椭圆中心，旧写法会拒绝拖动，表现为"选框完全拖不动"）。
+                        bool selectedTextBox = Doc.Selected.Count > 0;
+                        foreach (var sel in Doc.Selected)
+                            if (sel.Kind != StrokeKind.TextBox) { selectedTextBox = false; break; }
+                        if (selectedTextBox && under != null && !Doc.Selected.Contains(under)) move = false;
                         else _dragHitStroke = under;
                     }
                 }

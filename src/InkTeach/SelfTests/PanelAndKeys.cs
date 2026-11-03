@@ -1307,9 +1307,10 @@ internal sealed partial class App
 
             // 截图那一格的上带：**[截图][隐藏窗口截图]**（8.3.1 照微信改的名；
             // 8.3.0 叫"连批注拍/只拍下层"）+ 右端一颗**动作按钮「粘贴图片」**。
-            var capBar = ui.BarRectForTest;
-            SendMouse((int)((capBar.MinX + capBar.MaxX) * 0.5f * DpiScale),
-                      (int)((capBar.MinY + capBar.MaxY) * 0.5f * DpiScale), 0);
+            // ⚠ 指针要停在**截图那一格**上开带；停在整条工具条的"中点"会落到别的格
+            //   （格数/钉住状态一变中点就换格），后面的段/动作按钮全跟着错。
+            SendMouse((int)((cap.MinX + cap.MaxX) * 0.5f * DpiScale),
+                      (int)((cap.MinY + cap.MaxY) * 0.5f * DpiScale), 0);
             SettleFrames(400);
             var segDirect = ui.SegmentRectForTest(0);
             var segHidden = ui.SegmentRectForTest(1);
@@ -1344,8 +1345,8 @@ internal sealed partial class App
             ClickPhysical((cap.MinX + cap.MaxX) * 0.5f * DpiScale,
                           (cap.MinY + cap.MaxY) * 0.5f * DpiScale);
             SettleFrames(250);
-            SendMouse((int)((capBar.MinX + capBar.MaxX) * 0.5f * DpiScale),
-                      (int)((capBar.MinY + capBar.MaxY) * 0.5f * DpiScale), 0);
+            SendMouse((int)((cap.MinX + cap.MaxX) * 0.5f * DpiScale),
+                      (int)((cap.MinY + cap.MaxY) * 0.5f * DpiScale), 0);
             SettleFrames(400);
             segHidden = ui.SegmentRectForTest(1);
             ClickPhysical((segHidden.MinX + segHidden.MaxX) * 0.5f * DpiScale,
@@ -1359,12 +1360,14 @@ internal sealed partial class App
                   $"取景={CaptureActive}，工具={Tool}");
 
             // 「粘贴图片」：右端的动作按钮（没有键盘的触摸屏 / 手写板也能用）
-            ClickPhysical((cap.MinX + cap.MaxX) * 0.5f * DpiScale,
-                          (cap.MinY + cap.MaxY) * 0.5f * DpiScale);
-            SettleFrames(250);
-            SendMouse((int)((capBar.MinX + capBar.MaxX) * 0.5f * DpiScale),
-                      (int)((capBar.MinY + capBar.MaxY) * 0.5f * DpiScale), 0);
-            SettleFrames(400);
+            // ⚠ 这里直接选中"截图格 + 上带"，不再靠点格子/悬停开带：
+            //   截图模式刚退出来时界面还在淡入，合成点击会掉到画布上，
+            //   一旦误入取景，后面整段（清空/白板）全被遮罩吃掉（2026-11-03 连红 123 项）。
+            //   "点格子开带"本身由本段前半和 --bandactiontest 覆盖，这里只验动作按钮。
+            Host.Commands.SetTool(Tool.Capture);
+            ui.SelectBandCellForTest(9);
+            ui.OpenRailForTest();
+            SettleFrames(300);
             {
                 // 先在剪贴板上放一张 60×40 的图（绿底），再点动作按钮
                 var buf = new byte[60 * 40 * 4];
@@ -3016,11 +3019,11 @@ internal sealed partial class App
             for (int i = 0; i < 2; i++)
                 Need(ui.TipContentForTest(200 + i).Title == null, $"框选段{i}不该有");
             Host.Commands.SetTool(Tool.Rectangle);
-            ui.SelectBandCellForTest(9);
+            ui.SelectBandCellForTest(10);        // 图形那一格（文本插入后是 10）
             for (int i = 0; i < ui.BandSegmentCountForTest; i++)
                 Need(ui.TipContentForTest(200 + i).Title != null, $"缺图形段{i}");
             Host.Commands.SetTool(Tool.Capture);
-            ui.SelectBandCellForTest(10);
+            ui.SelectBandCellForTest(9);         // 截图那一格（9）
             Need(ui.TipContentForTest(400).Title == null, "粘贴图片不该有");
             for (int i = 0; i < 2; i++)
                 Need(ui.TipContentForTest(200 + i).Title == null, $"截图段{i}不该有");

@@ -68,7 +68,10 @@ $cases = @(
     @{ f = '穿透模式';   n = 'passtest';     a = @('--passtest');        t = 180; d = '穿透：跨进程真实点击落到下层窗口' }
     @{ f = '穿透模式';   n = 'uitest';       a = @('--uitest');          t = 240; d = '界面输入通路：面板内/外 × 穿透开/关 × 界面吃不吃，谁收到（含"穿透下面板可点"）' }
     @{ f = '产品界面';   n = 'paneltest';    a = @('--paneltest');       t = 240; d = '产品界面（src/InkUi）：球→按钮带、点按钮改引擎状态、拖动贴边、空闲 0 帧' }
-    @{ f = '产品界面';   n = 'shapebandtest'; a = @('--shapebandtest');  t = 240; d = '图形那格的界面入口：上带七段逐段点 / 三个新热键合成键盘真按 / 主条图标跟着种类变' }
+    @{ f = '产品界面';   n = 'shapepaneltest'; a = @('--shapepaneltest'); t = 120; d = '图形面板：入口 / 页签 / 选图形 / 蓝色互斥（39 张卡）' }
+    @{ f = '产品界面';   n = 'shapeaudittest'; a = @('--shapeaudittest'); t = 120; d = '图形面板 39 张卡逐张仿真：种类 / 档位 / 紧框 / 轮廓 / 手柄 / 小样' }
+    @{ f = '产品界面';   n = 'bandactiontest'; a = @('--bandactiontest'); t = 120; d = '选择上带的三连：全选 / 复制 / 粘贴（几何与命中）' }
+    @{ f = '产品界面';   n = 'qrtest';         a = @('--qrtest');         t = 120; d = '反馈群二维码：读图 / 整屏打开 / 点一下关闭' }
     @{ f = '键位设置';   n = 'keytest';      a = @('--keytest');         t = 180; d = '键位表 / 冲突检测 / 落盘读回 / 真机注册' }
     @{ f = '图形动作';   n = 'snaptest';    a = @('--snaptest');      t = 120; d = '对象吸附：3×3 线组合 / 软相交 / 抛物线底边 / 正弦拼缝' }
     @{ f = '启动与自启'; n = 'autostarttest'; a = @('--autostarttest'); t = 120; d = '开机自启：Run 写入 / 任务管理器禁用位 / 路径修复 / 清理 / 引擎命令' }

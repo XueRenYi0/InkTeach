@@ -1840,7 +1840,9 @@ public sealed partial class FullUi : IOverlayUi
         6 => BandAction.Clear,        // 清空 ≈ "全擦掉"，和两种橡皮排一条
         7 => _host?.State.TextBoxEditing == true ? BandAction.TextDone : BandAction.None,
         8 => BandAction.SelectAll,    // 单动作口径的兜底；实际按 ActionAt 取三连
-        10 => BandAction.PasteImage,  // 截图那条：把剪贴板里的东西粘进来（8.3.0 从分段里拆出来）
+        // 2026-11-03：**截图格是 9、图形格是 10**（文本插到 7 之后整体后移了一格）。
+        // 以前这里写的是 10，结果「粘贴图片」挂到了图形那条上，截图条反而没有按钮。
+        9 => BandAction.PasteImage,   // 截图那条：把剪贴板里的东西粘进来（8.3.0 从分段里拆出来）
         _ => BandAction.None,
     };
 
