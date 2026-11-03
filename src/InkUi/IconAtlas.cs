@@ -447,7 +447,7 @@ internal static class IconAtlas
         var o = new Vector2(4f, 20f);
         var xEnd = new Vector2(20f, 20f);
         var zEnd = new Vector2(4f, 4f);
-        var yEnd = new Vector2(10f, 14f);      // 45° 斜二测（和长方体底面的深度一致）
+        var yEnd = new Vector2(10f, 8f);      // PrismDepthSkew：和四棱柱底面的深度一致
         ctx.DrawLine(o, xEnd, brush, 1.5f, _round);
         ctx.DrawLine(o, yEnd, brush, 1.5f, _round);
         ctx.DrawLine(o, zEnd, brush, 1.5f, _round);
@@ -462,7 +462,7 @@ internal static class IconAtlas
         }
         Arrow(xEnd, new Vector2(1f, 0f));
         Arrow(zEnd, new Vector2(0f, -1f));
-        Arrow(yEnd, Vector2.Normalize(new Vector2(1f, -1f)));
+        Arrow(yEnd, Vector2.Normalize(new Vector2(ShapeSpec.PrismDepthSkew, -1f)));
 
         ctx.Transform = saved;
     }

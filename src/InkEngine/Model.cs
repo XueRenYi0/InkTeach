@@ -1910,12 +1910,13 @@ internal sealed class Stroke
     }
 
     /// <summary>
-    /// **空间直角坐标系的 y 轴默认方向**（局部坐标）：**45° 斜二测**，
-    /// 和长方体底面（`Cuboid` 的 `(d, −d)` 深度）一致。
-    /// 画的时候会根据拖动象限换成左后 / 左前 / 右前；这个常量只作为默认值和图标参考。
+    /// **空间直角坐标系的 y 轴默认方向**（局部坐标）：**棱柱族的斜二测**
+    /// `(PrismDepthSkew, −1)`（屏幕 y 向下，所以"向后上方"是负 y）。
+    /// 面板里的「四棱柱」就是按这个投影画的；真正的老「长方体」才是 45°。
+    /// 画的时候会根据拖动象限换成左后 / 左前 / 右前；这个常量作为默认值和图标参考。
     /// </summary>
     public static readonly Vector2 SpaceAxisYDirection =
-        Vector2.Normalize(new Vector2(1f, -1f));
+        Vector2.Normalize(new Vector2(ShapeSpec.PrismDepthSkew, -1f));
 
     /// <summary>
     /// **空间直角坐标系**的一笔画法（2026-11-03）：按下点 `(x0,y0)` = 原点 O，
@@ -1925,7 +1926,7 @@ internal sealed class Stroke
     /// - **y 的"后/前" = 拖动的上下方向**（往上拖 → y 向后上方，往下拖 → y 向前下方）；
     /// - **z 永远向上**（即使往下拖，长度取 |dy|）。
     ///
-    /// 四个拖动象限正好对应长方体四个底角；松手后还能拖 X / Y 轴端把方向翻过去。
+    /// 四个拖动象限正好对应四棱柱四个底角；松手后还能拖 X / Y 轴端把方向翻过去。
     /// 默认（往右上拖）就是课本最常见的"front-left：x 右、y 后右、z 上"。
     /// `Points` = `[O, +x 端, +y 端, +z 端]`，只画正半轴。
     /// </summary>
@@ -1938,10 +1939,11 @@ internal sealed class Stroke
         float yLen = MathF.Max(0.5f, MathF.Min(xLen, zLen) * 0.5f);
         float xSign = dx < 0f ? -1f : 1f;
         bool back = dy <= 0f;
-        // 45° 斜二测：x 的左右和 y 的前后是耦合的（长方体底面的两条边）；
+        // 棱柱族斜二测：x 的左右和 y 的前后是耦合的（四棱柱底面的两条边）；
         // 四个象限 = 四个底角。z 不参与，永远朝上。
         var yDir = Vector2.Normalize(new Vector2(
-            xSign * (back ? 1f : -1f), back ? -1f : 1f));
+            xSign * (back ? 1f : -1f) * ShapeSpec.PrismDepthSkew,
+            back ? -1f : 1f));
         var o = new Vector2(x0, y0);
         SetPoint(0, o);
         SetPoint(1, o + new Vector2(xSign * xLen, 0f));
