@@ -1916,9 +1916,9 @@ internal sealed partial class App
             var cases = new (float Dx, float Dy, float Sx, float Syx, float Syy)[]
             {
                 (300f, -120f, 1f, 1f, -1f),   // 右上：x 右，y 后右
-                (-300f, -120f, -1f, -1f, -1f), // 左上：x 左，y 后左
+                (-300f, -120f, -1f, 1f, -1f), // 左上：x 左，y 后右（侧边平行）
                 (300f, 120f, 1f, -1f, 1f),    // 右下：x 右，y 前左
-                (-300f, 120f, -1f, 1f, 1f),   // 左下：x 左，y 前右
+                (-300f, 120f, -1f, -1f, 1f),  // 左下：x 左，y 前左（侧边平行）
             };
             foreach (var c in cases)
             {
@@ -1937,7 +1937,48 @@ internal sealed partial class App
                     break;
                 }
             }
-            Check("四个拖动象限 = 长方体四个底角", ok, detail);
+            Check("四个拖动象限 = 四棱柱四个底角", ok, detail);
+        }
+
+        // 四棱柱四个底角：y 必须沿各自那条**侧棱**（平行四边形侧边全都平行）。
+        {
+            var prism = new Stroke { Tool = Tool.Prism, Kind = StrokeKind.Prism, PrismSides = 4 };
+            prism.AddPoint(0f, 0f, 1f, 0);
+            prism.SetPrismBase(0f, 0f, 320f, 180f);
+            var bp = prism.PrismBaseLocal();
+            bool ok = bp.Length == 4;
+            string detail = "";
+            for (int i = 0; i < bp.Length && ok; i++)
+            {
+                var c = bp[i];
+                int hi = -1, si = -1;
+                float sideBest = float.MaxValue;
+                for (int j = 0; j < bp.Length; j++)
+                {
+                    if (j == i) continue;
+                    if (MathF.Abs(bp[j].Y - c.Y) < 0.5f) hi = j;
+                    else
+                    {
+                        float d = Vector2.DistanceSquared(bp[j], c);
+                        if (d < sideBest) { sideBest = d; si = j; }
+                    }
+                }
+                if (hi < 0 || si < 0) { ok = false; break; }
+                float xs = MathF.Sign(bp[hi].X - c.X);
+                bool isBack = bp[si].Y < c.Y;
+                var sys = new Stroke { Tool = Tool.SpaceCoordinate, Kind = StrokeKind.SpaceCoordinate };
+                sys.AddPoint(c.X, c.Y, 1f, 0);
+                sys.SetSpaceAxisBox(c.X, c.Y, c.X + xs * 120f, c.Y + (isBack ? -120f : 120f));
+                var yv = new Vector2(sys.Points[2].X - c.X, sys.Points[2].Y - c.Y);
+                var sv = bp[si] - c;
+                float dot = Vector2.Dot(Vector2.Normalize(yv), Vector2.Normalize(sv));
+                if (dot < 0.999f)
+                {
+                    ok = false;
+                    detail = $"第 {i} 角 y={Vector2.Normalize(yv)} 侧棱={Vector2.Normalize(sv)}";
+                }
+            }
+            Check("四棱柱四个底角：y 都沿侧棱", ok, detail);
         }
 
         Span<ShapeHandle> hs = stackalloc ShapeHandle[8];

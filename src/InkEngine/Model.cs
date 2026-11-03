@@ -1939,10 +1939,13 @@ internal sealed class Stroke
         float yLen = MathF.Max(0.5f, MathF.Min(xLen, zLen) * 0.5f);
         float xSign = dx < 0f ? -1f : 1f;
         bool back = dy <= 0f;
-        // 棱柱族斜二测：x 的左右和 y 的前后是耦合的（四棱柱底面的两条边）；
-        // 四个象限 = 四个底角。z 不参与，永远朝上。
+        // 棱柱族斜二测：**底面是平行四边形**，四条侧边全都平行——
+        // 所以 y 的左右分量只由"前/后"决定，**不能**再乘 x 的左右符号：
+        //   · 前角（往上拖）→ y 后右；(+skew, −1)
+        //   · 后角（往下拖）→ y 前左；(−skew, +1)
+        // x 的左右只改 x 自己。这样四个底角才都能和四棱柱的底边对上。
         var yDir = Vector2.Normalize(new Vector2(
-            xSign * (back ? 1f : -1f) * ShapeSpec.PrismDepthSkew,
+            (back ? 1f : -1f) * ShapeSpec.PrismDepthSkew,
             back ? -1f : 1f));
         var o = new Vector2(x0, y0);
         SetPoint(0, o);
