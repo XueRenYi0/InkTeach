@@ -1554,7 +1554,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --imagetest         图像对象（上屏 / 复制翻转 / 存档 / 剪贴板）");
         Console.WriteLine("  --clipboardtest     剪贴板对象通道（复制 → 粘回来仍是对象；会覆盖系统剪贴板）");
         Console.WriteLine("  --lassotest         套索选择（80% 判据 / 贴边无限延伸 / 加选减选）");
-        Console.WriteLine("  --capturetest       截图（拖框 → 左上角 → 剪贴板，且不拍进自己的批注）");
+        Console.WriteLine("  --capturetest       截图（拖框 → 原位落 → 不写剪贴板，且不拍进自己的批注）");
         Console.WriteLine("  --logupload         开发用：真传一次运行日志（验日志收集仓 / 令牌是否通）");
         Console.WriteLine("  --logtest           日志系统自检（session.json / 环境 / 性能摘要 / 导出 zip）");
         Console.WriteLine("  --backuptest        全局备份自检（收藏/设置/历史/课件批注打包 → 恢复 → 坏包拒绝；不含 PDF/PPT 原文件）");

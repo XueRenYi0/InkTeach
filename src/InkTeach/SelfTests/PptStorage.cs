@@ -1591,10 +1591,13 @@ internal sealed partial class App
         var vp = ViewportCanvas;
         float m = CaptureMarginLogical * DpiScale;
         var pastedBox = EditRegion.Of(Doc.Strokes);
-        Check("粘到视口左上角（含留白）",
-              Math.Abs(pastedBox.MinX - (vp.MinX + m)) < 0.6f
-              && Math.Abs(pastedBox.MinY - (vp.MinY + m)) < 0.6f,
-              $"落在 ({pastedBox.MinX:F0},{pastedBox.MinY:F0})，期望 ({vp.MinX + m:F0},{vp.MinY + m:F0})");
+        // 2026-11-03：粘贴不再是"永远落到视口左上角"——复制后接着粘，落在**原件旁边 24px**
+        // （和 Ctrl+D 同一个手感）。只有剪贴板不是刚复制的那批（被别的程序换过 / 另一实例）
+        // 才退回左上角。这条验的是前者。
+        Check("粘贴：落在原件旁边 24px（复制后接力）",
+              Math.Abs(pastedBox.MinX - (box.MinX + 24f)) < 0.6f
+              && Math.Abs(pastedBox.MinY - (box.MinY + 24f)) < 0.6f,
+              $"落在 ({pastedBox.MinX:F0},{pastedBox.MinY:F0})，期望 ({box.MinX + 24f:F0},{box.MinY + 24f:F0})");
 
         bool newIds = Doc.Strokes.Count > 0;
         foreach (var s in Doc.Strokes) if (s.Id == 0) newIds = false;

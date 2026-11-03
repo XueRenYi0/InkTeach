@@ -468,8 +468,8 @@ internal sealed partial class App
                   Doc.Selected.Count == 1 && camMoved,
                   $"选中 {Doc.Selected.Count} 条，相机 {(camMoved ? "动了" : "没动")}");
 
-            // **复制按钮**：点一下 = 原件原位保留 + 副本错位 24px 并选中 + 同时写入剪贴板。
-            // 不再有“复制拖动模式”；生成副本后直接拖新副本即可。
+            // **复制 / 粘贴**（2026-11-03 拆分）：复制只写剪贴板、**不再顺手生成副本**；
+            // 粘贴落在原件旁边 24px，一步撤销。以前这里验的是"复制一份 + 同时进剪贴板"。
             Doc.Clear();
             Doc.ClearHistory();
             Tool = Tool.Marquee;
@@ -479,30 +479,36 @@ internal sealed partial class App
             var srcXform0 = src.Transform;
 
             RunBarActionForTest((int)SelBarButton.Copy);
-            var copy = Doc.Selected.Count == 1 ? Doc.Selected[0] : null;
-            bool copyOffset = copy != null
-                && MathF.Abs(copy.Transform.M31 - (src.Transform.M31 + 24f)) < 0.5f
-                && MathF.Abs(copy.Transform.M32 - (src.Transform.M32 + 24f)) < 0.5f;
-            bool copyOriginalKept = src.Transform.Equals(srcXform0);
+            bool copyKeptOnlyOne = Doc.Strokes.Count == 1 && ReferenceEquals(Doc.Strokes[0], src);
             bool clipboardHasCopy = ClipboardInk.TryGetObjects(out var clipObjs)
                                     && clipObjs != null && clipObjs.Count == 1;
-            Check("复制按钮：原件原位保留 + 副本错位选中",
-                  Doc.Strokes.Count == 2 && copy != null && !ReferenceEquals(copy, src)
-                  && copyOffset && copyOriginalKept,
-                  $"对象={Doc.Strokes.Count}，选中={Doc.Selected.Count}，"
-                  + $"偏移={(copy != null ? $"{copy.Transform.M31 - src.Transform.M31:F0},{copy.Transform.M32 - src.Transform.M32:F0}" : "无")}，"
-                  + $"原件={(copyOriginalKept ? "没动" : "动了")}，剪贴板={clipboardHasCopy}");
-            if (clipboardHasCopy)
-                Check("复制按钮：同一动作也进了剪贴板", true, "可编辑对象格式已读到");
-            else
-                Console.WriteLine("    [剪贴板] 当前被其他程序占用，跳过这一条（--clipboardtest 另测）");
+            Check("复制：只进剪贴板，不生成副本",
+                  copyKeptOnlyOne && clipboardHasCopy,
+                  $"对象={Doc.Strokes.Count}，剪贴板={(clipboardHasCopy ? "有" : "无")}");
 
-            // 副本是一次独立撤销；原件不应被带走
-            Doc.Undo();
-            Check("复制按钮：一次撤销只回退副本，原件回原位",
-                  Doc.Strokes.Count == 1 && ReferenceEquals(Doc.Strokes[0], src)
-                  && src.Transform.Equals(srcXform0),
-                  $"{Doc.Strokes.Count} 条，原件位置 {(src.Transform.Equals(srcXform0) ? "原位" : "变了")}");
+            if (clipboardHasCopy)
+            {
+                RunBarActionForTest((int)SelBarButton.Paste);
+                var pasted = Doc.Selected.Count == 1 ? Doc.Selected[0] : null;
+                bool pastedOffset = pasted != null
+                    && MathF.Abs(pasted.Transform.M31 - (src.Transform.M31 + 24f)) < 0.5f
+                    && MathF.Abs(pasted.Transform.M32 - (src.Transform.M32 + 24f)) < 0.5f;
+                Check("粘贴：落在原件旁边 24px、自动选中",
+                      Doc.Strokes.Count == 2 && pasted != null && !ReferenceEquals(pasted, src)
+                      && pastedOffset,
+                      $"对象={Doc.Strokes.Count}，选中={Doc.Selected.Count}，"
+                      + $"偏移={(pasted != null ? $"{pasted.Transform.M31 - src.Transform.M31:F0},{pasted.Transform.M32 - src.Transform.M32:F0}" : "无")}");
+
+                Doc.Undo();
+                Check("粘贴：一次撤销只回退副本，原件不动",
+                      Doc.Strokes.Count == 1 && ReferenceEquals(Doc.Strokes[0], src)
+                      && src.Transform.Equals(srcXform0),
+                      $"{Doc.Strokes.Count} 条，原件位置 {(src.Transform.Equals(srcXform0) ? "原位" : "变了")}");
+            }
+            else
+            {
+                Console.WriteLine("    [剪贴板] 当前被其他程序占用，跳过复制/粘贴这两条（--clipboardtest 另测）");
+            }
         }
 
         // ⑭ 拖动 / 旋转期间的画法（2026-09-16）：方案 A 收装饰 + 方案 B 拖动预览
@@ -2521,14 +2527,15 @@ internal sealed partial class App
     /// <summary>
     /// 截图自检（真机）：合成鼠标拖一个框，然后验三件事——
     ///   1. 生成了一个**图像对象**，尺寸等于拖出来的框（按 DPI 折成画布尺寸）；
-    ///   2. 它落在**视口左上角**并自动选中（用户下一步就是拖它）；
+    ///   2. 它落在**原位**并自动选中（用户下一步就是拖它）；
     ///   3. **没有把自己的批注拍进去**（抓之前覆盖层藏起来了）——
     ///      这一条最重要：先在框里画一大片品红，抓到的图里品红必须≈0。
+    /// 2026-11-03 起还多验一条：**不再默认写系统剪贴板**。
     /// </summary>
     private void CaptureTest()
     {
         Console.WriteLine();
-        Console.WriteLine("=== 截图自检（模式段进屋 → 拖框 → 调整 → 原位落 → 剪贴板）===");
+        Console.WriteLine("=== 截图自检（模式段进屋 → 拖框 → 调整 → 原位落 → 不写剪贴板）===");
         int pass = 0, fail = 0;
         void Check(string name, bool ok, string detail)
         {
@@ -2569,6 +2576,13 @@ internal sealed partial class App
         BoardOn = true;                    // 白底：亮度/像素判据才稳（桌面颜色不可控）
         Doc.InvalidateAll();
         SettleFrames(300);
+
+        // 2026-11-03：截图**不再默认写系统剪贴板**（用户："截图可能也会默认进剪贴板，
+        // 这样就不用进剪贴板了"）。先放一张 64×48 的"哨兵图"，截完确认它还在——
+        // 比"读不到图"更强的判据：既没写、也没把原来的内容清掉。
+        var sentinel = MakeTestImage(64, 48);
+        bool sentinelOk = ClipboardImage.SetImage(sentinel.Bgra, sentinel.Width, sentinel.Height);
+
         Tool = Tool.Capture;
         int x0 = (int)(cx - 150), y0 = (int)(cy - 100);
         int x1 = (int)(cx + 150), y1 = (int)(cy + 100);
@@ -2705,11 +2719,11 @@ internal sealed partial class App
             if (px[i + 2] > 200 && px[i + 1] < 90 && px[i] > 200) shotInk++;
         Check("截图：自己的批注没被拍进去（品红≈0）", shotInk < 200, $"{shotInk} 像素");
 
-        // 剪贴板：截图必须同时进剪贴板
-        if (ClipboardImage.TryGetImage(out var clip, out int cw, out int ch, out _))
-        Check("截图：同时进了剪贴板", cw == shot.Image.Width && ch == shot.Image.Height, $"{cw}×{ch}");
-        else
-            Console.WriteLine("    剪贴板：读不出来（可能被别的程序占着）——这项跳过");
+        // 剪贴板：2026-11-03 起截图**不再默认写**——哨兵图必须原样还在
+        if (sentinelOk && ClipboardImage.TryGetImage(out _, out int cw, out int ch, out _))
+            Check("截图：不再默认写剪贴板（哨兵图 64×48 还在）", cw == 64 && ch == 48, $"{cw}×{ch}");
+        else if (!sentinelOk)
+            Console.WriteLine("    剪贴板：占着，写不进哨兵图——这项跳过");
 
         Check("拖动中显示了尺寸读数（框右下角那块有深色胶囊）", midReadoutDark > 800,
               $"{midReadoutDark} 像素（读数是 {300 / dpi:F0}×{200 / dpi:F0} 的一个深色胶囊）");

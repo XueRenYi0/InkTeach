@@ -66,8 +66,17 @@ internal static class ClipboardInk
     /// 撤销 / 多选就会指错对象。
     /// </summary>
     public static bool TryGetObjects(out List<Stroke> items)
+        => TryGetObjectsWithRaw(out items, out _);
+
+    /// <summary>
+    /// 同 <see cref="TryGetObjects"/>，但把**原始字节**也交出来。
+    /// 粘贴时要靠它判断"剪贴板里还是不是我们刚复制的那批"——是，就落在原件旁边；
+    /// 不是（被别的程序改过 / 从另一实例复制），就回到视口左上角。
+    /// </summary>
+    public static bool TryGetObjectsWithRaw(out List<Stroke> items, out byte[] raw)
     {
         items = null;
+        raw = null;
         uint fmt = Format;
         if (fmt == 0) return false;
         if (!ClipboardImage.OpenWithRetry(IntPtr.Zero)) return false;
@@ -85,6 +94,7 @@ internal static class ClipboardInk
                 if (n <= 0 || n > 64L * 1024 * 1024) return false;
                 var buf = new byte[n];
                 Marshal.Copy(p, buf, 0, (int)n);
+                raw = buf;
 
                 var tmp = new InkDocument();
                 InkSerializer.LoadInto(tmp, buf);
@@ -98,6 +108,7 @@ internal static class ClipboardInk
         {
             Console.WriteLine("剪贴板里的对象读不出来（忽略，当图粘）：" + ex.Message);
             items = null;
+            raw = null;
             return false;
         }
         finally { Native.CloseClipboard(); }

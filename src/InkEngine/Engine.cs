@@ -6601,8 +6601,8 @@ public partial class InkEngine
             return false;
         }
 
-        bool clipOk = ClipboardImage.SetImage(pixels, w, h);
-
+        // **不再默认写系统剪贴板**（2026-11-03 用户："截图可能也会默认进剪贴板，
+        // 这样就不用进剪贴板了"）：截图只落图、选中，要外发走「导出」或选中后 Ctrl+C。
         var img = ImageData.Adopt(w, h, pixels);
         if (img == null) return false;
 
@@ -6621,12 +6621,9 @@ public partial class InkEngine
         {
             Doc.SelectOnly(new[] { placed });
             Tool = Tool.Marquee;             // 刚截完图，最可能的下一件事是摆放它
-            SetInkStatus(clipOk
-                ? $"截图 {w}×{h} 已落图并选中，已复制到剪贴板"
-                : $"截图 {w}×{h} 已落图并选中；剪贴板被占用，未复制");
+            SetInkStatus($"截图 {w}×{h} 已落图并选中");
         }
-        Console.WriteLine($"截图 {w}×{h} 物理像素 → 原位落在画布 ({px:F0},{py:F0})，已选中；"
-                          + (clipOk ? "剪贴板已写入" : "剪贴板写入失败"));
+        Console.WriteLine($"截图 {w}×{h} 物理像素 → 原位落在画布 ({px:F0},{py:F0})，已选中");
         RegainKeyboardFocus();          // 回到批注态：前台/键盘要回来（见那段注释）
         return placed != null;
     }
@@ -7565,10 +7562,12 @@ public partial class InkEngine
         ClampViewOffset();
     }
 
-    /// <summary>
-    /// 从剪贴板粘一张图（Ctrl+V）。位置规则和截图一致：**视口左上角**，
-    /// 粘完立刻选中。
-    /// </summary>
+    /// <summary>上一次「复制」的原点（画布坐标）。粘贴落在它旁边，和 `Ctrl+D` 的 24px 错位一致。</summary>
+    private Vector2? _lastCopyOrigin;
+    /// <summary>上一次「复制」写进剪贴板的原始字节：粘贴时比对，确认中间没被别的程序换过。</summary>
+    private byte[] _lastCopiedBytes;
+    private int _pasteStep;
+
     /// <summary>
     /// 复制选中对象到剪贴板：**对象字节 + 一张图**。
     ///
@@ -7586,10 +7585,17 @@ public partial class InkEngine
         }
 
         byte[] objects = ClipboardInk.Serialize(sel);
+        _lastCopiedBytes = objects;
 
         // 同时渲染一张图：范围 = 这批对象的画布范围 + 4 逻辑像素留白
         byte[] dib = null; int w = 0, h = 0;
         var box = EditRegion.Of(sel);
+        if (!box.IsEmpty)
+        {
+            // 记住"原件在哪"：粘贴时落在旁边 24px（见 PasteFromClipboard）
+            _lastCopyOrigin = new Vector2(box.MinX, box.MinY);
+            _pasteStep = 0;
+        }
         if (!box.IsEmpty && _windows.Count > 0)
         {
             box = box.Inflate(4f * DpiScale);
@@ -7612,13 +7618,11 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 操作条“复制”按钮：**原件原位保留，副本错位 24px 并选中，同时写入剪贴板**。
-    /// 不再有复制拖动模式；副本生成后直接拖它即可。
-    ///
-    /// 两个结果分开处理：剪贴板失败不影响副本，副本失败也不抹掉剪贴板；
-    /// 两边都失败 / 被上限拒绝时都有可见状态，而不是只在控制台留一行。
+    /// 操作条「复制」：**只写剪贴板**，不顺手生成副本（2026-11-03 用户：
+    /// "点击操作条上的复制，它会默认复制到剪贴板里，造成剪贴板污染"）。
+    /// 要副本就用旁边的「粘贴」或 `Ctrl+D`；文本条上仍然是"复制一份"（那里没有粘贴格）。
     /// </summary>
-    internal bool CopySelectionAndDuplicate()
+    internal bool CopySelectionFromBar()
     {
         int n = Doc.Selected.Count;
         if (n == 0)
@@ -7627,28 +7631,11 @@ public partial class InkEngine
             return false;
         }
 
-        // 先复制（内部可编辑对象 + 外部图片）；即使剪贴板被占用也继续生成副本。
-        bool copied = CopySelectionToClipboard();
-
-        // 原位保留原件，副本偏移 24px（和 Ctrl+D 的手感一致），并只选中副本。
-        bool duplicated = Doc.DuplicateSelected();
-
-        if (duplicated)
-        {
-            // 剪贴板成功时 CopySelectionToClipboard 已经闪过一次；失败时也闪一下，
-            // 至少让“副本已经生成”这件事在屏幕上看得见。
-            if (!copied) SelFlashUntilMs = NowMs + SelFlashMs;
-            SetInkStatus(copied
-                ? $"已复制 {n} 个对象：原件保留，新副本已选中，同时进入剪贴板"
-                : $"已复制 {n} 个对象：原件保留，新副本已选中；剪贴板被占用，未写入");
-            return true;
-        }
-
-        string why = string.IsNullOrEmpty(Doc.LastRejectReason) ? "副本创建失败" : Doc.LastRejectReason;
-        SetInkStatus(copied
-            ? $"已复制到剪贴板，但{why}"
-            : $"复制失败：剪贴板不可用，{why}");
-        return false;
+        bool ok = CopySelectionToClipboard();
+        SetInkStatus(ok
+            ? $"已复制 {n} 个对象，点「粘贴」放到旁边"
+            : "复制失败：剪贴板被别的程序占着");
+        return ok;
     }
 
     // ---- 导出（选中 → 透明底 PNG）------------------------------------------
@@ -7900,17 +7887,36 @@ public partial class InkEngine
 
     /// <summary>
     /// 粘贴：**优先粘回可编辑对象**——剪贴板里有我们的对象格式就还原成对象，
-    /// 没有就退回"当图片粘贴"（原有行为）。落在视口左上角并自动选中，粘完就能拖走。
+    /// 没有就退回"当图片粘贴"（原有行为）。有原件位置就落在它旁边 24px，
+    /// 否则落在视口左上角；粘完自动选中，直接能拖走。
     /// </summary>
     internal bool PasteFromClipboard()
     {
         ExitReplayForEdit("粘贴");
-        if (ClipboardInk.TryGetObjects(out var objs) && objs.Count > 0)
+        if (ClipboardInk.TryGetObjectsWithRaw(out var objs, out var rawBytes) && objs.Count > 0)
         {
             var vp = ViewportCanvas;
             float m = CaptureMarginLogical * DpiScale;
             var box = EditRegion.Of(objs);
-            var move = Matrix3x2.CreateTranslation(vp.MinX + m - box.MinX, vp.MinY + m - box.MinY);
+            // 落点：**接着原件放**（2026-11-03）——复制后点粘贴，副本出现在原件
+            // 旁边 24px，和 `Ctrl+D` 的手感一致，而不是飞到视口左上角。
+            // 只认"剪贴板里还是我们刚复制的那批"（比字节）：中间被别的程序换过、
+            // 或者从另一个实例复制过来，就老老实实回到左上角。
+            bool sameAsCopied = rawBytes != null && _lastCopiedBytes != null
+                                && rawBytes.AsSpan().SequenceEqual(_lastCopiedBytes);
+            float tx, ty;
+            if (sameAsCopied && _lastCopyOrigin is Vector2 origin)
+            {
+                _pasteStep++;
+                tx = origin.X + 24f * _pasteStep;
+                ty = origin.Y + 24f * _pasteStep;
+            }
+            else
+            {
+                tx = vp.MinX + m;
+                ty = vp.MinY + m;
+            }
+            var move = Matrix3x2.CreateTranslation(tx - box.MinX, ty - box.MinY);
             foreach (var s in objs) s.Transform = s.Transform * move;   // 插入前平移（画布坐标）
 
             Doc.AddStrokes(objs);          // 一步撤销
@@ -7918,6 +7924,7 @@ public partial class InkEngine
             Tool = Tool.Marquee;
             NotifyUiStateChanged();
             _dirty = true;
+            SetInkStatus($"已粘贴 {objs.Count} 个对象（仍是可编辑对象）");
             Console.WriteLine($"粘贴 {objs.Count} 个对象（仍是可编辑对象）");
             return true;
         }
@@ -19205,10 +19212,15 @@ public partial class InkEngine
                 break;
             }
 
-            // 复制按钮 = **原件原位保留 + 新副本错位选中 + 写入剪贴板**。
-            // 不再有"复制拖动模式"；生成副本后直接拖新副本即可。
+            // 复制按钮（2026-11-03 起）= **只写剪贴板**；要副本用旁边的「粘贴」或 Ctrl+D。
+            // 文本条上没有粘贴格，仍然保持"复制一份"。
             case SelBarButton.Copy:
-                CopySelectionAndDuplicate();
+                if (textBoxOnly) Doc.DuplicateSelected();
+                else CopySelectionFromBar();
+                break;
+
+            case SelBarButton.Paste:
+                PasteFromClipboard();
                 break;
 
             // 翻转绕**框自己的轴**。框现在一律轴对齐，所以它就是屏幕的左右/上下翻——

@@ -28,6 +28,7 @@ internal sealed partial class App
         PassThrough = false;
 
         int noHandles = 0, noRotate = 0;
+        Span<ShapeHandle> hs = stackalloc ShapeHandle[8];
         foreach (var p in ShapeCatalog.All)
         {
             Doc.Clear();
@@ -80,7 +81,6 @@ internal sealed partial class App
                 Check($"{p.Label}：紧框/轮廓有效", finite && outline > 0,
                       $"框 {b.MinX:F0},{b.MinY:F0}..{b.MaxX:F0},{b.MaxY:F0}，点 {outline}");
 
-                Span<ShapeHandle> hs = stackalloc ShapeHandle[8];
                 int hn = SelectionHandles.ShapeHandlesOf(s, hs);
                 if (hn == 0) noHandles++;
                 if (!SelectionHandles.RotateHandleVisible(s)) noRotate++;
