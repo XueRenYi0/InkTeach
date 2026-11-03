@@ -2245,6 +2245,12 @@ internal sealed class Stroke
     /// </summary>
     public bool PreviewNoAux;
 
+    /// <summary>仅“图形卡小样”用：正切的可见半高（把无限高的分支截断成方形小样）。</summary>
+    public float PreviewTangentHalfHeight;
+
+    /// <summary>仅“图形卡小样”用：坐标系箭头长度；不设则按线宽算。</summary>
+    public float PreviewArrowHeadLen;
+
     /// <summary>
     /// 改"画不画那两条虚线渐近线"，**并且让几何缓存失效**。
     ///
@@ -2689,6 +2695,8 @@ internal sealed class Stroke
     /// </summary>
     public float TangentHalfHeightLocal()
     {
+        if (PreviewTangentHalfHeight > 0.5f)
+            return MathF.Max(0.5f, PreviewTangentHalfHeight);
         float dragged = MathF.Max(0.5f, MathF.Abs(TangentEndLocal().Y - TangentOriginLocal().Y));
         return MathF.Max(dragged, TangentMinAspect * TangentHalfSpanLocal());
     }
@@ -4746,7 +4754,8 @@ internal sealed class Stroke
     {
         var list = new List<InkPiece>();
         var (minX, minY, maxX, maxY) = AxisFrameLocal();
-        float head = AxisArrowHeadLen(Width);
+        float head = PreviewArrowHeadLen > 0.5f
+            ? PreviewArrowHeadLen : AxisArrowHeadLen(Width);
 
         // ---- 数轴：一条水平线 + 右端一个箭头 ----
         if (Kind == StrokeKind.NumberLine)

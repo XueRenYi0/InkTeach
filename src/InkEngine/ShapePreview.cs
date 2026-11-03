@@ -70,6 +70,8 @@ internal static class ShapePreview
                 s.AddPoint(mid, mid, 1f, 0);
                 // 原点就是卡片中心，四条轴臂等长；不这么写会偏到右下角。
                 s.SetAxisBox(mid, mid, hi, lo);
+                // 小样里的箭头不能按画布线宽 5 倍算：卡片缩到 44px 后会变成大三角。
+                s.PreviewArrowHeadLen = 8.5f;
                 break;
             case Tool.Parabola:
                 if (p.Variant == 0)
@@ -99,8 +101,10 @@ internal static class ShapePreview
                 break;
             case Tool.Tangent:
                 s.AddPoint(mid, mid, 1f, 0);
-                s.SetTangentBox(mid, mid, 80f, 20f, 2f);
-                s.PreviewNoAux = true;   // 卡片里不画两条竖虚线，只留正切曲线
+                // 正切本来就被 3:1 的“最小高宽比”撑得很高；小样只留方一点的一段，
+                // 上下剪断，两条渐近线留在框边，比例就和别的卡接近了。
+                s.SetTangentBox(mid, mid, 82f, 18f, 2f);
+                s.PreviewTangentHalfHeight = 32f;
                 break;
             case Tool.Cylinder:
             case Tool.Cone:
