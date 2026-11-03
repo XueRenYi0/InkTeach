@@ -180,6 +180,8 @@ internal enum ShapeSnapKind
     RightPyramid,
     /// <summary>棱台：上底中心**在底心正上方**（＝直棱台）。同上，只是名字不同。</summary>
     RightFrustum,
+    /// <summary>梯形被拖成两组对边都平行（上底=下底但中点错开）。</summary>
+    ParallelogramTrapezoid,
 }
 
 /// <summary>
@@ -565,12 +567,6 @@ internal static class SelectionHandles
                 dst[1] = ShapeHandle.Vertex1;
                 dst[2] = ShapeHandle.Vertex2;
                 dst[3] = ShapeHandle.Vertex3;
-                if (dst.Length >= 6)
-                {
-                    dst[4] = ShapeHandle.EdgeTop;
-                    dst[5] = ShapeHandle.EdgeBottom;
-                    return 6;
-                }
                 return 4;
 
             case StrokeKind.Sector:
@@ -1228,6 +1224,7 @@ internal static class SelectionHandles
         ShapeSnapKind.RightPrism => "直棱柱",
         ShapeSnapKind.RightPyramid => "直棱锥",
         ShapeSnapKind.RightFrustum => "直棱台",
+        ShapeSnapKind.ParallelogramTrapezoid => "平行四边形",
         _ => "",
     };
 

@@ -161,18 +161,16 @@ internal sealed partial class App
               Tool == Tool.Pen && Doc.Selected.Count == 0 && !RestoreToolAfterShapeSelectionForTest,
               $"tool={Tool} sel={Doc.Selected.Count} restore={RestoreToolAfterShapeSelectionForTest}");
 
-        // 梯形上底中点手柄：只改上底长度，上下底仍平行。
+        // 梯形上底角点：拖过另一个点后自动交换左右身份，仍是梯形、不交叉。
         var trap = Doc.Strokes[^1];
-        float topW0 = MathF.Abs(trap.Points[2].X - trap.Points[3].X);
-        float midTop = (trap.Points[2].X + trap.Points[3].X) * 0.5f;
-        VertexDragForTest(trap, ShapeHandle.EdgeTop, midTop, trap.Points[2].Y,
-                          midTop + 30f, trap.Points[2].Y);
-        float topW1 = MathF.Abs(trap.Points[2].X - trap.Points[3].X);
-        Check("梯形上底中点手柄：只拉长上底、上下底保持平行",
-              topW1 > topW0 + 20f
+        float oldTL = trap.Points[3].X, oldTR = trap.Points[2].X;
+        VertexDragForTest(trap, ShapeHandle.Vertex3, oldTL, trap.Points[3].Y,
+                          oldTR + 60f, trap.Points[3].Y);
+        Check("梯形上底点拖过另一个点：自动交换左右、仍是梯形",
+              trap.Points[3].X < trap.Points[2].X
               && MathF.Abs(trap.Points[2].Y - trap.Points[3].Y) < 0.5f
               && MathF.Abs(trap.Points[0].Y - trap.Points[1].Y) < 0.5f,
-              $"上底 {topW0:F0}→{topW1:F0}");
+              $"上底左/右 {trap.Points[3].X:F0} / {trap.Points[2].X:F0}");
 
         // 悬停：名字不常驻，指针停在哪张卡就显示哪张。
         m = LibraryPanelInfoNow();
@@ -408,18 +406,16 @@ internal sealed partial class App
               Tool == Tool.Pen && Doc.Selected.Count == 0 && !RestoreToolAfterShapeSelectionForTest,
               $"tool={Tool} sel={Doc.Selected.Count} restore={RestoreToolAfterShapeSelectionForTest}");
 
-        // 梯形上底中点手柄：只改上底长度，上下底仍平行。
+        // 梯形上底角点：拖过另一个点后自动交换左右身份，仍是梯形、不交叉。
         var trap = Doc.Strokes[^1];
-        float topW0 = MathF.Abs(trap.Points[2].X - trap.Points[3].X);
-        float midTop = (trap.Points[2].X + trap.Points[3].X) * 0.5f;
-        VertexDragForTest(trap, ShapeHandle.EdgeTop, midTop, trap.Points[2].Y,
-                          midTop + 30f, trap.Points[2].Y);
-        float topW1 = MathF.Abs(trap.Points[2].X - trap.Points[3].X);
-        Check("梯形上底中点手柄：只拉长上底、上下底保持平行",
-              topW1 > topW0 + 20f
+        float oldTL = trap.Points[3].X, oldTR = trap.Points[2].X;
+        VertexDragForTest(trap, ShapeHandle.Vertex3, oldTL, trap.Points[3].Y,
+                          oldTR + 60f, trap.Points[3].Y);
+        Check("梯形上底点拖过另一个点：自动交换左右、仍是梯形",
+              trap.Points[3].X < trap.Points[2].X
               && MathF.Abs(trap.Points[2].Y - trap.Points[3].Y) < 0.5f
               && MathF.Abs(trap.Points[0].Y - trap.Points[1].Y) < 0.5f,
-              $"上底 {topW0:F0}→{topW1:F0}");
+              $"上底左/右 {trap.Points[3].X:F0} / {trap.Points[2].X:F0}");
 
         // 悬停：名字不常驻，指针停在哪张卡就显示哪张。
         m = LibraryPanelInfoNow();

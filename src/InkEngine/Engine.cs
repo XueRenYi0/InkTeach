@@ -16820,6 +16820,7 @@ public partial class InkEngine
         var c = s.ShapeCenterLocal;
         float minAxis = ShapeMinAxisLogical * DpiScale;
         bool alt = (Native.GetAsyncKeyState(0x12 /* VK_MENU */) & 0x8000) != 0;
+        bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
         float lenTol = SelectionHandles.ShapeSnapLengthToleranceLogical * DpiScale;
         _shapeSnap = ShapeSnapKind.None;        // 每帧重判：不吸的帧必须回到"没有"
 
@@ -16828,51 +16829,71 @@ public partial class InkEngine
             case StrokeKind.Trapezoid:
             {
                 float minW = ShapeMinAxisLogical * DpiScale;
+                float minH = ShapeMinAxisLogical * DpiScale;
                 if (pts.Length < 4) break;
-                if (_vertexHandle == ShapeHandle.EdgeTop)
-                {
-                    float mid = (pts[2].X + pts[3].X) * 0.5f;
-                    float oldHalf = MathF.Abs(pts[2].X - pts[3].X) * 0.5f;
-                    float half = MathF.Max(minW * 0.5f, oldHalf + (local.X - mid));
-                    pts[2].X = mid + half;
-                    pts[3].X = mid - half;
-                    break;
-                }
-                if (_vertexHandle == ShapeHandle.EdgeBottom)
-                {
-                    float mid = (pts[0].X + pts[1].X) * 0.5f;
-                    float oldHalf = MathF.Abs(pts[1].X - pts[0].X) * 0.5f;
-                    float half = MathF.Max(minW * 0.5f, oldHalf + (local.X - mid));
-                    pts[0].X = mid - half;
-                    pts[1].X = mid + half;
-                    break;
-                }
+
                 int idx = SelectionHandles.VertexIndex(_vertexHandle);
                 if (idx < 0 || idx >= 4) break;
                 if (idx <= 1)
                 {
-                    pts[0].Y = pts[1].Y = local.Y;
+                    // 下底：两个底点的 y 一起走，保证底边水平。
+                    float topY = MathF.Min(pts[2].Y, pts[3].Y);
+                    pts[0].Y = pts[1].Y = MathF.Max(local.Y, topY + minH);
                     pts[idx].X = local.X;
-                }
+                    // 拖过另一个底点：自动交换左右身份，仍是梯形，不交叉。
+                    if (pts[0].X > pts[1].X)
+                    {
+                        (pts[0], pts[1]) = (pts[1], pts[0]);
+                        _vertexHandle = _vertexHandle == ShapeHandle.Vertex0
+                            ? ShapeHandle.Vertex1 : ShapeHandle.Vertex0;
+                        idx = SelectionHandles.VertexIndex(_vertexHandle);
+                    }
+                    if (pts[1].X - pts[0].X < minW)
+                    {
+                        if (idx == 0) pts[1].X = pts[0].X + minW;
+                        else pts[0].X = pts[1].X - minW;
+                    }                }
                 else
                 {
-                    pts[2].Y = pts[3].Y = local.Y;
+                    // 上底：两个顶点的 y 一起走，且不能压到下底。
+                    float bottomY = MathF.Max(pts[0].Y, pts[1].Y);
+                    pts[2].Y = pts[3].Y = MathF.Min(local.Y, bottomY - minH);
                     pts[idx].X = local.X;
-                }
-                // 保证上下底都还有宽度；太窄就把被拖的点顶回去。
-                if (MathF.Abs(pts[1].X - pts[0].X) < minW)
-                    pts[idx <= 1 ? 1 : 0] = new Vector2(pts[idx <= 1 ? 0 : 1].X + minW, pts[0].Y);
-                if (MathF.Abs(pts[2].X - pts[3].X) < minW)
-                {
-                    float mid = (pts[2].X + pts[3].X) * 0.5f;
-                    pts[2].X = mid + minW * 0.5f;
-                    pts[3].X = mid - minW * 0.5f;
+                    if (pts[2].X < pts[3].X)
+                    {
+                        (pts[2], pts[3]) = (pts[3], pts[2]);
+                        _vertexHandle = _vertexHandle == ShapeHandle.Vertex2
+                            ? ShapeHandle.Vertex3 : ShapeHandle.Vertex2;
+                        idx = SelectionHandles.VertexIndex(_vertexHandle);
+                    }
+                    if (pts[2].X - pts[3].X < minW)
+                    {
+                        if (idx == 2) pts[3].X = pts[2].X - minW;
+                        else pts[2].X = pts[3].X + minW;
+                    }
                 }
                 if (!alt)
                 {
                     float mb = (pts[0].X + pts[1].X) * 0.5f;
                     float mt = (pts[2].X + pts[3].X) * 0.5f;
-                    if (MathF.Abs(mb - mt) <= lenTol)
+                    float wb = pts[1].X - pts[0].X;
+                    float wt = pts[2].X - pts[3].X;
+                    if (MathF.Abs(wt - wb) <= lenTol)
+                    {
+                        float half = wb * 0.5f;
+                        if (MathF.Abs(mb - mt) <= lenTol)
+                        {
+                            float mid = (mb + mt) * 0.5f;
+                            pts[2].X = mid + half; pts[3].X = mid - half;
+                            _shapeSnap = ShapeSnapKind.Rectangle;
+                        }
+                        else
+                        {
+                            pts[2].X = mt + half; pts[3].X = mt - half;
+                            _shapeSnap = ShapeSnapKind.ParallelogramTrapezoid;
+                        }
+                    }
+                    else if (MathF.Abs(mb - mt) <= lenTol)
                     {
                         float d = mb - mt;
                         pts[2].X += d; pts[3].X += d;
@@ -16880,15 +16901,16 @@ public partial class InkEngine
                     }
                     else
                     {
-                        bool right = (idx == 2 && MathF.Abs(pts[2].X - pts[1].X) <= lenTol)
-                                  || (idx == 3 && MathF.Abs(pts[3].X - pts[0].X) <= lenTol)
-                                  || (idx == 1 && MathF.Abs(pts[1].X - pts[2].X) <= lenTol)
-                                  || (idx == 0 && MathF.Abs(pts[0].X - pts[3].X) <= lenTol);
+                        int ti = SelectionHandles.VertexIndex(_vertexHandle);
+                        bool right = (ti == 2 && MathF.Abs(pts[2].X - pts[1].X) <= lenTol)
+                                  || (ti == 3 && MathF.Abs(pts[3].X - pts[0].X) <= lenTol)
+                                  || (ti == 1 && MathF.Abs(pts[1].X - pts[2].X) <= lenTol)
+                                  || (ti == 0 && MathF.Abs(pts[0].X - pts[3].X) <= lenTol);
                         if (right)
                         {
-                            if (idx == 2) pts[2].X = pts[1].X;
-                            else if (idx == 3) pts[3].X = pts[0].X;
-                            else if (idx == 1) pts[1].X = pts[2].X;
+                            if (ti == 2) pts[2].X = pts[1].X;
+                            else if (ti == 3) pts[3].X = pts[0].X;
+                            else if (ti == 1) pts[1].X = pts[2].X;
                             else pts[0].X = pts[3].X;
                             _shapeSnap = ShapeSnapKind.RightAngle;
                         }
@@ -16905,7 +16927,11 @@ public partial class InkEngine
                 float sweep = s.SectorSweepDegrees();
                 if (_vertexHandle == ShapeHandle.Rim)
                 {
-                    float r = MathF.Max(minAxis, Vector2.Distance(center, local));
+                    float rOld = Vector2.Distance(center, new Vector2(pts[1].X, pts[1].Y));
+                    float r = shift ? MathF.Max(minAxis, rOld)
+                                    : MathF.Max(minAxis, Vector2.Distance(center, local));
+                    if (!shift)
+                        a0 = MathF.Atan2(local.Y - center.Y, local.X - center.X);
                     pts[1] = center + new Vector2(MathF.Cos(a0), MathF.Sin(a0)) * r;
                     pts[2] = center + new Vector2(MathF.Cos(a0 + sweep * MathF.PI / 180f),
                                                   MathF.Sin(a0 + sweep * MathF.PI / 180f)) * r;
@@ -16913,7 +16939,9 @@ public partial class InkEngine
                 }
                 if (_vertexHandle == ShapeHandle.FocusPoint)
                 {
-                    float r = MathF.Max(minAxis, Vector2.Distance(center, new Vector2(pts[1].X, pts[1].Y)));
+                    float rOld = Vector2.Distance(center, new Vector2(pts[1].X, pts[1].Y));
+                    float r = shift ? MathF.Max(minAxis, rOld)
+                                    : MathF.Max(minAxis, Vector2.Distance(center, local));
                     float a1 = MathF.Atan2(local.Y - center.Y, local.X - center.X);
                     float d = (a1 - a0) * 180f / MathF.PI;
                     while (d < 0f) d += 360f;
@@ -16923,6 +16951,7 @@ public partial class InkEngine
                         if (MathF.Abs(snapped - d) <= 3f) d = snapped;
                     }
                     sweep = Math.Clamp(d, 5f, 359f);
+                    pts[1] = center + new Vector2(MathF.Cos(a0), MathF.Sin(a0)) * r;
                     pts[2] = center + new Vector2(MathF.Cos(a0 + sweep * MathF.PI / 180f),
                                                   MathF.Sin(a0 + sweep * MathF.PI / 180f)) * r;
                 }
