@@ -3932,6 +3932,13 @@ internal sealed class Stroke
     {
         get
         {
+            if (Kind == StrokeKind.SpaceCoordinate && Points.Count >= 4)
+            {
+                Span<Vector2> sp = stackalloc Vector2[4];
+                for (int i = 0; i < 4; i++) sp[i] = new Vector2(Points[i].X, Points[i].Y);
+                return SpaceAxisInkBoundsOf(sp, Transform, Matrix3x2.Identity, Width);
+            }
+
             // **参数化图形一律自己算**，连"变换是单位阵"这一档也不例外：
             // 圆的墨迹圈是"圆心 ± r"，而它的两个控制点（圆心 + 圆周点）的 AABB 只是一条
             // 从圆心伸出去的细条（2026-09-19 出图核对时踩到：紧框算成 256×16）。

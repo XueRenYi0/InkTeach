@@ -1987,10 +1987,21 @@ internal sealed partial class App
               hn == 4 && hs[0] == ShapeHandle.SpaceOrigin && hs[1] == ShapeHandle.SpaceX
               && hs[2] == ShapeHandle.SpaceY && hs[3] == ShapeHandle.SpaceZ,
               $"{hn} 个");
-        Check("没有旋转柄、外框角不留后门",
-              !SelectionHandles.RotateHandleVisible(s)
+        Check("有旋转柄（可调角度）、外框角不留后门",
+              SelectionHandles.RotateHandleVisible(s)
               && SelectionHandles.HandleOf(s, SelHandle.TopLeft) == ShapeHandle.None,
               $"旋转={SelectionHandles.RotateHandleVisible(s)}");
+
+        {
+            var xb = Vector2.Normalize(new Vector2(s.Points[1].X - o.X, s.Points[1].Y - o.Y));
+            s.Transform = SelectionHandles.RotateMatrix(30f, o);
+            var oc = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceOrigin);
+            var xc = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceX);
+            var xa = Vector2.Normalize(xc - oc);
+            float deg = MathF.Acos(Math.Clamp(Vector2.Dot(xb, xa), -1f, 1f)) * 180f / MathF.PI;
+            Check("旋转 30°：X 轴角度跟着转", Near(deg, 30f, 1f), $"转了 {deg:F1}°");
+            s.Transform = Matrix3x2.Identity;
+        }
 
         // 拖 X：只改 x 长度，指针的 y 偏移忽略。
         var xh = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceX);

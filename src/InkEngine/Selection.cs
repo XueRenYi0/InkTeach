@@ -784,11 +784,13 @@ internal static class SelectionHandles
     /// 上一批不给的理由是"转歪了就不像课本上那条曲线"；现在的口径是：图形就是要能像
     /// 图形那样摆弄，转歪了自己转回来（而且通用框的旋转本来就是任何对象都有的能力）。
     /// 抛物线的朝向切换仍在图形面板那一格（不受旋转影响）。
+    /// 空间坐标系**例外**（2026-11-03 用户："还需要角度"）：它允许旋转，
+    /// 用来对齐任意朝向的四棱柱 / 长方体；旋转后 z 轴不再强制向上，这是用户主动摆的角度。
+    /// 平面坐标系 / 数轴仍然不给旋转（它们的定义就是"水平 + 竖直"）。
     /// </summary>
     public static bool RotateHandleVisible(Stroke s)
         => !(s.Kind is StrokeKind.Circle or StrokeKind.Coordinate
-             or StrokeKind.SpaceCoordinate or StrokeKind.NumberLine
-             or StrokeKind.TextBox);
+             or StrokeKind.NumberLine or StrokeKind.TextBox);
 
     /// <summary>
     /// **这个对象有没有"定义元素手柄"**——也就是它走**特殊手柄那一套**（直线 / 箭头 / 圆 /

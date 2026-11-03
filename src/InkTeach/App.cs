@@ -3198,6 +3198,11 @@ internal sealed partial class App : InkEngine.InkEngine
                     VertexDragForTest(sh, ShapeHandle.SpaceY, yh.X, yh.Y, yTo.X, yTo.Y);
                     SettleFrames(350);
                 }
+                {
+                    var oo = SelectionHandles.ShapeHandleCanvasPosition(sh, ShapeHandle.SpaceOrigin);
+                    VertexDragForTest(sh, ShapeHandle.SpaceOrigin, oo.X, oo.Y, oo.X + 80f, oo.Y + 40f);
+                    SettleFrames(350);
+                }
             }
 
             var sFrame = SelectionHandles.FrameOf(Doc.Selected);
