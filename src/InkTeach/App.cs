@@ -3188,7 +3188,7 @@ internal sealed partial class App : InkEngine.InkEngine
                     VertexDragForTest(sh, h, from.X, from.Y, to.X, to.Y);
                     SettleFrames(250);
                 }
-                DragHandle(ShapeHandle.SpaceX, -140f * DpiScale, 0f);
+                DragHandle(ShapeHandle.SpaceX, -100f * DpiScale, -80f * DpiScale);
                 DragHandle(ShapeHandle.SpaceZ, 0f, 120f * DpiScale);
                 // 再把 Y 拖过原点：这是最容易留下旧框的一幕（旧框在右上方，新框跑到左下方）。
                 {

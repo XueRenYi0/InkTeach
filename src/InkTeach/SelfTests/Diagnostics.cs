@@ -1987,47 +1987,37 @@ internal sealed partial class App
               hn == 4 && hs[0] == ShapeHandle.SpaceOrigin && hs[1] == ShapeHandle.SpaceX
               && hs[2] == ShapeHandle.SpaceY && hs[3] == ShapeHandle.SpaceZ,
               $"{hn} 个");
-        Check("有旋转柄（可调角度）、外框角不留后门",
-              SelectionHandles.RotateHandleVisible(s)
+        Check("没有整体旋转柄（角度改 x/y 轴端，不转整张坐标系）、外框角不留后门",
+              !SelectionHandles.RotateHandleVisible(s)
               && SelectionHandles.HandleOf(s, SelHandle.TopLeft) == ShapeHandle.None,
               $"旋转={SelectionHandles.RotateHandleVisible(s)}");
 
-        {
-            var xb = Vector2.Normalize(new Vector2(s.Points[1].X - o.X, s.Points[1].Y - o.Y));
-            s.Transform = SelectionHandles.RotateMatrix(30f, o);
-            var oc = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceOrigin);
-            var xc = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceX);
-            var xa = Vector2.Normalize(xc - oc);
-            float deg = MathF.Acos(Math.Clamp(Vector2.Dot(xb, xa), -1f, 1f)) * 180f / MathF.PI;
-            Check("旋转 30°：X 轴角度跟着转", Near(deg, 30f, 1f), $"转了 {deg:F1}°");
-            s.Transform = Matrix3x2.Identity;
-        }
-
-        // 拖 X：只改 x 长度，指针的 y 偏移忽略。
+        // 拖 X：长度和角度都跟指针（x 不再锁水平）。
         var xh = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceX);
-        VertexDragForTest(s, ShapeHandle.SpaceX, xh.X, xh.Y, xh.X + 100f, xh.Y + 50f);
-        Check("拖 +x：只改 x 长度，y/z/原点不动",
-              Near(s.Points[1].X, xh.X + 100f) && Near(s.Points[1].Y, o.Y)
+        var xTo = new Vector2(xh.X + 100f, xh.Y + 50f);
+        VertexDragForTest(s, ShapeHandle.SpaceX, xh.X, xh.Y, xTo.X, xTo.Y);
+        Check("拖 X：长度和角度都跟指针（不再水平锁）",
+              Near2(new Vector2(s.Points[1].X, s.Points[1].Y), xTo)
               && Near(s.Points[2].X, y.X) && Near(s.Points[3].Y, z.Y),
-              $"X=({s.Points[1].X:F0},{s.Points[1].Y:F0})");
+              $"X=({s.Points[1].X:F0},{s.Points[1].Y:F0}) 期望 ({xTo.X:F0},{xTo.Y:F0})");
 
         // 拖 Z：只改 z 长度。
         var zh = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceZ);
         VertexDragForTest(s, ShapeHandle.SpaceZ, zh.X, zh.Y, zh.X + 40f, zh.Y - 80f);
         Check("拖 +z：只改 z 长度，x/y/原点不动",
               Near(s.Points[3].X, o.X) && Near(s.Points[3].Y, zh.Y - 80f)
-              && Near(s.Points[1].X, xh.X + 100f) && Near(s.Points[2].Y, y.Y),
+              && Near2(new Vector2(s.Points[1].X, s.Points[1].Y), xTo) && Near(s.Points[2].Y, y.Y),
               $"Z=({s.Points[3].X:F0},{s.Points[3].Y:F0})");
 
-        // 拖 Y：只沿固定方向改长度，不能拖歪。
+        // 拖 Y：长度和夹角都跟指针（y 不再锁斜二测方向）。
         var yh = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceY);
-        var yTarget = yh + Stroke.SpaceAxisYDirection * 60f;
-        VertexDragForTest(s, ShapeHandle.SpaceY, yh.X, yh.Y, yTarget.X, yTarget.Y);
+        var yTo = new Vector2(yh.X + 70f, yh.Y - 30f);
+        VertexDragForTest(s, ShapeHandle.SpaceY, yh.X, yh.Y, yTo.X, yTo.Y);
         var newY = new Vector2(s.Points[2].X, s.Points[2].Y);
-        Check("拖 +y：只沿斜二测方向改长度",
-              Near(Vector2.Distance(o, newY), Vector2.Distance(o, y) + 60f)
-              && Near(MathF.Abs(Vector2.Dot(Vector2.Normalize(newY - o), yDir)), 1f, 0.001f),
-              $"Y 长 {Vector2.Distance(o, y):F0}→{Vector2.Distance(o, newY):F0}");
+        Check("拖 Y：长度和夹角都跟指针（不再锁斜二测方向）",
+              Near2(newY, yTo)
+              && Near(s.Points[3].Y, zh.Y - 80f),
+              $"Y=({newY.X:F0},{newY.Y:F0}) 期望 ({yTo.X:F0},{yTo.Y:F0})");
 
         // 轴端拖过原点 = 翻方向（四个底角都靠这个微调）。
         {

@@ -1976,6 +1976,8 @@ public partial class InkEngine
         AxisYLength,
         /// <summary>坐标系：网格格距。</summary>
         GridStep,
+        /// <summary>空间坐标系：x 轴与 y 轴的平面夹角。</summary>
+        SpaceAngle,
     }
 
     /// <summary>正在拖旋转手柄——度数标签靠它决定显不显示。</summary>
@@ -17129,11 +17131,13 @@ public partial class InkEngine
                 }
                 if (_vertexHandle == ShapeHandle.SpaceX)
                 {
-                    // 有符号长度：拖到原点左边 → x 轴翻向左（对应另一个底角）。
-                    float dx = local.X - o.X;
-                    float sign = dx < 0f ? -1f : 1f;
-                    float len = MathF.Max(minAxis, MathF.Abs(dx));
-                    pts[1] = o + new Vector2(sign * len, 0f);
+                    // x 轴端**自由拖**：位置同时决定长度和角度（有些题的投影夹角不是 60°）。
+                    // 只夹最小长度，方向完全跟指针；Z 仍保持向上。
+                    var d = local - o;
+                    float len = d.Length();
+                    var dir = len > 1e-3f ? d / len : new Vector2(1f, 0f);
+                    len = MathF.Max(minAxis, len);
+                    pts[1] = o + dir * len;
                     break;
                 }
                 if (_vertexHandle == ShapeHandle.SpaceZ)
@@ -17145,14 +17149,12 @@ public partial class InkEngine
                 }
                 if (_vertexHandle == ShapeHandle.SpaceY)
                 {
-                    // 沿当前 y 轴方向做有符号投影：拖过原点 → y 轴翻到相反方向。
-                    var cur = new Vector2(pts[2].X - o.X, pts[2].Y - o.Y);
-                    var dir = cur.LengthSquared() > 1e-6f
-                        ? Vector2.Normalize(cur) : Stroke.SpaceAxisYDirection;
-                    float dot = Vector2.Dot(local - o, dir);
-                    float sign = dot < 0f ? -1f : 1f;
-                    float len = MathF.Max(minAxis, MathF.Abs(dot));
-                    pts[2] = o + dir * (sign * len);
+                    // y 轴端同样**自由拖**：长度和夹角都能调；z 不动。
+                    var d = local - o;
+                    float len = d.Length();
+                    var dir = len > 1e-3f ? d / len : Stroke.SpaceAxisYDirection;
+                    len = MathF.Max(minAxis, len);
+                    pts[2] = o + dir * len;
                     break;
                 }
                 break;
@@ -17581,11 +17583,26 @@ public partial class InkEngine
             // 四种曲线的读数（p / 实半轴 / 虚半轴 / 周期＋振幅）2026-09-20 随手柄一起删了：
             // 读数挂在手柄上，手柄没了，那个量就没人拖得动它们了（见 ShapeHandlesOf）。
             case StrokeKind.SpaceCoordinate:
-                // 空间坐标系没有角度/长度读数（轴端不标字母，也不显示数值）。
+            {
+                if (_vertexHandle is ShapeHandle.SpaceX or ShapeHandle.SpaceY)
+                {
+                    var xv = pts[1] - pts[0];
+                    var yv = pts[2] - pts[0];
+                    float lx = xv.Length(), ly = yv.Length();
+                    if (lx > 1e-3f && ly > 1e-3f)
+                    {
+                        float cos = Math.Clamp(Vector2.Dot(xv, yv) / (lx * ly), -1f, 1f);
+                        _vertexReadout = VertexReadoutKind.SpaceAngle;
+                        _vertexReadoutValue = MathF.Acos(cos) * 180f / MathF.PI;
+                        _vertexReadoutSecondary = 0f;
+                        break;
+                    }
+                }
                 _vertexReadout = VertexReadoutKind.None;
                 _vertexReadoutValue = 0f;
                 _vertexReadoutSecondary = 0f;
                 break;
+            }
 
             case StrokeKind.Coordinate:
             {
