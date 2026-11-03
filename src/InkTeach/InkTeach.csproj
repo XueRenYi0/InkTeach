@@ -74,7 +74,7 @@
   <!-- 反馈 QQ 群的二维码卡片（2026-11-03）：运行时从 assets 读，跟着输出一起走。
        发版时 publish.ps1 打进 dist，老师离线也能给学生扫。 -->
   <ItemGroup>
-    <Content Include="assets\qq-group.jpg" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="assets\qq-group-qr.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

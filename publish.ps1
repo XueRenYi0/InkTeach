@@ -231,13 +231,13 @@ if (-not (Test-Path $pdfiumSrc)) {
 }
 Copy-Item $pdfiumSrc (Join-Path $outDir "pdfium.dll") -Force
 # 反馈群二维码（2026-11-03）：跟着包走，老师离线也能给学生扫。缺了只报警不拦发布。
-$qrSrc = Join-Path $root "src\InkTeach\assets\qq-group.jpg"
+$qrSrc = Join-Path $root "src\InkTeach\assets\qq-group-qr.png"
 if (Test-Path $qrSrc) {
     $qrDst = Join-Path $outDir "assets"
     New-Item -ItemType Directory -Path $qrDst -Force | Out-Null
-    Copy-Item $qrSrc (Join-Path $qrDst "qq-group.jpg") -Force
+    Copy-Item $qrSrc (Join-Path $qrDst "qq-group-qr.png") -Force
 } else {
-    Write-Host "  [警告] 缺少反馈群二维码 assets\qq-group.jpg（日志页的「二维码」会显示缺图）" -ForegroundColor Yellow
+    Write-Host "  [警告] 缺少反馈群二维码 assets\qq-group-qr.png（日志页的二维码会显示缺图）" -ForegroundColor Yellow
 }
 $licSrc = Join-Path $root "vendor\pdfium-win-x64\licenses"
 $licDst = Join-Path $outDir "pdfium-licenses"

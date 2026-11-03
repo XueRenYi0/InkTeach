@@ -1,7 +1,7 @@
+using System.IO;
 using System.Numerics;
 using System.Runtime.InteropServices;
-using InkEngine;
-using Vortice.DCommon;
+using InkEngine;using Vortice.DCommon;
 using Vortice.Direct2D1;
 using Vortice.DXGI;
 using Vortice.Mathematics;
@@ -3896,22 +3896,27 @@ public sealed partial class FullUi : IOverlayUi
 
     private bool _logIncludeOlder;
 
+    /// <summary>日志页右侧的二维码卡片（2026-11-03）：左边表单，右边一张能扫的图。</summary>
+    private const float LogQrW = 190f;
+    private const float LogQrGap = 16f;
+    private float LogLeftRight() => MoreLeftX() + MoreContentW() - LogQrW - LogQrGap;
+
     private RectF LogNoteRect() => new()
     {
         MinX = MoreLeftX(), MinY = MoreHeaderRect().MaxY + 30f,
-        MaxX = MoreLeftX() + MoreContentW(), MaxY = MoreHeaderRect().MaxY + 30f + LogNoteH,
+        MaxX = LogLeftRight(), MaxY = MoreHeaderRect().MaxY + 30f + LogNoteH,
     };
 
     private RectF LogScopeRect() => new()
     {
         MinX = MoreLeftX(), MinY = LogNoteRect().MaxY + 8f,
-        MaxX = MoreLeftX() + MoreContentW(), MaxY = LogNoteRect().MaxY + 8f + 34f,
+        MaxX = LogLeftRight(), MaxY = LogNoteRect().MaxY + 8f + 34f,
     };
 
     private RectF LogToggleRect() => new()
     {
         MinX = MoreLeftX(), MinY = LogScopeRect().MaxY + 8f,
-        MaxX = MoreLeftX() + MoreContentW(), MaxY = LogScopeRect().MaxY + 8f + LogToggleH,
+        MaxX = LogLeftRight(), MaxY = LogScopeRect().MaxY + 8f + LogToggleH,
     };
 
     private RectF LogUploadRect()
@@ -3947,9 +3952,23 @@ public sealed partial class FullUi : IOverlayUi
         };
     }
 
-    /// <summary>那一行右端的三个小动作：二维码 / 复制群号 / 复制链接（最右）。</summary>
-    private const float LogGroupBtnW = 64f;
-    private const float LogGroupBtnGap = 6f;
+    /// <summary>日志页右侧的二维码卡片：从备注框顶端到状态行底端。</summary>
+    private RectF LogQrCardRect()
+    {
+        float top = LogNoteRect().MinY;
+        float bottom = LogUploadRect().MaxY + 10f + MoreStatusH;
+        return new RectF
+        {
+            MinX = MoreLeftX() + MoreContentW() - LogQrW,
+            MinY = top,
+            MaxX = MoreLeftX() + MoreContentW(),
+            MaxY = bottom,
+        };
+    }
+
+    /// <summary>那一行右端的小动作：复制群号 / 复制链接（最右）。</summary>
+    private const float LogGroupBtnW = 72f;
+    private const float LogGroupBtnGap = 8f;
     private RectF LogGroupUrlRect()
     {
         var g = LogGroupRect();
@@ -3966,15 +3985,6 @@ public sealed partial class FullUi : IOverlayUi
         {
             MinX = u.MinX - LogGroupBtnGap - LogGroupBtnW, MinY = u.MinY,
             MaxX = u.MinX - LogGroupBtnGap, MaxY = u.MaxY,
-        };
-    }
-    private RectF LogGroupQrRect()
-    {
-        var c = LogGroupCopyRect();
-        return new RectF
-        {
-            MinX = c.MinX - LogGroupBtnGap - LogGroupBtnW, MinY = c.MinY,
-            MaxX = c.MinX - LogGroupBtnGap, MaxY = c.MaxY,
         };
     }
 
@@ -4233,7 +4243,7 @@ public sealed partial class FullUi : IOverlayUi
             if (LogExportRect().Contains(x, y)) return MoreHitLogExport;
             if (LogToggleRect().Contains(x, y)) return MoreHitLogOlder;
             // 三个小按钮优先；其余整行（含群号文字）都是复制群号
-            if (LogGroupQrRect().Contains(x, y)) return MoreHitLogQr;
+            if (LogQrCardRect().Contains(x, y)) return MoreHitLogQr;
             if (LogGroupUrlRect().Contains(x, y)) return MoreHitLogGroupUrl;
             if (LogGroupRect().Contains(x, y)) return MoreHitLogGroup;
             return MoreHitInside;
@@ -4452,7 +4462,7 @@ public sealed partial class FullUi : IOverlayUi
             new RectF
             {
                 MinX = MoreLeftX(), MinY = MoreHeaderRect().MaxY + 6f,
-                MaxX = MoreLeftX() + MoreContentW(), MaxY = MoreHeaderRect().MaxY + 26f,
+                MaxX = LogLeftRight(), MaxY = MoreHeaderRect().MaxY + 26f,
             },
             12.5f, Brush(ctx, MutedCol), center: false);
 
@@ -4506,32 +4516,90 @@ public sealed partial class FullUi : IOverlayUi
             new RectF
             {
                 MinX = MoreLeftX(), MinY = ur.MaxY + 10f,
-                MaxX = MoreLeftX() + MoreContentW(), MaxY = ur.MaxY + 10f + MoreStatusH,
+                MaxX = LogLeftRight(), MaxY = ur.MaxY + 10f + MoreStatusH,
             },
             11f, Brush(ctx, MutedCol));
+
+        // 右侧二维码卡片（2026-11-03）：一直可见，学生拿手机就能扫；点它整屏放大。
+        DrawLogQrCard(ctx);
 
         // 加群反馈（2026-11-03）：整行可点，点一下把群号复制走——触摸屏不用手抄。
         var gr = LogGroupRect();
         var grr = new RoundedRectangle(new Vortice.RawRectF(gr.MinX, gr.MinY, gr.MaxX, gr.MaxY), 10f, 10f);
         bool groupHover = _moreHover == MoreHitLogGroup;
         bool urlHover = _moreHover == MoreHitLogGroupUrl;
-        bool qrHover = _moreHover == MoreHitLogQr;
-        bool anyHover = groupHover || urlHover || qrHover;
+        bool anyHover = groupHover || urlHover;
         ctx.FillRoundedRectangle(grr, Brush(ctx, HoverCol));
         ctx.DrawRoundedRectangle(grr, Brush(ctx, anyHover ? Tokens.Accent : BorderCol),
                                  anyHover ? 1.5f : 1f);
         var cr = LogGroupCopyRect();
         var lr = LogGroupUrlRect();
-        var qr = LogGroupQrRect();
         _widgets.TextLeftMiddle(ctx, $"遇到问题？加 QQ 群 {ProductInfo.FeedbackQQGroup}",
-            new RectF { MinX = gr.MinX + 12f, MinY = gr.MinY, MaxX = qr.MinX - 10f, MaxY = gr.MaxY },
+            new RectF { MinX = gr.MinX + 12f, MinY = gr.MinY, MaxX = cr.MinX - 10f, MaxY = gr.MaxY },
             12.5f, Brush(ctx, InkCol));
-        _widgets.Text(ctx, "二维码", qr, 11.5f,
-                      Brush(ctx, qrHover ? Tokens.Accent : MutedCol));
         _widgets.Text(ctx, "复制群号", cr, 11.5f,
                       Brush(ctx, groupHover ? Tokens.Accent : MutedCol));
         _widgets.Text(ctx, "复制链接", lr, 11.5f,
                       Brush(ctx, urlHover ? Tokens.Accent : MutedCol));
+    }
+
+    /// <summary>日志页右侧的二维码卡片：白底（扫码要对比度）、图 + 一行小字。</summary>
+    private void DrawLogQrCard(ID2D1DeviceContext ctx)
+    {
+        var card = LogQrCardRect();
+        var rr = new RoundedRectangle(
+            new Vortice.RawRectF(card.MinX, card.MinY, card.MaxX, card.MaxY), 12f, 12f);
+        ctx.FillRoundedRectangle(rr, Brush(ctx, new Color4(1f, 1f, 1f, 1f)));
+        ctx.DrawRoundedRectangle(rr,
+            Brush(ctx, _moreHover == MoreHitLogQr ? Tokens.Accent : BorderCol),
+            _moreHover == MoreHitLogQr ? 1.6f : 1f);
+
+        EnsureQrBitmap(ctx);
+        float pad = 10f;
+        float capH = 22f;
+        float side = MathF.Min(card.MaxX - card.MinX - pad * 2f,
+                               card.MaxY - card.MinY - pad * 2f - capH);
+        side = MathF.Max(40f, side);
+        float cx = (card.MinX + card.MaxX) * 0.5f;
+        float x0 = cx - side * 0.5f, y0 = card.MinY + pad;
+        if (_qrBmp != null)
+            ctx.DrawBitmap(_qrBmp, new Vortice.RawRectF(x0, y0, x0 + side, y0 + side),
+                           1f, Vortice.Direct2D1.InterpolationMode.HighQualityCubic, null, null);
+        else
+            _widgets.Text(ctx, "二维码缺失", new RectF { MinX = card.MinX, MinY = y0,
+                                                        MaxX = card.MaxX, MaxY = y0 + side },
+                          11f, Brush(ctx, new Color4(0.85f, 0.22f, 0.22f, 1f)));
+
+        _widgets.Text(ctx, $"扫码加群 {ProductInfo.FeedbackQQGroup}",
+            new RectF { MinX = card.MinX + 6f, MinY = y0 + side + 2f,
+                        MaxX = card.MaxX - 6f, MaxY = y0 + side + 2f + capH },
+            10.5f, Brush(ctx, new Color4(0.25f, 0.28f, 0.33f, 1f)));
+    }
+
+    // 二维码位图（2026-11-03）：只建一次；899×899 的 PNG 换成 GPU 位图约 3.2MB。
+    private ID2D1Bitmap _qrBmp;
+    private bool _qrBmpTried;
+
+    private void EnsureQrBitmap(ID2D1DeviceContext ctx)
+    {
+        if (_qrBmp != null || _qrBmpTried) return;
+        _qrBmpTried = true;
+        string path = Path.Combine(AppContext.BaseDirectory, "assets", "qq-group-qr.png");
+        if (!UiImageBytes.TryLoad(path, out int w, out int h, out byte[] bgra)) return;
+        var props = new BitmapProperties1(
+            new PixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied),
+            96f, 96f, BitmapOptions.None);
+        var handle = GCHandle.Alloc(bgra, GCHandleType.Pinned);
+        try
+        {
+            _qrBmp = ctx.CreateBitmap(new SizeI(w, h), handle.AddrOfPinnedObject(),
+                                      (uint)(w * 4), props);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("二维码位图创建失败：" + ex.Message);
+        }
+        finally { handle.Free(); }
     }
 
     private void DrawMoreHome(ID2D1DeviceContext ctx)

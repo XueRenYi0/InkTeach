@@ -7594,7 +7594,7 @@ public partial class InkEngine
             _feedbackQrTried = true;
             try
             {
-                string path = Path.Combine(AppContext.BaseDirectory, "assets", "qq-group.jpg");
+                string path = Path.Combine(AppContext.BaseDirectory, "assets", "qq-group-qr.png");
                 var r = ImageFile.Load(path);
                 if (r.Success)
                     FeedbackQrImage = ImageData.AdoptPremultiplied(r.Width, r.Height, r.Bgra);

@@ -3136,21 +3136,22 @@ internal sealed partial class OverlayWindow : IDisposable
 
         float w = Width, h = Height;
         float u = app.UiUnit;
-        float maxW = w * 0.70f, maxH = h * 0.86f;
+        float capH = 46f * u;
+        float maxW = w * 0.70f, maxH = h * 0.86f - capH;
         float k = MathF.Min(maxW / img.Width, maxH / img.Height);
         float dw = img.Width * k, dh = img.Height * k;
-        float x0 = (w - dw) * 0.5f, y0 = (h - dh) * 0.5f;
+        float x0 = (w - dw) * 0.5f, y0 = (h - (dh + capH)) * 0.5f;
 
         _ctx.Transform = Matrix3x2.Identity;
         _ctx.FillRectangle(new Vortice.RawRectF(0, 0, w, h),
                            Brush(new Color4(0f, 0f, 0f, 0.55f)));
 
-        // 白底卡片：图本身是白底 JPG，垫一层圆角白卡把边缘收干净
+        // 白底卡片：图本身是白底，垫一层圆角白卡把边缘收干净
         float pad = 10f * u;
         var card = new RectF
         {
             MinX = x0 - pad, MinY = y0 - pad,
-            MaxX = x0 + dw + pad, MaxY = y0 + dh + pad,
+            MaxX = x0 + dw + pad, MaxY = y0 + dh + capH + pad,
         };
         _ctx.FillRoundedRectangle(
             new RoundedRectangle(new Vortice.RawRectF(card.MinX, card.MinY, card.MaxX, card.MaxY), 18f * u, 18f * u),
@@ -3160,6 +3161,12 @@ internal sealed partial class OverlayWindow : IDisposable
         if (bmp != null)
             _ctx.DrawBitmap(bmp, new Vortice.RawRectF(x0, y0, x0 + dw, y0 + dh),
                             1f, Vortice.Direct2D1.InterpolationMode.HighQualityCubic, null, null);
+
+        _ctx.DrawText($"扫一扫，加 QQ 群 {ProductInfo.FeedbackQQGroup}",
+                      AiTextFormat(18f * u, bold: false, center: true),
+                      new Vortice.Mathematics.Rect(card.MinX + 8f * u, y0 + dh + 4f * u,
+                                                   card.MaxX - card.MinX - 16f * u, capH - 4f * u),
+                      Brush(new Color4(0.18f, 0.20f, 0.24f, 1f)));
 
         // 右上角 ✕：点任意处都能关，但这个标记让人知道"能关"
         float cs = 34f * u;
