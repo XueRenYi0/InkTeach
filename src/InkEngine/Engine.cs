@@ -4716,6 +4716,8 @@ public partial class InkEngine
     private void OnPointerDown(IntPtr hWnd, IntPtr wParam)
     {
         StampInput();
+        // 反馈群二维码是全屏覆盖层：任何一点都先关它，这一下不再落到画布/界面。
+        if (FeedbackQrVisible) { HideFeedbackQr(); return; }
         StopTouchFling();                // 任何按下（画布/界面/笔）= 先刹住双指惯性
         _cntDown++;
         ClearEngineTooltip();            // 按下 = 新动作开始，悬停提示先收
@@ -7570,9 +7572,68 @@ public partial class InkEngine
 
     /// <summary>上一次「复制」的整块范围：判断原件还在不在当前这一屏。</summary>
     private RectF? _lastCopyBox;
+
     /// <summary>上一次「复制」写进剪贴板的原始字节：粘贴时比对，确认中间没被别的程序换过。</summary>
     private byte[] _lastCopiedBytes;
     private int _pasteStep;
+
+    // ---- 反馈群二维码（2026-11-03）-----------------------------------------
+    // 图在 assets/qq-group.jpg，跟着输出走；点「二维码」时整屏展示，点一下 / Esc 关闭。
+    // 只读一次，失败也不重试（缺图是发版问题，不是运行时问题）。
+    internal ImageData FeedbackQrImage;
+    internal bool FeedbackQrVisible;
+    private bool _feedbackQrTried;
+
+    /// <summary>显示 / 隐藏反馈群二维码。</summary>
+    internal void ToggleFeedbackQr()
+    {
+        if (FeedbackQrVisible) { HideFeedbackQr(); return; }
+
+        if (!_feedbackQrTried)
+        {
+            _feedbackQrTried = true;
+            try
+            {
+                string path = Path.Combine(AppContext.BaseDirectory, "assets", "qq-group.jpg");
+                var r = ImageFile.Load(path);
+                if (r.Success)
+                    FeedbackQrImage = ImageData.AdoptPremultiplied(r.Width, r.Height, r.Bgra);
+                else
+                    Console.WriteLine("二维码：读不出来 —— " + r.Error + $"（{path}）");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("二维码：读取失败 " + ex.Message);
+            }
+        }
+
+        if (FeedbackQrImage == null)
+        {
+            SetInkStatus("二维码图缺失：assets/qq-group.jpg");
+            return;
+        }
+
+        FeedbackQrVisible = true;
+        _dirty = true;
+        RequestFullFrames();
+        SetInkStatus("扫一扫加群；点一下关闭");
+        Console.WriteLine("二维码：整屏展示");
+    }
+
+    internal void HideFeedbackQr()
+    {
+        if (!FeedbackQrVisible) return;
+        FeedbackQrVisible = false;
+        _dirty = true;
+        RequestFullFrames();
+        Console.WriteLine("二维码：关闭");
+    }
+
+    /// <summary>整屏重画两帧：二维码是覆盖层，出现/消失时脏区不能只算局部。</summary>
+    private void RequestFullFrames()
+    {
+        foreach (var w in _windows) w.RequestFullFrames();
+    }
 
     /// <summary>
     /// 复制选中对象到剪贴板：**对象字节 + 一张图**。
@@ -20228,6 +20289,12 @@ public partial class InkEngine
         if ((Native.GetAsyncKeyState(0x10 /*VK_SHIFT*/) & 0x8000) != 0) mods |= KeyChord.ModShift;
 
         int vk = wParam.ToInt32();
+        // 反馈群二维码：Esc = 关掉（在说明页/面板之前，它是最上面那层）。
+        if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && FeedbackQrVisible)
+        {
+            HideFeedbackQr();
+            return true;
+        }
         // 使用说明层优先：打开时 Esc/F1 关闭、左右切页，其它键也不许落到画布。
         // 关闭时 F1 打开；只在批注键盘模式收到（和 Ctrl+P/I/L 同一入口）。
         if (Ui != null && Ui.HandleHelpKey(vk)) return true;

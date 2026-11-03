@@ -3078,6 +3078,10 @@ internal sealed partial class OverlayWindow : IDisposable
         if (uiVisible)
             DrawUi(app);
 
+        // 反馈群二维码：最上面一层（连界面一起盖住），点一下 / Esc 关。
+        if (app.FeedbackQrVisible)
+            DrawFeedbackQr(app);
+
         var hr = _ctx.EndDraw();
         _ctx.Target = null;
         sw.Stop();
@@ -3113,6 +3117,58 @@ internal sealed partial class OverlayWindow : IDisposable
             }
             _libraryRectPrev = pr;
         }
+    }
+
+    /// <summary>请求整屏重画两帧（二维码这种覆盖层出现 / 消失时用）。</summary>
+    internal void RequestFullFrames() => _fullFramesLeft = 2;
+
+    /// <summary>
+    /// 反馈群二维码（2026-11-03）：**整屏遮罩 + 居中卡片图**。
+    ///
+    /// 为什么用图而不是画格子：QQ 的群卡是官方生成的，图里自带头像、群号、
+    /// "扫一扫二维码，加入群聊"和 QQ 标志——自己重画既不准也白费。
+    /// 点任意处 / Esc 关闭（引擎那边处理），右上角再画一个 ✕ 让人看得出来能关。
+    /// </summary>
+    private void DrawFeedbackQr(InkEngine app)
+    {
+        var img = app.FeedbackQrImage;
+        if (img == null) return;
+
+        float w = Width, h = Height;
+        float u = app.UiUnit;
+        float maxW = w * 0.70f, maxH = h * 0.86f;
+        float k = MathF.Min(maxW / img.Width, maxH / img.Height);
+        float dw = img.Width * k, dh = img.Height * k;
+        float x0 = (w - dw) * 0.5f, y0 = (h - dh) * 0.5f;
+
+        _ctx.Transform = Matrix3x2.Identity;
+        _ctx.FillRectangle(new Vortice.RawRectF(0, 0, w, h),
+                           Brush(new Color4(0f, 0f, 0f, 0.55f)));
+
+        // 白底卡片：图本身是白底 JPG，垫一层圆角白卡把边缘收干净
+        float pad = 10f * u;
+        var card = new RectF
+        {
+            MinX = x0 - pad, MinY = y0 - pad,
+            MaxX = x0 + dw + pad, MaxY = y0 + dh + pad,
+        };
+        _ctx.FillRoundedRectangle(
+            new RoundedRectangle(new Vortice.RawRectF(card.MinX, card.MinY, card.MaxX, card.MaxY), 18f * u, 18f * u),
+            Brush(new Color4(1f, 1f, 1f, 1f)));
+
+        var bmp = img.GetBitmap(_ctx);
+        if (bmp != null)
+            _ctx.DrawBitmap(bmp, new Vortice.RawRectF(x0, y0, x0 + dw, y0 + dh),
+                            1f, Vortice.Direct2D1.InterpolationMode.HighQualityCubic, null, null);
+
+        // 右上角 ✕：点任意处都能关，但这个标记让人知道"能关"
+        float cs = 34f * u;
+        float cx = card.MaxX - 8f * u - cs * 0.5f, cy = card.MinY + 8f * u + cs * 0.5f;
+        _ctx.FillEllipse(new Ellipse(new Vector2(cx, cy), cs * 0.5f, cs * 0.5f),
+                         Brush(new Color4(0f, 0f, 0f, 0.55f)));
+        float icon = cs - 16f * u;
+        DrawIcon(IconPaths.collapse, cx - icon * 0.5f, cy - icon * 0.5f,
+                 icon, Brush(new Color4(1f, 1f, 1f, 0.95f)));
     }
 
     /// <summary>

@@ -3858,6 +3858,7 @@ public sealed partial class FullUi : IOverlayUi
     private const int MoreHitLogOlder = 303;  // 包含更早日志
     private const int MoreHitLogGroup = 304;  // 复制反馈 QQ 群号（2026-11-03）
     private const int MoreHitLogGroupUrl = 305; // 复制加群链接（2026-11-03）
+    private const int MoreHitLogQr = 306;       // 整屏显示群二维码（2026-11-03）
 
     /// <summary>
     /// 面板宽：**所有 More 页共用**工作区的 55%，夹在 560～980 逻辑像素。
@@ -3946,8 +3947,9 @@ public sealed partial class FullUi : IOverlayUi
         };
     }
 
-    /// <summary>那一行右端的两个小动作：复制链接（最右）/ 复制群号。</summary>
-    private const float LogGroupBtnW = 72f;
+    /// <summary>那一行右端的三个小动作：二维码 / 复制群号 / 复制链接（最右）。</summary>
+    private const float LogGroupBtnW = 64f;
+    private const float LogGroupBtnGap = 6f;
     private RectF LogGroupUrlRect()
     {
         var g = LogGroupRect();
@@ -3962,8 +3964,17 @@ public sealed partial class FullUi : IOverlayUi
         var u = LogGroupUrlRect();
         return new RectF
         {
-            MinX = u.MinX - 8f - LogGroupBtnW, MinY = u.MinY,
-            MaxX = u.MinX - 8f, MaxY = u.MaxY,
+            MinX = u.MinX - LogGroupBtnGap - LogGroupBtnW, MinY = u.MinY,
+            MaxX = u.MinX - LogGroupBtnGap, MaxY = u.MaxY,
+        };
+    }
+    private RectF LogGroupQrRect()
+    {
+        var c = LogGroupCopyRect();
+        return new RectF
+        {
+            MinX = c.MinX - LogGroupBtnGap - LogGroupBtnW, MinY = c.MinY,
+            MaxX = c.MinX - LogGroupBtnGap, MaxY = c.MaxY,
         };
     }
 
@@ -4221,7 +4232,8 @@ public sealed partial class FullUi : IOverlayUi
             if (LogUploadRect().Contains(x, y)) return MoreHitLogUpload;
             if (LogExportRect().Contains(x, y)) return MoreHitLogExport;
             if (LogToggleRect().Contains(x, y)) return MoreHitLogOlder;
-            // 链接按钮优先；其余整行（含"复制群号"）都是复制群号
+            // 三个小按钮优先；其余整行（含群号文字）都是复制群号
+            if (LogGroupQrRect().Contains(x, y)) return MoreHitLogQr;
             if (LogGroupUrlRect().Contains(x, y)) return MoreHitLogGroupUrl;
             if (LogGroupRect().Contains(x, y)) return MoreHitLogGroup;
             return MoreHitInside;
@@ -4503,14 +4515,19 @@ public sealed partial class FullUi : IOverlayUi
         var grr = new RoundedRectangle(new Vortice.RawRectF(gr.MinX, gr.MinY, gr.MaxX, gr.MaxY), 10f, 10f);
         bool groupHover = _moreHover == MoreHitLogGroup;
         bool urlHover = _moreHover == MoreHitLogGroupUrl;
+        bool qrHover = _moreHover == MoreHitLogQr;
+        bool anyHover = groupHover || urlHover || qrHover;
         ctx.FillRoundedRectangle(grr, Brush(ctx, HoverCol));
-        ctx.DrawRoundedRectangle(grr, Brush(ctx, groupHover || urlHover ? Tokens.Accent : BorderCol),
-                                 groupHover || urlHover ? 1.5f : 1f);
+        ctx.DrawRoundedRectangle(grr, Brush(ctx, anyHover ? Tokens.Accent : BorderCol),
+                                 anyHover ? 1.5f : 1f);
         var cr = LogGroupCopyRect();
         var lr = LogGroupUrlRect();
+        var qr = LogGroupQrRect();
         _widgets.TextLeftMiddle(ctx, $"遇到问题？加 QQ 群 {ProductInfo.FeedbackQQGroup}",
-            new RectF { MinX = gr.MinX + 12f, MinY = gr.MinY, MaxX = cr.MinX - 10f, MaxY = gr.MaxY },
+            new RectF { MinX = gr.MinX + 12f, MinY = gr.MinY, MaxX = qr.MinX - 10f, MaxY = gr.MaxY },
             12.5f, Brush(ctx, InkCol));
+        _widgets.Text(ctx, "二维码", qr, 11.5f,
+                      Brush(ctx, qrHover ? Tokens.Accent : MutedCol));
         _widgets.Text(ctx, "复制群号", cr, 11.5f,
                       Brush(ctx, groupHover ? Tokens.Accent : MutedCol));
         _widgets.Text(ctx, "复制链接", lr, 11.5f,
@@ -4769,6 +4786,13 @@ public sealed partial class FullUi : IOverlayUi
             _host.Commands.CopyText(ProductInfo.FeedbackQQUrl);
             _hubHint = "加群链接已复制，粘到 QQ / 微信里就能打开";
             Invalidate();
+        }
+        else if (hit == MoreHitLogQr)
+        {
+            // 整屏二维码：学生用手机扫，老师不用打字。
+            _hubHint = "";
+            CloseMore();
+            _host.Commands.ShowFeedbackQr();
         }
     }
 
@@ -5030,7 +5054,7 @@ public sealed partial class FullUi : IOverlayUi
                 return true;
             }
             if (_morePage == MorePage.Log
-                && hit >= MoreHitLogNote && hit <= MoreHitLogGroupUrl)
+                && hit >= MoreHitLogNote && hit <= MoreHitLogQr)
             {
                 ActivateLog(hit);
                 return true;

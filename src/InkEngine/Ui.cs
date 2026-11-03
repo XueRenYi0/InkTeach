@@ -533,6 +533,12 @@ public interface IEngineCommands
     void CopyText(string text);
 
     /// <summary>
+    /// **显示反馈群二维码**（2026-11-03）：整屏一张卡片，点一下 / Esc 关闭。
+    /// 图片在 `assets/qq-group.jpg`，跟着安装包走。
+    /// </summary>
+    void ShowFeedbackQr();
+
+    /// <summary>
     /// **粘贴**：剪贴板里有我们的对象就粘成可编辑对象，否则当图粘到视口左上角。
     /// 和批注内的 `Ctrl+V` 是同一个动作——**给没有键盘的触摸屏 / 手写板留的入口**
     /// （用户 2026-09-17："截图要不要增加一个粘贴功能…如果是触摸屏或者手写板可能没有键盘"）。
