@@ -26,8 +26,8 @@ internal sealed class ShapePreset
 }
 
 /// <summary>
-/// 图形面板的固定目录（37 张卡）。
-/// 顺序：常用（基础 + 梯形 + 五角星 + 扇形 + 坐标系 2 档）→ 曲线（10）→ 立体（16）。
+/// 图形面板的固定目录（39 张卡）。
+/// 顺序：常用（基础 + 梯形 + 五角星 + 扇形 + 坐标系 2 档）→ 曲线（10）→ 立体（17，空间坐标系开头）。
 /// “全部”只是把这三组按顺序拼起来，不另维护一张表。
 /// </summary>
 internal static class ShapeCatalog
@@ -60,7 +60,8 @@ internal static class ShapeCatalog
         new(Tool.Wave, "波浪", ShapeGroup.Curve, 0),
         new(Tool.Tangent, "正切", ShapeGroup.Curve, 0),
 
-        // ---- 立体 16 ----
+        // ---- 立体 17 ----
+        new(Tool.SpaceCoordinate, "空间坐标系", ShapeGroup.Solid, 0),
         new(Tool.Cylinder, "圆柱", ShapeGroup.Solid, 0),
         new(Tool.Cone, "圆锥", ShapeGroup.Solid, 0),
         new(Tool.ConeFrustum, "圆台", ShapeGroup.Solid, 0),

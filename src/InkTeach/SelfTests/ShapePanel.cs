@@ -76,13 +76,13 @@ internal sealed partial class App
         Check("选图形后：旧图形上带不再出现", ui.BandCellForTest != 10,
               $"bandCell={ui.BandCellForTest}");
 
-        // 2a. 38 张档位卡 + 分类；图形卡 72×82，固定 5 行高
-        Check("档位展开后共 38 张卡",
-              ShapeCatalog.All.Length == 38 && ShapeCatalog.CountFor("all") == 38,
+        // 2a. 39 张档位卡 + 分类；图形卡 72×82，固定 5 行高
+        Check("档位展开后共 39 张卡",
+              ShapeCatalog.All.Length == 39 && ShapeCatalog.CountFor("all") == 39,
               $"all={ShapeCatalog.CountFor("all")}");
-        Check("分类数量：全部38 / 常用12 / 曲线10 / 立体16",
+        Check("分类数量：全部39 / 常用12 / 曲线10 / 立体17",
               ShapeCatalog.CountFor("common") == 12 && ShapeCatalog.CountFor("curve") == 10
-              && ShapeCatalog.CountFor("solid") == 16,
+              && ShapeCatalog.CountFor("solid") == 17,
               $"常用={ShapeCatalog.CountFor("common")} 曲线={ShapeCatalog.CountFor("curve")} 立体={ShapeCatalog.CountFor("solid")}");
         Check("图形页默认「全部」、9 列 × 5 行、卡片 72×82",
               ShapeCategoryId == "all" && m.Cols == 9 && m.Rows == 5
@@ -127,11 +127,11 @@ internal sealed partial class App
         Check("点「曲线」→ 10 张", ShapeCategoryId == "curve" && ShapeCardsNow().Length == 10,
               $"cat={ShapeCategoryId} n={ShapeCardsNow().Length}");
         ClickShapeTab("solid");
-        Check("点「立体」→ 16 张", ShapeCategoryId == "solid" && ShapeCardsNow().Length == 16,
+        Check("点「立体」→ 17 张", ShapeCategoryId == "solid" && ShapeCardsNow().Length == 17,
               $"cat={ShapeCategoryId} n={ShapeCardsNow().Length}");
         ClickShapeTab("all");
-        Check("点「全部」→ 38 张、仍是 5 行高",
-              ShapeCategoryId == "all" && ShapeCardsNow().Length == 38
+        Check("点「全部」→ 39 张、仍是 5 行高",
+              ShapeCategoryId == "all" && ShapeCardsNow().Length == 39
               && LibraryPanelInfoNow().Rows == 5,
               $"cat={ShapeCategoryId} n={ShapeCardsNow().Length} rows={LibraryPanelInfoNow().Rows}");
 
@@ -337,12 +337,12 @@ internal sealed partial class App
               $"图形={ui.CellActiveForTest(10)} 收藏={ui.CellActiveForTest(11)}");
 
         var m = LibraryPanelInfoNow();
-        Check("档位展开后共 38 张卡",
-              ShapeCatalog.All.Length == 38 && ShapeCatalog.CountFor("all") == 38,
+        Check("档位展开后共 39 张卡",
+              ShapeCatalog.All.Length == 39 && ShapeCatalog.CountFor("all") == 39,
               $"all={ShapeCatalog.CountFor("all")}");
-        Check("分类数量：常用12 / 曲线10 / 立体16",
+        Check("分类数量：常用12 / 曲线10 / 立体17",
               ShapeCatalog.CountFor("common") == 12 && ShapeCatalog.CountFor("curve") == 10
-              && ShapeCatalog.CountFor("solid") == 16,
+              && ShapeCatalog.CountFor("solid") == 17,
               $"常用={ShapeCatalog.CountFor("common")} 曲线={ShapeCatalog.CountFor("curve")} 立体={ShapeCatalog.CountFor("solid")}");
         Check("图形页默认「全部」、9 列 × 5 行、卡片 72×82",
               ShapeCategoryId == "all" && m.Cols == 9
@@ -378,7 +378,7 @@ internal sealed partial class App
         Check("点「曲线」→ 10 张", ShapeCategoryId == "curve" && ShapeCardsNow().Length == 10,
               $"cat={ShapeCategoryId} n={ShapeCardsNow().Length}");
         ClickShapeTab("solid");
-        Check("点「立体」→ 16 张", ShapeCategoryId == "solid" && ShapeCardsNow().Length == 16,
+        Check("点「立体」→ 17 张", ShapeCategoryId == "solid" && ShapeCardsNow().Length == 17,
               $"cat={ShapeCategoryId} n={ShapeCardsNow().Length}");
         ClickShapeTab("all");
 
@@ -564,7 +564,7 @@ internal sealed partial class App
         OpenLibraryPanel(LibraryTab.Shapes);
         SettleFrames(150);
         SetShapeCategory("solid");
-        Check("图形页切到「立体」→ 16 张", ShapeCategoryId == "solid" && ShapeCardsNow().Length == 16,
+        Check("图形页切到「立体」→ 17 张", ShapeCategoryId == "solid" && ShapeCardsNow().Length == 17,
               $"分类 {ShapeCategoryId}，{ShapeCardsNow().Length} 张");
 
         ResizeBy(-2f * (LibraryLayout.CellWLogical + LibraryLayout.CellGapLogical),
@@ -589,7 +589,7 @@ internal sealed partial class App
               + $"({reopened.MinX:F0},{reopened.MinY:F0}) "
               + $"{reopened.MaxX - reopened.MinX:F0}×{reopened.MaxY - reopened.MinY:F0}");
         Check("图形页：关闭重开后仍停在「立体」",
-              ShapeCategoryId == "solid" && ShapeCardsNow().Length == 16,
+              ShapeCategoryId == "solid" && ShapeCardsNow().Length == 17,
               $"分类 {ShapeCategoryId}，{ShapeCardsNow().Length} 张");
 
         // ---- 收藏页：高度是另一份；缩到 1 行后照样记得 ----

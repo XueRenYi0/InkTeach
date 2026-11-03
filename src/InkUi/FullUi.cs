@@ -6617,6 +6617,7 @@ public sealed partial class FullUi : IOverlayUi
         // 坐标系 / 数轴也是自绘的（见 IconAtlas.DrawAxes / DrawNumberLine）：
         // 上游图标库里没有"两条轴"和"一条带刻度的轴"这两个专名。
         Tool.Coordinate => "axes",
+        Tool.SpaceCoordinate => "spaceaxes",
         Tool.NumberLine => "numberline",
         // 四种曲线：同样自绘（见 IconAtlas.DrawParabola / DrawHyperbola / DrawWave）。
         // 图标画的是"理想样子"（开口向上的抛物线 / a = b 的双曲线 / 一个周期）。

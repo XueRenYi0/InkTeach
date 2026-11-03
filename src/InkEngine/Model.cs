@@ -1,3 +1,4 @@
+using System;
 using System.Numerics;
 using Vortice.Direct2D1;
 using Vortice.Mathematics;
@@ -254,6 +255,11 @@ public enum Tool
     Trapezoid = 34,
     /// <summary>扇形：圆心 → 半径，默认 90°；圆弧端点可调 5°~360°。</summary>
     Sector = 35,
+    /// <summary>
+    /// 空间直角坐标系（2026-11-03 加）：原点 + 三个正半轴端点。
+    /// 只画正半轴；x 向右、z 向上、y 沿立体图的斜二测方向，不带网格和字母。
+    /// </summary>
+    SpaceCoordinate = 36,
 }
 
 /// <summary>An axis-aligned rectangle in virtual-desktop pixels.</summary>
@@ -669,6 +675,12 @@ internal enum StrokeKind
     Trapezoid = 29,
     /// <summary>扇形：Points = 圆心/起始半径端点/圆弧端点；半径与张角由三点现算。</summary>
     Sector = 30,
+    /// <summary>
+    /// **空间直角坐标系**（2026-11-03）：`Points` = 原点 O / +x 端 / +y 端 / +z 端。
+    /// 只画正半轴；y 的方向跟随立体图的斜二测（<see cref="ShapeSpec.PrismDepthSkew"/>），
+    /// 不带网格、不写字母。
+    /// </summary>
+    SpaceCoordinate = 31,
 }
 
 /// <summary>
@@ -1303,9 +1315,10 @@ internal sealed class Stroke
                 list.AddRange(TetraEdges());
                 break;
 
-            // ---- 坐标系 / 数轴：轴线 ＋ 箭头（＋ 网格）----
+            // ---- 坐标系 / 数轴 / 空间坐标系：轴线 ＋ 箭头（＋ 网格）----
             case StrokeKind.Coordinate:
             case StrokeKind.NumberLine:
+            case StrokeKind.SpaceCoordinate:
                 if (Points.Count < 2) break;
                 list.AddRange(AxisPieces());
                 break;
@@ -1897,6 +1910,50 @@ internal sealed class Stroke
     }
 
     /// <summary>
+    /// **空间直角坐标系的 y 轴方向**（局部坐标）：跟随立体图的斜二测——
+    /// `(PrismDepthSkew, −1)` 归一化（屏幕 y 向下，所以"向后上方"是负 y）。
+    /// 和棱柱族共用同一个常量，画出来才和立体图是一套透视。
+    /// </summary>
+    public static readonly Vector2 SpaceAxisYDirection =
+        Vector2.Normalize(new Vector2(ShapeSpec.PrismDepthSkew, -1f));
+
+    /// <summary>
+    /// **空间直角坐标系**的一笔画法（2026-11-03）：按下点 `(x0,y0)` = 原点 O，
+    /// 指针 `(x1,y1)` 只定 **x / z 两截的长度**；y 轴按斜二测固定方向、
+    /// 默认取 `min(x, z) / 2`，之后可以拖轴端单独改。
+    ///
+    /// `Points` = `[O, +x 端, +y 端, +z 端]`：
+    ///   · **只画正半轴**（用户 2026-11-03 拍板），原点在角上；
+    ///   · 拖到左边 / 下边也只取长度，x 始终向右、z 始终向上；
+    ///   · 不带网格、不写 x/y/z 字母（没有文字层）。
+    /// </summary>
+    public void SetSpaceAxisBox(float x0, float y0, float x1, float y1)
+    {
+        while (Points.Count < 4) AddPoint(x0, y0, 1f, 0);
+        float xLen = MathF.Max(0.5f, MathF.Abs(x1 - x0));
+        float zLen = MathF.Max(0.5f, MathF.Abs(y1 - y0));
+        float yLen = MathF.Max(0.5f, MathF.Min(xLen, zLen) * 0.5f);
+        var o = new Vector2(x0, y0);
+        SetPoint(0, o);
+        SetPoint(1, o + new Vector2(xLen, 0f));
+        SetPoint(2, o + SpaceAxisYDirection * yLen);
+        SetPoint(3, o + new Vector2(0f, -zLen));
+    }
+
+    /// <summary>空间坐标系的四个定义点（局部坐标）：O / +x / +y / +z。</summary>
+    public Vector2[] SpaceAxisPointsLocal()
+    {
+        if (Points.Count < 4) return Array.Empty<Vector2>();
+        return new[]
+        {
+            new Vector2(Points[0].X, Points[0].Y),
+            new Vector2(Points[1].X, Points[1].Y),
+            new Vector2(Points[2].X, Points[2].Y),
+            new Vector2(Points[3].X, Points[3].Y),
+        };
+    }
+
+    /// <summary>
     /// 坐标系 / 数轴的**画布空间墨迹框** = 定义点的外接 ＋ 半笔宽。
     ///
     /// 它以前要多算一截"刻度半长"（刻度是唯一伸出外框的东西）；**刻度取消之后那一截
@@ -1968,6 +2025,7 @@ internal sealed class Stroke
         // 差别只在"顶上那个中心算出来的面长什么样"（见 PrismTopLocal），所以只多两行。
         StrokeKind.Pyramid => 3,
         StrokeKind.Frustum => 3,
+        StrokeKind.SpaceCoordinate => 4, // 原点 + 三个轴端
         _ => 2,
     };
 
@@ -3143,11 +3201,13 @@ internal sealed class Stroke
             return PolygonInkBoundsOf(kind, transform, Matrix3x2.Identity,
                                       local[0], local[1], local[2], width).Inflate(2f);
 
-        // 坐标系 / 数轴：定义点的外接 + 半笔宽（**没有刻度了，所以不用再往外多算一截**）。
-        if (kind is StrokeKind.Coordinate or StrokeKind.NumberLine && local.Count >= 2)
+        // 坐标系 / 数轴 / 空间坐标系：定义点的外接 + 半笔宽。
+        if (kind is StrokeKind.Coordinate or StrokeKind.NumberLine or StrokeKind.SpaceCoordinate
+            && local.Count >= 2)
         {
-            int n = Math.Min(local.Count, 3);
-            Span<Vector2> pts = stackalloc Vector2[3];
+            int n = Math.Min(local.Count,
+                kind == StrokeKind.SpaceCoordinate ? 4 : 3);
+            Span<Vector2> pts = stackalloc Vector2[4];
             for (int i = 0; i < n; i++) pts[i] = local[i];
             return AxisInkBoundsOf(pts[..n], transform, Matrix3x2.Identity, width).Inflate(2f);
         }
@@ -3702,6 +3762,7 @@ internal sealed class Stroke
                 or StrokeKind.Cuboid or StrokeKind.Tetrahedron
                 or StrokeKind.Prism or StrokeKind.Pyramid or StrokeKind.Frustum
                 or StrokeKind.Star or StrokeKind.Trapezoid or StrokeKind.Sector
+                or StrokeKind.SpaceCoordinate
            || IsCurveKind(kind);
 
     /// <summary>
@@ -4410,6 +4471,19 @@ internal sealed class Stroke
                 break;
             }
 
+            // ---- 空间坐标系：三根从原点出发的轴（抬笔分段，避免连出假线）----
+            case StrokeKind.SpaceCoordinate:
+            {
+                if (Points.Count < 4) break;
+                var o = new Vector2(Points[0].X, Points[0].Y);
+                list.Add(o); list.Add(new Vector2(Points[1].X, Points[1].Y));
+                list.Add(OutlineBreak);
+                list.Add(o); list.Add(new Vector2(Points[2].X, Points[2].Y));
+                list.Add(OutlineBreak);
+                list.Add(o); list.Add(new Vector2(Points[3].X, Points[3].Y));
+                break;
+            }
+
             case StrokeKind.Coordinate:
             case StrokeKind.NumberLine:
             {
@@ -4819,6 +4893,7 @@ internal sealed class Stroke
             StrokeKind.Sector => BuildSector(factory),
             StrokeKind.Coordinate => BuildAxes(factory),
             StrokeKind.NumberLine => BuildAxes(factory),
+            StrokeKind.SpaceCoordinate => BuildAxes(factory),
             StrokeKind.Parabola => BuildParabola(factory),
             StrokeKind.Hyperbola => BuildHyperbola(factory),
             StrokeKind.Sine => BuildWave(factory),
@@ -4985,9 +5060,26 @@ internal sealed class Stroke
     private List<InkPiece> AxisPieces()
     {
         var list = new List<InkPiece>();
-        var (minX, minY, maxX, maxY) = AxisFrameLocal();
         float head = PreviewArrowHeadLen > 0.5f
             ? PreviewArrowHeadLen : AxisArrowHeadLen(Width);
+
+        // ---- 空间直角坐标系：原点 → 三个正半轴端点，各带一个箭头 ----
+        if (Kind == StrokeKind.SpaceCoordinate)
+        {
+            if (Points.Count < 4) return list;
+            var so = new Vector2(Points[0].X, Points[0].Y);
+            void Axis(Vector2 end, Vector2 dir)
+            {
+                list.Add(new InkPiece(new List<Vector2> { so, end }, false));
+                list.Add(new InkPiece(AxisArrowPoints(end, dir, head), false));
+            }
+            Axis(new Vector2(Points[1].X, Points[1].Y), new Vector2(1f, 0f));
+            Axis(new Vector2(Points[2].X, Points[2].Y), SpaceAxisYDirection);
+            Axis(new Vector2(Points[3].X, Points[3].Y), new Vector2(0f, -1f));
+            return list;
+        }
+
+        var (minX, minY, maxX, maxY) = AxisFrameLocal();
 
         // ---- 数轴：一条水平线 + 右端一个箭头 ----
         if (Kind == StrokeKind.NumberLine)

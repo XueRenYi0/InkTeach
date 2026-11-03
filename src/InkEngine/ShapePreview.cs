@@ -131,6 +131,11 @@ internal static class ShapePreview
                 s.SetTangentBox(mid, mid, 82f, 18f, 2f);
                 s.PreviewTangentHalfHeight = 32f;
                 break;
+            case Tool.SpaceCoordinate:
+                s.AddPoint(16f, 86f, 1f, 0);
+                s.SetSpaceAxisBox(16f, 86f, 86f, 16f);
+                s.PreviewArrowHeadLen = 8.5f;
+                break;
             case Tool.Cylinder:
             case Tool.Cone:
             case Tool.ConeFrustum:

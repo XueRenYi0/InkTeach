@@ -108,7 +108,7 @@ internal sealed partial class App
             Console.WriteLine($"  已出图：{dpath}");
         else Console.WriteLine("  出图失败：" + dpath);
 
-        // 统一面板 2A：图形页（22 张卡，先只显示）。出图用横排，8 列 3 行。
+        // 统一面板 2A：图形页（39 张卡，先只显示）。出图用横排，9 列 5 行。
         LibraryMenu = 0;
         LibrarySelectMode = false;
         LibrarySelected.Clear();

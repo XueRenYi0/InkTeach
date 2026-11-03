@@ -63,6 +63,7 @@ internal static class IconAtlas
         if (name == "trapezoid") { DrawTrapezoidIcon(ctx, x, y, size, brush); return; }
         if (name == "sector") { DrawSectorIcon(ctx, x, y, size, brush); return; }
         if (name == "axes") { DrawAxes(ctx, x, y, size, brush); return; }
+        if (name == "spaceaxes") { DrawSpaceAxes(ctx, x, y, size, brush); return; }
         // "坐标系 + 网格"那一档（2026-09-24）：同一张图多一层细格线。
         if (name == "axesGrid") { DrawAxes(ctx, x, y, size, brush, grid: true); return; }
         if (name == "numberline") { DrawNumberLine(ctx, x, y, size, brush); return; }
@@ -430,6 +431,41 @@ internal static class IconAtlas
         ctx.Transform = saved;
     }
 
+    /// <summary>
+    /// **空间直角坐标系图标**：O 在左下，x 向右、z 向上、y 沿立体图的斜二测方向。
+    /// 和画布上的画法（<see cref="Stroke.SetSpaceAxisBox"/>）同一条方向规则，
+    /// 只是缩到 24×24 的图标格子里。
+    /// </summary>
+    private static void DrawSpaceAxes(ID2D1DeviceContext ctx, float x, float y,
+                                      float size, ID2D1Brush brush)
+    {
+        var saved = ctx.Transform;
+        ctx.Transform = Matrix3x2.CreateScale(size / 24f)
+                      * Matrix3x2.CreateTranslation(x, y)
+                      * saved;
+
+        var o = new Vector2(4f, 20f);
+        var xEnd = new Vector2(20f, 20f);
+        var zEnd = new Vector2(4f, 4f);
+        var yEnd = new Vector2(10f, 8f);      // (6, -12) ≈ 立体图的斜二测方向
+        ctx.DrawLine(o, xEnd, brush, 1.5f, _round);
+        ctx.DrawLine(o, yEnd, brush, 1.5f, _round);
+        ctx.DrawLine(o, zEnd, brush, 1.5f, _round);
+
+        void Arrow(Vector2 tip, Vector2 dir)
+        {
+            var root = tip - dir * 3.2f;
+            var n = new Vector2(-dir.Y, dir.X);
+            var spread = n * 1.7f;
+            ctx.DrawLine(root + spread, tip, brush, 1.5f, _round);
+            ctx.DrawLine(tip, root - spread, brush, 1.5f, _round);
+        }
+        Arrow(xEnd, new Vector2(1f, 0f));
+        Arrow(zEnd, new Vector2(0f, -1f));
+        Arrow(yEnd, Vector2.Normalize(new Vector2(ShapeSpec.PrismDepthSkew, -1f)));
+
+        ctx.Transform = saved;
+    }
     /// <summary>
     /// **自绘的数轴图标**：一条带箭头的水平线 ＋ 三根刻度。
     ///

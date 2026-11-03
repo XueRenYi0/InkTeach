@@ -12135,7 +12135,8 @@ public partial class InkEngine
              or Tool.Cylinder or Tool.Cone or Tool.Cuboid or Tool.Tetrahedron
              or Tool.Prism or Tool.Pyramid or Tool.Frustum
              or Tool.ConeFrustum or Tool.Sphere
-             or Tool.Star or Tool.Trapezoid or Tool.Sector;
+             or Tool.Star or Tool.Trapezoid or Tool.Sector
+             or Tool.SpaceCoordinate;
 
     /// <summary>
     /// **一笔**做什么：把"这一笔拖到的位置"写进半成品的几何。
@@ -12392,6 +12393,7 @@ public partial class InkEngine
         Tool.Star => StrokeKind.Star,
         Tool.Trapezoid => StrokeKind.Trapezoid,
         Tool.Sector => StrokeKind.Sector,
+        Tool.SpaceCoordinate => StrokeKind.SpaceCoordinate,
         _ => StrokeKind.Arrow,
     };
 
@@ -12689,6 +12691,14 @@ public partial class InkEngine
         if (s.Kind is StrokeKind.Triangle or StrokeKind.Parallelogram)
         {
             s.SetShapeBox(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y);
+            _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);
+            return;
+        }
+
+        // 空间直角坐标系：按下 = 原点，拖出去只定 x/z 两截；y 按斜二测自动半长。
+        if (s.Kind == StrokeKind.SpaceCoordinate)
+        {
+            s.SetSpaceAxisBox(_shapeBoxOrigin.X, _shapeBoxOrigin.Y, x, y);
             _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);
             return;
         }
@@ -16948,6 +16958,13 @@ public partial class InkEngine
             _shapeSnapText = snapText;
             _shapeSnapAnchor = canvasPoint;
         }
+        else if (snapping && !alt && s.Kind == StrokeKind.SpaceCoordinate
+                 && _vertexHandle == ShapeHandle.SpaceOrigin)
+        {
+            canvasPoint = SnapSpaceOrigin(canvasPoint, out _shapeSnap, out string snapText);
+            _shapeSnapText = snapText;
+            _shapeSnapAnchor = canvasPoint;
+        }
 
         var local = SelectionHandles.ToLocalPoint(canvasPoint, s.Transform);
         var c = s.ShapeCenterLocal;
@@ -17095,6 +17112,40 @@ public partial class InkEngine
                 if (idx < 0 || idx >= pts.Length) break;
                 pts[idx] = SelectionHandles.SnapPolygonVertex(
                     s.Kind, idx, pts[0], pts[1], pts[2], local, lenTol, alt, out _shapeSnap);
+                break;
+            }
+
+            case StrokeKind.SpaceCoordinate:
+            {
+                // 2026-11-03：四个手柄各管一件事。O = 整组平移（否则轴会歪，
+                // 就不再是"直角坐标系"）；三个轴端只改自己那一截的长度。
+                if (pts.Length < 4) break;
+                var o = new Vector2(pts[0].X, pts[0].Y);
+                if (_vertexHandle == ShapeHandle.SpaceOrigin)
+                {
+                    var delta = local - o;
+                    for (int i = 0; i < 4; i++) pts[i] += delta;
+                    break;
+                }
+                if (_vertexHandle == ShapeHandle.SpaceX)
+                {
+                    float len = MathF.Max(minAxis, local.X - o.X);
+                    pts[1] = o + new Vector2(len, 0f);
+                    break;
+                }
+                if (_vertexHandle == ShapeHandle.SpaceZ)
+                {
+                    float len = MathF.Max(minAxis, o.Y - local.Y);
+                    pts[3] = o + new Vector2(0f, -len);
+                    break;
+                }
+                if (_vertexHandle == ShapeHandle.SpaceY)
+                {
+                    var dir = Stroke.SpaceAxisYDirection;
+                    float len = MathF.Max(minAxis, Vector2.Dot(local - o, dir));
+                    pts[2] = o + dir * len;
+                    break;
+                }
                 break;
             }
 
@@ -17401,6 +17452,39 @@ public partial class InkEngine
         return new Vector2(x, y);
     }
 
+    /// <summary>
+    /// 空间坐标系**原点**的吸附：只吸画布中心 / 四条边（没有"自己的框"——
+    /// 正半轴坐标系的框是三个轴端现算的，吸框角没有意义）。
+    /// 8 逻辑像素，横竖分开判，`Alt` 在调用处已经排除。
+    /// </summary>
+    private Vector2 SnapSpaceOrigin(Vector2 p, out ShapeSnapKind kind, out string text)
+    {
+        kind = ShapeSnapKind.None;
+        text = "";
+        var vp = ViewportCanvas;
+        float tol = CoordinateSnapRadiusLogical * DpiScale;
+        float cx = (vp.MinX + vp.MaxX) * 0.5f;
+        float cy = (vp.MinY + vp.MaxY) * 0.5f;
+        float x = p.X, y = p.Y;
+        string sx = "", sy = "";
+        bool centerX = false, centerY = false;
+
+        if (MathF.Abs(p.X - cx) <= tol) { x = cx; sx = "画布水平居中"; centerX = true; }
+        else if (MathF.Abs(p.X - vp.MinX) <= tol) { x = vp.MinX; sx = "画布左边缘"; }
+        else if (MathF.Abs(p.X - vp.MaxX) <= tol) { x = vp.MaxX; sx = "画布右边缘"; }
+
+        if (MathF.Abs(p.Y - cy) <= tol) { y = cy; sy = "画布垂直居中"; centerY = true; }
+        else if (MathF.Abs(p.Y - vp.MinY) <= tol) { y = vp.MinY; sy = "画布上边缘"; }
+        else if (MathF.Abs(p.Y - vp.MaxY) <= tol) { y = vp.MaxY; sy = "画布下边缘"; }
+
+        if (sx.Length == 0 && sy.Length == 0) return p;
+        kind = centerX && centerY ? ShapeSnapKind.CanvasCenter : ShapeSnapKind.CanvasEdge;
+        text = centerX && centerY ? "画布中心"
+             : sx.Length > 0 && sy.Length > 0 ? sx + " + " + sy
+             : sx.Length > 0 ? sx : sy;
+        return new Vector2(x, y);
+    }
+
     ///
     /// 量的都是**用户看到的那个量**：
     ///   · 直线的 α 按**画布坐标**量（旋转过的线，局部角不等于屏幕角）；
@@ -17487,6 +17571,13 @@ public partial class InkEngine
 
             // 四种曲线的读数（p / 实半轴 / 虚半轴 / 周期＋振幅）2026-09-20 随手柄一起删了：
             // 读数挂在手柄上，手柄没了，那个量就没人拖得动它们了（见 ShapeHandlesOf）。
+            case StrokeKind.SpaceCoordinate:
+                // 空间坐标系没有角度/长度读数（轴端不标字母，也不显示数值）。
+                _vertexReadout = VertexReadoutKind.None;
+                _vertexReadoutValue = 0f;
+                _vertexReadoutSecondary = 0f;
+                break;
+
             case StrokeKind.Coordinate:
             {
                 float fx0 = MathF.Min(pts[0].X, pts[1].X);

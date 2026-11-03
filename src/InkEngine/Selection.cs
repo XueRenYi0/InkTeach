@@ -111,6 +111,14 @@ internal enum ShapeHandle
     EdgeTop,
     /// <summary>梯形下底中点（拖它只改下底长度）。</summary>
     EdgeBottom,
+    /// <summary>空间坐标系：原点（整组平移）。</summary>
+    SpaceOrigin,
+    /// <summary>空间坐标系：+x 轴端（只改 x 长度）。</summary>
+    SpaceX,
+    /// <summary>空间坐标系：+y 轴端（只沿斜二测方向改 y 长度）。</summary>
+    SpaceY,
+    /// <summary>空间坐标系：+z 轴端（只改 z 长度）。</summary>
+    SpaceZ,
 }
 
 /// <summary>
@@ -602,6 +610,15 @@ internal static class SelectionHandles
                 dst[2] = ShapeHandle.Vertex2;
                 return 3;
 
+            case StrokeKind.SpaceCoordinate:
+                // **四个**：原点 + 三个正半轴端点（用户 2026-11-03 定：只画正半轴）。
+                if (dst.Length < 4 || s.Points.Count < 4) return 0;
+                dst[0] = ShapeHandle.SpaceOrigin;
+                dst[1] = ShapeHandle.SpaceX;
+                dst[2] = ShapeHandle.SpaceY;
+                dst[3] = ShapeHandle.SpaceZ;
+                return 4;
+
             case StrokeKind.Coordinate:
                 // **四轴端 + 原点**（2026-11-03）：四个轴端各自只改**自己那一截**的长度，
                 // 所以正负半轴可以不一样长。用户原话："能不能给坐标轴上加上 4 个点，
@@ -724,6 +741,14 @@ internal static class SelectionHandles
                 ? new Vector2((s.Points[0].X + s.Points[1].X) * 0.5f,
                               (s.Points[0].Y + s.Points[1].Y) * 0.5f)
                 : c,
+            ShapeHandle.SpaceOrigin => s.Points.Count >= 1
+                ? new Vector2(s.Points[0].X, s.Points[0].Y) : c,
+            ShapeHandle.SpaceX => s.Points.Count >= 2
+                ? new Vector2(s.Points[1].X, s.Points[1].Y) : c,
+            ShapeHandle.SpaceY => s.Points.Count >= 3
+                ? new Vector2(s.Points[2].X, s.Points[2].Y) : c,
+            ShapeHandle.SpaceZ => s.Points.Count >= 4
+                ? new Vector2(s.Points[3].X, s.Points[3].Y) : c,
             _ => c,
         };
     }
@@ -761,7 +786,8 @@ internal static class SelectionHandles
     /// 抛物线的朝向切换仍在图形面板那一格（不受旋转影响）。
     /// </summary>
     public static bool RotateHandleVisible(Stroke s)
-        => !(s.Kind is StrokeKind.Circle or StrokeKind.Coordinate or StrokeKind.NumberLine
+        => !(s.Kind is StrokeKind.Circle or StrokeKind.Coordinate
+             or StrokeKind.SpaceCoordinate or StrokeKind.NumberLine
              or StrokeKind.TextBox);
 
     /// <summary>
@@ -811,6 +837,10 @@ internal static class SelectionHandles
         ShapeHandle.FocusPoint => SelHandle.FocusPoint,
         ShapeHandle.EdgeTop => SelHandle.Top,
         ShapeHandle.EdgeBottom => SelHandle.Bottom,
+        ShapeHandle.SpaceOrigin => SelHandle.VertexA,
+        ShapeHandle.SpaceX => SelHandle.Right,
+        ShapeHandle.SpaceY => SelHandle.FocusPoint,
+        ShapeHandle.SpaceZ => SelHandle.Top,
         _ => SelHandle.None,
     };
 
@@ -822,6 +852,18 @@ internal static class SelectionHandles
     /// </summary>
     public static ShapeHandle HandleOf(Stroke s, SelHandle h)
     {
+        // **空间坐标系**（2026-11-03）：四个手柄借通用命中位，语义由这一支翻译。
+        // O=VertexA、X=Right、Y=FocusPoint、Z=Top；别的 SelHandle 一律没有。
+        if (s.Kind == StrokeKind.SpaceCoordinate)
+            return h switch
+            {
+                SelHandle.VertexA => ShapeHandle.SpaceOrigin,
+                SelHandle.Right => ShapeHandle.SpaceX,
+                SelHandle.FocusPoint => ShapeHandle.SpaceY,
+                SelHandle.Top => ShapeHandle.SpaceZ,
+                _ => ShapeHandle.None,
+            };
+
         // **坐标系**（2026-11-03）：四个轴端走通用的 Left/Right/Top/Bottom 命中位，
         // 原点 / 格距仍借用 VertexC / VertexD。别的 SelHandle 一律不给——外框角
         // 不再有手柄，画都不画的东西也不该点得到。
@@ -974,10 +1016,9 @@ internal static class SelectionHandles
             // （半轴很小时），后画的轴端点是更具体的那个（拖它只改一条半轴），
             // 让它优先，否则小椭圆上永远只能拖中心。
             //
-            // **坐标系例外**：四个轴端可以缩到贴近原点（用户要把原点摆到左下角，
-            // 就是让 −x / +y 两截缩到最短），重合时"谁后画谁赢"会让原点永远压住
-            // 缩短的轴端，再也拉不出来。这里按**离指针最近**的那颗算。
-            if (s.Kind == StrokeKind.Coordinate)
+            // **坐标系 / 空间坐标系例外**：四个/三个轴端可以缩到贴近原点，重合时
+            // "谁后画谁赢"会让原点永远压住缩短的轴端，再也拉不出来。这里按**离指针最近**的那颗算。
+            if (s.Kind is StrokeKind.Coordinate or StrokeKind.SpaceCoordinate)
             {
                 int best = -1;
                 float bestD = rad * rad;

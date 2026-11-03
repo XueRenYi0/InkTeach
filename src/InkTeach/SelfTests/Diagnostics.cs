@@ -1868,6 +1868,145 @@ internal sealed partial class App
 
 
     /// <summary>
+    /// 空间直角坐标系自检（2026-11-03）：一笔画法、四轴端、拖轴端、整组平移、
+    /// 轮廓/紧框、存档、立体组第一张卡。几何全走正式代码路径。
+    /// </summary>
+    private void SpaceAxisTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 空间直角坐标系自检 ===");
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail = "")
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-34} {detail}");
+        }
+        bool Near(float a, float b, float tol = 1.5f) => MathF.Abs(a - b) <= tol;
+        bool Near2(Vector2 a, Vector2 b, float tol = 1.5f)
+            => Near(a.X, b.X, tol) && Near(a.Y, b.Y, tol);
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.SpaceCoordinate;
+        ShapeDragForTest(200f, 200f, 500f, 400f);
+        var s = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+        Check("一笔画出空间坐标系", s != null && s.Kind == StrokeKind.SpaceCoordinate,
+              s == null ? "没有对象" : $"Kind={s.Kind}");
+        if (s == null) { Console.WriteLine("  （后面几项没法验）"); ExitCode = 1; return; }
+
+        Check("四个定义点（O / +x / +y / +z）", s.Points.Count == 4,
+              $"控制点 {s.Points.Count} 个");
+        var o = new Vector2(s.Points[0].X, s.Points[0].Y);
+        var x = new Vector2(s.Points[1].X, s.Points[1].Y);
+        var y = new Vector2(s.Points[2].X, s.Points[2].Y);
+        var z = new Vector2(s.Points[3].X, s.Points[3].Y);
+        var yDir = Stroke.SpaceAxisYDirection;
+        Check("按下点 = 原点 O", Near2(o, new Vector2(200f, 200f)),
+              $"O=({o.X:F0},{o.Y:F0})");
+        Check("拖出的 x / z 长度", Near2(x, new Vector2(500f, 200f)) && Near2(z, new Vector2(200f, 0f)),
+              $"X=({x.X:F0},{x.Y:F0}) Z=({z.X:F0},{z.Y:F0})");
+        Check("y 沿斜二测方向、默认半长", Near(Vector2.Distance(o, y), 100f)
+              && Near(Vector2.Dot(Vector2.Normalize(y - o), yDir), 1f, 0.001f),
+              $"Y=({y.X:F0},{y.Y:F0})，方向 {Vector2.Normalize(y - o)}");
+
+        Span<ShapeHandle> hs = stackalloc ShapeHandle[8];
+        int hn = SelectionHandles.ShapeHandlesOf(s, hs);
+        Check("四个手柄：O / X / Y / Z",
+              hn == 4 && hs[0] == ShapeHandle.SpaceOrigin && hs[1] == ShapeHandle.SpaceX
+              && hs[2] == ShapeHandle.SpaceY && hs[3] == ShapeHandle.SpaceZ,
+              $"{hn} 个");
+        Check("没有旋转柄、外框角不留后门",
+              !SelectionHandles.RotateHandleVisible(s)
+              && SelectionHandles.HandleOf(s, SelHandle.TopLeft) == ShapeHandle.None,
+              $"旋转={SelectionHandles.RotateHandleVisible(s)}");
+
+        // 拖 X：只改 x 长度，指针的 y 偏移忽略。
+        var xh = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceX);
+        VertexDragForTest(s, ShapeHandle.SpaceX, xh.X, xh.Y, xh.X + 100f, xh.Y + 50f);
+        Check("拖 +x：只改 x 长度，y/z/原点不动",
+              Near(s.Points[1].X, xh.X + 100f) && Near(s.Points[1].Y, o.Y)
+              && Near(s.Points[2].X, y.X) && Near(s.Points[3].Y, z.Y),
+              $"X=({s.Points[1].X:F0},{s.Points[1].Y:F0})");
+
+        // 拖 Z：只改 z 长度。
+        var zh = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceZ);
+        VertexDragForTest(s, ShapeHandle.SpaceZ, zh.X, zh.Y, zh.X + 40f, zh.Y - 80f);
+        Check("拖 +z：只改 z 长度，x/y/原点不动",
+              Near(s.Points[3].X, o.X) && Near(s.Points[3].Y, zh.Y - 80f)
+              && Near(s.Points[1].X, xh.X + 100f) && Near(s.Points[2].Y, y.Y),
+              $"Z=({s.Points[3].X:F0},{s.Points[3].Y:F0})");
+
+        // 拖 Y：只沿固定方向改长度，不能拖歪。
+        var yh = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceY);
+        var yTarget = yh + Stroke.SpaceAxisYDirection * 60f;
+        VertexDragForTest(s, ShapeHandle.SpaceY, yh.X, yh.Y, yTarget.X, yTarget.Y);
+        var newY = new Vector2(s.Points[2].X, s.Points[2].Y);
+        Check("拖 +y：只沿斜二测方向改长度",
+              Near(Vector2.Distance(o, newY), Vector2.Distance(o, y) + 60f)
+              && Near(MathF.Abs(Vector2.Dot(Vector2.Normalize(newY - o), yDir)), 1f, 0.001f),
+              $"Y 长 {Vector2.Distance(o, y):F0}→{Vector2.Distance(o, newY):F0}");
+
+        // 拖 O：四个点整组平移，轴长/方向都不变。
+        var beforeO = s.SpaceAxisPointsLocal();
+        var oh = SelectionHandles.ShapeHandleCanvasPosition(s, ShapeHandle.SpaceOrigin);
+        VertexDragForTest(s, ShapeHandle.SpaceOrigin, oh.X, oh.Y, oh.X + 50f, oh.Y + 30f);
+        var afterO = s.SpaceAxisPointsLocal();
+        Check("拖 O：整组平移，四个点同一位移",
+              Near2(afterO[0] - beforeO[0], new Vector2(50f, 30f))
+              && Near2(afterO[1] - beforeO[1], new Vector2(50f, 30f))
+              && Near2(afterO[2] - beforeO[2], new Vector2(50f, 30f))
+              && Near2(afterO[3] - beforeO[3], new Vector2(50f, 30f)),
+              $"Δ=({afterO[0].X - beforeO[0].X:F0},{afterO[0].Y - beforeO[0].Y:F0})");
+
+        // 原点吸画布中心：拖到中心后，四个点整组跟着吸过去。
+        {
+            var vp = ViewportCanvas;
+            var ctr = new Vector2((vp.MinX + vp.MaxX) * 0.5f, (vp.MinY + vp.MaxY) * 0.5f);
+            ShapeDragForTest(ctr.X + 300f, ctr.Y + 200f, ctr.X + 500f, ctr.Y + 400f);
+            var snapS = Doc.Strokes[^1];
+            var sh0 = SelectionHandles.ShapeHandleCanvasPosition(snapS, ShapeHandle.SpaceOrigin);
+            VertexDragForTest(snapS, ShapeHandle.SpaceOrigin, sh0.X, sh0.Y, ctr.X, ctr.Y);
+            Check("原点吸附：拖到画布中心后 O 落在中心",
+                  Near2(new Vector2(snapS.Points[0].X, snapS.Points[0].Y), ctr),
+                  $"O=({snapS.Points[0].X:F0},{snapS.Points[0].Y:F0}) 中心=({ctr.X:F0},{ctr.Y:F0})");
+        }
+
+        var outline = s.ShapeOutline();
+        int finite = 0;
+        foreach (var p in outline) if (!float.IsNaN(p.X)) finite++;
+        Check("轮廓：三根轴（两两之间抬笔，不连假线）",
+              finite == 6 && outline.Exists(p => float.IsNaN(p.X)),
+              $"有限点 {finite}，抬笔 {outline.FindAll(p => float.IsNaN(p.X)).Count}");
+        Check("紧框：四个点都包进去", s.WorldInkBounds.MaxX > s.WorldInkBounds.MinX
+              && s.WorldInkBounds.MaxY > s.WorldInkBounds.MinY,
+              $"框 {s.WorldInkBounds.MinX:F0},{s.WorldInkBounds.MinY:F0}"
+              + $"..{s.WorldInkBounds.MaxX:F0},{s.WorldInkBounds.MaxY:F0}");
+
+        byte[] blob = InkSerializer.Save(Doc);
+        var back = new InkDocument();
+        InkSerializer.LoadInto(back, blob);
+        var rb = back.Strokes.Count > 0 ? back.Strokes[^1] : null;
+        Check("存档往返：Kind / 四个点都在",
+              rb != null && rb.Kind == StrokeKind.SpaceCoordinate && rb.Points.Count == 4,
+              rb == null ? "没有对象" : $"{rb.Kind}，{rb.Points.Count} 个点");
+
+        Check("立体组开头：空间坐标系是第 1 张，立体 17 / 全部 39",
+              ShapeCatalog.All.Length == 39 && ShapeCatalog.CountFor("solid") == 17
+              && ShapeCatalog.ForCategory("solid")[0].Tool == Tool.SpaceCoordinate,
+              $"all={ShapeCatalog.All.Length} solid={ShapeCatalog.CountFor("solid")}"
+              + $" first={ShapeCatalog.ForCategory("solid")[0].Tool}");
+        var preview = ShapePreview.Create(ShapeCatalog.ForCategory("solid")[0]);
+        Check("卡片小样：也是 SpaceCoordinate / 四个点",
+              preview.Kind == StrokeKind.SpaceCoordinate && preview.Points.Count == 4,
+              $"{preview.Kind}，{preview.Points.Count} 个点");
+
+        Console.WriteLine();
+        Console.WriteLine($"空间直角坐标系专项：通过 {pass} 项，失败 {fail} 项");
+        ExitCode = fail == 0 ? 0 : 1;
+        _quit = true;
+    }
+
+    /// <summary>
     /// 坐标系 / 数轴自检（2026-09-19 第三批）。
     ///
     /// 四层判据，缺一层都可能"看着绿其实没做"：

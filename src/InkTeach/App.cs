@@ -556,6 +556,12 @@ internal sealed partial class App : InkEngine.InkEngine
             _nextLogAt = double.MaxValue;
             AxisTest();
         }
+        else if (mode == "--spaceaxistest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SpaceAxisTest();
+        }
         else if (mode == "--curvetest")
         {
             _autoExitAt = double.MaxValue;
@@ -888,6 +894,7 @@ internal sealed partial class App : InkEngine.InkEngine
                         : args.Contains("--parallelogram") ? "parallelogram"
                         : args.Contains("--parabola") ? "parabola"
                         : args.Contains("--cuboid") ? "cuboid"
+                        : args.Contains("--spacecoordinate") ? "spacecoordinate"
                         : args.Contains("--rectangle") ? "rectangle" : "line";
             ShapeToolShowcase(args.Length > 1 ? args[1] : "reports/shape-line-handles.bmp",
                               kind, args.Contains("--drag"), args.Contains("--draw"),
@@ -1509,6 +1516,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --dwelltest         停顿成型的手势自检（真入口 + 推时钟：触发 / 定型 / 撤销回手绘 / 不留墨）");
         Console.WriteLine("  --dashtest          线型自检（实线/虚线/点线上屏墨量、面板那一行、存档往返）");
         Console.WriteLine("  --axistest          坐标系/数轴自检（画法 / 四轴端+原点 / 吸附 / 网格 / 上屏 / 存档往返）");
+        Console.WriteLine("  --spaceaxistest     空间直角坐标系自检（一笔画法 / 四轴端 / 整组平移 / 存档 / 面板）");
         Console.WriteLine("  --axisshow [路径]   出图：坐标系（带网格/不带）+ 数轴 + 一条虚线");
         Console.WriteLine("  --curvetest         四种曲线自检（画法 / 紧框 / 手柄精简 / 朝向 / 存档往返）");
         Console.WriteLine("  --curveshow [路径]  出图：抛物线四种开口 + 双曲线两个方向 + 正弦/余弦各一周期");
@@ -3131,6 +3139,11 @@ internal sealed partial class App : InkEngine.InkEngine
                     sh.AddPoint(cx - 260f, cy - 40f, 1f, 0);
                     sh.SetCuboidFront(cx - 260f, cy - 40f, cx + 180f, cy + 200f);
                     sh.SetCuboidDepth(cy - 40f, cy - 40f + 150f);  // 深 = |正面上边 − 这个 y| = 150
+                    break;
+                case "spacecoordinate":
+                    sh.Tool = Tool.SpaceCoordinate; sh.Kind = StrokeKind.SpaceCoordinate;
+                    sh.AddPoint(cx - 260f, cy + 180f, 1f, 0);
+                    sh.SetSpaceAxisBox(cx - 260f, cy + 180f, cx + 240f, cy - 180f);
                     break;
                 default: // parallelogram
                     sh.Tool = Tool.Parallelogram; sh.Kind = StrokeKind.Parallelogram;
