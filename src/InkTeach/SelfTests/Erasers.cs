@@ -106,6 +106,16 @@ internal sealed partial class App
         const float penW = 16f;
         const float reach = penW * 0.5f;          // 半笔宽：切口要停在框外这么远
 
+        // --- 0. 精细档（2026-11-03）：两种橡皮的最前面各多一档 -------------------
+        Check("像素橡皮档位表：首档 14、共 6 档",
+              PixelEraserWidthPresets.Length == 6 && PixelEraserWidthPresets[0] == 14f
+              && PixelEraserWidthPresets[^1] == 150f,
+              string.Join("/", PixelEraserWidthPresets));
+        Check("整笔橡皮档位表：首档 6、共 6 档",
+              EraserRadiusPresets.Length == 6 && EraserRadiusPresets[0] == 6f
+              && EraserRadiusPresets[^1] == 34f,
+              string.Join("/", EraserRadiusPresets));
+
         // --- 0. 形状与落点反馈 -------------------------------------------------
         Check("落点是竖着的黄金比例矩形",
               PixelEraserWidthLogical > 0f && PixelEraserHeightLogical > PixelEraserWidthLogical

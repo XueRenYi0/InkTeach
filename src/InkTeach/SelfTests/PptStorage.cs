@@ -1619,6 +1619,24 @@ internal sealed partial class App
               Doc.Strokes.Count == 0 && Doc.UndoDepth == undos0,
               $"撤销后对象 {Doc.Strokes.Count}，撤销栈回到 {Doc.UndoDepth}");
 
+        // --- 4.5 翻到别处再粘：落在当前屏，不把人拽回原件（2026-11-03）-------------
+        {
+            float camWas = ViewOffsetY;
+            ViewOffsetY = camWas + (ViewportCanvas.MaxY - ViewportCanvas.MinY) + 600f;
+            var vpFar = ViewportCanvas;
+            Doc.Clear();
+            Doc.ClearHistory();
+            bool pastedFar = PasteFromClipboard();
+            var farBox = EditRegion.Of(Doc.Strokes);
+            bool inFarView = pastedFar && Doc.Strokes.Count == expect.Length
+                          && farBox.MinY >= vpFar.MinY - 0.5f && farBox.MaxY <= vpFar.MaxY + 0.5f;
+            Check("翻到下一屏再粘贴：落在当前屏内（不拽回原件）", inFarView,
+                  $"落在 y {farBox.MinY:F0}..{farBox.MaxY:F0}，当前屏 {vpFar.MinY:F0}..{vpFar.MaxY:F0}");
+            Doc.Clear();
+            Doc.ClearHistory();
+            ViewOffsetY = camWas;
+        }
+
         // --- 5. 只有图（没有对象格式）→ 退回"当图粘" ---------------------------
         var little = MakeTestImage(64, 48);
         bool wroteImg = ClipboardImage.SetImage(little.Bgra, little.Width, little.Height);

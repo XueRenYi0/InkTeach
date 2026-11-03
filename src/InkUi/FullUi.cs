@@ -1654,8 +1654,8 @@ public sealed partial class FullUi : IOverlayUi
     {
         Tool.Highlighter => (8f, 88f),     // = HighlighterWidthGrades 首尾
         Tool.Laser => (2f, 24f),           // = LaserWidthGrades 首尾
-        Tool.Eraser => (12f, 34f),         // 整笔橡皮的**落点半径** = EraserWidthGrades 首尾
-        Tool.PixelEraser => (46f, 150f),   // 面积橡皮的**横边**（高 = 横边 × 1.618）＝ 首尾
+        Tool.Eraser => (6f, 34f),          // 整笔橡皮的**落点半径** = EraserWidthGrades 首尾
+        Tool.PixelEraser => (14f, 150f),   // 像素橡皮的**横边**（高 = 横边 × 1.618）＝ 首尾
         _ => (1f, 20f),                    // 画笔 = PenWidthGrades 首尾
     };
 
@@ -1667,7 +1667,8 @@ public sealed partial class FullUi : IOverlayUi
     /// 界面只认公开契约、拿不到引擎 internal 是故意的。
     /// **笔表 2026-10-15 换代：1~20 每档差 1**（用户定；原 15 档的 .5 中点与 40 撤掉）：
     ///   荧光笔 8/13/18/25/32；激光 4/6/8/11/14/18/22；
-    ///   整笔橡皮 12/17/22/28/34（固定 5 档）；面积橡皮 46/70/93/122/150（固定 5 档）。
+    ///   整笔橡皮 6/12/17/22/28/34（6 档）；像素橡皮 14/46/70/93/122/150（6 档）。
+    ///   2026-11-03：两种橡皮各加了一个"精细档"（6 / 14），用来把一条细线切开一个小口。
     /// </summary>
     private static readonly float[] PenWidthGrades =
     {
@@ -1680,8 +1681,8 @@ public sealed partial class FullUi : IOverlayUi
         { 8f, 12f, 16f, 20f, 24f, 28f, 32f, 36f, 40f, 44f, 48f, 52f, 56f, 60f, 64f, 68f, 72f, 76f, 80f, 84f, 88f };
     private static readonly float[] LaserWidthGrades =
         { 2f, 4f, 6f, 8f, 10f, 12f, 14f, 16f, 18f, 20f, 22f, 24f };
-    private static readonly float[] EraserWidthGrades = { 12f, 17f, 22f, 28f, 34f };
-    private static readonly float[] PixelEraserWidthGrades = { 46f, 70f, 93f, 122f, 150f };
+    private static readonly float[] EraserWidthGrades = { 6f, 12f, 17f, 22f, 28f, 34f };
+    private static readonly float[] PixelEraserWidthGrades = { 14f, 46f, 70f, 93f, 122f, 150f };
 
     private float[] WidthGrades(Tool tool) => tool switch
     {

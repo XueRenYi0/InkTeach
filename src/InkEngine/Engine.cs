@@ -374,14 +374,16 @@ public partial class InkEngine
     /// 整笔橡皮的落点半径（逻辑像素）的档位。**以前它根本没有档位**——
     /// 界面上给橡皮画了粗细滑条，可引擎里 `SetWidthFromUi` 把它归到"其它"那一支，
     /// 结果改的是**笔宽**：老师拖橡皮的滑条，笔迹粗细悄悄变了、橡皮一点没变。
-    /// 现在四种工具各记各的。**2026-10-09 晚用户定：固定五档、滑动吸附在档上**
-    /// （不像笔那样铺开很多档——橡皮就 5 个大小，拖到哪都落在最近的档）。
+    /// 现在四种工具各记各的。**2026-10-09 晚用户定：固定档位、滑动吸附在档上**
+    /// （不像笔那样铺开很多档——橡皮就几个大小，拖到哪都落在最近的档）。
+    /// **2026-11-03**：两种橡皮各加了一个"精细档"（整笔 6 / 像素 14），放在最前面。
     /// </summary>
-    internal static readonly float[] EraserRadiusPresets = { 12f, 17f, 22f, 28f, 34f };
-    internal int EraserRadiusIndex = 2;
-    /// <summary>两种橡皮各自的可调范围（逻辑像素）。界面滑条的范围要和这里一致。</summary>
-    internal const float EraserRadiusMin = 8f, EraserRadiusMax = 48f;
-    internal const float PixelEraserMinWidth = 30f, PixelEraserMaxWidth = 160f;
+    internal static readonly float[] EraserRadiusPresets = { 6f, 12f, 17f, 22f, 28f, 34f };
+    internal int EraserRadiusIndex = 3;   // 默认还是 22（2026-11-03 前面加了一档 6）
+    /// <summary>两种橡皮各自的可调范围（逻辑像素）。界面滑条的范围要和这里一致。
+    /// 2026-11-03：各加了一个"精细档"，下限跟着降（像素橡皮 30 → 12）。</summary>
+    internal const float EraserRadiusMin = 4f, EraserRadiusMax = 48f;
+    internal const float PixelEraserMinWidth = 12f, PixelEraserMaxWidth = 160f;
     internal float PenWidthLogical = 3f;
     internal float HighlighterWidthLogical = 18f;
     /// <summary>
@@ -517,10 +519,10 @@ public partial class InkEngine
     /// </summary>
     internal const float GoldenRatio = 1.618f;
     internal float PixelEraserWidthLogical = 93f;
-    /// <summary>面积橡皮五档（2026-10-09 晚用户定：固定 5 档、滑动吸附；
-    /// 就是之前待办里那组 46/70/93/122/150）。默认 93（下标 2）。</summary>
-    internal static readonly float[] PixelEraserWidthPresets = { 46f, 70f, 93f, 122f, 150f };
-    internal int PixelEraserWidthIndex = 2;
+    /// <summary>像素橡皮六档（2026-10-09 晚用户定：固定档位、滑动吸附；
+    /// 2026-11-03 前面加了一档 14 用来切细线）。默认 93（下标 3）。</summary>
+    internal static readonly float[] PixelEraserWidthPresets = { 14f, 46f, 70f, 93f, 122f, 150f };
+    internal int PixelEraserWidthIndex = 3;   // 默认还是 93（前面加了一档 14）
     internal float PixelEraserHeightLogical => PixelEraserWidthLogical * GoldenRatio;
     internal float PixelEraserHalfWidthPx => PixelEraserWidthLogical * 0.5f * DpiScale;
     internal float PixelEraserHalfHeightPx => PixelEraserHeightLogical * 0.5f * DpiScale;
@@ -3223,8 +3225,12 @@ public partial class InkEngine
         { LaserWidthIndex = wLaser3; LaserWidthLogical = LaserWidthPresets[wLaser3]; }
         else if (MigrateWidthPref("w2.laser", new[] { 4f, 6f, 8f, 11f, 14f, 18f, 22f }, LaserWidthPresets, ref LaserWidthIndex, ref LaserWidthLogical)) { }
         else if (MigrateWidthPref("w.laser", new[] { 4f, 8f, 14f, 22f }, LaserWidthPresets, ref LaserWidthIndex, ref LaserWidthLogical)) { }
-        if (int.TryParse(GetUiPref("w2.pixel"), out int wPixel2) && wPixel2 >= 0 && wPixel2 < PixelEraserWidthPresets.Length)
-        { PixelEraserWidthIndex = wPixel2; PixelEraserWidthLogical = PixelEraserWidthPresets[wPixel2]; }
+        // 2026-11-03：前面加了一档 14，旧下标会整体错位 —— 新 key 存新下标，
+        // 旧的 w2.pixel 按**旧档表的值**翻译过来（不能直接当新下标用）。
+        if (int.TryParse(GetUiPref("w3.pixel"), out int wPixel3) && wPixel3 >= 0 && wPixel3 < PixelEraserWidthPresets.Length)
+        { PixelEraserWidthIndex = wPixel3; PixelEraserWidthLogical = PixelEraserWidthPresets[wPixel3]; }
+        else if (MigrateWidthPref("w2.pixel", new[] { 46f, 70f, 93f, 122f, 150f },
+                                  PixelEraserWidthPresets, ref PixelEraserWidthIndex, ref PixelEraserWidthLogical)) { }
         else if (MigrateWidthPref("w.pixel", new[] { 46f, 93f, 150f }, PixelEraserWidthPresets, ref PixelEraserWidthIndex, ref PixelEraserWidthLogical)) { }
         // 上次用的橡皮形态（面积擦 / 整笔擦）。新用户默认面积擦（2026-10-25 用户定），
         // 老用户仍按上次记忆——两种 pref 都要认，不能只认 "pixel"。
@@ -7562,8 +7568,8 @@ public partial class InkEngine
         ClampViewOffset();
     }
 
-    /// <summary>上一次「复制」的原点（画布坐标）。粘贴落在它旁边，和 `Ctrl+D` 的 24px 错位一致。</summary>
-    private Vector2? _lastCopyOrigin;
+    /// <summary>上一次「复制」的整块范围：判断原件还在不在当前这一屏。</summary>
+    private RectF? _lastCopyBox;
     /// <summary>上一次「复制」写进剪贴板的原始字节：粘贴时比对，确认中间没被别的程序换过。</summary>
     private byte[] _lastCopiedBytes;
     private int _pasteStep;
@@ -7592,8 +7598,8 @@ public partial class InkEngine
         var box = EditRegion.Of(sel);
         if (!box.IsEmpty)
         {
-            // 记住"原件在哪"：粘贴时落在旁边 24px（见 PasteFromClipboard）
-            _lastCopyOrigin = new Vector2(box.MinX, box.MinY);
+            // 记住"原件在哪 + 多大"：粘贴时判断它还在不在当前屏，并落在旁边 24px
+            _lastCopyBox = box;
             _pasteStep = 0;
         }
         if (!box.IsEmpty && _windows.Count > 0)
@@ -7905,24 +7911,46 @@ public partial class InkEngine
             var vp = ViewportCanvas;
             float m = CaptureMarginLogical * DpiScale;
             var box = EditRegion.Of(objs);
-            // 落点：**接着原件放**（2026-11-03）——复制后点粘贴，副本出现在原件
-            // 旁边 24px，和 `Ctrl+D` 的手感一致，而不是飞到视口左上角。
-            // 只认"剪贴板里还是我们刚复制的那批"（比字节）：中间被别的程序换过、
-            // 或者从另一个实例复制过来，就老老实实回到左上角。
+            float bw = box.MaxX - box.MinX, bh = box.MaxY - box.MinY;
+            // 落点（2026-11-03）：
+            //   · 原件**还在当前这一屏** → 挨着它放 24px（和 Ctrl+D 同一个手感）；
+            //   · 翻了页 / 滚远了（原件不在眼前）→ 落在**当前屏中央**，不把人拽回去。
+            //     这条照 Figma：视图离原件太远时，粘到当前视图中间。
+            //   · 剪贴板不是我们刚复制的那批（另一个实例 / 外部程序）→ 老规矩，视口左上角。
+            // 只认"剪贴板里还是我们刚复制的那批"（比字节）：中间被别的程序换过就不算。
             bool sameAsCopied = rawBytes != null && _lastCopiedBytes != null
                                 && rawBytes.AsSpan().SequenceEqual(_lastCopiedBytes);
+            bool sourceVisible = sameAsCopied && _lastCopyBox is RectF src
+                                 && src.MaxY > vp.MinY + m && src.MinY < vp.MaxY - m
+                                 && src.MaxX > vp.MinX + m && src.MinX < vp.MaxX - m;
+
             float tx, ty;
-            if (sameAsCopied && _lastCopyOrigin is Vector2 origin)
+            if (sameAsCopied)
             {
                 _pasteStep++;
-                tx = origin.X + 24f * _pasteStep;
-                ty = origin.Y + 24f * _pasteStep;
+                if (sourceVisible && _lastCopyBox is RectF srcBox)
+                {
+                    tx = srcBox.MinX + 24f * _pasteStep;
+                    ty = srcBox.MinY + 24f * _pasteStep;
+                }
+                else
+                {
+                    tx = vp.MinX + (vp.MaxX - vp.MinX - bw) * 0.5f + 24f * (_pasteStep - 1);
+                    ty = vp.MinY + (vp.MaxY - vp.MinY - bh) * 0.5f + 24f * (_pasteStep - 1);
+                }
             }
             else
             {
                 tx = vp.MinX + m;
                 ty = vp.MinY + m;
             }
+
+            // 夹进当前屏：连续粘贴、原件贴边、或图形比屏还大时都不会跑出去
+            float maxX = MathF.Max(vp.MinX + m, vp.MaxX - m - bw);
+            float maxY = MathF.Max(vp.MinY + m, vp.MaxY - m - bh);
+            tx = Math.Clamp(tx, vp.MinX + m, maxX);
+            ty = Math.Clamp(ty, vp.MinY + m, maxY);
+
             var move = Matrix3x2.CreateTranslation(tx - box.MinX, ty - box.MinY);
             foreach (var s in objs) s.Transform = s.Transform * move;   // 插入前平移（画布坐标）
 
@@ -14037,7 +14065,7 @@ public partial class InkEngine
         SetUiPref("wv.pen", PenWidthLogical.ToString("0.##"));
         SetUiPref("w3.hl", HighlighterWidthIndex.ToString());
         SetUiPref("w3.laser", LaserWidthIndex.ToString());
-        SetUiPref("w2.pixel", PixelEraserWidthIndex.ToString());
+        SetUiPref("w3.pixel", PixelEraserWidthIndex.ToString());
         NotifyUiStateChanged();
     }
 
@@ -14863,7 +14891,7 @@ public partial class InkEngine
                 int i = NearestIndex(PixelEraserWidthPresets, cv);
                 PixelEraserWidthIndex = i;
                 PixelEraserWidthLogical = PixelEraserWidthPresets[i];
-                SetUiPref("w2.pixel", i.ToString());
+                SetUiPref("w3.pixel", i.ToString());
                 SetUiPref("wv.pixel", PixelEraserWidthLogical.ToString("0.##"));
                 break;
             }

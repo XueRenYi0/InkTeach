@@ -810,7 +810,7 @@ internal sealed partial class App
             var slE = ui.SliderRectForTest;
             float slEy = (slE.MinY + slE.MaxY) * 0.5f * DpiScale;
 
-            var (emin, emax) = (12f, 34f);             // 界面那边 WidthRange(Tool.Eraser)（= 档表首尾）
+            var (emin, emax) = (6f, 34f);              // 界面那边 WidthRange(Tool.Eraser)（= 档表首尾）
             var (trackL, trackR) = ui.SliderTrackRangeForTest;
             SendMouse((int)(trackL * DpiScale), (int)slEy, 0);                          SettleFrames(60);
             SendMouse((int)(trackL * DpiScale), (int)slEy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(50);
@@ -866,7 +866,7 @@ internal sealed partial class App
                   + $"（{pv.MinX:F0}..{pv.MaxX:F0} × {pv.MinY:F0}..{pv.MaxY:F0}），"
                   + $"可见范围 {qb.MaxX - qb.MinX:F0}×{qb.MaxY - qb.MinY:F0}");
 
-            // 面积橡皮同理（2026-10-09 晚起固定 5 档、最粗 150；拖动吸附）
+            // 像素橡皮同理（2026-10-09 晚起固定档位、最粗 150；拖动吸附）
             Host.Commands.SetTool(Tool.PixelEraser);
             SettleFrames(200);
             float penW1 = PenWidthLogical;
