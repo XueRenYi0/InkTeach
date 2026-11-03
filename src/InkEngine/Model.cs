@@ -1910,12 +1910,12 @@ internal sealed class Stroke
     }
 
     /// <summary>
-    /// **空间直角坐标系的 y 轴默认方向**（局部坐标）：跟随立体图的斜二测——
-    /// `(PrismDepthSkew, −1)` 归一化（屏幕 y 向下，所以"向后上方"是负 y）。
+    /// **空间直角坐标系的 y 轴默认方向**（局部坐标）：**45° 斜二测**，
+    /// 和长方体底面（`Cuboid` 的 `(d, −d)` 深度）一致。
     /// 画的时候会根据拖动象限换成左后 / 左前 / 右前；这个常量只作为默认值和图标参考。
     /// </summary>
     public static readonly Vector2 SpaceAxisYDirection =
-        Vector2.Normalize(new Vector2(ShapeSpec.PrismDepthSkew, -1f));
+        Vector2.Normalize(new Vector2(1f, -1f));
 
     /// <summary>
     /// **空间直角坐标系**的一笔画法（2026-11-03）：按下点 `(x0,y0)` = 原点 O，
@@ -1938,11 +1938,10 @@ internal sealed class Stroke
         float yLen = MathF.Max(0.5f, MathF.Min(xLen, zLen) * 0.5f);
         float xSign = dx < 0f ? -1f : 1f;
         bool back = dy <= 0f;
-        // 投影方向：x 的左右和 y 的前后是耦合的（长方体底面的两条边）；
+        // 45° 斜二测：x 的左右和 y 的前后是耦合的（长方体底面的两条边）；
         // 四个象限 = 四个底角。z 不参与，永远朝上。
         var yDir = Vector2.Normalize(new Vector2(
-            xSign * (back ? 1f : -1f) * ShapeSpec.PrismDepthSkew,
-            back ? -1f : 1f));
+            xSign * (back ? 1f : -1f), back ? -1f : 1f));
         var o = new Vector2(x0, y0);
         SetPoint(0, o);
         SetPoint(1, o + new Vector2(xSign * xLen, 0f));
