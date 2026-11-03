@@ -1870,6 +1870,12 @@ public partial class InkEngine
     /// <summary>吸住时那颗胶囊贴哪儿（画布坐标）：拖元素 = 被拖的那个元素、拖四角 = 指针。</summary>
     internal Vector2 ShapeSnapAnchor => _shapeSnapAnchor;
 
+    /// <summary>
+    /// 吸附胶囊的**具体文案**（坐标系原点 / 轴端用）：比如"左边缘 + 垂直居中"。
+    /// 为空时回落到 <see cref="SelectionHandles.ShapeSnapLabel"/>。
+    /// </summary>
+    internal string ShapeSnapText => _shapeSnapText;
+
     private bool _vertexDragging;
 
     /// <summary>
@@ -1913,6 +1919,12 @@ public partial class InkEngine
     /// <summary>这一帧的"特殊形状吸附"结果（见 <see cref="ShapeSnapKind"/>）。</summary>
     private ShapeSnapKind _shapeSnap;
     private Vector2 _shapeSnapAnchor;
+    /// <summary>坐标系吸附时的具体文案（为空 = 用枚举的通用文案）。</summary>
+    private string _shapeSnapText = "";
+    /// <summary>这次拖坐标系轴端时，起手那一刻的格距（用来判"长度是不是整数倍格距"）。</summary>
+    private float _vertexAxisGridStep;
+    /// <summary>轴端吸到网格时要把格距钉住；提交时一起写进对象（0 = 不钉）。</summary>
+    private float _vertexPinGridStep;
     /// <summary>上一帧"被拖的那个元素"附近的脏矩形（这一帧要连它一起标）。</summary>
     private RectF _vertexPrevBounds;
 
@@ -1924,6 +1936,12 @@ public partial class InkEngine
     /// 用户对椭圆的要求原话是"a、b 各要有最小值（不许退化成线段）"。
     /// </summary>
     internal const float ShapeMinAxisLogical = 4f;
+
+    /// <summary>
+    /// 坐标系原点 / 轴端的吸附半径（**逻辑像素**）：8 逻辑像素，和"用户能感到吸住"
+    /// 的常规手感一致（`Alt` 临时关闭）。
+    /// </summary>
+    internal const float CoordinateSnapRadiusLogical = 8f;
 
     /// <summary>拖定义元素时，那个读数**是什么量**（决定胶囊上写 α / r / a / b）。</summary>
     internal enum VertexReadoutKind
@@ -1952,6 +1970,12 @@ public partial class InkEngine
         WavePeriod,
         /// <summary>扇形：圆心角（度）。</summary>
         SectorAngle,
+        /// <summary>坐标系：+x / −x 半轴的长度。</summary>
+        AxisXLength,
+        /// <summary>坐标系：+y / −y 半轴的长度。</summary>
+        AxisYLength,
+        /// <summary>坐标系：网格格距。</summary>
+        GridStep,
     }
 
     /// <summary>正在拖旋转手柄——度数标签靠它决定显不显示。</summary>
@@ -16671,11 +16695,17 @@ public partial class InkEngine
         // "这一拖不是拖格距"（0 = 没在拖；格距自己不许是 0，见那个字段的注释）。
         _vertexPreviewGridStep = 0f;
         // 预览初始就是原样（这个时候还没动，画面不该有任何变化）。
-        WriteVertexLocalPoints(_vertexPreviewCanvas);
+        WriteVertexLocalPoints(_vertexPreviewCanvas, snapping: false);
         UpdateVertexReadout();
         _vertexSnapped = false;
         _shapeSnap = ShapeSnapKind.None;
+        _shapeSnapText = "";
         _shapeSnapAnchor = _vertexPreviewCanvas;
+        // 坐标系轴端吸附网格时用的"起手格距"：拖动过程中格距可能跟着外框变（自动档），
+        // 用起手那一刻的值才能吸得稳；真吸上了就把这一档钉住（见 WriteVertexLocalPoints）。
+        _vertexAxisGridStep = s.Kind == StrokeKind.Coordinate && s.Grid
+            ? s.AxisGridStepLocal() : 0f;
+        _vertexPinGridStep = 0f;
 
         _dragHandle = SelectionHandles.SelHandleOf(h);
         _dragIsMove = false;
@@ -16760,6 +16790,9 @@ public partial class InkEngine
         // 同一个道理：这一拖是不是"拖坐标系的格距手柄"（见 _vertexPreviewGridStep）。
         float gridStep = _vertexPreviewGridStep;
         bool gridDrag = moved && s != null && gridStep > 0f;
+        // 轴端吸到网格时要把起手那一档格距钉住（见 WriteVertexLocalPoints）。
+        float pinGridStep = _vertexPinGridStep;
+        bool pinGrid = moved && s != null && pinGridStep > 0f && !gridDrag;
 
         _vertexDragging = false;
         _vertexTarget = null;
@@ -16772,6 +16805,9 @@ public partial class InkEngine
         _dragIsMove = false;
         _selDragMoved = false;
         _shapeSnap = ShapeSnapKind.None;        // 手势结束：胶囊跟着消失
+        _shapeSnapText = "";
+        _vertexAxisGridStep = 0f;
+        _vertexPinGridStep = 0f;
 
         // 拖 P：**点表一个字没变**（P 不是控制点），只有那个参数角要写
         //（撤销要不要跟着回，见 SetStrokeGeometryAction 的 newFocusU）。
@@ -16779,6 +16815,8 @@ public partial class InkEngine
         if (focusDrag) Doc.ApplyGeometry(s, pts, focusU);
         // 拖格距：同一个套路——点表一个字没变（格距不是控制点），只有那一个数要写。
         else if (gridDrag) Doc.ApplyGeometry(s, pts, null, gridStep);
+        // 拖轴端且吸到了网格：点表和格距一起写（格距钉住，网格线才不会跑掉）。
+        else if (pinGrid) Doc.ApplyGeometry(s, pts, null, pinGridStep);
         else if (moved && s != null && pts != null) Doc.ApplyGeometry(s, pts);
         // 一点没动（只是点了一下端点手柄松手）：**也必须把它压过的那块重画一次**——
         // 起手那一下它已经从内容层摘出去了，不重画的话这一块就一直是"没有这条线"，
@@ -16807,7 +16845,7 @@ public partial class InkEngine
     ///   · **特殊形状吸附**（规格 9.6）只在这条路上做：它改的是"被拖的那个点"，
     ///     而不是形状的种类。`Alt` 传进去就变成完全自由。
     /// </summary>
-    private void WriteVertexLocalPoints(Vector2 canvasPoint)
+    private void WriteVertexLocalPoints(Vector2 canvasPoint, bool snapping = true)
     {
         var s = _vertexTarget;
         var pts = _vertexPreviewLocal;
@@ -16816,13 +16854,27 @@ public partial class InkEngine
         for (int i = 0; i < pts.Length; i++)
             pts[i] = i < s.Points.Count ? new Vector2(s.Points[i].X, s.Points[i].Y) : Vector2.Zero;
 
-        var local = SelectionHandles.ToLocalPoint(canvasPoint, s.Transform);
-        var c = s.ShapeCenterLocal;
-        float minAxis = ShapeMinAxisLogical * DpiScale;
         bool alt = (Native.GetAsyncKeyState(0x12 /* VK_MENU */) & 0x8000) != 0;
         bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
         float lenTol = SelectionHandles.ShapeSnapLengthToleranceLogical * DpiScale;
         _shapeSnap = ShapeSnapKind.None;        // 每帧重判：不吸的帧必须回到"没有"
+        _shapeSnapText = "";
+        _vertexPinGridStep = 0f;
+
+        // **坐标系原点吸附**（2026-11-03）：画布中心 / 四条边，横竖各判各的。
+        // 在**画布坐标**里吸，过了这一关才逆变换回局部坐标——否则旋转 / 缩放过的
+        // 坐标系会吸到一个和屏幕上看到的完全无关的位置。
+        if (snapping && !alt && s.Kind == StrokeKind.Coordinate
+            && _vertexHandle == ShapeHandle.Vertex2)
+        {
+            canvasPoint = SnapCoordinateOrigin(canvasPoint, out _shapeSnap, out string snapText);
+            _shapeSnapText = snapText;
+            _shapeSnapAnchor = canvasPoint;
+        }
+
+        var local = SelectionHandles.ToLocalPoint(canvasPoint, s.Transform);
+        var c = s.ShapeCenterLocal;
+        float minAxis = ShapeMinAxisLogical * DpiScale;
 
         switch (s.Kind)
         {
@@ -16970,22 +17022,91 @@ public partial class InkEngine
             }
 
             case StrokeKind.Coordinate:
-            case StrokeKind.NumberLine:
             {
-                // 定义元素**各拖各的**——这正是"它们都是真的定义元素"那件事的兑现。
-                // 这里没有"特殊形状吸附"：坐标系 / 数轴没有等腰、直角那一类的约束，
-                // `_shapeSnap` 就一直是 None（上面已经重置过）。
-                int idx = SelectionHandles.VertexIndex(_vertexHandle);
-                if (idx < 0) break;
+                if (pts.Length < 3) break;
+                var o = new Vector2(pts[2].X, pts[2].Y);
+                float minLen = ShapeMinAxisLogical * DpiScale;
 
-                // **第 4 颗 = 格距手柄**（用户 2026-09-24："拖动那个点来改变这个方格的大小"）：
-                // 它**不是控制点**，所以这一支要判在"点数"那道闸**之前**（坐标系只有三个点），
-                // 而且**一个点都不动**——外框、原点都保持原样，改的只有格距。
-                if (idx == 3 && s.Kind == StrokeKind.Coordinate)
+                // ---- 四个轴端：**只改自己那一截**（2026-11-03）----
+                // 0 = 外框的 min 那一侧，1 = 外框的 max 那一侧；原点、另外三个端点都不动。
+                if (_vertexHandle is ShapeHandle.AxisRight or ShapeHandle.AxisLeft
+                                    or ShapeHandle.AxisTop or ShapeHandle.AxisBottom)
+                {
+                    bool horizontal = _vertexHandle is ShapeHandle.AxisRight or ShapeHandle.AxisLeft;
+                    bool positive = _vertexHandle is ShapeHandle.AxisRight or ShapeHandle.AxisBottom;
+                    var (minX, minY, maxX, maxY) = s.AxisFrameLocal();
+                    float value = horizontal ? local.X : local.Y;
+
+                    // 画布边吸附（和原点同一套 8 逻辑像素；边在原点外侧才接受）。
+                    if (snapping && !alt)
+                    {
+                        float tol = CoordinateSnapRadiusLogical * DpiScale;
+                        var vp = ViewportCanvas;
+                        float edgeCanvas = horizontal
+                            ? (positive ? vp.MaxX : vp.MinX)
+                            : (positive ? vp.MaxY : vp.MinY);
+                        // 画布边 → 局部坐标的同一个轴（坐标系不给旋转柄；这里只是把
+                        // 多选整体缩放过的情形也一并覆盖）。
+                        var edgeLocal = SelectionHandles.ToLocalPoint(
+                            horizontal ? new Vector2(edgeCanvas, canvasPoint.Y)
+                                       : new Vector2(canvasPoint.X, edgeCanvas), s.Transform);
+                        float edge = horizontal ? edgeLocal.X : edgeLocal.Y;
+                        bool edgeUsable = positive ? edge >= (horizontal ? o.X : o.Y) + minLen
+                                                   : edge <= (horizontal ? o.X : o.Y) - minLen;
+                        if (edgeUsable && MathF.Abs(value - edge) <= tol)
+                        {
+                            value = edge;
+                            _shapeSnap = ShapeSnapKind.CanvasEdge;
+                            _shapeSnapText = "画布边";
+                        }
+                        else if (s.Grid && _vertexAxisGridStep > 0f)
+                        {
+                            // 自己的网格：长度吸到格距的整数倍（1 格起）。
+                            float scale = MathF.Sqrt(MathF.Abs(
+                                s.Transform.M11 * s.Transform.M22 - s.Transform.M12 * s.Transform.M21));
+                            if (scale < 1e-3f) scale = 1f;
+                            float originOnAxis = horizontal ? o.X : o.Y;
+                            float len = MathF.Abs(value - originOnAxis);
+                            float k = MathF.Round(len / _vertexAxisGridStep);
+                            float snapped = k * _vertexAxisGridStep;
+                            if (k >= 1f && MathF.Abs(len - snapped) <= tol / scale)
+                            {
+                                value = originOnAxis + (positive ? snapped : -snapped);
+                                _shapeSnap = ShapeSnapKind.GridStep;
+                                _shapeSnapText = "网格";
+                                // 自动格距会随外框短边变；吸上了就把当前这一档钉住，
+                                // 否则松手后网格线又跑开，读数就成了假的。
+                                _vertexPinGridStep = _vertexAxisGridStep;
+                            }
+                        }
+                    }
+
+                    // 夹最小值：轴端不许越过原点到另一侧（否则"正 / 负半轴"就翻面了）。
+                    if (horizontal)
+                    {
+                        value = positive ? MathF.Max(value, o.X + minLen)
+                                         : MathF.Min(value, o.X - minLen);
+                        if (positive) maxX = value; else minX = value;
+                    }
+                    else
+                    {
+                        value = positive ? MathF.Max(value, o.Y + minLen)
+                                         : MathF.Min(value, o.Y - minLen);
+                        if (positive) maxY = value; else minY = value;
+                    }
+                    // 外框统一写回 min/max 两个角（顺序不承载语义，见 AxisFrameLocal）。
+                    pts[0] = new Vector2(minX, minY);
+                    pts[1] = new Vector2(maxX, maxY);
+                    break;
+                }
+
+                // ---- 格距手柄（第 6 颗，开网格才有）----
+                // 它**不是控制点**，而且**一个点都不动**——外框、原点都保持原样，改的只有格距。
+                if (_vertexHandle == ShapeHandle.Vertex3)
                 {
                     // 手柄落在"原点 + (格距, −格距)"上，所以两个方向的偏移量都等于格距；
                     // 取平均（= 打到那条对角线上的投影）而不是单看某一轴：拖动方向偏一点也不会跳。
-                    var d = local - pts[2];
+                    var d = local - o;
                     float want = (MathF.Abs(d.X) + MathF.Abs(d.Y)) * 0.5f;
                     _vertexPreviewGridStep = Math.Clamp(want,
                         Stroke.AxisMinGridStepLocal,
@@ -16993,35 +17114,30 @@ public partial class InkEngine
                     break;
                 }
 
-                if (idx >= pts.Length) break;
-                float minLen = ShapeMinAxisLogical * DpiScale;
-
-                if (s.Kind == StrokeKind.NumberLine)
+                if (_vertexHandle == ShapeHandle.Vertex2)
                 {
-                    // **数轴的两个端点**：只改 x，y 一律保持 —— 往斜上方拖也还是水平线
-                    // （数轴歪了就不是数轴了）。同时不许互相越过：越过去"左端/右端"
-                    // 这两个名字就撒谎了，手柄也会互换位置。
-                    float x = local.X;
-                    if (idx == 0) x = MathF.Min(x, pts[1].X - minLen);
-                    else x = MathF.Max(x, pts[0].X + minLen);
-                    pts[idx] = new Vector2(x, pts[0].Y);
+                    // **原点 = 整组平移**（2026-11-03 用户确认）：三个点一起走，
+                    // 四根半轴的长度一个都不变。原来是在外框里挪、只改原点，
+                    // 那样"贴画布中心"这类吸附会顺手把轴长改掉，语义也说不清。
+                    var delta = local - o;
+                    for (int i = 0; i < pts.Length; i++) pts[i] += delta;
                     break;
                 }
+                break;
+            }
 
-                if (idx == 2)
-                {
-                    // **原点**：在外框里随便挪（老师最常用的动作就是"框画完了，
-                    // 把原点拖到左下角，只留第一象限"）。
-                    // 夹在外框内是必须的：跑到框外，两条轴就都不在框里交叉了，
-                    // 画出来是个说不清的东西（而贴在框角上正是想要的那种用法）。
-                    float fx0 = MathF.Min(pts[0].X, pts[1].X), fx1 = MathF.Max(pts[0].X, pts[1].X);
-                    float fy0 = MathF.Min(pts[0].Y, pts[1].Y), fy1 = MathF.Max(pts[0].Y, pts[1].Y);
-                    pts[2] = new Vector2(Math.Clamp(local.X, fx0, fx1), Math.Clamp(local.Y, fy0, fy1));
-                }
-                else
-                {
-                    pts[idx] = local;                 // 外框任意一角都能拖（改范围）
-                }
+            case StrokeKind.NumberLine:
+            {
+                // **数轴的两个端点**：只改 x，y 一律保持 —— 往斜上方拖也还是水平线
+                // （数轴歪了就不是数轴了）。同时不许互相越过：越过去"左端/右端"
+                // 这两个名字就撒谎了，手柄也会互换位置。
+                int idx = SelectionHandles.VertexIndex(_vertexHandle);
+                if (idx < 0 || idx >= pts.Length) break;
+                float minLen = ShapeMinAxisLogical * DpiScale;
+                float x = local.X;
+                if (idx == 0) x = MathF.Min(x, pts[1].X - minLen);
+                else x = MathF.Max(x, pts[0].X + minLen);
+                pts[idx] = new Vector2(x, pts[0].Y);
                 break;
             }
 
@@ -17100,7 +17216,43 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 刷新"拖动中的读数"：直线是倾斜角 α、圆是 `r`（附带直径 d = 2r）、椭圆是 `a` 或 `b`。
+    /// 坐标系**原点**的吸附：画布中心 / 四条边；横竖各判各的（可以只吸 x 不吸 y）。
+    ///
+    /// 为什么允许分轴吸：老师最常见的摆法是"原点贴左边、垂直方向随便"或者
+    /// "原点贴下边、水平居中"——两轴绑成一个点反而难摆。中心优先于边
+    /// （屏幕很小时两者会重叠，先判中心）。
+    ///
+    /// 半径 = <see cref="CoordinateSnapRadiusLogical"/>；`Alt` 在调用处已经排除。
+    /// 返回的是**画布坐标**，文案给胶囊用（为空 = 没吸住）。
+    /// </summary>
+    private Vector2 SnapCoordinateOrigin(Vector2 p, out ShapeSnapKind kind, out string text)
+    {
+        kind = ShapeSnapKind.None;
+        text = "";
+        var vp = ViewportCanvas;
+        float tol = CoordinateSnapRadiusLogical * DpiScale;
+        float cx = (vp.MinX + vp.MaxX) * 0.5f;
+        float cy = (vp.MinY + vp.MaxY) * 0.5f;
+        float x = p.X, y = p.Y;
+        string sx = "", sy = "";
+        bool centerX = false, centerY = false;
+
+        if (MathF.Abs(p.X - cx) <= tol) { x = cx; sx = "水平居中"; centerX = true; }
+        else if (MathF.Abs(p.X - vp.MinX) <= tol) { x = vp.MinX; sx = "左边缘"; }
+        else if (MathF.Abs(p.X - vp.MaxX) <= tol) { x = vp.MaxX; sx = "右边缘"; }
+
+        if (MathF.Abs(p.Y - cy) <= tol) { y = cy; sy = "垂直居中"; centerY = true; }
+        else if (MathF.Abs(p.Y - vp.MinY) <= tol) { y = vp.MinY; sy = "上边缘"; }
+        else if (MathF.Abs(p.Y - vp.MaxY) <= tol) { y = vp.MaxY; sy = "下边缘"; }
+
+        if (sx.Length == 0 && sy.Length == 0) return p;
+        kind = centerX && centerY ? ShapeSnapKind.CanvasCenter : ShapeSnapKind.CanvasEdge;
+        text = centerX && centerY ? "画布中心"
+             : sx.Length > 0 && sy.Length > 0 ? sx + " + " + sy
+             : sx.Length > 0 ? sx : sy;
+        return new Vector2(x, y);
+    }
+
     ///
     /// 量的都是**用户看到的那个量**：
     ///   · 直线的 α 按**画布坐标**量（旋转过的线，局部角不等于屏幕角）；
@@ -17188,10 +17340,45 @@ public partial class InkEngine
             // 四种曲线的读数（p / 实半轴 / 虚半轴 / 周期＋振幅）2026-09-20 随手柄一起删了：
             // 读数挂在手柄上，手柄没了，那个量就没人拖得动它们了（见 ShapeHandlesOf）。
             case StrokeKind.Coordinate:
+            {
+                float fx0 = MathF.Min(pts[0].X, pts[1].X);
+                float fx1 = MathF.Max(pts[0].X, pts[1].X);
+                float fy0 = MathF.Min(pts[0].Y, pts[1].Y);
+                float fy1 = MathF.Max(pts[0].Y, pts[1].Y);
+                var o = pts[2];
+                switch (_vertexHandle)
+                {
+                    case ShapeHandle.AxisRight:
+                    case ShapeHandle.AxisLeft:
+                        _vertexReadout = VertexReadoutKind.AxisXLength;
+                        _vertexReadoutValue = _vertexHandle == ShapeHandle.AxisRight
+                            ? fx1 - o.X : o.X - fx0;
+                        break;
+                    case ShapeHandle.AxisTop:
+                    case ShapeHandle.AxisBottom:
+                        _vertexReadout = VertexReadoutKind.AxisYLength;
+                        _vertexReadoutValue = _vertexHandle == ShapeHandle.AxisTop
+                            ? o.Y - fy0 : fy1 - o.Y;
+                        break;
+                    case ShapeHandle.Vertex3:
+                        // 格距手柄：预览字段在拖动中才有值；没拖时显示当前格距。
+                        _vertexReadout = VertexReadoutKind.GridStep;
+                        _vertexReadoutValue = _vertexPreviewGridStep > 0f
+                            ? _vertexPreviewGridStep : s.AxisGridStepLocal();
+                        break;
+                    default:
+                        // 原点：这一拖只有"吸到了什么"那颗胶囊，没有长度读数。
+                        _vertexReadout = VertexReadoutKind.None;
+                        break;
+                }
+                _vertexReadoutSecondary = 0f;
+                break;
+            }
+
             case StrokeKind.NumberLine:
-                // 坐标系 / 数轴同样**没有角度读数**：四个定义元素之间没有"倾斜角"可言
-                // （轴永远是水平的 / 竖直的，刻度间距也只是个长度）。
-                // 落到 default 去报 α 的话，拖框角会给出一个毫无意义的度数。
+                // 数轴同样**没有角度读数**：两个定义元素之间没有"倾斜角"可言
+                // （轴永远是水平的，刻度间距也只是个长度）。
+                // 落到 default 去报 α 的话，拖端点会给出一个毫无意义的度数。
                 _vertexReadout = VertexReadoutKind.None;
                 _vertexReadoutValue = 0f;
                 _vertexReadoutSecondary = 0f;

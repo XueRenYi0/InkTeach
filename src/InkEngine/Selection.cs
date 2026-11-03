@@ -89,8 +89,17 @@ internal enum ShapeHandle
     /// 它们的定义元素是四个点，本身没有"推导出来的点"这回事。
     /// </summary>
     Vertex0, Vertex1, Vertex2,
-    /// <summary>第四个顶点（只有坐标系 / 数轴有，见 <see cref="SelectionHandles.VertexIndex"/>）。</summary>
+    /// <summary>第四个顶点（只有数轴 / 坐标系格距手柄有，见 <see cref="SelectionHandles.VertexIndex"/>）。</summary>
     Vertex3,
+    /// <summary>
+    /// **坐标系的四个轴端**（2026-11-03 加，用户："能不能给坐标轴上加 4 个点，
+    /// 这样拖动长度会更方便"）。
+    ///
+    /// 和椭圆共用 <see cref="AxisRight"/> / <see cref="AxisTop"/> 两格（语义都是"横向 / 纵向的
+    /// 参数端点"），另外补 <see cref="AxisLeft"/> / <see cref="AxisBottom"/> 给负半轴。
+    /// 四个点各自只改自己那一截的长度：原点 **不动**，另外三个轴端也不动。
+    /// </summary>
+    AxisLeft, AxisBottom,
     /// <summary>
     /// **焦点三角形的顶点 P**（只有椭圆（带焦点）有，2026-09-22）。
     ///
@@ -182,6 +191,12 @@ internal enum ShapeSnapKind
     RightFrustum,
     /// <summary>梯形被拖成两组对边都平行（上底=下底但中点错开）。</summary>
     ParallelogramTrapezoid,
+    /// <summary>坐标系原点吸到画布中心（横竖都居中）。</summary>
+    CanvasCenter,
+    /// <summary>坐标系原点吸到画布某一条边（具体是哪条看 `Engine.ShapeSnapText`）。</summary>
+    CanvasEdge,
+    /// <summary>坐标轴端吸到自己的网格步长（长度 = 整数倍格距）。</summary>
+    GridStep,
 }
 
 /// <summary>
@@ -507,11 +522,11 @@ internal static class SelectionHandles
     }
 
     /// <summary>
-    /// 这个图形有哪些手柄，写进 <paramref name="dst"/>，返回个数（最多 5 个，调用方给 5 个格子）。
+    /// 这个图形有哪些手柄，写进 <paramref name="dst"/>，返回个数（最多 8 个，调用方给 8 个格子）。
     ///
     /// 用"写进缓冲 + 返回个数"而不是返回 List：手柄命中在悬停时**每帧都跑**，
     /// 每帧 new 一个 List 是白给的垃圾（这也是仓库里 SpatialGrid 那套的老规矩）。
-    /// 顺序 = 绘制顺序；命中时**倒着**遍历（后画的先中），见 HitTest。
+    /// 顺序 = 绘制顺序；命中时**倒着**遍历（后画的先中），坐标系例外（按最近的那颗，见 HitTest）。
     /// </summary>
     public static int ShapeHandlesOf(Stroke s, Span<ShapeHandle> dst)
     {
@@ -586,24 +601,32 @@ internal static class SelectionHandles
                 return 3;
 
             case StrokeKind.Coordinate:
-                // **三个**（外框两角 / 原点）：这三个都是真的定义元素，都上手柄。
-                if (dst.Length < 3 || s.Points.Count < 3) return 0;
-                dst[0] = ShapeHandle.Vertex0;
-                dst[1] = ShapeHandle.Vertex1;
-                dst[2] = ShapeHandle.Vertex2;
-                // **开了网格还有第四颗：格距**（用户 2026-09-24："那个第一个方格上那个格点，
+                // **五颗**（2026-11-03 起）：四个轴端 + 原点。
+                //
+                // 用户："能不能给坐标轴上加 4 个点，这样的话拖动长度会更方便"——
+                // 四个轴端各自只改**自己那一截**的长度，所以正负半轴可以不一样长；
+                // 原点在手柄列表里排最后（命中倒着找），它和某根轴端重合时优先抓原点
+                // （整组平移），但 `HitTest` 对坐标系改成了"取最近的那颗"，所以
+                // 轴端缩到最短时仍然抓得到。
+                if (dst.Length < 5 || s.Points.Count < 3) return 0;
+                dst[0] = ShapeHandle.AxisRight;    // +x
+                dst[1] = ShapeHandle.AxisTop;      // +y（屏幕 y 向下，上是 minY）
+                dst[2] = ShapeHandle.AxisLeft;     // −x
+                dst[3] = ShapeHandle.AxisBottom;   // −y
+                dst[4] = ShapeHandle.Vertex2;      // 原点
+                // **开了网格还有第六颗：格距**（用户 2026-09-24："那个第一个方格上那个格点，
                 // 它也做一个空心点，这样的话我就可以通过拖动那个点来改变这个方格的大小"）。
                 // 它**不是控制点**——拖它只改 `Stroke.AxisGridStep`（见 Engine 那一支）。
                 //
                 // ⚠ **只有开网格时才给**：没画格子就没有"第一个格子"这个可见的东西，
                 // 那时给一颗"拖了也看不见变化"的手柄，正是 2026-09-19 撤掉
                 // "单位长度点"时说的那种"画都不画却点得到"的死元素。
-                if (s.Grid && dst.Length >= 4)
+                if (s.Grid && dst.Length >= 6)
                 {
-                    dst[3] = ShapeHandle.Vertex3;
-                    return 4;
+                    dst[5] = ShapeHandle.Vertex3;
+                    return 6;
                 }
-                return 3;
+                return 5;
 
             case StrokeKind.NumberLine:
                 // **两个**（左端 / 右端）。没有刻度之后，"零点"和"单位长度点"退场了
@@ -671,8 +694,20 @@ internal static class SelectionHandles
                 ? new Vector2(s.Points[1].X, s.Points[1].Y)
                 : s.RimLocalPoint(),
             // 椭圆只剩"右端点（管 a）＋ 上端点（管 b）"两个，见 ShapeHandlesOf。
-            ShapeHandle.AxisRight => c + new Vector2(s.SemiAxisALocal, 0f),
-            ShapeHandle.AxisTop => c + new Vector2(0f, -s.SemiAxisBLocal),   // 屏幕 y 向下，"上"是 -y
+            // 坐标系共用这两格表示 +x / +y 轴端：位置 = 原点 + 那一截的长度
+            //（原点在外框里的位置可以偏，所以不能拿外框角当轴端）。
+            ShapeHandle.AxisRight => s.Kind == StrokeKind.Coordinate
+                ? CoordinateAxisEndLocal(s, 1, 0)
+                : c + new Vector2(s.SemiAxisALocal, 0f),
+            ShapeHandle.AxisTop => s.Kind == StrokeKind.Coordinate
+                ? CoordinateAxisEndLocal(s, 0, -1)
+                : c + new Vector2(0f, -s.SemiAxisBLocal),   // 屏幕 y 向下，"上"是 -y
+            ShapeHandle.AxisLeft => s.Kind == StrokeKind.Coordinate
+                ? CoordinateAxisEndLocal(s, -1, 0)
+                : c,
+            ShapeHandle.AxisBottom => s.Kind == StrokeKind.Coordinate
+                ? CoordinateAxisEndLocal(s, 0, 1)
+                : c,
             // 焦点三角形的顶点 P：由参数角算（不在 Points 里，见 ShapeHandle.FocusPoint）
             ShapeHandle.FocusPoint => s.Kind == StrokeKind.Sector && s.Points.Count >= 3
                 ? new Vector2(s.Points[2].X, s.Points[2].Y)
@@ -692,6 +727,19 @@ internal static class SelectionHandles
     /// <summary>定义元素在**画布坐标**里的位置（手柄画在哪、读数的锚点，都用它）。</summary>
     public static Vector2 ShapeHandleCanvasPosition(Stroke s, ShapeHandle h)
         => Vector2.Transform(ShapeHandleLocal(s, h), s.Transform);
+
+    /// <summary>
+    /// 坐标系某一根轴的端点（局部坐标）：<paramref name="dx"/> / <paramref name="dy"/> 只取
+    /// +1 / −1 / 0，表示往哪一侧。四个轴端**各自**取外框那一侧到原点的距离，
+    /// 所以正负半轴可以不一样长（原点不需要在框中心）。
+    /// </summary>
+    internal static Vector2 CoordinateAxisEndLocal(Stroke s, int dx, int dy)
+    {
+        var (minX, minY, maxX, maxY) = s.AxisFrameLocal();
+        var o = s.AxisOriginLocal();
+        return new Vector2(dx > 0 ? maxX : dx < 0 ? minX : o.X,
+                           dy > 0 ? maxY : dy < 0 ? minY : o.Y);
+    }
 
     /// <summary>
     /// 这个图形给不给旋转柄。
@@ -750,6 +798,8 @@ internal static class SelectionHandles
         ShapeHandle.Rim => SelHandle.EndpointB,
         ShapeHandle.AxisRight => SelHandle.Right,
         ShapeHandle.AxisTop => SelHandle.Top,
+        ShapeHandle.AxisLeft => SelHandle.Left,
+        ShapeHandle.AxisBottom => SelHandle.Bottom,
         ShapeHandle.Vertex0 => SelHandle.VertexA,
         ShapeHandle.Vertex1 => SelHandle.VertexB,
         ShapeHandle.Vertex2 => SelHandle.VertexC,
@@ -768,7 +818,23 @@ internal static class SelectionHandles
     /// </summary>
     public static ShapeHandle HandleOf(Stroke s, SelHandle h)
     {
-        // 三角形 / 平行四边形 / 坐标系 / 数轴：定义元素**就是那些控制点**，别的 SelHandle 一律"没有"。
+        // **坐标系**（2026-11-03）：四个轴端走通用的 Left/Right/Top/Bottom 命中位，
+        // 原点 / 格距仍借用 VertexC / VertexD。别的 SelHandle 一律不给——外框角
+        // 不再有手柄，画都不画的东西也不该点得到。
+        if (s.Kind == StrokeKind.Coordinate)
+            return h switch
+            {
+                SelHandle.Right => ShapeHandle.AxisRight,
+                SelHandle.Top => ShapeHandle.AxisTop,
+                SelHandle.Left => ShapeHandle.AxisLeft,
+                SelHandle.Bottom => ShapeHandle.AxisBottom,
+                SelHandle.VertexC => ShapeHandle.Vertex2,
+                SelHandle.VertexD => HasHandle(s, ShapeHandle.Vertex3)
+                    ? ShapeHandle.Vertex3 : ShapeHandle.None,
+                _ => ShapeHandle.None,
+            };
+
+        // 三角形 / 平行四边形 / 梯形 / 数轴：定义元素**就是那些控制点**，别的 SelHandle 一律"没有"。
         // 和"直线不给八向缩放柄留后门"是同一条规矩（见 HitTest 的注释）：
         // 画都不画的东西，也不该点得到、更不该被翻译成一个能改几何的元素
         // （EndpointB 落到 Rim 上，外面那条拖动分支就会去改一个顶点）。
@@ -831,16 +897,19 @@ internal static class SelectionHandles
 
     /// <summary>
     /// 是不是"**完全由控制点定义**"的图形：三角形 / 平行四边形（三个点）
-    /// 和坐标系 / 数轴（四个点）。
+    /// 和数轴（两个点）。
     ///
     /// 和 <see cref="IsPolygon"/> 的区别：这个是"手柄怎么发"的口径
     /// （顶点柄发几格、别的 SelHandle 一律不给），那个是"几何怎么算"的口径
     /// （平行四边形要现推第四个角）。
+    ///
+    /// **坐标系不在这一族**（2026-11-03）：它的四个轴端不是 `Points` 里的点，
+    /// 而是"外框 + 原点"现算的，所以走 `HandleOf` 里单独那一支。
     /// </summary>
     public static bool IsVertexDefined(Stroke s)
         => s != null && s.Kind is StrokeKind.Triangle or StrokeKind.Parallelogram
                                    or StrokeKind.Trapezoid
-                                   or StrokeKind.Coordinate or StrokeKind.NumberLine;
+                                   or StrokeKind.NumberLine;
 
     /// <summary>是不是"三个顶点定义"的多边形（三角形 / 平行四边形）。</summary>
     public static bool IsPolygon(Stroke s)
@@ -900,10 +969,28 @@ internal static class SelectionHandles
             // **倒着找**：后画的手柄先命中。椭圆上"中心"和"轴端点"离得可能很近
             // （半轴很小时），后画的轴端点是更具体的那个（拖它只改一条半轴），
             // 让它优先，否则小椭圆上永远只能拖中心。
-            for (int i = n - 1; i >= 0; i--)
+            //
+            // **坐标系例外**：四个轴端可以缩到贴近原点（用户要把原点摆到左下角，
+            // 就是让 −x / +y 两截缩到最短），重合时"谁后画谁赢"会让原点永远压住
+            // 缩短的轴端，再也拉不出来。这里按**离指针最近**的那颗算。
+            if (s.Kind == StrokeKind.Coordinate)
             {
-                if (Vector2.DistanceSquared(p, ShapeHandleCanvasPosition(s, handles[i])) <= rad * rad)
-                    return SelHandleOf(handles[i]);
+                int best = -1;
+                float bestD = rad * rad;
+                for (int i = 0; i < n; i++)
+                {
+                    float d = Vector2.DistanceSquared(p, ShapeHandleCanvasPosition(s, handles[i]));
+                    if (d <= bestD) { bestD = d; best = i; }
+                }
+                if (best >= 0) return SelHandleOf(handles[best]);
+            }
+            else
+            {
+                for (int i = n - 1; i >= 0; i--)
+                {
+                    if (Vector2.DistanceSquared(p, ShapeHandleCanvasPosition(s, handles[i])) <= rad * rad)
+                        return SelHandleOf(handles[i]);
+                }
             }
             // 旋转柄照旧（形状是"参数"，旋转是"姿态"，两码事）；圆不给（见 RotateHandleVisible）。
             if (RotateHandleVisible(s)
@@ -1225,6 +1312,9 @@ internal static class SelectionHandles
         ShapeSnapKind.RightPyramid => "直棱锥",
         ShapeSnapKind.RightFrustum => "直棱台",
         ShapeSnapKind.ParallelogramTrapezoid => "平行四边形",
+        ShapeSnapKind.CanvasCenter => "画布中心",
+        ShapeSnapKind.CanvasEdge => "画布边",
+        ShapeSnapKind.GridStep => "网格",
         _ => "",
     };
 

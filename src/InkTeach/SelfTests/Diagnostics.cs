@@ -1873,8 +1873,8 @@ internal sealed partial class App
     /// 四层判据，缺一层都可能"看着绿其实没做"：
     ///   ① **画法**：真机拖一下 → 定义元素按规格落地（**原点 = 按下点**、外框 = 原点对称展开
     ///      出来的半宽半高）；
-    ///   ② **手柄**：三个顶点柄、**没有旋转柄**、别的 SelHandle 不留后门；
-    ///      并真拖一遍——原点"框不动"、拖出框外会被夹回来；
+    ///   ② **手柄**：四轴端 + 原点（开网格再 + 格距）、**没有旋转柄**、别的 SelHandle 不留后门；
+    ///      并真拖一遍——原点整组平移、四个轴端各自只改自己那一截；
     ///   ③ **屏幕**：两条轴真的上屏（轴上有墨、框里空白处没墨），打开网格墨量明显变多；
     ///   ④ **存档**：v10 往返（含网格与压感那两位）；再造一个**真·v8 老文件**
     ///      （见 MakeLegacyFile），读进来必须是"没有网格"（老文件本来就没这个概念）。
@@ -1948,22 +1948,32 @@ internal sealed partial class App
               $"原点 ({o0.X:F0},{o0.Y:F0}) 期望按下点 ({x0:F0},{y0:F0})");
         Check("坐标系：一次拖拽 = 一步撤销", Doc.UndoDepth == 1, $"撤销栈 {Doc.UndoDepth} 步");
 
-        // ================= ② 手柄：三格、无旋转柄、不留后门 =================
-        Span<ShapeHandle> handles = stackalloc ShapeHandle[5];
+        // ================= ② 手柄：四轴端 + 原点、无旋转柄、不留后门 =================
+        Span<ShapeHandle> handles = stackalloc ShapeHandle[8];
         int hn = SelectionHandles.ShapeHandlesOf(cs, handles);
-        Check("坐标系：三个顶点柄",
-              hn == 3 && handles[0] == ShapeHandle.Vertex0 && handles[2] == ShapeHandle.Vertex2,
-              $"{hn} 个，第 3 格 = {(hn > 2 ? handles[2].ToString() : "无")}");
+        Check("坐标系：四轴端 + 原点共五颗手柄",
+              hn == 5
+              && handles[0] == ShapeHandle.AxisRight && handles[1] == ShapeHandle.AxisTop
+              && handles[2] == ShapeHandle.AxisLeft && handles[3] == ShapeHandle.AxisBottom
+              && handles[4] == ShapeHandle.Vertex2,
+              $"{hn} 个：{handles[0]},{handles[1]},{handles[2]},{handles[3]},{handles[4]}");
         Check("坐标系：**不给旋转柄**（转歪了就不是坐标系了）",
               !SelectionHandles.RotateHandleVisible(cs), "");
-        Check("坐标系：八向缩放柄不留后门（翻译成 None）",
+        Check("坐标系：外框角不留后门（翻译成 None）",
               SelectionHandles.HandleOf(cs, SelHandle.TopLeft) == ShapeHandle.None
-              && SelectionHandles.HandleOf(cs, SelHandle.Right) == ShapeHandle.None,
+              && SelectionHandles.HandleOf(cs, SelHandle.BottomRight) == ShapeHandle.None,
               $"TopLeft → {SelectionHandles.HandleOf(cs, SelHandle.TopLeft)}");
-        Check("坐标系：顶点柄 ↔ SelHandle 双向对得上",
-              SelectionHandles.HandleOf(cs, SelHandle.VertexD) == ShapeHandle.Vertex3
-              && SelectionHandles.SelHandleOf(ShapeHandle.Vertex3) == SelHandle.VertexD,
+        Check("坐标系：四轴端 ↔ SelHandle 双向对得上",
+              SelectionHandles.HandleOf(cs, SelHandle.Right) == ShapeHandle.AxisRight
+              && SelectionHandles.HandleOf(cs, SelHandle.Top) == ShapeHandle.AxisTop
+              && SelectionHandles.HandleOf(cs, SelHandle.Left) == ShapeHandle.AxisLeft
+              && SelectionHandles.HandleOf(cs, SelHandle.Bottom) == ShapeHandle.AxisBottom
+              && SelectionHandles.SelHandleOf(ShapeHandle.AxisLeft) == SelHandle.Left
+              && SelectionHandles.SelHandleOf(ShapeHandle.AxisBottom) == SelHandle.Bottom,
               "");
+        Check("坐标系：原点仍走 VertexC（格距柄在开网格时才另外出现）",
+              SelectionHandles.HandleOf(cs, SelHandle.VertexC) == ShapeHandle.Vertex2,
+              $"VertexC → {SelectionHandles.HandleOf(cs, SelHandle.VertexC)}");
 
         // ================= ③ 屏幕：轴真的上屏、框里是空的 =================
         Doc.SelectOnly(Array.Empty<Stroke>());     // 先取消选中，免得选中框和手柄混进探针
@@ -1977,13 +1987,14 @@ internal sealed partial class App
         Check("屏幕：框里的空白处没有墨（不是画了个框）",
               inBlank <= NoInk, $"{inBlank} 像素（期望 ≤{NoInk}）");
 
-        // ---- 拖原点：**框不动**（这是老师最常用的那个动作）----
+        // ---- 拖原点：**整组平移**（2026-11-03 用户确认；四根半轴长度一个都不变）----
         Tool = Tool.Marquee;
         Doc.SelectOnly(new[] { cs });
         SettleFrames(300);
         var frameBefore = cs.AxisFrameLocal();
         var oHandle = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.Vertex2);
-        var oTarget = new Vector2(fr.MinX + 60f, fr.MaxY - 60f);      // 拖到框的左下角附近
+        var oTarget = new Vector2(frameBefore.MinX + 60f, frameBefore.MaxY - 60f);
+        var move = oTarget - oHandle;
         bool tookO = SelectionGestureForTest(oHandle.X, oHandle.Y);
         UpdateSelectionGestureForTest(oTarget.X, oTarget.Y);
         SettleFrames(120);
@@ -1995,42 +2006,79 @@ internal sealed partial class App
               Near(cs.AxisOriginLocal().X, oTarget.X, 2f) && Near(cs.AxisOriginLocal().Y, oTarget.Y, 2f),
               $"原点 ({cs.AxisOriginLocal().X:F0},{cs.AxisOriginLocal().Y:F0})"
               + $" 期望 ({oTarget.X:F0},{oTarget.Y:F0})");
-        Check("拖原点：**外框一分不动**（哪部分是范围、哪部分是原点，各管各的）",
-              Near(frameAfter.MinX, frameBefore.MinX, 0.01f)
-              && Near(frameAfter.MaxX, frameBefore.MaxX, 0.01f)
-              && Near(frameAfter.MinY, frameBefore.MinY, 0.01f)
-              && Near(frameAfter.MaxY, frameBefore.MaxY, 0.01f),
-              $"框 {frameBefore.MinX:F0},{frameBefore.MinY:F0}..{frameBefore.MaxX:F0},{frameBefore.MaxY:F0} 未变");
+        Check("拖原点：**整组平移**（外框跟着走同一个位移）",
+              Near(frameAfter.MinX, frameBefore.MinX + move.X, 2f)
+              && Near(frameAfter.MaxX, frameBefore.MaxX + move.X, 2f)
+              && Near(frameAfter.MinY, frameBefore.MinY + move.Y, 2f)
+              && Near(frameAfter.MaxY, frameBefore.MaxY + move.Y, 2f),
+              $"框位移 ({frameAfter.MinX - frameBefore.MinX:F0},{frameAfter.MinY - frameBefore.MinY:F0})"
+              + $" 期望 ({move.X:F0},{move.Y:F0})");
+        Check("拖原点：四根半轴长度一个都不变",
+              Near((frameAfter.MaxX - frameAfter.MinX), (frameBefore.MaxX - frameBefore.MinX), 0.5f)
+              && Near((frameAfter.MaxY - frameAfter.MinY), (frameBefore.MaxY - frameBefore.MinY), 0.5f),
+              $"尺寸 {frameAfter.MaxX - frameAfter.MinX:F0}×{frameAfter.MaxY - frameAfter.MinY:F0}"
+              + $"（原 {frameBefore.MaxX - frameBefore.MinX:F0}×{frameBefore.MaxY - frameBefore.MinY:F0}）");
 
-        // 原点拖出框外要被夹回来（跑到框外，两条轴就都不在框里交叉了）
+        // ---- 四个轴端：各自只改自己那一截（正负半轴可以不一样长）----
+        cs.Grid = false;                        // 这一段只验几何，先把网格吸附关掉
+        cs.InvalidateMetrics();
+        Doc.SelectOnly(new[] { cs });
+        SettleFrames(200);
+
+        void DragAxis(ShapeHandle h, float dx, float dy)
         {
-            var far = new Vector2(fr.MaxX + 900f, fr.MaxY + 900f);
-            SelectionGestureForTest(SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.Vertex2).X,
-                                    SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.Vertex2).Y);
-            UpdateSelectionGestureForTest(far.X, far.Y);
+            var from = SelectionHandles.ShapeHandleCanvasPosition(cs, h);
+            SelectionGestureForTest(from.X, from.Y);
+            UpdateSelectionGestureForTest(from.X + dx, from.Y + dy);
             SettleFrames(120);
             EndSelectionGestureForTest();
             SettleFrames(200);
-            var ov = cs.AxisOriginLocal();
-            Check("拖原点：拖出框外会被夹回框里（轴永远不会跑出框）",
-                  ov.X <= fr.MaxX + 0.5f && ov.Y <= fr.MaxY + 0.5f
-                  && ov.X >= fr.MinX - 0.5f && ov.Y >= fr.MinY - 0.5f,
-                  $"原点 ({ov.X:F0},{ov.Y:F0})，框 ({fr.MinX:F0},{fr.MinY:F0})..({fr.MaxX:F0},{fr.MaxY:F0})");
         }
 
-        // ---- 拖外框角：改范围 ----
-        var cHandle = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.Vertex0);
-        var cTarget = new Vector2(cHandle.X - 120f, cHandle.Y - 90f);
-        SelectionGestureForTest(cHandle.X, cHandle.Y);
-        UpdateSelectionGestureForTest(cTarget.X, cTarget.Y);
-        SettleFrames(120);
-        EndSelectionGestureForTest();
-        SettleFrames(200);
-        Check("拖外框角：外框跟着变大（±2 像素）",
-              Near(cs.AxisFrameLocal().MinX, cTarget.X, 2f)
-              && Near(cs.AxisFrameLocal().MinY, cTarget.Y, 2f),
-              $"左上角 ({cs.AxisFrameLocal().MinX:F0},{cs.AxisFrameLocal().MinY:F0})"
-              + $" 期望 ({cTarget.X:F0},{cTarget.Y:F0})");
+        {
+            var b = cs.AxisFrameLocal();
+            var end = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.AxisRight);
+            DragAxis(ShapeHandle.AxisRight, 100f, 40f);       // y 偏移必须被忽略
+            var a = cs.AxisFrameLocal();
+            Check("轴端 +x：只拉长右半轴（minX / 上下边一分不动）",
+                  Near(a.MaxX, end.X + 100f, 2f)
+                  && Near(a.MinX, b.MinX, 0.5f) && Near(a.MinY, b.MinY, 0.5f)
+                  && Near(a.MaxY, b.MaxY, 0.5f),
+                  $"maxX {b.MaxX:F0}→{a.MaxX:F0}，期望 {end.X + 100f:F0}");
+        }
+        {
+            var b = cs.AxisFrameLocal();
+            var end = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.AxisLeft);
+            DragAxis(ShapeHandle.AxisLeft, -80f, -30f);
+            var a = cs.AxisFrameLocal();
+            Check("轴端 −x：只拉长左半轴（maxX / 上下边一分不动）",
+                  Near(a.MinX, end.X - 80f, 2f)
+                  && Near(a.MaxX, b.MaxX, 0.5f) && Near(a.MinY, b.MinY, 0.5f)
+                  && Near(a.MaxY, b.MaxY, 0.5f),
+                  $"minX {b.MinX:F0}→{a.MinX:F0}，期望 {end.X - 80f:F0}");
+        }
+        {
+            var b = cs.AxisFrameLocal();
+            var end = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.AxisTop);
+            DragAxis(ShapeHandle.AxisTop, 50f, -70f);         // x 偏移必须被忽略
+            var a = cs.AxisFrameLocal();
+            Check("轴端 +y：只拉长上半轴（minX / maxX / 下边一分不动）",
+                  Near(a.MinY, end.Y - 70f, 2f)
+                  && Near(a.MinX, b.MinX, 0.5f) && Near(a.MaxX, b.MaxX, 0.5f)
+                  && Near(a.MaxY, b.MaxY, 0.5f),
+                  $"minY {b.MinY:F0}→{a.MinY:F0}，期望 {end.Y - 70f:F0}");
+        }
+        {
+            var b = cs.AxisFrameLocal();
+            var end = SelectionHandles.ShapeHandleCanvasPosition(cs, ShapeHandle.AxisBottom);
+            DragAxis(ShapeHandle.AxisBottom, -40f, 90f);
+            var a = cs.AxisFrameLocal();
+            Check("轴端 −y：只拉长下半轴（minX / maxX / 上边一分不动）",
+                  Near(a.MaxY, end.Y + 90f, 2f)
+                  && Near(a.MinX, b.MinX, 0.5f) && Near(a.MaxX, b.MaxX, 0.5f)
+                  && Near(a.MinY, b.MinY, 0.5f),
+                  $"maxY {b.MaxY:F0}→{a.MaxY:F0}，期望 {end.Y + 90f:F0}");
+        }
 
         // ---- 紧框就是"定义点的外接 + 半笔宽"（**刻度取消之后不该再虚报那一截**）----
         {
@@ -2043,6 +2091,55 @@ internal sealed partial class App
                   Near(wb.MaxX - wb.MinX, needW, 2.5f),
                   $"紧框宽 {wb.MaxX - wb.MinX:F1}，期望 {needW:F1}"
                   + $"（外框 {f2.MaxX - f2.MinX:F0} + 2×{halfPen:F1}）");
+        }
+
+        // ================= ③b 原点吸附：画布中心 / 边（2026-11-03）=================
+        {
+            Doc.Clear();
+            Doc.ClearHistory();
+            Tool = Tool.Marquee;
+            var vp = ViewportCanvas;
+            float cx = (vp.MinX + vp.MaxX) * 0.5f;
+            float cy = (vp.MinY + vp.MaxY) * 0.5f;
+
+            var sc = MakeCoordinateForTest(cx + 160f, cy + 120f, 180f, 140f, grid: false);
+            Doc.AddStroke(sc);
+            Doc.SelectOnly(new[] { sc });
+            SettleFrames(200);
+            var oh = SelectionHandles.ShapeHandleCanvasPosition(sc, ShapeHandle.Vertex2);
+            SelectionGestureForTest(oh.X, oh.Y);
+            UpdateSelectionGestureForTest(cx, cy);
+            SettleFrames(120);
+            Check("原点吸附：靠近画布中心 → 吸住（胶囊说「画布中心」）",
+                  ShapeSnapKind == ShapeSnapKind.CanvasCenter
+                  && Near(ShapeSnapAnchor.X, cx, 0.5f) && Near(ShapeSnapAnchor.Y, cy, 0.5f),
+                  $"kind={ShapeSnapKind} anchor=({ShapeSnapAnchor.X:F0},{ShapeSnapAnchor.Y:F0})"
+                  + $" 中心=({cx:F0},{cy:F0})");
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            Check("原点吸附：松手后原点真的落在画布中心",
+                  Near(sc.AxisOriginLocal().X, cx, 1f) && Near(sc.AxisOriginLocal().Y, cy, 1f),
+                  $"原点 ({sc.AxisOriginLocal().X:F0},{sc.AxisOriginLocal().Y:F0})");
+
+            var ec = MakeCoordinateForTest(vp.MinX + 200f, vp.MinY + 500f, 150f, 100f, grid: false);
+            Doc.AddStroke(ec);
+            Doc.SelectOnly(new[] { ec });
+            SettleFrames(200);
+            var eh = SelectionHandles.ShapeHandleCanvasPosition(ec, ShapeHandle.Vertex2);
+            SelectionGestureForTest(eh.X, eh.Y);
+            UpdateSelectionGestureForTest(vp.MinX, vp.MinY + 600f);
+            SettleFrames(120);
+            Check("原点吸附：贴左边界 → 吸住并说清是哪条边",
+                  ShapeSnapKind == ShapeSnapKind.CanvasEdge
+                  && ShapeSnapText.Contains("左边缘")
+                  && Near(ShapeSnapAnchor.X, vp.MinX, 0.5f),
+                  $"kind={ShapeSnapKind} text={ShapeSnapText} x={ShapeSnapAnchor.X:F0}");
+            EndSelectionGestureForTest();
+            SettleFrames(200);
+            Check("原点吸附：松手后原点真的贴在左边界",
+                  Near(ec.AxisOriginLocal().X, vp.MinX, 1f)
+                  && Near(ec.AxisOriginLocal().Y, vp.MinY + 600f, 1f),
+                  $"原点 ({ec.AxisOriginLocal().X:F0},{ec.AxisOriginLocal().Y:F0})");
         }
 
         // ================= ④ 网格：开着比关着**屏幕上真的多了那些格线** =================
@@ -2084,7 +2181,7 @@ internal sealed partial class App
             Doc.Clear();
             Doc.ClearHistory();
             SetToolFromUi(Tool.NumberLine);
-            float nx = _virtualX + 500f, ny = _virtualY + 1400f, nl = 900f;
+            float nx = _virtualX + 500f, ny = _virtualY + 1000f, nl = 900f;
             SendMouse((int)nx, (int)(ny + 300f), 0);                     SettleFrames(60);
             SendMouse((int)nx, (int)(ny + 300f), Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
             for (int i = 1; i <= 4; i++)
@@ -2142,7 +2239,7 @@ internal sealed partial class App
         // 用户 2026-09-24："那个坐标系坐标原点现在不是有一个空心点吗？选中的时候它是可以拖动的。
         // 那么我打算那个第一个方格那个格点，它也做一个空心点，这样的话我就可以通过拖动那个点
         // 来改变这个方格的大小。"
-        // 落点 = **第 4 颗手柄**，位置 = 第一象限第一个格子的外角 = 原点 ＋ (格距, −格距)。
+        // 落点 = **第 6 颗手柄**，位置 = 第一象限第一个格子的外角 = 原点 ＋ (格距, −格距)。
         // 盯五件事：① 只在开网格时才有；② 位置真的在那个格点上；③ 拖它只改格距、
         // **三个控制点一个字不动**；④ 一步撤销回得去；⑤ 拖到天边也只夹到外框短边。
         {
@@ -2156,10 +2253,10 @@ internal sealed partial class App
             SettleFrames(300);
 
             float autoStep = gh.AxisGridStepLocal();
-            Span<ShapeHandle> hbuf = stackalloc ShapeHandle[5];
+            Span<ShapeHandle> hbuf = stackalloc ShapeHandle[8];
             int hn2 = SelectionHandles.ShapeHandlesOf(gh, hbuf);
-            Check("格距手柄：开网格之后是**四颗**，第 4 颗是 Vertex3",
-                  hn2 == 4 && hbuf[3] == ShapeHandle.Vertex3, $"{hn2} 颗");
+            Check("格距手柄：开网格之后是**六颗**，第 6 颗是 Vertex3",
+                  hn2 == 6 && hbuf[5] == ShapeHandle.Vertex3, $"{hn2} 颗");
             var hpos = SelectionHandles.ShapeHandleCanvasPosition(gh, ShapeHandle.Vertex3);
             var gridOrg = gh.AxisOriginLocal();
             Check("格距手柄：落在**第一象限第一个格子的外角**（右上：x 加、y 减）",
@@ -2210,13 +2307,13 @@ internal sealed partial class App
                   gh.AxisGridStepLocal() <= shortSide + 0.5f,
                   $"格距 {gh.AxisGridStepLocal():F0}，外框短边 {shortSide:F0}");
 
-            // 关掉网格 → 第 4 颗必须消失（没格子就没有「第一个格子」）
+            // 关掉网格 → 第 6 颗必须消失（没格子就没有「第一个格子」）
             gh.Grid = false;
             gh.InvalidateMetrics();
             Doc.SelectOnly(new[] { gh });
             SettleFrames(200);
-            Check("格距手柄：**关掉网格就没有第 4 颗**（不留看不见却点得到的死元素）",
-                  SelectionHandles.ShapeHandlesOf(gh, hbuf) == 3,
+            Check("格距手柄：**关掉网格就没有第 6 颗**（不留看不见却点得到的死元素）",
+                  SelectionHandles.ShapeHandlesOf(gh, hbuf) == 5,
                   $"{SelectionHandles.ShapeHandlesOf(gh, hbuf)} 颗");
         }
 

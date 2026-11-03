@@ -4182,7 +4182,20 @@ internal sealed partial class OverlayWindow : IDisposable
     private static string VertexReadoutLabel(InkEngine app)
     {
         if (app.ShapeSnapKind != ShapeSnapKind.None)
-            return SelectionHandles.ShapeSnapLabel(app.ShapeSnapKind);
+        {
+            string snap = app.ShapeSnapKind is ShapeSnapKind.CanvasCenter or ShapeSnapKind.CanvasEdge
+                                                   or ShapeSnapKind.GridStep
+                          && !string.IsNullOrEmpty(app.ShapeSnapText)
+                ? app.ShapeSnapText
+                : SelectionHandles.ShapeSnapLabel(app.ShapeSnapKind);
+            // 轴端吸住时**两个数一起给**："吸到了什么" ＋ "这一截有多长"。
+            return app.VertexReadout switch
+            {
+                InkEngine.VertexReadoutKind.AxisXLength => $"{snap} · x 半轴 = {app.VertexReadoutValue:F0}",
+                InkEngine.VertexReadoutKind.AxisYLength => $"{snap} · y 半轴 = {app.VertexReadoutValue:F0}",
+                _ => snap,
+            };
+        }
         return app.VertexReadout switch
         {
             // 圆：两个数一起给（半径是"拉多大"，直径是老师嘴里常说的那个数）
@@ -4200,6 +4213,10 @@ internal sealed partial class OverlayWindow : IDisposable
             InkEngine.VertexReadoutKind.WavePeriod =>
                 $"T = {app.VertexReadoutValue:F1}  A = {app.VertexReadoutSecondary:F1}",
             InkEngine.VertexReadoutKind.SectorAngle => $"{app.VertexReadoutValue:F0}°",
+            // 坐标系：四个轴端各自只改自己那一截，所以读数就是"这一截有多长"。
+            InkEngine.VertexReadoutKind.AxisXLength => $"x 半轴 = {app.VertexReadoutValue:F0}",
+            InkEngine.VertexReadoutKind.AxisYLength => $"y 半轴 = {app.VertexReadoutValue:F0}",
+            InkEngine.VertexReadoutKind.GridStep => $"格距 = {app.VertexReadoutValue:F1}",
             // 直线/箭头：倾斜角 α（[0°,180°)），和旋转读数 Δ 是两个数；
             // 长度是 2026-10-05 加的第二个数（同 α 一颗胶囊）。
             InkEngine.VertexReadoutKind.Inclination =>
