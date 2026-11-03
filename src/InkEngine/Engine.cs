@@ -8453,7 +8453,7 @@ public partial class InkEngine
             return tab == LibraryTab.Shapes
                 ? LibraryLayout.HeightForRows(5, 1f, LibraryLayout.ShapeCellHLogical)
                 : 286f;
-        // 竖排：图形页固定露 5 行（4 列时多出来的滚动看），收藏默认 5 行。
+        // 竖排：图形页默认露 5 行（拖过之后按用户那一档记，允许更矮并滚动），收藏默认 5 行。
         return tab == LibraryTab.Shapes
             ? LibraryLayout.HeightForRows(5, 1f, LibraryLayout.ShapeCellHLogical)
             : 582f;
@@ -8461,31 +8461,40 @@ public partial class InkEngine
 
     /// <summary>
     /// 切页签时只换高度：位置、宽度、横竖都不动，贴主条那条边（MaxY）固定。
-    /// 图形页固定 5 行高（37 张在 9 列下刚好放完，变窄就滚动），切分类不变高。
+    /// **两个页签的高度各记各的，也不再把图形页硬卡在 5 行**——图形页同样允许
+    /// 拖矮后用滚动看，和收藏页一个口径（2026-11-03 用户报"大小没记忆"）。
     /// </summary>
     private void ApplyTabHeight(LibraryTab tab)
     {
-        var m = LibraryPanelInfoNow();
         float dpi = UiUnit;
-        float hLog = tab == LibraryTab.Shapes ? _libraryHeightShapes : _libraryHeightFavorites;
-        if (hLog <= 1f) hLog = DefaultTabHeightLogical(tab);
-
-        if (tab == LibraryTab.Shapes)
-        {
-            // 固定 5 行；窄面板放不下就滚动，不把面板越撑越高。
-            float need = LibraryLayout.HeightForRows(5, 1f, LibraryLayout.ShapeCellHLogical);
-            hLog = MathF.Max(hLog, need);
-        }
-
-        var panel = m.Panel;
-        float want = hLog * dpi;
         var screen = UiLogicalScreen;
         var ui = UiBarBoundsNow();
         float uiTop = ui.IsEmpty ? screen.MaxY - 80f : ui.MinY;
+
+        // 先把矩形准备好（首次打开从偏好 / 默认值初始化）。
+        // 这里**不走 `LibraryPanelRectNow()`**：那一步会按"新页签的卡片高度"重新
+        // Snap 一遍，底边会跟着卡片高度抖 10 像素；切页签只该换高度，底边必须钉住。
+        EnsureLibraryPanelPrefs();
+        if (_libraryPanelLogical.IsEmpty)
+        {
+            var def = DefaultLibraryRect(screen, uiTop, dpi, LibraryMode);
+            _libraryPanelLogical = new RectF
+            {
+                MinX = def.MinX / dpi, MinY = def.MinY / dpi,
+                MaxX = def.MaxX / dpi, MaxY = def.MaxY / dpi,
+            };
+        }
+
+        float hLog = tab == LibraryTab.Shapes ? _libraryHeightShapes : _libraryHeightFavorites;
+        if (hLog <= 1f) hLog = DefaultTabHeightLogical(tab);
+
+        var r = _libraryPanelLogical;
+        float want = hLog * dpi;
+        // 贴主条那条边（MaxY）固定，只改高度。宽度保持用户拖过的那一档。
         var desired = new RectF
         {
-            MinX = panel.MinX, MaxX = panel.MaxX,
-            MinY = panel.MaxY - want, MaxY = panel.MaxY,
+            MinX = r.MinX * dpi, MaxX = r.MaxX * dpi,
+            MinY = r.MaxY * dpi - want, MaxY = r.MaxY * dpi,
         };
         desired = ClampLibraryPanel(desired, screen, uiTop, dpi, LibraryMode);
         _libraryPanelLogical = new RectF
@@ -9559,6 +9568,22 @@ public partial class InkEngine
         LibraryMarqueeActive = false;
         LibraryManageSorting = false;
         SaveLibraryPanelPrefs();
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// 自检用：**只清内存**里的面板位置 / 每页高度，下一次打开会从盘里重新读
+    ///（模拟"关掉软件再开"）。和 <see cref="ResetLibraryPanelForTest"/> 不同，它不写盘。
+    /// </summary>
+    internal void ReloadLibraryPanelPlacementForTest()
+    {
+        CancelLibraryPanelDrag();
+        CancelLibraryTouchScroll();
+        _libraryPanelLogical = default;
+        _libraryHeightShapes = 0f;
+        _libraryHeightFavorites = 0f;
+        _libraryPanelPrefsLoaded = false;
+        LibraryPanelOpen = false;
         _dirty = true;
     }
 

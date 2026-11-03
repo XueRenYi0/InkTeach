@@ -506,4 +506,144 @@ internal sealed partial class App
         ExitCode = fail == 0 ? 0 : 1;
         _quit = true;
     }
+
+    /// <summary>
+    /// 面板**尺寸 / 位置记忆**专项（2026-11-03）：用户报"图形框位置有点记忆，
+    /// 大小没记忆"。这条链子跨"关软件再开"——必须走**写盘 → 清内存 → 从盘重读**，
+    /// 只在内存里比对等于没验。图形页和收藏页各验一遍，且两页的高度各记各的。
+    /// </summary>
+    private void LibrarySizeMemoryTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 面板尺寸记忆自检 ===");
+        int pass = 0, fail = 0;
+        void Check(string name, bool ok, string detail = "")
+        {
+            if (ok) pass++; else fail++;
+            Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-34} {detail}");
+        }
+        bool Near(float a, float b, float tol = 1.5f) => MathF.Abs(a - b) <= tol;
+
+        PassMode = PassThroughMode.LayeredTransparent;
+        PassThrough = false;
+        foreach (var w in _windows) ApplyPassThroughStyle(w);
+        SetUiFactory(() => new InkUi.FullUi());
+        SettleFrames(250);
+        if (CurrentUi is not InkUi.FullUi)
+        {
+            Console.WriteLine("  界面没挂上，停止");
+            ExitCode = 1;
+            return;
+        }
+
+        void ResizeBy(float dx, float dy, uint id)
+        {
+            var r = LibraryPanelRectNow();
+            var grip = LibraryLayout.ResizeRect(r, UiUnit);
+            float gx = (grip.MinX + grip.MaxX) * 0.5f;
+            float gy = (grip.MinY + grip.MaxY) * 0.5f;
+            LibraryPointerDown(gx, gy, Native.PT_PEN, id);
+            LibraryPanelDragMove(gx + dx * UiUnit, gy + dy * UiUnit);
+            LibraryPanelDragEnd();
+            SettleFrames(150);
+        }
+        void CloseSaveReload()
+        {
+            CloseLibraryPanel();
+            SaveSettingsForTest();          // 自检模式平时不落盘，这里显式写一次
+            ReloadUiPrefsForTest();         // 磁盘 → 内存，模拟"关软件再开"
+            ReloadLibraryPanelPlacementForTest();
+        }
+
+        // ---- 图形页：拖窄 + 拖矮（故意低于 5 行）----
+        ResetLibraryPanelForTest();
+        OpenLibraryPanel(LibraryTab.Shapes);
+        SettleFrames(150);
+
+        ResizeBy(-2f * (LibraryLayout.CellWLogical + LibraryLayout.CellGapLogical),
+                 -2f * (LibraryLayout.ShapeCellHLogical + LibraryLayout.RowGapLogical), 9301u);
+        var shrunk = LibraryPanelRectNow();
+        var shrunkInfo = LibraryPanelInfoNow();
+        Check("图形页可以拖到 5 行以下（不再被硬卡回 5 行）",
+              shrunkInfo.Rows < 5,
+              $"行 {shrunkInfo.Rows}，高 {shrunk.MaxY - shrunk.MinY:F0}");
+        float sx = shrunk.MinX, sy = shrunk.MinY;
+        float sw = shrunk.MaxX - shrunk.MinX, sh = shrunk.MaxY - shrunk.MinY;
+
+        CloseSaveReload();
+        OpenLibraryPanel(LibraryTab.Shapes);
+        SettleFrames(200);
+        var reopened = LibraryPanelRectNow();
+        Check("图形页：关闭重开后位置 / 宽度 / 高度都记得",
+              Near(reopened.MinX, sx) && Near(reopened.MinY, sy)
+              && Near(reopened.MaxX - reopened.MinX, sw)
+              && Near(reopened.MaxY - reopened.MinY, sh),
+              $"({sx:F0},{sy:F0}) {sw:F0}×{sh:F0} → "
+              + $"({reopened.MinX:F0},{reopened.MinY:F0}) "
+              + $"{reopened.MaxX - reopened.MinX:F0}×{reopened.MaxY - reopened.MinY:F0}");
+
+        // ---- 收藏页：高度是另一份；缩到 1 行后照样记得 ----
+        SetLibraryTab(LibraryTab.Favorites);
+        SettleFrames(150);
+        ResizeBy(0f, -(LibraryLayout.CellHLogical + LibraryLayout.RowGapLogical), 9302u);
+        var fav = LibraryPanelRectNow();
+        var favInfo = LibraryPanelInfoNow();
+        Check("收藏页可以缩到 1 行（最小档）", favInfo.Rows == 1,
+              $"行 {favInfo.Rows}，高 {fav.MaxY - fav.MinY:F0}");
+        float fx = fav.MinX, fy = fav.MinY;
+        float fw = fav.MaxX - fav.MinX, fh = fav.MaxY - fav.MinY;
+
+        CloseSaveReload();
+        OpenLibraryPanel(LibraryTab.Favorites);
+        SettleFrames(200);
+        var favBack = LibraryPanelRectNow();
+        Check("收藏页：关闭重开后位置 / 宽度 / 高度都记得",
+              Near(favBack.MinX, fx) && Near(favBack.MinY, fy)
+              && Near(favBack.MaxX - favBack.MinX, fw)
+              && Near(favBack.MaxY - favBack.MinY, fh),
+              $"({fx:F0},{fy:F0}) {fw:F0}×{fh:F0} → "
+              + $"({favBack.MinX:F0},{favBack.MinY:F0}) "
+              + $"{favBack.MaxX - favBack.MinX:F0}×{favBack.MaxY - favBack.MinY:F0}");
+
+        // ---- 两页高度各一份：切回图形页仍是刚才的矮档 ----
+        SetLibraryTab(LibraryTab.Shapes);
+        SettleFrames(150);
+        var shapesBack = LibraryPanelRectNow();
+        Check("切回图形页：仍用图形页自己的高度（不被收藏页覆盖）",
+              Near(shapesBack.MaxY - shapesBack.MinY, sh),
+              $"高 {shapesBack.MaxY - shapesBack.MinY:F0}，期望 {sh:F0}");
+
+        Check("落盘：图形 / 收藏高度各一份",
+              !string.IsNullOrEmpty(GetUiPref("libHShapes"))
+              && !string.IsNullOrEmpty(GetUiPref("libHFav")),
+              $"shapes={GetUiPref("libHShapes")} fav={GetUiPref("libHFav")}");
+
+        // ---- 白板滚动后切页签：面板必须还钉在屏幕同一位置 ----
+        // （老代码把画布坐标当屏幕坐标用，相机一滚，切一次页签就偏一截。）
+        {
+            float oldOff = ViewOffsetY;
+            ViewOffsetY = oldOff + 220f;
+            SettleFrames(120);
+            var cam0 = LibraryPanelRectNow();
+            float x0 = cam0.MinX;
+            float bottom0 = cam0.MaxY + ViewOffsetY;
+            SetLibraryTab(LibraryTab.Favorites);
+            SettleFrames(120);
+            SetLibraryTab(LibraryTab.Shapes);
+            SettleFrames(120);
+            var cam1 = LibraryPanelRectNow();
+            Check("白板滚动后切页签：面板仍钉在屏幕同一位置",
+                  Near(cam1.MinX, x0) && Near(cam1.MaxY + ViewOffsetY, bottom0),
+                  $"x {x0:F0}→{cam1.MinX:F0}，屏幕底 {bottom0:F0}→{cam1.MaxY + ViewOffsetY:F0}");
+            ViewOffsetY = oldOff;
+            SettleFrames(120);
+        }
+
+        ResetLibraryPanelForTest();
+        SaveSettingsForTest();          // 临时配置也恢复成默认，别把测试尺寸留给下一轮
+        Console.WriteLine();
+        Console.WriteLine($"面板尺寸记忆专项：通过 {pass} 项，失败 {fail} 项");
+        ExitCode = fail == 0 ? 0 : 1;
+        _quit = true;
+    }
 }
