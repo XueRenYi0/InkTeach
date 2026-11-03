@@ -3856,6 +3856,7 @@ public sealed partial class FullUi : IOverlayUi
     private const int MoreHitLogUpload = 301; // 上传日志
     private const int MoreHitLogExport = 302; // 只导出 zip
     private const int MoreHitLogOlder = 303;  // 包含更早日志
+    private const int MoreHitLogGroup = 304;  // 复制反馈 QQ 群号（2026-11-03）
 
     /// <summary>
     /// 面板宽：**所有 More 页共用**工作区的 55%，夹在 560～980 逻辑像素。
@@ -3881,12 +3882,15 @@ public sealed partial class FullUi : IOverlayUi
     private const float LogNoteH = 58f;
     private const float LogButtonH = 44f;
     private const float LogToggleH = 36f;
+    /// <summary>日志页底部"加群反馈"那一行（2026-11-03）。</summary>
+    private const float LogGroupH = 42f;
 
     private float MoreLogH()
         => MorePad * 2 + MoreHeaderH + 10
            + 20 + LogNoteH + 12
            + 36 + LogToggleH + 14
-           + LogButtonH + 12 + MoreStatusH;
+           + LogButtonH + 12 + MoreStatusH
+           + 14 + LogGroupH;
 
     private bool _logIncludeOlder;
 
@@ -3927,6 +3931,17 @@ public sealed partial class FullUi : IOverlayUi
         {
             MinX = u.MinX - 10f - w, MinY = u.MinY,
             MaxX = u.MinX - 10f, MaxY = u.MaxY,
+        };
+    }
+
+    /// <summary>日志页最底下一行：加 QQ 群反馈（2026-11-03）。</summary>
+    private RectF LogGroupRect()
+    {
+        float top = LogUploadRect().MaxY + 10f + MoreStatusH + 14f;
+        return new RectF
+        {
+            MinX = MoreLeftX(), MinY = top,
+            MaxX = MoreLeftX() + MoreContentW(), MaxY = top + LogGroupH,
         };
     }
 
@@ -4184,6 +4199,7 @@ public sealed partial class FullUi : IOverlayUi
             if (LogUploadRect().Contains(x, y)) return MoreHitLogUpload;
             if (LogExportRect().Contains(x, y)) return MoreHitLogExport;
             if (LogToggleRect().Contains(x, y)) return MoreHitLogOlder;
+            if (LogGroupRect().Contains(x, y)) return MoreHitLogGroup;
             return MoreHitInside;
         }
 
@@ -4369,7 +4385,7 @@ public sealed partial class FullUi : IOverlayUi
     private static readonly (string Label, string Hint, bool Danger)[] MoreBottomTiles =
     {
         ("设置", "外观 / 书写 / 墨迹 / 工具条，都在里面", false),
-        ("日志", "上传运行日志给开发（会显示编号）；上传不了会自动改为存 zip", false),
+        ("日志", "上传运行日志给开发；加群反馈也在这里", false),
         ("检查更新", $"当前 v{ProductInfo.Version}；有新版本会提示，也可以直接应用更新", false),
         ("重启软件", "像电脑重启：不恢复本次板书（自动存档还在）", false),
         ("退出", "关掉批注（会先把键位落盘）", true),
@@ -4457,6 +4473,20 @@ public sealed partial class FullUi : IOverlayUi
                 MaxX = MoreLeftX() + MoreContentW(), MaxY = ur.MaxY + 10f + MoreStatusH,
             },
             11f, Brush(ctx, MutedCol));
+
+        // 加群反馈（2026-11-03）：整行可点，点一下把群号复制走——触摸屏不用手抄。
+        var gr = LogGroupRect();
+        var grr = new RoundedRectangle(new Vortice.RawRectF(gr.MinX, gr.MinY, gr.MaxX, gr.MaxY), 10f, 10f);
+        bool groupHover = _moreHover == MoreHitLogGroup;
+        ctx.FillRoundedRectangle(grr, Brush(ctx, HoverCol));
+        ctx.DrawRoundedRectangle(grr, Brush(ctx, groupHover ? Tokens.Accent : BorderCol),
+                                 groupHover ? 1.5f : 1f);
+        _widgets.TextLeftMiddle(ctx, $"遇到问题？加 QQ 群 {ProductInfo.FeedbackQQGroup}",
+            new RectF { MinX = gr.MinX + 12f, MinY = gr.MinY, MaxX = gr.MaxX - 96f, MaxY = gr.MaxY },
+            12.5f, Brush(ctx, InkCol));
+        _widgets.Text(ctx, "点一下复制",
+            new RectF { MinX = gr.MaxX - 96f, MinY = gr.MinY, MaxX = gr.MaxX - 12f, MaxY = gr.MaxY },
+            11.5f, Brush(ctx, MutedCol));
     }
 
     private void DrawMoreHome(ID2D1DeviceContext ctx)
@@ -4696,6 +4726,13 @@ public sealed partial class FullUi : IOverlayUi
         {
             _hubHint = "";
             _host.Commands.ExportLogs(note, _logIncludeOlder);
+            Invalidate();
+        }
+        else if (hit == MoreHitLogGroup)
+        {
+            // 2026-11-03：点一下复制群号——触摸屏不用手抄。
+            _host.Commands.CopyText(ProductInfo.FeedbackQQGroup);
+            _hubHint = $"群号已复制：{ProductInfo.FeedbackQQGroup}";
             Invalidate();
         }
     }
@@ -4958,7 +4995,7 @@ public sealed partial class FullUi : IOverlayUi
                 return true;
             }
             if (_morePage == MorePage.Log
-                && hit >= MoreHitLogNote && hit <= MoreHitLogOlder)
+                && hit >= MoreHitLogNote && hit <= MoreHitLogGroup)
             {
                 ActivateLog(hit);
                 return true;

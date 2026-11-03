@@ -933,4 +933,10 @@ public static class ProductInfo
 {
     /// <summary>版本号，例如 "8.11.1"。</summary>
     public static string Version => UpdateFeed.CurrentVersion;
+
+    /// <summary>
+    /// 反馈用的 QQ 群号（2026-11-03 用户给）。**只在这里写一份**：
+    /// 「日志与反馈」页、更新提示、使用说明都读它，换群只改这一处。
+    /// </summary>
+    public const string FeedbackQQGroup = "1121678580";
 }

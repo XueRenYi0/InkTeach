@@ -527,6 +527,12 @@ public interface IEngineCommands
     void UploadLogs(string note, bool includeOlder);
 
     /// <summary>
+    /// **复制一段文字**（2026-11-03：日志页"点一下复制群号"）。
+    /// 只做"显式动作"——用户点了才写剪贴板，不做任何自动写入。
+    /// </summary>
+    void CopyText(string text);
+
+    /// <summary>
     /// **粘贴**：剪贴板里有我们的对象就粘成可编辑对象，否则当图粘到视口左上角。
     /// 和批注内的 `Ctrl+V` 是同一个动作——**给没有键盘的触摸屏 / 手写板留的入口**
     /// （用户 2026-09-17："截图要不要增加一个粘贴功能…如果是触摸屏或者手写板可能没有键盘"）。
