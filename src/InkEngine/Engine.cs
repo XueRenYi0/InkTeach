@@ -17129,6 +17129,18 @@ public partial class InkEngine
                     for (int i = 0; i < 4; i++) pts[i] += delta;
                     break;
                 }
+                if (snapping && _vertexHandle is ShapeHandle.SpaceX or ShapeHandle.SpaceY)
+                {
+                    var snapped = SnapSpaceAxis(s, _vertexHandle, o, local, shift, alt,
+                                                out ShapeSnapKind sk, out string st);
+                    if (sk != ShapeSnapKind.None)
+                    {
+                        local = snapped;
+                        _shapeSnap = sk;
+                        _shapeSnapText = st;
+                        _shapeSnapAnchor = Vector2.Transform(local, s.Transform);
+                    }
+                }
                 if (_vertexHandle == ShapeHandle.SpaceX)
                 {
                     // x 轴端**自由拖**：位置同时决定长度和角度（有些题的投影夹角不是 60°）。
@@ -17463,6 +17475,87 @@ public partial class InkEngine
         return new Vector2(x, y);
     }
 
+    /// <summary>
+    /// 空间坐标系**轴端**的角度吸附（2026-11-03）：
+    ///   · **单根轴**吸到特殊角（<see cref="SelectionHandles.SpecialInclinationDegrees"/>：
+    ///     0/30/45/60/90/120/135/150；`Shift` 是 15° 硬档，`Alt` 关闭）；
+    ///   · **两轴夹角**也吸到同一组特殊角（拖 X 时 Y 固定，拖 Y 时 X 固定）。
+    /// 两个候选都算出来，取**离指针更近**的那个；平手时优先“夹角”，因为数学题更关心夹角。
+    /// 返回**局部坐标**；文案由这里一起给出，胶囊上直接写吸到了什么。
+    /// </summary>
+    private Vector2 SnapSpaceAxis(Stroke s, ShapeHandle handle, Vector2 o, Vector2 p,
+                                  bool shift, bool alt,
+                                  out ShapeSnapKind kind, out string text)
+    {
+        kind = ShapeSnapKind.None;
+        text = "";
+        if (alt) return p;
+        float len = Vector2.Distance(o, p);
+        if (len < 1e-3f) return p;
+
+        float pointerAng = MathF.Atan2(p.Y - o.Y, p.X - o.X);
+        float AngleOf(Vector2 q) => MathF.Atan2(q.Y - o.Y, q.X - o.X);
+        float DeltaTo(Vector2 q)
+        {
+            float d = SelectionHandles.NormalizeDegrees((AngleOf(q) - pointerAng) * 180f / MathF.PI);
+            return MathF.Min(d, 360f - d);
+        }
+
+        // 候选一：单根轴吸到特殊角（SnapEndPoint 已经处理 Shift / 软吸附 / 方向侧）。
+        var absPt = SelectionHandles.SnapEndPoint(o, p, shift, alt, out bool absSnap);
+        float absDelta = absSnap ? DeltaTo(absPt) : float.MaxValue;
+
+        // 候选二：两轴夹角吸到特殊角（x–y 取 0~180 的较小角）。
+        var other = handle == ShapeHandle.SpaceX
+            ? new Vector2(s.Points[2].X, s.Points[2].Y)
+            : new Vector2(s.Points[1].X, s.Points[1].Y);
+        var ov = other - o;
+        bool relSnap = false;
+        float relDeg = 0f;
+        Vector2 relPt = p;
+        float relDelta = float.MaxValue;
+        if (ov.LengthSquared() > 1e-6f)
+        {
+            float raw = (pointerAng - AngleOf(other)) * 180f / MathF.PI;
+            raw = SelectionHandles.NormalizeDegrees(raw);
+            if (raw > 180f) raw -= 360f;               // -180..180
+            float absRaw = MathF.Abs(raw);
+            if (absRaw > 0.5f && absRaw < 179.5f)
+            {
+                float snapped = SelectionHandles.SnapFoldedDegrees(
+                    absRaw, SelectionHandles.SpecialInclinationDegrees, shift, alt, out relSnap);
+                if (relSnap && snapped > 0.5f && snapped < 179.5f)
+                {
+                    float sign = raw < 0f ? -1f : 1f;
+                    float a = AngleOf(other) + sign * snapped * MathF.PI / 180f;
+                    relPt = o + new Vector2(MathF.Cos(a), MathF.Sin(a)) * len;
+                    relDeg = snapped;
+                    relDelta = DeltaTo(relPt);
+                }
+            }
+        }
+
+        bool useRel = relSnap && (!absSnap || relDelta <= absDelta);
+        if (!useRel && !absSnap) return p;
+
+        var result = useRel ? relPt : absPt;
+        kind = ShapeSnapKind.AxisAngle;
+        if (useRel)
+            text = $"x–y {relDeg:F0}°";
+        else
+        {
+            // 显示按“数学角”（y 向上）：右 0°、上 90°、左 180°、下 270°。
+            float vx = result.X - o.X, vy = result.Y - o.Y;
+            float display = SelectionHandles.NormalizeDegrees(
+                -MathF.Atan2(vy, vx) * 180f / MathF.PI);
+            text = (handle == ShapeHandle.SpaceX ? "x 轴 " : "y 轴 ") + $"{display:F0}°";
+        }
+        return result;
+    }
+
+
+    /// 8 逻辑像素，横竖分开判，`Alt` 在调用处已经排除。
+    /// </summary>
     /// <summary>
     /// 空间坐标系**原点**的吸附：只吸画布中心 / 四条边（没有"自己的框"——
     /// 正半轴坐标系的框是三个轴端现算的，吸框角没有意义）。

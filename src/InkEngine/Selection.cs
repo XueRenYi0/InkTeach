@@ -207,6 +207,8 @@ internal enum ShapeSnapKind
     CanvasEdge,
     /// <summary>坐标轴端吸到自己的网格步长（长度 = 整数倍格距）。</summary>
     GridStep,
+    /// <summary>空间坐标系：轴端吸到特殊角 / 两轴夹角吸到特殊角。</summary>
+    AxisAngle,
 }
 
 /// <summary>
@@ -1364,6 +1366,7 @@ internal static class SelectionHandles
         ShapeSnapKind.CanvasCenter => "画布中心",
         ShapeSnapKind.CanvasEdge => "画布边",
         ShapeSnapKind.GridStep => "网格",
+        ShapeSnapKind.AxisAngle => "特殊角",
         _ => "",
     };
 

@@ -4185,6 +4185,7 @@ internal sealed partial class OverlayWindow : IDisposable
         {
             string snap = app.ShapeSnapKind is ShapeSnapKind.FrameAnchor or ShapeSnapKind.CanvasCenter
                                                    or ShapeSnapKind.CanvasEdge or ShapeSnapKind.GridStep
+                                                   or ShapeSnapKind.AxisAngle
                           && !string.IsNullOrEmpty(app.ShapeSnapText)
                 ? app.ShapeSnapText
                 : SelectionHandles.ShapeSnapLabel(app.ShapeSnapKind);

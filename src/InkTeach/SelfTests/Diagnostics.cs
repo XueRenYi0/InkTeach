@@ -1981,6 +1981,34 @@ internal sealed partial class App
             Check("四棱柱四个底角：y 都沿侧棱", ok, detail);
         }
 
+        // 角度吸附：单轴特殊角（30°）＋ 两轴夹角特殊角（60°）。
+        {
+            var snapS = new Stroke { Tool = Tool.SpaceCoordinate, Kind = StrokeKind.SpaceCoordinate };
+            snapS.AddPoint(0f, 0f, 1f, 0);
+            snapS.SetSpaceAxisBox(0f, 0f, 300f, -200f);   // x 0°，y 63°
+            Doc.AddStroke(snapS);
+
+            float rad305 = -30.5f * MathF.PI / 180f;
+            var sxTo = new Vector2(MathF.Cos(rad305), MathF.Sin(rad305)) * 220f;
+            var sxh = SelectionHandles.ShapeHandleCanvasPosition(snapS, ShapeHandle.SpaceX);
+            VertexDragForTest(snapS, ShapeHandle.SpaceX, sxh.X, sxh.Y, sxTo.X, sxTo.Y);
+            float xDeg = MathF.Abs(MathF.Atan2(snapS.Points[1].Y, snapS.Points[1].X) * 180f / MathF.PI);
+            Check("角度吸附：x 轴 30.5° 吸到 30°", Near(xDeg, 30f, 0.2f), $"x={xDeg:F1}°");
+
+            float rad10 = -10f * MathF.PI / 180f;
+            var x10 = new Vector2(MathF.Cos(rad10), MathF.Sin(rad10)) * 220f;
+            sxh = SelectionHandles.ShapeHandleCanvasPosition(snapS, ShapeHandle.SpaceX);
+            VertexDragForTest(snapS, ShapeHandle.SpaceX, sxh.X, sxh.Y, x10.X, x10.Y);
+
+            float rad71 = -71f * MathF.PI / 180f;
+            var syTo = new Vector2(MathF.Cos(rad71), MathF.Sin(rad71)) * 160f;
+            var syh = SelectionHandles.ShapeHandleCanvasPosition(snapS, ShapeHandle.SpaceY);
+            VertexDragForTest(snapS, ShapeHandle.SpaceY, syh.X, syh.Y, syTo.X, syTo.Y);
+            float yDeg = MathF.Abs(MathF.Atan2(snapS.Points[2].Y, snapS.Points[2].X) * 180f / MathF.PI);
+            Check("角度吸附：x=10° 时 y 拖到 71° → 夹角 60°", Near(yDeg, 70f, 0.2f),
+                  $"y={yDeg:F1}°（x 10°，期望 70°）");
+        }
+
         Span<ShapeHandle> hs = stackalloc ShapeHandle[8];
         int hn = SelectionHandles.ShapeHandlesOf(s, hs);
         Check("四个手柄：O / X / Y / Z",
