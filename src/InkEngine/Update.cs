@@ -939,4 +939,10 @@ public static class ProductInfo
     /// 「日志与反馈」页、更新提示、使用说明都读它，换群只改这一处。
     /// </summary>
     public const string FeedbackQQGroup = "1121678580";
+
+    /// <summary>
+    /// QQ 群的分享短链（2026-11-03 用户给，QQ「分享群链接」生成的标准格式）。
+    /// 手机上点开可直接唤起 QQ 加群；课堂大屏上更适合复制发到手机 / 微信。
+    /// </summary>
+    public const string FeedbackQQUrl = "https://qm.qq.com/q/lTrNHTI2nQ";
 }

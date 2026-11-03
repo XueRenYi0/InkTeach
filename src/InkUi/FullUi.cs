@@ -3857,6 +3857,7 @@ public sealed partial class FullUi : IOverlayUi
     private const int MoreHitLogExport = 302; // 只导出 zip
     private const int MoreHitLogOlder = 303;  // 包含更早日志
     private const int MoreHitLogGroup = 304;  // 复制反馈 QQ 群号（2026-11-03）
+    private const int MoreHitLogGroupUrl = 305; // 复制加群链接（2026-11-03）
 
     /// <summary>
     /// 面板宽：**所有 More 页共用**工作区的 55%，夹在 560～980 逻辑像素。
@@ -3942,6 +3943,27 @@ public sealed partial class FullUi : IOverlayUi
         {
             MinX = MoreLeftX(), MinY = top,
             MaxX = MoreLeftX() + MoreContentW(), MaxY = top + LogGroupH,
+        };
+    }
+
+    /// <summary>那一行右端的两个小动作：复制链接（最右）/ 复制群号。</summary>
+    private const float LogGroupBtnW = 72f;
+    private RectF LogGroupUrlRect()
+    {
+        var g = LogGroupRect();
+        return new RectF
+        {
+            MinX = g.MaxX - 12f - LogGroupBtnW, MinY = g.MinY + 8f,
+            MaxX = g.MaxX - 12f, MaxY = g.MaxY - 8f,
+        };
+    }
+    private RectF LogGroupCopyRect()
+    {
+        var u = LogGroupUrlRect();
+        return new RectF
+        {
+            MinX = u.MinX - 8f - LogGroupBtnW, MinY = u.MinY,
+            MaxX = u.MinX - 8f, MaxY = u.MaxY,
         };
     }
 
@@ -4199,6 +4221,8 @@ public sealed partial class FullUi : IOverlayUi
             if (LogUploadRect().Contains(x, y)) return MoreHitLogUpload;
             if (LogExportRect().Contains(x, y)) return MoreHitLogExport;
             if (LogToggleRect().Contains(x, y)) return MoreHitLogOlder;
+            // 链接按钮优先；其余整行（含"复制群号"）都是复制群号
+            if (LogGroupUrlRect().Contains(x, y)) return MoreHitLogGroupUrl;
             if (LogGroupRect().Contains(x, y)) return MoreHitLogGroup;
             return MoreHitInside;
         }
@@ -4478,15 +4502,19 @@ public sealed partial class FullUi : IOverlayUi
         var gr = LogGroupRect();
         var grr = new RoundedRectangle(new Vortice.RawRectF(gr.MinX, gr.MinY, gr.MaxX, gr.MaxY), 10f, 10f);
         bool groupHover = _moreHover == MoreHitLogGroup;
+        bool urlHover = _moreHover == MoreHitLogGroupUrl;
         ctx.FillRoundedRectangle(grr, Brush(ctx, HoverCol));
-        ctx.DrawRoundedRectangle(grr, Brush(ctx, groupHover ? Tokens.Accent : BorderCol),
-                                 groupHover ? 1.5f : 1f);
+        ctx.DrawRoundedRectangle(grr, Brush(ctx, groupHover || urlHover ? Tokens.Accent : BorderCol),
+                                 groupHover || urlHover ? 1.5f : 1f);
+        var cr = LogGroupCopyRect();
+        var lr = LogGroupUrlRect();
         _widgets.TextLeftMiddle(ctx, $"遇到问题？加 QQ 群 {ProductInfo.FeedbackQQGroup}",
-            new RectF { MinX = gr.MinX + 12f, MinY = gr.MinY, MaxX = gr.MaxX - 96f, MaxY = gr.MaxY },
+            new RectF { MinX = gr.MinX + 12f, MinY = gr.MinY, MaxX = cr.MinX - 10f, MaxY = gr.MaxY },
             12.5f, Brush(ctx, InkCol));
-        _widgets.Text(ctx, "点一下复制",
-            new RectF { MinX = gr.MaxX - 96f, MinY = gr.MinY, MaxX = gr.MaxX - 12f, MaxY = gr.MaxY },
-            11.5f, Brush(ctx, MutedCol));
+        _widgets.Text(ctx, "复制群号", cr, 11.5f,
+                      Brush(ctx, groupHover ? Tokens.Accent : MutedCol));
+        _widgets.Text(ctx, "复制链接", lr, 11.5f,
+                      Brush(ctx, urlHover ? Tokens.Accent : MutedCol));
     }
 
     private void DrawMoreHome(ID2D1DeviceContext ctx)
@@ -4733,6 +4761,13 @@ public sealed partial class FullUi : IOverlayUi
             // 2026-11-03：点一下复制群号——触摸屏不用手抄。
             _host.Commands.CopyText(ProductInfo.FeedbackQQGroup);
             _hubHint = $"群号已复制：{ProductInfo.FeedbackQQGroup}";
+            Invalidate();
+        }
+        else if (hit == MoreHitLogGroupUrl)
+        {
+            // 加群短链：手机点开能直接唤起 QQ；大屏上复制到微信 / 手机更实际。
+            _host.Commands.CopyText(ProductInfo.FeedbackQQUrl);
+            _hubHint = "加群链接已复制，粘到 QQ / 微信里就能打开";
             Invalidate();
         }
     }
@@ -4995,7 +5030,7 @@ public sealed partial class FullUi : IOverlayUi
                 return true;
             }
             if (_morePage == MorePage.Log
-                && hit >= MoreHitLogNote && hit <= MoreHitLogGroup)
+                && hit >= MoreHitLogNote && hit <= MoreHitLogGroupUrl)
             {
                 ActivateLog(hit);
                 return true;
