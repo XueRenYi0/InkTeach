@@ -1996,6 +1996,33 @@ internal sealed class Stroke
         return AxisInkBoundsOf(pts[..n], Transform, extra, Width);
     }
 
+    /// <summary>
+    /// 空间坐标系的墨迹紧框：四个定义点 ＋ **三个箭头的翅膀**。
+    /// 普通坐标系的箭头翅膀在轴线末端"后面"，点框就能包住；空间坐标系的 y 轴
+    /// 斜着走，箭头的两个翅膀会伸到点框外面——不把它们算进来，选中框会比图形小，
+    /// 翻方向时旧箭头也会留在脏区外（用户 2026-11-03 看到的"残影"）。
+    /// </summary>
+    private static RectF SpaceAxisInkBoundsOf(ReadOnlySpan<Vector2> pts, in Matrix3x2 transform,
+                                              in Matrix3x2 extra, float width)
+    {
+        if (pts.Length < 4) return RectF.Empty;
+        var m = transform * extra;
+        var r = RectF.Empty;
+
+        void Add(Vector2 p) { var q = Vector2.Transform(p, m); r.Add(q.X, q.Y); }
+        void Arrow(Vector2 tip, Vector2 dir)
+        {
+            foreach (var p in AxisArrowPoints(tip, dir, AxisArrowHeadLen(width))) Add(p);
+        }
+
+        for (int i = 0; i < 4; i++) Add(pts[i]);
+        Arrow(pts[1], new Vector2(1f, 0f));
+        var yDir = pts[2] - pts[0];
+        Arrow(pts[2], yDir.LengthSquared() > 1e-6f ? Vector2.Normalize(yDir) : SpaceAxisYDirection);
+        Arrow(pts[3], new Vector2(0f, -1f));
+        return r.IsEmpty ? r : r.Inflate(width * 0.5f);
+    }
+
     // =====================================================================
     //  四种曲线（2026-09-20 第四批）：抛物线 / 双曲线 / 正弦 / 余弦
     //
@@ -3211,13 +3238,19 @@ internal sealed class Stroke
             return PolygonInkBoundsOf(kind, transform, Matrix3x2.Identity,
                                       local[0], local[1], local[2], width).Inflate(2f);
 
-        // 坐标系 / 数轴 / 空间坐标系：定义点的外接 + 半笔宽。
-        if (kind is StrokeKind.Coordinate or StrokeKind.NumberLine or StrokeKind.SpaceCoordinate
-            && local.Count >= 2)
+        // 空间坐标系：四个点 ＋ 箭头翅膀（翅膀会伸出点框）。
+        if (kind == StrokeKind.SpaceCoordinate && local.Count >= 4)
         {
-            int n = Math.Min(local.Count,
-                kind == StrokeKind.SpaceCoordinate ? 4 : 3);
             Span<Vector2> pts = stackalloc Vector2[4];
+            for (int i = 0; i < 4; i++) pts[i] = local[i];
+            return SpaceAxisInkBoundsOf(pts, transform, Matrix3x2.Identity, width).Inflate(2f);
+        }
+
+        // 坐标系 / 数轴：定义点的外接 + 半笔宽。
+        if (kind is StrokeKind.Coordinate or StrokeKind.NumberLine && local.Count >= 2)
+        {
+            int n = Math.Min(local.Count, 3);
+            Span<Vector2> pts = stackalloc Vector2[3];
             for (int i = 0; i < n; i++) pts[i] = local[i];
             return AxisInkBoundsOf(pts[..n], transform, Matrix3x2.Identity, width).Inflate(2f);
         }
@@ -3568,6 +3601,15 @@ internal sealed class Stroke
             return;
         }
 
+        // 空间坐标系：四个点 ＋ 三个箭头的翅膀（y 斜着，翅膀会伸到点框外面）。
+        if (Kind == StrokeKind.SpaceCoordinate && Points.Count >= 4)
+        {
+            Span<Vector2> sp = stackalloc Vector2[4];
+            for (int i = 0; i < 4; i++) sp[i] = new Vector2(Points[i].X, Points[i].Y);
+            Bounds = SpaceAxisInkBoundsOf(sp, Matrix3x2.Identity, Matrix3x2.Identity, Width);
+            return;
+        }
+
         if (Kind == StrokeKind.TextBox && TextBox != null && Points.Count >= 1)
         {
             var o = new Vector2(Points[0].X, Points[0].Y);
@@ -3660,6 +3702,18 @@ internal sealed class Stroke
                 rr.MinX -= hw0; rr.MinY -= hw0; rr.MaxX += hw0; rr.MaxY += hw0;
                 _inkBounds = rr;
                 _maxHalfWidth = hw0;
+                _inkBoundsRevision = Revision;
+                return rr;
+            }
+
+            // 空间坐标系：四个点 ＋ 三个箭头的翅膀（翅膀会伸出点框，见那个函数的注释）。
+            if (Kind == StrokeKind.SpaceCoordinate && Points.Count >= 4)
+            {
+                Span<Vector2> sp = stackalloc Vector2[4];
+                for (int i = 0; i < 4; i++) sp[i] = new Vector2(Points[i].X, Points[i].Y);
+                var rr = SpaceAxisInkBoundsOf(sp, Transform, Matrix3x2.Identity, Width);
+                _inkBounds = rr;
+                _maxHalfWidth = Width * 0.5f;
                 _inkBoundsRevision = Revision;
                 return rr;
             }
@@ -4014,13 +4068,19 @@ internal sealed class Stroke
             return CurvePreviewInkBounds(local, extra);
         if (Kind is StrokeKind.Triangle or StrokeKind.Parallelogram && local.Count >= 3)
             return PolygonInkBounds(local[0], local[1], local[2], extra);
-        // 坐标系 / 数轴：和静止态同一条式子（定义点的外接 + 半笔宽），口径不能差一分。
+        // 坐标系 / 数轴 / 空间坐标系：和静止态同一条式子（定义点的外接 + 半笔宽），口径不能差一分。
         if (Kind is StrokeKind.Coordinate or StrokeKind.NumberLine && local.Count >= 2)
         {
             int n = Math.Min(local.Count, 3);
             Span<Vector2> pts = stackalloc Vector2[3];
             for (int i = 0; i < n; i++) pts[i] = local[i];
             return AxisInkBoundsOf(pts[..n], Transform, extra, Width);
+        }
+        if (Kind == StrokeKind.SpaceCoordinate && local.Count >= 4)
+        {
+            Span<Vector2> pts = stackalloc Vector2[4];
+            for (int i = 0; i < 4; i++) pts[i] = local[i];
+            return SpaceAxisInkBoundsOf(pts, Transform, extra, Width);
         }
 
         var b = RectF.Empty;
@@ -5084,7 +5144,10 @@ internal sealed class Stroke
                 list.Add(new InkPiece(AxisArrowPoints(end, dir, head), false));
             }
             Axis(new Vector2(Points[1].X, Points[1].Y), new Vector2(1f, 0f));
-            Axis(new Vector2(Points[2].X, Points[2].Y), SpaceAxisYDirection);
+            var yEnd = new Vector2(Points[2].X, Points[2].Y);
+            var yDir = yEnd - so;
+            Axis(yEnd, yDir.LengthSquared() > 1e-6f
+                ? Vector2.Normalize(yDir) : SpaceAxisYDirection);
             Axis(new Vector2(Points[3].X, Points[3].Y), new Vector2(0f, -1f));
             return list;
         }

@@ -1995,6 +1995,16 @@ internal sealed partial class App
                   s.Points[2].Y > o.Y
                   && Near(Vector2.Distance(o, new Vector2(s.Points[2].X, s.Points[2].Y)), 80f),
                   $"Y=({s.Points[2].X:F0},{s.Points[2].Y:F0})");
+
+            var yNow = new Vector2(s.Points[2].X, s.Points[2].Y);
+            Stroke.InkPiece yArrow = null;
+            foreach (var p in s.InkPieces())
+                if (p.Pts.Count == 3 && Near2(p.Pts[1], yNow)) { yArrow = p; break; }
+            Check("Y 箭头方向跟着实际 Y 轴（不是默认后右）",
+                  yArrow != null
+                  && Vector2.Dot(yArrow.Pts[0] - yNow, yNow - o) < 0f
+                  && Vector2.Dot(yArrow.Pts[2] - yNow, yNow - o) < 0f,
+                  yArrow == null ? "没找到箭头" : $"翼 {yArrow.Pts[0]} / {yArrow.Pts[2]}");
         }
 
         // 拖 O：四个点整组平移，轴长/方向都不变。

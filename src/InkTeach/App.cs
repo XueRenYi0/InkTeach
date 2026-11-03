@@ -3178,6 +3178,28 @@ internal sealed partial class App : InkEngine.InkEngine
                                 + $"被拖的顶点 {apex} → {apexTo}");
             }
 
+            // `--drag` + 空间坐标系：真拖 X / Z 轴端缩短，松手后看有没有残留的旧选中框。
+            if (drag && kind == "spacecoordinate")
+            {
+                void DragHandle(ShapeHandle h, float dx, float dy)
+                {
+                    var from = SelectionHandles.ShapeHandleCanvasPosition(sh, h);
+                    var to = new Vector2(from.X + dx, from.Y + dy);
+                    VertexDragForTest(sh, h, from.X, from.Y, to.X, to.Y);
+                    SettleFrames(250);
+                }
+                DragHandle(ShapeHandle.SpaceX, -140f * DpiScale, 0f);
+                DragHandle(ShapeHandle.SpaceZ, 0f, 120f * DpiScale);
+                // 再把 Y 拖过原点：这是最容易留下旧框的一幕（旧框在右上方，新框跑到左下方）。
+                {
+                    var yh = SelectionHandles.ShapeHandleCanvasPosition(sh, ShapeHandle.SpaceY);
+                    var oo = SelectionHandles.ShapeHandleCanvasPosition(sh, ShapeHandle.SpaceOrigin);
+                    var yTo = oo - (yh - oo) * 0.8f;
+                    VertexDragForTest(sh, ShapeHandle.SpaceY, yh.X, yh.Y, yTo.X, yTo.Y);
+                    SettleFrames(350);
+                }
+            }
+
             var sFrame = SelectionHandles.FrameOf(Doc.Selected);
             var sAabb = sFrame.CanvasAabb;
             var sBar = SelectionHandles.BarRect(sAabb, UiUnit, FurnitureViewport);
