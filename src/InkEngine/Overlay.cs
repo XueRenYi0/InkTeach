@@ -4186,8 +4186,7 @@ internal sealed partial class OverlayWindow : IDisposable
         return app.VertexReadout switch
         {
             // 圆：两个数一起给（半径是"拉多大"，直径是老师嘴里常说的那个数）
-            InkEngine.VertexReadoutKind.Radius =>
-                $"r = {app.VertexReadoutValue:F1}  d = {app.VertexReadoutSecondary:F1}",
+            InkEngine.VertexReadoutKind.Radius => $"r = {app.VertexReadoutValue:F1}",
             InkEngine.VertexReadoutKind.AxisA => $"a = {app.VertexReadoutValue:F1}",
             InkEngine.VertexReadoutKind.AxisB => $"b = {app.VertexReadoutValue:F1}",
             // 抛物线：报课本里那个 p（焦点、准线都从它来，见 VertexReadoutKind 的注释）。
