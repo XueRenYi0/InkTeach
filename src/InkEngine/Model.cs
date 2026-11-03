@@ -2240,6 +2240,12 @@ internal sealed class Stroke
     public bool ShowAsymptotes = true;
 
     /// <summary>
+    /// 仅“图形卡小样”用：不画辅助几何（正切那两条虚线渐近线）。
+    /// 小样只要形状本身，辅助线在 44px 的卡片里会变成两条竖杠、抢掉曲线。
+    /// </summary>
+    public bool PreviewNoAux;
+
+    /// <summary>
     /// 改"画不画那两条虚线渐近线"，**并且让几何缓存失效**。
     ///
     /// ⚠ **光给字段赋值是不够的**（2026-09-22 用户报的就是这件事："我选择的不带渐近线的，

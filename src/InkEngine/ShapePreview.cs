@@ -67,8 +67,9 @@ internal static class ShapePreview
                 s.SetShapeBox(lo, lo, hi, hi);
                 break;
             case Tool.Coordinate:
-                s.AddPoint(mid, mid + 18f, 1f, 0);
-                s.SetAxisBox(mid, mid + 18f, hi, lo);
+                s.AddPoint(mid, mid, 1f, 0);
+                // 原点就是卡片中心，四条轴臂等长；不这么写会偏到右下角。
+                s.SetAxisBox(mid, mid, hi, lo);
                 break;
             case Tool.Parabola:
                 if (p.Variant == 0)
@@ -98,7 +99,8 @@ internal static class ShapePreview
                 break;
             case Tool.Tangent:
                 s.AddPoint(mid, mid, 1f, 0);
-                s.SetTangentBox(mid, mid, hi, lo, 2f);
+                s.SetTangentBox(mid, mid, 80f, 20f, 2f);
+                s.PreviewNoAux = true;   // 卡片里不画两条竖虚线，只留正切曲线
                 break;
             case Tool.Cylinder:
             case Tool.Cone:

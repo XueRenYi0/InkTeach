@@ -2407,14 +2407,17 @@ internal sealed partial class OverlayWindow : IDisposable
         //   · **坐标系网格**（用户 2026-09-24："变细变淡"）：**细一半、淡一半的实线**——
         //     整屏格子铺开时，"淡"比"细"更决定它抢不抢眼。
         // 放在主几何之后画：两者重叠的地方（顶点附近 / 原点）以主线为准。
-        var aux = s.BuildCanvasGeometry(Gfx.D2DFactory, aux: true, extra);
-        if (aux != null)
+        if (!s.PreviewNoAux)
         {
-            bool grid = s.Kind == StrokeKind.Coordinate && s.Grid;
-            _ctx.DrawGeometry(aux,
-                              Brush(grid ? Stroke.Fade(s.Color, Stroke.AxisGridAlpha) : s.Color),
-                              MathF.Max(1f, s.Width * (grid ? Stroke.AxisGridWidthFactor : 0.6f)),
-                              Gfx.StyleFor(grid ? StrokeDash.Solid : StrokeDash.Dashed));
+            var aux = s.BuildCanvasGeometry(Gfx.D2DFactory, aux: true, extra);
+            if (aux != null)
+            {
+                bool grid = s.Kind == StrokeKind.Coordinate && s.Grid;
+                _ctx.DrawGeometry(aux,
+                                  Brush(grid ? Stroke.Fade(s.Color, Stroke.AxisGridAlpha) : s.Color),
+                                  MathF.Max(1f, s.Width * (grid ? Stroke.AxisGridWidthFactor : 0.6f)),
+                                  Gfx.StyleFor(grid ? StrokeDash.Solid : StrokeDash.Dashed));
+            }
         }
 
         // **圆心点是墨迹本身**（2026-10-18 用户定）：只有圆要，一直存在，
