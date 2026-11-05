@@ -51,6 +51,7 @@ MODELS = {
     "glm-4.5v":            ("siliconflow", "zai-org/GLM-4.5V", "智谱 VLM"),
     "paddleocr-vl":        ("siliconflow", "PaddlePaddle/PaddleOCR-VL-1.5", "专用 OCR"),
     "deepseek-ocr":        ("siliconflow", "deepseek-ai/DeepSeek-OCR", "专用 OCR"),
+    "ds-v4.1-flash":       ("siliconflow", "deepseek-ai/DeepSeek-V4.1-Flash", "VLM（准但慢）"),
     "ds-qwen3-vl-plus":    ("dashscope", "qwen3-vl-plus", "百炼旗舰 VLM"),
     "ds-qwen-vl-ocr":      ("dashscope", "qwen-vl-ocr", "百炼专用 OCR"),
     "ds-qwen35-ocr":       ("dashscope", "qwen3.5-ocr", "百炼新一代 OCR"),
