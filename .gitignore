@@ -37,3 +37,8 @@ vendor/
 # log ledger/download cache (online: InkTeach-Logs cases/ledger.json)
 reports/log-ledger.json
 logs-download/
+
+# AI 基准：密钥与原始返回不进库
+tools/ai-bench/keys.json
+tools/ai-bench/raw/
+tools/ai-bench/crops/
