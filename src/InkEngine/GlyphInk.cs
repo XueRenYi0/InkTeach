@@ -48,7 +48,7 @@ public static class GlyphInk
 
     private static Glyph Build(string fontPath, char ch)
     {
-        const int H = 256;                       // 归一化用的参考字高
+        const int H = 384;                       // 归一化用的参考字高（越高，缩放后越平滑）
         int W = H * 2;
         using var bmp = new SKBitmap(W * SuperSample, H * SuperSample);
         using (var canvas = new SKCanvas(bmp))
@@ -92,28 +92,35 @@ public static class GlyphInk
             for (int x = 0; x < bw; x++)
                 sub[y * bw + x] = mask[(y + minY) * w + (x + minX)];
 
-        // **扫描线填充**（2026-11-05 用户定：不要求笔顺，只要求是能被橡皮擦的墨迹）。
-        // 每一行找连续的墨迹段 → 一段一笔（水平短线），行距 = 线宽，叠起来就是实心字。
-        // 不做骨架追踪：那条路在交叉处会断成散点，反而更难稳。
-        const int Step = 2;                 // 行距（参考像素）
-        var glyph = new Glyph { WidthRatio = (float)bw / bh };
-        float wNorm = (Step + 0.6f) / bh;   // 稍微叠一点，避免出现横纹
+        // **中心线 + 逐笔宽度**：骨架折线是曲线，边缘天然平滑；
+        // 每条折线的宽度取该笔的局部半宽中位数 —— 正好还原「横细竖粗」。
+        var skel = Thin(sub, bw, bh);
+        var dist = Distance(sub, bw, bh);
+        var lines = Trace(skel, bw, bh);
 
-        for (int y = 0; y < bh; y += Step)
+        var glyph = new Glyph { WidthRatio = (float)bw / bh };
+        foreach (var line in lines)
         {
-            int x = 0;
-            while (x < bw)
+            if (line.Count < 2) continue;
+            var ws = new List<float>();
+            foreach (var (x, y) in line)
             {
-                if (sub[y * bw + x] == 0) { x++; continue; }
-                int x0 = x;
-                while (x < bw && sub[y * bw + x] != 0) x++;
-                int x1 = x - 1;
-                if (x1 - x0 < 1) continue;
-                glyph.Strokes.Add((
-                    new[] { (x0 - 0.5f) / bh, (x1 + 0.5f) / bh },
-                    new[] { (y + 0.5f) / bh, (y + 0.5f) / bh },
-                    wNorm));
+                int idx = y * bw + x;
+                if (idx >= 0 && idx < dist.Length) ws.Add(dist[idx]);
             }
+            if (ws.Count == 0) continue;
+            ws.Sort();
+            float med = ws[ws.Count / 2] * 2f / bh;
+            if (med < 0.002f) continue;
+
+            var xs = new float[line.Count];
+            var ys = new float[line.Count];
+            for (int i = 0; i < line.Count; i++)
+            {
+                xs[i] = (float)line[i].x / bh;
+                ys[i] = (float)line[i].y / bh;
+            }
+            glyph.Strokes.Add((xs, ys, med));
         }
         return glyph;
     }
@@ -225,35 +232,39 @@ public static class GlyphInk
             return n;
         }
 
-        for (int y = 1; y < h - 1; y++)
-            for (int x = 1; x < w - 1; x++)
-            {
-                int i = y * w + x;
-                if (skel[i] == 0 || used[i]) continue;
-                if (Deg(x, y) > 1) continue;           // 只从端点起笔
-
-                var line = new List<(int, int)> { (x, y) };
-                used[i] = true;
-                int cx = x, cy = y;
-                while (true)
+        // 两轮：先从端点起笔（线条最完整），再兜底从任意未访问点起笔（闭环不会漏）。
+        for (int pass = 0; pass < 2; pass++)
+        {
+            for (int y = 1; y < h - 1; y++)
+                for (int x = 1; x < w - 1; x++)
                 {
-                    int nx = -1, ny = -1;
-                    for (int k = 0; k < 8; k++)
+                    int i = y * w + x;
+                    if (skel[i] == 0 || used[i]) continue;
+                    if (pass == 0 && Deg(x, y) != 1) continue;
+
+                    var line = new List<(int x, int y)> { (x, y) };
+                    used[i] = true;
+                    int cx = x, cy = y;
+                    while (true)
                     {
-                        int tx = cx + dx[k], ty = cy + dy[k];
-                        if (tx < 0 || ty < 0 || tx >= w || ty >= h) continue;
-                        int ti = ty * w + tx;
-                        if (skel[ti] == 0 || used[ti]) continue;
-                        nx = tx; ny = ty; break;
+                        int nx = -1, ny = -1, best = 99;
+                        for (int k = 0; k < 8; k++)
+                        {
+                            int tx = cx + dx[k], ty = cy + dy[k];
+                            if (tx < 0 || ty < 0 || tx >= w || ty >= h) continue;
+                            int ti = ty * w + tx;
+                            if (skel[ti] == 0 || used[ti]) continue;
+                            int dg = Deg(tx, ty);
+                            if (dg < best) { best = dg; nx = tx; ny = ty; }
+                        }
+                        if (nx < 0) break;
+                        used[ny * w + nx] = true;
+                        line.Add((nx, ny));
+                        cx = nx; cy = ny;
                     }
-                    if (nx < 0) break;
-                    used[ny * w + nx] = true;
-                    line.Add((nx, ny));
-                    cx = nx; cy = ny;
-                    if (Deg(cx, cy) > 2) break;        // 到分叉点收笔
+                    if (line.Count >= 2) lines.Add(line);
                 }
-                if (line.Count >= 3) lines.Add(line);
-            }
+        }
         return lines;
     }
 }
