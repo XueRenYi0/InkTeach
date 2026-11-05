@@ -14,17 +14,22 @@ import sys
 BASE = os.path.dirname(os.path.abspath(__file__))
 RAW = os.path.join(BASE, "raw")
 
+# 注意：这里是 str.replace，pattern 必须是**单反斜杠**（r"\in"），
+# 写成 r"\\in" 会变成“两个反斜杠”，永远匹配不到，符号随后被删掉——会虚高 CER。
 TEX = [
-    (r"\\notin", "∉"), (r"\\in", "∈"),
-    (r"\\not\\subset", "⊄"), (r"\\subset", "⊂"),
-    (r"\\subseteq", "⊆"), (r"\\cap", "∩"), (r"\\cup", "∪"),
-    (r"\\parallel", "∥"), (r"\\perp", "⊥"), (r"\\angle", "∠"),
-    (r"\\triangle", "△"), (r"\\because", "∵"), (r"\\therefore", "∴"),
-    (r"\\leq", "≤"), (r"\\geq", "≥"), (r"\\neq", "≠"),
-    (r"\\times", "×"), (r"\\div", "÷"), (r"\\cdot", "·"),
-    (r"\\pm", "±"), (r"\\pi", "π"), (r"\\infty", "∞"),
-    (r"\\alpha", "α"), (r"\\beta", "β"), (r"\\theta", "θ"),
-    (r"\\overrightarrow", ""), (r"\\mathrm", ""), (r"\\text", ""),
+    (r"\not\subset", "⊄"), (r"\not\subset", "⊄"),
+    (r"\notin", "∉"), (r"\in", "∈"),
+    (r"\nsubseteq", "⊈"), (r"\subseteq", "⊆"), (r"\subset", "⊂"),
+    (r"\cap", "∩"), (r"\cup", "∪"), (r"\parallel", "∥"),
+    (r"\perp", "⊥"), (r"\angle", "∠"), (r"\triangle", "△"),
+    (r"\because", "∵"), (r"\therefore", "∴"),
+    (r"\leqslant", "≤"), (r"\geqslant", "≥"), (r"\leq", "≤"), (r"\geq", "≥"),
+    (r"\neq", "≠"), (r"\times", "×"), (r"\div", "÷"), (r"\cdot", "·"),
+    (r"\pm", "±"), (r"\pi", "π"), (r"\infty", "∞"),
+    (r"\alpha", "α"), (r"\beta", "β"), (r"\theta", "θ"),
+    (r"\overrightarrow", ""), (r"\mathrm", ""), (r"\text", ""),
+    (r"\quad", " "), (r"\qquad", " "), (r"\cdots", "…"), (r"\ldots", "…"),
+    (r"\vdots", "…"), (r"\dots", "…"),
 ]
 
 FORMULA_CHARS = set("∈∉⊂⊄∩∪∥⊥∠△=+×÷√≤≥≠π")

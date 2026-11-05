@@ -32,6 +32,13 @@ PROMPT = """逐行转录图片中的手写板书内容。要求：
 PROVIDERS = {
     "siliconflow": ("https://api.siliconflow.cn/v1/chat/completions", "siliconflow"),
     "dashscope": ("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "dashscope"),
+    "deepseek": ("https://api.deepseek.com/chat/completions", "deepseek"),
+}
+
+# 个别模型要额外带参数。DeepSeek 官方**必须显式关思考**，否则会先吐几千 token 推理
+# （实测同一张图：开思考 10.4s 且正文为空，关思考 1.1s 出结果）。
+MODEL_EXTRA = {
+    "deepseek-flash": {"thinking": {"type": "disabled"}},
 }
 
 # 专用 OCR 模型有自己的“惯用提示词”，硬套通用提示会退化成复读机（实测 PaddleOCR-VL/DeepSeek-OCR）。
@@ -51,7 +58,8 @@ MODELS = {
     "glm-4.5v":            ("siliconflow", "zai-org/GLM-4.5V", "智谱 VLM"),
     "paddleocr-vl":        ("siliconflow", "PaddlePaddle/PaddleOCR-VL-1.5", "专用 OCR"),
     "deepseek-ocr":        ("siliconflow", "deepseek-ai/DeepSeek-OCR", "专用 OCR"),
-    "ds-v4.1-flash":       ("siliconflow", "deepseek-ai/DeepSeek-V4.1-Flash", "VLM（准但慢）"),
+    "ds-v4.1-flash":       ("siliconflow", "deepseek-ai/DeepSeek-V4.1-Flash", "VLM（硅基流动，关不掉思考）"),
+    "deepseek-flash":      ("deepseek", "deepseek-flash", "官方 VLM（关思考，最快）"),
     "ds-qwen3-vl-plus":    ("dashscope", "qwen3-vl-plus", "百炼旗舰 VLM"),
     "ds-qwen-vl-ocr":      ("dashscope", "qwen-vl-ocr", "百炼专用 OCR"),
     "ds-qwen35-ocr":       ("dashscope", "qwen3.5-ocr", "百炼新一代 OCR"),
@@ -80,6 +88,7 @@ def load_keys():
     keys = {
         "siliconflow": os.environ.get("SILICONFLOW_API_KEY", ""),
         "dashscope": os.environ.get("DASHSCOPE_API_KEY", ""),
+        "deepseek": os.environ.get("DEEPSEEK_API_KEY", ""),
     }
     if not any(keys.values()):
         p = os.path.join(BASE, "keys.json")
@@ -100,7 +109,7 @@ def slug(s):
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", s)
 
 
-def call(url, key, model, b64, prompt, timeout=180, retries=2):
+def call(url, key, model, b64, prompt, extra=None, timeout=180, retries=2):
     payload = {
         "model": model,
         "messages": [{
@@ -114,6 +123,8 @@ def call(url, key, model, b64, prompt, timeout=180, retries=2):
         "max_tokens": 4096,
         "stream": False,
     }
+    if extra:
+        payload.update(extra)
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     last = None
     for attempt in range(retries + 1):
@@ -184,7 +195,7 @@ def main():
                 print(f"skip {mk}/{b} (exists)", flush=True)
                 continue
             prompt = PROMPT_OVERRIDE.get(mk, PROMPT)
-            resp, dt, err = call(url, key, mid, imgs[b], prompt)
+            resp, dt, err = call(url, key, mid, imgs[b], prompt, MODEL_EXTRA.get(mk))
             rec = {
                 "model_key": mk, "provider": prov, "model": mid, "board": b,
                 "prompt": prompt,
