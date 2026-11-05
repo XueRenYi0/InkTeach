@@ -92,32 +92,28 @@ public static class GlyphInk
             for (int x = 0; x < bw; x++)
                 sub[y * bw + x] = mask[(y + minY) * w + (x + minX)];
 
-        var skel = Thin(sub, bw, bh);
-        var dist = Distance(sub, bw, bh);
-        var lines = Trace(skel, bw, bh);
-
+        // **扫描线填充**（2026-11-05 用户定：不要求笔顺，只要求是能被橡皮擦的墨迹）。
+        // 每一行找连续的墨迹段 → 一段一笔（水平短线），行距 = 线宽，叠起来就是实心字。
+        // 不做骨架追踪：那条路在交叉处会断成散点，反而更难稳。
+        const int Step = 2;                 // 行距（参考像素）
         var glyph = new Glyph { WidthRatio = (float)bw / bh };
-        foreach (var line in lines)
-        {
-            if (line.Count < 3) continue;
-            var widths = new List<float>();
-            foreach (var (x, y) in line)
-            {
-                int idx = y * bw + x;
-                if (idx >= 0 && idx < dist.Length) widths.Add(dist[idx]);
-            }
-            if (widths.Count == 0) continue;
-            widths.Sort();
-            float med = widths[widths.Count / 2] * 2f / bh;   // 归一化到字高 1
+        float wNorm = (Step + 0.6f) / bh;   // 稍微叠一点，避免出现横纹
 
-            var xs = new float[line.Count];
-            var ys = new float[line.Count];
-            for (int i = 0; i < line.Count; i++)
+        for (int y = 0; y < bh; y += Step)
+        {
+            int x = 0;
+            while (x < bw)
             {
-                xs[i] = (float)line[i].x / bh;
-                ys[i] = (float)line[i].y / bh;
+                if (sub[y * bw + x] == 0) { x++; continue; }
+                int x0 = x;
+                while (x < bw && sub[y * bw + x] != 0) x++;
+                int x1 = x - 1;
+                if (x1 - x0 < 1) continue;
+                glyph.Strokes.Add((
+                    new[] { (x0 - 0.5f) / bh, (x1 + 0.5f) / bh },
+                    new[] { (y + 0.5f) / bh, (y + 0.5f) / bh },
+                    wNorm));
             }
-            glyph.Strokes.Add((xs, ys, Math.Max(0.004f, med)));
         }
         return glyph;
     }
