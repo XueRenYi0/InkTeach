@@ -1826,9 +1826,8 @@ public sealed partial class FullUi : IOverlayUi
     /// **极简档只留复制 / 粘贴**：5 格时带子只有两百来像素，三个动作会把
     /// 「矩形 / 套索」挤到 5px（实测算式），那一档全选仍可双击选择格。
     /// </summary>
-    // 2026-11-05：末尾接「AI」彩色格（下拉 → 手写优化）。
     private static readonly BandAction[] SelectBandActions =
-        { BandAction.SelectAll, BandAction.Copy, BandAction.Paste, BandAction.AiMenu };
+        { BandAction.SelectAll, BandAction.Copy, BandAction.Paste };
 
     private static readonly BandAction[] SelectBandActionsNarrow =
         { BandAction.Copy, BandAction.Paste };

@@ -35,8 +35,7 @@ internal sealed partial class App
         SettleFrames(80);
 
         int n = ui.ActionCountForTest;
-        // 2026-11-05：末尾多一个「AI」格，所以是 4 个
-        Check("选择带：四个动作（含 AI）", n == 4, $"动作数 {n}");
+        Check("选择带：三个动作", n == 3, $"动作数 {n}");
 
         var a0 = ui.ActionRectAtForTest(0);
         var a1 = ui.ActionRectAtForTest(1);
@@ -47,13 +46,10 @@ internal sealed partial class App
         Check("从左到右、不重叠", ordered,
               $"{a0.MinX:F0}..{a0.MaxX:F0} / {a1.MinX:F0}..{a1.MaxX:F0} / {a2.MinX:F0}..{a2.MaxX:F0}");
 
-        var a3 = ui.ActionRectAtForTest(3);
         var band = ui.BandRectForTest;
-        bool inside = !band.IsEmpty && a0.MinX >= band.MinX - 0.5f && a3.MaxX <= band.MaxX + 0.5f;
-        Check("四个动作都在带子里", inside,
-              $"带 {band.MinX:F0}..{band.MaxX:F0}，动作 {a0.MinX:F0}..{a3.MaxX:F0}");
-        Check("AI 格在最右且够宽（≥50）", a3.MinX >= a2.MaxX - 0.01f && a3.MaxX - a3.MinX >= 50f,
-              $"{a3.MinX:F0}..{a3.MaxX:F0} 宽 {a3.MaxX - a3.MinX:F0}");
+        bool inside = !band.IsEmpty && a0.MinX >= band.MinX - 0.5f && a2.MaxX <= band.MaxX + 0.5f;
+        Check("三连都在带子里", inside,
+              $"带 {band.MinX:F0}..{band.MaxX:F0}，三连 {a0.MinX:F0}..{a2.MaxX:F0}");
 
         float w0 = a0.MaxX - a0.MinX, w1 = a1.MaxX - a1.MinX, w2 = a2.MaxX - a2.MinX;
         Check("每个按钮够宽（≥58）", w0 >= 58f && w1 >= 58f && w2 >= 58f,
