@@ -727,6 +727,7 @@ public sealed partial class FullUi : IOverlayUi
         if (SizePreviewVisible && _host != null) u = Union(u, SizePreviewRect(_host.State));
         if (_penPickerOpen) u = Union(u, PenPickerRect());
         if (_textFontMenuOpen) u = Union(u, TextFontMenuRect());
+        if (_aiMenuOpen) u = Union(u, AiMenuRect());
         return FinishBounds(u);
     }
 
@@ -1815,7 +1816,7 @@ public sealed partial class FullUi : IOverlayUi
     //
     // 位置：上带**最右端**。粗细滑条也在右端，所以橡皮那条是
     // `[整笔擦][面积擦] …… [粗细滑条][清空]`——动作永远贴在最外沿。
-    private enum BandAction { None = 0, Clear, SelectAll, Copy, Paste, CloseBoard, PasteImage, TextDone }
+    private enum BandAction { None = 0, Clear, SelectAll, Copy, Paste, CloseBoard, PasteImage, TextDone, AiMenu }
 
     /// <summary>
     /// 「选择」上带右端的三连（2026-11-03 用户定）：全选 / 复制 / 粘贴。
@@ -1825,8 +1826,9 @@ public sealed partial class FullUi : IOverlayUi
     /// **极简档只留复制 / 粘贴**：5 格时带子只有两百来像素，三个动作会把
     /// 「矩形 / 套索」挤到 5px（实测算式），那一档全选仍可双击选择格。
     /// </summary>
+    // 2026-11-05：末尾接「AI」彩色格（下拉 → 手写优化）。
     private static readonly BandAction[] SelectBandActions =
-        { BandAction.SelectAll, BandAction.Copy, BandAction.Paste };
+        { BandAction.SelectAll, BandAction.Copy, BandAction.Paste, BandAction.AiMenu };
 
     private static readonly BandAction[] SelectBandActionsNarrow =
         { BandAction.Copy, BandAction.Paste };
@@ -1890,6 +1892,7 @@ public sealed partial class FullUi : IOverlayUi
         BandAction.CloseBoard => ActionWNarrow,
         // 全选 / 复制 / 粘贴：两字 + 留白（62 = 图标 16 + 两字 + 边距；这三个是纯文字）
         BandAction.SelectAll or BandAction.Copy or BandAction.Paste => ActionWClearTight,
+        BandAction.AiMenu => AiCellW,
         BandAction.Clear => Density switch
         {
             BandDensity.Minimal => ActionWClearTight,
@@ -1903,7 +1906,9 @@ public sealed partial class FullUi : IOverlayUi
     private const float ActionGap = 6f;
 
     private float ActionWidthAt(int i) =>
-        _bandCell == 8 ? ActionWClearTight : ActionWidthOf(ActionAt(i));
+        ActionAt(i) == BandAction.AiMenu ? AiCellW
+        : _bandCell == 8 ? ActionWClearTight
+        : ActionWidthOf(ActionAt(i));
 
     private const double ClearHoldMs = 800;
 
@@ -2041,6 +2046,9 @@ public sealed partial class FullUi : IOverlayUi
             case BandAction.Paste:
                 _host.Commands.Paste();
                 break;
+            case BandAction.AiMenu:
+                ToggleAiMenu();
+                return;
             default:
                 _host.Commands.SelectAll();
                 break;
@@ -2069,6 +2077,7 @@ public sealed partial class FullUi : IOverlayUi
     private void DrawOneBandAction(ID2D1DeviceContext ctx, BandAction a, in RectF r, bool textOnly)
     {
         if (a == BandAction.None) return;
+        if (a == BandAction.AiMenu) { DrawAiCell(ctx, r); return; }
         bool clear = a == BandAction.Clear;
         bool closeBoard = a == BandAction.CloseBoard;
         bool paste = a == BandAction.PasteImage;
@@ -5194,6 +5203,9 @@ public sealed partial class FullUi : IOverlayUi
         // **滑条要排在工具格前面**：它在面板最下沿，和工具格的矩形是重叠的。
         // 排在后面的话，按最下沿那一条会被当成"点了某个工具"（假面板里 groove 也是先判的）。
         // 动作按钮（清空/全选/复制/粘贴）排在最前面：它贴在上带最外沿，和谁都挨着。
+        // AI 下拉要**先于**动作格处理：它的菜单浮在带子外面。
+        if (_aiMenuOpen && AiMenuClick(p.X, p.Y)) return true;
+
         int actIdx = BandOpen() ? ActionHitAt(p.X, p.Y) : -1;
         if (actIdx >= 0)
         {
@@ -6347,6 +6359,7 @@ public sealed partial class FullUi : IOverlayUi
         if (BandHasSlider) DrawBandSlider(ctx, st);
         else if (BandHasWidthButton) DrawWidthButton(ctx, st);
         DrawBandAction(ctx);
+        if (_aiMenuOpen) DrawAiMenu(ctx);
 
         // ⚠ 「第 N 屏」原来是**单画在带子右边**的一段文字（用的是写死的 `SegmentRect(4, 5)`），
         // 2026-09-27 改成翻页器中间那一段（见 <see cref="BoardSegKind.PageLabel"/>）——

@@ -1,0 +1,132 @@
+using System.Numerics;
+using InkEngine;
+using Vortice.Direct2D1;
+using Vortice.Mathematics;
+
+namespace InkUi;
+
+/// <summary>
+/// 选中操作条末尾的「AI」彩色格 + 下拉菜单。
+///
+/// 2026-11-05 用户定：
+///   · 跟着操作条一起出现，放在「全选 / 复制 / 粘贴」后面；
+///   · 彩色、丰富、梦幻 —— 青 → 紫 → 粉 的横向渐变；
+///   · 下拉**只放已经做好的功能**（当前只有「手写优化」），不展示灰项。
+///
+/// 这一版只做**入口与菜单**；「手写优化」真正改笔画的动作在
+/// `调研/AI-手写体替换-方案.md` 里排第二步。
+/// </summary>
+public sealed partial class FullUi
+{
+    private enum AiMenuItem { None = -1, Handwriting = 0 }
+
+    private bool _aiMenuOpen;
+    private int _aiMenuHover = -1;
+
+    private const float AiCellW = 62f;
+    private const float AiMenuW = 176f;
+    private const float AiMenuRowH = 40f;
+    private const float AiMenuPad = 6f;
+
+    private static readonly Color4 AiCyan = new(0.13f, 0.83f, 0.93f, 1f);
+    private static readonly Color4 AiPurple = new(0.63f, 0.36f, 0.98f, 1f);
+    private static readonly Color4 AiPink = new(0.96f, 0.45f, 0.71f, 1f);
+
+    /// <summary>AI 格是动作组里的最后一格（由 ActionRectAt 统一排布）。</summary>
+    private RectF AiCellRect() => ActionRectAt(ActionCount - 1);
+
+    private RectF AiMenuRect()
+    {
+        var c = AiCellRect();
+        float w = AiMenuW;
+        float h = AiMenuPad * 2 + AiMenuRowH;
+        float x = c.MinX;
+        float y = c.MaxY + 8f;                 // 带子在屏幕下方时往上翻
+        if (y + h > _screen.MaxY - 8f) y = c.MinY - 8f - h;
+        x = Math.Clamp(x, _screen.MinX + 8f, MathF.Max(_screen.MinX + 8f, _screen.MaxX - 8f - w));
+        y = Math.Clamp(y, _screen.MinY + 8f, MathF.Max(_screen.MinY + 8f, _screen.MaxY - 8f - h));
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    private RectF AiMenuItemRect(int i)
+    {
+        var r = AiMenuRect();
+        float y = r.MinY + AiMenuPad + i * AiMenuRowH;
+        return new RectF { MinX = r.MinX + AiMenuPad, MinY = y, MaxX = r.MaxX - AiMenuPad, MaxY = y + AiMenuRowH };
+    }
+
+    private void ToggleAiMenu()
+    {
+        _aiMenuOpen = !_aiMenuOpen;
+        _aiMenuHover = -1;
+        Invalidate();
+    }
+
+    private void CloseAiMenu()
+    {
+        if (!_aiMenuOpen) return;
+        _aiMenuOpen = false;
+        _aiMenuHover = -1;
+        Invalidate();
+    }
+
+    /// <summary>点中菜单项返回 true（调用方不要再把这一下派给别处）。</summary>
+    private bool AiMenuClick(float x, float y)
+    {
+        if (!_aiMenuOpen) return false;
+        if (AiMenuItemRect(0).Contains(x, y))
+        {
+            _aiMenuOpen = false;
+            _aiMenuHover = -1;
+            // 第二步接：真正把选中墨迹换成本地手写字体。
+            Invalidate();
+            return true;
+        }
+        if (!AiMenuRect().Contains(x, y)) CloseAiMenu();
+        return true;
+    }
+
+    private void DrawAiCell(ID2D1DeviceContext ctx, in RectF r)
+    {
+        var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 8f, 8f);
+
+        // 青 → 紫 → 粉：横向线性渐变
+        var stops = new[]
+        {
+            new GradientStop(0f, AiCyan),
+            new GradientStop(0.55f, AiPurple),
+            new GradientStop(1f, AiPink),
+        };
+        using var coll = ctx.CreateGradientStopCollection(stops, ExtendMode.Clamp);
+        using var grad = ctx.CreateLinearGradientBrush(
+            new LinearGradientBrushProperties
+            {
+                StartPoint = new Vector2(r.MinX, r.MinY),
+                EndPoint = new Vector2(r.MaxX, r.MaxY),
+            }, new BrushProperties { Opacity = 1f }, coll);
+
+        ctx.FillRoundedRectangle(rr, grad);
+
+        _widgets.Text(ctx, "AI", r, 12.5f, Brush(ctx, new Color4(1f, 1f, 1f, 1f)));
+        var tri = new RectF { MinX = r.MaxX - 16f, MinY = r.MinY, MaxX = r.MaxX - 6f, MaxY = r.MaxY };
+        _widgets.Text(ctx, "▾", tri, 10f, Brush(ctx, new Color4(1f, 1f, 1f, 0.9f)));
+
+        if (_host != null && _host.NowMs < _actionFlashUntil)
+            ctx.DrawRoundedRectangle(rr, Brush(ctx, new Color4(1f, 1f, 1f, 0.9f)), 2f);
+    }
+
+    private void DrawAiMenu(ID2D1DeviceContext ctx)
+    {
+        var r = AiMenuRect();
+        var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 10f, 10f);
+        ctx.FillRoundedRectangle(rr, Brush(ctx, new Color4(1f, 1f, 1f, 0.98f)));
+        ctx.DrawRoundedRectangle(rr, Brush(ctx, new Color4(0f, 0f, 0f, 0.12f)), 1f);
+
+        var item = AiMenuItemRect(0);
+        if (_aiMenuHover == 0)
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(item.MinX, item.MinY, item.MaxX, item.MaxY), 7f, 7f),
+                Brush(ctx, new Color4(0.63f, 0.36f, 0.98f, 0.12f)));
+        _widgets.Text(ctx, "✨ 手写优化", item, 13f, Brush(ctx, new Color4(0.15f, 0.15f, 0.18f, 1f)));
+    }
+}

@@ -78,6 +78,7 @@ public sealed partial class FullUi
     /// <summary>Esc：AI → 更多 → 色板，从最上面那层往下关。</summary>
     public bool HandleEscape()
     {
+        if (_aiMenuOpen) { CloseAiMenu(); return true; }
         if (_aiOpen) { CloseAiPanel(); return true; }
         if (_moreOpen) { CloseMore(); return true; }
         if (_penPickerOpen) { ClosePenColorPicker(); return true; }
