@@ -532,6 +532,16 @@ internal sealed partial class App : InkEngine.InkEngine
             ExitCode = RecoProbe.RunInkFile(args.Length > 1 ? args[1] : "reports/我的双曲线.txt");
             _quit = true;
         }
+        else if (mode == "--inkboardpng")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(200);
+            InkBoardPng(args.Length > 1 ? args[1] : "",
+                        args.Length > 2 ? args[2] : "reports/board.png");
+            _quit = true;
+        }
         else if (mode == "--dwelltest")
         {
             // 手势那一套**必须真跑**（起笔 / 采样 / 轮询 / 抬手都走引擎里真在用的函数），
