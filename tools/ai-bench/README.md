@@ -53,3 +53,10 @@ InkTeach.exe --inkboardpng "板书-20261105-100213.inkb" "板书-20261105-100213
   硬套通用提示会复读。见 `PROMPT_OVERRIDE`。
 - **不要缩图**：实测缩到 40% 准确率明显下降，而且并不更快。
 - 整板识别 30–60s，选区识别 2–9s；产品里只该做选区。
+
+## ��Ⱦ��Ա�ҳ
+
+```powershell
+python -m pip install latex2mathml
+python tools/ai-bench/make_compare2.py   # ��� compare2.html��ͼ���ϡ�ģ�ͽ�����¡���ʽ����Ⱦ
+```
