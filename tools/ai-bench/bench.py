@@ -33,12 +33,18 @@ PROVIDERS = {
     "siliconflow": ("https://api.siliconflow.cn/v1/chat/completions", "siliconflow"),
     "dashscope": ("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "dashscope"),
     "deepseek": ("https://api.deepseek.com/chat/completions", "deepseek"),
+    "zhipu": ("https://open.bigmodel.cn/api/paas/v4/chat/completions", "zhipu"),
 }
 
 # 个别模型要额外带参数。DeepSeek 官方**必须显式关思考**，否则会先吐几千 token 推理
 # （实测同一张图：开思考 10.4s 且正文为空，关思考 1.1s 出结果）。
 MODEL_EXTRA = {
     "deepseek-flash": {"thinking": {"type": "disabled"}},
+    # 智谱 4.5V 默认也带思考；4V 系列没有思考，但带上也无害
+    "zy-glm-4.5v": {"thinking": {"type": "disabled"}},
+    "zy-glm-4v": {"thinking": {"type": "disabled"}},
+    "zy-glm-4v-flash": {"thinking": {"type": "disabled"}, "max_tokens": 1024},
+    "zy-glm-4v-plus": {"thinking": {"type": "disabled"}, "max_tokens": 2048},
 }
 
 # 专用 OCR 模型有自己的“惯用提示词”，硬套通用提示会退化成复读机（实测 PaddleOCR-VL/DeepSeek-OCR）。
@@ -60,6 +66,11 @@ MODELS = {
     "deepseek-ocr":        ("siliconflow", "deepseek-ai/DeepSeek-OCR", "专用 OCR"),
     "ds-v4.1-flash":       ("siliconflow", "deepseek-ai/DeepSeek-V4.1-Flash", "VLM（硅基流动，关不掉思考）"),
     "deepseek-flash":      ("deepseek", "deepseek-flash", "官方 VLM（关思考，最快）"),
+    "zy-glm-4v":           ("zhipu", "glm-4v", "智谱 OCR 向老模型（快且准）"),
+    "zy-glm-4.5v":         ("zhipu", "glm-4.5v", "智谱通用 VLM"),
+    "zy-glm-4v-flash":     ("zhipu", "glm-4v-flash", "智谱免费档（上限低）"),
+    "zy-glm-4v-plus":      ("zhipu", "glm-4v-plus", "智谱增强档"),
+    "ds-qwen35-omni-flash": ("dashscope", "qwen3.5-omni-flash", "百炼全模态（速度冠军）"),
     "ds-qwen3-vl-plus":    ("dashscope", "qwen3-vl-plus", "百炼旗舰 VLM"),
     "ds-qwen-vl-ocr":      ("dashscope", "qwen-vl-ocr", "百炼专用 OCR"),
     "ds-qwen35-ocr":       ("dashscope", "qwen3.5-ocr", "百炼新一代 OCR"),
@@ -89,6 +100,7 @@ def load_keys():
         "siliconflow": os.environ.get("SILICONFLOW_API_KEY", ""),
         "dashscope": os.environ.get("DASHSCOPE_API_KEY", ""),
         "deepseek": os.environ.get("DEEPSEEK_API_KEY", ""),
+        "zhipu": os.environ.get("ZHIPU_API_KEY", ""),
     }
     if not any(keys.values()):
         p = os.path.join(BASE, "keys.json")

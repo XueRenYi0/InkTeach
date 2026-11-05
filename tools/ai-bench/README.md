@@ -9,6 +9,7 @@
 $env:SILICONFLOW_API_KEY = "sk-..."   # https://cloud.siliconflow.cn
 $env:DASHSCOPE_API_KEY   = "sk-..."   # https://bailian.console.aliyun.com
 $env:DEEPSEEK_API_KEY    = "sk-..."   # https://platform.deepseek.com
+$env:ZHIPU_API_KEY       = "xxxx.yyyy" # https://open.bigmodel.cn
 ```
 
 密钥只从环境变量读，**不要写进 `keys.json` 提交**（该文件已 gitignore）。
