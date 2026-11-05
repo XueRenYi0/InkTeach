@@ -34,6 +34,7 @@ PROVIDERS = {
     "dashscope": ("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "dashscope"),
     "deepseek": ("https://api.deepseek.com/chat/completions", "deepseek"),
     "zhipu": ("https://open.bigmodel.cn/api/paas/v4/chat/completions", "zhipu"),
+    "ark": ("https://ark.cn-beijing.volces.com/api/v3/chat/completions", "ark"),
 }
 
 # 个别模型要额外带参数。DeepSeek 官方**必须显式关思考**，否则会先吐几千 token 推理
@@ -45,6 +46,12 @@ MODEL_EXTRA = {
     "zy-glm-4v": {"thinking": {"type": "disabled"}},
     "zy-glm-4v-flash": {"thinking": {"type": "disabled"}, "max_tokens": 1024},
     "zy-glm-4v-plus": {"thinking": {"type": "disabled"}, "max_tokens": 2048},
+    # 火山：thinking 关掉；Kimi 只允许 temperature=0.6
+    "ark-db-2-1-lite": {"thinking": {"type": "disabled"}},
+    "ark-db-2-1-pro": {"thinking": {"type": "disabled"}},
+    "ark-db-evolving": {"thinking": {"type": "disabled"}},
+    "ark-deepseek-v4-1-flash": {"thinking": {"type": "disabled"}},
+    "ark-kimi-k3-1-pro": {"thinking": {"type": "disabled"}, "temperature": 0.6},
 }
 
 # 专用 OCR 模型有自己的“惯用提示词”，硬套通用提示会退化成复读机（实测 PaddleOCR-VL/DeepSeek-OCR）。
@@ -71,6 +78,11 @@ MODELS = {
     "zy-glm-4v-flash":     ("zhipu", "glm-4v-flash", "智谱免费档（上限低）"),
     "zy-glm-4v-plus":      ("zhipu", "glm-4v-plus", "智谱增强档"),
     "ds-qwen35-omni-flash": ("dashscope", "qwen3.5-omni-flash", "百炼全模态（速度冠军）"),
+    "ark-db-2-1-lite":     ("ark", "doubao-seed-2-1-lite-260915", "火山豆包（综合最优）"),
+    "ark-db-2-1-pro":      ("ark", "doubao-seed-2-1-pro-260915", "火山豆包旗舰"),
+    "ark-db-evolving":     ("ark", "doubao-seed-evolving", "火山豆包（b2 最准）"),
+    "ark-deepseek-v4-1-flash": ("ark", "deepseek-v4-1-flash-261017", "火山上的 DeepSeek"),
+    "ark-kimi-k3-1-pro":   ("ark", "kimi-k3-1-pro-261024", "火山上的 Kimi"),
     "ds-qwen3-vl-plus":    ("dashscope", "qwen3-vl-plus", "百炼旗舰 VLM"),
     "ds-qwen-vl-ocr":      ("dashscope", "qwen-vl-ocr", "百炼专用 OCR"),
     "ds-qwen35-ocr":       ("dashscope", "qwen3.5-ocr", "百炼新一代 OCR"),
@@ -101,6 +113,7 @@ def load_keys():
         "dashscope": os.environ.get("DASHSCOPE_API_KEY", ""),
         "deepseek": os.environ.get("DEEPSEEK_API_KEY", ""),
         "zhipu": os.environ.get("ZHIPU_API_KEY", ""),
+        "ark": os.environ.get("ARK_API_KEY", ""),
     }
     if not any(keys.values()):
         p = os.path.join(BASE, "keys.json")
