@@ -97,6 +97,45 @@
 
 ---
 
+## 5.1 填充方案（2026-11-06 调研，用户指定）
+
+### 外面怎么做的（调研结论）
+
+- **显卡/2D 库的通用做法**：字形是「轮廓 + 填充规则」。
+  Direct2D 的 `ID2D1PathGeometry` + `FillGeometry`，填充规则 `D2D1_FILL_MODE_ALTERNATE`
+  就是 even-odd——外轮廓与内孔交替，孔自动空出来（Microsoft Docs）。
+- **矢量软件（Illustrator / Inkscape / Figma）**：同一个字形是一条「复合路径」，
+  用 even-odd 或 nonzero 决定哪里填、哪里挖孔；导出 TrueType/Android 时只能 nonzero，
+  所以才需要手动反转方向。
+- **绘画软件的「正填充/反填充」**：本质是 even-odd vs nonzero 两套规则，
+  不是两种算法。
+
+### 我们的做法
+
+新增一种对象 `StrokeKind.Glyph`：
+
+| 项 | 设计 |
+|---|---|
+| 存什么 | 若干闭合轮廓（三次贝塞尔 + 折线），`FillMode = Alternate` |
+| 从哪来 | SkiaSharp `SKPath` 取字形轮廓（`GetTextPath`），逐条 verb 存下来 |
+| 渲染 | 建 `ID2D1PathGeometry` → `FillGeometry`，孔自动空 |
+| 缩放 | 纯矢量，**任意大小一模一样**，没有锯齿 |
+| 命中 | `ID2D1Geometry.FillContainsPoint` |
+| **局部擦除** | `ID2D1Geometry.CombineWithGeometry(..., EXCLUDE, 橡皮圆)` → **布尔减**，擦掉一点是可行的 |
+| 存档 | 加一种 kind；老文件不受影响 |
+| 导出 | 复用现有离屏渲染 |
+
+### 和中心线方案对比
+
+| | 中心线墨迹 | Glyph 填充 |
+|---|---|---|
+| 还原度 | ~85%，有毛刺/多余点 | **100%** |
+| 缩放 | 平滑但会变细 | **完美** |
+| 局部擦 | 天然支持 | 需要布尔减（D2D 支持） |
+| 工作量 | 小 | 中（新对象类型） |
+
+> 结论：**改用 Glyph 填充**。中心线版留作后备（代码在 `GlyphInk.cs`）。
+
 ## 6. 现有原型
 
 - `tools/ai-bench/mixed_replace.py`（临时目录版本）：混排渲染原型，
