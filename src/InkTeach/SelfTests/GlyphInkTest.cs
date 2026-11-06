@@ -53,6 +53,17 @@ internal sealed partial class App
         }
         if (strokes.Count == 0) { Console.WriteLine("没有生成对象"); ExitCode = 1; return; }
 
+        // 命中校验：对象外框中心（多半是笔画/孔）与外框外一点
+        var first = strokes[0];
+        float fx0 = float.MaxValue, fy0 = float.MaxValue, fx1 = float.MinValue, fy1 = float.MinValue;
+        foreach (var p in first.Points)
+        {
+            if (p.X < fx0) fx0 = p.X; if (p.X > fx1) fx1 = p.X;
+            if (p.Y < fy0) fy0 = p.Y; if (p.Y > fy1) fy1 = p.Y;
+        }
+        float cx = (fx0 + fx1) * 0.5f, cy = (fy0 + fy1) * 0.5f;
+        Console.WriteLine($"  命中(中心)={first.HitTestExact(cx, cy)}  命中(框外)={first.HitTestExact(fx0 - 20, fy0 - 20)}");
+
         float minX = float.MaxValue, minY = float.MaxValue, maxX2 = float.MinValue, maxY2 = float.MinValue;
         foreach (var s in strokes)
             foreach (var p in s.Points)
