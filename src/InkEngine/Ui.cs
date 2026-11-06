@@ -349,6 +349,8 @@ public interface IEngineCommands
 
     /// <summary>AI 面板：改输入框里的题目要求（预设标签用）。</summary>
     void SetAiPromptText(string text);
+    /// <summary>AI 菜单「手写优化」：识别选中笔迹并就地换成手写字体（一步撤销）。</summary>
+    void OptimizeHandwriting();
 
     /// <summary>
     /// AI 面板：在给定的**界面逻辑坐标**上开一个原生单行输入框（中文/输入法交给系统）。
@@ -1383,6 +1385,10 @@ public readonly struct UiState
     public string AiPrompt { get; init; }
     /// <summary>原生输入框是否正在编辑（界面据此画光标/边框）。</summary>
     public bool AiPromptEditing { get; init; }
+    /// <summary>手写优化是否正在识别（AI 菜单里显示进度）。</summary>
+    public bool AiBusy { get; init; }
+    /// <summary>手写优化最近一次状态（“识别中…” / “已优化 N 行” / 失败原因）。</summary>
+    public string AiStatus { get; init; }
 
     /// <summary>「日志与反馈」里用户写的问题描述（上传/导出时进 zip 的 问题.txt）。</summary>
     public string LogNote { get; init; }

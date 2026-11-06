@@ -5814,6 +5814,12 @@ public sealed partial class FullUi : IOverlayUi
     {
         _aiPrompt = state.AiPrompt ?? _aiPrompt;
         _aiPromptEditing = state.AiPromptEditing;
+        if (state.AiStatus != _lastAiStatus || state.AiBusy != _lastAiBusy)
+        {
+            _lastAiStatus = state.AiStatus ?? "";
+            _lastAiBusy = state.AiBusy;
+            Invalidate();
+        }
         // 回放一开始：把「更多」/「AI」面板收掉。它们都是**全屏模态**，开着会挡住控制条和画布；
         if (state.ReplayActive && _moreOpen) CloseMore();
         if (state.ReplayActive && _aiOpen) CloseAiPanel();

@@ -233,11 +233,17 @@ internal static class HandwritingReplace
     /// </summary>
     public static int Apply(InkDocument doc, IReadOnlyList<Stroke> selected,
                             RectF region, IReadOnlyList<string> texts, string fontPath)
+        => Apply(doc, selected, region, texts, fontPath, out _);
+
+    public static int Apply(InkDocument doc, IReadOnlyList<Stroke> selected,
+                            RectF region, IReadOnlyList<string> texts, string fontPath,
+                            out List<Stroke> glyphs)
     {
+        glyphs = new List<Stroke>();
         if (doc == null || selected == null || texts == null || texts.Count == 0) return 0;
         var lines = DetectLines(selected, region, texts.Count);
         var result = BuildReplacement(selected, lines, texts, fontPath,
-                                      out var replacedText, out var glyphs);
+                                      out var replacedText, out glyphs);
         if (result == null || replacedText.Count == 0) return 0;
 
         var remove = new RemoveStrokesAction();

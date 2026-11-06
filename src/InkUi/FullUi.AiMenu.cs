@@ -22,10 +22,13 @@ public sealed partial class FullUi
 
     private bool _aiMenuOpen;
     private int _aiMenuHover = -1;
+    private string _lastAiStatus = "";
+    private bool _lastAiBusy;
 
     private const float AiCellW = 62f;
-    private const float AiMenuW = 176f;
+    private const float AiMenuW = 236f;
     private const float AiMenuRowH = 40f;
+    private const float AiMenuStatusH = 30f;
     private const float AiMenuPad = 6f;
 
     private static readonly Color4 AiCyan = new(0.13f, 0.83f, 0.93f, 1f);
@@ -39,13 +42,21 @@ public sealed partial class FullUi
     {
         var c = AiCellRect();
         float w = AiMenuW;
-        float h = AiMenuPad * 2 + AiMenuRowH;
+        string status = _host?.State.AiStatus ?? "";
+        float h = AiMenuPad * 2 + AiMenuRowH + (status.Length > 0 ? AiMenuStatusH : 0f);
         float x = c.MinX;
         float y = c.MaxY + 8f;                 // 带子在屏幕下方时往上翻
         if (y + h > _screen.MaxY - 8f) y = c.MinY - 8f - h;
         x = Math.Clamp(x, _screen.MinX + 8f, MathF.Max(_screen.MinX + 8f, _screen.MaxX - 8f - w));
         y = Math.Clamp(y, _screen.MinY + 8f, MathF.Max(_screen.MinY + 8f, _screen.MaxY - 8f - h));
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    private RectF AiMenuStatusRect()
+    {
+        var r = AiMenuRect();
+        float y = r.MinY + AiMenuPad + AiMenuRowH;
+        return new RectF { MinX = r.MinX + 10f, MinY = y, MaxX = r.MaxX - 10f, MaxY = y + AiMenuStatusH };
     }
 
     private RectF AiMenuItemRect(int i)
@@ -76,9 +87,9 @@ public sealed partial class FullUi
         if (!_aiMenuOpen) return false;
         if (AiMenuItemRect(0).Contains(x, y))
         {
-            _aiMenuOpen = false;
+            // 识别在后台跑，菜单保持打开显示“识别中 / 已优化 / 失败”。
+            _host?.Commands.OptimizeHandwriting();
             _aiMenuHover = -1;
-            // 第二步接：真正把选中墨迹换成本地手写字体。
             Invalidate();
             return true;
         }
@@ -128,5 +139,17 @@ public sealed partial class FullUi
                 new RoundedRectangle(new Vortice.RawRectF(item.MinX, item.MinY, item.MaxX, item.MaxY), 7f, 7f),
                 Brush(ctx, new Color4(0.63f, 0.36f, 0.98f, 0.12f)));
         _widgets.Text(ctx, "✨ 手写优化", item, 13f, Brush(ctx, new Color4(0.15f, 0.15f, 0.18f, 1f)));
+
+        string status = _host?.State.AiStatus ?? "";
+        if (status.Length > 0)
+        {
+            var sr = AiMenuStatusRect();
+            var col = _host.State.AiBusy
+                ? new Color4(0.55f, 0.30f, 0.85f, 1f)
+                : status.StartsWith("已优化", StringComparison.Ordinal)
+                    ? new Color4(0.10f, 0.55f, 0.30f, 1f)
+                    : new Color4(0.60f, 0.20f, 0.20f, 1f);
+            _widgets.Text(ctx, status, sr, 10.5f, Brush(ctx, col));
+        }
     }
 }

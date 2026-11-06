@@ -1,0 +1,180 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Vortice.Mathematics;
+
+namespace InkEngine;
+
+/// <summary>
+/// AI 菜单「手写优化」的运行时：
+///   选中文字笔迹 → 渲染成白底 PNG → 调 <see cref="OcrClient"/> → 逐行 Recognize
+///   → 回到主线程 <see cref="HandwritingReplace.Apply"/>（一步撤销）。
+///
+/// 网络在后台线程跑，主循环只做“取结果 + 改文档”，界面不会卡。
+/// </summary>
+public partial class InkEngine
+{
+    private sealed class HandOcrDone
+    {
+        public List<Stroke> Selected;
+        public RectF Region;
+        public OcrClient.OcrResult Result;
+    }
+
+    private bool _handOcrBusy;
+    private string _handOcrStatus = "";
+    private HandOcrDone _handOcrDone;
+    private CancellationTokenSource _handOcrCts;
+    private int _handOcrGeneration;
+
+    internal bool HandOcrBusy => _handOcrBusy;
+    internal string HandOcrStatus => _handOcrStatus;
+
+    private void SetHandOcrStatus(string text)
+    {
+        _handOcrStatus = text ?? "";
+        NotifyUiStateChanged();
+        InvalidateUi();
+    }
+
+    /// <summary>AI 菜单那一项点下去：开始识别，立即返回。</summary>
+    internal void OptimizeHandwritingFromUi()
+    {
+        if (_handOcrBusy)
+        {
+            SetHandOcrStatus("正在识别，请稍候…");
+            return;
+        }
+
+        var selected = new List<Stroke>();
+        foreach (var s in Doc.Selected)
+        {
+            if (s == null) continue;
+            if (s.Kind != StrokeKind.Freehand) continue;
+            if (s.Tool == Tool.Highlighter) continue;
+            if (s.Locked || s.IsImage || s.IsShape) continue;
+            selected.Add(s);
+        }
+        if (selected.Count == 0)
+        {
+            SetHandOcrStatus("先框选要优化的文字笔迹");
+            return;
+        }
+
+        var cfg = OcrClient.LoadConfig();
+        if (!cfg.IsConfigured)
+        {
+            SetHandOcrStatus("未配置识别服务（ai.json）");
+            return;
+        }
+
+        string font = GlyphText.BundledFontPath;
+        if (string.IsNullOrEmpty(font))
+        {
+            SetHandOcrStatus("缺少手写字体文件");
+            return;
+        }
+
+        var region = EditRegion.Of(selected);
+        if (region.IsEmpty)
+        {
+            SetHandOcrStatus("选区没有墨迹");
+            return;
+        }
+
+        byte[] png = RenderSelectionPng(selected, region);
+        if (png == null)
+        {
+            SetHandOcrStatus("选区渲染失败（太大或没有画布）");
+            return;
+        }
+
+        _handOcrBusy = true;
+        SetHandOcrStatus("识别中…（约 2–5 秒）");
+
+        _handOcrCts?.Cancel();
+        _handOcrCts = new CancellationTokenSource();
+        int gen = ++_handOcrGeneration;
+        var ct = _handOcrCts.Token;
+
+        Task.Run(async () =>
+        {
+            var result = await OcrClient.RecognizeAsync(png, cfg, OcrClient.BoardPrompt, ct)
+                                        .ConfigureAwait(false);
+            if (gen != Volatile.Read(ref _handOcrGeneration)) return;
+            var done = new HandOcrDone { Selected = selected, Region = region, Result = result };
+            Interlocked.Exchange(ref _handOcrDone, done);
+        });
+    }
+
+    /// <summary>主循环每帧调一次：把后台识别结果搬回文档（只在主线程改 Doc）。</summary>
+    internal void StepHandwritingOcr()
+    {
+        var done = Interlocked.Exchange(ref _handOcrDone, null);
+        if (done == null) return;
+
+        _handOcrBusy = false;
+        if (done.Result == null)
+        {
+            SetHandOcrStatus("识别失败：没有返回结果");
+            return;
+        }
+        if (!done.Result.Ok)
+        {
+            string why = string.IsNullOrWhiteSpace(done.Result.Error) ? "未知错误" : done.Result.Error;
+            SetHandOcrStatus("识别失败：" + Clip(why, 26));
+            return;
+        }
+
+        // 识别期间选区可能被改掉 / 撤销；对象不在了就放弃，绝不误删。
+        var alive = new HashSet<Stroke>(Doc.Strokes);
+        foreach (var s in done.Selected)
+            if (!alive.Contains(s))
+            {
+                SetHandOcrStatus("选区已变化，已取消");
+                return;
+            }
+
+        string font = GlyphText.BundledFontPath;
+        if (string.IsNullOrEmpty(font))
+        {
+            SetHandOcrStatus("缺少手写字体文件");
+            return;
+        }
+
+        int lines = HandwritingReplace.Apply(Doc, done.Selected, done.Region,
+                                             done.Result.Lines, font, out var glyphs);
+        if (lines == 0)
+        {
+            SetHandOcrStatus("没有匹配到可替换的文字行");
+            return;
+        }
+
+        // 替换完选中新对象：操作条还在，AI 菜单还能继续显示结果。
+        Doc.Selected.Clear();
+        Doc.Selected.AddRange(glyphs);
+        SetHandOcrStatus($"已优化 {lines} 行（Ctrl+Z 可撤销）");
+    }
+
+    /// <summary>把选中笔迹渲染成白底 PNG（OCR 接口只吃图片）。</summary>
+    private byte[] RenderSelectionPng(IReadOnlyList<Stroke> selected, RectF region)
+    {
+        if (_windows.Count == 0) return null;
+        var box = region.Inflate(12f);
+        int w = Math.Max(1, (int)MathF.Ceiling(box.MaxX - box.MinX));
+        int h = Math.Max(1, (int)MathF.Ceiling(box.MaxY - box.MinY));
+        if (w > 2400 || h > 2400 || (long)w * h > 8_000_000) return null;
+
+        var bgra = _windows[0].RenderStrokesToBgra(selected, box, w, h);
+        if (bgra == null) return null;
+        return ExportFormats.Encode("ocr.png", bgra, w, h, 0, out _);
+    }
+
+    private static string Clip(string s, int n)
+    {
+        s = (s ?? "").Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return s.Length <= n ? s : s.Substring(0, n) + "…";
+    }
+}

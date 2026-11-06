@@ -159,15 +159,38 @@
   - `--handreplace`：真实板书 + OCR JSON → 整行替换 → 渲染 PNG → 验证 Ctrl+Z
   - `--glyphsave` / `--glyphobj`：存档往返 / 命中
 - [x] 字体：`assets/fonts/ZhiMangXing.ttf`（OFL，随安装包分发）＋ 授权文本。
+- [x] **OCR 接进产品**：`OcrClient` 走 OpenAI 兼容 `/chat/completions`，
+      BYOK 配置读环境变量或 `%APPDATA%\InkTeach\ai.json`；按厂商自动关思考。
+- [x] **UI 接通**：AI 菜单「手写优化」→ 选中 → 渲染白底 PNG → 后台识别 →
+      主线程替换；菜单里显示「识别中 / 已优化 N 行 / 失败原因」，失败不动原板书。
+- [x] 自检：`--handocr` 用本机 mock HTTP 服务走完整闭环（不联网、不花钱），
+      验证 12 行替换 + 选中新对象 + 一步撤销。
+
+### 识别服务怎么配（测试期）
+
+只设环境变量即可，**密钥不进 git / 安装包**：
+
+```powershell
+$env:DEEPSEEK_API_KEY = "sk-..."          # 官方 DeepSeek：base/model 自动填
+# 或任意 OpenAI 兼容中转：
+$env:INKTEACH_AI_BASEURL = "https://xxx/v1"
+$env:INKTEACH_AI_KEY     = "sk-..."
+$env:INKTEACH_AI_MODEL   = "deepseek-flash"
+$env:INKTEACH_AI_THINKING = "auto"        # auto / disabled / low / none
+```
+
+也可以写 `%APPDATA%\InkTeach\ai.json`：
+
+```json
+{ "baseUrl": "https://api.deepseek.com", "key": "sk-...", "model": "deepseek-flash", "thinking": "auto" }
+```
 
 ### 还没做
 
-- [ ] **OCR 接进产品**：现在自检吃的是 `--handreplace` 传进来的 OCR JSON；
-      产品里要接 BYOK（OpenAI 兼容 + 按厂商关思考，见 `AI-板书识别-基准-2026-11-05.md`）。
-- [ ] UI：把 AI 菜单的「手写优化」从占位接到 `HandwritingReplace.Apply`，
-      选中区域 → 识别 → 替换；失败时只提示，不改原板书。
+- [ ] 用真实云 Key 跑一遍（当前只验证了本机 mock；协议和请求体已经按基准报告写）。
 - [ ] 公式段：目前先做 Unicode 符号替换，复杂公式仍是二期（KaTeX 印刷体）。
 - [ ] 更多字体 / 用户自选字体。
+- [ ] Glyph 局部擦除（现在整行一个对象，橡皮点一下会整行删；先保证替换可用）。
 
 ### 已知取舍
 
