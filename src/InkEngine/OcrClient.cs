@@ -192,7 +192,7 @@ internal static class OcrClient
             string content = ContentText(msg);
             content = StripFence(content);
             res.Text = content;
-            res.Lines = SplitLines(content);
+            res.Lines = OcrText.FilterLines(SplitLines(content));
             if (HasRepeat(res.Lines))
             {
                 res.Error = "识别结果连续复读，请重试";
@@ -303,6 +303,7 @@ internal static class OcrClient
         "逐行转录图片中的手写板书内容。要求：\n" +
         "- 按从上到下的书写顺序输出，每行一段；\n" +
         "- 汉字照写，数学符号尽量用 Unicode（∈ ∉ ⊂ ⊄ ⊆ ∩ ∪ ∥ ∠ △）；\n" +
+        "- 逐字照抄，保留原标点；特别注意下标 / 上标（如 D₁C₁ 不要写成 DD₁）和集合符号（⊂ / ⊄ / ⊆ 不要混用）；\n" +
         "- 复杂公式用 LaTeX，行内包在 $...$ 里；\n" +
         "- 不描述图形、箭头、圈注，不解释，不加标题，不加编号；\n" +
         "- 认不出的字写 ？，不要猜测。";

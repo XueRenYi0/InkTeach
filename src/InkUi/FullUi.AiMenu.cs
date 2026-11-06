@@ -11,10 +11,8 @@ namespace InkUi;
 /// 2026-11-05 用户定：
 ///   · 跟着操作条一起出现，放在「全选 / 复制 / 粘贴」后面；
 ///   · 彩色、丰富、梦幻 —— 青 → 紫 → 粉 的横向渐变；
-///   · 下拉**只放已经做好的功能**（当前只有「手写优化」），不展示灰项。
-///
-/// 这一版只做**入口与菜单**；「手写优化」真正改笔画的动作在
-/// `调研/AI-手写体替换-方案.md` 里排第二步。
+///   · 下拉只放已经做好的功能，不展示灰项。
+///   · 2026-11-06 加第二项：公式默认保留原笔迹（安全），要连公式换需明确点第二项。
 /// </summary>
 public sealed partial class FullUi
 {
@@ -30,6 +28,7 @@ public sealed partial class FullUi
     private const float AiMenuRowH = 40f;
     private const float AiMenuStatusH = 30f;
     private const float AiMenuPad = 6f;
+    private const int AiMenuItems = 2;
 
     private static readonly Color4 AiCyan = new(0.13f, 0.83f, 0.93f, 1f);
     private static readonly Color4 AiPurple = new(0.63f, 0.36f, 0.98f, 1f);
@@ -42,7 +41,8 @@ public sealed partial class FullUi
     {
         var c = AiCellRect();
         float w = AiMenuW;
-        float h = AiMenuPad * 2 + AiMenuRowH + (_lastAiStatus.Length > 0 ? AiMenuStatusH : 0f);
+        float h = AiMenuPad * 2 + AiMenuRowH * AiMenuItems
+                  + (_lastAiStatus.Length > 0 ? AiMenuStatusH : 0f);
         float x = c.MinX;
         float y = c.MaxY + 8f;                 // 带子在屏幕下方时往上翻
         if (y + h > _screen.MaxY - 8f) y = c.MinY - 8f - h;
@@ -54,7 +54,7 @@ public sealed partial class FullUi
     private RectF AiMenuStatusRect()
     {
         var r = AiMenuRect();
-        float y = r.MinY + AiMenuPad + AiMenuRowH;
+        float y = r.MinY + AiMenuPad + AiMenuRowH * AiMenuItems;
         return new RectF { MinX = r.MinX + 10f, MinY = y, MaxX = r.MaxX - 10f, MaxY = y + AiMenuStatusH };
     }
 
@@ -86,8 +86,16 @@ public sealed partial class FullUi
         if (!_aiMenuOpen) return false;
         if (AiMenuItemRect(0).Contains(x, y))
         {
-            // 识别在后台跑，菜单保持打开显示“识别中 / 已优化 / 失败”。
-            _host?.Commands.OptimizeHandwriting();
+            // 默认安全模式：公式行保留原笔迹。
+            _host?.Commands.OptimizeHandwriting(false);
+            _aiMenuHover = -1;
+            Invalidate();
+            return true;
+        }
+        if (AiMenuItemRect(1).Contains(x, y))
+        {
+            // 用户明确选择“含公式”：OCR 对下标敏感，结果会有识别误差。
+            _host?.Commands.OptimizeHandwriting(true);
             _aiMenuHover = -1;
             Invalidate();
             return true;
@@ -132,12 +140,16 @@ public sealed partial class FullUi
         ctx.FillRoundedRectangle(rr, Brush(ctx, new Color4(1f, 1f, 1f, 0.98f)));
         ctx.DrawRoundedRectangle(rr, Brush(ctx, new Color4(0f, 0f, 0f, 0.12f)), 1f);
 
-        var item = AiMenuItemRect(0);
-        if (_aiMenuHover == 0)
-            ctx.FillRoundedRectangle(
-                new RoundedRectangle(new Vortice.RawRectF(item.MinX, item.MinY, item.MaxX, item.MaxY), 7f, 7f),
-                Brush(ctx, new Color4(0.63f, 0.36f, 0.98f, 0.12f)));
-        _widgets.Text(ctx, "✨ 手写优化", item, 13f, Brush(ctx, new Color4(0.15f, 0.15f, 0.18f, 1f)));
+        string[] labels = { "✨ 手写优化（保留公式）", "✨ 手写优化（含公式）" };
+        for (int i = 0; i < labels.Length; i++)
+        {
+            var item = AiMenuItemRect(i);
+            if (_aiMenuHover == i)
+                ctx.FillRoundedRectangle(
+                    new RoundedRectangle(new Vortice.RawRectF(item.MinX, item.MinY, item.MaxX, item.MaxY), 7f, 7f),
+                    Brush(ctx, new Color4(0.63f, 0.36f, 0.98f, 0.12f)));
+            _widgets.Text(ctx, labels[i], item, 12.5f, Brush(ctx, new Color4(0.15f, 0.15f, 0.18f, 1f)));
+        }
 
         string status = _lastAiStatus;
         if (status.Length > 0)
@@ -145,9 +157,11 @@ public sealed partial class FullUi
             var sr = AiMenuStatusRect();
             var col = _lastAiBusy
                 ? new Color4(0.55f, 0.30f, 0.85f, 1f)
-                : status.StartsWith("已优化", StringComparison.Ordinal)
-                    ? new Color4(0.10f, 0.55f, 0.30f, 1f)
-                    : new Color4(0.60f, 0.20f, 0.20f, 1f);
+                : status.Contains("公式可能")
+                    ? new Color4(0.85f, 0.50f, 0.10f, 1f)
+                    : status.StartsWith("已优化", StringComparison.Ordinal)
+                        ? new Color4(0.10f, 0.55f, 0.30f, 1f)
+                        : new Color4(0.60f, 0.20f, 0.20f, 1f);
             _widgets.Text(ctx, status, sr, 10.5f, Brush(ctx, col));
         }
     }

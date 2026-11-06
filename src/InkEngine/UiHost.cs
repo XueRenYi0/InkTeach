@@ -112,7 +112,8 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void ToggleLibraryPanel() => _engine.ToggleLibraryPanel();
     public void ToggleShapesPanel() => _engine.ToggleShapesPanel();
     public void SetAiPromptText(string text) => _engine.AiPromptText = text ?? "";
-    public void OptimizeHandwriting() => _engine.OptimizeHandwritingFromUi();
+    public void OptimizeHandwriting(bool includeFormulas)
+        => _engine.OptimizeHandwritingFromUi(includeFormulas);
     public void BeginAiPromptEdit(float x, float y, float w, float h)
         => _engine.BeginAiPromptEditFromUi(x, y, w, h);
     public void EndAiPromptEdit(bool accept) => _engine.EndAiPromptEditFromUi(accept);

@@ -563,7 +563,9 @@ internal sealed partial class App : InkEngine.InkEngine
             HandOcrPng(args.Length > 1 ? args[1] : "",
                        args.Length > 2 ? args[2] : "",
                        args.Length > 3 ? args[3] : "reports/handocr.png",
-                       args.Length > 4 && float.TryParse(args[4], out float tl2) ? tl2 : 480f);
+                       args.Length > 4 && float.TryParse(args[4], out float tl2) ? tl2 : 480f,
+                       args.Contains("--real"),
+                       args.Contains("--allformulas"));
             _quit = true;
         }
         else if (mode == "--handreplace")

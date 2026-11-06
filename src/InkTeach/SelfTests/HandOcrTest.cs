@@ -16,43 +16,67 @@ internal sealed partial class App
     /// 识别服务用本机 mock（不联网、不花钱）：
     ///   --handocr &lt;板书.inkb&gt; &lt;ocr.json&gt; &lt;输出png&gt; [文字区左边界]
     /// </summary>
-    private void HandOcrPng(string inPath, string ocrPath, string outPath, float textLeft)
+    private void HandOcrPng(string inPath, string ocrPath, string outPath, float textLeft,
+                            bool real, bool includeFormulas)
     {
         Console.WriteLine();
-        Console.WriteLine("=== 手写优化 OCR 闭环（本机 mock） ===");
-        if (!File.Exists(inPath) || !File.Exists(ocrPath))
+        Console.WriteLine("=== 手写优化 OCR 闭环" + (real ? "（真实云 API）" : "（本机 mock）") + " ===");
+        if (!File.Exists(inPath) || (!real && !File.Exists(ocrPath)))
         {
             Console.WriteLine("文件不存在");
             ExitCode = 1;
             return;
         }
 
-        string text = string.Join("\n", LoadOcrLines(ocrPath).Select(CleanOcrLine));
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        var server = Task.Run(() => ServeOne(listener, text));
-        Console.WriteLine($"mock OCR：127.0.0.1:{port}");
+        string text = "";
+        TcpListener listener = null;
+        Task server = null;
+        if (!real)
+        {
+            text = string.Join("\n", LoadOcrLines(ocrPath).Select(OcrText.Normalize));
+            listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            server = Task.Run(() => ServeOne(listener, text));
+            Console.WriteLine($"mock OCR：127.0.0.1:{port}");
+        }
+        else
+        {
+            var cfg = OcrClient.LoadConfig();
+            Console.WriteLine($"真实 OCR：{cfg.BaseUrl} / {cfg.Model} / key={(cfg.Key.Length > 8 ? cfg.Key[..4] + "…" + cfg.Key[^4..] : "****")}");
+            if (!cfg.IsConfigured)
+            {
+                Console.WriteLine("未配置识别服务");
+                ExitCode = 1;
+                return;
+            }
+        }
 
         InkSerializer.LoadInto(Doc, File.ReadAllBytes(inPath));
         Doc.Selected.Clear();
         foreach (var s in Doc.Strokes)
         {
             var b = s.WorldInkBounds;
-            if (!b.IsEmpty && b.MaxX >= textLeft) Doc.Selected.Add(s);
+            if (b.IsEmpty) continue;
+            // 左上角立方体 + A/B/C/D 标注：不是文字，不选；但保持原样。
+            if (b.MaxX < textLeft && b.MaxY < 560f) continue;
+            Doc.Selected.Add(s);
         }
         int before = Doc.Strokes.Count;
         Console.WriteLine($"载入 {before} 个对象，选中 {Doc.Selected.Count} 个文字候选");
 
-        OcrClient.TestOverride = new OcrClient.OcrConfig
+        if (!real)
         {
-            BaseUrl = $"http://127.0.0.1:{port}",
-            Key = "test",
-            Model = "mock-vlm",
-            Thinking = "none",
-        };
+            OcrClient.TestOverride = new OcrClient.OcrConfig
+            {
+                BaseUrl = $"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}",
+                Key = "test",
+                Model = "mock-vlm",
+                Thinking = "none",
+            };
+        }
 
-        OptimizeHandwritingFromUi();
+        OptimizeHandwritingFromUi(includeFormulas);
         var timeout = Environment.TickCount64 + 20_000;
         while (HandOcrBusy && Environment.TickCount64 < timeout)
             SettleFrames(50);
@@ -86,9 +110,12 @@ internal sealed partial class App
         Console.WriteLine(undoOk ? $"一步撤销：OK（回到 {before}）" : $"一步撤销：FAIL（{Doc.Strokes.Count} ≠ {before}）");
         if (!undoOk) ok = false;
 
-        OcrClient.TestOverride = null;
-        listener.Stop();
-        try { server.Wait(2000); } catch { }
+        if (!real)
+        {
+            OcrClient.TestOverride = null;
+            listener.Stop();
+            try { server.Wait(2000); } catch { }
+        }
         Console.WriteLine(ok ? "结论：OK" : "结论：FAIL");
         ExitCode = ok ? 0 : 1;
     }

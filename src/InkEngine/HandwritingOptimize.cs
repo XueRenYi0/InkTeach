@@ -21,6 +21,7 @@ public partial class InkEngine
         public List<Stroke> Selected;
         public RectF Region;
         public OcrClient.OcrResult Result;
+        public bool IncludeFormulas;
     }
 
     private bool _handOcrBusy;
@@ -40,7 +41,8 @@ public partial class InkEngine
     }
 
     /// <summary>AI 菜单那一项点下去：开始识别，立即返回。</summary>
-    internal void OptimizeHandwritingFromUi()
+    /// <param name="includeFormulas">false = 公式行保留原笔迹（默认，安全）；true = 连公式一起换。</param>
+    internal void OptimizeHandwritingFromUi(bool includeFormulas = false)
     {
         if (_handOcrBusy)
         {
@@ -92,7 +94,7 @@ public partial class InkEngine
         }
 
         _handOcrBusy = true;
-        SetHandOcrStatus("识别中…（约 2–5 秒）");
+        SetHandOcrStatus(includeFormulas ? "识别中…（含公式）" : "识别中…（约 2–5 秒）");
 
         _handOcrCts?.Cancel();
         _handOcrCts = new CancellationTokenSource();
@@ -104,7 +106,8 @@ public partial class InkEngine
             var result = await OcrClient.RecognizeAsync(png, cfg, OcrClient.BoardPrompt, ct)
                                         .ConfigureAwait(false);
             if (gen != Volatile.Read(ref _handOcrGeneration)) return;
-            var done = new HandOcrDone { Selected = selected, Region = region, Result = result };
+            var done = new HandOcrDone { Selected = selected, Region = region, Result = result,
+                                          IncludeFormulas = includeFormulas };
             Interlocked.Exchange(ref _handOcrDone, done);
         });
     }
@@ -128,6 +131,16 @@ public partial class InkEngine
             SetHandOcrStatus("识别失败：" + Clip(why, 26));
             return;
         }
+        if (SelfCheckMode)
+        {
+            Console.WriteLine($"[手写优化] OCR 返回 {done.Result.Lines.Length} 行：");
+            for (int i = 0; i < done.Result.Lines.Length; i++)
+            {
+                string t = done.Result.Lines[i];
+                if (t.Length > 70) t = t[..70] + "…";
+                Console.WriteLine($"  {i + 1,2}. math={OcrText.HasMath(t)}  {t}");
+            }
+        }
 
         // 识别期间选区可能被改掉 / 撤销；对象不在了就放弃，绝不误删。
         var alive = new HashSet<Stroke>(Doc.Strokes);
@@ -146,10 +159,13 @@ public partial class InkEngine
         }
 
         int lines = HandwritingReplace.Apply(Doc, done.Selected, done.Region,
-                                             done.Result.Lines, font, out var glyphs);
+                                             done.Result.Lines, font, done.IncludeFormulas,
+                                             out var glyphs, out int skipped);
         if (lines == 0)
         {
-            SetHandOcrStatus("没有匹配到可替换的文字行");
+            SetHandOcrStatus(skipped > 0
+                ? $"只识别到公式行（{skipped} 行已保留原笔迹）"
+                : "没有匹配到可替换的文字行");
             return;
         }
 
@@ -158,7 +174,19 @@ public partial class InkEngine
         Doc.Selected.AddRange(glyphs);
         Console.WriteLine($"[手写优化] {lines} 行，{done.Result.Seconds:F1}s，" +
                           $"tokens {done.Result.PromptTokens}/{done.Result.CompletionTokens}");
-        SetHandOcrStatus($"已优化 {lines} 行（Ctrl+Z 可撤销）");
+        if (skipped > 0)
+            SetHandOcrStatus($"已优化 {lines} 行；{skipped} 个公式行保留原笔迹");
+        else if (done.IncludeFormulas)
+        {
+            int math = 0;
+            foreach (var line in done.Result.Lines)
+                if (OcrText.HasMath(line)) math++;
+            SetHandOcrStatus(math > 0
+                ? $"已优化 {lines} 行；公式可能有识别误差"
+                : $"已优化 {lines} 行（Ctrl+Z 可撤销）");
+        }
+        else
+            SetHandOcrStatus($"已优化 {lines} 行（Ctrl+Z 可撤销）");
     }
 
     /// <summary>把选中笔迹渲染成白底 PNG（OCR 接口只吃图片）。</summary>

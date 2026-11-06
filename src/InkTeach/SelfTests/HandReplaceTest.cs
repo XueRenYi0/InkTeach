@@ -1,6 +1,5 @@
 using System.IO;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using InkEngine;
 using Vortice.Mathematics;
 
@@ -40,7 +39,9 @@ internal sealed partial class App
         {
             var b = s.WorldInkBounds;
             if (b.IsEmpty) continue;
-            if (b.MaxX < textLeft) continue;   // 左侧图形区（真实板书里是立方体）
+            // 真实板书 b1 左上角是立方体 + A/B/C/D 标注（x<480, y<560）。
+            // 它们不是文字，不能进切行候选；但保留在结果里。
+            if (b.MaxX < textLeft && b.MaxY < 560f) continue;
             candidates.Add(s);
         }
         var region = EditRegion.Of(candidates);
@@ -52,7 +53,7 @@ internal sealed partial class App
         }
         Console.WriteLine($"文字区：({region.MinX:F0},{region.MinY:F0})..({region.MaxX:F0},{region.MaxY:F0})");
 
-        var texts = LoadOcrLines(ocrPath).Select(CleanOcrLine).ToList();
+        var texts = LoadOcrLines(ocrPath).Select(OcrText.Normalize).ToList();
         var lines = HandwritingReplace.DetectLines(candidates, region, texts.Count);
         Console.WriteLine($"检测到 {lines.Count} 行，OCR 给了 {texts.Count} 行");
         for (int i = 0; i < Math.Min(lines.Count, texts.Count); i++)
@@ -74,11 +75,11 @@ internal sealed partial class App
         foreach (var s in workAll)
         {
             var b = s.WorldInkBounds;
-            if (!b.IsEmpty && b.MaxX >= textLeft) workCandidates.Add(s);
+            if (!b.IsEmpty && !(b.MaxX < textLeft && b.MaxY < 560f)) workCandidates.Add(s);
         }
         var workRegion = EditRegion.Of(workCandidates);
         int before = work.Strokes.Count;
-        int applied = HandwritingReplace.Apply(work, workCandidates, workRegion, texts, fontPath);
+        int applied = HandwritingReplace.Apply(work, workCandidates, workRegion, texts, fontPath, true);
         if (applied == 0)
         {
             Console.WriteLine("没有生成替换对象");
@@ -119,27 +120,5 @@ internal sealed partial class App
         foreach (var line in (t.GetString() ?? "").Split('\n'))
             if (!string.IsNullOrWhiteSpace(line)) lines.Add(line.Trim());
         return lines;
-    }
-
-    /// <summary>
-    /// OCR 的 LaTeX 先换成 Unicode 再进手写字体。公式排版是二期；
-    /// 这一版先把常见符号和上下标弄对，至少不把 `\in` 原样画出来。
-    /// </summary>
-    private static string CleanOcrLine(string s)
-    {
-        s = s.Replace("\\(", "").Replace("\\)", "").Replace("$", "");
-        s = s.Replace("\\not\\subset", "⊄").Replace("\\notin", "∉")
-             .Replace("\\subseteq", "⊆").Replace("\\subset", "⊂")
-             .Replace("\\parallel", "∥").Replace("\\cap", "∩").Replace("\\cup", "∪")
-             .Replace("\\pi", "π").Replace("\\alpha", "α").Replace("\\beta", "β")
-             .Replace("\\gamma", "γ").Replace("\\Delta", "Δ").Replace("\\Omega", "Ω")
-             .Replace("\\in", "∈").Replace("\\times", "×").Replace("\\cdot", "·")
-             .Replace("\\leq", "≤").Replace("\\geq", "≥").Replace("\\neq", "≠")
-             .Replace("\\ ", " ").Replace("\\,", "").Replace("\\;", "")
-             .Replace("{", "").Replace("}", "");
-        s = Regex.Replace(s, "\\\\([a-zA-Z]+)", "$1");
-        s = Regex.Replace(s, "_([0-9])", m => "₀₁₂₃₄₅₆₇₈₉"[m.Groups[1].Value[0] - '0'].ToString());
-        s = Regex.Replace(s, "\\^([0-9])", m => "⁰¹²³⁴⁵⁶⁷⁸⁹"[m.Groups[1].Value[0] - '0'].ToString());
-        return s;
     }
 }

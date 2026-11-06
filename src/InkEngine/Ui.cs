@@ -350,7 +350,8 @@ public interface IEngineCommands
     /// <summary>AI 面板：改输入框里的题目要求（预设标签用）。</summary>
     void SetAiPromptText(string text);
     /// <summary>AI 菜单「手写优化」：识别选中笔迹并就地换成手写字体（一步撤销）。</summary>
-    void OptimizeHandwriting();
+    /// <param name="includeFormulas">false = 公式行保留原笔迹（默认）；true = 连公式一起换。</param>
+    void OptimizeHandwriting(bool includeFormulas);
 
     /// <summary>
     /// AI 面板：在给定的**界面逻辑坐标**上开一个原生单行输入框（中文/输入法交给系统）。

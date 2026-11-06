@@ -104,30 +104,37 @@ internal static class HandwritingReplace
                 merged.Add(b);
         }
 
-        // 识别器知道大概几行。切行时如果因为一条长笔迹 / 蓝笔批注把两行连成一行，
-        // 就把最高的那条在“最空的一行”中间劈开，补到识别器给的行数。
-        // 真实板书里这种情况很常见（上下标、分数、圈注都会跨行）。
-        int guard = 0;
-        while (expectedLines > 0 && merged.Count < expectedLines && guard++ < 24)
+        // 切行只信**几何**：如果一条行带明显比中位行高（上下标、分数、圈注把两行粘在一起），
+        // 就在最空的一行中间劈开。不再按 OCR 行数硬补——模型偶尔会把顶点 / 括号批注
+        // 单独认成一行（D /（包含）），硬补会让后面的行整体错位。
+        if (merged.Count > 0)
         {
-            int bi = -1, tallest = 0;
-            for (int i = 0; i < merged.Count; i++)
+            var hs = new List<int>();
+            foreach (var b in merged) hs.Add(b.Y1 - b.Y0);
+            hs.Sort();
+            int median = hs[hs.Count / 2];
+            int guard = 0;
+            while (guard++ < 24)
             {
-                int h = merged[i].Y1 - merged[i].Y0;
-                if (h > tallest) { tallest = h; bi = i; }
+                int bi = -1, tallest = 0;
+                for (int i = 0; i < merged.Count; i++)
+                {
+                    int h = merged[i].Y1 - merged[i].Y0;
+                    if (h > tallest) { tallest = h; bi = i; }
+                }
+                if (bi < 0 || tallest < 24 || tallest <= median * 1.7f) break;
+
+                var (y0, y1) = merged[bi];
+                int from = y0 + Math.Max(2, (y1 - y0) / 4);
+                int to = y1 - Math.Max(2, (y1 - y0) / 4);
+                int split = -1, best = int.MaxValue;
+                for (int y = from; y <= to; y++)
+                    if (count[y] < best) { best = count[y]; split = y; }
+                if (split <= y0 + 4 || split >= y1 - 4) break;
+
+                merged[bi] = (y0, split);
+                merged.Insert(bi + 1, (split, y1));
             }
-            if (bi < 0 || tallest < 24) break;
-
-            var (y0, y1) = merged[bi];
-            int from = y0 + Math.Max(2, (y1 - y0) / 4);
-            int to = y1 - Math.Max(2, (y1 - y0) / 4);
-            int split = -1, best = int.MaxValue;
-            for (int y = from; y <= to; y++)
-                if (count[y] < best) { best = count[y]; split = y; }
-            if (split <= y0 + 4 || split >= y1 - 4) break;
-
-            merged[bi] = (y0, split);
-            merged.Insert(bi + 1, (split, y1));
         }
         merged.Sort((a, b) => a.Y0.CompareTo(b.Y0));
 
@@ -199,18 +206,25 @@ internal static class HandwritingReplace
                                                 List<TextLine> lines,
                                                 IReadOnlyList<string> texts,
                                                 string fontPath,
+                                                bool includeFormulas,
                                                 out List<Stroke> replacedText,
-                                                out List<Stroke> glyphs)
+                                                out List<Stroke> glyphs,
+                                                out int skipped)
     {
         replacedText = new List<Stroke>();
         glyphs = new List<Stroke>();
+        skipped = 0;
         if (lines == null || lines.Count == 0 || texts == null || texts.Count == 0)
             return null;
 
         int n = Math.Min(lines.Count, texts.Count);
         for (int i = 0; i < n; i++)
         {
-            string t = texts[i]?.Trim();
+            // 公式默认保留原笔迹：OCR 对下标 / 集合符号很敏感（实测 D₁C₁→DD₁、
+            // ⊄→∉），自动替换会把数学意思改掉。只有用户明确选“含公式”才替换。
+            if (!includeFormulas && OcrText.HasMath(texts[i])) { skipped++; continue; }
+
+            string t = OcrText.Normalize(texts[i]?.Trim());
             if (string.IsNullOrEmpty(t)) continue;
             var g = GlyphText.BuildLine(fontPath, t, lines[i].Box, lines[i].Color);
             if (g == null) continue;
@@ -229,26 +243,39 @@ internal static class HandwritingReplace
 
     /// <summary>
     /// 在文档上真正执行替换：删原文字笔迹 + 加 Glyph 行，合成**一步撤销**。
-    /// 返回替换了几行。
+    /// 返回替换了几行；<paramref name="skipped"/> = 因公式保留原笔迹的行数。
     /// </summary>
     public static int Apply(InkDocument doc, IReadOnlyList<Stroke> selected,
                             RectF region, IReadOnlyList<string> texts, string fontPath)
-        => Apply(doc, selected, region, texts, fontPath, out _);
+        => Apply(doc, selected, region, texts, fontPath, false, out _, out _);
+
+    public static int Apply(InkDocument doc, IReadOnlyList<Stroke> selected,
+                            RectF region, IReadOnlyList<string> texts, string fontPath,
+                            bool includeFormulas)
+        => Apply(doc, selected, region, texts, fontPath, includeFormulas, out _, out _);
 
     public static int Apply(InkDocument doc, IReadOnlyList<Stroke> selected,
                             RectF region, IReadOnlyList<string> texts, string fontPath,
                             out List<Stroke> glyphs)
+        => Apply(doc, selected, region, texts, fontPath, false, out glyphs, out _);
+
+    public static int Apply(InkDocument doc, IReadOnlyList<Stroke> selected,
+                            RectF region, IReadOnlyList<string> texts, string fontPath,
+                            bool includeFormulas, out List<Stroke> glyphs, out int skipped)
     {
         glyphs = new List<Stroke>();
+        skipped = 0;
         if (doc == null || selected == null || texts == null || texts.Count == 0) return 0;
         var lines = DetectLines(selected, region, texts.Count);
-        var result = BuildReplacement(selected, lines, texts, fontPath,
-                                      out var replacedText, out glyphs);
+        var result = BuildReplacement(selected, lines, texts, fontPath, includeFormulas,
+                                      out var replacedText, out glyphs, out skipped);
         if (result == null || replacedText.Count == 0) return 0;
 
         var remove = new RemoveStrokesAction();
+        var seen = new HashSet<Stroke>();
         foreach (var s in replacedText)
         {
+            if (!seen.Add(s)) continue;   // 两个相邻行带可能同时圈到一条笔迹，只删一次
             int idx = doc.Strokes.IndexOf(s);
             if (idx >= 0) remove.Items.Add((idx, s));
         }
