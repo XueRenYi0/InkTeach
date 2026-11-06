@@ -67,12 +67,9 @@ internal sealed partial class App
         // 再在第二份文档里验证 Ctrl+Z 能回到替换前。
         var work = new InkDocument();
         InkSerializer.LoadInto(work, File.ReadAllBytes(inPath));
-        var workAll = work.StrokesOf(InkDocument.BoardPageKey);
-        if (workAll == null || workAll.Count == 0)
-        {
-            workAll = new List<Stroke>();
-            foreach (var s in work.Strokes) workAll.Add(s);
-        }
+        var workAll = new List<Stroke>();
+        foreach (var s in work.Strokes) workAll.Add(s);
+        Console.WriteLine($"work.Strokes = {work.Strokes.Count}，workAll = {workAll.Count}");
         var workCandidates = new List<Stroke>();
         foreach (var s in workAll)
         {
@@ -81,7 +78,7 @@ internal sealed partial class App
         }
         var workRegion = EditRegion.Of(workCandidates);
         int before = work.Strokes.Count;
-        int applied = HandwritingReplace.Apply(work, workAll, workRegion, texts, fontPath);
+        int applied = HandwritingReplace.Apply(work, workCandidates, workRegion, texts, fontPath);
         if (applied == 0)
         {
             Console.WriteLine("没有生成替换对象");

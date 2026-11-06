@@ -231,12 +231,12 @@ internal static class HandwritingReplace
     /// 在文档上真正执行替换：删原文字笔迹 + 加 Glyph 行，合成**一步撤销**。
     /// 返回替换了几行。
     /// </summary>
-    public static int Apply(InkDocument doc, IReadOnlyList<Stroke> all,
+    public static int Apply(InkDocument doc, IReadOnlyList<Stroke> selected,
                             RectF region, IReadOnlyList<string> texts, string fontPath)
     {
-        if (doc == null || all == null || texts == null || texts.Count == 0) return 0;
-        var lines = DetectLines(all, region, texts.Count);
-        var result = BuildReplacement(all, lines, texts, fontPath,
+        if (doc == null || selected == null || texts == null || texts.Count == 0) return 0;
+        var lines = DetectLines(selected, region, texts.Count);
+        var result = BuildReplacement(selected, lines, texts, fontPath,
                                       out var replacedText, out var glyphs);
         if (result == null || replacedText.Count == 0) return 0;
 
