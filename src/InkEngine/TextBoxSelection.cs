@@ -344,3 +344,69 @@ internal sealed class TextBoxGeometryAction : EditAction
         doc.RefreshStrokeGrid(_stroke);
     }
 }
+
+/// <summary>
+/// 文本框“字体 / 行距”的一步撤销。字体和行距都会改排版高度，
+/// 所以把宽高和原点一起快照；和改字号那条 <see cref="TextBoxGeometryAction"/> 分开，
+/// 免得老调用方误把字体重置回雅黑。
+/// </summary>
+internal sealed class TextBoxStyleAction : EditAction
+{
+    private readonly Stroke _stroke;
+    private readonly Vector2 _beforeOrigin, _afterOrigin;
+    private readonly float _beforeW, _beforeH, _beforeFont, _beforeSpacing;
+    private readonly float _afterW, _afterH, _afterFont, _afterSpacing;
+    private readonly bool _beforeAuto, _afterAuto;
+    private readonly TextBoxFace _beforeFace, _afterFace;
+    private readonly RectF _beforeBounds, _afterBounds;
+
+    public TextBoxStyleAction(Stroke s, Vector2 beforeOrigin,
+                              float beforeW, float beforeH, float beforeFont, bool beforeAuto,
+                              TextBoxFace beforeFace, float beforeSpacing, RectF beforeBounds)
+    {
+        _stroke = s;
+        var box = s.TextBox;
+        _beforeOrigin = beforeOrigin;
+        _beforeW = beforeW; _beforeH = beforeH; _beforeFont = beforeFont;
+        _beforeAuto = beforeAuto; _beforeFace = beforeFace; _beforeSpacing = beforeSpacing;
+        _beforeBounds = beforeBounds;
+
+        _afterOrigin = s.Points.Count > 0 ? new Vector2(s.Points[0].X, s.Points[0].Y) : beforeOrigin;
+        _afterW = box?.Width ?? beforeW;
+        _afterH = box?.Height ?? beforeH;
+        _afterFont = box?.FontSize ?? beforeFont;
+        _afterAuto = box?.AutoHeight ?? beforeAuto;
+        _afterFace = box?.Face ?? beforeFace;
+        _afterSpacing = box?.LineSpacing ?? beforeSpacing;
+        _afterBounds = s.PaddedBounds;
+    }
+
+    public override int HeldStrokes => 1;
+    public override RectF AffectedBefore => _beforeBounds;
+    public override RectF AffectedAfter => _afterBounds;
+
+    public override void Undo(InkDocument doc)
+        => Apply(doc, _beforeOrigin, _beforeW, _beforeH, _beforeFont, _beforeAuto,
+                 _beforeFace, _beforeSpacing);
+
+    public override void Redo(InkDocument doc)
+        => Apply(doc, _afterOrigin, _afterW, _afterH, _afterFont, _afterAuto,
+                 _afterFace, _afterSpacing);
+
+    private void Apply(InkDocument doc, Vector2 origin, float w, float h, float font, bool auto,
+                       TextBoxFace face, float spacing)
+    {
+        var box = _stroke.TextBox;
+        if (box == null) return;
+        box.FontSize = font;
+        box.AutoHeight = auto;
+        box.Face = face;
+        box.LineSpacing = spacing;
+        box.Width = w;
+        box.Height = h;
+        box.InvalidateLayout();
+        _stroke.SetTextBoxRect(origin, w, h);
+        if (auto) _stroke.SyncTextBoxBounds();
+        doc.RefreshStrokeGrid(_stroke);
+    }
+}

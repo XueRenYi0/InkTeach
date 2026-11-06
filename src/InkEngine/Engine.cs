@@ -16559,6 +16559,22 @@ public partial class InkEngine
             // 导出格式：0 = PNG（透明底）、1 = JPG（白底）。
         }
 
+        if (part >= SelectionHandles.PanelPart.SpacingBase)
+        {
+            int i = part - SelectionHandles.PanelPart.SpacingBase;
+            if (i >= 0 && i < TextBoxFaces.LineSpacings.Length)
+                SetSelectedTextSpacingFromUi(TextBoxFaces.LineSpacings[i]);
+            return true;
+        }
+
+        if (part >= SelectionHandles.PanelPart.FaceBase)
+        {
+            int i = part - SelectionHandles.PanelPart.FaceBase;
+            if (i >= 0 && i < TextBoxFaces.All.Length)
+                SetSelectedTextFaceFromUi(i);
+            return true;
+        }
+
         if (part >= SelectionHandles.PanelPart.FontBase)
         {
             int i = part - SelectionHandles.PanelPart.FontBase;

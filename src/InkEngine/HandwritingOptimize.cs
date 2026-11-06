@@ -143,10 +143,11 @@ public partial class InkEngine
 
         Task.Run(async () =>
         {
-            var result = await OcrClient.RecognizeAsync(png, cfg,
-                                        mode == HandOcrMode.TextBox
-                                            ? OcrClient.TextBoxPrompt
-                                            : OcrClient.BoardPrompt, ct)
+            string prompt = mode == HandOcrMode.TextBox
+                ? OcrClient.BoxPrompt
+                : OcrClient.BoardPrompt;
+            var result = await OcrClient.RecognizeAsync(png, cfg, prompt, ct,
+                                        withBoxes: mode == HandOcrMode.TextBox)
                                         .ConfigureAwait(false);
             if (gen != Volatile.Read(ref _handOcrGeneration)) return;
             var done = new HandOcrDone { Selected = selected, Region = region, Result = result,
@@ -203,15 +204,18 @@ public partial class InkEngine
                 SetHandOcrStatus("识别结果为空");
                 return;
             }
-            var box = CreateRecognizedTextBox(text, done.InkColor);
-            if (box == null)
+            var boxes = CreateRecognizedTextBoxes(done);
+            if (boxes.Count == 0)
             {
                 SetHandOcrStatus("创建文本框失败");
                 return;
             }
-            Doc.SelectOnly(new[] { box });
-            Console.WriteLine($"[识别到文本框] {done.Result.Lines.Length} 行，{done.Result.Seconds:F1}s");
-            SetHandOcrStatus($"已识别 {done.Result.Lines.Length} 行 → 文本框");
+            Doc.SelectOnly(boxes);
+            Console.WriteLine($"[识别到文本框] {done.Result.Lines.Length} 行，{done.Result.Seconds:F1}s，" +
+                              $"{boxes.Count} 个文本框");
+            SetHandOcrStatus(boxes.Count > 1
+                ? $"已识别 {done.Result.Lines.Length} 行 → {boxes.Count} 栏文本框"
+                : $"已识别 {done.Result.Lines.Length} 行 → 文本框");
             return;
         }
 
@@ -264,15 +268,298 @@ public partial class InkEngine
             SetHandOcrStatus($"已优化 {lines} 行（Ctrl+Z 可撤销）");
     }
 
-    /// <summary>把识别结果变成一个普通文本框；纸面背景 + 原墨迹主色。</summary>
-    private Stroke CreateRecognizedTextBox(string text, Color4 ink)
+    /// <summary>
+    /// 识别结果 → 普通文本框。尽量贴近原选区：
+    ///   · 框宽 = 选区宽 + 左右内边距，位置从原选区左上角开始；
+    ///   · 字号 / 行距由“贴近墨迹的几何行”反推；
+    ///   · 每一行自己的墨色（红蓝批注分得开），公式也在对应行色里烘；
+    ///   · 双栏板书按 OCR bbox 的 x 空隙拆成两个框，避免把两栏叠成一长条。
+    /// </summary>
+    private List<Stroke> CreateRecognizedTextBoxes(HandOcrDone done)
     {
-        var s = CreatePlainTextBox(text);
-        if (s?.TextBox == null) return null;
-        s.TextBox.Paper = true;
-        s.Color = ink;
-        s.TextBox.Ink = ink;
-        return s;
+        var items = done.Result.Items;
+        if (items.Count == done.Result.Lines.Length && items.Count > 3)
+        {
+            var groups = SplitColumns(items);
+            if (groups.Count > 1)
+            {
+                var multi = new List<Stroke>();
+                foreach (var group in groups)
+                {
+                    var s = CreateRecognizedTextBoxForGroup(done, group);
+                    if (s != null) multi.Add(s);
+                }
+                if (multi.Count > 0) return multi;
+            }
+        }
+
+        var one = CreateRecognizedTextBoxForGroup(done,
+            items.Count == done.Result.Lines.Length ? items : null);
+        return one != null ? new List<Stroke> { one } : new List<Stroke>();
+    }
+
+    private Stroke CreateRecognizedTextBoxForGroup(HandOcrDone done, List<OcrClient.OcrLine> items)
+    {
+        bool useItems = items != null && items.Count > 0;
+        var lines = new List<string>();
+        if (useItems) foreach (var item in items) lines.Add(item.Text);
+        else lines.AddRange(done.Result.Lines);
+        string text = string.Join("\n", lines);
+        if (string.IsNullOrWhiteSpace(text)) return null;
+
+        var region = useItems ? ItemsRegion(items, done.Region) : done.Region;
+        region = region.Inflate(10f);
+        var pngBox = done.Region.Inflate(12f);
+        float u = MathF.Max(0.75f, DpiScale);
+        float pad = 18f * u;
+
+        var colors = new List<Color4>();
+        var heights = new List<float>();
+        var centers = new List<float>();
+
+        // 几何切行始终算一份：它比 OCR 的 bbox 更贴**墨迹本身**，用来定字号和行距；
+        // OCR bbox 主要负责“这一行是什么颜色”和双栏拆分。
+        var detected = HandwritingReplace.DetectLines(done.Selected, region, lines.Count);
+
+        if (useItems)
+        {
+            foreach (var item in items)
+            {
+                if (item.HasBox)
+                {
+                    var box = ItemBox(item, pngBox);
+                    colors.Add(DominantInkColor(done.Selected, box));
+                }
+                else colors.Add(done.InkColor);
+            }
+        }
+        else if (detected.Count == lines.Count)
+        {
+            foreach (var line in detected) colors.Add(line.Color);
+        }
+
+        // 字号 / 行距：优先用几何行（紧贴墨迹）；几何行切多了/切少了也用它的
+        // **低位数**，因为中位数容易被分式、上下标撑高的行带带偏。
+        bool useDetectedMetrics = detected.Count >= 2
+                                  && detected.Count >= lines.Count * 0.65f;
+        if (useDetectedMetrics)
+        {
+            foreach (var line in detected)
+            {
+                heights.Add(line.Box.MaxY - line.Box.MinY);
+                centers.Add((line.Box.MinY + line.Box.MaxY) * 0.5f);
+            }
+        }
+        else if (useItems)
+        {
+            foreach (var item in items)
+            {
+                if (!item.HasBox) continue;
+                var box = ItemBox(item, pngBox);
+                heights.Add(box.MaxY - box.MinY);
+                centers.Add((box.MinY + box.MaxY) * 0.5f);
+            }
+        }
+
+        float medianH = LowerMedian(heights,
+            detected.Count >= lines.Count ? 0.45f : 0.5f);
+        if (medianH <= 0f)
+            medianH = (region.MaxY - region.MinY) / MathF.Max(1f, lines.Count);
+
+        centers.Sort();
+        var gaps = new List<float>();
+        for (int i = 1; i < centers.Count; i++)
+        {
+            float gap = centers[i] - centers[i - 1];
+            if (gap > 1f) gaps.Add(gap);
+        }
+        float pitch = Median(gaps);
+
+        // 两个估计取大：紧贴墨迹的行高，和“行中心距 / 1.75”。
+        // 只用行高会把小字行估小，再用大行距补高度，结果字小、行空。
+        float fontPx = Math.Clamp(MathF.Max(medianH * 0.76f,
+                                            pitch > 0f && detected.Count >= lines.Count
+                                                ? pitch / 1.75f : 0f),
+                                  9f * u, 72f * u);
+
+        float spacing = detected.Count >= lines.Count && pitch > 0f
+            ? Math.Clamp(pitch / fontPx, 1.0f, 2.2f)
+            : TextBoxFaces.DefaultLineSpacing;   // 几何行被合并（双栏/整页）：不拿合并行距当行距
+
+        float boxW = MathF.Max(120f * u, (region.MaxX - region.MinX) + pad * 2f);
+        var target = new RectF
+        {
+            MinX = region.MinX - pad,
+            MinY = region.MinY - pad,
+            MaxX = region.MinX - pad + boxW,
+            MaxY = region.MaxY + pad,
+        };
+        if (SelfCheckMode)
+        {
+            int boxes = 0;
+            if (useItems) foreach (var item in items) if (item.HasBox) boxes++;
+            Console.WriteLine($"[布局] 选区 {(region.MaxX - region.MinX):F0}×{(region.MaxY - region.MinY):F0}，" +
+                              $"OCR {items?.Count ?? 0} 行（bbox {boxes}），几何 {detected.Count} 行，" +
+                              $"中位行高 {medianH:F1} → 字号 {fontPx / u:F1}px，行距 {spacing:F2}×");
+        }
+        return CreatePlainTextBoxAt(text, target, done.InkColor, TextBoxFace.YaHei,
+                                    spacing, fontPx / u, colors);
+    }
+
+    private static RectF ItemBox(OcrClient.OcrLine item, RectF pngBox)
+        => new()
+        {
+            MinX = pngBox.MinX + item.X0 * (pngBox.MaxX - pngBox.MinX),
+            MinY = pngBox.MinY + item.Y0 * (pngBox.MaxY - pngBox.MinY),
+            MaxX = pngBox.MinX + item.X1 * (pngBox.MaxX - pngBox.MinX),
+            MaxY = pngBox.MinY + item.Y1 * (pngBox.MaxY - pngBox.MinY),
+        };
+
+    private static RectF ItemsRegion(List<OcrClient.OcrLine> items, RectF fallback)
+    {
+        float x0 = float.MaxValue, y0 = float.MaxValue, x1 = float.MinValue, y1 = float.MinValue;
+        foreach (var item in items)
+        {
+            if (!item.HasBox) continue;
+            x0 = MathF.Min(x0, item.X0);
+            y0 = MathF.Min(y0, item.Y0);
+            x1 = MathF.Max(x1, item.X1);
+            y1 = MathF.Max(y1, item.Y1);
+        }
+        if (x1 <= x0 || y1 <= y0) return fallback;
+        var pngBox = fallback.Inflate(12f);
+        return new RectF
+        {
+            MinX = pngBox.MinX + x0 * (pngBox.MaxX - pngBox.MinX),
+            MinY = pngBox.MinY + y0 * (pngBox.MaxY - pngBox.MinY),
+            MaxX = pngBox.MinX + x1 * (pngBox.MaxX - pngBox.MinX),
+            MaxY = pngBox.MinY + y1 * (pngBox.MaxY - pngBox.MinY),
+        };
+    }
+
+    /// <summary>
+    /// 按 OCR bbox 的 x0 最大空隙拆栏。只在“空隙 &gt; 0.2 图片宽、两边都有 4 行以上”时拆，
+    /// 单栏板书（b1/b2）不会被误拆；双栏（b3）左右各成一块。
+    /// </summary>
+    private static List<List<OcrClient.OcrLine>> SplitColumns(List<OcrClient.OcrLine> items)
+    {
+        var groups = new List<List<OcrClient.OcrLine>>();
+        SplitColumns(items, groups, 0);
+        groups.Sort((a, b) => MinX(a).CompareTo(MinX(b)));
+        return groups;
+
+        static float MinX(List<OcrClient.OcrLine> list)
+        {
+            float m = float.MaxValue;
+            foreach (var i in list) if (i.HasBox) m = MathF.Min(m, i.X0);
+            return m;
+        }
+    }
+
+    private static void SplitColumns(List<OcrClient.OcrLine> items,
+                                     List<List<OcrClient.OcrLine>> groups, int depth)
+    {
+        if (depth >= 3 || items.Count < 8)
+        {
+            groups.Add(items);
+            return;
+        }
+
+        var xs = new List<float>();
+        foreach (var item in items) if (item.HasBox) xs.Add((item.X0 + item.X1) * 0.5f);
+        if (xs.Count < items.Count * 0.75f)
+        {
+            groups.Add(items);
+            return;
+        }
+        xs.Sort();
+
+        float bestGap = 0f, cut = 0f;
+        for (int i = 1; i < xs.Count; i++)
+        {
+            float gap = xs[i] - xs[i - 1];
+            if (gap > bestGap) { bestGap = gap; cut = (xs[i] + xs[i - 1]) * 0.5f; }
+        }
+        if (bestGap < 0.2f)
+        {
+            groups.Add(items);
+            return;
+        }
+
+        var left = new List<OcrClient.OcrLine>();
+        var right = new List<OcrClient.OcrLine>();
+        bool seenRight = false;
+        foreach (var item in items)
+        {
+            float cx = (item.X0 + item.X1) * 0.5f;
+            bool isRight = item.HasBox ? cx >= cut : seenRight;
+            if (item.HasBox && cx >= cut) seenRight = true;
+            (isRight ? right : left).Add(item);
+        }
+        if (left.Count < 4 || right.Count < 4)
+        {
+            groups.Add(items);
+            return;
+        }
+
+        // 两栏的横向范围必须基本不重叠；交叠说明是“宽左栏 + 右侧批注”，
+        // 硬拆会让两个纸面互相盖住（b3 实测），这种宁可保持一个长框。
+        float leftMax = float.MinValue, rightMin = float.MaxValue;
+        foreach (var item in left) if (item.HasBox) leftMax = MathF.Max(leftMax, item.X1);
+        foreach (var item in right) if (item.HasBox) rightMin = MathF.Min(rightMin, item.X0);
+        if (leftMax > rightMin + 0.08f)
+        {
+            groups.Add(items);
+            return;
+        }
+
+        SplitColumns(left, groups, depth + 1);
+        SplitColumns(right, groups, depth + 1);
+    }
+
+    /// <summary>选中笔迹在指定框内的主色（按框内点数分 红 / 蓝 / 其它三桶）。</summary>
+    private static Color4 DominantInkColor(IReadOnlyList<Stroke> strokes, RectF area)
+    {
+        int rw = 0, bw = 0, ow = 0;
+        float rr = 0, rg = 0, rb = 0, br = 0, bg = 0, bb = 0, or_ = 0, og = 0, ob = 0;
+        foreach (var s in strokes)
+        {
+            int inside = 0;
+            foreach (var p in s.Points)
+                if (p.X >= area.MinX && p.X <= area.MaxX && p.Y >= area.MinY && p.Y <= area.MaxY)
+                    inside++;
+            if (inside == 0) continue;
+
+            var c = s.Color;
+            int w = inside;
+            bool red = c.R > c.B * 1.25f && c.R > 0.35f;
+            bool blue = c.B > c.R * 1.25f && c.B > 0.35f;
+            if (red) { rw += w; rr += c.R * w; rg += c.G * w; rb += c.B * w; }
+            else if (blue) { bw += w; br += c.R * w; bg += c.G * w; bb += c.B * w; }
+            else { ow += w; or_ += c.R * w; og += c.G * w; ob += c.B * w; }
+        }
+        if (rw == 0 && bw == 0 && ow == 0) return new Color4(0.86f, 0.16f, 0.12f, 1f);
+        if (rw >= bw && rw >= ow && rw > 0) return new Color4(rr / rw, rg / rw, rb / rw, 1f);
+        if (bw >= rw && bw >= ow && bw > 0) return new Color4(br / bw, bg / bw, bb / bw, 1f);
+        return new Color4(or_ / ow, og / ow, ob / ow, 1f);
+    }
+
+    private static float Median(List<float> values)
+    {
+        if (values == null || values.Count == 0) return 0f;
+        var copy = new List<float>(values);
+        copy.Sort();
+        return copy[copy.Count / 2];
+    }
+
+    /// <summary>低位数：按比例取排序后的值，避免一行分式/上下标把字号估大。</summary>
+    private static float LowerMedian(List<float> values, float percentile)
+    {
+        if (values == null || values.Count == 0) return 0f;
+        var copy = new List<float>(values);
+        copy.Sort();
+        int i = (int)MathF.Round((copy.Count - 1) * Math.Clamp(percentile, 0f, 1f));
+        return copy[Math.Clamp(i, 0, copy.Count - 1)];
     }
 
     /// <summary>选中笔迹的主色（按点数分 红 / 蓝 / 其它三桶，取占比最大的那桶）。</summary>

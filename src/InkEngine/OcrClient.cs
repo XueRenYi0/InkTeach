@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -60,9 +61,19 @@ internal static class OcrClient
         public string Error = "";
         public string Text = "";
         public string[] Lines = Array.Empty<string>();
+        /// <summary>带归一化 bbox 的行（识别到文本框时用；没有 bbox 时为空）。</summary>
+        public List<OcrLine> Items = new();
         public double Seconds;
         public int PromptTokens;
         public int CompletionTokens;
+    }
+
+    /// <summary>OCR 的一行：文本 + 相对图片的归一化包围盒（0..1）。</summary>
+    internal sealed class OcrLine
+    {
+        public string Text = "";
+        public float X0, Y0, X1, Y1;
+        public bool HasBox;
     }
 
     /// <summary>读配置：环境变量 &gt; ai.json &gt; DeepSeek 官方默认。</summary>
@@ -121,7 +132,8 @@ internal static class OcrClient
 
     /// <summary>识别一张 PNG。失败时返回 Ok=false + 短错误，不抛异常给界面。</summary>
     internal static async Task<OcrResult> RecognizeAsync(byte[] png, OcrConfig cfg,
-                                                         string prompt, CancellationToken ct)
+                                                         string prompt, CancellationToken ct,
+                                                         bool withBoxes = false)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var res = new OcrResult();
@@ -133,7 +145,7 @@ internal static class OcrClient
                 ["model"] = cfg.Model,
                 ["stream"] = false,
                 ["temperature"] = 0,
-                ["max_tokens"] = 2400,
+                ["max_tokens"] = withBoxes ? 4096 : 2400,
                 ["messages"] = new object[]
                 {
                     new
@@ -192,6 +204,28 @@ internal static class OcrClient
             string content = ContentText(msg);
             content = StripFence(content);
             res.Text = content;
+
+            if (withBoxes)
+            {
+                var (pw, ph) = PngSize(png);
+                if (TryParseBoxes(content, pw, ph, out var items))
+                {
+                    res.Items = items;
+                    res.Lines = new string[items.Count];
+                    for (int i = 0; i < items.Count; i++) res.Lines[i] = items[i].Text;
+                    if (HasRepeat(res.Lines))
+                    {
+                        res.Error = "识别结果连续复读，请重试";
+                        res.Lines = Array.Empty<string>();
+                        return res;
+                    }
+                    res.Ok = res.Lines.Length > 0;
+                    if (!res.Ok) res.Error = "识别结果为空";
+                    ReadUsage(root, res);
+                    return res;
+                }
+            }
+
             res.Lines = OcrText.FilterLines(SplitLines(content));
             if (HasRepeat(res.Lines))
             {
@@ -202,11 +236,7 @@ internal static class OcrClient
             res.Ok = res.Lines.Length > 0;
             if (!res.Ok) res.Error = "识别结果为空";
 
-            if (root.TryGetProperty("usage", out var usage))
-            {
-                if (usage.TryGetProperty("prompt_tokens", out var pt)) res.PromptTokens = pt.GetInt32();
-                if (usage.TryGetProperty("completion_tokens", out var ctok)) res.CompletionTokens = ctok.GetInt32();
-            }
+            ReadUsage(root, res);
             return res;
         }
         catch (OperationCanceledException)
@@ -241,6 +271,165 @@ internal static class OcrClient
         }
         return "";
     }
+
+    private static void ReadUsage(JsonElement root, OcrResult res)
+    {
+        if (root.TryGetProperty("usage", out var usage))
+        {
+            if (usage.TryGetProperty("prompt_tokens", out var pt)) res.PromptTokens = pt.GetInt32();
+            if (usage.TryGetProperty("completion_tokens", out var ctok)) res.CompletionTokens = ctok.GetInt32();
+        }
+    }
+
+    /// <summary>PNG 宽高（IHDR 固定在第 16..23 字节，大端）。</summary>
+    private static (int W, int H) PngSize(byte[] png)
+    {
+        if (png == null || png.Length < 24) return (0, 0);
+        int w = (png[16] << 24) | (png[17] << 16) | (png[18] << 8) | png[19];
+        int h = (png[20] << 24) | (png[21] << 16) | (png[22] << 8) | png[23];
+        return (Math.Max(0, w), Math.Max(0, h));
+    }
+
+    /// <summary>
+    /// 解析“每行一个对象”的 bbox 结果。坐标允许 0..1；超出就丢掉 bbox，
+    /// 文本仍保留（后面的逐行着色会退回整框主色）。
+    ///
+    /// **不直接用 JsonDocument 读 text**：模型把 LaTeX 的 `\notin` 原样写进 JSON 时，
+    /// `\n` / `\t` / `\b` 会被 JSON 当成换行、制表、退格，公式就悄悄坏了。
+    /// 这里按固定字段顺序用正则抓原文，再只还原 `\"` 和 `\\`，其余反斜杠原样保留。
+    /// </summary>
+    private static bool TryParseBoxes(string content, int pngW, int pngH, out List<OcrLine> items)
+    {
+        items = new List<OcrLine>();
+        if (string.IsNullOrWhiteSpace(content)) return false;
+
+        string last = null;
+        foreach (Match m in BoxItemRegex.Matches(content))
+        {
+            string text = UnescapeJsonText(m.Groups["text"].Value).Trim();
+            if (text.Length == 0 || text == last) continue;
+            if (OcrText.IsJunkLine(text)) continue;
+            last = text;
+
+            var line = new OcrLine { Text = text };
+            float x0 = Num(m.Groups["x0"].Value);
+            float y0 = Num(m.Groups["y0"].Value);
+            float x1 = Num(m.Groups["x1"].Value);
+            float y1 = Num(m.Groups["y1"].Value);
+            NormalizeBox(line, x0, y0, x1, y1, pngW, pngH);
+            items.Add(line);
+        }
+        if (items.Count > 0) return true;
+
+        // 字段顺序不是我们要求的（或模型换了格式）：退回标准 JSON 解析。
+        int start = content.IndexOf('[');
+        int end = content.LastIndexOf(']');
+        if (start < 0 || end <= start) return false;
+        string json = content.Substring(start, end - start + 1);
+
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(json);
+        }
+        catch
+        {
+            try { doc = JsonDocument.Parse(FixJsonEscapes(json)); }
+            catch { return false; }
+        }
+
+        using (doc)
+        {
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return false;
+            last = null;
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                if (e.ValueKind != JsonValueKind.Object) continue;
+                if (!e.TryGetProperty("text", out var t) || t.ValueKind != JsonValueKind.String) continue;
+                string text = (t.GetString() ?? "").Trim();
+                if (text.Length == 0 || text == last) continue;
+                if (OcrText.IsJunkLine(text)) continue;
+                last = text;
+
+                var line = new OcrLine { Text = text };
+                if (TryNum(e, "x0", out float x0) && TryNum(e, "y0", out float y0) &&
+                    TryNum(e, "x1", out float x1) && TryNum(e, "y1", out float y1))
+                    NormalizeBox(line, x0, y0, x1, y1, pngW, pngH);
+                items.Add(line);
+            }
+        }
+        return items.Count > 0;
+    }
+
+    private static readonly Regex BoxItemRegex = new(
+        @"""text""\s*:\s*""(?<text>(?:\\.|[^""\\])*)""\s*,\s*""x0""\s*:\s*(?<x0>[^,}]+)\s*,\s*""y0""\s*:\s*(?<y0>[^,}]+)\s*,\s*""x1""\s*:\s*(?<x1>[^,}]+)\s*,\s*""y1""\s*:\s*(?<y1>[^,}]+)",
+        RegexOptions.Singleline | RegexOptions.Compiled);
+
+    /// <summary>只还原 JSON 的 `\"` / `\\`；`\in`、`\frac` 这类 LaTeX 保持原样。</summary>
+    private static string UnescapeJsonText(string s)
+    {
+        if (string.IsNullOrEmpty(s) || s.IndexOf('\\') < 0) return s;
+        var sb = new StringBuilder(s.Length);
+        for (int i = 0; i < s.Length; i++)
+        {
+            if (s[i] == '\\' && i + 1 < s.Length && (s[i + 1] == '"' || s[i + 1] == '\\'))
+            {
+                sb.Append(s[i + 1]);
+                i++;
+            }
+            else sb.Append(s[i]);
+        }
+        return sb.ToString();
+    }
+
+    private static float Num(string raw)
+    {
+        raw = (raw ?? "").Trim().Trim('"');
+        return float.TryParse(raw, System.Globalization.NumberStyles.Float,
+                              System.Globalization.CultureInfo.InvariantCulture, out float v)
+            ? v : 0f;
+    }
+
+    private static void NormalizeBox(OcrLine line, float x0, float y0, float x1, float y1,
+                                     int pngW, int pngH)
+    {
+        if (x0 > 1.5f || y0 > 1.5f || x1 > 1.5f || y1 > 1.5f)
+        {
+            // 有些厂商返回像素；能换算就换算，不能就不信这个框。
+            if (pngW > 0 && pngH > 0 && x1 <= pngW * 1.1f && y1 <= pngH * 1.1f)
+            {
+                x0 /= pngW; x1 /= pngW; y0 /= pngH; y1 /= pngH;
+            }
+        }
+        if (x0 >= -0.05f && y0 >= -0.05f && x1 <= 1.05f && y1 <= 1.05f && x1 > x0 && y1 > y0)
+        {
+            line.X0 = Math.Clamp(x0, 0f, 1f);
+            line.Y0 = Math.Clamp(y0, 0f, 1f);
+            line.X1 = Math.Clamp(x1, 0f, 1f);
+            line.Y1 = Math.Clamp(y1, 0f, 1f);
+            line.HasBox = true;
+        }
+    }
+
+    private static bool TryNum(JsonElement e, string name, out float value)
+    {
+        value = 0f;
+        if (!e.TryGetProperty(name, out var p)) return false;
+        if (p.ValueKind == JsonValueKind.Number && p.TryGetDouble(out double d))
+        {
+            value = (float)d;
+            return true;
+        }
+        if (p.ValueKind == JsonValueKind.String &&
+            float.TryParse(p.GetString(), System.Globalization.NumberStyles.Float,
+                           System.Globalization.CultureInfo.InvariantCulture, out value))
+            return true;
+        return false;
+    }
+
+    /// <summary>模型常把 LaTeX 的 `\in` 直接写进 JSON（非法转义）；补一层反斜杠再试。</summary>
+    private static string FixJsonEscapes(string s)
+        => Regex.Replace(s, @"\\(?![""\\/bfnrtu])", @"\\");
 
     private static string StripFence(string s)
     {
@@ -312,4 +501,14 @@ internal static class OcrClient
     internal const string TextBoxPrompt =
         BoardPrompt + "\n" +
         "- 不转录图形、坐标轴、立方体顶点旁的字母 / 数字标注（如 A/B/C/D、0/1/x/y、B′ 等），只转录正文段落和公式。";
+
+    /// <summary>
+    /// 识别到文本框 + 逐行 bbox。**JSON 里的反斜杠必须转义**（LaTeX 用 `\\in`），
+    /// 解析端还会再容错一次（<see cref="FixJsonEscapes"/>）。
+    /// </summary>
+    internal const string BoxPrompt =
+        TextBoxPrompt + "\n\n" +
+        "输出格式：只输出一个 JSON 数组，不要 Markdown 代码块，不要解释。每个元素一行：\n" +
+        "{\"text\":\"这一行的文字（公式用 $...$，JSON 里的反斜杠写成 \\\\）\",\"x0\":0.05,\"y0\":0.10,\"x1\":0.95,\"y1\":0.18}\n" +
+        "坐标是相对整张图片的 0..1 小数：x0/y0 左上，x1/y1 右下；按从上到下、从左到右的阅读顺序排列。";
 }

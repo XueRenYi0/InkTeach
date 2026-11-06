@@ -178,8 +178,11 @@ internal static class InkSerializer
     /// v26 及以前没有这一位：普通文本框按自动宽迁移（老版本没有手动改宽这回事），
     /// AI 题卡按固定宽；读端必须卡在 `version >= 27`。
     /// </summary>
-    /// v28（2026-11-06）：文本框末尾追加一位 **Paper**（识别到文本框的纸面背景）。</summary>
-    public const int FormatVersion = 28;
+    /// <summary>
+    /// v28（2026-11-06）：文本框末尾追加一位 **Paper**（识别到文本框的纸面背景）。
+    /// v29（2026-11-06）：再追加 **字体档 / 行距 / 逐行墨色**（识别结果按行保留红蓝）。
+    /// </summary>
+    public const int FormatVersion = 29;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -373,6 +376,16 @@ internal static class InkSerializer
             w.Write((byte)(c.AutoWidth ? 1 : 0));
             // v28：识别到文本框的纸面背景。
             w.Write((byte)(c.Paper ? 1 : 0));
+            // v29：字体档 / 行距 / 逐行墨色。
+            w.Write((byte)c.Face);
+            w.Write(c.LineSpacing);
+            w.Write(c.LineColors.Count);
+            foreach (var ink in c.LineColors)
+            {
+                w.Write(ink.R);
+                w.Write(ink.G);
+                w.Write(ink.B);
+            }
         }
     }
 
@@ -650,6 +663,28 @@ internal static class InkSerializer
             if (version >= 27) c.AutoWidth = r.ReadByte() != 0;
             else if (c.Role == TextBoxRole.Normal) c.AutoWidth = true;
             if (version >= 28) c.Paper = r.ReadByte() != 0;
+            if (version >= 29)
+            {
+                int face = r.ReadByte();
+                c.Face = face >= 0 && face < TextBoxFaces.All.Length
+                    ? (TextBoxFace)face : TextBoxFace.YaHei;
+                float spacing = r.ReadSingle();
+                c.LineSpacing = TextBoxFaces.ClampSpacing(spacing);
+                int colors = r.ReadInt32();
+                if (colors < 0 || colors > 4096)
+                    throw new InvalidDataException($"文本框逐行颜色数量不合理：{colors}。");
+                for (int ci = 0; ci < colors; ci++)
+                {
+                    float cr = r.ReadSingle();
+                    float cg = r.ReadSingle();
+                    float cb = r.ReadSingle();
+                    c.LineColors.Add(new Color4(
+                        float.IsFinite(cr) ? Math.Clamp(cr, 0f, 1f) : 0f,
+                        float.IsFinite(cg) ? Math.Clamp(cg, 0f, 1f) : 0f,
+                        float.IsFinite(cb) ? Math.Clamp(cb, 0f, 1f) : 0f,
+                        1f));
+                }
+            }
             s.TextBox = c;
             c.Ink = s.Color;
             c.InvalidateLayout();

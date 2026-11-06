@@ -65,6 +65,22 @@ internal sealed class TextBoxData
     /// <summary>正文字号（逻辑像素，乘 <see cref="Unit"/> 后是画布像素）。</summary>
     public float FontSize = 14.5f;
 
+    /// <summary>普通文本框的字体档（雅黑 / 楷体 / 宋体 / 黑体）。</summary>
+    public TextBoxFace Face = TextBoxFace.YaHei;
+
+    /// <summary>行距倍数（1.0 = 紧凑，1.55 = 现有默认）。只影响普通文本框。</summary>
+    public float LineSpacing = TextBoxFaces.DefaultLineSpacing;
+
+    /// <summary>
+    /// 逐行墨色（对应 <see cref="Text"/> 的硬换行行号；空 = 全部用 <see cref="Ink"/>）。
+    /// 识别到文本框时按 OCR 行写入，红蓝批注能按行保留。
+    /// </summary>
+    public readonly List<Color4> LineColors = new();
+
+    /// <summary>第 <paramref name="hardLine"/> 行的墨色；没有逐行色就退回整框主色。</summary>
+    public Color4 InkForLine(int hardLine)
+        => hardLine >= 0 && hardLine < LineColors.Count ? LineColors[hardLine] : Ink;
+
     /// <summary>
     /// 普通文本框的文字/公式颜色（= Stroke.Color 的副本）。
     /// 公式是位图，颜色必须在渲染时定；改颜色时同步这里并让排版重烘。
@@ -323,8 +339,10 @@ internal sealed class TextBoxData
             Role = Role, Title = Title, Meta = Meta, Text = Text,
             ShowAnswers = ShowAnswers, Width = Width, Height = Height,
             AutoHeight = AutoHeight, AutoWidth = AutoWidth, FontSize = FontSize,
+            Face = Face, LineSpacing = LineSpacing, Paper = Paper,
             Unit = Unit, Ink = Ink, ScrollY = ScrollY,
         };
+        foreach (var color in LineColors) c.LineColors.Add(color);
         foreach (var q in Questions) c.Questions.Add(q.Clone());
         return c;
     }
@@ -421,6 +439,8 @@ internal sealed class TextBoxLine
     public string Text = "";
     public float X, Y, Size, Height;
     public TextBoxInk Ink;
+    /// <summary>逐行墨色（识别结果的红/蓝行）；null = 按 <see cref="Ink"/> / 笔迹颜色。</summary>
+    public Color4? Tint;
     public bool Bold;
     public int QuestionIndex = -1;
 
@@ -536,13 +556,15 @@ internal static class TextBoxLayout
         float pad = 18f * u;
         float textW = MathF.Max(8f * u, card.Width - pad * 2f);
         float size = Math.Clamp(card.FontSize, 8f, 72f) * u;
-        float lineH = size * 1.55f;
+        float spacing = TextBoxFaces.ClampSpacing(card.LineSpacing);
+        float lineH = size * spacing;
         var lines = new List<TextBoxLine>();
         float y = pad;
         string[] hardLines = (card.Text ?? "").Replace("\r\n", "\n").Split('\n');
         for (int hi = 0; hi < hardLines.Length; hi++)
         {
             string hard = hardLines[hi];
+            Color4 ink = card.InkForLine(hi);
             string display = hard;
             float lineSize = size;
             float lineH2 = lineH;
@@ -574,7 +596,7 @@ internal static class TextBoxLayout
                             || (lang.Length == 0 && LooksLikeLatex(code));
                 if (math)
                 {
-                    AddMathBlock(lines, code, size, pad, textW, card.Ink, u, ref y);
+                    AddMathBlock(lines, code, size, pad, textW, ink, u, ref y);
                 }
                 else
                 {
@@ -582,7 +604,7 @@ internal static class TextBoxLayout
                     {
                         foreach (string part in Wrap(row, textW, size))
                         {
-                            AddText(lines, part, pad, y, size, lineH, TextBoxInk.Black);
+                            AddText(lines, part, pad, y, size, lineH, ink);
                             y += lineH;
                         }
                     }
@@ -629,7 +651,7 @@ internal static class TextBoxLayout
 
                 if (sb.Length > 0)
                 {
-                    AddMathBlock(lines, sb.ToString().Trim(), size, pad, textW, card.Ink, u, ref y);
+                    AddMathBlock(lines, sb.ToString().Trim(), size, pad, textW, ink, u, ref y);
                     hi = consumedTo;
                     continue;
                 }
@@ -643,7 +665,7 @@ internal static class TextBoxLayout
                 display = display[(hash + 1)..].Trim();
                 float scale = hash == 1 ? 1.45f : hash == 2 ? 1.25f : 1.12f;
                 lineSize = size * scale;
-                lineH2 = lineSize * 1.5f;
+                lineH2 = lineSize * spacing;
                 boldAll = true;
             }
             else if (display.StartsWith("- ", StringComparison.Ordinal)
@@ -655,24 +677,24 @@ internal static class TextBoxLayout
             string trimmed = display.Trim();
             if (TryBlockMath(trimmed, out string latex))
             {
-                AddMathBlock(lines, latex, lineSize, pad, textW, card.Ink, u, ref y);
+                AddMathBlock(lines, latex, lineSize, pad, textW, ink, u, ref y);
                 continue;
             }
 
             if (display.Contains('$') || display.Contains("\\(") || display.Contains("\\)")
                 || display.Contains('*') || display.Contains('`') || boldAll)
             {
-                var runs = ParseInline(display, lineSize, u, boldAll, card.Ink);
+                var runs = ParseInline(display, lineSize, u, boldAll, ink);
                 if (runs.Count > 0)
                 {
-                    LayoutInlineRuns(lines, runs, pad, textW, lineSize, lineH2, u, ref y);
+                    LayoutInlineRuns(lines, runs, pad, textW, lineSize, lineH2, u, ref y, ink);
                     continue;
                 }
             }
 
             foreach (string line in Wrap(display, textW, lineSize))
             {
-                AddText(lines, line, pad, y, lineSize, lineH2, TextBoxInk.Black, boldAll);
+                AddText(lines, line, pad, y, lineSize, lineH2, ink, boldAll);
                 y += lineH2;
             }
         }
@@ -813,7 +835,7 @@ internal static class TextBoxLayout
 
     private static void LayoutInlineRuns(List<TextBoxLine> lines, List<TextBoxRun> source,
                                          float pad, float textW, float size, float lineH,
-                                         float u, ref float y)
+                                         float u, ref float y, Color4? tint = null)
     {
         var current = new List<TextBoxRun>();
         float x = 0f;
@@ -834,6 +856,7 @@ internal static class TextBoxLayout
             {
                 Kind = TextBoxLineKind.Text,
                 X = pad, Y = cursorY, Size = size, Height = h,
+                Tint = tint,
                 Runs = current,
             });
             cursorY += h;
@@ -982,6 +1005,18 @@ internal static class TextBoxLayout
         {
             Kind = TextBoxLineKind.Text, Text = text, X = x, Y = y,
             Size = size, Height = h, Ink = ink, Bold = bold,
+        });
+    }
+
+    /// <summary>普通文本框的逐行墨色版本：Tint 优先于 <see cref="TextBoxLine.Ink"/>。</summary>
+    private static void AddText(List<TextBoxLine> lines, string text, float x, float y,
+                                float size, float h, Color4 tint, bool bold = false)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        lines.Add(new TextBoxLine
+        {
+            Kind = TextBoxLineKind.Text, Text = text, X = x, Y = y,
+            Size = size, Height = h, Ink = TextBoxInk.Black, Tint = tint, Bold = bold,
         });
     }
 

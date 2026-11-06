@@ -552,7 +552,7 @@ internal sealed partial class OverlayWindow : IDisposable
     /// AI 题卡的文字格式缓存。键 = (字号, 粗体, 居中)；题卡只在内容层重画时用到，
     /// 量很小，但别每帧重建 DirectWrite 格式。
     /// </summary>
-    private readonly Dictionary<(int Px, bool Bold, bool Center, bool Italic), IDWriteTextFormat> _aiFormats = new();
+    private readonly Dictionary<(int Px, bool Bold, bool Center, bool Italic, string Family), IDWriteTextFormat> _aiFormats = new();
 
     /// <summary>题卡配色（纸面始终浅色，保证黑题/红解析在深色主题下也读得清）。</summary>
     private static readonly Color4 AiPaper = new(0.999f, 0.995f, 0.972f, 0.985f);
@@ -2502,6 +2502,7 @@ internal sealed partial class OverlayWindow : IDisposable
         try
         {
             float pad = 18f * u;
+            string family = TextBoxFaces.DirectWrite(card.Face);
             // ??????????????????????????? ScrollY?
             float scrolledY = o.Y - card.ScrollY;
             foreach (var line in lines)
@@ -2543,8 +2544,9 @@ internal sealed partial class OverlayWindow : IDisposable
                             }
                             else
                             {
-                                Color4 ink = card.Role == TextBoxRole.Normal ? s.Color : AiColor(line.Ink);
-                                _ctx.DrawText(run.Text, AiTextFormat(run.Size, run.Bold, false, run.Italic),
+                                Color4 ink = line.Tint
+                                    ?? (card.Role == TextBoxRole.Normal ? s.Color : AiColor(line.Ink));
+                                _ctx.DrawText(run.Text, AiTextFormat(run.Size, run.Bold, false, run.Italic, family),
                                     new Rect(rx, ry, run.Width + 2f, run.Height), Brush(ink));
                             }
                         }
@@ -2564,9 +2566,10 @@ internal sealed partial class OverlayWindow : IDisposable
                     default:
                     {
                         float w = MathF.Max(10f, card.Width - line.X - pad);
-                        Color4 ink = card.Role == TextBoxRole.Normal && line.Ink == TextBoxInk.Black
-                            ? s.Color : AiColor(line.Ink);
-                        _ctx.DrawText(line.Text, AiTextFormat(line.Size, line.Bold, false),
+                        Color4 ink = line.Tint
+                            ?? (card.Role == TextBoxRole.Normal && line.Ink == TextBoxInk.Black
+                                ? s.Color : AiColor(line.Ink));
+                        _ctx.DrawText(line.Text, AiTextFormat(line.Size, line.Bold, false, false, family),
                             new Rect(o.X + line.X, scrolledY + line.Y, w, line.Height),
                             Brush(ink));
                         break;
@@ -2623,12 +2626,14 @@ internal sealed partial class OverlayWindow : IDisposable
         _ => AiBlack,
     };
 
-    private IDWriteTextFormat AiTextFormat(float size, bool bold, bool center, bool italic = false)
+    private IDWriteTextFormat AiTextFormat(float size, bool bold, bool center, bool italic = false,
+                                           string family = null)
     {
         int px = Math.Max(8, (int)MathF.Round(size));
-        var key = (px, bold, center, italic);
+        family = string.IsNullOrWhiteSpace(family) ? "Microsoft YaHei UI" : family;
+        var key = (px, bold, center, italic, family);
         if (_aiFormats.TryGetValue(key, out var f)) return f;
-        f = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+        f = Gfx.WriteFactory.CreateTextFormat(family, null,
             bold ? FontWeight.SemiBold : FontWeight.Normal,
             italic ? FontStyle.Italic : FontStyle.Normal,
             FontStretch.Normal, px, "zh-CN");
@@ -6382,8 +6387,8 @@ internal sealed partial class OverlayWindow : IDisposable
 
     /// <summary>层级小面板：置顶 / 置底两格（图标用 Fluent 的"上/下箭头 + 底托"）。</summary>
     /// <summary>
-    /// 文字操作条的字号下拉：3×2 的常用档（10/14/18/24/48/64），当前字号高亮。
-    /// 和色带那个字号菜单读**同一张表**（<see cref="InkPalette.TextFontSizes"/>）。
+    /// 文字操作条「A」下拉：字体 / 字号 / 行距三行。
+    /// 第一行用真实字体画名字（看到的就是会用的字），第二行字号，第三行行距倍数。
     /// </summary>
     private void DrawFontPanel(InkEngine app, in RectF sel)
     {
@@ -6392,22 +6397,62 @@ internal sealed partial class OverlayWindow : IDisposable
         DrawPanelCard(app, p, app.FloatingTheme.CornerRadius * dpi, dpi);
         var th = app.FloatingTheme;
 
-        float current = app.Doc.Selected.Count == 1
-            ? app.Doc.Selected[0].TextBox?.FontSize ?? 18f : 18f;
+        var box = app.Doc.Selected.Count == 1 ? app.Doc.Selected[0].TextBox : null;
+        float currentSize = box?.FontSize ?? 18f;
+        TextBoxFace currentFace = box?.Face ?? TextBoxFace.YaHei;
+        float currentSpacing = box?.LineSpacing ?? TextBoxFaces.DefaultLineSpacing;
+
+        float pad = SelectionHandles.FloatPadLogical * dpi;
+        var labelFmt = AiTextFormat(12f * dpi, false, false);
+        string[] rowLabels = { "字体", "字号", "行距" };
+        for (int row = 0; row < 3; row++)
+        {
+            var first = row switch
+            {
+                0 => SelectionHandles.FontPanelFaceRect(0, sel, dpi, app.FurnitureViewport),
+                1 => SelectionHandles.FontPanelCellRect(0, sel, dpi, app.FurnitureViewport),
+                _ => SelectionHandles.FontPanelSpacingRect(0, sel, dpi, app.FurnitureViewport),
+            };
+            _ctx.DrawText(rowLabels[row], labelFmt,
+                new Rect(p.MinX + pad, first.MinY, SelectionHandles.StyleLabelWidthLogical * dpi,
+                         first.MaxY - first.MinY),
+                Brush(th.TextMuted));
+        }
+
+        void Chip(RectF cell, string label, bool active, IDWriteTextFormat fmt)
+        {
+            float cr = 8f * dpi;
+            _scratch.Color = active ? th.ActiveBg : th.Hover;
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(cell.MinX, cell.MinY, cell.MaxX, cell.MaxY), cr, cr), _scratch);
+            _ctx.DrawText(label, fmt,
+                new Rect(cell.MinX, cell.MinY, cell.MaxX - cell.MinX, cell.MaxY - cell.MinY),
+                Brush(active ? th.ActiveText : th.Text));
+        }
+
+        for (int i = 0; i < TextBoxFaces.All.Length; i++)
+        {
+            var info = TextBoxFaces.All[i];
+            var cell = SelectionHandles.FontPanelFaceRect(i, sel, dpi, app.FurnitureViewport);
+            Chip(cell, info.Name, currentFace == info.Face,
+                 AiTextFormat(13f * dpi, true, true, false, info.DirectWrite));
+        }
 
         for (int i = 0; i < SelectionHandles.FontPanelSizeCount
                         && i < InkPalette.TextFontSizes.Length; i++)
         {
             var cell = SelectionHandles.FontPanelCellRect(i, sel, dpi, app.FurnitureViewport);
-            bool active = MathF.Abs(current - InkPalette.TextFontSizes[i]) < 0.1f;
-            float cr = 8f * dpi;
-            _scratch.Color = active ? th.ActiveBg : th.Hover;
-            _ctx.FillRoundedRectangle(new RoundedRectangle(
-                new Vortice.RawRectF(cell.MinX, cell.MinY, cell.MaxX, cell.MaxY), cr, cr), _scratch);
-            var fmt = AiTextFormat(15f * dpi, true, true);
-            _ctx.DrawText(InkPalette.TextFontSizes[i].ToString("F0"), fmt,
-                new Rect(cell.MinX, cell.MinY, cell.MaxX - cell.MinX, cell.MaxY - cell.MinY),
-                Brush(active ? th.ActiveText : th.Text));
+            bool active = MathF.Abs(currentSize - InkPalette.TextFontSizes[i]) < 0.1f;
+            Chip(cell, InkPalette.TextFontSizes[i].ToString("F0"), active,
+                 AiTextFormat(15f * dpi, true, true));
+        }
+
+        for (int i = 0; i < TextBoxFaces.LineSpacings.Length; i++)
+        {
+            var cell = SelectionHandles.FontPanelSpacingRect(i, sel, dpi, app.FurnitureViewport);
+            bool active = MathF.Abs(currentSpacing - TextBoxFaces.LineSpacings[i]) < 0.01f;
+            Chip(cell, TextBoxFaces.LineSpacings[i].ToString("0.0"), active,
+                 AiTextFormat(14f * dpi, true, true));
         }
     }
 

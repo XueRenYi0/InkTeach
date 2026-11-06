@@ -282,6 +282,57 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
+    /// <summary>文字操作条「字体」：换整个文本框的字体档（雅黑/楷体/宋体/黑体）。</summary>
+    internal void SetSelectedTextFaceFromUi(int index)
+    {
+        if (index < 0 || index >= TextBoxFaces.All.Length) return;
+        ApplySelectedTextStyle(TextBoxFaces.All[index].Face, null);
+    }
+
+    /// <summary>文字操作条「行距」：换整个文本框的行距倍数。</summary>
+    internal void SetSelectedTextSpacingFromUi(float spacing)
+        => ApplySelectedTextStyle(null, spacing);
+
+    private void ApplySelectedTextStyle(TextBoxFace? face, float? spacing)
+    {
+        if (Doc.Selected.Count != 1) { NotifyUiStateChanged(); return; }
+        var s = Doc.Selected[0];
+        var box = s.TextBox;
+        if (s.Kind != StrokeKind.TextBox || box == null) { NotifyUiStateChanged(); return; }
+
+        var oldFace = box.Face;
+        float oldSpacing = box.LineSpacing;
+        var newFace = face ?? oldFace;
+        float newSpacing = TextBoxFaces.ClampSpacing(spacing ?? oldSpacing);
+        if (newFace == oldFace && MathF.Abs(newSpacing - oldSpacing) < 0.001f)
+        {
+            NotifyUiStateChanged();
+            return;
+        }
+
+        var old = s.PaddedBounds;
+        var origin = s.Points.Count > 0 ? new Vector2(s.Points[0].X, s.Points[0].Y) : Vector2.Zero;
+        float oldW = box.Width, oldH = box.Height, oldFont = box.FontSize;
+        bool oldAuto = box.AutoHeight;
+
+        box.Face = newFace;
+        box.LineSpacing = newSpacing;
+        box.InvalidateLayout();
+        s.SyncTextBoxBounds();
+        ClampTextBoxIntoView(s);
+        Doc.RefreshStrokeGrid(s);
+        Doc.Dirty.Add(old);
+        Doc.Dirty.Add(s.PaddedBounds);
+        Doc.StructureChangedSinceRender = true;
+        Doc.Version++;
+        _dirty = true;
+        NotifyUiStateChanged();
+
+        var act = new TextBoxStyleAction(s, origin, oldW, oldH, oldFont, oldAuto,
+                                         oldFace, oldSpacing, old);
+        Doc.CommitInteractive(act);
+    }
+
     internal void CommitTextEditFromUi()
     {
         if (_textBoxEditing) EndTextBoxEditFromUi(true);
@@ -472,6 +523,61 @@ public partial class InkEngine
         };
         data.Ink = color;
         s.SetTextBoxRect(new Vector2(x, y), data.Width, data.Height);
+        ClampTextBoxIntoView(s);
+        Doc.AddStroke(s);
+        return s;
+    }
+
+    /// <summary>
+    /// 识别到文本框用：在指定矩形里建一个普通文本框，墨色/字体/行距/逐行色都由调用方给。
+    /// **先设样式再排版**——公式图是按墨色烘的，晚设颜色会出现“文字红、公式黑”。
+    /// </summary>
+    private Stroke CreatePlainTextBoxAt(string text, RectF target, Color4 ink,
+                                        TextBoxFace face, float lineSpacing, float fontSizeLogical,
+                                        IReadOnlyList<Color4> lineColors)
+    {
+        EnsureTextPrefs();
+        var screen = ScreenRectPhysical();
+        float u = MathF.Max(0.75f, DpiScale);
+
+        var data = TextBoxData.CreatePlain(text ?? "", u,
+                                           MathF.Max(120f * u, target.MaxX - target.MinX), 60f * u);
+        data.FontSize = Math.Clamp(fontSizeLogical, 8f, 72f);
+        data.Face = face;
+        data.LineSpacing = TextBoxFaces.ClampSpacing(lineSpacing);
+        data.Ink = ink;
+        data.Paper = true;
+        data.AutoWidth = false;
+        data.AutoHeight = true;
+        if (lineColors != null)
+            foreach (var c in lineColors) data.LineColors.Add(c);
+
+        var s = new Stroke
+        {
+            Tool = Tool.Marquee,
+            Kind = StrokeKind.TextBox,
+            TextBox = data,
+            Color = ink,
+            Width = 0f,
+        };
+
+        float maxH = MathF.Max(120f * u, (screen.MaxY - screen.MinY) * 0.92f);
+        data.FitToContent(data.Width, maxH, fitWidth: false);
+
+        // 整页/多栏这种“框比原始版面高很多”的情况：按目标高度反推缩小字号，
+        // 让结果别变成一条几米长的纸。最多两轮，避免和换行互相追。
+        float targetH = MathF.Max(120f * u, target.MaxY - target.MinY);
+        for (int pass = 0; pass < 2 && data.Height > targetH * 1.25f; pass++)
+        {
+            float k = Math.Clamp(targetH * 1.15f / MathF.Max(1f, data.Height), 0.45f, 1f);
+            float next = MathF.Max(8f, data.FontSize * k);
+            if (MathF.Abs(next - data.FontSize) < 0.5f) break;
+            data.FontSize = next;
+            data.InvalidateLayout();
+            data.FitToContent(data.Width, maxH, fitWidth: false);
+        }
+
+        s.SetTextBoxRect(new Vector2(target.MinX, target.MinY), data.Width, data.Height);
         ClampTextBoxIntoView(s);
         Doc.AddStroke(s);
         return s;

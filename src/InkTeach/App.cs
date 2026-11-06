@@ -601,6 +601,15 @@ internal sealed partial class App : InkEngine.InkEngine
             SelAiShow(args.Length > 1 ? args[1] : "reports/selai.bmp");
             _quit = true;
         }
+        else if (mode == "--textstyle")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(200);
+            TextStyleShow(args.Length > 1 ? args[1] : "reports/textstyle.bmp");
+            _quit = true;
+        }
         else if (mode == "--handocr")
         {
             _autoExitAt = double.MaxValue;

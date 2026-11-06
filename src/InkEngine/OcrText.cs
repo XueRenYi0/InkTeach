@@ -69,18 +69,26 @@ internal static class OcrText
         var result = new List<string>();
         foreach (var item in raw)
         {
-            if (string.IsNullOrWhiteSpace(item)) continue;
+            if (IsJunkLine(item)) continue;
             string t = item.Trim();
-            if (Regex.IsMatch(t, "^[A-Z]$")) continue;
-            if (Regex.IsMatch(t, @"^[A-Za-z]'?$") || Regex.IsMatch(t, @"^[0-9]{1,2}$") ||
-                Regex.IsMatch(t, @"^[∞%]$") || Regex.IsMatch(t, @"^[∞\s0-9]*[A-Za-z]'?$")) continue;
-            if (Regex.IsMatch(t, @"^(frac|sqrt|begin|end|dots|quad|qquad|therefore|vdots|cdots|ldots|left|right)[0-9A-Za-z{}]*$",
-                             RegexOptions.IgnoreCase)) continue;
-            if (Regex.IsMatch(t, @"^[（(][^）)]{1,10}[）)]$") && !HasMath(t)) continue;
             if (result.Count > 0 && result[^1] == t) continue;
             result.Add(t);
         }
         return result.ToArray();
+    }
+
+    /// <summary>单行是不是“非正文”（顶点字母、短括号批注、裸 LaTeX 命令残留）。</summary>
+    public static bool IsJunkLine(string item)
+    {
+        if (string.IsNullOrWhiteSpace(item)) return true;
+        string t = item.Trim();
+        if (Regex.IsMatch(t, "^[A-Z]$")) return true;
+        if (Regex.IsMatch(t, @"^[A-Za-z]'?$") || Regex.IsMatch(t, @"^[0-9]{1,2}$") ||
+            Regex.IsMatch(t, @"^[∞%]$") || Regex.IsMatch(t, @"^[∞\s0-9]*[A-Za-z]'?$")) return true;
+        if (Regex.IsMatch(t, @"^(frac|sqrt|begin|end|dots|quad|qquad|therefore|vdots|cdots|ldots|left|right)[0-9A-Za-z{}]*$",
+                          RegexOptions.IgnoreCase)) return true;
+        if (Regex.IsMatch(t, @"^[（(][^）)]{1,10}[）)]$") && !HasMath(t)) return true;
+        return false;
     }
 
     /// <summary>这一行是不是带公式 / 数学符号（用来决定默认要不要保留原笔迹）。</summary>

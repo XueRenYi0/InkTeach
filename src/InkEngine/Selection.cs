@@ -2432,12 +2432,18 @@ internal static class SelectionHandles
     /// <summary>层级面板每一格的边长（两格并排）。</summary>
     public const float LayerCellLogical = 48f;
 
-    /// <summary>字号下拉：3 列 × 2 行的方格，格子边长 56（放得下 48/64 两位数字）。</summary>
-    public const int FontCellColumns = 3;
-    public const int FontCellRows = 2;
-    public const float FontCellLogical = 56f;
-    /// <summary>常用字号档数（与 <see cref="InkPalette.TextFontSizes"/> 同长）。</summary>
+    /// <summary>
+    /// 文字操作条「A」下拉：**字体 / 字号 / 行距**三行（2026-11-06 用户要的三件）。
+    /// 参考 Word 的字体对话框和 ClassIn 文本框条：字体、字号、行距是最常用的三项，
+    /// 不再另开三个入口，避免把七格条撑成十格。
+    /// </summary>
+    public const int FontFaceCount = 4;
     public const int FontPanelSizeCount = 6;
+    public const int FontSpacingCount = 5;
+    public const int StyleColumns = 6;
+    public const float StyleLabelWidthLogical = 40f;
+    public const float StyleCellWidthLogical = 52f;
+    public const float StyleRowHeightLogical = 38f;
 
     /// <summary>滑条右端留给"笔尖预览点"的宽度（逻辑像素）。和主条那条滑条同一个语言：
     /// 右端一颗跟着值变大的点——粗细一眼看得见，不用读数字。</summary>
@@ -2637,18 +2643,16 @@ internal static class SelectionHandles
                       2, sel, dpi, visible, textBar);
 
     /// <summary>
-    /// 文字操作条的字号下拉：**三列两行**的常用字号（10/14/18/24/48/64）。
+    /// 文字操作条的字号下拉（现在是三行：字体 / 字号 / 行距）。
     /// 挂在「字号」那一格的下面；下方放不下就翻到框上方，再放不下夹进可见区。
-    ///
-    /// 和操作条本身"不翻面"是两件事：条永远在下方、夹在屏幕底；
-    /// 弹出菜单比条高，翻面是为了不被屏幕底裁掉（颜色/层级面板早就是这么做的）。
     /// </summary>
     public static RectF FontPanelRect(in RectF sel, float dpi, in RectF visible)
     {
-        float w = (FloatPadLogical * 2 + FontCellColumns * FontCellLogical
-                 + (FontCellColumns - 1) * FloatGapLogical) * dpi;
-        float h = (FloatPadLogical * 2 + FontCellRows * FontCellLogical
-                 + (FontCellRows - 1) * FloatGapLogical) * dpi;
+        float w = (FloatPadLogical * 2 + StyleLabelWidthLogical
+                 + StyleColumns * StyleCellWidthLogical
+                 + (StyleColumns - 1) * FloatGapLogical) * dpi;
+        float h = (FloatPadLogical * 2 + 3 * StyleRowHeightLogical
+                 + 2 * FloatGapLogical) * dpi;
         var bar = BarRect(sel, dpi, visible, TextBarButtonCount);
         var btn = BarButtonRectIn(bar, BarIndexOf(SelBarButton.FontSize, true), dpi);
 
@@ -2672,16 +2676,30 @@ internal static class SelectionHandles
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
     }
 
-    /// <summary>字号下拉里第 i 格（0 = 10，1 = 14 …，按三列两行排）。</summary>
-    public static RectF FontPanelCellRect(int i, in RectF sel, float dpi, in RectF visible)
+    /// <summary>三行里的第 <paramref name="row"/> 行、第 <paramref name="col"/> 格。</summary>
+    private static RectF StyleCellRect(int row, int col, in RectF sel, float dpi, in RectF visible)
     {
         var p = FontPanelRect(sel, dpi, visible);
-        int col = i % FontCellColumns, row = i / FontCellColumns;
-        float cell = FontCellLogical * dpi, gap = FloatGapLogical * dpi, pad = FloatPadLogical * dpi;
-        float x = p.MinX + pad + col * (cell + gap);
-        float y = p.MinY + pad + row * (cell + gap);
-        return new RectF { MinX = x, MinY = y, MaxX = x + cell, MaxY = y + cell };
+        float pad = FloatPadLogical * dpi;
+        float gap = FloatGapLogical * dpi;
+        float cellW = StyleCellWidthLogical * dpi;
+        float cellH = StyleRowHeightLogical * dpi;
+        float x = p.MinX + pad + StyleLabelWidthLogical * dpi + col * (cellW + gap);
+        float y = p.MinY + pad + row * (cellH + gap);
+        return new RectF { MinX = x, MinY = y, MaxX = x + cellW, MaxY = y + cellH };
     }
+
+    /// <summary>字号下拉里的第 i 个字号（第二行）。</summary>
+    public static RectF FontPanelCellRect(int i, in RectF sel, float dpi, in RectF visible)
+        => StyleCellRect(1, i, sel, dpi, visible);
+
+    /// <summary>字体档（第一行，4 格）。</summary>
+    public static RectF FontPanelFaceRect(int i, in RectF sel, float dpi, in RectF visible)
+        => StyleCellRect(0, i, sel, dpi, visible);
+
+    /// <summary>行距档（第三行，5 格）。</summary>
+    public static RectF FontPanelSpacingRect(int i, in RectF sel, float dpi, in RectF visible)
+        => StyleCellRect(2, i, sel, dpi, visible);
 
     /// <summary>
     /// "挂在操作条某个按钮下面的小面板"——层级和导出共用这一份几何：
@@ -2810,6 +2828,10 @@ internal static class SelectionHandles
         LayerBack,
         /// <summary>字号下拉的格子（+ i，0..5）。值刻意离 SwatchBase 远一点，避免区间重叠。</summary>
         FontBase = 20,
+        /// <summary>字体档（+ i，0..3）。</summary>
+        FaceBase = 40,
+        /// <summary>行距档（+ i，0..4）。</summary>
+        SpacingBase = 60,
     }
 
     /// <summary>
@@ -2848,9 +2870,15 @@ internal static class SelectionHandles
         }
         else if (panel == SelPanel.FontSize)
         {
+            for (int i = 0; i < FontFaceCount; i++)
+                if (FontPanelFaceRect(i, sel, dpi, visible).Contains(x, y))
+                    return (PanelPart)((int)PanelPart.FaceBase + i);
             for (int i = 0; i < FontPanelSizeCount; i++)
                 if (FontPanelCellRect(i, sel, dpi, visible).Contains(x, y))
                     return (PanelPart)((int)PanelPart.FontBase + i);
+            for (int i = 0; i < FontSpacingCount; i++)
+                if (FontPanelSpacingRect(i, sel, dpi, visible).Contains(x, y))
+                    return (PanelPart)((int)PanelPart.SpacingBase + i);
         }
         return PanelPart.None;
     }

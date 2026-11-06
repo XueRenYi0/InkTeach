@@ -244,6 +244,11 @@ $env:INKTEACH_AI_THINKING = "auto"        # auto / disabled / low / none
 > 主路径用经典版面分析，不引入 DocLayout-YOLO / PP-Structure 模型；
 > 照搬它们的“块优先 + 阅读顺序”思想，公式按 UniMERNet 的“独立块”口径处理。
 
+### 识别到文本框优化（2026-11-06）
+> 字体切换 / 行距 / 逐行红蓝 / 结果贴近原选区 / 红字夹黑字的修复，
+> 以及第二版前必须攻克的难关，见 `调研/AI-识别到文本框-优化与难关.md`。
+> 参考 OneNote Ink to Text、Word 字体/行距、Excalidraw text element、ProseMirror marks。
+
 ### 还没做
 
 - [ ] **按块 / 按字保持原大小**（用户 2026-11-06 定）：不再整行统一缩字号，而是

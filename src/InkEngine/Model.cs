@@ -6758,6 +6758,8 @@ internal sealed class SetStrokePropAction : EditAction
     private readonly Prop _prop;
     private readonly Color4[] _oldColor;
     private readonly Color4[] _newColor;      // 每条各自的"新颜色"（荧光笔要转半透明，见下）
+    /// <summary>改色前的逐行墨色（识别到文本框）；手动改色 = 覆盖逐行原色，撤销时还原。</summary>
+    private readonly List<Color4>[] _oldLineColors;
     private readonly float[] _oldWidth;
     private readonly bool[] _oldLock;
     private readonly bool[] _oldGrid;
@@ -6779,10 +6781,13 @@ internal sealed class SetStrokePropAction : EditAction
         _prop = Prop.Color;
         _oldColor = new Color4[_targets.Length];
         _newColor = new Color4[_targets.Length];
+        _oldLineColors = new List<Color4>[_targets.Length];
         for (int i = 0; i < _targets.Length; i++)
         {
             _oldColor[i] = _targets[i].Color;
             _newColor[i] = i < newColors.Length ? newColors[i] : newColors[^1];
+            if (_targets[i].TextBox is { Role: TextBoxRole.Normal } box)
+                _oldLineColors[i] = new List<Color4>(box.LineColors);
         }
     }
 
@@ -6883,6 +6888,10 @@ internal sealed class SetStrokePropAction : EditAction
                     if (s.TextBox is { Role: TextBoxRole.Normal } box)
                     {
                         box.Ink = s.Color;
+                        // 手动改色覆盖逐行原色；撤销时把识别结果的红/蓝行还原。
+                        box.LineColors.Clear();
+                        if (old && _oldLineColors?[i] is { } saved)
+                            box.LineColors.AddRange(saved);
                         box.InvalidateLayout();
                         s.SyncTextBoxBounds();
                         doc.RefreshStrokeGrid(s);
