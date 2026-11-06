@@ -86,6 +86,10 @@ internal static class OcrText
              .Replace("\\ ", " ").Replace("\\,", "").Replace("\\;", "")
              .Replace("{", "").Replace("}", "");
 
+        // 行内短括号批注（答对）/（包含）不是正文；带数学符号的（点用 ∈ ∉）保留。
+        s = Regex.Replace(s, @"[（(][^）)]{1,6}[）)]", m =>
+            Regex.IsMatch(m.Value, @"[$\\∈∉⊂⊄⊆⊇∩∪∥]") ? m.Value : "");
+
         s = Regex.Replace(s, @"\\([a-zA-Z]+)", "$1");
         s = SubDigit.Replace(s, m => Subs[m.Groups[1].Value[0] - '0'].ToString());
         s = SupDigit.Replace(s, m => Sups[m.Groups[1].Value[0] - '0'].ToString());
