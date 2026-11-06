@@ -46,6 +46,22 @@ public static class GlyphInk
         return g;
     }
 
+    /// <summary>
+    /// 取一个字的**矢量轮廓**（SVG path 数据，M/L/Q/C/Z）。
+    ///
+    /// 填充方案（StrokeKind.Glyph）就吃这份数据：交给 D2D 的
+    /// `ID2D1PathGeometry` + `FillGeometry`（ALTERNATE = even-odd），
+    /// 外轮廓和内孔交替，孔自动空出来。
+    /// </summary>
+    public static string GetSvgPath(string fontPath, char ch)
+    {
+        using var tf = SKTypeface.FromFile(fontPath);
+        if (tf == null) return null;
+        using var paint = new SKPaint { Typeface = tf, TextSize = 200f, IsAntialias = false };
+        using var path = paint.GetTextPath(ch.ToString(), 0, 0);
+        return path?.ToSvgPathData();
+    }
+
     private static Glyph Build(string fontPath, char ch)
     {
         const int H = 384;                       // 归一化用的参考字高（越高，缩放后越平滑）

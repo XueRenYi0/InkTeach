@@ -10,6 +10,23 @@ internal sealed partial class App
     /// 开发/自检用：把一段文字用「字库描边」转成墨迹，渲染成 PNG。
     ///   --glyphink &lt;字体文件&gt; &lt;文字&gt; &lt;输出png&gt; [字高]
     /// </summary>
+    /// <summary>自检：打印字形的矢量轮廓（验证「挖孔」是不是分成多条子路径）。</summary>
+    private void GlyphPathDump(string fontPath, string text)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 字形轮廓 ===");
+        foreach (char ch in text)
+        {
+            string svg = GlyphInk.GetSvgPath(fontPath, ch);
+            if (svg == null) { Console.WriteLine($"{ch}: 取不到"); continue; }
+            int contours = 0;
+            foreach (char c in svg) if (c == 'M') contours++;
+            Console.WriteLine($"{ch}: 轮廓 {contours} 条，SVG {svg.Length} 字符");
+            Console.WriteLine("    " + (svg.Length > 160 ? svg.Substring(0, 160) + "…" : svg));
+        }
+        ExitCode = 0;
+    }
+
     private void GlyphInkPng(string fontPath, string text, string outPath, float height)
     {
         Console.WriteLine();

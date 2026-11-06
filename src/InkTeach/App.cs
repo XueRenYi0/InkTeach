@@ -542,6 +542,14 @@ internal sealed partial class App : InkEngine.InkEngine
                         args.Length > 2 ? args[2] : "reports/board.png");
             _quit = true;
         }
+        else if (mode == "--glyphpath")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            GlyphPathDump(args.Length > 1 ? args[1] : @"C:\Windows\Fonts\simkai.ttf",
+                          args.Length > 2 ? args[2] : "函数向量");
+            _quit = true;
+        }
         else if (mode == "--glyphink")
         {
             _autoExitAt = double.MaxValue;
