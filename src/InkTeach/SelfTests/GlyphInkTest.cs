@@ -11,6 +11,26 @@ internal sealed partial class App
     ///   --glyphink &lt;字体文件&gt; &lt;文字&gt; &lt;输出png&gt; [字高]
     /// </summary>
     /// <summary>自检：打印字形的矢量轮廓（验证「挖孔」是不是分成多条子路径）。</summary>
+    /// <summary>自检：把一个字按「轮廓 + even-odd 填充」渲染成 PNG，验证挖孔。</summary>
+    private void GlyphFillPng(string fontPath, char ch, string outPath)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 字形填充 ===");
+        string svg = GlyphInk.GetSvgPath(fontPath, ch);
+        if (svg == null) { Console.WriteLine("取不到轮廓"); ExitCode = 1; return; }
+
+        var bgra = _windows[0].RenderGlyphToBgra(svg, new Color4(0.86f, 0.16f, 0.12f, 1f),
+                                                  out int w, out int h);
+        if (bgra == null) { Console.WriteLine("填充渲染失败"); ExitCode = 1; return; }
+
+        var bytes = ExportFormats.Encode(outPath, bgra, w, h, 1, out string tag);
+        if (bytes == null) { Console.WriteLine("编码失败"); ExitCode = 1; return; }
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
+        File.WriteAllBytes(outPath, bytes);
+        Console.WriteLine($"写出：{outPath}（{w}×{h}，{bytes.Length / 1024.0:F0} KB）");
+        ExitCode = 0;
+    }
+
     private void GlyphPathDump(string fontPath, string text)
     {
         Console.WriteLine();

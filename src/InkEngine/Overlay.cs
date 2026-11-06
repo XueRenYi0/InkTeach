@@ -2061,6 +2061,10 @@ internal sealed partial class OverlayWindow : IDisposable
     /// 位图尺寸 = 它的像素尺寸（画布坐标就是物理像素，1:1）。
     /// 返回 null = 建位图/绘制失败（调用方就当"这次没图"，对象格式照放）。
     /// </summary>
+    /// <summary>字形轮廓填充渲染（开发/自检用）：走 <see cref="GlyphFill"/>。</summary>
+    public byte[] RenderGlyphToBgra(string svg, Color4 color, out int w, out int h)
+        => GlyphFill.Render(_ctx, svg, color, out w, out h);
+
     public byte[] RenderStrokesToBgra(IReadOnlyList<Stroke> strokes, RectF region, int w, int h)
     {
         if (_ctx == null || strokes == null || strokes.Count == 0 || w <= 0 || h <= 0) return null;
