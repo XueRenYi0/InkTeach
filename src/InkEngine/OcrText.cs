@@ -72,6 +72,8 @@ internal static class OcrText
             if (string.IsNullOrWhiteSpace(item)) continue;
             string t = item.Trim();
             if (Regex.IsMatch(t, "^[A-Z]$")) continue;
+            if (Regex.IsMatch(t, @"^[A-Za-z]'?$") || Regex.IsMatch(t, @"^[0-9]{1,2}$") ||
+                Regex.IsMatch(t, @"^[∞%]$") || Regex.IsMatch(t, @"^[∞\s0-9]*[A-Za-z]'?$")) continue;
             if (Regex.IsMatch(t, @"^(frac|sqrt|begin|end|dots|quad|qquad|therefore|vdots|cdots|ldots|left|right)[0-9A-Za-z{}]*$",
                              RegexOptions.IgnoreCase)) continue;
             if (Regex.IsMatch(t, @"^[（(][^）)]{1,10}[）)]$") && !HasMath(t)) continue;

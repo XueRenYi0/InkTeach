@@ -52,11 +52,12 @@ internal static class HandwritingReplace
             // 特别高的笔迹多半是图形里的长线 / 大括号，先不参与切行；
             // 真正的文字行高一般 < 区域高度的 18%。
             float h = b.MaxY - b.MinY;
-            if (h > regionH * 0.18f) continue;
+            if (regionH > 200f && h > regionH * 0.18f) continue;
             candidates.Add(s);
         }
         if (candidates.Count == 0) return lines;
-
+        if (Environment.GetEnvironmentVariable("INKTEACH_BLOCK_DEBUG") == "1")
+            Console.WriteLine($"[detect] region h={regionH:F0} strokes={candidates.Count}");
         int rowCount = Math.Max(1, (int)MathF.Ceiling(regionH) + 1);
         var count = new int[rowCount];
         var minX = new float[rowCount];
@@ -137,12 +138,14 @@ internal static class HandwritingReplace
             }
         }
         merged.Sort((a, b) => a.Y0.CompareTo(b.Y0));
+        if (Environment.GetEnvironmentVariable("INKTEACH_BLOCK_DEBUG") == "1")
+            Console.WriteLine($"[detect] bands={merged.Count}");
 
         foreach (var (y0, y1) in merged)
         {
             float bandY0 = region.MinY + y0;
             float bandY1 = region.MinY + y1;
-            if (bandY1 - bandY0 > regionH * 0.22f) continue;   // 图形 / 大括号
+            if (regionH > 200f && bandY1 - bandY0 > regionH * 0.22f) continue;   // 图形 / 大括号
 
             var line = new TextLine();
             float x0 = float.MaxValue, x1 = float.MinValue;

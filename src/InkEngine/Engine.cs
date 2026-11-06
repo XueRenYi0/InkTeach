@@ -18246,8 +18246,9 @@ public partial class InkEngine
                 var am = SelectionHandles.BarAiMenuRectIn(SelectionBarCanvasRect, ui,
                     FurnitureViewport, HandOcrStatus.Length > 0);
                 int row = SelectionHandles.BarAiMenuRowAt(x, y, am, ui);
-                if (row == 0 || row == 1)
-                    OptimizeHandwritingFromUi(row == 1);
+                if (row == 0) RecognizeToTextBoxFromUi();
+                else if (row == 1) OptimizeHandwritingFromUi(false);
+                else if (row == 2) OptimizeHandwritingFromUi(true);
                 return true;
             }
             else

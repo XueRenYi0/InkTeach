@@ -39,6 +39,8 @@ internal enum TextBoxRole
 internal sealed class TextBoxData
 {
     public TextBoxRole Role = TextBoxRole.Normal;
+    /// <summary>纸面背景：识别结果放到文本框时打开，避免叠在原板书上看不清。</summary>
+    public bool Paper;
     public string Title = "";
     public string Meta = "";
     public string Text = "";

@@ -16,12 +16,15 @@ namespace InkEngine;
 /// </summary>
 public partial class InkEngine
 {
+    private enum HandOcrMode { Handwriting, TextBox }
+
     private sealed class HandOcrDone
     {
         public List<Stroke> Selected;
         public RectF Region;
         public OcrClient.OcrResult Result;
         public bool IncludeFormulas;
+        public HandOcrMode Mode;
     }
 
     private bool _handOcrBusy;
@@ -40,9 +43,15 @@ public partial class InkEngine
         InvalidateUi();
     }
 
-    /// <summary>AI 菜单那一项点下去：开始识别，立即返回。</summary>
-    /// <param name="includeFormulas">false = 公式行保留原笔迹（默认，安全）；true = 连公式一起换。</param>
+    /// <summary>AI 菜单「手写优化」：开始识别，立即返回。</summary>
     internal void OptimizeHandwritingFromUi(bool includeFormulas = false)
+        => StartHandOcr(HandOcrMode.Handwriting, includeFormulas);
+
+    /// <summary>AI 菜单「识别到文本框」：识别后放进普通文本框（公式用 $...$ 渲染）。</summary>
+    internal void RecognizeToTextBoxFromUi()
+        => StartHandOcr(HandOcrMode.TextBox, true);
+
+    private void StartHandOcr(HandOcrMode mode, bool includeFormulas)
     {
         if (_handOcrBusy)
         {
@@ -72,10 +81,23 @@ public partial class InkEngine
             if (b.IsEmpty) continue;
             if (b.MaxX - b.MinX > 350f || b.MaxY - b.MinY > 180f) graphicLike++;
         }
-        if (graphicLike > 3)
+        if (mode != HandOcrMode.TextBox && graphicLike > 3)
         {
             SetHandOcrStatus($"选区里图形较多（{graphicLike} 条长线），请只框选文字");
             return;
+        }
+
+        // 「识别到文本框」只需要文字：把图形长线从 OCR 图里剔掉（公式分式线一般 <350）。
+        if (mode == HandOcrMode.TextBox)
+        {
+            var textOnly = new List<Stroke>();
+            foreach (var s in selected)
+            {
+                var b = s.WorldInkBounds;
+                if (b.IsEmpty) continue;
+                if (b.MaxX - b.MinX <= 360f && b.MaxY - b.MinY <= 190f) textOnly.Add(s);
+            }
+            if (textOnly.Count >= 3) selected = textOnly;
         }
 
         var cfg = OcrClient.LoadConfig();
@@ -107,7 +129,9 @@ public partial class InkEngine
         }
 
         _handOcrBusy = true;
-        SetHandOcrStatus(includeFormulas ? "识别中…（含公式）" : "识别中…（约 2–5 秒）");
+        SetHandOcrStatus(mode == HandOcrMode.TextBox
+            ? "识别中…（文本框）"
+            : includeFormulas ? "识别中…（含公式）" : "识别中…（约 2–5 秒）");
 
         _handOcrCts?.Cancel();
         _handOcrCts = new CancellationTokenSource();
@@ -116,11 +140,14 @@ public partial class InkEngine
 
         Task.Run(async () =>
         {
-            var result = await OcrClient.RecognizeAsync(png, cfg, OcrClient.BoardPrompt, ct)
+            var result = await OcrClient.RecognizeAsync(png, cfg,
+                                        mode == HandOcrMode.TextBox
+                                            ? OcrClient.TextBoxPrompt
+                                            : OcrClient.BoardPrompt, ct)
                                         .ConfigureAwait(false);
             if (gen != Volatile.Read(ref _handOcrGeneration)) return;
             var done = new HandOcrDone { Selected = selected, Region = region, Result = result,
-                                          IncludeFormulas = includeFormulas };
+                                          IncludeFormulas = includeFormulas, Mode = mode };
             Interlocked.Exchange(ref _handOcrDone, done);
         });
     }
@@ -163,6 +190,26 @@ public partial class InkEngine
                 SetHandOcrStatus("选区已变化，已取消");
                 return;
             }
+
+        if (done.Mode == HandOcrMode.TextBox)
+        {
+            string text = string.Join("\n", done.Result.Lines);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                SetHandOcrStatus("识别结果为空");
+                return;
+            }
+            var box = CreateRecognizedTextBox(text);
+            if (box == null)
+            {
+                SetHandOcrStatus("创建文本框失败");
+                return;
+            }
+            Doc.SelectOnly(new[] { box });
+            Console.WriteLine($"[识别到文本框] {done.Result.Lines.Length} 行，{done.Result.Seconds:F1}s");
+            SetHandOcrStatus($"已识别 {done.Result.Lines.Length} 行 → 文本框");
+            return;
+        }
 
         // 先做一次切行对齐检查：OCR 行数和几何行数差太多，说明这一页是
         // 双栏 / 公式碎片 / 图形混排，硬替换会把整行搬到错误位置。
@@ -211,6 +258,17 @@ public partial class InkEngine
         }
         else
             SetHandOcrStatus($"已优化 {lines} 行（Ctrl+Z 可撤销）");
+    }
+
+    /// <summary>把识别结果变成一个普通文本框；纸面背景打开，避免压在原板书上看不清。</summary>
+    private Stroke CreateRecognizedTextBox(string text)
+    {
+        var s = CreatePlainTextBox(text);
+        if (s?.TextBox == null) return null;
+        s.TextBox.Paper = true;
+        s.Color = new Color4(0.10f, 0.10f, 0.12f, 1f);
+        s.TextBox.Ink = s.Color;
+        return s;
     }
 
     /// <summary>把选中笔迹渲染成白底 PNG（OCR 接口只吃图片）。</summary>

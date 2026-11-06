@@ -178,7 +178,8 @@ internal static class InkSerializer
     /// v26 及以前没有这一位：普通文本框按自动宽迁移（老版本没有手动改宽这回事），
     /// AI 题卡按固定宽；读端必须卡在 `version >= 27`。
     /// </summary>
-    public const int FormatVersion = 27;
+    /// v28（2026-11-06）：文本框末尾追加一位 **Paper**（识别到文本框的纸面背景）。</summary>
+    public const int FormatVersion = 28;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -370,6 +371,8 @@ internal static class InkSerializer
             }
             // v27：是否仍处于"自动宽"（没手动拖过左右竖线/四角）。
             w.Write((byte)(c.AutoWidth ? 1 : 0));
+            // v28：识别到文本框的纸面背景。
+            w.Write((byte)(c.Paper ? 1 : 0));
         }
     }
 
@@ -646,6 +649,7 @@ internal static class InkSerializer
             // 文本框没有"手动改宽"这回事，用户双击编辑时本来就期望它跟着字长。
             if (version >= 27) c.AutoWidth = r.ReadByte() != 0;
             else if (c.Role == TextBoxRole.Normal) c.AutoWidth = true;
+            if (version >= 28) c.Paper = r.ReadByte() != 0;
             s.TextBox = c;
             c.Ink = s.Color;
             c.InvalidateLayout();

@@ -2977,6 +2977,7 @@ internal static class SelectionHandles
 
     public const float BarAiMenuWidthLogical = 236f;
     public const float BarAiMenuRowHeightLogical = 38f;
+    public const int BarAiMenuRows = 3;
     public const float BarAiMenuStatusHeightLogical = 26f;
     public const float BarAiMenuPadLogical = 6f;
 
@@ -2984,7 +2985,7 @@ internal static class SelectionHandles
     public static RectF BarAiMenuRectIn(in RectF bar, float dpi, in RectF visible, bool hasStatus)
     {
         float w = BarAiMenuWidthLogical * dpi;
-        float h = (BarAiMenuPadLogical * 2 + BarAiMenuRowHeightLogical * 2
+        float h = (BarAiMenuPadLogical * 2 + BarAiMenuRowHeightLogical * BarAiMenuRows
                    + (hasStatus ? BarAiMenuStatusHeightLogical : 0f)) * dpi;
         float x = bar.MaxX - w;
         float y = bar.MaxY + 8f * dpi;
@@ -3012,7 +3013,7 @@ internal static class SelectionHandles
     public static RectF BarAiMenuStatusRectIn(in RectF menu, float dpi)
     {
         float pad = BarAiMenuPadLogical * dpi;
-        float y = menu.MinY + pad + BarAiMenuRowHeightLogical * 2f * dpi;
+        float y = menu.MinY + pad + BarAiMenuRowHeightLogical * BarAiMenuRows * dpi;
         return new RectF { MinX = menu.MinX + pad + 4f * dpi, MinY = y,
                            MaxX = menu.MaxX - pad - 4f * dpi,
                            MaxY = y + BarAiMenuStatusHeightLogical * dpi };
@@ -3022,7 +3023,7 @@ internal static class SelectionHandles
     public static int BarAiMenuRowAt(float x, float y, in RectF menu, float dpi)
     {
         if (!menu.Contains(x, y)) return -1;
-        for (int i = 0; i < 2; i++)
+        for (int i = 0; i < BarAiMenuRows; i++)
             if (BarAiMenuRowRectIn(menu, i, dpi).Contains(x, y)) return i;
         return -2;   // 点在菜单里但不在选项上（状态行 / 边距）
     }

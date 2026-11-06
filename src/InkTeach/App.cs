@@ -554,6 +554,29 @@ internal sealed partial class App : InkEngine.InkEngine
                           args.Length > 4 && float.TryParse(args[4], out float gs2) ? gs2 : 120f);
             _quit = true;
         }
+        else if (mode == "--handtextbox")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(200);
+            HandTextBoxPng(args.Length > 1 ? args[1] : "",
+                           args.Length > 2 ? args[2] : "reports/handtextbox.png",
+                           args.Length > 3 && float.TryParse(args[3], out float htl) ? htl : 480f);
+            _quit = true;
+        }
+        else if (mode == "--handbbox")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(200);
+            HandBboxPng(args.Length > 1 ? args[1] : "",
+                        args.Length > 2 ? args[2] : "",
+                        args.Length > 3 ? args[3] : "reports/handbbox.png",
+                        !args.Contains("--safe"));
+            _quit = true;
+        }
         else if (mode == "--handblocks")
         {
             _autoExitAt = double.MaxValue;

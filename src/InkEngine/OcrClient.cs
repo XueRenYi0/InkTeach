@@ -307,4 +307,9 @@ internal static class OcrClient
         "- 复杂公式用 LaTeX，行内包在 $...$ 里；\n" +
         "- 不描述图形、箭头、圈注，不解释，不加标题，不加编号；\n" +
         "- 认不出的字写 ？，不要猜测。";
+
+    /// <summary>识别到文本框：只保留正文/公式，明确不要图形旁的字母数字标注。</summary>
+    internal const string TextBoxPrompt =
+        BoardPrompt + "\n" +
+        "- 不转录图形、坐标轴、立方体顶点旁的字母 / 数字标注（如 A/B/C/D、0/1/x/y、B′ 等），只转录正文段落和公式。";
 }

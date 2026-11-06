@@ -2490,9 +2490,10 @@ internal sealed partial class OverlayWindow : IDisposable
 
         // 纸面 + 细边。普通文本框默认**透明**，直接融进白板/PPT；
         // AI 题卡默认浅色纸面，保证黑题红解析在任何背景上都读得清。
-        if (card.Role == TextBoxRole.AiQuestion)
+        if (card.Role == TextBoxRole.AiQuestion || card.Paper)
         {
-            _ctx.FillRoundedRectangle(rr, Brush(AiPaper));
+            _ctx.FillRoundedRectangle(rr, Brush(card.Paper && card.Role != TextBoxRole.AiQuestion
+                ? new Color4(1f, 1f, 1f, 0.98f) : AiPaper));
             _ctx.DrawRoundedRectangle(rr, Brush(AiBorder), 1f);
         }
 
@@ -5835,7 +5836,7 @@ internal sealed partial class OverlayWindow : IDisposable
         DrawPanelCard(app, m, 10f * dpi, dpi);
         var theme = app.FloatingTheme;
 
-        string[] labels = { "✨ 手写优化（保留公式）", "✨ 手写优化（含公式）" };
+        string[] labels = { "📝 识别到文本框", "✨ 手写优化（保留公式）", "✨ 手写优化（含公式）" };
         for (int i = 0; i < labels.Length; i++)
         {
             var r = SelectionHandles.BarAiMenuRowRectIn(m, i, dpi);
