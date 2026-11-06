@@ -30,7 +30,14 @@ internal sealed partial class App
         InsertTextBoxFromUi();
         SetTextBoxEditTextForTest("红字蓝字\n第二行变蓝");
         SetTextBoxEditSelectionForTest(5, 10);
+        BlurTextBoxEditForTest();
         SetTextColorFromUi(blue);
+        bool editStayed = TextBoxEditing;
+        SettleFrames(300);
+        string editingPath = Path.ChangeExtension(outPath, null) + "-editing.bmp";
+        bool shotEditing = ScreenProbe.SaveBmp(editingPath, (int)_virtualX, (int)_virtualY,
+                                               (int)_virtualW, (int)_virtualH);
+        Console.WriteLine($"编辑中截图：{editingPath}（{(shotEditing ? "OK" : "FAIL")}）");
         var box1 = Doc.Selected.Count == 1 ? Doc.Selected[0].TextBox : null;
         bool selectedOk = box1 != null
             && box1.ColorSpans.Any(s => s.Start == 5 && s.Length == 5
@@ -82,8 +89,8 @@ internal sealed partial class App
                                         (int)_virtualW, (int)_virtualH);
 
         Console.WriteLine($"选中改色={selectedOk}，提交={commitOk}，撤销={undoOk}，" +
-                          $"整框改色={wholeOk}，存盘={saved}");
+                          $"失焦不退出={editStayed}，整框改色={wholeOk}，存盘={saved}");
         Console.WriteLine($"写出：{outPath}");
-        ExitCode = selectedOk && commitOk && undoOk && wholeOk && saved && shot ? 0 : 1;
+        ExitCode = selectedOk && commitOk && undoOk && editStayed && wholeOk && saved && shot ? 0 : 1;
     }
 }

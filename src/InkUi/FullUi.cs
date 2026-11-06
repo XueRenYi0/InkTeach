@@ -288,6 +288,7 @@ public sealed partial class FullUi : IOverlayUi
     private bool _lastLibraryOpen;
     /// <summary>上一次看到的工具。用它判断"工具真的换了"，而不是"带子对不对"。</summary>
     private Tool _lastTool = Tool.Pen;
+    private bool _lastTextBoxEditing;
 
     /// <summary>
     /// 上一次看到的"在放映吗"。用它认**进放映的那一刻**（边沿），
@@ -493,8 +494,7 @@ public sealed partial class FullUi : IOverlayUi
         _ai.Bind(host);
         _tipFade.Bind(host);
         _moreH.Jump(MoreTargetH());
-        _lastTool = host.State.Tool;
-        // **手动启动即展开**（用户 2026-09-27 定："第一次打开以后，默认就展开"）。
+        _lastTool = host.State.Tool;        // **手动启动即展开**（用户 2026-09-27 定："第一次打开以后，默认就展开"）。
         //
         // 开机自启是另一回事：那时老师和学生还没开始用，工具条展开会挡桌面，
         // 所以后台待命态收成小球 + 穿透。判据同时看 StartupMode 和当前穿透，
@@ -1380,7 +1380,7 @@ public sealed partial class FullUi : IOverlayUi
     private bool BandHasSwatches => _bandCell is 3 or 4 or 7;
 
     /// <summary>文本那一格：色片 = 下一次输入的文字颜色；右边是字号下拉。</summary>
-    private bool BandHasTextSize => _bandCell == 7;
+    private bool BandHasTextSize => _bandCell == 7 && _host?.State.TextBoxEditing != true;
     // 文本带在 4~5 格的自定义主条里会很窄：字号按钮收小、色片只留 3 个，
     // 否则字号按钮和色片会叠在一起。
     private bool TextSizeTight => VisibleCount() <= 5;
@@ -5866,6 +5866,25 @@ public sealed partial class FullUi : IOverlayUi
             if (_penPickerOpen
                 && state.Tool != (_pickerHighlighter ? Tool.Highlighter : Tool.Pen))
                 ClosePenColorPicker();
+        }
+
+        // ---- 编辑文本框：把底部文字色带张开（选中文字后点色片改色）----
+        // 编辑时操作条是隐藏的，没有这一条就没有改色入口；色带只留色片，不显示字号。
+        if (state.TextBoxEditing != _lastTextBoxEditing)
+        {
+            _lastTextBoxEditing = state.TextBoxEditing;
+            _railHover = false;
+            _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
+            if (state.TextBoxEditing)
+            {
+                _bandCell = 7;
+                _rail.To(1f, Tokens.RailMs);
+            }
+            else
+            {
+                _rail.To(0f, Tokens.RailMs);
+            }
+            Invalidate();
         }
 
         // ---- 收藏弹窗开合：**不切换、不展开色带** ----

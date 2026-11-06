@@ -69,6 +69,8 @@ OneNote/Excalidraw 只存“对象颜色”，不存“同一框内逐行颜色�
 - **有选中**：只改 RichEdit 里选中的字（`EM_SETCHARFORMAT / SCF_SELECTION`），
   同时记成 `TextBoxData.ColorSpans`；画布排版按 span 切成彩色 run，公式按所在段色烘。
 - **没选中**：改整框主色，清空逐行/逐字色（`LineColors` + `ColorSpans`）。
+- **入口**：编辑时操作条是隐藏的，底部文字色带会自动展开（4 个色片 +「完成」）；
+  点色片就是改选中文字，没选中就改整框。编辑窗失焦不再直接结束编辑，点画布外才提交。
 - 文字色带、自定义取色板、选中条颜色按钮三条入口都走同一判定
   （`SetTextBoxEditColorFromUi`）。
 - 退出编辑时从 RichEdit 逐字抓回颜色，重建 span；文字增删后颜色仍跟着字走。

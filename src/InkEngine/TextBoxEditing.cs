@@ -1043,6 +1043,13 @@ public partial class InkEngine
         }
     }
 
+    /// <summary>自检：模拟“点了一下底部色带”导致编辑窗失焦（不应结束编辑）。</summary>
+    internal void BlurTextBoxEditForTest()
+    {
+        if (_textBoxEditing && _windows.Count > 0)
+            Native.SetFocus(_windows[0].Hwnd);
+    }
+
     /// <summary>自检：在编辑窗里选中一段（start/end 是标准化文本下标）。</summary>
     internal void SetTextBoxEditSelectionForTest(int start, int end)
     {
@@ -1376,7 +1383,8 @@ public partial class InkEngine
                 }
                 break;
             case Native.WM_KILLFOCUS:
-                if (_textBoxEditing) EndTextBoxEditFromUi(true);
+                // 点底部文字色带 / 面板只丢焦点，不结束编辑；点画布外面由 Engine 判断提交。
+                // （以前这里直接 End，导致“编辑中选一段改色”永远点不到色带。）
                 return IntPtr.Zero;
             case Native.WM_GETDLGCODE:
                 return new IntPtr(Native.DLGC_WANTALLKEYS);
@@ -1685,6 +1693,7 @@ public partial class InkEngine
             Doc.Version++;
             _dirty = true;
             NotifyUiStateChanged();
+            FocusTextBoxEditWindow();
             return;
         }
 
@@ -1704,6 +1713,7 @@ public partial class InkEngine
         UpdateTextBoxEditColors(s);
         ApplyRichEditColorAll(color);
         NotifyUiStateChanged();
+        FocusTextBoxEditWindow();
     }
 
     /// <summary>

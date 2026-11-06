@@ -27,28 +27,32 @@ internal static class HandwritingComposer
     }
 
     /// <summary>返回这一行要加进文档的对象；没有可画内容时返回 null。</summary>
-    public static List<Stroke> BuildLine(string raw, RectF box, Color4 color)
+    public static List<Stroke> BuildLine(string raw, RectF box, Color4 color,
+                                         float sizeOverride = 0f, bool allowShrink = true)
     {
         if (box.IsEmpty || string.IsNullOrWhiteSpace(raw)) return null;
         var runs = OcrText.SplitRuns(raw);
         if (runs.Count == 0 || !runs.Exists(r => r.IsMath))
-            return Fallback(raw, box, color);
+            return Fallback(raw, box, color, sizeOverride, allowShrink);
 
         float boxW = box.MaxX - box.MinX, boxH = box.MaxY - box.MinY;
-        float size = MathF.Max(4f, boxH * GlyphText.SizePerLineHeight);
+        float size = sizeOverride > 0f
+            ? sizeOverride
+            : MathF.Max(4f, boxH * GlyphText.SizePerLineHeight);
         Layout layout = null;
 
         for (int pass = 0; pass < 3; pass++)
         {
             layout = LayoutRuns(runs, size, color);
-            if (layout == null) return Fallback(raw, box, color);
+            if (layout == null) return Fallback(raw, box, color, sizeOverride, allowShrink);
             if (layout.Width <= boxW * 1.02f && layout.Height <= boxH * 1.08f) break;
+            if (!allowShrink) break;
             float k = MathF.Min(boxW * 1.02f / MathF.Max(1f, layout.Width),
                                 boxH * 1.08f / MathF.Max(1f, layout.Height));
             size *= MathF.Max(0.05f, k * 0.99f);
             if (size < 3f) break;
         }
-        if (layout == null) return Fallback(raw, box, color);
+        if (layout == null) return Fallback(raw, box, color, sizeOverride, allowShrink);
 
         float dx = box.MinX - layout.MinX;
         float dy = box.MinY + (boxH - layout.Height) * 0.5f - layout.MinY;
@@ -96,9 +100,11 @@ internal static class HandwritingComposer
         return result.Count > 0 ? result : null;
     }
 
-    private static List<Stroke> Fallback(string raw, RectF box, Color4 color)
+    private static List<Stroke> Fallback(string raw, RectF box, Color4 color,
+                                         float sizeOverride = 0f, bool allowShrink = true)
     {
-        var g = GlyphText.BuildLine(GlyphText.CjkFontPath, OcrText.Normalize(raw), box, color);
+        var g = GlyphText.BuildLine(GlyphText.CjkFontPath, OcrText.Normalize(raw), box, color,
+                                    sizeOverride, allowShrink);
         return g == null ? null : new List<Stroke> { g };
     }
 
@@ -161,9 +167,9 @@ internal static class HandwritingComposer
                                                    (byte[])r.Image.Bgra.Clone());
             if (img == null) continue;
 
-            // CSharpMath 的自然字号偏高；行内公式按正文 x-height 缩到 0.52，
-            // 分式 / 根式这种多层的给到 0.8，避免压到上下行。
-            float targetH = size * (text.Contains("\\frac") || text.Contains("\\sqrt") ? 0.8f : 0.52f);
+            // CSharpMath 的自然字号偏高；行内公式按正文 x-height 缩，
+            // 分式 / 根式这种多层的再给大一点。0.52 太小会和中文脱节（用户说的“不和谐”）。
+            float targetH = size * (text.Contains("\\frac") || text.Contains("\\sqrt") ? 1.0f : 0.68f);
             float k = targetH / MathF.Max(1f, r.LogicalHeight);
             float w = r.LogicalWidth * k;
             float asc = r.LogicalAscent * k;

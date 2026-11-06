@@ -182,6 +182,9 @@ internal static class HandwritingReplace
             line.Color = Dominant(redW, blueW, otherW,
                                   rr, rg, rb, br, bg, bb, or_, og, ob,
                                   line.Strokes[0].Color);
+            // 行内短横线（手写的下划线/强调线）跟着文字一起换掉；否则旧线会从新字中间穿过去，
+            // 就是用户看到的“多余的三线”。只收“扁、短、横跨本行”的线，长分隔线/图形不碰。
+            AddUnderlineStrokes(line, candidates);
             lines.Add(line);
         }
 
@@ -199,6 +202,34 @@ internal static class HandwritingReplace
         if (bw >= rw && bw >= ow)
             return new Color4(br / bw, bg / bw, bb / bw, 1f);
         return new Color4(or_ / ow, og / ow, ob / ow, 1f);
+    }
+
+    /// <summary>
+    /// 把行内/行下沿的短横线收进这一行，替换时一起删掉。
+    /// 判据刻意保守：扁（高度 ≤ 行高 18%）、横向跨度足够、和文字区横向重叠 ≥ 50%、
+    /// 纵向在本行带下方半个行高以内；不碰长分隔线和图形。
+    /// </summary>
+    internal static void AddUnderlineStrokes(TextLine line, List<Stroke> candidates)
+    {
+        float lineH = line.Box.MaxY - line.Box.MinY;
+        float lineW = line.Box.MaxX - line.Box.MinX;
+        if (lineH <= 2f || lineW <= 2f) return;
+        var already = new HashSet<Stroke>(line.Strokes);
+        foreach (var s in candidates)
+        {
+            if (already.Contains(s)) continue;
+            var b = s.WorldInkBounds;
+            if (b.IsEmpty) continue;
+            float w = b.MaxX - b.MinX, h = b.MaxY - b.MinY;
+            if (h > MathF.Max(5f, lineH * 0.18f)) continue;
+            if (w < MathF.Max(16f, h * 2.5f)) continue;
+            if (w > MathF.Max(80f, lineW * 0.98f)) continue;
+            float overlap = MathF.Min(b.MaxX, line.Box.MaxX) - MathF.Max(b.MinX, line.Box.MinX);
+            if (overlap < w * 0.5f) continue;
+            if (b.MinY < line.Box.MinY - lineH * 0.25f) continue;
+            if (b.MaxY > line.Box.MaxY + lineH * 0.55f) continue;
+            line.Strokes.Add(s);
+        }
     }
 
     /// <summary>
@@ -223,20 +254,74 @@ internal static class HandwritingReplace
             return null;
 
         int n = Math.Min(lines.Count, texts.Count);
+        var use = new List<int>();
         for (int i = 0; i < n; i++)
         {
             // 公式默认保留原笔迹：OCR 对下标 / 集合符号很敏感（实测 D₁C₁→DD₁、
             // ⊄→∉），自动替换会把数学意思改掉。只有用户明确选“含公式”才替换。
             if (!includeFormulas && OcrText.HasMath(texts[i])) { skipped++; continue; }
-
-            string raw = texts[i]?.Trim();
-            if (string.IsNullOrEmpty(raw)) continue;
-            var parts = HandwritingComposer.BuildLine(raw, lines[i].Box, lines[i].Color);
-            if (parts == null || parts.Count == 0) continue;
-            glyphs.AddRange(parts);
-            replacedText.AddRange(lines[i].Strokes);
-            replacedLines++;
+            if (string.IsNullOrWhiteSpace(texts[i])) continue;
+            use.Add(i);
         }
+        if (use.Count == 0) return null;
+
+        // **全段共用一个字号**：以前每行各自缩到自己的行框，长行小、短行大，
+        // 一页里大小忽大忽小（用户说的“不和谐”）。先按行高中位数定一个基准，
+        // 再按“最挤的那一行”整体缩一次，所有行始终同字号。
+        var heights = new List<float>();
+        foreach (int i in use)
+            heights.Add(lines[i].Box.MaxY - lines[i].Box.MinY);
+        heights.Sort();
+        float sharedSize = MathF.Max(4f,
+            heights[heights.Count / 2] * GlyphText.SizePerLineHeight);
+
+        List<Stroke> bestGlyphs = null, bestReplaced = null;
+        int bestLines = 0;
+        for (int pass = 0; pass < 3; pass++)
+        {
+            var passGlyphs = new List<Stroke>();
+            var passReplaced = new List<Stroke>();
+            int passLines = 0;
+            float minRatio = 1f;
+
+            foreach (int i in use)
+            {
+                string raw = texts[i]?.Trim();
+                if (string.IsNullOrEmpty(raw)) continue;
+                var parts = HandwritingComposer.BuildLine(raw, lines[i].Box, lines[i].Color,
+                                                          sharedSize, allowShrink: false);
+                if (parts == null || parts.Count == 0) continue;
+
+                float x0 = float.MaxValue, y0 = float.MaxValue;
+                float x1 = float.MinValue, y1 = float.MinValue;
+                foreach (var part in parts)
+                {
+                    var pb = part.WorldInkBounds;
+                    if (pb.IsEmpty) continue;
+                    x0 = MathF.Min(x0, pb.MinX); y0 = MathF.Min(y0, pb.MinY);
+                    x1 = MathF.Max(x1, pb.MaxX); y1 = MathF.Max(y1, pb.MaxY);
+                }
+                float boxW = MathF.Max(1f, lines[i].Box.MaxX - lines[i].Box.MinX);
+                float boxH = MathF.Max(1f, lines[i].Box.MaxY - lines[i].Box.MinY);
+                if (x1 > x0)
+                    minRatio = MathF.Min(minRatio, MathF.Min(boxW / (x1 - x0), boxH / (y1 - y0)));
+
+                passGlyphs.AddRange(parts);
+                passReplaced.AddRange(lines[i].Strokes);
+                passLines++;
+            }
+
+            if (passGlyphs.Count == 0) return null;
+            bestGlyphs = passGlyphs;
+            bestReplaced = passReplaced;
+            bestLines = passLines;
+            if (minRatio >= 0.98f || pass == 2) break;
+            sharedSize *= Math.Clamp(minRatio * 0.985f, 0.82f, 1f);
+        }
+
+        replacedText = bestReplaced ?? new List<Stroke>();
+        glyphs = bestGlyphs ?? new List<Stroke>();
+        replacedLines = bestLines;
         if (glyphs.Count == 0) return null;
 
         var removed = new HashSet<Stroke>(replacedText);
@@ -273,6 +358,21 @@ internal static class HandwritingReplace
         skipped = 0;
         if (doc == null || selected == null || texts == null || texts.Count == 0) return 0;
         var lines = DetectLines(selected, region, texts.Count);
+        return ApplyLines(doc, selected, lines, texts, fontPath, includeFormulas,
+                          out glyphs, out skipped);
+    }
+
+    /// <summary>
+    /// 用调用方给的“行框 + 该行要删的笔迹”执行替换。
+    /// 几何切行（<see cref="DetectLines"/>）和 OCR bbox 两条路共用这一段。
+    /// </summary>
+    internal static int ApplyLines(InkDocument doc, IReadOnlyList<Stroke> selected,
+                                   List<TextLine> lines, IReadOnlyList<string> texts,
+                                   string fontPath, bool includeFormulas,
+                                   out List<Stroke> glyphs, out int skipped)
+    {
+        glyphs = new List<Stroke>();
+        skipped = 0;
         var result = BuildReplacement(selected, lines, texts, fontPath, includeFormulas,
                                       out var replacedText, out glyphs, out skipped, out int replacedLines);
         if (result == null || replacedText.Count == 0) return 0;

@@ -145,9 +145,9 @@ public partial class InkEngine
         {
             string prompt = mode == HandOcrMode.TextBox
                 ? OcrClient.BoxPrompt
-                : OcrClient.BoardPrompt;
+                : includeFormulas ? OcrClient.BoxPrompt : OcrClient.BoardPrompt;
             var result = await OcrClient.RecognizeAsync(png, cfg, prompt, ct,
-                                        withBoxes: mode == HandOcrMode.TextBox)
+                                        withBoxes: mode == HandOcrMode.TextBox || includeFormulas)
                                         .ConfigureAwait(false);
             if (gen != Volatile.Read(ref _handOcrGeneration)) return;
             var done = new HandOcrDone { Selected = selected, Region = region, Result = result,
@@ -219,21 +219,41 @@ public partial class InkEngine
             return;
         }
 
+        string font = GlyphText.BundledFontPath;
+        if (string.IsNullOrEmpty(font))
+        {
+            SetHandOcrStatus("缺少手写字体文件");
+            return;
+        }
+
+        int boxed = 0;
+        foreach (var item in done.Result.Items) if (item.HasBox) boxed++;
+
         // 先做一次切行对齐检查：OCR 行数和几何行数差太多，说明这一页是
         // 双栏 / 公式碎片 / 图形混排，硬替换会把整行搬到错误位置。
         var detected = HandwritingReplace.DetectLines(done.Selected, done.Region,
                                                       done.Result.Lines.Length);
         if (detected.Count != done.Result.Lines.Length)
         {
+            // 几何对不上时再走 OCR 行框；单栏能对齐的板书仍用几何切行，
+            // 它比 bbox 更贴原笔迹（bbox 容易漏掉框边的批注/下划线）。
+            // bbox 路径目前仍是实验：b2 实测会留下大量框外残笔，默认不开。
+            if (Environment.GetEnvironmentVariable("INKTEACH_HAND_BBOX") == "1"
+                && done.Result.Items.Count == done.Result.Lines.Length
+                && boxed >= done.Result.Lines.Length * 0.7f)
+            {
+                int bboxLines = ApplyBboxHandwriting(done, font, out var bboxGlyphs);
+                if (bboxLines > 0)
+                {
+                    Doc.Selected.Clear();
+                    Doc.Selected.AddRange(bboxGlyphs);
+                    Console.WriteLine($"[手写优化/bbox] {bboxLines} 行，{done.Result.Seconds:F1}s");
+                    SetHandOcrStatus($"已优化 {bboxLines} 行（按识别框）");
+                    return;
+                }
+            }
             Console.WriteLine($"[手写优化] 拒绝对齐：几何 {detected.Count} 行 / OCR {done.Result.Lines.Length} 行");
             SetHandOcrStatus($"排版复杂（检测 {detected.Count} / 识别 {done.Result.Lines.Length} 行），请只框选文字");
-            return;
-        }
-
-        string font = GlyphText.BundledFontPath;
-        if (string.IsNullOrEmpty(font))
-        {
-            SetHandOcrStatus("缺少手写字体文件");
             return;
         }
 
@@ -542,6 +562,68 @@ public partial class InkEngine
         if (rw >= bw && rw >= ow && rw > 0) return new Color4(rr / rw, rg / rw, rb / rw, 1f);
         if (bw >= rw && bw >= ow && bw > 0) return new Color4(br / bw, bg / bw, bb / bw, 1f);
         return new Color4(or_ / ow, og / ow, ob / ow, 1f);
+    }
+
+    /// <summary>
+    /// 按 OCR 行框就地替换：复杂板书（双栏、行数对不上）不再整块拒绝。
+    /// 只删“落在该行框里”的笔迹 + 行内短下划线，图形和框外内容保留。
+    /// </summary>
+    private int ApplyBboxHandwriting(HandOcrDone done, string font, out List<Stroke> glyphs)
+    {
+        glyphs = new List<Stroke>();
+        var items = done.Result.Items;
+        if (items == null || items.Count == 0) return 0;
+
+        var pngBox = done.Region.Inflate(12f);
+        var lines = new List<HandwritingReplace.TextLine>();
+        var texts = new List<string>();
+        int skipped = 0;
+
+        foreach (var item in items)
+        {
+            if (!item.HasBox) continue;
+            string raw = item.Text?.Trim();
+            if (string.IsNullOrEmpty(raw)) continue;
+            if (!done.IncludeFormulas && OcrText.HasMath(raw)) { skipped++; continue; }
+
+            var box = ItemBox(item, pngBox);
+            if (box.MaxX - box.MinX < 4f || box.MaxY - box.MinY < 4f) continue;
+
+            var line = new HandwritingReplace.TextLine
+            {
+                Box = box,
+                Color = DominantInkColor(done.Selected, box),
+            };
+
+            foreach (var s in done.Selected)
+            {
+                var b = s.WorldInkBounds;
+                if (b.IsEmpty) continue;
+                float iw = MathF.Min(b.MaxX, box.MaxX) - MathF.Max(b.MinX, box.MinX);
+                float ih = MathF.Min(b.MaxY, box.MaxY) - MathF.Max(b.MinY, box.MinY);
+                float area = MathF.Max(1f, (b.MaxX - b.MinX) * (b.MaxY - b.MinY));
+                bool overlap = iw > 0 && ih > 0 && iw * ih / area > 0.25f;
+                float cx = (b.MinX + b.MaxX) * 0.5f, cy = (b.MinY + b.MaxY) * 0.5f;
+                bool center = cx >= box.MinX && cx <= box.MaxX
+                              && cy >= box.MinY && cy <= box.MaxY
+                              && (b.MaxX - b.MinX) <= (box.MaxX - box.MinX) * 1.8f
+                              && (b.MaxY - b.MinY) <= (box.MaxY - box.MinY) * 1.8f;
+                if (overlap || center) line.Strokes.Add(s);
+            }
+
+            HandwritingReplace.AddUnderlineStrokes(line, done.Selected);
+            if (line.Strokes.Count == 0) continue;
+            lines.Add(line);
+            texts.Add(raw);
+        }
+
+        if (lines.Count == 0) return 0;
+        int n = HandwritingReplace.ApplyLines(Doc, done.Selected, lines, texts, font,
+                                               done.IncludeFormulas, out glyphs, out int skipped2);
+        skipped += skipped2;
+        if (SelfCheckMode)
+            Console.WriteLine($"[手写优化/bbox] 行框 {lines.Count}，跳过公式 {skipped}，替换 {n}");
+        return n;
     }
 
     private static float Median(List<float> values)

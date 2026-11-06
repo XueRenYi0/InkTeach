@@ -211,14 +211,15 @@ public static class GlyphText
     /// 把一行字排进原行框 <paramref name="box"/>：
     /// 高度按行框起字号；宽度不够时缩字号重排；最后左对齐、垂直居中。
     /// </summary>
-    internal static Stroke BuildLine(string fontPath, string text, RectF box, Color4 color)
+    internal static Stroke BuildLine(string fontPath, string text, RectF box, Color4 color,
+                                     float sizeOverride = 0f, bool allowShrink = true)
     {
         if (box.IsEmpty || string.IsNullOrEmpty(text)) return null;
 
         float boxW = box.MaxX - box.MinX, boxH = box.MaxY - box.MinY;
         var fonts = Fonts.Default;
         if (!string.IsNullOrEmpty(fontPath)) fonts.Cjk = fontPath;
-        float size = MathF.Max(4f, boxH * SizePerLineHeight);
+        float size = sizeOverride > 0f ? sizeOverride : MathF.Max(4f, boxH * SizePerLineHeight);
         LineLayout layout = null;
 
         // 最多缩两轮：第一轮按宽度，第二轮防极端窄框。
@@ -227,13 +228,14 @@ public static class GlyphText
             layout = Layout(fonts, text, size, 0f, 0f);
             if (layout.Contours.Count == 0) return null;
             if (layout.Width <= boxW * 1.02f) break;
+            if (!allowShrink) break;
             size *= MathF.Max(0.05f, boxW / layout.Width * 0.99f);
             if (size < 3f) break;
         }
         if (layout == null || layout.Contours.Count == 0) return null;
 
         // 宽度已经收进来了；竖向明显超出时再收一点，避免压到上下行。
-        if (layout.Height > boxH * 1.02f)
+        if (allowShrink && layout.Height > boxH * 1.02f)
         {
             size *= boxH / layout.Height * 0.99f;
             layout = Layout(fonts, text, size, 0f, 0f);
