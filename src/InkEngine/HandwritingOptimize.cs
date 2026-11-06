@@ -25,6 +25,7 @@ public partial class InkEngine
         public OcrClient.OcrResult Result;
         public bool IncludeFormulas;
         public HandOcrMode Mode;
+        public Color4 InkColor;
     }
 
     private bool _handOcrBusy;
@@ -121,6 +122,8 @@ public partial class InkEngine
             return;
         }
 
+        var inkColor = DominantInkColor(selected);
+
         byte[] png = RenderSelectionPng(selected, region);
         if (png == null)
         {
@@ -147,7 +150,8 @@ public partial class InkEngine
                                         .ConfigureAwait(false);
             if (gen != Volatile.Read(ref _handOcrGeneration)) return;
             var done = new HandOcrDone { Selected = selected, Region = region, Result = result,
-                                          IncludeFormulas = includeFormulas, Mode = mode };
+                                          IncludeFormulas = includeFormulas, Mode = mode,
+                                          InkColor = inkColor };
             Interlocked.Exchange(ref _handOcrDone, done);
         });
     }
@@ -199,7 +203,7 @@ public partial class InkEngine
                 SetHandOcrStatus("识别结果为空");
                 return;
             }
-            var box = CreateRecognizedTextBox(text);
+            var box = CreateRecognizedTextBox(text, done.InkColor);
             if (box == null)
             {
                 SetHandOcrStatus("创建文本框失败");
@@ -260,15 +264,36 @@ public partial class InkEngine
             SetHandOcrStatus($"已优化 {lines} 行（Ctrl+Z 可撤销）");
     }
 
-    /// <summary>把识别结果变成一个普通文本框；纸面背景打开，避免压在原板书上看不清。</summary>
-    private Stroke CreateRecognizedTextBox(string text)
+    /// <summary>把识别结果变成一个普通文本框；纸面背景 + 原墨迹主色。</summary>
+    private Stroke CreateRecognizedTextBox(string text, Color4 ink)
     {
         var s = CreatePlainTextBox(text);
         if (s?.TextBox == null) return null;
         s.TextBox.Paper = true;
-        s.Color = new Color4(0.10f, 0.10f, 0.12f, 1f);
-        s.TextBox.Ink = s.Color;
+        s.Color = ink;
+        s.TextBox.Ink = ink;
         return s;
+    }
+
+    /// <summary>选中笔迹的主色（按点数分 红 / 蓝 / 其它三桶，取占比最大的那桶）。</summary>
+    private static Color4 DominantInkColor(IReadOnlyList<Stroke> strokes)
+    {
+        int rw = 0, bw = 0, ow = 0;
+        float rr = 0, rg = 0, rb = 0, br = 0, bg = 0, bb = 0, or_ = 0, og = 0, ob = 0;
+        foreach (var s in strokes)
+        {
+            var c = s.Color;
+            int w = Math.Max(1, s.Points.Count);
+            bool red = c.R > c.B * 1.25f && c.R > 0.35f;
+            bool blue = c.B > c.R * 1.25f && c.B > 0.35f;
+            if (red) { rw += w; rr += c.R * w; rg += c.G * w; rb += c.B * w; }
+            else if (blue) { bw += w; br += c.R * w; bg += c.G * w; bb += c.B * w; }
+            else { ow += w; or_ += c.R * w; og += c.G * w; ob += c.B * w; }
+        }
+        if (rw >= bw && rw >= ow && rw > 0) return new Color4(rr / rw, rg / rw, rb / rw, 1f);
+        if (bw >= rw && bw >= ow && bw > 0) return new Color4(br / bw, bg / bw, bb / bw, 1f);
+        if (ow > 0) return new Color4(or_ / ow, og / ow, ob / ow, 1f);
+        return new Color4(0.86f, 0.16f, 0.12f, 1f);
     }
 
     /// <summary>把选中笔迹渲染成白底 PNG（OCR 接口只吃图片）。</summary>
