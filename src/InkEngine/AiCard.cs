@@ -36,6 +36,14 @@ internal enum TextBoxRole
 /// **AI 题卡只是 Role = AiQuestion 的文本框**；普通文本框用 Role = Normal 和
 /// <see cref="Text"/>。两条路共用同一套选中、改宽高、存档和操作条。
 /// </summary>
+/// <summary>文本框里一段显式墨色（编辑时选中改色）。Start/Length 对 <see cref="TextBoxData.Text"/>。</summary>
+internal sealed class TextBoxColorSpan
+{
+    public int Start;
+    public int Length;
+    public Color4 Color;
+}
+
 internal sealed class TextBoxData
 {
     public TextBoxRole Role = TextBoxRole.Normal;
@@ -77,9 +85,81 @@ internal sealed class TextBoxData
     /// </summary>
     public readonly List<Color4> LineColors = new();
 
+    /// <summary>
+    /// 逐字/逐段的显式墨色（编辑时选中一段改色）。Start/Length 是 <see cref="Text"/>
+    /// 的字符下标；同一位置以 ColorSpans 优先于 <see cref="LineColors"/>。
+    /// </summary>
+    public readonly List<TextBoxColorSpan> ColorSpans = new();
+
     /// <summary>第 <paramref name="hardLine"/> 行的墨色；没有逐行色就退回整框主色。</summary>
     public Color4 InkForLine(int hardLine)
         => hardLine >= 0 && hardLine < LineColors.Count ? LineColors[hardLine] : Ink;
+
+    /// <summary>某个字符的墨色：显式 span &gt; 整框主色。</summary>
+    public Color4 ColorAt(int index, Color4 fallback)
+    {
+        for (int i = ColorSpans.Count - 1; i >= 0; i--)
+        {
+            var s = ColorSpans[i];
+            if (index >= s.Start && index < s.Start + s.Length) return s.Color;
+        }
+        return fallback;
+    }
+
+    public bool HasColorSpanIn(int start, int length)
+    {
+        int end = start + Math.Max(0, length);
+        foreach (var s in ColorSpans)
+            if (s.Start < end && s.Start + s.Length > start) return true;
+        return false;
+    }
+
+    /// <summary>手动改整框颜色：逐行色和逐字色都清掉，统一听 <see cref="Ink"/>。</summary>
+    public void ClearCustomColors()
+    {
+        LineColors.Clear();
+        ColorSpans.Clear();
+    }
+
+    /// <summary>写入一段显式墨色；和已有 span 重叠时先切掉旧的重叠部分。</summary>
+    public void SetColorSpan(int start, int length, Color4 color)
+    {
+        if (length <= 0) return;
+        start = Math.Max(0, start);
+        int end = start + length;
+        var next = new List<TextBoxColorSpan>();
+        foreach (var old in ColorSpans)
+        {
+            int oe = old.Start + old.Length;
+            if (oe <= start || old.Start >= end) { next.Add(old); continue; }
+            if (old.Start < start)
+                next.Add(new TextBoxColorSpan { Start = old.Start, Length = start - old.Start, Color = old.Color });
+            if (oe > end)
+                next.Add(new TextBoxColorSpan { Start = end, Length = oe - end, Color = old.Color });
+        }
+        next.Add(new TextBoxColorSpan { Start = start, Length = length, Color = color });
+        next.Sort((a, b) => a.Start.CompareTo(b.Start));
+
+        ColorSpans.Clear();
+        foreach (var s in next)
+        {
+            if (ColorSpans.Count > 0)
+            {
+                var last = ColorSpans[^1];
+                if (last.Start + last.Length == s.Start && SameColor(last.Color, s.Color))
+                {
+                    last.Length += s.Length;
+                    continue;
+                }
+            }
+            ColorSpans.Add(s);
+        }
+    }
+
+    private static bool SameColor(Color4 a, Color4 b)
+        => MathF.Abs(a.R - b.R) < 0.004f
+           && MathF.Abs(a.G - b.G) < 0.004f
+           && MathF.Abs(a.B - b.B) < 0.004f;
 
     /// <summary>
     /// 普通文本框的文字/公式颜色（= Stroke.Color 的副本）。
@@ -343,6 +423,8 @@ internal sealed class TextBoxData
             Unit = Unit, Ink = Ink, ScrollY = ScrollY,
         };
         foreach (var color in LineColors) c.LineColors.Add(color);
+        foreach (var span in ColorSpans)
+            c.ColorSpans.Add(new TextBoxColorSpan { Start = span.Start, Length = span.Length, Color = span.Color });
         foreach (var q in Questions) c.Questions.Add(q.Clone());
         return c;
     }
@@ -462,6 +544,8 @@ internal sealed class TextBoxRun
     public float Size;
     public bool Bold;
     public bool Italic;
+    /// <summary>这一段自己的墨色（逐字改色）；null = 跟随整行 / 文本框。</summary>
+    public Color4? Tint;
     public bool IsMath => MathImage != null;
 }
 
@@ -561,9 +645,12 @@ internal static class TextBoxLayout
         var lines = new List<TextBoxLine>();
         float y = pad;
         string[] hardLines = (card.Text ?? "").Replace("\r\n", "\n").Split('\n');
+        int textOffset = 0;
         for (int hi = 0; hi < hardLines.Length; hi++)
         {
             string hard = hardLines[hi];
+            int lineStart = textOffset;
+            textOffset += hard.Length + 1;
             Color4 ink = card.InkForLine(hi);
             string display = hard;
             float lineSize = size;
@@ -675,6 +762,17 @@ internal static class TextBoxLayout
             }
 
             string trimmed = display.Trim();
+
+            // 逐字改色：这一行有显式 span 时走彩色 run 路径（忽略 Markdown 粗体）。
+            if (display == hard && card.HasColorSpanIn(lineStart, hard.Length)
+                && !trimmed.StartsWith("$$", StringComparison.Ordinal)
+                && !trimmed.StartsWith("\\[", StringComparison.Ordinal))
+            {
+                AddColoredInline(lines, display, lineStart, lineSize, u, pad, textW, lineH2,
+                                 ink, card, ref y);
+                continue;
+            }
+
             if (TryBlockMath(trimmed, out string latex))
             {
                 AddMathBlock(lines, latex, lineSize, pad, textW, ink, u, ref y);
@@ -733,6 +831,73 @@ internal static class TextBoxLayout
     }
 
     /// <summary>
+    /// 带逐字颜色的行内排版：按 `$...$` 切公式，文字段再按 ColorSpans 切成彩色 run。
+    /// 只用于“这一行有显式 span”的情况，普通行仍走 <see cref="ParseInline"/>。
+    /// </summary>
+    private static void AddColoredInline(List<TextBoxLine> lines, string text, int textStart,
+                                         float size, float u, float pad, float textW, float lineH,
+                                         Color4 fallback, TextBoxData card, ref float y)
+    {
+        var runs = new List<TextBoxRun>();
+        int i = 0;
+        while (i < text.Length)
+        {
+            int open = text.IndexOf('$', i);
+            if (open < 0)
+            {
+                AddColoredTextRuns(runs, text[i..], textStart + i, size, card, fallback);
+                break;
+            }
+            if (open > i)
+                AddColoredTextRuns(runs, text[i..open], textStart + i, size, card, fallback);
+
+            int close = text.IndexOf('$', open + 1);
+            if (close < 0 || close == open + 1)
+            {
+                AddColoredTextRuns(runs, text[open..], textStart + open, size, card, fallback);
+                break;
+            }
+            string latex = text[(open + 1)..close].Trim();
+            int colorAt = textStart + Math.Min(open + 1, text.Length - 1);
+            AddMathRuns(runs, latex, size * 0.95f, card.ColorAt(colorAt, fallback));
+            i = close + 1;
+        }
+        if (runs.Count > 0)
+            LayoutInlineRuns(lines, runs, pad, textW, size, lineH, u, ref y);
+    }
+
+    private static void AddColoredTextRuns(List<TextBoxRun> runs, string text, int absStart,
+                                           float size, TextBoxData card, Color4 fallback)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        int segStart = 0;
+        Color4 cur = card.ColorAt(absStart, fallback);
+        for (int i = 1; i < text.Length; i++)
+        {
+            Color4 c = card.ColorAt(absStart + i, fallback);
+            if (MathF.Abs(c.R - cur.R) < 0.004f
+                && MathF.Abs(c.G - cur.G) < 0.004f
+                && MathF.Abs(c.B - cur.B) < 0.004f) continue;
+            AddRun(text[segStart..i], cur);
+            segStart = i;
+            cur = c;
+        }
+        AddRun(text[segStart..], cur);
+
+        void AddRun(string value, Color4 color)
+        {
+            if (value.Length == 0) return;
+            float w = MeasureText(value, size);
+            runs.Add(new TextBoxRun
+            {
+                Text = value, Size = size, Width = w,
+                Height = size * 1.55f, Ascent = size * 0.82f, Descent = size * 0.30f,
+                Tint = color,
+            });
+        }
+    }
+
+    /// <summary>
     /// 公式 → 若干 run。含中文的 `\text{...}` 拆成普通文字 run，
     /// 其余按公式图；这样中文不会画成方框，又能和公式排在同一基线。
     /// </summary>
@@ -752,6 +917,7 @@ internal static class TextBoxLayout
                 {
                     Text = value, Size = size, Width = w,
                     Height = size * 1.55f, Ascent = size * 0.82f, Descent = size * 0.30f,
+                    Tint = ink,
                 });
             }
             else
@@ -864,7 +1030,7 @@ internal static class TextBoxLayout
             x = 0f;
         }
 
-        void AddRun(string text, bool bold, bool italic)
+        void AddRun(string text, bool bold, bool italic, Color4? tint)
         {
             if (text.Length == 0) return;
             float w = MeasureText(text, size);
@@ -872,7 +1038,7 @@ internal static class TextBoxLayout
             {
                 Text = text, Size = size, X = x - w, Width = w,
                 Height = size * 1.55f, Ascent = size * 0.82f, Descent = size * 0.30f,
-                Bold = bold, Italic = italic,
+                Bold = bold, Italic = italic, Tint = tint,
             });
         }
 
@@ -910,14 +1076,14 @@ internal static class TextBoxLayout
                                 && !(closing && x < textW + size * 1.2f);
                 if (overflow && current.Count > 0)
                 {
-                    if (i > start) AddRun(token.Text[start..i], token.Bold, token.Italic);
+                    if (i > start) AddRun(token.Text[start..i], token.Bold, token.Italic, token.Tint);
                     Flush();
                     start = i;
                 }
                 x += cw;
             }
             if (start < token.Text.Length)
-                AddRun(token.Text[start..], token.Bold, token.Italic);
+                AddRun(token.Text[start..], token.Bold, token.Italic, token.Tint);
         }
         Flush();
         y = cursorY;

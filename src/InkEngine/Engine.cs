@@ -16375,6 +16375,13 @@ public partial class InkEngine
     /// </summary>
     internal int SetSelectionColor(Color4 baseColor)
     {
+        // 编辑中且编辑窗里选中了一段文字：只改选中的字，不动整框。
+        if (_textBoxEditing && _textBoxEditHwnd != IntPtr.Zero && TextBoxEditHasSelection)
+        {
+            SetTextBoxEditColorFromUi(baseColor);
+            return 1;
+        }
+
         var targets = new List<Stroke>();
         var colors = new List<Color4>();
         int changed = 0;

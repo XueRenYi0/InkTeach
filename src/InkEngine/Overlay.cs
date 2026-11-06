@@ -2544,7 +2544,8 @@ internal sealed partial class OverlayWindow : IDisposable
                             }
                             else
                             {
-                                Color4 ink = line.Tint
+                                Color4 ink = run.Tint
+                                    ?? line.Tint
                                     ?? (card.Role == TextBoxRole.Normal ? s.Color : AiColor(line.Ink));
                                 _ctx.DrawText(run.Text, AiTextFormat(run.Size, run.Bold, false, run.Italic, family),
                                     new Rect(rx, ry, run.Width + 2f, run.Height), Brush(ink));

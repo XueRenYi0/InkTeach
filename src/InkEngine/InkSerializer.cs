@@ -181,8 +181,9 @@ internal static class InkSerializer
     /// <summary>
     /// v28（2026-11-06）：文本框末尾追加一位 **Paper**（识别到文本框的纸面背景）。
     /// v29（2026-11-06）：再追加 **字体档 / 行距 / 逐行墨色**（识别结果按行保留红蓝）。
+    /// v30（2026-11-06）：再追加 **逐字墨色 span**（编辑时选中一段改色）。
     /// </summary>
-    public const int FormatVersion = 29;
+    public const int FormatVersion = 30;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -385,6 +386,16 @@ internal static class InkSerializer
                 w.Write(ink.R);
                 w.Write(ink.G);
                 w.Write(ink.B);
+            }
+            // v30：逐字/逐段墨色。
+            w.Write(c.ColorSpans.Count);
+            foreach (var span in c.ColorSpans)
+            {
+                w.Write(span.Start);
+                w.Write(span.Length);
+                w.Write(span.Color.R);
+                w.Write(span.Color.G);
+                w.Write(span.Color.B);
             }
         }
     }
@@ -683,6 +694,31 @@ internal static class InkSerializer
                         float.IsFinite(cg) ? Math.Clamp(cg, 0f, 1f) : 0f,
                         float.IsFinite(cb) ? Math.Clamp(cb, 0f, 1f) : 0f,
                         1f));
+                }
+                if (version >= 30)
+                {
+                    int spans = r.ReadInt32();
+                    if (spans < 0 || spans > 8192)
+                        throw new InvalidDataException($"文本框逐字颜色数量不合理：{spans}。");
+                    for (int si = 0; si < spans; si++)
+                    {
+                        int start = r.ReadInt32();
+                        int len = r.ReadInt32();
+                        float sr = r.ReadSingle();
+                        float sg = r.ReadSingle();
+                        float sb = r.ReadSingle();
+                        if (start < 0 || len <= 0) continue;
+                        c.ColorSpans.Add(new TextBoxColorSpan
+                        {
+                            Start = start,
+                            Length = len,
+                            Color = new Color4(
+                                float.IsFinite(sr) ? Math.Clamp(sr, 0f, 1f) : 0f,
+                                float.IsFinite(sg) ? Math.Clamp(sg, 0f, 1f) : 0f,
+                                float.IsFinite(sb) ? Math.Clamp(sb, 0f, 1f) : 0f,
+                                1f),
+                        });
+                    }
                 }
             }
             s.TextBox = c;

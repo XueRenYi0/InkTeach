@@ -40,7 +40,7 @@ OneNote/Excalidraw 只存“对象颜色”，不存“同一框内逐行颜色�
 - `TextBoxData.LineColors`：按硬换行行号存 `Color4`；
 - OCR bbox 命中哪一行，就用该行框内的笔迹点算主色（红/蓝/其它三桶）；
 - 行内公式也按该行色烘；不同行可以红、蓝、黑混排；
-- 存档 v29 保存 `FontFace / LineSpacing / LineColors`，老 v28 文件按默认值迁移。
+- 存档 v29 保存 `FontFace / LineSpacing / LineColors`，v30 再追加逐字 `ColorSpans`；老 v28 文件按默认值迁移。
 
 ### 2.3 字体 / 行距面板
 
@@ -64,7 +64,20 @@ OneNote/Excalidraw 只存“对象颜色”，不存“同一框内逐行颜色�
 - 整页/多栏导致高度超过目标 1.25 倍时，自动缩字号再排（最多两轮）。
   b3 整页：高 9691 → 3950（原页 3698），不再是一条“几米长的纸”。
 
-### 2.5 实测
+### 2.5 编辑中改色：选中改一段，没选中改整框
+
+- **有选中**：只改 RichEdit 里选中的字（`EM_SETCHARFORMAT / SCF_SELECTION`），
+  同时记成 `TextBoxData.ColorSpans`；画布排版按 span 切成彩色 run，公式按所在段色烘。
+- **没选中**：改整框主色，清空逐行/逐字色（`LineColors` + `ColorSpans`）。
+- 文字色带、自定义取色板、选中条颜色按钮三条入口都走同一判定
+  （`SetTextBoxEditColorFromUi`）。
+- 退出编辑时从 RichEdit 逐字抓回颜色，重建 span；文字增删后颜色仍跟着字走。
+- 存档 v30 保存 span；`Ctrl+Z` 能撤销“选中改色”。
+
+**实测**（`--textcolor`）：两行文本，选中第二行改蓝 → 第一行保持黑、第二行蓝；
+撤销恢复；不选中改红 → 整框红且逐字色清空；存盘往返 OK。
+
+### 2.6 实测
 
 | 板书 | 结果 |
 |---|---|
@@ -117,10 +130,11 @@ OneNote/Excalidraw 只存“对象颜色”，不存“同一框内逐行颜色�
 
 ### 难关 5：富文本 run 模型
 
-- 现状：`LineColors` 只能整行一色；同一行里“红字 + 蓝批注”仍会取主色。
-- 下一步：照 ProseMirror marks 存 `TextRun { text, color, bold, italic, math }`，
-  文本框内容从 `string Text` 迁到 `List<TextRun>`；存档再加一段，做 v30 迁移。
-- 不做的理由（本轮）：改编辑器和光标映射成本高，先把逐行色跑通。
+- 现状：已有 `ColorSpans`（字符区间 + 颜色）和逐行色，能保留“同一行里一段红、一段蓝”；
+  但没有粗体/斜体/字号混合的完整 run 模型。
+- 下一步：照 ProseMirror marks 把 `Text` 升级成 `TextRun { text, color, bold, italic, math }`；
+  存档再做 v31 迁移。
+- 不做的理由（本轮）：完整富文本编辑器 + 光标映射成本高；先解决颜色这一条最高频需求。
 
 ### 难关 6：编辑后颜色/位置映射失效
 

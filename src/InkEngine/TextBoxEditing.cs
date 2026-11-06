@@ -1,3 +1,4 @@
+using System;
 using System.Globalization;
 using System.Numerics;
 using Vortice.Mathematics;
@@ -43,6 +44,11 @@ public partial class InkEngine
     private int _textBoxEditCaretIndex = -1;
     private float _textBoxEditOriginalW, _textBoxEditOriginalH;
     private bool _textBoxEditOriginalAuto, _textBoxEditOriginalAutoWidth;
+    private List<Color4> _textBoxEditOriginalLineColors = new();
+    private List<TextBoxColorSpan> _textBoxEditOriginalColorSpans = new();
+    private bool _textBoxEditColorTouched;
+    /// <summary>RichEdit 的字符位置是否按“标准化后的 \n”计数（false = 按 \r\n）。</summary>
+    private bool _textBoxEditCpNormalized;
     private RectF _textBoxEditOriginalBounds;
     private Vector2 _textBoxEditOriginalOrigin;
     private Matrix3x2 _textBoxEditOriginalXf = Matrix3x2.Identity;
@@ -239,6 +245,7 @@ public partial class InkEngine
         SetUiPref("textColorExplicit", "1");
         SetUiPref("textSwatchSelected", slot.ToString(CultureInfo.InvariantCulture));
         Console.WriteLine($"文字默认色：色位 {slot + 1}");
+        if (_textBoxEditing) SetTextBoxEditColorFromUi(_textColor);
         _dirty = true;
         NotifyUiStateChanged();
     }
@@ -262,6 +269,7 @@ public partial class InkEngine
         SetUiPref("textColorExplicit", "1");
         SetUiPref("textSwatchSelected", slot.ToString(CultureInfo.InvariantCulture));
         SaveTextSwatchPrefs();
+        if (_textBoxEditing) SetTextBoxEditColorFromUi(color);
         _dirty = true;
         NotifyUiStateChanged();
     }
@@ -671,6 +679,9 @@ public partial class InkEngine
         _textBoxEditStroke = s;
         _textBoxEditWasNew = isNew;
         _textBoxEditOriginalText = s.TextBox.Text ?? "";
+        _textBoxEditOriginalLineColors = new List<Color4>(s.TextBox.LineColors);
+        _textBoxEditOriginalColorSpans = CloneSpans(s.TextBox.ColorSpans);
+        _textBoxEditColorTouched = false;
         _textBoxEditOriginalW = s.TextBox.Width;
         _textBoxEditOriginalH = s.TextBox.Height;
         _textBoxEditOriginalAuto = s.TextBox.AutoHeight;
@@ -691,6 +702,7 @@ public partial class InkEngine
         _textBoxEditSuppressChange = true;
         Native.SetWindowTextW(_textBoxEditHwnd, s.TextBox.Text ?? "");
         _textBoxEditSuppressChange = false;
+        _textBoxEditCpNormalized = DetectRichEditCpMode();
         UpdateTextBoxEditColors(s);
         var font = EnsureTextBoxEditFont(s.TextBox.FontSize * s.TextBox.Unit);
         Native.SendMessage(_textBoxEditHwnd, Native.WM_SETFONT, font, new IntPtr(1));
@@ -1031,6 +1043,17 @@ public partial class InkEngine
         }
     }
 
+    /// <summary>自检：在编辑窗里选中一段（start/end 是标准化文本下标）。</summary>
+    internal void SetTextBoxEditSelectionForTest(int start, int end)
+    {
+        if (!_textBoxEditing || _textBoxEditHwnd == IntPtr.Zero) return;
+        var (raw, norm) = ReadRawAndNorm(_textBoxEditHwnd);
+        int a = Math.Clamp(start, 0, norm.Length);
+        int b = Math.Clamp(end, a, norm.Length);
+        Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL,
+                           new IntPtr(NormToCp(a, raw)), new IntPtr(NormToCp(b, raw)));
+    }
+
     internal void EndTextBoxEditFromUi(bool accept)
     {
         if (!_textBoxEditing) return;
@@ -1044,6 +1067,9 @@ public partial class InkEngine
             var sb = new System.Text.StringBuilder(32768);
             Native.GetWindowTextW(_textBoxEditHwnd, sb, sb.Capacity);
             text = sb.ToString().Replace("\r\n", "\n").Replace('\r', '\n');
+            if (s?.TextBox != null
+                && (_textBoxEditColorTouched || s.TextBox.ColorSpans.Count > 0))
+                CaptureRichEditColors(s.TextBox, text);
         }
         bool wasNew = _textBoxEditWasNew;
         bool blank = accept && s?.TextBox is { Role: TextBoxRole.Normal } && IsBlankText(text);
@@ -1069,6 +1095,14 @@ public partial class InkEngine
             {
                 var box = s.TextBox;
                 box.Text = before;
+                box.LineColors.Clear();
+                box.LineColors.AddRange(_textBoxEditOriginalLineColors);
+                box.ColorSpans.Clear();
+                foreach (var span in _textBoxEditOriginalColorSpans)
+                    box.ColorSpans.Add(new TextBoxColorSpan
+                    {
+                        Start = span.Start, Length = span.Length, Color = span.Color,
+                    });
                 box.Width = _textBoxEditOriginalW;
                 box.Height = _textBoxEditOriginalH;
                 box.AutoHeight = _textBoxEditOriginalAuto;
@@ -1138,7 +1172,9 @@ public partial class InkEngine
             Doc.Dirty.Add(s.PaddedBounds);
             Doc.StructureChangedSinceRender = true;
             Doc.Version++;
-            if (!string.Equals(before, text, StringComparison.Ordinal))
+            if (!string.Equals(before, text, StringComparison.Ordinal)
+                || !SameColors(_textBoxEditOriginalLineColors, s.TextBox.LineColors)
+                || !SameSpans(_textBoxEditOriginalColorSpans, s.TextBox.ColorSpans))
             {
                 var newOrigin = s.Points.Count > 0
                     ? new Vector2(s.Points[0].X, s.Points[0].Y) : Vector2.Zero;
@@ -1146,7 +1182,9 @@ public partial class InkEngine
                     s, before, text, oldBounds, s.PaddedBounds,
                     oldW, oldH, oldAuto, _textBoxEditOriginalAutoWidth, oldOrigin, oldXf,
                     s.TextBox.Width, s.TextBox.Height, s.TextBox.AutoHeight,
-                    s.TextBox.AutoWidth, newOrigin, s.Transform));
+                    s.TextBox.AutoWidth, newOrigin, s.Transform,
+                    _textBoxEditOriginalLineColors, _textBoxEditOriginalColorSpans,
+                    s.TextBox.LineColors, s.TextBox.ColorSpans));
             }
         }
         _dirty = true;
@@ -1426,8 +1464,7 @@ public partial class InkEngine
     }
 
     private void ApplyRichEditFormat(Stroke s)
-    {
-        if (!_richEditReady || s?.TextBox == null) return;
+    {        if (!_richEditReady || s?.TextBox == null) return;
         float fontPx = MathF.Max(6f, s.TextBox.FontSize * MathF.Max(0.5f, s.TextBox.Unit));
         float dpi = MathF.Max(1f, DpiScale);
         int fontTwips = Math.Max(80, (int)MathF.Round(fontPx * 15f / dpi));
@@ -1442,16 +1479,14 @@ public partial class InkEngine
             yHeight = fontTwips,
             crTextColor = (int)_textBoxEditTextColor,
             bCharSet = 1,
-            szFaceName = "Microsoft YaHei UI",
+            szFaceName = TextBoxFaces.DirectWrite(s.TextBox.Face),
         };
         Native.SendMessageCharFormat(_textBoxEditHwnd, Native.EM_SETCHARFORMAT,
                                      new IntPtr(Native.SCF_ALL), ref cf);
 
-        // 行距和显示端一致：1.55 × 字号。
-        // ⚠ RichEdit 的“多倍行距”是按它自己的默认行高乘的，不是按字号；
-        // 之前写 155（rule=5）= 7.75 行，长文本只看得见第一行。
-        // 这里改成 **固定值**（rule=3），twips 直接按 1.55×字号 算，和排版同源。
-        int lineTwips = Math.Max(80, (int)MathF.Round(fontPx * 1.55f * 15f / dpi));
+        // 行距和显示端一致：用文本框自己的 LineSpacing（不再固定 1.55）。
+        int lineTwips = Math.Max(80, (int)MathF.Round(
+            fontPx * TextBoxFaces.ClampSpacing(s.TextBox.LineSpacing) * 15f / dpi));
         var pf = new Native.PARAFORMAT2
         {
             cbSize = System.Runtime.InteropServices.Marshal.SizeOf<Native.PARAFORMAT2>(),
@@ -1463,8 +1498,285 @@ public partial class InkEngine
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL, IntPtr.Zero, new IntPtr(-1));
         Native.SendMessageParaFormat(_textBoxEditHwnd, Native.EM_SETPARAFORMAT, IntPtr.Zero, ref pf);
 
+        // 逐行/逐字原色：识别结果在编辑窗里也保持红蓝，不能一进去变单色。
+        ApplyAllColorsToRichEdit(s.TextBox);
+
         int len = Native.GetWindowTextLengthW(_textBoxEditHwnd);
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL, new IntPtr(len), new IntPtr(len));
+    }
+
+    private static List<TextBoxColorSpan> CloneSpans(IEnumerable<TextBoxColorSpan> src)
+    {
+        var list = new List<TextBoxColorSpan>();
+        if (src == null) return list;
+        foreach (var s in src)
+            list.Add(new TextBoxColorSpan { Start = s.Start, Length = s.Length, Color = s.Color });
+        return list;
+    }
+
+    private static bool SameColors(IReadOnlyList<Color4> a, IReadOnlyList<Color4> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+            if (MathF.Abs(a[i].R - b[i].R) > 0.004f
+                || MathF.Abs(a[i].G - b[i].G) > 0.004f
+                || MathF.Abs(a[i].B - b[i].B) > 0.004f) return false;
+        return true;
+    }
+
+    private static bool SameSpans(IReadOnlyList<TextBoxColorSpan> a, IReadOnlyList<TextBoxColorSpan> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+            if (a[i].Start != b[i].Start || a[i].Length != b[i].Length
+                || MathF.Abs(a[i].Color.R - b[i].Color.R) > 0.004f
+                || MathF.Abs(a[i].Color.G - b[i].Color.G) > 0.004f
+                || MathF.Abs(a[i].Color.B - b[i].Color.B) > 0.004f) return false;
+        return true;
+    }
+
+    private static (string Raw, string Norm) ReadRawAndNorm(IntPtr hwnd)
+    {
+        var sb = new System.Text.StringBuilder(32768);
+        Native.GetWindowTextW(hwnd, sb, sb.Capacity);
+        string raw = sb.ToString();
+        return (raw, raw.Replace("\r\n", "\n").Replace('\r', '\n'));
+    }
+
+    /// <summary>RichEdit 的 cp 到底按 \r\n 还是按 \n 计（不同版本不一样，实测一次记住）。</summary>
+    private bool DetectRichEditCpMode()
+    {
+        var (raw, norm) = ReadRawAndNorm(_textBoxEditHwnd);
+        Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL, IntPtr.Zero, new IntPtr(-1));
+        var cr = new Native.CHARRANGE();
+        Native.SendMessageCharRange(_textBoxEditHwnd, Native.EM_EXGETSEL_RICH, IntPtr.Zero, ref cr);
+        if (cr.cpMax == norm.Length) return true;
+        if (cr.cpMax == raw.Length) return false;
+        return norm.Length <= raw.Length;
+    }
+
+    private int NormToCp(int normIndex, string raw)
+    {
+        if (_textBoxEditCpNormalized) return Math.Max(0, normIndex);
+        int ni = 0, ri = 0;
+        while (ri < raw.Length && ni < normIndex)
+        {
+            if (raw[ri] == '\r' && ri + 1 < raw.Length && raw[ri + 1] == '\n') { ri += 2; ni++; }
+            else { ri++; ni++; }
+        }
+        return ri;
+    }
+
+    private int CpToNorm(int cp, string raw)
+    {
+        if (_textBoxEditCpNormalized) return Math.Max(0, cp);
+        int ni = 0, ri = 0;
+        while (ri < cp && ri < raw.Length)
+        {
+            if (raw[ri] == '\r' && ri + 1 < raw.Length && raw[ri + 1] == '\n') { ri += 2; ni++; }
+            else { ri++; ni++; }
+        }
+        return ni;
+    }
+
+    private static int ColorRef(Color4 c)
+        => ((int)(c.R * 255f) & 0xFF)
+           | (((int)(c.G * 255f) & 0xFF) << 8)
+           | (((int)(c.B * 255f) & 0xFF) << 16);
+
+    private static Color4 FromColorRef(int cref)
+        => new Color4(((cref >> 0) & 0xFF) / 255f,
+                      ((cref >> 8) & 0xFF) / 255f,
+                      ((cref >> 16) & 0xFF) / 255f, 1f);
+
+    private void ApplyRichEditColorAll(Color4 color)
+    {
+        if (_textBoxEditHwnd == IntPtr.Zero) return;
+        var cf = new Native.CHARFORMAT2W
+        {
+            cbSize = System.Runtime.InteropServices.Marshal.SizeOf<Native.CHARFORMAT2W>(),
+            dwMask = Native.CFM_COLOR,
+            crTextColor = ColorRef(color),
+        };
+        Native.SendMessageCharFormat(_textBoxEditHwnd, Native.EM_SETCHARFORMAT,
+                                     new IntPtr(Native.SCF_ALL), ref cf);
+        Native.InvalidateRect(_textBoxEditHwnd, IntPtr.Zero, true);
+    }
+
+    private void ApplyRichEditColorRange(int cpMin, int cpMax, Color4 color)
+    {
+        if (_textBoxEditHwnd == IntPtr.Zero || cpMax <= cpMin) return;
+        Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL,
+                           new IntPtr(cpMin), new IntPtr(cpMax));
+        var cf = new Native.CHARFORMAT2W
+        {
+            cbSize = System.Runtime.InteropServices.Marshal.SizeOf<Native.CHARFORMAT2W>(),
+            dwMask = Native.CFM_COLOR,
+            crTextColor = ColorRef(color),
+        };
+        Native.SendMessageCharFormat(_textBoxEditHwnd, Native.EM_SETCHARFORMAT,
+                                     new IntPtr(Native.SCF_SELECTION), ref cf);
+    }
+
+    /// <summary>把逐行色 + 逐字 span 一起刷到 RichEdit；识别结果进编辑窗也保持红蓝。</summary>
+    private void ApplyAllColorsToRichEdit(TextBoxData box)
+    {
+        if (_textBoxEditHwnd == IntPtr.Zero || box == null) return;
+        var (raw, _) = ReadRawAndNorm(_textBoxEditHwnd);
+        int offset = 0;
+        string[] hard = (box.Text ?? "").Replace("\r\n", "\n").Split('\n');
+        for (int i = 0; i < hard.Length; i++)
+        {
+            if (i < box.LineColors.Count && hard[i].Length > 0)
+            {
+                int a = NormToCp(offset, raw), b = NormToCp(offset + hard[i].Length, raw);
+                ApplyRichEditColorRange(a, b, box.LineColors[i]);
+            }
+            offset += hard[i].Length + 1;
+        }
+        foreach (var span in box.ColorSpans)
+        {
+            int a = NormToCp(span.Start, raw);
+            int b = NormToCp(span.Start + span.Length, raw);
+            ApplyRichEditColorRange(a, b, span.Color);
+        }
+    }
+
+    private (int Min, int Max) RichEditSelection()
+    {
+        var cr = new Native.CHARRANGE();
+        if (_textBoxEditHwnd != IntPtr.Zero)
+            Native.SendMessageCharRange(_textBoxEditHwnd, Native.EM_EXGETSEL_RICH, IntPtr.Zero, ref cr);
+        return (cr.cpMin, cr.cpMax);
+    }
+
+    internal bool TextBoxEditHasSelection
+    {
+        get
+        {
+            var (a, b) = RichEditSelection();
+            return b > a;
+        }
+    }
+
+    /// <summary>
+    /// 编辑中改色：有选中 → 只改选中的字；没选中 → 整框改色。
+    /// 选中改色立即写进 RichEdit（实时），提交时再从 RichEdit 抓回逐字 span。
+    /// </summary>
+    internal void SetTextBoxEditColorFromUi(Color4 color)
+    {
+        var s = _textBoxEditStroke;
+        var box = s?.TextBox;
+        if (s == null || box == null) return;
+        _textBoxEditColorTouched = true;
+
+        var (cpMin, cpMax) = RichEditSelection();
+        if (cpMax > cpMin)
+        {
+            ApplyRichEditColorRange(cpMin, cpMax, color);
+            var (raw, _) = ReadRawAndNorm(_textBoxEditHwnd);
+            int a = CpToNorm(cpMin, raw), b = CpToNorm(cpMax, raw);
+            if (b > a) box.SetColorSpan(a, b - a, color);
+            box.InvalidateLayout();
+            s.SyncTextBoxBounds();
+            Doc.RefreshStrokeGrid(s);
+            Doc.Dirty.Add(s.PaddedBounds);
+            Doc.StructureChangedSinceRender = true;
+            Doc.Version++;
+            _dirty = true;
+            NotifyUiStateChanged();
+            return;
+        }
+
+        // 没有选中 = 整框改色：逐行/逐字色都清掉。
+        var old = s.PaddedBounds;
+        s.Color = color;
+        box.Ink = color;
+        box.ClearCustomColors();
+        box.InvalidateLayout();
+        s.SyncTextBoxBounds();
+        Doc.RefreshStrokeGrid(s);
+        Doc.Dirty.Add(old);
+        Doc.Dirty.Add(s.PaddedBounds);
+        Doc.StructureChangedSinceRender = true;
+        Doc.Version++;
+        _dirty = true;
+        UpdateTextBoxEditColors(s);
+        ApplyRichEditColorAll(color);
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 提交时从 RichEdit 抓每个字的颜色，重建 span。
+    /// 这样用户选一段改色、又接着增删字之后，颜色仍跟着字走。
+    /// </summary>
+    private void CaptureRichEditColors(TextBoxData box, string text)
+    {
+        if (_textBoxEditHwnd == IntPtr.Zero || box == null) return;
+        var (raw, _) = ReadRawAndNorm(_textBoxEditHwnd);
+        box.ColorSpans.Clear();
+
+        int hardLine = 0;
+        Color4 baseColor = box.InkForLine(0);
+        var spans = new List<TextBoxColorSpan>();
+        int runStart = -1, runLen = 0;
+        Color4 runColor = baseColor;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '\n')
+            {
+                hardLine++;
+                baseColor = box.InkForLine(hardLine);
+            }
+            int a = NormToCp(i, raw);
+            int b = NormToCp(i + 1, raw);
+            if (b <= a) b = a + 1;
+            Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL,
+                               new IntPtr(a), new IntPtr(b));
+            var cf = new Native.CHARFORMAT2W
+            {
+                cbSize = System.Runtime.InteropServices.Marshal.SizeOf<Native.CHARFORMAT2W>(),
+                dwMask = Native.CFM_COLOR,
+            };
+            Native.SendMessageCharFormat(_textBoxEditHwnd, Native.EM_GETCHARFORMAT,
+                                         new IntPtr(Native.SCF_SELECTION), ref cf);
+            Color4 c = FromColorRef(cf.crTextColor);
+            bool sameBase = MathF.Abs(c.R - baseColor.R) < 0.02f
+                            && MathF.Abs(c.G - baseColor.G) < 0.02f
+                            && MathF.Abs(c.B - baseColor.B) < 0.02f;
+
+            if (sameBase)
+            {
+                Flush();
+                continue;
+            }
+            if (runStart < 0)
+            {
+                runStart = i; runLen = 1; runColor = c;
+            }
+            else if (MathF.Abs(c.R - runColor.R) < 0.02f
+                     && MathF.Abs(c.G - runColor.G) < 0.02f
+                     && MathF.Abs(c.B - runColor.B) < 0.02f)
+            {
+                runLen++;
+            }
+            else
+            {
+                Flush();
+                runStart = i; runLen = 1; runColor = c;
+            }
+        }
+        Flush();
+
+        foreach (var span in spans) box.ColorSpans.Add(span);
+
+        void Flush()
+        {
+            if (runStart < 0 || runLen <= 0) return;
+            spans.Add(new TextBoxColorSpan { Start = runStart, Length = runLen, Color = runColor });
+            runStart = -1; runLen = 0;
+        }
     }
 
     private IntPtr EnsureTextBoxEditFont(float px)
@@ -1542,13 +1854,19 @@ internal sealed class TextBoxTextAction : EditAction
     private readonly bool _beforeAutoWidth, _afterAutoWidth;
     private readonly Vector2 _beforeOrigin, _afterOrigin;
     private readonly Matrix3x2 _beforeXf, _afterXf;
+    private readonly List<Color4> _beforeLineColors, _afterLineColors;
+    private readonly List<TextBoxColorSpan> _beforeSpans, _afterSpans;
 
     public TextBoxTextAction(Stroke s, string before, string after,
                              RectF beforeBounds, RectF afterBounds,
                              float beforeW, float beforeH, bool beforeAuto, bool beforeAutoWidth,
                              Vector2 beforeOrigin, Matrix3x2 beforeXf,
                              float afterW, float afterH, bool afterAuto, bool afterAutoWidth,
-                             Vector2 afterOrigin, Matrix3x2 afterXf)
+                             Vector2 afterOrigin, Matrix3x2 afterXf,
+                             IReadOnlyList<Color4> beforeLineColors,
+                             IReadOnlyList<TextBoxColorSpan> beforeSpans,
+                             IReadOnlyList<Color4> afterLineColors,
+                             IReadOnlyList<TextBoxColorSpan> afterSpans)
     {
         _stroke = s;
         _before = before;
@@ -1561,6 +1879,19 @@ internal sealed class TextBoxTextAction : EditAction
         _afterW = afterW; _afterH = afterH; _afterAuto = afterAuto;
         _afterAutoWidth = afterAutoWidth;
         _afterOrigin = afterOrigin; _afterXf = afterXf;
+        _beforeLineColors = new List<Color4>(beforeLineColors ?? Array.Empty<Color4>());
+        _afterLineColors = new List<Color4>(afterLineColors ?? Array.Empty<Color4>());
+        _beforeSpans = CloneSpans(beforeSpans);
+        _afterSpans = CloneSpans(afterSpans);
+    }
+
+    private static List<TextBoxColorSpan> CloneSpans(IEnumerable<TextBoxColorSpan> src)
+    {
+        var list = new List<TextBoxColorSpan>();
+        if (src == null) return list;
+        foreach (var s in src)
+            list.Add(new TextBoxColorSpan { Start = s.Start, Length = s.Length, Color = s.Color });
+        return list;
     }
 
     public override int HeldStrokes => 1;
@@ -1568,17 +1899,29 @@ internal sealed class TextBoxTextAction : EditAction
     public override RectF AffectedAfter => _afterBounds;
 
     public override void Undo(InkDocument doc)
-        => Apply(doc, _before, _beforeW, _beforeH, _beforeAuto, _beforeAutoWidth, _beforeOrigin, _beforeXf);
+        => Apply(doc, _before, _beforeW, _beforeH, _beforeAuto, _beforeAutoWidth,
+                 _beforeOrigin, _beforeXf, _beforeLineColors, _beforeSpans);
     public override void Redo(InkDocument doc)
-        => Apply(doc, _after, _afterW, _afterH, _afterAuto, _afterAutoWidth, _afterOrigin, _afterXf);
+        => Apply(doc, _after, _afterW, _afterH, _afterAuto, _afterAutoWidth,
+                 _afterOrigin, _afterXf, _afterLineColors, _afterSpans);
 
     private void Apply(InkDocument doc, string text, float w, float h, bool auto, bool autoWidth,
-                       Vector2 origin, Matrix3x2 xf)
+                       Vector2 origin, Matrix3x2 xf,
+                       IReadOnlyList<Color4> lineColors, IReadOnlyList<TextBoxColorSpan> spans)
     {
         var box = _stroke.TextBox;
         if (box == null) return;
         var old = _stroke.PaddedBounds;
         box.Text = text;
+        box.LineColors.Clear();
+        if (lineColors != null) box.LineColors.AddRange(lineColors);
+        box.ColorSpans.Clear();
+        if (spans != null)
+            foreach (var span in spans)
+                box.ColorSpans.Add(new TextBoxColorSpan
+                {
+                    Start = span.Start, Length = span.Length, Color = span.Color,
+                });
         box.Width = MathF.Max(1f, w);
         box.Height = MathF.Max(1f, h);
         box.AutoHeight = auto;

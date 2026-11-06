@@ -610,6 +610,15 @@ internal sealed partial class App : InkEngine.InkEngine
             TextStyleShow(args.Length > 1 ? args[1] : "reports/textstyle.bmp");
             _quit = true;
         }
+        else if (mode == "--textcolor")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(200);
+            TextColorShow(args.Length > 1 ? args[1] : "reports/textcolor.bmp");
+            _quit = true;
+        }
         else if (mode == "--handocr")
         {
             _autoExitAt = double.MaxValue;

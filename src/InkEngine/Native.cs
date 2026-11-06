@@ -25,6 +25,8 @@ internal static class Native
     public const int ECO_AUTOHSCROLL = 0x0080;
     public const int EM_REPLACESEL = 0x00C2;
     public const int SCF_ALL = 4;
+    public const int SCF_SELECTION = 1;
+    public const int EM_GETCHARFORMAT = 0x043A;
     public const uint CFM_BOLD = 0x00000001;
     public const uint CFM_ITALIC = 0x00000002;
     public const uint CFM_SIZE = 0x80000000;
@@ -831,6 +833,9 @@ internal static class Native
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageW")]
     public static extern IntPtr SendMessageCharFormat(IntPtr hWnd, uint msg, IntPtr wParam, ref CHARFORMAT2W lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageW")]
+    public static extern IntPtr SendMessageCharRange(IntPtr hWnd, uint msg, IntPtr wParam, ref CHARRANGE lParam);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageW")]
     public static extern IntPtr SendMessageParaFormat(IntPtr hWnd, uint msg, IntPtr wParam, ref PARAFORMAT2 lParam);
