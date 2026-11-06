@@ -209,11 +209,13 @@ internal static class HandwritingReplace
                                                 bool includeFormulas,
                                                 out List<Stroke> replacedText,
                                                 out List<Stroke> glyphs,
-                                                out int skipped)
+                                                out int skipped,
+                                                out int replacedLines)
     {
         replacedText = new List<Stroke>();
         glyphs = new List<Stroke>();
         skipped = 0;
+        replacedLines = 0;
         if (lines == null || lines.Count == 0 || texts == null || texts.Count == 0)
             return null;
 
@@ -224,12 +226,13 @@ internal static class HandwritingReplace
             // ⊄→∉），自动替换会把数学意思改掉。只有用户明确选“含公式”才替换。
             if (!includeFormulas && OcrText.HasMath(texts[i])) { skipped++; continue; }
 
-            string t = OcrText.Normalize(texts[i]?.Trim());
-            if (string.IsNullOrEmpty(t)) continue;
-            var g = GlyphText.BuildLine(fontPath, t, lines[i].Box, lines[i].Color);
-            if (g == null) continue;
-            glyphs.Add(g);
+            string raw = texts[i]?.Trim();
+            if (string.IsNullOrEmpty(raw)) continue;
+            var parts = HandwritingComposer.BuildLine(raw, lines[i].Box, lines[i].Color);
+            if (parts == null || parts.Count == 0) continue;
+            glyphs.AddRange(parts);
             replacedText.AddRange(lines[i].Strokes);
+            replacedLines++;
         }
         if (glyphs.Count == 0) return null;
 
@@ -268,7 +271,7 @@ internal static class HandwritingReplace
         if (doc == null || selected == null || texts == null || texts.Count == 0) return 0;
         var lines = DetectLines(selected, region, texts.Count);
         var result = BuildReplacement(selected, lines, texts, fontPath, includeFormulas,
-                                      out var replacedText, out glyphs, out skipped);
+                                      out var replacedText, out glyphs, out skipped, out int replacedLines);
         if (result == null || replacedText.Count == 0) return 0;
 
         var remove = new RemoveStrokesAction();
@@ -287,6 +290,6 @@ internal static class HandwritingReplace
         remove.Redo(doc);
         add.Redo(doc);
         doc.CommitCompound(remove, add);
-        return glyphs.Count;
+        return replacedLines;
     }
 }

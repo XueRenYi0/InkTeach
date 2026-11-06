@@ -33,7 +33,7 @@ internal sealed partial class App
         Task server = null;
         if (!real)
         {
-            text = string.Join("\n", LoadOcrLines(ocrPath).Select(OcrText.Normalize));
+            text = string.Join("\n", LoadOcrLines(ocrPath));
             listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;

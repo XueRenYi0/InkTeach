@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using SkiaSharp;
 using Vortice.DCommon;
 using Vortice.Direct2D1;
 using Vortice.DXGI;
@@ -216,6 +217,74 @@ public static class GlyphFill
         s.InvalidateMetrics();
         s.RecomputeBounds();
         return s;
+    }
+
+    /// <summary>
+    /// 从 Glyph 的填充区域里减掉一个圆（橡皮）；返回新的轮廓点，null = 擦光了。
+    /// 用 SkiaSharp 的布尔减，结果重新拍平成闭合轮廓。
+    /// </summary>
+    internal static List<InkPoint> SubtractCircle(Stroke s, float cx, float cy, float r)
+    {
+        using var glyph = BuildPath(s);
+        if (glyph == null) return null;
+        using var circle = new SKPath();
+        circle.AddCircle(cx, cy, MathF.Max(0.5f, r));
+        using var result = glyph.Op(circle, SKPathOp.Difference);
+        return ToPoints(result);
+    }
+
+    /// <summary>同上，减掉一个矩形（像素橡皮）。</summary>
+    internal static List<InkPoint> SubtractRect(Stroke s, RectF rect)
+    {
+        using var glyph = BuildPath(s);
+        if (glyph == null) return null;
+        using var clip = new SKPath();
+        clip.AddRect(new SKRect(rect.MinX, rect.MinY, rect.MaxX, rect.MaxY));
+        using var result = glyph.Op(clip, SKPathOp.Difference);
+        return ToPoints(result);
+    }
+
+    private static SKPath BuildPath(Stroke s)
+    {
+        if (s == null || s.Points.Count < 3) return null;
+        var path = new SKPath();
+        int i = 0;
+        while (i < s.Points.Count)
+        {
+            var p0 = s.Points[i];
+            if (p0.P < 0)
+            {
+                path.MoveTo(p0.X, p0.Y);
+                i++;
+                while (i < s.Points.Count && s.Points[i].P >= 0)
+                {
+                    path.LineTo(s.Points[i].X, s.Points[i].Y);
+                    i++;
+                }
+                path.Close();
+            }
+            else i++;
+        }
+        return path;
+    }
+
+    private static List<InkPoint> ToPoints(SKPath path)
+    {
+        if (path == null || path.IsEmpty) return null;
+        var contours = Flatten(path.ToSvgPathData());
+        if (contours.Count == 0) return null;
+        var pts = new List<InkPoint>();
+        foreach (var c in contours)
+        {
+            if (c.Count < 3) continue;
+            bool first = true;
+            foreach (var p in c)
+            {
+                pts.Add(new InkPoint { X = p.X, Y = p.Y, P = first ? -1f : 1f, T = 0 });
+                first = false;
+            }
+        }
+        return pts.Count >= 3 ? pts : null;
     }
 
     /// <summary>渲染一段字形轮廓到 BGRA（透明底）。</summary>

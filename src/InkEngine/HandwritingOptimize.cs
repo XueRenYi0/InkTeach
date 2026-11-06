@@ -65,6 +65,19 @@ public partial class InkEngine
             return;
         }
 
+        int graphicLike = 0;
+        foreach (var s in selected)
+        {
+            var b = s.WorldInkBounds;
+            if (b.IsEmpty) continue;
+            if (b.MaxX - b.MinX > 350f || b.MaxY - b.MinY > 180f) graphicLike++;
+        }
+        if (graphicLike > 3)
+        {
+            SetHandOcrStatus($"选区里图形较多（{graphicLike} 条长线），请只框选文字");
+            return;
+        }
+
         var cfg = OcrClient.LoadConfig();
         if (!cfg.IsConfigured)
         {
@@ -89,7 +102,7 @@ public partial class InkEngine
         byte[] png = RenderSelectionPng(selected, region);
         if (png == null)
         {
-            SetHandOcrStatus("选区渲染失败（太大或没有画布）");
+            SetHandOcrStatus("选区太大，请只框选一块文字");
             return;
         }
 
@@ -150,6 +163,17 @@ public partial class InkEngine
                 SetHandOcrStatus("选区已变化，已取消");
                 return;
             }
+
+        // 先做一次切行对齐检查：OCR 行数和几何行数差太多，说明这一页是
+        // 双栏 / 公式碎片 / 图形混排，硬替换会把整行搬到错误位置。
+        var detected = HandwritingReplace.DetectLines(done.Selected, done.Region,
+                                                      done.Result.Lines.Length);
+        if (detected.Count != done.Result.Lines.Length)
+        {
+            Console.WriteLine($"[手写优化] 拒绝对齐：几何 {detected.Count} 行 / OCR {done.Result.Lines.Length} 行");
+            SetHandOcrStatus($"排版复杂（检测 {detected.Count} / 识别 {done.Result.Lines.Length} 行），请只框选文字");
+            return;
+        }
 
         string font = GlyphText.BundledFontPath;
         if (string.IsNullOrEmpty(font))

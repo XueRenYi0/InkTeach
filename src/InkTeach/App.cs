@@ -554,6 +554,16 @@ internal sealed partial class App : InkEngine.InkEngine
                           args.Length > 4 && float.TryParse(args[4], out float gs2) ? gs2 : 120f);
             _quit = true;
         }
+        else if (mode == "--glypherase")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(200);
+            GlyphErasePng(args.Length > 1 ? args[1] : "reports/glypherase-before.png",
+                          args.Length > 2 ? args[2] : "reports/glypherase-after.png");
+            _quit = true;
+        }
         else if (mode == "--selaishow")
         {
             _autoExitAt = double.MaxValue;

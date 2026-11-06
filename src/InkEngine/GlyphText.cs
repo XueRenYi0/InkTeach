@@ -20,17 +20,40 @@ namespace InkEngine;
 /// </summary>
 public static class GlyphText
 {
-    /// <summary>行高 → 字号的经验系数（原型里跑过 3 张真实板书）。</summary>
-    public const float SizePerLineHeight = 1.18f;
+    /// <summary>行高 → 字号的经验系数（2026-11-06 楷体调到 1.05，避免压上下行）。</summary>
+    public const float SizePerLineHeight = 1.05f;
 
-    /// <summary>安装包里的默认手写字体（OFL 志莽行书）。</summary>
-    public static string BundledFontPath
+    /// <summary>安装包里的默认中文楷体（OFL 漓雨手书）。</summary>
+    public static string CjkFontPath
     {
         get
         {
-            string p = Path.Combine(AppContext.BaseDirectory, "assets", "fonts", "ZhiMangXing.ttf");
+            string p = Path.Combine(AppContext.BaseDirectory, "assets", "fonts", "LiyuShoushu.ttf");
+            if (File.Exists(p)) return p;
+            // 老安装包 / 调试目录没有漓雨时，退回随包的志莽行书。
+            p = Path.Combine(AppContext.BaseDirectory, "assets", "fonts", "ZhiMangXing.ttf");
             return File.Exists(p) ? p : null;
         }
+    }
+
+    /// <summary>兼容旧调用：默认中文手写字体。</summary>
+    public static string BundledFontPath => CjkFontPath;
+
+    /// <summary>英文用系统 Segoe UI（正常印刷体），中文用楷体，符号用 Segoe UI Symbol。</summary>
+    public sealed class Fonts
+    {
+        public string Cjk;
+        public string Latin;
+        public string Symbol;
+
+        public static Fonts Default => new()
+        {
+            Cjk = CjkFontPath ?? @"C:\Windows\Fonts\simkai.ttf",
+            Latin = File.Exists(@"C:\Windows\Fonts\segoeui.ttf")
+                ? @"C:\Windows\Fonts\segoeui.ttf" : @"C:\Windows\Fonts\arial.ttf",
+            Symbol = File.Exists(@"C:\Windows\Fonts\seguisym.ttf")
+                ? @"C:\Windows\Fonts\seguisym.ttf" : @"C:\Windows\Fonts\segoeui.ttf",
+        };
     }
 
     /// <summary>主字体缺字时的系统回退。顺序：雅黑（中文）→ 符号字体。</summary>
@@ -62,29 +85,43 @@ public static class GlyphText
         public float Height;
         public float MinX;
         public float MinY;
+        /// <summary>排完这一串之后的笔位置（含空白 / 字宽，不是墨迹包围盒）。</summary>
+        public float Advance;
         /// <summary>主字体缺的字（调用方可以提示 / 记日志）。</summary>
         public string Missing = "";
     }
 
+    /// <summary>按字号、基线排一行（单一字体，兼容旧调用）。</summary>
+    public static LineLayout Layout(string fontPath, string text, float fontSize,
+                                    float startX, float baselineY)
+        => Layout(new Fonts { Cjk = fontPath, Latin = fontPath, Symbol = fontPath },
+                  text, fontSize, startX, baselineY);
+
     /// <summary>
     /// 按字号 <paramref name="fontSize"/>、基线 <paramref name="baselineY"/> 排一行。
-    /// 返回的坐标已经是画布坐标（左上原点）。
+    /// 中文走楷体、ASCII 走正常拉丁字体、符号走符号字体；缺字再逐级回退。
     /// </summary>
-    public static LineLayout Layout(string fontPath, string text, float fontSize,
+    public static LineLayout Layout(Fonts fonts, string text, float fontSize,
                                     float startX, float baselineY)
     {
         var result = new LineLayout();
         if (string.IsNullOrEmpty(text) || fontSize <= 0) return result;
+        if (fonts == null) fonts = Fonts.Default;
 
-        var primary = Load(fontPath);
-        if (primary == null) return result;
+        var cjk = Load(fonts.Cjk);
+        var latin = Load(fonts.Latin) ?? cjk;
+        var symbol = Load(fonts.Symbol) ?? cjk;
+        if (cjk == null) cjk = latin ?? symbol;
+        if (cjk == null) return result;
 
         var fallbacks = new List<SKTypeface>();
         foreach (var f in FallbackFonts)
         {
             var tf = Load(f);
-            if (tf != null && !ReferenceEquals(tf, primary)) fallbacks.Add(tf);
+            if (tf != null && !fallbacks.Contains(tf)) fallbacks.Add(tf);
         }
+        foreach (var tf in new[] { cjk, latin, symbol })
+            if (tf != null && !fallbacks.Contains(tf)) fallbacks.Add(tf);
 
         var paints = new Dictionary<SKTypeface, SKPaint>();
         SKPaint PaintOf(SKTypeface tf)
@@ -115,11 +152,12 @@ public static class GlyphText
             // 空格只推进，不产生轮廓。
             if (char.IsWhiteSpace(ch, 0))
             {
-                x += PaintOf(primary).MeasureText(ch);
+                x += PaintOf(latin).MeasureText(ch);
                 continue;
             }
 
-            var tf = primary.ContainsGlyph(cp) ? primary : null;
+            SKTypeface preferred = IsCjk(cp) ? cjk : cp < 128 ? latin : symbol;
+            SKTypeface tf = preferred != null && preferred.ContainsGlyph(cp) ? preferred : null;
             if (tf == null)
             {
                 foreach (var fb in fallbacks)
@@ -127,7 +165,7 @@ public static class GlyphText
             }
             if (tf == null)
             {
-                tf = primary;
+                tf = cjk;
                 missing.Append(ch);
             }
 
@@ -161,9 +199,13 @@ public static class GlyphText
             result.Width = maxX - minX;
             result.Height = maxY - minY;
         }
+        result.Advance = x - startX;
         result.Missing = missing.ToString();
         return result;
     }
+
+    private static bool IsCjk(int cp)
+        => cp >= 0x2E80 || (cp >= 0x3000 && cp <= 0x303F) || (cp >= 0xFF00 && cp <= 0xFFEF);
 
     /// <summary>
     /// 把一行字排进原行框 <paramref name="box"/>：
@@ -174,13 +216,15 @@ public static class GlyphText
         if (box.IsEmpty || string.IsNullOrEmpty(text)) return null;
 
         float boxW = box.MaxX - box.MinX, boxH = box.MaxY - box.MinY;
+        var fonts = Fonts.Default;
+        if (!string.IsNullOrEmpty(fontPath)) fonts.Cjk = fontPath;
         float size = MathF.Max(4f, boxH * SizePerLineHeight);
         LineLayout layout = null;
 
         // 最多缩两轮：第一轮按宽度，第二轮防极端窄框。
         for (int pass = 0; pass < 3; pass++)
         {
-            layout = Layout(fontPath, text, size, 0f, 0f);
+            layout = Layout(fonts, text, size, 0f, 0f);
             if (layout.Contours.Count == 0) return null;
             if (layout.Width <= boxW * 1.02f) break;
             size *= MathF.Max(0.05f, boxW / layout.Width * 0.99f);
@@ -192,7 +236,7 @@ public static class GlyphText
         if (layout.Height > boxH * 1.02f)
         {
             size *= boxH / layout.Height * 0.99f;
-            layout = Layout(fontPath, text, size, 0f, 0f);
+            layout = Layout(fonts, text, size, 0f, 0f);
             if (layout.Contours.Count == 0) return null;
         }
 

@@ -53,7 +53,7 @@ internal sealed partial class App
         }
         Console.WriteLine($"文字区：({region.MinX:F0},{region.MinY:F0})..({region.MaxX:F0},{region.MaxY:F0})");
 
-        var texts = LoadOcrLines(ocrPath).Select(OcrText.Normalize).ToList();
+        var texts = LoadOcrLines(ocrPath).ToList();
         var lines = HandwritingReplace.DetectLines(candidates, region, texts.Count);
         Console.WriteLine($"检测到 {lines.Count} 行，OCR 给了 {texts.Count} 行");
         for (int i = 0; i < Math.Min(lines.Count, texts.Count); i++)

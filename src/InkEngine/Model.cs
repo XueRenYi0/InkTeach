@@ -7040,6 +7040,41 @@ internal sealed class TransformObjectsAction : EditAction
 ///   ② 脏区加"旧位、新位**各一个**矩形"，不用并集（见 SelfManagesDirty 的注释）；
 ///   ③ 端点存的是**局部坐标**，所以外面提交之前要先过 Transform⁻¹（见 Selection.ToLocalPoint）。
 /// </summary>
+internal sealed class GlyphEraseAction : EditAction
+{
+    private readonly Stroke _target;
+    private readonly List<InkPoint> _oldPoints;
+    private readonly List<InkPoint> _newPoints;
+    private readonly RectF _before;
+    private readonly RectF _after;
+
+    public override bool SelfManagesDirty => true;
+
+    public GlyphEraseAction(Stroke target, IReadOnlyList<InkPoint> newPoints)
+    {
+        _target = target;
+        _oldPoints = new List<InkPoint>(target.Points);
+        _newPoints = new List<InkPoint>(newPoints ?? Array.Empty<InkPoint>());
+        _before = target.PaddedBounds;
+        var after = RectF.Empty;
+        foreach (var p in _newPoints) after.Add(p.X, p.Y);
+        _after = after.IsEmpty ? _before : after.Inflate(2f);
+    }
+
+    public override RectF AffectedBefore => _before;
+    public override RectF AffectedAfter => _after;
+
+    public override void Undo(InkDocument doc) => Apply(doc, _oldPoints);
+    public override void Redo(InkDocument doc) => Apply(doc, _newPoints);
+
+    private void Apply(InkDocument doc, List<InkPoint> pts)
+    {
+        doc.ApplyGlyphPoints(_target, pts);
+        doc.Dirty.Add(_before);
+        doc.Dirty.Add(_after);
+    }
+}
+
 internal sealed class SetStrokeGeometryAction : EditAction
 {
     private readonly Stroke _target;
@@ -7647,6 +7682,22 @@ internal sealed class InkDocument
     }
 
     /// <summary>
+    /// 换掉一整组 Glyph 轮廓点（保留每段的 P=-1 起点标记）。橡皮布尔减用。
+    /// 调用方负责 Dirty；这里只让模型和空间索引跟上。
+    /// </summary>
+    internal void ApplyGlyphPoints(Stroke s, IReadOnlyList<InkPoint> points)
+    {
+        StructureChangedSinceRender = true;
+        _grid.Remove(s);
+        s.Points.Clear();
+        if (points != null) s.Points.AddRange(points);
+        s.InvalidateMetrics();
+        s.RecomputeBounds();
+        _grid.Insert(s);
+        Version++;
+    }
+
+    /// <summary>
     /// 对一条图形提交一次**改几何**（拖端点松手时走这里）。一步撤销。
     ///
     /// 和 <see cref="ApplyTransform"/> 一样是"效果先应用、再记账"：
@@ -8057,9 +8108,20 @@ internal sealed class InkDocument
         return (act.Removed.Count, strokes);
     }
 
-    public int EraseAt(float x, float y, float radius)
+    private static bool SameGlyphPoints(List<InkPoint> a, List<InkPoint> b)
     {
-        // One drag = one undo step. Collecting the removals into a single action
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+        {
+            if (MathF.Abs(a[i].X - b[i].X) > 0.05f ||
+                MathF.Abs(a[i].Y - b[i].Y) > 0.05f ||
+                MathF.Abs(a[i].P - b[i].P) > 0.01f) return false;
+        }
+        return true;
+    }
+
+    public int EraseAt(float x, float y, float radius)
+    {        // One drag = one undo step. Collecting the removals into a single action
         // also stops a fast drag from flooding the undo stack. A call made
         // outside BeginErase/EndErase is committed straight away.
         bool standalone = _eraseBatch == null;
@@ -8078,10 +8140,41 @@ internal sealed class InkDocument
             // 图像是"老师截来的内容"，不是笔画——橡皮擦掉半张截图不是任何人想要的；
             // 要删它用框选 + Delete。改之前这里对图像会走 IsShape 分支整条删掉，
             // 两种橡皮行为不一致（实测见 调研-图形与选中框.md 第五节）。
-            if (s.IsImage) continue;
+            // 例外：手写优化生成的公式图（Tool=Pen）是这一行的一部分，整张删掉可撤销。
+            if (s.IsImage && s.Tool != Tool.Pen) continue;
+            if (s.IsImage)
+            {
+                int ii = Strokes.IndexOf(s);
+                if (ii < 0) continue;
+                act.Items.Add((ii, s));
+                RemoveStroke(s);
+                added++;
+                continue;
+            }
             // **锁定的也不碰**（2026-09-16）：橡皮改的是内容，不是位置——
             // "锁了还能被擦掉"等于没锁。图像那条先例的同一个形状。
             if (s.Locked) continue;
+            if (s.Kind == StrokeKind.Glyph)
+            {
+                // Glyph 是填充轮廓：橡皮按**布尔减**擦局部，而不是整行删。
+                var newPts = GlyphFill.SubtractCircle(s, x, y, radius);
+                if (newPts == null)
+                {
+                    int gi = Strokes.IndexOf(s);
+                    if (gi < 0) continue;
+                    act.Items.Add((gi, s));
+                    RemoveStroke(s);
+                    added++;
+                }
+                else if (!SameGlyphPoints(newPts, s.Points))
+                {
+                    var ge = new GlyphEraseAction(s, newPts);
+                    ge.Redo(this);
+                    _glyphEraseBatch.Add(ge);
+                    added++;
+                }
+                continue;
+            }
             if (s.Kind == StrokeKind.TextBox)
             {
                 // **整笔橡皮点中文本框 = 删掉整个文本框**（用户 2026-11-01 定）：
@@ -8107,24 +8200,47 @@ internal sealed class InkDocument
             added++;
             RemoveStroke(s);
         }
-        if (standalone && act.Items.Count > 0) Commit(act);
+        if (standalone)
+        {
+            if (_glyphEraseBatch.Count > 0 || act.Items.Count > 0)
+            {
+                var compound = new CompoundAction();
+                compound.Steps.AddRange(_glyphEraseBatch);
+                if (act.Items.Count > 0) compound.Steps.Add(act);
+                if (compound.Steps.Count > 0) Commit(compound);
+            }
+            _glyphEraseBatch.Clear();
+        }
         return added;
     }
 
     private RemoveStrokesAction _eraseBatch;
     private EraseIntervalsAction _intervalBatch;
+    private readonly List<EditAction> _glyphEraseBatch = new();
 
     /// <summary>像素橡皮算出来的参数区间（复用一个表，拖动时不要每步分配）。</summary>
     private readonly List<(float a, float b)> _intervalScratch = new();
 
-    public void BeginErase() => _eraseBatch = new RemoveStrokesAction();
+    public void BeginErase()
+    {
+        _eraseBatch = new RemoveStrokesAction();
+        _glyphEraseBatch.Clear();
+    }
 
     /// <summary>像素橡皮：开始一次拖拽。整段拖拽只算**一步**撤销。</summary>
     public void BeginEraseRect() => _intervalBatch = new EraseIntervalsAction();
 
     public void EndErase()
     {
-        if (_eraseBatch != null && _eraseBatch.Items.Count > 0) Commit(_eraseBatch);
+        bool hasRemove = _eraseBatch != null && _eraseBatch.Items.Count > 0;
+        if (hasRemove || _glyphEraseBatch.Count > 0)
+        {
+            var compound = new CompoundAction();
+            compound.Steps.AddRange(_glyphEraseBatch);
+            if (hasRemove) compound.Steps.Add(_eraseBatch);
+            if (compound.Steps.Count > 0) Commit(compound);
+        }
+        _glyphEraseBatch.Clear();
         _eraseBatch = null;
         if (_intervalBatch != null && _intervalBatch.Items.Count > 0)
         {
@@ -8255,6 +8371,7 @@ internal sealed class InkDocument
             if (s.Kind == StrokeKind.TextBox) continue;
             if (s.Locked) continue;        // 同整笔橡皮：锁定的不擦（见 Stroke.Locked）
             if (!s.PaddedBounds.Intersects(rect)) continue;
+            if (s.Kind == StrokeKind.Glyph) continue;   // Glyph 用整笔橡皮做布尔减，像素橡皮不啃
             if (s.Kind != StrokeKind.Freehand && !ShapeTouchesRect(s, rect)) continue;
             _candidateSet.Add(s);
         }

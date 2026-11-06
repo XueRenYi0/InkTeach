@@ -22,6 +22,41 @@ internal static class OcrText
     private const string Sups = "⁰¹²³⁴⁵⁶⁷⁸⁹";
     private const string SubLetters = "ₙₘₛᵢⱼₖ";
 
+    /// <summary>把一行拆成「普通文字 / 行内公式」两段（$...$、\(...\)、\[...\]）。</summary>
+    public static List<(bool IsMath, string Text)> SplitRuns(string raw)
+    {
+        var runs = new List<(bool, string)>();
+        if (string.IsNullOrEmpty(raw)) return runs;
+        int i = 0, textStart = 0;
+        while (i < raw.Length)
+        {
+            string open = null, close = null;
+            if (raw[i] == '$') { open = "$"; close = "$"; }
+            else if (i + 1 < raw.Length && raw[i] == '\\' && raw[i + 1] == '(') { open = "\\("; close = "\\)"; }
+            else if (i + 1 < raw.Length && raw[i] == '\\' && raw[i + 1] == '[') { open = "\\["; close = "\\]"; }
+            if (open == null) { i++; continue; }
+
+            int end = raw.IndexOf(close, i + open.Length, StringComparison.Ordinal);
+            if (end < 0) break;
+            if (i > textStart)
+            {
+                string t = raw.Substring(textStart, i - textStart);
+                if (!string.IsNullOrWhiteSpace(t)) runs.Add((false, t));
+            }
+            string math = raw.Substring(i + open.Length, end - i - open.Length);
+            if (!string.IsNullOrWhiteSpace(math)) runs.Add((true, math));
+            i = end + close.Length;
+            textStart = i;
+        }
+        if (textStart < raw.Length)
+        {
+            string t = raw.Substring(textStart);
+            if (!string.IsNullOrWhiteSpace(t)) runs.Add((false, t));
+        }
+        if (runs.Count == 0 && !string.IsNullOrWhiteSpace(raw)) runs.Add((false, raw));
+        return runs;
+    }
+
     /// <summary>
     /// 去掉 OCR 常带出来的“非正文行”：
     ///   · 单个大写字母（立方体顶点 A/B/C/D 被单独认成一行）；
@@ -37,6 +72,8 @@ internal static class OcrText
             if (string.IsNullOrWhiteSpace(item)) continue;
             string t = item.Trim();
             if (Regex.IsMatch(t, "^[A-Z]$")) continue;
+            if (Regex.IsMatch(t, @"^(frac|sqrt|begin|end|dots|quad|qquad|therefore|vdots|cdots|ldots|left|right)[0-9A-Za-z{}]*$",
+                             RegexOptions.IgnoreCase)) continue;
             if (Regex.IsMatch(t, @"^[（(][^）)]{1,10}[）)]$") && !HasMath(t)) continue;
             if (result.Count > 0 && result[^1] == t) continue;
             result.Add(t);
