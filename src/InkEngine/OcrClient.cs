@@ -193,6 +193,12 @@ internal static class OcrClient
             content = StripFence(content);
             res.Text = content;
             res.Lines = SplitLines(content);
+            if (HasRepeat(res.Lines))
+            {
+                res.Error = "识别结果连续复读，请重试";
+                res.Lines = Array.Empty<string>();
+                return res;
+            }
             res.Ok = res.Lines.Length > 0;
             if (!res.Ok) res.Error = "识别结果为空";
 
@@ -257,6 +263,20 @@ internal static class OcrClient
             lines.Add(t);
         }
         return lines.ToArray();
+    }
+
+    private static bool HasRepeat(string[] lines)
+    {
+        int same = 0;
+        for (int i = 1; i < lines.Length; i++)
+        {
+            if (string.Equals(lines[i], lines[i - 1], StringComparison.Ordinal))
+            {
+                if (++same >= 3) return true;
+            }
+            else same = 0;
+        }
+        return false;
     }
 
     private static string ShortError(string raw, int status)

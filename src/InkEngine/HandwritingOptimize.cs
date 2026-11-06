@@ -124,6 +124,7 @@ public partial class InkEngine
         if (!done.Result.Ok)
         {
             string why = string.IsNullOrWhiteSpace(done.Result.Error) ? "未知错误" : done.Result.Error;
+            Console.WriteLine($"[手写优化] 识别失败：{why}（{done.Result.Seconds:F1}s）");
             SetHandOcrStatus("识别失败：" + Clip(why, 26));
             return;
         }
@@ -155,6 +156,8 @@ public partial class InkEngine
         // 替换完选中新对象：操作条还在，AI 菜单还能继续显示结果。
         Doc.Selected.Clear();
         Doc.Selected.AddRange(glyphs);
+        Console.WriteLine($"[手写优化] {lines} 行，{done.Result.Seconds:F1}s，" +
+                          $"tokens {done.Result.PromptTokens}/{done.Result.CompletionTokens}");
         SetHandOcrStatus($"已优化 {lines} 行（Ctrl+Z 可撤销）");
     }
 

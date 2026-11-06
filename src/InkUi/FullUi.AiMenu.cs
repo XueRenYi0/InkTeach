@@ -42,8 +42,7 @@ public sealed partial class FullUi
     {
         var c = AiCellRect();
         float w = AiMenuW;
-        string status = _host?.State.AiStatus ?? "";
-        float h = AiMenuPad * 2 + AiMenuRowH + (status.Length > 0 ? AiMenuStatusH : 0f);
+        float h = AiMenuPad * 2 + AiMenuRowH + (_lastAiStatus.Length > 0 ? AiMenuStatusH : 0f);
         float x = c.MinX;
         float y = c.MaxY + 8f;                 // 带子在屏幕下方时往上翻
         if (y + h > _screen.MaxY - 8f) y = c.MinY - 8f - h;
@@ -140,11 +139,11 @@ public sealed partial class FullUi
                 Brush(ctx, new Color4(0.63f, 0.36f, 0.98f, 0.12f)));
         _widgets.Text(ctx, "✨ 手写优化", item, 13f, Brush(ctx, new Color4(0.15f, 0.15f, 0.18f, 1f)));
 
-        string status = _host?.State.AiStatus ?? "";
+        string status = _lastAiStatus;
         if (status.Length > 0)
         {
             var sr = AiMenuStatusRect();
-            var col = _host.State.AiBusy
+            var col = _lastAiBusy
                 ? new Color4(0.55f, 0.30f, 0.85f, 1f)
                 : status.StartsWith("已优化", StringComparison.Ordinal)
                     ? new Color4(0.10f, 0.55f, 0.30f, 1f)
