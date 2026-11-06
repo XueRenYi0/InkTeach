@@ -72,6 +72,61 @@ internal sealed partial class App
         ExitCode = 0;
     }
 
+    /// <summary>自检：Glyph 对象存盘 → 重开 → 再渲染，验证 .inkb 往返。</summary>
+    private void GlyphSaveTest(string fontPath, string text, string outPath, float size)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 字形对象 存盘往返 ===");
+        var doc = new InkDocument();
+        float x = 20;
+        foreach (char ch in text)
+        {
+            var s = GlyphFill.BuildStroke(GlyphInk.GetSvgPath(fontPath, ch), size,
+                                          new Color4(0.86f, 0.16f, 0.12f, 1f), x, 20);
+            if (s == null) continue;
+            doc.Strokes.Add(s);
+            float maxX = 0;
+            foreach (var p in s.Points) if (p.X > maxX) maxX = p.X;
+            x = maxX + size * 0.08f;
+        }
+        Console.WriteLine($"存盘前：{doc.Strokes.Count} 个对象");
+
+        byte[] data = InkSerializer.Save(doc);
+        Console.WriteLine($"序列化：{data.Length} 字节");
+
+        var doc2 = new InkDocument();
+        InkSerializer.LoadInto(doc2, data);
+        Console.WriteLine($"重开后：{doc2.Strokes.Count} 个对象");
+
+        if (doc2.Strokes.Count != doc.Strokes.Count)
+        {
+            Console.WriteLine("!! 数量不一致，往返失败");
+            ExitCode = 1;
+            return;
+        }
+        int glyph = 0;
+        foreach (var s in doc2.Strokes) if (s.Kind == StrokeKind.Glyph) glyph++;
+        Console.WriteLine($"其中 Glyph：{glyph}");
+
+        var list = new List<Stroke>();
+        foreach (var s in doc2.Strokes) list.Add(s);
+        float minX = float.MaxValue, minY = float.MaxValue, maxX2 = float.MinValue, maxY2 = float.MinValue;
+        foreach (var s in list)
+            foreach (var p in s.Points)
+            {
+                if (p.X < minX) minX = p.X; if (p.X > maxX2) maxX2 = p.X;
+                if (p.Y < minY) minY = p.Y; if (p.Y > maxY2) maxY2 = p.Y;
+            }
+        var box = new RectF { MinX = minX - 10, MinY = minY - 10, MaxX = maxX2 + 10, MaxY = maxY2 + 10 };
+        int w = (int)MathF.Ceiling(box.MaxX - box.MinX);
+        int h = (int)MathF.Ceiling(box.MaxY - box.MinY);
+        var bgra = _windows[0].RenderStrokesToBgra(list, box, w, h);
+        if (bgra == null) { Console.WriteLine("渲染失败"); ExitCode = 1; return; }
+        File.WriteAllBytes(outPath, ExportFormats.Encode(outPath, bgra, w, h, 1, out _));
+        Console.WriteLine($"写出：{outPath}（{w}×{h}）");
+        ExitCode = glyph == doc.Strokes.Count ? 0 : 1;
+    }
+
     private void GlyphPathDump(string fontPath, string text)
     {
         Console.WriteLine();
