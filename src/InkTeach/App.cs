@@ -554,13 +554,6 @@ internal sealed partial class App : InkEngine.InkEngine
                           args.Length > 4 && float.TryParse(args[4], out float gs2) ? gs2 : 120f);
             _quit = true;
         }
-        else if (mode == "--handblocks")
-        {
-            _autoExitAt = double.MaxValue;
-            _nextLogAt = double.MaxValue;
-            HandBlocksDump(args.Length > 1 ? args[1] : "");
-            _quit = true;
-        }
         else if (mode == "--glypherase")
         {
             _autoExitAt = double.MaxValue;
