@@ -5791,11 +5791,77 @@ internal sealed partial class OverlayWindow : IDisposable
                     }
                     break;
                 }
+                case SelBarButton.Ai:
+                {
+                    // 青 → 紫 → 粉：和主带 AI 格同一套视觉
+                    var chip = SelectionHandles.BarHoverChipIn(btn, dpi);
+                    var stops = new[]
+                    {
+                        new GradientStop(0f, new Color4(0.13f, 0.83f, 0.93f, 1f)),
+                        new GradientStop(0.55f, new Color4(0.63f, 0.36f, 0.98f, 1f)),
+                        new GradientStop(1f, new Color4(0.96f, 0.45f, 0.71f, 1f)),
+                    };
+                    using var coll = _ctx.CreateGradientStopCollection(stops, ExtendMode.Clamp);
+                    using var grad = _ctx.CreateLinearGradientBrush(
+                        new LinearGradientBrushProperties
+                        {
+                            StartPoint = new Vector2(chip.MinX, chip.MinY),
+                            EndPoint = new Vector2(chip.MaxX, chip.MaxY),
+                        }, new BrushProperties { Opacity = 1f }, coll);
+                    _ctx.FillRoundedRectangle(new RoundedRectangle(
+                        new Vortice.RawRectF(chip.MinX, chip.MinY, chip.MaxX, chip.MaxY),
+                        7f * dpi, 7f * dpi), grad);
+                    var fmt = AiTextFormat(12.5f * dpi, true, true);
+                    _ctx.DrawText("AI", fmt,
+                        new Rect(chip.MinX, chip.MinY, chip.MaxX - chip.MinX, chip.MaxY - chip.MinY),
+                        Brush(new Color4(1f, 1f, 1f, 1f)));
+                    break;
+                }
                 default:
                     DrawIcon(IconForBar(kind), cx - glyphBox * 0.5f, cy - glyphBox * 0.5f,
                              glyphBox, iconBrush);
                     break;
             }
+        }
+
+        if (app.SelAiMenuOpen) DrawSelectionAiMenu(app, rect, dpi);
+    }
+
+    /// <summary>选中操作条旁的 AI 下拉（手写优化两项 + 状态行）。</summary>
+    private void DrawSelectionAiMenu(InkEngine app, in RectF bar, float dpi)
+    {
+        bool hasStatus = !string.IsNullOrEmpty(app.HandOcrStatus);
+        var m = SelectionHandles.BarAiMenuRectIn(bar, dpi, app.FurnitureViewport, hasStatus);
+        DrawPanelCard(app, m, 10f * dpi, dpi);
+        var theme = app.FloatingTheme;
+
+        string[] labels = { "✨ 手写优化（保留公式）", "✨ 手写优化（含公式）" };
+        for (int i = 0; i < labels.Length; i++)
+        {
+            var r = SelectionHandles.BarAiMenuRowRectIn(m, i, dpi);
+            if (app.SelAiMenuHover == i)
+            {
+                _scratch.Color = theme.Hover;
+                _ctx.FillRoundedRectangle(new RoundedRectangle(
+                    new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f * dpi, 7f * dpi), _scratch);
+            }
+            _ctx.DrawText(labels[i], AiTextFormat(12.5f * dpi, false, false),
+                new Rect(r.MinX + 8f * dpi, r.MinY, r.MaxX - r.MinX - 8f * dpi, r.MaxY - r.MinY),
+                Brush(theme.Text));
+        }
+
+        if (hasStatus)
+        {
+            var sr = SelectionHandles.BarAiMenuStatusRectIn(m, dpi);
+            var c = app.HandOcrBusy
+                ? new Color4(0.55f, 0.30f, 0.85f, 1f)
+                : app.HandOcrStatus.Contains("公式可能")
+                    ? new Color4(0.85f, 0.50f, 0.10f, 1f)
+                    : app.HandOcrStatus.StartsWith("已优化", StringComparison.Ordinal)
+                        ? new Color4(0.10f, 0.55f, 0.30f, 1f)
+                        : new Color4(0.60f, 0.20f, 0.20f, 1f);
+            _ctx.DrawText(app.HandOcrStatus, AiTextFormat(10f * dpi, false, false),
+                new Rect(sr.MinX, sr.MinY, sr.MaxX - sr.MinX, sr.MaxY - sr.MinY), Brush(c));
         }
     }
 

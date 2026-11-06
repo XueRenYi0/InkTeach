@@ -157,6 +157,11 @@ internal enum SelBarButton
     /// 不挤进普通对象的十格；普通对象没有这一格。
     /// </summary>
     FontSize = 10,
+    /// <summary>
+    /// **AI**（2026-11-06）：选中操作条末尾的彩色格，点开是「手写优化」下拉。
+    /// 只出现在普通对象条（文本框条没有，因为手写优化只处理墨迹）。
+    /// </summary>
+    Ai = 11,
 }
 
 /// <summary>
@@ -2261,7 +2266,7 @@ internal static class SelectionHandles
     ///     （那一格已经选中抛物线时**再点一次**换一档，见 Engine.CycleParabolaAxis）。
     ///     选中之后就是不能再改朝向——这是用户的选择，不是缺功能。
     /// </summary>
-    public const int BarButtonCount = 10;
+    public const int BarButtonCount = 11;
 
     /// <summary>
     /// 文本框的操作条：**七格**（用户 2026-11-01 按 ClassIn 定的顺序）：
@@ -2291,14 +2296,16 @@ internal static class SelectionHandles
     /// <summary>第 <paramref name="i"/> 格在这条上是什么语义（顺序表只此一份）。</summary>
     public static SelBarButton BarButtonOf(int i, bool textBar)
     {
-        if (!textBar) return (SelBarButton)i;
+        if (!textBar)
+            return i == 10 ? SelBarButton.Ai
+                 : i >= 0 && i < 10 ? (SelBarButton)i : SelBarButton.Collapse;
         return i >= 0 && i < TextBarOrder.Length ? TextBarOrder[i] : SelBarButton.Collapse;
     }
 
     /// <summary>某个语义在这条上的格子下标（挂面板时要用：文字条的"层级"是第 5 格，不是第 4 格）。</summary>
     public static int BarIndexOf(SelBarButton button, bool textBar)
     {
-        if (!textBar) return (int)button;
+        if (!textBar) return button == SelBarButton.Ai ? 10 : (int)button;
         for (int i = 0; i < TextBarOrder.Length; i++)
             if (TextBarOrder[i] == button) return i;
         return 0;
@@ -2964,5 +2971,59 @@ internal static class SelectionHandles
             if (x >= b.MinX && x <= b.MaxX) return i;
         }
         return -1;
+    }
+
+    // ---- AI 菜单（浮在选中操作条旁，2026-11-06） -------------------------
+
+    public const float BarAiMenuWidthLogical = 236f;
+    public const float BarAiMenuRowHeightLogical = 38f;
+    public const float BarAiMenuStatusHeightLogical = 26f;
+    public const float BarAiMenuPadLogical = 6f;
+
+    /// <summary>AI 菜单整块：默认贴操作条右下，下面放不下就翻到上面。</summary>
+    public static RectF BarAiMenuRectIn(in RectF bar, float dpi, in RectF visible, bool hasStatus)
+    {
+        float w = BarAiMenuWidthLogical * dpi;
+        float h = (BarAiMenuPadLogical * 2 + BarAiMenuRowHeightLogical * 2
+                   + (hasStatus ? BarAiMenuStatusHeightLogical : 0f)) * dpi;
+        float x = bar.MaxX - w;
+        float y = bar.MaxY + 8f * dpi;
+        if (!visible.IsEmpty)
+        {
+            float margin = BarScreenPaddingLogical * dpi;
+            if (y + h > visible.MaxY - margin) y = bar.MinY - 8f * dpi - h;
+            x = Math.Clamp(x, visible.MinX + margin,
+                           MathF.Max(visible.MinX + margin, visible.MaxX - margin - w));
+            y = Math.Clamp(y, visible.MinY + margin,
+                           MathF.Max(visible.MinY + margin, visible.MaxY - margin - h));
+        }
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    public static RectF BarAiMenuRowRectIn(in RectF menu, int i, float dpi)
+    {
+        float pad = BarAiMenuPadLogical * dpi;
+        float rowH = BarAiMenuRowHeightLogical * dpi;
+        float y = menu.MinY + pad + i * rowH;
+        return new RectF { MinX = menu.MinX + pad, MinY = y,
+                           MaxX = menu.MaxX - pad, MaxY = y + rowH };
+    }
+
+    public static RectF BarAiMenuStatusRectIn(in RectF menu, float dpi)
+    {
+        float pad = BarAiMenuPadLogical * dpi;
+        float y = menu.MinY + pad + BarAiMenuRowHeightLogical * 2f * dpi;
+        return new RectF { MinX = menu.MinX + pad + 4f * dpi, MinY = y,
+                           MaxX = menu.MaxX - pad - 4f * dpi,
+                           MaxY = y + BarAiMenuStatusHeightLogical * dpi };
+    }
+
+    /// <summary>点中第几项；-1 = 没点到菜单。</summary>
+    public static int BarAiMenuRowAt(float x, float y, in RectF menu, float dpi)
+    {
+        if (!menu.Contains(x, y)) return -1;
+        for (int i = 0; i < 2; i++)
+            if (BarAiMenuRowRectIn(menu, i, dpi).Contains(x, y)) return i;
+        return -2;   // 点在菜单里但不在选项上（状态行 / 边距）
     }
 }

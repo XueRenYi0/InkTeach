@@ -1092,6 +1092,10 @@ public partial class InkEngine
     /// </summary>
     internal bool SelBarCollapsed;
 
+    /// <summary>选中操作条末尾的 AI 下拉是否打开（2026-11-06）。</summary>
+    internal bool SelAiMenuOpen;
+    internal int SelAiMenuHover = -1;
+
     // 操作条 / 收起圆钮的**画布坐标缓存**：只在文档、选区、界面单位、可见区尺寸
     // 发生变化时重算；**画布滚动不重算**。这样滚动时条跟着对象一起走、滚出视野就消失，
     // 而不是一直粘在屏幕下沿（ClassIn 的行为，用户 2026-11-01 确认合理）。
@@ -16856,6 +16860,7 @@ public partial class InkEngine
 
     private void UpdateBarHover(float x, float y)
     {
+        if (Doc.Selected.Count == 0) SelAiMenuOpen = false;
         int hover = -1;
         if (!_drawing && SelectionBarShown)
         {
@@ -16867,6 +16872,18 @@ public partial class InkEngine
             else hover = SelectionHandles.BarButtonAtIn(x, y, SelectionBarCanvasRect, UiUnit,
                 SelectionHandles.BarButtonCountFor(SingleTextBoxSelection));
         }
+
+        int aiRow = -1;
+        if (!_drawing && SelAiMenuOpen && !BarDrawnCollapsed)
+        {
+            var m = SelectionHandles.BarAiMenuRectIn(SelectionBarCanvasRect, UiUnit,
+                FurnitureViewport, HandOcrStatus.Length > 0);
+            aiRow = SelectionHandles.BarAiMenuRowAt(x, y, m, UiUnit);
+            if (aiRow < 0) aiRow = -1;
+        }
+        if (SelAiMenuHover != aiRow) { SelAiMenuHover = aiRow; _dirty = true; }
+        if (aiRow >= 0) hover = -1;
+
         if (hover == SelBarHover) return;
         SelBarHover = hover;
         _dirty = true;
@@ -18222,6 +18239,17 @@ public partial class InkEngine
                 HandlePanelClick(x, y);
                 return true;                        // 面板上的点击一律吃掉（包括空白处）
             }
+            else if (SelAiMenuOpen &&
+                     SelectionHandles.BarAiMenuRectIn(SelectionBarCanvasRect, ui,
+                         FurnitureViewport, HandOcrStatus.Length > 0).Contains(x, y))
+            {
+                var am = SelectionHandles.BarAiMenuRectIn(SelectionBarCanvasRect, ui,
+                    FurnitureViewport, HandOcrStatus.Length > 0);
+                int row = SelectionHandles.BarAiMenuRowAt(x, y, am, ui);
+                if (row == 0 || row == 1)
+                    OptimizeHandwritingFromUi(row == 1);
+                return true;
+            }
             else
             {
                 int btn0 = SelectionHandles.BarButtonAtIn(x, y, SelectionBarRect(aabb0), ui,
@@ -18233,6 +18261,7 @@ public partial class InkEngine
                     SelPanelOpen = SelPanel.None;
                     _dirty = true;
                 }
+                if (SelAiMenuOpen) { SelAiMenuOpen = false; _dirty = true; }
             }
         }
 
@@ -19273,6 +19302,7 @@ public partial class InkEngine
                 return;
             }
         }
+        if (btn != SelBarButton.Ai) SelAiMenuOpen = false;
         switch (btn)
         {
             // **收起工具条**（用户 2026-09-16 更正：条首那个 ✕ 不是"取消选择"）。
@@ -19281,6 +19311,14 @@ public partial class InkEngine
                 SelBarCollapsed = true;
                 CloseCustomColor();
                 SelPanelOpen = SelPanel.None;
+                SelAiMenuOpen = false;
+                break;
+
+            case SelBarButton.Ai:
+                CloseCustomColor();
+                SelPanelOpen = SelPanel.None;
+                SelAiMenuOpen = !SelAiMenuOpen;
+                SelAiMenuHover = -1;
                 break;
 
             case SelBarButton.Color:
