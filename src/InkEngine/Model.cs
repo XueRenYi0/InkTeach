@@ -4224,6 +4224,29 @@ internal sealed class Stroke
                 && canvasY >= b.MinY - tolerance && canvasY <= b.MaxY + tolerance;
         }
 
+        // 字形填充对象：点在**填色区域**里就算命中（even-odd，孔里不算）。
+        if (Kind == StrokeKind.Glyph && Points.Count >= 3)
+        {
+            bool inside = false;
+            int i = 0;
+            while (i < Points.Count)
+            {
+                int start = i;
+                int end = i + 1;
+                while (end < Points.Count && Points[end].P >= 0) end++;
+                for (int k = start; k < end; k++)
+                {
+                    var a = Points[k];
+                    var b = Points[k + 1 < end ? k + 1 : start];
+                    if ((a.Y > canvasY) != (b.Y > canvasY) &&
+                        canvasX < (b.X - a.X) * (canvasY - a.Y) / (b.Y - a.Y) + a.X)
+                        inside = !inside;
+                }
+                i = end;
+            }
+            return inside;
+        }
+
         // **"线宽不变"的对象**（图形，见 KeepsWidth）：几何本身就带变换（画布空间），
         // 所以查询点**不用**反变换，线宽也就是画布单位里的 Width —— 和屏幕上看到的
         // 一致。不这么走的话，拉伸过的图形会出现"看得见却点不中"（局部空间里量的线宽
