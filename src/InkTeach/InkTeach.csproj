@@ -75,6 +75,9 @@
        发版时 publish.ps1 打进 dist，老师离线也能给学生扫。 -->
   <ItemGroup>
     <Content Include="assets\qq-group-qr.png" CopyToOutputDirectory="PreserveNewest" />
+    <!-- 手写优化用的 OFL 字体（2026-11-06）：随安装包分发，授权文本同目录。 -->
+    <Content Include="assets\fonts\ZhiMangXing.ttf" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="assets\fonts\OFL-ZhiMangXing.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

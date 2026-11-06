@@ -554,6 +554,32 @@ internal sealed partial class App : InkEngine.InkEngine
                           args.Length > 4 && float.TryParse(args[4], out float gs2) ? gs2 : 120f);
             _quit = true;
         }
+        else if (mode == "--handreplace")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(200);
+            HandReplacePng(args.Length > 1 ? args[1] : "",
+                           args.Length > 2 ? args[2] : "",
+                           args.Length > 3 ? args[3] : "reports/handreplace.png",
+                           args.Length > 4 ? args[4] : @"C:\Windows\Fonts\simkai.ttf",
+                           args.Length > 5 && float.TryParse(args[5], out float tl) ? tl : 0f);
+            _quit = true;
+        }
+        else if (mode == "--glyphline")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(200);
+            GlyphLinePng(args.Length > 1 ? args[1] : @"C:\Windows\Fonts\simkai.ttf",
+                         args.Length > 2 ? args[2] : "同学们，上课！",
+                         args.Length > 3 ? args[3] : "reports/glyphline.png",
+                         args.Length > 4 && float.TryParse(args[4], out float lh) ? lh : 72f,
+                         args.Length > 5 && float.TryParse(args[5], out float lw) ? lw : 1200f);
+            _quit = true;
+        }
         else if (mode == "--glyphobj")
         {
             _autoExitAt = double.MaxValue;

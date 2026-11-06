@@ -214,6 +214,7 @@ public static class GlyphFill
             }
         }
         s.InvalidateMetrics();
+        s.RecomputeBounds();
         return s;
     }
 
