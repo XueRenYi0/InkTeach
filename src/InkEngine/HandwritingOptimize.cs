@@ -220,7 +220,7 @@ public partial class InkEngine
         var box = region.Inflate(12f);
         int w = Math.Max(1, (int)MathF.Ceiling(box.MaxX - box.MinX));
         int h = Math.Max(1, (int)MathF.Ceiling(box.MaxY - box.MinY));
-        if (w > 2400 || h > 2400 || (long)w * h > 8_000_000) return null;
+        if (w > 4096 || h > 4096 || (long)w * h > 16_000_000) return null;
 
         var bgra = _windows[0].RenderStrokesToBgra(selected, box, w, h);
         if (bgra == null) return null;
