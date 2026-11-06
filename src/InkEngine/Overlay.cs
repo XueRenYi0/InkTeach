@@ -2354,8 +2354,37 @@ internal sealed partial class OverlayWindow : IDisposable
         _ctx.DrawGeometry(geo, Brush(color), MathF.Max(1f, width), Gfx.StyleFor(StrokeDash.Solid));
     }
 
+    /// <summary>字形填充对象：逐条闭合轮廓 → even-odd 填充。</summary>
+    private void DrawGlyphStroke(Stroke s)
+    {
+        if (s.Points.Count < 3 || _ctx == null) return;
+        using var geo = Gfx.D2DFactory.CreatePathGeometry();
+        using (var sink = geo.Open())
+        {
+            sink.SetFillMode(Vortice.Direct2D1.FillMode.Alternate);
+            int i = 0;
+            while (i < s.Points.Count)
+            {
+                var p0 = s.Points[i];
+                sink.BeginFigure(new Vector2(p0.X, p0.Y), FigureBegin.Filled);
+                i++;
+                while (i < s.Points.Count && s.Points[i].P >= 0)
+                {
+                    var p = s.Points[i];
+                    sink.AddLine(new Vector2(p.X, p.Y));
+                    i++;
+                }
+                sink.EndFigure(FigureEnd.Closed);
+            }
+            sink.Close();
+        }
+        _ctx.FillGeometry(geo, Brush(s.Color));
+    }
+
     private void DrawStrokeCore(Stroke s, Matrix3x2? extra = null)
     {
+        if (s.Kind == StrokeKind.Glyph) { DrawGlyphStroke(s); return; }
+
         // AI 题卡：结构化内容，由 DirectWrite 逐行画；不是位图、也不是几何。
         // **必须放在最前面**：它和图像一样没有可描边的中心线。
         if (s.Kind == StrokeKind.TextBox)

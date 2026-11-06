@@ -97,6 +97,126 @@ public static class GlyphFill
         sink.Close();
     }
 
+    /// <summary>把 SVG 轮廓拍平成多段折线（每条 = 一个闭合轮廓）。</summary>
+    public static List<List<System.Numerics.Vector2>> Flatten(string svg)
+    {
+        var result = new List<List<System.Numerics.Vector2>>();
+        if (string.IsNullOrEmpty(svg)) return result;
+
+        var t = new List<string>();
+        for (int p = 0; p < svg.Length;)
+        {
+            char c = svg[p];
+            if (char.IsLetter(c)) { t.Add(c.ToString()); p++; }
+            else if (c == '-' || c == '+' || c == '.' || char.IsDigit(c))
+            {
+                int s = p++;
+                while (p < svg.Length && (char.IsDigit(svg[p]) || svg[p] == '.')) p++;
+                t.Add(svg.Substring(s, p - s));
+            }
+            else p++;
+        }
+
+        int i = 0;
+        float Num() => float.Parse(t[i++], CultureInfo.InvariantCulture);
+        System.Numerics.Vector2 cur = default;
+        List<System.Numerics.Vector2> line = null;
+
+        void Push(System.Numerics.Vector2 v) => line?.Add(v);
+
+        for (; i < t.Count;)
+        {
+            string c = t[i++];
+            switch (c)
+            {
+                case "M":
+                    if (line != null && line.Count > 1) result.Add(line);
+                    cur = new System.Numerics.Vector2(Num(), Num());
+                    line = new List<System.Numerics.Vector2> { cur };
+                    break;
+                case "L":
+                    cur = new System.Numerics.Vector2(Num(), Num());
+                    Push(cur);
+                    break;
+                case "Q":
+                {
+                    var q = new System.Numerics.Vector2(Num(), Num());
+                    var p2 = new System.Numerics.Vector2(Num(), Num());
+                    for (int k = 1; k <= 10; k++)
+                    {
+                        float u = k / 10f, v = 1 - u;
+                        Push(new System.Numerics.Vector2(
+                            v * v * cur.X + 2 * v * u * q.X + u * u * p2.X,
+                            v * v * cur.Y + 2 * v * u * q.Y + u * u * p2.Y));
+                    }
+                    cur = p2;
+                    break;
+                }
+                case "C":
+                {
+                    var c1 = new System.Numerics.Vector2(Num(), Num());
+                    var c2 = new System.Numerics.Vector2(Num(), Num());
+                    var p2 = new System.Numerics.Vector2(Num(), Num());
+                    for (int k = 1; k <= 12; k++)
+                    {
+                        float u = k / 12f, v = 1 - u;
+                        Push(new System.Numerics.Vector2(
+                            v * v * v * cur.X + 3 * v * v * u * c1.X + 3 * v * u * u * c2.X + u * u * u * p2.X,
+                            v * v * v * cur.Y + 3 * v * v * u * c1.Y + 3 * v * u * u * c2.Y + u * u * u * p2.Y));
+                    }
+                    cur = p2;
+                    break;
+                }
+                case "Z":
+                case "z":
+                    if (line != null && line.Count > 1) { result.Add(line); line = null; }
+                    break;
+            }
+        }
+        if (line != null && line.Count > 1) result.Add(line);
+        return result;
+    }
+
+    /// <summary>从轮廓点造一条 <see cref="StrokeKind.Glyph"/> 对象。</summary>
+    internal static Stroke BuildStroke(string svg, float size, Color4 color,
+                                     float x, float y, float? widthRatio = null)
+    {
+        var contours = Flatten(svg);
+        if (contours.Count == 0) return null;
+
+        float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+        foreach (var c in contours)
+            foreach (var p in c)
+            {
+                if (p.X < minX) minX = p.X;
+                if (p.X > maxX) maxX = p.X;
+                if (p.Y < minY) minY = p.Y;
+                if (p.Y > maxY) maxY = p.Y;
+            }
+        float h = MathF.Max(1f, maxY - minY);
+        float k = size / h;
+        float ox = x - minX * k, oy = y - minY * k;
+
+        var s = new Stroke { Kind = StrokeKind.Glyph, Color = color, Width = 1f };
+        foreach (var c in contours)
+        {
+            bool first = true;
+            foreach (var p in c)
+            {
+                s.Points.Add(new InkPoint
+                {
+                    X = ox + p.X * k,
+                    Y = oy + p.Y * k,
+                    P = first ? -1f : 1f,
+                    T = 0,
+                });
+                first = false;
+            }
+        }
+        s.InvalidateMetrics();
+        return s;
+    }
+
     /// <summary>渲染一段字形轮廓到 BGRA（透明底）。</summary>
     public static byte[] Render(ID2D1DeviceContext ctx, string svg, Color4 color,
                                 out int w, out int h, float pad = 8f)

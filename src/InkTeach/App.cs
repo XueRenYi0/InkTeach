@@ -542,6 +542,18 @@ internal sealed partial class App : InkEngine.InkEngine
                         args.Length > 2 ? args[2] : "reports/board.png");
             _quit = true;
         }
+        else if (mode == "--glyphobj")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(200);
+            GlyphObjPng(args.Length > 1 ? args[1] : @"C:\Windows\Fonts\simkai.ttf",
+                        args.Length > 2 ? args[2] : "函数向量",
+                        args.Length > 3 ? args[3] : "reports/glyphobj.png",
+                        args.Length > 4 && float.TryParse(args[4], out float gs) ? gs : 120f);
+            _quit = true;
+        }
         else if (mode == "--glyphfill")
         {
             _autoExitAt = double.MaxValue;

@@ -31,6 +31,47 @@ internal sealed partial class App
         ExitCode = 0;
     }
 
+    /// <summary>自检：造一组 Glyph 对象并渲染整块板（验证对象化后的画法）。</summary>
+    private void GlyphObjPng(string fontPath, string text, string outPath, float size)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 字形对象 ===");
+        var strokes = new List<Stroke>();
+        float x = 20;
+        foreach (char ch in text)
+        {
+            string svg = GlyphInk.GetSvgPath(fontPath, ch);
+            if (svg == null) continue;
+            var s = GlyphFill.BuildStroke(svg, size, new Color4(0.86f, 0.16f, 0.12f, 1f), x, 20);
+            if (s == null) continue;
+            strokes.Add(s);
+            // 用对象自己的包围盒推进
+            float maxX = 0;
+            foreach (var p in s.Points) if (p.X > maxX) maxX = p.X;
+            x = maxX + size * 0.08f;
+            Console.WriteLine($"  {ch}: {s.Kind}, 点 {s.Points.Count}");
+        }
+        if (strokes.Count == 0) { Console.WriteLine("没有生成对象"); ExitCode = 1; return; }
+
+        float minX = float.MaxValue, minY = float.MaxValue, maxX2 = float.MinValue, maxY2 = float.MinValue;
+        foreach (var s in strokes)
+            foreach (var p in s.Points)
+            {
+                if (p.X < minX) minX = p.X; if (p.X > maxX2) maxX2 = p.X;
+                if (p.Y < minY) minY = p.Y; if (p.Y > maxY2) maxY2 = p.Y;
+            }
+        var box = new RectF { MinX = minX - 10, MinY = minY - 10, MaxX = maxX2 + 10, MaxY = maxY2 + 10 };
+        int w = (int)MathF.Ceiling(box.MaxX - box.MinX);
+        int h = (int)MathF.Ceiling(box.MaxY - box.MinY);
+
+        var bgra = _windows[0].RenderStrokesToBgra(strokes, box, w, h);
+        if (bgra == null) { Console.WriteLine("渲染失败"); ExitCode = 1; return; }
+        var bytes = ExportFormats.Encode(outPath, bgra, w, h, 1, out string tag);
+        File.WriteAllBytes(outPath, bytes);
+        Console.WriteLine($"写出：{outPath}（{w}×{h}）");
+        ExitCode = 0;
+    }
+
     private void GlyphPathDump(string fontPath, string text)
     {
         Console.WriteLine();
