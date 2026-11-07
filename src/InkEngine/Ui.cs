@@ -1395,7 +1395,8 @@ public readonly struct UiState
     /// <summary>手写优化最近一次状态（“识别中…” / “已优化 N 行” / 失败原因）。</summary>
     public string AiStatus { get; init; }
 
-    /// <summary>AI 识别 API 是否已配置（设置页入口显示“已配置/未配置”）。</summary>
+    /// <summary>AI 识别 API 是否已配置（设置页入口据此显示"去配置/管理"）。
+    /// ⚠ 不再显示"已配置"：保存过 DeepSeek 后仍要能继续添加/切换服务商。</summary>
     public bool AiApiConfigured { get; init; }
     /// <summary>当前配置的模型名（只用于设置页摘要）。</summary>
     public string AiApiModel { get; init; }

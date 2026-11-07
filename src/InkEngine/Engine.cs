@@ -2661,6 +2661,9 @@ public partial class InkEngine
         //   真敲错了 mode 名的行为不变，仍旧进自检模式。）
         if (IsSwitchNotMode(mode)) mode = "";
         SelfCheckMode = mode.Length > 0;
+        // 设置页后台自检：**不建覆盖层、不接 PPT、不注册热键、不装键盘看门狗**。
+        // 它只摆几何/命中/逐行执行，用户在用电脑时也能跑。
+        bool headlessSettingsAudit = mode == "--settingsaudit";
         // `--startupcheck` 是自检模式，但也要走一遍真实的后台待命装配。
         StartupMode = args.Contains("--startup") || args.Contains("--startupcheck");
         _startupPassive = StartupMode;
@@ -2753,7 +2756,7 @@ public partial class InkEngine
         // 不走这条路）。没装 Office / 没开 PPT 时它什么都不做。
         // 开机自启先不接 PPT：等用户真正激活（退出穿透）时再接，
         // 避免一登录就因为放映中的 PPT 自动展开页条/抢前台。
-        if (!StartupMode) StartPptLink();
+        if (!StartupMode && !headlessSettingsAudit) StartPptLink();
 
         // --hud：显式打开调试性能面板（默认关，交互里已没有开它的快捷键）。
         // 测"写一笔的内存/延时"就靠它：面板上并列 提交 / 工作集 / 显存 / 笔画数。
@@ -3091,7 +3094,7 @@ public partial class InkEngine
         Console.WriteLine($"virtual desktop: {_virtualW}x{_virtualH} at ({_virtualX},{_virtualY})"
                           + $"；主屏 {_primaryW}x{_primaryH}");
 
-        if (!CreateOverlays())
+        if (!headlessSettingsAudit && !CreateOverlays())
             return 3;
 
         // 键位：先读用户配置的覆盖项，再注册全局热键。读坏了不阻塞启动——
@@ -3310,11 +3313,13 @@ public partial class InkEngine
             Console.WriteLine("自动更新：检查 done.txt 失败：" + ex.Message);
         }
 
-        RegisterHotkeys();
+        // 设置页后台自检是无窗口模式：**不注册全局热键**（否则用户正在用的键会被抢），
+        // 也不启动键盘取消看门狗。
+        if (!headlessSettingsAudit) RegisterHotkeys();
 
         // 自检取消看门狗（2026-10-18）：独立线程读键，不依赖 UI 的 WM_HOTKEY。
         // --help / --clicktarget 是一次性/辅助进程，不需要。
-        if (SelfCheckMode && mode != "--help" && mode != "--clicktarget")
+        if (SelfCheckMode && !headlessSettingsAudit && mode != "--help" && mode != "--clicktarget")
             SelfTestCancel.Start();
 
         // 自检/基准模式下面板默认关掉，除非显式 --hud。

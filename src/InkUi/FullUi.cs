@@ -397,7 +397,7 @@ public sealed partial class FullUi : IOverlayUi
          "只上传安装量、版本、硬件/性能和触摸统计；不含姓名、账号、课件或屏幕内容；可随时关闭"),
         // AI 识别（2026-11-07）：设置里唯一的外网服务入口；配置写 %APPDATA%\InkTeach\ai.json。
         (Row.AiApi, "AI 识别 API…", false, false,
-         "配置板书识别用的服务地址 / API Key / 模型；保存后下一次识别生效"),
+         "配置板书识别用的服务地址 / API Key / 模型；可添加多个服务商，选中一个作为当前使用"),
         // 墨迹三条偏好（原本在「墨迹」页，2026-10-02 启动器改版后搬进设置子页）。
         (Row.RestoreInk, "自动恢复上次板书", false, false, "下次启动接上这次的板书"),
         // ⚠ 名称 2026-10-10 改：这个开关**不只管 PPT**——文档（PDF/图片）批注的按页
@@ -686,6 +686,7 @@ public sealed partial class FullUi : IOverlayUi
         // 那会让默认位置把面板夹到屏幕左上角。
         var w = _host?.WorkArea ?? default;
         _work = (w.MaxX > w.MinX && w.MaxY > w.MinY) ? w : screen;
+        ClampSettingsScroll();
         _frameShiftValid = false;          // 屏幕/DPI 变了：旧的位移快照作废
         return QueryBounds();
     }
@@ -3793,6 +3794,7 @@ public sealed partial class FullUi : IOverlayUi
     private void SetProfile(Profile p)
     {
         _profile = p;
+        ClampSettingsScroll();          // 自定义档会多出宫格，内容高度变了
         if (PosOf(CellForTool(_host.State.Tool)) < 0)
             _host.Commands.SetTool(Tool.Pen);
         _hover = -1;
@@ -3819,6 +3821,14 @@ public sealed partial class FullUi : IOverlayUi
     private SettingsCategory _settingsCat = SettingsCategory.Toolbar;
 
     private enum SettingsCategory { Toolbar = 0, General = 1, Writing = 2, Ink = 3, Ai = 4, Backup = 5, About = 6 }
+
+    /// <summary>设置页右侧是**一整页连续内容**（不是一分类一页）：滚轮/拖动上下滑，
+    /// 左侧分类只是"跳到哪一段"。所以滚动位置是页面级状态，不是分类级。</summary>
+    private float _settingsScroll;
+    private bool _settingsScrollDrag;
+
+    /// <summary>设置页右侧可视高度（逻辑像素）。面板高稳定，不随分类跳。</summary>
+    private const float SettingsBodyH = 560f;
 
     private static readonly string[] SettingsCatNames =
         { "工具栏", "常规", "书写", "墨迹", "AI 服务", "备份", "关于" };
@@ -3904,6 +3914,7 @@ public sealed partial class FullUi : IOverlayUi
     private const int MoreHitLogGroupUrl = 305; // 复制加群链接（2026-11-03）
     private const int MoreHitLogQr = 306;       // 整屏显示群二维码（2026-11-03）
     private const int MoreHitSettingsNav = 320; // 320+设置页左侧分类
+    private const int MoreHitSettingsScroll = 340; // 设置页右侧滚动条（拖动）
 
     /// <summary>
     /// 面板宽：**所有 More 页共用**工作区的 55%，夹在 560～980 逻辑像素。
@@ -4052,9 +4063,140 @@ public sealed partial class FullUi : IOverlayUi
     private float SettingsContentTop()
         => MoreRect().MinY + MorePad + MoreHeaderH + 8f;
 
+    private float SettingsViewportTop() => SettingsContentTop();
+    private float SettingsViewportBottom() => MoreRect().MaxY - MorePad;
+    private float SettingsViewportH()
+        => MathF.Max(80f, SettingsViewportBottom() - SettingsViewportTop());
+    private RectF SettingsViewportRect() => new()
+    {
+        MinX = SettingsContentLeft(),
+        MinY = SettingsViewportTop(),
+        MaxX = SettingsContentLeft() + SettingsContentW(),
+        MaxY = SettingsViewportBottom(),
+    };
+
     private float SettingsNavLeft() => MoreLeftX();
     private float SettingsContentLeft() => MoreLeftX() + SettingsNavW + 16f;
     private float SettingsContentW() => MathF.Max(120f, MoreContentW() - SettingsNavW - 16f);
+
+    /// <summary>每个分类在**连续内容**里的高度（含组头、行、组后距）。</summary>
+    private float SettingsSectionH(SettingsCategory cat)
+    {
+        if (cat == SettingsCategory.Toolbar)
+            return MoreGroupHeadH + MoreProfileH + MoreChipTopGap
+                   + (ChipsShown ? MoreChipBlockH : 42f) + MoreGroupGap;
+        return MoreGroupHeadH + SettingsRows(cat).Length * MoreRowH + MoreGroupGap;
+    }
+
+    /// <summary>分类在内容坐标系里的起点（0 = 内容顶部）。</summary>
+    private float SettingsSectionTop(SettingsCategory cat)
+    {
+        float y = 0f;
+        for (int c = 0; c < (int)cat; c++)
+            y += SettingsSectionH((SettingsCategory)c);
+        return y;
+    }
+
+    private float SettingsContentH()
+    {
+        float y = 0f;
+        for (int c = 0; c < SettingsCatNames.Length; c++)
+            y += SettingsSectionH((SettingsCategory)c);
+        return y;
+    }
+
+    private float SettingsScrollMax()
+        => MathF.Max(0f, SettingsContentH() - SettingsViewportH());
+
+    private void ClampSettingsScroll()
+        => _settingsScroll = Math.Clamp(_settingsScroll, 0f, SettingsScrollMax());
+
+    /// <summary>内容坐标 → 屏幕坐标（右侧视口顶部 + 内容 y − 滚动）。</summary>
+    private float SettingsY(float contentY)
+        => SettingsViewportTop() + contentY - _settingsScroll;
+
+    private RectF SettingsScrollbarRect() => new()
+    {
+        MinX = SettingsContentLeft() + SettingsContentW() + 4f,
+        MinY = SettingsViewportTop(),
+        MaxX = SettingsContentLeft() + SettingsContentW() + 10f,
+        MaxY = SettingsViewportBottom(),
+    };
+
+    /// <summary>命中区比视觉宽一圈：触摸时 6px 的细条很难抓。</summary>
+    private RectF SettingsScrollbarHitRect()
+    {
+        var r = SettingsScrollbarRect();
+        return new RectF { MinX = r.MinX - 4f, MinY = r.MinY, MaxX = r.MaxX + 2f, MaxY = r.MaxY };
+    }
+
+    private RectF SettingsScrollThumbRect()
+    {
+        float max = SettingsScrollMax();
+        if (max <= 0.5f) return RectF.Empty;
+        var bar = SettingsScrollbarRect();
+        float track = bar.MaxY - bar.MinY;
+        float thumb = MathF.Max(32f, track * SettingsViewportH() / SettingsContentH());
+        float t = _settingsScroll / max;
+        float y = bar.MinY + t * (track - thumb);
+        return new RectF { MinX = bar.MinX, MinY = y, MaxX = bar.MaxX, MaxY = y + thumb };
+    }
+
+    /// <summary>滚到哪一段 → 左侧分类高亮跟着走（不是反过来）。
+    /// 滚到最底时高亮最后一段——否则"关于"永远高亮不到。</summary>
+    private void UpdateSettingsActiveFromScroll()
+    {
+        var max = SettingsScrollMax();
+        SettingsCategory active;
+        if (max > 0.5f && _settingsScroll >= max - 1f)
+        {
+            active = (SettingsCategory)(SettingsCatNames.Length - 1);
+        }
+        else
+        {
+            float y = _settingsScroll + 1f;
+            active = SettingsCategory.Toolbar;
+            for (int c = 0; c < SettingsCatNames.Length; c++)
+            {
+                if (SettingsSectionTop((SettingsCategory)c) > y) break;
+                active = (SettingsCategory)c;
+            }
+        }
+        if (active != _settingsCat)
+        {
+            _settingsCat = active;
+            Invalidate();
+        }
+    }
+
+    private void ScrollSettingsTo(float scroll)
+    {
+        _settingsScroll = Math.Clamp(scroll, 0f, SettingsScrollMax());
+        UpdateSettingsActiveFromScroll();
+        Invalidate();
+    }
+
+    /// <summary>点左侧分类：**高亮必须停在被点的那个**。
+    /// 最后一段很短时，滚到它也只能滚到 max，按"视口顶部"算会跳回上一段（用户点了"关于"却亮"书写"）。</summary>
+    private void ScrollSettingsToCategory(SettingsCategory cat)
+    {
+        _settingsCat = cat;
+        _settingsScroll = Math.Clamp(SettingsSectionTop(cat), 0f, SettingsScrollMax());
+        Invalidate();
+    }
+
+    /// <summary>拖动滚动条：按滑块中心映射到滚动位置。</summary>
+    private void DragSettingsScrollbar(float y)
+    {
+        float max = SettingsScrollMax();
+        if (max <= 0.5f) return;
+        var bar = SettingsScrollbarRect();
+        var thumb = SettingsScrollThumbRect();
+        float track = bar.MaxY - bar.MinY;
+        float thumbH = thumb.MaxY - thumb.MinY;
+        float t = (y - bar.MinY - thumbH * 0.5f) / MathF.Max(1f, track - thumbH);
+        ScrollSettingsTo(Math.Clamp(t, 0f, 1f) * max);
+    }
 
     private RectF SettingsNavItemRect(int i)
     {
@@ -4070,19 +4212,9 @@ public sealed partial class FullUi : IOverlayUi
         return -1;
     }
 
-    /// <summary>设置子页高：左侧分类固定，右侧按当前分类的行数。</summary>
+    /// <summary>设置子页高：**固定**（右侧连续滚动），不随当前分类跳。</summary>
     private float MoreSettingsH()
-    {
-        float navH = SettingsNavTop + SettingsCatNames.Length * (SettingsNavItemH + SettingsNavGap);
-        float contentH;
-        if (_settingsCat == SettingsCategory.Toolbar)
-            contentH = MoreGroupHeadH + MoreProfileH + MoreChipTopGap
-                       + (ChipsShown ? MoreChipBlockH : 42f) + MoreGroupGap;
-        else
-            contentH = MoreGroupHeadH + SettingsRows(_settingsCat).Length * MoreRowH + 8f;
-        float bodyH = MathF.Max(navH, contentH);
-        return MorePad * 2 + MoreHeaderH + 8f + bodyH;
-    }
+        => MorePad * 2 + MoreHeaderH + 8f + SettingsBodyH;
 
     /// <summary>钉住宫格**只在自定义档**显示（用户 2026-10-02："老是占地方"）。</summary>
     private bool ChipsShown => _profile == Profile.Custom;
@@ -4211,7 +4343,7 @@ public sealed partial class FullUi : IOverlayUi
 
     // ---- 设置子页几何 --------------------------------------------------------
 
-    private float SetToolHeadY() => SettingsContentTop();
+    private float SetToolHeadY() => SettingsY(SettingsSectionTop(SettingsCategory.Toolbar));
 
     private RectF MoreProfileRect(int i)
     {
@@ -4249,35 +4381,36 @@ public sealed partial class FullUi : IOverlayUi
     private RectF SetInkHeadRect() => SetColHeadRect(SetColKind.Ink);
 
     /// <summary>
-    /// Rows 在设置页三列里的位置：外观（4）/ 书写（5）/ 墨迹（3）**并排**。
+    /// 行在**连续设置页**里的位置：先找它属于哪个分类、分类里的第几行，
+    /// 再加上分类在内容里的起点、减去页面滚动。
     ///
-    /// 2026-10-02 加「悬停提示」那一行时，行数**从常量来**（`LookRowCount` /
-    /// `WriteRowCount`），不再在 `SetWriteHeadRect` 里写死 `2 * MoreRowH`——
-    /// 加行忘改一处，后面的组头就会压到上一行上（仓库在抽屉时代踩过"写死下标"的坑）。
-    /// 2026-10-09：三列并排——行高不再叠两组，只看最高的那一列（`InkRowCount` 也入常量）。
+    /// 2026-11-07：从"一分类一页"改成"一整页连续滚动"——所有行都参与绘制/命中，
+    /// 左侧分类只是跳到对应段落；这也是"AI/备份/关于只有一个开关"不再显得空的原因。
     /// </summary>
     private RectF MoreRowRect(int i)
     {
-        var rows = SettingsRows(_settingsCat);
-        int idx = Array.IndexOf(rows, Rows[i].Kind);
-        if (idx < 0) return RectF.Empty;
-        float x = SettingsContentLeft();
-        float y = SettingsContentTop() + MoreGroupHeadH + idx * MoreRowH;
-        return new RectF { MinX = x, MinY = y, MaxX = x + SettingsContentW(), MaxY = y + MoreRowH };
-    }
-
-    /// <summary>自检用：不管当前分类，都给出某一行在它所属分类里的位置。</summary>
-    private RectF SettingsRowRectFor(Row kind)
-    {
+        var kind = Rows[i].Kind;
         for (int c = 0; c < SettingsCatNames.Length; c++)
         {
             var rows = SettingsRows((SettingsCategory)c);
             int idx = Array.IndexOf(rows, kind);
             if (idx < 0) continue;
-            float x = SettingsContentLeft();
-            float y = SettingsContentTop() + MoreGroupHeadH + idx * MoreRowH;
-            return new RectF { MinX = x, MinY = y, MaxX = x + SettingsContentW(), MaxY = y + MoreRowH };
+            float y = SettingsY(SettingsSectionTop((SettingsCategory)c)
+                                + MoreGroupHeadH + idx * MoreRowH);
+            return new RectF
+            {
+                MinX = SettingsContentLeft(), MinY = y,
+                MaxX = SettingsContentLeft() + SettingsContentW(), MaxY = y + MoreRowH,
+            };
         }
+        return RectF.Empty;
+    }
+
+    /// <summary>自检用：不管当前分类，都给出某一行在连续页里的位置。</summary>
+    private RectF SettingsRowRectFor(Row kind)
+    {
+        for (int i = 0; i < Rows.Length; i++)
+            if (Rows[i].Kind == kind) return MoreRowRect(i);
         return RectF.Empty;
     }
 
@@ -4349,17 +4482,29 @@ public sealed partial class FullUi : IOverlayUi
         {
             int nav = SettingsNavAt(x, y);
             if (nav >= 0) return MoreHitSettingsNav + nav;
-            if (_settingsCat != SettingsCategory.Toolbar) return MoreHitInside;
+
+            // 滚动条在内容右侧的留白里（不在视口矩形内），要先判它；
+            // 否则"滚动条永远点不到"——2026-11-07 后台自检抓到的第二个问题。
+            if (SettingsScrollMax() > 0.5f && SettingsScrollbarHitRect().Contains(x, y))
+                return MoreHitSettingsScroll;
+
+            // 右侧是**一整页连续内容**：先限制在视口里，再按滚动后的矩形命中。
+            if (!SettingsViewportRect().Contains(x, y)) return MoreHitInside;
+
+            // 工具栏段：档位 + 钉住宫格（滚出视口后自然点不到）
+            for (int i = 0; i < 3; i++)
+                if (MoreProfileRect(i).Contains(x, y)) return MoreHitProfile + i;
+            if (ChipsShown)
+                for (int cell = 1; cell < Cells.Length; cell++)
+                    if (CanUnpin(cell) && MoreChipRect(cell).Contains(x, y))
+                        return MoreHitChip + cell;
+
+            // 所有分类的行都在同一页里，按滚动后的位置命中。
+            for (int i = 0; i < Rows.Length; i++)
+                if (MoreRowRect(i).Contains(x, y)) return MoreHitRow + i;
+            return MoreHitInside;
         }
 
-        for (int i = 0; i < 3; i++)
-            if (MoreProfileRect(i).Contains(x, y)) return MoreHitProfile + i;
-        if (ChipsShown)
-            for (int cell = 1; cell < Cells.Length; cell++)
-                if (CanUnpin(cell) && MoreChipRect(cell).Contains(x, y))
-                    return MoreHitChip + cell;
-        for (int i = 0; i < Rows.Length; i++)
-            if (MoreRowRect(i).Contains(x, y)) return MoreHitRow + i;
         return MoreHitInside;
     }
 
@@ -4375,6 +4520,8 @@ public sealed partial class FullUi : IOverlayUi
 
         _moreOpen = true;
         _morePage = MorePage.Home;          // 每次打开都回启动器（肌肉记忆：底栏永远同一处）
+        _settingsScroll = 0f;
+        _settingsScrollDrag = false;
         _moreHover = MoreHitNone;
         _morePress = -1;
         _hubHint = "";
@@ -4392,6 +4539,7 @@ public sealed partial class FullUi : IOverlayUi
         _moreOpen = false;
         _moreHover = MoreHitNone;
         _morePress = -1;
+        _settingsScrollDrag = false;
         HideTip();              // 面板里的提示跟着收（触摸长按候选也作废）
         CancelTipHold();
         _more.To(0f, Tokens.MoreCloseMs);
@@ -4736,68 +4884,90 @@ public sealed partial class FullUi : IOverlayUi
     {
         DrawSettingsNav(ctx);
 
-        if (_settingsCat == SettingsCategory.Toolbar)
-        {
-            DrawMoreGroupHead(ctx, new RectF
-            {
-                MinX = SettingsContentLeft(), MinY = SetToolHeadY(),
-                MaxX = SettingsContentLeft() + SettingsContentW(), MaxY = SetToolHeadY() + MoreGroupHeadH,
-            }, "工具栏");
+        var vp = SettingsViewportRect();
+        ctx.PushAxisAlignedClip(new Vortice.RawRectF(vp.MinX, vp.MinY, vp.MaxX, vp.MaxY),
+                                AntialiasMode.Aliased);
 
-            for (int i = 0; i < 3; i++)
+        // **一整页连续内容**：所有分类按顺序排下来，滚动只移动内容，不换页。
+        for (int c = 0; c < SettingsCatNames.Length; c++)
+        {
+            var cat = (SettingsCategory)c;
+            float headY = SettingsY(SettingsSectionTop(cat));
+            var head = new RectF
             {
-                var s = MoreProfileRect(i);
-                bool active = ProfileIndex() == i;
-                var rr = new RoundedRectangle(new Vortice.RawRectF(s.MinX, s.MinY, s.MaxX, s.MaxY), 8f, 8f);
-                if (active) ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Accent));
-                else if (_moreHover == MoreHitProfile + i) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
-                ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : BorderCol), 1f);
-                _widgets.Text(ctx, ProfileName(i), s, 12.5f,
-                              Brush(ctx, active ? Tokens.AccentInk : InkCol));
-            }
-            if (ChipsShown)
+                MinX = SettingsContentLeft(), MinY = headY,
+                MaxX = SettingsContentLeft() + SettingsContentW(),
+                MaxY = headY + MoreGroupHeadH,
+            };
+            DrawMoreGroupHead(ctx, head, SettingsCatNames[c]);
+
+            if (cat == SettingsCategory.Toolbar)
             {
-                for (int cell = 1; cell < Cells.Length; cell++)
+                for (int i = 0; i < 3; i++)
                 {
-                    var c = MoreChipRect(cell);
-                    bool pinned = _pinned[cell];
-                    bool locked = !CanUnpin(cell);
-                    var rr = new RoundedRectangle(new Vortice.RawRectF(c.MinX, c.MinY, c.MaxX, c.MaxY), 8f, 8f);
-                    if (!locked && _moreHover == MoreHitChip + cell) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
-                    ctx.DrawRoundedRectangle(rr, Brush(ctx, pinned ? Tokens.Accent : BorderCol), 1f);
-                    DrawCellIcon(ctx, cell, c, Tokens.Icon,
-                                 new Color4(InkCol.R, InkCol.G, InkCol.B, pinned ? 1f : 0.35f),
-                                 pinned, _host.State);
-                    if (!pinned)
-                        _widgets.Text(ctx, "+", new RectF { MinX = c.MaxX - 18f, MinY = c.MinY + 2f, MaxX = c.MaxX - 3f, MaxY = c.MinY + 18f },
-                                      12f, Brush(ctx, MutedCol));
-                    if (locked) DrawLockBadge(ctx, c);
+                    var s = MoreProfileRect(i);
+                    bool active = ProfileIndex() == i;
+                    var rr = new RoundedRectangle(new Vortice.RawRectF(s.MinX, s.MinY, s.MaxX, s.MaxY), 8f, 8f);
+                    if (active) ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Accent));
+                    else if (_moreHover == MoreHitProfile + i) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+                    ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : BorderCol), 1f);
+                    _widgets.Text(ctx, ProfileName(i), s, 12.5f,
+                                  Brush(ctx, active ? Tokens.AccentInk : InkCol));
+                }
+                if (ChipsShown)
+                {
+                    for (int cell = 1; cell < Cells.Length; cell++)
+                    {
+                        var cr = MoreChipRect(cell);
+                        bool pinned = _pinned[cell];
+                        bool locked = !CanUnpin(cell);
+                        var rr = new RoundedRectangle(new Vortice.RawRectF(cr.MinX, cr.MinY, cr.MaxX, cr.MaxY), 8f, 8f);
+                        if (!locked && _moreHover == MoreHitChip + cell) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+                        ctx.DrawRoundedRectangle(rr, Brush(ctx, pinned ? Tokens.Accent : BorderCol), 1f);
+                        DrawCellIcon(ctx, cell, cr, Tokens.Icon,
+                                     new Color4(InkCol.R, InkCol.G, InkCol.B, pinned ? 1f : 0.35f),
+                                     pinned, _host.State);
+                        if (!pinned)
+                            _widgets.Text(ctx, "+", new RectF { MinX = cr.MaxX - 18f, MinY = cr.MinY + 2f, MaxX = cr.MaxX - 3f, MaxY = cr.MinY + 18f },
+                                          12f, Brush(ctx, MutedCol));
+                        if (locked) DrawLockBadge(ctx, cr);
+                    }
+                }
+                else
+                {
+                    _widgets.Text(ctx, "挑工具：切到「自定义」档，这里就能钉 / 取消钉",
+                                  new RectF
+                                  {
+                                      MinX = SettingsContentLeft(),
+                                      MinY = MoreProfileRect(0).MaxY + MoreChipTopGap,
+                                      MaxX = SettingsContentLeft() + SettingsContentW(),
+                                      MaxY = MoreProfileRect(0).MaxY + MoreChipTopGap + 32f,
+                                  },
+                                  11.5f, Brush(ctx, MutedCol), center: false);
                 }
             }
             else
             {
-                _widgets.Text(ctx, "挑工具：切到「自定义」档，这里就能钉 / 取消钉",
-                              new RectF
-                              {
-                                  MinX = SettingsContentLeft(),
-                                  MinY = MoreProfileRect(0).MaxY + MoreChipTopGap,
-                                  MaxX = SettingsContentLeft() + SettingsContentW(),
-                                  MaxY = MoreProfileRect(0).MaxY + MoreChipTopGap + 32f,
-                              },
-                              11.5f, Brush(ctx, MutedCol), center: false);
+                foreach (var kind in SettingsRows(cat))
+                    for (int i = 0; i < Rows.Length; i++)
+                        if (Rows[i].Kind == kind) { DrawMoreRow(ctx, i); break; }
             }
-            return;
         }
 
-        DrawMoreGroupHead(ctx, new RectF
-        {
-            MinX = SettingsContentLeft(), MinY = SettingsContentTop(),
-            MaxX = SettingsContentLeft() + SettingsContentW(), MaxY = SettingsContentTop() + MoreGroupHeadH,
-        }, SettingsCatNames[(int)_settingsCat]);
+        ctx.PopAxisAlignedClip();
+        DrawSettingsScrollbar(ctx);
+    }
 
-        foreach (var kind in SettingsRows(_settingsCat))
-            for (int i = 0; i < Rows.Length; i++)
-                if (Rows[i].Kind == kind) { DrawMoreRow(ctx, i); break; }
+    private void DrawSettingsScrollbar(ID2D1DeviceContext ctx)
+    {
+        if (SettingsScrollMax() <= 0.5f) return;
+        var bar = SettingsScrollbarRect();
+        var track = new RoundedRectangle(new Vortice.RawRectF(bar.MinX + 1.5f, bar.MinY, bar.MaxX - 1.5f, bar.MaxY), 2f, 2f);
+        ctx.FillRoundedRectangle(track, Brush(ctx, new Color4(BorderCol.R, BorderCol.G, BorderCol.B, 0.25f)));
+        var thumb = SettingsScrollThumbRect();
+        if (thumb.IsEmpty) return;
+        var tr = new RoundedRectangle(new Vortice.RawRectF(thumb.MinX, thumb.MinY, thumb.MaxX, thumb.MaxY), 3f, 3f);
+        ctx.FillRoundedRectangle(tr, Brush(ctx, new Color4(Tokens.Accent.R, Tokens.Accent.G, Tokens.Accent.B, 0.55f)));
     }
 
     private void DrawSettingsNav(ID2D1DeviceContext ctx)
@@ -4849,7 +5019,7 @@ public sealed partial class FullUi : IOverlayUi
             Row.HistoryDays => HistoryDaysName(_host.GetPref("historyDays")),
             Row.UiSize => UiScalePresets.Name(_host.UiScale),
             Row.TouchMode => _host.State.TouchGesturesOn ? "手势" : "单指",
-            Row.AiApi => _host.State.AiApiConfigured ? "已配置" : "未配置",
+            Row.AiApi => "管理…",
             _ => null,
         };
         float valueW = value != null ? _widgets.Measure(value, 12.5f) : 0f;
@@ -4988,7 +5158,11 @@ public sealed partial class FullUi : IOverlayUi
         switch (i)
         {
             case 0: _morePage = MorePage.Settings; _settingsCat = SettingsCategory.Toolbar;
-                _moreHover = MoreHitNone; Invalidate(); break;
+                _settingsScroll = 0f;
+                _settingsScrollDrag = false;
+                _moreHover = MoreHitNone;
+                _moreH.To(MoreSettingsH(), Tokens.MoreOpenMs);
+                Invalidate(); break;
             // 「日志」（2026-11-02）：先打开「日志与反馈」页，让用户可选填一句问题；
             // 空着也能直接上传，上传/导出都在这一页完成，状态行就在下面。
             case 1:
@@ -5243,10 +5417,16 @@ public sealed partial class FullUi : IOverlayUi
             }
             if (hit >= MoreHitSettingsNav && hit < MoreHitSettingsNav + SettingsCatNames.Length)
             {
-                _settingsCat = (SettingsCategory)(hit - MoreHitSettingsNav);
+                var cat = (SettingsCategory)(hit - MoreHitSettingsNav);
                 _moreHover = hit;
+                ScrollSettingsToCategory(cat);
                 _moreH.To(MoreSettingsH(), Tokens.MoreOpenMs);
-                Invalidate();
+                return true;
+            }
+            if (hit == MoreHitSettingsScroll)
+            {
+                _settingsScrollDrag = true;
+                DragSettingsScrollbar(p.Y);
                 return true;
             }
             if (_morePage == MorePage.Log
@@ -5446,6 +5626,11 @@ public sealed partial class FullUi : IOverlayUi
         // 「更多」面板开着时，指针只喂给面板：更新悬停、别再碰主条的悬停/拖动状态
         if (_moreOpen)
         {
+            if (_settingsScrollDrag && _morePage == MorePage.Settings)
+            {
+                DragSettingsScrollbar(p.Y);
+                return true;
+            }
             int hit = MoreHitAt(p.X, p.Y);
             if (hit != _moreHover) { _moreHover = hit; Invalidate(); }
             // 面板里的提示：鼠标悬停出、手指/笔长按也出（2026-10-02 第二批）
@@ -5538,6 +5723,11 @@ public sealed partial class FullUi : IOverlayUi
     {
         if (_aiOpen) return true;
         if (!_moreOpen) return false;
+        if (_morePage == MorePage.Settings && SettingsViewportRect().Contains(x, y))
+        {
+            ScrollSettingsTo(_settingsScroll - delta / 120f * 72f);
+            return true;
+        }
         if (_morePage == MorePage.Help && MoreRect().Contains(x, y))
             ScrollHelp(-delta / 120f * 48f);
         return true;
@@ -5562,6 +5752,7 @@ public sealed partial class FullUi : IOverlayUi
         {
             _moreHover = MoreHitNone;
             _morePress = -1;
+            _settingsScrollDrag = false;
             Invalidate();
         }
         if (!_hoverInside) return;
@@ -5637,6 +5828,12 @@ public sealed partial class FullUi : IOverlayUi
         // 「更多」面板：按下和抬起落在**同一行**才算一次执行（和抽屉同一套手感）
         if (_moreOpen)
         {
+            if (_settingsScrollDrag)
+            {
+                _settingsScrollDrag = false;
+                Invalidate();
+                return true;
+            }
             // 触摸/笔长按已经弹过提示：这一次松手**不执行**（提示停一会儿自己收）——
             // 和主条上那条规则完全一致（Windows/Material 惯例：长按是"看"不是"点"）。
             if (_tipHoldFired)
@@ -7949,12 +8146,67 @@ public sealed partial class FullUi : IOverlayUi
         _moreOpen = true;
         _morePage = MorePage.Settings;
         _settingsCat = SettingsCategory.Toolbar;
+        _settingsScroll = 0f;
+        _settingsScrollDrag = false;
         _more.Jump(1f);
         _moreH.Jump(MoreTargetH());
         _moreHover = MoreHitNone;
         _morePress = -1;
         Invalidate();
     }
+
+    // ---- 设置页连续滚动的自检钩子（2026-11-07）----------------------------
+
+    internal void AttachHostForTest(IUiHost host)
+    {
+        _host = host;
+        _peek.Bind(host);
+        _rail.Bind(host);
+    }
+
+    /// <summary>无窗口自检：直接摆好设置页的几何，不创建任何 HWND。</summary>
+    internal void PrepareSettingsAuditForTest(RectF screen)
+    {
+        _screen = screen;
+        _work = screen;
+        _moreOpen = true;
+        _morePage = MorePage.Settings;
+        _settingsCat = SettingsCategory.Toolbar;
+        _settingsScroll = 0f;
+        _settingsScrollDrag = false;
+        _moreHover = MoreHitNone;
+        _morePress = -1;
+    }
+
+    internal int SettingsCategoryCountForTest => SettingsCatNames.Length;
+    internal int SettingsRowCountForTest => Rows.Length;
+    internal RectF SettingsRowRectForTest(int i) => MoreRowRect(i);
+    internal RectF SettingsNavRectForTest(int i) => SettingsNavItemRect(i);
+    internal RectF SettingsViewportRectForTest => SettingsViewportRect();
+    internal float SettingsScrollMaxForTest => SettingsScrollMax();
+    internal float SettingsScrollValueForTest => _settingsScroll;
+    internal int SettingsActiveCategoryForTest => (int)_settingsCat;
+    internal float SettingsContentHForTest => SettingsContentH();
+    internal float SettingsSectionTopForTest(int c)
+        => SettingsSectionTop((SettingsCategory)Math.Clamp(c, 0, SettingsCatNames.Length - 1));
+    internal RectF SettingsScrollbarRectForTest => SettingsScrollbarRect();
+    internal RectF SettingsScrollThumbRectForTest => SettingsScrollThumbRect();
+
+    internal int SettingsRowCategoryForTest(int i)
+    {
+        var kind = Rows[i].Kind;
+        for (int c = 0; c < SettingsCatNames.Length; c++)
+            if (Array.IndexOf(SettingsRows((SettingsCategory)c), kind) >= 0) return c;
+        return -1;
+    }
+
+    internal void SettingsScrollToForTest(float scroll) => ScrollSettingsTo(scroll);
+    internal void SettingsSetCategoryForTest(int c)
+    {
+        int n = Math.Clamp(c, 0, SettingsCatNames.Length - 1);
+        ScrollSettingsToCategory((SettingsCategory)n);
+    }
+    internal void ActivateRowForTest(int i) => ActivateRow(i);
 
     /// <summary>自检：按标签触发设置行（等同点整行）。</summary>
     internal bool ActivateRowByLabelForTest(string labelPart)
