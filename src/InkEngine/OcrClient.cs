@@ -76,50 +76,108 @@ internal static class OcrClient
         public bool HasBox;
     }
 
-    /// <summary>配置文件路径：`%APPDATA%\InkTeach\ai.json`（密钥不进仓库/安装包）。</summary>
-    internal static string ConfigPath
-        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                        "InkTeach", "ai.json");
+    internal sealed class ModelListResult
+    {
+        public bool Ok;
+        public string Error = "";
+        public readonly List<string> Models = new();
+    }
 
-    /// <summary>保存 BYOK 配置（覆盖 ai.json；环境变量仍然优先）。</summary>
+    /// <summary>拉取 OpenAI 兼容的 `/models`，给设置里的模型下拉用。失败不抛异常。</summary>
+    internal static async Task<ModelListResult> ListModelsAsync(OcrConfig cfg, CancellationToken ct)
+    {
+        var res = new ModelListResult();
+        if (cfg == null || string.IsNullOrWhiteSpace(cfg.Key))
+        {
+            res.Error = "先填 API Key";
+            return res;
+        }
+
+        string endpoint = cfg.Endpoint;
+        if (endpoint.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
+            endpoint = endpoint[..^"/chat/completions".Length] + "/models";
+        else
+            endpoint = (cfg.BaseUrl ?? "").TrimEnd('/') + "/models";
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(15));
+            using var req = new HttpRequestMessage(HttpMethod.Get, endpoint);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", cfg.Key);
+            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseContentRead, cts.Token)
+                                       .ConfigureAwait(false);
+            string raw = await resp.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode)
+            {
+                res.Error = ShortError(raw, (int)resp.StatusCode);
+                return res;
+            }
+
+            using var doc = JsonDocument.Parse(raw);
+            var root = doc.RootElement;
+            JsonElement arr;
+            if (!root.TryGetProperty("data", out arr) || arr.ValueKind != JsonValueKind.Array)
+                if (!root.TryGetProperty("models", out arr) || arr.ValueKind != JsonValueKind.Array)
+                    arr = default;
+
+            if (arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var e in arr.EnumerateArray())
+                {
+                    string id = e.ValueKind == JsonValueKind.String
+                        ? e.GetString()
+                        : e.TryGetProperty("id", out var v) && v.ValueKind == JsonValueKind.String
+                            ? v.GetString()
+                            : null;
+                    if (!string.IsNullOrWhiteSpace(id)) res.Models.Add(id.Trim());
+                }
+            }
+            res.Models.Sort(StringComparer.OrdinalIgnoreCase);
+            res.Ok = res.Models.Count > 0;
+            if (!res.Ok) res.Error = "接口没有返回模型列表";
+            return res;
+        }
+        catch (OperationCanceledException)
+        {
+            res.Error = "获取模型超时";
+            return res;
+        }
+        catch (Exception ex)
+        {
+            res.Error = ex.Message;
+            return res;
+        }
+    }
+
+    /// <summary>配置文件路径：`%APPDATA%\InkTeach\ai.json`（密钥不进仓库/安装包）。</summary>
+    internal static string ConfigPathOverride;
+    internal static string ConfigPath
+        => ConfigPathOverride ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "InkTeach", "ai.json");
+
+    /// <summary>保存当前生效的 BYOK 配置（写回 ai.json 的 active provider）。</summary>
     internal static void SaveConfig(OcrConfig cfg)
     {
         if (cfg == null) return;
-        string file = ConfigPath;
-        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-        var obj = new
-        {
-            baseUrl = (cfg.BaseUrl ?? "").Trim(),
-            key = (cfg.Key ?? "").Trim(),
-            model = (cfg.Model ?? "").Trim(),
-            thinking = string.IsNullOrWhiteSpace(cfg.Thinking) ? "auto" : cfg.Thinking.Trim(),
-        };
-        File.WriteAllText(file, JsonSerializer.Serialize(obj,
-            new JsonSerializerOptions { WriteIndented = true }));
+        OcrProviders.UpdateActive(cfg);
     }
 
-    /// <summary>读配置：环境变量 &gt; ai.json &gt; DeepSeek 官方默认。</summary>
+    /// <summary>读配置：环境变量 &gt; ai.json 当前服务商 &gt; DeepSeek 官方默认。</summary>
     internal static OcrConfig LoadConfig()
     {
         if (TestOverride != null) return TestOverride;
 
-        var cfg = new OcrConfig();
-        string dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "InkTeach");
-        string file = Path.Combine(dir, "ai.json");
-        if (File.Exists(file))
+        var profile = OcrProviders.Load().Active;
+        var cfg = new OcrConfig
         {
-            try
-            {
-                using var doc = JsonDocument.Parse(File.ReadAllText(file));
-                var r = doc.RootElement;
-                cfg.BaseUrl = Str(r, "baseUrl", "base_url") ?? cfg.BaseUrl;
-                cfg.Key = Str(r, "key", "apiKey", "api_key") ?? cfg.Key;
-                cfg.Model = Str(r, "model") ?? cfg.Model;
-                cfg.Thinking = Str(r, "thinking") ?? cfg.Thinking;
-            }
-            catch { /* 配置坏了就当没配，走环境变量 */ }
-        }
+            BaseUrl = profile?.BaseUrl ?? "https://api.deepseek.com",
+            Key = profile?.Key ?? "",
+            Model = profile?.Model ?? "deepseek-flash",
+            Thinking = string.IsNullOrWhiteSpace(profile?.Thinking) ? "auto" : profile.Thinking,
+        };
 
         string envBase = Environment.GetEnvironmentVariable("INKTEACH_AI_BASEURL");
         string envKey = Environment.GetEnvironmentVariable("INKTEACH_AI_KEY");

@@ -275,9 +275,14 @@ $env:INKTEACH_AI_THINKING = "auto"        # auto / disabled / low / none
 ### 2026-11-07 当前入口（用户定）
 
 - AI 菜单**只保留「📝 识别到文本框」**；两个「手写优化」先隐藏，代码保留，等复杂板书算法稳定后再放出来。
-- 设置 →「书写」列新增 **「AI 识别 API…」**：原生小窗填服务地址 / API Key / 模型，
-  保存到 `%APPDATA%\InkTeach\ai.json`；设置页右侧显示「已配置 / 未配置」。
-- 不引入 WPF/WebView：这个弹窗用系统 EDIT/BUTTON，中文输入法和密码框交给 Windows。
+- 设置页改成 **左侧分类 + 右侧内容**：工具栏 / 常规 / 书写 / 墨迹 / AI 服务 / 备份 / 关于。
+- **AI 服务 → AI 识别 API…**：
+  - 预置 5 家（DeepSeek / 阿里百炼 / 火山方舟 / 智谱 / 硅基流动）+ 自定义；
+  - 自定义可多条，名称自动取域名、重名加序号，可删除；
+  - 服务地址 / Key / 模型（密码框），支持「获取 API Key」跳转，「获取模型」调 `/models`；
+  - 模型名后缀「推荐」只是界面标签；实测只推荐 DeepSeek `deepseek-flash`、火山 `doubao-seed-2-1-lite-260915`；
+  - 保存在 `%APPDATA%\InkTeach\ai.json` 的 `activeId + providers[]`，旧版扁平文件自动迁移。
+- 不引入 WPF/WebView：弹窗用系统 EDIT/COMBOBOX/BUTTON，中文输入法和密码框交给 Windows。
 
 ### 还没做
 

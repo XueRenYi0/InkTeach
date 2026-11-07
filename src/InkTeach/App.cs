@@ -628,6 +628,20 @@ internal sealed partial class App : InkEngine.InkEngine
             AiApiShow(args.Length > 1 ? args[1] : "reports/aiapi.bmp");
             _quit = true;
         }
+        else if (mode == "--apiconfig")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ApiConfigTest();
+            _quit = true;
+        }
+        else if (mode == "--listmodels")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ListModelsTest();
+            _quit = true;
+        }
         else if (mode == "--handocr")
         {
             _autoExitAt = double.MaxValue;

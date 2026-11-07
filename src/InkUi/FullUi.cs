@@ -3816,6 +3816,33 @@ public sealed partial class FullUi : IOverlayUi
     private readonly Anim _more;          // 0 = 关、1 = 全开（兼遮罩透明度）
     private readonly Anim _moreH;         // 面板高度：换页时动画到目标高（不跳）
     private MorePage _morePage = MorePage.Home;
+    private SettingsCategory _settingsCat = SettingsCategory.Toolbar;
+
+    private enum SettingsCategory { Toolbar = 0, General = 1, Writing = 2, Ink = 3, Ai = 4, Backup = 5, About = 6 }
+
+    private static readonly string[] SettingsCatNames =
+        { "工具栏", "常规", "书写", "墨迹", "AI 服务", "备份", "关于" };
+
+    private static readonly Row[] SettingsGeneralRows =
+        { Row.DarkTheme, Row.AutoHide, Row.RailPin, Row.UiSize, Row.AutoStart };
+    private static readonly Row[] SettingsWritingRows =
+        { Row.DwellShape, Row.Pressure, Row.Predict, Row.TouchMode };
+    private static readonly Row[] SettingsInkRows =
+        { Row.RestoreInk, Row.PptAutoSave, Row.HistoryDays };
+    private static readonly Row[] SettingsAiRows = { Row.AiApi };
+    private static readonly Row[] SettingsBackupRows = { Row.BackupAll, Row.RestoreAll };
+    private static readonly Row[] SettingsAboutRows = { Row.Privacy };
+
+    private static Row[] SettingsRows(SettingsCategory cat) => cat switch
+    {
+        SettingsCategory.General => SettingsGeneralRows,
+        SettingsCategory.Writing => SettingsWritingRows,
+        SettingsCategory.Ink => SettingsInkRows,
+        SettingsCategory.Ai => SettingsAiRows,
+        SettingsCategory.Backup => SettingsBackupRows,
+        SettingsCategory.About => SettingsAboutRows,
+        _ => Array.Empty<Row>(),
+    };
     private int _moreHover = MoreHitNone;
     private int _morePress = -1;
     private string _hubHint = "";         // 启动器状态行的临时提示（点置灰格/预留格时写）
@@ -3876,6 +3903,7 @@ public sealed partial class FullUi : IOverlayUi
     private const int MoreHitLogGroup = 304;  // 复制反馈 QQ 群号（2026-11-03）
     private const int MoreHitLogGroupUrl = 305; // 复制加群链接（2026-11-03）
     private const int MoreHitLogQr = 306;       // 整屏显示群二维码（2026-11-03）
+    private const int MoreHitSettingsNav = 320; // 320+设置页左侧分类
 
     /// <summary>
     /// 面板宽：**所有 More 页共用**工作区的 55%，夹在 560～980 逻辑像素。
@@ -4016,16 +4044,45 @@ public sealed partial class FullUi : IOverlayUi
            + MoreGroupHeadH + HubRows(1) * (MoreTile + MoreTileGap) + MoreGroupGap
            + MoreStatusH + 8 + MoreTile;
 
-    /// <summary>设置子页高：工具条组 ＋ 下半三栏（外观 / 书写 / 墨迹 并排）。</summary>
-    private float MoreSettingsH()
-        => MorePad * 2 + MoreHeaderH + 8
-           + MoreGroupHeadH + MoreProfileH + MoreChipTopGap
-           + (ChipsShown ? MoreChipBlockH : 42f)
-           + MoreGroupGap + MoreLowerH;
+    private const float SettingsNavW = 132f;
+    private const float SettingsNavItemH = 34f;
+    private const float SettingsNavGap = 5f;
+    private const float SettingsNavTop = 4f;
 
-    /// <summary>下半区高度 = 最高那一列（三列并排，三个组头都在同一行）。</summary>
-    private static float MoreLowerH
-        => MoreGroupHeadH + MathF.Max(LookRowCount, MathF.Max(WriteRowCount, InkRowCount)) * MoreRowH;
+    private float SettingsContentTop()
+        => MoreRect().MinY + MorePad + MoreHeaderH + 8f;
+
+    private float SettingsNavLeft() => MoreLeftX();
+    private float SettingsContentLeft() => MoreLeftX() + SettingsNavW + 16f;
+    private float SettingsContentW() => MathF.Max(120f, MoreContentW() - SettingsNavW - 16f);
+
+    private RectF SettingsNavItemRect(int i)
+    {
+        float x = SettingsNavLeft();
+        float y = SettingsContentTop() + SettingsNavTop + i * (SettingsNavItemH + SettingsNavGap);
+        return new RectF { MinX = x, MinY = y, MaxX = x + SettingsNavW, MaxY = y + SettingsNavItemH };
+    }
+
+    private int SettingsNavAt(float x, float y)
+    {
+        for (int i = 0; i < SettingsCatNames.Length; i++)
+            if (SettingsNavItemRect(i).Contains(x, y)) return i;
+        return -1;
+    }
+
+    /// <summary>设置子页高：左侧分类固定，右侧按当前分类的行数。</summary>
+    private float MoreSettingsH()
+    {
+        float navH = SettingsNavTop + SettingsCatNames.Length * (SettingsNavItemH + SettingsNavGap);
+        float contentH;
+        if (_settingsCat == SettingsCategory.Toolbar)
+            contentH = MoreGroupHeadH + MoreProfileH + MoreChipTopGap
+                       + (ChipsShown ? MoreChipBlockH : 42f) + MoreGroupGap;
+        else
+            contentH = MoreGroupHeadH + SettingsRows(_settingsCat).Length * MoreRowH + 8f;
+        float bodyH = MathF.Max(navH, contentH);
+        return MorePad * 2 + MoreHeaderH + 8f + bodyH;
+    }
 
     /// <summary>钉住宫格**只在自定义档**显示（用户 2026-10-02："老是占地方"）。</summary>
     private bool ChipsShown => _profile == Profile.Custom;
@@ -4154,12 +4211,12 @@ public sealed partial class FullUi : IOverlayUi
 
     // ---- 设置子页几何 --------------------------------------------------------
 
-    private float SetToolHeadY() => MoreRect().MinY + MorePad + MoreHeaderH + 8f;
+    private float SetToolHeadY() => SettingsContentTop();
 
     private RectF MoreProfileRect(int i)
     {
-        float w = (MoreContentW() - MoreProfileGap * 2f) / 3f;
-        float x = MoreLeftX() + i * (w + MoreProfileGap);
+        float w = (SettingsContentW() - MoreProfileGap * 2f) / 3f;
+        float x = SettingsContentLeft() + i * (w + MoreProfileGap);
         float y = SetToolHeadY() + MoreGroupHeadH;
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + MoreProfileH };
     }
@@ -4167,10 +4224,10 @@ public sealed partial class FullUi : IOverlayUi
     private RectF MoreChipRect(int cell)
     {
         int idx = cell - 1;
-        float w = (MoreContentW() - (MoreChipCols - 1) * MoreChipGap) / MoreChipCols;
+        float w = (SettingsContentW() - (MoreChipCols - 1) * MoreChipGap) / MoreChipCols;
         int col = idx % MoreChipCols, row = idx / MoreChipCols;
         float y = MoreProfileRect(0).MaxY + MoreChipTopGap + row * (MoreChipH + MoreChipGap);
-        float x = MoreLeftX() + col * (w + MoreChipGap);
+        float x = SettingsContentLeft() + col * (w + MoreChipGap);
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + MoreChipH };
     }
 
@@ -4199,26 +4256,30 @@ public sealed partial class FullUi : IOverlayUi
     /// 加行忘改一处，后面的组头就会压到上一行上（仓库在抽屉时代踩过"写死下标"的坑）。
     /// 2026-10-09：三列并排——行高不再叠两组，只看最高的那一列（`InkRowCount` 也入常量）。
     /// </summary>
-    private RectF MoreRowRect(int i) => Rows[i].Kind switch
+    private RectF MoreRowRect(int i)
     {
-        Row.DarkTheme => SetColRow(SetColKind.Look, 0),
-        Row.AutoHide => SetColRow(SetColKind.Look, 1),
-        Row.RailPin => SetColRow(SetColKind.Look, 2),
-        Row.UiSize => SetColRow(SetColKind.Look, 3),
-        Row.AutoStart => SetColRow(SetColKind.Look, 4),      // 「功能提示」行 2026-10-16 撤除（改常开），界面上移一格
-        Row.DwellShape => SetColRow(SetColKind.Write, 0),
-        Row.Pressure => SetColRow(SetColKind.Write, 1),
-        Row.Predict => SetColRow(SetColKind.Write, 2),
-        Row.TouchMode => SetColRow(SetColKind.Write, 3),
-        Row.Privacy => SetColRow(SetColKind.Write, 4),
-        Row.AiApi => SetColRow(SetColKind.Write, 5),
-        Row.RestoreInk => SetColRow(SetColKind.Ink, 0),
-        Row.PptAutoSave => SetColRow(SetColKind.Ink, 1),
-        Row.HistoryDays => SetColRow(SetColKind.Ink, 2),
-        Row.BackupAll => SetColRow(SetColKind.Ink, 3),
-        Row.RestoreAll => SetColRow(SetColKind.Ink, 4),
-        _ => SetColRow(SetColKind.Ink, 2),
-    };
+        var rows = SettingsRows(_settingsCat);
+        int idx = Array.IndexOf(rows, Rows[i].Kind);
+        if (idx < 0) return RectF.Empty;
+        float x = SettingsContentLeft();
+        float y = SettingsContentTop() + MoreGroupHeadH + idx * MoreRowH;
+        return new RectF { MinX = x, MinY = y, MaxX = x + SettingsContentW(), MaxY = y + MoreRowH };
+    }
+
+    /// <summary>自检用：不管当前分类，都给出某一行在它所属分类里的位置。</summary>
+    private RectF SettingsRowRectFor(Row kind)
+    {
+        for (int c = 0; c < SettingsCatNames.Length; c++)
+        {
+            var rows = SettingsRows((SettingsCategory)c);
+            int idx = Array.IndexOf(rows, kind);
+            if (idx < 0) continue;
+            float x = SettingsContentLeft();
+            float y = SettingsContentTop() + MoreGroupHeadH + idx * MoreRowH;
+            return new RectF { MinX = x, MinY = y, MaxX = x + SettingsContentW(), MaxY = y + MoreRowH };
+        }
+        return RectF.Empty;
+    }
 
     /// <summary>设置页下半的三列：外观 / 书写 / 墨迹（并排；序号 = 列序，`SetColX` 用它）。</summary>
     private enum SetColKind { Look = 0, Write = 1, Ink = 2 }
@@ -4282,6 +4343,13 @@ public sealed partial class FullUi : IOverlayUi
             for (int i = 0; i < MoreBottomTiles.Length; i++)
                 if (HubBottomRect(i).Contains(x, y)) return MoreHitBottom + i;
             return MoreHitInside;
+        }
+
+        if (_morePage == MorePage.Settings)
+        {
+            int nav = SettingsNavAt(x, y);
+            if (nav >= 0) return MoreHitSettingsNav + nav;
+            if (_settingsCat != SettingsCategory.Toolbar) return MoreHitInside;
         }
 
         for (int i = 0; i < 3; i++)
@@ -4666,52 +4734,84 @@ public sealed partial class FullUi : IOverlayUi
 
     private void DrawMoreSettings(ID2D1DeviceContext ctx)
     {
-        DrawMoreGroupHead(ctx, new RectF { MinX = MoreLeftX(), MinY = SetToolHeadY(),
-                                           MaxX = MoreLeftX() + MoreContentW(), MaxY = SetToolHeadY() + MoreGroupHeadH },
-                          "工具条");
-        for (int i = 0; i < 3; i++)
+        DrawSettingsNav(ctx);
+
+        if (_settingsCat == SettingsCategory.Toolbar)
         {
-            var s = MoreProfileRect(i);
-            bool active = ProfileIndex() == i;
-            var rr = new RoundedRectangle(new Vortice.RawRectF(s.MinX, s.MinY, s.MaxX, s.MaxY), 8f, 8f);
-            if (active) ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Accent));
-            else if (_moreHover == MoreHitProfile + i) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
-            ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : BorderCol), 1f);
-            _widgets.Text(ctx, ProfileIndex() == i ? ProfileName(i) : ProfileName(i), s, 12.5f,
-                          Brush(ctx, active ? Tokens.AccentInk : InkCol));
-        }
-        if (ChipsShown)
-        {
-            for (int cell = 1; cell < Cells.Length; cell++)
+            DrawMoreGroupHead(ctx, new RectF
             {
-                var c = MoreChipRect(cell);
-                bool pinned = _pinned[cell];
-                bool locked = !CanUnpin(cell);
-                var rr = new RoundedRectangle(new Vortice.RawRectF(c.MinX, c.MinY, c.MaxX, c.MaxY), 8f, 8f);
-                if (!locked && _moreHover == MoreHitChip + cell) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
-                ctx.DrawRoundedRectangle(rr, Brush(ctx, pinned ? Tokens.Accent : BorderCol), 1f);
-                DrawCellIcon(ctx, cell, c, Tokens.Icon,
-                             new Color4(InkCol.R, InkCol.G, InkCol.B, pinned ? 1f : 0.35f),
-                             pinned, _host.State);
-                if (!pinned)
-                    _widgets.Text(ctx, "+", new RectF { MinX = c.MaxX - 18f, MinY = c.MinY + 2f, MaxX = c.MaxX - 3f, MaxY = c.MinY + 18f },
-                                  12f, Brush(ctx, MutedCol));
-                if (locked) DrawLockBadge(ctx, c);
+                MinX = SettingsContentLeft(), MinY = SetToolHeadY(),
+                MaxX = SettingsContentLeft() + SettingsContentW(), MaxY = SetToolHeadY() + MoreGroupHeadH,
+            }, "工具栏");
+
+            for (int i = 0; i < 3; i++)
+            {
+                var s = MoreProfileRect(i);
+                bool active = ProfileIndex() == i;
+                var rr = new RoundedRectangle(new Vortice.RawRectF(s.MinX, s.MinY, s.MaxX, s.MaxY), 8f, 8f);
+                if (active) ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Accent));
+                else if (_moreHover == MoreHitProfile + i) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+                ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : BorderCol), 1f);
+                _widgets.Text(ctx, ProfileName(i), s, 12.5f,
+                              Brush(ctx, active ? Tokens.AccentInk : InkCol));
             }
-        }
-        else
-        {
-            _widgets.Text(ctx, "挑工具：切到「自定义」档，这里就能钉 / 取消钉",
-                          new RectF { MinX = MoreLeftX(), MinY = MoreProfileRect(0).MaxY + MoreChipTopGap,
-                                      MaxX = MoreLeftX() + MoreContentW(),
-                                      MaxY = MoreProfileRect(0).MaxY + MoreChipTopGap + 32f },
-                          11.5f, Brush(ctx, MutedCol), center: false);
+            if (ChipsShown)
+            {
+                for (int cell = 1; cell < Cells.Length; cell++)
+                {
+                    var c = MoreChipRect(cell);
+                    bool pinned = _pinned[cell];
+                    bool locked = !CanUnpin(cell);
+                    var rr = new RoundedRectangle(new Vortice.RawRectF(c.MinX, c.MinY, c.MaxX, c.MaxY), 8f, 8f);
+                    if (!locked && _moreHover == MoreHitChip + cell) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+                    ctx.DrawRoundedRectangle(rr, Brush(ctx, pinned ? Tokens.Accent : BorderCol), 1f);
+                    DrawCellIcon(ctx, cell, c, Tokens.Icon,
+                                 new Color4(InkCol.R, InkCol.G, InkCol.B, pinned ? 1f : 0.35f),
+                                 pinned, _host.State);
+                    if (!pinned)
+                        _widgets.Text(ctx, "+", new RectF { MinX = c.MaxX - 18f, MinY = c.MinY + 2f, MaxX = c.MaxX - 3f, MaxY = c.MinY + 18f },
+                                      12f, Brush(ctx, MutedCol));
+                    if (locked) DrawLockBadge(ctx, c);
+                }
+            }
+            else
+            {
+                _widgets.Text(ctx, "挑工具：切到「自定义」档，这里就能钉 / 取消钉",
+                              new RectF
+                              {
+                                  MinX = SettingsContentLeft(),
+                                  MinY = MoreProfileRect(0).MaxY + MoreChipTopGap,
+                                  MaxX = SettingsContentLeft() + SettingsContentW(),
+                                  MaxY = MoreProfileRect(0).MaxY + MoreChipTopGap + 32f,
+                              },
+                              11.5f, Brush(ctx, MutedCol), center: false);
+            }
+            return;
         }
 
-        DrawMoreGroupHead(ctx, SetLookHeadRect(), "外观");
-        DrawMoreGroupHead(ctx, SetWriteHeadRect(), "书写");
-        DrawMoreGroupHead(ctx, SetInkHeadRect(), "墨迹");
-        for (int i = 0; i < Rows.Length; i++) DrawMoreRow(ctx, i);
+        DrawMoreGroupHead(ctx, new RectF
+        {
+            MinX = SettingsContentLeft(), MinY = SettingsContentTop(),
+            MaxX = SettingsContentLeft() + SettingsContentW(), MaxY = SettingsContentTop() + MoreGroupHeadH,
+        }, SettingsCatNames[(int)_settingsCat]);
+
+        foreach (var kind in SettingsRows(_settingsCat))
+            for (int i = 0; i < Rows.Length; i++)
+                if (Rows[i].Kind == kind) { DrawMoreRow(ctx, i); break; }
+    }
+
+    private void DrawSettingsNav(ID2D1DeviceContext ctx)
+    {
+        for (int i = 0; i < SettingsCatNames.Length; i++)
+        {
+            var r = SettingsNavItemRect(i);
+            bool active = (int)_settingsCat == i;
+            var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 8f, 8f);
+            if (active) ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Accent));
+            else if (_moreHover == MoreHitSettingsNav + i) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+            _widgets.TextLeftMiddle(ctx, SettingsCatNames[i], r, 12.5f,
+                Brush(ctx, active ? Tokens.AccentInk : InkCol));
+        }
     }
 
     /// <summary>
@@ -4887,7 +4987,8 @@ public sealed partial class FullUi : IOverlayUi
     {
         switch (i)
         {
-            case 0: _morePage = MorePage.Settings; _moreHover = MoreHitNone; Invalidate(); break;
+            case 0: _morePage = MorePage.Settings; _settingsCat = SettingsCategory.Toolbar;
+                _moreHover = MoreHitNone; Invalidate(); break;
             // 「日志」（2026-11-02）：先打开「日志与反馈」页，让用户可选填一句问题；
             // 空着也能直接上传，上传/导出都在这一页完成，状态行就在下面。
             case 1:
@@ -5137,6 +5238,14 @@ public sealed partial class FullUi : IOverlayUi
                 if (_host?.State.LogNoteEditing == true) _host.Commands.EndLogNoteEdit(true);
                 _morePage = MorePage.Home;
                 _moreHover = MoreHitNone;
+                Invalidate();
+                return true;
+            }
+            if (hit >= MoreHitSettingsNav && hit < MoreHitSettingsNav + SettingsCatNames.Length)
+            {
+                _settingsCat = (SettingsCategory)(hit - MoreHitSettingsNav);
+                _moreHover = hit;
+                _moreH.To(MoreSettingsH(), Tokens.MoreOpenMs);
                 Invalidate();
                 return true;
             }
@@ -7763,7 +7872,7 @@ public sealed partial class FullUi : IOverlayUi
     internal int MorePageForTest => (int)_morePage;
     internal RectF MoreCloseRectForTest => MoreCloseRect();
     internal RectF MoreBackRectForTest => MoreBackRect();
-    internal RectF MoreRowRectForTest(int i) => MoreRowRect(i);
+    internal RectF MoreRowRectForTest(int i) => SettingsRowRectFor(Rows[i].Kind);
     internal RectF MoreProfileRectForTest(int i) => MoreProfileRect(i);
     internal RectF MoreChipRectForTest(int cell) => MoreChipRect(cell);
     /// <summary>自检用：启动器格子的矩形（按**全局编号**，各分组自动展开；越界返回空）。</summary>
@@ -7829,7 +7938,8 @@ public sealed partial class FullUi : IOverlayUi
     internal RectF RowRectByLabelForTest(string labelPart)
     {
         for (int i = 0; i < Rows.Length; i++)
-            if (Rows[i].Label.Contains(labelPart, StringComparison.Ordinal)) return MoreRowRect(i);
+            if (Rows[i].Label.Contains(labelPart, StringComparison.Ordinal))
+                return SettingsRowRectFor(Rows[i].Kind);
         return RectF.Empty;
     }
 
@@ -7838,6 +7948,7 @@ public sealed partial class FullUi : IOverlayUi
     {
         _moreOpen = true;
         _morePage = MorePage.Settings;
+        _settingsCat = SettingsCategory.Toolbar;
         _more.Jump(1f);
         _moreH.Jump(MoreTargetH());
         _moreHover = MoreHitNone;
@@ -7855,6 +7966,15 @@ public sealed partial class FullUi : IOverlayUi
             return true;
         }
         return false;
+    }
+
+    /// <summary>自检：设置页切到第 i 个左侧分类。</summary>
+    internal void SelectSettingsCategoryForTest(int i)
+    {
+        _settingsCat = (SettingsCategory)Math.Clamp(i, 0, SettingsCatNames.Length - 1);
+        _moreHover = MoreHitNone;
+        _moreH.Jump(MoreTargetH());
+        Invalidate();
     }
 
     /// <summary>自检用：第 i 行的矩形（现在指「更多」面板里的行——产品里行只在这儿）。</summary>

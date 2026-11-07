@@ -24,6 +24,7 @@ internal sealed partial class App
         }
 
         ui.OpenSettingsPageForTest();
+        ui.SelectSettingsCategoryForTest(4); // AI 服务
         SettleFrames(300);
         string pagePath = Path.ChangeExtension(outPath, null) + "-settings.bmp";
         bool page = ScreenProbe.SaveBmp(pagePath, (int)_virtualX, (int)_virtualY,
