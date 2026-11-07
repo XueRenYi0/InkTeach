@@ -91,6 +91,12 @@ internal sealed class TouchGestures
     public const float DirRatio = 1.25f;        // 主方向占比（原来 1.5，斜一点会一直不锁）
     public const float PageTurnLogical = 60f;   // 横滑翻页阈值（原来 80）
 
+    // ---- 双指纵滑惯性（2026-10-28；2026-11-07 抽到这里让界面也能用同一套）----
+    public const float FlingMaxVy = UiTouchFling.MaxVelocity;        // 最大速度（逻辑像素/ms）
+    public const float FlingStopVy = UiTouchFling.StopVelocity;     // 低于它 = 停
+    public const float FlingDecayPerSec = UiTouchFling.DecayPerSecond; // 指数衰减
+    public const float FlingMaxStepMs = UiTouchFling.MaxStepMs;     // 卡顿后别一跳半屏
+
     private sealed class Contact
     {
         public uint Id;

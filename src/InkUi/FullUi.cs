@@ -463,6 +463,7 @@ public sealed partial class FullUi : IOverlayUi
             if (_more.Running) return true;          // 「更多」面板开合（遮罩淡入淡出跟着它）
             if (_moreH.Running) return true;         // 面板换页时的高度动画
             if (_ai.Running) return true;            // AI 面板开合
+            if (_settingsFlingActive) return true;   // 设置页双指惯性
             // 按住清空、或者刚按完那一下的闪光：都要继续给帧，否则进度条不走、
             // 也永远到不了 0.8 秒那个点（"按住不放"这条全靠帧在推进）。
             if (ActionHolding) return true;
@@ -705,6 +706,7 @@ public sealed partial class FullUi : IOverlayUi
         // 全屏层（更多 / 说明）开合：收藏弹窗先藏，关掉自动回来。
         // 色带 / 取色器只是底部临时展开，**不影响收藏弹窗**。
         _host.Commands.SetUiOverlay(_moreOpen || _aiOpen || _more.Running || _ai.Running);
+        StepSettingsFling();             // 设置页双指纵滑的惯性（和白板同一套衰减）
         UpdatePeek();                    // 贴边隐藏该不该收
         UpdateRail();                    // 色线该不该长成设置条
         UpdateBandAction();              // "按住清空"够 0.8 秒没有
@@ -3826,6 +3828,20 @@ public sealed partial class FullUi : IOverlayUi
     /// 左侧分类只是"跳到哪一段"。所以滚动位置是页面级状态，不是分类级。</summary>
     private float _settingsScroll;
     private bool _settingsScrollDrag;
+    private float _settingsFlingVy;
+    private bool _settingsFlingActive;
+    private double _settingsFlingLastMs;
+
+    // 设置页双指纵滑（2026-11-07）：设置页是 UI 模态，触摸按下先被 UI 吃掉，
+    // 引擎的 TouchGestures 收不到；所以在这里用 PointerId 自己记两根手指。
+    private readonly Dictionary<uint, Vector2> _settingsTouches = new();
+    private bool _settingsTouchGesture;
+    private bool _settingsTouchAxisLocked;
+    private bool _settingsTouchScrolling;
+    private Vector2 _settingsTouchStartMid;
+    private Vector2 _settingsTouchLastMid;
+    private double _settingsTouchLastMs;
+    private float _settingsTouchVy;
 
     /// <summary>设置页右侧可视高度（逻辑像素）。面板高稳定，不随分类跳。</summary>
     private const float SettingsBodyH = 560f;
@@ -4180,6 +4196,7 @@ public sealed partial class FullUi : IOverlayUi
     /// 最后一段很短时，滚到它也只能滚到 max，按"视口顶部"算会跳回上一段（用户点了"关于"却亮"书写"）。</summary>
     private void ScrollSettingsToCategory(SettingsCategory cat)
     {
+        StopSettingsFling();
         _settingsCat = cat;
         _settingsScroll = Math.Clamp(SettingsSectionTop(cat), 0f, SettingsScrollMax());
         Invalidate();
@@ -4196,6 +4213,181 @@ public sealed partial class FullUi : IOverlayUi
         float thumbH = thumb.MaxY - thumb.MinY;
         float t = (y - bar.MinY - thumbH * 0.5f) / MathF.Max(1f, track - thumbH);
         ScrollSettingsTo(Math.Clamp(t, 0f, 1f) * max);
+    }
+
+    /// <summary>
+    /// 双指纵滑（2026-11-07）：设置页是"整页连续滚动"，交给它接住；
+    /// 其它界面不消费，继续走画布的双指漫游。
+    /// </summary>
+    public bool TouchScroll(in UiTouchScrollEvent e)
+    {
+        if (!_moreOpen || _morePage != MorePage.Settings) return false;
+        if (e.Phase == UiTouchScrollPhase.Cancel)
+        {
+            StopSettingsFling();
+            return true;
+        }
+
+        var vp = SettingsViewportRect();
+        if (e.Phase == UiTouchScrollPhase.Begin)
+        {
+            StopSettingsFling();
+            return true;          // 设置页是模态：消费掉，别让底下的画布跟着滚
+        }
+        if (e.Phase == UiTouchScrollPhase.Move)
+        {
+            if (vp.Contains(e.X, e.Y))
+                ScrollSettingsTo(_settingsScroll - e.Dy);
+            return true;
+        }
+        if (e.Phase == UiTouchScrollPhase.End)
+        {
+            if (vp.Contains(e.X, e.Y)) StartSettingsFling(e.Vy);
+            return true;
+        }
+        return true;
+    }
+
+    private void StartSettingsFling(float vy)
+    {
+        if (SettingsScrollMax() <= 0.5f) { StopSettingsFling(); return; }
+        if (MathF.Abs(vy) < UiTouchFling.StopVelocity) { StopSettingsFling(); return; }
+        _settingsFlingVy = Math.Clamp(vy, -UiTouchFling.MaxVelocity, UiTouchFling.MaxVelocity);
+        _settingsFlingActive = true;
+        _settingsFlingLastMs = _host?.NowMs ?? 0;
+        Invalidate();
+    }
+
+    private void StepSettingsFling()
+    {
+        if (!_settingsFlingActive) return;
+        double now = _host?.NowMs ?? 0;
+        double dt = Math.Clamp(now - _settingsFlingLastMs, 0, UiTouchFling.MaxStepMs);
+        _settingsFlingLastMs = now;
+        if (dt <= 0) return;
+        _settingsFlingVy *= MathF.Exp(-UiTouchFling.DecayPerSecond * (float)(dt / 1000.0));
+        if (MathF.Abs(_settingsFlingVy) < UiTouchFling.StopVelocity)
+        {
+            StopSettingsFling();
+            return;
+        }
+        float before = _settingsScroll;
+        ScrollSettingsTo(_settingsScroll - _settingsFlingVy * (float)dt);
+        if (MathF.Abs(_settingsScroll - before) < 0.01f)
+            StopSettingsFling();
+    }
+
+    private void StopSettingsFling()
+    {
+        if (!_settingsFlingActive) { _settingsFlingVy = 0f; return; }
+        _settingsFlingActive = false;
+        _settingsFlingVy = 0f;
+        Invalidate();
+    }
+
+    // ---- 设置页双指纵滑（UI 自己记两根手指；见字段注释）----------------------
+
+    private void ResetSettingsTouch()
+    {
+        _settingsTouches.Clear();
+        _settingsTouchGesture = false;
+        _settingsTouchAxisLocked = false;
+        _settingsTouchScrolling = false;
+        _settingsTouchVy = 0f;
+        StopSettingsFling();
+    }
+
+    /// <summary>返回 true = 这一次按下已经归双指手势，不再走行点击。</summary>
+    private bool SettingsTouchDown(in UiPointerEvent e, Vector2 p)
+    {
+        if (!_moreOpen || _morePage != MorePage.Settings || !e.FromTouch) return false;
+        _settingsTouches[e.PointerId] = new Vector2(p.X, p.Y);
+        if (_settingsTouches.Count < 2) return false;
+
+        StopSettingsFling();
+        _settingsTouchGesture = true;
+        _settingsTouchAxisLocked = false;
+        _settingsTouchScrolling = false;
+        _settingsTouchVy = 0f;
+        _settingsTouchStartMid = _settingsTouchLastMid = SettingsTouchMid();
+        _settingsTouchLastMs = _host?.NowMs ?? 0;
+        _morePress = -1;
+        _moreHover = MoreHitNone;
+        Invalidate();
+        return true;
+    }
+
+    /// <summary>返回 true = 这一次移动归双指手势，不再做悬停/行拖动。</summary>
+    private bool SettingsTouchMove(in UiPointerEvent e, Vector2 p)
+    {
+        if (!_settingsTouchGesture || !e.FromTouch) return false;
+        if (!_settingsTouches.ContainsKey(e.PointerId)) return true;
+        _settingsTouches[e.PointerId] = new Vector2(p.X, p.Y);
+
+        var mid = SettingsTouchMid();
+        if (!_settingsTouchAxisLocked)
+        {
+            var total = mid - _settingsTouchStartMid;
+            if (total.Length() < 10f) return true;
+            if (MathF.Abs(total.X) >= MathF.Abs(total.Y) * 1.25f)
+            {
+                _settingsTouchAxisLocked = true;
+                _settingsTouchScrolling = false;   // 横滑：不滚、也不翻页
+                return true;
+            }
+            if (MathF.Abs(total.Y) >= MathF.Abs(total.X) * 1.25f)
+            {
+                _settingsTouchAxisLocked = true;
+                _settingsTouchScrolling = true;
+            }
+            else return true;
+        }
+
+        if (!_settingsTouchScrolling)
+        {
+            _settingsTouchLastMid = mid;
+            return true;
+        }
+
+        float dy = mid.Y - _settingsTouchLastMid.Y;
+        _settingsTouchLastMid = mid;
+        double dt = Math.Clamp((_host?.NowMs ?? 0) - _settingsTouchLastMs, 1, 40);
+        _settingsTouchLastMs = _host?.NowMs ?? 0;
+        if (MathF.Abs(dy) > 0.01f)
+        {
+            // 手指往下 = 内容往下 = scroll 减小；和白板 ScrollCanvasBy 的符号一致。
+            ScrollSettingsTo(_settingsScroll - dy);
+            _settingsTouchVy = Math.Clamp(dy / (float)dt, -UiTouchFling.MaxVelocity, UiTouchFling.MaxVelocity);
+        }
+        return true;
+    }
+
+    /// <summary>返回 true = 这一次抬起归双指手势，不再执行行点击。</summary>
+    private bool SettingsTouchUp(in UiPointerEvent e)
+    {
+        if (!_settingsTouchGesture || !e.FromTouch) return false;
+        _settingsTouches.Remove(e.PointerId);
+        if (_settingsTouchScrolling && _settingsTouches.Count < 2)
+        {
+            StartSettingsFling(_settingsTouchVy);
+            _settingsTouchScrolling = false;
+        }
+        if (_settingsTouches.Count == 0)
+        {
+            _settingsTouchGesture = false;
+            _settingsTouchAxisLocked = false;
+            _settingsTouchScrolling = false;
+            _settingsTouchVy = 0f;
+        }
+        return true;
+    }
+
+    private Vector2 SettingsTouchMid()
+    {
+        Vector2 sum = Vector2.Zero;
+        int n = 0;
+        foreach (var p in _settingsTouches.Values) { sum += p; n++; }
+        return n > 0 ? sum / n : Vector2.Zero;
     }
 
     private RectF SettingsNavItemRect(int i)
@@ -4522,6 +4714,7 @@ public sealed partial class FullUi : IOverlayUi
         _morePage = MorePage.Home;          // 每次打开都回启动器（肌肉记忆：底栏永远同一处）
         _settingsScroll = 0f;
         _settingsScrollDrag = false;
+        ResetSettingsTouch();
         _moreHover = MoreHitNone;
         _morePress = -1;
         _hubHint = "";
@@ -4540,6 +4733,7 @@ public sealed partial class FullUi : IOverlayUi
         _moreHover = MoreHitNone;
         _morePress = -1;
         _settingsScrollDrag = false;
+        ResetSettingsTouch();
         HideTip();              // 面板里的提示跟着收（触摸长按候选也作废）
         CancelTipHold();
         _more.To(0f, Tokens.MoreCloseMs);
@@ -5160,6 +5354,7 @@ public sealed partial class FullUi : IOverlayUi
             case 0: _morePage = MorePage.Settings; _settingsCat = SettingsCategory.Toolbar;
                 _settingsScroll = 0f;
                 _settingsScrollDrag = false;
+                StopSettingsFling();
                 _moreHover = MoreHitNone;
                 _moreH.To(MoreSettingsH(), Tokens.MoreOpenMs);
                 Invalidate(); break;
@@ -5405,6 +5600,7 @@ public sealed partial class FullUi : IOverlayUi
         // 点面板外 = 关闭，而且这一下**不落墨**（消费掉；这也是自检要钉的一条）。
         if (_moreOpen)
         {
+            if (SettingsTouchDown(e, p)) return true;
             int hit = MoreHitAt(p.X, p.Y);
             if (hit == MoreHitNone || hit == MoreHitClose) { CloseMore(); return true; }
             if (hit == MoreHitBack)
@@ -5626,6 +5822,7 @@ public sealed partial class FullUi : IOverlayUi
         // 「更多」面板开着时，指针只喂给面板：更新悬停、别再碰主条的悬停/拖动状态
         if (_moreOpen)
         {
+            if (SettingsTouchMove(e, p)) return true;
             if (_settingsScrollDrag && _morePage == MorePage.Settings)
             {
                 DragSettingsScrollbar(p.Y);
@@ -5725,6 +5922,7 @@ public sealed partial class FullUi : IOverlayUi
         if (!_moreOpen) return false;
         if (_morePage == MorePage.Settings && SettingsViewportRect().Contains(x, y))
         {
+            StopSettingsFling();
             ScrollSettingsTo(_settingsScroll - delta / 120f * 72f);
             return true;
         }
@@ -5828,6 +6026,7 @@ public sealed partial class FullUi : IOverlayUi
         // 「更多」面板：按下和抬起落在**同一行**才算一次执行（和抽屉同一套手感）
         if (_moreOpen)
         {
+            if (SettingsTouchUp(e)) return true;
             if (_settingsScrollDrag)
             {
                 _settingsScrollDrag = false;

@@ -6927,10 +6927,12 @@ public partial class InkEngine
     private double _g2LastMoveMs;     // 上一次双指移动的时刻（算瞬时速度）
     private bool _g2FlingActive;      // 惯性还在跑
     private double _g2FlingLastMs;    // 惯性上一拍的时刻
-    private const float TouchFlingMax = 1.8f;          // 最大速度（逻辑像素/ms，约 1800px/s）
-    private const float TouchFlingStop = 0.02f;        // 低于它 = 停（约 20px/s）
-    private const float TouchFlingDecayPerSec = 3.5f;  // 指数衰减；越小惯性越大
-    private const float TouchFlingMaxStepMs = 80f;     // 卡顿后别一跳半屏
+    private bool _g2UiScroll;         // 这一次双指纵滑由界面消费（设置页）
+    private float _g2UiVy;            // 界面消费时的松手速度（界面逻辑像素/ms）
+    private const float TouchFlingMax = TouchGestures.FlingMaxVy;          // 最大速度（逻辑像素/ms，约 1800px/s）
+    private const float TouchFlingStop = TouchGestures.FlingStopVy;        // 低于它 = 停（约 20px/s）
+    private const float TouchFlingDecayPerSec = TouchGestures.FlingDecayPerSec; // 指数衰减；越小惯性越大
+    private const float TouchFlingMaxStepMs = TouchGestures.FlingMaxStepMs;     // 卡顿后别一跳半屏
 
     /// <summary>一根手指按下那一刻的选区快照。这一下可能在图形工具下被"点框外 = 收起选区"
     /// 清掉（见 <see cref="ClearSelectionForNewContext"/>）；但它若紧接着升级成双指手势，
@@ -7343,6 +7345,8 @@ public partial class InkEngine
         _g2IdB = p.IdB;
         _g2ScrollSm = 0f;
         _g2FlingVy = 0f;
+        _g2UiScroll = false;
+        _g2UiVy = 0f;
         _g2LastMoveMs = NowMs;
 
         _g2StartMid = _g2LastMid = (p.A + p.B) * 0.5f;
@@ -7454,6 +7458,26 @@ public partial class InkEngine
             // 单位统一成**逻辑像素 / ms**；dt 太小/太大都夹一下，防异常事件把速度打飞。
             double dtMs = Math.Clamp(NowMs - _g2LastMoveMs, 1.0, 40.0);
             _g2LastMoveMs = NowMs;
+
+            // **设置页这类整页界面先接**（2026-11-07）：接住后不再滚画布，
+            // 惯性也由界面在 PrepareFrame 里用同一套 UiTouchFling 参数走。
+            if (!_g2UiScroll && UiVisibleNow && Ui != null)
+            {
+                var begin = new UiTouchScrollEvent(UiTouchScrollPhase.Begin,
+                    mid.X / UiUnit, mid.Y / UiUnit, 0f, 0f, NowMs);
+                if (Ui.TouchScroll(begin)) _g2UiScroll = true;
+            }
+            if (_g2UiScroll)
+            {
+                float uiDy = use * TouchScrollGain / UiUnit;
+                float uiVy = uiDy / (float)dtMs;
+                _g2UiVy = Math.Clamp(_g2UiVy * 0.70f + uiVy * 0.30f,
+                                     -TouchFlingMax, TouchFlingMax);
+                Ui?.TouchScroll(new UiTouchScrollEvent(UiTouchScrollPhase.Move,
+                    mid.X / UiUnit, mid.Y / UiUnit, uiDy, _g2UiVy, NowMs));
+                return;
+            }
+
             float instVy = (use * TouchScrollGain / DpiScale) / (float)dtMs;
             _g2FlingVy = Math.Clamp(_g2FlingVy * 0.70f + instVy * 0.30f,
                                     -TouchFlingMax, TouchFlingMax);
@@ -7499,6 +7523,17 @@ public partial class InkEngine
             _g2Transform = false;
             return;
         }
+        // 界面消费的双指纵滑：把松手速度交给界面，界面用同一套 UiTouchFling 继续跑。
+        // 不能在这里再开画布惯性——否则设置页松手后画布会在底下偷偷滚。
+        if (_g2UiScroll)
+        {
+            Ui?.TouchScroll(new UiTouchScrollEvent(UiTouchScrollPhase.End,
+                _g2LastMid.X / UiUnit, _g2LastMid.Y / UiUnit, 0f, _g2UiVy, NowMs));
+            _g2UiScroll = false;
+            _g2UiVy = 0f;
+            _g2Tap = false;
+            return;
+        }
         // 最后一根手指抬起：纵向滑动如果还有速度，交给惯性继续跑。
         // 只认最后一根（第一根先抬时 _touch.Count 还是 2，不能提前开船）。
         if (_g2Axis == 2 && _touch.Count <= 1
@@ -7540,6 +7575,10 @@ public partial class InkEngine
 
     private void StopTouchFling()
     {
+        // 界面消费的惯性也要刹住：松手后 `_g2UiScroll` 已经清零，不能只看它。
+        Ui?.TouchScroll(new UiTouchScrollEvent(UiTouchScrollPhase.Cancel, 0f, 0f, 0f, 0f, NowMs));
+        _g2UiScroll = false;
+        _g2UiVy = 0f;
         _g2FlingActive = false;
         _g2FlingVy = 0f;
     }
@@ -20554,6 +20593,7 @@ public partial class InkEngine
     {
         StopTouchFling();                      // 滚轮/触控板接管：先刹住双指惯性
         int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);
+        Native.GetCursorPos(out var cursor);
         // 选中一个内容溢出的文本框时，滚轮先滚它自己的内容，不滚画布。
         if (Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.TextBox)
         {
@@ -20627,8 +20667,11 @@ public partial class InkEngine
 
         if (UiVisibleNow && Ui != null)
         {
+            // **用系统光标的真实位置**，不用 PointerX/Y：那两个是**画布坐标**
+            // （`PointerY = 屏幕Y - ViewOffsetY`）。设置页在滚动过的白板/文档上打开时，
+            // 拿画布坐标去判界面视口会永远判不进——表现就是"滚轮在设置里滚不动"。
             bool consumed = UiGuard("Wheel",
-                () => Ui.Wheel(PointerX / UiUnit, PointerY / UiUnit, delta), false);
+                () => Ui.Wheel(cursor.X / UiUnit, cursor.Y / UiUnit, delta), false);
             if (consumed)
             {
                 _dirty = true;

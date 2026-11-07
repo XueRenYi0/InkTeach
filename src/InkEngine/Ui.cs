@@ -128,6 +128,13 @@ public interface IOverlayUi
     /// <summary>指针抬起。</summary>
     bool PointerUp(in UiPointerEvent e);
 
+    /// <summary>
+    /// **双指纵滑**（2026-11-07）：设置页这类"整页滚动"的界面要接住它。
+    /// 坐标是界面逻辑坐标（和 PointerDown/Move 同一套），Dy 是这一次的纵向量（逻辑像素），
+    /// Vy 是松手速度（逻辑像素/毫秒）。返回 true = 界面消费，引擎不再滚画布。
+    /// </summary>
+    bool TouchScroll(in UiTouchScrollEvent e) => false;
+
     /// <summary>引擎状态变化（工具/颜色/粗细/撤销深度等），界面据此刷新显示。</summary>
     void OnStateChanged(in UiState state);
 
@@ -1443,6 +1450,51 @@ public readonly struct UiPointerEvent
     /// 停着的鼠标随便动一下就会被当成"手指滑走了"（2026-10-02 自检实测：长按被搅黄）。
     /// </summary>
     public uint PointerId { get; }
+}
+
+/// <summary>双指纵滑的阶段。Begin/Move/End 一次手势；Cancel = 被滚轮/按下打断。</summary>
+public enum UiTouchScrollPhase
+{
+    Begin = 0,
+    Move = 1,
+    End = 2,
+    Cancel = 3,
+}
+
+/// <summary>
+/// 双指纵滑事件（2026-11-07）。坐标/距离都是**界面逻辑像素**，和 UiPointerEvent 同源；
+/// Vy 是松手速度（逻辑像素/毫秒），用于接住引擎同一套惯性衰减。
+/// </summary>
+public readonly struct UiTouchScrollEvent
+{
+    public UiTouchScrollEvent(UiTouchScrollPhase phase, float x, float y, float dy, float vy, double nowMs)
+    {
+        Phase = phase;
+        X = x;
+        Y = y;
+        Dy = dy;
+        Vy = vy;
+        NowMs = nowMs;
+    }
+
+    public UiTouchScrollPhase Phase { get; }
+    public float X { get; }
+    public float Y { get; }
+    public float Dy { get; }
+    public float Vy { get; }
+    public double NowMs { get; }
+}
+
+/// <summary>
+/// 双指纵滑的惯性参数（2026-11-07 从 Engine 私有常量抽出来）：
+/// 画布和界面**用同一套**，避免"白板惯性大、设置惯性小"。
+/// </summary>
+public static class UiTouchFling
+{
+    public const float MaxVelocity = 1.8f;        // 逻辑像素/ms，约 1800px/s
+    public const float StopVelocity = 0.02f;      // 约 20px/s
+    public const float DecayPerSecond = 3.5f;     // 指数衰减；越小惯性越大
+    public const float MaxStepMs = 80f;           // 卡顿后别一跳半屏
 }
 
 /// <summary>

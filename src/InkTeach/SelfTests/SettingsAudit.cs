@@ -103,6 +103,50 @@ internal static class SettingsAudit
             Check("滚动条可命中", sh == 340, $"命中 {sh}");
         }
 
+        // 6) 双指纵滑 + 滚轮：设置页必须接住，不能漏到画布
+        {
+            ui.SettingsScrollToForTest(0);
+            var vp = ui.SettingsViewportRectForTest;
+            float cx = (vp.MinX + vp.MaxX) * 0.5f, cy = (vp.MinY + vp.MaxY) * 0.5f;
+            bool begin = ui.TouchScroll(new UiTouchScrollEvent(UiTouchScrollPhase.Begin, cx, cy, 0, 0, 0));
+            bool move = ui.TouchScroll(new UiTouchScrollEvent(UiTouchScrollPhase.Move, cx, cy, -100, -0.5f, 0));
+            float afterMove = ui.SettingsScrollValueForTest;
+            bool end = ui.TouchScroll(new UiTouchScrollEvent(UiTouchScrollPhase.End, cx, cy, 0, -0.5f, 0));
+            Check("双指纵滑接住并滚动", begin && move && end && afterMove > 1f,
+                  $"begin={begin} move={move} end={end} scroll={afterMove:F0}");
+
+            float beforeFling = ui.SettingsScrollValueForTest;
+            host.NowMs = 16;
+            ui.PrepareFrame();
+            bool flingMoved = ui.SettingsScrollValueForTest > beforeFling + 0.5f;
+            Check("双指松手后惯性继续", flingMoved,
+                  $"{beforeFling:F0} → {ui.SettingsScrollValueForTest:F0}");
+
+            ui.TouchScroll(new UiTouchScrollEvent(UiTouchScrollPhase.Cancel, 0, 0, 0, 0, 0));
+            ui.SettingsScrollToForTest(0);
+            bool wheel = ui.Wheel(cx, cy, -120);
+            Check("设置页滚轮可滚", wheel && ui.SettingsScrollValueForTest > 1f,
+                  $"wheel={wheel} scroll={ui.SettingsScrollValueForTest:F0}");
+        }
+
+        // 7) 指针级双指纵滑：设置页的触摸按下会被 UI 先吃掉，必须自己记两根手指
+        {
+            ui.SettingsScrollToForTest(0);
+            var vp = ui.SettingsViewportRectForTest;
+            float cx = (vp.MinX + vp.MaxX) * 0.5f, cy = (vp.MinY + vp.MaxY) * 0.5f;
+            var p1 = new UiPointerEvent(cx - 20, cy, 0.5f, false, false, true, 11);
+            var p2 = new UiPointerEvent(cx + 20, cy, 0.5f, false, false, true, 12);
+            ui.PointerDown(p1);
+            ui.PointerDown(p2);
+            ui.PointerMove(new UiPointerEvent(cx - 20, cy - 80, 0.5f, false, false, true, 11));
+            ui.PointerMove(new UiPointerEvent(cx + 20, cy - 80, 0.5f, false, false, true, 12));
+            float moved = ui.SettingsScrollValueForTest;
+            ui.PointerUp(new UiPointerEvent(cx - 20, cy - 80, 0.5f, false, false, true, 11));
+            ui.PointerUp(new UiPointerEvent(cx + 20, cy - 80, 0.5f, false, false, true, 12));
+            ui.TouchScroll(new UiTouchScrollEvent(UiTouchScrollPhase.Cancel, 0, 0, 0, 0, 0));
+            Check("指针级双指纵滑", moved > 1f, $"scroll={moved:F0}");
+        }
+
         // 5) 每一行都能执行一次（不弹窗：命令全走 no-op 代理）
         // 先出两张图（顶部/底部），放在执行之前——执行会切深色主题，图会变。
         ui.SettingsScrollToForTest(0);
@@ -189,7 +233,7 @@ internal static class SettingsAudit
         public bool IsReattach => false;
         public Vortice.DirectWrite.IDWriteFactory TextFactory => Gfx.WriteFactory;
         public Vortice.Direct2D1.ID2D1Factory1 PathFactory => Gfx.D2DFactory;
-        public double NowMs => 0;
+        public double NowMs { get; set; }
         public int DocumentVersion => 0;
         public void InvalidateUi() { }
         public string GetPref(string key) => _prefs.TryGetValue(key, out var v) ? v : null;
