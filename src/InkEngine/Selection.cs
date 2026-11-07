@@ -3005,7 +3005,8 @@ internal static class SelectionHandles
 
     public const float BarAiMenuWidthLogical = 236f;
     public const float BarAiMenuRowHeightLogical = 38f;
-    public const int BarAiMenuRows = 3;
+    /// <summary>当前只保留「识别到文本框」一项；手写优化两项先隐藏，代码保留。</summary>
+    public const int BarAiMenuRows = 1;
     public const float BarAiMenuStatusHeightLogical = 26f;
     public const float BarAiMenuPadLogical = 6f;
 

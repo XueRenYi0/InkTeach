@@ -354,6 +354,8 @@ public interface IEngineCommands
     void OptimizeHandwriting(bool includeFormulas);
     /// <summary>AI 菜单「识别到文本框」：识别选中内容，放进普通文本框（保留原墨迹）。</summary>
     void RecognizeToTextBox();
+    /// <summary>设置 →「AI 识别 API」：打开服务地址 / Key / 模型配置窗口。</summary>
+    void OpenAiApiSettings();
 
     /// <summary>
     /// AI 面板：在给定的**界面逻辑坐标**上开一个原生单行输入框（中文/输入法交给系统）。
@@ -1392,6 +1394,11 @@ public readonly struct UiState
     public bool AiBusy { get; init; }
     /// <summary>手写优化最近一次状态（“识别中…” / “已优化 N 行” / 失败原因）。</summary>
     public string AiStatus { get; init; }
+
+    /// <summary>AI 识别 API 是否已配置（设置页入口显示“已配置/未配置”）。</summary>
+    public bool AiApiConfigured { get; init; }
+    /// <summary>当前配置的模型名（只用于设置页摘要）。</summary>
+    public string AiApiModel { get; init; }
 
     /// <summary>「日志与反馈」里用户写的问题描述（上传/导出时进 zip 的 问题.txt）。</summary>
     public string LogNote { get; init; }

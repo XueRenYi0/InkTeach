@@ -115,6 +115,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void OptimizeHandwriting(bool includeFormulas)
         => _engine.OptimizeHandwritingFromUi(includeFormulas);
     public void RecognizeToTextBox() => _engine.RecognizeToTextBoxFromUi();
+    public void OpenAiApiSettings() => _engine.OpenAiApiSettingsFromUi();
     public void BeginAiPromptEdit(float x, float y, float w, float h)
         => _engine.BeginAiPromptEditFromUi(x, y, w, h);
     public void EndAiPromptEdit(bool accept) => _engine.EndAiPromptEditFromUi(accept);

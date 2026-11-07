@@ -76,6 +76,28 @@ internal static class OcrClient
         public bool HasBox;
     }
 
+    /// <summary>配置文件路径：`%APPDATA%\InkTeach\ai.json`（密钥不进仓库/安装包）。</summary>
+    internal static string ConfigPath
+        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                        "InkTeach", "ai.json");
+
+    /// <summary>保存 BYOK 配置（覆盖 ai.json；环境变量仍然优先）。</summary>
+    internal static void SaveConfig(OcrConfig cfg)
+    {
+        if (cfg == null) return;
+        string file = ConfigPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        var obj = new
+        {
+            baseUrl = (cfg.BaseUrl ?? "").Trim(),
+            key = (cfg.Key ?? "").Trim(),
+            model = (cfg.Model ?? "").Trim(),
+            thinking = string.IsNullOrWhiteSpace(cfg.Thinking) ? "auto" : cfg.Thinking.Trim(),
+        };
+        File.WriteAllText(file, JsonSerializer.Serialize(obj,
+            new JsonSerializerOptions { WriteIndented = true }));
+    }
+
     /// <summary>读配置：环境变量 &gt; ai.json &gt; DeepSeek 官方默认。</summary>
     internal static OcrConfig LoadConfig()
     {

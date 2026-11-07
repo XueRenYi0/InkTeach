@@ -14620,6 +14620,8 @@ public partial class InkEngine
         AiPromptEditing = _aiPromptEditing,
         AiBusy = _handOcrBusy,
         AiStatus = _handOcrStatus,
+        AiApiConfigured = AiApiConfigured,
+        AiApiModel = AiApiModel,
         LogNote = LogNoteText,
         LogNoteEditing = _logNoteEditing,
         LogUploadConsentOn = LogUploadConsentGranted,
@@ -18270,8 +18272,6 @@ public partial class InkEngine
                     FurnitureViewport, HandOcrStatus.Length > 0);
                 int row = SelectionHandles.BarAiMenuRowAt(x, y, am, ui);
                 if (row == 0) RecognizeToTextBoxFromUi();
-                else if (row == 1) OptimizeHandwritingFromUi(false);
-                else if (row == 2) OptimizeHandwritingFromUi(true);
                 return true;
             }
             else

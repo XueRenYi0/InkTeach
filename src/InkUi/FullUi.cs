@@ -354,7 +354,7 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。外观 / 书写 / 墨迹三列并排；
     /// `AutoStart` 排在表尾，但由 <see cref="MoreRowRect"/> 画在外观列最后一格。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, TouchMode, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart }
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, TouchMode, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -395,6 +395,9 @@ public sealed partial class FullUi : IOverlayUi
         // 设备与性能统计（2026-10-24）：首次弹窗同意；设置里可关闭。
         (Row.Privacy, "设备与性能统计", false, false,
          "只上传安装量、版本、硬件/性能和触摸统计；不含姓名、账号、课件或屏幕内容；可随时关闭"),
+        // AI 识别（2026-11-07）：设置里唯一的外网服务入口；配置写 %APPDATA%\InkTeach\ai.json。
+        (Row.AiApi, "AI 识别 API…", false, false,
+         "配置板书识别用的服务地址 / API Key / 模型；保存后下一次识别生效"),
         // 墨迹三条偏好（原本在「墨迹」页，2026-10-02 启动器改版后搬进设置子页）。
         (Row.RestoreInk, "自动恢复上次板书", false, false, "下次启动接上这次的板书"),
         // ⚠ 名称 2026-10-10 改：这个开关**不只管 PPT**——文档（PDF/图片）批注的按页
@@ -3754,6 +3757,10 @@ public sealed partial class FullUi : IOverlayUi
                 _host.Commands.SetPrivacyConsent(!_host.State.PrivacyConsentOn);
                 break;
 
+            case Row.AiApi:
+                _host.Commands.OpenAiApiSettings();
+                break;
+
             // 墨迹三条偏好（原来在「墨迹」页）：只写 `ui.*`，
             // 默认值不落盘（restoreInk 默认关只写 "1"、pptAutoSave 默认开只写 "0"、
             // historyDays 默认永久写成 null = 删项）。
@@ -3838,7 +3845,7 @@ public sealed partial class FullUi : IOverlayUi
     /// 用户说"设置现在太长了"。原来左列堆 9 行（组头 26 + 9×48 + 8 ≈ 476），三列后最高 5 行。
     /// </summary>
     private const int LookRowCount = 5;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小 / 开机自动启动    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小（「功能提示」2026-10-16 撤除、改常开）
-    private const int WriteRowCount = 5;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测 / 触摸模式 / 设备与性能统计
+    private const int WriteRowCount = 6;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测 / 触摸模式 / 设备与性能统计 / AI API
     private const int InkRowCount = 5;     // 墨迹：自动恢复 / 课件墨迹自动保存 / 历史清理 / 备份 / 恢复
     private const float MoreColumnGap = 16f;
     private const float MoreSwitchW = 44f;
@@ -4204,6 +4211,7 @@ public sealed partial class FullUi : IOverlayUi
         Row.Predict => SetColRow(SetColKind.Write, 2),
         Row.TouchMode => SetColRow(SetColKind.Write, 3),
         Row.Privacy => SetColRow(SetColKind.Write, 4),
+        Row.AiApi => SetColRow(SetColKind.Write, 5),
         Row.RestoreInk => SetColRow(SetColKind.Ink, 0),
         Row.PptAutoSave => SetColRow(SetColKind.Ink, 1),
         Row.HistoryDays => SetColRow(SetColKind.Ink, 2),
@@ -4741,6 +4749,7 @@ public sealed partial class FullUi : IOverlayUi
             Row.HistoryDays => HistoryDaysName(_host.GetPref("historyDays")),
             Row.UiSize => UiScalePresets.Name(_host.UiScale),
             Row.TouchMode => _host.State.TouchGesturesOn ? "手势" : "单指",
+            Row.AiApi => _host.State.AiApiConfigured ? "已配置" : "未配置",
             _ => null,
         };
         float valueW = value != null ? _widgets.Measure(value, 12.5f) : 0f;
@@ -7822,6 +7831,30 @@ public sealed partial class FullUi : IOverlayUi
         for (int i = 0; i < Rows.Length; i++)
             if (Rows[i].Label.Contains(labelPart, StringComparison.Ordinal)) return MoreRowRect(i);
         return RectF.Empty;
+    }
+
+    /// <summary>自检：直接打开设置页（不模拟点“更多”里的设置格）。</summary>
+    internal void OpenSettingsPageForTest()
+    {
+        _moreOpen = true;
+        _morePage = MorePage.Settings;
+        _more.Jump(1f);
+        _moreH.Jump(MoreTargetH());
+        _moreHover = MoreHitNone;
+        _morePress = -1;
+        Invalidate();
+    }
+
+    /// <summary>自检：按标签触发设置行（等同点整行）。</summary>
+    internal bool ActivateRowByLabelForTest(string labelPart)
+    {
+        for (int i = 0; i < Rows.Length; i++)
+        {
+            if (!Rows[i].Label.Contains(labelPart, StringComparison.Ordinal)) continue;
+            ActivateRow(i);
+            return true;
+        }
+        return false;
     }
 
     /// <summary>自检用：第 i 行的矩形（现在指「更多」面板里的行——产品里行只在这儿）。</summary>

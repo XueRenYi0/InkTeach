@@ -464,6 +464,9 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
+    [DllImport("user32.dll")]
+    public static extern bool EnableWindow(IntPtr hWnd, bool enable);
+
     /// <summary>
     /// 分层窗口的整体透明度。面板的"接输入小窗"用它把自己压到 1/255：
     /// 肉眼不可见，但**在**——既不能用 alpha=0（等于点不到自己），
