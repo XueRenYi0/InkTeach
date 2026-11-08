@@ -2555,18 +2555,20 @@ internal sealed partial class App
         {
             bool rowsOk = true;
             var seenRows = new List<RectF>();
+            var viewport = ui.SettingsViewportRectForTest;
             for (int i = 0; i < ui.MoreRowCountForTest; i++)
             {
                 var r = ui.MoreRowRectForTest(i);
-                bool inside = !r.IsEmpty && r.MinX >= moreRect.MinX && r.MaxX <= moreRect.MaxX
-                           && r.MinY >= moreRect.MinY && r.MaxY <= moreRect.MaxY;
-                if (!inside) { rowsOk = false; break; }
+                bool horizontal = !r.IsEmpty && r.MinX >= moreRect.MinX && r.MaxX <= moreRect.MaxX;
+                if (!horizontal) { rowsOk = false; break; }
+                // 设置页是**连续滚动**：视口外的行本来就不在面板里，不能按旧版"一页一行"判。
+                if (r.MaxY <= viewport.MinY || r.MinY >= viewport.MaxY) continue;
                 foreach (var s in seenRows)
                     if (s.MinX < r.MaxX && r.MinX < s.MaxX && s.MinY < r.MaxY && r.MinY < s.MaxY)
                     { rowsOk = false; break; }
                 seenRows.Add(r);
             }
-            Check("每一行都在面板内、互不重叠", rowsOk, $"逐行取了 {seenRows.Count} 个矩形");
+            Check("可见行都在面板内、互不重叠", rowsOk, $"逐行取了 {seenRows.Count} 个矩形");
         }
 
         {
@@ -3231,6 +3233,9 @@ internal sealed partial class App
 
         // 「压感粗细」也在这里过一遍完整链路：点行 → 引擎状态立刻翻转 → 落盘（批次 0.2）
         {
+            // 连续滚动：先滚到「书写」，否则行在视口外，合成点击会落空。
+            ui.SettingsScrollToCategoryForTest(2);
+            SettleFrames(150);
             var pressureRow = ui.RowRectByLabelForTest("压感粗细");
             Check("「压感粗细」那一行找得到", pressureRow.MaxY > pressureRow.MinY,
                   $"行高 {pressureRow.MaxY - pressureRow.MinY:F0}");
@@ -3266,6 +3271,9 @@ internal sealed partial class App
         // （原 2026-10-05 停用块里顺带的「启动器/底栏提示文案」那段仍留停用——它跟本行无关，
         //   需要时从 git 历史恢复；这里只验"墨迹预测"行自己的链路。）
         {
+            // 连续滚动：先滚到「书写」（“墨迹预测”属于书写组），再拿行矩形 / 悬停 / 点击。
+            ui.SettingsScrollToCategoryForTest(2);
+            SettleFrames(150);
             var predictRow = ui.RowRectByLabelForTest("墨迹预测");
             Check("「墨迹预测」那一行找得到", predictRow.MaxY > predictRow.MinY,
                   $"行高 {predictRow.MaxY - predictRow.MinY:F0}");

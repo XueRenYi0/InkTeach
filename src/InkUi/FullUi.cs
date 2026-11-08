@@ -8669,6 +8669,8 @@ public sealed partial class FullUi : IOverlayUi
     internal RectF SettingsRowRectForTest(int i) => MoreRowRect(i);
     internal RectF SettingsNavRectForTest(int i) => SettingsNavItemRect(i);
     internal RectF SettingsViewportRectForTest => SettingsViewportRect();
+    internal void SettingsScrollToCategoryForTest(int c)
+        => ScrollSettingsToCategory((SettingsCategory)Math.Clamp(c, 0, SettingsCatNames.Length - 1));
     internal float SettingsScrollMaxForTest => SettingsScrollMax();
     internal float SettingsScrollValueForTest => _settingsScroll;
     internal int SettingsActiveCategoryForTest => (int)_settingsCat;

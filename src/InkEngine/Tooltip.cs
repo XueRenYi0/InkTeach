@@ -215,6 +215,7 @@ public partial class InkEngine
             SelBarButton.FlipH => ("左右翻转", null, null),
             SelBarButton.FlipV => ("上下翻转", null, null),
             SelBarButton.Delete => ("删除", Keys.KeyText(KeyAction.DeleteSelected), null),
+            SelBarButton.Ai => ("AI 识别", null, "把手写内容识别成文本框（公式保留）"),
             _ => default,
         };
     }
