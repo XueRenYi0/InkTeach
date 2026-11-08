@@ -370,6 +370,8 @@ public interface IEngineCommands
     /// 所以界面这边只需要这一句开关。
     /// </summary>
     void ToggleLibraryPanel();
+    /// <summary>关掉收藏/图形面板（不管当前是收藏页还是图形页）；没开时是空操作。</summary>
+    void CloseLibraryPanel();
     /// <summary>图形入口：打开统一面板的「图形」页；已开在图形页则关。</summary>
     void ToggleShapesPanel();
 

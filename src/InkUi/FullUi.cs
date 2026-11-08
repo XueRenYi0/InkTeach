@@ -6562,7 +6562,9 @@ public sealed partial class FullUi : IOverlayUi
             case 13: cmd.Redo(); break;
             case 14:
                 // 「更多」：打开屏幕中央的面板（2026-10-01 起；抽屉从产品路径退场）
-                if (st.LibraryOpen) cmd.ToggleLibraryPanel();
+                // 必须先**无条件关**收藏/图形面板：Toggle 在图形页会切到收藏页，
+                // 用户点“更多”却看到收藏弹窗（2026-11-08 真机反馈）；无条件 Close 也是空操作安全。
+                cmd.CloseLibraryPanel();
                 OpenMore();
                 break;
         }

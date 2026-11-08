@@ -114,6 +114,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void CycleSolidSides() => _engine.CycleSolidSides();
     public void CycleHyperbolaAsymptotes() => _engine.CycleHyperbolaAsymptotes();
     public void ToggleLibraryPanel() => _engine.ToggleLibraryPanel();
+    public void CloseLibraryPanel() => _engine.CloseLibraryPanel();
     public void ToggleShapesPanel() => _engine.ToggleShapesPanel();
     public void SetAiPromptText(string text) => _engine.AiPromptText = text ?? "";
     public void OptimizeHandwriting(bool includeFormulas)
