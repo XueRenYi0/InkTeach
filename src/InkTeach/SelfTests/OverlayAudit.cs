@@ -107,6 +107,19 @@ internal static class OverlayAudit
                   $"low={low.DownCount} high={high.DownCount}");
         }
 
+        // 8) 只登记捕获（迁移期：旧分支已经处理按下）
+        {
+            var m = new OverlayLayerManager();
+            var layer = new TestLayer("timer", 600);
+            m.Register(layer);
+            bool captured = m.Capture("timer", 9);
+            m.PointerMove(10, 10, 9);
+            m.PointerUp(10, 10, 9);
+            Check("只登记捕获", captured && layer.MoveCount == 1 && layer.UpCount == 1
+                  && m.CaptureLayer == null,
+                  $"move={layer.MoveCount} up={layer.UpCount}");
+        }
+
         Console.WriteLine($"  合计：{pass} 通过 / {fail} 失败");
         return fail == 0 ? 0 : 1;
     }

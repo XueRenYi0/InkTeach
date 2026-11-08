@@ -4959,7 +4959,7 @@ public partial class InkEngine
         if (TimerCardPointerDown(screenX, screenY))
         {
             _drawing = false;
-            _timerCapturing = true;         // 这一次归它：松手时由它收尾（见 OnPointerUp）
+            OverlayLayers.Capture("timer", id);   // A4.4：捕获所有权先交给管理器
             Native.SetCapture(hWnd);
             _dirty = true;
             ApplyCursor();
@@ -4970,7 +4970,7 @@ public partial class InkEngine
         if (RollCardPointerDown(screenX, screenY))
         {
             _drawing = false;
-            _rollCapturing = true;
+            OverlayLayers.Capture("roll", id);    // A4.4：捕获所有权先交给管理器
             Native.SetCapture(hWnd);
             _dirty = true;
             ApplyCursor();
@@ -4984,7 +4984,7 @@ public partial class InkEngine
         if (PptBarPointerDown(screenX, screenY))
         {
             _drawing = false;
-            _pptCapturing = true;           // 这一次归它：松手时由它收尾（见 OnPointerUp）
+            OverlayLayers.Capture("ppt", id);     // A4.4：捕获所有权先交给管理器
             Native.SetCapture(hWnd);        // 长按要持续收到移动（判"拿起后有没有拖走"）
             _dirty = true;
             ApplyCursor();
@@ -6217,6 +6217,20 @@ public partial class InkEngine
         if (_aiCardCapturing)
         {
             TextBoxPointerUp();
+            Native.ReleaseCapture();
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
+        // A4.4：计时/点名/PPT 的捕获所有权已交给 OverlayLayerManager；松手由它收尾。
+        if (OverlayLayers.CaptureLayer is { Id: "timer" or "roll" or "ppt" })
+        {
+            if (ReadPointer(id, out float mx, out float my, out _, out _, out _))
+                OverlayLayers.PointerUp(mx, my, id);
+            else
+                OverlayLayers.PointerUp(0, 0, id);
             Native.ReleaseCapture();
             _drawing = false;
             _dirty = true;
