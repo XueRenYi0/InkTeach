@@ -494,6 +494,9 @@ internal sealed partial class OverlayWindow : IDisposable
     /// <summary>轻提示的格式：居中、12.5 逻辑像素。</summary>
     private IDWriteTextFormat _toastFmt;
     private float _toastFmtPx;
+    /// <summary>选中条弹层的行文字：左对齐/居中两版，**都垂直居中**（图标对齐）。</summary>
+    private IDWriteTextFormat _menuLeftFmt, _menuCenterFmt;
+    private float _menuLeftPx, _menuCenterPx;
 
     // 内容层的改动也要记两帧：后缓冲里躺着的是两帧前的画面。
     private readonly List<RectF> _contentDirtyNow = new();
@@ -5927,7 +5930,7 @@ internal sealed partial class OverlayWindow : IDisposable
     {
         var m = app.SelectionMenuRectNow();
         if (m.IsEmpty) return;
-        DrawPanelCard(app, m, 10f * dpi, dpi);
+        DrawPanelCard(app, m, 10f * dpi, dpi, opaque: true);
         var theme = app.FloatingTheme;
         int rows = app.SelectionMenuRowsNow;
 
@@ -5943,8 +5946,9 @@ internal sealed partial class OverlayWindow : IDisposable
                     _ctx.FillRoundedRectangle(new RoundedRectangle(
                         new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f * dpi, 7f * dpi), _scratch);
                 }
-                _ctx.DrawText(labels[i], AiTextFormat(12.5f * dpi, false, false),
-                    new Rect(r.MinX + 8f * dpi, r.MinY, r.MaxX - r.MinX - 8f * dpi, r.MaxY - r.MinY),
+                _ctx.DrawText(labels[i], MenuTextFormat(dpi, center: true),
+                    new Rect(r.MinX + 8f * dpi, r.MinY,
+                             r.MaxX - r.MinX - 16f * dpi, r.MaxY - r.MinY),
                     Brush(theme.Text));
             }
 
@@ -5958,7 +5962,7 @@ internal sealed partial class OverlayWindow : IDisposable
                         : app.HandOcrStatus.StartsWith("已优化", StringComparison.Ordinal)
                             ? new Color4(0.10f, 0.55f, 0.30f, 1f)
                             : new Color4(0.60f, 0.20f, 0.20f, 1f);
-                _ctx.DrawText(app.HandOcrStatus, AiTextFormat(10f * dpi, false, false),
+                _ctx.DrawText(app.HandOcrStatus, MenuTextFormat(dpi * 0.8f, center: false),
                     new Rect(sr.MinX, sr.MinY, sr.MaxX - sr.MinX, sr.MaxY - sr.MinY), Brush(c));
             }
             return;
@@ -5984,9 +5988,9 @@ internal sealed partial class OverlayWindow : IDisposable
             float cy = (r.MinY + r.MaxY) * 0.5f;
             DrawIcon(icon, r.MinX + 8f * dpi, cy - iconBox * 0.5f, iconBox, Brush(theme.Text));
             _ctx.DrawText(SelectionHandles.BarButtonLabel(kind),
-                AiTextFormat(12.5f * dpi, false, false),
+                MenuTextFormat(dpi, center: false),
                 new Rect(r.MinX + 34f * dpi, r.MinY,
-                         r.MaxX - r.MinX - 34f * dpi - 4f * dpi, r.MaxY - r.MinY),
+                         r.MaxX - r.MinX - 34f * dpi - 8f * dpi, r.MaxY - r.MinY),
                 Brush(theme.Text));
         }
     }
@@ -5996,6 +6000,7 @@ internal sealed partial class OverlayWindow : IDisposable
     {
         SelBarButton.Collapse => IconPaths.collapse,
         SelBarButton.Layer => IconPaths.layer,
+        SelBarButton.Top or SelBarButton.Bottom => IconPaths.layer,
         SelBarButton.Export => IconPaths.export,
         SelBarButton.Library => IconPaths.starAdd,
         SelBarButton.Copy => IconPaths.copy,
@@ -6115,7 +6120,8 @@ internal sealed partial class OverlayWindow : IDisposable
     /// 所以浮层和工具条永远是一套，不会再出现"工具条换了投影、操作条还是老样子"。
     /// 没有界面挂上来时用 `UiTheme.Default` 兜底（自检宿主）。
     /// </summary>
-    private void DrawPanelCard(InkEngine app, in RectF r, float radius, float? uiUnit = null)
+    private void DrawPanelCard(InkEngine app, in RectF r, float radius, float? uiUnit = null,
+                               bool opaque = false)
     {
         float dpi = uiUnit ?? Dpi / 96f;
         var th = app?.FloatingTheme ?? UiTheme.Default;
@@ -6138,7 +6144,10 @@ internal sealed partial class OverlayWindow : IDisposable
                 radius + inf, radius + inf), _scratch);
         }
 
-        _scratch.Color = th.Panel;
+        // 菜单类浮层必须不透明：半透明会让下面的选中框/手柄透出来（2026-11-08 截图）。
+        _scratch.Color = opaque
+            ? new Color4(th.Panel.R, th.Panel.G, th.Panel.B, 1f)
+            : th.Panel;
         _ctx.FillRoundedRectangle(new RoundedRectangle(box, radius, radius), _scratch);
         _scratch.Color = th.PanelBorder;
         _ctx.DrawRoundedRectangle(new RoundedRectangle(box, radius, radius), _scratch, 1f * dpi);
@@ -7263,6 +7272,38 @@ internal sealed partial class OverlayWindow : IDisposable
             _toastFmtPx = px;
         }
         return _toastFmt;
+    }
+
+    /// <summary>
+    /// 选中条弹层的行文字格式：左对齐（`⋯`）或居中（AI），
+    /// **两种都 ParagraphAlignment.Center**，保证文字和左侧图标垂直对齐。
+    /// </summary>
+    private IDWriteTextFormat MenuTextFormat(float dpi, bool center)
+    {
+        float px = MathF.Max(10f, MathF.Round(12.5f * dpi));
+        if (center)
+        {
+            if (_menuCenterFmt == null || _menuCenterPx != px)
+            {
+                _menuCenterFmt?.Dispose();
+                _menuCenterFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                    FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+                _menuCenterFmt.TextAlignment = TextAlignment.Center;
+                _menuCenterFmt.ParagraphAlignment = ParagraphAlignment.Center;
+                _menuCenterPx = px;
+            }
+            return _menuCenterFmt;
+        }
+        if (_menuLeftFmt == null || _menuLeftPx != px)
+        {
+            _menuLeftFmt?.Dispose();
+            _menuLeftFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _menuLeftFmt.TextAlignment = TextAlignment.Leading;
+            _menuLeftFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _menuLeftPx = px;
+        }
+        return _menuLeftFmt;
     }
 
     /// <summary>

@@ -65,12 +65,37 @@ internal sealed partial class App
         bool ok3 = ScreenProbe.SaveBmp(p3, (int)_virtualX, (int)_virtualY,
                                        (int)_virtualW, (int)_virtualH);
 
+        // 贴底：菜单下方放不下，应翻到**选中对象上方**，不能盖住对象。
+        Doc.Clear();
+        var low = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(0.86f, 0.16f, 0.12f, 1f), Width = 6f,
+        };
+        float lowY = _virtualY + _virtualH - 220f;
+        for (int i = 0; i <= 30; i++)
+            low.Points.Add(new InkPoint { X = 420 + i * 7f, Y = lowY, P = 1f, T = i });
+        low.InvalidateMetrics();
+        low.RecomputeBounds();
+        Doc.AppendStroke(low);
+        Doc.Selected.Clear();
+        Doc.Selected.Add(low);
+        Tool = Tool.Marquee;
+        SettleFrames(400);
+        OpenSelectionMenuForTest(ai: false);
+        SettleFrames(400);
+        string p4 = Path.ChangeExtension(outPath, null) + "-low.bmp";
+        bool ok4 = ScreenProbe.SaveBmp(p4, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+
         Console.WriteLine($"操作条：{SelectionHandles.BarButtonCountFor(false)} 格，" +
                           $"AI 倒数第二、⋯ 最后；截图 {(ok1 ? "OK" : "FAIL")} / " +
-                          $"{(ok2 ? "OK" : "FAIL")} / {(ok3 ? "OK" : "FAIL")}");
+                          $"{(ok2 ? "OK" : "FAIL")} / {(ok3 ? "OK" : "FAIL")} / " +
+                          $"{(ok4 ? "OK" : "FAIL")}");
         Console.WriteLine($"写出：{p1}");
         Console.WriteLine($"写出：{p2}");
         Console.WriteLine($"写出：{p3}");
-        ExitCode = ok1 && ok2 && ok3 ? 0 : 1;
+        Console.WriteLine($"写出：{p4}");
+        ExitCode = ok1 && ok2 && ok3 && ok4 ? 0 : 1;
     }
 }

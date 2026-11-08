@@ -28,6 +28,17 @@ internal sealed partial class App
         Doc.ClearHistory();
         ShowHud = false;
 
+        // 先放一条背景墨迹：验证“置顶”真的把它换到最上。
+        var bg = new Stroke
+        {
+            Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+            Color = new Color4(0.20f, 0.45f, 0.85f, 1f), Width = 6f,
+        };
+        for (int i = 0; i <= 20; i++)
+            bg.Points.Add(new InkPoint { X = 340 + i * 6f, Y = 380, P = 1f, T = i });
+        bg.InvalidateMetrics();
+        bg.RecomputeBounds();
+
         var s = new Stroke
         {
             Tool = Tool.Pen,
@@ -40,6 +51,7 @@ internal sealed partial class App
         s.InvalidateMetrics();
         s.RecomputeBounds();
         Doc.AppendStroke(s);
+        Doc.AppendStroke(bg);   // 背景放在 s 之后：置顶测试要把 s 从 0 移到 1
         Doc.Selected.Clear();
         Doc.Selected.Add(s);
         Tool = Tool.Marquee;
@@ -54,18 +66,19 @@ internal sealed partial class App
 
         OpenSelectionMenuForTest(ai: false);
         SettleFrames(120);
-        Check("⋯ 打开：AI 自动关、6 行",
-              SelMoreMenuOpen && !SelAiMenuOpen && SelectionMenuRowsNow == 6,
+        Check("⋯ 打开：AI 自动关、7 行（置顶/置底直接两行）",
+              SelMoreMenuOpen && !SelAiMenuOpen && SelectionMenuRowsNow == 7,
               $"ai={SelAiMenuOpen} more={SelMoreMenuOpen} rows={SelectionMenuRowsNow}");
 
         var order = SelectionHandles.MoreBarOrder(false);
-        bool covers = System.Array.IndexOf(order, SelBarButton.Layer) >= 0
+        bool covers = System.Array.IndexOf(order, SelBarButton.Top) >= 0
+                   && System.Array.IndexOf(order, SelBarButton.Bottom) >= 0
                    && System.Array.IndexOf(order, SelBarButton.Export) >= 0
                    && System.Array.IndexOf(order, SelBarButton.FlipH) >= 0
                    && System.Array.IndexOf(order, SelBarButton.FlipV) >= 0
                    && System.Array.IndexOf(order, SelBarButton.Lock) >= 0
                    && System.Array.IndexOf(order, SelBarButton.Library) >= 0;
-        Check("⋯ 覆盖 6 个收纳动作", covers,
+        Check("⋯ 覆盖 7 个收纳动作（无二级弹窗）", covers,
               string.Join(",", order));
 
         var mr = SelectionMenuRectNow();
@@ -76,21 +89,25 @@ internal sealed partial class App
               $"menu {mr.MinX:F0},{mr.MinY:F0}-{mr.MaxX:F0},{mr.MaxY:F0}；" +
               $"vp {vp.MinX:F0},{vp.MinY:F0}-{vp.MaxX:F0},{vp.MaxY:F0}");
 
-        // 点第一行「层级」：菜单关、层级面板开（锚在最右的 ⋯ 格下面）。
+        // 点第一行「置顶」：直接执行，菜单关；不再开二级“层级”弹窗。
+        int idxBefore = Doc.Strokes.IndexOf(s);
         var row0 = SelectionHandles.BarMenuRowRectIn(mr, 0, UiUnit);
         bool down = SelectionGestureForTest((row0.MinX + row0.MaxX) * 0.5f,
                                             (row0.MinY + row0.MaxY) * 0.5f);
         EndSelectionGestureForTest();
         SettleFrames(160);
-        Check("点 ⋯ 第一行：菜单关、层级面板开",
-              down && !SelMoreMenuOpen && SelPanelOpen == SelPanel.Layer,
-              $"down={down} more={SelMoreMenuOpen} panel={SelPanelOpen}");
+        Check("点 ⋯ 第一行：置顶执行、菜单关、无二级弹窗",
+              down && !SelMoreMenuOpen && SelPanelOpen == SelPanel.None
+              && Doc.Strokes.IndexOf(s) == Doc.Strokes.Count - 1,
+              $"down={down} more={SelMoreMenuOpen} panel={SelPanelOpen} " +
+              $"idx {idxBefore}→{Doc.Strokes.IndexOf(s)}");
 
         var tOrder = SelectionHandles.MoreBarOrder(true);
-        Check("文本框 ⋯ 只收锁定/层级",
-              tOrder.Length == 2
-              && System.Array.IndexOf(tOrder, SelBarButton.Lock) >= 0
-              && System.Array.IndexOf(tOrder, SelBarButton.Layer) >= 0,
+        Check("文本框 ⋯：置顶/置底/锁定",
+              tOrder.Length == 3
+              && System.Array.IndexOf(tOrder, SelBarButton.Top) >= 0
+              && System.Array.IndexOf(tOrder, SelBarButton.Bottom) >= 0
+              && System.Array.IndexOf(tOrder, SelBarButton.Lock) >= 0,
               string.Join(",", tOrder));
 
         OpenSelectionMenuForTest(ai: true);

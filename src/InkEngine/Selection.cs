@@ -163,10 +163,14 @@ internal enum SelBarButton
     /// </summary>
     Ai = 11,
     /// <summary>
-    /// **更多 `⋯`**（2026-11-08）：收纳低频对象动作（锁定/层级/保存/翻转/图库）。
+    /// **更多 `⋯`**（2026-11-08）：收纳低频对象动作（置顶/置底/保存/翻转/锁定/图库）。
     /// 固定在最右；点开和 AI 共用同一个弹层宿主，同一时间只开一个。
     /// </summary>
     More = 12,
+    /// <summary>置顶（`⋯` 里的第一行；不再二级弹“层级”面板）。</summary>
+    Top = 13,
+    /// <summary>置底（`⋯` 里的第二行）。</summary>
+    Bottom = 14,
 }
 
 /// <summary>
@@ -2310,11 +2314,13 @@ internal static class SelectionHandles
 
     /// <summary>
     /// `⋯` 里的动作（顺序 = 菜单行序）。
-    /// 普通对象：层级 → 保存 → 翻转 → 锁定 → 图库；文本框只留锁定/层级。
+    /// **层级不再开二级弹窗**：置顶/置底直接两行（用户 2026-11-08 指出）。
+    /// 普通对象：置顶 → 置底 → 保存 → 翻转 → 锁定 → 图库。
     /// </summary>
     private static readonly SelBarButton[] MoreOrderNormal =
     {
-        SelBarButton.Layer,
+        SelBarButton.Top,
+        SelBarButton.Bottom,
         SelBarButton.Export,
         SelBarButton.FlipH,
         SelBarButton.FlipV,
@@ -2324,8 +2330,9 @@ internal static class SelectionHandles
 
     private static readonly SelBarButton[] MoreOrderText =
     {
+        SelBarButton.Top,
+        SelBarButton.Bottom,
         SelBarButton.Lock,
-        SelBarButton.Layer,
     };
 
     /// <summary>这一条有几格（普通 6，文本框 6）。</summary>
@@ -2355,6 +2362,8 @@ internal static class SelectionHandles
     /// <summary>`⋯` 菜单行的文案（绘制和自检共用）。</summary>
     public static string BarButtonLabel(SelBarButton button) => button switch
     {
+        SelBarButton.Top => "置顶",
+        SelBarButton.Bottom => "置底",
         SelBarButton.Layer => "层级（置顶 / 置底）",
         SelBarButton.Export => "保存 / 导出",
         SelBarButton.FlipH => "左右翻转",
@@ -3076,7 +3085,8 @@ internal static class SelectionHandles
 
     public const float BarMenuWidthLogical = 236f;       // AI 菜单默认宽
     public const float BarMenuNarrowWidthLogical = 220f; // `⋯` 菜单默认宽
-    public const float BarMenuRowHeightLogical = 38f;
+    /// <summary>32 而不是 38：7 行菜单在 200% 屏上也不至于半屏高（用户 2026-11-08 反馈）。</summary>
+    public const float BarMenuRowHeightLogical = 32f;
     public const float BarMenuStatusHeightLogical = 26f;
     public const float BarMenuPadLogical = 6f;
     /// <summary>AI 菜单当前只有「识别文本」一项；手写优化两项先隐藏，代码保留。</summary>
@@ -3085,18 +3095,24 @@ internal static class SelectionHandles
     /// <summary>弹层整块：默认贴操作条右下，下面放不下就翻到上面。</summary>
     public static RectF BarMenuRectIn(in RectF bar, float dpi, in RectF visible,
                                       int rows, bool hasStatus,
-                                      float widthLogical = BarMenuWidthLogical)
+                                      float widthLogical = BarMenuWidthLogical,
+                                      bool centerX = true, RectF avoid = default)
     {
         int n = Math.Max(1, rows);
         float w = widthLogical * dpi;
         float h = (BarMenuPadLogical * 2 + BarMenuRowHeightLogical * n
                    + (hasStatus ? BarMenuStatusHeightLogical : 0f)) * dpi;
-        float x = bar.MaxX - w;
+        // 默认在条的正中（用户 2026-11-08："识别文本要居中"）；多行菜单也居中，
+        // 不再贴条右端，视觉上和条是一个整体。
+        float x = centerX ? (bar.MinX + bar.MaxX) * 0.5f - w * 0.5f : bar.MaxX - w;
         float y = bar.MaxY + 8f * dpi;
         if (!visible.IsEmpty)
         {
             float margin = BarScreenPaddingLogical * dpi;
-            if (y + h > visible.MaxY - margin) y = bar.MinY - 8f * dpi - h;
+            // 下面放不下时，**翻到选中对象上方**，不是翻到条上方——
+            // 条就贴在对象下沿，翻到条上方必然盖住对象（2026-11-08 截图反馈）。
+            if (y + h > visible.MaxY - margin)
+                y = (avoid.IsEmpty ? bar.MinY : avoid.MinY) - 8f * dpi - h;
             x = Math.Clamp(x, visible.MinX + margin,
                            MathF.Max(visible.MinX + margin, visible.MaxX - margin - w));
             y = Math.Clamp(y, visible.MinY + margin,

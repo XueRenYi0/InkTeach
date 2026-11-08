@@ -219,8 +219,9 @@ handle, with 90° soft snapping (`Shift` 15° grid, `Alt` free). **Small objects
 to a minimal frame** so handles never sit on top of the content and the scaling anchor stays on the
 object's own corner.
 
-Six-cell action bar: **collapse / colour / duplicate / delete / AI / ⋯**. Lock, layer, save,
-flip H/V and gallery live in ⋯; low-frequency actions no longer stretch the bar. The colour panel has
+Six-cell action bar: **collapse / colour / duplicate / delete / AI / ⋯**. Pin top/bottom, save,
+flip H/V, lock and gallery live in ⋯; low-frequency actions no longer stretch the bar and no
+second-level popup is used. The colour panel has
 a continuous width slider (live readout while dragging, one undo step on release), three line styles,
 a 4×4 palette plus HSV picking. Duplicate (9.2.4) keeps the original, creates a selected 24px-offset
 copy (clipboard copy is on the selection band); the old infinite drag-copy mode is gone.

@@ -17167,7 +17167,8 @@ public partial class InkEngine
             SelectionBarCanvasRect, UiUnit, FurnitureViewport, rows,
             SelectionMenuHasStatusNow,
             SelAiMenuOpen ? SelectionHandles.BarMenuWidthLogical
-                          : SelectionHandles.BarMenuNarrowWidthLogical);
+                          : SelectionHandles.BarMenuNarrowWidthLogical,
+            centerX: true, avoid: LiveSelectionFrame.CanvasAabb);
     }
 
     private void UpdateBarHover(float x, float y)
@@ -19683,6 +19684,14 @@ public partial class InkEngine
             case SelBarButton.Layer:
                 CloseCustomColor();                             // 换面板 = 色板跟着关
                 SelPanelOpen = SelPanelOpen == SelPanel.Layer ? SelPanel.None : SelPanel.Layer;
+                break;
+
+            // `⋯` 里的置顶/置底：直接执行，不再开二级“层级”弹窗。
+            case SelBarButton.Top:
+                ReorderSelection(toFront: true);
+                break;
+            case SelBarButton.Bottom:
+                ReorderSelection(toFront: false);
                 break;
 
             case SelBarButton.Export:
