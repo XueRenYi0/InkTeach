@@ -12,6 +12,7 @@ internal static class Native
     public const int WM_ERASEBKGND = 0x0014;
     public const int WM_CTLCOLOREDIT = 0x0133;
     public const int EM_SETRECT = 0x00B3;
+    public const int EM_GETRECT = 0x00B2;
     // RichEdit???/????????
     public const int EM_SETCHARFORMAT = 0x0444;
     public const int EM_SETPARAFORMAT = 0x0447;

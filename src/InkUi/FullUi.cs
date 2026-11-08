@@ -4424,6 +4424,7 @@ public sealed partial class FullUi : IOverlayUi
     private const float SettingsNavItemH = 44f;
     private const float SettingsNavGap = 5f;
     private const float SettingsNavTop = 4f;
+    private const float SettingsNavTextInset = 14f;
 
     private float SettingsContentTop()
         => MoreRect().MinY + MorePad + MoreHeaderH + 8f;
@@ -5410,8 +5411,13 @@ public sealed partial class FullUi : IOverlayUi
             {
                 ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
             }
-            _widgets.TextLeftMiddle(ctx, SettingsCatNames[i], r, 12.5f,
-                Brush(ctx, active ? Tokens.Accent : InkCol));
+            _widgets.TextLeftMiddle(ctx, SettingsCatNames[i],
+                new RectF
+                {
+                    MinX = r.MinX + SettingsNavTextInset, MinY = r.MinY,
+                    MaxX = r.MaxX - 8f, MaxY = r.MaxY,
+                },
+                12.5f, Brush(ctx, active ? Tokens.Accent : InkCol));
         }
     }
 
@@ -6168,6 +6174,16 @@ public sealed partial class FullUi : IOverlayUi
     {
         if (_aiOpen) return true;
         if (!_moreOpen) return false;
+        if (_morePage == MorePage.Api && _apiModelMenuOpen && ApiModelMenuRect().Contains(x, y))
+        {
+            int max = Math.Max(0, _apiModels.Count - ApiModelVisibleCount);
+            if (max > 0)
+            {
+                _apiModelScroll = Math.Clamp(_apiModelScroll + (delta > 0 ? -1 : 1), 0, max);
+                Invalidate();
+            }
+            return true;
+        }
         if (_morePage == MorePage.Settings && SettingsViewportRect().Contains(x, y))
         {
             StopSettingsFling();

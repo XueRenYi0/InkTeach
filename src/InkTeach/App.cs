@@ -639,6 +639,30 @@ internal sealed partial class App : InkEngine.InkEngine
             // A4.0：浮层优先级/捕获/Esc/点外/阻断；无窗口、不抢前台。
             return OverlayAudit.Run();
         }
+        else if (mode == "--apiinputshot")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(200);
+            if (CurrentUi is not InkUi.FullUi ui)
+            {
+                Console.WriteLine("FAIL：UI 不是 FullUi");
+                ExitCode = 1;
+                _quit = true;
+                return ExitCode;
+            }
+            ui.OpenApiPageForTest();
+            SettleFrames(300);
+            ui.ApiClickForTest(401);      // 服务地址输入框：进入编辑态，截原生 EDIT
+            SettleFrames(300);
+            string path = args.Length > 1 ? args[1] : "reports/api-input-align.bmp";
+            bool ok = ScreenProbe.SaveBmp(path, (int)_virtualX, (int)_virtualY,
+                                          (int)_virtualW, (int)_virtualH);
+            Console.WriteLine((ok ? "已写出 " : "写出失败 ") + path);
+            ExitCode = ok ? 0 : 1;
+            _quit = true;
+        }
         else if (mode == "--aiapishow")
         {
             _autoExitAt = double.MaxValue;

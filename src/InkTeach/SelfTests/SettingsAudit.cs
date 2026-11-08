@@ -318,6 +318,19 @@ internal static class SettingsAudit
             ui.ApiClickForTest(404);            // 获取模型
             ui.PrepareFrame();
             Check("AI 服务获取模型", ui.ApiStatusForTest.Contains("已获取"), ui.ApiStatusForTest);
+            Check("获取模型后自动展开下拉",
+                  ui.ApiModelMenuOpenForTest && ui.ApiModelCountForTest == 2,
+                  $"open={ui.ApiModelMenuOpenForTest} models={ui.ApiModelCountForTest}");
+            var modelItem = ui.ApiModelItemRectForTest(1);
+            int modelHit = ui.ApiHitAtForTest(
+                (modelItem.MinX + modelItem.MaxX) * 0.5f, (modelItem.MinY + modelItem.MaxY) * 0.5f);
+            Check("模型下拉项可命中", modelHit == 441, $"hit={modelHit}");
+            Check("模型下拉离屏绘制", RenderSettingsPng(ui, "settings-api-model-menu.png"),
+                  "reports/settings-api-model-menu.png");
+            ui.ApiClickForTest(441);
+            Check("从下拉选择模型",
+                  ui.ApiModelForTest == "deepseek-flash" && !ui.ApiModelMenuOpenForTest,
+                  $"model={ui.ApiModelForTest} open={ui.ApiModelMenuOpenForTest}");
             ui.ApiClickForTest(407);            // 删除：第一次只确认
             ui.ApiClickForTest(407);            // 第二次真删
             Check("AI 服务删除", ui.ApiStatusForTest.Contains("已删除"), ui.ApiStatusForTest);

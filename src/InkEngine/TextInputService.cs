@@ -72,6 +72,10 @@ public partial class InkEngine
 
     internal ITextInputService TextInput => _textInput ??= new TextInputService(this);
 
+    /// <summary>自检用：当前 EDIT 的格式化矩形（物理像素；Top/Bottom/Height）。</summary>
+    internal (int Top, int Bottom, int Height) TextInputRectForTest
+        => (_textInput as TextInputService)?.TextRectForTest ?? (0, 0, 0);
+
     /// <summary>
     /// 原生文字宿主：无边框 EDIT，支持单行/多行/密码、IME、选区、复制粘贴、撤销。
     /// 第一版用 windowed EDIT；真透明以后评估 windowless RichEdit/TSF（见调研 §3.12）。
@@ -93,6 +97,9 @@ public partial class InkEngine
         private bool _hiding;
         private bool _mainNoActivate;
         private TextInputRequest _request;
+        private bool _multiLine;
+        private int _clientW, _clientH;
+        private int _padPx;
 
         public TextInputService(InkEngine engine) => _engine = engine;
 
@@ -117,7 +124,7 @@ public partial class InkEngine
             }
 
             ApplyVisual(request.Visual);
-            Native.SetWindowTextW(_hwnd, request.InitialText ?? "");
+            Native.SetWindowTextW(_hwnd, SanitizeSingleLine(request.InitialText));
             Native.SendMessage(_hwnd, Native.EM_SETLIMITTEXT,
                 new IntPtr(Math.Max(1, request.MaxLength)), IntPtr.Zero);
             Native.SendMessage(_hwnd, 0x00CC /*EM_SETPASSWORDCHAR*/,
@@ -145,7 +152,19 @@ public partial class InkEngine
         internal void SetTextForTest(string text)
         {
             if (_editing && _hwnd != IntPtr.Zero)
-                Native.SetWindowTextW(_hwnd, text ?? "");
+                Native.SetWindowTextW(_hwnd, SanitizeSingleLine(text));
+        }
+
+        /// <summary>自检用：EDIT 的格式化矩形 + 客户区高度（物理像素）。</summary>
+        internal (int Top, int Bottom, int Height) TextRectForTest
+        {
+            get
+            {
+                if (_hwnd == IntPtr.Zero) return (0, 0, 0);
+                var rc = new Native.RECT();
+                Native.SendMessageRect(_hwnd, Native.EM_GETRECT, IntPtr.Zero, ref rc);
+                return (rc.Top, rc.Bottom, _clientH);
+            }
         }
 
         public void Commit()
@@ -197,11 +216,11 @@ public partial class InkEngine
 
         private void EnsureWindow(TextInputMode mode)
         {
+            bool wantMulti = mode == TextInputMode.MultiLine;
             if (_hostHwnd != IntPtr.Zero)
             {
                 // EDIT 的 ES_MULTILINE 不能运行时切换；模式变了就重建。
-                bool wantMulti = (_style & 0x0004L /*ES_MULTILINE*/) != 0;
-                if (wantMulti == (mode == TextInputMode.MultiLine)) return;
+                if (_multiLine == wantMulti) return;
                 // DestroyWindow 会发 WM_KILLFOCUS；先挡住，否则会把新请求当成“失焦提交”。
                 bool oldHiding = _hiding;
                 _hiding = true;
@@ -211,13 +230,15 @@ public partial class InkEngine
                 _hiding = oldHiding;
             }
 
-            long style = 0L;
-            if (mode == TextInputMode.MultiLine)
-                style |= 0x0004L /*ES_MULTILINE*/ | 0x0010L /*ES_WANTRETURN*/ | 0x00200000L /*WS_VSCROLL*/;
+            _multiLine = wantMulti;
+            // 单行也带 ES_MULTILINE：只有多行 EDIT 才能用 EM_SETRECT 做垂直居中。
+            // 单行会拦截 Enter、并把粘贴里的换行压成空格。
+            long style = 0x0004L /*ES_MULTILINE*/;
+            if (_multiLine)
+                style |= 0x0010L /*ES_WANTRETURN*/ | 0x00200000L /*WS_VSCROLL*/;
             else
                 style |= 0x0080L /*ES_AUTOHSCROLL*/;
 
-            _style = style;
             _hostWndProc = HostWndProc;
             _hostHwnd = Native.CreateWindowEx(
                 Native.WS_EX_TOPMOST | Native.WS_EX_TOOLWINDOW,
@@ -250,8 +271,6 @@ public partial class InkEngine
                 Marshal.GetFunctionPointerForDelegate(_wndProc));
         }
 
-        private long _style;
-
         private void ApplyVisual(TextInputVisual v)
         {
             v ??= new TextInputVisual();
@@ -267,6 +286,7 @@ public partial class InkEngine
                 Native.SendMessage(_hwnd, Native.WM_SETFONT, _font, new IntPtr(1));
 
             int pad = (int)MathF.Round(v.Padding * _engine.UiUnit);
+            _padPx = pad;
             Native.SendMessage(_hwnd, Native.EM_SETMARGINS,
                 new IntPtr(Native.EC_LEFTMARGIN | Native.EC_RIGHTMARGIN),
                 new IntPtr(pad | (pad << 16)));
@@ -279,6 +299,7 @@ public partial class InkEngine
                 _brushColor = bg;
             }
             _textColor = ColorRef(v.Text);
+            UpdateTextRect();
         }
 
         private uint _textColor;
@@ -291,8 +312,46 @@ public partial class InkEngine
             int y = (int)MathF.Floor(logical.MinY * u);
             int w = Math.Max(24, (int)MathF.Ceiling((logical.MaxX - logical.MinX) * u));
             int h = Math.Max(24, (int)MathF.Ceiling((logical.MaxY - logical.MinY) * u));
+            _clientW = w; _clientH = h;
             Native.SetWindowPos(_hostHwnd, Native.HWND_TOPMOST, x, y, w, h, 0);
             Native.SetWindowPos(_hwnd, IntPtr.Zero, 0, 0, w, h, Native.SWP_NOZORDER);
+            UpdateTextRect();
+        }
+
+        /// <summary>
+        /// 文字垂直居中：单行 EDIT 默认顶对齐，看起来像“字跑到框上面”。
+        /// 单行也建成多行 EDIT，用 EM_SETRECT 把格式化矩形放到中间；
+        /// 多行则用 visual padding 做上/下留白。
+        /// </summary>
+        private void UpdateTextRect()
+        {
+            if (_hwnd == IntPtr.Zero || _clientW <= 0 || _clientH <= 0) return;
+            int top, bottom;
+            if (_multiLine)
+            {
+                top = _padPx;
+                bottom = Math.Max(top + 8, _clientH - _padPx);
+            }
+            else
+            {
+                int line = Math.Max(1, (int)MathF.Round(_fontPx * 1.4f));
+                top = Math.Max(0, (_clientH - line) / 2);
+                bottom = Math.Min(_clientH, top + line + 2);
+            }
+            var rc = new Native.RECT
+            {
+                Left = 0, Top = top,
+                Right = Math.Max(1, _clientW),
+                Bottom = Math.Max(top + 1, bottom),
+            };
+            Native.SendMessageRect(_hwnd, Native.EM_SETRECT, IntPtr.Zero, ref rc);
+        }
+
+        private string SanitizeSingleLine(string text)
+        {
+            text ??= "";
+            if (_multiLine) return text;
+            return text.Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ');
         }
 
         private string ReadText()
@@ -301,7 +360,7 @@ public partial class InkEngine
             int len = Native.GetWindowTextLengthW(_hwnd);
             var sb = new StringBuilder(Math.Max(16, len + 1));
             Native.GetWindowTextW(_hwnd, sb, sb.Capacity);
-            return sb.ToString();
+            return SanitizeSingleLine(sb.ToString());
         }
 
         private void HideCore()
@@ -426,7 +485,7 @@ public partial class InkEngine
                     }
                     if (vk == 0x0D /*Enter*/)
                     {
-                        bool multiline = (_style & 0x0004L) != 0;
+                        bool multiline = _multiLine;
                         bool ctrl = (Native.GetAsyncKeyState(0x11) & 0x8000) != 0;
                         if (multiline && !ctrl) break;     // 多行：Enter 换行；Ctrl+Enter 提交
                         Commit();
@@ -437,7 +496,7 @@ public partial class InkEngine
                 case Native.WM_CHAR:
                 {
                     int ch = wParam.ToInt32();
-                    bool multiline = (_style & 0x0004L) != 0;
+                    bool multiline = _multiLine;
                     if (ch == 0x1B) return IntPtr.Zero;
                     if (!multiline && (ch == 0x0D || ch == 0x0A)) return IntPtr.Zero;
                     break;

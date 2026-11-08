@@ -29,7 +29,10 @@ public sealed partial class FullUi
     private const int ApiHitDelete = 407;
     private const int ApiHitKeyLink = 408;
     private const int ApiHitProviderMenu = 409;
+    private const int ApiHitModelMenu = 410;
     private const int ApiHitProviderItemBase = 420;
+    private const int ApiHitModelItemBase = 440;
+    private const int ApiModelMenuMaxRows = 8;
 
     private AiApiSettingsSnapshot _apiSnapshot;
     private string _apiSelectedId = "";
@@ -41,6 +44,8 @@ public sealed partial class FullUi
     private bool _apiFetching;
     private bool _apiDeleteConfirm;
     private bool _apiProviderMenuOpen;
+    private bool _apiModelMenuOpen;
+    private int _apiModelScroll;
     private List<string> _apiModels = new();
     private Task<AiApiModelsResult> _apiFetchTask;
 
@@ -110,6 +115,35 @@ public sealed partial class FullUi
         MaxY = ApiProviderMenuRect().MinY + 4f + (i + 1) * ApiItemH,
     };
 
+    private int ApiModelVisibleCount => Math.Min(_apiModels.Count, ApiModelMenuMaxRows);
+
+    private RectF ApiModelMenuRect()
+    {
+        int count = Math.Max(1, ApiModelVisibleCount);
+        float h = count * ApiItemH + 8f;
+        float y = ApiFieldRect(3).MaxY + 4f;
+        float bottomLimit = ApiBottomRect(0).MinY - 8f;
+        if (y + h > bottomLimit)
+            y = MathF.Max(MoreHeaderRect().MaxY + 4f, ApiFieldRect(3).MinY - h - 4f);
+        return new RectF
+        {
+            MinX = ApiFieldRect(3).MinX, MinY = y,
+            MaxX = ApiFieldRect(3).MaxX, MaxY = y + h,
+        };
+    }
+
+    private RectF ApiModelItemRect(int i)
+    {
+        int row = i - _apiModelScroll;
+        if (row < 0 || row >= ApiModelVisibleCount) return RectF.Empty;
+        var m = ApiModelMenuRect();
+        return new RectF
+        {
+            MinX = m.MinX + 6f, MinY = m.MinY + 4f + row * ApiItemH,
+            MaxX = m.MaxX - 6f, MaxY = m.MinY + 4f + (row + 1) * ApiItemH,
+        };
+    }
+
     /// <summary>从设置行「AI 服务 → 管理…」进入；服务为空时退回旧独立窗（兼容自检/老版本）。</summary>
     private void OpenApiSettingsPage()
     {
@@ -127,6 +161,8 @@ public sealed partial class FullUi
         _apiSelectedId = _apiSnapshot?.ActiveId ?? "";
         _apiEditingNew = false;
         _apiProviderMenuOpen = false;
+        _apiModelMenuOpen = false;
+        _apiModelScroll = 0;
         _apiDeleteConfirm = false;
         _apiStatus = "";
         _apiModels.Clear();
@@ -150,6 +186,9 @@ public sealed partial class FullUi
         _apiModel = p?.Model ?? "";
         _apiEditingNew = p == null;
         _apiDeleteConfirm = false;
+        _apiModelMenuOpen = false;
+        _apiModelScroll = 0;
+        _apiModels.Clear();
     }
 
     private string ApiProviderName()
@@ -164,6 +203,14 @@ public sealed partial class FullUi
 
     private int ApiHitAt(float x, float y)
     {
+        if (_apiModelMenuOpen)
+        {
+            int n = ApiModelVisibleCount;
+            for (int i = 0; i < n; i++)
+                if (ApiModelItemRect(_apiModelScroll + i).Contains(x, y))
+                    return ApiHitModelItemBase + i;
+            if (ApiModelMenuRect().Contains(x, y)) return ApiHitModelMenu;
+        }
         if (_apiProviderMenuOpen)
         {
             int count = ApiProviderCount;
@@ -175,7 +222,8 @@ public sealed partial class FullUi
         if (ApiFieldRect(0).Contains(x, y)) return ApiHitProvider;
         if (ApiFieldRect(1).Contains(x, y)) return ApiHitBase;
         if (ApiFieldRect(2).Contains(x, y)) return ApiHitKey;
-        if (ApiFieldRect(3).Contains(x, y)) return ApiHitModel;
+        if (ApiFieldRect(3).Contains(x, y))
+            return _apiModels.Count > 0 ? ApiHitModelMenu : ApiHitModel;
         if (ApiSideRect(0).Contains(x, y)) return ApiHitKeyLink;
         if (ApiSideRect(3).Contains(x, y)) return ApiHitFetch;
         for (int i = 0; i < 3; i++)
@@ -191,6 +239,19 @@ public sealed partial class FullUi
 
     private void ApiPointerDown(int hit, float x, float y)
     {
+        if (_apiModelMenuOpen)
+        {
+            int n = ApiModelVisibleCount;
+            if (hit >= ApiHitModelItemBase && hit < ApiHitModelItemBase + n)
+            {
+                SelectApiModel(_apiModelScroll + hit - ApiHitModelItemBase);
+                return;
+            }
+            _apiModelMenuOpen = false;
+            Invalidate();
+            if (hit == ApiHitModelMenu || hit == ApiHitModel) return;
+        }
+
         if (_apiProviderMenuOpen)
         {
             int count = ApiProviderCount;
@@ -209,6 +270,19 @@ public sealed partial class FullUi
         {
             case ApiHitProvider:
                 _apiProviderMenuOpen = !_apiProviderMenuOpen;
+                _apiModelMenuOpen = false;
+                Invalidate();
+                break;
+            case ApiHitModelMenu:
+                _apiModelMenuOpen = !_apiModelMenuOpen;
+                _apiProviderMenuOpen = false;
+                if (_apiModelMenuOpen)
+                {
+                    // 打开时让当前模型尽量在可视行里。
+                    int at = _apiModels.IndexOf(_apiModel);
+                    int max = Math.Max(0, _apiModels.Count - ApiModelVisibleCount);
+                    _apiModelScroll = Math.Clamp(at < 0 ? 0 : at - ApiModelVisibleCount + 1, 0, max);
+                }
                 Invalidate();
                 break;
             case ApiHitBase:
@@ -238,6 +312,9 @@ public sealed partial class FullUi
     private void SelectApiProvider(int index)
     {
         _apiProviderMenuOpen = false;
+        _apiModelMenuOpen = false;
+        _apiModels.Clear();
+        _apiModelScroll = 0;
         if (index < 0 || index > ApiProviderCount) return;
         if (index == ApiProviderCount)
         {
@@ -259,6 +336,15 @@ public sealed partial class FullUi
             _apiDeleteConfirm = false;
             _apiStatus = "";
         }
+        Invalidate();
+    }
+
+    private void SelectApiModel(int index)
+    {
+        _apiModelMenuOpen = false;
+        if (index < 0 || index >= _apiModels.Count) return;
+        _apiModel = _apiModels[index];
+        _apiStatus = "";
         Invalidate();
     }
 
@@ -318,6 +404,7 @@ public sealed partial class FullUi
         string id = ApiFieldId(hit);
         if (string.IsNullOrEmpty(id)) return;
         _apiProviderMenuOpen = false;
+        _apiModelMenuOpen = false;
         _apiDeleteConfirm = false;
         _apiStatus = "";
 
@@ -366,6 +453,7 @@ public sealed partial class FullUi
         }
         _host.TextInput?.Commit();
         _apiFetching = true;
+        _apiModelMenuOpen = false;
         _apiStatus = "正在获取模型…";
         _apiFetchTask = _host.AiApi.FetchModelsAsync(_apiBase, _apiKey);
         Invalidate();
@@ -386,9 +474,21 @@ public sealed partial class FullUi
             if (r.Ok)
             {
                 _apiModels = r.Models ?? new List<string>();
-                if (string.IsNullOrEmpty(_apiModel) && _apiModels.Count > 0)
-                    _apiModel = PickApiModel(_apiModels);
-                _apiStatus = $"已获取 {_apiModels.Count} 个模型";
+                if (_apiModels.Count > 0)
+                {
+                    if (string.IsNullOrEmpty(_apiModel) || !_apiModels.Contains(_apiModel))
+                        _apiModel = PickApiModel(_apiModels);
+                    int at = _apiModels.IndexOf(_apiModel);
+                    _apiModelScroll = Math.Clamp(
+                        at < 0 ? 0 : at - ApiModelVisibleCount + 1,
+                        0, Math.Max(0, _apiModels.Count - ApiModelVisibleCount));
+                    _apiModelMenuOpen = true;   // 获取完直接展开，用户能看到全部可选模型
+                    _apiStatus = $"已获取 {_apiModels.Count} 个模型，请在下拉里选择";
+                }
+                else
+                {
+                    _apiStatus = "已获取 0 个模型";
+                }
             }
             else _apiStatus = "获取失败：" + (r.Error ?? "未知错误");
         }
@@ -469,7 +569,8 @@ public sealed partial class FullUi
         DrawApiField(ctx, ApiFieldRect(0), ApiProviderName(), false, false, "选择服务商");
         DrawApiField(ctx, ApiFieldRect(1), _apiBase, IsApiEditing("api.base"), false, "https://api.example.com/v1");
         DrawApiField(ctx, ApiFieldRect(2), _apiKey, IsApiEditing("api.key"), true, "sk-…");
-        DrawApiField(ctx, ApiFieldRect(3), _apiModel, IsApiEditing("api.model"), false, "模型名");
+        DrawApiField(ctx, ApiFieldRect(3), _apiModel, IsApiEditing("api.model"), false, "模型名",
+                     _apiModels.Count > 0);
 
         DrawApiButton(ctx, ApiSideRect(0), "获取 API Key ↗", false, true, ApiHitKeyLink);
         DrawApiButton(ctx, ApiSideRect(3), _apiFetching ? "获取中…" : "获取模型", false, true, ApiHitFetch);
@@ -488,6 +589,7 @@ public sealed partial class FullUi
                       false, p != null && !p.Builtin, ApiHitDelete);
 
         if (_apiProviderMenuOpen) DrawApiProviderMenu(ctx);
+        if (_apiModelMenuOpen) DrawApiModelMenu(ctx);
     }
 
     private bool IsApiEditing(string id)
@@ -495,7 +597,7 @@ public sealed partial class FullUi
            && string.Equals(_host.TextInput.EditingId, id, StringComparison.Ordinal);
 
     private void DrawApiField(ID2D1DeviceContext ctx, RectF r, string text, bool editing,
-                              bool password, string placeholder)
+                              bool password, string placeholder, bool dropdown = false)
     {
         var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 8f, 8f);
         ctx.FillRoundedRectangle(rr, Brush(ctx, ApiFieldBg));
@@ -506,8 +608,19 @@ public sealed partial class FullUi
         if (password && show.Length > 0) show = new string('•', Math.Min(16, show.Length));
         bool empty = string.IsNullOrEmpty(show);
         _widgets.TextLeftMiddle(ctx, empty ? placeholder : show,
-            new RectF { MinX = r.MinX + 10f, MinY = r.MinY, MaxX = r.MaxX - 10f, MaxY = r.MaxY },
+            new RectF
+            {
+                MinX = r.MinX + 10f, MinY = r.MinY,
+                MaxX = r.MaxX - (dropdown ? 30f : 10f), MaxY = r.MaxY,
+            },
             12.5f, Brush(ctx, empty ? MutedCol : InkCol));
+        if (dropdown)
+        {
+            float cx = r.MaxX - 17f, cy = (r.MinY + r.MaxY) * 0.5f;
+            var ink = Brush(ctx, MutedCol);
+            ctx.DrawLine(new Vector2(cx - 4f, cy - 2f), new Vector2(cx, cy + 2f), ink, 1.5f);
+            ctx.DrawLine(new Vector2(cx, cy + 2f), new Vector2(cx + 4f, cy - 2f), ink, 1.5f);
+        }
     }
 
     private void DrawApiButton(ID2D1DeviceContext ctx, RectF r, string label,
@@ -550,6 +663,56 @@ public sealed partial class FullUi
         }
     }
 
+    private void DrawApiModelMenu(ID2D1DeviceContext ctx)
+    {
+        var m = ApiModelMenuRect();
+        var rr = new RoundedRectangle(new Vortice.RawRectF(m.MinX, m.MinY, m.MaxX, m.MaxY), 10f, 10f);
+        ctx.FillRoundedRectangle(rr, Brush(ctx, _dark
+            ? new Color4(0.18f, 0.19f, 0.21f, 1f)
+            : new Color4(1f, 1f, 1f, 1f)));
+        ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
+
+        int n = ApiModelVisibleCount;
+        for (int row = 0; row < n; row++)
+        {
+            int index = _apiModelScroll + row;
+            var item = ApiModelItemRect(index);
+            bool hot = _moreHover == ApiHitModelItemBase + row;
+            if (hot)
+                ctx.FillRoundedRectangle(
+                    new RoundedRectangle(new Vortice.RawRectF(item.MinX, item.MinY, item.MaxX, item.MaxY), 6f, 6f),
+                    Brush(ctx, HoverCol));
+            bool active = index < _apiModels.Count && _apiModels[index] == _apiModel;
+            _widgets.TextLeftMiddle(ctx, _apiModels[index],
+                new RectF { MinX = item.MinX + 10f, MinY = item.MinY, MaxX = item.MaxX - 18f, MaxY = item.MaxY },
+                12.5f, Brush(ctx, active ? Tokens.Accent : InkCol));
+            if (active)
+            {
+                float cx = item.MaxX - 14f, cy = (item.MinY + item.MaxY) * 0.5f;
+                var ink = Brush(ctx, Tokens.Accent);
+                ctx.DrawLine(new Vector2(cx - 4f, cy), new Vector2(cx - 1f, cy + 3f), ink, 1.6f);
+                ctx.DrawLine(new Vector2(cx - 1f, cy + 3f), new Vector2(cx + 5f, cy - 4f), ink, 1.6f);
+            }
+        }
+
+        // 模型很多时右侧给一条细滚动提示（滚轮可滚）。
+        int max = Math.Max(0, _apiModels.Count - n);
+        if (max > 0)
+        {
+            float trackX = m.MaxX - 5f, top = m.MinY + 6f, bottom = m.MaxY - 6f;
+            float trackH = MathF.Max(8f, bottom - top);
+            float thumbH = MathF.Max(18f, trackH * n / _apiModels.Count);
+            float t = _apiModelScroll / (float)max;
+            float y = top + (trackH - thumbH) * t;
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(trackX, top, trackX + 2f, top + trackH), 1f, 1f),
+                Brush(ctx, new Color4(BorderCol.R, BorderCol.G, BorderCol.B, 0.35f)));
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(trackX, y, trackX + 2f, y + thumbH), 1f, 1f),
+                Brush(ctx, new Color4(Tokens.Accent.R, Tokens.Accent.G, Tokens.Accent.B, 0.65f)));
+        }
+    }
+
     // ---- A2.1 自检钩子 -------------------------------------------------------
     internal void OpenApiPageForTest() { OpenApiSettingsPage(); _moreH.Jump(MoreApiH()); _more.Jump(1f); }
 
@@ -570,6 +733,10 @@ public sealed partial class FullUi
     internal int ApiProviderCountForTest => ApiProviderCount;
     internal RectF ApiProviderItemRectForTest(int i) => ApiProviderItemRect(i);
     internal string ApiSelectedProviderIdForTest => _apiSelectedId;
+    internal int ApiModelCountForTest => _apiModels.Count;
+    internal bool ApiModelMenuOpenForTest => _apiModelMenuOpen;
+    internal string ApiModelForTest => _apiModel;
+    internal RectF ApiModelItemRectForTest(int i) => ApiModelItemRect(i);
     internal string ApiStatusForTest => _apiStatus;
     internal void ApiClickForTest(int hit) => ApiPointerDown(hit, 0f, 0f);
 }

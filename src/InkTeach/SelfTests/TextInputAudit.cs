@@ -35,6 +35,10 @@ internal static class TextInputAudit
         });
         Check("Begin 进入编辑", input.IsEditing && input.EditingId == "audit.single",
               $"editing={input.IsEditing} id={input.EditingId}");
+        var singleRect = engine.TextInputRectForTest;
+        Check("单行文字垂直居中",
+              singleRect.Top > 2 && singleRect.Bottom < singleRect.Height - 2,
+              $"top={singleRect.Top} bottom={singleRect.Bottom} h={singleRect.Height}");
 
         input.UpdateRect(new RectF { MinX = 20, MinY = 20, MaxX = 240, MaxY = 60 });
         input.Commit();
@@ -73,6 +77,9 @@ internal static class TextInputAudit
             OnCommit = t => multi = t,
         });
         bool multiEditing = input.IsEditing;
+        var multiRect = engine.TextInputRectForTest;
+        Check("多行文字顶部留白", multiRect.Top >= 4 && multiRect.Bottom <= multiRect.Height,
+              $"top={multiRect.Top} bottom={multiRect.Bottom} h={multiRect.Height}");
         input.Commit();
         Check("多行提交", multi == "a\r\nb" && !input.IsEditing,
               $"editingBefore={multiEditing} text={(multi == null ? "null" : multi.Replace("\r", "\\r").Replace("\n", "\\n"))}");
