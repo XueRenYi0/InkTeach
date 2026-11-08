@@ -4960,6 +4960,7 @@ public partial class InkEngine
         if (OverlayLayers.PointerDown(screenX, screenY, id, ptype, 600, 600))
         {
             _drawing = false;
+            _timerCapturing = true;   // 旧拖动判据；捕获生命周期仍归管理器
             Native.SetCapture(hWnd);
             _dirty = true;
             ApplyCursor();
@@ -4970,6 +4971,7 @@ public partial class InkEngine
         if (OverlayLayers.PointerDown(screenX, screenY, id, ptype, 590, 590))
         {
             _drawing = false;
+            _rollCapturing = true;    // 旧拖动判据；捕获生命周期仍归管理器
             Native.SetCapture(hWnd);
             _dirty = true;
             ApplyCursor();
@@ -4983,6 +4985,7 @@ public partial class InkEngine
         if (OverlayLayers.PointerDown(screenX, screenY, id, ptype, 500, 500))
         {
             _drawing = false;
+            _pptCapturing = true;      // 旧输入窗/拖动判据；捕获生命周期仍归管理器
             Native.SetCapture(hWnd);        // 长按要持续收到移动（判"拿起后有没有拖走"）
             _dirty = true;
             ApplyCursor();
@@ -6259,6 +6262,9 @@ public partial class InkEngine
                 OverlayLayers.PointerUp(mx, my, id);
             else
                 OverlayLayers.PointerUp(0, 0, id);
+            _timerCapturing = false;
+            _rollCapturing = false;
+            _pptCapturing = false;
             Native.ReleaseCapture();
             _drawing = false;
             _dirty = true;
