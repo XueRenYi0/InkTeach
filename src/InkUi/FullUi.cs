@@ -712,6 +712,7 @@ public sealed partial class FullUi : IOverlayUi
         _host.Commands.SetUiOverlay(_moreOpen || _aiOpen || _more.Running || _ai.Running);
         StepSettingsFling();             // 设置页双指纵滑的惯性（和白板同一套衰减）
         StepApiFetch();                  // AI 服务页：模型列表异步返回后回到 UI 线程
+        FinishMoreCloseIfDone();         // 关闭动画结束后再清 PageHost（避免闪回 Home）
         UpdatePeek();                    // 贴边隐藏该不该收
         UpdateRail();                    // 色线该不该长成设置条
         UpdateBandAction();              // "按住清空"够 0.8 秒没有
@@ -5177,8 +5178,6 @@ public sealed partial class FullUi : IOverlayUi
         _host?.TextInput?.Commit();
         if (_host?.State.LogNoteEditing == true) _host.Commands.EndLogNoteEdit(true);
         _moreOpen = false;
-        _pageHost?.Close(animate: false);
-        _morePage = MorePage.Home;
         _moreHover = MoreHitNone;
         _morePress = -1;
         _settingsScrollDrag = false;
@@ -5188,6 +5187,15 @@ public sealed partial class FullUi : IOverlayUi
         CancelTipHold();
         _more.To(0f, Tokens.MoreCloseMs);
         Invalidate();
+    }
+
+    /// <summary>关闭动画结束后再清 PageHost，避免淡出时闪回 Home 内容。</summary>
+    private void FinishMoreCloseIfDone()
+    {
+        if (_moreOpen || _more.Running) return;
+        if (_pageHost == null || _pageHost.Count == 0) return;
+        _pageHost.Close(animate: false);
+        _morePage = MorePage.Home;
     }
 
     private void UpdateMoreHeight()
@@ -5249,7 +5257,11 @@ public sealed partial class FullUi : IOverlayUi
         _widgets.Text(ctx, "✕", MoreCloseRect(), 15f,
                       Brush(ctx, _moreHover == MoreHitClose ? InkCol : MutedCol));
 
-        if (_morePage == MorePage.Home) DrawMoreHome(ctx);
+        if (_pageHost?.Current != null)
+        {
+            _pageHost.Render(ctx);
+        }
+        else if (_morePage == MorePage.Home) DrawMoreHome(ctx);
         else if (_morePage == MorePage.Settings) DrawMoreSettings(ctx);
         else if (_morePage == MorePage.Log) DrawLogPage(ctx);
         else if (_morePage == MorePage.Api) DrawApiPage(ctx);
@@ -5334,93 +5346,9 @@ public sealed partial class FullUi : IOverlayUi
 
     private void DrawLogPage(ID2D1DeviceContext ctx)
     {
-        var st = _host?.State;
-        string note = st?.LogNote ?? "";
-        bool editing = st?.LogNoteEditing ?? false;
-
-        _widgets.Text(ctx, "刚才遇到了什么问题？（选填）",
-            new RectF
-            {
-                MinX = MoreLeftX(), MinY = MoreHeaderRect().MaxY + 6f,
-                MaxX = LogLeftRight(), MaxY = MoreHeaderRect().MaxY + 26f,
-            },
-            12.5f, Brush(ctx, MutedCol), center: false);
-
-        var nr = LogNoteRect();
-        var nrr = new RoundedRectangle(new Vortice.RawRectF(nr.MinX, nr.MinY, nr.MaxX, nr.MaxY), 10f, 10f);
-        ctx.FillRoundedRectangle(nrr, Brush(ctx, HoverCol));
-        ctx.DrawRoundedRectangle(nrr,
-            Brush(ctx, editing || _moreHover == MoreHitLogNote ? Tokens.Accent : BorderCol),
-            editing ? 1.6f : 1f);
-        string noteText = editing
-            ? "正在输入…（回车确认 / Esc 取消）"
-            : (note.Length > 0 ? note : "例如：清屏后屏幕底部还剩一条黑线");
-        _widgets.TextLeftMiddle(ctx, noteText,
-            new RectF { MinX = nr.MinX + 12f, MinY = nr.MinY, MaxX = nr.MaxX - 12f, MaxY = nr.MaxY },
-            13.5f, Brush(ctx, note.Length > 0 || editing ? InkCol : MutedCol));
-
-        string scope = _logIncludeOlder
-            ? "将上传：最多 4 份运行日志（≤8MB）、环境摘要、这段描述。"
-            : "将上传：最近 2 份运行日志（≤4MB）、环境摘要、这段描述。";
-        if (st?.LogUploadConsentOn != true) scope += " 首次上传会先征求同意。";
-        _widgets.TextLeftMiddle(ctx, scope, LogScopeRect(), 11f, Brush(ctx, MutedCol));
-
-        var tr = LogToggleRect();
-        _widgets.TextLeftMiddle(ctx, "包含更早日志（最多 4 份 / 8MB）",
-            new RectF { MinX = tr.MinX, MinY = tr.MinY, MaxX = tr.MaxX - MoreSwitchW - 12f, MaxY = tr.MaxY },
-            12.5f, Brush(ctx, InkCol));
-        var sw = new RectF
-        {
-            MinX = tr.MaxX - MoreSwitchW,
-            MinY = tr.MinY + (tr.MaxY - tr.MinY - MoreSwitchH) * 0.5f,
-            MaxX = tr.MaxX,
-            MaxY = tr.MinY + (tr.MaxY - tr.MinY - MoreSwitchH) * 0.5f + MoreSwitchH,
-        };
-        DrawSwitch(ctx, sw, _logIncludeOlder);
-
-        var ur = LogUploadRect();
-        var urr = new RoundedRectangle(new Vortice.RawRectF(ur.MinX, ur.MinY, ur.MaxX, ur.MaxY), 10f, 10f);
-        ctx.FillRoundedRectangle(urr, Brush(ctx, Tokens.Accent));
-        _widgets.Text(ctx, "上传日志", ur, 14f, Brush(ctx, Tokens.AccentInk));
-
-        var er = LogExportRect();
-        var err = new RoundedRectangle(new Vortice.RawRectF(er.MinX, er.MinY, er.MaxX, er.MaxY), 10f, 10f);
-        ctx.DrawRoundedRectangle(err, Brush(ctx, _moreHover == MoreHitLogExport ? Tokens.Accent : BorderCol), 1f);
-        _widgets.Text(ctx, "只导出 zip", er, 12.5f,
-            Brush(ctx, _moreHover == MoreHitLogExport ? Tokens.Accent : InkCol));
-
-        string status = !string.IsNullOrEmpty(_hubHint) ? _hubHint
-                      : !string.IsNullOrEmpty(st?.InkStatus) ? (st?.InkStatus ?? "")
-                      : "日志不会自动上传；上传成功后会显示编号。";
-        _widgets.TextLeftMiddle(ctx, status,
-            new RectF
-            {
-                MinX = MoreLeftX(), MinY = ur.MaxY + 10f,
-                MaxX = LogLeftRight(), MaxY = ur.MaxY + 10f + MoreStatusH,
-            },
-            11f, Brush(ctx, MutedCol));
-
-        // 右侧二维码卡片（2026-11-03）：一直可见，学生拿手机就能扫；点它整屏放大。
-        DrawLogQrCard(ctx);
-
-        // 加群反馈（2026-11-03）：整行可点，点一下把群号复制走——触摸屏不用手抄。
-        var gr = LogGroupRect();
-        var grr = new RoundedRectangle(new Vortice.RawRectF(gr.MinX, gr.MinY, gr.MaxX, gr.MaxY), 10f, 10f);
-        bool groupHover = _moreHover == MoreHitLogGroup;
-        bool urlHover = _moreHover == MoreHitLogGroupUrl;
-        bool anyHover = groupHover || urlHover;
-        ctx.FillRoundedRectangle(grr, Brush(ctx, HoverCol));
-        ctx.DrawRoundedRectangle(grr, Brush(ctx, anyHover ? Tokens.Accent : BorderCol),
-                                 anyHover ? 1.5f : 1f);
-        var cr = LogGroupCopyRect();
-        var lr = LogGroupUrlRect();
-        _widgets.TextLeftMiddle(ctx, $"遇到问题？加 QQ 群 {ProductInfo.FeedbackQQGroup}",
-            new RectF { MinX = gr.MinX + 12f, MinY = gr.MinY, MaxX = cr.MinX - 10f, MaxY = gr.MaxY },
-            12.5f, Brush(ctx, InkCol));
-        _widgets.Text(ctx, "复制群号", cr, 11.5f,
-                      Brush(ctx, groupHover ? Tokens.Accent : MutedCol));
-        _widgets.Text(ctx, "复制链接", lr, 11.5f,
-                      Brush(ctx, urlHover ? Tokens.Accent : MutedCol));
+        // A3.1：日志页绘制已搬到 LogPage；这里只保留 PageHost 未建立时的兜底。
+        if (_pageHost?.Current is LogPage) { _pageHost.Render(ctx); return; }
+        new LogPage(this).Render(ctx, PageFrame.Empty);
     }
 
     /// <summary>日志页右侧的二维码卡片：白底（扫码要对比度）、图 + 一行小字。</summary>

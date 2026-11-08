@@ -552,6 +552,17 @@ public sealed partial class FullUi
 
     // ---- A2.1 自检钩子 -------------------------------------------------------
     internal void OpenApiPageForTest() { OpenApiSettingsPage(); _moreH.Jump(MoreApiH()); _more.Jump(1f); }
+
+    internal void OpenLogPageForTest()
+    {
+        _moreOpen = true;
+        EnsurePageHost();
+        SetMorePage(MorePage.Home, push: false);
+        SetMorePage(MorePage.Log, push: true);
+        _moreH.Jump(MoreLogH());
+        _more.Jump(1f);
+    }
+
     internal int ApiHitAtForTest(float x, float y) => ApiHitAt(x, y);
     internal RectF ApiFieldRectForTest(int row) => ApiFieldRect(row);
     internal RectF ApiBottomRectForTest(int i) => ApiBottomRect(i);

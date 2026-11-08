@@ -286,6 +286,32 @@ internal static class SettingsAudit
             ui.OpenSettingsPageForTest();
         }
 
+        // 9) 日志页：绘制已搬到 LogPage，PageHost 渲染通路必须仍然出图。
+        {
+            ui.OpenLogPageForTest();
+            var logNoteRect = ui.LogNoteRectForTest;
+            int logHit = ui.MoreHitAtForTest(
+                (logNoteRect.MinX + logNoteRect.MaxX) * 0.5f, (logNoteRect.MinY + logNoteRect.MaxY) * 0.5f);
+            Check("日志页绘制/命中",
+                  ui.MorePageIdForTest == "more.log" && logHit == 300
+                  && RenderSettingsPng(ui, "settings-log.png"),
+                  $"page={ui.MorePageIdForTest} hit={logHit} reports/settings-log.png");
+            ui.OpenSettingsPageForTest();
+        }
+
+        // 10) 说明页：绘制已搬到 HelpPage，页签/正文仍能出图。
+        {
+            ui.OpenHelpPageForTest();
+            var tab = ui.HelpTabRectForTest(0);
+            int tabHit = ui.MoreHitAtForTest(
+                (tab.MinX + tab.MaxX) * 0.5f, (tab.MinY + tab.MaxY) * 0.5f);
+            Check("说明页绘制/命中",
+                  ui.MorePageIdForTest == "more.help" && tabHit == 40
+                  && RenderSettingsPng(ui, "settings-help.png"),
+                  $"page={ui.MorePageIdForTest} hit={tabHit} reports/settings-help.png");
+            ui.OpenSettingsPageForTest();
+        }
+
         // 5) 每一行都能执行一次（不弹窗：命令全走 no-op 代理）
         // 先出两张图（顶部/底部），放在执行之前——执行会切深色主题，图会变。
         ui.SettingsScrollToForTest(0);

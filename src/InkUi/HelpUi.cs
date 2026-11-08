@@ -220,47 +220,9 @@ public sealed partial class FullUi
 
     private void DrawHelpPage(ID2D1DeviceContext ctx)
     {
-        for (int i = 0; i < HelpTabCount; i++)
-        {
-            var tab = HelpTabRect(i);
-            bool active = i == _helpTab;
-            bool hot = _moreHover == HelpHitTabBase + i;
-            var rr = new RoundedRectangle(
-                new Vortice.RawRectF(tab.MinX, tab.MinY, tab.MaxX, tab.MaxY), 11f, 11f);
-            if (active) ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Accent));
-            else if (hot) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
-            ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : BorderCol), 1f);
-            _widgets.Text(ctx, HelpTabNames[i], tab, HelpTabFont,
-                          Brush(ctx, active ? Tokens.AccentInk : InkCol));
-        }
-
-        var viewport = HelpViewportRect();
-        _helpScroll = Math.Clamp(_helpScroll, 0f, HelpMaxScroll());
-        ctx.PushAxisAlignedClip(
-            new Vortice.RawRectF(viewport.MinX, viewport.MinY, viewport.MaxX, viewport.MaxY),
-            AntialiasMode.Aliased);
-        var content = HelpFullContentRect();
-        switch (_helpTab)
-        {
-            case 0: DrawHelpQuick(ctx, content); break;
-            case 1: DrawHelpGestures(ctx, content); break;
-            default: DrawHelpShortcuts(ctx, content); break;
-        }
-        ctx.PopAxisAlignedClip();
-
-        // 内容超过视口时，右侧给一条很轻的滚动提示；不抢面板内容。
-        float maxScroll = HelpMaxScroll();
-        if (maxScroll > 0.5f)
-        {
-            float trackX = viewport.MaxX + 5f;
-            float h = viewport.MaxY - viewport.MinY;
-            float thumbH = MathF.Max(28f, h * h / (h + maxScroll));
-            float t = maxScroll <= 0.01f ? 0f : _helpScroll / maxScroll;
-            float top = viewport.MinY + (h - thumbH) * t;
-            ctx.FillRoundedRectangle(
-                new RoundedRectangle(new Vortice.RawRectF(trackX, top, trackX + 3f, top + thumbH), 1.5f, 1.5f),
-                Brush(ctx, _dark ? new Color4(1f, 1f, 1f, 0.28f) : new Color4(0f, 0f, 0f, 0.22f)));
-        }
+        // A3.1：说明页绘制已搬到 HelpPage；这里只保留 PageHost 未建立时的兜底。
+        if (_pageHost?.Current is HelpPage) { _pageHost.Render(ctx); return; }
+        new HelpPage(this).Render(ctx, PageFrame.Empty);
     }
 
     private void DrawHelpQuick(ID2D1DeviceContext ctx, in RectF content)
