@@ -28,10 +28,26 @@ public partial class InkEngine
             bounds: LibraryLayerBounds,
             hit: LibraryLayerHit,
             down: (x, y, id, type) => LibraryPanelVisibleNow && LibraryPointerDown(x, y, type, id),
-            move: (x, y, id) => LibraryPanelVisibleNow && LibraryPanelPointerMove(x, y, id),
-            up: (x, y, id) => LibraryPanelVisibleNow && LibraryPanelPointerUp(x, y, id),
+            move: (x, y, id) =>
+            {
+                if (!LibraryPanelVisibleNow) return false;
+                if (LibraryPanelPointerMove(x, y, id)) return true;
+                return LibraryPanelDragMove(x, y);
+            },
+            up: (x, y, id) =>
+            {
+                bool handled = LibraryPanelVisibleNow && LibraryPanelPointerUp(x, y, id);
+                if (_libraryDrag != 0)
+                {
+                    LibraryPanelDragEnd();
+                    Native.ReleaseCapture();
+                    handled = true;
+                }
+                return handled;
+            },
             dismiss: CloseLibraryPanel,
-            dismissPolicy: OverlayDismissPolicy.Escape));
+            dismissPolicy: OverlayDismissPolicy.Escape,
+            blocksInputBelow: false));
 
         m.Register(new LegacyOverlayLayer(
             "replay", 700,

@@ -4810,7 +4810,8 @@ public partial class InkEngine
 
         // 收藏弹窗是**常驻浮层**（用户 2026-10-26 定）：点面板外/画布/换工具都不收，
         // 只有 Esc、关闭、再点收藏格才收。这里只让面板自己先吃它范围内的按下。
-        if (LibraryPanelVisibleNow && LibraryPointerDown(x, y, ptype, id))
+        if (LibraryPanelVisibleNow
+            && OverlayLayers.PointerDown(x, y, id, ptype, 800, 800))
         {
             ApplyCursor();
             return;
@@ -6169,6 +6170,23 @@ public partial class InkEngine
             return;
         if (ColorPickActive) return;
         // 划线选收尾：先于"卡片拖动"，也先于"面板拖动"（它们在这条路上是互斥的）。
+        // A4.7：library 被管理器捕获时，松手交给管理器（含抽屉拖动收尾）。
+        if (OverlayLayers.CaptureLayer?.Id == "library")
+        {
+            float lx = PointerX, ly = PointerY;
+            if (ReadPointer(id, out float lsx, out float lsy, out _, out _, out _))
+            {
+                lx = lsx; ly = lsy;
+                ScreenToCanvas(ref lx, ref ly);
+            }
+            OverlayLayers.PointerUp(lx, ly, id);
+            Native.ReleaseCapture();
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
         if (LibraryPanelVisibleNow && LibraryPanelPointerUp(PointerX, PointerY, id))
         {
             _drawing = false;
