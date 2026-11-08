@@ -6159,7 +6159,8 @@ public sealed partial class FullUi : IOverlayUi
         if (_morePage == MorePage.Settings && SettingsViewportRect().Contains(x, y))
         {
             StopSettingsFling();
-            ScrollSettingsTo(_settingsScroll - delta / 120f * 72f);
+            // 设置页比画布更"细"：一格 48 逻辑像素，滚轮/触控板不会一下从书写冲到最底。
+            ScrollSettingsTo(_settingsScroll - delta / 120f * 48f);
             return true;
         }
         if (_morePage == MorePage.Help && MoreRect().Contains(x, y))

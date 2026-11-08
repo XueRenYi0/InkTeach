@@ -242,6 +242,28 @@ internal static class SettingsAudit
             Check("指针级双指纵滑", moved > 1f, $"scroll={moved:F0}");
         }
 
+        // 7.1 真实 UI 包装：FromTouch 必须传到 PointerMove/Up。
+        //（之前包装层固定传 false，自检直接调 FullUi 看不出来，真机双指就永远不滚。）
+        {
+            var engine = new global::InkEngine.InkEngine();
+            var ui2 = new FullUi();
+            var host2 = new AuditHost(screen);
+            ui2.AttachHostForTest(host2);
+            ui2.PrepareSettingsAuditForTest(screen);
+            engine.Ui = ui2;
+            ui2.SettingsScrollToForTest(0);
+            var vp = ui2.SettingsViewportRectForTest;
+            float cx = (vp.MinX + vp.MaxX) * 0.5f, cy = (vp.MinY + vp.MaxY) * 0.5f;
+            engine.UiPointerDownForTest(cx - 20, cy, true, 21);
+            engine.UiPointerDownForTest(cx + 20, cy, true, 22);
+            engine.UiPointerMoveForTest(cx - 20, cy - 80, true, 21);
+            engine.UiPointerMoveForTest(cx + 20, cy - 80, true, 22);
+            float moved = ui2.SettingsScrollValueForTest;
+            engine.UiPointerUpForTest(cx - 20, cy - 80, true, 21);
+            engine.UiPointerUpForTest(cx + 20, cy - 80, true, 22);
+            Check("真实 UI 包装：双指 FromTouch 传到底", moved > 1f, $"scroll={moved:F0}");
+        }
+
         // 8) AI 服务页：假数据打开、字段/按钮命中、离屏出图（不写 ai.json、不联网）
         {
             ui.OpenApiPageForTest();

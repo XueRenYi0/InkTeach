@@ -2412,6 +2412,8 @@ public partial class InkEngine
     // 于是"穿透"和"面板可点"天然同时成立。
     private IntPtr _uiInputHwnd;
     private bool _uiInputShown;
+    // 界面当前按住的指针（触摸可以同时有两根；不能用一个 bool 把第一根抬手后的第二根丢掉）。
+    private readonly HashSet<uint> _uiPointers = new();
     private RectF _uiInputRect;                 // 物理像素
 
     /// <summary>
@@ -6007,7 +6009,8 @@ public partial class InkEngine
         if (UiCapturing)
         {
             ClearEngineTooltip();
-            UiPointerMove(screenX, screenY, pressure, false, inverted, id);   // 逻辑屏幕坐标
+            UiPointerMove(screenX, screenY, pressure, false, inverted,
+                          ptype == Native.PT_TOUCH, id);   // 逻辑屏幕坐标
             _dirty = true;
             return;
         }
@@ -6018,7 +6021,8 @@ public partial class InkEngine
         // **捕获分支**会转发，而"鼠标停在按钮上"恰恰是没捕获的状态——
         // 于是界面的悬停永远不会亮，而且不报错，只是"感觉不跟手"。
         // 书写中不转发：那一笔已经归画布了，界面这时候不该再动。
-        if (!_drawing && UiPointerMove(screenX, screenY, pressure, ptype == Native.PT_PEN, inverted, id))
+        if (!_drawing && UiPointerMove(screenX, screenY, pressure, ptype == Native.PT_PEN, inverted,
+                                       ptype == Native.PT_TOUCH, id))
         {
             ClearEngineTooltip();                 // 指针在界面那条上：引擎侧提示让位
             if (!_uiHover) { _uiHover = true; ApplyCursor(); }
@@ -6241,15 +6245,16 @@ public partial class InkEngine
 
         // 界面优先收尾，否则会留下"按钮一直按着"的状态。
         if (UiCapturing && ReadPointer(id, out float ux, out float uy, out float upressure,
-                                       out bool uinverted, out _))
+                                       out bool uinverted, out uint uptype))
         {
-            UiPointerUp(ux, uy, upressure, false, uinverted, id);
+            UiPointerUp(ux, uy, upressure, uptype == Native.PT_PEN, uinverted,
+                        uptype == Native.PT_TOUCH, id);
             // **必须显式放开捕获**：按钮上也走 SetCapture（拖出按钮、在按钮上滑开
             // 都要继续收到消息），而系统**不会**在按键抬起时替我们放开。
             // 忘了这一句的后果不是"按钮卡住"，而是**整台机器的鼠标事件都还挂在
             // 我们窗口上**：穿透、点下层程序、换到别的软件全乱，而且现象离原因很远。
-            Native.ReleaseCapture();
-            UiCapturing = false;
+            // 双指时第一根抬手不能放：另一根还在界面上，等最后一根再放。
+            if (!UiCapturing) Native.ReleaseCapture();
             _drawing = false;
             _dirty = true;
             ApplyCursor();
@@ -15887,37 +15892,55 @@ public partial class InkEngine
         var e = new UiPointerEvent(x / UiUnit, y / UiUnit, pressure, fromPen, eraserTip,
                                    fromTouch, pointerId);
         if (!UiGuard("PointerDown", () => Ui.PointerDown(e), false)) return false;
+        _uiPointers.Add(pointerId);
         UiCapturing = true;
         return true;
     }
 
     private bool UiPointerMove(float x, float y, float pressure, bool fromPen, bool eraserTip,
-                               uint pointerId = 0)
+                               bool fromTouch = false, uint pointerId = 0)
     {
         if (!UiVisibleNow || CaptureActive || ColorPickActive || LibraryPlacementMode) return false;
 
         // 只有在界面已经捕获输入或指针落在界面矩形内时才转发，避免没必要的调用。
-        if (!UiCapturing && !UiContains(x, y)) return false;
+        if (!UiCapturing && !_uiPointers.Contains(pointerId) && !UiContains(x, y)) return false;
         var e = new UiPointerEvent(x / UiUnit, y / UiUnit, pressure, fromPen, eraserTip,
-                                   false, pointerId);
+                                   fromTouch, pointerId);
         return UiGuard("PointerMove", () => Ui.PointerMove(e), false);
     }
 
     private bool UiPointerUp(float x, float y, float pressure, bool fromPen, bool eraserTip,
-                             uint pointerId = 0)
+                             bool fromTouch = false, uint pointerId = 0)
     {
         if (CaptureActive || ColorPickActive || LibraryPlacementMode)
         {
+            _uiPointers.Clear();
             UiCapturing = false;
             return false;
         }
-        if (!UiVisibleNow || !UiCapturing) return false;
+        if (!UiVisibleNow)
+        {
+            _uiPointers.Clear();
+            UiCapturing = false;
+            return false;
+        }
+        // 触摸双指：第一根抬手后不能把另一根也丢掉；按“这一次按下的指针”记账。
+        if (!UiCapturing && !_uiPointers.Contains(pointerId)) return false;
         var e = new UiPointerEvent(x / UiUnit, y / UiUnit, pressure, fromPen, eraserTip,
-                                   false, pointerId);
+                                   fromTouch, pointerId);
         bool consumed = UiGuard("PointerUp", () => Ui.PointerUp(e), false);
-        UiCapturing = false;
+        _uiPointers.Remove(pointerId);
+        UiCapturing = _uiPointers.Count > 0;
         return consumed;
     }
+
+    // 自检钩子：直接走真实 UI 包装（含 FromTouch 标志），避免自检绕过它。
+    internal bool UiPointerDownForTest(float logicalX, float logicalY, bool fromTouch, uint id)
+        => UiPointerDown(logicalX * UiUnit, logicalY * UiUnit, 0.5f, false, false, fromTouch, id);
+    internal bool UiPointerMoveForTest(float logicalX, float logicalY, bool fromTouch, uint id)
+        => UiPointerMove(logicalX * UiUnit, logicalY * UiUnit, 0.5f, false, false, fromTouch, id);
+    internal bool UiPointerUpForTest(float logicalX, float logicalY, bool fromTouch, uint id)
+        => UiPointerUp(logicalX * UiUnit, logicalY * UiUnit, 0.5f, false, false, fromTouch, id);
 
     private bool UiContains(float x, float y)
     {
@@ -16093,6 +16116,7 @@ public partial class InkEngine
     {
         Console.WriteLine($"  → 界面已停用（{what}）。笔迹不受影响；修好之后重开软件就回来了。");
         Ui = new NullUi();
+        _uiPointers.Clear();
         UiCapturing = false;
         Native.ReleaseCapture();
         _uiHover = false;
@@ -16315,7 +16339,8 @@ public partial class InkEngine
                 StampInput(); _cntMove++;
                 LastPointerType = ptype;
                 _uiHover = true;
-                UiPointerMove(sx, sy, pressure, ptype == Native.PT_PEN, inverted, id);
+                UiPointerMove(sx, sy, pressure, ptype == Native.PT_PEN, inverted,
+                              ptype == Native.PT_TOUCH, id);
                 _dirty = true;
                 return IntPtr.Zero;
             }
@@ -16324,13 +16349,13 @@ public partial class InkEngine
             {
                 uint id = (uint)(wParam.ToInt64() & 0xFFFF);
                 if (ReadPointer(id, out float sx, out float sy, out float pressure,
-                                out bool inverted, out _))
+                                out bool inverted, out uint ptype))
                 {
                     StampInput(); _cntUp++;
-                    UiPointerUp(sx, sy, pressure, false, inverted, id);
+                    UiPointerUp(sx, sy, pressure, ptype == Native.PT_PEN, inverted,
+                                ptype == Native.PT_TOUCH, id);
                 }
-                Native.ReleaseCapture();
-                UiCapturing = false;
+                if (!UiCapturing) Native.ReleaseCapture();
                 _dirty = true;
                 ApplyCursor();
                 return IntPtr.Zero;
@@ -16338,6 +16363,7 @@ public partial class InkEngine
 
             case Native.WM_POINTERCAPTURECHANGED:
                 _cntCaptureLost++;
+                _uiPointers.Clear();
                 UiCapturing = false;
                 _uiHover = false;
                 _dirty = true;
