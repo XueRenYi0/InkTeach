@@ -608,6 +608,13 @@ internal sealed partial class App : InkEngine.InkEngine
             ToastShow(args.Length > 1 ? args[1] : "reports/toast.bmp");
             _quit = true;
         }
+        else if (mode == "--selmenutest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SelMenuTest();
+            _quit = true;
+        }
         else if (mode == "--textstyle")
         {
             _autoExitAt = double.MaxValue;
@@ -5912,7 +5919,7 @@ internal sealed partial class App : InkEngine.InkEngine
                 Doc.Redo();
 
                 float fs0 = pt.TextBox.FontSize;
-                RunBarActionForTest((int)SelBarButton.FlipV);
+                RunBarButtonForTest(SelBarButton.FlipV);
                 Check(pt.TextBox.FontSize > fs0, $"操作条 A+：字号 {fs0:0} → {pt.TextBox.FontSize:0}");
             }
         }
@@ -6091,7 +6098,7 @@ internal sealed partial class App : InkEngine.InkEngine
         }
         var victim = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
         var vb = victim?.PaddedBounds ?? default;
-        RunBarActionForTest((int)SelBarButton.Delete);   // 走真实操作条删除路径
+        RunBarButtonForTest(SelBarButton.Delete);   // 走真实操作条删除路径
         SettleFrames(300);
         string p6 = System.IO.Path.ChangeExtension(path, null) + "-deleted.bmp";
         bool ok6 = ScreenProbe.SaveBmp(p6, (int)_virtualX, (int)_virtualY,
@@ -6152,7 +6159,7 @@ internal sealed partial class App : InkEngine.InkEngine
         {
             BeginTextBoxEdit(st2);
             SetTextBoxEditTextForTest("编辑中删除测试\n第二行文字");
-            RunBarActionForTest((int)SelBarButton.Delete);
+            RunBarButtonForTest(SelBarButton.Delete);
             SettleFrames(250);
         }
         bool editDelOk = !TextBoxEditing && Doc.Strokes.Count == 0 && Doc.Selected.Count == 0;

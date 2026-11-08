@@ -284,15 +284,15 @@ internal sealed partial class App
                 SelBarHover = btn;
                 UpdateEngineTooltip();
             }
-            HoverBar((int)SelBarButton.Delete);
+            HoverBar(SelectionHandles.BarIndexOf(SelBarButton.Delete, false));
             // ⚠ 先把**上一段用例留下的迟到消息**（鼠标 move / leave）排干净：它们会在派发时
             // 按指针位置重算 hover、甚至清掉提示，正好卡在计时器上就是偶发红（2026-10-16 抓到）。
             SettleFrames(200);
-            HoverBar((int)SelBarButton.Delete);    // 重设：此后队列里只剩"指向这一格"的消息
+            HoverBar(SelectionHandles.BarIndexOf(SelBarButton.Delete, false));    // 重设：此后队列里只剩"指向这一格"的消息
             for (int i = 0; i < 8 && !TooltipShown; i++)
             {
                 SettleFrames(320);                 // 累计 >1.5s 首次延迟
-                HoverBar((int)SelBarButton.Delete);   // 顶住偶发消息；同格不重新计时
+                HoverBar(SelectionHandles.BarIndexOf(SelBarButton.Delete, false));   // 顶住偶发消息；同格不重新计时
                 StepEngineTooltip();               // 自检里没有主循环，手动推一下"到点"
             }
             var delKeys = Keys.KeyText(KeyAction.DeleteSelected);
@@ -314,10 +314,10 @@ internal sealed partial class App
 
             // 延迟两档（2026-10-16，WPF Initial/BetweenShowDelay 口径）：
             // 第一次/隔久了 1.5s；出过提示后 5 秒窗口内 → 400ms 就亮。
-            HoverBar((int)SelBarButton.Color);                 // 上一条检查刚亮过 → 这里也是快路径
+            HoverBar(SelectionHandles.BarIndexOf(SelBarButton.Color, false));                 // 上一条检查刚亮过 → 这里也是快路径
             SettleFrames(470); StepEngineTooltip();
             bool warm = TooltipShown;                         // 快路径可用（作后续对照的锚）
-            HoverBar((int)SelBarButton.Lock);                  // 换一格（窗口内）
+            HoverBar(SelectionHandles.BarIndexOf(SelBarButton.Copy, false));                  // 换一格（窗口内）
             SettleFrames(470); StepEngineTooltip();
             Check("刚出过提示：换一格 400ms 就亮（快延迟）",
                   warm && TooltipShown, $"锚={warm}，快={TooltipShown}");
@@ -327,14 +327,14 @@ internal sealed partial class App
             SelBarHover = -1;
             UpdateEngineTooltip();
             SettleFrames(5300);                                // 等窗口（5 秒）过期
-            HoverBar((int)SelBarButton.Export);
+            HoverBar(SelectionHandles.BarIndexOf(SelBarButton.More, false));
             SettleFrames(470); StepEngineTooltip();
             bool slowEarly = !TooltipShown;                    // 470ms 还不该亮（慢档 1.5s）
             bool slowLate = false;                             // 之后该亮；反复重申 hover 顶住迟到消息
             for (int i = 0; i < 8 && !slowLate; i++)
             {
                 SettleFrames(220);
-                HoverBar((int)SelBarButton.Export);            // 同格重申：不重新计时（同 id 早退）
+                HoverBar(SelectionHandles.BarIndexOf(SelBarButton.More, false));            // 同格重申：不重新计时（同 id 早退）
                 StepEngineTooltip();
                 slowLate = TooltipShown;
             }
@@ -482,7 +482,7 @@ internal sealed partial class App
             var sentinel = MakeTestImage(64, 48);
             bool sentinelOk = ClipboardImage.SetImage(sentinel.Bgra, sentinel.Width, sentinel.Height);
 
-            RunBarActionForTest((int)SelBarButton.Copy);
+            RunBarButtonForTest(SelBarButton.Copy);
             var copy = Doc.Selected.Count == 1 ? Doc.Selected[0] : null;
             bool copyOffset = copy != null && !ReferenceEquals(copy, src)
                 && MathF.Abs(copy.Transform.M31 - (src.Transform.M31 + 24f)) < 0.5f
@@ -847,7 +847,7 @@ internal sealed partial class App
 
             // ② 收起 / 展开（用户更正：条首那个 ✕ 是"收起工具条"，不是"取消选择"）
             int barWhiteBeforeCollapse = Bar2White();
-            RunBarActionForTest((int)SelBarButton.Collapse);
+            RunBarButtonForTest(SelBarButton.Collapse);
             SettleFrames(140);
             var dotR = SelectionHandles.BarCollapsedRect(barFrame.CanvasAabb, dpi, ViewportCanvas);
             int barWhiteCollapsed = Bar2White();
@@ -874,7 +874,7 @@ internal sealed partial class App
             CheckFloatOverlayTokens((n, ok, d) => Check(n, ok, d));
 
             // ③ 颜色面板：点"颜色"开面板 → 点色片改色 → 一次撤销回原色
-            RunBarActionForTest((int)SelBarButton.Color);
+            RunBarButtonForTest(SelBarButton.Color);
             SettleFrames(140);
             var panelR = SelectionHandles.PanelRect(barFrame.CanvasAabb, dpi, ViewportCanvas,
                                                     SelectionHandles.SwatchCount);
@@ -1021,8 +1021,8 @@ internal sealed partial class App
             }
 
             // ⑥ 锁定（用户定的 B 语义）：锁上以后能选中、但拖不动、也删不掉
-            RunBarActionForTest((int)SelBarButton.Color);          // 先收面板（免得盖住条）
-            RunBarActionForTest((int)SelBarButton.Lock);
+            RunBarButtonForTest(SelBarButton.Color);          // 先收面板（免得盖住条）
+            RunBarButtonForTest(SelBarButton.Lock);
             SettleFrames(120);
             bool lockedNow = bA.Locked;
             var lockC = new Vector2((barFrame.CanvasAabb.MinX + barFrame.CanvasAabb.MaxX) * 0.5f,
@@ -1034,7 +1034,7 @@ internal sealed partial class App
             SettleFrames(120);
             bool stayed = bA.Transform.IsIdentity && Doc.UndoDepth == depthBefore;
             int nBefore = Doc.Strokes.Count;
-            RunBarActionForTest((int)SelBarButton.Delete);
+            RunBarButtonForTest(SelBarButton.Delete);
             SettleFrames(120);
             bool survivedDelete = Doc.Strokes.Contains(bA) && Doc.Strokes.Count == nBefore;
             Check("锁定：能选中，但拖不动、也删不掉（B 语义）",
@@ -1044,7 +1044,7 @@ internal sealed partial class App
 
             // ⑦ 解锁之后能拖（B 语义的另一半：锁是可以随时解开的）
             Doc.SelectOnly(new[] { bA });
-            RunBarActionForTest((int)SelBarButton.Lock);           // 再点一次 = 解锁
+            RunBarButtonForTest(SelBarButton.Lock);           // 再点一次 = 解锁
             SettleFrames(120);
             var unlockC = new Vector2((LiveSelectionFrame.CanvasAabb.MinX + LiveSelectionFrame.CanvasAabb.MaxX) * 0.5f,
                                       (LiveSelectionFrame.CanvasAabb.MinY + LiveSelectionFrame.CanvasAabb.MaxY) * 0.5f);
@@ -1060,7 +1060,7 @@ internal sealed partial class App
             // ⑧ 层级：置顶（下标关系反过来）→ 一次撤销回原顺序
             Doc.SelectOnly(new[] { bA });
             int idxBefore = Doc.Strokes.IndexOf(bA);
-            RunBarActionForTest((int)SelBarButton.Layer);          // 开层级面板
+            RunBarButtonForTest(SelBarButton.Layer);          // 开层级面板
             SettleFrames(120);
             var frontCell = SelectionHandles.LayerCellRect(0, LiveSelectionFrame.CanvasAabb, dpi, ViewportCanvas);
             bool tookFront = SelectionGestureForTest((frontCell.MinX + frontCell.MaxX) * 0.5f,
@@ -1083,7 +1083,7 @@ internal sealed partial class App
             {
                 int n0 = Doc.Strokes.Count, d0 = Doc.UndoDepth, sel0 = Doc.Selected.Count;
                 int a0 = ExportAttempts;
-                RunBarActionForTest((int)SelBarButton.Export);
+                RunBarButtonForTest(SelBarButton.Export);
                 SettleFrames(80);
                 Check("导出格子：点了真的走导出，而且不动文档、不进撤销栈",
                       ExportAttempts == a0 + 1
@@ -1781,7 +1781,7 @@ internal sealed partial class App
         // "那一下真的走到了导出这条路"（计数器）＋"没有把任何面板打开"。
         {
             int before = ExportAttempts;
-            RunBarActionForTest((int)SelBarButton.Export);
+            RunBarButtonForTest(SelBarButton.Export);
             Check("点「导出」直接走导出（不再开格式面板）",
                   ExportAttempts == before + 1 && SelPanelOpen == SelPanel.None,
                   $"试了 {before} → {ExportAttempts} 次，面板 = {SelPanelOpen}");

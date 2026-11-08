@@ -221,12 +221,12 @@ internal sealed partial class App
         EndTextBoxEditFromUi(true);
         SettleFrames(120);
 
-        // ---- 5. 操作条：七格 / 收起 / 字号 / 颜色 ----
+        // ---- 5. 操作条：六格（收起/字号/颜色/复制/删除/⋯） ----
         ClickCanvasPoint(mcx, mcy);
-        Check("选中文字：七格操作条出现",
+        Check("选中文字：六格操作条出现",
               SelectionBarShown && SingleTextBoxSelection
-              && SelectionHandles.BarButtonCountFor(true) == 7,
-              $"bar={SelectionBarShown} 七格={SelectionHandles.BarButtonCountFor(true)}");
+              && SelectionHandles.BarButtonCountFor(true) == 6,
+              $"bar={SelectionBarShown} 六格={SelectionHandles.BarButtonCountFor(true)}");
         var bar = SelectionBarCanvasRect;
         Check("操作条在下方、贴底不翻面",
               bar.MinY > oldBox.PaddedBounds.MaxY - 2f,
@@ -362,7 +362,8 @@ internal sealed partial class App
         Doc.SelectOnly(new[] { oldBox });
         SettleFrames(120);
         bar = SelectionBarCanvasRect;
-        var del = SelectionHandles.BarButtonRectIn(bar, 6, UiUnit);
+        var del = SelectionHandles.BarButtonRectIn(
+            bar, SelectionHandles.BarIndexOf(SelBarButton.Delete, textBar: true), UiUnit);
         int beforeTrash = TextBoxCountForTest;
         ClickCanvasPoint((del.MinX + del.MaxX) * 0.5f, (del.MinY + del.MaxY) * 0.5f);
         Check("操作条垃圾桶：删除选中文字", TextBoxCountForTest == beforeTrash - 1,

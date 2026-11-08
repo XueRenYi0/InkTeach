@@ -773,7 +773,7 @@ internal sealed partial class App
         // 用户报"实线和虚线好像不能选中"时，这两层正是嫌疑最大的地方（引擎里那一层
         // 是连通的，所以只能靠真路把它钉死或抓出来）。现在按用户的手法走一遍：
         // 点操作条「颜色」→ 面板开 → 手势打格子中心。
-        RunBarActionForTest((int)SelBarButton.Color);
+        RunBarButtonForTest(SelBarButton.Color);
         SettleFrames(200);
         Check("操作条「颜色」那一格能把线型面板打开",
               SelPanelOpen == SelPanel.Ink, $"面板 = {SelPanelOpen}");

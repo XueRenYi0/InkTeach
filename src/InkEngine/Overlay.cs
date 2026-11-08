@@ -439,6 +439,8 @@ internal sealed partial class OverlayWindow : IDisposable
     private RectF _uiBoundsPrev = RectF.Empty;
     /// <summary>上一帧图库面板占的矩形（窗口坐标）。面板关掉时要靠它把那张卡片擦掉。</summary>
     private RectF _libraryRectPrev = RectF.Empty;
+    /// <summary>上一帧选中条弹层（AI/`⋯`）占的矩形（窗口坐标）。</summary>
+    private RectF _selMenuRectPrev = RectF.Empty;
 
     /// <summary>上一帧"自绘落点反馈"（橡皮框 / 圆环）占的矩形（窗口坐标）。
     /// **必须并进脏区**：指针一帧里可能移动超过半径（快擦、面积擦的框还会随速度变大变小），
@@ -3576,6 +3578,12 @@ internal sealed partial class OverlayWindow : IDisposable
                 r.Add(CanvasRectToWindow(SelectionHandles.FontPanelRect(sb, dpi, app.FurnitureViewport)
                     .Inflate(cardPad + 2f * dpi)));
 
+            // AI / `⋯` 弹层：显示、换菜单、关闭都要擦旧位置。
+            var menu = app.SelectionMenuRectNow();
+            if (!menu.IsEmpty) r.Add(CanvasRectToWindow(menu.Inflate(cardPad)));
+            if (!_selMenuRectPrev.IsEmpty) r.Add(_selMenuRectPrev);
+            _selMenuRectPrev = menu.IsEmpty ? RectF.Empty : CanvasRectToWindow(menu);
+
             // 旋转读数标签贴在旋转手柄外侧，比选中框本身还高出去一截，
             // 同样必须进脏区；拖动中它每帧都在动，靠 _transientHistory 回溯两帧。
             // **文案要和绘制用同一个函数**：单选直线时它是 `α = xx.x°`、别的对象是 `Δ`，
@@ -3665,6 +3673,14 @@ internal sealed partial class OverlayWindow : IDisposable
                   MaxY = OriginY + Height,
               }
             : RectF.Empty;
+
+        // 选中被清空那一帧：上面那段 `Selected.Count > 0` 不再执行，
+        // 弹层的旧位置要在这里补擦一次，否则关菜单会留一块卡片。
+        if (app.Doc.Selected.Count == 0 && !_selMenuRectPrev.IsEmpty)
+        {
+            r.Add(_selMenuRectPrev);
+            _selMenuRectPrev = RectF.Empty;
+        }
 
         return r;
     }
@@ -5733,7 +5749,7 @@ internal sealed partial class OverlayWindow : IDisposable
     }
 
     /// <summary>
-    /// 操作条（十格）：收起 / 颜色 / 锁定 / 层级 / 导出 / **图库** / 复制 / 左右翻转 / 上下翻转 / 删除。
+    /// 操作条（六格）：收起 / 颜色 / 复制 / 删除 / AI / `⋯`。
     /// 顺序的语义见 <see cref="SelBarButton"/>；这一层只负责画。
     ///
     /// **为什么在下方而不是上方**：选中内容靠屏幕上边时，上方的操作条要么被顶出
@@ -5856,6 +5872,16 @@ internal sealed partial class OverlayWindow : IDisposable
                     }
                     break;
                 }
+                case SelBarButton.More:
+                {
+                    // 三个点：不引新图标，手画三颗圆点（和系统“更多”一致）
+                    float dotR = MathF.Max(1.6f * dpi, glyphBox * 0.075f);
+                    float dotGap = glyphBox * 0.22f;
+                    for (int k = -1; k <= 1; k++)
+                        _ctx.FillEllipse(new Ellipse(new Vector2(cx + k * dotGap, cy),
+                                                     dotR, dotR), iconBrush);
+                    break;
+                }
                 case SelBarButton.Ai:
                 {
                     // 青 → 紫 → 粉：和主带 AI 格同一套视觉
@@ -5889,44 +5915,79 @@ internal sealed partial class OverlayWindow : IDisposable
             }
         }
 
-        if (app.SelAiMenuOpen) DrawSelectionAiMenu(app, rect, dpi);
+        if (app.SelectionMenuRowsNow > 0) DrawSelectionMenu(app, dpi);
     }
 
-    /// <summary>选中操作条旁的 AI 下拉（手写优化两项 + 状态行）。</summary>
-    private void DrawSelectionAiMenu(InkEngine app, in RectF bar, float dpi)
+    /// <summary>
+    /// 选中条弹层：AI 和 `⋯` **共用这一套**（方案 A）。
+    /// 行数/宽度/是否有状态行由引擎的 `SelectionMenuRowsNow` 决定；
+    /// 绘制、命中、脏区都读同一个 `SelectionMenuRectNow()`。
+    /// </summary>
+    private void DrawSelectionMenu(InkEngine app, float dpi)
     {
-        bool hasStatus = !string.IsNullOrEmpty(app.HandOcrStatus);
-        var m = SelectionHandles.BarAiMenuRectIn(bar, dpi, app.FurnitureViewport, hasStatus);
+        var m = app.SelectionMenuRectNow();
+        if (m.IsEmpty) return;
         DrawPanelCard(app, m, 10f * dpi, dpi);
         var theme = app.FloatingTheme;
+        int rows = app.SelectionMenuRowsNow;
 
-        string[] labels = { "📝 识别文本" };
-        for (int i = 0; i < labels.Length; i++)
+        if (app.SelAiMenuOpen)
         {
-            var r = SelectionHandles.BarAiMenuRowRectIn(m, i, dpi);
-            if (app.SelAiMenuHover == i)
+            string[] labels = { "📝 识别文本" };
+            for (int i = 0; i < labels.Length && i < rows; i++)
+            {
+                var r = SelectionHandles.BarMenuRowRectIn(m, i, dpi);
+                if (app.SelMenuHover == i)
+                {
+                    _scratch.Color = theme.Hover;
+                    _ctx.FillRoundedRectangle(new RoundedRectangle(
+                        new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f * dpi, 7f * dpi), _scratch);
+                }
+                _ctx.DrawText(labels[i], AiTextFormat(12.5f * dpi, false, false),
+                    new Rect(r.MinX + 8f * dpi, r.MinY, r.MaxX - r.MinX - 8f * dpi, r.MaxY - r.MinY),
+                    Brush(theme.Text));
+            }
+
+            if (app.SelectionMenuHasStatusNow)
+            {
+                var sr = SelectionHandles.BarMenuStatusRectIn(m, rows, dpi);
+                var c = app.HandOcrBusy
+                    ? new Color4(0.55f, 0.30f, 0.85f, 1f)
+                    : app.HandOcrStatus.Contains("公式可能")
+                        ? new Color4(0.85f, 0.50f, 0.10f, 1f)
+                        : app.HandOcrStatus.StartsWith("已优化", StringComparison.Ordinal)
+                            ? new Color4(0.10f, 0.55f, 0.30f, 1f)
+                            : new Color4(0.60f, 0.20f, 0.20f, 1f);
+                _ctx.DrawText(app.HandOcrStatus, AiTextFormat(10f * dpi, false, false),
+                    new Rect(sr.MinX, sr.MinY, sr.MaxX - sr.MinX, sr.MaxY - sr.MinY), Brush(c));
+            }
+            return;
+        }
+
+        // `⋯`：图标 + 文字，行高 38；悬停整行浅底。
+        var order = SelectionHandles.MoreBarOrder(app.SingleTextBoxSelection);
+        float pad = SelectionHandles.BarMenuPadLogical * dpi;
+        float iconBox = 20f * dpi;
+        for (int i = 0; i < rows && i < order.Length; i++)
+        {
+            var r = SelectionHandles.BarMenuRowRectIn(m, i, dpi);
+            if (app.SelMenuHover == i)
             {
                 _scratch.Color = theme.Hover;
                 _ctx.FillRoundedRectangle(new RoundedRectangle(
                     new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f * dpi, 7f * dpi), _scratch);
             }
-            _ctx.DrawText(labels[i], AiTextFormat(12.5f * dpi, false, false),
-                new Rect(r.MinX + 8f * dpi, r.MinY, r.MaxX - r.MinX - 8f * dpi, r.MaxY - r.MinY),
+            var kind = order[i];
+            string icon = kind == SelBarButton.Lock
+                ? (IsSelectionLocked(app) ? IconPaths.lockClosed : IconPaths.unlock)
+                : IconForBar(kind);
+            float cy = (r.MinY + r.MaxY) * 0.5f;
+            DrawIcon(icon, r.MinX + 8f * dpi, cy - iconBox * 0.5f, iconBox, Brush(theme.Text));
+            _ctx.DrawText(SelectionHandles.BarButtonLabel(kind),
+                AiTextFormat(12.5f * dpi, false, false),
+                new Rect(r.MinX + 34f * dpi, r.MinY,
+                         r.MaxX - r.MinX - 34f * dpi - 4f * dpi, r.MaxY - r.MinY),
                 Brush(theme.Text));
-        }
-
-        if (hasStatus)
-        {
-            var sr = SelectionHandles.BarAiMenuStatusRectIn(m, dpi);
-            var c = app.HandOcrBusy
-                ? new Color4(0.55f, 0.30f, 0.85f, 1f)
-                : app.HandOcrStatus.Contains("公式可能")
-                    ? new Color4(0.85f, 0.50f, 0.10f, 1f)
-                    : app.HandOcrStatus.StartsWith("已优化", StringComparison.Ordinal)
-                        ? new Color4(0.10f, 0.55f, 0.30f, 1f)
-                        : new Color4(0.60f, 0.20f, 0.20f, 1f);
-            _ctx.DrawText(app.HandOcrStatus, AiTextFormat(10f * dpi, false, false),
-                new Rect(sr.MinX, sr.MinY, sr.MaxX - sr.MinX, sr.MaxY - sr.MinY), Brush(c));
         }
     }
 
@@ -5960,6 +6021,8 @@ internal sealed partial class OverlayWindow : IDisposable
         SelBarButton.Color => app.SelPanelOpen == SelPanel.Ink,
         SelBarButton.Layer => app.SelPanelOpen == SelPanel.Layer,
         SelBarButton.FontSize => app.SelPanelOpen == SelPanel.FontSize,
+        SelBarButton.Ai => app.SelAiMenuOpen,
+        SelBarButton.More => app.SelMoreMenuOpen,
         _ => false,
     };
 

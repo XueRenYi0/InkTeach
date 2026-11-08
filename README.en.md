@@ -219,15 +219,16 @@ handle, with 90° soft snapping (`Shift` 15° grid, `Alt` free). **Small objects
 to a minimal frame** so handles never sit on top of the content and the scaling anchor stays on the
 object's own corner.
 
-Ten-cell action bar: **collapse / colour / lock / layer / export / gallery / duplicate / flip H /
-flip V / delete**. The colour panel has a continuous width slider (live readout while dragging,
-one undo step on release), three line styles, a 4×4 palette plus HSV picking. Duplicate (9.2.4) keeps
-the original, creates a selected 24px-offset copy and writes the selection to the clipboard; the old
-infinite drag-copy mode is gone. **During drag or rotation the model is not touched at all** — the
-preview is drawn on the floating layer and committed on release as a single undo step.
+Six-cell action bar: **collapse / colour / duplicate / delete / AI / ⋯**. Lock, layer, save,
+flip H/V and gallery live in ⋯; low-frequency actions no longer stretch the bar. The colour panel has
+a continuous width slider (live readout while dragging, one undo step on release), three line styles,
+a 4×4 palette plus HSV picking. Duplicate (9.2.4) keeps the original, creates a selected 24px-offset
+copy (clipboard copy is on the selection band); the old infinite drag-copy mode is gone.
+**During drag or rotation the model is not touched at all** — the preview is drawn on the floating
+layer and committed on release as a single undo step.
 
-A coloured **AI** cell sits at the end of the action bar (9.6.0): with handwriting selected, choose
-“Recognise to text box” to create a normal text box in place, with the **original ink kept**. Inline
+A coloured **AI** cell sits next to the last cell of the action bar (9.6.0): with handwriting selected,
+choose “Recognise text” to create a normal text box in place, with the **original ink kept**. Inline
 LaTeX formulas, font / line spacing and per-line red/blue are preserved from the OCR result; complex
 layouts (multi-column, labels beside diagrams) are rejected instead of being mis-arranged. The text
 box can be undone or deleted on its own.

@@ -806,12 +806,10 @@ internal sealed partial class App
         // 换朝向这件事，2026-09-20 深夜**从操作条挪到了图形面板**（用户："选中框的抛物线按钮
         // 功能取消哦，我不打算从这个转抛物线开口"）：现在条上**没有「开口方向」这一格**，
         // 换朝向走的是 `Engine.CycleParabolaAxis`（画之前定，见 --shapebandtest 里那两条）。
-        // ⚠ 数字 10 = 九格 ＋ **2026-09-22 加的第十格「图库」**（见 `SelBarButton` 和
-        //   `BarButtonCount` 的注释）。这条早先写死 9，是那天之后**没跟着改**的遗留——
-        //   正好又是"写死常量会随功能移位静默失效"那个坑（自检当场红，才没漏过去）。
-        //   2026-11-03：复制/粘贴挂在「选择」的上带，操作条仍是 10 格。
-        Check("操作条：没有「开口方向」那一格（九格 ＋ 图库 = 10）",
-              SelectionHandles.BarButtonCount == 10,
+        // 2026-11-08：选中条收口为 6 格（收起/颜色/复制/删除/AI/⋯），
+        // 其余进 `⋯`。这里只验"没有开口方向"，数字跟着 BarButtonCount 走。
+        Check("操作条：没有「开口方向」那一格（6 格）",
+              SelectionHandles.BarButtonCount == 6,
               $"格子数 {SelectionHandles.BarButtonCount}");
         // 挪走的只是"入口"，能力本身没动：`Stroke.SetParabolaAxis` 仍然**保形状地转方向**
         //（这条前面④的四个朝向循环已经在验了，这里只补一句"入口换了、算式没换"）。
@@ -1381,7 +1379,7 @@ internal sealed partial class App
                 Doc.SelectOnly(new[] { g });
                 SettleFrames(120);
                 int before = InkAround(g);
-                RunBarActionForTest((int)SelBarButton.Delete);
+                RunBarButtonForTest(SelBarButton.Delete);
                 SettleFrames(300);
                 int after = InkAround(g);
                 Check(flipFirst

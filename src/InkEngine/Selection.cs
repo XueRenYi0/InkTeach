@@ -158,10 +158,15 @@ internal enum SelBarButton
     /// </summary>
     FontSize = 10,
     /// <summary>
-    /// **AI**（2026-11-06）：选中操作条末尾的彩色格，点开是「手写优化」下拉。
+    /// **AI**（2026-11-06）：选中操作条的彩色格，点开是 AI 菜单。
     /// 只出现在普通对象条（文本框条没有，因为手写优化只处理墨迹）。
     /// </summary>
     Ai = 11,
+    /// <summary>
+    /// **更多 `⋯`**（2026-11-08）：收纳低频对象动作（锁定/层级/保存/翻转/图库）。
+    /// 固定在最右；点开和 AI 共用同一个弹层宿主，同一时间只开一个。
+    /// </summary>
+    More = 12,
 }
 
 /// <summary>
@@ -2266,50 +2271,105 @@ internal static class SelectionHandles
     ///     （那一格已经选中抛物线时**再点一次**换一档，见 Engine.CycleParabolaAxis）。
     ///     选中之后就是不能再改朝向——这是用户的选择，不是缺功能。
     /// </summary>
-    public const int BarButtonCount = 11;
+    public const int BarButtonCount = 6;
 
     /// <summary>
-    /// 文本框的操作条：**七格**（用户 2026-11-01 按 ClassIn 定的顺序）：
-    /// 收起 / 字号 / 颜色 / 锁定 / 层级 / 复制 / 删除。
+    /// 普通对象条（2026-11-08 收口，用户："图标太多了，只留最核心的"）：
+    /// **收起 / 颜色 / 复制 / 删除 / AI / `⋯`**。
     ///
-    /// 为什么不复用普通对象的十格再"借两格当字号"：普通条里的导出、图库、翻转
-    /// 对纯文字要么无意义、要么会把条撑得比文字本身还长。单独一条七格，
-    /// **信息结构照 ClassIn，配色和图标仍用我们自己那套**。
+    /// 收进 `⋯` 的低频动作见 <see cref="MoreBarOrder"/>：
+    /// 锁定 / 层级 / 保存 / 左右翻转 / 上下翻转 / 图库。
+    /// 删除**不埋**（PowerPoint / OneNote / GoodNotes 的快捷动作都保留删除），
+    /// 但放在 AI/`⋯` 左边，和复制之间留分隔，减少手滑。
     /// </summary>
-    public const int TextBarButtonCount = 7;
+    private static readonly SelBarButton[] NormalBarOrder =
+    {
+        SelBarButton.Collapse,
+        SelBarButton.Color,
+        SelBarButton.Copy,
+        SelBarButton.Delete,
+        SelBarButton.Ai,
+        SelBarButton.More,
+    };
+
+    /// <summary>
+    /// 文本框操作条（2026-11-08 收口）：**收起 / 字号 / 颜色 / 复制 / 删除 / `⋯`**。
+    /// 锁定、层级收进 `⋯`；不显示 AI/翻转/导出/图库（对纯文字无意义或太低频）。
+    /// </summary>
+    public const int TextBarButtonCount = 6;
 
     private static readonly SelBarButton[] TextBarOrder =
     {
         SelBarButton.Collapse,
         SelBarButton.FontSize,
         SelBarButton.Color,
-        SelBarButton.Lock,
-        SelBarButton.Layer,
         SelBarButton.Copy,
         SelBarButton.Delete,
+        SelBarButton.More,
     };
 
-    /// <summary>这一条有几格（文本框七格，其余十格）。</summary>
+    /// <summary>
+    /// `⋯` 里的动作（顺序 = 菜单行序）。
+    /// 普通对象：层级 → 保存 → 翻转 → 锁定 → 图库；文本框只留锁定/层级。
+    /// </summary>
+    private static readonly SelBarButton[] MoreOrderNormal =
+    {
+        SelBarButton.Layer,
+        SelBarButton.Export,
+        SelBarButton.FlipH,
+        SelBarButton.FlipV,
+        SelBarButton.Lock,
+        SelBarButton.Library,
+    };
+
+    private static readonly SelBarButton[] MoreOrderText =
+    {
+        SelBarButton.Lock,
+        SelBarButton.Layer,
+    };
+
+    /// <summary>这一条有几格（普通 6，文本框 6）。</summary>
     public static int BarButtonCountFor(bool textBar)
         => textBar ? TextBarButtonCount : BarButtonCount;
 
     /// <summary>第 <paramref name="i"/> 格在这条上是什么语义（顺序表只此一份）。</summary>
     public static SelBarButton BarButtonOf(int i, bool textBar)
     {
-        if (!textBar)
-            return i == 10 ? SelBarButton.Ai
-                 : i >= 0 && i < 10 ? (SelBarButton)i : SelBarButton.Collapse;
-        return i >= 0 && i < TextBarOrder.Length ? TextBarOrder[i] : SelBarButton.Collapse;
+        var order = textBar ? TextBarOrder : NormalBarOrder;
+        return i >= 0 && i < order.Length ? order[i] : SelBarButton.Collapse;
     }
 
-    /// <summary>某个语义在这条上的格子下标（挂面板时要用：文字条的"层级"是第 5 格，不是第 4 格）。</summary>
+    /// <summary>某个语义在这条上的格子下标；已被收进 `⋯` 的动作返回 -1。</summary>
     public static int BarIndexOf(SelBarButton button, bool textBar)
     {
-        if (!textBar) return button == SelBarButton.Ai ? 10 : (int)button;
-        for (int i = 0; i < TextBarOrder.Length; i++)
-            if (TextBarOrder[i] == button) return i;
-        return 0;
+        var order = textBar ? TextBarOrder : NormalBarOrder;
+        for (int i = 0; i < order.Length; i++)
+            if (order[i] == button) return i;
+        return -1;
     }
+
+    /// <summary>`⋯` 菜单里的动作（只读；调用方不要改数组）。</summary>
+    public static SelBarButton[] MoreBarOrder(bool textBar)
+        => textBar ? MoreOrderText : MoreOrderNormal;
+
+    /// <summary>`⋯` 菜单行的文案（绘制和自检共用）。</summary>
+    public static string BarButtonLabel(SelBarButton button) => button switch
+    {
+        SelBarButton.Layer => "层级（置顶 / 置底）",
+        SelBarButton.Export => "保存 / 导出",
+        SelBarButton.FlipH => "左右翻转",
+        SelBarButton.FlipV => "上下翻转",
+        SelBarButton.Lock => "锁定 / 解锁",
+        SelBarButton.Library => "收藏",
+        SelBarButton.Delete => "删除",
+        SelBarButton.Copy => "复制一份",
+        SelBarButton.Color => "颜色",
+        SelBarButton.Collapse => "收起",
+        SelBarButton.FontSize => "字号",
+        SelBarButton.Ai => "AI",
+        SelBarButton.More => "更多",
+        _ => "",
+    };
 
     /// <summary>
     /// 操作条的高度 / 每格宽度 / 格间距（逻辑像素）。
@@ -2637,10 +2697,17 @@ internal static class SelectionHandles
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
     }
 
-    /// <summary>层级小面板的矩形（两格并排，贴在"层级"那一格的下面）。</summary>
+    /// <summary>
+    /// 层级小面板的矩形（两格并排）。2026-11-08 起「层级」收进 `⋯`，
+    /// 面板改挂在最右的 `⋯` 格下面；和 AI/`⋯` 菜单互斥，不会同时出来。
+    /// </summary>
     public static RectF LayerPanelRect(in RectF sel, float dpi, in RectF visible, bool textBar = false)
-        => PanelBelow(BarIndexOf(SelBarButton.Layer, textBar), LayerCellLogical, LayerCellLogical,
-                      2, sel, dpi, visible, textBar);
+    {
+        int anchor = BarIndexOf(SelBarButton.Layer, textBar);
+        if (anchor < 0) anchor = BarIndexOf(SelBarButton.More, textBar);
+        return PanelBelow(anchor, LayerCellLogical, LayerCellLogical,
+                          2, sel, dpi, visible, textBar);
+    }
 
     /// <summary>
     /// 文字操作条的字号下拉（现在是三行：字体 / 字号 / 行距）。
@@ -3001,21 +3068,29 @@ internal static class SelectionHandles
         return -1;
     }
 
-    // ---- AI 菜单（浮在选中操作条旁，2026-11-06） -------------------------
+    // ---- 选中条弹层（AI / `⋯` 共用一套几何，2026-11-08） -----------------
+    //
+    // 用户拍板方案 A：AI 格和 `⋯` 是**两个入口、一个弹层**。
+    // 所以这里只有一套 `BarMenuRectIn / RowRect / RowAt`；两者只是行数、
+    // 宽度、是否有状态行不同。绘制、命中、脏区必须读同一份。
 
-    public const float BarAiMenuWidthLogical = 236f;
-    public const float BarAiMenuRowHeightLogical = 38f;
-    /// <summary>当前只保留「识别到文本框」一项；手写优化两项先隐藏，代码保留。</summary>
+    public const float BarMenuWidthLogical = 236f;       // AI 菜单默认宽
+    public const float BarMenuNarrowWidthLogical = 220f; // `⋯` 菜单默认宽
+    public const float BarMenuRowHeightLogical = 38f;
+    public const float BarMenuStatusHeightLogical = 26f;
+    public const float BarMenuPadLogical = 6f;
+    /// <summary>AI 菜单当前只有「识别文本」一项；手写优化两项先隐藏，代码保留。</summary>
     public const int BarAiMenuRows = 1;
-    public const float BarAiMenuStatusHeightLogical = 26f;
-    public const float BarAiMenuPadLogical = 6f;
 
-    /// <summary>AI 菜单整块：默认贴操作条右下，下面放不下就翻到上面。</summary>
-    public static RectF BarAiMenuRectIn(in RectF bar, float dpi, in RectF visible, bool hasStatus)
+    /// <summary>弹层整块：默认贴操作条右下，下面放不下就翻到上面。</summary>
+    public static RectF BarMenuRectIn(in RectF bar, float dpi, in RectF visible,
+                                      int rows, bool hasStatus,
+                                      float widthLogical = BarMenuWidthLogical)
     {
-        float w = BarAiMenuWidthLogical * dpi;
-        float h = (BarAiMenuPadLogical * 2 + BarAiMenuRowHeightLogical * BarAiMenuRows
-                   + (hasStatus ? BarAiMenuStatusHeightLogical : 0f)) * dpi;
+        int n = Math.Max(1, rows);
+        float w = widthLogical * dpi;
+        float h = (BarMenuPadLogical * 2 + BarMenuRowHeightLogical * n
+                   + (hasStatus ? BarMenuStatusHeightLogical : 0f)) * dpi;
         float x = bar.MaxX - w;
         float y = bar.MaxY + 8f * dpi;
         if (!visible.IsEmpty)
@@ -3030,30 +3105,30 @@ internal static class SelectionHandles
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
     }
 
-    public static RectF BarAiMenuRowRectIn(in RectF menu, int i, float dpi)
+    public static RectF BarMenuRowRectIn(in RectF menu, int i, float dpi)
     {
-        float pad = BarAiMenuPadLogical * dpi;
-        float rowH = BarAiMenuRowHeightLogical * dpi;
+        float pad = BarMenuPadLogical * dpi;
+        float rowH = BarMenuRowHeightLogical * dpi;
         float y = menu.MinY + pad + i * rowH;
         return new RectF { MinX = menu.MinX + pad, MinY = y,
                            MaxX = menu.MaxX - pad, MaxY = y + rowH };
     }
 
-    public static RectF BarAiMenuStatusRectIn(in RectF menu, float dpi)
+    public static RectF BarMenuStatusRectIn(in RectF menu, int rows, float dpi)
     {
-        float pad = BarAiMenuPadLogical * dpi;
-        float y = menu.MinY + pad + BarAiMenuRowHeightLogical * BarAiMenuRows * dpi;
+        float pad = BarMenuPadLogical * dpi;
+        float y = menu.MinY + pad + BarMenuRowHeightLogical * Math.Max(1, rows) * dpi;
         return new RectF { MinX = menu.MinX + pad + 4f * dpi, MinY = y,
                            MaxX = menu.MaxX - pad - 4f * dpi,
-                           MaxY = y + BarAiMenuStatusHeightLogical * dpi };
+                           MaxY = y + BarMenuStatusHeightLogical * dpi };
     }
 
     /// <summary>点中第几项；-1 = 没点到菜单。</summary>
-    public static int BarAiMenuRowAt(float x, float y, in RectF menu, float dpi)
+    public static int BarMenuRowAt(float x, float y, in RectF menu, float dpi, int rows)
     {
         if (!menu.Contains(x, y)) return -1;
-        for (int i = 0; i < BarAiMenuRows; i++)
-            if (BarAiMenuRowRectIn(menu, i, dpi).Contains(x, y)) return i;
+        for (int i = 0; i < Math.Max(1, rows); i++)
+            if (BarMenuRowRectIn(menu, i, dpi).Contains(x, y)) return i;
         return -2;   // 点在菜单里但不在选项上（状态行 / 边距）
     }
 }

@@ -52,16 +52,25 @@ internal sealed partial class App
         bool ok1 = ScreenProbe.SaveBmp(p1, (int)_virtualX, (int)_virtualY,
                                        (int)_virtualW, (int)_virtualH);
 
-        SelAiMenuOpen = true;
+        OpenSelectionMenuForTest(ai: true);
         SettleFrames(500);
         string p2 = Path.ChangeExtension(outPath, null) + "-menu.bmp";
         bool ok2 = ScreenProbe.SaveBmp(p2, (int)_virtualX, (int)_virtualY,
                                        (int)_virtualW, (int)_virtualH);
 
+        // 方案 A：点 `⋯` 应自动关掉 AI，只留下一个弹层。
+        OpenSelectionMenuForTest(ai: false);
+        SettleFrames(500);
+        string p3 = Path.ChangeExtension(outPath, null) + "-more.bmp";
+        bool ok3 = ScreenProbe.SaveBmp(p3, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+
         Console.WriteLine($"操作条：{SelectionHandles.BarButtonCountFor(false)} 格，" +
-                          $"AI 在最后一格；截图 {(ok1 ? "OK" : "FAIL")} / {(ok2 ? "OK" : "FAIL")}");
+                          $"AI 倒数第二、⋯ 最后；截图 {(ok1 ? "OK" : "FAIL")} / " +
+                          $"{(ok2 ? "OK" : "FAIL")} / {(ok3 ? "OK" : "FAIL")}");
         Console.WriteLine($"写出：{p1}");
         Console.WriteLine($"写出：{p2}");
-        ExitCode = ok1 && ok2 ? 0 : 1;
+        Console.WriteLine($"写出：{p3}");
+        ExitCode = ok1 && ok2 && ok3 ? 0 : 1;
     }
 }

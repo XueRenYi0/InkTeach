@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -1093,8 +1093,12 @@ public partial class InkEngine
     internal bool SelBarCollapsed;
 
     /// <summary>选中操作条末尾的 AI 下拉是否打开（2026-11-06）。</summary>
+    /// <summary>AI 菜单开着吗。和 <see cref="SelMoreMenuOpen"/> **互斥**（方案 A）。</summary>
     internal bool SelAiMenuOpen;
-    internal int SelAiMenuHover = -1;
+    /// <summary>`⋯` 菜单开着吗。和 <see cref="SelAiMenuOpen"/> 互斥。</summary>
+    internal bool SelMoreMenuOpen;
+    /// <summary>当前弹层的悬停行（AI/`⋯` 共用；同一时间只开一个）。</summary>
+    internal int SelMenuHover = -1;
 
     // 操作条 / 收起圆钮的**画布坐标缓存**：只在文档、选区、界面单位、可见区尺寸
     // 发生变化时重算；**画布滚动不重算**。这样滚动时条跟着对象一起走、滚出视野就消失，
@@ -3926,7 +3930,8 @@ public partial class InkEngine
             StepDocPageReady();               // 文档页后台渲染完一页：置脏（这一拍会采纳它）
             StepDocAutoSave();                // 文档批注的节流保存（自动保存开着才写）
             StepPptBar();                     // 底部那条：引导过期 / "再点确认"过期（没有长按了）
-            StepToast();                      // 轻提示到点自动消失（1.5s，不吞输入）
+            StepToast();                      // 轻提示到点自动消失（2s，不吞输入）
+            StepSelectionMenu();              // 选中被清空时弹层跟着关
             StepEngineTooltip();              // 引擎侧悬停提示的 500ms 延迟（到点点亮）
             StepTimerCard();                  // 课堂计时卡片：推进秒数 / 到点 / 同步接输入小窗
             StepRollCard();                   // 课堂点名卡片：滚动推进 / 同步接输入小窗
@@ -4036,7 +4041,8 @@ public partial class InkEngine
         // 两边都是幂等的（TakeDirty 取走就清、SameAs 挡重复）。
         StepPpt();
         StepPptBar();     // 底部那条：引导过期 / "再点确认"过期（理由同上，自检那条路也走它）
-        StepToast();      // 轻提示到点消失（1.5s；自检也用"抽消息＋渲染"驱动）
+        StepToast();      // 轻提示到点消失（2s；自检也用"抽消息＋渲染"驱动）
+        StepSelectionMenu(); // 选中被清空时弹层跟着关（自检也走这一条）
         StepTouchFling(); // 双指纵滑松手后的惯性（每帧衰减；自检也走这一条）
         StepTimerCard();  // 课堂计时卡片同理：自检用"抽消息＋渲染"驱动，不走主循环
         StepRollCard();   // 课堂点名卡片同理
@@ -14853,6 +14859,14 @@ public partial class InkEngine
         => RunBarAction(index, SelectionHandles.FrameOf(Doc.Selected),
                         SelectionHandles.FrameOf(Doc.Selected).CanvasAabb);
 
+    /// <summary>自检用：按语义执行一个动作（含已收进 `⋯` 的动作）。</summary>
+    internal void RunBarButtonForTest(SelBarButton button)
+        => RunBarButton(button, SelectionHandles.FrameOf(Doc.Selected),
+                        SelectionHandles.FrameOf(Doc.Selected).CanvasAabb);
+
+    /// <summary>自检用：打开 AI 或 `⋯` 弹层（验证互斥/几何）。</summary>
+    internal void OpenSelectionMenuForTest(bool ai) => OpenSelectionMenu(ai);
+
     /// <summary>自检用：拖动中移动指针（选择手势）。</summary>
     internal void UpdateSelectionGestureForTest(float x, float y) => UpdateSelDrag(x, y);
 
@@ -17102,9 +17116,63 @@ public partial class InkEngine
         return SelectionBarCanvasRect;
     }
 
+    /// <summary>
+    /// 打开选中条的弹层。**方案 A：两个入口、一个弹层**——
+    /// 打开任意一个都先把另一个关掉，保证同一时间只有一个。
+    /// </summary>
+    internal void OpenSelectionMenu(bool ai)
+    {
+        SelAiMenuOpen = ai;
+        SelMoreMenuOpen = !ai;
+        SelMenuHover = -1;
+        SelBarHover = -1;
+        _dirty = true;
+    }
+
+    /// <summary>关掉当前弹层（没开是空操作）。</summary>
+    internal void CloseSelectionMenu()
+    {
+        if (!SelAiMenuOpen && !SelMoreMenuOpen) return;
+        SelAiMenuOpen = false;
+        SelMoreMenuOpen = false;
+        SelMenuHover = -1;
+        _dirty = true;
+    }
+
+    /// <summary>每帧兜底：选中被清空（撤销/删除/点空白）时，弹层必须跟着关。</summary>
+    internal void StepSelectionMenu()
+    {
+        if (Doc.Selected.Count == 0) CloseSelectionMenu();
+    }
+
+    /// <summary>当前弹层的行数；0 = 没有弹层。AI 1 行，`⋯` 随对象类型 2/6 行。</summary>
+    internal int SelectionMenuRowsNow
+        => SelAiMenuOpen ? SelectionHandles.BarAiMenuRows
+         : SelMoreMenuOpen ? SelectionHandles.MoreBarOrder(SingleTextBoxSelection).Length
+         : 0;
+
+    /// <summary>AI 菜单才有状态行（识别进度/结果）；`⋯` 没有。</summary>
+    internal bool SelectionMenuHasStatusNow
+        => SelAiMenuOpen && HandOcrStatus.Length > 0;
+
+    /// <summary>
+    /// 当前弹层的矩形（画布坐标）。绘制、命中、脏区**都读这一份**；
+    /// 和 `SelectionBarCanvasRect` 同一个锚点，下方放不下自动翻到上方。
+    /// </summary>
+    internal RectF SelectionMenuRectNow()
+    {
+        int rows = SelectionMenuRowsNow;
+        if (rows <= 0 || BarDrawnCollapsed) return RectF.Empty;
+        return SelectionHandles.BarMenuRectIn(
+            SelectionBarCanvasRect, UiUnit, FurnitureViewport, rows,
+            SelectionMenuHasStatusNow,
+            SelAiMenuOpen ? SelectionHandles.BarMenuWidthLogical
+                          : SelectionHandles.BarMenuNarrowWidthLogical);
+    }
+
     private void UpdateBarHover(float x, float y)
     {
-        if (Doc.Selected.Count == 0) SelAiMenuOpen = false;
+        if (Doc.Selected.Count == 0) CloseSelectionMenu();
         int hover = -1;
         if (!_drawing && SelectionBarShown)
         {
@@ -17117,16 +17185,15 @@ public partial class InkEngine
                 SelectionHandles.BarButtonCountFor(SingleTextBoxSelection));
         }
 
-        int aiRow = -1;
-        if (!_drawing && SelAiMenuOpen && !BarDrawnCollapsed)
+        int menuRow = -1;
+        var menu = SelectionMenuRectNow();
+        if (!_drawing && !menu.IsEmpty)
         {
-            var m = SelectionHandles.BarAiMenuRectIn(SelectionBarCanvasRect, UiUnit,
-                FurnitureViewport, HandOcrStatus.Length > 0);
-            aiRow = SelectionHandles.BarAiMenuRowAt(x, y, m, UiUnit);
-            if (aiRow < 0) aiRow = -1;
+            menuRow = SelectionHandles.BarMenuRowAt(x, y, menu, UiUnit, SelectionMenuRowsNow);
+            if (menuRow < 0) menuRow = -1;   // -2 = 点在菜单边距/状态行，不算行
         }
-        if (SelAiMenuHover != aiRow) { SelAiMenuHover = aiRow; _dirty = true; }
-        if (aiRow >= 0) hover = -1;
+        if (SelMenuHover != menuRow) { SelMenuHover = menuRow; _dirty = true; }
+        if (menuRow >= 0) hover = -1;
 
         if (hover == SelBarHover) return;
         SelBarHover = hover;
@@ -18483,14 +18550,25 @@ public partial class InkEngine
                 HandlePanelClick(x, y);
                 return true;                        // 面板上的点击一律吃掉（包括空白处）
             }
-            else if (SelAiMenuOpen &&
-                     SelectionHandles.BarAiMenuRectIn(SelectionBarCanvasRect, ui,
-                         FurnitureViewport, HandOcrStatus.Length > 0).Contains(x, y))
+            else if (!SelectionMenuRectNow().IsEmpty
+                     && SelectionMenuRectNow().Contains(x, y))
             {
-                var am = SelectionHandles.BarAiMenuRectIn(SelectionBarCanvasRect, ui,
-                    FurnitureViewport, HandOcrStatus.Length > 0);
-                int row = SelectionHandles.BarAiMenuRowAt(x, y, am, ui);
-                if (row == 0) RecognizeToTextBoxFromUi();
+                var menu = SelectionMenuRectNow();
+                int row = SelectionHandles.BarMenuRowAt(x, y, menu, ui, SelectionMenuRowsNow);
+                if (SelAiMenuOpen)
+                {
+                    if (row == 0) RecognizeToTextBoxFromUi();
+                }
+                else if (SelMoreMenuOpen)
+                {
+                    var order = SelectionHandles.MoreBarOrder(SingleTextBoxSelection);
+                    if (row >= 0 && row < order.Length)
+                    {
+                        var action = order[row];
+                        CloseSelectionMenu();
+                        RunBarButton(action, frame, aabb0);
+                    }
+                }
                 return true;
             }
             else
@@ -18504,7 +18582,7 @@ public partial class InkEngine
                     SelPanelOpen = SelPanel.None;
                     _dirty = true;
                 }
-                if (SelAiMenuOpen) { SelAiMenuOpen = false; _dirty = true; }
+                CloseSelectionMenu();
             }
         }
 
@@ -19530,11 +19608,16 @@ public partial class InkEngine
     /// 图标数组一一对应：0 复制 / 1 删除 / 2 左右翻转 / 3 上下翻转 / 4 旋转。
     /// </summary>
     private void RunBarAction(int index, in SelectionFrame frame, in RectF aabb)
+        => RunBarButton(SelectionHandles.BarButtonOf(index, SingleTextBoxSelection), frame, aabb);
+
+    /// <summary>
+    /// 执行一个操作条语义。**渲染、命中、`⋯` 菜单行都走这一份**，
+    /// 不再用下标二次映射（2026-11-08 收口：隐藏动作没有下标）。
+    /// </summary>
+    private void RunBarButton(SelBarButton btn, in SelectionFrame frame, in RectF aabb)
     {
         // 下标 ↔ 语义只在 SelBarButton 里写一遍（渲染、命中、动作三处共用它）。
-        // 文本框是**七格**，第 1 格是字号；普通对象是十格，第 7/8 格才是翻转。
         bool textBoxOnly = SingleTextBoxSelection;
-        var btn = SelectionHandles.BarButtonOf(index, textBoxOnly);
         if (textBoxOnly)
         {
             var tb = Doc.Selected[0].TextBox;
@@ -19545,7 +19628,7 @@ public partial class InkEngine
                 return;
             }
         }
-        if (btn != SelBarButton.Ai) SelAiMenuOpen = false;
+        if (btn != SelBarButton.Ai && btn != SelBarButton.More) CloseSelectionMenu();
         switch (btn)
         {
             // **收起工具条**（用户 2026-09-16 更正：条首那个 ✕ 不是"取消选择"）。
@@ -19554,14 +19637,21 @@ public partial class InkEngine
                 SelBarCollapsed = true;
                 CloseCustomColor();
                 SelPanelOpen = SelPanel.None;
-                SelAiMenuOpen = false;
+                CloseSelectionMenu();
                 break;
 
             case SelBarButton.Ai:
                 CloseCustomColor();
                 SelPanelOpen = SelPanel.None;
-                SelAiMenuOpen = !SelAiMenuOpen;
-                SelAiMenuHover = -1;
+                if (SelAiMenuOpen) CloseSelectionMenu();
+                else OpenSelectionMenu(ai: true);
+                break;
+
+            case SelBarButton.More:
+                CloseCustomColor();
+                SelPanelOpen = SelPanel.None;
+                if (SelMoreMenuOpen) CloseSelectionMenu();
+                else OpenSelectionMenu(ai: false);
                 break;
 
             case SelBarButton.Color:

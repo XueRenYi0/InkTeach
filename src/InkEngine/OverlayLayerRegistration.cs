@@ -144,7 +144,7 @@ public partial class InkEngine
         m.Register(new LegacyOverlayLayer(
             "selection", 400,
             visible: () => SelectionBarShown,
-            bounds: () => BarDrawnCollapsed ? SelectionDotCanvasRect : SelectionBarCanvasRect,
+            bounds: SelectionLayerBounds,
             hit: SelectionLayerHit,
             down: (x, y, id, type) => SelectionBarShown && SelectionBarPointerDown(x, y),
             wantsCapture: false,
@@ -175,6 +175,16 @@ public partial class InkEngine
     /// Phase 5.0：选择操作条这一块（整条 / 收起圆钮 / 挂着的面板 / AI 菜单）是否命中。
     /// 判据和 <see cref="TryBeginSelectionGesture"/> 的 ⓪ 段一致；只用于浮层路由。
     /// </summary>
+    private RectF SelectionLayerBounds()
+    {
+        if (!SelectionBarShown) return RectF.Empty;
+        if (BarDrawnCollapsed) return SelectionDotCanvasRect;
+        var r = SelectionBarCanvasRect;
+        var menu = SelectionMenuRectNow();
+        if (!menu.IsEmpty) r.Add(menu);
+        return r;
+    }
+
     private bool SelectionLayerHit(float x, float y)
     {
         if (!SelectionBarShown) return false;
@@ -183,6 +193,8 @@ public partial class InkEngine
         var aabb = LiveSelectionFrame.CanvasAabb;
         float ui = UiUnit;
         if (SelectionBarCanvasRect.Contains(x, y)) return true;
+        var menu = SelectionMenuRectNow();
+        if (!menu.IsEmpty && menu.Contains(x, y)) return true;
         if (CustomColorOpen
             && SelectionHandles.PickContains(x, y, aabb, ui, FurnitureViewport,
                                              SelectionHandles.SwatchCount, SingleTextBoxSelection))
@@ -191,10 +203,6 @@ public partial class InkEngine
             && SelectionHandles.PanelContains(x, y, aabb, ui, FurnitureViewport,
                                               SelPanelOpen, SelectionHandles.SwatchCount,
                                               SingleTextBoxSelection))
-            return true;
-        if (SelAiMenuOpen
-            && SelectionHandles.BarAiMenuRectIn(SelectionBarCanvasRect, ui, FurnitureViewport,
-                   HandOcrStatus.Length > 0).Contains(x, y))
             return true;
         return false;
     }

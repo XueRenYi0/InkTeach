@@ -278,13 +278,20 @@ internal sealed partial class App
                   $"BarDrawnCollapsed={BarDrawnCollapsed}");
         }
 
-        // 点「图库」那一格：**走真机的命中**（几何和绘制同源，不是直接调动作）。
-        var frame0 = SelectionHandles.FrameOf(Doc.Selected);
-        var libCell = SelectionHandles.BarButtonRect((int)SelBarButton.Library, frame0.CanvasAabb,
-                                                     DpiScale, ViewportCanvas);
-        Check("A：操作条上那颗「图库」在屏幕里（没被夹出去）",
+        // 2026-11-08 起「收藏」收进 `⋯`：先开菜单，再点菜单行（走真机命中）。
+        RectF LibRow()
+        {
+            OpenSelectionMenuForTest(ai: false);
+            SettleFrames(120);
+            var menu = SelectionMenuRectNow();
+            var order = SelectionHandles.MoreBarOrder(false);
+            int idx = System.Array.IndexOf(order, SelBarButton.Library);
+            return SelectionHandles.BarMenuRowRectIn(menu, idx, UiUnit);
+        }
+        var libCell = LibRow();
+        Check("A：⋯ 里的「收藏」在屏幕里（没被夹出去）",
               libCell.MinX > 0 && libCell.MaxY < _virtualY + _virtualH,
-              $"格子 ({libCell.MinX:F0},{libCell.MinY:F0})-({libCell.MaxX:F0},{libCell.MaxY:F0})");
+              $"行 ({libCell.MinX:F0},{libCell.MinY:F0})-({libCell.MaxX:F0},{libCell.MaxY:F0})");
         ClickPhys((libCell.MinX + libCell.MaxX) * 0.5f, (libCell.MinY + libCell.MaxY) * 0.5f);
         var entries = ShapeLibrary.List();
         Check("A：存进图库了（目录里多出一个条目，里面就是刚画的那个矩形）",
@@ -295,7 +302,8 @@ internal sealed partial class App
                   : ""));
 
         // A2：**同一内容再点一次**——不写第二份，图标反馈 = 重复。
-        ClickPhys((libCell.MinX + libCell.MaxX) * 0.5f, (libCell.MinY + libCell.MaxY) * 0.5f);
+        var libCell2 = LibRow();
+        ClickPhys((libCell2.MinX + libCell2.MaxX) * 0.5f, (libCell2.MinY + libCell2.MaxY) * 0.5f);
         var entries2 = ShapeLibrary.List();
         Check("A2：同一内容再收藏 → 不重复存，反馈=已收藏",
               entries2.Count == 1 && LibraryFeedback == LibraryFeedbackKind.Duplicate,
