@@ -81,6 +81,21 @@ internal static class OverlayAudit
                   $"block={block.DownCount} low={low.DownCount}");
         }
 
+        // 6) 引擎适配器：五个旧浮层都注册，优先级按表
+        {
+            var engine = new global::InkEngine.InkEngine();
+            var layers = engine.OverlayLayers.Layers;
+            bool hasAll = layers.Any(l => l.Id == "library")
+                       && layers.Any(l => l.Id == "replay")
+                       && layers.Any(l => l.Id == "timer")
+                       && layers.Any(l => l.Id == "roll")
+                       && layers.Any(l => l.Id == "ppt");
+            var priorities = layers.Select(l => l.Priority).ToArray();
+            bool ordered = priorities.SequenceEqual(priorities.OrderBy(p => p));
+            Check("引擎浮层适配器注册", layers.Count == 5 && hasAll && ordered,
+                  $"count={layers.Count} ids={string.Join(",", layers.Select(l => l.Id))}");
+        }
+
         Console.WriteLine($"  合计：{pass} 通过 / {fail} 失败");
         return fail == 0 ? 0 : 1;
     }

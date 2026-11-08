@@ -79,6 +79,18 @@ public sealed class OverlayLayerManager
     public IOverlayLayer Get(string id)
         => _layers.Find(x => string.Equals(x.Id, id, StringComparison.Ordinal));
 
+    /// <summary>只读命中探测：不调用 PointerDown，不产生任何副作用（影子路由/调试用）。</summary>
+    public IOverlayLayer PeekHit(float x, float y)
+    {
+        for (int i = _layers.Count - 1; i >= 0; i--)
+        {
+            var layer = _layers[i];
+            if (!layer.Visible || !layer.ConsumesInput) continue;
+            if (layer.HitTest(x, y)) return layer;
+        }
+        return null;
+    }
+
     public void ClearCapture()
     {
         _capture = null;

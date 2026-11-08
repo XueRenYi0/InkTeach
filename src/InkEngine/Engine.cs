@@ -4745,6 +4745,7 @@ public partial class InkEngine
     private void OnPointerDown(IntPtr hWnd, IntPtr wParam)
     {
         StampInput();
+        EnsureOverlayLayers();           // A4.1：注册浮层适配器（影子路由/后续切换；不产生输入副作用）
         // 反馈群二维码是全屏覆盖层：任何一点都先关它，这一下不再落到画布/界面。
         if (FeedbackQrVisible) { HideFeedbackQr(); return; }
         StopTouchFling();                // 任何按下（画布/界面/笔）= 先刹住双指惯性
