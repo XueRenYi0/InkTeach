@@ -488,6 +488,7 @@ public sealed partial class FullUi : IOverlayUi
     {
         _host = host;
         EnsureUiActions();
+        EnsurePageHost();
         _widgets = new Widgets(host);
         IconAtlas.Init(host.PathFactory);
         _expand.Bind(host);        // 时钟必须接真的那个（见 Anim.Bind 的注释）
@@ -688,6 +689,7 @@ public sealed partial class FullUi : IOverlayUi
         // 那会让默认位置把面板夹到屏幕左上角。
         var w = _host?.WorkArea ?? default;
         _work = (w.MaxX > w.MinX && w.MaxY > w.MinY) ? w : screen;
+        _pageHost?.SetWorkArea(_work);
         ClampSettingsScroll();
         _frameShiftValid = false;          // 屏幕/DPI 变了：旧的位移快照作废
         return QueryBounds();
@@ -4110,8 +4112,11 @@ public sealed partial class FullUi : IOverlayUi
     private string _settingsFocusId;
     private bool _settingsFocusVisible;
 
+    // A1：页面栈由 PageHost 管；现有绘制/命中仍读 _morePage，两者通过 SetMorePage 同步。
+    private PageHost _pageHost;
+
     /// <summary>设置页右侧可视高度（逻辑像素）。面板高稳定，不随分类跳。</summary>
-    private const float SettingsBodyH = 560f;
+    private const float SettingsBodyH = 476f;
 
     private static readonly string[] SettingsCatNames =
         { "工具栏", "常规", "书写", "墨迹", "AI 服务", "备份", "关于" };
@@ -4148,7 +4153,7 @@ public sealed partial class FullUi : IOverlayUi
     private const float MorePad = 20f;
     private const float MoreHeaderH = 44f;
     private const float MoreGroupGap = 14f;
-    private const float MoreGroupHeadH = 26f;
+    private const float MoreGroupHeadH = 24f;
     private const float MoreTile = 76f;
     private const float MoreTileGap = 10f;
     private const float MoreStatusH = 20f;
@@ -4156,18 +4161,7 @@ public sealed partial class FullUi : IOverlayUi
     private const float MoreChipH = 40f;
     private const float MoreChipGap = 8f;
     private const int MoreChipCols = 6;
-    private const float MoreRowH = 48f;
-    /// <summary>
-    /// 设置页三列各几行。**加行时三处一起改**：这里的数字、`Rows` 表、`MoreRowRect`。
-    /// 2026-10-02 加「悬停提示」那一行时就是这么改的（原来这两个数写死在
-    /// `SetWriteHeadRect` 和 `MoreLowerH` 里，两处各写一遍迟早漏一处）。
-    /// 2026-10-09：两列（左列堆"外观＋书写"）→ **三列并排**（外观 / 书写 / 墨迹 各一列）——
-    /// 用户说"设置现在太长了"。原来左列堆 9 行（组头 26 + 9×48 + 8 ≈ 476），三列后最高 5 行。
-    /// </summary>
-    private const int LookRowCount = 5;    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小 / 开机自动启动    // 外观：深色主题 / 贴边隐藏 / 色带常开 / 界面大小（「功能提示」2026-10-16 撤除、改常开）
-    private const int WriteRowCount = 6;   // 书写：停顿变图形 / 压感粗细 / 墨迹预测 / 触摸模式 / 设备与性能统计 / AI API
-    private const int InkRowCount = 5;     // 墨迹：自动恢复 / 课件墨迹自动保存 / 历史清理 / 备份 / 恢复
-    private const float MoreColumnGap = 16f;
+    private const float MoreRowH = 44f;
     private const float MoreSwitchW = 44f;
     private const float MoreSwitchH = 26f;
     private const float MoreCloseSize = 44f;
@@ -4211,13 +4205,107 @@ public sealed partial class FullUi : IOverlayUi
         return Math.Clamp(workW * 0.55f, 560f, 980f);
     }
 
-    private float MoreTargetH() => _morePage switch
+    private float MoreTargetH()
     {
-        MorePage.Home => MoreHomeH(),
-        MorePage.Settings => MoreSettingsH(),
-        MorePage.Log => MoreLogH(),
-        _ => MoreHelpH(),
+        // A1：页面高度优先由 PageHost 当前页的 PreferredSize 决定；
+        // 旧 _morePage switch 只在 PageHost 还没建立时兜底（测试/初始化顺序）。
+        var page = _pageHost?.Current;
+        if (page != null && page.PreferredSize.Height > 0f)
+            return page.PreferredSize.Height;
+        return _morePage switch
+        {
+            MorePage.Home => MoreHomeH(),
+            MorePage.Settings => MoreSettingsH(),
+            MorePage.Log => MoreLogH(),
+            _ => MoreHelpH(),
+        };
+    }
+
+    // ---- A1：PageHost 适配（现有绘制/命中仍读 _morePage）-------------------
+
+    private void EnsurePageHost()
+    {
+        if (_pageHost != null) return;
+        _pageHost = new PageHost(new PageHostMetrics
+        {
+            WidthRatio = 0.55f,
+            MinWidth = 560f,
+            MaxWidth = 980f,
+            DefaultHeight = 570f,
+            MaxHeightMargin = 24f,
+        }, () => _host?.NowMs ?? 0d);
+        if (_host != null) _pageHost.Bind(_host);
+        _pageHost.SetWorkArea(_work);
+    }
+
+    private static string LegacyPageId(MorePage page) => page switch
+    {
+        MorePage.Settings => "more.settings",
+        MorePage.Help => "more.help",
+        MorePage.Log => "more.log",
+        _ => "more.home",
     };
+
+    private LegacyPage CreateLegacyPage(MorePage page) => new()
+    {
+        Id = LegacyPageId(page),
+        Title = page switch
+        {
+            MorePage.Settings => "设置",
+            MorePage.Help => "使用说明",
+            MorePage.Log => "日志与反馈",
+            _ => "更多",
+        },
+        PreferredSize = new PageSize(0f, page switch
+        {
+            MorePage.Settings => MoreSettingsH(),
+            MorePage.Help => MoreHelpH(),
+            MorePage.Log => MoreLogH(),
+            _ => MoreHomeH(),
+        }),
+        CanBack = page != MorePage.Home,
+    };
+
+    /// <summary>
+    /// 切页：先同步 PageHost 栈，再让现有 _morePage 读同一页。
+    /// Home 重置栈；从 Home 进子页用 Push；子页之间切换用 Replace。
+    /// </summary>
+    private void SetMorePage(MorePage page, bool push)
+    {
+        EnsurePageHost();
+        _morePage = page;
+        if (_pageHost == null) return;
+
+        string id = LegacyPageId(page);
+        string current = _pageHost.Current?.Id;
+        if (page == MorePage.Home)
+        {
+            if (current != id) _pageHost.Open(CreateLegacyPage(page), animate: false);
+            else _pageHost.Layout();
+            return;
+        }
+
+        if (current == id)
+        {
+            _pageHost.Layout();
+            return;
+        }
+
+        LegacyPage next = CreateLegacyPage(page);
+        if (current == null) _pageHost.Open(next, animate: false);
+        else if (current == "more.home" && push) _pageHost.Push(next);
+        else _pageHost.Replace(next);
+    }
+
+    private void GoBackMorePage()
+    {
+        EnsurePageHost();
+        if (_pageHost != null && _pageHost.Count > 1)
+            _pageHost.Pop();
+        else
+            _pageHost?.Open(CreateLegacyPage(MorePage.Home), animate: false);
+        _morePage = MorePage.Home;
+    }
 
     // ---- 日志与反馈页 --------------------------------------------------------
     private const float LogNoteH = 58f;
@@ -4338,8 +4426,8 @@ public sealed partial class FullUi : IOverlayUi
            + MoreGroupHeadH + HubRows(1) * (MoreTile + MoreTileGap) + MoreGroupGap
            + MoreStatusH + 8 + MoreTile;
 
-    private const float SettingsNavW = 132f;
-    private const float SettingsNavItemH = 34f;
+    private const float SettingsNavW = 168f;
+    private const float SettingsNavItemH = 44f;
     private const float SettingsNavGap = 5f;
     private const float SettingsNavTop = 4f;
 
@@ -4823,23 +4911,6 @@ public sealed partial class FullUi : IOverlayUi
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + MoreChipH };
     }
 
-    private float SetLowerTop()
-        => MoreProfileRect(0).MaxY + MoreChipTopGap
-           + (ChipsShown ? MoreChipBlockH : 42f) + MoreGroupGap;
-
-    /// <summary>三列并排时每列的宽（内容宽减两道列距，再三等分）。</summary>
-    private float SetColW() => MathF.Max(110f, (MoreContentW() - MoreColumnGap * 2f) / 3f);
-    private float SetColX(SetColKind col) => MoreLeftX() + (int)col * (SetColW() + MoreColumnGap);
-
-    private RectF SetColHeadRect(SetColKind col) => new()
-    {
-        MinX = SetColX(col), MinY = SetLowerTop(),
-        MaxX = SetColX(col) + SetColW(), MaxY = SetLowerTop() + MoreGroupHeadH,
-    };
-    private RectF SetLookHeadRect() => SetColHeadRect(SetColKind.Look);
-    private RectF SetWriteHeadRect() => SetColHeadRect(SetColKind.Write);
-    private RectF SetInkHeadRect() => SetColHeadRect(SetColKind.Ink);
-
     /// <summary>
     /// 行在**连续设置页**里的位置：先找它属于哪个分类、分类里的第几行，
     /// 再加上分类在内容里的起点、减去页面滚动。
@@ -4872,17 +4943,6 @@ public sealed partial class FullUi : IOverlayUi
         for (int i = 0; i < Rows.Length; i++)
             if (Rows[i].Kind == kind) return MoreRowRect(i);
         return RectF.Empty;
-    }
-
-    /// <summary>设置页下半的三列：外观 / 书写 / 墨迹（并排；序号 = 列序，`SetColX` 用它）。</summary>
-    private enum SetColKind { Look = 0, Write = 1, Ink = 2 }
-
-    private RectF SetColRow(SetColKind col, int idx)
-    {
-        float headBottom = SetColHeadRect(col).MaxY;   // 三列组头同高 → 行起点也一样
-        float x = SetColX(col);
-        float y = headBottom + idx * MoreRowH;
-        return new RectF { MinX = x, MinY = y, MaxX = x + SetColW(), MaxY = y + MoreRowH };
     }
 
     private RectF MoreSwitchRect(int i) => new()
@@ -5100,7 +5160,7 @@ public sealed partial class FullUi : IOverlayUi
         _rail.To(0f, Tokens.RailMs);
 
         _moreOpen = true;
-        _morePage = MorePage.Home;          // 每次打开都回启动器（肌肉记忆：底栏永远同一处）
+        SetMorePage(MorePage.Home, push: false);   // 每次打开都回启动器（肌肉记忆：底栏永远同一处）
         _settingsScroll = 0f;
         _settingsScrollDrag = false;
         ResetSettingsTouch();
@@ -5120,6 +5180,8 @@ public sealed partial class FullUi : IOverlayUi
         if (!_moreOpen) return;
         if (_host?.State.LogNoteEditing == true) _host.Commands.EndLogNoteEdit(true);
         _moreOpen = false;
+        _pageHost?.Close(animate: false);
+        _morePage = MorePage.Home;
         _moreHover = MoreHitNone;
         _morePress = -1;
         _settingsScrollDrag = false;
@@ -5558,15 +5620,27 @@ public sealed partial class FullUi : IOverlayUi
 
     private void DrawSettingsNav(ID2D1DeviceContext ctx)
     {
+        var selBg = new Color4(Tokens.Accent.R, Tokens.Accent.G, Tokens.Accent.B, 0.08f);
         for (int i = 0; i < SettingsCatNames.Length; i++)
         {
             var r = SettingsNavItemRect(i);
             bool active = (int)_settingsCat == i;
             var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 8f, 8f);
-            if (active) ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Accent));
-            else if (_moreHover == MoreHitSettingsNav + i) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+            if (active)
+            {
+                ctx.FillRoundedRectangle(rr, Brush(ctx, selBg));
+                // 左侧强调竖条：比整块高饱和蓝更轻，和 WinUI NavigationView 一致。
+                ctx.FillRoundedRectangle(
+                    new RoundedRectangle(
+                        new Vortice.RawRectF(r.MinX + 2f, r.MinY + 8f, r.MinX + 5f, r.MaxY - 8f), 1.5f, 1.5f),
+                    Brush(ctx, Tokens.Accent));
+            }
+            else if (_moreHover == MoreHitSettingsNav + i)
+            {
+                ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+            }
             _widgets.TextLeftMiddle(ctx, SettingsCatNames[i], r, 12.5f,
-                Brush(ctx, active ? Tokens.AccentInk : InkCol));
+                Brush(ctx, active ? Tokens.Accent : InkCol));
         }
     }
 
@@ -5665,7 +5739,7 @@ public sealed partial class FullUi : IOverlayUi
             case HelpTileCode:                        // 使用说明（2026-10-19）
                 // 和「设置」一样留在 More 面板里换页，不另开一层——DPI、遮罩、
                 // 命中、居中都沿用 More，200% 缩放下不会再错位。
-                _morePage = MorePage.Help;
+                SetMorePage(MorePage.Help, push: true);
                 _moreHover = MoreHitNone;
                 _morePress = -1;
                 _helpScroll = 0f;
@@ -5743,7 +5817,7 @@ public sealed partial class FullUi : IOverlayUi
     {
         switch (i)
         {
-            case 0: _morePage = MorePage.Settings; _settingsCat = SettingsCategory.Toolbar;
+            case 0: SetMorePage(MorePage.Settings, push: true); _settingsCat = SettingsCategory.Toolbar;
                 _settingsScroll = 0f;
                 _settingsScrollDrag = false;
                 StopSettingsFling();
@@ -5753,7 +5827,7 @@ public sealed partial class FullUi : IOverlayUi
             // 「日志」（2026-11-02）：先打开「日志与反馈」页，让用户可选填一句问题；
             // 空着也能直接上传，上传/导出都在这一页完成，状态行就在下面。
             case 1:
-                _morePage = MorePage.Log;
+                SetMorePage(MorePage.Log, push: true);
                 _moreHover = MoreHitNone;
                 _morePress = -1;
                 _hubHint = "";
@@ -5999,7 +6073,7 @@ public sealed partial class FullUi : IOverlayUi
             if (hit == MoreHitBack)
             {
                 if (_host?.State.LogNoteEditing == true) _host.Commands.EndLogNoteEdit(true);
-                _morePage = MorePage.Home;
+                GoBackMorePage();
                 _moreHover = MoreHitNone;
                 Invalidate();
                 return true;
@@ -8725,6 +8799,12 @@ public sealed partial class FullUi : IOverlayUi
     internal string FocusedSettingForTest => _settingsFocusId;
     internal bool SettingsFocusVisibleForTest => _settingsFocusVisible;
 
+    // ---- A1 PageHost 自检钩子（2026-11-08）--------------------------------
+    internal int MorePageStackCountForTest => _pageHost?.Count ?? 0;
+    internal string MorePageIdForTest => _pageHost?.Current?.Id ?? "";
+    internal float MoreTargetHForTest => MoreTargetH();
+    internal void BackMorePageForTest() => GoBackMorePage();
+
     /// <summary>自检/出图用：打开「更多」面板（产品里只能点主条「…」那一格）。</summary>
     internal void OpenMoreForTest() { OpenMore(); _more.Jump(1f); _moreH.Jump(MoreTargetH()); }
 
@@ -8734,7 +8814,7 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>自检/出图用：切到启动器（0）/ 设置子页（1）。</summary>
     internal void SetMorePageForTest(int i)
     {
-        _morePage = (MorePage)Math.Clamp(i, 0, 3);
+        SetMorePage((MorePage)Math.Clamp(i, 0, 3), push: true);
         _moreHover = MoreHitNone;
         _moreH.Jump(MoreTargetH());
         Invalidate();
@@ -8771,7 +8851,9 @@ public sealed partial class FullUi : IOverlayUi
     internal void OpenSettingsPageForTest()
     {
         _moreOpen = true;
-        _morePage = MorePage.Settings;
+        EnsurePageHost();
+        SetMorePage(MorePage.Home, push: false);
+        SetMorePage(MorePage.Settings, push: true);
         _settingsCat = SettingsCategory.Toolbar;
         _settingsScroll = 0f;
         _settingsScrollDrag = false;
@@ -8789,6 +8871,7 @@ public sealed partial class FullUi : IOverlayUi
     {
         _host = host;
         EnsureUiActions();
+        EnsurePageHost();
         _peek.Bind(host);
         _rail.Bind(host);
     }
@@ -8799,7 +8882,10 @@ public sealed partial class FullUi : IOverlayUi
         _screen = screen;
         _work = screen;
         _moreOpen = true;
-        _morePage = MorePage.Settings;
+        EnsurePageHost();
+        _pageHost?.SetWorkArea(_work);
+        SetMorePage(MorePage.Home, push: false);
+        SetMorePage(MorePage.Settings, push: true);
         _settingsCat = SettingsCategory.Toolbar;
         _settingsScroll = 0f;
         _settingsScrollDrag = false;

@@ -55,6 +55,13 @@ internal static class SettingsAudit
         Check("动作 ID 唯一", dupIds == 0, $"重复 {dupIds}");
         Check("每行都有动作", missingActions == 0, $"缺失 {missingActions}");
 
+        // A1：PageHost 必须已经接管“更多 → 设置”的当前页/高度。
+        Check("PageHost 接管设置页",
+              ui.MorePageStackCountForTest == 2
+              && ui.MorePageIdForTest == "more.settings"
+              && ui.MoreTargetHForTest > 0f,
+              $"depth={ui.MorePageStackCountForTest} id={ui.MorePageIdForTest} h={ui.MoreTargetHForTest:F0}");
+
         // A0（2026-11-08）：设置页键盘焦点——Tab/方向键/Enter 至少能走通一次。
         bool tabKey = ui.HandleUiKey(0x09 /*Tab*/, false, false, false, false);
         string focus1 = ui.FocusedSettingForTest;
@@ -68,6 +75,12 @@ internal static class SettingsAudit
               && !string.IsNullOrEmpty(focus2)
               && !string.Equals(focus1, focus2, StringComparison.Ordinal),
               $"tab={tabKey} down={downKey} enter={enterKey} {focus1} -> {focus2}");
+
+        // A1：返回必须回到 Home，PageHost 栈只剩一层。
+        ui.BackMorePageForTest();
+        Check("PageHost 返回根页",
+              ui.MorePageStackCountForTest == 1 && ui.MorePageIdForTest == "more.home",
+              $"depth={ui.MorePageStackCountForTest} id={ui.MorePageIdForTest}");
         ui.OpenSettingsPageForTest();
 
         // A0（2026-11-08）：弹层栈——两层时 Esc 只关最上面，不会一次关两层。

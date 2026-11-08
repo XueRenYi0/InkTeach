@@ -361,7 +361,7 @@ IOverlayLayer
 
 ### Phase 1：PageHost + 设置试点（2～3 周）
 
-> 适配补充：`计划-统一界面-适配补充调研-2026-11-08.md` 的 **A0（Action 表/稳定 ID/FocusRing/Popup 栈）与 PageHost 骨架已于 2026-11-08 落地**，`--settingsaudit` 25 项、`--pageaudit` 16 项全绿；本阶段继续把 More/Settings/Help/Log 接进 PageHost。
+> 适配补充：`计划-统一界面-适配补充调研-2026-11-08.md` 的 **A0（Action 表/稳定 ID/FocusRing/Popup 栈）与 A1（PageHost 接入 + 设置 476/44/24）已于 2026-11-08 落地**，`--settingsaudit` 27 项、`--pageaudit` 16 项全绿；本阶段进入 A2 文字输入/API 页。
 
 - `PageHost` / `Page` / `PageFrame` / `LegacyPage`；
 - `SettingsPage` 包当前设置页（连续滚动/双指/滚轮/滚动条原样）；
