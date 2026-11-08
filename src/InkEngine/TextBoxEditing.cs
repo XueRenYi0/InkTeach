@@ -997,6 +997,8 @@ public partial class InkEngine
         _dirty = true;
         RefreshTextBoxEditWindow(box);
         KeepTextBoxEditInView(s);
+        // 重排后 RichEdit 可能又跟了一下末尾光标；内容全部可见，钉回左上角。
+        ResetRichEditScroll();
     }
 
     private string ReadTextBoxEditText()
@@ -1040,6 +1042,7 @@ public partial class InkEngine
             int end = Native.GetWindowTextLengthW(_textBoxEditHwnd);
             Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL,
                                new IntPtr(end), new IntPtr(end));
+            ResetRichEditScroll();
         }
     }
 
@@ -1832,6 +1835,10 @@ public partial class InkEngine
         }
         Native.SetWindowPos(_textBoxEditHost, Native.HWND_TOPMOST, 0, 0, 0, 0,
                             Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+        // 聚焦/设焦点时 RichEdit 可能自动把视图滚到末尾的光标处，第一行会被顶出可视区。
+        // 文本框是自动高的，内容本来就该全部可见——聚焦后把内部滚动钉回左上角。
+        ResetRichEditScroll();
+        Native.InvalidateRect(_textBoxEditHwnd, IntPtr.Zero, true);
     }
 
     private void RestoreTextBoxEditFocus()

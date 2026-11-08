@@ -16342,6 +16342,18 @@ public partial class InkEngine
                 _uiHover = false;
                 _dirty = true;
                 return IntPtr.Zero;
+
+            // 接输入小窗覆盖界面时，滚轮消息会先到这里；不转发的话设置页/说明页滚不动。
+            case Native.WM_MOUSEWHEEL:
+            {
+                if (Ui == null) return IntPtr.Zero;
+                int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);
+                Native.GetCursorPos(out var cursor);
+                bool consumed = UiGuard("Wheel",
+                    () => Ui.Wheel(cursor.X / UiUnit, cursor.Y / UiUnit, delta), false);
+                if (consumed) _dirty = true;
+                return IntPtr.Zero;
+            }
         }
         return Native.DefWindowProc(hWnd, msg, wParam, lParam);
     }
