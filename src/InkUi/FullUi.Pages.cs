@@ -70,9 +70,14 @@ public sealed partial class FullUi
 
         public PageHit HitTest(float x, float y)
         {
-            var t = Ui.MoreHitTargetAt(x, y);
-            return t.IsNone ? PageHit.None : new PageHit(PageHitKind.Action, t.ActionId, t.Index);
+            int code = HitCode(x, y);
+            if (code == MoreHitNone) return PageHit.None;
+            var t = Ui.HitTargetFromLegacy(code);
+            return new PageHit(PageHitKind.Action, t.ActionId, code);
         }
+
+        /// <summary>页面内容命中；返回旧整数码（A3.3 的兼容层）。</summary>
+        protected abstract int HitCode(float x, float y);
 
         public bool PointerDown(in UiPointerEvent e) => false;
         public bool PointerMove(in UiPointerEvent e) => false;
@@ -123,6 +128,18 @@ public sealed partial class FullUi
                 var tr = Ui.HubBottomRect(2);
                 Ui.DrawUpdateDot(ctx, new Vector2(tr.MaxX - 8f, tr.MinY + 8f), 4.5f, 1f);
             }
+        }
+
+        protected override int HitCode(float x, float y)
+        {
+            for (int s = 0; s < 2; s++)
+                for (int i = 0; i < Ui.HubCount(s); i++)
+                    if (Ui.HubTileRect(s, i).Contains(x, y))
+                        return MoreHitTile + Ui.HubTileCode(s, i);
+            for (int i = 0; i < MoreBottomTiles.Length; i++)
+                if (Ui.HubBottomRect(i).Contains(x, y))
+                    return MoreHitBottom + i;
+            return MoreHitInside;
         }
     }
 
@@ -210,6 +227,30 @@ public sealed partial class FullUi
             if (Ui._settingsFocusVisible) Ui.DrawSettingsFocusRing(ctx);
             Ui.DrawSettingsScrollbar(ctx);
         }
+
+        protected override int HitCode(float x, float y)
+        {
+            int nav = Ui.SettingsNavAt(x, y);
+            if (nav >= 0) return MoreHitSettingsNav + nav;
+
+            // 滚动条在内容右侧的留白里（不在视口矩形内），要先判它。
+            if (Ui.SettingsScrollMax() > 0.5f && Ui.SettingsScrollbarHitRect().Contains(x, y))
+                return MoreHitSettingsScroll;
+
+            // 右侧是一整页连续内容：先限制在视口里，再按滚动后的矩形命中。
+            if (!Ui.SettingsViewportRect().Contains(x, y)) return MoreHitInside;
+
+            for (int i = 0; i < 3; i++)
+                if (Ui.MoreProfileRect(i).Contains(x, y)) return MoreHitProfile + i;
+            if (Ui.ChipsShown)
+                for (int cell = 1; cell < Cells.Length; cell++)
+                    if (FullUi.CanUnpin(cell) && Ui.MoreChipRect(cell).Contains(x, y))
+                        return MoreHitChip + cell;
+
+            for (int i = 0; i < Rows.Length; i++)
+                if (Ui.MoreRowRect(i).Contains(x, y)) return MoreHitRow + i;
+            return MoreHitInside;
+        }
     }
 
     private sealed class HelpPage : MorePageBase
@@ -260,6 +301,13 @@ public sealed partial class FullUi
                     new RoundedRectangle(new Vortice.RawRectF(trackX, top, trackX + 3f, top + thumbH), 1.5f, 1.5f),
                     Ui.Brush(ctx, Ui._dark ? new Color4(1f, 1f, 1f, 0.28f) : new Color4(0f, 0f, 0f, 0.22f)));
             }
+        }
+
+        protected override int HitCode(float x, float y)
+        {
+            for (int i = 0; i < HelpTabCount; i++)
+                if (Ui.HelpTabRect(i).Contains(x, y)) return HelpHitTabBase + i;
+            return MoreHitInside;
         }
     }
 
@@ -359,6 +407,18 @@ public sealed partial class FullUi
             Ui._widgets.Text(ctx, "复制链接", lr, 11.5f,
                           Ui.Brush(ctx, urlHover ? Tokens.Accent : Ui.MutedCol));
         }
+
+        protected override int HitCode(float x, float y)
+        {
+            if (Ui.LogNoteRect().Contains(x, y)) return MoreHitLogNote;
+            if (Ui.LogUploadRect().Contains(x, y)) return MoreHitLogUpload;
+            if (Ui.LogExportRect().Contains(x, y)) return MoreHitLogExport;
+            if (Ui.LogToggleRect().Contains(x, y)) return MoreHitLogOlder;
+            if (Ui.LogQrCardRect().Contains(x, y)) return MoreHitLogQr;
+            if (Ui.LogGroupUrlRect().Contains(x, y)) return MoreHitLogGroupUrl;
+            if (Ui.LogGroupRect().Contains(x, y)) return MoreHitLogGroup;
+            return MoreHitInside;
+        }
     }
 
     private sealed class ApiPage : MorePageBase
@@ -368,5 +428,7 @@ public sealed partial class FullUi
 
         public override void Render(ID2D1DeviceContext ctx, in PageFrame frame)
             => Ui.DrawApiPage(ctx);
+
+        protected override int HitCode(float x, float y) => Ui.ApiHitAt(x, y);
     }
 }

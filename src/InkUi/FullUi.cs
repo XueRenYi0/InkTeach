@@ -4962,67 +4962,9 @@ public sealed partial class FullUi : IOverlayUi
         if (MoreCloseRect().Contains(x, y)) return MoreHitClose;
         if (_morePage != MorePage.Home && MoreBackRect().Contains(x, y)) return MoreHitBack;
 
-        if (_morePage == MorePage.Log)
-        {
-            if (LogNoteRect().Contains(x, y)) return MoreHitLogNote;
-            if (LogUploadRect().Contains(x, y)) return MoreHitLogUpload;
-            if (LogExportRect().Contains(x, y)) return MoreHitLogExport;
-            if (LogToggleRect().Contains(x, y)) return MoreHitLogOlder;
-            // 三个小按钮优先；其余整行（含群号文字）都是复制群号
-            if (LogQrCardRect().Contains(x, y)) return MoreHitLogQr;
-            if (LogGroupUrlRect().Contains(x, y)) return MoreHitLogGroupUrl;
-            if (LogGroupRect().Contains(x, y)) return MoreHitLogGroup;
-            return MoreHitInside;
-        }
-
-        if (_morePage == MorePage.Help)
-        {
-            for (int i = 0; i < HelpTabCount; i++)
-                if (HelpTabRect(i).Contains(x, y)) return HelpHitTabBase + i;
-            return MoreHitInside;
-        }
-
-        if (_morePage == MorePage.Home)
-        {
-            for (int s = 0; s < 2; s++)
-                for (int i = 0; i < HubCount(s); i++)
-                    if (HubTileRect(s, i).Contains(x, y)) return MoreHitTile + HubTileCode(s, i);
-            for (int i = 0; i < MoreBottomTiles.Length; i++)
-                if (HubBottomRect(i).Contains(x, y)) return MoreHitBottom + i;
-            return MoreHitInside;
-        }
-
-        if (_morePage == MorePage.Api)
-            return ApiHitAt(x, y);
-
-        if (_morePage == MorePage.Settings)
-        {
-            int nav = SettingsNavAt(x, y);
-            if (nav >= 0) return MoreHitSettingsNav + nav;
-
-            // 滚动条在内容右侧的留白里（不在视口矩形内），要先判它；
-            // 否则"滚动条永远点不到"——2026-11-07 后台自检抓到的第二个问题。
-            if (SettingsScrollMax() > 0.5f && SettingsScrollbarHitRect().Contains(x, y))
-                return MoreHitSettingsScroll;
-
-            // 右侧是**一整页连续内容**：先限制在视口里，再按滚动后的矩形命中。
-            if (!SettingsViewportRect().Contains(x, y)) return MoreHitInside;
-
-            // 工具栏段：档位 + 钉住宫格（滚出视口后自然点不到）
-            for (int i = 0; i < 3; i++)
-                if (MoreProfileRect(i).Contains(x, y)) return MoreHitProfile + i;
-            if (ChipsShown)
-                for (int cell = 1; cell < Cells.Length; cell++)
-                    if (CanUnpin(cell) && MoreChipRect(cell).Contains(x, y))
-                        return MoreHitChip + cell;
-
-            // 所有分类的行都在同一页里，按滚动后的位置命中。
-            for (int i = 0; i < Rows.Length; i++)
-                if (MoreRowRect(i).Contains(x, y)) return MoreHitRow + i;
-            return MoreHitInside;
-        }
-
-        return MoreHitInside;
+        // A3.3：页面内容命中交给当前 IPage；返回值仍是旧整数码（input 层暂时不改）。
+        var pageHit = _pageHost?.Current?.HitTest(x, y) ?? PageHit.None;
+        return pageHit.Kind == PageHitKind.None ? MoreHitInside : pageHit.Index;
     }
 
     // ---- 稳定命中目标（A0，2026-11-08）------------------------------------
@@ -5086,6 +5028,29 @@ public sealed partial class FullUi : IOverlayUi
 
         if (hit == MoreHitSettingsScroll)
             return new HitTarget(HitKind.SettingsScroll, "more.settings.scroll");
+
+        if (hit >= ApiHitProvider && hit <= ApiHitKeyLink)
+        {
+            string id = hit switch
+            {
+                ApiHitProvider => "api.provider",
+                ApiHitBase => "api.base",
+                ApiHitKey => "api.key",
+                ApiHitModel => "api.model",
+                ApiHitFetch => "api.fetchModels",
+                ApiHitSave => "api.save",
+                ApiHitCancel => "api.cancel",
+                ApiHitDelete => "api.delete",
+                ApiHitKeyLink => "api.keyUrl",
+                _ => "api.control",
+            };
+            return new HitTarget(HitKind.PopupItem, id, hit);
+        }
+        if (hit == ApiHitProviderMenu)
+            return new HitTarget(HitKind.PopupItem, "api.provider.menu", hit);
+        if (hit >= ApiHitProviderItemBase)
+            return new HitTarget(HitKind.PopupItem, $"api.provider.item{hit - ApiHitProviderItemBase}",
+                                 hit - ApiHitProviderItemBase);
 
         string logId = LogActionId(hit);
         if (logId != null)
