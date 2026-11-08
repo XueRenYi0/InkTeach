@@ -361,7 +361,7 @@ IOverlayLayer
 
 ### Phase 1：PageHost + 设置试点（2～3 周）
 
-> 适配补充：**A0–A3 已于 2026-11-08 全部落地**（PageHost 五页具体 IPage、自持绘制/命中、`_morePage` 从 PageHost 派生）。`--settingsaudit` 40、`--pageaudit` 16、`--textinputaudit` 8 全绿；下一步 A4 `OverlayLayerManager`。
+> 适配补充：**A0–A3 已落地；A4.0 浮层管理器骨架也已落地**（`IOverlayLayer` + 优先级/捕获/Esc/点外/阻断，`--overlayaudit` 5 项）。`--settingsaudit` 40、`--pageaudit` 16、`--textinputaudit` 8；下一步 A4.1 接入 PPT/回放/计时/点名/收藏。
 
 - `PageHost` / `Page` / `PageFrame` / `LegacyPage`；
 - `SettingsPage` 包当前设置页（连续滚动/双指/滚轮/滚动条原样）；

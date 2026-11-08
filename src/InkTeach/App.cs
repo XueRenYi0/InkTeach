@@ -634,6 +634,11 @@ internal sealed partial class App : InkEngine.InkEngine
             // A2：文字宿主 Begin/Commit/Cancel/校验/多行；隐藏窗口、不抢前台。
             return TextInputAudit.Run();
         }
+        else if (mode == "--overlayaudit")
+        {
+            // A4.0：浮层优先级/捕获/Esc/点外/阻断；无窗口、不抢前台。
+            return OverlayAudit.Run();
+        }
         else if (mode == "--aiapishow")
         {
             _autoExitAt = double.MaxValue;
@@ -1741,6 +1746,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --settingsaudit     设置页后台自检（无窗口、不抢前台；逐项命中/执行/出图）");
         Console.WriteLine("  --pageaudit         PageHost 页面栈自检（无窗口；栈/生命周期/尺寸/几何）");
         Console.WriteLine("  --textinputaudit    文字输入宿主自检（隐藏窗口；Begin/Commit/Cancel/校验/多行）");
+        Console.WriteLine("  --overlayaudit      浮层管理自检（无窗口；优先级/捕获/Esc/点外/阻断）");
         Console.WriteLine("  --shapepaneltest    图形面板专项（入口 / 页签 / 选图形 / 蓝色互斥）");
         Console.WriteLine("  --bandactiontest    选择带上带的三连（全选 / 复制 / 粘贴）几何与提示");
         Console.WriteLine("  --qrtest            反馈群二维码（读图 / 打开 / 点一下关闭）");
