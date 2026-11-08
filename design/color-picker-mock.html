@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>取色板 · 常用色 + 最近使用</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    width: 1280px;
+    height: 820px;
+    overflow: hidden;
+    background:
+      radial-gradient(1200px 700px at 15% 0%, #ffffff 0%, rgba(255,255,255,0) 62%),
+      linear-gradient(160deg, #eef2f7 0%, #e7ecf3 55%, #e3e9f1 100%);
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+    color: #0f172a;
+  }
+  .page { position: relative; width: 1280px; height: 820px; }
+
+  .title {
+    position: absolute; left: 80px; top: 48px;
+    font-size: 30px; line-height: 40px; font-weight: 700; letter-spacing: .2px;
+  }
+  .subtitle {
+    position: absolute; left: 80px; top: 94px;
+    font-size: 17px; line-height: 26px; color: #64748b;
+  }
+  .tag {
+    position: absolute; top: 50px; right: 80px;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 14px; border-radius: 999px;
+    background: rgba(255,255,255,.72); border: 1px solid #dbe3ec;
+    font-size: 15px; color: #475569;
+    box-shadow: 0 4px 14px rgba(30,41,59,.05);
+  }
+  .tag i { width: 8px; height: 8px; border-radius: 50%; background: #2563eb; display: inline-block; }
+
+  .card {
+    position: absolute; left: 80px; top: 148px;
+    width: 800px; height: 440px;
+    border-radius: 24px;
+    background: #fcfcfd;
+    border: 1px solid #e2e7ee;
+    box-shadow: 0 24px 70px rgba(20,30,50,.16), 0 3px 12px rgba(20,30,50,.06);
+    padding: 22px 24px;
+    display: flex; gap: 30px;
+  }
+
+  .left { width: 368px; flex: 0 0 368px; }
+  .right { width: 344px; flex: 0 0 344px; }
+
+  .slot-pill {
+    display: inline-flex; align-items: center; gap: 9px;
+    height: 36px; padding: 0 14px;
+    border-radius: 999px; background: #eef2f7; color: #475569;
+    font-size: 16px; font-weight: 600;
+  }
+  .slot-pill .dot { width: 16px; height: 16px; border-radius: 5px; background: #1e88e5; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
+  .slot-pill .hint { font-weight: 400; color: #94a3b8; font-size: 14px; }
+
+  .sv-wrap { position: relative; margin-top: 15px; width: 236px; height: 236px; }
+  .sv {
+    width: 236px; height: 236px; border-radius: 14px;
+    background:
+      linear-gradient(to top, #000 0%, rgba(0,0,0,0) 100%),
+      linear-gradient(to right, #fff 0%, hsl(210 100% 50%) 100%);
+    box-shadow: inset 0 0 0 1px rgba(15,23,42,.14), 0 2px 6px rgba(15,23,42,.06);
+  }
+  .sv-cursor {
+    position: absolute; left: 78%; top: 22%;
+    width: 19px; height: 19px; margin: -9.5px 0 0 -9.5px;
+    border-radius: 50%; border: 3px solid #fff;
+    box-shadow: 0 0 0 1.5px rgba(15,23,42,.6), 0 2px 5px rgba(15,23,42,.28);
+  }
+  .hue {
+    position: absolute; left: 252px; top: 0; width: 36px; height: 236px;
+    border-radius: 10px;
+    background: linear-gradient(to bottom,
+      #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%,
+      #0000ff 67%, #ff00ff 83%, #ff0000 100%);
+    box-shadow: inset 0 0 0 1px rgba(15,23,42,.14), 0 2px 6px rgba(15,23,42,.06);
+  }
+  .hue-mark {
+    position: absolute; left: 249px; top: calc(58% - 2px);
+    width: 42px; height: 4px; border-radius: 2px; background: #fff;
+    box-shadow: 0 0 0 1px rgba(15,23,42,.28);
+  }
+
+  .preview-row { display: flex; align-items: center; gap: 13px; margin-top: 17px; }
+  .preview-swatch {
+    width: 52px; height: 52px; border-radius: 11px; background: #1e88e5;
+    box-shadow: inset 0 0 0 1px rgba(15,23,42,.14), 0 2px 5px rgba(15,23,42,.08);
+  }
+  .hex { font-family: Consolas, "Cascadia Mono", monospace; font-size: 19px; font-weight: 600; color: #1e293b; letter-spacing: .4px; }
+  .eye {
+    margin-left: auto; height: 52px; padding: 0 16px;
+    display: inline-flex; align-items: center; gap: 8px;
+    border-radius: 11px; border: 1px solid #dfe5ec; background: #f4f7fa;
+    font-size: 16px; color: #334155; font-weight: 600;
+  }
+  .eye svg { width: 20px; height: 20px; }
+
+  .left-hint { margin-top: 17px; font-size: 15px; line-height: 22px; color: #94a3b8; }
+
+  .right-head { display: flex; align-items: baseline; justify-content: space-between; height: 28px; }
+  .right-head b { font-size: 19px; font-weight: 700; color: #0f172a; }
+  .right-head span { font-size: 14px; color: #94a3b8; }
+
+  .grid {
+    display: grid; grid-template-columns: repeat(8, 36px);
+    grid-auto-rows: 36px; gap: 8px; margin-top: 11px;
+  }
+  .sw {
+    width: 36px; height: 36px; border-radius: 8px;
+    box-shadow: inset 0 0 0 1px rgba(15,23,42,.12), 0 1px 2px rgba(15,23,42,.05);
+  }
+  .sw.white { box-shadow: inset 0 0 0 1px rgba(15,23,42,.22), 0 1px 2px rgba(15,23,42,.05); }
+  .sw.sel { box-shadow: 0 0 0 3px #fcfcfd, 0 0 0 5px #2563eb, inset 0 0 0 1px rgba(15,23,42,.08); }
+
+  .divider { height: 1px; background: #e8edf3; margin: 15px 0 14px; }
+
+  .recent-head { display: flex; align-items: baseline; justify-content: space-between; height: 28px; }
+  .recent-head b { font-size: 19px; font-weight: 700; color: #0f172a; }
+  .recent-head span { font-size: 14px; color: #94a3b8; }
+  .recent-grid { display: grid; grid-template-columns: repeat(8, 36px); grid-auto-rows: 36px; gap: 8px; margin-top: 11px; }
+
+  .right-hint { margin-top: 20px; font-size: 15px; line-height: 22px; color: #94a3b8; }
+
+  .band {
+    position: absolute; left: 260px; top: 632px;
+    width: 760px; height: 88px; border-radius: 26px;
+    background: #fcfcfd; border: 1px solid #e2e7ee;
+    box-shadow: 0 18px 45px rgba(20,30,50,.12);
+    display: flex; align-items: center; justify-content: center; gap: 18px;
+  }
+  .band .chip { width: 44px; height: 44px; border-radius: 11px; box-shadow: inset 0 0 0 1px rgba(15,23,42,.12); }
+  .band .chip.sel { box-shadow: 0 0 0 4px #fcfcfd, 0 0 0 7px #2563eb, inset 0 0 0 1px rgba(15,23,42,.08); }
+  .band-note {
+    position: absolute; left: 260px; top: 738px; width: 760px;
+    text-align: center; font-size: 16px; color: #64748b;
+  }
+  .band-note b { color: #334155; }
+
+  .callout {
+    position: absolute; font-size: 14px; color: #64748b;
+  }
+  .callout.left { left: 80px; top: 604px; }
+  .callout.right { left: 596px; top: 604px; }
+  .callout i {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: #94a3b8; margin-right: 7px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="title">取色板：左边自由取色，右边常用色 + 最近使用</div>
+  <div class="subtitle">色带仍然是 8 个纯色片；取色板负责“找颜色”，常用色和最近颜色都放在右边。</div>
+  <div class="tag"><i></i> 建议稿 · 逻辑示意</div>
+
+  <div class="card">
+    <div class="left">
+      <div class="slot-pill"><span class="dot"></span>色片 3 <span class="hint">正在换色</span></div>
+
+      <div class="sv-wrap">
+        <div class="sv"></div>
+        <div class="sv-cursor"></div>
+        <div class="hue"></div>
+        <div class="hue-mark"></div>
+      </div>
+
+      <div class="preview-row">
+        <div class="preview-swatch"></div>
+        <div class="hex">#1E88E5</div>
+        <div class="eye">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 3l2 2-7.5 7.5-2-2L19 3z"/>
+            <path d="M11.5 12.5l-2 2"/>
+            <path d="M4 20c1.8-.2 3.4-.9 4.6-2.1l1.9-1.9 2 2-1.9 1.9C9.4 21.1 7.8 21.8 6 22H2v-2c.4-1.8 1.1-3.4 2.3-4.6L6.2 13.5"/>
+          </svg>
+          吸管
+        </div>
+      </div>
+
+      <div class="left-hint">拖动方块或色相条微调；单击色片使用，再点当前色片打开这里。</div>
+    </div>
+
+    <div class="right">
+      <div class="right-head"><b>常用色</b><span>首行 = 出厂默认</span></div>
+      <div class="grid">
+        <!-- 首行：现在色带上的 8 个默认色 -->
+        <div class="sw" style="background:#1e1e1e"></div>
+        <div class="sw" style="background:#e53935"></div>
+        <div class="sw sel" style="background:#1e88e5"></div>
+        <div class="sw" style="background:#43a047"></div>
+        <div class="sw" style="background:#fdd835"></div>
+        <div class="sw" style="background:#fb8c00"></div>
+        <div class="sw" style="background:#8e24aa"></div>
+        <div class="sw white" style="background:#ffffff"></div>
+
+        <!-- 其余常用色：24 个 -->
+        <div class="sw" style="background:#6b7280"></div>
+        <div class="sw" style="background:#9ca3af"></div>
+        <div class="sw" style="background:#374151"></div>
+        <div class="sw" style="background:#7f1d1d"></div>
+        <div class="sw" style="background:#dc2626"></div>
+        <div class="sw" style="background:#f97316"></div>
+        <div class="sw" style="background:#f59e0b"></div>
+        <div class="sw" style="background:#fde68a"></div>
+
+        <div class="sw" style="background:#14532d"></div>
+        <div class="sw" style="background:#16a34a"></div>
+        <div class="sw" style="background:#4ade80"></div>
+        <div class="sw" style="background:#0f766e"></div>
+        <div class="sw" style="background:#14b8a6"></div>
+        <div class="sw" style="background:#06b6d4"></div>
+        <div class="sw" style="background:#0ea5e9"></div>
+        <div class="sw" style="background:#1d4ed8"></div>
+
+        <div class="sw" style="background:#1e3a8a"></div>
+        <div class="sw" style="background:#6366f1"></div>
+        <div class="sw" style="background:#8b5cf6"></div>
+        <div class="sw" style="background:#c026d3"></div>
+        <div class="sw" style="background:#ec4899"></div>
+        <div class="sw" style="background:#f472b6"></div>
+        <div class="sw" style="background:#92400e"></div>
+        <div class="sw" style="background:#d6a06a"></div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="recent-head"><b>最近使用</b><span>只记自定义色</span></div>
+      <div class="recent-grid">
+        <div class="sw" style="background:#0d9488"></div>
+        <div class="sw" style="background:#e11d48"></div>
+        <div class="sw" style="background:#7c3aed"></div>
+        <div class="sw" style="background:#ea580c"></div>
+        <div class="sw" style="background:#65a30d"></div>
+        <div class="sw" style="background:#0891b2"></div>
+        <div class="sw" style="background:#db2777"></div>
+        <div class="sw" style="background:#4b5563"></div>
+      </div>
+
+      <div class="right-hint">点色块直接替换“色片 3”；点外面关闭。常用色是固定的，不随用户改。</div>
+    </div>
+  </div>
+
+  <div class="callout left"><i></i>左：HSV / 色相 / 吸管</div>
+  <div class="callout right"><i></i>右：32 个固定常用色 + 8 个最近</div>
+
+  <div class="band">
+    <div class="chip" style="background:#1e1e1e"></div>
+    <div class="chip" style="background:#e53935"></div>
+    <div class="chip sel" style="background:#1e88e5"></div>
+    <div class="chip" style="background:#43a047"></div>
+    <div class="chip" style="background:#fdd835"></div>
+    <div class="chip" style="background:#fb8c00"></div>
+    <div class="chip" style="background:#8e24aa"></div>
+    <div class="chip white" style="background:#ffffff; box-shadow:inset 0 0 0 1px rgba(15,23,42,.22)"></div>
+  </div>
+  <div class="band-note"><b>色带：</b>8 个纯色片 · 单击使用 · 再点当前色片打开取色板</div>
+</div>
+</body>
+</html>

@@ -38,7 +38,9 @@ vendor/
 reports/log-ledger.json
 logs-download/
 
-# AI ��׼����Կ��ԭʼ���ز�����
+# AI 基准：密钥与原始返回不进库
 tools/ai-bench/keys.json
 tools/ai-bench/raw/
 tools/ai-bench/crops/
+# 宣传片成片（由 tools/make_promo_video.py 生成，体积大，不入库）
+调研/宣传视频/*.mp4

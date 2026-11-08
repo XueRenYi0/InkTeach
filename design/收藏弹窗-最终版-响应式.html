@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>收藏弹窗 · 最终版（响应式）</title>
+<style>
+:root{
+  --board:#E9ECF1; --panel:#FBFBFD; --card:#FFFFFF;
+  --border:rgba(23,26,33,.16); --cb:rgba(23,26,33,.16);
+  --ink:#1B1B1F; --ink2:#5A6070; --ink3:#7A8190;
+  --hover:rgba(0,0,0,.055); --accent:#0067C0; --accent-bg:#F0F6FC;
+  --chip:#EFF2F6; --danger:#B02A2A; --grip:#D3D8E0;
+  --white:#FFFFFF; --ms:0 10px 26px rgba(0,0,0,.11);
+}
+[data-theme="dark"]{
+  --board:#121214; --panel:#1E1E21; --card:#2A2A2E;
+  --border:rgba(255,255,255,.15); --cb:rgba(255,255,255,.13);
+  --ink:#F0F0F2; --ink2:#B6BCC6; --ink3:#8B929E;
+  --hover:rgba(255,255,255,.08); --accent:#5AB0F7; --accent-bg:#1B2A3A;
+  --chip:#2C2C31; --danger:#F2716E; --grip:#4A4E57;
+  --white:#26262B; --ms:0 10px 26px rgba(0,0,0,.55);
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;
+     background:#FAFAFB;color:var(--ink);font-size:13px;line-height:1.6}
+[data-theme="dark"] body{background:#0C0C0E}
+.wrap{max-width:1080px;margin:0 auto;padding:24px 20px 60px}
+h1{font-size:17px;font-weight:500;margin:0 0 4px}
+.sub{color:var(--ink3);font-size:12.5px;margin:0 0 16px}
+.ctrl{display:flex;flex-direction:column;gap:8px;margin-bottom:14px}
+.crow{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.lab{font-size:12px;color:var(--ink3);width:52px;flex:none}
+.tb{padding:5px 11px;border-radius:8px;border:1px solid var(--border);background:transparent;
+    color:var(--ink2);cursor:pointer;font-size:12.5px;font-family:inherit;min-width:34px}
+.tb.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.sep{width:1px;height:16px;background:var(--border);margin:0 6px}
+.stage{background:var(--board);border-radius:14px;padding:26px;min-height:430px;
+       display:flex;align-items:center;justify-content:center;overflow:auto}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;
+       padding:12px;position:relative;transition:width .16s,height .16s}
+.bar{display:flex;align-items:center;gap:6px;margin-bottom:8px;position:relative}
+.grip{width:5px;height:20px;border-radius:3px;background:var(--grip);flex:none;cursor:grab}
+.tabs{display:flex;gap:15px;align-items:center;flex:1;min-width:0;overflow:hidden}
+.tab{font-size:13px;color:var(--ink2);padding-bottom:6px;border-bottom:2px solid transparent;
+     white-space:nowrap;cursor:pointer;flex:none}
+.tab:hover{border-bottom-color:var(--border)}
+.tab.on{color:var(--ink);font-weight:500;border-bottom-color:var(--accent)}
+.plus{color:var(--ink3);font-size:15px;cursor:pointer;flex:none;padding:0 2px}
+.dd{font-size:13px;font-weight:500;color:var(--ink);display:flex;align-items:center;gap:5px;
+    padding:3px 8px;border-radius:7px;background:var(--chip);cursor:pointer;white-space:nowrap}
+.dd:hover{background:var(--hover)}
+.tools{display:flex;align-items:center;gap:2px;flex:none;margin-left:auto}
+.ib{width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;
+    color:var(--ink2);cursor:pointer;position:relative;flex:none}
+.bar.compact .ib{width:20px;height:20px}
+.bar.compact .grip{height:14px}
+.bar.compact .tab{font-size:12px;padding-bottom:4px}
+.ib:hover{background:var(--hover)}
+.ib.acc{color:var(--accent)}
+.bdg{position:absolute;right:-3px;top:-3px;background:var(--danger);color:#fff;border-radius:6px;
+     font-size:9.5px;padding:0 3.5px;line-height:13px}
+.act{font-size:12.5px;color:var(--ink2);white-space:nowrap;padding:3px 7px;border-radius:7px;cursor:pointer}
+.act:hover{background:var(--hover)}
+.act.acc{color:var(--accent)}
+.act.dgr{color:var(--danger)}
+.grid{display:grid;gap:8px}
+.card{background:var(--card);border:1px solid var(--cb);border-radius:10px;
+      width:84px;height:92px;display:flex;align-items:center;justify-content:center;
+      position:relative;cursor:pointer;transition:border-color .1s,background .1s}
+.card:hover{border-color:var(--accent)}
+.card svg{width:56%;height:56%}
+.card.sel{border:2px solid var(--accent);background:var(--accent-bg)}
+.card.dead{border-style:dashed;opacity:.6}
+.ck{position:absolute;left:4px;top:4px;width:18px;height:18px;border-radius:50%;
+    background:var(--white);border:1.5px solid var(--border);display:none}
+.selmode .ck{display:block}
+.ck.on{background:var(--accent);border-color:var(--accent);color:#fff;font-size:11px;
+       display:flex;align-items:center;justify-content:center}
+.mini{position:absolute;right:3px;top:3px;width:18px;height:18px;border-radius:50%;
+      background:var(--white);border:1px solid var(--border);color:var(--ink2);font-size:11px;
+      display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .1s;line-height:1}
+.card:hover .mini{opacity:1}
+.fly{position:absolute;left:12px;top:38px;background:var(--white);border:1px solid var(--border);
+     border-radius:10px;padding:5px;box-shadow:var(--ms);z-index:8;min-width:170px}
+.frow{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;
+      color:var(--ink2);padding:6px 9px;border-radius:7px;cursor:pointer}
+.frow:hover{background:var(--hover)}
+.frow.on{background:var(--accent-bg);color:var(--accent);font-weight:500}
+.frow em{font-style:normal;font-size:10.5px;color:var(--danger);font-weight:500}
+.empty{text-align:center;color:var(--ink3);font-size:12.5px;padding:22px 0}
+.read{font-family:Consolas,monospace;font-size:12px;color:var(--ink2);margin-top:10px;text-align:center}
+.read b{color:var(--accent);font-weight:500}
+table{width:100%;border-collapse:collapse;margin-top:20px;font-size:12.5px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+th{font-weight:500;color:var(--ink2);font-size:12px}
+td code{font-family:Consolas,monospace;font-size:11.5px;background:var(--chip);
+        padding:1px 5px;border-radius:4px;color:var(--ink2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>收藏弹窗 · 最终版</h1>
+  <p class="sub">只有"多宽"一个维度。切列数看顶栏怎么自动变，切行数看它怎么自动压扁。</p>
+
+  <div class="ctrl">
+    <div class="crow">
+      <span class="lab">列数</span>
+      <div id="cols" class="crow" style="gap:4px"></div>
+    </div>
+    <div class="crow">
+      <span class="lab">行数</span>
+      <div id="rows" class="crow" style="gap:4px"></div>
+      <div class="sep"></div>
+      <button class="tb" id="theme">深色</button>
+      <div class="sep"></div>
+      <button class="tb" id="reset">重置</button>
+    </div>
+  </div>
+
+  <div class="stage"><div class="panel" id="panel"></div></div>
+  <p class="read" id="read"></p>
+
+  <table>
+    <tr><th style="width:150px">宽度</th><th style="width:130px">顶栏形态</th><th>说明</th></tr>
+    <tr><td>≥ 440px</td><td>分类页签</td><td>分类一次点击切换，全可见</td></tr>
+    <tr><td>&lt; 440px</td><td>「分类 ▾」下拉</td><td>页签放不下，换成下拉弹层</td></tr>
+    <tr><td>只有 1 行卡片</td><td>顶栏压到 20px</td><td>面板矮了，顶栏不能还占 18%；自动切成「分类 ▾」</td></tr>
+  </table>
+  <p style="font-size:12px;color:var(--ink3);margin-top:12px">
+    整理态里可以试**划线选**：按住一张卡横着划过去，经过的连续勾上。起手那张已选就整条取消。
+  </p>
+</div>
+
+<script>
+const S=[
+  {s:'<rect x="11" y="15" width="26" height="18" rx="1.5"/>',c:'#2F6FB0'},
+  {s:'<path d="M11 17 L24 33 L37 17"/>',c:'#1B1B1F'},
+  {s:'<path d="M11 17 L24 33 L37 17"/>',c:'#1B1B1F'},
+  {s:'<rect x="11" y="15" width="26" height="18" rx="1.5"/>',c:'#5B5BD6'},
+  {s:'<path d="M10 24 H36 M29 17 L36 24 L29 31"/>',c:'#2F6FB0'},
+  {s:'<circle cx="24" cy="24" r="12.5"/>',c:'#1B1B1F'},
+  {s:'<path d="M24 12 L37 35 H11 Z"/>',c:'#5B5BD6'},
+  {s:'<path d="M12 11 V37 H38"/><path d="M14 15 Q24 40 36 15" stroke-width="2"/>',c:'#1B1B1F'},
+  {s:'<path d="M10 24 H38 M16 18 L10 24 L16 30 M32 18 L38 24 L32 30"/>',c:'#2F6FB0'},
+  {s:'<path d="M11 34 H19 V26 H27 V18 H35 V10"/>',c:'#1B1B1F'},
+  {s:'<path d="M24 13 L34 24 L24 35 L14 24 Z"/>',c:'#5B5BD6'},
+  {s:'<path d="M24 12 L27.4 20.6 L36.5 21.2 L29.5 27.1 L31.7 36 L24 31.2 L16.3 36 L18.5 27.1 L11.5 21.2 L20.6 20.6 Z"/>',c:'#2F6FB0'},
+  {s:'<path d="M13 12 V36 M13 24 H34 M28 18 L34 24 L28 30"/>',c:'#1B1B1F'},
+  {s:'<path d="M12 15 H36 V33 H12 Z"/><path d="M12 15 L36 33 M36 15 L12 33" stroke-width="1.4"/>',c:'#1B1B1F'},
+  {s:'<path d="M13 30 Q20 12 28 22 T37 16"/>',c:'#5B5BD6'},
+  {s:'<path d="M24 11 V37 M11 24 H37"/><circle cx="24" cy="24" r="7"/>',c:'#2F6FB0'},
+  {s:'<path d="M12 30 L22 20 L28 26 L36 16"/>',c:'#1B1B1F'},
+  {s:'<path d="M11 14 H37 V34 H11 Z M18 14 V34 M26 14 V34 M11 24 H37"/>',c:'#2F6FB0'}
+];
+const CATS=[{id:'all',n:'全部'},{id:'shape',n:'图形'},{id:'arrow',n:'箭头'},{id:'hand',n:'手写'}];
+
+const CARD_W=84, CARD_H=92, GAP=8, PAD=12, HEAD=28, HEAD_MIN=20;
+const IC={
+  trash:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 4.5 H13.5 M6 2.5 V4.5 M10 2.5 V4.5 M4 4.5 L4.8 13.2 H11.2 L12 4.5 M6.6 7 V11 M9.4 7 V11"/></svg>',
+  check:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M5.4 8.2 L7.2 10 L10.6 6.3"/></svg>',
+  x:'<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4 L12 12 M12 4 L4 12"/></svg>',
+  down:'<svg width="10" height="7" viewBox="0 0 12 9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2.5 L6 6.5 L10 2.5"/></svg>'
+};
+
+let theme='light', cols=8, rows=3, state='default', cat='all', sel=new Set(), trashN=2, fly=false, menu=null;
+let dragPaint=null;
+
+function panelW(c){return PAD*2 + c*CARD_W + (c-1)*GAP;}
+function panelH(r){return PAD*2 + (r===1?HEAD_MIN:HEAD) + 8 + r*CARD_H + (r-1)*GAP;}
+function useTabs(){return panelW(cols)>=440 && rows>1;}
+
+function cardSVG(i,color){
+  const o=S[i%S.length];
+  return '<svg viewBox="0 0 48 48" fill="none" stroke="'+(color||o.c)+
+    '" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'+o.s+'</svg>';
+}
+
+function barHTML(){
+  if(state==='select'){
+    return '<div class="bar" style="height:28px">'+
+      '<div class="grip"></div>'+
+      '<span id="selN" style="font-size:13px;font-weight:500;margin-left:4px">已选 '+sel.size+'</span>'+
+      '<span class="act acc">全选</span>'+
+      '<div style="flex:1"></div>'+
+      '<span class="act">移动到 '+IC.down+'</span>'+
+      '<span class="act dgr">删除</span>'+
+      '<span class="act">取消</span></div>';
+  }
+  if(state==='trash'){
+    return '<div class="bar" style="height:28px">'+
+      '<div class="grip"></div>'+
+      '<span class="act">‹ 返回</span>'+
+      '<span style="font-size:13px;font-weight:500;margin-left:2px">回收站</span>'+
+      '<span style="font-size:12px;color:var(--ink3)">'+trashN+'</span>'+
+      '<div style="flex:1"></div>'+
+      (trashN?'<span class="act dgr">清空</span>':'')+'</div>';
+  }
+
+  const h = rows===1?HEAD_MIN:HEAD;
+  const trash = trashN? '<div class="ib">'+IC.trash+'<span class="bdg">'+trashN+'</span></div>' : '';
+  const tail = '<div class="tools">'+trash+
+    '<div class="ib acc" data-a="select">'+IC.check+'</div>'+
+    '<div class="ib" data-a="close">'+IC.x+'</div></div>';
+
+  if(useTabs()){
+    const tabs = CATS.map(c=>'<span class="tab '+(c.id===cat?'on':'')+'" data-a="tab" data-id="'+c.id+'">'+c.n+'</span>').join('');
+    return '<div class="bar'+(rows===1?' compact':'')+'" style="height:'+h+'px">'+
+      '<div class="grip"></div>'+
+      '<div class="tabs">'+tabs+'<span class="plus" data-a="newcat">＋</span></div>'+tail+'</div>';
+  }
+  return '<div class="bar'+(rows===1?' compact':'')+'" style="height:'+h+'px">'+
+    '<div class="grip"></div>'+
+    '<div class="dd" data-a="fly">'+CATS.find(c=>c.id===cat).n+' '+IC.down+'</div>'+
+    tail+'</div>';
+}
+
+function gridHTML(){
+  if(state==='trash'){
+    if(!trashN) return '<div class="empty" style="grid-column:1/-1">回收站是空的</div>';
+    let h='';
+    for(let i=0;i<trashN;i++)
+      h+='<div class="card dead" data-a="restore" data-i="'+i+'">'+cardSVG(i,'#9AA3B2')+'</div>';
+    return h;
+  }
+  let h='';
+  for(let i=0;i<cols*rows;i++){
+    const on=sel.has(i);
+    h+='<div class="card '+(on?'sel':'')+'" data-a="card" data-i="'+i+'">'+
+       (state==='select'?'<div class="ck '+(on?'on':'')+'">'+(on?'✓':'')+'</div>':'')+
+       cardSVG(i)+
+       (state==='default'?'<div class="mini">⋯</div>':'')+'</div>';
+  }
+  return h;
+}
+
+function render(){
+  const p=document.getElementById('panel');
+  p.style.width=panelW(cols)+'px';
+  p.style.height=panelH(rows)+'px';
+  p.className='panel'+(state==='select'?' selmode':'');
+  p.innerHTML = barHTML() +
+    '<div class="grid" style="grid-template-columns:repeat('+cols+',84px)">'+gridHTML()+'</div>' +
+    (fly?'<div class="fly">'+CATS.map(c=>'<div class="frow '+(c.id===cat?'on':'')+
+        '" data-a="cat" data-id="'+c.id+'"><span>'+c.n+'</span></div>').join('')+
+        '<div class="frow" data-a="newcat"><span>＋ 新建分类</span></div></div>':'');
+  document.getElementById('read').innerHTML =
+    '面板 <b>'+panelW(cols)+'×'+panelH(rows)+'</b> ｜ '+cols+' 列 × '+rows+' 行 ｜ 顶栏 '+
+    (rows===1?HEAD_MIN:HEAD)+'px ｜ '+(useTabs()?'分类页签':'分类下拉');
+  bind();
+}
+
+function bind(){
+  const p=document.getElementById('panel');
+  p.querySelectorAll('[data-a]').forEach(el=>{
+    el.onclick=e=>{
+      e.stopPropagation();
+      const a=el.dataset.a;
+      if(a==='tab'||a==='cat'){ cat=el.dataset.id; fly=false; render(); }
+      else if(a==='fly'){ fly=!fly; render(); }
+      else if(a==='select'){ state='select'; sel.clear(); fly=false; render(); }
+      else if(a==='close'){ state='default'; fly=false; render(); }
+      else if(a==='newcat'){ alert('新建分类：原地弹输入框'); fly=false; render(); }
+      else if(a==='restore'){ trashN=Math.max(0,trashN-1); render(); }
+      else if(a==='card'){
+        if(state==='select'){ const i=+el.dataset.i; sel.has(i)?sel.delete(i):sel.add(i); render(); }
+      }
+    };
+  });
+
+  if(state==='select'){
+    p.querySelectorAll('.card').forEach(c=>{
+      c.onpointerdown=e=>{
+        const i=+c.dataset.i;
+        dragPaint = !sel.has(i);
+        apply(i, dragPaint);
+        e.preventDefault();
+      };
+      c.onpointerenter=()=>{ if(dragPaint!==null) apply(+c.dataset.i, dragPaint); };
+    });
+    window.onpointerup=()=>{ dragPaint=null; };
+  }
+  p.onclick=e=>{ if(fly){ fly=false; render(); } };
+}
+function apply(i,on){
+  if(on) sel.add(i); else sel.delete(i);
+  const c=document.querySelector('.card[data-i="'+i+'"]');
+  if(!c) return;
+  c.classList.toggle('sel',on);
+  const ck=c.querySelector('.ck');
+  if(ck){ ck.classList.toggle('on',on); ck.textContent=on?'✓':''; }
+  const t=document.getElementById('selN');
+  if(t) t.textContent='已选 '+sel.size;
+}
+
+const colBox=document.getElementById('cols');
+[3,4,5,6,7,8,9,10].forEach(n=>{
+  const b=document.createElement('button');
+  b.className='tb'+(n===8?' on':''); b.textContent=n;
+  b.onclick=()=>{ cols=n; [...colBox.children].forEach(x=>x.classList.remove('on')); b.classList.add('on'); render(); };
+  colBox.appendChild(b);
+});
+const rowBox=document.getElementById('rows');
+[1,2,3].forEach(n=>{
+  const b=document.createElement('button');
+  b.className='tb'+(n===3?' on':''); b.textContent=n;
+  b.onclick=()=>{ rows=n; [...rowBox.children].forEach(x=>x.classList.remove('on')); b.classList.add('on'); render(); };
+  rowBox.appendChild(b);
+});
+document.getElementById('theme').onclick=e=>{
+  theme=theme==='light'?'dark':'light';
+  document.documentElement.setAttribute('data-theme',theme);
+  e.target.textContent=theme==='light'?'深色':'浅色';
+  render();
+};
+document.getElementById('reset').onclick=()=>{
+  cols=8; rows=3; state='default'; cat='all'; sel.clear(); fly=false; trashN=2;
+  [...colBox.children].forEach((x,i)=>x.classList.toggle('on',i===5));
+  [...rowBox.children].forEach((x,i)=>x.classList.toggle('on',i===2));
+  render();
+};
+render();
+</script>
+</body>
+</html>

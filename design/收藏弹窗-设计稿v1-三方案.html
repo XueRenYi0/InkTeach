@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>收藏弹窗 · 设计稿 v1（三方案）</title>
+<style>
+:root{
+  --board:#ECEEF2; --panel:#FBFBFD; --card:#FFFFFF;
+  --border:rgba(23,26,33,.15); --card-border:rgba(23,26,33,.16);
+  --ink:#1B1B1F; --ink2:#5A6070; --ink3:#7A8190;
+  --hover:rgba(0,0,0,.055); --accent:#0067C0; --accent-bg:#F2F7FC;
+  --chip:#F0F2F5; --chip-ink:#4A4F58; --danger:#B02A2A;
+  --grip:#D3D8E0; --page:#FFFFFF;
+}
+[data-theme="dark"]{
+  --board:#131315; --panel:#1F1F21; --card:#2A2A2D;
+  --border:rgba(255,255,255,.14); --card-border:rgba(255,255,255,.12);
+  --ink:#F0F0F2; --ink2:#B4BAC4; --ink3:#8B929E;
+  --hover:rgba(255,255,255,.08); --accent:#4FA8F5; --accent-bg:#1E2D3D;
+  --chip:#2F2F33; --chip-ink:#C7CCD4; --danger:#F2716E;
+  --grip:#4A4E57; --page:#25252A;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;
+     background:#FAFAFB;color:var(--ink);font-size:13px;line-height:1.6}
+[data-theme="dark"] body{background:#0D0D0F}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 24px 80px}
+h1{font-size:17px;font-weight:500;margin:0 0 6px}
+.sub{color:var(--ink3);font-size:12.5px;margin:0 0 20px}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
+.tb{padding:6px 14px;border-radius:999px;border:1px solid var(--border);background:transparent;
+    color:var(--ink2);cursor:pointer;font-size:13px;font-family:inherit}
+.tb.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.tb:hover{border-color:var(--accent)}
+.spacer{flex:1}
+.stage{background:var(--board);border-radius:14px;padding:22px}
+.row{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap}
+.cap{font-size:12px;color:var(--ink3);margin:8px 0 0}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;
+       position:relative;padding:12px;user-select:none}
+.grid{display:grid;gap:8px}
+.card{background:var(--card);border:1px solid var(--card-border);border-radius:10px;
+      display:flex;align-items:center;justify-content:center;position:relative;
+      cursor:pointer;transition:border-color .12s,background .12s}
+.card:hover{border-color:var(--accent)}
+.card svg{width:58%;height:58%;overflow:visible}
+.card.sel{border:2px solid var(--accent);background:var(--accent-bg)}
+.ck{position:absolute;left:4px;top:4px;width:18px;height:18px;border-radius:50%;
+    background:var(--page);border:1.5px solid var(--border);display:none}
+.selmode .ck{display:block}
+.ck.on{background:var(--accent);border-color:var(--accent);color:#fff;
+       font-size:11px;align-items:center;justify-content:center}
+.selmode .ck.on{display:flex}
+.dot{position:absolute;right:4px;top:4px;width:20px;height:20px;border-radius:50%;
+     background:var(--page);border:1px solid var(--border);color:var(--ink2);
+     font-size:12px;display:flex;align-items:center;justify-content:center;
+     opacity:0;transition:opacity .12s;line-height:1}
+.card:hover .dot{opacity:1}
+.head{display:flex;align-items:center;gap:8px;height:32px;margin-bottom:10px}
+.grip{width:5px;height:22px;border-radius:3px;background:var(--grip);flex:none}
+.grip.top{width:34px;height:5px;margin:0 auto 8px}
+.title{font-size:13px;font-weight:500;white-space:nowrap}
+.muted{font-size:12px;color:var(--ink3);white-space:nowrap}
+.chip{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--chip);
+      color:var(--chip-ink);white-space:nowrap;cursor:pointer;border:1px solid transparent}
+.chip.on{background:var(--accent);color:#fff}
+.chip.add{background:transparent;border:1px dashed var(--border);color:var(--ink2)}
+.kn{width:28px;height:28px;border-radius:50%;background:var(--page);border:1px solid var(--border);
+    color:var(--ink2);font-size:14px;display:flex;align-items:center;justify-content:center;
+    line-height:1;flex:none;cursor:pointer}
+.act{font-size:13px;color:var(--ink);white-space:nowrap;cursor:pointer;padding:2px 4px}
+.act.dgr{color:var(--danger)}
+.tab2{font-size:13px;color:var(--ink2);padding:3px 2px 8px;border-bottom:2px solid transparent;
+      white-space:nowrap;cursor:pointer}
+.tab2.on{color:var(--ink);font-weight:500;border-bottom-color:var(--accent)}
+.hint{font-size:12px;color:var(--ink3);margin-top:10px}
+.notes{margin-top:26px;display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+.note{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--page)}
+.note b{font-size:12.5px;font-weight:500;display:block;margin-bottom:4px}
+.note span{font-size:12px;color:var(--ink2);line-height:1.7}
+.oldhead{display:flex;align-items:center;gap:6px;height:36px;margin-bottom:4px;font-size:12.5px;color:var(--ink2)}
+.pill{background:var(--chip);border-radius:7px;padding:2px 8px;font-size:12px;color:var(--ink2)}
+.card.old{height:80px}
+.cname{position:absolute;bottom:3px;left:0;right:0;text-align:center;font-size:10.5px;color:var(--ink3)}
+.check0{position:absolute;right:3px;top:3px;width:16px;height:16px;border-radius:4px;
+        background:rgba(255,255,255,.9);border:1px solid var(--border)}
+.vp{width:100px}
+.vp.w2{width:190px}
+.vp.w3{width:280px}
+.vb{display:flex;flex-direction:column;gap:8px}
+.mini{height:4px;width:30px;border-radius:2px;background:var(--grip);margin:2px auto 0}
+.drawer{max-height:0;overflow:hidden;transition:max-height .18s ease}
+.drawer.open{max-height:44px}
+.drawer .head{margin-bottom:0;height:38px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>收藏弹窗 · 设计稿 v1</h1>
+  <p class="sub">三款信息架构对照 ＋ 竖排形态。点 ⋯ 看抽屉，点「选择」进选择态，卡片可点。</p>
+
+  <div class="bar">
+    <button class="tb on" data-plan="old">现状</button>
+    <button class="tb" data-plan="A">方案 A 净条</button>
+    <button class="tb" data-plan="B">方案 B 折叠胶囊</button>
+    <button class="tb" data-plan="C">方案 C 分类页签</button>
+    <span class="spacer"></span>
+    <button class="tb" id="theme">深色</button>
+  </div>
+
+  <div class="stage" id="stage"></div>
+
+  <div class="notes" id="notes"></div>
+</div>
+
+<script>
+const C = {
+  blue:"#2F6FB0", violet:"#5B5BD6", ink:"#1B1B1F", gray:"#B9C0CB"
+};
+const S = [
+  {s:'<rect x="11" y="15" width="26" height="18" rx="1.5"/>', c:'blue'},
+  {s:'<path d="M11 17 L24 33 L37 17"/>', c:'ink'},
+  {s:'<path d="M11 17 L24 33 L37 17"/>', c:'ink'},
+  {s:'<rect x="11" y="15" width="26" height="18" rx="1.5"/>', c:'violet'},
+  {s:'<path d="M10 24 H36 M29 17 L36 24 L29 31"/>', c:'blue'},
+  {s:'<circle cx="24" cy="24" r="12.5"/>', c:'ink'},
+  {s:'<path d="M24 12 L37 35 H11 Z"/>', c:'violet'},
+  {s:'<path d="M12 11 V37 H38"/><path d="M14 15 Q24 40 36 15" stroke-width="2"/>', c:'ink'},
+  {s:'<path d="M10 24 H38 M16 18 L10 24 L16 30 M32 18 L38 24 L32 30"/>', c:'blue'},
+  {s:'<path d="M11 34 H19 V26 H27 V18 H35 V10"/>', c:'ink'},
+  {s:'<path d="M24 13 L34 24 L24 35 L14 24 Z"/>', c:'violet'},
+  {s:'<path d="M24 12 L27.4 20.6 L36.5 21.2 L29.5 27.1 L31.7 36 L24 31.2 L16.3 36 L18.5 27.1 L11.5 21.2 L20.6 20.6 Z"/>', c:'blue'},
+  {s:'<path d="M13 12 V36 M13 24 H34 M28 18 L34 24 L28 30"/>', c:'ink'},
+  {s:'<path d="M12 15 H36 V33 H12 Z"/><path d="M12 15 L36 33 M36 15 L12 33" stroke-width="1.4"/>', c:'ink'},
+  {s:'<path d="M13 30 Q20 12 28 22 T37 16"/>', c:'violet'},
+  {s:'<path d="M24 11 V37 M11 24 H37"/><circle cx="24" cy="24" r="7"/>', c:'blue'},
+  {s:'<path d="M12 30 L22 20 L28 26 L36 16"/>', c:'ink'},
+  {s:'<path d="M11 14 H37 V34 H11 Z M18 14 V34 M26 14 V34 M11 24 H37"/>', c:'blue'}
+];
+
+let theme = 'light';
+document.getElementById('theme').onclick = e => {
+  theme = theme === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', theme);
+  e.target.textContent = theme === 'light' ? '深色' : '浅色';
+  render(current);
+};
+
+function inkOf(key){
+  if (key === 'ink') return theme === 'dark' ? '#E8E8EC' : C.ink;
+  if (key === 'gray') return theme === 'dark' ? '#6B717C' : C.gray;
+  return C[key];
+}
+function svgOf(i){
+  const o = S[i % S.length], col = inkOf(o.c);
+  return '<svg viewBox="0 0 48 48" fill="none" stroke="'+col+
+         '" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'+o.s+'</svg>';
+}
+function cards(n, cls, withCheck){
+  let h = '';
+  for (let i = 0; i < n; i++){
+    h += '<div class="card '+cls+'" data-i="'+i+'">' + svgOf(i) +
+         (withCheck ? '<div class="ck"></div>' : '') +
+         '<div class="dot">⋯</div></div>';
+  }
+  return h;
+}
+
+const PLANS = {
+  old: {
+    label: '现状',
+    html: () => `
+      <div class="panel" style="width:820px">
+        <div class="oldhead">
+          <span style="color:var(--ink3);font-size:10px;letter-spacing:1px">⁙</span>
+          <span style="color:var(--ink);font-weight:500">收藏 · 9</span>
+          <span style="flex:1"></span>
+          <span class="pill">全部 · 9 ▾</span>
+          <span class="pill">＋</span>
+          <span class="pill">‹</span><span style="font-size:12px;color:var(--ink2)">1</span><span class="pill">›</span>
+          <span class="pill">↕</span><span class="pill">⋯</span><span class="pill">✕</span>
+        </div>
+        <div class="grid" style="grid-template-columns:repeat(9,1fr)">${cards(9,'old',false)
+          .replace(/<div class="dot">⋯<\/div>/g,'<div class="check0"></div>')
+          .replace(/<\/svg>/g,'</svg><div class="cname">矩形</div>')}</div>
+      </div>
+      <p class="cap">标题栏 36px 里挤了 7 个控件；每张卡常驻 16px 勾选框 ＋ 一行 10.5px 名字。</p>`,
+    notes: [
+      ['信息密度失衡', '常驻控件 7 个，卡片区只占面板高 78%。眼睛先看到按钮，不是内容。'],
+      ['勾选框成噪点', '9 张卡 9 个白框，占卡宽 22%，且和「点卡插入」抢同一次点击。'],
+      ['卡片偏小', '72×80 是笔尖容易点偏的尺寸。省掉标题栏可提到 84×92，面积 +34%。']
+    ]
+  },
+
+  A: {
+    label: '方案 A · 净条',
+    html: () => `
+      <div class="row">
+        <div>
+          <div class="panel" style="width:700px">
+            <div class="grid" style="grid-template-columns:repeat(8,1fr);gap:8px">${cards(16)}</div>
+            <div class="kn" style="position:absolute;right:10px;bottom:10px">⋯</div>
+            <div class="grip" style="position:absolute;left:2px;top:50%;margin-top:-11px"></div>
+          </div>
+          <p class="cap">常驻 1 个控件 · 内容占 96% · 卡片 84×92</p>
+        </div>
+      </div>
+      <p class="hint">整条面板除卡片外任何地方按住就能拖。卡片只负责「插入」和「拖动排序」，两个手势不打架。</p>
+      <p class="hint">分类、分页、布局方向、回收站全部在右下那颗 ⋯ 里。第一眼看到的是纯粹的内容。</p>`,
+    notes: [
+      ['优点', '最干净。第一眼完全没有按钮干扰，符合「初次点击简单」。'],
+      ['代价', '切分类要两次点击（⋯ → 分类）。分类多的老师会觉得绕。'],
+      ['适合', '收藏基本只有一个分类、或者分类很少的人。']
+    ]
+  },
+
+  B: {
+    label: '方案 B · 折叠胶囊',
+    html: () => `
+      <div class="row">
+        <div>
+          <div class="panel" style="width:700px" data-b>
+            <div class="head">
+              <div class="grip"></div>
+              <span class="title">全部</span><span class="muted">21</span>
+              <span style="flex:1"></span>
+              <div class="kn" data-open>⋯</div>
+            </div>
+            <div class="drawer" data-drawer>
+              <div class="head">
+                <div class="grip"></div>
+                <span class="chip on">全部 21</span><span class="chip">图形 8</span>
+                <span class="chip">箭头 6</span><span class="chip">手写 4</span>
+                <span class="chip add">＋</span>
+                <span style="flex:1"></span>
+                <span class="act" data-select>选择</span>
+                <div class="kn" data-close>⌃</div>
+              </div>
+            </div>
+            <div class="grid" style="grid-template-columns:repeat(7,1fr);gap:8px">${cards(14,'',true)}</div>
+          </div>
+          <p class="cap">点 ⋯ 展开抽屉（高度不变，不遮挡卡片）；再点 ⌃ 或点空白收起</p>
+        </div>
+      </div>
+      <p class="hint">默认只露「分类名 ＋ 数量 ＋ ⋯」三样。低频的东西（新建分类、布局方向、回收站、整理）都藏在抽屉第二层。</p>
+      <p class="hint">点「选择」进多选：卡片左上才出现勾选圈，顶部原地换成「已选 N ／ 移动 ／ 删除 ／ 取消」。</p>`,
+    notes: [
+      ['优点', '一次点击就到分类，又不用常驻一整条。抽屉原地展开不推挤卡片，不会跳。'],
+      ['关键', '抽屉只有 38px，等于把现在 36px 的标题栏换成了「按需出现」的抽屉。'],
+      ['适合', '绝大多数情况。这也是你说的「折叠式菜单」最直接的落地。']
+    ]
+  },
+
+  C: {
+    label: '方案 C · 分类页签',
+    html: () => `
+      <div class="row">
+        <div>
+          <div class="panel" style="width:700px">
+            <div class="head" style="gap:16px">
+              <span class="tab2 on">全部 21</span><span class="tab2">图形 8</span>
+              <span class="tab2">箭头 6</span><span class="tab2">手写 4</span>
+              <span style="flex:1"></span>
+              <div class="kn">⋯</div>
+            </div>
+            <div class="grid" style="grid-template-columns:repeat(8,1fr);gap:8px">${cards(16)}</div>
+          </div>
+          <p class="cap">常驻 5 个控件 · 内容占 84% · 分类一眼可见</p>
+        </div>
+      </div>
+      <p class="hint">分类摊平成页签，切换是一次点击。选中项靠 2px 下划线 ＋ 加粗，投影上也认得出。</p>
+      <p class="hint">分类超过 5 个时页签横向滚动，最右放一颗固定的 ⋯，滚到哪它都不动。</p>`,
+    notes: [
+      ['优点', '分类可见性最好，一眼知道有哪些类、各类多少张。切换成本最低。'],
+      ['代价', '常驻信息最多，卡片区比 B 矮 34px（少半行）。'],
+      ['适合', '分类固定且常用（图形／箭头／手写／公式这类三五个），且你希望上课时一键换类。']
+    ]
+  }
+};
+
+let current = 'old';
+function render(plan){
+  current = plan;
+  const p = PLANS[plan];
+  document.getElementById('stage').innerHTML = p.html();
+  document.getElementById('notes').innerHTML = p.notes.map(
+    n => '<div class="note"><b>'+n[0]+'</b><span>'+n[1]+'</span></div>').join('');
+  bind();
+}
+function bind(){
+  document.querySelectorAll('[data-plan]').forEach(b => b.onclick = () => {
+    document.querySelectorAll('[data-plan]').forEach(x => x.classList.remove('on'));
+    b.classList.add('on'); render(b.dataset.plan);
+  });
+  const panel = document.querySelector('[data-b]');
+  if (panel){
+    const drawer = panel.querySelector('[data-drawer]');
+    panel.querySelector('[data-open]').onclick = () => drawer.classList.add('open');
+    panel.querySelector('[data-close]').onclick = () => drawer.classList.remove('open');
+    panel.querySelector('[data-select]').onclick = () => {
+      panel.classList.add('selmode');
+      const head = drawer.querySelector('.head');
+      head.innerHTML = '<div class="grip"></div><span class="title">已选 0</span>' +
+        '<span style="flex:1"></span><span class="act">移动 ▾</span>' +
+        '<span class="act dgr">删除</span><span class="act" data-cancel>取消</span>';
+      let n = 0;
+      panel.querySelectorAll('.card').forEach(c => c.onclick = () => {
+        c.classList.toggle('sel');
+        const ck = c.querySelector('.ck');
+        ck.classList.toggle('on'); ck.textContent = ck.classList.contains('on') ? '✓' : '';
+        n = panel.querySelectorAll('.card.sel').length;
+        head.querySelector('.title').textContent = '已选 ' + n;
+      });
+      head.querySelector('[data-cancel]').onclick = () => {
+        drawer.classList.remove('open'); render('B');
+      };
+    };
+  }
+}
+render('old');
+</script>
+</body>
+</html>

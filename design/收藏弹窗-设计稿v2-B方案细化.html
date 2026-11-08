@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>收藏弹窗 · 设计稿 v2（B 方案细化）</title>
+<style>
+:root{
+  --board:#ECEEF2; --panel:#FBFBFD; --card:#FFFFFF;
+  --border:rgba(23,26,33,.15); --cb:rgba(23,26,33,.16);
+  --ink:#1B1B1F; --ink2:#5A6070; --ink3:#7A8190;
+  --hover:rgba(0,0,0,.055); --accent:#0067C0; --accent-bg:#F2F7FC;
+  --chip:#F0F2F5; --chip-ink:#4A4F58; --danger:#B02A2A;
+  --grip:#D3D8E0; --white:#FFFFFF; --menu-shadow:0 8px 22px rgba(0,0,0,.10);
+}
+[data-theme="dark"]{
+  --board:#131315; --panel:#1F1F21; --card:#2A2A2D;
+  --border:rgba(255,255,255,.14); --cb:rgba(255,255,255,.12);
+  --ink:#F0F0F2; --ink2:#B4BAC4; --ink3:#8B929E;
+  --hover:rgba(255,255,255,.08); --accent:#4FA8F5; --accent-bg:#1E2D3D;
+  --chip:#2F2F33; --chip-ink:#C7CCD4; --danger:#F2716E;
+  --grip:#4A4E57; --white:#25252A; --menu-shadow:0 8px 22px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;
+     background:#FAFAFB;color:var(--ink);font-size:13px;line-height:1.6}
+[data-theme="dark"] body{background:#0D0D0F}
+.wrap{max-width:1000px;margin:0 auto;padding:26px 22px 70px}
+h1{font-size:17px;font-weight:500;margin:0 0 5px}
+.sub{color:var(--ink3);font-size:12.5px;margin:0 0 18px}
+.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+.tb{padding:6px 13px;border-radius:999px;border:1px solid var(--border);background:transparent;
+    color:var(--ink2);cursor:pointer;font-size:12.5px;font-family:inherit}
+.tb.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.sep{width:1px;height:18px;background:var(--border);margin:0 4px}
+.stage{background:var(--board);border-radius:14px;padding:26px;position:relative;min-height:320px;
+       display:flex;align-items:center;justify-content:center}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;
+       position:relative;padding:12px;transition:width .18s}
+.hd{display:flex;align-items:center;gap:8px;height:36px;margin-bottom:10px}
+.hd.tight{height:32px}
+.grip{width:5px;height:22px;border-radius:3px;background:var(--grip);flex:none}
+.grip.top{width:34px;height:5px;margin:0 auto 6px}
+.sp{flex:1;min-width:4px}
+.t{font-size:13px;font-weight:500;white-space:nowrap}
+.n{font-size:12px;color:var(--ink3)}
+.ex{width:32px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+    flex:none;cursor:pointer}
+.ex:hover{background:var(--hover)}
+.pillb{display:flex;align-items:center;gap:6px;background:var(--chip);border-radius:999px;
+       padding:5px 12px;font-size:12.5px;color:var(--chip-ink);cursor:pointer;flex:none}
+.pillb:hover{background:var(--hover)}
+.chip{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--chip);
+      color:var(--chip-ink);white-space:nowrap;cursor:pointer;border:1px solid transparent}
+.chip.on{background:var(--accent);color:#fff}
+.chip.add{background:transparent;border:1px dashed var(--border);color:var(--ink2)}
+.chips{display:flex;gap:6px;overflow-x:auto;flex:1;min-width:0;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.dv{width:1px;height:20px;background:var(--border);flex:none}
+.ib{display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--ink2);
+    white-space:nowrap;padding:4px 7px;border-radius:8px;cursor:pointer;flex:none}
+.ib:hover{background:var(--hover)}
+.ib.acc{color:var(--accent)}
+.ib.dgr{color:var(--danger)}
+.bdg{background:var(--danger);color:#fff;border-radius:8px;font-size:10.5px;
+     padding:0 5px;line-height:15px}
+.grid{display:grid;gap:8px}
+.card{background:var(--card);border:1px solid var(--cb);border-radius:10px;
+      display:flex;align-items:center;justify-content:center;position:relative;
+      cursor:pointer;aspect-ratio:84/92;transition:border-color .12s,background .12s}
+.card:hover{border-color:var(--accent)}
+.card svg{width:56%;height:56%}
+.card.sel{border:2px solid var(--accent);background:var(--accent-bg)}
+.card.dead{border-style:dashed;border-color:rgba(23,26,33,.22);opacity:.62}
+.ck{position:absolute;left:4px;top:4px;width:18px;height:18px;border-radius:50%;
+    background:var(--white);border:1.5px solid var(--border);display:none}
+.selmode .ck{display:block}
+.ck.on{background:var(--accent);border-color:var(--accent);color:#fff;font-size:11px;
+       display:flex;align-items:center;justify-content:center}
+.dot{position:absolute;right:4px;top:4px;width:20px;height:20px;border-radius:50%;
+     background:var(--white);border:1px solid var(--border);color:var(--ink2);font-size:12px;
+     display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .12s}
+.card:hover .dot{opacity:1}
+.menu{position:absolute;background:var(--white);border:1px solid var(--border);border-radius:10px;
+      padding:5px;width:172px;box-shadow:var(--menu-shadow);z-index:9}
+.mi{font-size:12.5px;color:var(--ink);padding:6px 9px;border-radius:7px;display:flex;
+    align-items:center;gap:7px;cursor:pointer}
+.mi:hover{background:var(--hover)}
+.mi.on{color:var(--accent);font-weight:500}
+.msep{height:1px;background:var(--border);margin:4px 6px}
+.empty{grid-column:1/-1;text-align:center;color:var(--ink3);font-size:12.5px;padding:26px 0}
+.hint{font-size:12px;color:var(--ink3);margin:12px 0 0;text-align:center}
+table{width:100%;border-collapse:collapse;margin-top:26px;font-size:12.5px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+th{font-weight:500;color:var(--ink2);font-size:12px}
+td code{font-family:Consolas,monospace;font-size:11.5px;background:var(--chip);
+        padding:1px 5px;border-radius:4px;color:var(--ink2)}
+.badge0{font-size:11px;padding:1px 7px;border-radius:99px;background:var(--accent-bg);
+        color:var(--accent);white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>收藏弹窗 · 设计稿 v2</h1>
+  <p class="sub">B 方案细化：三重箭头展开分类，编辑／回收站／设置各归其位。可以直接点着走一遍。</p>
+
+  <div class="ctrl">
+    <button class="tb on" data-dir="h">横排（贴上下）</button>
+    <button class="tb" data-dir="v">竖排（贴左右）</button>
+    <div class="sep"></div>
+    <button class="tb on" data-ex="text">展开器：文字＋箭头</button>
+    <button class="tb" data-ex="tri">展开器：三重箭头</button>
+    <div class="sep"></div>
+    <button class="tb" id="theme">深色</button>
+    <div class="sep"></div>
+    <button class="tb" id="reset">回到默认态</button>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="panel" id="panel" style="width:760px">
+      <div id="bar"></div>
+      <div class="grid" id="grid"></div>
+    </div>
+  </div>
+  <p class="hint" id="hint"></p>
+
+  <table>
+    <tr><th style="width:120px">功能</th><th style="width:110px">放在哪</th><th>为什么</th></tr>
+    <tr><td>切换分类</td><td><span class="badge0">展开后 chips</span></td><td>最高频，展开就是给它用的。一次点击到位</td></tr>
+    <tr><td>新建分类</td><td>chips 末尾 <code>＋</code></td><td>跟在分类后面，位置符合预期</td></tr>
+    <tr><td>选择／批量编辑</td><td>展开后右侧「选择」</td><td>是"进入一个模式"，必须有明确入口，不能靠猜</td></tr>
+    <tr><td>移动 / 删除所选</td><td>选择态的顶部操作条</td><td>进了模式才出现，跟选择动作贴身</td></tr>
+    <tr><td>回收站</td><td>展开后独立图标 ＋ 红色角标</td><td>不是分类，是"撤销现场"。混进 chips 会误入</td></tr>
+    <tr><td>清空回收站</td><td>回收站视图右上</td><td>只在那个视图里出现，两段确认</td></tr>
+    <tr><td>横排／竖排</td><td>⚙ 菜单（带勾选的两行）</td><td>设一次就不动，用 <code>↕</code> 符号没人看得懂</td></tr>
+    <tr><td>重置大小／位置</td><td>⚙ 菜单</td><td>面板拖到屏幕外、缩成一条缝时的唯一救命入口</td></tr>
+    <tr><td>单卡重命名／移动</td><td>卡片悬停浮出小 <code>⋯</code></td><td>低频操作，不占常驻位置</td></tr>
+    <tr><td>拖动排序</td><td>卡片直接拖（出插入竖线）</td><td>已有能力，保留</td></tr>
+    <tr><td>插入到画布</td><td>拖卡片出面板（落点半透明预览）</td><td>已有能力，保留</td></tr>
+  </table>
+</div>
+
+<script>
+const S = [
+  {s:'<rect x="11" y="15" width="26" height="18" rx="1.5"/>', c:'blue'},
+  {s:'<path d="M11 17 L24 33 L37 17"/>', c:'ink'},
+  {s:'<path d="M11 17 L24 33 L37 17"/>', c:'ink'},
+  {s:'<rect x="11" y="15" width="26" height="18" rx="1.5"/>', c:'violet'},
+  {s:'<path d="M10 24 H36 M29 17 L36 24 L29 31"/>', c:'blue'},
+  {s:'<circle cx="24" cy="24" r="12.5"/>', c:'ink'},
+  {s:'<path d="M24 12 L37 35 H11 Z"/>', c:'violet'},
+  {s:'<path d="M12 11 V37 H38"/><path d="M14 15 Q24 40 36 15" stroke-width="2"/>', c:'ink'},
+  {s:'<path d="M10 24 H38 M16 18 L10 24 L16 30 M32 18 L38 24 L32 30"/>', c:'blue'},
+  {s:'<path d="M11 34 H19 V26 H27 V18 H35 V10"/>', c:'ink'},
+  {s:'<path d="M24 13 L34 24 L24 35 L14 24 Z"/>', c:'violet'},
+  {s:'<path d="M24 12 L27.4 20.6 L36.5 21.2 L29.5 27.1 L31.7 36 L24 31.2 L16.3 36 L18.5 27.1 L11.5 21.2 L20.6 20.6 Z"/>', c:'blue'},
+  {s:'<path d="M13 12 V36 M13 24 H34 M28 18 L34 24 L28 30"/>', c:'ink'},
+  {s:'<path d="M12 15 H36 V33 H12 Z"/><path d="M12 15 L36 33 M36 15 L12 33" stroke-width="1.4"/>', c:'ink'},
+  {s:'<path d="M13 30 Q20 12 28 22 T37 16"/>', c:'violet'},
+  {s:'<path d="M24 11 V37 M11 24 H37"/><circle cx="24" cy="24" r="7"/>', c:'blue'},
+  {s:'<path d="M12 30 L22 20 L28 26 L36 16"/>', c:'ink'},
+  {s:'<path d="M11 14 H37 V34 H11 Z M18 14 V34 M26 14 V34 M11 24 H37"/>', c:'blue'}
+];
+const CATS = [{id:'all',n:'全部',c:21},{id:'shape',n:'图形',c:8},
+              {id:'arrow',n:'箭头',c:6},{id:'hand',n:'手写',c:4}];
+
+let theme='light', dir='h', exStyle='text';
+let state='default';          // default | expanded | select | trash
+let cat='all', sel=new Set(), trashN=3, menu=null;
+let confirmDel=false, confirmEmpty=false;
+
+const ICON = {
+  trash:'<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 4.5 H13.5 M6 2.5 V4.5 M10 2.5 V4.5 M4 4.5 L4.8 13.2 H11.2 L12 4.5 M6.4 7 V11 M9.6 7 V11"/></svg>',
+  check:'<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M5.4 8.2 L7.2 10 L10.6 6.3"/></svg>',
+  gear:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.9 V3.3 M8 12.7 V14.1 M1.9 8 H3.3 M12.7 8 H14.1 M3.7 3.7 L4.7 4.7 M11.3 11.3 L12.3 12.3 M12.3 3.7 L11.3 4.7 M4.7 11.3 L3.7 12.3"/></svg>',
+  down:'<svg width="12" height="9" viewBox="0 0 12 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2.5 L6 6.5 L10 2.5"/></svg>',
+  up:'<svg width="12" height="9" viewBox="0 0 12 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.5 L6 2.5 L10 6.5"/></svg>',
+  tri:o=>`<svg width="20" height="22" viewBox="0 0 20 22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="${o?'M4 18 L10 13 L16 18':'M4 4 L10 9 L16 4'}" opacity="1"/>
+    <path d="${o?'M4 12.5 L10 7.5 L16 12.5':'M4 9.5 L10 14.5 L16 9.5'}" opacity=".52"/>
+    <path d="${o?'M4 7 L10 2 L16 7':'M4 15 L10 20 L16 15'}" opacity=".26"/></svg>`
+};
+
+function ink(c){
+  if(c==='ink') return theme==='dark'?'#E8E8EC':'#1B1B1F';
+  if(c==='gray') return theme==='dark'?'#6B717C':'#B9C0CB';
+  return c==='blue'?'#2F6FB0':'#5B5BD6';
+}
+function shapeSVG(i,custom){
+  const o=S[i%S.length];
+  return '<svg viewBox="0 0 48 48" fill="none" stroke="'+(custom||ink(o.c))+
+    '" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'+o.s+'</svg>';
+}
+function expander(open){
+  if(exStyle==='tri')
+    return '<div class="ex" data-a="toggle">'+ICON.tri(open)+'</div>';
+  return '<div class="pillb" data-a="toggle">'+(open?'收起':'展开')+(open?ICON.up:ICON.down)+'</div>';
+}
+function catOf(id){return CATS.find(c=>c.id===id)||CATS[0];}
+
+function barHTML(){
+  const g = dir==='h' ? '<div class="grip"></div>' : '<div class="grip top"></div>';
+  if(state==='default'){
+    return '<div class="hd">'+g+'<span class="t">'+catOf(cat).n+'</span>'+
+           '<span class="n">'+catOf(cat).c+'</span><span class="sp"></span>'+
+           expander(false)+'</div>';
+  }
+  if(state==='expanded'){
+    const chips = CATS.map(c=>'<span class="chip '+(c.id===cat?'on':'')+
+        '" data-a="cat" data-id="'+c.id+'">'+c.n+' '+c.c+'</span>').join('')+
+      '<span class="chip add" data-a="newcat">＋</span>';
+    return '<div class="hd">'+g+
+      '<div class="chips">'+chips+'</div>'+
+      (dir==='h'?'<div class="dv"></div>':'')+
+      '<div class="ib" data-a="trash">'+ICON.trash+(trashN?'<span class="bdg">'+trashN+'</span>':'')+'</div>'+
+      '<div class="ib acc" data-a="select">'+ICON.check+'<span>'+(dir==='h'?'选择':'')+'</span></div>'+
+      '<div class="ib" data-a="gear">'+ICON.gear+'</div>'+
+      '<div class="ex" data-a="toggle">'+(exStyle==='tri'?ICON.tri(true):ICON.up)+'</div></div>';
+  }
+  if(state==='select'){
+    return '<div class="hd">'+g+'<span class="t">已选 '+sel.size+'</span>'+
+      '<span class="ib acc" data-a="all">全选</span><span class="sp"></span>'+
+      '<span class="ib" data-a="move">移动到 '+ICON.down+'</span>'+
+      '<span class="ib dgr" data-a="del">'+(confirmDel?'再点一次':'删除')+'</span>'+
+      '<div class="dv"></div>'+
+      '<span class="ib" data-a="cancel">取消</span></div>';
+  }
+  if(state==='trash'){
+    return '<div class="hd">'+g+'<span class="ib" data-a="back">‹ 返回收藏</span>'+
+      '<div class="dv"></div><span class="t">回收站</span><span class="n">'+trashN+'</span>'+
+      '<span class="sp"></span>'+
+      (trashN?'<span class="ib dgr" data-a="empty">'+(confirmEmpty?'确认清空':'清空')+'</span>':'')+
+      '</div>';
+  }
+  return '';
+}
+
+function gridHTML(){
+  if(state==='trash'){
+    if(trashN===0) return '<div class="empty">回收站是空的</div>';
+    let h='';
+    for(let i=0;i<trashN;i++)
+      h+='<div class="card dead" data-a="restore" data-i="'+i+'">'+shapeSVG(i,'#9AA3B2')+'</div>';
+    return h;
+  }
+  let h='';
+  const n = dir==='h'?16:6;
+  for(let i=0;i<n;i++){
+    const on = sel.has(i);
+    h+='<div class="card '+(on?'sel':'')+'" data-a="card" data-i="'+i+'">'+
+       (state==='select'?'<div class="ck '+(on?'on':'')+'">'+(on?'✓':'')+'</div>':'')+
+       shapeSVG(i)+
+       (state==='default'?'<div class="dot">⋯</div>':'')+
+       '</div>';
+  }
+  return h;
+}
+
+function hintText(){
+  if(state==='default') return '默认态：只露「分类名 ＋ 数量 ＋ 展开器」，其余全部藏起来。点展开器继续。';
+  if(state==='expanded') return '工具带：分类 chips（可横滚）｜回收站／选择／设置｜收起。再点展开器收起，点画板空白也收。';
+  if(state==='select') return '选择态：点整张卡就是勾选，不用戳角上的小圈。删除是两段确认。';
+  return '回收站：虚线边 ＋ 六折灰。点卡片直接还原，不用另找按钮。';
+}
+
+function render(){
+  const panel=document.getElementById('panel');
+  panel.style.width = dir==='h' ? '760px' : '230px';
+  panel.className = 'panel' + (state==='select'?' selmode':'');
+  document.getElementById('bar').innerHTML = barHTML();
+  const grid=document.getElementById('grid');
+  grid.style.gridTemplateColumns = 'repeat('+(dir==='h'?8:2)+',minmax(0,1fr))';
+  grid.innerHTML = gridHTML();
+  document.getElementById('hint').textContent = hintText();
+  document.getElementById('stage').querySelectorAll('.menu').forEach(m=>m.remove());
+  if(menu==='gear') showMenu(panel);
+  bindStage();
+}
+
+function showMenu(panel){
+  const m=document.createElement('div');
+  m.className='menu'; m.style.right='46px'; m.style.top='54px';
+  m.innerHTML =
+    '<div class="mi on">✓ 横排（贴上下）</div>'+
+    '<div class="mi" data-a="vert">　竖排（贴左右）</div>'+
+    '<div class="msep"></div>'+
+    '<div class="mi" data-a="resetsize">重置面板大小</div>'+
+    '<div class="mi" data-a="resetpos">面板回到默认位置</div>';
+  panel.appendChild(m);
+  m.querySelector('[data-a=vert]').onclick=()=>{dir='v';menu=null;setDirUI();render();};
+}
+
+function bindStage(){
+  document.querySelectorAll('[data-a]').forEach(el=>{
+    const a=el.dataset.a;
+    el.onclick=(e)=>{
+      e.stopPropagation();
+      if(a==='toggle'){ state = state==='expanded'?'default':'expanded'; menu=null; confirmDel=false; render(); }
+      else if(a==='cat'){ cat=el.dataset.id; render(); }
+      else if(a==='newcat'){ alert('这里弹一个输入框，新建分类'); }
+      else if(a==='trash'){ state='trash'; menu=null; render(); }
+      else if(a==='select'){ state='select'; sel.clear(); menu=null; render(); }
+      else if(a==='gear'){ menu = menu==='gear'?null:'gear'; render(); }
+      else if(a==='back'){ state='expanded'; render(); }
+      else if(a==='empty'){
+        if(confirmEmpty){ trashN=0; confirmEmpty=false; }
+        else { confirmEmpty=true; }
+        render();
+      }
+      else if(a==='restore'){
+        trashN--; render();
+      }
+      else if(a==='card'){
+        if(state==='select'){
+          const i=+el.dataset.i;
+          sel.has(i)?sel.delete(i):sel.add(i);
+          confirmDel=false; render();
+        } else {
+          alert('插入这张卡到画布');
+        }
+      }
+      else if(a==='all'){ sel=new Set([...Array(dir==='h'?16:6).keys()]); render(); }
+      else if(a==='cancel'){ state='expanded'; sel.clear(); confirmDel=false; render(); }
+      else if(a==='del'){
+        if(confirmDel){ sel.clear(); confirmDel=false; } else { confirmDel=true; }
+        render();
+      }
+      else if(a==='move'){ alert('这里弹分类 chips 浮层，选一个目标分类'); }
+      else if(a==='resetsize'){ alert('面板尺寸回到默认（3 行 / 2 列）'); menu=null; render(); }
+      else if(a==='resetpos'){ alert('面板回到屏幕默认位置'); menu=null; render(); }
+      else if(a==='vert'){ dir='v'; menu=null; setDirUI(); render(); }
+    };
+  });
+}
+
+function setDirUI(){
+  document.querySelectorAll('[data-dir]').forEach(b=>
+    b.classList.toggle('on', b.dataset.dir===dir));
+}
+document.querySelectorAll('[data-dir]').forEach(b=>b.onclick=()=>{
+  dir=b.dataset.dir; setDirUI(); render();
+});
+document.querySelectorAll('[data-ex]').forEach(b=>b.onclick=()=>{
+  exStyle=b.dataset.ex;
+  document.querySelectorAll('[data-ex]').forEach(x=>x.classList.toggle('on',x===b));
+  render();
+});
+document.getElementById('theme').onclick=e=>{
+  theme = theme==='light'?'dark':'light';
+  document.documentElement.setAttribute('data-theme',theme);
+  e.target.textContent = theme==='light'?'深色':'浅色';
+  render();
+};
+document.getElementById('reset').onclick=()=>{
+  state='default'; sel.clear(); menu=null; confirmDel=false; confirmEmpty=false; trashN=3; cat='all';
+  render();
+};
+document.getElementById('stage').onclick=()=>{
+  if(state==='expanded'||menu){ state=state==='expanded'?'default':state; menu=null; render(); }
+};
+render();
+</script>
+</body>
+</html>

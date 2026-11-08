@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>画笔常用色 · 5 行 40 色</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; width: 1280px; height: 780px; overflow: hidden;
+    background:
+      radial-gradient(1100px 650px at 12% 0%, #ffffff 0%, rgba(255,255,255,0) 60%),
+      linear-gradient(160deg, #eef2f7 0%, #e7ecf3 55%, #e3e9f1 100%);
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+    color: #0f172a;
+  }
+  .page { position: relative; width: 1280px; height: 780px; }
+  .title { position: absolute; left: 60px; top: 36px; font-size: 29px; font-weight: 700; letter-spacing: .2px; }
+  .subtitle { position: absolute; left: 60px; top: 80px; font-size: 16px; color: #64748b; }
+  .note {
+    position: absolute; right: 60px; top: 44px; padding: 9px 14px;
+    border-radius: 999px; background: rgba(255,255,255,.72); border: 1px solid #dbe3ec;
+    font-size: 14px; color: #475569;
+  }
+  .note b { color: #2563eb; }
+
+  .card {
+    position: absolute; left: 60px; top: 122px; width: 1160px; height: 604px;
+    border-radius: 24px; background: #fcfcfd; border: 1px solid #e2e7ee;
+    box-shadow: 0 24px 70px rgba(20,30,50,.14), 0 3px 12px rgba(20,30,50,.05);
+    padding: 22px 28px;
+  }
+  .row { display: flex; align-items: center; height: 112px; }
+  .row + .row { border-top: 1px solid #edf1f6; }
+  .label { width: 150px; flex: 0 0 150px; }
+  .label b { display: block; font-size: 18px; font-weight: 700; }
+  .label span { display: block; margin-top: 4px; font-size: 13px; color: #94a3b8; }
+  .items { display: grid; grid-template-columns: repeat(8, 76px); gap: 12px; }
+  .item { width: 76px; }
+  .sw {
+    width: 76px; height: 56px; border-radius: 11px;
+    box-shadow: inset 0 0 0 1px rgba(15,23,42,.13), 0 1px 2px rgba(15,23,42,.05);
+  }
+  .sw.white, .sw.light { box-shadow: inset 0 0 0 1px rgba(15,23,42,.24), 0 1px 2px rgba(15,23,42,.05); }
+  .name { margin-top: 5px; font-size: 13px; font-weight: 600; color: #334155; }
+  .hex { margin-top: 1px; font-family: Consolas, "Cascadia Mono", monospace; font-size: 10px; color: #94a3b8; letter-spacing: .2px; }
+  .foot {
+    position: absolute; left: 60px; top: 746px; width: 1160px; text-align: center;
+    font-size: 14px; color: #64748b;
+  }
+  .foot b { color: #334155; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="title">画笔常用色 · 5 行 40 色</div>
+  <div class="subtitle">按课堂用途分组，不是色轮：默认 / 批改强调 / 公式理科 / 结构中性 / 暗板浅色。</div>
+  <div class="note">5 行是<b>上限</b>；4 行更紧凑</div>
+
+  <div class="card">
+    <!-- 1 默认 -->
+    <div class="row">
+      <div class="label"><b>默认</b><span>现在色带上的 8 色</span></div>
+      <div class="items">
+        <div class="item"><div class="sw" style="background:#1e1e1e"></div><div class="name">黑</div><div class="hex">#1E1E1E</div></div>
+        <div class="item"><div class="sw" style="background:#f22e2e"></div><div class="name">红</div><div class="hex">#F22E2E</div></div>
+        <div class="item"><div class="sw" style="background:#2173e6"></div><div class="name">蓝</div><div class="hex">#2173E6</div></div>
+        <div class="item"><div class="sw" style="background:#21b354"></div><div class="name">绿</div><div class="hex">#21B354</div></div>
+        <div class="item"><div class="sw" style="background:#fad11f"></div><div class="name">黄</div><div class="hex">#FAD11F</div></div>
+        <div class="item"><div class="sw" style="background:#fa8c17"></div><div class="name">橙</div><div class="hex">#FA8C17</div></div>
+        <div class="item"><div class="sw" style="background:#8c47db"></div><div class="name">紫</div><div class="hex">#8C47DB</div></div>
+        <div class="item"><div class="sw white" style="background:#ffffff"></div><div class="name">白</div><div class="hex">#FFFFFF</div></div>
+      </div>
+    </div>
+
+    <!-- 2 批改 / 强调 -->
+    <div class="row">
+      <div class="label"><b>批改 · 强调</b><span>红 / 橙 / 粉，白底最醒目</span></div>
+      <div class="items">
+        <div class="item"><div class="sw" style="background:#ff3b30"></div><div class="name">亮红</div><div class="hex">#FF3B30</div></div>
+        <div class="item"><div class="sw" style="background:#ff4500"></div><div class="name">朱红</div><div class="hex">#FF4500</div></div>
+        <div class="item"><div class="sw" style="background:#ff6b6b"></div><div class="name">珊瑚</div><div class="hex">#FF6B6B</div></div>
+        <div class="item"><div class="sw" style="background:#ff2d55"></div><div class="name">玫红</div><div class="hex">#FF2D55</div></div>
+        <div class="item"><div class="sw" style="background:#e91e63"></div><div class="name">品红</div><div class="hex">#E91E63</div></div>
+        <div class="item"><div class="sw" style="background:#ff7a00"></div><div class="name">亮橙</div><div class="hex">#FF7A00</div></div>
+        <div class="item"><div class="sw" style="background:#ffb300"></div><div class="name">琥珀</div><div class="hex">#FFB300</div></div>
+        <div class="item"><div class="sw light" style="background:#ffd54f"></div><div class="name">金</div><div class="hex">#FFD54F</div></div>
+      </div>
+    </div>
+
+    <!-- 3 公式 / 理科 -->
+    <div class="row">
+      <div class="label"><b>公式 · 理科</b><span>蓝 / 青 / 绿，定义和图形</span></div>
+      <div class="items">
+        <div class="item"><div class="sw" style="background:#0066ff"></div><div class="name">纯蓝</div><div class="hex">#0066FF</div></div>
+        <div class="item"><div class="sw" style="background:#38bdf8"></div><div class="name">天蓝</div><div class="hex">#38BDF8</div></div>
+        <div class="item"><div class="sw" style="background:#06b6d4"></div><div class="name">青</div><div class="hex">#06B6D4</div></div>
+        <div class="item"><div class="sw" style="background:#0d9488"></div><div class="name">蓝绿</div><div class="hex">#0D9488</div></div>
+        <div class="item"><div class="sw" style="background:#22c55e"></div><div class="name">亮绿</div><div class="hex">#22C55E</div></div>
+        <div class="item"><div class="sw" style="background:#34d399"></div><div class="name">薄荷</div><div class="hex">#34D399</div></div>
+        <div class="item"><div class="sw" style="background:#4f46e5"></div><div class="name">靛蓝</div><div class="hex">#4F46E5</div></div>
+        <div class="item"><div class="sw" style="background:#7c3aed"></div><div class="name">紫罗兰</div><div class="hex">#7C3AED</div></div>
+      </div>
+    </div>
+
+    <!-- 4 结构 / 中性 -->
+    <div class="row">
+      <div class="label"><b>结构 · 中性</b><span>坐标 / 辅助线 / 几何</span></div>
+      <div class="items">
+        <div class="item"><div class="sw" style="background:#374151"></div><div class="name">深灰</div><div class="hex">#374151</div></div>
+        <div class="item"><div class="sw" style="background:#6b7280"></div><div class="name">中灰</div><div class="hex">#6B7280</div></div>
+        <div class="item"><div class="sw" style="background:#9ca3af"></div><div class="name">浅灰</div><div class="hex">#9CA3AF</div></div>
+        <div class="item"><div class="sw light" style="background:#d1d5db"></div><div class="name">银灰</div><div class="hex">#D1D5DB</div></div>
+        <div class="item"><div class="sw" style="background:#1e3a8a"></div><div class="name">深蓝</div><div class="hex">#1E3A8A</div></div>
+        <div class="item"><div class="sw" style="background:#475569"></div><div class="name">石板</div><div class="hex">#475569</div></div>
+        <div class="item"><div class="sw" style="background:#92400e"></div><div class="name">棕</div><div class="hex">#92400E</div></div>
+        <div class="item"><div class="sw" style="background:#4d7c0f"></div><div class="name">橄榄</div><div class="hex">#4D7C0F</div></div>
+      </div>
+    </div>
+
+    <!-- 5 暗板 / 浅色 -->
+    <div class="row">
+      <div class="label"><b>暗板 · 浅色</b><span>绿板 / 黑板用，白底会淡</span></div>
+      <div class="items">
+        <div class="item"><div class="sw light" style="background:#fff8e7"></div><div class="name">奶油</div><div class="hex">#FFF8E7</div></div>
+        <div class="item"><div class="sw light" style="background:#fff59d"></div><div class="name">浅黄</div><div class="hex">#FFF59D</div></div>
+        <div class="item"><div class="sw light" style="background:#fdba74"></div><div class="name">浅橙</div><div class="hex">#FDBA74</div></div>
+        <div class="item"><div class="sw light" style="background:#86efac"></div><div class="name">浅绿</div><div class="hex">#86EFAC</div></div>
+        <div class="item"><div class="sw light" style="background:#67e8f9"></div><div class="name">浅青</div><div class="hex">#67E8F9</div></div>
+        <div class="item"><div class="sw light" style="background:#93c5fd"></div><div class="name">浅蓝</div><div class="hex">#93C5FD</div></div>
+        <div class="item"><div class="sw light" style="background:#c4b5fd"></div><div class="name">薰衣草</div><div class="hex">#C4B5FD</div></div>
+        <div class="item"><div class="sw light" style="background:#f9a8d4"></div><div class="name">浅粉</div><div class="hex">#F9A8D4</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot"><b>5 行 = 40 色：</b>首行默认保留肌肉记忆；后四行按用途分组。4 行（32 色）更紧凑，5 行适合大屏/触屏。</div>
+</div>
+</body>
+</html>
