@@ -28,11 +28,19 @@ internal sealed partial class App
             foreach (var s in doc.Strokes) strokes.Add(s);
         }
 
+        // 先把整块板子的笔宽中位数算出来，后面把所有笔往它靠——"同一支笔"
+        var widths = new List<float>();
+        foreach (var s in strokes)
+            if (s.Kind == StrokeKind.Freehand && s.Points.Count >= 3) widths.Add(s.Width);
+        widths.Sort();
+        float medianW = widths.Count > 0 ? widths[widths.Count / 2] : 0f;
+
         int smoothed = 0, freehand = 0;
         foreach (var s in strokes)
         {
             if (s.Kind != StrokeKind.Freehand || s.Points.Count < 3) continue;
             freehand++;
+            if (medianW > 0) s.Width = 0.5f * s.Width + 0.5f * medianW;
             for (int pass = 0; pass < passes; pass++)
             {
                 var src = s.Points.ToArray();
