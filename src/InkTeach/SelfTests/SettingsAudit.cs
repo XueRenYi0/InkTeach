@@ -312,6 +312,22 @@ internal static class SettingsAudit
             ui.OpenSettingsPageForTest();
         }
 
+        // 11) 启动器：绘制已搬到 MoreHomePage；格子/底栏命中仍走原表。
+        {
+            ui.OpenHomePageForTest();
+            var hub = ui.HubTileRectForTest(0);
+            int hubHit = ui.MoreHitAtForTest(
+                (hub.MinX + hub.MaxX) * 0.5f, (hub.MinY + hub.MaxY) * 0.5f);
+            var bottom = ui.HubBottomRectForTest(0);
+            int bottomHit = ui.MoreHitAtForTest(
+                (bottom.MinX + bottom.MaxX) * 0.5f, (bottom.MinY + bottom.MaxY) * 0.5f);
+            Check("启动器绘制/命中",
+                  ui.MorePageIdForTest == "more.home" && hubHit == 140 && bottomHit == 200
+                  && RenderSettingsPng(ui, "settings-home.png"),
+                  $"page={ui.MorePageIdForTest} hub={hubHit} bottom={bottomHit} reports/settings-home.png");
+            ui.OpenSettingsPageForTest();
+        }
+
         // 5) 每一行都能执行一次（不弹窗：命令全走 no-op 代理）
         // 先出两张图（顶部/底部），放在执行之前——执行会切深色主题，图会变。
         ui.SettingsScrollToForTest(0);

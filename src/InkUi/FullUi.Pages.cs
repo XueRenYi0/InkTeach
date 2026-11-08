@@ -1,3 +1,4 @@
+using System.Numerics;
 using InkEngine;
 using Vortice.Direct2D1;
 using Vortice.Mathematics;
@@ -27,6 +28,15 @@ public sealed partial class FullUi
         SetMorePage(MorePage.Home, push: false);
         SetMorePage(MorePage.Help, push: true);
         _moreH.Jump(MoreHelpH());
+        _more.Jump(1f);
+    }
+
+    internal void OpenHomePageForTest()
+    {
+        _moreOpen = true;
+        EnsurePageHost();
+        SetMorePage(MorePage.Home, push: false);
+        _moreH.Jump(MoreHomeH());
         _more.Jump(1f);
     }
 
@@ -77,7 +87,43 @@ public sealed partial class FullUi
             : base(ui, "more.home", "更多", new PageSize(0f, ui.MoreHomeH()), canBack: false) { }
 
         public override void Render(ID2D1DeviceContext ctx, in PageFrame frame)
-            => Ui.DrawMoreHome(ctx);
+        {
+            string[] heads = { "课堂", "墨迹" };
+            for (int s = 0; s < 2; s++)
+            {
+                Ui.DrawMoreGroupHead(ctx, Ui.HubHeadRect(s), heads[s]);
+                for (int i = 0; i < Ui.HubCount(s); i++)
+                {
+                    int code = Ui.HubTileCode(s, i);
+                    var info = Ui.HubTileInfo(code);
+                    Ui.DrawHubTile(ctx, Ui.HubTileRect(s, i), info.Label, info.Enabled, info.Danger,
+                                   MoreHitTile + code);
+                }
+            }
+
+            // 状态行：命令反馈（保存/打开/更新）——产品里不弹窗，结果都落在这儿。
+            // 没有要说的就显示**版本号**（用户 2026-10-08："软件里最好能看到版本号"）。
+            var st = Ui._host.State;
+            string status = !string.IsNullOrEmpty(Ui._hubHint) ? Ui._hubHint
+                          : !string.IsNullOrEmpty(st.InkStatus) ? st.InkStatus
+                          : st.UpdateStage != UpdateStage.Idle && !string.IsNullOrEmpty(st.UpdateText) ? st.UpdateText
+                          : $"v{ProductInfo.Version}";
+            var sr = Ui.HubStatusRect();
+            if (status.Length != 0)
+                Ui._widgets.Text(ctx, status, sr, 11.5f, Ui.Brush(ctx, Ui.MutedCol), center: false);
+
+            // 底栏固定五格（表在上面，绘制/命中/提示共用）
+            for (int i = 0; i < MoreBottomTiles.Length; i++)
+                Ui.DrawHubTile(ctx, Ui.HubBottomRect(i), MoreBottomTiles[i].Label, true, MoreBottomTiles[i].Danger,
+                               MoreHitBottom + i);
+
+            // 新版本红点：面板已经打开时落在「检查更新」这一格上（主条那颗此时被遮住）。
+            if (Ui.UpdateAvailable)
+            {
+                var tr = Ui.HubBottomRect(2);
+                Ui.DrawUpdateDot(ctx, new Vector2(tr.MaxX - 8f, tr.MinY + 8f), 4.5f, 1f);
+            }
+        }
     }
 
     private sealed class SettingsPage : MorePageBase
@@ -86,7 +132,84 @@ public sealed partial class FullUi
             : base(ui, "more.settings", "设置", new PageSize(0f, ui.MoreSettingsH()), canBack: true) { }
 
         public override void Render(ID2D1DeviceContext ctx, in PageFrame frame)
-            => Ui.DrawMoreSettings(ctx);
+        {
+            Ui.DrawSettingsNav(ctx);
+
+            var vp = Ui.SettingsViewportRect();
+            ctx.PushAxisAlignedClip(new Vortice.RawRectF(vp.MinX, vp.MinY, vp.MaxX, vp.MaxY),
+                                    AntialiasMode.Aliased);
+
+            // **一整页连续内容**：所有分类按顺序排下来，滚动只移动内容，不换页。
+            for (int c = 0; c < SettingsCatNames.Length; c++)
+            {
+                var cat = (SettingsCategory)c;
+                float headY = Ui.SettingsY(Ui.SettingsSectionTop(cat));
+                var head = new RectF
+                {
+                    MinX = Ui.SettingsContentLeft(), MinY = headY,
+                    MaxX = Ui.SettingsContentLeft() + Ui.SettingsContentW(),
+                    MaxY = headY + MoreGroupHeadH,
+                };
+                Ui.DrawMoreGroupHead(ctx, head, SettingsCatNames[c]);
+
+                if (cat == SettingsCategory.Toolbar)
+                {
+                    for (int i = 0; i < 3; i++)
+                    {
+                        var s = Ui.MoreProfileRect(i);
+                        bool active = Ui.ProfileIndex() == i;
+                        var rr = new RoundedRectangle(new Vortice.RawRectF(s.MinX, s.MinY, s.MaxX, s.MaxY), 8f, 8f);
+                        if (active) ctx.FillRoundedRectangle(rr, Ui.Brush(ctx, Tokens.Accent));
+                        else if (Ui._moreHover == MoreHitProfile + i) ctx.FillRoundedRectangle(rr, Ui.Brush(ctx, Ui.HoverCol));
+                        ctx.DrawRoundedRectangle(rr, Ui.Brush(ctx, active ? Tokens.Accent : Ui.BorderCol), 1f);
+                        Ui._widgets.Text(ctx, FullUi.ProfileName(i), s, 12.5f,
+                                      Ui.Brush(ctx, active ? Tokens.AccentInk : Ui.InkCol));
+                    }
+                    if (Ui.ChipsShown)
+                    {
+                        for (int cell = 1; cell < Cells.Length; cell++)
+                        {
+                            var cr = Ui.MoreChipRect(cell);
+                            bool pinned = Ui._pinned[cell];
+                            bool locked = !FullUi.CanUnpin(cell);
+                            var rr = new RoundedRectangle(new Vortice.RawRectF(cr.MinX, cr.MinY, cr.MaxX, cr.MaxY), 8f, 8f);
+                            if (!locked && Ui._moreHover == MoreHitChip + cell)
+                                ctx.FillRoundedRectangle(rr, Ui.Brush(ctx, Ui.HoverCol));
+                            ctx.DrawRoundedRectangle(rr, Ui.Brush(ctx, pinned ? Tokens.Accent : Ui.BorderCol), 1f);
+                            Ui.DrawCellIcon(ctx, cell, cr, Tokens.Icon,
+                                         new Color4(Ui.InkCol.R, Ui.InkCol.G, Ui.InkCol.B, pinned ? 1f : 0.35f),
+                                         pinned, Ui._host.State);
+                            if (!pinned)
+                                Ui._widgets.Text(ctx, "+", new RectF { MinX = cr.MaxX - 18f, MinY = cr.MinY + 2f, MaxX = cr.MaxX - 3f, MaxY = cr.MinY + 18f },
+                                              12f, Ui.Brush(ctx, Ui.MutedCol));
+                            if (locked) Ui.DrawLockBadge(ctx, cr);
+                        }
+                    }
+                    else
+                    {
+                        Ui._widgets.Text(ctx, "挑工具：切到「自定义」档，这里就能钉 / 取消钉",
+                                      new RectF
+                                      {
+                                          MinX = Ui.SettingsContentLeft(),
+                                          MinY = Ui.MoreProfileRect(0).MaxY + MoreChipTopGap,
+                                          MaxX = Ui.SettingsContentLeft() + Ui.SettingsContentW(),
+                                          MaxY = Ui.MoreProfileRect(0).MaxY + MoreChipTopGap + 32f,
+                                      },
+                                      11.5f, Ui.Brush(ctx, Ui.MutedCol), center: false);
+                    }
+                }
+                else
+                {
+                    foreach (var kind in SettingsRows(cat))
+                        for (int i = 0; i < Rows.Length; i++)
+                            if (Rows[i].Kind == kind) { Ui.DrawMoreRow(ctx, i); break; }
+                }
+            }
+
+            ctx.PopAxisAlignedClip();
+            if (Ui._settingsFocusVisible) Ui.DrawSettingsFocusRing(ctx);
+            Ui.DrawSettingsScrollbar(ctx);
+        }
     }
 
     private sealed class HelpPage : MorePageBase

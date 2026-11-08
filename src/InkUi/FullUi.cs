@@ -5412,41 +5412,9 @@ public sealed partial class FullUi : IOverlayUi
 
     private void DrawMoreHome(ID2D1DeviceContext ctx)
     {
-        string[] heads = { "课堂", "墨迹" };
-        for (int s = 0; s < 2; s++)
-        {
-            DrawMoreGroupHead(ctx, HubHeadRect(s), heads[s]);
-            for (int i = 0; i < HubCount(s); i++)
-            {
-                int code = HubTileCode(s, i);
-                var info = HubTileInfo(code);
-                DrawHubTile(ctx, HubTileRect(s, i), info.Label, info.Enabled, info.Danger,
-                            MoreHitTile + code);
-            }
-        }
-
-        // 状态行：命令反馈（保存/打开/更新）——产品里不弹窗，结果都落在这儿。
-        // 没有要说的就显示**版本号**（用户 2026-10-08："软件里最好能看到版本号"）。
-        var st = _host.State;
-        string status = !string.IsNullOrEmpty(_hubHint) ? _hubHint
-                      : !string.IsNullOrEmpty(st.InkStatus) ? st.InkStatus
-                      : st.UpdateStage != UpdateStage.Idle && !string.IsNullOrEmpty(st.UpdateText) ? st.UpdateText
-                      : $"v{ProductInfo.Version}";
-        var sr = HubStatusRect();
-        if (status.Length != 0)
-            _widgets.Text(ctx, status, sr, 11.5f, Brush(ctx, MutedCol), center: false);
-
-        // 底栏固定五格（表在上面，绘制/命中/提示共用）
-        for (int i = 0; i < MoreBottomTiles.Length; i++)
-            DrawHubTile(ctx, HubBottomRect(i), MoreBottomTiles[i].Label, true, MoreBottomTiles[i].Danger,
-                        MoreHitBottom + i);
-
-        // 新版本红点：面板已经打开时落在「检查更新」这一格上（主条那颗此时被遮住）。
-        if (UpdateAvailable)
-        {
-            var tr = HubBottomRect(2);
-            DrawUpdateDot(ctx, new Vector2(tr.MaxX - 8f, tr.MinY + 8f), 4.5f, 1f);
-        }
+        // A3.2：首页绘制已搬到 MoreHomePage；这里只保留 PageHost 未建立时的兜底。
+        if (_pageHost?.Current is MoreHomePage) { _pageHost.Render(ctx); return; }
+        new MoreHomePage(this).Render(ctx, PageFrame.Empty);
     }
 
     private void DrawMoreGroupHead(ID2D1DeviceContext ctx, RectF r, string label)
@@ -5456,81 +5424,9 @@ public sealed partial class FullUi : IOverlayUi
 
     private void DrawMoreSettings(ID2D1DeviceContext ctx)
     {
-        DrawSettingsNav(ctx);
-
-        var vp = SettingsViewportRect();
-        ctx.PushAxisAlignedClip(new Vortice.RawRectF(vp.MinX, vp.MinY, vp.MaxX, vp.MaxY),
-                                AntialiasMode.Aliased);
-
-        // **一整页连续内容**：所有分类按顺序排下来，滚动只移动内容，不换页。
-        for (int c = 0; c < SettingsCatNames.Length; c++)
-        {
-            var cat = (SettingsCategory)c;
-            float headY = SettingsY(SettingsSectionTop(cat));
-            var head = new RectF
-            {
-                MinX = SettingsContentLeft(), MinY = headY,
-                MaxX = SettingsContentLeft() + SettingsContentW(),
-                MaxY = headY + MoreGroupHeadH,
-            };
-            DrawMoreGroupHead(ctx, head, SettingsCatNames[c]);
-
-            if (cat == SettingsCategory.Toolbar)
-            {
-                for (int i = 0; i < 3; i++)
-                {
-                    var s = MoreProfileRect(i);
-                    bool active = ProfileIndex() == i;
-                    var rr = new RoundedRectangle(new Vortice.RawRectF(s.MinX, s.MinY, s.MaxX, s.MaxY), 8f, 8f);
-                    if (active) ctx.FillRoundedRectangle(rr, Brush(ctx, Tokens.Accent));
-                    else if (_moreHover == MoreHitProfile + i) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
-                    ctx.DrawRoundedRectangle(rr, Brush(ctx, active ? Tokens.Accent : BorderCol), 1f);
-                    _widgets.Text(ctx, ProfileName(i), s, 12.5f,
-                                  Brush(ctx, active ? Tokens.AccentInk : InkCol));
-                }
-                if (ChipsShown)
-                {
-                    for (int cell = 1; cell < Cells.Length; cell++)
-                    {
-                        var cr = MoreChipRect(cell);
-                        bool pinned = _pinned[cell];
-                        bool locked = !CanUnpin(cell);
-                        var rr = new RoundedRectangle(new Vortice.RawRectF(cr.MinX, cr.MinY, cr.MaxX, cr.MaxY), 8f, 8f);
-                        if (!locked && _moreHover == MoreHitChip + cell) ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
-                        ctx.DrawRoundedRectangle(rr, Brush(ctx, pinned ? Tokens.Accent : BorderCol), 1f);
-                        DrawCellIcon(ctx, cell, cr, Tokens.Icon,
-                                     new Color4(InkCol.R, InkCol.G, InkCol.B, pinned ? 1f : 0.35f),
-                                     pinned, _host.State);
-                        if (!pinned)
-                            _widgets.Text(ctx, "+", new RectF { MinX = cr.MaxX - 18f, MinY = cr.MinY + 2f, MaxX = cr.MaxX - 3f, MaxY = cr.MinY + 18f },
-                                          12f, Brush(ctx, MutedCol));
-                        if (locked) DrawLockBadge(ctx, cr);
-                    }
-                }
-                else
-                {
-                    _widgets.Text(ctx, "挑工具：切到「自定义」档，这里就能钉 / 取消钉",
-                                  new RectF
-                                  {
-                                      MinX = SettingsContentLeft(),
-                                      MinY = MoreProfileRect(0).MaxY + MoreChipTopGap,
-                                      MaxX = SettingsContentLeft() + SettingsContentW(),
-                                      MaxY = MoreProfileRect(0).MaxY + MoreChipTopGap + 32f,
-                                  },
-                                  11.5f, Brush(ctx, MutedCol), center: false);
-                }
-            }
-            else
-            {
-                foreach (var kind in SettingsRows(cat))
-                    for (int i = 0; i < Rows.Length; i++)
-                        if (Rows[i].Kind == kind) { DrawMoreRow(ctx, i); break; }
-            }
-        }
-
-        ctx.PopAxisAlignedClip();
-        if (_settingsFocusVisible) DrawSettingsFocusRing(ctx);
-        DrawSettingsScrollbar(ctx);
+        // A3.2：设置页绘制已搬到 SettingsPage；这里只保留 PageHost 未建立时的兜底。
+        if (_pageHost?.Current is SettingsPage) { _pageHost.Render(ctx); return; }
+        new SettingsPage(this).Render(ctx, PageFrame.Empty);
     }
 
     private void DrawSettingsScrollbar(ID2D1DeviceContext ctx)
