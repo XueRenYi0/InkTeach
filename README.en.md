@@ -226,6 +226,12 @@ the original, creates a selected 24px-offset copy and writes the selection to th
 infinite drag-copy mode is gone. **During drag or rotation the model is not touched at all** — the
 preview is drawn on the floating layer and committed on release as a single undo step.
 
+A coloured **AI** cell sits at the end of the action bar (9.6.0): with handwriting selected, choose
+“Recognise to text box” to create a normal text box in place, with the **original ink kept**. Inline
+LaTeX formulas, font / line spacing and per-line red/blue are preserved from the OCR result; complex
+layouts (multi-column, labels beside diagrams) are rejected instead of being mis-arranged. The text
+box can be undone or deleted on its own.
+
 **Object snapping (9.2.0; axis targets 9.2.2; curve seams 9.2.3)**: dragging a single shape or
 image aligns the selection frame's left / centre / right with the target's left / centre / right
 (and the same horizontally), with a soft 24px intersection gate, 5px enter / 8px exit, and `Alt` to
