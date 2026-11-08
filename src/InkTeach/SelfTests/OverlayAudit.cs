@@ -81,7 +81,7 @@ internal static class OverlayAudit
                   $"block={block.DownCount} low={low.DownCount}");
         }
 
-        // 6) 引擎适配器：五个旧浮层都注册，优先级按表
+        // 6) 引擎适配器：六个旧浮层都注册，优先级按表
         {
             var engine = new global::InkEngine.InkEngine();
             var layers = engine.OverlayLayers.Layers;
@@ -89,10 +89,11 @@ internal static class OverlayAudit
                        && layers.Any(l => l.Id == "replay")
                        && layers.Any(l => l.Id == "timer")
                        && layers.Any(l => l.Id == "roll")
-                       && layers.Any(l => l.Id == "ppt");
+                       && layers.Any(l => l.Id == "ppt")
+                       && layers.Any(l => l.Id == "selection");
             var priorities = layers.Select(l => l.Priority).ToArray();
             bool ordered = priorities.SequenceEqual(priorities.OrderBy(p => p));
-            Check("引擎浮层适配器注册", layers.Count == 5 && hasAll && ordered,
+            Check("引擎浮层适配器注册", layers.Count == 6 && hasAll && ordered,
                   $"count={layers.Count} ids={string.Join(",", layers.Select(l => l.Id))}");
         }
 
@@ -115,6 +116,39 @@ internal static class OverlayAudit
             var hit = m.PeekHit(10, 10);
             Check("PeekHit 只读", ReferenceEquals(hit, layer) && layer.DownCount == 0,
                   $"hit={hit?.Id} down={layer.DownCount}");
+        }
+
+        // 9) 选择条：注册为 400、不捕获；命中只覆盖条本身
+        {
+            var engine = new global::InkEngine.InkEngine();
+            var stroke = new global::InkEngine.Stroke
+            {
+                Tool = global::InkEngine.Tool.Pen,
+                Kind = global::InkEngine.StrokeKind.Freehand,
+            };
+            stroke.AddPoint(100, 100, 0.5f, 0);
+            stroke.AddPoint(200, 200, 0.5f, 1);
+            engine.Doc.AddStroke(stroke);
+            engine.Doc.SelectOnly(new[] { stroke });
+            engine.Tool = global::InkEngine.Tool.Marquee;
+
+            var selLayer = engine.OverlayLayers.Layers.FirstOrDefault(l => l.Id == "selection");
+            var bar = engine.SelectionBarCanvasRect;
+            bool hitBar = engine.SelectionLayerHitForTest(
+                (bar.MinX + bar.MaxX) * 0.5f, (bar.MinY + bar.MaxY) * 0.5f);
+            bool miss = !engine.SelectionLayerHitForTest(bar.MinX - 200f, bar.MinY - 200f);
+
+            // 真的把“按下”从管理器送进去：第 0 格 = 收起，应把条收成圆钮。
+            var b0 = SelectionHandles.BarButtonRectIn(bar, 0, engine.UiUnit);
+            bool tookBar = engine.OverlayLayers.PointerDown(
+                (b0.MinX + b0.MaxX) * 0.5f, (b0.MinY + b0.MaxY) * 0.5f, 1, 1, 400, 400);
+            bool collapsed = engine.BarDrawnCollapsed;
+            engine.SelBarCollapsed = false;      // 复原，别影响后续用例
+            Check("选择条命中只覆盖自己",
+                  selLayer is { Priority: 400, WantsCapture: false }
+                  && engine.SelectionBarShown && !bar.IsEmpty && hitBar && miss
+                  && tookBar && collapsed,
+                  $"shown={engine.SelectionBarShown} hit={hitBar} miss={miss} took={tookBar} collapsed={collapsed}");
         }
 
         Console.WriteLine($"  合计：{pass} 通过 / {fail} 失败");

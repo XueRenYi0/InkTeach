@@ -361,7 +361,7 @@ IOverlayLayer
 
 ### Phase 1：PageHost + 设置试点（2～3 周）
 
-> 适配补充：**A0–A3 + A4.0–A4.9 已落地**（回放/timer/roll/ppt/library 的按下、捕获、移动、松手已切到浮层管理器，旧捕获与影子分支已清）。`--settingsaudit` 40、`--pageaudit` 16、`--textinputaudit` 8、`--overlayaudit` 8 全绿；A4 收口，剩余为发布前真机验收与 Phase 5 可选。
+> 适配补充：**A0–A3 + A4.0–A4.9 已落地；P5.0 选择条按下已接浮层管理器**。`--settingsaudit` 40、`--pageaudit` 16、`--textinputaudit` 8、`--overlayaudit` 9 全绿；A4 收口，剩余为发布前真机验收与 P5.1 提示/HUD/取景。
 
 - `PageHost` / `Page` / `PageFrame` / `LegacyPage`；
 - `SettingsPage` 包当前设置页（连续滚动/双指/滚轮/滚动条原样）；

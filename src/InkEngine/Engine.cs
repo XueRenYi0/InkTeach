@@ -5042,6 +5042,15 @@ public partial class InkEngine
         // 于是"写一半的字凭空消失"。它顺带就是最基础的掌心抑制：掌根不再抢笔。
         if (_drawing) return;
 
+        // Phase 5.0：选择操作条（优先级 400）先走浮层管理器。
+        // 只切“按下”；未命中/未消费继续走原来的工具分流（条本身不需要指针捕获）。
+        if (OverlayLayers.PointerDown(x, y, id, ptype, 400, 400))
+        {
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
         _activePointer = id;
         _activePointerType = ptype;
         PointerX = x; PointerY = y; PointerInside = true;

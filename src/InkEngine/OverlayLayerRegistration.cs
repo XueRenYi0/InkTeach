@@ -119,6 +119,17 @@ public partial class InkEngine
             dismissPolicy: OverlayDismissPolicy.Escape,
             blocksInputBelow: false));
 
+        // Phase 5.0：选择操作条（含收起圆钮 / 挂着的面板 / AI 菜单）。
+        // 只切“按下”：命中后调用现有选择手势分流；条本身不需要指针捕获。
+        m.Register(new LegacyOverlayLayer(
+            "selection", 400,
+            visible: () => SelectionBarShown,
+            bounds: () => BarDrawnCollapsed ? SelectionDotCanvasRect : SelectionBarCanvasRect,
+            hit: SelectionLayerHit,
+            down: (x, y, id, type) => SelectionBarShown && SelectionBarPointerDown(x, y),
+            wantsCapture: false,
+            blocksInputBelow: false));
+
         _overlayLayers = m;
     }
 
@@ -139,4 +150,38 @@ public partial class InkEngine
         if (LibraryCategoriesOpen && LibraryLayout.Contains(LibraryDrawerRectNow(), x, y)) return true;
         return false;
     }
+
+    /// <summary>
+    /// Phase 5.0：选择操作条这一块（整条 / 收起圆钮 / 挂着的面板 / AI 菜单）是否命中。
+    /// 判据和 <see cref="TryBeginSelectionGesture"/> 的 ⓪ 段一致；只用于浮层路由。
+    /// </summary>
+    private bool SelectionLayerHit(float x, float y)
+    {
+        if (!SelectionBarShown) return false;
+        if (BarDrawnCollapsed) return SelectionDotCanvasRect.Contains(x, y);
+
+        var aabb = LiveSelectionFrame.CanvasAabb;
+        float ui = UiUnit;
+        if (SelectionBarCanvasRect.Contains(x, y)) return true;
+        if (CustomColorOpen
+            && SelectionHandles.PickContains(x, y, aabb, ui, FurnitureViewport,
+                                             SelectionHandles.SwatchCount, SingleTextBoxSelection))
+            return true;
+        if (SelPanelOpen != SelPanel.None
+            && SelectionHandles.PanelContains(x, y, aabb, ui, FurnitureViewport,
+                                              SelPanelOpen, SelectionHandles.SwatchCount,
+                                              SingleTextBoxSelection))
+            return true;
+        if (SelAiMenuOpen
+            && SelectionHandles.BarAiMenuRectIn(SelectionBarCanvasRect, ui, FurnitureViewport,
+                   HandOcrStatus.Length > 0).Contains(x, y))
+            return true;
+        return false;
+    }
+
+    /// <summary>Phase 5.0：条上的按下仍走原来的选择手势分流（按钮 / 面板 / 圆钮）。</summary>
+    private bool SelectionBarPointerDown(float x, float y)
+        => TryBeginSelectionGesture(x, y, shift: false, alt: false);
+
+    internal bool SelectionLayerHitForTest(float x, float y) => SelectionLayerHit(x, y);
 }
