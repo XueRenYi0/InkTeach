@@ -115,7 +115,8 @@ public sealed partial class FullUi
     {
         if (_host?.AiApi == null)
         {
-            _host?.Commands.OpenAiApiSettings();
+            _apiStatus = "AI 服务组件未接入";
+            Invalidate();
             return;
         }
 

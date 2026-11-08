@@ -597,10 +597,10 @@ internal sealed partial class App
             var pencil = LibraryLayout.DrawerPencilRect(rowA, uiK);
             ClickPanel(pencil);
             Check("F：铅笔 → 原生输入框改名",
-                  LibraryRenamingId == catA.Id && LibraryRenameHwndForTest != IntPtr.Zero,
-                  $"改名 {LibraryRenamingId}，输入框 {(LibraryRenameHwndForTest != IntPtr.Zero ? "有" : "无")}");
-            Native.SetWindowTextW(LibraryRenameHwndForTest, "改名A");
-            Native.SendMessage(LibraryRenameHwndForTest, Native.WM_KEYDOWN, new IntPtr(0x0D), IntPtr.Zero);
+                  LibraryRenamingId == catA.Id && LibraryRenameEditingForTest,
+                  $"改名 {LibraryRenamingId}，输入框 {(LibraryRenameEditingForTest ? "有" : "无")}");
+            SetLibraryRenameTextForTest("改名A");
+            EndLibraryCategoryRenameForTest(true);
             SettleFrames(120);
             Check("F：Enter 保存分类名",
                   ShapeLibrary.ListCategories().Exists(c => c.Id == catA.Id && c.Name == "改名A"),
@@ -645,8 +645,8 @@ internal sealed partial class App
             Check("F：＋ 新建分类 → 新分类出现并进入改名",
                   LibraryRenamingId != null && ShapeLibrary.ListCategories().Count >= 3,
                   $"改名 {LibraryRenamingId}，分类数 {ShapeLibrary.ListCategories().Count}");
-            if (LibraryRenameHwndForTest != IntPtr.Zero)
-                Native.SendMessage(LibraryRenameHwndForTest, Native.WM_KEYDOWN, new IntPtr(0x1B), IntPtr.Zero);
+            if (LibraryRenameEditingForTest)
+                EndLibraryCategoryRenameForTest(false);
             SettleFrames(100);
             LibraryCategoriesOpen = false;
             LibraryDrawerManage = false;

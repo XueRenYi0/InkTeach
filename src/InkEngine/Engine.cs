@@ -8222,11 +8222,7 @@ public partial class InkEngine
         => LibraryPanelOpen && !PassThrough && !UiOverlayOpen && !CaptureActive && !PptMode;
     /// <summary>正在改名的分类 id（空 = 没在改名）。</summary>
     internal string LibraryRenamingId;
-    /// <summary>改名用的原生 EDIT：中文走系统 IME，不能自己画假输入框。</summary>
-    private IntPtr _libraryRenameHwnd;
-    private Native.WndProcDelegate _libraryRenameWndProc;
-    private IntPtr _libraryRenameOldProc;
-    private bool _libraryRenameHadNoActivate;
+    /// <summary>改名/日志/其他小输入共用的字体缓存（原生 EDIT 用）。</summary>
     private IntPtr _libraryRenameFont;
     private float _libraryRenameFontPx;
     private long _libraryDrawerLastClickMs;
@@ -8926,114 +8922,53 @@ public partial class InkEngine
         return default;
     }
 
-    /// <summary>开始改分类名：原生 EDIT 盖在那一行上，中文/输入法都由系统处理。</summary>
+    /// <summary>开始改分类名：一个统一文字宿主盖在那一行上，中文/输入法都由系统处理。</summary>
     internal void BeginLibraryCategoryRename(string id)
     {
         if (!LibraryLayout.DrawerRowIsUserCategory(id)) return;
-        EnsureLibraryRenameWindow();
-        if (_libraryRenameHwnd == IntPtr.Zero) return;
         LibraryRenamingId = id;
         LibraryConfirm = "";
         LibraryMenu = 0;
         LibraryCategoriesOpen = true;
         var row = LibraryDrawerRowRectForId(id);
         if (row.IsEmpty) { LibraryRenamingId = null; return; }
+
         var edit = LibraryLayout.DrawerEditRect(row, UiUnit);
         string current = ShapeLibrary.CategoryNameOf(id) ?? "";
-        Native.SetWindowTextW(_libraryRenameHwnd, current);
-        var font = EnsureLibraryRenameFont(UiUnit);
-        Native.SendMessage(_libraryRenameHwnd, Native.WM_SETFONT, font, new IntPtr(1));
-        int marginL = Math.Max(1, (int)MathF.Round(3f * UiUnit));
-        int marginR = Math.Max(1, (int)MathF.Round(2f * UiUnit));
-        Native.SendMessage(_libraryRenameHwnd, Native.EM_SETMARGINS,
-                           new IntPtr(Native.EC_LEFTMARGIN | Native.EC_RIGHTMARGIN),
-                           new IntPtr(marginL | (marginR << 16)));
-        Native.SendMessage(_libraryRenameHwnd, Native.EM_SETLIMITTEXT, new IntPtr(60), IntPtr.Zero);
-        Native.SendMessage(_libraryRenameHwnd, Native.EM_SETSEL, IntPtr.Zero, new IntPtr(-1));
-        int x = (int)MathF.Round(edit.MinX);
-        int y = (int)MathF.Round(edit.MinY + ViewOffsetY);
-        int w = Math.Max(40, (int)MathF.Round(edit.MaxX - edit.MinX));
-        int h = Math.Max(20, (int)MathF.Round(edit.MaxY - edit.MinY));
-        Native.SetWindowPos(_libraryRenameHwnd, Native.HWND_TOPMOST, x, y, w, h,
-                            Native.SWP_SHOWWINDOW);
-        FocusLibraryRenameWindow();
+        var logical = new RectF
+        {
+            MinX = edit.MinX / UiUnit,
+            MinY = (edit.MinY + ViewOffsetY) / UiUnit,
+            MaxX = edit.MaxX / UiUnit,
+            MaxY = (edit.MaxY + ViewOffsetY) / UiUnit,
+        };
+
+        TextInput.Begin(new TextInputRequest
+        {
+            Id = "library.rename",
+            Rect = logical,
+            InitialText = current,
+            Mode = TextInputMode.SingleLine,
+            MaxLength = 60,
+            Visual = new TextInputVisual
+            {
+                Background = Opaque(FloatingTheme.Panel),
+                Text = FloatingTheme.Text,
+                FontSize = 11f,
+                Padding = 4f,
+            },
+            OnCommit = text => FinishLibraryCategoryRename(id, text),
+            OnCancel = () => FinishLibraryCategoryRename(id, null),
+        });
+        if (TextInput?.IsEditing != true) LibraryRenamingId = null;
         _dirty = true;
     }
 
-    /// <summary>
-    /// 原生输入框要收键盘，必须先是"前台线程"的焦点窗口；覆盖层平时是
-    /// WS_EX_NOACTIVATE，直接 SetFocus 会被系统忽略。这里临时摘掉它，借前台线程的输入队列。
-    /// </summary>
-    private void FocusLibraryRenameWindow()
+    private void FinishLibraryCategoryRename(string id, string text)
     {
-        if (_libraryRenameHwnd == IntPtr.Zero) return;
-        IntPtr main = _windows.Count > 0 ? _windows[0].Hwnd : IntPtr.Zero;
-        _libraryRenameHadNoActivate = false;
-        if (main != IntPtr.Zero)
-        {
-            long ex = Native.GetWindowLongPtr(main, Native.GWL_EXSTYLE).ToInt64();
-            if ((ex & Native.WS_EX_NOACTIVATE) != 0)
-            {
-                _libraryRenameHadNoActivate = true;
-                Native.SetWindowLongPtr(main, Native.GWL_EXSTYLE,
-                    new IntPtr(ex & ~Native.WS_EX_NOACTIVATE));
-                Native.SetWindowPos(main, IntPtr.Zero, 0, 0, 0, 0,
-                    Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER);
-            }
-        }
-        IntPtr fg = Native.GetForegroundWindow();
-        uint fgTid = Native.GetWindowThreadProcessId(fg, out _);
-        uint myTid = Native.GetCurrentThreadId();
-        IntPtr target = _libraryRenameHwnd;
-        if (fgTid != 0 && fgTid != myTid)
-        {
-            Native.AttachThreadInput(myTid, fgTid, true);
-            Native.SetForegroundWindow(target);
-            Native.SetFocus(_libraryRenameHwnd);
-            Native.AttachThreadInput(myTid, fgTid, false);
-        }
-        else
-        {
-            Native.SetForegroundWindow(target);
-            Native.SetFocus(_libraryRenameHwnd);
-        }
-        Native.SetWindowPos(_libraryRenameHwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
-                            Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
-    }
-
-    private void RestoreLibraryRenameFocus()
-    {
-        bool had = _libraryRenameHadNoActivate;
-        _libraryRenameHadNoActivate = false;
-        if (had && _windows.Count > 0)
-        {
-            IntPtr main = _windows[0].Hwnd;
-            long ex = Native.GetWindowLongPtr(main, Native.GWL_EXSTYLE).ToInt64();
-            Native.SetWindowLongPtr(main, Native.GWL_EXSTYLE,
-                new IntPtr(ex | Native.WS_EX_NOACTIVATE));
-            Native.SetWindowPos(main, IntPtr.Zero, 0, 0, 0, 0,
-                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
-        }
-        // 键盘模式：焦点本来就该在覆盖层上，改名输入框藏了要还回去，不然按键全丢。
-        if (KeyboardMode && _windows.Count > 0) Native.SetFocus(_windows[0].Hwnd);
-    }
-
-    /// <summary>结束改名：`✓`/Enter 保存，`✕`/Esc/点别处取消。</summary>
-    internal void EndLibraryCategoryRename(bool save)
-    {
-        if (string.IsNullOrEmpty(LibraryRenamingId)) return;
-        string id = LibraryRenamingId;
+        if (string.IsNullOrEmpty(id)) return;
         LibraryRenamingId = null;
-        string text = "";
-        if (_libraryRenameHwnd != IntPtr.Zero)
-        {
-            var sb = new System.Text.StringBuilder(256);
-            Native.GetWindowTextW(_libraryRenameHwnd, sb, sb.Capacity);
-            text = sb.ToString();
-            Native.ShowWindow(_libraryRenameHwnd, Native.SW_HIDE);
-        }
-        RestoreLibraryRenameFocus();
-        if (save && !string.IsNullOrWhiteSpace(text))
+        if (!string.IsNullOrWhiteSpace(text))
         {
             string before = ShapeLibrary.CategoryNameOf(id);
             if (ShapeLibrary.RenameCategory(id, text))
@@ -9052,12 +8987,24 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
+    /// <summary>结束改名：`✓`/Enter 保存，`✕`/Esc/点别处取消。</summary>
+    internal void EndLibraryCategoryRename(bool save)
+    {
+        if (string.IsNullOrEmpty(LibraryRenamingId)) return;
+        string id = LibraryRenamingId;
+        if (TextInput?.IsEditing == true)
+        {
+            if (save) TextInput.Commit();
+            else TextInput.Cancel();
+            return;
+        }
+        FinishLibraryCategoryRename(id, null);
+    }
+
     private void HideLibraryRenameWindow()
     {
+        if (TextInput?.IsEditing == true) TextInput.Cancel();
         LibraryRenamingId = null;
-        if (_libraryRenameHwnd != IntPtr.Zero)
-            Native.ShowWindow(_libraryRenameHwnd, Native.SW_HIDE);
-        RestoreLibraryRenameFocus();
     }
 
     private IntPtr EnsureLibraryRenameFont(float dpi)
@@ -9076,49 +9023,6 @@ public partial class InkEngine
         return _libraryRenameFont != IntPtr.Zero
             ? _libraryRenameFont
             : Native.GetStockObject(Native.DEFAULT_GUI_FONT);
-    }
-
-    private void EnsureLibraryRenameWindow()
-    {
-        if (_libraryRenameHwnd != IntPtr.Zero) return;
-        long exStyle = Native.WS_EX_TOPMOST | Native.WS_EX_TOOLWINDOW;
-        _libraryRenameHwnd = Native.CreateWindowEx(exStyle, "EDIT", "InkTeachCategoryName",
-            0x80000000L /*WS_POPUP*/ | 0x00800000L /*WS_BORDER*/, 0, 0, 1, 1,
-            IntPtr.Zero, IntPtr.Zero, _hInstance, IntPtr.Zero);
-        if (_libraryRenameHwnd == IntPtr.Zero)
-        {
-            Console.WriteLine("分类改名输入框创建失败: " + Marshal.GetLastWin32Error());
-            return;
-        }
-        _libraryRenameWndProc = LibraryRenameWndProc;
-        _libraryRenameOldProc = Native.SetWindowLongPtr(
-            _libraryRenameHwnd, Native.GWLP_WNDPROC,
-            Marshal.GetFunctionPointerForDelegate(_libraryRenameWndProc));
-    }
-
-    private IntPtr LibraryRenameWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
-    {
-        switch (msg)
-        {
-            case Native.WM_KEYDOWN:
-            {
-                int vk = (int)wParam.ToInt64();
-                if (vk == 0x0D) { EndLibraryCategoryRename(true); return IntPtr.Zero; }
-                if (vk == 0x1B) { EndLibraryCategoryRename(false); return IntPtr.Zero; }
-                break;
-            }
-            case Native.WM_CHAR:
-                // Enter/Esc 已经处理过，别再让 EDIT 发“叮”。
-                if ((int)wParam.ToInt64() == 0x0D || (int)wParam.ToInt64() == 0x1B)
-                    return IntPtr.Zero;
-                break;
-            case Native.WM_KILLFOCUS:
-                if (!string.IsNullOrEmpty(LibraryRenamingId)) EndLibraryCategoryRename(false);
-                return IntPtr.Zero;
-            case Native.WM_GETDLGCODE:
-                return new IntPtr(Native.DLGC_WANTALLKEYS);
-        }
-        return Native.CallWindowProc(_libraryRenameOldProc, hWnd, msg, wParam, lParam);
     }
 
     /// <summary>清空回收站（永久删除，二次确认由界面负责）。</summary>
@@ -11004,7 +10908,11 @@ public partial class InkEngine
     }
 
     internal int LibraryDrawerVisibleCountForPaint => LibraryDrawerVisibleCount();
-    internal IntPtr LibraryRenameHwndForTest => _libraryRenameHwnd;
+    internal bool LibraryRenameEditingForTest
+        => TextInput?.IsEditing == true
+           && string.Equals(TextInput.EditingId, "library.rename", StringComparison.Ordinal);
+    internal void SetLibraryRenameTextForTest(string text) => _textInput?.SetTextForTest(text);
+    internal void EndLibraryCategoryRenameForTest(bool save) => EndLibraryCategoryRename(save);
     internal bool LibraryManageSortingForPaint => LibraryManageSorting;
     internal int LibraryManageDropIndex;
     internal bool LibraryManageModeForTest => LibrarySelectMode;

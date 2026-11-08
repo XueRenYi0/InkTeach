@@ -141,6 +141,13 @@ public partial class InkEngine
             Position(rect);
         }
 
+        /// <summary>自检用：直接改当前 EDIT 的文本；不触发提交。</summary>
+        internal void SetTextForTest(string text)
+        {
+            if (_editing && _hwnd != IntPtr.Zero)
+                Native.SetWindowTextW(_hwnd, text ?? "");
+        }
+
         public void Commit()
         {
             if (!_editing || _request == null) return;

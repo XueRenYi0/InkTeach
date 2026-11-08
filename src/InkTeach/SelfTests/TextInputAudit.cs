@@ -77,6 +77,15 @@ internal static class TextInputAudit
         Check("多行提交", multi == "a\r\nb" && !input.IsEditing,
               $"editingBefore={multiEditing} text={(multi == null ? "null" : multi.Replace("\r", "\\r").Replace("\n", "\\n"))}");
 
+        engine.LogNoteText = "";
+        engine.BeginLogNoteEditForTest(new RectF { MinX = 10, MinY = 10, MaxX = 310, MaxY = 120 });
+        Check("日志输入进入", engine.LogNoteEditing && input.IsEditing,
+              $"editing={engine.LogNoteEditing}");
+        engine.SetLogNoteTextForTest("日志页测试");
+        engine.EndLogNoteEditFromUi(true);
+        Check("日志输入提交", !engine.LogNoteEditing && engine.LogNoteText == "日志页测试",
+              $"editing={engine.LogNoteEditing} text={engine.LogNoteText}");
+
         if (input is IDisposable disposable) disposable.Dispose();
         Console.WriteLine($"  合计：{pass} 通过 / {fail} 失败");
         return fail == 0 ? 0 : 1;
