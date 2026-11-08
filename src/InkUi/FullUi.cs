@@ -4249,28 +4249,6 @@ public sealed partial class FullUi : IOverlayUi
         _ => "more.home",
     };
 
-    private LegacyPage CreateLegacyPage(MorePage page) => new()
-    {
-        Id = LegacyPageId(page),
-        Title = page switch
-        {
-            MorePage.Settings => "设置",
-            MorePage.Help => "使用说明",
-            MorePage.Log => "日志与反馈",
-            MorePage.Api => "AI 服务",
-            _ => "更多",
-        },
-        PreferredSize = new PageSize(0f, page switch
-        {
-            MorePage.Settings => MoreSettingsH(),
-            MorePage.Help => MoreHelpH(),
-            MorePage.Log => MoreLogH(),
-            MorePage.Api => MoreApiH(),
-            _ => MoreHomeH(),
-        }),
-        CanBack = page != MorePage.Home,
-    };
-
     /// <summary>
     /// 切页：先同步 PageHost 栈，再让现有 _morePage 读同一页。
     /// Home 重置栈；从 Home 进子页用 Push；子页之间切换用 Replace。
@@ -4285,7 +4263,7 @@ public sealed partial class FullUi : IOverlayUi
         string current = _pageHost.Current?.Id;
         if (page == MorePage.Home)
         {
-            if (current != id) _pageHost.Open(CreateLegacyPage(page), animate: false);
+            if (current != id) _pageHost.Open(CreatePage(page), animate: false);
             else _pageHost.Layout();
             return;
         }
@@ -4296,7 +4274,7 @@ public sealed partial class FullUi : IOverlayUi
             return;
         }
 
-        LegacyPage next = CreateLegacyPage(page);
+        IPage next = CreatePage(page);
         if (current == null) _pageHost.Open(next, animate: false);
         else if (push) _pageHost.Push(next);
         else _pageHost.Replace(next);
@@ -4318,7 +4296,7 @@ public sealed partial class FullUi : IOverlayUi
         if (_pageHost != null && _pageHost.Count > 1)
             _pageHost.Pop();
         else
-            _pageHost?.Open(CreateLegacyPage(MorePage.Home), animate: false);
+            _pageHost?.Open(CreatePage(MorePage.Home), animate: false);
         _morePage = MorePageFromId(_pageHost?.Current?.Id);
     }
 
