@@ -4956,10 +4956,9 @@ public partial class InkEngine
 
         // 课堂计时卡片（引擎侧浮层）：**排在界面之后、PPT 条之前、穿透之前**——
         // 和 PPT 条同一条规矩：看得见的那一块就是点得到的（穿透/放映下也要能暂停/停）。
-        if (TimerCardPointerDown(screenX, screenY))
+        if (OverlayLayers.PointerDown(screenX, screenY, id, ptype, 600, 600))
         {
             _drawing = false;
-            OverlayLayers.Capture("timer", id);   // A4.4：捕获所有权先交给管理器
             Native.SetCapture(hWnd);
             _dirty = true;
             ApplyCursor();
@@ -4967,10 +4966,9 @@ public partial class InkEngine
         }
 
         // 课堂点名卡片（引擎侧浮层）：和计时卡同一槽位规则。
-        if (RollCardPointerDown(screenX, screenY))
+        if (OverlayLayers.PointerDown(screenX, screenY, id, ptype, 590, 590))
         {
             _drawing = false;
-            OverlayLayers.Capture("roll", id);    // A4.4：捕获所有权先交给管理器
             Native.SetCapture(hWnd);
             _dirty = true;
             ApplyCursor();
@@ -4981,10 +4979,9 @@ public partial class InkEngine
         //   · 界面在它上面（见 RenderFrame 的绘制顺序），所以界面先问；
         //   · 必须在穿透之前——开着穿透时老师照样得能点翻页 / 拖进度条
         //     （NCHITTEST 里给它开了区域豁免，见那里的注释）。
-        if (PptBarPointerDown(screenX, screenY))
+        if (OverlayLayers.PointerDown(screenX, screenY, id, ptype, 500, 500))
         {
             _drawing = false;
-            OverlayLayers.Capture("ppt", id);     // A4.4：捕获所有权先交给管理器
             Native.SetCapture(hWnd);        // 长按要持续收到移动（判"拿起后有没有拖走"）
             _dirty = true;
             ApplyCursor();

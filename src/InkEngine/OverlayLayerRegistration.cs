@@ -67,7 +67,8 @@ public partial class InkEngine
                 TimerCardPointerUp(x, y);
                 return true;
             },
-            dismiss: StopTimerFromUi));
+            dismiss: StopTimerFromUi,
+            blocksInputBelow: false));
 
         m.Register(new LegacyOverlayLayer(
             "roll", 590,
@@ -83,7 +84,8 @@ public partial class InkEngine
                 return true;
             },
             dismiss: CloseRollCardFromUi,
-            dismissPolicy: OverlayDismissPolicy.Escape));
+            dismissPolicy: OverlayDismissPolicy.Escape,
+            blocksInputBelow: false));
 
         m.Register(new LegacyOverlayLayer(
             "ppt", 500,
@@ -98,7 +100,8 @@ public partial class InkEngine
                 return true;
             },
             dismiss: ExitPptMode,
-            dismissPolicy: OverlayDismissPolicy.Escape));
+            dismissPolicy: OverlayDismissPolicy.Escape,
+            blocksInputBelow: false));
 
         _overlayLayers = m;
     }
