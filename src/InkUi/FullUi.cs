@@ -4571,30 +4571,38 @@ public sealed partial class FullUi : IOverlayUi
     /// </summary>
     public bool TouchScroll(in UiTouchScrollEvent e)
     {
-        if (!_moreOpen || _morePage != MorePage.Settings) return false;
+        if (!_moreOpen) return false;
         if (e.Phase == UiTouchScrollPhase.Cancel)
         {
             StopSettingsFling();
             return true;
         }
 
-        var vp = SettingsViewportRect();
-        if (e.Phase == UiTouchScrollPhase.Begin)
+        if (_morePage == MorePage.Settings)
         {
-            StopSettingsFling();
-            return true;          // 设置页是模态：消费掉，别让底下的画布跟着滚
-        }
-        if (e.Phase == UiTouchScrollPhase.Move)
-        {
-            if (vp.Contains(e.X, e.Y))
-                ScrollSettingsTo(_settingsScroll - e.Dy);
+            var vp = SettingsViewportRect();
+            if (e.Phase == UiTouchScrollPhase.Begin)
+            {
+                StopSettingsFling();
+                return true;          // 设置页是模态：消费掉，别让底下的画布跟着滚
+            }
+            if (e.Phase == UiTouchScrollPhase.Move)
+            {
+                if (vp.Contains(e.X, e.Y))
+                    ScrollSettingsTo(_settingsScroll - e.Dy);
+                return true;
+            }
+            if (e.Phase == UiTouchScrollPhase.End)
+            {
+                if (vp.Contains(e.X, e.Y)) StartSettingsFling(e.Vy);
+                return true;
+            }
             return true;
         }
-        if (e.Phase == UiTouchScrollPhase.End)
-        {
-            if (vp.Contains(e.X, e.Y)) StartSettingsFling(e.Vy);
-            return true;
-        }
+
+        // 其它“更多”页也是模态：能滚的帮助页滚自己的内容，其余吞掉，别滚底下的画布。
+        if (_morePage == MorePage.Help && e.Phase == UiTouchScrollPhase.Move)
+            ScrollHelp(-e.Dy);
         return true;
     }
 
@@ -4650,7 +4658,7 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>返回 true = 这一次按下已经归双指手势，不再走行点击。</summary>
     private bool SettingsTouchDown(in UiPointerEvent e, Vector2 p)
     {
-        if (!_moreOpen || _morePage != MorePage.Settings || !e.FromTouch) return false;
+        if (!_moreOpen || !e.FromTouch) return false;
         _settingsTouches[e.PointerId] = new Vector2(p.X, p.Y);
         if (_settingsTouches.Count < 2) return false;
 
@@ -4706,7 +4714,10 @@ public sealed partial class FullUi : IOverlayUi
         if (MathF.Abs(dy) > 0.01f)
         {
             // 手指往下 = 内容往下 = scroll 减小；和白板 ScrollCanvasBy 的符号一致。
-            ScrollSettingsTo(_settingsScroll - dy);
+            if (_morePage == MorePage.Settings)
+                ScrollSettingsTo(_settingsScroll - dy);
+            else if (_morePage == MorePage.Help)
+                ScrollHelp(-dy);
             _settingsTouchVy = Math.Clamp(dy / (float)dt, -UiTouchFling.MaxVelocity, UiTouchFling.MaxVelocity);
         }
         return true;
@@ -4715,11 +4726,12 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>返回 true = 这一次抬起归双指手势，不再执行行点击。</summary>
     private bool SettingsTouchUp(in UiPointerEvent e)
     {
-        if (!_settingsTouchGesture || !e.FromTouch) return false;
-        _settingsTouches.Remove(e.PointerId);
-        if (_settingsTouchScrolling && _settingsTouches.Count < 2)
+        if (!e.FromTouch) return false;
+        bool tracked = _settingsTouches.Remove(e.PointerId);
+        if (!_settingsTouchGesture) return false;   // 单指：让正常点击/长按收尾
+        if (tracked && _settingsTouchScrolling && _settingsTouches.Count < 2)
         {
-            StartSettingsFling(_settingsTouchVy);
+            if (_morePage == MorePage.Settings) StartSettingsFling(_settingsTouchVy);
             _settingsTouchScrolling = false;
         }
         if (_settingsTouches.Count == 0)

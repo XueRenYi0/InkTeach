@@ -469,6 +469,8 @@ public sealed partial class FullUi
 
     internal void SetHelpTabForTest(int tab) => SetHelpTab(tab);
     internal float HelpScrollForTest => _helpScroll;
+    internal float HelpMaxScrollForTest => HelpMaxScroll();
+    internal RectF HelpViewportRectForTest => HelpViewportRect();
     internal float HelpDesiredHForTest => HelpDesiredH();
     internal float HelpMoreHForTest => MoreHelpH();
 }

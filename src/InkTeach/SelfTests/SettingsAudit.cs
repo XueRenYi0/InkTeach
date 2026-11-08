@@ -264,6 +264,28 @@ internal static class SettingsAudit
             Check("真实 UI 包装：双指 FromTouch 传到底", moved > 1f, $"scroll={moved:F0}");
         }
 
+        // 7.2 帮助页也能双指滚（不是只有设置页）
+        {
+            ui.SetMorePageForTest(2);
+            ui.SetHelpTabForTest(2);   // 快捷键页内容最长，确保有可滚内容
+            ui.PrepareFrame();
+            var vp = ui.HelpViewportRectForTest;
+            float before = ui.HelpScrollForTest;
+            float max = ui.HelpMaxScrollForTest;
+            float cx = (vp.MinX + vp.MaxX) * 0.5f, cy = (vp.MinY + vp.MaxY) * 0.5f;
+            ui.PointerDown(new UiPointerEvent(cx - 20, cy, 0.5f, false, false, true, 31));
+            ui.PointerDown(new UiPointerEvent(cx + 20, cy, 0.5f, false, false, true, 32));
+            ui.PointerMove(new UiPointerEvent(cx - 20, cy - 80, 0.5f, false, false, true, 31));
+            ui.PointerMove(new UiPointerEvent(cx + 20, cy - 80, 0.5f, false, false, true, 32));
+            float after = ui.HelpScrollForTest;
+            ui.PointerUp(new UiPointerEvent(cx - 20, cy - 80, 0.5f, false, false, true, 31));
+            ui.PointerUp(new UiPointerEvent(cx + 20, cy - 80, 0.5f, false, false, true, 32));
+            Check("帮助页双指纵滑", max > 1f && after > before + 1f,
+                  $"max={max:F0} {before:F0}→{after:F0}");
+            ui.SetMorePageForTest(1);
+            ui.PrepareFrame();
+        }
+
         // 8) AI 服务页：假数据打开、字段/按钮命中、离屏出图（不写 ai.json、不联网）
         {
             ui.OpenApiPageForTest();
