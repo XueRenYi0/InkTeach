@@ -3136,10 +3136,13 @@ internal sealed partial class OverlayWindow : IDisposable
         _libraryRectPrev = RectF.Empty;
         if (app.LibraryPanelVisibleNow && !app.LibraryPlacementMode)
         {
-            var pr = CanvasRectToWindow(app.LibraryPanelRectNow()).Inflate(4f * app.UiUnit);
+            // 脏区必须带**投影最远半径**：只放 4px 时，面板往左拖，右侧旧投影擦不掉，
+            // 表现为“右侧一条虚影”；往右拖因为新面板盖住旧投影才看不出来。
+            float pad = (4f + app.FloatingTheme.ShadowReachLogical) * app.UiUnit;
+            var pr = CanvasRectToWindow(app.LibraryPanelRectNow()).Inflate(pad);
             if (app.LibraryCategoriesOpen)
             {
-                var dr = CanvasRectToWindow(app.LibraryDrawerRectNow()).Inflate(4f * app.UiUnit);
+                var dr = CanvasRectToWindow(app.LibraryDrawerRectNow()).Inflate(pad);
                 pr = new RectF
                 {
                     MinX = MathF.Min(pr.MinX, dr.MinX), MinY = MathF.Min(pr.MinY, dr.MinY),
@@ -3148,7 +3151,7 @@ internal sealed partial class OverlayWindow : IDisposable
             }
             if (app.LibraryMenu != 0)
             {
-                var mr = CanvasRectToWindow(app.LibraryMenuRect()).Inflate(4f * app.UiUnit);
+                var mr = CanvasRectToWindow(app.LibraryMenuRect()).Inflate(pad);
                 pr = new RectF
                 {
                     MinX = MathF.Min(pr.MinX, mr.MinX), MinY = MathF.Min(pr.MinY, mr.MinY),
@@ -3393,11 +3396,12 @@ internal sealed partial class OverlayWindow : IDisposable
         //（和界面 `_uiBoundsPrev` 一模一样的做法：只算当前，屏幕会留一张擦不掉的卡片印子）。
         if (app.LibraryPanelVisibleNow && !app.LibraryPlacementMode)
         {
-            r.Add(CanvasRectToWindow(app.LibraryPanelRectNow()).Inflate(4f * app.UiUnit));
+            float pad = (4f + app.FloatingTheme.ShadowReachLogical) * app.UiUnit;
+            r.Add(CanvasRectToWindow(app.LibraryPanelRectNow()).Inflate(pad));
             if (app.LibraryCategoriesOpen)
-                r.Add(CanvasRectToWindow(app.LibraryDrawerRectNow()).Inflate(4f * app.UiUnit));
+                r.Add(CanvasRectToWindow(app.LibraryDrawerRectNow()).Inflate(pad));
             if (app.LibraryMenu != 0)
-                r.Add(CanvasRectToWindow(app.LibraryMenuRect()).Inflate(4f * app.UiUnit));
+                r.Add(CanvasRectToWindow(app.LibraryMenuRect()).Inflate(pad));
         }
         if (!_libraryRectPrev.IsEmpty) r.Add(_libraryRectPrev);
 
