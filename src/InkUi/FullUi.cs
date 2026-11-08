@@ -5129,6 +5129,9 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>打开面板（入口只有主条「…」那一格）。</summary>
     private void OpenMore()
     {
+        // 模态互斥：更多面板打开前无条件关掉收藏/图形面板（未开时是空操作）。
+        // 放在这里而不是只写在“更多”格里，保证以后从别处打开更多也不会两个模态叠着。
+        _host?.Commands.CloseLibraryPanel();
         // 任务管理器可能在运行期间把自启关掉/打开；每次打开抽屉重读一次。
         _host?.Commands.RefreshAutoStart();
         _railHover = false;
@@ -6562,9 +6565,6 @@ public sealed partial class FullUi : IOverlayUi
             case 13: cmd.Redo(); break;
             case 14:
                 // 「更多」：打开屏幕中央的面板（2026-10-01 起；抽屉从产品路径退场）
-                // 必须先**无条件关**收藏/图形面板：Toggle 在图形页会切到收藏页，
-                // 用户点“更多”却看到收藏弹窗（2026-11-08 真机反馈）；无条件 Close 也是空操作安全。
-                cmd.CloseLibraryPanel();
                 OpenMore();
                 break;
         }
