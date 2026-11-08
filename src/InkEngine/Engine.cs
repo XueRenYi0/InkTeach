@@ -6011,6 +6011,19 @@ public partial class InkEngine
         }
         if (_uiHover) { _uiHover = false; ApplyCursor(); }
 
+        // A4.6：计时/点名/PPT 一旦被管理器捕获，移动也先走管理器；
+        // 未消费时仍落到下面的旧 hover/drag 逻辑。
+        if (OverlayLayers.CaptureLayer?.Id is "timer" or "roll" or "ppt")
+        {
+            if (OverlayLayers.PointerMove(screenX, screenY, id))
+            {
+                ClearEngineTooltip();
+                _dirty = true;
+                ApplyCursor();
+                return;
+            }
+        }
+
         // 课堂计时卡片：拖动跟手 / 悬停（排在 PPT 条之前、穿透之前——同按下顺序）。
         if (!_drawing && TimerCardPointerMove(screenX, screenY))
         {
