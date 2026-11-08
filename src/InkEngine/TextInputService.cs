@@ -1,0 +1,408 @@
+using System.Runtime.InteropServices;
+using System.Text;
+using Vortice.Mathematics;
+
+namespace InkEngine;
+
+/// <summary>文字输入模式。RichText 先不进接口，画布文本框仍走 TextBoxEditing。</summary>
+public enum TextInputMode
+{
+    SingleLine = 0,
+    MultiLine = 1,
+}
+
+/// <summary>文字宿主的视觉参数（界面逻辑像素）。</summary>
+public sealed class TextInputVisual
+{
+    public Color4 Background { get; init; } = new(1f, 1f, 1f, 1f);
+    public Color4 Text { get; init; } = new(0f, 0f, 0f, 1f);
+    public float FontSize { get; init; } = 14f;
+    public float Padding { get; init; } = 8f;
+}
+
+/// <summary>
+/// 一次文字输入请求。页面只给“矩形 + 初值 + 校验 + 提交/取消”，
+/// IME/光标/选区/剪贴板/撤销交给原生 EDIT。
+/// </summary>
+public sealed class TextInputRequest
+{
+    public string Id { get; init; } = "";
+    public RectF Rect { get; set; }
+    public string InitialText { get; init; } = "";
+    public TextInputMode Mode { get; init; } = TextInputMode.SingleLine;
+    public int MaxLength { get; init; } = 512;
+    public bool Password { get; init; }
+
+    /// <summary>false = 只创建/定位宿主，不抢前台（自检用）。</summary>
+    public bool Activate { get; init; } = true;
+
+    /// <summary>false = 宿主保持隐藏，只用于自检/预加载；默认显示。</summary>
+    public bool Visible { get; init; } = true;
+
+    /// <summary>失焦时提交（默认）；false = 失焦取消。</summary>
+    public bool CommitOnFocusLost { get; init; } = true;
+
+    public TextInputVisual Visual { get; init; } = new();
+
+    /// <summary>返回非空字符串 = 校验失败，保持编辑并调 OnError。</summary>
+    public Func<string, string> Validate { get; init; }
+    public Action<string> OnError { get; init; }
+    public Action<string> OnCommit { get; init; }
+    public Action OnCancel { get; init; }
+
+    /// <summary>Tab 提交后通知页面移动焦点；bool = Shift。</summary>
+    public Action<bool> OnTab { get; init; }
+}
+
+/// <summary>一个窗口一个文字输入宿主；页面通过 IUiHost.TextInput 使用。</summary>
+public interface ITextInputService
+{
+    bool IsEditing { get; }
+    string EditingId { get; }
+
+    void Begin(TextInputRequest request);
+    void UpdateRect(RectF rect);
+    void Commit();
+    void Cancel();
+}
+
+public partial class InkEngine
+{
+    private TextInputService _textInput;
+
+    internal ITextInputService TextInput => _textInput ??= new TextInputService(this);
+
+    /// <summary>
+    /// 原生文字宿主：无边框 EDIT，支持单行/多行/密码、IME、选区、复制粘贴、撤销。
+    /// 第一版用 windowed EDIT；真透明以后评估 windowless RichEdit/TSF（见调研 §3.12）。
+    /// </summary>
+    internal sealed class TextInputService : ITextInputService, IDisposable
+    {
+        private readonly InkEngine _engine;
+        private IntPtr _hwnd;
+        private IntPtr _oldProc;
+        private Native.WndProcDelegate _wndProc;
+        private IntPtr _font;
+        private IntPtr _brush;
+        private uint _brushColor;
+        private float _fontPx;
+        private bool _editing;
+        private bool _hiding;
+        private bool _mainNoActivate;
+        private TextInputRequest _request;
+
+        public TextInputService(InkEngine engine) => _engine = engine;
+
+        public bool IsEditing => _editing;
+        public string EditingId => _editing ? _request?.Id ?? "" : "";
+
+        public void Begin(TextInputRequest request)
+        {
+            if (request == null) return;
+            if (_editing) Commit();
+
+            _request = request;
+            _editing = true;
+            _hiding = false;
+
+            EnsureWindow(request.Mode);
+            if (_hwnd == IntPtr.Zero)
+            {
+                _editing = false;
+                _request = null;
+                return;
+            }
+
+            ApplyVisual(request.Visual);
+            Native.SetWindowTextW(_hwnd, request.InitialText ?? "");
+            Native.SendMessage(_hwnd, Native.EM_SETLIMITTEXT,
+                new IntPtr(Math.Max(1, request.MaxLength)), IntPtr.Zero);
+            Native.SendMessage(_hwnd, 0x00CC /*EM_SETPASSWORDCHAR*/,
+                new IntPtr(request.Password ? '*' : 0), IntPtr.Zero);
+
+            int len = Native.GetWindowTextLengthW(_hwnd);
+            Native.SendMessage(_hwnd, Native.EM_SETSEL, new IntPtr(len), new IntPtr(len));
+            Position(request.Rect);
+
+            if (request.Visible)
+            {
+                Native.ShowWindow(_hwnd, Native.SW_SHOW);
+                if (request.Activate) FocusHost();
+            }
+        }
+
+        public void UpdateRect(RectF rect)
+        {
+            if (!_editing || _request == null) return;
+            _request.Rect = rect;
+            Position(rect);
+        }
+
+        public void Commit()
+        {
+            if (!_editing || _request == null) return;
+            TextInputRequest req = _request;
+            string text = ReadText();
+
+            if (req.Validate != null)
+            {
+                string error = req.Validate(text);
+                if (!string.IsNullOrEmpty(error))
+                {
+                    req.OnError?.Invoke(error);
+                    return;       // 保持编辑，不丢用户输入
+                }
+            }
+
+            HideCore();
+            req.OnCommit?.Invoke(text);
+        }
+
+        public void Cancel()
+        {
+            if (!_editing || _request == null) return;
+            TextInputRequest req = _request;
+            HideCore();
+            req.OnCancel?.Invoke();
+        }
+
+        public void Dispose()
+        {
+            if (_hwnd != IntPtr.Zero)
+            {
+                bool oldHiding = _hiding;
+                _hiding = true;
+                Native.DestroyWindow(_hwnd);
+                _hiding = oldHiding;
+            }
+            _hwnd = IntPtr.Zero;
+            _editing = false;
+            _request = null;
+            if (_font != IntPtr.Zero) Native.DeleteObject(_font);
+            _font = IntPtr.Zero;
+            if (_brush != IntPtr.Zero) Native.DeleteObject(_brush);
+            _brush = IntPtr.Zero;
+        }
+
+        private void EnsureWindow(TextInputMode mode)
+        {
+            if (_hwnd != IntPtr.Zero)
+            {
+                // EDIT 的 ES_MULTILINE 不能运行时切换；模式变了就重建。
+                bool wantMulti = (_style & 0x0004L /*ES_MULTILINE*/) != 0;
+                if (wantMulti == (mode == TextInputMode.MultiLine)) return;
+                // DestroyWindow 会发 WM_KILLFOCUS；先挡住，否则会把新请求当成“失焦提交”。
+                bool oldHiding = _hiding;
+                _hiding = true;
+                Native.DestroyWindow(_hwnd);
+                _hwnd = IntPtr.Zero;
+                _hiding = oldHiding;
+            }
+
+            long style = 0x80000000L /*WS_POPUP*/;
+            if (mode == TextInputMode.MultiLine)
+                style |= 0x0004L /*ES_MULTILINE*/ | 0x0010L /*ES_WANTRETURN*/
+                         | 0x00200000L /*WS_VSCROLL*/;
+            else
+                style |= 0x0080L /*ES_AUTOHSCROLL*/;
+
+            _style = style;
+            _hwnd = Native.CreateWindowEx(
+                Native.WS_EX_TOPMOST | Native.WS_EX_TOOLWINDOW,
+                "EDIT", "InkTeachTextInput", style, 0, 0, 1, 1,
+                IntPtr.Zero, IntPtr.Zero, _engine._hInstance, IntPtr.Zero);
+            if (_hwnd == IntPtr.Zero)
+            {
+                Console.WriteLine("文字输入宿主创建失败: " + Marshal.GetLastWin32Error());
+                return;
+            }
+
+            _wndProc = WndProc;
+            _oldProc = Native.SetWindowLongPtr(
+                _hwnd, Native.GWLP_WNDPROC,
+                Marshal.GetFunctionPointerForDelegate(_wndProc));
+        }
+
+        private long _style;
+
+        private void ApplyVisual(TextInputVisual v)
+        {
+            v ??= new TextInputVisual();
+            float px = MathF.Max(8f, MathF.Round(v.FontSize * _engine.UiUnit));
+            if (_font == IntPtr.Zero || MathF.Abs(_fontPx - px) > 0.5f)
+            {
+                if (_font != IntPtr.Zero) Native.DeleteObject(_font);
+                _font = Native.CreateFontW(
+                    -(int)px, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Microsoft YaHei UI");
+                _fontPx = px;
+            }
+            if (_font != IntPtr.Zero)
+                Native.SendMessage(_hwnd, Native.WM_SETFONT, _font, new IntPtr(1));
+
+            int pad = (int)MathF.Round(v.Padding * _engine.UiUnit);
+            Native.SendMessage(_hwnd, Native.EM_SETMARGINS,
+                new IntPtr(Native.EC_LEFTMARGIN | Native.EC_RIGHTMARGIN),
+                new IntPtr(pad | (pad << 16)));
+
+            uint bg = ColorRef(v.Background);
+            if (bg != _brushColor || _brush == IntPtr.Zero)
+            {
+                if (_brush != IntPtr.Zero) Native.DeleteObject(_brush);
+                _brush = Native.CreateSolidBrush(bg);
+                _brushColor = bg;
+            }
+            _textColor = ColorRef(v.Text);
+        }
+
+        private uint _textColor;
+
+        private void Position(RectF logical)
+        {
+            if (_hwnd == IntPtr.Zero) return;
+            float u = _engine.UiUnit;
+            int x = (int)MathF.Floor(logical.MinX * u);
+            int y = (int)MathF.Floor(logical.MinY * u);
+            int w = Math.Max(24, (int)MathF.Ceiling((logical.MaxX - logical.MinX) * u));
+            int h = Math.Max(24, (int)MathF.Ceiling((logical.MaxY - logical.MinY) * u));
+            Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, x, y, w, h, 0);
+        }
+
+        private string ReadText()
+        {
+            if (_hwnd == IntPtr.Zero) return "";
+            int len = Native.GetWindowTextLengthW(_hwnd);
+            var sb = new StringBuilder(Math.Max(16, len + 1));
+            Native.GetWindowTextW(_hwnd, sb, sb.Capacity);
+            return sb.ToString();
+        }
+
+        private void HideCore()
+        {
+            if (_hiding) return;
+            _hiding = true;
+            _editing = false;
+            _request = null;
+            if (_hwnd != IntPtr.Zero) Native.ShowWindow(_hwnd, Native.SW_HIDE);
+            RestoreFocus();
+            _hiding = false;
+        }
+
+        private void FocusHost()
+        {
+            IntPtr main = _engine._windows.Count > 0 ? _engine._windows[0].Hwnd : IntPtr.Zero;
+            _mainNoActivate = false;
+            if (main != IntPtr.Zero)
+            {
+                long ex = Native.GetWindowLongPtr(main, Native.GWL_EXSTYLE).ToInt64();
+                if ((ex & Native.WS_EX_NOACTIVATE) != 0)
+                {
+                    _mainNoActivate = true;
+                    Native.SetWindowLongPtr(main, Native.GWL_EXSTYLE,
+                        new IntPtr(ex & ~Native.WS_EX_NOACTIVATE));
+                    Native.SetWindowPos(main, IntPtr.Zero, 0, 0, 0, 0,
+                        Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER);
+                }
+            }
+
+            IntPtr fg = Native.GetForegroundWindow();
+            uint fgTid = Native.GetWindowThreadProcessId(fg, out _);
+            uint myTid = Native.GetCurrentThreadId();
+            if (fgTid != 0 && fgTid != myTid)
+            {
+                Native.AttachThreadInput(myTid, fgTid, true);
+                Native.SetForegroundWindow(_hwnd);
+                Native.SetFocus(_hwnd);
+                Native.AttachThreadInput(myTid, fgTid, false);
+            }
+            else
+            {
+                Native.SetForegroundWindow(_hwnd);
+                Native.SetFocus(_hwnd);
+            }
+            Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
+                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+        }
+
+        private void RestoreFocus()
+        {
+            bool had = _mainNoActivate;
+            _mainNoActivate = false;
+            if (had && _engine._windows.Count > 0)
+            {
+                IntPtr main = _engine._windows[0].Hwnd;
+                long ex = Native.GetWindowLongPtr(main, Native.GWL_EXSTYLE).ToInt64();
+                Native.SetWindowLongPtr(main, Native.GWL_EXSTYLE,
+                    new IntPtr(ex | Native.WS_EX_NOACTIVATE));
+                Native.SetWindowPos(main, IntPtr.Zero, 0, 0, 0, 0,
+                    Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
+            }
+            if (_engine.KeyboardMode && _engine._windows.Count > 0)
+                Native.SetFocus(_engine._windows[0].Hwnd);
+        }
+
+        private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+        {
+            switch (msg)
+            {
+                case Native.WM_CTLCOLOREDIT:
+                {
+                    IntPtr hdc = wParam;
+                    Native.SetTextColor(hdc, _textColor);
+                    Native.SetBkColor(hdc, _brushColor);
+                    return _brush != IntPtr.Zero ? _brush : Native.GetStockObject(0 /*WHITE_BRUSH*/);
+                }
+                case Native.WM_KEYDOWN:
+                {
+                    int vk = wParam.ToInt32();
+                    if (vk == 0x1B /*Esc*/) { Cancel(); return IntPtr.Zero; }
+                    if (vk == 0x09 /*Tab*/)
+                    {
+                        TextInputRequest req = _request;
+                        bool shift = (Native.GetAsyncKeyState(0x10) & 0x8000) != 0;
+                        Commit();
+                        req?.OnTab?.Invoke(shift);
+                        return IntPtr.Zero;
+                    }
+                    if (vk == 0x0D /*Enter*/)
+                    {
+                        bool multiline = (_style & 0x0004L) != 0;
+                        bool ctrl = (Native.GetAsyncKeyState(0x11) & 0x8000) != 0;
+                        if (multiline && !ctrl) break;     // 多行：Enter 换行；Ctrl+Enter 提交
+                        Commit();
+                        return IntPtr.Zero;
+                    }
+                    break;
+                }
+                case Native.WM_CHAR:
+                {
+                    int ch = wParam.ToInt32();
+                    bool multiline = (_style & 0x0004L) != 0;
+                    if (ch == 0x1B) return IntPtr.Zero;
+                    if (!multiline && (ch == 0x0D || ch == 0x0A)) return IntPtr.Zero;
+                    break;
+                }
+                case Native.WM_KILLFOCUS:
+                    if (!_hiding && _editing)
+                    {
+                        if (_request?.CommitOnFocusLost != false) Commit();
+                        else Cancel();
+                    }
+                    return IntPtr.Zero;
+                case Native.WM_GETDLGCODE:
+                    return new IntPtr(Native.DLGC_WANTALLKEYS);
+                case Native.WM_CLOSE:
+                    Cancel();
+                    return IntPtr.Zero;
+            }
+            return Native.CallWindowProc(_oldProc, hWnd, msg, wParam, lParam);
+        }
+
+        private static uint ColorRef(Color4 c)
+        {
+            uint r = (uint)Math.Clamp((int)MathF.Round(c.R * 255f), 0, 255);
+            uint g = (uint)Math.Clamp((int)MathF.Round(c.G * 255f), 0, 255);
+            uint b = (uint)Math.Clamp((int)MathF.Round(c.B * 255f), 0, 255);
+            return r | (g << 8) | (b << 16);
+        }
+    }
+}

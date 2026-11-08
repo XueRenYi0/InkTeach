@@ -82,6 +82,8 @@ internal sealed class UiHost : IUiHost, IEngineCommands
 
     public ID2D1Factory1 PathFactory => Gfx.D2DFactory;
 
+    public ITextInputService TextInput => _engine.TextInput;
+
     public double NowMs => _engine.NowMs;
 
     public int DocumentVersion => _engine.Doc.Version;

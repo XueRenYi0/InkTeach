@@ -226,6 +226,12 @@ public interface IUiHost
     /// <summary>Direct2D 工厂。界面要画自定义几何（路径）时用它创建。</summary>
     ID2D1Factory1 PathFactory { get; }
 
+    /// <summary>
+    /// 一个窗口一个文字输入宿主。默认 null（老界面/自检不受影响）；
+    /// 新页面用它 Begin/UpdateRect/Commit/Cancel，不要自己 CreateWindowEx。
+    /// </summary>
+    ITextInputService TextInput => null;
+
     /// <summary>引擎的单调时钟（毫秒）。动画与"几秒后自动隐藏"用这个。</summary>
     double NowMs { get; }
 
