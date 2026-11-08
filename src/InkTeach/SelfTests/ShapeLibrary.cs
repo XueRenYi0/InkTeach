@@ -826,11 +826,19 @@ internal sealed partial class App
             SettleFrames(180);
             var resetRect = LibraryPanelRectNow();
             float barTop = UiBarBoundsNow().MinY * uiK;
-            Check("I：重置后回到横排、贴工具条上沿",
+            // 2026-11-03 用户定：切页签**顶边固定**，矮的那页下方自然留空。
+            // 默认高度取两页里更高的那一档（横排 = 图形 5 行），所以收藏页重置后
+            // 底边会离工具条还有几十像素——这是有意留空，不是没贴边。
+            // 判据改为：横排 + 回到默认上沿/默认宽度 + 不压到工具条。
+            Check("I：重置后回到横排、回到默认上沿",
                   LibraryMode == LibraryPanelMode.Horizontal
                   && resetRect.MaxY <= barTop + 1f
-                  && resetRect.MaxY > barTop - 40f * uiK,
-                  $"方向 {LibraryMode}，底 {resetRect.MaxY:F0}，条上沿 {barTop:F0}");
+                  && MathF.Abs(resetRect.MinY - before.MinY) < 3f * uiK
+                  && MathF.Abs((resetRect.MaxX - resetRect.MinX)
+                             - (before.MaxX - before.MinX)) < 3f * uiK,
+                  $"方向 {LibraryMode}，顶 {resetRect.MinY:F0}/{before.MinY:F0}，"
+                  + $"宽 {resetRect.MaxX - resetRect.MinX:F0}/{before.MaxX - before.MinX:F0}，"
+                  + $"底 {resetRect.MaxY:F0}，条上沿 {barTop:F0}");
 
             // 白板滚动时，收藏弹窗必须钉在屏幕上，不能跟着内容走。
             {
