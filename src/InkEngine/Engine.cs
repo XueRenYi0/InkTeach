@@ -4759,6 +4759,7 @@ public partial class InkEngine
         float screenX = sx, screenY = sy;
         float x = sx, y = sy;
         ScreenToCanvas(ref x, ref y);
+        ShadowOverlayHit(screenX, screenY);   // A4.2：只读对比旧分支与浮层管理器
 
         // 文本框编辑中：点编辑框以外 = 先提交，**同一下**继续走文本工具分流。
         //（ClassIn 的行为：点空白马上出新输入框，旧框变成普通显示、不再带操作条。）

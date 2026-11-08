@@ -361,7 +361,7 @@ IOverlayLayer
 
 ### Phase 1：PageHost + 设置试点（2～3 周）
 
-> 适配补充：**A0–A3 + A4.0/A4.1 已于 2026-11-08 落地**（五页 IPage、浮层管理器、library/replay/timer/roll/ppt 适配器注册）。`--settingsaudit` 40、`--pageaudit` 16、`--textinputaudit` 8、`--overlayaudit` 6 全绿；下一步 A4.2 影子路由。
+> 适配补充：**A0–A3 + A4.0–A4.2 已落地**（五页 IPage、浮层适配器、影子路由）。`--settingsaudit` 40、`--pageaudit` 16、`--textinputaudit` 8、`--overlayaudit` 6 全绿；下一步 A4.3 切 library/replay 主路由。
 
 - `PageHost` / `Page` / `PageFrame` / `LegacyPage`；
 - `SettingsPage` 包当前设置页（连续滚动/双指/滚轮/滚动条原样）；

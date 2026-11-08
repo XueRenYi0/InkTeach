@@ -123,4 +123,40 @@ public partial class InkEngine
 
     /// <summary>自检/影子路由：只读探测当前最上层浮层，不触发任何回调。</summary>
     internal string OverlayPeekForTest(float x, float y) => OverlayLayers.PeekHit(x, y)?.Id ?? "";
+
+    internal int OverlayShadowMismatches { get; private set; }
+    internal string OverlayShadowLast { get; private set; } = "";
+    private int _overlayShadowLogged;
+
+    /// <summary>
+    /// A4.2 影子路由：用旧分支顺序算一遍“应该由谁吃”，和 OverlayLayerManager.PeekHit 对比。
+    /// 只记录、不改变输入；UI 不在这张表里，旧结果是 ui 时跳过。
+    /// </summary>
+    internal void ShadowOverlayHit(float screenX, float screenY)
+    {
+        string oldLayer = OverlayShadowLegacyTop(screenX, screenY);
+        if (oldLayer == "ui") return;
+
+        string newLayer = OverlayLayers.PeekHit(screenX, screenY)?.Id ?? "";
+        if (string.Equals(oldLayer, newLayer, StringComparison.Ordinal)) return;
+
+        OverlayShadowMismatches++;
+        OverlayShadowLast = $"{oldLayer} -> {newLayer} @ {screenX:F0},{screenY:F0}";
+        if (_overlayShadowLogged < 8)
+        {
+            _overlayShadowLogged++;
+            Console.WriteLine("[overlay-shadow] " + OverlayShadowLast);
+        }
+    }
+
+    private string OverlayShadowLegacyTop(float x, float y)
+    {
+        if (LibraryLayerHit(x, y)) return "library";
+        if (ReplayActive && ReplayBarRect().Contains(x, y)) return "replay";
+        if (UiContains(x, y)) return "ui";
+        if (TimerCardOpen && TimerCardRect().Contains(x, y)) return "timer";
+        if (RollCardOpen && RollCardRect().Contains(x, y)) return "roll";
+        if (PptBarContains(x, y)) return "ppt";
+        return "";
+    }
 }
