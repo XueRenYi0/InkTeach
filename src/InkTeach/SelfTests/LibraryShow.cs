@@ -69,6 +69,23 @@ internal sealed partial class App
             Console.WriteLine($"  已出图：{vpath}");
         else Console.WriteLine("  出图失败：" + vpath);
 
+        // 窄面板二级分类下拉（收藏/图形共用）：先缩到 compact，再出图核对。
+        SetLibraryPanelWidthForTest(240f);
+        SettleFrames(300);
+        panelV = LibraryPanelRectNow();
+        LibraryCategoryMenuOpen = true;
+        LibraryCategoryMenuHover = 1;
+        SettleFrames(250);
+        string cpath = Path.Combine(Path.GetDirectoryName(path) ?? ".",
+            Path.GetFileNameWithoutExtension(path) + "-cat-menu" + Path.GetExtension(path));
+        if (OffscreenFloatingShot(cpath, panelV.Inflate(16f)))
+            Console.WriteLine($"  已出图：{cpath}");
+        else Console.WriteLine("  出图失败：" + cpath);
+        LibraryCategoryMenuOpen = false;
+        LibraryCategoryMenuHover = -1;
+        ResetLibraryPanelForTest();
+        SettleFrames(300);
+
         LibraryMenu = 4;
         SettleFrames(250);
         string mpath = Path.Combine(Path.GetDirectoryName(path) ?? ".",
@@ -144,6 +161,21 @@ internal sealed partial class App
         if (OffscreenFloatingShot(svpath, panelSV.Inflate(16f)))
             Console.WriteLine($"  已出图：{svpath}");
         else Console.WriteLine("  出图失败：" + svpath);
+
+        var psv = LibraryPanelRectNow();
+        SetLibraryPanelWidthForTest(240f);
+        SettleFrames(300);
+        panelSV = LibraryPanelRectNow();
+        LibraryCategoryMenuOpen = true;
+        LibraryCategoryMenuHover = 2;
+        SettleFrames(250);
+        string scpath = Path.Combine(Path.GetDirectoryName(path) ?? ".",
+            Path.GetFileNameWithoutExtension(path) + "-shapes-cat-menu" + Path.GetExtension(path));
+        if (OffscreenFloatingShot(scpath, panelSV.Inflate(16f)))
+            Console.WriteLine($"  已出图：{scpath}");
+        else Console.WriteLine("  出图失败：" + scpath);
+        LibraryCategoryMenuOpen = false;
+        LibraryCategoryMenuHover = -1;
 
         CloseLibraryPanel();
         ShapeLibrary.DirOverride = null;

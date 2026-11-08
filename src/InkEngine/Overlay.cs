@@ -4024,11 +4024,8 @@ internal sealed partial class OverlayWindow : IDisposable
         // 旋转柄和度数标签在第 3 / 6 步里单独判据，**照旧留着**（此刻它就是"我抓着的那个东西"）。
         if (!app.SelRotating)
         {
-            // 1) 光晕
-            _scratch.Color = new Color4(accent.R, accent.G, accent.B, 0.16f);
-            DrawQuad(c0, c1, c2, c3, 6.5f * dpi);
-
-            // 2) 描边。复制成功那 0.25 秒加粗变亮，闪一下（用户反馈"复制以后看不出来"）。
+            // 1) 描边。**不再画 6.5px 光晕**：大屏上那圈半透明蓝看起来像"线的虚影"，
+            // 选中框要干净利落；对比度靠 2.5px 实线和白底手柄就够。
             if (app.SelFlashing)
             {
                 _scratch.Color = new Color4(accent.R, accent.G, accent.B, 1f);
@@ -4689,6 +4686,7 @@ internal sealed partial class OverlayWindow : IDisposable
         if (app.LibraryTab == LibraryTab.Shapes)
         {
             DrawShapeLibraryPage(app, m, dpi, theme);
+            if (app.LibraryCategoryMenuOpen && !m.Tabbed) DrawLibraryCategoryMenu(app, dpi, theme);
             return;
         }
 
@@ -4890,6 +4888,7 @@ internal sealed partial class OverlayWindow : IDisposable
         }
 
         if (app.LibraryCategoriesOpen) DrawLibraryDrawer(app, m, dpi, theme);
+        if (app.LibraryCategoryMenuOpen && !m.Tabbed) DrawLibraryCategoryMenu(app, dpi, theme);
 
         var grip2 = LibraryLayout.ResizeRect(panel, dpi);
         _scratch.Color = theme.TextMuted;
@@ -5012,37 +5011,9 @@ internal sealed partial class OverlayWindow : IDisposable
         }
     }
 
-    /// <summary>图形页的二级分类页签：全部 / 常用 / 曲线 / 立体（数量写在名字后）。</summary>
+    /// <summary>图形页的二级分类页签：全部 / 常用 / 曲线 / 立体（和收藏共用同一个选择器）。</summary>
     private void DrawShapeTabs(InkEngine app, in LibraryLayout.Info m, float dpi, UiTheme theme)
-    {
-        var cats = ShapeCatalog.Categories;
-        var widths = new float[cats.Length];
-        for (int i = 0; i < cats.Length; i++)
-            widths[i] = LibraryLayout.TabWidthLogical(cats[i].Name) * dpi;
-        var clip = m.Tabs;
-        _ctx.PushAxisAlignedClip(
-            new Vortice.RawRectF(clip.MinX, clip.MinY, clip.MaxX, clip.MaxY),
-            AntialiasMode.Aliased);
-        for (int i = 0; i < cats.Length; i++)
-        {
-            var tr = LibraryLayout.TabRect(m, widths, i, dpi, app.LibraryTabScroll);
-            if (tr.MaxX < m.Tabs.MinX) continue;
-            if (tr.MinX > m.Tabs.MaxX) break;
-            bool on = cats[i].Id == app.ShapeCategoryId;
-            _scratch.Color = on ? theme.Text : theme.TextMuted;
-            _ctx.DrawText(cats[i].Name, ReadoutFormatTab(dpi),
-                          new Rect(tr.MinX, tr.MinY, tr.MaxX - tr.MinX,
-                                   tr.MaxY - tr.MinY - 2f * dpi), _scratch);
-            if (on)
-            {
-                _scratch.Color = theme.ActiveBg;
-                _ctx.DrawLine(new System.Numerics.Vector2(tr.MinX, tr.MaxY - 1f * dpi),
-                              new System.Numerics.Vector2(tr.MaxX, tr.MaxY - 1f * dpi),
-                              _scratch, 2f * dpi);
-            }
-        }
-        _ctx.PopAxisAlignedClip();
-    }
+        => DrawCategoryTabs(app, m, dpi, theme);
 
     private void DrawShapeCatalogCard(ShapePreset preset, in RectF cell,
                                       bool active, bool hover, float dpi, UiTheme theme)
@@ -5406,9 +5377,17 @@ internal sealed partial class OverlayWindow : IDisposable
         }
     }
 
-    private void DrawLibraryTabs(InkEngine app, in LibraryLayout.Info m, float dpi, UiTheme theme)
+    /// <summary>
+    /// 分类选择器**唯一实现**：收藏 / 图形 / 以后新增“物理”等分类都走这里。
+    /// 宽面板 = 同一套胶囊页签；窄面板 = 同一个下拉 pill（调用方走 DrawLibPill）。
+    /// 数据只认 `LibraryTabsNow()`，选中项由当前页决定，不再各写一套绘制。
+    /// </summary>
+    private void DrawCategoryTabs(InkEngine app, in LibraryLayout.Info m, float dpi, UiTheme theme)
     {
-        var cats = app.LibraryTabCategories();
+        var cats = app.LibraryTabsNow();
+        bool shapes = app.LibraryTab == LibraryTab.Shapes;
+        string selected = shapes ? app.ShapeCategoryId : app.LibraryCategoryId;
+        var favCats = shapes ? null : app.LibraryTabCategories();
         var widths = new float[cats.Length];
         for (int i = 0; i < cats.Length; i++)
             widths[i] = LibraryLayout.TabWidthLogical(cats[i].Name) * dpi;
@@ -5421,32 +5400,35 @@ internal sealed partial class OverlayWindow : IDisposable
             var tr = LibraryLayout.TabRect(m, widths, i, dpi, app.LibraryTabScroll);
             if (tr.MaxX < m.Tabs.MinX) continue;
             if (tr.MinX > m.Tabs.MaxX) break;
-            bool on = cats[i].Id == app.LibraryCategoryId;
+            bool on = cats[i].Id == selected;
+            if (on)
+            {
+                var rr = new RoundedRectangle(
+                    new Vortice.RawRectF(tr.MinX + 2f * dpi, tr.MinY + 2f * dpi,
+                                         tr.MaxX - 2f * dpi, tr.MaxY - 2f * dpi),
+                    7f * dpi, 7f * dpi);
+                _scratch.Color = theme.ActiveBg;
+                _ctx.FillRoundedRectangle(rr, _scratch);
+            }
             float starW = 0f;
-            if (cats[i].Pinned)
+            if (!shapes && favCats != null && i < favCats.Length && favCats[i].Pinned)
             {
                 starW = 12f * dpi;
                 var starBox = new RectF
                 {
-                    MinX = tr.MinX, MinY = tr.MinY + 2f * dpi,
-                    MaxX = tr.MinX + starW, MaxY = tr.MaxY - 2f * dpi,
+                    MinX = tr.MinX + 4f * dpi, MinY = tr.MinY + 2f * dpi,
+                    MaxX = tr.MinX + 4f * dpi + starW, MaxY = tr.MaxY - 2f * dpi,
                 };
                 DrawLibStar(starBox, true, new Color4(0.95f, 0.68f, 0.12f, 1f), dpi);
             }
-            _scratch.Color = on ? theme.Text : theme.TextMuted;
+            _scratch.Color = on ? theme.ActiveText : theme.TextMuted;
             _ctx.DrawText(cats[i].Name, ReadoutFormatTab(dpi),
-                          new Rect(tr.MinX + starW, tr.MinY, tr.MaxX - tr.MinX - starW,
+                          new Rect(tr.MinX + starW + 4f * dpi, tr.MinY,
+                                   tr.MaxX - tr.MinX - starW - 8f * dpi,
                                    tr.MaxY - tr.MinY - 2f * dpi), _scratch);
-            if (on)
-            {
-                _scratch.Color = theme.ActiveBg;
-                _ctx.DrawLine(new System.Numerics.Vector2(tr.MinX, tr.MaxY - 1f * dpi),
-                              new System.Numerics.Vector2(tr.MaxX, tr.MaxY - 1f * dpi),
-                              _scratch, 2f * dpi);
-            }
         }
-        // 页签拖动：目标位置一条竖线。
-        if (app.LibraryTabDropIndex >= 0)
+        // 页签拖动：目标位置一条竖线（只收藏页有重排）。
+        if (!shapes && app.LibraryTabDropIndex >= 0)
         {
             float x = m.Tabs.MaxX;
             if (app.LibraryTabDropIndex < cats.Length)
@@ -5462,6 +5444,53 @@ internal sealed partial class OverlayWindow : IDisposable
             }
         }
         _ctx.PopAxisAlignedClip();
+    }
+
+    private void DrawLibraryTabs(InkEngine app, in LibraryLayout.Info m, float dpi, UiTheme theme)
+        => DrawCategoryTabs(app, m, dpi, theme);
+
+    /// <summary>窄面板的二级分类下拉：收藏/图形共用，数据来自 LibraryTabsNow。</summary>
+    private void DrawLibraryCategoryMenu(InkEngine app, float dpi, UiTheme theme)
+    {
+        var m = app.LibraryCategoryMenuRect();
+        if (m.IsEmpty) return;
+        var rr = new RoundedRectangle(
+            new Vortice.RawRectF(m.MinX, m.MinY, m.MaxX, m.MaxY), 10f * dpi, 10f * dpi);
+        _scratch.Color = new Color4(theme.Panel.R, theme.Panel.G, theme.Panel.B, 0.99f);
+        _ctx.FillRoundedRectangle(rr, _scratch);
+        _scratch.Color = theme.PanelBorder;
+        _ctx.DrawRoundedRectangle(rr, _scratch, 1f);
+
+        var cats = app.LibraryTabsNow();
+        string selected = app.LibrarySelectedCategoryId;
+        for (int i = 0; i < cats.Length; i++)
+        {
+            var item = app.LibraryCategoryMenuItemRect(i);
+            if (item.IsEmpty) continue;
+            bool on = cats[i].Id == selected;
+            if (app.LibraryCategoryMenuHover == i)
+            {
+                _scratch.Color = theme.Hover;
+                _ctx.FillRoundedRectangle(new RoundedRectangle(
+                    new Vortice.RawRectF(item.MinX, item.MinY, item.MaxX, item.MaxY),
+                    6f * dpi, 6f * dpi), _scratch);
+            }
+            _scratch.Color = on ? theme.ActiveBg : theme.Text;
+            _ctx.DrawText(cats[i].Name, ReadoutFormatSmall(dpi),
+                          new Rect(item.MinX + 10f * dpi, item.MinY,
+                                   item.MaxX - item.MinX - 30f * dpi, item.MaxY - item.MinY), _scratch);
+            if (on)
+            {
+                float cx = item.MaxX - 14f * dpi, cy = (item.MinY + item.MaxY) * 0.5f;
+                _scratch.Color = theme.ActiveBg;
+                _ctx.DrawLine(new System.Numerics.Vector2(cx - 4f * dpi, cy),
+                              new System.Numerics.Vector2(cx - 1f * dpi, cy + 3f * dpi),
+                              _scratch, 1.6f * dpi);
+                _ctx.DrawLine(new System.Numerics.Vector2(cx - 1f * dpi, cy + 3f * dpi),
+                              new System.Numerics.Vector2(cx + 5f * dpi, cy - 4f * dpi),
+                              _scratch, 1.6f * dpi);
+            }
+        }
     }
 
     private void DrawLibMenuGlyph(in RectF r, Color4 color, float dpi)

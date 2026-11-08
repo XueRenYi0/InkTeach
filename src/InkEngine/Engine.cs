@@ -4817,6 +4817,13 @@ public partial class InkEngine
             ApplyCursor();
             return;
         }
+        // 点面板外：分类下拉先收起，这一下继续照常走画布/界面。
+        if (LibraryPanelVisibleNow && LibraryCategoryMenuOpen)
+        {
+            LibraryCategoryMenuOpen = false;
+            LibraryCategoryMenuHover = -1;
+            _dirty = true;
+        }
 
         // 使用态选中一张后，直接点画布 = 落点插入；面板保持打开。
         if (LibraryPanelVisibleNow && LibraryUseSelected != null
@@ -8313,6 +8320,9 @@ public partial class InkEngine
     internal int LibraryCategoryScroll;
     /// <summary>分类抽屉是否展开（管理分类 / 2 列快速切换时用）。</summary>
     internal bool LibraryCategoriesOpen;
+    /// <summary>窄面板的二级分类下拉（收藏/图形共用；和宽面板的页签是同一个数据源）。</summary>
+    internal bool LibraryCategoryMenuOpen;
+    internal int LibraryCategoryMenuHover = -1;
     /// <summary>抽屉是不是「管理分类」（显示铅笔/垃圾桶/新建）；false = 2 列的快速切换。</summary>
     internal bool LibraryDrawerManage;
     /// <summary>界面自己的全屏层（更多 / 说明）开着；收藏弹窗先藏，关掉自动回来。</summary>
@@ -8676,6 +8686,8 @@ public partial class InkEngine
         LibraryConfirm = "";
         LibraryCategoryScroll = 0;
         LibraryCategoriesOpen = false;
+        LibraryCategoryMenuOpen = false;
+        LibraryCategoryMenuHover = -1;
         LibraryDrawerManage = false;
         LibrarySelectMode = false;
         LibraryUseSelected = null;
@@ -8702,6 +8714,8 @@ public partial class InkEngine
         LibraryMenuPage = 0;
         LibraryConfirm = "";
         LibraryCategoriesOpen = false;
+        LibraryCategoryMenuOpen = false;
+        LibraryCategoryMenuHover = -1;
         LibraryDrawerManage = false;
         LibrarySelectMode = false;
         LibraryUseSelected = null;
@@ -8833,6 +8847,8 @@ public partial class InkEngine
         LibraryMenuPage = 0;
         LibraryConfirm = "";
         LibraryCategoriesOpen = false;
+        LibraryCategoryMenuOpen = false;
+        LibraryCategoryMenuHover = -1;
         LibraryDrawerManage = false;
         HideLibraryRenameWindow();
         CancelLibraryPanelDrag();
@@ -8957,6 +8973,8 @@ public partial class InkEngine
     /// <summary>收藏面板：切分类（`"all"` = 全部）。只筛，不搬。</summary>
     internal void SetLibraryCategory(string id)
     {
+        LibraryCategoryMenuOpen = false;
+        LibraryCategoryMenuHover = -1;
         if (id != "all" && id != ShapeLibrary.TrashCategory
             && !LibraryCategories.Exists(c => c.Id == id)) return;
         LibraryCategoryId = id;
@@ -9006,6 +9024,8 @@ public partial class InkEngine
         LibraryConfirm = "";
         LibraryRenamingId = null;
         LibraryCategoriesOpen = true;
+        LibraryCategoryMenuOpen = false;
+        LibraryCategoryMenuHover = -1;
         LibraryDrawerManage = true;
         ReloadLibrary();
         SetInkStatus("分类已删除；里面的内容都在「未分类」");
@@ -9033,6 +9053,8 @@ public partial class InkEngine
         LibraryConfirm = "";
         LibraryMenu = 0;
         LibraryCategoriesOpen = true;
+        LibraryCategoryMenuOpen = false;
+        LibraryCategoryMenuHover = -1;
         var row = LibraryDrawerRowRectForId(id);
         if (row.IsEmpty) { LibraryRenamingId = null; return; }
 
@@ -9350,6 +9372,8 @@ public partial class InkEngine
             case "categories":
                 CloseLibraryMenu();
                 LibraryCategoriesOpen = true;
+                LibraryCategoryMenuOpen = false;
+                LibraryCategoryMenuHover = -1;
                 LibraryDrawerManage = true;
                 EnsureLibraryCategoryVisible();
                 _dirty = true;
@@ -9481,6 +9505,8 @@ public partial class InkEngine
 
     internal void SetShapeCategory(string id)
     {
+        LibraryCategoryMenuOpen = false;
+        LibraryCategoryMenuHover = -1;
         if (ShapeCategoryId == id) return;
         ShapeCategoryId = id;
         SetUiPref("shapeCat", id);
@@ -9705,6 +9731,54 @@ public partial class InkEngine
         return m;
     }
 
+    internal string LibrarySelectedCategoryId
+        => LibraryTab == LibraryTab.Shapes ? ShapeCategoryId : LibraryCategoryId;
+
+    /// <summary>窄面板二级分类下拉：收藏和图形共用；数据只认 LibraryTabsNow。</summary>
+    internal RectF LibraryCategoryMenuRect()
+    {
+        var m = LibraryPanelInfoNow();
+        var cats = LibraryTabsNow();
+        float dpi = UiUnit;
+        int n = Math.Max(1, cats.Length);
+        float itemH = 32f * dpi;
+        float w = MathF.Max(m.CurrentCategory.MaxX - m.CurrentCategory.MinX, 176f * dpi);
+        float h = n * itemH + 8f * dpi;
+        float x = m.CurrentCategory.MinX;
+        float y = m.CurrentCategory.MaxY + 4f * dpi;
+        var panel = LibraryPanelRectNow();
+        if (!panel.IsEmpty)
+        {
+            if (y + h > panel.MaxY - 8f * dpi)
+                y = m.CurrentCategory.MinY - h - 4f * dpi;
+            y = Math.Clamp(y, panel.MinY + 8f * dpi,
+                           MathF.Max(panel.MinY + 8f * dpi, panel.MaxY - 8f * dpi - h));
+            x = Math.Clamp(x, panel.MinX + 8f * dpi,
+                           MathF.Max(panel.MinX + 8f * dpi, panel.MaxX - 8f * dpi - w));
+        }
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    internal RectF LibraryCategoryMenuItemRect(int i)
+    {
+        var m = LibraryCategoryMenuRect();
+        float dpi = UiUnit, itemH = 32f * dpi;
+        return new RectF
+        {
+            MinX = m.MinX + 6f * dpi, MinY = m.MinY + 4f * dpi + i * itemH,
+            MaxX = m.MaxX - 6f * dpi, MaxY = m.MinY + 4f * dpi + (i + 1) * itemH,
+        };
+    }
+
+    internal void SetLibraryCategoryById(string id)
+    {
+        if (LibraryTab == LibraryTab.Shapes) SetShapeCategory(id);
+        else SetLibraryCategory(id);
+        LibraryCategoryMenuOpen = false;
+        LibraryCategoryMenuHover = -1;
+        _dirty = true;
+    }
+
     /// <summary>整理操作条：全选 / 移动 / 删除 / 完成。</summary>
     internal (RectF All, RectF Move, RectF Delete, RectF Done) LibraryManageRects()
         => LibraryLayout.ManageRects(LibraryPanelInfoNow());
@@ -9786,6 +9860,20 @@ public partial class InkEngine
     }
 
     /// <summary>自检用：把弹窗位置/大小/方向恢复成默认，避免上一条用例带偏。</summary>
+    /// <summary>自检：把面板设成指定逻辑宽度（用于验证 compact 分类下拉）。</summary>
+    internal void SetLibraryPanelWidthForTest(float logicalWidth)
+    {
+        var p = LibraryPanelRectNow();
+        float dpi = UiUnit;
+        _libraryPanelLogical = new RectF
+        {
+            MinX = p.MinX / dpi, MinY = p.MinY / dpi,
+            MaxX = p.MinX / dpi + logicalWidth, MaxY = p.MaxY / dpi,
+        };
+        _libraryPanelPrefsLoaded = true;
+        _dirty = true;
+    }
+
     internal void ResetLibraryPanelForTest()
     {
         CancelLibraryPanelDrag();
@@ -9808,6 +9896,8 @@ public partial class InkEngine
         LibraryUseSelected = null;
         LibrarySelected.Clear();
         LibraryCategoriesOpen = false;
+        LibraryCategoryMenuOpen = false;
+        LibraryCategoryMenuHover = -1;
         LibraryDrawerManage = false;
         LibraryMarqueeActive = false;
         LibraryManageSorting = false;
@@ -10263,6 +10353,29 @@ public partial class InkEngine
         var m = LibraryPanelInfoNow();
         var panel = m.Panel;
 
+        if (LibraryCategoryMenuOpen && m.Tabbed)
+        {
+            LibraryCategoryMenuOpen = false;
+            LibraryCategoryMenuHover = -1;
+        }
+        // 窄面板二级分类下拉：收藏/图形共用；菜单项优先于下面的卡片/页签。
+        if (LibraryCategoryMenuOpen)
+        {
+            var cats = LibraryTabsNow();
+            for (int i = 0; i < cats.Length; i++)
+                if (LibraryCategoryMenuItemRect(i).Contains(x, y))
+                {
+                    SetLibraryCategoryById(cats[i].Id);
+                    return true;
+                }
+            if (LibraryCategoryMenuRect().Contains(x, y)) return true;
+            bool onPill = m.CurrentCategory.Contains(x, y);
+            LibraryCategoryMenuOpen = false;
+            LibraryCategoryMenuHover = -1;
+            _dirty = true;
+            if (onPill) return true;   // 再点 pill = 只收起，不要立刻又打开
+        }
+
         // 改名中：只有「✓ / ✕」留给下面的抽屉分支，其余任何点击都先取消。
         if (!string.IsNullOrEmpty(LibraryRenamingId))
         {
@@ -10413,9 +10526,10 @@ public partial class InkEngine
             }
             if (!m.Tabbed && m.CurrentCategory.Contains(x, y))
             {
-                // 窄面板放不下四个页签：点当前分类依次换下一个，标签始终可见。
-                int i = Array.FindIndex(shapeCats, c => c.Id == ShapeCategoryId);
-                SetShapeCategory(shapeCats[(Math.Max(0, i) + 1) % shapeCats.Length].Id);
+                // 窄面板放不下四个页签：打开同一个分类下拉（不再"点一下跳下一个"）。
+                LibraryCategoryMenuOpen = !LibraryCategoryMenuOpen;
+                LibraryCategoryMenuHover = -1;
+                _dirty = true;
                 return true;
             }
             if (m.Grid.Contains(x, y))
@@ -10535,6 +10649,8 @@ public partial class InkEngine
             LibraryMenu = 4;
             LibraryMenuPage = 0;
             LibraryConfirm = "";
+            LibraryCategoryMenuOpen = false;
+            LibraryCategoryMenuHover = -1;
             _dirty = true;
             return true;
         }
@@ -10555,10 +10671,9 @@ public partial class InkEngine
         }
         else if (m.CurrentCategory.Contains(x, y))
         {
-            LibraryCategoriesOpen = true;
-            LibraryDrawerManage = false;
-            LibraryCategoryScroll = 0;
-            EnsureLibraryCategoryVisible();
+            // 收藏页窄面板：和图形页同一条下拉，不再弹分类抽屉（抽屉只做管理）。
+            LibraryCategoryMenuOpen = !LibraryCategoryMenuOpen;
+            LibraryCategoryMenuHover = -1;
             _dirty = true;
             return true;
         }
@@ -10614,6 +10729,20 @@ public partial class InkEngine
     /// <summary>面板内的专用拖动状态；返回 true = 这一串移动归它。</summary>
     internal bool LibraryPanelPointerMove(float x, float y, uint pointerId)
     {
+        if (LibraryCategoryMenuOpen)
+        {
+            int hov = -1;
+            var cats = LibraryTabsNow();
+            for (int i = 0; i < cats.Length; i++)
+                if (LibraryCategoryMenuItemRect(i).Contains(x, y)) { hov = i; break; }
+            if (hov != LibraryCategoryMenuHover)
+            {
+                LibraryCategoryMenuHover = hov;
+                _dirty = true;
+            }
+            if (LibraryCategoryMenuRect().Contains(x, y)) return true;
+        }
+
         // 从卡片按住往外拖：过阈值才算拖，松手在画布上放置。
         if (_libraryCardPress != 0)
         {
@@ -20499,7 +20628,12 @@ public partial class InkEngine
         // 收藏面板：Esc = 先关菜单，再关面板（和其它浮层同一套手感）。
         if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && LibraryPanelVisibleNow)
         {
-            if (LibraryCategoriesOpen)
+            if (LibraryCategoryMenuOpen)
+            {
+                LibraryCategoryMenuOpen = false;
+                LibraryCategoryMenuHover = -1;
+            }
+            else if (LibraryCategoriesOpen)
             {
                 LibraryCategoriesOpen = false;
                 LibraryDrawerManage = false;

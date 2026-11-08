@@ -8460,7 +8460,11 @@ internal static class Program
         System.Threading.Mutex mutex;
         try
         {
-            mutex = new System.Threading.Mutex(true, @"Local\InkTeach.SingleInstance", out bool first);
+            // 自检专用：允许开发时用临时互斥体后缀和正在运行的产品实例并存（不设 = 正常单实例）。
+            string suffix = Environment.GetEnvironmentVariable("INKTEACH_MUTEX_SUFFIX");
+            string mutexName = @"Local\InkTeach.SingleInstance"
+                               + (string.IsNullOrEmpty(suffix) ? "" : "." + suffix);
+            mutex = new System.Threading.Mutex(true, mutexName, out bool first);
             if (first) { s_single = mutex; return true; }
         }
         catch (Exception ex)
