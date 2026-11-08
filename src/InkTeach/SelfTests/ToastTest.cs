@@ -23,7 +23,7 @@ internal sealed partial class App
         Doc.Clear();
         ShowHud = false;
 
-        ShowToast("已识别为文本框 · 双击编辑 · 可撤销", 2000);
+        ShowToast("已识别为文本 · 双击编辑 · 可撤销", 2000);
         SettleFrames(200);
         bool visible = ToastVisible;
         bool shot = ScreenProbe.SaveBmp(outPath, (int)_virtualX, (int)_virtualY,

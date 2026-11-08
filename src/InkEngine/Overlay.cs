@@ -5900,7 +5900,7 @@ internal sealed partial class OverlayWindow : IDisposable
         DrawPanelCard(app, m, 10f * dpi, dpi);
         var theme = app.FloatingTheme;
 
-        string[] labels = { "📝 识别到文本框" };
+        string[] labels = { "📝 识别文本" };
         for (int i = 0; i < labels.Length; i++)
         {
             var r = SelectionHandles.BarAiMenuRowRectIn(m, i, dpi);

@@ -10,7 +10,7 @@ internal sealed partial class App
     private void HandTextBoxPng(string inPath, string outPath, float textLeft)
     {
         Console.WriteLine();
-        Console.WriteLine("=== 识别到文本框 ===");
+        Console.WriteLine("=== 识别文本 ===");
         InkSerializer.LoadInto(Doc, File.ReadAllBytes(inPath));
         Doc.Selected.Clear();
         foreach (var s in Doc.Strokes)
