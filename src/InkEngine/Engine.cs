@@ -5940,6 +5940,19 @@ public partial class InkEngine
             if (_replayScrubbing) return;
         }
 
+        // A4.9：library 被管理器捕获时，移动也先走管理器（含卡片拖动/抽屉拖动）；
+        // 未消费时仍落回下面的旧 library 逻辑。
+        if (OverlayLayers.CaptureLayer?.Id == "library")
+        {
+            if (OverlayLayers.PointerMove(x, y, id))
+            {
+                ClearEngineTooltip();
+                ApplyCursor();
+                _dirty = true;
+                return;
+            }
+        }
+
         // 整理 / 页签 / 滚动条：这一串移动归收藏面板。
         if (LibraryPanelVisibleNow && LibraryPanelPointerMove(x, y, id))
         {
