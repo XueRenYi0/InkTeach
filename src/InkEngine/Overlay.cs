@@ -3108,7 +3108,7 @@ internal sealed partial class OverlayWindow : IDisposable
         // 截图整层之下——截图时 TooltipShown 本来就是假的（进入截图会清掉）。
         DrawEngineTooltip(app);
 
-        // 轻提示（1.5 秒）：画在所有浮层之上、截图整层之下。
+        // 轻提示（2 秒）：画在所有浮层之上、截图整层之下。
         // 只画不接命中——提示期间笔/鼠标/触摸照常落到画布和按钮上。
         DrawToast(app);
 

@@ -3,7 +3,7 @@ namespace InkEngine;
 /// <summary>
 /// 屏幕上的轻提示（toast）。**只负责显示，不参与命中**：
 ///   · 不抢焦点、不拦鼠标/笔/触摸，提示期间照常写字、点按钮；
-///   · 默认 1.5 秒（用户 2026-11-08 定："弹一两秒就行"），到点自动消失；
+///   · 默认 2 秒（用户 2026-11-08 定："1.5 秒有点短，2 秒可以"），到点自动消失；
 ///   · 同一时间只显示最后一条，新的覆盖旧的（不排队，避免连续识别时越积越多）。
 ///
 /// 为什么不做成对话框 / 状态条：识别到文本框是"已经完成"的反馈，
@@ -19,8 +19,8 @@ public partial class InkEngine
     /// <summary>提示还在显示吗（绘制 / 脏区 / 自检都读这一句）。</summary>
     internal bool ToastVisible => ToastText.Length > 0 && NowMs < _toastUntilMs;
 
-    /// <summary>弹一条 1.5 秒的轻提示；不抢焦点、不吞输入。</summary>
-    internal void ShowToast(string text, int ms = 1500)
+    /// <summary>弹一条 2 秒的轻提示；不抢焦点、不吞输入。</summary>
+    internal void ShowToast(string text, int ms = 2000)
     {
         if (string.IsNullOrWhiteSpace(text)) return;
         ToastText = text;

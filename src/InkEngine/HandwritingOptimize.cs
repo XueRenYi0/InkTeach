@@ -216,8 +216,8 @@ public partial class InkEngine
             Doc.Selected.Clear();
             _dirty = true;
             ShowToast(boxes.Count > 1
-                ? $"已识别为文本框（{boxes.Count} 栏）· 双击编辑 · Ctrl+Z 撤销"
-                : "已识别为文本框 · 双击编辑 · Ctrl+Z 撤销");
+                ? $"已识别为文本框（{boxes.Count} 栏）· 双击编辑 · 可撤销"
+                : "已识别为文本框 · 双击编辑 · 可撤销");
             Console.WriteLine($"[识别到文本框] {done.Result.Lines.Length} 行，{done.Result.Seconds:F1}s，" +
                               $"{boxes.Count} 个文本框（默认不选中）");
             SetHandOcrStatus(boxes.Count > 1
