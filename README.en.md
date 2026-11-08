@@ -221,7 +221,8 @@ object's own corner.
 
 Six-cell action bar: **collapse / colour / duplicate / delete / AI / ⋯**. Pin top/bottom, save,
 flip H/V, lock and gallery live in ⋯; low-frequency actions no longer stretch the bar and no
-second-level popup is used. The colour panel has
+second-level popup is used. Images and shapes use **five cells**: images replace colour with
+“save” and hide AI; shapes keep colour and hide AI. The colour panel has
 a continuous width slider (live readout while dragging, one undo step on release), three line styles,
 a 4×4 palette plus HSV picking. Duplicate (9.2.4) keeps the original, creates a selected 24px-offset
 copy (clipboard copy is on the selection band); the old infinite drag-copy mode is gone.

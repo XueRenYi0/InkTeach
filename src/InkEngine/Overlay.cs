@@ -5772,7 +5772,7 @@ internal sealed partial class OverlayWindow : IDisposable
         bool textBoxSel = app.SingleTextBoxSelection;
         // 布局从 SelectionHandles 取，与命中判定同源：分开写迟早差几个像素，
         // 表现就是"看得见按钮却点不中"。
-        int barCount = SelectionHandles.BarButtonCountFor(textBoxSel);
+        int barCount = SelectionHandles.BarButtonCountFor(app.BarSurfaceNow);
         // 用引擎的画布缓存：滚动时操作条跟着对象走，不会粘在屏幕下沿。
         var rect = app.SelectionBarCanvasRect;
         // 圆角**用界面那套令牌**（UiTheme.CornerRadius = 10），不自己发明一个胶囊：
@@ -5791,7 +5791,7 @@ internal sealed partial class OverlayWindow : IDisposable
         for (int i = 0; i < n; i++)
         {
             var btn = SelectionHandles.BarButtonRectIn(rect, i, dpi);
-            var kind = SelectionHandles.BarButtonOf(i, textBoxSel);
+            var kind = SelectionHandles.BarButtonOf(i, app.BarSurfaceNow);
             bool hot = app.SelBarHover == i;
             bool active = IsBarButtonActive(app, kind);
             bool danger = kind == SelBarButton.Delete && hot;
@@ -5969,7 +5969,7 @@ internal sealed partial class OverlayWindow : IDisposable
         }
 
         // `⋯`：图标 + 文字，行高 38；悬停整行浅底。
-        var order = SelectionHandles.MoreBarOrder(app.SingleTextBoxSelection);
+        var order = SelectionHandles.MoreBarOrder(app.BarSurfaceNow);
         float pad = SelectionHandles.BarMenuPadLogical * dpi;
         float iconBox = 20f * dpi;
         for (int i = 0; i < rows && i < order.Length; i++)

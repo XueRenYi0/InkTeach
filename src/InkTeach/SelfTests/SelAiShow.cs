@@ -88,14 +88,39 @@ internal sealed partial class App
         bool ok4 = ScreenProbe.SaveBmp(p4, (int)_virtualX, (int)_virtualY,
                                        (int)_virtualW, (int)_virtualH);
 
+        // 图形条（5 格：收起/颜色/复制/删除/⋯）
+        Doc.Clear();
+        var shape = MakeCoordinateForTest(420f, 300f, 240f, 180f, grid: false);
+        Doc.AppendStroke(shape);
+        Doc.Selected.Clear();
+        Doc.Selected.Add(shape);
+        Tool = Tool.Marquee;
+        SettleFrames(400);
+        string p5 = Path.ChangeExtension(outPath, null) + "-shape.bmp";
+        bool ok5 = ScreenProbe.SaveBmp(p5, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+
+        // 图片条（5 格：收起/保存/复制/删除/⋯）
+        Doc.Clear();
+        var picture = Doc.AddImage(MakeTestImage(96, 72), 420f, 300f, 1f);
+        Doc.Selected.Clear();
+        Doc.Selected.Add(picture);
+        SettleFrames(400);
+        string p6 = Path.ChangeExtension(outPath, null) + "-image.bmp";
+        bool ok6 = ScreenProbe.SaveBmp(p6, (int)_virtualX, (int)_virtualY,
+                                       (int)_virtualW, (int)_virtualH);
+
         Console.WriteLine($"操作条：{SelectionHandles.BarButtonCountFor(false)} 格，" +
                           $"AI 倒数第二、⋯ 最后；截图 {(ok1 ? "OK" : "FAIL")} / " +
                           $"{(ok2 ? "OK" : "FAIL")} / {(ok3 ? "OK" : "FAIL")} / " +
-                          $"{(ok4 ? "OK" : "FAIL")}");
+                          $"{(ok4 ? "OK" : "FAIL")} / {(ok5 ? "OK" : "FAIL")} / " +
+                          $"{(ok6 ? "OK" : "FAIL")}");
         Console.WriteLine($"写出：{p1}");
         Console.WriteLine($"写出：{p2}");
         Console.WriteLine($"写出：{p3}");
         Console.WriteLine($"写出：{p4}");
-        ExitCode = ok1 && ok2 && ok3 && ok4 ? 0 : 1;
+        Console.WriteLine($"写出：{p5}");
+        Console.WriteLine($"写出：{p6}");
+        ExitCode = ok1 && ok2 && ok3 && ok4 && ok5 && ok6 ? 0 : 1;
     }
 }

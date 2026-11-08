@@ -1139,7 +1139,7 @@ public partial class InkEngine
         if (!stale) return;
 
         var aabb = LiveSelectionFrame.CanvasAabb;
-        int count = SelectionHandles.BarButtonCountFor(SingleTextBoxSelection);
+        int count = SelectionHandles.BarButtonCountFor(BarSurfaceNow);
         _barCanvasCache = SelectionHandles.BarRect(aabb, UiUnit, vp, count);
         _dotCanvasCache = SelectionHandles.BarCollapsedRect(aabb, UiUnit, vp);
         _barCacheVersion = Doc.Version;
@@ -17108,9 +17108,34 @@ public partial class InkEngine
     /// 判据走 <see cref="SelectionBarShown"/>（和绘制、光标同一条）：那一块不在的时候
     /// 悬停高亮也不该亮。收起态（用户自己收的 / 画完自动选中那个框）只高亮那颗圆钮。
     /// </summary>
-    /// <summary>单选一个文本框吗（决定用七格文字条还是十格通用条）。</summary>
+    /// <summary>单选一个文本框吗（决定用文字条还是通用条）。</summary>
     internal bool SingleTextBoxSelection
         => Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.TextBox;
+
+    /// <summary>
+    /// 当前选中对象该用哪种选中条（2026-11-08）：
+    /// 图片 → 5 格（保存代替颜色，无 AI）；图形 → 5 格（颜色，无 AI）；
+    /// 文本 → 6 格（字号）；其余（墨迹/多选/混合）→ 6 格（颜色 + AI）。
+    /// </summary>
+    internal SelBarSurface BarSurfaceNow
+    {
+        get
+        {
+            int n = Doc.Selected.Count;
+            if (n == 0) return SelBarSurface.Normal;
+            if (n == 1 && Doc.Selected[0].Kind == StrokeKind.TextBox) return SelBarSurface.Text;
+
+            bool allImages = true, allShapes = true;
+            foreach (var s in Doc.Selected)
+            {
+                if (!s.IsImage) allImages = false;
+                if (!Stroke.IsShapeKind(s.Kind)) allShapes = false;
+            }
+            if (allImages) return SelBarSurface.Image;
+            if (allShapes) return SelBarSurface.Shape;
+            return SelBarSurface.Normal;
+        }
+    }
 
     /// <summary>
     /// 当前选中对象的操作条矩形。**所有对象统一"给下限、不翻面"**；
@@ -17155,7 +17180,7 @@ public partial class InkEngine
     /// <summary>当前弹层的行数；0 = 没有弹层。AI 1 行，`⋯` 随对象类型 2/6 行。</summary>
     internal int SelectionMenuRowsNow
         => SelAiMenuOpen ? SelectionHandles.BarAiMenuRows
-         : SelMoreMenuOpen ? SelectionHandles.MoreBarOrder(SingleTextBoxSelection).Length
+         : SelMoreMenuOpen ? SelectionHandles.MoreBarOrder(BarSurfaceNow).Length
          : 0;
 
     /// <summary>AI 菜单才有状态行（识别进度/结果）；`⋯` 没有。</summary>
@@ -17190,7 +17215,7 @@ public partial class InkEngine
                 hover = dot.Contains(x, y) ? (int)SelBarButton.Collapse : -1;
             }
             else hover = SelectionHandles.BarButtonAtIn(x, y, SelectionBarCanvasRect, UiUnit,
-                SelectionHandles.BarButtonCountFor(SingleTextBoxSelection));
+                SelectionHandles.BarButtonCountFor(BarSurfaceNow));
         }
 
         int menuRow = -1;
@@ -18569,7 +18594,7 @@ public partial class InkEngine
                 }
                 else if (SelMoreMenuOpen)
                 {
-                    var order = SelectionHandles.MoreBarOrder(SingleTextBoxSelection);
+                    var order = SelectionHandles.MoreBarOrder(BarSurfaceNow);
                     if (row >= 0 && row < order.Length)
                     {
                         var action = order[row];
@@ -18582,7 +18607,7 @@ public partial class InkEngine
             else
             {
                 int btn0 = SelectionHandles.BarButtonAtIn(x, y, SelectionBarRect(aabb0), ui,
-                    SelectionHandles.BarButtonCountFor(SingleTextBoxSelection));
+                    SelectionHandles.BarButtonCountFor(BarSurfaceNow));
                 if (btn0 >= 0) { RunBarAction(btn0, frame, aabb0); return true; }
                 if (SelPanelOpen != SelPanel.None || CustomColorOpen)
                 {
@@ -19616,7 +19641,7 @@ public partial class InkEngine
     /// 图标数组一一对应：0 复制 / 1 删除 / 2 左右翻转 / 3 上下翻转 / 4 旋转。
     /// </summary>
     private void RunBarAction(int index, in SelectionFrame frame, in RectF aabb)
-        => RunBarButton(SelectionHandles.BarButtonOf(index, SingleTextBoxSelection), frame, aabb);
+        => RunBarButton(SelectionHandles.BarButtonOf(index, BarSurfaceNow), frame, aabb);
 
     /// <summary>
     /// 执行一个操作条语义。**渲染、命中、`⋯` 菜单行都走这一份**，

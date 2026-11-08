@@ -131,7 +131,36 @@ internal sealed partial class App
               && System.Array.IndexOf(tOrder, SelBarButton.Lock) >= 0,
               string.Join(",", tOrder));
 
-        OpenSelectionMenuForTest(ai: true);
+        // 图形：5 格（颜色在、AI 不在），⋯ 7 行。
+        Doc.Clear();
+        var sh = MakeCoordinateForTest(300f, 300f, 220f, 160f, grid: false);
+        Doc.AppendStroke(sh);
+        Doc.Selected.Clear();
+        Doc.Selected.Add(sh);
+        SettleFrames(160);
+        Check("图形条：5 格、颜色外露、无 AI、⋯ 7 行",
+              BarSurfaceNow == SelBarSurface.Shape
+              && SelectionHandles.BarButtonCountFor(SelBarSurface.Shape) == 5
+              && SelectionHandles.BarButtonOf(1, SelBarSurface.Shape) == SelBarButton.Color
+              && SelectionHandles.BarButtonOf(4, SelBarSurface.Shape) == SelBarButton.More
+              && SelectionHandles.MoreBarOrder(SelBarSurface.Shape).Length == 7,
+              $"surface={BarSurfaceNow} count={SelectionHandles.BarButtonCountFor(SelBarSurface.Shape)}");
+
+        // 图片：5 格（第 2 格是保存/导出、无 AI），⋯ 6 行（保存已在核心）。
+        Doc.Clear();
+        var img = Doc.AddImage(MakeTestImage(32, 24), 300f, 300f, 1f);
+        Doc.Selected.Clear();
+        Doc.Selected.Add(img);
+        SettleFrames(160);
+        Check("图片条：5 格、保存外露、无 AI、⋯ 6 行",
+              BarSurfaceNow == SelBarSurface.Image
+              && SelectionHandles.BarButtonCountFor(SelBarSurface.Image) == 5
+              && SelectionHandles.BarButtonOf(1, SelBarSurface.Image) == SelBarButton.Export
+              && SelectionHandles.BarButtonOf(4, SelBarSurface.Image) == SelBarButton.More
+              && SelectionHandles.MoreBarOrder(SelBarSurface.Image).Length == 6,
+              $"surface={BarSurfaceNow} count={SelectionHandles.BarButtonCountFor(SelBarSurface.Image)}");
+
+        OpenSelectionMenuForTest(ai: false);
         SettleFrames(60);
         Doc.Selected.Clear();
         SettleFrames(160);

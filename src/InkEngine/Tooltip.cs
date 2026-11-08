@@ -115,7 +115,7 @@ public partial class InkEngine
                 ? SelectionDotCanvasRect
                 : SelectionHandles.BarButtonRectIn(SelectionBarCanvasRect, SelBarHover, UiUnit);
             var (t, k, n) = BarButtonTip(
-                SelectionHandles.BarButtonOf(SelBarHover, SingleTextBoxSelection));
+                SelectionHandles.BarButtonOf(SelBarHover, BarSurfaceNow));
             if (t != null)
             {
                 EngineTooltipHover(200 + SelBarHover, t, k, n, btn);

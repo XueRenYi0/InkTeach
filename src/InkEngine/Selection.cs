@@ -174,6 +174,19 @@ internal enum SelBarButton
 }
 
 /// <summary>
+/// 选中条按“选中的是什么”分四种表面（2026-11-08）：
+/// 普通墨迹/多选、文本框、图片、图形。
+/// 只影响**外露哪几个核心格**和 `⋯` 的内容；弹层/几何/互斥仍是同一套。
+/// </summary>
+public enum SelBarSurface
+{
+    Normal,
+    Text,
+    Image,
+    Shape,
+}
+
+/// <summary>
 /// **吸到了什么**（一族"特殊形状"吸附，规格 9.6）。
 ///
 /// 为什么要一个专门的枚举、而不是只报个 bool：三条硬要求里有一条是
@@ -2312,6 +2325,26 @@ internal static class SelectionHandles
         SelBarButton.More,
     };
 
+    /// <summary>图片：颜色/AI 对图片无意义，“保存/导出”补进来（5 格）。</summary>
+    private static readonly SelBarButton[] ImageBarOrder =
+    {
+        SelBarButton.Collapse,
+        SelBarButton.Export,
+        SelBarButton.Copy,
+        SelBarButton.Delete,
+        SelBarButton.More,
+    };
+
+    /// <summary>图形/线条：颜色有效，AI 不处理图形（5 格）。</summary>
+    private static readonly SelBarButton[] ShapeBarOrder =
+    {
+        SelBarButton.Collapse,
+        SelBarButton.Color,
+        SelBarButton.Copy,
+        SelBarButton.Delete,
+        SelBarButton.More,
+    };
+
     /// <summary>
     /// `⋯` 里的动作（顺序 = 菜单行序）。
     /// **层级不再开二级弹窗**：置顶/置底直接两行（用户 2026-11-08 指出）。
@@ -2335,21 +2368,72 @@ internal static class SelectionHandles
         SelBarButton.Lock,
     };
 
-    /// <summary>这一条有几格（普通 6，文本框 6）。</summary>
+    /// <summary>图片：保存已经在核心，`⋯` 里不再重复。</summary>
+    private static readonly SelBarButton[] MoreOrderImage =
+    {
+        SelBarButton.Top,
+        SelBarButton.Bottom,
+        SelBarButton.FlipH,
+        SelBarButton.FlipV,
+        SelBarButton.Lock,
+        SelBarButton.Library,
+    };
+
+    private static readonly SelBarButton[] MoreOrderShape =
+    {
+        SelBarButton.Top,
+        SelBarButton.Bottom,
+        SelBarButton.Export,
+        SelBarButton.FlipH,
+        SelBarButton.FlipV,
+        SelBarButton.Lock,
+        SelBarButton.Library,
+    };
+
+    public const int ImageBarButtonCount = 5;
+    public const int ShapeBarButtonCount = 5;
+
+    /// <summary>这一条有几格（普通/文本 6，图片/图形 5）。</summary>
     public static int BarButtonCountFor(bool textBar)
-        => textBar ? TextBarButtonCount : BarButtonCount;
+        => BarButtonCountFor(textBar ? SelBarSurface.Text : SelBarSurface.Normal);
+
+    public static int BarButtonCountFor(SelBarSurface surface) => surface switch
+    {
+        SelBarSurface.Text => TextBarButtonCount,
+        SelBarSurface.Image => ImageBarButtonCount,
+        SelBarSurface.Shape => ShapeBarButtonCount,
+        _ => BarButtonCount,
+    };
 
     /// <summary>第 <paramref name="i"/> 格在这条上是什么语义（顺序表只此一份）。</summary>
     public static SelBarButton BarButtonOf(int i, bool textBar)
+        => BarButtonOf(i, textBar ? SelBarSurface.Text : SelBarSurface.Normal);
+
+    public static SelBarButton BarButtonOf(int i, SelBarSurface surface)
     {
-        var order = textBar ? TextBarOrder : NormalBarOrder;
+        var order = surface switch
+        {
+            SelBarSurface.Text => TextBarOrder,
+            SelBarSurface.Image => ImageBarOrder,
+            SelBarSurface.Shape => ShapeBarOrder,
+            _ => NormalBarOrder,
+        };
         return i >= 0 && i < order.Length ? order[i] : SelBarButton.Collapse;
     }
 
     /// <summary>某个语义在这条上的格子下标；已被收进 `⋯` 的动作返回 -1。</summary>
     public static int BarIndexOf(SelBarButton button, bool textBar)
+        => BarIndexOf(button, textBar ? SelBarSurface.Text : SelBarSurface.Normal);
+
+    public static int BarIndexOf(SelBarButton button, SelBarSurface surface)
     {
-        var order = textBar ? TextBarOrder : NormalBarOrder;
+        var order = surface switch
+        {
+            SelBarSurface.Text => TextBarOrder,
+            SelBarSurface.Image => ImageBarOrder,
+            SelBarSurface.Shape => ShapeBarOrder,
+            _ => NormalBarOrder,
+        };
         for (int i = 0; i < order.Length; i++)
             if (order[i] == button) return i;
         return -1;
@@ -2357,7 +2441,15 @@ internal static class SelectionHandles
 
     /// <summary>`⋯` 菜单里的动作（只读；调用方不要改数组）。</summary>
     public static SelBarButton[] MoreBarOrder(bool textBar)
-        => textBar ? MoreOrderText : MoreOrderNormal;
+        => MoreBarOrder(textBar ? SelBarSurface.Text : SelBarSurface.Normal);
+
+    public static SelBarButton[] MoreBarOrder(SelBarSurface surface) => surface switch
+    {
+        SelBarSurface.Text => MoreOrderText,
+        SelBarSurface.Image => MoreOrderImage,
+        SelBarSurface.Shape => MoreOrderShape,
+        _ => MoreOrderNormal,
+    };
 
     /// <summary>`⋯` 菜单行的文案（绘制和自检共用）。</summary>
     public static string BarButtonLabel(SelBarButton button) => button switch
