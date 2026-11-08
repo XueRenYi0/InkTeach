@@ -119,7 +119,27 @@ public partial class InkEngine
             dismissPolicy: OverlayDismissPolicy.Escape,
             blocksInputBelow: false));
 
-        // Phase 5.0：选择操作条（含收起圆钮 / 挂着的面板 / AI 菜单）。
+        // P5.1：截图取景。整屏覆盖，但只接管“取消/确认/调整”这类已被截图吃掉的按下；
+        // 没吃掉时 `blocksInputBelow=false`，落回 Tool.Capture 旧分支起新框。
+        m.Register(new LegacyOverlayLayer(
+            "capture", 850,
+            visible: () => CaptureActive,
+            bounds: () => ViewportCanvas,
+            hit: (x, y) => CaptureActive,
+            down: (x, y, id, type) => CaptureActive && CapturePointerDown(x, y),
+            move: (x, y, id) =>
+            {
+                if (!CaptureActive) return false;
+                if (CaptureAdjusting) CaptureAdjustMove(x, y);
+                else ExtendCaptureTo(x, y);
+                return true;
+            },
+            up: (x, y, id) => CaptureActive,
+            dismiss: CancelCapture,
+            dismissPolicy: OverlayDismissPolicy.Escape,
+            blocksInputBelow: false));
+
+        // P5.0：选择操作条（含收起圆钮 / 挂着的面板 / AI 菜单）。
         // 只切“按下”：命中后调用现有选择手势分流；条本身不需要指针捕获。
         m.Register(new LegacyOverlayLayer(
             "selection", 400,

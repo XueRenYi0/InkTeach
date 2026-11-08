@@ -5082,8 +5082,9 @@ public partial class InkEngine
         ApplyCursor();
 
         // 截图（8.3.1）：待机 / 拖框 / 调整三种状态先都过这里。
-        // 返回 true = 这一下被截图吃掉；false = 照常走工具分流（也就是"从这里起框"）。
-        if (CaptureActive && CapturePointerDown(x, y))
+        // P5.1：按下先走浮层管理器（范围 850）；
+        // 返回 false = 没点取消/没说“已吃掉”，照常走工具分流（也就是"从这里起框"）。
+        if (CaptureActive && OverlayLayers.PointerDown(x, y, id, ptype, 850, 850))
         {
             _capturePressHandled = true;
             return;
@@ -6101,6 +6102,16 @@ public partial class InkEngine
         }
 
         // 截图的"松开后调整"（8.3.0）：拖手柄/拖整体。**和当前工具无关**。
+        // P5.1：被管理器捕获时移动先走管理器；未捕获时仍走旧分支。
+        if (OverlayLayers.CaptureLayer?.Id == "capture")
+        {
+            if (OverlayLayers.PointerMove(x, y, id))
+            {
+                _dirty = true;
+                ApplyCursor();
+                return;
+            }
+        }
         if (CaptureAdjusting) { CaptureAdjustMove(x, y); return; }
 
         // 浮层面板里的拖动（粗细滑条 / 自定义取色板）：**和当前工具无关**。
@@ -6183,6 +6194,10 @@ public partial class InkEngine
             && id != _libraryTouchScrollId)
             return;
         if (ColorPickActive) return;
+        // P5.1：截图取景被管理器捕获时，先清掉捕获；
+        // 确认/取消仍走 `_capturePressHandled`，调整拖动仍走 `EndStroke` 里原来的截图分支。
+        if (OverlayLayers.CaptureLayer?.Id == "capture" && OverlayLayers.CapturePointerId == id)
+            OverlayLayers.PointerUp(PointerX, PointerY, id);
         // 划线选收尾：先于"卡片拖动"，也先于"面板拖动"（它们在这条路上是互斥的）。
         // A4.7：library 被管理器捕获时，松手交给管理器（含抽屉拖动收尾）。
         if (OverlayLayers.CaptureLayer?.Id == "library")

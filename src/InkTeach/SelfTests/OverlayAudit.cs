@@ -81,7 +81,7 @@ internal static class OverlayAudit
                   $"block={block.DownCount} low={low.DownCount}");
         }
 
-        // 6) 引擎适配器：六个旧浮层都注册，优先级按表
+        // 6) 引擎适配器：七个旧浮层都注册，优先级按表
         {
             var engine = new global::InkEngine.InkEngine();
             var layers = engine.OverlayLayers.Layers;
@@ -90,10 +90,12 @@ internal static class OverlayAudit
                        && layers.Any(l => l.Id == "timer")
                        && layers.Any(l => l.Id == "roll")
                        && layers.Any(l => l.Id == "ppt")
+                       && layers.Any(l => l.Id == "capture")
                        && layers.Any(l => l.Id == "selection");
+            bool captureOk = layers.Any(l => l.Id == "capture" && l.Priority == 850 && l.WantsCapture);
             var priorities = layers.Select(l => l.Priority).ToArray();
             bool ordered = priorities.SequenceEqual(priorities.OrderBy(p => p));
-            Check("引擎浮层适配器注册", layers.Count == 6 && hasAll && ordered,
+            Check("引擎浮层适配器注册", layers.Count == 7 && hasAll && captureOk && ordered,
                   $"count={layers.Count} ids={string.Join(",", layers.Select(l => l.Id))}");
         }
 
@@ -149,6 +151,19 @@ internal static class OverlayAudit
                   && engine.SelectionBarShown && !bar.IsEmpty && hitBar && miss
                   && tookBar && collapsed,
                   $"shown={engine.SelectionBarShown} hit={hitBar} miss={miss} took={tookBar} collapsed={collapsed}");
+        }
+
+        // 10) 截图取景：整屏命中，但“起新框”不吞（down=false）
+        {
+            var engine = new global::InkEngine.InkEngine();
+            engine.CaptureActive = true;
+            var layer = engine.OverlayLayers.Layers.First(l => l.Id == "capture");
+            bool hit = layer.HitTest(10, 10);
+            bool took = engine.OverlayLayers.PointerDown(10, 10, 1, 1, 850, 850);
+            engine.CaptureActive = false;
+            Check("截图取景不吞起框",
+                  hit && !took && layer.Priority == 850 && layer.WantsCapture,
+                  $"hit={hit} took={took} prio={layer.Priority}");
         }
 
         Console.WriteLine($"  合计：{pass} 通过 / {fail} 失败");
