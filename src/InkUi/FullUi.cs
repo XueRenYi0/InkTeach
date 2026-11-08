@@ -4082,7 +4082,9 @@ public sealed partial class FullUi : IOverlayUi
     private bool _moreOpen;
     private readonly Anim _more;          // 0 = 关、1 = 全开（兼遮罩透明度）
     private readonly Anim _moreH;         // 面板高度：换页时动画到目标高（不跳）
-    private MorePage _morePage = MorePage.Home;
+    private MorePage _morePage => _pageHost?.Current != null
+        ? MorePageFromId(_pageHost.Current.Id)
+        : MorePage.Home;
     private SettingsCategory _settingsCat = SettingsCategory.Toolbar;
 
     private enum SettingsCategory { Toolbar = 0, General = 1, Writing = 2, Ink = 3, Ai = 4, Backup = 5, About = 6 }
@@ -4257,7 +4259,6 @@ public sealed partial class FullUi : IOverlayUi
     private void SetMorePage(MorePage page, bool push)
     {
         EnsurePageHost();
-        _morePage = page;
         if (_pageHost == null) return;
 
         string id = LegacyPageId(page);
@@ -4298,7 +4299,6 @@ public sealed partial class FullUi : IOverlayUi
             _pageHost.Pop();
         else
             _pageHost?.Open(CreatePage(MorePage.Home), animate: false);
-        _morePage = MorePageFromId(_pageHost?.Current?.Id);
     }
 
     // ---- 日志与反馈页 --------------------------------------------------------
@@ -5160,7 +5160,6 @@ public sealed partial class FullUi : IOverlayUi
         if (_moreOpen || _more.Running) return;
         if (_pageHost == null || _pageHost.Count == 0) return;
         _pageHost.Close(animate: false);
-        _morePage = MorePage.Home;
     }
 
     private void UpdateMoreHeight()
@@ -5223,14 +5222,7 @@ public sealed partial class FullUi : IOverlayUi
                       Brush(ctx, _moreHover == MoreHitClose ? InkCol : MutedCol));
 
         if (_pageHost?.Current != null)
-        {
             _pageHost.Render(ctx);
-        }
-        else if (_morePage == MorePage.Home) DrawMoreHome(ctx);
-        else if (_morePage == MorePage.Settings) DrawMoreSettings(ctx);
-        else if (_morePage == MorePage.Log) DrawLogPage(ctx);
-        else if (_morePage == MorePage.Api) DrawApiPage(ctx);
-        else DrawHelpPage(ctx);
     }
 
     // ---- 启动器绘制 ----------------------------------------------------------
@@ -5309,13 +5301,6 @@ public sealed partial class FullUi : IOverlayUi
         _widgets.Text(ctx, label, t, 14f, Brush(ctx, ink));
     }
 
-    private void DrawLogPage(ID2D1DeviceContext ctx)
-    {
-        // A3.1：日志页绘制已搬到 LogPage；这里只保留 PageHost 未建立时的兜底。
-        if (_pageHost?.Current is LogPage) { _pageHost.Render(ctx); return; }
-        new LogPage(this).Render(ctx, PageFrame.Empty);
-    }
-
     /// <summary>日志页右侧的二维码卡片：白底（扫码要对比度）、图 + 一行小字。</summary>
     private void DrawLogQrCard(ID2D1DeviceContext ctx)
     {
@@ -5375,24 +5360,10 @@ public sealed partial class FullUi : IOverlayUi
         finally { handle.Free(); }
     }
 
-    private void DrawMoreHome(ID2D1DeviceContext ctx)
-    {
-        // A3.2：首页绘制已搬到 MoreHomePage；这里只保留 PageHost 未建立时的兜底。
-        if (_pageHost?.Current is MoreHomePage) { _pageHost.Render(ctx); return; }
-        new MoreHomePage(this).Render(ctx, PageFrame.Empty);
-    }
-
     private void DrawMoreGroupHead(ID2D1DeviceContext ctx, RectF r, string label)
         => _widgets.Text(ctx, label, r, 12.5f, Brush(ctx, MutedCol), center: false);
 
     // ---- 设置子页绘制 --------------------------------------------------------
-
-    private void DrawMoreSettings(ID2D1DeviceContext ctx)
-    {
-        // A3.2：设置页绘制已搬到 SettingsPage；这里只保留 PageHost 未建立时的兜底。
-        if (_pageHost?.Current is SettingsPage) { _pageHost.Render(ctx); return; }
-        new SettingsPage(this).Render(ctx, PageFrame.Empty);
-    }
 
     private void DrawSettingsScrollbar(ID2D1DeviceContext ctx)
     {

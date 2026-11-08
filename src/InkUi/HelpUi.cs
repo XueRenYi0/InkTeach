@@ -49,7 +49,7 @@ public sealed partial class FullUi
         }
 
         if (!_moreOpen) OpenMore();
-        _morePage = MorePage.Help;
+        SetMorePage(MorePage.Help, push: true);
         _moreHover = MoreHitNone;
         _morePress = -1;
         _helpTab = Math.Clamp(_helpTab, 0, HelpTabCount - 1);
@@ -217,13 +217,6 @@ public sealed partial class FullUi
     // =====================================================================
     //  绘制
     // =====================================================================
-
-    private void DrawHelpPage(ID2D1DeviceContext ctx)
-    {
-        // A3.1：说明页绘制已搬到 HelpPage；这里只保留 PageHost 未建立时的兜底。
-        if (_pageHost?.Current is HelpPage) { _pageHost.Render(ctx); return; }
-        new HelpPage(this).Render(ctx, PageFrame.Empty);
-    }
 
     private void DrawHelpQuick(ID2D1DeviceContext ctx, in RectF content)
     {
@@ -467,7 +460,7 @@ public sealed partial class FullUi
     internal void OpenHelpForTest()
     {
         if (!_moreOpen) OpenMore();
-        _morePage = MorePage.Help;
+        SetMorePage(MorePage.Help, push: true);
         _moreHover = MoreHitNone;
         _helpScroll = 0f;
         _moreH.Jump(MoreHelpH());
