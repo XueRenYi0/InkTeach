@@ -210,9 +210,16 @@ public partial class InkEngine
                 SetHandOcrStatus("创建文本框失败");
                 return;
             }
-            Doc.SelectOnly(boxes);
+            // 2026-11-08 用户定：识别完**默认不选中**新文本框。
+            // 选中会立刻弹出操作条 + 手柄，把刚识别出来的字盖住，编辑反而更别扭；
+            // 不选中时它就是页面上的普通文字，单击选中、双击编辑。
+            Doc.Selected.Clear();
+            _dirty = true;
+            ShowToast(boxes.Count > 1
+                ? $"已识别为文本框（{boxes.Count} 栏）· 双击编辑 · Ctrl+Z 撤销"
+                : "已识别为文本框 · 双击编辑 · Ctrl+Z 撤销");
             Console.WriteLine($"[识别到文本框] {done.Result.Lines.Length} 行，{done.Result.Seconds:F1}s，" +
-                              $"{boxes.Count} 个文本框");
+                              $"{boxes.Count} 个文本框（默认不选中）");
             SetHandOcrStatus(boxes.Count > 1
                 ? $"已识别 {done.Result.Lines.Length} 行 → {boxes.Count} 栏文本框"
                 : $"已识别 {done.Result.Lines.Length} 行 → 文本框");

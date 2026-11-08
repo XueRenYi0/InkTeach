@@ -480,6 +480,8 @@ internal sealed partial class OverlayWindow : IDisposable
     private RectF _rollRectPrev = RectF.Empty;
     /// <summary>引擎侧悬停提示上一帧的矩形（换块 / 隐藏那一帧要把旧卡擦干净，同 PPT 条）。</summary>
     private RectF _tipRectPrev = RectF.Empty;
+    /// <summary>上一帧轻提示占的矩形：提示到点消失那一帧要把它擦干净。</summary>
+    private RectF _toastRectPrev = RectF.Empty;
 
     /// <summary>页码那一段文字的格式（13 逻辑像素，见 `PptPageFormat`）。</summary>
     private IDWriteTextFormat _pptPageFmt;
@@ -487,6 +489,9 @@ internal sealed partial class OverlayWindow : IDisposable
     /// <summary>悬停提示的两行格式：第一行 12.5、第二行 11（都左对齐，键位跟名称同一行）。</summary>
     private IDWriteTextFormat _tipTitleFmt, _tipNoteFmt;
     private float _tipTitleFmtPx, _tipNoteFmtPx;
+    /// <summary>轻提示的格式：居中、12.5 逻辑像素。</summary>
+    private IDWriteTextFormat _toastFmt;
+    private float _toastFmtPx;
 
     // 内容层的改动也要记两帧：后缓冲里躺着的是两帧前的画面。
     private readonly List<RectF> _contentDirtyNow = new();
@@ -3103,6 +3108,10 @@ internal sealed partial class OverlayWindow : IDisposable
         // 截图整层之下——截图时 TooltipShown 本来就是假的（进入截图会清掉）。
         DrawEngineTooltip(app);
 
+        // 轻提示（1.5 秒）：画在所有浮层之上、截图整层之下。
+        // 只画不接命中——提示期间笔/鼠标/触摸照常落到画布和按钮上。
+        DrawToast(app);
+
         // 截图整层（8.3.0）：遮罩/冻结帧/取景框/准线/读数/调整手柄。
         // 放在最后 = 盖住上面所有东西（滚动条、PPT 条、HUD）；界面那一块在截图期间
         // 由引擎收起（见 PrepareUi），所以这就是屏幕上看到的全部。
@@ -3501,6 +3510,18 @@ internal sealed partial class OverlayWindow : IDisposable
             }
             if (!_tipRectPrev.IsEmpty) r.Add(_tipRectPrev);
             _tipRectPrev = cur;
+        }
+
+        // 轻提示：显示、换文案、到点消失都在变；**消失那一帧**旧矩形也要擦。
+        {
+            var cur = RectF.Empty;
+            if (app.ToastVisible)
+            {
+                cur = ToastRect(app);
+                r.Add(cur.Inflate(4f * Dpi / 96f));
+            }
+            if (!_toastRectPrev.IsEmpty) r.Add(_toastRectPrev);
+            _toastRectPrev = cur;
         }
 
         // 选中高亮画在浮动层上、不进内容层，所以它的区域必须每帧算进脏区。
@@ -7147,6 +7168,62 @@ internal sealed partial class OverlayWindow : IDisposable
         _ctx.DrawText("点页码：页码跳转菜单", ReadoutFormatSmall(dpi),
                       new Rect(hint.MinX, hint.MinY, hint.MaxX - hint.MinX, hint.MaxY - hint.MinY),
                       _scratch);
+    }
+
+    /// <summary>
+    /// 轻提示（toast）的卡片矩形：窗口顶部居中。**量宽、绘制、脏区都读这一份**。
+    /// 用窗口坐标（0..Width/Height），不跟虚拟桌面原点走，多屏下也不会跑到别的屏上。
+    /// </summary>
+    private RectF ToastRect(InkEngine app)
+    {
+        float dpi = app.UiUnit;
+        string text = app.ToastText ?? "";
+        float textW = text.Length * 13f * dpi;       // 中文约 13 逻辑像素/字，提示都很短
+        float maxW = MathF.Max(120f * dpi, Width - 24f * dpi);
+        float w = MathF.Min(maxW, MathF.Max(180f * dpi, 28f * dpi + textW));
+        float h = 36f * dpi;
+        float x = MathF.Max(12f * dpi, (Width - w) * 0.5f);
+        float y = 22f * dpi;
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    private IDWriteTextFormat ToastFormat(float dpi)
+    {
+        float px = MathF.Max(10f, MathF.Round(12.5f * dpi));
+        if (_toastFmt == null || _toastFmtPx != px)
+        {
+            _toastFmt?.Dispose();
+            _toastFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _toastFmt.TextAlignment = TextAlignment.Center;
+            _toastFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _toastFmtPx = px;
+        }
+        return _toastFmt;
+    }
+
+    /// <summary>
+    /// 画轻提示。**只画、不接命中**：提示显示期间，笔/鼠标/触摸照常落到
+    /// 画布和按钮上；没有模态、没有焦点切换。
+    /// </summary>
+    private void DrawToast(InkEngine app)
+    {
+        if (!app.ToastVisible) return;
+        float dpi = app.UiUnit;
+        var r = ToastRect(app);
+        var theme = app.FloatingTheme;
+        var box = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
+        float radius = MathF.Min(9f * dpi, (r.MaxY - r.MinY) * 0.5f);
+
+        _scratch.Color = theme.Panel;
+        _ctx.FillRoundedRectangle(new RoundedRectangle(box, radius, radius), _scratch);
+        _scratch.Color = theme.PanelBorder;
+        _ctx.DrawRoundedRectangle(new RoundedRectangle(box, radius, radius), _scratch, 1f * dpi);
+
+        _scratch.Color = theme.Text;
+        _ctx.DrawText(app.ToastText, ToastFormat(dpi),
+            new Rect(r.MinX + 10f * dpi, r.MinY, r.MaxX - r.MinX - 20f * dpi, r.MaxY - r.MinY),
+            _scratch);
     }
 
     // ---- 引擎侧悬停提示（Tooltip；2026-10-02）--------------------------------

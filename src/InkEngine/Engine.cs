@@ -3926,6 +3926,7 @@ public partial class InkEngine
             StepDocPageReady();               // 文档页后台渲染完一页：置脏（这一拍会采纳它）
             StepDocAutoSave();                // 文档批注的节流保存（自动保存开着才写）
             StepPptBar();                     // 底部那条：引导过期 / "再点确认"过期（没有长按了）
+            StepToast();                      // 轻提示到点自动消失（1.5s，不吞输入）
             StepEngineTooltip();              // 引擎侧悬停提示的 500ms 延迟（到点点亮）
             StepTimerCard();                  // 课堂计时卡片：推进秒数 / 到点 / 同步接输入小窗
             StepRollCard();                   // 课堂点名卡片：滚动推进 / 同步接输入小窗
@@ -4035,6 +4036,7 @@ public partial class InkEngine
         // 两边都是幂等的（TakeDirty 取走就清、SameAs 挡重复）。
         StepPpt();
         StepPptBar();     // 底部那条：引导过期 / "再点确认"过期（理由同上，自检那条路也走它）
+        StepToast();      // 轻提示到点消失（1.5s；自检也用"抽消息＋渲染"驱动）
         StepTouchFling(); // 双指纵滑松手后的惯性（每帧衰减；自检也走这一条）
         StepTimerCard();  // 课堂计时卡片同理：自检用"抽消息＋渲染"驱动，不走主循环
         StepRollCard();   // 课堂点名卡片同理
