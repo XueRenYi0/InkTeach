@@ -265,7 +265,6 @@ public partial class InkEngine
     private float _replayCurrentParam;
     private ReplayBarZone _replayHover = ReplayBarZone.None;
     private bool _replayScrubbing;
-    private bool _replayCapturing;                       // 这一次按下归控制条（松手由它收尾）
 
     /// <summary>编辑类命令的闸门：回放中点编辑 = **先收掉回放**，再执行原命令。</summary>
     private void ExitReplayForEdit(string what)

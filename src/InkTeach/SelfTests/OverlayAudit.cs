@@ -107,17 +107,14 @@ internal static class OverlayAudit
                   $"low={low.DownCount} high={high.DownCount}");
         }
 
-        // 8) 只登记捕获（迁移期：旧分支已经处理按下）
+        // 8) PeekHit 只读探测：不触发任何按下（影子路由删掉后的覆盖）
         {
             var m = new OverlayLayerManager();
-            var layer = new TestLayer("timer", 600);
+            var layer = new TestLayer("peek", 600);
             m.Register(layer);
-            bool captured = m.Capture("timer", 9);
-            m.PointerMove(10, 10, 9);
-            m.PointerUp(10, 10, 9);
-            Check("只登记捕获", captured && layer.MoveCount == 1 && layer.UpCount == 1
-                  && m.CaptureLayer == null,
-                  $"move={layer.MoveCount} up={layer.UpCount}");
+            var hit = m.PeekHit(10, 10);
+            Check("PeekHit 只读", ReferenceEquals(hit, layer) && layer.DownCount == 0,
+                  $"hit={hit?.Id} down={layer.DownCount}");
         }
 
         Console.WriteLine($"  合计：{pass} 通过 / {fail} 失败");

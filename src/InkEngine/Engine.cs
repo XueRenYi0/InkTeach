@@ -4759,7 +4759,6 @@ public partial class InkEngine
         float screenX = sx, screenY = sy;
         float x = sx, y = sy;
         ScreenToCanvas(ref x, ref y);
-        ShadowOverlayHit(screenX, screenY);   // A4.2：只读对比旧分支与浮层管理器
 
         // 文本框编辑中：点编辑框以外 = 先提交，**同一下**继续走文本工具分流。
         //（ClassIn 的行为：点空白马上出新输入框，旧框变成普通显示、不再带操作条。）
@@ -4838,26 +4837,16 @@ public partial class InkEngine
         //   · 画布上 → **暂停/继续，不落墨**（讲课时最顺手的动作，用户已拍板）。
         if (_replay != null)
         {
-            // A4.3：回放条的主路由先交给 OverlayLayerManager（范围只限 replay）。
-            if (ReplayBarContains(screenX, screenY)
-                && OverlayLayers.PointerDown(screenX, screenY, id, ptype, 700, 700))
-            {
-                _drawing = false;
-                Native.SetCapture(hWnd);
-                _dirty = true;
-                ApplyCursor();
-                return;
-            }
+            // A4.8：回放条完全由 OverlayLayerManager 路由（范围只限 replay）。
+            // 按下 → 捕获；移动/松手由管理器转给适配器，旧 fallback 已删。
             if (ReplayBarContains(screenX, screenY))
             {
-                if (ReplayPointerDown(screenX, screenY))
+                if (OverlayLayers.PointerDown(screenX, screenY, id, ptype, 700, 700))
                 {
                     _drawing = false;
                     Native.SetCapture(hWnd);
-                    _replayCapturing = true;
                     _dirty = true;
                     ApplyCursor();
-                    return;
                 }
                 return;
             }
@@ -6322,17 +6311,6 @@ public partial class InkEngine
                 OverlayLayers.PointerUp(rx0, ry0, id);
             else
                 OverlayLayers.PointerUp(0, 0, id);
-            Native.ReleaseCapture();
-            _drawing = false;
-            _dirty = true;
-            ApplyCursor();
-            return;
-        }
-
-        if (_replayCapturing && ReadPointer(id, out float rx, out float ry, out _, out _, out _))
-        {
-            _replayCapturing = false;
-            ReplayPointerUp(rx, ry);
             Native.ReleaseCapture();
             _drawing = false;
             _dirty = true;

@@ -97,16 +97,6 @@ public sealed class OverlayLayerManager
         _capturePointer = 0;
     }
 
-    /// <summary>只登记捕获，不调用 PointerDown（迁移期：旧分支已经处理按下时用）。</summary>
-    public bool Capture(string id, uint pointerId)
-    {
-        var layer = Get(id);
-        if (layer == null) return false;
-        _capture = layer;
-        _capturePointer = pointerId;
-        return true;
-    }
-
     /// <summary>按下：先看捕获，再按优先级问可见且吃输入的层。</summary>
     public bool PointerDown(float x, float y, uint pointerId, uint pointerType,
                             int minPriority = int.MinValue, int maxPriority = int.MaxValue)
