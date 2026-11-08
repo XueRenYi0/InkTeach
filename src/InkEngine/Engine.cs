@@ -4837,6 +4837,16 @@ public partial class InkEngine
         //   · 画布上 → **暂停/继续，不落墨**（讲课时最顺手的动作，用户已拍板）。
         if (_replay != null)
         {
+            // A4.3：回放条的主路由先交给 OverlayLayerManager（范围只限 replay）。
+            if (ReplayBarContains(screenX, screenY)
+                && OverlayLayers.PointerDown(screenX, screenY, id, ptype, 700, 700))
+            {
+                _drawing = false;
+                Native.SetCapture(hWnd);
+                _dirty = true;
+                ApplyCursor();
+                return;
+            }
             if (ReplayBarContains(screenX, screenY))
             {
                 if (ReplayPointerDown(screenX, screenY))
@@ -5925,6 +5935,15 @@ public partial class InkEngine
 
         // 回放：控制条悬停 / 拖进度（屏幕坐标，和条自己的坐标系一致）。
         // 拖进度时不再往下走——这一串移动归控制条。
+        if (OverlayLayers.CaptureLayer?.Id == "replay" && ReplayScrubbing)
+        {
+            if (OverlayLayers.PointerMove(screenX, screenY, id))
+            {
+                _dirty = true;
+                ApplyCursor();
+                return;
+            }
+        }
         if (_replay != null)
         {
             ReplayPointerMove(screenX, screenY);
@@ -6248,6 +6267,20 @@ public partial class InkEngine
         }
 
         // 回放控制条：这一下按下归它就由它收尾（拖进度条的松手也在这里）。
+        // A4.3：回放条由 OverlayLayerManager 捕获时，松手也走管理器。
+        if (OverlayLayers.CaptureLayer?.Id == "replay")
+        {
+            if (ReadPointer(id, out float rx0, out float ry0, out _, out _, out _))
+                OverlayLayers.PointerUp(rx0, ry0, id);
+            else
+                OverlayLayers.PointerUp(0, 0, id);
+            Native.ReleaseCapture();
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
         if (_replayCapturing && ReadPointer(id, out float rx, out float ry, out _, out _, out _))
         {
             _replayCapturing = false;

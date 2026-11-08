@@ -43,7 +43,7 @@ public partial class InkEngine
             {
                 if (!ReplayActive) return false;
                 ReplayPointerMove(x, y);
-                return true;
+                return ReplayScrubbing;
             },
             up: (x, y, id) =>
             {

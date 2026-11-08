@@ -96,6 +96,17 @@ internal static class OverlayAudit
                   $"count={layers.Count} ids={string.Join(",", layers.Select(l => l.Id))}");
         }
 
+        // 7) 优先级范围过滤：切某一层时不会误问更高/更低层
+        {
+            var m = new OverlayLayerManager();
+            var low = new TestLayer("low", 500);
+            var high = new TestLayer("high", 800);
+            m.Register(low); m.Register(high);
+            bool down = m.PointerDown(10, 10, 1, 1, 500, 500);
+            Check("优先级范围过滤", down && low.DownCount == 1 && high.DownCount == 0,
+                  $"low={low.DownCount} high={high.DownCount}");
+        }
+
         Console.WriteLine($"  合计：{pass} 通过 / {fail} 失败");
         return fail == 0 ? 0 : 1;
     }
