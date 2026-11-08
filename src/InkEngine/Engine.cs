@@ -11816,6 +11816,8 @@ public partial class InkEngine
     {
         if (LibraryPanelVisibleNow && LibraryLayout.Contains(LibraryPanelRectNow(), PointerX, PointerY))
             return true;
+        var menu = SelectionMenuRectNow();
+        if (!menu.IsEmpty && menu.Contains(PointerX, PointerY)) return true;
         // 画布坐标 → 屏幕坐标只差一个垂直滚动量（ScreenToCanvas 就是 `y -= ViewOffsetY`），
         // x 没有滚动、直接用。
         return PptBarContains(PointerX, PointerY + ViewOffsetY)
@@ -11940,6 +11942,11 @@ public partial class InkEngine
                     && SelectionHandles.PanelContains(canvasX, canvasY, aabb, dpi, FurnitureViewport,
                                                       SelPanelOpen, SelectionHandles.SwatchCount,
                                                       SingleTextBoxSelection))
+                    return CursorKind.Default;
+                // AI / `⋯` 弹层也是界面：整块给箭头，不能露出画布工具光标
+                //（2026-11-08 用户："这些界面不管点不点都该是鼠标"）。
+                var menu = SelectionMenuRectNow();
+                if (!menu.IsEmpty && menu.Contains(canvasX, canvasY))
                     return CursorKind.Default;
             }
         }
@@ -17168,7 +17175,7 @@ public partial class InkEngine
             SelectionMenuHasStatusNow,
             SelAiMenuOpen ? SelectionHandles.BarMenuWidthLogical
                           : SelectionHandles.BarMenuNarrowWidthLogical,
-            centerX: true, avoid: LiveSelectionFrame.CanvasAabb);
+            centerX: true);
     }
 
     private void UpdateBarHover(float x, float y)

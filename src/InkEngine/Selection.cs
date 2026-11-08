@@ -3083,8 +3083,8 @@ internal static class SelectionHandles
     // 所以这里只有一套 `BarMenuRectIn / RowRect / RowAt`；两者只是行数、
     // 宽度、是否有状态行不同。绘制、命中、脏区必须读同一份。
 
-    public const float BarMenuWidthLogical = 236f;       // AI 菜单默认宽
-    public const float BarMenuNarrowWidthLogical = 220f; // `⋯` 菜单默认宽
+    public const float BarMenuWidthLogical = 200f;       // AI 菜单默认宽
+    public const float BarMenuNarrowWidthLogical = 200f; // `⋯` 菜单默认宽（两侧优先放得下）
     /// <summary>32 而不是 38：7 行菜单在 200% 屏上也不至于半屏高（用户 2026-11-08 反馈）。</summary>
     public const float BarMenuRowHeightLogical = 32f;
     public const float BarMenuStatusHeightLogical = 26f;
@@ -3096,7 +3096,7 @@ internal static class SelectionHandles
     public static RectF BarMenuRectIn(in RectF bar, float dpi, in RectF visible,
                                       int rows, bool hasStatus,
                                       float widthLogical = BarMenuWidthLogical,
-                                      bool centerX = true, RectF avoid = default)
+                                      bool centerX = true)
     {
         int n = Math.Max(1, rows);
         float w = widthLogical * dpi;
@@ -3109,14 +3109,22 @@ internal static class SelectionHandles
         if (!visible.IsEmpty)
         {
             float margin = BarScreenPaddingLogical * dpi;
-            // 下面放不下时，**翻到选中对象上方**，不是翻到条上方——
-            // 条就贴在对象下沿，翻到条上方必然盖住对象（2026-11-08 截图反馈）。
-            if (y + h > visible.MaxY - margin)
-                y = (avoid.IsEmpty ? bar.MinY : avoid.MinY) - 8f * dpi - h;
+            float top = visible.MinY + margin;
+            float bottom = visible.MaxY - margin;
+            // 依次试：条下方 → 条右侧 → 条左侧 → 条上方。
+            // **始终贴着条**，不按选中对象的高度跑（大图形时会把菜单甩到很远）。
+            if (y + h > bottom)
+            {
+                float sideY = Math.Clamp(bar.MaxY - h, top, MathF.Max(top, bottom - h));
+                float rightX = bar.MaxX + 8f * dpi;
+                float leftX = bar.MinX - 8f * dpi - w;
+                if (rightX + w <= visible.MaxX - margin) { x = rightX; y = sideY; }
+                else if (leftX >= visible.MinX + margin) { x = leftX; y = sideY; }
+                else y = bar.MinY - 8f * dpi - h;
+            }
             x = Math.Clamp(x, visible.MinX + margin,
                            MathF.Max(visible.MinX + margin, visible.MaxX - margin - w));
-            y = Math.Clamp(y, visible.MinY + margin,
-                           MathF.Max(visible.MinY + margin, visible.MaxY - margin - h));
+            y = Math.Clamp(y, top, MathF.Max(top, bottom - h));
         }
         return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
     }

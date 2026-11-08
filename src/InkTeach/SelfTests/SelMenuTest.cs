@@ -63,6 +63,11 @@ internal sealed partial class App
               SelAiMenuOpen && !SelMoreMenuOpen && SelectionMenuRowsNow == 1
               && !SelectionMenuRectNow().IsEmpty,
               $"ai={SelAiMenuOpen} more={SelMoreMenuOpen} rows={SelectionMenuRowsNow}");
+        var aiRect = SelectionMenuRectNow();
+        PointerX = (aiRect.MinX + aiRect.MaxX) * 0.5f;
+        PointerY = (aiRect.MinY + aiRect.MaxY) * 0.5f;
+        Check("AI 菜单上光标 = 箭头", ComputeCursorKind() == CursorKind.Default,
+              Cursors.Name(ComputeCursorKind()));
 
         OpenSelectionMenuForTest(ai: false);
         SettleFrames(120);
@@ -88,6 +93,22 @@ internal sealed partial class App
               && mr.MinY >= vp.MinY - 1f && mr.MaxY <= vp.MaxY + 1f,
               $"menu {mr.MinX:F0},{mr.MinY:F0}-{mr.MaxX:F0},{mr.MaxY:F0}；" +
               $"vp {vp.MinX:F0},{vp.MinY:F0}-{vp.MaxX:F0},{vp.MaxY:F0}");
+
+        PointerX = (mr.MinX + mr.MaxX) * 0.5f;
+        PointerY = (mr.MinY + mr.MaxY) * 0.5f;
+        Check("⋯ 菜单上光标 = 箭头", ComputeCursorKind() == CursorKind.Default,
+              Cursors.Name(ComputeCursorKind()));
+
+        var bar0 = SelectionBarCanvasRect;
+        PointerX = (bar0.MinX + bar0.MaxX) * 0.5f;
+        PointerY = (bar0.MinY + bar0.MaxY) * 0.5f;
+        Check("操作条上光标 = 箭头", ComputeCursorKind() == CursorKind.Default,
+              Cursors.Name(ComputeCursorKind()));
+
+        PointerX = 100f; PointerY = 100f;   // 框选工具 + 画布空白 = 十字
+        Check("画布空白仍保持工具光标（框选=十字）",
+              ComputeCursorKind() == CursorKind.Cross,
+              Cursors.Name(ComputeCursorKind()));
 
         // 点第一行「置顶」：直接执行，菜单关；不再开二级“层级”弹窗。
         int idxBefore = Doc.Strokes.IndexOf(s);
