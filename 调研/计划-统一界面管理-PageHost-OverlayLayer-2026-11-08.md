@@ -361,7 +361,7 @@ IOverlayLayer
 
 ### Phase 1：PageHost + 设置试点（2～3 周）
 
-> 适配补充：**A0–A3 + A4.0–A4.9 已落地；P5.0 选择条按下、P5.1 截图取景已接浮层管理器**。`--settingsaudit` 40、`--pageaudit` 16、`--textinputaudit` 8、`--overlayaudit` 10 全绿；剩余为发布前真机验收。Phase 5 的提示/HUD 是纯绘制层，不接输入；WindowManager 另立项目。
+> 适配补充：**A0–A3 + A4.0–A4.9 已落地；P5.0 选择条按下、P5.1 截图取景已接浮层管理器**。发布前全量功能套件 **46/46 PASS**；`--settingsaudit` 40、`--pageaudit` 16、`--textinputaudit` 8、`--overlayaudit` 10 全绿。剩余为真机手测（回放/计时/点名/PPT/library/截图、IME/DPI）。Phase 5 的提示/HUD 是纯绘制层，不接输入；WindowManager 另立项目。
 
 - `PageHost` / `Page` / `PageFrame` / `LegacyPage`；
 - `SettingsPage` 包当前设置页（连续滚动/双指/滚轮/滚动条原样）；
