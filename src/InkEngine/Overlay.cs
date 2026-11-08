@@ -3138,7 +3138,7 @@ internal sealed partial class OverlayWindow : IDisposable
         {
             // 脏区必须带**投影最远半径**：只放 4px 时，面板往左拖，右侧旧投影擦不掉，
             // 表现为“右侧一条虚影”；往右拖因为新面板盖住旧投影才看不出来。
-            float pad = (4f + app.FloatingTheme.ShadowReachLogical) * app.UiUnit;
+            float pad = FloatingDirtyPad(app, app.UiUnit);
             var pr = CanvasRectToWindow(app.LibraryPanelRectNow()).Inflate(pad);
             if (app.LibraryCategoriesOpen)
             {
@@ -3396,7 +3396,7 @@ internal sealed partial class OverlayWindow : IDisposable
         //（和界面 `_uiBoundsPrev` 一模一样的做法：只算当前，屏幕会留一张擦不掉的卡片印子）。
         if (app.LibraryPanelVisibleNow && !app.LibraryPlacementMode)
         {
-            float pad = (4f + app.FloatingTheme.ShadowReachLogical) * app.UiUnit;
+            float pad = FloatingDirtyPad(app, app.UiUnit);
             r.Add(CanvasRectToWindow(app.LibraryPanelRectNow()).Inflate(pad));
             if (app.LibraryCategoriesOpen)
                 r.Add(CanvasRectToWindow(app.LibraryDrawerRectNow()).Inflate(pad));
@@ -4664,6 +4664,10 @@ internal sealed partial class OverlayWindow : IDisposable
     /// 画法与操作条/其它面板同一套：`DrawPanelCard` 卡片 ＋ 主题色，圆角取界面推上来的
     /// `CornerRadius`（三块东西必须是一家）。
     /// </summary>
+    /// <summary>带投影的浮层脏区外扩：4px 余量 + 投影最远半径；unit = 逻辑→物理的倍数。</summary>
+    private static float FloatingDirtyPad(InkEngine app, float unit)
+        => (4f + app.FloatingTheme.ShadowReachLogical) * unit;
+
     private void DrawLibraryPanel(InkEngine app)
     {
         if (!app.LibraryPanelVisibleNow || app.LibraryPlacementMode)
