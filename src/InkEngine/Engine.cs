@@ -20435,6 +20435,12 @@ public partial class InkEngine
         if (Ui != null && Ui.HandleHelpKey(vk)) return true;
         // 取色板色值输入框：编辑期间优先吃键盘（数字/A-F/退格/回车/Esc）。
         if (Ui != null && Ui.HandlePickerKey(vk, (mods & KeyChord.ModCtrl) != 0)) return true;
+        // 页面级键盘（设置页/API 页）：Tab/方向键/Enter/Space；只在页面打开时消费。
+        if (Ui != null && Ui.HandleUiKey(vk,
+                (mods & KeyChord.ModCtrl) != 0,
+                (mods & KeyChord.ModShift) != 0,
+                (mods & KeyChord.ModAlt) != 0,
+                isRepeat)) return true;
         // 界面最上面那层（AI 面板 / 更多 / 色板）：Esc 先关它。
         if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && Ui != null && Ui.HandleEscape()) return true;
         // 收藏面板点了一张卡、还没落笔：Esc = 取消这次插入（别让老师找不到怎么退）。

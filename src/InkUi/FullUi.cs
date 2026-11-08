@@ -487,6 +487,7 @@ public sealed partial class FullUi : IOverlayUi
     public void Attach(IUiHost host)
     {
         _host = host;
+        EnsureUiActions();
         _widgets = new Widgets(host);
         IconAtlas.Init(host.PathFactory);
         _expand.Bind(host);        // 时钟必须接真的那个（见 Anim.Bind 的注释）
@@ -3283,6 +3284,105 @@ public sealed partial class FullUi : IOverlayUi
         return $"#{r:X2}{g:X2}{b:X2}";
     }
 
+    // ---- 设置页键盘焦点（A0，2026-11-08）------------------------------------
+    // 只接管“页面打开时的 Tab/方向键/Enter/Space”，不碰全局快捷键。
+    // 键位/焦点语义照 WAI-ARIA APG 的 Dialog/Menu 与 Unity FocusRing：
+    // Tab 循环、跳过禁用、Enter/Space 执行、焦点进视口。
+
+    public bool HandleUiKey(int vk, bool ctrl, bool shift, bool alt, bool repeat)
+    {
+        if (!_moreOpen || _morePage != MorePage.Settings || ctrl || alt) return false;
+        EnsureUiActions();
+        BuildSettingsFocusTargets();
+
+        switch (vk)
+        {
+            case 0x09 /*Tab*/:
+                if (shift) _focusRing.MovePrev(); else _focusRing.MoveNext();
+                break;
+            case 0x26 /*Up*/: _focusRing.MoveUp(); break;
+            case 0x28 /*Down*/: _focusRing.MoveDown(); break;
+            case 0x25 /*Left*/: _focusRing.MoveLeft(); break;
+            case 0x27 /*Right*/: _focusRing.MoveRight(); break;
+            case 0x0D /*Enter*/:
+            case 0x0A /*LF*/:
+            case 0x20 /*Space*/:
+                if (!repeat) ActivateFocusedSetting();
+                break;
+            default:
+                return false;
+        }
+
+        _settingsFocusId = _focusRing.FocusedId;
+        EnsureSettingsFocusVisible();
+        _settingsFocusVisible = true;
+        Invalidate();
+        return true;
+    }
+
+    private void ActivateFocusedSetting()
+    {
+        string id = _focusRing.FocusedId;
+        if (string.IsNullOrEmpty(id)) return;
+        _actions.Execute(id);
+        _settingsFocusId = id;
+    }
+
+    private void BuildSettingsFocusTargets()
+    {
+        var targets = new List<FocusTarget>(SettingsCatNames.Length + Rows.Length);
+        for (int c = 0; c < SettingsCatNames.Length; c++)
+            targets.Add(new FocusTarget(SettingsNavActionId(c), SettingsNavItemRect(c), true));
+        for (int i = 0; i < Rows.Length; i++)
+            targets.Add(new FocusTarget(RowActionId(Rows[i].Kind), MoreRowRect(i), !Rows[i].Gray));
+        _focusRing.SetTargets(targets, _settingsFocusId);
+    }
+
+    private RectF RectForFocusId(string id)
+    {
+        if (string.IsNullOrEmpty(id)) return RectF.Empty;
+        for (int c = 0; c < SettingsCatNames.Length; c++)
+            if (string.Equals(SettingsNavActionId(c), id, StringComparison.Ordinal))
+                return SettingsNavItemRect(c);
+        for (int i = 0; i < Rows.Length; i++)
+            if (string.Equals(RowActionId(Rows[i].Kind), id, StringComparison.Ordinal))
+                return MoreRowRect(i);
+        return RectF.Empty;
+    }
+
+    private void EnsureSettingsFocusVisible()
+    {
+        string id = _focusRing.FocusedId;
+        if (string.IsNullOrEmpty(id)) return;
+        // 左栏分类始终在视口外/固定区域，不要拿它去滚右栏。
+        if (id.StartsWith("more.settings.nav.", StringComparison.Ordinal)) return;
+
+        var r = RectForFocusId(id);
+        if (r.IsEmpty) return;
+        var vp = SettingsViewportRect();
+        const float margin = 8f;
+        if (r.MinY < vp.MinY + margin)
+            ScrollSettingsTo(_settingsScroll - (vp.MinY + margin - r.MinY));
+        else if (r.MaxY > vp.MaxY - margin)
+            ScrollSettingsTo(_settingsScroll + (r.MaxY - (vp.MaxY - margin)));
+    }
+
+    private void DrawSettingsFocusRing(ID2D1DeviceContext ctx)
+    {
+        var r = RectForFocusId(_focusRing.FocusedId);
+        if (r.IsEmpty) return;
+        var rr = new RoundedRectangle(
+            new Vortice.RawRectF(r.MinX - 1f, r.MinY - 1f, r.MaxX + 1f, r.MaxY + 1f), 5f, 5f);
+        ctx.DrawRoundedRectangle(rr, Brush(ctx, Tokens.Accent), 1.5f);
+    }
+
+    private void ResetSettingsFocus()
+    {
+        _settingsFocusId = null;
+        _settingsFocusVisible = false;
+        _focusRing.Clear();
+    }
+
     private void EnsurePenPickerBitmaps(ID2D1DeviceContext ctx)
     {
         float dpi = _host?.DpiScale ?? 1f;
@@ -3646,9 +3746,11 @@ public sealed partial class FullUi : IOverlayUi
         };
     }
 
-    private bool IsToggleRow(int i)
-        => Rows[i].Kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.DwellShape
+    private static bool IsToggleRow(Row kind)
+        => kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.DwellShape
            or Row.Pressure or Row.Predict or Row.Privacy or Row.RestoreInk or Row.PptAutoSave or Row.AutoStart;
+
+    private bool IsToggleRow(int i) => IsToggleRow(Rows[i].Kind);
 
     /// <summary>
     /// **自检用**：这一行到底有没有画开关。
@@ -3693,7 +3795,163 @@ public sealed partial class FullUi : IOverlayUi
     private static string PatternName(int p) =>
         PatternNames[Math.Clamp(p, 0, PatternNames.Length - 1)];
 
+    // ---- UI 动作表：设置行（A0）--------------------------------------------
+
+    /// <summary>把设置行和左侧分类注册成稳定 Action。重复调用安全。</summary>
+    private void EnsureUiActions()
+    {
+        if (_actionsReady) return;
+        _actionsReady = true;
+
+        foreach (var row in Rows)
+        {
+            var kind = row.Kind;
+            _actions.Register(new UiAction
+            {
+                Id = RowActionId(kind),
+                Label = row.Label,
+                Hint = row.Hint,
+                Kind = RowActionKind(kind),
+                IsEnabled = () =>
+                {
+                    int i = RowIndex(kind);
+                    return i >= 0 && !Rows[i].Gray;
+                },
+                IsChecked = IsToggleRow(kind)
+                    ? () =>
+                    {
+                        int i = RowIndex(kind);
+                        return i >= 0 && IsOn(i);
+                    }
+                    : null,
+                Execute = () =>
+                {
+                    int i = RowIndex(kind);
+                    if (i >= 0) LegacyActivateRow(i);
+                },
+            });
+        }
+
+        for (int c = 0; c < SettingsCatNames.Length; c++)
+        {
+            int cat = c;
+            _actions.Register(new UiAction
+            {
+                Id = SettingsNavActionId(cat),
+                Label = SettingsCatNames[cat],
+                Kind = UiActionKind.Navigate,
+                Execute = () => ScrollSettingsToCategory((SettingsCategory)cat),
+            });
+        }
+
+        for (int code = 0; code <= 7; code++)
+        {
+            int c = code;
+            var info = HubTileInfo(c);
+            _actions.Register(new UiAction
+            {
+                Id = HubActionId(c),
+                Label = info.Label,
+                Hint = info.Hint,
+                Kind = UiActionKind.Command,
+                IsEnabled = () => HubTileInfo(c).Enabled,
+                Execute = () => ActivateHub(c),
+            });
+        }
+        foreach (int code in new[] { AiTileCode, HelpTileCode })
+        {
+            int c = code;
+            var info = HubTileInfo(c);
+            _actions.Register(new UiAction
+            {
+                Id = HubActionId(c),
+                Label = info.Label,
+                Hint = info.Hint,
+                Kind = UiActionKind.Command,
+                IsEnabled = () => HubTileInfo(c).Enabled,
+                Execute = () => ActivateHub(c),
+            });
+        }
+
+        for (int i = 0; i < MoreBottomTiles.Length; i++)
+        {
+            int idx = i;
+            var info = MoreBottomTiles[idx];
+            _actions.Register(new UiAction
+            {
+                Id = BottomActionId(idx),
+                Label = info.Label,
+                Hint = info.Hint,
+                Kind = UiActionKind.Command,
+                Execute = () => ActivateBottom(idx),
+            });
+        }
+
+        RegisterLogAction(MoreHitLogNote, "问题描述", "写一句遇到的问题；上传/导出会带上它");
+        RegisterLogAction(MoreHitLogUpload, "上传日志", "把运行日志传到云端，方便开发排查");
+        RegisterLogAction(MoreHitLogExport, "导出 ZIP", "只打包日志，不联网");
+        RegisterLogAction(MoreHitLogOlder, "包含更早日志", "连同上一次启动的日志一起打包");
+        RegisterLogAction(MoreHitLogGroup, "复制群号", "复制反馈 QQ 群号");
+        RegisterLogAction(MoreHitLogGroupUrl, "复制加群链接", "复制能直接唤起 QQ 的加群短链");
+        RegisterLogAction(MoreHitLogQr, "群二维码", "整屏显示二维码，手机扫码加群");
+    }
+
+    private void RegisterLogAction(int hit, string label, string hint)
+    {
+        _actions.Register(new UiAction
+        {
+            Id = LogActionId(hit),
+            Label = label,
+            Hint = hint,
+            Kind = UiActionKind.Command,
+            Execute = () => ActivateLog(hit),
+        });
+    }
+
+    private static int RowIndex(Row kind)
+    {
+        for (int i = 0; i < Rows.Length; i++)
+            if (Rows[i].Kind == kind) return i;
+        return -1;
+    }
+
+    private static string RowActionId(Row kind) => kind switch
+    {
+        Row.DarkTheme => "settings.general.darkTheme",
+        Row.AutoHide => "settings.general.autoHide",
+        Row.RailPin => "settings.general.railPin",
+        Row.UiSize => "settings.general.uiSize",
+        Row.AutoStart => "settings.general.autoStart",
+        Row.DwellShape => "settings.writing.dwellShape",
+        Row.Pressure => "settings.writing.pressure",
+        Row.Predict => "settings.writing.predict",
+        Row.TouchMode => "settings.writing.touchMode",
+        Row.RestoreInk => "settings.ink.restoreInk",
+        Row.PptAutoSave => "settings.ink.pptAutoSave",
+        Row.HistoryDays => "settings.ink.historyDays",
+        Row.AiApi => "settings.ai.api",
+        Row.BackupAll => "settings.backup.backupAll",
+        Row.RestoreAll => "settings.backup.restoreAll",
+        Row.Privacy => "settings.about.privacy",
+        _ => "settings.unknown." + kind,
+    };
+
+    private static UiActionKind RowActionKind(Row kind) => kind switch
+    {
+        Row.UiSize or Row.HistoryDays => UiActionKind.Choice,
+        Row.AiApi => UiActionKind.Navigate,
+        _ when IsToggleRow(kind) => UiActionKind.Toggle,
+        _ => UiActionKind.Command,
+    };
+
     private void ActivateRow(int i)
+    {
+        EnsureUiActions();
+        int idx = Math.Clamp(i, 0, Rows.Length - 1);
+        _actions.Execute(RowActionId(Rows[idx].Kind));
+    }
+
+    private void LegacyActivateRow(int i)
     {
         switch (Rows[i].Kind)
         {
@@ -3842,6 +4100,15 @@ public sealed partial class FullUi : IOverlayUi
     private Vector2 _settingsTouchLastMid;
     private double _settingsTouchLastMs;
     private float _settingsTouchVy;
+
+    // ---- UI 动作表（A0，2026-11-08）----------------------------------------
+    // 先把设置行的“标题/说明/开关/执行”收成一份；旧 switch 保留为 LegacyActivateRow，
+    // 双跑通过后再逐行删。不是第二套命令系统：Execute 仍调原来的业务方法。
+    private readonly UiActionTable _actions = new();
+    private bool _actionsReady;
+    private readonly FocusRing _focusRing = new();
+    private string _settingsFocusId;
+    private bool _settingsFocusVisible;
 
     /// <summary>设置页右侧可视高度（逻辑像素）。面板高稳定，不随分类跳。</summary>
     private const float SettingsBodyH = 560f;
@@ -4187,6 +4454,7 @@ public sealed partial class FullUi : IOverlayUi
 
     private void ScrollSettingsTo(float scroll)
     {
+        _settingsFocusVisible = false;      // 滚动后焦点环位置会变；下次键盘再显示
         _settingsScroll = Math.Clamp(scroll, 0f, SettingsScrollMax());
         UpdateSettingsActiveFromScroll();
         Invalidate();
@@ -4700,6 +4968,127 @@ public sealed partial class FullUi : IOverlayUi
         return MoreHitInside;
     }
 
+    // ---- 稳定命中目标（A0，2026-11-08）------------------------------------
+    // 先做“旧整数 → 稳定 HitTarget”的适配层：几何仍然只有 MoreHitAt 一份，
+    // 新代码用 ActionId，旧代码继续用整数；双跑通过后再把 MoreHitAt 删掉。
+
+    internal HitTarget MoreHitTargetAt(float x, float y)
+        => HitTargetFromLegacy(MoreHitAt(x, y));
+
+    private HitTarget HitTargetFromLegacy(int hit)
+    {
+        if (hit == MoreHitNone) return HitTarget.None;
+        if (hit == MoreHitInside) return new HitTarget(HitKind.Inside, "page.surface");
+        if (hit == MoreHitClose) return new HitTarget(HitKind.PageClose, "page.close");
+        if (hit == MoreHitBack) return new HitTarget(HitKind.PageBack, "page.back");
+
+        if (_morePage == MorePage.Help
+            && hit >= HelpHitTabBase && hit < HelpHitTabBase + HelpTabCount)
+        {
+            int i = hit - HelpHitTabBase;
+            return new HitTarget(HitKind.HelpTab, $"page.help.tab{i}", i);
+        }
+
+        if (_morePage == MorePage.Settings
+            && hit >= MoreHitProfile && hit < MoreHitProfile + 3)
+        {
+            int i = hit - MoreHitProfile;
+            return new HitTarget(HitKind.SettingsProfile, $"settings.toolbar.profile{i}", i);
+        }
+
+        if (_morePage == MorePage.Settings
+            && hit >= MoreHitChip && hit < MoreHitChip + Cells.Length)
+        {
+            int cell = hit - MoreHitChip;
+            return new HitTarget(HitKind.SettingsChip, $"settings.toolbar.chip{cell}", cell);
+        }
+
+        if (hit >= MoreHitRow && hit < MoreHitRow + Rows.Length)
+        {
+            int i = hit - MoreHitRow;
+            return new HitTarget(HitKind.SettingsRow, RowActionId(Rows[i].Kind), i);
+        }
+
+        if (hit >= MoreHitTile && hit < MoreHitTile + HubTileTotal)
+        {
+            int code = hit - MoreHitTile;
+            return new HitTarget(HitKind.HubTile, HubActionId(code), code);
+        }
+
+        if (hit >= MoreHitBottom && hit < MoreHitBottom + MoreBottomTiles.Length)
+        {
+            int i = hit - MoreHitBottom;
+            return new HitTarget(HitKind.BottomTile, BottomActionId(i), i);
+        }
+
+        if (hit >= MoreHitSettingsNav && hit < MoreHitSettingsNav + SettingsCatNames.Length)
+        {
+            int i = hit - MoreHitSettingsNav;
+            return new HitTarget(HitKind.SettingsNav, SettingsNavActionId(i), i);
+        }
+
+        if (hit == MoreHitSettingsScroll)
+            return new HitTarget(HitKind.SettingsScroll, "more.settings.scroll");
+
+        string logId = LogActionId(hit);
+        if (logId != null)
+            return new HitTarget(HitKind.LogButton, logId);
+
+        return new HitTarget(HitKind.Unknown, $"legacy.{hit}", hit);
+    }
+
+    private static string HubActionId(int code)
+    {
+        switch (code)
+        {
+            case 0: return "more.home.timer";
+            case 1: return "more.home.rollCard";
+            case 2: return "more.home.rollOne";
+            case 3: return "more.home.save";
+            case 4: return "more.home.open";
+            case 5: return "more.home.replay";
+            case 6: return "more.home.closeDocument";
+            case 7: return "more.home.history";
+        }
+        if (code == AiTileCode) return "more.home.ai";
+        if (code == HelpTileCode) return "more.home.help";
+        return $"more.home.tile{code}";
+    }
+
+    private static string BottomActionId(int i) => i switch
+    {
+        0 => "more.bottom.settings",
+        1 => "more.bottom.log",
+        2 => "more.bottom.checkUpdate",
+        3 => "more.bottom.restart",
+        4 => "more.bottom.quit",
+        _ => $"more.bottom.{i}",
+    };
+
+    private static string SettingsNavActionId(int i) => i switch
+    {
+        0 => "more.settings.nav.toolbar",
+        1 => "more.settings.nav.general",
+        2 => "more.settings.nav.writing",
+        3 => "more.settings.nav.ink",
+        4 => "more.settings.nav.ai",
+        5 => "more.settings.nav.backup",
+        6 => "more.settings.nav.about",
+        _ => $"more.settings.nav.{i}",
+    };
+
+    private static string LogActionId(int hit) => hit switch
+    {
+        MoreHitLogNote => "more.log.note",
+        MoreHitLogUpload => "more.log.upload",
+        MoreHitLogExport => "more.log.export",
+        MoreHitLogOlder => "more.log.older",
+        MoreHitLogGroup => "more.log.group",
+        MoreHitLogGroupUrl => "more.log.groupUrl",
+        MoreHitLogQr => "more.log.qr",
+        _ => null,
+    };
+
     // ---- 开/关与换页 ---------------------------------------------------------
 
     /// <summary>打开面板（入口只有主条「…」那一格）。</summary>
@@ -4715,6 +5104,7 @@ public sealed partial class FullUi : IOverlayUi
         _settingsScroll = 0f;
         _settingsScrollDrag = false;
         ResetSettingsTouch();
+        ResetSettingsFocus();
         _moreHover = MoreHitNone;
         _morePress = -1;
         _hubHint = "";
@@ -4734,6 +5124,7 @@ public sealed partial class FullUi : IOverlayUi
         _morePress = -1;
         _settingsScrollDrag = false;
         ResetSettingsTouch();
+        ResetSettingsFocus();
         HideTip();              // 面板里的提示跟着收（触摸长按候选也作废）
         CancelTipHold();
         _more.To(0f, Tokens.MoreCloseMs);
@@ -5149,6 +5540,7 @@ public sealed partial class FullUi : IOverlayUi
         }
 
         ctx.PopAxisAlignedClip();
+        if (_settingsFocusVisible) DrawSettingsFocusRing(ctx);
         DrawSettingsScrollbar(ctx);
     }
 
@@ -5542,6 +5934,7 @@ public sealed partial class FullUi : IOverlayUi
     public bool PointerDown(in UiPointerEvent e)
     {
         var p = Local(e);
+        _settingsFocusVisible = false;        // 鼠标/触摸一按，键盘焦点环先让位（保留 FocusedId）
         _pressId = e.PointerId;                // 这一按是谁按的（长按期间挡别的指针）
         _press = -1;
         _dragging = false;
@@ -8297,6 +8690,41 @@ public sealed partial class FullUi : IOverlayUi
     /// <summary>自检用：行表里有几行（不写死数字——插一行/删一行自检要自己跟上）。</summary>
     internal int MoreRowCountForTest => Rows.Length;
 
+    // ---- A0 动作表/稳定命中的自检钩子（2026-11-08）------------------------
+
+    internal int UiActionCountForTest
+    {
+        get
+        {
+            EnsureUiActions();
+            return _actions.Count;
+        }
+    }
+
+    internal string[] UiActionIdsForTest
+    {
+        get
+        {
+            EnsureUiActions();
+            var ids = new string[_actions.Count];
+            for (int i = 0; i < ids.Length; i++) ids[i] = _actions.All[i].Id;
+            return ids;
+        }
+    }
+
+    internal bool HasUiActionForTest(string id)
+    {
+        EnsureUiActions();
+        return _actions.Get(id) != null;
+    }
+
+    internal string RowActionIdForTest(int i) => RowActionId(Rows[i].Kind);
+
+    internal HitTarget MoreHitTargetAtForTest(float x, float y) => MoreHitTargetAt(x, y);
+
+    internal string FocusedSettingForTest => _settingsFocusId;
+    internal bool SettingsFocusVisibleForTest => _settingsFocusVisible;
+
     /// <summary>自检/出图用：打开「更多」面板（产品里只能点主条「…」那一格）。</summary>
     internal void OpenMoreForTest() { OpenMore(); _more.Jump(1f); _moreH.Jump(MoreTargetH()); }
 
@@ -8351,6 +8779,7 @@ public sealed partial class FullUi : IOverlayUi
         _moreH.Jump(MoreTargetH());
         _moreHover = MoreHitNone;
         _morePress = -1;
+        ResetSettingsFocus();
         Invalidate();
     }
 
@@ -8359,6 +8788,7 @@ public sealed partial class FullUi : IOverlayUi
     internal void AttachHostForTest(IUiHost host)
     {
         _host = host;
+        EnsureUiActions();
         _peek.Bind(host);
         _rail.Bind(host);
     }
@@ -8375,6 +8805,7 @@ public sealed partial class FullUi : IOverlayUi
         _settingsScrollDrag = false;
         _moreHover = MoreHitNone;
         _morePress = -1;
+        ResetSettingsFocus();
     }
 
     internal int SettingsCategoryCountForTest => SettingsCatNames.Length;

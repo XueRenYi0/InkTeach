@@ -157,6 +157,13 @@ public interface IOverlayUi
     bool HandlePickerKey(int vk, bool ctrl) => false;
 
     /// <summary>
+    /// 页面级键盘（Tab/方向键/Enter/Space 等）。只在页面打开时接管；
+    /// 返回 true = 这次按键已被页面消费，引擎不再往画布/键位表传。默认 false。
+    /// <paramref name="repeat"/> = 按住产生的自动重复（Enter/Space 不应重复执行）。
+    /// </summary>
+    bool HandleUiKey(int vk, bool ctrl, bool shift, bool alt, bool repeat) => false;
+
+    /// <summary>
     /// Esc：先关最上面那层界面（AI 面板 / 更多 / 色板）。返回 true = 这次 Esc 归界面，
     /// 引擎不再往画布/键位表传。默认 false，给不需要的界面用。
     /// </summary>

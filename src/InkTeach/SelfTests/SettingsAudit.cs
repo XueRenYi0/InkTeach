@@ -42,6 +42,81 @@ internal static class SettingsAudit
         Check("分类数", cats == 7, $"实际 {cats}");
         Check("行数", rows > 0, $"实际 {rows}");
 
+        // A0（2026-11-08）：动作表必须覆盖所有设置行，ID 唯一，稳定命中能对回同一动作。
+        int actionCount = ui.UiActionCountForTest;
+        Check("动作表覆盖所有行", actionCount >= rows, $"动作 {actionCount} / 行 {rows}");
+        var actionIds = ui.UiActionIdsForTest;
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+        int dupIds = 0, missingActions = 0;
+        foreach (var id in actionIds)
+            if (!seenIds.Add(id)) dupIds++;
+        for (int i = 0; i < rows; i++)
+            if (!ui.HasUiActionForTest(ui.RowActionIdForTest(i))) missingActions++;
+        Check("动作 ID 唯一", dupIds == 0, $"重复 {dupIds}");
+        Check("每行都有动作", missingActions == 0, $"缺失 {missingActions}");
+
+        // A0（2026-11-08）：设置页键盘焦点——Tab/方向键/Enter 至少能走通一次。
+        bool tabKey = ui.HandleUiKey(0x09 /*Tab*/, false, false, false, false);
+        string focus1 = ui.FocusedSettingForTest;
+        bool downKey = ui.HandleUiKey(0x28 /*Down*/, false, false, false, false);
+        string focus2 = ui.FocusedSettingForTest;
+        bool enterKey = ui.HandleUiKey(0x0D /*Enter*/, false, false, false, false);
+        Check("设置页键盘焦点",
+              tabKey && downKey && enterKey
+              && ui.SettingsFocusVisibleForTest
+              && !string.IsNullOrEmpty(focus1)
+              && !string.IsNullOrEmpty(focus2)
+              && !string.Equals(focus1, focus2, StringComparison.Ordinal),
+              $"tab={tabKey} down={downKey} enter={enterKey} {focus1} -> {focus2}");
+        ui.OpenSettingsPageForTest();
+
+        // A0（2026-11-08）：弹层栈——两层时 Esc 只关最上面，不会一次关两层。
+        var popups = new PopupStack();
+        int popupClosed = 0;
+        var popupBounds = new RectF { MinX = 0, MinY = 0, MaxX = 100, MaxY = 100 };
+        popups.Push(new Popup
+        {
+            Id = "popup.1", OwnerPageId = "settings", Bounds = popupBounds,
+            Dismiss = DismissPolicy.OutsideOrEscape, OnClose = () => popupClosed++,
+        });
+        popups.Push(new Popup
+        {
+            Id = "popup.2", OwnerPageId = "settings", Bounds = popupBounds,
+            Dismiss = DismissPolicy.OutsideOrEscape, OnClose = () => popupClosed++,
+        });
+        bool escTop = popups.HandleEscape();
+        bool oneLeft = popups.Top != null && popups.Top.Id == "popup.1";
+        bool escBottom = popups.HandleEscape();
+        Check("弹层栈只关最上面",
+              escTop && oneLeft && escBottom && popups.IsEmpty && popupClosed == 2,
+              $"escTop={escTop} oneLeft={oneLeft} escBottom={escBottom} closed={popupClosed}");
+
+        // A0：稳定命中覆盖启动器/底栏/日志（不只设置行）。
+        ui.OpenMoreForTest();
+        ui.SetMorePageForTest(0);
+        var hubRect = ui.HubTileRectForTest(0);
+        var hubTarget = ui.MoreHitTargetAtForTest(
+            (hubRect.MinX + hubRect.MaxX) * 0.5f, (hubRect.MinY + hubRect.MaxY) * 0.5f);
+        var bottomRect = ui.HubBottomRectForTest(0);
+        var bottomTarget = ui.MoreHitTargetAtForTest(
+            (bottomRect.MinX + bottomRect.MaxX) * 0.5f, (bottomRect.MinY + bottomRect.MaxY) * 0.5f);
+        ui.SetMorePageForTest(3);
+        var logRect = ui.LogNoteRectForTest;
+        var logTarget = ui.MoreHitTargetAtForTest(
+            (logRect.MinX + logRect.MaxX) * 0.5f, (logRect.MinY + logRect.MaxY) * 0.5f);
+        bool stableHits = hubTarget.Kind == HitKind.HubTile
+                          && hubTarget.ActionId == "more.home.timer"
+                          && bottomTarget.Kind == HitKind.BottomTile
+                          && bottomTarget.ActionId == "more.bottom.settings"
+                          && logTarget.Kind == HitKind.LogButton
+                          && logTarget.ActionId == "more.log.note"
+                          && ui.HasUiActionForTest("more.home.timer")
+                          && ui.HasUiActionForTest("more.bottom.settings")
+                          && ui.HasUiActionForTest("more.log.note");
+        Check("启动器/底栏/日志稳定命中", stableHits,
+              $"hub={hubTarget.Kind}/{hubTarget.ActionId} bottom={bottomTarget.Kind}/{bottomTarget.ActionId} log={logTarget.Kind}/{logTarget.ActionId}");
+        ui.OpenSettingsPageForTest();
+
         // 1) 每一行都必须属于且只属于一个分类
         int unassigned = 0;
         for (int i = 0; i < rows; i++)
@@ -59,7 +134,7 @@ internal static class SettingsAudit
         Check("左侧分类全部可点", navBad == 0, $"异常 {navBad}");
 
         // 3) 滚到每一段，段内每一行都要在视口里、且命中自己
-        int rowBad = 0, offscreen = 0;
+        int rowBad = 0, offscreen = 0, targetBad = 0;
         for (int c = 0; c < cats; c++)
         {
             ui.SettingsSetCategoryForTest(c);
@@ -73,10 +148,17 @@ internal static class SettingsAudit
                 if (!vp.Contains(cx, cy)) { offscreen++; Console.WriteLine($"    行 {i} 不在视口（y={cy:F0}）"); continue; }
                 int hit = ui.MoreHitAtForTest(cx, cy);
                 if (hit != 60 + i) { rowBad++; Console.WriteLine($"    行 {i} 命中 {hit}（应为 {60 + i}）"); }
+                var target = ui.MoreHitTargetAtForTest(cx, cy);
+                if (target.Kind != HitKind.SettingsRow || target.ActionId != ui.RowActionIdForTest(i))
+                {
+                    targetBad++;
+                    Console.WriteLine($"    行 {i} 稳定命中 {target.Kind}/{target.ActionId}（应为 SettingsRow/{ui.RowActionIdForTest(i)}）");
+                }
             }
         }
         Check("所有行在所属段落可见", offscreen == 0, $"离屏 {offscreen}");
         Check("所有行都能命中", rowBad == 0, $"异常 {rowBad}");
+        Check("稳定命中对回动作", targetBad == 0, $"异常 {targetBad}");
 
         // 4) 连续滚动：能滚、滚到底最后一行仍可见、滚动条能拖
         bool canScroll = ui.SettingsScrollMaxForTest > 1f;
